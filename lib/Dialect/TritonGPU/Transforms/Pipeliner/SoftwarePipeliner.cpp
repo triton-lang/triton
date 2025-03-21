@@ -82,6 +82,16 @@ struct PipelinePass : public impl::TritonGPUPipelineBase<PipelinePass> {
 
   void runOnOperation() override {
     ModuleOp moduleOp = getOperation();
+    unsigned loopCnt = 0;
+    getOperation()->walk([&](scf::ForOp forOp) {
+      // Bail out for loops with num_stage <= 1.
+      if (getNumStagesOrDefault(forOp, numStages) > 1)
+        loopCnt++;
+    });
+
+    if (loopCnt == 0)
+      return;
+
     // Go over the interesting ops and assign latencies (based on the
     // numStages) to the them, trying to populate the allowed stages. This
     // step will be at some point extracted to separate pass that will be run
