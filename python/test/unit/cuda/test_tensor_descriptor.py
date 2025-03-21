@@ -421,6 +421,41 @@ def test_tensor_descriptor_return_value():
     torch.testing.assert_close(expect, out)
 
 
+@triton.jit(noinline=True)
+def tensor_descriptor_arg_helper(in_desc, out_desc, M_BLOCK: tl.constexpr, N_BLOCK: tl.constexpr):
+    moffset = tl.program_id(0) * M_BLOCK
+    noffset = tl.program_id(1) * N_BLOCK
+    value = in_desc.load([moffset, noffset])
+    out_desc.store([moffset, noffset], value.abs())
+
+
+@requires_tma
+@pytest.mark.interpreter
+def test_tensor_descriptor_argument():
+
+    @triton.jit
+    def kernel(out_ptr, a_ptr, M, N, M_BLOCK: tl.constexpr, N_BLOCK: tl.constexpr):
+        out_desc = tl.make_tensor_descriptor(out_ptr, shape=[M, N], strides=[N, 1], block_shape=[M_BLOCK, N_BLOCK])
+        in_desc = tl.make_tensor_descriptor(a_ptr, shape=[M, N], strides=[N, 1], block_shape=[M_BLOCK, N_BLOCK])
+        tensor_descriptor_arg_helper(in_desc, out_desc, M_BLOCK, N_BLOCK)
+
+    M, N = 32, 128
+    inp = torch.randn((M, N), device="cuda")
+
+    M_BLOCK = 8
+    N_BLOCK = 32
+    out = inp.new_zeros((M, N))
+
+    def alloc_fn(size: int, align: int, stream: Optional[int]) -> torch.Tensor:
+        return torch.empty(size, dtype=torch.int8, device="cuda")
+
+    triton.set_allocator(alloc_fn)
+
+    expect = inp.abs()
+    kernel[(M // M_BLOCK, N // N_BLOCK)](out, inp, M, N, M_BLOCK, N_BLOCK)
+    torch.testing.assert_close(expect, out)
+
+
 @triton.jit
 def matmul_kernel_make_tensor_desciptor(a_ptr, b_ptr, c_ptr,  #
                                         M, N, K,  #
