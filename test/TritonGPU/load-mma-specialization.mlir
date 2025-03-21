@@ -673,6 +673,8 @@ tt.func @matmul_tma_acc_with_conditional_def_and_use_no_multibuf_flag(
   // CHECK-NEXT: ttng.init_barrier [[MMA_MBAR0]], 1
 
   // CHECK-NEXT: [[ACC_BUFS:%.*]] = ttng.tmem_alloc : () -> !ttg.memdesc<1x128x128xf32, [[ACC_TMEM]], #ttng.tensor_memory, mutable>
+  // CHECK-NEXT: [[ACC_BUF:%.*]] = ttg.memdesc_subview [[ACC_BUFS]][%c0_i32, %c0_i32, %c0_i32]
+  // CHECK-NEXT: ttng.tmem_store [[ZERO]], [[ACC_BUF]], %true
 
   // CHECK-NEXT: [[ACC_EMPTY_BUFS:%.*]] = ttg.local_alloc : () -> !ttg.memdesc<1xi64
   // CHECK-NEXT: [[ACC_EMPTY_BUF0:%.*]] = ttg.memdesc_subview [[ACC_EMPTY_BUFS]][%c0_i32]
@@ -703,7 +705,6 @@ tt.func @matmul_tma_acc_with_conditional_def_and_use_no_multibuf_flag(
     %b_shared = ttg.local_alloc %b : (tensor<64x128xf16, #oper_layout>) -> !ttg.memdesc<64x128xf16, #shared, #smem>
     %c_tmem = ttng.tmem_alloc %acc : (tensor<128x128xf32, #acc_layout>) -> !ttg.memdesc<128x128xf32, #acc_tmem, #ttng.tensor_memory, mutable>
 
-    // CHECK-NEXT: [[ACC_BUF:%.*]] = ttg.memdesc_subview [[ACC_BUFS]][%c0_i32, %c0_i32, %c0_i32]
     // CHECK-NEXT: ttng.tc_gen5_mma %{{[0-9]+}}, %{{[0-9]+}}, [[ACC_BUF]], [[FLAG]], %true, [[MMA_MBAR0]] {ttg.partition = 1 : i32}
     ttng.tc_gen5_mma %a_shared, %b_shared, %c_tmem, %flag, %true : (!ttg.memdesc<128x64xf16, #shared, #smem>, !ttg.memdesc<64x128xf16, #shared, #smem>, !ttg.memdesc<128x128xf32, #acc_tmem, #ttng.tensor_memory, mutable>, i1, i1) -> ()
     %c = ttng.tmem_load %c_tmem : !ttg.memdesc<128x128xf32, #acc_tmem, #ttng.tensor_memory, mutable> -> tensor<128x128xf32, #acc_layout>

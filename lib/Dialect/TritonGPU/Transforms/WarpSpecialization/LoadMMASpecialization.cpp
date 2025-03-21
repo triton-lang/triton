@@ -329,11 +329,9 @@ LogicalResult triton::gpu::specializeLoadMMADependencies(scf::ForOp &loop,
   b.setInsertionPoint(loop);
   ttng::TMEMAllocOp accAlloc =
       createTMemAlloc(b, info.accAlloc, /*multiBuffered=*/true, numMmaStages);
-  if (!info.accDef || !info.accDef->isFlag) {
-    auto accInitArg = cast<BlockArgument>(info.accAlloc.getSrc());
-    Value accInitValue = loop.getInitArgs()[accInitArg.getArgNumber() - 1];
-    ttng::createInitStore(b, accAlloc, accInitValue, /*multiBuffered=*/true);
-  }
+  auto accInitArg = cast<BlockArgument>(info.accAlloc.getSrc());
+  Value accInitValue = loop.getInitArgs()[accInitArg.getArgNumber() - 1];
+  ttng::createInitStore(b, accAlloc, accInitValue, /*multiBuffered=*/true);
 
   // If the accumulator is multibuffered, the buffer changes when the
   // accumulator is reset.
