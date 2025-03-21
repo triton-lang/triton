@@ -287,6 +287,23 @@ tt.func @transpose(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg1: i32 
 }
 }
 
+// CHECK-LABEL: @check_dot_op_idx1_propagation
+module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 1 : i32} {
+tt.func @check_dot_op_idx1_propagation(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<f32> {tt.divisibility = 16 : i32}) {
+  // CHECK-NOT: ttg.convert_layout {{.*}} : {{.*}} -> tensor<{{.*}}, #ttg.dot_op<{opIdx = 1, parent = {{.*}}}>>
+  // CHECK: tt.load {{.+}} : tensor<{{.*}}, #ttg.dot_op<{opIdx = 1, parent = {{.*}}}>>
+  %cst_1 = arith.constant dense<1> : tensor<64x64xi32, #blocked1>
+  %splat_load_addr = tt.splat %arg0 : !tt.ptr<f32> -> tensor<64x64x!tt.ptr<f32>, #blocked1>
+  %splat_store_addr = tt.splat %arg1 : !tt.ptr<f32> -> tensor<64x64x!tt.ptr<f32>, #blocked1>
+  %1 = tt.addptr %splat_load_addr, %cst_1 : tensor<64x64x!tt.ptr<f32>, #blocked1>, tensor<64x64xi32, #blocked1>
+  %2 = ttg.convert_layout %1 : tensor<64x64x!tt.ptr<f32>, #blocked1> -> tensor<64x64x!tt.ptr<f32>, #ttg.dot_op<{opIdx = 1, parent = #blocked1}>>
+  %3 = tt.load %2 : tensor<64x64x!tt.ptr<f32>, #ttg.dot_op<{opIdx = 1, parent = #blocked1}>>
+  %4 = ttg.convert_layout %3 : tensor<64x64xf32, #ttg.dot_op<{opIdx = 1, parent = #blocked1}>> -> tensor<64x64xf32, #blocked1>
+  tt.store %splat_store_addr, %4 : tensor<64x64x!tt.ptr<f32>, #blocked1>
+  tt.return
+}
+}
+
 // CHECK-LABEL: loop
 module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 1 : i32} {
 tt.func @loop(%arg0: !tt.ptr<f32>, %arg1: i32, %arg2: !tt.ptr<f32>, %arg3: i32, %arg4: i32) {
@@ -3340,36 +3357,6 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
       scf.yield %3 : tensor<32x128xf32, #mma>
     }
     tt.return %loop#0 : tensor<32x128xf32, #mma>
-  }
-}
-
-// -----
-
-#blocked = #ttg.blocked<{sizePerThread = [2, 2], threadsPerWarp = [2, 16], warpsPerCTA = [4, 1], order = [1, 0]}>
-#mma = #ttg.nvidia_mma<{versionMajor = 2, versionMinor = 0, warpsPerCTA = [4, 1], instrShape = [16, 8]}>
-module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:90", "ttg.threads-per-warp" = 32 : i32} {
-  // We currently don't propagate through block arguments on hoistDotOperand
-  // that being said, https://github.com/triton-lang/triton/pull/5350
-  // allowed to lift DotOperand(opIdx=1), which might be alright
-
-  // CHECK: tt.func @do_not_propagate_through_block_arguments()
-  // CHECK: %[[THROUGH_FOR_OP:.*]] = arith.constant dense<1.000000e+00> : tensor<32x128xf32, #ttg.dot_op<{opIdx = 1, parent = #blocked}>>
-  // CHECK: scf.for {{.*}} iter_args(%{{.*}} = %[[THROUGH_FOR_OP]],
-  tt.func @do_not_propagate_through_block_arguments() -> tensor<32x128xf32, #mma> {
-    %cst = arith.constant dense<1.000000e+00> : tensor<32x128xf32, #ttg.dot_op<{opIdx = 1, parent = #blocked}>>
-    %cst_0 = arith.constant dense<1.000000e+00> : tensor<32x32xf32, #ttg.dot_op<{opIdx = 0, parent = #blocked}>>
-    %cst_1 = arith.constant dense<0.000000e+00> : tensor<32x128xf32, #mma>
-    %c0_i32 = arith.constant 0 : i32
-    %c32_i32 = arith.constant 32 : i32
-    %c128_i32 = arith.constant 128 : i32
-    %loop:2 = scf.for %arg2 = %c0_i32 to %c128_i32 step %c32_i32 iter_args(%arg0 = %cst, %arg1 = %cst_1) -> (tensor<32x128xf32, #ttg.dot_op<{opIdx = 1, parent = #blocked}>>, tensor<32x128xf32, #mma>)  : i32 {
-      %0 = arith.addf %cst, %arg0 : tensor<32x128xf32, #ttg.dot_op<{opIdx = 1, parent = #blocked}>>
-      %1 = ttg.convert_layout %0 : tensor<32x128xf32, #ttg.dot_op<{opIdx = 1, parent = #blocked}>> -> tensor<32x128xf32, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 1}>>
-      %2 = ttg.convert_layout %cst_0 : tensor<32x32xf32, #ttg.dot_op<{opIdx = 0, parent = #blocked}>> -> tensor<32x32xf32, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 1}>>
-      %3 = tt.dot %2, %1, %arg1, inputPrecision = tf32 : tensor<32x32xf32, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 1}>> * tensor<32x128xf32, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 1}>> -> tensor<32x128xf32, #mma>
-      scf.yield %0, %3 : tensor<32x128xf32, #ttg.dot_op<{opIdx = 1, parent = #blocked}>>, tensor<32x128xf32, #mma>
-    }
-    tt.return %loop#1 : tensor<32x128xf32, #mma>
   }
 }
 

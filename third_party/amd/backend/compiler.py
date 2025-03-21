@@ -240,6 +240,10 @@ class HIPBackend(BaseBackend):
         global_prefetch = int(os.getenv("TRITON_HIP_GLOBAL_PREFETCH", "0"))
         local_prefetch = int(os.getenv("TRITON_HIP_LOCAL_PREFETCH", "0"))
         use_async_copy = int(os.getenv("TRITON_HIP_USE_ASYNC_COPY", "0")) == 1
+        bypass_lds = int(os.getenv("TRITON_HIP_BYPASS_LDS_FOR_DOT", "0"))
+
+        if bypass_lds:
+            amd.passes.ttgpuir.add_bypass_lds_for_dot_operand(pm)
 
         # The `local-prefetch` scheduling variant requires turning on buffer ops.
         if options.instruction_sched_variant == "local-prefetch":
