@@ -37,7 +37,7 @@ void init_triton_proton(py::module &&m) {
       "add_convert_proton_nvidia_gpu_to_llvm",
       mlir::triton::proton::gpu::createConvertProtonNvidiaGPUToLLVMPass);
   ADD_PASS_WRAPPER_0(
-      "add_convert_proton_amdgpu_to_llvm",
+      "add_convert_proton_amd_gpu_to_llvm",
       mlir::triton::proton::gpu::createConvertProtonAMDGPUToLLVMPass);
   ADD_PASS_WRAPPER_0(
       "add_allocate_proton_shared_memory",

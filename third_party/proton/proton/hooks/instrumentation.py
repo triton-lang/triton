@@ -65,12 +65,18 @@ class InstrumentationHook(Hook):
         set_instrumentation_on()
 
         backend = triton.runtime.driver.active.get_current_target().backend
+
+        def passes(pm, backend_pass):
+            triton_proton.add_allocate_proton_shared_memory(pm)
+            triton_proton.add_allocate_proton_global_scratch_buffer(pm)
+            backend_pass(pm)
+
         if backend == "cuda":
             backend_name = "nvidia"
-            ttgpuir_func = triton_proton.add_convert_proton_nvidia_gpu_to_llvm
+            ttgpuir_func = lambda pm: passes(pm, triton_proton.add_convert_proton_nvidia_gpu_to_llvm)
         elif backend == "hip":
             backend_name = "amd"
-            ttgpuir_func = triton_proton.add_convert_proton_amd_gpu_to_llvm
+            ttgpuir_func = lambda pm: passes(pm, triton_proton.add_convert_proton_amd_gpu_to_llvm)
         else:
             raise RuntimeError(f"Unsupported backend: {backend}")
 

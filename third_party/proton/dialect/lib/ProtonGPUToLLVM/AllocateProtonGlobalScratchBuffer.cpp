@@ -44,9 +44,9 @@ struct AllocateProtonGlobalScratchBuffer
                                          Alignments.end(), Alignments.begin());
     assert(allAlignmentsEqual &&
            "all global scratch buffer alignment values must be the same");
-    mod->setAttr("proton.global_scratch_memory_size",
+    mod->setAttr("ttg.profile_scratch_memory_size",
                  builder.getI32IntegerAttr(cumulativeMemorySize));
-    mod->setAttr("proton.global_scratch_memory_alignment",
+    mod->setAttr("ttg.profile_scratch_memory_alignment",
                  builder.getI32IntegerAttr(Alignments.front()));
   }
 };
