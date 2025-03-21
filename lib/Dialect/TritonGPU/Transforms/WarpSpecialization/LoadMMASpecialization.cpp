@@ -406,7 +406,9 @@ LogicalResult triton::gpu::specializeLoadMMADependencies(scf::ForOp &loop,
       llvm::append_range(accUses, op->getUsers());
     }
 
-    // Place the epilogue partition in the default warpgroup.
+    // Place the epilogue partition in the default warpgroup. The MMA and load
+    // partitions shouldn't have tensor computations in them, which means they
+    // will get assigned just 1 warp each.
     schedule.reorderPartitions({2, 1, 0});
   }
 
