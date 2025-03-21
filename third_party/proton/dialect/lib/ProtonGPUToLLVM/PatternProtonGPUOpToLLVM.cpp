@@ -23,10 +23,7 @@ struct CircularStoreOpConversion
   LogicalResult
   matchAndRewrite(mlir::triton::proton::gpu::CircularStoreOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    auto loc = op.getLoc();
-    auto b = TritonLLVMOpBuilder(loc, rewriter);
-    auto zero = b.i32_val(0);
-    rewriter.replaceOp(op, zero.getDefiningOp());
+    rewriter.eraseOp(op);
     return success();
   }
 
