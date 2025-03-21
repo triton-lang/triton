@@ -185,18 +185,6 @@ def test_warp_specialize_tma_matmul(M, N, K, BLOCK_SIZE_M, BLOCK_SIZE_N, BLOCK_S
     torch.testing.assert_close(ref_out, C, atol=0.03, rtol=0.03)
 
 
-def matmul_tma_persistent_get_configs():
-    return [
-        triton.Config({'BLOCK_SIZE_M': BM, 'BLOCK_SIZE_N': BN, "BLOCK_SIZE_K" : BK, "GROUP_SIZE_M" : 8, "EPILOGUE_SUBTILE" : SUBTILE}, num_stages=s, num_warps=w) \
-        for BM in [128] \
-        for BN in [128, 256] \
-        for BK in [64, 128] \
-        for s in ([3, 4]) \
-        for w in [4, 8] \
-        for SUBTILE in [True, False] \
-    ]
-
-
 @triton.jit
 def matmul_tma_persistent_ws_kernel(  #
         a_ptr, b_ptr, c_ptr,  #
