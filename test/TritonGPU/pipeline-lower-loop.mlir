@@ -885,7 +885,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
   // CHECK-DAG: %[[ONE:.*]] = arith.constant 1 : i32
   // CHECK-DAG: %[[NUM_STAGES:.*]] = arith.constant 2 : i32
   // CHECK-DAG: %[[_128:.*]] = arith.constant{{.*}} 128 : i32
-  // CHECK: %[[GLOBAL_ALLOC:.*]] = ttg.global_scratch_alloc {alignment = 128 : i32, nbytes = 256 : i32} : !tt.ptr<i8>
+  // CHECK: %[[GLOBAL_ALLOC:.*]] = ttg.global_scratch_alloc {alignment = 128 : i32, nbytes = 128 : i32} : !tt.ptr<i8>
   // CHECK: scf.for {{.*}} iter_args(%[[IDX:.*]] = %[[ZERO]])
   // CHECK:   %[[OFFS:.*]] = arith.muli %[[IDX]], %[[_128]] {loop.cluster = 0 : i32, loop.stage = 1 : i32}
   // CHECK:   %[[DESC_PTR:.*]] = tt.addptr %[[GLOBAL_ALLOC]], %[[OFFS]] {loop.cluster = 0 : i32, loop.stage = 1 : i32}
