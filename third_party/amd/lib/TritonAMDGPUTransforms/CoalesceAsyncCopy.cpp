@@ -22,22 +22,29 @@ namespace ttg = triton::gpu;
 struct CoalesceAsyncCopyWrites
     : public OpRewritePattern<ttg::AsyncCopyGlobalToLocalOp> {
   CoalesceAsyncCopyWrites(const triton::AMD::TargetInfo &targetInfo,
-                          MLIRContext *ctx,
-                          triton::ModuleAxisInfoAnalysis &axisAnalysis)
-      : OpRewritePattern(ctx), targetInfo{targetInfo},
-        axisAnalysis(axisAnalysis) {}
+                          ModuleOp mod, MLIRContext *ctx)
+      : OpRewritePattern(ctx), targetInfo{targetInfo} {
+    // Precompute the contiguity of all AsyncCopy ops based on the src and mask
+    // contiguity/alignment to avoid rebuilding ModuleAxisInfoAnalysis after
+    // every IR change.
+    triton::ModuleAxisInfoAnalysis axisAnalysis(mod);
+    mod->walk([&](ttg::AsyncCopyGlobalToLocalOp copyOp) {
+      unsigned contiguity =
+          mlir::LLVM::AMD::getContiguity(copyOp.getSrc(), axisAnalysis);
+      if (auto mask = copyOp.getMask()) {
+        contiguity =
+            std::min<unsigned>(contiguity, axisAnalysis.getMaskAlignment(mask));
+      }
+      asyncCopyContiguity.insert({copyOp, contiguity});
+    });
+  }
+
   LogicalResult matchAndRewrite(ttg::AsyncCopyGlobalToLocalOp copyOp,
                                 PatternRewriter &rewriter) const override {
     auto src = copyOp.getSrc();
     auto dst = copyOp.getResult();
     Value mask = copyOp.getMask();
     Value other = copyOp.getOther();
-
-    // AxisAnalysis will not have data about the src if we already processed the
-    // copyOp
-    if (axisAnalysis.getAxisInfo(src) == nullptr) {
-      return rewriter.notifyMatchFailure(copyOp, "already adjusted layout");
-    }
 
     auto srcTy = cast<RankedTensorType>(src.getType());
     auto dstTy = cast<ttg::MemDescType>(dst.getType());
@@ -56,13 +63,15 @@ struct CoalesceAsyncCopyWrites
       return rewriter.notifyMatchFailure(
           copyOp, "swizzled shared encoding not supported");
 
-    // Get the minimum contiguity based on the src and mask contiguity and
-    // alignment
-    unsigned loadContig = mlir::LLVM::AMD::getContiguity(src, axisAnalysis);
-    if (mask) {
-      loadContig =
-          std::min<unsigned>(loadContig, axisAnalysis.getMaskAlignment(mask));
-    }
+    // We start from the precomputed contiguity we got from AxisAnalysis.
+    unsigned loadContig = 0;
+    if (auto it = asyncCopyContiguity.find(copyOp);
+        it != asyncCopyContiguity.end())
+      loadContig = it->second;
+    else
+      return copyOp->emitError()
+             << "No contiguity information about the copy op";
+    assert(loadContig > 0);
 
     // Further restrict the contiguity based on the contiguity of the src to dst
     // layout e.g. if the order of the blocked and shared encoding is different
@@ -88,7 +97,8 @@ struct CoalesceAsyncCopyWrites
           copyOp, "could not find layout config to create coalesced writes");
     }
 
-    // Do not rewrite if we already use the correct contiguity
+    // Do not rewrite if we already use the correct contiguity (could be from a
+    // previous rewrite)
     auto contigPerThread = ttg::getContigPerThread(srcTy);
     auto blockedContig = contigPerThread[blockedEnc.getOrder()[0]];
     if (blockedContig == loadContig) {
@@ -131,13 +141,12 @@ struct CoalesceAsyncCopyWrites
       if (other)
         copyOp.getOtherMutable().assign(other);
     });
-
     return success();
   }
 
 private:
   const triton::AMD::TargetInfo &targetInfo;
-  triton::ModuleAxisInfoAnalysis &axisAnalysis;
+  DenseMap<ttg::AsyncCopyGlobalToLocalOp, unsigned> asyncCopyContiguity;
 };
 
 class TritonAMDGPUCoalesceAsyncCopyPass
@@ -153,7 +162,6 @@ public:
     MLIRContext *context = &getContext();
 
     triton::AMD::TargetInfo targetInfo(archGenerationName);
-    triton::ModuleAxisInfoAnalysis axisInfoAnalysis(m);
 
     mlir::RewritePatternSet patterns(context);
 
@@ -162,8 +170,7 @@ public:
     case triton::AMD::ISAFamily::CDNA2:
     case triton::AMD::ISAFamily::CDNA3:
     case triton::AMD::ISAFamily::CDNA4:
-      patterns.add<CoalesceAsyncCopyWrites>(targetInfo, context,
-                                            axisInfoAnalysis);
+      patterns.add<CoalesceAsyncCopyWrites>(targetInfo, m, context);
       break;
     default:
       break;
