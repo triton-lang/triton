@@ -555,9 +555,10 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
 #smem = #ttg.shared_memory
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   // CHECK: llvm.mlir.global external @global_smem
-  // CHECK-LABEL: basic_subview
+  // CHECK-LABEL: nvmma_subview
   tt.func @nvmma_subview() {
-    // CHECK-NEXT: llvm.mlir.undef
+    // CHECK: llvm.mlir.addressof @global_smem
+    // CHECK: llvm.mlir.undef
     // CHECK-NEXT: llvm.mlir.constant(32 : i32) : i32
     // CHECK-NEXT: llvm.mlir.constant(0 : i32) : i32
     // CHECK-NEXT: llvm.mlir.constant(16 : i32) : i32
