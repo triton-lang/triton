@@ -89,8 +89,6 @@ def matmul_kernel(A, B, C, M, N, K,  #
 def test_cast_matmul(M, K, N, BLOCK_K, BLOCK_M, BLOCK_N, w_dtype, x_dtype, out_dtype, device):
     if x_dtype == w_dtype:
         pytest.skip("skip the same input dtype")
-    if is_hip() and BLOCK_M == 64 and w_dtype in ["float8_e5m2", "float8_e4m3fnuz"]:
-        pytest.skip("skip due to bug on HIP path")
     x_dtype: torch.dtype = getattr(torch, x_dtype)
     w_dtype: torch.dtype = getattr(torch, w_dtype)
 
