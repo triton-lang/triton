@@ -1980,6 +1980,20 @@ def _experimental_descriptor_store(desc_pointer, value, offsets, _builder=None):
     return desc.store(offsets, value, _builder=_builder)
 
 
+@builtin
+def load_tensor_descriptor(desc: tensor_descriptor_base, offsets: Sequence[constexpr | tensor],
+                           _builder=None) -> tensor:
+    """Load a block of data from a tensor descriptor."""
+    return desc.load(offsets, _builder=_builder)
+
+
+@builtin
+def store_tensor_descriptor(desc: tensor_descriptor_base, offsets: Sequence[constexpr | tensor], value: tensor,
+                            _builder=None) -> tensor:
+    """Store a block of data to a tensor descriptor."""
+    return desc.store(offsets, value, _builder=_builder)
+
+
 @_tensor_member_fn
 @builtin
 def store(pointer, value, mask=None, boundary_check=(), cache_modifier="", eviction_policy="", _builder=None):
