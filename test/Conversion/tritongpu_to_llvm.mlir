@@ -551,6 +551,42 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
 
 // -----
 
+#shared0 = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
+  // CHECK: llvm.mlir.global external @global_smem
+  // CHECK-LABEL: basic_subview
+  tt.func @nvmma_subview() {
+    // CHECK-NEXT: llvm.mlir.undef
+    // CHECK-NEXT: llvm.mlir.constant(32 : i32) : i32
+    // CHECK-NEXT: llvm.mlir.constant(0 : i32) : i32
+    // CHECK-NEXT: llvm.mlir.constant(16 : i32) : i32
+    // CHECK-NEXT: llvm.mul
+    // CHECK-NEXT: llvm.mul
+    // CHECK-NEXT: llvm.sub
+    // CHECK-NEXT: llvm.udiv
+    // CHECK-NEXT: llvm.mul
+    // CHECK-NEXT: llvm.sub
+    // CHECK-NEXT: llvm.urem
+    // CHECK-NEXT: llvm.sub
+    // CHECK-NEXT: llvm.mul
+    // CHECK-NEXT: llvm.add
+    // CHECK-NEXT: llvm.udiv
+    // CHECK-NEXT: llvm.mul
+    // CHECK-NEXT: llvm.add
+    // CHECK-NEXT: llvm.urem
+    // CHECK-NEXT: llvm.add
+    // CHECK-NEXT: llvm.getelementptr %10[%35] : (!llvm.ptr<3>, i32) -> !llvm.ptr<3>, f32
+    %index = arith.constant 1 : i32
+    %zero = arith.constant 0 : i32
+    %0 = ttg.local_alloc : () -> !ttg.memdesc<16x128xf32, #shared0, #smem, mutable>
+    %1 = ttg.memdesc_subview %0[%index, %zero, %zero] : !ttg.memdesc<16x64xf32, #shared0, #smem, mutable> -> !ttg.memdesc<16x32xf32, #shared0, #smem, mutable>
+    tt.return
+  }
+}
+
+// -----
+
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   // CHECK-LABEL: basic_async_wait
   tt.func @basic_async_wait() {
