@@ -186,4 +186,17 @@ tt.func @partition_outputs(%lb: i32, %ub: i32, %step: i32) -> (!ty, !ty, !ty) {
   tt.return %outs#0, %outs#1, %outs#2 : !ty, !ty, !ty
 }
 
+// CHECK-LABEL: @future_conditional_self_use
+tt.func @future_conditional_self_use(%lb: i32, %ub: i32, %step: i32, %cond: i1) {
+  %c0_i32 = arith.constant 0 : i32
+  scf.for %i = %lb to %ub step %step iter_args(%k = %c0_i32) -> i32 : i32 {
+    %0 = "op_a"() {ttg.partition = 0 : i32} : () -> i32
+    scf.if %cond {
+      "use"(%k) : (i32) -> ()
+    } {ttg.partition = 0 : i32}
+    scf.yield %0 : i32
+  } {ttg.partition.stages = [0]}
+  tt.return
+}
+
 }

@@ -47,6 +47,9 @@ public:
     void insert(Operation *op) { ops.push_back(op); }
 
   private:
+    void setIndex(int idx) { this->idx = idx; }
+    friend class WarpSchedule;
+
     // The partition number.
     int idx;
     // The stage of the partition.
@@ -57,6 +60,8 @@ public:
 
   // Create a new partition with a stage.
   Partition *addPartition(unsigned stage);
+  // Give each partition a new index and order. The indices must be unique.
+  void reorderPartitions(ArrayRef<unsigned> order);
 
   // Get the partition the op belongs to.
   Partition *getPartition(Operation *op);

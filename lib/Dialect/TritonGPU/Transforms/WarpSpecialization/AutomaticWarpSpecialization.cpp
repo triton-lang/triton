@@ -1,8 +1,9 @@
+#include "mlir/Dialect/Arith/Transforms/Passes.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/Pass/Pass.h"
-#include "triton/Dialect/TritonGPU/Transforms/Partition.h"
+#include "mlir/Pass/PassManager.h"
+#include "mlir/Transforms/Passes.h"
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h"
-#include "triton/Dialect/TritonGPU/Transforms/WarpSpecialization.h"
 
 using namespace mlir;
 using namespace triton;
@@ -30,18 +31,16 @@ struct AutomaticWarpSpecialization
 } // namespace
 
 void AutomaticWarpSpecialization::runOnOperation() {
-  SmallVector<scf::ForOp> loops;
-  getOperation().walk([&](scf::ForOp loop) {
-    if (loop->hasAttr("tt.warp_specialize"))
-      loops.push_back(loop);
-  });
-
-  for (scf::ForOp loop : loops) {
-    if (failed(specializeLoadMMADependencies(loop, numStages)))
-      continue;
-    if (failed(rewritePartitionDependencies(loop)))
-      continue;
-    if (failed(partitionLoop(loop)))
-      continue;
-  }
+  OpPassManager pm;
+  pm.addPass(createTritonGPULoadMMASpecialization());
+  pm.addPass(createTritonGPURewritePartitionDependencies());
+  // `int-range-optimizations` combines SCCP with integer range analysis. It's
+  // good at cleaning up loop arithmetic.
+  pm.addPass(arith::createIntRangeOptimizationsPass());
+  pm.addPass(createCSEPass());
+  pm.addPass(createTritonGPUPartitionLoops());
+  // Strip dead code that might have been created by loop partitioning.
+  pm.addPass(createTritonGPULoopDCE());
+  if (failed(runPipeline(pm, getOperation())))
+    return signalPassFailure();
 }

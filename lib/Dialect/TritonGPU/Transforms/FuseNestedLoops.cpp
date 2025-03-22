@@ -900,6 +900,13 @@ static void fuseOneLevel(LoopNestNode *parent, mlir::DominanceInfo &domInfo) {
     epilogueIf.erase();
   }
 
+  // Propagate warp specialization flags.
+  if (outer->hasAttr(kWarpSpecializeAttrName) ||
+      llvm::any_of(innerLoops, [](scf::ForOp loop) {
+        return loop->hasAttr(kWarpSpecializeAttrName);
+      }))
+    fused->setAttr(kWarpSpecializeAttrName, b.getUnitAttr());
+
   // Propagate the `tt.disallow_acc_multi_buffer` attribute to the parent loop.
   bool disallowAccMultiBuffer = getDisallowAccMultiBuffer(outer);
   for (scf::ForOp loop : innerLoops) {

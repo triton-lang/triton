@@ -14,6 +14,7 @@ namespace triton {
 static const char *kNumStagesAttrName = "tt.num_stages";
 static const char *kDisallowAccMultiBufferAttrName =
     "tt.disallow_acc_multi_buffer";
+static const char *kWarpSpecializeAttrName = "tt.warp_specialize";
 static const char *kLoopStageAttrName = "loop.stage";
 static const char *kLoopClusterAttrName = "loop.cluster";
 static const char *kScheduledMaxStageAttrName = "tt.scheduled_max_stage";
@@ -37,17 +38,6 @@ void replaceUsesAndPropagateType(OpBuilder &builder, Operation *oldUse,
 // Return true if the given ForOp has the attribute
 // `tt.disallow_acc_multi_buffer` set to true.
 bool getDisallowAccMultiBuffer(scf::ForOp forOp);
-
-/// Visit the operands of `op` and the operands of any nested ops defined
-/// outside of `op`.
-void visitNestedOperands(Operation *op,
-                         function_ref<void(OpOperand &)> visitor);
-/// Visit the operands of `op` and the operands of any nested ops defined
-/// outside of `op`.
-void visitNestedOperands(Operation *op, function_ref<void(Value)> visitor);
-/// Get the operands of `op` and the operands of any nested ops defined outside
-/// of `op`.
-SetVector<Value> getNestedOperands(Operation *op);
 
 // Return the definition of the given value. If the value is a loop-carried
 // dependency, return the definition and the distance to it.
@@ -94,10 +84,6 @@ gpu::MemDescType getBufferViewType(gpu::MemDescType allocTy);
 gpu::SharedEncodingTrait getSharedEncoding(RankedTensorType ty);
 // Get a shared encoding for a tensor based on its uses.
 gpu::SharedEncodingTrait getSharedEncoding(Operation *loadOp);
-
-// Erase the given loop carried values from the loop, where `loop` is replaced
-// with a new loop.
-void eraseLoopCarriedValues(scf::ForOp &loop, llvm::BitVector indices);
 
 // Get the number of stages to pipeline the loop with, if it is explicitly
 // specified.

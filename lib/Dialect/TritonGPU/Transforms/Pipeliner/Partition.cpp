@@ -1,5 +1,6 @@
 #include "triton/Dialect/TritonGPU/Transforms/Partition.h"
 #include "triton/Dialect/TritonGPU/Transforms/PipeliningUtility.h"
+#include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "llvm/ADT/SCCIterator.h"
 
 using namespace mlir;
@@ -84,6 +85,19 @@ template <> struct GraphTraits<PartitionGraph> {
 WarpSchedule::Partition *WarpSchedule::addPartition(unsigned stage) {
   partitions.push_back(std::make_unique<Partition>(partitions.size(), stage));
   return partitions.back().get();
+}
+
+void WarpSchedule::reorderPartitions(ArrayRef<unsigned> order) {
+  assert(order.size() == partitions.size());
+  assert(DenseSet<unsigned>(order.begin(), order.end()).size() == order.size());
+
+  SmallVector<std::unique_ptr<Partition>> newPartitions(partitions.size());
+  for (auto [i, order] : llvm::enumerate(order)) {
+    assert(order < partitions.size());
+    newPartitions[order] = std::move(partitions[i]);
+    newPartitions[order]->setIndex(order);
+  }
+  partitions = std::move(newPartitions);
 }
 
 WarpSchedule::Partition *WarpSchedule::getPartition(Operation *op) {
@@ -202,7 +216,8 @@ LogicalResult WarpSchedule::verify(scf::ForOp loop) const {
   for (Partition &partition : getPartitions()) {
     bool failed = false;
     auto callback = [&](OpResult output, OpOperand &use, unsigned distance) {
-      const Partition *consumer = opToPartition.at(use.getOwner());
+      Operation *user = loop.getBody()->findAncestorOpInBlock(*use.getOwner());
+      const Partition *consumer = opToPartition.at(user);
       if (partition.getStage() < consumer->getStage() + distance)
         return;
       InFlightDiagnostic diag =
@@ -298,7 +313,8 @@ void WarpSchedule::iterateUses(
   });
   while (!uses.empty()) {
     auto [output, use, distance] = uses.pop_back_val();
-    if (!isa<scf::YieldOp>(use->getOwner())) {
+    Operation *owner = loop.getBody()->findAncestorOpInBlock(*use->getOwner());
+    if (!isa<scf::YieldOp>(owner)) {
       callback(output, *use, distance);
       continue;
     }
