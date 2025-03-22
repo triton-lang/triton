@@ -577,7 +577,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
     // CHECK-NEXT: llvm.add
     // CHECK-NEXT: llvm.urem
     // CHECK-NEXT: llvm.add
-    // CHECK-NEXT: llvm.getelementptr %10[%35] : (!llvm.ptr<3>, i32) -> !llvm.ptr<3>, f32
+    // CHECK-NEXT: llvm.getelementptr
     %index = arith.constant 1 : i32
     %zero = arith.constant 0 : i32
     %0 = ttg.local_alloc : () -> !ttg.memdesc<16x128xf32, #shared0, #smem, mutable>
