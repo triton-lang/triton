@@ -1,5 +1,4 @@
 // RUN: triton-opt %s -allow-unregistered-dialect -tritongpu-rewrite-partition-dependencies -verify-diagnostics -canonicalize | FileCheck %s
-// REQUIRES: disabled
 
 #blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
 !ty = tensor<1xi32, #blocked>
