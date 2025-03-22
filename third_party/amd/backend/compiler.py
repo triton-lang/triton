@@ -22,6 +22,23 @@ def is_pingpong_enabled(arch):
     return os.getenv("TRITON_HIP_USE_BLOCK_PINGPONG", default) == "1"
 
 
+def ping_pong_conditional_threshold():
+    """
+    Determines a heuristic threshold (>=) for blocksize that is used to determine
+    if loads/stores in a conditional should be assumed "not-taken". Otherwise
+    the value conditional is assumed taken. In addition, here are some special values:
+        -1: Always assume the path with "minimum" loads/stores regardless of
+            the condition. This is primarily to enable testing/experimentation.
+        -2: Always assume the path with "maximum" loads/stores regardless of
+            the condition. This is primarily to enable testing/experimentation.
+        All other values: Size threshold in bytes for the blocksize to be compared.
+            To "always" ignore believed prologues/epilogues, set this to 0.
+    """
+    # This is the medium tile size in the Ping Pong Scheduler.
+    default = "33554432"
+    return int(os.getenv("TRITON_HIP_PING_PONG_THRESHOLD", default))
+
+
 @dataclass(frozen=True)
 class HIPOptions:
     num_warps: int = 4
@@ -264,7 +281,7 @@ class HIPBackend(BaseBackend):
             amd.passes.ttgpuir.add_reorder_instructions(pm)
             use_block_pingpong = is_pingpong_enabled(options.arch)
             if use_block_pingpong and options.num_stages == 2:
-                amd.passes.ttgpuir.add_block_pingpong(pm, options.num_stages)
+                amd.passes.ttgpuir.add_block_pingpong(pm, options.num_stages, ping_pong_conditional_threshold())
 
         if HIPBackend.use_buffer_ops():
             amd.passes.ttgpuir.add_canonicalize_pointers(pm)
