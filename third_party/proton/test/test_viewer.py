@@ -141,13 +141,14 @@ def test_percentage():
     pass
 
 
-def derivation_metrics_test(metrics, expected_data, sample_file, rtol=1e-7, atol=1e-6):
+def derivation_metrics_test(metrics, expected_data, sample_file, metrics_expr = None, rtol=1e-7, atol=1e-6):
     with open(sample_file, "r") as f:
         gf, inclusive_metrics, exclusive_metrics, device_info = get_raw_metrics(f)
         assert len(inclusive_metrics + exclusive_metrics) > 0, "No metrics found in the input file"
         gf.update_inclusive_columns()
-        derived_metrics = derive_metrics(gf, metrics, inclusive_metrics, exclusive_metrics, device_info)
+        derived_metrics = derive_metrics(gf, metrics, inclusive_metrics, exclusive_metrics, device_info, metrics_expr)
         for derived_metric in derived_metrics:
+            print(derived_metric)
             np.testing.assert_allclose(gf.dataframe[derived_metric].to_numpy(), expected_data[derived_metric],
                                        rtol=rtol, atol=atol)
 
@@ -196,4 +197,28 @@ def test_flops_derivation():
             "tflop8/s (inc)": [341.796875, 488.28125, 48.828125, 488.28125]
         },
         sample_file=cuda_example_file,
+    )
+
+def test_bytes_derivation_with_expression():
+    # Now, in addition to the regular metrics,
+    # include a metric expression that creates a new column "@double_bytes"
+    # which should be twice the value of "byte/s (inc)".
+    derivation_metrics_test(
+        metrics=[
+            "byte/s", "gbyte/s", "tbyte/s",
+            "@double_bytes"
+        ],
+        expected_data={
+            "byte/s (inc)": [1.953125e+11, 4.88281250e+11, 4.88281250e+10, 4.88281250e+10],
+            "gbyte/s (inc)": [195.3125, 488.28125, 48.828125, 48.828125],
+            "tbyte/s (inc)": [0.195312, 0.48828125, 0.04882812, 0.04882812],
+            "@double_bytes": [
+                1.953125e+11 * 2,
+                4.88281250e+11 * 2,
+                4.88281250e+10 * 2,
+                4.88281250e+10 * 2,
+            ],
+        },
+        sample_file=cuda_example_file,
+        metrics_expr="@double_bytes = MULT(byte/s, 2);"
     )

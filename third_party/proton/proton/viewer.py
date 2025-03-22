@@ -9,7 +9,8 @@ except ImportError:
     raise ImportError("Failed to import hatchet. `pip install llnl-hatchet` to get the correct version.")
 import numpy as np
 from triton.profiler.hook import COMPUTE_METADATA_SCOPE_NAME, TritonHook
-
+from triton.profiler.metrics.interpreter import interpret_statements
+from triton.profiler.metrics.parser import MetricExprParser
 
 def match_available_metrics(metrics, inclusive_metrics, exclusive_metrics):
     ret = []
@@ -18,6 +19,14 @@ def match_available_metrics(metrics, inclusive_metrics, exclusive_metrics):
     if metrics:
         for metric in metrics:
             metric = metric.lower()
+            # Handle @ prefixed metrics - these should only match exactly with created metrics
+            if metric.startswith('@'):
+                metric_name = metric[1:]  # Remove @ prefix
+                if metric_name in inclusive_metrics:
+                    ret.append(metric_name)
+                continue
+            
+            # Normal metric matching for non-@ metrics
             for raw_metric in inclusive_metrics + exclusive_metrics:
                 suffix = " (inc)" if raw_metric in inclusive_metrics else ""
                 raw_metric_no_unit = raw_metric.split("(")[0].strip().lower()
@@ -145,15 +154,25 @@ for width in TritonHook.flops_width:
     derivable_metrics.update({key: FactorDict(factor_name, factor_dict) for key in factor_dict.keys()})
 
 
-def derive_metrics(gf, metrics, inclusive_metrics, exclusive_metrics, device_info):
+def derive_metrics(gf, metrics, inclusive_metrics, exclusive_metrics, device_info, metric_expr=None):
     derived_metrics = []
+    metric_mappings = {}  # Track original metric -> derived metric name mappings
 
     def get_time_seconds(df, metric, factor_dict):
         time_metric_name = match_available_metrics(metric, inclusive_metrics, exclusive_metrics)[0]
         time_unit = (factor_dict.name + "/" + time_metric_name.split("(")[1].split(")")[0])
         return df[time_metric_name] * factor_dict.factor[time_unit]
 
-    for metric in metrics:
+    # If metric_expr is provided, parse it once and find needed metrics
+    ast = None
+    needed_metrics = []
+    if metric_expr:
+        parser = MetricExprParser(metric_expr)
+        ast = parser.ast
+        needed_metrics = parser.find_derivable_metrics()
+
+    # Handle all requested metrics
+    for metric in list(set(metrics + needed_metrics)):
         if metric == "util":  # exclusive
             min_time_bytes = get_min_time_bytes(gf.dataframe, device_info)
             min_time_flops = get_min_time_flops(gf.dataframe, device_info)
@@ -167,10 +186,12 @@ def derive_metrics(gf, metrics, inclusive_metrics, exclusive_metrics, device_inf
             metric_name = derivable_metric.name
             metric_factor_dict = derivable_metric.factor
             matched_metric_name = match_available_metrics(metric_name, inclusive_metrics, exclusive_metrics)[0]
-            gf.dataframe[f"{metric} (inc)"] = (gf.dataframe[matched_metric_name] /
+            derived_name = f"{metric} (inc)"
+            gf.dataframe[derived_name] = (gf.dataframe[matched_metric_name] /
                                                (get_time_seconds(gf.dataframe, "time", time_factor_dict)) /
                                                metric_factor_dict[metric])
-            derived_metrics.append(f"{metric} (inc)")
+            derived_metrics.append(derived_name)
+            metric_mappings[metric] = derived_name
         elif metric in time_factor_dict.factor or metric in cpu_time_factor_dict.factor or \
                 metric in avg_time_factor_dict.factor or metric in avg_cpu_time_factor_dict.factor:  # inclusive
             is_cpu = metric in cpu_time_factor_dict.factor or metric in avg_cpu_time_factor_dict.factor
@@ -185,8 +206,13 @@ def derive_metrics(gf, metrics, inclusive_metrics, exclusive_metrics, device_inf
             if is_avg:
                 time_value = time_value / gf.dataframe["count (inc)"]
 
-            gf.dataframe[f"{metric} (inc)"] = time_value / factor_dict.factor[metric_time_unit]
-            derived_metrics.append(f"{metric} (inc)")
+            derived_name = f"{metric} (inc)"
+            gf.dataframe[derived_name] = time_value / factor_dict.factor[metric_time_unit]
+            derived_metrics.append(derived_name)
+            metric_mappings[metric] = derived_name
+        # Skip expression-based metric derivations, will be handled later
+        elif '@' in metric:
+            continue
         else:
             metric_name_and_unit = metric.split("/")
             metric_name = metric_name_and_unit[0]
@@ -202,11 +228,23 @@ def derive_metrics(gf, metrics, inclusive_metrics, exclusive_metrics, device_inf
                     total = gf.dataframe[matched_metric_name].iloc[0]
                 else:
                     total = gf.dataframe[matched_metric_name].sum()
-                gf.dataframe[metric + suffix] = (single_frame / total) * 100.0
-                derived_metrics.append(metric + suffix)
+                derived_name = metric + suffix
+                gf.dataframe[derived_name] = (single_frame / total) * 100.0
+                derived_metrics.append(derived_name)
+                metric_mappings[metric] = derived_name
             else:
                 matched_metric_name = match_available_metrics(metric_name, inclusive_metrics, exclusive_metrics)[0]
                 derived_metrics.append(matched_metric_name)
+                metric_mappings[metric] = matched_metric_name
+
+
+
+    # Finally handle expression-based metric derivations
+    if ast:
+        created_metrics = interpret_statements(ast, gf, metric_mappings)
+        for metric in created_metrics:
+            metric_mappings[metric] = metric
+        derived_metrics.extend(created_metrics)
 
     # Update derived metrics to the graph frame
     for derived_metric in derived_metrics:
@@ -215,18 +253,8 @@ def derive_metrics(gf, metrics, inclusive_metrics, exclusive_metrics, device_inf
         else:
             gf.exc_metrics.append(derived_metric)
 
-    return derived_metrics
-
-
-def format_frames(gf, format):
-    if format == "file_function_line":
-        gf.dataframe["name"] = gf.dataframe["name"].apply(lambda x: x.split("/")[-1])
-    elif format == "function_line":
-        gf.dataframe["name"] = gf.dataframe["name"].apply(lambda x: x.split(":")[-1])
-    elif format == "file_function":
-        gf.dataframe["name"] = gf.dataframe["name"].apply(
-            lambda x: f"{x.split('/')[-1].split(':')[0]}@{x.split('@')[-1].split(':')[0]}")
-    return gf
+    # Return only the original metrics with their mapped names
+    return [metric_mappings.get(metric, metric) for metric in metrics]
 
 
 def filter_frames(gf, include=None, exclude=None, threshold=None, metric=None):
@@ -246,6 +274,17 @@ WHERE p."name" =~ "{exclude}"
     if threshold:
         query = ["*", {metric: f">= {threshold}"}]
         gf = gf.filter(query, squash=True)
+    return gf
+
+
+def format_frames(gf, format):
+    if format == "file_function_line":
+        gf.dataframe["name"] = gf.dataframe["name"].apply(lambda x: x.split("/")[-1])
+    elif format == "function_line":
+        gf.dataframe["name"] = gf.dataframe["name"].apply(lambda x: x.split(":")[-1])
+    elif format == "file_function":
+        gf.dataframe["name"] = gf.dataframe["name"].apply(
+            lambda x: f"{x.split('/')[-1].split(':')[0]}@{x.split('@')[-1].split(':')[0]}")
     return gf
 
 
@@ -271,12 +310,13 @@ def print_tree(gf, metrics, depth=100, format=None, print_sorted=False):
     emit_warnings(gf, metrics)
 
 
-def parse(metrics, filename, include=None, exclude=None, threshold=None):
+def parse(metrics, filename, include=None, exclude=None, threshold=None, metric_expr=None):
     with open(filename, "r") as f:
         gf, inclusive_metrics, exclusive_metrics, device_info = get_raw_metrics(f)
         assert len(inclusive_metrics + exclusive_metrics) > 0, "No metrics found in the input file"
         gf.update_inclusive_columns()
-        metrics = derive_metrics(gf, metrics, inclusive_metrics, exclusive_metrics, device_info)
+        metrics = derive_metrics(gf, metrics, inclusive_metrics, exclusive_metrics, device_info, metric_expr)
+        print(f"metrics: {metrics}")
         # TODO: generalize to support multiple metrics, not just the first one
         gf = filter_frames(gf, include, exclude, threshold, metrics[0])
         return gf, metrics
@@ -289,7 +329,11 @@ def show_metrics(file_name):
         if inclusive_metrics:
             for raw_metric in inclusive_metrics:
                 raw_metric_no_unit = raw_metric.split("(")[0].strip().lower()
-                print(f"- {raw_metric_no_unit}")
+                # Skip showing @ metrics unless they were explicitly created
+                if not raw_metric_no_unit.startswith('@'):
+                    print(f"- {raw_metric_no_unit}")
+                else:
+                    print(f"- {raw_metric_no_unit} (derived)")
         print("Available exclusive metrics:")
         if exclusive_metrics:
             for raw_metric in exclusive_metrics:
@@ -314,6 +358,15 @@ Derived metrics can be created when source metrics are available.
 - byte/s, gbyte/s, tbyte/s: bytes / time
 - util: max(sum(flops<width>) / peak_flops<width>_time, sum(bytes) / peak_bandwidth_time)
 - <metric>/%%: frame(metric) / sum(metric). Only availble for inclusive metrics (e.g. time)
+""",
+    )
+    argparser.add_argument(
+        "-c",
+        "--custom-expr",
+        type=str,
+        default=None,
+        help="""Arbitrary metric expressions, e.g.:
+@m1 = time; @m2 = num_samples; @m3 = @m1 / sum(@m2);
 """,
     )
     argparser.add_argument(
@@ -388,7 +441,7 @@ proton-viewer -e ".*test.*" path/to/file.json
 
     args, target_args = argparser.parse_known_args()
     assert len(target_args) == 1, "Must specify a file to read"
-
+    
     file_name = target_args[0]
     metrics = args.metrics.split(",") if args.metrics else None
     include = args.include
@@ -403,9 +456,9 @@ proton-viewer -e ".*test.*" path/to/file.json
     if args.list:
         show_metrics(file_name)
     elif metrics:
-        gf, derived_metrics = parse(metrics, file_name, include, exclude, threshold)
+        gf, derived_metrics = parse(metrics, file_name, include, exclude, threshold, args.metric_expr)
         if diff:
-            gf2, _ = parse(metrics, diff, include, exclude, threshold)
+            gf2, _ = parse(metrics, diff, include, exclude, threshold, args.metric_expr)
             gf = gf.sub(gf2)
         print_tree(gf, derived_metrics, depth, format, print_sorted)
 
