@@ -17,12 +17,12 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     // CHECK-NOT: arith.constant dense<127> : tensor<128x4xi8, #linear>
     // CHECK-NOT: arith.constant dense<127> : tensor<128x4xi8, #linear1>
     // CHECK-NOT: tt.fp_to_fp
+    // CHECK: %[[C:.+]] = ttg.convert_layout {{.*}} : tensor<128x128xf32, #blocked1> -> tensor<128x128xf32, #mma>
     // CHECK: %[[A:.+]] = ttg.convert_layout {{.*}} : tensor<128x64xi8, #blocked> -> tensor<128x64xi8, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 16}>>
     // CHECK: %[[B:.+]] = ttg.convert_layout {{.*}} : tensor<64x128xi8, #blocked1> -> tensor<64x128xi8, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 16}>>
     // CHECK: %[[SCALE0:.+]] = ttg.convert_layout {{.*}} : tensor<128x4xi8, #blocked2> -> tensor<128x4xi8, #linear>
     // CHECK: %[[SCALE1:.+]] = ttg.convert_layout {{.*}} : tensor<128x4xi8, #blocked2> -> tensor<128x4xi8, #linear1>
-    // CHECK: tt.dot_scaled %[[A]] scale %[[SCALE0]], %[[B]] scale %[[SCALE1]], %{{.*}} lhs = e2m1 rhs = e2m1
-    // CHECK: ttg.convert_layout {{.*}} : tensor<128x128xf32, #mma> -> tensor<128x128xf32, #blocked1>
+    // CHECK: tt.dot_scaled %[[A]] scale %[[SCALE0]], %[[B]] scale %[[SCALE1]], %[[C]] lhs = e2m1 rhs = e2m1
     %cst = arith.constant dense<0.000000e+00> : tensor<128x128xf32, #blocked1>
     %1 = tt.dot_scaled %arg0 scale %arg2, %arg1 scale %arg3, %cst lhs = e2m1 rhs = e2m1 {fastMath = false} : tensor<128x64xi8, #blocked>, tensor<128x4xi8, #blocked2> * tensor<64x128xi8, #blocked1>, tensor<128x4xi8, #blocked2> -> tensor<128x128xf32, #blocked1>
     tt.store %arg4, %1 : tensor<128x128x!tt.ptr<f32>, #blocked1>
@@ -117,12 +117,12 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     // CHECK-NOT: arith.constant dense<127> : tensor<128x4xi8, #linear>
     // CHECK-NOT: arith.constant dense<127> : tensor<128x4xi8, #linear1>
     // CHECK-NOT: tt.fp_to_fp
+    // CHECK: %[[C:.+]] = ttg.convert_layout {{.*}} : tensor<128x128xf32, #blocked> -> tensor<128x128xf32, #mma>
     // CHECK: %[[A:.+]] = ttg.convert_layout {{.*}} : tensor<128x128xf8E4M3FN, #blocked> -> tensor<128x128xf8E4M3FN, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 16}>>
     // CHECK: %[[B:.+]] = ttg.convert_layout {{.*}} : tensor<128x128xf8E4M3FN, #blocked> -> tensor<128x128xf8E4M3FN, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 16}>>
     // CHECK: %[[SCALE0:.+]] = ttg.convert_layout {{.*}} : tensor<128x4xi8, #blocked1> -> tensor<128x4xi8, #linear>
     // CHECK: %[[SCALE1:.+]] = ttg.convert_layout {{.*}} : tensor<128x4xi8, #blocked1> -> tensor<128x4xi8, #linear1>
-    // CHECK: tt.dot_scaled %[[A]] scale %[[SCALE0]], %[[B]] scale %[[SCALE1]], %{{.*}} lhs = e4m3 rhs = e4m3
-    // CHECK: ttg.convert_layout {{.*}} : tensor<128x128xf32, #mma> -> tensor<128x128xf32, #blocked>
+    // CHECK: tt.dot_scaled %[[A]] scale %[[SCALE0]], %[[B]] scale %[[SCALE1]], %[[C]] lhs = e4m3 rhs = e4m3
     %cst = arith.constant dense<0.000000e+00> : tensor<128x128xf32, #blocked>
     %1 = tt.dot_scaled %arg0 scale %arg2, %arg1 scale %arg3, %cst lhs = e4m3 rhs = e4m3 {fastMath = false} : tensor<128x128xf8E4M3FN, #blocked>, tensor<128x4xi8, #blocked1> * tensor<128x128xf8E4M3FN, #blocked>, tensor<128x4xi8, #blocked1> -> tensor<128x128xf32, #blocked>
     tt.store %arg4, %1 : tensor<128x128x!tt.ptr<f32>, #blocked>
