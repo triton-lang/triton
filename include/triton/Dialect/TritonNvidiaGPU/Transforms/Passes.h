@@ -56,8 +56,6 @@ std::unique_ptr<Pass> createTensorMemoryAllocationPass();
 
 std::unique_ptr<Pass> createTritonNvidiaGPUMMALoweringPass();
 
-std::unique_ptr<Pass> createTritonNvidiaGPUKeepAccInTMemPass();
-
 std::unique_ptr<Pass> createTritonNvidiaGPUPromoteLHSToTMemPass();
 
 std::unique_ptr<Pass> createTritonNvidiaGPUOptimizeDescriptorEncodingPass();

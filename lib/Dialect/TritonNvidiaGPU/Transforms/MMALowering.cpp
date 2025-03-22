@@ -45,7 +45,7 @@ public:
 
     rewriter.setInsertionPointAfter(op);
     Value phase = rewriter.create<arith::ConstantIntOp>(loc, 0, 32);
-    rewriter.create<WaitBarrierOp>(loc, barrierAlloc, phase);
+    rewriter.create<WaitBarrierOp>(loc, barrierAlloc, phase, op.getPred());
     rewriter.create<InvalBarrierOp>(loc, barrierAlloc);
     return success();
   }

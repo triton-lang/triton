@@ -37,8 +37,7 @@ bool tt::CoarseSchedule::insertMinimum(Operation *op, int stage,
 
   // If existingCluster is reachable from cluster,
   // then cluster is earlier in the list
-  auto it = cluster;
-  for (auto it = cluster; it != clusters.end(); ++it) {
+  for (auto it = std::next(cluster); it != clusters.end(); ++it) {
     if (it == existingCluster) {
       existingCluster = cluster;
       return true;
@@ -79,7 +78,7 @@ bool tt::CoarseSchedule::insertDepsOfOp(Operation *op, int stage,
     if (defOp && defOp->getBlock() == op->getBlock()) {
       if (tryInsert(defOp, stage, cluster)) {
         inserted = true;
-        insertDepsOfOp(defOp, stage, cluster, includeArg);
+        insertDepsOfOp(defOp, stage, cluster, includeArg, insertIfEarlier);
       }
     }
   }

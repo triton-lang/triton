@@ -15,7 +15,7 @@ namespace gpu {
 
 /// Discover operations that should become async and assign latencies to them
 /// based on the numStages value provided by the user.
-void assignLatencies(ModuleOp moduleOp, int numStages, bool assignMMA = false);
+void assignLatencies(ModuleOp moduleOp, int numStages);
 
 /// Schedule the loops based on the latencies assigned to the operations.
 void scheduleLoops(ModuleOp moduleOp);
@@ -35,12 +35,6 @@ bool preProcessLoopAndGetSchedule(scf::ForOp &forOp, int numStages,
 /// schedules async copies to overlap with the epilogue of a loop.
 bool getOuterLoopSchedule(scf::ForOp &forOp, int numStages,
                           mlir::triton::PipeliningOption &options);
-
-/// Pipeline the Tensor Core Gen 05 MMA ops in the module with `numStages`
-/// stages. This will pre-process the loops, lowering the ops related to TG Gen5
-/// MMA, and then pipeline the loops using expander.
-void pipelineTC05MMALoops(ModuleOp module, int numStages,
-                          bool disableExpander = false);
 
 /// Pipeline the TMA stores in the loop.
 bool pipelineTMAStores(scf::ForOp forOp);
@@ -106,7 +100,8 @@ public:
   CoarseSchedule() = default;
   CoarseSchedule(int numStages) : numStages(numStages) {}
   ClusterList clusters;
-  using Cluster = decltype(clusters)::iterator;
+  using Cluster = ClusterList::iterator;
+  using ClusterHash = size_t;
 
   DenseMap<Operation *, std::pair<int, Cluster>> opToStageAndCluster;
 
@@ -114,7 +109,9 @@ public:
   int getNumStages() { return numStages; }
 
   void insert(Operation *op, int stage, Cluster cluster) {
-    assert(stage < numStages && "Invalid stage");
+    if (stage >= numStages) {
+      numStages = stage + 1;
+    }
     opToStageAndCluster[op] = {stage, cluster};
   }
 
@@ -153,6 +150,10 @@ public:
   void serialize(scf::ForOp &forOp);
   // Create a CoarseSchedule based on forOp's <stage, cluster>.
   LogicalResult deSerialize(scf::ForOp &forOp);
+
+  static ClusterHash hashCluster(Cluster cluster) {
+    return reinterpret_cast<ClusterHash>(&*cluster);
+  }
 
   LLVM_DUMP_METHOD void dump();
 
