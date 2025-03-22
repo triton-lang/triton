@@ -11,7 +11,8 @@ namespace mlir::triton::proton {
 #define GEN_PASS_DECL
 #include "proton/dialect/include/Conversion/ProtonToProtonGPU/Passes.h.inc"
 
-/// FIXME(Keren): I dropped some non-sense default numbers, just to make end to end tests work
+/// FIXME(Keren): I dropped some non-sense default numbers, just to make end to
+/// end tests work
 std::unique_ptr<OperationPass<ModuleOp>> createConvertProtonToProtonGPUPass(
     std::string metric = "cycle", std::string granularity = "warpgroup",
     int32_t maxSharedMem = 0, int32_t scratchMem = 65536,

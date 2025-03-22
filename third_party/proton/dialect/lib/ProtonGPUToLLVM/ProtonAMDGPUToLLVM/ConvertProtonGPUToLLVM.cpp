@@ -46,8 +46,7 @@ struct ConvertProtonAMDGPUToLLVM
                                                tritonTargetInfo);
     mlir::triton::proton::gpu::populateProtonGPUOpPatterns(
         typeConverter, patterns, protonTargetInfo, 1);
-    auto convTarget =
-        ProtonLLVMConversionTarget(*context);
+    auto convTarget = ProtonLLVMConversionTarget(*context);
     if (failed(applyPartialConversion(mod, convTarget, std::move(patterns))))
       return signalPassFailure();
   }
