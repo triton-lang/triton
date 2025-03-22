@@ -1,5 +1,5 @@
-#ifndef PROTONAMDGPUTOLLVM_CONVERSION_PASSES
-#define PROTONAMDGPUTOLLVM_CONVERSION_PASSES
+#ifndef PROTONAMDGPU_TO_LLVM_PASSES
+#define PROTONAMDGPU_TO_LLVM_PASSES
 
 include "mlir/Pass/PassBase.td"
 
@@ -26,4 +26,4 @@ def ConvertProtonAMDGPUToLLVM : Pass<"convert-proton-amdgpu-to-llvm", "mlir::Mod
     ];
 }
 
-#endif
+#endif // PROTONAMDGPU_TO_LLVM_PASSES

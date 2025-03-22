@@ -535,7 +535,7 @@ class CudaLauncher(object):
     def __call__(self, gridX, gridY, gridZ, stream, function, *args):
 
         def allocate_scratch(size, align, allocator):
-            if size > 0 and not isinstance(allocator, _allocation.NullAllocator):
+            if size > 0:
                 grid_size = gridX * gridY * gridZ
                 alloc_size = grid_size * size
                 return allocator(alloc_size, align, stream)

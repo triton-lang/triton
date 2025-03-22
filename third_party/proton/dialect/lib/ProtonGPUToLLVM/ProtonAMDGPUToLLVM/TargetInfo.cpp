@@ -3,7 +3,7 @@
 #include "mlir/Dialect/LLVMIR/LLVMTypes.h"
 #include "llvm/Support/MathExtras.h"
 
-namespace mlir::triton::proton::AMD {
+namespace mlir::triton::proton::gpu::AMD {
 
 Value TargetInfo::clock(ConversionPatternRewriter &rewriter, Location loc,
                         bool isClock64) const {
@@ -12,4 +12,4 @@ Value TargetInfo::clock(ConversionPatternRewriter &rewriter, Location loc,
   return Value();
 }
 
-} // namespace mlir::triton::proton::AMD
+} // namespace mlir::triton::proton::gpu::AMD

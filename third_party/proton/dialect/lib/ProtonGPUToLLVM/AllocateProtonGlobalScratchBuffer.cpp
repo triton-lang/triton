@@ -24,8 +24,8 @@ struct AllocateProtonGlobalScratchBuffer
     MLIRContext *ctx = &getContext();
     OpBuilder builder(ctx);
 
-    assert(llvm::range_size(mod.getOps<triton::FuncOp>()) == 1);
-    FuncOp func = *mod.getOps<triton::FuncOp>().begin();
+    assert(llvm::range_size(mod.getOps<FunctionOpInterface>()) == 1);
+    auto func = *mod.getOps<FunctionOpInterface>().begin();
 
     int32_t cumulativeMemorySize = 0; // bytes
     std::vector<uint32_t> Alignments;
@@ -44,9 +44,9 @@ struct AllocateProtonGlobalScratchBuffer
                                          Alignments.end(), Alignments.begin());
     assert(allAlignmentsEqual &&
            "all global scratch buffer alignment values must be the same");
-    mod->setAttr("proton.global_scratch_memory_size",
+    mod->setAttr("ttg.profile_scratch_memory_size",
                  builder.getI32IntegerAttr(cumulativeMemorySize));
-    mod->setAttr("proton.global_scratch_memory_alignment",
+    mod->setAttr("ttg.profile_scratch_memory_alignment",
                  builder.getI32IntegerAttr(Alignments.front()));
   }
 };

@@ -10,16 +10,27 @@ using namespace mlir;
 using namespace mlir::triton;
 
 namespace mlir {
-namespace triton::proton {
+namespace triton::proton::gpu {
 #define GEN_PASS_DEF_CONVERTPROTONAMDGPUTOLLVM
 #include "proton/dialect/include/Conversion/ProtonGPUToLLVM/ProtonAMDGPUToLLVM/Passes.h.inc"
-} // namespace triton::proton
+} // namespace triton::proton::gpu
 } // namespace mlir
 
 namespace {
 
+class ProtonLLVMConversionTarget : public ConversionTarget {
+public:
+  explicit ProtonLLVMConversionTarget(MLIRContext &ctx)
+      : ConversionTarget(ctx) {
+    addLegalDialect<LLVM::LLVMDialect>();
+    addIllegalDialect<mlir::triton::proton::gpu::ProtonGPUDialect>();
+    addIllegalDialect<mlir::triton::proton::ProtonDialect>();
+    addLegalOp<mlir::UnrealizedConversionCastOp>();
+  }
+};
+
 struct ConvertProtonAMDGPUToLLVM
-    : public mlir::triton::proton::impl::ConvertProtonAMDGPUToLLVMBase<
+    : public mlir::triton::proton::gpu::impl::ConvertProtonAMDGPUToLLVMBase<
           ConvertProtonAMDGPUToLLVM> {
   explicit ConvertProtonAMDGPUToLLVM(std::string arch) { this->arch = arch; }
 
@@ -29,16 +40,15 @@ struct ConvertProtonAMDGPUToLLVM
     ModuleOp mod = getOperation();
     auto tritonTargetInfo = mlir::triton::AMD::TargetInfo(arch);
     auto protonTargetInfo =
-        mlir::triton::proton::AMD::TargetInfo(tritonTargetInfo);
+        mlir::triton::proton::gpu::AMD::TargetInfo(tritonTargetInfo);
     mlir::LowerToLLVMOptions option(context);
     TritonGPUToLLVMTypeConverter typeConverter(context, option,
                                                tritonTargetInfo);
-    mlir::triton::proton::populateProtonGPUOpPatterns(typeConverter, patterns,
-                                                      protonTargetInfo, 1);
-    if (failed(
-            mlir::applyPatternsGreedily(getOperation(), std::move(patterns)))) {
-      signalPassFailure();
-    }
+    mlir::triton::proton::gpu::populateProtonGPUOpPatterns(
+        typeConverter, patterns, protonTargetInfo, 1);
+    auto convTarget = ProtonLLVMConversionTarget(*context);
+    if (failed(applyPartialConversion(mod, convTarget, std::move(patterns))))
+      return signalPassFailure();
   }
 };
 
