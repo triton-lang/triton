@@ -246,9 +246,9 @@ struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp>,
       const size_t movWidth = width < 16 ? 16 : width;
       assert(wordNElems * nWords * numVecs == numElems);
 
-      // TODO(Superjomn) Add cache policy fields to StoreOp.
-      // TODO(Superjomn) Deal with cache policy here.
-      const bool hasL2EvictPolicy = false;
+      // Check if we need to apply L2 cache hints
+      const bool hasL2CacheHint = op.getEvict() == triton::EvictionPolicy::EVICT_FIRST || 
+                                 op.getEvict() == triton::EvictionPolicy::EVICT_LAST;
 
       PTXBuilder ptxBuilder;
 
@@ -315,15 +315,15 @@ struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp>,
                         op.getEvict() == triton::EvictionPolicy::EVICT_FIRST)
                      .o("L1::evict_last",
                         op.getEvict() == triton::EvictionPolicy::EVICT_LAST)
-                     .o("L1::cache_hint", hasL2EvictPolicy)
+                     .o("L2::evict_first", 
+                        op.getEvict() == triton::EvictionPolicy::EVICT_FIRST)
+                     .o("L2::evict_last", 
+                        op.getEvict() == triton::EvictionPolicy::EVICT_LAST)
                      .v(nWords)
                      .b(width);
 
       PTXBuilder::Operand *evictOpr{};
 
-      // Here lack a mlir::Value to bind to this operation, so disabled.
-      // if (has_l2_evict_policy)
-      //   evictOpr = ptxBuilder.newOperand(l2Evict, "l");
 
       if (!evictOpr)
         ld(dstsOpr, addrOpr).maybePredicate(pred, "b");
@@ -336,10 +336,6 @@ struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp>,
                        ? LLVM::LLVMStructType::getLiteral(getContext(), retTys)
                        : retTys[0];
 
-      // TODO: if (has_l2_evict_policy)
-      // auto asmDialectAttr =
-      // LLVM::AsmDialectAttr::get(rewriter.getContext(),
-      //                                                 LLVM::AsmDialect::AD_ATT);
       Value ret = ptxBuilder.launch(rewriter, loc, retTy);
 
       // Extract and store return values
@@ -502,6 +498,10 @@ struct StoreOpConversion : public ConvertOpToLLVMPattern<triton::StoreOp>,
               .o("L1::evict_first",
                  op.getEvict() == triton::EvictionPolicy::EVICT_FIRST)
               .o("L1::evict_last",
+                 op.getEvict() == triton::EvictionPolicy::EVICT_LAST)
+              .o("L2::evict_first", 
+                 op.getEvict() == triton::EvictionPolicy::EVICT_FIRST)
+              .o("L2::evict_last", 
                  op.getEvict() == triton::EvictionPolicy::EVICT_LAST)
               .v(nWords)
               .b(width);
