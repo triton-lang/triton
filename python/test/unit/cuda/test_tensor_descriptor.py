@@ -11,7 +11,8 @@ from typing import Optional
 @requires_tma
 @pytest.mark.interpreter
 @pytest.mark.parametrize("dtype_str", tma_dtypes)
-def test_tensor_descriptor_load(dtype_str):
+@pytest.mark.parametrize("M_BLOCK,N_BLOCK", [(2, 16), (8, 16), (8, 32)])
+def test_tensor_descriptor_load(dtype_str, M_BLOCK, N_BLOCK):
 
     @triton.jit
     def kernel(out_ptr, a_ptr, M, N, M_BLOCK: tl.constexpr, N_BLOCK: tl.constexpr):
@@ -41,9 +42,6 @@ def test_tensor_descriptor_load(dtype_str):
 
     M, N = 32, 128
     inp = to_triton(numpy_random((M, N), dtype_str), device="cuda", dst_type=dtype_str)
-
-    M_BLOCK = 8
-    N_BLOCK = 32
     out = inp.new_empty((M_BLOCK, N_BLOCK))
 
     kernel[(1, )](out, inp, M, N, M_BLOCK, N_BLOCK)
@@ -55,7 +53,8 @@ def test_tensor_descriptor_load(dtype_str):
 @requires_tma
 @pytest.mark.interpreter
 @pytest.mark.parametrize("dtype_str", tma_dtypes)
-def test_tensor_descriptor_store(dtype_str):
+@pytest.mark.parametrize("M_BLOCK,N_BLOCK", [(2, 16), (8, 16), (8, 32)])
+def test_tensor_descriptor_store(dtype_str, M_BLOCK, N_BLOCK):
 
     @triton.jit
     def kernel(out_ptr, a_ptr, M, N, M_BLOCK: tl.constexpr, N_BLOCK: tl.constexpr):
@@ -84,9 +83,6 @@ def test_tensor_descriptor_store(dtype_str):
 
     M, N = 32, 128
     inp = to_triton(numpy_random((M, N), dtype_str), device="cuda", dst_type=dtype_str)
-
-    M_BLOCK = 8
-    N_BLOCK = 32
     out = inp.new_empty((M, N))
 
     grid_m = M // M_BLOCK

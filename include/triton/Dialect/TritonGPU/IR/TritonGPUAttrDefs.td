@@ -430,7 +430,7 @@ def NVMMASharedEncodingAttr :
         } else if (contigDimSizeInByte >= 32 && contigDimSizeInByte % 32 == 0) {
           swizzlingByteWidth = 32;
         } else {
-          llvm_unreachable("unsupported shared memory layout for MMAv3");
+          llvm_unreachable("unsupported NVMMA layout (MMAv3 or TMA)");
         }
         bool transposed = order[0] == 0;
         return $_get(context, swizzlingByteWidth, transposed, eleBitWidth, fp4Padded, CTALayout);
