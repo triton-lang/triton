@@ -1442,6 +1442,23 @@ void TritonAMDGPUCanonicalizePointersPass::runOnOperation() {
 
   auto func = getOperation();
 
+  // Skip the pass as a workaround as if op with multiple results are not
+  // supported yet.
+  bool hasIfOpWithMultipleResults =
+      func.walk([&](scf::IfOp ifOp) {
+            if (ifOp.getNumResults() > 1) {
+              for (auto result : ifOp.getResultTypes()) {
+                if (llvm::isa<tt::PointerType>(result)) {
+                  return WalkResult::interrupt();
+                }
+              }
+            }
+            return WalkResult::advance();
+          })
+          .wasInterrupted();
+  if (hasIfOpWithMultipleResults)
+    return;
+
   FatPointers fatPrs;
   PatternRewriter rewriter(&getContext());
   // Convert tt.func; %1 = unrealize_cast(%arg0: tt.ptr, c0: i32) -> tt.ptr
