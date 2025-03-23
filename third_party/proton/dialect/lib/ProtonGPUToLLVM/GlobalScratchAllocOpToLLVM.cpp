@@ -1,11 +1,11 @@
 #include "third_party/proton/dialect/include/Conversion/ProtonGPUToLLVM/GlobalScratchAllocOpToLLVM.h"
+#include "Conversion/ProtonGPUToLLVM/TargetInfoBase.h"
 #include "Dialect/ProtonGPU/IR/Dialect.h"
 #include "mlir/Conversion/LLVMCommon/Pattern.h"
 #include "mlir/IR/PatternMatch.h"
 #include "mlir/Pass/Pass.h"
 #include "third_party/proton/dialect/include/Conversion/ProtonGPUToLLVM/Passes.h"
 #include "third_party/proton/dialect/include/Dialect/Proton/IR/Dialect.h"
-#include "triton/Conversion/TritonGPUToLLVM/TargetInfoBase.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
@@ -24,29 +24,17 @@ struct GlobalScratchAllocOpConversion
   LogicalResult
   matchAndRewrite(proton::gpu::GlobalScratchAllocOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    rewriter.eraseOp(op);
-    auto funcOp = op->getParentOfType<LLVM::LLVMFuncOp>();
-    auto ctx = funcOp->getContext();
-    auto loc = funcOp.getLoc();
+    auto loc = op.getLoc();
     auto b = TritonLLVMOpBuilder(loc, rewriter);
-    auto gmemBase = funcOp.getArgument(funcOp.getNumArguments() - 1);
-    assert(op->hasAttr("offset"));
-    size_t offset =
-        cast<IntegerAttr>(op->getAttr("offset")).getValue().getZExtValue();
-    auto llvmPointerType = LLVM::LLVMPointerType::get(ctx);
-    rewriter.create<LLVM::GEPOp>(loc, llvmPointerType, llvmPointerType,
-                                 gmemBase, b.i32_val(offset));
-    funcOp->setAttr("ttg.profile_scratch_memory_size",
-                    rewriter.getI32IntegerAttr(1));
-    funcOp->setAttr("ttg.profile_scratch_memory_alignment",
-                    rewriter.getI32IntegerAttr(1));
+    auto zero = b.i32_val(0);
+    rewriter.replaceOp(op, zero.getDefiningOp());
     return success();
   }
 };
 
 } // namespace
 
-void mlir::triton::proton::populateGlobalScratchAllocOpToLLVMPattern(
+void mlir::triton::proton::gpu::populateGlobalScratchAllocOpToLLVMPattern(
     LLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
     const TargetInfoBase &targetInfo, PatternBenefit benefit) {
   patterns.add<GlobalScratchAllocOpConversion>(typeConverter, benefit);

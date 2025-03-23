@@ -109,6 +109,8 @@ public:
         llvm::NextPowerOf2(
             (maxSharedMem - llvm::alignTo(sharedMemUsed, bytesPerEntry))) /
         (2 * bytesPerEntry);
+    // FIXME(Keren): this is a hack
+    sharedSlots = std::max(sharedSlots, 1);
     int allocSharedMemSize = sharedSlots * bytesPerEntry;
     int numWarps = mlir::triton::gpu::lookupNumWarps(mod);
     int allocBufferSize = bufferSize > 0 ? bufferSize : allocSharedMemSize;
