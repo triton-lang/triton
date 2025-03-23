@@ -12,9 +12,7 @@ def is_hip():
     return triton.runtime.driver.active.get_current_target().backend == "hip"
 
 
-def test_record(tmp_path: pathlib.Path, monkeypatch):
-    monkeypatch.setenv("ttg.profile_scratch_memory_size", "1")
-
+def test_record(tmp_path: pathlib.Path):
     if is_hip():
         pytest.skip("HIP backend does not support record")
 
@@ -54,10 +52,7 @@ def test_record(tmp_path: pathlib.Path, monkeypatch):
     assert "proton.record end" in ttir
 
 
-def test_jit(tmp_path, monkeypatch):
-    monkeypatch.setenv("ttg.profile_scratch_memory_size", "1")
-
-    # TODO(Keren): Remove hacks
+def test_jit(tmp_path):
     if is_hip():
         pytest.skip("HIP backend does not support record")
 
