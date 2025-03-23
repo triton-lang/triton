@@ -99,26 +99,32 @@ std::string getRegisterSizeCode(int size, bool is_float) {
   }
 }
 
-Value createL2CachePolicy(triton::CacheModifier l2Cache,
-                        ConversionPatternRewriter &rewriter, Location loc) {
-  // Only create a policy register if we need L2 cache control
-  if (l2Cache == triton::CacheModifier::NONE)
-    return Value();
-    
+Value createCachePolicy(triton::EvictionPolicy opEvict,
+             ConversionPatternRewriter &rewriter, Location loc) {
+  // Emit createpolicy.fractional.L2::policy.b64 xx 1.0
   PTXBuilder ptxBuilder;
+  const bool hasL2EvictPolicy = opEvict == triton::EvictionPolicy::EVICT_FIRST || 
+                 opEvict == triton::EvictionPolicy::EVICT_LAST;
+  Value policyRet;
+
+  if (hasL2EvictPolicy) {
   auto &policy = ptxBuilder.create<>("createpolicy.fractional")
-      ->o("L2::evict_first", l2Cache == triton::CacheModifier::EVICT_FIRST)
-      .o("L2::evict_last", l2Cache == triton::CacheModifier::EVICT_LAST)
-      .b(64);
-  
+            ->o("L2::evict_first", opEvict == triton::EvictionPolicy::EVICT_FIRST)
+            .o("L2::evict_last", opEvict == triton::EvictionPolicy::EVICT_LAST)
+            .b(64);
+
   const std::string writeConstraint = "=l";
+  // prepare asm operands
   auto *dstOpr = ptxBuilder.newOperand(writeConstraint, /*init=*/true);
   std::string fractionStr = "1.0";
   auto *fractionOpr = ptxBuilder.newConstantOperand(fractionStr);
   policy(dstOpr, fractionOpr);
-  
+
   Type policyRetTy = rewriter.getI64Type();
-  return ptxBuilder.launch(rewriter, loc, policyRetTy);
+  policyRet = ptxBuilder.launch(rewriter, loc, policyRetTy);
+  }
+
+  return policyRet;
 }
 
 // Contains some helper functions for both Load and Store conversions.
@@ -324,7 +330,7 @@ struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp>,
           ptxBuilder.newAddrOperand(ptrElems[vecStart], "l", in_off);
 
       // Create L2 cache policy register if needed
-      Value l2PolicyReg = createL2CachePolicy(op.getL2Cache(), rewriter, loc);
+      Value l2PolicyReg = createCachePolicy(op.getEvict(), rewriter, loc);
 
       // Define the instruction opcode
       auto &ld = ptxBuilder.create<>("ld")
@@ -506,7 +512,7 @@ struct StoreOpConversion : public ConvertOpToLLVMPattern<triton::StoreOp>,
           ptxBuilder.newAddrOperand(ptrElems[vecStart], "l", in_off);
 
       // Create L2 cache policy register if needed
-      Value l2PolicyReg = createL2CachePolicy(op.getL2Cache(), rewriter, loc);
+      Value l2PolicyReg = createCachePolicy(op.getEvict(), rewriter, loc);
 
       auto &ptxStoreInstr =
           ptxBuilder.create<>("st")
