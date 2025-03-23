@@ -48,7 +48,7 @@ def _check_mode(backend: str, mode: Optional[str]) -> None:
     backend_modes = {
         "cupti": ["", "pcsampling"],
         "roctracer": [""],
-        "instrumentation": [""],
+        "instrumentation": ["cycles"],
     }
 
     if mode not in backend_modes[backend]:
