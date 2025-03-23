@@ -11,16 +11,27 @@ using namespace mlir;
 using namespace mlir::triton;
 
 namespace mlir {
-namespace triton::proton {
+namespace triton::proton::gpu {
 #define GEN_PASS_DEF_CONVERTPROTONNVIDIAGPUTOLLVM
 #include "proton/dialect/include/Conversion/ProtonGPUToLLVM/ProtonNvidiaGPUToLLVM/Passes.h.inc"
-} // namespace triton::proton
+} // namespace triton::proton::gpu
 } // namespace mlir
 
 namespace {
 
+class ProtonLLVMConversionTarget : public ConversionTarget {
+public:
+  explicit ProtonLLVMConversionTarget(MLIRContext &ctx)
+      : ConversionTarget(ctx) {
+    addLegalDialect<LLVM::LLVMDialect>();
+    addIllegalDialect<mlir::triton::proton::gpu::ProtonGPUDialect>();
+    addIllegalDialect<mlir::triton::proton::ProtonDialect>();
+    addLegalOp<mlir::UnrealizedConversionCastOp>();
+  }
+};
+
 struct ConvertProtonNvidiaGPUToLLVM
-    : public mlir::triton::proton::impl::ConvertProtonNvidiaGPUToLLVMBase<
+    : public mlir::triton::proton::gpu::impl::ConvertProtonNvidiaGPUToLLVMBase<
           ConvertProtonNvidiaGPUToLLVM> {
   explicit ConvertProtonNvidiaGPUToLLVM(int32_t computeCapability,
                                         int32_t ptxVersion) {
@@ -35,16 +46,15 @@ struct ConvertProtonNvidiaGPUToLLVM
     auto tritonTargetInfo =
         mlir::triton::NVIDIA::TargetInfo(computeCapability, ptxVersion);
     auto protonTargetInfo =
-        mlir::triton::proton::NVIDIA::TargetInfo(tritonTargetInfo);
+        mlir::triton::proton::gpu::NVIDIA::TargetInfo(tritonTargetInfo);
     mlir::LowerToLLVMOptions option(context);
     TritonGPUToLLVMTypeConverter typeConverter(context, option,
                                                tritonTargetInfo);
-    mlir::triton::proton::populateProtonGPUOpPatterns(typeConverter, patterns,
-                                                      protonTargetInfo, 1);
-    if (failed(
-            mlir::applyPatternsGreedily(getOperation(), std::move(patterns)))) {
-      signalPassFailure();
-    }
+    mlir::triton::proton::gpu::populateProtonGPUOpPatterns(
+        typeConverter, patterns, protonTargetInfo, 1);
+    auto convTarget = ProtonLLVMConversionTarget(*context);
+    if (failed(applyPartialConversion(mod, convTarget, std::move(patterns))))
+      return signalPassFailure();
   }
 };
 
