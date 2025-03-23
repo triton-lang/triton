@@ -246,10 +246,6 @@ struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp>,
       const size_t movWidth = width < 16 ? 16 : width;
       assert(wordNElems * nWords * numVecs == numElems);
 
-      // Check if we need to apply L2 cache hints
-      const bool hasL2CacheHint = op.getEvict() == triton::EvictionPolicy::EVICT_FIRST || 
-                                 op.getEvict() == triton::EvictionPolicy::EVICT_LAST;
-
       PTXBuilder ptxBuilder;
 
       Value pred = mask ? maskElems[vecStart] : Value{};
