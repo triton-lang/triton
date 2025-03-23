@@ -392,8 +392,10 @@ struct MemDescSubviewOpConversion
     Location loc = op->getLoc();
     auto b = TritonLLVMOpBuilder(loc, rewriter);
     auto srcTy = op.getSrc().getType();
+    auto destTy = op.getResult().getType();
     auto llvmElemTy = getTypeConverter()->convertType(srcTy.getElementType());
     auto layoutOrder = getOrder(srcTy);
+    auto enc = srcTy.getEncoding();
 
     // newBase = base + offset
     auto smemObj = getSharedMemoryObjectFromStruct(loc, adaptor.getSrc(),
@@ -408,13 +410,49 @@ struct MemDescSubviewOpConversion
     for (int i = rankReduced; i < opOffsetVals.size(); i++) {
       offsetVals.push_back(b.add(opOffsetVals[i], smemObj.getOffsets()[i]));
     }
-    // Compute the offset based on the original strides of the shared memory
-    // object
-    auto offset = dot(rewriter, loc, opOffsetVals, opSmemStrides);
-    auto elemPtrTy = smemObj.getBase().getType();
-    smemObj = SharedMemoryObject(
-        b.gep(elemPtrTy, llvmElemTy, smemObj.getBase(), offset), llvmElemTy,
-        offsetVals);
+    Value offset = b.undef(i32_ty);
+    auto allocShape = srcTy.getAllocShape();
+    bool isSimpleSubview =
+        allocShape.take_back(destRank) == destTy.getShape() ||
+        !isa<NVMMASharedEncodingAttr>(enc);
+    if (!isSimpleSubview) {
+      auto nvmmaEnc = cast<NVMMASharedEncodingAttr>(enc);
+      assert(destRank >= 2 &&
+             "Shape size should be >= 2 when using NVMMAShared encoding");
+      auto swizzleStride = b.i32_val((nvmmaEnc.getSwizzlingByteWidth() * 8) /
+                                     llvmElemTy.getIntOrFloatBitWidth());
+      offset = b.i32_val(0);
+      for (auto i = 0; i < opOffsetVals.size() - 2; ++i) {
+        offset = b.add(offset, b.mul(opOffsetVals[i], opSmemStrides[i]));
+      }
+      // newOffset = offset - (stridedOff * swizzledStride + contigOff /
+      // swizzledStride * tileSize + contigOff % swizzledStride)
+      // + stridedInc * swizzledStride + contigInc / swizzledStride *
+      // tileSize + contigInc % swizzledStride
+      auto stridedDim = destRank - 1 - layoutOrder[0];
+      auto contigDim = destRank - 1 - layoutOrder[1];
+      auto stridedOff = smemObj.getOffsets()[stridedDim];
+      auto contigOff = smemObj.getOffsets()[contigDim];
+      auto stridedInc = offsetVals[stridedDim];
+      auto contigInc = offsetVals[contigDim];
+      int allocStridedDim = allocShape.size() - 1 - layoutOrder[0];
+      auto tileSize =
+          b.mul(b.i32_val(allocShape[allocStridedDim]), swizzleStride);
+      offset = b.sub(offset, b.mul(stridedOff, swizzleStride));
+      offset = b.sub(offset, b.mul(b.udiv(contigOff, swizzleStride), tileSize));
+      offset = b.sub(offset, b.urem(contigOff, swizzleStride));
+      offset = b.add(offset, b.mul(stridedInc, swizzleStride));
+      offset = b.add(offset, b.mul(b.udiv(contigInc, swizzleStride), tileSize));
+      offset = b.add(offset, b.urem(contigInc, swizzleStride));
+    } else {
+      // Compute the offset based on the original strides of the shared memory
+      // object
+      offset = dot(rewriter, loc, opOffsetVals, opSmemStrides);
+    }
+    auto base = smemObj.getBase();
+    auto elemPtrTy = base.getType();
+    smemObj = SharedMemoryObject(b.gep(elemPtrTy, llvmElemTy, base, offset),
+                                 llvmElemTy, offsetVals);
     auto retVal = getStructFromSharedMemoryObject(loc, smemObj, rewriter);
     rewriter.replaceOp(op, retVal);
     return success();
