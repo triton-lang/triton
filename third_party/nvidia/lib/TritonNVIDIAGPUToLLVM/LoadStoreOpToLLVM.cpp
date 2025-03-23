@@ -99,6 +99,28 @@ std::string getRegisterSizeCode(int size, bool is_float) {
   }
 }
 
+Value createL2CachePolicy(triton::CacheModifier l2Cache,
+                        ConversionPatternRewriter &rewriter, Location loc) {
+  // Only create a policy register if we need L2 cache control
+  if (l2Cache == triton::CacheModifier::NONE)
+    return Value();
+    
+  PTXBuilder ptxBuilder;
+  auto &policy = ptxBuilder.create<>("createpolicy.fractional")
+      ->o("L2::evict_first", l2Cache == triton::CacheModifier::EVICT_FIRST)
+      .o("L2::evict_last", l2Cache == triton::CacheModifier::EVICT_LAST)
+      .b(64);
+  
+  const std::string writeConstraint = "=l";
+  auto *dstOpr = ptxBuilder.newOperand(writeConstraint, /*init=*/true);
+  std::string fractionStr = "1.0";
+  auto *fractionOpr = ptxBuilder.newConstantOperand(fractionStr);
+  policy(dstOpr, fractionOpr);
+  
+  Type policyRetTy = rewriter.getI64Type();
+  return ptxBuilder.launch(rewriter, loc, policyRetTy);
+}
+
 // Contains some helper functions for both Load and Store conversions.
 struct LoadStoreConversionBase {
   explicit LoadStoreConversionBase(const NVIDIA::TargetInfo &targetInfo,
@@ -301,6 +323,9 @@ struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp>,
       auto *addrOpr =
           ptxBuilder.newAddrOperand(ptrElems[vecStart], "l", in_off);
 
+      // Create L2 cache policy register if needed
+      Value l2PolicyReg = createL2CachePolicy(op.getL2Cache(), rewriter, loc);
+
       // Define the instruction opcode
       auto &ld = ptxBuilder.create<>("ld")
                      ->o("volatile", op.getIsVolatile())
@@ -311,15 +336,11 @@ struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp>,
                         op.getEvict() == triton::EvictionPolicy::EVICT_FIRST)
                      .o("L1::evict_last",
                         op.getEvict() == triton::EvictionPolicy::EVICT_LAST)
-                     .o("L2::evict_first", 
-                        op.getEvict() == triton::EvictionPolicy::EVICT_FIRST)
-                     .o("L2::evict_last", 
-                        op.getEvict() == triton::EvictionPolicy::EVICT_LAST)
+                     .o("L2::cache_hint", l2PolicyReg != Value())
                      .v(nWords)
                      .b(width);
 
       PTXBuilder::Operand *evictOpr{};
-
 
       if (!evictOpr)
         ld(dstsOpr, addrOpr).maybePredicate(pred, "b");
@@ -484,6 +505,9 @@ struct StoreOpConversion : public ConvertOpToLLVMPattern<triton::StoreOp>,
       auto *asmAddr =
           ptxBuilder.newAddrOperand(ptrElems[vecStart], "l", in_off);
 
+      // Create L2 cache policy register if needed
+      Value l2PolicyReg = createL2CachePolicy(op.getL2Cache(), rewriter, loc);
+
       auto &ptxStoreInstr =
           ptxBuilder.create<>("st")
               ->global()
@@ -495,13 +519,18 @@ struct StoreOpConversion : public ConvertOpToLLVMPattern<triton::StoreOp>,
                  op.getEvict() == triton::EvictionPolicy::EVICT_FIRST)
               .o("L1::evict_last",
                  op.getEvict() == triton::EvictionPolicy::EVICT_LAST)
-              .o("L2::evict_first", 
-                 op.getEvict() == triton::EvictionPolicy::EVICT_FIRST)
-              .o("L2::evict_last", 
-                 op.getEvict() == triton::EvictionPolicy::EVICT_LAST)
+              .o("L2::cache_hint", l2PolicyReg != Value())
               .v(nWords)
               .b(width);
-      ptxStoreInstr(asmAddr, asmArgList).maybePredicate(pred, "b");
+              
+      PTXBuilder::Operand *evictOpr{};
+      if (l2PolicyReg)
+        evictOpr = ptxBuilder.newOperand(l2PolicyReg, "l");
+
+      if (!evictOpr)
+        ptxStoreInstr(asmAddr, asmArgList).maybePredicate(pred, "b");
+      else
+        ptxStoreInstr(asmAddr, asmArgList, evictOpr).maybePredicate(pred, "b");
 
       auto asmReturnTy = void_ty(ctx);
       ptxBuilder.launch(rewriter, loc, asmReturnTy);
