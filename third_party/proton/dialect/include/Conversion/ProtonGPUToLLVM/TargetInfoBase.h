@@ -4,7 +4,7 @@
 #include "triton/Conversion/MLIRTypes.h"
 #include "triton/Conversion/TritonGPUToLLVM/TargetInfoBase.h"
 
-namespace mlir::triton::proton {
+namespace mlir::triton::proton::gpu {
 
 class TargetInfoBase {
 public:
@@ -16,13 +16,13 @@ public:
   }
 
   virtual Value clock(ConversionPatternRewriter &rewriter, Location loc,
-                      bool isClock64) const;
+                      bool isClock64) const = 0;
 
-  virtual ~TargetInfoBase() {}
+  virtual ~TargetInfoBase() = default;
 
 protected:
   const mlir::triton::TargetInfoBase &helper;
 };
-} // namespace mlir::triton::proton
+} // namespace mlir::triton::proton::gpu
 
 #endif // PROTONGPU_TO_LLVM_TARGETINFO_BASE_H
