@@ -582,7 +582,7 @@ class JITFunction(KernelInterface[T]):
             for k in kwargs:
                 # TODO(Keren): Remove this check
                 # Use instrumentation:mode to differentiate regular kernels with instrumented kernels
-                if k != "instrumentation" and k not in options.__dict__ and k not in sigkeys:
+                if k not in options.__dict__ and k not in sigkeys:
                     raise KeyError("Keyword argument %s was specified but unrecognised" % k)
             # constexprs
             constexprs = find_paths_if(sigvals, lambda _, val: val == "constexpr")
