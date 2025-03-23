@@ -19,7 +19,6 @@
 #include "mlir/Pass/Pass.h"
 #include "third_party/amd/include/Analysis/AxisInfoExt.h"
 #include "third_party/amd/include/Dialect/TritonAMDGPU/IR/Dialect.h"
-#include "third_party/proton/dialect/include/Conversion/ProtonGPUToLLVM/RecordOpToLLVM.h"
 #include "triton/Analysis/Allocation.h"
 #include "triton/Analysis/AxisInfo.h"
 #include "triton/Analysis/Membar.h"
@@ -227,10 +226,6 @@ struct ConvertTritonAMDGPUToLLVM
                                                           patterns);
     mlir::triton::populatePrintOpToLLVMPattern(typeConverter, patterns,
                                                targetInfo, commonBenefit);
-
-    mlir::triton::proton::populateRecordOpToLLVMPattern(
-        typeConverter, patterns, targetInfo, commonBenefit);
-
     mlir::ub::populateUBToLLVMConversionPatterns(typeConverter, patterns);
 
     if (failed(applyPartialConversion(mod, convTarget, std::move(patterns)))) {

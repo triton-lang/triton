@@ -128,6 +128,7 @@ class CUDAOptions:
     backend_name: str = 'cuda'
     sanitize_overflow: bool = True
     arch: str = None
+    instrumentation_mode: str = ""
 
     def __post_init__(self):
         default_libdir = Path(__file__).parent / 'lib'
@@ -147,6 +148,7 @@ class CUDAOptions:
 
 
 class CUDABackend(BaseBackend):
+    instrumentation = {}
 
     @staticmethod
     def supports_target(target: GPUTarget):
@@ -303,6 +305,8 @@ class CUDABackend(BaseBackend):
         nvidia.passes.ttnvgpuir.add_lower_mma(pm)
         passes.common.add_sccp(pm)
         passes.common.add_canonicalizer(pm)
+        if "ttir" in CUDABackend.instrumentation:
+            CUDABackend.instrumentation["ttir"](pm)
         pm.run(mod)
         metadata["cluster_dims"] = (cluster_info.clusterDimX, cluster_info.clusterDimY, cluster_info.clusterDimZ)
         tensordesc_meta = mod.get_tensordesc_metadata()
@@ -353,6 +357,8 @@ class CUDABackend(BaseBackend):
         passes.common.add_symbol_dce(pm)
         if not knobs.compilation.disable_line_info:
             passes.llvmir.add_di_scope(pm)
+        if "ttgpuir" in CUDABackend.instrumentation:
+            CUDABackend.instrumentation["ttgpuir"](pm)
         pm.run(mod)
         # LLVM-IR (MLIR) -> LLVM-IR (LLVM)
         llvm.init_targets()
@@ -383,8 +389,8 @@ class CUDABackend(BaseBackend):
         metadata["tmem_size"] = src.get_int_attr("ttg.tensor_memory_size")
         metadata["global_scratch_size"] = src.get_int_attr("ttg.global_scratch_memory_size")
         metadata["global_scratch_align"] = src.get_int_attr("ttg.global_scratch_memory_alignment")
-        metadata["profile_scratch_size"] = int(os.environ.get("ttg.profile_scratch_memory_size", 0))
-        metadata["profile_scratch_align"] = int(os.environ.get("ttg.profile_scratch_memory_alignment", 1))
+        metadata["profile_scratch_size"] = src.get_int_attr("ttg.profile_scratch_memory_size") or 0
+        metadata["profile_scratch_align"] = src.get_int_attr("ttg.profile_scratch_memory_alignment") or 1
         ret = str(llvm_mod)
         del llvm_mod
         del context
