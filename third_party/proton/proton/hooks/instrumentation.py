@@ -1,13 +1,14 @@
 import functools
 from typing import Dict, List, Optional, Tuple, Any
 
+import triton
 from triton._C.libtriton import ir
 from triton._C.libtriton import proton as triton_proton
 from triton._C.libproton import proton as libproton
 from triton.compiler import LazyDict
 from triton.runtime.jit import JITFunction
-from triton.language import constexpr
 from triton.runtime._allocation import set_profile_allocator, NullAllocator
+from triton.backends import backends
 
 from .hook import Hook
 from ..flags import set_instrumentation_on, set_instrumentation_off
@@ -62,6 +63,29 @@ class InstrumentationHook(Hook):
         InstrumentationHook.active_count += 1
 
         set_instrumentation_on()
+
+        backend = triton.runtime.driver.active.get_current_target().backend
+
+        def passes(pm, backend_pass):
+            # TODO(Keren): Confirm if proton shared memory allocation is needed
+            #triton_proton.add_allocate_proton_shared_memory(pm)
+            triton_proton.add_allocate_proton_global_scratch_buffer(pm)
+            backend_pass(pm)
+
+        if backend == "cuda":
+            backend_name = "nvidia"
+            ttgpuir_func = lambda pm: passes(pm, triton_proton.add_convert_proton_nvidia_gpu_to_llvm)
+        elif backend == "hip":
+            backend_name = "amd"
+            ttgpuir_func = lambda pm: passes(pm, triton_proton.add_convert_proton_amd_gpu_to_llvm)
+        else:
+            raise RuntimeError(f"Unsupported backend: {backend}")
+
+        backends[backend_name].compiler.instrumentation = {
+            "ttir": triton_proton.add_convert_proton_to_protongpu,
+            "ttgpuir": ttgpuir_func,
+        }
+
         # Set up the profiling allocator
         set_profile_allocator(self.allocator)
 
@@ -71,7 +95,7 @@ class InstrumentationHook(Hook):
 
         @functools.wraps(original_run)
         def instrumented_run(self, *args, **kwargs):
-            kwargs["instrumentation"] = constexpr(mode)
+            kwargs["instrumentation_mode"] = mode
             return original_run(self, *args, **kwargs)
 
         JITFunction.run = instrumented_run
@@ -81,6 +105,16 @@ class InstrumentationHook(Hook):
             return
 
         InstrumentationHook.active_count -= 1
+
+        backend = triton.runtime.driver.active.get_current_target().backend
+        if backend == "cuda":
+            backend_name = "nvidia"
+        elif backend == "hip":
+            backend_name = "amd"
+        else:
+            raise RuntimeError(f"Unsupported backend: {backend}")
+
+        backends[backend_name].compiler.instrumentation = {}
 
         set_instrumentation_off()
 
