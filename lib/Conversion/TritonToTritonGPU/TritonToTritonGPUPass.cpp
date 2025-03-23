@@ -578,17 +578,6 @@ void populateTritonPatterns(TritonGPUTypeConverter &typeConverter,
       // clang-format on
       >(typeConverter, context);
 }
-// Proton patterns
-// NOTE: Because Proton's inputs are scalars and not tensors this conversion
-// isn't strictly necessary however you could envision a case where we pass in
-// tensors in for Triton object specific tracing operations in which case we
-// would need to fill in the OpConversionPattern
-void populateProtonPatterns(TritonGPUTypeConverter &typeConverter,
-                            RewritePatternSet &patterns) {
-  MLIRContext *context = patterns.getContext();
-  patterns.add<GenericOpPattern<triton::proton::RecordOp>>(typeConverter,
-                                                           context);
-}
 //
 // SCF patterns
 //
@@ -802,7 +791,6 @@ public:
     populateArithPatternsAndLegality(typeConverter, patterns, target);
     populateMathPatternsAndLegality(typeConverter, patterns, target);
     populateTritonPatterns(typeConverter, patterns, numCTAs);
-    populateProtonPatterns(typeConverter, patterns);
     // TODO: can we use
     //    mlir::scf::populateSCFStructurealTypeConversionsAndLegality(...) here?
     populateSCFPatterns(typeConverter, patterns);

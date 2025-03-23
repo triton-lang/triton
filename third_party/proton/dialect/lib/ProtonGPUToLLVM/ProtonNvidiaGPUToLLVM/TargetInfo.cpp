@@ -5,7 +5,7 @@
 #include "third_party/nvidia/include/TritonNVIDIAGPUToLLVM/PTXAsmFormat.h"
 #include "llvm/Support/MathExtras.h"
 
-namespace mlir::triton::proton::NVIDIA {
+namespace mlir::triton::proton::gpu::NVIDIA {
 
 Value TargetInfo::clock(ConversionPatternRewriter &rewriter, Location loc,
                         bool isClock64) const {
@@ -24,4 +24,4 @@ Value TargetInfo::clock(ConversionPatternRewriter &rewriter, Location loc,
   return val;
 }
 
-} // namespace mlir::triton::proton::NVIDIA
+} // namespace mlir::triton::proton::gpu::NVIDIA
