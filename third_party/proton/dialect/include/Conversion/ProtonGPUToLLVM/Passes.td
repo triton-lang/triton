@@ -1,5 +1,5 @@
-#ifndef PROTONCOMMONGPU_CONVERSION_PASSES
-#define PROTONCOMMONGPU_CONVERSION_PASSES
+#ifndef PROTONGPU_TO_LLVM_PASSES
+#define PROTONGPU_TO_LLVM_PASSES
 
 include "mlir/Pass/PassBase.td"
 
@@ -17,12 +17,4 @@ def AllocateProtonGlobalScratchBuffer : Pass<"allocate-proton-global-scratch-buf
     let constructor = "mlir::triton::proton::gpu::createAllocateProtonGlobalScratchBufferPass()";
 }
 
-
-def AddProtonKernelArg : Pass<"add-proton-kernel-arg", "mlir::ModuleOp"> {
-
-    let constructor = "mlir::triton::proton::gpu::createAddProtonKernelArgPass()";
-  let dependentDialects = [
-    "mlir::triton::gpu::TritonGPUDialect"
-  ];
-}
-#endif
+#endif // PROTONGPU_TO_LLVM_PASSES
