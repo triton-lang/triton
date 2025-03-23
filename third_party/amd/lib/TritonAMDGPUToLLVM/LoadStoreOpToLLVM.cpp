@@ -121,7 +121,7 @@ struct LoadStoreConversionBase {
                                    ModuleAxisInfoAnalysis &axisAnalysisPass)
       : targetInfo(targetInfo), axisAnalysisPass(axisAnalysisPass) {}
 
-  // Createa a LLVM vector of type `vecTy` containing all zeros
+  // Create a LLVM vector of type `vecTy` containing all zeros
   Value createZeroVector(OpBuilder &builder, Location loc,
                          VectorType vecTy) const {
     mlir::Attribute zeroAttr = builder.getZeroAttr(vecTy.getElementType());
