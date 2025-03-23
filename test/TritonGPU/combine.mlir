@@ -3700,14 +3700,23 @@ module attributes {"ttg.num-warps" = 4 : i32, ttg.target = "hip:gfx950", "ttg.th
         %arg4: tensor<128x128x!tt.ptr<f32>, #blocked>
       ) {
     %cst = arith.constant dense<0.000000e+00> : tensor<128x128xf32, #mma>
-
-    %4 = tt.dot_scaled %arg0 scale %arg2, %arg1 scale %arg3, %cst lhs = e4m3 rhs = e4m3 {fastMath = false} : tensor<128x128xf8E4M3FN, #dot_op_a>, tensor<128x4xi8, #linear> * tensor<128x128xf8E4M3FN, #dot_op_b>, tensor<128x4xi8, #linear1> -> tensor<128x128xf32, #mma>
-    // CHECK: %[[RET:.+]] = tt.dot_scaled %arg0 scale %arg2, %arg1 scale %arg3, %cst lhs = e4m3 rhs = e4m3 {fastMath = false}
+    %cst0 = arith.constant dense<0.000000e+00> : tensor<128x128xf32, #blocked1>
+    %c0 = arith.constant 0 : index
+    %c1 = arith.constant 1 : index
+    %c32 = arith.constant 32 : index
+    // CHECK: %[[RET:.+]] = scf.for
+    // CHECK-NEXT: tt.dot_scaled %arg0 scale %arg2, %arg1 scale %arg3, %cst lhs = e4m3 rhs = e4m3 {fastMath = false}
+    // CHECK-NEXT: scf.yield
+    // CHECK-NEXT: }
     // CHECK-NEXT: ttg.convert_layout %[[RET]] : tensor<128x128xf32, #mma> -> tensor<128x128xf32, [[$BLOCK]]>
     // CHECK-NEXT: tt.store
-    %5 = ttg.convert_layout %4 : tensor<128x128xf32, #mma> -> tensor<128x128xf32, #blocked1>
-    %6 = ttg.convert_layout %5 : tensor<128x128xf32, #blocked1> -> tensor<128x128xf32, #blocked>
-    tt.store %arg4, %6 : tensor<128x128x!tt.ptr<f32>, #blocked>
+    %1 = scf.for %arg5 = %c0 to %c32 step %c1 iter_args(%arg6 = %cst0) -> (tensor<128x128xf32, #blocked1>) {
+      %4 = tt.dot_scaled %arg0 scale %arg2, %arg1 scale %arg3, %cst lhs = e4m3 rhs = e4m3 {fastMath = false} : tensor<128x128xf8E4M3FN, #dot_op_a>, tensor<128x4xi8, #linear> * tensor<128x128xf8E4M3FN, #dot_op_b>, tensor<128x4xi8, #linear1> -> tensor<128x128xf32, #mma>
+      %5 = ttg.convert_layout %4 : tensor<128x128xf32, #mma> -> tensor<128x128xf32, #blocked1>
+      scf.yield %5 : tensor<128x128xf32, #blocked1>
+    }
+    %7 = ttg.convert_layout %1 : tensor<128x128xf32, #blocked1> -> tensor<128x128xf32, #blocked>
+    tt.store %arg4, %7 : tensor<128x128x!tt.ptr<f32>, #blocked>
     tt.return
   }
 }
