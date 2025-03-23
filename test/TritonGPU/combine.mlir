@@ -3705,8 +3705,8 @@ module attributes {"ttg.num-warps" = 4 : i32, ttg.target = "hip:gfx950", "ttg.th
     %c1 = arith.constant 1 : index
     %c32 = arith.constant 32 : index
     // CHECK: %[[RET:.+]] = scf.for
-    // CHECK-NEXT: tt.dot_scaled %arg0 scale %arg2, %arg1 scale %arg3, %cst lhs = e4m3 rhs = e4m3 {fastMath = false}
-    // CHECK-NEXT: scf.yield
+    // CHECK-NEXT: %[[DOT_RET:.+]] = tt.dot_scaled %arg0 scale %arg2, %arg1 scale %arg3, %cst lhs = e4m3 rhs = e4m3 {fastMath = false}
+    // CHECK-NEXT: scf.yield %[[DOT_RET]]
     // CHECK-NEXT: }
     // CHECK-NEXT: ttg.convert_layout %[[RET]] : tensor<128x128xf32, #mma> -> tensor<128x128xf32, [[$BLOCK]]>
     // CHECK-NEXT: tt.store
