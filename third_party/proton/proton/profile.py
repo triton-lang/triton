@@ -34,6 +34,15 @@ def _get_backend_default_path(backend: str) -> str:
     return lib_path
 
 
+def _get_backend_default_mode(backend: str, mode: Optional[str]) -> str:
+    if mode is None:
+        if backend == "instrumentation":
+            mode = "cycles"
+        else:
+            mode = ""
+    return mode
+
+
 def _check_env(backend: str) -> None:
     if backend == "roctracer":
         hip_device_envs = ["HIP_VISIBLE_DEVICES", "CUDA_VISIBLE_DEVICES"]
@@ -49,7 +58,7 @@ def _check_mode(backend: str, mode: Optional[str]) -> None:
     backend_modes = {
         "cupti": ["", "pcsampling"],
         "roctracer": [""],
-        "instrumentation": [""],
+        "instrumentation": ["cycles"],
     }
 
     if mode not in backend_modes[backend]:
@@ -108,7 +117,7 @@ def start(
     name = DEFAULT_PROFILE_NAME if name is None else name
     backend = _select_backend() if backend is None else backend
     backend_path = _get_backend_default_path(backend)
-    mode = "" if mode is None else mode
+    mode = _get_backend_default_mode(backend, mode)
 
     _check_env(backend)
     _check_mode(backend, mode)

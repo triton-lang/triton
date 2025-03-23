@@ -104,11 +104,10 @@ inline void registerTritonDialects(mlir::DialectRegistry &registry) {
   // Proton passes
   mlir::test::proton::registerTestScopeIdAllocationPass();
   mlir::triton::proton::registerConvertProtonToProtonGPU();
-  mlir::triton::proton::registerConvertProtonNvidiaGPUToLLVM();
-  mlir::triton::proton::registerConvertProtonAMDGPUToLLVM();
-  // TODO: Add test prefixes
-  mlir::triton::proton::registerAllocateProtonSharedMemoryPass();
-  mlir::triton::proton::registerAllocateProtonGlobalScratchBufferPass();
+  mlir::triton::proton::gpu::registerConvertProtonNvidiaGPUToLLVM();
+  mlir::triton::proton::gpu::registerConvertProtonAMDGPUToLLVM();
+  mlir::triton::proton::gpu::registerAllocateProtonSharedMemoryPass();
+  mlir::triton::proton::gpu::registerAllocateProtonGlobalScratchBufferPass();
 
   // NVGPU transform passes
   mlir::registerNVHopperTransformsPasses();

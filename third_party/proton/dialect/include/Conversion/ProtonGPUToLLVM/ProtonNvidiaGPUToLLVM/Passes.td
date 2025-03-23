@@ -1,5 +1,5 @@
-#ifndef PROTONNVIDIAGPUTOLLVM_CONVERSION_PASSES
-#define PROTONNVIDIAGPUTOLLVM_CONVERSION_PASSES
+#ifndef PROTONNVIDIAGPU_TO_LLVM_PASSES
+#define PROTONNVIDIAGPU_TO_LLVM_PASSES
 
 include "mlir/Pass/PassBase.td"
 
@@ -30,4 +30,4 @@ def ConvertProtonNvidiaGPUToLLVM : Pass<"convert-proton-nvidia-gpu-to-llvm", "ml
     ];
 }
 
-#endif
+#endif // PROTONNVIDIAGPU_TO_LLVM_PASSES
