@@ -138,6 +138,10 @@ arbitrary LLVM version.
   during the build. By default, this is the user's home directory. It
   can be changed anytime.
 
+- If you're running out of memory when building Triton, specify the `MAX_JOBS`
+  environment variable (to the `pip install -e python` command) to limit the
+  number of jobs.
+
 - Pass `--no-build-isolation` to `pip install` to make nop builds faster.
   Without this, every invocation of `pip install` uses a different symlink to
   cmake, and this forces ninja to rebuild most of the `.a` files.
