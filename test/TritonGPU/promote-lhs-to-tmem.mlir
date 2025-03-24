@@ -1,4 +1,4 @@
-// RUN: env ENABLE_LHS_TO_TMEM=1 triton-opt %s -split-input-file -tritongpu-promote-lhs-to-tmem | FileCheck --dump-input-context=50 %s
+// RUN: env ENABLE_LHS_TO_TMEM=1 triton-opt %s -tritongpu-promote-lhs-to-tmem | FileCheck --dump-input-context=50 %s
 
 #blocked = #ttg.blocked<{sizePerThread = [1, 128], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [1, 0]}>
 #blocked1 = #ttg.blocked<{sizePerThread = [1, 128], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [0, 1]}>
