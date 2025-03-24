@@ -1,4 +1,4 @@
-// RUN: triton-opt %s -allow-unregistered-dialect -verify-diagnostics -tritongpu-load-mma-specialization -int-range-optimizations -canonicalize -cse -tritongpu-loop-dce | FileCheck %s
+// RUN: triton-opt %s -allow-unregistered-dialect -verify-diagnostics -tritongpu-load-mma-specialization -int-range-optimizations -canonicalize -cse -tritongpu-remove-layout-conversions | FileCheck %s
 // RUN: triton-opt %s -allow-unregistered-dialect -verify-diagnostics -tritongpu-automatic-warp-specialization | FileCheck %s --check-prefix=AWS
 
 #acc_layout = #ttg.blocked<{sizePerThread = [1, 128], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [0, 1]}>
