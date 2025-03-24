@@ -502,14 +502,14 @@ bool loadRequiresAdditionalBuffer(Operation *loadOp) {
     }
     return op;
   };
-  // Pattern match the op sequence used loading mmav3 operands
+  // Pattern match the op sequence used for loading mmav3 operands
   if (canBeShmemPipelined(loadOp) && loadOp->hasOneUse()) {
     ttg::LocalAllocOp alloc =
         dyn_cast<ttg::LocalAllocOp>(*loadOp->getUsers().begin());
-    if (alloc && alloc->hasOneUse()) {
-      if (isa<ttng::WarpGroupDotOp>(skipViewOps(*alloc->getUsers().begin()))) {
-        return true;
-      }
+    if (alloc) {
+      return llvm::any_of(alloc->getUsers(), [&](Operation *op) {
+        return isa<ttng::WarpGroupDotOp>(skipViewOps(op));
+      });
     }
   }
   return false;
