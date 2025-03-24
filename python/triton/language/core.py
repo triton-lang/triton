@@ -1574,7 +1574,7 @@ def trans(input: tensor, *dims, _builder=None):
 
     :param input: The input tensor.
     :param dims: The desired ordering of dimensions.  For example,
-        :code:`(2, 1, 0)` reverses the order dims in a a 3D tensor.
+        :code:`(2, 1, 0)` reverses the order dims in a 3D tensor.
 
     :code:`dims` can be passed as a tuple or as individual parameters: ::
 
@@ -1600,7 +1600,7 @@ def permute(input, *dims, _builder=None):
     :param input: The input tensor.
     :type input: Block
     :param dims: The desired ordering of dimensions.  For example,
-        :code:`(2, 1, 0)` reverses the order dims in a a 3D tensor.
+        :code:`(2, 1, 0)` reverses the order dims in a 3D tensor.
 
     :code:`dims` can be passed as a tuple or as individual parameters: ::
 

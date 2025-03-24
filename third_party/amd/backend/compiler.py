@@ -239,6 +239,7 @@ class HIPBackend(BaseBackend):
 
         global_prefetch = int(os.getenv("TRITON_HIP_GLOBAL_PREFETCH", "0"))
         local_prefetch = int(os.getenv("TRITON_HIP_LOCAL_PREFETCH", "0"))
+        use_async_copy = int(os.getenv("TRITON_HIP_USE_ASYNC_COPY", "0")) == 1
 
         # The `local-prefetch` scheduling variant requires turning on buffer ops.
         if options.instruction_sched_variant == "local-prefetch":
@@ -250,7 +251,10 @@ class HIPBackend(BaseBackend):
                                              "num_stages == 0. Now it will not happen anymore; "
                                              "please update to use num_stages == 2 for "
                                              "equivalent behavior in the past.")
-            amd.passes.ttgpuir.add_stream_pipeline(pm, options.num_stages, global_prefetch, local_prefetch)
+            amd.passes.ttgpuir.add_stream_pipeline(pm, options.num_stages, global_prefetch, local_prefetch,
+                                                   use_async_copy)
+            if use_async_copy:
+                amd.passes.ttgpuir.add_coalesce_async_copy(pm, options.arch)
             passes.common.add_canonicalizer(pm)
         if options.instruction_sched_variant.lower() != "none":
             amd.passes.ttgpuir.insert_instruction_sched_hints(pm, options.instruction_sched_variant)
