@@ -288,16 +288,17 @@ struct HoistTMEMAlloc
     SmallVector<ttng::MMAv5OpInterface> mmaOps;
     m.walk([&](ttng::MMAv5OpInterface mmaOp) { mmaOps.push_back(mmaOp); });
     for (auto mmaOp : mmaOps) {
+      auto forOp = dyn_cast<scf::ForOp>(mmaOp->getParentOp());
+      if (!forOp) {
+        return;
+      }
+      hoistInvariantInputs(mmaOp, forOp);
+
       auto allocAndLoadOpt = getTMemAllocAndLoad(mmaOp);
       if (!allocAndLoadOpt) {
         return;
       }
       auto [alloc, load] = allocAndLoadOpt.value();
-      auto forOp = dyn_cast<scf::ForOp>(load->getParentOp());
-      if (!forOp) {
-        return;
-      }
-      hoistInvariantInputs(mmaOp, forOp);
       hoistTMEMAlloc(alloc, forOp);
     }
   }
