@@ -25,6 +25,7 @@
 #include "TritonNVIDIAGPUToLLVM/PTXAsmFormat.h"
 #include "mlir/Conversion/LLVMCommon/Pattern.h"
 #include "mlir/Dialect/GPU/IR/GPUDialect.h"
+#include "mlir/Dialect/LLVMIR/NVVMDialect.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 
 #include "Utility.h"
@@ -193,16 +194,19 @@ struct ArriveBarrierOpConversion
   matchAndRewrite(triton::nvidia_gpu::ArriveBarrierOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     // TODO: Add phase result as needed.
-    std::string ptxAsm =
-        "mbarrier.arrive.shared.b64 _, [$0], " + std::to_string(op.getCount());
+    std::string ptxAsm = "@$0 mbarrier.arrive.shared::cta.b64 _, [$1], " +
+                         std::to_string(op.getCount()) + ";";
+
+    TritonLLVMOpBuilder b(op.getLoc(), rewriter);
+    Value id = getThreadId(rewriter, op.getLoc());
+    Value pred = b.icmp_eq(id, b.i32_val(0));
     if (op.getPred())
-      ptxAsm = "@$1 " + ptxAsm;
+      pred = b.and_(pred, adaptor.getPred());
 
     PTXBuilder ptxBuilder;
     SmallVector<PTXBuilder::Operand *, 2> operands = {
+        ptxBuilder.newOperand(pred, "b"),
         ptxBuilder.newOperand(adaptor.getAlloc(), "r")};
-    if (op.getPred())
-      operands.push_back(ptxBuilder.newOperand(adaptor.getPred(), "b"));
 
     auto arriveOp = *ptxBuilder.create<>(ptxAsm);
     arriveOp(operands, /*onlyAttachMLIRArgs=*/true);

@@ -32,7 +32,13 @@ std::unique_ptr<Pass> createTritonAMDGPUCanonicalizePointersPass();
 std::unique_ptr<Pass> createTritonAMDGPUConvertToBufferOpsPass(
     std::string archGenName = std::string());
 
-std::unique_ptr<Pass> createTritonAMDGPUBlockPingpongPass();
+std::unique_ptr<Pass>
+createTritonAMDGPUBlockPingpongPass(int32_t numStages = 2);
+
+std::unique_ptr<Pass> createTritonAMDGPUInThreadTransposePass();
+
+std::unique_ptr<Pass>
+createTritonAMDGPUCoalesceAsyncCopyPass(std::string archGenName = {});
 
 /// Generate the code for registering passes.
 #define GEN_PASS_REGISTRATION

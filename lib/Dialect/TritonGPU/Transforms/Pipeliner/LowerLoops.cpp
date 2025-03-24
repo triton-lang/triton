@@ -8,6 +8,7 @@
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/TMAUtilities.h"
+#include "triton/Tools/StrUtil.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/ErrorHandling.h"
 
@@ -61,10 +62,6 @@ public:
     return op;
   }
 };
-
-bool isTMALoad(Operation *op) {
-  return isa<tt::DescriptorLoadOp, tt::DescriptorGatherOp>(op);
-}
 
 DenseSet<Operation *> getTopLevelUsersInLoop(Operation *op, scf::ForOp forOp) {
   DenseSet<Operation *> topLevelUsers;
@@ -146,85 +143,13 @@ Value createIncrementModulo(BuilderT &builder, Location loc, Value counter,
 // LOWER LOADS
 /////////////////////////////
 
-ttg::SharedEncodingTrait getSharedEncoding(Operation *op) {
-  // Try to use local alloc encoding if possible.
-  ttg::SharedEncodingTrait localAllocEnc;
-  if (llvm::any_of(op->getUsers(), [&](Operation *user) {
-        return isa<ttg::LocalAllocOp>(user);
-      })) {
-    for (auto user : op->getUsers()) {
-      auto localAlloc = dyn_cast<ttg::LocalAllocOp>(user);
-      if (!localAlloc)
-        continue;
-      auto enc = mlir::cast<ttg::SharedEncodingTrait>(
-          localAlloc.getType().getEncoding());
-      if (!localAllocEnc) {
-        localAllocEnc = enc;
-      }
-      if (enc != localAllocEnc) {
-        // Some users have different encoding than others.
-        // Use one of the encodings, and warn about the performance issue.
-        op->emitRemark()
-            << "Pipelining load with different use encodings. This will lead "
-               "to layout conversions and performance degradation.";
-        continue;
-      }
-    }
-  }
-
-  auto ty = cast<RankedTensorType>(op->getResultTypes()[0]);
-  auto ctaLayout = ttg::getCTALayout(ty.getEncoding());
-  auto order = ttg::getOrder(ty);
-  if (isTMALoad(op)) {
-    // TMA encoding is set on the descriptor type
-    TypedValue<tt::TensorDescType> desc;
-    if (auto load = dyn_cast<tt::DescriptorLoadOp>(op)) {
-      desc = load.getDesc();
-    } else if (auto gather = dyn_cast<tt::DescriptorGatherOp>(op)) {
-      desc = gather.getDesc();
-    } else {
-      op->emitError() << "unrecognized tma load type";
-      llvm::report_fatal_error("unrecognized tma load type");
-    }
-    return ttng::getEncodingFromDescriptor(op, ty, desc);
-  }
-
-  if (localAllocEnc)
-    return localAllocEnc;
-
-  // Try to use dot encoding if possible.
-  bool incompatible = false;
-  localAllocEnc =
-      getSharedEncIfAllUsersAreDotEnc(op->getResult(0), incompatible)
-          .value_or(nullptr);
-
-  if (localAllocEnc)
-    return localAllocEnc;
-
-  // Use generic layout. This won't be optimal for 2D tensors.
-  return ttg::SwizzledSharedEncodingAttr::get(ty.getContext(), 1, 1, 1, order,
-                                              ctaLayout);
-}
-
 // Create an allocation that can hold distance number of loadOp shapes.
 static Value createAlloc(scf::ForOp &forOp, Operation *loadOp,
                          ttg::SharedEncodingTrait sharedEnc,
                          unsigned distance) {
-  OpBuilder builder(forOp);
-  Attribute sharedMemorySpace =
-      ttg::SharedMemorySpaceAttr::get(forOp.getContext());
-  auto ty = cast<RankedTensorType>(loadOp->getResultTypes()[0]);
-  SmallVector<int64_t> bufferShape(ty.getShape().begin(), ty.getShape().end());
-  bufferShape.insert(bufferShape.begin(), distance);
-  Type memdescType = ttg::MemDescType::get(bufferShape, ty.getElementType(),
-                                           sharedEnc, sharedMemorySpace,
-                                           /*mutableMemory=*/true);
-  Value alloc =
-      builder.create<ttg::LocalAllocOp>(loadOp->getLoc(), memdescType);
-
-  builder.setInsertionPointAfter(forOp);
-  builder.create<ttg::LocalDeallocOp>(forOp.getLoc(), alloc);
-  return alloc;
+  return triton::createAlloc(
+      forOp, cast<RankedTensorType>(loadOp->getResultTypes().front()),
+      loadOp->getLoc(), sharedEnc, distance);
 }
 
 template <typename BuilderT, typename... Args>
@@ -275,16 +200,7 @@ void createAsyncCopy(scf::ForOp forOp, tt::LoadOp loadOp, Value alloc,
   ttg::MemDescType allocTy = cast<ttg::MemDescType>(alloc.getType());
 
   // Create async copy
-  SmallVector<Value> copyOffsets(allocTy.getRank(), zero);
-  copyOffsets[0] = insertIdx;
-  Attribute sharedMemorySpace =
-      triton::gpu::SharedMemorySpaceAttr::get(forOp.getContext());
-  ttg::MemDescType subviewTy = ttg::MemDescType::get(
-      allocTy.getShape().drop_front(), allocTy.getElementType(),
-      allocTy.getEncoding(), sharedMemorySpace, /*mutableMemory=*/true,
-      /*allocShape=*/allocTy.getAllocShape());
-  auto view =
-      builder.create<ttg::MemDescSubviewOp>(loc, subviewTy, alloc, copyOffsets);
+  Value view = createSingleBufferView(builder, alloc, insertIdx);
   Operation *copy = builder.create<ttg::AsyncCopyGlobalToLocalOp>(
       loc, src, view, mask, other, loadOp.getCache(), loadOp.getEvict(),
       loadOp.getIsVolatile());
@@ -295,10 +211,7 @@ void createAsyncCopy(scf::ForOp forOp, tt::LoadOp loadOp, Value alloc,
   builder.setStageCluster(schedule[firstUse]);
   Operation *wait =
       builder.create<ttg::AsyncWaitOp>(loc, commit->getResult(0), 0);
-  SmallVector<Value> loadOffsets(allocTy.getRank(), zero);
-  loadOffsets[0] = extractIdx;
-  auto viewLoad =
-      builder.create<ttg::MemDescSubviewOp>(loc, subviewTy, alloc, loadOffsets);
+  Value viewLoad = createSingleBufferView(builder, alloc, extractIdx);
 
   if (!loadOp.getOther() || isZeroConst(loadOp.getOther())) {
     // Remove redundant local_load -> local_alloc, but only if
@@ -308,8 +221,7 @@ void createAsyncCopy(scf::ForOp forOp, tt::LoadOp loadOp, Value alloc,
     for (Operation *user : loadOp->getUsers()) {
       if (auto userAlloc = dyn_cast<ttg::LocalAllocOp>(user)) {
         if (allocTy.getEncoding() == userAlloc.getType().getEncoding()) {
-          tt::replaceUsesAndPropagateType(builder, userAlloc,
-                                          viewLoad.getResult());
+          tt::replaceUsesAndPropagateType(builder, userAlloc, viewLoad);
           allocsToErase.push_back(userAlloc);
         }
       }
@@ -362,14 +274,7 @@ void createTMAAsyncCopy(
   ttg::MemDescType allocTy = cast<ttg::MemDescType>(alloc.getType());
 
   // Create async copy
-  SmallVector<Value> copyOffsets(allocTy.getRank(), zero);
-  copyOffsets[0] = insertIdx;
-  ttg::MemDescType subviewTy = ttg::MemDescType::get(
-      allocTy.getShape().drop_front(), allocTy.getElementType(),
-      allocTy.getEncoding(), sharedMemorySpace, /*mutableMemory=*/true,
-      /*allocShape=*/allocTy.getAllocShape());
-  auto view =
-      builder.create<ttg::MemDescSubviewOp>(loc, subviewTy, alloc, copyOffsets);
+  Value view = createSingleBufferView(builder, alloc, insertIdx);
 
   Value pred = builder.create<arith::ConstantIntOp>(loc, 1, 1);
   Value tmaPtr =
@@ -379,17 +284,13 @@ void createTMAAsyncCopy(
   // Create local load after the wait
   builder.setInsertionPointAfter(waitOp);
   builder.setStageCluster(schedule[firstUse]);
-  SmallVector<Value> loadOffsets(allocTy.getRank(), zero);
-  loadOffsets[0] = extractIdx;
-  auto viewLoad =
-      builder.create<ttg::MemDescSubviewOp>(loc, subviewTy, alloc, loadOffsets);
-  // Remove redundant local_load -> local_alloc
+  Value viewLoad = createSingleBufferView(builder, alloc, extractIdx);
+  //  Remove redundant local_load -> local_alloc
   SmallVector<ttg::LocalAllocOp> allocsToErase;
   for (Operation *user : loadOp->getUsers()) {
     if (auto userAlloc = dyn_cast<ttg::LocalAllocOp>(user)) {
       if (allocTy.getEncoding() == userAlloc.getType().getEncoding()) {
-        tt::replaceUsesAndPropagateType(builder, userAlloc,
-                                        viewLoad.getResult());
+        tt::replaceUsesAndPropagateType(builder, userAlloc, viewLoad);
         allocsToErase.push_back(userAlloc);
       }
     }
@@ -517,8 +418,7 @@ void createTMABarrierAndWait(
     for (Operation *op : group) {
       auto tensorTy = cast<RankedTensorType>(op->getResultTypes()[0]);
       int loadSize = product(tensorTy.getShape());
-      sizeInBytes +=
-          loadSize * tensorTy.getElementType().getIntOrFloatBitWidth() / 8;
+      sizeInBytes += loadSize * tensorTy.getElementTypeBitWidth() / 8;
     }
 
     Value barrierAlloc = triton::createBarrierAlloc(forOp, numBuffers);
@@ -542,15 +442,6 @@ void createTMABarrierAndWait(
       asyncLoads[op].barrier = barrier;
       asyncLoads[op].waitOp = wait;
     }
-
-    // Invalidate and deallocate barrier
-    builder.setInsertionPointAfter(forOp);
-    for (int i = 0; i < numBuffers; i++) {
-      Value barrierView =
-          triton::createSingleBufferView(builder, barrierAlloc, i);
-      builder.create<ttng::InvalBarrierOp>(loc, barrierView);
-    }
-    builder.create<ttg::LocalDeallocOp>(loc, barrierAlloc);
   }
 }
 

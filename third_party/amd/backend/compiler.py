@@ -149,7 +149,7 @@ class HIPBackend(BaseBackend):
     @staticmethod
     @functools.lru_cache()
     def use_buffer_ops():
-        return os.environ.get("AMDGCN_USE_BUFFER_OPS", "0") == "1"
+        return os.environ.get("AMDGCN_USE_BUFFER_OPS", "1") == "1"
 
     @staticmethod
     def is_within_2gb(arg):
@@ -257,11 +257,14 @@ class HIPBackend(BaseBackend):
         passes.ttgpuir.add_optimize_dot_operands(pm, True)
         passes.ttgpuir.add_remove_layout_conversions(pm)
         passes.ttgpuir.add_reduce_data_duplication(pm)
+        if os.environ.get("TRITON_HIP_USE_IN_THREAD_TRANSPOSE", "0") == "1":
+            amd.passes.ttgpuir.add_in_thread_transpose(pm)
+            passes.ttgpuir.add_remove_layout_conversions(pm)
         if amd.has_matrix_core_feature(options.arch):
             amd.passes.ttgpuir.add_reorder_instructions(pm)
             use_block_pingpong = is_pingpong_enabled(options.arch)
             if use_block_pingpong and options.num_stages == 2:
-                amd.passes.ttgpuir.add_block_pingpong(pm)
+                amd.passes.ttgpuir.add_block_pingpong(pm, options.num_stages)
 
         if HIPBackend.use_buffer_ops():
             amd.passes.ttgpuir.add_canonicalize_pointers(pm)
@@ -279,7 +282,6 @@ class HIPBackend(BaseBackend):
         # TritonGPU -> LLVM-IR (MLIR)
         pm = ir.pass_manager(mod.context)
         pm.enable_debug()
-        amd.passes.ttgpuir.add_decompose_unsupported_conversions(pm, options.arch)
         # custom_lds_size is an experimental parameter that defines amount of LDS available
         # for one thread block. Measured in bytes.
         #

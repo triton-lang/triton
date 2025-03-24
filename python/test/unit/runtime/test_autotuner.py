@@ -5,7 +5,9 @@ import triton.language as tl
 import pytest
 
 
-def do_bench(kernel_call, quantiles):
+def do_bench(kernel_call, quantiles, use_cuda_graph=False):
+    if use_cuda_graph:
+        return triton.testing.do_bench_cudagraph(kernel_call, quantiles=quantiles)
     return triton.testing.do_bench(kernel_call, quantiles=quantiles, warmup=1, rep=1)
 
 
@@ -20,7 +22,8 @@ def test_kwargs(use_cuda_graph: bool, device: str):
 
     configs = [triton.Config(kwargs={'BLOCK_SIZE_M': 32}), triton.Config(kwargs={'BLOCK_SIZE_M': 128})]
 
-    @triton.autotune(configs=configs, key=['M'], warmup=1, rep=1, use_cuda_graph=use_cuda_graph, do_bench=do_bench)
+    @triton.autotune(configs=configs, key=["M"],
+                     do_bench=lambda kernel, quantiles: do_bench(kernel, quantiles, use_cuda_graph))
     @triton.jit
     def _kernel(dst, src, stride_m: tl.constexpr, M, BLOCK_SIZE_N: tl.constexpr, BLOCK_SIZE_M: tl.constexpr):
         offsets_m = tl.program_id(0) * stride_m + tl.arange(0, BLOCK_SIZE_M)

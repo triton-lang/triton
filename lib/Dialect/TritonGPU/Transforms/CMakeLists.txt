@@ -21,6 +21,7 @@ add_triton_library(TritonGPUTransforms
   Pipeliner/TC05MMAPipeline.cpp
   Pipeliner/TMAStoresPipeline.cpp
   Pipeliner/ModifiedAccMMAPipeline.cpp
+  Pipeliner/Partition.cpp
   Pipeliner/PipeliningUtility.cpp
   Pipeliner/Schedule.cpp
   Prefetch.cpp
@@ -29,6 +30,10 @@ add_triton_library(TritonGPUTransforms
   ReorderInstructions.cpp
   CoalesceAsyncCopy.cpp
   Utility.cpp
+  WarpSpecialization/AutomaticWarpSpecialization.cpp
+  WarpSpecialization/LoadMMASpecialization.cpp
+  WarpSpecialization/PartitionLoops.cpp
+  WarpSpecialization/RewritePartitionDependencies.cpp
 
   DEPENDS
   TritonGPUTransformsIncGen

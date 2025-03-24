@@ -4974,7 +4974,7 @@ def test_tma_load_block_shape_err(device):
 
     @triton.jit
     def kernel(ptr):
-        desc = tl.make_tensor_descriptor(ptr, [128, 128], [128, 1], [1, 32])
+        desc = tl.make_tensor_descriptor(ptr, [128, 128], [128, 1], [1, 2])
         desc.load([0, 0])
 
     input = torch.empty((128, 128), dtype=torch.int32, device=device)
@@ -4982,7 +4982,7 @@ def test_tma_load_block_shape_err(device):
     with pytest.raises(errc) as e:
         kernel[(1, )](input)
 
-    assert "tensor descriptor block shape must have at least 8 rows" in str(e.value.__cause__)
+    assert "Descriptor block shape must have at least 16 bytes" in str(e.value.__cause__)
 
 
 @pytest.mark.interpreter
@@ -4990,15 +4990,15 @@ def test_tma_store_block_shape_err(device):
 
     @triton.jit
     def kernel(ptr):
-        desc = tl.make_tensor_descriptor(ptr, [128, 128], [128, 1], [8, 8])
-        desc.store([0, 0], tl.zeros((1, 32), dtype=tl.int16))
+        desc = tl.make_tensor_descriptor(ptr, [128, 128], [128, 1], [8, 4])
+        desc.store([0, 0], tl.zeros([8, 4], dtype=tl.int16))
 
     input = torch.empty((128, 128), dtype=torch.int16, device=device)
     errc = triton.CompilationError if not is_interpreter() else InterpreterError
     with pytest.raises(errc) as e:
         kernel[(1, )](input)
 
-    assert "int16 tensor descriptor block shape must have at least 16 columns" in str(e.value.__cause__)
+    assert "Descriptor block shape must have at least 16 bytes" in str(e.value.__cause__)
 
 
 def test_trans_reshape(device):
@@ -6503,6 +6503,7 @@ def test_dot_max_num_imprecise_acc(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, in_type_s
     else:
         torch.testing.assert_close(ref_out, C, rtol=1e-3, atol=1e-3)
     if is_cuda() and low_precision_acc > 0 and torch.cuda.get_device_capability()[0] == 9:
+        # Hopper-specific workaround lower precision accumulator.
         assert h.asm["ptx"].count("add.f32") == (BLOCK_M * BLOCK_N) // (32 * num_warps) * (BLOCK_K // low_precision_acc)
 
 

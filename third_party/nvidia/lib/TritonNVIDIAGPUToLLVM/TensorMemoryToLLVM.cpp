@@ -311,7 +311,7 @@ void createTensorMemoryStore(Location loc, Value address,
   ptxBuilder.launch(rewriter, loc, voidTy);
 }
 
-static void createWaitOpSt(Location loc, ConversionPatternRewriter &rewriter) {
+void createWaitOpSt(Location loc, ConversionPatternRewriter &rewriter) {
   PTXBuilder ptxBuilder;
   std::string opcode = "tcgen05.wait::st.sync.aligned;";
   auto &wait = *ptxBuilder.create<PTXInstr>(opcode);

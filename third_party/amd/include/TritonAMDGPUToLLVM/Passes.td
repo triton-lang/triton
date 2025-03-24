@@ -3,16 +3,6 @@
 
 include "mlir/Pass/PassBase.td"
 
-def DecomposeUnsupportedAMDConversions : Pass<"decompose-unsupported-amd-conversions", "mlir::ModuleOp"> {
-    let summary = "Decompose conversions that are not supported by TritonGPU -> LLVM";
-    let constructor = "mlir::triton::AMD::createDecomposeUnsupportedConversionsPass(\"\")";
-
-    let options = [
-        Option<"arch", "arch", "std::string", /*default*/"\"\"",
-               "gfx target device architecture, e.g., gfx942">,
-    ];
-}
-
 def OptimizeAMDLDSUsage : Pass<"optimize-amd-lds-usage", "mlir::ModuleOp"> {
     let summary = "Minimize LDS usage";
     let constructor = "mlir::triton::AMD::createOptimizeLDSUsagePass(\"\")";
