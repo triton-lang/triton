@@ -27,7 +27,7 @@ def TritonAMDGPUStreamPipeline : Pass<"tritonamdgpu-stream-pipeline", "mlir::Mod
            "Set local prefetch stage count">,
     Option<"useAsyncCopy", "use_async_copy",
            "bool", /*default*/"false",
-           "Use AsyncCopyGlobalToLocal to directly load to shared memory (uses more shared memory)">,
+           "Use AsyncCopyGlobalToLocal to directly load to shared memory">,
   ];
 }
 

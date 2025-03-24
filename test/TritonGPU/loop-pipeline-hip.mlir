@@ -1,4 +1,4 @@
-// RUN: triton-opt %s -split-input-file -tritonamdgpu-stream-pipeline=num_stages=2 -canonicalize | FileCheck %s --check-prefixes=COMMON,STREAM
+// RUN: triton-opt %s -split-input-file -tritonamdgpu-stream-pipeline=num_stages=2 -canonicalize | FileCheck %s --check-prefixes=COMMON,SYNC
 // RUN: triton-opt %s -split-input-file -tritonamdgpu-stream-pipeline="num_stages=2 use_async_copy=1" -canonicalize | FileCheck %s --check-prefixes=COMMON,ASYNC
 
 #blocked = #ttg.blocked<{sizePerThread = [8, 1], threadsPerWarp = [8, 8], warpsPerCTA = [1, 4], order = [0, 1]}>
@@ -475,8 +475,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 
 // Prologue
 // COMMON-COUNT-2: ttg.local_alloc
-  // STREAM-COUNT-2: tt.load
-  // STREAM-COUNT-2: ttg.local_store
+  // SYNC-COUNT-2: tt.load
+  // SYNC-COUNT-2: ttg.local_store
   //
   // ASYNC: tt.load
   // ASYNC: ttg.local_store
@@ -485,9 +485,9 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 // Main loop
 //         COMMON:   scf.for
 //
-  // STREAM-COUNT-2:   ttg.local_load
-  //         STREAM:   tt.dot
-  //         STREAM:   scf.yield
+  // SYNC-COUNT-2:   ttg.local_load
+  //         SYNC:   tt.dot
+  //         SYNC:   scf.yield
   //
   //         ASYNC:    ttg.local_load
   //         ASYNC:    ttg.async_wait

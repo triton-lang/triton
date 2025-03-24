@@ -301,8 +301,7 @@ bool StreamPipeliner::createAsyncCopy(tt::LoadOp loadOp, Value alloc,
   if (numBuffers == 1)
     return false;
 
-  OpBuilder builder(forOp);
-  builder.setInsertionPoint(loadOp);
+  OpBuilder builder(loadOp);
   Location loc = loadOp.getLoc();
 
   Value src = loadOp.getPtr();
@@ -315,7 +314,7 @@ bool StreamPipeliner::createAsyncCopy(tt::LoadOp loadOp, Value alloc,
   // Skip swizzled shared encodings because they are not supported by the
   // lowering to llvm
   // TODO: remove once swizzle async copies are supported
-  if (!useAsyncCopy || sharedEncodingAttr.getMaxPhase() != 1 ||
+  if (sharedEncodingAttr.getMaxPhase() != 1 ||
       sharedEncodingAttr.getPerPhase() != 1) {
     return false;
   }
@@ -331,11 +330,12 @@ bool StreamPipeliner::createAsyncCopy(tt::LoadOp loadOp, Value alloc,
   auto viewLoad =
       builder.create<ttg::MemDescSubviewOp>(loc, subviewTy, alloc, loadOffsets);
 
-  // Clean up old local caches.
+  // If the load is used by an existing local allocation we replace it with the
+  // new subview
   SmallVector<ttg::LocalAllocOp> allocsToErase;
   for (Operation *user : loadOp->getUsers()) {
     if (auto alloc = dyn_cast<ttg::LocalAllocOp>(user)) {
-      tt::replaceUsesAndPropagateType(builder, alloc, viewLoad.getResult());
+      tt::replaceUsesAndPropagateType(builder, alloc, viewLoad);
       allocsToErase.push_back(alloc);
     }
   }
@@ -351,7 +351,7 @@ bool StreamPipeliner::createAsyncCopy(tt::LoadOp loadOp, Value alloc,
   schedule.insert(newLoadOp, stage, cluster);
 
   // Insert synchronization primitives to create barriers during lowering
-  Operation *commit =
+  auto commit =
       builder.create<ttg::AsyncCommitGroupOp>(loc, newLoadOp->getResult(0));
   ttg::AsyncWaitOp wait =
       builder.create<ttg::AsyncWaitOp>(loc, commit->getResult(0), 0);
@@ -363,16 +363,16 @@ bool StreamPipeliner::createAsyncCopy(tt::LoadOp loadOp, Value alloc,
     scheduleOp(newLoadOp, SCHED_LOCAL_STORE);
 
   // Create local load which consumes the async token from the AsyncWait
-  auto sharedLoad = builder.create<ttg::LocalLoadOp>(
-      loc, loadOp.getType(), viewLoad, wait->getResult(0));
-  Value result = sharedLoad.getResult();
+  auto sharedLoad =
+      builder.create<ttg::LocalLoadOp>(loc, loadOp.getType(), viewLoad, wait);
   if (stages[SCHED_LOCAL_LOAD] != stages[SCHED_COMPUTE])
     scheduleOp(sharedLoad, SCHED_LOCAL_LOAD);
 
-  loadOp->replaceAllUsesWith(ValueRange{result});
-
-  if (stages[SCHED_LOCAL_LOAD] != stages[SCHED_COMPUTE] && result.hasOneUse()) {
-    if (auto cvt = dyn_cast<ttg::ConvertLayoutOp>(*result.getUsers().begin()))
+  loadOp->replaceAllUsesWith(ValueRange{sharedLoad});
+  if (stages[SCHED_LOCAL_LOAD] != stages[SCHED_COMPUTE] &&
+      sharedLoad->hasOneUse()) {
+    if (auto cvt =
+            dyn_cast<ttg::ConvertLayoutOp>(*sharedLoad->getUsers().begin()))
       scheduleOp(cvt, SCHED_LOCAL_LOAD);
   }
 
