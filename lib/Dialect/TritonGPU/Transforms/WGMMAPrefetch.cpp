@@ -39,7 +39,6 @@ namespace {
 /// GEMM. Currently supports operations where:
 /// 1. LHS (A) is in registers
 /// 2. RHS (B) is in shared memory
-/// 3. Swizzle byte width matches the matrix size in swizzle dimension
 ///
 /// @param dotOp The dot operation to check
 /// @return success if the operation is supported, failure otherwise
@@ -52,19 +51,7 @@ LogicalResult isSupportedRSGEMM(ttng::WarpGroupDotOp dotOp) {
   auto encB = dyn_cast<TensorOrMemDesc>(operandB.getType()).getEncoding();
 
   if (isa<DotOperandEncodingAttr>(encA) && isa<NVMMASharedEncodingAttr>(encB)) {
-    auto bShape = cast<MemDescType>(operandB.getType()).getShape();
-    auto rank = bShape.size();
-    auto EncB = cast<NVMMASharedEncodingAttr>(encB);
-    auto SwizzleByteWidth = EncB.getSwizzlingByteWidth();
-    auto ElementBitWidth = EncB.getElementBitWidth();
-    auto TransB = EncB.getTransposed();
-    int64_t SwizzleDimSize = TransB ? bShape[rank - 2] : bShape[rank - 1];
-
-    // Currently, memory subview does not calculate correct base
-    // address for subtile when SwizzleByteWidth is larger than
-    // the matrix size in the swizzle dim
-    if (SwizzleDimSize * ElementBitWidth == SwizzleByteWidth * 8)
-      return success();
+    return success();
   }
 
   return failure();
