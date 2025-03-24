@@ -90,9 +90,11 @@ bool mlir::triton::nvidia_gpu::mmaHasPipelineableOperands(
   // also coming from load or outside the loop.
   if (auto scaledOp = dyn_cast<ttng::TCGen5MMAScaledOp>(mmaOp.getOperation())) {
     if (!isa<ttg::SharedEncodingTrait>(
-            scaledOp.getAScale().getType().getEncoding()) ||
+            scaledOp.getAScale().getType().getEncoding()) &&
+            !forOp.isDefinedOutsideOfLoop(scaledOp.getAScale()) ||
         !isa<ttg::SharedEncodingTrait>(
-            scaledOp.getBScale().getType().getEncoding()))
+            scaledOp.getBScale().getType().getEncoding()) &&
+            !forOp.isDefinedOutsideOfLoop(scaledOp.getBScale()))
       return false;
     if (!comesFromLoadOrOutsideLoop(scaledOp.getAScale()) ||
         !comesFromLoadOrOutsideLoop(scaledOp.getBScale()))

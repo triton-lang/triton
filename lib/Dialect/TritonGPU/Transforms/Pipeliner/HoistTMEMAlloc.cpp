@@ -246,6 +246,36 @@ ttng::TMEMAllocOp hoistTMEMAlloc(ttng::TMEMAllocOp alloc, scf::ForOp forOp) {
 
   return newAlloc;
 }
+
+// Hoist invariant tmem_alloc. This could technically be done as general LICM
+// but controlling tmem liveranga more precisley is likely to be important.
+static void hoistInvariantInputs(Operation *mmaOp, scf::ForOp forOp) {
+  for (auto operand : mmaOp->getOperands()) {
+    if (forOp.isDefinedOutsideOfLoop(operand))
+      continue;
+    auto tmemAllocOp = operand.getDefiningOp<ttng::TMEMAllocOp>();
+    if (!tmemAllocOp || tmemAllocOp.getType().getMutableMemory())
+      continue;
+    assert(tmemAllocOp.getSrc());
+    Value src = tmemAllocOp.getSrc();
+    SmallVector<Operation *> opToHoist = {tmemAllocOp.getOperation()};
+    // Also hoist simple unary elementwise that may have sinked into the loop.
+    while (Operation *defOp = src.getDefiningOp()) {
+      if (forOp.isDefinedOutsideOfLoop(src))
+        break;
+      if (!(isMemoryEffectFree(defOp) && isSpeculatable(defOp) &&
+            defOp->getNumOperands() == 1))
+        break;
+      opToHoist.push_back(defOp);
+      src = defOp->getOperand(0);
+    }
+    if (!forOp.isDefinedOutsideOfLoop(src))
+      continue;
+    for (auto op : llvm::reverse(opToHoist)) {
+      forOp.moveOutOfLoop(op);
+    }
+  }
+}
 } // namespace
 
 struct HoistTMEMAlloc
@@ -267,6 +297,7 @@ struct HoistTMEMAlloc
       if (!forOp) {
         return;
       }
+      hoistInvariantInputs(mmaOp, forOp);
       hoistTMEMAlloc(alloc, forOp);
     }
   }
