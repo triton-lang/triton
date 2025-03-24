@@ -7091,6 +7091,8 @@ def gen_gather_warp_shuffle_cases():
              "linear<{register = [[0, 2], [0, 32], [2, 0], [0, 16], [64, 0]], lane = [[0, 8], [8, 0], [1, 0], [4, 0], [16, 0], [32, 0]], warp = [[0, 1], [0, 4]], block = []}>"
              ),
         ]
+    else:
+        return []
 
 
 # These layouts are specially chosen to trigger the warp shuffle codegen.
