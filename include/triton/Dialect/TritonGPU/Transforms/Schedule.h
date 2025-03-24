@@ -25,16 +25,11 @@ void lowerLoops(ModuleOp moduleOp);
 
 }; // namespace gpu
 
-/// This fill out the pipelining options including schedule and annotations
-/// for wait ops. This also does pre-processing by converting some of the
-/// loads into async loads so that the IR is ready to be pipelined.
-bool preProcessLoopAndGetSchedule(scf::ForOp &forOp, int numStages,
-                                  mlir::triton::PipeliningOption &options);
-
-/// Fills out pipelining options for an outer loop pipelining case. This
-/// schedules async copies to overlap with the epilogue of a loop.
-bool getOuterLoopSchedule(scf::ForOp &forOp, int numStages,
-                          mlir::triton::PipeliningOption &options);
+/// Pipeline the Tensor Core Gen 05 MMA ops in the module with `numStages`
+/// stages. This will pre-process the loops, lowering the ops related to TG Gen5
+/// MMA, and then pipeline the loops using expander.
+void pipelineTC05MMALoops(ModuleOp module, int numStages,
+                          bool disableExpander = false);
 
 /// Pipeline the TMA stores in the loop.
 bool pipelineTMAStores(scf::ForOp forOp);
