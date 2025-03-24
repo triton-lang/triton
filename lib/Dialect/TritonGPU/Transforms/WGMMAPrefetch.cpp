@@ -91,7 +91,6 @@ private:
   DenseMap<Value, SmallVector<Value>> dot2aVals;
   DenseMap<Value, SmallVector<Value>> dot2aValsLocalLoad;
   DenseMap<Value, SmallVector<Value>> dot2aValsElementWise;
-  DenseMap<Value, SmallVector<Value>> dot2bVals;
   DenseMap<Value, ttng::WarpGroupDotWaitOp> dot2Wait;
 
   Value generatePrefetch(Value v, unsigned opIdx, bool isPrologue,
@@ -309,7 +308,6 @@ LogicalResult WGMMAPrefetcher::initialize() {
         }
       }
 
-      dot2bVals[dotOp] = bVals;
       dot2aSrcMemDesc[dotOp] = aSmem;
       dot2bSrcMemDesc[dotOp] = bSmem;
       dot2Wait[dotOp] = dotWait;
