@@ -451,7 +451,7 @@ _Allocate tensor memory_
 Syntax:
 
 ```
-operation ::= `ttng.tmem_alloc` $src attr-dict `:` functional-type(operands, results)
+operation ::= `ttng.tmem_alloc` ($src^)? attr-dict `:` functional-type(operands, results)
 ```
 
 This operation allocates buffer in tensor memory and return a descriptor

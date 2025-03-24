@@ -724,7 +724,7 @@ This is needed before the shared memory can be written to.</p>
 <h2><code class="docutils literal notranslate"><span class="pre">ttng.tmem_alloc</span></code> (triton::nvidia_gpu::TMEMAllocOp)<a class="headerlink" href="#ttng-tmem-alloc-triton-nvidia-gpu-tmemallocop" title="Link to this heading">¶</a></h2>
 <p><em>Allocate tensor memory</em></p>
 <p>Syntax:</p>
-<div class="highlight-default notranslate"><div class="highlight"><pre><span></span>operation ::= `ttng.tmem_alloc` $src attr-dict `:` functional-type(operands, results)
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span>operation ::= `ttng.tmem_alloc` ($src^)? attr-dict `:` functional-type(operands, results)
 </pre></div>
 </div>
 <p>This operation allocates buffer in tensor memory and return a descriptor
