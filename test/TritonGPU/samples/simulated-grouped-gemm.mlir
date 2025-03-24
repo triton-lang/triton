@@ -11,7 +11,7 @@
 // CHECK: #[[$ATTR_3:.+]] = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = true, elementBitWidth = 16}>
 // CHECK: #[[$ATTR_4:.+]] = #ttg.shared_memory
 // To regenerate this test case, run `make golden-samples` in the triton root directory
-// RUN: triton-opt %s -split-input-file -tritongpu-pipeline -canonicalize | FileCheck --dump-input-context=50 %s
+// RUN: triton-opt %s -tritongpu-pipeline -canonicalize | FileCheck --dump-input-context=50 %s
 #nvmma_128 = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16}>
 
 // CHECK-LABEL:   tt.func public @matmul_kernel_descriptor_persistent(
