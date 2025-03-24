@@ -182,6 +182,8 @@ private:
       unsigned firstIndex) override {
     if (auto forOp = dyn_cast<scf::ForOp>(op)) {
       visitForOpInductionVar(forOp, argLattices);
+    } else if (auto ws = dyn_cast<gpu::WarpSpecializePartitionsOp>(op)) {
+      visitWarpSpecializeExplicitCaptures(ws, successor, argLattices);
     } else {
       setAllToEntryStates(argLattices.take_front(firstIndex));
       setAllToEntryStates(argLattices.drop_front(
@@ -202,6 +204,9 @@ public:
   void
   visitForOpInductionVar(scf::ForOp op,
                          ArrayRef<dataflow::Lattice<AxisInfo> *> argLattices);
+  void visitWarpSpecializeExplicitCaptures(
+      gpu::WarpSpecializePartitionsOp ws, const RegionSuccessor &successor,
+      ArrayRef<dataflow::Lattice<AxisInfo> *> argLattices);
 };
 
 template <typename OpTy>
@@ -277,18 +282,15 @@ public:
   AxisInfo
   getAxisInfo(ub::PoisonOp op,
               ArrayRef<const dataflow::Lattice<AxisInfo> *> operands) override {
-    constexpr int64_t largePowerOf2 = int64_t(1) << 32;
-    // Poison values are never accessed, thus assume optimistic values.
-    if (auto shape = dyn_cast<mlir::ShapedType>(op.getType())) {
-      unsigned rank = shape.getRank();
-      return AxisInfo(
-          /*contiguity=*/AxisInfo::DimVectorT(rank, largePowerOf2),
-          /*divisibility=*/AxisInfo::DimVectorT(rank, largePowerOf2),
-          /*constancy=*/AxisInfo::DimVectorT(shape.getShape()));
-    }
+    unsigned rank = 1;
+    if (auto shape = dyn_cast<mlir::ShapedType>(op.getType()))
+      rank = shape.getRank();
 
-    return AxisInfo(/*contiguity=*/{1}, /*divisibility=*/{largePowerOf2},
-                    /*constancy=*/{1});
+    // Poison values are never accessed, thus assume optimistic values.
+    return AxisInfo(
+        AxisInfo::DimVectorT(rank, highestPowOf2Divisor<int64_t>(0)),
+        AxisInfo::DimVectorT(rank, highestPowOf2Divisor<int64_t>(0)),
+        AxisInfo::DimVectorT(rank, highestPowOf2Divisor<int64_t>(0)));
   }
 };
 
@@ -1116,6 +1118,20 @@ void AxisInfoAnalysis::visitForOpInductionVar(
   (void)argLattices[0]->join(inductionVar);
 }
 
+void AxisInfoAnalysis::visitWarpSpecializeExplicitCaptures(
+    gpu::WarpSpecializePartitionsOp ws, const RegionSuccessor &successor,
+    ArrayRef<dataflow::Lattice<AxisInfo> *> argLattices) {
+  assert(!successor.isParent());
+  ProgramPoint *point = getProgramPointAfter(ws);
+
+  for (auto [capture, argLattice] :
+       llvm::zip(ws.getParentOp().getExplicitCaptures(), argLattices)) {
+    propagateIfChanged(
+        argLattice,
+        argLattice->join(getLatticeElementFor(point, capture)->getValue()));
+  }
+}
+
 } // anonymous namespace
 
 template <class T>
@@ -1160,8 +1176,9 @@ void AxisInfo::initPessimisticStateFromFunc(int argNumber, T funcOp,
       initPessimisticStateFromFunc(blockArg.getArgNumber(), fun,
                                    &knownContiguity, &knownDivisibility,
                                    &knownConstancy);
-    } else if (isa<RegionBranchOpInterface>(op)) {
-      // scf::ForOp, scf::IfOp, scf::WhileOp
+    } else if (isa<RegionBranchOpInterface, gpu::WarpSpecializePartitionsOp>(
+                   op)) {
+      // scf::ForOp, scf::IfOp, scf::WhileOp, gpu::WarpSpecializePartitionsOp
       // Control flow operations are initialized with "unknown" state:
       // the maximum possible divisibility, contiguity, and constancy.
       knownDivisibility = DimVectorT(rank, highestPowOf2Divisor<int64_t>(0));
@@ -1317,12 +1334,15 @@ unsigned ModuleAxisInfoAnalysis::getMaskAlignment(Value mask) {
 void ModuleAxisInfoAnalysis::initialize(FunctionOpInterface funcOp) {
   std::unique_ptr<DataFlowSolver> solver = createDataFlowSolver();
   AxisInfoAnalysis *analysis = solver->load<AxisInfoAnalysis>();
-  WalkResult result = funcOp.walk([&](Operation *op) {
-    if (op->hasTrait<OpTrait::IsIsolatedFromAbove>() &&
-        failed(solver->initializeAndRun(op)))
-      return WalkResult::interrupt();
-    return WalkResult::advance();
-  });
+  // Walk pre-order so analysis results can be propagated into nested isolated
+  // regions.
+  WalkResult result =
+      funcOp.walk<mlir::WalkOrder::PreOrder>([&](Operation *op) {
+        if (op->hasTrait<OpTrait::IsIsolatedFromAbove>() &&
+            failed(solver->initializeAndRun(op)))
+          return WalkResult::interrupt();
+        return WalkResult::advance();
+      });
   if (result.wasInterrupted())
     return;
 
