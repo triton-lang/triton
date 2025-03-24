@@ -908,10 +908,13 @@ void createBarrierAndWaitOps(scf::ForOp forOp, CoarseSchedule &schedule,
   for (auto user : alloc->getUsers()) {
     if (auto load = dyn_cast<ttng::TMEMLoadOp>(user)) {
       int waitStage = schedule[mma].first + numStages - 1;
+      int loadStage =
+          schedule[forOp.getBody()->findAncestorOpInBlock(*load)].first;
       if (!forOp->isAncestor(load) ||
-          // If the load is in the same stage as the mma wait, no need to add
-          // a new wait.
-          schedule[load].first == waitStage) {
+          // If the load is in the same stage as the mma wait, would be, do not
+          // add a new wait, rely on the wait that will be inserted in the main
+          // block.
+          loadStage == waitStage) {
         continue;
       }
       // Put the wait in the same stage as the load
