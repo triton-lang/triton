@@ -2,12 +2,14 @@ add_triton_library(TritonAMDGPUTransforms
   AccelerateAMDMatmul.cpp
   BlockPingpong.cpp
   CanonicalizePointers.cpp
+  CoalesceAsyncCopy.cpp
   ConvertToBufferOps.cpp
   OptimizeEpilogue.cpp
   HoistLayoutConversions.cpp
   ReorderInstructions.cpp
   StreamPipeline.cpp
   MfmaGroup.cpp
+  InThreadTranspose.cpp
 
   DEPENDS
   TritonAMDGPUIR

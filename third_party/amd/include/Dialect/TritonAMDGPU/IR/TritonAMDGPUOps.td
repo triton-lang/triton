@@ -394,4 +394,41 @@ def TTG_UpcastMXFPOp : TT_AMDGPU_Op<"upcast_mxfp", [Pure]> {
   }];
 }
 
+//===----------------------------------------------------------------------===//
+// InThreadTransposeOp
+//===----------------------------------------------------------------------===//
+
+def InThreadTransposeOp : TT_AMDGPU_Op<"in_thread_transpose", [Pure]> {
+  let summary = "Perform transpose of register values belonging to each threads";
+
+  let hasVerifier = 1;
+
+  let description = [{
+    This operation performs a layout transpose over values in registers per thread.
+    Specifically, given the input layout's blocked layout, it transposes the two last dimensions(rank-1 and rank-2)
+    along the register dimension of the underlying linear layout.
+
+    Conversion example:
+    * input layout: blocked layout with sizePerThread=[2, 2], order=[0, 1]. It's linear layout register bases = [[1, 0], [2, 0], [0, 1], [0, 2]]
+    * output layout: same thread and warp bases as in input, register bases = [[0, 1], [0, 2], [1, 0], [2, 0]]
+
+    This operation enables efficient coalesced loading from HBM with following vectorized writing to shared memory
+    in cases when HBM and shared memory order differ and target AMD hardware does not natively support this transposition.
+    This is a specific variant of ttg.convert_layout and will be converted to ttg.convert_layout when lowering to llvm.
+    We do not want this conversion to be optimized out, because we need to explicitly materialize instructions
+    to transpose within each thread after loading from HBM and before writing to shared memory.
+  }];
+
+  let arguments = (ins TT_Tensor:$src);
+
+  let results = (outs TT_Tensor:$result);
+
+  let assemblyFormat = "$src attr-dict `:` type($src) `->` type($result)";
+
+  let extraClassDeclaration = [{
+    static mlir::triton::LinearLayout deduceOutputLayout(mlir::ArrayRef<int64_t> shape,
+                                 mlir::triton::gpu::BlockedEncodingAttr srcEncoding);
+  }];
+}
+
 #endif
