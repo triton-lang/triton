@@ -1046,38 +1046,45 @@ void LayoutRematerialization::hoistConvertOnTopOfExtOrBroadcast() {
 bool shouldPropagateConversion(ConvertLayoutOp convertOp) {
   RankedTensorType targetType = convertOp.getType();
   auto dotEnc = dyn_cast<DotOperandEncodingAttr>(targetType.getEncoding());
-  // If the target encoding is not DotOperandEncodingAttr, allow propagation.
-  if (!dotEnc) {
+
+  // Allow propagation if target encoding is not DotOperandEncodingAttr.
+  if (!dotEnc)
     return true;
-  }
+
+  int opIdx = dotEnc.getOpIdx();
+
   // Skip conversions to DotOperandEncodingAttr when the operand index is 0.
   // This heuristic is applied to prevent moving the blocked->dot conversion of
   // the Q tensor (a loop invariant in Flash Attention) outside the loop. Doing
   // so can increase register pressure and cause spilling in some cases.
-  if (dotEnc.getOpIdx() == 0) {
+  if (opIdx == 0)
     return false;
-  }
-  // Skip conversions to DotOperandEncodingAttr when the operand index is 1 if
-  // it's not intentionally placed above a load as we have to be a bit more
-  // careful with the heuristics for both correctness and performance.
-  // TODO: Fix this logic to avoid propagating conversions backward unless
-  // it reduces the total number of conversions.
-  assert(dotEnc.getOpIdx() == 1);
-  SetVector<Operation *> slice;
-  BackwardSliceOptions opt;
-  opt.omitBlockArguments = true;
-  opt.filter = [&](Operation *op) {
-    return op->getParentRegion() == convertOp->getParentRegion();
-  };
-  getBackwardSlice(convertOp.getOperation(), &slice, opt);
 
-  for (Operation *currOp : slice) {
-    if (isa<LoadOp>(currOp)) {
-      return false;
-    }
-  }
-  // Allow propagation if no LoadOp is found.
-  return true;
+  // Skip conversions to DotOperandEncodingAttr when the operand index is 1,
+  // unless it matches a very specific pattern where a load is intentionally
+  // converted to dot layout. This pattern is typically produced by passes that
+  // aim to enable direct loading in dot layout, avoiding shared memory usage
+  // (e.g., AMD's bypass_lds_for_dot_operand pass).
+  // Expected pattern:
+  // %0 = convert_layout blocked -> dot
+  // %1 = load(%0)
+  // %2 = dot(.., %1, ..)
+  assert(opIdx == 1);
+
+  auto srcEnc = convertOp.getSrc().getType().getEncoding();
+  if (!isa<BlockedEncodingAttr>(srcEnc))
+    return false;
+
+  if (!convertOp->hasOneUse())
+    return false;
+
+  auto *user = convertOp->use_begin()->getOwner();
+  auto loadOp = dyn_cast<triton::LoadOp>(user);
+  if (!loadOp || !loadOp->hasOneUse())
+    return false;
+
+  auto *loadUser = loadOp->use_begin()->getOwner();
+  return isa<triton::DotOp>(loadUser);
 }
 
 void LayoutRematerialization::hoistConvertIntoConditionals() {

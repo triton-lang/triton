@@ -293,13 +293,16 @@ tt.func @check_dot_op_idx1_propagation(%arg0: !tt.ptr<f32> {tt.divisibility = 16
   // CHECK-NOT: ttg.convert_layout {{.*}} : {{.*}} -> tensor<{{.*}}, #ttg.dot_op<{opIdx = 1, parent = {{.*}}}>>
   // CHECK: tt.load {{.+}} : tensor<{{.*}}, #ttg.dot_op<{opIdx = 1, parent = {{.*}}}>>
   %cst_1 = arith.constant dense<1> : tensor<64x64xi32, #blocked1>
+  %cst_f32 = arith.constant dense<1.0> : tensor<64x64xf32, #blocked1>
   %splat_load_addr = tt.splat %arg0 : !tt.ptr<f32> -> tensor<64x64x!tt.ptr<f32>, #blocked1>
   %splat_store_addr = tt.splat %arg1 : !tt.ptr<f32> -> tensor<64x64x!tt.ptr<f32>, #blocked1>
   %1 = tt.addptr %splat_load_addr, %cst_1 : tensor<64x64x!tt.ptr<f32>, #blocked1>, tensor<64x64xi32, #blocked1>
   %2 = ttg.convert_layout %1 : tensor<64x64x!tt.ptr<f32>, #blocked1> -> tensor<64x64x!tt.ptr<f32>, #ttg.dot_op<{opIdx = 1, parent = #blocked1}>>
   %3 = tt.load %2 : tensor<64x64x!tt.ptr<f32>, #ttg.dot_op<{opIdx = 1, parent = #blocked1}>>
-  %4 = ttg.convert_layout %3 : tensor<64x64xf32, #ttg.dot_op<{opIdx = 1, parent = #blocked1}>> -> tensor<64x64xf32, #blocked1>
-  tt.store %splat_store_addr, %4 : tensor<64x64x!tt.ptr<f32>, #blocked1>
+  %4 = tt.load %1 : tensor<64x64x!tt.ptr<f32>, #blocked1>
+  %5 = ttg.convert_layout %4 : tensor<64x64xf32, #blocked1> -> tensor<64x64xf32, #ttg.dot_op<{opIdx = 0, parent = #blocked1}>>
+  %6 = tt.dot %5, %3, %cst_f32 : tensor<64x64xf32, #ttg.dot_op<{opIdx = 0, parent = #blocked1}>> * tensor<64x64xf32, #ttg.dot_op<{opIdx = 1, parent = #blocked1}>> -> tensor<64x64xf32, #blocked1>
+  tt.store %splat_store_addr, %6 : tensor<64x64x!tt.ptr<f32>, #blocked1>
   tt.return
 }
 }
