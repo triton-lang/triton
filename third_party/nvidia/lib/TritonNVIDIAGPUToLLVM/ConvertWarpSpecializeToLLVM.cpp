@@ -399,8 +399,7 @@ struct ConvertWarpSpecializeToLLVM
   void runOnOperation() override {
     ModuleOp mod = getOperation();
     // FIXME: Assume warp specialization only happens on Blackwell.
-    NVIDIA::TargetInfo targetInfo(/*computeCapability=*/100,
-                                  /*ptxVersion=*/100);
+    NVIDIA::TargetInfo targetInfo(/*computeCapability=*/100, /*ptxVersion=*/87);
 
     // Convert types and cleanup unrealized conversions.
     mlir::LowerToLLVMOptions option(&getContext());
