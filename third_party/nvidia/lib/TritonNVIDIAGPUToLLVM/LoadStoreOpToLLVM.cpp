@@ -108,20 +108,20 @@ Value createCachePolicy(triton::EvictionPolicy opEvict,
   Value policyRet;
 
   if (hasL2EvictPolicy) {
-  auto &policy = ptxBuilder.create<>("createpolicy.fractional")
-            ->o("L2::evict_first", opEvict == triton::EvictionPolicy::EVICT_FIRST)
-            .o("L2::evict_last", opEvict == triton::EvictionPolicy::EVICT_LAST)
-            .b(64);
+    auto &policy = ptxBuilder.create<>("createpolicy.fractional")
+              ->o("L2::evict_first", opEvict == triton::EvictionPolicy::EVICT_FIRST)
+              .o("L2::evict_last", opEvict == triton::EvictionPolicy::EVICT_LAST)
+              .b(64);
 
-  const std::string writeConstraint = "=l";
-  // prepare asm operands
-  auto *dstOpr = ptxBuilder.newOperand(writeConstraint, /*init=*/true);
-  std::string fractionStr = "1.0";
-  auto *fractionOpr = ptxBuilder.newConstantOperand(fractionStr);
-  policy(dstOpr, fractionOpr);
+    const std::string writeConstraint = "=l";
+    // prepare asm operands
+    auto *dstOpr = ptxBuilder.newOperand(writeConstraint, /*init=*/true);
+    std::string fractionStr = "1.0";
+    auto *fractionOpr = ptxBuilder.newConstantOperand(fractionStr);
+    policy(dstOpr, fractionOpr);
 
-  Type policyRetTy = rewriter.getI64Type();
-  policyRet = ptxBuilder.launch(rewriter, loc, policyRetTy);
+    Type policyRetTy = rewriter.getI64Type();
+    policyRet = ptxBuilder.launch(rewriter, loc, policyRetTy);
   }
 
   return policyRet;
@@ -346,7 +346,9 @@ struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp>,
                      .v(nWords)
                      .b(width);
 
-      PTXBuilder::Operand *evictOpr{};
+      PTXBuilder::Operand *evictOpr = nullptr;
+      if (l2PolicyReg)
+        evictOpr = ptxBuilder.newOperand(l2PolicyReg, "l");
 
       if (!evictOpr)
         ld(dstsOpr, addrOpr).maybePredicate(pred, "b");
@@ -529,7 +531,7 @@ struct StoreOpConversion : public ConvertOpToLLVMPattern<triton::StoreOp>,
               .v(nWords)
               .b(width);
               
-      PTXBuilder::Operand *evictOpr{};
+      PTXBuilder::Operand *evictOpr = nullptr;
       if (l2PolicyReg)
         evictOpr = ptxBuilder.newOperand(l2PolicyReg, "l");
 
