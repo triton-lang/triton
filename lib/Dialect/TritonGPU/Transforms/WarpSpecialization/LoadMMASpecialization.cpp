@@ -180,8 +180,10 @@ getUserPrecondition(ImplicitLocOpBuilder &b, scf::ForOp loop,
 LogicalResult triton::gpu::specializeLoadMMADependencies(scf::ForOp &loop,
                                                          int defaultNumStages) {
   auto ops = llvm::to_vector(loop.getOps<ttng::MMAv5OpInterface>());
+  if (ops.empty())
+    return success();
   // Support only 1 MMA op.
-  if (ops.size() != 1) {
+  if (ops.size() > 1) {
     return mlir::emitWarning(
         loop.getLoc(),
         "failed to warp specialize: more than one `tt.dot` found in the loop");

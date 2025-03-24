@@ -199,4 +199,20 @@ tt.func @future_conditional_self_use(%lb: i32, %ub: i32, %step: i32, %cond: i1) 
   tt.return
 }
 
+// CHECK-LABEL: @trivial_tensor_captures
+tt.func @trivial_tensor_captures(%arg0: f16, %lb: i32, %ub: i32, %step: i32) {
+  %0 = tt.make_range {end = 256 : i32, start = 0 : i32} : tensor<256xi32>
+  %1 = tt.splat %arg0 : f16 -> tensor<32xf16>
+  // CHECK: ttg.warp_specialize(%arg1, %arg2, %arg3, %arg0)
+  scf.for %i = %lb to %ub step %step : i32 {
+    // CHECK: partition0(%arg4: i32, %arg5: i32, %arg6: i32, %arg7: f16) num_warps(4)
+    // CHECK-NEXT: [[SPLAT:%.*]] = tt.splat %arg7 : f16 -> tensor<32xf16>
+    // CHECK-NEXT: [[RANGE:%.*]] = tt.make_range {end = 256 : i32, start = 0 : i32} : tensor<256xi32>
+    // CHECK-NEXT: scf.for
+    // CHECK-NEXT: "use"([[RANGE]], [[SPLAT]])
+    "use"(%0, %1) {ttg.partition = 1} : (tensor<256xi32>, tensor<32xf16>) -> ()
+  } {ttg.partition.stages = [0, 0]}
+  tt.return
+}
+
 }

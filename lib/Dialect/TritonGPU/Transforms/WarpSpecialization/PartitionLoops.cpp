@@ -192,10 +192,16 @@ LogicalResult triton::gpu::partitionLoop(scf::ForOp loop) {
   // captures and thread them in to the regions.
   SetVector<Value> captures;
   getUsedValuesDefinedAbove(wsOp.getPartitionOpHolder(), captures);
-  for (Value capture : captures) {
-    // Rematerialize constants.
-    if (capture.getDefiningOp() &&
-        capture.getDefiningOp()->hasTrait<OpTrait::ConstantLike>()) {
+  for (unsigned i = 0; i < captures.size(); ++i) {
+    Value capture = captures[i];
+
+    // Rematerialize constants and also pure tensor ops to get around the
+    // restriction below on capturing tensors.
+    Operation *defOp = capture.getDefiningOp();
+    if (defOp && isPure(defOp) &&
+        (defOp->hasTrait<OpTrait::ConstantLike>() ||
+         isa<RankedTensorType>(capture.getType()))) {
+      captures.insert(defOp->operand_begin(), defOp->operand_end());
       for (Region *region : wsOp.getPartitionRegions()) {
         b.setInsertionPointToStart(&region->front());
         Value copy = b.clone(*capture.getDefiningOp())->getResult(0);
