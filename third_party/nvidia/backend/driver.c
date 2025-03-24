@@ -357,14 +357,15 @@ static PyObject *fill2DTMADescriptor(PyObject *self, PyObject *args) {
   // descriptor we rely on a convention between this function and codegen.
   CUtensorMapSwizzle swizzle = CU_TENSOR_MAP_SWIZZLE_128B;
   uint32_t contigDimSizeInByte = elementSize * tensorDims[0];
-  if (contigDimSizeInByte >= 128) {
+  if (tensorDims[1] < 8 || contigDimSizeInByte < 32) {
+    swizzle = CU_TENSOR_MAP_SWIZZLE_NONE;
+  } else if (contigDimSizeInByte >= 128) {
     swizzle = CU_TENSOR_MAP_SWIZZLE_128B;
   } else if (contigDimSizeInByte >= 64) {
     swizzle = CU_TENSOR_MAP_SWIZZLE_64B;
-  } else if (contigDimSizeInByte >= 32) {
-    swizzle = CU_TENSOR_MAP_SWIZZLE_32B;
   } else {
-    assert(false && "block size too small.");
+    assert(contigDimSizeInByte >= 32);
+    swizzle = CU_TENSOR_MAP_SWIZZLE_32B;
   }
   // The bounding box inner dimension must be less than or equal to the swizzle
   // size.

@@ -1,22 +1,16 @@
 #include "mlir/IR/TypeUtilities.h"
 #include "mlir/Pass/PassManager.h"
-#include "mlir/Transforms/Passes.h"
-#include "triton/Analysis/AxisInfo.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Types.h"
 #include "triton/Dialect/TritonGPU/IR/Attributes.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/TritonGPUInterfaces.h"
-#include "triton/Dialect/TritonGPU/Transforms/Passes.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/Passes.h"
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/TMAUtilities.h"
-#include "triton/Tools/Sys/GetEnv.hpp"
 #include "llvm/ADT/PriorityWorklist.h"
-#include "llvm/ADT/Sequence.h"
-#include "llvm/Support/Casting.h"
-#include "llvm/Support/VersionTuple.h"
+#include <algorithm>
 #include <memory>
 #include <unordered_set>
 
@@ -35,6 +29,7 @@ struct UseInfo {
   TypedValue<tt::TensorDescType> descriptor;
   Operation *use;
   Attribute desiredSharedEncoding;
+  SmallVector<int64_t> shape;
   ttg::CTALayoutAttr ctaLayout;
 };
 
@@ -72,6 +67,14 @@ ttg::CTALayoutAttr getCtaLayoutFromEncoding(Attribute encoding) {
                                  layout.getCTASplitNum(), layout.getCTAOrder());
 }
 
+SmallVector<int64_t> expandToRank(ArrayRef<int64_t> shape, int rank) {
+  SmallVector<int64_t> result(rank, 1);
+  assert(shape.size() <= rank);
+  auto rankDiff = rank - shape.size();
+  std::copy(shape.begin(), shape.end(), result.begin() + rankDiff);
+  return result;
+}
+
 std::optional<UseInfo> getUseInfo(Operation *op) {
   UseInfo info;
   info.use = op;
@@ -81,6 +84,9 @@ std::optional<UseInfo> getUseInfo(Operation *op) {
     auto encoding = info.desiredSharedEncoding ? info.desiredSharedEncoding
                                                : load.getType().getEncoding();
     info.ctaLayout = ttg::getCTALayout(encoding);
+    auto shape = load.getResult().getType().getShape();
+    auto rank = load.getDesc().getType().getBlockType().getRank();
+    info.shape = expandToRank(shape, rank);
     return info;
   }
   if (auto gather = dyn_cast<tt::DescriptorGatherOp>(op)) {
@@ -89,18 +95,27 @@ std::optional<UseInfo> getUseInfo(Operation *op) {
     auto encoding = info.desiredSharedEncoding ? info.desiredSharedEncoding
                                                : gather.getType().getEncoding();
     info.ctaLayout = ttg::getCTALayout(encoding);
+    auto shape = gather.getResult().getType().getShape();
+    auto rank = gather.getDesc().getType().getBlockType().getRank();
+    info.shape = expandToRank(shape, rank);
     return info;
   }
   if (auto store = dyn_cast<tt::DescriptorStoreOp>(op)) {
     info.descriptor = store.getDesc();
     auto encoding = store.getSrc().getType().getEncoding();
     info.ctaLayout = ttg::getCTALayout(encoding);
+    auto shape = store.getSrc().getType().getShape();
+    auto rank = store.getDesc().getType().getBlockType().getRank();
+    info.shape = expandToRank(shape, rank);
     return info;
   }
   if (auto scatter = dyn_cast<tt::DescriptorScatterOp>(op)) {
     info.descriptor = scatter.getDesc();
     auto encoding = scatter.getSrc().getType().getEncoding();
     info.ctaLayout = ttg::getCTALayout(encoding);
+    auto shape = scatter.getSrc().getType().getShape();
+    auto rank = scatter.getDesc().getType().getBlockType().getRank();
+    info.shape = expandToRank(shape, rank);
     return info;
   }
   return std::nullopt;
@@ -109,12 +124,15 @@ std::optional<UseInfo> getUseInfo(Operation *op) {
 struct EncodingInfo {
   Attribute desiredEncoding;
   ttg::CTALayoutAttr ctaLayout;
+  // Shape may be different from the descriptor block shape for gather/scatter
+  // use case
+  SmallVector<int64_t> shape;
   bool forcedToDefault = false;
 
   bool operator==(const EncodingInfo &other) const {
     return desiredEncoding == other.desiredEncoding &&
            ctaLayout == other.ctaLayout &&
-           forcedToDefault == other.forcedToDefault;
+           forcedToDefault == other.forcedToDefault && shape == other.shape;
   }
 };
 
@@ -123,7 +141,8 @@ struct EncodingInfo {
 template <> struct std::hash<EncodingInfo> {
   size_t operator()(const EncodingInfo &einfo) const {
     return llvm::hash_combine(einfo.desiredEncoding, einfo.ctaLayout,
-                              einfo.forcedToDefault);
+                              einfo.forcedToDefault,
+                              ArrayRef<int64_t>(einfo.shape));
   }
 };
 
@@ -172,6 +191,21 @@ EncodingInfo combineEncodings(const EncodingInfo &lhs, const EncodingInfo &rhs,
   // Always propagate forcedToDefault
   result.forcedToDefault = lhs.forcedToDefault || rhs.forcedToDefault;
 
+  if (result.forcedToDefault)
+    return result;
+
+  if (lhs.shape.empty() || lhs.shape == rhs.shape)
+    result.shape = rhs.shape;
+  else if (rhs.shape.empty())
+    result.shape = lhs.shape;
+  else {
+    assert(lhs.shape.size() == rhs.shape.size());
+    auto rank = lhs.shape.size();
+    result.shape.reserve(rank);
+    for (int i = 0; i < rank; ++i)
+      result.shape.push_back(std::min(lhs.shape[i], rhs.shape[i]));
+  }
+
   SetVector<ttg::CTALayoutAttr> ctaLayouts;
   if (lhs.ctaLayout)
     ctaLayouts.insert(lhs.ctaLayout);
@@ -189,9 +223,6 @@ EncodingInfo combineEncodings(const EncodingInfo &lhs, const EncodingInfo &rhs,
   default:
     break;
   }
-
-  if (result.forcedToDefault)
-    return result;
 
   SetVector<Attribute> desiredEncodings;
   if (lhs.desiredEncoding)
@@ -213,23 +244,32 @@ EncodingInfo combineEncodings(const EncodingInfo &lhs, const EncodingInfo &rhs,
 }
 
 Attribute getFallbackSharedEncoding(RankedTensorType tensorType,
-                                    ttg::CTALayoutAttr ctaLayout) {
+                                    ttg::CTALayoutAttr ctaLayout,
+                                    ArrayRef<int64_t> usageShape) {
   auto ctx = tensorType.getContext();
   SmallVector<unsigned> order;
   for (int i = tensorType.getRank() - 1; i >= 0; --i)
     order.push_back(i);
 
+  ArrayRef<int64_t> shape =
+      usageShape.empty() ? tensorType.getShape() : usageShape;
   if (!ctaLayout)
     ctaLayout = ttg::CTALayoutAttr::getDefault(ctx, tensorType.getRank());
   else if (ctaLayout.getRank() != tensorType.getRank())
-    ctaLayout = ttng::updateCTALayoutForShape(ctaLayout, tensorType.getShape());
+    ctaLayout = ttng::updateCTALayoutForShape(ctaLayout, shape);
 
-  if (tensorType.getRank() == 1) {
+  auto elemTy = tensorType.getElementType();
+  auto shapePerCTA = ttg::getShapePerCTA(ctaLayout.getCTASplitNum(), shape);
+  unsigned eleBitWidth = tensorType.getElementType().getIntOrFloatBitWidth();
+
+  auto contigDimSizeInBytes = shapePerCTA.back() * eleBitWidth / 8;
+  auto rank = tensorType.getRank();
+  if (rank == 1 || contigDimSizeInBytes < 32 || shape[rank - 2] < 8) {
     return ttg::SwizzledSharedEncodingAttr::get(ctx, 1, 1, 1, order, ctaLayout);
   }
-  return ttg::NVMMASharedEncodingAttr::get(
-      ctx, tensorType.getShape(), order, ctaLayout, tensorType.getElementType(),
-      /*fp4Padded*/ false);
+  return ttg::NVMMASharedEncodingAttr::get(ctx, shape, order, ctaLayout,
+                                           tensorType.getElementType(),
+                                           /*fp4Padded*/ false);
 }
 
 tt::TensorDescType getTensorDescTypeWithEncoding(Operation *op,
@@ -274,17 +314,19 @@ void assignMemoryLayouts(tt::FuncOp &func) {
   // fallback to default encoding
   for (auto blockArg : func.getBlocks().front().getArguments())
     if (auto desc = dyn_cast<TypedValue<tt::TensorDescType>>(blockArg))
-      updateEncoding({desc}, EncodingInfo{{}, {}, /*forcedToDefault=*/true});
+      updateEncoding({desc},
+                     EncodingInfo{{}, {}, {}, /*forcedToDefault=*/true});
 
   func.walk([&](Operation *op) {
     if (auto info = getUseInfo(op)) {
-      updateEncoding(info->descriptor, EncodingInfo{info->desiredSharedEncoding,
-                                                    info->ctaLayout});
+      updateEncoding(info->descriptor,
+                     EncodingInfo{info->desiredSharedEncoding, info->ctaLayout,
+                                  info->shape});
     } else {
       bool forcedToDefault =
           isa<tt::CallOp, tt::ReturnOp, tt::ReinterpretTensorDescOp>(op);
       auto einfo =
-          internEncoding(encodings, EncodingInfo{{}, {}, forcedToDefault});
+          internEncoding(encodings, EncodingInfo{{}, {}, {}, forcedToDefault});
 
       auto setEncoding = [&](Value v) {
         auto typedVal = cast<TypedValue<tt::TensorDescType>>(v);
@@ -344,9 +386,10 @@ void assignMemoryLayouts(tt::FuncOp &func) {
     if (einfo->desiredEncoding) {
       newEncoding = einfo->desiredEncoding;
     } else if (einfo->forcedToDefault) {
-      newEncoding = getFallbackSharedEncoding(existingTy, {});
+      newEncoding = getFallbackSharedEncoding(existingTy, {}, {});
     } else {
-      newEncoding = getFallbackSharedEncoding(existingTy, einfo->ctaLayout);
+      newEncoding =
+          getFallbackSharedEncoding(existingTy, einfo->ctaLayout, einfo->shape);
     }
     desc.setType(getTensorDescTypeWithEncoding(desc.getDefiningOp(), existingTy,
                                                newEncoding));
@@ -356,14 +399,14 @@ void assignMemoryLayouts(tt::FuncOp &func) {
   SmallVector<Type> resultTys(func.getResultTypes());
   for (auto [i, argTy] : llvm::enumerate(argTys)) {
     if (auto descTy = dyn_cast<tt::TensorDescType>(argTy)) {
-      auto encoding = getFallbackSharedEncoding(descTy.getBlockType(), {});
+      auto encoding = getFallbackSharedEncoding(descTy.getBlockType(), {}, {});
       argTys[i] = getTensorDescTypeWithEncoding(nullptr, descTy.getBlockType(),
                                                 encoding);
     }
   }
   for (auto [i, resultTy] : llvm::enumerate(resultTys)) {
     if (auto descTy = dyn_cast<tt::TensorDescType>(resultTy)) {
-      auto encoding = getFallbackSharedEncoding(descTy.getBlockType(), {});
+      auto encoding = getFallbackSharedEncoding(descTy.getBlockType(), {}, {});
       resultTys[i] = getTensorDescTypeWithEncoding(
           nullptr, descTy.getBlockType(), encoding);
     }

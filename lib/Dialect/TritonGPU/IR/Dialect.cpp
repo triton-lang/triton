@@ -1042,7 +1042,7 @@ LinearEncodingAttr::orderPerDim(StringAttr dimName,
 // [Note. Divergence of methods wrt. legacy layouts]
 // For smaller shapes where the CTATile is larger than the output
 // tensor, some methods return different values than the legacy layouts. I think
-// this is benign tho. An example: what is the the vector of `warpsPerCTA` if
+// this is benign tho. An example: what is the vector of `warpsPerCTA` if
 // all the warps hold the same data? I think it should be [1, 1], even if we
 // have 4 warps. But perhaps for this we have to add some masking in some
 // places... We'll see
