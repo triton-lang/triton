@@ -9,6 +9,22 @@ tt.func @fn(%v: i32) {
 
 // -----
 
+// Invalid bitcast between types of different bit width.
+tt.func public @fn(%arg0: tensor<128xf32>) {
+    // expected-error @+1 {{Cannot bitcast data-type of size}}
+    %a = tt.bitcast %arg0 : tensor<128xf32> -> tensor<128xi16>
+    tt.return
+}
+// -----
+
+// Invalid bitcast between pointer and non-pointer type.
+tt.func public @fn(%arg0: !tt.ptr<f32>) {
+    // expected-error @+1 {{Cannot bitcast pointer to non-pointer type}}
+    %a = tt.bitcast %arg0 : !tt.ptr<f32> -> i32
+    tt.return
+}
+// -----
+
 tt.func @fn(%v: i32) {
   %b = tt.splat %v : i32 -> tensor<2x32xi32>
   // expected-error @+1 {{Different dimensions at index 0 between source and result.  Broadcast requires the source dimension to be 1.}}

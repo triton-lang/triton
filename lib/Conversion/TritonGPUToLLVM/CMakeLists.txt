@@ -6,7 +6,6 @@ add_triton_library(TritonGPUToLLVM
     AssertOpToLLVM.cpp
     ControlFlowOpToLLVM.cpp
     ConvertLayoutOpToLLVM.cpp
-    DecomposeUnsupportedConversions.cpp
     ElementwiseOpToLLVM.cpp
     FuncOpToLLVM.cpp
     GatherOpToLLVM.cpp
