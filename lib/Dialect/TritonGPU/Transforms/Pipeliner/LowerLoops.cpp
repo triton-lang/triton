@@ -1099,6 +1099,10 @@ scf::ForOp lowerMMA(ttng::MMAv5OpInterface mma, scf::ForOp forOp,
 scf::ForOp lowerMMAs(scf::ForOp forOp, CoarseSchedule &schedule) {
   SmallVector<ttng::MMAv5OpInterface> mmas;
   forOp.walk([&](ttng::MMAv5OpInterface mma) { mmas.push_back(mma); });
+  // TODO: Enable pipelining for loops with multiple MMAv5 ops.
+  if (mmas.size() > 1) {
+    return forOp;
+  }
   for (auto mma : mmas) {
     forOp = lowerMMA(mma, forOp, schedule);
   }
