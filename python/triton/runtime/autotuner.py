@@ -15,22 +15,9 @@ from .driver import driver
 
 class Autotuner(KernelInterface):
 
-    def __init__(
-        self,
-        fn,
-        arg_names,
-        configs,
-        key,
-        reset_to_zero,
-        restore_value,
-        pre_hook=None,
-        post_hook=None,
-        prune_configs_by: Optional[Dict] = None,
-        warmup=None,
-        rep=None,
-        use_cuda_graph=False,
-        do_bench=None,
-    ):
+    def __init__(self, fn, arg_names, configs, key, reset_to_zero, restore_value, pre_hook=None, post_hook=None,
+                 prune_configs_by: Optional[Dict] = None, warmup=None, rep=None, use_cuda_graph=False, do_bench=None,
+                 cache_results=False):
         """
         :param prune_configs_by: a dict of functions that are used to prune configs, fields:
             'perf_model': performance model used to predicate running time with different configs, returns running time
@@ -44,6 +31,7 @@ class Autotuner(KernelInterface):
         self.keys = key
         self.cache: Dict[Tuple, Config] = {}
         self.arg_names = arg_names
+        self.cache_results = cache_results or os.getenv("TRITON_CACHE_AUTOTUNING", None) == "1"
 
         # Reset to zero or restore values
         self.reset_to_zero = []
@@ -241,7 +229,10 @@ class Autotuner(KernelInterface):
                     self.pre_hook(full_nargs, reset_only=True)
                     self.configs_timings = timings
 
-                self.check_disk_cache(key, pruned_configs, benchmark)
+                if self.cache_results:
+                    self.check_disk_cache(key, pruned_configs, benchmark)
+                else:
+                    benchmark()
 
             config = self.cache[key]
         else:
@@ -366,7 +357,7 @@ class Config:
 
 
 def autotune(configs, key, prune_configs_by=None, reset_to_zero=None, restore_value=None, pre_hook=None, post_hook=None,
-             warmup=None, rep=None, use_cuda_graph=False, do_bench=None):
+             warmup=None, rep=None, use_cuda_graph=False, do_bench=None, cache_results=False):
     """
     Decorator for auto-tuning a :code:`triton.jit`'d function.
 
@@ -420,12 +411,14 @@ def autotune(configs, key, prune_configs_by=None, reset_to_zero=None, restore_va
     :type rep: int
     :param do_bench: a benchmark function to measure the time of each run.
     :type do_bench: lambda fn, quantiles
+    :param cache_results: whether to cache autotune timings to disk.  Defaults to False.
+    "type cache_results: bool
     """
 
     def decorator(fn):
         return Autotuner(fn, fn.arg_names, configs, key, reset_to_zero, restore_value, pre_hook=pre_hook,
                          post_hook=post_hook, prune_configs_by=prune_configs_by, warmup=warmup, rep=rep,
-                         use_cuda_graph=use_cuda_graph, do_bench=do_bench)
+                         use_cuda_graph=use_cuda_graph, do_bench=do_bench, cache_results=cache_results)
 
     return decorator
 
