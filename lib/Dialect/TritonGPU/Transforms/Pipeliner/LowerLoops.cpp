@@ -882,12 +882,6 @@ void createBarrierAndWaitOps(scf::ForOp forOp, CoarseSchedule &schedule,
   builder.setStageCluster(schedule[mma]);
   builder.setInsertionPoint(mma);
   Location loc = mma->getLoc();
-  Value barWrap;
-  barrierIdx = createIncrementModulo(builder, loc, barrierIdx, numStagesVal,
-                                     zero, one, &barWrap);
-  phase = builder.create<arith::SelectOp>(
-      loc, phase.getType(), barWrap,
-      builder.create<arith::XOrIOp>(loc, phase, one), phase);
   Value barrierSlice =
       triton::createSingleBufferView(builder, barrierAlloc, barrierIdx);
   mma.setBarrier(barrierSlice);
@@ -930,15 +924,22 @@ void createBarrierAndWaitOps(scf::ForOp forOp, CoarseSchedule &schedule,
       }
     }
   }
+  builder.setInsertionPointAfter(mma);
   if (!addedWaitInMMABlock) {
     // Add a wait in the same stage as the mma
-    builder.setInsertionPointAfter(mma);
     auto [mmaStage, mmaCluster] = schedule[mma];
     // Put wait in the next stage after the MMA.
     int waitStage = mmaStage + numStages - 1;
     builder.setStageCluster({waitStage, mmaCluster});
     builder.create<ttng::WaitBarrierOp>(loc, barrierSlice, phase, waitBuffers);
   }
+  builder.setStageCluster(schedule[mma]);
+  Value barWrap;
+  barrierIdx = createIncrementModulo(builder, loc, barrierIdx, numStagesVal,
+                                     zero, one, &barWrap);
+  phase = builder.create<arith::SelectOp>(
+      loc, phase.getType(), barWrap,
+      builder.create<arith::XOrIOp>(loc, phase, one), phase);
 }
 
 void multibufferTensorMemory(scf::ForOp forOp, CoarseSchedule &schedule,
@@ -1065,7 +1066,7 @@ scf::ForOp lowerMMA(ttng::MMAv5OpInterface mma, scf::ForOp forOp,
   unsigned newOperandIndex = forOp.getInitArgs().size();
   SmallVector<Value> newOperands = {
       zero,     // phase
-      minusOne, // barrierIdx
+      zero,     // barrierIdx
       minusOne, // bufIdx
   };
   scf::ForOp newForOp =
