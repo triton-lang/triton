@@ -12,7 +12,7 @@
 namespace mlir::triton::nvws {
 
 template <typename T>
-std::optional<Twine> verifySlice(T &origType, T &newType, size_t rank) {
+static std::optional<Twine> verifySlice(T &origType, T &newType, size_t rank) {
   if (!origType || !newType)
     return "MLIR Types don't match";
   if (origType.getElementType() != newType.getElementType() ||
@@ -27,7 +27,7 @@ std::optional<Twine> verifySlice(T &origType, T &newType, size_t rank) {
 }
 
 std::optional<Twine>
-ArefRegionVerify(ArefType aref,
+static arefRegionVerify(ArefType aref,
                  ValueTypeRange<MutableArrayRef<BlockArgument>> blockArgTypes,
                  size_t rank) {
   auto numBatchAxes = aref.getNumBatchAxes();
@@ -51,6 +51,8 @@ ArefRegionVerify(ArefType aref,
         auto argT = dyn_cast<triton::gpu::MemDescType>(arg);
         if (auto result = verifySlice(origT, argT, rank))
           return result;
+      } else {
+        return "Slicing not Implemented for this type";
       }
     }
   }
@@ -59,7 +61,7 @@ ArefRegionVerify(ArefType aref,
 
 LogicalResult ArefPutOp::verify() {
   if (auto result =
-          ArefRegionVerify(getOperand().getType(),
+          arefRegionVerify(getOperand().getType(),
                            getRegion().getArgumentTypes(), getIndexes().size()))
     return emitError(*result);
   return success();
@@ -117,7 +119,7 @@ void ArefPutOp::print(OpAsmPrinter &p) {
 
 LogicalResult ArefGetOp::verify() {
   if (auto result =
-          ArefRegionVerify(getOperand().getType(),
+          arefRegionVerify(getOperand().getType(),
                            getRegion().getArgumentTypes(), getIndexes().size()))
     return emitError(*result);
   return success();
