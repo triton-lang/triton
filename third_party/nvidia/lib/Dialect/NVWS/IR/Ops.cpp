@@ -26,10 +26,9 @@ static std::optional<Twine> verifySlice(T &origType, T &newType, size_t rank) {
   return std::nullopt;
 }
 
-std::optional<Twine>
-static arefRegionVerify(ArefType aref,
-                 ValueTypeRange<MutableArrayRef<BlockArgument>> blockArgTypes,
-                 size_t rank) {
+std::optional<Twine> static arefRegionVerify(
+    ArefType aref, ValueTypeRange<MutableArrayRef<BlockArgument>> blockArgTypes,
+    size_t rank) {
   auto numBatchAxes = aref.getNumBatchAxes();
   if (numBatchAxes ? *numBatchAxes != rank : rank == 0)
     return "The Number of Batch axes on the aref type does not match the "
