@@ -224,6 +224,9 @@ static LogicalResult lowerWarpSpecialize(LLVM::LLVMFuncOp func,
   Value isDefault = b.icmp_ult(wid, b.i32_val(defaultNumWarps));
   b.create<LLVM::CondBrOp>(isDefault, entry, switchLoop);
 
+  // Attempt to elide captures of trivial computations by hoisting them into the
+  // header or rematerializing them into each partition.
+
   // Forward arguments from the header into the old entry block.
   for (auto [arg, oldArg] :
        llvm::zip(header->getArguments(), entry->getArguments()))
@@ -340,7 +343,7 @@ static LogicalResult lowerWarpSpecialize(LLVM::LLVMFuncOp func,
       Value capturePtr =
           LLVM::getSharedMemoryBase(b.getLoc(), b, targetInfo, ws);
       for (auto [i, arg] : llvm::zip(llvm::seq<int32_t>(ws.getNumOperands()),
-                                     ws.getOperands())) {
+                                     ws.getExplicitCaptures())) {
         Value ptr =
             b.gep(ptrTy, captureType, capturePtr, ArrayRef<LLVM::GEPArg>{0, i});
         b.store(arg, ptr, /*align=*/1);
@@ -359,7 +362,7 @@ static LogicalResult lowerWarpSpecialize(LLVM::LLVMFuncOp func,
       b.setInsertionPoint(op);
       createBarrier(b, kSwitchLoopBarrierIdx, /*numThreads=*/std::nullopt,
                     /*aligned=*/false);
-      b.replaceOpWithNewOp<LLVM::BrOp>(op, op.getOperands(), after);
+      b.replaceOpWithNewOp<LLVM::BrOp>(op, op.getValues(), after);
     });
     after->getParent()->getBlocks().splice(after->getIterator(),
                                            ws.getDefaultRegion().getBlocks());

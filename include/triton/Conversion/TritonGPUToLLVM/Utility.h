@@ -848,6 +848,12 @@ inline bool isCanonicalIndex(unsigned index, unsigned freeVarMask) {
   return (index & freeVarMask) == 0;
 }
 
+// Certain lowerings may introduce references to function arguments. Keep warp
+// group code isolated from above by invoking this function.
+void makeAllWarpGroupsIsolatedFromAbove(Operation *op);
+// Isolated a single warp specialize op from above.
+void makeWarpGroupsIsolatedFromAbove(triton::gpu::WarpSpecializeOp op);
+
 } // namespace mlir
 
 #endif
