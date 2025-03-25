@@ -197,14 +197,16 @@ private:
     size_t size;
     size_t alignment;
     size_t offset;
+    SetVector<int> regionIds;
+    int sharingGroup; // -1 means not shared
 
     bool operator==(const BufferT &other) const { return id == other.id; }
     bool operator<(const BufferT &other) const { return id < other.id; }
 
     BufferT(BufferKind kind, BufferId id, Operation *owner, size_t size,
-            size_t alignment = 4, size_t offset = 0)
+            size_t alignment = 4, size_t offset = 0, int sharingGroup = -1)
         : kind(kind), id(id), owner(owner), size(size), alignment(alignment),
-          offset(offset) {}
+          offset(offset), sharingGroup(sharingGroup) {}
 
     size_t setOffsetAligned(size_t newOffset) {
       return offset = llvm::alignTo(newOffset, alignment);

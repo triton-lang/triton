@@ -250,6 +250,7 @@ public:
 //===----------------------------------------------------------------------===//
 
 void TritonNvidiaGPUDialect::initialize() {
+  registerTypes();
   addAttributes<
 #define GET_ATTRDEF_LIST
 #include "triton/Dialect/TritonNvidiaGPU/IR/TritonNvidiaGPUAttrDefs.cpp.inc"

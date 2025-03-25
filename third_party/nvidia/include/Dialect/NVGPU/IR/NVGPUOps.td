@@ -67,6 +67,7 @@ def NVGPU_WGMMAFenceOp : NVGPU_Op<"wgmma_fence", []> {
   let assemblyFormat = "attr-dict";
 }
 
+
 def NVGPU_WGMMACommitGroupOp : NVGPU_Op<"wgmma_commit_group", []> {
   let assemblyFormat = "attr-dict";
 }
@@ -76,6 +77,32 @@ def NVGPU_WGMMAWaitGroupOp : NVGPU_Op<"wgmma_wait_group", [DeclareOpInterfaceMet
   let arguments = (ins LLVM_AnyStruct:$input, I32Attr:$pendings);
   let results = (outs LLVM_AnyStruct:$output);
   let assemblyFormat = "$input attr-dict `:` type($input)";
+}
+
+def MBarrier_ArriveTypeAttr : I32EnumAttr<"MBarriveType",
+    "mbarrier arrive type, either 'normal', 'expect_tx', 'cp_async'",
+    [
+      I32EnumAttrCase<"normal", 0>,
+      I32EnumAttrCase<"cp_async", 1>,
+      I32EnumAttrCase<"expect_tx", 2>,
+      I32EnumAttrCase<"remote", 3>,
+    ]>{
+  let cppNamespace = "::mlir::triton::nvgpu";
+}
+
+def NVGPU_MBarrierArriveOp : NVGPU_Op<"mbarrier_arrive", []> {
+  let arguments = (ins LLVM_PointerShared:$mbarrier, I1:$pred, Optional<I32>:$ctaId, MBarrier_ArriveTypeAttr:$arriveType, DefaultValuedAttr<I32Attr, "0">:$txCount);
+  let assemblyFormat = "$mbarrier `,` $pred (`,` $ctaId^)? attr-dict `:` type($mbarrier)";
+}
+
+def NVGPU_NamedBarrierArriveOp : NVGPU_Op<"bar_arrive", []> {
+  let arguments = (ins I32:$bar, I32:$numThreads);
+  let assemblyFormat = "$bar `,` $numThreads attr-dict `:` type(operands)";
+}
+
+def NVGPU_NamedBarrierWaitOp : NVGPU_Op<"bar_wait", []> {
+  let arguments = (ins I32:$bar, I32:$numThreads);
+  let assemblyFormat = "$bar `,` $numThreads attr-dict `:` type(operands)";
 }
 
 def WGMMA_LayoutAttr : I32EnumAttr<"WGMMALayout",
@@ -167,6 +194,11 @@ def NVGPU_WarpIdOp : NVGPU_Op<"warp_id", [Pure]> {
   let assemblyFormat = "attr-dict";
 }
 
+def NVGPU_CanonicalWarpIdOp : NVGPU_Op<"canonical_warp_id", [Pure]> {
+  let results = (outs I32:$result);
+  let assemblyFormat = "attr-dict";
+}
+
 def NVGPU_TensorMemoryBaseAddress : NVGPU_Op<"tensor_memory_base", [Pure]> {
   let description = [{
     Op to represent base address of tensor memory in a kernel.
@@ -176,5 +208,14 @@ def NVGPU_TensorMemoryBaseAddress : NVGPU_Op<"tensor_memory_base", [Pure]> {
   let assemblyFormat = "attr-dict";
 }
 
+def NVGPU_RegAllocOp : NVGPU_Op<"reg_alloc", []> {
+  let arguments = (ins I32Attr: $regCount);
+  let assemblyFormat = "attr-dict";
+}
+
+def NVGPU_RegDeallocOp : NVGPU_Op<"reg_dealloc", []> {
+  let arguments = (ins I32Attr: $regCount);
+  let assemblyFormat = "attr-dict";
+}
 
 #endif
