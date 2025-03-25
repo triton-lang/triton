@@ -66,14 +66,30 @@ llvm::AMDGPU::GPUKind TargetInfo::getGPUKind() const {
 }
 
 bool TargetInfo::isCDNA() const {
-  return llvm::is_contained(
-      {ISAFamily::CDNA1, ISAFamily::CDNA2, ISAFamily::CDNA3, ISAFamily::CDNA4},
-      getISAFamily());
+  switch (getISAFamily()) {
+  case ISAFamily::CDNA1:
+  case ISAFamily::CDNA2:
+  case ISAFamily::CDNA3:
+  case ISAFamily::CDNA4:
+    return true;
+  default:
+    break;
+  }
+
+  return false;
 }
 
 bool TargetInfo::isRDNA() const {
-  return llvm::is_contained(
-      {ISAFamily::RDNA1, ISAFamily::RDNA2, ISAFamily::RDNA3}, getISAFamily());
+  switch (getISAFamily()) {
+  case ISAFamily::RDNA1:
+  case ISAFamily::RDNA2:
+  case ISAFamily::RDNA3:
+    return true;
+  default:
+    break;
+  }
+
+  return false;
 }
 
 int TargetInfo::getWarpSize() const { return isCDNA() ? 64 : 32; }
