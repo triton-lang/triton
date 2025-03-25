@@ -101,6 +101,54 @@ def test_tensor_descriptor_store(dtype_str, M_BLOCK, N_BLOCK):
     torch.testing.assert_close(unwrap_tensor(inp), unwrap_tensor(out))
 
 
+# Exercise the functional load/store builtins once to ensure they map through.
+@requires_tma
+@pytest.mark.interpreter
+@pytest.mark.parametrize("dtype_str", tma_dtypes)
+def test_tensor_descriptor_functional_interface(dtype_str):
+    """Copies an entire tensor blockwise using the descriptor builtins."""
+
+    @triton.jit
+    def kernel(out_ptr, a_ptr, M, N, M_BLOCK: tl.constexpr, N_BLOCK: tl.constexpr):
+        in_desc = tl.make_tensor_descriptor(
+            a_ptr,
+            shape=[M, N],
+            strides=[N, 1],
+            block_shape=[M_BLOCK, N_BLOCK],
+        )
+        out_desc = tl.make_tensor_descriptor(
+            out_ptr,
+            shape=[M, N],
+            strides=[N, 1],
+            block_shape=[M_BLOCK, N_BLOCK],
+        )
+        moffset = tl.program_id(0) * M_BLOCK
+        noffset = tl.program_id(1) * N_BLOCK
+        block = tl.load_tensor_descriptor(in_desc, [moffset, noffset])
+        tl.store_tensor_descriptor(out_desc, [moffset, noffset], block)
+
+    M, N = 32, 128
+    inp = to_triton(numpy_random((M, N), dtype_str), device="cuda", dst_type=dtype_str)
+
+    M_BLOCK = 8
+    N_BLOCK = 32
+    out = inp.new_empty((M, N))
+
+    grid_m = M // M_BLOCK
+    grid_n = N // N_BLOCK
+
+    def alloc_fn(size: int, align: int, stream: Optional[int]):
+        assert size == 2 * 128 * (grid_m * grid_n)
+        assert align == 128
+        assert stream == 0
+        return torch.empty(size, dtype=torch.int8, device="cuda")
+
+    triton.set_allocator(alloc_fn)
+
+    kernel[(grid_m, grid_n)](out, inp, M, N, M_BLOCK, N_BLOCK)
+    torch.testing.assert_close(unwrap_tensor(inp), unwrap_tensor(out))
+
+
 @requires_tma
 @pytest.mark.interpreter
 @pytest.mark.parametrize("dtype_str", tma_dtypes)
