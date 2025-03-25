@@ -65,8 +65,9 @@ struct ExtractSliceOpConversion
     auto resultTy = cast<RankedTensorType>(op.getType());
     auto vals = unpackLLElements(loc, adaptor.getSource(), rewriter);
     auto elemsPerThread = triton::gpu::getElemsPerThread(srcTy);
-    auto contigPerThread = triton::gpu::getContigPerThread(srcTy);
-    auto totalContigPerThread = product<unsigned>(contigPerThread);
+    auto sizePerThread =
+        triton::gpu::toLinearEncoding(srcTy).getSizePerThread();
+    auto totalSizePerThread = product<unsigned>(sizePerThread);
     auto order = triton::gpu::getOrder(srcTy);
 
     // Calculate valid total number of workers in each dimension
@@ -94,21 +95,21 @@ struct ExtractSliceOpConversion
 
     // The diagram above illustrates the graphical representation of the
     // skipElems, tensorStride, and lastIdx variables.
-    auto skipElems = CTAOffsets[order[1]] * (elemsPerThread[order[0]] *
-                                             contigPerThread[order[1]]) +
-                     CTAOffsets[order[0]] * totalContigPerThread;
+    auto skipElems = CTAOffsets[order[1]] *
+                         (elemsPerThread[order[0]] * sizePerThread[order[1]]) +
+                     CTAOffsets[order[0]] * totalSizePerThread;
     auto tensorStride =
-        (CTAPerShape[order[0]] - CTASizes[order[0]]) * totalContigPerThread;
+        (CTAPerShape[order[0]] - CTASizes[order[0]]) * totalSizePerThread;
     auto lastIdx =
         (CTAOffsets[order[1]] + CTASizes[order[1]] - 1) *
-            elemsPerThread[order[0]] * contigPerThread[order[1]] +
-        (CTAOffsets[order[0]] + CTASizes[order[0]]) * totalContigPerThread;
+            elemsPerThread[order[0]] * sizePerThread[order[1]] +
+        (CTAOffsets[order[0]] + CTASizes[order[0]]) * totalSizePerThread;
 
     assert(lastIdx <= vals.size());
 
     SmallVector<Value> resultVals;
     for (int i = skipElems; i < lastIdx; i += tensorStride) {
-      for (int j = 0; j < totalContigPerThread * CTASizes[order[0]]; ++j, ++i) {
+      for (int j = 0; j < totalSizePerThread * CTASizes[order[0]]; ++j, ++i) {
         assert(i < lastIdx);
         resultVals.push_back(vals[i]);
       }

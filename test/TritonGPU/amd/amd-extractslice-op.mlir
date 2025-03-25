@@ -12,3 +12,17 @@ module attributes {"ttg.compute-capability" = 0 : i32, "ttg.num-ctas" = 1 : i32,
     tt.return
   }
 }
+
+// -----
+
+#mma = #ttg.amd_mfma<{versionMajor = 3, versionMinor = 0, warpsPerCTA = [2, 2], instrShape = [32, 32], isTransposed = true}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "hip:gfx942", "ttg.threads-per-warp" = 64 : i32} {
+  tt.func public @extract_mfma_result_slice(%arg0: tensor<256x256xf32, #mma>) attributes {noinline = false} {
+    // CHECK: @extract_mfma_result_slice
+    // CHECK: %256 = llvm.mlir.undef : !llvm.struct<(f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32)>
+    // CHECK-COUNT-16:  %{{[0-9]*}} = llvm.insertvalue %{{[0-9]*}}, %{{[0-9]*}}[{{[0-9]*}}] : !llvm.struct<(f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32)>
+    %0 = amdgpu.extract_slice %arg0 [0, 0] : tensor<256x256xf32, #mma> to tensor<64x64xf32, #mma>
+    tt.return
+  }
+}
+
