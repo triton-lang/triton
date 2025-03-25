@@ -100,18 +100,21 @@ std::string getRegisterSizeCode(int size, bool is_float) {
 }
 
 Value createCachePolicy(triton::EvictionPolicy opEvict,
-             ConversionPatternRewriter &rewriter, Location loc) {
+                        ConversionPatternRewriter &rewriter, Location loc) {
   // Emit createpolicy.fractional.L2::policy.b64 xx 1.0
   PTXBuilder ptxBuilder;
-  const bool hasL2EvictPolicy = opEvict == triton::EvictionPolicy::EVICT_FIRST || 
-                 opEvict == triton::EvictionPolicy::EVICT_LAST;
+  const bool hasL2EvictPolicy =
+      opEvict == triton::EvictionPolicy::EVICT_FIRST ||
+      opEvict == triton::EvictionPolicy::EVICT_LAST;
   Value policyRet;
 
   if (hasL2EvictPolicy) {
-    auto &policy = ptxBuilder.create<>("createpolicy.fractional")
-              ->o("L2::evict_first", opEvict == triton::EvictionPolicy::EVICT_FIRST)
-              .o("L2::evict_last", opEvict == triton::EvictionPolicy::EVICT_LAST)
-              .b(64);
+    auto &policy =
+        ptxBuilder.create<>("createpolicy.fractional")
+            ->o("L2::evict_first",
+                opEvict == triton::EvictionPolicy::EVICT_FIRST)
+            .o("L2::evict_last", opEvict == triton::EvictionPolicy::EVICT_LAST)
+            .b(64);
 
     const std::string writeConstraint = "=l";
     // prepare asm operands
@@ -530,7 +533,8 @@ struct StoreOpConversion : public ConvertOpToLLVMPattern<triton::StoreOp>,
               .o("L2::cache_hint", l2PolicyReg != Value())
               .v(nWords)
               .b(width);
-              
+
+
       PTXBuilder::Operand *evictOpr = nullptr;
       if (l2PolicyReg)
         evictOpr = ptxBuilder.newOperand(l2PolicyReg, "l");
