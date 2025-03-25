@@ -1,4 +1,4 @@
-// RUN: triton-opt %s -split-input-file -canonicalize -triton-combine | FileCheck %s
+// RUN: triton-opt %s -canonicalize -triton-combine | FileCheck %s
 
 // We don't combine if the dot result is used by more than one op.
 // CHECK-LABEL: @test_combine_dot_add_invalid_pattern
