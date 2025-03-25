@@ -1,4 +1,4 @@
-// RUN: triton-opt %s -pass-pipeline='builtin.module(convert-triton-to-tritongpu{num-warps=4 target=cuda:100},tritongpu-coalesce,tritongpu-accelerate-matmul,tritongpu-remove-layout-conversions,tritongpu-optimize-dot-operands,cse,tritongpu-fuse-nested-loops,canonicalize,tritongpu-optimize-accumulator-init,tritongpu-pipeline,canonicalize)' | FileCheck %s --check-prefix=BLACKWELL
+// RUN: triton-opt %s -pass-pipeline='builtin.module(convert-triton-to-tritongpu{num-warps=4 target=cuda:100},tritongpu-coalesce,tritongpu-accelerate-matmul,tritongpu-remove-layout-conversions,tritongpu-optimize-dot-operands,cse,tritongpu-fuse-nested-loops,canonicalize,tritongpu-optimize-accumulator-init,tritongpu-hoist-tmem-alloc,tritongpu-pipeline,canonicalize)' | FileCheck %s --check-prefix=BLACKWELL
 // RUN: triton-opt %s -pass-pipeline='builtin.module(convert-triton-to-tritongpu{num-warps=4 target=cuda:90 },tritongpu-coalesce,tritongpu-accelerate-matmul,tritongpu-remove-layout-conversions,tritongpu-optimize-dot-operands,cse,tritongpu-fuse-nested-loops,canonicalize,tritongpu-optimize-accumulator-init,canonicalize,tritongpu-combine-tensor-select-and-if,tritongpu-pipeline,canonicalize)' | FileCheck %s --check-prefix=HOPPER
 
 #shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16}>
@@ -51,7 +51,7 @@ tt.func public @matmul_kernel_tma_persistent(%arg0: !tt.ptr<i8, 0>, %arg1: !tt.p
       %39 = tt.descriptor_load %38[%20, %35] : !tt.tensordesc<tensor<128x64xf16, #shared>> -> tensor<128x64xf16>
       // BLACKWELL: ttg.memdesc_trans
       // BLACKWELL: [[ACC_BUF:%.*]] = ttg.memdesc_subview [[ACC_BUFS]]
-      // BLACKWELL: ttng.tc_gen5_mma {{%[0-9]+}}, {{%[0-9]+}}, [[ACC_BUF]], %arg
+      // BLACKWELL: ttng.tc_gen5_mma {{%[0-9]+}}, {{%[0-9]+}}, [[ACC_BUF]]
 
       // HOPPER: [[RESULT:%.*]] = ttng.warp_group_dot {{.*}} isAsync = true
       // HOPPER-NEXT: ttng.warp_group_dot_wait [[RESULT]], {{.*}} {pendings = 1 : i32}

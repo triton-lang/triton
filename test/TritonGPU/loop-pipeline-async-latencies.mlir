@@ -79,21 +79,21 @@ tt.func public @matmul_kernel_tma_persistent(%arg0: !tt.ptr<i8, 0> {tt.nv_tma_de
 
     // Compute RHS buffer index modulo 4.
     // CHECK: [[V0:%.*]] = arith.addi [[RHS_BUF_IDX]], %c1_i32
-    // CHECK-NEXT: [[V1:%.*]] = arith.cmpi slt, [[V0]], %c4_i32
-    // CHECK-NEXT: [[RHS_BUF_IDX:%.*]] = arith.select [[V1]], [[V0]], %c0_i32
+    // CHECK-NEXT: [[V1:%.*]] = arith.cmpi sge, [[V0]], %c4_i32
+    // CHECK-NEXT: [[RHS_BUF_IDX:%.*]] = arith.select [[V1]], %c0_i32, [[V0]]
 
     // Compute RHS phase index modulo 4.
     // CHECK: [[V0:%.*]] = arith.xori [[RHS_PHASE_ARG]], %c1_i32
-    // CHECK-NEXT: [[RHS_PHASE:%.*]] = arith.select [[V1]], [[RHS_PHASE_ARG]], [[V0]]
+    // CHECK-NEXT: [[RHS_PHASE:%.*]] = arith.select [[V1]], [[V0]], [[RHS_PHASE_ARG]]
 
     // Compute LHS buffer index modulo 2.
     // CHECK: [[V0:%.*]] = arith.addi [[LHS_BUF_IDX]], %c1_i32
-    // CHECK-NEXT: [[V1:%.*]] = arith.cmpi slt, [[V0]], %c2_i32
-    // CHECK-NEXT: [[LHS_BUF_IDX:%.*]] = arith.select [[V1]], [[V0]], %c0_i32
+    // CHECK-NEXT: [[V1:%.*]] = arith.cmpi sge, [[V0]], %c2_i32
+    // CHECK-NEXT: [[LHS_BUF_IDX:%.*]] = arith.select [[V1]], %c0_i32, [[V0]]
 
     // Compute LHS phase index modulo 2.
     // CHECK: [[V0:%.*]] = arith.xori [[LHS_PHASE_ARG]], %c1_i32
-    // CHECK-NEXT: [[LHS_PHASE:%.*]] = arith.select [[V1]], [[LHS_PHASE_ARG]], [[V0]]
+    // CHECK-NEXT: [[LHS_PHASE:%.*]] = arith.select [[V1]], [[V0]], [[LHS_PHASE_ARG]]
 
     // CHECK: [[LHS_MBAR:%.*]] = ttg.memdesc_subview [[LHS_BARS]][[[LHS_BUF_IDX]]]
     // CHECK-NEXT: ttng.wait_barrier [[LHS_MBAR]], [[LHS_PHASE]]
@@ -109,8 +109,8 @@ tt.func public @matmul_kernel_tma_persistent(%arg0: !tt.ptr<i8, 0> {tt.nv_tma_de
     %9 = ttng.warp_group_dot %5, %8, %arg7 {inputPrecision = 0 : i32} : !ttg.memdesc<128x64xf16, #shared, #smem> * !ttg.memdesc<64x256xf16, #shared1, #smem> -> tensor<128x256xf32, #mma>
 
     // CHECK: [[V0:%.*]] = arith.addi [[NEXT_LHS_BUF_IDX]], %c1_i32
-    // CHECK-NEXT: [[V1:%.*]] = arith.cmpi slt, [[V0]], %c2_i32
-    // CHECK-NEXT: [[NEXT_LHS_BUF_IDX:%.*]] = arith.select [[V1]], [[V0]], %c0_i32
+    // CHECK-NEXT: [[V1:%.*]] = arith.cmpi sge, [[V0]], %c2_i32
+    // CHECK-NEXT: [[NEXT_LHS_BUF_IDX:%.*]] = arith.select [[V1]], %c0_i32, [[V0]]
     // CHECK-NEXT: [[NEXT_LHS_BAR:%.*]] = ttg.memdesc_subview [[LHS_BARS]][[[NEXT_LHS_BUF_IDX]]]
     // CHECK-NEXT: ttng.barrier_expect [[NEXT_LHS_BAR]], 16384, [[LHS_MASK]]
 
@@ -119,8 +119,8 @@ tt.func public @matmul_kernel_tma_persistent(%arg0: !tt.ptr<i8, 0> {tt.nv_tma_de
     // CHECK-NEXT: ttng.async_tma_copy_global_to_local %arg0[%c0_i32, [[NEXT_LHS_IDX]]] [[NEXT_LHS_BUF]], [[NEXT_LHS_BAR]], [[LHS_MASK]]
 
     // CHECK: [[V0:%.*]] = arith.addi [[NEXT_RHS_BUF_IDX]], %c1_i32
-    // CHECK-NEXT: [[V1:%.*]] = arith.cmpi slt, [[V0]], %c4_i32
-    // CHECK-NEXT: [[NEXT_RHS_BUF_IDX:%.*]] = arith.select [[V1]], [[V0]], %c0_i32
+    // CHECK-NEXT: [[V1:%.*]] = arith.cmpi sge, [[V0]], %c4_i32
+    // CHECK-NEXT: [[NEXT_RHS_BUF_IDX:%.*]] = arith.select [[V1]], %c0_i32, [[V0]]
     // CHECK-NEXT: [[NEXT_RHS_BAR:%.*]] = ttg.memdesc_subview [[RHS_BARS]][[[NEXT_RHS_BUF_IDX]]]
     // CHECK-NEXT: ttng.barrier_expect [[NEXT_RHS_BAR]], 32768, [[RHS_MASK]]
 

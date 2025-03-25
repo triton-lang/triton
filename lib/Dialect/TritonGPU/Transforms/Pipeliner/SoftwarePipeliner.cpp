@@ -125,11 +125,6 @@ struct PipelinePass : public impl::TritonGPUPipelineBase<PipelinePass> {
 
     pipelineWgmma(moduleOp);
 
-    // There is a hard dependency between load pipelining and the TC05MMA
-    // pipelining. We can pipeline the TC05MMA only after the loads are
-    // pipelined and buffers are allocated.
-    mlir::triton::pipelineTC05MMALoops(moduleOp, 2);
-
     // schedule the waits
     mlir::triton::updateWaits(getOperation());
 

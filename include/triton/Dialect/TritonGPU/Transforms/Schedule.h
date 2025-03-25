@@ -15,7 +15,7 @@ namespace gpu {
 
 /// Discover operations that should become async and assign latencies to them
 /// based on the numStages value provided by the user.
-void assignLatencies(ModuleOp moduleOp, int numStages, bool assignMMA = false);
+void assignLatencies(ModuleOp moduleOp, int numStages);
 
 /// Schedule the loops based on the latencies assigned to the operations.
 void scheduleLoops(ModuleOp moduleOp);
@@ -24,17 +24,6 @@ void scheduleLoops(ModuleOp moduleOp);
 void lowerLoops(ModuleOp moduleOp);
 
 }; // namespace gpu
-
-/// This fill out the pipelining options including schedule and annotations
-/// for wait ops. This also does pre-processing by converting some of the
-/// loads into async loads so that the IR is ready to be pipelined.
-bool preProcessLoopAndGetSchedule(scf::ForOp &forOp, int numStages,
-                                  mlir::triton::PipeliningOption &options);
-
-/// Fills out pipelining options for an outer loop pipelining case. This
-/// schedules async copies to overlap with the epilogue of a loop.
-bool getOuterLoopSchedule(scf::ForOp &forOp, int numStages,
-                          mlir::triton::PipeliningOption &options);
 
 /// Pipeline the Tensor Core Gen 05 MMA ops in the module with `numStages`
 /// stages. This will pre-process the loops, lowering the ops related to TG Gen5
@@ -106,7 +95,8 @@ public:
   CoarseSchedule() = default;
   CoarseSchedule(int numStages) : numStages(numStages) {}
   ClusterList clusters;
-  using Cluster = decltype(clusters)::iterator;
+  using Cluster = ClusterList::iterator;
+  using ClusterHash = size_t;
 
   DenseMap<Operation *, std::pair<int, Cluster>> opToStageAndCluster;
 
@@ -114,7 +104,9 @@ public:
   int getNumStages() { return numStages; }
 
   void insert(Operation *op, int stage, Cluster cluster) {
-    assert(stage < numStages && "Invalid stage");
+    if (stage >= numStages) {
+      numStages = stage + 1;
+    }
     opToStageAndCluster[op] = {stage, cluster};
   }
 
@@ -153,6 +145,10 @@ public:
   void serialize(scf::ForOp &forOp);
   // Create a CoarseSchedule based on forOp's <stage, cluster>.
   LogicalResult deSerialize(scf::ForOp &forOp);
+
+  static ClusterHash hashCluster(Cluster cluster) {
+    return reinterpret_cast<ClusterHash>(&*cluster);
+  }
 
   LLVM_DUMP_METHOD void dump();
 
