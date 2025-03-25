@@ -257,15 +257,6 @@ public:
       : forOp(forOp), opLatency(opLatency) {};
 
   void run() {
-    // TODO: Enable pipelining for loops with multiple MMAv5 ops.
-    int mmav5Count = 0;
-    for (auto &op : forOp.getBody()->without_terminator()) {
-      if (isa<ttng::MMAv5OpInterface>(&op)) {
-        mmav5Count++;
-      }
-    }
-    if (mmav5Count > 1)
-      return;
     // Check if the load op (mma operand) is pipelineable.
     auto isLoadPipelineable = [&](Operation *op) {
       return opLatency.count(op) && opLatency[op] > 0;
