@@ -65,11 +65,18 @@ llvm::AMDGPU::GPUKind TargetInfo::getGPUKind() const {
   return llvm::AMDGPU::parseArchAMDGCN(arch);
 }
 
-bool TargetInfo::isCDNA() const { return llvm::is_contained({ISAFamily::CDNA1, ISAFamily::CDNA2, ISAFamily::CDNA3, ISAFamily::CDNA4}, getISAFamily()); }
+bool TargetInfo::isCDNA() const {
+  return llvm::is_contained(
+      {ISAFamily::CDNA1, ISAFamily::CDNA2, ISAFamily::CDNA3, ISAFamily::CDNA4},
+      getISAFamily());
+}
 
-bool TargetInfo::isRDNA() const { return llvm::is_contained({ISAFamily::RDNA1, ISAFamily::RDNA2, ISAFamily::RDNA3}, getISAFamily()); }
+bool TargetInfo::isRDNA() const {
+  return llvm::is_contained(
+      {ISAFamily::RDNA1, ISAFamily::RDNA2, ISAFamily::RDNA3}, getISAFamily());
+}
 
-int TargetInfo::getWarpSize() const { return isCDNA() ? 64 : 32;}
+int TargetInfo::getWarpSize() const { return isCDNA() ? 64 : 32; }
 
 int TargetInfo::getSharedMemorySize() const {
   int kbytes = getISAFamily() == ISAFamily::CDNA4 ? 160 : 64;
@@ -207,9 +214,12 @@ bool TargetInfo::warpReduce(RewriterBase &rewriter, Location loc,
                             unsigned interleave) const {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
 
-  if (numLaneToReduce != getWarpSize()) return false;
-  if (isCDNA() && getISAFamily() == ISAFamily::CDNA1) return false;
-  if (isRDNA() && getISAFamily() != ISAFamily::RDNA3) return false;
+  if (numLaneToReduce != getWarpSize())
+    return false;
+  if (isCDNA() && getISAFamily() == ISAFamily::CDNA1)
+    return false;
+  if (isRDNA() && getISAFamily() != ISAFamily::RDNA3)
+    return false;
 
   Operation *reduxOp = op.getSingleCombiner();
   if (!reduxOp)
@@ -313,10 +323,11 @@ bool TargetInfo::warpReduce(RewriterBase &rewriter, Location loc,
       // row_bcast:15 row_mask:0xa
       buf = createDppReduxOpWithBoundCtrl(
           valType, buf, static_cast<uint32_t>(DppCtrl::BCAST15), 0xa, allBanks);
-      
+
       // row_bcast:31
       buf = createDppReduxOpWithBoundCtrl(
-          valType, buf, static_cast<uint32_t>(DppCtrl::BCAST31), allRows, allBanks);
+          valType, buf, static_cast<uint32_t>(DppCtrl::BCAST31), allRows,
+          allBanks);
     } else {
       // RDNA doesn't have broadcast dpp mode
       Type actualType = castToAndSExtInt(rewriter, loc, buf, valType, 32);
