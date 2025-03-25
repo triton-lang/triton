@@ -455,6 +455,10 @@ LogicalResult triton::gpu::specializeLoadMMADependencies(scf::ForOp &loop,
   eraseLoopCarriedValues(loop, toErase);
 
   schedule.serialize(loop);
+
+  // HACK: Set this attribute so that LowerLoops will multi-buffer TMA
+  // descriptors.
+  loop->setAttr(kScheduledMaxStageAttrName, b.getI32IntegerAttr(numStages));
   return success();
 }
 

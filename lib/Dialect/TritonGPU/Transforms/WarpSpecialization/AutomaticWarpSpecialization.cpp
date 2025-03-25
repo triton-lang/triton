@@ -47,6 +47,8 @@ void AutomaticWarpSpecialization::runOnOperation() {
   RewritePatternSet patterns(&getContext());
   populateForOpDeadArgumentElimination(patterns);
   scf::ForOp::getCanonicalizationPatterns(patterns, &getContext());
+  scf::IfOp::getCanonicalizationPatterns(patterns, &getContext());
+  WarpSpecializeOp::getCanonicalizationPatterns(patterns, &getContext());
   if (failed(applyPatternsGreedily(getOperation(), std::move(patterns))))
     return signalPassFailure();
 }
