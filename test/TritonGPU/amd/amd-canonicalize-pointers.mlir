@@ -1345,3 +1345,33 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
 // CHECK:           %[[VAL_8:.*]] = tt.extern_elementwise %[[VAL_7]] {libname = "", libpath = "", pure = false, symbol = "foo"} : (tensor<1024x!tt.ptr<i64>>) -> tensor<1024xi64>
 // CHECK:           tt.return
 // CHECK:         }
+
+// -----
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  tt.func public @inline_asm(%arg0: !tt.ptr<i8>, %arg1: !tt.ptr<i8>) attributes {noinline = false} {
+    %0 = tt.make_range {end = 512 : i32, start = 0 : i32} : tensor<512xi32>
+    %1 = tt.splat %arg0 : !tt.ptr<i8> -> tensor<512x!tt.ptr<i8>>
+    %2 = tt.addptr %1, %0 : tensor<512x!tt.ptr<i8>>, tensor<512xi32>
+    %3 = tt.load %2 : tensor<512x!tt.ptr<i8>>
+    %4 = tt.elementwise_inline_asm "shl.b32 $0, $0, 3;" {constraints = "=r,r", packed_element = 4 : i32, pure = true} %3 : tensor<512xi8> -> tensor<512xi8>
+    %5 = tt.splat %arg1 : !tt.ptr<i8> -> tensor<512x!tt.ptr<i8>>
+    %6 = tt.addptr %5, %0 : tensor<512x!tt.ptr<i8>>, tensor<512xi32>
+    tt.store %6, %4 : tensor<512x!tt.ptr<i8>>
+    tt.return
+  }
+}
+
+// CHECK-LABEL:   tt.func public @inline_asm(
+// CHECK-SAME:                               %[[VAL_0:.*]]: !tt.ptr<i8>,
+// CHECK-SAME:                               %[[VAL_1:.*]]: !tt.ptr<i8>) attributes {noinline = false} {
+// CHECK:           %[[VAL_2:.*]] = tt.make_range {end = 512 : i32, start = 0 : i32} : tensor<512xi32>
+// CHECK:           %[[VAL_3:.*]] = tt.splat %[[VAL_0]] : !tt.ptr<i8> -> tensor<512x!tt.ptr<i8>>
+// CHECK:           %[[VAL_4:.*]] = tt.addptr %[[VAL_3]], %[[VAL_2]] : tensor<512x!tt.ptr<i8>>, tensor<512xi32>
+// CHECK:           %[[VAL_5:.*]] = tt.load %[[VAL_4]] : tensor<512x!tt.ptr<i8>>
+// CHECK:           %[[VAL_6:.*]] = tt.elementwise_inline_asm "shl.b32 $0, $0, 3;" {constraints = "=r,r", packed_element = 4 : i32, pure = true} %[[VAL_5]] : tensor<512xi8> -> tensor<512xi8>
+// CHECK:           %[[VAL_7:.*]] = tt.splat %[[VAL_1]] : !tt.ptr<i8> -> tensor<512x!tt.ptr<i8>>
+// CHECK:           %[[VAL_8:.*]] = tt.addptr %[[VAL_7]], %[[VAL_2]] : tensor<512x!tt.ptr<i8>>, tensor<512xi32>
+// CHECK:           tt.store %[[VAL_8]], %[[VAL_6]] : tensor<512x!tt.ptr<i8>>
+// CHECK:           tt.return
+// CHECK:         }
