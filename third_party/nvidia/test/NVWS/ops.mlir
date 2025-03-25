@@ -92,3 +92,20 @@ module attributes {"ttg.target" = "cuda:0", "ttg.num-ctas" = 1 : i32, "ttg.num-w
     tt.return
   }
 }
+
+// -----
+
+module attributes {"ttg.target" = "cuda:0", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: aref_put_tensor
+  // CHECK: nvws.aref.put
+  tt.func @aref_put_tensor(%d : tensor<1x64x16xf16>, %e : tensor<1x16x32xf16>) {
+    %c0_i32 = arith.constant {ttg.partition = [0, 1]} 0 : i32
+    %0 = nvws.aref.create %d, %e : !nvws.aref<[tensor<1x64x16xf16>, tensor<1x16x32xf16>], 1>
+    nvws.aref.put %0[%c0_i32] as (%b0 : tensor<64x16xf16>, %b1 : tensor<16x32xf16>) {
+      %1 = math.exp %b0 : tensor<64x16xf16>
+      %2 = math.cos %b1 : tensor<16x32xf16>
+      nvws.aref.return %1, %2 : tensor<64x16xf16>, tensor<16x32xf16>
+    } : (!nvws.aref<[tensor<1x64x16xf16>, tensor<1x16x32xf16>], 1>, i32) -> ()
+    tt.return
+  }
+}

@@ -1,16 +1,10 @@
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/Diagnostics.h"
-#include "mlir/Support/DebugStringHelper.h"
 #include "nvidia/include/Dialect/NVWS/IR/Dialect.h"
-#include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Types.h"
-#include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Attributes.h"
-#include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Types.h"
-#include "triton/Dialect/TritonGPU/Transforms/Utility.h"
-#include "llvm/Support/Casting.h"
-#include "llvm/Support/LogicalResult.h"
+#include "llvm/ADT/SmallVectorExtras.h"
 
 #define GET_OP_CLASSES
 #include "Dialect/NVWS/IR/Ops.cpp.inc"
@@ -154,6 +148,43 @@ void ArefGetOp::print(OpAsmPrinter &p) {
 
   p << " : ";
   p.printFunctionalType(*this);
+}
+
+LogicalResult ArefReturnOp::verify() {
+  Operation *op = getOperation();
+  auto operandTypes = getOperandTypes();
+  if (auto get = dyn_cast<ArefGetOp>(op->getBlock()->getParentOp())) {
+    auto resultTypes = get.getResultTypes();
+    if (operandTypes.size() != resultTypes.size()) {
+      return emitError("Mismatching number of returns");
+    }
+    for (auto [returnType, parentType] : llvm::zip(operandTypes, resultTypes)) {
+      if (returnType != parentType) {
+        return emitError(
+            "Return sources and Parent Op Results have different types");
+      }
+    }
+  }
+  if (isa<ArefPutOp>(op->getBlock()->getParentOp())) {
+    auto argTypes = op->getBlock()->getArgumentTypes();
+    SmallVector<Type> inRegTypes =
+        llvm::filter_to_vector(argTypes, [](const Type &type) {
+          if (isa<triton::gpu::MemDescType>(type))
+            return false;
+          return true;
+        });
+
+    if (operandTypes.size() != inRegTypes.size()) {
+      return emitError("Mismatching number of returns");
+    }
+    for (auto [returnType, parentType] : llvm::zip(operandTypes, inRegTypes)) {
+      if (returnType != parentType) {
+        return emitError(
+            "Return sources and Block Arguments have different types");
+      }
+    }
+  }
+  return success();
 }
 
 } // namespace mlir::triton::nvws

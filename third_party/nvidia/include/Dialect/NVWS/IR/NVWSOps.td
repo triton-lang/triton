@@ -43,6 +43,13 @@ def NVWS_ArefCreateOp : NVWS_Op<"aref.create", [
                         "result", "operands", "::llvm::cast<ArefType>($_self).getBaseType()">]> {
   let summary = "Create an asynchronous reference.";
   let description = [{
+    Create an asynchronous reference.
+
+    Takes as inputs a variadic number of operands, and returns an ARef.
+    The inputs can be of any type, but if the numBatchAxes attribute is
+    set on the result type, the inputs are expected to be array-like
+    (i.e., Tensor, MemDesc, etc) and have matching values for the first
+    numBatchAxes of the shapes.
   }];
   let arguments = (ins Variadic<AnyType>:$operands);
 
@@ -99,7 +106,11 @@ def NVWS_ArefPutOp : NVWS_Op<"aref.put", [SameVariadicOperandSize]> {
     At the start of the region, the values are guaranteed to be “empty”,
     and operations are free to write to them. When the compute in the region
     completes, the buffers have been written to, and the aref is marked as “full”
-    so that a consumer can read from them
+    so that a consumer can read from them.
+
+    If the Aref contains in-register types (i.e., not ttg.MemDesc), the region should
+    return the updated values. This represents a semantic copy at the aref level,
+    but should be optimized away during lowering.
 
   }];
   let arguments = (
@@ -120,6 +131,7 @@ def NVWS_ArefReturnOp: NVWS_Op<"aref.return",
   let summary = "terminator for aref_put/get operator";
   let arguments = (ins Variadic<AnyType>:$srcs);
   let assemblyFormat = "attr-dict ($srcs^ `:` type($srcs))?";
+  let hasVerifier = 1;
 }
 
 #endif
