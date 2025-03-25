@@ -229,7 +229,9 @@ private:
 
     bool seenDot = false;
     for (Operation &op : forOp.getBody()->without_terminator()) {
-      if (!isa<mlir::triton::DotOpInterface>(op))
+      // Arbitrary heuristic. TMEMStoreOp is included to keep logic consistent
+      // with legacy code when we weren't hoisting tmem allocas.
+      if (!isa<mlir::triton::DotOpInterface, ttng::TMEMStoreOp>(op))
         continue;
       seenDot = true;
       seen.clear();
