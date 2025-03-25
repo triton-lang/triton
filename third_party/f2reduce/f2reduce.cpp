@@ -13,7 +13,7 @@
 
 namespace f2reduce {
 
-void swap_rows(uint64_t* RESTRICT x, uint64_t* RESTRICT y, uint64_t n) {
+static void swap_rows(uint64_t* RESTRICT x, uint64_t* RESTRICT y, uint64_t n) {
     for (uint64_t i = 0; i < n; i++) {
         uint64_t z = x[i]; x[i] = y[i]; y[i] = z;
     }
@@ -21,7 +21,7 @@ void swap_rows(uint64_t* RESTRICT x, uint64_t* RESTRICT y, uint64_t n) {
 
 // the noinline attribute is necessary for gcc to properly vectorise this:
 template<uint64_t N>
-NO_INLINE void memxor_lop7(uint64_t* RESTRICT dst,
+static NO_INLINE void memxor_lop7(uint64_t* RESTRICT dst,
     const uint64_t* RESTRICT src1,
     const uint64_t* RESTRICT src2,
     const uint64_t* RESTRICT src3,
@@ -34,7 +34,7 @@ NO_INLINE void memxor_lop7(uint64_t* RESTRICT dst,
 }
 
 template<uint64_t N>
-NO_INLINE void memxor_lop5(uint64_t* RESTRICT dst,
+static NO_INLINE void memxor_lop5(uint64_t* RESTRICT dst,
     const uint64_t* RESTRICT src1,
     const uint64_t* RESTRICT src2,
     const uint64_t* RESTRICT src3,
@@ -45,7 +45,7 @@ NO_INLINE void memxor_lop5(uint64_t* RESTRICT dst,
 }
 
 template<uint64_t N>
-NO_INLINE void memxor_lop3(uint64_t* RESTRICT dst,
+static NO_INLINE void memxor_lop3(uint64_t* RESTRICT dst,
     const uint64_t* RESTRICT src1,
     const uint64_t* RESTRICT src2) {
     for (uint64_t i = 0; i < N; i++) {
@@ -54,14 +54,14 @@ NO_INLINE void memxor_lop3(uint64_t* RESTRICT dst,
 }
 
 template<uint64_t N>
-void memxor_inplace(uint64_t* RESTRICT dst, const uint64_t* RESTRICT src1, const uint64_t* RESTRICT src2) {
+static void memxor_inplace(uint64_t* RESTRICT dst, const uint64_t* RESTRICT src1, const uint64_t* RESTRICT src2) {
     for (uint64_t i = 0; i < N; i++) {
         dst[i] = src1[i] ^ src2[i];
     }
 }
 
 // split k into 6 approximately-equal pieces
-void split_k(int k, int* subkays) {
+static void split_k(int k, int* subkays) {
 
     int k5_k6 = (k <= 32) ? 0 : (k / 3);
     int k3_k4 = (k - k5_k6) >> 1;
@@ -86,7 +86,7 @@ void split_k(int k, int* subkays) {
  * AVX512-friendly.
  */
 template<uint64_t N>
-void kronrod(uint64_t* RESTRICT matrix, uint64_t rows, uint64_t stride, const uint64_t* RESTRICT workspace, uint64_t* RESTRICT cache, const uint64_t* RESTRICT pivots, int k) {
+static void kronrod(uint64_t* RESTRICT matrix, uint64_t rows, uint64_t stride, const uint64_t* RESTRICT workspace, uint64_t* RESTRICT cache, const uint64_t* RESTRICT pivots, int k) {
     constexpr int logwidth = 5;
 
     static_assert(N <= (1ull << logwidth), "kronrod<N> assumes that N <= 32");
@@ -165,7 +165,7 @@ void kronrod(uint64_t* RESTRICT matrix, uint64_t rows, uint64_t stride, const ui
 }
 
 
-bool find_pivots(uint64_t* RESTRICT pivots, uint64_t* RESTRICT this_strip, uint64_t rows, uint64_t &starting_row, uint64_t *workspace, uint64_t &next_b, uint64_t final_b, int K, int& k) {
+static bool find_pivots(uint64_t* RESTRICT pivots, uint64_t* RESTRICT this_strip, uint64_t rows, uint64_t &starting_row, uint64_t *workspace, uint64_t &next_b, uint64_t final_b, int K, int& k) {
 
     // sorted copy, so that we can skip existing pivots:
     uint64_t spivots[64] = {(uint64_t) -1};
@@ -248,7 +248,7 @@ bool find_pivots(uint64_t* RESTRICT pivots, uint64_t* RESTRICT this_strip, uint6
  * The long switch statements are because we generate bespoke code for each
  * value of the chunk width N, which outperforms having a variable-length loop.
  */
-void chunked_kronrod(const uint64_t* RESTRICT pivots, uint64_t* RESTRICT matrix, uint64_t rows, uint64_t strips, uint64_t stride, const uint64_t* workspace, uint64_t* RESTRICT cache, int k) {
+static void chunked_kronrod(const uint64_t* RESTRICT pivots, uint64_t* RESTRICT matrix, uint64_t rows, uint64_t strips, uint64_t stride, const uint64_t* workspace, uint64_t* RESTRICT cache, int k) {
 
     uint64_t re = strips - 1;
 
@@ -318,7 +318,7 @@ void chunked_kronrod(const uint64_t* RESTRICT pivots, uint64_t* RESTRICT matrix,
  * Find up to K pivot rows in this strip of 64 columns, remove them from all
  * other rows, and permute them into the correct places.
  */
-bool perform_K_steps(uint64_t* RESTRICT matrix, uint64_t* RESTRICT stripspace, uint64_t rows, uint64_t strips, uint64_t stride, uint64_t &starting_row, uint64_t *workspace, uint64_t* RESTRICT cache, uint64_t &next_b, int K, uint64_t final_b) {
+static bool perform_K_steps(uint64_t* RESTRICT matrix, uint64_t* RESTRICT stripspace, uint64_t rows, uint64_t strips, uint64_t stride, uint64_t &starting_row, uint64_t *workspace, uint64_t* RESTRICT cache, uint64_t &next_b, int K, uint64_t final_b) {
 
     memset(workspace, 0, 8 * rows);
 
@@ -365,7 +365,7 @@ bool perform_K_steps(uint64_t* RESTRICT matrix, uint64_t* RESTRICT stripspace, u
 }
 
 
-void inplace_rref_strided_K(uint64_t* RESTRICT matrix, uint64_t* RESTRICT stripspace, uint64_t rows, uint64_t cols, uint64_t stride, uint64_t *workspace, uint64_t *cache, int K) {
+static void inplace_rref_strided_K(uint64_t* RESTRICT matrix, uint64_t* RESTRICT stripspace, uint64_t rows, uint64_t cols, uint64_t stride, uint64_t *workspace, uint64_t *cache, int K) {
 
     uint64_t strips = (cols + 63) >> 6;
 
@@ -398,7 +398,7 @@ void inplace_rref_strided_K(uint64_t* RESTRICT matrix, uint64_t* RESTRICT strips
 }
 
 
-void inplace_rref_strided_heap(uint64_t *matrix, uint64_t rows, uint64_t cols, uint64_t stride, int K) {
+static void inplace_rref_strided_heap(uint64_t *matrix, uint64_t rows, uint64_t cols, uint64_t stride, int K) {
 
     // Array for storing, for each row, the appropriate linear combination of
     // the k <= K <= 32 pivot rows that needs to be subtracted:
@@ -427,7 +427,7 @@ void inplace_rref_strided_heap(uint64_t *matrix, uint64_t rows, uint64_t cols, u
     free(cache_raw);
 }
 
-void inplace_rref_small(uint64_t *matrix, uint64_t rows, uint64_t cols) {
+static void inplace_rref_small(uint64_t *matrix, uint64_t rows, uint64_t cols) {
 
     uint64_t final_b = (1ull << (cols - 1)) - 1;
     uint64_t next_b = 0;
