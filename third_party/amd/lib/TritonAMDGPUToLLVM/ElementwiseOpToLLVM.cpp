@@ -43,8 +43,10 @@ cvtScalePkUpcastFromFp8(Location loc, ConversionPatternRewriter &rewriter,
                 std::is_same_v<convertOp, ROCDL::CvtScaleF32PkF32Bf8Op>) {
     resType = i64_ty;
     dstType = f32_ty;
-  } else if constexpr (std::is_same_v<convertOp, ROCDL::CvtScaleF32PkF16Fp8Op> ||
-                       std::is_same_v<convertOp, ROCDL::CvtScaleF32PkF16Bf8Op>) {
+  } else if constexpr (std::is_same_v<convertOp,
+                                      ROCDL::CvtScaleF32PkF16Fp8Op> ||
+                       std::is_same_v<convertOp,
+                                      ROCDL::CvtScaleF32PkF16Bf8Op>) {
     resType = i32_ty;
     dstType = f16_ty;
   } else {
@@ -705,9 +707,9 @@ ConverterT Fp8E5M2FNUZ_to_Fp16(AMD::ISAFamily isaFamily) {
 }
 
 // OCP Bf8 -> Bf16
-static SmallVector<Value> Fp8E5M2_to_Bf16_SW(Location loc,
-                                          ConversionPatternRewriter &rewriter,
-                                          const SmallVector<Value> &v) {
+static SmallVector<Value>
+Fp8E5M2_to_Bf16_SW(Location loc, ConversionPatternRewriter &rewriter,
+                   const SmallVector<Value> &v) {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   auto fp8x4VecTy = vec_ty(i8_ty, 4);
   Value a0 = b.undef(fp8x4VecTy);
@@ -889,9 +891,9 @@ static SmallVector<Value> Bf16_to_Fp8E4M3FN(Location loc,
 }
 
 // fp8e4m3fn to bf16
-static SmallVector<Value> Fp8E4M3FN_to_Bf16_SW(Location loc,
-                                            ConversionPatternRewriter &rewriter,
-                                            const SmallVector<Value> &v) {
+static SmallVector<Value>
+Fp8E4M3FN_to_Bf16_SW(Location loc, ConversionPatternRewriter &rewriter,
+                     const SmallVector<Value> &v) {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   auto fp8x4VecTy = vec_ty(i8_ty, 4);
   Value a0 = b.undef(fp8x4VecTy);
@@ -926,7 +928,7 @@ static SmallVector<Value> Fp8E4M3FN_to_Bf16_SW(Location loc,
 
 static SmallVector<Value>
 Fp8E4M3FN_to_Bf16_HW(Location loc, ConversionPatternRewriter &rewriter,
-                   const SmallVector<Value> &v) {
+                     const SmallVector<Value> &v) {
   assert(v.size() == 2);
   return cvtScalePkUpcastFromFp8<ROCDL::CvtScaleF32PkBf16Fp8Op>(loc, rewriter,
                                                                 v[0], v[1]);
@@ -1165,7 +1167,8 @@ struct FpToFpOpConversion
             // F8 -> BF16
             {{F8E5M2TyID, BF16TyID, undefRounding}, Fp8E5M2_to_Bf16(isaFamily)},
             {{F8E5M2FNUZTyID, BF16TyID, undefRounding}, Fp8E5M2FNUZ_to_Bf16},
-            {{F8E4M3FNTyID, BF16TyID, undefRounding}, Fp8E4M3FN_to_Bf16(isaFamily)},
+            {{F8E4M3FNTyID, BF16TyID, undefRounding},
+             Fp8E4M3FN_to_Bf16(isaFamily)},
             {{F8E4M3FNUZTyID, BF16TyID, undefRounding}, Fp8E4M3FNUZ_to_Bf16},
             // BF16 -> F8
             {{BF16TyID, F8E5M2TyID, RoundingMode::RTNE},
