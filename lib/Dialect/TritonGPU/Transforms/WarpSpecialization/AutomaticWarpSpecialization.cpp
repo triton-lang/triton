@@ -33,7 +33,7 @@ struct AutomaticWarpSpecialization
 
 void AutomaticWarpSpecialization::runOnOperation() {
   OpPassManager pm;
-  pm.addPass(createTritonGPULoadMMASpecialization());
+  pm.addPass(createTritonGPULoadMMASpecialization({numStages}));
   pm.addPass(createTritonGPURewritePartitionDependencies());
   // `int-range-optimizations` combines SCCP with integer range analysis. It's
   // good at cleaning up loop arithmetic.
