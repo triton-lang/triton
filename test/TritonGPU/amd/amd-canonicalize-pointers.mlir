@@ -1318,31 +1318,46 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
 
 // -----
 
-module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
-  tt.func public @asin_kernel(%arg0: !tt.ptr<i64>) attributes {noinline = false} {
+module attributes {} {
+  tt.func public @asin_kernel(%arg0: !tt.ptr<f32>, %arg1: !tt.ptr<f32>, %arg2: i32) attributes {noinline = false} {
     %c1024_i32 = arith.constant 1024 : i32
     %0 = tt.get_program_id x : i32
     %1 = arith.muli %0, %c1024_i32 : i32
     %2 = tt.make_range {end = 1024 : i32, start = 0 : i32} : tensor<1024xi32>
     %3 = tt.splat %1 : i32 -> tensor<1024xi32>
     %4 = arith.addi %3, %2 : tensor<1024xi32>
-    %5 = tt.splat %arg0 : !tt.ptr<i64> -> tensor<1024x!tt.ptr<i64>>
-    %6 = tt.addptr %5, %4 : tensor<1024x!tt.ptr<i64>>, tensor<1024xi32>
-    %7 = tt.extern_elementwise %6 {libname = "", libpath = "", pure = false, symbol = "foo"} : (tensor<1024x!tt.ptr<i64>>) -> tensor<1024xi64>
+    %5 = tt.splat %arg2 : i32 -> tensor<1024xi32>
+    %6 = arith.cmpi slt, %4, %5 : tensor<1024xi32>
+    %7 = tt.splat %arg0 : !tt.ptr<f32> -> tensor<1024x!tt.ptr<f32>>
+    %8 = tt.addptr %7, %4 : tensor<1024x!tt.ptr<f32>>, tensor<1024xi32>
+    %9 = tt.load %8, %6 : tensor<1024x!tt.ptr<f32>>
+    %10 = tt.extern_elementwise %9 {libname = "", libpath = "", pure = true, symbol = "__ocml_asin_f32"} : (tensor<1024xf32>) -> tensor<1024xf32>
+    %11 = tt.splat %arg1 : !tt.ptr<f32> -> tensor<1024x!tt.ptr<f32>>
+    %12 = tt.addptr %11, %4 : tensor<1024x!tt.ptr<f32>>, tensor<1024xi32>
+    tt.store %12, %10, %6 : tensor<1024x!tt.ptr<f32>>
     tt.return
   }
 }
 
 // CHECK-LABEL:   tt.func public @asin_kernel(
-// CHECK-SAME:                                %[[VAL_0:.*]]: !tt.ptr<i64>) attributes {noinline = false} {
-// CHECK:           %[[VAL_1:.*]] = arith.constant 1024 : i32
-// CHECK:           %[[VAL_2:.*]] = tt.get_program_id x : i32
-// CHECK:           %[[VAL_3:.*]] = arith.muli %[[VAL_2]], %[[VAL_1]] : i32
-// CHECK:           %[[VAL_4:.*]] = tt.make_range {end = 1024 : i32, start = 0 : i32} : tensor<1024xi32>
-// CHECK:           %[[VAL_5:.*]] = tt.addptr %[[VAL_0]], %[[VAL_3]] : !tt.ptr<i64>, i32
-// CHECK:           %[[VAL_6:.*]] = tt.splat %[[VAL_5]] : !tt.ptr<i64> -> tensor<1024x!tt.ptr<i64>>
-// CHECK:           %[[VAL_7:.*]] = tt.addptr %[[VAL_6]], %[[VAL_4]] : tensor<1024x!tt.ptr<i64>>, tensor<1024xi32>
-// CHECK:           %[[VAL_8:.*]] = tt.extern_elementwise %[[VAL_7]] {libname = "", libpath = "", pure = false, symbol = "foo"} : (tensor<1024x!tt.ptr<i64>>) -> tensor<1024xi64>
+// CHECK-SAME:                                %[[VAL_0:.*]]: !tt.ptr<f32>, %[[VAL_1:.*]]: !tt.ptr<f32>, %[[VAL_2:.*]]: i32) attributes {noinline = false} {
+// CHECK:           %[[VAL_3:.*]] = arith.constant 1024 : i32
+// CHECK:           %[[VAL_4:.*]] = tt.get_program_id x : i32
+// CHECK:           %[[VAL_5:.*]] = arith.muli %[[VAL_4]], %[[VAL_3]] : i32
+// CHECK:           %[[VAL_6:.*]] = tt.make_range {end = 1024 : i32, start = 0 : i32} : tensor<1024xi32>
+// CHECK:           %[[VAL_7:.*]] = tt.splat %[[VAL_5]] : i32 -> tensor<1024xi32>
+// CHECK:           %[[VAL_8:.*]] = arith.addi %[[VAL_7]], %[[VAL_6]] : tensor<1024xi32>
+// CHECK:           %[[VAL_9:.*]] = tt.splat %[[VAL_2]] : i32 -> tensor<1024xi32>
+// CHECK:           %[[VAL_10:.*]] = arith.cmpi slt, %[[VAL_8]], %[[VAL_9]] : tensor<1024xi32>
+// CHECK:           %[[VAL_11:.*]] = tt.addptr %[[VAL_0]], %[[VAL_5]] : !tt.ptr<f32>, i32
+// CHECK:           %[[VAL_12:.*]] = tt.splat %[[VAL_11]] : !tt.ptr<f32> -> tensor<1024x!tt.ptr<f32>>
+// CHECK:           %[[VAL_13:.*]] = tt.addptr %[[VAL_12]], %[[VAL_6]] : tensor<1024x!tt.ptr<f32>>, tensor<1024xi32>
+// CHECK:           %[[VAL_14:.*]] = tt.load %[[VAL_13]], %[[VAL_10]] : tensor<1024x!tt.ptr<f32>>
+// CHECK:           %[[VAL_15:.*]] = tt.extern_elementwise %[[VAL_14]] {libname = "", libpath = "", pure = true, symbol = "__ocml_asin_f32"} : (tensor<1024xf32>) -> tensor<1024xf32>
+// CHECK:           %[[VAL_16:.*]] = tt.addptr %[[VAL_1]], %[[VAL_5]] : !tt.ptr<f32>, i32
+// CHECK:           %[[VAL_17:.*]] = tt.splat %[[VAL_16]] : !tt.ptr<f32> -> tensor<1024x!tt.ptr<f32>>
+// CHECK:           %[[VAL_18:.*]] = tt.addptr %[[VAL_17]], %[[VAL_6]] : tensor<1024x!tt.ptr<f32>>, tensor<1024xi32>
+// CHECK:           tt.store %[[VAL_18]], %[[VAL_15]], %[[VAL_10]] : tensor<1024x!tt.ptr<f32>>
 // CHECK:           tt.return
 // CHECK:         }
 
