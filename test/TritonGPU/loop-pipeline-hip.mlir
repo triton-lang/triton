@@ -1,4 +1,5 @@
-// RUN: triton-opt %s -split-input-file -tritonamdgpu-stream-pipeline=num_stages=2 -canonicalize | FileCheck %s
+// RUN: triton-opt %s -split-input-file -tritonamdgpu-stream-pipeline=num_stages=2 -canonicalize | FileCheck %s --check-prefixes=COMMON,SYNC
+// RUN: triton-opt %s -split-input-file -tritonamdgpu-stream-pipeline="num_stages=2 use_async_copy=1" -canonicalize | FileCheck %s --check-prefixes=COMMON,ASYNC
 
 #blocked = #ttg.blocked<{sizePerThread = [8, 1], threadsPerWarp = [8, 8], warpsPerCTA = [1, 4], order = [0, 1]}>
 #blocked1 = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [8, 8], warpsPerCTA = [4, 1], order = [1, 0]}>
@@ -7,7 +8,7 @@
 #shared1 = #ttg.swizzled_shared<{vec = 8, perPhase = 1, maxPhase = 8, order = [1, 0]}>
 #smem = #ttg.shared_memory
 module attributes {"ttg.target" = "hip:gfx942", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 64 : i32} {
-  // CHECK-LABEL: tt.func @load_two_users
+  // COMMON-LABEL: tt.func @load_two_users
   tt.func @load_two_users(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<f16> {tt.divisibility = 16 : i32}) -> (tensor<128x16xf32, #mma>, tensor<128x64xf32, #mma>) {
     %cst = arith.constant dense<0> : tensor<1x16xi32, #blocked>
     %cst_0 = arith.constant dense<0> : tensor<128x1xi32, #blocked1>
@@ -34,13 +35,13 @@ module attributes {"ttg.target" = "hip:gfx942", "ttg.num-ctas" = 1 : i32, "ttg.n
     %14 = tt.broadcast %11 : tensor<1x16x!tt.ptr<f16>, #blocked> -> tensor<64x16x!tt.ptr<f16>, #blocked>
     %15 = tt.broadcast %13 : tensor<64x1xi32, #blocked> -> tensor<64x16xi32, #blocked>
     %16 = tt.addptr %14, %15 : tensor<64x16x!tt.ptr<f16>, #blocked>, tensor<64x16xi32, #blocked>
-    // CHECK: ttg.local_store
-    // CHECK: scf.for
-    // CHECK:   tt.load
-    // CHECK:   tt.dot
-    // CHECK:   tt.dot
-    // CHECK:   ttg.local_store
-    // CHECK:   scf.yield
+    // COMMON: ttg.local_store
+    // COMMON: scf.for
+    // COMMON:   tt.load
+    // COMMON:   tt.dot
+    // COMMON:   tt.dot
+    // COMMON:   ttg.local_store
+    // COMMON:   scf.yield
     %17:2 = scf.for %arg2 = %c0_i32 to %c8_i32 step %c1_i32 iter_args(%arg3 = %cst_1, %arg4 = %cst_2) -> (tensor<128x16xf32, #mma>, tensor<128x64xf32, #mma>)  : i32 {
       %18 = tt.load %16 : tensor<64x16x!tt.ptr<f16>, #blocked>
       %19 = ttg.convert_layout %9 : tensor<128x64xf16, #blocked1> -> tensor<128x64xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 2}>>
@@ -60,8 +61,8 @@ module attributes {"ttg.target" = "hip:gfx942", "ttg.num-ctas" = 1 : i32, "ttg.n
 
 // -----
 
-// CHECK-LABEL: tt.func public @_jagged_hstu_attn_fwd_0d1d2d3d4d5de
-// CHECK-NOT:  ttg.convert_layout {{.*}} : tensor<32x64xf32, #shared> -> tensor<32x64xf32, #shared1>
+// COMMON-LABEL: tt.func public @_jagged_hstu_attn_fwd_0d1d2d3d4d5de
+// COMMON-NOT:  ttg.convert_layout {{.*}} : tensor<32x64xf32, #shared> -> tensor<32x64xf32, #shared1>
 
 #blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [64, 1], warpsPerCTA = [2, 2], order = [0, 1]}>
 #blocked1 = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [64, 1], warpsPerCTA = [1, 4], order = [0, 1]}>
@@ -166,13 +167,13 @@ module attributes {"ttg.target" = "hip:gfx942", "ttg.num-ctas" = 1 : i32, "ttg.n
 
 // Disable pipelining for loops that contain barrier.
 //   Barriers are problematic since they are not chained to any other operation.
-// CHECK-LABEL: tt.func public @add_barrier_kernel
-// CHECK:  scf.for
-// CHECK:    tt.load
-// CHECK:    gpu.barrier
-// CHECK:    tt.store
-// CHECK-NOT:  gpu.barrier
-// CHECK:  tt.return
+// COMMON-LABEL: tt.func public @add_barrier_kernel
+// COMMON:  scf.for
+// COMMON:    tt.load
+// COMMON:    gpu.barrier
+// COMMON:    tt.store
+// COMMON-NOT:  gpu.barrier
+// COMMON:  tt.return
 
 #blocked = #ttg.blocked<{sizePerThread = [4], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
@@ -203,11 +204,11 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
 
 // -----
 
-// CHECK-NOT: #ttg.swizzled_shared<{{.*}} order = [2, 0, 1]
-// CHECK: #ttg.swizzled_shared<{{.*}} order = [2, 1, 0]
-// CHECK-NOT: #ttg.swizzled_shared<{{.*}} order = [2, 0, 1]
+// COMMON-NOT: #ttg.swizzled_shared<{{.*}} order = [2, 0, 1]
+// COMMON: #ttg.swizzled_shared<{{.*}} order = [2, 1, 0]
+// COMMON-NOT: #ttg.swizzled_shared<{{.*}} order = [2, 0, 1]
 
-// CHECK-LABEL: tt.func public @slowest_dim_is_batch
+// COMMON-LABEL: tt.func public @slowest_dim_is_batch
 #blocked = #ttg.blocked<{sizePerThread = [1, 1, 2], threadsPerWarp = [4, 1, 16], warpsPerCTA = [4, 1, 1], order = [2, 1, 0]}>
 #blocked1 = #ttg.blocked<{sizePerThread = [1, 1, 8], threadsPerWarp = [16, 1, 4], warpsPerCTA = [4, 1, 1], order = [2, 0, 1]}>
 #blocked2 = #ttg.blocked<{sizePerThread = [1, 2], threadsPerWarp = [1, 64], warpsPerCTA = [1, 4], order = [1, 0]}>
@@ -239,9 +240,9 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 // -----
 
 // Check that the stream pipeliner updates the resulting memory layout of transpose ops to mutable if immutable local buffers are replaced
-// CHECK-LABEL: loop_with_dot_and_transpose
-// CHECK: ttg.local_alloc {{.*}}, mutable>
-// CHECK: ttg.memdesc_trans {{.*}}, mutable> -> {{.*}}, mutable>
+// COMMON-LABEL: loop_with_dot_and_transpose
+// COMMON: ttg.local_alloc {{.*}}, mutable>
+// COMMON: ttg.memdesc_trans {{.*}}, mutable> -> {{.*}}, mutable>
 
 #blocked = #ttg.blocked<{sizePerThread = [2, 2], threadsPerWarp = [2, 16], warpsPerCTA = [4, 1], order = [1, 0]}>
 #blocked1 = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [32, 1], warpsPerCTA = [1, 4], order = [0, 1]}>
@@ -270,11 +271,11 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 // -----
 
 // Check that the stream pipeliner updates atomic op in the k-loop correctly
-// CHECK-LABEL: _triton_gemm_kernel_atomic_rmw
-// CHECK:  scf.for
-// CHECK: tt.atomic_rmw fadd, acq_rel, gpu
-// CHECK:  tt.dot
-// CHECK: scf.yield
+// COMMON-LABEL: _triton_gemm_kernel_atomic_rmw
+// COMMON:  scf.for
+// COMMON: tt.atomic_rmw fadd, acq_rel, gpu
+// COMMON:  tt.dot
+// COMMON: scf.yield
 
 #blocked = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [8, 8], warpsPerCTA = [4, 1], order = [1, 0]}>
 #mma = #ttg.amd_mfma<{versionMajor = 3, versionMinor = 0, warpsPerCTA = [4, 1], instrShape = [32, 32], isTransposed = true}>
@@ -338,25 +339,25 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 // -----
 
 // Check that we can pipeline scaled dot with linear layout
-// CHECK-LABEL: mxfp8_mxfp4_matmul
+// COMMON-LABEL: mxfp8_mxfp4_matmul
 
 // Prologue
-// CHECK-COUNT-3: ttg.local_alloc
-// CHECK-COUNT-3: tt.load
-// CHECK-COUNT-3: ttg.local_store
+// COMMON-COUNT-3: ttg.local_alloc
+// COMMON-COUNT-3: tt.load
+// COMMON-COUNT-3: ttg.local_store
 
 // Main loop
-//         CHECK: scf.for
-// CHECK-COUNT-3:   ttg.local_load
-//         CHECK:   tt.dot_scaled
-//         CHECK:   scf.yield
+//         COMMON: scf.for
+// COMMON-COUNT-3:   ttg.local_load
+//         COMMON:   tt.dot_scaled
+//         COMMON:   scf.yield
 
 // Epilogue
-// CHECK-COUNT-3: ttg.local_load
-//         CHECK: scf.if
-//         CHECK:   tt.dot_scaled
-// CHECK-COUNT-2:   scf.yield
-// CHECK-COUNT-3: ttg.local_dealloc
+// COMMON-COUNT-3: ttg.local_load
+//         COMMON: scf.if
+//         COMMON:   tt.dot_scaled
+// COMMON-COUNT-2:   scf.yield
+// COMMON-COUNT-3: ttg.local_dealloc
 
 #blocked = #ttg.blocked<{sizePerThread = [1, 16], threadsPerWarp = [4, 16], warpsPerCTA = [4, 1], order = [1, 0]}>
 #blocked1 = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [64, 1], warpsPerCTA = [4, 1], order = [1, 0]}>
@@ -461,6 +462,84 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     } {tt.num_stages = 2 : i32}
     %79 = ttg.convert_layout %62#0 : tensor<128x256xf32, #blocked2> -> tensor<128x256xf32, #blocked3>
     tt.store %71, %79 : tensor<128x256x!tt.ptr<f32>, #blocked3>
+    tt.return
+  }
+}
+
+// -----
+
+// Check that we can pipeline a simple matmul kernel
+// Note: Currently AsyncCopy is only used for the second operand because we do not support (actual) swizzled shared encodings
+
+// COMMON-LABEL: simple_matmul_kernel
+
+// Prologue
+// COMMON-COUNT-2: ttg.local_alloc
+  // SYNC-COUNT-2: tt.load
+  // SYNC-COUNT-2: ttg.local_store
+  //
+  // ASYNC: tt.load
+  // ASYNC: ttg.local_store
+  // ASYNC: ttg.async_copy_global_to_local
+
+// Main loop
+//         COMMON:   scf.for
+//
+  // SYNC-COUNT-2:   ttg.local_load
+  //         SYNC:   tt.dot
+  //         SYNC:   scf.yield
+  //
+  //         ASYNC:    ttg.local_load
+  //         ASYNC:    ttg.async_wait
+  //         ASYNC:    ttg.local_load
+  //         ASYNC:    ttg.dot
+  //         ASYNC:    ttg.async_copy_global_to_local
+
+// Epilogue
+// COMMON-COUNT-2: ttg.local_load
+//         COMMON: scf.if
+//         COMMON:   tt.dot
+// COMMON-COUNT-2:   scf.yield
+// COMMON-COUNT-2: ttg.local_dealloc
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [8, 8], warpsPerCTA = [8, 1], order = [1, 0]}>
+#blocked1 = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [4, 16], warpsPerCTA = [8, 1], order = [1, 0]}>
+#mma = #ttg.amd_mfma<{versionMajor = 3, versionMinor = 0, warpsPerCTA = [4, 2], instrShape = [32, 32], isTransposed = true}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.target = "hip:gfx942", "ttg.threads-per-warp" = 64 : i32} {
+  tt.func public @simple_matmul_kernel(%test: tensor<1x64xi32, #blocked1>, %arg0: tensor<64x64x!tt.ptr<f16>, #mma>, %arg1: i32, %arg2: !tt.ptr<f16> {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32}, %arg3: !tt.ptr<f16> {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32}, %arg4: !tt.ptr<f16> {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32}, %arg5: i32 {tt.divisibility = 16 : i32}, %arg6: i32 {tt.divisibility = 16 : i32}, %arg7: i32 {tt.divisibility = 16 : i32}, %arg8: i32 {tt.divisibility = 16 : i32}, %arg9: i32 {tt.divisibility = 16 : i32}, %arg10: i32 {tt.divisibility = 16 : i32}) attributes {noinline = false} {
+    %cst = arith.constant dense<32> : tensor<64x32xi32, #blocked>
+    %cst_0 = arith.constant dense<32> : tensor<32x64xi32, #blocked1>
+    %c64_i32 = arith.constant 64 : i32
+    %c1_i32 = arith.constant 1 : i32
+    %c0_i32 = arith.constant 0 : i32
+    %cst_1 = arith.constant dense<0.000000e+00> : tensor<64x64xf32, #mma>
+    %0 = tt.make_range {end = 64 : i32, start = 0 : i32} : tensor<64xi32, #ttg.slice<{dim = 0, parent = #blocked1}>>
+    %1 = arith.muli %arg1, %c64_i32 : i32
+    %2 = tt.splat %1 : i32 -> tensor<64xi32, #ttg.slice<{dim = 0, parent = #blocked1}>>
+    %3 = arith.addi %2, %0 : tensor<64xi32, #ttg.slice<{dim = 0, parent = #blocked1}>>
+    %4 = tt.splat %arg6 : i32 -> tensor<64xi32, #ttg.slice<{dim = 0, parent = #blocked1}>>
+    %5 = arith.remsi %3, %4 : tensor<64xi32, #ttg.slice<{dim = 0, parent = #blocked1}>>
+    %6 = tt.make_range {end = 32 : i32, start = 0 : i32} : tensor<32xi32, #ttg.slice<{dim = 0, parent = #blocked}>>
+    %7 = tt.expand_dims %6 {axis = 0 : i32} : tensor<32xi32, #ttg.slice<{dim = 0, parent = #blocked}>> -> tensor<1x32xi32, #blocked>
+    %8 = tt.broadcast %7 : tensor<1x32xi32, #blocked> -> tensor<64x32xi32, #blocked>
+    %9 = tt.splat %arg2 : !tt.ptr<f16> -> tensor<64x32x!tt.ptr<f16>, #blocked>
+    %10 = tt.addptr %9, %8 : tensor<64x32x!tt.ptr<f16>, #blocked>, tensor<64x32xi32, #blocked>
+    %11 = tt.expand_dims %5 {axis = 0 : i32} : tensor<64xi32, #ttg.slice<{dim = 0, parent = #blocked1}>> -> tensor<1x64xi32, #blocked1>
+    %12 = tt.broadcast %11 : tensor<1x64xi32, #blocked1> -> tensor<32x64xi32, #blocked1>
+    %13 = tt.splat %arg3 : !tt.ptr<f16> -> tensor<32x64x!tt.ptr<f16>, #blocked1>
+    %14 = tt.addptr %13, %12 : tensor<32x64x!tt.ptr<f16>, #blocked1>, tensor<32x64xi32, #blocked1>
+    %15:3 = scf.for %arg11 = %c0_i32 to %arg1 step %c1_i32 iter_args(%arg12 = %cst_1, %arg13 = %10, %arg14 = %14) -> (tensor<64x64xf32, #mma>, tensor<64x32x!tt.ptr<f16>, #blocked>, tensor<32x64x!tt.ptr<f16>, #blocked1>)  : i32 {
+      %17 = tt.load %arg13 : tensor<64x32x!tt.ptr<f16>, #blocked>
+      %18 = tt.load %arg14 : tensor<32x64x!tt.ptr<f16>, #blocked1>
+      %19 = ttg.convert_layout %17 : tensor<64x32xf16, #blocked> -> tensor<64x32xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 4}>>
+      %20 = ttg.convert_layout %18 : tensor<32x64xf16, #blocked1> -> tensor<32x64xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 4}>>
+      %21 = tt.dot %19, %20, %arg12, inputPrecision = tf32 : tensor<64x32xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 4}>> * tensor<32x64xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 4}>> -> tensor<64x64xf32, #mma>
+      %22 = tt.addptr %arg13, %cst : tensor<64x32x!tt.ptr<f16>, #blocked>, tensor<64x32xi32, #blocked>
+      %23 = tt.addptr %arg14, %cst_0 : tensor<32x64x!tt.ptr<f16>, #blocked1>, tensor<32x64xi32, #blocked1>
+      scf.yield %21, %22, %23 : tensor<64x64xf32, #mma>, tensor<64x32x!tt.ptr<f16>, #blocked>, tensor<32x64x!tt.ptr<f16>, #blocked1>
+    }
+    %16 = arith.truncf %15#0 : tensor<64x64xf32, #mma> to tensor<64x64xf16, #mma>
+    tt.store %arg0, %16 : tensor<64x64x!tt.ptr<f16>, #mma>
     tt.return
   }
 }

@@ -1574,7 +1574,7 @@ def trans(input: tensor, *dims, _builder=None):
 
     :param input: The input tensor.
     :param dims: The desired ordering of dimensions.  For example,
-        :code:`(2, 1, 0)` reverses the order dims in a a 3D tensor.
+        :code:`(2, 1, 0)` reverses the order dims in a 3D tensor.
 
     :code:`dims` can be passed as a tuple or as individual parameters: ::
 
@@ -1600,7 +1600,7 @@ def permute(input, *dims, _builder=None):
     :param input: The input tensor.
     :type input: Block
     :param dims: The desired ordering of dimensions.  For example,
-        :code:`(2, 1, 0)` reverses the order dims in a a 3D tensor.
+        :code:`(2, 1, 0)` reverses the order dims in a 3D tensor.
 
     :code:`dims` can be passed as a tuple or as individual parameters: ::
 
@@ -1977,6 +1977,20 @@ def _experimental_descriptor_store(desc_pointer, value, offsets, _builder=None):
     This stores a tensor of data based on the descriptor and offsets.
     """
     desc = _experimental_reinterpret_tensor_descriptor(desc_pointer, value.shape, value.dtype, _builder=_builder)
+    return desc.store(offsets, value, _builder=_builder)
+
+
+@builtin
+def load_tensor_descriptor(desc: tensor_descriptor_base, offsets: Sequence[constexpr | tensor],
+                           _builder=None) -> tensor:
+    """Load a block of data from a tensor descriptor."""
+    return desc.load(offsets, _builder=_builder)
+
+
+@builtin
+def store_tensor_descriptor(desc: tensor_descriptor_base, offsets: Sequence[constexpr | tensor], value: tensor,
+                            _builder=None) -> tensor:
+    """Store a block of data to a tensor descriptor."""
     return desc.store(offsets, value, _builder=_builder)
 
 

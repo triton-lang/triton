@@ -1,4 +1,4 @@
-// RUN: triton-opt %s -split-input-file --convert-triton-gpu-to-llvm=compute-capability=70 2>&1 | FileCheck %s
+// RUN: triton-opt %s --convert-triton-gpu-to-llvm=compute-capability=70 2>&1 | FileCheck %s
 
 #blocked = #ttg.blocked<{sizePerThread = [4], threadsPerWarp = [32], warpsPerCTA = [4], order = [0], CTAsPerCGA = [1], CTASplitNum = [1], CTAOrder = [0]}>
 // CHECK-LABEL: clamp
