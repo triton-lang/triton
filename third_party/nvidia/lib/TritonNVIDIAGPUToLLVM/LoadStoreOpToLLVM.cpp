@@ -534,7 +534,6 @@ struct StoreOpConversion : public ConvertOpToLLVMPattern<triton::StoreOp>,
               .v(nWords)
               .b(width);
 
-
       PTXBuilder::Operand *evictOpr = nullptr;
       if (l2PolicyReg)
         evictOpr = ptxBuilder.newOperand(l2PolicyReg, "l");
