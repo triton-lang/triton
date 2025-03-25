@@ -1,0 +1,1446 @@
+//===----------------------------------------------------------------------===//
+//
+// Copyright (C) 2025 by Kunlunxin. All rights reserved.
+//
+//===----------------------------------------------------------------------===//
+#include "xpu/kernel/xtdk.h"
+#include "xpu/kernel/xtdk_math.h"
+#include "xpu/kernel/xtdk_simd.h"
+#include "xpu/kernel/xtdk_atomic_sm_xpu3.h"
+#include "xpu/kernel/xtdk_io.h"
+
+#define inline __attribute__((always_inline))
+#define PI 3.14159265358979323846f
+// Value of ln2 and ln10
+#define LN2 0.69314718055994530942f
+#define LN10 2.30258509299404568402f
+
+#define HUGE_VALF 1e10000f
+#define INFINITY HUGE_VALF
+
+#ifdef __GNUC__
+#define predict_true(x) __builtin_expect(!!(x), 1)
+#define predict_false(x) __builtin_expect(x, 0)
+#else
+#define predict_true(x) (x)
+#define predict_false(x) (x)
+#endif
+
+// TODO[dyq]: replace asm by builtin for scheduling
+namespace xpu {
+
+#ifdef __arch_xpu2__
+typedef struct {
+    unsigned short val;
+} float16;
+#endif
+
+#ifdef __arch_xpu3__
+typedef _Float16 float16;
+#endif
+
+
+__device__ inline void printTest(int customIdx) {
+    printf("[printTest_%d] cluster_id[%d] cid[%d/%d]\n", customIdx, cluster_id(), core_num(), core_id());
+}
+
+__device__ inline void printBool(bool b, int customIdx) {
+    int clusterId = cluster_id();
+    int coreId = core_id();
+    if (clusterId == 0 && coreId == 0) {
+        if (b) {
+            printf("[printBool_%d] cluster_id = %d, core_id = %d, local_x[0] = true \n", customIdx, clusterId, coreId);
+        } else {
+            printf("[printBool_%d] cluster_id = %d, core_id = %d, local_x[0] = false \n", customIdx, clusterId, coreId);
+        }
+    }
+}
+
+__device__ inline void printFloat(float a, int customIdx) {
+    int clusterId = cluster_id();
+    int coreId = core_id();
+    if (clusterId == 0 && coreId == 0) {
+        printf("[printFloat_%d] cluster_id = %d, core_id = %d, local_x[0] = %f \n", customIdx, clusterId, coreId, a);
+    }
+}
+
+__device__ inline void printInt(int a, int customIdx) {
+    int clusterId = cluster_id();
+    int coreId = core_id();
+    if (clusterId == 0 && coreId == 0) {
+        printf("[printInt_%d] cluster_id = %d, core_id = %d, local_x[0] = %d \n", customIdx, clusterId, coreId, a);
+    }
+}
+
+__device__ inline void printMMaOp(int a, int b, int c) {
+    int clusterId = cluster_id();
+    int coreId = core_id();
+    if (clusterId == 0) {
+        printf("[printMMAOp] cluster_id = %d, core_id = %d, mma %d %d %d\n", clusterId, coreId, a, b, c);
+    }
+}
+
+__device__ inline void printDsOp(int a, int b) {
+    int clusterId = cluster_id();
+    int coreId = core_id();
+    if (clusterId == 0) {
+        printf("[printDsOp] cluster_id = %d, core_id = %d, ds %d %d\n", clusterId, coreId, a, b);
+    }
+}
+
+__device__ inline void printDmaOp(int a) {
+    int clusterId = cluster_id();
+    int coreId = core_id();
+    if (clusterId == 0) {
+        printf("[printDmaOp] cluster_id = %d, core_id = %d, dma %d\n", clusterId, coreId, a);
+    }
+}
+
+__device__ inline void printDmaoOp(int a) {
+    int clusterId = cluster_id();
+    int coreId = core_id();
+    if (clusterId == 0) {
+        printf("[printDMAOop] cluster_id = %d, core_id = %d, dmao %d\n", clusterId, coreId, a);
+    }
+}
+
+__device__ void inline fp16tofp32(const float16* x, float* y, int len) {
+    int start = (len - 1) / 32 * 32;
+    x = x + start;
+    y = y + start;
+    for (int i = start; i >= 0; i -= 32) {
+        float16x32_t X;
+        float32x16_t X_l;
+        float32x16_t X_h;
+        __asm__ __volatile__("vload.mz %0{mr1}, 0(%1)":"=&v"(X):"r"(x));
+        __asm__ __volatile__("vfp162float_l.rn %0, %1":"=&v"(X_l):"v"(X));
+        __asm__ __volatile__("vfp162float_h.rn %0, %1":"=&v"(X_h):"v"(X));
+        __asm__ __volatile__("vstore_mask16.mz %0{mr1}, 0(%1)"::"v"(X_h), "r"(y + 16));
+        __asm__ __volatile__("vstore_mask16.mz %0{mr1}, 0(%1)"::"v"(X_l), "r"(y));
+        x -= 32;
+        y -= 32;
+    }
+    mfence_lm();
+}
+
+
+__device__ void inline fp32tofp16(const float* x, float16* y, int len) {
+    for (int i = 0; i < len; i += 32) {
+        float32x16_t Y_h = __builtin_xpu2_vload_mask16_mr1(x + 16, 0);
+        float32x16_t Y_l = __builtin_xpu2_vload_mask16_mr1(x, 0);
+        __asm__ __volatile__("vfloat2fp16_l.rn vr0, %0\t\n"
+                "vfloat2fp16_h.rn vr0, %1\t\n"
+                "vstore.mz vr0{mr1}, 0(%2)"
+                ::"v"(Y_l), "v"(Y_h), "r"(y):"vr0");
+        x += 32;
+        y += 32;
+    }
+    mfence_lm();
+}
+
+static __device__ inline void taylor_sin(float *C1, float *C3, float *C5, float *C7, float *C9) {
+    *C1 = 1;
+    *C3 = -0.16666666666666666;
+    *C5 = 0.008333333333333333;
+    *C7 = -0.0001984126984126984;
+    *C9 = 2.7557319223985893e-06;
+}
+
+static __device__ inline void taylor_arcsin(float *C1, float *C3, float *C5, float *C7, float *C9) {
+    *C1 = 1;
+    *C3 = 1.0f / 6.0f;
+    *C5 = 3.0f / 40.0f;
+    *C7 = 5.0f / 112.0f;
+    *C9 = 35.0f / 1152.0f;
+}
+
+// standardized input into [-PI, PI] interval
+static __device__ inline void translation_sin(float *input) {
+    float tmp;
+    tmp = *input;
+    int factor = int(*input / PI);
+    tmp = tmp - factor * PI;
+    if (factor % 2 != 0){
+        tmp = -tmp;
+    }
+    *input = tmp;
+}
+
+__device__ inline float nearbyint(float input) {
+    return rint(input);
+}
+
+__device__ inline float rint(float __x) { return __builtin_rintf(__x); }
+
+__device__ inline float sinf(float input) {
+    float C1, C3, C5, C7, C9;
+    taylor_sin(&C1, &C3, &C5, &C7, &C9);
+
+    translation_sin(&input);
+
+    // make the input exist in the [- PI/2, PI/2] interval,
+    // taylor expansion is more effective for this part
+    if (input > (PI / 2)) {
+        input = PI - input;
+    } else if (input < (-PI / 2)) {
+        input = -PI - input;
+    }
+
+    // taylor expansion process
+    float tmp0 = input * input;
+    float tmp1 = tmp0 * input;
+    float tmp2 = tmp1 * tmp0;
+    float tmp3 = tmp2 * tmp0;
+    float tmp4 = tmp3 * tmp0;
+    float result = C1 * input + C3 * tmp1 + C5 * tmp2 + C7 * tmp3 + C9 * tmp4;
+
+    return result;
+}
+
+
+// 把不在 [-pi, pi]的数map到[-pi, pi]区间内，len通常=32
+static __device__ inline void translation_sin(float* input, int len) {
+    for (int k = 0; k < len; k++) {
+        float tmp;
+        tmp = *(input + k);
+        int factor = int(*(input + k) / PI);
+        tmp = tmp - factor * PI;                         //取余数
+        if (factor % 2 != 0) {
+            tmp = -tmp;
+        }
+        *(input + k) = tmp;
+    }
+}
+
+__device__ inline float32x16_t vsinf(float32x16_t input) {
+    float C1, C3, C5, C7, C9;
+    taylor_sin(&C9, &C7, &C5, &C3, &C1);
+
+    // 把转成float32的数在LM进行处理，使得处于区间[-pi, pi]
+    __simd__ float tmp_lm[16];
+    vstore_lm_float32x16(tmp_lm, input);
+    __asm__("mfence{lm}");
+    translation_sin(tmp_lm, 16);
+    __asm__("mfence{lm}");
+
+    float32x16_t tmp1, tmp2, v0l;
+    v0l = vload_lm_float32x16(tmp_lm);
+
+    // 如果x>pi/2, x=pi-x
+    // 如果x< -pi/2, x= -pi -x
+    // 使得所有数都在[-pi/2, pi/2],泰勒展开对这部分比较有效
+    int mask = svle_float32x16(PI / 2, v0l);
+    tmp1 = svsub_float32x16_mz(PI, v0l, mask);
+    tmp2 = svadd_float32x16_mz(0, v0l, ~mask);
+    v0l = vvadd_float32x16(tmp1, tmp2);
+    tmp1 = svmul_float32x16(-1, v0l);
+    mask = svlt_float32x16(PI / 2, tmp1);
+    tmp1 = svsub_float32x16_mz(-PI, v0l, mask);
+    tmp2 = svadd_float32x16_mz(0, v0l, ~mask);
+    v0l = vvadd_float32x16(tmp1, tmp2);
+
+    //泰勒展开过程
+    tmp1 = vvmul_float32x16(v0l, v0l);      // tmp0 = a*a
+    tmp2 = svmul_float32x16(C1, tmp1);      // C1*tmp0
+    tmp2 = svadd_float32x16(C3, tmp2);      // C3 + C1*tmp0
+    tmp2 = vvmul_float32x16(tmp2, tmp1);    // C3*tmp0 + C1*tmp0*tmp0
+    tmp2 = svadd_float32x16(C5, tmp2);      // C5 + C3*tmp0 + C1*tmp0*tmp0
+    tmp2 = vvmul_float32x16(tmp2, tmp1);    // C5*tmp0 + C3*tmp0*tmp0 + C1*tmp0*tmp0*tmp0
+    tmp2 = svadd_float32x16(C7, tmp2);      // C7 + C5*tmp0 + C3*tmp0*tmp0 + C1*tmp0*tmp0*tmp0
+    tmp2 = vvmul_float32x16(tmp2, tmp1);    // C7*tmp0 + C5*tmp0 + C3*tmp0*tmp0 + C1*tmp0*tmp0*tmp0
+    tmp2 = svadd_float32x16(C9, tmp2);
+    v0l = vvmul_float32x16(tmp2, v0l);
+
+    return v0l;
+}
+
+__device__ inline float16x32_t vsinf(float16x32_t input) {
+    float32x16_t vl_input = vfp162float_l(input);
+    float32x16_t vh_input = vfp162float_h(input);
+    float32x16_t vl_sin = vsinf(vl_input);
+    float32x16_t vh_sin = vsinf(vh_input);
+    float16x32_t v_sin = vfloat2fp16_lh(vl_sin, vh_sin);
+    return v_sin;
+}
+
+// 先把cos函数平移成sin函数，再把不在 [-pi, pi]的数map到[-pi, pi]区间内，len通常=32
+static __device__ inline void translation_cos(float* input, int len) {
+    for (int k = 0; k < len; k++) {
+        float tmp = *(input + k) + PI / 2;                 //平移
+        int factor = int(tmp / PI);
+        tmp = tmp - factor * PI;
+        if (factor % 2 != 0) {
+            tmp = -tmp;
+        }
+        *(input + k) = tmp;
+    }
+}
+
+__device__ inline float32x16_t vcosf(float32x16_t input) {
+    float C1, C3, C5, C7, C9;
+    taylor_sin(&C9, &C7, &C5, &C3, &C1);
+
+    // 把转成float32的数在LM进行处理，使得处于区间[-pi, pi]
+    __simd__ float tmp_lm[16];
+    vstore_lm_float32x16(tmp_lm, input);
+    __asm__("mfence{lm}");
+    translation_cos(tmp_lm, 16);
+    __asm__("mfence{lm}");
+
+    float32x16_t tmp1, tmp2, v0l;
+    v0l = vload_lm_float32x16(tmp_lm);
+
+    // 如果x>pi/2, x=pi-x
+    // 如果x< -pi/2, x= -pi -x
+    // 使得所有数都在[-pi/2, pi/2],泰勒展开对这部分比较有效
+    int mask = svle_float32x16(PI / 2, v0l);
+    tmp1 = svsub_float32x16_mz(PI, v0l, mask);
+    tmp2 = svadd_float32x16_mz(0, v0l, ~mask);
+    v0l = vvadd_float32x16(tmp1, tmp2);
+    tmp1 = svmul_float32x16(-1, v0l);
+    mask = svlt_float32x16(PI / 2, tmp1);
+    tmp1 = svsub_float32x16_mz(-PI, v0l, mask);
+    tmp2 = svadd_float32x16_mz(0, v0l, ~mask);
+    v0l = vvadd_float32x16(tmp1, tmp2);
+
+    //泰勒展开过程
+    tmp1 = vvmul_float32x16(v0l, v0l);
+    tmp2 = svmul_float32x16(C1, tmp1);
+    tmp2 = svadd_float32x16(C3, tmp2);
+    tmp2 = vvmul_float32x16(tmp2, tmp1);
+    tmp2 = svadd_float32x16(C5, tmp2);
+    tmp2 = vvmul_float32x16(tmp2, tmp1);
+    tmp2 = svadd_float32x16(C7, tmp2);
+    tmp2 = vvmul_float32x16(tmp2, tmp1);
+    tmp2 = svadd_float32x16(C9, tmp2);
+    v0l = vvmul_float32x16(tmp2, v0l);
+
+    return v0l;
+}
+
+__device__ inline float16x32_t vcosf(float16x32_t input) {
+    float32x16_t vl_input = vfp162float_l(input);
+    float32x16_t vh_input = vfp162float_h(input);
+    float32x16_t vl_cos = vcosf(vl_input);
+    float32x16_t vh_cos = vcosf(vh_input);
+    float16x32_t v_cos = vfloat2fp16_lh(vl_cos, vh_cos);
+    return v_cos;
+}
+
+// Translate cos into sin, convert to [-PI, PI]
+static __device__ inline void translation_cos(float* input) {
+    float tmp;
+    tmp = *input + PI / 2;
+    int factor = int(tmp / PI);
+    tmp = tmp - factor * PI;
+    if (factor % 2 != 0){
+        tmp = -tmp;
+    }
+    *input = tmp;
+}
+
+extern __device__ inline float cosf(float input) {
+    float C1, C3, C5, C7, C9;
+    taylor_sin(&C1, &C3, &C5, &C7, &C9);
+
+    translation_cos(&input);
+
+    // make the input exist in the [-PI/2, PI/2]
+    if (input > (PI / 2)) {
+        input = PI - input;
+    } else if (input < (-PI / 2)) {
+        input = -PI - input;
+    }
+
+    // taylor expansion process
+    float tmp0 = input * input;
+    float tmp1 = tmp0 * input;
+    float tmp2 = tmp1 * tmp0;
+    float tmp3 = tmp2 * tmp0;
+    float tmp4 = tmp3 * tmp0;
+    float result = C1 * input + C3 * tmp1 + C5 * tmp2 + C7 * tmp3 + C9 * tmp4;
+
+    return result;
+}
+
+
+
+static __device__ inline void translation_tan(float* input) {
+    float tmp = *input;
+    int factor = int(tmp / (PI/2));
+    tmp = tmp - factor * (PI/2);
+    if (factor % 2 != 0) {
+         if (factor > 0) {
+             tmp = tmp - (PI/2);
+         } else if (factor < 0) {
+             tmp = tmp + (PI/2);
+         }
+    }
+    *input = tmp;
+}
+
+__device__ inline float tanf(float input) {
+    float C1, C3, C5, C7, C9;
+    taylor_sin(&C1, &C3, &C5, &C7, &C9);
+
+    translation_tan(&input);
+
+    // sin
+    float tmp0 = input * input;
+    float tmp1 = tmp0 * input;
+    float tmp2 = tmp1 * tmp0;
+    float tmp3 = tmp2 * tmp0;
+    float tmp4 = tmp3 * tmp0;
+    float result_sin = C1 * input + C3 * tmp1 + C5 * tmp2 + C7 * tmp3 + C9 * tmp4;
+
+    // cos
+    input = input + PI/2;
+    if (input > (PI/2)) {
+        input = PI - input;  // sin (pi-x) = sin x
+    }
+
+    tmp0 = input * input;
+    tmp1 = tmp0 * input;
+    tmp2 = tmp1 * tmp0;
+    tmp3 = tmp2 * tmp0;
+    tmp4 = tmp3 * tmp0;
+    float result_cos = C1 * input + C3 * tmp1 + C5 * tmp2 + C7 * tmp3 + C9 * tmp4;
+
+    return result_sin/result_cos;
+}
+
+static __device__ inline void translation_arcsin(float* input) {
+    float tmp;
+    tmp = *input;
+    if (tmp < 0) {tmp = -tmp;}
+    if (tmp > 0.62f){
+        tmp = sqrt(1.0f - tmp * tmp);
+    }
+    *input = tmp;
+}
+
+// There is no feedback when the input is not [- 1, 1]
+__device__ inline float asinf(float input) {
+    float C1, C3, C5, C7, C9;
+    taylor_arcsin(&C1, &C3, &C5, &C7, &C9);
+
+    float input_ori = input;
+    translation_arcsin(&input);  // The interval becomes [0, 0.62]
+
+    float tmp0 = input * input;
+    float tmp1 = tmp0 * input;
+    float tmp2 = tmp1 * tmp0;
+    float tmp3 = tmp2 * tmp0;
+    float tmp4 = tmp3 * tmp0;
+    float result = C1 * input + C3 * tmp1 + C5 * tmp2 + C7 * tmp3 + C9 * tmp4;
+
+    if (input_ori > 0.62f || input_ori < -0.62f) {
+        result = PI/2 - result;
+    }
+    if (input_ori < 0) {
+        result = - result;
+    }
+
+    return result;
+}
+
+__device__ inline float acosf(float input) {
+    float result = PI/2 - asinf(input);
+    return result;
+}
+
+__device__ inline float atanf(float input) {
+    input = input / sqrt(1.0f + input * input);
+    float result = asinf(input);
+    return result;
+}
+
+__device__ inline float atan2f(float input, float other) {
+    if (other > 0) {
+        return atanf(input / other);
+    } else if (other < 0 && input >= 0) {
+        return atanf(input / other) + PI;
+    } else if (other < 0 && input < 0) {
+        return atanf(input / other) - PI;
+    } else if (other == 0 && input > 0) {
+        return PI / 2;
+    } else if (other == 0 && input < 0) {
+        return -PI / 2;
+    } else {
+        return 0;
+    }
+}
+
+__device__ inline float sinhf(float input) {
+    float tmp = exp(input);
+    float result = (tmp-1.0f/tmp)/2;
+    return result;
+}
+
+__device__ inline float coshf(float input) {
+    float tmp = exp(input);
+    float result = (tmp+1.0f/tmp)/2;
+    return result;
+}
+
+__device__ inline float tanhf(float input) {
+    float tmp = exp(input);
+    float result = (tmp-1.0f/tmp)/(tmp+1.0f/tmp);
+    return result;
+}
+
+__device__ inline float32x16_t vtanhf(float32x16_t input) {
+    int len = 16;
+    __simd__ float input_lm[len];
+    __simd__ float exp_lm[len];
+    __simd__ float inv_exp_lm[len];
+    vstore_lm_float32x16(input_lm, input);
+    mfence_lm();
+    for (int k = 0; k < len; k++) {
+        float input_tmp = *(input_lm + k);
+        float exp_tmp = exp(input_tmp);
+        float inv_exp_tmp = 1 / exp_tmp;
+        *(exp_lm + k) = exp_tmp;
+        *(inv_exp_lm + k) = inv_exp_tmp;
+    }
+    mfence_lm();
+    float32x16_t _exp = vload_lm_float32x16(exp_lm);
+    float32x16_t _inv_exp = vload_lm_float32x16(inv_exp_lm);
+    float32x16_t _sub = vvsub_float32x16(_exp, _inv_exp);
+    float32x16_t _add = vvadd_float32x16(_exp, _inv_exp);
+    vstore_lm_float32x16(exp_lm, _sub);
+    vstore_lm_float32x16(inv_exp_lm, _add);
+    mfence_lm();
+    for (int k = 0; k < len; k++) {
+        float sub_tmp = *(exp_lm + k);
+        float add_tmp = *(inv_exp_lm + k);
+        float res_tmp = sub_tmp / add_tmp;
+        *(input_lm + k) = res_tmp;
+    }
+    mfence_lm();
+    float32x16_t res = vload_lm_float32x16(input_lm);
+    return res;
+}
+
+__device__ inline float16x32_t hvtanh(float16x32_t input) {
+    float32x16_t vl_input = vfp162float_l(input);
+    float32x16_t vh_input = vfp162float_h(input);
+    float32x16_t vl_tanh = vcosf(vl_input);
+    float32x16_t vh_tanh = vcosf(vh_input);
+    float16x32_t v_tanh = vfloat2fp16_lh(vl_tanh, vh_tanh);
+    return v_tanh;
+}
+
+__device__ inline float asinhf(float input) {
+    float result = log(input + sqrt(1.0f + input * input));
+    return result;
+}
+
+__device__ inline float acoshf(float input) {
+    float result = log(input + sqrt(-1.0f + input * input));
+    return result;
+}
+
+__device__ inline float atanhf(float input) {
+    float result = log((1.0f + input)/(1.0f - input)) / 2;
+    return result;
+}
+
+// other
+__device__ inline float rsqrtf(float input) {
+    return 1.0f / sqrt(input);
+}
+
+__device__ inline double rsqrtf(double input) {
+    return 1.0f / sqrt(input);
+}
+
+__device__ inline float __fsqrt_rn(float __a) {
+  float ret;
+  asm volatile("sqrt.f.rn %0, %1" : "=r"(ret) : "r"(__a));
+  return ret;
+}
+
+__device__ inline double __dsqrt_rn(double __a) {
+  double dsqrt = sqrt(__a);
+  double rounded_dsqrt = static_cast<double>(dsqrt);
+  return rounded_dsqrt;
+}
+
+__device__ inline float pow(float input1, float input2) {
+    float ret;
+    float mul_res;
+    float log_res;
+    if (input1 > 0.0f) {
+      log_res = __builtin_xpu_log2f(input1);
+      mul_res = __builtin_xpu_mulf(log_res, input2);
+      ret = __builtin_xpu_exp2f(mul_res);
+    } else if ((input1 < 0.0f) && (rint(input2) != input2)) { // intput1 is negative and input2 is not integer
+      ret = __builtin_nanf ("");
+    } else if (input2 == 0.0f) {
+      ret = 1.0f;
+    } else if (input1 == 0.0f && input2 > 0.0f) {
+      ret = 0.0f;
+    } else if (input1 == 0.0f && input2 < 0.0f) {
+      ret = __builtin_inff();
+    } else if (rint(0.5f * input2) == (0.5f * input2)) { // input2 is even
+      log_res = __builtin_xpu_log2f(-input1);
+      mul_res = __builtin_xpu_mulf(log_res, input2);
+      ret = __builtin_xpu_exp2f(mul_res);
+    } else {
+      log_res = __builtin_xpu_log2f(-input1);
+      mul_res = __builtin_xpu_mulf(log_res, input2);
+      ret = -__builtin_xpu_exp2f(mul_res);
+    }
+    return ret;
+}
+
+__device__ inline int32_t ffs(int32_t x) {
+    if (x == 0) return 0;
+
+    int32_t position = 1;
+
+    // Check lower half (16 bits)
+    if ((x & 0x0000FFFF) == 0) {
+        x >>= 16;
+        position += 16;
+    }
+    // Check lower 8 bits of the current half
+    if ((x & 0x000000FF) == 0) {
+        x >>= 8;
+        position += 8;
+    }
+    // Check lower 4 bits of the current quarter
+    if ((x & 0x0000000F) == 0) {
+        x >>= 4;
+        position += 4;
+    }
+    // Check lower 2 bits of the current nibble
+    if ((x & 0x00000003) == 0) {
+        x >>= 2;
+        position += 2;
+    }
+    // Check the lowest bit of the current pair
+    if ((x & 0x00000001) == 0) {
+        position += 1;
+    }
+
+    return position;
+}
+
+__device__ inline float log1pf(float input) {
+    return log(input + 1.0f);
+}
+
+__device__ inline float expm1f(float input) {
+    return exp(input) - 1.0f;
+}
+
+__device__  inline uint64_t asuint64(double f) {
+  union {
+    double _f;
+    uint64_t _i;
+  } u;
+  u._f = f;
+  return u._i;
+}
+
+/* Top 12 bits of a double (sign and exponent bits).  */
+__device__ inline uint32_t top12(double x) {
+    return asuint64(x) >> 52;
+}
+
+__device__ inline uint32_t asuint(float f) {
+  union {
+    float _f;
+    uint32_t _i;
+  } u;
+  u._f = f;
+  return u._i;
+}
+
+__device__ inline double eval_as_double(double x) {
+  double y = x;
+  return y;
+}
+
+__device__  inline double asdouble(uint64_t i) {
+  union {
+    uint64_t _i;
+    double _f;
+  } u;
+  u._i = i;
+  return u._f;
+}
+
+__device__ inline float eval_as_float(float x) {
+  float y = x;
+  return y;
+}
+
+__device__ inline float exp2f(float x) {
+    int N = 32;
+    uint32_t abstop;
+    uint64_t ki, t;
+    double kd, xd, z, r, r2, y, s;
+    uint64_t T[32] = {
+        0x3ff0000000000000, 0x3fefd9b0d3158574, 0x3fefb5586cf9890f, 0x3fef9301d0125b51, 0x3fef72b83c7d517b,
+        0x3fef54873168b9aa, 0x3fef387a6e756238, 0x3fef1e9df51fdee1, 0x3fef06fe0a31b715, 0x3feef1a7373aa9cb,
+        0x3feedea64c123422, 0x3feece086061892d, 0x3feebfdad5362a27, 0x3feeb42b569d4f82, 0x3feeab07dd485429,
+        0x3feea47eb03a5585, 0x3feea09e667f3bcd, 0x3fee9f75e8ec5f74, 0x3feea11473eb0187, 0x3feea589994cce13,
+        0x3feeace5422aa0db, 0x3feeb737b0cdc5e5, 0x3feec49182a3f090, 0x3feed503b23e255d, 0x3feee89f995ad3ad,
+        0x3feeff76f2fb5e47, 0x3fef199bdd85529c, 0x3fef3720dcef9069, 0x3fef5818dcfba487, 0x3fef7c97337b9b5f,
+        0x3fefa4afa2a490da, 0x3fefd0765b6e4540,
+    };
+    double SHIFT = 0x1.8p+52 / N;
+    xd = (double)x;
+    abstop = top12(x) & 0x7ff;
+    if (predict_false(abstop >= top12(128.0f))) {
+        /* |x| >= 128 or x is nan.  */
+        if (asuint(x) == asuint(-INFINITY))
+        return 0.0f;
+        if (abstop >= top12(INFINITY))
+        return x + x;
+        if (x > 0.0f)
+        return 0;
+        if (x <= -150.0f)
+        return 0;
+    }
+
+    /* x = k/N + r with r in [-1/(2N), 1/(2N)] and int k.  */
+    kd = eval_as_double(xd + SHIFT);
+    ki = asuint64(kd);
+    kd -= SHIFT; /* k/N for int k.  */
+    r = xd - kd;
+
+    /* exp2(x) = 2^(k/N) * 2^r ~= s * (C0*r^3 + C1*r^2 + C2*r + 1) */
+    t = T[ki % N];
+    t += ki << (52 - 5);
+    s = asdouble(t);
+    z = 0x1.c6af84b912394p-5 * r + 0x1.ebfce50fac4f3p-3;
+    r2 = r * r;
+    y = 0x1.62e42ff0c52d6p-1 * r + 1;
+    y = z * r2 + y;
+    y = y * s;
+    return eval_as_float(y);
+}
+
+__device__ inline float roundf(float input) {
+    return (input > 0.0) ? floor(input + 0.5) : ceil(input - 0.5);
+}
+
+__device__ inline float log2f(float input) {
+    return log(input) / LN2;
+}
+
+__device__ inline float log10f(float input) {
+    return log(input) / LN10;
+}
+
+__device__ inline float xpu_sqrt(float input) {
+    return sqrt(input);
+}
+
+__device__ inline double xpu_sqrt(double input) {
+    return sqrt(input);
+}
+
+__device__ inline float xpu_floor(float input) {
+    return floor(input);
+}
+
+__device__ inline double xpu_floor(double input) {
+    return floor(input);
+}
+
+__device__ inline float xpu_ceil(float input) {
+    return ceil(input);
+}
+
+__device__ inline double xpu_ceil(double input) {
+    return ceil(input);
+}
+
+__device__ inline int32_t xpu_min(int32_t a, int32_t b) {
+    return min(a, b);
+}
+
+__device__ inline uint32_t xpu_min(uint32_t a, uint32_t b) {
+    return min(a, b);
+}
+
+__device__ inline int64_t xpu_min(int64_t a, int64_t b) {
+    return min(a, b);
+}
+
+__device__ inline uint64_t xpu_min(uint64_t a, uint64_t b) {
+    return min(a, b);
+}
+
+__device__ inline float xpu_min(float a, float b) {
+    return min(a, b);
+}
+
+__device__ inline double xpu_min(double a, double b) {
+    return min(a, b);
+}
+
+__device__ inline int32_t xpu_max(int32_t a, int32_t b) {
+    return max(a, b);
+}
+
+__device__ inline uint32_t xpu_max(uint32_t a, uint32_t b) {
+    return max(a, b);
+}
+
+__device__ inline int64_t xpu_max(int64_t a, int64_t b) {
+    return max(a, b);
+}
+
+__device__ inline uint64_t xpu_max(uint64_t a, uint64_t b) {
+    return max(a, b);
+}
+
+__device__ inline float xpu_max(float a, float b) {
+    return max(a, b);
+}
+
+__device__ inline double xpu_max(double a, double b) {
+    return max(a, b);
+}
+
+__device__ inline float fma(float x, float y, float z) {
+    return x * y + z;
+}
+
+__device__ inline float erf(float x) {
+    float a1 =  0.254829592;
+    float a2 = -0.284496736;
+    float a3 =  1.421413741;
+    float a4 = -1.453152027;
+    float a5 =  1.061405429;
+    float p  =  0.3275911;
+
+    int sign = 1;
+    if (x < 0) {
+        sign = -1;
+    }
+    x = fabs(x);
+
+    float t = 1.0 / (1.0 + p * x);
+    float y = (((((a5 * t + a4) * t) + a3) * t + a2) * t + a1) * t;
+    float result = 1 - (y * exp(-x * x));
+    return sign * result;
+}
+
+__device__ inline float erfc(float x) {
+    return 1.0f - erf(x);
+}
+
+ __device__ inline float erfinv(float x) {
+    if (x < -1.0f || x > 1.0f) {
+        return __builtin_nanf("");
+    } else if (x == 1.0f) {
+        return INFINITY;
+    } else if (x == -1.0f) {
+        return -INFINITY;
+    }
+
+    float a0 = 1.1975323115670912564578e0;
+    float a1 = 4.7072688112383978012285e1;
+    float a2 = 6.9706266534389598238465e2;
+    float a3 = 4.8548868893843886794648e3;
+    float a4 = 1.6235862515167575384252e4;
+    float a5 = 2.3782041382114385731252e4;
+    float a6 = 1.1819493347062294404278e4;
+    float a7 = 8.8709406962545514830200e2;
+
+    float b0 = 1.0000000000000000000e0;
+    float b1 = 4.2313330701600911252e1;
+    float b2 = 6.8718700749205790830e2;
+    float b3 = 5.3941960214247511077e3;
+    float b4 = 2.1213794301586595867e4;
+    float b5 = 3.9307895800092710610e4;
+    float b6 = 2.8729085735721942674e4;
+    float b7 = 5.2264952788528545610e3;
+
+    float c0 = 1.42343711074968357734e0;
+    float c1 = 4.63033784615654529590e0;
+    float c2 = 5.76949722146069140550e0;
+    float c3 = 3.64784832476320460504e0;
+    float c4 = 1.27045825245236838258e0;
+    float c5 = 2.41780725177450611770e-1;
+    float c6 = 2.27238449892691845833e-2;
+    float c7 = 7.74545014278341407640e-4;
+
+    float d0 = 1.4142135623730950488016887e0;
+    float d1 = 2.9036514445419946173133295e0;
+    float d2 = 2.3707661626024532365971225e0;
+    float d3 = 9.7547832001787427186894837e-1;
+    float d4 = 2.0945065210512749128288442e-1;
+    float d5 = 2.1494160384252876777097297e-2;
+    float d6 = 7.7441459065157709165577218e-4;
+    float d7 = 1.4859850019840355905497876e-9;
+
+    float e0 = 6.65790464350110377720e0;
+    float e1 = 5.46378491116411436990e0;
+    float e2 = 1.78482653991729133580e0;
+    float e3 = 2.96560571828504891230e-1;
+    float e4 = 2.65321895265761230930e-2;
+    float e5 = 1.24266094738807843860e-3;
+    float e6 = 2.71155556874348757815e-5;
+    float e7 = 2.01033439929228813265e-7;
+
+    float f0 = 1.414213562373095048801689e0;
+    float f1 = 8.482908416595164588112026e-1;
+    float f2 = 1.936480946950659106176712e-1;
+    float f3 = 2.103693768272068968719679e-2;
+    float f4 = 1.112800997078859844711555e-3;
+    float f5 = 2.611088405080593625138020e-5;
+    float f6 = 2.010321207683943062279931e-7;
+    float f7 = 2.891024605872965461538222e-15;
+
+    float abs_x = fabs(x);
+
+    if (abs_x <= 0.85f) {
+        float r = 0.180625f - 0.25f * x * x;
+        float num = (((((((a7 * r + a6) * r + a5) * r + a4) * r + a3) * r + a2) * r + a1) * r + a0);
+        float den = (((((((b7 * r + b6) * r + b5) * r + b4) * r + b3) * r + b2) * r + b1) * r + b0);
+        return x * num / den;
+    }
+
+    float r = sqrt(LN2 - log(1.0f - abs_x));
+
+    float num, den;
+    if (r <= 5.0f) {
+        r = r - 1.6f;
+        num = (((((((c7 * r + c6) * r + c5) * r + c4) * r + c3) * r + c2) * r + c1) * r + c0);
+        den = (((((((d7 * r + d6) * r + d5) * r + d4) * r + d3) * r + d2) * r + d1) * r + d0);
+    } else {
+        r = r - 5.0f;
+        num = (((((((e7 * r + e6) * r + e5) * r + e4) * r + e3) * r + e2) * r + e1) * r + e0);
+        den = (((((((f7 * r + f6) * r + f5) * r + f4) * r + f3) * r + f2) * r + f1) * r + f0);
+    }
+
+    float sign = x >= 0.0f ? 1.0f : -1.0f;
+    return num / den * sign;
+}
+
+__device__ inline float32x16_t verf(float32x16_t vl) {
+    // 定义 erf 中使用的常数
+    float a1 =  0.254829592;
+    float a2 = -0.284496736;
+    float a3 =  1.421413741;
+    float a4 = -1.453152027;
+    float a5 =  1.061405429;
+    float p  =  0.3275911;
+
+    __simd__ float expx2[16];
+    __simd__ float t[16];
+    float32x16_t tmp1, tmp2, tmp;
+    int signl;
+
+    // 计算 x 的平方
+    tmp1 = vvmul_float32x16(vl, vl);
+    vstore_lm_float32x16(expx2, tmp1);
+
+    // 计算 |x|
+    signl = svlt_float32x16(0, vl);    // x>0
+    tmp1 = svmul_float32x16_mz(1, vl, signl);
+    tmp2 = svmul_float32x16_mz(-1, vl, ~signl);
+    tmp = vvadd_float32x16(tmp1, tmp2);
+    vstore_lm_float32x16(t, tmp);
+
+    // 计算 t = 1.0 / (1.0 + p * |x|)
+    mfence_lm();
+    for (int k = 0; k < 16; k++) {
+        expx2[k] = exp(-expx2[k]);
+        t[k] = 1.0f / (1.0f + p * t[k]);
+    }
+    mfence_lm();
+
+    // 计算 erf 多项式 (((((a5 * t + a4) * t) + a3) * t + a2) * t + a1) * t
+    vl = vload_lm_float32x16(t);
+    tmp1 = svmul_float32x16(a5, vl);
+    tmp1 = svadd_float32x16(a4, tmp1);
+    tmp1 = vvmul_float32x16(tmp1, vl);
+    tmp1 = svadd_float32x16(a3, tmp1);
+    tmp1 = vvmul_float32x16(tmp1, vl);
+    tmp1 = svadd_float32x16(a2, tmp1);
+    tmp1 = vvmul_float32x16(tmp1, vl);
+    tmp1 = svadd_float32x16(a1, tmp1);
+    tmp1 = vvmul_float32x16(tmp1, vl);
+
+    // 计算 *exp(-x^2)
+    vl = vload_lm_float32x16(expx2);
+    vl = vvmul_float32x16(vl, tmp1);
+    vl = svsub_float32x16(1, vl);
+
+    // sign ? y : -y
+    tmp1 = svmul_float32x16_mz(1, vl, signl);
+    tmp2 = svmul_float32x16_mz(-1, vl, ~signl);
+    vl = vvadd_float32x16(tmp1, tmp2);
+
+    return vl;
+}
+
+#define CHAR_BIT  8
+typedef int32_t si_int;
+typedef uint32_t su_int;
+typedef int64_t di_int;
+typedef uint64_t du_int;
+
+typedef union {
+  di_int all;
+  struct {
+    su_int low;
+    si_int high; // _YUGA_LITTLE_ENDIAN
+  } s;
+} dwords;
+
+static __device__ inline di_int __muldsi3(su_int a, su_int b) {
+  dwords r;
+  const int bits_in_word_2 = (int)(sizeof(si_int) * CHAR_BIT) / 2;
+  const su_int lower_mask = (su_int)~0 >> bits_in_word_2;
+  r.s.low = (a & lower_mask) * (b & lower_mask);
+  su_int t = r.s.low >> bits_in_word_2;
+  r.s.low &= lower_mask;
+  t += (a >> bits_in_word_2) * (b & lower_mask);
+  r.s.low += (t & lower_mask) << bits_in_word_2;
+  r.s.high = t >> bits_in_word_2;
+  t = r.s.low >> bits_in_word_2;
+  r.s.low &= lower_mask;
+  t += (b >> bits_in_word_2) * (a & lower_mask);
+  r.s.low += (t & lower_mask) << bits_in_word_2;
+  r.s.high += t >> bits_in_word_2;
+  r.s.high += (a >> bits_in_word_2) * (b >> bits_in_word_2);
+  return r.all;
+}
+
+static __device__ inline di_int __muldi3(di_int a, di_int b) {
+  dwords x;
+  x.all = a;
+  dwords y;
+  y.all = b;
+  dwords r;
+  r.all = __muldsi3(x.s.low, y.s.low);
+  r.s.high += x.s.high * y.s.low + x.s.low * y.s.high;
+  return r.all;
+}
+
+__device__ inline int32_t mulhi (int32_t a, int32_t b) {
+    int64_t product = __muldi3((int64_t)a, (int64_t)b);
+    int32_t high_part = (int32_t)(product >> 32);
+    return high_part;
+}
+
+__device__ inline uint32_t umulhi (uint32_t a, uint32_t b) {
+    int64_t product = __muldi3((int64_t)a, (int64_t)b);
+    uint32_t high_part = (uint32_t)(product >> 32);
+    return high_part;
+}
+
+
+__device__ inline uint32_t __FLOAT_BITS(float __f) {
+  union {
+    float __f;
+    uint32_t __i;
+  } __u;
+  __u.__f = __f;
+  return __u.__i;
+}
+
+__device__ inline int32_t isnan(float x) {
+    return (__FLOAT_BITS(x) & 0x7fffffffU) > 0x7f800000U;
+}
+
+__device__ inline int32_t isinf(float __a) {
+    uint32_t bits = *reinterpret_cast<uint32_t *>(&__a);
+    uint32_t exponentMask = 0x7F800000U;
+    uint32_t fractionMask = 0x007FFFFFU;
+    uint32_t exponent = bits & exponentMask;
+    uint32_t fraction = bits & fractionMask;
+    return (exponent == exponentMask) && (fraction == 0);
+}
+
+__device__ inline int32x16_t visinf(float32x16_t vx0) {
+    vx0 = reinterpret_cast<float32x16_t>(svand_int32x16(0x7FFFFFFF, reinterpret_cast<int32x16_t>(vx0)));
+    int32x16_t mask0 = sveq_int32x16(0x7F800000, reinterpret_cast<int32x16_t>(vx0));
+    return mask0;
+}
+
+__device__ inline int32_t finitef(float __a) {
+  unsigned int *valueAsBits = reinterpret_cast<unsigned int *>(&__a);
+  unsigned int exponentMask = 0x7F800000U;
+  unsigned int fractionMask = 0x007FFFFFU;
+  unsigned int exponent = (*valueAsBits) & exponentMask;
+  unsigned int fraction = (*valueAsBits) & fractionMask;
+  return (exponent != exponentMask) || (fraction != 0) && (exponent == 0);
+}
+
+
+__device__ inline float __fdiv_rn(float __a, float __b) {
+  float ret;
+  asm volatile("div.f.rn %0, %1, %2" : "=r"(ret) : "r"(__a), "r"(__b));
+  return ret;
+}
+
+__device__ inline double __ddiv_rn(double __a, double __b) {
+  double div = __a / __b;
+  double rounded_div = static_cast<double>(div);
+  return rounded_div;
+}
+
+__device__ inline float __fdiv_rz(float __a, float __b) {
+  float ret;
+  asm volatile("div.f.rz %0, %1, %2" : "=r"(ret) : "r"(__a), "r"(__b));
+    return ret;
+}
+
+
+__device__ inline double __ddiv_rz(double __a, double __b) {
+  double div = __a / __b;
+  double rounded_div = static_cast<double>(div);
+  return rounded_div;
+}
+
+__device__ inline float __fdiv_rd(float __a, float __b) {
+  float ret;
+  asm volatile("div.f.rd %0, %1, %2" : "=r"(ret) : "r"(__a), "r"(__b));
+  return ret;
+}
+
+__device__ inline double __ddiv_rd(double __a, double __b) {
+  double div = __a / __b;
+  double rounded_div = static_cast<double>(div);
+  return rounded_div;
+}
+
+__device__ inline float truncf(float input) { return __builtin_truncf(input); }
+
+__device__ inline double trunc(double x) {
+  union {
+    double f;
+    uint64_t i;
+  } u = {x};
+  int e = (int)(u.i >> 52 & 0x7ff) - 0x3ff + 12;
+  uint64_t m;
+  if (e >= 52 + 12)
+    return x;
+  if (e < 12)
+    e = 1;
+  m = -1ULL >> e;
+  if ((u.i & m) == 0)
+    return x;
+  u.i &= ~m;
+  return u.f;
+}
+
+
+__device__ inline float xpu_trunc(float x, float y) {
+  float output_temp1 = x / y;
+  float z = floor(output_temp1);
+  float output_temp2 = fabs(z);
+  z = z + output_temp2;
+  z = z / 2;
+
+  output_temp1 = -output_temp1;
+  output_temp1 = floor(output_temp1);
+  output_temp2 = fabs(output_temp1);
+  output_temp1 = output_temp1 + output_temp2;
+  output_temp1 = output_temp1 / 2;
+  output_temp1 = -output_temp1;
+  z = z + output_temp1;
+  return z;
+}
+
+__device__ inline bool isnanf(float x) { return __builtin_isnan(x); }
+
+__device__ inline float fmodf(float x, float y) {
+  union {
+    float f;
+    unsigned i;
+  } ux = {x}, uy = {y};
+  int ex = ux.i >> 23 & 0xff;
+  int ey = uy.i >> 23 & 0xff;
+  unsigned sx = ux.i & 0x80000000;
+  unsigned i;
+  unsigned uxi = ux.i;
+
+  if (uy.i << 1 == 0 || isnanf(y) || ex == 0xff)
+    return (x * y) / (x * y);
+  if (uxi << 1 <= uy.i << 1) {
+    if (uxi << 1 == uy.i << 1)
+      return 0 * x;
+    return x;
+  }
+
+  /* normalize x and y */
+  if (!ex) {
+    for (i = uxi << 9; i >> 31 == 0; ex--, i <<= 1)
+      ;
+    uxi <<= -ex + 1;
+  } else {
+    uxi &= -1U >> 9;
+    uxi |= 1U << 23;
+  }
+  if (!ey) {
+    for (i = uy.i << 9; i >> 31 == 0; ey--, i <<= 1)
+      ;
+    uy.i <<= -ey + 1;
+  } else {
+    uy.i &= -1U >> 9;
+    uy.i |= 1U << 23;
+  }
+
+  /* x mod y */
+  for (; ex > ey; ex--) {
+    i = uxi - uy.i;
+    if (i >> 31 == 0) {
+      if (i == 0)
+        return 0 * x;
+      uxi = i;
+    }
+    uxi <<= 1;
+  }
+  i = uxi - uy.i;
+  if (i >> 31 == 0) {
+    if (i == 0)
+      return 0 * x;
+    uxi = i;
+  }
+  for (; uxi >> 23 == 0; uxi <<= 1, ex--)
+    ;
+
+  /* scale result up */
+  if (ex > 0) {
+    uxi -= 1U << 23;
+    uxi |= (unsigned)ex << 23;
+  } else {
+    uxi >>= -ex + 1;
+  }
+  uxi |= sx;
+  ux.i = uxi;
+  return ux.f;
+}
+
+
+__device__ inline int __signbitf(float a) {
+  return a < 0.f;
+}
+
+// float16
+#ifdef __arch_xpu3__
+__device__ inline float fp16tofp32(float16 input) {
+    __simd__ float16 _input[32] = {input};
+    __simd__ float _input_fp32[32];
+    fp16tofp32(_input, _input_fp32, 1);
+    return _input_fp32[0];
+}
+
+__device__ inline float16 fp32tofp16(float input) {
+    __simd__ float _input[32] = {input};
+    __simd__ float16 _input_fp16[32];
+    fp32tofp16(_input, _input_fp16, 1);
+    return _input_fp16[0];
+}
+
+__device__ inline float16 hsin(float16 input) {
+    float input_fp32 = fp16tofp32(input);
+    float result_fp32 = sinf(input_fp32);
+    return fp32tofp16(result_fp32);
+}
+
+__device__ inline float16 hcos(float16 input) {
+    float input_fp32 = fp16tofp32(input);
+    float result_fp32 = cosf(input_fp32);
+    return fp32tofp16(result_fp32);
+}
+
+__device__ inline float16 htan(float16 input) {
+    float input_fp32 = fp16tofp32(input);
+    float result_fp32 = tanf(input_fp32);
+    return fp32tofp16(result_fp32);
+}
+
+__device__ inline float16 hasin(float16 input) {
+    float input_fp32 = fp16tofp32(input);
+    float result_fp32 = asinf(input_fp32);
+    return fp32tofp16(result_fp32);
+}
+
+__device__ inline float16 hacos(float16 input) {
+    float input_fp32 = fp16tofp32(input);
+    float result_fp32 = acosf(input_fp32);
+    return fp32tofp16(result_fp32);
+}
+
+__device__ inline float16 htanh(float16 input) {
+    float input_fp32 = fp16tofp32(input);
+    float result_fp32 = tanhf(input_fp32);
+    return fp32tofp16(result_fp32);
+}
+
+__device__ inline float16 hasinh(float16 input) {
+    float input_fp32 = fp16tofp32(input);
+    float result_fp32 = asinhf(input_fp32);
+    return fp32tofp16(result_fp32);
+}
+
+__device__ inline float16 hacosh(float16 input) {
+    float input_fp32 = fp16tofp32(input);
+    float result_fp32 = acoshf(input_fp32);
+    return fp32tofp16(result_fp32);
+}
+
+__device__ inline float16 hatanh(float16 input) {
+    float input_fp32 = fp16tofp32(input);
+    float result_fp32 = atanhf(input_fp32);
+    return fp32tofp16(result_fp32);
+}
+
+__device__ inline float16 hrsqrt(float16 input) {
+    float input_fp32 = fp16tofp32(input);
+    float result_fp32 = rsqrtf(input_fp32);
+    return fp32tofp16(result_fp32);
+}
+
+__device__ inline float16 hpow(float16 input1, float16 input2) {
+    float input1_fp32 = fp16tofp32(input1);
+    float input2_fp32 = fp16tofp32(input2);
+    float result_fp32 = pow(input1_fp32, input2_fp32);
+    return fp32tofp16(result_fp32);
+}
+
+__device__ inline float16 hexpm1(float16 input) {
+    float input_fp32 = fp16tofp32(input);
+    float result_fp32 = expm1f(input_fp32);
+    return fp32tofp16(result_fp32);
+}
+
+__device__ inline float16 hexp2(float16 input) {
+    float input_fp32 = fp16tofp32(input);
+    float result_fp32 = exp2f(input_fp32);
+    return fp32tofp16(result_fp32);
+}
+
+__device__ inline float16 hlog2(float16 input) {
+    float input_fp32 = fp16tofp32(input);
+    float result_fp32 = log2f(input_fp32);
+    return fp32tofp16(result_fp32);
+}
+
+__device__ inline float16 hlog10(float16 input) {
+    float input_fp32 = fp16tofp32(input);
+    float result_fp32 = log10f(input_fp32);
+    return fp32tofp16(result_fp32);
+}
+
+__device__ inline float16 xpu_hfloor(float16 input) {
+    float input_fp32 = fp16tofp32(input);
+    float result_fp32 = xpu_floor(input_fp32);
+    return fp32tofp16(result_fp32);
+}
+
+__device__ inline float16 xpu_hceil(float16 input) {
+    float input_fp32 = fp16tofp32(input);
+    float result_fp32 = xpu_ceil(input_fp32);
+    return fp32tofp16(result_fp32);
+}
+
+__device__ inline float16 xpu_hmin(float16 input1, float16 input2) {
+    float input1_fp32 = fp16tofp32(input1);
+    float input2_fp32 = fp16tofp32(input2);
+    float result_fp32 = xpu_min(input1_fp32, input2_fp32);
+    return fp32tofp16(result_fp32);
+}
+
+__device__ inline float16 xpu_hmax(float16 input1, float16 input2) {
+    float input1_fp32 = fp16tofp32(input1);
+    float input2_fp32 = fp16tofp32(input2);
+    float result_fp32 = xpu_max(input1_fp32, input2_fp32);
+    return fp32tofp16(result_fp32);
+}
+
+__device__ inline float16 herf(float16 input) {
+    float input_fp32 = fp16tofp32(input);
+    float result_fp32 = erf(input_fp32);
+    return fp32tofp16(result_fp32);
+}
+
+__device__ inline int32_t hisnan(float16 input) {
+    float input_fp32 = fp16tofp32(input);
+    int32_t result_fp32 = isnan(input_fp32);
+    return result_fp32;
+}
+
+__device__ inline int32_t hisin(float16 input) {
+    float input_fp32 = fp16tofp32(input);
+    int32_t result_fp32 = isinf(input_fp32);
+    return result_fp32;
+}
+
+__device__ inline int32_t hfinite(float16 input) {
+    float input_fp32 = fp16tofp32(input);
+    int32_t result_fp32 = finitef(input_fp32);
+    return result_fp32;
+}
+
+
+// borrowed from xtrans include/xpu/kernel/atomic.h
+#define GM_BASE_ADDR 0x4000000000
+#define NOP_TIME 5
+
+__attribute__((weak)) __device__ int XTransSpinLock = 0;
+
+__attribute__((used)) __device__ void xtransLock() {
+  int nop_time = NOP_TIME;
+  // 使用amoadd获取返回值，如果不为0的话，则一直循环，直到获取到锁为止，在里面设置一些nop来减少竞争
+  while (__builtin_xpu_amoadd(1, &XTransSpinLock) != 0) {
+    for (int i = 0; i < nop_time; i++) {
+      __asm __volatile__("nop");
+    }
+    nop_time += NOP_TIME;
+  }
+}
+
+__attribute__((used)) __device__ inline void xtransUnlock() {
+  // 释放锁就是将锁置为0
+  __builtin_xpu_amoswap(0, &XTransSpinLock);
+}
+
+__device__ float atomicAdd(__global_ptr__ float *address, float val) {
+  if ((long)address >= GM_BASE_ADDR) {
+    xtransLock();
+    float x = *address;
+    *address = x + val;
+    xtransUnlock();
+    return x;
+  } else {
+    ticket_lock_mix();
+    float x = *address;
+    *address = x + val;
+    ticket_unlock_mix();
+    return x;
+  }
+}
+
+__device__ float16 atomicAdd(__global_ptr__ float16 *address, float16 val) {
+  if ((long)address >= GM_BASE_ADDR) {
+    xtransLock();
+    float16 x = *address;
+    *address = __hadd(x, val);
+    xtransUnlock();
+    return x;
+  } else {
+    ticket_lock_mix();
+    float16 x = *address;
+    *address = __hadd(x, val);
+    ticket_unlock_mix();
+    return x;
+  }
+}
+
+#endif
+
+} // namespace xpu

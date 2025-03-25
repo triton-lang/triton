@@ -6,6 +6,7 @@ build-*/
 python/build/
 python/dist/
 python/triton*.egg-info/
+python/_deps/
 
 python/triton/_C/*.pyd
 python/triton/_C/*.so
@@ -16,6 +17,12 @@ python/triton/backends/
 !python/triton/backends/__init__.py
 !python/triton/backends/compiler.py
 !python/triton/backends/driver.py
+
+# flagtree backend
+third_party/cambricon/
+third_party/iluvatar/iluvatarTritonPlugin.so
+third_party/triton_shared/
+third_party/xpu/backend/xpu3
 
 # Proton
 python/triton/profiler

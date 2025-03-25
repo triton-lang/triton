@@ -24,6 +24,8 @@ from setuptools.command.develop import develop
 from setuptools.command.egg_info import egg_info
 from wheel.bdist_wheel import bdist_wheel
 
+import setup_helper as helper
+
 
 @dataclass
 class Backend:
@@ -481,10 +483,14 @@ download_and_copy(
     f"https://anaconda.org/nvidia/cuda-cupti/{version}/download/linux-{arch}/cuda-cupti-{version}-0.tar.bz2",
 )
 
-backends = [*BackendInstaller.copy(["nvidia", "amd"]), *BackendInstaller.copy_externals()]
+if helper.flagtree_backend:
+    backends = [*BackendInstaller.copy(helper.extend_backends), *BackendInstaller.copy_externals()]
+else:
+    backends = [*BackendInstaller.copy(helper.default_backends), *BackendInstaller.copy_externals()]
 
 
 def add_link_to_backends():
+    helper.CommonUtils.unlink()
     for backend in backends:
         if os.path.islink(backend.install_dir):
             os.unlink(backend.install_dir)
@@ -537,8 +543,11 @@ class plugin_egginfo(egg_info):
         egg_info.run(self)
 
 
+package_data_tools = ["compile.h", "compile.c"]
+if helper.flagtree_backend == "xpu":
+    package_data_tools += ["compile_xpu.h", "compile_xpu.c"]
 package_data = {
-    "triton/tools": ["compile.h", "compile.c"],
+    "triton/tools": package_data_tools,
     **{f"triton/backends/{b.name}": b.package_data
        for b in backends},
 }
@@ -559,6 +568,10 @@ def get_packages():
         "triton/backends",
         "triton/tools",
     ]
+    if helper.flagtree_backend == "xpu":
+        packages.append("triton/language/extra/xpu")
+    elif helper.flagtree_backend == "mthreads":
+        packages.append("triton/language/extra/musa")
     packages += [f'triton/backends/{backend.name}' for backend in backends]
     packages += ["triton/profiler"]
     return packages
@@ -587,11 +600,12 @@ setup(
     description="A language and compiler for custom Deep Learning operations",
     long_description="",
     packages=get_packages(),
+    package_dir=helper.CommonUtils.get_package_dir(get_packages()),
     entry_points=get_entry_points(),
     install_requires=get_install_requires(),
     package_data=package_data,
     include_package_data=True,
-    ext_modules=[CMakeExtension("triton", "triton/_C/")],
+    ext_modules=[CMakeExtension("triton", helper.ext_sourcedir)],
     cmdclass={
         "build_ext": CMakeBuild,
         "build_py": CMakeBuildPy,
@@ -620,6 +634,7 @@ setup(
     extras_require={
         "build": [
             "cmake>=3.20",
+            "GitPython",
             "lit",
         ],
         "tests": [

@@ -1,3 +1,9 @@
+if (FLAGTREE_BACKEND)
+    set(NVGPUIR "")
+else()
+    set(NVGPUIR "NVGPUIR")
+endif()
+
 add_triton_library(TritonGPUToLLVM
     ConvertLayoutOpToLLVM/SharedToDotOperandFMA.cpp
     DotOpToLLVM/FMA.cpp
@@ -34,5 +40,5 @@ add_triton_library(TritonGPUToLLVM
     TritonGPUIR
     TritonGPUTransforms
     TritonNvidiaGPUTransforms
-    NVGPUIR
+    ${NVGPUIR}
 )

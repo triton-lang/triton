@@ -1,0 +1,66 @@
+FROM ubuntu:22.04
+
+ARG PYTHON_VER=3.10
+ARG PYTHON_NAME=py310
+
+ARG WORKSPACE=/root/wksp
+ARG CONDA_INSTALL_DIR=/root/miniconda3
+ARG MUSA_ROOT_PATH=/usr/local/musa
+
+ENV DEBIAN_FRONTEND=noninteractive
+ENV TZ=Etc/UTC
+
+ENV MTHREADS_VISIBLE_DEVICES all
+ENV MTHREADS_DRIVER_CAPABILITIES compute,utility
+RUN groupadd -o -g 29  audio; exit 0 && \
+    groupadd -o -g 109 render; exit 0
+
+ENV MUSA_TOOLKIT_PATH=/usr/local/musa
+ENV PATH=${MUSA_TOOLKIT_PATH}/bin:$PATH
+ENV LD_LIBRARY_PATH=${MUSA_TOOLKIT_PATH}/lib:$LD_LIBRARY_PATH
+
+RUN sed -i 's/archive.ubuntu.com/mirrors.ustc.edu.cn/g' /etc/apt/sources.list && \
+    apt clean && apt update -y --fix-missing && apt install -y --no-install-recommends \
+        build-essential gnupg gnupg2 vim curl wget git g++ clang libclang-dev libelf-dev gcc-multilib llvm \
+        ssh sudo clang-format clang-tidy libglib2.0-dev libtinfo-dev patch ccache \
+        ripgrep libgtest-dev intel-mkl libnuma-dev ca-certificates openssl && \
+    rm -rf /var/lib/apt/lists/*
+
+WORKDIR ${WORKSPACE}
+
+RUN wget -q --no-check-certificate \
+        https://repo.continuum.io/miniconda/Miniconda3-latest-Linux-x86_64.sh \
+        -O ${WORKSPACE}/miniconda.sh && \
+    /bin/bash ${WORKSPACE}/miniconda.sh -b -p ${CONDA_INSTALL_DIR} && \
+    rm ${WORKSPACE}/miniconda.sh && \
+    ${CONDA_INSTALL_DIR}/bin/conda clean -a && \
+    ln -s ${CONDA_INSTALL_DIR}/etc/profile.d/conda.sh /etc/profile.d/conda.sh && \
+    echo ". ${CONDA_INSTALL_DIR}/etc/profile.d/conda.sh" >> ~/.bashrc && \
+    echo "conda activate ${PYTHON_NAME}" >> ~/.bashrc
+ENV PATH=${CONDA_INSTALL_DIR}/bin:$PATH
+
+RUN pip config set global.index-url https://pypi.mirrors.ustc.edu.cn/simple/
+
+RUN rm /bin/sh && ln -s /bin/bash /bin/sh && \
+    conda create -n ${PYTHON_NAME} python=${PYTHON_VER} -y && \
+    conda info|egrep "conda version|active environment"
+
+RUN source activate ${PYTHON_NAME} && \
+    pip install --no-cache-dir pyyaml setuptools typing_extensions pyahocorasick \
+    future six black pre-commit pytest minio cmake cffi ninja pillow transformers openpyxl packaging \
+    scipy==1.13.1 numpy==1.23.1 mkl==2023.0.0 mkl-include==2023.0.0 mkl-devel==2023.0.0
+
+RUN ln -s /usr/lib/x86_64-linux-gnu/libmkl_intel_lp64.so /usr/lib/x86_64-linux-gnu/libmkl_intel_lp64.so.1 && \
+    ln -s /usr/lib/x86_64-linux-gnu/libmkl_gnu_thread.so /usr/lib/x86_64-linux-gnu/libmkl_gnu_thread.so.1 && \
+    ln -s /usr/lib/x86_64-linux-gnu/libmkl_core.so /usr/lib/x86_64-linux-gnu/libmkl_core.so.1 && \
+    cp /usr/lib/x86_64-linux-gnu/libstdc++.so.6.0.30 ${CONDA_INSTALL_DIR}/envs/${PYTHON_NAME}/lib/ && \
+    ln -s -f ${CONDA_INSTALL_DIR}/envs/py310/lib/libstdc++.so.6.0.30 ${CONDA_INSTALL_DIR}/envs/${PYTHON_NAME}/lib/libstdc++.so && \
+    ln -s -f ${CONDA_INSTALL_DIR}/envs/py310/lib/libstdc++.so.6.0.30 ${CONDA_INSTALL_DIR}/envs/${PYTHON_NAME}/lib/libstdc++.so.6
+
+RUN rm -rf ${WORKSPACE}/*
+
+WORKDIR /root
+
+# COPY m3d-musa-toolkit-installer.sh ./
+
+RUN source activate ${PYTHON_NAME}

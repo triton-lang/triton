@@ -1,0 +1,5 @@
+GitPython
+cmake
+ninja
+pytest
+wheel

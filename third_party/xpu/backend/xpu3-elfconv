@@ -1,0 +1,55 @@
+set -e
+INPUT=$1
+OUTPUT=$2
+CLANG_PATH=$3
+ALIGNE_BITS=6
+cdnn_attribute=`$CLANG_PATH/llvm-readelf --arch-specific "$INPUT"`
+cdnn_key="CDNN_Inst_Is_Used"
+if [ "${cdnn_attribute/$cdnn_key}" = "$cdnn_attribute" ]; then
+  CDNN_INST_IS_USED=false
+  CDNN_Inst_Is_Used_FLAG=""
+  LM_SIZE=8 #32KB
+  LITTLE_CORE_SUFFIX=''
+else
+  CDNN_INST_IS_USED=true
+  CDNN_Inst_Is_Used_FLAG="-DCDNN_Inst_Is_Used"
+  LM_SIZE=8
+  LITTLE_CORE_SUFFIX='s'
+fi
+index=0
+crt_object_file="$OUTPUT.crt.o"
+kernel_bin_file="$OUTPUT.bin"
+for function_name in $($CLANG_PATH/llvm-readelf -s "$INPUT" | grep FUNC | grep GLOBAL  | grep DEFAULT | awk '{print $8}'); do
+  # Read PARAM_SIZE from section .XPU.KERNEL_PARAM_SIZE.<kernel_mangled_name>
+  sec_file=$(dirname $OUTPUT).${function_name}_PARAM_SIZE
+  $CLANG_PATH/llvm-objcopy "$INPUT" --dump-section=.XPU.KERNEL_PARAM_SIZE.${function_name}=${sec_file}
+  OLD_IFS="$IFS"
+  IFS=" "
+  sec_file_array=($($CLANG_PATH/xpu-xxd -e ${sec_file}))
+  IFS="$OLD_IFS"
+  PARAM_SIZE=$(printf %d $(echo ${sec_file_array[1]} | sed -r 's/0*([0-9])/0x\1/'))
+  #    //XPU3 has 64bit arguments, need to align 8, and stack aligned to 64 constrain by datalayout
+  PARAM_SPACE=$(( ($PARAM_SIZE + 63)/64*64))
+  rm -f ${sec_file}
+  # Prepare crt.o for each global function
+  $CLANG_PATH/clang --xpu-arch=xpu3 -c $CLANG_PATH/xpu3-crt.xpu -o "$crt_object_file" -DKERNEL_ENTRY="$function_name" -DALIGNE_BITS=${ALIGNE_BITS} -DPARAM_SIZE=${PARAM_SIZE} -DPARAM_SPACE=${PARAM_SPACE} -DLOCAL_MEM_SIZE=${LM_SIZE} ${CDNN_Inst_Is_Used_FLAG} -O2 --xpu-device-only
+  # Link crt.o $INPUT into a bin file
+  if [ -n "$DEVICE_LIB_PATH" ]; then
+      device_libs=""
+      for device_lib_name in $DEVICE_LIB_PATH/*.a
+      do
+          device_libs=$device_libs"$device_lib_name "
+      done
+      device_libs="${device_libs#"${device_libs%%[![:space:]]*}"}"
+      device_libs="${device_libs%"${device_libs##*[![:space:]]}"}"
+      $CLANG_PATH/ld.lld -gc-sections "$crt_object_file" "$INPUT" "${CLANG_PATH}/../lib/linux/libclang_rt.builtins-xpu3$LITTLE_CORE_SUFFIX.a" "${device_libs}" -T "$CLANG_PATH"/xpu-kernel.t -o "$kernel_bin_file"
+  elif [ -f "${CLANG_PATH}/../lib/linux/libclang_rt.builtins-xpu3.a" ]; then
+    $CLANG_PATH/ld.lld -gc-sections "$crt_object_file" "$INPUT" "${CLANG_PATH}/../lib/linux/libclang_rt.builtins-xpu3$LITTLE_CORE_SUFFIX.a" -T "$CLANG_PATH"/xpu-kernel.t -o "$kernel_bin_file"
+  else
+    $CLANG_PATH/ld.lld -gc-sections "$crt_object_file" "$INPUT" -T "$CLANG_PATH"/xpu-kernel.t -o "$kernel_bin_file"
+  fi
+  let index=index+1
+  $CLANG_PATH/llvm-objcopy "$kernel_bin_file" --dump-section="KERNEL"="$OUTPUT"
+  printf_buffer_offset=`$CLANG_PATH/llvm-objdump -t "$kernel_bin_file" | grep .xpu_kernel_printf_buffer | cut -d' ' -f1`
+  echo  "[TritonXPU] printf_buffer_offset = 0x$printf_buffer_offset"
+done

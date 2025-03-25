@@ -1,68 +1,44 @@
-# Governance Structure
+[中文版](./CONTRIBUTING_cn.md)
 
-Triton adopts the following hierarchical technical governance structure:
-* A community of **contributors** who file issues and submit pull requests
-* A group of **module maintainers** who own parts of Triton and drive their development
-* A body of **core maintainers** who own Triton overall and drive its development
-* A **lead core maintainer** who is the catch-all decision maker when consensus cannot be reached by core maintainers
+# FlagTree Contributor Guide
 
-All contributions are expected to follow Triton’s design principles, as enforced by module and core maintainers. While high-quality pull requests are appreciated and encouraged, all maintainers reserve the right to prioritize their own work over code reviews at-will, hence contributors should not expect their work to be reviewed promptly.
+Thank you for your interest in FlagTree! We use GitHub to host code, manage issues, and handle pull requests. Before contributing, please read the following guidelines.
 
-Contributors can maximize the chances of their work being accepted by maintainers by meeting a high quality bar before sending a PR to maintainers.  We encourage maintainers who contribute to Triton on behalf of a company to get reviews from senior developers within their company before sending to maintainers.
-Module maintainers
-We aim to make the Triton codebase as modular as possible, such that different components (e.g., subdirectories) can be improved in parallel under the supervision of different module maintainers.
+## Bug Reports
 
-What constitutes (or not) a module is up to the core maintainers. Core maintainers also reserve the right to decide whether the development of a module should happen – or keep happening – in-tree or not.
+Please use GitHub Issues to report bugs. When reporting a bug, include:
+- A concise summary
+- Steps to reproduce
+- Specific and accurate descriptions
+- Example code if possible (this is particularly helpful)
 
-**List of in-tree modules (as of 05/12/2024, alphabetical order):**
-* AMD backend (Lei Zhang)
-* Interpreter (Keren Zhou)
-* Profiler (Keren Zhou)
+## Code Contributions
 
-Note: Parts of Triton that are not listed above (e.g., Nvidia backend) are assumed to be owned by core maintainers.
+When submitting a pull request, contributors should describe the changes made and the rationale behind them. If possible, provide corresponding tests. Pull requests require approval from __ONE__ team member before merging and must pass all continuous integration checks.
 
-Note: Some important parts of the Triton eco-system (e.g., Intel XPU backend) may be maintained out-of-tree and advertised in our repository. The governance rules described in this document do not carry over to these modules.
+### Code Formatting
 
-__List of out-of-tree modules (as of 05/12/2024, alphabetical order):__
-* CPU backend (Bert Maher, Ilya Enkovich)
-* Intel backend (Ettore Tiotto, Whitney Tsang)
+We use pre-commit for code formatting checks:
 
+```shell
+python3 -m pip install pre-commit
+cd ${YOUR_CODE_DIR}/flagtree
+pre-commit install
+pre-commit
+```
 
-## Core maintainers
-The core maintainers drive the development of Triton at large and set the roadmap for the project. As such, they have the following responsibilities:
-* Proposing, implementing and reviewing profound changes to user-facing APIs, IR specifications and/or pass infrastructures
-* Enforcing code quality standards and adherence to core design principles
-* Drawing module boundaries and resolving disputes between module maintainers
+### Unit Tests
 
+After installation, you can run unit tests in the backend directory:
+```shell
+cd third_party/backendxxx/python/test/unit
+python3 -m pytest -s
+```
 
-The core maintainers as a group have the power to veto any decision made at a Module maintainer level.
+### Backend Integration
 
-The core maintainers should publicly articulate their decision-making, and share the reasoning behind their decisions, vetoes, and dispute resolution.
+Please contact the core development team for backend integration matters.
 
-__List of core maintainers (as of 05/12/2024, alphabetical order):__
-* Justin Lebar
-* Keren Zhou
-* Pawel Szczerbuk
-* Phil Tillet
-* Thomas Raoux
-* Zahi Moudallal
+## License
 
-## Lead core maintainer
-When core maintainers cannot come to a consensus, a publicly declared lead maintainer is expected to settle the debate and make executive decisions.
-
-The Lead Core Maintainer should publicly articulate their decision-making, and give a clear reasoning for their decisions.
-
-The Lead Core Maintainer is also responsible for confirming or removing core maintainers.
-
-**Lead maintainer (as of 05/12/2024)**
-* Phil Tillet
-
-# Decision Making
-
-## Uncontroversial Changes
-
-We are committed to accepting functional bug fixes that meet our quality standards – and include minimized unit tests to avoid future regressions. Performance improvements generally fall under the same category, with the caveat that they may be rejected if the trade-off between usefulness and complexity is deemed unfavorable by core maintainers (e.g., complex swizzling logic to improve the performance of non-tensor-cores matrix multiplications). Design changes that neither fix known functional nor performance issues are automatically considered controversial.
-
-## Controversial Changes
-
-More controversial design changes (e.g., changes in our IRs/APIs/Passes) are evaluated on a case-by-case basis under the subjective judgment of core maintainers. While it is possible for contributors to propose and land deep design changes upstream (see https://github.com/triton-lang/triton/pull/1305), the community should expect such occurrences to be relatively rare.
+FlagTree is licensed under the [MIT license](/LICENSE).
