@@ -24,6 +24,7 @@
 #include <queue>
 
 #include "mlir/Support/LLVM.h"
+#include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/Passes.h"
@@ -607,7 +608,9 @@ void CTAPlanner::eliminateAdjacentCasts(CastOp cast0, CastOp cast1) {
 
 bool CTAPlanner::isLoadStoreOp(Operation *op) const {
   return llvm::isa<triton::LoadOp, triton::StoreOp, triton::AtomicRMWOp,
-                   triton::AtomicCASOp>(op);
+                   triton::AtomicCASOp, triton::DescriptorLoadOp,
+                   triton::DescriptorStoreOp, triton::DescriptorGatherOp,
+                   triton::DescriptorScatterOp>(op);
 }
 
 bool CTAPlanner::processLoadStore(Operation *op, Attribute layout) {
@@ -638,7 +641,11 @@ bool CTAPlanner::processLoadStore(Operation *op, Attribute layout) {
     auto type = op->getOperand(i).getType();
     if (auto ptrTy = dyn_cast<triton::PointerType>(type))
       type = ptrTy.getPointeeType();
-    auto tensorTy = cast<RankedTensorType>(type);
+    auto tensorTy = dyn_cast<RankedTensorType>(type);
+    if (!tensorTy) {
+      newOperandLayouts.push_back(Attribute());
+      continue;
+    }
     auto oldLayout =
         cast<ttg::DistributedEncodingTrait>(tensorTy.getEncoding());
     auto newLayout =

@@ -142,10 +142,11 @@ sharedToLinearLayoutNoLeadingOffset(ArrayRef<int64_t> shape,
   // Construct bases for the 2 most minor dimensions of the layout.  These are
   // the dims that get swizzled.
   assert(shape.size() >= 2);
+  auto shapePerCTA = getShapePerCTA(shared, shape);
   int colDim = shared.getOrder()[0];
   int rowDim = shared.getOrder()[1];
-  int numCols = shape[colDim];
-  int numRows = shape[rowDim];
+  int numCols = shapePerCTA[colDim];
+  int numRows = shapePerCTA[rowDim];
   StringAttr colDimName = outDimNames[colDim];
   StringAttr rowDimName = outDimNames[rowDim];
 
@@ -166,8 +167,8 @@ sharedToLinearLayoutNoLeadingOffset(ArrayRef<int64_t> shape,
   // Add the remaining dimensions.
   for (int i = 2; i < rank; i++) {
     int dim = shared.getOrder()[i];
-    ctaLayout *=
-        LinearLayout::identity1D(shape[dim], S("offset"), outDimNames[dim]);
+    ctaLayout *= LinearLayout::identity1D(shapePerCTA[dim], S("offset"),
+                                          outDimNames[dim]);
   }
 
   return combineCtaCgaWithShape(ctaLayout, shared.getCTALayout(), shape);
@@ -270,11 +271,14 @@ LinearLayout sharedToLinearLayoutLeadingOffset(ArrayRef<int64_t> shape,
     }
   }
   int packingFactor = isFp4Padded ? 2 : 1;
+  auto shapePerCTA = getShapePerCTA(shared, shape);
 
-  if (shape[colDim] * packingFactor < tileCols || shape[rowDim] < tileRows) {
-    llvm::errs() << "Illegal shared layout; expected shape to be at least ["
-                 << tileRows << ", " << tileCols << "], shape: ["
-                 << shape[rowDim] << ", " << shape[colDim] << "]\n";
+  if (shapePerCTA[colDim] * packingFactor < tileCols ||
+      shapePerCTA[rowDim] < tileRows) {
+    llvm::errs()
+        << "Illegal shared layout; expected shapePerCTA to be at least ["
+        << tileRows << ", " << tileCols << "], shapePerCTA: ["
+        << shapePerCTA[rowDim] << ", " << shapePerCTA[colDim] << "]\n";
     llvm::report_fatal_error("Illegal shared layout");
   }
 
@@ -315,8 +319,8 @@ LinearLayout sharedToLinearLayoutLeadingOffset(ArrayRef<int64_t> shape,
 
   // Add the remaining dimensions.
   for (int dim = batchDims - 1; dim >= 0; --dim) {
-    tileLayout *=
-        LinearLayout::identity1D(shape[dim], S("offset"), outDimNames[dim]);
+    tileLayout *= LinearLayout::identity1D(shapePerCTA[dim], S("offset"),
+                                           outDimNames[dim]);
   }
 
   return combineCtaCgaWithShape(tileLayout, shared.getCTALayout(), shape);

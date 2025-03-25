@@ -546,8 +546,9 @@ def matmul_kernel_make_tensor_desciptor(a_ptr, b_ptr, c_ptr,  #
 @requires_tma
 @pytest.mark.interpreter
 @pytest.mark.parametrize("num_stages", [1, 4])
+@pytest.mark.parametrize("num_ctas", [1, 2])
 @pytest.mark.parametrize("BLOCK_M, BLOCK_N, BLOCK_K", [(32, 32, 32), (128, 64, 64), (128, 128, 64), (128, 256, 64)])
-def testmake_tensor_descriptor_matmul(num_stages, BLOCK_M, BLOCK_N, BLOCK_K):
+def test_make_tensor_descriptor_matmul(num_stages, num_ctas, BLOCK_M, BLOCK_N, BLOCK_K):
     device = "cuda"
     if is_interpreter():
         M, N, K = BLOCK_M, BLOCK_N, BLOCK_K
@@ -579,6 +580,7 @@ def testmake_tensor_descriptor_matmul(num_stages, BLOCK_M, BLOCK_N, BLOCK_K):
         BLOCK_K,
         num_warps=8,
         num_stages=num_stages,
+        num_ctas=num_ctas,
     )
     ref_out = torch.matmul(A.to(torch.float32), B.to(torch.float32)).to(torch.float16)
     torch.testing.assert_close(ref_out, C, rtol=1e-3, atol=1e-3)
