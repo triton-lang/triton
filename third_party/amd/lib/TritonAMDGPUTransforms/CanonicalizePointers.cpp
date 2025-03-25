@@ -1009,6 +1009,10 @@ public:
       rewriter.inlineBlockBefore(ifOp.elseBlock(), newIfOp.elseBlock(),
                                  newIfOp.elseBlock()->begin());
 
+    // Note only the `then` yield here is considered because this whole pass is
+    // effectively 1:N type conversion and thus only the types are important
+    // (and for `scf.if` the types along both `then`/`else` branches must be the
+    // same).
     ArrayRef<int64_t> yieldPtrOffsets =
         llvm::cast<DenseI64ArrayAttr>(
             newIfOp.thenYield()->getDiscardableAttr(kSCFIfOpYieldFatPtrOffsets))
