@@ -11,6 +11,7 @@ from ..runtime.driver import driver
 from ..tools.disasm import get_sass
 # TODO: this shouldn't be here
 from .code_generator import ast_to_ttir
+from . import config
 from pathlib import Path
 import re
 import functools
@@ -179,7 +180,7 @@ def filter_traceback(e: BaseException):
 
     These are uninteresting to the user -- "just show me *my* code!"
     """
-    if os.getenv("TRITON_FRONT_END_DEBUGGING", "0") == "1":
+    if config.front_end_debugging():
         return
 
     if e.__cause__ is not None:

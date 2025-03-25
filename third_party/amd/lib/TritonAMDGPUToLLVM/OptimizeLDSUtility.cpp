@@ -1,6 +1,5 @@
 #include "OptimizeLDSUtility.h"
 #include "triton/Analysis/Allocation.h"
-#include "triton/Conversion/TritonGPUToLLVM/Patterns.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Attributes.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
@@ -73,11 +72,10 @@ createTmpLayout(triton::gpu::DistributedEncodingTrait layout,
         src.getKWidth());
   }
   if (auto src = dyn_cast<triton::gpu::SliceEncodingAttr>(layout)) {
-    // TODO: think of a way to construct slice layouts based on warpsPerCTA
-    // argument
-    auto parentWarpsPerCTA = triton::gpu::getWarpsPerCTA(src.getParent());
+    auto warps = to_vector(warpsPerCTA);
+    warps.insert(warps.begin() + src.getDim(), 1);
     return triton::gpu::SliceEncodingAttr::get(
-        ctx, src.getDim(), createTmpLayout(src.getParent(), parentWarpsPerCTA));
+        ctx, src.getDim(), createTmpLayout(src.getParent(), warps));
   }
   // TODO: support linear layout if needed.
   if (isa<triton::gpu::LinearEncodingAttr>(layout))

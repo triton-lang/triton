@@ -85,18 +85,8 @@ SmallVector<unsigned> getThreadsPerWarp(Attribute layout,
   return toLinearEncoding(layout, shape).getThreadsPerWarp();
 }
 
-SmallVector<unsigned> getWarpsPerCTA(Attribute layout) {
-  if (auto distributedLayout =
-          mlir::dyn_cast<DistributedEncodingTrait>(layout)) {
-    return distributedLayout.getWarpsPerCTA();
-  }
-
-  llvm::report_fatal_error("getWarpsPerCTA not implemented");
-  return SmallVector<unsigned>();
-}
-
-SmallVector<unsigned> getWarpsPerCTAWithUniqueData(Attribute layout,
-                                                   ArrayRef<int64_t> shape) {
+SmallVector<unsigned> getWarpsPerCTA(Attribute layout,
+                                     ArrayRef<int64_t> shape) {
   return toLinearEncoding(layout, shape).getWarpsPerCTA();
 }
 
@@ -578,9 +568,6 @@ SmallVector<unsigned> BlockedEncodingAttr::getCTAOrder() const {
 SmallVector<unsigned> BlockedEncodingAttr::getCTASplitNum() const {
   return SmallVector<unsigned>(getCTALayout().getCTASplitNum());
 }
-SmallVector<unsigned> BlockedEncodingAttr::getWarpsPerCTA() const {
-  return SmallVector<unsigned>(getWarpsPerCTA__());
-}
 
 template <class T>
 SmallVector<T> SliceEncodingAttr::paddedShape(ArrayRef<T> shape) const {
@@ -637,15 +624,6 @@ SmallVector<unsigned> SliceEncodingAttr::getCTAsPerCGA() const {
   llvm::report_fatal_error(
       "getCTAsPerCGA for SliceEncodingAttr is not well-defined");
 }
-SmallVector<unsigned> SliceEncodingAttr::getWarpsPerCTA() const {
-  auto parent = getParent();
-  auto parentWarpsPerCTA = ::getWarpsPerCTA(parent);
-  SmallVector<unsigned> warpsPerCTA = parentWarpsPerCTA;
-  warpsPerCTA.erase(warpsPerCTA.begin() + getDim());
-  int32_t nextDim = getDim() < warpsPerCTA.size() ? getDim() : getDim() - 1;
-  warpsPerCTA[nextDim] *= parentWarpsPerCTA[getDim()];
-  return warpsPerCTA;
-}
 
 // Wmma encoding
 
@@ -700,14 +678,6 @@ SmallVector<unsigned> DotOperandEncodingAttr::getCTASplitNum() const {
   auto kDim = getOpIdx() == 0 ? rank - 1 : rank - 2;
   res[kDim] = 1;
   return res;
-}
-SmallVector<unsigned> DotOperandEncodingAttr::getWarpsPerCTA() const {
-  auto distributedLayout = mlir::cast<DistributedEncodingTrait>(getParent());
-  auto warps = distributedLayout.getWarpsPerCTA();
-  auto rank = warps.size();
-  auto kDim = getOpIdx() == 0 ? rank - 1 : rank - 2;
-  warps[kDim] = 1;
-  return warps;
 }
 
 LogicalResult DotOperandEncodingAttr::verify(
@@ -1072,7 +1042,7 @@ LinearEncodingAttr::orderPerDim(StringAttr dimName,
 // [Note. Divergence of methods wrt. legacy layouts]
 // For smaller shapes where the CTATile is larger than the output
 // tensor, some methods return different values than the legacy layouts. I think
-// this is benign tho. An example: what is the the vector of `warpsPerCTA` if
+// this is benign tho. An example: what is the vector of `warpsPerCTA` if
 // all the warps hold the same data? I think it should be [1, 1], even if we
 // have 4 warps. But perhaps for this we have to add some masking in some
 // places... We'll see
@@ -1306,7 +1276,7 @@ void NvidiaMmaEncodingAttr::print(AsmPrinter &printer) const {
           << ", warpsPerCTA = [" << ArrayRef(getWarpsPerCTA()) << "]";
 
   maybePrintCTALayout(getContext(), printer, getCTALayout(),
-                      /*rank=*/getWarpsPerCTA().size());
+                      /*rank=*/getRank());
 
   printer << ", instrShape = [" << getInstrShape() << "]}>";
 }
@@ -1386,11 +1356,11 @@ void AMDMfmaEncodingAttr::print(AsmPrinter &printer) const {
   printer << "<{"
           << "versionMajor = " << getVersionMajor()                      //
           << ", versionMinor = " << getVersionMinor()                    //
-          << ", warpsPerCTA = [" << ArrayRef(getWarpsPerCTA()) << "]"    //
+          << ", warpsPerCTA = [" << getWarpsPerCTA() << "]"              //
           << ", instrShape = [" << ArrayRef{getMDim(), getNDim()} << "]" //
           << ", isTransposed = " << getIsTransposed();
   maybePrintCTALayout(getContext(), printer, getCTALayout(),
-                      /*rank=*/getWarpsPerCTA().size());
+                      /*rank=*/getRank());
   printer << "}>";
 }
 
@@ -1721,9 +1691,6 @@ SmallVector<unsigned> AMDMfmaEncodingAttr::getCTAOrder() const {
 SmallVector<unsigned> AMDMfmaEncodingAttr::getCTASplitNum() const {
   return SmallVector<unsigned>(getCTALayout().getCTASplitNum());
 }
-SmallVector<unsigned> AMDMfmaEncodingAttr::getWarpsPerCTA() const {
-  return SmallVector<unsigned>(getWarpsPerCTA__());
-}
 
 SmallVector<int64_t>
 AMDMfmaEncodingAttr::getInstrShapeForOperand(int kWidth, int opIdx) const {
@@ -1842,9 +1809,6 @@ SmallVector<unsigned> AMDWmmaEncodingAttr::getCTAOrder() const {
 SmallVector<unsigned> AMDWmmaEncodingAttr::getCTASplitNum() const {
   return SmallVector<unsigned>(getCTALayout().getCTASplitNum());
 }
-SmallVector<unsigned> AMDWmmaEncodingAttr::getWarpsPerCTA() const {
-  return SmallVector<unsigned>(getWarpsPerCTA__());
-}
 
 SmallVector<int64_t> AMDWmmaEncodingAttr::getElemsPerInstrForOperands() const {
   return {16, 16};
@@ -1916,9 +1880,6 @@ SmallVector<unsigned> NvidiaMmaEncodingAttr::getCTAOrder() const {
 SmallVector<unsigned> NvidiaMmaEncodingAttr::getCTASplitNum() const {
   return SmallVector<unsigned>(getCTALayout().getCTASplitNum());
 }
-SmallVector<unsigned> NvidiaMmaEncodingAttr::getWarpsPerCTA() const {
-  return SmallVector<unsigned>(getWarpsPerCTA__());
-}
 
 SmallVector<unsigned>
 NvidiaMmaEncodingAttr::getRepOrderForOperand(int opIdx) const {
@@ -1933,7 +1894,7 @@ NvidiaMmaEncodingAttr::getRepForOperand(ArrayRef<int64_t> shape, int bitwidth,
       "kWidth must be >= 32 / bitwidth for this function to be well-defined");
   auto rank = shape.size();
   // Broadcast long K
-  auto warpsPerCTA = getWarpsPerCTA();
+  auto warpsPerCTA = to_vector(getWarpsPerCTA());
   auto kDim = opIdx == 0 ? rank - 1 : rank - 2;
   warpsPerCTA[kDim] = 1;
 

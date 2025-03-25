@@ -25,6 +25,9 @@ def TritonAMDGPUStreamPipeline : Pass<"tritonamdgpu-stream-pipeline", "mlir::Mod
     Option<"localPrefetch", "local_prefetch",
            "int32_t", /*default*/"0",
            "Set local prefetch stage count">,
+    Option<"useAsyncCopy", "use_async_copy",
+           "bool", /*default*/"false",
+           "Use AsyncCopyGlobalToLocal to directly load to shared memory">,
   ];
 }
 
@@ -164,6 +167,12 @@ def TritonAMDGPUBlockPingpong: Pass<"tritonamdgpu-block-pingpong", "mlir::Module
   let constructor = "mlir::createTritonAMDGPUBlockPingpongPass()";
 
   let dependentDialects = ["mlir::ROCDL::ROCDLDialect, mlir::triton::amdgpu::TritonAMDGPUDialect"];
+
+  let options = [
+    Option<"numStages", "num-stages",
+        "int32_t", /*default*/"2",
+        "Number of Pipeline stages">,
+    ];
 }
 
 def TritonAMDGPUInThreadTranspose: Pass<"tritonamdgpu-in-thread-transpose", "mlir::triton::FuncOp"> {
@@ -218,6 +227,26 @@ def TritonAMDGPUInThreadTranspose: Pass<"tritonamdgpu-in-thread-transpose", "mli
   let dependentDialects = ["mlir::triton::amdgpu::TritonAMDGPUDialect", "mlir::triton::gpu::TritonGPUDialect"];
 }
 
+def TritonAMDGPUCoalesceAsyncCopy: Pass<"tritonamdgpu-coalesce-async-copy", "mlir::ModuleOp"> {
+  let summary = "Improve coalescing for async global to local copies";
+
+  let description = [{
+    GFX9:
+      For AsyncCopyGlobalToLocal ops where the blocked encoding's sizePerThread is larger than the contiguity of the
+      source or the supported load vector size we clip it to the largest supported size. This ensures we get coalesced writes to
+      shared memory as required by the hardware. Does only work for non swizzled shared memory layouts
+  }];
+
+  let constructor = "mlir::createTritonAMDGPUCoalesceAsyncCopyPass()";
+
+  let dependentDialects = [];
+
+  let options = [
+    Option<"archGenerationName", "arch-generation-name",
+           "std::string", /*default=*/"std::string{}",
+           "GFX generation name of target device.">,
+  ];
+}
 
 
 #endif

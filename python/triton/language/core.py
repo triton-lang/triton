@@ -307,6 +307,12 @@ class base_type:
         """
         raise NotImplementedError
 
+    def mangle(self) -> str:
+        raise NotImplementedError(f"NYI: Type mangling for type {self.__class__}")
+
+    def _flatten_ir_types(self, builder: ir.builder, out: List[ir.type]) -> None:
+        raise NotImplementedError
+
 
 # -----------------------
 # dtype
@@ -502,10 +508,6 @@ class dtype(base_type):
     def is_const():
         return False
 
-    @staticmethod
-    def is_tuple():
-        return False
-
     def __eq__(self, other: dtype):
         if not isinstance(other, dtype):
             return False
@@ -517,6 +519,9 @@ class dtype(base_type):
     @property
     def scalar(self):
         return self
+
+    def _flatten_ir_types(self, builder: ir.builder, out: List[ir.type]) -> None:
+        out.append(self.to_ir(builder))
 
     def to_ir(self, builder: ir.builder) -> ir.type:
         if self.name.startswith("fp8"):
@@ -581,6 +586,17 @@ class dtype(base_type):
     def _unflatten_ir(self, handles: List[ir.value], cursor: int) -> Tuple[base_value, int]:
         return tensor(handles[cursor], self), cursor + 1
 
+    def mangle(self) -> str:
+        if self.is_int():
+            SIGNED = dtype.SIGNEDNESS.SIGNED
+            prefix = 'i' if self.int_signedness == SIGNED else 'u'
+            return prefix + str(self.int_bitwidth)
+        if self.is_floating():
+            return str(self)
+        if self.is_void():
+            return 'V'
+        return super().mangle()
+
 
 # Some functions have a param named `dtype`, which shadows the `dtype` class.
 # We can't change the param name because it is part of function's public API.
@@ -622,6 +638,9 @@ class pointer_type(dtype):
     @property
     def scalar(self):
         return self
+
+    def mangle(self) -> str:
+        return f"P{self.element_ty.mangle()}"
 
 
 class nv_tma_desc_type(pointer_type):
@@ -672,6 +691,11 @@ class block_type(dtype):
     def scalar(self):
         return self.element_ty
 
+    def mangle(self) -> str:
+        elt = self.scalar.mangle()
+        shape = '_'.join(map(str, self.shape))
+        return f'{elt}S{shape}S'
+
 
 class tuple_type(base_type):
 
@@ -686,14 +710,13 @@ class tuple_type(base_type):
     def __iter__(self):
         return iter(self.types)
 
-    def to_ir(self, builder: ir.builder):
-        return [ty.to_ir(builder) for ty in self.types]
+    def _flatten_ir_types(self, builder: ir.builder, out: List[ir.type]):
+        for ty in self.types:
+            if not isinstance(ty, constexpr):
+                ty._flatten_ir_types(builder, out)
 
     def __getitem__(self, index: int) -> dtype:
         return self.types[index]
-
-    def is_tuple(self):
-        return True
 
     def __eq__(self, other):
         return type(self) is type(other) and self.types == other.types and self.fields == other.fields
@@ -704,6 +727,9 @@ class tuple_type(base_type):
             value, cursor = ty._unflatten_ir(handles, cursor)
             values.append(value)
         return tuple(values, self), cursor
+
+    def mangle(self):
+        return 'T' + '_'.join(ty.mangle for ty in self.types) + 'T'
 
 
 class slice_type(dtype):
@@ -1263,8 +1289,8 @@ class tensor_descriptor_base_type(base_type):
         value = tensor_descriptor_base(handles[cursor], self.block_type)
         return value, cursor + 1
 
-    def to_ir(self, builder: ir.builder):
-        return builder.create_tensor_descriptor_type(self.block_type.to_ir(builder))
+    def _flatten_ir_types(self, builder: ir.builder, out: List[ir.type]) -> None:
+        out.append(builder.create_tensor_descriptor_type(self.block_type.to_ir(builder)))
 
     def __str__(self) -> str:
         # ex. "tensor_descriptor<float32[16, 32]>"
@@ -1277,6 +1303,9 @@ class tensor_descriptor_base_type(base_type):
 
     def __neq__(self, other) -> bool:
         return not (self == other)
+
+    def mangle(self) -> str:
+        return f"TD{self.block_type.mangle()}"
 
 
 class tensor_descriptor_base(base_value):
@@ -1363,8 +1392,10 @@ class tensor_descriptor_type(tensor_descriptor_base_type):
         value = tensor_descriptor(handle, shape, strides, self.block_type)
         return value, cursor
 
-    def to_ir(self, builder: ir.builder):
-        return [super().to_ir(builder), *self.shape_type.to_ir(builder), *self.strides_type.to_ir(builder)]
+    def _flatten_ir_types(self, builder: ir.builder, out: List[ir.type]) -> None:
+        super()._flatten_ir_types(builder, out)
+        self.shape_type._flatten_ir_types(builder, out)
+        self.strides_type._flatten_ir_types(builder, out)
 
     def __eq__(self, other):
         return super().__eq__(other) and (self.shape_type == other.shape_type) and (self.strides_type
@@ -1543,7 +1574,7 @@ def trans(input: tensor, *dims, _builder=None):
 
     :param input: The input tensor.
     :param dims: The desired ordering of dimensions.  For example,
-        :code:`(2, 1, 0)` reverses the order dims in a a 3D tensor.
+        :code:`(2, 1, 0)` reverses the order dims in a 3D tensor.
 
     :code:`dims` can be passed as a tuple or as individual parameters: ::
 
@@ -1569,7 +1600,7 @@ def permute(input, *dims, _builder=None):
     :param input: The input tensor.
     :type input: Block
     :param dims: The desired ordering of dimensions.  For example,
-        :code:`(2, 1, 0)` reverses the order dims in a a 3D tensor.
+        :code:`(2, 1, 0)` reverses the order dims in a 3D tensor.
 
     :code:`dims` can be passed as a tuple or as individual parameters: ::
 

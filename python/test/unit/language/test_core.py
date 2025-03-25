@@ -4974,7 +4974,7 @@ def test_tma_load_block_shape_err(device):
 
     @triton.jit
     def kernel(ptr):
-        desc = tl.make_tensor_descriptor(ptr, [128, 128], [128, 1], [1, 32])
+        desc = tl.make_tensor_descriptor(ptr, [128, 128], [128, 1], [1, 2])
         desc.load([0, 0])
 
     input = torch.empty((128, 128), dtype=torch.int32, device=device)
@@ -4982,7 +4982,7 @@ def test_tma_load_block_shape_err(device):
     with pytest.raises(errc) as e:
         kernel[(1, )](input)
 
-    assert "tensor descriptor block shape must have at least 8 rows" in str(e.value.__cause__)
+    assert "Descriptor block shape must have at least 16 bytes" in str(e.value.__cause__)
 
 
 @pytest.mark.interpreter
@@ -4990,15 +4990,15 @@ def test_tma_store_block_shape_err(device):
 
     @triton.jit
     def kernel(ptr):
-        desc = tl.make_tensor_descriptor(ptr, [128, 128], [128, 1], [8, 8])
-        desc.store([0, 0], tl.zeros((1, 32), dtype=tl.int16))
+        desc = tl.make_tensor_descriptor(ptr, [128, 128], [128, 1], [8, 4])
+        desc.store([0, 0], tl.zeros([8, 4], dtype=tl.int16))
 
     input = torch.empty((128, 128), dtype=torch.int16, device=device)
     errc = triton.CompilationError if not is_interpreter() else InterpreterError
     with pytest.raises(errc) as e:
         kernel[(1, )](input)
 
-    assert "int16 tensor descriptor block shape must have at least 16 columns" in str(e.value.__cause__)
+    assert "Descriptor block shape must have at least 16 bytes" in str(e.value.__cause__)
 
 
 def test_trans_reshape(device):
@@ -7068,21 +7068,37 @@ def test_gather(src_shape, indices_shape, axis, device):
     torch.testing.assert_close(result, ref, rtol=0, atol=0)
 
 
+def gen_gather_warp_shuffle_cases():
+    if THREADS_PER_WARP == 32:
+        return [
+            ([32, 16], [32, 16], 0,
+             "linear<{register = [[0, 2], [2, 0]], lane = [[0, 8], [8, 0], [1, 0], [4, 0], [16, 0]], warp = [[0, 1], [0, 4]], block = []}>",
+             "linear<{register = [[2, 0], [0, 2]], lane = [[0, 8], [16, 0], [1, 0], [8, 0], [4, 0]], warp = [[0, 1], [0, 4]], block = []}>"
+             ),
+            ([128, 64], [256, 64], 0,
+             "linear<{register = [[0, 2], [32, 0], [2, 0], [0, 16], [0, 32], [64, 0]], lane = [[0, 8], [8, 0], [1, 0], [4, 0], [16, 0]], warp = [[0, 1], [0, 4]], block = []}>",
+             "linear<{register = [[0, 2], [32, 0], [0, 32], [2, 0], [0, 16], [64, 0], [128, 0]], lane = [[0, 8], [8, 0], [1, 0], [4, 0], [16, 0]], warp = [[0, 1], [0, 4]], block = []}>"
+             ),
+        ]
+    elif THREADS_PER_WARP == 64:
+        return [
+            ([64, 16], [64, 16], 0,
+             "linear<{register = [[0, 2], [2, 0]], lane = [[0, 8], [8, 0], [1, 0], [4, 0], [16, 0], [32, 0]], warp = [[0, 1], [0, 4]], block = []}>",
+             "linear<{register = [[2, 0], [0, 2]], lane = [[0, 8], [16, 0], [1, 0], [8, 0], [4, 0], [32, 0]], warp = [[0, 1], [0, 4]], block = []}>"
+             ),
+            ([128, 64], [256, 64], 0,
+             "linear<{register = [[0, 2], [2, 0], [0, 16], [0, 32]], lane = [[0, 8], [8, 0], [1, 0], [4, 0], [16, 0], [32, 0]], warp = [[0, 1], [0, 4]], block = []}>",
+             "linear<{register = [[0, 2], [0, 32], [2, 0], [0, 16], [64, 0]], lane = [[0, 8], [8, 0], [1, 0], [4, 0], [16, 0], [32, 0]], warp = [[0, 1], [0, 4]], block = []}>"
+             ),
+        ]
+    else:
+        return []
+
+
 # These layouts are specially chosen to trigger the warp shuffle codegen.
-@pytest.mark.parametrize("src_shape, indices_shape, axis, src_layout, indices_layout", [
-    ([32, 16], [32, 16], 0,
-     "linear<{register = [[0, 2], [2, 0]], lane = [[0, 8], [8, 0], [1, 0], [4, 0], [16, 0]], warp = [[0, 1], [0, 4]], block = []}>",
-     "linear<{register = [[2, 0], [0, 2]], lane = [[0, 8], [16, 0], [1, 0], [8, 0], [4, 0]], warp = [[0, 1], [0, 4]], block = []}>"
-     ),
-    ([128, 64], [256, 64], 0,
-     "linear<{register = [[0, 2], [32, 0], [2, 0], [0, 16], [0, 32], [64, 0]], lane = [[0, 8], [8, 0], [1, 0], [4, 0], [16, 0]], warp = [[0, 1], [0, 4]], block = []}>",
-     "linear<{register = [[0, 2], [32, 0], [0, 32], [2, 0], [0, 16], [64, 0], [128, 0]], lane = [[0, 8], [8, 0], [1, 0], [4, 0], [16, 0]], warp = [[0, 1], [0, 4]], block = []}>"
-     ),
-])
+@pytest.mark.parametrize("src_shape, indices_shape, axis, src_layout, indices_layout", gen_gather_warp_shuffle_cases())
 def test_gather_warp_shuffle(src_shape, indices_shape, axis, src_layout, indices_layout, tmp_path: pathlib.Path,
                              device):
-    if is_hip():
-        pytest.skip("warp-local gather has issues on HIP")
 
     def prepare_kernel(src: torch.Tensor, axis: int, indices: torch.Tensor):
         output = torch.empty(indices.shape, dtype=src.dtype, device=src.device)
@@ -7106,7 +7122,7 @@ def test_gather_warp_shuffle(src_shape, indices_shape, axis, src_layout, indices
 
         pat = r"(%[0-9]+) = tt.gather (%[0-9]+)\[(%[0-9]+)\] {axis = "
         pat += str(axis)
-        pat += r" : i32} : \(tensor\<"
+        pat += r" : i32, efficient_layout} : \(tensor\<"
         pat += src_spec
         pat += r", (#[a-z]+[0-9]+)\>, tensor\<"
         pat += indices_spec
@@ -7119,7 +7135,7 @@ def test_gather_warp_shuffle(src_shape, indices_shape, axis, src_layout, indices
     %idx = ttg.convert_layout \3 : tensor<""" + indices_spec + r""", \5> -> tensor<""" + indices_spec + r""", #idx_layout>
     %out = tt.gather %src[%idx] {axis = """ + str(
             axis
-        ) + r""" : i32} : (tensor<""" + src_spec + r""", #src_layout>, tensor<""" + indices_spec + r""", #idx_layout>) -> tensor<""" + output_spec + r""", #idx_layout>
+        ) + r""" : i32, efficient_layout} : (tensor<""" + src_spec + r""", #src_layout>, tensor<""" + indices_spec + r""", #idx_layout>) -> tensor<""" + output_spec + r""", #idx_layout>
     \1 = ttg.convert_layout %out : tensor<""" + output_spec + r""", #idx_layout> -> tensor<""" + output_spec + r""", \6>"""
         return re.sub(pat, repl, ir)
 
@@ -7130,6 +7146,7 @@ def test_gather_warp_shuffle(src_shape, indices_shape, axis, src_layout, indices
     output, compiled = prepare_kernel(src, axis, indices)
     ir = compiled.asm["ttgir"]
     ir = inject_layout(ir, src, axis, indices, src_layout, indices_layout)
+    assert ir != compiled.asm["ttgir"]
 
     temp_file = tmp_path / "test_warp_gather.ttgir"
     temp_file.write_text(ir)

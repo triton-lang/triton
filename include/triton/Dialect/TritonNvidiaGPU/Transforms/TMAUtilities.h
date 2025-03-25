@@ -156,11 +156,16 @@ mlir::LogicalResult createTMADesc(mlir::Value tmaPtr,
              "elem type .b4x16_p64 supports only 128B swizzling");
     }
   } else {
-    op->emitError() << "Unhandled encoding type";
-    return failure();
+    auto swizzledEnc = dyn_cast<gpu::SwizzledSharedEncodingAttr>(
+        op.getType().getBlockType().getEncoding());
+    if (!swizzledEnc || swizzledEnc.getVec() != 1 ||
+        swizzledEnc.getPerPhase() != 1 || swizzledEnc.getMaxPhase() != 1) {
+      op->emitError() << "Unhandled encoding type";
+      return failure();
+    }
   }
 
-  int32_t swizzle_mode;
+  int32_t swizzle_mode = 0;
   if (swizzleBytes == 128) {
     swizzle_mode = 3;
   } else if (swizzleBytes == 64) {
