@@ -46,35 +46,6 @@ bool aliasingStoresBetween(Operation *op, ttng::TMEMStoreOp store) {
   return false;
 }
 
-Operation *findNearestCommonDominator(ArrayRef<Operation *> ops,
-                                      DominanceInfo &domInfo) {
-  if (ops.size() == 0) {
-    return nullptr;
-  }
-  if (ops.size() == 1) {
-    return ops[0];
-  }
-  llvm::SmallPtrSet<Block *, 16> blocks;
-  for (auto op : ops) {
-    blocks.insert(op->getBlock());
-  }
-  Block *domBlock = domInfo.findNearestCommonDominator(blocks);
-  if (domBlock == nullptr) {
-    return nullptr;
-  }
-  SmallVector<Operation *> ancestorOps;
-  for (auto op : ops) {
-    ancestorOps.push_back(domBlock->findAncestorOpInBlock(*op));
-  }
-  Operation *dom = ancestorOps[0];
-  for (unsigned i = 1; i < ops.size(); i++) {
-    if (ancestorOps[i]->isBeforeInBlock(dom)) {
-      dom = ancestorOps[i];
-    }
-  }
-  return dom;
-}
-
 class CombineTMEMStoreAndSelect : public OpRewritePattern<ttng::TMEMStoreOp> {
 public:
   using OpRewritePattern::OpRewritePattern;

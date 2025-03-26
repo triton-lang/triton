@@ -6,6 +6,7 @@
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/Partition.h"
 #include "triton/Dialect/TritonGPU/Transforms/PipeliningUtility.h"
+#include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "triton/Dialect/TritonGPU/Transforms/WarpSpecialization.h"
 #include "llvm/ADT/SCCIterator.h"
 
@@ -118,7 +119,8 @@ LogicalResult triton::gpu::partitionLoop(scf::ForOp loop) {
   for (const Partition &partition : schedule.getPartitions()) {
     bool failed = false;
     auto callback = [&](OpResult output, OpOperand &use, unsigned distance) {
-      const Partition *usePartition = schedule.getPartition(use.getOwner());
+      Operation *owner = loop.getBody()->findAncestorOpInBlock(*use.getOwner());
+      const Partition *usePartition = schedule.getPartition(owner);
       if (usePartition == schedule.getRootPartition() ||
           usePartition == &partition)
         return;

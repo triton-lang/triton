@@ -590,13 +590,10 @@ scf::ForOp lowerLoads(scf::ForOp forOp, CoarseSchedule &schedule) {
   }
 
   // Patch the loop to add the new loop carried dependencies.
-  scf::ForOp newForOp =
-      replaceForOpWithNewSignature(builder, forOp, newOperands);
-  forOp.erase();
-  forOp = newForOp;
+  (void)addIterArgsToLoop(builder, forOp, newOperands);
 
   // Update yield op with temporary yield values
-  auto forYield = cast<scf::YieldOp>(newForOp.getBody()->getTerminator());
+  auto forYield = cast<scf::YieldOp>(forOp.getBody()->getTerminator());
   for (unsigned i = 0; i < newOperands.size(); ++i) {
     forYield.getResultsMutable().append(newOperands[i]);
   }
@@ -605,13 +602,13 @@ scf::ForOp lowerLoads(scf::ForOp forOp, CoarseSchedule &schedule) {
   loc = forOp.getLoc();
   int argIdx = newOperandIndex;
   for (auto &[numBuffers, loadGroup] : loadGroups) {
-    Value insertIdx = newForOp.getBody()->getArgument(argIdx);
+    Value insertIdx = forOp.getBody()->getArgument(argIdx);
     argIdx++;
-    Value extractIdx = newForOp.getBody()->getArgument(argIdx);
+    Value extractIdx = forOp.getBody()->getArgument(argIdx);
     argIdx++;
     Value phase = nullptr;
     if (loadGroup.hasTMALoad) {
-      phase = newForOp.getBody()->getArgument(argIdx);
+      phase = forOp.getBody()->getArgument(argIdx);
       argIdx++;
     }
 
@@ -821,25 +818,22 @@ scf::ForOp lowerTMADescriptors(scf::ForOp forOp, CoarseSchedule &schedule) {
     newOperands.push_back(zero);
   }
 
-  scf::ForOp newForOp =
-      replaceForOpWithNewSignature(builder, forOp, newOperands);
-  forOp.erase();
-  forOp = newForOp;
+  (void)addIterArgsToLoop(builder, forOp, newOperands);
 
-  auto tmaCounters = ArrayRef<BlockArgument>(newForOp.getBody()->getArguments())
+  auto tmaCounters = ArrayRef<BlockArgument>(forOp.getBody()->getArguments())
                          .slice(tmaCounterArgsStartIdx);
 
   // Update yield op with temporary yield values
-  auto forYield = cast<scf::YieldOp>(newForOp.getBody()->getTerminator());
+  auto forYield = cast<scf::YieldOp>(forOp.getBody()->getTerminator());
   for (unsigned i = 0; i < newOperands.size(); ++i) {
     forYield.getResultsMutable().append(newOperands[i]);
   }
 
-  if (failed(rewriteTMABufferUpdates(newForOp, tmaBufferMapping, tmaCounters,
+  if (failed(rewriteTMABufferUpdates(forOp, tmaBufferMapping, tmaCounters,
                                      maxStage, one, zero, schedule))) {
     llvm_unreachable("Failed to rewrite TMA ops");
   }
-  return newForOp;
+  return forOp;
 }
 
 /////////////////////////////
