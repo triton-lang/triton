@@ -1,0 +1,37 @@
+name: NV-Build-And-Test
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  nv-build:
+    runs-on: nv-jiuding
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: FlagTree Build on NVIDIA-A100
+        shell: bash
+        run: |
+          source ~/env.sh
+          cd python
+          MAX_JOBS=20 pip3.11 install . --no-build-isolation
+
+  nv-stest:
+    runs-on: nv-jiuding
+    needs: nv-build
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: FlagTree Test on NVIDIA-A100
+        shell: bash
+        run: |
+          pytest -s python/test/unit

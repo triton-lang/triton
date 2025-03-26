@@ -1,0 +1,39 @@
+
+name: Kunlun-Build-And-Test
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  kunlun-build:
+    runs-on: kunlun
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: FlagTree Build on Kunlun
+        shell: bash
+        run: |
+          source ~/env.sh
+          export FLAGTREE_BACKEND=xpu
+          cd python
+          pip3 install . --no-build-isolation
+
+  kunlun-test:
+    runs-on: kunlun
+    needs: kunlun-build
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: FlagTree Test on Kunlun
+        shell: bash
+        run: |
+          pytest -s third_party/xpu/python/test/unit

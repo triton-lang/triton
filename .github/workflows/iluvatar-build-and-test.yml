@@ -1,0 +1,59 @@
+name: Iluvatar-Build-And-Test
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  iluvatar-build-and-test:
+    runs-on: iluvatar
+    steps:
+      - name: Checkout code (attempt 1)
+        id: checkout1
+        uses: actions/checkout@v4
+        continue-on-error: true
+
+      - name: Sleep before checkout2
+        if: steps.checkout1.outcome == 'failure'
+        run: |
+          echo "First checkout attempt failed. Sleeping for 120 seconds before retry..."
+          sleep 120
+
+      - name: Checkout code (attempt 2)
+        id: checkout2
+        if: steps.checkout1.outcome == 'failure'
+        uses: actions/checkout@v4
+        continue-on-error: true
+
+      - name: Sleep before final checkout
+        if: steps.checkout1.outcome == 'failure' && steps.checkout2.outcome == 'failure'
+        run: |
+          echo "Second checkout attempt failed. Sleeping for 180 seconds before final retry..."
+          sleep 180
+
+      - name: Checkout code (final attempt)
+        if: steps.checkout1.outcome == 'failure' && steps.checkout2.outcome == 'failure'
+        uses: actions/checkout@v4
+
+      - name: Verify checkout success
+        if: success()
+        run: echo "Checkout completed successfully"
+
+      - name: FlagTree Build on Iluvatar
+        shell: bash
+        run: |
+          export FLAGTREE_BACKEND=iluvatar
+          source ~/env.sh
+          cd python
+          MAX_JOBS=20 pip3 install . --no-build-isolation
+
+      - name: FlagTree Test on Iluvatar
+        shell: bash
+        run: |
+          CUDA_VISIBLE_DEVICES=15 pytest -s third_party/iluvatar/python/test/unit

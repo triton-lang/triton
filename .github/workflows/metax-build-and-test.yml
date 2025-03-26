@@ -1,0 +1,35 @@
+name: Metax-Build-And-Test
+
+on:
+  workflow_call:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  metax-build:
+    runs-on: metax
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: FlagTree Build on Metax
+        shell: bash
+        run: |
+          source ~/env.sh
+          export FLAGTREE_BACKEND=metax
+          cd python
+          MAX_JOBS=20 pip3 install . --no-build-isolation
+
+  metax-test:
+    runs-on: metax
+    needs: metax-build
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: FlagTree Test on Metax
+        shell: bash
+        run: |
+          pytest -s python/test/unit

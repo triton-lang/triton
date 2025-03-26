@@ -1,0 +1,38 @@
+name: Cambricon-Build-And-Test
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  cambricon-build:
+    runs-on: cambricon
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: FlagTree Build on Cambricon
+        shell: bash
+        run: |
+          export FLAGTREE_BACKEND=cambricon
+          source ~/env.sh
+          cd python
+          MAX_JOBS=8 pip3 install . --no-build-isolation
+
+  cambricon-test:
+    runs-on: cambricon
+    needs: cambricon-build
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: FlagTree Test on Cambricon
+        shell: bash
+        run: |
+          echo "Skip Triton tests on Cambricon currently."
