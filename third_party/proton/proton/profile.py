@@ -35,11 +35,25 @@ def _get_backend_default_path(backend: str) -> str:
 
 
 def _get_backend_default_mode(backend: str, mode: Optional[str]) -> str:
+    # Define supported modes for each backend
+    backend_modes = {
+        "cupti": ["", "pcsampling"],
+        "roctracer": [""],
+        "instrumentation": ["cycles"],
+    }
+
+    # Validate backend
+    if backend not in backend_modes:
+        raise ValueError(f"Unsupported backend: {backend}")
+
+    # Set default mode if none provided
     if mode is None:
-        if backend == "instrumentation":
-            mode = "cycles"
-        else:
-            mode = ""
+        mode = "cycles" if backend == "instrumentation" else ""
+
+    # Validate mode
+    if mode not in backend_modes[backend]:
+        raise ValueError(f"Invalid mode {mode} for backend {backend}")
+
     return mode
 
 
@@ -51,18 +65,6 @@ def _check_env(backend: str) -> None:
                 raise ValueError(
                     f"Proton does not work when the environment variable {env} is set on AMD GPUs. Please unset it and use `ROCR_VISIBLE_DEVICES` instead"
                 )
-
-
-def _check_mode(backend: str, mode: Optional[str]) -> None:
-    # TODO(Keren): Need a better mode registration mechanism
-    backend_modes = {
-        "cupti": ["", "pcsampling"],
-        "roctracer": [""],
-        "instrumentation": ["cycles"],
-    }
-
-    if mode not in backend_modes[backend]:
-        raise ValueError(f"Invalid mode {mode} for backend {backend}")
 
 
 def start(
@@ -120,7 +122,6 @@ def start(
     mode = _get_backend_default_mode(backend, mode)
 
     _check_env(backend)
-    _check_mode(backend, mode)
 
     session = libproton.start(name, context, data, backend, mode, backend_path)
 
