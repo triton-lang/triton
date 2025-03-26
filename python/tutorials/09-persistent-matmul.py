@@ -234,7 +234,10 @@ def matmul_tma_ws_kernel(a_desc_ptr, b_desc_ptr, c_desc_ptr,  #
                          BLOCK_SIZE_N: tl.constexpr,  #
                          BLOCK_SIZE_K: tl.constexpr,  #
                          GROUP_SIZE_M: tl.constexpr,  #
+                         FP8_OUTPUT: tl.constexpr,  #
                          ):
+    dtype = tl.float8e4nv if FP8_OUTPUT else tl.float16
+
     pid = tl.program_id(axis=0)
     num_pid_m = tl.cdiv(M, BLOCK_SIZE_M)
     num_pid_n = tl.cdiv(N, BLOCK_SIZE_N)
@@ -254,11 +257,11 @@ def matmul_tma_ws_kernel(a_desc_ptr, b_desc_ptr, c_desc_ptr,  #
 
     for k in tl.range(k_tiles, warp_specialize=True, num_stages=3):
         offs_k = k * BLOCK_SIZE_K
-        a = tl._experimental_descriptor_load(a_desc_ptr, [offs_am, offs_k], [BLOCK_SIZE_M, BLOCK_SIZE_K], tl.float16)
-        b = tl._experimental_descriptor_load(b_desc_ptr, [offs_bn, offs_k], [BLOCK_SIZE_N, BLOCK_SIZE_K], tl.float16)
+        a = tl._experimental_descriptor_load(a_desc_ptr, [offs_am, offs_k], [BLOCK_SIZE_M, BLOCK_SIZE_K], dtype)
+        b = tl._experimental_descriptor_load(b_desc_ptr, [offs_bn, offs_k], [BLOCK_SIZE_N, BLOCK_SIZE_K], dtype)
         accumulator = tl.dot(a, b.T, accumulator)
 
-    c = accumulator.to(tl.float16)
+    c = accumulator.to(dtype)
 
     offs_cm = pid_m * BLOCK_SIZE_M
     offs_cn = pid_n * BLOCK_SIZE_N
@@ -324,6 +327,7 @@ def matmul_tma_ws(a, b):
     matmul_tma_ws_kernel[grid](
         desc_a, desc_b, desc_c,  #
         M, N, K,  #
+        FP8_OUTPUT=dtype == torch.float8_e4m3fn,  #
     )
     return c
 
@@ -430,7 +434,7 @@ def matmul_tma_persistent_get_configs():
         for BM in [128] \
         for BN in [128, 256] \
         for BK in [64, 128] \
-        for s in ([3, 4]) \
+        for s in ([2, 3, 4]) \
         for w in [4, 8] \
         for SUBTILE in [True, False] \
     ]
@@ -715,7 +719,7 @@ def bench_fn(reps, warmup_reps, fn, *args):
             fn(*args)
 
 
-def bench(K, dtype, reps=1000, warmup_reps=10000):
+def bench(K, dtype, reps=10000, warmup_reps=10000):
     M = 8192
     N = 8192
     a = torch.randn((M, K), device="cuda", dtype=torch.float16).to(dtype)
@@ -803,7 +807,7 @@ if __name__ == "__main__":
     if args.prec == 'fp8' and (not hasattr(torch, "float8_e4m3fn") or not is_cuda()):
         print("This example requires CUDA with fp8 support.")
     else:
-        dtype = torch.float8_e4m3fn if args.prec == 'fp8' else torch.float16
+        dtype = torch.float8_e4m3fn
 
         if args.K and args.K_range is None:
             args.K_range = [args.K, args.K]
