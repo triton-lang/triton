@@ -1283,8 +1283,6 @@ struct FpToFpOpConversion
     inVals.resize(numElements, b.undef(typeConverter->convertType(srcType)));
     SmallVector<Value> outVals;
     if (srcType != dstType) {
-      // llvm::errs()<<"getconverter for "<<srcType<<" "<<desType<<"
-      // "<<roundingMode<<"\n";
       auto getCvtFunc = getConversionFunc(srcType, dstType, roundingMode);
       if (failed(getCvtFunc)) {
         std::string rmError;
