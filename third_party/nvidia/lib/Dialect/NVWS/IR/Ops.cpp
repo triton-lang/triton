@@ -201,16 +201,10 @@ LogicalResult WarpGroupOp::verify() {
 ParseResult WarpGroupOp::parse(OpAsmParser &p, OperationState &result) {
   auto ctx = p.getBuilder().getContext();
 
-  int32_t startWarp;
   SMLoc operandLoc = p.getCurrentLocation();
-  if (p.parseKeyword("start_warp") || p.parseLParen() ||
-      p.parseInteger(startWarp) || p.parseRParen() ||
-      p.parseOptionalAttrDictWithKeyword(result.attributes))
+  if (p.parseOptionalAttrDictWithKeyword(result.attributes))
     return failure();
 
-  result.addAttribute(
-      getStartWarpAttrName(result.name),
-      p.getBuilder().getIntegerAttr(type::i32Ty(ctx), startWarp));
   SmallVector<int32_t> partitionNumWarps;
   while (succeeded(p.parseOptionalKeyword(
       ("partition" + Twine(partitionNumWarps.size()).str())))) {
@@ -222,16 +216,14 @@ ParseResult WarpGroupOp::parse(OpAsmParser &p, OperationState &result) {
   }
 
   result.addAttribute(getNumWarpsAttrName(result.name),
-                      IntArrayAttr::get(ctx, partitionNumWarps));
+                      p.getBuilder().getDenseI32ArrayAttr(partitionNumWarps));
 
   return success();
 }
 
 void WarpGroupOp::print(OpAsmPrinter &p) {
-  p << " start_warp(" << getStartWarp() << ") ";
-  p.printOptionalAttrDictWithKeyword(
-      getOperation()->getAttrs(),
-      {getStartWarpAttrName(), getNumWarpsAttrName()});
+  p.printOptionalAttrDictWithKeyword(getOperation()->getAttrs(),
+                                     {getNumWarpsAttrName()});
 
   for (auto [i, region, numWarps] :
        llvm::enumerate(getPartitionRegions(), getNumWarps())) {

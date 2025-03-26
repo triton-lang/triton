@@ -141,7 +141,7 @@ def NVWS_WarpGroupOp : NVWS_Op<"warp_group", [
   let description = [{
     Higher level container for Warp Specialization Analysis.
 
-    Contains a variadic number warp groups, a startWarp number, and
+    Contains a variadic number warp groups, with
     the number of warps in each group, plus a region to hold the
     computation for that warp group.
 
@@ -152,9 +152,7 @@ def NVWS_WarpGroupOp : NVWS_Op<"warp_group", [
     before execution.
   }];
 
-  let arguments = (ins
-    I32Attr:$startWarp,
-    NVWS_IntArray:$numWarps);
+  let arguments = (ins DenseI32ArrayAttr:$numWarps);
 
   let regions = (region VariadicRegion<MinSizedRegion<1>>:$partitionRegions);
   let hasVerifier=1;
