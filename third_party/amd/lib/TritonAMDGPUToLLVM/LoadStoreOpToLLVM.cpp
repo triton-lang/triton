@@ -1087,22 +1087,20 @@ struct AtomicCASOpConversion
       auto valTy = cast<RankedTensorType>(op.getVal().getType());
       vec = std::min<unsigned>(vec, valTy.getElementType().isF16() ? 2 : 1);
     }
+    // scalar value input is supposed to sync behavior of threads in a
+    // tile, so need a barrier to sync threads.
+    else {
+      b.barrier();
+    }
 
     auto vecTy = vec_ty(valueElemTy, vec);
     SmallVector<Value> resultVals(elemsPerThread);
 
     // atomic ops
     for (size_t i = 0; i < elemsPerThread; i += vec) {
-      Value casVal = b.undef(vecTy);
-      for (int ii = 0; ii < vec; ++ii) {
-        Value iiVal = createIndexAttrConstant(
-            rewriter, loc, getTypeConverter()->getIndexType(), ii);
-        casVal = b.insert_element(vecTy, casVal, valElements[i + ii], iiVal);
-      }
-
       Value casPtr = ptrElements[i];
       Value casCmp = cmpElements[i];
-      casVal = valElements[i];
+      Value casVal = valElements[i];
 
       // use op
       if (TensorTy) { // for tensor
@@ -1300,6 +1298,11 @@ struct AtomicRMWOpConversion
       checkPairs = !(contigWithinLanes > 1 && contigWithinLanes % 2 == 0);
       enableIntraWaveReduce &= contigWithinLanes == 1;
     }
+    // scalar value input is supposed to sync behavior of threads in a
+    // tile, so need a barrier to sync threads.
+    else {
+        b.barrier();
+    }
 
     auto vecTy = vec_ty(valueElemTy, vec);
     auto elemsPerThread = getTotalElemsPerThread(val.getType());
@@ -1338,7 +1341,6 @@ struct AtomicRMWOpConversion
         Value retVal =
             emitter.emitAtomicRMW(rewriter, ptrElements[i], valElement, rmwMask,
                                   atomicSharedMemBase, enableIntraWaveReduce);
-
         if (tensorTy) {
           for (int ii = 0; ii < vec; ++ii) {
             resultVals[i + ii] =
