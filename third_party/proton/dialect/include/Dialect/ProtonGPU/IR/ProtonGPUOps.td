@@ -117,4 +117,16 @@ def PTG_GlobalScratchAllocOp : PTG_Op<"global_scratch_alloc", [MemoryEffects<[Me
   let assemblyFormat = [{attr-dict `:` qualified(type($result))}];
 }
 
+def PTG_StackAllocOp : PTG_Op<"stack_alloc", [MemoryEffects<[MemAlloc<GlobalMemory>]>]> {
+  let summary = "Allocate a proton stack memory buffer";
+  let description = [{
+    This operation allocates a proton buffer in device stack memory.
+  }];
+  let arguments = (
+    ins
+  );
+  let results = (outs TTG_MemDescType : $data);
+  let assemblyFormat = "attr-dict `:` qualified(type($data))";
+}
+
 #endif  // PROTONGPU_OPS

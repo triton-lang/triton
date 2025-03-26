@@ -1,4 +1,4 @@
-// RUN: triton-opt %s -split-input-file --convert-proton-nvidia-gpu-to-llvm -cse | FileCheck %s
+// RUN: triton-opt %s -split-input-file --convert-proton-nvidia-gpu-to-llvm | FileCheck %s
 
 #shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
 #smem = #ttg.shared_memory
@@ -41,6 +41,26 @@ module attributes {"ttg.num-warps" = 8 : i32} {
     // CHECK: llvm.store %[[VAL]], %[[PTR]] : i32, !llvm.ptr<5>
     // CHECK: tt.return
     %0 = proton_gpu.init_buffer_index : <i32, 5>
+    tt.return
+  }
+}
+
+// -----
+
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
+  tt.func @stack_alloc() {
+    // CHECK: %[[SIZE:.*]] = llvm.mlir.constant(32 : i32) : i32
+    // CHECK: %[[PTR:.*]] = llvm.alloca %[[SIZE]] x i32 : (i32) -> !llvm.ptr
+    // CHECK: %[[STRUCT:.*]] = llvm.mlir.undef : !llvm.struct<(ptr)>
+    // CHECK: llvm.insertvalue %[[PTR]], %[[STRUCT]][0] : !llvm.struct<(ptr)>
+    %0 = proton_gpu.stack_alloc : !ttg.memdesc<32xi32, #shared, #proton_gpu.stack_memory, mutable>
+    %1 = proton_gpu.global_scratch_alloc {alignment = 128 : i32, nbytes = 384 : i32} : !tt.ptr<i32>
+    %2 = proton_gpu.init_buffer_index : <i32, 5>
+    %3 = proton_gpu.read_counter : i32
+    proton_gpu.circular_store start %0, %2, %3 {scopeId = 0 : i32} : !ttg.memdesc<32xi32, #shared, #proton_gpu.stack_memory, mutable>, <i32, 5>, i32
+    proton_gpu.finalize %0, %2, %1 : !ttg.memdesc<32xi32, #shared, #proton_gpu.stack_memory, mutable>, <i32, 5>, <i32>
     tt.return
   }
 }

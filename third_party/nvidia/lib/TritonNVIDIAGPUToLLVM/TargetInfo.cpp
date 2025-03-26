@@ -7,6 +7,11 @@
 #include "mlir/Dialect/LLVMIR/NVVMDialect.h"
 #include "llvm/Support/MathExtras.h"
 
+// TODO(crobeck): get CMake to regonize this include dir so we can shorten
+// headerfile path to:
+// Dialect/ProtonGPU/IR/Dialect.h
+#include "third_party/proton/dialect/include/Dialect/ProtonGPU/IR/Dialect.h"
+
 using namespace mlir;
 
 using ::mlir::LLVM::linearize;
@@ -623,6 +628,8 @@ int TargetInfo::getAddressSpace(Attribute addressSpace) const {
   if (isa<triton::gpu::SharedMemorySpaceAttr,
           triton::nvidia_gpu::TensorMemorySpaceAttr>(addressSpace)) {
     spaceId = 3;
+  } else if (isa<triton::proton::gpu::StackMemorySpaceAttr>(addressSpace)) {
+    spaceId = 1;
   } else {
     llvm::report_fatal_error(
         "Only support SharedMemorySpace, TensorMemorySpace for now");
