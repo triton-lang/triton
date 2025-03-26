@@ -139,11 +139,11 @@ static Value shuffleCommonImpl(Location loc, RewriterBase &rewriter,
       Value offset = b.i32_val(0x401F);
       return rewriter.create<ROCDL::DsSwizzleOp>(loc, valType, val, offset);
     } else {
-      if (!llvm::is_contained(
-              {ISAFamily::CDNA2, ISAFamily::CDNA3, ISAFamily::CDNA4},
-              isaFamily)) {
-        // DPP is only supported for CDNA2/CDNA3/CDNA4 right now, so we fallback
-        // to ds_swizzle for other architectures.
+      if (!llvm::is_contained({ISAFamily::CDNA2, ISAFamily::CDNA3,
+                               ISAFamily::CDNA4, ISAFamily::RDNA3},
+                              isaFamily)) {
+        // DPP is only supported for CDNA2/CDNA3/CDNA4/RDNA3 right now, so we
+        // fallback to ds_swizzle for other architectures.
         //
         // This map facilates the butterfly shuffle pattern for a stride less
         // than 16. The pattern stride is the key of the map.

@@ -1,5 +1,6 @@
 #include "triton/Analysis/AxisInfo.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
+#include "triton/Dialect/TritonGPU/Transforms/MMAv5PipelineUtility.h"
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h"
 #include "triton/Dialect/TritonGPU/Transforms/PipeliningUtility.h"
 #include "triton/Dialect/TritonGPU/Transforms/Schedule.h"
@@ -228,7 +229,9 @@ private:
 
     bool seenDot = false;
     for (Operation &op : forOp.getBody()->without_terminator()) {
-      if (!isa<mlir::triton::DotOpInterface>(op))
+      // Arbitrary heuristic. TMEMStoreOp is included to keep logic consistent
+      // with legacy code when we weren't hoisting tmem allocas.
+      if (!isa<mlir::triton::DotOpInterface, ttng::TMEMStoreOp>(op))
         continue;
       seenDot = true;
       seen.clear();
@@ -254,10 +257,29 @@ public:
       : forOp(forOp), opLatency(opLatency) {};
 
   void run() {
+    // TODO: Enable pipelining for loops with multiple MMAv5 ops.
+    int mmav5Count = 0;
     for (auto &op : forOp.getBody()->without_terminator()) {
-      if (isa<ttng::MMAv5OpInterface>(op) &&
-          isPipeliningOfMMAOpPossible(&op, forOp)) {
-        opLatency[&op] = 1;
+      if (isa<ttng::MMAv5OpInterface>(&op)) {
+        mmav5Count++;
+      }
+    }
+    if (mmav5Count > 1)
+      return;
+    // Check if the load op (mma operand) is pipelineable.
+    auto isLoadPipelineable = [&](Operation *op) {
+      return opLatency.count(op) && opLatency[op] > 0;
+    };
+    for (auto &op : forOp.getBody()->without_terminator()) {
+      // If the acc can not be multibuffered, do not pipeline the uses of
+      // the MMA to later stages.
+      if (auto mma = dyn_cast<ttng::MMAv5OpInterface>(&op)) {
+        if (ttng::mmaHasPipelineableOperands(mma, forOp, isLoadPipelineable) &&
+            !ttng::hasAccReadModifyWrite(mma, forOp) &&
+            !getDisallowAccMultiBuffer(forOp) &&
+            isAccMultibufferingPossible(mma, forOp)) {
+          opLatency[&op] = 1;
+        }
       }
     }
   }
@@ -266,47 +288,53 @@ private:
   scf::ForOp forOp;
   DenseMap<Operation *, int> &opLatency;
 
-  bool isPipeliningOfMMAOpPossible(Operation *op, scf::ForOp forOp) {
-    assert((isa<ttng::MMAv5OpInterface>(op)) && "Only MMA ops are supported");
-    // Operands of the MMA op must come from the load, or from outside the loop.
-    auto comesFromLoadOrOutsideLoop = [&](Value v) {
-      if (forOp.isDefinedOutsideOfLoop(v)) {
+  bool isConstantZero(Value v) {
+    if (auto constantOp = v.getDefiningOp<arith::ConstantOp>()) {
+      if (auto attr = dyn_cast<IntegerAttr>(constantOp.getValue())) {
+        return attr.getValue().isZero();
+      }
+      if (auto attr = dyn_cast<FloatAttr>(constantOp.getValue())) {
+        return attr.getValue().isZero();
+      }
+    }
+    return false;
+  }
+
+  bool accUseFlagSetToFalse(ttng::MMAv5OpInterface mma, scf::ForOp forOp) {
+    Value accUseFlag = mma.useAccumulator();
+    if (isConstantZero(accUseFlag)) {
+      return true;
+    }
+    auto yieldOp = cast<scf::YieldOp>(forOp.getBody()->getTerminator());
+    while (auto blockArg = dyn_cast<BlockArgument>(accUseFlag)) {
+      accUseFlag = yieldOp.getOperand(blockArg.getArgNumber() - 1);
+    }
+    // If the accUseFlag is overwritten in the loop, we treat it as a 'false'
+    // with condition being ~accUseFlag.
+    return accUseFlag.getDefiningOp() &&
+           forOp->isAncestor(accUseFlag.getDefiningOp());
+  }
+
+  bool accOverwrittenInLoop(ttng::MMAv5OpInterface mma, scf::ForOp forOp) {
+    auto tmemAlloc = mma.getAccumulator().getDefiningOp<ttng::TMEMAllocOp>();
+    if (!tmemAlloc || !forOp.isDefinedOutsideOfLoop(tmemAlloc)) {
+      return false;
+    }
+    for (auto user : tmemAlloc->getUsers()) {
+      if (isa<ttng::TMEMStoreOp>(user) &&
+          forOp->isAncestor(user->getParentOp())) {
         return true;
       }
-      // Do not walk through the Block Arguments.
-      if (!v.getDefiningOp()) {
-        return false;
-      }
-      if (auto localAlloc = dyn_cast<ttg::LocalAllocOp>(v.getDefiningOp())) {
-        if (!localAlloc.getSrc()) {
-          return false;
-        }
-        return (localAlloc.getSrc().getDefiningOp() &&
-                isa<tt::LoadOp>(localAlloc.getSrc().getDefiningOp())) ||
-               forOp.isDefinedOutsideOfLoop(localAlloc.getSrc());
-      }
-      return false;
-    };
-    if (auto dotOp = dyn_cast<tt::DotOpInterface>(op)) {
-      if (!comesFromLoadOrOutsideLoop(dotOp.getA()) ||
-          !comesFromLoadOrOutsideLoop(dotOp.getB())) {
-        return false;
-      }
     }
+    return false;
+  }
 
-    // For scaled MMA check if the scales are passed through shared memory, and
-    // also coming from load or outside the loop.
-    if (auto scaledOp = dyn_cast<ttng::TCGen5MMAScaledOp>(op)) {
-      if (!isa<ttg::SharedEncodingTrait>(
-              scaledOp.getAScale().getType().getEncoding()) ||
-          !isa<ttg::SharedEncodingTrait>(
-              scaledOp.getBScale().getType().getEncoding()))
-        return false;
-      if (!comesFromLoadOrOutsideLoop(scaledOp.getAScale()) ||
-          !comesFromLoadOrOutsideLoop(scaledOp.getBScale()))
-        return false;
-    }
-    return true;
+  bool isAccMultibufferingPossible(ttng::MMAv5OpInterface mma,
+                                   scf::ForOp forOp) {
+    // If the accumulator is never overwritten in the loop, we can't multibuffer
+    // it, as the overwrite point is the only place where we can swap the
+    // buffer.
+    return accUseFlagSetToFalse(mma, forOp) || accOverwrittenInLoop(mma, forOp);
   }
 };
 
@@ -316,7 +344,7 @@ private:
 // on the requested number of stages assign the latencies in a way that
 // cover all the stages with the sum of latencies in the chain from the first
 // load to the final dot op.
-void assignLatencies(ModuleOp moduleOp, int defaultNumStages, bool assignMMA) {
+void assignLatencies(ModuleOp moduleOp, int defaultNumStages) {
   SmallVector<scf::ForOp> loops;
   moduleOp->walk([&](scf::ForOp forOp) {
     // Bail out for loops with num_stage <= 1.
@@ -335,9 +363,7 @@ void assignLatencies(ModuleOp moduleOp, int defaultNumStages, bool assignMMA) {
     }
     int numStages = getNumStagesOrDefault(forOp, defaultNumStages);
     AssignLoadLatencies(forOp, numStages, opLatency).run();
-    if (assignMMA) {
-      AssignMMALatencies(forOp, opLatency).run();
-    }
+    AssignMMALatencies(forOp, opLatency).run();
   }
   serializeLatencies(moduleOp, opLatency);
 }

@@ -9,8 +9,7 @@ namespace ttg = mlir::triton::gpu;
 namespace ttng = mlir::triton::nvidia_gpu;
 
 ttng::TMEMAllocOp createTMemAlloc(IRRewriter &rewriter,
-                                  ttng::TMEMAllocOp oldTMemAllocOp,
-                                  Value initValue) {
+                                  ttng::TMEMAllocOp oldTMemAllocOp) {
   Location loc = oldTMemAllocOp.getLoc();
   auto oldRetType = oldTMemAllocOp.getType();
   SmallVector<int64_t> shape = {oldRetType.getShape().begin(),
@@ -19,7 +18,7 @@ ttng::TMEMAllocOp createTMemAlloc(IRRewriter &rewriter,
       shape, oldRetType.getElementType(), oldRetType.getEncoding(),
       oldRetType.getMemorySpace(), /*mutableMemory=*/true);
   return rewriter.create<ttng::TMEMAllocOp>(oldTMemAllocOp.getLoc(),
-                                            accMemDescType, initValue);
+                                            accMemDescType, nullptr);
 }
 
 Value createBarrierAlloc(IRRewriter &rewriter, scf::ForOp forOp) {
@@ -43,22 +42,25 @@ Value createBarrierAlloc(IRRewriter &rewriter, scf::ForOp forOp) {
 }
 
 scf::ForOp pipelineDot(scf::ForOp forOp, ttng::TCGen5MMAOp dotOp,
-                       ttng::TMEMLoadOp loadOp, ttng::TMEMAllocOp allocOp,
-                       Operation *accModOp, int yieldArgNo) {
+                       ttng::TMEMLoadOp loadOp, ttng::TMEMStoreOp storeOp,
+                       ttng::TMEMAllocOp allocOp, Operation *accModOp,
+                       int yieldArgNo) {
+  bool tmemHoisted = forOp.isDefinedOutsideOfLoop(allocOp.getResult());
+  if (tmemHoisted) {
+    assert(storeOp);
+  }
   IRRewriter rewriter(forOp->getContext());
   rewriter.setInsertionPoint(forOp);
   Location loc = forOp.getLoc();
   Value vTrue = rewriter.create<arith::ConstantIntOp>(loc, 1, 1);
   Value accInitValue = forOp.getInitArgs()[yieldArgNo];
-  auto newAlloc = createTMemAlloc(rewriter, allocOp, accInitValue);
+  auto newAlloc = tmemHoisted ? allocOp : createTMemAlloc(rewriter, allocOp);
+  newAlloc.getSrcMutable().assign(accInitValue);
   Value barrier = createBarrierAlloc(rewriter, forOp);
   Value phase = rewriter.create<arith::ConstantIntOp>(loc, 0, 32);
   Value notZerothIter = rewriter.create<arith::ConstantIntOp>(loc, 0, 1);
   Type loadTy = loadOp.getType();
-  scf::ForOp newForOp =
-      replaceForOpWithNewSignature(rewriter, forOp, {phase, notZerothIter});
-  forOp.erase();
-  forOp = newForOp;
+  (void)addIterArgsToLoop(rewriter, forOp, {phase, notZerothIter});
   phase = forOp.getRegionIterArg(forOp.getNumRegionIterArgs() - 2);
   notZerothIter = forOp.getRegionIterArg(forOp.getNumRegionIterArgs() - 1);
   Value oldAccValue = forOp.getRegionIterArg(yieldArgNo);
@@ -86,16 +88,11 @@ scf::ForOp pipelineDot(scf::ForOp forOp, ttng::TCGen5MMAOp dotOp,
   // Update the yield
   appendToForOpYield(forOp, {phase, vTrue});
 
+  rewriter.setInsertionPointAfter(forOp);
   // Short-circuit the loop carry value that was holding the accumulator value,
   // removing the last reference to the loaded accumulator.
   forOp.getBody()->getTerminator()->setOperand(yieldArgNo, oldAccValue);
-
-  // Remove the old alloc and load
-  loadOp.erase();
-  allocOp.erase();
-
   // Update the uses outside the loop
-  rewriter.setInsertionPointAfter(forOp);
   phase = forOp.getResult(forOp.getNumResults() - 2);
   notZerothIter = forOp.getResult(forOp.getNumResults() - 1);
   rewriter.create<ttng::WaitBarrierOp>(dotOp.getLoc(), barrier, phase,
@@ -107,9 +104,19 @@ scf::ForOp pipelineDot(scf::ForOp forOp, ttng::TCGen5MMAOp dotOp,
   rewriter.create<ttng::InvalBarrierOp>(dotOp.getLoc(), barrier);
   rewriter.create<ttg::LocalDeallocOp>(dotOp.getLoc(), barrier);
 
+  // Remove the old alloc and load
+  if (storeOp) {
+    storeOp.erase();
+  }
+  loadOp.erase();
+  if (!tmemHoisted) {
+    allocOp.erase();
+  }
+
   return forOp;
 }
 
+// TODO: Integrate with the new pipeliner
 scf::ForOp mlir::triton::pipelineMMAWithScaledAcc(scf::ForOp forOp) {
   // Look for chained mmas for which the tmem access is not pipelined yet, with
   // an operation modifying the acc value before the mma.
@@ -126,22 +133,40 @@ scf::ForOp mlir::triton::pipelineMMAWithScaledAcc(scf::ForOp forOp) {
   for (auto op : dotOps) {
     auto dotOp = llvm::cast<ttng::TCGen5MMAOp>(op);
     auto tmemAlloc = dotOp.getD().getDefiningOp<ttng::TMEMAllocOp>();
-    if (!tmemAlloc || tmemAlloc->getBlock() != dotOp->getBlock()) {
+    if (!tmemAlloc) {
       continue;
     }
-    if (tmemAlloc.getSrc() == nullptr) {
+    if (tmemAlloc->getParentOp() == forOp && tmemAlloc.getSrc() == nullptr) {
       continue;
     }
     ttng::TMEMLoadOp tmemLoad = nullptr;
+    ttng::TMEMStoreOp tmemStore = nullptr;
     for (auto user : tmemAlloc.getResult().getUsers()) {
       if (auto load = dyn_cast<ttng::TMEMLoadOp>(user)) {
-        tmemLoad = load;
-        break;
+        if (load->getBlock() == dotOp->getBlock()) {
+          if (tmemLoad) {
+            // Multiple loads in the loop, bail out
+            return forOp;
+          }
+          tmemLoad = load;
+        }
+      }
+      if (auto store = dyn_cast<ttng::TMEMStoreOp>(user)) {
+        if (store->getBlock() == dotOp->getBlock()) {
+          if (tmemStore) {
+            // Multiple stores in the loop, bail out
+            return forOp;
+          }
+          tmemStore = store;
+        }
       }
     }
-    if (!tmemLoad || tmemLoad->getBlock() != dotOp->getBlock() ||
-        !tmemLoad.getResult().hasOneUse()) {
+    if (!tmemLoad || !tmemLoad.getResult().hasOneUse()) {
       continue;
+    }
+    if (tmemStore) {
+      // If there is a store in the loop, alloc should be already hoisted
+      assert(forOp.isDefinedOutsideOfLoop(tmemAlloc));
     }
     OpOperand &tmemLoadUse = *tmemLoad.getResult().getUses().begin();
     auto yieldOp = dyn_cast<scf::YieldOp>(tmemLoadUse.getOwner());
@@ -157,14 +182,15 @@ scf::ForOp mlir::triton::pipelineMMAWithScaledAcc(scf::ForOp forOp) {
     if (accModOp == tmemAlloc) {
       accModOp = nullptr; // not really an acc modification
     } else {
-      if (!accModOp->hasOneUse() &&
-          *accModOp->getUsers().begin() != tmemAlloc) {
+      if (!accModOp->hasOneUse() ||
+          (*accModOp->getUsers().begin() != tmemAlloc &&
+           *accModOp->getUsers().begin() != tmemStore)) {
         continue;
       }
     }
 
-    forOp =
-        pipelineDot(forOp, dotOp, tmemLoad, tmemAlloc, accModOp, yieldArgNo);
+    forOp = pipelineDot(forOp, dotOp, tmemLoad, tmemStore, tmemAlloc, accModOp,
+                        yieldArgNo);
   }
   return forOp;
 };

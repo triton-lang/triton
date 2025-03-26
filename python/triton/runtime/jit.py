@@ -787,8 +787,8 @@ def jit(
     version=None,
     repr: Optional[Callable] = None,
     launch_metadata: Optional[Callable] = None,
-    do_not_specialize: Optional[Iterable[int]] = None,
-    do_not_specialize_on_alignment: Optional[Iterable[int]] = None,
+    do_not_specialize: Optional[Iterable[int | str]] = None,
+    do_not_specialize_on_alignment: Optional[Iterable[int | str]] = None,
     debug: Optional[bool] = None,
     noinline: Optional[bool] = None,
 ) -> Callable[[T], JITFunction[T]]:
@@ -801,8 +801,8 @@ def jit(
     version=None,
     repr: Optional[Callable] = None,
     launch_metadata: Optional[Callable] = None,
-    do_not_specialize: Optional[Iterable[int]] = None,
-    do_not_specialize_on_alignment: Optional[Iterable[int]] = None,
+    do_not_specialize: Optional[Iterable[int | str]] = None,
+    do_not_specialize_on_alignment: Optional[Iterable[int | str]] = None,
     debug: Optional[bool] = None,
     noinline: Optional[bool] = None,
 ) -> Union[JITFunction[T], Callable[[T], JITFunction[T]]]:

@@ -1,4 +1,5 @@
 #include "mlir/IR/BuiltinOps.h"
+#include "mlir/IR/Dominance.h"
 #include "mlir/IR/ImplicitLocOpBuilder.h"
 #include "mlir/Pass/Pass.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
@@ -16,6 +17,9 @@ using namespace mlir;
 using namespace triton;
 using namespace triton::gpu;
 namespace ttng = triton::nvidia_gpu;
+
+using MMAInfo = ttng::MMAInfo;
+using Partition = WarpSchedule::Partition;
 
 //===----------------------------------------------------------------------===//
 // specializeLoadMMADependencies
@@ -75,39 +79,55 @@ static LogicalResult findSingleChainToLoad(scf::ForOp loop, Value value,
   return failure();
 }
 
-// FIXME: This won't work for persistent matmul.
-static LogicalResult matchAccumulatorPattern(ttng::TMEMAllocOp alloc,
-                                             ttng::TMEMLoadOp load) {
-  if (!alloc.getSrc())
-    return failure();
-  auto arg = dyn_cast<BlockArgument>(alloc.getSrc());
-  if (!arg)
-    return failure();
+static std::pair<Value, Value> addIndexAndPhase(ImplicitLocOpBuilder &b,
+                                                scf::ForOp &loop,
+                                                unsigned numBuffers,
+                                                Value epilogue = {}) {
+  OpBuilder::InsertionGuard guard(b);
+  b.setInsertionPoint(loop);
+  auto intCst = [&](int value) {
+    return b.create<arith::ConstantIntOp>(value, 32);
+  };
 
-  auto loop = cast<scf::ForOp>(alloc->getParentOp());
-  if (arg.getOwner() != loop.getBody())
-    return failure();
+  // Index and phase both start at 0.
+  unsigned curArgIdx = loop.getNumRegionIterArgs();
+  auto newArgs = addIterArgsToLoop(b, loop, {intCst(0), intCst(0)});
+  Value index = newArgs[0];
+  Value phase = newArgs[1];
 
-  unsigned idx = arg.getArgNumber() - 1;
-  OpOperand &yielded = loop.getBody()->getTerminator()->getOpOperand(idx);
-  if (yielded.get() != load.getResult() || !load->hasOneUse())
-    return failure();
-  return success();
+  auto yield = cast<scf::YieldOp>(loop.getBody()->getTerminator());
+  b.setInsertionPoint(yield);
+
+  // Post-increment the index and phase.
+  Value nextIndex = b.create<arith::AddIOp>(index, intCst(1));
+  Value nextPhase = b.create<arith::XOrIOp>(phase, intCst(1));
+
+  Value rollover = b.create<arith::CmpIOp>(arith::CmpIPredicate::eq, nextIndex,
+                                           intCst(numBuffers));
+  nextIndex = b.create<arith::SelectOp>(rollover, intCst(0), nextIndex);
+  nextPhase = b.create<arith::SelectOp>(rollover, nextPhase, phase);
+
+  if (epilogue) {
+    nextIndex = b.create<arith::SelectOp>(epilogue, nextIndex, index);
+    nextPhase = b.create<arith::SelectOp>(epilogue, nextPhase, phase);
+  }
+
+  yield->insertOperands(yield.getNumOperands(), {nextIndex, nextPhase});
+
+  return {index, phase};
 }
 
 // Create an operation inside a partition.
 template <typename OpT, typename... Args>
-static auto createInPartition(ImplicitLocOpBuilder &b,
-                              WarpSchedule::Partition &partition,
+static auto createInPartition(ImplicitLocOpBuilder &b, Partition &partition,
                               Args &&...args) {
   auto op = b.create<OpT>(std::forward<Args>(args)...);
   partition.insert(op);
   return op;
 }
 
-static void lowerTMACopy(ImplicitLocOpBuilder &b,
-                         WarpSchedule::Partition &partition, Operation *op,
-                         Value barrier, Value view) {
+static void lowerTMACopy(ImplicitLocOpBuilder &b, Partition &partition,
+                         Operation *op, Value barrier, Value view) {
   Value truePred = b.create<arith::ConstantIntOp>(true, /*width=*/1);
   if (auto load = dyn_cast<DescriptorLoadOp>(op)) {
     Value tmaPtr = createInPartition<ttng::TensorDescToTMAPtrOp>(
@@ -124,56 +144,99 @@ static void lowerTMACopy(ImplicitLocOpBuilder &b,
   }
 }
 
+static std::pair<Value, Operation *>
+getUserPrecondition(ImplicitLocOpBuilder &b, scf::ForOp loop,
+                    Operation *domOp) {
+  // If the use is inside a loop besides the actual loop being pipelined, we
+  // have to hoist the use up to that loop, otherwise the barriers will be
+  // inserted in the loop.
+  for (Operation *userLoop;
+       loop != (userLoop = domOp->getParentOfType<LoopLikeOpInterface>());)
+    domOp = userLoop;
+  assert(loop->isProperAncestor(domOp));
+
+  Value trueVal = b.create<arith::ConstantOp>(b.getBoolAttr(true));
+  OpBuilder::InsertionGuard guard(b);
+  b.setInsertionPoint(loop.getBody()->findAncestorOpInBlock(*domOp));
+
+  Value precondition = trueVal;
+  Operation *parentOp = domOp;
+  while (loop != (parentOp = parentOp->getParentOp())) {
+    assert(!isa<LoopLikeOpInterface>(parentOp));
+    auto ifOp = dyn_cast<scf::IfOp>(parentOp);
+    if (!ifOp) {
+      llvm::report_fatal_error(
+          "FIXME: unsupported parent operation for MMA user");
+    }
+    Value cond = ifOp.getCondition();
+    if (domOp->getParentRegion() == &ifOp.getElseRegion())
+      cond = b.create<arith::XOrIOp>(cond, trueVal);
+    precondition = b.create<arith::AndIOp>(precondition, cond);
+  }
+
+  return {precondition, domOp};
+}
+
 LogicalResult triton::gpu::specializeLoadMMADependencies(scf::ForOp &loop,
                                                          int defaultNumStages) {
   auto ops = llvm::to_vector(loop.getOps<ttng::MMAv5OpInterface>());
   // Support only 1 MMA op.
-  if (ops.size() != 1)
-    return failure();
+  if (ops.size() != 1) {
+    return mlir::emitWarning(
+        loop.getLoc(),
+        "failed to warp specialize: more than one `tt.dot` found in the loop");
+  }
   ttng::MMAv5OpInterface mmaOp = ops.front();
   auto dot = cast<DotOpInterface>(*mmaOp);
 
+  // Look for the loads that feed the A and B operands.
   SmallVector<Operation *> aChain, bChain;
   if (failed(findSingleChainToLoad(loop, dot.getA(), aChain)) ||
-      failed(findSingleChainToLoad(loop, dot.getB(), bChain)))
-    return failure();
-  auto accOr = getTMemAllocAndLoad(mmaOp);
-  if (!accOr)
-    return failure();
-  auto [accAlloc, accLoad] = *accOr;
-  if (failed(matchAccumulatorPattern(accAlloc, accLoad)))
-    return failure();
+      failed(findSingleChainToLoad(loop, dot.getB(), bChain))) {
+    return mlir::emitWarning(loop.getLoc(),
+                             "failed to warp specialize: could not find TMA "
+                             "loads for `tt.dot` operands");
+  }
 
-  // Pattern match succeeded. Now rewrite the loads and MMA op.
+  // Determine if the MMA can be pipelined according to some specific rules.
+  DominanceInfo domInfo(loop);
+  std::optional<MMAInfo> mmaInfoOr = getMMAInfo(loop, mmaOp, domInfo);
+  if (!mmaInfoOr) {
+    return mlir::emitWarning(loop.getLoc(),
+                             "failed to warp specialize: could not determine "
+                             "if the MMA op can be pipelined");
+  }
+  MMAInfo info = std::move(*mmaInfoOr);
+
+  // FIXME: We rely on the reset point of the accumulator to indicate where the
+  // epilogue once was if the loop was flattened.
+  if (info.accIsMultiBuffered) {
+    MMAInfo::AccOverridePoint def = *info.accDef;
+    Operation *defOp = def.condition ? def.condition.getDefiningOp() : def.op;
+    if (defOp->getBlock() != loop.getBody() || defOp->isBeforeInBlock(mmaOp)) {
+      return mlir::emitWarning(loop.getLoc(),
+                               "failed to warp specialize: accumulator reset "
+                               "does not occur after the `tt.dot`");
+    }
+  }
+
+  // Pattern match succeeded. Now rewrite the loads and MMA ops to pass tensor
+  // values through buffers.
   int numStages = getNumStagesOrDefault(loop, defaultNumStages);
   int numBuffers = numStages - 1;
+  int numMmaStages = 1 + info.accIsMultiBuffered;
   WarpSchedule schedule;
-  WarpSchedule::Partition *loadPartition = schedule.addPartition(0);
-  WarpSchedule::Partition *mmaPartition = schedule.addPartition(numBuffers);
+  Partition *loadPartition = schedule.addPartition(0);
+  Partition *mmaPartition = schedule.addPartition(numBuffers);
 
   ImplicitLocOpBuilder b(mmaOp.getLoc(), loop);
   auto intCst = [&](int value, unsigned width = 32) {
     return b.create<arith::ConstantIntOp>(value, width);
   };
 
-  // Rewrite the loop to pass things through buffers.
-  unsigned idx = cast<BlockArgument>(accAlloc.getSrc()).getArgNumber() - 1;
-  Value newAlloc = createTMemAlloc(b, accAlloc, /*multiBufferred=*/false,
-                                   /*numStages=*/1);
-  Value mmaBarrier = createBarrierAlloc(loop, /*numBarriers=*/1);
-  b.create<ttng::TMEMStoreOp>(newAlloc, loop.getInitArgs()[idx],
-                              intCst(true, /*width=*/1));
-  mmaOp.setBarrier(mmaBarrier);
-  accAlloc.replaceAllUsesWith(newAlloc);
-  accLoad->dropAllUses();
-  accLoad->moveAfter(loop);
-  loop.getResult(idx).replaceAllUsesWith(accLoad);
-  accAlloc.erase();
-  llvm::BitVector indices(loop.getNumResults());
-  indices.set(idx);
-  eraseLoopCarriedValues(loop, indices);
+  // Multi-buffer the loads.
+  auto [loadIndex, loadPhase] = addIndexAndPhase(b, loop, numBuffers);
 
-  // Now multi-buffer the loads.
   Operation *aLoad = aChain.back();
   Operation *bLoad = bChain.back();
   auto aType = cast<RankedTensorType>(aLoad->getResult(0).getType());
@@ -193,28 +256,6 @@ LogicalResult triton::gpu::specializeLoadMMADependencies(scf::ForOp &loop,
     b.create<ttng::ArriveBarrierOp>(emptyBar, 1);
   }
 
-  unsigned curArgIdx = loop.getNumRegionIterArgs();
-  scf::ForOp newLoop =
-      replaceForOpWithNewSignature(b, loop, {intCst(-1), intCst(0), intCst(0)});
-  loop.erase();
-  loop = newLoop;
-
-  Value index = loop.getRegionIterArgs().slice(curArgIdx)[0];
-  Value phase = loop.getRegionIterArgs().slice(curArgIdx)[1];
-  Value mmaPhase = loop.getRegionIterArgs().slice(curArgIdx)[2];
-
-  b.setInsertionPointToStart(loop.getBody());
-  index = b.create<arith::AddIOp>(index, intCst(1));
-  Value rollover = b.create<arith::CmpIOp>(arith::CmpIPredicate::eq, index,
-                                           intCst(numBuffers));
-  index = b.create<arith::SelectOp>(rollover, intCst(0), index);
-  phase = b.create<arith::SelectOp>(
-      rollover, b.create<arith::XOrIOp>(phase, intCst(1)), phase);
-
-  Value nextMmaPhase = b.create<arith::XOrIOp>(mmaPhase, intCst(1));
-  auto yield = cast<scf::YieldOp>(loop.getBody()->getTerminator());
-  yield->insertOperands(yield.getNumOperands(), {index, phase, nextMmaPhase});
-
   int loadSizeInBytes =
       product(aType.getShape()) * aType.getElementTypeBitWidth() / 8 +
       product(bType.getShape()) * bType.getElementTypeBitWidth() / 8;
@@ -223,26 +264,25 @@ LogicalResult triton::gpu::specializeLoadMMADependencies(scf::ForOp &loop,
   b.setInsertionPoint(aLoad->isBeforeInBlock(bLoad) ? aLoad : bLoad);
   // Wait for the buffer to be empty and the corresponding barrier to be
   // exhausted.
-  Value curEmptyBarrier = createSingleBufferView(b, emptyBars, index);
-  createInPartition<ttng::WaitBarrierOp>(b, *loadPartition, curEmptyBarrier,
-                                         phase);
+  Value curEmptyBar = createSingleBufferView(b, emptyBars, loadIndex);
+  createInPartition<ttng::WaitBarrierOp>(b, *loadPartition, curEmptyBar,
+                                         loadPhase);
   // Indicate the expected size of the loads.
-  Value curLoadBarrier = createSingleBufferView(b, readyBars, index);
-  createInPartition<ttng::BarrierExpectOp>(b, *loadPartition, curLoadBarrier,
-                                           loadSizeInBytes,
-                                           intCst(true, /*width=*/1));
+  Value curLoadBar = createSingleBufferView(b, readyBars, loadIndex);
+  createInPartition<ttng::BarrierExpectOp>(b, *loadPartition, curLoadBar,
+                                           loadSizeInBytes, intCst(true, 1));
 
   // Replace the loads with async copies.
   b.setInsertionPoint(aLoad);
-  Value aView = createSingleBufferView(b, aAlloc, index);
-  lowerTMACopy(b, *loadPartition, aLoad, curLoadBarrier, aView);
+  Value aView = createSingleBufferView(b, aAlloc, loadIndex);
+  lowerTMACopy(b, *loadPartition, aLoad, curLoadBar, aView);
   replaceUsesAndPropagateType(b, *aLoad->user_begin(), aView);
   aLoad->user_begin()->erase();
   aLoad->erase();
 
   b.setInsertionPoint(bLoad);
-  Value bView = createSingleBufferView(b, bAlloc, index);
-  lowerTMACopy(b, *loadPartition, bLoad, curLoadBarrier, bView);
+  Value bView = createSingleBufferView(b, bAlloc, loadIndex);
+  lowerTMACopy(b, *loadPartition, bLoad, curLoadBar, bView);
   replaceUsesAndPropagateType(b, *bLoad->user_begin(), bView);
   bLoad->user_begin()->erase();
   bLoad->erase();
@@ -265,15 +305,152 @@ LogicalResult triton::gpu::specializeLoadMMADependencies(scf::ForOp &loop,
     return lhs->isBeforeInBlock(rhs);
   });
   b.setInsertionPoint(*minIt);
-  createInPartition<ttng::WaitBarrierOp>(b, *mmaPartition, curLoadBarrier,
-                                         phase);
+  createInPartition<ttng::WaitBarrierOp>(b, *mmaPartition, curLoadBar,
+                                         loadPhase);
 
-  // Insert the MMA wait after the MMA op and signal the empty barriers.
+  // Now rewrite the MMA by hoisting the TMEM allocation out of the loop and
+  // multi-buffering it if necessary. However, the TMEM multi-buffering may be
+  // with respect to the outer loop.
+  auto [mmaIndex, mmaPhase] = addIndexAndPhase(b, loop, numMmaStages);
+  Value mmaBars = createBarrierAlloc(loop, numMmaStages);
+
+  b.setInsertionPoint(mmaOp);
+  Value curMmaBar = createSingleBufferView(b, mmaBars, mmaIndex);
+  mmaOp.setBarrier(curMmaBar);
+
   b.setInsertionPointAfter(mmaOp);
-  createInPartition<ttng::WaitBarrierOp>(b, *mmaPartition, mmaBarrier,
-                                         mmaPhase);
-  createInPartition<ttng::ArriveBarrierOp>(b, *mmaPartition, curEmptyBarrier,
-                                           1);
+  createInPartition<ttng::WaitBarrierOp>(b, *mmaPartition, curMmaBar, mmaPhase);
+  createInPartition<ttng::ArriveBarrierOp>(b, *mmaPartition, curEmptyBar, 1);
+  OpBuilder::InsertPoint donePt = b.saveInsertionPoint();
+
+  // Now handle the accumulator, which is the tricky bit. The accumulator value
+  // may be conditionally reset in the MMA partition before the MMA op, and it
+  // may be conditionally used in a user partition.
+  b.setInsertionPoint(loop);
+  ttng::TMEMAllocOp accAlloc =
+      createTMemAlloc(b, info.accAlloc, /*multiBuffered=*/true, numMmaStages);
+  auto accInitArg = cast<BlockArgument>(info.accAlloc.getSrc());
+  Value accInitValue = loop.getInitArgs()[accInitArg.getArgNumber() - 1];
+  ttng::createInitStore(b, accAlloc, accInitValue, /*multiBuffered=*/true);
+
+  // If the accumulator is multibuffered, the buffer changes when the
+  // accumulator is reset.
+  auto [accIndex, accPhase] = addIndexAndPhase(
+      b, loop, numMmaStages,
+      info.accDef.value_or(MMAInfo::AccOverridePoint{}).condition);
+  b.setInsertionPoint(mmaOp);
+  Value curAccBuf = createSingleBufferView(b, accAlloc, accIndex);
+  mmaOp.setAccumulator(curAccBuf);
+
+  // Replace uses of the accumulator inside the loop with a value loaded from
+  // the buffer. Place these in a new user partition.
+  SmallVector<Operation *> accUses = getDirectAccUses(info.accLoad);
+  if (!accUses.empty()) {
+    Value accEmptyBars = createBarrierAlloc(loop, numMmaStages);
+    Value accReadyBars = createBarrierAlloc(loop, numMmaStages);
+    b.setInsertionPoint(loop);
+    // Because the accumulator reset occurs after the MMA op, we have to place
+    // the wait on the empty barrier after the MMA op as well. This is OK since
+    // we know all buffers are empty upon entry to the loop. However, this means
+    // the last mbarrier is guarding the first buffer. Thus, initialize all but
+    // the last mbarrier.
+    for (auto i : llvm::drop_end(llvm::seq(numMmaStages))) {
+      Value emptyBar = createSingleBufferView(b, accEmptyBars, i);
+      b.create<ttng::ArriveBarrierOp>(emptyBar, 1);
+    }
+    b.setInsertionPointToStart(loop.getBody());
+    Value curAccEmptyBar = createSingleBufferView(b, accEmptyBars, accIndex);
+    Value curAccReadyBar = createSingleBufferView(b, accReadyBars, accIndex);
+
+    Operation *domOp = findNearestCommonDominator(accUses, domInfo);
+    assert(domOp && "could not find common dominator for accumulator uses");
+    Value pred;
+    b.restoreInsertionPoint(donePt);
+    std::tie(pred, domOp) = getUserPrecondition(b, loop, domOp);
+
+    // Set up production of the accumulator result.
+    b.setInsertionPointAfter(pred.getDefiningOp());
+    createInPartition<ttng::ArriveBarrierOp>(b, *mmaPartition, curAccReadyBar,
+                                             1, pred);
+    createInPartition<ttng::WaitBarrierOp>(b, *mmaPartition, curAccEmptyBar,
+                                           accPhase, pred);
+    assert(donePt.getPoint() == b.getInsertionPoint() ||
+           donePt.getPoint()->isBeforeInBlock(&*b.getInsertionPoint()));
+    donePt = b.saveInsertionPoint();
+
+    // Acquire and get the accumulator result.
+    b.setInsertionPoint(domOp);
+    Partition *userPartition = schedule.addPartition(numBuffers + numMmaStages);
+    createInPartition<ttng::WaitBarrierOp>(b, *userPartition, curAccReadyBar,
+                                           accPhase);
+    Value acc = createInPartition<ttng::TMEMLoadOp>(
+        b, *userPartition, info.accLoad.getType(), curAccBuf);
+    for (Operation *user : accUses)
+      user->replaceUsesOfWith(info.accLoad, acc);
+    // Signal the accumulator buffer is ready for the next iteration. Because
+    // the mbarriers got shifted over by 1, we have to signal the next mbarrier.
+    Value nextIndex =
+        b.create<arith::AddIOp>(accIndex, intCst(numMmaStages - 1));
+    nextIndex = b.create<arith::RemUIOp>(nextIndex, intCst(numMmaStages));
+    Value nextAccEmptyBar = createSingleBufferView(b, accEmptyBars, nextIndex);
+    createInPartition<ttng::ArriveBarrierOp>(b, *userPartition, nextAccEmptyBar,
+                                             1);
+
+    // Propagate the partition to transitive users. If this happens to create a
+    // cycle, subsequent warp specialization steps will fail.
+    while (!accUses.empty()) {
+      Operation *op = accUses.pop_back_val();
+      if (isa<scf::YieldOp>(op))
+        continue;
+      op = loop.getBody()->findAncestorOpInBlock(*op);
+      userPartition->insert(op);
+      llvm::append_range(accUses, op->getUsers());
+    }
+
+    // Place the epilogue partition in the default warpgroup. The MMA and load
+    // partitions shouldn't have tensor computations in them, which means they
+    // will get assigned just 1 warp each.
+    schedule.reorderPartitions({2, 1, 0});
+  }
+
+  // Update the reset of the accumulator in the loop if it is multi-buffered.
+  if (info.accIsMultiBuffered && info.accDef->initValue) {
+    MMAInfo::AccOverridePoint def = *info.accDef;
+    b.setInsertionPointAfter(def.condition ? def.condition.getDefiningOp()
+                                           : def.op);
+    assert(b.getInsertionBlock() == loop.getBody());
+    if (b.getInsertionPoint()->isBeforeInBlock(&*donePt.getPoint()))
+      b.restoreInsertionPoint(donePt);
+    Value pred = def.condition ? def.condition : intCst(true, 1);
+
+    // Write the initial value for the next accumulator buffer.
+    Value nextIndex = b.create<arith::AddIOp>(accIndex, intCst(1));
+    nextIndex = b.create<arith::RemUIOp>(nextIndex, intCst(numMmaStages));
+    Value nextAccBuf = createSingleBufferView(b, accAlloc, nextIndex);
+    createInPartition<ttng::TMEMStoreOp>(b, *mmaPartition, nextAccBuf,
+                                         def.initValue, pred);
+    if (def.condition) {
+      def.op->dropAllUses();
+      def.op->erase();
+    }
+  }
+
+  // Replace uses of the accumulator outside the loop.
+  llvm::BitVector toErase(loop.getNumRegionIterArgs());
+  if (info.yieldArgNo) {
+    b.setInsertionPointAfter(loop);
+    Value accBuf =
+        createSingleBufferView(b, accAlloc, loop.getResults().end()[-2]);
+    Value acc = b.create<ttng::TMEMLoadOp>(info.accLoad.getType(), accBuf);
+    loop.getResult(*info.yieldArgNo).replaceAllUsesWith(acc);
+    toErase.set(*info.yieldArgNo);
+  }
+
+  info.accAlloc->dropAllUses();
+  info.accLoad->dropAllUses();
+  info.accAlloc.erase();
+  info.accLoad.erase();
+  eraseLoopCarriedValues(loop, toErase);
 
   schedule.serialize(loop);
   return success();
@@ -301,7 +478,7 @@ struct LoadMMASpecialization
 void LoadMMASpecialization::runOnOperation() {
   SmallVector<scf::ForOp> loops;
   getOperation().walk([&](scf::ForOp loop) {
-    if (loop->hasAttr("tt.warp_specialize"))
+    if (loop->hasAttr(kWarpSpecializeAttrName))
       loops.push_back(loop);
   });
   for (scf::ForOp loop : loops) {
