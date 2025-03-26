@@ -329,7 +329,7 @@ tt.func @matmul_tma_acc_with_unconditional_user(
     // CHECK-NEXT: ttng.arrive_barrier
 
     // CHECK-NEXT: ttng.arrive_barrier [[CUR_ACC_READY_BAR]], 1, %true {ttg.partition = 1 : i32}
-    // CHECK-NEXT: ttng.wait_barrier [[CUR_ACC_EMPTY_BAR]], [[ACC_PHASE]] {ttg.partition = 1 : i32}, %true
+    // CHECK-NEXT: ttng.wait_barrier [[CUR_ACC_EMPTY_BAR]], [[ACC_PHASE]], %true {ttg.partition = 1 : i32}
 
     // CHECK-NEXT: [[ACC_RESET:%.*]] = "acc_reset"
     %acc_reset = "acc_reset"() : () -> tensor<128x128xf32, #acc_layout>
@@ -429,7 +429,7 @@ tt.func @matmul_tma_acc_with_conditional_user(
     %do_epilogue = "epilogue_cond"(%k) : (i32) -> i1
 
     // CHECK-NEXT: ttng.arrive_barrier [[CUR_ACC_READY_BAR]], 1, [[DO_EPILOGUE]] {ttg.partition = 1 : i32}
-    // CHECK-NEXT: ttng.wait_barrier [[CUR_ACC_EMPTY_BAR]], [[ACC_PHASE]] {ttg.partition = 1 : i32}, [[DO_EPILOGUE]]
+    // CHECK-NEXT: ttng.wait_barrier [[CUR_ACC_EMPTY_BAR]], [[ACC_PHASE]], [[DO_EPILOGUE]] {ttg.partition = 1 : i32}
 
     // CHECK-NEXT: [[ACC_INDEX_INCR:%.*]] = arith.addi [[ACC_INDEX]], %c1_i32
     // CHECK-NEXT: [[NEXT_ACC_INDEX:%.*]] = arith.remui [[ACC_INDEX_INCR]], %c2_i32
@@ -518,7 +518,7 @@ tt.func @matmul_tma_acc_with_conditional_def(
     // CHECK-NEXT: ttng.arrive_barrier
 
     // CHECK-NEXT: ttng.arrive_barrier [[CUR_ACC_READY_BAR]], 1, %true {ttg.partition = 1 : i32}
-    // CHECK-NEXT: ttng.wait_barrier [[CUR_ACC_EMPTY_BAR]], [[ACC_PHASE]] {ttg.partition = 1 : i32}, %true
+    // CHECK-NEXT: ttng.wait_barrier [[CUR_ACC_EMPTY_BAR]], [[ACC_PHASE]], %true {ttg.partition = 1 : i32}
 
     // CHECK-NEXT: [[DO_EPILOGUE:%.*]] = "epilogue_cond"([[K]])
     %do_epilogue = "epilogue_cond"(%k) : (i32) -> i1
@@ -612,7 +612,7 @@ tt.func @matmul_tma_acc_with_conditional_def_and_use(
     // CHECK-NEXT: [[DO_EPILOGUE:%.*]] = "epilogue_cond"([[K]])
     %do_epilogue = "epilogue_cond"(%k) : (i32) -> i1
     // CHECK-NEXT: ttng.arrive_barrier [[CUR_ACC_READY_BAR]], 1, [[DO_EPILOGUE]] {ttg.partition = 1 : i32}
-    // CHECK-NEXT: ttng.wait_barrier [[CUR_ACC_EMPTY_BAR]], [[ACC_PHASE]] {ttg.partition = 1 : i32}, [[DO_EPILOGUE]]
+    // CHECK-NEXT: ttng.wait_barrier [[CUR_ACC_EMPTY_BAR]], [[ACC_PHASE]], [[DO_EPILOGUE]] {ttg.partition = 1 : i32}
     %acc_reset = arith.select %do_epilogue, %zero, %c : tensor<128x128xf32, #acc_layout>
 
     // CHECK-NEXT: [[ACC_INDEX_INCR:%.*]] = arith.addi [[ACC_INDEX]], %c1_i32
@@ -716,7 +716,7 @@ tt.func @matmul_tma_acc_with_conditional_def_and_use_no_multibuf_flag(
     // CHECK-NEXT: [[NEXT_FLAG:%.*]] = arith.xori [[DO_EPILOGUE]], %true
 
     // CHECK-NEXT: ttng.arrive_barrier [[ACC_READY_BUF0]], 1, [[DO_EPILOGUE]] {ttg.partition = 1 : i32}
-    // CHECK-NEXT: ttng.wait_barrier [[ACC_EMPTY_BUF0]], [[ACC_PHASE]] {ttg.partition = 1 : i32}, [[DO_EPILOGUE]]
+    // CHECK-NEXT: ttng.wait_barrier [[ACC_EMPTY_BUF0]], [[ACC_PHASE]], [[DO_EPILOGUE]] {ttg.partition = 1 : i32}
     %use_acc = arith.select %do_epilogue, %false, %true : i1
 
     // CHECK-NEXT: scf.if [[DO_EPILOGUE]]

@@ -4,7 +4,13 @@
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 
 namespace mlir {
+
+class OpBuilder;
 class DominanceInfo;
+
+namespace scf {
+class ForOp;
+} // namespace scf
 namespace triton::nvidia_gpu {
 
 //===----------------------------------------------------------------------===//
@@ -75,10 +81,24 @@ std::optional<MMAInfo> getMMAInfo(scf::ForOp forOp, MMAv5OpInterface mmaOp,
 // optionally multi-buffered based on the number of stages.
 TMEMAllocOp createTMemAlloc(OpBuilder &builder, TMEMAllocOp oldTMemAllocOp,
                             bool multiBufferred, int numStages);
+
 // Create a store op of the initial value of the accumulator into the
 // potentially multi-buffered accumulator.
 void createInitStore(OpBuilder &builder, TMEMAllocOp allocOp, Value initVal,
                      bool multiBufferred);
+
+// Return true if operands of the MMA operation are/are going to be pipelined
+// and multibuffered, enabling the MMA operation to be pipelined.
+bool mmaHasPipelineableOperands(
+    MMAv5OpInterface mma, scf::ForOp forOp,
+    std::function<bool(Operation *)> isLoadPipelineable);
+
+// Return true if the accumulator of an mma in subsequent iterations is either
+// independent from the previous iteration (overwritten) or completely reused,
+// without read-modify-write.
+// Otherwise, we can not pipeline the MMA, as we need to insert a wait after the
+// mma to read back the accumulator for RMW.
+bool hasAccReadModifyWrite(MMAv5OpInterface mma, scf::ForOp forOp);
 
 } // namespace triton::nvidia_gpu
 } // namespace mlir

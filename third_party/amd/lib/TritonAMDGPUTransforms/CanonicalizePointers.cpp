@@ -1009,17 +1009,36 @@ public:
       rewriter.inlineBlockBefore(ifOp.elseBlock(), newIfOp.elseBlock(),
                                  newIfOp.elseBlock()->begin());
 
-    rewriter.replaceOpWithMultiple(ifOp, {newIfOp.getResults()});
-
-    for (int64_t idx :
-         llvm::cast<DenseI64ArrayAttr>(newIfOp.thenYield()->getDiscardableAttr(
-                                           kSCFIfOpYieldFatPtrOffsets))
-             .asArrayRef()) {
+    // Note only the `then` yield here is considered because this whole pass is
+    // effectively 1:N type conversion and thus only the types are important
+    // (and for `scf.if` the types along both `then`/`else` branches must be the
+    // same).
+    ArrayRef<int64_t> yieldPtrOffsets =
+        llvm::cast<DenseI64ArrayAttr>(
+            newIfOp.thenYield()->getDiscardableAttr(kSCFIfOpYieldFatPtrOffsets))
+            .asArrayRef();
+    for (int64_t idx : yieldPtrOffsets) {
       Value thenFatPtrBase = newIfOp.thenYield().getOperand(idx);
       Value thenFatPtrOffset = newIfOp.thenYield().getOperand(idx + 1);
       fatPtrs[{newIfOp.getResult(idx), newIfOp.getResult(idx + 1)}] =
           fatPtrs.at({thenFatPtrBase, thenFatPtrOffset});
     }
+
+    ResultRange results = newIfOp.getResults();
+    SmallVector<ValueRange> replacements;
+    SetVector<int64_t> ptrIndices(yieldPtrOffsets.begin(),
+                                  yieldPtrOffsets.end());
+    int64_t idx = 0;
+    for (; idx < newIfOp.getNumResults();) {
+      if (ptrIndices.contains(idx)) {
+        replacements.push_back(results.slice(idx, 2));
+        idx += 2;
+      } else {
+        replacements.push_back(results.slice(idx, 1));
+        idx += 1;
+      }
+    }
+    rewriter.replaceOpWithMultiple(ifOp, replacements);
 
     return success();
   }
@@ -1442,23 +1461,6 @@ void TritonAMDGPUCanonicalizePointersPass::runOnOperation() {
 
   auto func = getOperation();
 
-  // Skip the pass as a workaround as if op with multiple results are not
-  // supported yet.
-  bool hasIfOpWithMultipleResults =
-      func.walk([&](scf::IfOp ifOp) {
-            if (ifOp.getNumResults() > 1) {
-              for (auto result : ifOp.getResultTypes()) {
-                if (llvm::isa<tt::PointerType>(result)) {
-                  return WalkResult::interrupt();
-                }
-              }
-            }
-            return WalkResult::advance();
-          })
-          .wasInterrupted();
-  if (hasIfOpWithMultipleResults)
-    return;
-
   FatPointers fatPrs;
   PatternRewriter rewriter(&getContext());
   // Convert tt.func; %1 = unrealize_cast(%arg0: tt.ptr, c0: i32) -> tt.ptr
@@ -1518,6 +1520,8 @@ void TritonAMDGPUCanonicalizePointersPass::runOnOperation() {
       MaterializeFatPointer<triton::gpu::AsyncCopyGlobalToLocalOp>,
       MaterializeFatPointer<tt::PtrToIntOp>, MaterializeFatPointer<tt::StoreOp>,
       MaterializeFatPointerVariadic<tt::CallOp>,
+      MaterializeFatPointerVariadic<tt::ExternElementwiseOp>,
+      MaterializeFatPointerVariadic<tt::ElementwiseInlineAsmOp>,
       MaterializeFatPointerVariadic<tt::PrintOp>, ConvertSCFForOp,
       ConvertExpandDims, ConvertSCFYieldOp, ConvertSCFIfOp,
       ConvertSCFConditionOp, ConvertSCFWhileOp, ConvertCFCondBranch,
