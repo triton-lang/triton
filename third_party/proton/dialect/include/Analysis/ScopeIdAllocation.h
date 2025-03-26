@@ -24,8 +24,7 @@ public:
 
   ScopeId getOpScopeId(Operation *op) const {
     if (auto recordOp = dyn_cast<RecordOp>(op)) {
-      auto name = recordOp.getName();
-      return nameToIdMap.lookup(name);
+      return opToIdMap.lookup(recordOp);
     }
     llvm_unreachable("unexpected operation type");
   }
@@ -45,7 +44,7 @@ private:
 
   Operation *funcOp;
   llvm::DenseMap<ScopeId, StringRef> idToNameMap;
-  llvm::StringMap<ScopeId> nameToIdMap;
+  llvm::DenseMap<Operation *, ScopeId> opToIdMap;
 };
 
 class ModuleScopeIdAllocation : public CallGraph<ScopeIdAllocation> {
