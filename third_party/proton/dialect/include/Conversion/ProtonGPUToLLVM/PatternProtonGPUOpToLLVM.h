@@ -6,6 +6,13 @@
 
 namespace mlir::triton {
 namespace proton::gpu {
+
+// Profiler index is private to each thread, address space is 5.
+// See detail discussion:
+// https://llvm.org/docs/NVPTXUsage.html#address-spaces
+// https://llvm.org/docs/AMDGPUUsage.html#address-spaces
+constexpr int IndexPtrAddrSpace = 5;
+
 void populateProtonGPUOpPatterns(LLVMTypeConverter &typeConverter,
                                  RewritePatternSet &patterns,
                                  const TargetInfoBase &targetInfo,
