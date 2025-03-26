@@ -970,11 +970,11 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
       %5 = ttg.local_alloc %4 : (tensor<128x128xf16, #blocked>) -> !ttg.memdesc<128x128xf16, #shared, #smem, mutable>
       %6 = tt.load %arg2 : tensor<128x128x!tt.ptr<f32>, #blocked1>
       ttng.tmem_store %6, %0, %true : tensor<128x128xf32, #blocked1> -> !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>
-      // CHECK-NOT: ttng.tc_gen5_mma {{.*}} {tt.latency
+      // CHECK: ttng.tc_gen5_mma {{.*}} {tt.latency = 1 : i32}
       ttng.tc_gen5_mma %3, %5, %0, %true, %true : (!ttg.memdesc<128x128xf16, #shared, #smem, mutable>, !ttg.memdesc<128x128xf16, #shared, #smem, mutable>, !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>, i1, i1) -> ()
       %7 = ttng.tmem_load %0 : !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable> -> tensor<128x128xf32, #blocked1>
       ttng.tmem_store %7, %1, %true : tensor<128x128xf32, #blocked1> -> !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>
-      // CHECK-NOT: ttng.tc_gen5_mma {{.*}} {tt.latency
+      // CHECK: ttng.tc_gen5_mma {{.*}} {tt.latency = 1 : i32}
       ttng.tc_gen5_mma %3, %5, %1, %true, %true : (!ttg.memdesc<128x128xf16, #shared, #smem, mutable>, !ttg.memdesc<128x128xf16, #shared, #smem, mutable>, !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>, i1, i1) -> ()
       %8 = ttng.tmem_load %1 : !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable> -> tensor<128x128xf32, #blocked1>
       tt.store %arg3, %8 : tensor<128x128x!tt.ptr<f32>, #blocked1>
