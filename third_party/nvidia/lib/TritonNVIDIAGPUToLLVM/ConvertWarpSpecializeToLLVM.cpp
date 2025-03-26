@@ -420,7 +420,7 @@ static LogicalResult lowerWarpSpecialize(LLVM::LLVMFuncOp func,
       Value capturePtr =
           LLVM::getSharedMemoryBase(b.getLoc(), b, targetInfo, ws);
       for (auto [i, arg] : llvm::zip(llvm::seq<int32_t>(ws.getNumOperands()),
-                                     ws.getExplicitCaptures())) {
+                                     ws.getOperands())) {
         Value ptr =
             b.gep(ptrTy, captureType, capturePtr, ArrayRef<LLVM::GEPArg>{0, i});
         b.store(arg, ptr, /*align=*/1);
@@ -439,7 +439,7 @@ static LogicalResult lowerWarpSpecialize(LLVM::LLVMFuncOp func,
       b.setInsertionPoint(op);
       createBarrier(b, kSwitchLoopBarrierIdx, /*numThreads=*/std::nullopt,
                     /*aligned=*/false);
-      b.replaceOpWithNewOp<LLVM::BrOp>(op, op.getValues(), after);
+      b.replaceOpWithNewOp<LLVM::BrOp>(op, op.getOperands(), after);
     });
     after->getParent()->getBlocks().splice(after->getIterator(),
                                            ws.getDefaultRegion().getBlocks());
