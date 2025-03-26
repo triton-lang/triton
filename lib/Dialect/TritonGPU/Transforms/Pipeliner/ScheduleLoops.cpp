@@ -70,8 +70,6 @@ bool hasLatenciesAssigned(scf::ForOp forOp,
   for (auto &op : forOp.getBody()->without_terminator()) {
     if (opLatency.count(&op))
       return true;
-    if (op.hasAttr(kLoopStageAttrName))
-      return true;
   }
   return false;
 }
@@ -130,11 +128,9 @@ CoarseSchedule scheduleKeyOps(scf::ForOp forOp,
   for (auto &op : forOp.getBody()->without_terminator()) {
     if (opLatency.count(&op))
       latOps.push_back(&op);
-    if (auto stageAttr = op.getAttrOfType<IntegerAttr>(kLoopStageAttrName))
-      opToStage[&op] = stageAttr.getInt();
   }
   // If no latency ops, nothing to schedule
-  if (latOps.empty() && opToStage.empty())
+  if (latOps.empty())
     return CoarseSchedule(0);
 
   DominanceInfo domInfo(forOp);
