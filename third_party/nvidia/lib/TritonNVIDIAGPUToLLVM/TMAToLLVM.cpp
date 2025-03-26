@@ -1,10 +1,10 @@
 #include "mlir/Conversion/LLVMCommon/TypeConverter.h"
+#include "mlir/Dialect/LLVMIR/NVVMDialect.h"
 #include "mlir/IR/TypeUtilities.h"
 
 #include "PatternTritonGPUOpToLLVM.h"
 #include "TritonNVIDIAGPUToLLVM/PTXAsmFormat.h"
 
-#include "mlir/Dialect/LLVMIR/NVVMDialect.h"
 #include "mlir/IR/Value.h"
 #include "mlir/Transforms/DialectConversion.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
@@ -15,6 +15,7 @@
 
 using namespace mlir;
 using namespace mlir::triton;
+using namespace mlir::triton::gpu;
 using namespace mlir::triton::nvidia_gpu;
 
 namespace {
@@ -38,7 +39,9 @@ void tensormap_cp_fenceproxy(Location loc, MLIRContext *ctx,
   // Execute collectively on first warp in block
   constexpr int kWarpSize = 32;
   Value threadId = getThreadId(rewriter, loc);
+  Value clusterId = rewriter.create<nvgpu::ClusterCTAIdOp>(loc);
   Value pred = b.icmp_slt(threadId, b.i32_val(kWarpSize));
+  pred = b.and_(pred, b.icmp_eq(clusterId, b.i32_val(0)));
   cp(outAddrOpr, inAddrOpr, sizeOpr).predicate(pred);
 
   ptxBuilder.launch(rewriter, loc, void_ty(ctx));
@@ -287,6 +290,11 @@ struct ExperimentalTensormapCreateOpConversion
                                    op.getSwizzleMode());
     tensormap_replace_fill_mode(loc, ctx, rewriter, smemBase, op.getFillMode());
     tensormap_cp_fenceproxy(loc, ctx, rewriter, adaptor.getDescPtr(), smemBase);
+
+    auto mod = op->getParentOfType<ModuleOp>();
+    if (TritonGPUDialect::getNumCTAs(mod) > 1)
+      rewriter.create<NVVM::ClusterWaitOp>(loc, UnitAttr());
+
     rewriter.eraseOp(op);
     return success();
   }

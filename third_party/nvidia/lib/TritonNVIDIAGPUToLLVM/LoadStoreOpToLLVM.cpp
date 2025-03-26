@@ -1247,7 +1247,7 @@ struct AsyncTMACopyGlobalToLocalOpConversion
     auto shapePerCTA = ttg::getShapePerCTA(op.getResult().getType());
     auto contigDimSize = nvidia_gpu::getTMAContigDim(op.getResult().getType());
     int numCopies = ceil<int>(shapePerCTA.back(), contigDimSize);
-    int rank = shapePerCTA.size();
+    int rank = op.getCoord().size();
     auto ctaOffset = getCtaOffset(rewriter, loc, encoding, shapePerCTA);
 
     // The bounding box inner dimension must be less than or equal to the
@@ -1278,8 +1278,8 @@ struct AsyncTMACopyGlobalToLocalOpConversion
       int operandIdx = 3;
       for (int i = 0; i < rank; i++) {
         Value coord = adaptor.getCoord()[rank - i - 1];
-        if (ctaOffset[i])
-          coord = b.add(coord, ctaOffset[i]);
+        if (i < ctaOffset.size() && ctaOffset[ctaOffset.size() - i - 1])
+          coord = b.add(coord, ctaOffset[ctaOffset.size() - i - 1]);
         if (i == 0) {
           Value offset = b.mul(copyIdxVal, b.i32_val(contigDimSize));
           coord = b.add(coord, offset);
@@ -1335,7 +1335,7 @@ struct AsyncTMACopyLocalToGlobalOpConversion
 
     auto contigDimSize = nvidia_gpu::getTMAContigDim(op.getSrc().getType());
     int numCopies = shapePerCTA.back() / contigDimSize;
-    auto rank = shapePerCTA.size();
+    auto rank = op.getCoord().size();
     auto encoding = op.getSrc().getType().getEncoding();
     auto ctaOffset = getCtaOffset(rewriter, loc, encoding, shapePerCTA);
 
@@ -1360,8 +1360,8 @@ struct AsyncTMACopyLocalToGlobalOpConversion
       int operandIdx = 2;
       for (int i = 0; i < rank; i++) {
         Value coord = adaptor.getCoord()[rank - i - 1];
-        if (ctaOffset[i])
-          coord = b.add(coord, ctaOffset[i]);
+        if (i < ctaOffset.size() && ctaOffset[ctaOffset.size() - i - 1])
+          coord = b.add(coord, ctaOffset[ctaOffset.size() - i - 1]);
         if (i == 0) {
           Value offset = b.mul(copyIdxVal, b.i32_val(contigDimSize));
           coord = b.add(coord, offset);
@@ -1689,7 +1689,7 @@ struct TMAStoreWaitOpConversion
   matchAndRewrite(triton::nvidia_gpu::TMAStoreWaitOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     auto ctx = op.getContext();
-    auto isRead = UnitAttr::get(ctx);
+    UnitAttr isRead;
     rewriter.replaceOpWithNewOp<NVVM::CpAsyncBulkWaitGroupOp>(
         op, op.getPendingsAttr(), isRead);
     return success();
