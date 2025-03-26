@@ -319,30 +319,33 @@ def get_thirdparty_packages(packages: list):
 def download_and_copy(name, src_func, dst_path, variable, version, url_func):
     if is_offline_build():
         return
-    triton_cache_path = get_triton_cache_path()
-    if variable in os.environ:
-        return
     base_dir = os.path.dirname(__file__)
-    system = platform.system()
-    arch = platform.machine()
-    # NOTE: This might be wrong for jetson if both grace chips and jetson chips return aarch64
-    arch = {"arm64": "sbsa", "aarch64": "sbsa"}.get(arch, arch)
-    supported = {"Linux": "linux", "Darwin": "linux"}
-    url = url_func(supported[system], arch, version)
-    src_path = src_func(supported[system], arch, version)
-    tmp_path = os.path.join(triton_cache_path, "nvidia", name)  # path to cache the download
     dst_path = os.path.join(base_dir, os.pardir, "third_party", "nvidia", "backend", dst_path)  # final binary path
-    src_path = os.path.join(tmp_path, src_path)
-    download = not os.path.exists(src_path)
-    if os.path.exists(dst_path) and system == "Linux" and shutil.which(dst_path) is not None:
-        curr_version = subprocess.check_output([dst_path, "--version"]).decode("utf-8").strip()
-        curr_version = re.search(r"V([.|\d]+)", curr_version)
-        assert curr_version is not None, f"No version information for {dst_path}"
-        download = download or curr_version.group(1) != version
-    if download:
-        print(f'downloading and extracting {url} ...')
-        file = tarfile.open(fileobj=open_url(url), mode="r|*")
-        file.extractall(path=tmp_path)
+    if (src_path := os.environ.get(variable, None)) is not None:
+        if not src_path:
+            return
+        assert os.path.exists(src_path), f"{variable}={src_path} is not a valid path"
+    else:
+        triton_cache_path = get_triton_cache_path()
+        system = platform.system()
+        arch = platform.machine()
+        # NOTE: This might be wrong for jetson if both grace chips and jetson chips return aarch64
+        arch = {"arm64": "sbsa", "aarch64": "sbsa"}.get(arch, arch)
+        supported = {"Linux": "linux", "Darwin": "linux"}
+        url = url_func(supported[system], arch, version)
+        src_path = src_func(supported[system], arch, version)
+        tmp_path = os.path.join(triton_cache_path, "nvidia", name)  # path to cache the download
+        src_path = os.path.join(tmp_path, src_path)
+        download = not os.path.exists(src_path)
+        if os.path.exists(dst_path) and system == "Linux" and shutil.which(dst_path) is not None:
+            curr_version = subprocess.check_output([dst_path, "--version"]).decode("utf-8").strip()
+            curr_version = re.search(r"V([.|\d]+)", curr_version)
+            assert curr_version is not None, f"No version information for {dst_path}"
+            download = download or curr_version.group(1) != version
+        if download:
+            print(f'downloading and extracting {url} ...')
+            file = tarfile.open(fileobj=open_url(url), mode="r|*")
+            file.extractall(path=tmp_path)
     os.makedirs(os.path.split(dst_path)[0], exist_ok=True)
     print(f'copy {src_path} to {dst_path} ...')
     if os.path.isdir(src_path):
@@ -550,7 +553,7 @@ download_and_copy(
     name="nvcc",
     src_func=lambda system, arch, version: f"cuda_nvcc-{system}-{arch}-{version}-archive/include",
     dst_path="include",
-    variable="TRITON_CUDACRT_PATH",
+    variable="TRITON_CUDACRT_INCLUDE_PATH",
     version=NVIDIA_TOOLCHAIN_VERSION["cudacrt"],
     url_func=lambda system, arch, version:
     f"https://developer.download.nvidia.com/compute/cuda/redist/cuda_nvcc/{system}-{arch}/cuda_nvcc-{system}-{arch}-{version}-archive.tar.xz",
@@ -559,7 +562,7 @@ download_and_copy(
     name="cudart",
     src_func=lambda system, arch, version: f"cuda_cudart-{system}-{arch}-{version}-archive/include",
     dst_path="include",
-    variable="TRITON_CUDART_PATH",
+    variable="TRITON_CUDART_INCLUDE_PATH",
     version=NVIDIA_TOOLCHAIN_VERSION["cudart"],
     url_func=lambda system, arch, version:
     f"https://developer.download.nvidia.com/compute/cuda/redist/cuda_cudart/{system}-{arch}/cuda_cudart-{system}-{arch}-{version}-archive.tar.xz",
