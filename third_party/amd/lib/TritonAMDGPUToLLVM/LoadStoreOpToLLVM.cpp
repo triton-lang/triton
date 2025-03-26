@@ -1301,7 +1301,7 @@ struct AtomicRMWOpConversion
     // scalar value input is supposed to sync behavior of threads in a
     // tile, so need a barrier to sync threads.
     else {
-        b.barrier();
+      b.barrier();
     }
 
     auto vecTy = vec_ty(valueElemTy, vec);
