@@ -5,24 +5,34 @@ namespace triton::proton {
 
 void ScopeIdAllocation::run() {
   llvm::StringMap<size_t> nameCount;
-  funcOp->walk([&](RecordOp recordOp) {
+  ScopeId id = 0;
+
+  funcOp->walk<WalkOrder::PreOrder>([&](RecordOp recordOp) {
     auto name = recordOp.getName();
-    if (!nameCount.contains(name))
-      nameCount[name] = 0;
-    nameCount[name]++;
-    if (!nameToIdMap.contains(name)) {
-      auto id = nameToIdMap.size();
-      nameToIdMap[name] = id;
-      idToNameMap[id] = name;
+    if (recordOp.getIsStart()) {
+      if (!nameCount.contains(name)) {
+        nameCount[name] = id;
+        idToNameMap[id] = name;
+        opToIdMap[recordOp] = id;
+        id++;
+      } else {
+        recordOp->emitError("The scope name must appear in pairs");
+      }
+    } else {
+      if (nameCount.contains(name)) {
+        opToIdMap[recordOp] = nameCount.lookup(name);
+        nameCount.erase(name);
+      } else {
+        recordOp->emitError("The scope name must appear in pairs");
+      }
     }
   });
-  funcOp->walk([&](RecordOp recordOp) {
-    auto name = recordOp.getName();
-    if (nameCount[name] != 2) {
-      recordOp->emitError(
-          "The scope name must appear exactly twice in each function");
+
+  if (nameCount.size() > 0) {
+    for (auto &[name, _] : nameCount) {
+      funcOp->emitError("Scope name '") << name << "' must appear in pairs";
     }
-  });
+  }
 }
 
 ModuleScopeIdAllocation::ModuleScopeIdAllocation(ModuleOp moduleOp)
