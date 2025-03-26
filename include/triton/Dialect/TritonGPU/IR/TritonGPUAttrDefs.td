@@ -1369,4 +1369,5 @@ def TTG_SharedMemorySpace : AttrDef<TritonGPU_Dialect, "SharedMemorySpace"> {
     Attribute to indicate that the memory descriptor points to shared memory.
   }];
 }
+
 #endif
