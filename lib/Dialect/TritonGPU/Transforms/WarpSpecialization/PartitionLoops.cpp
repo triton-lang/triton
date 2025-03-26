@@ -2,6 +2,8 @@
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/ImplicitLocOpBuilder.h"
 #include "mlir/Pass/Pass.h"
+#include "mlir/Pass/PassManager.h"
+#include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 #include "mlir/Transforms/RegionUtils.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/Partition.h"
@@ -157,25 +159,10 @@ LogicalResult triton::gpu::partitionLoop(scf::ForOp loop) {
   // loop.
   eraseOtherPartitions(loop, schedule, &defaultPartition);
 
-  // Figure out how many warps each partition needs. For now, this is either 1
-  // or the number of warps.
-  SmallVector<int32_t> partitionNumWarps;
-  int32_t functionNumWarps = lookupNumWarps(loop);
-  auto isTensor = [](Type t) { return isa<RankedTensorType>(t); };
-  for (Block &block : llvm::make_pointee_range(partitionBlocks)) {
-    WalkResult result = block.walk([&](Operation *op) {
-      if (llvm::any_of(op->getOperandTypes(), isTensor) ||
-          llvm::any_of(op->getResultTypes(), isTensor))
-        return WalkResult::interrupt();
-      return WalkResult::advance();
-    });
-    partitionNumWarps.push_back(result.wasInterrupted() ? functionNumWarps : 1);
-  }
-
   // Create the warp specialize op and move in the partition blocks.
   ImplicitLocOpBuilder b(loop.getLoc(), loop);
-  auto wsOp = b.create<WarpSpecializeOp>(
-      loop.getResultTypes(), partitionNumWarps, partitionBlocks.size());
+  auto wsOp = b.create<WarpSpecializeOp>(loop.getResultTypes(), std::nullopt,
+                                         partitionBlocks.size());
   loop.replaceAllUsesWith(wsOp);
   Block *defaultBlock = b.createBlock(&wsOp.getDefaultRegion());
   loop->moveBefore(defaultBlock, defaultBlock->end());
@@ -222,6 +209,33 @@ LogicalResult triton::gpu::partitionLoop(scf::ForOp loop) {
       replaceAllUsesInRegionWith(capture, arg, *region);
     }
   }
+
+  // Run DCE on the isolated regions to clean up the IR before determining the
+  // number of warps and registers.
+  MLIRContext *ctx = loop.getContext();
+  RewritePatternSet patterns(ctx);
+  populateForOpDeadArgumentElimination(patterns);
+  scf::ForOp::getCanonicalizationPatterns(patterns, ctx);
+  scf::IfOp::getCanonicalizationPatterns(patterns, ctx);
+  FrozenRewritePatternSet frozenPatterns(std::move(patterns));
+
+  // Figure out how many warps each partition needs. For now, this is either 1
+  // or the number of warps.
+  SmallVector<int32_t> partitionNumWarps;
+  int32_t functionNumWarps = lookupNumWarps(loop);
+  auto isTensor = [](Type t) { return isa<RankedTensorType>(t); };
+  for (Region *region : wsOp.getPartitionRegions()) {
+    if (failed(applyPatternsGreedily(*region, frozenPatterns)))
+      return failure();
+    WalkResult result = region->walk([&](Operation *op) {
+      if (llvm::any_of(op->getOperandTypes(), isTensor) ||
+          llvm::any_of(op->getResultTypes(), isTensor))
+        return WalkResult::interrupt();
+      return WalkResult::advance();
+    });
+    partitionNumWarps.push_back(result.wasInterrupted() ? functionNumWarps : 1);
+  }
+  wsOp.setPartitionNumWarps(partitionNumWarps);
 
   return success();
 }

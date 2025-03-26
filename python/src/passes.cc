@@ -1,5 +1,6 @@
 #include "mlir/Transforms/Passes.h"
 #include "mlir/Conversion/Passes.h"
+#include "mlir/Dialect/Arith/Transforms/Passes.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Pass/PassManager.h"
 #include "passes.h"
@@ -26,6 +27,8 @@ void init_triton_analysis(py::module &&m) {
 void init_triton_passes_common(py::module &&m) {
   using namespace mlir;
   ADD_PASS_WRAPPER_0("add_sccp", createSCCPPass);
+  ADD_PASS_WRAPPER_0("add_int_range_optimizations",
+                     arith::createIntRangeOptimizationsPass);
   ADD_PASS_WRAPPER_0("add_symbol_dce", createSymbolDCEPass);
   ADD_PASS_WRAPPER_0("add_inliner", createInlinerPass);
   ADD_PASS_WRAPPER_0("add_canonicalizer", createCanonicalizerPass);
