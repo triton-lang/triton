@@ -10,6 +10,7 @@ Triton MLIR Dialects and Ops
    ./TritonGPUDialect.md
    ./ProtonDialect.md
    ./NVGPUDialect.md
+   ./NVWSDialect.md
    ./TritonDialect.md
    ./TritonAMDGPUDialect.md
 
@@ -23,3 +24,4 @@ Triton MLIR Dialects and Ops
    ./TritonOps.md
    ./TritonNvidiaGPUOps.md
    ./NVGPUOps.md
+   ./NVWSOps.md

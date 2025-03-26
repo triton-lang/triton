@@ -635,7 +635,7 @@ _Wait until the mbarrier phase completes._
 Syntax:
 
 ```
-operation ::= `ttng.wait_barrier` $alloc `,` $phase attr-dict (`,` $pred^)? (`deps` $deps^)? `:` qualified(type($alloc)) (`,` type($deps)^)?
+operation ::= `ttng.wait_barrier` $alloc `,` $phase (`,` $pred^)? (`deps` $deps^)? attr-dict `:` qualified(type($alloc)) (`,` type($deps)^)?
 ```
 
 Blocks the program progress until the mbarrier object in `alloc` completes
