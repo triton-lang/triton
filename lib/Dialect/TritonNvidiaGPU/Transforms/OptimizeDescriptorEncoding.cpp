@@ -220,6 +220,7 @@ EncodingInfo combineEncodings(const EncodingInfo &lhs, const EncodingInfo &rhs,
     break;
   case 1:
     result.ctaLayout = ctaLayouts[0];
+    break;
   default:
     break;
   }
@@ -237,6 +238,7 @@ EncodingInfo combineEncodings(const EncodingInfo &lhs, const EncodingInfo &rhs,
     break;
   case 1:
     result.desiredEncoding = desiredEncodings[0];
+    break;
   default:
     break;
   }
