@@ -301,8 +301,8 @@ def handle_flagtree_backend():
     if flagtree_backend:
         print(f"flagtree_backend is {flagtree_backend}")
         extend_backends.append(flagtree_backend)
-    if "editable_wheel" in sys.argv:
-        ext_sourcedir = os.path.abspath(f"../third_party/{flagtree_backend}/python/{ext_sourcedir}") + "/"
+        if "editable_wheel" in sys.argv:
+            ext_sourcedir = os.path.abspath(f"../third_party/{flagtree_backend}/python/{ext_sourcedir}") + "/"
     if use_triton_shared and not flagtree_backend:
         default_backends.append("triton_shared")
 

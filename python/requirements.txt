@@ -1,5 +1,6 @@
-GitPython
-cmake
 ninja
-pytest
+cmake
 wheel
+GitPython
+pytest
+scipy
