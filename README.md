@@ -33,7 +33,7 @@ export FLAGTREE_BACKEND=iluvatar
 python3 -m pip install . --no-build-isolation -v
 ```
 ```shell
-# kunlunxin（xpu）
+# xpu (klx)
 # Recommended: Use the Docker image (22GB) https://su.bcebos.com/klx-sdk-release-public/xpytorch/docker/ubuntu2004_v030/ubuntu_2004_x86_64_v30.tar
 mkdir -p ~/.flagtree/xpu; cd ~/.flagtree/xpu
 wget https://github.com/FlagTree/flagtree/releases/download/v0.1.0-build-deps/XTDK-llvm18-ubuntu2004_x86_64.tar
