@@ -364,6 +364,7 @@ LogicalResult triton::gpu::specializeLoadMMADependencies(scf::ForOp &loop,
     b.setInsertionPointToStart(loop.getBody());
     Value curAccEmptyBar = createSingleBufferView(b, accEmptyBars, accIndex);
     Value curAccReadyBar = createSingleBufferView(b, accReadyBars, accIndex);
+
     Operation *domOp = findNearestCommonDominator(accUses, domInfo);
     assert(domOp && "could not find common dominator for accumulator uses");
     Value pred;
