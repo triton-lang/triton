@@ -5101,7 +5101,7 @@ def test_call(type, num_ctas, device):
 def test_if(if_type, device):
 
     @triton.jit
-    def kernel(Cond, XTrue, XFalse, Ret, IfType: tl.constexpr, BoolVar: tl.constexpr, StaticVaue: tl.constexpr):
+    def kernel(Cond, XTrue, XFalse, Ret, IfType: tl.constexpr, BoolVar: tl.constexpr, StaticValue: tl.constexpr):
         pid = tl.program_id(0)
         cond = tl.load(Cond)
         if IfType == "if":
@@ -5125,7 +5125,7 @@ def test_if(if_type, device):
             else:
                 tl.store(Ret, tl.load(XFalse))
         elif IfType == "if_and_static":
-            if StaticVaue != 0 and StaticVaue != 0:
+            if StaticValue != 0 and StaticValue != 0:
                 tl.store(Ret, tl.load(XTrue))
             else:
                 tl.store(Ret, tl.load(XFalse))

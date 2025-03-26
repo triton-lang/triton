@@ -1309,7 +1309,7 @@ LogicalResult DescriptorGatherOp::verify() {
 }
 
 // -- DescriptorLoadOp --
-static LogicalResult verifyDesciptorLoadStoreType(Operation *op,
+static LogicalResult verifyDescriptorLoadStoreType(Operation *op,
                                                   TensorDescType desc,
                                                   RankedTensorType tensor) {
   RankedTensorType block = desc.getBlockType();
@@ -1328,17 +1328,17 @@ static LogicalResult verifyDesciptorLoadStoreType(Operation *op,
   if (blockShape == tensorShape &&
       block.getElementType() == tensor.getElementType())
     return success();
-  return op->emitOpError("tensor desciptor block and tensor types must match");
+  return op->emitOpError("tensor descriptor block and tensor types must match");
 }
 
 LogicalResult DescriptorLoadOp::verify() {
-  return verifyDesciptorLoadStoreType(*this, getDesc().getType(), getType());
+  return verifyDescriptorLoadStoreType(*this, getDesc().getType(), getType());
 }
 
 // -- DescriptorStoreOp --
 LogicalResult DescriptorStoreOp::verify() {
-  return verifyDesciptorLoadStoreType(*this, getDesc().getType(),
-                                      getSrc().getType());
+  return verifyDescriptorLoadStoreType(*this, getDesc().getType(),
+                                       getSrc().getType());
 }
 
 // -- ExperimentalTensormapCreateOp --

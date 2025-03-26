@@ -286,7 +286,7 @@ static void createMMACommit(ConversionPatternRewriter &rewriter, Location loc,
   std::string opcode;
   if (twoCTAs) {
     // .multicast::cluster and mask 0x3 means the completion of UTCMMA.2CTA will
-    // be boardcasted into CTAid 0 and 1
+    // be broadcasted into CTAid 0 and 1
     auto *ctaMask = ptxBuilder.newOperand(b.int_val(16, 0x3), "h");
     ptxOperands.push_back(ctaMask);
     opcode = "@$0 "

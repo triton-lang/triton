@@ -59,7 +59,7 @@ std::pair<OpResult, int64_t> getDefinitionAndDistance(scf::ForOp forOp,
 std::pair<Operation *, int64_t> getDefiningOpAndDistance(scf::ForOp forOp,
                                                          Value value);
 
-// Return maxumum length of the vectorized copy between registers and shared
+// Return maximum length of the vectorized copy between registers and shared
 // memory for the given tensor type and shared encoding.
 int getCopyVecBytes(RankedTensorType registerTy,
                     gpu::SharedEncodingTrait sharedEnc);

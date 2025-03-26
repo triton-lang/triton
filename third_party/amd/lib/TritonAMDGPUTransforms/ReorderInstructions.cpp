@@ -202,7 +202,7 @@ static void scheduleGlobalLoadLocalStore(Operation *parentOp) {
     BackwardSliceOptions options;
     options.omitBlockArguments = true;
     options.inclusive = false;
-    // Slice should inlcude values flowing into op regions
+    // Slice should include values flowing into op regions
     options.omitUsesFromAbove = false;
     options.filter = [&](Operation *defOp) -> bool {
       Block *defBlock = defOp->getBlock();
@@ -276,7 +276,7 @@ static void scheduleGlobalLoadLocalStore(Operation *parentOp) {
 //   local_store tileB, bufferB
 // }
 // ```
-// For now, we don't have a perfect hueristic about when should this
+// For now, we don't have a perfect heuristic about when should this
 // optimization be applied. Therefore, we implement a simple hueristic that
 // this is applied when the tile size of A and B are large enough, i.e.
 // nonKDim >= 128  and kDim >= 64. And also this is only applied for typical
