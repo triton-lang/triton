@@ -99,7 +99,7 @@ module {
 		// CHECK-NEXT: scope id = 1
     proton.record start "name0"
     proton.record end "name0"
-    if (%cond) {
+    scf.if %cond {
       // CHECK-NEXT: scope id = 1
       proton.record start "name0"
       proton.record end "name0"

@@ -11,9 +11,10 @@ void ScopeIdAllocation::run() {
     auto name = recordOp.getName();
     if (recordOp.getIsStart()) {
       if (!nameCount.contains(name)) {
-        nameCount[name] = id++;
+        nameCount[name] = id;
         idToNameMap[id] = name;
         opToIdMap[recordOp] = id;
+        id++;
       } else {
         recordOp->emitError(
             "The scope name must appear in pairs");
