@@ -6,6 +6,7 @@
 #include "triton/Conversion/MLIRTypes.h"
 #include "triton/Conversion/TritonGPUToLLVM/PatternTritonGPUOpToLLVM.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
+#include <numeric>
 
 using namespace mlir;
 using namespace mlir::triton;
@@ -60,11 +61,9 @@ struct ExtractSliceOpConversion
                               ConversionPatternRewriter &rewriter) const {
     Location loc = op->getLoc();
     auto srcTy = cast<RankedTensorType>(op.getSource().getType());
-    auto srcLayout = srcTy.getEncoding();
     auto srcShape = srcTy.getShape();
     auto resultTy = cast<RankedTensorType>(op.getType());
     auto vals = unpackLLElements(loc, adaptor.getSource(), rewriter);
-    auto elemsPerThread = triton::gpu::getElemsPerThread(srcTy);
     auto sizePerThread =
         triton::gpu::toLinearEncoding(srcTy).getSizePerThread();
     auto totalSizePerThread = product<unsigned>(sizePerThread);
@@ -72,38 +71,48 @@ struct ExtractSliceOpConversion
 
     // Calculate valid total number of workers in each dimension
     auto shapePerCTATile = triton::gpu::getShapePerCTATile(srcTy);
-    shapePerCTATile[0] =
-        std::min(static_cast<unsigned>(srcShape[0]), shapePerCTATile[0]);
-    shapePerCTATile[1] =
-        std::min(static_cast<unsigned>(srcShape[1]), shapePerCTATile[1]);
+    for (size_t i = 0; i < shapePerCTATile.size(); ++i) {
+      shapePerCTATile[i] =
+          std::min(static_cast<unsigned>(srcShape[i]), shapePerCTATile[i]);
+    }
 
-    // Rank == 2 checked in the verifier
-    SmallVector<int64_t, 2> sizes;
-    for (auto i = 0; i < 2; ++i) {
+    // ranks of the source and the destination are euqal; checked in the
+    // verifier
+    const auto rank = srcTy.getRank();
+    SmallVector<int64_t> sizes;
+    for (auto i = 0; i < rank; ++i) {
       sizes.push_back(resultTy.getDimSize(i));
     }
 
     auto offsets = op.getStaticOffsets();
 
     // Calculate offsets and sizes in terms of CTA units.
-    std::array<int64_t, 2> CTAOffsets{offsets[0] / shapePerCTATile[0],
-                                      offsets[1] / shapePerCTATile[1]};
-    std::array<int64_t, 2> CTASizes{sizes[0] / shapePerCTATile[0],
-                                    sizes[1] / shapePerCTATile[1]};
-    std::array<int64_t, 2> CTAPerShape{srcShape[0] / shapePerCTATile[0],
-                                       srcShape[1] / shapePerCTATile[1]};
+    SmallVector<int64_t> CTAOffsets;
+    SmallVector<int64_t> CTASizes;
+    SmallVector<int64_t> CTAPerShape;
+    for (size_t dim = 0; dim < rank; ++dim) {
+      CTAOffsets.push_back(offsets[dim] / shapePerCTATile[dim]);
+      CTASizes.push_back(sizes[dim] / shapePerCTATile[dim]);
+      CTAPerShape.push_back(srcShape[dim] / shapePerCTATile[dim]);
+    }
+    SmallVector<int64_t> CTAStrides(CTAPerShape.size());
+    std::exclusive_scan(CTAPerShape.rbegin(), CTAPerShape.rend(),
+                        CTAStrides.begin(), 1, std::multiplies<>{});
+    std::reverse(CTAStrides.begin(), CTAStrides.end());
 
     // The diagram above illustrates the graphical representation of the
     // skipElems, tensorStride, and lastIdx variables.
-    auto skipElems = CTAOffsets[order[1]] *
-                         (elemsPerThread[order[0]] * sizePerThread[order[1]]) +
-                     CTAOffsets[order[0]] * totalSizePerThread;
     auto tensorStride =
         (CTAPerShape[order[0]] - CTASizes[order[0]]) * totalSizePerThread;
-    auto lastIdx =
-        (CTAOffsets[order[1]] + CTASizes[order[1]] - 1) *
-            elemsPerThread[order[0]] * sizePerThread[order[1]] +
-        (CTAOffsets[order[0]] + CTASizes[order[0]]) * totalSizePerThread;
+
+    unsigned skipElems = 0;
+    unsigned lastIdx = 0;
+    for (size_t dim = 0; dim < rank; ++dim) {
+      skipElems += CTAOffsets[dim] * CTAStrides[dim];
+      lastIdx += (CTAOffsets[dim] + CTASizes[dim] - 1) * CTAStrides[dim];
+    }
+    skipElems *= totalSizePerThread;
+    lastIdx = totalSizePerThread * (lastIdx + 1);
 
     assert(lastIdx <= vals.size());
 
@@ -125,11 +134,7 @@ struct ExtractSliceOpConversion
   matchAndRewrite(amdgpu::ExtractSliceOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     auto srcTy = op.getSource().getType();
-    if (isa<BlockedEncodingAttr, AMDMfmaEncodingAttr>(
-            op.getSource().getType().getEncoding())) {
-      return processLayout(op, adaptor, rewriter);
-    }
-    return failure();
+    return processLayout(op, adaptor, rewriter);
   }
 };
 } // namespace
