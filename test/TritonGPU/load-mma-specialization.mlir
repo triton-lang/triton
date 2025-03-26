@@ -737,7 +737,7 @@ tt.func @matmul_tma_acc_with_conditional_def_and_use_no_multibuf_flag(
 
     // CHECK-NEXT: scf.yield [[NEXT_FLAG]], %{{[0-9]+}}, %{{[0-9]+}}, [[MMA_NEXT_PHASE]], [[EPILOGUE_ACC_NEXT_PHASE]]
     scf.yield %c, %use_acc : tensor<128x128xf32, #acc_layout>, i1
-  // CHECK-NEXT: tt.scheduled_max_stage = 1 : i32
+  // CHECK-NEXT: tt.scheduled_max_stage = 2 : i32
   // CHECK-SAME: ttg.partition.stages = [3 : i32, 2 : i32, 0 : i32, 3 : i32]
   } {tt.warp_specialize, tt.disallow_acc_multi_buffer, tt.num_stages = 2 : i32}
 
