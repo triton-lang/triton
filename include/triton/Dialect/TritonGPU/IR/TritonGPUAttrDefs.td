@@ -587,15 +587,17 @@ We call each individual tile "rep".
                     "unsigned",
                     "getTotalElemsPerThread",
                      (ins "ArrayRef<int64_t>":$shape),
+                     /*methodBody=*/[{}],
                      /*defaultImplementation=*/[{
-                         return toLinearEncoding($_self, shape).getTotalElemsPerThread(shape);
+                         return toLinearEncoding($_attr, shape).getTotalElemsPerThread(shape);
                      }]>,
     InterfaceMethod<"Return element size per thread in each dimension.",
                     "SmallVector<unsigned>",
                     "getElemsPerThread",
                      (ins "ArrayRef<int64_t>":$shape),
+                     /*methodBody=*/[{}],
                      /*defaultImplementation=*/[{
-                         return toLinearEncoding($_self, shape).getElemsPerThread(shape);
+                         return toLinearEncoding($_attr, shape).getElemsPerThread(shape);
                      }]>,
     InterfaceMethod<"Convert to LinearLayout.",
                     "LinearLayout",
