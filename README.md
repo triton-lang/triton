@@ -26,8 +26,8 @@ Complete build commands for each backend:
 # iluvatar
 # Recommended: Use Ubuntu 20.04
 mkdir -p ~/.flagtree/iluvatar; cd ~/.flagtree/iluvatar
-wget https://github.com/Galaxy1458/build_tools/releases/download/v1.0.0-build-deps/iluvatar-llvm18-x86_64.tar.gz
-wget https://github.com/Galaxy1458/build_tools/releases/download/v1.0.0-build-deps/iluvatarTritonPlugin-cpython3.10-glibc2.30-glibcxx3.4.28-cxxabi1.3.12-ubuntu-x86_64.tar.gz
+wget https://github.com/FlagTree/flagtree/releases/download/v0.1.0-build-deps/iluvatar-llvm18-x86_64.tar.gz
+wget https://github.com/FlagTree/flagtree/releases/download/v0.1.0-build-deps/iluvatarTritonPlugin-cpython3.10-glibc2.30-glibcxx3.4.28-cxxabi1.3.12-ubuntu-x86_64.tar.gz
 cd ${YOUR_CODE_DIR}/flagtree/python
 export FLAGTREE_BACKEND=iluvatar
 python3 -m pip install . --no-build-isolation -v
@@ -36,8 +36,8 @@ python3 -m pip install . --no-build-isolation -v
 # kunlunxin（xpu）
 # Recommended: Use the Docker image (22GB) https://su.bcebos.com/klx-sdk-release-public/xpytorch/docker/ubuntu2004_v030/ubuntu_2004_x86_64_v30.tar
 mkdir -p ~/.flagtree/xpu; cd ~/.flagtree/xpu
-wget https://github.com/Galaxy1458/build_tools/releases/download/v1.0.0-build-deps/XTDK-llvm18-ubuntu2004_x86_64.tar
-wget https://github.com/Galaxy1458/build_tools/releases/download/v1.0.0-build-deps/xre-Linux-x86_64.tar.gz
+wget https://github.com/FlagTree/flagtree/releases/download/v0.1.0-build-deps/XTDK-llvm18-ubuntu2004_x86_64.tar
+wget https://github.com/FlagTree/flagtree/releases/download/v0.1.0-build-deps/xre-Linux-x86_64.tar.gz
 cd ${YOUR_CODE_DIR}/flagtree/python
 export FLAGTREE_BACKEND=xpu
 python3 -m pip install . --no-build-isolation -v
@@ -46,7 +46,7 @@ python3 -m pip install . --no-build-isolation -v
 # mthreads
 # Recommended: Use the Dockerfile flagtree/dockerfiles/Dockerfile-ubuntu22.04-python3.10-mthreads
 mkdir -p ~/.flagtree/mthreads; cd ~/.flagtree/mthreads
-wget https://github.com/Galaxy1458/build_tools/releases/download/v1.0.0-build-deps/mthreads-llvm19-glibc2.34-glibcxx3.4.30-x64.tar.gz
+wget https://github.com/FlagTree/flagtree/releases/download/v0.1.0-build-deps/mthreads-llvm19-glibc2.34-glibcxx3.4.30-x64.tar.gz
 cd ${YOUR_CODE_DIR}/flagtree/python
 export FLAGTREE_BACKEND=mthreads
 python3 -m pip install . --no-build-isolation -v
