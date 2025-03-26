@@ -55,8 +55,8 @@ module {
 // -----
 
 module {
-  // CHECK-LABEL: nested
-  tt.func @nested() {
+  // CHECK-LABEL: inner
+  tt.func @inner() {
 		// CHECK: scope id = 0
 		// CHECK-NEXT: scope id = 0
     proton.record start "name0"
@@ -68,7 +68,7 @@ module {
   tt.func @outer() {
 		// CHECK: scope id = 1
 		proton.record start "name0"
-		tt.call @nested() : () -> ()
+		tt.call @inner() : () -> ()
 		// CHECK-NEXT: scope id = 1
 		proton.record end "name0"
 		tt.return
@@ -76,3 +76,37 @@ module {
 }
 
 // -----
+
+module {
+  // CHECK-LABEL: duplicate
+  tt.func @duplicate() {
+		// CHECK: scope id = 0
+		// CHECK-NEXT: scope id = 0
+		// CHECK-NEXT: scope id = 1
+		// CHECK-NEXT: scope id = 1
+    proton.record start "name0"
+    proton.record end "name0"
+    proton.record start "name0"
+    proton.record end "name0"
+    tt.return
+  }
+}
+
+// -----
+
+module {
+  // CHECK-LABEL: condition
+  tt.func @condition(%cond: i1) {
+		// CHECK: scope id = 0
+		// CHECK-NEXT: scope id = 0
+    proton.record start "name0"
+    proton.record end "name0"
+    scf.if %cond {
+      // CHECK-NEXT: scope id = 1
+      // CHECK-NEXT: scope id = 1
+      proton.record start "name0"
+      proton.record end "name0"
+    }
+    tt.return
+  }
+}
