@@ -51,7 +51,7 @@ struct InitBufferIndexOpConversion
     auto loc = op.getLoc();
     auto mod = op.getOperation()->getParentOfType<ModuleOp>();
     auto b = TritonLLVMOpBuilder(loc, rewriter);
-    auto ptrTy = ptr_ty(rewriter.getContext(), indexPtrAddressSpace);
+    auto ptrTy = ptr_ty(rewriter.getContext(), IndexPtrAddrSpace);
     auto indexPtr = rewriter.create<LLVM::AllocaOp>(
         loc, ptrTy, i32_ty, b.i32_val(1), /*alignment=*/0);
     b.store(b.i32_val(0), indexPtr);
