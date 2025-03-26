@@ -21,9 +21,7 @@ struct TestPipelineAssignLatencies
   using impl::TritonGPUTestPipelineAssignLatenciesBase<
       TestPipelineAssignLatencies>::TritonGPUTestPipelineAssignLatenciesBase;
 
-  void runOnOperation() override {
-    assignLatencies(getOperation(), numStages, /*assignMMA=*/true);
-  }
+  void runOnOperation() override { assignLatencies(getOperation(), numStages); }
 };
 
 } // namespace gpu
