@@ -82,8 +82,8 @@ private:
   /// Width of the prefetch window in elements
   unsigned prefetchWidth;
 
-  /// Collection of dot operations to be optimized
-  SetVector<ttng::WarpGroupDotOp> dots;
+  /// Collection of dot operations to be optimizedSetVector
+  DenseSet<ttng::WarpGroupDotOp> dots;
 
   /// Maps for tracking various aspects of dot operations
   DenseMap<Value, Value> dot2aSrcMemDesc;
@@ -95,10 +95,9 @@ private:
 
   Value generatePrefetch(Value v, unsigned opIdx, bool isPrologue,
                          bool loadToReg, Attribute dotEncoding,
-                         OpBuilder &builder,
+                         OpBuilder &builder, int64_t kWidth,
                          std::optional<int64_t> offsetK = std::nullopt,
-                         std::optional<int64_t> shapeK = std::nullopt,
-                         std::optional<int64_t> kWidth = std::nullopt);
+                         std::optional<int64_t> shapeK = std::nullopt);
 
   /// Clone elementwise operations for prefetched values
   void cloneElementwiseOps(Value &bRem, const SmallVector<Value> &vals,
@@ -110,9 +109,17 @@ void WGMMAPrefetcher::cloneElementwiseOps(Value &ret,
                                           Value source, OpBuilder &builder) {
   IRMapping mapping;
   mapping.map(source, ret);
+  // Save the original insertion point
+  OpBuilder::InsertionGuard guard(builder);
+
   for (int i = 0; i < vals.size(); i++) {
     Value v = vals[i];
-    Value curr = builder.clone(*v.getDefiningOp(), mapping)->getResult(0);
+    Operation *op = v.getDefiningOp();
+    assert(op->getNumResults() == 1 &&
+           "Defining operation must have exactly one result");
+    // builder.setInsertionPoint(op); // Set insertion point to the location of
+    // the original operation
+    Value curr = builder.clone(*op, mapping)->getResult(0);
     if (isa<RankedTensorType>(curr.getType())) {
       auto retType = RankedTensorType::get(
           cast<RankedTensorType>(ret.getType()).getShape(),
@@ -126,10 +133,12 @@ void WGMMAPrefetcher::cloneElementwiseOps(Value &ret,
   ret = mapping.lookup(vals.back());
 }
 
-Value WGMMAPrefetcher::generatePrefetch(
-    Value v, unsigned opIdx, bool isPrologue, bool loadToReg,
-    Attribute dotEncoding, OpBuilder &builder, std::optional<int64_t> offsetK,
-    std::optional<int64_t> shapeK, std::optional<int64_t> kWidth) {
+Value WGMMAPrefetcher::generatePrefetch(Value v, unsigned opIdx,
+                                        bool isPrologue, bool loadToReg,
+                                        Attribute dotEncoding,
+                                        OpBuilder &builder, int64_t kWidth,
+                                        std::optional<int64_t> offsetK,
+                                        std::optional<int64_t> shapeK) {
   // opIdx: 0 => a, 1 => b
   auto type = cast<triton::gpu::MemDescType>(v.getType());
   SmallVector<int64_t> shape{type.getShape().begin(), type.getShape().end()};
@@ -159,10 +168,8 @@ Value WGMMAPrefetcher::generatePrefetch(
       v, offsetsVal);
 
   if (loadToReg) {
-    int64_t newKWidth = kWidth ? *kWidth : prefetchWidth / 8;
-
     auto dotOperandEnc = triton::gpu::DotOperandEncodingAttr::get(
-        builder.getContext(), opIdx, dotEncoding, newKWidth);
+        builder.getContext(), opIdx, dotEncoding, kWidth);
     Value prefetchSlice = builder.create<triton::gpu::LocalLoadOp>(
         v.getLoc(), RankedTensorType::get(shape, elementType, dotOperandEnc),
         newSmem);
@@ -184,8 +191,6 @@ LogicalResult WGMMAPrefetcher::initialize() {
   // Step 1: check the condition if the forloop can be prefetched
   for (Operation &op : *loop) {
     if (auto dotOp = dyn_cast<ttng::WarpGroupDotOp>(op)) {
-      auto dstMmaEnc =
-          dyn_cast<NvidiaMmaEncodingAttr>(getEncoding(dotOp.getResult()));
       dotsInFor.push_back(dotOp);
     } else if (auto dotOp = dyn_cast<triton::DotOp>(op)) {
       // Only allow WarpGroupDotOp in the loop for now
@@ -371,8 +376,8 @@ scf::ForOp WGMMAPrefetcher::createNewForOp() {
       // Prefetching
       for (int i = 0; i < subTileCnt; i++) {
         Value aRem = generatePrefetch(mapping.lookup(dot2aSrcMemDesc[dot]), 0,
-                                      false, true, dotEncoding, builder,
-                                      prefetchWidth * i, prefetchWidth, kWidth);
+                                      false, true, dotEncoding, builder, kWidth,
+                                      prefetchWidth * i, prefetchWidth);
         PrefetchedA.push_back(aRem);
       }
 
@@ -387,9 +392,9 @@ scf::ForOp WGMMAPrefetcher::createNewForOp() {
       for (int i = 0; i < subTileCnt; i++) {
         cloneElementwiseOps(PrefetchedA[i], dot2aValsElementWise[dot],
                             dot2aValsLocalLoad[dot].back(), builder);
-        Value bSubtile = generatePrefetch(mapping.lookup(dot2bSrcMemDesc[dot]),
-                                          1, false, false, dotEncoding, builder,
-                                          prefetchWidth * i, prefetchWidth);
+        Value bSubtile = generatePrefetch(
+            mapping.lookup(dot2bSrcMemDesc[dot]), 1, false, false, dotEncoding,
+            builder, kWidth, prefetchWidth * i, prefetchWidth);
         if (i > 0) {
           OpC = prevDot.getResult();
           // for subtiles with index > 0, useC is set to 1 for
