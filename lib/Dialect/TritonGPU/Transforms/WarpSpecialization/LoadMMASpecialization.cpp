@@ -313,8 +313,8 @@ LogicalResult triton::gpu::specializeLoadMMADependencies(scf::ForOp &loop,
   // Now rewrite the MMA by hoisting the TMEM allocation out of the loop and
   // multi-buffering it if necessary. However, the TMEM multi-buffering may be
   // with respect to the outer loop.
-  auto [mmaIndex, mmaPhase] = addIndexAndPhase(b, loop, numMmaStages);
-  Value mmaBars = createBarrierAlloc(loop, numMmaStages);
+  auto [mmaIndex, mmaPhase] = addIndexAndPhase(b, loop, numStages);
+  Value mmaBars = createBarrierAlloc(loop, numStages);
 
   b.setInsertionPoint(mmaOp);
   Value curMmaBar = createSingleBufferView(b, mmaBars, mmaIndex);
