@@ -1,10 +1,10 @@
+#include "Conversion/ProtonGPUToLLVM/PatternProtonGPUOpToLLVM.h"
+#include "Conversion/ProtonGPUToLLVM/ProtonNvidiaGPUToLLVM/Passes.h"
+#include "Conversion/ProtonGPUToLLVM/ProtonNvidiaGPUToLLVM/TargetInfo.h"
 #include "Dialect/ProtonGPU/IR/Dialect.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Transforms/DialectConversion.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
-#include "third_party/proton/dialect/include/Conversion/ProtonGPUToLLVM/PatternProtonGPUOpToLLVM.h"
-#include "third_party/proton/dialect/include/Conversion/ProtonGPUToLLVM/ProtonNvidiaGPUToLLVM/Passes.h"
-#include "third_party/proton/dialect/include/Conversion/ProtonGPUToLLVM/ProtonNvidiaGPUToLLVM/TargetInfo.h"
 #include "triton/Conversion/TritonGPUToLLVM/TypeConverter.h"
 
 using namespace mlir;
