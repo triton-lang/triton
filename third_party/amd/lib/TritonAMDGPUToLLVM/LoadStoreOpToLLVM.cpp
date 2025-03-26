@@ -1341,6 +1341,7 @@ struct AtomicRMWOpConversion
         Value retVal =
             emitter.emitAtomicRMW(rewriter, ptrElements[i], valElement, rmwMask,
                                   atomicSharedMemBase, enableIntraWaveReduce);
+
         if (tensorTy) {
           for (int ii = 0; ii < vec; ++ii) {
             resultVals[i + ii] =
