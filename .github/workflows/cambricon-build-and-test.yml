@@ -11,7 +11,7 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  cambricon-build:
+  cambricon-build-and-test:
     runs-on: cambricon
     steps:
       - name: Checkout code
@@ -24,15 +24,3 @@ jobs:
           source ~/env.sh
           cd python
           MAX_JOBS=8 pip3 install . --no-build-isolation
-
-  cambricon-test:
-    runs-on: cambricon
-    needs: cambricon-build
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: FlagTree Test on Cambricon
-        shell: bash
-        run: |
-          echo "Skip Triton tests on Cambricon currently."

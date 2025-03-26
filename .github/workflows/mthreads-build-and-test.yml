@@ -8,7 +8,7 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  mthreads-build:
+  mthreads-build-and-test:
     runs-on: mthreads
     steps:
       - name: Checkout code
@@ -21,13 +21,6 @@ jobs:
           export FLAGTREE_BACKEND=mthreads
           cd python
           MAX_JOBS=20 pip3 install . --no-build-isolation
-
-  mthreads-test:
-    runs-on: mthreads
-    needs: mthreads-build
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
 
       - name: FlagTree Test on Mthreads
         shell: bash

@@ -8,7 +8,7 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  metax-build:
+  metax-build-and-test:
     runs-on: metax
     steps:
       - name: Checkout code
@@ -21,13 +21,6 @@ jobs:
           export FLAGTREE_BACKEND=metax
           cd python
           MAX_JOBS=20 pip3 install . --no-build-isolation
-
-  metax-test:
-    runs-on: metax
-    needs: metax-build
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
 
       - name: FlagTree Test on Metax
         shell: bash

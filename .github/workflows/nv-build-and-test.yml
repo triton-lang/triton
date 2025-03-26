@@ -11,7 +11,7 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  nv-build:
+  nv-build-and-test:
     runs-on: nv-jiuding
     steps:
       - name: Checkout code
@@ -23,13 +23,6 @@ jobs:
           source ~/env.sh
           cd python
           MAX_JOBS=20 pip3.11 install . --no-build-isolation
-
-  nv-stest:
-    runs-on: nv-jiuding
-    needs: nv-build
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
 
       - name: FlagTree Test on NVIDIA-A100
         shell: bash

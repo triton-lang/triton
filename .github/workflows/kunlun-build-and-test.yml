@@ -12,7 +12,7 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  kunlun-build:
+  kunlun-build-and-test:
     runs-on: kunlun
     steps:
       - name: Checkout code
@@ -25,13 +25,6 @@ jobs:
           export FLAGTREE_BACKEND=xpu
           cd python
           pip3 install . --no-build-isolation
-
-  kunlun-test:
-    runs-on: kunlun
-    needs: kunlun-build
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
 
       - name: FlagTree Test on Kunlun
         shell: bash
