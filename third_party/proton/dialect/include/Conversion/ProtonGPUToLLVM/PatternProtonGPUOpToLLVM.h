@@ -6,6 +6,10 @@
 
 namespace mlir::triton {
 namespace proton::gpu {
+
+// Profiler index is private to each thread, address space is 5
+constexpr int indexPtrAddressSpace = 5;
+
 void populateProtonGPUOpPatterns(LLVMTypeConverter &typeConverter,
                                  RewritePatternSet &patterns,
                                  const TargetInfoBase &targetInfo,
