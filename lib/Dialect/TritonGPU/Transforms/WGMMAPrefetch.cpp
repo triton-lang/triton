@@ -109,16 +109,12 @@ void WGMMAPrefetcher::cloneElementwiseOps(Value &ret,
                                           Value source, OpBuilder &builder) {
   IRMapping mapping;
   mapping.map(source, ret);
-  // Save the original insertion point
-  OpBuilder::InsertionGuard guard(builder);
 
   for (int i = 0; i < vals.size(); i++) {
     Value v = vals[i];
     Operation *op = v.getDefiningOp();
     assert(op->getNumResults() == 1 &&
            "Defining operation must have exactly one result");
-    // builder.setInsertionPoint(op); // Set insertion point to the location of
-    // the original operation
     Value curr = builder.clone(*op, mapping)->getResult(0);
     if (isa<RankedTensorType>(curr.getType())) {
       auto retType = RankedTensorType::get(
