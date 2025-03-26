@@ -29,13 +29,13 @@ test-cpp:
 
 .PHONY: test-python
 test-unit: all
-	cd python/test/unit && $(PYTEST) -s -n 8 --ignore=cuda/test_flashattention.py \
+	cd python/test/unit && $(PYTEST) -vs --ignore=cuda/test_flashattention.py \
 		--ignore=language/test_line_info.py --ignore=language/test_subprocess.py --ignore=test_debug.py
-	$(PYTEST) -s -n 8 python/test/unit/language/test_subprocess.py
-	$(PYTEST) -s -n 8 python/test/unit/test_debug.py --forked
+	$(PYTEST) -vs python/test/unit/language/test_subprocess.py
+	$(PYTEST) -vs python/test/unit/test_debug.py --forked
 	TRITON_DISABLE_LINE_INFO=0 $(PYTEST) -s python/test/unit/language/test_line_info.py
 	# Run cuda/test_flashattention.py separately to avoid out of gpu memory
-	$(PYTEST) -s python/test/unit/cuda/test_flashattention.py
+	$(PYTEST) -vs python/test/unit/cuda/test_flashattention.py
 	TRITON_ALWAYS_COMPILE=1 TRITON_DISABLE_LINE_INFO=0 LLVM_PASS_PLUGIN_PATH=python/triton/instrumentation/libGPUInstrumentationTestLib.so \
 		$(PYTEST) --capture=tee-sys -rfs -vvv python/test/unit/instrumentation/test_gpuhello.py
 

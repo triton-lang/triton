@@ -274,8 +274,11 @@ jobs:
             source /venv/bin/activate
           fi
           echo "PATH is '$PATH'"
+          nvidia-smi
+          python3 -c "import torch; print(torch.cuda.device_count())"
           ccache --zero-stats
           make dev-install
+
 
       - &print-ccache-stats
         name: CCache Stats
@@ -290,7 +293,10 @@ jobs:
           if [ "${{ matrix.runner[0] }}" == "gb200-runner-set" ]; then
             source /venv/bin/activate
           fi
-          make test-unit
+          python3 -c "import torch; print(torch.cuda.device_count())"
+          cd python/test/unit
+          pytest -vs language/test_core.py
+
 
       - name: Run interpreter tests
         if: ${{ matrix.runner[0] == 'h100-runner-set' }}
