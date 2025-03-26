@@ -79,6 +79,16 @@ void init_triton_nvidia(py::module &&m) {
     context.loadAllAvailableDialects();
   });
 
+  // Set short point option, this needs to be set before setting the data
+  // layout.
+  m.def("set_short_ptr", []() {
+    auto options = llvm::cl::getRegisteredOptions();
+    const char *flag = "nvptx-short-ptr";
+    auto *shortPtr = static_cast<llvm::cl::opt<bool> *>(options[flag]);
+    assert(shortPtr);
+    shortPtr->setValue(true);
+  });
+
   // TODO: could be done in python if we had a generic interface to set metadata
   m.def("set_nvvm_reflect_ftz", [](llvm::Module *mod) {
     // please check https://llvm.org/docs/NVPTXUsage.html#reflection-parameters
