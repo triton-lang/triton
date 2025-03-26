@@ -40,19 +40,19 @@ def _get_backend_default_mode(backend: str, mode: Optional[str]) -> str:
         "roctracer": [""],
         "instrumentation": ["cycles"],
     }
-    
+
     # Validate backend
     if backend not in backend_modes:
         raise ValueError(f"Unsupported backend: {backend}")
-    
+
     # Set default mode if none provided
     if mode is None:
         mode = "cycles" if backend == "instrumentation" else ""
-    
+
     # Validate mode
     if mode not in backend_modes[backend]:
         raise ValueError(f"Invalid mode {mode} for backend {backend}")
-    
+
     return mode
 
 

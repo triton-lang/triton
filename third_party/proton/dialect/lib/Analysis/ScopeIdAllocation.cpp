@@ -16,16 +16,14 @@ void ScopeIdAllocation::run() {
         opToIdMap[recordOp] = id;
         id++;
       } else {
-        recordOp->emitError(
-            "The scope name must appear in pairs");
+        recordOp->emitError("The scope name must appear in pairs");
       }
     } else {
       if (nameCount.contains(name)) {
         opToIdMap[recordOp] = nameCount.lookup(name);
         nameCount.erase(name);
       } else {
-        recordOp->emitError(
-            "The scope name must appear in pairs");
+        recordOp->emitError("The scope name must appear in pairs");
       }
     }
   });
