@@ -891,43 +891,64 @@ void createBarrierAndWaitOps(scf::ForOp forOp, CoarseSchedule &schedule,
     waitBuffers.push_back(mmaAsScaledDotOp.getBScale());
   }
 
-  // Add waits before loads from the accumulator
-  bool addedWaitInMMABlock = false;
+  // Add waits before loads from the accumulator.
+  struct WaitPoint {
+    Operation *op;
+    int stage;
+    CoarseSchedule::Cluster cluster;
+  };
+  // waitPoints are (operation before which to insert the wait, stage, cluster)
+  SmallVector<WaitPoint> waitPoints;
+  auto [mmaStage, mmaCluster] = schedule[mma];
+  waitPoints.push_back(
+      {mma->getNextNode(), mmaStage + numStages - 1, mmaCluster});
+
+  // Would wait before operation a be redundant given existence of wait before
+  // operation b?
+  auto isWaitRedundant = [&](WaitPoint a, WaitPoint b) {
+    if (a.op->getBlock() == b.op->getBlock() ||
+        domInfo.properlyDominates(b.op, a.op)) {
+      if ((a.stage > b.stage) ||
+          (a.stage == b.stage &&
+           schedule.clusters.isBefore(b.cluster, a.cluster)) ||
+          (a.stage == b.stage && a.cluster == b.cluster &&
+           b.op->isBeforeInBlock(a.op))) {
+        return true;
+      }
+    }
+    return false;
+  };
+
   for (auto user : alloc->getUsers()) {
     if (auto load = dyn_cast<ttng::TMEMLoadOp>(user)) {
-      int waitStage = schedule[mma].first + numStages - 1;
-      int loadStage =
-          schedule[forOp.getBody()->findAncestorOpInBlock(*load)].first;
-      if (!forOp->isAncestor(load) ||
-          // If the load is in the same stage as the mma wait, would be, do not
-          // add a new wait, rely on the wait that will be inserted in the main
-          // block.
-          loadStage == waitStage) {
+      Operation *loadAncestor = forOp.getBody()->findAncestorOpInBlock(*load);
+      if (!loadAncestor) {
         continue;
       }
-      // Put the wait in the same stage as the load
-      assert(domInfo.properlyDominates(mma, load) &&
-             "Loads before the mma are not supported for the moment.");
-      // TODO: No point in adding more than one wait in a block
-      builder.setInsertionPoint(load);
-      builder.setStageCluster(schedule[load]);
-      builder.create<ttng::WaitBarrierOp>(loc, barrierSlice, phase,
-                                          waitBuffers);
-      if (load->getBlock() == mma->getBlock()) {
-        addedWaitInMMABlock = true;
+      auto [loadStage, loadCluster] = schedule[loadAncestor];
+      WaitPoint loadWP = {load, loadStage, loadCluster};
+      bool newWaitRequired = llvm::none_of(waitPoints, [&](const auto &wp) {
+        return isWaitRedundant(loadWP, wp);
+      });
+
+      if (newWaitRequired) {
+        // Remove any wait points that are redundant with respect to the load.
+        llvm::erase_if(waitPoints, [&](const auto &wp) {
+          return isWaitRedundant(loadWP, wp);
+        });
+        waitPoints.push_back(loadWP);
       }
     }
   }
-  builder.setInsertionPointAfter(mma);
-  if (!addedWaitInMMABlock) {
-    // Add a wait in the same stage as the mma
-    auto [mmaStage, mmaCluster] = schedule[mma];
-    // Put wait in the next stage after the MMA.
-    int waitStage = mmaStage + numStages - 1;
-    builder.setStageCluster({waitStage, mmaCluster});
+
+  for (auto wp : waitPoints) {
+    builder.setStageCluster({wp.stage, wp.cluster});
+    builder.setInsertionPoint(wp.op);
     builder.create<ttng::WaitBarrierOp>(loc, barrierSlice, phase, waitBuffers);
   }
+
   builder.setStageCluster(schedule[mma]);
+  builder.setInsertionPoint(forOp.getBody()->getTerminator());
   Value barWrap;
   barrierIdx = createIncrementModulo(builder, loc, barrierIdx, numStagesVal,
                                      zero, one, &barWrap);
@@ -959,10 +980,15 @@ void multibufferTensorMemory(scf::ForOp forOp, CoarseSchedule &schedule,
   Value zero = builder.create<arith::ConstantIntOp>(forOp.getLoc(), 0, 32);
   Value one = builder.create<arith::ConstantIntOp>(forOp.getLoc(), 1, 32);
 
+  bool multibufferingIsValid = false;
+
   SmallVector<Operation *> allocUsers = llvm::to_vector(alloc->getUsers());
   for (auto user : allocUsers) {
     if (auto store = dyn_cast<ttng::TMEMStoreOp>(user)) {
       if (forOp->isAncestor(store)) {
+        // We can multibuffer, since the store is a point where we can
+        // change the buffer index
+        multibufferingIsValid = true;
         builder.setStageCluster(schedule[store]);
         builder.setInsertionPoint(store);
         // Change the buffer index to the new buffer index on store.
@@ -1005,7 +1031,17 @@ void multibufferTensorMemory(scf::ForOp forOp, CoarseSchedule &schedule,
     } else if (auto mma = dyn_cast<ttng::MMAv5OpInterface>(user)) {
       builder.setStageCluster(schedule[mma]);
       builder.setInsertionPoint(mma);
-      // Change the buffer index when the mma does not use the accumulator
+      // We can legally switch to next buffer index if the mma does not use the
+      // accumulator
+      auto isConstTrue = [](Value v) {
+        if (auto constOp = v.getDefiningOp<arith::ConstantOp>()) {
+          if (auto attr = dyn_cast<BoolAttr>(constOp.getValueAttr())) {
+            return attr.getValue();
+          }
+        }
+        return false;
+      };
+      multibufferingIsValid = !isConstTrue(mma.useAccumulator());
       Value curBufIdx = getCurrBufIdx(mma.getOperation());
       Value newBufIdx = createIncrementModulo(
           builder, forOp.getLoc(), curBufIdx, numStagesVal, zero, one);
@@ -1022,6 +1058,11 @@ void multibufferTensorMemory(scf::ForOp forOp, CoarseSchedule &schedule,
       llvm::errs() << "Unsupported user of the accumulator: " << *user << "\n";
       llvm::report_fatal_error("Unsupported user of the accumulator");
     }
+  }
+  if (!multibufferingIsValid) {
+    llvm::report_fatal_error(
+        "Trying to multibuffer TMEM while there is no store to the "
+        "accumulator, and the mma uses the accumulator all the time.");
   }
   alloc->erase();
   bufIdx = bufIdxDefs.back().second;
