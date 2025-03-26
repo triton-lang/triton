@@ -782,7 +782,7 @@ if __name__ == "__main__":
     if args.prec == 'fp8' and (not hasattr(torch, "float8_e4m3fn") or not is_cuda()):
         print("This example requires CUDA with fp8 support.")
     else:
-        dtype = torch.float8_e4m3fn
+        dtype = torch.float8_e4m3fn if args.prec == 'fp8' else torch.float16
 
         if args.K and args.K_range is None:
             args.K_range = [args.K, args.K]
