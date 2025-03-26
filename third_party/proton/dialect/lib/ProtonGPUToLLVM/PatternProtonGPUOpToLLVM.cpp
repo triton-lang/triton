@@ -1,10 +1,10 @@
-#include "third_party/proton/dialect/include/Conversion/ProtonGPUToLLVM/PatternProtonGPUOpToLLVM.h"
+#include "Conversion/ProtonGPUToLLVM/PatternProtonGPUOpToLLVM.h"
+#include "Conversion/ProtonGPUToLLVM/GlobalScratchAllocOpToLLVM.h"
 #include "Conversion/ProtonGPUToLLVM/TargetInfoBase.h"
+#include "Dialect/ProtonGPU/IR/Dialect.h"
 #include "mlir/Conversion/LLVMCommon/Pattern.h"
 #include "mlir/Conversion/LLVMCommon/TypeConverter.h"
 #include "mlir/IR/PatternMatch.h"
-#include "third_party/proton/dialect/include/Conversion/ProtonGPUToLLVM/GlobalScratchAllocOpToLLVM.h"
-#include "third_party/proton/dialect/include/Dialect/ProtonGPU/IR/Dialect.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 
 namespace mlir::triton {
@@ -49,9 +49,13 @@ struct InitBufferIndexOpConversion
                   OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     auto loc = op.getLoc();
+    auto mod = op.getOperation()->getParentOfType<ModuleOp>();
     auto b = TritonLLVMOpBuilder(loc, rewriter);
-    auto zero = b.i32_val(0);
-    rewriter.replaceOp(op, zero.getDefiningOp());
+    auto ptrTy = ptr_ty(rewriter.getContext(), IndexPtrAddrSpace);
+    auto indexPtr = rewriter.create<LLVM::AllocaOp>(
+        loc, ptrTy, i32_ty, b.i32_val(1), /*alignment=*/0);
+    b.store(b.i32_val(0), indexPtr);
+    rewriter.replaceOp(op, indexPtr);
     return success();
   }
 
@@ -72,10 +76,8 @@ struct ReadCounterOpConversion
   matchAndRewrite(mlir::triton::proton::gpu::ReadCounterOp op,
                   OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    auto loc = op.getLoc();
-    auto b = TritonLLVMOpBuilder(loc, rewriter);
-    auto zero = b.i32_val(0);
-    rewriter.replaceOp(op, zero.getDefiningOp());
+    Value clock = targetInfo.clock(rewriter, op.getLoc(), false);
+    rewriter.replaceOp(op, {clock});
     return success();
   }
 
