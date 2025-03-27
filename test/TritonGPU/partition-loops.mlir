@@ -199,4 +199,43 @@ tt.func @future_conditional_self_use(%lb: i32, %ub: i32, %step: i32, %cond: i1) 
   tt.return
 }
 
+// CHECK-LABEL: @trivial_tensor_captures
+tt.func @trivial_tensor_captures(%arg0: f16, %lb: i32, %ub: i32, %step: i32) {
+  %0 = tt.make_range {end = 256 : i32, start = 0 : i32} : tensor<256xi32>
+  %1 = tt.splat %arg0 : f16 -> tensor<32xf16>
+  // CHECK: ttg.warp_specialize(%arg1, %arg2, %arg3, %arg0)
+  scf.for %i = %lb to %ub step %step : i32 {
+    // CHECK: partition0(%arg4: i32, %arg5: i32, %arg6: i32, %arg7: f16) num_warps(4)
+    // CHECK-NEXT: [[SPLAT:%.*]] = tt.splat %arg7 : f16 -> tensor<32xf16>
+    // CHECK-NEXT: [[RANGE:%.*]] = tt.make_range {end = 256 : i32, start = 0 : i32} : tensor<256xi32>
+    // CHECK-NEXT: scf.for
+    // CHECK-NEXT: "use"([[RANGE]], [[SPLAT]])
+    "use"(%0, %1) {ttg.partition = 1} : (tensor<256xi32>, tensor<32xf16>) -> ()
+  } {ttg.partition.stages = [0, 0]}
+  tt.return
+}
+
+// CHECK-LABEL: @dce_before_warp_allocation
+tt.func @dce_before_warp_allocation(%lb: i32, %ub: i32, %step: i32) {
+  %cst = arith.constant dense<0> : tensor<128xi32, #blocked>
+  // CHECK: ttg.warp_specialize
+  // CHECK: partition0({{.*}}) num_warps(1)
+  // CHECK: partition1({{.*}}) num_warps(4)
+  scf.for %i = %lb to %ub step %step iter_args(%idxs = %cst) -> tensor<128xi32, #blocked> : i32 {
+    %do_prologue = "prologue_cond"(%i) : (i32) -> i1
+    %0 = scf.if %do_prologue -> tensor<128xi32, #blocked> {
+      %1 = tt.splat %i : i32 -> tensor<128xi32, #blocked>
+      %2 = arith.addi %1, %idxs : tensor<128xi32, #blocked>
+      scf.yield %2 : tensor<128xi32, #blocked>
+    } else {
+      scf.yield %idxs : tensor<128xi32, #blocked>
+    }
+    "op_a"(%0) {ttg.partition = 0 : i32} : (tensor<128xi32, #blocked>) -> ()
+    "op_b"(%i) {ttg.partition = 1 : i32} : (i32) -> ()
+    "op_c"(%0) {ttg.partition = 2 : i32} : (tensor<128xi32, #blocked>) -> ()
+    scf.yield %0 : tensor<128xi32, #blocked>
+  } {ttg.partition.stages = [0, 0, 0]}
+  tt.return
+}
+
 }

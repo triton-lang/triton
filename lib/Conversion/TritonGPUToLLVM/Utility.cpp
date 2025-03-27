@@ -1,6 +1,7 @@
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/IR/Attributes.h"
+#include "mlir/Transforms/RegionUtils.h"
 #include "triton/Conversion/TritonGPUToLLVM/TargetInfoBase.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Attributes.h"
@@ -916,6 +917,27 @@ getExpandedSharedMemoryObject(ConversionPatternRewriter &rewriter, Location loc,
   auto expandedSmemObj =
       SharedMemoryObject(smemObj.getBase(), smemObj.getBaseElemType(), offsets);
   return expandedSmemObj;
+}
+
+// Isolated a single warp specialize op from above.
+static void
+makeWarpGroupsIsolatedFromAbove(triton::gpu::WarpSpecializeOp wsOp) {
+  SetVector<Value> captures;
+  getUsedValuesDefinedAbove(wsOp.getPartitionOpHolder(), captures);
+  for (Value capture : captures) {
+    wsOp->insertOperands(wsOp.getNumOperands(), capture);
+    for (Region *region : wsOp.getPartitionRegions()) {
+      BlockArgument arg =
+          region->addArgument(capture.getType(), capture.getLoc());
+      replaceAllUsesInRegionWith(capture, arg, *region);
+    }
+  }
+}
+
+void makeAllWarpGroupsIsolatedFromAbove(Operation *op) {
+  op->walk([](triton::gpu::WarpSpecializeOp wsOp) {
+    makeWarpGroupsIsolatedFromAbove(wsOp);
+  });
 }
 
 } // namespace mlir

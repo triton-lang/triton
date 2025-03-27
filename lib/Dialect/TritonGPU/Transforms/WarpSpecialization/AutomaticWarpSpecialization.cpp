@@ -33,7 +33,7 @@ struct AutomaticWarpSpecialization
 
 void AutomaticWarpSpecialization::runOnOperation() {
   OpPassManager pm;
-  pm.addPass(createTritonGPULoadMMASpecialization());
+  pm.addPass(createTritonGPULoadMMASpecialization({numStages}));
   pm.addPass(createTritonGPURewritePartitionDependencies());
   // `int-range-optimizations` combines SCCP with integer range analysis. It's
   // good at cleaning up loop arithmetic.
@@ -47,6 +47,8 @@ void AutomaticWarpSpecialization::runOnOperation() {
   RewritePatternSet patterns(&getContext());
   populateForOpDeadArgumentElimination(patterns);
   scf::ForOp::getCanonicalizationPatterns(patterns, &getContext());
+  scf::IfOp::getCanonicalizationPatterns(patterns, &getContext());
+  WarpSpecializeOp::getCanonicalizationPatterns(patterns, &getContext());
   if (failed(applyPatternsGreedily(getOperation(), std::move(patterns))))
     return signalPassFailure();
 }

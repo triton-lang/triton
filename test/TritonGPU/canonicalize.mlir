@@ -321,3 +321,19 @@ tt.func @unused_warp_specialize_captures_and_results(%arg0: i32, %arg1: i32, %ar
   // CHECK-NEXT: return [[OUTS]]#0, [[OUTS]]#1 : i32, i32
   tt.return %0#0, %0#2 : i32, i32
 }
+
+// CHECK-LABEL: @duplicate_warp_specialize_captures
+tt.func @duplicate_warp_specialize_captures(%arg0: i32, %arg1: i32, %arg2: i32) {
+  // CHECK-NEXT: ttg.warp_specialize(%arg0, %arg1)
+  ttg.warp_specialize(%arg0, %arg1, %arg1, %arg2, %arg0)
+  default {
+    ttg.warp_yield
+  }
+  // CHECK: partition0(%arg3: i32, %arg4: i32)
+  partition0(%arg3: i32, %arg4: i32, %arg5: i32, %arg6: i32, %arg7: i32) num_warps(4) {
+    // CHECK-NEXT: "use"(%arg3, %arg4, %arg4, %arg3)
+    "use"(%arg3, %arg4, %arg5, %arg7) : (i32, i32, i32, i32) -> ()
+    ttg.warp_return
+  } : (i32, i32, i32, i32, i32) -> ()
+  tt.return
+}

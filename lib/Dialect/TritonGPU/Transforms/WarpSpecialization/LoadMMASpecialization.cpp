@@ -81,7 +81,7 @@ static LogicalResult findSingleChainToLoad(scf::ForOp loop, Value value,
 
 static std::pair<Value, Value> addIndexAndPhase(ImplicitLocOpBuilder &b,
                                                 scf::ForOp &loop,
-                                                unsigned numBuffers,
+                                                unsigned numStages,
                                                 Value epilogue = {}) {
   OpBuilder::InsertionGuard guard(b);
   b.setInsertionPoint(loop);
@@ -103,7 +103,7 @@ static std::pair<Value, Value> addIndexAndPhase(ImplicitLocOpBuilder &b,
   Value nextPhase = b.create<arith::XOrIOp>(phase, intCst(1));
 
   Value rollover = b.create<arith::CmpIOp>(arith::CmpIPredicate::eq, nextIndex,
-                                           intCst(numBuffers));
+                                           intCst(numStages));
   nextIndex = b.create<arith::SelectOp>(rollover, intCst(0), nextIndex);
   nextPhase = b.create<arith::SelectOp>(rollover, nextPhase, phase);
 
@@ -180,8 +180,10 @@ getUserPrecondition(ImplicitLocOpBuilder &b, scf::ForOp loop,
 LogicalResult triton::gpu::specializeLoadMMADependencies(scf::ForOp &loop,
                                                          int defaultNumStages) {
   auto ops = llvm::to_vector(loop.getOps<ttng::MMAv5OpInterface>());
+  if (ops.empty())
+    return success();
   // Support only 1 MMA op.
-  if (ops.size() != 1) {
+  if (ops.size() > 1) {
     return mlir::emitWarning(
         loop.getLoc(),
         "failed to warp specialize: more than one `tt.dot` found in the loop");
@@ -223,11 +225,11 @@ LogicalResult triton::gpu::specializeLoadMMADependencies(scf::ForOp &loop,
   // Pattern match succeeded. Now rewrite the loads and MMA ops to pass tensor
   // values through buffers.
   int numStages = getNumStagesOrDefault(loop, defaultNumStages);
-  int numBuffers = numStages - 1;
   int numMmaStages = 1 + info.accIsMultiBuffered;
   WarpSchedule schedule;
   Partition *loadPartition = schedule.addPartition(0);
-  Partition *mmaPartition = schedule.addPartition(numBuffers);
+  Partition *mmaPartition = schedule.addPartition(numStages);
+  Partition *waiterPartition = schedule.addPartition(numStages + numMmaStages);
 
   ImplicitLocOpBuilder b(mmaOp.getLoc(), loop);
   auto intCst = [&](int value, unsigned width = 32) {
@@ -235,7 +237,7 @@ LogicalResult triton::gpu::specializeLoadMMADependencies(scf::ForOp &loop,
   };
 
   // Multi-buffer the loads.
-  auto [loadIndex, loadPhase] = addIndexAndPhase(b, loop, numBuffers);
+  auto [loadIndex, loadPhase] = addIndexAndPhase(b, loop, numStages);
 
   Operation *aLoad = aChain.back();
   Operation *bLoad = bChain.back();
@@ -243,15 +245,15 @@ LogicalResult triton::gpu::specializeLoadMMADependencies(scf::ForOp &loop,
   auto bType = cast<RankedTensorType>(bLoad->getResult(0).getType());
   SharedEncodingTrait aEnc = getSharedEncoding(aChain.back());
   SharedEncodingTrait bEnc = getSharedEncoding(bChain.back());
-  Value aAlloc = createAlloc(loop, aType, aLoad->getLoc(), aEnc, numBuffers);
-  Value bAlloc = createAlloc(loop, bType, bLoad->getLoc(), bEnc, numBuffers);
+  Value aAlloc = createAlloc(loop, aType, aLoad->getLoc(), aEnc, numStages);
+  Value bAlloc = createAlloc(loop, bType, bLoad->getLoc(), bEnc, numStages);
 
   // Share the same set of barriers for both.
-  Value emptyBars = createBarrierAlloc(loop, numBuffers);
-  Value readyBars = createBarrierAlloc(loop, numBuffers);
+  Value emptyBars = createBarrierAlloc(loop, numStages);
+  Value readyBars = createBarrierAlloc(loop, numStages);
   // Mark the empty barriers as initially ready.
   b.setInsertionPoint(loop);
-  for (auto i : llvm::seq(numBuffers)) {
+  for (auto i : llvm::seq(numStages)) {
     Value emptyBar = createSingleBufferView(b, emptyBars, i);
     b.create<ttng::ArriveBarrierOp>(emptyBar, 1);
   }
@@ -311,16 +313,17 @@ LogicalResult triton::gpu::specializeLoadMMADependencies(scf::ForOp &loop,
   // Now rewrite the MMA by hoisting the TMEM allocation out of the loop and
   // multi-buffering it if necessary. However, the TMEM multi-buffering may be
   // with respect to the outer loop.
-  auto [mmaIndex, mmaPhase] = addIndexAndPhase(b, loop, numMmaStages);
-  Value mmaBars = createBarrierAlloc(loop, numMmaStages);
+  auto [mmaIndex, mmaPhase] = addIndexAndPhase(b, loop, numStages);
+  Value mmaBars = createBarrierAlloc(loop, numStages);
 
   b.setInsertionPoint(mmaOp);
   Value curMmaBar = createSingleBufferView(b, mmaBars, mmaIndex);
   mmaOp.setBarrier(curMmaBar);
 
   b.setInsertionPointAfter(mmaOp);
-  createInPartition<ttng::WaitBarrierOp>(b, *mmaPartition, curMmaBar, mmaPhase);
-  createInPartition<ttng::ArriveBarrierOp>(b, *mmaPartition, curEmptyBar, 1);
+  createInPartition<ttng::WaitBarrierOp>(b, *waiterPartition, curMmaBar,
+                                         mmaPhase);
+  createInPartition<ttng::ArriveBarrierOp>(b, *waiterPartition, curEmptyBar, 1);
   OpBuilder::InsertPoint donePt = b.saveInsertionPoint();
 
   // Now handle the accumulator, which is the tricky bit. The accumulator value
@@ -370,8 +373,8 @@ LogicalResult triton::gpu::specializeLoadMMADependencies(scf::ForOp &loop,
 
     // Set up production of the accumulator result.
     b.setInsertionPointAfter(pred.getDefiningOp());
-    createInPartition<ttng::ArriveBarrierOp>(b, *mmaPartition, curAccReadyBar,
-                                             1, pred);
+    createInPartition<ttng::ArriveBarrierOp>(b, *waiterPartition,
+                                             curAccReadyBar, 1, pred);
     createInPartition<ttng::WaitBarrierOp>(b, *mmaPartition, curAccEmptyBar,
                                            accPhase, pred);
     assert(donePt.getPoint() == b.getInsertionPoint() ||
@@ -380,7 +383,7 @@ LogicalResult triton::gpu::specializeLoadMMADependencies(scf::ForOp &loop,
 
     // Acquire and get the accumulator result.
     b.setInsertionPoint(domOp);
-    Partition *userPartition = schedule.addPartition(numBuffers + numMmaStages);
+    Partition *userPartition = schedule.addPartition(numStages + numMmaStages);
     createInPartition<ttng::WaitBarrierOp>(b, *userPartition, curAccReadyBar,
                                            accPhase);
     Value acc = createInPartition<ttng::TMEMLoadOp>(
@@ -410,7 +413,7 @@ LogicalResult triton::gpu::specializeLoadMMADependencies(scf::ForOp &loop,
     // Place the epilogue partition in the default warpgroup. The MMA and load
     // partitions shouldn't have tensor computations in them, which means they
     // will get assigned just 1 warp each.
-    schedule.reorderPartitions({2, 1, 0});
+    schedule.reorderPartitions({2, 1, 3, 0});
   }
 
   // Update the reset of the accumulator in the loop if it is multi-buffered.
@@ -453,6 +456,10 @@ LogicalResult triton::gpu::specializeLoadMMADependencies(scf::ForOp &loop,
   eraseLoopCarriedValues(loop, toErase);
 
   schedule.serialize(loop);
+
+  // HACK: Set this attribute so that LowerLoops will multi-buffer TMA
+  // descriptors.
+  loop->setAttr(kScheduledMaxStageAttrName, b.getI32IntegerAttr(numStages));
   return success();
 }
 
