@@ -142,8 +142,8 @@ private:
       return false;
     }
 
-    auto sharedEnc =
-        dyn_cast<triton::gpu::SwizzledSharedEncodingAttr>(srcTy.getEncoding());
+    auto sharedEnc = dyn_cast<triton::gpu::AMDLDSTransSharedEncodingAttr>(
+        srcTy.getEncoding());
     if (!sharedEnc)
       return false;
 

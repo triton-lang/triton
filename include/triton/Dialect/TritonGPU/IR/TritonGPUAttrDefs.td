@@ -276,9 +276,15 @@ When vec=2, elements are swizzled in pairs of 2.  In other words, the element at
 
         // ---- begin MFMA ----
         if (auto mfmaEnc = mlir::dyn_cast<AMDMfmaEncodingAttr>(dotOpEnc.getParent())) {
-          return mfmaEnc.composeSharedLayoutForOperand(
-              CTALayout, dotOpEnc.getOpIdx(), shape, order, dotOpEnc.getKWidth(),
-              typeWidthInBit, needTrans);
+          int perPhase = 1;
+          int vecSize = 1;
+          int maxPhase = 1;
+
+          mfmaEnc.composeSharedLayoutParams(
+               dotOpEnc.getOpIdx(), shape, order, dotOpEnc.getKWidth(),
+              typeWidthInBit, needTrans, perPhase, vecSize, maxPhase);
+
+          return get(context, vecSize, perPhase, maxPhase, order, CTALayout);
         }
 
         // ---- begin WMMA ----
@@ -552,6 +558,112 @@ Swizzling examples (matrix is filled with numbers 0, 1, 2, .. columns*rows-1):
   let hasCustomAssemblyFormat = 1;
 }
 
+def AMDLDSTransSharedEncodingAttr :
+  TritonGPU_Attr<"AMDLDSTransSharedEncoding", "amd_lds_trans_shared_encoding",
+                 [SharedEncodingTrait, LayoutEncodingTrait]> {
+  let mnemonic = "amd_lds_trans_shared";
+
+  let description = [{
+LDS transpose load instructions need a custom swizzle pattern due to a gap in the linear memory layout.
+In this layout, each group of 16 threads reads 128 consecutive bytes, followed by a 128-byte gap.
+The next 16-thread group then reads the next chunk. This gap makes standard SwizzledSharedEncodingAttr inefficient,
+since some swizzle phases fall into the unused gap region.
+
+LDS transpose loads use 64-bit instructions. On gfx950, to avoid bank conflicts, 32 threads must access different banks.
+In the LDS transpose layout, each 16-thread group loads 16 elements (any data type) along the non-K dimension,
+covering 64/bitwidth rows — one per K index.
+
+For example, for a 64x128 fp16 tensor with SwizzledSharedEncodingAttr, we could set vecSize=16, perPhase=1, and maxPhase=16.
+But rows 4-7 fall in the gap and waste phases 4-7. As a result, row 8 starts swizzling with phase 8,
+putting its data in the same banks as row 0 — causing bank conflicts.
+
+To fix this, AMDLDSTransSharedEncodingAttr reuses the first half of the phases before moving to the second half.
+vecSize and perPhase work the same as in SwizzledSharedEncodingAttr.
+So we set vecSize=16, perPhase=1, and maxPhase=8.
+Then rows 0-3 use phases 0-3, rows 4-7 also use 0-3, rows 8-11 use 4-7, and rows 12-15 also use 4-7.
+Note that limitation of this swizzling pattern is that maxPhase must always be even number.
+
+Swizzling examples (matrix is filled with numbers 0, 1, 2, .. columns*rows-1):
+
+  #shared<{vec=1, perPhase=1, maxPhase=2, order=[1,0]}>
+  row      elements
+    0  [ 0,  1,  2,  3],  // phase = 0 (xor with 0)
+    1  [ 4,  5,  6,  7],  // phase = 0 (xor with 0)
+    2  [ 9,  8, 11, 10],  // phase = 1 (xor with 1)
+    3  [13, 12, 15, 14]   // phase = 1 (xor with 0)
+    4  [16, 17, 18, 19],  // phase = 0 (xor with 0)
+    5  [20, 21, 22, 23],  // phase = 0 (xor with 0)
+    6  [25, 24, 27, 26],  // phase = 1 (xor with 1)
+    7  [29, 28, 31, 30]   // phase = 1 (xor with 1)
+
+  #shared<{vec=1, perPhase=2, maxPhase=2, order=[1,0]}>
+  row      elements
+    0  [ 0,  1,  2,  3],  // phase = 0 (xor with 0)
+    1  [ 4,  5,  6,  7],  // phase = 0 (xor with 0)
+    2  [ 9,  8, 11, 10],  // phase = 0 (xor with 0)
+    3  [12, 13, 14, 15]   // phase = 0 (xor with 0)
+    4  [17, 16, 19, 18],  // phase = 1 (xor with 1)
+    5  [21, 20, 23, 22],  // phase = 1 (xor with 1)
+    6  [25, 24, 27, 26],  // phase = 1 (xor with 1)
+    7  [29, 28, 31, 30]   // phase = 1 (xor with 1)
+
+  #shared<{vec=1, perPhase=1, maxPhase=4, order=[1,0]}>
+  row      elements
+    0  [ 0,  1,  2,  3],  // phase = 0 (xor with 0)
+    1  [ 5,  4,  7,  6],  // phase = 1 (xor with 1)
+    2  [10, 11,  8,  9],  // phase = 0 (xor with 0)
+    3  [15, 14, 13, 12]   // phase = 1 (xor with 1)
+    4  [18, 19, 16, 17],  // phase = 2 (xor with 2)
+    5  [23, 22, 21, 20],  // phase = 3 (xor with 3)
+    6  [26, 27, 24, 25],  // phase = 2 (xor with 2)
+    7  [31, 30, 29, 28]   // phase = 3 (xor with 3)
+
+  }];
+
+
+  let builders = [
+    AttrBuilder<(ins "DotOperandEncodingAttr":$dotOpEnc,
+                     "ArrayRef<int64_t>":$shape,
+                     "ArrayRef<unsigned>":$order,
+                     "CTALayoutAttr":$CTALayout,
+                     "unsigned":$typeWidthInBit,
+                     "bool":$needTrans), [{
+
+        // ---- begin MFMA ----
+        if (auto mfmaEnc = mlir::dyn_cast<AMDMfmaEncodingAttr>(dotOpEnc.getParent())) {
+          int perPhase = 1;
+          int vecSize = 1;
+          int maxPhase = 1;
+
+          mfmaEnc.composeSharedLayoutParams(
+               dotOpEnc.getOpIdx(), shape, order, dotOpEnc.getKWidth(),
+              typeWidthInBit, needTrans, perPhase, vecSize, maxPhase);
+
+          return get(context, vecSize, perPhase, maxPhase, order, CTALayout);
+        }
+
+        // ---- not implemented ----
+        llvm_unreachable("unsupported AMDLDSTrans swizzling for provided MMA version");
+    }]>,
+  ];
+
+  let parameters = (
+    ins
+    "unsigned":$vec,
+    "unsigned":$perPhase,
+    "unsigned":$maxPhase,
+    ArrayRefParameter<"unsigned">:$order,
+    "CTALayoutAttr":$CTALayout
+  );
+
+  let extraClassDeclaration = extraBaseClassDeclaration # [{
+    int32_t getAlignment() const;
+    SmallVector<unsigned> getCTAsPerCGA() const;
+    SmallVector<unsigned> getCTAOrder() const;
+    SmallVector<unsigned> getCTASplitNum() const;
+  }];
+  let hasCustomAssemblyFormat = 1;
+}
 
 //===----------------------------------------------------------------------===//
 // Distributed Layout Encoding
@@ -1021,10 +1133,10 @@ V [ 0,4,8...60   1,5...61     2,6...62     3,7...63    ]   [ 128,132...188  129,
 
     // Returns a swizzled shared layout matching this MFMA layout for the
     // dot operand at the given |operandIdx| with |operandShape|.
-    SwizzledSharedEncodingAttr composeSharedLayoutForOperand(
-        CTALayoutAttr ctaLayout, int operandIdx, ArrayRef<int64_t> operandShape,
+    void composeSharedLayoutParams(
+        int operandIdx, ArrayRef<int64_t> operandShape,
         ArrayRef<unsigned> sharedOrder, unsigned vectorSize,
-        unsigned elemBitWidth, bool needTrans) const;
+        unsigned elemBitWidth, bool needTrans, int &perPhase, int &vecSize, int &maxPhase) const;
   }];
 
   let genVerifyDecl = 1;
@@ -1141,6 +1253,14 @@ Row |
     SmallVector<unsigned> getRepOrderForOperand(int opIdx) const;
     unsigned getKWidthForOperands() const;
     static SmallVector<unsigned> getMNKDimPerInstr();
+
+    // Returns a swizzled shared layout matching this MFMA layout for the
+    // dot operand at the given |operandIdx| with |operandShape|.
+    void composeSharedLayoutParams(
+        int operandIdx, ArrayRef<int64_t> operandShape,
+        ArrayRef<unsigned> sharedOrder, unsigned vectorSize,
+        unsigned elemBitWidth, bool needTrans, int &perPhase, int &vecSize, int &maxPhase) const;
+
   }];
 }
 

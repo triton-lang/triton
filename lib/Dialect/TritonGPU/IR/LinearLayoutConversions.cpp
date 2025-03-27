@@ -224,6 +224,65 @@ sharedToLinearLayoutAMDRotating(ArrayRef<int64_t> shape,
   return combineCtaCgaWithShape(ctaLayout, shared.getCTALayout(), shape);
 }
 
+LinearLayout
+sharedToLinearLayoutAMDLDSTrans(ArrayRef<int64_t> shape,
+                                AMDLDSTransSharedEncodingAttr shared) {
+  MLIRContext *ctx = shared.getContext();
+  int rank = shape.size();
+  if (rank == 1) {
+    return combineCtaCgaWithShape(
+        LinearLayout::identity1D(shape[0], S("offset"), S("dim0")),
+        shared.getCTALayout(), shape);
+  }
+
+  auto outDimNames = standardOutDimNames(ctx, rank);
+
+  // Construct bases for the 2 most minor dimensions of the layout.  These are
+  // the dims that get swizzled.
+  assert(shape.size() >= 2);
+  int colDim = shared.getOrder()[0];
+  int rowDim = shared.getOrder()[1];
+  int numCols = shape[colDim];
+  int numRows = shape[rowDim];
+  StringAttr colDimName = outDimNames[colDim];
+  StringAttr rowDimName = outDimNames[rowDim];
+
+  std::vector<std::vector<int>> bases2D;
+  for (int logCol = 0; logCol < llvm::Log2_32(numCols); logCol++) {
+    bases2D.push_back({0, 1 << logCol});
+  }
+  for (int logRow = 0; logRow < llvm::Log2_32(numRows); logRow++) {
+    int row = 1 << logRow;
+    int vec = shared.getVec();
+    int perPhase = shared.getPerPhase();
+    int maxPhase = shared.getMaxPhase();
+    unsigned phase = (row / perPhase) % (2 * maxPhase);
+    unsigned block = phase / (maxPhase / 2);
+
+    unsigned offset = 0;
+    if (block == 1 || block == 2) {
+      offset = maxPhase / 2;
+    } else if (block == 3) {
+      offset = maxPhase;
+    }
+
+    int col = (vec * (phase - offset)) % numCols;
+    bases2D.push_back({row, col});
+  }
+  LinearLayout ctaLayout =
+      LinearLayout({{S("offset"), bases2D}}, {rowDimName, colDimName});
+
+  // Add the remaining dimensions.
+  for (int i = 2; i < rank; i++) {
+    int dim = shared.getOrder()[i];
+    ctaLayout *=
+        LinearLayout::identity1D(shape[dim], S("offset"), outDimNames[dim]);
+  }
+
+  auto finalLay = combineCtaCgaWithShape(ctaLayout, shared.getCTALayout(), shape);
+  return finalLay;
+}
+
 } // namespace
 
 LinearLayout sharedToLinearLayoutLeadingOffset(ArrayRef<int64_t> shape,
@@ -1098,6 +1157,8 @@ LinearLayout TritonGPUDialect::toLinearLayout(ArrayRef<int64_t> shape,
       result = sharedToLinearLayoutLeadingOffset(shape, shared);
     } else if (auto sbl = dyn_cast<AMDRotatingSharedEncodingAttr>(layout)) {
       result = sharedToLinearLayoutAMDRotating(shape, sbl);
+    } else if (auto shared = dyn_cast<AMDLDSTransSharedEncodingAttr>(layout)) {
+      result = sharedToLinearLayoutAMDLDSTrans(shape, shared);
     } else {
       assert(0 && "unknown layout");
     }
