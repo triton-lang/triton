@@ -290,5 +290,10 @@ LinearLayout chooseScaledMfmaScaleLayout(
 LinearLayout chooseMfmaLikeStoreLayout(AMDMfmaEncodingAttr mfmaLayout,
                                        ArrayRef<int64_t> shape);
 
+
+// Create LinearLayout for nvidia mma tile.
+LinearLayout nvidiaMmaTile(MLIRContext *ctx, ArrayRef<unsigned> tileShape,
+                           unsigned kWidth, ArrayRef<unsigned> order,
+                           ArrayRef<unsigned> repOrder);
 } // namespace mlir::triton::gpu
 #endif // TRITON_DIALECT_TRITONGPU_IR_LINEARLAYOUTCONVERSIONS_H

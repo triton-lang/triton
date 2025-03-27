@@ -152,10 +152,8 @@ SmallVector<unsigned> getOrderForDotOperand(unsigned opIdx, unsigned rank,
                                             bool kContig) {
   // kContig: if true, the matrix is fastest-running on k,
   //         otherwise it is on m (resp. n)
-  // opIdx=0: [batch, m, k] if rank == 3 else [m, k]
-  // opIdx=1: [batch, k, n] if rank == 3 else [k, n]
-  // batch (if rank == 3) is always the slowest running dimension
-  assert(rank == 2 || rank == 3);
+  // opIdx=0: [*batch, m, k]
+  // opIdx=1: [*batch, k, n]
   assert(opIdx == 0 || opIdx == 1);
   auto rowMajor = bool(opIdx) != kContig;
   return getMatrixOrder(rank, rowMajor);
