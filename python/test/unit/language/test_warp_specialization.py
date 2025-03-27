@@ -6,7 +6,7 @@ import triton.language as tl
 
 from triton._internal_testing import is_cuda
 
-if torch.cuda.is_available():
+if torch.cuda.is_available() and torch.cuda.get_device_capability()[0] == 10:
     from triton._C.libtriton import nvidia
     cublas_workspace = torch.empty(32 * 1024 * 1024, device="cuda", dtype=torch.uint8)
     cublas = nvidia.cublas.CublasLt(cublas_workspace)
