@@ -86,7 +86,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
 #shared1 = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [1, 0]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   // CHECK-LABEL: async_tma_store_wait
-  // CHECK: nvvm.cp.async.bulk.wait_group 0
+  // CHECK: nvvm.cp.async.bulk.wait_group 0 {read}
   tt.func @async_tma_store_wait() {
     ttng.async_tma_store_wait {pendings = 0 : i32}
     tt.return

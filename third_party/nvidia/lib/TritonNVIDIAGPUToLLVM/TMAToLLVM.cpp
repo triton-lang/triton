@@ -199,6 +199,10 @@ struct ExperimentalTensormapFenceproxyAcquireOpConversion
     PTXBuilder ptxBuilder;
     auto b = TritonLLVMOpBuilder(loc, rewriter);
 
+    auto mod = op->getParentOfType<ModuleOp>();
+    if (TritonGPUDialect::getNumCTAs(mod) > 1)
+      rewriter.create<NVVM::ClusterWaitOp>(loc, UnitAttr());
+
     // prepare asm operands
     auto *descAddrOpr = ptxBuilder.newAddrOperand(adaptor.getDescPtr(), "l");
     auto *sizeOpr = ptxBuilder.newConstantOperand(TMA_SIZE_BYTES);
@@ -290,10 +294,6 @@ struct ExperimentalTensormapCreateOpConversion
                                    op.getSwizzleMode());
     tensormap_replace_fill_mode(loc, ctx, rewriter, smemBase, op.getFillMode());
     tensormap_cp_fenceproxy(loc, ctx, rewriter, adaptor.getDescPtr(), smemBase);
-
-    auto mod = op->getParentOfType<ModuleOp>();
-    if (TritonGPUDialect::getNumCTAs(mod) > 1)
-      rewriter.create<NVVM::ClusterWaitOp>(loc, UnitAttr());
 
     rewriter.eraseOp(op);
     return success();

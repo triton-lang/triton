@@ -1240,15 +1240,13 @@ struct AsyncTMACopyGlobalToLocalOpConversion
     int elementSizeInBytes =
         op.getResult().getType().getElementType().getIntOrFloatBitWidth() / 8;
     int packingFactor = (mmaEncoding && mmaEncoding.getFp4Padded()) ? 2 : 1;
-    int totalNumElements =
-        product(op.getResult().getType().getShape()) * packingFactor;
-    int64_t size = totalNumElements * elementSizeInBytes;
 
     auto shapePerCTA = ttg::getShapePerCTA(op.getResult().getType());
     auto contigDimSize = nvidia_gpu::getTMAContigDim(op.getResult().getType());
     int numCopies = ceil<int>(shapePerCTA.back(), contigDimSize);
     int rank = op.getCoord().size();
     auto ctaOffset = getCtaOffset(rewriter, loc, encoding, shapePerCTA);
+    int elementsPerCTA = product(shapePerCTA) * packingFactor;
 
     // The bounding box inner dimension must be less than or equal to the
     // swizzle size.
@@ -1265,7 +1263,7 @@ struct AsyncTMACopyGlobalToLocalOpConversion
       Type elemPtrTy = ptr_ty(rewriter.getContext(), 3);
       Value copyIdxVal = b.add(warpID, b.i32_val(copyIdx));
       Value shMemOffset =
-          b.mul(copyIdxVal, b.i32_val(totalNumElements / numCopies));
+          b.mul(copyIdxVal, b.i32_val(elementsPerCTA / numCopies));
       Value shMemPtr =
           b.gep(elemPtrTy, llvmElemTy, dstMemObj.getBase(), shMemOffset);
       SmallVector<PTXBuilder::Operand *> operands = {
@@ -1324,14 +1322,13 @@ struct AsyncTMACopyLocalToGlobalOpConversion
     Value pred = LLVM::NVIDIA::createElectPredicate(loc, rewriter);
     int elementSizeInBytes =
         op.getSrc().getType().getElementType().getIntOrFloatBitWidth() / 8;
-    int totalNumElements = product(op.getSrc().getType().getShape());
-    int64_t size = totalNumElements * elementSizeInBytes;
 
     auto mod = op->getParentOfType<ModuleOp>();
     int numWarps = ttg::lookupNumWarps(op);
     int warpSize = ttg::TritonGPUDialect::getThreadsPerWarp(mod);
     Value warpID = rewriter.create<nvgpu::WarpIdOp>(loc);
     auto shapePerCTA = ttg::getShapePerCTA(op.getSrc().getType());
+    int elementsPerCTA = product(shapePerCTA);
 
     auto contigDimSize = nvidia_gpu::getTMAContigDim(op.getSrc().getType());
     int numCopies = shapePerCTA.back() / contigDimSize;
@@ -1349,7 +1346,7 @@ struct AsyncTMACopyLocalToGlobalOpConversion
       Type elemPtrTy = ptr_ty(rewriter.getContext(), 3);
       Value copyIdxVal = b.add(warpID, b.i32_val(copyIdx));
       Value shMemOffset =
-          b.mul(copyIdxVal, b.i32_val(totalNumElements / numCopies));
+          b.mul(copyIdxVal, b.i32_val(elementsPerCTA / numCopies));
       Value shMemPtr =
           b.gep(elemPtrTy, llvmElemTy, dstMemObj.getBase(), shMemOffset);
       SmallVector<PTXBuilder::Operand *> operands = {
@@ -1689,7 +1686,7 @@ struct TMAStoreWaitOpConversion
   matchAndRewrite(triton::nvidia_gpu::TMAStoreWaitOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     auto ctx = op.getContext();
-    UnitAttr isRead;
+    UnitAttr isRead = UnitAttr::get(ctx);
     rewriter.replaceOpWithNewOp<NVVM::CpAsyncBulkWaitGroupOp>(
         op, op.getPendingsAttr(), isRead);
     return success();

@@ -17,6 +17,7 @@
 #include "triton/Tools/StrUtil.h"
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/SmallVector.h"
+#include "llvm/Support/Casting.h"
 
 namespace mlir {
 namespace triton {
@@ -419,9 +420,8 @@ static bool canUseTwoCTAs(triton::DotOp dotOp) {
   // Skip convert layouts.
   while (auto cvtOp = b.getDefiningOp<ConvertLayoutOp>())
     b = cvtOp.getSrc();
-  if (!b.getDefiningOp<triton::LoadOp>())
-    return false;
-  return true;
+  return llvm::isa_and_nonnull<triton::LoadOp, triton::DescriptorLoadOp,
+                               triton::DescriptorGatherOp>(b.getDefiningOp());
 }
 
 static DistributedEncodingTrait
@@ -447,8 +447,10 @@ static Value splitBOperand(Value b, mlir::PatternRewriter &rewriter) {
   MLIRContext *ctx = b.getContext();
   while (auto cvtOp = b.getDefiningOp<ConvertLayoutOp>())
     b = cvtOp.getSrc();
-  auto loadOp = b.getDefiningOp<triton::LoadOp>();
-  assert(loadOp && "expected LoadOp");
+  auto loadOp = b.getDefiningOp();
+  assert((isa<triton::LoadOp, triton::DescriptorLoadOp,
+              triton::DescriptorGatherOp>(loadOp)) &&
+         "expected LoadOp");
   RankedTensorType bType = cast<RankedTensorType>(b.getType());
   auto currentLayout = cast<DistributedEncodingTrait>(bType.getEncoding());
   auto newCTALayout =
@@ -464,15 +466,14 @@ static Value splitBOperand(Value b, mlir::PatternRewriter &rewriter) {
         RankedTensorType::get(tensorType.getShape(),
                               tensorType.getElementType(), newLayout),
         operand.get());
-    loadOp.setOperand(operand.getOperandNumber(), newOperand);
+    loadOp->setOperand(operand.getOperandNumber(), newOperand);
   }
-  loadOp.getResult().setType(RankedTensorType::get(
+  loadOp->getResult(0).setType(RankedTensorType::get(
       bType.getShape(), bType.getElementType(), newLayout));
-  Value newB = loadOp.getResult();
+  Value newB = loadOp->getResult(0);
   rewriter.setInsertionPointAfter(loadOp);
-  auto cvt =
-      rewriter.create<ConvertLayoutOp>(b.getLoc(), bType, loadOp.getResult());
-  rewriter.replaceAllUsesExcept(loadOp.getResult(), cvt.getResult(), cvt);
+  auto cvt = rewriter.create<ConvertLayoutOp>(b.getLoc(), bType, newB);
+  rewriter.replaceAllUsesExcept(newB, cvt.getResult(), cvt);
   return newB;
 }
 
