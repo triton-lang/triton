@@ -6,6 +6,7 @@
 #dot_op_a = #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 4}>
 #dot_op_b = #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 4}>
 // INSTR_HINT-LABEL: @insert_schedule_hint
+// LOWER_HINT-LABEL: @insert_schedule_hint
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.target = "hip:gfx942", "ttg.threads-per-warp" = 64 : i32} {
   tt.func public @insert_schedule_hint(
     %lb : index, %ub : index, %step : index,
