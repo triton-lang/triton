@@ -162,7 +162,7 @@ class Autotuner(KernelInterface):
 
     def check_disk_cache(self, tuning_key, configs, bench_fn):
         # We can't serialize prehooks, so just give up and run the benchmarks.
-        if any(cfg.pre_hook for cfg in configs):
+        if not tuning_key or any(cfg.pre_hook for cfg in configs):
             bench_fn()
             return
 
