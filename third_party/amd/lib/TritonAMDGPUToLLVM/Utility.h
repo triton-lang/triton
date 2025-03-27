@@ -88,7 +88,8 @@ Type scaleDotElemTypeToMLIRType(MLIRContext *ctx, triton::ScaleDotElemType t);
 // Returns true if we can perform coalesced write from the source encoding to
 // the destination encoding.
 bool canCoalesceWriteIntoSharedMemory(RewriterBase &rewriter,
-                                      const LinearLayout &srcToSharedLayout);
+                                      const LinearLayout &srcToSharedLayout,
+                                      unsigned threadsPerWarp);
 
 // Returns true if the swizzling pattern does only swizzle the shared memory
 // offsets of a warp and does not exchange destination elements across warps

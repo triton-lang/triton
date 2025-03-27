@@ -447,13 +447,13 @@ struct BufferLoadToLocalOpConversion
         triton::gpu::toLinearLayout(shape, dstTy.getEncoding());
     LinearLayout srcToSharedLayout = srcLayout.invertAndCompose(sharedLayout);
 
+    unsigned threadsPerWarp = lookupThreadsPerWarp(rewriter);
     if (!isSwizzled && !LLVM::AMD::canCoalesceWriteIntoSharedMemory(
-                           rewriter, srcToSharedLayout)) {
+                           rewriter, srcToSharedLayout, threadsPerWarp)) {
       return rewriter.notifyMatchFailure(
           op, "does not write coalesced into LDS and is not swizzled");
     }
 
-    unsigned threadsPerWarp = lookupThreadsPerWarp(rewriter);
     if (isSwizzled && !LLVM::AMD::doesSwizzleInsideWarp(
                           rewriter, srcToSharedLayout, threadsPerWarp)) {
       return rewriter.notifyMatchFailure(
@@ -627,8 +627,9 @@ struct AsyncCopyGlobalToLocalOpConversion
     // global.load.lds does not support per lane offsets.
     // We need to ensure that we write coalesced into shared memory. This means
     // that the kLane dim needs to be contigeous based on the vector size.
-    if (!LLVM::AMD::canCoalesceWriteIntoSharedMemory(rewriter,
-                                                     srcToSharedLayout)) {
+    unsigned threadsPerWarp = lookupThreadsPerWarp(rewriter);
+    if (!LLVM::AMD::canCoalesceWriteIntoSharedMemory(
+            rewriter, srcToSharedLayout, threadsPerWarp)) {
       return rewriter.notifyMatchFailure(op,
                                          "does not write coalesced into LDS");
     }
@@ -683,7 +684,7 @@ struct AsyncCopyGlobalToLocalOpConversion
       if (maskElems.empty()) {
         rewriter.create<ROCDL::GlobalLoadLDSOp>(
             loc, srcPtr, shmemAddrs[i], vecBytesVal, /*offset=*/b.i32_val(0),
-            cacheModifiers);
+            cacheModifiers, nullptr, nullptr, nullptr);
         continue;
       }
 
@@ -697,7 +698,7 @@ struct AsyncCopyGlobalToLocalOpConversion
       rewriter.setInsertionPointToStart(loadBlock);
       rewriter.create<ROCDL::GlobalLoadLDSOp>(
           loc, srcPtr, shmemAddrs[i], vecBytesVal, /*offset=*/b.i32_val(0),
-          cacheModifiers);
+          cacheModifiers, nullptr, nullptr, nullptr);
 
       rewriter.create<LLVM::BrOp>(loc, afterLoad);
       rewriter.setInsertionPointToStart(afterLoad);

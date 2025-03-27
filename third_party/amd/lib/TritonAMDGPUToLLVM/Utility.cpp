@@ -605,7 +605,8 @@ Type scaleDotElemTypeToMLIRType(MLIRContext *ctx, triton::ScaleDotElemType t) {
 }
 
 bool canCoalesceWriteIntoSharedMemory(RewriterBase &rewriter,
-                                      const LinearLayout &srcToSharedLayout) {
+                                      const LinearLayout &srcToSharedLayout,
+                                      unsigned threadsPerWarp) {
   auto contig = srcToSharedLayout.getNumConsecutiveInOut();
 
   StringAttr kLane = rewriter.getStringAttr("lane");
@@ -621,10 +622,12 @@ bool canCoalesceWriteIntoSharedMemory(RewriterBase &rewriter,
     }
   }
   // Additionally we could swizzle based on the warp dimensions so we need to
-  // check that all bases have 0 bits for the first (log2(warpSize) + 1) bits
-  unsigned warpSize = 64;
-  assert(llvm::isPowerOf2_32(warpSize));
-  unsigned mask = (64 * 2) - 1;
+  // check that all bases (divided by contig) have 0 bits for the first
+  // (log2(warpSize) + 1) bits
+  assert(llvm::isPowerOf2_32(threadsPerWarp));
+  assert(llvm::isPowerOf2_32(contig));
+  unsigned mask = (threadsPerWarp * contig) - 1;
+  llvm::outs() << "Mask: " << mask << "\n";
   StringAttr kWarp = rewriter.getStringAttr("warp");
   for (int inWarp : llvm::seq(srcToSharedLayout.getInDimSizeLog2(kWarp))) {
     auto basis = srcToSharedLayout.getBasis(kWarp, inWarp)[0];
@@ -645,6 +648,7 @@ bool doesSwizzleInsideWarp(RewriterBase &rewriter,
   auto contig = srcToSharedLayout.getNumConsecutiveInOut();
   // If all lane bases are below (2^warpSize) * contig we swizzle inside warp
   // boundaries
+  assert(llvm::isPowerOf2_32(threadsPerWarp));
   unsigned upperLimit = (threadsPerWarp + 1) * contig;
 
   StringAttr kLane = rewriter.getStringAttr("lane");
