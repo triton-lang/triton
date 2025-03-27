@@ -540,13 +540,13 @@ struct TritonAMDGPUInsertInstructionSchedHints
       mod.walk([&](scf::ForOp forOp) {
         // The attention schedule hint is inserted to the beginning of a
         // for-loop with chained dots.
-        bool isChainDot = false;
-        forOp->walk([&isChainDot](Operation *op) {
-          if (auto dotOp = dyn_cast<triton::DotOp>(op)) {
-            isChainDot |= isChainDotHead(dotOp);
-          }
+        auto result = forOp->walk([](triton::DotOp op) {
+          if (isChainDotHead(op))
+            return WalkResult::interrupt();
+          return WalkResult::advance();
         });
-        if (isChainDot) {
+
+        if (result.wasInterrupted()) {
           OpBuilder rewriter(ctx);
           rewriter.setInsertionPointToStart(forOp.getBody());
           rewriter.create<triton::amdgpu::InstructionSchedHint>(forOp->getLoc(),
