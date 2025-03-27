@@ -177,6 +177,7 @@ void mlir::triton::replaceUsesAndPropagateType(OpBuilder &builder,
       newVal.getDefiningOp()->setAttrs(user->getAttrs());
     }
     assert(newVal);
+    newVal.getDefiningOp()->setAttrs(user->getAttrs());
     replaceUsesAndPropagateType(builder, user, newVal);
     opsToDelete.push_back(use.getOwner());
   }

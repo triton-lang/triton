@@ -24,6 +24,8 @@
 
 include "triton/Dialect/TritonNvidiaGPU/IR/TritonNvidiaGPUDialect.td"
 include "triton/Dialect/TritonNvidiaGPU/IR/TritonNvidiaGPUOpInterfaces.td"
+include "triton/Dialect/TritonNvidiaGPU/IR/TritonNvidiaGPUTypes.td"
+include "triton/Dialect/TritonNvidiaGPU/IR/TritonNvidiaGPUAttrDefs.td"
 include "mlir/Dialect/Arith/IR/ArithBase.td"
 include "triton/Dialect/Triton/IR/TritonTypes.td"
 include "triton/Dialect/Triton/IR/TritonAttrDefs.td"
@@ -31,6 +33,7 @@ include "triton/Dialect/Triton/IR/TritonInterfaces.td"
 include "triton/Dialect/Triton/IR/TritonOpInterfaces.td"
 include "triton/Dialect/TritonGPU/IR/TritonGPUTypes.td"
 include "triton/Dialect/TritonGPU/IR/TritonGPUTypeInterfaces.td"
+include "triton/Dialect/TritonGPU/IR/TritonGPUAttrDefs.td"
 include "mlir/IR/OpBase.td"
 include "mlir/Interfaces/SideEffectInterfaces.td" // Pure
 include "mlir/Interfaces/InferTypeOpInterface.td" // SameOperandsAndResultType
@@ -45,6 +48,38 @@ class TTNG_Op<string mnemonic, list<Trait> traits = []> :
        !listconcat(traits, [VerifyTensorLayoutsTrait])> {
 }
 
+def TTNG_MBarrierArriveOp : TTNG_Op<"mbarrier_arrive", [AttrSizedOperandSegments,
+                                                      MemoryEffects<[MemWrite<SharedMemory>]>]> {
+  let summary = "mbarrier arrive";
+
+  let description = [{
+    This operation defining the arriving action for a mbarrier.
+    txCount:
+        An optional attribute that set tx-count. This Op will be lowered into
+        mbarrier.arrive.expect_tx if the optional attribute exist.
+    trackAsyncOp:
+        If true, this op will be lowered into cp.async.mbarrier.arrive.noinc.
+    pred:
+        Only perform arrive action when pred is true.
+    remoteCtaId:
+        if set, perform an remote arrive action.
+
+    Example:
+
+    triton_nvidia_gpu.mbarrier_arrive %0 {trackAsyncOp = false} : !tt.ptr<i64>
+
+  }];
+
+  let arguments = (ins TTG_MemDescType:$mbarrier,
+                       Optional<I1>:$pred,
+                       Optional<I32>:$remoteCtaId,
+                       I1Attr: $trackAsyncOp,
+                       DefaultValuedAttr<I32Attr, "0">: $txCount
+                  );
+
+  let assemblyFormat = "operands attr-dict `:` type(operands)";
+}
+
 def TTNG_FenceAsyncSharedOp : TTNG_Op<"fence_async_shared"> {
   let arguments = (ins BoolAttr:$bCluster);
 
@@ -57,6 +92,31 @@ def TTNG_FenceAsyncSharedOp : TTNG_Op<"fence_async_shared"> {
       return computeCapability >= 90;
     }
   }];
+}
+
+def TTNG_GetCanonicalWarpIdOp : TTNG_Op<"get_canonical_warp_id", [Pure]> {
+  let description = [{
+    Returns the one dimensional warpId when it's used for producing warp uniform values.
+  }];
+
+  let results = (outs I32:$result);
+  let assemblyFormat = "attr-dict `:` type($result)";
+}
+
+def TTNG_NamedBarrierArriveOp : TTNG_Op<"bar_arrive", []> {
+  let summary = "named barrier arrive";
+
+  let arguments = (ins I32:$bar, I32: $numThreads);
+
+  let assemblyFormat = "$bar `,` $numThreads attr-dict `:` type(operands)";
+}
+
+def TTNG_NamedBarrierWaitOp : TTNG_Op<"bar_wait", []> {
+  let summary = "named barrier wait";
+
+  let arguments = (ins I32:$bar, I32: $numThreads);
+
+  let assemblyFormat = "$bar `,` $numThreads attr-dict `:` type(operands)";
 }
 
 def TTNG_ClusterArriveOp : TTNG_Op<"cluster_arrive", []> {
@@ -480,6 +540,68 @@ def TTNG_TMEMCopyOp : TTNG_Op<"tmem_copy", [DeclareOpInterfaceMethods<MemoryEffe
 
   let assemblyFormat = [{$src `,` $dst `,` $barrier attr-dict `:` functional-type(operands, results)}];
   let hasVerifier = 1;
+}
+
+def TTNG_GetAsyncTaskIdOp : TTNG_Op<"get_async_task_id", [Pure]> {
+  let results = (outs I32:$result);
+
+  let builders = [OpBuilder<(ins)>];
+
+  let assemblyFormat = "attr-dict `:` type($result)";
+}
+
+//
+// Token
+//
+
+def TTNG_CreateTokenOp : TTNG_Op<"create_token"> {
+  let results = (outs TensorOf<[TTNG_TokenType]>:$result);
+
+  let arguments = (ins I32Attr:$num, TT_TokenLoadTypeAttr:$loadType);
+
+  let builders = [OpBuilder<(ins "uint32_t":$num, "triton::nvidia_gpu::TokenLoadType":$loadType)>];
+
+  let assemblyFormat = "attr-dict `:` type($result)";
+}
+
+def TTNG_ProducerAcquireOp : TTNG_Op<"producer_acquire"> {
+  let arguments = (ins TensorOf<[TTNG_TokenType]>:$token, I32:$idx, I1:$phase);
+
+  let assemblyFormat = "$token `,` $idx `,` $phase attr-dict `:` type(operands)";
+}
+
+def TTNG_ProducerCommitOp : TTNG_Op<"producer_commit"> {
+  let arguments = (ins TensorOf<[TTNG_TokenType]>:$token, I32:$idx);
+
+  let assemblyFormat = "$token `,` $idx attr-dict `:` type(operands)";
+}
+
+def TTNG_ConsumerWaitOp : TTNG_Op<"consumer_wait"> {
+  let arguments = (ins TensorOf<[TTNG_TokenType]>:$token, I32:$idx, I1: $phase);
+
+  let assemblyFormat = "$token `,` $idx `,` $phase attr-dict `:` type(operands)";
+}
+
+def TTNG_ConsumerReleaseOp : TTNG_Op<"consumer_release"> {
+  let arguments = (ins TensorOf<[TTNG_TokenType]>:$token, I32:$idx);
+
+  let assemblyFormat = "$token `,` $idx attr-dict `:` type(operands)";
+}
+
+def TTNG_RegAllocOp : TTNG_Op<"reg_alloc", []> {
+  let summary = "register allocation";
+
+  let arguments = (ins I32Attr: $regCount);
+
+  let assemblyFormat = "$regCount attr-dict";
+}
+
+def TTNG_RegDeallocOp : TTNG_Op<"reg_dealloc", []> {
+  let summary = "register deallocation";
+
+  let arguments = (ins I32Attr: $regCount);
+
+  let assemblyFormat = "$regCount attr-dict";
 }
 
 #endif

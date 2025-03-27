@@ -29,6 +29,7 @@
 
 #define GET_OP_CLASSES
 #include "triton/Dialect/TritonNvidiaGPU/IR/Ops.cpp.inc"
+#include "triton/Dialect/TritonNvidiaGPU/IR/OpsEnums.cpp.inc"
 
 namespace mlir {
 namespace triton {
@@ -103,6 +104,20 @@ LogicalResult WarpGroupDotWaitOp::inferReturnTypes(
   for (Value operand : operands)
     inferredReturnTypes.push_back(operand.getType());
   return mlir::success();
+}
+
+///--- Async related ops ---
+void GetAsyncTaskIdOp::build(::mlir::OpBuilder &builder,
+                             ::mlir::OperationState &state) {
+  build(builder, state, builder.getI32Type());
+}
+
+void CreateTokenOp::build(::mlir::OpBuilder &builder,
+                          ::mlir::OperationState &state, uint32_t num,
+                          TokenLoadType loadType) {
+  auto tokenType = TokenType::get(builder.getContext());
+  auto resultType = RankedTensorType::get({num}, tokenType);
+  build(builder, state, resultType, num, loadType);
 }
 
 static LogicalResult
