@@ -209,7 +209,7 @@ FailureOr<SmallVector<Value>> traverseIfOpForDefs(scf::IfOp ifOp, int argIdx) {
 
 FailureOr<SmallVector<Value>> traverseWhileOpForDefs(scf::WhileOp whileOp,
                                                      int argIdx) {
-  auto terminator = whileOp.getBefore().front().getTerminator();
+  auto terminator = whileOp.getYieldOp();
   auto search = traverseCFForValueDefs(terminator->getOperand(argIdx));
   if (failed(search))
     return failure();
@@ -228,7 +228,9 @@ traverseRegionBranchOpForDefs(RegionBranchOpInterface regionBranch,
   llvm::SmallVector<scf::YieldOp> yieldOps;
   regionBranch->walk([&](Operation *op) {
     if (auto yieldOp = dyn_cast<scf::YieldOp>(op)) {
-      yieldOps.push_back(yieldOp);
+      if (yieldOp->getParentOp() == regionBranch) {
+        yieldOps.push_back(yieldOp);
+      }
     }
   });
 
