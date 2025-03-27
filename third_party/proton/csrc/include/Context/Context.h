@@ -43,6 +43,8 @@ public:
 
   void setState(std::optional<Context> state) { ContextSource::state = state; }
 
+  virtual size_t getDepth() = 0;
+
 protected:
   virtual std::vector<Context> getContextsImpl() = 0;
   static thread_local std::optional<Context> state;

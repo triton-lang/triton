@@ -5,19 +5,13 @@ import sys
 from collections import Counter
 
 import triton
+from triton._internal_testing import is_interpreter
 
 import pytest
 
 dir_path = os.path.dirname(os.path.realpath(__file__))
 print_path = os.path.join(dir_path, "print_helper.py")
 torch_types = ["int8", "uint8", "int16", "int32", "long", "float16", "float32", "float64"]
-
-
-def is_interpreter():
-    return os.environ.get('TRITON_INTERPRET', '0') == '1'
-
-
-# TODO: Print with multiple operands
 
 
 @pytest.mark.interpreter

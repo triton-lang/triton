@@ -259,7 +259,7 @@ enum class TensorCoreType : uint8_t {
   NOT_APPLICABLE,
 };
 
-Type getMmaRetType(TensorCoreType mmaType, MLIRContext *ctx) {
+static Type getMmaRetType(TensorCoreType mmaType, MLIRContext *ctx) {
   Type fp32Ty = type::f32Ty(ctx);
   Type fp16Ty = type::f16Ty(ctx);
   Type i32Ty = type::i32Ty(ctx);
@@ -292,7 +292,7 @@ Type getMmaRetType(TensorCoreType mmaType, MLIRContext *ctx) {
   return Type{};
 }
 
-TensorCoreType getMmaType(triton::DotOp op) {
+static TensorCoreType getMmaType(triton::DotOp op) {
   auto aTy = op.getA().getType();
   auto bTy = op.getB().getType();
   // d = a*b + c

@@ -1,4 +1,4 @@
-// RUN: triton-opt %s -split-input-file --tritonamdgpu-accelerate-matmul='arch-generation-name=gfx1100 matrix-instruction-size=0' | FileCheck %s
+// RUN: triton-opt %s -split-input-file --tritonamdgpu-accelerate-matmul="arch-generation-name=gfx1100 matrix-instruction-size=0" | FileCheck %s
 
 // CHECK: #[[DOT_OP_PARENT:.+]] = #ttg.blocked<{{.*}}>
 // CHECK: #[[WMMA_0:.+]] = #ttg.amd_wmma<{version = 1, isTranspose = false, warpsPerCTA = [1, 4]}>

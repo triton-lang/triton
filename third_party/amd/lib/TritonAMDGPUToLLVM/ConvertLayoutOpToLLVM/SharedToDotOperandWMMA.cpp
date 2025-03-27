@@ -171,7 +171,7 @@ Value convertLayout(int opIdx, ConversionPatternRewriter &rewriter,
   auto numRepK = numReps[opIdx == 0 ? 2 : 1];
   auto repB = numReps[0];
 
-  unsigned iWaveSize = triton::gpu::getWarpSize(wmmaLayout);
+  unsigned iWaveSize = triton::gpu::lookupThreadsPerWarp(rewriter);
   assert(iWaveSize == 32);
   Value waveSize = tb.i32_val(iWaveSize);
   Value linearWaveId = tb.udiv(thread, waveSize);
@@ -190,9 +190,10 @@ Value convertLayout(int opIdx, ConversionPatternRewriter &rewriter,
   SmallVector<Value> offsets;
   Value smemBase;
   auto smemStrides = smemObj.getStrides(aTensorTy, loc, rewriter);
+  auto warpOrder = triton::gpu::getMatrixOrder(rank, /*rowMajor*/ true);
   Value spatialWarpId = AMD::getWarpIdInBlock(
       rewriter, loc, linearWaveId, warpsPerCTA, elemsPerInstr[0],
-      shape[nonKDimIdx], nonKDimIdx, wmmaLayout.getDefaultOrder());
+      shape[nonKDimIdx], nonKDimIdx, warpOrder);
   if (opIdx == 0) {
     offsets = AMD::computeOffsetsAType(
         rewriter, loc, computeTensorElemMappingInBlock, elemsPerInstr,

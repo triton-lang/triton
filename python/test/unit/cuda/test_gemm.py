@@ -29,10 +29,7 @@ from torch.testing import assert_close
 
 import triton
 import triton.language as tl
-
-
-def is_hip():
-    return triton.runtime.driver.active.get_current_target().backend == "hip"
+from triton._internal_testing import is_hip
 
 
 @triton.jit

@@ -161,7 +161,7 @@ def is_cuda():
     return triton.runtime.driver.active.get_current_target().backend == "cuda"
 
 
-def is_hip_mi200():
+def is_hip_cdna2():
     target = triton.runtime.driver.active.get_current_target()
     return target.backend == 'hip' and target.arch == 'gfx90a'
 
@@ -363,10 +363,10 @@ triton_output = matmul(a, b)
 torch_output = torch.matmul(a, b)
 print(f"triton_output_with_fp16_inputs={triton_output}")
 print(f"torch_output_with_fp16_inputs={torch_output}")
-# Bigger tolerance for AMD MI200 devices.
-# MI200 devices use reduced precision fp16 and bf16 and flush input and
+# Bigger tolerance for AMD CDNA2 devices.
+# CDNA2 devices use reduced precision fp16 and bf16 and flush input and
 # output denormal values to zero. Detailed info is at: https://pytorch.org/docs/stable/notes/numerical_accuracy.html#reduced-precision-fp16-and-bf16-gemms-and-convolutions-on-amd-instinct-mi200-devices
-rtol = 1e-2 if is_hip_mi200() else 0
+rtol = 1e-2 if is_hip_cdna2() else 0
 if torch.allclose(triton_output, torch_output, atol=1e-2, rtol=rtol):
     print("✅ Triton and Torch match")
 else:

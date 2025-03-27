@@ -926,7 +926,7 @@ typedef enum hipMemPoolAttr
  */
  typedef enum hipMemLocationType {
     hipMemLocationTypeInvalid = 0,
-    hipMemLocationTypeDevice = 1    ///< Device location, thus it's HIP device ID
+    hipMemLocationTypeDevice = 1    ///< Device location, thus its HIP device ID
 } hipMemLocationType;
 /**
  * Specifies a memory location.
@@ -4243,7 +4243,7 @@ hipError_t hipGetSymbolSize(size_t* size, const void* symbol);
  * is greater or equal to the version 600, the symbol function will be handle properly as backend
  * compatible function.
  *
- * @param[in] flags  Currently only default flag is suppported.
+ * @param[in] flags  Currently only default flag is supported.
  * @param[out] symbolStatus  Optional enumeration for returned status of searching for symbol driver
  * function based on the input hipVersion.
  *
@@ -5436,7 +5436,7 @@ hipError_t hipDevicePrimaryCtxSetFlags(hipDevice_t dev, unsigned int flags);
  *
  */
 /**
- * @brief Loads code object from file into a module the currrent context.
+ * @brief Loads code object from file into a module in the current context.
  *
  * @param [in] fname  Filename of code object to load
 

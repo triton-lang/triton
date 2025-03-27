@@ -6,6 +6,7 @@ import torch
 
 import triton
 import triton.language as tl
+from triton._internal_testing import is_interpreter
 
 
 @triton.jit
@@ -132,16 +133,8 @@ def check_file_lines(file_lines, file_name, lineno, should_contain=True):
 func_types = ["single", "call", "call_noinline", "autotune", "dot_combine", "cdiv"]
 
 
-def is_interpreter():
-    import os
-    return os.environ.get('TRITON_INTERPRET', '0') == '1'
-
-
 @pytest.mark.parametrize("func", func_types)
 def test_line_info(func: str):
-    if is_interpreter():
-        pytest.skip("interpreter does not support warmup compilation")
-
     try:
         obj_kind, command, anchor, separator = get_disassembler_command_and_debug_line_format()
     except BaseException:
@@ -164,24 +157,24 @@ def test_line_info(func: str):
 
     file_lines = extract_file_lines(command, anchor, separator, kernel_info.asm[obj_kind])
     if func == "single":
-        assert (check_file_lines(file_lines, "test_line_info.py", 13))
         assert (check_file_lines(file_lines, "test_line_info.py", 14))
+        assert (check_file_lines(file_lines, "test_line_info.py", 15))
     elif func == "call":
-        assert (check_file_lines(file_lines, "test_line_info.py", 24))
-        assert (check_file_lines(file_lines, "test_line_info.py", 26))
+        assert (check_file_lines(file_lines, "test_line_info.py", 25))
+        assert (check_file_lines(file_lines, "test_line_info.py", 27))
     elif func == "call_noinline":
-        assert (check_file_lines(file_lines, "test_line_info.py", 38))
-        assert (check_file_lines(file_lines, "test_line_info.py", 31))
-        assert (check_file_lines(file_lines, "test_line_info.py", 31))
+        assert (check_file_lines(file_lines, "test_line_info.py", 39))
+        assert (check_file_lines(file_lines, "test_line_info.py", 32))
+        assert (check_file_lines(file_lines, "test_line_info.py", 32))
     elif func == "autotune":
-        assert (check_file_lines(file_lines, "test_line_info.py", 49))
         assert (check_file_lines(file_lines, "test_line_info.py", 50))
         assert (check_file_lines(file_lines, "test_line_info.py", 51))
+        assert (check_file_lines(file_lines, "test_line_info.py", 52))
     elif func == "dot_combine":
-        assert (check_file_lines(file_lines, "test_line_info.py", 61))
-        assert (check_file_lines(file_lines, "test_line_info.py", 62, should_contain=False))
+        assert (check_file_lines(file_lines, "test_line_info.py", 62))
+        assert (check_file_lines(file_lines, "test_line_info.py", 63, should_contain=False))
     elif func == "cdiv":
-        assert (check_file_lines(file_lines, "test_line_info.py", 71))
+        assert (check_file_lines(file_lines, "test_line_info.py", 72))
 
 
 @pytest.mark.interpreter
@@ -194,31 +187,28 @@ def test_line_info_interpreter(func: str):
     expected_def_lineno = 0
     if func == "single":
         kernel = kernel_single
-        expected_def_lineno = 12
+        expected_def_lineno = 13
     elif func == "call":
         kernel = kernel_call
-        expected_def_lineno = 23
+        expected_def_lineno = 24
     elif func == "call_noinline":
         kernel = kernel_call_noinline
-        expected_def_lineno = 37
+        expected_def_lineno = 38
     elif func == "autotune":
         kernel = kernel_autotune.fn
-        expected_def_lineno = 48
+        expected_def_lineno = 49
     elif func == "dot_combine":
         kernel = kernel_dot_combine
-        expected_def_lineno = 58
+        expected_def_lineno = 59
     elif func == "cdiv":
         kernel = kernel_cdiv
-        expected_def_lineno = 68
+        expected_def_lineno = 69
     kernel.rewrite()
     assert kernel.rewriter.def_file_lineno == expected_def_lineno
 
 
 @pytest.mark.parametrize("status", ["0", "1"])
 def test_line_info_env(monkeypatch, status: str):
-    if is_interpreter():
-        pytest.skip("interpreter does not support warmup compilation")
-
     try:
         obj_kind, command, anchor, separator = get_disassembler_command_and_debug_line_format()
     except BaseException:

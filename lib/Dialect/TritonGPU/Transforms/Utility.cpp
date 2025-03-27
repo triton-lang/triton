@@ -4,6 +4,7 @@
 
 #include "mlir/Analysis/SliceAnalysis.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
+#include "mlir/IR/Dominance.h"
 #include "mlir/IR/IRMapping.h"
 #include "mlir/Support/LLVM.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
@@ -16,6 +17,7 @@
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "llvm/Support/Debug.h"
+
 #define DEBUG_TYPE "ttg-utility"
 #define DBGS() (llvm::dbgs() << "[" DEBUG_TYPE "]: ")
 #define LDBG(X) LLVM_DEBUG(DBGS() << X << "\n")
@@ -633,7 +635,7 @@ bool canFoldIntoConversion(Operation *op, Attribute targetEncoding) {
 }
 
 scf::ForOp replaceForOpWithNewSignature(
-    RewriterBase &rewriter, scf::ForOp loop, ValueRange newIterOperands,
+    OpBuilder &rewriter, scf::ForOp loop, ValueRange newIterOperands,
     SmallVectorImpl<std::tuple<Value, Value>> &replacements) {
   OpBuilder::InsertionGuard g(rewriter);
   rewriter.setInsertionPoint(loop);
@@ -657,19 +659,32 @@ scf::ForOp replaceForOpWithNewSignature(
   return newLoop;
 }
 
-scf::ForOp replaceForOpWithNewSignature(RewriterBase &rewriter, scf::ForOp loop,
+scf::ForOp replaceForOpWithNewSignature(OpBuilder &rewriter, scf::ForOp loop,
                                         ValueRange newIterOperands) {
   SmallVector<std::tuple<Value, Value>> replacements;
   auto newForOp = replaceForOpWithNewSignature(rewriter, loop, newIterOperands,
                                                replacements);
-  for (auto &kv : replacements) {
-    rewriter.replaceAllUsesWith(std::get<0>(kv), std::get<1>(kv));
+  for (auto [result, value] : replacements) {
+    result.replaceAllUsesWith(value);
   }
   return newForOp;
 }
 
+Block::BlockArgListType addIterArgsToLoop(OpBuilder &rewriter, scf::ForOp &loop,
+                                          ValueRange newIterOperands) {
+  unsigned curArgIdx = loop.getNumRegionIterArgs();
+  scf::ForOp newLoop =
+      replaceForOpWithNewSignature(rewriter, loop, newIterOperands);
+  // Save the caller from insertion point invalidation.
+  if (rewriter.getInsertionPoint() == loop->getIterator())
+    rewriter.setInsertionPoint(newLoop);
+  loop.erase();
+  loop = newLoop;
+  return loop.getRegionIterArgs().slice(curArgIdx);
+}
+
 scf::WhileOp replaceWhileOpWithNewSignature(
-    RewriterBase &rewriter, scf::WhileOp loop, ValueRange newIterOperands,
+    OpBuilder &rewriter, scf::WhileOp loop, ValueRange newIterOperands,
     TypeRange newResultTypes,
     SmallVectorImpl<std::tuple<Value, Value>> &replacements) {
   OpBuilder::InsertionGuard g(rewriter);
@@ -708,11 +723,11 @@ scf::WhileOp replaceWhileOpWithNewSignature(
   for (auto [oldArg, newArg] : llvm::zip(
            loop.getBeforeArguments(), newLoop.getBeforeArguments().take_front(
                                           loop.getBeforeArguments().size())))
-    rewriter.replaceAllUsesWith(oldArg, newArg);
+    oldArg.replaceAllUsesWith(newArg);
   for (auto [oldArg, newArg] : llvm::zip(loop.getAfterArguments(),
                                          newLoop.getAfterArguments().take_front(
                                              loop.getAfterArguments().size())))
-    rewriter.replaceAllUsesWith(oldArg, newArg);
+    oldArg.replaceAllUsesWith(newArg);
 
   // Stack the new results
   for (auto it : llvm::zip(loop.getResults(), newLoop.getResults().take_front(
@@ -722,7 +737,7 @@ scf::WhileOp replaceWhileOpWithNewSignature(
   return newLoop;
 }
 
-scf::WhileOp replaceWhileOpWithNewSignature(RewriterBase &rewriter,
+scf::WhileOp replaceWhileOpWithNewSignature(OpBuilder &rewriter,
                                             scf::WhileOp loop,
                                             ValueRange newIterOperands,
                                             TypeRange newResultTypes) {
@@ -730,13 +745,13 @@ scf::WhileOp replaceWhileOpWithNewSignature(RewriterBase &rewriter,
   auto newWhileOp = replaceWhileOpWithNewSignature(
       rewriter, loop, newIterOperands, newResultTypes, replacements);
   for (auto &kv : replacements) {
-    rewriter.replaceAllUsesWith(std::get<0>(kv), std::get<1>(kv));
+    std::get<0>(kv).replaceAllUsesWith(std::get<1>(kv));
   }
   return newWhileOp;
 }
 
 scf::IfOp replaceIfOpWithNewSignature(
-    RewriterBase &rewriter, scf::IfOp ifOp, TypeRange newResultTypes,
+    OpBuilder &rewriter, scf::IfOp ifOp, TypeRange newResultTypes,
     SmallVectorImpl<std::tuple<Value, Value>> &replacements) {
   OpBuilder::InsertionGuard g(rewriter);
   rewriter.setInsertionPoint(ifOp);
@@ -769,13 +784,13 @@ void appendToForOpYield(scf::ForOp forOp, ArrayRef<Value> newOperands) {
   yieldOp->erase();
 }
 
-scf::IfOp replaceIfOpWithNewSignature(RewriterBase &rewriter, scf::IfOp ifOp,
+scf::IfOp replaceIfOpWithNewSignature(OpBuilder &rewriter, scf::IfOp ifOp,
                                       TypeRange newResultTypes) {
   SmallVector<std::tuple<Value, Value>> replacements;
   auto newIfOp =
       replaceIfOpWithNewSignature(rewriter, ifOp, newResultTypes, replacements);
   for (auto &kv : replacements)
-    rewriter.replaceAllUsesWith(std::get<0>(kv), std::get<1>(kv));
+    std::get<0>(kv).replaceAllUsesWith(std::get<1>(kv));
   return newIfOp;
 }
 
@@ -1066,7 +1081,7 @@ getSharedEncIfAllUsersAreDotEnc(Value val, bool &incompatible) {
         return std::nullopt;
       auto srcTy = cast<triton::gpu::TensorOrMemDesc>(val.getType());
       auto CTALayout = ttg::getCTALayout(srcTy.getEncoding());
-      auto order = ttg::getOrder(srcTy);
+      auto order = getOrderForMemory(srcTy);
       unsigned bitWidth = srcTy.getElementType().getIntOrFloatBitWidth();
       tempAttr = ttg::SwizzledSharedEncodingAttr::get(
           val.getContext(), dotOpEnc, srcTy.getShape(), order, CTALayout,
@@ -1238,14 +1253,16 @@ ttg::LocalAllocOp findShmemAlloc(Value operand) {
       transitiveOperand = transitiveOperand.getDefiningOp()->getOperand(0);
     }
   }
-  if (auto subView =
-          dyn_cast<ttg::MemDescSubviewOp>(transitiveOperand.getDefiningOp())) {
+  if (auto subView = dyn_cast_or_null<ttg::MemDescSubviewOp>(
+          transitiveOperand.getDefiningOp())) {
     // Multi-buffered operand
-    return dyn_cast<ttg::LocalAllocOp>(subView.getSrc().getDefiningOp());
+    return dyn_cast_or_null<ttg::LocalAllocOp>(
+        subView.getSrc().getDefiningOp());
   } else {
     // Single bufferred operand that does not require a subview (not loaded in
     // the loop)
-    return dyn_cast<ttg::LocalAllocOp>(transitiveOperand.getDefiningOp());
+    return dyn_cast_or_null<ttg::LocalAllocOp>(
+        transitiveOperand.getDefiningOp());
   }
   return nullptr;
 }
@@ -1265,6 +1282,95 @@ getMMAsWithMultiBufferredOperands(scf::ForOp forOp,
   }
 
   return eligible;
+}
+
+Operation *findNearestCommonDominator(ArrayRef<Operation *> ops,
+                                      DominanceInfo &domInfo) {
+  if (ops.size() == 0) {
+    return nullptr;
+  }
+  if (ops.size() == 1) {
+    return ops[0];
+  }
+  llvm::SmallPtrSet<Block *, 16> blocks;
+  for (auto op : ops) {
+    blocks.insert(op->getBlock());
+  }
+  Block *domBlock = domInfo.findNearestCommonDominator(blocks);
+  if (domBlock == nullptr) {
+    return nullptr;
+  }
+  SmallVector<Operation *> ancestorOps;
+  for (auto op : ops) {
+    ancestorOps.push_back(domBlock->findAncestorOpInBlock(*op));
+  }
+  Operation *dom = ancestorOps[0];
+  for (unsigned i = 1; i < ops.size(); i++) {
+    if (ancestorOps[i]->isBeforeInBlock(dom)) {
+      dom = ancestorOps[i];
+    }
+  }
+  return dom;
+}
+
+void visitNestedOperands(Operation *op,
+                         function_ref<void(OpOperand &)> visitor) {
+  op->walk([&](Operation *nestedOp) {
+    for (OpOperand &operand : nestedOp->getOpOperands()) {
+      if (operand.get().getParentBlock()->getParentOp()->isProperAncestor(op))
+        visitor(operand);
+    }
+  });
+}
+
+void visitNestedOperands(Operation *op, function_ref<void(Value)> visitor) {
+  visitNestedOperands(op, [&](OpOperand &operand) { visitor(operand.get()); });
+}
+
+SetVector<Value> getNestedOperands(Operation *op) {
+  SetVector<Value> result;
+  visitNestedOperands(op, [&](Value operand) { result.insert(operand); });
+  return result;
+}
+
+void eraseLoopCarriedValues(scf::ForOp &loop, llvm::BitVector indices) {
+  // Pad the indices in case new arguments were added.
+  while (indices.size() != loop.getInitArgs().size())
+    indices.push_back(false);
+
+  loop.getBody()->getTerminator()->eraseOperands(indices);
+  loop.getBody()->eraseArguments([&](BlockArgument arg) {
+    int idx = arg.getArgNumber();
+    return idx != 0 && indices.test(idx - 1);
+  });
+
+  llvm::BitVector loopOperandIndices(loop->getNumOperands());
+  for (auto [i, operand] : llvm::enumerate(loop.getInitArgsMutable())) {
+    if (indices.test(i))
+      loopOperandIndices.set(operand.getOperandNumber());
+  }
+  loop->eraseOperands(loopOperandIndices);
+
+  // Rewrite the loop to erase results.
+  OperationState state(loop.getLoc(), loop->getName(), loop->getOperands(),
+                       loop.getInitArgs().getTypes(), loop->getAttrs());
+  state.addRegion()->takeBody(loop.getBodyRegion());
+
+  OpBuilder b(loop);
+  auto newLoop = cast<scf::ForOp>(b.create(state));
+
+  // Replace uses of the old loop with the new loop.
+  unsigned newResultIdx = 0;
+  for (auto [i, result] : llvm::enumerate(loop.getResults())) {
+    if (indices.test(i)) {
+      assert(result.use_empty() && "loop carried value still has uses");
+      continue;
+    }
+    result.replaceAllUsesWith(newLoop.getResult(newResultIdx++));
+  }
+
+  loop.erase();
+  loop = newLoop;
 }
 
 } // namespace mlir

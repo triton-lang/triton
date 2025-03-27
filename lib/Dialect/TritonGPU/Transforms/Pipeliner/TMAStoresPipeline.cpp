@@ -1,6 +1,7 @@
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/Schedule.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
+#include "triton/Dialect/TritonNvidiaGPU/Transforms/TMAUtilities.h"
 
 using namespace mlir;
 namespace tt = mlir::triton;
@@ -17,10 +18,9 @@ static SmallVector<TMAStore> getTMAStores(scf::ForOp forOp) {
   SmallVector<TMAStore> tmaStores;
 
   forOp.getBody()->walk<mlir::WalkOrder::PreOrder>([&](Operation *op) {
-    if (auto storeOp = dyn_cast<tt::ExperimentalDescriptorStoreOp>(op)) {
+    if (auto storeOp = dyn_cast<tt::DescriptorStoreOp>(op)) {
       tmaStores.push_back({storeOp, storeOp.getDesc(), storeOp.getSrc()});
-    } else if (auto scatterOp =
-                   dyn_cast<tt::ExperimentalDescriptorScatterOp>(op)) {
+    } else if (auto scatterOp = dyn_cast<tt::DescriptorScatterOp>(op)) {
       tmaStores.push_back({scatterOp, scatterOp.getDesc(), scatterOp.getSrc()});
 
       // Don't walk into nested loops.
@@ -36,7 +36,8 @@ static SmallVector<TMAStore> getTMAStores(scf::ForOp forOp) {
 static Value createAlloc(scf::ForOp &forOp, const TMAStore &store) {
   OpBuilder builder(forOp);
   RankedTensorType ty = store.src.getType();
-  auto order = ttg::getOrder(ty);
+  // Is this one correct or should it always be [2, 1, 0]?
+  auto order = triton::gpu::getOrderForMemory(ty);
   auto ctaLayout = ttg::getCTALayout(ty.getEncoding());
   Attribute encoding = ttg::SwizzledSharedEncodingAttr::get(
       ty.getContext(), 1, 1, 1, order, ctaLayout);
@@ -60,7 +61,6 @@ static void createTMAAsyncCopy(scf::ForOp forOp, const TMAStore &store,
   OpBuilder builder(store.op);
   Location loc = store.op->getLoc();
   RankedTensorType ty = store.src.getType();
-  auto order = ttg::getOrder(ty);
   auto ctaLayout = ttg::getCTALayout(ty.getEncoding());
 
   // Put wait before the local_store make the store truly async. We know
@@ -70,11 +70,15 @@ static void createTMAAsyncCopy(scf::ForOp forOp, const TMAStore &store,
   builder.create<ttng::FenceAsyncSharedOp>(loc, false);
   Value tmaPtr =
       builder.create<triton::nvidia_gpu::TensorDescToTMAPtrOp>(loc, store.desc);
-  if (auto storeOp = dyn_cast<tt::ExperimentalDescriptorStoreOp>(store.op)) {
+  if (auto storeOp = dyn_cast<tt::DescriptorStoreOp>(store.op)) {
+    auto indices = ttng::translateTMAIndices(
+        builder, storeOp.getLoc(),
+        storeOp.getDesc().getType().getBlockType().getEncoding(),
+        storeOp.getIndices());
     builder.create<ttng::AsyncTMACopyLocalToGlobalOp>(
         loc, tmaPtr, storeOp.getIndices(), alloc);
   } else {
-    auto scatterOp = cast<tt::ExperimentalDescriptorScatterOp>(store.op);
+    auto scatterOp = cast<tt::DescriptorScatterOp>(store.op);
     builder.create<ttng::AsyncTMAScatterOp>(
         loc, tmaPtr, scatterOp.getXOffsets(), scatterOp.getYOffset(), alloc);
   }

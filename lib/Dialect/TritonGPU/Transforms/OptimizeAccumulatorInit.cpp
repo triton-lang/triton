@@ -211,10 +211,7 @@ public:
       }
 
       Value loopArgFlagValue = loopArgIsZero ? vFalse : vTrue;
-      scf::ForOp newForOp =
-          replaceForOpWithNewSignature(rewriter, forOp, {loopArgFlagValue});
-      forOp.erase();
-      forOp = newForOp;
+      (void)addIterArgsToLoop(rewriter, forOp, {loopArgFlagValue});
       loopArgFlagValue =
           forOp.getRegionIterArg(forOp.getNumRegionIterArgs() - 1);
 

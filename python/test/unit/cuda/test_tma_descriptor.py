@@ -5,8 +5,8 @@ from triton.tools.experimental_descriptor import create_1d_tma_descriptor, creat
 
 @pytest.mark.parametrize("M, BLOCK_M, expect_error", [(128, 32, False), (127, 32, False), (128, 31, True)])
 def test_1d_tma_descriptor_exception(M, BLOCK_M, expect_error):
-    if not torch.cuda.is_available() or not torch.cuda.get_device_capability()[0] == 9:
-        pytest.skip("Test requires Hopper target.")
+    if not torch.cuda.is_available() or not torch.cuda.get_device_capability()[0] >= 9:
+        pytest.skip("Test requires Hopper or Blackwell target.")
         return
 
     device = "cuda"
@@ -28,8 +28,8 @@ def test_1d_tma_descriptor_exception(M, BLOCK_M, expect_error):
 @pytest.mark.parametrize("M, BLOCK_M", [(128, 32), (125, 33)])
 @pytest.mark.parametrize("N, BLOCK_N, expect_error", [(128, 32, False), (128, 30, True), (127, 32, True)])
 def test_2d_tma_descriptor_exception(M, N, BLOCK_M, BLOCK_N, expect_error):
-    if not torch.cuda.is_available() or not torch.cuda.get_device_capability()[0] == 9:
-        pytest.skip("Test requires Hopper target.")
+    if not torch.cuda.is_available() or not torch.cuda.get_device_capability()[0] >= 9:
+        pytest.skip("Test requires Hopper or Blackwell target.")
         return
 
     device = "cuda"

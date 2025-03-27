@@ -279,8 +279,7 @@ public:
     if (mDim != 32 && mDim != 16)
       return rewriter.notifyMatchFailure(op, "NYI: non-mfma32/16 intrinsics");
 
-    int numThreads = triton::gpu::TritonGPUDialect::getThreadsPerWarp(
-        op->getParentOfType<ModuleOp>());
+    int numThreads = lookupThreadsPerWarp(rewriter);
     auto [laneId, warpId] = getLaneAndWarpId(rewriter, loc);
 
     bool useFp16 = op.getType().getElementType().isF16();

@@ -25,6 +25,7 @@
 #include "TritonNVIDIAGPUToLLVM/PTXAsmFormat.h"
 #include "mlir/Conversion/LLVMCommon/Pattern.h"
 #include "mlir/Dialect/GPU/IR/GPUDialect.h"
+#include "mlir/Dialect/LLVMIR/NVVMDialect.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 
 #include "Utility.h"
@@ -184,6 +185,38 @@ struct WaitBarrierOpConversion
     return success();
   }
 };
+
+struct ArriveBarrierOpConversion
+    : public ConvertOpToLLVMPattern<triton::nvidia_gpu::ArriveBarrierOp> {
+  using ConvertOpToLLVMPattern::ConvertOpToLLVMPattern;
+
+  LogicalResult
+  matchAndRewrite(triton::nvidia_gpu::ArriveBarrierOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    // TODO: Add phase result as needed.
+    std::string ptxAsm = "@$0 mbarrier.arrive.shared::cta.b64 _, [$1], " +
+                         std::to_string(op.getCount()) + ";";
+
+    TritonLLVMOpBuilder b(op.getLoc(), rewriter);
+    Value id = getThreadId(rewriter, op.getLoc());
+    Value pred = b.icmp_eq(id, b.i32_val(0));
+    if (op.getPred())
+      pred = b.and_(pred, adaptor.getPred());
+
+    PTXBuilder ptxBuilder;
+    SmallVector<PTXBuilder::Operand *, 2> operands = {
+        ptxBuilder.newOperand(pred, "b"),
+        ptxBuilder.newOperand(adaptor.getAlloc(), "r")};
+
+    auto arriveOp = *ptxBuilder.create<>(ptxAsm);
+    arriveOp(operands, /*onlyAttachMLIRArgs=*/true);
+    auto voidTy = void_ty(getContext());
+    ptxBuilder.launch(rewriter, op.getLoc(), voidTy);
+
+    rewriter.eraseOp(op);
+    return success();
+  }
+};
 } // namespace
 
 void mlir::triton::NVIDIA::populateBarrierOpToLLVMPatterns(
@@ -194,4 +227,5 @@ void mlir::triton::NVIDIA::populateBarrierOpToLLVMPatterns(
                                                                   benefit);
   patterns.add<WaitBarrierOpConversion>(typeConverter, benefit);
   patterns.add<BarrierExpectConversion>(typeConverter, benefit);
+  patterns.add<ArriveBarrierOpConversion>(typeConverter, benefit);
 }

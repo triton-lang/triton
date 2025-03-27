@@ -65,6 +65,35 @@ llvm::AMDGPU::GPUKind TargetInfo::getGPUKind() const {
   return llvm::AMDGPU::parseArchAMDGCN(arch);
 }
 
+bool TargetInfo::isCDNA() const {
+  switch (getISAFamily()) {
+  case ISAFamily::CDNA1:
+  case ISAFamily::CDNA2:
+  case ISAFamily::CDNA3:
+  case ISAFamily::CDNA4:
+    return true;
+  default:
+    break;
+  }
+
+  return false;
+}
+
+bool TargetInfo::isRDNA() const {
+  switch (getISAFamily()) {
+  case ISAFamily::RDNA1:
+  case ISAFamily::RDNA2:
+  case ISAFamily::RDNA3:
+    return true;
+  default:
+    break;
+  }
+
+  return false;
+}
+
+int TargetInfo::getWarpSize() const { return isCDNA() ? 64 : 32; }
+
 int TargetInfo::getSharedMemorySize() const {
   int kbytes = getISAFamily() == ISAFamily::CDNA4 ? 160 : 64;
   return kbytes * 1024;
@@ -200,14 +229,13 @@ bool TargetInfo::warpReduce(RewriterBase &rewriter, Location loc,
                             unsigned numLaneToReduce,
                             unsigned interleave) const {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
-  if (numLaneToReduce != 64)
-    return false;
 
-  if (!llvm::is_contained(
-          {ISAFamily::CDNA2, ISAFamily::CDNA3, ISAFamily::CDNA4},
-          getISAFamily())) {
+  if (numLaneToReduce != getWarpSize())
     return false;
-  }
+  if (isCDNA() && getISAFamily() == ISAFamily::CDNA1)
+    return false;
+  if (isRDNA() && getISAFamily() != ISAFamily::RDNA3)
+    return false;
 
   Operation *reduxOp = op.getSingleCombiner();
   if (!reduxOp)
@@ -307,24 +335,43 @@ bool TargetInfo::warpReduce(RewriterBase &rewriter, Location loc,
     buf = createDppReduxOpWithBoundCtrl(valType, buf, 1 + dppCtrlRowShr,
                                         allRows, allBanks);
 
-    // row_bcast:15 row_mask:0xa
-    buf = createDppReduxOpWithBoundCtrl(
-        valType, buf, static_cast<uint32_t>(DppCtrl::BCAST15), 0xa, allBanks);
+    if (isCDNA()) {
+      // row_bcast:15 row_mask:0xa
+      buf = createDppReduxOpWithBoundCtrl(
+          valType, buf, static_cast<uint32_t>(DppCtrl::BCAST15), 0xa, allBanks);
 
-    // row_bcast:31
-    buf = createDppReduxOpWithBoundCtrl(valType, buf,
-                                        static_cast<uint32_t>(DppCtrl::BCAST31),
-                                        allRows, allBanks);
+      // row_bcast:31
+      buf = createDppReduxOpWithBoundCtrl(
+          valType, buf, static_cast<uint32_t>(DppCtrl::BCAST31), allRows,
+          allBanks);
+    } else {
+      // RDNA doesn't have broadcast dpp mode
+      Type actualType = castToAndSExtInt(rewriter, loc, buf, valType, 32);
+
+      Value permlaneResult =
+          LLVM::createLLVMIntrinsicCallOp(
+              rewriter, loc, "llvm.amdgcn.permlanex16", actualType,
+              ValueRange{buf, buf, b.i32_val(-1), b.i32_val(-1), b.true_val(),
+                         b.false_val()})
+              ->getResult(0);
+      buf = truncAndCastFromInt(rewriter, loc, buf, valType, 32);
+      permlaneResult =
+          truncAndCastFromInt(rewriter, loc, permlaneResult, valType, 32);
+      IRMapping mapping;
+      mapping.map(reduxOp->getOperand(0), buf);
+      mapping.map(reduxOp->getOperand(1), permlaneResult);
+      buf = rewriter.clone(*reduxOp, mapping)->getResult(0);
+    }
 
     // Similarly, we need to cast data types for readlane instruction.
     Type actualType = castToAndSExtInt(rewriter, loc, buf, valType, 16);
 
-    // Get reduction result from lane 63
+    // Get reduction result from lane 63/31
     std::string intrinsic = "llvm.amdgcn.readlane";
-    Value result =
-        LLVM::createLLVMIntrinsicCallOp(rewriter, loc, intrinsic, actualType,
-                                        ValueRange{buf, b.i32_val(63)})
-            ->getResult(0);
+    Value result = LLVM::createLLVMIntrinsicCallOp(
+                       rewriter, loc, intrinsic, actualType,
+                       ValueRange{buf, b.i32_val(isCDNA() ? 63 : 31)})
+                       ->getResult(0);
 
     result = truncAndCastFromInt(rewriter, loc, result, valType, 16);
 

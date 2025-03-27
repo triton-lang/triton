@@ -1,4 +1,4 @@
-// RUN: triton-opt %s  -split-input-file --convert-triton-amdgpu-to-llvm='arch=gfx942' | FileCheck %s
+// RUN: triton-opt %s  -split-input-file --convert-triton-amdgpu-to-llvm="arch=gfx942" | FileCheck %s
 
 // CHECK-LABEL:mfma_xf32
 

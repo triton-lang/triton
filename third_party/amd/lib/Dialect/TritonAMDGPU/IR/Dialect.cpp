@@ -27,6 +27,7 @@
 #include "llvm/ADT/TypeSwitch.h"
 
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
+#include "triton/Tools/LayoutUtils.h"
 
 // clang-format off
 #include "Dialect/TritonAMDGPU/IR/Dialect.h"
@@ -239,6 +240,66 @@ UpcastMXFPOp::deduceOutputType(TypedValue<RankedTensorType> inputTensor,
   const int kIdx = (opIdx == 0 ? 1 : 0) + hasBatch;
   newShape[kIdx] *= 2;
   return RankedTensorType::get(newShape, outputElemType, newVEncoding);
+}
+
+LogicalResult InThreadTransposeOp::verify() {
+  auto srcTy = getSrc().getType();
+  auto dstTy = getResult().getType();
+  if (srcTy.getElementType() != dstTy.getElementType()) {
+    return emitOpError("Expect input and output tensor to have same dtype");
+  }
+
+  auto shape = srcTy.getShape();
+  if (shape != dstTy.getShape()) {
+    return emitOpError("Expect equal input and output shapes");
+  }
+
+  if (shape.size() != 2) {
+    return emitOpError("Expect 2d tensor");
+  }
+
+  auto srcEncoding = dyn_cast<BlockedEncodingAttr>(srcTy.getEncoding());
+  if (!srcEncoding) {
+    return emitOpError("Expect input tensor in Blocked encoding");
+  }
+
+  auto dstEncoding = dstTy.getEncoding();
+  auto expectedLinearLayout = deduceOutputLayout(shape, srcEncoding);
+  auto dstLinearLayout = triton::gpu::toLinearLayout(shape, dstEncoding);
+  if (dstLinearLayout != expectedLinearLayout) {
+    return emitOpError("Expect output layout to be transposed per thread: " +
+                       expectedLinearLayout.toString());
+  }
+  return success();
+}
+
+LinearLayout
+InThreadTransposeOp::deduceOutputLayout(ArrayRef<int64_t> shape,
+                                        gpu::BlockedEncodingAttr srcEncoding) {
+  auto srcLL = srcEncoding.toLinearLayout(shape);
+  SmallVector<unsigned> newRegOrder(srcEncoding.getOrder());
+  int rank = shape.size();
+  assert(rank == 2 && "InThreadTransposeOp do not support non 2d tensors yet");
+  std::swap(newRegOrder[rank - 2], newRegOrder[rank - 1]);
+
+  // Make in-register transposed tile
+  auto ctx = srcEncoding.getContext();
+  auto regDimName = StringAttr::get(ctx, "register");
+  auto inThreadTransposedTile = identityStandardND(
+      regDimName, srcEncoding.getSizePerThread(), newRegOrder);
+  // make sure basis in same order as in srcLayout
+  SmallVector<StringAttr> outDimNames(srcLL.getOutDimNames());
+  inThreadTransposedTile = inThreadTransposedTile.transposeOuts(outDimNames);
+
+  // Copy original bases, and replace register tile with transposed one
+  LinearLayout::BasesT bases = srcLL.getBases();
+  auto &regBase = *bases.find(regDimName);
+  int regsTransposed = inThreadTransposedTile.getInDimSizeLog2(regDimName);
+  for (int i = 0; i < regsTransposed; ++i)
+    regBase.second[i] = inThreadTransposedTile.getBasis(regDimName, i);
+
+  LinearLayout transposedLL(bases, SmallVector<StringAttr>(outDimNames));
+  return transposedLL;
 }
 
 } // namespace mlir::triton::amdgpu

@@ -5,6 +5,7 @@ import pytest
 import torch
 import triton
 import triton.language as tl
+from triton._internal_testing import is_cuda
 
 
 @contextmanager
@@ -14,10 +15,6 @@ def enable_diagnostics_context(value):
         yield
     finally:
         os.environ["MLIR_ENABLE_DIAGNOSTICS"] = ""
-
-
-def is_cuda():
-    return triton.runtime.driver.active.get_current_target().backend == "cuda"
 
 
 def test_mma_remark(capfd, fresh_triton_cache):

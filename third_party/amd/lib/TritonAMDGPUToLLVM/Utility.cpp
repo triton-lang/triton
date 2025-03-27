@@ -1,4 +1,5 @@
 #include "Utility.h"
+#include "Dialect/TritonAMDGPU/IR/Dialect.h"
 #include "TritonAMDGPUToLLVM/GCNAsmFormat.h"
 #include "mlir/Dialect/LLVMIR/LLVMTypes.h"
 #include "mlir/Dialect/LLVMIR/ROCDLDialect.h"
@@ -138,11 +139,11 @@ static Value shuffleCommonImpl(Location loc, RewriterBase &rewriter,
       Value offset = b.i32_val(0x401F);
       return rewriter.create<ROCDL::DsSwizzleOp>(loc, valType, val, offset);
     } else {
-      if (!llvm::is_contained(
-              {ISAFamily::CDNA2, ISAFamily::CDNA3, ISAFamily::CDNA4},
-              isaFamily)) {
-        // DPP is only supported for CDNA2/CDNA3/CDNA4 right now, so we fallback
-        // to ds_swizzle for other architectures.
+      if (!llvm::is_contained({ISAFamily::CDNA2, ISAFamily::CDNA3,
+                               ISAFamily::CDNA4, ISAFamily::RDNA3},
+                              isaFamily)) {
+        // DPP is only supported for CDNA2/CDNA3/CDNA4/RDNA3 right now, so we
+        // fallback to ds_swizzle for other architectures.
         //
         // This map facilates the butterfly shuffle pattern for a stride less
         // than 16. The pattern stride is the key of the map.
@@ -528,35 +529,41 @@ unsigned getContiguity(Value ptr, ModuleAxisInfoAnalysis &axisAnalysisPass) {
   auto tensorTy = dyn_cast<RankedTensorType>(ptr.getType());
   if (!tensorTy)
     return 1;
-  return axisAnalysisPass.getPtrContiguity(ptr);
+  return axisAnalysisPass.getContiguity(ptr);
 }
 
 unsigned getContiguity(Value ptr, Value offset,
                        ModuleAxisInfoAnalysis &axisAnalysisPass) {
-  // Get contiguity from the offset
+
   Type type = getPointerTypeWithShape(ptr, offset);
   RankedTensorType tensorTy = cast<RankedTensorType>(type);
+
+  // To compute the contiguity of the scalar/warp-uniform ptr and offset pair we
+  // need to look at the contiguity of the offsets and the alignment of the ptr
+  auto elemNumBits = triton::getPointeeBitWidth(tensorTy);
+  auto contiguity = axisAnalysisPass.getContiguity(offset, elemNumBits);
+
+  // To get the alignment of the scalar ptr we need to look at the divisibility
+  auto *axisInfo = axisAnalysisPass.getAxisInfo(ptr);
+  auto maxMultipleBytes = axisInfo->getDivisibility(0);
+  auto elemNumBytes = std::max<unsigned>(elemNumBits / 8, 1);
+  auto align = std::max<unsigned>(maxMultipleBytes / elemNumBytes, 1);
+
+  // FIXME (Alex): this should not be needed anymore because it's done inside
+  // getContiguity, but we have an order issues with LL, so we keep this
+  // until the LL order issue is fixed
   auto layout = tensorTy.getEncoding();
   auto linearLayout = triton::gpu::toLinearLayout(tensorTy.getShape(), layout);
   auto llAttr =
       triton::gpu::LinearEncodingAttr::get(tensorTy.getContext(), linearLayout);
-  auto order = llAttr.getOrder();
+  auto order = triton::gpu::getOrder(tensorTy);
   auto contigPerThread = llAttr.getContigPerThread();
   assert(order[0] < contigPerThread.size() &&
          "Unexpected contigPerThread size");
-  unsigned contiguity = contigPerThread[order[0]];
-
-  // Get alignment from the pointer. Since this is a scalar pointer
-  // we should not take the pointer contiguity to consider alignment
-  auto *axisInfo = axisAnalysisPass.getAxisInfo(ptr);
-  auto maxMultipleBytes = axisInfo->getDivisibility(0);
-  auto elemNumBits = triton::getPointeeBitWidth(tensorTy);
-  auto elemNumBytes = std::max<unsigned>(elemNumBits / 8, 1);
-  auto align = std::max<int64_t>(maxMultipleBytes / elemNumBytes, 1);
+  contiguity = std::min(contiguity, contigPerThread[order[0]]);
 
   // Final contiguity is a min of the offset contiguity and pointer alignment
-  contiguity = std::min<int64_t>(align, contiguity);
-  return contiguity;
+  return std::min(align, contiguity);
 }
 
 unsigned getVectorSize(Value ptr, ModuleAxisInfoAnalysis &axisAnalysisPass) {
@@ -620,6 +627,18 @@ bool canCoalesceWriteIntoSharedMemory(RewriterBase &rewriter,
     }
   }
   return true;
+}
+
+bool isUsedByDotScaledOp(Operation *op) {
+  const ForwardSliceOptions fwdOpt;
+  SetVector<mlir::Operation *> forwardSliceSet;
+  getForwardSlice(op, &forwardSliceSet, fwdOpt);
+
+  return std::any_of(
+      forwardSliceSet.begin(), forwardSliceSet.end(), [](auto *operation) {
+        return isa<triton::DotScaledOp, triton::amdgpu::UpcastMXFPOp>(
+            operation);
+      });
 }
 
 } // namespace mlir::LLVM::AMD

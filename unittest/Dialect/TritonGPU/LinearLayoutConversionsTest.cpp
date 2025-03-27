@@ -109,6 +109,15 @@ public:
         CTALayoutAttr::get(&ctx, cpg, cSplit, cOrd));
   }
 
+  AMDRotatingSharedEncodingAttr
+  AMDRotatingShared(unsigned vec, unsigned perPhase, unsigned maxPhase,
+                    ArrayRef<unsigned> cpg, ArrayRef<unsigned> cSplit,
+                    ArrayRef<unsigned> ord, ArrayRef<unsigned> cOrd) {
+    return AMDRotatingSharedEncodingAttr::get(
+        &ctx, vec, perPhase, maxPhase, ord,
+        CTALayoutAttr::get(&ctx, cpg, cSplit, cOrd));
+  }
+
   StringAttr S(StringRef str) { return StringAttr::get(&ctx, str); }
 
 protected:
@@ -2727,6 +2736,87 @@ TEST_F(LinearLayoutConversionsTest, Shared1DSwizzle) {
       LinearLayout::identity1D(64, S("offset"), S("dim0")) *
           LinearLayout::identity1D(1, S("offset"), S("dim1")) *
           LinearLayout::identity1D(1, S("block"), S("dim0")));
+}
+
+TEST_F(LinearLayoutConversionsTest, AMDRotatingShared2D_8x16_ord10) {
+  EXPECT_EQ(
+      toLinearLayout({8, 16},
+                     AMDRotatingShared(/*vec=*/2, /*perPhase=*/2,
+                                       /*maxPhase=*/2, /*ctaPerCga=*/{1, 1},
+                                       /*cSplit=*/{1, 1},
+                                       /*order=*/{1, 0},
+                                       /*ctaOrder=*/{1, 0})),
+      LinearLayout({{S("offset"),
+                     {{0, 1}, {0, 2}, {0, 4}, {0, 8}, {1, 0}, {2, 2}, {4, 2}}},
+                    {S("block"), {}}},
+                   {S("dim0"), S("dim1")}));
+}
+
+TEST_F(LinearLayoutConversionsTest, AMDRotatingShared2D_8x16_ord01) {
+  EXPECT_EQ(
+      toLinearLayout({8, 16},
+                     AMDRotatingShared(/*vec=*/2, /*perPhase=*/2,
+                                       /*maxPhase=*/2, /*ctaPerCga=*/{1, 1},
+                                       /*cSplit=*/{1, 1},
+                                       /*order=*/{0, 1},
+                                       /*ctaOrder=*/{1, 0})),
+      LinearLayout({{S("offset"),
+                     {{1, 0}, {2, 0}, {4, 0}, {0, 1}, {2, 2}, {2, 4}, {0, 8}}},
+                    {S("block"), {}}},
+                   {S("dim0"), S("dim1")}));
+}
+
+TEST_F(LinearLayoutConversionsTest, AMDRotatingShared2D_64x64) {
+  // 64 rows is enough to fit two full patterns with given parameters, so last
+  // base is {32, 0}
+  EXPECT_EQ(toLinearLayout({64, 64}, AMDRotatingShared(
+                                         /*vec=*/4, /*perPhase=*/2,
+                                         /*maxPhase=*/4, /*ctaPerCga=*/{1, 1},
+                                         /*cSplit=*/{1, 1},
+                                         /*order=*/{1, 0},
+                                         /*ctaOrder=*/{1, 0})),
+            LinearLayout({{S("offset"),
+                           {{0, 1},
+                            {0, 2},
+                            {0, 4},
+                            {0, 8},
+                            {0, 16},
+                            {0, 32},
+                            {1, 0},
+                            {2, 4},
+                            {4, 8},
+                            {8, 4},
+                            {16, 8},
+                            {32, 0}}},
+                          {S("block"), {}}},
+                         {S("dim0"), S("dim1")}));
+}
+
+TEST_F(LinearLayoutConversionsTest, AMDRotatingShared3D_4x64x64) {
+  EXPECT_EQ(
+      toLinearLayout({4, 64, 64}, AMDRotatingShared(/*vec=*/4, /*perPhase=*/2,
+                                                    /*maxPhase=*/4,
+                                                    /*ctaPerCga=*/{1, 1, 1},
+                                                    /*cSplit=*/{1, 1, 1},
+                                                    /*order=*/{2, 1, 0},
+                                                    /*ctaOrder=*/{2, 1, 0})),
+      LinearLayout({{S("offset"),
+                     {{0, 0, 1},
+                      {0, 0, 2},
+                      {0, 0, 4},
+                      {0, 0, 8},
+                      {0, 0, 16},
+                      {0, 0, 32},
+                      {0, 1, 0},
+                      {0, 2, 4},
+                      {0, 4, 8},
+                      {0, 8, 4},
+                      {0, 16, 8},
+                      {0, 32, 0},
+                      {1, 0, 0},
+                      {2, 0, 0}}},
+                    {S("block"), {}}},
+                   {S("dim0"), S("dim1"), S("dim2")}));
 }
 
 TEST_F(LinearLayoutConversionsTest, ChooseShmemLayout) {

@@ -91,7 +91,7 @@ int main(int argc, char **argv) {
   }
   // If we are supposed to override the target triple or data layout, do so now.
   if (!TargetTriple.empty())
-    M->setTargetTriple(Triple::normalize(TargetTriple));
+    M->setTargetTriple(Triple(Triple::normalize(TargetTriple)));
   auto optPipeline = makeOptimizingPipeline();
   if (auto err = optPipeline(M.get())) {
     llvm::errs() << "Failed to optimize LLVM IR " << err << "\n";

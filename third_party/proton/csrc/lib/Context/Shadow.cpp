@@ -7,38 +7,44 @@ namespace proton {
 
 void ShadowContextSource::initializeThreadContext() {
   if (!mainContextStack) {
-    mainContextStack = &threadContextStack;
-    contextInitialized = true;
+    mainContextStack = &threadContextStack[this];
+    threadContextInitialized[this] = false;
   }
-  if (!contextInitialized) {
-    threadContextStack = *mainContextStack;
-    contextInitialized = true;
+  if (!threadContextInitialized[this]) {
+    threadContextStack[this] = *mainContextStack;
+    threadContextInitialized[this] = true;
   }
 }
 
 void ShadowContextSource::enterScope(const Scope &scope) {
   initializeThreadContext();
-  threadContextStack.push_back(scope);
+  threadContextStack[this].push_back(scope);
 }
 
 std::vector<Context> ShadowContextSource::getContextsImpl() {
   initializeThreadContext();
-  return threadContextStack;
+  return threadContextStack[this];
+}
+
+size_t ShadowContextSource::getDepth() {
+  initializeThreadContext();
+  return threadContextStack[this].size();
 }
 
 void ShadowContextSource::exitScope(const Scope &scope) {
-  if (threadContextStack.empty()) {
+  if (threadContextStack[this].empty()) {
     throw std::runtime_error("Context stack is empty");
   }
-  if (threadContextStack.back() != scope) {
+  if (threadContextStack[this].back() != scope) {
     throw std::runtime_error("Context stack is not balanced");
   }
-  threadContextStack.pop_back();
+  threadContextStack[this].pop_back();
 }
 
-/*static*/ thread_local std::vector<Context>
-    ShadowContextSource::threadContextStack;
+/*static*/ thread_local std::map<ShadowContextSource *, bool>
+    ShadowContextSource::threadContextInitialized;
 
-/*static*/ thread_local bool ShadowContextSource::contextInitialized = false;
+/*static*/ thread_local std::map<ShadowContextSource *, std::vector<Context>>
+    ShadowContextSource::threadContextStack;
 
 } // namespace proton

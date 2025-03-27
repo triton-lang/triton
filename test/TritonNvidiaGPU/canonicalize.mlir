@@ -1,4 +1,4 @@
-// RUN: triton-opt %s -split-input-file -canonicalize | FileCheck %s
+// RUN: triton-opt %s -canonicalize | FileCheck %s
 
 // CHECK-LABEL: @test_dce_tmem_alloc
 //   CHECK-NOT:   ttng.tmem_alloc

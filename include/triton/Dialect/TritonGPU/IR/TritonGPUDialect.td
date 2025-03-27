@@ -23,12 +23,14 @@ def TritonGPU_Dialect : Dialect {
     void registerTypes();
 
     LinearLayout toLinearLayout(ArrayRef<int64_t> shape, Attribute layout);
+    LinearEncodingAttr toLinearEncoding(ArrayRef<int64_t> shape, Attribute layout);
 
     static int getNumCTAs(ModuleOp mod);
     static int getThreadsPerWarp(ModuleOp mod);
 
     private:
       LinearLayoutCache llCache;
+      LinearEncodingCache leCache;
   }];
 
   let useDefaultTypePrinterParser = 1;

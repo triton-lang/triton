@@ -94,4 +94,6 @@ std::vector<Context> PythonContextSource::getContextsImpl() {
   return contexts;
 }
 
+size_t PythonContextSource::getDepth() { return getContextsImpl().size(); }
+
 } // namespace proton

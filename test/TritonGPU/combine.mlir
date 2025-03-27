@@ -3679,3 +3679,44 @@ module attributes {"ttg.num-warps" = 1 : i32, ttg.target = "cuda:80"} {
     tt.return %1 : tensor<2x16x2xf32, #blocked>
   }
 }
+
+// -----
+
+#linear = #ttg.linear<{register = [[0, 2], [64, 0]], lane = [[1, 0], [2, 0], [4, 0], [8, 0], [16, 0], [0, 1]], warp = [[0, 0], [32, 0]], block = []}>
+#linear1 = #ttg.linear<{register = [[0, 2], [64, 0]], lane = [[1, 0], [2, 0], [4, 0], [8, 0], [16, 0], [0, 1]], warp = [[32, 0], [0, 0]], block = []}>
+#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 64], warpsPerCTA = [2, 2], order = [1, 0]}>
+#blocked1 = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 64], warpsPerCTA = [1, 4], order = [1, 0]}>
+#mma = #ttg.amd_mfma<{versionMajor = 4, versionMinor = 0, warpsPerCTA = [2, 2], instrShape = [32, 32], isTransposed = true}>
+#dot_op_a = #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 16}>
+#dot_op_b = #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 16}>
+// CHECK: [[$BLOCK:.+]] = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 64], warpsPerCTA = [2, 2], order = [1, 0]}>
+// CHECK-LABEL: mfma_dot_scaled_no_redundant_convert_layout
+module attributes {"ttg.num-warps" = 4 : i32, ttg.target = "hip:gfx950", "ttg.threads-per-warp" = 64 : i32} {
+  tt.func public @mfma_dot_scaled_no_redundant_convert_layout(
+        %arg0: tensor<128x128xf8E4M3FN, #dot_op_a>,
+        %arg1: tensor<128x128xf8E4M3FN, #dot_op_b>,
+        %arg2: tensor<128x4xi8, #linear>,
+        %arg3: tensor<128x4xi8, #linear1>,
+        %arg4: tensor<128x128x!tt.ptr<f32>, #blocked>
+      ) {
+    %cst = arith.constant dense<0.000000e+00> : tensor<128x128xf32, #mma>
+    %cst0 = arith.constant dense<0.000000e+00> : tensor<128x128xf32, #blocked1>
+    %c0 = arith.constant 0 : index
+    %c1 = arith.constant 1 : index
+    %c32 = arith.constant 32 : index
+    // CHECK: %[[RET:.+]] = scf.for
+    // CHECK-NEXT: %[[DOT_RET:.+]] = tt.dot_scaled %arg0 scale %arg2, %arg1 scale %arg3, %cst lhs = e4m3 rhs = e4m3 {fastMath = false}
+    // CHECK-NEXT: scf.yield %[[DOT_RET]]
+    // CHECK-NEXT: }
+    // CHECK-NEXT: ttg.convert_layout %[[RET]] : tensor<128x128xf32, #mma> -> tensor<128x128xf32, [[$BLOCK]]>
+    // CHECK-NEXT: tt.store
+    %1 = scf.for %arg5 = %c0 to %c32 step %c1 iter_args(%arg6 = %cst0) -> (tensor<128x128xf32, #blocked1>) {
+      %4 = tt.dot_scaled %arg0 scale %arg2, %arg1 scale %arg3, %cst lhs = e4m3 rhs = e4m3 {fastMath = false} : tensor<128x128xf8E4M3FN, #dot_op_a>, tensor<128x4xi8, #linear> * tensor<128x128xf8E4M3FN, #dot_op_b>, tensor<128x4xi8, #linear1> -> tensor<128x128xf32, #mma>
+      %5 = ttg.convert_layout %4 : tensor<128x128xf32, #mma> -> tensor<128x128xf32, #blocked1>
+      scf.yield %5 : tensor<128x128xf32, #blocked1>
+    }
+    %7 = ttg.convert_layout %1 : tensor<128x128xf32, #blocked1> -> tensor<128x128xf32, #blocked>
+    tt.store %arg4, %7 : tensor<128x128x!tt.ptr<f32>, #blocked>
+    tt.return
+  }
+}

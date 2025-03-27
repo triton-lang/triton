@@ -117,9 +117,9 @@ class StreamPipeliner {
 
 public:
   StreamPipeliner(scf::ForOp _forOp, int _numStages, int _globalPrefetch,
-                  int _localPrefetch)
-      : forOp(_forOp), numBuffers(1), numStages(_numStages),
-        schedule(numStages),
+                  int _localPrefetch, bool _useAsyncCopy)
+      : forOp(_forOp), numStages(_numStages), numBuffers(1),
+        useAsyncCopy(_useAsyncCopy), schedule(numStages),
         axisInfoAnalysis(forOp->getParentOfType<ModuleOp>()) {
     int lastStage = numStages - 1;
     stages[SCHED_GLOBAL_LOAD] = 0;
@@ -148,6 +148,7 @@ private:
 
   Value createAlloc(Operation *loadOp,
                     ttg::SwizzledSharedEncodingAttr sharedEnc);
+  bool createAsyncCopy(tt::LoadOp loadOp, Value alloc, Value extractIdx);
   void createStreamCopy(tt::LoadOp loadOp, Value alloc, Value extractIdx);
   void createStreamOps();
 
@@ -167,6 +168,9 @@ private:
   // Computed number of buffers
   int numBuffers;
 
+  // Directly store to shared memory with AsyncCopy when pipelining tt.loads
+  bool useAsyncCopy;
+
   // Stage for each SchedType Op
   int stages[SCHED_SIZE];
   // Cluster for each SchedType Op
@@ -184,6 +188,7 @@ private:
     // The distance of this load's stage to its use' stage.
     int distToUse = 0;
     bool usedByDot = false;
+    bool isAsync = false;
   };
 
   // Mapping for each pipelined load to scheduling details.
@@ -229,6 +234,12 @@ LogicalResult StreamPipeliner::initSchedule(int maxIndirectionLevel) {
   // TODO: Use the precise number of buffers needed by the particular load.
   numBuffers =
       std::max(1, stages[SCHED_LOCAL_LOAD] - stages[SCHED_LOCAL_STORE]);
+  // If we use AsyncCopy we need one more buffer since we are not using a
+  // register buffer
+  if (useAsyncCopy) {
+    numBuffers += 1;
+  }
+
   LDBG("deduced max shared memory buffer number = " << numBuffers);
 
   // If tt.load and ttg.local_store are in the same stage
@@ -280,6 +291,93 @@ LogicalResult StreamPipeliner::initSchedule(int maxIndirectionLevel) {
                            << "; total = " << SCHED_SIZE);
 
   return success();
+}
+
+bool StreamPipeliner::createAsyncCopy(tt::LoadOp loadOp, Value alloc,
+                                      Value extractIdx) {
+  assert(useAsyncCopy);
+  // If we have a single buffer we would require another barrier after the
+  // local_reads so instead we fall back to pipeline with registers
+  if (numBuffers == 1)
+    return false;
+
+  OpBuilder builder(loadOp);
+  Location loc = loadOp.getLoc();
+
+  Value src = loadOp.getPtr();
+  auto srcTy = cast<triton::gpu::TensorOrMemDesc>(src.getType());
+
+  ttg::MemDescType allocTy = cast<ttg::MemDescType>(alloc.getType());
+  auto sharedEncodingAttr =
+      cast<ttg::SwizzledSharedEncodingAttr>(allocTy.getEncoding());
+
+  // Skip swizzled shared encodings because they are not supported by the
+  // lowering to llvm
+  // TODO: remove once swizzle async copies are supported
+  if (sharedEncodingAttr.getMaxPhase() != 1 ||
+      sharedEncodingAttr.getPerPhase() != 1) {
+    return false;
+  }
+
+  // Extract local subview from shared allocation
+  Value zero = builder.create<arith::ConstantIntOp>(forOp.getLoc(), 0, 32);
+  SmallVector<Value> loadOffsets(allocTy.getRank(), zero);
+  loadOffsets[0] = extractIdx;
+  auto sharedMemorySpace = ttg::SharedMemorySpaceAttr::get(forOp.getContext());
+  auto subviewTy = ttg::MemDescType::get(
+      allocTy.getShape().drop_front(), allocTy.getElementType(),
+      allocTy.getEncoding(), sharedMemorySpace, /*mutableMemory=*/true);
+  auto viewLoad =
+      builder.create<ttg::MemDescSubviewOp>(loc, subviewTy, alloc, loadOffsets);
+
+  // If the load is used by an existing local allocation we replace it with the
+  // new subview
+  SmallVector<ttg::LocalAllocOp> allocsToErase;
+  for (Operation *user : loadOp->getUsers()) {
+    if (auto alloc = dyn_cast<ttg::LocalAllocOp>(user)) {
+      tt::replaceUsesAndPropagateType(builder, alloc, viewLoad);
+      allocsToErase.push_back(alloc);
+    }
+  }
+  for (auto alloc : allocsToErase)
+    alloc.erase();
+
+  auto [stage, cluster] = schedule[loadOp];
+
+  auto newLoadOp = builder.create<ttg::AsyncCopyGlobalToLocalOp>(
+      loadOp.getLoc(), src, viewLoad, loadOp.getMask(), loadOp.getOther(),
+      loadOp.getCache(), loadOp.getEvict(), loadOp.getIsVolatile());
+  schedule.erase(loadOp);
+  schedule.insert(newLoadOp, stage, cluster);
+
+  // Insert synchronization primitives to create barriers during lowering
+  auto commit =
+      builder.create<ttg::AsyncCommitGroupOp>(loc, newLoadOp->getResult(0));
+  ttg::AsyncWaitOp wait =
+      builder.create<ttg::AsyncWaitOp>(loc, commit->getResult(0), 0);
+
+  // If we have 2 buffers we need to place the prefetches (AsyncCopy)
+  // after the local_reads and therefore also the AsyncWaits to avoid another
+  // barrier. This is done by scheduling it as a local_store.
+  if (numBuffers == 2)
+    scheduleOp(newLoadOp, SCHED_LOCAL_STORE);
+
+  // Create local load which consumes the async token from the AsyncWait
+  auto sharedLoad =
+      builder.create<ttg::LocalLoadOp>(loc, loadOp.getType(), viewLoad, wait);
+  if (stages[SCHED_LOCAL_LOAD] != stages[SCHED_COMPUTE])
+    scheduleOp(sharedLoad, SCHED_LOCAL_LOAD);
+
+  loadOp->replaceAllUsesWith(ValueRange{sharedLoad});
+  if (stages[SCHED_LOCAL_LOAD] != stages[SCHED_COMPUTE] &&
+      sharedLoad->hasOneUse()) {
+    if (auto cvt =
+            dyn_cast<ttg::ConvertLayoutOp>(*sharedLoad->getUsers().begin()))
+      scheduleOp(cvt, SCHED_LOCAL_LOAD);
+  }
+
+  loadOp.erase();
+  return true;
 }
 
 void StreamPipeliner::createStreamCopy(tt::LoadOp loadOp, Value alloc,
@@ -355,7 +453,8 @@ void StreamPipeliner::createStreamCopy(tt::LoadOp loadOp, Value alloc,
 
 // Returns the given |inputValue|'s dot user result encoding and updates |opIdx|
 // with which dot operand |inputValue| is fed into if possible.
-ttg::AMDMfmaEncodingAttr getDotEncoding(Value inputValue, unsigned *opIdx) {
+static ttg::AMDMfmaEncodingAttr getDotEncoding(Value inputValue,
+                                               unsigned *opIdx) {
   if (!llvm::hasSingleElement(inputValue.getUses()))
     return nullptr;
 
@@ -399,7 +498,7 @@ getSharedEncIfAllUsersAreDotEnc(Value loadedValue) {
 
       auto srcTy = cast<ttg::TensorOrMemDesc>(loadedValue.getType());
       auto ctaLayout = ttg::getCTALayout(srcTy.getEncoding());
-      auto order = ttg::getOrder(srcTy);
+      auto order = getOrderForMemory(srcTy);
       unsigned bitWidth = srcTy.getElementType().getIntOrFloatBitWidth();
       SmallVector<unsigned> sharedOrder;
       int rank = order.size();
@@ -430,8 +529,8 @@ getSharedEncIfAllUsersAreDotEnc(Value loadedValue) {
           unsigned vecSize = llEnc.getLinearLayout().getNumConsecutiveInOut();
           LDBG("deduced opIdx: " << opIdx << "; deduced vecSize: " << vecSize);
           tempAttr = dotEnc.composeSharedLayoutForOperand(
-              ctaLayout, opIdx, srcTy.getShape(), sharedOrder, vecSize,
-              bitWidth, /*needTrans=*/false);
+              ctaLayout, opIdx, srcTy.getShape(), order, vecSize, bitWidth,
+              /*needTrans=*/false);
         }
       }
     }
@@ -502,7 +601,7 @@ void StreamPipeliner::assignMemoryLayouts() {
     assert(!isLoadFromTensorPtr(loadOp) &&
            "Block ptr should have been lowered before this pass.");
     auto ptr = loadOp.getPtr();
-    unsigned vec = axisInfoAnalysis.getPtrContiguity(ptr);
+    unsigned vec = axisInfoAnalysis.getContiguity(ptr);
     if (auto mask = loadOp.getMask())
       vec = std::min<unsigned>(vec, axisInfoAnalysis.getMaskAlignment(mask));
 
@@ -752,7 +851,7 @@ Value StreamPipeliner::createAlloc(Operation *loadOp,
 void StreamPipeliner::createStreamOps() {
   SmallVector<std::pair<Operation *, Value>> loadToAllocs;
   for (auto &[loadOp, info] : loadToInfo) {
-    if (!info.sharedEncoding)
+    if (!info.sharedEncoding || info.isAsync)
       continue;
 
     Value alloc = createAlloc(loadOp, info.sharedEncoding);
@@ -773,25 +872,25 @@ void StreamPipeliner::createStreamOps() {
 
   unsigned newOperandIndex = forOp.getBody()->getNumArguments();
   // Patch the loop to add the new loop carried dependencies.
-  scf::ForOp newForOp =
-      replaceForOpWithNewSignature(builder, forOp, {extractIdx});
-  forOp.erase();
-  forOp = newForOp;
+  (void)addIterArgsToLoop(builder, forOp, {extractIdx});
 
   // Create one counter for the extract indices to avoid creating long
   // live range.
-  extractIdx = newForOp.getBody()->getArgument(newOperandIndex);
+  extractIdx = forOp.getBody()->getArgument(newOperandIndex);
 
-  builder.setInsertionPoint(newForOp.getBody(), newForOp.getBody()->begin());
+  builder.setInsertionPoint(forOp.getBody(), forOp.getBody()->begin());
   extractIdx = builder.create<arith::AddIOp>(loc, extractIdx, one);
   Value cndExt = builder.create<arith::CmpIOp>(loc, arith::CmpIPredicate::slt,
                                                extractIdx, numBuffersVal);
   extractIdx = builder.create<arith::SelectOp>(loc, cndExt, extractIdx, zero);
 
-  // Create stream copies.
+  // Replace tt.loads with async copies or stream copies
   for (auto &[op, alloc] : loadToAllocs) {
-    if (auto loadOp = dyn_cast<tt::LoadOp>(op))
+    if (auto loadOp = dyn_cast<tt::LoadOp>(op)) {
+      if (useAsyncCopy && createAsyncCopy(loadOp, alloc, extractIdx))
+        continue;
       createStreamCopy(loadOp, alloc, extractIdx);
+    }
   }
   // Patch the yield with the updated counters.
   appendToForOpYield(forOp, {extractIdx});
@@ -875,8 +974,8 @@ static bool checkPrecondition(scf::ForOp forOp) {
     // Don't pipeline outer loops.
     if (op != forOp && isa<scf::ForOp, scf::WhileOp>(op))
       return WalkResult::interrupt();
-    // Don't pipeline loops with barriers.
-    if (isa<gpu::BarrierOp>(op))
+    // Don't pipeline loops with barriers or asserts/prints.
+    if (isa<gpu::BarrierOp, tt::AssertOp, tt::PrintOp>(op))
       return WalkResult::interrupt();
     return WalkResult::advance();
   };
@@ -922,11 +1021,13 @@ void labelLoadOpsForTritonDot(scf::ForOp forOp) {
 struct PipelinePass : public TritonAMDGPUStreamPipelineBase<PipelinePass> {
   PipelinePass() = default;
   PipelinePass(int32_t _numStages, int32_t _globalPrefetch,
-               int32_t _localPrefetch) {
+               int32_t _localPrefetch, bool _useAsyncCopy) {
     this->numStages = _numStages;
 
     this->globalPrefetch = _globalPrefetch;
     this->localPrefetch = _localPrefetch;
+
+    this->useAsyncCopy = _useAsyncCopy;
   }
 
   void runOnOperation() override {
@@ -948,34 +1049,24 @@ struct PipelinePass : public TritonAMDGPUStreamPipelineBase<PipelinePass> {
     getOperation()->walk([&](scf::ForOp forOp) {
       labelLoadOpsForTritonDot(forOp);
       // Bail out for loops with num_stage <= 1.
-      if (getNumStagesOrDefault(forOp) > 1)
+      if (tt::getNumStagesOrDefault(forOp, numStages) > 1)
         loops.push_back(forOp);
     });
 
     for (scf::ForOp forOp : loops) {
       if (!checkPrecondition(forOp))
         continue;
-      StreamPipeliner sp(forOp, getNumStagesOrDefault(forOp), globalPrefetch,
-                         localPrefetch);
+      StreamPipeliner sp(forOp, tt::getNumStagesOrDefault(forOp, numStages),
+                         globalPrefetch, localPrefetch, useAsyncCopy);
       if (failed(sp.pipelineLoop()))
         continue;
     }
   }
-
-private:
-  int getNumStagesOrDefault(scf::ForOp forOp) {
-    // Use the attribute attached to the loop if it exists, otherwise use the
-    // global control.
-    if (auto attr = forOp->getAttrOfType<IntegerAttr>(tt::kNumStagesAttrName))
-      return attr.getInt();
-    return numStages;
-  }
 };
 } // namespace
 
-std::unique_ptr<Pass>
-mlir::createTritonAMDGPUStreamPipelinePass(int numStages, int globalPrefetch,
-                                           int localPrefetch) {
+std::unique_ptr<Pass> mlir::createTritonAMDGPUStreamPipelinePass(
+    int numStages, int globalPrefetch, int localPrefetch, bool useAsyncCopy) {
   return std::make_unique<PipelinePass>(numStages, globalPrefetch,
-                                        localPrefetch);
+                                        localPrefetch, useAsyncCopy);
 }

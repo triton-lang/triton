@@ -1,16 +1,6 @@
 import pytest
 import torch
-import triton
-import os
-
-
-def is_interpreter():
-    return os.environ.get('TRITON_INTERPRET', '0') == '1'
-
-
-def is_cuda():
-    return not is_interpreter() and \
-        triton.runtime.driver.active.get_current_target().backend == "cuda"
+from triton._internal_testing import is_cuda
 
 
 @pytest.mark.parametrize("m, n, k", [(16, 16, 16), (32, 16, 16), (16, 32, 16), (16, 16, 32)])

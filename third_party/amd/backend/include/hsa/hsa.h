@@ -3594,7 +3594,7 @@ typedef struct hsa_isa_s {
  * @brief Retrieve a reference to an instruction set architecture handle out of
  * a symbolic name.
  *
- * @param[in] name Vendor-specific name associated with a a particular
+ * @param[in] name Vendor-specific name associated with a particular
  * instruction set architecture. @p name must start with the vendor name and a
  * colon (for example, "AMD:"). The rest of the name is vendor-specific. Must be
  * a NUL-terminated string.

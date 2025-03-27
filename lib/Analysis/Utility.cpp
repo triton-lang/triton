@@ -99,15 +99,15 @@ bool shouldUseDistSmem(Attribute srcLayout, Attribute dstLayout) {
 }
 
 unsigned ReduceOpHelper::getInterWarpSizeWithUniqueData() {
-  return getWarpsPerCTAWithUniqueData(srcEncoding, srcShape)[axis];
+  return getWarpsPerCTA(srcEncoding, srcShape)[axis];
 }
 
 unsigned ReduceOpHelper::getIntraWarpSizeWithUniqueData() {
-  return getThreadsPerWarpWithUniqueData(srcEncoding, srcShape)[axis];
+  return getThreadsPerWarp(srcEncoding, srcShape)[axis];
 }
 
 bool ReduceOpHelper::isWarpSynchronous() {
-  return getWarpsPerCTAWithUniqueData(srcEncoding, srcShape)[axis] == 1;
+  return getWarpsPerCTA(srcEncoding, srcShape)[axis] == 1;
 }
 
 SmallVector<unsigned> ReduceOpHelper::getScratchRepShape() {
@@ -174,8 +174,8 @@ unsigned ScanLoweringHelper::getAxisNumWarpsWithUniqueData() {
 
 unsigned ScanLoweringHelper::getAxisNumBlocks() {
   auto contigPerThread = getEncoding().getContigPerThread();
-  auto threadsPerWarp = getThreadsPerWarp(getEncoding());
-  auto warpsPerCTA = getWarpsPerCTA(getEncoding());
+  auto threadsPerWarp = getEncoding().getThreadsPerWarp();
+  auto warpsPerCTA = getEncoding().getWarpsPerCTA();
   unsigned axis = getAxis();
   return ceil<unsigned>(
       getShape()[axis],
@@ -184,8 +184,8 @@ unsigned ScanLoweringHelper::getAxisNumBlocks() {
 
 unsigned ScanLoweringHelper::getNonAxisNumBlocks() {
   auto contigPerThread = getEncoding().getContigPerThread();
-  auto threadsPerWarp = getThreadsPerWarp(getEncoding());
-  auto warpsPerCTA = getWarpsPerCTA(getEncoding());
+  auto threadsPerWarp = getEncoding().getThreadsPerWarp();
+  auto warpsPerCTA = getEncoding().getWarpsPerCTA();
   auto rank = contigPerThread.size();
   unsigned axis = getAxis();
   unsigned numBlocks = 1;
@@ -521,8 +521,8 @@ unsigned ScanLoweringHelper::getAxisBlockStride() {
   auto order = getOrder();
   unsigned stride = 1;
   auto contigPerThread = getEncoding().getContigPerThread();
-  auto threadsPerWarp = getThreadsPerWarp(getEncoding());
-  auto warpsPerCTA = getWarpsPerCTA(getEncoding());
+  auto threadsPerWarp = getEncoding().getThreadsPerWarp();
+  auto warpsPerCTA = getEncoding().getWarpsPerCTA();
   for (unsigned dim : order) {
     if (dim == getAxis())
       return stride;
