@@ -37,7 +37,7 @@ Users can pass command-line arguments to specify matrix dimensions and iteration
 
 Note that currently this tutorial will fail on devices with a small shared memory size, such as RTX-4090.
 
-.. GENERATED FROM PYTHON SOURCE LINES 21-819
+.. GENERATED FROM PYTHON SOURCE LINES 21-797
 
 
 
@@ -46,18 +46,17 @@ Note that currently this tutorial will fail on devices with a small shared memor
 
  .. code-block:: none
 
-    TMA benchmarks will be running with experimental grid constant TMA descriptor.
     M=32, N=32, K=32 verification naive vs: torch: ✅ cublas: ✅ persistent: ✅ 
     M=8192, N=8192, K=512 verification naive vs: torch: ✅ cublas: ✅ persistent: ✅ 
-    175.462 5483.095 ROOT
-    ├─ nan 0.052 _ZN2at6native18elementwise_kernelILi128ELi4EZNS0_22gpu_kernel_impl_nocastIZZZNS0_23direct_copy_kernel_cudaERNS_18TensorIteratorBaseEENKUlvE1_clEvENKUlvE8_clEvEUlN3c104HalfEE_EEvS4_RKT_EUliE_EEviT1_
-    ├─ nan 0.046 _ZN2at6native54_GLOBAL__N__d8ceb000_21_DistributionNormal_cu_0c5b6e8543distribution_elementwise_grid_stride_kernelIfLi4EZNS0_9templates4cuda20normal_and_transformIN3c104HalfEfPNS_17CUDAGeneratorImplEZZZNS4_13normal_kernelIS9_EEvRKNS_10TensorBaseEddT_ENKUlvE_clEvENKUlvE1_clEvEUlfE_EEvRNS_18TensorIteratorBaseET1_T2_EUlP24curandStatePhilox4_32_10E0_ZNS1_27distribution_nullary_kernelIS7_f6float4S9_SO_SH_EEvSJ_SL_RKT3_T4_EUlifE_EEviNS_15PhiloxCudaStateESK_SL_
-    ├─ 177.181 4266.341 cublas [M=8192, N=8192, K=512]
-    │  └─ nan 4266.341 ampere_fp16_s16816gemm_fp16_128x128_ldg8_f2f_stages_32x5_tn
-    ├─ 169.399 405.665 matmul_kernel [M=8192, N=8192, K=512]
-    ├─ 161.811 424.690 matmul_kernel_persistent [M=8192, N=8192, K=512]
-    └─ 177.891 386.301 torch [M=8192, N=8192, K=512]
-       └─ nan 386.301 ampere_fp16_s16816gemm_fp16_128x128_ldg8_f2f_stages_32x5_tn
+    175.947 5467.957 ROOT
+    ├─ nan 0.050 _ZN2at6native18elementwise_kernelILi128ELi4EZNS0_22gpu_kernel_impl_nocastIZZZNS0_23direct_copy_kernel_cudaERNS_18TensorIteratorBaseEENKUlvE1_clEvENKUlvE8_clEvEUlN3c104HalfEE_EEvS4_RKT_EUliE_EEviT1_
+    ├─ nan 0.045 _ZN2at6native54_GLOBAL__N__d8ceb000_21_DistributionNormal_cu_0c5b6e8543distribution_elementwise_grid_stride_kernelIfLi4EZNS0_9templates4cuda20normal_and_transformIN3c104HalfEfPNS_17CUDAGeneratorImplEZZZNS4_13normal_kernelIS9_EEvRKNS_10TensorBaseEddT_ENKUlvE_clEvENKUlvE1_clEvEUlfE_EEvRNS_18TensorIteratorBaseET1_T2_EUlP24curandStatePhilox4_32_10E0_ZNS1_27distribution_nullary_kernelIS7_f6float4S9_SO_SH_EEvSJ_SL_RKT3_T4_EUlifE_EEviNS_15PhiloxCudaStateESK_SL_
+    ├─ 177.633 4255.479 cublas [M=8192, N=8192, K=512]
+    │  └─ nan 4255.479 ampere_fp16_s16816gemm_fp16_128x128_ldg8_f2f_stages_32x5_tn
+    ├─ 169.764 404.794 matmul_kernel [M=8192, N=8192, K=512]
+    ├─ 161.616 425.203 matmul_kernel_persistent [M=8192, N=8192, K=512]
+    └─ 179.712 382.386 torch [M=8192, N=8192, K=512]
+       └─ nan 382.386 ampere_fp16_s16816gemm_fp16_128x128_ldg8_f2f_stages_32x5_tn
 
 
 
@@ -112,12 +111,8 @@ Note that currently this tutorial will fail on devices with a small shared memor
         return ret
 
 
-    HAS_TMA_DESC = "nv_tma_desc_type" in dir(tl)
-
-    if HAS_TMA_DESC:
-        print("TMA benchmarks will be running with experimental grid constant TMA descriptor.", )
-    else:
-        print("TMA benchmarks will be running without grid constant TMA descriptor.", )
+    HAS_TMA_DESC = supports_tma() and hasattr(tl, "nv_tma_desc_type")
+    HAS_TENSOR_DESC = supports_tma() and hasattr(tl, "make_tensor_descriptor")
 
 
     # TmaAutoTuneHelper used in htyu's PR #5622
@@ -137,49 +132,27 @@ Note that currently this tutorial will fail on devices with a small shared memor
         def __init__(self):
             self.fill_1d_tma_descriptor_inner = (triton.runtime.driver.active.utils.fill_1d_tma_descriptor)
             self.fill_2d_tma_descriptor_inner = (triton.runtime.driver.active.utils.fill_2d_tma_descriptor)
-            if HAS_TMA_DESC:
-                self.descriptors = {}
-            else:
-                self.cuda_descriptors = {}
+            self.descriptors = {}
 
         # Call this method outside of the lambda function for grid size
         def init_tma_descriptor(self, name):
-            if HAS_TMA_DESC:
-                self.descriptors[name] = torch.empty(TmaAutoTuneHelper.TMA_SIZE, device="cpu", dtype=torch.int8)
-            else:
-                self.cuda_descriptors[name] = torch.empty(TmaAutoTuneHelper.TMA_SIZE, device="cuda", dtype=torch.int8)
+            self.descriptors[name] = torch.empty(TmaAutoTuneHelper.TMA_SIZE, device="cpu", dtype=torch.int8)
 
         # Call this method inside the lambda function for grid size
         def fill_1d_tma_descriptor(self, name, ptr, dim, block_dim, element_size):
-            if HAS_TMA_DESC:
-                desc_x = self.descriptors[name]
-                assert desc_x.data_ptr() % 64 == 0
-                self.fill_1d_tma_descriptor_inner(ptr, dim, block_dim, element_size, desc_x.data_ptr())
-            else:
-                desc_x = self.cuda_descriptors[name]
-                buf_x = torch.empty_like(desc_x, device="cpu", pin_memory=True)
-                self.fill_1d_tma_descriptor_inner(ptr, dim, block_dim, element_size, buf_x.data_ptr())
-                desc_x.copy_(buf_x, non_blocking=True)
+            desc_x = self.descriptors[name]
+            assert desc_x.data_ptr() % 64 == 0
+            self.fill_1d_tma_descriptor_inner(ptr, dim, block_dim, element_size, desc_x.data_ptr())
 
         # Call this method inside the lambda function for grid size
         def fill_2d_tma_descriptor(self, name, ptr, dim1, dim0, block_dim1, block_dim0, element_size):
-            if HAS_TMA_DESC:
-                desc_x = self.descriptors[name]
-                assert desc_x.data_ptr() % 64 == 0
-                self.fill_2d_tma_descriptor_inner(ptr, dim1, dim0, block_dim1, block_dim0, element_size, desc_x.data_ptr())
-            else:
-                desc_x = self.cuda_descriptors[name]
-                buf_x = torch.empty_like(desc_x, device="cpu", pin_memory=True)
-                self.fill_2d_tma_descriptor_inner(ptr, dim1, dim0, block_dim1, block_dim0, element_size, buf_x.data_ptr())
-                desc_x.copy_(buf_x, non_blocking=True)
+            desc_x = self.descriptors[name]
+            assert desc_x.data_ptr() % 64 == 0
+            self.fill_2d_tma_descriptor_inner(ptr, dim1, dim0, block_dim1, block_dim0, element_size, desc_x.data_ptr())
 
         def get_tma_descriptor_kernel_param(self, name):
-            if HAS_TMA_DESC:
-                assert self.descriptors[name] is not None
-                return self.KernelParamWrapper(self.descriptors[name])
-            else:
-                assert self.cuda_descriptors[name] is not None
-                return self.cuda_descriptors[name]
+            assert self.descriptors[name] is not None
+            return self.KernelParamWrapper(self.descriptors[name])
 
 
     def matmul_get_configs():
@@ -279,7 +252,7 @@ Note that currently this tutorial will fail on devices with a small shared memor
         key=["M", "N", "K"],
     )
     @triton.jit(launch_metadata=_matmul_launch_metadata)
-    def matmul_tma_ws_kernel(a_desc_ptr, b_desc_ptr, c_desc_ptr,  #
+    def matmul_kernel_tma_ws(a_desc_ptr, b_desc_ptr, c_desc_ptr,  #
                              M, N, K,  #
                              BLOCK_SIZE_M: tl.constexpr,  #
                              BLOCK_SIZE_N: tl.constexpr,  #
@@ -372,7 +345,7 @@ Note that currently this tutorial will fail on devices with a small shared memor
         desc_b = desc_helper.get_tma_descriptor_kernel_param("b")
         desc_c = desc_helper.get_tma_descriptor_kernel_param("c")
 
-        matmul_tma_ws_kernel[grid](
+        matmul_kernel_tma_ws[grid](
             desc_a, desc_b, desc_c,  #
             M, N, K,  #
         )
@@ -511,7 +484,10 @@ Note that currently this tutorial will fail on devices with a small shared memor
         tile_id_c = start_pid - NUM_SMS
         num_pid_in_group = GROUP_SIZE_M * num_pid_n
 
-        for tile_id in tl.range(start_pid, num_tiles, NUM_SMS, flatten=True):
+        # Enable warp specialization to leverage async warp scheduling in the GPU.
+        # FIXME: This only works on Blackwell right now. On older GPUs, this will
+        # use software pipelining.
+        for tile_id in tl.range(start_pid, num_tiles, NUM_SMS, flatten=True, warp_specialize=True):
             pid_m, pid_n = _compute_pid(tile_id, num_pid_in_group, num_pid_m, GROUP_SIZE_M, NUM_SMS)
             offs_am = pid_m * BLOCK_SIZE_M
             offs_bn = pid_n * BLOCK_SIZE_N
@@ -777,10 +753,11 @@ Note that currently this tutorial will fail on devices with a small shared memor
             bench_fn(reps, warmup_reps, torch_matmul, a, b)
         bench_fn(reps, warmup_reps, matmul, a, b.T)
         bench_fn(reps, warmup_reps, matmul_persistent, a, b.T)
-        if supports_tma():
-            bench_fn(reps, warmup_reps, matmul_tma_ws, a, b)
+        if HAS_TMA_DESC:
             bench_fn(reps, warmup_reps, matmul_tma_persistent, a, b)
+        if HAS_TENSOR_DESC:
             bench_fn(reps, warmup_reps, matmul_descriptor_persistent, a, b)
+            bench_fn(reps, warmup_reps, matmul_tma_ws, a, b)
 
 
     def validate(M, N, K, dtype):
@@ -791,10 +768,10 @@ Note that currently this tutorial will fail on devices with a small shared memor
         torch_result = torch_matmul(a, b) if dtype == torch.float16 else None
         cublas_result = cublas_matmul(a, b) if cublas is not None else None
         naive_result = matmul(a, b.T)
-        tma_ws_result = matmul_tma_ws(a, b) if supports_tma() else None
+        tma_ws_result = matmul_tma_ws(a, b) if HAS_TENSOR_DESC else None
         persistent_result = matmul_persistent(a, b.T)
-        tma_persistent_result = matmul_tma_persistent(a, b) if supports_tma() else None
-        descriptor_persistent_result = matmul_descriptor_persistent(a, b) if supports_tma() else None
+        tma_persistent_result = matmul_tma_persistent(a, b) if HAS_TMA_DESC else None
+        descriptor_persistent_result = matmul_descriptor_persistent(a, b) if HAS_TENSOR_DESC else None
 
         if tma_ws_result is not None:
             naive_vs_tma_ws = "✅" if torch.allclose(naive_result.to(torch.float16), tma_ws_result.to(torch.float16),
@@ -871,7 +848,7 @@ Note that currently this tutorial will fail on devices with a small shared memor
 
 .. rst-class:: sphx-glr-timing
 
-   **Total running time of the script:** (0 minutes 56.333 seconds)
+   **Total running time of the script:** (0 minutes 56.299 seconds)
 
 
 .. _sphx_glr_download_getting-started_tutorials_09-persistent-matmul.py:
