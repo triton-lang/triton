@@ -9,21 +9,27 @@ FlagTree's initial release is built on Triton 3.1, introducing support for diver
 ### New features
 
 * Multi-Backend Support
+
 Currently supported backends include iluvatar, xpu (klx), mthreads, and cambricon.
 
 * Dual Compilation Path Support
+
 In this initial phase, the project provides basic compatibility for both TritonGPU dialect and Linalg dialect compilation paths.
 
 * Pluggable High-Variance Module Architecture
+
 Enables chip-specific backend customization through a plugin architecture. These non-generic modules are maintained by respective chip vendors and maintain structural consistency with the FlagTree main repository through engineering practices.
 
 * Cross-Compilation and Rapid Validation Capabilities
+
 For developer convenience, FlagTree supports compilation on any hardware platform and Python3 import functionality. Cross-compilation is possible when build and runtime environments are compatible (specifically matching or compatible versions of cpython, glibc, glibcxx, and cxxabi), allowing compiled artifacts to run across platforms with corresponding chip deployments.
 
 * CI/CD Integration
+
 The project implements comprehensive CI/CD pipelines for iluvatar, xpu, mthreads, nvidia, and other backends, enabling end-to-end validation from compilation to testing correctness.
 
 * Quality Management Framework
+
 Beyond CI/CD coverage for multiple backend chips, FlagTree implements quality and compliance assurance mechanisms including Contributor License Agreement (CLA) signing and security compliance scanning.
 
 ### Known issues
