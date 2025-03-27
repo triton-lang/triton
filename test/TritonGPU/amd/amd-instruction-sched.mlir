@@ -1,4 +1,3 @@
-// RUN: triton-opt %s -triton-amdgpu-insert-instruction-sched-hints='variant=attention' -triton-amdgpu-lower-insert-instruction-sched-hints -verify-diagnostics | FileCheck %s -check-prefix=INSERT_ATTENTION
 // RUN: triton-opt %s -convert-triton-to-tritongpu='target=hip:gfx942 num-ctas=1 num-warps=4 threads-per-warp=64' -tritongpu-coalesce -tritonamdgpu-accelerate-matmul='arch-generation-name=gfx942 matrix-instruction-size=32 kPack=1' -tritongpu-remove-layout-conversions -tritonamdgpu-stream-pipeline='num_stages=1' -triton-amdgpu-insert-instruction-sched-hints='variant=local_prefetch' -tritongpu-reduce-data-duplication -optimize-amd-lds-usage='target-arch=gfx942' -convert-scf-to-cf -convert-index-to-llvm -allocate-shared-memory -convert-triton-amdgpu-to-llvm='arch=gfx942' -verify-diagnostics | FileCheck %s -check-prefix=INSTR_COUNT_NS1
 // RUN: triton-opt %s -convert-triton-to-tritongpu='target=hip:gfx942 num-ctas=1 num-warps=4 threads-per-warp=64' -tritongpu-coalesce -tritonamdgpu-accelerate-matmul='arch-generation-name=gfx942 matrix-instruction-size=32 kPack=1' -tritongpu-remove-layout-conversions -tritonamdgpu-stream-pipeline='num_stages=2' -triton-amdgpu-insert-instruction-sched-hints='variant=local_prefetch' -tritongpu-reduce-data-duplication -optimize-amd-lds-usage='target-arch=gfx942' -convert-scf-to-cf -convert-index-to-llvm -allocate-shared-memory -convert-triton-amdgpu-to-llvm='arch=gfx942' -verify-diagnostics | FileCheck %s -check-prefix=INSTR_COUNT_NS2
 // RUN: triton-opt %s -convert-triton-to-tritongpu='target=hip:gfx942 num-ctas=1 num-warps=4 threads-per-warp=64' -tritongpu-coalesce -tritonamdgpu-accelerate-matmul='arch-generation-name=gfx942 matrix-instruction-size=16 kPack=1' -tritongpu-remove-layout-conversions -tritonamdgpu-stream-pipeline='num_stages=2' -triton-amdgpu-insert-instruction-sched-hints='variant=local_prefetch' -tritongpu-reduce-data-duplication -optimize-amd-lds-usage='target-arch=gfx942' -convert-scf-to-cf -convert-index-to-llvm -allocate-shared-memory -convert-triton-amdgpu-to-llvm='arch=gfx942' -triton-amdgpu-lower-insert-instruction-sched-hints='arch=gfx942 num_stages=2' -debug-only='lower-insert-instruction-sched-hints' -verify-diagnostics 2>&1 | FileCheck %s -check-prefix=USE_LOCAL_PREFETCH_GLOBAL_LOAD
@@ -6,7 +5,6 @@
 // RUN: triton-opt %s -convert-triton-to-tritongpu='target=hip:gfx942 num-ctas=1 num-warps=4 threads-per-warp=64' -tritongpu-coalesce -tritongpu-remove-layout-conversions -tritonamdgpu-stream-pipeline='num_stages=2' | FileCheck %s -check-prefix=LABELING_PS_2
 
 module {
-  // INSERT_ATTENTION-LABEL: @test_dot_op
   // INSTR_COUNT_NS1-LABEL: @test_dot_op
   // INSTR_COUNT_NS2-LABEL: @test_dot_op
   // USE_LOCAL_PREFETCH_GLOBAL_LOAD: @test_dot_op
@@ -41,14 +39,6 @@ module {
   %loop:3 = scf.for %iv = %lb to %ub step %step iter_args(%a_ptr = %a_ptr_init, %b_ptr = %b_ptr_init, %prev_c = %c_init) -> (tensor<128x32x!tt.ptr<f16>>, tensor<32x128x!tt.ptr<f16>>, tensor<128x128xf32>) {
     %a = tt.load %a_ptr : tensor<128x32x!tt.ptr<f16>>
     %b = tt.load %b_ptr, %b_mask, %b_other : tensor<32x128x!tt.ptr<f16>>
-
-    // INSERT_ATTENTION: scf.for
-    // INSERT_ATTENTION: rocdl.sched.barrier 0
-    // INSERT_ATTENTION: tt.dot
-    // INSERT_ATTENTION: math.exp2
-    // INSERT_ATTENTION: rocdl.iglp.opt 2
-    // INSERT_ATTENTION-NEXT: rocdl.sched.barrier 0
-    // INSERT_ATTENTION-NEXT: scf.yield
 
     // INSTR_COUNT_NS1: amdgpu.instruction_sched_hint
     // INSTR_COUNT_NS1-SAME: isBufferLoadsAEnabled = false
@@ -154,10 +144,9 @@ module {
     // LABELING_PS_2: ttg.local_store %[[REG0_OP1]], %{{.*}} {OpIdx = #amdgpu.OpIdx<1>}
 
     %c = tt.dot %a, %b, %prev_c : tensor<128x32xf16> * tensor<32x128xf16> -> tensor<128x128xf32>
-    %c1 = math.exp2 %c : tensor<128x128xf32>
     %next_a_ptr = tt.addptr %a_ptr, %a_off : tensor<128x32x!tt.ptr<f16>>, tensor<128x32xi32>
     %next_b_ptr = tt.addptr %b_ptr, %b_off : tensor<32x128x!tt.ptr<f16>>, tensor<32x128xi32>
-    scf.yield %next_a_ptr, %next_b_ptr, %c1 : tensor<128x32x!tt.ptr<f16>>, tensor<32x128x!tt.ptr<f16>>, tensor<128x128xf32>
+    scf.yield %next_a_ptr, %next_b_ptr, %c : tensor<128x32x!tt.ptr<f16>>, tensor<32x128x!tt.ptr<f16>>, tensor<128x128xf32>
   }
 
   // C ptrs

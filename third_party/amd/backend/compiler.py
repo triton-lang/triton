@@ -60,7 +60,7 @@ class HIPOptions:
     # attention: enables a bunch of optimizations for attention kernels, including:
     #            - iglp 2 and sched.barrier around it
     #            - sink-insts-to-avoid-spills flag to avoid register spills
-    instruction_sched_variant: str = 'none'
+    schedule_hint: str = 'none'
 
     def __post_init__(self):
         default_libdir = Path(__file__).parent / 'lib'
@@ -240,7 +240,7 @@ class HIPBackend(BaseBackend):
         use_async_copy = int(os.getenv("TRITON_HIP_USE_ASYNC_COPY", "0")) == 1
 
         # The `local-prefetch` scheduling variant requires turning on buffer ops.
-        if options.instruction_sched_variant == "local-prefetch":
+        if options.schedule_hint == "local-prefetch":
             global_prefetch = local_prefetch = 1
 
         if amd.has_matrix_core_feature(options.arch):
@@ -254,13 +254,12 @@ class HIPBackend(BaseBackend):
             if use_async_copy:
                 amd.passes.ttgpuir.add_coalesce_async_copy(pm, options.arch)
             passes.common.add_canonicalizer(pm)
-        if options.instruction_sched_variant.lower() != "none":
-            amd.passes.ttgpuir.insert_instruction_sched_hints(pm, options.instruction_sched_variant)
+        if options.schedule_hint.lower() != "none":
+            amd.passes.ttgpuir.insert_instruction_sched_hints(pm, options.schedule_hint)
         passes.ttgpuir.add_optimize_dot_operands(pm, True)
         passes.ttgpuir.add_remove_layout_conversions(pm)
         passes.ttgpuir.add_reduce_data_duplication(pm)
-        is_attention_variant = options.instruction_sched_variant.lower() == "attention"
-        if os.environ.get("TRITON_HIP_USE_IN_THREAD_TRANSPOSE", "0") == "1" or is_attention_variant:
+        if os.environ.get("TRITON_HIP_USE_IN_THREAD_TRANSPOSE", "0") == "1":
             amd.passes.ttgpuir.add_in_thread_transpose(pm)
             passes.ttgpuir.add_remove_layout_conversions(pm)
         if amd.has_matrix_core_feature(options.arch):
@@ -313,7 +312,7 @@ class HIPBackend(BaseBackend):
         passes.common.add_canonicalizer(pm)
         passes.common.add_cse(pm)
         passes.common.add_symbol_dce(pm)
-        if options.instruction_sched_variant.lower() != "none":
+        if options.schedule_hint.lower() != "none":
             amd.passes.ttgpuir.lower_instruction_sched_hints(pm, options.arch, options.num_stages)
         if os.environ.get("TRITON_DISABLE_LINE_INFO", "0") == "0":
             passes.llvmir.add_di_scope(pm)
@@ -396,11 +395,11 @@ class HIPBackend(BaseBackend):
         metadata["name"] = names[0]
         # llvm -> hsaco
         flags = []
-        # XXX(Kyle): The sink-insts-to-avoid-spills helps mitigate register spills
-        # under heavy workload, but it can also lead to regression in some cases.
-        # But from existing observation, the regression is not significant.
-        # It would be better to have some heuristics for it.
-        if options.instruction_sched_variant == 'attention':
+        # The sink-insts-to-avoid-spills flag asks LLVM backend to sink instructions
+        # into cycles to avoid register spills in the MachineSinking pass, while it
+        # can also lead to regression in some cases. But from current observation,
+        # the regression is not significant. It would be better to have some heuristics.
+        if options.schedule_hint == 'attention':
             flags.append('sink-insts-to-avoid-spills')
         amdgcn = llvm.translate_to_asm(src, amd.TARGET_TRIPLE, options.arch, '', flags, options.enable_fp_fusion, False)
         if os.environ.get("AMDGCN_ENABLE_DUMP", "0") == "1":
