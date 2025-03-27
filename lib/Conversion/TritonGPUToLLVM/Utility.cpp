@@ -919,13 +919,9 @@ getExpandedSharedMemoryObject(ConversionPatternRewriter &rewriter, Location loc,
   return expandedSmemObj;
 }
 
-void makeAllWarpGroupsIsolatedFromAbove(Operation *op) {
-  op->walk([](triton::gpu::WarpSpecializeOp wsOp) {
-    makeWarpGroupsIsolatedFromAbove(wsOp);
-  });
-}
-
-void makeWarpGroupsIsolatedFromAbove(triton::gpu::WarpSpecializeOp wsOp) {
+// Isolated a single warp specialize op from above.
+static void
+makeWarpGroupsIsolatedFromAbove(triton::gpu::WarpSpecializeOp wsOp) {
   SetVector<Value> captures;
   getUsedValuesDefinedAbove(wsOp.getPartitionOpHolder(), captures);
   for (Value capture : captures) {
@@ -936,6 +932,12 @@ void makeWarpGroupsIsolatedFromAbove(triton::gpu::WarpSpecializeOp wsOp) {
       replaceAllUsesInRegionWith(capture, arg, *region);
     }
   }
+}
+
+void makeAllWarpGroupsIsolatedFromAbove(Operation *op) {
+  op->walk([](triton::gpu::WarpSpecializeOp wsOp) {
+    makeWarpGroupsIsolatedFromAbove(wsOp);
+  });
 }
 
 } // namespace mlir
