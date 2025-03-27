@@ -88,9 +88,13 @@ Type scaleDotElemTypeToMLIRType(MLIRContext *ctx, triton::ScaleDotElemType t);
 // Returns true if we can perform coalesced write from the source encoding to
 // the destination encoding.
 bool canCoalesceWriteIntoSharedMemory(RewriterBase &rewriter,
-                                      RankedTensorType srcTy,
-                                      triton::gpu::MemDescType dstTy,
-                                      unsigned vectorSize);
+                                      const LinearLayout &srcToSharedLayout);
+
+// Returns true if the swizzling pattern does only swizzle the shared memory
+// offsets of a warp and does not exchange destination elements across warps
+bool doesSwizzleInsideWarp(RewriterBase &rewriter,
+                           const LinearLayout &srcToSharedLayout,
+                           unsigned threadsPerWarp);
 
 // Return true if op is used by DotScaledOp or UpcastMXFPOp ops.
 bool isUsedByDotScaledOp(Operation *op);

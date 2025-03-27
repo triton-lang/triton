@@ -605,25 +605,52 @@ Type scaleDotElemTypeToMLIRType(MLIRContext *ctx, triton::ScaleDotElemType t) {
 }
 
 bool canCoalesceWriteIntoSharedMemory(RewriterBase &rewriter,
-                                      RankedTensorType srcTy,
-                                      triton::gpu::MemDescType dstTy,
-                                      unsigned vectorSize) {
-  auto shape = srcTy.getShape();
-  LinearLayout srcLayout =
-      triton::gpu::toLinearLayout(shape, srcTy.getEncoding());
-  LinearLayout sharedLayout =
-      triton::gpu::toLinearLayout(shape, dstTy.getEncoding());
-  LinearLayout srcToSharedLayout = srcLayout.invertAndCompose(sharedLayout);
+                                      const LinearLayout &srcToSharedLayout) {
+  auto contig = srcToSharedLayout.getNumConsecutiveInOut();
 
   StringAttr kLane = rewriter.getStringAttr("lane");
   for (int inLane : llvm::seq(srcToSharedLayout.getInDimSizeLog2(kLane))) {
     auto basis = srcToSharedLayout.getBasis(kLane, inLane)[0];
-    unsigned expected = vectorSize * (1 << inLane);
+    unsigned expected = contig * (1 << inLane);
     if (basis != expected) {
       LDBG("detected uncoalesced layout from blocked to shared in async copy "
            "for lane "
            << 1 + inLane << "; given " << basis << " but expected "
            << expected);
+      return false;
+    }
+  }
+  // Additionally we could swizzle based on the warp dimensions so we need to
+  // check that all bases have 0 bits for the first (log2(warpSize) + 1) bits
+  unsigned warpSize = 64;
+  assert(llvm::isPowerOf2_32(warpSize));
+  unsigned mask = (64 * 2) - 1;
+  StringAttr kWarp = rewriter.getStringAttr("warp");
+  for (int inWarp : llvm::seq(srcToSharedLayout.getInDimSizeLog2(kWarp))) {
+    auto basis = srcToSharedLayout.getBasis(kWarp, inWarp)[0];
+    if ((basis & mask) != 0) {
+      LDBG("detected uncoalesced layout from blocked to shared in async copy "
+           "for warp" +
+           std::to_string(inWarp));
+      return false;
+    }
+  }
+
+  return true;
+}
+
+bool doesSwizzleInsideWarp(RewriterBase &rewriter,
+                           const LinearLayout &srcToSharedLayout,
+                           unsigned threadsPerWarp) {
+  auto contig = srcToSharedLayout.getNumConsecutiveInOut();
+  // If all lane bases are below (2^warpSize) * contig we swizzle inside warp
+  // boundaries
+  unsigned upperLimit = (threadsPerWarp + 1) * contig;
+
+  StringAttr kLane = rewriter.getStringAttr("lane");
+  for (int inLane : llvm::seq(srcToSharedLayout.getInDimSizeLog2(kLane))) {
+    auto basis = srcToSharedLayout.getBasis(kLane, inLane)[0];
+    if (basis >= upperLimit) {
       return false;
     }
   }
