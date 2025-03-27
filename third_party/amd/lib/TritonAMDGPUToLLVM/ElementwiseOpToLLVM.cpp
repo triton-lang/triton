@@ -24,7 +24,7 @@ namespace {
 // Data type conversion utility functions
 //===----------------------------------------------------------------------===//
 // Convert Ocp Fp8/Bf8 to Fp16/Bf16/Fp32 on CDNA4
-template <typename convertOp>
+template <typename ConvertOp>
 static SmallVector<Value>
 cvtScalePkUpcastFromFp8(Location loc, ConversionPatternRewriter &rewriter,
                         Value v0, Value v1) {
@@ -39,13 +39,13 @@ cvtScalePkUpcastFromFp8(Location loc, ConversionPatternRewriter &rewriter,
 
   auto resType = i32_ty;
   auto dstType = f32_ty;
-  if constexpr (std::is_same_v<convertOp, ROCDL::CvtScaleF32PkF32Fp8Op> ||
-                std::is_same_v<convertOp, ROCDL::CvtScaleF32PkF32Bf8Op>) {
+  if constexpr (std::is_same_v<ConvertOp, ROCDL::CvtScaleF32PkF32Fp8Op> ||
+                std::is_same_v<ConvertOp, ROCDL::CvtScaleF32PkF32Bf8Op>) {
     resType = i64_ty;
     dstType = f32_ty;
-  } else if constexpr (std::is_same_v<convertOp,
+  } else if constexpr (std::is_same_v<ConvertOp,
                                       ROCDL::CvtScaleF32PkF16Fp8Op> ||
-                       std::is_same_v<convertOp,
+                       std::is_same_v<ConvertOp,
                                       ROCDL::CvtScaleF32PkF16Bf8Op>) {
     resType = i32_ty;
     dstType = f16_ty;
@@ -55,7 +55,7 @@ cvtScalePkUpcastFromFp8(Location loc, ConversionPatternRewriter &rewriter,
   }
   Value scale = b.f32_val(1);
   Value select = b.false_val();
-  auto result = rewriter.create<convertOp>(loc, resType, i32v, scale, select);
+  auto result = rewriter.create<ConvertOp>(loc, resType, i32v, scale, select);
   auto retVecTy = vec_ty(dstType, 2);
   auto retVec = b.bitcast(result, retVecTy);
   SmallVector<Value> ret(2);
@@ -65,7 +65,7 @@ cvtScalePkUpcastFromFp8(Location loc, ConversionPatternRewriter &rewriter,
 }
 
 // Convert Fp16/Bf16/Fp32 to OCP Fp8/Bf8 on CDNA4
-template <typename convertOp>
+template <typename ConvertOp>
 static SmallVector<Value>
 cvtScalePkDowncastToFp8(Location loc, ConversionPatternRewriter &rewriter,
                         Value v0, Value v1) {
@@ -76,9 +76,9 @@ cvtScalePkDowncastToFp8(Location loc, ConversionPatternRewriter &rewriter,
   Value select = b.false_val();
 
   Value result;
-  if constexpr (std::is_same_v<convertOp, ROCDL::CvtScaleF32PkFp8F32Op> ||
-                std::is_same_v<convertOp, ROCDL::CvtScaleF32PkBf8F32Op>) {
-    result = rewriter.create<convertOp>(loc, v2I16Ty, v2I16Vec, v0, v1, scale,
+  if constexpr (std::is_same_v<ConvertOp, ROCDL::CvtScaleF32PkFp8F32Op> ||
+                std::is_same_v<ConvertOp, ROCDL::CvtScaleF32PkBf8F32Op>) {
+    result = rewriter.create<ConvertOp>(loc, v2I16Ty, v2I16Vec, v0, v1, scale,
                                         select);
   } else {
     Type v2F16Ty = vec_ty(v0.getType(), 2);
@@ -87,7 +87,7 @@ cvtScalePkDowncastToFp8(Location loc, ConversionPatternRewriter &rewriter,
     auto idx1 = b.i32_val(1);
     srcVec = b.insert_element(v2F16Ty, srcVec, v0, idx0);
     srcVec = b.insert_element(v2F16Ty, srcVec, v1, idx1);
-    result = rewriter.create<convertOp>(loc, v2I16Ty, v2I16Vec, srcVec, scale,
+    result = rewriter.create<ConvertOp>(loc, v2I16Ty, v2I16Vec, srcVec, scale,
                                         select);
   }
   auto fp8x4VecTy = vec_ty(i8_ty, 4);
@@ -296,7 +296,7 @@ static Value cvtFp16ToFp32(Location loc, ConversionPatternRewriter &rewriter,
 }
 
 // Convert Bf8/Fp8 to Fp32 on CDNA3
-template <typename convertOp>
+template <typename ConvertOp>
 static SmallVector<Value> cvtPkF8ToFp32(Location loc,
                                         ConversionPatternRewriter &rewriter,
                                         Value v0, Value v1) {
@@ -313,7 +313,7 @@ static SmallVector<Value> cvtPkF8ToFp32(Location loc,
   auto dstType = f32_ty;
 
   Value select = b.false_val();
-  auto result = rewriter.create<convertOp>(loc, resType, i32v, select);
+  auto result = rewriter.create<ConvertOp>(loc, resType, i32v, select);
   auto f32x2VecTy = vec_ty(dstType, 2);
   auto retVec = b.bitcast(result, f32x2VecTy);
   SmallVector<Value> ret(2);
@@ -323,7 +323,7 @@ static SmallVector<Value> cvtPkF8ToFp32(Location loc,
 }
 
 // Convert Fp32 to Bf8/Fp8 on CDNA3
-template <typename convertOp>
+template <typename ConvertOp>
 static SmallVector<Value> cvtPkFp32ToF8(Location loc,
                                         ConversionPatternRewriter &rewriter,
                                         Value v0, Value v1) {
@@ -333,7 +333,7 @@ static SmallVector<Value> cvtPkFp32ToF8(Location loc,
   Value select = b.false_val();
 
   Value result;
-  result = rewriter.create<convertOp>(loc, v2I16Ty, v0, v1, old, select);
+  result = rewriter.create<ConvertOp>(loc, v2I16Ty, v0, v1, old, select);
   auto fp8x4VecTy = vec_ty(i8_ty, 4);
   auto fp8x4Vec = b.bitcast(result, fp8x4VecTy);
   SmallVector<Value> ret(2);
@@ -459,7 +459,6 @@ Fp16_to_Fp8E5M2FNUZ_HW(Location loc, ConversionPatternRewriter &rewriter,
   auto f32_1 = cvtFp16ToFp32(loc, rewriter, v[1]);
 
   // Convert fp32 to bf8
-  // return cvtFp32ToFp8(loc, rewriter, f32_0, f32_1, fp8_format);
   return cvtPkFp32ToF8<ROCDL::CvtPkBf8F32Op>(loc, rewriter, f32_0, f32_1);
 }
 
