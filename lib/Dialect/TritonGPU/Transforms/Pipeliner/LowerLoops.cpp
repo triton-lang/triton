@@ -934,7 +934,7 @@ void createBarrierAndWaitOps(scf::ForOp forOp, CoarseSchedule &schedule,
       if (newWaitRequired) {
         // Remove any wait points that are redundant with respect to the load.
         llvm::erase_if(waitPoints, [&](const auto &wp) {
-          return isWaitRedundant(loadWP, wp);
+          return isWaitRedundant(wp, loadWP);
         });
         waitPoints.push_back(loadWP);
       }
