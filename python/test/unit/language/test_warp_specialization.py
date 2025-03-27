@@ -6,6 +6,13 @@ import triton.language as tl
 
 from triton._internal_testing import is_cuda
 
+if torch.cuda.is_available():
+    from triton._C.libtriton import nvidia
+    cublas_workspace = torch.empty(32 * 1024 * 1024, device="cuda", dtype=torch.uint8)
+    cublas = nvidia.cublas.CublasLt(cublas_workspace)
+else:
+    cublas = None
+
 
 @pytest.mark.skipif(not is_cuda(), reason="warp specialization is only supported on NVIDIA")
 def test_warp_specialize_basic_ir(tmp_path: pathlib.Path):
@@ -127,6 +134,7 @@ def matmul_tma_ws_kernel(  #
         BLOCK_SIZE_N: tl.constexpr,  #
         BLOCK_SIZE_K: tl.constexpr,  #
         GROUP_SIZE_M: tl.constexpr,  #
+        USE_FP8: tl.constexpr,  #
 ):
     a_desc = tl.make_tensor_descriptor(a_ptr, shape=[M, K], strides=[a_stride0, a_stride1],
                                        block_shape=[BLOCK_SIZE_M, BLOCK_SIZE_K])
@@ -151,23 +159,34 @@ def matmul_tma_ws_kernel(  #
         b = b_desc.load((off_bn, off_k))
         accumulator = tl.dot(a, b.T, accumulator)
 
-    c = accumulator.to(tl.float16)
+    c = accumulator.to(tl.float8e4nv if USE_FP8 else tl.float16)
     c_desc.store((off_am, off_bn), c)
 
 
+def exceeds_smem_capacity(num_stages, BLOCK_M, BLOCK_N, BLOCK_K, use_fp8):
+    return (num_stages * BLOCK_K * (BLOCK_M + BLOCK_N) + BLOCK_M * BLOCK_N) * (1 if use_fp8 else 2) > 228 * 1024
+
+
 @pytest.mark.parametrize("M, N, K", [(32, 32, 32), (8192, 8192, 512)])
-@pytest.mark.parametrize("BLOCK_SIZE_M, BLOCK_SIZE_N, BLOCK_SIZE_K", [(128, 128, 64), (128, 128, 128)])
+@pytest.mark.parametrize("BLOCK_SIZE_M", [128])
+@pytest.mark.parametrize("BLOCK_SIZE_N", [128, 256])
+@pytest.mark.parametrize("BLOCK_SIZE_K", [64, 128])
 @pytest.mark.parametrize("num_stages", [2, 3, 4])
 @pytest.mark.parametrize("num_warps", [4, 8])
+@pytest.mark.parametrize("use_fp8", [False, True])
 @pytest.mark.skipif(torch.cuda.get_device_capability()[0] < 10, reason="Requires compute capability >= 10")
-def test_warp_specialize_tma_matmul(M, N, K, BLOCK_SIZE_M, BLOCK_SIZE_N, BLOCK_SIZE_K, num_stages, num_warps):
+def test_warp_specialize_tma_matmul(M, N, K, BLOCK_SIZE_M, BLOCK_SIZE_N, BLOCK_SIZE_K, num_stages, num_warps, use_fp8):
+    if exceeds_smem_capacity(num_stages, BLOCK_SIZE_M, BLOCK_SIZE_N, BLOCK_SIZE_K, use_fp8=use_fp8):
+        pytest.skip("uses too much shared memory")
+    dtype = torch.float8_e4m3fn if use_fp8 else torch.float16
+
     GROUP_SIZE_M = 8
 
     device = "cuda"
     torch.manual_seed(42)
-    A = torch.randn((M, K), dtype=torch.float16, device=device)
-    B = torch.randn((N, K), dtype=torch.float16, device=device)
-    C = torch.randn((M, N), dtype=torch.float16, device=device)
+    A = torch.randn((M, K), dtype=torch.float16, device=device).to(dtype)
+    B = torch.randn((N, K), dtype=torch.float16, device=device).to(dtype)
+    C = torch.randn((M, N), dtype=torch.float16, device=device).to(dtype)
 
     def alloc_fn(size, align, stream):
         return torch.empty(size, dtype=torch.int8, device="cuda")
@@ -176,13 +195,15 @@ def test_warp_specialize_tma_matmul(M, N, K, BLOCK_SIZE_M, BLOCK_SIZE_N, BLOCK_S
 
     grid = lambda META: (triton.cdiv(M, META["BLOCK_SIZE_M"]) * triton.cdiv(N, META["BLOCK_SIZE_N"]), )
     kernel = matmul_tma_ws_kernel[grid](A, B, C, *A.stride(), *B.stride(), *C.stride(), M, N, K, num_stages,
-                                        BLOCK_SIZE_M, BLOCK_SIZE_N, BLOCK_SIZE_K, GROUP_SIZE_M, num_warps=num_warps)
+                                        BLOCK_SIZE_M, BLOCK_SIZE_N, BLOCK_SIZE_K, GROUP_SIZE_M, num_warps=num_warps,
+                                        USE_FP8=use_fp8)
     ttgir = kernel.asm["ttgir"]
     assert "ttng.tc_gen5_mma" in ttgir
     assert "ttg.warp_specialize" in ttgir
 
-    ref_out = torch.matmul(A, B.T).to(torch.float16)
-    torch.testing.assert_close(ref_out, C, atol=0.03, rtol=0.03)
+    ref_out = torch.empty((M, N), dtype=dtype, device=device)
+    cublas.matmul(A, B, ref_out)
+    torch.testing.assert_close(ref_out.to(torch.float16), C.to(torch.float16), atol=0.03, rtol=0.03)
 
 
 @triton.jit
@@ -198,6 +219,7 @@ def matmul_tma_persistent_ws_kernel(  #
         BLOCK_SIZE_K: tl.constexpr,  #
         GROUP_SIZE_M: tl.constexpr,  #
         NUM_SMS: tl.constexpr,  #
+        USE_FP8: tl.constexpr,  #
 ):
     a_desc = tl.make_tensor_descriptor(a_ptr, shape=[M, K], strides=[a_stride0, a_stride1],
                                        block_shape=[BLOCK_SIZE_M, BLOCK_SIZE_K])
@@ -224,25 +246,32 @@ def matmul_tma_persistent_ws_kernel(  #
             b = b_desc.load((off_bn, off_k))
             accumulator = tl.dot(a, b.T, accumulator)
 
-        c = accumulator.to(tl.float16)
+        c = accumulator.to(tl.float8e4nv if USE_FP8 else tl.float16)
         c_desc.store((off_am, off_bn), c)
 
 
 @pytest.mark.parametrize("M, N, K", [(32, 32, 32), (8192, 8192, 512)])
-@pytest.mark.parametrize("BLOCK_SIZE_M, BLOCK_SIZE_N, BLOCK_SIZE_K", [(128, 128, 64), (128, 128, 128)])
+@pytest.mark.parametrize("BLOCK_SIZE_M", [128])
+@pytest.mark.parametrize("BLOCK_SIZE_N", [128, 256])
+@pytest.mark.parametrize("BLOCK_SIZE_K", [64, 128])
 @pytest.mark.parametrize("num_stages", [2, 3, 4])
 @pytest.mark.parametrize("num_warps", [4, 8])
+@pytest.mark.parametrize("use_fp8", [False, True])
 @pytest.mark.skipif(torch.cuda.get_device_capability()[0] < 10, reason="Requires compute capability >= 10")
-def test_warp_specialize_tma_matmul_persistent(M, N, K, BLOCK_SIZE_M, BLOCK_SIZE_N, BLOCK_SIZE_K, num_stages,
-                                               num_warps):
+def test_warp_specialize_tma_matmul_persistent(M, N, K, BLOCK_SIZE_M, BLOCK_SIZE_N, BLOCK_SIZE_K, num_stages, num_warps,
+                                               use_fp8):
+    if exceeds_smem_capacity(num_stages, BLOCK_SIZE_M, BLOCK_SIZE_N, BLOCK_SIZE_K, use_fp8):
+        pytest.skip("uses too much shared memory")
+    dtype = torch.float8_e4m3fn if use_fp8 else torch.float16
+
     GROUP_SIZE_M = 8
     NUM_SMS = torch.cuda.get_device_properties("cuda").multi_processor_count
 
     device = "cuda"
     torch.manual_seed(42)
-    A = torch.randn((M, K), dtype=torch.float16, device=device)
-    B = torch.randn((N, K), dtype=torch.float16, device=device)
-    C = torch.randn((M, N), dtype=torch.float16, device=device)
+    A = torch.randn((M, K), dtype=torch.float16, device=device).to(dtype)
+    B = torch.randn((N, K), dtype=torch.float16, device=device).to(dtype)
+    C = torch.randn((M, N), dtype=torch.float16, device=device).to(dtype)
 
     def alloc_fn(size, align, stream):
         return torch.empty(size, dtype=torch.int8, device="cuda")
@@ -257,10 +286,11 @@ def test_warp_specialize_tma_matmul_persistent(M, N, K, BLOCK_SIZE_M, BLOCK_SIZE
 
     kernel = matmul_tma_persistent_ws_kernel[grid](A, B, C, *A.stride(), *B.stride(), *C.stride(), M, N, K, num_stages,
                                                    BLOCK_SIZE_M, BLOCK_SIZE_N, BLOCK_SIZE_K, GROUP_SIZE_M, NUM_SMS,
-                                                   num_warps=num_warps)
+                                                   num_warps=num_warps, USE_FP8=use_fp8)
     ttgir = kernel.asm["ttgir"]
     assert "ttng.tc_gen5_mma" in ttgir
     assert "ttg.warp_specialize" in ttgir
 
-    ref_out = torch.matmul(A, B.T).to(torch.float16)
-    torch.testing.assert_close(ref_out, C, atol=0.03, rtol=0.03)
+    ref_out = torch.empty((M, N), dtype=dtype, device=device)
+    cublas.matmul(A, B, ref_out)
+    torch.testing.assert_close(ref_out.to(torch.float16), C.to(torch.float16), atol=0.03, rtol=0.03)
