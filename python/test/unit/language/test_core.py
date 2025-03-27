@@ -1496,6 +1496,7 @@ def test_noinline(mode, device):
 @pytest.mark.parametrize(
     "op, dtype_x_str, mode, sem",
     itertools.chain.from_iterable([[
+        ('add', 'bfloat16', mode, sem),
         ('add', 'float16', mode, sem),
         ('add', 'uint32', mode, sem),
         ('add', 'int32', mode, sem),
@@ -1537,13 +1538,15 @@ def test_atomic_rmw(op, dtype_x_str, mode, sem, device):
     sem_arg = sem if sem is None else f'"{sem}"'
     kernel = patch_kernel(kernel, {'GENERATE_TEST_HERE': f'tl.atomic_{op}(Z, x, sem={sem_arg})'})
     numpy_op = {'add': np.sum, 'max': np.max, 'min': np.min}[op]
-    max_neutral = float('-inf') if dtype_x_str in float_dtypes else np.iinfo(getattr(np, dtype_x_str)).min
-    min_neutral = float('inf') if dtype_x_str in float_dtypes else np.iinfo(getattr(np, dtype_x_str)).max
+    dtype_x_np = np.float32 if dtype_x_str == 'bfloat16' else getattr(np, dtype_x_str)
+
+    max_neutral = float('-inf') if dtype_x_str in float_dtypes_with_bfloat16 else np.iinfo(dtype_x_np).min
+    min_neutral = float('inf') if dtype_x_str in float_dtypes_with_bfloat16 else np.iinfo(dtype_x_np).max
     neutral = {'add': 0, 'max': max_neutral, 'min': min_neutral}[op]
 
     # triton result
     rs = RandomState(17)
-    x = np.array([2**i for i in range(n_programs)], dtype=getattr(np, dtype_x_str))
+    x = np.array([2**i for i in range(n_programs)], dtype=dtype_x_np)
     if mode == 'all_neg':
         x = -np.abs(x)
     if mode == 'all_pos':
@@ -1554,18 +1557,21 @@ def test_atomic_rmw(op, dtype_x_str, mode, sem, device):
     if mode == 'max_pos':
         idx = rs.randint(n_programs, size=(1, )).item()
         x[idx] = np.max(np.abs(x)) + 1
-    x_tri = to_triton(x, device=device)
+    x_tri = to_triton(x, dst_type=dtype_x_str, device=device)
 
-    z_tri = to_triton(np.array([neutral], dtype=getattr(np, dtype_x_str)), device=device)
+    z_tri = to_triton(np.array([neutral], dtype=dtype_x_np), dst_type=dtype_x_str, device=device)
     h = kernel[(n_programs, )](x_tri, z_tri)
     # torch result
-    z_ref = numpy_op(x).astype(getattr(np, dtype_x_str))
+    z_ref = numpy_op(x).astype(dtype_x_np)
     # compare
     exact = op not in ['add']
-    if exact:
-        assert z_ref.item() == to_numpy(z_tri).item()
-    else:
-        np.testing.assert_allclose(z_ref, to_numpy(z_tri), rtol=0.01)
+
+    # Do not check accuracy for cuda arch in the case of bf16
+    if dtype_x_str != 'bfloat16' or not is_cuda():
+        if exact:
+            assert z_ref.item() == to_numpy(z_tri).item()
+        else:
+            np.testing.assert_allclose(z_ref, to_numpy(z_tri), rtol=0.01)
     sem_str = "acq_rel" if sem is None else sem
     if not is_cuda():
         return
@@ -1594,7 +1600,7 @@ def test_atomic_rmw_predicate(num_ctas, device):
                           for shape in [(2, 2), (2, 8), (8, 2), (8, 8), (32, 32), (64, 64)]
                           for axis in [0, 1]
                           for num_ctas in num_ctas_list
-                          for dtype_x_str in ['float16', 'float32', 'uint64', 'int64', 'float64']
+                          for dtype_x_str in ['bfloat16', 'float16', 'float32', 'uint64', 'int64', 'float64']
                           for check_return_val in ([True, False] if is_hip() else [True])])
 def test_tensor_atomic_rmw(shape, axis, num_ctas, dtype_x_str, check_return_val, device):
     check_type_supported(dtype_x_str, device)
@@ -1627,11 +1633,13 @@ def test_tensor_atomic_rmw(shape, axis, num_ctas, dtype_x_str, check_return_val,
             if RETURN_VAL:
                 tl.store(OLD + off1, old)
 
+    dtype_x_np = np.float32 if dtype_x_str == 'bfloat16' else getattr(np, dtype_x_str)
+
     rs = RandomState(17)
     x = numpy_random((shape0, shape1), dtype_str=dtype_x_str, rs=rs)
     z_shape = (shape0, ) if axis == 1 else (shape1, )
     z = numpy_random(z_shape, dtype_str=dtype_x_str, rs=rs)
-    old = np.zeros(z_shape, dtype=getattr(np, dtype_x_str))
+    old = np.zeros(z_shape, dtype=dtype_x_np)
     # reference results
     if x.dtype == np.float16:
         # do the sum in float32 to reduce numerical variation
@@ -1660,8 +1668,9 @@ def test_tensor_atomic_rmw(shape, axis, num_ctas, dtype_x_str, check_return_val,
 @pytest.mark.parametrize("size, num_ctas, dtype_x_str", [(size, num_ctas, dtype_x_str)
                                                          for size in [2, 4, 8, 32, 64, 128]
                                                          for num_ctas in num_ctas_list
-                                                         for dtype_x_str in ['float16', 'float32']])
+                                                         for dtype_x_str in ['bfloat16', 'float16', 'float32']])
 def test_tensor_atomic_add_non_exclusive_offset(size, num_ctas, dtype_x_str, device):
+    check_type_supported(dtype_x_str, device)
 
     @triton.jit
     def kernel(X, val, NUM: tl.constexpr):
@@ -1675,7 +1684,9 @@ def test_tensor_atomic_add_non_exclusive_offset(size, num_ctas, dtype_x_str, dev
     val = torch.randn((size**2), dtype=getattr(torch, dtype_x_str), device=device)
     kernel[(1, )](x, val, size, num_warps=1, num_ctas=num_ctas)
     ref = val[0::2] + val[1::2]
-    torch.testing.assert_close(ref, x.reshape(math.prod(shape)))
+
+    if dtype_x_str != 'bfloat16' or not is_cuda():
+        torch.testing.assert_close(ref, x.reshape(math.prod(shape)))
 
 
 @pytest.mark.interpreter
@@ -1685,7 +1696,7 @@ def test_tensor_atomic_add_non_exclusive_offset(size, num_ctas, dtype_x_str, dev
                           for idx_order in ['increase', 'decrease', 'random_no_duplication', 'random']
                           for mask_step in range(1, 5)
                           for num_ctas in num_ctas_list
-                          for dtype_x_str in ['float16', 'float32']])
+                          for dtype_x_str in ['bfloat16', 'float16', 'float32']])
 def test_tensor_atomic_add_access_patterns(shape, idx_order, mask_step, num_ctas, dtype_x_str, device):
     check_type_supported(dtype_x_str, device)
     if is_interpreter():
@@ -1726,7 +1737,8 @@ def test_tensor_atomic_add_access_patterns(shape, idx_order, mask_step, num_ctas
             cnt += 1
 
     kernel[(1, )](val, idx, dst, shape0, shape1, mask_step, 64, num_ctas=num_ctas)
-    np.testing.assert_allclose(to_numpy(dst_ref), to_numpy(dst), atol=1e-2)
+    if not dtype_x_str == "bfloat16":
+        np.testing.assert_allclose(to_numpy(dst_ref), to_numpy(dst), atol=1e-2)
 
 
 @pytest.mark.interpreter
