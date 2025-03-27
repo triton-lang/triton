@@ -9,6 +9,7 @@
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
+#include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 
 using namespace mlir;
 using namespace mlir::triton::gpu;
@@ -98,7 +99,8 @@ TritonGPUConversionTarget::TritonGPUConversionTarget(
 
   addDynamicallyLegalDialect<arith::ArithDialect, math::MathDialect,
                              triton::TritonDialect, cf::ControlFlowDialect,
-                             scf::SCFDialect, ub::UBDialect>(
+                             scf::SCFDialect, ub::UBDialect,
+                             triton::nvidia_gpu::TritonNvidiaGPUDialect>(
       [&](Operation *op) {
         bool hasLegalRegions = true;
         for (auto &region : op->getRegions()) {

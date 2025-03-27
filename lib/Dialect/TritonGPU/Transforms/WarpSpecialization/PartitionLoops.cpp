@@ -4,8 +4,10 @@
 #include "mlir/Pass/Pass.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 #include "mlir/Transforms/RegionUtils.h"
+#include "triton/Conversion/TritonToTritonGPU/Passes.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/Partition.h"
+#include "triton/Dialect/TritonGPU/Transforms/Passes.h"
 #include "triton/Dialect/TritonGPU/Transforms/PipeliningUtility.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "triton/Dialect/TritonGPU/Transforms/WarpSpecialization.h"
@@ -102,6 +104,47 @@ slicePartition(scf::ForOp baseLoop, const WarpSchedule &baseSchedule,
   eraseOtherPartitions(loop, schedule, partition);
 
   return std::move(block);
+}
+
+//===----------------------------------------------------------------------===//
+// shrinkWarps
+//===----------------------------------------------------------------------===//
+
+static LogicalResult shrinkWarps(Region *region, unsigned numWarps) {
+  OpBuilder b(region->getContext());
+  OwningOpRef<ModuleOp> container = ModuleOp::create(region->getLoc());
+  Block &containerBlock = container->getBodyRegion().front();
+
+  b.setInsertionPointToStart(&containerBlock);
+  auto containerFunc =
+      b.create<FuncOp>(region->getLoc(), "container",
+                       b.getFunctionType(region->getArgumentTypes(), {}));
+  containerFunc.getBody().takeBody(*region);
+
+  mlir::AttrTypeReplacer wipeout;
+  wipeout.addReplacement([](RankedTensorType ty) {
+    return RankedTensorType::get(ty.getShape(), ty.getElementType());
+  });
+  wipeout.addReplacement([](TensorDescType ty) -> std::pair<Type, WalkResult> {
+    return {ty, WalkResult::skip()};
+  });
+  wipeout.recursivelyReplaceElementsIn(*container, /*replaceAttrs=*/false,
+                                       /*replaceLocs=*/false,
+                                       /*replaceTypes=*/true);
+
+  PassManager pm(region->getContext());
+  pm.enableVerifier(false);
+
+  pm.addPass(createConvertTritonToTritonGPUPass("cuda:100", numWarps));
+  pm.addPass(createTritonGPUCoalesce());
+  pm.addPass(createTritonGPURemoveLayoutConversions());
+  pm.addPass(createTritonGPUOptimizeThreadLocality());
+  pm.addPass(createTritonGPURemoveLayoutConversions());
+  if (failed(pm.run(*container)))
+    return failure();
+
+  region->takeBody(containerFunc.getBody());
+  return success();
 }
 
 //===----------------------------------------------------------------------===//
@@ -260,14 +303,27 @@ struct PartitionLoops
 void PartitionLoops::runOnOperation() {
   // Collect for loops to warp specialize. This pass expects the loop to already
   // be scheduled.
-  SmallVector<scf::ForOp> loops;
-  getOperation().walk([&](scf::ForOp loop) {
-    if (loop->hasAttrOfType<ArrayAttr>(kPartitionStagesAttrName))
-      loops.push_back(loop);
-  });
+  // SmallVector<scf::ForOp> loops;
+  // getOperation().walk([&](scf::ForOp loop) {
+  //  if (loop->hasAttrOfType<ArrayAttr>(kPartitionStagesAttrName))
+  //    loops.push_back(loop);
+  //});
 
-  for (scf::ForOp loop : loops) {
-    if (failed(partitionLoop(loop)))
-      continue;
-  }
+  // for (scf::ForOp loop : loops) {
+  //   if (failed(partitionLoop(loop)))
+  //     continue;
+  // }
+  getOperation().walk([](WarpSpecializeOp op) {
+    SmallVector<int32_t> newNumWarps;
+    for (auto [numWarps, region] :
+         llvm::zip(op.getPartitionNumWarps(), op.getPartitionRegions())) {
+      if (numWarps == 8) {
+        (void)shrinkWarps(region, 1);
+        newNumWarps.push_back(1);
+      } else {
+        newNumWarps.push_back(numWarps);
+      }
+    }
+    op.setPartitionNumWarps(newNumWarps);
+  });
 }

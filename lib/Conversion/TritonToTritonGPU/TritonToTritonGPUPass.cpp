@@ -10,6 +10,7 @@
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/TritonGPUConversion.h"
+#include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "llvm/ADT/APSInt.h"
 #include <numeric>
 
@@ -431,50 +432,34 @@ static RankedTensorType getNewIndicesType(RankedTensorType type,
                                newEncoding);
 }
 
-struct TritonDescriptorGatherPattern
-    : public OpConversionPattern<triton::DescriptorGatherOp> {
-  using OpConversionPattern::OpConversionPattern;
+// Function for converting any gather or scatter op that requires a specific
+// index layout. This also handles converting result types if there are any.
+static LogicalResult convertGatherScatterOp(Operation *op, OpOperand &indices,
+                                            ConversionPatternRewriter &b,
+                                            const TypeConverter &tc) {
+  auto type = cast<RankedTensorType>(indices.get().getType());
+  RankedTensorType newType =
+      getNewIndicesType(type, lookupThreadsPerWarp(b), lookupNumWarps(op));
+  if (!newType)
+    return failure();
+  Value index = b.create<ConvertLayoutOp>(op->getLoc(), newType, indices.get());
+  b.modifyOpInPlace(op, [&] {
+    indices.set(index);
+    for (OpResult result : op->getOpResults())
+      result.setType(tc.convertType(result.getType()));
+  });
+  return success();
+}
+
+template <typename OpT>
+struct GatherScatterOpPattern : public OpConversionPattern<OpT> {
+  using OpConversionPattern<OpT>::OpConversionPattern;
 
   LogicalResult
-  matchAndRewrite(triton::DescriptorGatherOp op, OpAdaptor adaptor,
+  matchAndRewrite(OpT op, typename OpT::Adaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    auto numThreads = lookupThreadsPerWarp(rewriter);
-    auto numWarps = lookupNumWarps(op);
-    RankedTensorType newType = getNewIndicesType(
-        cast<RankedTensorType>(adaptor.getXOffsets().getType()), numThreads,
-        numWarps);
-    if (!newType)
-      return failure();
-
-    Value newInd = rewriter.create<ConvertLayoutOp>(op.getLoc(), newType,
-                                                    adaptor.getXOffsets());
-    rewriter.replaceOpWithNewOp<triton::DescriptorGatherOp>(
-        op, getTypeConverter()->convertType(op.getType()), adaptor.getDesc(),
-        newInd, adaptor.getYOffset());
-    return success();
-  }
-};
-
-struct TritonDescriptorScatterPattern
-    : public OpConversionPattern<triton::DescriptorScatterOp> {
-  using OpConversionPattern::OpConversionPattern;
-
-  LogicalResult
-  matchAndRewrite(triton::DescriptorScatterOp op, OpAdaptor adaptor,
-                  ConversionPatternRewriter &rewriter) const override {
-    auto numThreads = lookupThreadsPerWarp(rewriter);
-    auto numWarps = lookupNumWarps(op);
-    RankedTensorType newType = getNewIndicesType(
-        cast<RankedTensorType>(adaptor.getXOffsets().getType()), numThreads,
-        numWarps);
-    if (!newType)
-      return failure();
-
-    Value newInd = rewriter.create<ConvertLayoutOp>(op.getLoc(), newType,
-                                                    adaptor.getXOffsets());
-    rewriter.replaceOpWithNewOp<triton::DescriptorScatterOp>(
-        op, adaptor.getDesc(), newInd, adaptor.getYOffset(), adaptor.getSrc());
-    return success();
+    return convertGatherScatterOp(op, op.getXOffsetsMutable(), rewriter,
+                                  *this->typeConverter);
   }
 };
 
@@ -619,10 +604,13 @@ void populateTritonPatterns(TritonGPUTypeConverter &typeConverter,
       GenericOpPattern<triton::ReduceReturnOp>, TritonScanPattern,
       GenericOpPattern<triton::ScanReturnOp>,
       GenericOpPattern<triton::MakeRangeOp>, TritonExpandDimsPattern,
-      TritonTransPattern, TritonDotPattern, TritonDescriptorGatherPattern,
-      TritonDescriptorScatterPattern, GenericOpPattern<triton::LoadOp>,
-      GenericOpPattern<triton::StoreOp>, GenericOpPattern<triton::HistogramOp>,
-      GenericOpPattern<triton::GatherOp>,
+      TritonTransPattern, TritonDotPattern,
+      GatherScatterOpPattern<DescriptorGatherOp>,
+      GatherScatterOpPattern<DescriptorScatterOp>,
+      GatherScatterOpPattern<triton::nvidia_gpu::AsyncTMAGatherOp>,
+      GatherScatterOpPattern<triton::nvidia_gpu::AsyncTMAScatterOp>,
+      GenericOpPattern<triton::LoadOp>, GenericOpPattern<triton::StoreOp>,
+      GenericOpPattern<triton::HistogramOp>, GenericOpPattern<triton::GatherOp>,
       GenericOpPattern<triton::ExternElementwiseOp>,
       GenericOpPattern<triton::PrintOp>, GenericOpPattern<triton::AssertOp>,
       GenericOpPattern<triton::AtomicCASOp>,

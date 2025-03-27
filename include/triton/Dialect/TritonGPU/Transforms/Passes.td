@@ -155,6 +155,9 @@ def TritonGPUPartitionLoops : Pass<"tritongpu-partition-loops", "mlir::ModuleOp"
   let dependentDialects = ["mlir::triton::gpu::TritonGPUDialect"];
 }
 
+def TritonGPUOptimizePartitionWarps : Pass<"tritongpu-optimize-partition-warps", "mlir::ModuleOp"> {
+}
+
 def TritonGPULoadMMASpecialization : Pass<"tritongpu-load-mma-specialization", "mlir::ModuleOp"> {
   let summary = "load MMA specialization";
 
