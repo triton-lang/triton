@@ -15,6 +15,8 @@
 using namespace mlir;
 namespace tt = mlir::triton;
 namespace ttg = mlir::triton::gpu;
+using ::mlir::LLVM::AMD::isChainDotHead;
+using ::mlir::LLVM::AMD::isChainDotTail;
 using ::mlir::LLVM::AMD::scaleDotElemTypeToMLIRType;
 using mlir::triton::gpu::chooseScaledMfmaOperandLayout;
 using mlir::triton::gpu::chooseScaledMfmaScaleLayout;
@@ -54,49 +56,6 @@ FailureOr<ScaleDotElemType> mlirTypeToScaledElemType(Type type) {
       .Case<Float6E2M3FNType>([](Type) { return ScaleDotElemType::E2M3; })
       .Case<Float4E2M1FNType>([](Type) { return ScaleDotElemType::E2M1; })
       .Default([](Type) { return failure(); });
-}
-
-// Check if the result of this tl.dot is used as opA of another tl.dot
-// in the same region
-bool isChainDotHead(tt::DotOpInterface dotOp) {
-  auto isInSameRegion = [&dotOp](Operation *op) {
-    return op->getParentRegion() == dotOp->getParentRegion();
-  };
-  ForwardSliceOptions fwdOpt;
-  fwdOpt.filter = isInSameRegion;
-  SetVector<mlir::Operation *> fwdSlices;
-  getForwardSlice(dotOp, &fwdSlices, fwdOpt);
-  for (Operation *op : fwdSlices) {
-    if (auto dOp = dyn_cast<tt::DotOpInterface>(op)) {
-      assert(dOp != dotOp);
-      auto opA = dOp.getA().getDefiningOp();
-      if (opA && fwdSlices.contains(opA)) {
-        return true;
-      }
-    }
-  }
-  return false;
-}
-
-// Check if the opA of this tl.dot is the result of another tl.dot
-// in the same region
-bool isChainDotTail(tt::DotOpInterface dotOp) {
-  auto isInSameRegion = [&dotOp](Operation *op) {
-    return op->getParentRegion() == dotOp->getParentRegion();
-  };
-  BackwardSliceOptions bwdOpt;
-  bwdOpt.omitBlockArguments = true;
-  bwdOpt.filter = isInSameRegion;
-  SetVector<Operation *> bwdSlices;
-  Operation *opA = dotOp.getA().getDefiningOp();
-  if (!opA)
-    return false;
-  getBackwardSlice(opA, &bwdSlices, bwdOpt);
-  if (llvm::find_if(bwdSlices, [](Operation *op) {
-        return isa<tt::DotOpInterface>(op);
-      }) != bwdSlices.end())
-    return true;
-  return false;
 }
 
 SmallVector<unsigned, 3>

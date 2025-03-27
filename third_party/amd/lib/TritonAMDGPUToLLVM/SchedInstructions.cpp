@@ -1,6 +1,7 @@
 #include "SchedInstructions.h"
 #include "TritonAMDGPUToLLVM/Passes.h"
 #include "TritonAMDGPUToLLVM/TargetUtils.h"
+#include "Utility.h"
 #include "mlir/Dialect/AMDGPU/IR/AMDGPUDialect.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/LLVMIR/ROCDLDialect.h"
@@ -19,6 +20,7 @@ namespace mlir::triton {
 #define LDBG(X) LLVM_DEBUG(DBGS() << X << "\n")
 
 using namespace mlir;
+using ::mlir::LLVM::AMD::isChainDotHead;
 
 // TODO: The following passes/algorithms are applicable only for a single
 // `tt.dot` op in a `scf.for` block -i.e., a single schedule hint op per block.
@@ -425,7 +427,8 @@ struct InstructionSchedHintsRewriter
     // not supposed to be used together with IGLP OPT according to the AMDGPU
     // backend documentation.
     const bool limitSchedulingRange =
-        schedVariant == mlir::triton::amdgpu::SchedHint::local_prefetch;
+        schedVariant == mlir::triton::amdgpu::SchedHint::local_prefetch ||
+        schedVariant == mlir::triton::amdgpu::SchedHint::attention;
     ;
     Location loc = instructionSchedHint->getLoc();
     Block *block = instructionSchedHint->getBlock();
@@ -438,12 +441,11 @@ struct InstructionSchedHintsRewriter
     rewriter.setInsertionPoint(block, std::prev(block->end()));
 
     switch (schedVariant) {
-    case mlir::triton::amdgpu::SchedHint::llvm_iglp_0:
-    case mlir::triton::amdgpu::SchedHint::llvm_iglp_1:
-      createIglpOpt(rewriter, loc, static_cast<int>(schedVariant) - 1);
-      break;
     case mlir::triton::amdgpu::SchedHint::local_prefetch:
       createLocalPrefetchSchedule(rewriter, loc, instructionSchedHint);
+      break;
+    case mlir::triton::amdgpu::SchedHint::attention:
+      createIglpOpt(rewriter, loc, 2);
       break;
     case mlir::triton::amdgpu::SchedHint::none:
     default:
@@ -520,7 +522,8 @@ struct TritonAMDGPUInsertInstructionSchedHints
       return;
     }
 
-    if (schedHint != mlir::triton::amdgpu::SchedHint::none) {
+    switch (schedHint) {
+    case mlir::triton::amdgpu::SchedHint::local_prefetch:
       mod.walk([&](scf::ForOp forOp) {
         // Note, instruction schedule barriers are inserted only in the case of
         // a single `tt.dot` op in a `scf::ForOp` scope in the current
@@ -532,6 +535,28 @@ struct TritonAMDGPUInsertInstructionSchedHints
                                                                 schedHint);
         }
       });
+      break;
+    case mlir::triton::amdgpu::SchedHint::attention:
+      mod.walk([&](scf::ForOp forOp) {
+        // The attention schedule hint is inserted to the beginning of a
+        // for-loop with chained dots.
+        auto result = forOp->walk([](triton::DotOp op) {
+          if (isChainDotHead(op))
+            return WalkResult::interrupt();
+          return WalkResult::advance();
+        });
+
+        if (result.wasInterrupted()) {
+          OpBuilder rewriter(ctx);
+          rewriter.setInsertionPointToStart(forOp.getBody());
+          rewriter.create<triton::amdgpu::InstructionSchedHint>(forOp->getLoc(),
+                                                                schedHint);
+        }
+      });
+      break;
+    case mlir::triton::amdgpu::SchedHint::none:
+    default:
+      break;
     }
   }
 };

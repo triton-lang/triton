@@ -57,16 +57,14 @@ class HIPOptions:
     #
     # Current experimental scheduling variants:
     #
-    # llvm-iglp-0: injects `llvm.amdgcn.iglp_opt` intrinsic call with value `0` to the GEMM's
-    #              k-loop; i.e., "interleave DS and MFMA instructions for small GEMM kernels".
-    # llvm-iglp-1: injects `llvm.amdgcn.iglp_opt` intrinsic call with value `1` to the GEMM's
-    #              k-loop; i.e., "interleave DS and MFMA instructions for single wave small
-    #              GEMM kernels.".
     # local-prefetch: implements instruction scheduling similar to the one from the ROCm Composable
     #                 Kernel library. Note, this variant requires the use of buffer load/store ops
     #                 and a special software pipelining style - i.e., 1x LDS and 1x register
     #                 prefetch buffers for each GEMM tile.
-    instruction_sched_variant: str = 'none'
+    # attention: enables a bunch of optimizations for attention kernels, including:
+    #            - iglp 2 and sched.barrier around it
+    #            - sink-insts-to-avoid-spills flag to avoid register spills
+    schedule_hint: str = 'none'
 
     def __post_init__(self):
         default_libdir = Path(__file__).parent / 'lib'
@@ -239,7 +237,7 @@ class HIPBackend(BaseBackend):
         local_prefetch = int(os.getenv("TRITON_HIP_LOCAL_PREFETCH", "0"))
 
         # The `local-prefetch` scheduling variant requires turning on buffer ops.
-        if options.instruction_sched_variant == "local-prefetch":
+        if options.schedule_hint == "local-prefetch":
             global_prefetch = local_prefetch = 1
 
         if amd.has_matrix_core_feature(options.arch):
@@ -250,8 +248,8 @@ class HIPBackend(BaseBackend):
                                              "equivalent behavior in the past.")
             amd.passes.ttgpuir.add_stream_pipeline(pm, options.num_stages, global_prefetch, local_prefetch)
             passes.common.add_canonicalizer(pm)
-        if options.instruction_sched_variant.lower() != "none":
-            amd.passes.ttgpuir.insert_instruction_sched_hints(pm, options.instruction_sched_variant)
+        if options.schedule_hint.lower() != "none":
+            amd.passes.ttgpuir.insert_instruction_sched_hints(pm, options.schedule_hint)
         passes.ttgpuir.add_optimize_dot_operands(pm, True)
         passes.ttgpuir.add_remove_layout_conversions(pm)
         passes.ttgpuir.add_reduce_data_duplication(pm)
@@ -309,7 +307,7 @@ class HIPBackend(BaseBackend):
         passes.common.add_canonicalizer(pm)
         passes.common.add_cse(pm)
         passes.common.add_symbol_dce(pm)
-        if options.instruction_sched_variant.lower() != "none":
+        if options.schedule_hint.lower() != "none":
             amd.passes.ttgpuir.lower_instruction_sched_hints(pm, options.arch, options.num_stages)
         if os.environ.get("TRITON_DISABLE_LINE_INFO", "0") == "0":
             passes.llvmir.add_di_scope(pm)
@@ -391,7 +389,14 @@ class HIPBackend(BaseBackend):
         assert len(names) == 1
         metadata["name"] = names[0]
         # llvm -> hsaco
-        amdgcn = llvm.translate_to_asm(src, amd.TARGET_TRIPLE, options.arch, '', [], options.enable_fp_fusion, False)
+        flags = []
+        # The sink-insts-to-avoid-spills flag asks LLVM backend to sink instructions
+        # into loops to avoid register spills in the MachineSinking pass, while it
+        # can also lead to regression in some cases. But from current observation,
+        # the regression is not significant. It would be better to have some heuristics.
+        if options.schedule_hint == 'attention':
+            flags.append('sink-insts-to-avoid-spills')
+        amdgcn = llvm.translate_to_asm(src, amd.TARGET_TRIPLE, options.arch, '', flags, options.enable_fp_fusion, False)
         if os.environ.get("AMDGCN_ENABLE_DUMP", "0") == "1":
             print("// -----// AMDGCN Dump //----- //")
             print(amdgcn)
