@@ -1,9 +1,11 @@
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/Diagnostics.h"
 #include "nvidia/include/Dialect/NVWS/IR/Dialect.h"
+#include "triton/Conversion/MLIRTypes.h"
 #include "triton/Dialect/Triton/IR/Types.h"
 #include "triton/Dialect/TritonGPU/IR/Attributes.h"
 #include "triton/Dialect/TritonGPU/IR/Types.h"
+#include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallVectorExtras.h"
 
 #define GET_OP_CLASSES
@@ -186,6 +188,50 @@ LogicalResult ArefReturnOp::verify() {
     }
   }
   return success();
+}
+
+LogicalResult WarpGroupOp::verify() {
+  auto numWarps = getNumWarps();
+  auto regions = getRegions();
+  if (numWarps.size() != regions.size())
+    return emitError("Must supply numWarps for each Warp Group");
+  return success();
+}
+
+ParseResult WarpGroupOp::parse(OpAsmParser &p, OperationState &result) {
+  auto ctx = p.getBuilder().getContext();
+
+  SMLoc operandLoc = p.getCurrentLocation();
+  if (p.parseOptionalAttrDictWithKeyword(result.attributes))
+    return failure();
+
+  SmallVector<int32_t> partitionNumWarps;
+  while (succeeded(p.parseOptionalKeyword(
+      ("partition" + Twine(partitionNumWarps.size()).str())))) {
+    SMLoc regionLoc = p.getCurrentLocation();
+    if (p.parseKeyword("num_warps") || p.parseLParen() ||
+        p.parseInteger(partitionNumWarps.emplace_back()) || p.parseRParen() ||
+        p.parseRegion(*result.addRegion()))
+      return failure();
+  }
+
+  result.addAttribute(getNumWarpsAttrName(result.name),
+                      p.getBuilder().getDenseI32ArrayAttr(partitionNumWarps));
+
+  return success();
+}
+
+void WarpGroupOp::print(OpAsmPrinter &p) {
+  p.printOptionalAttrDictWithKeyword(getOperation()->getAttrs(),
+                                     {getNumWarpsAttrName()});
+
+  for (auto [i, region, numWarps] :
+       llvm::enumerate(getPartitionRegions(), getNumWarps())) {
+    p.printNewline();
+    p << "partition" << i;
+    p << " num_warps(" << numWarps << ") ";
+    p.printRegion(region, /*printEntryBlockArgs=*/false);
+  }
 }
 
 } // namespace mlir::triton::nvws

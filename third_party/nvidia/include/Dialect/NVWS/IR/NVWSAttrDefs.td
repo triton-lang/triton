@@ -31,5 +31,6 @@ class NVWS_Attr<string name, list<Trait> traits = [],
 }
 
 def NVWS_TypeArray : ArrayOfAttr<NVWS_Dialect, "TypeArray", "type_array", "Type"> {}
+def NVWS_IntArray : ArrayOfAttr<NVWS_Dialect, "IntArray", "int_array", "int"> {}
 
 #endif
