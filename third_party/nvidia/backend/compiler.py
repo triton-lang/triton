@@ -272,10 +272,10 @@ class CUDABackend(BaseBackend):
             passes.ttir.add_triton_licm(pm)
             passes.ttgpuir.add_optimize_accumulator_init(pm)
             passes.ttgpuir.add_warp_specialize(pm, opt.num_stages)
+            passes.ttgpuir.add_hoist_tmem_alloc(pm)
             passes.ttgpuir.add_pipeline(pm, opt.num_stages, dump_enabled)
             passes.ttgpuir.add_combine_tensor_select_and_if(pm)
             nvidia.passes.ttnvgpuir.add_promote_lhs_to_tmem(pm)
-            nvidia.passes.ttnvgpuir.add_keep_acc_in_tmem(pm)
             passes.common.add_canonicalizer(pm)
         else:
             passes.ttir.add_triton_licm(pm)
@@ -331,6 +331,7 @@ class CUDABackend(BaseBackend):
         proc = sm_arch_from_capability(capability)
         features = get_features(options, self.target.arch)
         triple = 'nvptx64-nvidia-cuda'
+        nvidia.set_short_ptr()
         llvm.attach_datalayout(llvm_mod, triple, proc, features)
         nvidia.set_nvvm_reflect_ftz(llvm_mod)
 
@@ -366,7 +367,7 @@ class CUDABackend(BaseBackend):
         triple = 'nvptx64-nvidia-cuda'
         proc = sm_arch_from_capability(capability)
         features = get_features(opt, self.target.arch)
-        ret = llvm.translate_to_asm(src, triple, proc, features, ['nvptx-short-ptr'], opt.enable_fp_fusion, False)
+        ret = llvm.translate_to_asm(src, triple, proc, features, [], opt.enable_fp_fusion, False)
         # Find kernel names (there should only be one)
         names = re.findall(r".visible .entry ([a-zA-Z_][a-zA-Z0-9_]*)", ret)
         assert len(names) == 1

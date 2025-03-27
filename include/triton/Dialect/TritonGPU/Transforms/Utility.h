@@ -10,6 +10,7 @@
 #include <numeric>
 
 namespace mlir {
+class DominanceInfo;
 
 namespace triton {
 class ModuleAxisInfoAnalysis;
@@ -135,6 +136,8 @@ scf::ForOp replaceForOpWithNewSignature(
     SmallVectorImpl<std::tuple<Value, Value>> &replacements);
 scf::ForOp replaceForOpWithNewSignature(OpBuilder &rewriter, scf::ForOp loop,
                                         ValueRange newIterOperands);
+Block::BlockArgListType addIterArgsToLoop(OpBuilder &rewriter, scf::ForOp &loop,
+                                          ValueRange newIterOperands);
 
 // Replace WhileOp with a new WhileOp with extra operands. The YieldOp is not
 // updated and needs to be updated separately for the loop to be correct.
@@ -213,6 +216,27 @@ triton::gpu::LocalAllocOp findShmemAlloc(Value operand);
 SmallVector<Operation *>
 getMMAsWithMultiBufferredOperands(scf::ForOp forOp,
                                   SmallVector<Operation *> &mmaOps);
+
+// Given a list of ops, find the naerest common dominator of all ops or return
+// null if one could not be found. The ops are allowed to be in different
+// regions. The result op is not necessarily one of the ops in the list.
+Operation *findNearestCommonDominator(ArrayRef<Operation *> ops,
+                                      DominanceInfo &domInfo);
+
+/// Visit the operands of `op` and the operands of any nested ops defined
+/// outside of `op`.
+void visitNestedOperands(Operation *op,
+                         function_ref<void(OpOperand &)> visitor);
+/// Visit the operands of `op` and the operands of any nested ops defined
+/// outside of `op`.
+void visitNestedOperands(Operation *op, function_ref<void(Value)> visitor);
+/// Get the operands of `op` and the operands of any nested ops defined outside
+/// of `op`.
+SetVector<Value> getNestedOperands(Operation *op);
+
+// Erase the given loop carried values from the loop, where `loop` is replaced
+// with a new loop.
+void eraseLoopCarriedValues(scf::ForOp &loop, llvm::BitVector indices);
 } // namespace mlir
 
 #endif // TRITON_DIALECT_TRITONGPU_TRANSFORMS_UTILITY_H_

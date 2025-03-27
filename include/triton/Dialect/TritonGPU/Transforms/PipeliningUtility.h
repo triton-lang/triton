@@ -14,6 +14,7 @@ namespace triton {
 static const char *kNumStagesAttrName = "tt.num_stages";
 static const char *kDisallowAccMultiBufferAttrName =
     "tt.disallow_acc_multi_buffer";
+static const char *kWarpSpecializeAttrName = "tt.warp_specialize";
 static const char *kLoopStageAttrName = "loop.stage";
 static const char *kLoopClusterAttrName = "loop.cluster";
 static const char *kScheduledMaxStageAttrName = "tt.scheduled_max_stage";
@@ -38,17 +39,6 @@ void replaceUsesAndPropagateType(OpBuilder &builder, Operation *oldUse,
 // `tt.disallow_acc_multi_buffer` set to true.
 bool getDisallowAccMultiBuffer(scf::ForOp forOp);
 
-/// Visit the operands of `op` and the operands of any nested ops defined
-/// outside of `op`.
-void visitNestedOperands(Operation *op,
-                         function_ref<void(OpOperand &)> visitor);
-/// Visit the operands of `op` and the operands of any nested ops defined
-/// outside of `op`.
-void visitNestedOperands(Operation *op, function_ref<void(Value)> visitor);
-/// Get the operands of `op` and the operands of any nested ops defined outside
-/// of `op`.
-SetVector<Value> getNestedOperands(Operation *op);
-
 // Return the definition of the given value. If the value is a loop-carried
 // dependency, return the definition and the distance to it.
 std::pair<OpResult, int64_t> getDefinitionAndDistance(scf::ForOp forOp,
@@ -71,11 +61,6 @@ void serializeLatencies(ModuleOp module, DenseMap<Operation *, int> &opLatency);
 // Deserialize the latencies of the operations in the loops from the attribute.
 DenseMap<Operation *, int> deserializeLatencies(Operation *op);
 
-// Given a result of MemDescSubview, or Alloca, create a MemDescSubview with a
-// single buffer slice (leading dimension equal to 1), at the given index.
-Value createSingleBufferView(OpBuilder &builder, Value alloc, Value idx);
-Value createSingleBufferView(OpBuilder &builder, Value alloc, int idx);
-
 // Create an allocation for multibuffered scalars.
 Value createScalarAlloc(ImplicitLocOpBuilder &rewriter, Type type,
                         unsigned numBuffers);
@@ -95,13 +80,46 @@ gpu::SharedEncodingTrait getSharedEncoding(RankedTensorType ty);
 // Get a shared encoding for a tensor based on its uses.
 gpu::SharedEncodingTrait getSharedEncoding(Operation *loadOp);
 
-// Erase the given loop carried values from the loop, where `loop` is replaced
-// with a new loop.
-void eraseLoopCarriedValues(scf::ForOp &loop, llvm::BitVector indices);
-
 // Get the number of stages to pipeline the loop with, if it is explicitly
 // specified.
 int getNumStagesOrDefault(scf::ForOp forOp, int defaultNumStages);
+
+// Given a result of MemDescSubview, or Alloca, create a MemDescSubview with a
+// single buffer slice (leading dimension equal to 1), at the given index.
+template <typename TBuilder>
+Value createSingleBufferView(TBuilder &builder, Value alloc, Value idx) {
+  assert(isa<triton::gpu::MemDescType>(alloc.getType()) &&
+         "Expected MemDescType");
+  auto allocDescType = cast<triton::gpu::MemDescType>(alloc.getType());
+  SmallVector<int64_t> shape;
+  if (allocDescType.getShape().size() > 1) {
+    shape.insert(shape.end(), allocDescType.getShape().begin() + 1,
+                 allocDescType.getShape().end());
+  } else {
+    shape.push_back(1);
+  }
+  auto viewDescType = triton::gpu::MemDescType::get(
+      shape, allocDescType.getElementType(), allocDescType.getEncoding(),
+      allocDescType.getMemorySpace(), allocDescType.getMutableMemory(),
+      /*allocShape=*/allocDescType.getAllocShape());
+  SmallVector<Value> idxs = {idx};
+  if (allocDescType.getShape().size() > 1) {
+    Value zero =
+        builder.template create<arith::ConstantIntOp>(alloc.getLoc(), 0, 32);
+    for (unsigned i = 1; i < allocDescType.getShape().size(); i++) {
+      idxs.push_back(zero);
+    }
+  }
+  return builder.template create<triton::gpu::MemDescSubviewOp>(
+      alloc.getLoc(), viewDescType, alloc, idxs);
+}
+
+template <typename TBuilder>
+Value createSingleBufferView(TBuilder &builder, Value alloc, int idx) {
+  return createSingleBufferView(
+      builder, alloc,
+      builder.template create<arith::ConstantIntOp>(alloc.getLoc(), idx, 32));
+}
 
 } // namespace triton
 } // namespace mlir

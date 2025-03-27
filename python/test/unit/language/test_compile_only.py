@@ -100,7 +100,7 @@ def test_compile_only_k_loop() -> None:
 
     pattern = (r"%(?P<TMEM_BASE>\w+) = arith.constant dense<0.000000e\+00>"
                r"(.|\n)*?"
-               r"%(?P<TMEM>\w+) = ttng\.tmem_alloc %(?P=TMEM_BASE)"
+               r"%(?P<TMEM>\w+) = ttng\.tmem_alloc (%(?P=TMEM_BASE))?"
                r"(.|\n)*?"
                r"scf\.for"
                r"(.|\n)*?"
