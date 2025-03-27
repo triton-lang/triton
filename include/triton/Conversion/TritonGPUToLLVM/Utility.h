@@ -16,6 +16,7 @@
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/LinearLayoutConversions.h"
 #include "triton/Dialect/TritonGPU/IR/Types.h"
+#include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "triton/Tools/LinearLayout.h"
 #include "triton/Tools/StrUtil.h"
@@ -333,6 +334,81 @@ public:
 
 namespace mlir {
 namespace triton {
+
+static inline void insertBarrier(OpBuilder &builder, Operation *op) {
+  auto barrierOp = builder.create<mlir::gpu::BarrierOp>(op->getLoc());
+  auto asyncTaskIds = getAsyncTaskIds(op);
+  assert(asyncTaskIds.size() <= 1);
+  if (asyncTaskIds.size() == 1) {
+    int asyncTaskId = asyncTaskIds[0];
+    int barId = asyncTaskId + nameBarrierIdBegin;
+    assert(barId < nameBarrierIdEnd);
+    auto mod = op->getParentOfType<ModuleOp>();
+    int numWarps = mlir::triton::gpu::lookupNumWarps(op);
+    int warpSize = triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod);
+    int numThreads = numWarps * warpSize;
+    barrierOp->setAttr("bar_id", builder.getI64IntegerAttr(barId));
+    barrierOp->setAttr("num_threads", builder.getI64IntegerAttr(numThreads));
+  }
+}
+
+// Delinearize supposing order is [0, 1, .. , n]
+template <typename T>
+llvm::SmallVector<T> getMultiDimIndexImpl(T linearIndex,
+                                          llvm::ArrayRef<T> shape) {
+  // shape: {a, b, c, d}  ->  accMul: {1, a, a*b, a*b*c}
+  size_t rank = shape.size();
+  T accMul = product(shape.drop_back());
+  T linearRemain = linearIndex;
+  llvm::SmallVector<T> multiDimIndex(rank);
+  for (int i = rank - 1; i >= 0; --i) {
+    multiDimIndex[i] = linearRemain / accMul;
+    linearRemain = linearRemain % accMul;
+    if (i != 0) {
+      accMul = accMul / shape[i - 1];
+    }
+  }
+  return multiDimIndex;
+}
+
+template <typename T>
+llvm::SmallVector<T> getMultiDimIndex(T linearIndex, llvm::ArrayRef<T> shape,
+                                      llvm::ArrayRef<unsigned> order) {
+  size_t rank = shape.size();
+  assert(rank == order.size());
+  auto reordered = applyPermutation(shape, order);
+  auto reorderedMultiDim = getMultiDimIndexImpl<T>(linearIndex, reordered);
+  llvm::SmallVector<T> multiDim(rank);
+  for (unsigned i = 0; i < rank; ++i) {
+    multiDim[order[i]] = reorderedMultiDim[i];
+  }
+  return multiDim;
+}
+
+// Linearize supposing order is [0, 1, .. , n]
+template <typename T>
+T getLinearIndexImpl(llvm::ArrayRef<T> multiDimIndex, llvm::ArrayRef<T> shape) {
+  assert(multiDimIndex.size() == shape.size());
+  // shape: {a, b, c, d}  ->  accMul: {1, a, a*b, a*b*c}
+  size_t rank = shape.size();
+  T accMul = product(shape.drop_back());
+  T linearIndex = 0;
+  for (int i = rank - 1; i >= 0; --i) {
+    linearIndex += multiDimIndex[i] * accMul;
+    if (i != 0) {
+      accMul = accMul / shape[i - 1];
+    }
+  }
+  return linearIndex;
+}
+
+template <typename T>
+T getLinearIndex(llvm::ArrayRef<T> multiDimIndex, llvm::ArrayRef<T> shape,
+                 llvm::ArrayRef<unsigned> order) {
+  assert(shape.size() == order.size());
+  return getLinearIndexImpl<T>(applyPermutation(multiDimIndex, order),
+                               applyPermutation(shape, order));
+}
 
 namespace gpu {
 Type getFunctionType(Type resultType, ValueRange operands);

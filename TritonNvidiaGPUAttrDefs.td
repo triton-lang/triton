@@ -2,21 +2,8 @@
 #define TRITONNVIDIAGPU_ATTRDEFS
 
 include "mlir/IR/AttrTypeBase.td"
-include "mlir/IR/EnumAttr.td"
 include "triton/Dialect/TritonNvidiaGPU/IR/TritonNvidiaGPUDialect.td"
 include "triton/Dialect/Triton/IR/TritonInterfaces.td"
-
-// Type for synchronization tokens.
-def TT_TokenLoadTypeAttr : I32EnumAttr<
-    "TokenLoadType", "",
-    [
-      I32EnumAttrCase<"None", 0, "none">,
-      I32EnumAttrCase<"AsyncLoadOp", 1, "asyncLoadOp">,
-      I32EnumAttrCase<"TMALoadOp", 2, "tmaLoadOp">,
-      I32EnumAttrCase<"LocalStoreOp", 3, "localStoreOp">,
-    ]>{
-  let cppNamespace = "::mlir::triton::nvidia_gpu";
-}
 
 def TTG_TensorMemorySpace : AttrDef<TritonNvidiaGPU_Dialect, "TensorMemorySpace"> {
   let mnemonic = "tensor_memory";
