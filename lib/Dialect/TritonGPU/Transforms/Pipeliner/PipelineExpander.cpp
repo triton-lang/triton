@@ -34,6 +34,7 @@
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/MathExtras.h"
 
+#include "triton/Dialect/TritonGPU/Transforms/PipelineErrorReporter.h"
 #include "triton/Dialect/TritonGPU/Transforms/PipelineExpander.h"
 
 // FIXME: PipelineExpander should not depend on Triton-specific headers!
@@ -265,6 +266,9 @@ bool LoopPipelinerInternal::verifySchedule() {
         diag.attachNote(producer->getLoc())
             .append("operand defined here: ")
             .appendOp(*producer, OpPrintingFlags().printGenericOpForm());
+        PipelineErrorReporter errorReporter(forOp, maxStage + 1, stages);
+        errorReporter.printSchedulingError(distance, consumer, producer,
+                                           operand);
         return false;
       }
     }
