@@ -44,7 +44,7 @@ tt.func @two_empty_partitions(%lb: i32, %ub: i32, %step: i32) {
   // CHECK-NEXT:   }
   // CHECK-NEXT:   warp_yield
   // CHECK-NEXT: }
-  // CHECK-NEXT: partition0(%arg3: i32, %arg4: i32, %arg5: i32) num_warps(1)
+  // CHECK-NEXT: partition0(%arg3: i32, %arg4: i32, %arg5: i32) num_warps(4)
   // CHECK-NEXT:   scf.for [[I:%.*]] = %arg3 to %arg4 step %arg5
   // CHECK-NEXT:     "op_a"([[I]])
   // CHECK-NEXT:   }
@@ -219,7 +219,7 @@ tt.func @trivial_tensor_captures(%arg0: f16, %lb: i32, %ub: i32, %step: i32) {
 tt.func @dce_before_warp_allocation(%lb: i32, %ub: i32, %step: i32) {
   %cst = arith.constant dense<0> : tensor<128xi32, #blocked>
   // CHECK: ttg.warp_specialize
-  // CHECK: partition0({{.*}}) num_warps(1)
+  // CHECK: partition0({{.*}}) num_warps(4)
   // CHECK: partition1({{.*}}) num_warps(4)
   scf.for %i = %lb to %ub step %step iter_args(%idxs = %cst) -> tensor<128xi32, #blocked> : i32 {
     %do_prologue = "prologue_cond"(%i) : (i32) -> i1
