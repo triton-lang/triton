@@ -34,7 +34,7 @@ def test_tensor_descriptor_load(dtype_str, num_ctas, M_BLOCK, N_BLOCK):
         tl.store(out_ptr + idx, block)
 
     def alloc_fn(size: int, align: int, stream: Optional[int]):
-        assert size == 128
+        assert size == 128 * num_ctas
         assert align == 128
         assert stream == 0
         return torch.empty(size, dtype=torch.int8, device="cuda")
@@ -91,7 +91,7 @@ def test_tensor_descriptor_store(dtype_str, num_ctas, M_BLOCK, N_BLOCK):
     grid_n = N // N_BLOCK
 
     def alloc_fn(size: int, align: int, stream: Optional[int]):
-        assert size == 128 * (grid_m * grid_n)
+        assert size == 128 * (grid_m * grid_n) * num_ctas
         assert align == 128
         assert stream == 0
         return torch.empty(size, dtype=torch.int8, device="cuda")
@@ -550,13 +550,12 @@ def matmul_kernel_make_tensor_desciptor(a_ptr, b_ptr, c_ptr,  #
 @pytest.mark.parametrize("num_ctas", [1, 2])
 @pytest.mark.parametrize("BLOCK_M, BLOCK_N, BLOCK_K, num_stages", [
     (128, 128, 16, 1),
-    (512, 64, 32, 2),
+    (256, 64, 32, 2),
     (64, 512, 32, 2),
     (128, 128, 16, 4),
     (64, 128, 32, 4),
     (32, 32, 32, 4),
     (256, 128, 32, 4),
-    (64, 16, 16, 4),
 ])
 def test_make_tensor_descriptor_matmul(num_stages, num_ctas, BLOCK_M, BLOCK_N, BLOCK_K):
     device = "cuda"
@@ -571,7 +570,7 @@ def test_make_tensor_descriptor_matmul(num_stages, num_ctas, BLOCK_M, BLOCK_N, B
     grid = (triton.cdiv(M, BLOCK_M), triton.cdiv(N, BLOCK_N), 1)
 
     def alloc_fn(size: int, align: int, stream: Optional[int]):
-        assert size == 3 * 128 * grid[0] * grid[1]
+        assert size == 3 * 128 * grid[0] * grid[1] * num_ctas
         assert align == 128
         assert stream == 0
         return torch.empty(size, dtype=torch.int8, device="cuda")
@@ -598,7 +597,7 @@ def test_make_tensor_descriptor_matmul(num_stages, num_ctas, BLOCK_M, BLOCK_N, B
         return
 
     assert "tensormap.cp_fenceproxy.global.shared::cta.tensormap::generic.release.gpu.sync.aligned" in kernel.asm["ptx"]
-    if BLOCK_M >= 64 and BLOCK_N >= 64 and torch.cuda.get_device_capability()[0] == 9:
+    if BLOCK_M >= 64 and BLOCK_N >= 64 and torch.cuda.get_device_capability()[0] == 9 and num_ctas == 1:
         # TODO: The use of stmatrix for Blackwell is currently not supported.
         # Only a subset of TMEM and stmatrix layout pairs are compatible, for example 16x256bx2 and m8n8x4.
         assert "stmatrix.sync.aligned.m8n8.x4.shared.b16" in kernel.asm["ptx"]

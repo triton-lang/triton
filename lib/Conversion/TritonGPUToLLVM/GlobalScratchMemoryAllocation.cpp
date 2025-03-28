@@ -63,6 +63,7 @@ static void allocateGMem(Operation *parentOp,
       largestAlignment = std::max(largestAlignment, align);
     }
   });
+
   int32_t totalMemorySize = roundUp(offset, largestAlignment);
   parentOp->setAttr("ttg.global_scratch_memory_size",
                     builder.getI32IntegerAttr(totalMemorySize));
