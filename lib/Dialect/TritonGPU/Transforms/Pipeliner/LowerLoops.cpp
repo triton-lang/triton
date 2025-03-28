@@ -893,11 +893,10 @@ void createBarrierAndWaitOps(scf::ForOp forOp, CoarseSchedule &schedule,
 
   // Add waits before loads from the accumulator.
   struct WaitPoint {
-    Operation *op;
+    Operation *op; // operation before which to insert the wait
     int stage;
     CoarseSchedule::Cluster cluster;
   };
-  // waitPoints are (operation before which to insert the wait, stage, cluster)
   SmallVector<WaitPoint> waitPoints;
   auto [mmaStage, mmaCluster] = schedule[mma];
   waitPoints.push_back(
