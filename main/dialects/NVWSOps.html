@@ -94,6 +94,11 @@
 <li class="toctree-l4"><a class="reference internal" href="#id5">Operands:</a></li>
 </ul>
 </li>
+<li class="toctree-l3"><a class="reference internal" href="#nvws-warp-group-triton-nvws-warpgroupop"><code class="docutils literal notranslate"><span class="pre">nvws.warp_group</span></code> (triton::nvws::WarpGroupOp)</a><ul>
+<li class="toctree-l4"><a class="reference internal" href="#attributes">Attributes:</a></li>
+</ul>
+</li>
+<li class="toctree-l3"><a class="reference internal" href="#nvws-warp-group-return-triton-nvws-warpgroupreturnop"><code class="docutils literal notranslate"><span class="pre">nvws.warp_group.return</span></code> (triton::nvws::WarpGroupReturnOp)</a></li>
 </ul>
 </li>
 </ul>
@@ -304,6 +309,41 @@ but should be optimized away during lowering.</p>
 </tbody>
 </table>
 </section>
+</section>
+<section id="nvws-warp-group-triton-nvws-warpgroupop">
+<h2><code class="docutils literal notranslate"><span class="pre">nvws.warp_group</span></code> (triton::nvws::WarpGroupOp)<a class="headerlink" href="#nvws-warp-group-triton-nvws-warpgroupop" title="Link to this heading">¶</a></h2>
+<p><em>Container Op for Warp Specialization</em></p>
+<p>Higher level container for Warp Specialization Analysis.</p>
+<p>Contains a variadic number warp groups, with
+the number of warps in each group, plus a region to hold the
+computation for that warp group.</p>
+<p>Regions are not Isolated from Above to aid in analysis,
+and take inputs purely by reference.</p>
+<p>nvws.warp_group should be lowered to ttg.warp_specialize
+before execution.</p>
+<p>Traits: <code class="docutils literal notranslate"><span class="pre">RecursiveMemoryEffects</span></code>, <code class="docutils literal notranslate"><span class="pre">RecursivelySpeculatableImplTrait</span></code></p>
+<p>Interfaces: <code class="docutils literal notranslate"><span class="pre">ConditionallySpeculatable</span></code></p>
+<section id="attributes">
+<h3>Attributes:<a class="headerlink" href="#attributes" title="Link to this heading">¶</a></h3>
+<table>
+<tr><th>Attribute</th><th>MLIR Type</th><th>Description</th></tr>
+<tr><td><code>numWarps</code></td><td>::mlir::DenseI32ArrayAttr</td><td>i32 dense array attribute</td></tr>
+</table>
+</section>
+</section>
+<section id="nvws-warp-group-return-triton-nvws-warpgroupreturnop">
+<h2><code class="docutils literal notranslate"><span class="pre">nvws.warp_group.return</span></code> (triton::nvws::WarpGroupReturnOp)<a class="headerlink" href="#nvws-warp-group-return-triton-nvws-warpgroupreturnop" title="Link to this heading">¶</a></h2>
+<p><em>Terminator for a warp group region</em></p>
+<p>Syntax:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span>operation ::= `nvws.warp_group.return` attr-dict
+</pre></div>
+</div>
+<p>Warp groups are expected to return values via referential modification
+of their inputs. Thus, the warp_group.return op takes no values to
+return from the warp group.</p>
+<p>Traits: <code class="docutils literal notranslate"><span class="pre">AlwaysSpeculatableImplTrait</span></code>, <code class="docutils literal notranslate"><span class="pre">HasParent&lt;WarpGroupOp&gt;</span></code>, <code class="docutils literal notranslate"><span class="pre">Terminator</span></code></p>
+<p>Interfaces: <code class="docutils literal notranslate"><span class="pre">ConditionallySpeculatable</span></code>, <code class="docutils literal notranslate"><span class="pre">NoMemoryEffect</span> <span class="pre">(MemoryEffectOpInterface)</span></code></p>
+<p>Effects: <code class="docutils literal notranslate"><span class="pre">MemoryEffects::Effect{}</span></code></p>
 </section>
 </section>
 

@@ -404,9 +404,8 @@ interleave for better instruction level parallelism.
 <tr><th>Attribute</th><th>MLIR Type</th><th>Description</th></tr>
 <tr><td><code>variant</code></td><td>::mlir::triton::amdgpu::SchedHintAttr</td><td><details><summary>Instruction Scheduling Hints for AMD GPUs</summary>{{% markdown %}}Enum cases:
 * none (`none`)
-* llvm_iglp_0 (`llvm_iglp_0`)
-* llvm_iglp_1 (`llvm_iglp_1`)
-* local_prefetch (`local_prefetch`){{% /markdown %}}</details></td></tr>
+* local_prefetch (`local_prefetch`)
+* attention (`attention`){{% /markdown %}}</details></td></tr>
 <tr><td><code>numDsReadsA</code></td><td>::mlir::triton::amdgpu::InstCounterAttr</td><td><details><summary>An instruction counter attribute.</summary>{{% markdown %}}
     The attribute holds the number of issued LLVM instructions of a specific kind as well as
     the data type.

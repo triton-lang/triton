@@ -37,7 +37,7 @@ Users can pass command-line arguments to specify matrix dimensions and iteration
 
 Note that currently this tutorial will fail on devices with a small shared memory size, such as RTX-4090.
 
-.. GENERATED FROM PYTHON SOURCE LINES 21-797
+.. GENERATED FROM PYTHON SOURCE LINES 21-801
 
 
 
@@ -48,15 +48,15 @@ Note that currently this tutorial will fail on devices with a small shared memor
 
     M=32, N=32, K=32 verification naive vs: torch: ✅ cublas: ✅ persistent: ✅ 
     M=8192, N=8192, K=512 verification naive vs: torch: ✅ cublas: ✅ persistent: ✅ 
-    175.947 5467.957 ROOT
+    171.425 20043.586 ROOT
     ├─ nan 0.050 _ZN2at6native18elementwise_kernelILi128ELi4EZNS0_22gpu_kernel_impl_nocastIZZZNS0_23direct_copy_kernel_cudaERNS_18TensorIteratorBaseEENKUlvE1_clEvENKUlvE8_clEvEUlN3c104HalfEE_EEvS4_RKT_EUliE_EEviT1_
     ├─ nan 0.045 _ZN2at6native54_GLOBAL__N__d8ceb000_21_DistributionNormal_cu_0c5b6e8543distribution_elementwise_grid_stride_kernelIfLi4EZNS0_9templates4cuda20normal_and_transformIN3c104HalfEfPNS_17CUDAGeneratorImplEZZZNS4_13normal_kernelIS9_EEvRKNS_10TensorBaseEddT_ENKUlvE_clEvENKUlvE1_clEvEUlfE_EEvRNS_18TensorIteratorBaseET1_T2_EUlP24curandStatePhilox4_32_10E0_ZNS1_27distribution_nullary_kernelIS7_f6float4S9_SO_SH_EEvSJ_SL_RKT3_T4_EUlifE_EEviNS_15PhiloxCudaStateESK_SL_
-    ├─ 177.633 4255.479 cublas [M=8192, N=8192, K=512]
-    │  └─ nan 4255.479 ampere_fp16_s16816gemm_fp16_128x128_ldg8_f2f_stages_32x5_tn
-    ├─ 169.764 404.794 matmul_kernel [M=8192, N=8192, K=512]
-    ├─ 161.616 425.203 matmul_kernel_persistent [M=8192, N=8192, K=512]
-    └─ 179.712 382.386 torch [M=8192, N=8192, K=512]
-       └─ nan 382.386 ampere_fp16_s16816gemm_fp16_128x128_ldg8_f2f_stages_32x5_tn
+    ├─ 177.251 7753.907 cublas [M=8192, N=8192, K=512]
+    │  └─ nan 7753.907 ampere_fp16_s16816gemm_fp16_128x128_ldg8_f2f_stages_32x5_tn
+    ├─ 167.199 4110.050 matmul_kernel [M=8192, N=8192, K=512]
+    ├─ 160.285 4287.324 matmul_kernel_persistent [M=8192, N=8192, K=512]
+    └─ 176.556 3892.211 torch [M=8192, N=8192, K=512]
+       └─ nan 3892.211 ampere_fp16_s16816gemm_fp16_128x128_ldg8_f2f_stages_32x5_tn
 
 
 
@@ -258,7 +258,10 @@ Note that currently this tutorial will fail on devices with a small shared memor
                              BLOCK_SIZE_N: tl.constexpr,  #
                              BLOCK_SIZE_K: tl.constexpr,  #
                              GROUP_SIZE_M: tl.constexpr,  #
+                             FP8_OUTPUT: tl.constexpr,  #
                              ):
+        dtype = tl.float8e4nv if FP8_OUTPUT else tl.float16
+
         pid = tl.program_id(axis=0)
         num_pid_m = tl.cdiv(M, BLOCK_SIZE_M)
         num_pid_n = tl.cdiv(N, BLOCK_SIZE_N)
@@ -278,11 +281,11 @@ Note that currently this tutorial will fail on devices with a small shared memor
 
         for k in tl.range(k_tiles, warp_specialize=True, num_stages=3):
             offs_k = k * BLOCK_SIZE_K
-            a = tl._experimental_descriptor_load(a_desc_ptr, [offs_am, offs_k], [BLOCK_SIZE_M, BLOCK_SIZE_K], tl.float16)
-            b = tl._experimental_descriptor_load(b_desc_ptr, [offs_bn, offs_k], [BLOCK_SIZE_N, BLOCK_SIZE_K], tl.float16)
+            a = tl._experimental_descriptor_load(a_desc_ptr, [offs_am, offs_k], [BLOCK_SIZE_M, BLOCK_SIZE_K], dtype)
+            b = tl._experimental_descriptor_load(b_desc_ptr, [offs_bn, offs_k], [BLOCK_SIZE_N, BLOCK_SIZE_K], dtype)
             accumulator = tl.dot(a, b.T, accumulator)
 
-        c = accumulator.to(tl.float16)
+        c = accumulator.to(dtype)
 
         offs_cm = pid_m * BLOCK_SIZE_M
         offs_cn = pid_n * BLOCK_SIZE_N
@@ -348,6 +351,7 @@ Note that currently this tutorial will fail on devices with a small shared memor
         matmul_kernel_tma_ws[grid](
             desc_a, desc_b, desc_c,  #
             M, N, K,  #
+            FP8_OUTPUT=dtype == torch.float8_e4m3fn,  #
         )
         return c
 
@@ -454,7 +458,7 @@ Note that currently this tutorial will fail on devices with a small shared memor
             for BM in [128] \
             for BN in [128, 256] \
             for BK in [64, 128] \
-            for s in ([3, 4]) \
+            for s in ([2, 3, 4]) \
             for w in [4, 8] \
             for SUBTILE in [True, False] \
         ]
@@ -739,7 +743,7 @@ Note that currently this tutorial will fail on devices with a small shared memor
                 fn(*args)
 
 
-    def bench(K, dtype, reps=1000, warmup_reps=10000):
+    def bench(K, dtype, reps=10000, warmup_reps=10000):
         M = 8192
         N = 8192
         a = torch.randn((M, K), device="cuda", dtype=torch.float16).to(dtype)
@@ -848,7 +852,7 @@ Note that currently this tutorial will fail on devices with a small shared memor
 
 .. rst-class:: sphx-glr-timing
 
-   **Total running time of the script:** (0 minutes 56.299 seconds)
+   **Total running time of the script:** (1 minutes 11.034 seconds)
 
 
 .. _sphx_glr_download_getting-started_tutorials_09-persistent-matmul.py:

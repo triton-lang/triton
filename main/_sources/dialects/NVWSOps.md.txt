@@ -127,3 +127,52 @@ Effects: `MemoryEffects::Effect{}`
 | :-----: | ----------- |
 | `srcs` | variadic of any type |
 
+
+### `nvws.warp_group` (triton::nvws::WarpGroupOp)
+
+_Container Op for Warp Specialization_
+
+Higher level container for Warp Specialization Analysis.
+
+Contains a variadic number warp groups, with
+the number of warps in each group, plus a region to hold the
+computation for that warp group.
+
+Regions are not Isolated from Above to aid in analysis,
+and take inputs purely by reference.
+
+nvws.warp_group should be lowered to ttg.warp_specialize
+before execution.
+
+Traits: `RecursiveMemoryEffects`, `RecursivelySpeculatableImplTrait`
+
+Interfaces: `ConditionallySpeculatable`
+
+#### Attributes:
+
+<table>
+<tr><th>Attribute</th><th>MLIR Type</th><th>Description</th></tr>
+<tr><td><code>numWarps</code></td><td>::mlir::DenseI32ArrayAttr</td><td>i32 dense array attribute</td></tr>
+</table>
+
+
+### `nvws.warp_group.return` (triton::nvws::WarpGroupReturnOp)
+
+_Terminator for a warp group region_
+
+Syntax:
+
+```
+operation ::= `nvws.warp_group.return` attr-dict
+```
+
+Warp groups are expected to return values via referential modification
+of their inputs. Thus, the warp_group.return op takes no values to
+return from the warp group.
+
+Traits: `AlwaysSpeculatableImplTrait`, `HasParent<WarpGroupOp>`, `Terminator`
+
+Interfaces: `ConditionallySpeculatable`, `NoMemoryEffect (MemoryEffectOpInterface)`
+
+Effects: `MemoryEffects::Effect{}`
+
