@@ -315,3 +315,31 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
     tt.return
   }
 }
+
+// -----
+
+// CHECK-LABEL: inThreadTranspose_scf_while_traversal_regression
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [8, 8], warpsPerCTA = [1, 8], order = [1, 0]}>
+#shared = #ttg.swizzled_shared<{vec = 4, perPhase = 2, maxPhase = 4, order = [0, 1], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [0, 1]}>
+#smem = #ttg.shared_memory
+#mma = #ttg.amd_mfma<{versionMajor = 3, versionMinor = 0, warpsPerCTA = [4, 2], instrShape = [32, 32], isTransposed = true}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.target = "hip:gfx942", "ttg.threads-per-warp" = 64 : i32} {
+  tt.func public @inThreadTranspose_scf_while_traversal_regression(%arg0: tensor<256x32xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 4}>>, %arg1: !tt.ptr<f16> {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32}, %arg2: i1) {
+    %cst_0 = arith.constant dense<0.000000e+00> : tensor<256x128xf32, #mma>
+    %0 = tt.splat %arg1 : !tt.ptr<f16> -> tensor<32x128x!tt.ptr<f16>, #blocked>
+    %1 = tt.load %0 : tensor<32x128x!tt.ptr<f16>, #blocked>
+    %2 = ttg.local_alloc %1 : (tensor<32x128xf16, #blocked>) -> !ttg.memdesc<32x128xf16, #shared, #smem, mutable>
+    %3:2 = scf.while (%arg10 = %2, %arg11 = %arg2) : (!ttg.memdesc<32x128xf16, #shared, #smem, mutable>, i1) -> (!ttg.memdesc<32x128xf16, #shared, #smem, mutable>, i1) {
+      scf.condition(%arg11) %arg10, %arg11 : !ttg.memdesc<32x128xf16, #shared, #smem, mutable>, i1
+    } do {
+    ^bb0(%arg20: !ttg.memdesc<32x128xf16, #shared, #smem, mutable>, %arg21: i1):
+      %10 = tt.load %0 : tensor<32x128x!tt.ptr<f16>, #blocked>
+      %11 = ttg.local_load %arg20 : !ttg.memdesc<32x128xf16, #shared, #smem, mutable> -> tensor<32x128xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 4}>>
+      ttg.local_store %10, %arg20 : tensor<32x128xf16, #blocked> -> !ttg.memdesc<32x128xf16, #shared, #smem, mutable>
+      %12 = tt.dot %arg0, %11, %cst_0 : tensor<256x32xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 4}>> * tensor<32x128xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 4}>> -> tensor<256x128xf32, #mma>
+      scf.yield %arg20, %arg21 : !ttg.memdesc<32x128xf16, #shared, #smem, mutable>, i1
+    }
+    tt.return
+  }
+}
