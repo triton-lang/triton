@@ -1,6 +1,6 @@
 #include "TritonAMDGPUTransforms/Passes.h"
-#include "mlir/IR/TypeUtilities.h"
 #include "mlir/Support/LLVM.h"
+#include "third_party/amd/include/Analysis/RangeAnalysis.h"
 #include "third_party/amd/include/Dialect/TritonAMDGPU/IR/Dialect.h"
 #include "third_party/amd/lib/TritonAMDGPUToLLVM/SchedInstructions.h"
 #include "triton/Analysis/AxisInfo.h"
