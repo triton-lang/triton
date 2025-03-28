@@ -1,5 +1,6 @@
 add_triton_library(ProtonNVIDIAGPUToLLVM
     TargetInfo.cpp
+    NvidiaPatternProtonGPUOpToLLVM.cpp
     ConvertProtonGPUToLLVM.cpp
 
     DEPENDS

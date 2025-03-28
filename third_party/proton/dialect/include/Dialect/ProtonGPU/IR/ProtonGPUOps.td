@@ -34,16 +34,17 @@ def PTG_CircularStoreOp : PTG_Op<"circular_store", [
     ins TTG_MemDescType: $data,
     TT_PtrType :$indexPtr,
     I32: $counter,
+    I32:$segBaseOffset,
+    I1:$isWriter,
     UnitAttr: $isStart,
-    I32Attr: $scopeId,
-    DefaultValuedAttr<GranularityAttr, "Granularity::WARPGROUP">:$granularity
+    I32Attr: $scopeId
   );
 
   let hasVerifier = 1;
 
   let assemblyFormat = [{
-    (`start` $isStart^):(`end`)? $data `,` $indexPtr `,` $counter attr-dict `:`
-    qualified(type($data)) `,` type($indexPtr) `,` type($counter)
+    (`start` $isStart^):(`end`)? $data `,` $indexPtr `,` $counter `,` $segBaseOffset `,` $isWriter attr-dict `:`
+    qualified(type($data)) `,` type($indexPtr) `,` type($counter) `,` type($segBaseOffset) `,` type($isWriter)
   }];
 }
 
@@ -115,6 +116,50 @@ def PTG_GlobalScratchAllocOp : PTG_Op<"global_scratch_alloc", [MemoryEffects<[Me
   ];
 
   let assemblyFormat = [{attr-dict `:` qualified(type($result))}];
+}
+
+def PTG_SegmentBaseOp : PTG_Op<"segment_base", [Pure]> {
+  let summary = "Get the base offset of the segment of the profiler internal buffer";
+
+  let description = [{
+      Get the base offset of the segment that the current thread belongs to.
+      The internal profiler buffer is partitioned into memory segments storing the
+      profiling data of different warps.
+
+      Return `-1` if the current thread is not associated with any segment.
+  }];
+  let arguments = (ins
+    TTG_MemDescType: $data,
+    DefaultValuedAttr<GranularityAttr, "Granularity::ALL">:$granularity,
+    OptionalAttr<DenseI32ArrayAttr>:$warpIds
+  );
+  let results = (outs I32:$segBaseOffset);
+  let assemblyFormat = "$data `,` attr-dict `:` qualified(type($data)) `->` type($segBaseOffset)";
+}
+
+def PTG_CheckSegWriterOp : PTG_Op<"check_segment_writer", [Pure]> {
+  let summary = "Check if the current thread is a segment writer";
+
+  let description = [{
+      Check if the current thread is a segment writer. A segment writer is responsible
+      for writing the profiling data of into the segment memory.
+  }];
+
+  let arguments = (ins I32:$segBaseOffset);
+  let results = (outs I1:$res);
+  let assemblyFormat = [{$segBaseOffset attr-dict `:` type($res)}];
+}
+
+def PTG_StackAllocOp : PTG_Op<"stack_alloc", [MemoryEffects<[MemAlloc<GlobalMemory>]>]> {
+  let summary = "Allocate a proton stack memory buffer";
+  let description = [{
+    This operation allocates a proton buffer in device stack memory.
+  }];
+  let arguments = (
+    ins
+  );
+  let results = (outs TTG_MemDescType : $data);
+  let assemblyFormat = "attr-dict `:` qualified(type($data))";
 }
 
 #endif  // PROTONGPU_OPS
