@@ -436,8 +436,7 @@ struct BufferLoadToLocalOpConversion
     // patterns. There is still a check performed to not silently produce wrong
     // results if we invalidate the condition in the future
 
-    bool isSwizzled =
-        sharedEnc.getPerPhase() != 1 || sharedEnc.getMaxPhase() != 1;
+    bool noSwizzling = sharedEnc.getMaxPhase() == 1;
 
     // Compute the blocked -> shared linear layout to check preconditions
     auto shape = ptrType.getShape();
@@ -448,14 +447,14 @@ struct BufferLoadToLocalOpConversion
     LinearLayout srcToSharedLayout = srcLayout.invertAndCompose(sharedLayout);
 
     unsigned threadsPerWarp = lookupThreadsPerWarp(rewriter);
-    if (!isSwizzled && !LLVM::AMD::canCoalesceWriteIntoSharedMemory(
+    if (noSwizzling && !LLVM::AMD::canCoalesceWriteIntoSharedMemory(
                            rewriter, srcToSharedLayout, threadsPerWarp)) {
       return rewriter.notifyMatchFailure(
           op, "does not write coalesced into LDS and is not swizzled");
     }
 
-    if (isSwizzled && !LLVM::AMD::doesSwizzleInsideWarp(
-                          rewriter, srcToSharedLayout, threadsPerWarp)) {
+    if (!noSwizzling && !LLVM::AMD::doesSwizzleInsideWarp(
+                            rewriter, srcToSharedLayout, threadsPerWarp)) {
       return rewriter.notifyMatchFailure(op,
                                          "does swizzle across warp boundaries");
     }
@@ -464,12 +463,9 @@ struct BufferLoadToLocalOpConversion
     auto smemObj = mlir::LLVM::getSharedMemoryObjectFromStruct(
         loc, llDst, resElemTy, rewriter);
 
-    // First we determine the vector size per load and collect the
-    // shared addresses. This will only emit the address calculation and not the
-    // actual loads
-    auto emitSharedAddressed = [&](RankedTensorType srcTy, MemDescType dstTy) {
-      VectorType vecTy;
-      SmallVector<Value> shmemAddrs;
+    auto emitSharedAddresses = [&](RankedTensorType srcTy, MemDescType dstTy,
+                                   SmallVector<Value> &shmemAddrs,
+                                   VectorType &vecTy) {
       bool ok = emitTransferBetweenRegistersAndShared(
           ptrType, dstTy, resElemTy, {}, smemObj, loc, rewriter, targetInfo,
           [&](VectorType vecTy_, Value shmemAddr) {
@@ -477,18 +473,24 @@ struct BufferLoadToLocalOpConversion
             shmemAddrs.push_back(shmemAddr);
           });
       assert(ok);
-      return std::make_tuple(shmemAddrs, vecTy);
     };
 
+    // First we determine the vector size per load and collect the
+    // shared addresses. This will only emit the address calculation and not the
+    // actual loads.
+    // For swizzled loads we get the linear shared addresses from a
+    // temporary non swizzled layout. Those addresses will be used as the store
+    // addresses. Additionally, we compute the swizzled shared memory addresses
+    // which will be used to compute which lane holds our global ptr
     VectorType vecTy;
     SmallVector<Value> linearShmemAddr;
     SmallVector<Value> swizzledShmemAddr;
 
-    if (!isSwizzled) {
-      std::tie(linearShmemAddr, vecTy) = emitSharedAddressed(ptrType, dstTy);
+    if (noSwizzling) {
+      emitSharedAddresses(ptrType, dstTy, linearShmemAddr, vecTy);
     } else {
-      std::tie(swizzledShmemAddr, vecTy) = emitSharedAddressed(ptrType, dstTy);
-      // Create non swizzled smem encoding
+      emitSharedAddresses(ptrType, dstTy, swizzledShmemAddr, vecTy);
+      // Create non swizzled/linear encoding
       auto dstEnc = cast<SwizzledSharedEncodingAttr>(dstTy.getEncoding());
       auto flatSharedEnc = SwizzledSharedEncodingAttr::get(
           getContext(), dstEnc.getVec(), 1, 1, dstEnc.getOrder(),
@@ -497,10 +499,10 @@ struct BufferLoadToLocalOpConversion
           MemDescType::get(dstTy.getShape(), dstTy.getElementType(),
                            flatSharedEnc, dstTy.getMemorySpace());
       VectorType linearVecTy;
-      std::tie(linearShmemAddr, linearVecTy) =
-          emitSharedAddressed(ptrType, flatDstTy);
+      emitSharedAddresses(ptrType, flatDstTy, linearShmemAddr, linearVecTy);
       assert(linearVecTy == vecTy);
     }
+    assert(vecTy.getNumElements() == vec);
 
     int vecBits = vecTy.getNumElements() * vecTy.getElementTypeBitWidth();
     if (!targetInfo.supportsDirectToLdsLoadBitWidth(vecBits)) {
@@ -523,16 +525,17 @@ struct BufferLoadToLocalOpConversion
       auto offsetIn = offsetElems[srcIdx];
       Value pred = mask ? maskElems[srcIdx] : b.true_val();
 
-      if (isSwizzled) {
-        // We compute the difference in elements between the two lds pointers.
-        // This will tells use which lane holds the global ptr we need to store
-        auto srcPtr = b.ptrtoint(i32_ty, swizzledShmemAddr[i]);
-        auto swizzledSrcPtr = b.ptrtoint(i32_ty, linearShmemAddr[i]);
-        Value laneOffset =
-            b.sdiv(b.sub(srcPtr, swizzledSrcPtr), b.i32_val(vecBytes));
+      if (!noSwizzling) {
+        // We compute the difference in elements between the two shmem
+        // addresses. This will tell use which lane holds the global ptr we need
+        // to store
+        auto linearAddr = b.ptrtoint(i64_ty, swizzledShmemAddr[i]);
+        auto swizzledAddr = b.ptrtoint(i64_ty, linearShmemAddr[i]);
+        auto diff = b.trunc(i32_ty, b.sub(linearAddr, swizzledAddr));
+        Value laneOffset = b.sdiv(diff, vecBytesVal);
         Value selectLane = b.add(getLaneId(rewriter, loc), laneOffset);
 
-        // Permute returns the value from lane_id * bytes
+        // BPermute returns the value from (lane_id * bytes)
         Value laneByteOffset =
             b.mul(selectLane,
                   b.i32_val(offsetIn.getType().getIntOrFloatBitWidth() / 8));
@@ -540,14 +543,14 @@ struct BufferLoadToLocalOpConversion
             loc, offsetIn.getType(), laneByteOffset, offsetIn);
 
         if (mask) {
-          // We also need to exchange the mask for this we can use a ballot and
-          // select the bit based on the selected lane
+          // To swizzle the mask we can use ballot and then select the bit based
+          // on the lane id
           auto warpMask =
               targetInfo.ballot(rewriter, loc, rewriter.getI64Type(), pred);
           // Extract the selectLane bit
           auto bitMask =
               b.lshr(warpMask, b.zext(rewriter.getI64Type(), selectLane));
-          pred = b.trunc(rewriter.getIntegerType(1), bitMask);
+          pred = b.trunc(i1_ty, bitMask);
         }
       }
 
