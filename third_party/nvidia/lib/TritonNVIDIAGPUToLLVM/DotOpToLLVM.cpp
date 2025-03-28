@@ -108,9 +108,9 @@ struct WarpGroupDotWaitOpConversion
     auto pendings = op.getPendings();
     Location loc = op.getLoc();
     if (adaptor.getInputs().size() <= 1) {
-      Value intput =
+      Value input =
           adaptor.getInputs().size() == 1 ? adaptor.getInputs()[0] : Value();
-      rewriter.replaceOpWithNewOp<triton::nvgpu::WGMMAWaitGroupOp>(op, intput,
+      rewriter.replaceOpWithNewOp<triton::nvgpu::WGMMAWaitGroupOp>(op, input,
                                                                    pendings);
       return success();
     }

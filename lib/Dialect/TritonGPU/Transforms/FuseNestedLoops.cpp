@@ -461,7 +461,7 @@ static scf::IfOp eraseIfResults(ImplicitLocOpBuilder &b, scf::IfOp ifOp,
 // epilogueK and the first iteration of bodyj(K+1). Hence the `- N` term in the
 // total number of iterations.
 //
-// What the above Python-psuedo-code glosses over is SSA dependency management.
+// What the above Python-pseudo-code glosses over is SSA dependency management.
 // To interpret the pseudocode as SSA IR, just imagine everything is put back
 // into allocas and SSA formation re-runs after fusion, which one should note
 // will introduce undefs.

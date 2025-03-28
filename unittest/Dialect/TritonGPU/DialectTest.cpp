@@ -208,7 +208,7 @@ void testReshape(RankedTensorType srcTy, RankedTensorType dstTy,
         << "got " << inferredSrcLinear.toString() << ".\n";
   }
 
-  // The funtional characterisation of resize is that, if we have a srcLayout
+  // The functional characterisation of resize is that, if we have a srcLayout
   // and a dstLayout, then the flattened layouts are views of the same data
   // when considered as C-contiguous.
   auto makeFlattenedCContig = [](ArrayRef<int64_t> shape, Attribute layout) {

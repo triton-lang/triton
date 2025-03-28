@@ -61,7 +61,7 @@ namespace {
 // main loop and rotating the loop to schedule global load ops for future loop
 // iterations together with compute for the current iteration. In this way, we
 // can 1) issue memory operations earlier to hide the latency and 2) break the
-// strong dependency inside on loop iteration to give backends flexiblity to
+// strong dependency inside on loop iteration to give backends flexibility to
 // better interleave instructions for better instruction-level parallelism.
 //
 // This StreamPipeliner class creates the pipelining schedule and calls the

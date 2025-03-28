@@ -306,10 +306,10 @@ static ConverterT makeConverterFromPtx(const std::string &ptxAsm, Type inType,
     int outNums = numElements / outVecWidth;
     PTXBuilder builder;
     SmallVector<PTXBuilder::Operand *> operands;
-    auto outConstriant = outVecWidthBits == 16 ? "=h" : "=r";
+    auto outConstraint = outVecWidthBits == 16 ? "=h" : "=r";
     auto inConstraint = inVecWidthBits == 16 ? "h" : "r";
     for (int i = 0; i < outNums; i++) {
-      operands.push_back(builder.newOperand(outConstriant));
+      operands.push_back(builder.newOperand(outConstraint));
     }
 
     for (Value inVal : inPacked) {
