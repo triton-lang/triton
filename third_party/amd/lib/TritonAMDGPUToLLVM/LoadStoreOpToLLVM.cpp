@@ -593,12 +593,10 @@ struct AsyncCopyGlobalToLocalOpConversion
       if (maskElems.empty()) {
         rewriter.create<ROCDL::GlobalLoadLDSOp>(
             loc,
-            /*globalPtr*/ srcPtr,
-            /*ldsPtr*/ shmemAddrs[i],
-            /*size*/ vecBytesVal,
-            /*offset=*/b.i32_val(0),
-            /*aux*/ cacheModifiers, /*alias_scopes*/ nullptr,
-            /*noalias_scopes*/ nullptr, /*tbaa*/ nullptr);
+            /*globalPtr=*/srcPtr, /*ldsPtr=*/shmemAddrs[i],
+            /*size=*/vecBytesVal, /*offset=*/b.i32_val(0),
+            /*aux=*/cacheModifiers, /*alias_scopes=*/nullptr,
+            /*noalias_scopes=*/nullptr, /*tbaa=*/nullptr);
         continue;
       }
 
