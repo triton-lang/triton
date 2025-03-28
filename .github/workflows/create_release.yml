@@ -2,7 +2,6 @@ name: Create Release
 
 on:
   push:
-    workflow_dispatch:
     branches:
       - main
       - release/*
@@ -25,7 +24,7 @@ jobs:
     permissions:
       contents: write
     outputs:
-      pt_release_name: test
+      release_name: "${{ steps.release_name.outputs.name }}"
     steps:
       - uses: actions/checkout@v4
         with:
