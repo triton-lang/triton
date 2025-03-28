@@ -831,11 +831,13 @@ public:
   ConvertTritonToTritonGPU() = default;
   // constructor with some parameters set explicitly.
   ConvertTritonToTritonGPU(const std::string &target, int numWarps,
-                           int threadsPerWarp, int numCTAs) {
+                           int threadsPerWarp, int numCTAs,
+                           bool enableSourceRemat) {
     this->numWarps = numWarps;
     this->threadsPerWarp = threadsPerWarp;
     this->numCTAs = numCTAs;
     this->target = target;
+    this->enableSourceRemat = enableSourceRemat;
   }
 
   void runOnOperation() override {
@@ -850,7 +852,7 @@ public:
     ModuleOp mod = getOperation();
     // type converter
     TritonGPUTypeConverter typeConverter(context, numWarps, threadsPerWarp,
-                                         numCTAs);
+                                         numCTAs, enableSourceRemat);
     TritonGPUConversionTarget target(*context, typeConverter);
     // rewrite patterns
     RewritePatternSet patterns(context);
@@ -889,9 +891,10 @@ std::unique_ptr<OperationPass<ModuleOp>>
 mlir::triton::createConvertTritonToTritonGPUPass(const std::string &target,
                                                  int numWarps,
                                                  int threadsPerWarp,
-                                                 int numCTAs) {
-  return std::make_unique<::ConvertTritonToTritonGPU>(target, numWarps,
-                                                      threadsPerWarp, numCTAs);
+                                                 int numCTAs,
+                                                 bool enableSourceRemat) {
+  return std::make_unique<::ConvertTritonToTritonGPU>(
+      target, numWarps, threadsPerWarp, numCTAs, enableSourceRemat);
 }
 
 std::unique_ptr<OperationPass<ModuleOp>>

@@ -20,18 +20,20 @@ using RunPipelineFn = function_ref<LogicalResult(OpPassManager &, ModuleOp)>;
 // Take the body of a partition into a new `tt.func`. We can use this to run a
 // full compiler pipeline on the partition.
 static OwningOpRef<ModuleOp> takeIntoFunction(ModuleAxisInfoAnalysis &axisInfo,
-                                              Region *partition) {
+                                              Region *partition,
+                                              unsigned numWarps) {
   // Forward the module attributes (target, number of threads per warp, etc.)
   // onto the container module.
   ModuleOp mod = axisInfo.getModuleOp();
   OwningOpRef<ModuleOp> container = ModuleOp::create(mod.getLoc());
-  container.get()->setAttrs(mod->getAttrs());
   Block *containerBlock = container->getBody();
 
   auto b = OpBuilder::atBlockBegin(containerBlock);
   FunctionType funcType = b.getFunctionType(partition->getArgumentTypes(), {});
   auto containerFunc = b.create<FuncOp>(mod.getLoc(), "container", funcType);
   containerFunc.getBody().takeBody(*partition);
+  container.get()->setAttrs(mod->getAttrs());
+  container.get()->setAttr(AttrNumWarpsName, b.getI32IntegerAttr(numWarps));
 
   // Replace `ttg.warp_return` with `tt.return` to make the IR valid.
   containerFunc.walk([&](WarpReturnOp op) {
@@ -79,9 +81,11 @@ static void extractPartitionBody(OwningOpRef<ModuleOp> container,
 
 // Reset the layouts of operations in a region and re-run layout assignment.
 static LogicalResult relayoutWarps(ModuleAxisInfoAnalysis &axisInfo,
-                                   Region *partition, unsigned numWarps,
+                                   Region *partition, unsigned prevNumWarps,
+                                   unsigned newNumWarps,
                                    RunPipelineFn runPipeline) {
-  OwningOpRef<ModuleOp> container = takeIntoFunction(axisInfo, partition);
+  OwningOpRef<ModuleOp> container =
+      takeIntoFunction(axisInfo, partition, prevNumWarps);
 
   // Start by removing all tensor encodings.
   mlir::AttrTypeReplacer replacer;
@@ -103,9 +107,21 @@ static LogicalResult relayoutWarps(ModuleAxisInfoAnalysis &axisInfo,
   int threadsPerWarp = TritonGPUDialect::getThreadsPerWarp(mod);
   int numCTAs = TritonGPUDialect::getNumCTAs(mod);
 
+  // Enable `convert-triton-to-tritongpu` to rematerialize source layouts for
+  // TTG dialect operations. They will get cleared later.
   OpPassManager pm;
-  pm.addPass(createConvertTritonToTritonGPUPass(target.str(), numWarps,
-                                                threadsPerWarp, numCTAs));
+  pm.addPass(createConvertTritonToTritonGPUPass(target.str(), newNumWarps,
+                                                threadsPerWarp, numCTAs,
+                                                /*enableSourceRemat=*/true));
+  if (failed(runPipeline(pm, *container)))
+    return failure();
+  // Clear source rematerializations by propagating the source layout.
+  container->walk([](UnrealizedConversionCastOp op) {
+    op.getResult(0).replaceAllUsesWith(op.getOperand(0));
+    op.erase();
+  });
+
+  pm.clear();
   pm.addPass(createTritonGPUCoalesce());
   pm.addPass(createTritonGPURemoveLayoutConversions());
   pm.addPass(createTritonGPUOptimizeThreadLocality());
@@ -123,17 +139,24 @@ static LogicalResult relayoutWarps(ModuleAxisInfoAnalysis &axisInfo,
 
 // Get the number of i32 registers required to store a tensor, assuming no
 // redundancy in the layout.
-static unsigned getTensorNumI32Regs(RankedTensorType ty) {
+static unsigned getTensorNumI32RegsPerWarp(RankedTensorType ty) {
+  unsigned numElems = getTotalElemsPerThread(ty) *
+                      product(getThreadsPerWarp(ty)) *
+                      product(getWarpsPerCTA(ty));
   unsigned elSize =
       isa<PointerType>(ty.getElementType()) ? 64 : ty.getElementTypeBitWidth();
-  return ty.getNumElements() * (elSize / 32);
+  return numElems * elSize / 32;
 }
 
 static LogicalResult optimizePartitionNumWarps(ModuleAxisInfoAnalysis &axisInfo,
                                                WarpSpecializeOp wsOp,
                                                RunPipelineFn runPipeline) {
+  // Extremely rough estimate of the number of registers needed per partition.
   // For each partition, get the number of i32 registers used by the largest
   // tensor value.
+  //
+  // Because the partition region is isolated from above, we could in theory
+  // compile it to PTX and read the number of registers that got allocated.
   SmallVector<unsigned> maxTensorRegs;
   for (Region *partition : wsOp.getPartitionRegions()) {
     unsigned &tensorRegs = maxTensorRegs.emplace_back(0);
@@ -141,7 +164,7 @@ static LogicalResult optimizePartitionNumWarps(ModuleAxisInfoAnalysis &axisInfo,
       for (Type type :
            llvm::concat<Type>(op->getOperandTypes(), op->getResultTypes())) {
         if (auto tensor = dyn_cast<RankedTensorType>(type))
-          tensorRegs = std::max(tensorRegs, getTensorNumI32Regs(tensor));
+          tensorRegs = std::max(tensorRegs, getTensorNumI32RegsPerWarp(tensor));
       }
     });
     // Assume that the largest tensor accounts for half of the registers used
@@ -156,10 +179,14 @@ static LogicalResult optimizePartitionNumWarps(ModuleAxisInfoAnalysis &axisInfo,
   // `maxnreg` on the kernel, which is currently controlled by the frontend.
   // Thus, assume PTXAS will evenly distribute the total pool of registers
   // across all warps.
-  constexpr unsigned nCustodialRegs = 32;
+  //
+  // If the compiler could control that, then we could allow non-uniform
+  // register distributions, mostly beneficial for single-warp warpgroups that
+  // just do some artihmetic.
   constexpr unsigned nTotalRegs = 65536; // for Blackwell SMs
   const unsigned threadsPerWarp =
       TritonGPUDialect::getThreadsPerWarp(axisInfo.getModuleOp());
+  const unsigned defaultNumWarps = lookupNumWarps(wsOp);
 
   SmallVector<int32_t> partitionNumWarps =
       llvm::to_vector(wsOp.getPartitionNumWarps());
@@ -168,17 +195,20 @@ static LogicalResult optimizePartitionNumWarps(ModuleAxisInfoAnalysis &axisInfo,
   // partition needs. If this reduces the number of warps, it increases the
   // number of threads per warp, which can further reduce warps, etc. Iterate
   // until this converges.
+  //
+  // The algorithm is generally conservative and won't drop the number of warps
+  // unless there is big gap between the number of registers used and needed,
+  // since the estimate is quite rough.
   bool changed;
   do {
     changed = false;
 
-    int32_t totalNumWarps =
-        std::accumulate(partitionNumWarps.begin(), partitionNumWarps.end(), 0);
+    int32_t totalNumWarps = std::accumulate(
+        partitionNumWarps.begin(), partitionNumWarps.end(), defaultNumWarps);
     // Given the number of remaining registers per thread, figure out how many
     // warps are needed to capture the tensor regs. Assume each thread uses a
     // minimum number of registers for other things.
-    unsigned regsPerThread = (nTotalRegs - totalNumWarps * nCustodialRegs) /
-                             totalNumWarps / threadsPerWarp;
+    unsigned regsPerThread = nTotalRegs / totalNumWarps / threadsPerWarp;
     for (auto [numWarps, tensorRegs] :
          llvm::zip(partitionNumWarps, maxTensorRegs)) {
       int32_t nextNumWarps = 1;
@@ -200,7 +230,8 @@ static LogicalResult optimizePartitionNumWarps(ModuleAxisInfoAnalysis &axisInfo,
     if (newNumWarps == prevNumWarps || !tensorRegs)
       continue;
     // We need to reassign layouts.
-    if (failed(relayoutWarps(axisInfo, partition, newNumWarps, runPipeline)))
+    if (failed(relayoutWarps(axisInfo, partition, prevNumWarps, newNumWarps,
+                             runPipeline)))
       return failure();
   }
   wsOp.setPartitionNumWarps(partitionNumWarps);
