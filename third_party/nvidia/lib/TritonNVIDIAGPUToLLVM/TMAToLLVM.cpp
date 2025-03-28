@@ -1,5 +1,4 @@
 #include "mlir/Conversion/LLVMCommon/TypeConverter.h"
-#include "mlir/Dialect/LLVMIR/NVVMDialect.h"
 #include "mlir/IR/TypeUtilities.h"
 
 #include "PatternTritonGPUOpToLLVM.h"
@@ -15,7 +14,6 @@
 
 using namespace mlir;
 using namespace mlir::triton;
-using namespace mlir::triton::gpu;
 using namespace mlir::triton::nvidia_gpu;
 
 namespace {
@@ -196,7 +194,6 @@ struct ExperimentalTensormapFenceproxyAcquireOpConversion
     auto loc = op.getLoc();
     PTXBuilder ptxBuilder;
     auto b = TritonLLVMOpBuilder(loc, rewriter);
-    auto ctx = getContext();
 
     // prepare asm operands
     auto *descAddrOpr = ptxBuilder.newAddrOperand(adaptor.getDescPtr(), "l");

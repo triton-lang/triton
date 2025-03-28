@@ -169,7 +169,6 @@ mlir::LogicalResult createTMADesc(mlir::Value tmaPtr,
     return op->emitError(
         "FP4 padded loads require 128 elements or more in the last dim");
   }
-
   boxDim.push_back(mkI32Constant(contig_dim_size));
   for (int k = shapePerCTA.size() - 2; k >= 0; --k)
     boxDim.push_back(mkI32Constant(shapePerCTA[k]));
