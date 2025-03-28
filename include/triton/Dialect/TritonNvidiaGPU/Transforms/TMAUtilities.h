@@ -162,15 +162,15 @@ mlir::LogicalResult createTMADesc(mlir::Value tmaPtr,
 
   int paddingScale = fp4Padded ? 2 : 1;
   auto shapePerCTA = gpu::getShapePerCTA(encoding, op.getTensorShape());
-  int32_t contig_dim_size = shapePerCTA.back() * paddingScale;
+  int32_t contig_dim_size = getTMAContigDim(encoding, op.getTensorShape());
 
   llvm::SmallVector<Value> boxDim;
   if (fp4Padded && contig_dim_size != 128) {
-    op->emitError(
+    return op->emitError(
         "FP4 padded loads require 128 elements or more in the last dim");
   }
 
-  boxDim.push_back(mkI32Constant(getTMAContigDim(op.getType().getBlockType())));
+  boxDim.push_back(mkI32Constant(contig_dim_size));
   for (int k = shapePerCTA.size() - 2; k >= 0; --k)
     boxDim.push_back(mkI32Constant(shapePerCTA[k]));
 

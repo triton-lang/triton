@@ -1243,7 +1243,8 @@ struct AsyncTMACopyGlobalToLocalOpConversion
 
     auto shapePerCTA = ttg::getShapePerCTA(op.getResult().getType());
     auto contigDimSize = nvidia_gpu::getTMAContigDim(op.getResult().getType());
-    int numCopies = ceil<int>(shapePerCTA.back(), contigDimSize);
+    int numCopies =
+        ceil<int>(shapePerCTA.back() * packingFactor, contigDimSize);
     int rank = op.getCoord().size();
     auto ctaOffset = getCtaOffset(rewriter, loc, encoding, shapePerCTA);
     int elementsPerCTA = product(shapePerCTA) * packingFactor;
