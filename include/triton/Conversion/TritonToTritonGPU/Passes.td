@@ -36,7 +36,10 @@ def ConvertTritonToTritonGPU: Pass<"convert-triton-to-tritongpu", "mlir::ModuleO
               "number of ctas in a cga">,
         Option<"target", "target",
               "std::string", /*default*/"\"\"",
-              "the GPU target, e.g., cuda:80, hip:gfx942">
+              "the GPU target, e.g., cuda:80, hip:gfx942">,
+        Option<"enableSourceRemat", "enable-source-remat",
+               "bool", /*default*/"false",
+               "enable trivial source rematerialization">,
    ];
 }
 
