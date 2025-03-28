@@ -1,5 +1,55 @@
 // RUN: triton-opt %s -split-input-file -allow-unregistered-dialect -test-tritonamdgpu-fold-true-cmpi -canonicalize | FileCheck %s
 
+module attributes {"ttg.num-warps" = 4 : i32} {
+  tt.func @cmpsle(%arg0: !tt.ptr<f32>) -> i1 {
+    %c0 = arith.constant 0 : i32
+    %c1024_i32 = arith.constant 1024 : i32
+    %cmpsle = arith.cmpi sle, %c0, %c1024_i32 : i32
+    tt.return %cmpsle: i1
+  }
+}
+
+// CHECK-LABEL:   tt.func @cmpsle(
+// CHECK-SAME:                       %[[VAL_0:.*]]: !tt.ptr<f32>) -> i1 {
+// CHECK:           %[[VAL_1:.*]] = arith.constant true
+// CHECK:           tt.return %[[VAL_1]] : i1
+// CHECK:         }
+
+// -----
+
+module attributes {"ttg.num-warps" = 4 : i32} {
+  tt.func @assumepid(%arg0: !tt.ptr<f32>) -> tensor<1024xf32> {
+    %c0 = arith.constant 0 : i32
+    %c1024_i32 = arith.constant 1024 : i32
+    %pid = tt.get_program_id x : i32
+    %cmpsle = arith.cmpi sle, %pid, %c1024_i32 : i32
+    llvm.intr.assume %cmpsle : i1
+    %cmpsge = arith.cmpi sge, %pid, %c0 : i32
+    llvm.intr.assume %cmpsge : i1
+    %1 = arith.muli %pid, %c1024_i32 : i32
+    %2 = tt.addptr %arg0, %1 : !tt.ptr<f32>, i32
+    %3 = tt.splat %2 : !tt.ptr<f32> -> tensor<1024x!tt.ptr<f32>>
+    %4 = tt.load %3 : tensor<1024x!tt.ptr<f32>>
+    tt.return %4 : tensor<1024xf32>
+  }
+}
+
+// CHECK-LABEL:   tt.func @assumepid(
+// CHECK-SAME:                       %[[VAL_0:.*]]: !tt.ptr<f32>) -> tensor<1024xf32> {
+// CHECK:           %[[VAL_1:.*]] = arith.constant true
+// CHECK:           %[[VAL_2:.*]] = arith.constant 1024 : i32
+// CHECK:           %[[VAL_3:.*]] = tt.get_program_id x : i32
+// CHECK:           llvm.intr.assume %[[VAL_1]] : i1
+// CHECK:           llvm.intr.assume %[[VAL_1]] : i1
+// CHECK:           %[[VAL_4:.*]] = arith.muli %[[VAL_3]], %[[VAL_2]] : i32
+// CHECK:           %[[VAL_5:.*]] = tt.addptr %[[VAL_0]], %[[VAL_4]] : !tt.ptr<f32>, i32
+// CHECK:           %[[VAL_6:.*]] = tt.splat %[[VAL_5]] : !tt.ptr<f32> -> tensor<1024x!tt.ptr<f32>>
+// CHECK:           %[[VAL_7:.*]] = tt.load %[[VAL_6]] : tensor<1024x!tt.ptr<f32>>
+// CHECK:           tt.return %[[VAL_7]] : tensor<1024xf32>
+// CHECK:         }
+
+// -----
+
 #blocked = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [1, 0]}>
 #blocked1 = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [4, 8], warpsPerCTA = [4, 1], order = [1, 0]}>
 #mma = #ttg.nvidia_mma<{versionMajor = 2, versionMinor = 0, warpsPerCTA = [4, 1], instrShape = []}>
