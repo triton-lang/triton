@@ -434,12 +434,12 @@ struct BufferLoadToLocalOpConversion
     // the lane of a warp via permute. This only works if the swizzle pattern
     // does not exchange elements between warps which holds for all our swizzle
     // patterns. There is still a check performed to not silently produce wrong
-    // results if we invalidate the condition
+    // results if we invalidate the condition in the future
 
     bool isSwizzled =
         sharedEnc.getPerPhase() != 1 || sharedEnc.getMaxPhase() != 1;
 
-    // Compute the blocked -> shared linear layout to analyse pre conditions
+    // Compute the blocked -> shared linear layout to check preconditions
     auto shape = ptrType.getShape();
     LinearLayout srcLayout =
         triton::gpu::toLinearLayout(shape, ptrType.getEncoding());
@@ -456,8 +456,8 @@ struct BufferLoadToLocalOpConversion
 
     if (isSwizzled && !LLVM::AMD::doesSwizzleInsideWarp(
                           rewriter, srcToSharedLayout, threadsPerWarp)) {
-      return rewriter.notifyMatchFailure(
-          op, "does swizzled across warp boundaries");
+      return rewriter.notifyMatchFailure(op,
+                                         "does swizzle across warp boundaries");
     }
 
     auto resElemTy = getTypeConverter()->convertType(dstTy.getElementType());
@@ -467,28 +467,27 @@ struct BufferLoadToLocalOpConversion
     // First we determine the vector size per load and collect the
     // shared addresses. This will only emit the address calculation and not the
     // actual loads
+    auto emitSharedAddressed = [&](RankedTensorType srcTy, MemDescType dstTy) {
+      VectorType vecTy;
+      SmallVector<Value> shmemAddrs;
+      bool ok = emitTransferBetweenRegistersAndShared(
+          ptrType, dstTy, resElemTy, {}, smemObj, loc, rewriter, targetInfo,
+          [&](VectorType vecTy_, Value shmemAddr) {
+            vecTy = vecTy_;
+            shmemAddrs.push_back(shmemAddr);
+          });
+      assert(ok);
+      return std::make_tuple(shmemAddrs, vecTy);
+    };
+
     VectorType vecTy;
-    SmallVector<Value> shmemAddrs;
-    bool ok = emitTransferBetweenRegistersAndShared(
-        ptrType, dstTy, resElemTy, {}, smemObj, loc, rewriter, targetInfo,
-        [&](VectorType vecTy_, Value shmemAddr) {
-          vecTy = vecTy_;
-          shmemAddrs.push_back(shmemAddr);
-        });
-    assert(ok);
+    SmallVector<Value> linearShmemAddr;
+    SmallVector<Value> swizzledShmemAddr;
 
-    int vecBits = vecTy.getNumElements() * vecTy.getElementTypeBitWidth();
-    if (!targetInfo.supportsDirectToLdsLoadBitWidth(vecBits)) {
-      return rewriter.notifyMatchFailure(
-          op, "Buffer load to local does not support the required load vector "
-              "bitwidth" +
-                  std::to_string(vecBits));
-    }
-
-    // For swizzled layouts we need to compute the non swizzled offsets into lds
-    // to know from which lane we select the global ptr.
-    SmallVector<Value> shmemAddrsNonSwizzled;
-    if (isSwizzled) {
+    if (!isSwizzled) {
+      std::tie(linearShmemAddr, vecTy) = emitSharedAddressed(ptrType, dstTy);
+    } else {
+      std::tie(swizzledShmemAddr, vecTy) = emitSharedAddressed(ptrType, dstTy);
       // Create non swizzled smem encoding
       auto dstEnc = cast<SwizzledSharedEncodingAttr>(dstTy.getEncoding());
       auto flatSharedEnc = SwizzledSharedEncodingAttr::get(
@@ -497,15 +496,18 @@ struct BufferLoadToLocalOpConversion
       auto flatDstTy =
           MemDescType::get(dstTy.getShape(), dstTy.getElementType(),
                            flatSharedEnc, dstTy.getMemorySpace());
-      VectorType vecTypeNonSwizzled;
-      bool ok = emitTransferBetweenRegistersAndShared(
-          ptrType, flatDstTy, resElemTy, {}, smemObj, loc, rewriter, targetInfo,
-          [&](VectorType vecTy_, Value shmemAddr) {
-            vecTypeNonSwizzled = vecTy;
-            shmemAddrsNonSwizzled.push_back(shmemAddr);
-          });
-      assert(vecTypeNonSwizzled == vecTy);
-      assert(shmemAddrsNonSwizzled.size() == shmemAddrs.size());
+      VectorType linearVecTy;
+      std::tie(linearShmemAddr, linearVecTy) =
+          emitSharedAddressed(ptrType, flatDstTy);
+      assert(linearVecTy == vecTy);
+    }
+
+    int vecBits = vecTy.getNumElements() * vecTy.getElementTypeBitWidth();
+    if (!targetInfo.supportsDirectToLdsLoadBitWidth(vecBits)) {
+      return rewriter.notifyMatchFailure(
+          op, "Buffer load to local does not support the required load vector "
+              "bitwidth" +
+                  std::to_string(vecBits));
     }
 
     int vecBytes = vecBits / 8;
@@ -516,7 +518,7 @@ struct BufferLoadToLocalOpConversion
     // based on the collected shared addresses and vector size
     Value rsrcDesc = bufferEmitter.createResourceDescriptor(llPtr, llStride);
 
-    for (int i = 0; i < shmemAddrs.size(); i++) {
+    for (int i = 0; i < linearShmemAddr.size(); i++) {
       auto srcIdx = i * vec;
       auto offsetIn = offsetElems[srcIdx];
       Value pred = mask ? maskElems[srcIdx] : b.true_val();
@@ -524,8 +526,8 @@ struct BufferLoadToLocalOpConversion
       if (isSwizzled) {
         // We compute the difference in elements between the two lds pointers.
         // This will tells use which lane holds the global ptr we need to store
-        auto srcPtr = b.ptrtoint(i32_ty, shmemAddrs[i]);
-        auto swizzledSrcPtr = b.ptrtoint(i32_ty, shmemAddrsNonSwizzled[i]);
+        auto srcPtr = b.ptrtoint(i32_ty, swizzledShmemAddr[i]);
+        auto swizzledSrcPtr = b.ptrtoint(i32_ty, linearShmemAddr[i]);
         Value laneOffset =
             b.sdiv(b.sub(srcPtr, swizzledSrcPtr), b.i32_val(vecBytes));
         Value selectLane = b.add(getLaneId(rewriter, loc), laneOffset);
@@ -549,13 +551,12 @@ struct BufferLoadToLocalOpConversion
         }
       }
 
-      auto dstAddr = isSwizzled ? shmemAddrsNonSwizzled[i] : shmemAddrs[i];
       bufferEmitter.emitLoadToLds(vecTy, vecBytesVal, rsrcDesc, offsetIn,
-                                  dstAddr, pred, op.getCache());
+                                  linearShmemAddr[i], pred, op.getCache());
       if (!otherElems.empty()) {
         Value storeVal = packElementRangeIntoVector(
             rewriter, this->getTypeConverter(), loc, vecTy, otherElems, srcIdx);
-        llStore(rewriter, loc, shmemAddrs[i], storeVal,
+        llStore(rewriter, loc, linearShmemAddr[i], storeVal,
                 b.icmp_ne(maskElems[srcIdx], b.true_val()), op.getCache());
       }
     }
@@ -684,7 +685,7 @@ struct AsyncCopyGlobalToLocalOpConversion
       if (maskElems.empty()) {
         rewriter.create<ROCDL::GlobalLoadLDSOp>(
             loc, srcPtr, shmemAddrs[i], vecBytesVal, /*offset=*/b.i32_val(0),
-            cacheModifiers, nullptr, nullptr, nullptr);
+            cacheModifiers);
         continue;
       }
 
@@ -698,7 +699,7 @@ struct AsyncCopyGlobalToLocalOpConversion
       rewriter.setInsertionPointToStart(loadBlock);
       rewriter.create<ROCDL::GlobalLoadLDSOp>(
           loc, srcPtr, shmemAddrs[i], vecBytesVal, /*offset=*/b.i32_val(0),
-          cacheModifiers, nullptr, nullptr, nullptr);
+          cacheModifiers);
 
       rewriter.create<LLVM::BrOp>(loc, afterLoad);
       rewriter.setInsertionPointToStart(afterLoad);
