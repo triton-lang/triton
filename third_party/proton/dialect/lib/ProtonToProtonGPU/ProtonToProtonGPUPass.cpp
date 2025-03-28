@@ -14,6 +14,7 @@
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "llvm/Support/MathExtras.h"
+#include <sstream>
 
 namespace mlir {
 namespace triton {
@@ -23,25 +24,30 @@ namespace proton {
 #include "Conversion/ProtonToProtonGPU/Passes.h.inc"
 
 namespace {
-// FIXME(fywkevin): This is a placeholder for now. After Jeff's WS support in
-// place, we should revisit and adjust this accordingly.
-const int getWarpNumPerGroup() { return 4; }
+
+void parseWarpIds(std::string warpIds,
+                  llvm::SmallVectorImpl<int32_t> &warpIdVec) {
+  std::stringstream ss(warpIds);
+  std::string warpid;
+
+  while (std::getline(ss, warpid, ',')) {
+    warpIdVec.push_back(std::stoi(warpid));
+  }
+}
 
 class RecordOpCircularRewrite : public OpRewritePattern<proton::RecordOp> {
 public:
   RecordOpCircularRewrite(MLIRContext *ctx, Value buffer, Value index,
-                          StringRef metric, StringRef granularity,
+                          Value segmentBase, Value isWriter, StringRef metric,
                           ModuleScopeIdAllocation &scopeInfo)
       : OpRewritePattern::OpRewritePattern(ctx), buffer(buffer), index(index),
-        metric(metric), granularity(granularity), scopeInfo(scopeInfo) {}
+        segmentBase(segmentBase), isWriter(isWriter), metric(metric),
+        scopeInfo(scopeInfo) {}
 
   LogicalResult matchAndRewrite(proton::RecordOp op,
                                 PatternRewriter &rewriter) const override {
     Location loc = op->getLoc();
     MLIRContext *context = op.getContext();
-    auto granularityEnum = granularity == "warpgroup"
-                               ? proton::gpu::Granularity::WARPGROUP
-                               : proton::gpu::Granularity::WARP;
 
     rewriter.setInsertionPointAfter(op);
 
@@ -50,9 +56,9 @@ public:
         proton::Metric::CYCLE);
 
     int scopeId = scopeInfo.getOpScopeId(op);
-    rewriter.create<proton::gpu::CircularStoreOp>(op.getLoc(), buffer, index,
-                                                  counter, op.getIsStart(),
-                                                  scopeId, granularityEnum);
+    rewriter.create<proton::gpu::CircularStoreOp>(
+        op.getLoc(), buffer, index, counter, segmentBase, isWriter,
+        op.getIsStart(), scopeId);
 
     rewriter.eraseOp(op);
     return success();
@@ -61,8 +67,9 @@ public:
 private:
   Value buffer;
   Value index;
+  Value segmentBase;
+  Value isWriter;
   StringRef metric;
-  StringRef granularity;
   ModuleScopeIdAllocation &scopeInfo;
 };
 } // namespace
@@ -71,12 +78,14 @@ class ConvertProtonToProtonGPUPass
     : public impl::ConvertProtonToProtonGPUBase<ConvertProtonToProtonGPUPass> {
 public:
   ConvertProtonToProtonGPUPass(std::string metric, std::string granularity,
-                               int32_t maxSharedMem, int32_t scratchMem,
-                               int32_t alignment, std::string strategy,
-                               std::string bufferType, int32_t bufferSize)
+                               std::string warpIds, int32_t maxSharedMem,
+                               int32_t scratchMem, int32_t alignment,
+                               std::string strategy, std::string bufferType,
+                               int32_t bufferSize)
       : ConvertProtonToProtonGPUBase<ConvertProtonToProtonGPUPass>() {
     this->metric = metric;
     this->granularity = granularity;
+    this->warpIds = warpIds;
     this->maxSharedMem = maxSharedMem;
     this->scratchMem = scratchMem;
     this->alignment = alignment;
@@ -91,6 +100,18 @@ public:
     ModuleOp mod = llvm::cast<ModuleOp>(func->getParentOp());
     OpBuilder builder(context);
     builder.setInsertionPointToStart(&func.getBody().front());
+    int numWarps = mlir::triton::gpu::lookupNumWarps(mod);
+
+    auto granularityEnum = granularity == "all"
+                               ? proton::gpu::Granularity::ALL
+                               : proton::gpu::Granularity::SELECT;
+
+    llvm::SmallVector<int32_t, 8> warpIdVec;
+    int segmentNum = numWarps;
+    if (granularityEnum == proton::gpu::Granularity::SELECT) {
+      parseWarpIds(warpIds, warpIdVec);
+      segmentNum = warpIdVec.size();
+    }
 
     int sharedMemUsed = 0;
     if (mod->hasAttr("ttg.shared"))
@@ -100,19 +121,18 @@ public:
     const int bytesPerEntry = proton::gpu::getBytesPerClockEntry();
     const int wordsPerEntry = bytesPerEntry / 4; // 1 word = 4 bytes
     const int circularHeaderSize = 16;           // byte size
-    // TODO(fywkevin): we should consider the WS support for shared memory
-    // allocation.
 
     // We take any available shared memory left to allocate the circular buffer.
-    // The buffer size must be power of 2.
-    int sharedSlots =
+    // The buffer size per segment must be power of 2.
+    int segmentByteSize =
         llvm::NextPowerOf2(
-            (maxSharedMem - llvm::alignTo(sharedMemUsed, bytesPerEntry))) /
-        (2 * bytesPerEntry);
+            (maxSharedMem - llvm::alignTo(sharedMemUsed, bytesPerEntry)) /
+            segmentNum) /
+        2;
+    int sharedSlots = segmentByteSize * segmentNum / bytesPerEntry;
     // FIXME(Keren): this is a hack
     sharedSlots = std::max(sharedSlots, 1);
     int allocSharedMemSize = sharedSlots * bytesPerEntry;
-    int numWarps = mlir::triton::gpu::lookupNumWarps(mod);
     int allocBufferSize = bufferSize > 0 ? bufferSize : allocSharedMemSize;
     if (!allocBufferSize) {
       mlir::emitError(loc, "profiling buffer size can't be 0.");
@@ -139,21 +159,32 @@ public:
     }
 
     Value buffer;
+    auto ctaLayout =
+        triton::gpu::CTALayoutAttr::get(context, /*CTAsPerCGA=*/{1},
+                                        /*CTASplitNum=*/{1}, /*CTAOrder=*/{0});
+
+    // TODO(fywkevin): add another shared encoding attribute derived from the
+    // SharedEncodingTrait, and use it here.
+    auto encoding = triton::gpu::SwizzledSharedEncodingAttr::get(
+        context, 1, 1, 1, {0}, ctaLayout);
+
     if (bufferType == "shared_mem") {
       Attribute sharedMemorySpace =
           triton::gpu::SharedMemorySpaceAttr::get(context);
-      auto ctaLayout = triton::gpu::CTALayoutAttr::get(
-          context, /*CTAsPerCGA=*/{1},
-          /*CTASplitNum=*/{1}, /*CTAOrder=*/{0});
-
-      // TODO(fywkevin): add another shared encoding attribute derived from the
-      // SharedEncodingTrait, and use it here.
-      auto encoding = triton::gpu::SwizzledSharedEncodingAttr::get(
-          context, 1, 1, 1, {0}, ctaLayout);
       auto sharedBufferType = triton::gpu::MemDescType::get(
           {wordsPerEntry * sharedSlots}, builder.getI32Type(), encoding,
           sharedMemorySpace, /*mutable_memory=*/true);
       buffer = builder.create<triton::gpu::LocalAllocOp>(loc, sharedBufferType);
+    } else if (bufferType == "stack_mem") {
+      Attribute stackMemorySpace =
+          mlir::triton::proton::gpu::StackMemorySpaceAttr::get(context);
+      auto stackBufferType = triton::gpu::MemDescType::get(
+          {wordsPerEntry * sharedSlots}, builder.getI32Type(), encoding,
+          stackMemorySpace, /*mutable_memory=*/true);
+      buffer = builder.create<proton::gpu::StackAllocOp>(loc, stackBufferType);
+    } else if (bufferType == "heap_mem") {
+      mlir::emitError(loc, "not implemented yet");
+      return failure();
     } else {
       mlir::emitError(loc, "buffer-type not supported");
       return failure();
@@ -169,10 +200,17 @@ public:
         triton::PointerType::get(mlir::IntegerType::get(context, 32), 5);
     Value index = builder.create<proton::gpu::InitBufferIndexOp>(loc, ptrTy);
 
+    Value segmentBase = builder.create<proton::gpu::SegmentBaseOp>(
+        loc, mlir::IntegerType::get(context, 32), buffer, granularityEnum,
+        builder.getDenseI32ArrayAttr(warpIdVec));
+
+    Value isWriter = builder.create<proton::gpu::CheckSegWriterOp>(
+        loc, mlir::IntegerType::get(context, 1), segmentBase);
+
     mlir::RewritePatternSet patterns(context);
     ModuleScopeIdAllocation &scopeInfo = getAnalysis<ModuleScopeIdAllocation>();
-    patterns.add<RecordOpCircularRewrite>(context, buffer, index, metric,
-                                          granularity, scopeInfo);
+    patterns.add<RecordOpCircularRewrite>(context, buffer, index, segmentBase,
+                                          isWriter, metric, scopeInfo);
     if (applyPatternsGreedily(mod, std::move(patterns)).failed())
       return failure();
 
@@ -207,8 +245,10 @@ public:
       return;
     }
 
-    if (bufferType != "shared_mem" && bufferType != "stack_mem") {
-      mlir::emitError(loc, "buffer-type must be shared_mem or stack_mem");
+    if (bufferType != "shared_mem" && bufferType != "stack_mem" &&
+        bufferType != "heap_mem") {
+      mlir::emitError(
+          loc, "buffer-type must be shared_mem or stack_mem or heap_mem");
       signalPassFailure();
       return;
     }
@@ -231,8 +271,8 @@ public:
       return;
     }
 
-    if (granularity != "warp" && granularity != "warpgroup") {
-      mlir::emitError(loc, "granularity must be warp or warpgroup");
+    if (granularity != "all" && granularity != "select") {
+      mlir::emitError(loc, "granularity must be all or select");
       signalPassFailure();
       return;
     }
@@ -249,14 +289,13 @@ public:
   }
 };
 
-std::unique_ptr<OperationPass<ModuleOp>>
-createConvertProtonToProtonGPUPass(std::string metric, std::string granularity,
-                                   int32_t maxSharedMem, int32_t scratchMem,
-                                   int32_t alignment, std::string strategy,
-                                   std::string bufferType, int32_t bufferSize) {
+std::unique_ptr<OperationPass<ModuleOp>> createConvertProtonToProtonGPUPass(
+    std::string metric, std::string granularity, std::string warpIds,
+    int32_t maxSharedMem, int32_t scratchMem, int32_t alignment,
+    std::string strategy, std::string bufferType, int32_t bufferSize) {
   return std::make_unique<ConvertProtonToProtonGPUPass>(
-      metric, granularity, maxSharedMem, scratchMem, alignment, strategy,
-      bufferType, bufferSize);
+      metric, granularity, warpIds, maxSharedMem, scratchMem, alignment,
+      strategy, bufferType, bufferSize);
 }
 
 } // namespace proton
