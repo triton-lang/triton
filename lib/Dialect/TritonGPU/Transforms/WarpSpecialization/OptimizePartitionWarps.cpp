@@ -231,7 +231,6 @@ void OptimizePartitionWarps::runOnOperation() {
   ModuleAxisInfoAnalysis axisInfo(getOperation());
   auto runPipelineFn = [&](OpPassManager &pm, ModuleOp container) {
     getOperation().push_back(container);
-    container.dump();
     auto remove = llvm::make_scope_exit([&] { container->remove(); });
     return runPipeline(pm, container);
   };
