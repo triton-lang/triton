@@ -269,3 +269,49 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
     tt.return
   }
 }
+
+// -----
+
+// CHECK-LABEL: inThreadTranspose_scf_traversal_regression
+
+// CHECK: scf.if {{.*}} -> (!ttg.memdesc<32x128xf16, #shared, #smem>) {
+// CHECK:   scf.if {{.*}} -> (tensor<32x128xf16, #blocked>) {
+// CHECK:   } else {
+// CHECK:   }
+// CHECK:   amdgpu.in_thread_transpose {{.*}} : tensor<32x128xf16
+// CHECK:   ttg.local_alloc {{.*}} : {{.*}} !ttg.memdesc<32x128xf16
+// CHECK:   scf.yield %7 : !ttg.memdesc<32x128xf16, #shared, #smem>
+// CHECK: } else {
+// CHECK:   amdgpu.in_thread_transpose {{.*}} : tensor<32x128xf16
+// CHECK:   ttg.local_alloc %8 : {{.*}} -> !ttg.memdesc<32x128xf16
+// CHECK:   scf.yield {{.*}} : !ttg.memdesc<32x128xf16
+// CHECK: }
+// CHECK: ttg.local_load
+#blocked = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [8, 8], warpsPerCTA = [1, 8], order = [1, 0]}>
+#shared = #ttg.swizzled_shared<{vec = 4, perPhase = 2, maxPhase = 4, order = [0, 1], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [0, 1]}>
+#smem = #ttg.shared_memory
+#mma = #ttg.amd_mfma<{versionMajor = 3, versionMinor = 0, warpsPerCTA = [4, 2], instrShape = [32, 32], isTransposed = true}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.target = "hip:gfx942", "ttg.threads-per-warp" = 64 : i32} {
+  tt.func public @inThreadTranspose_scf_traversal_regression(%arg0: tensor<256x32xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 4}>>, %arg1: !tt.ptr<f16> {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32}, %arg2: i1) {
+    %cst_0 = arith.constant dense<0.000000e+00> : tensor<256x128xf32, #mma>
+    %0 = tt.splat %arg1 : !tt.ptr<f16> -> tensor<32x128x!tt.ptr<f16>, #blocked>
+    %5 = scf.if %arg2 -> (!ttg.memdesc<32x128xf16, #shared, #smem>) {
+      %10 = scf.if %arg2 -> (tensor<32x128xf16, #blocked>) {
+        %11 = tt.load %0 : tensor<32x128x!tt.ptr<f16>, #blocked>
+        scf.yield %11 : tensor<32x128xf16, #blocked>
+      } else {
+        %cst_1 = arith.constant dense<0.000000e+00> : tensor<32x128xf16, #blocked>
+        scf.yield %cst_1 : tensor<32x128xf16, #blocked>
+      }
+      %2 = ttg.local_alloc %10 : (tensor<32x128xf16, #blocked>) -> !ttg.memdesc<32x128xf16, #shared, #smem>
+      scf.yield %2 : !ttg.memdesc<32x128xf16, #shared, #smem>
+    } else {
+      %3 = tt.load %0 : tensor<32x128x!tt.ptr<f16>, #blocked>
+      %4 = ttg.local_alloc %3 : (tensor<32x128xf16, #blocked>) -> !ttg.memdesc<32x128xf16, #shared, #smem>
+      scf.yield %4 : !ttg.memdesc<32x128xf16, #shared, #smem>
+    }
+    %6 = ttg.local_load %5 : !ttg.memdesc<32x128xf16, #shared, #smem> -> tensor<32x128xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 4}>>
+    %7 = tt.dot %arg0, %6, %cst_0 : tensor<256x32xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 4}>> * tensor<32x128xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 4}>> -> tensor<256x128xf32, #mma>
+    tt.return
+  }
+}
