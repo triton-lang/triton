@@ -107,7 +107,7 @@ tt.func @fits_after_shrink(%arg0: i32) {
     ttg.local_store %3, %arg2 : tensor<128x64xf16, #blocked2d_8> -> !ttg.memdesc<128x64xf16, #shared, #smem, mutable>
     ttg.warp_return
   }
-  // CHECK: partition0({{.*}}) num_warps(1)
+  // CHECK: partition1({{.*}}) num_warps(1)
   partition1(%arg1: i32, %arg2: !ttg.memdesc<128x64xf16, #shared, #smem, mutable>) num_warps(8) {
     ttg.warp_return
   } : (i32, !ttg.memdesc<128x64xf16, #shared, #smem, mutable>) -> ()
