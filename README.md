@@ -2,7 +2,7 @@
 
 ## FlagTree
 
-Flagtree is a multi-backend Triton compiler project dedicated to developing a diverse ecosystem of AI chip compilers and related tooling platforms, thereby fostering and strengthening the upstream and downstream Triton ecosystem. Currently in its initial phase, the project aims to maintain compatibility with existing adaptation solutions while unifying the codebase to rapidly implement single-version multi-backend support.
+FlagTree is an open source, unified compiler for multiple AI chips dedicated to developing a diverse ecosystem of AI chip compilers and related tooling platforms, thereby fostering and strengthening the upstream and downstream Triton ecosystem. Currently in its initial phase, the project aims to maintain compatibility with existing adaptation solutions while unifying the codebase to rapidly implement single-version multi-backend support.
 
 ## Install from source
 Installation dependencies (ensure you use the correct python3.x version):

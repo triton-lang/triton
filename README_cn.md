@@ -2,9 +2,9 @@
 
 ## FlagTree
 
-FlagTree 是多后端的 Triton 编译器项目。FlagTree 致力于打造多元 AI 芯片编译器及相关工具平台，发展和壮大 Triton 上下游生态。项目当前处于初期，目标是兼容现有适配方案，统一代码仓库，快速实现单版本多后端支持。
+FlagTree 是面向多种 AI 芯片的开源、统一编译器。FlagTree 致力于打造多元 AI 芯片编译器及相关工具平台，发展和壮大 Triton 上下游生态。项目当前处于初期，目标是兼容现有适配方案，统一代码仓库，快速实现单版本多后端支持。
 
-## Install from source
+## 从源代码安装
 安装依赖（注意使用正确的 python3.x 执行）：
 ```shell
 apt install zlib1g zlib1g-dev libxml2 libxml2-dev  # ubuntu
@@ -18,7 +18,7 @@ export FLAGTREE_BACKEND=backendxxx
 python3 -m pip install . --no-build-isolation -v
 ```
 
-## Tips for building
+## 构建技巧
 
 自动下载依赖库的速度可能受限于网络环境，编译前可自行下载至缓存目录 ~/.flagtree（可通过环境变量 FLAGTREE_CACHE_DIR 修改），无需自行设置 LLVM_BUILD_DIR 等环境变量。
 各后端完整编译命令如下：
@@ -70,7 +70,7 @@ python3 -m pip install . --no-build-isolation -v
 unset LLVM_BUILD_DIR LLVM_INCLUDE_DIRS LLVM_LIBRARY_DIR LLVM_SYSPATH
 ```
 
-## Running tests
+## 运行测试
 
 安装完成后可以在后端目录下运行测试：
 ```shell
@@ -78,10 +78,10 @@ cd third_party/backendxxx/python/test
 python3 -m pytest -s
 ```
 
-## Contributing
+## 关于贡献
 
 欢迎参与 FlagTree 的开发并贡献代码，详情请参考[CONTRIBUTING.md](/CONTRIBUTING_cn.md)。
 
-## License
+## 许可证
 
 FlagTree 使用 [MIT license](/LICENSE)。
