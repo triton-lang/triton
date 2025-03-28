@@ -14,7 +14,7 @@ namespace mlir {
 class TritonGPUTypeConverter : public TypeConverter {
 public:
   TritonGPUTypeConverter(MLIRContext *context, int numWarps, int threadsPerWarp,
-                         int numCTAs);
+                         int numCTAs, bool enableSourceRemat);
   int getNumWarps() const { return numWarps; }
   int getThreadsPerWarp() const { return threadsPerWarp; }
   int getNumCTAs() const { return numCTAs; }

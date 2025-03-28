@@ -102,7 +102,7 @@ tt.func @test_canonicalize_convert_histogram(%arg0: tensor<256xi32, #blocked1>) 
 
 // CHECK-LABEL: @test_canonicalize_convert_local_load
 // CHECK-NOT:   gpu.barrier
-// CHECK: %[[V:.+]] = ttg.local_load
+// CHECK: %[[V:.+]] = ttg.local_load {{.*}} token %arg0
 // CHECK-NEXT:  gpu.barrier
 // CHECK-NEXT: tt.return %[[V]]
 
@@ -111,9 +111,9 @@ tt.func @test_canonicalize_convert_histogram(%arg0: tensor<256xi32, #blocked1>) 
 #shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
 #smem = #ttg.shared_memory
 module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 1 : i32, "ttg.compute-capability" = 80} {
-tt.func @test_canonicalize_convert_local_load() -> tensor<256xi32, #blocked1> {
+tt.func @test_canonicalize_convert_local_load(%arg0: !ttg.async.token) -> tensor<256xi32, #blocked1> {
     %0 = ttg.local_alloc : () -> !ttg.memdesc<256xi32, #shared, #smem, mutable>
-    %1 = ttg.local_load %0 : !ttg.memdesc<256xi32, #shared, #smem, mutable> -> tensor<256xi32, #blocked>
+    %1 = ttg.local_load %0 token %arg0: !ttg.memdesc<256xi32, #shared, #smem, mutable> -> tensor<256xi32, #blocked>
     gpu.barrier
     %2 = ttg.convert_layout %1 : tensor<256xi32, #blocked> -> tensor<256xi32, #blocked1>
     tt.return %2 : tensor<256xi32, #blocked1>

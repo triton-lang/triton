@@ -51,4 +51,9 @@ void AutomaticWarpSpecialization::runOnOperation() {
   WarpSpecializeOp::getCanonicalizationPatterns(patterns, &getContext());
   if (failed(applyPatternsGreedily(getOperation(), std::move(patterns))))
     return signalPassFailure();
+
+  pm.clear();
+  pm.addPass(createTritonGPUOptimizePartitionWarps());
+  if (failed(runPipeline(pm, getOperation())))
+    return signalPassFailure();
 }
