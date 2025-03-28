@@ -35,9 +35,10 @@ void AutomaticWarpSpecialization::runOnOperation() {
   OpPassManager pm;
   pm.addPass(createTritonGPULoadMMASpecialization({numStages}));
   pm.addPass(createTritonGPURewritePartitionDependencies());
-  // `int-range-optimizations` combines SCCP with integer range analysis. It's
-  // good at cleaning up loop arithmetic.
-  pm.addPass(arith::createIntRangeOptimizationsPass());
+  // `int-range-optimizations` and SCCP are good at cleaning up loop arithmetic.
+  // FIXME: Re-enable integer range analysis once it is fixed.
+  // pm.addPass(arith::createIntRangeOptimizationsPass());
+  pm.addPass(createSCCPPass());
   pm.addPass(createCSEPass());
   pm.addPass(createTritonGPUPartitionLoops());
   if (failed(runPipeline(pm, getOperation())))
