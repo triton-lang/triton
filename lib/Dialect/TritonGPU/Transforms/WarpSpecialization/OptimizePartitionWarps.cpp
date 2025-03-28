@@ -137,9 +137,8 @@ static LogicalResult relayoutWarps(ModuleAxisInfoAnalysis &axisInfo,
 // optimizePartitionWarps
 //===----------------------------------------------------------------------===//
 
-// Get the number of i32 registers required to store a tensor, assuming no
-// redundancy in the layout.
-static unsigned getTensorNumI32RegsPerWarp(RankedTensorType ty) {
+// Get the number of i32 registers required to store a tensor.
+static unsigned getTensorNumI32Regs(RankedTensorType ty) {
   unsigned numElems = getTotalElemsPerThread(ty) *
                       product(getThreadsPerWarp(ty)) *
                       product(getWarpsPerCTA(ty));
@@ -164,7 +163,7 @@ static LogicalResult optimizePartitionNumWarps(ModuleAxisInfoAnalysis &axisInfo,
       for (Type type :
            llvm::concat<Type>(op->getOperandTypes(), op->getResultTypes())) {
         if (auto tensor = dyn_cast<RankedTensorType>(type))
-          tensorRegs = std::max(tensorRegs, getTensorNumI32RegsPerWarp(tensor));
+          tensorRegs = std::max(tensorRegs, getTensorNumI32Regs(tensor));
       }
     });
     // Assume that the largest tensor accounts for half of the registers used
@@ -191,36 +190,46 @@ static LogicalResult optimizePartitionNumWarps(ModuleAxisInfoAnalysis &axisInfo,
   SmallVector<int32_t> partitionNumWarps =
       llvm::to_vector(wsOp.getPartitionNumWarps());
 
-  // Figure out the number of registers per thread and then how many warps each
-  // partition needs. If this reduces the number of warps, it increases the
-  // number of threads per warp, which can further reduce warps, etc. Iterate
-  // until this converges.
-  //
-  // The algorithm is generally conservative and won't drop the number of warps
-  // unless there is big gap between the number of registers used and needed,
-  // since the estimate is quite rough.
   bool changed;
   do {
     changed = false;
 
-    int32_t totalNumWarps = std::accumulate(
+    // Assuming even distribution of registers, given the total number of warps
+    // currently allocated, we can guess the number of registers PTXAS will
+    // distribute to each warp.
+    //
+    // For example, given 18 warps and a tensor<128x256xf32> contained in an
+    // 8-warp partition, we have (nTotalRegs/32/18) = ~113 regs per thread, and
+    // the tensor requires 128 regs per thread in its partition. In this case,
+    // nothing can be done.
+    //
+    // However, given a tensor<128x128xf32>, this requires only 64 regs per
+    // thread in 8 warps. If we reduce the size of the warp to 4, the overall
+    // regs per thread increases to (nTotalRegs/32/14) = ~146 regs per thread,
+    // while the tensor now requires 128 regs per thread. This works.
+    //
+    // The next iteration sees ~170 regs per thread, but the tensor will require
+    // 256, which is too many. So the algorithm stops at 4 warps. Evidently, if
+    // there are other partitions that can be reduced, we have to iterate this
+    // algorithm.
+    int32_t curTotalNumWarps = std::accumulate(
         partitionNumWarps.begin(), partitionNumWarps.end(), defaultNumWarps);
-    // Given the number of remaining registers per thread, figure out how many
-    // warps are needed to capture the tensor regs. Assume each thread uses a
-    // minimum number of registers for other things.
-    unsigned regsPerThread = nTotalRegs / totalNumWarps / threadsPerWarp;
+
     for (auto [numWarps, tensorRegs] :
          llvm::zip(partitionNumWarps, maxTensorRegs)) {
-      int32_t nextNumWarps = 1;
-      if (tensorRegs) {
-        unsigned fittedWarps = llvm::PowerOf2Ceil(llvm::divideCeil(
-            llvm::divideCeil(tensorRegs, regsPerThread), threadsPerWarp));
-        // Never increase the number of warps.
-        nextNumWarps = std::min<int32_t>(numWarps, fittedWarps);
-        assert(nextNumWarps > 0);
+      if (numWarps == 1)
+        continue;
+      // Check if reducing the number of warps will still fit the tensor. If it
+      // didn't fit to begin with, it won't fit after shrinking.
+      unsigned reqRegsPerThread = tensorRegs / threadsPerWarp / (numWarps / 2);
+      unsigned nextTotalNumWarps = curTotalNumWarps - (numWarps / 2);
+      unsigned nextRegsPerThread =
+          nTotalRegs / threadsPerWarp / nextTotalNumWarps;
+      if (reqRegsPerThread <= nextRegsPerThread) {
+        numWarps /= 2;
+        changed = true;
+        break;
       }
-      changed |= (nextNumWarps != numWarps);
-      numWarps = nextNumWarps;
     }
   } while (changed);
 
@@ -261,6 +270,8 @@ struct OptimizePartitionWarps
 void OptimizePartitionWarps::runOnOperation() {
   ModuleAxisInfoAnalysis axisInfo(getOperation());
   auto runPipelineFn = [&](OpPassManager &pm, ModuleOp container) {
+    // The module must be directly nested under the current op for `runPipeline`
+    // to work.
     getOperation().push_back(container);
     auto remove = llvm::make_scope_exit([&] { container->remove(); });
     return runPipeline(pm, container);

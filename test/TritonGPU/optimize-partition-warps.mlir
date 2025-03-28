@@ -91,4 +91,27 @@ tt.func @medium_tensor_computation(%arg0: i32) {
   tt.return
 }
 
+// CHECK-LABEL: @fits_after_shrink
+tt.func @fits_after_shrink(%arg0: i32) {
+  %alloc = ttg.local_alloc : () -> !ttg.memdesc<128x64xf16, #shared, #smem, mutable>
+  ttg.warp_specialize(%arg0, %alloc)
+  default {
+    ttg.warp_yield
+  }
+  // CHECK: partition0({{.*}}) num_warps(4)
+  partition0(%arg1: i32, %arg2: !ttg.memdesc<128x64xf16, #shared, #smem, mutable>) num_warps(8) {
+    %0 = ttg.local_load %arg2 : !ttg.memdesc<128x64xf16, #shared, #smem, mutable> -> tensor<128x64xf16, #blocked2d_8>
+    %1 = arith.extf %0 : tensor<128x64xf16, #blocked2d_8> to tensor<128x64xf32, #blocked2d_8>
+    %2 = arith.addf %1, %1 : tensor<128x64xf32, #blocked2d_8>
+    %3 = arith.truncf %2 : tensor<128x64xf32, #blocked2d_8> to tensor<128x64xf16, #blocked2d_8>
+    ttg.local_store %3, %arg2 : tensor<128x64xf16, #blocked2d_8> -> !ttg.memdesc<128x64xf16, #shared, #smem, mutable>
+    ttg.warp_return
+  }
+  // CHECK: partition0({{.*}}) num_warps(1)
+  partition1(%arg1: i32, %arg2: !ttg.memdesc<128x64xf16, #shared, #smem, mutable>) num_warps(8) {
+    ttg.warp_return
+  } : (i32, !ttg.memdesc<128x64xf16, #shared, #smem, mutable>) -> ()
+  tt.return
+}
+
 }
