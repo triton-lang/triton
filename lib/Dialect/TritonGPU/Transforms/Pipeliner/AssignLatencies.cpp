@@ -6,6 +6,7 @@
 #include "triton/Dialect/TritonGPU/Transforms/Schedule.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
+#include "triton/Tools/Sys/GetEnv.hpp"
 #include "llvm/Support/Debug.h"
 
 #define DEBUG_TYPE "triton-loop-pipeline"
@@ -257,6 +258,16 @@ public:
       : forOp(forOp), opLatency(opLatency) {};
 
   void run() {
+    if (!triton::tools::getBoolEnv("ENABLE_MMA_V5_ATT_PIPELINE")) {
+      int mmav5Count = 0;
+      for (auto &op : forOp.getBody()->without_terminator()) {
+        if (isa<ttng::MMAv5OpInterface>(&op)) {
+          mmav5Count++;
+        }
+      }
+      if (mmav5Count > 1)
+        return;
+    }
     // Check if the load op (mma operand) is pipelineable.
     auto isLoadPipelineable = [&](Operation *op) {
       return opLatency.count(op) && opLatency[op] > 0;
