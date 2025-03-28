@@ -156,47 +156,17 @@ static void moveUpTranspose(triton::FuncOp funcOp) {
       op->moveAfter(argOp);
 }
 
-// Schedule global load and local store ops for better GEMM performance.
-static void scheduleGlobalLoadLocalStore(Operation *parentOp) {
+// Schedule global load ops for better GEMM performance.
+static void moveUpGlobalLoad(triton::FuncOp funcOp) {
   SmallVector<Operation *> moveOps;
 
-  // Search through the forOp initArgs to find global loads for a GEMM that
-  // the pipeliner may have peeled into a loop prologue.
-  if (auto forOp = dyn_cast<scf::ForOp>(parentOp)) {
-    SmallVector<Value> vals = forOp.getInitArgs();
-    while (!vals.empty()) {
-      SmallVector<Value> nextVals; // Next set of values to search via BFS.
-      for (size_t i = 0; i < vals.size(); ++i) {
-        Operation *defOp = vals[i].getDefiningOp();
-        if (isa_and_nonnull<triton::LoadOp>(defOp)) {
-          moveOps.push_back(defOp);
-          continue;
-        }
-
-        // Find uses of the op that are local_store
-        for (Operation *op : vals[i].getUsers()) {
-          if (auto storeOp = dyn_cast<ttg::LocalStoreOp>(op)) {
-            // Recurse on operands of the local_store (to find a global_load).
-            nextVals.push_back(storeOp.getSrc());
-          }
-        }
-      }
-      vals.swap(nextVals);
-    }
-  }
-
-  // Move local_store ops inside the loop early if dependence distance greater
-  // than one iteration (i.e., num_stages > 2). For such case, better perf on
-  // GEMM when local_store ops precede global loads.
-  parentOp->walk([&](ttg::LocalStoreOp op) { moveOps.push_back(op); });
-  // Move global_load ops inside the loop early to prefetch. This may increase
+  // Move global_load ops early to prefetch. This may increase
   // register pressure but it enables issuing global loads early.
-  parentOp->walk([&](triton::LoadOp op) { moveOps.push_back(op); });
+  funcOp->walk([&](triton::LoadOp op) { moveOps.push_back(op); });
 
   for (auto op : llvm::reverse(moveOps)) {
     // Gather use-def chain in block.
     Block *block = op->getBlock();
-    bool leadsToLoad = false;
     SetVector<Operation *> backwardSet;
 
     BackwardSliceOptions options;
@@ -209,18 +179,11 @@ static void scheduleGlobalLoadLocalStore(Operation *parentOp) {
       if (!block->findAncestorOpInBlock(*defOp))
         return false;
 
-      // Check for a `load` dependent path.
-      leadsToLoad |= isa<triton::LoadOp>(defOp);
       // Only move ops residing in the same block.
       return defBlock == block;
     };
     mlir::getBackwardSlice(op, &backwardSet, options);
     backwardSet.insert(op);
-
-    // Don't move a local_store if its source is a load from
-    // the same iteration.
-    if (isa<ttg::LocalStoreOp>(op) && leadsToLoad)
-      continue;
 
     auto ipoint = findEarlyInsertionPoint(block, op);
     // Remove ops that already precede the insertion point. This is done
@@ -342,15 +305,14 @@ struct TritonAMDGPUReorderInstructionsPass
       moveDownCoversion(funcOp);
 
       moveUpTranspose(funcOp);
+      moveUpGlobalLoad(funcOp);
 
       if (isPureMatmulFunc(funcOp)) {
-        scheduleGlobalLoadLocalStore(funcOp);
         funcOp.walk([&](scf::ForOp forOp) -> void { sinkSecondLoad(forOp); });
       } else {
         SmallVector<scf::ForOp> leafForOps = triton::AMD::getLeafForOps(funcOp);
         for (auto forOp : leafForOps) {
           if (isPureMatmulLoop(forOp)) {
-            scheduleGlobalLoadLocalStore(forOp);
             sinkSecondLoad(forOp);
           }
         }
