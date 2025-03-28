@@ -435,19 +435,14 @@ static RankedTensorType getNewIndicesType(RankedTensorType type,
 // Function for converting any gather or scatter op that requires a specific
 // index layout. This also handles converting result types if there are any.
 static LogicalResult convertGatherScatterOp(Operation *op, OpOperand &indices,
-                                            ConversionPatternRewriter &b,
-                                            const TypeConverter &tc) {
+                                            ConversionPatternRewriter &b) {
   auto type = cast<RankedTensorType>(indices.get().getType());
   RankedTensorType newType =
       getNewIndicesType(type, lookupThreadsPerWarp(b), lookupNumWarps(op));
   if (!newType)
     return failure();
   Value index = b.create<ConvertLayoutOp>(op->getLoc(), newType, indices.get());
-  b.modifyOpInPlace(op, [&] {
-    indices.set(index);
-    for (OpResult result : op->getOpResults())
-      result.setType(tc.convertType(result.getType()));
-  });
+  indices.set(index);
   return success();
 }
 
@@ -458,8 +453,16 @@ struct GatherScatterOpPattern : public OpConversionPattern<OpT> {
   LogicalResult
   matchAndRewrite(OpT op, typename OpT::Adaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    return convertGatherScatterOp(op, op.getXOffsetsMutable(), rewriter,
-                                  *this->typeConverter);
+    LogicalResult result = success();
+    rewriter.modifyOpInPlace(op, [&] {
+      for (auto [operand, value] :
+           llvm::zip(op->getOpOperands(), adaptor.getOperands()))
+        operand.set(value);
+      for (OpResult result : op->getOpResults())
+        result.setType(this->typeConverter->convertType(result.getType()));
+      result = convertGatherScatterOp(op, op.getXOffsetsMutable(), rewriter);
+    });
+    return result;
   }
 };
 

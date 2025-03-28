@@ -156,6 +156,13 @@ def TritonGPUPartitionLoops : Pass<"tritongpu-partition-loops", "mlir::ModuleOp"
 }
 
 def TritonGPUOptimizePartitionWarps : Pass<"tritongpu-optimize-partition-warps", "mlir::ModuleOp"> {
+  let summary = "optimize the number of warps assigned to partitions";
+
+  let description = [{
+    The `tritongpu-optimize-partition-warps` pass will analyze the partitions
+    of `ttg.warp_specialize` ops and attempts to reduce the number of warps
+    assigned to them and optimize the register usage of the partitions.
+  }];
 }
 
 def TritonGPULoadMMASpecialization : Pass<"tritongpu-load-mma-specialization", "mlir::ModuleOp"> {
