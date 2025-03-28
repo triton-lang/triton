@@ -478,7 +478,7 @@ struct CanonicalizeConcatOpFromExtractSlice
     auto concatItemShape = concatItemType.getShape();
     SmallVector<int64_t> dimScales(concatItemShape.size(), 1);
     int64_t concatItemIndex = 0;
-    std::exclusive_scan(coords.begin(), coords.end(), dimScales.begin(), 1,
+    std::exclusive_scan(coords.rbegin(), coords.rend(), dimScales.rbegin(), 1,
                         std::multiplies<>());
     for (auto [idx, itemDimSize] : llvm::enumerate(concatItemShape)) {
       if ((offset[idx] % itemDimSize) != 0)
