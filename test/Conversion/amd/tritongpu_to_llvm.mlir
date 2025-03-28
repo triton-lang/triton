@@ -164,7 +164,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
     // CHECK-SAME: with 323, 15, 15, true : f32
     // CHECK-NEXT: llvm.intr.maxnum
 
-    // CHECK: llvm.amdgcn.readlane
+    // CHECK: rocdl.readlane
     %0 = "tt.reduce"(%arg0) <{axis = 0 : i32}> ({
     ^bb0(%arg1: f32, %arg2: f32):
       %1 = arith.maxnumf %arg1, %arg2 : f32
