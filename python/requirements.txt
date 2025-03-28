@@ -2,7 +2,7 @@ ninja
 cmake
 setuptools>=40.8.0
 wheel
-cmake>=3.18
+cmake>=3.18,<4.0
 ninja>=1.11.1
 pybind11>=2.13.1
 lit
