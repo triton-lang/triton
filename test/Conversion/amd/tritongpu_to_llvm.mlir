@@ -269,15 +269,15 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
     // CHECK-COUNT-2: llvm.amdgcn.ds.permute
     // CHECK: llvm.bitcast
     // CHECK: llvm.inttoptr
-    // CHECK: llvm.amdgcn.ballot
+    // CHECK: rocdl.ballot
     // CHECK: llvm.ptrtoint
-    // CHECK: llvm.amdgcn.ballot
+    // CHECK: rocdl.ballot
 
     // loop body:
     // CHECK: llvm.bitcast
     // CHECK-COUNT-2: llvm.amdgcn.readfirstlane
     // CHECK: llvm.bitcast
-    // CHECK: llvm.amdgcn.ballot
+    // CHECK: rocdl.ballot
     // CHECK: rocdl.mbcnt.lo
     // CHECK: rocdl.mbcnt.hi
 
@@ -294,7 +294,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
     // CHECK: llvm.amdgcn.ds.permute
     // CHECK: llvm.bitcast
 
-    // CHECK: llvm.amdgcn.ballot
+    // CHECK: rocdl.ballot
 
     // reduction:
     // CHECK-COUNT-6: llvm.amdgcn.ds.bpermute

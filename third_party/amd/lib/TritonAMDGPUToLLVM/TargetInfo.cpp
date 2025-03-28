@@ -110,9 +110,7 @@ Value TargetInfo::getClusterCTAId(RewriterBase &rewriter, Location loc) const {
 
 Value TargetInfo::ballot(RewriterBase &rewriter, Location loc, Type type,
                          Value cmp) const {
-  return LLVM::createLLVMIntrinsicCallOp(rewriter, loc, "llvm.amdgcn.ballot",
-                                         type, cmp)
-      ->getResult(0);
+  return rewriter.create<ROCDL::BallotOp>(loc, type, cmp);
 }
 
 void TargetInfo::storeDShared(RewriterBase &rewriter, Location loc, Value ptr,
