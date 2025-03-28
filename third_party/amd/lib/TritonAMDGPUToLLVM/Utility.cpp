@@ -621,9 +621,9 @@ bool canCoalesceWriteIntoSharedMemory(RewriterBase &rewriter,
       return false;
     }
   }
-  // Additionally we could swizzle based on the warp dimensions so we need to
-  // check that all bases (divided by contig) have 0 bits for the first
-  // (log2(warpSize) + 1) bits
+  // Additionally we could swizzle based on the warp dimension so we need to
+  // check that when all bases are divided by contig, none of the first
+  // (log2(warpSize) + 1) bits are set to 1
   assert(llvm::isPowerOf2_32(threadsPerWarp));
   assert(llvm::isPowerOf2_32(contig));
   unsigned mask = (threadsPerWarp * contig) - 1;

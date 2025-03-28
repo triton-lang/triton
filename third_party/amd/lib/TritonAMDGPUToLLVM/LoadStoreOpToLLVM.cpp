@@ -475,22 +475,22 @@ struct BufferLoadToLocalOpConversion
       assert(ok);
     };
 
-    // First we determine the vector size per load and collect the
-    // shared addresses. This will only emit the address calculation and not the
-    // actual loads.
-    // For swizzled loads we get the linear shared addresses from a
-    // temporary non swizzled layout. Those addresses will be used as the store
-    // addresses. Additionally, we compute the swizzled shared memory addresses
-    // which will be used to compute which lane holds our global ptr
+    // Determine the vector size per load and collect the shared addresses. This
+    // will only emit the address calculation and not the actual loads.
+    // For swizzled loads we get the non swizzled/coalesced shared addresses
+    // from a temporary non swizzled layout. Those addresses will be used as the
+    // store addresses. Additionally, we compute the swizzled shared memory
+    // addresses which will be used to compute which lane holds the global ptr
+    // to the coalesced address
     VectorType vecTy;
-    SmallVector<Value> linearShmemAddr;
+    SmallVector<Value> coalescedShmemAddr;
     SmallVector<Value> swizzledShmemAddr;
 
     if (noSwizzling) {
-      emitSharedAddresses(ptrType, dstTy, linearShmemAddr, vecTy);
+      emitSharedAddresses(ptrType, dstTy, coalescedShmemAddr, vecTy);
     } else {
       emitSharedAddresses(ptrType, dstTy, swizzledShmemAddr, vecTy);
-      // Create non swizzled/linear encoding
+      // Create non swizzled/coalesced encoding
       auto dstEnc = cast<SwizzledSharedEncodingAttr>(dstTy.getEncoding());
       auto flatSharedEnc = SwizzledSharedEncodingAttr::get(
           getContext(), dstEnc.getVec(), 1, 1, dstEnc.getOrder(),
@@ -498,9 +498,10 @@ struct BufferLoadToLocalOpConversion
       auto flatDstTy =
           MemDescType::get(dstTy.getShape(), dstTy.getElementType(),
                            flatSharedEnc, dstTy.getMemorySpace());
-      VectorType linearVecTy;
-      emitSharedAddresses(ptrType, flatDstTy, linearShmemAddr, linearVecTy);
-      assert(linearVecTy == vecTy);
+      VectorType coalescedVecTy;
+      emitSharedAddresses(ptrType, flatDstTy, coalescedShmemAddr,
+                          coalescedVecTy);
+      assert(coalescedVecTy == vecTy);
     }
     assert(vecTy.getNumElements() == vec);
 
@@ -520,7 +521,7 @@ struct BufferLoadToLocalOpConversion
     // based on the collected shared addresses and vector size
     Value rsrcDesc = bufferEmitter.createResourceDescriptor(llPtr, llStride);
 
-    for (int i = 0; i < linearShmemAddr.size(); i++) {
+    for (int i = 0; i < coalescedShmemAddr.size(); i++) {
       auto srcIdx = i * vec;
       auto offsetIn = offsetElems[srcIdx];
       Value pred = mask ? maskElems[srcIdx] : b.true_val();
@@ -529,9 +530,12 @@ struct BufferLoadToLocalOpConversion
         // We compute the difference in elements between the two shmem
         // addresses. This will tell use which lane holds the global ptr we need
         // to store
-        auto linearAddr = b.ptrtoint(i64_ty, swizzledShmemAddr[i]);
-        auto swizzledAddr = b.ptrtoint(i64_ty, linearShmemAddr[i]);
-        auto diff = b.trunc(i32_ty, b.sub(linearAddr, swizzledAddr));
+        // Calculate the difference in elements between the two shared memory
+        // addresses. The offset tells us which lane contains the global pointer
+        // which should be stored at the coalesced shared address
+        auto coalescedAddr = b.ptrtoint(i64_ty, swizzledShmemAddr[i]);
+        auto swizzledAddr = b.ptrtoint(i64_ty, coalescedShmemAddr[i]);
+        auto diff = b.trunc(i32_ty, b.sub(coalescedAddr, swizzledAddr));
         Value laneOffset = b.sdiv(diff, vecBytesVal);
         Value selectLane = b.add(getLaneId(rewriter, loc), laneOffset);
 
@@ -555,11 +559,11 @@ struct BufferLoadToLocalOpConversion
       }
 
       bufferEmitter.emitLoadToLds(vecTy, vecBytesVal, rsrcDesc, offsetIn,
-                                  linearShmemAddr[i], pred, op.getCache());
+                                  coalescedShmemAddr[i], pred, op.getCache());
       if (!otherElems.empty()) {
         Value storeVal = packElementRangeIntoVector(
             rewriter, this->getTypeConverter(), loc, vecTy, otherElems, srcIdx);
-        llStore(rewriter, loc, linearShmemAddr[i], storeVal,
+        llStore(rewriter, loc, coalescedShmemAddr[i], storeVal,
                 b.icmp_ne(maskElems[srcIdx], b.true_val()), op.getCache());
       }
     }
