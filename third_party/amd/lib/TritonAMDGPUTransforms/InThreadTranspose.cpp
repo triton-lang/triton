@@ -159,18 +159,21 @@ struct GlobalToSharedMemoryOpChain {
   SmallVector<Value> sharedMemVals;
 };
 
-FailureOr<SmallVector<Value>> traverseCFForValueDefs(Value val);
+FailureOr<SmallVector<Value>>
+traverseCFForValueDefs(Value val, SetVector<Value> &visitedVals);
 
-FailureOr<SmallVector<Value>> traverseForOpForDefs(scf::ForOp forOp,
-                                                   int argIdx) {
+FailureOr<SmallVector<Value>>
+traverseForOpForDefs(scf::ForOp forOp, int argIdx,
+                     SetVector<Value> &visitedVals) {
   int iterArgIdx = argIdx - 1; // Skip induction variable
   if (iterArgIdx >= 0) {
     Value yieldVal = forOp.getBody()->getTerminator()->getOperand(iterArgIdx);
     // look inside of a loop
-    auto inLoop = traverseCFForValueDefs(yieldVal);
+    auto inLoop = traverseCFForValueDefs(yieldVal, visitedVals);
     // look outside of a loop
     int forOpArgIdx = iterArgIdx + forOp.getNumControlOperands();
-    auto outLoop = traverseCFForValueDefs(forOp.getOperand(forOpArgIdx));
+    auto outLoop =
+        traverseCFForValueDefs(forOp.getOperand(forOpArgIdx), visitedVals);
     if (failed(inLoop) || failed(outLoop))
       return failure();
 
@@ -179,27 +182,30 @@ FailureOr<SmallVector<Value>> traverseForOpForDefs(scf::ForOp forOp,
     return foundDefs;
   } else {
     // Induction variable
-    auto search = traverseCFForValueDefs(forOp.getOperand(0));
+    auto search = traverseCFForValueDefs(forOp.getOperand(0), visitedVals);
     if (failed(search))
       return failure();
     return search.value();
   }
 }
 
-FailureOr<SmallVector<Value>> traverseIfOpForDefs(scf::IfOp ifOp, int argIdx) {
+FailureOr<SmallVector<Value>>
+traverseIfOpForDefs(scf::IfOp ifOp, int argIdx, SetVector<Value> &visitedVals) {
   auto thenYield = ifOp.thenYield();
   auto elseYield = ifOp.elseYield();
 
   SmallVector<Value> foundDefs;
   // Track all possible yielded values from then/else blocks
   if (thenYield) {
-    auto ops = traverseCFForValueDefs(thenYield->getOperand(argIdx));
+    auto ops =
+        traverseCFForValueDefs(thenYield->getOperand(argIdx), visitedVals);
     if (failed(ops))
       return failure();
     foundDefs.append(ops.value());
   }
   if (elseYield) {
-    auto ops = traverseCFForValueDefs(elseYield->getOperand(argIdx));
+    auto ops =
+        traverseCFForValueDefs(elseYield->getOperand(argIdx), visitedVals);
     if (failed(ops))
       return failure();
     foundDefs.append(ops.value());
@@ -207,14 +213,16 @@ FailureOr<SmallVector<Value>> traverseIfOpForDefs(scf::IfOp ifOp, int argIdx) {
   return foundDefs;
 }
 
-FailureOr<SmallVector<Value>> traverseWhileOpForDefs(scf::WhileOp whileOp,
-                                                     int argIdx) {
+FailureOr<SmallVector<Value>>
+traverseWhileOpForDefs(scf::WhileOp whileOp, int argIdx,
+                       SetVector<Value> &visitedVals) {
   auto terminator = whileOp.getYieldOp();
-  auto search = traverseCFForValueDefs(terminator->getOperand(argIdx));
+  auto search =
+      traverseCFForValueDefs(terminator->getOperand(argIdx), visitedVals);
   if (failed(search))
     return failure();
   SmallVector<Value> foundDefs = search.value();
-  search = traverseCFForValueDefs(whileOp.getInits()[argIdx]);
+  search = traverseCFForValueDefs(whileOp.getInits()[argIdx], visitedVals);
   if (failed(search))
     return failure();
   foundDefs.append(search.value());
@@ -222,21 +230,19 @@ FailureOr<SmallVector<Value>> traverseWhileOpForDefs(scf::WhileOp whileOp,
 }
 
 FailureOr<SmallVector<Value>>
-traverseRegionBranchOpForDefs(RegionBranchOpInterface regionBranch,
-                              int argIdx) {
+traverseRegionBranchOpForDefs(RegionBranchOpInterface regionBranch, int argIdx,
+                              SetVector<Value> &visitedVals) {
   // Deal with the case that convert_layout intakes from scf.if, etc.
   llvm::SmallVector<scf::YieldOp> yieldOps;
-  regionBranch->walk([&](Operation *op) {
-    if (auto yieldOp = dyn_cast<scf::YieldOp>(op)) {
-      if (yieldOp->getParentOp() == regionBranch) {
-        yieldOps.push_back(yieldOp);
-      }
+  regionBranch->walk([&](scf::YieldOp op) {
+    if (op->getParentOp() == regionBranch) {
+      yieldOps.push_back(op);
     }
   });
 
   SmallVector<Value> foundDefs;
   for (auto yieldOp : yieldOps) {
-    auto ops = traverseCFForValueDefs(yieldOp->getOperand(argIdx));
+    auto ops = traverseCFForValueDefs(yieldOp->getOperand(argIdx), visitedVals);
     if (failed(ops))
       return failure();
     foundDefs.append(ops.value());
@@ -250,7 +256,11 @@ traverseRegionBranchOpForDefs(RegionBranchOpInterface regionBranch,
 /// If val is a result of operation, return definingOp.
 /// If val is a result of some control flow operation or block argument,
 /// traverse control flow instructions.
-FailureOr<SmallVector<Value>> traverseCFForValueDefs(Value val) {
+FailureOr<SmallVector<Value>>
+traverseCFForValueDefs(Value val, SetVector<Value> &visitedVals) {
+  if (visitedVals.contains(val))
+    return SmallVector<Value>{};
+  visitedVals.insert(val);
   LDBG("    traverseCFForValueDefs processing " << val);
   auto attachValue =
       [val](
@@ -265,7 +275,8 @@ FailureOr<SmallVector<Value>> traverseCFForValueDefs(Value val) {
   // traverse inside CFG operation
   if (auto regionBranch = val.getDefiningOp<RegionBranchOpInterface>()) {
     auto resId = cast<OpResult>(val).getResultNumber();
-    return attachValue(traverseRegionBranchOpForDefs(regionBranch, resId));
+    return attachValue(
+        traverseRegionBranchOpForDefs(regionBranch, resId, visitedVals));
   }
 
   // if val is not a CFG op and not a block argument, it is a "normal" operation
@@ -291,11 +302,11 @@ FailureOr<SmallVector<Value>> traverseCFForValueDefs(Value val) {
   // Traverse outside CFG operations
   int argIdx = blockArg.getArgNumber();
   if (auto forOp = dyn_cast<scf::ForOp>(parentOp))
-    return attachValue(traverseForOpForDefs(forOp, argIdx));
+    return attachValue(traverseForOpForDefs(forOp, argIdx, visitedVals));
   if (auto ifOp = dyn_cast<scf::IfOp>(parentOp))
-    return attachValue(traverseIfOpForDefs(ifOp, argIdx));
+    return attachValue(traverseIfOpForDefs(ifOp, argIdx, visitedVals));
   if (auto whileOp = dyn_cast<scf::WhileOp>(parentOp))
-    return attachValue(traverseWhileOpForDefs(whileOp, argIdx));
+    return attachValue(traverseWhileOpForDefs(whileOp, argIdx, visitedVals));
 
   LDBG("    can not traverse def-use chains, unsupported control flow "
        "operation");
@@ -310,7 +321,11 @@ struct ForwardSearchAnalysis {
 /// For a given value return all operations that uses it.
 ///
 /// Traverses control flow instructions forward.
-FailureOr<ForwardSearchAnalysis> traverseCFForValueUses(Value val) {
+FailureOr<ForwardSearchAnalysis>
+traverseCFForValueUses(Value val, SetVector<Value> &visitedVals) {
+  if (visitedVals.contains(val))
+    return ForwardSearchAnalysis{};
+  visitedVals.insert(val);
   LDBG("    traverseCFForValueUses processing " << val);
   ForwardSearchAnalysis result;
   for (auto &use : val.getUses()) {
@@ -320,31 +335,41 @@ FailureOr<ForwardSearchAnalysis> traverseCFForValueUses(Value val) {
       LDBG("    Reached return from function");
       return failure();
     }
+    // process data flow directed outside of SCF operation
     if (isa<scf::YieldOp>(user)) {
       auto opIdx = use.getOperandNumber();
       auto parent = user->getParentOp();
       // traverse outside data flow
       auto parentResult = parent->getResult(opIdx);
-      auto cfSearch = traverseCFForValueUses(parentResult);
+      auto cfSearch = traverseCFForValueUses(parentResult, visitedVals);
       if (failed(cfSearch))
         return failure();
       result.ops.append(cfSearch.value().ops);
       result.transitiveCF.push_back(parentResult);
       result.transitiveCF.append(cfSearch.value().transitiveCF);
 
-      // traverse loop internal data flow
       if (auto forOp = dyn_cast<scf::ForOp>(parent)) {
+        // traverse loop body data flow, reachable by backward edge in CF
         int forBodyOperandIdx = opIdx + forOp.getNumInductionVars();
         auto blockArg = forOp.getBody()->getArgument(forBodyOperandIdx);
-        auto cfSearch = traverseCFForValueUses(blockArg);
+        auto cfSearch = traverseCFForValueUses(blockArg, visitedVals);
         if (failed(cfSearch))
           return failure();
         result.ops.append(cfSearch.value().ops);
         result.transitiveCF.push_back(blockArg);
         result.transitiveCF.append(cfSearch.value().transitiveCF);
+      } else if (auto whileOp = dyn_cast<scf::WhileOp>(parent)) {
+        // traverse loop body data flow, reachable by backward edge in CF
+        // TBD
+      } else if (auto whileOp = dyn_cast<scf::IfOp>(parent)) {
+        // do nothing, there are no backward edges in scf::if
+      } else {
+        LDBG("    Reached unsupported CF operation in forward CF traversal");
+        return failure();
       }
       continue;
     }
+    // process data flow directed inside of SCF operation
     if (auto forOp = dyn_cast<scf::ForOp>(user)) {
       LDBG("      for op num operands: " << forOp.getNumOperands());
       LDBG("      for op body num operands: "
@@ -353,13 +378,15 @@ FailureOr<ForwardSearchAnalysis> traverseCFForValueUses(Value val) {
       int blockArgIdx = use.getOperandNumber() - forOp.getNumControlOperands() +
                         forOp.getNumInductionVars();
       auto blockArg = forOp.getBody()->getArgument(blockArgIdx);
-      auto cfSearch = traverseCFForValueUses(blockArg);
+      auto cfSearch = traverseCFForValueUses(blockArg, visitedVals);
       if (failed(cfSearch))
         return failure();
       result.ops.append(cfSearch.value().ops);
       result.transitiveCF.push_back(blockArg);
       result.transitiveCF.append(cfSearch.value().transitiveCF);
       continue;
+    } else if (auto whileOp = dyn_cast<scf::WhileOp>(user)) {
+      // TBD
     }
     if (isa<scf::SCFDialect>(user->getDialect())) {
       LDBG("    can not traverse def-use chains, unsupported control flow "
@@ -378,7 +405,8 @@ FailureOr<ForwardSearchAnalysis> traverseCFForValueUses(Value val) {
 /// \returns true on success, false if analysis failed
 template <typename Op>
 FailureOr<SmallVector<Op>> findAllDefiningOps(Value val) {
-  auto candidates = traverseCFForValueDefs(val);
+  SetVector<Value> visitedVals;
+  auto candidates = traverseCFForValueDefs(val, visitedVals);
   if (failed(candidates))
     return failure();
   SmallVector<Op> result;
@@ -405,8 +433,9 @@ FailureOr<SmallVector<Op>> findAllDefiningOps(Value val) {
 ///
 /// \returns partially filled GlobalToSharedMemoryOpChain structure of failure.
 FailureOr<GlobalToSharedMemoryOpChain>
-findReachableSMemOps(ttg::LocalLoadOp root,
-                     SetVector<mlir::Operation *> &visited) {
+findReachableSMemOps(ttg::LocalLoadOp root) {
+  SetVector<Operation *> visitedOps;
+  SetVector<Value> visitedVals;
   // breadth-first search for reachable opeations
   GlobalToSharedMemoryOpChain foundNetwork;
   SmallVector<Operation *> traversalStep{root};
@@ -414,9 +443,9 @@ findReachableSMemOps(ttg::LocalLoadOp root,
     LDBG("begin new step in smem op analysis");
     SmallVector<Operation *> nextTraversalStep;
     for (auto candidate : traversalStep) {
-      if (visited.contains(candidate))
+      if (visitedOps.contains(candidate))
         continue;
-      visited.insert(candidate);
+      visitedOps.insert(candidate);
       LDBG("  processing in smem op analysis: " << *candidate);
 
       // Each smem operation could have at most 1 result and at most 1 memory
@@ -446,7 +475,7 @@ findReachableSMemOps(ttg::LocalLoadOp root,
 
       // Look backward
       if (smemOperand) {
-        auto backwardSearch = traverseCFForValueDefs(smemOperand);
+        auto backwardSearch = traverseCFForValueDefs(smemOperand, visitedVals);
         if (failed(backwardSearch))
           return failure();
         for (auto def : backwardSearch.value()) {
@@ -461,7 +490,7 @@ findReachableSMemOps(ttg::LocalLoadOp root,
 
       // Look forward
       if (smemOutput) {
-        auto forwardSearch = traverseCFForValueUses(smemOutput);
+        auto forwardSearch = traverseCFForValueUses(smemOutput, visitedVals);
         if (failed(forwardSearch))
           return failure();
         foundNetwork.sharedMemVals.append(forwardSearch.value().transitiveCF);
@@ -512,10 +541,9 @@ matchInThreadTransposePattern(ttg::LocalLoadOp lLoad) {
     return failure();
   }
 
-  SetVector<Operation *> visited;
   // find local_alloc, local_store, local_load and ttg.memdesc_subview
   // operations
-  auto sharedMemSearch = findReachableSMemOps(lLoad, visited);
+  auto sharedMemSearch = findReachableSMemOps(lLoad);
   if (failed(sharedMemSearch)) {
     LDBG("Failed to traverse shared memmory operation network");
     return failure();

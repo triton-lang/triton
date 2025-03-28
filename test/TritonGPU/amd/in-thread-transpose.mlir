@@ -272,7 +272,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
 
 // -----
 
-// CHECK-LABEL: inThreadTranspose_scf_traversal_regression
+// Test that backward SCF traversal correctly process nested CF structures
+// CHECK-LABEL: inThreadTranspose_nested_scf_traversal_regression
 
 // CHECK: scf.if {{.*}} -> (!ttg.memdesc<32x128xf16, #shared, #smem>) {
 // CHECK:   scf.if {{.*}} -> (tensor<32x128xf16, #blocked>) {
@@ -292,7 +293,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
 #smem = #ttg.shared_memory
 #mma = #ttg.amd_mfma<{versionMajor = 3, versionMinor = 0, warpsPerCTA = [4, 2], instrShape = [32, 32], isTransposed = true}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.target = "hip:gfx942", "ttg.threads-per-warp" = 64 : i32} {
-  tt.func public @inThreadTranspose_scf_traversal_regression(%arg0: tensor<256x32xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 4}>>, %arg1: !tt.ptr<f16> {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32}, %arg2: i1) {
+  tt.func public @inThreadTranspose_nested_scf_traversal_regression(%arg0: tensor<256x32xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 4}>>, %arg1: !tt.ptr<f16> {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32}, %arg2: i1) {
     %cst_0 = arith.constant dense<0.000000e+00> : tensor<256x128xf32, #mma>
     %0 = tt.splat %arg1 : !tt.ptr<f16> -> tensor<32x128x!tt.ptr<f16>, #blocked>
     %5 = scf.if %arg2 -> (!ttg.memdesc<32x128xf16, #shared, #smem>) {
@@ -319,7 +320,6 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
 // -----
 
 // CHECK-LABEL: inThreadTranspose_scf_while_traversal_regression
-
 #blocked = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [8, 8], warpsPerCTA = [1, 8], order = [1, 0]}>
 #shared = #ttg.swizzled_shared<{vec = 4, perPhase = 2, maxPhase = 4, order = [0, 1], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [0, 1]}>
 #smem = #ttg.shared_memory
