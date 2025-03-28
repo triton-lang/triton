@@ -36,12 +36,12 @@ The `flash-attention.py` kernel comes with auto-tuning. In this example, we want
 
 ```bash
 $ TRITON_PRINT_AUTOTUNING=1 python3 ./flash-attention.py -b 2 -hq 16 -hk 16 -sq 8192 -sk 8192 -d 128 -causal -layout thd
-Autotuning kernel attn_fwd with config BLOCK_M: 128, BLOCK_N: 128, waves_per_eu: 2, PRE_LOAD_V: False, GRID_CU_MULTIP: 2, instruction_sched_variant: none, num_warps: 4, num_ctas: 1, num_stages: 1, maxnreg: None
-Autotuning kernel attn_fwd with config BLOCK_M: 128, BLOCK_N: 64, waves_per_eu: 2, PRE_LOAD_V: False, GRID_CU_MULTIP: 2, instruction_sched_variant: none, num_warps: 4, num_ctas: 1, num_stages: 1, maxnreg: None
-Autotuning kernel attn_fwd with config BLOCK_M: 128, BLOCK_N: 64, waves_per_eu: 3, PRE_LOAD_V: False, GRID_CU_MULTIP: 2, instruction_sched_variant: none, num_warps: 4, num_ctas: 1, num_stages: 1, maxnreg: None
-Autotuning kernel attn_fwd with config BLOCK_M: 128, BLOCK_N: 64, waves_per_eu: 1, PRE_LOAD_V: False, GRID_CU_MULTIP: 2, instruction_sched_variant: none, num_warps: 4, num_ctas: 1, num_stages: 1, maxnreg: None
-Autotuning kernel attn_fwd with config BLOCK_M: 128, BLOCK_N: 32, waves_per_eu: 2, PRE_LOAD_V: False, GRID_CU_MULTIP: 2, instruction_sched_variant: none, num_warps: 4, num_ctas: 1, num_stages: 1, maxnreg: None
-Triton autotuning for function attn_fwd finished after 15.06s; best config selected: BLOCK_M: 128, BLOCK_N: 64, waves_per_eu: 2, PRE_LOAD_V: False, GRID_CU_MULTIP: 2, instruction_sched_variant: none, num_warps: 4, num_ctas: 1, num_stages: 1, maxnreg: None;
+Autotuning kernel attn_fwd with config BLOCK_M: 128, BLOCK_N: 128, waves_per_eu: 2, PRE_LOAD_V: False, GRID_CU_MULTIP: 2, schedule_hint: none, num_warps: 4, num_ctas: 1, num_stages: 1, maxnreg: None
+Autotuning kernel attn_fwd with config BLOCK_M: 128, BLOCK_N: 64, waves_per_eu: 2, PRE_LOAD_V: False, GRID_CU_MULTIP: 2, schedule_hint: none, num_warps: 4, num_ctas: 1, num_stages: 1, maxnreg: None
+Autotuning kernel attn_fwd with config BLOCK_M: 128, BLOCK_N: 64, waves_per_eu: 3, PRE_LOAD_V: False, GRID_CU_MULTIP: 2, schedule_hint: none, num_warps: 4, num_ctas: 1, num_stages: 1, maxnreg: None
+Autotuning kernel attn_fwd with config BLOCK_M: 128, BLOCK_N: 64, waves_per_eu: 1, PRE_LOAD_V: False, GRID_CU_MULTIP: 2, schedule_hint: none, num_warps: 4, num_ctas: 1, num_stages: 1, maxnreg: None
+Autotuning kernel attn_fwd with config BLOCK_M: 128, BLOCK_N: 32, waves_per_eu: 2, PRE_LOAD_V: False, GRID_CU_MULTIP: 2, schedule_hint: none, num_warps: 4, num_ctas: 1, num_stages: 1, maxnreg: None
+Triton autotuning for function attn_fwd finished after 15.06s; best config selected: BLOCK_M: 128, BLOCK_N: 64, waves_per_eu: 2, PRE_LOAD_V: False, GRID_CU_MULTIP: 2, schedule_hint: none, num_warps: 4, num_ctas: 1, num_stages: 1, maxnreg: None;
 fused-attention-fwd-d128-layoutthd:
    BATCH    HQ    HK  N_CTX_Q  N_CTX_K      triton      torch
 0    2.0  16.0  16.0   8192.0   8192.0  221.869662  17.140226

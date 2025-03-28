@@ -65,18 +65,18 @@ def get_full_tuning_space():
     waves_per_eu_range = [0]
     matrix_instr_nonkdim_range = [16, 32]
     kpack_range = [1, 2]
-    sched_variants = ["none"]
+    schedule_hints = ["none"]
 
     space = itertools.product(block_mn_range, block_mn_range, block_k_range, num_warps_range, group_m_range,
                               split_k_range, num_stage_range, waves_per_eu_range, matrix_instr_nonkdim_range,
-                              sched_variants, kpack_range)
+                              schedule_hints, kpack_range)
 
     for instance in space:
-        block_m, block_n, block_k, num_warps, group_m, split_k, num_stages, waves_per_eu, matrix_instr_nonkdim, sched_variant, kpack = instance
+        block_m, block_n, block_k, num_warps, group_m, split_k, num_stages, waves_per_eu, matrix_instr_nonkdim, schedule_hint, kpack = instance
         configs.append({
             'BLOCK_SIZE_M': block_m, 'BLOCK_SIZE_N': block_n, 'BLOCK_SIZE_K': block_k, 'GROUP_SIZE_M': group_m,
             'SPLIT_K': split_k, 'num_warps': num_warps, 'num_stages': num_stages, 'waves_per_eu': waves_per_eu,
-            'matrix_instr_nonkdim': matrix_instr_nonkdim, 'kpack': kpack, 'instruction_sched_variant': sched_variant
+            'matrix_instr_nonkdim': matrix_instr_nonkdim, 'kpack': kpack, 'schedule_hint': schedule_hint
         })
 
     return configs
@@ -358,7 +358,7 @@ def gen_rotating_tensors(M, N, K, dtype_a, need_Trans_a, dtype_b, need_Trans_b, 
 
 
 def matmul(a, b, c, bias, block_m, block_n, block_k, group_m, split_k, num_warps, num_stages, waves_per_eu,
-           mfmaInstrSize, kpack, use_bias, sched_variant):
+           mfmaInstrSize, kpack, use_bias, schedule_hint):
     # Check constraints.
     assert a.shape[1] == b.shape[0], "Incompatible dimensions"
     #assert a.is_contiguous(), "Matrix A must be contiguous"
@@ -376,12 +376,12 @@ def matmul(a, b, c, bias, block_m, block_n, block_k, group_m, split_k, num_warps
                         BLOCK_SIZE_K=block_k, GROUP_SIZE_M=group_m, SPLIT_K=split_k, num_warps=num_warps,
                         num_stages=num_stages, waves_per_eu=waves_per_eu, matrix_instr_nonkdim=mfmaInstrSize,
                         kpack=kpack, BIAS=use_bias, EVEN_K=EVEN_K, GRID_MN=grid[0], NUM_XCDS=num_xcds,
-                        instruction_sched_variant=sched_variant)
+                        schedule_hint=schedule_hint)
     return c
 
 
 def test_correctness(M, N, K, col_a, col_b, dtype_a, dtype_b, dtype_c, init_type, config, bias_vector, verbose):
-    block_m, block_n, block_k, group_m, split_k, num_warps, num_stages, waves_per_eu, mfmaInstrSize, kpack, sched_variant = read_config(
+    block_m, block_n, block_k, group_m, split_k, num_warps, num_stages, waves_per_eu, mfmaInstrSize, kpack, schedule_hint = read_config(
         config)
     use_bias = bias_vector
     torch.manual_seed(0)
@@ -397,7 +397,7 @@ def test_correctness(M, N, K, col_a, col_b, dtype_a, dtype_b, dtype_c, init_type
     # Allocates output.
     c = torch.zeros((M, N), device=a.device, dtype=tl_to_torch_types[name_to_tl_types[dtype_c]])
     triton_output = matmul(a, b, c, bias, block_m, block_n, block_k, group_m, split_k, num_warps, num_stages,
-                           waves_per_eu, mfmaInstrSize, kpack, use_bias, sched_variant)
+                           waves_per_eu, mfmaInstrSize, kpack, use_bias, schedule_hint)
     torch_output = torch.matmul(a_fp16, b_fp16)
     if use_bias:
         torch_output += bias_fp16[:, None]
