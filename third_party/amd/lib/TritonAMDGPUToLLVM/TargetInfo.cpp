@@ -99,7 +99,9 @@ int TargetInfo::getSharedMemorySize() const {
   return kbytes * 1024;
 }
 
-bool TargetInfo::supportMaximumMinimum() const { return false; }
+bool TargetInfo::supportMaximumMinimum() const {
+  return getISAFamily() == ISAFamily::CDNA4;
+}
 
 Value TargetInfo::getClusterCTAId(RewriterBase &rewriter, Location loc) const {
   // On AMD hardware we don't have CTA clusters like NVIDIA. So this will always

@@ -1874,9 +1874,10 @@ void populateElementwiseOpToLLVMPatterns(
                                         benefit);
   triton::populateElementwiseOpToLLVMPatterns(
       typeConverter, patterns, axisInfoAnalysis, targetInfo, benefit);
+  bool hwNanPropagationSupported = targetInfo.supportMaximumMinimum();
   triton::populateMinMaxFOpToLLVMPattern(
       typeConverter, patterns, axisInfoAnalysis,
-      /*hwNanPropagationSupported=*/false, benefit);
+      hwNanPropagationSupported, benefit);
   triton::populateClampFOpToLLVMPattern(typeConverter, patterns,
                                         axisInfoAnalysis, targetInfo, benefit);
 }
