@@ -16,7 +16,7 @@ namespace ttng = mlir::triton::nvidia_gpu;
 
 std::optional<std::pair<ttng::TMEMAllocOp, ttng::TMEMLoadOp>>
 ttng::getTMemAllocAndLoad(ttng::MMAv5OpInterface mmaOp) {
-  auto acc = mmaOp->getOperand(2).getDefiningOp<ttng::TMEMAllocOp>();
+  auto acc = mmaOp.getAccumulator().getDefiningOp<ttng::TMEMAllocOp>();
   if (!acc || acc->getParentRegion() != mmaOp->getParentRegion()) {
     return std::nullopt;
   }

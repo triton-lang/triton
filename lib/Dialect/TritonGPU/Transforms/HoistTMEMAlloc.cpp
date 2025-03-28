@@ -206,15 +206,6 @@ ttng::TMEMAllocOp hoistTMEMAlloc(ttng::TMEMAllocOp alloc, scf::ForOp forOp) {
   alloc.replaceAllUsesWith(newAlloc.getResult());
   alloc.erase();
 
-  ModuleOp module = forOp->getParentOfType<ModuleOp>();
-  mlir::RewritePatternSet patterns(module.getContext());
-  patterns.add<RotateTMEMStoreInLoop, CombineTMEMLoadAndStore,
-               CombineTMEMStoreAndSelect, SinkTMEMLoad>(module.getContext());
-  scf::ForOp::getCanonicalizationPatterns(patterns, module.getContext());
-  if (applyPatternsGreedily(module, std::move(patterns)).failed()) {
-    llvm_unreachable("Failed to hoist tmem_store");
-  }
-
   return newAlloc;
 }
 
@@ -261,16 +252,23 @@ struct HoistTMEMAlloc
     for (auto mmaOp : mmaOps) {
       auto forOp = dyn_cast<scf::ForOp>(mmaOp->getParentOp());
       if (!forOp) {
-        return;
+        continue;
       }
       hoistInvariantInputs(mmaOp, forOp);
 
-      auto allocAndLoadOpt = getTMemAllocAndLoad(mmaOp);
-      if (!allocAndLoadOpt) {
-        return;
+      auto alloc = mmaOp.getAccumulator().getDefiningOp<ttng::TMEMAllocOp>();
+      if (!alloc || alloc->getParentRegion() != mmaOp->getParentRegion()) {
+        continue;
       }
-      auto [alloc, load] = allocAndLoadOpt.value();
       hoistTMEMAlloc(alloc, forOp);
+    }
+
+    mlir::RewritePatternSet patterns(&getContext());
+    patterns.add<RotateTMEMStoreInLoop, CombineTMEMLoadAndStore,
+                 CombineTMEMStoreAndSelect, SinkTMEMLoad>(&getContext());
+    scf::ForOp::getCanonicalizationPatterns(patterns, &getContext());
+    if (failed(applyPatternsGreedily(getOperation(), std::move(patterns)))) {
+      llvm_unreachable("Failed to hoist tmem_store");
     }
   }
 };
