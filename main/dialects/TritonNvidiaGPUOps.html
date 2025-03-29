@@ -277,18 +277,8 @@ by <code class="docutils literal notranslate"><span class="pre">desc_ptr</span><
 <h3>Attributes:<a class="headerlink" href="#id1" title="Link to this heading">¶</a></h3>
 <table>
 <tr><th>Attribute</th><th>MLIR Type</th><th>Description</th></tr>
-<tr><td><code>cache</code></td><td>::mlir::triton::CacheModifierAttr</td><td><details><summary>allowed 32-bit signless integer cases: 1, 2, 3, 4, 5, 6, 7</summary>{{% markdown %}}Enum cases:
-* none (`NONE`)
-* ca (`CA`)
-* cg (`CG`)
-* wb (`WB`)
-* cs (`CS`)
-* wt (`WT`)
-* cv (`CV`){{% /markdown %}}</details></td></tr>
-<tr><td><code>evict</code></td><td>::mlir::triton::EvictionPolicyAttr</td><td><details><summary>allowed 32-bit signless integer cases: 1, 2, 3</summary>{{% markdown %}}Enum cases:
-* evict_normal (`NORMAL`)
-* evict_first (`EVICT_FIRST`)
-* evict_last (`EVICT_LAST`){{% /markdown %}}</details></td></tr>
+<tr><td><code>cache</code></td><td>::mlir::triton::CacheModifierAttr</td><td>allowed 32-bit signless integer cases: 1, 2, 3, 4, 5, 6, 7</td></tr>
+<tr><td><code>evict</code></td><td>::mlir::triton::EvictionPolicyAttr</td><td>allowed 32-bit signless integer cases: 1, 2, 3</td></tr>
 <tr><td><code>isVolatile</code></td><td>::mlir::BoolAttr</td><td>bool attribute</td></tr>
 </table>
 </section>
@@ -649,22 +639,8 @@ If there is a barrier the result will be safe to read after a barrier wait.</p>
 <h3>Attributes:<a class="headerlink" href="#id15" title="Link to this heading">¶</a></h3>
 <table>
 <tr><th>Attribute</th><th>MLIR Type</th><th>Description</th></tr>
-<tr><td><code>a_type</code></td><td>::mlir::triton::ScaleDotElemTypeAttr</td><td><details><summary>allowed 32-bit signless integer cases: 0, 1, 2, 3, 4, 5, 6</summary>{{% markdown %}}Enum cases:
-* e4m3 (`E4M3`)
-* e5m2 (`E5M2`)
-* e2m3 (`E2M3`)
-* e3m2 (`E3M2`)
-* e2m1 (`E2M1`)
-* bf16 (`BF16`)
-* fp16 (`FP16`){{% /markdown %}}</details></td></tr>
-<tr><td><code>b_type</code></td><td>::mlir::triton::ScaleDotElemTypeAttr</td><td><details><summary>allowed 32-bit signless integer cases: 0, 1, 2, 3, 4, 5, 6</summary>{{% markdown %}}Enum cases:
-* e4m3 (`E4M3`)
-* e5m2 (`E5M2`)
-* e2m3 (`E2M3`)
-* e3m2 (`E3M2`)
-* e2m1 (`E2M1`)
-* bf16 (`BF16`)
-* fp16 (`FP16`){{% /markdown %}}</details></td></tr>
+<tr><td><code>a_type</code></td><td>::mlir::triton::ScaleDotElemTypeAttr</td><td>allowed 32-bit signless integer cases: 0, 1, 2, 3, 4, 5, 6</td></tr>
+<tr><td><code>b_type</code></td><td>::mlir::triton::ScaleDotElemTypeAttr</td><td>allowed 32-bit signless integer cases: 0, 1, 2, 3, 4, 5, 6</td></tr>
 </table>
 </section>
 <section id="id16">
@@ -1005,10 +981,7 @@ https://docs.nvidia.com/cuda/parallel-thread-execution/index.html#data-movement-
 <h3>Attributes:<a class="headerlink" href="#id26" title="Link to this heading">¶</a></h3>
 <table>
 <tr><th>Attribute</th><th>MLIR Type</th><th>Description</th></tr>
-<tr><td><code>inputPrecision</code></td><td>::mlir::triton::InputPrecisionAttr</td><td><details><summary>allowed 32-bit signless integer cases: 0, 1, 2</summary>{{% markdown %}}Enum cases:
-* tf32 (`TF32`)
-* tf32x3 (`TF32x3`)
-* ieee (`IEEE`){{% /markdown %}}</details></td></tr>
+<tr><td><code>inputPrecision</code></td><td>::mlir::triton::InputPrecisionAttr</td><td>allowed 32-bit signless integer cases: 0, 1, 2</td></tr>
 <tr><td><code>maxNumImpreciseAcc</code></td><td>::mlir::IntegerAttr</td><td>32-bit signless integer attribute</td></tr>
 <tr><td><code>isAsync</code></td><td>::mlir::BoolAttr</td><td>bool attribute</td></tr>
 </table>

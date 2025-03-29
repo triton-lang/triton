@@ -292,15 +292,8 @@ Effects: `MemoryEffects::Effect{MemoryEffects::Read on ::mlir::triton::GlobalMem
 
 <table>
 <tr><th>Attribute</th><th>MLIR Type</th><th>Description</th></tr>
-<tr><td><code>sem</code></td><td>::mlir::triton::MemSemanticAttr</td><td><details><summary>allowed 32-bit signless integer cases: 1, 2, 3, 4</summary>{{% markdown %}}Enum cases:
-* relaxed (`RELAXED`)
-* acquire (`ACQUIRE`)
-* release (`RELEASE`)
-* acq_rel (`ACQUIRE_RELEASE`){{% /markdown %}}</details></td></tr>
-<tr><td><code>scope</code></td><td>::mlir::triton::MemSyncScopeAttr</td><td><details><summary>allowed 32-bit signless integer cases: 1, 2, 3</summary>{{% markdown %}}Enum cases:
-* gpu (`GPU`)
-* cta (`CTA`)
-* sys (`SYSTEM`){{% /markdown %}}</details></td></tr>
+<tr><td><code>sem</code></td><td>::mlir::triton::MemSemanticAttr</td><td>allowed 32-bit signless integer cases: 1, 2, 3, 4</td></tr>
+<tr><td><code>scope</code></td><td>::mlir::triton::MemSyncScopeAttr</td><td>allowed 32-bit signless integer cases: 1, 2, 3</td></tr>
 </table>
 
 #### Operands:
@@ -343,26 +336,9 @@ Effects: `MemoryEffects::Effect{MemoryEffects::Read on ::mlir::triton::GlobalMem
 
 <table>
 <tr><th>Attribute</th><th>MLIR Type</th><th>Description</th></tr>
-<tr><td><code>atomic_rmw_op</code></td><td>::mlir::triton::RMWOpAttr</td><td><details><summary>allowed 32-bit signless integer cases: 1, 2, 3, 4, 5, 6, 7, 8, 9, 10</summary>{{% markdown %}}Enum cases:
-* and (`AND`)
-* or (`OR`)
-* xor (`XOR`)
-* add (`ADD`)
-* fadd (`FADD`)
-* max (`MAX`)
-* min (`MIN`)
-* umax (`UMAX`)
-* umin (`UMIN`)
-* exch (`XCHG`){{% /markdown %}}</details></td></tr>
-<tr><td><code>sem</code></td><td>::mlir::triton::MemSemanticAttr</td><td><details><summary>allowed 32-bit signless integer cases: 1, 2, 3, 4</summary>{{% markdown %}}Enum cases:
-* relaxed (`RELAXED`)
-* acquire (`ACQUIRE`)
-* release (`RELEASE`)
-* acq_rel (`ACQUIRE_RELEASE`){{% /markdown %}}</details></td></tr>
-<tr><td><code>scope</code></td><td>::mlir::triton::MemSyncScopeAttr</td><td><details><summary>allowed 32-bit signless integer cases: 1, 2, 3</summary>{{% markdown %}}Enum cases:
-* gpu (`GPU`)
-* cta (`CTA`)
-* sys (`SYSTEM`){{% /markdown %}}</details></td></tr>
+<tr><td><code>atomic_rmw_op</code></td><td>::mlir::triton::RMWOpAttr</td><td>allowed 32-bit signless integer cases: 1, 2, 3, 4, 5, 6, 7, 8, 9, 10</td></tr>
+<tr><td><code>sem</code></td><td>::mlir::triton::MemSemanticAttr</td><td>allowed 32-bit signless integer cases: 1, 2, 3, 4</td></tr>
+<tr><td><code>scope</code></td><td>::mlir::triton::MemSyncScopeAttr</td><td>allowed 32-bit signless integer cases: 1, 2, 3</td></tr>
 </table>
 
 #### Operands:
@@ -496,9 +472,7 @@ Effects: `MemoryEffects::Effect{}`
 
 <table>
 <tr><th>Attribute</th><th>MLIR Type</th><th>Description</th></tr>
-<tr><td><code>propagateNan</code></td><td>::mlir::triton::PropagateNanAttr</td><td><details><summary>allowed 32-bit signless integer cases: 0, 65535</summary>{{% markdown %}}Enum cases:
-* none (`NONE`)
-* all (`ALL`){{% /markdown %}}</details></td></tr>
+<tr><td><code>propagateNan</code></td><td>::mlir::triton::PropagateNanAttr</td><td>allowed 32-bit signless integer cases: 0, 65535</td></tr>
 </table>
 
 #### Operands:
@@ -590,18 +564,8 @@ Effects: `MemoryEffects::Effect{MemoryEffects::Read on ::mlir::triton::GlobalMem
 
 <table>
 <tr><th>Attribute</th><th>MLIR Type</th><th>Description</th></tr>
-<tr><td><code>cache</code></td><td>::mlir::triton::CacheModifierAttr</td><td><details><summary>allowed 32-bit signless integer cases: 1, 2, 3, 4, 5, 6, 7</summary>{{% markdown %}}Enum cases:
-* none (`NONE`)
-* ca (`CA`)
-* cg (`CG`)
-* wb (`WB`)
-* cs (`CS`)
-* wt (`WT`)
-* cv (`CV`){{% /markdown %}}</details></td></tr>
-<tr><td><code>evict</code></td><td>::mlir::triton::EvictionPolicyAttr</td><td><details><summary>allowed 32-bit signless integer cases: 1, 2, 3</summary>{{% markdown %}}Enum cases:
-* evict_normal (`NORMAL`)
-* evict_first (`EVICT_FIRST`)
-* evict_last (`EVICT_LAST`){{% /markdown %}}</details></td></tr>
+<tr><td><code>cache</code></td><td>::mlir::triton::CacheModifierAttr</td><td>allowed 32-bit signless integer cases: 1, 2, 3, 4, 5, 6, 7</td></tr>
+<tr><td><code>evict</code></td><td>::mlir::triton::EvictionPolicyAttr</td><td>allowed 32-bit signless integer cases: 1, 2, 3</td></tr>
 </table>
 
 #### Operands:
@@ -704,10 +668,7 @@ Effects: `MemoryEffects::Effect{}`
 
 <table>
 <tr><th>Attribute</th><th>MLIR Type</th><th>Description</th></tr>
-<tr><td><code>inputPrecision</code></td><td>::mlir::triton::InputPrecisionAttr</td><td><details><summary>allowed 32-bit signless integer cases: 0, 1, 2</summary>{{% markdown %}}Enum cases:
-* tf32 (`TF32`)
-* tf32x3 (`TF32x3`)
-* ieee (`IEEE`){{% /markdown %}}</details></td></tr>
+<tr><td><code>inputPrecision</code></td><td>::mlir::triton::InputPrecisionAttr</td><td>allowed 32-bit signless integer cases: 0, 1, 2</td></tr>
 <tr><td><code>maxNumImpreciseAcc</code></td><td>::mlir::IntegerAttr</td><td>32-bit signless integer attribute</td></tr>
 </table>
 
@@ -751,22 +712,8 @@ Effects: `MemoryEffects::Effect{}`
 
 <table>
 <tr><th>Attribute</th><th>MLIR Type</th><th>Description</th></tr>
-<tr><td><code>a_elem_type</code></td><td>::mlir::triton::ScaleDotElemTypeAttr</td><td><details><summary>allowed 32-bit signless integer cases: 0, 1, 2, 3, 4, 5, 6</summary>{{% markdown %}}Enum cases:
-* e4m3 (`E4M3`)
-* e5m2 (`E5M2`)
-* e2m3 (`E2M3`)
-* e3m2 (`E3M2`)
-* e2m1 (`E2M1`)
-* bf16 (`BF16`)
-* fp16 (`FP16`){{% /markdown %}}</details></td></tr>
-<tr><td><code>b_elem_type</code></td><td>::mlir::triton::ScaleDotElemTypeAttr</td><td><details><summary>allowed 32-bit signless integer cases: 0, 1, 2, 3, 4, 5, 6</summary>{{% markdown %}}Enum cases:
-* e4m3 (`E4M3`)
-* e5m2 (`E5M2`)
-* e2m3 (`E2M3`)
-* e3m2 (`E3M2`)
-* e2m1 (`E2M1`)
-* bf16 (`BF16`)
-* fp16 (`FP16`){{% /markdown %}}</details></td></tr>
+<tr><td><code>a_elem_type</code></td><td>::mlir::triton::ScaleDotElemTypeAttr</td><td>allowed 32-bit signless integer cases: 0, 1, 2, 3, 4, 5, 6</td></tr>
+<tr><td><code>b_elem_type</code></td><td>::mlir::triton::ScaleDotElemTypeAttr</td><td>allowed 32-bit signless integer cases: 0, 1, 2, 3, 4, 5, 6</td></tr>
 <tr><td><code>fastMath</code></td><td>::mlir::BoolAttr</td><td>bool attribute</td></tr>
 </table>
 
@@ -993,9 +940,7 @@ Effects: `MemoryEffects::Effect{}`
 
 <table>
 <tr><th>Attribute</th><th>MLIR Type</th><th>Description</th></tr>
-<tr><td><code>rounding</code></td><td>::mlir::triton::RoundingModeAttr</td><td><details><summary>allowed 32-bit signless integer cases: 0, 1</summary>{{% markdown %}}Enum cases:
-* rtz (`RTZ`)
-* rtne (`RTNE`){{% /markdown %}}</details></td></tr>
+<tr><td><code>rounding</code></td><td>::mlir::triton::RoundingModeAttr</td><td>allowed 32-bit signless integer cases: 0, 1</td></tr>
 </table>
 
 #### Operands:
@@ -1079,10 +1024,7 @@ Effects: `MemoryEffects::Effect{}`
 
 <table>
 <tr><th>Attribute</th><th>MLIR Type</th><th>Description</th></tr>
-<tr><td><code>axis</code></td><td>::mlir::triton::ProgramIDDimAttr</td><td><details><summary>allowed 32-bit signless integer cases: 0, 1, 2</summary>{{% markdown %}}Enum cases:
-* x (`X`)
-* y (`Y`)
-* z (`Z`){{% /markdown %}}</details></td></tr>
+<tr><td><code>axis</code></td><td>::mlir::triton::ProgramIDDimAttr</td><td>allowed 32-bit signless integer cases: 0, 1, 2</td></tr>
 </table>
 
 #### Results:
@@ -1110,10 +1052,7 @@ Effects: `MemoryEffects::Effect{}`
 
 <table>
 <tr><th>Attribute</th><th>MLIR Type</th><th>Description</th></tr>
-<tr><td><code>axis</code></td><td>::mlir::triton::ProgramIDDimAttr</td><td><details><summary>allowed 32-bit signless integer cases: 0, 1, 2</summary>{{% markdown %}}Enum cases:
-* x (`X`)
-* y (`Y`)
-* z (`Z`){{% /markdown %}}</details></td></tr>
+<tr><td><code>axis</code></td><td>::mlir::triton::ProgramIDDimAttr</td><td>allowed 32-bit signless integer cases: 0, 1, 2</td></tr>
 </table>
 
 #### Results:
@@ -1245,21 +1184,9 @@ Interfaces: `InferTypeOpInterface`, `MemoryEffectOpInterface`
 <table>
 <tr><th>Attribute</th><th>MLIR Type</th><th>Description</th></tr>
 <tr><td><code>boundaryCheck</code></td><td>::mlir::DenseI32ArrayAttr</td><td>i32 dense array attribute</td></tr>
-<tr><td><code>padding</code></td><td>::mlir::triton::PaddingOptionAttr</td><td><details><summary>allowed 32-bit signless integer cases: 1, 2</summary>{{% markdown %}}Enum cases:
-* zero (`PAD_ZERO`)
-* nan (`PAD_NAN`){{% /markdown %}}</details></td></tr>
-<tr><td><code>cache</code></td><td>::mlir::triton::CacheModifierAttr</td><td><details><summary>allowed 32-bit signless integer cases: 1, 2, 3, 4, 5, 6, 7</summary>{{% markdown %}}Enum cases:
-* none (`NONE`)
-* ca (`CA`)
-* cg (`CG`)
-* wb (`WB`)
-* cs (`CS`)
-* wt (`WT`)
-* cv (`CV`){{% /markdown %}}</details></td></tr>
-<tr><td><code>evict</code></td><td>::mlir::triton::EvictionPolicyAttr</td><td><details><summary>allowed 32-bit signless integer cases: 1, 2, 3</summary>{{% markdown %}}Enum cases:
-* evict_normal (`NORMAL`)
-* evict_first (`EVICT_FIRST`)
-* evict_last (`EVICT_LAST`){{% /markdown %}}</details></td></tr>
+<tr><td><code>padding</code></td><td>::mlir::triton::PaddingOptionAttr</td><td>allowed 32-bit signless integer cases: 1, 2</td></tr>
+<tr><td><code>cache</code></td><td>::mlir::triton::CacheModifierAttr</td><td>allowed 32-bit signless integer cases: 1, 2, 3, 4, 5, 6, 7</td></tr>
+<tr><td><code>evict</code></td><td>::mlir::triton::EvictionPolicyAttr</td><td>allowed 32-bit signless integer cases: 1, 2, 3</td></tr>
 <tr><td><code>isVolatile</code></td><td>::mlir::BoolAttr</td><td>bool attribute</td></tr>
 </table>
 
@@ -1788,18 +1715,8 @@ Effects: `MemoryEffects::Effect{MemoryEffects::Write on ::mlir::triton::GlobalMe
 <table>
 <tr><th>Attribute</th><th>MLIR Type</th><th>Description</th></tr>
 <tr><td><code>boundaryCheck</code></td><td>::mlir::DenseI32ArrayAttr</td><td>i32 dense array attribute</td></tr>
-<tr><td><code>cache</code></td><td>::mlir::triton::CacheModifierAttr</td><td><details><summary>allowed 32-bit signless integer cases: 1, 2, 3, 4, 5, 6, 7</summary>{{% markdown %}}Enum cases:
-* none (`NONE`)
-* ca (`CA`)
-* cg (`CG`)
-* wb (`WB`)
-* cs (`CS`)
-* wt (`WT`)
-* cv (`CV`){{% /markdown %}}</details></td></tr>
-<tr><td><code>evict</code></td><td>::mlir::triton::EvictionPolicyAttr</td><td><details><summary>allowed 32-bit signless integer cases: 1, 2, 3</summary>{{% markdown %}}Enum cases:
-* evict_normal (`NORMAL`)
-* evict_first (`EVICT_FIRST`)
-* evict_last (`EVICT_LAST`){{% /markdown %}}</details></td></tr>
+<tr><td><code>cache</code></td><td>::mlir::triton::CacheModifierAttr</td><td>allowed 32-bit signless integer cases: 1, 2, 3, 4, 5, 6, 7</td></tr>
+<tr><td><code>evict</code></td><td>::mlir::triton::EvictionPolicyAttr</td><td>allowed 32-bit signless integer cases: 1, 2, 3</td></tr>
 </table>
 
 #### Operands:

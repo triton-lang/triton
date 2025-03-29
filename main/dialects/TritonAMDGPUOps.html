@@ -187,26 +187,9 @@ when it converts to the buffer ops because it is important for optimizing the ca
 <h3>Attributes:<a class="headerlink" href="#attributes" title="Link to this heading">¶</a></h3>
 <table>
 <tr><th>Attribute</th><th>MLIR Type</th><th>Description</th></tr>
-<tr><td><code>atomic_rmw_op</code></td><td>::mlir::triton::RMWOpAttr</td><td><details><summary>allowed 32-bit signless integer cases: 1, 2, 3, 4, 5, 6, 7, 8, 9, 10</summary>{{% markdown %}}Enum cases:
-* and (`AND`)
-* or (`OR`)
-* xor (`XOR`)
-* add (`ADD`)
-* fadd (`FADD`)
-* max (`MAX`)
-* min (`MIN`)
-* umax (`UMAX`)
-* umin (`UMIN`)
-* exch (`XCHG`){{% /markdown %}}</details></td></tr>
-<tr><td><code>sem</code></td><td>::mlir::triton::MemSemanticAttr</td><td><details><summary>allowed 32-bit signless integer cases: 1, 2, 3, 4</summary>{{% markdown %}}Enum cases:
-* relaxed (`RELAXED`)
-* acquire (`ACQUIRE`)
-* release (`RELEASE`)
-* acq_rel (`ACQUIRE_RELEASE`){{% /markdown %}}</details></td></tr>
-<tr><td><code>scope</code></td><td>::mlir::triton::MemSyncScopeAttr</td><td><details><summary>allowed 32-bit signless integer cases: 1, 2, 3</summary>{{% markdown %}}Enum cases:
-* gpu (`GPU`)
-* cta (`CTA`)
-* sys (`SYSTEM`){{% /markdown %}}</details></td></tr>
+<tr><td><code>atomic_rmw_op</code></td><td>::mlir::triton::RMWOpAttr</td><td>allowed 32-bit signless integer cases: 1, 2, 3, 4, 5, 6, 7, 8, 9, 10</td></tr>
+<tr><td><code>sem</code></td><td>::mlir::triton::MemSemanticAttr</td><td>allowed 32-bit signless integer cases: 1, 2, 3, 4</td></tr>
+<tr><td><code>scope</code></td><td>::mlir::triton::MemSyncScopeAttr</td><td>allowed 32-bit signless integer cases: 1, 2, 3</td></tr>
 </table>
 </section>
 <section id="operands">
@@ -280,14 +263,7 @@ the cache memory access.</p>
 <h3>Attributes:<a class="headerlink" href="#id1" title="Link to this heading">¶</a></h3>
 <table>
 <tr><th>Attribute</th><th>MLIR Type</th><th>Description</th></tr>
-<tr><td><code>cache</code></td><td>::mlir::triton::CacheModifierAttr</td><td><details><summary>allowed 32-bit signless integer cases: 1, 2, 3, 4, 5, 6, 7</summary>{{% markdown %}}Enum cases:
-* none (`NONE`)
-* ca (`CA`)
-* cg (`CG`)
-* wb (`WB`)
-* cs (`CS`)
-* wt (`WT`)
-* cv (`CV`){{% /markdown %}}</details></td></tr>
+<tr><td><code>cache</code></td><td>::mlir::triton::CacheModifierAttr</td><td>allowed 32-bit signless integer cases: 1, 2, 3, 4, 5, 6, 7</td></tr>
 </table>
 </section>
 <section id="id2">
@@ -350,14 +326,7 @@ the cache memory access.</p>
 <h3>Attributes:<a class="headerlink" href="#id4" title="Link to this heading">¶</a></h3>
 <table>
 <tr><th>Attribute</th><th>MLIR Type</th><th>Description</th></tr>
-<tr><td><code>cache</code></td><td>::mlir::triton::CacheModifierAttr</td><td><details><summary>allowed 32-bit signless integer cases: 1, 2, 3, 4, 5, 6, 7</summary>{{% markdown %}}Enum cases:
-* none (`NONE`)
-* ca (`CA`)
-* cg (`CG`)
-* wb (`WB`)
-* cs (`CS`)
-* wt (`WT`)
-* cv (`CV`){{% /markdown %}}</details></td></tr>
+<tr><td><code>cache</code></td><td>::mlir::triton::CacheModifierAttr</td><td>allowed 32-bit signless integer cases: 1, 2, 3, 4, 5, 6, 7</td></tr>
 </table>
 </section>
 <section id="id5">
@@ -434,14 +403,7 @@ the cache memory access.</p>
 <h3>Attributes:<a class="headerlink" href="#id7" title="Link to this heading">¶</a></h3>
 <table>
 <tr><th>Attribute</th><th>MLIR Type</th><th>Description</th></tr>
-<tr><td><code>cache</code></td><td>::mlir::triton::CacheModifierAttr</td><td><details><summary>allowed 32-bit signless integer cases: 1, 2, 3, 4, 5, 6, 7</summary>{{% markdown %}}Enum cases:
-* none (`NONE`)
-* ca (`CA`)
-* cg (`CG`)
-* wb (`WB`)
-* cs (`CS`)
-* wt (`WT`)
-* cv (`CV`){{% /markdown %}}</details></td></tr>
+<tr><td><code>cache</code></td><td>::mlir::triton::CacheModifierAttr</td><td>allowed 32-bit signless integer cases: 1, 2, 3, 4, 5, 6, 7</td></tr>
 </table>
 </section>
 <section id="id8">
@@ -653,10 +615,7 @@ interleave for better instruction level parallelism.</p>
 <h3>Attributes:<a class="headerlink" href="#id15" title="Link to this heading">¶</a></h3>
 <table>
 <tr><th>Attribute</th><th>MLIR Type</th><th>Description</th></tr>
-<tr><td><code>variant</code></td><td>::mlir::triton::amdgpu::SchedHintAttr</td><td><details><summary>Instruction Scheduling Hints for AMD GPUs</summary>{{% markdown %}}Enum cases:
-* none (`none`)
-* local_prefetch (`local_prefetch`)
-* attention (`attention`){{% /markdown %}}</details></td></tr>
+<tr><td><code>variant</code></td><td>::mlir::triton::amdgpu::SchedHintAttr</td><td>Instruction Scheduling Hints for AMD GPUs</td></tr>
 <tr><td><code>numDsReadsA</code></td><td>::mlir::triton::amdgpu::InstCounterAttr</td><td><details><summary>An instruction counter attribute.</summary>{{% markdown %}}
     The attribute holds the number of issued LLVM instructions of a specific kind as well as
     the data type.
@@ -706,14 +665,7 @@ https://www.opencompute.org/documents/ocp-microscaling-formats-mx-v1-0-spec-fina
 <h3>Attributes:<a class="headerlink" href="#id16" title="Link to this heading">¶</a></h3>
 <table>
 <tr><th>Attribute</th><th>MLIR Type</th><th>Description</th></tr>
-<tr><td><code>fp_type</code></td><td>::mlir::triton::ScaleDotElemTypeAttr</td><td><details><summary>allowed 32-bit signless integer cases: 0, 1, 2, 3, 4, 5, 6</summary>{{% markdown %}}Enum cases:
-* e4m3 (`E4M3`)
-* e5m2 (`E5M2`)
-* e2m3 (`E2M3`)
-* e3m2 (`E3M2`)
-* e2m1 (`E2M1`)
-* bf16 (`BF16`)
-* fp16 (`FP16`){{% /markdown %}}</details></td></tr>
+<tr><td><code>fp_type</code></td><td>::mlir::triton::ScaleDotElemTypeAttr</td><td>allowed 32-bit signless integer cases: 0, 1, 2, 3, 4, 5, 6</td></tr>
 <tr><td><code>fastMath</code></td><td>::mlir::BoolAttr</td><td>bool attribute</td></tr>
 </table>
 </section>

@@ -78,15 +78,8 @@ Effects: `MemoryEffects::Effect{MemoryEffects::Read on ::mlir::SideEffects::Defa
 
 <table>
 <tr><th>Attribute</th><th>MLIR Type</th><th>Description</th></tr>
-<tr><td><code>sem</code></td><td>::mlir::triton::nvgpu::MemSemanticAttr</td><td><details><summary>allowed 32-bit signless integer cases: 1, 2, 3, 4</summary>{{% markdown %}}Enum cases:
-* relaxed (`RELAXED`)
-* acquire (`ACQUIRE`)
-* release (`RELEASE`)
-* acq_rel (`ACQUIRE_RELEASE`){{% /markdown %}}</details></td></tr>
-<tr><td><code>scope</code></td><td>::mlir::triton::nvgpu::MemSyncScopeAttr</td><td><details><summary>allowed 32-bit signless integer cases: 1, 2, 3</summary>{{% markdown %}}Enum cases:
-* gpu (`GPU`)
-* cta (`CTA`)
-* sys (`SYSTEM`){{% /markdown %}}</details></td></tr>
+<tr><td><code>sem</code></td><td>::mlir::triton::nvgpu::MemSemanticAttr</td><td>allowed 32-bit signless integer cases: 1, 2, 3, 4</td></tr>
+<tr><td><code>scope</code></td><td>::mlir::triton::nvgpu::MemSyncScopeAttr</td><td>allowed 32-bit signless integer cases: 1, 2, 3</td></tr>
 </table>
 
 #### Operands:
@@ -219,39 +212,11 @@ operation ::= `nvgpu.wgmma` $opA `,` $opB `,` $useC (`,` $opC^)? attr-dict `:` f
 <tr><td><code>m</code></td><td>::mlir::IntegerAttr</td><td>32-bit signless integer attribute</td></tr>
 <tr><td><code>n</code></td><td>::mlir::IntegerAttr</td><td>32-bit signless integer attribute</td></tr>
 <tr><td><code>k</code></td><td>::mlir::IntegerAttr</td><td>32-bit signless integer attribute</td></tr>
-<tr><td><code>eltTypeC</code></td><td>::mlir::triton::nvgpu::WGMMAEltTypeAttr</td><td><details><summary>wgmma operand type, either 's8', 's32', 'e4m3', 'e5m2', 'f16', 'bf16', 'tf32', or 'f32'</summary>{{% markdown %}}Enum cases:
-* s8 (`s8`)
-* s32 (`s32`)
-* e4m3 (`e4m3`)
-* e5m2 (`e5m2`)
-* f16 (`f16`)
-* bf16 (`bf16`)
-* tf32 (`tf32`)
-* f32 (`f32`){{% /markdown %}}</details></td></tr>
-<tr><td><code>eltTypeA</code></td><td>::mlir::triton::nvgpu::WGMMAEltTypeAttr</td><td><details><summary>wgmma operand type, either 's8', 's32', 'e4m3', 'e5m2', 'f16', 'bf16', 'tf32', or 'f32'</summary>{{% markdown %}}Enum cases:
-* s8 (`s8`)
-* s32 (`s32`)
-* e4m3 (`e4m3`)
-* e5m2 (`e5m2`)
-* f16 (`f16`)
-* bf16 (`bf16`)
-* tf32 (`tf32`)
-* f32 (`f32`){{% /markdown %}}</details></td></tr>
-<tr><td><code>eltTypeB</code></td><td>::mlir::triton::nvgpu::WGMMAEltTypeAttr</td><td><details><summary>wgmma operand type, either 's8', 's32', 'e4m3', 'e5m2', 'f16', 'bf16', 'tf32', or 'f32'</summary>{{% markdown %}}Enum cases:
-* s8 (`s8`)
-* s32 (`s32`)
-* e4m3 (`e4m3`)
-* e5m2 (`e5m2`)
-* f16 (`f16`)
-* bf16 (`bf16`)
-* tf32 (`tf32`)
-* f32 (`f32`){{% /markdown %}}</details></td></tr>
-<tr><td><code>layoutA</code></td><td>::mlir::triton::nvgpu::WGMMALayoutAttr</td><td><details><summary>wgmma layout, either 'row' or 'col'</summary>{{% markdown %}}Enum cases:
-* row (`row`)
-* col (`col`){{% /markdown %}}</details></td></tr>
-<tr><td><code>layoutB</code></td><td>::mlir::triton::nvgpu::WGMMALayoutAttr</td><td><details><summary>wgmma layout, either 'row' or 'col'</summary>{{% markdown %}}Enum cases:
-* row (`row`)
-* col (`col`){{% /markdown %}}</details></td></tr>
+<tr><td><code>eltTypeC</code></td><td>::mlir::triton::nvgpu::WGMMAEltTypeAttr</td><td>wgmma operand type, either 's8', 's32', 'e4m3', 'e5m2', 'f16', 'bf16', 'tf32', or 'f32'</td></tr>
+<tr><td><code>eltTypeA</code></td><td>::mlir::triton::nvgpu::WGMMAEltTypeAttr</td><td>wgmma operand type, either 's8', 's32', 'e4m3', 'e5m2', 'f16', 'bf16', 'tf32', or 'f32'</td></tr>
+<tr><td><code>eltTypeB</code></td><td>::mlir::triton::nvgpu::WGMMAEltTypeAttr</td><td>wgmma operand type, either 's8', 's32', 'e4m3', 'e5m2', 'f16', 'bf16', 'tf32', or 'f32'</td></tr>
+<tr><td><code>layoutA</code></td><td>::mlir::triton::nvgpu::WGMMALayoutAttr</td><td>wgmma layout, either 'row' or 'col'</td></tr>
+<tr><td><code>layoutB</code></td><td>::mlir::triton::nvgpu::WGMMALayoutAttr</td><td>wgmma layout, either 'row' or 'col'</td></tr>
 </table>
 
 #### Operands:

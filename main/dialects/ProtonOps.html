@@ -144,11 +144,8 @@ proton.record() {isStart = false, regionId = 1 : i32, granularity = 1 : i32}
 <tr><th>Attribute</th><th>MLIR Type</th><th>Description</th></tr>
 <tr><td><code>isStart</code></td><td>::mlir::BoolAttr</td><td>bool attribute</td></tr>
 <tr><td><code>regionId</code></td><td>::mlir::IntegerAttr</td><td>32-bit signless integer attribute whose value is non-negative</td></tr>
-<tr><td><code>metric</code></td><td>::mlir::triton::proton::MetricAttr</td><td><details><summary>allowed 32-bit signless integer cases: 0</summary>{{% markdown %}}Enum cases:
-* cycle (`CYCLE`){{% /markdown %}}</details></td></tr>
-<tr><td><code>granularity</code></td><td>::mlir::triton::proton::GranularityAttr</td><td><details><summary>allowed 32-bit signless integer cases: 0, 1</summary>{{% markdown %}}Enum cases:
-* warpgroup (`WARPGROUP`)
-* warp (`WARP`){{% /markdown %}}</details></td></tr>
+<tr><td><code>metric</code></td><td>::mlir::triton::proton::MetricAttr</td><td>allowed 32-bit signless integer cases: 0</td></tr>
+<tr><td><code>granularity</code></td><td>::mlir::triton::proton::GranularityAttr</td><td>allowed 32-bit signless integer cases: 0, 1</td></tr>
 </table>
 </section>
 </section>
