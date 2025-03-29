@@ -105,6 +105,65 @@ protected:
   const proton::gpu::TargetInfoBase &targetInfo;
 };
 
+struct StackAllocOpConversion
+    : public ConvertOpToLLVMPattern<mlir::triton::proton::gpu::StackAllocOp> {
+  explicit StackAllocOpConversion(LLVMTypeConverter &typeConverter,
+                                  const proton::gpu::TargetInfoBase &targetInfo,
+                                  PatternBenefit benefit)
+      : mlir::ConvertOpToLLVMPattern<mlir::triton::proton::gpu::StackAllocOp>(
+            typeConverter, benefit),
+        targetInfo(targetInfo) {}
+
+  LogicalResult
+  matchAndRewrite(mlir::triton::proton::gpu::StackAllocOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto moduleOp =
+        rewriter.getBlock()->getParent()->getParentOfType<ModuleOp>();
+    Location loc = op.getLoc();
+    auto ctx = moduleOp.getContext();
+
+    auto bufferTy =
+        mlir::cast<triton::gpu::MemDescType>(op.getData().getType());
+    auto rank = bufferTy.getRank();
+    assert(rank > 0 && "Proton stack currently only supports 1-D shapes");
+    auto shape = bufferTy.getShape();
+
+    const int bufferSizeInBytes =
+        mlir::ShapedType::getNumElements(bufferTy.getShape()) *
+        bufferTy.getElementType().getIntOrFloatBitWidth() / 8;
+
+    auto bufferSizeVal = rewriter.create<LLVM::ConstantOp>(
+        loc, rewriter.getIntegerType(32),
+        IntegerAttr::get(rewriter.getIntegerType(32), bufferSizeInBytes));
+    auto llvmPointerType = LLVM::LLVMPointerType::get(op->getContext());
+    Type llvmInt32Type = IntegerType::get(op->getContext(), 32);
+    Value arrayVal = rewriter.create<LLVM::AllocaOp>(
+        loc, llvmPointerType, llvmInt32Type, bufferSizeVal);
+
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
+    Value stackMemBase = b.gep(ptr_ty(ctx), i32_ty, arrayVal, b.i32_val(0));
+
+    // TODO(crobeck): update if we ever support multi-rank stack alloc ops
+    SmallVector<Type, 4> types = {ptr_ty(ctx)};
+    SmallVector<Value, 4> elems = {stackMemBase};
+
+    auto structTy =
+        LLVM::LLVMStructType::getLiteral(rewriter.getContext(), types);
+
+    // return value
+    Value llvmStruct = rewriter.create<LLVM::UndefOp>(loc, structTy);
+    for (const auto &v : llvm::enumerate(elems)) {
+      assert(v.value() && "can not insert null values");
+      llvmStruct = b.insert_val(structTy, llvmStruct, v.value(), v.index());
+    }
+    rewriter.replaceOp(op, llvmStruct);
+    return success();
+  }
+
+protected:
+  const proton::gpu::TargetInfoBase &targetInfo;
+};
+
 } // namespace
 
 void populateProtonGPUOpPatterns(LLVMTypeConverter &typeConverter,
@@ -117,6 +176,7 @@ void populateProtonGPUOpPatterns(LLVMTypeConverter &typeConverter,
   patterns.add<InitBufferIndexOpConversion>(typeConverter, targetInfo, benefit);
   patterns.add<ReadCounterOpConversion>(typeConverter, targetInfo, benefit);
   patterns.add<FinalizeOpConversion>(typeConverter, targetInfo, benefit);
+  patterns.add<StackAllocOpConversion>(typeConverter, targetInfo, benefit);
 }
 
 } // namespace proton::gpu
