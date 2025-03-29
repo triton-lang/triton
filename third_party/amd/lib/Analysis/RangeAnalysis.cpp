@@ -465,4 +465,31 @@ TritonIntegerRangeAnalysis::collectAssumptions(Operation *rootOp,
   return assumptions;
 }
 
+struct FoldTrueCmpIOp : OpRewritePattern<arith::CmpIOp> {
+  using OpRewritePattern::OpRewritePattern;
+
+  FoldTrueCmpIOp(MLIRContext *context, std::shared_ptr<DataFlowSolver> solver)
+      : OpRewritePattern(context), solver(std::move(solver)) {};
+
+  LogicalResult matchAndRewrite(arith::CmpIOp cmpOp,
+                                PatternRewriter &rewriter) const override {
+    if (cmpIIsStaticallyTrue(*solver, cmpOp)) {
+      if (failed(mlir::dataflow::maybeReplaceWithConstant(*solver, rewriter,
+                                                          cmpOp.getResult()))) {
+        LDBG("failed to replace with constant op: " << cmpOp);
+      }
+    } else {
+      return failure();
+    }
+    return success();
+  }
+
+  std::shared_ptr<DataFlowSolver> solver;
+};
+
+void populateFoldTrueCmpIOpPatterns(RewritePatternSet &patterns,
+                                    std::shared_ptr<DataFlowSolver> solver) {
+  patterns.add<FoldTrueCmpIOp>(patterns.getContext(), std::move(solver));
+}
+
 } // namespace mlir::triton::AMD

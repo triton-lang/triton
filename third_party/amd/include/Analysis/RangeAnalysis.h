@@ -121,6 +121,9 @@ std::optional<SmallVector<ConstantIntRanges>>
 collectRanges(const DataFlowSolver &solver, ValueRange values);
 bool cmpIIsStaticallyTrue(const DataFlowSolver &solver, arith::CmpIOp cmpOp);
 
+void populateFoldTrueCmpIOpPatterns(RewritePatternSet &patterns,
+                                    std::shared_ptr<DataFlowSolver> solver);
+
 } // namespace mlir::triton::AMD
 
 #endif
