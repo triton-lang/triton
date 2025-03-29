@@ -7332,3 +7332,13 @@ def test_dtype_tensor(device, dtype):
         tensor = tl.zeros((1, ), dtype)
 
     dtype_tensor_kernel[(1, )](dtype)
+
+
+@pytest.mark.interpreter
+def test_float_tuple():
+
+    @triton.jit
+    def _namedtuple_float_tuple_kernel():
+        x, y = float('-inf'), float('inf')  # noqa: F841
+
+    _namedtuple_float_tuple_kernel[(1, )]()
