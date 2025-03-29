@@ -190,6 +190,8 @@ std::optional<SmallVector<ConstantIntRanges>>
 collectRanges(const DataFlowSolver &solver, ValueRange values) {
   SmallVector<ConstantIntRanges> ranges;
   for (Value val : values) {
+    if (!getElementTypeOrSelf(val).isInteger())
+      return {};
     auto *maybeInferredRange =
         solver.lookupState<dataflow::IntegerValueRangeLattice>(val);
     if (!maybeInferredRange || maybeInferredRange->getValue().isUninitialized())
