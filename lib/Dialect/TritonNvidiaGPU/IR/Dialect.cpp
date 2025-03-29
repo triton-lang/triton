@@ -97,9 +97,9 @@ TMemAllocation getTmemAllocSizes(MemDescType memDescType) {
 }
 
 Attribute getTmemCompatibleLayout(unsigned M, unsigned N,
-                                  ArrayRef<int64_t> shape, unsigned numWarps,
-                                  triton::gpu::CTALayoutAttr ctaLayout) {
+                                  RankedTensorType oldType, unsigned numWarps) {
   assert(numWarps == 4 || numWarps == 8);
+  auto shape = getShapePerCTA(oldType);
   assert(shape.size() == 2);
   SmallVector<unsigned> sizePerThread;
   SmallVector<unsigned> threadsPerWarp;
@@ -140,9 +140,28 @@ Attribute getTmemCompatibleLayout(unsigned M, unsigned N,
     }
   }
   order = {0, 1};
+  auto ctaLayout = getCTALayout(oldType.getEncoding());
   return triton::gpu::BlockedEncodingAttr::get(ctaLayout.getContext(),
                                                sizePerThread, threadsPerWarp,
                                                warpsPerCTA, order, ctaLayout);
+}
+
+bool isDistributedLayoutSplitMTmemLoadStore(RankedTensorType tensorType,
+                                            MemDescType memType, int numWarps) {
+  auto tmemEnc = dyn_cast<triton::nvidia_gpu::TensorMemoryEncodingAttr>(
+      memType.getEncoding());
+  if (!tmemEnc || tmemEnc.getBlockM() != 128)
+    return false;
+  int M = tmemEnc.getBlockM();
+  int N = tmemEnc.getBlockN();
+  auto llEncoding = dyn_cast<LinearEncodingAttr>(tensorType.getEncoding());
+  if (!llEncoding)
+    return false;
+  auto CTALayout = getCTALayout(tensorType.getEncoding());
+  auto shapePerCTA = mlir::triton::gpu::getShapePerCTA(tensorType);
+  LinearLayout llLayout =
+      getTmemLoadLayoutSplitLongM(M, N, tensorType, numWarps);
+  return llEncoding.getLinearLayout() == llLayout;
 }
 
 // Verify if the distributed layout can be mapped onto tensor memory.
@@ -169,6 +188,8 @@ bool isDistributedLayoutTMemCompatible(Operation *op,
                tensorType.getContext(),
                getScaleTMEMStoreLinearLayout(tensorType, numWarps));
   }
+  if (isDistributedLayoutSplitMTmemLoadStore(tensorType, memType, numWarps))
+    return true;
   auto shapePerCTA = mlir::triton::gpu::getShapePerCTA(tensorType);
   int numElements = product(shapePerCTA);
   int numBlocks = ceil<int>(numElements, blockM * blockN);
