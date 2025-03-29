@@ -49,6 +49,10 @@ def _tuple_assign(XPtrs, YPtrs, values):
     tl.store(Y[0], y[0])
     tl.store(Y[1], y[1])
     tl.store(Y[2], y[2])
+    # assign tuple containing None
+    a = (None, )
+    b = a
+    a = b
 
 
 @pytest.mark.interpreter
