@@ -52,9 +52,23 @@ public:
       return failure();
     Value src = localAllocOp.getSrc();
     auto srcType = cast<RankedTensorType>(src.getType());
-    auto srcLayout = cast<ttg::BlockedEncodingAttr>(srcType.getEncoding());
+    auto srcLayout = srcType.getEncoding();
+    auto accTMemEncoding = dyn_cast<ttng::TensorMemoryEncodingAttr>(
+        tcGen5MMAOp.getD().getType().getEncoding());
+    ArrayRef<unsigned> CTASplitNum =
+        triton::gpu::getCTALayout(srcLayout).getCTASplitNum();
+    // TMem encoding for A operand is the same as for D (Acc), but unpacked.
+    auto aTMemEncoding = ttng::TensorMemoryEncodingAttr::get(
+        context, accTMemEncoding.getBlockM(), lhs.getType().getShape()[1],
+        /*unpacked=*/false, CTASplitNum[0], CTASplitNum[1]);
+    Attribute tensorMemorySpace =
+        triton::nvidia_gpu::TensorMemorySpaceAttr::get(context);
+    ttg::MemDescType lhsMemDescType = ttg::MemDescType::get(
+        lhs.getType().getShape(), lhs.getType().getElementType(), aTMemEncoding,
+        tensorMemorySpace,
+        /*mutableMemory=*/false);
     bool layoutTmemCompatible = ttng::isDistributedLayoutTMemCompatible(
-        tcGen5MMAOp, srcType, tcGen5MMAOp.getD().getType());
+        tcGen5MMAOp, srcType, lhsMemDescType);
     Attribute newLayout = srcLayout;
     if (!layoutTmemCompatible) {
       if (triton::tools::getBoolEnv("ALLOW_LHS_TMEM_LAYOUT_CONVERSION")) {
@@ -70,19 +84,6 @@ public:
           RankedTensorType::get(ty.getShape(), ty.getElementType(), newLayout);
       src = rewriter.create<ttg::ConvertLayoutOp>(loc, newTy, src);
     }
-    auto accTMemEncoding = dyn_cast<ttng::TensorMemoryEncodingAttr>(
-        tcGen5MMAOp.getD().getType().getEncoding());
-    ArrayRef<unsigned> CTASplitNum = srcLayout.getCTALayout().getCTASplitNum();
-    // TMem encoding for A operand is the same as for D (Acc), but unpacked.
-    auto aTMemEncoding = ttng::TensorMemoryEncodingAttr::get(
-        context, accTMemEncoding.getBlockM(), lhs.getType().getShape()[1],
-        /*unpacked=*/false, CTASplitNum[0], CTASplitNum[1]);
-    Attribute tensorMemorySpace =
-        triton::nvidia_gpu::TensorMemorySpaceAttr::get(context);
-    Type lhsMemDescType = triton::gpu::MemDescType::get(
-        lhs.getType().getShape(), lhs.getType().getElementType(), aTMemEncoding,
-        tensorMemorySpace,
-        /*mutableMemory=*/false);
     Value tMemAlloc =
         rewriter.create<ttng::TMEMAllocOp>(loc, lhsMemDescType, src);
     tcGen5MMAOp.getAMutable().assign(tMemAlloc);
@@ -100,8 +101,6 @@ public:
       TritonNvidiaGPUPromoteLHSToTMemPassBase;
 
   void runOnOperation() override {
-    if (!triton::tools::getBoolEnv("ENABLE_LHS_TO_TMEM"))
-      return;
     MLIRContext *context = &getContext();
     ModuleOp m = getOperation();
 

@@ -20,11 +20,6 @@ import triton.tools.experimental_descriptor
 import triton
 import triton.language as tl
 
-# ENABLE_LHS_TO_TMEM is an experimental environment variable for Blackwell.
-# If it is set to 1 it can improve performance of Blackwell attention. However,
-# it defaults to 0 as it is known to cause correctness issues outside of the
-# _attn_fwd_tma kernel below.
-
 DEVICE = triton.runtime.driver.active.get_active_torch_device()
 
 

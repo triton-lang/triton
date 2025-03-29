@@ -34,7 +34,8 @@ def matmul_kernel(  #
         stride_bk, stride_bn,  #
         stride_cm, stride_cn,  #
         BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr, BLOCK_K: tl.constexpr,  #
-        NUM_STAGES: tl.constexpr, SCALE_A: tl.constexpr = None, PRECISION: tl.constexpr = "ieee"):
+        NUM_STAGES: tl.constexpr, SCALE_A: tl.constexpr = None, PRECISION: tl.constexpr = "ieee",
+        A_TRANS: tl.constexpr = False):
     pid = tl.program_id(axis=0)
     num_pid_m = tl.cdiv(M, BLOCK_M)
     pid_m = pid % num_pid_m
@@ -42,22 +43,26 @@ def matmul_kernel(  #
     offs_am = (pid_m * BLOCK_M + tl.arange(0, BLOCK_M)) % M
     offs_bn = (pid_n * BLOCK_N + tl.arange(0, BLOCK_N)) % N
     offs_k = tl.arange(0, BLOCK_K)
-    a_ptrs = a_ptr + (offs_am[:, None] * stride_am + offs_k[None, :] * stride_ak)
+    if not A_TRANS:
+        a_ptrs = a_ptr + (offs_am[:, None] * stride_am + offs_k[None, :] * stride_ak)
+    else:
+        a_ptrs = a_ptr + (offs_k[:, None] * stride_ak + offs_am[None, :] * stride_am)
     b_ptrs = b_ptr + (offs_k[:, None] * stride_bk + offs_bn[None, :] * stride_bn)
     accumulator = tl.zeros((BLOCK_M, BLOCK_N), dtype=output_ptr.dtype.element_ty)
     for k in tl.range(0, tl.cdiv(K, BLOCK_K), num_stages=NUM_STAGES):
         a = tl.load(a_ptrs)
         if SCALE_A is not None:
             a = a * SCALE_A
+        if A_TRANS:
+            a = a.T
         b = tl.load(b_ptrs)
         accumulator = tl.dot(a, b, acc=accumulator, out_dtype=output_ptr.dtype.element_ty, input_precision=PRECISION)
         a_ptrs += BLOCK_K * stride_ak
         b_ptrs += BLOCK_K * stride_bk
     offs_cm = pid_m * BLOCK_M + tl.arange(0, BLOCK_M)
     offs_cn = pid_n * BLOCK_N + tl.arange(0, BLOCK_N)
-    mask_c = (offs_cm[:, None] < M) & (offs_cn[None, :] < N)
     output_ptrs = output_ptr + stride_cm * offs_cm[:, None] + stride_cn * offs_cn[None, :]
-    tl.store(output_ptrs, accumulator, mask=mask_c)
+    tl.store(output_ptrs, accumulator)
 
 
 def get_src_element_ty_size(dtype_str):
@@ -519,90 +524,43 @@ def test_blocked_scale_mxfp(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, NUM_STAGES, USE_
             print(f"SWP failed for M = {M}, N = {N}")
 
 
-@triton.jit
-def lhs_in_tmem_kernel(  #
-        a_ptr, b_ptr, output_ptr,  #
-        stride_am, stride_ak,  #
-        stride_bk, stride_bn,  #
-        stride_cm, stride_cn,  #
-        M: tl.constexpr, N: tl.constexpr, K: tl.constexpr, A_TRANS: tl.constexpr, BLOCK_M: tl.constexpr,
-        BLOCK_N: tl.constexpr, BLOCK_K: tl.constexpr):
-    pid = tl.program_id(axis=0)
-    num_pid_m = tl.cdiv(M, BLOCK_M)
-    pid_m = pid % num_pid_m
-    pid_n = pid // num_pid_m
-    offs_am = (pid_m * BLOCK_M + tl.arange(0, BLOCK_M)) % M
-    offs_bn = (pid_n * BLOCK_N + tl.arange(0, BLOCK_N)) % N
-    offs_k = tl.arange(0, BLOCK_K)
-
-    if not A_TRANS:
-        a_ptrs = a_ptr + (offs_am[:, None] * stride_am + offs_k[None, :] * stride_ak)
-    else:
-        a_ptrs = a_ptr + (offs_k[:, None] * stride_am + offs_am[None, :] * stride_ak)
-    b_ptrs = b_ptr + (offs_k[:, None] * stride_bk + offs_bn[None, :] * stride_bn)
-    accumulator = tl.zeros((BLOCK_M, BLOCK_N), dtype=tl.float32)
-    for k in tl.range(0, tl.cdiv(K, BLOCK_K), num_stages=1):
-        k_remaining = K - k * BLOCK_K
-        valid_k = offs_k < k_remaining
-        m_remaining = M - pid_m * BLOCK_M
-        valid_m = offs_am < m_remaining
-        a = tl.load(a_ptrs, mask=(valid_k[None, :] & valid_m[:, None]), other=0.0)
-        if A_TRANS:
-            a = a.T
-        n_remaining = N - pid_n * BLOCK_N
-        valid_n = offs_bn < n_remaining
-        b = tl.load(b_ptrs, mask=(valid_k[:, None] & valid_n[None, :]), other=0.0)
-        accumulator = tl.dot(a, b, acc=accumulator)
-        a_ptrs += BLOCK_K * stride_ak
-        b_ptrs += BLOCK_K * stride_bk
-
-    offs_cm = pid_m * BLOCK_M + tl.arange(0, BLOCK_M)
-    offs_cn = pid_n * BLOCK_N + tl.arange(0, BLOCK_N)
-
-    output_ptrs = output_ptr + stride_cm * offs_cm[:, None] + stride_cn * offs_cn[None, :]
-    mask_c = (offs_cm[:, None] < M) & (offs_cn[None, :] < N)
-    tl.store(output_ptrs, accumulator, mask=mask_c)
-
-
-@pytest.mark.parametrize("M, N, K", [(128, 64, 64), (1024, 512, 256)])
-@pytest.mark.parametrize("BLOCK_M, BLOCK_N, BLOCK_K", [(128, 128, 128), (256, 128, 128), (128, 256, 128),
-                                                       (128, 256, 256), (128, 128, 64), (128, 64, 128)])
+@pytest.mark.parametrize("BLOCK_M, BLOCK_N, BLOCK_K", [(128, 128, 64), (128, 64, 128), (64, 128, 32), (128, 256, 32)])
 @pytest.mark.parametrize("a_trans", [False, True])
 @pytest.mark.parametrize("dtype_src_str", ["float32", "float16", "float8e5"])
 @pytest.mark.skipif(torch.cuda.get_device_capability()[0] < 10, reason="Requires compute capability >= 10")
-def test_lhs_in_tmem(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, a_trans, dtype_src_str, device, monkeypatch):
+def test_lhs_in_tmem(BLOCK_M, BLOCK_N, BLOCK_K, a_trans, dtype_src_str, device, monkeypatch):
+    M = 1024
+    N = 512
+    K = 256
     _knob_promote_lhs_to_tmem(monkeypatch)
-    if M != BLOCK_M or N != BLOCK_N or K != BLOCK_K:
-        # TODO: Make LHS TMEM promotion work for all problem sizes regardless of block dims
-        pytest.xfail(
-            "LHS TMEM promotion produces incorrect results when the workload dimensions are not equal to the block dims"
-        )
     torch.manual_seed(42)
     if dtype_src_str == "float8e5":
         a = torch.randint(20, 40, (M, K), dtype=torch.int8, device=device).view(torch.float8_e5m2)
-        if (a_trans):
-            a = a.T
         b = torch.randint(20, 40, (K, N), dtype=torch.int8, device=device).view(torch.float8_e5m2)
+        if a_trans:
+            a = a.T.contiguous().T
         A = f8_to_f16(a, dtype_src_str)
         B = f8_to_f16(b, dtype_src_str)
     else:
         dtype_src = getattr(torch, dtype_src_str)
         a = torch.randn(M, K, dtype=dtype_src, device=device)
-        if (a_trans):
-            a = a.T
         b = torch.randn(K, N, dtype=dtype_src, device=device)
+        if a_trans:
+            a = a.T.contiguous().T
         A = a
         B = b
-    output = torch.empty((M, N), dtype=torch.float16, device=device)
-    grid = (1, 1)
-    lhs_in_tmem_kernel[grid](a, b, output, a.stride(0), a.stride(1), b.stride(0), b.stride(1), output.stride(0),
-                             output.stride(1), M, N, K, A_TRANS=a_trans, BLOCK_M=BLOCK_M, BLOCK_N=BLOCK_N,
-                             BLOCK_K=BLOCK_K)
-    ref_out = torch.matmul(A if not a_trans else A.T, B).to(torch.float16)
-
+    output = torch.empty((M, N), dtype=torch.float32, device=device)
+    grid = (triton.cdiv(M, BLOCK_M) * triton.cdiv(N, BLOCK_N), 1)
+    k = matmul_kernel[grid](a, b, output, M, N, K, a.stride(0), a.stride(1), b.stride(0), b.stride(1), output.stride(0),
+                            output.stride(1), BLOCK_M, BLOCK_N, BLOCK_K, NUM_STAGES=1, SCALE_A=None, PRECISION="tf32",
+                            A_TRANS=a_trans)
+    ref_out = torch.matmul(A, B).to(torch.float32)
     atol = 0.03
     rtol = 0.03
     torch.testing.assert_close(ref_out, output, atol=atol, rtol=rtol)
+    pattern = r"%\w+\s*=\s*ttng\.tmem_alloc[\s\S]*?tng\.tc_gen5_mma\s+%\w+,"
+    ttgir = k.asm["ttgir"]
+    assert re.search(pattern, ttgir)
 
 
 @triton.jit
