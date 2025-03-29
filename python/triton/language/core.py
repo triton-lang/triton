@@ -1211,7 +1211,7 @@ class tuple(base_value):
         def get_type(x):
             if isinstance(x, dtype):
                 return dtype
-            if isinstance(x, int):
+            if isinstance(x, (int, float)):
                 return constexpr
             return x.type
 
