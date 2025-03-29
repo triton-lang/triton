@@ -1222,7 +1222,7 @@ LinearLayout chooseStMatrixLayoutLeadingOffset(MLIRContext *ctx,
   // Construct the bases for warpsPerCTA[0]
   std::vector<std::vector<int>> basesWarp;
   auto warpsPerCTA = mma.getWarpsPerCTA();
-  auto shape = tensorTy.getShape();
+  auto shapePerCTA = getShapePerCTA(tensorTy);
   for (int logWarp = 0; logWarp < llvm::Log2_32(warpsPerCTA[0]); logWarp++) {
     int warp = 1 << logWarp;
     basesWarp.push_back({0, warp * instrM});
@@ -1230,20 +1230,20 @@ LinearLayout chooseStMatrixLayoutLeadingOffset(MLIRContext *ctx,
 
   // Expand the `register` dimension so the size of columns matches `shape[1] /
   // warpsPerCTA[1]`
-  auto numColsPerWarp = std::max<int>(instrN, shape[1] / warpsPerCTA[1]);
-  assert(warpsPerCTA[1] * instrN >= shape[1] &&
+  auto numColsPerWarp = std::max<int>(instrN, shapePerCTA[1] / warpsPerCTA[1]);
+  assert(warpsPerCTA[1] * instrN >= shapePerCTA[1] &&
          "There must be enough columns to use MMAv3");
   auto logNumCols = llvm::Log2_32(numColsPerWarp / numColsPerChunk);
   for (int logCol = 0; logCol < logNumCols; logCol++) {
     int chunk = 1 << logCol;
-    int basis = chunk * shape[0];
+    int basis = chunk * shapePerCTA[0];
     basesReg.push_back({0, basis});
   }
 
   // Expand the `register` dimension so that the size of rows matches `shape[0]`
-  assert(warpsPerCTA[0] * instrM <= shape[0] &&
+  assert(warpsPerCTA[0] * instrM <= shapePerCTA[0] &&
          "There must be enough rows to use MMAv3");
-  auto logNumRows = llvm::Log2_32(shape[0] / (warpsPerCTA[0] * instrM));
+  auto logNumRows = llvm::Log2_32(shapePerCTA[0] / (warpsPerCTA[0] * instrM));
   for (int logRow = 0; logRow < logNumRows; logRow++) {
     int chunk = 1 << logRow;
     int basis = chunk * warpsPerCTA[0] * instrM;
@@ -1253,10 +1253,10 @@ LinearLayout chooseStMatrixLayoutLeadingOffset(MLIRContext *ctx,
   // Expand the `warp` dimension so that the size of cols matches `shape[1]`
   for (int logWarp = 0; logWarp < llvm::Log2_32(warpsPerCTA[1]); logWarp++) {
     int warp = 1 << logWarp;
-    if (warp * numColsPerWarp >= shape[1]) {
+    if (warp * numColsPerWarp >= shapePerCTA[1]) {
       basesWarp.push_back({0, 0});
     } else {
-      int basis = (warp * numColsPerWarp) / numColsPerChunk * shape[0];
+      int basis = (warp * numColsPerWarp) / numColsPerChunk * shapePerCTA[0];
       basesWarp.push_back({0, basis});
     }
   }
