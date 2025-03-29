@@ -636,10 +636,8 @@ bool isUsedByDotScaledOp(Operation *op) {
   getForwardSlice(op, &forwardSliceSet, fwdOpt);
 
   return std::any_of(
-      forwardSliceSet.begin(), forwardSliceSet.end(), [](auto *operation) {
-        return isa<triton::DotScaledOp, triton::amdgpu::UpcastMXFPOp>(
-            operation);
-      });
+      forwardSliceSet.begin(), forwardSliceSet.end(),
+      [](auto *operation) { return isa<triton::DotScaledOp>(operation); });
 }
 
 bool isChainDotHead(tt::DotOpInterface dotOp) {
