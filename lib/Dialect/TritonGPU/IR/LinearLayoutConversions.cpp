@@ -1549,4 +1549,46 @@ LinearLayout getScaleTMEMStoreLinearLayout(RankedTensorType scaleType,
   return combineCtaCgaWithShape(regLanes, CTALayout, scaleType.getShape());
 }
 
+LinearLayout getTmemLoadLayoutSplitLongM(int M, int N, RankedTensorType oldType,
+                                         int numWarps) {
+  assert(numWarps == 8);
+  auto ctaLayout = getCTALayout(oldType.getEncoding());
+  SmallVector<int64_t> shape = getShapePerCTA(oldType);
+  MLIRContext *ctx = ctaLayout.getContext();
+
+  using basisT = std::vector<std::vector<int32_t>>;
+  StringAttr kRegister = StringAttr::get(ctx, "register");
+  StringAttr kLane = StringAttr::get(ctx, "lane");
+  StringAttr kWarp = StringAttr::get(ctx, "warp");
+
+  // Follow the layout given by a tmem load using this layout:
+  // https://docs.nvidia.com/cuda/parallel-thread-execution/#tcgen05-matrix-fragments-shape-1632b2
+  basisT laneBase;
+  assert(M == 128);
+  for (int i = 1; i < 16; i = i << 1) {
+    laneBase.push_back({i, 0});
+  }
+  basisT regBase;
+  for (int i = 1; i < N / 2; i = i << 1) {
+    regBase.push_back({0, i});
+  }
+  laneBase.push_back({0, N / 2});
+  // then replicate the pattern.
+  for (int i = N; i < shape[1]; i = i << 1) {
+    regBase.push_back({0, i});
+  }
+  for (int i = M; i < shape[0]; i = i << 1) {
+    regBase.push_back({i, 0});
+  }
+  // warp 0 and 4 can only access M[0:32], therefore we need to interleave the
+  // data.
+  basisT warpBase = {{32, 0}, {64, 0}, {16, 0}};
+  SmallVector<StringAttr> outDimNames = standardOutDimNames(ctx, 2);
+  auto regLanes =
+      LinearLayout({{kRegister, regBase}, {kLane, laneBase}, {kWarp, warpBase}},
+                   {outDimNames[0], outDimNames[1]});
+
+  return combineCtaCgaWithShape(regLanes, ctaLayout, oldType.getShape());
+}
+
 } // namespace mlir::triton::gpu

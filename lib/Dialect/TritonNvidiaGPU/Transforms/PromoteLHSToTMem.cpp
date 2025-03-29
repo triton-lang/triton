@@ -21,9 +21,7 @@ namespace ttg = triton::gpu;
 
 namespace {
 template <class MMAOpTy>
-Attribute getLHSTMemLayout(MMAOpTy tcGen5MMAOp,
-                           ttg::BlockedEncodingAttr srcLayout) {
-  auto CTALayout = getCTALayout(srcLayout);
+Attribute getLHSTMemLayout(MMAOpTy tcGen5MMAOp, RankedTensorType srcType) {
   int numWarps = ttg::lookupNumWarps(tcGen5MMAOp);
   auto accTmemEncoding = dyn_cast<ttng::TensorMemoryEncodingAttr>(
       tcGen5MMAOp.getD().getType().getEncoding());
@@ -33,8 +31,7 @@ Attribute getLHSTMemLayout(MMAOpTy tcGen5MMAOp,
   // N has to follow the number of columns in the LHS.
   int M = accTmemEncoding.getBlockM();
   int N = lhsShape[1];
-  Attribute resLayout =
-      ttng::getTmemCompatibleLayout(M, N, lhsShape, numWarps, CTALayout);
+  Attribute resLayout = ttng::getTmemCompatibleLayout(M, N, srcType, numWarps);
   return resLayout;
 }
 
@@ -61,7 +58,7 @@ public:
     Attribute newLayout = srcLayout;
     if (!layoutTmemCompatible) {
       if (triton::tools::getBoolEnv("ALLOW_LHS_TMEM_LAYOUT_CONVERSION")) {
-        newLayout = getLHSTMemLayout(tcGen5MMAOp, srcLayout);
+        newLayout = getLHSTMemLayout(tcGen5MMAOp, srcType);
       } else {
         return failure();
       }
