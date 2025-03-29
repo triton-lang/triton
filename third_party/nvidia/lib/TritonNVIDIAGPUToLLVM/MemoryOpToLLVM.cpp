@@ -153,6 +153,11 @@ LogicalResult lowerDistributedToSharedStmatrix(
   int swizzleByteSize = sharedLayout.getSwizzlingByteWidth();
 
   RankedTensorType srcTy = src.getType();
+
+  // TODO: multi-cta support
+  auto ctaLayout = getCTALayout(srcTy.getEncoding());
+  if (product(ctaLayout.getCTASplitNum()) > 1)
+    return failure();
   SmallVector<unsigned> shape =
       convertType<unsigned, int64_t>(srcTy.getShape());
   SmallVector<unsigned> order = sharedLayout.getTransposed()
