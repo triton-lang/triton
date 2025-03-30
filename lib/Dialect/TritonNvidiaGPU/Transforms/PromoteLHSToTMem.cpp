@@ -57,7 +57,7 @@ public:
         tcGen5MMAOp.getD().getType().getEncoding());
     ArrayRef<unsigned> CTASplitNum =
         triton::gpu::getCTALayout(srcLayout).getCTASplitNum();
-    // TMem encoding for A operand is the same as for D (Acc), but unpacked.
+    // TMem encoding for A operand is the same as for D (Acc), but packed.
     auto aTMemEncoding = ttng::TensorMemoryEncodingAttr::get(
         context, accTMemEncoding.getBlockM(), lhs.getType().getShape()[1],
         /*unpacked=*/false, CTASplitNum[0], CTASplitNum[1]);

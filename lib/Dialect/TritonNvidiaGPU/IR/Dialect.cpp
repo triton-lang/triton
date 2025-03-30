@@ -146,13 +146,6 @@ Attribute getTmemCompatibleLayout(unsigned M, unsigned N,
                                                warpsPerCTA, order, ctaLayout);
 }
 
-static bool isLayoutEquivalent(ArrayRef<int64_t> shape, Attribute lhs,
-                               Attribute rhs) {
-  auto lhsLL = triton::gpu::toLinearLayout(shape, lhs);
-  auto rhsLL = triton::gpu::toLinearLayout(shape, rhs);
-  return lhsLL == rhsLL;
-}
-
 bool isDistributedLayoutSplitMTmemLoadStore(RankedTensorType tensorType,
                                             MemDescType memType, int numWarps) {
   auto tmemEnc = dyn_cast<triton::nvidia_gpu::TensorMemoryEncodingAttr>(
@@ -196,8 +189,8 @@ bool isDistributedLayoutTMemCompatible(Operation *op,
   // TODO: Add support for more layout compatible with tmem load/store. There
   // will only be a discret set of layout possible due to the limiations of
   // tmem_load/store.
-  return isLayoutEquivalent(tensorType.getShape(), layout,
-                            tensorType.getEncoding());
+  return areLayoutsEquivalent(tensorType.getShape(), layout,
+                              tensorType.getEncoding());
 }
 
 } // namespace nvidia_gpu
