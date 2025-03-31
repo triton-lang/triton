@@ -189,7 +189,7 @@ def _layer_norm_bwd_dx_fused(DX,  # pointer to the input gradient
     # need a barrier to ensure all threads finished before
     # releasing the lock
     tl.debug_barrier()
-    
+
     # Release the lock
     tl.atomic_xchg(Lock, 0)
 
