@@ -136,7 +136,6 @@ private:
       uniqueOffsets.insert({offsets[i], i});
     }
 
-    unsigned srcElems = getTotalElemsPerThread(operandType);
     auto *combineOp = &op.getCombineOp();
     auto srcIndices = emitIndices(op.getLoc(), rewriter, targetInfo,
                                   helper.getSrcLayout(), operandType, true);

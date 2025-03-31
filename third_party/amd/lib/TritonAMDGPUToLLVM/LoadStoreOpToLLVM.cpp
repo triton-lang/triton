@@ -588,12 +588,15 @@ struct AsyncCopyGlobalToLocalOpConversion
     // size
     for (int i = 0; i < shmemAddrs.size(); i++) {
       auto srcIdx = i * maxVec;
-      auto srcPtr = srcElems[srcIdx];
+      Value srcPtr = srcElems[srcIdx];
 
       if (maskElems.empty()) {
         rewriter.create<ROCDL::GlobalLoadLDSOp>(
-            loc, srcPtr, shmemAddrs[i], vecBytesVal, /*offset=*/b.i32_val(0),
-            cacheModifiers);
+            loc,
+            /*globalPtr=*/srcPtr, /*ldsPtr=*/shmemAddrs[i],
+            /*size=*/vecBytesVal, /*offset=*/b.i32_val(0),
+            /*aux=*/cacheModifiers, /*alias_scopes=*/nullptr,
+            /*noalias_scopes=*/nullptr, /*tbaa=*/nullptr);
         continue;
       }
 
@@ -607,7 +610,7 @@ struct AsyncCopyGlobalToLocalOpConversion
       rewriter.setInsertionPointToStart(loadBlock);
       rewriter.create<ROCDL::GlobalLoadLDSOp>(
           loc, srcPtr, shmemAddrs[i], vecBytesVal, /*offset=*/b.i32_val(0),
-          cacheModifiers);
+          cacheModifiers, nullptr, nullptr, nullptr);
 
       rewriter.create<LLVM::BrOp>(loc, afterLoad);
       rewriter.setInsertionPointToStart(afterLoad);

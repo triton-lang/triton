@@ -111,9 +111,20 @@ tt.func @async_wait(%arg: tensor<32x16xf16, #AL>) {
   %cst0 = ttg.local_alloc %arg : (tensor<32x16xf16, #AL>) -> !ttg.memdesc<32x16xf16, #A_SHARED, #ttg.shared_memory>
   // CHECK: ttg.async_wait
   ttg.async_wait {num = 4 : i32}
-  // CHECK: gpu.barrier
+  // CHECK-NEXT: gpu.barrier
   // CHECK-NEXT: ttg.local_load
   %1 = ttg.local_load %cst0 : !ttg.memdesc<32x16xf16, #A_SHARED, #ttg.shared_memory> -> tensor<32x16xf16, #AL>
+  tt.return
+}
+
+// CHECK-LABEL: @async_store_wait
+tt.func @async_store_wait(%arg: tensor<32x16xf16, #AL>) {
+  %alloc = ttg.local_alloc : () -> !ttg.memdesc<32x16xf16, #A_SHARED, #ttg.shared_memory, mutable>
+  // CHECK: async_tma_store_wait
+  ttng.async_tma_store_wait {pendings = 0 : i32}
+  // CHECK-NEXT: gpu.barrier
+  // CHECK-NEXT: ttg.local_store
+  ttg.local_store %arg, %alloc : tensor<32x16xf16, #AL> -> !ttg.memdesc<32x16xf16, #A_SHARED, #ttg.shared_memory, mutable>
   tt.return
 }
 

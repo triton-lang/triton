@@ -1,4 +1,5 @@
 import functools
+import operator
 import os
 import sysconfig
 import hashlib
@@ -514,6 +515,7 @@ class CudaLauncher(object):
         signature = {idx: value for idx, value in src.signature.items()}
         src = make_launcher(constants, signature)
         mod = compile_module_from_src(src, "__triton_launcher")
+        self.num_ctas = functools.reduce(operator.mul, metadata.cluster_dims, 1)
         self.launch = mod.launch
         self.global_scratch_size = metadata.global_scratch_size
         self.global_scratch_align = metadata.global_scratch_align
@@ -522,7 +524,7 @@ class CudaLauncher(object):
     def __call__(self, gridX, gridY, gridZ, stream, function, *args):
         if self.global_scratch_size > 0:
             grid_size = gridX * gridY * gridZ
-            alloc_size = grid_size * self.global_scratch_size
+            alloc_size = grid_size * self.num_ctas * self.global_scratch_size
             global_scratch = _allocation._allocator(alloc_size, self.global_scratch_align, stream)
         else:
             global_scratch = None

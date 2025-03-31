@@ -208,7 +208,10 @@ def matmul_kernel_tma_ws(a_desc_ptr, b_desc_ptr, c_desc_ptr,  #
                          BLOCK_SIZE_N: tl.constexpr,  #
                          BLOCK_SIZE_K: tl.constexpr,  #
                          GROUP_SIZE_M: tl.constexpr,  #
+                         FP8_OUTPUT: tl.constexpr,  #
                          ):
+    dtype = tl.float8e4nv if FP8_OUTPUT else tl.float16
+
     pid = tl.program_id(axis=0)
     num_pid_m = tl.cdiv(M, BLOCK_SIZE_M)
     num_pid_n = tl.cdiv(N, BLOCK_SIZE_N)
@@ -228,11 +231,11 @@ def matmul_kernel_tma_ws(a_desc_ptr, b_desc_ptr, c_desc_ptr,  #
 
     for k in tl.range(k_tiles, warp_specialize=True, num_stages=3):
         offs_k = k * BLOCK_SIZE_K
-        a = tl._experimental_descriptor_load(a_desc_ptr, [offs_am, offs_k], [BLOCK_SIZE_M, BLOCK_SIZE_K], tl.float16)
-        b = tl._experimental_descriptor_load(b_desc_ptr, [offs_bn, offs_k], [BLOCK_SIZE_N, BLOCK_SIZE_K], tl.float16)
+        a = tl._experimental_descriptor_load(a_desc_ptr, [offs_am, offs_k], [BLOCK_SIZE_M, BLOCK_SIZE_K], dtype)
+        b = tl._experimental_descriptor_load(b_desc_ptr, [offs_bn, offs_k], [BLOCK_SIZE_N, BLOCK_SIZE_K], dtype)
         accumulator = tl.dot(a, b.T, accumulator)
 
-    c = accumulator.to(tl.float16)
+    c = accumulator.to(dtype)
 
     offs_cm = pid_m * BLOCK_SIZE_M
     offs_cn = pid_n * BLOCK_SIZE_N
@@ -298,6 +301,7 @@ def matmul_tma_ws(a, b):
     matmul_kernel_tma_ws[grid](
         desc_a, desc_b, desc_c,  #
         M, N, K,  #
+        FP8_OUTPUT=dtype == torch.float8_e4m3fn,  #
     )
     return c
 
@@ -404,7 +408,7 @@ def matmul_tma_persistent_get_configs():
         for BM in [128] \
         for BN in [128, 256] \
         for BK in [64, 128] \
-        for s in ([3, 4]) \
+        for s in ([2, 3, 4]) \
         for w in [4, 8] \
         for SUBTILE in [True, False] \
     ]
@@ -434,7 +438,10 @@ def matmul_kernel_tma_persistent(a_desc_ptr, b_desc_ptr, c_desc_ptr,  #
     tile_id_c = start_pid - NUM_SMS
     num_pid_in_group = GROUP_SIZE_M * num_pid_n
 
-    for tile_id in tl.range(start_pid, num_tiles, NUM_SMS, flatten=True):
+    # Enable warp specialization to leverage async warp scheduling in the GPU.
+    # FIXME: This only works on Blackwell right now. On older GPUs, this will
+    # use software pipelining.
+    for tile_id in tl.range(start_pid, num_tiles, NUM_SMS, flatten=True, warp_specialize=True):
         pid_m, pid_n = _compute_pid(tile_id, num_pid_in_group, num_pid_m, GROUP_SIZE_M, NUM_SMS)
         offs_am = pid_m * BLOCK_SIZE_M
         offs_bn = pid_n * BLOCK_SIZE_N
@@ -686,7 +693,7 @@ def bench_fn(reps, warmup_reps, fn, *args):
             fn(*args)
 
 
-def bench(K, dtype, reps=1000, warmup_reps=10000):
+def bench(K, dtype, reps=10000, warmup_reps=10000):
     M = 8192
     N = 8192
     a = torch.randn((M, K), device="cuda", dtype=torch.float16).to(dtype)

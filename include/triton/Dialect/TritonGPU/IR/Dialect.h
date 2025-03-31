@@ -270,6 +270,10 @@ llvm::SmallVector<T> expandMatrixShapeWithBatch(llvm::ArrayRef<T> s);
 
 llvm::SmallVector<unsigned>
 expandMatrixOrderWithBatch(llvm::ArrayRef<unsigned> o);
+
+// Return true if the two layouts represent the exact same mapping.
+bool areLayoutsEquivalent(ArrayRef<int64_t> shape, Attribute lhs,
+                          Attribute rhs);
 } // namespace mlir::triton::gpu
 
 #endif // TRITON_DIALECT_TRITONGPU_IR_DIALECT_H_
