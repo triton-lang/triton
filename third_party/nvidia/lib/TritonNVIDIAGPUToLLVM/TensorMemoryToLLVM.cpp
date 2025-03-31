@@ -75,10 +75,10 @@ struct TMemRuntimeInfo {
   bool unpackedb16;
   bool useStridedMessage;
   int numBlocks;
-  int numWarpGroupsPerBlock;
   bool blocksInterleaved;
   int numColsPerBlock;
   int colsPerWarpGroup;
+  bool splitWarpgroupsAlongM;
 };
 
 TMemMessageTraits getTMemMessageFromAtom(const TMemAccessAtom &atom,
@@ -202,17 +202,27 @@ TMemRuntimeInfo getTMemRuntimeInfo(Operation *op, RankedTensorType tensorType,
 
   info.useStridedMessage = (info.blockM == 64);
 
+  info.splitWarpgroupsAlongM =
+      nvidia_gpu::isDistributedLayoutSplitMTmemLoadStore(tensorType, memType,
+                                                         info.numWarps);
+
   info.numBlocks = ceil<int>(info.numElements, info.blockM * info.blockN);
-  info.numWarpGroupsPerBlock = ceil<int>(info.numWarpGroups, info.numBlocks);
-  info.blocksInterleaved = (info.numBlocks > 1 && info.useStridedMessage);
+  info.blocksInterleaved = (info.numBlocks > 1 && info.blockM == 64);
   info.numColsPerBlock = info.numCols / info.numBlocks;
   if (info.blocksInterleaved) {
     info.numColsPerBlock *= 2;
   }
-  info.colsPerWarpGroup = info.numColsPerBlock / info.numWarpGroupsPerBlock;
-  // If more than one warp group processes the same block,
-  // then fewer columns must be processed per message per warp group
-  info.numColsPerBlock /= info.numWarpGroupsPerBlock;
+  if (info.splitWarpgroupsAlongM) {
+    info.colsPerWarpGroup = info.numColsPerBlock;
+    info.useStridedMessage = true;
+    assert(info.blockM == 128);
+  } else {
+    int numWarpGroupsPerBlock = ceil<int>(info.numWarpGroups, info.numBlocks);
+    info.colsPerWarpGroup = info.numColsPerBlock / numWarpGroupsPerBlock;
+    // If more than one warp group processes the same block,
+    // then fewer columns must be processed per message per warp group
+    info.numColsPerBlock /= numWarpGroupsPerBlock;
+  }
   return info;
 }
 
@@ -228,15 +238,24 @@ void calculateAddressAndEmitTmemMessage(
 
   for (int block = 0; block < info.numBlocks; block += info.numWarpGroups) {
     Value address = b.ptrtoint(i32_ty, baseAddress);
-    Value blockId =
-        b.add(b.i32_val(block),
-              b.udiv(warpGroupId, b.i32_val(info.numWarpGroupsPerBlock)));
-    Value warpGroupIdInBlock =
-        b.urem(warpGroupId, b.i32_val(info.numWarpGroupsPerBlock));
-    Value startColumnId =
-        b.mul(warpGroupIdInBlock, b.i32_val(info.colsPerWarpGroup));
+    Value blockId = b.i32_val(block);
+    Value startColumnId = b.i32_val(0);
     Value blockRowId =
         b.mul(warpIdInGroup, b.i32_val(TMemRuntimeInfo::numRowsPerWarp));
+
+    if (info.splitWarpgroupsAlongM) {
+      // When split along M warp 0 loads the 16 top rows, warp 4 loads the 16
+      // bottom rows.
+      blockRowId = b.add(blockRowId, b.mul(warpGroupId, b.i32_val(16)));
+    } else {
+      int numWarpGroupsPerBlock = ceil<int>(info.numWarpGroups, info.numBlocks);
+      Value warpGroupIdInBlock =
+          b.urem(warpGroupId, b.i32_val(numWarpGroupsPerBlock));
+      blockId =
+          b.add(blockId, b.udiv(warpGroupId, b.i32_val(numWarpGroupsPerBlock)));
+      startColumnId =
+          b.mul(warpGroupIdInBlock, b.i32_val(info.colsPerWarpGroup));
+    }
 
     if (info.blocksInterleaved) {
       Value blockIdIsOdd = b.urem(blockId, b.i32_val(2));
