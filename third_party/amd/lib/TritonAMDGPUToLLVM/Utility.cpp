@@ -645,10 +645,11 @@ bool doesSwizzleInsideWarp(RewriterBase &rewriter,
                            const LinearLayout &srcToSharedLayout,
                            unsigned threadsPerWarp) {
   auto contig = srcToSharedLayout.getNumConsecutiveInOut();
-  // If all lane bases are below (2^warpSize) * contig we swizzle inside warp
-  // boundaries
+  // If all bases in lane dimension are below the next power of two of
+  // threadsPerWarp multiplied with the contigoutiy we do not swizzle across
+  // warp boundaries.
   assert(llvm::isPowerOf2_32(threadsPerWarp));
-  unsigned upperLimit = (threadsPerWarp + 1) * contig;
+  unsigned upperLimit = 2 * threadsPerWarp * contig;
 
   StringAttr kLane = rewriter.getStringAttr("lane");
   for (int inLane : llvm::seq(srcToSharedLayout.getInDimSizeLog2(kLane))) {
