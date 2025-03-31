@@ -19,6 +19,7 @@
 // #include "triton/Conversion/TritonGPUToLLVM/PatternTritonGPUOpToLLVM.h"
 // #include "triton/Conversion/TritonGPUToLLVM/TypeConverter.h"
 #include "third_party/amd/include/Dialect/TritonAMDGPU/IR/Dialect.h"
+#include "third_party/amd/include/Dialect/TritonAMDGPU/Utility/CommonUtils.h"
 #include "third_party/amd/include/TritonAMDGPUTransforms/DotTiling.h"
 #include "third_party/amd/include/TritonAMDGPUTransforms/MfmaGroup.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
@@ -70,31 +71,6 @@ SmallVector<Value> createOffset(llvm::ArrayRef<Value> valueOffset,
   return values;
 }
 
-class CoordinateAux {
-public:
-  CoordinateAux(llvm::ArrayRef<int64_t> layout) : layout(layout) {
-    bounds.resize(layout.size());
-    std::exclusive_scan(layout.rbegin(), layout.rend(), bounds.begin(), 1,
-                        std::multiplies<>());
-  }
-
-  SmallVector<int64_t> map(int64_t index) {
-    SmallVector<int64_t> coords(bounds.size(), 0);
-    for (size_t i = 1; i < bounds.size(); ++i) {
-      size_t d = bounds.size() - i;
-      coords[d] = index / bounds[d];
-      index = index % bounds[d];
-    }
-    coords[0] = index;
-    std::reverse(coords.begin(), coords.end());
-    return coords;
-  }
-
-private:
-  llvm::ArrayRef<int64_t> layout;
-  std::vector<int> bounds;
-};
-
 inline bool isRowMajor(::llvm::ArrayRef<unsigned> order) {
   auto rank = order.size();
   return order[rank - 1] == 0;
@@ -141,8 +117,6 @@ LogicalResult rewriteLocalLoad(OpBuilder &rewriter,
   SmallVector<int64_t> refinedShape = {resultShape[0] / numReps2D[0],
                                        resultShape[1] / numReps2D[1]};
   LDBG("refinedShape: " << refinedShape[0] << "x" << refinedShape[1]);
-  int64_t refinedShapeNonK = refinedShape[nonKDimIdx];
-  int64_t refinedShapeK = refinedShape[kDimIdx];
 
   auto refinedTensorType =
       RankedTensorType::get(refinedShape, resultElementType, resultEncode);
@@ -156,8 +130,8 @@ LogicalResult rewriteLocalLoad(OpBuilder &rewriter,
   rewriter.setInsertionPointAfter(op);
   SmallVector<Value> subtiles;
   auto order = memDescEncoding.getOrder();
-  for (int32_t j = 0; j < numReps2D[1]; ++j) {   // dim[1]
-    for (int32_t i = 0; i < numReps2D[0]; ++i) { // dim[0]
+  for (int32_t i = 0; i < numReps2D[0]; ++i) {
+    for (int32_t j = 0; j < numReps2D[1]; ++j) {
       int32_t offset0 = i * refinedShape[0];
       int32_t offset1 = j * refinedShape[1];
       auto offset = createOffset({}, {offset0, offset1}, rewriter, loc);
@@ -167,15 +141,21 @@ LogicalResult rewriteLocalLoad(OpBuilder &rewriter,
 
       auto refinedLoad = rewriter.create<ttg::LocalLoadOp>(
           loc, refinedTensorType, refinedView);
-      // LDBG("RefinedLocalLoad: " << *refinedLoad);
       subtiles.push_back(refinedLoad);
     }
   }
 
   // concat dims is correct shape 8x1 vs 1x8, else gives wrong output shape.
-  auto concatDims = DenseI64ArrayAttr::get(ctx, numReps2D);
+  std::vector<int64_t> loweringOrder(numReps2D.size());
+  int64_t counter = 0;
+  auto increment = [&counter](int64_t &val) { val = counter++; };
+  if (opIdx == 0)
+    std::for_each(loweringOrder.rbegin(), loweringOrder.rend(), increment);
+  else
+    std::for_each(loweringOrder.begin(), loweringOrder.end(), increment);
+
   auto joinedResult = rewriter.create<triton::amdgpu::ConcatOp>(
-      loc, resultType, subtiles, concatDims);
+      loc, resultType, subtiles, numReps2D, loweringOrder);
   LDBG("ConcatOp: " << *joinedResult);
 
   op.replaceAllUsesWith(joinedResult.getResult());
@@ -560,9 +540,10 @@ LogicalResult rewriteLoadOp(OpBuilder &rewriter, triton::LoadOp loadOp) {
   auto evict = loadOp.getEvict();
   auto isVolatile = loadOp.getIsVolatile();
 
-  CoordinateAux aux(refinedBlock.numPerDims);
-  for (size_t counter = 0; counter < refinedBlock.numSubTiles; ++counter) {
-    auto coords = aux.map(counter);
+  AMD::CoordinateMapper coordsMapper(refinedBlock.numPerDims);
+  for (size_t linearIdx = 0; linearIdx < refinedBlock.numSubTiles;
+       ++linearIdx) {
+    auto coords = coordsMapper.map(linearIdx);
     SmallVector<int64_t> offset(refinedBlock.numDims, 0);
     for (auto [dim, coord] : llvm::enumerate(coords)) {
       offset[dim] = coord * refinedBlock.elementsPerWorkGroup[dim];
@@ -618,9 +599,10 @@ LogicalResult rewriteLocalStoreOp(OpBuilder &rewriter,
       sharedMemorySpace, mutableMemory, origMemViewType.getAllocShape());
 
   rewriter.setInsertionPointAfter(loadStoreOp);
-  CoordinateAux aux(refinedBlock.numPerDims);
-  for (size_t counter = 0; counter < refinedBlock.numSubTiles; ++counter) {
-    auto coords = aux.map(counter);
+  AMD::CoordinateMapper coordsMapper(refinedBlock.numPerDims);
+  for (size_t linearIdx = 0; linearIdx < refinedBlock.numSubTiles;
+       ++linearIdx) {
+    auto coords = coordsMapper.map(linearIdx);
     SmallVector<int64_t> offset(refinedBlock.numDims, 0);
     for (auto [dim, coord] : llvm::enumerate(coords)) {
       offset[dim] = coord * refinedBlock.elementsPerWorkGroup[dim];
