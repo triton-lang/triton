@@ -30,7 +30,7 @@ Extra Credits:
 * Original flash attention paper (https://arxiv.org/abs/2205.14135)
 * Rabe and Staats (https://arxiv.org/pdf/2112.05682v2.pdf)
 
-.. GENERATED FROM PYTHON SOURCE LINES 15-900
+.. GENERATED FROM PYTHON SOURCE LINES 15-895
 
 
 
@@ -66,25 +66,25 @@ Extra Credits:
     TMA benchmarks will be running with experimental grid constant TMA descriptor.
     fused-attention-batch4-head32-d64-fwd-causal=True:
          N_CTX  Triton [FP16]  Triton [FP8]
-    0   1024.0     113.331029     84.588915
-    1   2048.0     140.109371    103.691857
-    2   4096.0     152.919178    115.032390
-    3   8192.0     167.367688    121.155636
-    4  16384.0     168.807424    124.893636
+    0   1024.0     114.707372     84.664292
+    1   2048.0     139.550684    103.595036
+    2   4096.0     153.904705    113.778451
+    3   8192.0     165.280896    120.767272
+    4  16384.0     168.056634    124.115864
     fused-attention-batch4-head32-d64-fwd-causal=False:
          N_CTX  Triton [FP16]  Triton [FP8]
-    0   1024.0     159.404938    116.860620
-    1   2048.0     171.291669    117.528656
-    2   4096.0     171.665516    119.737982
-    3   8192.0     174.084421    118.941217
-    4  16384.0     175.889896    118.858929
+    0   1024.0     159.230492    116.975342
+    1   2048.0     168.170064    117.873175
+    2   4096.0     172.372008    119.721455
+    3   8192.0     174.374198    120.227730
+    4  16384.0     175.814284    118.573445
     fused-attention-batch4-head32-d64-bwd-causal=True:
          N_CTX  Triton [FP16]  Triton [FP8]
-    0   1024.0      36.066295     36.088425
-    1   2048.0      44.161221     44.174302
-    2   4096.0      49.379505     49.314708
-    3   8192.0      52.357217     52.363347
-    4  16384.0      53.799533     53.814363
+    0   1024.0      36.128841     36.087166
+    1   2048.0      44.161706     44.096415
+    2   4096.0      49.297630     49.377429
+    3   8192.0      52.339864     52.317420
+    4  16384.0      53.767206     53.920565
 
 
 
@@ -102,11 +102,6 @@ Extra Credits:
 
     import triton
     import triton.language as tl
-
-    # ENABLE_LHS_TO_TMEM is an experimental environment variable for Blackwell.
-    # If it is set to 1 it can improve performance of Blackwell attention. However,
-    # it defaults to 0 as it is known to cause correctness issues outside of the
-    # _attn_fwd_tma kernel below.
 
     DEVICE = triton.runtime.driver.active.get_active_torch_device()
 
@@ -984,7 +979,7 @@ Extra Credits:
 
 .. rst-class:: sphx-glr-timing
 
-   **Total running time of the script:** (0 minutes 53.723 seconds)
+   **Total running time of the script:** (0 minutes 53.856 seconds)
 
 
 .. _sphx_glr_download_getting-started_tutorials_06-fused-attention.py:
