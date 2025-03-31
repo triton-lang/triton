@@ -152,9 +152,9 @@ void changeSharedEncoding(PatternRewriter &rewriter, Value memVal,
 /// Structure describes operations involved in tt.load -> ttg.local_store op
 /// chain
 struct GlobalToSharedMemoryOpChain {
-  SmallVector<tt::LoadOp> globalLoads;
+  SetVector<tt::LoadOp> globalLoads;
   // list of localAllocOp and localStoreOp operations
-  SmallVector<Operation *> localAllocStores;
+  SetVector<Operation *> localAllocStores;
   // list of MemDescSubviewOp, control flow results and block operands
   SmallVector<Value> sharedMemVals;
 };
@@ -217,15 +217,16 @@ FailureOr<SmallVector<Value>>
 traverseWhileOpForDefs(scf::WhileOp whileOp, int argIdx,
                        SetVector<Value> &visitedVals) {
   auto terminator = whileOp.getYieldOp();
-  auto search =
+  auto bodySearch =
       traverseCFForValueDefs(terminator->getOperand(argIdx), visitedVals);
-  if (failed(search))
+  if (failed(bodySearch))
     return failure();
-  SmallVector<Value> foundDefs = search.value();
-  search = traverseCFForValueDefs(whileOp.getInits()[argIdx], visitedVals);
-  if (failed(search))
+  SmallVector<Value> foundDefs = bodySearch.value();
+  auto initSearch =
+      traverseCFForValueDefs(whileOp.getInits()[argIdx], visitedVals);
+  if (failed(initSearch))
     return failure();
-  foundDefs.append(search.value());
+  foundDefs.append(initSearch.value());
   return foundDefs;
 }
 
@@ -339,17 +340,19 @@ traverseCFForValueUses(Value val, SetVector<Value> &visitedVals) {
     if (isa<scf::YieldOp>(user)) {
       auto opIdx = use.getOperandNumber();
       auto parent = user->getParentOp();
-      // traverse outside data flow
-      auto parentResult = parent->getResult(opIdx);
-      auto cfSearch = traverseCFForValueUses(parentResult, visitedVals);
-      if (failed(cfSearch))
-        return failure();
-      result.ops.append(cfSearch.value().ops);
-      result.transitiveCF.push_back(parentResult);
-      result.transitiveCF.append(cfSearch.value().transitiveCF);
+      // traverse outbound data flow
+      if (isa<scf::ForOp, scf::IfOp>(parent)) {
+        auto parentResult = parent->getResult(opIdx);
+        auto cfSearch = traverseCFForValueUses(parentResult, visitedVals);
+        if (failed(cfSearch))
+          return failure();
+        result.ops.append(cfSearch.value().ops);
+        result.transitiveCF.push_back(parentResult);
+        result.transitiveCF.append(cfSearch.value().transitiveCF);
+      }
 
+      // traverse backward data flow, i.e. along loop backward CF
       if (auto forOp = dyn_cast<scf::ForOp>(parent)) {
-        // traverse loop body data flow, reachable by backward edge in CF
         int forBodyOperandIdx = opIdx + forOp.getNumInductionVars();
         auto blockArg = forOp.getBody()->getArgument(forBodyOperandIdx);
         auto cfSearch = traverseCFForValueUses(blockArg, visitedVals);
@@ -359,9 +362,15 @@ traverseCFForValueUses(Value val, SetVector<Value> &visitedVals) {
         result.transitiveCF.push_back(blockArg);
         result.transitiveCF.append(cfSearch.value().transitiveCF);
       } else if (auto whileOp = dyn_cast<scf::WhileOp>(parent)) {
-        // traverse loop body data flow, reachable by backward edge in CF
-        // TBD
-      } else if (auto whileOp = dyn_cast<scf::IfOp>(parent)) {
+        auto condBlockArg = whileOp.getBeforeArguments()[opIdx];
+        auto condBlockSearch =
+            traverseCFForValueUses(condBlockArg, visitedVals);
+        if (failed(condBlockSearch))
+          return failure();
+        result.ops.append(condBlockSearch.value().ops);
+        result.transitiveCF.push_back(condBlockArg);
+        result.transitiveCF.append(condBlockSearch.value().transitiveCF);
+      } else if (auto ifOp = dyn_cast<scf::IfOp>(parent)) {
         // do nothing, there are no backward edges in scf::if
       } else {
         LDBG("    Reached unsupported CF operation in forward CF traversal");
@@ -385,8 +394,46 @@ traverseCFForValueUses(Value val, SetVector<Value> &visitedVals) {
       result.transitiveCF.push_back(blockArg);
       result.transitiveCF.append(cfSearch.value().transitiveCF);
       continue;
-    } else if (auto whileOp = dyn_cast<scf::WhileOp>(user)) {
-      // TBD
+    }
+    if (auto whileOp = dyn_cast<scf::WhileOp>(user)) {
+      int blockArgIdx = use.getOperandNumber();
+      auto condArg = whileOp.getBeforeArguments()[blockArgIdx];
+      auto condSearch = traverseCFForValueUses(condArg, visitedVals);
+      if (failed(condSearch))
+        return failure();
+      result.ops.append(condSearch.value().ops);
+      result.transitiveCF.push_back(condArg);
+      result.transitiveCF.append(condSearch.value().transitiveCF);
+      continue;
+    }
+    if (auto condOp = dyn_cast<scf::ConditionOp>(user)) {
+      // -1 because first operand is a condition predicate,
+      // it is not forwarded to successor blocks
+      int argIdx = use.getOperandNumber() - 1;
+      // loop body
+      auto whileOp = condOp.getParentOp<scf::WhileOp>();
+      if (!whileOp) {
+        LDBG("    can not traverse scf::ConditionOp successors");
+        return failure();
+      }
+      // traverse loop body
+      auto bodyArg = whileOp.getAfterArguments()[argIdx];
+      auto bodySearch = traverseCFForValueUses(bodyArg, visitedVals);
+      if (failed(bodySearch))
+        return failure();
+      result.ops.append(bodySearch.value().ops);
+      result.transitiveCF.push_back(bodyArg);
+      result.transitiveCF.append(bodySearch.value().transitiveCF);
+
+      // traverse while results
+      auto whileRes = whileOp.getResult(argIdx);
+      auto whileSearch = traverseCFForValueUses(whileRes, visitedVals);
+      if (failed(whileSearch))
+        return failure();
+      result.ops.append(whileSearch.value().ops);
+      result.transitiveCF.push_back(whileRes);
+      result.transitiveCF.append(whileSearch.value().transitiveCF);
+      continue;
     }
     if (isa<scf::SCFDialect>(user->getDialect())) {
       LDBG("    can not traverse def-use chains, unsupported control flow "
@@ -435,7 +482,10 @@ FailureOr<SmallVector<Op>> findAllDefiningOps(Value val) {
 FailureOr<GlobalToSharedMemoryOpChain>
 findReachableSMemOps(ttg::LocalLoadOp root) {
   SetVector<Operation *> visitedOps;
-  SetVector<Value> visitedVals;
+  // Use separate sets for forward and backward search,
+  // because we can visit one value in two directions
+  SetVector<Value> visitedValsForward;
+  SetVector<Value> visitedValsBackward;
   // breadth-first search for reachable opeations
   GlobalToSharedMemoryOpChain foundNetwork;
   SmallVector<Operation *> traversalStep{root};
@@ -454,10 +504,10 @@ findReachableSMemOps(ttg::LocalLoadOp root) {
       Value smemOperand;
       Value smemOutput;
       if (isa<ttg::LocalAllocOp>(candidate)) {
-        foundNetwork.localAllocStores.push_back(candidate);
+        foundNetwork.localAllocStores.insert(candidate);
         smemOutput = candidate->getResult(0);
       } else if (isa<ttg::LocalStoreOp>(candidate)) {
-        foundNetwork.localAllocStores.push_back(candidate);
+        foundNetwork.localAllocStores.insert(candidate);
         smemOperand = candidate->getOperand(1);
       } else if (isa<ttg::MemDescSubviewOp>(candidate)) {
         smemOutput = candidate->getResult(0);
@@ -475,7 +525,8 @@ findReachableSMemOps(ttg::LocalLoadOp root) {
 
       // Look backward
       if (smemOperand) {
-        auto backwardSearch = traverseCFForValueDefs(smemOperand, visitedVals);
+        auto backwardSearch =
+            traverseCFForValueDefs(smemOperand, visitedValsBackward);
         if (failed(backwardSearch))
           return failure();
         for (auto def : backwardSearch.value()) {
@@ -490,7 +541,8 @@ findReachableSMemOps(ttg::LocalLoadOp root) {
 
       // Look forward
       if (smemOutput) {
-        auto forwardSearch = traverseCFForValueUses(smemOutput, visitedVals);
+        auto forwardSearch =
+            traverseCFForValueUses(smemOutput, visitedValsForward);
         if (failed(forwardSearch))
           return failure();
         foundNetwork.sharedMemVals.append(forwardSearch.value().transitiveCF);
@@ -575,16 +627,28 @@ matchInThreadTransposePattern(ttg::LocalLoadOp lLoad) {
       LDBG("Failed to traverse path to global loads");
       return failure();
     }
-    pattern.globalLoads.append(globalLoadSearch.value());
+    pattern.globalLoads.insert_range(globalLoadSearch.value());
   }
+
+  LDBG("found global loads: " << pattern.globalLoads.size());
+  for (auto load : pattern.globalLoads)
+    LDBG(load);
+  LDBG("found local alloc stores: " << pattern.localAllocStores.size());
+  for (auto local : pattern.localAllocStores)
+    LDBG(*local);
+  LDBG("found shared mem values: " << pattern.sharedMemVals.size());
+  for (auto val : pattern.sharedMemVals)
+    LDBG(val);
+
   if (pattern.globalLoads.empty()) {
     LDBG("Did not find global load operation");
     return failure();
   }
   // check that all global loads have same type(i.e. shape and layout),
   // otherwise can not guarantee transformation overhead is cheap
+  auto firstLoadOp = pattern.globalLoads.front();
   auto expectedLoadType =
-      cast<RankedTensorType>(pattern.globalLoads.front().getResult().getType());
+      cast<RankedTensorType>(firstLoadOp.getResult().getType());
   // TODO support non 2d tensors:
   // in_thread_transpose operation and getTransposableBlockedEnc function
   // are limited to 2d tensors
@@ -685,8 +749,9 @@ public:
         cast<ttg::DotOperandEncodingAttr>(localLoad.getType().getEncoding());
 
     LDBG("Adjusting global loads");
+    auto firstLoadOp = pattern.globalLoads.front();
     RankedTensorType loadResultType =
-        cast<RankedTensorType>(pattern.globalLoads[0].getResult().getType());
+        cast<RankedTensorType>(firstLoadOp.getResult().getType());
     auto newBlockedEnc =
         getTransposableBlockedEnc(dotOpEnc.getOpIdx(), loadResultType);
     auto loadShape = loadResultType.getShape();

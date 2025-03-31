@@ -319,27 +319,147 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
 
 // -----
 
-// CHECK-LABEL: inThreadTranspose_scf_while_traversal_regression
+// Test that ITT does not crash on following Data flow:
+//
+// %v = define mem ref
+// while (%arg = %v) {
+//   use %arg
+// }
+//
+// CHECK-LABEL: inThreadTranspose_inbound_df_while_regression
+// CHECK: [[TRANS1:%.*]] = amdgpu.in_thread_transpose
+// CHECK: ttg.local_alloc [[TRANS1]] : (tensor<32x128xf16
+// CHECK: scf.while
+// CHECK: } do {
+// CHECK:  [[TRANS2:%.*]] = amdgpu.in_thread_transpose
+// CHECK:  ttg.local_store [[TRANS2]], {{.*}} : tensor<32x128xf16
+// CHECK: }
 #blocked = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [8, 8], warpsPerCTA = [1, 8], order = [1, 0]}>
 #shared = #ttg.swizzled_shared<{vec = 4, perPhase = 2, maxPhase = 4, order = [0, 1], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [0, 1]}>
 #smem = #ttg.shared_memory
 #mma = #ttg.amd_mfma<{versionMajor = 3, versionMinor = 0, warpsPerCTA = [4, 2], instrShape = [32, 32], isTransposed = true}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.target = "hip:gfx942", "ttg.threads-per-warp" = 64 : i32} {
-  tt.func public @inThreadTranspose_scf_while_traversal_regression(%arg0: tensor<256x32xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 4}>>, %arg1: !tt.ptr<f16> {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32}, %arg2: i1) {
+  tt.func public @inThreadTranspose_inbound_df_while_regression(%arg0: tensor<256x32xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 4}>>, %arg1: !tt.ptr<f16> {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32}, %arg2: i1) {
     %cst_0 = arith.constant dense<0.000000e+00> : tensor<256x128xf32, #mma>
     %0 = tt.splat %arg1 : !tt.ptr<f16> -> tensor<32x128x!tt.ptr<f16>, #blocked>
     %1 = tt.load %0 : tensor<32x128x!tt.ptr<f16>, #blocked>
     %2 = ttg.local_alloc %1 : (tensor<32x128xf16, #blocked>) -> !ttg.memdesc<32x128xf16, #shared, #smem, mutable>
-    %3:2 = scf.while (%arg10 = %2, %arg11 = %arg2) : (!ttg.memdesc<32x128xf16, #shared, #smem, mutable>, i1) -> (!ttg.memdesc<32x128xf16, #shared, #smem, mutable>, i1) {
-      scf.condition(%arg11) %arg10, %arg11 : !ttg.memdesc<32x128xf16, #shared, #smem, mutable>, i1
+    %3:1 = scf.while (%arg10 = %2, %arg11 = %arg2) : (!ttg.memdesc<32x128xf16, #shared, #smem, mutable>, i1) -> (!ttg.memdesc<32x128xf16, #shared, #smem, mutable>) {
+      scf.condition(%arg11) %arg10 : !ttg.memdesc<32x128xf16, #shared, #smem, mutable>
     } do {
-    ^bb0(%arg20: !ttg.memdesc<32x128xf16, #shared, #smem, mutable>, %arg21: i1):
+    ^bb0(%arg20: !ttg.memdesc<32x128xf16, #shared, #smem, mutable>):
       %10 = tt.load %0 : tensor<32x128x!tt.ptr<f16>, #blocked>
       %11 = ttg.local_load %arg20 : !ttg.memdesc<32x128xf16, #shared, #smem, mutable> -> tensor<32x128xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 4}>>
       ttg.local_store %10, %arg20 : tensor<32x128xf16, #blocked> -> !ttg.memdesc<32x128xf16, #shared, #smem, mutable>
       %12 = tt.dot %arg0, %11, %cst_0 : tensor<256x32xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 4}>> * tensor<32x128xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 4}>> -> tensor<256x128xf32, #mma>
-      scf.yield %arg20, %arg21 : !ttg.memdesc<32x128xf16, #shared, #smem, mutable>, i1
+      scf.yield %arg20, %arg2 : !ttg.memdesc<32x128xf16, #shared, #smem, mutable>, i1
     }
+    tt.return
+  }
+}
+
+// -----
+
+// Test that ITT does not crash on following Data flow:
+//
+// %w = while () {
+//   %v = define mem ref
+//   yield %v
+// }
+// use %w
+//
+// CHECK-LABEL: inThreadTranspose_outbound_df_while_regression
+// CHECK: [[TRANS1:%.*]] = amdgpu.in_thread_transpose
+// CHECK: ttg.local_alloc [[TRANS1]] : (tensor<32x128xf16
+// CHECK: scf.while
+// CHECK: } do {
+// CHECK: }
+// CHECK: [[TRANS2:%.*]] = amdgpu.in_thread_transpose
+// CHECK: ttg.local_store [[TRANS2]], {{.*}} : tensor<32x128xf16
+#blocked = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [8, 8], warpsPerCTA = [1, 8], order = [1, 0]}>
+#shared = #ttg.swizzled_shared<{vec = 4, perPhase = 2, maxPhase = 4, order = [0, 1], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [0, 1]}>
+#smem = #ttg.shared_memory
+#mma = #ttg.amd_mfma<{versionMajor = 3, versionMinor = 0, warpsPerCTA = [4, 2], instrShape = [32, 32], isTransposed = true}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.target = "hip:gfx942", "ttg.threads-per-warp" = 64 : i32} {
+  tt.func public @inThreadTranspose_outbound_df_while_regression(%arg0: tensor<256x32xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 4}>>, %arg1: !tt.ptr<f16> {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32}, %arg2: i1) {
+    %cst_0 = arith.constant dense<0.000000e+00> : tensor<256x128xf32, #mma>
+    %0 = tt.splat %arg1 : !tt.ptr<f16> -> tensor<32x128x!tt.ptr<f16>, #blocked>
+    %1 = tt.load %0 : tensor<32x128x!tt.ptr<f16>, #blocked>
+    %2 = ttg.local_alloc %1 : (tensor<32x128xf16, #blocked>) -> !ttg.memdesc<32x128xf16, #shared, #smem, mutable>
+    %3:1 = scf.while (%arg10 = %2, %arg11 = %arg2) : (!ttg.memdesc<32x128xf16, #shared, #smem, mutable>, i1) -> (!ttg.memdesc<32x128xf16, #shared, #smem, mutable>) {
+      scf.condition(%arg11) %arg10 : !ttg.memdesc<32x128xf16, #shared, #smem, mutable>
+    } do {
+    ^bb0(%arg20: !ttg.memdesc<32x128xf16, #shared, #smem, mutable>):
+      scf.yield %arg20, %arg2 : !ttg.memdesc<32x128xf16, #shared, #smem, mutable>, i1
+    }
+    ttg.local_store %1, %3#0 : tensor<32x128xf16, #blocked> -> !ttg.memdesc<32x128xf16, #shared, #smem, mutable>
+    %4 = ttg.local_load %3#0 : !ttg.memdesc<32x128xf16, #shared, #smem, mutable> -> tensor<32x128xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 4}>>
+    %5 = tt.dot %arg0, %4, %cst_0 : tensor<256x32xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 4}>> * tensor<32x128xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 4}>> -> tensor<256x128xf32, #mma>
+    tt.return
+  }
+}
+
+// -----
+
+// Test that ITT does not crash on following Data flow:
+//
+// %v = define mem ref
+// for (%arg = %v) {
+//   use %arg
+// }
+//
+// CHECK-LABEL: inThreadTranspose_inbound_df_for_regression
+#blocked = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [8, 8], warpsPerCTA = [1, 8], order = [1, 0]}>
+#shared = #ttg.swizzled_shared<{vec = 4, perPhase = 2, maxPhase = 4, order = [0, 1], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [0, 1]}>
+#smem = #ttg.shared_memory
+#mma = #ttg.amd_mfma<{versionMajor = 3, versionMinor = 0, warpsPerCTA = [4, 2], instrShape = [32, 32], isTransposed = true}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.target = "hip:gfx942", "ttg.threads-per-warp" = 64 : i32} {
+  tt.func public @inThreadTranspose_inbound_df_for_regression(%arg0: tensor<256x32xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 4}>>, %arg1: !tt.ptr<f16> {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32}, %arg2: i1) {
+    tt.return
+  }
+}
+
+// -----
+
+// Test that ITT does not crash on following Data flow:
+//
+// %f = for () {
+//   %v = define mem ref
+//   yield %v
+// }
+// use %f
+//
+// CHECK-LABEL: inThreadTranspose_outbound_df_for_regression
+#blocked = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [8, 8], warpsPerCTA = [1, 8], order = [1, 0]}>
+#shared = #ttg.swizzled_shared<{vec = 4, perPhase = 2, maxPhase = 4, order = [0, 1], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [0, 1]}>
+#smem = #ttg.shared_memory
+#mma = #ttg.amd_mfma<{versionMajor = 3, versionMinor = 0, warpsPerCTA = [4, 2], instrShape = [32, 32], isTransposed = true}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.target = "hip:gfx942", "ttg.threads-per-warp" = 64 : i32} {
+  tt.func public @inThreadTranspose_outbound_df_for_regression(%arg0: tensor<256x32xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 4}>>, %arg1: !tt.ptr<f16> {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32}, %arg2: i1) {
+    tt.return
+  }
+}
+
+// -----
+
+// Test that ITT does not crash on following Data flow:
+//
+// %i = if () {
+//   %v1 = define mem ref
+//   yield %v1
+// } else {
+//   %v2 = define mem ref
+//   yield %v2
+// }
+// use %i
+//
+// CHECK-LABEL: inThreadTranspose_outbound_df_for_regression
+#blocked = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [8, 8], warpsPerCTA = [1, 8], order = [1, 0]}>
+#shared = #ttg.swizzled_shared<{vec = 4, perPhase = 2, maxPhase = 4, order = [0, 1], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [0, 1]}>
+#smem = #ttg.shared_memory
+#mma = #ttg.amd_mfma<{versionMajor = 3, versionMinor = 0, warpsPerCTA = [4, 2], instrShape = [32, 32], isTransposed = true}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.target = "hip:gfx942", "ttg.threads-per-warp" = 64 : i32} {
+  tt.func public @inThreadTranspose_outbound_df_for_regression(%arg0: tensor<256x32xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 4}>>, %arg1: !tt.ptr<f16> {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32}, %arg2: i1) {
     tt.return
   }
 }
