@@ -343,9 +343,16 @@ scf::ForOp WGMMAPrefetcher::createNewForOp() {
       builder.setInsertionPointToEnd(newForOp.getBody());
     }
   };
+  // Keep track of each user of dotwait
+  DenseSet<Operation *> dotWaitUsers;
 
   for (Operation &op : forOp.getBody()->without_terminator()) {
     if (op.getNumRegions() > 0) {
+      setInsertionPointBeforeYield(builder, newForOp);
+    }
+    // Stop sinking dotwait when find the user of dotwait
+    if (!dotWaitUsers.empty() && dotWaitUsers.contains(&op)) {
+      dotWaitUsers.clear();
       setInsertionPointBeforeYield(builder, newForOp);
     }
     for (auto operand : op.getOperands()) {
@@ -359,6 +366,7 @@ scf::ForOp WGMMAPrefetcher::createNewForOp() {
     Operation *newOp = builder.clone(op, mapping);
     auto dot = dyn_cast<nvidia_gpu::WarpGroupDotOp>(&op);
     if (dot && dots.contains(dot)) {
+
       Attribute dotEncoding = dot.getType().getEncoding();
 
       int64_t kShape = dot.getA().getType().getShape().back();
@@ -408,6 +416,10 @@ scf::ForOp WGMMAPrefetcher::createNewForOp() {
     }
     auto dotWait = dyn_cast<nvidia_gpu::WarpGroupDotWaitOp>(newOp);
     if (dotWait) {
+      dotWaitUsers.clear();
+      for (auto dotWaitUser : op.getUsers()) {
+        dotWaitUsers.insert(dotWaitUser);
+      }
       builder.setInsertionPoint(dotWait);
     }
 

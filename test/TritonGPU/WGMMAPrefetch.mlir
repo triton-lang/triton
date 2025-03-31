@@ -35,7 +35,8 @@
 // CHECK:       %[[A_SUBITLE_4_REG_CVT:.*]] = arith.sitofp %[[A_SUBITLE_4_REG]]
 // CHECK:       %[[D_4:.*]] = ttng.warp_group_dot %[[A_SUBITLE_4_REG_CVT]], %[[B_SUBTILE_4_SMEM:.*]], %[[D_3]], %[[TRUE]]
 // CHECK-DAG:   %[[D:.*]] = ttng.warp_group_dot_wait %[[D_4]]
-// CHECK-NEXT: scf.yield {{.*}}, {{.*}}, {{.*}}, {{.*}}, %[[D]]
+// CHECK-NEXT:  %[[D_ADD_CONSTANT:.*]] = arith.addf %[[D]]
+// CHECK:       scf.yield {{.*}}, {{.*}}, {{.*}}, {{.*}}, %[[D_ADD_CONSTANT]]
 
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.target = "cuda:90", "ttg.threads-per-warp" = 32 : i32} {
     tt.func @wgmma_mixed_precision(%lb : index, %ub : index, %step : index, %A : !tt.ptr<i8>, %B : !tt.ptr<bf16>) -> tensor<128x256xf32, #C> {
@@ -49,6 +50,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
     %b_mask = arith.constant dense<true> : tensor<64x256xi1, #BL>
     %b_other = arith.constant dense<0.00e+00> : tensor<64x256xbf16, #BL>
     %c_init = arith.constant dense<0.00e+00> : tensor<128x256xf32, #C>
+    %constant_init = arith.constant dense<1.00e+00> : tensor<128x256xf32, #C>
 
     %a_off = arith.constant dense<4> : tensor<128x64xi32, #AL>
     %b_off = arith.constant dense<4> : tensor<64x256xi32, #BL>
@@ -70,12 +72,14 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
         %next_a_ptr = tt.addptr %a_ptr, %a_off: tensor<128x64x!tt.ptr<i8>, #AL>, tensor<128x64xi32, #AL>
         %next_b_ptr = tt.addptr %b_ptr, %b_off: tensor<64x256x!tt.ptr<bf16>, #BL>, tensor<64x256xi32, #BL>
 
+        %c_add_constant = arith.addf %c, %constant_init: tensor<128x256xf32, #C>
+
         %next_a_ = tt.load %next_a_ptr, %a_mask, %a_other : tensor<128x64x!tt.ptr<i8>, #AL>
         %next_a = ttg.local_alloc %next_a_ : (tensor<128x64xi8, #AL>) -> !ttg.memdesc<128x64xi8, #A_SMEM, #smem, 1x128x64>
         %next_b_ = tt.load %next_b_ptr, %b_mask, %b_other : tensor<64x256x!tt.ptr<bf16>, #BL>
         %next_b = ttg.local_alloc %next_b_ : (tensor<64x256xbf16, #BL>) -> !ttg.memdesc<64x256xbf16, #B_SMEM, #smem, 1x64x256>
 
-        scf.yield %next_a_ptr, %next_b_ptr, %next_a, %next_b, %c: tensor<128x64x!tt.ptr<i8>, #AL>, tensor<64x256x!tt.ptr<bf16>, #BL>, !ttg.memdesc<128x64xi8, #A_SMEM, #smem, 1x128x64>, !ttg.memdesc<64x256xbf16, #B_SMEM, #smem, 1x64x256>, tensor<128x256xf32, #C>
+        scf.yield %next_a_ptr, %next_b_ptr, %next_a, %next_b, %c_add_constant: tensor<128x64x!tt.ptr<i8>, #AL>, tensor<64x256x!tt.ptr<bf16>, #BL>, !ttg.memdesc<128x64xi8, #A_SMEM, #smem, 1x128x64>, !ttg.memdesc<64x256xbf16, #B_SMEM, #smem, 1x64x256>, tensor<128x256xf32, #C>
 
     }
     tt.return %loop#4 : tensor<128x256xf32, #C>
