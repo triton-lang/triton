@@ -409,12 +409,30 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
 // }
 //
 // CHECK-LABEL: inThreadTranspose_inbound_df_for_regression
+// CHECK: [[TRANS1:%.*]] = amdgpu.in_thread_transpose
+// CHECK: ttg.local_alloc [[TRANS1]] : (tensor<32x128xf16
+// CHECK: scf.for
+// CHECK:   [[TRANS2:%.*]] = amdgpu.in_thread_transpose
+// CHECK:   ttg.local_store [[TRANS2]], {{.*}} : tensor<32x128xf16
+// CHECK: }
 #blocked = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [8, 8], warpsPerCTA = [1, 8], order = [1, 0]}>
 #shared = #ttg.swizzled_shared<{vec = 4, perPhase = 2, maxPhase = 4, order = [0, 1], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [0, 1]}>
 #smem = #ttg.shared_memory
 #mma = #ttg.amd_mfma<{versionMajor = 3, versionMinor = 0, warpsPerCTA = [4, 2], instrShape = [32, 32], isTransposed = true}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.target = "hip:gfx942", "ttg.threads-per-warp" = 64 : i32} {
   tt.func public @inThreadTranspose_inbound_df_for_regression(%arg0: tensor<256x32xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 4}>>, %arg1: !tt.ptr<f16> {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32}, %arg2: i1) {
+    %c0_i32 = arith.constant 0 : i32
+    %c1_i32 = arith.constant 0 : i32
+    %c10_i32 = arith.constant 10 : i32
+    %0 = tt.splat %arg1 : !tt.ptr<f16> -> tensor<32x128x!tt.ptr<f16>, #blocked>
+    %1 = tt.load %0 : tensor<32x128x!tt.ptr<f16>, #blocked>
+    %2 = ttg.local_alloc %1 : (tensor<32x128xf16, #blocked>) -> !ttg.memdesc<32x128xf16, #shared, #smem, mutable>
+    %3:1 = scf.for %arg10 = %c0_i32 to %c10_i32 step %c1_i32 iter_args(%arg11 = %2) -> (!ttg.memdesc<32x128xf16, #shared, #smem, mutable>) : i32 {
+      %10 = tt.load %0 : tensor<32x128x!tt.ptr<f16>, #blocked>
+      %11 = ttg.local_load %arg11 : !ttg.memdesc<32x128xf16, #shared, #smem, mutable> -> tensor<32x128xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 4}>>
+      ttg.local_store %10, %arg11 : tensor<32x128xf16, #blocked> -> !ttg.memdesc<32x128xf16, #shared, #smem, mutable>
+      scf.yield %arg11 : !ttg.memdesc<32x128xf16, #shared, #smem, mutable>
+    }
     tt.return
   }
 }
@@ -430,12 +448,29 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
 // use %f
 //
 // CHECK-LABEL: inThreadTranspose_outbound_df_for_regression
+// CHECK: scf.for
+// CHECK:   [[TRANS:%.*]] = amdgpu.in_thread_transpose
+// CHECK:   ttg.local_store [[TRANS]], {{.*}} : tensor<32x128xf16
+// CHECK: }
+// CHECK: ttg.local_load
 #blocked = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [8, 8], warpsPerCTA = [1, 8], order = [1, 0]}>
 #shared = #ttg.swizzled_shared<{vec = 4, perPhase = 2, maxPhase = 4, order = [0, 1], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [0, 1]}>
 #smem = #ttg.shared_memory
 #mma = #ttg.amd_mfma<{versionMajor = 3, versionMinor = 0, warpsPerCTA = [4, 2], instrShape = [32, 32], isTransposed = true}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.target = "hip:gfx942", "ttg.threads-per-warp" = 64 : i32} {
   tt.func public @inThreadTranspose_outbound_df_for_regression(%arg0: tensor<256x32xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 4}>>, %arg1: !tt.ptr<f16> {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32}, %arg2: i1) {
+    %c0_i32 = arith.constant 0 : i32
+    %c1_i32 = arith.constant 0 : i32
+    %c10_i32 = arith.constant 10 : i32
+    %0 = tt.splat %arg1 : !tt.ptr<f16> -> tensor<32x128x!tt.ptr<f16>, #blocked>
+    %1 = ttg.local_alloc  : () -> !ttg.memdesc<32x128xf16, #shared, #smem, mutable>
+    %2:1 = scf.for %arg10 = %c0_i32 to %c10_i32 step %c1_i32 iter_args(%arg11 = %1) -> (!ttg.memdesc<32x128xf16, #shared, #smem, mutable>) : i32 {
+      %10 = tt.load %0 : tensor<32x128x!tt.ptr<f16>, #blocked>
+      %11 = ttg.local_load %arg11 : !ttg.memdesc<32x128xf16, #shared, #smem, mutable> -> tensor<32x128xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 4}>>
+      ttg.local_store %10, %arg11 : tensor<32x128xf16, #blocked> -> !ttg.memdesc<32x128xf16, #shared, #smem, mutable>
+      scf.yield %arg11 : !ttg.memdesc<32x128xf16, #shared, #smem, mutable>
+    }
+    %3 = ttg.local_load %2#0 : !ttg.memdesc<32x128xf16, #shared, #smem, mutable> -> tensor<32x128xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 4}>>
     tt.return
   }
 }
@@ -454,12 +489,33 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
 // use %i
 //
 // CHECK-LABEL: inThreadTranspose_outbound_df_for_regression
+// CHECK: [[IF:%.*]] = scf.if
+// CHECK:   [[ALLOC1:%.*]] = ttg.local_alloc : () -> !ttg.memdesc<32x128xf16
+// CHECK:   scf.yield [[ALLOC1]]
+// CHECK: } else {
+// CHECK:   [[ALLOC2:%.*]] = ttg.local_alloc : () -> !ttg.memdesc<32x128xf16
+// CHECK:   scf.yield [[ALLOC2]]
+// CHECK: }
+// CHECK: [[TRANS:%.*]] = amdgpu.in_thread_transpose
+// CHECK: ttg.local_store [[TRANS]], [[IF]] : tensor<32x128xf16
+// CHECK: ttg.local_load [[IF]] : !ttg.memdesc<32x128xf16
 #blocked = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [8, 8], warpsPerCTA = [1, 8], order = [1, 0]}>
 #shared = #ttg.swizzled_shared<{vec = 4, perPhase = 2, maxPhase = 4, order = [0, 1], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [0, 1]}>
 #smem = #ttg.shared_memory
 #mma = #ttg.amd_mfma<{versionMajor = 3, versionMinor = 0, warpsPerCTA = [4, 2], instrShape = [32, 32], isTransposed = true}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.target = "hip:gfx942", "ttg.threads-per-warp" = 64 : i32} {
   tt.func public @inThreadTranspose_outbound_df_for_regression(%arg0: tensor<256x32xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 4}>>, %arg1: !tt.ptr<f16> {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32}, %arg2: i1) {
+    %0 = scf.if %arg2 -> (!ttg.memdesc<32x128xf16, #shared, #smem, mutable>) {
+      %1 = ttg.local_alloc  : () -> !ttg.memdesc<32x128xf16, #shared, #smem, mutable>
+      scf.yield %1 : !ttg.memdesc<32x128xf16, #shared, #smem, mutable>
+    } else {
+      %2 = ttg.local_alloc  : () -> !ttg.memdesc<32x128xf16, #shared, #smem, mutable>
+      scf.yield %2 : !ttg.memdesc<32x128xf16, #shared, #smem, mutable>
+    }
+    %3 = tt.splat %arg1 : !tt.ptr<f16> -> tensor<32x128x!tt.ptr<f16>, #blocked>
+    %4 = tt.load %3: tensor<32x128x!tt.ptr<f16>, #blocked>
+    ttg.local_store %4, %0 : tensor<32x128xf16, #blocked> -> !ttg.memdesc<32x128xf16, #shared, #smem, mutable>
+    %5 = ttg.local_load %0 : !ttg.memdesc<32x128xf16, #shared, #smem, mutable> -> tensor<32x128xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 4}>>
     tt.return
   }
 }
