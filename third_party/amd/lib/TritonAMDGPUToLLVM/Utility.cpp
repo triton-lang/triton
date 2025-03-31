@@ -627,7 +627,6 @@ bool canCoalesceWriteIntoSharedMemory(RewriterBase &rewriter,
   assert(llvm::isPowerOf2_32(threadsPerWarp));
   assert(llvm::isPowerOf2_32(contig));
   unsigned mask = (threadsPerWarp * contig) - 1;
-  llvm::outs() << "Mask: " << mask << "\n";
   StringAttr kWarp = rewriter.getStringAttr("warp");
   for (int inWarp : llvm::seq(srcToSharedLayout.getInDimSizeLog2(kWarp))) {
     auto basis = srcToSharedLayout.getBasis(kWarp, inWarp)[0];

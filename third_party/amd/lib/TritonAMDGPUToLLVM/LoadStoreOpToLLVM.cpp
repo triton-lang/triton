@@ -436,7 +436,7 @@ struct BufferLoadToLocalOpConversion
     // patterns. There is still a check performed to not silently produce wrong
     // results if we invalidate the condition in the future
 
-    bool noSwizzling = sharedEnc.getMaxPhase() == 1;
+    bool hasSwizzling = sharedEnc.getMaxPhase() != 1;
 
     // Compute the blocked -> shared linear layout to check preconditions
     auto shape = ptrType.getShape();
@@ -447,13 +447,13 @@ struct BufferLoadToLocalOpConversion
     LinearLayout srcToSharedLayout = srcLayout.invertAndCompose(sharedLayout);
 
     unsigned threadsPerWarp = lookupThreadsPerWarp(rewriter);
-    if (noSwizzling && !LLVM::AMD::canCoalesceWriteIntoSharedMemory(
-                           rewriter, srcToSharedLayout, threadsPerWarp)) {
+    if (!hasSwizzling && !LLVM::AMD::canCoalesceWriteIntoSharedMemory(
+                             rewriter, srcToSharedLayout, threadsPerWarp)) {
       return rewriter.notifyMatchFailure(
           op, "does not write coalesced into LDS and is not swizzled");
     }
 
-    if (!noSwizzling && !LLVM::AMD::doesSwizzleInsideWarp(
+    if (hasSwizzling && !LLVM::AMD::doesSwizzleInsideWarp(
                             rewriter, srcToSharedLayout, threadsPerWarp)) {
       return rewriter.notifyMatchFailure(op,
                                          "does swizzle across warp boundaries");
@@ -486,7 +486,7 @@ struct BufferLoadToLocalOpConversion
     SmallVector<Value> coalescedShmemAddr;
     SmallVector<Value> swizzledShmemAddr;
 
-    if (noSwizzling) {
+    if (!hasSwizzling) {
       emitSharedAddresses(ptrType, dstTy, coalescedShmemAddr, vecTy);
     } else {
       emitSharedAddresses(ptrType, dstTy, swizzledShmemAddr, vecTy);
@@ -526,25 +526,19 @@ struct BufferLoadToLocalOpConversion
       auto offsetIn = offsetElems[srcIdx];
       Value pred = mask ? maskElems[srcIdx] : b.true_val();
 
-      if (!noSwizzling) {
-        // We compute the difference in elements between the two shmem
-        // addresses. This will tell use which lane holds the global ptr we need
-        // to store
-        // Calculate the difference in elements between the two shared memory
-        // addresses. The offset tells us which lane contains the global pointer
-        // which should be stored at the coalesced shared address
-        auto coalescedAddr = b.ptrtoint(i64_ty, swizzledShmemAddr[i]);
-        auto swizzledAddr = b.ptrtoint(i64_ty, coalescedShmemAddr[i]);
-        auto diff = b.trunc(i32_ty, b.sub(coalescedAddr, swizzledAddr));
+      if (hasSwizzling) {
+        // Compute the laneOffset based on the difference in elements between
+        // the two shmem addresses. laneOffset will be negative for half the
+        // lanes because a smaller laneId might hold our global_ptr.
+        auto coalescedAddr = b.ptrtoint(i64_ty, coalescedShmemAddr[i]);
+        auto swizzledAddr = b.ptrtoint(i64_ty, swizzledShmemAddr[i]);
+        auto diff = b.trunc(i32_ty, b.sub(swizzledAddr, coalescedAddr));
         Value laneOffset = b.sdiv(diff, vecBytesVal);
+        // selectLane will always stay inside the warp [0,
+        // threadsPerWarp) because we only swizzle inside a warp
         Value selectLane = b.add(getLaneId(rewriter, loc), laneOffset);
 
-        // BPermute returns the value from (lane_id * bytes)
-        Value laneByteOffset =
-            b.mul(selectLane,
-                  b.i32_val(offsetIn.getType().getIntOrFloatBitWidth() / 8));
-        offsetIn = rewriter.create<ROCDL::DsBpermuteOp>(
-            loc, offsetIn.getType(), laneByteOffset, offsetIn);
+        offsetIn = targetInfo.shuffleIdx(rewriter, loc, offsetIn, selectLane);
 
         if (mask) {
           // To swizzle the mask we can use ballot and then select the bit based
