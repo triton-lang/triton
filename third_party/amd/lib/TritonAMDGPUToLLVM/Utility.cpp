@@ -632,8 +632,8 @@ bool canCoalesceWriteIntoSharedMemory(RewriterBase &rewriter,
     auto basis = srcToSharedLayout.getBasis(kWarp, inWarp)[0];
     if ((basis & mask) != 0) {
       LDBG("detected uncoalesced layout from blocked to shared in async copy "
-           "for warp" +
-           std::to_string(inWarp));
+           "for warp "
+           << std::to_string(inWarp));
       return false;
     }
   }
