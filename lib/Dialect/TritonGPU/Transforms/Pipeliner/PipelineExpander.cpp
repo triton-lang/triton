@@ -67,8 +67,9 @@ protected:
   Value lb;
   Value step;
   bool dynamicLoop;
-  triton::PipeliningOption::AnnotationlFnType annotateFn = nullptr;
   bool peelEpilogue;
+  bool guardEpilogue;
+  triton::PipeliningOption::AnnotationlFnType annotateFn = nullptr;
   triton::PipeliningOption::PredicateOpFnType predicateFn = nullptr;
 
   // When peeling the kernel we generate several version of each value for
@@ -158,6 +159,7 @@ bool LoopPipelinerInternal::initializeLoopInfo(
     }
   }
   peelEpilogue = options.peelEpilogue;
+  guardEpilogue = options.guardEpilogue;
   predicateFn = options.predicateFn;
   if ((!peelEpilogue || dynamicLoop) && predicateFn == nullptr) {
     LDBG("--no epilogue or predicate set -> BAIL");
@@ -770,11 +772,16 @@ LoopPipelinerInternal::emitEpilogue(RewriterBase &rewriter,
           unsigned nextVersion = currentVersion + 1;
           Value pred = predicates[currentVersion];
           Value prevValue = valueMapping[mapVal][currentVersion];
-          auto selOp = rewriter.create<arith::SelectOp>(loc, pred, pair.value(),
-                                                        prevValue);
-          returnValues[ri] = selOp;
+          Value nextValue = pair.value();
+          // @@@: Is this valid for all results and all epilogue stages
+          // consider loop-carried addptr result needed for next stage
+          // @@@ solution - also guard all results without uses
+          if (guardEpilogue)
+            nextValue = rewriter.create<arith::SelectOp>(loc, pred, nextValue,
+                                                         prevValue);
+          returnValues[ri] = nextValue;
           if (nextVersion <= maxStage)
-            setValueMapping(mapVal, selOp, nextVersion);
+            setValueMapping(mapVal, nextValue, nextVersion);
         }
       }
     }

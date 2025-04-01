@@ -1,4 +1,5 @@
 #include "TritonAMDGPUTransforms/Passes.h"
+#include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/IR/TypeUtilities.h"
 #include "mlir/Support/LLVM.h"
 #include "third_party/amd/include/Dialect/TritonAMDGPU/IR/Dialect.h"
@@ -119,17 +120,14 @@ public:
   StreamPipeliner(scf::ForOp _forOp, int _numStages, int _globalPrefetch,
                   int _localPrefetch, bool _useAsyncCopy)
       : forOp(_forOp), numStages(_numStages), numBuffers(1),
-        useAsyncCopy(_useAsyncCopy), schedule(numStages),
+        useAsyncCopy(_useAsyncCopy), mustGuardEpilogue(false),
+        schedule(numStages),
         axisInfoAnalysis(forOp->getParentOfType<ModuleOp>()) {
     int lastStage = numStages - 1;
     stages[SCHED_GLOBAL_LOAD] = 0;
     stages[SCHED_LOCAL_STORE] = _globalPrefetch;
     stages[SCHED_LOCAL_LOAD] = lastStage - _localPrefetch;
     stages[SCHED_COMPUTE] = lastStage;
-
-    options.supportDynamicLoops = true;
-    options.peelEpilogue = true;
-    options.predicateFn = streamPredication;
   }
 
   LogicalResult pipelineLoop();
@@ -152,6 +150,9 @@ private:
   void createStreamCopy(tt::LoadOp loadOp, Value alloc, Value extractIdx);
   void createStreamOps();
 
+  bool safeDAG(Value v, int index);
+  void checkResultResilience();
+
   void scheduleOp(Operation *op, SchedType type, int stage = -1) {
     if (stage < 0)
       stage = stages[type];
@@ -164,6 +165,8 @@ private:
 
   // User settings
   int numStages;
+
+  bool mustGuardEpilogue;
 
   // Computed number of buffers
   int numBuffers;
@@ -199,12 +202,82 @@ private:
 
   // Capture list of new shared memory buffers.
   SmallVector<Value> sharedMemAllocs;
-
-  // Pipelining options for the PipelineExpander
-  tt::PipeliningOption options;
 };
 
 } // namespace
+
+bool StreamPipeliner::safeDAG(Value v, int index) {
+  if (Operation *defOp = v.getDefiningOp()) {
+    if (auto loadOp = dyn_cast<tt::LoadOp>(defOp)) {
+      // Loads in the loop will be guarded
+      return loadOp->getParentOfType<scf::ForOp>() == forOp;
+    } else if (auto cvtOp = dyn_cast<ttg::ConvertLayoutOp>(defOp)) {
+      return safeDAG(cvtOp.getSrc(), index);
+    } else if (auto dotOp = dyn_cast<tt::DotOpInterface>(defOp)) {
+      // 1 input must be safe
+      if (!safeDAG(dotOp.getA(), -1) && !safeDAG(dotOp.getB(), -1))
+        return false;
+      return safeDAG(dotOp.getC(), index);
+    } else if (auto splatOp = dyn_cast<tt::SplatOp>(defOp)) {
+      // both inputs must be safe
+      return safeDAG(splatOp.getOperand(), -1);
+    } else if (auto bcastOp = dyn_cast<tt::BroadcastOp>(defOp)) {
+      // both inputs must be safe
+      return safeDAG(bcastOp.getOperand(), -1);
+    } else if (auto expandOp = dyn_cast<tt::ExpandDimsOp>(defOp)) {
+      // both inputs must be safe
+      return safeDAG(expandOp.getOperand(), -1);
+    } else if (auto addOp = dyn_cast<arith::AddFOp>(defOp)) {
+      // both inputs must be safe
+      return safeDAG(addOp.getLhs(), -1) && safeDAG(addOp.getRhs(), -1);
+    } else if (auto subOp = dyn_cast<arith::SubFOp>(defOp)) {
+      // both inputs must be safe
+      return safeDAG(subOp.getLhs(), -1) && safeDAG(subOp.getRhs(), -1);
+    } else if (auto mulOp = dyn_cast<arith::MulFOp>(defOp)) {
+      // either input must be safe
+      return safeDAG(mulOp.getLhs(), -1) || safeDAG(mulOp.getRhs(), -1);
+    } else if (auto truncOp = dyn_cast<arith::TruncFOp>(defOp)) {
+      // either input must be safe
+      return safeDAG(truncOp.getOperand(), -1);
+    } else if (auto constOp = dyn_cast<arith::ConstantOp>(defOp)) {
+      // check for constant zero
+      if (auto attr = dyn_cast<FloatAttr>(constOp.getValue()))
+        return attr.getValue().isZero();
+    } else if (auto exp2Op = dyn_cast<math::Exp2Op>(defOp)) {
+      // either input must be safe
+      return safeDAG(exp2Op.getOperand(), -1);
+    } else if (auto selectOp = dyn_cast<arith::SelectOp>(defOp)) {
+      // both inputs must be safe
+      return safeDAG(selectOp.getTrueValue(), -1) &&
+             safeDAG(selectOp.getFalseValue(), -1);
+    } else if (auto transposeOp = dyn_cast<tt::TransposeOpInterface>(defOp)) {
+      // input must be safe
+      return safeDAG(transposeOp.getSrc(), -1);
+    } else {
+      // Unknown op default to false
+      LDBG("Unknown op for unguard epilogue in stream pipeliner");
+      return false;
+    }
+  } else {
+    // check block arg
+    auto arg = cast<BlockArgument>(v);
+    return arg.getArgNumber() == index;
+  }
+  return false;
+}
+
+void StreamPipeliner::checkResultResilience() {
+  auto yieldVals = forOp.getYieldedValuesMutable().value();
+  for (auto [index, res] : llvm::enumerate(forOp.getResults())) {
+    if (!res.use_empty()) {
+      // Check init value == 0
+      // Backtrack yield value
+      Value yieldVal = yieldVals[index].get();
+      if (!safeDAG(yieldVal, index + 1)) // + induction
+        mustGuardEpilogue = true;
+    }
+  }
+}
 
 // Init Schedule Config based on settings and loop characteristics.
 // Create clusters in order of ops in loop. This can interleave ops
@@ -214,6 +287,7 @@ private:
 //            can cause invalid schedules to be produced.
 LogicalResult StreamPipeliner::initSchedule(int maxIndirectionLevel) {
 
+  checkResultResilience();
   bool pairedGlobalLoadLocalStore = stages[SCHED_LOCAL_STORE] == 0;
   stages[SCHED_LOCAL_STORE] += maxIndirectionLevel;
 
@@ -797,11 +871,16 @@ void StreamPipeliner::scheduleRemainingToLastStage() {
   // Assign the rest of the ops to the last stage.
   // Take care of the ordering of the ops - uses cannot be scheduled to the
   // cluster before the definition.
+  int count = 0;
   auto cluster = clusters[SCHED_COMPUTE];
   DenseMap<Operation *, tt::CoarseSchedule::Cluster> opToCluster;
   for (auto &op : forOp.getBody()->without_terminator()) {
-    if (schedule.count(&op) == 0)
+    if (schedule.count(&op) == 0) {
       opToCluster[&op] = cluster;
+    }
+  }
+  if (count != 0) {
+    mustGuardEpilogue = true;
   }
   SmallVector<Operation *> queue;
   for (auto [op, stage, cluster] : schedule.getOpsInOrder(forOp)) {
@@ -931,18 +1010,6 @@ LogicalResult StreamPipeliner::preprocessLoopAndBuildSchedule() {
     schedule.dump();
   });
 
-  // Create the final schedule for the kernel loop. This will dictate the
-  // stages and order of operations to the pipeline expander.
-  std::vector<std::pair<Operation *, unsigned>> coarseSchedule =
-      schedule.createFinalSchedule(forOp);
-
-  // Fill out the pipeline options.
-  options.getScheduleFn =
-      [coarseSchedule](scf::ForOp,
-                       std::vector<std::pair<Operation *, unsigned>> &s) {
-        s = std::move(coarseSchedule);
-      };
-
   OpBuilder builder(forOp);
   builder.setInsertionPointAfter(forOp);
   // Explicitly deallocate created allocations.
@@ -956,6 +1023,27 @@ LogicalResult StreamPipeliner::pipelineLoop() {
   if (failed(preprocessLoopAndBuildSchedule()))
     return failure();
   LDBG("Loop before sending to expander:\n" << *forOp);
+
+  // Create the final schedule for the kernel loop. This will dictate the
+  // stages and order of operations to the pipeline expander.
+  std::vector<std::pair<Operation *, unsigned>> coarseSchedule =
+      schedule.createFinalSchedule(forOp);
+
+  // Pipelining options for the PipelineExpander
+  tt::PipeliningOption options;
+  options.supportDynamicLoops = true;
+  options.peelEpilogue = true;
+  options.guardEpilogue = mustGuardEpilogue;
+  if (mustGuardEpilogue)
+    options.predicateFn = streamPredication;
+  else
+    options.predicateFn = tt::predicateOp;
+
+  options.getScheduleFn =
+      [&coarseSchedule](scf::ForOp,
+                        std::vector<std::pair<Operation *, unsigned>> &s) {
+        s = std::move(coarseSchedule);
+      };
 
   IRRewriter rewriter(forOp->getContext());
   rewriter.setInsertionPoint(forOp);

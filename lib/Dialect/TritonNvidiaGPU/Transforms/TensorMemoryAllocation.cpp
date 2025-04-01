@@ -229,7 +229,7 @@ allocateTMem(Operation *parentOp,
           // HW restriction, the A alloc and accumulator needs to be in the same
           // rows.
           rowIdConstraints.joinOps(getAlloc(mmaOp.getA()),
-                                   getAlloc(mmaOp.getD()));
+                                   getAlloc(mmaOp.getC()));
         } else {
           // TODO: we need to handle cases where the format is blockM and we
           // have multiple blocks.
@@ -237,7 +237,7 @@ allocateTMem(Operation *parentOp,
                       mmaOp.getA().getType().getEncoding())
                           .getBlockM() != 64 &&
                   cast<triton::nvidia_gpu::TensorMemoryEncodingAttr>(
-                      mmaOp.getD().getType().getEncoding())
+                      mmaOp.getC().getType().getEncoding())
                           .getBlockM() != 64) &&
                  "interleaved layout with TMEM operand is not supported yet.");
         }

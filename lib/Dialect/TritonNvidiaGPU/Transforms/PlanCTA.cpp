@@ -278,7 +278,7 @@ bool CTAPlanner::processDot(triton::FuncOp &funcOp) {
 
     auto aTy = cast<RankedTensorType>(dot.getA().getType());
     auto bTy = cast<RankedTensorType>(dot.getB().getType());
-    auto dTy = cast<RankedTensorType>(dot.getD().getType());
+    auto dTy = cast<RankedTensorType>(dot.getC().getType());
 
     assert(isa<ttg::DotOperandEncodingAttr>(aTy.getEncoding()) &&
            isa<ttg::DotOperandEncodingAttr>(bTy.getEncoding()) &&

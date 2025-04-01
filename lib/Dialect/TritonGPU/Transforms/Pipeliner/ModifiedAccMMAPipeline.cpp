@@ -82,7 +82,7 @@ scf::ForOp pipelineDot(scf::ForOp forOp, ttng::TCGen5MMAOp dotOp,
   }
 
   // Update the dot op
-  dotOp.getDMutable().assign(newAlloc);
+  dotOp.getCMutable().assign(newAlloc);
   dotOp.getBarrierMutable().assign(barrier);
 
   // Update the yield
@@ -132,7 +132,7 @@ scf::ForOp mlir::triton::pipelineMMAWithScaledAcc(scf::ForOp forOp) {
 
   for (auto op : dotOps) {
     auto dotOp = llvm::cast<ttng::TCGen5MMAOp>(op);
-    auto tmemAlloc = dotOp.getD().getDefiningOp<ttng::TMEMAllocOp>();
+    auto tmemAlloc = dotOp.getC().getDefiningOp<ttng::TMEMAllocOp>();
     if (!tmemAlloc) {
       continue;
     }

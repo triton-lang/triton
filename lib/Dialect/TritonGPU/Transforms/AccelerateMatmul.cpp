@@ -755,7 +755,7 @@ static Value promoteOperand(OpBuilder &builder, Location loc, Value operand,
 // supported.
 static void decomposeMixedModeDotOp(ModuleOp mod, int computeCapability) {
   mod.walk([=](DotOp dotOp) -> void {
-    auto D = dotOp.getD();
+    auto D = dotOp.getC();
     OpBuilder builder(dotOp);
     Type AElType = dotOp.getA().getType().getElementType();
     Type promoteType;

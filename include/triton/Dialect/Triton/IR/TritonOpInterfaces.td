@@ -49,6 +49,11 @@ def DotOpInterface : OpInterface<"DotOpInterface"> {
       /*retType=*/"::mlir::Value",
       /*methodName=*/"getB",
       /*args=*/(ins)>,
+    InterfaceMethod<
+      /*desc=*/"Get the RHS C tensor",
+      /*retType=*/"::mlir::Value",
+      /*methodName=*/"getC",
+      /*args=*/(ins)>,
   InterfaceMethod<
       /*desc=*/"Verify the dimensions of the A and B DotOp operands.",
       /*retType=*/"bool",

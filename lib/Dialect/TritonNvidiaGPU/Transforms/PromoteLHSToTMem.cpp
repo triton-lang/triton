@@ -24,7 +24,7 @@ template <class MMAOpTy>
 Attribute getLHSTMemLayout(MMAOpTy tcGen5MMAOp, RankedTensorType srcType) {
   int numWarps = ttg::lookupNumWarps(tcGen5MMAOp);
   auto accTmemEncoding = dyn_cast<ttng::TensorMemoryEncodingAttr>(
-      tcGen5MMAOp.getD().getType().getEncoding());
+      tcGen5MMAOp.getC().getType().getEncoding());
   auto lhs = tcGen5MMAOp.getA();
   auto lhsShape = lhs.getType().getShape();
   // M has to follow the MMA size, as it is related to the message we are using.
@@ -54,7 +54,7 @@ public:
     auto srcType = cast<RankedTensorType>(src.getType());
     auto srcLayout = srcType.getEncoding();
     auto accTMemEncoding = dyn_cast<ttng::TensorMemoryEncodingAttr>(
-        tcGen5MMAOp.getD().getType().getEncoding());
+        tcGen5MMAOp.getC().getType().getEncoding());
     ArrayRef<unsigned> CTASplitNum =
         triton::gpu::getCTALayout(srcLayout).getCTASplitNum();
     // TMem encoding for A operand is the same as for D (Acc), but packed.
