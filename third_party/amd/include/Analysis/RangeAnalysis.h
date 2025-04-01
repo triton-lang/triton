@@ -124,6 +124,9 @@ bool cmpIIsStaticallyTrue(const DataFlowSolver &solver, arith::CmpIOp cmpOp);
 
 bool isEmptyInitializedRange(ConstantIntRanges rv);
 
+void populateFoldTrueCmpIOpPatterns(RewritePatternSet &patterns,
+                                    DataFlowSolver *solver);
+
 } // namespace mlir::triton::AMD
 
 #endif
