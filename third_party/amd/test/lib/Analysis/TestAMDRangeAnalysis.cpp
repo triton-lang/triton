@@ -34,6 +34,13 @@ struct TestAMDRangeAnalysisPass
       return signalPassFailure();
 
     auto nonNegativePred = [&solver](Value v) -> bool {
+      if (const auto *r =
+              solver->lookupState<dataflow::IntegerValueRangeLattice>(v)) {
+        if (r->getValue().isUninitialized())
+          return false;
+        if (AMD::isEmptyInitializedRange(r->getValue().getValue()))
+          return false;
+      }
       return succeeded(dataflow::staticallyNonNegative(*solver, v));
     };
 

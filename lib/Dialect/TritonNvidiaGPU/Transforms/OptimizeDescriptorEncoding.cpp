@@ -220,6 +220,7 @@ EncodingInfo combineEncodings(const EncodingInfo &lhs, const EncodingInfo &rhs,
     break;
   case 1:
     result.ctaLayout = ctaLayouts[0];
+    break;
   default:
     break;
   }
@@ -237,6 +238,7 @@ EncodingInfo combineEncodings(const EncodingInfo &lhs, const EncodingInfo &rhs,
     break;
   case 1:
     result.desiredEncoding = desiredEncodings[0];
+    break;
   default:
     break;
   }
@@ -264,7 +266,7 @@ Attribute getFallbackSharedEncoding(RankedTensorType tensorType,
 
   auto contigDimSizeInBytes = shapePerCTA.back() * eleBitWidth / 8;
   auto rank = tensorType.getRank();
-  if (rank == 1 || contigDimSizeInBytes < 32 || shape[rank - 2] < 8) {
+  if (rank == 1 || contigDimSizeInBytes < 32 || shapePerCTA[rank - 2] < 8) {
     return ttg::SwizzledSharedEncodingAttr::get(ctx, 1, 1, 1, order, ctaLayout);
   }
   return ttg::NVMMASharedEncodingAttr::get(ctx, shape, order, ctaLayout,

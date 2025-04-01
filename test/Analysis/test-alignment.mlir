@@ -844,3 +844,25 @@ module {
     tt.return %int_min : i64
   }
 }
+
+// -----
+
+tt.func @test_warp_specialize_propagation(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg1: i32 {tt.divisibility = 16 : i32}) {
+  ttg.warp_specialize(%arg0, %arg1)
+  default {
+    // expected-remark @below {{contiguity = [1], divisibility = [16], constancy = [1], constant_value = <none>}}
+    tt.addptr %arg0, %arg1 : !tt.ptr<f16>, i32
+    ttg.warp_yield
+  }
+  partition0(%arg2: !tt.ptr<f16>, %arg3: i32) num_warps(1) {
+    // expected-remark @below {{contiguity = [1], divisibility = [16], constancy = [1], constant_value = <none>}}
+    tt.addptr %arg2, %arg3 : !tt.ptr<f16>, i32
+    ttg.warp_return
+  }
+  partition1(%arg2: !tt.ptr<f16>, %arg3: i32) num_warps(1) {
+    // expected-remark @below {{contiguity = [1], divisibility = [16], constancy = [1], constant_value = <none>}}
+    tt.addptr %arg2, %arg3 : !tt.ptr<f16>, i32
+    ttg.warp_return
+  } : (!tt.ptr<f16>, i32) -> ()
+  tt.return
+}

@@ -9,6 +9,7 @@
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
+#include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 
 using namespace mlir;
 using namespace mlir::triton::gpu;
@@ -18,7 +19,8 @@ using namespace mlir::triton::gpu;
 //
 TritonGPUTypeConverter::TritonGPUTypeConverter(MLIRContext *context,
                                                int numWarps, int threadsPerWarp,
-                                               int numCTAs)
+                                               int numCTAs,
+                                               bool enableSourceRemat)
     : context(context), numWarps(numWarps), threadsPerWarp(threadsPerWarp),
       numCTAs(numCTAs) {
   addConversion([](Type type) { return type; });
@@ -55,9 +57,8 @@ TritonGPUTypeConverter::TritonGPUTypeConverter(MLIRContext *context,
   //
   // This will be called when (newArgType != origArgType)
   // This will create newArg, and map(origArg, newArg)
-  addArgumentMaterialization([&](OpBuilder &builder,
-                                 RankedTensorType tensorType, ValueRange inputs,
-                                 Location loc) -> Value {
+  addArgumentMaterialization([](OpBuilder &builder, RankedTensorType tensorType,
+                                ValueRange inputs, Location loc) -> Value {
     llvm_unreachable("Argument rematerialization should not happen in Triton "
                      "-> TritonGPU conversion");
     return {};
@@ -65,18 +66,19 @@ TritonGPUTypeConverter::TritonGPUTypeConverter(MLIRContext *context,
 
   // If the origValue still has live user(s), use this to
   // convert origValue to newValue
-  addSourceMaterialization([&](OpBuilder &builder, RankedTensorType tensorType,
+  addSourceMaterialization([=](OpBuilder &builder, RankedTensorType tensorType,
                                ValueRange inputs, Location loc) -> Value {
-    llvm_unreachable("Source rematerialization should not happen in Triton -> "
-                     "TritonGPU Conversion");
-    return {};
+    assert(enableSourceRemat && "Source rematerialization should not happen in "
+                                "Triton -> TritonGPU Conversion");
+    return builder.create<UnrealizedConversionCastOp>(loc, tensorType, inputs)
+        .getResult(0);
   });
 
   // This will be called when (desiredType != newOperandType)
   // where, desiredType = typeConverter->convertType(origType)
   // NOTE: only for remapped values.
-  addTargetMaterialization([&](OpBuilder &builder, RankedTensorType tensorType,
-                               ValueRange inputs, Location loc) {
+  addTargetMaterialization([](OpBuilder &builder, RankedTensorType tensorType,
+                              ValueRange inputs, Location loc) {
     auto cast =
         builder.create<triton::gpu::ConvertLayoutOp>(loc, tensorType, inputs);
     return cast.getResult();
@@ -98,7 +100,8 @@ TritonGPUConversionTarget::TritonGPUConversionTarget(
 
   addDynamicallyLegalDialect<arith::ArithDialect, math::MathDialect,
                              triton::TritonDialect, cf::ControlFlowDialect,
-                             scf::SCFDialect, ub::UBDialect>(
+                             scf::SCFDialect, ub::UBDialect,
+                             triton::nvidia_gpu::TritonNvidiaGPUDialect>(
       [&](Operation *op) {
         bool hasLegalRegions = true;
         for (auto &region : op->getRegions()) {

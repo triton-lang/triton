@@ -271,6 +271,12 @@ LinearLayout chooseDsReadB64TrLayout(Attribute enc, ArrayRef<int64_t> shape,
 LinearLayout getScaleTMEMStoreLinearLayout(RankedTensorType scaleType,
                                            int numWarps);
 
+// Return a layout valid for TMemLoad op for a tmem layout of block MxN that
+// distribute the data long M for the warp groups. This doesn't affect the TMem
+// layout it just returns a distributed layout compatible for tmem_load.
+LinearLayout getTmemLoadLayoutSplitLongM(int M, int N, RankedTensorType oldType,
+                                         int numWarps);
+
 // Create LinearLayout for scale in scaled mfma.
 LinearLayout chooseScaledMfmaScaleLayout(
     MLIRContext *ctx, int dotOperandIdx,

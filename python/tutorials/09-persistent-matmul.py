@@ -61,12 +61,8 @@ def _matmul_launch_metadata(grid, kernel, args):
     return ret
 
 
-HAS_TMA_DESC = "nv_tma_desc_type" in dir(tl)
-
-if HAS_TMA_DESC:
-    print("TMA benchmarks will be running with experimental grid constant TMA descriptor.", )
-else:
-    print("TMA benchmarks will be running without grid constant TMA descriptor.", )
+HAS_TMA_DESC = supports_tma() and hasattr(tl, "nv_tma_desc_type")
+HAS_TENSOR_DESC = supports_tma() and hasattr(tl, "make_tensor_descriptor")
 
 
 # TmaAutoTuneHelper used in htyu's PR #5622
@@ -86,49 +82,27 @@ class TmaAutoTuneHelper:
     def __init__(self):
         self.fill_1d_tma_descriptor_inner = (triton.runtime.driver.active.utils.fill_1d_tma_descriptor)
         self.fill_2d_tma_descriptor_inner = (triton.runtime.driver.active.utils.fill_2d_tma_descriptor)
-        if HAS_TMA_DESC:
-            self.descriptors = {}
-        else:
-            self.cuda_descriptors = {}
+        self.descriptors = {}
 
     # Call this method outside of the lambda function for grid size
     def init_tma_descriptor(self, name):
-        if HAS_TMA_DESC:
-            self.descriptors[name] = torch.empty(TmaAutoTuneHelper.TMA_SIZE, device="cpu", dtype=torch.int8)
-        else:
-            self.cuda_descriptors[name] = torch.empty(TmaAutoTuneHelper.TMA_SIZE, device="cuda", dtype=torch.int8)
+        self.descriptors[name] = torch.empty(TmaAutoTuneHelper.TMA_SIZE, device="cpu", dtype=torch.int8)
 
     # Call this method inside the lambda function for grid size
     def fill_1d_tma_descriptor(self, name, ptr, dim, block_dim, element_size):
-        if HAS_TMA_DESC:
-            desc_x = self.descriptors[name]
-            assert desc_x.data_ptr() % 64 == 0
-            self.fill_1d_tma_descriptor_inner(ptr, dim, block_dim, element_size, desc_x.data_ptr())
-        else:
-            desc_x = self.cuda_descriptors[name]
-            buf_x = torch.empty_like(desc_x, device="cpu", pin_memory=True)
-            self.fill_1d_tma_descriptor_inner(ptr, dim, block_dim, element_size, buf_x.data_ptr())
-            desc_x.copy_(buf_x, non_blocking=True)
+        desc_x = self.descriptors[name]
+        assert desc_x.data_ptr() % 64 == 0
+        self.fill_1d_tma_descriptor_inner(ptr, dim, block_dim, element_size, desc_x.data_ptr())
 
     # Call this method inside the lambda function for grid size
     def fill_2d_tma_descriptor(self, name, ptr, dim1, dim0, block_dim1, block_dim0, element_size):
-        if HAS_TMA_DESC:
-            desc_x = self.descriptors[name]
-            assert desc_x.data_ptr() % 64 == 0
-            self.fill_2d_tma_descriptor_inner(ptr, dim1, dim0, block_dim1, block_dim0, element_size, desc_x.data_ptr())
-        else:
-            desc_x = self.cuda_descriptors[name]
-            buf_x = torch.empty_like(desc_x, device="cpu", pin_memory=True)
-            self.fill_2d_tma_descriptor_inner(ptr, dim1, dim0, block_dim1, block_dim0, element_size, buf_x.data_ptr())
-            desc_x.copy_(buf_x, non_blocking=True)
+        desc_x = self.descriptors[name]
+        assert desc_x.data_ptr() % 64 == 0
+        self.fill_2d_tma_descriptor_inner(ptr, dim1, dim0, block_dim1, block_dim0, element_size, desc_x.data_ptr())
 
     def get_tma_descriptor_kernel_param(self, name):
-        if HAS_TMA_DESC:
-            assert self.descriptors[name] is not None
-            return self.KernelParamWrapper(self.descriptors[name])
-        else:
-            assert self.cuda_descriptors[name] is not None
-            return self.cuda_descriptors[name]
+        assert self.descriptors[name] is not None
+        return self.KernelParamWrapper(self.descriptors[name])
 
 
 def matmul_get_configs():
@@ -228,13 +202,16 @@ def matmul(a, b):
     key=["M", "N", "K"],
 )
 @triton.jit(launch_metadata=_matmul_launch_metadata)
-def matmul_tma_ws_kernel(a_desc_ptr, b_desc_ptr, c_desc_ptr,  #
+def matmul_kernel_tma_ws(a_desc_ptr, b_desc_ptr, c_desc_ptr,  #
                          M, N, K,  #
                          BLOCK_SIZE_M: tl.constexpr,  #
                          BLOCK_SIZE_N: tl.constexpr,  #
                          BLOCK_SIZE_K: tl.constexpr,  #
                          GROUP_SIZE_M: tl.constexpr,  #
+                         FP8_OUTPUT: tl.constexpr,  #
                          ):
+    dtype = tl.float8e4nv if FP8_OUTPUT else tl.float16
+
     pid = tl.program_id(axis=0)
     num_pid_m = tl.cdiv(M, BLOCK_SIZE_M)
     num_pid_n = tl.cdiv(N, BLOCK_SIZE_N)
@@ -254,11 +231,11 @@ def matmul_tma_ws_kernel(a_desc_ptr, b_desc_ptr, c_desc_ptr,  #
 
     for k in tl.range(k_tiles, warp_specialize=True, num_stages=3):
         offs_k = k * BLOCK_SIZE_K
-        a = tl._experimental_descriptor_load(a_desc_ptr, [offs_am, offs_k], [BLOCK_SIZE_M, BLOCK_SIZE_K], tl.float16)
-        b = tl._experimental_descriptor_load(b_desc_ptr, [offs_bn, offs_k], [BLOCK_SIZE_N, BLOCK_SIZE_K], tl.float16)
+        a = tl._experimental_descriptor_load(a_desc_ptr, [offs_am, offs_k], [BLOCK_SIZE_M, BLOCK_SIZE_K], dtype)
+        b = tl._experimental_descriptor_load(b_desc_ptr, [offs_bn, offs_k], [BLOCK_SIZE_N, BLOCK_SIZE_K], dtype)
         accumulator = tl.dot(a, b.T, accumulator)
 
-    c = accumulator.to(tl.float16)
+    c = accumulator.to(dtype)
 
     offs_cm = pid_m * BLOCK_SIZE_M
     offs_cn = pid_n * BLOCK_SIZE_N
@@ -321,9 +298,10 @@ def matmul_tma_ws(a, b):
     desc_b = desc_helper.get_tma_descriptor_kernel_param("b")
     desc_c = desc_helper.get_tma_descriptor_kernel_param("c")
 
-    matmul_tma_ws_kernel[grid](
+    matmul_kernel_tma_ws[grid](
         desc_a, desc_b, desc_c,  #
         M, N, K,  #
+        FP8_OUTPUT=dtype == torch.float8_e4m3fn,  #
     )
     return c
 
@@ -430,7 +408,7 @@ def matmul_tma_persistent_get_configs():
         for BM in [128] \
         for BN in [128, 256] \
         for BK in [64, 128] \
-        for s in ([3, 4]) \
+        for s in ([2, 3, 4]) \
         for w in [4, 8] \
         for SUBTILE in [True, False] \
     ]
@@ -460,7 +438,10 @@ def matmul_kernel_tma_persistent(a_desc_ptr, b_desc_ptr, c_desc_ptr,  #
     tile_id_c = start_pid - NUM_SMS
     num_pid_in_group = GROUP_SIZE_M * num_pid_n
 
-    for tile_id in tl.range(start_pid, num_tiles, NUM_SMS, flatten=True):
+    # Enable warp specialization to leverage async warp scheduling in the GPU.
+    # FIXME: This only works on Blackwell right now. On older GPUs, this will
+    # use software pipelining.
+    for tile_id in tl.range(start_pid, num_tiles, NUM_SMS, flatten=True, warp_specialize=True):
         pid_m, pid_n = _compute_pid(tile_id, num_pid_in_group, num_pid_m, GROUP_SIZE_M, NUM_SMS)
         offs_am = pid_m * BLOCK_SIZE_M
         offs_bn = pid_n * BLOCK_SIZE_N
@@ -712,7 +693,7 @@ def bench_fn(reps, warmup_reps, fn, *args):
             fn(*args)
 
 
-def bench(K, dtype, reps=1000, warmup_reps=10000):
+def bench(K, dtype, reps=10000, warmup_reps=10000):
     M = 8192
     N = 8192
     a = torch.randn((M, K), device="cuda", dtype=torch.float16).to(dtype)
@@ -726,10 +707,11 @@ def bench(K, dtype, reps=1000, warmup_reps=10000):
         bench_fn(reps, warmup_reps, torch_matmul, a, b)
     bench_fn(reps, warmup_reps, matmul, a, b.T)
     bench_fn(reps, warmup_reps, matmul_persistent, a, b.T)
-    if supports_tma():
-        bench_fn(reps, warmup_reps, matmul_tma_ws, a, b)
+    if HAS_TMA_DESC:
         bench_fn(reps, warmup_reps, matmul_tma_persistent, a, b)
+    if HAS_TENSOR_DESC:
         bench_fn(reps, warmup_reps, matmul_descriptor_persistent, a, b)
+        bench_fn(reps, warmup_reps, matmul_tma_ws, a, b)
 
 
 def validate(M, N, K, dtype):
@@ -740,10 +722,10 @@ def validate(M, N, K, dtype):
     torch_result = torch_matmul(a, b) if dtype == torch.float16 else None
     cublas_result = cublas_matmul(a, b) if cublas is not None else None
     naive_result = matmul(a, b.T)
-    tma_ws_result = matmul_tma_ws(a, b) if supports_tma() else None
+    tma_ws_result = matmul_tma_ws(a, b) if HAS_TENSOR_DESC else None
     persistent_result = matmul_persistent(a, b.T)
-    tma_persistent_result = matmul_tma_persistent(a, b) if supports_tma() else None
-    descriptor_persistent_result = matmul_descriptor_persistent(a, b) if supports_tma() else None
+    tma_persistent_result = matmul_tma_persistent(a, b) if HAS_TMA_DESC else None
+    descriptor_persistent_result = matmul_descriptor_persistent(a, b) if HAS_TENSOR_DESC else None
 
     if tma_ws_result is not None:
         naive_vs_tma_ws = "✅" if torch.allclose(naive_result.to(torch.float16), tma_ws_result.to(torch.float16),
