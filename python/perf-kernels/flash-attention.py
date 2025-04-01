@@ -1168,7 +1168,8 @@ class _attention(torch.autograd.Function):
         return o, encoded_softmax, attn_fwd.best_config
 
     @staticmethod
-    def backward(ctx, do, _):
+    def backward(ctx, *gradients):
+        do = gradients[0]
         if torch.version.hip is not None:
             BLOCK = 64
         else:
@@ -1936,6 +1937,14 @@ def run_benchmark(custom, args):
         else:
             x_vals_list = nonvarlen_benchmark_configs()
 
+        if mode == 'bwd':
+            # Only those with N_CTX_Q == N_CTX_K work
+            new_x = []
+            for v in x_vals_list:
+                if v[-1] == v[-2]:
+                    new_x.append(v)
+            x_vals_list = new_x
+
         if args.model:
             x_vals_list = model_benchmark_configs(args)
             x_names = ['model', 'BATCH', 'HQ', 'HK', 'N_CTX_Q', 'N_CTX_K', 'D_HEAD']
@@ -2013,7 +2022,7 @@ def run_benchmark(custom, args):
             input_metadata.set_persistent(args.persistent)
             fn = lambda: attention(q, k, v, o, input_metadata)
             if mode == 'bwd':
-                o, _ = fn()
+                o, _, _ = fn()
                 do = torch.randn_like(o)
                 fn = lambda: o.backward(do, retain_graph=True)
 
