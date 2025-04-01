@@ -275,19 +275,19 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
 // Test that backward SCF traversal correctly process nested CF structures
 // CHECK-LABEL: inThreadTranspose_nested_scf_traversal_regression
 
-// CHECK: scf.if {{.*}} -> (!ttg.memdesc<32x128xf16, #shared, #smem>) {
+// CHECK: [[IF:%.*]] = scf.if {{.*}} -> (!ttg.memdesc<32x128xf16, #shared, #smem>) {
 // CHECK:   scf.if {{.*}} -> (tensor<32x128xf16, #blocked>) {
 // CHECK:   } else {
 // CHECK:   }
-// CHECK:   amdgpu.in_thread_transpose {{.*}} : tensor<32x128xf16
-// CHECK:   ttg.local_alloc {{.*}} : {{.*}} !ttg.memdesc<32x128xf16
-// CHECK:   scf.yield %7 : !ttg.memdesc<32x128xf16, #shared, #smem>
+// CHECK:   [[TRANS1:%.*]] = amdgpu.in_thread_transpose {{.*}} : tensor<32x128xf16
+// CHECK:   [[ALLOC1:%.*]] = ttg.local_alloc [[TRANS1]] : {{.*}} !ttg.memdesc<32x128xf16
+// CHECK:   scf.yield [[ALLOC1]] : !ttg.memdesc<32x128xf16, #shared, #smem>
 // CHECK: } else {
-// CHECK:   amdgpu.in_thread_transpose {{.*}} : tensor<32x128xf16
-// CHECK:   ttg.local_alloc %8 : {{.*}} -> !ttg.memdesc<32x128xf16
-// CHECK:   scf.yield {{.*}} : !ttg.memdesc<32x128xf16
+// CHECK:   [[TRANS2:%.*]] = amdgpu.in_thread_transpose {{.*}} : tensor<32x128xf16
+// CHECK:   [[ALLOC2:%.*]] = ttg.local_alloc [[TRANS2]] : {{.*}} -> !ttg.memdesc<32x128xf16
+// CHECK:   scf.yield [[ALLOC2]] : !ttg.memdesc<32x128xf16
 // CHECK: }
-// CHECK: ttg.local_load
+// CHECK: ttg.local_load [[IF]]
 #blocked = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [8, 8], warpsPerCTA = [1, 8], order = [1, 0]}>
 #shared = #ttg.swizzled_shared<{vec = 4, perPhase = 2, maxPhase = 4, order = [0, 1], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [0, 1]}>
 #smem = #ttg.shared_memory
