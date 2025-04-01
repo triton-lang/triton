@@ -477,8 +477,8 @@ TritonIntegerRangeAnalysis::collectAssumptions(Operation *rootOp,
 struct FoldTrueCmpIOp : OpRewritePattern<arith::CmpIOp> {
   using OpRewritePattern::OpRewritePattern;
 
-  FoldTrueCmpIOp(MLIRContext *context, std::shared_ptr<DataFlowSolver> solver)
-      : OpRewritePattern(context), solver(std::move(solver)) {};
+  FoldTrueCmpIOp(MLIRContext *context, DataFlowSolver *solver)
+      : OpRewritePattern(context), solver(solver) {};
 
   LogicalResult matchAndRewrite(arith::CmpIOp cmpOp,
                                 PatternRewriter &rewriter) const override {
@@ -486,6 +486,7 @@ struct FoldTrueCmpIOp : OpRewritePattern<arith::CmpIOp> {
       if (failed(mlir::dataflow::maybeReplaceWithConstant(*solver, rewriter,
                                                           cmpOp.getResult()))) {
         LDBG("failed to replace with constant op: " << cmpOp);
+        return failure();
       }
     } else {
       return failure();
@@ -493,12 +494,12 @@ struct FoldTrueCmpIOp : OpRewritePattern<arith::CmpIOp> {
     return success();
   }
 
-  std::shared_ptr<DataFlowSolver> solver;
+  DataFlowSolver *solver;
 };
 
 void populateFoldTrueCmpIOpPatterns(RewritePatternSet &patterns,
-                                    std::shared_ptr<DataFlowSolver> solver) {
-  patterns.add<FoldTrueCmpIOp>(patterns.getContext(), std::move(solver));
+                                    DataFlowSolver *solver) {
+  patterns.add<FoldTrueCmpIOp>(patterns.getContext(), solver);
 }
 
 } // namespace mlir::triton::AMD

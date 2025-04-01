@@ -24,14 +24,14 @@ struct TestAMDFoldTrueCmpIOpPass
   void runOnOperation() override {
     DenseMap<Value, SetVector<Operation *>> assumptions =
         AMD::TritonIntegerRangeAnalysis::collectAssumptions(getOperation());
-    std::shared_ptr<DataFlowSolver> solver = createDataFlowSolver();
+    std::unique_ptr solver = createDataFlowSolver();
     solver->load<AMD::TritonIntegerRangeAnalysis>(assumptions);
     if (failed(solver->initializeAndRun(getOperation())))
       return signalPassFailure();
 
     ModuleOp mod = getOperation();
     RewritePatternSet patterns(&getContext());
-    AMD::populateFoldTrueCmpIOpPatterns(patterns, solver);
+    AMD::populateFoldTrueCmpIOpPatterns(patterns, solver.get());
     if (failed(applyPatternsGreedily(mod, std::move(patterns)))) {
       return signalPassFailure();
     }

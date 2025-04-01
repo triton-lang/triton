@@ -1064,14 +1064,14 @@ struct PipelinePass : public TritonAMDGPUStreamPipelineBase<PipelinePass> {
 
     DenseMap<Value, SetVector<Operation *>> assumptions =
         tt::AMD::TritonIntegerRangeAnalysis::collectAssumptions(getOperation());
-    std::shared_ptr solver = createDataFlowSolver();
+    std::unique_ptr solver = createDataFlowSolver();
     solver->load<tt::AMD::TritonIntegerRangeAnalysis>(assumptions);
     if (failed(solver->initializeAndRun(getOperation())))
       return signalPassFailure();
 
     ModuleOp mod = getOperation();
     RewritePatternSet patterns(&getContext());
-    tt::AMD::populateFoldTrueCmpIOpPatterns(patterns, solver);
+    tt::AMD::populateFoldTrueCmpIOpPatterns(patterns, solver.get());
     (void)applyPatternsGreedily(mod, std::move(patterns));
   }
 };
