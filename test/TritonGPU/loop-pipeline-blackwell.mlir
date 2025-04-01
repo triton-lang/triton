@@ -20,17 +20,17 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
   // CHECK: %[[BAR_SLICE:.+]] = ttg.memdesc_subview %[[BAR_BUF]][%[[C0]]]
   // CHECK: ttng.init_barrier %[[BAR_SLICE]], 1
   // CHECK: %[[FOR_RET:.+]]:8 = scf.for {{.*}} iter_args(%[[PHASE:.+]] = %[[C0]], %[[A_DIST1:.+]] = %[[POISON]], %[[B_DIST1:.+]] = %[[POISON]], %[[WAIT_PRED:.+]] = %[[FALSE]]
-  // CHECK:   ttng.wait_barrier %[[BAR_BUF]], %[[PHASE]], %[[WAIT_PRED]]
+  // CHECK:   ttng.wait_barrier %[[BAR_BUF]], %[[PHASE]], %[[WAIT_PRED]] deps %[[A_DIST1]], %[[B_DIST1]]
   // CHECK:   %[[ACC:.+]] = ttng.tmem_load %[[TMEM_BUF]]
   // CHECK:   %[[ACC2:.+]] = arith.mulf %[[ACC]], %[[C2_F]]
   // CHECK:   ttng.tmem_store %[[ACC2]], %[[TMEM_BUF]], %[[TRUE]]
   // CHECK:   ttng.tc_gen5_mma %[[A_OP:.*]], %[[B_OP:.*]], %[[TMEM_BUF]], %[[TRUE]], %[[TRUE]], %[[BAR_BUF]]
   // CHECK:   %[[PHASE_NEXT:.+]] = arith.xori %[[PHASE]], %[[C1]]
   // CHECK:   scf.yield %[[PHASE_NEXT]], %[[A_OP]], %[[B_OP]], %[[TRUE]]
-  // CHECK: ttng.wait_barrier %[[BAR_BUF]], %[[FOR_RET]]#4, %[[FOR_RET]]#5
-  // CHECK: ttng.tmem_load %[[TMEM_BUF]]
+  // CHECK: ttng.wait_barrier %[[BAR_BUF]], %[[FOR_RET]]#0, %[[FOR_RET]]#3 deps %[[FOR_RET]]#1, %[[FOR_RET]]#2
   // CHECK: ttng.inval_barrier %[[BAR_BUF]]
   // CHECK: ttg.local_dealloc %[[BAR_BUF]]
+  // CHECK: ttng.tmem_load %[[TMEM_BUF]]
   tt.func public @chained_dot_scaled_acc(%A_ptr: tensor<128x128x!tt.ptr<f16>, #blocked1> {tt.contiguity = 16 : i32, tt.divisibility = 16 : i32}, %B_ptr: tensor<128x128x!tt.ptr<f16>, #blocked1> {tt.contiguity = 16 : i32, tt.divisibility = 16 : i32}, %arg3: i32) -> tensor<128x128xf16, #blocked> attributes {noinline = false} {
     %true = arith.constant true
     %cst = arith.constant dense<0.000000e+00> : tensor<128x128xf32, #blocked>

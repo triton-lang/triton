@@ -881,7 +881,8 @@ std::pair<int, int> getTmemUseStageBounds(ttng::TMEMAllocOp alloc,
 scf::ForOp prepLoopForDist1Wait(scf::ForOp forOp, CoarseSchedule &schedule,
                                 ttng::MMAv5OpInterface mma,
                                 const SmallVector<Value> &mmaOpBuffers,
-                                SmallVector<Value> &waitBuffers, Value &pred) {
+                                SmallVector<int> &waitBuffersArgIdx,
+                                int &predArgIdx) {
   OpBuilderForStage builder(forOp, schedule);
   Location loc = mma.getLoc();
   SmallVector<Value> newOperands;
@@ -901,9 +902,9 @@ scf::ForOp prepLoopForDist1Wait(scf::ForOp forOp, CoarseSchedule &schedule,
   forOp = newForOp;
 
   for (int i = 0; i < mmaOpBuffers.size(); ++i) {
-    waitBuffers.push_back(forOp.getRegionIterArg(newOperandIndex + i));
+    waitBuffersArgIdx.push_back(newOperandIndex + i);
   }
-  pred = forOp.getRegionIterArg(newOperandIndex + mmaOpBuffers.size());
+  predArgIdx = newOperandIndex + mmaOpBuffers.size();
 
   builder.setInsertionPointAfter(mma);
   builder.setStageCluster(schedule[mma]);
@@ -919,10 +920,12 @@ scf::ForOp prepLoopForDist1Wait(scf::ForOp forOp, CoarseSchedule &schedule,
 
 scf::ForOp createBarrierAndWaitOps(scf::ForOp forOp, CoarseSchedule &schedule,
                                    ttng::MMAv5OpInterface mma,
-                                   ttng::TMEMAllocOp alloc, Value phase,
-                                   Value barrierIdx, int numStages) {
+                                   ttng::TMEMAllocOp alloc, int phaseArgIdx,
+                                   int barrierIdxArgIdx, int numStages) {
   OpBuilderForStage builder(forOp, schedule);
   DominanceInfo domInfo(forOp);
+  Value phase = forOp.getRegionIterArg(phaseArgIdx);
+  Value barrierIdx = forOp.getRegionIterArg(barrierIdxArgIdx);
   Value zero = builder.create<arith::ConstantIntOp>(forOp.getLoc(), 0, 32);
   Value one = builder.create<arith::ConstantIntOp>(forOp.getLoc(), 1, 32);
   Value numStagesVal =
@@ -1000,8 +1003,8 @@ scf::ForOp createBarrierAndWaitOps(scf::ForOp forOp, CoarseSchedule &schedule,
   }
 
   struct Dist1WaitInfo {
-    SmallVector<Value> waitBuffers;
-    Value predicate;
+    SmallVector<int> waitBuffersArgIdx;
+    int predicateArgIdx;
   };
   std::optional<Dist1WaitInfo> dist1WaitInfo;
   for (auto wp : waitPoints) {
@@ -1017,15 +1020,17 @@ scf::ForOp createBarrierAndWaitOps(scf::ForOp forOp, CoarseSchedule &schedule,
       //    time
       // 2. The waitBuffers do not dominate this wait, so it needs to take undef
       //    values from the arg iters
-      if (dist1WaitInfo) {
-        currWaitBuffers = dist1WaitInfo->waitBuffers;
-        pred = dist1WaitInfo->predicate;
-      } else {
-        currWaitBuffers.clear();
+      if (!dist1WaitInfo) {
+        dist1WaitInfo = Dist1WaitInfo();
         forOp = prepLoopForDist1Wait(forOp, schedule, mma, waitBuffers,
-                                     currWaitBuffers, pred);
-        dist1WaitInfo = {currWaitBuffers, pred};
+                                     dist1WaitInfo->waitBuffersArgIdx,
+                                     dist1WaitInfo->predicateArgIdx);
       }
+      currWaitBuffers = llvm::to_vector(
+          llvm::map_range(dist1WaitInfo->waitBuffersArgIdx, [&](int idx) {
+            return cast<Value>(forOp.getRegionIterArg(idx));
+          }));
+      pred = forOp.getRegionIterArg(dist1WaitInfo->predicateArgIdx);
     }
     Value barrierSlice = barrierAlloc;
     if (numStages > 1) {
@@ -1050,14 +1055,32 @@ scf::ForOp createBarrierAndWaitOps(scf::ForOp forOp, CoarseSchedule &schedule,
                                                newPhase, phase);
   }
   replaceAllUsesDominatedBy(newPhase.getDefiningOp(), newPhase, phase, domInfo);
+
+  // If there is a dist-1 wait, we need to add a wait after the loop
+  if (dist1WaitInfo) {
+    builder.setInsertionPointAfter(forOp);
+    Value barrierSlice = barrierAlloc;
+    Value barrierIdx = forOp.getResult(barrierIdxArgIdx);
+    Value phase = forOp.getResult(phaseArgIdx);
+    SmallVector<Value> currWaitBuffers = llvm::to_vector(
+        llvm::map_range(dist1WaitInfo->waitBuffersArgIdx,
+                        [&](int idx) { return forOp.getResult(idx); }));
+    if (numStages > 1) {
+      barrierSlice =
+          triton::createSingleBufferView(builder, barrierAlloc, barrierIdx);
+    }
+    builder.create<ttng::WaitBarrierOp>(
+        loc, barrierSlice, phase,
+        forOp.getResult(dist1WaitInfo->predicateArgIdx), currWaitBuffers);
+  }
   return forOp;
 }
 
 void multibufferTensorMemory(scf::ForOp forOp, CoarseSchedule &schedule,
-                             ttng::TMEMAllocOp alloc, Value bufIdx,
-                             int bufIdxArgIdx, int tmemUseNumStages) {
+                             ttng::TMEMAllocOp alloc, int bufIdxArgIdx,
+                             int tmemUseNumStages) {
   DominanceInfo domInfo(forOp);
-
+  Value bufIdx = forOp.getRegionIterArg(bufIdxArgIdx);
   SmallVector<std::pair<Operation *, Value>> bufIdxDefs;
   auto getCurrBufIdx = [&](Operation *op) {
     for (auto [_op, _val] : llvm::reverse(bufIdxDefs)) {
@@ -1207,20 +1230,23 @@ scf::ForOp lowerMMA(ttng::MMAv5OpInterface mma, scf::ForOp forOp,
   forOp.erase();
   forOp = newForOp;
 
-  Value phase = forOp.getRegionIterArg(newOperandIndex + 0);
-  Value barrierIdx = forOp.getRegionIterArg(newOperandIndex + 1);
-  Value bufIdx = forOp.getRegionIterArg(newOperandIndex + 2);
+  int phaseArgIdx = newOperandIndex + 0;
+  int barrierIdxArgIdx = newOperandIndex + 1;
+  int bufIdxArgIdx = newOperandIndex + 2;
+  Value phase = forOp.getRegionIterArg(phaseArgIdx);
+  Value barrierIdx = forOp.getRegionIterArg(barrierIdxArgIdx);
+  Value bufIdx = forOp.getRegionIterArg(bufIdxArgIdx);
 
   SmallVector<Value> newYieldOperands = {phase, barrierIdx, bufIdx};
   cast<scf::YieldOp>(forOp.getBody()->getTerminator())
       .getResultsMutable()
       .append(newYieldOperands);
 
-  forOp = createBarrierAndWaitOps(forOp, schedule, mma, alloc, phase,
-                                  barrierIdx, waitNumStages);
+  forOp = createBarrierAndWaitOps(forOp, schedule, mma, alloc, phaseArgIdx,
+                                  barrierIdxArgIdx, waitNumStages);
 
   if (tmemUseNumStages > 1) {
-    multibufferTensorMemory(forOp, schedule, alloc, bufIdx, newOperandIndex + 2,
+    multibufferTensorMemory(forOp, schedule, alloc, bufIdxArgIdx,
                             tmemUseNumStages);
   }
 

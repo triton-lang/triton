@@ -1364,14 +1364,14 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
   // CHECK: %[[BAR_BUF:.+]] = ttg.local_alloc : () -> !ttg.memdesc<1xi64
   // CHECK: %[[A_BUF:.+]] = ttg.local_alloc : () -> !ttg.memdesc<2x128x128xf16
   // CHECK: %[[B_BUF:.+]] = ttg.local_alloc : () -> !ttg.memdesc<2x128x128xf16
-  // CHECK: scf.for {{.*}} %[[A_DIST1:.*]] = %[[POISON]], %[[B_DIST1:.*]] = %[[POISON]], %[[WAIT_PRED:.*]] = %[[FALSE]]
+  // CHECK: %[[FOR:.*]]:6 = scf.for {{.*}} %[[A_DIST1:.*]] = %[[POISON]], %[[B_DIST1:.*]] = %[[POISON]], %[[WAIT_PRED:.*]] = %[[FALSE]]
   // CHECK: ttng.wait_barrier %[[BAR_BUF]], {{.*}}, %[[WAIT_PRED]] deps %[[A_DIST1]], %[[B_DIST1]] {loop.cluster = 0 : i32, loop.stage = 2 : i32}
   // CHECK: %[[ACC1:.*]] = ttng.tmem_load %[[TMEM_BUF]] {loop.cluster = 0 : i32, loop.stage = 2 : i32}
   // CHECK: %[[MUL:.*]] = arith.mulf %[[ACC1]], {{.*}} {loop.cluster = 0 : i32, loop.stage = 2 : i32}
   // CHECK: ttng.tmem_store %[[MUL]], %[[TMEM_BUF]], {{.*}} {loop.cluster = 0 : i32, loop.stage = 2 : i32}
   // CHECK: ttng.tc_gen5_mma %[[A_SLICE:.*]], %[[B_SLICE:.*]], %[[TMEM_BUF]], {{.*}}, {{.*}}, %[[BAR_BUF]] {loop.cluster = 0 : i32, loop.stage = 2 : i32}
-  // CHECK: %[[WAIT_PRED_NEXT:.*]] = arith.xori %[[WAIT_PRED]], %[[TRUE]] {loop.cluster = 0 : i32, loop.stage = 2 : i32}
-  // CHECK: scf.yield {{.*}}, %[[A_SLICE]], %[[B_SLICE]], %[[WAIT_PRED_NEXT]]
+  // CHECK: scf.yield {{.*}}, %[[A_SLICE]], %[[B_SLICE]], %[[TRUE]]
+  // CHECK: ttng.wait_barrier %[[BAR_BUF]], %[[FOR]]#0, %[[FOR]]#3 deps %[[FOR]]#1, %[[FOR]]#2
   tt.func public @changed_acc_before_mma(%arg0: tensor<128x128x!tt.ptr<f16>, #blocked> {tt.contiguity = 16 : i32, tt.divisibility = 16 : i32}, %arg1: tensor<128x128x!tt.ptr<f16>, #blocked> {tt.contiguity = 16 : i32, tt.divisibility = 16 : i32}, %arg2: i32) -> tensor<128x128xf16, #blocked1> attributes {noinline = false} {
     %true = arith.constant true
     %cst = arith.constant dense<0.000000e+00> : tensor<128x128xf32, #blocked1>
