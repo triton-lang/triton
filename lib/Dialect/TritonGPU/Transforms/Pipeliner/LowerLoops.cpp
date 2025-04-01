@@ -1,3 +1,4 @@
+#include "mlir/Dialect/UB/IR/UBOps.h"
 #include "mlir/IR/Dominance.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 #include "triton/Analysis/Utility.h"
@@ -118,7 +119,9 @@ Operation *getFirstUseOfPipelinedOp(SmallVector<Operation *> ops,
       auto [_firstUserStage, _firstUserCluster] = schedule[firstUser];
       if (_useStage < _firstUserStage ||
           (_useStage == _firstUserStage &&
-           schedule.clusters.isBefore(_useCluster, _firstUserCluster))) {
+           schedule.clusters.isBefore(_useCluster, _firstUserCluster)) ||
+          (_useStage == _firstUserStage && _useCluster == _firstUserCluster &&
+           topLevelUser->isBeforeInBlock(firstUser))) {
         firstUser = topLevelUser;
       }
     }
@@ -874,10 +877,50 @@ std::pair<int, int> getTmemUseStageBounds(ttng::TMEMAllocOp alloc,
   return bounds;
 }
 
-void createBarrierAndWaitOps(scf::ForOp forOp, CoarseSchedule &schedule,
-                             ttng::MMAv5OpInterface mma,
-                             ttng::TMEMAllocOp alloc, Value &phase,
-                             Value &barrierIdx, int numStages) {
+// Add forOp args to hold dist-1 dependencies and a predicate for the wait
+scf::ForOp prepLoopForDist1Wait(scf::ForOp forOp, CoarseSchedule &schedule,
+                                ttng::MMAv5OpInterface mma,
+                                const SmallVector<Value> &mmaOpBuffers,
+                                SmallVector<Value> &waitBuffers, Value &pred) {
+  OpBuilderForStage builder(forOp, schedule);
+  Location loc = mma.getLoc();
+  SmallVector<Value> newOperands;
+  unsigned newOperandIndex = forOp.getInitArgs().size();
+  Value vFalse = builder.create<arith::ConstantIntOp>(loc, 0, 1);
+  // Create undef values for the wait buffers
+  for (auto buffer : mmaOpBuffers) {
+    newOperands.push_back(builder.create<ub::PoisonOp>(loc, buffer.getType()));
+  }
+  // Create a predicate for the wait (start with false and change to true on the
+  // first mma execution)
+  newOperands.push_back(vFalse);
+
+  scf::ForOp newForOp =
+      replaceForOpWithNewSignature(builder, forOp, newOperands);
+  forOp.erase();
+  forOp = newForOp;
+
+  for (int i = 0; i < mmaOpBuffers.size(); ++i) {
+    waitBuffers.push_back(forOp.getRegionIterArg(newOperandIndex + i));
+  }
+  pred = forOp.getRegionIterArg(newOperandIndex + mmaOpBuffers.size());
+
+  builder.setInsertionPointAfter(mma);
+  builder.setStageCluster(schedule[mma]);
+  Value vTrue = builder.create<arith::ConstantIntOp>(loc, 1, 1);
+
+  auto yieldOp = cast<scf::YieldOp>(forOp.getBody()->getTerminator());
+  for (unsigned i = 0; i < mmaOpBuffers.size(); ++i) {
+    yieldOp.getResultsMutable().append(mmaOpBuffers[i]);
+  }
+  yieldOp.getResultsMutable().append(vTrue); // predicate
+  return forOp;
+}
+
+scf::ForOp createBarrierAndWaitOps(scf::ForOp forOp, CoarseSchedule &schedule,
+                                   ttng::MMAv5OpInterface mma,
+                                   ttng::TMEMAllocOp alloc, Value phase,
+                                   Value barrierIdx, int numStages) {
   OpBuilderForStage builder(forOp, schedule);
   DominanceInfo domInfo(forOp);
   Value zero = builder.create<arith::ConstantIntOp>(forOp.getLoc(), 0, 32);
@@ -889,8 +932,11 @@ void createBarrierAndWaitOps(scf::ForOp forOp, CoarseSchedule &schedule,
   builder.setStageCluster(schedule[mma]);
   builder.setInsertionPoint(mma);
   Location loc = mma->getLoc();
-  Value barrierSlice =
-      triton::createSingleBufferView(builder, barrierAlloc, barrierIdx);
+  Value barrierSlice = barrierAlloc;
+  if (numStages > 1) {
+    barrierSlice =
+        triton::createSingleBufferView(builder, barrierAlloc, barrierIdx);
+  }
   mma.setBarrier(barrierSlice);
 
   // List of buffers that may be used until wait completes
@@ -953,24 +999,62 @@ void createBarrierAndWaitOps(scf::ForOp forOp, CoarseSchedule &schedule,
     }
   }
 
+  struct Dist1WaitInfo {
+    SmallVector<Value> waitBuffers;
+    Value predicate;
+  };
+  std::optional<Dist1WaitInfo> dist1WaitInfo;
   for (auto wp : waitPoints) {
     builder.setStageCluster({wp.stage, wp.cluster});
     builder.setInsertionPoint(wp.op);
-    builder.create<ttng::WaitBarrierOp>(loc, barrierSlice, phase, waitBuffers);
+    SmallVector<Value> currWaitBuffers = waitBuffers;
+    Value pred = nullptr;
+    if (forOp.getBody()->findAncestorOpInBlock(*wp.op)->isBeforeInBlock(mma)) {
+      // Waits before the mma are special: they are dist-1 to the mma which
+      // means two things:
+      // 1. The wait should not be executed before the mma executes for the
+      // first
+      //    time
+      // 2. The waitBuffers do not dominate this wait, so it needs to take undef
+      //    values from the arg iters
+      if (dist1WaitInfo) {
+        currWaitBuffers = dist1WaitInfo->waitBuffers;
+        pred = dist1WaitInfo->predicate;
+      } else {
+        currWaitBuffers.clear();
+        forOp = prepLoopForDist1Wait(forOp, schedule, mma, waitBuffers,
+                                     currWaitBuffers, pred);
+        dist1WaitInfo = {currWaitBuffers, pred};
+      }
+    }
+    Value barrierSlice = barrierAlloc;
+    if (numStages > 1) {
+      barrierSlice =
+          triton::createSingleBufferView(builder, barrierAlloc, barrierIdx);
+    }
+    builder.create<ttng::WaitBarrierOp>(loc, barrierSlice, phase, pred,
+                                        currWaitBuffers);
   }
 
   builder.setStageCluster(schedule[mma]);
   builder.setInsertionPoint(forOp.getBody()->getTerminator());
-  Value barWrap;
-  barrierIdx = createIncrementModulo(builder, loc, barrierIdx, numStagesVal,
-                                     zero, one, &barWrap);
-  phase = builder.create<arith::SelectOp>(
-      loc, phase.getType(), barWrap,
-      builder.create<arith::XOrIOp>(loc, phase, one), phase);
+  Value newPhase = builder.create<arith::XOrIOp>(loc, phase, one);
+  Value newBarrierIdx = barrierIdx;
+  if (numStages > 1) {
+    Value barWrap;
+    newBarrierIdx = createIncrementModulo(builder, loc, barrierIdx,
+                                          numStagesVal, zero, one, &barWrap);
+    replaceAllUsesDominatedBy(newBarrierIdx.getDefiningOp(), newBarrierIdx,
+                              barrierIdx, domInfo);
+    newPhase = builder.create<arith::SelectOp>(loc, phase.getType(), barWrap,
+                                               newPhase, phase);
+  }
+  replaceAllUsesDominatedBy(newPhase.getDefiningOp(), newPhase, phase, domInfo);
+  return forOp;
 }
 
 void multibufferTensorMemory(scf::ForOp forOp, CoarseSchedule &schedule,
-                             ttng::TMEMAllocOp alloc, Value &bufIdx,
+                             ttng::TMEMAllocOp alloc, Value bufIdx,
                              int bufIdxArgIdx, int tmemUseNumStages) {
   DominanceInfo domInfo(forOp);
 
@@ -1077,7 +1161,9 @@ void multibufferTensorMemory(scf::ForOp forOp, CoarseSchedule &schedule,
         "accumulator, and the mma uses the accumulator all the time.");
   }
   alloc->erase();
-  bufIdx = bufIdxDefs.back().second;
+  Value newBufIdx = bufIdxDefs.back().second;
+  replaceAllUsesDominatedBy(newBufIdx.getDefiningOp(), newBufIdx, bufIdx,
+                            domInfo);
 }
 
 scf::ForOp lowerMMA(ttng::MMAv5OpInterface mma, scf::ForOp forOp,
@@ -1125,21 +1211,18 @@ scf::ForOp lowerMMA(ttng::MMAv5OpInterface mma, scf::ForOp forOp,
   Value barrierIdx = forOp.getRegionIterArg(newOperandIndex + 1);
   Value bufIdx = forOp.getRegionIterArg(newOperandIndex + 2);
 
-  if (waitNumStages > 1) {
-    createBarrierAndWaitOps(forOp, schedule, mma, alloc, phase, barrierIdx,
-                            waitNumStages);
-  }
+  SmallVector<Value> newYieldOperands = {phase, barrierIdx, bufIdx};
+  cast<scf::YieldOp>(forOp.getBody()->getTerminator())
+      .getResultsMutable()
+      .append(newYieldOperands);
+
+  forOp = createBarrierAndWaitOps(forOp, schedule, mma, alloc, phase,
+                                  barrierIdx, waitNumStages);
 
   if (tmemUseNumStages > 1) {
     multibufferTensorMemory(forOp, schedule, alloc, bufIdx, newOperandIndex + 2,
                             tmemUseNumStages);
   }
-
-  SmallVector<Value> newYieldOperands;
-  newYieldOperands.push_back(phase);
-  newYieldOperands.push_back(barrierIdx);
-  newYieldOperands.push_back(bufIdx);
-  appendToForOpYield(forOp, newYieldOperands);
 
   return forOp;
 }

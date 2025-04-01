@@ -229,6 +229,53 @@ public:
   }
 };
 
+class RotateTMEMLoadInLoop : public OpRewritePattern<ttng::TMEMLoadOp> {
+public:
+  using OpRewritePattern::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(ttng::TMEMLoadOp load,
+                                PatternRewriter &rewriter) const override {
+    scf::ForOp forOp = dyn_cast<scf::ForOp>(load->getParentOp());
+    if (!forOp) {
+      return failure();
+    }
+    if (!forOp.isDefinedOutsideOfLoop(load.getSrc())) {
+      return failure();
+    }
+    if (!load.getResult().hasOneUse()) {
+      return failure();
+    }
+    OpOperand &use = *load.getResult().getUses().begin();
+    auto yield = dyn_cast<scf::YieldOp>(use.getOwner());
+    if (!yield) {
+      return failure();
+    }
+    // Create two copies of the store: one before the loop, storing the initial
+    // value, and one before the yield, storing the value carried by the loop
+    // arg.
+    int argNo = use.getOperandNumber();
+    Value initVal = forOp.getInitArgs()[argNo];
+    rewriter.setInsertionPoint(forOp);
+    auto vTrue = rewriter.create<arith::ConstantIntOp>(load.getLoc(), 1, 1);
+    rewriter.create<ttng::TMEMStoreOp>(load.getLoc(), load.getSrc(), initVal,
+                                       vTrue);
+    auto attributes = load->getAttrDictionary();
+    rewriter.moveOpBefore(load, &forOp.getBody()->front());
+    forOp.getRegionIterArg(argNo).replaceAllUsesWith(load.getResult());
+    load->setAttrs(attributes);
+
+    // Load from the tmem after the loop, and use it instead of the loop carried
+    // value.
+    rewriter.setInsertionPointAfter(forOp);
+    auto loadAfterLoop = rewriter.create<ttng::TMEMLoadOp>(
+        load.getLoc(), load.getResult().getType(), load.getSrc());
+    forOp->getResult(argNo).replaceAllUsesWith(loadAfterLoop.getResult());
+    // Loop carried value is no longer used, short-circuit it.
+    yield.setOperand(argNo, forOp.getRegionIterArg(argNo));
+    return success();
+  }
+};
+
 ttng::TMEMAllocOp hoistTMEMAlloc(ttng::TMEMAllocOp alloc, scf::ForOp forOp) {
   OpBuilder builder(alloc);
   builder.setInsertionPoint(forOp);
@@ -300,7 +347,7 @@ struct HoistTMEMAlloc
     }
 
     mlir::RewritePatternSet patterns(&getContext());
-    patterns.add<RotateTMEMStoreInLoop, CombineTMEMLoadAndStore,
+    patterns.add<RotateTMEMStoreInLoop, RotateTMEMLoadInLoop, CombineTMEMLoadAndStore,
                  CombineTMEMStoreAndSelect, SinkTMEMLoad>(&getContext());
     scf::ForOp::getCanonicalizationPatterns(patterns, &getContext());
     if (failed(applyPatternsGreedily(getOperation(), std::move(patterns)))) {

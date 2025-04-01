@@ -13,19 +13,21 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
   // CHECK-DAG: %[[FALSE:.+]] = arith.constant false
   // CHECK-DAG: %[[C0:.+]] = arith.constant 0 : i32
   // CHECK-DAG: %[[C1:.+]] = arith.constant 1 : i32
-  // CHECK: %[[TMEM_BUF:.+]] = ttng.tmem_alloc %[[C0_F]]
+  // CHECK-DAG: %[[POISON:.*]] = ub.poison
+  // CHECK: %[[TMEM_BUF:.+]] = ttng.tmem_alloc : ()
+  // CHECK: ttng.tmem_store %[[C0_F]], %[[TMEM_BUF]], %[[TRUE]]
   // CHECK: %[[BAR_BUF:.+]] = ttg.local_alloc : () -> !ttg.memdesc<1xi64
-  // CHECK: ttng.init_barrier %[[BAR_BUF]], 1
-  // CHECK: %[[FOR_RET:.+]]:8 = scf.for {{.*}} iter_args({{.*}}, {{.*}}, {{.*}}, {{.*}}, {{.*}}, {{.*}}, %[[PHASE:.+]] = %[[C0]], %[[NOT_0_ITER:.+]] = %[[FALSE]])
-  // CHECK:   ttng.wait_barrier %[[BAR_BUF]], %[[PHASE]], %[[NOT_0_ITER]]
-  // CHECK:   %[[NOT_0_ITER_I32:.+]] = arith.extui %[[NOT_0_ITER]] : i1 to i32
-  // CHECK:   %[[PHASE_NEXT:.+]] = arith.xori %[[PHASE]], %[[NOT_0_ITER_I32]]
+  // CHECK: %[[BAR_SLICE:.+]] = ttg.memdesc_subview %[[BAR_BUF]][%[[C0]]]
+  // CHECK: ttng.init_barrier %[[BAR_SLICE]], 1
+  // CHECK: %[[FOR_RET:.+]]:8 = scf.for {{.*}} iter_args(%[[PHASE:.+]] = %[[C0]], %[[A_DIST1:.+]] = %[[POISON]], %[[B_DIST1:.+]] = %[[POISON]], %[[WAIT_PRED:.+]] = %[[FALSE]]
+  // CHECK:   ttng.wait_barrier %[[BAR_BUF]], %[[PHASE]], %[[WAIT_PRED]]
   // CHECK:   %[[ACC:.+]] = ttng.tmem_load %[[TMEM_BUF]]
   // CHECK:   %[[ACC2:.+]] = arith.mulf %[[ACC]], %[[C2_F]]
   // CHECK:   ttng.tmem_store %[[ACC2]], %[[TMEM_BUF]], %[[TRUE]]
-  // CHECK:   ttng.tc_gen5_mma {{.*}}, {{.*}}, %[[TMEM_BUF]], %[[TRUE]], %[[TRUE]], %[[BAR_BUF]]
-  // CHECK:   scf.yield {{.*}}, {{.*}}, {{.*}}, {{.*}}, %[[PHASE_NEXT]], %[[TRUE]]
-  // CHECK: ttng.wait_barrier %[[BAR_BUF]], %[[FOR_RET]]#6, %[[FOR_RET]]#7
+  // CHECK:   ttng.tc_gen5_mma %[[A_OP:.*]], %[[B_OP:.*]], %[[TMEM_BUF]], %[[TRUE]], %[[TRUE]], %[[BAR_BUF]]
+  // CHECK:   %[[PHASE_NEXT:.+]] = arith.xori %[[PHASE]], %[[C1]]
+  // CHECK:   scf.yield %[[PHASE_NEXT]], %[[A_OP]], %[[B_OP]], %[[TRUE]]
+  // CHECK: ttng.wait_barrier %[[BAR_BUF]], %[[FOR_RET]]#4, %[[FOR_RET]]#5
   // CHECK: ttng.tmem_load %[[TMEM_BUF]]
   // CHECK: ttng.inval_barrier %[[BAR_BUF]]
   // CHECK: ttg.local_dealloc %[[BAR_BUF]]

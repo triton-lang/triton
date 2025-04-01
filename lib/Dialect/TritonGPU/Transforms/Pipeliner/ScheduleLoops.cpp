@@ -27,26 +27,6 @@ bool hasGpuBarriers(scf::ForOp forOp) {
   return result.wasInterrupted();
 }
 
-bool mmav5DominatesTmemLoads(scf::ForOp forOp) {
-  DominanceInfo domInfo(forOp);
-  bool mmav5DominatesTmemLoads = true;
-  forOp.walk([&](ttng::MMAv5OpInterface mma) {
-    auto tmemAlloc = mma.getAccumulator().getDefiningOp<ttng::TMEMAllocOp>();
-    if (!tmemAlloc || !forOp.isDefinedOutsideOfLoop(tmemAlloc)) {
-      return WalkResult::interrupt();
-    }
-    for (auto user : tmemAlloc->getUsers()) {
-      if (isa<ttng::TMEMLoadOp>(user) && forOp->isAncestor(user) &&
-          !domInfo.properlyDominates(mma, user)) {
-        mmav5DominatesTmemLoads = false;
-        return WalkResult::interrupt();
-      }
-    }
-    return WalkResult::advance();
-  });
-  return mmav5DominatesTmemLoads;
-}
-
 // Return true if the preconditions for pipelining the loop are met.
 bool isSafeToPipeline(scf::ForOp forOp) {
   // Skip loop with distance > 1.
@@ -57,10 +37,6 @@ bool isSafeToPipeline(scf::ForOp forOp) {
     return false;
   // Skip loops with barriers.
   if (hasGpuBarriers(forOp))
-    return false;
-  // Lowering does not currently support cases where tmem_load happens
-  // before the mma in the loop
-  if (!mmav5DominatesTmemLoads(forOp))
     return false;
   return true;
 }

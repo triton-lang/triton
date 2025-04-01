@@ -75,6 +75,8 @@ public:
     }
 
     bool isBefore(iterator a, iterator b) const {
+      if (a == b)
+        return false;
       for (auto it = begin(); it != end(); ++it) {
         if (it == a)
           return true;

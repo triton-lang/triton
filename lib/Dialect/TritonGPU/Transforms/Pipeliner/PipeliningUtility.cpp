@@ -2,6 +2,7 @@
 
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/Tensor/IR/Tensor.h"
+#include "mlir/Dialect/UB/IR/UBOps.h"
 #include "mlir/IR/ImplicitLocOpBuilder.h"
 #include "mlir/IR/TypeUtilities.h"
 #include "mlir/Interfaces/SideEffectInterfaces.h"
@@ -157,14 +158,32 @@ Operation *mlir::triton::predicateOp(RewriterBase &rewriter, Operation *op,
   return op;
 }
 
-void mlir::triton::replaceUsesAndPropagateType(OpBuilder &builder,
-                                               Operation *oldUse, Value val) {
+void mlir::triton::replaceUsesAndPropagateType(OpBuilder &builder, Value oldVal,
+                                               Value val) {
   SmallVector<Operation *> opsToDelete;
   SmallVector<OpOperand *> operandsToReplace;
 
   // Save the operand to replace / delete later (avoid iterator invalidation).
   // TODO: can we use an early_inc iterator?
-  for (OpOperand &use : oldUse->getUses()) {
+  for (OpOperand &use : oldVal.getUses()) {
+    // Propagate across loop iterations, handling possible undefined init
+    // values.
+    if (isa<scf::YieldOp>(use.getOwner()) &&
+        isa<scf::ForOp>(use.getOwner()->getParentOp())) {
+      auto forOp = cast<scf::ForOp>(use.getOwner()->getParentOp());
+      int64_t argIdx = use.getOperandNumber();
+      auto oldPoison =
+          dyn_cast<ub::PoisonOp>(forOp.getInitArgs()[argIdx].getDefiningOp());
+      if (oldPoison) {
+        OpBuilder::InsertionGuard g(builder);
+        builder.setInsertionPoint(oldPoison);
+        Value newPoison =
+            builder.create<ub::PoisonOp>(oldPoison.getLoc(), val.getType());
+        forOp.getInitArgsMutable()[argIdx].assign(newPoison);
+      }
+      BlockArgument arg = forOp.getRegionIterArg(argIdx);
+      arg.setType(val.getType());
+    }
     // Non-subview/trans ops will be replaced by `val`.
     if (!isa<triton::gpu::MemDescTransOp, triton::gpu::MemDescSubviewOp>(
             use.getOwner())) {
@@ -192,7 +211,9 @@ void mlir::triton::replaceUsesAndPropagateType(OpBuilder &builder,
       newVal.getDefiningOp()->setAttrs(user->getAttrs());
     }
     assert(newVal);
-    replaceUsesAndPropagateType(builder, user, newVal);
+    for (auto result : user->getResults()) {
+      replaceUsesAndPropagateType(builder, result, newVal);
+    }
     opsToDelete.push_back(use.getOwner());
   }
 
