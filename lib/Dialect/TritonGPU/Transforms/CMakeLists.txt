@@ -34,6 +34,7 @@ add_triton_library(TritonGPUTransforms
   Utility.cpp
   WarpSpecialization/AutomaticWarpSpecialization.cpp
   WarpSpecialization/LoadMMASpecialization.cpp
+  WarpSpecialization/OptimizePartitionWarps.cpp
   WarpSpecialization/PartitionLoops.cpp
   WarpSpecialization/RewritePartitionDependencies.cpp
 
@@ -47,5 +48,6 @@ add_triton_library(TritonGPUTransforms
   TritonIR
   TritonGPUIR
   TritonNvidiaGPUIR
+  TritonToTritonGPU
   MLIRTransformUtils
 )

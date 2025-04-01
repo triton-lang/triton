@@ -2433,10 +2433,9 @@ struct TritonGPUInferLayoutInterface
     }
     if (!expected || !got)
       return failure();
+
     // Check whether the encodings are structurally the same.
-    auto expectedLL = triton::gpu::toLinearLayout(shape, expected);
-    auto gotLL = triton::gpu::toLinearLayout(shape, got);
-    if (expectedLL != gotLL) {
+    if (!areLayoutsEquivalent(shape, expected, got)) {
       return emitOptionalError(loc, "Expected result encoding ", expected,
                                " but was ", got);
     }
@@ -3171,4 +3170,11 @@ int triton::gpu::lookupThreadsPerWarp(OpBuilder &rewriter) {
     op = op->getParentOp();
   assert(op && "cannot create thread ID outside of module");
   return triton::gpu::TritonGPUDialect::getThreadsPerWarp(cast<ModuleOp>(op));
+}
+
+bool triton::gpu::areLayoutsEquivalent(ArrayRef<int64_t> shape, Attribute lhs,
+                                       Attribute rhs) {
+  auto lhsLL = triton::gpu::toLinearLayout(shape, lhs);
+  auto rhsLL = triton::gpu::toLinearLayout(shape, rhs);
+  return lhsLL == rhsLL;
 }

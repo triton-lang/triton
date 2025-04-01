@@ -58,12 +58,15 @@ struct TMemAllocation {
 TMemAllocation getTmemAllocSizes(gpu::MemDescType memDescType);
 
 Attribute getTmemCompatibleLayout(unsigned M, unsigned N,
-                                  ArrayRef<int64_t> shape, unsigned numWarps,
-                                  triton::gpu::CTALayoutAttr ctaLayout);
+                                  RankedTensorType oltType, unsigned numWarps);
 
 bool isDistributedLayoutTMemCompatible(Operation *op,
                                        RankedTensorType tensorType,
                                        gpu::MemDescType memType);
+
+bool isDistributedLayoutSplitMTmemLoadStore(RankedTensorType tensorType,
+                                            gpu::MemDescType memType,
+                                            int numWarps);
 
 } // namespace mlir::triton::nvidia_gpu
 

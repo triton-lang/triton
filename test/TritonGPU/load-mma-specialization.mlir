@@ -14,6 +14,8 @@ module attributes {"ttg.num-warps" = 4 : i32, ttg.target = "cuda:100"} {
 
 // AWS-LABEL: @warp_specialize_tma_matmul
 // AWS: ttg.warp_specialize
+// AWS: num_warps(1)
+// AWS: num_warps(1)
 
 // CHECK: @warp_specialize_tma_matmul
 // CHECK-SAME: [[K_TILES:%arg[0-9]+]]
@@ -263,6 +265,9 @@ tt.func @invalid_acc_reset(
 
 // AWS-LABEL: @matmul_tma_acc_with_unconditional_user
 // AWS: ttg.warp_specialize
+// AWS: num_warps(4)
+// AWS: num_warps(4)
+// AWS: num_warps(4)
 
 // CHECK: @matmul_tma_acc_with_unconditional_user
 // CHECK-SAME: [[A_DESC:%arg[0-9]+]]
@@ -380,6 +385,9 @@ tt.func @matmul_tma_acc_with_unconditional_user(
 
 // AWS-LABEL: @matmul_tma_acc_with_conditional_user
 // AWS: ttg.warp_specialize
+// AWS: num_warps(4)
+// AWS: num_warps(4)
+// AWS: num_warps(4)
 
 // CHECK: @matmul_tma_acc_with_conditional_user
 // CHECK-SAME: [[A_DESC:%arg[0-9]+]]
@@ -474,6 +482,9 @@ tt.func @matmul_tma_acc_with_conditional_user(
 
 // AWS-LABEL: @matmul_tma_acc_with_conditional_def
 // AWS: ttg.warp_specialize
+// AWS: num_warps(4)
+// AWS: num_warps(1)
+// AWS: num_warps(1)
 
 // CHECK: @matmul_tma_acc_with_conditional_def
 // CHECK-SAME: [[A_DESC:%arg[0-9]+]]
@@ -566,6 +577,9 @@ tt.func @matmul_tma_acc_with_conditional_def(
 
 // AWS-LABEL: @matmul_tma_acc_with_conditional_def_and_use
 // AWS: ttg.warp_specialize
+// AWS: num_warps(4)
+// AWS: num_warps(1)
+// AWS: num_warps(1)
 
 // CHECK: @matmul_tma_acc_with_conditional_def_and_use
 // CHECK-SAME: [[A_DESC:%arg[0-9]+]]
@@ -661,6 +675,9 @@ tt.func @matmul_tma_acc_with_conditional_def_and_use(
 
 // AWS-LABEL: @matmul_tma_acc_with_conditional_def_and_use_no_multibuf
 // AWS: ttg.warp_specialize
+// AWS: num_warps(1)
+// AWS: num_warps(1)
+// AWS: num_warps(1)
 
 // CHECK: @matmul_tma_acc_with_conditional_def_and_use_no_multibuf
 // CHECK-SAME: [[A_DESC:%arg[0-9]+]]

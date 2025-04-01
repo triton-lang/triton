@@ -97,9 +97,9 @@ TMemAllocation getTmemAllocSizes(MemDescType memDescType) {
 }
 
 Attribute getTmemCompatibleLayout(unsigned M, unsigned N,
-                                  ArrayRef<int64_t> shape, unsigned numWarps,
-                                  triton::gpu::CTALayoutAttr ctaLayout) {
+                                  RankedTensorType oldType, unsigned numWarps) {
   assert(numWarps == 4 || numWarps == 8);
+  auto shape = getShapePerCTA(oldType);
   assert(shape.size() == 2);
   SmallVector<unsigned> sizePerThread;
   SmallVector<unsigned> threadsPerWarp;
@@ -140,9 +140,28 @@ Attribute getTmemCompatibleLayout(unsigned M, unsigned N,
     }
   }
   order = {0, 1};
+  auto ctaLayout = getCTALayout(oldType.getEncoding());
   return triton::gpu::BlockedEncodingAttr::get(ctaLayout.getContext(),
                                                sizePerThread, threadsPerWarp,
                                                warpsPerCTA, order, ctaLayout);
+}
+
+bool isDistributedLayoutSplitMTmemLoadStore(RankedTensorType tensorType,
+                                            MemDescType memType, int numWarps) {
+  auto tmemEnc = dyn_cast<triton::nvidia_gpu::TensorMemoryEncodingAttr>(
+      memType.getEncoding());
+  if (!tmemEnc || tmemEnc.getBlockM() != 128)
+    return false;
+  int M = tmemEnc.getBlockM();
+  int N = tmemEnc.getBlockN();
+  auto llEncoding = dyn_cast<LinearEncodingAttr>(tensorType.getEncoding());
+  if (!llEncoding)
+    return false;
+  auto CTALayout = getCTALayout(tensorType.getEncoding());
+  auto shapePerCTA = mlir::triton::gpu::getShapePerCTA(tensorType);
+  LinearLayout llLayout =
+      getTmemLoadLayoutSplitLongM(M, N, tensorType, numWarps);
+  return llEncoding.getLinearLayout() == llLayout;
 }
 
 // Verify if the distributed layout can be mapped onto tensor memory.
@@ -152,67 +171,26 @@ bool isDistributedLayoutTMemCompatible(Operation *op,
   int numWarps = lookupNumWarps(op);
   assert(numWarps % 4 == 0);
   int numWarpGroups = numWarps / 4;
-
-  int blockM = 0;
-  int blockN = 0;
-  bool scalesEncoding = false;
-  if (auto attr = dyn_cast<triton::nvidia_gpu::TensorMemoryEncodingAttr>(
+  if (isa<triton::nvidia_gpu::TensorMemoryScalesEncodingAttr>(
           memType.getEncoding())) {
-    blockM = attr.getBlockM();
-    blockN = attr.getBlockN();
-  } else {
-    assert(isa<triton::nvidia_gpu::TensorMemoryScalesEncodingAttr>(
-               memType.getEncoding()) &&
-           "Expecting a tensor memory encoding attribute");
     return tensorType.getEncoding() ==
            triton::gpu::LinearEncodingAttr::get(
                tensorType.getContext(),
                getScaleTMEMStoreLinearLayout(tensorType, numWarps));
   }
-  auto shapePerCTA = mlir::triton::gpu::getShapePerCTA(tensorType);
-  int numElements = product(shapePerCTA);
-  int numBlocks = ceil<int>(numElements, blockM * blockN);
-  bool useStridedMessage = blockM == 64;
-
-  int numWarpGroupsPerBlock = ceil<int>(numWarpGroups, numBlocks);
-
-  auto tensorEncoding =
-      cast<triton::gpu::BlockedEncodingAttr>(tensorType.getEncoding());
-  auto sizePerThread = tensorEncoding.getSizePerThread();
-  auto threadsPerWarp = tensorEncoding.getThreadsPerWarp();
-  auto warpsPerCTA = tensorEncoding.getWarpsPerCTA();
-  auto order = tensorEncoding.getOrder();
-
-  if (order.size() != 2)
-    return false;
-
-  if (order[0] != 0 || order[1] != 1)
-    return false;
-
-  if (useStridedMessage) {
-    // For blockM=64 we need to use 16x32bx2 message, meaning the distributed
-    // layout needs to be organized into 16x2 threads per warp and one row
-    // access per thread.
-    if (threadsPerWarp[0] != 16 || threadsPerWarp[1] != 2 ||
-        sizePerThread[0] != 1)
-      return false;
-
-    if (numBlocks == 1) {
-      // with blockM=64 and just single block we cannot split along the M
-      // dimension. Check that if we split, we split along N.
-      if (numWarpGroupsPerBlock > 1) {
-        if (warpsPerCTA[1] == 1)
-          return false;
-      }
-    }
-  } else {
-    // For blockM=128, we need to use a 32x32b message, which requires 32
-    // threads to be sequentially ordered across the M dimension, ensuring
-    // that each thread accesses a single and unique TMEM datapath.
-    if (threadsPerWarp[0] != 32 || sizePerThread[0] != 1)
-      return false;
-  }
-  return true;
+  auto attr =
+      cast<triton::nvidia_gpu::TensorMemoryEncodingAttr>(memType.getEncoding());
+  int blockM = attr.getBlockM();
+  int blockN = attr.getBlockN();
+  if (isDistributedLayoutSplitMTmemLoadStore(tensorType, memType, numWarps))
+    return true;
+  Attribute layout =
+      nvidia_gpu::getTmemCompatibleLayout(blockM, blockN, tensorType, numWarps);
+  // TODO: Add support for more layout compatible with tmem load/store. There
+  // will only be a discret set of layout possible due to the limiations of
+  // tmem_load/store.
+  return areLayoutsEquivalent(tensorType.getShape(), layout,
+                              tensorType.getEncoding());
 }
 
 } // namespace nvidia_gpu
