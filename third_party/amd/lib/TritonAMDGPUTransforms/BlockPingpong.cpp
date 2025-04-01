@@ -110,6 +110,7 @@ private:
   void appendClusterBarrier(OpBuilder &builder, Location loc);
   void prependClusterBarrier(OpBuilder &builder, Location loc);
   void appendOpWithPrio(OpBuilder &builder, Operation *Op, Location loc);
+  bool isPersistentGemm(size_t num_dots);
   ConditionalSelectionHeuristic getIfHeuristic(int64_t tileSize);
   template <typename T>
   size_t countIfMemoryOps(scf::IfOp ifOp, int64_t tileSize);
@@ -205,6 +206,44 @@ void Pingponger::appendOpWithPrio(OpBuilder &builder, Operation *op,
   appendOp(builder.create<ROCDL::SetPrioOp>(loc, highPriority));
   appendOp(op);
   appendOp(builder.create<ROCDL::SetPrioOp>(loc, lowPriority));
+}
+
+// Determine if the given loop matches the basic pattern of a persistent GEMM.
+// Here we define a persistent GEMM as containing a single dot product, and two
+// if statements inside the body of the loop, one before the dot product
+// which matches on == 0 and one after the dot product which matches on
+// == (var - 1).
+bool Pingponger::isPersistentGemm(size_t num_dots) {
+  if (num_dots != 1)
+    return false;
+  bool seenIfSection = false;
+  bool seenDot = false;
+  bool violatesPattern = false;
+  auto &&topLevelOps = forOp->getBody()->getOps<Operation *>();
+  for (auto &&op : topLevelOps) {
+    if (auto ifOp = dyn_cast<scf::IfOp>(op)) {
+      if (seenIfSection) {
+        // Violate our two if statement assumption.
+        return false;
+      }
+      if (seenDot) {
+        // TODO: Check for == (var - 1)
+      } else {
+        // TOOD: Check for == 0
+      }
+      seenIfSection = true;
+    } else if (auto dotOp = dyn_cast<tt::DotOp>(op)) {
+      if (seenDot || !seenIfSection) {
+        // Violate structure of the persistent GEMM
+        // assumption.
+        return false;
+      }
+      seenDot = true;
+      // Reset the if section flag.
+      seenIfSection = false;
+    }
+  }
+  return seenIfSection && seenDot;
 }
 
 // Find all of the "closest" operations that are of a given type T
