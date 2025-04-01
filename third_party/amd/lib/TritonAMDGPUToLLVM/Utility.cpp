@@ -633,7 +633,7 @@ bool canCoalesceWriteIntoSharedMemory(RewriterBase &rewriter,
     if ((basis & mask) != 0) {
       LDBG("detected uncoalesced layout from blocked to shared in async copy "
            "for warp "
-           << std::to_string(inWarp));
+           << inWarp);
       return false;
     }
   }
@@ -645,11 +645,10 @@ bool doesSwizzleInsideWarp(RewriterBase &rewriter,
                            const LinearLayout &srcToSharedLayout,
                            unsigned threadsPerWarp) {
   auto contig = srcToSharedLayout.getNumConsecutiveInOut();
-  // If all bases in lane dimension are below the next power of two of
-  // threadsPerWarp multiplied with the contigoutiy we do not swizzle across
-  // warp boundaries.
+  // If all bases in lane dimension are below threadsPerWarp multiplied with the
+  // contiguity we do not swizzle across warp boundaries.
   assert(llvm::isPowerOf2_32(threadsPerWarp));
-  unsigned upperLimit = 2 * threadsPerWarp * contig;
+  unsigned upperLimit = threadsPerWarp * contig;
 
   StringAttr kLane = rewriter.getStringAttr("lane");
   for (int inLane : llvm::seq(srcToSharedLayout.getInDimSizeLog2(kLane))) {
