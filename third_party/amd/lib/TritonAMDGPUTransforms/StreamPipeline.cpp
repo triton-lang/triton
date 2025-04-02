@@ -1,7 +1,5 @@
 #include "TritonAMDGPUTransforms/Passes.h"
 #include "mlir/Support/LLVM.h"
-#include "mlir/Transforms/GreedyPatternRewriteDriver.h"
-#include "third_party/amd/include/Analysis/RangeAnalysis.h"
 #include "third_party/amd/include/Dialect/TritonAMDGPU/IR/Dialect.h"
 #include "third_party/amd/lib/TritonAMDGPUToLLVM/SchedInstructions.h"
 #include "triton/Analysis/AxisInfo.h"
@@ -1061,18 +1059,6 @@ struct PipelinePass : public TritonAMDGPUStreamPipelineBase<PipelinePass> {
                          globalPrefetch, localPrefetch, useAsyncCopy);
       (void)sp.pipelineLoop();
     }
-
-    DenseMap<Value, SetVector<Operation *>> assumptions =
-        tt::AMD::TritonIntegerRangeAnalysis::collectAssumptions(getOperation());
-    std::unique_ptr solver = createDataFlowSolver();
-    solver->load<tt::AMD::TritonIntegerRangeAnalysis>(assumptions);
-    if (failed(solver->initializeAndRun(getOperation())))
-      return signalPassFailure();
-
-    ModuleOp mod = getOperation();
-    RewritePatternSet patterns(&getContext());
-    tt::AMD::populateFoldTrueCmpIOpPatterns(patterns, solver.get());
-    (void)applyPatternsGreedily(mod, std::move(patterns));
   }
 };
 } // namespace
