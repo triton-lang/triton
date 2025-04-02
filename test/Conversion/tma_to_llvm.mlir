@@ -6,7 +6,12 @@
 #linear = #ttg.linear<{register = [[1], [2], [16], [0]], lane = [[0], [0], [0], [0], [0]], warp = [[4], [8]], block = []}>
 #shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
 #shared1 = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16}>
+#shared2 = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 32}>
 #smem = #ttg.shared_memory
+
+#linear0 = #ttg.linear<{register = [[1], [2]], lane = [[4], [8], [0], [0], [0]], warp = [[16], [0]], block = []}>
+#linear1 = #ttg.linear<{register = [[1], [2], [16]], lane = [[0], [8], [0], [32], [0]], warp = [[0], [4]], block = []}>
+#blocked_4 = #ttg.blocked<{sizePerThread = [4], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
 
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100"} {
 
@@ -169,6 +174,130 @@ tt.func @tma_scatter(%arg0: !tt.ptr<i8>, %arg1: tensor<32xi32, #ttg.slice<{dim =
 
   // CHECK: nvvm.cp.async.bulk.commit.group()
 
+  // CHECK-NEXT: ret void
+  tt.return
+}
+
+// CHECK-LABEL: @tma_gather_linear_warp_base
+tt.func @tma_gather_linear_warp_base(
+  %arg0: !tt.ptr<i8>,
+  %arg1: !ttg.memdesc<1xi64, #shared, #smem, mutable>,
+  %arg2: tensor<32xi32, #linear0>,
+  %arg3: i32,
+  %arg4: !ttg.memdesc<32x32xf32, #shared2, #smem, mutable>,
+  %arg5: i1
+) {
+  // tileX warpId laneId
+  // 0     0      0
+  // 1     2      1
+  // 2     0      2
+  // 3     2      3
+  // 4     1      0
+  // 5     3      1
+  // 6     1      2
+  // 7     3      3
+
+  // CHECK: [[TID:%.*]] = tail call i32 @llvm.nvvm.read.ptx.sreg.tid.x()
+  // CHECK: [[LANE_ID:%.*]] = and i32 [[TID]], 31
+  // CHECK: [[WARP_ID:%.*]] = tail call i32 @llvm.nvvm.shfl.sync
+
+  // CHECK: [[IDX0:%.*]] = extractvalue {{.*}} 0
+  // CHECK: [[IDX1:%.*]] = extractvalue {{.*}} 1
+  // CHECK: [[IDX2:%.*]] = extractvalue {{.*}} 2
+  // CHECK: [[IDX3:%.*]] = extractvalue {{.*}} 3
+
+  // CHECK: [[WARP_B2:%.*]] = and i32 [[WARP_ID]], 2
+  // CHECK: [[ACTIVE_LANE0:%.*]] = lshr exact i32 [[WARP_B2]], 1
+
+  // CHECK: [[ADDR_C0:%.*]] = shl nuw nsw i32 [[WARP_B2]], 6
+  // CHECK: [[ADDR_C1:%.*]] = shl i32 [[WARP_ID]], 9
+  // CHECK: [[ADDR_C11:%.*]] = and i32 [[ADDR_C1]], 512
+  // CHECK: [[ADDR0:%.*]] = or disjoint i32 [[ADDR_C0]], [[ADDR_C11]]
+
+  // CHECK: [[LANE_PRED0:%.*]] = icmp eq i32 [[LANE_ID]], [[ACTIVE_LANE0]]
+  // CHECK: [[PRED0:%.*]] = and i1 %5, [[LANE_PRED0]]
+
+  // CHECK: [[OFFSET0:%.*]] = zext nneg i32 [[ADDR0]] to i64
+  // CHECK: [[BASEPTR0:%.*]] = getelementptr {{.*}} [[OFFSET0]]
+  // CHECK: cp.async.bulk.tensor
+  // CHECK-SAME: (i1 [[PRED0]], ptr addrspace(3) [[BASEPTR0]], ptr addrspace(1) %0, i32 %3, i32 [[IDX0]], i32 [[IDX1]], i32 [[IDX2]], i32 [[IDX3]]
+
+  // CHECK: [[ACTIVE_LANE1:%.*]] = or disjoint i32 [[ACTIVE_LANE0]], 2
+  // CHECK: [[ADDR1:%.*]] = or disjoint i32 [[ADDR0]], 256
+  // CHECK: [[LANE_PRED1:%.*]] = icmp eq i32 [[LANE_ID]], [[ACTIVE_LANE1]]
+  // CHECK: [[PRED1:%.*]] = and i1 %5, [[LANE_PRED1]]
+  // CHECK: [[OFFSET1:%.*]] = zext nneg i32 [[ADDR1]] to i64
+  // CHECK: [[BASEPTR1:%.*]] = getelementptr {{.*}} [[OFFSET1]]
+  // CHECK: cp.async.bulk.tensor
+  // CHECK-SAME: (i1 [[PRED1]], ptr addrspace(3) [[BASEPTR1]], ptr addrspace(1) %0, i32 %3, i32 [[IDX0]], i32 [[IDX1]], i32 [[IDX2]], i32 [[IDX3]]
+  ttng.async_tma_gather %arg0[%arg2, %arg3] %arg4, %arg1, %arg5 :
+    !tt.ptr<i8>,
+    tensor<32xi32, #linear0>,
+    i32,
+    !ttg.memdesc<1xi64, #shared, #smem, mutable>,
+    !ttg.memdesc<32x32xf32, #shared2, #smem, mutable>, i1
+  // CHECK-NEXT: ret void
+  tt.return
+}
+
+// CHECK-LABEL: @tma_gather_strange_layout
+tt.func @tma_gather_strange_layout(
+  %arg0: !tt.ptr<i8>,
+  %arg1: !ttg.memdesc<1xi64, #shared, #smem, mutable>,
+  %arg2: tensor<32xi32, #linear1>,
+  %arg3: i32,
+  %arg4: !ttg.memdesc<32x32xf32, #shared2, #smem, mutable>,
+  %arg5: i1
+) {
+  // CHECK: llvm.nvvm.shfl.sync
+  // CHECK: [[IDX0:%.*]] = extractvalue {{.*}} 0
+  // CHECK: [[IDX1:%.*]] = extractvalue {{.*}} 1
+  // CHECK: [[IDX2:%.*]] = extractvalue {{.*}} 2
+  // CHECK: [[IDX3:%.*]] = extractvalue {{.*}} 3
+  // CHECK: [[IDX4:%.*]] = extractvalue {{.*}} 4
+  // CHECK: [[IDX5:%.*]] = extractvalue {{.*}} 5
+  // CHECK: [[IDX6:%.*]] = extractvalue {{.*}} 6
+  // CHECK: [[IDX7:%.*]] = extractvalue {{.*}} 7
+
+  // CHECK: cp.async.bulk.tensor
+  // CHECK-SAME: i32 [[IDX0]], i32 [[IDX1]], i32 [[IDX2]], i32 [[IDX3]]
+
+  // CHECK: cp.async.bulk.tensor
+  // CHECK-SAME: i32 [[IDX4]], i32 [[IDX5]], i32 [[IDX6]], i32 [[IDX7]]
+  ttng.async_tma_gather %arg0[%arg2, %arg3] %arg4, %arg1, %arg5 :
+    !tt.ptr<i8>,
+    tensor<32xi32, #linear1>,
+    i32,
+    !ttg.memdesc<1xi64, #shared, #smem, mutable>,
+    !ttg.memdesc<32x32xf32, #shared2, #smem, mutable>, i1
+  // CHECK-NEXT: ret void
+  tt.return
+}
+
+// CHECK-LABEL: @tma_gather_tile_y_iter
+tt.func @tma_gather_tile_y_iter(
+  %arg0: !tt.ptr<i8>,
+  %arg1: !ttg.memdesc<1xi64, #shared, #smem, mutable>,
+  %arg2: tensor<8xi32, #blocked_4>,
+  %arg3: i32,
+  %arg4: !ttg.memdesc<8x64xf32, #shared2, #smem, mutable>,
+  %arg5: i1
+) {
+  // y = (warpId&2) * 16
+
+  // CHECK: [[WARP_ID:%.*]] = tail call i32 @llvm.nvvm.shfl.sync
+  // CHECK: [[Y_OFFSET:%.*]] = shl i32 [[WARP_ID]], 4
+  // CHECK: [[Y_CLAMP:%.*]] = and i32 [[Y_OFFSET]], 32
+  // CHECK: [[Y:%.*]] = add i32 [[Y_CLAMP]], %3
+
+  // CHECK: cp.async.bulk.tensor
+  // CHECK-SAME: i32 [[Y]]
+  ttng.async_tma_gather %arg0[%arg2, %arg3] %arg4, %arg1, %arg5 :
+    !tt.ptr<i8>,
+    tensor<8xi32, #blocked_4>,
+    i32,
+    !ttg.memdesc<1xi64, #shared, #smem, mutable>,
+    !ttg.memdesc<8x64xf32, #shared2, #smem, mutable>, i1
   // CHECK-NEXT: ret void
   tt.return
 }
