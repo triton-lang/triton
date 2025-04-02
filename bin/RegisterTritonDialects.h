@@ -34,7 +34,6 @@ void registerTestAlignmentPass();
 void registerTestAllocationPass();
 void registerTestMembarPass();
 void registerTestTritonAMDGPURangeAnalysis();
-void registerTestTritonAMDGPUFoldTrueCmpIOp();
 } // namespace test
 } // namespace mlir
 
@@ -48,7 +47,6 @@ inline void registerTritonDialects(mlir::DialectRegistry &registry) {
   mlir::test::registerTestAllocationPass();
   mlir::test::registerTestMembarPass();
   mlir::test::registerTestTritonAMDGPURangeAnalysis();
-  mlir::test::registerTestTritonAMDGPUFoldTrueCmpIOp();
   mlir::triton::registerConvertTritonToTritonGPUPass();
   mlir::triton::gpu::registerAllocateSharedMemoryPass();
   mlir::triton::gpu::registerTritonGPUAllocateWarpGroups();
@@ -76,6 +74,7 @@ inline void registerTritonDialects(mlir::DialectRegistry &registry) {
   mlir::registerTritonAMDGPUCoalesceAsyncCopy();
   mlir::triton::registerTritonAMDGPUInsertInstructionSchedHints();
   mlir::triton::registerTritonAMDGPULowerInstructionSchedHints();
+  mlir::registerTritonAMDFoldTrueCmpI();
 
   registry.insert<
       mlir::triton::TritonDialect, mlir::cf::ControlFlowDialect,

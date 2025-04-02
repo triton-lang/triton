@@ -4667,7 +4667,7 @@ def test_assume(device):
         return
 
     assert 'llvm.intr.assume' in pgm.asm['ttgir']
-    # stream pipeliner on AMD folds true cmpi ops to %true (Which llvm itself then dces)
+    # tritonamdgpu-fold-true-cmpi on AMD folds true cmpi ops to %true (which llvm itself then DCEs).
     if not is_hip():
         assert 'llvm.assume' in pgm.asm['llir']
 

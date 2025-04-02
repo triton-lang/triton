@@ -4,22 +4,16 @@
 #include "third_party/amd/include/Analysis/RangeAnalysis.h"
 #include "triton/Analysis/Utility.h"
 
+#define GEN_PASS_CLASSES
+#include "TritonAMDGPUTransforms/Passes.h"
+
 using namespace mlir;
 using namespace mlir::triton;
 
 namespace {
 
-struct TestAMDFoldTrueCmpIOpPass
-    : PassWrapper<TestAMDFoldTrueCmpIOpPass, OperationPass<ModuleOp>> {
-
-  MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(TestAMDFoldTrueCmpIOpPass)
-
-  StringRef getArgument() const final {
-    return "test-tritonamdgpu-fold-true-cmpi";
-  }
-  StringRef getDescription() const final {
-    return "print the result of the tritonamdgpu-fold-true-cmpi pass";
-  }
+struct TritonAMDFoldTrueCmpIOpPass
+    : TritonAMDFoldTrueCmpIBase<TritonAMDFoldTrueCmpIOpPass> {
 
   void runOnOperation() override {
     DenseMap<Value, SetVector<Operation *>> assumptions =
@@ -32,16 +26,12 @@ struct TestAMDFoldTrueCmpIOpPass
     ModuleOp mod = getOperation();
     RewritePatternSet patterns(&getContext());
     AMD::populateFoldTrueCmpIOpPatterns(patterns, solver.get());
-    if (failed(applyPatternsGreedily(mod, std::move(patterns)))) {
-      return signalPassFailure();
-    }
+    (void)applyPatternsGreedily(mod, std::move(patterns));
   }
 };
 
 } // namespace
 
-namespace mlir::test {
-void registerTestTritonAMDGPUFoldTrueCmpIOp() {
-  PassRegistration<TestAMDFoldTrueCmpIOpPass>();
+std::unique_ptr<Pass> mlir::createTritonAMDGPUFoldTrueCmpIPass() {
+  return std::make_unique<TritonAMDFoldTrueCmpIOpPass>();
 }
-} // namespace mlir::test
