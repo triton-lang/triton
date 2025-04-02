@@ -217,6 +217,8 @@ Value createIncrementModulo(BuilderT &builder, Location loc, Value counter,
 
 void replaceAllUsesDominatedBy(Operation *domOp, Value newValue, Value oldValue,
                                DominanceInfo &domInfo) {
+  if (newValue == oldValue)
+    return;
   oldValue.replaceUsesWithIf(newValue, [&](OpOperand &use) {
     return domInfo.properlyDominates(domOp, use.getOwner());
   });
@@ -233,15 +235,6 @@ static Value createAlloc(scf::ForOp &forOp, Operation *loadOp,
   return triton::createAlloc(
       forOp, cast<RankedTensorType>(loadOp->getResultTypes().front()),
       loadOp->getLoc(), sharedEnc, distance);
-}
-
-template <typename BuilderT, typename... Args>
-Operation *createWithStage(BuilderT &builder, Location loc, int stage,
-                           CoarseSchedule::Cluster cluster, Args &&...args) {
-  Operation *op = builder.template create<ttg::AsyncCopyGlobalToLocalOp>(
-      loc, std::forward<Args>(args)...);
-
-  return op;
 }
 
 void createAsyncCopy(scf::ForOp forOp, tt::LoadOp loadOp, Value alloc,
@@ -877,43 +870,41 @@ std::pair<int, int> getTmemUseStageBounds(ttng::TMEMAllocOp alloc,
   return bounds;
 }
 
-// Add forOp args to hold dist-1 dependencies and a predicate for the wait
+Value hoistLocalAlloc(OpBuilderForStage &builder, scf::ForOp forOp,
+                      CoarseSchedule &schedule, ttg::LocalAllocOp allocOp) {
+  Location loc = allocOp.getLoc();
+  Value src = allocOp.getSrc();
+  builder.setStageCluster(schedule[allocOp]);
+  builder.setInsertionPoint(allocOp);
+  auto storeOp = builder.create<ttg::LocalStoreOp>(loc, src, allocOp);
+  builder.setInsertionPoint(forOp);
+  auto newAlloc = triton::createAlloc(
+      forOp, cast<RankedTensorType>(src.getType()), loc,
+      cast<ttg::SharedEncodingTrait>(allocOp.getType().getEncoding()), 1,
+      false);
+  allocOp.replaceAllUsesWith(newAlloc);
+  allocOp.erase();
+  return newAlloc;
+}
+
+// Hoist LocalAlloc if necessary, and create a predicate argument for the wait
 scf::ForOp prepLoopForDist1Wait(scf::ForOp forOp, CoarseSchedule &schedule,
-                                ttng::MMAv5OpInterface mma,
-                                const SmallVector<Value> &mmaOpBuffers,
-                                SmallVector<int> &waitBuffersArgIdx,
-                                int &predArgIdx) {
+                                ttng::MMAv5OpInterface mma) {
   OpBuilderForStage builder(forOp, schedule);
   Location loc = mma.getLoc();
-  SmallVector<Value> newOperands;
-  unsigned newOperandIndex = forOp.getInitArgs().size();
   Value vFalse = builder.create<arith::ConstantIntOp>(loc, 0, 1);
-  // Create undef values for the wait buffers
-  for (auto buffer : mmaOpBuffers) {
-    newOperands.push_back(builder.create<ub::PoisonOp>(loc, buffer.getType()));
-  }
+
   // Create a predicate for the wait (start with false and change to true on the
   // first mma execution)
-  newOperands.push_back(vFalse);
-
-  scf::ForOp newForOp =
-      replaceForOpWithNewSignature(builder, forOp, newOperands);
+  scf::ForOp newForOp = replaceForOpWithNewSignature(builder, forOp, {vFalse});
   forOp.erase();
   forOp = newForOp;
-
-  for (int i = 0; i < mmaOpBuffers.size(); ++i) {
-    waitBuffersArgIdx.push_back(newOperandIndex + i);
-  }
-  predArgIdx = newOperandIndex + mmaOpBuffers.size();
 
   builder.setInsertionPointAfter(mma);
   builder.setStageCluster(schedule[mma]);
   Value vTrue = builder.create<arith::ConstantIntOp>(loc, 1, 1);
 
   auto yieldOp = cast<scf::YieldOp>(forOp.getBody()->getTerminator());
-  for (unsigned i = 0; i < mmaOpBuffers.size(); ++i) {
-    yieldOp.getResultsMutable().append(mmaOpBuffers[i]);
-  }
   yieldOp.getResultsMutable().append(vTrue); // predicate
   return forOp;
 }
@@ -1002,35 +993,31 @@ scf::ForOp createBarrierAndWaitOps(scf::ForOp forOp, CoarseSchedule &schedule,
     }
   }
 
-  struct Dist1WaitInfo {
-    SmallVector<int> waitBuffersArgIdx;
-    int predicateArgIdx;
-  };
-  std::optional<Dist1WaitInfo> dist1WaitInfo;
+  std::optional<int> predicateArgIdx;
   for (auto wp : waitPoints) {
     builder.setStageCluster({wp.stage, wp.cluster});
     builder.setInsertionPoint(wp.op);
     SmallVector<Value> currWaitBuffers = waitBuffers;
     Value pred = nullptr;
+    // TODO: Should be !domInfo.properlyDominates(mma, wp.op)?
     if (forOp.getBody()->findAncestorOpInBlock(*wp.op)->isBeforeInBlock(mma)) {
       // Waits before the mma are special: they are dist-1 to the mma which
       // means two things:
       // 1. The wait should not be executed before the mma executes for the
-      // first
-      //    time
-      // 2. The waitBuffers do not dominate this wait, so it needs to take undef
-      //    values from the arg iters
-      if (!dist1WaitInfo) {
-        dist1WaitInfo = Dist1WaitInfo();
-        forOp = prepLoopForDist1Wait(forOp, schedule, mma, waitBuffers,
-                                     dist1WaitInfo->waitBuffersArgIdx,
-                                     dist1WaitInfo->predicateArgIdx);
+      //    first time
+      // 2. The waitBuffers do not dominate this wait. We either need to hoist
+      //    the local allocs out of the loop, or have dist-1 buffer references.
+      if (!predicateArgIdx) {
+        forOp = prepLoopForDist1Wait(forOp, schedule, mma);
+        predicateArgIdx = forOp.getInitArgs().size() - 1;
+        // HACK: Clear the wait buffers. This is meant to avoid having to have
+        // dist-1 buffer references, or hoisting the local allocs out of the
+        // loop. This works as long as the wait is in the same stage as the mma,
+        // and is the reason for which we prevent pipelining the mma if there
+        // are loads from the accumulator before the mma in a different stage.
+        currWaitBuffers.clear();
       }
-      currWaitBuffers = llvm::to_vector(
-          llvm::map_range(dist1WaitInfo->waitBuffersArgIdx, [&](int idx) {
-            return cast<Value>(forOp.getRegionIterArg(idx));
-          }));
-      pred = forOp.getRegionIterArg(dist1WaitInfo->predicateArgIdx);
+      pred = forOp.getRegionIterArg(*predicateArgIdx);
     }
     Value barrierSlice = barrierAlloc;
     if (numStages > 1) {
@@ -1049,29 +1036,34 @@ scf::ForOp createBarrierAndWaitOps(scf::ForOp forOp, CoarseSchedule &schedule,
     Value barWrap;
     newBarrierIdx = createIncrementModulo(builder, loc, barrierIdx,
                                           numStagesVal, zero, one, &barWrap);
-    replaceAllUsesDominatedBy(newBarrierIdx.getDefiningOp(), newBarrierIdx,
-                              barrierIdx, domInfo);
     newPhase = builder.create<arith::SelectOp>(loc, phase.getType(), barWrap,
                                                newPhase, phase);
   }
+  if (predicateArgIdx) {
+    // If there is a wait predicate, we need to select the phase and barrierIdx
+    // based on the predicate
+    Value pred = forOp.getRegionIterArg(*predicateArgIdx);
+    newPhase = builder.create<arith::SelectOp>(loc, phase.getType(), pred,
+                                               newPhase, phase);
+    newBarrierIdx = builder.create<arith::SelectOp>(loc, phase.getType(), pred,
+                                                    newBarrierIdx, barrierIdx);
+  }
   replaceAllUsesDominatedBy(newPhase.getDefiningOp(), newPhase, phase, domInfo);
+  replaceAllUsesDominatedBy(newBarrierIdx.getDefiningOp(), newBarrierIdx,
+                            barrierIdx, domInfo);
 
   // If there is a dist-1 wait, we need to add a wait after the loop
-  if (dist1WaitInfo) {
+  if (predicateArgIdx) {
     builder.setInsertionPointAfter(forOp);
     Value barrierSlice = barrierAlloc;
     Value barrierIdx = forOp.getResult(barrierIdxArgIdx);
     Value phase = forOp.getResult(phaseArgIdx);
-    SmallVector<Value> currWaitBuffers = llvm::to_vector(
-        llvm::map_range(dist1WaitInfo->waitBuffersArgIdx,
-                        [&](int idx) { return forOp.getResult(idx); }));
     if (numStages > 1) {
       barrierSlice =
           triton::createSingleBufferView(builder, barrierAlloc, barrierIdx);
     }
-    builder.create<ttng::WaitBarrierOp>(
-        loc, barrierSlice, phase,
-        forOp.getResult(dist1WaitInfo->predicateArgIdx), currWaitBuffers);
+    builder.create<ttng::WaitBarrierOp>(loc, barrierSlice, phase,
+                                        forOp.getResult(*predicateArgIdx));
   }
   return forOp;
 }
@@ -1194,11 +1186,20 @@ scf::ForOp lowerMMA(ttng::MMAv5OpInterface mma, scf::ForOp forOp,
   auto isLoadPipelineable = [&](Operation *op) {
     return schedule[mma].first > schedule[op].first;
   };
-  if (!mmaHasPipelineableOperands(mma, forOp, isLoadPipelineable)) {
-    return forOp;
-  }
   auto alloc = mma.getAccumulator().getDefiningOp<ttng::TMEMAllocOp>();
   if (!alloc) {
+    return forOp;
+  }
+
+  DominanceInfo domInfo(forOp);
+
+  // Don't pipeline the mma if there are loads from the accumulator before the
+  // mma itself, and are not in the same stage as the mma
+  if (llvm::any_of(alloc->getUsers(), [&](Operation *op) {
+        return isa<ttng::TMEMLoadOp>(op) && forOp->isAncestor(op) &&
+               !domInfo.properlyDominates(mma.getOperation(), op) &&
+               schedule[op].first != schedule[mma].first;
+      })) {
     return forOp;
   }
 
@@ -1208,7 +1209,8 @@ scf::ForOp lowerMMA(ttng::MMAv5OpInterface mma, scf::ForOp forOp,
   int tmemUseNumStages =
       tmemUseStageBounds.second - tmemUseStageBounds.first + 1;
   int waitNumStages = tmemUseStageBounds.second - schedule[mma].first + 1;
-  if (waitNumStages == 1 && !hasAccReadModifyWrite(mma, forOp)) {
+  if (waitNumStages == 1 && !hasAccReadModifyWrite(mma, forOp) &&
+      mmaHasPipelineableOperands(mma, forOp, isLoadPipelineable)) {
     // Overlap the mma with itself, even if there is no use of the accumulator
     // after the mma
     waitNumStages = 2;

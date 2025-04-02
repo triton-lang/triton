@@ -328,12 +328,14 @@ Value mlir::triton::createBarrierAlloc(scf::ForOp forOp, int numBarriers) {
 Value mlir::triton::createAlloc(scf::ForOp forOp, RankedTensorType ty,
                                 Location loc,
                                 gpu::SharedEncodingTrait sharedEnc,
-                                unsigned distance) {
+                                unsigned distance, bool isMultiBuffer) {
   OpBuilder builder(forOp);
   Attribute sharedMemorySpace =
       ttg::SharedMemorySpaceAttr::get(forOp.getContext());
   SmallVector<int64_t> bufferShape(ty.getShape().begin(), ty.getShape().end());
-  bufferShape.insert(bufferShape.begin(), distance);
+  if (isMultiBuffer) {
+    bufferShape.insert(bufferShape.begin(), distance);
+  }
   Type memdescType = ttg::MemDescType::get(bufferShape, ty.getElementType(),
                                            sharedEnc, sharedMemorySpace,
                                            /*mutableMemory=*/true);
