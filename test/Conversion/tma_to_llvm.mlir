@@ -19,12 +19,9 @@ tt.func @tma_gather_simple(%arg0: !tt.ptr<i8>, %arg1: !ttg.memdesc<1xi64, #share
   // CHECK: [[BASE_PTR:%.*]] = extractvalue {{.*}} %4, 0
 
   // CHECK: [[TIDX:%.*]] = tail call i32 @llvm.nvvm.read.ptx.sreg.tid.x()
+  // CHECK: [[LANE_ID:%.*]] = and i32 [[TIDX]], 31
   // CHECK: [[WIDX:%.*]] = lshr i32 [[TIDX]], 5
   // CHECK: [[WARP_ID:%.*]] = tail call i32 @llvm.nvvm.shfl.sync.idx.i32(i32 -1, i32 [[WIDX]],
-
-  // CHECK: [[ELECT:%.*]] = tail call { i32, i1 } @llvm.nvvm.elect.sync
-  // CHECK: [[ELECT_PRED:%.*]] = extractvalue { i32, i1 } [[ELECT]], 1
-  // CHECK: [[PRED:%.*]] = and i1 %5, [[ELECT_PRED]]
 
   // CHECK: [[IDX0:%.*]] = extractvalue {{.*}} %2, 0
   // CHECK: [[IDX1:%.*]] = extractvalue {{.*}} %2, 1
@@ -63,23 +60,26 @@ tt.func @tma_gather_simple(%arg0: !tt.ptr<i8>, %arg1: !ttg.memdesc<1xi64, #share
   // CHECK: [[WARP_STRIDE_TMP:%.*]] = shl i32 [[WARP_ID]], 8
   // CHECK: [[WARP_STRIDE:%.*]] = and i32 [[WARP_STRIDE_TMP]], 768
 
+  // CHECK: [[LANE_PRED:%.*]] = icmp eq i32 [[LANE_ID]], 0
+  // CHECK: [[PRED:%.*]] = and i1 [[LANE_PRED]], %5
+
   // CHECK: [[OFFSET0:%.*]] = zext nneg i32 [[WARP_STRIDE]] to i64
   // CHECK: [[BASEPTR0:%.*]] = getelementptr bfloat, ptr addrspace(3) [[BASE_PTR]], i64 [[OFFSET0]]
   // CHECK: "@$0 cp.async.bulk.tensor.2d.tile::gather4.shared::cluster.global.mbarrier::complete_tx::bytes [$1], [$2, {$3, $4, $5, $6, $7}], [$8];", "b,r,l,r,r,r,r,r,r"
   // CHECK-SAME: (i1 [[PRED]], ptr addrspace(3) [[BASEPTR0]], ptr addrspace(1) %0, i32 [[Y0]], i32 [[IDX0]], i32 [[IDX1]], i32 [[IDX2]], i32 [[IDX3]], ptr addrspace(3) [[BAR]])
 
-  // CHECK: [[OFFSET1_TMP:%.*]] = or disjoint i32 [[WARP_STRIDE]], 2048
+  // CHECK: [[OFFSET1_TMP:%.*]] = or disjoint i32 [[WARP_STRIDE]], 1024
   // CHECK: [[OFFSET1:%.*]] = zext nneg i32 [[OFFSET1_TMP]] to i64
   // CHECK: [[BASEPTR1:%.*]] = getelementptr bfloat, ptr addrspace(3) [[BASE_PTR]], i64 [[OFFSET1]]
-  // CHECK: [[Y1:%.*]] = add i32 [[Y0]], 64
   // CHECK: cp.async.bulk.tensor.2d.tile::gather4
-  // CHECK-SAME: (i1 [[PRED]], ptr addrspace(3) [[BASEPTR1]], ptr addrspace(1) %0, i32 [[Y1]], i32 [[IDX0]], i32 [[IDX1]], i32 [[IDX2]], i32 [[IDX3]], ptr addrspace(3) [[BAR]])
+  // CHECK-SAME: (i1 [[PRED]], ptr addrspace(3) [[BASEPTR1]], ptr addrspace(1) %0, i32 [[Y0]], i32 [[IDX4]], i32 [[IDX5]], i32 [[IDX6]], i32 [[IDX7]], ptr addrspace(3) [[BAR]])
 
-  // CHECK: [[OFFSET2_TMP:%.*]] = or disjoint i32 [[WARP_STRIDE]], 1024
+  // CHECK: [[OFFSET2_TMP:%.*]] = or disjoint i32 [[WARP_STRIDE]], 2048
+  // CHECK: [[Y1:%.*]] = add i32 [[Y0]], 64
   // CHECK: [[OFFSET2:%.*]] = zext nneg i32 [[OFFSET2_TMP]] to i64
   // CHECK: [[BASEPTR2:%.*]] = getelementptr bfloat, ptr addrspace(3) [[BASE_PTR]], i64 [[OFFSET2]]
   // CHECK: cp.async.bulk.tensor.2d.tile::gather4
-  // CHECK-SAME: (i1 [[PRED]], ptr addrspace(3) [[BASEPTR2]], ptr addrspace(1) %0, i32 [[Y0]], i32 [[IDX4]], i32 [[IDX5]], i32 [[IDX6]], i32 [[IDX7]], ptr addrspace(3) [[BAR]])
+  // CHECK-SAME: (i1 [[PRED]], ptr addrspace(3) [[BASEPTR2]], ptr addrspace(1) %0, i32 [[Y1]], i32 [[IDX0]], i32 [[IDX1]], i32 [[IDX2]], i32 [[IDX3]], ptr addrspace(3) [[BAR]])
 
   // CHECK: [[OFFSET3_TMP:%.*]] = or disjoint i32 [[WARP_STRIDE]], 3072
   // CHECK: [[OFFSET3:%.*]] = zext nneg i32 [[OFFSET3_TMP]] to i64
@@ -108,11 +108,11 @@ tt.func @tma_gather_8_consecutive_indices(%arg0: !tt.ptr<i8>, %arg1: !ttg.memdes
   // CHECK: zext nneg i32 [[OFFSET0]] to i64
   // CHECK: cp.async.bulk.tensor
 
-  // CHECK: [[OFFSET1:%.*]] = or disjoint i32 [[OFFSET0]], 2048
+  // CHECK: [[OFFSET1:%.*]] = or disjoint i32 [[OFFSET0]], 256
   // CHECK: zext nneg i32 [[OFFSET1]] to i64
   // CHECK: cp.async.bulk.tensor
 
-  // CHECK: [[OFFSET2:%.*]] = or disjoint i32 [[OFFSET0]], 256
+  // CHECK: [[OFFSET2:%.*]] = or disjoint i32 [[OFFSET0]], 2048
   // CHECK: zext nneg i32 [[OFFSET2]] to i64
   // CHECK: cp.async.bulk.tensor
 
@@ -139,15 +139,12 @@ tt.func @tma_gather_redundant_indices(%arg0: !tt.ptr<i8>, %arg1: !ttg.memdesc<1x
 
 // CHECK-LABEL: @tma_gather_redundant_warps
 tt.func @tma_gather_redundant_warps(%arg0: !tt.ptr<i8>, %arg1: !ttg.memdesc<1xi64, #shared, #smem, mutable>, %arg2: tensor<32xi32, #ttg.slice<{dim = 0, parent = #blocked2}>>, %arg3: i32, %arg4: !ttg.memdesc<32x128xbf16, #shared1, #smem, mutable>, %arg5: i1) {
-  // CHECK: [[WARP_ID:%.*]] = tail call i32 @llvm.nvvm.shfl.sync.idx.i32
-  // CHECK: [[WARP_SELECT:%.*]] = and i32 [[WARP_ID]], 2
-  // CHECK: [[WARP_PRED:%.*]] = icmp eq i32 [[WARP_SELECT]], 0
-  // CHECK: [[PRED_TMP:%.*]] = and i1 %5, [[WARP_PRED]]
-  // CHECK: [[ELECT:%.*]] = tail call { i32, i1 } @llvm.nvvm.elect.sync
-  // CHECK: [[ELECT_PRED:%.*]] = extractvalue { i32, i1 } [[ELECT]], 1
-  // CHECK: [[PRED:%.*]] = and i1 [[ELECT_PRED]], [[PRED_TMP]]
+  // CHECK: [[TIDX:%.*]] = tail call i32 @llvm.nvvm.read.ptx.sreg.tid.x()
+  // CHECK: [[LANE_ID:%.*]] = and i32 [[TIDX]], 31
+  // CHECK: [[LANE_PRED:%.*]] = icmp eq i32 [[LANE_ID]], 0
+  // CHECK: [[PRED:%.*]] = and i1 [[LANE_PRED]], %5
 
-  // CHECK-COUNT-8: cp.async.bulk.tensor{{.*}}(i1 [[PRED]],
+  // CHECK-COUNT-4: cp.async.bulk.tensor{{.*}}(i1 [[PRED]],
   ttng.async_tma_gather %arg0[%arg2, %arg3] %arg4, %arg1, %arg5 : !tt.ptr<i8>, tensor<32xi32, #ttg.slice<{dim = 0, parent = #blocked2}>>, i32, !ttg.memdesc<1xi64, #shared, #smem, mutable>, !ttg.memdesc<32x128xbf16, #shared1, #smem, mutable>, i1
 
   // CHECK-NEXT: ret void
@@ -160,8 +157,10 @@ tt.func @tma_scatter(%arg0: !tt.ptr<i8>, %arg1: tensor<32xi32, #ttg.slice<{dim =
   // with `async_tma_gather`, so we don't need to re-test the indexing logic.
 
   // CHECK: [[BASE_PTR:%.*]] = extractvalue {{.*}} %3, 0
-  // CHECK: [[ELECT:%.*]] = tail call { i32, i1 } @llvm.nvvm.elect.sync
-  // CHECK: [[PRED:%.*]] = extractvalue { i32, i1 } [[ELECT]], 1
+
+  // CHECK: [[TIDX:%.*]] = tail call i32 @llvm.nvvm.read.ptx.sreg.tid.x()
+  // CHECK: [[LANE_ID:%.*]] = and i32 [[TIDX]], 31
+  // CHECK: [[PRED:%.*]] = icmp eq i32 [[LANE_ID]], 0
 
   // CHECK: [[PTR:%.*]] = getelementptr {{.*}} [[BASE_PTR]]
   // CHECK-NEXT: "@$0 cp.async.bulk.tensor.2d.tile::scatter4.global.shared::cta.bulk_group [$1, {$2, $3, $4, $5, $6}], [$7];"

@@ -185,6 +185,14 @@ LinearLayout identityStandardND(StringAttr inDimName, ArrayRef<unsigned> shape,
   return ret;
 }
 
+LinearLayout createScalarQuotientLayout(int32_t divisor, unsigned dimSize,
+                                        StringAttr inDim, StringAttr outDim) {
+  std::vector<std::vector<int>> bases;
+  for (unsigned x = 1; x < dimSize; x *= 2)
+    bases.push_back({int32_t(x / divisor)});
+  return LinearLayout({{inDim, std::move(bases)}}, outDim);
+}
+
 // Compute the supremum of two lists.
 // If the supremum is not unique, we return the first list first
 // Error out if the supremum does not exist

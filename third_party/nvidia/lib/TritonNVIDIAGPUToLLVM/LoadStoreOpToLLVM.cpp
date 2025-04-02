@@ -18,6 +18,7 @@
 #include "triton/Dialect/TritonGPU/IR/LinearLayoutConversions.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/TMAUtilities.h"
+#include "triton/Tools/LayoutUtils.h"
 
 #include <cassert>
 
@@ -1416,15 +1417,18 @@ static LogicalResult iterateGatherScatterIndices(
 
   StringAttr kDim0 = str_attr("dim0");
   StringAttr kDim1 = str_attr("dim1");
-  StringAttr kMsg = str_attr("msg");
   StringAttr kRegister = str_attr("register");
   StringAttr kLane = str_attr("lane");
   StringAttr kWarp = str_attr("warp");
   StringAttr kBlock = str_attr("block");
+  StringAttr kIter = str_attr("iteration");
+  StringAttr kTileX = str_attr("tileX");
+  StringAttr kTileY = str_attr("tileY");
+  StringAttr kInst = str_attr("inst");
 
   // Each warp can issue a distinct `gather4` instruction that loads 4 rows into
   // consecutive shared memory. Thus, the layout of the x offsets must be such
-  // that 4 consecutive elements are broadcasted to a warp.
+  // that 4 consecutive elements are grouped together in a thread.
   RankedTensorType xCoordsTy = xCoords.getType();
   LinearLayout xCoordsLayout = triton::gpu::toLinearLayout(
       xCoordsTy.getShape(), xCoordsTy.getEncoding());
@@ -1454,78 +1458,177 @@ static LogicalResult iterateGatherScatterIndices(
   unsigned threadsPerWarp = xCoordsLayout.getInDimSize(kLane);
   unsigned numWarps = xCoordsLayout.getInDimSize(kWarp);
 
-  // Each gather4 instructions reads 128 bytes for 4 rows at a time.
+  // Suppose the result tensor is `tensor<MxNxdtype>`. Each gather4/scatter4
+  // message covers a `[4, contigDimSize]` tile of the result, where the `y`
+  // elements are contiguous but the `x` elements are separately indexed using
+  // indices load out such that 4 consecutive elements are grouped together.
+  //
+  // Because each warp can emit a distinct message, even if the layout of the
+  // indices are redundant along the warp bases, we can still figure out a way
+  // to issue different messages per instruction. E.g. consider the layout
+  //
+  //   register = [[1], [2]]
+  //   lane =     [[4], [8], [0], [0], [0]]
+  //   warp =     [[16], [0]]
+  //   block =    []
+  //   outDims: dim0 (size 32)
+  //
+  // If the tensor is `tensor<32x128xf32>`, there are a total of 32 tiles
+  // (4 rows per message, and in 1 CTA mode, 128B per row). If we mask out the
+  // redundant warps, we have to emit 16 instructions to fill the 32 tiles. We
+  // can "vectorize" the subtiles along the redundant warps to emit only 8
+  // instructions.
+
+  // Determine the number of tiles per row needed to span `dim1`.
   auto shapePerCTA = ttg::getShapePerCTA(smemType);
   unsigned innerBlockSize = shapePerCTA.back();
-  unsigned contigDimSize = nvidia_gpu::getTMAContigDim(smemType);
-  unsigned numMessagesPerRow = ceil<unsigned>(innerBlockSize, contigDimSize);
+  unsigned elemsPerMsg = nvidia_gpu::getTMAContigDim(smemType);
+  unsigned numMessagesPerRow = ceil<unsigned>(innerBlockSize, elemsPerMsg);
 
-  // `xCoordsLayout` maps the register ID into dim0. Tile dim1 by adding a new
-  // dimension representing the TMA message ID.
+  // Build a map from dim0 and dim1 to tileX and tileY respectively.
+  LinearLayout dimToTile =
+      createScalarQuotientLayout(
+          /*divisor=*/4, xCoordsLayout.getOutDimSize(kDim0), kDim0, kTileX) *
+      createScalarQuotientLayout(elemsPerMsg, innerBlockSize, kDim1, kTileY);
+
+  // `xCoordsLayout` already spans `dim0` of the result tensor. Augment it with
+  // a new `iteration` dimension to span `dim1`. Given a particular tuple
+  // `(reg, lane, warp, block)` that contains the indices for 4 rows, this
+  // iteration is the number of instructions that needs to be emitted for this
+  // tuple to fill the rows.
   assert(innerBlockSize % numMessagesPerRow == 0);
   assert(llvm::isPowerOf2_32(numMessagesPerRow));
-  unsigned msgSize = innerBlockSize / numMessagesPerRow;
-  std::vector<std::vector<int>> msgBases;
+  unsigned iterMsgSize = innerBlockSize / numMessagesPerRow;
+  std::vector<std::vector<int>> iterBases;
   for (unsigned msgId = 1; msgId < numMessagesPerRow; msgId *= 2)
-    msgBases.push_back({int32_t(msgId * msgSize)});
-  LinearLayout msgToCol({{{kMsg, std::move(msgBases)}}},
-                        {{kDim1, innerBlockSize}},
-                        /*requiresSurjective=*/false);
-  LinearLayout msgLayout = xCoordsLayout * msgToCol;
+    iterBases.push_back({int32_t(msgId * iterMsgSize)});
+  LinearLayout iterToDim1({{{kIter, std::move(iterBases)}}},
+                          {{kDim1, innerBlockSize}},
+                          /*requiresSurjective=*/false);
+
+  // Create a layout that maps (reg, lane, warp, block, iter) to the specific
+  // tile of the result tensor.
+  LinearLayout resultTileLayout =
+      (xCoordsLayout * iterToDim1).compose(dimToTile);
+
+  // We can leverage redundancy in the warp and block bases to reduce the number
+  // of emitted instructions. In other words, for a particular gather4/scatter4
+  // instruction, we can have each warp issue a different message.
+  //
+  // "Steal work" by swapping zero warp or block bases with non-zero bases from
+  // either the lanes or iterations.
+  LinearLayout::BasesT newBases = resultTileLayout.getBases();
+  auto isNonZeroBase = [](ArrayRef<int> base) {
+    return llvm::any_of(base, [](int b) { return b != 0; });
+  };
+  auto stealWork = [&](std::vector<std::vector<int>> &bases) {
+    for (auto &base : bases) {
+      if (isNonZeroBase(base))
+        continue;
+      // Try to find to find a non-zero base to steal. Try the lanes and then
+      // the iterations.
+      auto it = llvm::find_if(newBases[kLane], isNonZeroBase);
+      if (it == newBases[kLane].end()) {
+        it = llvm::find_if(newBases[kIter], isNonZeroBase);
+        // No work to steal. Just exit.
+        if (it == newBases[kIter].end())
+          break;
+      }
+      std::swap(base, *it);
+    }
+  };
+  stealWork(newBases[kWarp]);
+  stealWork(newBases[kBlock]);
+  LinearLayout vectorLayout(newBases, {kTileX, kTileY});
+
+  // Collect the non-zero bases along the reg, lane, and iter dimensions of the
+  // new layout. These are the actual instructions that need to be emitted.
+  LinearLayout::BasesT instBases;
+  auto collectNonZeroBases = [&](StringAttr dim) {
+    auto &msgBases = instBases[kInst];
+    for (auto &base : vectorLayout.getBases().find(dim)->second) {
+      if (isNonZeroBase(base))
+        msgBases.push_back(base);
+    }
+  };
+  collectNonZeroBases(kRegister);
+  collectNonZeroBases(kLane);
+  collectNonZeroBases(kIter);
+  // Add in the warp and block components.
+  instBases[kWarp] = vectorLayout.getBases().find(kWarp)->second;
+  instBases[kBlock] = vectorLayout.getBases().find(kBlock)->second;
+  LinearLayout instLayout(instBases, {kTileX, kTileY});
+
+  // Check that we did this right.
+  assert(instLayout.getInDimSize(kInst) ==
+         llvm::divideCeil(resultTileLayout.getOutDimSize(kTileX) *
+                              resultTileLayout.getOutDimSize(kTileY),
+                          numWarps));
+
+  // We know the registers associated with each tile only depends on the
+  // instruction ID. This is because the register bases by construction are only
+  // non-zero along the tileX dimension and we didn't steal any bases from it.
+  // Stealing bases from a dimension into the warp or block bases indicates a
+  // layout conversion where the data needs to be moved around.
+  LinearLayout codegenLayout = instLayout.invertAndCompose(resultTileLayout);
+  LinearLayout regLayout = codegenLayout.sublayout({kInst}, {kRegister});
+  LinearLayout invLayout = resultTileLayout.pseudoinvert().sublayout(
+      {kTileX, kTileY}, {kLane, kIter});
+  assert(codegenLayout.sublayoutIsZero({kWarp, kBlock}, {kRegister}));
 
   // `gather4` will put the 128-byte segments of the 4 rows consecutively in
   // shared memory. However, if the 4 rows are smaller than the shared memory
   // swizzle tile size, e.g. [4, 32] vs. [8, 32], then, for example, the address
   // of the 0th element of row 4 will not be at the start of the segment.
   LinearLayout sharedLayout = getUnswizzledLayout(smemType);
-  LinearLayout msgToShared = msgLayout.invertAndCompose(sharedLayout);
+  LinearLayout tileToShMem =
+      dimToTile.pseudoinvert().invertAndCompose(sharedLayout);
 
-  // If there are too few rows, warps will have redundant data. An individual
-  // thread might also have redundant indices if there is register broadcasting.
-  auto freeVars = xCoordsLayout.getFreeVariableMasks();
-  unsigned regMask = freeVars[kRegister];
-  unsigned warpMask = freeVars[kWarp];
-  if (freeVars[kLane] != (threadsPerWarp - 1))
-    return op->emitError("x offsets must be broadcasted across each warp");
-
+  Value laneId = getLaneId(rewriter, loc);
   Value warpId = rewriter.create<nvgpu::WarpIdOp>(loc);
   Value blockId = rewriter.create<nvgpu::ClusterCTAIdOp>(loc);
 
-  // Mask out warps with redundant x offsets.
+  auto freeVars = instLayout.getFreeVariableMasks();
+  int32_t warpMask = freeVars[kWarp];
+  int32_t blockMask = freeVars[kBlock];
+
+  // Mask out warps and blocks that are still redundant. Redundant lanes and
+  // registers are handled automatically by the pseudoinverse.
   pred = b.and_(pred,
                 b.icmp_eq(b.i32_val(0), b.and_(warpId, b.i32_val(warpMask))));
-  // Select one thread in each warp to issue the gather4 messages.
-  pred = b.and_(pred, LLVM::NVIDIA::createElectPredicate(loc, rewriter));
+  pred = b.and_(pred,
+                b.icmp_eq(b.i32_val(0), b.and_(blockId, b.i32_val(blockMask))));
 
+  // Okay now we have everything needed to codegen the gather.
   SmallVector<Value> xOffsets = unpackLLElements(loc, xOffsetsValue, rewriter);
-  // Lane ID doesn't matter.
-  Value laneId = b.i32_val(0);
-  for (auto regId : seq<unsigned>(0, xOffsets.size(), 4)) {
-    // Skip redundant x offsets within a thread.
-    if ((regMask & regId) != 0)
-      continue;
-    Value regIdVal = b.i32_val(regId);
+  for (int instId : llvm::seq(instLayout.getInDimSize(kInst))) {
+    // Obtain the register ID of the first in the group of 4 based on the
+    // instruction ID only.
+    auto [reqRegId] = applyToOuts(regLayout, {{kInst, instId}}, kRegister);
+    // Given the instruction and (warp, block), determine which tile this warp
+    // is handling.
+    auto [tileX, tileY] = applyToOuts(
+        loc, rewriter, instLayout,
+        {{kInst, b.i32_val(instId)}, {kWarp, warpId}, {kBlock, blockId}},
+        kTileX, kTileY);
+    // Given the tile, we can figure out the lane that has the right data and
+    // which
+    auto [reqLaneId, reqIter] =
+        applyToOuts(loc, rewriter, invLayout,
+                    {{kTileX, tileX}, {kTileY, tileY}}, kLane, kIter);
+    auto [shMemOffset, block] =
+        applyToOuts(loc, rewriter, tileToShMem,
+                    {{kTileX, tileX}, {kTileY, tileY}}, "offset", kBlock);
 
-    for (auto msgId : llvm::seq(numMessagesPerRow)) {
-      Value msgIdVal = b.i32_val(msgId);
+    // Select the thread in the warp that has the right data.
+    Value curPred = b.and_(pred, b.icmp_eq(laneId, reqLaneId));
+    auto curXOffsets = ArrayRef(xOffsets).slice(reqRegId, 4);
+    Value curYOffset =
+        b.add(yOffsetValue, b.mul(reqIter, b.i32_val(elemsPerMsg)));
+    Value shMemPtr =
+        b.gep(elemPtrTy, llvmElemTy, smemObj.getBase(), shMemOffset);
 
-      auto result = applyLinearLayout(loc, rewriter, msgToShared,
-                                      {{kMsg, msgIdVal},
-                                       {kRegister, regIdVal},
-                                       {kLane, laneId},
-                                       {kWarp, warpId},
-                                       {kBlock, blockId}});
-      assert(result.size() == 2 && result.front().first == "offset" &&
-             result.back().first == "block");
-      Value shMemOffset = result.front().second;
-      // Because we checked that the memdesc's allocshape and shape match, we
-      // can ignore the strides and directly index into the shmem object.
-      Value shMemPtr =
-          b.gep(elemPtrTy, llvmElemTy, smemObj.getBase(), shMemOffset);
-      Value yOffset = b.add(yOffsetValue, b.i32_val(msgId * msgSize));
-
-      callback(pred, shMemPtr, yOffset, ArrayRef(xOffsets).slice(regId, 4));
-    };
+    callback(curPred, shMemPtr, curYOffset, curXOffsets);
   }
 
   return success();

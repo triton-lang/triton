@@ -436,6 +436,9 @@ public:
     return getBasis(inDim, pos)[getOutDimIndex(outDim)];
   }
 
+  // Get the map of the output dimensions.
+  auto &getOutDims() const { return outDims; }
+
   // These are in minor-to-major order, although if you don't flatten the dims
   // (e.g. by reshaping) then the order doesn't really affect anything.
   auto getInDimNames() const { return llvm::make_first_range(bases); }

@@ -2,6 +2,7 @@
 #define TRITON_TOOLS_LAYOUTUTILS_H
 
 #include "triton/Tools/LinearLayout.h"
+#include "triton/Tools/STLExtras.h"
 
 namespace mlir::triton {
 // Is the sublayout defined from dimNames to dimNames the identity?
@@ -98,12 +99,35 @@ standardOutDimPairs(MLIRContext *ctx, ArrayRef<int64_t> dstShape);
 LinearLayout identityStandardND(StringAttr inDimName, ArrayRef<unsigned> shape,
                                 ArrayRef<unsigned> order);
 
+// Create a layout that divides a 1D layout by a scalar divisor into a new
+// output dimension.
+LinearLayout createScalarQuotientLayout(int32_t divisor, unsigned dimSize,
+                                        StringAttr inDim, StringAttr outDim);
+
 // Compute the supremum of two lists.
 // Error out if the supremum does not exist (e.g. [a, b] and [b, a]).
 // If the supremum is not unique, we return the first list first
 // (e.g. [a, b], [a, c] -> [a, b, c]).
 SmallVector<StringAttr> supremum(const SmallVector<StringAttr> &x,
                                  const SmallVector<StringAttr> &y);
+
+// Apply a linear layout with specific inputs and with expected outputs. This
+// checks that the outputs are as expected and automatically packs them into a
+// tuple.
+template <typename... Outs>
+static auto applyToOuts(const LinearLayout &layout,
+                        ArrayRef<std::pair<StringAttr, int32_t>> inputs,
+                        Outs... outs) {
+  SmallVector<std::pair<StringAttr, int32_t>> results = layout.apply(inputs);
+  assert(results.size() == sizeof...(outs));
+  return for_each_with_index(
+      [&](int i, auto out) {
+        assert(out == results[i].first);
+        return results[i].second;
+      },
+      std::forward<Outs>(outs)...);
+}
+
 } // namespace mlir::triton
 
 #endif // TRITON_TOOLS_LAYOUTUTILS_H

@@ -3,6 +3,7 @@
 
 #include <set>
 
+#include "triton/Tools/STLExtras.h"
 #include "mlir/Conversion/LLVMCommon/Pattern.h"
 #include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
@@ -672,6 +673,24 @@ SmallVector<std::pair<StringAttr, Value>>
 applyLinearLayout(Location loc, RewriterBase &rewriter,
                   const LinearLayout &layout,
                   ArrayRef<std::pair<StringAttr, Value>> indices);
+
+// Apply a linear layout with specific inputs and with expected outputs. This
+// checks that the outputs are as expected and automatically packs them into a
+// tuple.
+template <typename... Outs>
+static auto
+applyToOuts(Location loc, RewriterBase &b, const LinearLayout &layout,
+            ArrayRef<std::pair<StringAttr, Value>> inputs, Outs... outs) {
+  SmallVector<std::pair<StringAttr, Value>> results =
+      applyLinearLayout(loc, b, layout, inputs);
+  assert(results.size() == sizeof...(outs));
+  return for_each_with_index(
+      [&](int i, auto out) {
+        assert(out == results[i].first);
+        return results[i].second;
+      },
+      std::forward<Outs>(outs)...);
+}
 
 SmallVector<SmallVector<unsigned>> emitOffsetForLayout(Attribute layout,
                                                        RankedTensorType type);

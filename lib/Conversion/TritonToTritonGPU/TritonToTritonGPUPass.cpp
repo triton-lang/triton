@@ -410,24 +410,18 @@ static RankedTensorType getNewIndicesType(RankedTensorType type,
                                           unsigned numThreads,
                                           unsigned numWarps) {
   assert(type.getRank() == 1);
-  auto enc = cast<DistributedEncodingTrait>(type.getEncoding());
+  MLIRContext *ctx = type.getContext();
 
   // Technically any layout where we have a pack of 4 neighbouring elements plus
   // broadcasted over the warp dimension is okay but for now we just pick a
   // layout.
-  std::array<unsigned, 2> sizePerThread{1, 4};
-  std::array<unsigned, 2> threadsPerWarp = {numThreads, 1};
-  std::array<unsigned, 2> order = {1, 0};
-  std::array<unsigned, 2> warpsPerCta = {1, numWarps};
+  auto ctaLayout = CTALayoutAttr::getDefault(ctx, /*rank=*/1);
+  auto newEncoding =
+      BlockedEncodingAttr::get(ctx, /*sizePerThread=*/{4}, {numThreads},
+                               {numWarps}, /*order=*/{0}, ctaLayout);
 
-  MLIRContext *ctx = type.getContext();
-  auto ctaLayout = CTALayoutAttr::getDefault(ctx, /*rank=*/2);
-  auto parentEncoding = BlockedEncodingAttr::get(
-      ctx, sizePerThread, threadsPerWarp, warpsPerCta, order, ctaLayout);
-  auto newEncoding = SliceEncodingAttr::get(ctx, /*dim=*/0, parentEncoding);
-  if (enc == newEncoding)
+  if (type.getEncoding() == newEncoding)
     return {};
-
   return RankedTensorType::get(type.getShape(), type.getElementType(),
                                newEncoding);
 }

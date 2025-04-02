@@ -1340,9 +1340,10 @@ def TT_DescriptorGatherOp : TT_Op<"descriptor_gather", [MemoryEffects<[MemRead<G
   let hasVerifier = 1;
 
   let extraClassDeclaration = [{
-    // TMA gathers have resstrictions on the minimum size of the gather result.
+    // TMA gathers have restrictions on the minimum size of the gather result.
     // This function verifies the result type.
-    static LogicalResult verifyResultType(Operation *op, mlir::ShapedType type);
+    static LogicalResult verifyResultType(Operation *op, ShapedType resultType,
+                                          RankedTensorType indicesType);
   }];
 }
 
@@ -1360,6 +1361,8 @@ def TT_DescriptorScatterOp : TT_Op<"descriptor_scatter", [
     $desc `[` $x_offsets `,` $y_offset `]` `,` $src
     attr-dict `:` type(operands)
   }];
+
+  let hasVerifier = 1;
 }
 
 def TT_ExperimentalTensormapCreateOp: TT_Op<
