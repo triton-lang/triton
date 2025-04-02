@@ -182,9 +182,15 @@ void Pingponger::appendOpWithPrio(OpBuilder &builder, Operation *op,
 
 // Determine if the given loop matches the basic pattern of a persistent GEMM.
 // Here we define a persistent GEMM as containing a single dot product, and two
-// if statements inside the body of the loop, one before the dot product
-// which matches on == 0 and one after the dot product which matches on
-// == (var - 1).
+// if statements inside the body of the loop. While canonically these should be
+// var == 0 and var == other_var - 1, we approximate this check to just check
+// for a comparison equality. This will miss legal variant like >= var and we
+// can adjust this with example kernels that fail.
+//
+// Note: That while ideally we would check that these are the same variable
+// and that they change per loop iteration, the persistent GEMM cannot depend
+// directly on the loop bounds, we will avoid matching an exact pattern which
+// may be quite flexible in general.
 bool Pingponger::isPersistentGemm(size_t num_dots) {
   if (num_dots != 1)
     return false;
@@ -196,11 +202,21 @@ bool Pingponger::isPersistentGemm(size_t num_dots) {
         // Violate our two if statement assumption.
         return false;
       }
-      if (seenDot) {
-        // TODO: Check for == (var - 1)
-      } else {
-        // TOOD: Check for == 0
+      auto cond = ifOp.getCondition().getDefiningOp();
+      if (!cond) {
+        return false;
       }
+      // bool matchesPattern = false;
+      // if (auto cmpIOp = dyn_cast<arith::CmpIOp>(cond)) {
+      //   if (auto pred =
+      //           dyn_cast<arith::CmpIPredicateAttr>(cmpIOp.getPredicate())) {
+      //     // TODO: CHECK PRED
+      //     matchesPattern = true;
+      //   }
+      // }
+      // if (!matchesPattern) {
+      //   return false;
+      // }
       seenIfSection = true;
     } else if (auto dotOp = dyn_cast<tt::DotOp>(op)) {
       if (seenDot || !seenIfSection) {
