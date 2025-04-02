@@ -206,17 +206,14 @@ bool Pingponger::isPersistentGemm(size_t num_dots) {
       if (!cond) {
         return false;
       }
-      // bool matchesPattern = false;
-      // if (auto cmpIOp = dyn_cast<arith::CmpIOp>(cond)) {
-      //   if (auto pred =
-      //           dyn_cast<arith::CmpIPredicateAttr>(cmpIOp.getPredicate())) {
-      //     // TODO: CHECK PRED
-      //     matchesPattern = true;
-      //   }
-      // }
-      // if (!matchesPattern) {
-      //   return false;
-      // }
+      bool matchesPattern = false;
+      if (auto cmpIOp = dyn_cast<arith::CmpIOp>(cond)) {
+        matchesPattern =
+            cmpIOp.getPredicate() == mlir::arith::CmpIPredicate::eq;
+      }
+      if (!matchesPattern) {
+        return false;
+      }
       seenIfSection = true;
     } else if (auto dotOp = dyn_cast<tt::DotOp>(op)) {
       if (seenDot || !seenIfSection) {
