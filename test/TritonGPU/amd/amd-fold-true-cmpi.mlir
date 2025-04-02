@@ -1,4 +1,4 @@
-// RUN: triton-opt %s -split-input-file -allow-unregistered-dialect -test-tritonamdgpu-fold-true-cmpi -canonicalize | FileCheck %s
+// RUN: triton-opt %s -split-input-file -allow-unregistered-dialect -tritonamdgpu-fold-true-cmpi -canonicalize | FileCheck %s
 
 module attributes {"ttg.num-warps" = 4 : i32} {
   tt.func @cmpsle(%arg0: !tt.ptr<f32>) -> i1 {
