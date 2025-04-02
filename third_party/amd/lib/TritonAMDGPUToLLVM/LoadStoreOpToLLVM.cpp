@@ -182,6 +182,134 @@ protected:
   ModuleAxisInfoAnalysis &axisAnalysisPass;
 };
 
+// Contains some helper functions for direct to lds loads.
+struct DirectToLdsLoadConversionBase : public LoadStoreConversionBase {
+  explicit DirectToLdsLoadConversionBase(
+      const AMD::TargetInfo &targetInfo,
+      ModuleAxisInfoAnalysis &axisAnalysisPass)
+      : LoadStoreConversionBase(targetInfo, axisAnalysisPass) {}
+
+  // direct to lds lods do not support per lane shared offsets. We need to
+  // ensure that we write coalesced into shared memory. This means we cannot
+  // exceed the supported load width because splitting them would cause strided
+  // (non coalesced) writes. Additionally:
+  //   1) For *non* swizzled shared encodings we check if they result in
+  //      coalesced writes and can then lower them directly to the intrinsics.
+  //   2) For swizzled shared encodings we need to transfer the swizzling to the
+  //      source pointers. For now this is done by swizzling the pointers
+  //      between the lane of a warp via permute. This only works if the swizzle
+  //      pattern does not exchange elements between warps which holds for all
+  //      our swizzle patterns. There is still a check performed to not silently
+  //      produce wrong results if we invalidate the condition in the future
+  LogicalResult verifyDirectToLdsSupport(RewriterBase &rewriter, Operation *op,
+                                         RankedTensorType srcTy,
+                                         MemDescType dstTy, VectorType vecTy,
+                                         bool hasSwizzling) const {
+    int vecBits = vecTy.getNumElements() * vecTy.getElementTypeBitWidth();
+    if (!targetInfo.supportsDirectToLdsLoadBitWidth(vecBits)) {
+      return rewriter.notifyMatchFailure(
+          op, "direct to lds does not support the required load vector "
+              "bitwidth" +
+                  std::to_string(vecBits));
+    }
+    // Compute the blocked -> shared linear layout to check preconditions
+    auto shape = srcTy.getShape();
+    LinearLayout srcLayout =
+        triton::gpu::toLinearLayout(shape, srcTy.getEncoding());
+    LinearLayout sharedLayout =
+        triton::gpu::toLinearLayout(shape, dstTy.getEncoding());
+    LinearLayout srcToSharedLayout = srcLayout.invertAndCompose(sharedLayout);
+
+    unsigned threadsPerWarp = lookupThreadsPerWarp(rewriter);
+    if (!hasSwizzling && !LLVM::AMD::canCoalesceWriteIntoSharedMemory(
+                             rewriter, srcToSharedLayout, threadsPerWarp)) {
+      return rewriter.notifyMatchFailure(
+          op, "does not write coalesced into LDS and is not swizzled");
+    }
+
+    if (hasSwizzling && !LLVM::AMD::doesSwizzleInsideWarp(
+                            rewriter, srcToSharedLayout, threadsPerWarp)) {
+      return rewriter.notifyMatchFailure(op,
+                                         "does swizzle across warp boundaries");
+    }
+    return success();
+  }
+
+  // Determine the vector size per load and collect the shared addresses. This
+  // will only emit the address calculation and not the actual loads.
+  // For swizzled loads we get the non swizzled/coalesced shared addresses
+  // from a temporary non swizzled layout. Those addresses will be used as the
+  // store addresses. Additionally, we compute the swizzled shared memory
+  // addresses which will be used to compute which lane holds the global ptr
+  // to the coalesced address
+  void emitSharedAddresses(RewriterBase &rewriter, Operation *op,
+                           RankedTensorType srcTy, MemDescType dstTy,
+                           bool hasSwizzling, Type resElemTy, Value llDst,
+                           SmallVector<Value> &coalescedShmemAddr,
+                           SmallVector<Value> &swizzledShmemAddr,
+                           VectorType &vecTy) const {
+    auto emitSharedAddresses = [&](MemDescType dstTy,
+                                   SmallVector<Value> &shmemAddrs,
+                                   VectorType &vecTy) {
+      auto loc = op->getLoc();
+      auto smemObj = mlir::LLVM::getSharedMemoryObjectFromStruct(
+          loc, llDst, resElemTy, rewriter);
+      bool ok = emitTransferBetweenRegistersAndShared(
+          srcTy, dstTy, resElemTy, {}, smemObj, loc, rewriter, targetInfo,
+          [&](VectorType vecTy_, Value shmemAddr) {
+            vecTy = vecTy_;
+            shmemAddrs.push_back(shmemAddr);
+          });
+      assert(ok);
+    };
+
+    if (!hasSwizzling) {
+      emitSharedAddresses(dstTy, coalescedShmemAddr, vecTy);
+    } else {
+      emitSharedAddresses(dstTy, swizzledShmemAddr, vecTy);
+      // Create non swizzled/coalesced encoding
+      auto dstEnc = cast<SwizzledSharedEncodingAttr>(dstTy.getEncoding());
+      auto flatSharedEnc = SwizzledSharedEncodingAttr::get(
+          op->getContext(), dstEnc.getVec(), 1, 1, dstEnc.getOrder(),
+          dstEnc.getCTALayout());
+      auto flatDstTy =
+          MemDescType::get(dstTy.getShape(), dstTy.getElementType(),
+                           flatSharedEnc, dstTy.getMemorySpace());
+      VectorType coalescedVecTy;
+      emitSharedAddresses(flatDstTy, coalescedShmemAddr, coalescedVecTy);
+      assert(coalescedVecTy == vecTy);
+    }
+  }
+
+  // Compute the laneOffset based on the difference in elements between
+  // the two shmem addresses. laneOffset will be negative for half the
+  // lanes because a smaller laneId might hold our global_ptr.
+  Value emitSelectLane(RewriterBase &rewriter, TritonLLVMOpBuilder &b,
+                       Location loc, Value coalescedShmem, Value swizzledShmem,
+                       Value vecBytes) const {
+    auto coalescedAddr = b.ptrtoint(i64_ty, coalescedShmem);
+    auto swizzledAddr = b.ptrtoint(i64_ty, swizzledShmem);
+    auto diff = b.trunc(i32_ty, b.sub(swizzledAddr, coalescedAddr));
+    Value laneOffset = b.sdiv(diff, vecBytes);
+    // selectLane will always stay inside the warp [0,
+    // threadsPerWarp) because we only swizzle inside a warp
+    Value selectLane = b.add(getLaneId(rewriter, loc), laneOffset);
+    return selectLane;
+  }
+
+  // Swizzle the mask (1bit) based on selectLane via ballot
+  Value shuffleMask(RewriterBase &rewriter, TritonLLVMOpBuilder &b,
+                    Location loc, const TargetInfoBase &targetInfo,
+                    Value selectLane, Value mask) const {
+    auto warpMask =
+        targetInfo.ballot(rewriter, loc, rewriter.getI64Type(), mask);
+    // Extract the selectLane bit
+    auto bitMask = b.lshr(warpMask, b.zext(rewriter.getI64Type(), selectLane));
+    auto newMask = b.trunc(i1_ty, bitMask);
+    return newMask;
+  }
+};
+
 struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp>,
                           public LoadStoreConversionBase {
   using ConvertOpToLLVMPattern<triton::LoadOp>::ConvertOpToLLVMPattern;
@@ -371,13 +499,13 @@ struct BufferLoadOpConversion
 
 struct BufferLoadToLocalOpConversion
     : public ConvertOpToLLVMPattern<triton::amdgpu::BufferLoadToLocalOp>,
-      public LoadStoreConversionBase {
+      public DirectToLdsLoadConversionBase {
   BufferLoadToLocalOpConversion(LLVMTypeConverter &converter,
                                 const AMD::TargetInfo &targetInfo,
                                 ModuleAxisInfoAnalysis &axisAnalysisPass,
                                 PatternBenefit benefit)
       : ConvertOpToLLVMPattern(converter, benefit),
-        LoadStoreConversionBase(targetInfo, axisAnalysisPass) {}
+        DirectToLdsLoadConversionBase(targetInfo, axisAnalysisPass) {}
 
   LogicalResult
   matchAndRewrite(triton::amdgpu::BufferLoadToLocalOp op, OpAdaptor adaptor,
@@ -423,97 +551,29 @@ struct BufferLoadToLocalOpConversion
     auto dstTy = op.getDest().getType();
     auto sharedEnc = cast<SwizzledSharedEncodingAttr>(dstTy.getEncoding());
 
-    // buffer_load into LDS does not support per lane shared offsets. We need to
-    // ensure that we write coalesced into shared memory.
-    //
-    // For *non* swizzled shared encodings we check if they result in
-    // coalesced writes and can then lower them directly to the intrinsics.
-    //
-    // For swizzled shared encodings we need to transfer the swizzling to the
-    // source pointers. For now this is done by swizzling the pointers between
-    // the lane of a warp via permute. This only works if the swizzle pattern
-    // does not exchange elements between warps which holds for all our swizzle
-    // patterns. There is still a check performed to not silently produce wrong
-    // results if we invalidate the condition in the future
-
     bool hasSwizzling = sharedEnc.getMaxPhase() != 1;
-
-    // Compute the blocked -> shared linear layout to check preconditions
-    auto shape = ptrType.getShape();
-    LinearLayout srcLayout =
-        triton::gpu::toLinearLayout(shape, ptrType.getEncoding());
-    LinearLayout sharedLayout =
-        triton::gpu::toLinearLayout(shape, dstTy.getEncoding());
-    LinearLayout srcToSharedLayout = srcLayout.invertAndCompose(sharedLayout);
-
-    unsigned threadsPerWarp = lookupThreadsPerWarp(rewriter);
-    if (!hasSwizzling && !LLVM::AMD::canCoalesceWriteIntoSharedMemory(
-                             rewriter, srcToSharedLayout, threadsPerWarp)) {
-      return rewriter.notifyMatchFailure(
-          op, "does not write coalesced into LDS and is not swizzled");
-    }
-
-    if (hasSwizzling && !LLVM::AMD::doesSwizzleInsideWarp(
-                            rewriter, srcToSharedLayout, threadsPerWarp)) {
-      return rewriter.notifyMatchFailure(op,
-                                         "does swizzle across warp boundaries");
-    }
-
     auto resElemTy = getTypeConverter()->convertType(dstTy.getElementType());
-    auto smemObj = mlir::LLVM::getSharedMemoryObjectFromStruct(
-        loc, llDst, resElemTy, rewriter);
 
-    auto emitSharedAddresses = [&](RankedTensorType srcTy, MemDescType dstTy,
-                                   SmallVector<Value> &shmemAddrs,
-                                   VectorType &vecTy) {
-      bool ok = emitTransferBetweenRegistersAndShared(
-          ptrType, dstTy, resElemTy, {}, smemObj, loc, rewriter, targetInfo,
-          [&](VectorType vecTy_, Value shmemAddr) {
-            vecTy = vecTy_;
-            shmemAddrs.push_back(shmemAddr);
-          });
-      assert(ok);
-    };
-
-    // Determine the vector size per load and collect the shared addresses. This
-    // will only emit the address calculation and not the actual loads.
-    // For swizzled loads we get the non swizzled/coalesced shared addresses
-    // from a temporary non swizzled layout. Those addresses will be used as the
-    // store addresses. Additionally, we compute the swizzled shared memory
-    // addresses which will be used to compute which lane holds the global ptr
-    // to the coalesced address
     VectorType vecTy;
+    // Will hold the coalesced shared addresses we need to store into
     SmallVector<Value> coalescedShmemAddr;
+    // If the shared encoding is swizzled we will compute the swizzled shared
+    // addresses to apply the reverse swizzling to the source pointers
     SmallVector<Value> swizzledShmemAddr;
-
-    if (!hasSwizzling) {
-      emitSharedAddresses(ptrType, dstTy, coalescedShmemAddr, vecTy);
-    } else {
-      emitSharedAddresses(ptrType, dstTy, swizzledShmemAddr, vecTy);
-      // Create non swizzled/coalesced encoding
-      auto dstEnc = cast<SwizzledSharedEncodingAttr>(dstTy.getEncoding());
-      auto flatSharedEnc = SwizzledSharedEncodingAttr::get(
-          getContext(), dstEnc.getVec(), 1, 1, dstEnc.getOrder(),
-          dstEnc.getCTALayout());
-      auto flatDstTy =
-          MemDescType::get(dstTy.getShape(), dstTy.getElementType(),
-                           flatSharedEnc, dstTy.getMemorySpace());
-      VectorType coalescedVecTy;
-      emitSharedAddresses(ptrType, flatDstTy, coalescedShmemAddr,
-                          coalescedVecTy);
-      assert(coalescedVecTy == vecTy);
-    }
+    emitSharedAddresses(rewriter, op, ptrType, dstTy, hasSwizzling, resElemTy,
+                        llDst, coalescedShmemAddr, swizzledShmemAddr, vecTy);
     assert(vecTy.getNumElements() == vec);
 
-    int vecBits = vecTy.getNumElements() * vecTy.getElementTypeBitWidth();
-    if (!targetInfo.supportsDirectToLdsLoadBitWidth(vecBits)) {
-      return rewriter.notifyMatchFailure(
-          op, "Buffer load to local does not support the required load vector "
-              "bitwidth" +
-                  std::to_string(vecBits));
+    // Verify that we can use direct to lds based on the src and shared encoding
+    // and possible vector size
+    if (auto res = verifyDirectToLdsSupport(rewriter, op, ptrType, dstTy, vecTy,
+                                            hasSwizzling);
+        res.failed()) {
+      return res;
     }
 
-    int vecBytes = vecBits / 8;
+    int vecBytes =
+        (vecTy.getNumElements() * vecTy.getElementTypeBitWidth()) / 8;
     assert(llvm::isPowerOf2_32(vecBytes));
     Value vecBytesVal = b.i32_val(vecBytes);
 
@@ -527,28 +587,13 @@ struct BufferLoadToLocalOpConversion
       Value pred = mask ? maskElems[srcIdx] : b.true_val();
 
       if (hasSwizzling) {
-        // Compute the laneOffset based on the difference in elements between
-        // the two shmem addresses. laneOffset will be negative for half the
-        // lanes because a smaller laneId might hold our global_ptr.
-        auto coalescedAddr = b.ptrtoint(i64_ty, coalescedShmemAddr[i]);
-        auto swizzledAddr = b.ptrtoint(i64_ty, swizzledShmemAddr[i]);
-        auto diff = b.trunc(i32_ty, b.sub(swizzledAddr, coalescedAddr));
-        Value laneOffset = b.sdiv(diff, vecBytesVal);
-        // selectLane will always stay inside the warp [0,
-        // threadsPerWarp) because we only swizzle inside a warp
-        Value selectLane = b.add(getLaneId(rewriter, loc), laneOffset);
-
+        // Apply swizzling to the src offsets
+        Value selectLane =
+            emitSelectLane(rewriter, b, loc, coalescedShmemAddr[i],
+                           swizzledShmemAddr[i], vecBytesVal);
         offsetIn = targetInfo.shuffleIdx(rewriter, loc, offsetIn, selectLane);
-
         if (mask) {
-          // To swizzle the mask we can use ballot and then select the bit based
-          // on the lane id
-          auto warpMask =
-              targetInfo.ballot(rewriter, loc, rewriter.getI64Type(), pred);
-          // Extract the selectLane bit
-          auto bitMask =
-              b.lshr(warpMask, b.zext(rewriter.getI64Type(), selectLane));
-          pred = b.trunc(i1_ty, bitMask);
+          pred = shuffleMask(rewriter, b, loc, targetInfo, selectLane, pred);
         }
       }
 
@@ -574,13 +619,13 @@ struct BufferLoadToLocalOpConversion
 
 struct AsyncCopyGlobalToLocalOpConversion
     : public ConvertOpToLLVMPattern<triton::gpu::AsyncCopyGlobalToLocalOp>,
-      public LoadStoreConversionBase {
+      public DirectToLdsLoadConversionBase {
   AsyncCopyGlobalToLocalOpConversion(LLVMTypeConverter &converter,
                                      const AMD::TargetInfo &targetInfo,
                                      ModuleAxisInfoAnalysis &axisAnalysisPass,
                                      PatternBenefit benefit)
       : ConvertOpToLLVMPattern(converter, benefit),
-        LoadStoreConversionBase(targetInfo, axisAnalysisPass) {}
+        DirectToLdsLoadConversionBase(targetInfo, axisAnalysisPass) {}
 
   LogicalResult
   matchAndRewrite(triton::gpu::AsyncCopyGlobalToLocalOp op, OpAdaptor adaptor,
@@ -603,12 +648,8 @@ struct AsyncCopyGlobalToLocalOpConversion
     auto resElemTy = getTypeConverter()->convertType(dstTy.getElementType());
 
     Value llSrc = adaptor.getSrc();
-
     auto srcElems = unpackLLElements(loc, llSrc, rewriter);
-
     Value llDst = adaptor.getResult();
-    auto smemObj = mlir::LLVM::getSharedMemoryObjectFromStruct(
-        loc, llDst, resElemTy, rewriter);
 
     // We can load N elements at a time if:
     //  1. Every group of N source pointers are contiguous.  For example, if
@@ -616,97 +657,32 @@ struct AsyncCopyGlobalToLocalOpConversion
     //  2. The mask (if present) has "alignment" N, meaning that each group of N
     //     mask bits are the same.  For example if N=2, the mask must be
     //     [x, x, y, y, ...].
-    unsigned maxVec =
-        mlir::LLVM::AMD::getContiguity(op.getSrc(), axisAnalysisPass);
+    unsigned maxVec = getVectorSize(op.getSrc(), axisAnalysisPass);
     auto maskElements = getMaskElemsAndUpdateVeclen(
         rewriter, loc, adaptor.getMask(), op.getMask(), maxVec);
 
-    // global_load to LDS do not support per lane shared offsets. We need to
-    // ensure that we write coalesced into shared memory.
-    //
-    // For *non* swizzled shared encodings we check if they result in
-    // coalesced writes and can then lower them directly to the intrinsics.
-    //
-    // For swizzled shared encodings we need to transfer the swizzling to the
-    // source pointers. For now this is done by swizzling the pointers between
-    // the lane of a warp via permute. This only works if the swizzle pattern
-    // does not exchange elements between warps which holds for all our swizzle
-    // patterns. There is still a check performed to not silently produce wrong
-    // results if we invalidate the condition in the future
-
     bool hasSwizzling = sharedEnc.getMaxPhase() != 1;
 
-    // Compute the blocked -> shared linear layout to check preconditions
-    auto shape = srcTy.getShape();
-    LinearLayout srcLayout =
-        triton::gpu::toLinearLayout(shape, srcTy.getEncoding());
-    LinearLayout sharedLayout =
-        triton::gpu::toLinearLayout(shape, dstTy.getEncoding());
-    LinearLayout srcToSharedLayout = srcLayout.invertAndCompose(sharedLayout);
-
-    unsigned threadsPerWarp = lookupThreadsPerWarp(rewriter);
-    if (!hasSwizzling && !LLVM::AMD::canCoalesceWriteIntoSharedMemory(
-                             rewriter, srcToSharedLayout, threadsPerWarp)) {
-      return rewriter.notifyMatchFailure(
-          op, "does not write coalesced into LDS and is not swizzled");
-    }
-
-    if (hasSwizzling && !LLVM::AMD::doesSwizzleInsideWarp(
-                            rewriter, srcToSharedLayout, threadsPerWarp)) {
-      return rewriter.notifyMatchFailure(op,
-                                         "does swizzle across warp boundaries");
-    }
-
-    auto emitSharedAddresses = [&](MemDescType dstTy,
-                                   SmallVector<Value> &shmemAddrs,
-                                   VectorType &vecTy) {
-      bool ok = emitTransferBetweenRegistersAndShared(
-          srcTy, dstTy, resElemTy, {}, smemObj, loc, rewriter, targetInfo,
-          [&](VectorType vecTy_, Value shmemAddr) {
-            vecTy = vecTy_;
-            shmemAddrs.push_back(shmemAddr);
-          });
-      assert(ok);
-    };
-
-    // Determine the vector size per load and collect the shared addresses. This
-    // will only emit the address calculation and not the actual loads.
-    // For swizzled loads we get the non swizzled/coalesced shared addresses
-    // from a temporary non swizzled layout. Those addresses will be used as the
-    // store addresses. Additionally, we compute the swizzled shared memory
-    // addresses which will be used to compute which lane holds the global ptr
-    // to the coalesced address
     VectorType vecTy;
+    // Will hold the coalesced shared addresses we need to store into
     SmallVector<Value> coalescedShmemAddr;
+    // If the shared encoding is swizzled we will compute the swizzled shared
+    // addresses to apply the reverse swizzling to the source pointers
     SmallVector<Value> swizzledShmemAddr;
-
-    if (!hasSwizzling) {
-      emitSharedAddresses(dstTy, coalescedShmemAddr, vecTy);
-    } else {
-      emitSharedAddresses(dstTy, swizzledShmemAddr, vecTy);
-      // Create non swizzled/coalesced encoding
-      auto dstEnc = cast<SwizzledSharedEncodingAttr>(dstTy.getEncoding());
-      auto flatSharedEnc = SwizzledSharedEncodingAttr::get(
-          getContext(), dstEnc.getVec(), 1, 1, dstEnc.getOrder(),
-          dstEnc.getCTALayout());
-      auto flatDstTy =
-          MemDescType::get(dstTy.getShape(), dstTy.getElementType(),
-                           flatSharedEnc, dstTy.getMemorySpace());
-      VectorType coalescedVecTy;
-      emitSharedAddresses(flatDstTy, coalescedShmemAddr, coalescedVecTy);
-      assert(coalescedVecTy == vecTy);
-    }
+    emitSharedAddresses(rewriter, op, srcTy, dstTy, hasSwizzling, resElemTy,
+                        llDst, coalescedShmemAddr, swizzledShmemAddr, vecTy);
     assert(vecTy.getNumElements() == maxVec);
 
-    int vecBits = vecTy.getNumElements() * vecTy.getElementTypeBitWidth();
-    if (!targetInfo.supportsDirectToLdsLoadBitWidth(vecBits)) {
-      return rewriter.notifyMatchFailure(
-          op, "Buffer load to local does not support the required load vector "
-              "bitwidth" +
-                  std::to_string(vecBits));
+    // Verify that we can use direct to lds based on the src and shared encoding
+    // and possible vector size
+    if (auto res = verifyDirectToLdsSupport(rewriter, op, srcTy, dstTy, vecTy,
+                                            hasSwizzling);
+        res.failed()) {
+      return res;
     }
 
-    int vecBytes = vecBits / 8;
+    int vecBytes =
+        (vecTy.getNumElements() * vecTy.getElementTypeBitWidth()) / 8;
     assert(llvm::isPowerOf2_32(vecBytes));
     Value vecBytesVal = b.i32_val(vecBytes);
 
@@ -736,28 +712,13 @@ struct AsyncCopyGlobalToLocalOpConversion
       pred = b.true_val();
 
       if (hasSwizzling) {
-        // Compute the laneOffset based on the difference in elements between
-        // the two shmem addresses. laneOffset will be negative for half the
-        // lanes because a smaller laneId might hold our global_ptr.
-        auto coalescedAddr = b.ptrtoint(i64_ty, coalescedShmemAddr[i]);
-        auto swizzledAddr = b.ptrtoint(i64_ty, swizzledShmemAddr[i]);
-        auto diff = b.trunc(i32_ty, b.sub(swizzledAddr, coalescedAddr));
-        Value laneOffset = b.sdiv(diff, vecBytesVal);
-        // selectLane will always stay inside the warp [0,
-        // threadsPerWarp) because we only swizzle inside a warp
-        Value selectLane = b.add(getLaneId(rewriter, loc), laneOffset);
-
+        // Apply swizzling to the src pointers
+        Value selectLane =
+            emitSelectLane(rewriter, b, loc, coalescedShmemAddr[i],
+                           swizzledShmemAddr[i], vecBytesVal);
         srcPtr = targetInfo.shuffleIdx(rewriter, loc, srcPtr, selectLane);
-
         if (!maskElements.empty()) {
-          // To swizzle the mask we can use ballot and then select the bit based
-          // on the lane id
-          auto warpMask =
-              targetInfo.ballot(rewriter, loc, rewriter.getI64Type(), pred);
-          // Extract the selectLane bit
-          auto bitMask =
-              b.lshr(warpMask, b.zext(rewriter.getI64Type(), selectLane));
-          pred = b.trunc(i1_ty, bitMask);
+          pred = shuffleMask(rewriter, b, loc, targetInfo, selectLane, pred);
         }
       }
 
