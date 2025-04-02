@@ -189,7 +189,7 @@ struct DirectToLdsLoadConversionBase : public LoadStoreConversionBase {
       ModuleAxisInfoAnalysis &axisAnalysisPass)
       : LoadStoreConversionBase(targetInfo, axisAnalysisPass) {}
 
-  // direct to lds lods do not support per lane shared offsets. We need to
+  // direct to lds loads do not support per lane shared offsets. We need to
   // ensure that we write coalesced into shared memory. This means we cannot
   // exceed the supported load width because splitting them would cause strided
   // (non coalesced) writes. Additionally:
@@ -201,16 +201,15 @@ struct DirectToLdsLoadConversionBase : public LoadStoreConversionBase {
   //      pattern does not exchange elements between warps which holds for all
   //      our swizzle patterns. There is still a check performed to not silently
   //      produce wrong results if we invalidate the condition in the future
-  LogicalResult verifyDirectToLdsSupport(RewriterBase &rewriter, Operation *op,
-                                         RankedTensorType srcTy,
-                                         MemDescType dstTy, VectorType vecTy,
-                                         bool hasSwizzling) const {
-    int vecBits = vecTy.getNumElements() * vecTy.getElementTypeBitWidth();
+  LogicalResult canWriteCoalesced(RewriterBase &rewriter, Operation *op,
+                                  RankedTensorType srcTy, MemDescType dstTy,
+                                  unsigned vectorSize,
+                                  bool hasSwizzling) const {
+
+    int vecBits = vectorSize * dstTy.getElementTypeBitWidth();
     if (!targetInfo.supportsDirectToLdsLoadBitWidth(vecBits)) {
-      return rewriter.notifyMatchFailure(
-          op, "direct to lds does not support the required load vector "
-              "bitwidth" +
-                  std::to_string(vecBits));
+      LDBG(op << " results in unsupported load bitwidth: " << vecBits);
+      return failure();
     }
     // Compute the blocked -> shared linear layout to check preconditions
     auto shape = srcTy.getShape();
@@ -223,14 +222,14 @@ struct DirectToLdsLoadConversionBase : public LoadStoreConversionBase {
     unsigned threadsPerWarp = lookupThreadsPerWarp(rewriter);
     if (!hasSwizzling && !LLVM::AMD::canCoalesceWriteIntoSharedMemory(
                              rewriter, srcToSharedLayout, threadsPerWarp)) {
-      return rewriter.notifyMatchFailure(
-          op, "does not write coalesced into LDS and is not swizzled");
+      LDBG(op << " does not write coalesced into LDS and is not swizzled");
+      return failure();
     }
 
     if (hasSwizzling && !LLVM::AMD::doesSwizzleInsideWarp(
                             rewriter, srcToSharedLayout, threadsPerWarp)) {
-      return rewriter.notifyMatchFailure(op,
-                                         "does swizzle across warp boundaries");
+      LDBG(op << " does swizzle across warp boundaries");
+      return failure();
     }
     return success();
   }
@@ -281,20 +280,21 @@ struct DirectToLdsLoadConversionBase : public LoadStoreConversionBase {
     }
   }
 
-  // Compute the laneOffset based on the difference in elements between
-  // the two shmem addresses. laneOffset will be negative for half the
-  // lanes because a smaller laneId might hold our global_ptr.
-  Value emitSelectLane(RewriterBase &rewriter, TritonLLVMOpBuilder &b,
-                       Location loc, Value coalescedShmem, Value swizzledShmem,
-                       Value vecBytes) const {
+  // Emits the computation to get the lane index which holds the source
+  // pointers/offsets we need to store to shared memory
+  Value emitSwizzledLaneIndex(RewriterBase &rewriter, TritonLLVMOpBuilder &b,
+                              Location loc, Value coalescedShmem,
+                              Value swizzledShmem, Value vecBytes) const {
+    // Compute the laneOffset based on the difference in elements between
+    // the two shmem addresses. laneOffset will be negative for half the
+    // lanes because a smaller laneId might hold our global_ptr.
     auto coalescedAddr = b.ptrtoint(i64_ty, coalescedShmem);
     auto swizzledAddr = b.ptrtoint(i64_ty, swizzledShmem);
     auto diff = b.trunc(i32_ty, b.sub(swizzledAddr, coalescedAddr));
     Value laneOffset = b.sdiv(diff, vecBytes);
-    // selectLane will always stay inside the warp [0,
+    // laneId + laneOffset will always stay inside the warp [0,
     // threadsPerWarp) because we only swizzle inside a warp
-    Value selectLane = b.add(getLaneId(rewriter, loc), laneOffset);
-    return selectLane;
+    return b.add(getLaneId(rewriter, loc), laneOffset);
   }
 
   // Swizzle the mask (1bit) based on selectLane via ballot
@@ -305,8 +305,7 @@ struct DirectToLdsLoadConversionBase : public LoadStoreConversionBase {
         targetInfo.ballot(rewriter, loc, rewriter.getI64Type(), mask);
     // Extract the selectLane bit
     auto bitMask = b.lshr(warpMask, b.zext(rewriter.getI64Type(), selectLane));
-    auto newMask = b.trunc(i1_ty, bitMask);
-    return newMask;
+    return b.trunc(i1_ty, bitMask);
   }
 };
 
@@ -550,27 +549,23 @@ struct BufferLoadToLocalOpConversion
 
     auto dstTy = op.getDest().getType();
     auto sharedEnc = cast<SwizzledSharedEncodingAttr>(dstTy.getEncoding());
+    auto resElemTy = getTypeConverter()->convertType(dstTy.getElementType());
 
     bool hasSwizzling = sharedEnc.getMaxPhase() != 1;
-    auto resElemTy = getTypeConverter()->convertType(dstTy.getElementType());
+    if (failed(canWriteCoalesced(rewriter, op, ptrType, dstTy, vec,
+                                 hasSwizzling))) {
+      return failure();
+    }
 
     VectorType vecTy;
     // Will hold the coalesced shared addresses we need to store into
     SmallVector<Value> coalescedShmemAddr;
     // If the shared encoding is swizzled we will compute the swizzled shared
-    // addresses to apply the reverse swizzling to the source pointers
+    // addresses to apply the reverse swizzling to the source offsets
     SmallVector<Value> swizzledShmemAddr;
     emitSharedAddresses(rewriter, op, ptrType, dstTy, hasSwizzling, resElemTy,
                         llDst, coalescedShmemAddr, swizzledShmemAddr, vecTy);
     assert(vecTy.getNumElements() == vec);
-
-    // Verify that we can use direct to lds based on the src and shared encoding
-    // and possible vector size
-    if (auto res = verifyDirectToLdsSupport(rewriter, op, ptrType, dstTy, vecTy,
-                                            hasSwizzling);
-        res.failed()) {
-      return res;
-    }
 
     int vecBytes =
         (vecTy.getNumElements() * vecTy.getElementTypeBitWidth()) / 8;
@@ -588,12 +583,14 @@ struct BufferLoadToLocalOpConversion
 
       if (hasSwizzling) {
         // Apply swizzling to the src offsets
-        Value selectLane =
-            emitSelectLane(rewriter, b, loc, coalescedShmemAddr[i],
-                           swizzledShmemAddr[i], vecBytesVal);
-        offsetIn = targetInfo.shuffleIdx(rewriter, loc, offsetIn, selectLane);
+        Value swizzledLaneId =
+            emitSwizzledLaneIndex(rewriter, b, loc, coalescedShmemAddr[i],
+                                  swizzledShmemAddr[i], vecBytesVal);
+        offsetIn =
+            targetInfo.shuffleIdx(rewriter, loc, offsetIn, swizzledLaneId);
         if (mask) {
-          pred = shuffleMask(rewriter, b, loc, targetInfo, selectLane, pred);
+          pred =
+              shuffleMask(rewriter, b, loc, targetInfo, swizzledLaneId, pred);
         }
       }
 
@@ -662,6 +659,10 @@ struct AsyncCopyGlobalToLocalOpConversion
         rewriter, loc, adaptor.getMask(), op.getMask(), maxVec);
 
     bool hasSwizzling = sharedEnc.getMaxPhase() != 1;
+    if (failed(canWriteCoalesced(rewriter, op, srcTy, dstTy, maxVec,
+                                 hasSwizzling))) {
+      return failure();
+    }
 
     VectorType vecTy;
     // Will hold the coalesced shared addresses we need to store into
@@ -672,14 +673,6 @@ struct AsyncCopyGlobalToLocalOpConversion
     emitSharedAddresses(rewriter, op, srcTy, dstTy, hasSwizzling, resElemTy,
                         llDst, coalescedShmemAddr, swizzledShmemAddr, vecTy);
     assert(vecTy.getNumElements() == maxVec);
-
-    // Verify that we can use direct to lds based on the src and shared encoding
-    // and possible vector size
-    if (auto res = verifyDirectToLdsSupport(rewriter, op, srcTy, dstTy, vecTy,
-                                            hasSwizzling);
-        res.failed()) {
-      return res;
-    }
 
     int vecBytes =
         (vecTy.getNumElements() * vecTy.getElementTypeBitWidth()) / 8;
@@ -709,16 +702,16 @@ struct AsyncCopyGlobalToLocalOpConversion
       auto srcIdx = i * maxVec;
       Value srcPtr = srcElems[srcIdx];
       Value pred = maskElements.empty() ? b.true_val() : maskElems[srcIdx];
-      pred = b.true_val();
 
       if (hasSwizzling) {
         // Apply swizzling to the src pointers
-        Value selectLane =
-            emitSelectLane(rewriter, b, loc, coalescedShmemAddr[i],
-                           swizzledShmemAddr[i], vecBytesVal);
-        srcPtr = targetInfo.shuffleIdx(rewriter, loc, srcPtr, selectLane);
+        Value swizzledLaneId =
+            emitSwizzledLaneIndex(rewriter, b, loc, coalescedShmemAddr[i],
+                                  swizzledShmemAddr[i], vecBytesVal);
+        srcPtr = targetInfo.shuffleIdx(rewriter, loc, srcPtr, swizzledLaneId);
         if (!maskElements.empty()) {
-          pred = shuffleMask(rewriter, b, loc, targetInfo, selectLane, pred);
+          pred =
+              shuffleMask(rewriter, b, loc, targetInfo, swizzledLaneId, pred);
         }
       }
 
