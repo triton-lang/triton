@@ -28,10 +28,12 @@
 #include "mlir/Support/LogicalResult.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 #include "mlir/Transforms/Passes.h"
+#include "mlir/Transforms/RegionUtils.h"
 #include "nvidia/include/Dialect/NVWS/IR/Dialect.h"
 #include "nvidia/include/Dialect/NVWS/Transforms/Passes.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "llvm/ADT/STLExtras.h"
+#include "llvm/ADT/SmallVectorExtras.h"
 #include "llvm/Support/LogicalResult.h"
 
 #include <memory>
@@ -52,34 +54,14 @@ using namespace triton::nvws;
 using namespace triton::gpu;
 
 class LowerWarpGroup : public OpRewritePattern<WarpGroupOp> {
-  void visitNestedOperands(Operation *op,
-                           function_ref<void(OpOperand &)> visitor) const {
-    op->walk([&](Operation *nestedOp) {
-      for (OpOperand &operand : nestedOp->getOpOperands()) {
-        if (operand.get().getParentBlock()->getParentOp()->isProperAncestor(op))
-          visitor(operand);
-      }
-    });
-  }
 
-  SmallVector<Value> iterateInputs(mlir::Block *block) const {
-    SmallVector<Value> captures;
-    for (Operation &op : *block) {
-      visitNestedOperands(&op, [&](OpOperand &operand) {
-        Value value = operand.get();
-        if (value.getParentBlock() != block)
-          captures.push_back(value);
-      });
-    }
-    return captures;
-  }
-
-  void populateBlock(PatternRewriter &rewriter, mlir::Block *input_block,
-                     mlir::Block *output_block, SmallVector<Value> &inputs,
-                     SmallVector<Value> &constants) const {
-
+  void populateRegion(PatternRewriter &rewriter, Region *inputRegion,
+                      Region *outputRegion, SmallVector<Value> &inputs,
+                      SmallVector<Value> &constants) const {
+    Block *output_block = &outputRegion->emplaceBlock();
     DenseMap<Value, Value> valueMap;
     rewriter.setInsertionPointToEnd(output_block);
+
     for (auto &value : inputs) {
       auto new_value =
           output_block->addArgument(value.getType(), value.getLoc());
@@ -92,43 +74,19 @@ class LowerWarpGroup : public OpRewritePattern<WarpGroupOp> {
       valueMap[value] = newConst->getResult(0);
     }
     auto retOp = rewriter.create<triton::gpu::WarpReturnOp>(
-        input_block->getParentOp()->getLoc(), ArrayRef<Type>(),
-        ArrayRef<Value>());
+        inputRegion->getLoc(), ArrayRef<Type>(), ArrayRef<Value>());
 
     for (auto &op : llvm::make_early_inc_range(
-             llvm::make_range(input_block->getOperations().begin(),
-                              input_block->getTerminator()->getIterator()))) {
+             inputRegion->getBlocks().front().without_terminator())) {
       op.moveBefore(retOp);
     }
 
-    auto traverseParentBlocks = [&](Operation *op) -> bool {
-      Block *currentBlock = op->getBlock();
-      while (currentBlock) {
-        // Check the current block
-        if (currentBlock == output_block)
-          return true;
-        // Get parent operation of this block
-        Operation *parentOp = currentBlock->getParentOp();
-        if (!parentOp)
-          break;
-        // Move up to parent block
-        currentBlock = parentOp->getBlock();
-      }
-      return false;
-    };
-
-    for (auto pair : valueMap) {
-      auto oldValue = pair.first;
-      auto newValue = pair.second;
-      rewriter.replaceUsesWithIf(oldValue, newValue, [&](OpOperand &operand) {
-        return traverseParentBlocks(operand.getOwner());
-      });
-    }
+    for (auto pair : valueMap)
+      replaceAllUsesInRegionWith(pair.first, pair.second, *outputRegion);
   }
 
   LogicalResult createTtgWSOp(Location loc, PatternRewriter &rewriter,
-                              Block *defaultPartition,
-                              ArrayRef<Block *> partitions,
+                              Region *defaultPartition, RegionRange &partitions,
                               ArrayRef<int> numWarps,
                               ArrayRef<int> warpGroupStartIds) const {
     if (partitions.size() != numWarps.size())
@@ -137,24 +95,21 @@ class LowerWarpGroup : public OpRewritePattern<WarpGroupOp> {
     if (partitions.size() != warpGroupStartIds.size())
       return failure(
           "mismatched number of warp groups and number of warp start ids");
-    DenseSet<Value> uniqueInputs;
-    DenseSet<Value> uniqueConstants;
-    for (auto *block : partitions) {
-      for (Value &input : iterateInputs(block)) {
-        if (!isa<BlockArgument>(input) &&
-            isa<arith::ConstantOp>(input.getDefiningOp())) {
-          uniqueConstants.insert(input);
-        } else {
-          uniqueInputs.insert(input);
-        }
-      }
-    }
+
+    SetVector<Value> captures;
+    for (auto partition : partitions)
+      mlir::getUsedValuesDefinedAbove(*partition, captures);
+
     SmallVector<Value> inputs;
     SmallVector<Value> constants;
-    for (auto value : uniqueInputs)
-      inputs.push_back(value);
-    for (auto value : uniqueConstants)
-      constants.push_back(value);
+    for (Value capture : captures) {
+      if (!isa<BlockArgument>(capture) &&
+          isa<arith::ConstantOp>(capture.getDefiningOp())) {
+        constants.push_back(capture);
+      } else {
+        inputs.push_back(capture);
+      }
+    }
 
     auto wsOp = rewriter.create<WarpSpecializeOp>(loc, TypeRange(), inputs);
 
@@ -165,10 +120,10 @@ class LowerWarpGroup : public OpRewritePattern<WarpGroupOp> {
     rewriter.setInsertionPointToEnd(&defaultBlock);
     auto yieldOp =
         rewriter.create<WarpYieldOp>(loc, TypeRange(), ArrayRef<Value>());
+
     if (defaultPartition) {
-      for (auto &op : llvm::make_early_inc_range(llvm::make_range(
-               defaultPartition->getOperations().begin(),
-               defaultPartition->getTerminator()->getIterator()))) {
+      for (auto &op : llvm::make_early_inc_range(
+               defaultPartition->getBlocks().front().without_terminator())) {
         op.moveBefore(yieldOp);
       }
     }
@@ -178,10 +133,10 @@ class LowerWarpGroup : public OpRewritePattern<WarpGroupOp> {
     auto wspOp =
         rewriter.create<WarpSpecializePartitionsOp>(loc, partitions.size());
     auto regions = wspOp.getPartitionRegions();
-    for (size_t i = 0, e = regions.size(); i < e; ++i) {
-      auto &block = regions[i].emplaceBlock();
-      populateBlock(rewriter, partitions[i], &block, inputs, constants);
-    }
+
+    for (auto [in, out] : zip(partitions, regions))
+      populateRegion(rewriter, in, &out, inputs, constants);
+
     return success();
   }
 
@@ -197,31 +152,26 @@ public:
         mlir::cast<mlir::IntegerAttr>(mod->getAttr("ttg.num-warps")).getInt();
 
     auto regions = warpGroupOp.getRegions();
-    Block *defaultBlock = nullptr;
+    Region *defaultRegion = nullptr;
     int startWarp = 0;
     auto numWarps = warpGroupOp.getNumWarps();
 
     if (numWarps[0] == globalNumWarps) {
-      defaultBlock = &regions.front()->getBlocks().front();
+      defaultRegion = regions.front();
       regions = regions.drop_front();
       startWarp = globalNumWarps;
       numWarps = numWarps.drop_front();
     }
 
-    auto result = createTtgWSOp(
-        loc, rewriter, defaultBlock,
-        llvm::map_to_vector(
-            regions,
-            [](Region *region) { return &region->getBlocks().front(); }),
-        numWarps, llvm::map_to_vector(numWarps, [&](int numWarps) {
-          int result = startWarp;
-          startWarp += numWarps;
-          return result;
-        }));
+    auto result =
+        createTtgWSOp(loc, rewriter, defaultRegion, regions, numWarps,
+                      llvm::map_to_vector(numWarps, [&](int numWarps) {
+                        int result = startWarp;
+                        startWarp += numWarps;
+                        return result;
+                      }));
     if (result.succeeded())
       rewriter.eraseOp(warpGroupOp);
-    else
-      assert(false);
 
     return result;
   }

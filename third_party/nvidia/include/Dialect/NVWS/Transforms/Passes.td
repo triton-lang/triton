@@ -25,10 +25,15 @@
 include "mlir/Pass/PassBase.td"
 
 def NVWSLowerWarpGroup : Pass<"nvws-lower-warp-group", "mlir::ModuleOp"> {
-  let summary = "convert aref-if to ttg.warp_specialize";
+  let summary = "Convert nvws.warp_group to ttg.warp_specialize.";
 
   let description = [{
     Convert nvws.warp_group to ttg.warp_specialize.
+
+    If the first group of nvws.warp_group matches the global
+    ttg.num_warps, it will be come the default region of ttg.warp_specialize.
+    If not, the ttg.warp_specialize default region will be empty, and all
+    warp groups will become isolated regions.
   }];
 
   let constructor = "mlir::createNVWSLowerWarpGroupPass()";
