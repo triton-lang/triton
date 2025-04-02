@@ -383,6 +383,8 @@ LogicalResult triton::gpu::specializeLoadMMADependencies(scf::ForOp &loop,
 
     // Acquire and get the accumulator result.
     b.setInsertionPoint(domOp);
+    if (isa<scf::IfOp>(domOp->getParentOp()))
+      b.setInsertionPoint(&domOp->getBlock()->front());
     Partition *userPartition = schedule.addPartition(numStages + numMmaStages);
     createInPartition<ttng::WaitBarrierOp>(b, *userPartition, curAccReadyBar,
                                            accPhase);

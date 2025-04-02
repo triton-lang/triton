@@ -101,7 +101,7 @@ TMemMessageTraits getTMemMessageFromAtom(const TMemAccessAtom &atom,
 // to avoid register pressure. This ensures the largest tmem message width is
 // used for the workload without inducing spills.
 int getTMemMessageNarrowingFactor(int workloadThreadRegs) {
-  const int allowedRegUsage = maxRegisters / 2;
+  const int allowedRegUsage = maxRegisters / 4;
   int narrowingFactor = 1;
   while (workloadThreadRegs > allowedRegUsage) {
     workloadThreadRegs /= 2;
