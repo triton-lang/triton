@@ -13,6 +13,29 @@
 
 namespace mlir::triton::nvws {
 
+LogicalResult ArefCreateOp::verify() {
+  auto rank = getResult().getType().getNumBatchAxes();
+  if (!rank)
+    return success();
+  for (size_t i = 0, e = *rank; i < e; i++) {
+    SmallVector<int> dims;
+    for (auto operand : getOperands()) {
+      auto type = operand.getType();
+      if (auto mType = dyn_cast<gpu::MemDescType>(type)) {
+        dims.push_back(mType.getShape()[i]);
+      } else if (auto rType = dyn_cast<RankedTensorType>(type)) {
+        dims.push_back(rType.getShape()[i]);
+      } else {
+        return emitError("Aref is sliced, but input type isn't supported.");
+      }
+      if (!llvm::all_equal(dims)) {
+        return emitError("Leading dims of sliced aref inputs don't match.");
+      }
+    }
+  }
+  return success();
+}
+
 template <typename T>
 static std::optional<Twine> verifySlice(T &origType, T &newType, size_t rank) {
   if (!origType || !newType)

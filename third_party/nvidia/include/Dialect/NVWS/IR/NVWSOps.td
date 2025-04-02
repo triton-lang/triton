@@ -40,7 +40,7 @@ class NVWS_Op<string mnemonic, list<Trait> traits = []> :
 
 def NVWS_ArefCreateOp : NVWS_Op<"aref.create", [
     RangedTypesMatchWith<"input types match Aref output type",
-                        "result", "operands", "::llvm::cast<ArefType>($_self).getBaseType()">]> {
+                        "result", "operands", "::llvm::cast<ArefType>($_self).getBaseType()">, Pure]> {
   let summary = "Create an asynchronous reference.";
   let description = [{
     Create an asynchronous reference.
@@ -56,6 +56,7 @@ def NVWS_ArefCreateOp : NVWS_Op<"aref.create", [
   let results = (outs NVWS_ArefType:$result);
 
   let assemblyFormat = [{$operands attr-dict `:` type($result)}];
+  let hasVerifier = 1;
 }
 
 def NVWS_ArefGetOp : NVWS_Op<"aref.get", []> {

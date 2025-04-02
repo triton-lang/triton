@@ -30,6 +30,8 @@ namespace mlir {
 
 std::unique_ptr<Pass> createNVWSLowerWarpGroupPass();
 
+std::unique_ptr<Pass> createNVWSLowerArefPass();
+
 /// Generate the code for registering passes.
 #define GEN_PASS_REGISTRATION
 #include "nvidia/include/Dialect/NVWS/Transforms/Passes.h.inc"
