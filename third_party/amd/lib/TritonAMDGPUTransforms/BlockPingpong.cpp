@@ -190,9 +190,7 @@ bool Pingponger::isPersistentGemm(size_t num_dots) {
     return false;
   bool seenIfSection = false;
   bool seenDot = false;
-  bool violatesPattern = false;
-  auto &&topLevelOps = forOp->getBody()->getOps<Operation *>();
-  for (auto &&op : topLevelOps) {
+  for (auto &&op : forOp.getBody()->getOperations()) {
     if (auto ifOp = dyn_cast<scf::IfOp>(op)) {
       if (seenIfSection) {
         // Violate our two if statement assumption.
@@ -719,8 +717,8 @@ void Pingponger::getDotPingponged() {
   auto gLoadIt = std::stable_partition(
       gLoadOps.begin(), gLoadOps.end(),
       [&dotGlobalLoads](tt::LoadOp op) { return dotGlobalLoads.contains(op); });
-  auto effectiveGlobalLoadCount =
-      estimateNonDotMemoryImpact<tt::LoadOp>(gLoadIt, gLoadOps.end(), tileSize);
+  auto effectiveGlobalLoadCount = estimateNonDotMemoryImpact<tt::LoadOp>(
+      gLoadIt, gLoadOps.end(), assumeNotTaken);
   gLoadOps.erase(gLoadIt, gLoadOps.end());
   effectiveGlobalLoadCount += gLoadOps.size();
   auto lLoadIt = std::stable_partition(lLoadOps.begin(), lLoadOps.end(),
@@ -728,7 +726,7 @@ void Pingponger::getDotPingponged() {
                                          return dotLocalLoads.contains(op);
                                        });
   auto effectiveLocalLoadCount = estimateNonDotMemoryImpact<ttg::LocalLoadOp>(
-      lLoadIt, lLoadOps.end(), tileSize);
+      lLoadIt, lLoadOps.end(), assumeNotTaken);
   lLoadOps.erase(lLoadIt, lLoadOps.end());
   effectiveLocalLoadCount += lLoadOps.size();
   auto lStoreIt =
@@ -737,7 +735,7 @@ void Pingponger::getDotPingponged() {
                               return dotLocalStores.contains(op);
                             });
   auto effectiveLocalStoreCount = estimateNonDotMemoryImpact<ttg::LocalStoreOp>(
-      lStoreIt, lStoreOps.end(), tileSize);
+      lStoreIt, lStoreOps.end(), assumeNotTaken);
   lStoreOps.erase(lStoreIt, lStoreOps.end());
   effectiveLocalStoreCount += lStoreOps.size();
   // All PingPong Scheduler assumes there are 2 movable global loads and 2
