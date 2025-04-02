@@ -431,18 +431,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
 
 // -----
 
-//CHECK-LABEL: pingpong_small_prologue_load
-//CHECK: ttg.local_load
-//CHECK: rocdl.s.setprio 1
-//CHECK: tt.load
-//CHECK: rocdl.sched.barrier
-//CHECK: ttg.local_load
-//CHECK: rocdl.s.setprio 0
-//CHECK: tt.load
-//CHECK: rocdl.sched.barrier
-//CHECK: rocdl.s.setprio 1
-//CHECK: tt.dot
-//CHECK: rocdl.s.setprio 0
+// CHECK-LABEL: pingpong_small_prologue_load
+// CHECK-NOT: setprio
 
 #blocked = #ttg.blocked<{sizePerThread = [8, 1], threadsPerWarp = [8, 8], warpsPerCTA = [1, 4], order = [0, 1]}>
 #blocked1 = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [8, 8], warpsPerCTA = [4, 1], order = [1, 0]}>
@@ -1402,9 +1392,9 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
       %32 = tt.load %31 : tensor<256x64x!tt.ptr<f16>, #blocked1>
       %33 = tt.addptr %arg8, %cst_0 : tensor<64x256x!tt.ptr<f16>, #blocked>, tensor<64x256xi32, #blocked>
       %34 = tt.load %33 : tensor<64x256x!tt.ptr<f16>, #blocked>
-      %35 = ttg.local_load %arg10 : !ttg.memdesc<256x64xf16, #shared, #ttg.shared_memory, mutable> -> tensor<256x64xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 8}>>
-      %36 = ttg.local_load %arg11 : !ttg.memdesc<64x256xf16, #shared1, #ttg.shared_memory, mutable> -> tensor<64x256xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>>
-      %37 = tt.dot %35, %36, %arg6 : tensor<256x64xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 8}>> * tensor<64x256xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>> -> tensor<256x256xf32, #mma>
+      %35 = ttg.local_load %arg10 : !ttg.memdesc<256x64xf16, #shared, #ttg.shared_memory, mutable> -> tensor<256x64xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 4}>>
+      %36 = ttg.local_load %arg11 : !ttg.memdesc<64x256xf16, #shared1, #ttg.shared_memory, mutable> -> tensor<64x256xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 4}>>
+      %37 = tt.dot %35, %36, %arg6 : tensor<256x64xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 4}>> * tensor<64x256xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 4}>> -> tensor<256x256xf32, #mma>
       %38 = arith.cmpi eq, %30, %c63_i32: i32
       %39 = scf.if %38 -> tensor<256x256xf32, #mma> {
         %40 = ttg.local_alloc  : () -> !ttg.memdesc<1x256x256xf32, #shared, #ttg.shared_memory, mutable>
