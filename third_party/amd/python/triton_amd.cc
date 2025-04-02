@@ -2,6 +2,7 @@
 #include "TritonAMDGPUToLLVM/Passes.h"
 #include "TritonAMDGPUToLLVM/TargetUtils.h"
 #include "TritonAMDGPUTransforms/Passes.h"
+#include "lld/Common/Driver.h"
 #include "mlir/Pass/PassManager.h"
 #include "mlir/Target/LLVMIR/Dialect/ROCDL/ROCDLToLLVMIRTranslation.h"
 #include "passes.h"
@@ -106,7 +107,34 @@ void addControlConstant(llvm::Module *module, const char *name,
   constant->setUnnamedAddr(GlobalVariable::UnnamedAddr::Local);
   constant->setVisibility(GlobalVariable::VisibilityTypes::ProtectedVisibility);
 }
+
 } // namespace
+
+namespace lld {
+// Just take the shortest codepath with global exception handling and no memory
+// cleanup on exit.
+int unsafeLldMain(llvm::ArrayRef<const char *> args,
+                  llvm::raw_ostream &stdoutOS, llvm::raw_ostream &stderrOS,
+                  llvm::ArrayRef<DriverDef> drivers, bool exitEarly);
+} // namespace lld
+
+LLD_HAS_DRIVER(elf)
+
+static std::optional<std::string> lldInvoke(const char *inPath,
+                                            const char *outPath) {
+  llvm::SmallVector<const char *> args{"ld.lld", "-shared", inPath, "-o",
+                                       outPath};
+  std::string errString;
+  llvm::raw_string_ostream errStream(errString);
+  int retCode =
+      lld::unsafeLldMain(args, llvm::outs(), errStream,
+                         {{lld::Gnu, &lld::elf::link}}, /*exitEarly=*/true);
+  if (retCode) {
+    errStream.flush();
+    return errString;
+  }
+  return {};
+}
 
 void init_triton_amd(py::module &&m) {
   m.doc() = "Python bindings to the AMD Triton backend";
@@ -302,4 +330,14 @@ void init_triton_amd(py::module &&m) {
       arg.addAttr(llvm::Attribute::InReg);
     }
   });
+
+  m.def("link_hsaco",
+        [](const std::string &inPath, const std::string &outPath) {
+          if (auto errString = lldInvoke(inPath.c_str(), outPath.c_str()))
+            throw std::runtime_error("LLD failed to link hsaco source " +
+                                     inPath + " into object file " + outPath +
+                                     " because " + errString.value());
+        });
+
+  m.def("llvm_version", []() { return LLVM_VERSION_STRING; });
 }
