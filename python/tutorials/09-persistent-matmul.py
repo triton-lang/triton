@@ -52,8 +52,6 @@ def _matmul_launch_metadata(grid, kernel, args):
     ret["name"] = f"{kernel.name} [M={M}, N={N}, K={K}]"
     if "c_ptr" in args:
         bytes_per_elem = args["c_ptr"].element_size()
-    elif "c_desc_ptr" in args:
-        bytes_per_elem = 2
     else:
         bytes_per_elem = 1 if args["FP8_OUTPUT"] else 2
     ret[f"flops{bytes_per_elem * 8}"] = 2. * M * N * K
