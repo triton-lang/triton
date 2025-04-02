@@ -1406,7 +1406,7 @@ static LinearLayout getUnswizzledLayout(triton::gpu::MemDescType type) {
 // and x offsets.
 static LogicalResult iterateGatherScatterIndices(
     Operation *op, ConversionPatternRewriter &rewriter,
-    const TypeConverter &typeConverter,
+    const TypeConverter &typeConverter, const NVIDIA::TargetInfo &targetInfo,
     mlir::TypedValue<RankedTensorType> xCoords,
     mlir::TypedValue<ttg::MemDescType> smem, Value smemObjValue,
     Value xOffsetsValue, Value yOffsetValue, Value pred,
@@ -1599,6 +1599,8 @@ static LogicalResult iterateGatherScatterIndices(
   pred = b.and_(pred,
                 b.icmp_eq(b.i32_val(0), b.and_(blockId, b.i32_val(blockMask))));
 
+  pred = b.and_(pred, LLVM::NVIDIA::createElectPredicate(loc, rewriter));
+
   // Okay now we have everything needed to codegen the gather.
   SmallVector<Value> xOffsets = unpackLLElements(loc, xOffsetsValue, rewriter);
   for (int instId : llvm::seq(instLayout.getInDimSize(kInst))) {
@@ -1621,26 +1623,39 @@ static LogicalResult iterateGatherScatterIndices(
                     {{kTileX, tileX}, {kTileY, tileY}}, "offset", kBlock);
 
     // Select the thread in the warp that has the right data.
-    Value curPred = b.and_(pred, b.icmp_eq(laneId, reqLaneId));
+    // Value curPred = b.and_(pred, b.icmp_eq(laneId, reqLaneId));
     auto curXOffsets = ArrayRef(xOffsets).slice(reqRegId, 4);
     Value curYOffset =
         b.add(yOffsetValue, b.mul(reqIter, b.i32_val(elemsPerMsg)));
     Value shMemPtr =
         b.gep(elemPtrTy, llvmElemTy, smemObj.getBase(), shMemOffset);
 
-    callback(curPred, shMemPtr, curYOffset, curXOffsets);
+    SmallVector<Value> xOffsetSelect;
+    for (Value offset : curXOffsets) {
+      xOffsetSelect.push_back(
+          targetInfo.shuffleIdx(rewriter, loc, offset, reqLaneId));
+    }
+
+    callback(pred, shMemPtr, curYOffset, xOffsetSelect);
   }
 
   return success();
 }
 
-struct AsyncTMAGatherOpConversion
+class AsyncTMAGatherOpConversion
     : public ConvertOpToLLVMPattern<triton::nvidia_gpu::AsyncTMAGatherOp> {
-  using ConvertOpToLLVMPattern::ConvertOpToLLVMPattern;
+public:
+  AsyncTMAGatherOpConversion(LLVMTypeConverter &converter,
+                             const NVIDIA::TargetInfo &targetInfo,
+                             PatternBenefit benefit)
+      : ConvertOpToLLVMPattern(converter, benefit), targetInfo(targetInfo) {}
 
   LogicalResult
   matchAndRewrite(triton::nvidia_gpu::AsyncTMAGatherOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override;
+
+private:
+  const NVIDIA::TargetInfo &targetInfo;
 };
 
 LogicalResult AsyncTMAGatherOpConversion::matchAndRewrite(
@@ -1681,22 +1696,29 @@ LogicalResult AsyncTMAGatherOpConversion::matchAndRewrite(
   };
 
   if (failed(iterateGatherScatterIndices(
-          op, rewriter, *getTypeConverter(), op.getXOffsets(), op.getResult(),
-          adaptor.getResult(), adaptor.getXOffsets(), adaptor.getYOffset(),
-          adaptor.getPred(), callback)))
+          op, rewriter, *getTypeConverter(), targetInfo, op.getXOffsets(),
+          op.getResult(), adaptor.getResult(), adaptor.getXOffsets(),
+          adaptor.getYOffset(), adaptor.getPred(), callback)))
     return failure();
 
   rewriter.eraseOp(op);
   return success();
 }
 
-struct AsyncTMAScatterOpConversion
+class AsyncTMAScatterOpConversion
     : public ConvertOpToLLVMPattern<triton::nvidia_gpu::AsyncTMAScatterOp> {
-  using ConvertOpToLLVMPattern::ConvertOpToLLVMPattern;
+public:
+  AsyncTMAScatterOpConversion(LLVMTypeConverter &converter,
+                              const NVIDIA::TargetInfo &targetInfo,
+                              PatternBenefit benefit)
+      : ConvertOpToLLVMPattern(converter, benefit), targetInfo(targetInfo) {}
 
   LogicalResult
   matchAndRewrite(triton::nvidia_gpu::AsyncTMAScatterOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override;
+
+private:
+  const NVIDIA::TargetInfo &targetInfo;
 };
 
 LogicalResult AsyncTMAScatterOpConversion::matchAndRewrite(
@@ -1732,8 +1754,9 @@ LogicalResult AsyncTMAScatterOpConversion::matchAndRewrite(
   };
 
   if (failed(iterateGatherScatterIndices(
-          op, rewriter, *getTypeConverter(), op.getXOffsets(), op.getSrc(),
-          adaptor.getSrc(), adaptor.getXOffsets(), adaptor.getYOffset(),
+          op, rewriter, *getTypeConverter(), targetInfo, op.getXOffsets(),
+          op.getSrc(), adaptor.getSrc(), adaptor.getXOffsets(),
+          adaptor.getYOffset(),
           /*pred=*/b.true_val(), callback)))
     return failure();
 
@@ -1806,11 +1829,11 @@ void mlir::triton::NVIDIA::populateLoadStoreOpToLLVMPatterns(
   patterns.add<AsyncCopyGlobalToLocalOpConversion, AtomicCASOpConversion,
                AtomicRMWOpConversion, LoadOpConversion, StoreOpConversion>(
       typeConverter, targetInfo, axisInfoAnalysis, benefit);
+  patterns.add<AsyncTMAGatherOpConversion, AsyncTMAScatterOpConversion>(
+      typeConverter, targetInfo, benefit);
   patterns.add<AsyncCommitGroupOpConversion>(typeConverter, benefit);
   patterns.add<AsyncWaitOpConversion>(typeConverter, benefit);
-  patterns
-      .add<AsyncTMACopyGlobalToLocalOpConversion,
-           AsyncTMACopyLocalToGlobalOpConversion, AsyncTMAGatherOpConversion,
-           AsyncTMAScatterOpConversion, TMAStoreWaitOpConversion>(typeConverter,
-                                                                  benefit);
+  patterns.add<AsyncTMACopyGlobalToLocalOpConversion,
+               AsyncTMACopyLocalToGlobalOpConversion, TMAStoreWaitOpConversion>(
+      typeConverter, benefit);
 }
