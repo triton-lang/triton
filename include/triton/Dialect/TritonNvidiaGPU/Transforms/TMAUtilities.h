@@ -81,8 +81,12 @@ updateEncodingForShape(Operation *op, gpu::SharedEncodingTrait encoding,
       return swizEnc;
 
     auto rank = tensorType.getRank();
-    SmallVector<unsigned> order(
-        swizEnc.getOrder().drop_front(swizEnc.getOrder().size() - rank));
+    auto oldOrder = swizEnc.getOrder();
+    assert(oldOrder.size() <= rank);
+    SmallVector<unsigned> order;
+    for (int i = 0; i + oldOrder.size() < rank; ++i)
+      order.push_back(rank - i - 1);
+    order.append(oldOrder.begin(), oldOrder.end());
     auto newCtaEnc = updateCTALayoutForShape(ctaLayout, tensorType.getShape());
     return gpu::SwizzledSharedEncodingAttr::get(
         ctx, swizEnc.getVec(), swizEnc.getPerPhase(), swizEnc.getMaxPhase(),
