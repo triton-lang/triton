@@ -28,7 +28,7 @@ from wheel.bdist_wheel import bdist_wheel
 
 import pybind11
 
-from build_helpers import get_base_dir, get_cmake_dir
+from python.build_helpers import get_base_dir, get_cmake_dir
 
 
 @dataclass
@@ -51,7 +51,7 @@ class BackendInstaller:
     def prepare(backend_name: str, backend_src_dir: str = None, is_external: bool = False):
         # Initialize submodule if there is one for in-tree backends.
         if not is_external:
-            root_dir = os.path.join(os.pardir, "third_party")
+            root_dir = "third_party"
             assert backend_name in os.listdir(
                 root_dir), f"{backend_name} is requested for install but not present in {root_dir}"
 
@@ -79,7 +79,7 @@ class BackendInstaller:
         for file in ["compiler.py", "driver.py"]:
             assert os.path.exists(os.path.join(backend_path, file)), f"${file} does not exist in ${backend_path}"
 
-        install_dir = os.path.join(os.path.dirname(__file__), "triton", "backends", backend_name)
+        install_dir = os.path.join(os.path.dirname(__file__), "python", "triton", "backends", backend_name)
         package_data = [f"{os.path.relpath(p, backend_path)}/*" for p, _, _, in os.walk(backend_path)]
 
         language_package_data = []
@@ -331,7 +331,7 @@ def download_and_copy(name, src_func, dst_path, variable, version, url_func):
     url = url_func(supported[system], arch, version)
     src_path = src_func(supported[system], arch, version)
     tmp_path = os.path.join(triton_cache_path, "nvidia", name)  # path to cache the download
-    dst_path = os.path.join(base_dir, os.pardir, "third_party", "nvidia", "backend", dst_path)  # final binary path
+    dst_path = os.path.join(base_dir, "third_party", "nvidia", "backend", dst_path)  # final binary path
     src_path = os.path.join(tmp_path, src_path)
     download = not os.path.exists(src_path)
     if os.path.exists(dst_path) and system == "Linux" and shutil.which(dst_path) is not None:
@@ -592,7 +592,8 @@ def add_link_to_backends():
         if backend.language_dir:
             # Link the contents of each backend's `language` directory into
             # `triton.language.extra`.
-            extra_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "triton", "language", "extra"))
+            extra_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "python", "triton", "language",
+                                                     "extra"))
             for x in os.listdir(backend.language_dir):
                 src_dir = os.path.join(backend.language_dir, x)
                 install_dir = os.path.join(extra_dir, x)
@@ -601,7 +602,7 @@ def add_link_to_backends():
         if backend.tools_dir:
             # Link the contents of each backend's `tools` directory into
             # `triton.tools.extra`.
-            extra_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "triton", "tools", "extra"))
+            extra_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "python", "triton", "tools", "extra"))
             for x in os.listdir(backend.tools_dir):
                 src_dir = os.path.join(backend.tools_dir, x)
                 install_dir = os.path.join(extra_dir, x)
@@ -609,8 +610,8 @@ def add_link_to_backends():
 
 
 def add_link_to_proton():
-    proton_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), os.pardir, "third_party", "proton", "proton"))
-    proton_install_dir = os.path.join(os.path.dirname(__file__), "triton", "profiler")
+    proton_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "third_party", "proton", "proton"))
+    proton_install_dir = os.path.join(os.path.dirname(__file__), "python", "triton", "profiler")
     update_symlink(proton_install_dir, proton_dir)
 
 
@@ -649,9 +650,9 @@ class plugin_egginfo(egg_info):
 
 
 package_data = {
-    "triton/tools/extra": sum((b.tools_package_data for b in backends), []),
-    **{f"triton/backends/{b.name}": b.package_data
-       for b in backends}, "triton/language/extra": sum((b.language_package_data for b in backends), [])
+    "python/triton/tools/extra": sum((b.tools_package_data for b in backends), []),
+    **{f"python/triton/backends/{b.name}": b.package_data
+       for b in backends}, "python/triton/language/extra": sum((b.language_package_data for b in backends), [])
 }
 
 
@@ -743,6 +744,7 @@ setup(
     long_description="",
     install_requires=["setuptools>=40.8.0"],
     packages=get_packages(),
+    package_dir={"": "python"},
     entry_points=get_entry_points(),
     package_data=package_data,
     include_package_data=True,

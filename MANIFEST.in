@@ -1,0 +1,3 @@
+graft python/triton/tools/extra/cuda
+graft python/triton/backends/amd
+graft python/triton/backends/nvidia
