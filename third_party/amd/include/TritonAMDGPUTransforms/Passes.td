@@ -172,7 +172,7 @@ def TritonAMDGPUBlockPingpong: Pass<"tritonamdgpu-block-pingpong", "mlir::Module
     Option<"numStages", "num-stages",
         "int32_t", /*default*/"2",
         "Number of Pipeline stages">,
-  ];
+    ];
 }
 
 def TritonAMDGPUInThreadTranspose: Pass<"tritonamdgpu-in-thread-transpose", "mlir::triton::FuncOp"> {
