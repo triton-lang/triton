@@ -80,6 +80,11 @@ private:
   void appendSlicedLoadAB(int slice);
   void appendClusterBarrier(OpBuilder &builder, Location loc);
   void appendOpWithPrio(OpBuilder &builder, Operation *Op, Location loc);
+  bool isPersistentGemm(size_t num_dots);
+  template <typename T>
+  size_t countIfMemoryOps(scf::IfOp ifOp, bool assumeNotTaken);
+  template <typename T>
+  size_t estimateNonDotMemoryImpact(T *start, T *end, bool assumeNotTaken);
   void determineDotMemoryOps(tt::DotOp dotOp,
                              DenseSet<tt::LoadOp> &dotGlobalLoads,
                              DenseSet<ttg::LocalLoadOp> &dotLocalLoads,
@@ -157,6 +162,55 @@ void Pingponger::appendOpWithPrio(OpBuilder &builder, Operation *op,
   appendOp(builder.create<ROCDL::SetPrioOp>(loc, lowPriority));
 }
 
+// Determine if the given loop matches the basic pattern of a persistent GEMM.
+// Here we define a persistent GEMM as containing a single dot product, and two
+// if statements inside the body of the loop. While canonically these should be
+// var == 0 and var == other_var - 1, we approximate this check to just check
+// for a comparison equality. This will miss legal variant like >= var and we
+// can adjust this with example kernels that fail.
+//
+// Note: That while ideally we would check that these are the same variable
+// and that they change per loop iteration, the persistent GEMM cannot depend
+// directly on the loop bounds, we will avoid matching an exact pattern which
+// may be quite flexible in general.
+bool Pingponger::isPersistentGemm(size_t num_dots) {
+  if (num_dots != 1)
+    return false;
+  bool seenIfSection = false;
+  bool seenDot = false;
+  for (auto &&op : forOp.getBody()->getOperations()) {
+    if (auto ifOp = dyn_cast<scf::IfOp>(op)) {
+      if (seenIfSection) {
+        // Violate our two if statement assumption.
+        return false;
+      }
+      auto cond = ifOp.getCondition().getDefiningOp();
+      if (!cond) {
+        return false;
+      }
+      bool matchesPattern = false;
+      if (auto cmpIOp = dyn_cast<arith::CmpIOp>(cond)) {
+        matchesPattern =
+            cmpIOp.getPredicate() == mlir::arith::CmpIPredicate::eq;
+      }
+      if (!matchesPattern) {
+        return false;
+      }
+      seenIfSection = true;
+    } else if (auto dotOp = dyn_cast<tt::DotOp>(op)) {
+      if (seenDot || !seenIfSection) {
+        // Violate structure of the persistent GEMM
+        // assumption.
+        return false;
+      }
+      seenDot = true;
+      // Reset the if section flag.
+      seenIfSection = false;
+    }
+  }
+  return seenIfSection && seenDot;
+}
+
 // Find all of the "closest" operations that are of a given type T
 // in the same basic block. Here "closest" means along any path P,
 // the first operation of type T that is encountered when traversing
@@ -198,6 +252,60 @@ void Pingponger::findClosestPredOps(Value v, DenseSet<T> &matchingOps) {
     }
   };
   impl(v);
+}
+
+// Determine the number of memory operations of type T that are expected
+// to execute each iteration of the outermost for loop for the ifOp.
+template <typename T>
+size_t Pingponger::countIfMemoryOps(scf::IfOp ifOp, bool assumeNotTaken) {
+  size_t thenCount = 0;
+  size_t elseCount = 0;
+  // Don't do a nested traversal as we are only estimating the "same level"
+  for (auto _ : ifOp.thenBlock()->getOps<T>()) {
+    thenCount++;
+  }
+  if (ifOp.elseBlock()) {
+    for (auto _ : ifOp.elseBlock()->getOps<T>()) {
+      elseCount++;
+    }
+  }
+  if (assumeNotTaken) {
+    return elseCount;
+  } else {
+    // By default make no assumptions about which branch is more
+    // likely and assume the worst case.
+    return std::max(thenCount, elseCount);
+  }
+}
+
+// Estimate the expected number of memory operations of type T
+// rounded to an integer. This is used to determine any possible
+// influence on cluster setup.
+template <typename T>
+size_t Pingponger::estimateNonDotMemoryImpact(T *start, T *end,
+                                              bool assumeNotTaken) {
+  DenseSet<Operation *> visitedParents;
+  size_t count = 0;
+  for (auto it = start; it != end; it++) {
+    auto parent = (*it)->getParentOp();
+    if (parent == nullptr)
+      continue;
+    if (parent == forOp)
+      count += 1;
+    else {
+      if (visitedParents.contains(parent))
+        continue;
+      visitedParents.insert(parent);
+      if (auto ifOp = dyn_cast<scf::IfOp>(parent))
+        count += countIfMemoryOps<T>(ifOp, assumeNotTaken);
+      else {
+        // Default to counting every memory access as a
+        // single access.
+        count += 1;
+      }
+    }
+  }
+  return count;
 }
 
 // Populate the dotGlobalLoads, dotLocalLoads, and dotLocalStores set with
@@ -574,6 +682,10 @@ void Pingponger::getDotPingponged() {
     return;
   }
 
+  // Determine if we have a persistent GEMM. This will decide how we interpret
+  // any memory operations that we find in conditionals.
+  auto assumeNotTaken = isPersistentGemm(dotOps.size());
+
   // The existing code depends on the loads being targeted being safe to move,
   // which will not hold if we do not properly have a GEMM. As a result, we
   // filter the associated load operations to only those that are associated
@@ -584,24 +696,33 @@ void Pingponger::getDotPingponged() {
   determineDotMemoryOps(dotOps[0], dotGlobalLoads, dotLocalLoads,
                         dotLocalStores);
 
-  auto origGlobalLoadCount = gLoadOps.size();
-  auto origLocalLoadCount = lLoadOps.size();
   // Prune Memory operations that may be moved to only those involved in dot
-  // computation.
-  auto gLoadIt = llvm::remove_if(gLoadOps, [&dotGlobalLoads](tt::LoadOp op) {
-    return !dotGlobalLoads.contains(op);
-  });
+  // computation. To understand the "cluster assumptions" we also estimate
+  // the impact of any additional loads/stores.
+  auto gLoadIt = std::stable_partition(
+      gLoadOps.begin(), gLoadOps.end(),
+      [&dotGlobalLoads](tt::LoadOp op) { return dotGlobalLoads.contains(op); });
+  auto effectiveGlobalLoadCount = estimateNonDotMemoryImpact<tt::LoadOp>(
+      gLoadIt, gLoadOps.end(), assumeNotTaken);
   gLoadOps.erase(gLoadIt, gLoadOps.end());
-  auto lLoadIt =
-      llvm::remove_if(lLoadOps, [&dotLocalLoads](ttg::LocalLoadOp op) {
-        return !dotLocalLoads.contains(op);
-      });
+  effectiveGlobalLoadCount += gLoadOps.size();
+  auto lLoadIt = std::stable_partition(lLoadOps.begin(), lLoadOps.end(),
+                                       [&dotLocalLoads](ttg::LocalLoadOp op) {
+                                         return dotLocalLoads.contains(op);
+                                       });
+  auto effectiveLocalLoadCount = estimateNonDotMemoryImpact<ttg::LocalLoadOp>(
+      lLoadIt, lLoadOps.end(), assumeNotTaken);
   lLoadOps.erase(lLoadIt, lLoadOps.end());
+  effectiveLocalLoadCount += lLoadOps.size();
   auto lStoreIt =
-      llvm::remove_if(lStoreOps, [&dotLocalStores](ttg::LocalStoreOp op) {
-        return !dotLocalStores.contains(op);
-      });
+      std::stable_partition(lStoreOps.begin(), lStoreOps.end(),
+                            [&dotLocalStores](ttg::LocalStoreOp op) {
+                              return dotLocalStores.contains(op);
+                            });
+  auto effectiveLocalStoreCount = estimateNonDotMemoryImpact<ttg::LocalStoreOp>(
+      lStoreIt, lStoreOps.end(), assumeNotTaken);
   lStoreOps.erase(lStoreIt, lStoreOps.end());
+  effectiveLocalStoreCount += lStoreOps.size();
   // All PingPong Scheduler assumes there are 2 movable global loads and 2
   // movable local loads.
   if (gLoadOps.size() != 2 || lLoadOps.size() != 2) {
@@ -609,6 +730,19 @@ void Pingponger::getDotPingponged() {
     message << "Unable to match ping pong slicing pattern. Details: "
             << gLoadOps.size() << " global loads in dot computation, "
             << lLoadOps.size() << " local loads in dot computation";
+    LDBG(message.str());
+    return;
+  }
+
+  // Restrict based on "effective loads" because this influenced the
+  // calculations used to generate the clusters.
+  if (effectiveGlobalLoadCount != 2 || effectiveLocalLoadCount != 2 ||
+      effectiveLocalStoreCount != 2) {
+    std::stringstream message;
+    message << "Unable to match memory expectations. Details: "
+            << effectiveGlobalLoadCount << " effective global load count, "
+            << effectiveLocalLoadCount << " effective local load count, "
+            << effectiveLocalStoreCount << " effective local store count";
     LDBG(message.str());
     return;
   }
@@ -672,14 +806,6 @@ void Pingponger::getDotPingponged() {
     // numWarps=4 doesn't need asymmetric sync, return.
     return;
   } else if (numWarps == 8) { // Pingpong between warps from the same block
-    if (origGlobalLoadCount != 2 || origLocalLoadCount != 2) {
-      std::stringstream message;
-      message << "Unable to match ping pong slicing pattern. Details: "
-              << gLoadOps.size() << " global loads, " << lLoadOps.size()
-              << " local loads";
-      LDBG(message.str());
-      return;
-    }
     if (lStoreOps.size() != 2) {
       std::stringstream message;
       message << "Unable to match ping pong slicing pattern. Details: "
