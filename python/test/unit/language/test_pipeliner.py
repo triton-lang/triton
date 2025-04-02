@@ -219,7 +219,7 @@ def test_pipeline_matmul(scale, device):
         pytest.skip("NYI: scale_dot just implemented in CUDA/HIP")
     M, N, K = 512, 512, 128
     BLOCK_M, BLOCK_N, BLOCK_K = 64, 64, 32
-    NUM_STAGES = 4
+    NUM_STAGES = 4 if is_cuda() else 2
 
     if scale:
         # Large enough tile to let our heuristics to pipeline small tensor kick in
