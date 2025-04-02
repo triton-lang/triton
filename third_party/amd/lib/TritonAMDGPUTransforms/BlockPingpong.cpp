@@ -23,30 +23,6 @@ namespace tt = mlir::triton;
 
 namespace {
 
-// Determine when tracking the memory operations
-// associated with a conditional how to define the
-// expected memory count.
-enum class ConditionalSelectionHeuristic {
-  minPath,
-  maxPath,
-  ifPath,
-  elsePath,
-};
-
-std::string
-conditionalSelectionHeuristicToString(ConditionalSelectionHeuristic h) {
-  switch (h) {
-  case ConditionalSelectionHeuristic::minPath:
-    return "minimum";
-  case ConditionalSelectionHeuristic::maxPath:
-    return "maximum";
-  case ConditionalSelectionHeuristic::ifPath:
-    return "if branch";
-  default:
-    return "else branch";
-  }
-}
-
 // This pass transforms a for-loop calculating a GEMM. Main purpose of the
 // transform is improve the efficiency of the GPU dot instruction (mfma)
 // by interleaving the execution of two warps on each SIMD. Especially it groups
@@ -80,13 +56,10 @@ class Pingponger {
   int32_t kWidth;
   int32_t numWarps;
   int32_t numStages;
-  int64_t conditionalTileSizeHeuristic;
 
 public:
-  Pingponger(scf::ForOp forOp, int32_t numWarps, int32_t numStages,
-             int64_t conditionalTileSizeHeuristic)
-      : forOp(forOp), numWarps(numWarps), numStages(numStages),
-        conditionalTileSizeHeuristic(conditionalTileSizeHeuristic) {}
+  Pingponger(scf::ForOp forOp, int32_t numWarps, int32_t numStages)
+      : forOp(forOp), numWarps(numWarps), numStages(numStages) {}
   void getDotPingponged();
 
 private:
@@ -111,11 +84,10 @@ private:
   void prependClusterBarrier(OpBuilder &builder, Location loc);
   void appendOpWithPrio(OpBuilder &builder, Operation *Op, Location loc);
   bool isPersistentGemm(size_t num_dots);
-  ConditionalSelectionHeuristic getIfHeuristic(int64_t tileSize);
   template <typename T>
-  size_t countIfMemoryOps(scf::IfOp ifOp, int64_t tileSize);
+  size_t countIfMemoryOps(scf::IfOp ifOp, bool assumeNotTaken);
   template <typename T>
-  size_t estimateNonDotMemoryImpact(T *start, T *end, int64_t tileSize);
+  size_t estimateNonDotMemoryImpact(T *start, T *end, bool assumeNotTaken);
   void determineDotMemoryOps(tt::DotOp dotOp,
                              DenseSet<tt::LoadOp> &dotGlobalLoads,
                              DenseSet<ttg::LocalLoadOp> &dotLocalLoads,
@@ -289,25 +261,10 @@ void Pingponger::findClosestPredOps(Value v, DenseSet<T> &matchingOps) {
   impl(v);
 }
 
-// Determine how memory operations are counted for conditionals
-// (e.g. which side of the branch to consider).
-ConditionalSelectionHeuristic Pingponger::getIfHeuristic(int64_t tileSize) {
-  // TODO(njriasan): Consider looking at the actual value in the conditional
-  // to determine when to use the heuristic.
-  if (conditionalTileSizeHeuristic == -1)
-    return ConditionalSelectionHeuristic::minPath;
-  else if (conditionalTileSizeHeuristic == -2)
-    return ConditionalSelectionHeuristic::maxPath;
-  else if (tileSize >= conditionalTileSizeHeuristic)
-    return ConditionalSelectionHeuristic::elsePath;
-  else
-    return ConditionalSelectionHeuristic::ifPath;
-}
-
 // Determine the number of memory operations of type T that are expected
 // to execute each iteration of the outermost for loop for the ifOp.
 template <typename T>
-size_t Pingponger::countIfMemoryOps(scf::IfOp ifOp, int64_t tileSize) {
+size_t Pingponger::countIfMemoryOps(scf::IfOp ifOp, bool assumeNotTaken) {
   size_t thenCount = 0;
   size_t elseCount = 0;
   // Don't do a nested traversal as we are only estimating the "same level"
@@ -319,18 +276,12 @@ size_t Pingponger::countIfMemoryOps(scf::IfOp ifOp, int64_t tileSize) {
       elseCount++;
     }
   }
-  auto heuristic = getIfHeuristic(tileSize);
-  LDBG("Encountered memory op inside conditional. Using heuristic: "
-       << conditionalSelectionHeuristicToString(heuristic));
-  if (heuristic == ConditionalSelectionHeuristic::minPath)
-    return std::min(thenCount, elseCount);
-  else if (heuristic == ConditionalSelectionHeuristic::maxPath)
-    return std::max(thenCount, elseCount);
-  else if (heuristic == ConditionalSelectionHeuristic::ifPath)
-    return thenCount;
-  else {
-    assert(heuristic == ConditionalSelectionHeuristic::elsePath);
+  if (assumeNotTaken) {
     return elseCount;
+  } else {
+    // By default make no assumptions about which branch is more
+    // likely and assume the worst case.
+    return std::max(thenCount, elseCount);
   }
 }
 
@@ -339,7 +290,7 @@ size_t Pingponger::countIfMemoryOps(scf::IfOp ifOp, int64_t tileSize) {
 // influence on cluster setup.
 template <typename T>
 size_t Pingponger::estimateNonDotMemoryImpact(T *start, T *end,
-                                              int64_t tileSize) {
+                                              bool assumeNotTaken) {
   DenseSet<Operation *> visitedParents;
   size_t count = 0;
   for (auto it = start; it != end; it++) {
@@ -353,7 +304,7 @@ size_t Pingponger::estimateNonDotMemoryImpact(T *start, T *end,
         continue;
       visitedParents.insert(parent);
       if (auto ifOp = dyn_cast<scf::IfOp>(parent))
-        count += countIfMemoryOps<T>(ifOp, tileSize);
+        count += countIfMemoryOps<T>(ifOp, assumeNotTaken);
       else {
         // Default to counting every memory access as a
         // single access.
@@ -748,40 +699,9 @@ void Pingponger::getDotPingponged() {
     return;
   }
 
-  // Pingpong scheduling tries to form two different types of the instruction
-  // clusters, i.e., Dot clusters and Memory clusters. While each SIMD has
-  // two concurrent warps, both warps can execute a different type of
-  // instruction cluster in parallel. Here are currently available patterns,
-  // more patterns could be added later.
-  //
-  // (1) One Dot-Memory (ping-pong) cluster
-  //  :Ideal to support small tile size e.g., 128x128x64_FP16. Where amount
-  //   of the data used per each iteration is small enough and not causing
-  //   local_load waiting or register spilling. Currently used for numWarps=4
-  //   case where SIMD can hold two warps from different blocks.
-  //
-  // (2) Four Dot-Memory (ping-pongx4) clusters
-  //  :Useful for the larger tile size e.g., 256x256x64_FP16. Clustering
-  //   the Dot instruction (mfma) all together without fetching data requires
-  //   GPU to hold all the data for the calculation. Such large tile size
-  //   exceeds the amount of register GPU has so, we need to split the dot
-  //   into several pieces.
-  //
-  // (3) Two Dot-Memory (ping-pongx2) clusters
-  //  :Covers medium sized tile e.g., 256x128x64_FP16. Different tile size may
-  //  require different scheduling pattern because the loop consists of
-  //  different amount of memory transfer and dot operation. This scheduling
-  //  support the tile sizes not supported by above two methods.
-  //
-  // N.B., Tile size smaller than 128x128x64_FP16 is likely not compute-bound
-  // that pingpong scheduling doesn't help much.
-
-  auto dotType = dotOps[0].getType();
-  auto dotShape = dotType.getShape();
-  auto aType = dotOps[0].getA().getType();
-  auto aShape = aType.getShape();
-  auto elemWidth = aType.getElementTypeBitWidth();
-  int64_t tileSize = dotShape[0] * dotShape[1] * aShape[1] * elemWidth;
+  // Determine if we have a persistent GEMM. This will decide how we interpret
+  // any memory operations that we find in conditionals.
+  auto assumeNotTaken = isPersistentGemm(dotOps.size());
 
   // The existing code depends on the loads being targeted being safe to move,
   // which will not hold if we do not properly have a GEMM. As a result, we
@@ -843,6 +763,41 @@ void Pingponger::getDotPingponged() {
     LDBG(message.str());
     return;
   }
+
+  // Pingpong scheduling tries to form two different types of the instruction
+  // clusters, i.e., Dot clusters and Memory clusters. While each SIMD has
+  // two concurrent warps, both warps can execute a different type of
+  // instruction cluster in parallel. Here are currently available patterns,
+  // more patterns could be added later.
+  //
+  // (1) One Dot-Memory (ping-pong) cluster
+  //  :Ideal to support small tile size e.g., 128x128x64_FP16. Where amount
+  //   of the data used per each iteration is small enough and not causing
+  //   local_load waiting or register spilling. Currently used for numWarps=4
+  //   case where SIMD can hold two warps from different blocks.
+  //
+  // (2) Four Dot-Memory (ping-pongx4) clusters
+  //  :Useful for the larger tile size e.g., 256x256x64_FP16. Clustering
+  //   the Dot instruction (mfma) all together without fetching data requires
+  //   GPU to hold all the data for the calculation. Such large tile size
+  //   exceeds the amount of register GPU has so, we need to split the dot
+  //   into several pieces.
+  //
+  // (3) Two Dot-Memory (ping-pongx2) clusters
+  //  :Covers medium sized tile e.g., 256x128x64_FP16. Different tile size may
+  //  require different scheduling pattern because the loop consists of
+  //  different amount of memory transfer and dot operation. This scheduling
+  //  support the tile sizes not supported by above two methods.
+  //
+  // N.B., Tile size smaller than 128x128x64_FP16 is likely not compute-bound
+  // that pingpong scheduling doesn't help much.
+
+  auto dotType = dotOps[0].getType();
+  auto dotShape = dotType.getShape();
+  auto aType = dotOps[0].getA().getType();
+  auto aShape = aType.getShape();
+  auto elemWidth = aType.getElementTypeBitWidth();
+  int64_t tileSize = dotShape[0] * dotShape[1] * aShape[1] * elemWidth;
 
   const int64_t minTile = 262144;      // e.g. 32x128x64x16bit
   const int64_t smallTile = 16777216;  // e.g. 128x128x64x16bit
@@ -910,17 +865,14 @@ class TritonAMDGPUBlockPingpongPass
     : public TritonAMDGPUBlockPingpongBase<TritonAMDGPUBlockPingpongPass> {
 public:
   TritonAMDGPUBlockPingpongPass() = default;
-  TritonAMDGPUBlockPingpongPass(int32_t numStages,
-                                int64_t conditionalTileSizeHeuristic) {
+  TritonAMDGPUBlockPingpongPass(int32_t numStages) {
     this->numStages = numStages;
-    this->conditionalTileSizeHeuristic = conditionalTileSizeHeuristic;
   }
   void runOnOperation() override {
     ModuleOp m = getOperation();
     for (auto funcOp : m.getOps<tt::FuncOp>()) {
       funcOp.walk([&](scf::ForOp forOp) {
-        Pingponger pingponger(forOp, ttg::lookupNumWarps(forOp), numStages,
-                              conditionalTileSizeHeuristic);
+        Pingponger pingponger(forOp, ttg::lookupNumWarps(forOp), numStages);
         pingponger.getDotPingponged();
       });
     }
@@ -928,8 +880,7 @@ public:
 };
 } // namespace
 
-std::unique_ptr<Pass> mlir::createTritonAMDGPUBlockPingpongPass(
-    int32_t numStages, int64_t conditionalTileSizeHeuristic) {
-  return std::make_unique<TritonAMDGPUBlockPingpongPass>(
-      numStages, conditionalTileSizeHeuristic);
+std::unique_ptr<Pass>
+mlir::createTritonAMDGPUBlockPingpongPass(int32_t numStages) {
+  return std::make_unique<TritonAMDGPUBlockPingpongPass>(numStages);
 }
