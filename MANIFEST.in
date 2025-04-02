@@ -1,3 +1,14 @@
-graft python/triton/tools/extra/cuda
+graft bin
+graft cmake
+graft include
+graft lib
+graft python/src
+graft python/triton/_C
 graft python/triton/backends/amd
 graft python/triton/backends/nvidia
+graft python/triton/tools/extra/cuda
+graft test
+graft third_party
+graft unittest
+include CMakeLists.txt
+include python/build_helpers.py
