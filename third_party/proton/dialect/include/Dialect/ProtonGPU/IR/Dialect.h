@@ -14,6 +14,9 @@
 #define GET_OP_CLASSES
 #include "proton/dialect/include/Dialect/ProtonGPU/IR/Ops.h.inc"
 
+#define GET_ATTRDEF_CLASSES
+#include "proton/dialect/include/Dialect/ProtonGPU/IR/AttrDefs.h.inc"
+
 namespace mlir {
 namespace triton {
 namespace proton {
