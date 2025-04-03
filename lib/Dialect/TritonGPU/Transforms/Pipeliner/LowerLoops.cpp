@@ -870,24 +870,7 @@ std::pair<int, int> getTmemUseStageBounds(ttng::TMEMAllocOp alloc,
   return bounds;
 }
 
-Value hoistLocalAlloc(OpBuilderForStage &builder, scf::ForOp forOp,
-                      CoarseSchedule &schedule, ttg::LocalAllocOp allocOp) {
-  Location loc = allocOp.getLoc();
-  Value src = allocOp.getSrc();
-  builder.setStageCluster(schedule[allocOp]);
-  builder.setInsertionPoint(allocOp);
-  auto storeOp = builder.create<ttg::LocalStoreOp>(loc, src, allocOp);
-  builder.setInsertionPoint(forOp);
-  auto newAlloc = triton::createAlloc(
-      forOp, cast<RankedTensorType>(src.getType()), loc,
-      cast<ttg::SharedEncodingTrait>(allocOp.getType().getEncoding()), 1,
-      false);
-  allocOp.replaceAllUsesWith(newAlloc);
-  allocOp.erase();
-  return newAlloc;
-}
-
-// Hoist LocalAlloc if necessary, and create a predicate argument for the wait
+// Create a predicate argument for the dist-1wait
 scf::ForOp prepLoopForDist1Wait(scf::ForOp forOp, CoarseSchedule &schedule,
                                 ttng::MMAv5OpInterface mma) {
   OpBuilderForStage builder(forOp, schedule);
