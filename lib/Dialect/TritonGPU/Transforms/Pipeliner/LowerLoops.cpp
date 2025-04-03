@@ -982,8 +982,7 @@ scf::ForOp createBarrierAndWaitOps(scf::ForOp forOp, CoarseSchedule &schedule,
     builder.setInsertionPoint(wp.op);
     SmallVector<Value> currWaitBuffers = waitBuffers;
     Value pred = nullptr;
-    // TODO: Should be !domInfo.properlyDominates(mma, wp.op)?
-    if (forOp.getBody()->findAncestorOpInBlock(*wp.op)->isBeforeInBlock(mma)) {
+    if (!domInfo.properlyDominates(mma, wp.op)) {
       // Waits before the mma are special: they are dist-1 to the mma which
       // means two things:
       // 1. The wait should not be executed before the mma executes for the
