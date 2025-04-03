@@ -313,6 +313,8 @@ void init_triton_ir(py::module &&m) {
       .def("disable_multithreading",
            [](MLIRContext &self) { self.disableMultithreading(); });
 
+  py::class_<OpBuilder>(m, "op_builder", py::module_local()).def(py::init<>());
+
   py::class_<SourceMgrDiagnosticHandler>(m, "source_mgr_diag",
                                          py::module_local())
       .def(py::init<llvm::SourceMgr &, MLIRContext *>());
