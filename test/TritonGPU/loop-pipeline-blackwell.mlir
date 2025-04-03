@@ -13,22 +13,23 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
   // CHECK-DAG: %[[FALSE:.+]] = arith.constant false
   // CHECK-DAG: %[[C0:.+]] = arith.constant 0 : i32
   // CHECK-DAG: %[[C1:.+]] = arith.constant 1 : i32
-  // CHECK-DAG: %[[POISON:.*]] = ub.poison
   // CHECK: %[[TMEM_BUF:.+]] = ttng.tmem_alloc : ()
   // CHECK: ttng.tmem_store %[[C0_F]], %[[TMEM_BUF]], %[[TRUE]]
   // CHECK: %[[BAR_BUF:.+]] = ttg.local_alloc : () -> !ttg.memdesc<1xi64
   // CHECK: %[[BAR_SLICE:.+]] = ttg.memdesc_subview %[[BAR_BUF]][%[[C0]]]
   // CHECK: ttng.init_barrier %[[BAR_SLICE]], 1
-  // CHECK: %[[FOR_RET:.+]]:8 = scf.for {{.*}} iter_args(%[[PHASE:.+]] = %[[C0]], %[[A_DIST1:.+]] = %[[POISON]], %[[B_DIST1:.+]] = %[[POISON]], %[[WAIT_PRED:.+]] = %[[FALSE]]
-  // CHECK:   ttng.wait_barrier %[[BAR_BUF]], %[[PHASE]], %[[WAIT_PRED]] deps %[[A_DIST1]], %[[B_DIST1]]
+  // CHECK: %[[FOR_RET:.+]]:8 = scf.for {{.*}} iter_args(%[[PHASE:.+]] = %[[C0]], %[[WAIT_PRED:.+]] = %[[FALSE]]
+  // CHECK:   ttng.wait_barrier %[[BAR_BUF]], %[[PHASE]], %[[WAIT_PRED]]
   // CHECK:   %[[ACC:.+]] = ttng.tmem_load %[[TMEM_BUF]]
   // CHECK:   %[[ACC2:.+]] = arith.mulf %[[ACC]], %[[C2_F]]
   // CHECK:   ttng.tmem_store %[[ACC2]], %[[TMEM_BUF]], %[[TRUE]]
   // CHECK:   ttng.tc_gen5_mma %[[A_OP:.*]], %[[B_OP:.*]], %[[TMEM_BUF]], %[[TRUE]], %[[TRUE]], %[[BAR_BUF]]
-  // CHECK:   %[[PHASE_NEXT:.+]] = arith.xori %[[PHASE]], %[[C1]]
-  // CHECK:   scf.yield %[[PHASE_NEXT]], %[[A_OP]], %[[B_OP]], %[[TRUE]]
-  // CHECK: ttng.wait_barrier %[[BAR_BUF]], %[[FOR_RET]]#0, %[[FOR_RET]]#3 deps %[[FOR_RET]]#1, %[[FOR_RET]]#2
-  // CHECK: ttng.inval_barrier %[[BAR_BUF]]
+  // CHECK:   %[[PHASE_NEG:.+]] = arith.xori %[[PHASE]], %[[C1]]
+  // CHECK:   %[[PHASE_NEXT:.+]] = arith.select %[[WAIT_PRED]], %[[PHASE_NEG]], %[[PHASE]]
+  // CHECK:   scf.yield %[[PHASE_NEXT]], %[[TRUE]]
+  // CHECK: ttng.wait_barrier %[[BAR_BUF]], %[[FOR_RET]]#0, %[[FOR_RET]]#1
+  // CHECK: %[[BAR_SLICE:.+]] = ttg.memdesc_subview %[[BAR_BUF]][%[[C0]]]
+  // CHECK: ttng.inval_barrier %[[BAR_SLICE]]
   // CHECK: ttg.local_dealloc %[[BAR_BUF]]
   // CHECK: ttng.tmem_load %[[TMEM_BUF]]
   tt.func public @chained_dot_scaled_acc(%A_ptr: tensor<128x128x!tt.ptr<f16>, #blocked1> {tt.contiguity = 16 : i32, tt.divisibility = 16 : i32}, %B_ptr: tensor<128x128x!tt.ptr<f16>, #blocked1> {tt.contiguity = 16 : i32, tt.divisibility = 16 : i32}, %arg3: i32) -> tensor<128x128xf16, #blocked> attributes {noinline = false} {
@@ -110,8 +111,10 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 1 : i32, ttg.targ
                     %A : !tt.ptr<f8E4M3FN> {tt.divisibility = 16 : i32},
                     %B : !tt.ptr<f8E4M3FN> {tt.divisibility = 16 : i32}) -> tensor<128x128xf32, #C> {
 // CHECK-LABEL: tt.func @matmul_loop_cast_load
-// CHECK-NOT: ttng.init_barrier
-// CHECK-NOT: ttng.wait_barrier
+// CHECK: ttng.init_barrier
+// CHECK: scf.for
+// CHECK: ttng.tc_gen5_mma {{.*}}, {{.*}}, {{.*}}, {{.*}}, {{.*}}, %[[BAR:.*]] :
+// CHECK: ttng.wait_barrier %[[BAR]]
     %a_ptr_splat = tt.splat %A : !tt.ptr<f8E4M3FN> -> tensor<128x32x!tt.ptr<f8E4M3FN>, #AL>
     %a_tmp0 = tt.make_range {end = 32: i32, start = 0: i32} : tensor<32xi32, #ALs0>
     %a_tmp1 = tt.expand_dims %a_tmp0 {axis = 0 : i32} : tensor<32xi32, #ALs0> -> tensor<1x32xi32, #AL>
