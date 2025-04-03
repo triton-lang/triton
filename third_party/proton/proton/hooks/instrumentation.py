@@ -157,6 +157,7 @@ class InstrumentationHook(Hook):
                 # Parse the MLIR module to extract scope IDs
                 context = ir.context()
                 ir.load_dialects(context)
+                triton_proton.load_dialects(context)
                 module = ir.parse_mlir_module(ir_path, context)
                 module.context = context
                 self.function_scope_ids[function] = triton_proton.get_scope_id_pairs(module)
