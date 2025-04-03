@@ -6,6 +6,10 @@
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Interfaces/LoopLikeInterface.h"
 
+namespace mlir::triton {
+class FuncOp;
+}
+
 namespace mlir::triton::AMD {
 
 /// This struct (analysis) adapt's upstream's IntegerRangeAnalysis (inferring
@@ -34,6 +38,8 @@ struct TritonIntegerRangeAnalysis : dataflow::IntegerRangeAnalysis {
       : dataflow::IntegerRangeAnalysis(solver), assumptions(assumptions) {}
 
   void setToEntryState(dataflow::IntegerValueRangeLattice *lattice) override;
+
+  void initializeFuncOp(triton::FuncOp *funcOp);
 
   LogicalResult visitOperation(
       Operation *op,
@@ -117,7 +123,7 @@ struct TritonIntegerRangeAnalysis : dataflow::IntegerRangeAnalysis {
   llvm::DenseMap<Value, SetVector<Operation *>> assumptions;
 };
 
-std::optional<SmallVector<ConstantIntRanges>>
+std::optional<SmallVector<std::optional<ConstantIntRanges>>>
 collectRanges(const DataFlowSolver &solver, ValueRange values);
 
 bool cmpIIsStaticallyTrue(const DataFlowSolver &solver, arith::CmpIOp cmpOp);
@@ -126,6 +132,9 @@ bool isEmptyInitializedRange(ConstantIntRanges rv);
 
 void populateFoldTrueCmpIOpPatterns(RewritePatternSet &patterns,
                                     DataFlowSolver *solver);
+
+void initializeFuncOps(Operation *op,
+                       TritonIntegerRangeAnalysis *rangeAnalysis);
 
 } // namespace mlir::triton::AMD
 
