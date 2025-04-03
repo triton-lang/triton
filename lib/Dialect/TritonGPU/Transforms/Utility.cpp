@@ -1373,7 +1373,6 @@ void eraseLoopCarriedValues(scf::ForOp &loop, llvm::BitVector indices) {
   loop = newLoop;
 }
 
-
 std::optional<bool> getBoolFromConstant(Value cst) {
   auto constantOp = cst.getDefiningOp<arith::ConstantOp>();
   if (!constantOp) {
