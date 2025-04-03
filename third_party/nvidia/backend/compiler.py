@@ -140,7 +140,7 @@ class CUDAOptions:
 
 
 class CUDABackend(BaseBackend):
-    instrumentation = {}
+    instrumentation = None
 
     @staticmethod
     def supports_target(target: GPUTarget):
@@ -205,6 +205,8 @@ class CUDABackend(BaseBackend):
 
     def load_dialects(self, ctx):
         nvidia.load_dialects(ctx)
+        if CUDABackend.instrumentation:
+            CUDABackend.instrumentation.load_dialects(ctx)
 
     @staticmethod
     def make_ttir(mod, metadata, opt, capability):
@@ -286,8 +288,8 @@ class CUDABackend(BaseBackend):
             nvidia.passes.ttnvgpuir.add_tma_lowering(pm)
             nvidia.passes.ttnvgpuir.add_fence_insertion(pm)
         passes.common.add_canonicalizer(pm)
-        if "ttir" in CUDABackend.instrumentation:
-            CUDABackend.instrumentation["ttir"](pm)
+        if CUDABackend.instrumentation:
+            CUDABackend.instrumentation.patch("ttir", pm, mod.context)
         pm.run(mod)
         metadata["cluster_dims"] = (cluster_info.clusterDimX, cluster_info.clusterDimY, cluster_info.clusterDimZ)
         tensordesc_meta = mod.get_tensordesc_metadata()
@@ -319,8 +321,8 @@ class CUDABackend(BaseBackend):
         passes.common.add_symbol_dce(pm)
         if not knobs.compilation.disable_line_info:
             passes.llvmir.add_di_scope(pm)
-        if "ttgpuir" in CUDABackend.instrumentation:
-            CUDABackend.instrumentation["ttgpuir"](pm)
+        if CUDABackend.instrumentation:
+            CUDABackend.instrumentation.patch("ttgpuir", pm, mod.context)
         pm.run(mod)
         # LLVM-IR (MLIR) -> LLVM-IR (LLVM)
         llvm.init_targets()
