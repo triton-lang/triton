@@ -35,13 +35,21 @@ module attributes {"ttg.target" = "hip:gfx942", "ttg.num-ctas" = 1 : i32, "ttg.n
     %14 = tt.broadcast %11 : tensor<1x16x!tt.ptr<f16>, #blocked> -> tensor<64x16x!tt.ptr<f16>, #blocked>
     %15 = tt.broadcast %13 : tensor<64x1xi32, #blocked> -> tensor<64x16xi32, #blocked>
     %16 = tt.addptr %14, %15 : tensor<64x16x!tt.ptr<f16>, #blocked>, tensor<64x16xi32, #blocked>
-    // COMMON: ttg.local_store
-    // COMMON: scf.for
-    // COMMON:   tt.load
-    // COMMON:   tt.dot
-    // COMMON:   tt.dot
-    // COMMON:   ttg.local_store
-    // COMMON:   scf.yield
+    // SYNC: ttg.local_store
+    // SYNC: scf.for
+    // SYNC:   tt.load
+    // SYNC:   tt.dot
+    // SYNC:   tt.dot
+    // SYNC:   ttg.local_store
+    // SYNC:   scf.yield
+
+    // ASYNC: ttg.async_copy_global_to_local
+    // ASYNC: scf.for
+    // ASYNC:  ttg.async_wait
+    // ASYNC:  tt.dot
+    // ASYNC:  tt.dot
+    // ASYNC:  ttg.async_copy_global_to_local
+    // ASYNC:  scf.yield
     %17:2 = scf.for %arg2 = %c0_i32 to %c8_i32 step %c1_i32 iter_args(%arg3 = %cst_1, %arg4 = %cst_2) -> (tensor<128x16xf32, #mma>, tensor<128x64xf32, #mma>)  : i32 {
       %18 = tt.load %16 : tensor<64x16x!tt.ptr<f16>, #blocked>
       %19 = ttg.convert_layout %9 : tensor<128x64xf16, #blocked1> -> tensor<128x64xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 2}>>
@@ -342,17 +350,21 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 // COMMON-LABEL: mxfp8_mxfp4_matmul
 
 // Prologue
-// COMMON-COUNT-3: ttg.local_alloc
-// COMMON-COUNT-3: tt.load
-// COMMON-COUNT-3: ttg.local_store
+// SYNC-3: ttg.local_alloc
+// SYNC-3: tt.load
+// SYNC-3: ttg.local_store
+//
+// ASYNC-3: ttg.async_copy_global_to_local
 
 // Main loop
 //         COMMON: scf.for
+//          ASYNC: ttg.async_wait
 // COMMON-COUNT-3:   ttg.local_load
 //         COMMON:   tt.dot_scaled
 //         COMMON:   scf.yield
 
 // Epilogue
+//          ASYNC: ttg.async_wait
 // COMMON-COUNT-3: ttg.local_load
 //         COMMON: scf.if
 //         COMMON:   tt.dot_scaled
@@ -478,9 +490,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
   // SYNC-COUNT-2: tt.load
   // SYNC-COUNT-2: ttg.local_store
   //
-  // ASYNC: tt.load
-  // ASYNC: ttg.local_store
-  // ASYNC: ttg.async_copy_global_to_local
+  // ASYNC-COUNT-2: ttg.async_copy_global_to_local
 
 // Main loop
 //         COMMON:   scf.for
@@ -489,13 +499,13 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
   //         SYNC:   tt.dot
   //         SYNC:   scf.yield
   //
-  //         ASYNC:    ttg.local_load
   //         ASYNC:    ttg.async_wait
-  //         ASYNC:    ttg.local_load
+  // ASYNC-COUNT-2:    ttg.local_load
   //         ASYNC:    ttg.dot
-  //         ASYNC:    ttg.async_copy_global_to_local
+  // ASYNC-COUNT-2:    ttg.async_copy_global_to_local
 
 // Epilogue
+//          ASYNC: ttg.async_wait
 // COMMON-COUNT-2: ttg.local_load
 //         COMMON: scf.if
 //         COMMON:   tt.dot

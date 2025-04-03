@@ -230,8 +230,11 @@ Value convertLayout(int opIdx, ConversionPatternRewriter &rewriter,
   if (!sharedLayout)
     return Value();
   auto order = sharedLayout.getOrder();
-  assert((rank == 2 || order[2] == 0) &&
-         "expect batch to be the slowest dimension");
+
+  // Rely on the linear layout conversion logic in this case, since only slowest
+  // dimension for batch is supported here
+  if (rank != 2 && order.back() != 0)
+    return Value();
 
   auto elemTy = aTensorTy.getElementType();
   auto kWidth = encoding.getKWidth();
