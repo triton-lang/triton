@@ -32,8 +32,6 @@
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/SourceMgr.h"
 
-#include "third_party/proton/dialect/include/Dialect/Proton/IR/Dialect.h"
-
 namespace {
 
 namespace py = pybind11;
@@ -324,8 +322,7 @@ void init_triton_ir(py::module &&m) {
     registry.insert<TritonDialect, ::mlir::triton::gpu::TritonGPUDialect,
                     math::MathDialect, arith::ArithDialect, scf::SCFDialect,
                     ::mlir::gpu::GPUDialect, cf::ControlFlowDialect,
-                    ::mlir::triton::proton::ProtonDialect, LLVM::LLVMDialect,
-                    mlir::ub::UBDialect>();
+                    LLVM::LLVMDialect, mlir::ub::UBDialect>();
     mlir::LLVM::registerInlinerInterface(registry);
     registerBuiltinDialectTranslation(registry);
     registerLLVMDialectTranslation(registry);
@@ -734,6 +731,7 @@ void init_triton_ir(py::module &&m) {
   py::class_<TritonOpBuilder>(m, "builder", py::module_local(),
                               py::dynamic_attr())
       .def(py::init<MLIRContext *>())
+      .def("get_context", &TritonOpBuilder::getContext)
       // getters
       .def("create_module",
            [](TritonOpBuilder &self) -> ModuleOp {
@@ -1757,14 +1755,6 @@ void init_triton_ir(py::module &&m) {
               std::vector<int32_t> &tensorShape) -> Value {
              return self.create<MakeTensorDescOp>(base, shape, strides,
                                                   tensorShape);
-           })
-      // Proton Ops
-      .def("create_proton_record",
-           [](TritonOpBuilder &self, bool isStart,
-              const std::string &name) -> void {
-             auto nameAttr = StringAttr::get(self.getBuilder().getContext(),
-                                             llvm::StringRef(name));
-             self.create<mlir::triton::proton::RecordOp>(isStart, nameAttr);
            });
 
   py::class_<PassManager>(m, "pass_manager", py::module_local())
