@@ -46,6 +46,10 @@ namespace {
 static std::function<Error(Module *)> makeOptimizingPipeline() {
   return [](Module *m) -> Error {
     PipelineTuningOptions tuningOptions;
+    tuningOptions.LoopInterleaving = true;
+    tuningOptions.LoopUnrolling = true;
+    tuningOptions.LoopVectorization = true;
+    tuningOptions.SLPVectorization = true;
     PassBuilder pb(nullptr, tuningOptions);
 
     LoopAnalysisManager lam;
@@ -63,6 +67,7 @@ static std::function<Error(Module *)> makeOptimizingPipeline() {
     if (BreakStructPhiNodes)
       fpm.addPass(BreakStructPhiNodesPass());
     mpm.addPass(createModuleToFunctionPassAdaptor(std::move(fpm)));
+    mpm.addPass(pb.buildPerModuleDefaultPipeline(OptimizationLevel::O3));
     mpm.run(*m, mam);
     return Error::success();
   };
