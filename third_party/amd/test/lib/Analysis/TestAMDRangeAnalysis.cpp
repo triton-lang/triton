@@ -2,6 +2,7 @@
 #include "mlir/Pass/Pass.h"
 #include "third_party/amd/include/Analysis/RangeAnalysis.h"
 #include "triton/Analysis/Utility.h"
+#include "triton/Dialect/TritonGPU/IR/Dialect.h"
 
 using namespace mlir;
 using namespace mlir::triton;
@@ -29,7 +30,9 @@ struct TestAMDRangeAnalysisPass
     DenseMap<Value, SetVector<Operation *>> assumptions =
         AMD::TritonIntegerRangeAnalysis::collectAssumptions(getOperation());
     std::shared_ptr<DataFlowSolver> solver = createDataFlowSolver();
-    solver->load<AMD::TritonIntegerRangeAnalysis>(assumptions);
+    AMD::TritonIntegerRangeAnalysis *rangeAnalysis =
+        solver->load<AMD::TritonIntegerRangeAnalysis>(assumptions);
+    AMD::initializeFuncOps(mod, rangeAnalysis);
     if (failed(solver->initializeAndRun(getOperation())))
       return signalPassFailure();
 
@@ -44,18 +47,39 @@ struct TestAMDRangeAnalysisPass
       return succeeded(dataflow::staticallyNonNegative(*solver, v));
     };
 
+    mod.walk<WalkOrder::PreOrder>([&solver](FuncOp funcOp) {
+      auto args = funcOp.getArguments();
+      if (auto argRanges = AMD::collectRanges(*solver, args)) {
+        int i = -1;
+        for (const auto &[arg, argR] : llvm::zip(args, *argRanges)) {
+          i++;
+          if (!argR)
+            continue;
+          std::string rangeS;
+          llvm::raw_string_ostream rangeSt(rangeS);
+          if (args.size() > 1)
+            rangeSt << "arg " << i << ": " << argR;
+          else
+            rangeSt << argR;
+          emitRemark(arg.getLoc(), rangeS);
+        }
+      }
+    });
+
     mod->walk<WalkOrder::PreOrder>([&solver, nonNegativePred](Operation *op) {
       auto results = op->getResults();
       if (auto outputRanges = AMD::collectRanges(*solver, results)) {
-        int i = 0;
+        int i = -1;
         for (const auto &[res, outR] : llvm::zip(results, *outputRanges)) {
+          i++;
+          if (!outR)
+            continue;
           std::string rangeS;
           llvm::raw_string_ostream rangeSt(rangeS);
           if (results.size() > 1)
-            rangeSt << " result " << i << ": " << outR;
+            rangeSt << "result " << i << ": " << outR;
           else
             rangeSt << outR;
-          i++;
           emitRemark(res.getLoc(), rangeS);
         }
 
@@ -71,7 +95,7 @@ struct TestAMDRangeAnalysisPass
           std::string nonNegs;
           llvm::raw_string_ostream nonNegSt(nonNegs);
           if (results.size() > 1)
-            nonNegSt << " result " << i << ": non-neg";
+            nonNegSt << "result " << i << ": non-neg";
           else
             nonNegSt << "non-neg";
           emitRemark(result.getLoc(), nonNegs);
