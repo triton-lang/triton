@@ -593,7 +593,7 @@ def matmul_kernel_descriptor_persistent(a_ptr, b_ptr, c_ptr,  #
     tile_id_c = start_pid - NUM_SMS
     num_pid_in_group = GROUP_SIZE_M * num_pid_n
 
-    for tile_id in tl.range(start_pid, num_tiles, NUM_SMS, flatten=True):
+    for tile_id in tl.range(start_pid, num_tiles, NUM_SMS, flatten=True, warp_specialize=True):
         pid_m, pid_n = _compute_pid(tile_id, num_pid_in_group, num_pid_m, GROUP_SIZE_M, NUM_SMS)
         offs_am = pid_m * BLOCK_SIZE_M
         offs_bn = pid_n * BLOCK_SIZE_N
@@ -611,13 +611,33 @@ def matmul_kernel_descriptor_persistent(a_ptr, b_ptr, c_ptr,  #
         offs_cn = pid_n * BLOCK_SIZE_N
 
         if EPILOGUE_SUBTILE:
-            acc = tl.reshape(accumulator, (BLOCK_SIZE_M, 2, BLOCK_SIZE_N // 2))
-            acc = tl.permute(acc, (0, 2, 1))
+            c_desc0 = tl.make_tensor_descriptor(
+                c_ptr,
+                shape=[M, offs_cn + BLOCK_SIZE_N // 4],
+                strides=[N, 1],
+                block_shape=[BLOCK_SIZE_M, BLOCK_SIZE_N // 2],
+            )
+            c_desc2 = tl.make_tensor_descriptor(
+                c_ptr,
+                shape=[M, offs_cn + BLOCK_SIZE_N // 2],
+                strides=[N, 1],
+                block_shape=[BLOCK_SIZE_M, BLOCK_SIZE_N // 2],
+            )
+
+            acc = tl.reshape(accumulator, (BLOCK_SIZE_M, 2, 2, BLOCK_SIZE_N // 4))
+            acc = tl.permute(acc, (0, 3, 1, 2))
             acc0, acc1 = tl.split(acc)
-            c0 = acc0.to(dtype)
-            c_desc.store([offs_cm, offs_cn], c0)
-            c1 = acc1.to(dtype)
-            c_desc.store([offs_cm, offs_cn + BLOCK_SIZE_N // 2], c1)
+            acc0 = acc0.reshape(BLOCK_SIZE_M, BLOCK_SIZE_N // 4, 2).permute(
+                (0, 2, 1)).reshape(BLOCK_SIZE_M, BLOCK_SIZE_N // 2)
+            acc1 = acc1.reshape(BLOCK_SIZE_M, BLOCK_SIZE_N // 4, 2).permute(
+                (0, 2, 1)).reshape(BLOCK_SIZE_M, BLOCK_SIZE_N // 2)
+            acc0 = acc0.to(dtype)
+            acc1 = acc1.to(dtype)
+
+            c_desc.store([offs_cm, offs_cn + BLOCK_SIZE_N // 2], acc1)
+            c_desc.store([offs_cm, offs_cn + BLOCK_SIZE_N // 4], acc0)
+            c_desc2.store([offs_cm, offs_cn + BLOCK_SIZE_N // 4], acc1)
+            c_desc0.store([offs_cm, offs_cn], acc0)
         else:
             c = accumulator.to(dtype)
             c_desc.store([offs_cm, offs_cn], c)
