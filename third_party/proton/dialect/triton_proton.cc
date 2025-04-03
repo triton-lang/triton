@@ -32,6 +32,15 @@ void init_triton_proton(py::module &&m) {
     return moduleScopeIdAllocation.getScopeIdPairs();
   });
 
+  m.def(
+      "create_proton_record",
+      [](mlir::OpBuilder &self, bool isStart, const std::string &name) -> void {
+        auto nameAttr =
+            mlir::StringAttr::get(self.getContext(), llvm::StringRef(name));
+        auto loc = self.getUnknownLoc();
+        self.create<mlir::triton::proton::RecordOp>(loc, isStart, nameAttr);
+      });
+
   // Proton Ops
   py::class_<mlir::OpBuilder>(m, "builder", py::module_local(),
                               py::dynamic_attr())

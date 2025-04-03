@@ -732,6 +732,7 @@ void init_triton_ir(py::module &&m) {
                               py::dynamic_attr())
       .def(py::init<MLIRContext *>())
       .def("get_context", &TritonOpBuilder::getContext)
+      .def("get_builder", &TritonOpBuilder::getBuilder)
       // getters
       .def("create_module",
            [](TritonOpBuilder &self) -> ModuleOp {
