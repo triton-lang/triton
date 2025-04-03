@@ -358,6 +358,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 
 // Main loop
 //         COMMON: scf.for
+//          ASYNC: ttg.async_wait
 // COMMON-COUNT-3:   ttg.local_load
 //         COMMON:   tt.dot_scaled
 //         COMMON:   scf.yield
