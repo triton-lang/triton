@@ -995,6 +995,9 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
     %20 = arith.truncf %19 : tensor<256x128xf32, #mma> to tensor<256x128xf16, #mma>
     %21 = tt.splat %arg2 : !tt.ptr<f16> -> tensor<256x128x!tt.ptr<f16>, #mma>
     tt.store %21, %20 : tensor<256x128x!tt.ptr<f16>, #mma>
+    tt.return
+  }
+}
 
 // -----
 // CHECK-LABEL: pingpong_medium_epilogue

@@ -156,8 +156,9 @@ void Pingponger::appendSlicedLoadAB(int slice) {
 SmallVector<Operation *> Pingponger::genClusterBarrier(OpBuilder &builder,
                                                        Location loc) {
   //  MembarAnalysis can recognize gpu::BarrierOp and skip inserting additional
-  return {builder.create<gpu::BarrierOp>(loc),
-          builder.create<ROCDL::SchedBarrier>(loc, 0)};
+  auto barrierOp = builder.create<gpu::BarrierOp>(loc);
+  auto schedBarrierOp = builder.create<ROCDL::SchedBarrier>(loc, 0);
+  return {barrierOp, schedBarrierOp};
 }
 void Pingponger::appendClusterBarrier(OpBuilder &builder, Location loc) {
   for (auto &&op : genClusterBarrier(builder, loc))
