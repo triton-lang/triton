@@ -2,7 +2,7 @@
 #define PROTON_ANALYSIS_SCOPE_ID_ALLOCATION_H
 
 #include "mlir/IR/Operation.h"
-#include "third_party/proton/dialect/include/Dialect/Proton/IR/Dialect.h"
+#include "proton/dialect/include/Dialect/Proton/IR/Dialect.h"
 #include "triton/Analysis/Utility.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/StringMap.h"
