@@ -95,7 +95,7 @@ bool verifyNonNegativeExpr(Value expr, const DenseSet<Value> &assumptions,
     return succeeded(dataflow::staticallyNonNegative(*solver, v));
   };
 
-  if (!llvm::isa<mlir::BlockArgument>(expr) && nonNegativePred(expr)) {
+  if (nonNegativePred(expr)) {
     return true;
   }
 
