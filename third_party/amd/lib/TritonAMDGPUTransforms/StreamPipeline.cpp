@@ -1,5 +1,4 @@
 #include "TritonAMDGPUTransforms/Passes.h"
-#include "mlir/IR/TypeUtilities.h"
 #include "mlir/Support/LLVM.h"
 #include "third_party/amd/include/Dialect/TritonAMDGPU/IR/Dialect.h"
 #include "third_party/amd/lib/TritonAMDGPUToLLVM/SchedInstructions.h"
@@ -872,16 +871,13 @@ void StreamPipeliner::createStreamOps() {
 
   unsigned newOperandIndex = forOp.getBody()->getNumArguments();
   // Patch the loop to add the new loop carried dependencies.
-  scf::ForOp newForOp =
-      replaceForOpWithNewSignature(builder, forOp, {extractIdx});
-  forOp.erase();
-  forOp = newForOp;
+  (void)addIterArgsToLoop(builder, forOp, {extractIdx});
 
   // Create one counter for the extract indices to avoid creating long
   // live range.
-  extractIdx = newForOp.getBody()->getArgument(newOperandIndex);
+  extractIdx = forOp.getBody()->getArgument(newOperandIndex);
 
-  builder.setInsertionPoint(newForOp.getBody(), newForOp.getBody()->begin());
+  builder.setInsertionPoint(forOp.getBody(), forOp.getBody()->begin());
   extractIdx = builder.create<arith::AddIOp>(loc, extractIdx, one);
   Value cndExt = builder.create<arith::CmpIOp>(loc, arith::CmpIPredicate::slt,
                                                extractIdx, numBuffersVal);
@@ -1061,8 +1057,7 @@ struct PipelinePass : public TritonAMDGPUStreamPipelineBase<PipelinePass> {
         continue;
       StreamPipeliner sp(forOp, tt::getNumStagesOrDefault(forOp, numStages),
                          globalPrefetch, localPrefetch, useAsyncCopy);
-      if (failed(sp.pipelineLoop()))
-        continue;
+      (void)sp.pipelineLoop();
     }
   }
 };

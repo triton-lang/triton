@@ -134,4 +134,42 @@ def NVWS_ArefReturnOp: NVWS_Op<"aref.return",
   let hasVerifier = 1;
 }
 
+def NVWS_WarpGroupOp : NVWS_Op<"warp_group", [
+  RecursiveMemoryEffects, RecursivelySpeculatable,
+]> {
+  let summary = "Container Op for Warp Specialization";
+  let description = [{
+    Higher level container for Warp Specialization Analysis.
+
+    Contains a variadic number warp groups, with
+    the number of warps in each group, plus a region to hold the
+    computation for that warp group.
+
+    Regions are not Isolated from Above to aid in analysis,
+    and take inputs purely by reference.
+
+    nvws.warp_group should be lowered to ttg.warp_specialize
+    before execution.
+  }];
+
+  let arguments = (ins DenseI32ArrayAttr:$numWarps);
+
+  let regions = (region VariadicRegion<MinSizedRegion<1>>:$partitionRegions);
+  let hasVerifier=1;
+  let hasCustomAssemblyFormat = 1;
+}
+
+def NVWS_WarpGroupReturnOp : NVWS_Op<"warp_group.return", [
+  Pure, Terminator, HasParent<"WarpGroupOp">
+]> {
+  let summary = "Terminator for a warp group region";
+  let description = [{
+    Warp groups are expected to return values via referential modification
+    of their inputs. Thus, the warp_group.return op takes no values to
+    return from the warp group.
+  }];
+
+  let assemblyFormat = "attr-dict";
+}
+
 #endif

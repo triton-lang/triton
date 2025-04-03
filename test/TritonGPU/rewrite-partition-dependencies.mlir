@@ -394,4 +394,30 @@ tt.func @self_recursion_and_use(%lb: i32, %ub: i32, %step: i32) {
   tt.return
 }
 
+// CHECK-LABEL: @conditional_consumer
+tt.func @conditional_consumer(%lb: i32, %ub: i32, %step: i32) {
+  // CHECK: ttg.local_alloc : () -> !ttg.memdesc<2x1xi32
+  scf.for %i = %lb to %ub step %step : i32 {
+    // CHECK: producer
+    %0 = "producer"() {ttg.partition = 0} : () -> !ty
+    // CHECK: rand
+    %cond = "rand"() : () -> i1
+    // CHECK: wait_barrier
+    // CHECK-NEXT: [[VALUE:%.*]] = ttg.local_load
+    // CHECK-NEXT: arrive_barrier
+    // CHECK-NEXT: scf.if
+    %1 = scf.if %cond -> !ty {
+      // CHECK-NEXT: something
+      "something"() : () -> ()
+      // CHECK-NEXT: yield [[VALUE]]
+      scf.yield %0 : !ty
+    } else {
+      %2 = "something"() : () -> !ty
+      scf.yield %2 : !ty
+    } {ttg.partition = 1}
+    "keep"(%1) {ttg.partition = 1} : (!ty) -> ()
+  } {ttg.partition.stages = [0, 2]}
+  tt.return
+}
+
 }

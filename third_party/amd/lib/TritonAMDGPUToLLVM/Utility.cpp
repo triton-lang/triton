@@ -8,6 +8,7 @@
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/LinearLayoutConversions.h"
 
+namespace tt = mlir::triton;
 using mlir::triton::ModuleAxisInfoAnalysis;
 using mlir::triton::AMD::DppCtrl;
 using mlir::triton::AMD::ISAFamily;
@@ -604,25 +605,55 @@ Type scaleDotElemTypeToMLIRType(MLIRContext *ctx, triton::ScaleDotElemType t) {
 }
 
 bool canCoalesceWriteIntoSharedMemory(RewriterBase &rewriter,
-                                      RankedTensorType srcTy,
-                                      triton::gpu::MemDescType dstTy,
-                                      unsigned vectorSize) {
-  auto shape = srcTy.getShape();
-  LinearLayout srcLayout =
-      triton::gpu::toLinearLayout(shape, srcTy.getEncoding());
-  LinearLayout sharedLayout =
-      triton::gpu::toLinearLayout(shape, dstTy.getEncoding());
-  LinearLayout srcToSharedLayout = srcLayout.invertAndCompose(sharedLayout);
+                                      const LinearLayout &srcToSharedLayout,
+                                      unsigned threadsPerWarp) {
+  auto contig = srcToSharedLayout.getNumConsecutiveInOut();
 
   StringAttr kLane = rewriter.getStringAttr("lane");
   for (int inLane : llvm::seq(srcToSharedLayout.getInDimSizeLog2(kLane))) {
     auto basis = srcToSharedLayout.getBasis(kLane, inLane)[0];
-    unsigned expected = vectorSize * (1 << inLane);
+    unsigned expected = contig * (1 << inLane);
     if (basis != expected) {
       LDBG("detected uncoalesced layout from blocked to shared in async copy "
            "for lane "
            << 1 + inLane << "; given " << basis << " but expected "
            << expected);
+      return false;
+    }
+  }
+  // Additionally we could swizzle based on the warp dimension so we need to
+  // check that when all bases are divided by contig, none of the first
+  // (log2(warpSize) + 1) bits are set to 1
+  assert(llvm::isPowerOf2_32(threadsPerWarp));
+  assert(llvm::isPowerOf2_32(contig));
+  unsigned mask = (threadsPerWarp * contig) - 1;
+  StringAttr kWarp = rewriter.getStringAttr("warp");
+  for (int inWarp : llvm::seq(srcToSharedLayout.getInDimSizeLog2(kWarp))) {
+    auto basis = srcToSharedLayout.getBasis(kWarp, inWarp)[0];
+    if ((basis & mask) != 0) {
+      LDBG("detected uncoalesced layout from blocked to shared in async copy "
+           "for warp "
+           << inWarp);
+      return false;
+    }
+  }
+
+  return true;
+}
+
+bool doesSwizzleInsideWarp(RewriterBase &rewriter,
+                           const LinearLayout &srcToSharedLayout,
+                           unsigned threadsPerWarp) {
+  auto contig = srcToSharedLayout.getNumConsecutiveInOut();
+  // If all bases in lane dimension are below threadsPerWarp multiplied with the
+  // contiguity we do not swizzle across warp boundaries.
+  assert(llvm::isPowerOf2_32(threadsPerWarp));
+  unsigned upperLimit = threadsPerWarp * contig;
+
+  StringAttr kLane = rewriter.getStringAttr("lane");
+  for (int inLane : llvm::seq(srcToSharedLayout.getInDimSizeLog2(kLane))) {
+    auto basis = srcToSharedLayout.getBasis(kLane, inLane)[0];
+    if (basis >= upperLimit) {
       return false;
     }
   }
@@ -639,6 +670,45 @@ bool isUsedByDotScaledOp(Operation *op) {
         return isa<triton::DotScaledOp, triton::amdgpu::UpcastMXFPOp>(
             operation);
       });
+}
+
+bool isChainDotHead(tt::DotOpInterface dotOp) {
+  auto isInSameRegion = [&dotOp](Operation *op) {
+    return op->getParentRegion() == dotOp->getParentRegion();
+  };
+  ForwardSliceOptions fwdOpt;
+  fwdOpt.filter = isInSameRegion;
+  SetVector<mlir::Operation *> fwdSlices;
+  getForwardSlice(dotOp, &fwdSlices, fwdOpt);
+  for (Operation *op : fwdSlices) {
+    if (auto dOp = dyn_cast<tt::DotOpInterface>(op)) {
+      assert(dOp != dotOp);
+      auto opA = dOp.getA().getDefiningOp();
+      if (opA && fwdSlices.contains(opA)) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+bool isChainDotTail(tt::DotOpInterface dotOp) {
+  auto isInSameRegion = [&dotOp](Operation *op) {
+    return op->getParentRegion() == dotOp->getParentRegion();
+  };
+  BackwardSliceOptions bwdOpt;
+  bwdOpt.omitBlockArguments = true;
+  bwdOpt.filter = isInSameRegion;
+  SetVector<Operation *> bwdSlices;
+  Operation *opA = dotOp.getA().getDefiningOp();
+  if (!opA)
+    return false;
+  getBackwardSlice(opA, &bwdSlices, bwdOpt);
+  if (llvm::find_if(bwdSlices, [](Operation *op) {
+        return isa<tt::DotOpInterface>(op);
+      }) != bwdSlices.end())
+    return true;
+  return false;
 }
 
 } // namespace mlir::LLVM::AMD

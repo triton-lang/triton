@@ -60,10 +60,7 @@ scf::ForOp pipelineDot(scf::ForOp forOp, ttng::TCGen5MMAOp dotOp,
   Value phase = rewriter.create<arith::ConstantIntOp>(loc, 0, 32);
   Value notZerothIter = rewriter.create<arith::ConstantIntOp>(loc, 0, 1);
   Type loadTy = loadOp.getType();
-  scf::ForOp newForOp =
-      replaceForOpWithNewSignature(rewriter, forOp, {phase, notZerothIter});
-  forOp.erase();
-  forOp = newForOp;
+  (void)addIterArgsToLoop(rewriter, forOp, {phase, notZerothIter});
   phase = forOp.getRegionIterArg(forOp.getNumRegionIterArgs() - 2);
   notZerothIter = forOp.getRegionIterArg(forOp.getNumRegionIterArgs() - 1);
   Value oldAccValue = forOp.getRegionIterArg(yieldArgNo);

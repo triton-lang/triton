@@ -4,7 +4,7 @@
 
 | **`Documentation`** | **`Nightly Wheels`** |
 |-------------------- | -------------------- |
-| [![Documentation](https://github.com/triton-lang/triton/actions/workflows/documentation.yml/badge.svg)](https://triton-lang.org/) | [![Wheels](https://github.com/triton-lang/triton/actions/workflows/wheels.yml/badge.svg?branch=release/2.0.x)](https://github.com/triton-lang/triton/actions/workflows/wheels.yml) |
+| [![Documentation](https://github.com/triton-lang/triton/actions/workflows/documentation.yml/badge.svg)](https://triton-lang.org/) | [![Wheels](https://github.com/triton-lang/triton/actions/workflows/wheels.yml/badge.svg)](https://github.com/triton-lang/triton/actions/workflows/wheels.yml) |
 
 # Triton
 
@@ -70,7 +70,7 @@ Finally, follow the instructions below to install triton from source.
 git clone https://github.com/triton-lang/triton.git
 cd triton
 
-pip install ninja cmake wheel pybind11 # build-time dependencies
+pip install -r python/requirements.txt # build-time dependencies
 pip install -e python
 ```
 
@@ -83,7 +83,7 @@ cd triton
 python -m venv .venv --prompt triton
 source .venv/bin/activate
 
-pip install ninja cmake wheel pybind11 # build-time dependencies
+pip install -r python/requirements.txt # build-time dependencies
 pip install -e python
 ```
 

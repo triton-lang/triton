@@ -182,6 +182,9 @@ struct ConvertTritonGPUToLLVM
         id.replaceAllUsesWith(zero);
       });
     }
+
+    // Ensure warp group code is isolated from above.
+    makeAllWarpGroupsIsolatedFromAbove(mod);
   }
 
 private:

@@ -4,6 +4,7 @@
 
 #include "mlir/Analysis/SliceAnalysis.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
+#include "mlir/IR/Dominance.h"
 #include "mlir/IR/IRMapping.h"
 #include "mlir/Support/LLVM.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
@@ -16,6 +17,7 @@
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "llvm/Support/Debug.h"
+
 #define DEBUG_TYPE "ttg-utility"
 #define DBGS() (llvm::dbgs() << "[" DEBUG_TYPE "]: ")
 #define LDBG(X) LLVM_DEBUG(DBGS() << X << "\n")
@@ -668,6 +670,19 @@ scf::ForOp replaceForOpWithNewSignature(OpBuilder &rewriter, scf::ForOp loop,
   return newForOp;
 }
 
+Block::BlockArgListType addIterArgsToLoop(OpBuilder &rewriter, scf::ForOp &loop,
+                                          ValueRange newIterOperands) {
+  unsigned curArgIdx = loop.getNumRegionIterArgs();
+  scf::ForOp newLoop =
+      replaceForOpWithNewSignature(rewriter, loop, newIterOperands);
+  // Save the caller from insertion point invalidation.
+  if (rewriter.getInsertionPoint() == loop->getIterator())
+    rewriter.setInsertionPoint(newLoop);
+  loop.erase();
+  loop = newLoop;
+  return loop.getRegionIterArgs().slice(curArgIdx);
+}
+
 scf::WhileOp replaceWhileOpWithNewSignature(
     OpBuilder &rewriter, scf::WhileOp loop, ValueRange newIterOperands,
     TypeRange newResultTypes,
@@ -1267,6 +1282,95 @@ getMMAsWithMultiBufferredOperands(scf::ForOp forOp,
   }
 
   return eligible;
+}
+
+Operation *findNearestCommonDominator(ArrayRef<Operation *> ops,
+                                      DominanceInfo &domInfo) {
+  if (ops.size() == 0) {
+    return nullptr;
+  }
+  if (ops.size() == 1) {
+    return ops[0];
+  }
+  llvm::SmallPtrSet<Block *, 16> blocks;
+  for (auto op : ops) {
+    blocks.insert(op->getBlock());
+  }
+  Block *domBlock = domInfo.findNearestCommonDominator(blocks);
+  if (domBlock == nullptr) {
+    return nullptr;
+  }
+  SmallVector<Operation *> ancestorOps;
+  for (auto op : ops) {
+    ancestorOps.push_back(domBlock->findAncestorOpInBlock(*op));
+  }
+  Operation *dom = ancestorOps[0];
+  for (unsigned i = 1; i < ops.size(); i++) {
+    if (ancestorOps[i]->isBeforeInBlock(dom)) {
+      dom = ancestorOps[i];
+    }
+  }
+  return dom;
+}
+
+void visitNestedOperands(Operation *op,
+                         function_ref<void(OpOperand &)> visitor) {
+  op->walk([&](Operation *nestedOp) {
+    for (OpOperand &operand : nestedOp->getOpOperands()) {
+      if (operand.get().getParentBlock()->getParentOp()->isProperAncestor(op))
+        visitor(operand);
+    }
+  });
+}
+
+void visitNestedOperands(Operation *op, function_ref<void(Value)> visitor) {
+  visitNestedOperands(op, [&](OpOperand &operand) { visitor(operand.get()); });
+}
+
+SetVector<Value> getNestedOperands(Operation *op) {
+  SetVector<Value> result;
+  visitNestedOperands(op, [&](Value operand) { result.insert(operand); });
+  return result;
+}
+
+void eraseLoopCarriedValues(scf::ForOp &loop, llvm::BitVector indices) {
+  // Pad the indices in case new arguments were added.
+  while (indices.size() != loop.getInitArgs().size())
+    indices.push_back(false);
+
+  loop.getBody()->getTerminator()->eraseOperands(indices);
+  loop.getBody()->eraseArguments([&](BlockArgument arg) {
+    int idx = arg.getArgNumber();
+    return idx != 0 && indices.test(idx - 1);
+  });
+
+  llvm::BitVector loopOperandIndices(loop->getNumOperands());
+  for (auto [i, operand] : llvm::enumerate(loop.getInitArgsMutable())) {
+    if (indices.test(i))
+      loopOperandIndices.set(operand.getOperandNumber());
+  }
+  loop->eraseOperands(loopOperandIndices);
+
+  // Rewrite the loop to erase results.
+  OperationState state(loop.getLoc(), loop->getName(), loop->getOperands(),
+                       loop.getInitArgs().getTypes(), loop->getAttrs());
+  state.addRegion()->takeBody(loop.getBodyRegion());
+
+  OpBuilder b(loop);
+  auto newLoop = cast<scf::ForOp>(b.create(state));
+
+  // Replace uses of the old loop with the new loop.
+  unsigned newResultIdx = 0;
+  for (auto [i, result] : llvm::enumerate(loop.getResults())) {
+    if (indices.test(i)) {
+      assert(result.use_empty() && "loop carried value still has uses");
+      continue;
+    }
+    result.replaceAllUsesWith(newLoop.getResult(newResultIdx++));
+  }
+
+  loop.erase();
+  loop = newLoop;
 }
 
 } // namespace mlir

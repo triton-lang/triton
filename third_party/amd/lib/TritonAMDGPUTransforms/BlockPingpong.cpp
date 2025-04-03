@@ -454,6 +454,7 @@ LogicalResult Pingponger::transformTwoPPClusters(OpBuilder &builder,
   // First, slice local_loads and dot into 2 parts
   if (sliceDot(builder, loc, dotOps[0], 2).failed())
     return failure();
+  builder.setInsertionPointAfter(gLoadOps[1]);
   // Reorder operations into two mem/dot clusters
 
   // Memory cluster #0

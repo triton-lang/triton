@@ -5,6 +5,7 @@
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/LLVMIR/LLVMTypes.h"
 #include "mlir/Dialect/LLVMIR/NVVMDialect.h"
+#include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "llvm/Support/MathExtras.h"
 
 using namespace mlir;
@@ -491,6 +492,12 @@ bool TargetInfo::canUseStMatrix(RankedTensorType tensorTy,
   if (tensorTy.getElementType().getIntOrFloatBitWidth() != 16)
     return false;
   if (order[0] != 1)
+    return false;
+
+  // Each chunk is filled in with a single warp
+  int numColsPerChunk = (8 * swizzleByteSize) / getElementBitWidth(tensorTy);
+  int instrN = mmaLayout.getInstrShape()[1];
+  if (instrN < numColsPerChunk)
     return false;
 
   auto tensorShapePerCTA = getShapePerCTA(mmaLayout, tensorTy.getShape());

@@ -1,5 +1,6 @@
 #include "TargetInfo.h"
 #include "TritonNVIDIAGPUToLLVM/PTXAsmFormat.h"
+#include "mlir/Analysis/TopologicalSortUtils.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/LLVMIR/NVVMDialect.h"
 #include "mlir/IR/BuiltinOps.h"
@@ -96,6 +97,81 @@ static void createBarrier(TritonLLVMIRRewriter &b, unsigned barIdx,
 
   (*ptxBuilder.create<>(ptxString))();
   ptxBuilder.launch(b, b.getLoc(), void_ty(b.getContext()));
+}
+
+//===----------------------------------------------------------------------===//
+// elideTrivialCaptures
+//===----------------------------------------------------------------------===//
+
+static LogicalResult findTrivialSubcomputation(LLVM::LLVMFuncOp func,
+                                               Value capture,
+                                               SetVector<Operation *> &ops) {
+  SetVector<Value> worklist;
+  worklist.insert(capture);
+  for (unsigned i = 0; i != worklist.size(); ++i) {
+    Value capture = worklist[i];
+    // Check for a kernel argument.
+    if (auto arg = dyn_cast<BlockArgument>(capture)) {
+      if (arg.getOwner() == &func.getBody().front())
+        continue;
+      // Otherwise, this is some other block argument that cannot be elided.
+      return failure();
+    }
+
+    Operation *op = capture.getDefiningOp();
+    // Check if the defining op can be rematerialized. At the LLVM level,
+    // checking for pure is probably a good enough heuristic.
+    if (isPure(op)) {
+      ops.insert(op);
+      worklist.insert(op->operand_begin(), op->operand_end());
+      continue;
+    }
+    // The op cannot be rematerialized.
+    return failure();
+  }
+
+  // Cap the number of ops that can be rematerialized.
+  // FIXME: This is arbitrary.
+  return success(ops.size() <= 16);
+}
+
+static void elideTrivialCaptures(LLVM::LLVMFuncOp func,
+                                 ArrayRef<WarpSpecializeOp> wsOps) {
+  // The goal is to completely eliminate captures by hoisting or rematerializing
+  // computations. We could minimize captures by rematerializing
+  // subcomputations, but that is much more complicated. Prefer rematerializing
+  // because that reduces liveranges. If subgraphs are duplicated more than
+  // once, we will rely on CSE to clean them up.
+  SetVector<Operation *> subgraph;
+  for (WarpSpecializeOp wsOp : wsOps) {
+    llvm::BitVector toErase(wsOp.getNumOperands());
+    for (auto [i, capture] : llvm::enumerate(wsOp.getExplicitCaptures())) {
+      subgraph.clear();
+      if (failed(findTrivialSubcomputation(func, capture, subgraph)))
+        continue;
+      toErase.set(i);
+      subgraph = topologicalSort(subgraph);
+
+      for (Region *region : wsOp.getPartitionRegions()) {
+        OpBuilder b(region);
+        IRMapping mapping;
+        for (Operation *op : subgraph) {
+          b.clone(*op, mapping);
+        }
+        Value remat = capture;
+        if (!subgraph.empty()) {
+          unsigned resultIdx = cast<OpResult>(capture).getResultNumber();
+          remat = mapping.lookup(subgraph.back())->getResult(resultIdx);
+        }
+        region->getArgument(i).replaceAllUsesWith(remat);
+      }
+    }
+
+    wsOp->eraseOperands(toErase);
+    for (Region *region : wsOp.getPartitionRegions()) {
+      region->front().eraseArguments(toErase);
+    }
+  }
 }
 
 //===----------------------------------------------------------------------===//
@@ -203,6 +279,10 @@ static LogicalResult lowerWarpSpecialize(LLVM::LLVMFuncOp func,
   if (failed(rewriteWarpGroupBarriers(func, wsOps, threadsPerWarp,
                                       defaultWarpGroupSize)))
     return failure();
+
+  // Attempt to elide captures of trivial computations by hoisting them into the
+  // header or rematerializing them into each partition.
+  elideTrivialCaptures(func, wsOps);
 
   MLIRContext *ctx = func.getContext();
   TritonLLVMIRRewriter b(func.getLoc(), ctx);
@@ -399,8 +479,7 @@ struct ConvertWarpSpecializeToLLVM
   void runOnOperation() override {
     ModuleOp mod = getOperation();
     // FIXME: Assume warp specialization only happens on Blackwell.
-    NVIDIA::TargetInfo targetInfo(/*computeCapability=*/100,
-                                  /*ptxVersion=*/100);
+    NVIDIA::TargetInfo targetInfo(/*computeCapability=*/100, /*ptxVersion=*/87);
 
     // Convert types and cleanup unrealized conversions.
     mlir::LowerToLLVMOptions option(&getContext());

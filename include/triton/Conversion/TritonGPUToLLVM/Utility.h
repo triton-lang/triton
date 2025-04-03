@@ -515,6 +515,7 @@ inline Value getStackPointer(RewriterBase &rewriter,
 }
 
 inline Value getGlobalScratchPtr(Location loc, RewriterBase &rewriter,
+                                 const TargetInfoBase &targetInfo,
                                  FunctionOpInterface funcOp,
                                  Value allocOffset = {}) {
   // See NOTE: [Additional Function Arguments]
@@ -553,6 +554,11 @@ inline Value getGlobalScratchPtr(Location loc, RewriterBase &rewriter,
   Value linearId = gridIdx[2];
   for (int k = 0; k < 2; ++k) {
     linearId = b.add(gridIdx[1 - k], b.mul(linearId, gridDim[1 - k]));
+  }
+  auto numCTAs = triton::gpu::TritonGPUDialect::getNumCTAs(mod);
+  if (numCTAs > 1) {
+    linearId = b.mul(linearId, b.i32_val(numCTAs));
+    linearId = b.add(linearId, targetInfo.getClusterCTAId(rewriter, loc));
   }
 
   auto allocSize = allocSizeAttr.getValue().getZExtValue();
@@ -847,6 +853,10 @@ inline llvm::MapVector<StringAttr, int32_t> getFreeVariableMasks(Type type) {
 inline bool isCanonicalIndex(unsigned index, unsigned freeVarMask) {
   return (index & freeVarMask) == 0;
 }
+
+// Certain lowerings may introduce references to function arguments. Keep warp
+// group code isolated from above by invoking this function.
+void makeAllWarpGroupsIsolatedFromAbove(Operation *op);
 
 } // namespace mlir
 

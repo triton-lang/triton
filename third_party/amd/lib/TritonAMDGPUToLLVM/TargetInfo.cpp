@@ -112,9 +112,7 @@ Value TargetInfo::getClusterCTAId(RewriterBase &rewriter, Location loc) const {
 
 Value TargetInfo::ballot(RewriterBase &rewriter, Location loc, Type type,
                          Value cmp) const {
-  return LLVM::createLLVMIntrinsicCallOp(rewriter, loc, "llvm.amdgcn.ballot",
-                                         type, cmp)
-      ->getResult(0);
+  return rewriter.create<ROCDL::BallotOp>(loc, type, cmp);
 }
 
 void TargetInfo::storeDShared(RewriterBase &rewriter, Location loc, Value ptr,
@@ -368,12 +366,10 @@ bool TargetInfo::warpReduce(RewriterBase &rewriter, Location loc,
     // Similarly, we need to cast data types for readlane instruction.
     Type actualType = castToAndSExtInt(rewriter, loc, buf, valType, 16);
 
-    // Get reduction result from lane 63/31
-    std::string intrinsic = "llvm.amdgcn.readlane";
-    Value result = LLVM::createLLVMIntrinsicCallOp(
-                       rewriter, loc, intrinsic, actualType,
-                       ValueRange{buf, b.i32_val(isCDNA() ? 63 : 31)})
-                       ->getResult(0);
+    // Get reduction result from the last lane of the warp
+    Value lastLaneId = b.i32_val(gpu::lookupThreadsPerWarp(rewriter) - 1);
+    Value result =
+        rewriter.create<ROCDL::ReadlaneOp>(loc, actualType, buf, lastLaneId);
 
     result = truncAndCastFromInt(rewriter, loc, result, valType, 16);
 

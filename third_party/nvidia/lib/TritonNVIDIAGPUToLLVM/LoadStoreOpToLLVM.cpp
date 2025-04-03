@@ -17,6 +17,7 @@
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/LinearLayoutConversions.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
+#include "triton/Dialect/TritonNvidiaGPU/Transforms/TMAUtilities.h"
 
 #include <cassert>
 
@@ -97,6 +98,37 @@ std::string getRegisterSizeCode(int size, bool is_float) {
   default:
     llvm_unreachable("Unsupported register size");
   }
+}
+
+Value createCachePolicy(triton::EvictionPolicy opEvict,
+                        ConversionPatternRewriter &rewriter, Location loc) {
+  // Emit createpolicy.fractional.L2::policy.b64 xx 1.0
+  PTXBuilder ptxBuilder;
+  const bool hasL2EvictPolicy =
+      opEvict == triton::EvictionPolicy::EVICT_FIRST ||
+      opEvict == triton::EvictionPolicy::EVICT_LAST;
+  Value policyRet;
+
+  if (hasL2EvictPolicy) {
+    auto &policy =
+        ptxBuilder.create<>("createpolicy.fractional")
+            ->o("L2::evict_first",
+                opEvict == triton::EvictionPolicy::EVICT_FIRST)
+            .o("L2::evict_last", opEvict == triton::EvictionPolicy::EVICT_LAST)
+            .b(64);
+
+    const std::string writeConstraint = "=l";
+    // prepare asm operands
+    auto *dstOpr = ptxBuilder.newOperand(writeConstraint, /*init=*/true);
+    std::string fractionStr = "1.0";
+    auto *fractionOpr = ptxBuilder.newConstantOperand(fractionStr);
+    policy(dstOpr, fractionOpr);
+
+    Type policyRetTy = rewriter.getI64Type();
+    policyRet = ptxBuilder.launch(rewriter, loc, policyRetTy);
+  }
+
+  return policyRet;
 }
 
 // Contains some helper functions for both Load and Store conversions.
@@ -246,10 +278,6 @@ struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp>,
       const size_t movWidth = width < 16 ? 16 : width;
       assert(wordNElems * nWords * numVecs == numElems);
 
-      // TODO(Superjomn) Add cache policy fields to StoreOp.
-      // TODO(Superjomn) Deal with cache policy here.
-      const bool hasL2EvictPolicy = false;
-
       PTXBuilder ptxBuilder;
 
       Value pred = mask ? maskElems[vecStart] : Value{};
@@ -305,6 +333,9 @@ struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp>,
       auto *addrOpr =
           ptxBuilder.newAddrOperand(ptrElems[vecStart], "l", in_off);
 
+      // Create L2 cache policy register if needed
+      Value l2PolicyReg = createCachePolicy(op.getEvict(), rewriter, loc);
+
       // Define the instruction opcode
       auto &ld = ptxBuilder.create<>("ld")
                      ->o("volatile", op.getIsVolatile())
@@ -315,15 +346,13 @@ struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp>,
                         op.getEvict() == triton::EvictionPolicy::EVICT_FIRST)
                      .o("L1::evict_last",
                         op.getEvict() == triton::EvictionPolicy::EVICT_LAST)
-                     .o("L1::cache_hint", hasL2EvictPolicy)
+                     .o("L2::cache_hint", l2PolicyReg != Value())
                      .v(nWords)
                      .b(width);
 
-      PTXBuilder::Operand *evictOpr{};
-
-      // Here lack a mlir::Value to bind to this operation, so disabled.
-      // if (has_l2_evict_policy)
-      //   evictOpr = ptxBuilder.newOperand(l2Evict, "l");
+      PTXBuilder::Operand *evictOpr = nullptr;
+      if (l2PolicyReg)
+        evictOpr = ptxBuilder.newOperand(l2PolicyReg, "l");
 
       if (!evictOpr)
         ld(dstsOpr, addrOpr).maybePredicate(pred, "b");
@@ -336,10 +365,6 @@ struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp>,
                        ? LLVM::LLVMStructType::getLiteral(getContext(), retTys)
                        : retTys[0];
 
-      // TODO: if (has_l2_evict_policy)
-      // auto asmDialectAttr =
-      // LLVM::AsmDialectAttr::get(rewriter.getContext(),
-      //                                                 LLVM::AsmDialect::AD_ATT);
       Value ret = ptxBuilder.launch(rewriter, loc, retTy);
 
       // Extract and store return values
@@ -492,6 +517,9 @@ struct StoreOpConversion : public ConvertOpToLLVMPattern<triton::StoreOp>,
       auto *asmAddr =
           ptxBuilder.newAddrOperand(ptrElems[vecStart], "l", in_off);
 
+      // Create L2 cache policy register if needed
+      Value l2PolicyReg = createCachePolicy(op.getEvict(), rewriter, loc);
+
       auto &ptxStoreInstr =
           ptxBuilder.create<>("st")
               ->global()
@@ -503,9 +531,18 @@ struct StoreOpConversion : public ConvertOpToLLVMPattern<triton::StoreOp>,
                  op.getEvict() == triton::EvictionPolicy::EVICT_FIRST)
               .o("L1::evict_last",
                  op.getEvict() == triton::EvictionPolicy::EVICT_LAST)
+              .o("L2::cache_hint", l2PolicyReg != Value())
               .v(nWords)
               .b(width);
-      ptxStoreInstr(asmAddr, asmArgList).maybePredicate(pred, "b");
+
+      PTXBuilder::Operand *evictOpr = nullptr;
+      if (l2PolicyReg)
+        evictOpr = ptxBuilder.newOperand(l2PolicyReg, "l");
+
+      if (!evictOpr)
+        ptxStoreInstr(asmAddr, asmArgList).maybePredicate(pred, "b");
+      else
+        ptxStoreInstr(asmAddr, asmArgList, evictOpr).maybePredicate(pred, "b");
 
       auto asmReturnTy = void_ty(ctx);
       ptxBuilder.launch(rewriter, loc, asmReturnTy);
@@ -1138,6 +1175,28 @@ struct AsyncCopyGlobalToLocalOpConversion
   }
 };
 
+static SmallVector<Value> getCtaOffset(RewriterBase &rewriter, Location loc,
+                                       Attribute encoding,
+                                       ArrayRef<int64_t> shapePerCTA) {
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
+  auto rank = shapePerCTA.size();
+  auto ctaId = rewriter.create<nvgpu::ClusterCTAIdOp>(loc);
+  auto ctaLayout = getCTALayout(encoding);
+  SmallVector<Value> ctaOffset(rank, Value());
+  Value curVal = ctaId;
+  for (int i = 0; i < rank; i++) {
+    auto dim = ctaLayout.getCTAOrder()[i];
+    auto splits = ctaLayout.getCTASplitNum()[dim];
+    if (splits == 1)
+      continue;
+    auto splitsVal = b.i32_val(splits);
+    auto idx = b.urem(curVal, splitsVal);
+    curVal = b.udiv(curVal, splitsVal);
+    ctaOffset[dim] = b.mul(idx, b.i32_val(shapePerCTA[dim]));
+  }
+  return ctaOffset;
+}
+
 struct AsyncTMACopyGlobalToLocalOpConversion
     : public ConvertOpToLLVMPattern<
           triton::nvidia_gpu::AsyncTMACopyGlobalToLocalOp> {
@@ -1181,17 +1240,14 @@ struct AsyncTMACopyGlobalToLocalOpConversion
     int elementSizeInBytes =
         op.getResult().getType().getElementType().getIntOrFloatBitWidth() / 8;
     int packingFactor = (mmaEncoding && mmaEncoding.getFp4Padded()) ? 2 : 1;
-    int totalNumElements =
-        product(op.getResult().getType().getShape()) * packingFactor;
-    int64_t size = totalNumElements * elementSizeInBytes;
 
-    int innerBlockSize = op.getResult().getType().getShape().back();
-    int contigDimSizeInByte =
-        innerBlockSize * elementSizeInBytes * packingFactor;
-    int numCopies = 1;
+    auto shapePerCTA = ttg::getShapePerCTA(op.getResult().getType());
+    auto contigDimSize = nvidia_gpu::getTMAContigDim(op.getResult().getType());
+    int numCopies =
+        ceil<int>(shapePerCTA.back() * packingFactor, contigDimSize);
     int rank = op.getCoord().size();
-    if (rank > 1)
-      numCopies = ceil<int>(contigDimSizeInByte, 128);
+    auto ctaOffset = getCtaOffset(rewriter, loc, encoding, shapePerCTA);
+    int elementsPerCTA = product(shapePerCTA) * packingFactor;
 
     // The bounding box inner dimension must be less than or equal to the
     // swizzle size.
@@ -1208,7 +1264,7 @@ struct AsyncTMACopyGlobalToLocalOpConversion
       Type elemPtrTy = ptr_ty(rewriter.getContext(), 3);
       Value copyIdxVal = b.add(warpID, b.i32_val(copyIdx));
       Value shMemOffset =
-          b.mul(copyIdxVal, b.i32_val(totalNumElements / numCopies));
+          b.mul(copyIdxVal, b.i32_val(elementsPerCTA / numCopies));
       Value shMemPtr =
           b.gep(elemPtrTy, llvmElemTy, dstMemObj.getBase(), shMemOffset);
       SmallVector<PTXBuilder::Operand *> operands = {
@@ -1221,8 +1277,10 @@ struct AsyncTMACopyGlobalToLocalOpConversion
       int operandIdx = 3;
       for (int i = 0; i < rank; i++) {
         Value coord = adaptor.getCoord()[rank - i - 1];
+        if (i < ctaOffset.size() && ctaOffset[ctaOffset.size() - i - 1])
+          coord = b.add(coord, ctaOffset[ctaOffset.size() - i - 1]);
         if (i == 0) {
-          Value offset = b.mul(copyIdxVal, b.i32_val(128 / elementSizeInBytes));
+          Value offset = b.mul(copyIdxVal, b.i32_val(contigDimSize));
           coord = b.add(coord, offset);
         }
         operands.push_back(ptxBuilderTMA.newOperand(coord, "r"));
@@ -1265,25 +1323,20 @@ struct AsyncTMACopyLocalToGlobalOpConversion
     Value pred = LLVM::NVIDIA::createElectPredicate(loc, rewriter);
     int elementSizeInBytes =
         op.getSrc().getType().getElementType().getIntOrFloatBitWidth() / 8;
-    int totalNumElements = product(op.getSrc().getType().getShape());
-    int64_t size = totalNumElements * elementSizeInBytes;
 
     auto mod = op->getParentOfType<ModuleOp>();
     int numWarps = ttg::lookupNumWarps(op);
     int warpSize = ttg::TritonGPUDialect::getThreadsPerWarp(mod);
     Value warpID = rewriter.create<nvgpu::WarpIdOp>(loc);
-    int innerBlockSize = op.getSrc().getType().getShape().back();
-    int contigDimSizeInByte = innerBlockSize * elementSizeInBytes;
-    int numCopies = 1;
-    int rank = op.getCoord().size();
-    if (rank > 1)
-      numCopies = ceil<int>(contigDimSizeInByte, 128);
+    auto shapePerCTA = ttg::getShapePerCTA(op.getSrc().getType());
+    int elementsPerCTA = product(shapePerCTA);
 
-    // The bounding box inner dimension must be less than or equal to the
-    // swizzle size.
-    // https://docs.nvidia.com/cuda/cuda-driver-api/group__CUDA__TENSOR__MEMORY.html#group__CUDA__TENSOR__MEMORY_1ga7c7d2aaac9e49294304e755e6f341d7
-    // We clamp the block size and the codegen will emit multiple copy
-    // operations.
+    auto contigDimSize = nvidia_gpu::getTMAContigDim(op.getSrc().getType());
+    int numCopies = shapePerCTA.back() / contigDimSize;
+    auto rank = op.getCoord().size();
+    auto encoding = op.getSrc().getType().getEncoding();
+    auto ctaOffset = getCtaOffset(rewriter, loc, encoding, shapePerCTA);
+
     for (int copyIdx = 0; copyIdx < numCopies; copyIdx += numWarps) {
       int numWarpsToCopy = std::min(numCopies - copyIdx, numWarps);
       if (numWarpsToCopy == 1)
@@ -1294,7 +1347,7 @@ struct AsyncTMACopyLocalToGlobalOpConversion
       Type elemPtrTy = ptr_ty(rewriter.getContext(), 3);
       Value copyIdxVal = b.add(warpID, b.i32_val(copyIdx));
       Value shMemOffset =
-          b.mul(copyIdxVal, b.i32_val(totalNumElements / numCopies));
+          b.mul(copyIdxVal, b.i32_val(elementsPerCTA / numCopies));
       Value shMemPtr =
           b.gep(elemPtrTy, llvmElemTy, dstMemObj.getBase(), shMemOffset);
       SmallVector<PTXBuilder::Operand *> operands = {
@@ -1305,8 +1358,10 @@ struct AsyncTMACopyLocalToGlobalOpConversion
       int operandIdx = 2;
       for (int i = 0; i < rank; i++) {
         Value coord = adaptor.getCoord()[rank - i - 1];
+        if (i < ctaOffset.size() && ctaOffset[ctaOffset.size() - i - 1])
+          coord = b.add(coord, ctaOffset[ctaOffset.size() - i - 1]);
         if (i == 0) {
-          Value offset = b.mul(copyIdxVal, b.i32_val(128 / elementSizeInBytes));
+          Value offset = b.mul(copyIdxVal, b.i32_val(contigDimSize));
           coord = b.add(coord, offset);
         }
         operands.push_back(ptxBuilderTMA.newOperand(coord, "r"));
@@ -1331,7 +1386,13 @@ struct AsyncTMACopyLocalToGlobalOpConversion
 };
 
 static LinearLayout getUnswizzledLayout(triton::gpu::MemDescType type) {
-  return triton::gpu::sharedToLinearLayoutLeadingOffset(
+  auto encoding = type.getEncoding();
+  auto mmaEncoding = dyn_cast<NVMMASharedEncodingAttr>(type.getEncoding());
+  if (!mmaEncoding) {
+    assert(isa<ttg::SwizzledSharedEncodingAttr>(encoding));
+    return ttg::toLinearLayout(type.getShape(), encoding);
+  }
+  return ttg::sharedToLinearLayoutLeadingOffset(
       type.getShape(), cast<NVMMASharedEncodingAttr>(type.getEncoding()),
       /*disableSwizzle=*/true);
 }
@@ -1394,10 +1455,10 @@ static LogicalResult iterateGatherScatterIndices(
   unsigned numWarps = xCoordsLayout.getInDimSize(kWarp);
 
   // Each gather4 instructions reads 128 bytes for 4 rows at a time.
-  unsigned innerBlockSize = smemType.getShape().back();
-  unsigned contigDimSizeInBytes =
-      innerBlockSize * ceil<unsigned>(smemType.getElementTypeBitWidth(), 8);
-  unsigned numMessagesPerRow = ceil<unsigned>(contigDimSizeInBytes, 128);
+  auto shapePerCTA = ttg::getShapePerCTA(smemType);
+  unsigned innerBlockSize = shapePerCTA.back();
+  unsigned contigDimSize = nvidia_gpu::getTMAContigDim(smemType);
+  unsigned numMessagesPerRow = ceil<unsigned>(innerBlockSize, contigDimSize);
 
   // `xCoordsLayout` maps the register ID into dim0. Tile dim1 by adding a new
   // dimension representing the TMA message ID.
@@ -1428,8 +1489,7 @@ static LogicalResult iterateGatherScatterIndices(
     return op->emitError("x offsets must be broadcasted across each warp");
 
   Value warpId = rewriter.create<nvgpu::WarpIdOp>(loc);
-  // Each block has separate shared memory. Multiple CTAs don't work anyways.
-  Value blockId = b.i32_val(0);
+  Value blockId = rewriter.create<nvgpu::ClusterCTAIdOp>(loc);
 
   // Mask out warps with redundant x offsets.
   pred = b.and_(pred,
