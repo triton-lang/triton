@@ -108,7 +108,7 @@ combineRedundantWaitOps(llvm::SmallSetVector<ttg::AsyncWaitOp, 8> &waitOps) {
     if (toDelete.count(waitOp))
       continue;
     SmallVector<ttg::AsyncWaitOp> waitGroup = {waitOp};
-    SmallVector<Value> depTokens;
+    SmallVector<Value> depTokens = waitOp.getOperands();
     unsigned minWaitNumber = waitOp.getNum();
     Operation *next = waitOp->getNextNode();
     while (next && !isa<ttg::AsyncCommitGroupOp>(next)) {
