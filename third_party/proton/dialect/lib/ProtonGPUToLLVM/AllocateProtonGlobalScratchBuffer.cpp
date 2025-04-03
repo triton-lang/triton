@@ -10,7 +10,7 @@ using namespace mlir::triton;
 namespace mlir {
 namespace triton::proton {
 #define GEN_PASS_DEF_ALLOCATEPROTONGLOBALSCRATCHBUFFER
-#include "proton/dialect/include/Conversion/ProtonGPUToLLVM/Passes.h.inc"
+#include "Conversion/ProtonGPUToLLVM/Passes.h.inc"
 } // namespace triton::proton
 } // namespace mlir
 
