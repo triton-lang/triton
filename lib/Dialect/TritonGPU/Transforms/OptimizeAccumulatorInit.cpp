@@ -173,18 +173,6 @@ findZeroInitOp(Value accUse, scf::ForOp forOp, bool &loopArgIsZero) {
 
 } // namespace
 
-std::optional<bool> getBoolFromConstant(Value cst) {
-  auto constantOp = cst.getDefiningOp<arith::ConstantOp>();
-  if (!constantOp) {
-    return std::nullopt;
-  }
-  assert(constantOp.getValue());
-  if (auto boolAttr = dyn_cast<BoolAttr>(constantOp.getValue())) {
-    return boolAttr.getValue();
-  }
-  return std::nullopt;
-}
-
 class OptimizeAccumulatorInitPass
     : public impl::TritonGPUOptimizeAccumulatorInitBase<
           OptimizeAccumulatorInitPass> {

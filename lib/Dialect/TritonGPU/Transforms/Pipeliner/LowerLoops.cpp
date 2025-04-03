@@ -1106,6 +1106,26 @@ scf::ForOp lowerMMA(ttng::MMAv5OpInterface mma, scf::ForOp forOp,
   }
 
   OpBuilder builder(forOp);
+
+  if (auto initFlagArg = dyn_cast<BlockArgument>(mma.useAccumulator())) {
+    // Undo the accumulator init optimization where the init flag is initialized
+    // with false and uncoditionally set to true after the first iteration,
+    // since this results in an incorrect IR after the MMA is peeled
+    auto idx = initFlagArg.getArgNumber() - 1;
+    auto yieldOp = mlir::cast<scf::YieldOp>(forOp.getBody()->getTerminator());
+    auto initArgs = forOp.getInitArgs();
+    auto yieldOperands = yieldOp.getOperands();
+    auto initUseAcc = getBoolFromConstant(initArgs[idx]);
+    auto yieldUseAcc = getBoolFromConstant(yieldOperands[idx]);
+
+    if (initUseAcc && *initUseAcc == false && yieldUseAcc &&
+        *yieldUseAcc == true) {
+      auto vTrue = builder.create<arith::ConstantOp>(forOp.getLoc(),
+                                                     builder.getBoolAttr(true));
+      mma.setUseAccumulator(vTrue);
+    }
+  }
+
   Value minusOne = builder.create<arith::ConstantIntOp>(forOp.getLoc(), -1, 32);
   Value zero = builder.create<arith::ConstantIntOp>(forOp.getLoc(), 0, 32);
 
