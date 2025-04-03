@@ -347,9 +347,9 @@ bool StreamPipeliner::createAsyncCopy(tt::LoadOp loadOp, Value alloc,
   ttg::AsyncWaitOp wait =
       builder.create<ttg::AsyncWaitOp>(loc, commit->getResult(0), 0);
 
-  // We need to place the prefetches (AsyncCopy) after the local_reads and
-  // therefore also the AsyncWaits to avoid another barrier. This is done by
-  // scheduling it as a local_store.
+  // We need to place the prefetches (AsyncCopy) after the AsyncWaits which
+  // create a barrier to ensure all warps are finished reading the shared buffer
+  // we will write into. This is done by scheduling it as a local_store.
   scheduleOp(newLoadOp, SCHED_LOCAL_STORE);
 
   // Create local load which consumes the async token from the AsyncWait
