@@ -12,7 +12,7 @@ using namespace mlir::triton;
 namespace mlir {
 namespace triton::proton::gpu {
 #define GEN_PASS_DEF_CONVERTPROTONAMDGPUTOLLVM
-#include "proton/dialect/include/Conversion/ProtonGPUToLLVM/ProtonAMDGPUToLLVM/Passes.h.inc"
+#include "Conversion/ProtonGPUToLLVM/ProtonAMDGPUToLLVM/Passes.h.inc"
 } // namespace triton::proton::gpu
 } // namespace mlir
 
