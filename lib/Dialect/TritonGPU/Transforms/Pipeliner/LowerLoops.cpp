@@ -431,8 +431,18 @@ void createTMABarrierAndWait(
         // Special case for MMAv3 loads, we can ignore the alloc and only
         // consider uses of the alloc op since it will be removed.
         if (canBeShmemPipelined(loadOp)) {
+          Attribute loadEncoding;
+          if (auto descLoad = dyn_cast<DescriptorLoadOp>(loadOp)) {
+            loadEncoding = nvidia_gpu::getEncodingFromDescriptor(
+                loadOp, descLoad.getType(), descLoad.getDesc());
+          } else if (auto descGather = dyn_cast<DescriptorGatherOp>(loadOp)) {
+            loadEncoding = nvidia_gpu::getEncodingFromDescriptor(
+                loadOp, descGather.getType(), descGather.getDesc());
+          }
           auto alloc = cast<ttg::LocalAllocOp>(*loadOp->getUsers().begin());
-          if (alloc->getBlock() == loadBlock) {
+          if (alloc->getBlock() == loadBlock &&
+              (!loadEncoding ||
+               loadEncoding == alloc.getType().getEncoding())) {
             users.insert(alloc->getUsers().begin(), alloc->getUsers().end());
             continue;
           }
