@@ -730,6 +730,8 @@ void init_triton_ir(py::module &&m) {
                               py::dynamic_attr())
       .def(py::init<MLIRContext *>());
 
+  py::class_<OpBuilder::InsertPoint>(m, "InsertPoint", py::module_local());
+
   py::class_<TritonOpBuilder>(m, "builder", py::module_local(),
                               py::dynamic_attr())
       .def(py::init<MLIRContext *>())
