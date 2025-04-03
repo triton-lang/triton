@@ -471,7 +471,22 @@ AMDMfmaEncodingAttr::toLinearLayout(ArrayRef<int64_t> shape) const {
       identityStandardND(S("warp"), getWarpsPerCTA(), order);
   LinearLayout ctaLayout = tileLayout * warpLayout;
 
-  return combineCtaCgaWithShape(ctaLayout, getCTALayout(), shape);
+  auto combinedLayout =
+      combineCtaCgaWithShape(ctaLayout, getCTALayout(), shape);
+
+  auto bases = combinedLayout.getBases();
+  std::vector<std::vector<int>> newRegBases;
+  for (const auto &basis : bases[S("register")]) {
+    if (llvm::any_of(basis, [](int b) { return b != 0; })) {
+      newRegBases.push_back(basis);
+    }
+  }
+  bases[S("register")] = newRegBases;
+
+  auto result = LinearLayout(std::move(bases),
+                             llvm::to_vector(combinedLayout.getOutDimNames()));
+
+  return result;
 }
 
 LinearLayout chooseDotDsReadB64TrLayout(DotOperandEncodingAttr dotMfmaLayout,
