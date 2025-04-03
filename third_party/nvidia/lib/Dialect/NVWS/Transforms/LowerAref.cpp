@@ -1,4 +1,3 @@
-
 /*
  * Copyright (c) 2025 NVIDIA Corporation & Affiliates. All rights reserved.
  *
@@ -23,20 +22,25 @@
  */
 
 #include "mlir/Dialect/Arith/IR/Arith.h"
+#include "mlir/Dialect/LLVMIR/NVVMDialect.h"
 #include "mlir/IR/AttrTypeSubElements.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/Location.h"
 #include "mlir/IR/PatternMatch.h"
 #include "mlir/IR/Value.h"
+#include "mlir/Support/LLVM.h"
 #include "mlir/Support/LogicalResult.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 #include "mlir/Transforms/Passes.h"
 #include "nvidia/include/Dialect/NVWS/IR/Dialect.h"
 #include "nvidia/include/Dialect/NVWS/Transforms/Passes.h"
+#include "triton/Dialect/Triton/IR/Dialect.h"
+#include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "llvm/ADT/STLExtras.h"
+#include "llvm/ADT/Sequence.h"
 
 #include <memory>
 #include <optional>
@@ -61,11 +65,14 @@ struct ArefUseNode {
   ArefUseNode *parent;
   Operation *op;
   SmallVector<ArefUseNode *> subOps;
+  bool containsAsync = false;
 };
 
 struct ArefValue {
   Value emptyMbars;
+  Value emptyPhase;
   Value fullMbars;
+  Value fullPhase;
   int depth;
 };
 
@@ -75,17 +82,21 @@ struct ArefUseGraph {
   SmallVector<ArefUseNode *> topLevelUses;
 };
 
-static MemDescType getBarrierMemDesc(MLIRContext *ctx,
-                                     PatternRewriter &rewriter,
-                                     llvm::ArrayRef<int64_t> shape) {
+static MemDescType getMemDesc(MLIRContext *ctx, PatternRewriter &rewriter,
+                              llvm::ArrayRef<int64_t> shape, Type intType) {
   Attribute sharedMemorySpace = triton::gpu::SharedMemorySpaceAttr::get(ctx);
   auto barrierCTALayout = CTALayoutAttr::get(
       /*context=*/ctx, /*CTAsPerCGA=*/{1},
       /*CTASplitNum=*/{1}, /*CTAOrder=*/{0});
   auto barrierEncoding =
       SwizzledSharedEncodingAttr::get(ctx, 1, 1, 1, {0}, barrierCTALayout);
-  return MemDescType::get(shape, rewriter.getI64Type(), barrierEncoding,
-                          sharedMemorySpace, /*mutableMemory=*/true);
+  return MemDescType::get(shape, intType, barrierEncoding, sharedMemorySpace,
+                          /*mutableMemory=*/true);
+}
+static MemDescType getBarrierMemDesc(MLIRContext *ctx,
+                                     PatternRewriter &rewriter,
+                                     llvm::ArrayRef<int64_t> shape) {
+  return getMemDesc(ctx, rewriter, shape, rewriter.getI64Type());
 }
 
 static Value getBarrierAt(MLIRContext *ctx, Location loc,
@@ -99,12 +110,34 @@ static Value getStageIndex(PatternRewriter &rewriter, Location loc, Value idx,
                            int depth) {
   Value stageIdx = rewriter.create<arith::ConstantIntOp>(loc, 0, 32);
   if (depth > 1) {
-    auto stage = rewriter.create<arith::RemSIOp>(
-        loc, idx, rewriter.create<arith::ConstantIntOp>(loc, depth, 32));
+    Value depthVal = rewriter.create<arith::ConstantIntOp>(loc, depth, 32);
+    Value stage = rewriter.create<arith::RemSIOp>(loc, idx, depthVal);
     stageIdx = rewriter.create<arith::IndexCastOp>(
         loc, rewriter.getIntegerType(32), stage);
   }
   return stageIdx;
+}
+
+static Value getPhase(Value k, Value phase, int depth, Location loc,
+                      PatternRewriter &rewriter) {
+  // parity = (k % numStage) % 2 == 0 ? parity : parity ^ 1
+  Value D = rewriter.create<arith::ConstantIntOp>(loc, depth, 32);
+  Value one = rewriter.create<arith::ConstantIntOp>(loc, 1, 32);
+  Value two = rewriter.create<arith::ConstantIntOp>(loc, 2, 32);
+  Value kmodD = rewriter.create<arith::RemSIOp>(loc, k, D);
+  Value kmodDmod2 = rewriter.create<arith::RemSIOp>(loc, k, two);
+  Value pred = rewriter.create<arith::CmpIOp>(
+      loc, arith::CmpIPredicate::eq, kmodDmod2,
+      rewriter.create<arith::ConstantIntOp>(loc, 0, 32));
+  Value parityXor = rewriter.create<arith::XOrIOp>(loc, phase, one);
+  return rewriter.create<arith::SelectOp>(loc, pred, phase, parityXor);
+}
+
+static Value updatePhaseCalculation(Operation *op, Value tmaIdx, Value phase,
+                                    int depth, PatternRewriter &rewriter) {
+  rewriter.setInsertionPointAfter(op);
+  auto loc = op->getLoc();
+  return getPhase(tmaIdx, phase, depth, loc, rewriter);
 }
 
 class LowerArefCreate : public OpRewritePattern<ArefCreateOp> {
@@ -125,11 +158,16 @@ public:
     auto loc = op.getLoc();
     auto ctx = op.getContext();
     auto uses = op.getResult().getUses();
-    auto rank = op.getResult().getType().getNumBatchAxes();
-    if (rank && *rank > 1)
+    auto numBatches = op.getResult().getType().getNumBatchAxes();
+
+    int rank = 0;
+    if (numBatches)
+      rank = *numBatches;
+    if (rank > 1)
       op.emitError("TODO: Implement multi-axis slicing");
+
     int depth = 1;
-    if (rank) {
+    if (rank == 1) {
       if (auto mType = dyn_cast<MemDescType>(op.getOperand(0).getType()))
         depth = mType.getShape()[0];
       if (auto rType = dyn_cast<RankedTensorType>(op.getOperand(0).getType()))
@@ -146,12 +184,20 @@ public:
     auto barrierType = MemDescType::get(
         SmallVector<int64_t>{depth}, rewriter.getI64Type(), barrierEncoding,
         sharedMemorySpace, /*mutableMemory=*/true);
+    auto phaseType = MemDescType::get(
+        SmallVector<int64_t>{depth}, rewriter.getI32Type(), barrierEncoding,
+        sharedMemorySpace, /*mutableMemory=*/true);
     // Create two mbarriers
     auto emptyMbars = rewriter.create<LocalAllocOp>(loc, barrierType, Value());
     emptyMbars->setAttr("aref_empty_mbarriers", rewriter.getUnitAttr());
-    auto fullMbars = rewriter.create<LocalAllocOp>(loc, barrierType, Value());
+    auto emptyPhases = rewriter.create<LocalAllocOp>(loc, phaseType, Value());
+    emptyMbars->setAttr("aref_empty_phases", rewriter.getUnitAttr());
 
+    auto fullMbars = rewriter.create<LocalAllocOp>(loc, barrierType, Value());
     fullMbars->setAttr("aref_full_mbarriers", rewriter.getUnitAttr());
+    auto fullPhases = rewriter.create<LocalAllocOp>(loc, phaseType, Value());
+    fullPhases->setAttr("aref_full_phases", rewriter.getUnitAttr());
+
     auto lb = rewriter.create<arith::ConstantIntOp>(loc, 0, 32);
     auto ub = rewriter.create<arith::ConstantIntOp>(loc, depth, 32);
     auto step = rewriter.create<arith::ConstantIntOp>(loc, 1, 32);
@@ -168,6 +214,16 @@ public:
       rewriter.create<InitBarrierOp>(loc, singleBarrier, count);
     }
 
+    for (int i = 0; i < 2; ++i) {
+      auto memDesc = geMemDesc(ctx, rewriter, {1}, rewriter.getI32Type());
+      auto singleBarrier = rewriter.create<triton::gpu::MemDescSubviewOp>(
+          loc, memDesc, i == 0 ? emptyMbars.getResult() : fullMbars.getResult(),
+          SmallVector<Value>{dLoop.getInductionVar()});
+
+      int count = i == 0 ? 0 : 1;
+      rewriter.create<InitBarrierOp>(loc, singleBarrier, count);
+    }
+
     graph.arefs[op] =
         ArefValue{emptyMbars.getResult(), fullMbars.getResult(), depth};
 
@@ -175,9 +231,15 @@ public:
   }
 };
 
-template <int full = 0, typename T>
+template <bool put, bool manualWait = false, typename T>
 LogicalResult lowerRegion(T op, PatternRewriter &rewriter,
                           ArefUseGraph &graph) {
+  // Lowering rules for Put/Get
+  // 1) they wait on empty/full barriers respectively at start
+  // 2) if full/empty barriers are signaled by enclosed ops, they will
+  // have already been lowered, so we can skip arrives. If not, add an arrive
+  // j3) If a Get op encloses a Put op, the get op's empty barrier depends
+  // on the put op's full barrier
   auto ctx = op.getContext();
   auto loc = op.getLoc();
   auto aref = op.getOperand();
@@ -197,14 +259,16 @@ LogicalResult lowerRegion(T op, PatternRewriter &rewriter,
     idx = op.getIndexes()[0];
 
   rewriter.setInsertionPoint(op);
-
   auto stageIdx = getStageIndex(rewriter, loc, idx, depth);
 
-  auto fullBarrier =
-      getBarrierAt(ctx, loc, rewriter, full ? fullMbars : emptyMbars, stageIdx);
-  // wait on full. Use a default phase for now, will rewrite later
-  auto waitOp =
-      rewriter.create<triton::nvidia_gpu::WaitBarrierOp>(loc, fullBarrier, one);
+  auto barrier =
+      getBarrierAt(ctx, loc, rewriter, put ? emptyMbars : fullMbars, stageIdx);
+  auto waitPhase = getPhase(idx, put ? one : zero, depth, loc, rewriter);
+  if constexpr (!manualWait) {
+    // wait on empty/full
+    auto waitOp = rewriter.create<triton::nvidia_gpu::WaitBarrierOp>(
+        loc, barrier, waitPhase);
+  }
 
   SmallVector<Value> views;
 
@@ -212,7 +276,6 @@ LogicalResult lowerRegion(T op, PatternRewriter &rewriter,
   if (depth > 1) {
     for (auto value :
          aref.template getDefiningOp<ArefCreateOp>().getOperands()) {
-      llvm::errs() << value << '\n';
       if (auto mType = dyn_cast<MemDescType>(value.getType())) {
         auto shape = mType.getShape();
         SmallVector<int64_t> tensorShape(shape.begin() + 1, shape.end());
@@ -242,15 +305,23 @@ LogicalResult lowerRegion(T op, PatternRewriter &rewriter,
   for (auto [arg, view] : zip(putOpBody->getArguments(), views)) {
     arg.replaceAllUsesWith(view);
   }
+
+  for (auto [ret, val] :
+       llvm::zip(op.getResults(), putOpBody->back().getOperands()))
+    ret.replaceAllUsesWith(val);
+
   for (auto &bodyOp :
        llvm::make_early_inc_range(putOpBody->without_terminator()))
     bodyOp.moveBefore(op);
 
-  // arrive on full mbar. To be rewritten later.
-  auto emptyBarrier = getBarrierAt(ctx, loc, rewriter, emptyMbars, stageIdx);
-  // wait on empty. Use a default phase for now, will rewrite later
-  rewriter.create<triton::nvidia_gpu::ArriveBarrierOp>(
-      loc, full ? emptyBarrier : fullBarrier, 1);
+  if (!graph.nodes[op].containsAsync) {
+    // And a barrier arrive to signal completion of the region if none of the
+    // underlying ops are already async. Phase To be rewritten later.
+    barrier = getBarrierAt(ctx, loc, rewriter, put ? fullMbars : emptyMbars,
+                           stageIdx);
+    // wait on empty. Use a default phase for now, will rewrite later
+    rewriter.create<triton::nvidia_gpu::ArriveBarrierOp>(loc, barrier, 1);
+  }
 
   rewriter.eraseOp(op);
 
@@ -268,7 +339,7 @@ public:
 
   LogicalResult matchAndRewrite(ArefGetOp op,
                                 PatternRewriter &rewriter) const override {
-    return lowerRegion<1, ArefGetOp>(op, rewriter, graph);
+    return lowerRegion<0>(op, rewriter, graph);
   }
 };
 
@@ -283,8 +354,241 @@ public:
 
   LogicalResult matchAndRewrite(ArefPutOp op,
                                 PatternRewriter &rewriter) const override {
+    return lowerRegion<1>(op, rewriter, graph);
+  }
+};
 
-    return lowerRegion<1, ArefPutOp>(op, rewriter, graph);
+class TMAStoreLowering : public OpRewritePattern<DescriptorStoreOp> {
+public:
+  using OpRewritePattern::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(DescriptorStoreOp op,
+                                PatternRewriter &rewriter) const override {
+    MLIRContext *ctx = op.getContext();
+    Attribute sharedMemorySpace = triton::gpu::SharedMemorySpaceAttr::get(ctx);
+    auto loc = op.getLoc();
+    auto tensorType = op.getSrc().getType();
+    auto order = getOrder(tensorType);
+    auto ctaLayout = getCTALayout(tensorType.getEncoding());
+    auto m = op->getParentOfType<ModuleOp>();
+    auto numWarps =
+        mlir::cast<mlir::IntegerAttr>(m->getAttr("ttg.num-warps")).getInt();
+    Attribute encoding = SwizzledSharedEncodingAttr::get(
+        tensorType.getContext(), 1, 1, 1, order, ctaLayout);
+    if (tensorType.getRank() > 1) {
+      encoding = NVMMASharedEncodingAttr::get(
+          tensorType.getContext(), tensorType.getShape(), order, ctaLayout,
+          tensorType.getElementType(), false);
+    }
+    MemDescType memDescType =
+        MemDescType::get(tensorType.getShape(), tensorType.getElementType(),
+                         encoding, sharedMemorySpace, /*mutableMemory=*/true);
+    Value alloc = rewriter.create<LocalAllocOp>(loc, memDescType, op.getSrc());
+    rewriter.create<triton::nvidia_gpu::FenceAsyncSharedOp>(loc, false);
+    // use id 2 for named barrier
+    auto barId = rewriter.create<arith::ConstantIntOp>(op.getLoc(), 2, 32);
+    auto numThreads =
+        rewriter.create<arith::ConstantIntOp>(op.getLoc(), numWarps * 32, 32);
+    rewriter.create<NVVM::BarrierOp>(op.getLoc(), barId, numThreads);
+    auto tensorOp =
+        dyn_cast<ReinterpretTensorDescOp>(op.getDesc().getDefiningOp());
+    rewriter.create<triton::nvidia_gpu::AsyncTMACopyLocalToGlobalOp>(
+        loc, tensorOp.getRawDesc(), op.getIndices(), alloc);
+    rewriter.create<triton::nvidia_gpu::TMAStoreWaitOp>(loc, 0);
+    // Ensure all threads arrive at this point to avoid race conditions between
+    // two TMA stores in Blackwell tests with sub-tiling enabled. Without this
+    // barrier, TMAStoreWaitOp might be executed by another warp that is
+    // slightly ahead of the warp issuing AsyncTMACopyLocalToGlobal. The barrier
+    // ensures that all warps proceed simultaneously after the data is copied.
+    rewriter.create<NVVM::BarrierOp>(op.getLoc(), barId, numThreads);
+    rewriter.eraseOp(op);
+    return success();
+  }
+};
+
+class ParallelizeDescriptorLoad : public OpRewritePattern<DescriptorLoadOp> {
+  ArefUseGraph &graph;
+
+public:
+  using OpRewritePattern::OpRewritePattern;
+
+  ParallelizeDescriptorLoad(mlir::MLIRContext *context, ArefUseGraph &graph)
+      : OpRewritePattern<DescriptorLoadOp>(context), graph(graph) {}
+
+  LogicalResult matchAndRewrite(DescriptorLoadOp op,
+                                PatternRewriter &rewriter) const override {
+
+    auto ctx = op.getContext();
+    auto loc = op.getLoc();
+    SmallVector<Operation *> users(op->user_begin(), op->user_end());
+    if (users.size() != 1)
+      return failure();
+    if (!isa<LocalStoreOp>(users[0]))
+      return failure();
+
+    auto putOp = dyn_cast<ArefPutOp>(op->getBlock()->getParentOp());
+    if (!putOp)
+      return failure();
+
+    auto aref = putOp.getOperand();
+    if (!graph.arefs.contains(aref))
+      return failure();
+    auto descOp =
+        dyn_cast<ReinterpretTensorDescOp>(op.getDesc().getDefiningOp());
+    if (!descOp)
+      return failure();
+    auto stageIdx = getStageIndex(rewriter, loc, putOp.getIndexes()[0],
+                                  graph.arefs[aref].depth);
+    auto fullBarrier =
+        getBarrierAt(ctx, loc, rewriter, graph.arefs[aref].fullMbars, stageIdx);
+
+    auto buf = users[0]->getOperand(1);
+    Value pred = rewriter.create<arith::ConstantIntOp>(loc, 1, 1);
+    rewriter.create<triton::nvidia_gpu::AsyncTMACopyGlobalToLocalOp>(
+        loc, descOp.getRawDesc(), op.getIndices(), fullBarrier, buf, pred);
+    int sizeInBytes = 0;
+    auto memDesc = cast<MemDescType>(buf.getType());
+    auto bufShape = memDesc.getShape();
+    auto elementType = memDesc.getElementType();
+    SmallVector<int64_t> tensorShape(bufShape.begin() + 1, bufShape.end());
+    sizeInBytes +=
+        product(tensorShape) * elementType.getIntOrFloatBitWidth() / 8;
+
+    rewriter.create<triton::nvidia_gpu::BarrierExpectOp>(loc, fullBarrier,
+                                                         sizeInBytes, pred);
+    graph.nodes[putOp].containsAsync = true;
+
+    rewriter.eraseOp(users[0]);
+    rewriter.eraseOp(op);
+    return success();
+  }
+};
+
+class ParallelizeTCGen5MMA : public OpRewritePattern<TCGen5MMAOp> {
+  ArefUseGraph &graph;
+
+public:
+  using OpRewritePattern::OpRewritePattern;
+
+  ParallelizeTCGen5MMA(mlir::MLIRContext *context, ArefUseGraph &graph)
+      : OpRewritePattern<TCGen5MMAOp>(context), graph(graph) {}
+
+  LogicalResult matchAndRewrite(TCGen5MMAOp op,
+                                PatternRewriter &rewriter) const override {
+    auto ctx = op.getContext();
+    auto loc = op.getLoc();
+    SmallVector<Operation *> users(op->user_begin(), op->user_end());
+    // if (users.size() != 1)
+    //   return failure();
+    // if (!isa<LocalStoreOp>(users[0]))
+    //   return failure();
+
+    auto putOp = dyn_cast<ArefPutOp>(op->getBlock()->getParentOp());
+    if (!putOp)
+      return failure();
+
+    auto getOp = dyn_cast<ArefGetOp>(putOp->getBlock()->getParentOp());
+    if (!getOp)
+      return failure();
+
+    auto putAref = putOp.getOperand();
+    auto getAref = getOp.getOperand();
+    if (!graph.arefs.contains(putAref) || !graph.arefs.contains(getAref))
+      return failure();
+
+    auto getArefValue = graph.arefs[getAref];
+    auto putArefValue = graph.arefs[putAref];
+
+    if (op.getBarrier())
+      return failure(); // Can't paralleize an already parallel mma
+
+    if (putAref.getType().getBaseType().size() != 1)
+      return failure(
+          "TODO: support putting into more than one tmem_buffer at a time");
+    if (putOp.getRegion().getArguments()[0] != op.getD())
+      return failure("This mma isn't accumulating to the put argument");
+
+    graph.nodes[putOp].containsAsync = true;
+    graph.nodes[getOp].containsAsync = true;
+
+    if (failed(lowerRegion<true, true>(putOp, rewriter, graph)))
+      return failure();
+
+    rewriter.setInsertionPoint(op);
+    auto zero = rewriter.create<arith::ConstantIntOp>(loc, 0, 32);
+    auto one = rewriter.create<arith::ConstantIntOp>(loc, 1, 32);
+
+    auto getBarrier = [&](const ArefValue &aref, const Value &idx,
+                          Value mbars) {
+      auto stageIdx = getStageIndex(rewriter, loc, idx, aref.depth);
+      return getBarrierAt(ctx, loc, rewriter, mbars, stageIdx);
+    };
+
+    // This assumes inputs to an mma are both from a single aref get. Need to
+    // relax that to allow nested aref gets for attention
+    Value getIdx = getArefValue.depth > 1 ? getOp.getIndexes()[0] : zero;
+    auto getEmptyBarrier =
+        getBarrier(getArefValue, getIdx, getArefValue.emptyMbars);
+    op.setBarrier(getEmptyBarrier);
+
+    int loopCarried = -1;
+    if (isa<BlockArgument>(getIdx)) {
+      // the index is a loop carried variable
+      int i = -1;
+      for (auto arg : getIdx.getParentBlock()->getArguments()) {
+        if (arg == getIdx)
+          loopCarried = i;
+        i += 1;
+      }
+    }
+    if (loopCarried < 0)
+      return failure();
+
+    auto mmaFor = dyn_cast<scf::ForOp>(getOp->getParentOp());
+    for (auto user : putAref.getUsers()) {
+      auto tmpOp = dyn_cast<ArefGetOp>(user);
+      if (!tmpOp)
+        continue;
+      for (auto arg : tmpOp.getRegion().getArguments()) {
+        for (auto getArgUser : arg.getUsers()) {
+          if (!isa<TMEMLoadOp>(getArgUser))
+            continue;
+          if (mmaFor) {
+            // Otherwise wait outside the loop.
+            rewriter.setInsertionPoint(mmaFor);
+            Value putIdx =
+                putArefValue.depth > 1
+                    ? putOp.getIndexes()[0]
+                    : rewriter.create<arith::ConstantIntOp>(loc, 0, 32);
+            auto putEmptyBarrier =
+                getBarrier(putArefValue, putIdx, putArefValue.emptyMbars);
+
+            rewriter.create<triton::nvidia_gpu::WaitBarrierOp>(
+                loc, putEmptyBarrier,
+                getPhase(putIdx, one, putArefValue.depth, loc, rewriter));
+            rewriter.setInsertionPointAfter(mmaFor);
+
+            Value idx = mmaFor.getResult(loopCarried);
+            Value finalMMABarrier =
+                getBarrier(getArefValue, idx, getArefValue.emptyMbars);
+            Value finalPhase =
+                getPhase(idx, rewriter.create<arith::ConstantIntOp>(loc, 0, 32),
+                         getArefValue.depth, loc, rewriter);
+            rewriter.create<triton::nvidia_gpu::WaitBarrierOp>(
+                loc, finalMMABarrier, finalPhase);
+            // signal full.
+            auto putFullBarrier =
+                getBarrier(putArefValue, putIdx, putArefValue.fullMbars);
+            rewriter.create<triton::nvidia_gpu::ArriveBarrierOp>(
+                loc, putFullBarrier, 1);
+          } else {
+            return failure();
+          }
+        }
+      }
+    }
+
+    return success();
   }
 };
 
@@ -337,10 +641,25 @@ public:
     ArefUseGraph graph = analyzeArefUseDef(m);
 
     mlir::RewritePatternSet patterns(context);
-    patterns.add<LowerArefCreate, LowerArefGet, LowerArefPut>(context, graph);
+    patterns
+        .add<LowerArefCreate, ParallelizeDescriptorLoad, ParallelizeTCGen5MMA>(
+            context, graph);
     GreedyRewriteConfig config;
 
     if (applyPatternsGreedily(m, std::move(patterns), config).failed())
+      signalPassFailure();
+
+    OpPassManager pm;
+    pm.addPass(mlir::createCanonicalizerPass());
+    pm.addPass(mlir::createCSEPass());
+    if (failed(runPipeline(pm, m)))
+      return signalPassFailure();
+
+    mlir::RewritePatternSet patterns2(context);
+    patterns2.add<LowerArefGet, LowerArefPut>(context, graph);
+    GreedyRewriteConfig config2;
+
+    if (applyPatternsGreedily(m, std::move(patterns2), config2).failed())
       signalPassFailure();
   }
 };

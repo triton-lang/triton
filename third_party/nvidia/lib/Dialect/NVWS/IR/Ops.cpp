@@ -1,7 +1,6 @@
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/Diagnostics.h"
 #include "nvidia/include/Dialect/NVWS/IR/Dialect.h"
-#include "triton/Conversion/MLIRTypes.h"
 #include "triton/Dialect/Triton/IR/Types.h"
 #include "triton/Dialect/TritonGPU/IR/Attributes.h"
 #include "triton/Dialect/TritonGPU/IR/Types.h"
@@ -20,6 +19,10 @@ LogicalResult ArefCreateOp::verify() {
   for (size_t i = 0, e = *rank; i < e; i++) {
     SmallVector<int> dims;
     for (auto operand : getOperands()) {
+      SmallVector<Operation *> users(operand.user_begin(), operand.user_end());
+      if (users.size() != 1)
+        return emitError(
+            "Aref buffer is used elsewhere, Aref cannot garuntee async safety");
       auto type = operand.getType();
       if (auto mType = dyn_cast<gpu::MemDescType>(type)) {
         dims.push_back(mType.getShape()[i]);

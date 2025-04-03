@@ -67,7 +67,8 @@ def NVWS_ArefGetOp : NVWS_Op<"aref.get", []> {
     If indexes is empty, the op will return the entire underlying value(s).
     If the indexes is size 1, the op will ensure that the underlying
     value is Tensor-Like (i.e, has a shape parameter) with rank at least 1,
-    and index into the first dimension.
+    and index into the first dimension in a circular fashion, by wrapping the
+    index around the boundaries of that dimension.
     Similarly, if indexes is size 2, the op will index into the first 2 dimensions
     etc.
 
@@ -99,7 +100,8 @@ def NVWS_ArefPutOp : NVWS_Op<"aref.put", [SameVariadicOperandSize]> {
     If indexes is empty, the op will return the entire underlying value(s).
     If the indexes is size 1, the op will ensure that the underlying
     value is Tensor-Like (i.e, has a shape parameter) with rank at least 1,
-    and index into the first dimension.
+    and index into the first dimension in a circular fashion, by wrapping the
+    index around the boundaries of that dimension.
     Similarly, if indexes is size 2, the op will index into the first 2 dimensions
     etc.
 
