@@ -5,6 +5,7 @@
 #include "triton/Analysis/AxisInfo.h"
 #include "triton/Conversion/TritonToTritonGPU/Passes.h"
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h"
+#include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "llvm/ADT/ScopeExit.h"
 
 using namespace mlir;
@@ -182,13 +183,23 @@ static LogicalResult optimizePartitionNumWarps(ModuleAxisInfoAnalysis &axisInfo,
   // If the compiler could control that, then we could allow non-uniform
   // register distributions, mostly beneficial for single-warp warpgroups that
   // just do some artihmetic.
-  constexpr unsigned nTotalRegs = 65536; // for Blackwell SMs
+  constexpr unsigned nTotalRegs = 64000; // for Blackwell SMs
   const unsigned threadsPerWarp =
       TritonGPUDialect::getThreadsPerWarp(axisInfo.getModuleOp());
   const unsigned defaultNumWarps = lookupNumWarps(wsOp);
 
   SmallVector<int32_t> partitionNumWarps =
       llvm::to_vector(wsOp.getPartitionNumWarps());
+
+  // Some instructions have critical throughput.
+  SmallVector<int32_t> minWarpsForPartition(partitionNumWarps.size(), 1);
+  for (auto [minWarps, region] :
+       llvm::zip(minWarpsForPartition, wsOp.getPartitionRegions())) {
+    region->walk([minWarps = &minWarps](Operation *op) {
+      if (isa<nvidia_gpu::AsyncTMAGatherOp, nvidia_gpu::AsyncTMAScatterOp>(op))
+        *minWarps = 2;
+    });
+  }
 
   bool changed;
   do {
@@ -215,9 +226,9 @@ static LogicalResult optimizePartitionNumWarps(ModuleAxisInfoAnalysis &axisInfo,
     int32_t curTotalNumWarps = std::accumulate(
         partitionNumWarps.begin(), partitionNumWarps.end(), defaultNumWarps);
 
-    for (auto [numWarps, tensorRegs] :
-         llvm::zip(partitionNumWarps, maxTensorRegs)) {
-      if (numWarps == 1)
+    for (auto [minWarps, numWarps, tensorRegs] :
+         llvm::zip(minWarpsForPartition, partitionNumWarps, maxTensorRegs)) {
+      if (numWarps <= minWarps)
         continue;
       // Check if reducing the number of warps will still fit the tensor. If it
       // didn't fit to begin with, it won't fit after shrinking.

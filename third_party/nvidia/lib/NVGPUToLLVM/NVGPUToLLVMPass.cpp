@@ -7,6 +7,7 @@
 #include "mlir/Pass/Pass.h"
 #include "mlir/Support/LogicalResult.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
+#include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 
 #include "nvidia/lib/TritonNVIDIAGPUToLLVM/Utility.h"
 #include "llvm/Support/ErrorHandling.h"
@@ -22,6 +23,56 @@ using ttn::Constraints;
 using ttn::OperandsAndConstraints;
 
 namespace {
+
+//===----------------------------------------------------------------------===//
+// reorderTensorMemoryLoads
+//===----------------------------------------------------------------------===//
+
+static void reorderTensorMemoryLoads(Block &block) {
+  // Sink tmem loads to first user or the end of the block.
+  auto loadOps = llvm::to_vector(block.getOps<nvgpu::TensorMemoryLoadOp>());
+  for (auto loadOp : loadOps) {
+    Operation *earliestUser = block.getTerminator();
+    for (Operation *user : loadOp->getUsers()) {
+      user = block.findAncestorOpInBlock(*user);
+      if (user && user->isBeforeInBlock(earliestUser))
+        earliestUser = user;
+    }
+    // FIXME: Check for aliasing with other tcgen05 ops.
+    loadOp->moveBefore(earliestUser);
+  }
+
+  // Now insert waits before the first use of each load. Group the waits
+  // together if possible.
+  DenseSet<nvgpu::TensorMemoryLoadOp> loadsToWait;
+  for (Operation &op : block) {
+    for (Value operand : getNestedOperands(&op)) {
+      auto loadDef = operand.getDefiningOp<nvgpu::TensorMemoryLoadOp>();
+      if (loadDef && loadsToWait.contains(loadDef)) {
+        OpBuilder b(&op);
+        b.create<nvgpu::TensorMemoryLoadWaitOp>(op.getLoc());
+        loadsToWait.clear();
+      }
+    }
+
+    if (auto loadDef = dyn_cast<nvgpu::TensorMemoryLoadOp>(op))
+      loadsToWait.insert(loadDef);
+  }
+}
+
+static void reorderTensorMemoryLoads(LLVM::LLVMFuncOp func) {
+  func.walk([](Operation *op) {
+    for (Region &region : op->getRegions()) {
+      for (Block &block : region) {
+        reorderTensorMemoryLoads(block);
+      }
+    }
+  });
+}
+
+//===----------------------------------------------------------------------===//
+// Utilities
+//===----------------------------------------------------------------------===//
 
 const std::string kWgmmaFenceOp = "wgmma.fence.sync.aligned;";
 const std::string kWgmmaCommitGroupOp = "wgmma.commit_group.sync.aligned;";
@@ -182,6 +233,10 @@ std::string patchPtxAsm(Operation *op, std::string ptxAsm) {
     res += ptxAsm.substr(prevStart, ptxAsm.size() - prevStart);
   return res;
 }
+
+//===----------------------------------------------------------------------===//
+// Conversion Patterns
+//===----------------------------------------------------------------------===//
 
 template <typename SourceOp>
 class NVGPUOpGenericPattern : public OpRewritePattern<SourceOp> {
@@ -654,6 +709,103 @@ public:
   }
 };
 
+Value createTensorMemoryLoad(Location loc, Value address, int secondHalfOffset,
+                             bool unpacked, int numRegPerMessage,
+                             int rowsPerThread, int colsPerThread,
+                             StringRef opShape, RewriterBase &rewriter) {
+  PTXBuilder ptxBuilder;
+  // If the memory is unpacked we need to pack on the fly when loading.
+  std::string packedStr = unpacked ? ".pack::16b" : "";
+  unsigned numRepeats = numRegPerMessage / (rowsPerThread * colsPerThread);
+  std::string opcode = "tcgen05.ld.sync.aligned." + std::string(opShape) +
+                       ".x" + std::to_string(numRepeats) + packedStr + ".b32 {";
+
+  SmallVector<PTXInstr::Operand *> operands;
+  for (int i = 0; i < numRegPerMessage; i++) {
+    opcode += "$" + std::to_string(i);
+    auto *resultOp = ptxBuilder.newOperand("=r");
+    operands.push_back(resultOp);
+    if (i < numRegPerMessage - 1)
+      opcode += ", ";
+  }
+  opcode += "}, [$" + std::to_string(numRegPerMessage) + "]";
+  if (secondHalfOffset)
+    opcode += ", " + std::to_string(secondHalfOffset);
+  opcode += ";";
+  operands.push_back(ptxBuilder.newOperand(address, "r"));
+  auto &ld = *ptxBuilder.create<PTXInstr>(opcode);
+  ld(operands, /*onlyAttachMLIRArgs=*/true);
+  SmallVector<Type> elemTypes(numRegPerMessage, i32_ty);
+  MLIRContext *ctx = rewriter.getContext();
+  Type structTy = struct_ty(elemTypes);
+  Value ret = ptxBuilder.launch(rewriter, loc, structTy);
+  return ret;
+}
+
+SmallVector<Value> unpackResults(Value packedValues, Type elemTy, int numCols,
+                                 Location loc, RewriterBase &rewriter) {
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
+  SmallVector<Value> resultVals;
+  int numElementsPer32B = 32 / elemTy.getIntOrFloatBitWidth();
+  Type packedType = elemTy;
+  if (numElementsPer32B > 1)
+    packedType = vec_ty(elemTy, numElementsPer32B);
+  for (int i = 0; i < numCols; i++) {
+    Value result = b.extract_val(i32_ty, packedValues, i);
+    result = b.bitcast(result, packedType);
+    if (numElementsPer32B > 1) {
+      for (int j = 0; j < numElementsPer32B; j++) {
+        Value elem = b.extract_element(elemTy, result, b.i32_val(j));
+        resultVals.push_back(elem);
+      }
+    } else {
+      resultVals.push_back(result);
+    }
+  }
+  return resultVals;
+}
+
+struct TensorMemoryLoadOpPattern : OpRewritePattern<nvgpu::TensorMemoryLoadOp> {
+  using OpRewritePattern::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(nvgpu::TensorMemoryLoadOp op,
+                                PatternRewriter &rewriter) const override {
+    Value resultPack = createTensorMemoryLoad(
+        op.getLoc(), op.getAddress(), op.getSecondHalfOffset(),
+        op.getUnpacked(), op.getNumRegPerMessage(), op.getAtomRowsPerThread(),
+        op.getAtomColsPerThread(), op.getAtomOpShape(), rewriter);
+    SmallVector<Value> results =
+        unpackResults(resultPack, op.getResultTypes().front(),
+                      op.getNumRegPerMessage(), op.getLoc(), rewriter);
+    rewriter.replaceOp(op, results);
+    return success();
+  }
+};
+
+void createWaitOpLd(Location loc, RewriterBase &rewriter) {
+  PTXBuilder ptxBuilder;
+  std::string opcode = "tcgen05.wait::ld.sync.aligned;";
+  auto &wait = *ptxBuilder.create<PTXInstr>(opcode);
+  wait({}, /*onlyAttachMLIRArgs=*/true);
+  ptxBuilder.launch(rewriter, loc, void_ty(rewriter.getContext()));
+}
+
+struct TensorMemoryLoadWaitOpPattern
+    : OpRewritePattern<nvgpu::TensorMemoryLoadWaitOp> {
+  using OpRewritePattern::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(nvgpu::TensorMemoryLoadWaitOp op,
+                                PatternRewriter &rewriter) const override {
+    createWaitOpLd(op.getLoc(), rewriter);
+    rewriter.eraseOp(op);
+    return success();
+  }
+};
+
+//===----------------------------------------------------------------------===//
+// Tensor Memory Allocation
+//===----------------------------------------------------------------------===//
+
 static Value createTMAlloc(IRRewriter &rewriter, LLVM::LLVMFuncOp func,
                            size_t size, Value pred, bool twoCTAs) {
   PTXBuilder ptxBuilder;
@@ -766,6 +918,10 @@ static void lowerTensorMemoryAlloc(ModuleOp mod) {
   }
 }
 
+//===----------------------------------------------------------------------===//
+// Pass Definition
+//===----------------------------------------------------------------------===//
+
 class ConvertNVGPUToLLVM : public ConvertNVGPUToLLVMBase<ConvertNVGPUToLLVM> {
 
 public:
@@ -775,6 +931,9 @@ public:
     MLIRContext *context = &getContext();
     ModuleOp mod = getOperation();
     RewritePatternSet patterns(context);
+
+    for (auto func : mod.getOps<LLVM::LLVMFuncOp>())
+      reorderTensorMemoryLoads(func);
 
 #define POPULATE_NVGPU_OP(SRC_OP, ASM)                                         \
   patterns.add<NVGPUOpGenericPattern<SRC_OP>>(context, ASM, Constraints(),     \
@@ -786,11 +945,11 @@ public:
     patterns.add<NVGPUOpGenericPattern<ttn::ClusterCTAIdOp>>(
         context, kClusterCtaIdOp, Constraints({"=r"}), Constraints());
 
-    patterns
-        .add<FenceAsyncSharedOpPattern, LoadMatrixOpPattern,
-             StoreMatrixOpPattern, ClusterArriveOpPattern, WGMMAOpPattern,
-             LoadAcquireOpPattern, WGMMAWaitGroupOpPattern, WarpIdOpPattern>(
-            context);
+    patterns.add<FenceAsyncSharedOpPattern, LoadMatrixOpPattern,
+                 StoreMatrixOpPattern, ClusterArriveOpPattern, WGMMAOpPattern,
+                 LoadAcquireOpPattern, WGMMAWaitGroupOpPattern, WarpIdOpPattern,
+                 TensorMemoryLoadOpPattern, TensorMemoryLoadWaitOpPattern>(
+        context);
 
     if (applyPatternsGreedily(mod, std::move(patterns)).failed())
       signalPassFailure();

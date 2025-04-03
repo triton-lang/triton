@@ -101,7 +101,7 @@ TMemMessageTraits getTMemMessageFromAtom(const TMemAccessAtom &atom,
 // to avoid register pressure. This ensures the largest tmem message width is
 // used for the workload without inducing spills.
 int getTMemMessageNarrowingFactor(int workloadThreadRegs) {
-  const int allowedRegUsage = maxRegisters / 4;
+  const int allowedRegUsage = maxRegisters / 8;
   int narrowingFactor = 1;
   while (workloadThreadRegs > allowedRegUsage) {
     workloadThreadRegs /= 2;
@@ -423,72 +423,6 @@ struct TensorMemoryAllocOpConversion
   }
 };
 
-Value createTensorMemoryLoad(Location loc, triton::nvidia_gpu::TMEMLoadOp op,
-                             Value address, int secondHalfOffset, bool unpacked,
-                             int numRegPerMessage, const TMemAccessAtom &atom,
-                             ConversionPatternRewriter &rewriter) {
-  PTXBuilder ptxBuilder;
-  // If the memory is unpacked we need to pack on the fly when loading.
-  std::string packedStr = unpacked ? ".pack::16b" : "";
-  unsigned numRepeats =
-      numRegPerMessage / (atom.rowsPerThread * atom.colsPerThread);
-  std::string opcode = "tcgen05.ld.sync.aligned." + std::string(atom.opShape) +
-                       ".x" + std::to_string(numRepeats) + packedStr + ".b32 {";
-
-  SmallVector<PTXInstr::Operand *> operands;
-  for (int i = 0; i < numRegPerMessage; i++) {
-    opcode += "$" + std::to_string(i);
-    auto *resultOp = ptxBuilder.newOperand("=r");
-    operands.push_back(resultOp);
-    if (i < numRegPerMessage - 1)
-      opcode += ", ";
-  }
-  opcode += "}, [$" + std::to_string(numRegPerMessage) + "]";
-  if (secondHalfOffset)
-    opcode += ", " + std::to_string(secondHalfOffset);
-  opcode += ";";
-  operands.push_back(ptxBuilder.newOperand(address, "r"));
-  auto &ld = *ptxBuilder.create<PTXInstr>(opcode);
-  ld(operands, /*onlyAttachMLIRArgs=*/true);
-  SmallVector<Type> elemTypes(numRegPerMessage, i32_ty);
-  MLIRContext *ctx = op.getContext();
-  Type structTy = struct_ty(elemTypes);
-  Value ret = ptxBuilder.launch(rewriter, loc, structTy);
-  return ret;
-}
-
-static SmallVector<Value> unpackResults(Value packedValues, Type elemTy,
-                                        int numCols, Location loc,
-                                        ConversionPatternRewriter &rewriter) {
-  auto b = TritonLLVMOpBuilder(loc, rewriter);
-  SmallVector<Value> resultVals;
-  int numElementsPer32B = 32 / elemTy.getIntOrFloatBitWidth();
-  Type packedType = elemTy;
-  if (numElementsPer32B > 1)
-    packedType = vec_ty(elemTy, numElementsPer32B);
-  for (int i = 0; i < numCols; i++) {
-    Value result = b.extract_val(i32_ty, packedValues, i);
-    result = b.bitcast(result, packedType);
-    if (numElementsPer32B > 1) {
-      for (int j = 0; j < numElementsPer32B; j++) {
-        Value elem = b.extract_element(elemTy, result, b.i32_val(j));
-        resultVals.push_back(elem);
-      }
-    } else {
-      resultVals.push_back(result);
-    }
-  }
-  return resultVals;
-}
-
-static void createWaitOpLd(Location loc, ConversionPatternRewriter &rewriter) {
-  PTXBuilder ptxBuilder;
-  std::string opcode = "tcgen05.wait::ld.sync.aligned;";
-  auto &wait = *ptxBuilder.create<PTXInstr>(opcode);
-  wait({}, /*onlyAttachMLIRArgs=*/true);
-  ptxBuilder.launch(rewriter, loc, void_ty(rewriter.getContext()));
-}
-
 struct TensorMemoryLoadOpConversion
     : public ConvertOpToLLVMPattern<triton::nvidia_gpu::TMEMLoadOp> {
   using ConvertOpToLLVMPattern::ConvertOpToLLVMPattern;
@@ -505,23 +439,27 @@ struct TensorMemoryLoadOpConversion
                                    cast<MemDescType>(op.getSrc().getType()));
     const TMemMessageTraits message = selectTMemMessage(info);
     SmallVector<Value> resultVals;
+
     calculateAddressAndEmitTmemMessage(
         loc, tmemBase, info, message, rewriter,
         [&](Value startAddress, int secondHalfColOffset, bool unpackedb16,
             int regsPerMessage, bool useStridedMessage) {
-          Value packedValues = createTensorMemoryLoad(
-              loc, op, startAddress, secondHalfColOffset, unpackedb16,
-              regsPerMessage, message.atom, rewriter);
-          auto results =
-              unpackResults(packedValues, op.getType().getElementType(),
-                            regsPerMessage, loc, rewriter);
-          resultVals.append(results.begin(), results.end());
+          Type elemTy = op.getType().getElementType();
+          int numElementsPer32B = 32 / elemTy.getIntOrFloatBitWidth();
+          int totalNumElements = numElementsPer32B * regsPerMessage;
+
+          auto loadOp = rewriter.create<nvgpu::TensorMemoryLoadOp>(
+              loc, SmallVector<Type>(totalNumElements, elemTy), startAddress,
+              secondHalfColOffset, unpackedb16, regsPerMessage,
+              message.atom.rowsPerThread, message.atom.colsPerThread,
+              message.atom.opShape);
+
+          resultVals.append(loadOp->result_begin(), loadOp->result_end());
         });
+
     Type structTy = getTypeConverter()->convertType(op.getType());
     Value resultStruct =
         packLLElements(loc, getTypeConverter(), resultVals, rewriter, structTy);
-    // Wait insertion could be moved to the TTGIR level if needed.
-    createWaitOpLd(loc, rewriter);
     rewriter.replaceOp(op, {resultStruct});
     return success();
   }
