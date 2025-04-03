@@ -18,7 +18,8 @@ namespace ttg = triton::gpu;
 // On gfx9 global and buffer loads directly to shared memory need to write
 // coalesced. This pattern converts the layout of the src, mask and other to
 // ensure the owned data per thread is contigious and does no exceed the
-// supported load vector size to ensure coalesed writes
+// supported load vector size. The swizzle pattern is ignored here and is
+// handled when lowering to LLVMIR
 struct CoalesceAsyncCopyWrites
     : public OpRewritePattern<ttg::AsyncCopyGlobalToLocalOp> {
   CoalesceAsyncCopyWrites(const triton::AMD::TargetInfo &targetInfo,
@@ -48,9 +49,6 @@ struct CoalesceAsyncCopyWrites
     if (!sharedEnc)
       return rewriter.notifyMatchFailure(
           copyOp, "destination encoding must be #SwizzledShared");
-    if (sharedEnc.getMaxPhase() > 1)
-      return rewriter.notifyMatchFailure(
-          copyOp, "swizzled shared encoding not supported");
 
     // We start from the precomputed contiguity we got from AxisAnalysis.
     unsigned loadContig = 0;
