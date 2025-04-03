@@ -92,7 +92,7 @@ class HIPOptions:
 
 
 class HIPBackend(BaseBackend):
-    instrumentation = {}
+    instrumentation = None
 
     @staticmethod
     def supports_target(target: GPUTarget):
@@ -149,6 +149,8 @@ class HIPBackend(BaseBackend):
 
     def load_dialects(self, ctx):
         amd.load_dialects(ctx)
+        if HIPBackend.instrumentation:
+            HIPBackend.instrumentation.load_dialects(ctx)
 
     @staticmethod
     def is_within_2gb(arg):
@@ -250,8 +252,8 @@ class HIPBackend(BaseBackend):
         passes.common.add_symbol_dce(pm)
         if use_async_copy:
             amd.passes.ttgpuir.add_update_async_wait_count(pm, options.arch)
-        if "ttir" in HIPBackend.instrumentation:
-            HIPBackend.instrumentation["ttir"](pm)
+        if HIPBackend.instrumentation:
+            HIPBackend.instrumentation.patch("ttir", pm, mod.context)
         pm.run(mod)
         return mod
 
@@ -310,8 +312,8 @@ class HIPBackend(BaseBackend):
         if not knobs.compilation.disable_line_info:
             passes.llvmir.add_di_scope(pm)
         amd.passes.ttgpuir.add_builtin_func_to_llvmir(pm, __HIP_FTZ)
-        if "ttgpuir" in HIPBackend.instrumentation:
-            HIPBackend.instrumentation["ttgpuir"](pm)
+        if HIPBackend.instrumentation:
+            HIPBackend.instrumentation.patch("ttgpuir", pm, mod.context)
         pm.run(mod)
 
         # LLVM-IR (MLIR) -> LLVM-IR (LLVM)
