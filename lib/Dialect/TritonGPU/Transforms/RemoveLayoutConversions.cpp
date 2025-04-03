@@ -1118,9 +1118,8 @@ void LayoutRematerialization::hoistConvertDotOperand(
   // The pass is targeted to MMA dot operands
 
   auto canBePipelined = [&](ConvertLayoutOp convertOp) {
-    // FIXME: Check that the parent is a for loop
     auto parent = convertOp->getParentOp();
-    if (!parent)
+    if (!parent || !dyn_cast<scf::ForOp>(parent))
       return false;
 
     // Find all the dot-like ops in the for loop that have a dot operand
