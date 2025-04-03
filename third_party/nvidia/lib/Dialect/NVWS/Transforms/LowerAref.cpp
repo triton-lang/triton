@@ -70,9 +70,7 @@ struct ArefUseNode {
 
 struct ArefValue {
   Value emptyMbars;
-  Value emptyPhase;
   Value fullMbars;
-  Value fullPhase;
   int depth;
 };
 
@@ -184,19 +182,12 @@ public:
     auto barrierType = MemDescType::get(
         SmallVector<int64_t>{depth}, rewriter.getI64Type(), barrierEncoding,
         sharedMemorySpace, /*mutableMemory=*/true);
-    auto phaseType = MemDescType::get(
-        SmallVector<int64_t>{depth}, rewriter.getI32Type(), barrierEncoding,
-        sharedMemorySpace, /*mutableMemory=*/true);
     // Create two mbarriers
     auto emptyMbars = rewriter.create<LocalAllocOp>(loc, barrierType, Value());
     emptyMbars->setAttr("aref_empty_mbarriers", rewriter.getUnitAttr());
-    auto emptyPhases = rewriter.create<LocalAllocOp>(loc, phaseType, Value());
-    emptyMbars->setAttr("aref_empty_phases", rewriter.getUnitAttr());
 
     auto fullMbars = rewriter.create<LocalAllocOp>(loc, barrierType, Value());
     fullMbars->setAttr("aref_full_mbarriers", rewriter.getUnitAttr());
-    auto fullPhases = rewriter.create<LocalAllocOp>(loc, phaseType, Value());
-    fullPhases->setAttr("aref_full_phases", rewriter.getUnitAttr());
 
     auto lb = rewriter.create<arith::ConstantIntOp>(loc, 0, 32);
     auto ub = rewriter.create<arith::ConstantIntOp>(loc, depth, 32);
@@ -206,16 +197,6 @@ public:
 
     for (int i = 0; i < 2; ++i) {
       auto memDesc = getBarrierMemDesc(ctx, rewriter, {1});
-      auto singleBarrier = rewriter.create<triton::gpu::MemDescSubviewOp>(
-          loc, memDesc, i == 0 ? emptyMbars.getResult() : fullMbars.getResult(),
-          SmallVector<Value>{dLoop.getInductionVar()});
-
-      int count = i == 0 ? 0 : 1;
-      rewriter.create<InitBarrierOp>(loc, singleBarrier, count);
-    }
-
-    for (int i = 0; i < 2; ++i) {
-      auto memDesc = geMemDesc(ctx, rewriter, {1}, rewriter.getI32Type());
       auto singleBarrier = rewriter.create<triton::gpu::MemDescSubviewOp>(
           loc, memDesc, i == 0 ? emptyMbars.getResult() : fullMbars.getResult(),
           SmallVector<Value>{dLoop.getInductionVar()});
@@ -478,17 +459,13 @@ public:
     auto ctx = op.getContext();
     auto loc = op.getLoc();
     SmallVector<Operation *> users(op->user_begin(), op->user_end());
-    // if (users.size() != 1)
-    //   return failure();
-    // if (!isa<LocalStoreOp>(users[0]))
-    //   return failure();
 
-    auto putOp = dyn_cast<ArefPutOp>(op->getBlock()->getParentOp());
-    if (!putOp)
+    auto getOp = dyn_cast<ArefGetOp>(op->getBlock()->getParentOp());
+    if (!getOp)
       return failure();
 
-    auto getOp = dyn_cast<ArefGetOp>(putOp->getBlock()->getParentOp());
-    if (!getOp)
+    auto putOp = dyn_cast<ArefPutOp>(getOp->getBlock()->getParentOp());
+    if (!putOp)
       return failure();
 
     auto putAref = putOp.getOperand();
@@ -511,7 +488,7 @@ public:
     graph.nodes[putOp].containsAsync = true;
     graph.nodes[getOp].containsAsync = true;
 
-    if (failed(lowerRegion<true, true>(putOp, rewriter, graph)))
+    if (failed(lowerRegion<true, true>(getOp, rewriter, graph)))
       return failure();
 
     rewriter.setInsertionPoint(op);
@@ -530,19 +507,6 @@ public:
     auto getEmptyBarrier =
         getBarrier(getArefValue, getIdx, getArefValue.emptyMbars);
     op.setBarrier(getEmptyBarrier);
-
-    int loopCarried = -1;
-    if (isa<BlockArgument>(getIdx)) {
-      // the index is a loop carried variable
-      int i = -1;
-      for (auto arg : getIdx.getParentBlock()->getArguments()) {
-        if (arg == getIdx)
-          loopCarried = i;
-        i += 1;
-      }
-    }
-    if (loopCarried < 0)
-      return failure();
 
     auto mmaFor = dyn_cast<scf::ForOp>(getOp->getParentOp());
     for (auto user : putAref.getUsers()) {
