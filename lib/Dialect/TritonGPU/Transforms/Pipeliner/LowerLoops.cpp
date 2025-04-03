@@ -1172,17 +1172,6 @@ scf::ForOp lowerMMA(ttng::MMAv5OpInterface mma, scf::ForOp forOp,
     return forOp;
   }
 
-  // Don't pipeline the mma if there are loads from the accumulator before the
-  // mma itself, and are not in the same stage as the mma
-  DominanceInfo domInfo(forOp);
-  if (llvm::any_of(alloc->getUsers(), [&](Operation *op) {
-        return isa<ttng::TMEMLoadOp>(op) && forOp->isAncestor(op) &&
-               !domInfo.properlyDominates(mma.getOperation(), op) &&
-               schedule[op].first != schedule[mma].first;
-      })) {
-    return forOp;
-  }
-
   // Create barrier and wait ops
   std::pair<int, int> tmemUseStageBounds =
       getTmemUseStageBounds(alloc, forOp, schedule);

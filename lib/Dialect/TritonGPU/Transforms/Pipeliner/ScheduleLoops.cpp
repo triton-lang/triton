@@ -27,8 +27,38 @@ bool hasGpuBarriers(scf::ForOp forOp) {
   return result.wasInterrupted();
 }
 
+// Only pipeline the loops where the MMA happens before the tmem_load,
+// or is in the same stage as the tmem_load. Lowering does not support
+// the case where the MMA is in a different stage as the tmem_load and
+// happens after it.
+bool mmav5DominatesTmemLoads(scf::ForOp forOp,
+                             const DenseMap<Operation *, int> &opLatency) {
+  DominanceInfo domInfo(forOp);
+  bool mmav5DominatesTmemLoads = true;
+  forOp.walk([&](ttng::MMAv5OpInterface mma) {
+    int mmaLatency = 0;
+    if (opLatency.count(mma) == 0) {
+      mmaLatency = opLatency.lookup(mma);
+    }
+    auto tmemAlloc = mma.getAccumulator().getDefiningOp<ttng::TMEMAllocOp>();
+    if (!tmemAlloc || !forOp.isDefinedOutsideOfLoop(tmemAlloc)) {
+      return WalkResult::interrupt();
+    }
+    for (auto user : tmemAlloc->getUsers()) {
+      if (isa<ttng::TMEMLoadOp>(user) && forOp->isAncestor(user) &&
+          !domInfo.properlyDominates(mma, user) && opLatency.lookup(mma) > 1) {
+        mmav5DominatesTmemLoads = false;
+        return WalkResult::interrupt();
+      }
+    }
+    return WalkResult::advance();
+  });
+  return mmav5DominatesTmemLoads;
+}
+
 // Return true if the preconditions for pipelining the loop are met.
-bool isSafeToPipeline(scf::ForOp forOp) {
+bool isSafeToPipeline(scf::ForOp forOp,
+                      const DenseMap<Operation *, int> &opLatency) {
   // Skip loop with distance > 1.
   if (loopHasDistGreaterThanOne(forOp))
     return false;
@@ -37,6 +67,10 @@ bool isSafeToPipeline(scf::ForOp forOp) {
     return false;
   // Skip loops with barriers.
   if (hasGpuBarriers(forOp))
+    return false;
+  // Lowering does not currently support cases where tmem_load happens
+  // before the mma in the loop
+  if (!mmav5DominatesTmemLoads(forOp, opLatency))
     return false;
   return true;
 }
@@ -359,7 +393,8 @@ void scheduleRemainingToLastStage(scf::ForOp forOp, CoarseSchedule &schedule,
 
 void scheduleLoop(scf::ForOp forOp,
                   const DenseMap<Operation *, int> &opLatency) {
-  if (!hasLatenciesAssigned(forOp, opLatency) || !isSafeToPipeline(forOp))
+  if (!hasLatenciesAssigned(forOp, opLatency) ||
+      !isSafeToPipeline(forOp, opLatency))
     return;
   // Based on the latencies, schedule the key ops to the stages.
   CoarseSchedule schedule = scheduleKeyOps(forOp, opLatency);
