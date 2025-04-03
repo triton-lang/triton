@@ -24,11 +24,15 @@ from dataclasses import dataclass
 from distutils.command.install import install
 from setuptools.command.develop import develop
 from setuptools.command.egg_info import egg_info
-from wheel.bdist_wheel import bdist_wheel
 
 import pybind11
 
 from python.build_helpers import get_base_dir, get_cmake_dir
+
+try:
+    from setuptools.command.bdist_wheel import bdist_wheel
+except ImportError:
+    from wheel.bdist_wheel import bdist_wheel
 
 
 @dataclass
