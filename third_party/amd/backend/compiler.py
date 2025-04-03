@@ -93,7 +93,7 @@ class HIPOptions:
 
 
 class HIPBackend(BaseBackend):
-    instrumentation = {}
+    instrumentation = None
 
     @staticmethod
     def supports_target(target: GPUTarget):
@@ -147,6 +147,8 @@ class HIPBackend(BaseBackend):
 
     def load_dialects(self, ctx):
         amd.load_dialects(ctx)
+        if HIPBackend.instrumentation:
+            HIPBackend.instrumentation.load_dialects(ctx)
 
     @staticmethod
     @functools.lru_cache()
@@ -275,8 +277,8 @@ class HIPBackend(BaseBackend):
         passes.common.add_canonicalizer(pm)
         passes.common.add_cse(pm)
         passes.common.add_symbol_dce(pm)
-        if "ttir" in HIPBackend.instrumentation:
-            HIPBackend.instrumentation["ttir"](pm)
+        if HIPBackend.instrumentation:
+            HIPBackend.instrumentation.patch("ttir", pm, mod.context)
         pm.run(mod)
         return mod
 
@@ -320,8 +322,8 @@ class HIPBackend(BaseBackend):
         if os.environ.get("TRITON_DISABLE_LINE_INFO", "0") == "0":
             passes.llvmir.add_di_scope(pm)
         amd.passes.ttgpuir.add_builtin_func_to_llvmir(pm, __HIP_FTZ)
-        if "ttgpuir" in HIPBackend.instrumentation:
-            HIPBackend.instrumentation["ttgpuir"](pm)
+        if HIPBackend.instrumentation:
+            HIPBackend.instrumentation.patch("ttgpuir", pm, mod.context)
         pm.run(mod)
 
         # LLVM-IR (MLIR) -> LLVM-IR (LLVM)
