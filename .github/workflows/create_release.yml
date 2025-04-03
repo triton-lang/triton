@@ -46,7 +46,8 @@ jobs:
           if [[ ${tag_or_branch} == v* ]]; then
             # strip trailing v from tag name
             tag_or_branch="${tag_or_branch#v}"
-            echo "TRITON_OVERRIDE_VERSION=${tag_or_branch}" >> "$GITHUB_ENV"
+            # important: version must be fixed in setup.py
+            sed -i -e "s:^TRITON_VERSION = .*:TRITON_VERSION = '${tag_or_branch}':" setup.py || exit 1
           fi
           echo "RELEASE_NAME=triton-$tag_or_branch" >> "$GITHUB_ENV"
       - name: Create source distribution

@@ -748,10 +748,12 @@ def get_git_version_suffix():
 # will cause errors
 Path(__file__).parent.joinpath("python", "triton", "_C").mkdir(exist_ok=True)
 
+# keep it separate for easy substitution
+TRITON_VERSION = "3.3.0" + get_git_version_suffix() + os.environ.get("TRITON_WHEEL_VERSION_SUFFIX", "")
+
 setup(
     name=os.environ.get("TRITON_WHEEL_NAME", "triton"),
-    version=os.environ.get("TRITON_OVERRIDE_VERSION",
-                           "3.3.0" + get_git_version_suffix() + os.environ.get("TRITON_WHEEL_VERSION_SUFFIX", "")),
+    version=TRITON_VERSION,
     author="Philippe Tillet",
     author_email="phil@openai.com",
     description="A language and compiler for custom Deep Learning operations",
