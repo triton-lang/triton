@@ -32,7 +32,8 @@ Operation *predicateOp(RewriterBase &rewriter, Operation *op, Value pred);
 /// Replace all uses of `oldUse` with `val` and propagate the type if needed.
 /// This is useful when we need to change a memory descriptor from immutable to
 /// mutable.
-void replaceUsesAndPropagateType(OpBuilder &builder, Value oldVal, Value val);
+void replaceUsesAndPropagateType(OpBuilder &builder, Operation *oldUse,
+                                 Value val);
 
 // Return true if the given ForOp has the attribute
 // `tt.disallow_acc_multi_buffer` set to true.
@@ -67,8 +68,7 @@ Value createScalarAlloc(ImplicitLocOpBuilder &rewriter, Type type,
 Value createBarrierAlloc(scf::ForOp forOp, int numBarriers);
 // Create an allocation that can hold distance number of tensor shapes.
 Value createAlloc(scf::ForOp forOp, RankedTensorType ty, Location loc,
-                  gpu::SharedEncodingTrait sharedEnc, unsigned distance,
-                  bool isMultiBuffer = true);
+                  gpu::SharedEncodingTrait sharedEnc, unsigned distance);
 
 // Determine if the operation is a TMA load.
 bool isTMALoad(Operation *op);

@@ -278,14 +278,14 @@ LogicalResult triton::gpu::specializeLoadMMADependencies(scf::ForOp &loop,
   b.setInsertionPoint(aLoad);
   Value aView = createSingleBufferView(b, aAlloc, loadIndex);
   lowerTMACopy(b, *loadPartition, aLoad, curLoadBar, aView);
-  replaceUsesAndPropagateType(b, aLoad->user_begin()->getResult(0), aView);
+  replaceUsesAndPropagateType(b, *aLoad->user_begin(), aView);
   aLoad->user_begin()->erase();
   aLoad->erase();
 
   b.setInsertionPoint(bLoad);
   Value bView = createSingleBufferView(b, bAlloc, loadIndex);
   lowerTMACopy(b, *loadPartition, bLoad, curLoadBar, bView);
-  replaceUsesAndPropagateType(b, bLoad->user_begin()->getResult(0), bView);
+  replaceUsesAndPropagateType(b, *bLoad->user_begin(), bView);
   bLoad->user_begin()->erase();
   bLoad->erase();
 

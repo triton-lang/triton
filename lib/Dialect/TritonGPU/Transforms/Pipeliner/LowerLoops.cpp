@@ -1,4 +1,3 @@
-#include "mlir/Dialect/UB/IR/UBOps.h"
 #include "mlir/IR/Dominance.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 #include "triton/Analysis/Utility.h"
@@ -1173,10 +1172,9 @@ scf::ForOp lowerMMA(ttng::MMAv5OpInterface mma, scf::ForOp forOp,
     return forOp;
   }
 
-  DominanceInfo domInfo(forOp);
-
   // Don't pipeline the mma if there are loads from the accumulator before the
   // mma itself, and are not in the same stage as the mma
+  DominanceInfo domInfo(forOp);
   if (llvm::any_of(alloc->getUsers(), [&](Operation *op) {
         return isa<ttng::TMEMLoadOp>(op) && forOp->isAncestor(op) &&
                !domInfo.properlyDominates(mma.getOperation(), op) &&
