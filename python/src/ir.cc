@@ -313,8 +313,6 @@ void init_triton_ir(py::module &&m) {
       .def("disable_multithreading",
            [](MLIRContext &self) { self.disableMultithreading(); });
 
-  py::class_<OpBuilder>(m, "op_builder", py::module_local()).def(py::init<>());
-
   py::class_<SourceMgrDiagnosticHandler>(m, "source_mgr_diag",
                                          py::module_local())
       .def(py::init<llvm::SourceMgr &, MLIRContext *>());
@@ -727,8 +725,6 @@ void init_triton_ir(py::module &&m) {
            })
       .def_property_readonly("type", &FuncOp::getFunctionType)
       .def("reset_type", &FuncOp::setType);
-
-  py::class_<OpBuilder::InsertPoint>(m, "InsertPoint", py::module_local());
 
   py::class_<TritonOpBuilder>(m, "builder", py::module_local(),
                               py::dynamic_attr())
