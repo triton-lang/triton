@@ -20,30 +20,62 @@ namespace gpu {
 
 namespace {
 
-// Returns true if between the op and the store there is another store to the
-// same TMEMAlloc.
-// Assumes that op dominates store.
-bool aliasingStoresBetween(Operation *op, ttng::TMEMStoreOp store) {
-  Operation *prevNode = store;
-  while (prevNode != op) {
+// If the operation access tensor memory, return the tensor memory values.
+void getTensorMemoryAccesses(Operation *op, DenseSet<Value> &tmemAccesses) {
+  for (Value operand : op->getOperands()) {
+    if (auto memdesc = dyn_cast<MemDescType>(operand.getType())) {
+      if (isa<ttng::TensorMemorySpaceAttr>(memdesc.getMemorySpace())) {
+        tmemAccesses.insert(operand);
+      }
+    }
+  }
+}
+
+bool mayAliasTMEMOp(const DenseSet<Value> &sinkAccesses, Operation *op) {
+  // Treat barriers as aliasing ops because they may be protecting tensory
+  // memory buffers.
+  if (isa<ttng::ArriveBarrierOp, ttng::WaitBarrierOp>(op)) {
+    return true;
+  }
+
+  // Check if the operation may alias the sink.
+  DenseSet<Value> tmemAccesses;
+  getTensorMemoryAccesses(op, tmemAccesses);
+  if (mayAliasAllocations(tmemAccesses, sinkAccesses)) {
+    return true;
+  }
+  return false;
+}
+
+// Returns true if between the `lhs` op and the `sink` op there is another
+// access to the same TMEMAlloc. Assumes that op dominates store.
+Operation *findTMEMAliasingOpInBetween(Operation *lhs, Operation *sink) {
+  DenseSet<Value> sinkAccesses;
+  getTensorMemoryAccesses(sink, sinkAccesses);
+  if (sinkAccesses.empty()) {
+    return nullptr;
+  }
+
+  Operation *prevNode = sink;
+  while (prevNode != lhs) {
     if (prevNode->getPrevNode() == nullptr) {
       prevNode = prevNode->getParentOp();
       if (prevNode == nullptr) {
-        return false;
+        return nullptr;
       }
     } else {
       prevNode = prevNode->getPrevNode();
     }
-    if (auto otherStore = dyn_cast<ttng::TMEMStoreOp>(prevNode)) {
-      if (otherStore.getDst() == store.getDst()) {
-        return true;
-      }
-    }
-    if (prevNode == op) {
+    if (prevNode == lhs) {
       break;
     }
+
+    // Check if this op may alias tensor memory.
+    if (mayAliasTMEMOp(sinkAccesses, prevNode)) {
+      return prevNode;
+    }
   }
-  return false;
+  return nullptr;
 }
 
 class CombineTMEMStoreAndSelect : public OpRewritePattern<ttng::TMEMStoreOp> {
@@ -62,13 +94,13 @@ public:
     Value falseSrc = select.getFalseValue();
     if (auto load = trueSrc.getDefiningOp<ttng::TMEMLoadOp>()) {
       if (store.getDst() == load.getSrc() &&
-          !aliasingStoresBetween(load, store)) {
+          !findTMEMAliasingOpInBetween(load, store)) {
         valueFromTMEM = kTrue;
       }
     }
     if (auto load = falseSrc.getDefiningOp<ttng::TMEMLoadOp>()) {
       if (store.getDst() == load.getSrc() &&
-          !aliasingStoresBetween(load, store)) {
+          !findTMEMAliasingOpInBetween(load, store)) {
         valueFromTMEM = valueFromTMEM == kTrue ? kUnknown : kFalse;
       }
     }
@@ -105,7 +137,7 @@ public:
         }
         // Can't have other stores to the same tmem_alloc in between the load
         // and the store
-        if (aliasingStoresBetween(load, store)) {
+        if (findTMEMAliasingOpInBetween(load, store)) {
           continue;
         }
         rewriter.eraseOp(store);
@@ -142,6 +174,9 @@ public:
         domOp == load->getNextNode()) {
       return failure();
     }
+    // Don't sink past potentially aliasing ops.
+    if (Operation *dst = findTMEMAliasingOpInBetween(load, domOp))
+      domOp = dst;
     rewriter.moveOpBefore(load, domOp);
     return success();
   }
@@ -225,8 +260,7 @@ static void hoistInvariantInputs(Operation *mmaOp, scf::ForOp forOp) {
     while (Operation *defOp = src.getDefiningOp()) {
       if (forOp.isDefinedOutsideOfLoop(src))
         break;
-      if (!(isMemoryEffectFree(defOp) && isSpeculatable(defOp) &&
-            defOp->getNumOperands() == 1))
+      if (!(isPure(defOp) && defOp->getNumOperands() == 1))
         break;
       opToHoist.push_back(defOp);
       src = defOp->getOperand(0);
