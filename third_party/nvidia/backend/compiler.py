@@ -238,6 +238,10 @@ class CUDABackend(BaseBackend):
 
     @staticmethod
     def make_ttgir(mod, metadata, opt, capability):
+        # Set maxnreg on all kernels, if it was provided.
+        if opt.maxnreg is not None:
+            mod.set_attr("ttg.maxnreg", ir.builder(mod.context).get_int32_attr(opt.maxnreg))
+
         cluster_info = nvidia.ClusterInfo()
         if opt.cluster_dims is not None:
             cluster_info.clusterDimX = opt.cluster_dims[0]
@@ -334,12 +338,6 @@ class CUDABackend(BaseBackend):
         nvidia.set_short_ptr()
         llvm.attach_datalayout(llvm_mod, triple, proc, features)
         nvidia.set_nvvm_reflect_ftz(llvm_mod)
-
-        # Set maxnreg on all kernels, if it was provided.
-        if options.maxnreg is not None:
-            for k in llvm_mod.get_functions():
-                if not k.is_declaration() and k.is_external_linkage():
-                    k.set_nvvm_maxnreg(options.maxnreg)
 
         if options.extern_libs:
             paths = [path for (name, path) in options.extern_libs]
