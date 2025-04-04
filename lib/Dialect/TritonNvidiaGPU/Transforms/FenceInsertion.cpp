@@ -38,33 +38,40 @@ public:
     // Only insert fences for compute capability 9.0
     if (computeCapability < 90)
       return;
-    if (::triton::tools::getBoolEnv("DISABLE_MMA_V3"))
+    if (::triton::tools::getBoolEnv("DISABLE_MMA_V3") &&
+        ::triton::tools::getBoolEnv("DISABLE_MMA_V5"))
       return;
     ModuleOp mod = getOperation();
     mod.walk([&](Operation *op) {
-      if (!isa<ttng::WarpGroupDotOp>(op))
+      bool isMMAv3 = isa<ttng::WarpGroupDotOp>(op);
+      bool isMMAv5 = isa<ttng::MMAv5OpInterface>(op);
+      if (!isMMAv3 && !isMMAv5)
         return WalkResult::advance();
       OpBuilder builder(op);
       auto a = op->getOperand(0);
       auto b = op->getOperand(1);
-      auto mmaEncoding = dyn_cast<ttg::NvidiaMmaEncodingAttr>(
-          cast<RankedTensorType>(op->getResult(0).getType()).getEncoding());
-      if (!mmaEncoding || !mmaEncoding.isHopper())
-        return WalkResult::advance();
-      bool aDependsOnShared = dependOnSharedEncOperand(a);
-      bool bDependsOnShared = dependOnSharedEncOperand(b);
-      if (!aDependsOnShared && !bDependsOnShared)
-        return WalkResult::advance();
+      bool aInMemory = isMMAv5;
+      bool bInMemory = isMMAv5;
+      if (isMMAv3) {
+        auto mmaEncoding = dyn_cast<ttg::NvidiaMmaEncodingAttr>(
+            cast<RankedTensorType>(op->getResult(0).getType()).getEncoding());
+        if (!mmaEncoding || !mmaEncoding.isHopper())
+          return WalkResult::advance();
+        bool aDependsOnShared = dependOnSharedEncOperand(a);
+        bool bDependsOnShared = dependOnSharedEncOperand(b);
+        if (!aDependsOnShared && !bDependsOnShared)
+          return WalkResult::advance();
+        aInMemory = aDependsOnShared;
+        bInMemory = bDependsOnShared;
+      }
       Operation *fence = builder.create<ttng::FenceAsyncSharedOp>(
           op->getLoc(), /*bCluster=*/false);
       // If there is all the dependencies are outside of the loop try to hoist
       // the fence.
       while (auto loopOp = fence->getParentOfType<LoopLikeOpInterface>()) {
-        if (aDependsOnShared &&
-            loopOp->isAncestor(a.getParentBlock()->getParentOp()))
+        if (aInMemory && loopOp->isAncestor(a.getParentBlock()->getParentOp()))
           break;
-        if (bDependsOnShared &&
-            loopOp->isAncestor(b.getParentBlock()->getParentOp()))
+        if (bInMemory && loopOp->isAncestor(b.getParentBlock()->getParentOp()))
           break;
         loopOp.moveOutOfLoop(fence);
       }
