@@ -1310,8 +1310,8 @@ LogicalResult DescriptorGatherOp::verify() {
 
 // -- DescriptorLoadOp --
 static LogicalResult verifyDescriptorLoadStoreType(Operation *op,
-                                                  TensorDescType desc,
-                                                  RankedTensorType tensor) {
+                                                   TensorDescType desc,
+                                                   RankedTensorType tensor) {
   RankedTensorType block = desc.getBlockType();
   ArrayRef<int64_t> blockShape = block.getShape();
   ArrayRef<int64_t> tensorShape = tensor.getShape();
