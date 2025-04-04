@@ -40,7 +40,6 @@
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "llvm/ADT/STLExtras.h"
-#include "llvm/ADT/Sequence.h"
 
 #include <memory>
 #include <optional>
@@ -61,7 +60,6 @@ using namespace triton::nvidia_gpu;
 using namespace triton::nvws;
 
 struct ArefUseNode {
-  SmallVector<ArefUseNode *> inputs;
   ArefUseNode *parent;
   Operation *op;
   SmallVector<ArefUseNode *> subOps;
@@ -72,16 +70,17 @@ struct ArefValue {
   Value emptyMbars;
   Value fullMbars;
   int depth;
+  SmallVector<ArefUseNode *> users;
 };
 
 struct ArefUseGraph {
   llvm::MapVector<Operation *, ArefUseNode> nodes;
   llvm::MapVector<Value, ArefValue> arefs;
-  SmallVector<ArefUseNode *> topLevelUses;
 };
 
-static MemDescType getMemDesc(MLIRContext *ctx, PatternRewriter &rewriter,
+static MemDescType getMemDesc(PatternRewriter &rewriter,
                               llvm::ArrayRef<int64_t> shape, Type intType) {
+  auto ctx = rewriter.getContext();
   Attribute sharedMemorySpace = triton::gpu::SharedMemorySpaceAttr::get(ctx);
   auto barrierCTALayout = CTALayoutAttr::get(
       /*context=*/ctx, /*CTAsPerCGA=*/{1},
@@ -91,15 +90,13 @@ static MemDescType getMemDesc(MLIRContext *ctx, PatternRewriter &rewriter,
   return MemDescType::get(shape, intType, barrierEncoding, sharedMemorySpace,
                           /*mutableMemory=*/true);
 }
-static MemDescType getBarrierMemDesc(MLIRContext *ctx,
-                                     PatternRewriter &rewriter,
+static MemDescType getBarrierMemDesc(PatternRewriter &rewriter,
                                      llvm::ArrayRef<int64_t> shape) {
-  return getMemDesc(ctx, rewriter, shape, rewriter.getI64Type());
+  return getMemDesc(rewriter, shape, rewriter.getI64Type());
 }
 
-static Value getBarrierAt(MLIRContext *ctx, Location loc,
-                          PatternRewriter &rewriter, Value mbars, Value idx) {
-  auto memDesc = getBarrierMemDesc(ctx, rewriter, {1});
+static Value getBarrierAt(PatternRewriter &rewriter, Location loc, Value mbars, Value idx) {
+  auto memDesc = getBarrierMemDesc(rewriter, {1});
   return rewriter.create<triton::gpu::MemDescSubviewOp>(
       loc, memDesc, mbars, SmallVector<Value>{idx});
 }
@@ -116,8 +113,7 @@ static Value getStageIndex(PatternRewriter &rewriter, Location loc, Value idx,
   return stageIdx;
 }
 
-static Value getPhase(Value k, Value phase, int depth, Location loc,
-                      PatternRewriter &rewriter) {
+static Value getPhase(PatternRewriter &rewriter, Location loc, Value k, Value phase, int depth) {
   // parity = (k % numStage) % 2 == 0 ? parity : parity ^ 1
   Value D = rewriter.create<arith::ConstantIntOp>(loc, depth, 32);
   Value one = rewriter.create<arith::ConstantIntOp>(loc, 1, 32);
@@ -129,13 +125,6 @@ static Value getPhase(Value k, Value phase, int depth, Location loc,
       rewriter.create<arith::ConstantIntOp>(loc, 0, 32));
   Value parityXor = rewriter.create<arith::XOrIOp>(loc, phase, one);
   return rewriter.create<arith::SelectOp>(loc, pred, phase, parityXor);
-}
-
-static Value updatePhaseCalculation(Operation *op, Value tmaIdx, Value phase,
-                                    int depth, PatternRewriter &rewriter) {
-  rewriter.setInsertionPointAfter(op);
-  auto loc = op->getLoc();
-  return getPhase(tmaIdx, phase, depth, loc, rewriter);
 }
 
 class LowerArefCreate : public OpRewritePattern<ArefCreateOp> {
@@ -196,7 +185,7 @@ public:
     rewriter.setInsertionPointToStart(dLoop.getBody());
 
     for (int i = 0; i < 2; ++i) {
-      auto memDesc = getBarrierMemDesc(ctx, rewriter, {1});
+      auto memDesc = getBarrierMemDesc(rewriter, {1});
       auto singleBarrier = rewriter.create<triton::gpu::MemDescSubviewOp>(
           loc, memDesc, i == 0 ? emptyMbars.getResult() : fullMbars.getResult(),
           SmallVector<Value>{dLoop.getInductionVar()});
@@ -207,10 +196,37 @@ public:
 
     graph.arefs[op] =
         ArefValue{emptyMbars.getResult(), fullMbars.getResult(), depth};
+    for (auto user : op.getResult().getUsers())
+      graph.arefs[op].users.push_back(&graph.nodes[user]);
 
     return success();
   }
 };
+
+static void waitOnMbar(PatternRewriter &rewriter, Location loc, Value mBars, Value idx, Value phase0, int depth) {
+  auto ctx = rewriter.getContext();
+  auto zero = rewriter.create<arith::ConstantIntOp>(loc, 0, 32);
+  auto one = rewriter.create<arith::ConstantIntOp>(loc, 1, 32);
+
+  auto stageIdx = getStageIndex(rewriter, loc, idx, depth);
+
+  auto barrier =
+      getBarrierAt(rewriter, loc, mBars, stageIdx);
+  auto waitPhase = getPhase(rewriter, loc, idx, phase0, depth);
+  // wait on empty/full
+  auto waitOp = rewriter.create<triton::nvidia_gpu::WaitBarrierOp>(
+      loc, barrier, waitPhase);
+}
+
+static void signalArrival(PatternRewriter& rewriter, Location loc, Value mBars, Value idx, int depth) {
+    // And a barrier arrive to signal completion of the region if none of the
+    // underlying ops are already async.
+    auto stageIdx = getStageIndex(rewriter, loc, idx, depth);
+    auto barrier = getBarrierAt(rewriter, loc, mBars,
+                           stageIdx);
+    // wait on empty. Use a default phase for now, will rewrite later
+    rewriter.create<triton::nvidia_gpu::ArriveBarrierOp>(loc, barrier, 1);
+}
 
 template <bool put, bool manualWait = false, typename T>
 LogicalResult lowerRegion(T op, PatternRewriter &rewriter,
@@ -232,24 +248,16 @@ LogicalResult lowerRegion(T op, PatternRewriter &rewriter,
   auto fullMbars = graph.arefs[aref].fullMbars;
   auto depth = graph.arefs[aref].depth;
 
+  rewriter.setInsertionPoint(op);
+
   auto zero = rewriter.create<arith::ConstantIntOp>(loc, 0, 32);
   auto one = rewriter.create<arith::ConstantIntOp>(loc, 1, 32);
+  Value idx = depth > 1 ? op.getIndexes()[0] : zero;
 
-  Value idx = zero;
-  if (depth > 1)
-    idx = op.getIndexes()[0];
-
-  rewriter.setInsertionPoint(op);
   auto stageIdx = getStageIndex(rewriter, loc, idx, depth);
 
-  auto barrier =
-      getBarrierAt(ctx, loc, rewriter, put ? emptyMbars : fullMbars, stageIdx);
-  auto waitPhase = getPhase(idx, put ? one : zero, depth, loc, rewriter);
-  if constexpr (!manualWait) {
-    // wait on empty/full
-    auto waitOp = rewriter.create<triton::nvidia_gpu::WaitBarrierOp>(
-        loc, barrier, waitPhase);
-  }
+  if constexpr (!manualWait)
+    waitOnMbar(rewriter, loc, put ? emptyMbars : fullMbars, idx, put ? one : zero, depth);
 
   SmallVector<Value> views;
 
@@ -280,12 +288,13 @@ LogicalResult lowerRegion(T op, PatternRewriter &rewriter,
   }
 
   auto putOpBody = &op->getRegion(0).front();
-  if (putOpBody->getArguments().size() != views.size()) {
+  if (putOpBody->getArguments().size() != views.size())
     return op.emitError("number of views and arguments mismatch.");
-  };
-  for (auto [arg, view] : zip(putOpBody->getArguments(), views)) {
+
+
+  for (auto [arg, view] : zip(putOpBody->getArguments(), views))
     arg.replaceAllUsesWith(view);
-  }
+
 
   for (auto [ret, val] :
        llvm::zip(op.getResults(), putOpBody->back().getOperands()))
@@ -296,12 +305,7 @@ LogicalResult lowerRegion(T op, PatternRewriter &rewriter,
     bodyOp.moveBefore(op);
 
   if (!graph.nodes[op].containsAsync) {
-    // And a barrier arrive to signal completion of the region if none of the
-    // underlying ops are already async. Phase To be rewritten later.
-    barrier = getBarrierAt(ctx, loc, rewriter, put ? fullMbars : emptyMbars,
-                           stageIdx);
-    // wait on empty. Use a default phase for now, will rewrite later
-    rewriter.create<triton::nvidia_gpu::ArriveBarrierOp>(loc, barrier, 1);
+    signalArrival(rewriter, loc, put ? fullMbars : emptyMbars, idx, depth);
   }
 
   rewriter.eraseOp(op);
@@ -458,13 +462,15 @@ public:
                                 PatternRewriter &rewriter) const override {
     auto ctx = op.getContext();
     auto loc = op.getLoc();
-    SmallVector<Operation *> users(op->user_begin(), op->user_end());
-
     auto getOp = dyn_cast<ArefGetOp>(op->getBlock()->getParentOp());
     if (!getOp)
       return failure();
 
-    auto putOp = dyn_cast<ArefPutOp>(getOp->getBlock()->getParentOp());
+    auto kLoop = dyn_cast<scf::ForOp>(getOp->getBlock()->getParentOp());
+    if (!kLoop)
+      return failure();
+
+    auto putOp = dyn_cast<ArefPutOp>(kLoop->getBlock()->getParentOp());
     if (!putOp)
       return failure();
 
@@ -488,9 +494,6 @@ public:
     graph.nodes[putOp].containsAsync = true;
     graph.nodes[getOp].containsAsync = true;
 
-    if (failed(lowerRegion<true, true>(getOp, rewriter, graph)))
-      return failure();
-
     rewriter.setInsertionPoint(op);
     auto zero = rewriter.create<arith::ConstantIntOp>(loc, 0, 32);
     auto one = rewriter.create<arith::ConstantIntOp>(loc, 1, 32);
@@ -508,48 +511,63 @@ public:
         getBarrier(getArefValue, getIdx, getArefValue.emptyMbars);
     op.setBarrier(getEmptyBarrier);
 
-    auto mmaFor = dyn_cast<scf::ForOp>(getOp->getParentOp());
-    for (auto user : putAref.getUsers()) {
-      auto tmpOp = dyn_cast<ArefGetOp>(user);
-      if (!tmpOp)
-        continue;
-      for (auto arg : tmpOp.getRegion().getArguments()) {
-        for (auto getArgUser : arg.getUsers()) {
-          if (!isa<TMEMLoadOp>(getArgUser))
-            continue;
-          if (mmaFor) {
-            // Otherwise wait outside the loop.
-            rewriter.setInsertionPoint(mmaFor);
-            Value putIdx =
-                putArefValue.depth > 1
-                    ? putOp.getIndexes()[0]
-                    : rewriter.create<arith::ConstantIntOp>(loc, 0, 32);
-            auto putEmptyBarrier =
-                getBarrier(putArefValue, putIdx, putArefValue.emptyMbars);
+    if (putArefValue.depth == 1) {
+      // not peristent
+      rewriter.setInsertionPointAfter(kLoop);
+      // TODO: relax the assumption about which position the loop-carried iteration count is in
+      Value idx = kLoop.getResult(0);
+      Value finalMMABarrier =
+          getBarrier(getArefValue, idx, getArefValue.emptyMbars);
+      Value finalPhase =
+          getPhase(idx, rewriter.create<arith::ConstantIntOp>(loc, 0, 32),
+                   getArefValue.depth, loc, rewriter);
+      rewriter.create<triton::nvidia_gpu::WaitBarrierOp>(
+          loc, finalMMABarrier, finalPhase);
 
-            rewriter.create<triton::nvidia_gpu::WaitBarrierOp>(
-                loc, putEmptyBarrier,
-                getPhase(putIdx, one, putArefValue.depth, loc, rewriter));
-            rewriter.setInsertionPointAfter(mmaFor);
 
-            Value idx = mmaFor.getResult(loopCarried);
-            Value finalMMABarrier =
-                getBarrier(getArefValue, idx, getArefValue.emptyMbars);
-            Value finalPhase =
-                getPhase(idx, rewriter.create<arith::ConstantIntOp>(loc, 0, 32),
-                         getArefValue.depth, loc, rewriter);
-            rewriter.create<triton::nvidia_gpu::WaitBarrierOp>(
-                loc, finalMMABarrier, finalPhase);
-            // signal full.
-            auto putFullBarrier =
-                getBarrier(putArefValue, putIdx, putArefValue.fullMbars);
-            rewriter.create<triton::nvidia_gpu::ArriveBarrierOp>(
-                loc, putFullBarrier, 1);
-          } else {
-            return failure();
+    } else {
+      // persistent. This should be cleaner, need to leverage the graph
+      ArefGetOp arefOp;
+      TMEMLoadOp load;
+      auto findLoad = [&]() -> TMEMLoadOp {
+        if (!arefOp)
+          return nullptr;
+        for (auto arg : arefOp.getRegion().getArguments()) {
+          for (auto getArgUser : arg.getUsers()) {
+            load = dyn_cast<TMEMLoadOp>(getArgUser);
+            if (load)
+              return load;
           }
         }
+        return nullptr;
+      };
+
+      for (auto user : putAref.getUsers()) {
+        arefOp = dyn_cast<ArefGetOp>(user);
+        if (!arefOp)
+          continue;
+        load = findLoad();
+        if (load)
+          break;
       }
+
+      if (load)
+        rewriter.setInsertionPoint(load);
+      else
+        return failure();
+
+      auto forOp = dyn_cast<scf::ForOp>(arefOp->getBlock()->getParentOp());
+      if (!forOp)
+        return failure();
+      // TODO: relax the assumption about which position the loop-carried iteration count is in
+      Value idx = forOp.getOperand(1);
+      Value finalMMABarrier =
+          getBarrier(getArefValue, idx, getArefValue.emptyMbars);
+      Value finalPhase =
+          getPhase(idx, rewriter.create<arith::ConstantIntOp>(loc, 0, 32),
+                   getArefValue.depth, loc, rewriter);
+      rewriter.create<triton::nvidia_gpu::WaitBarrierOp>(
+          loc, finalMMABarrier, finalPhase);
     }
 
     return success();
