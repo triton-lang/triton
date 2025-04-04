@@ -313,7 +313,7 @@ Derived metrics can be created when source metrics are available.
 - flop[<8/16/32/64>]/s, gflop[<8/16/32/64>]/s, tflop[<8/16/32/64>]/s: flops / time
 - byte/s, gbyte/s, tbyte/s: bytes / time
 - util: max(sum(flops<width>) / peak_flops<width>_time, sum(bytes) / peak_bandwidth_time)
-- <metric>/%%: frame(metric) / sum(metric). Only availble for inclusive metrics (e.g. time)
+- <metric>/%%: frame(metric) / sum(metric). Only available for inclusive metrics (e.g. time)
 """,
     )
     argparser.add_argument(

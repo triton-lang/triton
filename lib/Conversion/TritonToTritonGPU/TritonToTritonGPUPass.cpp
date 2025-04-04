@@ -628,7 +628,7 @@ void populateTritonPatterns(TritonGPUTypeConverter &typeConverter,
 }
 // Proton patterns
 // NOTE: Because Proton's inputs are scalars and not tensors this conversion
-// isn't strictly nessessary however you could envision a case where we pass in
+// isn't strictly necessary however you could envision a case where we pass in
 // tensors in for Triton object specific tracing operations in which case we
 // would need to fill in the OpConversionPattern
 void populateProtonPatterns(TritonGPUTypeConverter &typeConverter,
