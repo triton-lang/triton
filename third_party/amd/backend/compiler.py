@@ -93,7 +93,7 @@ class HIPOptions:
 
 
 class HIPBackend(BaseBackend):
-    instrumentation = {}
+    instrumentation = None
 
     @staticmethod
     def supports_target(target: GPUTarget):
@@ -147,6 +147,8 @@ class HIPBackend(BaseBackend):
 
     def load_dialects(self, ctx):
         amd.load_dialects(ctx)
+        if HIPBackend.instrumentation:
+            HIPBackend.instrumentation.load_dialects(ctx)
 
     @staticmethod
     @functools.lru_cache()
@@ -298,8 +300,8 @@ class HIPBackend(BaseBackend):
 
         passes.ttgpuir.add_allocate_shared_memory(pm)
         # instrumentation point here so we can override IRs above (e.g., ttir and ttgir)
-        if "ttgpuir" in HIPBackend.instrumentation:
-            HIPBackend.instrumentation["ttgpuir"](pm)
+        if HIPBackend.instrumentation:
+            HIPBackend.instrumentation.patch("ttgpuir", pm, mod.context)
         ## __HIP_FTZ is used to control the denorm flushing behavior of exp2 op as follows:
         ## 1. If __HIP_FTZ = 1, exp2 flushes denorms in input and output regardless
         ##    of the value of kernel arg `allow_flush_denorm`.
@@ -322,8 +324,8 @@ class HIPBackend(BaseBackend):
         if os.environ.get("TRITON_DISABLE_LINE_INFO", "0") == "0":
             passes.llvmir.add_di_scope(pm)
         amd.passes.ttgpuir.add_builtin_func_to_llvmir(pm, __HIP_FTZ)
-        if "llvmir" in HIPBackend.instrumentation:
-            HIPBackend.instrumentation["llvmir"](pm)
+        if HIPBackend.instrumentation:
+            HIPBackend.instrumentation.patch("llvmir", pm, mod.context)
         pm.run(mod)
 
         # LLVM-IR (MLIR) -> LLVM-IR (LLVM)
@@ -385,6 +387,8 @@ class HIPBackend(BaseBackend):
 
         # Get some metadata
         metadata["shared"] = src.get_int_attr("ttg.shared")
+        metadata["profile_scratch_size"] = src.get_int_attr("ttg.profile_scratch_memory_size") or 0
+        metadata["profile_scratch_align"] = src.get_int_attr("ttg.profile_scratch_memory_alignment") or 1
 
         amd.cleanup_bitcode_metadata(llvm_mod)
         # Disable inlining of print related functions,

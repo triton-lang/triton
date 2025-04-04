@@ -157,7 +157,7 @@ class CUDAOptions:
 
 
 class CUDABackend(BaseBackend):
-    instrumentation = {}
+    instrumentation = None
 
     @staticmethod
     def supports_target(target: GPUTarget):
@@ -222,6 +222,8 @@ class CUDABackend(BaseBackend):
 
     def load_dialects(self, ctx):
         nvidia.load_dialects(ctx)
+        if CUDABackend.instrumentation:
+            CUDABackend.instrumentation.load_dialects(ctx)
 
     @staticmethod
     def make_ttir(mod, metadata, opt):
@@ -314,8 +316,8 @@ class CUDABackend(BaseBackend):
         nvidia.passes.ttnvgpuir.add_allocate_tensor_memory(pm)
         passes.ttgpuir.add_allocate_global_scratch_memory(pm)
         # instrumentation point here so we can override IRs above (e.g., ttir and ttgir)
-        if "ttgpuir" in CUDABackend.instrumentation:
-            CUDABackend.instrumentation["ttgpuir"](pm)
+        if CUDABackend.instrumentation:
+            CUDABackend.instrumentation.patch("ttgpuir", pm, mod.context)
         nvidia.passes.ttgpuir.add_to_llvmir(pm, capability, ptx_version)
         passes.common.add_canonicalizer(pm)
         passes.common.add_cse(pm)
@@ -326,8 +328,8 @@ class CUDABackend(BaseBackend):
         passes.common.add_symbol_dce(pm)
         if os.environ.get("TRITON_DISABLE_LINE_INFO", "0") == "0":
             passes.llvmir.add_di_scope(pm)
-        if "llvmir" in CUDABackend.instrumentation:
-            CUDABackend.instrumentation["llvmir"](pm)
+        if CUDABackend.instrumentation:
+            CUDABackend.instrumentation.patch("llvmir", pm, mod.context)
         pm.run(mod)
         # LLVM-IR (MLIR) -> LLVM-IR (LLVM)
         llvm.init_targets()
