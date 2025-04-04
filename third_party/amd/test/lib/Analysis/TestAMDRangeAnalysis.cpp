@@ -66,7 +66,8 @@ struct TestAMDRangeAnalysisPass
       }
     });
 
-    mod->walk<WalkOrder::PreOrder>([&solver, nonNegativePred](Operation *op) {
+    mod->walk<WalkOrder::PreOrder>([&solver, nonNegativePred,
+                                    rangeAnalysis](Operation *op) {
       auto results = op->getResults();
       if (auto outputRanges = AMD::collectRanges(*solver, results)) {
         int i = -1;
@@ -87,6 +88,12 @@ struct TestAMDRangeAnalysisPass
           if (AMD::cmpIIsStaticallyTrue(*solver, cmpOp))
             emitRemark(op->getLoc(), "result is true");
         }
+      }
+
+      if (LoopLikeOpInterface loop = llvm::dyn_cast<LoopLikeOpInterface>(op)) {
+        int64_t loopTripCount = rangeAnalysis->getTotalLoopTripCount(loop);
+        emitRemark(loop.getLoc(), "inferred total trip count: " +
+                                      std::to_string(loopTripCount));
       }
 
       int i = 0;
