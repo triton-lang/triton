@@ -1192,10 +1192,12 @@ scf::ForOp lowerMMA(ttng::MMAv5OpInterface mma, scf::ForOp forOp,
   // Add arguments to the forOp
   unsigned newOperandIndex = forOp.getInitArgs().size();
   SmallVector<Value> newOperands = {
-      zero,     // phase
-      zero,     // barrierIdx
-      minusOne, // bufIdx
+      zero, // phase
+      zero, // barrierIdx
   };
+  if (tmemUseNumStages > 1) {
+    newOperands.push_back(minusOne); // bufIdx
+  }
   scf::ForOp newForOp =
       replaceForOpWithNewSignature(builder, forOp, newOperands);
   forOp.erase();
@@ -1206,9 +1208,12 @@ scf::ForOp lowerMMA(ttng::MMAv5OpInterface mma, scf::ForOp forOp,
   int bufIdxArgIdx = newOperandIndex + 2;
   Value phase = forOp.getRegionIterArg(phaseArgIdx);
   Value barrierIdx = forOp.getRegionIterArg(barrierIdxArgIdx);
-  Value bufIdx = forOp.getRegionIterArg(bufIdxArgIdx);
 
-  SmallVector<Value> newYieldOperands = {phase, barrierIdx, bufIdx};
+  SmallVector<Value> newYieldOperands = {phase, barrierIdx};
+  if (tmemUseNumStages > 1) {
+    Value bufIdx = forOp.getRegionIterArg(bufIdxArgIdx);
+    newYieldOperands.push_back(bufIdx);
+  }
   cast<scf::YieldOp>(forOp.getBody()->getTerminator())
       .getResultsMutable()
       .append(newYieldOperands);
