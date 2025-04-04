@@ -76,9 +76,12 @@ private:
   void addAsymmetricSyncToLoop(OpBuilder &builder, Location loc);
   void updateOpInsertion(Operation *Op);
   void appendOp(Operation *Op);
+  void prependOp(Operation *Op, bool moveBackwards);
   void moveOpAndPredecessorsUpSameBlock(Operation *Op);
   void appendSlicedLoadAB(int slice);
+  SmallVector<Operation *> genClusterBarrier(OpBuilder &builder, Location loc);
   void appendClusterBarrier(OpBuilder &builder, Location loc);
+  void prependClusterBarrier(OpBuilder &builder, Location loc);
   void appendOpWithPrio(OpBuilder &builder, Operation *Op, Location loc);
   void determineDotMemoryOps(tt::DotOp dotOp,
                              DenseSet<tt::LoadOp> &dotGlobalLoads,
@@ -93,6 +96,12 @@ void Pingponger::appendOp(Operation *op) {
   assert(lastInsertedOp != nullptr);
   op->moveAfter(lastInsertedOp);
   lastInsertedOp = op;
+}
+void Pingponger::prependOp(Operation *op, bool moveBackwards) {
+  assert(lastInsertedOp != nullptr);
+  op->moveBefore(lastInsertedOp);
+  if (moveBackwards)
+    lastInsertedOp = op;
 }
 
 // Move the given operations and any predecessors upon which it depends
@@ -144,11 +153,20 @@ void Pingponger::appendSlicedLoadAB(int slice) {
 // are at the memory cluster.
 // Also, SchedBarrier with `0` is set here to tell compiler backend not to
 // reorder any instruction across this point.
-void Pingponger::appendClusterBarrier(OpBuilder &builder, Location loc) {
+SmallVector<Operation *> Pingponger::genClusterBarrier(OpBuilder &builder,
+                                                       Location loc) {
   //  MembarAnalysis can recognize gpu::BarrierOp and skip inserting additional
-  //  barrier
-  appendOp(builder.create<gpu::BarrierOp>(loc));
-  appendOp(builder.create<ROCDL::SchedBarrier>(loc, 0));
+  auto barrierOp = builder.create<gpu::BarrierOp>(loc);
+  auto schedBarrierOp = builder.create<ROCDL::SchedBarrier>(loc, 0);
+  return {barrierOp, schedBarrierOp};
+}
+void Pingponger::appendClusterBarrier(OpBuilder &builder, Location loc) {
+  for (auto &&op : genClusterBarrier(builder, loc))
+    appendOp(op);
+}
+void Pingponger::prependClusterBarrier(OpBuilder &builder, Location loc) {
+  for (auto &&op : genClusterBarrier(builder, loc))
+    prependOp(op, false);
 }
 void Pingponger::appendOpWithPrio(OpBuilder &builder, Operation *op,
                                   Location loc) {
@@ -438,7 +456,12 @@ LogicalResult Pingponger::transformFourPPClusters(OpBuilder &builder,
 
   // dot3 (4/4)
   appendOpWithPrio(builder, dotSliceOps[3], loc);
-  appendClusterBarrier(builder, loc);
+
+  // Move the cluster barrier to the end of the main loop.
+  // This helps ensure that with persistent GEMMs the epilogue
+  // and prologue aren't grouped into the same long cluster.
+  updateOpInsertion(lastInsertedOp->getBlock()->getTerminator());
+  prependClusterBarrier(builder, loc);
 
   // Add a remark for user feedback
   dotSliceOps[0]->emitRemark()
@@ -454,6 +477,7 @@ LogicalResult Pingponger::transformTwoPPClusters(OpBuilder &builder,
   // First, slice local_loads and dot into 2 parts
   if (sliceDot(builder, loc, dotOps[0], 2).failed())
     return failure();
+  builder.setInsertionPointAfter(gLoadOps[1]);
   // Reorder operations into two mem/dot clusters
 
   // Memory cluster #0
@@ -488,7 +512,12 @@ LogicalResult Pingponger::transformTwoPPClusters(OpBuilder &builder,
 
   // dot1 (2/2)
   appendOpWithPrio(builder, dotSliceOps[1], loc);
-  appendClusterBarrier(builder, loc);
+
+  // Move the cluster barrier to the end of the main loop.
+  // This helps ensure that with persistent GEMMs the epilogue
+  // and prologue aren't grouped into the same long cluster.
+  updateOpInsertion(lastInsertedOp->getBlock()->getTerminator());
+  prependClusterBarrier(builder, loc);
 
   // Add a remark for user feedback
   dotSliceOps[0]->emitRemark()

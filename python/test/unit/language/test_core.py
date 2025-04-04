@@ -4666,7 +4666,10 @@ def test_assume(device):
     if is_interpreter():
         return
 
-    assert 'llvm.assume' in pgm.asm['llir']
+    assert 'llvm.intr.assume' in pgm.asm['ttgir']
+    # tritonamdgpu-fold-true-cmpi on AMD folds true cmpi ops to %true (which llvm itself then DCEs).
+    if not is_hip():
+        assert 'llvm.assume' in pgm.asm['llir']
 
 
 # ---------------

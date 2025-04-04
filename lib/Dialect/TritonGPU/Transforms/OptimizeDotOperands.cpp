@@ -1,4 +1,3 @@
-#include "mlir/IR/IRMapping.h"
 #include "mlir/IR/TypeUtilities.h"
 #include "mlir/Pass/PassManager.h"
 #include "mlir/Support/LogicalResult.h"
@@ -8,6 +7,7 @@
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Attributes.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
+#include "triton/Dialect/TritonGPU/IR/LayoutUtility.h"
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
@@ -46,21 +46,21 @@ public:
     if (!cvtEncoding)
       return failure();
 
-    // TODO(Qingyi): need to check whether the CTALayout of innerCvtEnc should
-    // be used here. For tests where numCTAs = 1, this is not a problem since
-    // all CTALayouts are the same.
-    //
     // Set needTrans to true here. newInnerCvtEnc is computed based on
     // argEncoding which is before the transpose. Without needTrans we will
     // compute vec and maxPhase based on incorrect m, n and k size of mma. The
     // type inference of MemDescTransOp simply swap the order but doesn't fix
     // the vec and maxPhase for the YType, hence it would causing incorrect
     // swizzling code.
-    auto newInnerCvtEnc = SwizzledSharedEncodingAttr::get(
-        getContext(), cvtEncoding, srcTy.getShape(),
-        /*order=*/getOrderForMemory(srcTy),
-        triton::gpu::getCTALayout(srcTy.getEncoding()), srcTy.getElementType(),
-        /*needTrans=*/true);
+    auto ctx = getContext();
+    auto oldCTALayout = triton::gpu::getCTALayout(srcTy.getEncoding());
+    auto newCTALayout = permuteCTALayout(ctx, oldCTALayout, trans.getOrder());
+    assert(succeeded(newCTALayout));
+    auto newInnerCvtEnc =
+        SwizzledSharedEncodingAttr::get(ctx, cvtEncoding, srcTy.getShape(),
+                                        /*order=*/getOrderForMemory(srcTy),
+                                        *newCTALayout, srcTy.getElementType(),
+                                        /*needTrans=*/true);
     if (newInnerCvtEnc == cvtEncoding)
       return failure();
     rewriter.setInsertionPoint(trans);
@@ -120,13 +120,13 @@ public:
       }
     }
 
-    // TODO(Qingyi): need to check whether the CTALayout of innerCvtEnc should
-    // be used here. For tests where numCTAs = 1, this is not a problem since
-    // all CTALayouts are the same.
+    auto ctx = getContext();
+    auto newCTALayout =
+        permuteCTALayout(ctx, allocEncoding.getCTALayout(), {1, 0});
+    assert(succeeded(newCTALayout));
     auto newInnerEnc = NVMMASharedEncodingAttr::get(
-        getContext(), srcTy.getShape(), newInnerCvtOrder,
-        allocEncoding.getCTALayout(), srcTy.getElementType(),
-        allocEncoding.getFp4Padded());
+        getContext(), srcTy.getShape(), newInnerCvtOrder, *newCTALayout,
+        srcTy.getElementType(), allocEncoding.getFp4Padded());
 
     MemDescType innerTy =
         MemDescType::get(srcTy.getShape(), srcTy.getElementType(), newInnerEnc,
