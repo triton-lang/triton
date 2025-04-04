@@ -38,9 +38,6 @@ public:
     // Only insert fences for compute capability 9.0
     if (computeCapability < 90)
       return;
-    if (::triton::tools::getBoolEnv("DISABLE_MMA_V3") &&
-        ::triton::tools::getBoolEnv("DISABLE_MMA_V5"))
-      return;
     ModuleOp mod = getOperation();
     mod.walk([&](Operation *op) {
       bool isMMAv3 = isa<ttng::WarpGroupDotOp>(op);
