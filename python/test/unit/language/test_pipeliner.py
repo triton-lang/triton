@@ -428,7 +428,7 @@ def indirect_matmul_kernel(
 @pytest.mark.parametrize("BLOCK_M, BLOCK_N, BLOCK_K", [(128, 128, 128), (128, 128, 64), (128, 64, 128)])
 @pytest.mark.parametrize("num_stages", [1, 3, 5])
 def test_indirect_matmul(BLOCK_M, BLOCK_N, BLOCK_K, num_stages, device):
-    if num_stages > 3 and is_hip():
+    if (num_stages > 3 or (num_stages >= 3 and (BLOCK_M, BLOCK_N, BLOCK_K) == (128, 128, 128))) and is_hip():
         pytest.skip("Not enough shared memory on HIP.")
     M = BLOCK_M
     N = BLOCK_N
