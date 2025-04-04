@@ -21,8 +21,8 @@ LogicalResult ArefCreateOp::verify() {
     for (auto operand : getOperands()) {
       SmallVector<Operation *> users(operand.user_begin(), operand.user_end());
       if (users.size() != 1)
-        return emitError(
-            "Aref buffer is used elsewhere, Aref cannot garuntee async safety");
+        return emitError("Aref buffer is used elsewhere, Aref cannot guarantee "
+                         "async safety");
       auto type = operand.getType();
       if (auto mType = dyn_cast<gpu::MemDescType>(type)) {
         dims.push_back(mType.getShape()[i]);
