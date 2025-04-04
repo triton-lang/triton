@@ -132,6 +132,14 @@ Value createElectPredicateWarp0(Location loc, RewriterBase &rewriter) {
   return b.and_(warp0, createElectPredicate(loc, rewriter));
 }
 
+Value mapa(Location loc, RewriterBase &rewriter, Value ptr, Value ctaid) {
+  Value args[] = {ptr, ctaid};
+  StringRef name = "llvm.nvvm.mapa.shared.cluster";
+  return LLVM::createLLVMIntrinsicCallOp(rewriter, loc, name, ptr.getType(),
+                                         args)
+      .getResult(0);
+}
+
 } // namespace NVIDIA
 } // namespace LLVM
 } // namespace mlir

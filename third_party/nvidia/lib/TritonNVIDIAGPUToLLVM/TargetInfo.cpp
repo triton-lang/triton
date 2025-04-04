@@ -131,15 +131,6 @@ Value TargetInfo::ballot(RewriterBase &rewriter, Location loc, Type type,
   return rewriter.create<NVVM::VoteBallotOp>(loc, type, threadMask, cmp);
 }
 
-static Value mapa(RewriterBase &rewriter, Location loc, Value ptr, Value ctaid,
-                  Value pred) {
-  Value args[] = {ptr, ctaid};
-  StringRef name = "llvm.nvvm.mapa.shared.cluster";
-  return LLVM::createLLVMIntrinsicCallOp(rewriter, loc, name, ptr.getType(),
-                                         args)
-      .getResult(0);
-}
-
 static std::string getConstraintForBitwidth(unsigned bitwidth) {
   switch (bitwidth) {
   case 8:
@@ -250,7 +241,7 @@ void TargetInfo::storeDShared(RewriterBase &rewriter, Location loc, Value ptr,
 
   // Get pointer to remote shared memory if needed.
   if (ctaId.has_value()) {
-    ptr = mapa(rewriter, loc, ptr, *ctaId, pred);
+    ptr = LLVM::NVIDIA::mapa(loc, rewriter, ptr, *ctaId);
   }
 
   PTXBuilder builder;
@@ -364,7 +355,7 @@ Value TargetInfo::loadDShared(RewriterBase &rewriter, Location loc, Value ptr,
 
   // Get pointer to remote shared memory if needed.
   if (ctaId.has_value()) {
-    ptr = mapa(rewriter, loc, ptr, *ctaId, pred);
+    ptr = LLVM::NVIDIA::mapa(loc, rewriter, ptr, *ctaId);
   }
 
   PTXBuilder builder;

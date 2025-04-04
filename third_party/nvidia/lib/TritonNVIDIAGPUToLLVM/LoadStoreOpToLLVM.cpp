@@ -1231,6 +1231,8 @@ struct AsyncTMACopyGlobalToLocalOpConversion
     int warpSize = ttg::TritonGPUDialect::getThreadsPerWarp(mod);
     Value warpID = rewriter.create<nvgpu::WarpIdOp>(loc);
     Value pred = adaptor.getPred();
+    Value ctaId = rewriter.create<nvgpu::ClusterCTAIdOp>(loc);
+    pred = b.and_(pred, b.icmp_eq(ctaId, b.i32_val(0)));
     // Select just one thread for the TMA copy. This also helps the compiler to
     // figure out that the op is uniform.
     pred = b.and_(pred, LLVM::NVIDIA::createElectPredicate(loc, rewriter));
@@ -1271,9 +1273,9 @@ struct AsyncTMACopyGlobalToLocalOpConversion
           ptxBuilderTMA.newOperand(boxPred, "b"),
           ptxBuilderTMA.newOperand(shMemPtr, "r"),
           ptxBuilderTMA.newOperand(adaptor.getDescPtr(), "l")};
-      std::string tmaInst =
-          "@$0 cp.async.bulk.tensor." + std::to_string(rank) +
-          "d.shared::cluster.global.mbarrier::complete_tx::bytes [$1], [$2, {";
+      std::string tmaInst = "@$0 cp.async.bulk.tensor." + std::to_string(rank) +
+                            "d.shared::cluster.global.mbarrier::complete_tx::"
+                            "bytes.cta_group::2 [$1], [$2, {";
       int operandIdx = 3;
       for (int i = 0; i < rank; i++) {
         Value coord = adaptor.getCoord()[rank - i - 1];
@@ -1288,8 +1290,9 @@ struct AsyncTMACopyGlobalToLocalOpConversion
         if (i != rank - 1)
           tmaInst += ", ";
       }
-      operands.push_back(
-          ptxBuilderTMA.newOperand(barrierMemObj.getBase(), "r"));
+      auto leaderBarrier = LLVM::NVIDIA::mapa(
+          loc, rewriter, barrierMemObj.getBase(), b.i32_val(0));
+      operands.push_back(ptxBuilderTMA.newOperand(leaderBarrier, "r"));
       tmaInst += "}], [$" + std::to_string(operandIdx++) + "];";
 
       auto &tma = *ptxBuilderTMA.create<>(tmaInst);

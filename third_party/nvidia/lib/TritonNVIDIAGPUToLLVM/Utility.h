@@ -43,6 +43,9 @@ Value createElectPredicateWarp0(Location loc, RewriterBase &rewriter);
 // Create bar.warp.sync
 void createSyncWarp(Location loc, OpBuilder &builder);
 
+// Map shared memory address into another cta within the current cluster
+Value mapa(Location loc, RewriterBase &rewriter, Value ptr, Value ctaId);
+
 } // namespace NVIDIA
 } // namespace LLVM
 

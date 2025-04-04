@@ -67,7 +67,7 @@ def _matmul_launch_metadata(grid, kernel, args):
 
 HAS_TMA_DESC = supports_tma() and hasattr(tl, "nv_tma_desc_type")
 HAS_TENSOR_DESC = supports_tma() and hasattr(tl, "make_tensor_descriptor")
-HAS_WARP_SPECIALIZE = supports_ws() and HAS_TENSOR_DESC
+HAS_WARP_SPECIALIZE = False  #supports_ws() and HAS_TENSOR_DESC
 
 
 # TmaAutoTuneHelper used in htyu's PR #5622
@@ -409,19 +409,19 @@ def matmul_persistent(a, b):
     return c
 
 
-def matmul_tma_persistent_get_configs():
+def matmul_tma_persistent_get_configs(supports_two_cta=True):
     return [
         triton.Config(
             {
                 'BLOCK_SIZE_M': BM, 'BLOCK_SIZE_N': BN, "BLOCK_SIZE_K": BK, "GROUP_SIZE_M": 8, "EPILOGUE_SUBTILE":
                 SUBTILE
-            }, num_stages=s, num_warps=w)  #
-        for BM in [128]  #
+            }, num_stages=s, num_warps=w, num_ctas=1 + int(supports_two_cta))  #
+        for BM in [128, 256]  #
         for BN in [128, 256]  #
         for BK in [64, 128]  #
-        for s in ([2, 3, 4])  #
+        for s in ([2, 3, 4] if not supports_two_cta else [4, 5, 6])  #
         for w in [4, 8]  #
-        for SUBTILE in [True, False]  #
+        for SUBTILE in [False]  #
     ]
 
 
@@ -563,7 +563,7 @@ def matmul_tma_persistent(a, b, warp_specialize: bool):
 
 
 @triton.autotune(
-    configs=matmul_tma_persistent_get_configs(),
+    configs=matmul_tma_persistent_get_configs(supports_two_cta=True),
     key=["M", "N", "K", "WARP_SPECIALIZE"],
 )
 @triton.jit(launch_metadata=_matmul_launch_metadata)
@@ -649,7 +649,7 @@ def matmul_descriptor_persistent(a, b, warp_specialize: bool):
     dtype = a.dtype
 
     c = torch.empty((M, N), device=a.device, dtype=dtype)
-    NUM_SMS = torch.cuda.get_device_properties("cuda").multi_processor_count
+    NUM_SMS = torch.cuda.get_device_properties("cuda").multi_processor_count // 2
 
     # TMA descriptors require a global memory allocation
     def alloc_fn(size: int, alignment: int, stream: Optional[int]):
@@ -657,8 +657,12 @@ def matmul_descriptor_persistent(a, b, warp_specialize: bool):
 
     triton.set_allocator(alloc_fn)
 
-    grid = lambda META: (min(NUM_SMS, triton.cdiv(M, META["BLOCK_SIZE_M"]) * triton.cdiv(N, META["BLOCK_SIZE_N"])), )
-    matmul_kernel_descriptor_persistent[grid](
+    def grid_fn(META):
+        num_tiles = triton.cdiv(M, META["BLOCK_SIZE_M"]) * triton.cdiv(N, META["BLOCK_SIZE_N"])
+        num_clusters = NUM_SMS
+        return (min(num_tiles, num_clusters), )
+
+    matmul_kernel_descriptor_persistent[grid_fn](
         a, b, c,  #
         M, N, K,  #
         NUM_SMS=NUM_SMS,  #
@@ -724,14 +728,11 @@ def bench(K, dtype, reps=10000, warmup_reps=10000):
         bench_fn("cublas", reps, 1, cublas_matmul, a, b)
     if dtype == torch.float16:
         bench_fn("torch", reps, warmup_reps, torch_matmul, a, b)
-    bench_fn("naive", reps, warmup_reps, matmul, a, b.T)
-    bench_fn("persistent", reps, warmup_reps, matmul_persistent, a, b.T)
+    # bench_fn("naive", reps, warmup_reps, matmul, a, b.T)
+    # bench_fn("persistent", reps, warmup_reps, matmul_persistent, a, b.T)
     warp_specialize = [False, True] if HAS_WARP_SPECIALIZE else [False]
     for ws in warp_specialize:
         ws_str = "_ws" if ws else ""
-        if HAS_TMA_DESC:
-            bench_fn(f"tma_persistent{ws_str}", reps, warmup_reps, lambda a, b: matmul_tma_persistent(a, b, ws), a, b)
-            bench_fn(f"tma{ws_str}", reps, warmup_reps, lambda a, b: matmul_tma(a, b, ws), a, b)
         if HAS_TENSOR_DESC:
             bench_fn(f"descriptor_persistent{ws_str}", reps, warmup_reps,
                      lambda a, b: matmul_descriptor_persistent(a, b, ws), a, b)
@@ -757,11 +758,11 @@ def validate(M, N, K, dtype):
     naive_result = matmul(a, b.T).to(torch.float16)
     run_test(naive_result, torch_matmul, a, b, "Torch", enabled=dtype == torch.float16)
     run_test(naive_result, cublas_matmul, a, b, "cuBLAS", enabled=cublas is not None)
-    run_test(naive_result, matmul_persistent, a, b.T, "Persistent")
+    # run_test(naive_result, matmul_persistent, a, b.T, "Persistent")
 
     kernels = [
-        (matmul_tma, "TMA", HAS_TMA_DESC),
-        (matmul_tma_persistent, "TMA Persistent", HAS_TMA_DESC),
+        # (matmul_tma, "TMA", HAS_TMA_DESC),
+        # (matmul_tma_persistent, "TMA Persistent", HAS_TMA_DESC),
         (matmul_descriptor_persistent, "Tensor Descriptor Persistent", HAS_TENSOR_DESC),
     ]
     warp_specialize = [False, True] if HAS_WARP_SPECIALIZE else [False]

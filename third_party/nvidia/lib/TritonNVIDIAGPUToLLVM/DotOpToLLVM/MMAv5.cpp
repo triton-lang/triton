@@ -4,6 +4,8 @@
 #include "Utility.h"
 #include "mlir/Support/LLVM.h"
 #include "triton/Conversion/TritonGPUToLLVM/PatternTritonGPUOpToLLVM.h"
+#include "triton/Conversion/TritonGPUToLLVM/Utility.h"
+#include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 
 using namespace mlir;
 using namespace mlir::triton;
@@ -310,18 +312,13 @@ void convertDot(const LLVMTypeConverter *typeConverter,
   // Only run mma on one thread. We currently use elect as ptxas is not able to
   // detect that tid.x == 0 is true only for 1 thread.
   Value warpId = rewriter.create<nvgpu::WarpIdOp>(loc);
-  Value wapr0 = tb.icmp_eq(warpId, tb.i32_val(0));
+  Value warp0 = tb.icmp_eq(warpId, tb.i32_val(0));
   if (twoCTAs) {
-    // TODO: we have to sync the two CTAs because we currently don't use remove
-    // barriers for the copies.
-    rewriter.create<triton::nvidia_gpu::ClusterArriveOp>(loc, false);
-    rewriter.create<triton::nvidia_gpu::ClusterWaitOp>(loc);
-
     Value clusterId = rewriter.create<nvgpu::ClusterCTAIdOp>(loc);
     Value cluster0 = tb.icmp_eq(clusterId, tb.i32_val(0));
     pred = tb.and_(pred, cluster0);
   }
-  pred = tb.and_(pred, wapr0);
+  pred = tb.and_(pred, warp0);
 
   // Wrap the whole mma code sequence within a IF block.
   auto *curBlock = rewriter.getInsertionBlock();

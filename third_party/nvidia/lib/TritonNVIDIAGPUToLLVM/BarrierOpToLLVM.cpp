@@ -21,6 +21,7 @@
  * SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
  */
 
+#include "Dialect/NVGPU/IR/Dialect.h"
 #include "PatternTritonGPUOpToLLVM.h"
 #include "TritonNVIDIAGPUToLLVM/PTXAsmFormat.h"
 #include "mlir/Conversion/LLVMCommon/Pattern.h"
@@ -29,6 +30,7 @@
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 
 #include "Utility.h"
+#include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 
 using namespace mlir;
 using namespace mlir::triton;
@@ -64,16 +66,29 @@ struct InitBarrierOpConversion
         rewriter);
 
     auto id = getThreadId(rewriter, loc);
-    auto pred = b.icmp_eq(id, b.i32_val(0));
+    auto ctaId = rewriter.create<nvgpu::ClusterCTAIdOp>(loc);
+    auto zero = b.i32_val(0);
+    auto pred = b.and_(b.icmp_eq(id, zero), b.icmp_eq(ctaId, zero));
     ::mlir::triton::PTXBuilder ptxBuilder;
     const std::string ptx = "@$0 mbarrier.init.shared::cta.b64 [$1], " +
                             std::to_string(op.getCount()) + ";";
-    auto &barSyncOp = *ptxBuilder.create<>(ptx);
-    barSyncOp({ptxBuilder.newOperand(pred, "b"),
+    auto &barInitOp = *ptxBuilder.create<>(ptx);
+    barInitOp({ptxBuilder.newOperand(pred, "b"),
                ptxBuilder.newOperand(smemObj.getBase(), "r")},
               /*onlyAttachMLIRArgs=*/true);
     auto voidTy = void_ty(op->getContext());
     ptxBuilder.launch(rewriter, loc, voidTy);
+
+    {
+      PTXBuilder ptxBuilder;
+      auto &fenceOp =
+          *ptxBuilder.create<>("fence.mbarrier_init.release.cluster");
+      fenceOp();
+      ptxBuilder.launch(rewriter, loc, voidTy);
+      rewriter.create<nvidia_gpu::ClusterArriveOp>(loc, false);
+      rewriter.create<nvidia_gpu::ClusterWaitOp>(loc);
+    }
+
     rewriter.eraseOp(op);
     return success();
   }
@@ -123,12 +138,14 @@ struct BarrierExpectConversion
         rewriter);
 
     auto id = getThreadId(rewriter, loc);
-    Value pred = b.icmp_eq(id, b.i32_val(0));
+    auto ctaId = rewriter.create<nvgpu::ClusterCTAIdOp>(loc);
+    auto zero = b.i32_val(0);
+    Value pred = b.and_(b.icmp_eq(id, zero), b.icmp_eq(ctaId, zero));
     pred = b.and_(pred, adaptor.getPred());
     ::mlir::triton::PTXBuilder ptxBuilder;
     const std::string ptx =
         "@$0 mbarrier.arrive.expect_tx.shared.b64 _, [$1], " +
-        std::to_string(op.getSize()) + ";";
+        std::to_string(2 * op.getSize()) + ";";
     auto &barSyncOp = *ptxBuilder.create<>(ptx);
     barSyncOp({ptxBuilder.newOperand(pred, "b"),
                ptxBuilder.newOperand(smemObj.getBase(), "r")},
@@ -147,11 +164,14 @@ struct WaitBarrierOpConversion
   LogicalResult
   matchAndRewrite(triton::nvidia_gpu::WaitBarrierOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
+    auto loc = op.getLoc();
+    TritonLLVMOpBuilder b(loc, rewriter);
     auto smemObj = LLVM::getSharedMemoryObjectFromStruct(
-        op.getLoc(), adaptor.getAlloc(),
+        loc, adaptor.getAlloc(),
         typeConverter->convertType(op.getAlloc().getType().getElementType()),
         rewriter);
-    auto loc = op.getLoc();
+    auto leaderPtr =
+        LLVM::NVIDIA::mapa(loc, rewriter, smemObj.getBase(), b.i32_val(0));
     const std::string ptxNoPred =
         "{                                                           \n\t"
         ".reg .pred P1;                                              \n\t"
@@ -173,7 +193,7 @@ struct WaitBarrierOpConversion
     std::string ptx = predicated ? ptxPred : ptxNoPred;
     auto &waitLoop = *ptxBuilder.create<>(ptx);
     SmallVector<::mlir::triton::PTXBuilder::Operand *, 3> operands = {
-        ptxBuilder.newOperand(smemObj.getBase(), "r"),
+        ptxBuilder.newOperand(leaderPtr, "r"),
         ptxBuilder.newOperand(adaptor.getPhase(), "r")};
     if (predicated)
       operands.push_back(ptxBuilder.newOperand(adaptor.getPred(), "b"));
