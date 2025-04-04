@@ -41,34 +41,31 @@ public:
     ModuleOp mod = getOperation();
     mod.walk([&](Operation *op) {
       bool isMMAv3 = isa<ttng::WarpGroupDotOp>(op);
-      bool isMMAv5 = isa<ttng::MMAv5OpInterface>(op);
-      if (!isMMAv3 && !isMMAv5)
+      if (!isMMAv3 && !isa<ttng::MMAv5OpInterface>(op))
         return WalkResult::advance();
       OpBuilder builder(op);
       auto a = op->getOperand(0);
       auto b = op->getOperand(1);
-      bool aInMemory = isMMAv5;
-      bool bInMemory = isMMAv5;
       if (isMMAv3) {
         auto mmaEncoding = dyn_cast<ttg::NvidiaMmaEncodingAttr>(
             cast<RankedTensorType>(op->getResult(0).getType()).getEncoding());
         if (!mmaEncoding || !mmaEncoding.isHopper())
           return WalkResult::advance();
-        bool aDependsOnShared = dependOnSharedEncOperand(a);
-        bool bDependsOnShared = dependOnSharedEncOperand(b);
-        if (!aDependsOnShared && !bDependsOnShared)
-          return WalkResult::advance();
-        aInMemory = aDependsOnShared;
-        bInMemory = bDependsOnShared;
       }
+      bool aDependsOnShared = dependOnSharedEncOperand(a);
+      bool bDependsOnShared = dependOnSharedEncOperand(b);
+      if (!aDependsOnShared && !bDependsOnShared)
+        return WalkResult::advance();
       Operation *fence = builder.create<ttng::FenceAsyncSharedOp>(
           op->getLoc(), /*bCluster=*/false);
       // If there is all the dependencies are outside of the loop try to hoist
       // the fence.
       while (auto loopOp = fence->getParentOfType<LoopLikeOpInterface>()) {
-        if (aInMemory && loopOp->isAncestor(a.getParentBlock()->getParentOp()))
+        if (aDependsOnShared &&
+            loopOp->isAncestor(a.getParentBlock()->getParentOp()))
           break;
-        if (bInMemory && loopOp->isAncestor(b.getParentBlock()->getParentOp()))
+        if (bDependsOnShared &&
+            loopOp->isAncestor(b.getParentBlock()->getParentOp()))
           break;
         loopOp.moveOutOfLoop(fence);
       }
