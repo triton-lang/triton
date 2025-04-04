@@ -381,17 +381,29 @@ LogicalResult triton::gpu::specializeLoadMMADependencies(scf::ForOp &loop,
            donePt.getPoint()->isBeforeInBlock(&*b.getInsertionPoint()));
     donePt = b.saveInsertionPoint();
 
-    // Acquire and get the accumulator result.
-    b.setInsertionPoint(domOp);
     Partition *userPartition = schedule.addPartition(numStages + numMmaStages);
+    // Acquire and get the accumulator result. Normally, we want to acquire the
+    // accumulator for as small of a critical section as possible to unblock
+    // dependents, but if the most dominating user is inside a conditional,
+    // acquire the accumulator for the whole branch. This will improve
+    // instruction scheduling and interleaving of the TMEM load.
+    bool userInConditional = isa<scf::IfOp>(domOp->getParentOp());
+    b.setInsertionPoint(domOp);
+    if (userInConditional)
+      b.setInsertionPointToStart(domOp->getBlock());
     createInPartition<ttng::WaitBarrierOp>(b, *userPartition, curAccReadyBar,
                                            accPhase);
+
+    b.setInsertionPoint(domOp);
     Value acc = createInPartition<ttng::TMEMLoadOp>(
         b, *userPartition, info.accLoad.getType(), curAccBuf);
     for (Operation *user : accUses)
       user->replaceUsesOfWith(info.accLoad, acc);
+
     // Signal the accumulator buffer is ready for the next iteration. Because
     // the mbarriers got shifted over by 1, we have to signal the next mbarrier.
+    if (userInConditional)
+      b.setInsertionPoint(domOp->getBlock()->getTerminator());
     Value nextIndex =
         b.create<arith::AddIOp>(accIndex, intCst(numMmaStages - 1));
     nextIndex = b.create<arith::RemUIOp>(nextIndex, intCst(numMmaStages));
