@@ -389,7 +389,7 @@ class HIPBackend(BaseBackend):
     @staticmethod
     def make_amdgcn(src, metadata, options):
         # Find kernel names (there should only be one)
-        # We get the name at the last possible step to accomodate `triton.compile`
+        # We get the name at the last possible step to accommodate `triton.compile`
         # on user-provided LLVM
         names = re.findall(r"define amdgpu_kernel void @([a-zA-Z_][a-zA-Z0-9_]*)", src)
         assert len(names) == 1

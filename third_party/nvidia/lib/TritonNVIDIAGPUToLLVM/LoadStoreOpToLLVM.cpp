@@ -862,10 +862,10 @@ struct AtomicRMWOpConversion
                           : threadPred;
 
       if (doPTXLDPromotion) {
-        Type covertedValueTy =
+        Type convertedValueTy =
             getTypeConverter()->convertType(getElementTypeOrSelf(op.getType()));
         auto loadAcquireOp = rewriter.create<triton::nvgpu::LoadAcquireOp>(
-            op.getLoc(), covertedValueTy, rmwPtr, pred,
+            op.getLoc(), convertedValueTy, rmwPtr, pred,
             op.getSem() == triton::MemSemantic::ACQUIRE
                 ? triton::nvgpu::MemSemantic::ACQUIRE
                 : triton::nvgpu::MemSemantic::RELAXED,
