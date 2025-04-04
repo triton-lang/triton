@@ -471,6 +471,27 @@ def TTNG_TMEMAllocOp : TTNG_Op<"tmem_alloc", [DeclareOpInterfaceMethods<MemoryEf
   let hasVerifier = 1;
 }
 
+def TTNG_TMEMSubSliceOp : TTNG_Op<"tmem_subslice", [Pure]> {
+  let summary = "Take a subslice of a tensor memory allocation";
+  let description = [{
+    This operation takes a subslice of a tensor memory allocation and returns a new descriptor
+    containing the address and a view of the subslice.
+    This is is similar to ttg.memdesc_subview except the offset needs to be static and we can only
+    slice alog the inner dimension of a 2D memdesc as this is the only one we can do for TMem.
+  }];
+  let arguments = (ins TTG_MemDescType:$src, I32Attr:$N);
+
+  let assemblyFormat = [{
+    $src attr-dict `:` qualified(type($src)) `->` qualified(type($result))
+  }];
+
+  let builders = [
+      OpBuilder<(ins "Value":$alloc, "int":$offset, "int":$size)>,
+    ];
+  let results = (outs TTG_MemDescType:$result);
+  let hasVerifier = 1;
+}
+
 def TTNG_TMEMCopyOp : TTNG_Op<"tmem_copy", [DeclareOpInterfaceMethods<MemoryEffectsOpInterface>]> {
   let summary = "Initiate an asynchronous copy operation from shared memory to the Tensor Memory.";
 

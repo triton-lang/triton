@@ -146,4 +146,16 @@ def TritonNvidiaGPUOptimizeDescriptorEncodingPass : Pass<"triton-nvidia-optimize
                            "mlir::triton::TritonDialect"];
 }
 
+def TritonNvidiaGPUOptimizeTMemSubtilingPass : Pass<"triton-nvidia-optimize-tmem-subtiling", "mlir::ModuleOp"> {
+  let summary = "Optimize subtiling.";
+
+  let description = [{
+    Optimize subtiling by trying to split tmem_load when user splits a tensor.
+  }];
+
+  let dependentDialects = ["mlir::triton::gpu::TritonGPUDialect",
+                           "mlir::triton::nvidia_gpu::TritonNvidiaGPUDialect",
+                           "mlir::triton::TritonDialect"];
+}
+
 #endif

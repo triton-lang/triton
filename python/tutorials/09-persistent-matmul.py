@@ -417,11 +417,11 @@ def matmul_tma_persistent_get_configs():
                 SUBTILE
             }, num_stages=s, num_warps=w)  #
         for BM in [128]  #
-        for BN in [128, 256]  #
-        for BK in [64, 128]  #
-        for s in ([2, 3, 4])  #
-        for w in [4, 8]  #
-        for SUBTILE in [True, False]  #
+        for BN in [256]  #
+        for BK in [64]  #
+        for s in ([1])  #
+        for w in [8]  #
+        for SUBTILE in [True]  #
     ]
 
 
@@ -712,31 +712,6 @@ def bench_fn(label, reps, warmup_reps, fn, *args):
     print(f"\rBenchmarking {label}: done")
 
 
-def bench(K, dtype, reps=10000, warmup_reps=10000):
-    M = 8192
-    N = 8192
-    a = torch.randn((M, K), device="cuda", dtype=torch.float16).to(dtype)
-    b = torch.randn((K, N), device="cuda", dtype=torch.float16).to(dtype)
-
-    b = b.T.contiguous()
-
-    if cublas is not None:
-        bench_fn("cublas", reps, 1, cublas_matmul, a, b)
-    if dtype == torch.float16:
-        bench_fn("torch", reps, warmup_reps, torch_matmul, a, b)
-    bench_fn("naive", reps, warmup_reps, matmul, a, b.T)
-    bench_fn("persistent", reps, warmup_reps, matmul_persistent, a, b.T)
-    warp_specialize = [False, True] if HAS_WARP_SPECIALIZE else [False]
-    for ws in warp_specialize:
-        ws_str = "_ws" if ws else ""
-        if HAS_TMA_DESC:
-            bench_fn(f"tma_persistent{ws_str}", reps, warmup_reps, lambda a, b: matmul_tma_persistent(a, b, ws), a, b)
-            bench_fn(f"tma{ws_str}", reps, warmup_reps, lambda a, b: matmul_tma(a, b, ws), a, b)
-        if HAS_TENSOR_DESC:
-            bench_fn(f"descriptor_persistent{ws_str}", reps, warmup_reps,
-                     lambda a, b: matmul_descriptor_persistent(a, b, ws), a, b)
-
-
 def run_test(expect, fn, a, b, label, enabled=True):
     print(f"  {label}: ...", end="")
     if enabled:
@@ -755,16 +730,14 @@ def validate(M, N, K, dtype):
     b = b.T.contiguous()
 
     naive_result = matmul(a, b.T).to(torch.float16)
-    run_test(naive_result, torch_matmul, a, b, "Torch", enabled=dtype == torch.float16)
-    run_test(naive_result, cublas_matmul, a, b, "cuBLAS", enabled=cublas is not None)
-    run_test(naive_result, matmul_persistent, a, b.T, "Persistent")
+    # run_test(naive_result, torch_matmul, a, b, "Torch", enabled=dtype == torch.float16)
+    # run_test(naive_result, cublas_matmul, a, b, "cuBLAS", enabled=cublas is not None)
+    # run_test(naive_result, matmul_persistent, a, b.T, "Persistent")
 
     kernels = [
-        (matmul_tma, "TMA", HAS_TMA_DESC),
         (matmul_tma_persistent, "TMA Persistent", HAS_TMA_DESC),
-        (matmul_descriptor_persistent, "Tensor Descriptor Persistent", HAS_TENSOR_DESC),
     ]
-    warp_specialize = [False, True] if HAS_WARP_SPECIALIZE else [False]
+    warp_specialize = [False]
 
     for (kernel, label, enabled), warp_specialize in itertools.product(kernels, warp_specialize):
         label = f"{label} (warp_specialize={warp_specialize})"
@@ -804,11 +777,11 @@ if __name__ == "__main__":
 
         torch.manual_seed(0)
 
-        validate(32, 32, 32, dtype)
+        #validate(32, 32, 32, dtype)
         validate(8192, 8192, args.K_range[0], dtype)
 
-        proton.start("matmul", hook="triton")
-        for K in range(args.K_range[0], args.K_range[1] + 1, args.K_step):
-            bench(K, dtype)
-        proton.finalize()
-        show_profile(args.prec, "matmul")
+        #proton.start("matmul", hook="triton")
+        #for K in range(args.K_range[0], args.K_range[1] + 1, args.K_step):
+        #    bench(K, dtype)
+        #proton.finalize()
+        #show_profile(args.prec, "matmul")
