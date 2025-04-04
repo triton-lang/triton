@@ -251,15 +251,14 @@ def test_simple_persistent_matmul(BLOCK_M, BLOCK_N, BLOCK_K, NUM_WARPS, DISALLOW
 
     torch.testing.assert_close(ref_out, output, atol=0.01, rtol=0.01)
 
-    # Make sure the mma is pipelined by checking if in the TTGIR we are waiting for the
-    # barrier coming from the loop args (previous iteration).
+    # Make sure the mma is pipelined by checking if in the TTGIR we have peeled mmav5 ops.
     # This applies only if TCv5 MMA is used (M % 64 == 0 and N % 8 == 0) and
     # when MMA arguments loads are pipelined (N > 16)
     if (device == "cuda" and torch.cuda.get_device_capability()[0] == 10 and BLOCK_M % 64 == 0 and BLOCK_N % 8 == 0
             and BLOCK_N > 16):
         ttgir = k.asm["ttgir"]
-        pattern = "ttng.wait_barrier %arg"
-        assert ttgir.count(pattern) > 0, "Expect barrier coming from the previous iteration."
+        pattern = "ttng.tc_gen5_mma"
+        assert ttgir.count(pattern) > 0, "Expect peeled mmav5 operations."
 
 
 @triton.jit
@@ -370,7 +369,7 @@ def test_mxfp(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, NUM_STAGES, nonKDim, NUM_WARPS
 
     # Pipelining of dot_scaled requires tmem_copy to be used, which in turn
     # requires the scales to be in the blocked layout in global memory.
-    assert "ttng.wait_barrier" not in out.asm["ttgir"]
+    assert out.asm["ttgir"].count("ttng.tc_gen5_mma") == 1
 
 
 def _knob_promote_lhs_to_tmem(monkeypatch):
