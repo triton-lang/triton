@@ -392,12 +392,6 @@ struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp>,
     Type llvmResultStructTy = typeConverter->convertType(op.getType());
     Value resultStruct = packLLElements(loc, typeConverter, loadedVals,
                                         rewriter, llvmResultStructTy);
-
-    // If the load is scalar, shuffle index the result with lane 0 to tell PTXAS
-    // this is a uniform value.
-    if (!isa<RankedTensorType>(op.getType()))
-      resultStruct = targetInfo.shuffleIdx(rewriter, loc, resultStruct, 0);
-
     rewriter.replaceOp(op, {resultStruct});
     return success();
   }
