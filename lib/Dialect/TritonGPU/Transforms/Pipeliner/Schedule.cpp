@@ -39,6 +39,8 @@ bool tt::CoarseSchedule::insertMinimum(Operation *op, int stage,
   // then cluster is earlier in the list
   for (auto it = std::next(cluster); it != clusters.end(); ++it) {
     if (it == existingCluster) {
+      if (existingCluster == cluster)
+        return false;
       existingCluster = cluster;
       return true;
     }

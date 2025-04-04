@@ -54,7 +54,7 @@ def test_compile_only_dot() -> None:
     assert re.search(pattern, str(ttgir)), "The TTGIR does not match the expected pattern."
 
     ptx = k.asm["ptx"]
-    pattern = (r"mov\.u32 	%r(?P<G>\d+), global_smem;"
+    pattern = (r"mov\.b32 	%r(?P<G>\d+), global_smem;"
                r"(.|\n)*"
                r"tcgen05\.alloc\.cta_group::1\.sync\.aligned\.shared::cta\.b32 \[%r(?P=G)], 64"
                r"(.|\n)*"

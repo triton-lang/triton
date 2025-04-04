@@ -191,7 +191,7 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.total-num-warps" = 8 : i32} {
 llvm.mlir.global external @global_smem() {addr_space = 3 : i32, alignment = 16 : i64} : !llvm.array<0 x i8>
 
 // CHECK-LABEL: @pass_captures
-llvm.func @pass_captures(%arg0: i32, %arg1: i64) attributes {allocation.offset = 32 : i32} {
+llvm.func @pass_captures() attributes {allocation.offset = 32 : i32} {
   // CHECK: ^bb4:
   // CHECK-NEXT: [[C0:%.*]] = llvm.mlir.constant(0 : i32)
   // CHECK-NEXT: [[SMEM_ADDR:%.*]] = llvm.mlir.addressof @global_smem
@@ -206,17 +206,19 @@ llvm.func @pass_captures(%arg0: i32, %arg1: i64) attributes {allocation.offset =
   // CHECK-NEXT: barrier.sync 1 ;
 
   // CHECK: ^bb5:
+  // CHECK: [[INS:%.*]]:2 = "produce"()
   // CHECK: llvm.mlir.addressof @global_smem
   // CHECK: [[C0:%.*]] = llvm.mlir.constant(0 : i32)
   // CHECK-NEXT: [[SMEM_ADDR:%.*]] = llvm.mlir.addressof @global_smem
   // CHECK-NEXT: [[SMEM_BASE:%.*]] = llvm.getelementptr [[SMEM_ADDR]][[[C0]]]
   // CHECK-NEXT: [[ARG0_PTR:%.*]] = llvm.getelementptr [[SMEM_BASE]][0, 0] : (!llvm.ptr<3>) -> !llvm.ptr<3>, !llvm.struct<packed (i32, i64)>
-  // CHECK-NEXT: llvm.store %arg0, [[ARG0_PTR]] {alignment = 1 : i64}
+  // CHECK-NEXT: llvm.store [[INS]]#0, [[ARG0_PTR]] {alignment = 1 : i64}
   // CHECK-NEXT: [[ARG1_PTR:%.*]] = llvm.getelementptr [[SMEM_BASE]][0, 1] : (!llvm.ptr<3>) -> !llvm.ptr<3>, !llvm.struct<packed (i32, i64)>
-  // CHECK-NEXT: llvm.store %arg1, [[ARG1_PTR]] {alignment = 1 : i64}
+  // CHECK-NEXT: llvm.store [[INS]]#1, [[ARG1_PTR]] {alignment = 1 : i64}
   // CHECK-NEXT: barrier.sync 1 ;
   // CHECK-NEXT: barrier.sync 1 ;
-  ttg.warp_specialize(%arg0, %arg1) attributes {allocation.offset = 0 : i32, warpGroupStartIds = array<i32: 4>}
+  %ins:2 = "produce"() : () -> (i32, i64)
+  ttg.warp_specialize(%ins#0, %ins#1) attributes {allocation.offset = 0 : i32, warpGroupStartIds = array<i32: 4>}
   default {
     ttg.warp_yield
   }
@@ -604,11 +606,13 @@ llvm.mlir.global external @global_smem() {addr_space = 3 : i32, alignment = 16 :
 // CHECK-LABEL: @type_conversion_results
 // CHECK-NOT: !tt.ptr<i32>
 // CHECK-NOT: unrealized_conversion_cast
-llvm.func @type_conversion_results(%arg0: !llvm.ptr<1>) attributes {allocation.offset = 0 : i32} {
-  %0 = builtin.unrealized_conversion_cast %arg0 : !llvm.ptr<1> to !tt.ptr<i32>
+llvm.func @type_conversion_results() attributes {allocation.offset = 0 : i32} {
+  // CHECK: [[CAP:%.*]] = "produce"
+  %cap = "produce"() : () -> !llvm.ptr<1>
+  %0 = builtin.unrealized_conversion_cast %cap : !llvm.ptr<1> to !tt.ptr<i32>
   %1 = ttg.warp_specialize(%0) attributes {allocation.offset = 0 : i32, warpGroupStartIds = array<i32: 4>}
   default {
-    // CHECK: llvm.br [[AFTER:\^.*]](%arg0 : !llvm.ptr<1>)
+    // CHECK: llvm.br [[AFTER:\^.*]]([[CAP]] : !llvm.ptr<1>)
     ttg.warp_yield %0 : !tt.ptr<i32>
   }
   partition0(%arg1: !tt.ptr<i32>) num_warps(2) {
@@ -620,6 +624,92 @@ llvm.func @type_conversion_results(%arg0: !llvm.ptr<1>) attributes {allocation.o
   %2 = builtin.unrealized_conversion_cast %1 : !tt.ptr<i32> to !llvm.ptr<1>
   // CHECK-NEXT: "use"([[OUT]])
   "use"(%2) : (!llvm.ptr<1>) -> ()
+  llvm.return
+}
+
+}
+
+// -----
+
+module attributes {"ttg.num-warps" = 4 : i32, ttg.target = "cuda:100", "ttg.total-num-warps" = 6 : i32} {
+
+llvm.mlir.global external @global_smem() {addr_space = 3 : i32, alignment = 16 : i64} : !llvm.array<0 x i8>
+
+// CHECK-LABEL: @capture_function_arg
+llvm.func @capture_function_arg(%arg0: i32) attributes {allocation.offset = 0 : i32} {
+  ttg.warp_specialize(%arg0) attributes {allocation.offset = 0 : i32, warpGroupStartIds = array<i32: 4>}
+  default {
+    ttg.warp_yield
+  }
+  partition0(%arg1: i32) num_warps(1) {
+    // CHECK: "use"(%arg0)
+    "use"(%arg1) : (i32) -> ()
+    ttg.warp_return
+  } : (i32) -> ()
+  llvm.return
+}
+
+// CHECK-LABEL: @type_conversion_func_arg
+llvm.func @type_conversion_func_arg(%arg0: !llvm.ptr<1>) attributes {allocation.offset = 0 : i32} {
+  %0 = builtin.unrealized_conversion_cast %arg0 : !llvm.ptr<1> to !tt.ptr<i32>
+  ttg.warp_specialize(%0) attributes {allocation.offset = 0 : i32, warpGroupStartIds = array<i32: 4>}
+  default {
+    ttg.warp_yield
+  }
+  partition0(%arg1: !tt.ptr<i32>) num_warps(1) {
+    %1 = builtin.unrealized_conversion_cast %arg1 : !tt.ptr<i32> to !llvm.ptr<1>
+    // CHECK: "use"(%arg0)
+    "use"(%1) : (!llvm.ptr<1>) -> ()
+    ttg.warp_return
+  } : (!tt.ptr<i32>) -> ()
+  llvm.return
+}
+
+// CHECK-LABEL: @trivial_remat
+llvm.func @trivial_remat() attributes {allocation.offset = 0 : i32} {
+  %0 = llvm.mlir.constant(0 : i32) : i32
+  %1 = llvm.mlir.addressof @global_smem : !llvm.ptr<3>
+  ttg.warp_specialize(%0, %1) attributes {allocation.offset = 0 : i32, warpGroupStartIds = array<i32: 4>}
+  default {
+    ttg.warp_yield
+  }
+  partition0(%arg0: i32, %arg1: !llvm.ptr<3>) num_warps(1) {
+  // CHECK: ^bb4:
+    // CHECK-NEXT: barrier.sync 1
+    // CHECK-NEXT: [[CAP1:%.*]] = llvm.mlir.addressof @global_smem : !llvm.ptr<3>
+    // CHECK-NEXT: [[CAP0:%.*]] = llvm.mlir.constant(0 : i32)
+    // CHECK-NEXT: "use"([[CAP0]], [[CAP1]])
+    "use"(%arg0, %arg1) : (i32, !llvm.ptr<3>) -> ()
+    // CHECK-NEXT: barrier.sync 1
+    ttg.warp_return
+  } : (i32, !llvm.ptr<3>) -> ()
+  llvm.return
+}
+
+// CHECK-LABEL: @remat_subgraph
+llvm.func @remat_subgraph(%arg0: i32, %arg1: i32) attributes {allocation.offset = 0 : i32} {
+  %0 = llvm.mlir.addressof @global_smem : !llvm.ptr<3>
+  %1 = llvm.getelementptr %0[%arg0] : (!llvm.ptr<3>, i32) -> !llvm.ptr<3>, i32
+  %2 = llvm.add %arg0, %arg1 : i32
+  %3 = llvm.mul %2, %arg1 : i32
+  %4 = llvm.udiv %2, %3 : i32
+  ttg.warp_specialize(%1, %4) attributes {allocation.offset = 0 : i32, warpGroupStartIds = array<i32: 4>}
+  default {
+    ttg.warp_yield
+  }
+  partition0(%arg2: !llvm.ptr<3>, %arg3: i32) num_warps(1) {
+  // CHECK: ^bb4:
+    // CHECK-NEXT: barrier.sync 1
+    // CHECK-NEXT: [[ADD:%.*]] = llvm.add %arg0, %arg1 : i32
+    // CHECK-NEXT: [[MUL:%.*]] = llvm.mul [[ADD]], %arg1 : i32
+    // CHECK-NEXT: [[UDIV:%.*]] = llvm.udiv [[ADD]], [[MUL]] : i32
+    // CHECK-NEXT: [[ADDR:%.*]] = llvm.mlir.addressof @global_smem : !llvm.ptr<3>
+    // CHECK-NEXT: [[PTR:%.*]] = llvm.getelementptr [[ADDR]][%arg0]
+    // CHECK-NEXT: "use"([[PTR]], [[UDIV]])
+    "use"(%arg2, %arg3) : (!llvm.ptr<3>, i32) -> ()
+    // CHECK-NEXT: barrier.sync 1
+    ttg.warp_return
+  } : (!llvm.ptr<3>, i32) -> ()
   llvm.return
 }
 

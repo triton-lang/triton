@@ -10,6 +10,7 @@
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/TritonGPUConversion.h"
+#include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "llvm/ADT/APSInt.h"
 #include <numeric>
 
@@ -431,50 +432,37 @@ static RankedTensorType getNewIndicesType(RankedTensorType type,
                                newEncoding);
 }
 
-struct TritonDescriptorGatherPattern
-    : public OpConversionPattern<triton::DescriptorGatherOp> {
-  using OpConversionPattern::OpConversionPattern;
+// Function for converting any gather or scatter op that requires a specific
+// index layout. This also handles converting result types if there are any.
+static LogicalResult convertGatherScatterOp(Operation *op, OpOperand &indices,
+                                            ConversionPatternRewriter &b) {
+  auto type = cast<RankedTensorType>(indices.get().getType());
+  RankedTensorType newType =
+      getNewIndicesType(type, lookupThreadsPerWarp(b), lookupNumWarps(op));
+  if (!newType)
+    return failure();
+  Value index = b.create<ConvertLayoutOp>(op->getLoc(), newType, indices.get());
+  indices.set(index);
+  return success();
+}
+
+template <typename OpT>
+struct GatherScatterOpPattern : public OpConversionPattern<OpT> {
+  using OpConversionPattern<OpT>::OpConversionPattern;
 
   LogicalResult
-  matchAndRewrite(triton::DescriptorGatherOp op, OpAdaptor adaptor,
+  matchAndRewrite(OpT op, typename OpT::Adaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    auto numThreads = lookupThreadsPerWarp(rewriter);
-    auto numWarps = lookupNumWarps(op);
-    RankedTensorType newType = getNewIndicesType(
-        cast<RankedTensorType>(adaptor.getXOffsets().getType()), numThreads,
-        numWarps);
-    if (!newType)
-      return failure();
-
-    Value newInd = rewriter.create<ConvertLayoutOp>(op.getLoc(), newType,
-                                                    adaptor.getXOffsets());
-    rewriter.replaceOpWithNewOp<triton::DescriptorGatherOp>(
-        op, getTypeConverter()->convertType(op.getType()), adaptor.getDesc(),
-        newInd, adaptor.getYOffset());
-    return success();
-  }
-};
-
-struct TritonDescriptorScatterPattern
-    : public OpConversionPattern<triton::DescriptorScatterOp> {
-  using OpConversionPattern::OpConversionPattern;
-
-  LogicalResult
-  matchAndRewrite(triton::DescriptorScatterOp op, OpAdaptor adaptor,
-                  ConversionPatternRewriter &rewriter) const override {
-    auto numThreads = lookupThreadsPerWarp(rewriter);
-    auto numWarps = lookupNumWarps(op);
-    RankedTensorType newType = getNewIndicesType(
-        cast<RankedTensorType>(adaptor.getXOffsets().getType()), numThreads,
-        numWarps);
-    if (!newType)
-      return failure();
-
-    Value newInd = rewriter.create<ConvertLayoutOp>(op.getLoc(), newType,
-                                                    adaptor.getXOffsets());
-    rewriter.replaceOpWithNewOp<triton::DescriptorScatterOp>(
-        op, adaptor.getDesc(), newInd, adaptor.getYOffset(), adaptor.getSrc());
-    return success();
+    LogicalResult result = success();
+    rewriter.modifyOpInPlace(op, [&] {
+      for (auto [operand, value] :
+           llvm::zip(op->getOpOperands(), adaptor.getOperands()))
+        operand.set(value);
+      for (OpResult result : op->getOpResults())
+        result.setType(this->typeConverter->convertType(result.getType()));
+      result = convertGatherScatterOp(op, op.getXOffsetsMutable(), rewriter);
+    });
+    return result;
   }
 };
 
@@ -619,10 +607,13 @@ void populateTritonPatterns(TritonGPUTypeConverter &typeConverter,
       GenericOpPattern<triton::ReduceReturnOp>, TritonScanPattern,
       GenericOpPattern<triton::ScanReturnOp>,
       GenericOpPattern<triton::MakeRangeOp>, TritonExpandDimsPattern,
-      TritonTransPattern, TritonDotPattern, TritonDescriptorGatherPattern,
-      TritonDescriptorScatterPattern, GenericOpPattern<triton::LoadOp>,
-      GenericOpPattern<triton::StoreOp>, GenericOpPattern<triton::HistogramOp>,
-      GenericOpPattern<triton::GatherOp>,
+      TritonTransPattern, TritonDotPattern,
+      GatherScatterOpPattern<DescriptorGatherOp>,
+      GatherScatterOpPattern<DescriptorScatterOp>,
+      GatherScatterOpPattern<triton::nvidia_gpu::AsyncTMAGatherOp>,
+      GatherScatterOpPattern<triton::nvidia_gpu::AsyncTMAScatterOp>,
+      GenericOpPattern<triton::LoadOp>, GenericOpPattern<triton::StoreOp>,
+      GenericOpPattern<triton::HistogramOp>, GenericOpPattern<triton::GatherOp>,
       GenericOpPattern<triton::ExternElementwiseOp>,
       GenericOpPattern<triton::PrintOp>, GenericOpPattern<triton::AssertOp>,
       GenericOpPattern<triton::AtomicCASOp>,
@@ -840,11 +831,13 @@ public:
   ConvertTritonToTritonGPU() = default;
   // constructor with some parameters set explicitly.
   ConvertTritonToTritonGPU(const std::string &target, int numWarps,
-                           int threadsPerWarp, int numCTAs) {
+                           int threadsPerWarp, int numCTAs,
+                           bool enableSourceRemat) {
     this->numWarps = numWarps;
     this->threadsPerWarp = threadsPerWarp;
     this->numCTAs = numCTAs;
     this->target = target;
+    this->enableSourceRemat = enableSourceRemat;
   }
 
   void runOnOperation() override {
@@ -859,7 +852,7 @@ public:
     ModuleOp mod = getOperation();
     // type converter
     TritonGPUTypeConverter typeConverter(context, numWarps, threadsPerWarp,
-                                         numCTAs);
+                                         numCTAs, enableSourceRemat);
     TritonGPUConversionTarget target(*context, typeConverter);
     // rewrite patterns
     RewritePatternSet patterns(context);
@@ -898,9 +891,10 @@ std::unique_ptr<OperationPass<ModuleOp>>
 mlir::triton::createConvertTritonToTritonGPUPass(const std::string &target,
                                                  int numWarps,
                                                  int threadsPerWarp,
-                                                 int numCTAs) {
-  return std::make_unique<::ConvertTritonToTritonGPU>(target, numWarps,
-                                                      threadsPerWarp, numCTAs);
+                                                 int numCTAs,
+                                                 bool enableSourceRemat) {
+  return std::make_unique<::ConvertTritonToTritonGPU>(
+      target, numWarps, threadsPerWarp, numCTAs, enableSourceRemat);
 }
 
 std::unique_ptr<OperationPass<ModuleOp>>

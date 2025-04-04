@@ -24,9 +24,12 @@
 #include <queue>
 
 #include "mlir/Support/LLVM.h"
+#include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/Passes.h"
+#include "llvm/ADT/STLExtras.h"
+#include "llvm/Support/ErrorHandling.h"
 
 #define GEN_PASS_CLASSES
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/Passes.h.inc"
@@ -231,7 +234,6 @@ bool CTAPlanner::isForward(CastOp cast) const {
 void CTAPlanner::setTiling(llvm::ArrayRef<unsigned> CTAsPerCGA) {
   assert(!tiled && "CTA tiling is already determinted");
   assert(clusterInfo && "ClusterInfo pointer is null");
-  assert(CTAsPerCGA.size() <= 3 && "setTiling not implemented");
   tiled = true;
   unsigned numCTAs = 1;
   for (unsigned cta : CTAsPerCGA)
@@ -249,6 +251,9 @@ void CTAPlanner::setTiling(llvm::ArrayRef<unsigned> CTAsPerCGA) {
     clusterInfo->clusterDimY = CTAsPerCGA[1];
   if (CTAsPerCGA.size() > 2)
     clusterInfo->clusterDimZ = CTAsPerCGA[2];
+  for (auto i = 3; i < CTAsPerCGA.size(); ++i)
+    if (CTAsPerCGA[i] != 1)
+      llvm::report_fatal_error("tiling > 3 dims is not implemented");
 }
 
 bool CTAPlanner::processDot(triton::FuncOp &funcOp) {
@@ -387,8 +392,8 @@ void CTAPlanner::processStoreLikeOps(triton::FuncOp &funcOp) {
 
   llvm::SmallVector<Operation *> stores;
   funcOp.walk([&](Operation *op) {
-    if (llvm::isa<triton::StoreOp, triton::AtomicRMWOp, triton::AtomicCASOp>(
-            op))
+    if (llvm::isa<triton::StoreOp, triton::AtomicRMWOp, triton::AtomicCASOp,
+                  triton::DescriptorStoreOp, triton::DescriptorScatterOp>(op))
       stores.push_back(op);
   });
   assert(stores.size() > 0 && "Cannot find store-like ops");
@@ -396,8 +401,14 @@ void CTAPlanner::processStoreLikeOps(triton::FuncOp &funcOp) {
 
   ttg::CTALayoutAttr CTALayout;
   for (Operation *store : stores) {
-    if (auto tensorTy =
-            dyn_cast<RankedTensorType>(store->getOperand(0).getType())) {
+    auto val = [store]() -> Value {
+      if (auto descStore = dyn_cast<triton::DescriptorStoreOp>(store))
+        return descStore.getSrc();
+      if (auto descScatter = dyn_cast<triton::DescriptorScatterOp>(store))
+        return descScatter.getSrc();
+      return store->getOperand(0);
+    }();
+    if (auto tensorTy = dyn_cast<RankedTensorType>(val.getType())) {
       if (!tiled) {
         // Use CTA tiling of the first store-like op as global CTA tiling
         CTALayout = ttg::getCTALayout(tensorTy.getEncoding());
@@ -607,7 +618,9 @@ void CTAPlanner::eliminateAdjacentCasts(CastOp cast0, CastOp cast1) {
 
 bool CTAPlanner::isLoadStoreOp(Operation *op) const {
   return llvm::isa<triton::LoadOp, triton::StoreOp, triton::AtomicRMWOp,
-                   triton::AtomicCASOp>(op);
+                   triton::AtomicCASOp, triton::DescriptorLoadOp,
+                   triton::DescriptorStoreOp, triton::DescriptorGatherOp,
+                   triton::DescriptorScatterOp>(op);
 }
 
 bool CTAPlanner::processLoadStore(Operation *op, Attribute layout) {
@@ -638,7 +651,11 @@ bool CTAPlanner::processLoadStore(Operation *op, Attribute layout) {
     auto type = op->getOperand(i).getType();
     if (auto ptrTy = dyn_cast<triton::PointerType>(type))
       type = ptrTy.getPointeeType();
-    auto tensorTy = cast<RankedTensorType>(type);
+    auto tensorTy = dyn_cast<RankedTensorType>(type);
+    if (!tensorTy) {
+      newOperandLayouts.push_back(Attribute());
+      continue;
+    }
     auto oldLayout =
         cast<ttg::DistributedEncodingTrait>(tensorTy.getEncoding());
     auto newLayout =

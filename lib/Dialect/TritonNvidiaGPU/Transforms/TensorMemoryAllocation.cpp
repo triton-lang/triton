@@ -142,7 +142,7 @@ static Interval<int> getLiveIntervals(Value value, Liveness &liveness,
 }
 
 static void updateMap(MemoryBitMap &memoryMap, Interval<int> liveInterval,
-                      std::map<int, TMemChunk> &intervalLiverangeEnd) {
+                      std::multimap<int, TMemChunk> &intervalLiverangeEnd) {
   int start = liveInterval.start();
   // Add any dead liverange to the list of free intervals.
   for (auto it = intervalLiverangeEnd.begin();
@@ -247,7 +247,7 @@ allocateTMem(Operation *parentOp,
   int totalMemorySize = 0;
   MemoryBitMap memoryMap;
   Liveness liveness(parentOp);
-  std::map<int, TMemChunk> intervalLiverangeEnd;
+  std::multimap<int, TMemChunk> intervalLiverangeEnd;
   DenseMap<TMEMAllocOp, TMemChunk> allocChunks;
   // Implement a linear scan first fit algorithm. We expect that fragmentation
   // won't be a problem, if it is this should be revisited.
@@ -283,7 +283,7 @@ allocateTMem(Operation *parentOp,
     allocChunks.insert({alloc, chunkAllocated});
     // currently naively constraint allocs based on the first one we find.
     rowIdConstraints.addConstraints(alloc, chunkAllocated.startRow);
-    intervalLiverangeEnd[liveInterval.end()] = chunkAllocated;
+    intervalLiverangeEnd.insert({liveInterval.end(), chunkAllocated});
     int colOffset = chunkAllocated.startCol;
     int rowOffset = chunkAllocated.startRow * 16;
 

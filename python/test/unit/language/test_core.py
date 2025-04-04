@@ -2984,7 +2984,7 @@ def test_reduce_layouts(M, N, src_layout, axis, epilogue_kind, dtype_str, add_ov
     rdims_2d = f"1x{N}" if axis == 0 else f"{M}x1"
     store_range = "%7" if axis == 0 else "%1"
     warps = warps_per_cta(src_layout, [M, N])
-    num_warps = np.prod(warps)
+    num_warps = int(np.prod(warps))
     blocked = BlockedLayout([1, 1], [32, THREADS_PER_WARP // 32], [4, num_warps // 4], [0, 1], [1, 1], [1, 1], [0, 1])
     one_d_layout = BlockedLayout([1], [THREADS_PER_WARP], [num_warps], [0], [1], [1], [0])
 
@@ -3484,6 +3484,11 @@ def get_test_dot_base_cases():
 
 
 # M, N, K, num_warps, col_a, col_b, epilogue, input_precision, in_dtype, out_dtype, kpack, mma_nonk_size
+def get_test_dot_softmax():
+    return [(128, 128, 64, 8, False, False, 'softmax', 'ieee', 'float16', 'float32', 1, None)]
+
+
+# M, N, K, num_warps, col_a, col_b, epilogue, input_precision, in_dtype, out_dtype, kpack, mma_nonk_size
 def get_test_dot_mixed_sizes_cases():
     available_kpack = [1, 2 if is_hip() else 1]
     available_precision = ["tf32" if is_cuda() else "ieee"]
@@ -3570,7 +3575,8 @@ def get_test_dot_double_rate_cases():
     get_test_dot_mfma_edge_cases() + \
     get_test_dot_fp8_output_cases() + \
     get_test_dot_small_k_mfma_cases() + \
-    get_test_dot_small_mn_fma_cases())
+    get_test_dot_small_mn_fma_cases() + \
+    get_test_dot_softmax())
 @pytest.mark.parametrize("num_ctas", num_ctas_list)
 def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, input_precision, in_dtype, out_dtype, kpack, mma_nonk_size,
              num_ctas, device):
@@ -3798,6 +3804,12 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, input_precision, in_dty
     elif in_dtype == "float8e4nv" and out_dtype == tl.float32:
         if capability[0] == 9:
             assert 'wgmma.mma_async.sync.aligned.m64n128k32.f32.e4m3.e4m3' in ptx
+    if is_tcgen5 and epilogue == 'softmax' and M >= 128:
+        # check that there is no shared memory exchange in the softmax
+        pattern = (r'tcgen05\.ld\.sync\.aligned\.16x32bx2\.x64\.b32'
+                   r'(?:(?!st\.shared).)*'
+                   r'cvt\.rn\.f16x2\.f32')
+        assert re.search(pattern, ptx, flags=re.DOTALL)
 
 
 @pytest.mark.parametrize("M, N, K, col_a, col_b, rhs_scale, mxfp_type, normal_type, num_warps, mma, kpack",
@@ -4654,7 +4666,10 @@ def test_assume(device):
     if is_interpreter():
         return
 
-    assert 'llvm.assume' in pgm.asm['llir']
+    assert 'llvm.intr.assume' in pgm.asm['ttgir']
+    # tritonamdgpu-fold-true-cmpi on AMD folds true cmpi ops to %true (which llvm itself then DCEs).
+    if not is_hip():
+        assert 'llvm.assume' in pgm.asm['llir']
 
 
 # ---------------
@@ -7332,3 +7347,13 @@ def test_dtype_tensor(device, dtype):
         tensor = tl.zeros((1, ), dtype)
 
     dtype_tensor_kernel[(1, )](dtype)
+
+
+@pytest.mark.interpreter
+def test_float_tuple():
+
+    @triton.jit
+    def _namedtuple_float_tuple_kernel():
+        x, y = float('-inf'), float('inf')  # noqa: F841
+
+    _namedtuple_float_tuple_kernel[(1, )]()

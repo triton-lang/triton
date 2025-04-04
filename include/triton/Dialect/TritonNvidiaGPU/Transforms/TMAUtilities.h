@@ -81,8 +81,16 @@ updateEncodingForShape(Operation *op, gpu::SharedEncodingTrait encoding,
       return swizEnc;
 
     auto rank = tensorType.getRank();
-    SmallVector<unsigned> order(
-        swizEnc.getOrder().drop_front(swizEnc.getOrder().size() - rank));
+    auto oldOrder = swizEnc.getOrder();
+    SmallVector<unsigned> order;
+    for (int i = 0; i + oldOrder.size() < rank; ++i)
+      order.push_back(rank - i - 1);
+    for (int i = 0; i < oldOrder.size(); ++i) {
+      // If it is a rank-reducing load, we need to drop the last dimensions.
+      if (oldOrder[i] >= rank)
+        continue;
+      order.push_back(oldOrder[i]);
+    }
     auto newCtaEnc = updateCTALayoutForShape(ctaLayout, tensorType.getShape());
     return gpu::SwizzledSharedEncodingAttr::get(
         ctx, swizEnc.getVec(), swizEnc.getPerPhase(), swizEnc.getMaxPhase(),
@@ -114,6 +122,33 @@ getEncodingFromDescriptor(Operation *op, RankedTensorType tensorType,
   return updateEncodingForShape(op, sharedEnc, tensorType);
 }
 
+inline int64_t getTMAContigDim(Attribute encoding, ArrayRef<int64_t> shape) {
+  assert(encoding);
+  auto mmaEncoding =
+      llvm::dyn_cast_or_null<gpu::NVMMASharedEncodingAttr>(encoding);
+
+  // The bounding box inner dimension must be less than or equal to the
+  // swizzle size.
+  // https://docs.nvidia.com/cuda/cuda-driver-api/group__CUDA__TENSOR__MEMORY.html#group__CUDA__TENSOR__MEMORY_1ga7c7d2aaac9e49294304e755e6f341d7
+  // We clamp the block size and the codegen will emit multiple copy
+  // operations.
+  if (mmaEncoding) {
+    auto elemSize = mmaEncoding.getElementBitWidth() / 8;
+    return mmaEncoding.getSwizzlingByteWidth() / elemSize;
+  }
+
+  auto shapePerCTA = gpu::getShapePerCTA(encoding, shape);
+  return shapePerCTA.back();
+}
+
+inline int64_t getTMAContigDim(RankedTensorType tensorType) {
+  return getTMAContigDim(tensorType.getEncoding(), tensorType.getShape());
+}
+
+inline int64_t getTMAContigDim(gpu::MemDescType memDescType) {
+  return getTMAContigDim(memDescType.getEncoding(), memDescType.getShape());
+}
+
 template <typename BuilderT>
 mlir::LogicalResult createTMADesc(mlir::Value tmaPtr,
                                   mlir::triton::MakeTensorDescOp op,
@@ -128,34 +163,28 @@ mlir::LogicalResult createTMADesc(mlir::Value tmaPtr,
 
   auto elemType = op.getBase().getType().getPointeeType();
   auto elemSize = elemType.getIntOrFloatBitWidth() / 8;
-  auto mmaEncoding = llvm::dyn_cast_or_null<gpu::NVMMASharedEncodingAttr>(
-      op.getType().getBlockType().getEncoding());
+  auto encoding = op.getType().getBlockType().getEncoding();
+  auto mmaEncoding =
+      llvm::dyn_cast_or_null<gpu::NVMMASharedEncodingAttr>(encoding);
   bool fp4Padded = mmaEncoding && mmaEncoding.getFp4Padded();
 
   int paddingScale = fp4Padded ? 2 : 1;
-  int32_t contig_dim_size = op.getTensorShape().back() * paddingScale;
-  int32_t contig_dim_size_in_bytes = contig_dim_size * elemSize;
-  if (contig_dim_size_in_bytes > 128) {
-    contig_dim_size = 128 / elemSize;
-  }
+  auto shapePerCTA = gpu::getShapePerCTA(encoding, op.getTensorShape());
+  int32_t contig_dim_size = getTMAContigDim(encoding, op.getTensorShape());
+
   llvm::SmallVector<Value> boxDim;
   if (fp4Padded && contig_dim_size != 128) {
-    op->emitError(
+    return op->emitError(
         "FP4 padded loads require 128 elements or more in the last dim");
   }
   boxDim.push_back(mkI32Constant(contig_dim_size));
-  for (int k = op.getTensorShape().size() - 2; k >= 0; --k) {
-    boxDim.push_back(mkI32Constant(op.getTensorShape()[k]));
-  }
+  for (int k = shapePerCTA.size() - 2; k >= 0; --k)
+    boxDim.push_back(mkI32Constant(shapePerCTA[k]));
 
-  unsigned swizzleBytes = 0;
-  if (mmaEncoding) {
-    swizzleBytes = mmaEncoding.getSwizzlingByteWidth();
-    if (fp4Padded) {
-      assert(swizzleBytes == 128 &&
-             "elem type .b4x16_p64 supports only 128B swizzling");
-    }
-  } else {
+  unsigned swizzleBytes = mmaEncoding ? mmaEncoding.getSwizzlingByteWidth() : 0;
+  assert(!fp4Padded || swizzleBytes == 128 &&
+                           "elem type .b4x16_p64 supports only 128B swizzling");
+  if (!mmaEncoding) {
     auto swizzledEnc = dyn_cast<gpu::SwizzledSharedEncodingAttr>(
         op.getType().getBlockType().getEncoding());
     if (!swizzledEnc || swizzledEnc.getVec() != 1 ||

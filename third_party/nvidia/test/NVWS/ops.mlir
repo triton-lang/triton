@@ -109,3 +109,45 @@ module attributes {"ttg.target" = "cuda:0", "ttg.num-ctas" = 1 : i32, "ttg.num-w
     tt.return
   }
 }
+
+// -----
+
+
+// CHECK-LABEL: @warp_group_nothing
+tt.func @warp_group_nothing() {
+  // CHECK-NEXT: nvws.warp_group
+  nvws.warp_group
+  tt.return
+}
+
+// CHECK-LABEL: @warp_1_partition
+tt.func @warp_1_partition() {
+  // CHECK-NEXT: nvws.warp_group
+  nvws.warp_group
+  // CHECK-NEXT:  num_warps(4) {
+  partition0  num_warps(4) {
+  // CHECK-NEXT: nvws.warp_group.return
+    nvws.warp_group.return
+  // CHECK-NEXT: }
+  }
+  tt.return
+}
+
+// CHECK-LABEL: @warp_2_partition
+tt.func @warp_2_partition() {
+  // CHECK-NEXT: nvws.warp_group
+  nvws.warp_group
+  // CHECK-NEXT: partition0  num_warps(8) {
+  partition0  num_warps(8) {
+  // CHECK-NEXT: nvws.warp_group.return
+    nvws.warp_group.return
+  // CHECK-NEXT: }
+  }
+  // CHECK-NEXT: partition1 num_warps(4) {
+  partition1 num_warps(4) {
+  // CHECK-NEXT:   nvws.warp_group.return
+    nvws.warp_group.return
+  // CHECK-NEXT: }
+  }
+  tt.return
+}

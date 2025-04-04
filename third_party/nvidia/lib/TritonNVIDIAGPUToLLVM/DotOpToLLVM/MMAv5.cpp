@@ -492,11 +492,16 @@ struct TCGen5MMAScaledOpConversion
     }
     auto bSharedLayout = cast<NVMMASharedEncodingAttr>(bTensorTy.getEncoding());
     bool transB = !bSharedLayout.getTransposed();
-    Value baseA =
-        getSharedMemoryObjectFromStruct(
-            loc, adaptor.getA(),
-            typeConverter->convertType(aTensorTy.getElementType()), rewriter)
-            .getBase();
+    Value baseA;
+    if (aInTmem) {
+      baseA = adaptor.getA();
+    } else {
+      baseA =
+          getSharedMemoryObjectFromStruct(
+              loc, adaptor.getA(),
+              typeConverter->convertType(aTensorTy.getElementType()), rewriter)
+              .getBase();
+    }
     Value baseB =
         getSharedMemoryObjectFromStruct(
             loc, adaptor.getB(),

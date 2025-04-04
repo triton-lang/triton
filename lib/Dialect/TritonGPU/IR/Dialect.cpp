@@ -10,6 +10,7 @@
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Attributes.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
+#include "triton/Dialect/TritonGPU/IR/LayoutUtility.h"
 #include "triton/Dialect/TritonGPU/IR/LinearLayoutConversions.h"
 #include "triton/Dialect/TritonGPU/IR/Types.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
@@ -2032,27 +2033,13 @@ struct TritonGPUInferLayoutInterface
     auto invOrder = inversePermutation(order);
     SmallVector<unsigned> invOrderUnsigned(invOrder.begin(), invOrder.end());
 
-    auto permuteCTALayout =
-        [&](const CTALayoutAttr &layout) -> FailureOr<CTALayoutAttr> {
-      auto n = order.size();
-      if (layout.getCTAsPerCGA().size() != n ||
-          layout.getCTASplitNum().size() != n ||
-          layout.getCTAOrder().size() != n) {
-        return failure();
-      }
-
-      return CTALayoutAttr::get(
-          ctx, applyPermutation(layout.getCTAsPerCGA(), order),
-          applyPermutation(layout.getCTASplitNum(), order),
-          applyPermutation(invOrderUnsigned, layout.getCTAOrder()));
-    };
-
     if (auto enc =
             mlir::dyn_cast<SwizzledSharedEncodingAttr>(operandEncoding)) {
       if (enc.getOrder().size() != order.size()) {
         return failure();
       }
-      FailureOr<CTALayoutAttr> ctaLayout = permuteCTALayout(enc.getCTALayout());
+      FailureOr<CTALayoutAttr> ctaLayout =
+          permuteCTALayout(ctx, enc.getCTALayout(), order);
       if (failed(ctaLayout)) {
         return failure();
       }
@@ -2066,7 +2053,8 @@ struct TritonGPUInferLayoutInterface
       if (order != ArrayRef<int32_t>({1, 0})) {
         return failure();
       }
-      FailureOr<CTALayoutAttr> ctaLayout = permuteCTALayout(enc.getCTALayout());
+      FailureOr<CTALayoutAttr> ctaLayout =
+          permuteCTALayout(ctx, enc.getCTALayout(), order);
       if (failed(ctaLayout)) {
         return failure();
       }
@@ -2083,7 +2071,8 @@ struct TritonGPUInferLayoutInterface
           enc.getWarpsPerCTA().size() != n || enc.getOrder().size() != n) {
         return failure();
       }
-      FailureOr<CTALayoutAttr> ctaLayout = permuteCTALayout(enc.getCTALayout());
+      FailureOr<CTALayoutAttr> ctaLayout =
+          permuteCTALayout(ctx, enc.getCTALayout(), order);
       if (failed(ctaLayout)) {
         return failure();
       }
@@ -2433,10 +2422,9 @@ struct TritonGPUInferLayoutInterface
     }
     if (!expected || !got)
       return failure();
+
     // Check whether the encodings are structurally the same.
-    auto expectedLL = triton::gpu::toLinearLayout(shape, expected);
-    auto gotLL = triton::gpu::toLinearLayout(shape, got);
-    if (expectedLL != gotLL) {
+    if (!areLayoutsEquivalent(shape, expected, got)) {
       return emitOptionalError(loc, "Expected result encoding ", expected,
                                " but was ", got);
     }
@@ -3171,4 +3159,11 @@ int triton::gpu::lookupThreadsPerWarp(OpBuilder &rewriter) {
     op = op->getParentOp();
   assert(op && "cannot create thread ID outside of module");
   return triton::gpu::TritonGPUDialect::getThreadsPerWarp(cast<ModuleOp>(op));
+}
+
+bool triton::gpu::areLayoutsEquivalent(ArrayRef<int64_t> shape, Attribute lhs,
+                                       Attribute rhs) {
+  auto lhsLL = triton::gpu::toLinearLayout(shape, lhs);
+  auto rhsLL = triton::gpu::toLinearLayout(shape, rhs);
+  return lhsLL == rhsLL;
 }
