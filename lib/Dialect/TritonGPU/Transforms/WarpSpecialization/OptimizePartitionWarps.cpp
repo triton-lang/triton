@@ -191,11 +191,14 @@ static LogicalResult optimizePartitionNumWarps(ModuleAxisInfoAnalysis &axisInfo,
   SmallVector<int32_t> partitionNumWarps =
       llvm::to_vector(wsOp.getPartitionNumWarps());
 
-  // Some instructions have critical throughput.
+  // Some instructions have critical throughput if they are inside a loop. Make
+  // sure there are enough warps for these ops to execute quickly.
   SmallVector<int32_t> minWarpsForPartition(partitionNumWarps.size(), 1);
   for (auto [minWarps, region] :
        llvm::zip(minWarpsForPartition, wsOp.getPartitionRegions())) {
     region->walk([minWarps = &minWarps](Operation *op) {
+      if (!isa<scf::ForOp>(op->getParentOp()))
+        return;
       if (isa<nvidia_gpu::AsyncTMAGatherOp, nvidia_gpu::AsyncTMAScatterOp>(op))
         *minWarps = 2;
     });

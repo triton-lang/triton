@@ -383,8 +383,12 @@ LogicalResult triton::gpu::specializeLoadMMADependencies(scf::ForOp &loop,
 
     // Acquire and get the accumulator result.
     b.setInsertionPoint(domOp);
+    // Normally, we want to tighten the acquire section of the accumulator use
+    // as much as possible, but if the use is conditional, acquire for the whole
+    // block to improve register pressure.
     if (isa<scf::IfOp>(domOp->getParentOp()))
-      b.setInsertionPoint(&domOp->getBlock()->front());
+      b.setInsertionPointToStart(domOp->getBlock());
+
     Partition *userPartition = schedule.addPartition(numStages + numMmaStages);
     createInPartition<ttng::WaitBarrierOp>(b, *userPartition, curAccReadyBar,
                                            accPhase);
@@ -398,6 +402,11 @@ LogicalResult triton::gpu::specializeLoadMMADependencies(scf::ForOp &loop,
         b.create<arith::AddIOp>(accIndex, intCst(numMmaStages - 1));
     nextIndex = b.create<arith::RemUIOp>(nextIndex, intCst(numMmaStages));
     Value nextAccEmptyBar = createSingleBufferView(b, accEmptyBars, nextIndex);
+
+    // Release at the end of the block so that TMEM loads can be sunk as
+    // necessary by PTXAS.
+    if (isa<scf::IfOp>(domOp->getParentOp()))
+      b.setInsertionPoint(domOp->getBlock()->getTerminator());
     createInPartition<ttng::ArriveBarrierOp>(b, *userPartition, nextAccEmptyBar,
                                              1);
 
