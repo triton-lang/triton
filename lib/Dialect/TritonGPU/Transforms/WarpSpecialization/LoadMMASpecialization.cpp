@@ -236,6 +236,25 @@ LogicalResult triton::gpu::specializeLoadMMADependencies(scf::ForOp &loop,
     return b.create<arith::ConstantIntOp>(value, width);
   };
 
+  if (auto initFlagArg = dyn_cast<BlockArgument>(mmaOp.useAccumulator())) {
+    // Undo the accumulator init optimization where the init flag is initialized
+    // with false and uncoditionally set to true after the first iteration
+    // TODO: why does getUsedValuesDefinedAbove crash without this workaround?
+    auto idx = initFlagArg.getArgNumber() - 1;
+    auto yieldOp = mlir::cast<scf::YieldOp>(loop.getBody()->getTerminator());
+    auto initArgs = loop.getInitArgs();
+    auto yieldOperands = yieldOp.getOperands();
+    auto initUseAcc = getBoolFromConstant(initArgs[idx]);
+    auto yieldUseAcc = getBoolFromConstant(yieldOperands[idx]);
+
+    if (initUseAcc && *initUseAcc == false && yieldUseAcc &&
+        *yieldUseAcc == true) {
+      auto vTrue =
+          b.create<arith::ConstantOp>(loop.getLoc(), b.getBoolAttr(true));
+      mmaOp.setUseAccumulator(vTrue);
+    }
+  }
+
   // Multi-buffer the loads.
   auto [loadIndex, loadPhase] = addIndexAndPhase(b, loop, numStages);
 
