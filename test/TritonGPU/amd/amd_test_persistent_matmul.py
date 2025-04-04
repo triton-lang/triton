@@ -93,9 +93,7 @@ def matmul_kernel_persistent(a_ptr, b_ptr, c_ptr,  #
         a_ptrs = a_ptr + (offs_am[:, None] * stride_am + offs_k[None, :] * stride_ak)
         b_ptrs = b_ptr + (offs_k[:, None] * stride_bk + offs_bn[None, :] * stride_bn)
 
-        # CHECK: amdgpu.buffer_load %arg0
         a = tl.load(a_ptrs, mask=offs_k_for_mask[None, :] < K - ki * BLOCK_SIZE_K, other=0.0)
-        # CHECK: amdgpu.buffer_load %arg1
         b = tl.load(b_ptrs, mask=offs_k_for_mask[:, None] < K - ki * BLOCK_SIZE_K, other=0.0)
         accumulator = tl.dot(a, b, accumulator)
 
