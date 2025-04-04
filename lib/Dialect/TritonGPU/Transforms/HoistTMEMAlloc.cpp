@@ -47,13 +47,14 @@ bool mayAliasTMEMOp(const DenseSet<Value> &sinkAccesses, Operation *op) {
   return false;
 }
 
-// Returns true if between the `lhs` op and the `sink` op there is another
-// access to the same TMEMAlloc. Assumes that op dominates store.
+// Returns the earliest operation that may alias `sink` through tensor memory
+// starting at, but not including, `lhs`. Returns nullptr if no such op exists.
 Operation *findTMEMAliasingOpInBetween(Operation *lhs, Operation *sink) {
   DenseSet<Value> sinkAccesses;
   getTensorMemoryAccesses(sink, sinkAccesses);
 
   Operation *prevNode = sink;
+  Operation *curAliasingOp = nullptr;
   while (prevNode != lhs) {
     if (prevNode->getPrevNode() == nullptr) {
       prevNode = prevNode->getParentOp();
@@ -69,10 +70,10 @@ Operation *findTMEMAliasingOpInBetween(Operation *lhs, Operation *sink) {
 
     // Check if this op may alias tensor memory.
     if (mayAliasTMEMOp(sinkAccesses, prevNode)) {
-      return prevNode;
+      curAliasingOp = prevNode;
     }
   }
-  return nullptr;
+  return curAliasingOp;
 }
 
 class CombineTMEMStoreAndSelect : public OpRewritePattern<ttng::TMEMStoreOp> {
