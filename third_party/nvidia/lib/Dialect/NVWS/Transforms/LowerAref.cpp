@@ -505,34 +505,33 @@ public:
     // Lowering the Put op will tell the get op that reads the mma accumulator
     // to that the mma loop is done, but we need to wait on the last mma
     // operation inside the get.
-    if (putArefValue.depth == 1) {
-      // not peristent, wait immediately after k loop
-      rewriter.setInsertionPointAfter(kLoop);
-      // TODO: relax the assumption about which position the loop-carried
-      // iteration count is in
-      Value idx = kLoop.getResult(0);
-      waitOnMbar(rewriter, loc, getArefValue.emptyMbars,
-                 rewriter.create<arith::ConstantIntOp>(loc, 0, 32), idx,
-                 getArefValue.depth);
-    } else {
-      // persistent.
-      for (auto user : putArefValue.users) {
-        auto mmaGetOp = dyn_cast<ArefGetOp>(user->op);
-        if (!mmaGetOp)
-          continue;
-        rewriter.setInsertionPoint(&mmaGetOp.getRegion().front().front());
+    for (auto user : putArefValue.users) {
+      Value idx;
+      auto mmaGetOp = dyn_cast<ArefGetOp>(user->op);
+      if (!mmaGetOp)
+        continue;
+      if (putArefValue.depth == 1) {
+        // not peristent, use the kLoop return
+        // TODO: relax the assumption about which position the loop-carried
+        // iteration count is in
+        idx = kLoop.getResult(0);
+        rewriter.setInsertionPointAfter(kLoop);
+      } else {
+        // persistent
         // Get should be inside of a for loop
         auto forOp = dyn_cast<scf::ForOp>(mmaGetOp->getBlock()->getParentOp());
         if (!forOp)
           return failure();
         // TODO: relax the assumption about which position the loop-carried
         // iteration count is in
-        Value idx = forOp.getOperand(1);
-        waitOnMbar(rewriter, loc, getArefValue.emptyMbars,
-                   rewriter.create<arith::ConstantIntOp>(loc, 0, 32), idx,
-                   getArefValue.depth);
+        idx = forOp.getOperand(1);
+        rewriter.setInsertionPoint(&mmaGetOp.getRegion().front().front());
       }
+      waitOnMbar(rewriter, loc, getArefValue.emptyMbars,
+                 rewriter.create<arith::ConstantIntOp>(loc, 0, 32), idx,
+                 getArefValue.depth);
     }
+
     // Since we are signalling the inputs to the mma are done with the mma
     // barrier, we don't need to add an arrival when lowering the get.
     graph.nodes[getOp].containsAsync = true;

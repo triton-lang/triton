@@ -205,7 +205,6 @@ module attributes {nvws.mma = {num_warps = 4 : i32, start_warp = 0 : i32}, nvws.
         %stage = arith.remsi %arg6, %c2_i32 : i32
         %32 = nvws.aref.get %16[%stage] as (%arg8 : !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>) {
           %32 = ttng.tmem_load %arg8 {} : !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable> -> tensor<128x128xf32, #blocked>
-          // need to zero out the tmem here
           nvws.aref.return %32 : tensor<128x128xf32, #blocked>
         } : (!nvws.aref<[!ttg.memdesc<2x128x128xf32, #tmem, #ttng.tensor_memory, mutable>], 1>, i32) -> (tensor<128x128xf32, #blocked>)
         %33 = tt.fp_to_fp %32 {}, rounding = rtne : tensor<128x128xf32, #blocked> -> tensor<128x128xf8E4M3FN, #blocked>
