@@ -1,9 +1,11 @@
 #include "Dialect/NVGPU/IR/Dialect.h"
+#include "Dialect/NVWS/IR/Dialect.h"
 #include "NVGPUToLLVM/NVGPUToLLVMPass.h"
 #include "TritonNVIDIAGPUToLLVM/Passes.h"
 #include "cublas_instance.h"
 #include "mlir/Pass/PassManager.h"
 #include "mlir/Target/LLVMIR/Dialect/NVVM/NVVMToLLVMIRTranslation.h"
+#include "nvidia/include/Dialect/NVWS/Transforms/Passes.h"
 #include "passes.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/Passes.h"
@@ -32,8 +34,6 @@ void init_triton_nvidia_passes_ttnvgpuir(py::module &&m) {
                      mlir::createTritonNvidiaGPUFenceInsertionPass);
   ADD_PASS_WRAPPER_0("add_tma_lowering",
                      mlir::createTritonNvidiaGPUTMALoweringPass);
-  ADD_PASS_WRAPPER_0("add_keep_acc_in_tmem",
-                     mlir::createTritonNvidiaGPUKeepAccInTMemPass);
   ADD_PASS_WRAPPER_0("add_promote_lhs_to_tmem",
                      mlir::createTritonNvidiaGPUPromoteLHSToTMemPass);
   ADD_PASS_WRAPPER_0("add_nvgpu_to_llvm",
@@ -48,8 +48,14 @@ void init_triton_nvidia_passes_ttnvgpuir(py::module &&m) {
                      mlir::createTritonNvidiaGPUOptimizeDescriptorEncodingPass);
 }
 
+void init_triton_nvidia_passes_nvws(py::module &&m) {
+  ADD_PASS_WRAPPER_0("add_lower_warp_group",
+                     mlir::createNVWSLowerWarpGroupPass);
+}
+
 void init_triton_nvidia(py::module &&m) {
   auto passes = m.def_submodule("passes");
+  init_triton_nvidia_passes_nvws(passes.def_submodule("nvws"));
   init_triton_nvidia_passes_ttgpuir(passes.def_submodule("ttgpuir"));
   init_triton_nvidia_passes_ttnvgpuir(passes.def_submodule("ttnvgpuir"));
 
@@ -74,6 +80,8 @@ void init_triton_nvidia(py::module &&m) {
     mlir::DialectRegistry registry;
     registry.insert<mlir::triton::nvidia_gpu::TritonNvidiaGPUDialect,
                     mlir::triton::nvgpu::NVGPUDialect>();
+    registry.insert<mlir::triton::nvidia_gpu::TritonNvidiaGPUDialect,
+                    mlir::triton::nvws::NVWSDialect>();
     mlir::registerNVVMDialectTranslation(registry);
     context.appendDialectRegistry(registry);
     context.loadAllAvailableDialects();

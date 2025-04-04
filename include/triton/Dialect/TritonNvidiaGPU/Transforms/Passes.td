@@ -104,22 +104,6 @@ def TritonNvidiaGPUMMALoweringPass : Pass<"triton-nvidia-mma-lowering", "mlir::M
   ];
 }
 
-def TritonNvidiaGPUKeepAccInTMemPass : Pass<"tritongpu-keep-acc-in-tmem", "mlir::ModuleOp"> {
-  let summary = "Keep accumulator in Tensor Memory";
-
-  let description = [{
-    For Tensor Core Gen 05 Dot operations called in the loop, where the accumulator is reused
-    in the next iteration, we want to keep the accumulator in Tensor Memory, so that we can
-    avoid the cost of loading the accumulator from registers to Tensor Memory.
-  }];
-
-  let constructor = "mlir::createTritonNvidiaGPUKeepAccInTMemPass()";
-
-  let dependentDialects = ["mlir::triton::gpu::TritonGPUDialect",
-                           "mlir::triton::nvidia_gpu::TritonNvidiaGPUDialect",
-                           "mlir::triton::TritonDialect"];
-}
-
 def TritonNvidiaGPUPromoteLHSToTMemPass : Pass<"tritongpu-promote-lhs-to-tmem", "mlir::ModuleOp"> {
   let summary = "Promote LHS operand of MMAv5 op to Tensor Memory";
 
