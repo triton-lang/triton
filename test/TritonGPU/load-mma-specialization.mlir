@@ -483,7 +483,7 @@ tt.func @matmul_tma_acc_with_conditional_user(
 // AWS-LABEL: @matmul_tma_acc_with_conditional_def
 // AWS: ttg.warp_specialize
 // AWS: num_warps(4)
-// AWS: num_warps(1)
+// AWS: num_warps(2)
 // AWS: num_warps(1)
 
 // CHECK: @matmul_tma_acc_with_conditional_def
@@ -578,7 +578,7 @@ tt.func @matmul_tma_acc_with_conditional_def(
 // AWS-LABEL: @matmul_tma_acc_with_conditional_def_and_use
 // AWS: ttg.warp_specialize
 // AWS: num_warps(4)
-// AWS: num_warps(1)
+// AWS: num_warps(2)
 // AWS: num_warps(1)
 
 // CHECK: @matmul_tma_acc_with_conditional_def_and_use
@@ -676,7 +676,7 @@ tt.func @matmul_tma_acc_with_conditional_def_and_use(
 // AWS-LABEL: @matmul_tma_acc_with_conditional_def_and_use_no_multibuf
 // AWS: ttg.warp_specialize
 // AWS: num_warps(1)
-// AWS: num_warps(1)
+// AWS: num_warps(2)
 // AWS: num_warps(1)
 
 // CHECK: @matmul_tma_acc_with_conditional_def_and_use_no_multibuf
