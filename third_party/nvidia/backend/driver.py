@@ -5,12 +5,15 @@ import sysconfig
 import hashlib
 import subprocess
 import tempfile
+import triton
 from pathlib import Path
 from triton.runtime.build import _build
 from triton.runtime.cache import get_cache_manager
 from triton.runtime import _allocation
 from triton.backends.compiler import GPUTarget
 from triton.backends.driver import GPUDriver
+
+from triton.tools.experimental_descriptor import TensorDescriptor, TmaDescKernelParam
 
 dirname = os.path.dirname(os.path.realpath(__file__))
 include_dir = [os.path.join(dirname, "include")]
@@ -92,6 +95,7 @@ class CudaUtils(object):
         self.get_device_properties = mod.get_device_properties
         self.cuOccupancyMaxActiveClusters = mod.cuOccupancyMaxActiveClusters
         self.set_printf_fifo_size = mod.set_printf_fifo_size
+        self.fill_tma_descriptor = mod.fill_tma_descriptor
         self.fill_1d_tma_descriptor = mod.fill_1d_tma_descriptor
         self.fill_2d_tma_descriptor = mod.fill_2d_tma_descriptor
 
@@ -104,6 +108,8 @@ class CudaUtils(object):
 def ty_to_cpp(ty):
     if ty[0] == '*':
         return "CUdeviceptr"
+    if ty.startswith("tensordesc"):
+        return "CUtensorMap";
     return {
         "i1": "int32_t",
         "i8": "int8_t",
@@ -126,10 +132,16 @@ def ty_to_cpp(ty):
 
 def make_launcher(constants, signature):
 
-    def _serialize_signature(sig):
-        if isinstance(sig, tuple):
-            return ','.join(map(_serialize_signature, sig))
-        return sig
+    def _expand_signature(sig, output):
+        if isinstance(sig, str) and sig.startswith("tensordesc"):
+            output.append("nvTmaDesc")
+            ndim = sig.count(",") + 1
+            for _ in range(ndim):
+                output.append("i32")
+            for _ in range(ndim):
+                output.append("i64")
+        else:
+            output.append(sig)
 
     def _extracted_type(ty):
         if isinstance(ty, tuple):
@@ -149,6 +161,8 @@ def make_launcher(constants, signature):
             return "O"
         if ty in ("constexpr", "nvTmaDesc"):
             return "O"
+        if ty.startswith("tensordesc"):
+            return "O"
         return {
             "float": "f",
             "double": "d",
@@ -163,11 +177,22 @@ def make_launcher(constants, signature):
             "uint64_t": "K",
         }[ty_to_cpp(ty)]
 
+    expand_signature = []
+    for sig in signature.values():
+        _expand_signature(sig, expand_signature)
+    signature = {i: s for i, s in enumerate(expand_signature)}
+
     args_format = ''.join([format_of(ty) for ty in signature.values()])
     format = "iiiKKpOOOOO" + args_format
-    signature = ','.join(map(_serialize_signature, signature.values()))
-    signature = list(filter(bool, signature.split(',')))
-    signature = {i: s for i, s in enumerate(signature)}
+
+    new_signature = []
+    for sig in signature.values():
+        if isinstance(sig, tuple):
+            new_signature.extend(sig)
+        else:
+            new_signature.append(sig)
+
+    signature = {i: s for i, s in enumerate(expand_signature)}
     args_list = ', ' + ', '.join(f"&_arg{i}" for i, ty in signature.items()) if len(signature) > 0 else ''
     # Record the end of regular arguments;
     # subsequent arguments are architecture-specific descriptors, such as tensor descriptors for CUDA.
@@ -506,6 +531,61 @@ PyMODINIT_FUNC PyInit___triton_launcher(void) {{
     return src
 
 
+def make_tensordesc_arg(arg, metadata):
+    assert isinstance(arg, TensorDescriptor)
+    swizzle = metadata["swizzle"]
+    elem_size = metadata["elem_size"]
+    elem_type = metadata["elem_type"]
+    block_size = metadata["block_size"]
+    fp4_padded = metadata["fp4_padded"]
+
+    data_ptr = arg.base.data_ptr()
+    shape = arg.shape
+    strides = arg.strides
+    assert strides[-1] == 1
+
+    desc = TmaDescKernelParam()
+    result = [desc, *shape, *strides]
+
+    if fp4_padded:
+        shape[-1] *= 2
+    triton.runtime.driver.active.utils.fill_tma_descriptor(
+        desc.tma_desc_cpu_ptr(),
+        data_ptr,
+        swizzle,
+        elem_size,
+        elem_type,
+        block_size,
+        shape,
+        strides,
+    )
+    return result
+
+
+def wrap_handle_tensordesc(launcher, tensordesc_meta):
+    if not tensordesc_meta:
+        return launcher
+
+    def inner(*args):
+        meta_args = args[:11]
+        raw_kernel_args = args[11:]
+        tensordesc_idx = 0
+        final_args = []
+        for i, arg in enumerate(raw_kernel_args):
+            if isinstance(arg, TensorDescriptor):
+                meta = tensordesc_meta[tensordesc_idx]
+                tensordesc_idx += 1
+                final_args.extend(make_tensordesc_arg(arg, meta))
+            else:
+                final_args.append(arg)
+        assert tensordesc_idx == len(tensordesc_meta)
+        return launcher(*meta_args, *final_args)
+
+    return inner
+
+
+
+
 class CudaLauncher(object):
 
     def __init__(self, src, metadata):
@@ -513,10 +593,11 @@ class CudaLauncher(object):
         arg_idx = lambda x: (src.fn.arg_names.index(x), ) if isinstance(x, str) else x
         constants = {arg_idx(idx): value for idx, value in constants.items()}
         signature = {idx: value for idx, value in src.signature.items()}
+
         src = make_launcher(constants, signature)
         mod = compile_module_from_src(src, "__triton_launcher")
         self.num_ctas = functools.reduce(operator.mul, metadata.cluster_dims, 1)
-        self.launch = mod.launch
+        self.launch = wrap_handle_tensordesc(mod.launch, metadata.tensordesc_meta)
         self.global_scratch_size = metadata.global_scratch_size
         self.global_scratch_align = metadata.global_scratch_align
         self.launch_cooperative_grid = metadata.launch_cooperative_grid
