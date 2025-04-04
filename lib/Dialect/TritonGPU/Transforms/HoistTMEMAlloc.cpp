@@ -52,9 +52,6 @@ bool mayAliasTMEMOp(const DenseSet<Value> &sinkAccesses, Operation *op) {
 Operation *findTMEMAliasingOpInBetween(Operation *lhs, Operation *sink) {
   DenseSet<Value> sinkAccesses;
   getTensorMemoryAccesses(sink, sinkAccesses);
-  if (sinkAccesses.empty()) {
-    return nullptr;
-  }
 
   Operation *prevNode = sink;
   while (prevNode != lhs) {
@@ -170,13 +167,17 @@ public:
     DominanceInfo domInfo(forOp);
     Operation *domOp =
         findNearestCommonDominator(llvm::to_vector(load->getUsers()), domInfo);
-    if (!domOp || !domInfo.properlyDominates(load.getOperation(), domOp) ||
-        domOp == load->getNextNode()) {
+    if (!domOp || !domInfo.properlyDominates(load.getOperation(), domOp)) {
       return failure();
     }
     // Don't sink past potentially aliasing ops.
-    if (Operation *dst = findTMEMAliasingOpInBetween(load, domOp))
+    if (Operation *dst = findTMEMAliasingOpInBetween(load, domOp)) {
       domOp = dst;
+    }
+    if (domOp == load->getNextNode()) {
+      // The load wasn't moved.
+      return failure();
+    }
     rewriter.moveOpBefore(load, domOp);
     return success();
   }
