@@ -230,6 +230,7 @@ static LogicalResult rewriteWarpGroupBarriers(LLVM::LLVMFuncOp func,
           continue;
         auto action = actRegs < maxnreg ? NVVM::SetMaxRegisterAction::decrease
                                         : NVVM::SetMaxRegisterAction::increase;
+        b.setInsertionPointToStart(&region->front());
         b.create<NVVM::SetMaxRegisterOp>(op.getLoc(), actRegs, action);
       }
     }

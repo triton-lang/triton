@@ -115,7 +115,7 @@ struct AllocateWarpGroups
       leftover = leftover / 8 * 8;
 
       // Generate setmaxnreg in each partition according to its warp group.
-      SmallVector<int32_t> maxnregsPerPartition(1 + warpGroups.size());
+      SmallVector<int32_t> maxnregsPerPartition(1 + arr.size());
       for (const WarpGroupInfo &wg : warpGroups) {
         for (Region *region : wg.partitions) {
           maxnregsPerPartition[1 + region->getRegionNumber()] =
