@@ -1,3 +1,4 @@
+#include "mlir/Dialect/LLVMIR/NVVMDialect.h"
 #include "mlir/IR/BuiltinAttributes.h"
 #include "triton/Conversion/TritonGPUToLLVM/PatternTritonGPUOpToLLVM.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
@@ -171,7 +172,7 @@ struct FuncOpConversion : public ConvertOpToLLVMPattern<triton::FuncOp> {
     if (auto totalNumWarps = funcOp.getParentOp()->getAttrOfType<IntegerAttr>(
             "ttg.total-num-warps"))
       numWarps = totalNumWarps.getInt();
-    newFuncOp->setAttr("nvvm.reqntid",
+    newFuncOp->setAttr(NVVM::NVVMDialect::getReqntidAttrName(),
                        rewriter.getDenseI32ArrayAttr(32 * numWarps));
 
     rewriter.eraseOp(funcOp);

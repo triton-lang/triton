@@ -366,6 +366,8 @@ def TTNG_AsyncTMAScatterOp : TTNG_Op<"async_tma_scatter", [DeclareOpInterfaceMet
     $desc_ptr `[` $x_offsets `,` $y_offset `]` $src
     attr-dict `:` type(operands)
   }];
+
+  let hasVerifier = 1;
 }
 
 def TTNG_TMAStoreWaitOp : TTNG_Op<"async_tma_store_wait"> {
