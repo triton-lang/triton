@@ -13,6 +13,7 @@ from triton.backends import backends
 from .hook import Hook
 from ..flags import set_instrumentation_on, set_instrumentation_off
 
+
 class CudaAllocator:
 
     def __init__(self, instrumentation_hook):
@@ -149,20 +150,22 @@ class InstrumentationHook(Hook):
         libproton.init_scope_ids(function, scope_id_pairs)
 
     def enter(self, lazy_dict: LazyDict) -> None:
-        libproton.enter_instrumented_op(lazy_dict.data.get("function", None), self.buffer.data_ptr(), self.profile_buffer_size)
+        libproton.enter_instrumented_op(lazy_dict.data.get("function", None), self.buffer.data_ptr(),
+                                        self.profile_buffer_size)
         InstrumentationHook.profile_mem = None
 
     def exit(self, lazy_dict: LazyDict) -> None:
         # FIXME(Keren): exit_instrumented_op will sync the device and copy the buffer back to the host.
         # But this is not necessary if we can delay the copy to reduce the overhead.
         # We should fix it after the profiling buffer is managed by a custom allocator.
-        libproton.exit_instrumented_op(lazy_dict.data.get("function", None), self.buffer.data_ptr(), self.profile_buffer_size)
+        libproton.exit_instrumented_op(lazy_dict.data.get("function", None), self.buffer.data_ptr(),
+                                       self.profile_buffer_size)
 
         # Copy the profiling buffer to the host for external processing (e.g., 3rd party tools).
         # FIXME(fywkevin): We should provide a config option to control on/off this behavior.
         import torch
         InstrumentationHook.profile_mem = torch.empty_like(self.buffer, device='cpu')
         InstrumentationHook.profile_mem.copy_(self.buffer)
-        
+
         # Release the profiling buffer for recycling
         self.buffer = None
