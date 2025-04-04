@@ -2408,4 +2408,12 @@ tt.func private @tensor_desc_to_tma_ptr(%arg0: !tt.tensordesc<tensor<128x64xf16,
   tt.return %0 : !tt.ptr<i8, 0>
 }
 
+// CHECK-LABEL: @tensor_desc_kernel_arg
+// CHECK-SAME: %arg0: !llvm.ptr<0>
+tt.func public @tensor_desc_kernel_arg(%arg0: !tt.ptr<i8, 0> {tt.nv_tma_desc = 1 : i32}) -> !tt.ptr<i8, 0> {
+  // CHECK-NEXT: llvm.addrspacecast %arg0 : !llvm.ptr<1> to !llvm.ptr
+  %0 = ttng.tensor_desc_to_tma_ptr %arg0 : !tt.tensordesc<tensor<128x64xf16, #shared>> to !tt.ptr<i8, 0>
+  tt.return %0 : !tt.ptr<i8, 0>
+}
+
 }

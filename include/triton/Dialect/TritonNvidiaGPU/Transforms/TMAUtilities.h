@@ -149,6 +149,58 @@ inline int64_t getTMAContigDim(gpu::MemDescType memDescType) {
   return getTMAContigDim(memDescType.getEncoding(), memDescType.getShape());
 }
 
+inline std::optional<int> getTMASwizzleMode(Operation *op, TensorDescType ty) {
+  auto encoding = ty.getBlockType().getEncoding();
+  auto mmaEncoding = dyn_cast<gpu::NVMMASharedEncodingAttr>(encoding);
+  unsigned swizzleBytes = mmaEncoding ? mmaEncoding.getSwizzlingByteWidth() : 0;
+  if (!mmaEncoding) {
+    auto swizzledEnc = dyn_cast<gpu::SwizzledSharedEncodingAttr>(encoding);
+    if (!swizzledEnc || swizzledEnc.getVec() != 1 ||
+        swizzledEnc.getPerPhase() != 1 || swizzledEnc.getMaxPhase() != 1) {
+      if (op)
+        op->emitError("Unhandled encoding type");
+      return std::nullopt;
+    }
+  }
+
+  bool fp4Padded = mmaEncoding && mmaEncoding.getFp4Padded();
+  assert(!fp4Padded || swizzleBytes == 128 &&
+                           "elem type .b4x16_p64 supports only 128B swizzling");
+
+  int32_t swizzleMode = 0;
+  if (swizzleBytes == 128) {
+    swizzleMode = 3;
+  } else if (swizzleBytes == 64) {
+    swizzleMode = 2;
+  } else if (swizzleBytes == 32) {
+    swizzleMode = 1;
+  }
+  return swizzleMode;
+}
+
+inline std::optional<int> getTMAElementType(Operation *op, TensorDescType ty) {
+  auto encoding = ty.getBlockType().getEncoding();
+  auto mmaEncoding = dyn_cast<gpu::NVMMASharedEncodingAttr>(encoding);
+  bool fp4Padded = mmaEncoding && mmaEncoding.getFp4Padded();
+
+  if (fp4Padded)
+    return 14;  // .b4x16_p64
+
+  auto elemSize = ty.getBlockType().getElementTypeBitWidth() / 8;
+  switch (elemSize) {
+    case 1: return 0;
+    case 2: return 1;
+    case 4: return 2;
+    default: break;
+  }
+  if (op) {
+    op->emitError()
+          << "Tensor descriptor element type must have size 1, 2, or 4 but got "
+          << elemSize;
+  }
+  return std::nullopt;
+}
+
 template <typename BuilderT>
 mlir::LogicalResult createTMADesc(mlir::Value tmaPtr,
                                   mlir::triton::MakeTensorDescOp op,
@@ -182,8 +234,6 @@ mlir::LogicalResult createTMADesc(mlir::Value tmaPtr,
     boxDim.push_back(mkI32Constant(shapePerCTA[k]));
 
   unsigned swizzleBytes = mmaEncoding ? mmaEncoding.getSwizzlingByteWidth() : 0;
-  assert(!fp4Padded || swizzleBytes == 128 &&
-                           "elem type .b4x16_p64 supports only 128B swizzling");
   if (!mmaEncoding) {
     auto swizzledEnc = dyn_cast<gpu::SwizzledSharedEncodingAttr>(
         op.getType().getBlockType().getEncoding());
@@ -194,14 +244,10 @@ mlir::LogicalResult createTMADesc(mlir::Value tmaPtr,
     }
   }
 
-  int32_t swizzle_mode = 0;
-  if (swizzleBytes == 128) {
-    swizzle_mode = 3;
-  } else if (swizzleBytes == 64) {
-    swizzle_mode = 2;
-  } else if (swizzleBytes == 32) {
-    swizzle_mode = 1;
-  }
+  auto maybeSwizzleMode = getTMASwizzleMode(op, op.getType());
+  if (!maybeSwizzleMode)
+    return failure();
+  auto swizzleMode = *maybeSwizzleMode;
 
   Value elemSizeVal = builder.template create<arith::ConstantOp>(
       loc, builder.getI64Type(), builder.getI64IntegerAttr(elemSize));
@@ -224,31 +270,9 @@ mlir::LogicalResult createTMADesc(mlir::Value tmaPtr,
     globalStride[i] = builder.template create<arith::MulIOp>(
         loc, globalStride[i], elemSizeVal);
 
-  int elemTypeEnum;
-
-  if (fp4Padded) {
-    elemTypeEnum = 14; // .b4x16_p64
-  } else {
-    switch (elemSize) {
-    case 1: {
-      elemTypeEnum = 0;
-      break;
-    }
-    case 2: {
-      elemTypeEnum = 1;
-      break;
-    }
-    case 4: {
-      elemTypeEnum = 2;
-      break;
-    }
-    default: {
-      op->emitError()
-          << "Tensor descriptor element type must have size 1, 2, or 4 but got "
-          << elemSize;
-      return failure();
-    }
-    }
+  auto elemTypeEnum = getTMAElementType(op, op.getType());
+  if (!elemTypeEnum) {
+    return failure();
   }
 
   builder.template create<triton::ExperimentalTensormapCreateOp>(
@@ -259,9 +283,9 @@ mlir::LogicalResult createTMADesc(mlir::Value tmaPtr,
       /*global_dim=*/globalDim,
       /*global_stride=*/globalStride,
       /*element_strides=*/elementStride,
-      /*elem_type*/ builder.getI32IntegerAttr(elemTypeEnum),
+      /*elem_type*/ builder.getI32IntegerAttr(*elemTypeEnum),
       /*interleave_layout*/ builder.getI32IntegerAttr(0),
-      /*swizzle_mode=*/builder.getI32IntegerAttr(swizzle_mode),
+      /*swizzle_mode=*/builder.getI32IntegerAttr(swizzleMode),
       /*fill_mode=*/builder.getI32IntegerAttr(0));
   return success();
 }
