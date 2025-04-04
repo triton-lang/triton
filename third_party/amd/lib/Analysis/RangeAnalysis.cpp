@@ -10,6 +10,7 @@
 #include "llvm/ADT/TypeSwitch.h"
 #include "llvm/Support/Debug.h"
 
+#include <llvm/IR/Constants.h>
 #include <numeric>
 #include <optional>
 
@@ -22,53 +23,64 @@ using namespace mlir;
 
 namespace tt = mlir::triton;
 
+std::optional<int64_t>
+triton::AMD::TritonIntegerRangeAnalysis::maybeGetTripCount(
+    LoopLikeOpInterface loop) {
+  std::optional<OpFoldResult> lowerBound = loop.getSingleLowerBound();
+  std::optional<OpFoldResult> upperBound = loop.getSingleUpperBound();
+  std::optional<OpFoldResult> step = loop.getSingleStep();
+  std::optional<Value> iv = loop.getSingleInductionVar();
+  if (!iv)
+    return {};
+
+  unsigned int width = ConstantIntRanges::getStorageBitwidth(iv->getType());
+
+  auto getLoopBoundFromFold = [&](std::optional<OpFoldResult> loopBound,
+                                  Block *block,
+                                  std::optional<bool> getUpper = std::nullopt,
+                                  std::optional<APInt> defaultVal =
+                                      std::nullopt) {
+    if (loopBound.has_value()) {
+      if (auto attr = dyn_cast<Attribute>(*loopBound)) {
+        if (auto bound = dyn_cast_or_null<IntegerAttr>(attr))
+          return bound.getValue();
+      } else if (auto value = llvm::dyn_cast_if_present<Value>(*loopBound)) {
+        const dataflow::IntegerValueRangeLattice *lattice =
+            getLatticeElementFor(getProgramPointBefore(block), value);
+        if (lattice != nullptr && !lattice->getValue().isUninitialized())
+          return getUpper ? lattice->getValue().getValue().smax()
+                          : lattice->getValue().getValue().smin();
+      }
+    }
+    if (defaultVal)
+      return *defaultVal;
+    return getUpper ? APInt::getSignedMaxValue(width)
+                    : APInt::getSignedMinValue(width);
+  };
+
+  Block *block = iv->getParentBlock();
+  APInt min = getLoopBoundFromFold(lowerBound, block,
+                                   /*getUpper=*/false);
+  APInt max = getLoopBoundFromFold(upperBound, block,
+                                   /*getUpper=*/true);
+  APInt stepValDefault = {width, 1, /*isSigned=*/true};
+  APInt stepVal =
+      getLoopBoundFromFold(step, block, /*getUpper=*/{}, stepValDefault);
+
+  if (stepVal.isNegative())
+    std::swap(min, max);
+  if (stepVal.isZero())
+    stepVal = stepValDefault;
+  if (max.sge(min))
+    return llvm::divideCeilSigned(max.getSExtValue() - min.getSExtValue(),
+                                  stepVal.getSExtValue());
+  return {};
+}
+
 namespace {
 
 constexpr int64_t kDefaultMaxTripCount = 1024;
 constexpr int64_t kDefaultMaxPrograms = 2 << 15; // 65536
-
-std::optional<int64_t>
-maybeGetTripCount(LoopLikeOpInterface loop,
-                  triton::AMD::TritonIntegerRangeAnalysis *analysis) {
-  std::optional<OpFoldResult> lowerBound = loop.getSingleLowerBound();
-  std::optional<OpFoldResult> upperBound = loop.getSingleUpperBound();
-  std::optional<OpFoldResult> step = loop.getSingleStep();
-
-  if (lowerBound && upperBound && step) {
-    if (lowerBound == upperBound)
-      return 0;
-
-    std::optional<int64_t> lbConstant = getConstantIntValue(*lowerBound);
-    if (!lbConstant) {
-      auto maybeRange =
-          analysis->maybeGetAssumedRange(llvm::cast<Value>(*lowerBound));
-      if (maybeRange)
-        lbConstant = maybeRange->smin().getSExtValue();
-      else
-        lbConstant = std::numeric_limits<int64_t>::min() >> 2;
-    }
-    std::optional<int64_t> ubConstant = getConstantIntValue(*upperBound);
-    if (!ubConstant) {
-      auto maybeRange =
-          analysis->maybeGetAssumedRange(llvm::cast<Value>(*upperBound));
-      if (maybeRange)
-        ubConstant = maybeRange->smax().getSExtValue();
-      else
-        ubConstant = std::numeric_limits<int64_t>::max() >> 2;
-    }
-    std::optional<int64_t> stepConstant = getConstantIntValue(*step);
-    if (!stepConstant) {
-      auto maybeRange =
-          analysis->maybeGetAssumedRange(llvm::cast<Value>(*step));
-      if (maybeRange)
-        stepConstant = maybeRange->smin().getSExtValue();
-      else
-        stepConstant = 1;
-    }
-    return llvm::divideCeilSigned(*ubConstant - *lbConstant, *stepConstant);
-  }
-  return {};
-}
 
 void getEnclosingLoops(Operation &op, SmallVector<LoopLikeOpInterface> &ops) {
   Operation *currOp = op.getParentOp();
@@ -170,15 +182,13 @@ std::optional<ConstantIntRanges> maybeGetAssumedRange(Operation *assumption,
   if (auto constValue = maybeConstantIntValue) {
     unsigned bitWidth = ConstantIntRanges::getStorageBitwidth(anchor.getType());
     assert(bitWidth > 0 && "expected non-zero bitwdith");
-    APInt apVal = {bitWidth, static_cast<uint64_t>(*constValue), isSigned};
-    APInt min, max;
-    if (isSigned) {
-      min = APInt::getSignedMinValue(bitWidth);
+    APInt apVal = {bitWidth, static_cast<uint64_t>(*constValue), isSigned},
+          min = APInt::getZero(bitWidth);
+    APInt max;
+    if (isSigned)
       max = APInt::getSignedMaxValue(bitWidth);
-    } else {
-      min = APInt::getMinValue(bitWidth);
+    else
       max = APInt::getMaxValue(bitWidth);
-    }
 
     switch (cmpOp.getPredicate()) {
     case arith::CmpIPredicate::eq:
@@ -288,6 +298,9 @@ TritonIntegerRangeAnalysis::maybeGetAssumedRange(Value anchor) const {
 void TritonIntegerRangeAnalysis::setToEntryState(
     dataflow::IntegerValueRangeLattice *lattice) {
   auto anchor = lattice->getAnchor();
+  if (!llvm::isa<IndexType>(getElementTypeOrSelf(anchor)) &&
+      !llvm::isa<IntegerType>(getElementTypeOrSelf(anchor)))
+    return;
   IntegerValueRange range = IntegerValueRange::getMaxRange(anchor);
   if (auto maybeRange = maybeGetAssumedRange(anchor))
     range = *maybeRange;
@@ -330,7 +343,7 @@ LogicalResult TritonIntegerRangeAnalysis::visitOperation(
       if (changed == ChangeResult::Change) {
         DBGS() << "Inferred range for ";
         v.printAsOperand(llvm::dbgs(), {});
-        llvm::dbgs() << " to " << incomingRange << "\n";
+        llvm::dbgs() << " to " << incomingRange_ << "\n";
       }
     });
     propagateIfChanged(lattice, changed);
@@ -429,6 +442,13 @@ void TritonIntegerRangeAnalysis::visitRegionSuccessors(
     ProgramPoint *point, RegionBranchOpInterface branch,
     RegionBranchPoint successor,
     ArrayRef<dataflow::AbstractSparseLattice *> abstractLattices) {
+  LLVM_DEBUG({
+    DBGS() << "Inferring ranges for ";
+    OpPrintingFlags flags;
+    flags.skipRegions(true);
+    branch.print(llvm::dbgs(), flags);
+    llvm::dbgs() << "\n";
+  });
   SmallVector<dataflow::IntegerValueRangeLattice *> lattices;
   for (auto abstractLat : abstractLattices) {
     lattices.push_back(
@@ -437,18 +457,34 @@ void TritonIntegerRangeAnalysis::visitRegionSuccessors(
   // Initialize loop trip counts
   LoopLikeOpInterface loop =
       llvm::dyn_cast<LoopLikeOpInterface>(branch.getOperation());
-  if (loop && !loopTripCounts.contains(loop)) {
-    SmallVector<LoopLikeOpInterface> loops{loop};
+  if (loop) {
+    if (!loopTripCounts.contains(loop)) {
+      loopTripCounts[loop] = std::numeric_limits<int64_t>::max();
+      for (auto argLat : lattices)
+        loopVisits[{loop, argLat}] = 0;
+    }
+
+    SmallVector loops{loop};
     getEnclosingLoops(*loop, loops);
-    int64_t loopTripCount = std::accumulate(
-        loops.begin(), loops.end(), (int64_t)1,
-        [this](int64_t accum, LoopLikeOpInterface loop) {
-          return accum * maybeGetTripCount(loop, this)
-                             .value_or(kDefaultMaxTripCount + 1);
-        });
-    loopTripCounts[loop] = loopTripCount;
-    for (auto argLat : lattices)
-      loopVisits[{loop, argLat}] = 0;
+    int64_t loopTripCount =
+        std::accumulate(loops.begin(), loops.end(), (int64_t)1,
+                        [this](int64_t accum, LoopLikeOpInterface loop) {
+                          return accum * maybeGetTripCount(loop).value_or(
+                                             kDefaultMaxTripCount + 1);
+                        });
+    LLVM_DEBUG({
+      DBGS() << "Trip count for ";
+      OpPrintingFlags flags;
+      flags.skipRegions(true);
+      loop->print(llvm::dbgs(), flags);
+      llvm::dbgs() << "\n";
+      DBGS() << " --> " << loopTripCount << '\n';
+    });
+    if (loopTripCount < loopTripCounts[loop]) {
+      emitRemark(loop.getLoc(),
+                 "inferred trip count: " + std::to_string(loopTripCount));
+      loopTripCounts[loop] = loopTripCount;
+    }
   }
 
   const auto *predecessors =
@@ -500,6 +536,7 @@ void TritonIntegerRangeAnalysis::visitRegionSuccessors(
       // If we've "run the loop" #tripcount times, stop propagating.
       if (loop && loopVisits[loopArgLat] >= loopTripCounts[loop])
         continue;
+
       ChangeResult changed;
       if (loop && loopTripCounts[loop] > kDefaultMaxTripCount) {
         // If the loop's tripcount is too large, infer the maximum range for
@@ -510,7 +547,15 @@ void TritonIntegerRangeAnalysis::visitRegionSuccessors(
         changed = argLat->join(IntegerValueRange::getMaxRange(oper));
       } else {
         // Else, propagate pred operands.
-        changed = argLat->join(*getLatticeElementFor(point, oper));
+        auto operLat = *getLatticeElementFor(point, oper);
+        changed = argLat->join(operLat);
+        LLVM_DEBUG({
+          if (changed == ChangeResult::Change) {
+            DBGS() << "Operand lattice ";
+            oper.printAsOperand(llvm::dbgs(), {});
+            llvm::dbgs() << " --> " << operLat.getValue() << "\n";
+          }
+        });
       }
       propagateIfChanged(argLat, changed);
       // Only increase the loop visitation count if have actually update the
