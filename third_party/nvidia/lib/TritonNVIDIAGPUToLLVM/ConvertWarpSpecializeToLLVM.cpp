@@ -216,6 +216,23 @@ static LogicalResult rewriteWarpGroupBarriers(LLVM::LLVMFuncOp func,
         bar.erase();
       });
     }
+
+    if (auto actRegisters = op.getActualRegisters()) {
+      int maxnreg = func->getParentOfType<ModuleOp>()
+                        ->getAttrOfType<IntegerAttr>(AttrMaxRegistersName)
+                        .getInt();
+      auto b = OpBuilder::atBlockBegin(&op.getDefaultRegion().front());
+      b.create<NVVM::SetMaxRegisterOp>(op.getLoc(), actRegisters->front(),
+                                       NVVM::SetMaxRegisterAction::increase);
+      for (auto [actRegs, region] :
+           llvm::zip(actRegisters->drop_front(), op.getPartitionRegions())) {
+        if (actRegs == maxnreg)
+          continue;
+        auto action = actRegs < maxnreg ? NVVM::SetMaxRegisterAction::decrease
+                                        : NVVM::SetMaxRegisterAction::increase;
+        b.create<NVVM::SetMaxRegisterOp>(op.getLoc(), actRegs, action);
+      }
+    }
   }
 
   return success();
