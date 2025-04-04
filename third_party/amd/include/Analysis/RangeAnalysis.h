@@ -97,6 +97,8 @@ struct TritonIntegerRangeAnalysis : dataflow::IntegerRangeAnalysis {
   ///   [0, 2147483647] ∩ [-2147483648, 128] = [0, 128]
   std::optional<ConstantIntRanges> maybeGetAssumedRange(Value anchor) const;
 
+  int64_t getTotalLoopTripCount(LoopLikeOpInterface loop);
+
   /// Trip counts of all loops with static loop bounds contained under the root
   /// operation being analyzed. Note, nested loops have trip counts computed as
   /// a product of enclosing loops; i.e. for
