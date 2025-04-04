@@ -22,6 +22,11 @@ def is_pingpong_enabled(arch):
     return os.getenv("TRITON_HIP_USE_BLOCK_PINGPONG", default) == "1"
 
 
+def is_in_thread_transpose_enabled(arch):
+    default = "1" if arch == "gfx942" else "0"
+    return os.getenv("TRITON_HIP_USE_IN_THREAD_TRANSPOSE", default) == "1"
+
+
 @dataclass(frozen=True)
 class HIPOptions:
     num_warps: int = 4
@@ -253,7 +258,7 @@ class HIPBackend(BaseBackend):
         passes.ttgpuir.add_optimize_dot_operands(pm, True)
         passes.ttgpuir.add_remove_layout_conversions(pm)
         passes.ttgpuir.add_reduce_data_duplication(pm)
-        if os.environ.get("TRITON_HIP_USE_IN_THREAD_TRANSPOSE", "0") == "1":
+        if is_in_thread_transpose_enabled(options.arch):
             amd.passes.ttgpuir.add_in_thread_transpose(pm)
             passes.ttgpuir.add_remove_layout_conversions(pm)
         if amd.has_matrix_core_feature(options.arch):
