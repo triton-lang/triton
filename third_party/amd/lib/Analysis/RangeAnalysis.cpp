@@ -10,7 +10,6 @@
 #include "llvm/ADT/TypeSwitch.h"
 #include "llvm/Support/Debug.h"
 
-#include <llvm/IR/Constants.h>
 #include <numeric>
 #include <optional>
 
@@ -295,6 +294,17 @@ TritonIntegerRangeAnalysis::maybeGetAssumedRange(Value anchor) const {
   return constIntRange;
 }
 
+int64_t
+TritonIntegerRangeAnalysis::getTotalLoopTripCount(LoopLikeOpInterface loop) {
+  SmallVector loops{loop};
+  getEnclosingLoops(*loop, loops);
+  return std::accumulate(loops.begin(), loops.end(), (int64_t)1,
+                         [this](int64_t accum, LoopLikeOpInterface loop) {
+                           return accum * maybeGetTripCount(loop).value_or(
+                                              kDefaultMaxTripCount + 1);
+                         });
+}
+
 void TritonIntegerRangeAnalysis::setToEntryState(
     dataflow::IntegerValueRangeLattice *lattice) {
   auto anchor = lattice->getAnchor();
@@ -464,14 +474,7 @@ void TritonIntegerRangeAnalysis::visitRegionSuccessors(
         loopVisits[{loop, argLat}] = 0;
     }
 
-    SmallVector loops{loop};
-    getEnclosingLoops(*loop, loops);
-    int64_t loopTripCount =
-        std::accumulate(loops.begin(), loops.end(), (int64_t)1,
-                        [this](int64_t accum, LoopLikeOpInterface loop) {
-                          return accum * maybeGetTripCount(loop).value_or(
-                                             kDefaultMaxTripCount + 1);
-                        });
+    int64_t loopTripCount = getTotalLoopTripCount(loop);
     LLVM_DEBUG({
       DBGS() << "Trip count for ";
       OpPrintingFlags flags;
@@ -481,8 +484,6 @@ void TritonIntegerRangeAnalysis::visitRegionSuccessors(
       DBGS() << " --> " << loopTripCount << '\n';
     });
     if (loopTripCount < loopTripCounts[loop]) {
-      emitRemark(loop.getLoc(),
-                 "inferred trip count: " + std::to_string(loopTripCount));
       loopTripCounts[loop] = loopTripCount;
     }
   }
