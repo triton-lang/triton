@@ -16,3 +16,8 @@ mlir_tablegen(OpsEnums.h.inc -gen-enum-decls)
 mlir_tablegen(OpsEnums.cpp.inc -gen-enum-defs)
 add_mlir_doc(ProtonGPUAttrDefs ProtonGPUAttrDefs dialects/ -gen-attrdef-doc)
 add_public_tablegen_target(ProtonGPUAttrDefsIncGen)
+
+set(LLVM_TARGET_DEFINITIONS ProtonGPUTypes.td)
+mlir_tablegen(Types.h.inc -gen-typedef-decls)
+mlir_tablegen(Types.cpp.inc -gen-typedef-defs)
+add_public_tablegen_target(ProtonGPUTypesIncGen)

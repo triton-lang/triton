@@ -12,6 +12,7 @@ include "triton/Dialect/Triton/IR/TritonInterfaces.td"
 include "proton/dialect/include/Dialect/Proton/IR/ProtonAttrDefs.td"
 include "proton/dialect/include/Dialect/ProtonGPU/IR/ProtonGPUDialect.td"
 include "proton/dialect/include/Dialect/ProtonGPU/IR/ProtonGPUAttrDefs.td"
+include "proton/dialect/include/Dialect/ProtonGPU/IR/ProtonGPUTypes.td"
 
 def GlobalMemory : Resource<"::mlir::triton::GlobalMemory">;
 def SharedMemory : Resource<"::mlir::triton::gpu::SharedMemory">;
@@ -34,8 +35,7 @@ def PTG_CircularStoreOp : PTG_Op<"circular_store", [
     ins TTG_MemDescType: $data,
     TT_PtrType :$indexPtr,
     I32: $counter,
-    I32:$segBaseOffset,
-    I1:$isWriter,
+    PTG_SegmentBase:$seg,
     UnitAttr: $isStart,
     I32Attr: $scopeId
   );
@@ -43,8 +43,8 @@ def PTG_CircularStoreOp : PTG_Op<"circular_store", [
   let hasVerifier = 1;
 
   let assemblyFormat = [{
-    (`start` $isStart^):(`end`)? $data `,` $indexPtr `,` $counter `,` $segBaseOffset `,` $isWriter attr-dict `:`
-    qualified(type($data)) `,` type($indexPtr) `,` type($counter) `,` type($segBaseOffset) `,` type($isWriter)
+    (`start` $isStart^):(`end`)? $data `,` $indexPtr `,` $counter `,` $seg attr-dict `:`
+    qualified(type($data)) `,` type($indexPtr) `,` type($counter) `,` type($seg)
   }];
 }
 
@@ -122,32 +122,18 @@ def PTG_SegmentBaseOp : PTG_Op<"segment_base", [Pure]> {
   let summary = "Get the base offset of the segment of the profiler internal buffer";
 
   let description = [{
-      Get the base offset of the segment that the current thread belongs to.
-      The internal profiler buffer is partitioned into memory segments storing the
-      profiling data of different warps.
-
-      Return `-1` if the current thread is not associated with any segment.
+      Get the location of the memory segment in the profiling buffer.
+      The internal profiler buffer is partitioned into segments.
+      If `selectIds` is none, then it is the full list of ids.
   }];
   let arguments = (ins
     TTG_MemDescType: $data,
-    DefaultValuedAttr<GranularityAttr, "Granularity::ALL">:$granularity,
-    OptionalAttr<DenseI32ArrayAttr>:$warpIds
+    DefaultValuedAttr<GranularityAttr, "Granularity::WARP">:$granularity,
+    OptionalAttr<DenseI32ArrayAttr>:$selectIds
   );
-  let results = (outs I32:$segBaseOffset);
+  let results = (outs PTG_SegmentBase:$segBaseOffset);
+  let hasVerifier = 1;
   let assemblyFormat = "$data `,` attr-dict `:` qualified(type($data)) `->` type($segBaseOffset)";
-}
-
-def PTG_CheckSegWriterOp : PTG_Op<"check_segment_writer", [Pure]> {
-  let summary = "Check if the current thread is a segment writer";
-
-  let description = [{
-      Check if the current thread is a segment writer. A segment writer is responsible
-      for writing the profiling data of into the segment memory.
-  }];
-
-  let arguments = (ins I32:$segBaseOffset);
-  let results = (outs I1:$res);
-  let assemblyFormat = [{$segBaseOffset attr-dict `:` type($res)}];
 }
 
 def PTG_StackAllocOp : PTG_Op<"stack_alloc", [MemoryEffects<[MemAlloc<GlobalMemory>]>]> {

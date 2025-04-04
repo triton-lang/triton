@@ -25,24 +25,30 @@ namespace proton {
 
 namespace {
 
-void parseWarpIds(std::string warpIds,
-                  llvm::SmallVectorImpl<int32_t> &warpIdVec) {
-  std::stringstream ss(warpIds);
-  std::string warpid;
+const std::unordered_map<std::string, proton::gpu::Granularity> granularityMap =
+    {{"cta", proton::gpu::Granularity::CTA},
+     {"warp", proton::gpu::Granularity::WARP},
+     {"warpgroup_2", proton::gpu::Granularity::WARPGROUP_2},
+     {"warpgroup_4", proton::gpu::Granularity::WARPGROUP_4},
+     {"warpgroup_8", proton::gpu::Granularity::WARPGROUP_8}};
 
-  while (std::getline(ss, warpid, ',')) {
-    warpIdVec.push_back(std::stoi(warpid));
+void parseSelectIds(std::string selectIds,
+                    llvm::SmallVectorImpl<int32_t> &selectIdVec) {
+  std::stringstream ss(selectIds);
+  std::string id;
+  // TODO(fywkevin): handle duplicated ids and sort them in ascending order.
+  while (std::getline(ss, id, ',')) {
+    selectIdVec.push_back(std::stoi(id));
   }
 }
 
 class RecordOpCircularRewrite : public OpRewritePattern<proton::RecordOp> {
 public:
   RecordOpCircularRewrite(MLIRContext *ctx, Value buffer, Value index,
-                          Value segmentBase, Value isWriter, StringRef metric,
+                          Value segmentBase, StringRef metric,
                           ModuleScopeIdAllocation &scopeInfo)
       : OpRewritePattern::OpRewritePattern(ctx), buffer(buffer), index(index),
-        segmentBase(segmentBase), isWriter(isWriter), metric(metric),
-        scopeInfo(scopeInfo) {}
+        segmentBase(segmentBase), metric(metric), scopeInfo(scopeInfo) {}
 
   LogicalResult matchAndRewrite(proton::RecordOp op,
                                 PatternRewriter &rewriter) const override {
@@ -56,9 +62,9 @@ public:
         proton::Metric::CYCLE);
 
     int scopeId = scopeInfo.getOpScopeId(op);
-    rewriter.create<proton::gpu::CircularStoreOp>(
-        op.getLoc(), buffer, index, counter, segmentBase, isWriter,
-        op.getIsStart(), scopeId);
+    rewriter.create<proton::gpu::CircularStoreOp>(op.getLoc(), buffer, index,
+                                                  counter, segmentBase,
+                                                  op.getIsStart(), scopeId);
 
     rewriter.eraseOp(op);
     return success();
@@ -68,7 +74,6 @@ private:
   Value buffer;
   Value index;
   Value segmentBase;
-  Value isWriter;
   StringRef metric;
   ModuleScopeIdAllocation &scopeInfo;
 };
@@ -78,14 +83,14 @@ class ConvertProtonToProtonGPUPass
     : public impl::ConvertProtonToProtonGPUBase<ConvertProtonToProtonGPUPass> {
 public:
   ConvertProtonToProtonGPUPass(std::string metric, std::string granularity,
-                               std::string warpIds, int32_t maxSharedMem,
+                               std::string selectIds, int32_t maxSharedMem,
                                int32_t scratchMem, int32_t alignment,
                                std::string strategy, std::string bufferType,
                                int32_t bufferSize)
       : ConvertProtonToProtonGPUBase<ConvertProtonToProtonGPUPass>() {
     this->metric = metric;
     this->granularity = granularity;
-    this->warpIds = warpIds;
+    this->selectIds = selectIds;
     this->maxSharedMem = maxSharedMem;
     this->scratchMem = scratchMem;
     this->alignment = alignment;
@@ -102,15 +107,18 @@ public:
     builder.setInsertionPointToStart(&func.getBody().front());
     int numWarps = mlir::triton::gpu::lookupNumWarps(mod);
 
-    auto granularityEnum = granularity == "all"
-                               ? proton::gpu::Granularity::ALL
-                               : proton::gpu::Granularity::SELECT;
+    auto granularityEnum = granularityMap.at(granularity);
 
-    llvm::SmallVector<int32_t, 8> warpIdVec;
+    llvm::SmallVector<int32_t, 8> selectIdVec;
     int segmentNum = numWarps;
-    if (granularityEnum == proton::gpu::Granularity::SELECT) {
-      parseWarpIds(warpIds, warpIdVec);
-      segmentNum = warpIdVec.size();
+    if (selectIds != "") {
+      parseSelectIds(selectIds, selectIdVec);
+      segmentNum = selectIdVec.size();
+      if (segmentNum && granularityEnum != proton::gpu::Granularity::WARP) {
+        mlir::emitError(
+            loc, "only warp granularity supports selective ids for now.");
+        return failure();
+      }
     }
 
     int sharedMemUsed = 0;
@@ -120,18 +128,20 @@ public:
 
     const int bytesPerEntry = proton::gpu::getBytesPerClockEntry();
     const int wordsPerEntry = bytesPerEntry / 4; // 1 word = 4 bytes
-    const int circularHeaderSize = 16;           // byte size
+    const int circularHeaderSize =
+        proton::gpu::getCircularHeaderSize(); // byte size
 
-    // We take any available shared memory left to allocate the circular buffer.
-    // The buffer size per segment must be power of 2.
+    // We take any available shared memory left to allocate the circular
+    // buffer. The buffer size per segment must be power of 2.
     int segmentByteSize =
         llvm::NextPowerOf2(
             (maxSharedMem - llvm::alignTo(sharedMemUsed, bytesPerEntry)) /
             segmentNum) /
         2;
     int sharedSlots = segmentByteSize * segmentNum / bytesPerEntry;
-    // FIXME(Keren): this is a hack
-    sharedSlots = std::max(sharedSlots, 1);
+    // FIXME(fywkevin): this is a hack, remove this after we have decent
+    // triton_proton.cc python bindings for passing proper args.
+    sharedSlots = std::max(sharedSlots, 32);
     int allocSharedMemSize = sharedSlots * bytesPerEntry;
     int allocBufferSize = bufferSize > 0 ? bufferSize : allocSharedMemSize;
     if (!allocBufferSize) {
@@ -201,16 +211,13 @@ public:
     Value index = builder.create<proton::gpu::InitBufferIndexOp>(loc, ptrTy);
 
     Value segmentBase = builder.create<proton::gpu::SegmentBaseOp>(
-        loc, mlir::IntegerType::get(context, 32), buffer, granularityEnum,
-        builder.getDenseI32ArrayAttr(warpIdVec));
-
-    Value isWriter = builder.create<proton::gpu::CheckSegWriterOp>(
-        loc, mlir::IntegerType::get(context, 1), segmentBase);
+        loc, proton::gpu::SegmentBaseType::get(context), buffer,
+        granularityEnum, builder.getDenseI32ArrayAttr(selectIdVec));
 
     mlir::RewritePatternSet patterns(context);
     ModuleScopeIdAllocation &scopeInfo = getAnalysis<ModuleScopeIdAllocation>();
     patterns.add<RecordOpCircularRewrite>(context, buffer, index, segmentBase,
-                                          isWriter, metric, scopeInfo);
+                                          metric, scopeInfo);
     if (applyPatternsGreedily(mod, std::move(patterns)).failed())
       return failure();
 
@@ -271,8 +278,8 @@ public:
       return;
     }
 
-    if (granularity != "all" && granularity != "select") {
-      mlir::emitError(loc, "granularity must be all or select");
+    if (!granularityMap.count(granularity)) {
+      mlir::emitError(loc, "granularity not supported");
       signalPassFailure();
       return;
     }
@@ -290,11 +297,11 @@ public:
 };
 
 std::unique_ptr<OperationPass<ModuleOp>> createConvertProtonToProtonGPUPass(
-    std::string metric, std::string granularity, std::string warpIds,
+    std::string metric, std::string granularity, std::string selectIds,
     int32_t maxSharedMem, int32_t scratchMem, int32_t alignment,
     std::string strategy, std::string bufferType, int32_t bufferSize) {
   return std::make_unique<ConvertProtonToProtonGPUPass>(
-      metric, granularity, warpIds, maxSharedMem, scratchMem, alignment,
+      metric, granularity, selectIds, maxSharedMem, scratchMem, alignment,
       strategy, bufferType, bufferSize);
 }
 

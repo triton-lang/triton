@@ -19,6 +19,9 @@ public:
   virtual Value clock(ConversionPatternRewriter &rewriter, Location loc,
                       bool isClock64) const = 0;
 
+  virtual Value hardwareId(ConversionPatternRewriter &rewriter,
+                           Location loc) const = 0;
+
   virtual int getAddressSpace(Attribute addressSpace) const = 0;
 
   virtual ~TargetInfoBase() = default;

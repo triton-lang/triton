@@ -4,6 +4,7 @@
 #include "mlir/Dialect/LLVMIR/LLVMTypes.h"
 #include "mlir/Dialect/LLVMIR/NVVMDialect.h"
 #include "third_party/nvidia/include/TritonNVIDIAGPUToLLVM/PTXAsmFormat.h"
+#include "third_party/nvidia/lib/TritonNVIDIAGPUToLLVM/Utility.h" // TODO(fywkevin): move Utility.h to include/
 #include "llvm/Support/MathExtras.h"
 
 namespace mlir::triton::proton::gpu::NVIDIA {
@@ -23,6 +24,11 @@ Value TargetInfo::clock(ConversionPatternRewriter &rewriter, Location loc,
       builder.launch(rewriter, loc, rewriter.getIntegerType(width), true);
 
   return val;
+}
+
+Value TargetInfo::hardwareId(ConversionPatternRewriter &rewriter,
+                             Location loc) const {
+  return LLVM::NVIDIA::getSRegValue(rewriter, loc, "smid");
 }
 
 int TargetInfo::getAddressSpace(Attribute addressSpace) const {

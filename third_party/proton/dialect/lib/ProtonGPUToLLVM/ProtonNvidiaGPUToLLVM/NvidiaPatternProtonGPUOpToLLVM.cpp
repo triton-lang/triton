@@ -54,11 +54,12 @@ struct CircularStoreOpConversion
     b.store(newIdx, indexPtr);
 
     // Compute the segment size in word (4 bytes).
-    auto segbaseOp = mlir::cast<proton::gpu::SegmentBaseOp>(
-        op.getSegBaseOffset().getDefiningOp());
+    auto segbaseOp =
+        mlir::cast<proton::gpu::SegmentBaseOp>(op.getSeg().getDefiningOp());
     int selectedWarpNum = mlir::triton::gpu::lookupNumWarps(mod);
-    if (segbaseOp.getGranularity() == proton::gpu::Granularity::SELECT)
-      selectedWarpNum = segbaseOp.getWarpIdsAttr().asArrayRef().size();
+    auto selectedIds = segbaseOp.getSelectIdsAttr().asArrayRef();
+    if (!selectedIds.empty())
+      selectedWarpNum = selectedIds.size();
     auto memDescTy =
         mlir::cast<triton::gpu::MemDescType>(op.getData().getType());
     const int bufferSizeInBytes =
@@ -67,7 +68,7 @@ struct CircularStoreOpConversion
     const int segmentWordSize = bufferSizeInBytes / selectedWarpNum / 4;
 
     // Compute the actual base offset (with urem as circular buffer).
-    Value segmentBase = adaptor.getSegBaseOffset();
+    Value segmentBase = adaptor.getSeg();
     Value tagOffset =
         b.add(segmentBase, b.urem(curIdx, b.i32_val(segmentWordSize)));
 
@@ -77,44 +78,32 @@ struct CircularStoreOpConversion
                                 : b.i32_val(1 << 31 | op.getScopeId());
     Value clock = op.getCounter();
     Value valsVec = packLLVector(loc, {tag, clock}, rewriter);
-    targetInfo.getTritonTargetInfo().storeDShared(
-        rewriter, loc, vecPtr, std::nullopt, valsVec,
-        /*pred=*/adaptor.getIsWriter());
 
-    rewriter.eraseOp(op);
-    return success();
-  }
-
-protected:
-  const proton::gpu::TargetInfoBase &targetInfo;
-};
-
-struct CheckSegWriterOpConversion
-    : public ConvertOpToLLVMPattern<
-          mlir::triton::proton::gpu::CheckSegWriterOp> {
-  explicit CheckSegWriterOpConversion(
-      LLVMTypeConverter &typeConverter,
-      const proton::gpu::TargetInfoBase &targetInfo, PatternBenefit benefit)
-      : mlir::ConvertOpToLLVMPattern<
-            mlir::triton::proton::gpu::CheckSegWriterOp>(typeConverter,
-                                                         benefit),
-        targetInfo(targetInfo) {}
-
-  LogicalResult
-  matchAndRewrite(mlir::triton::proton::gpu::CheckSegWriterOp op,
-                  OpAdaptor adaptor,
-                  ConversionPatternRewriter &rewriter) const override {
-    auto loc = op.getLoc();
-    auto b = TritonLLVMOpBuilder(loc, rewriter);
-    auto mod = op.getOperation()->getParentOfType<ModuleOp>();
+    // Compute the predicate for the writer.
     const int warpSize = triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod);
-    Value segment = adaptor.getSegBaseOffset();
-    Value isCurWarpEnabled = b.icmp_eq(segment, b.i32_val(-1));
     Value curThreadId = getThreadId(rewriter, loc);
     Value isWarpMaster =
         b.icmp_eq(b.urem(curThreadId, b.i32_val(warpSize)), b.i32_val(0));
-    Value isWriter = b.and_(isCurWarpEnabled, isWarpMaster);
-    rewriter.replaceOp(op, isWriter);
+    Value isWriter;
+
+    auto granularity = segbaseOp.getGranularity();
+    if (selectedIds.empty()) {
+      if (granularity == proton::gpu::Granularity::WARP) {
+        isWriter = isWarpMaster;
+      } else {
+        llvm::report_fatal_error(
+            "segment address specialization not implemented yet");
+      }
+    } else {
+      Value isCurWarpEnabled = b.icmp_ne(segmentBase, b.i32_val(-1));
+      isWriter = b.and_(isCurWarpEnabled, isWarpMaster);
+    }
+
+    targetInfo.getTritonTargetInfo().storeDShared(rewriter, loc, vecPtr,
+                                                  std::nullopt, valsVec,
+                                                  /*pred=*/isWriter);
+
+    rewriter.eraseOp(op);
     return success();
   }
 
@@ -130,6 +119,5 @@ void populateProtonGPUOpNvidiaPatterns(LLVMTypeConverter &typeConverter,
                                        const TargetInfo &targetInfo,
                                        PatternBenefit benefit) {
   patterns.add<CircularStoreOpConversion>(typeConverter, targetInfo, benefit);
-  patterns.add<CheckSegWriterOpConversion>(typeConverter, targetInfo, benefit);
 }
 } // namespace mlir::triton::proton::gpu::NVIDIA

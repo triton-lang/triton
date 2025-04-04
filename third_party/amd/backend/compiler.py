@@ -275,8 +275,7 @@ class HIPBackend(BaseBackend):
         passes.common.add_canonicalizer(pm)
         passes.common.add_cse(pm)
         passes.common.add_symbol_dce(pm)
-        if "ttir" in HIPBackend.instrumentation:
-            HIPBackend.instrumentation["ttir"](pm)
+
         pm.run(mod)
         return mod
 
@@ -298,6 +297,9 @@ class HIPBackend(BaseBackend):
         passes.convert.add_index_to_llvmir(pm)
 
         passes.ttgpuir.add_allocate_shared_memory(pm)
+        # instrumentation point here so we can override IRs above (e.g., ttir and ttgir)
+        if "ttgpuir" in HIPBackend.instrumentation:
+            HIPBackend.instrumentation["ttgpuir"](pm)
         ## __HIP_FTZ is used to control the denorm flushing behavior of exp2 op as follows:
         ## 1. If __HIP_FTZ = 1, exp2 flushes denorms in input and output regardless
         ##    of the value of kernel arg `allow_flush_denorm`.
@@ -320,8 +322,8 @@ class HIPBackend(BaseBackend):
         if os.environ.get("TRITON_DISABLE_LINE_INFO", "0") == "0":
             passes.llvmir.add_di_scope(pm)
         amd.passes.ttgpuir.add_builtin_func_to_llvmir(pm, __HIP_FTZ)
-        if "ttgpuir" in HIPBackend.instrumentation:
-            HIPBackend.instrumentation["ttgpuir"](pm)
+        if "llvmir" in HIPBackend.instrumentation:
+            HIPBackend.instrumentation["llvmir"](pm)
         pm.run(mod)
 
         # LLVM-IR (MLIR) -> LLVM-IR (LLVM)

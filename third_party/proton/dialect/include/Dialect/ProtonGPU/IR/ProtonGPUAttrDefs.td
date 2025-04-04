@@ -8,8 +8,11 @@ include "proton/dialect/include/Dialect/ProtonGPU/IR/ProtonGPUDialect.td"
 def GranularityAttr : I32EnumAttr<
   "Granularity", "",
   [
-    I32EnumAttrCase<"ALL", 0, "all">,
-    I32EnumAttrCase<"SELECT", 1, "select">,
+    I32EnumAttrCase<"CTA", 0, "cta">,
+    I32EnumAttrCase<"WARP", 1, "warp">,
+    I32EnumAttrCase<"WARPGROUP_2", 2, "warpgroup_2">,
+    I32EnumAttrCase<"WARPGROUP_4", 3, "warpgroup_4">,
+    I32EnumAttrCase<"WARPGROUP_8", 4, "warpgroup_8">
   ]> {
   let cppNamespace = "::mlir::triton::proton::gpu";
 }

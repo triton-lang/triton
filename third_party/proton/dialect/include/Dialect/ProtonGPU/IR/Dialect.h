@@ -7,6 +7,7 @@
 #include "proton/dialect/include/Dialect/Proton/IR/Dialect.h"
 #include "proton/dialect/include/Dialect/ProtonGPU/IR/Dialect.h.inc"
 #include "proton/dialect/include/Dialect/ProtonGPU/IR/OpsEnums.h.inc"
+#include "proton/dialect/include/Dialect/ProtonGPU/IR/Types.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 
@@ -22,6 +23,8 @@ namespace proton {
 namespace gpu {
 
 const int getBytesPerClockEntry();
+
+const int getCircularHeaderSize();
 
 } // namespace gpu
 } // namespace proton

@@ -25,7 +25,6 @@ module attributes {"ttg.num-warps" = 8 : i32} {
     // CHECK-NEXT: proton_gpu.init_buffer_index
     // CHECK-NEXT: proton_gpu.segment_base
     // CHECK-NEXT: proton_gpu.segment_base
-    // CHECK-NEXT: proton_gpu.check_segment_writer
     // CHECK-NEXT: proton_gpu.read_counter
     // CHECK-NEXT: proton_gpu.circular_store start
     // CHECK-NEXT: gpu.barrier
@@ -35,11 +34,10 @@ module attributes {"ttg.num-warps" = 8 : i32} {
     %stack = proton_gpu.stack_alloc : !ttg.memdesc<64xi32, #shared, #proton_gpu.stack_memory, mutable>
     %1 = proton_gpu.global_scratch_alloc {alignment = 128 : i32, nbytes = 384 : i32} : !tt.ptr<i32>
     %2 = proton_gpu.init_buffer_index : <i32, 5>
-    %seg = proton_gpu.segment_base %0, {granularity = 1 : i32, warpIds = array<i32: 0, 1, 2, 3>} : !ttg.memdesc<64xi32, #shared, #smem, mutable> -> i32
-    %seg_stack = proton_gpu.segment_base %stack, {granularity = 1 : i32, warpIds = array<i32>} : !ttg.memdesc<64xi32, #shared, #proton_gpu.stack_memory, mutable> -> i32
-    %writer = proton_gpu.check_segment_writer %seg : i1
+    %seg = proton_gpu.segment_base %0, {selectIds = array<i32: 0, 1, 2, 3>} : !ttg.memdesc<64xi32, #shared, #smem, mutable> -> !proton_gpu.seg
+    %seg_stack = proton_gpu.segment_base %stack, {granularity = 2 : i32, selectIds = array<i32>} : !ttg.memdesc<64xi32, #shared, #proton_gpu.stack_memory, mutable> -> !proton_gpu.seg
     %3 = proton_gpu.read_counter : i32
-    proton_gpu.circular_store start %0, %2, %3, %seg, %writer {scopeId = 0 : i32} : !ttg.memdesc<64xi32, #shared, #smem, mutable>, <i32, 5>, i32, i32, i1
+    proton_gpu.circular_store start %0, %2, %3, %seg {scopeId = 0 : i32} : !ttg.memdesc<64xi32, #shared, #smem, mutable>, <i32, 5>, i32, !proton_gpu.seg
     gpu.barrier
     proton_gpu.finalize %0, %2, %1 : !ttg.memdesc<64xi32, #shared, #smem, mutable>, <i32, 5>, <i32>
     tt.return
