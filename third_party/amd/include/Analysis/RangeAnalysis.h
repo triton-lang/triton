@@ -46,6 +46,8 @@ struct TritonIntegerRangeAnalysis : dataflow::IntegerRangeAnalysis {
       ArrayRef<const dataflow::IntegerValueRangeLattice *> operands,
       ArrayRef<dataflow::IntegerValueRangeLattice *> resultsLattices) override;
 
+  std::optional<int64_t> maybeGetTripCount(LoopLikeOpInterface loop);
+
   /// This method (which overloads
   /// AbstractSparseForwardDataFlowAnalysis::visitRegionSuccessors)
   /// implements "abstract interpretation" of loops with statically known bounds
