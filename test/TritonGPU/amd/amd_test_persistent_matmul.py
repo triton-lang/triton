@@ -9,7 +9,6 @@ def print_test_name_and_run(f):
     f()
 
 
-# CHECK: Test: test_dump_kernel
 @triton.jit
 def matmul_kernel_persistent(a_ptr, b_ptr, c_ptr,  #
                              M, N, K,  #
@@ -110,6 +109,7 @@ def matmul_kernel_persistent(a_ptr, b_ptr, c_ptr,  #
             accumulator = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=tl.float32)
 
 
+# CHECK: Test: test_matmul_kernel_persistent
 @print_test_name_and_run
 def test_matmul_kernel_persistent():
 
