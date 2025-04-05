@@ -222,7 +222,8 @@ static LogicalResult rewriteWarpGroupBarriers(LLVM::LLVMFuncOp func,
                         ->getAttrOfType<IntegerAttr>(AttrMaxRegistersName)
                         .getInt();
       auto b = OpBuilder::atBlockBegin(&op.getDefaultRegion().front());
-      b.create<NVVM::SetMaxRegisterOp>(op.getLoc(), actRegisters->front(),
+      b.create<NVVM::SetMaxRegisterOp>(op.getLoc(),
+                                       std::min(256, actRegisters->front()),
                                        NVVM::SetMaxRegisterAction::increase);
       for (auto [actRegs, region] :
            llvm::zip(actRegisters->drop_front(), op.getPartitionRegions())) {
@@ -231,7 +232,8 @@ static LogicalResult rewriteWarpGroupBarriers(LLVM::LLVMFuncOp func,
         auto action = actRegs < maxnreg ? NVVM::SetMaxRegisterAction::decrease
                                         : NVVM::SetMaxRegisterAction::increase;
         b.setInsertionPointToStart(&region->front());
-        b.create<NVVM::SetMaxRegisterOp>(op.getLoc(), actRegs, action);
+        b.create<NVVM::SetMaxRegisterOp>(op.getLoc(), std::min(256, actRegs),
+                                         action);
       }
     }
   }

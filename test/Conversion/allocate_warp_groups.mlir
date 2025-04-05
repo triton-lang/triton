@@ -70,22 +70,18 @@ tt.func @two_warp_specialize() {
 module attributes {"ttg.num-warps" = 8 : i32} {
 
 tt.func @setmaxnreg() {
-  ttg.warp_specialize() attributes {ttg.partition_reg_usage = [48 : i32, 80 : i32, 48 : i32]}
-  // CHECK: default
+  // CHECK: actualRegisters = array<i32: 208, 80, 80, 80>
+  ttg.warp_specialize() attributes {requestedRegisters = array<i32: 48, 80, 48>}
   default {
-    // CHECK-NEXT: nvvm.setmaxregister increase 208
     ttg.warp_yield
   }
   partition0() num_warps(1) {
-    // CHECK-NEXT: nvvm.setmaxregister decrease 80
     ttg.warp_return
   }
   partition1() num_warps(2) {
-    // CHECK-NEXT: nvvm.setmaxregister decrease 80
     ttg.warp_return
   }
   partition2() num_warps(1) {
-    // CHECK-NEXT: nvvm.setmaxregister decrease 80
     ttg.warp_return
   } : () -> ()
   tt.return
