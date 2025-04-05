@@ -66,7 +66,7 @@ tt.func @two_warp_specialize() {
 
 // -----
 
-// CHECK: module attributes {ttg.maxnreg = 166 : i32
+// CHECK: module attributes {ttg.maxnreg = 168 : i32
 module attributes {"ttg.num-warps" = 8 : i32} {
 
 tt.func @setmaxnreg() {

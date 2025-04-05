@@ -92,8 +92,9 @@ struct AllocateWarpGroups
               op->getAttrOfType<IntegerAttr>(AttrMaxRegistersName)) {
         maxnreg = maxnregAttr.getInt();
       } else {
-        maxnreg = 64000 / (baseNumWarps + op.getTotalPartitionWarps()) /
+        maxnreg = (1 << 16) / (baseNumWarps + op.getTotalPartitionWarps()) /
                   threadsPerWarp;
+        maxnreg = maxnreg / 8 * 8;
       }
 
       // Compute the register deficit over the partition warp groups.
