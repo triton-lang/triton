@@ -181,13 +181,15 @@ std::optional<ConstantIntRanges> maybeGetAssumedRange(Operation *assumption,
   if (auto constValue = maybeConstantIntValue) {
     unsigned bitWidth = ConstantIntRanges::getStorageBitwidth(anchor.getType());
     assert(bitWidth > 0 && "expected non-zero bitwdith");
-    APInt apVal = {bitWidth, static_cast<uint64_t>(*constValue), isSigned},
-          min = APInt::getZero(bitWidth);
-    APInt max;
-    if (isSigned)
+    APInt apVal = {bitWidth, static_cast<uint64_t>(*constValue), isSigned};
+    APInt min, max;
+    if (isSigned) {
+      min = APInt::getSignedMinValue(bitWidth);
       max = APInt::getSignedMaxValue(bitWidth);
-    else
+    } else {
+      min = APInt::getMinValue(bitWidth);
       max = APInt::getMaxValue(bitWidth);
+    }
 
     switch (cmpOp.getPredicate()) {
     case arith::CmpIPredicate::eq:

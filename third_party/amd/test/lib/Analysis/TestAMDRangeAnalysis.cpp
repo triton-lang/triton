@@ -90,12 +90,6 @@ struct TestAMDRangeAnalysisPass
         }
       }
 
-      if (LoopLikeOpInterface loop = llvm::dyn_cast<LoopLikeOpInterface>(op)) {
-        int64_t loopTripCount = rangeAnalysis->getTotalLoopTripCount(loop);
-        emitRemark(loop.getLoc(), "inferred total trip count: " +
-                                      std::to_string(loopTripCount));
-      }
-
       int i = 0;
       for (auto result : results) {
         if (nonNegativePred(result)) {
@@ -108,6 +102,12 @@ struct TestAMDRangeAnalysisPass
           emitRemark(result.getLoc(), nonNegs);
         }
         i++;
+      }
+
+      if (LoopLikeOpInterface loop = llvm::dyn_cast<LoopLikeOpInterface>(op)) {
+        int64_t loopTripCount = rangeAnalysis->getTotalLoopTripCount(loop);
+        emitRemark(loop.getLoc(), "inferred total trip count: " +
+                                      std::to_string(loopTripCount));
       }
     });
   }
