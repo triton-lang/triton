@@ -176,5 +176,21 @@ def NVGPU_TensorMemoryBaseAddress : NVGPU_Op<"tensor_memory_base", [Pure]> {
   let assemblyFormat = "attr-dict";
 }
 
+def NVGPU_TensorMemoryLoadOp : NVGPU_Op<"tensor_memory_load", [MemoryEffects<[MemRead]>]> {
+  let arguments = (ins
+    AnyType:$address,
+    I32Attr:$secondHalfOffset,
+    BoolAttr:$unpacked,
+    I32Attr:$numRegPerMessage,
+    I32Attr:$atomRowsPerThread,
+    I32Attr:$atomColsPerThread,
+    StrAttr:$atomOpShape
+  );
+  let results = (outs Variadic<AnyType>:$results);
+}
+
+def NVGPU_TensorMemoryLoadWaitOp : NVGPU_Op<"tensor_memory_load_wait", [MemoryEffects<[MemWrite]>]> {
+  let assemblyFormat = "attr-dict";
+}
 
 #endif
