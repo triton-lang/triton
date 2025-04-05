@@ -705,7 +705,6 @@ public:
       signalPassFailure();
 
     OpPassManager pm;
-    pm.addPass(mlir::createCanonicalizerPass());
     pm.addPass(mlir::createCSEPass());
     if (failed(runPipeline(pm, m)))
       return signalPassFailure();
