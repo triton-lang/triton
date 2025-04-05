@@ -67,5 +67,3 @@ llvm_config.add_tool_substitutions(tools, tool_dirs)
 llvm_config.with_environment('PYTHONPATH', [
     os.path.join(config.mlir_binary_dir, 'python_packages', 'triton'),
 ], append_path=True)
-
-config.environment["RUNNER_TYPE"] = os.environ.get("RUNNER_TYPE", "NONE")
