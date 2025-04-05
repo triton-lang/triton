@@ -184,7 +184,7 @@ static LogicalResult optimizePartitionNumWarps(ModuleAxisInfoAnalysis &axisInfo,
   // If the compiler could control that, then we could allow non-uniform
   // register distributions, mostly beneficial for single-warp warpgroups that
   // just do some artihmetic.
-  constexpr unsigned nTotalRegs = 64000; // for Blackwell SMs
+  constexpr unsigned nTotalRegs = 1 << 16; // for Blackwell SMs
   const unsigned threadsPerWarp =
       TritonGPUDialect::getThreadsPerWarp(axisInfo.getModuleOp());
   const unsigned defaultNumWarps = lookupNumWarps(wsOp);

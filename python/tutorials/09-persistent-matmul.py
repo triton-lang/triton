@@ -721,7 +721,7 @@ def bench(K, dtype, reps=10000, warmup_reps=10000):
     b = b.T.contiguous()
 
     if cublas is not None:
-        bench_fn("cublas", reps, 1, cublas_matmul, a, b)
+        bench_fn("cublas", reps, warmup_reps, cublas_matmul, a, b)
     if dtype == torch.float16:
         bench_fn("torch", reps, warmup_reps, torch_matmul, a, b)
     bench_fn("naive", reps, warmup_reps, matmul, a, b.T)
@@ -808,6 +808,7 @@ if __name__ == "__main__":
         validate(8192, 8192, args.K_range[0], dtype)
 
         proton.start("matmul", hook="triton")
+        proton.deactivate()
         for K in range(args.K_range[0], args.K_range[1] + 1, args.K_step):
             bench(K, dtype)
         proton.finalize()
