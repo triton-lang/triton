@@ -1479,16 +1479,4 @@ bool mayAliasAllocations(const DenseSet<Value> &lhs,
   return !llvm::set_intersection(lhsAllocs, rhsAllocs).empty();
 }
 
-std::optional<bool> getBoolFromConstant(Value cst) {
-  auto constantOp = cst.getDefiningOp<arith::ConstantOp>();
-  if (!constantOp) {
-    return std::nullopt;
-  }
-  assert(constantOp.getValue());
-  if (auto boolAttr = dyn_cast<BoolAttr>(constantOp.getValue())) {
-    return boolAttr.getValue();
-  }
-  return std::nullopt;
-}
-
 } // namespace mlir

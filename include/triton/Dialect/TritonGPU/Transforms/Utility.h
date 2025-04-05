@@ -242,9 +242,6 @@ void eraseLoopCarriedValues(scf::ForOp &loop, llvm::BitVector indices);
 bool mayAliasAllocations(const DenseSet<Value> &lhs,
                          const DenseSet<Value> &rhs);
 
-// Return true or false if this value is a bool constant
-std::optional<bool> getBoolFromConstant(Value cst);
-
 } // namespace mlir
 
 #endif // TRITON_DIALECT_TRITONGPU_TRANSFORMS_UTILITY_H_
