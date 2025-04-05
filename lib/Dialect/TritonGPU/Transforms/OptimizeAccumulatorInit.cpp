@@ -221,22 +221,19 @@ public:
       std::optional<std::pair<Operation *, int>> zeroInitOp =
           findZeroInitOp(accUse, forOp, loopArgIsZero);
 
-      if (loopArgIsZero) {
-        auto useAccValue = getUseAccFlag(mmaOp);
-        if (useAccValue) {
-          auto useAcc = getBoolFromConstant(useAccValue);
-          if (!useAcc || *useAcc == false) {
-            // Do not run this optimization if there is already a non-constant
-            // flag (this pass has already run), or if this MMA does not use the
-            // accumulator (e.g. the peeled MMA in the prologue, the first dot
-            // in attention)
-            continue;
-          }
-        }
-      }
-
       if (!zeroInitOp && !loopArgIsZero) {
         continue;
+      }
+
+      if (auto useAccValue = getUseAccFlag(mmaOp)) {
+        auto useAcc = getBoolFromConstant(useAccValue);
+        if (!useAcc || *useAcc == false) {
+          // Do not run this optimization if there is already a non-constant
+          // flag (this pass has already run), or if this MMA does not use the
+          // accumulator (e.g. the peeled MMA in the prologue, the first dot
+          // in attention)
+          continue;
+        }
       }
 
       Value loopArgFlagValue = loopArgIsZero ? vFalse : vTrue;
