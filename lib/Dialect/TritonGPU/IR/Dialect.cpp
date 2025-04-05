@@ -10,6 +10,7 @@
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Attributes.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
+#include "triton/Dialect/TritonGPU/IR/LayoutUtility.h"
 #include "triton/Dialect/TritonGPU/IR/LinearLayoutConversions.h"
 #include "triton/Dialect/TritonGPU/IR/Types.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
@@ -498,7 +499,7 @@ static LogicalResult parseBoolAttrValue(AsmParser &parser, Attribute attr,
                                         bool &value, StringRef desc) {
   auto boolAttr = mlir::dyn_cast<BoolAttr>(attr);
   if (!boolAttr) {
-    parser.emitError(parser.getNameLoc(), "expected an bool type in ") << desc;
+    parser.emitError(parser.getNameLoc(), "expected a bool type in ") << desc;
     return failure();
   }
   value = boolAttr.getValue();
@@ -2032,27 +2033,13 @@ struct TritonGPUInferLayoutInterface
     auto invOrder = inversePermutation(order);
     SmallVector<unsigned> invOrderUnsigned(invOrder.begin(), invOrder.end());
 
-    auto permuteCTALayout =
-        [&](const CTALayoutAttr &layout) -> FailureOr<CTALayoutAttr> {
-      auto n = order.size();
-      if (layout.getCTAsPerCGA().size() != n ||
-          layout.getCTASplitNum().size() != n ||
-          layout.getCTAOrder().size() != n) {
-        return failure();
-      }
-
-      return CTALayoutAttr::get(
-          ctx, applyPermutation(layout.getCTAsPerCGA(), order),
-          applyPermutation(layout.getCTASplitNum(), order),
-          applyPermutation(invOrderUnsigned, layout.getCTAOrder()));
-    };
-
     if (auto enc =
             mlir::dyn_cast<SwizzledSharedEncodingAttr>(operandEncoding)) {
       if (enc.getOrder().size() != order.size()) {
         return failure();
       }
-      FailureOr<CTALayoutAttr> ctaLayout = permuteCTALayout(enc.getCTALayout());
+      FailureOr<CTALayoutAttr> ctaLayout =
+          permuteCTALayout(ctx, enc.getCTALayout(), order);
       if (failed(ctaLayout)) {
         return failure();
       }
@@ -2066,7 +2053,8 @@ struct TritonGPUInferLayoutInterface
       if (order != ArrayRef<int32_t>({1, 0})) {
         return failure();
       }
-      FailureOr<CTALayoutAttr> ctaLayout = permuteCTALayout(enc.getCTALayout());
+      FailureOr<CTALayoutAttr> ctaLayout =
+          permuteCTALayout(ctx, enc.getCTALayout(), order);
       if (failed(ctaLayout)) {
         return failure();
       }
@@ -2083,7 +2071,8 @@ struct TritonGPUInferLayoutInterface
           enc.getWarpsPerCTA().size() != n || enc.getOrder().size() != n) {
         return failure();
       }
-      FailureOr<CTALayoutAttr> ctaLayout = permuteCTALayout(enc.getCTALayout());
+      FailureOr<CTALayoutAttr> ctaLayout =
+          permuteCTALayout(ctx, enc.getCTALayout(), order);
       if (failed(ctaLayout)) {
         return failure();
       }
@@ -2773,7 +2762,7 @@ std::string getSharedLayoutStr(RankedTensorType tensorType,
   // Shared layouts are a mapping of (block, offset) --> (...)
 
   // We can just use a single int to index into elementMapping because
-  // the 'swizzle' operation rearranges the indicies---and we want to keep it
+  // the 'swizzle' operation rearranges the indices---and we want to keep it
   // that way
   int32_t idx = 0;
   // Enumerate all the offsets for each block

@@ -358,7 +358,7 @@ private:
                resultIdx < resultDim; ++resultIdx) {
             auto smemIdx = resultIdx < op.getAxis() ? resultIdx : resultIdx + 1;
             if (resultShape[resultIdx] > smemShape[smemIdx]) {
-              // When srcShape smaller then src sizePerThread, only srcShape
+              // When srcShape smaller than src sizePerThread, only srcShape
               // elements is accumulated in smem. Modulo smemShape effectively
               // replicates srcShape elements to src sizePerThread.
               readIdx[smemIdx] =

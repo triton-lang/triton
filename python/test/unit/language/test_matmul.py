@@ -432,7 +432,7 @@ def block_scale_mxfp_matmul(  #
             scale_a = scale_a.reshape(BLOCK_M // 128, BLOCK_K // 128, 32, 4, 4)
             scale_b = scale_b.reshape(BLOCK_N // 128, BLOCK_K // 128, 32, 4, 4)
 
-        # Scales are comming in for optimial peformance, but we reshape here for
+        # Scales are coming in for optimial performance, but we reshape here for
         # the canonical inputs to dot_scaled
         # These reshapes and transposes will be optimized away during lowering
         scale_a = scale_a.trans(0, 3, 2, 1, 4).reshape(BLOCK_M, BLOCK_K // 32)
