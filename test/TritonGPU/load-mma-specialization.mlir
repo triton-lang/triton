@@ -484,10 +484,10 @@ tt.func @matmul_tma_acc_with_conditional_user(
     scf.if %do_epilogue {
       // CHECK-NEXT: ttng.wait_barrier [[CUR_ACC_READY_BAR]], [[ACC_PHASE]] {ttg.partition = 0 : i32}
       // CHECK-NEXT: [[C:%.*]] = ttng.tmem_load [[ACC_BUF]] {ttg.partition = 0 : i32}
-      // CHECK-NEXT: [[NEXT_ACC_EMPTY_BAR:%.*]] = ttg.memdesc_subview [[ACC_EMPTY_BUFS]][[[NEXT_ACC_INDEX]]]
-      // CHECK-NEXT: ttng.arrive_barrier [[NEXT_ACC_EMPTY_BAR]], 1 {ttg.partition = 0 : i32}
       // CHECK-NEXT: "acc_user"([[C]])
       "acc_user"(%c) : (tensor<128x128xf32, #acc_layout>) -> ()
+      // CHECK-NEXT: [[NEXT_ACC_EMPTY_BAR:%.*]] = ttg.memdesc_subview [[ACC_EMPTY_BUFS]][[[NEXT_ACC_INDEX]]]
+      // CHECK-NEXT: ttng.arrive_barrier [[NEXT_ACC_EMPTY_BAR]], 1 {ttg.partition = 0 : i32}
     // CHECK-NEXT: } {ttg.partition = 0 : i32}
     }
 
@@ -513,7 +513,7 @@ tt.func @matmul_tma_acc_with_conditional_user(
 
 // AWS: ttg.warp_specialize
 // AWS: num_warps(4)
-// AWS: num_warps(1)
+// AWS: num_warps(2)
 // AWS: num_warps(1)
 
 // CHECK: @matmul_tma_acc_with_conditional_def
@@ -612,7 +612,7 @@ tt.func @matmul_tma_acc_with_conditional_def(
 
 // AWS: ttg.warp_specialize
 // AWS: num_warps(4)
-// AWS: num_warps(1)
+// AWS: num_warps(2)
 // AWS: num_warps(1)
 
 // CHECK: @matmul_tma_acc_with_conditional_def_and_use
@@ -682,10 +682,10 @@ tt.func @matmul_tma_acc_with_conditional_def_and_use(
     scf.if %do_epilogue {
       // CHECK-NEXT: ttng.wait_barrier [[CUR_ACC_READY_BAR]], [[ACC_PHASE]] {ttg.partition = 0 : i32}
       // CHECK-NEXT: [[C:%.*]] = ttng.tmem_load [[ACC_BUF]] {ttg.partition = 0 : i32}
-      // CHECK-NEXT: [[NEXT_ACC_EMPTY_BAR:%.*]] = ttg.memdesc_subview [[ACC_EMPTY_BUFS]][[[NEXT_ACC_INDEX]]]
-      // CHECK-NEXT: ttng.arrive_barrier [[NEXT_ACC_EMPTY_BAR]], 1 {ttg.partition = 0 : i32}
       // CHECK-NEXT: "acc_user"([[C]])
       "acc_user"(%c) : (tensor<128x128xf32, #acc_layout>) -> ()
+      // CHECK-NEXT: [[NEXT_ACC_EMPTY_BAR:%.*]] = ttg.memdesc_subview [[ACC_EMPTY_BUFS]][[[NEXT_ACC_INDEX]]]
+      // CHECK-NEXT: ttng.arrive_barrier [[NEXT_ACC_EMPTY_BAR]], 1 {ttg.partition = 0 : i32}
     // CHECK-NEXT: } {ttg.partition = 0 : i32}
     }
 
@@ -714,7 +714,7 @@ tt.func @matmul_tma_acc_with_conditional_def_and_use(
 
 // AWS: ttg.warp_specialize
 // AWS: num_warps(1)
-// AWS: num_warps(1)
+// AWS: num_warps(2)
 // AWS: num_warps(1)
 
 // CHECK: @matmul_tma_acc_with_conditional_def_and_use_no_multibuf
@@ -791,10 +791,12 @@ tt.func @matmul_tma_acc_with_conditional_def_and_use_no_multibuf_flag(
     // CHECK-NEXT: scf.if [[DO_EPILOGUE]]
     scf.if %do_epilogue {
       // CHECK-NEXT: ttng.wait_barrier [[ACC_READY_BUF0]], [[ACC_PHASE]] {ttg.partition = 0 : i32}
+      // CHECK-NEXT: "some_op"()
+      "some_op"() : () -> ()
       // CHECK-NEXT: [[C:%.*]] = ttng.tmem_load [[ACC_BUF]] {ttg.partition = 0 : i32}
-      // CHECK-NEXT: ttng.arrive_barrier [[ACC_EMPTY_BUF0]], 1 {ttg.partition = 0 : i32}
       // CHECK-NEXT: "acc_user"([[C]])
       "acc_user"(%c) : (tensor<128x128xf32, #acc_layout>) -> ()
+      // CHECK-NEXT: ttng.arrive_barrier [[ACC_EMPTY_BUF0]], 1 {ttg.partition = 0 : i32}
     // CHECK-NEXT: } {ttg.partition = 0 : i32}
     }
 
