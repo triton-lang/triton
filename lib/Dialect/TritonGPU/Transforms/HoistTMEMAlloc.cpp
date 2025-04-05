@@ -20,30 +20,60 @@ namespace gpu {
 
 namespace {
 
-// Returns true if between the op and the store there is another store to the
-// same TMEMAlloc.
-// Assumes that op dominates store.
-bool aliasingStoresBetween(Operation *op, ttng::TMEMStoreOp store) {
-  Operation *prevNode = store;
-  while (prevNode != op) {
+// If the operation access tensor memory, return the tensor memory values.
+void getTensorMemoryAccesses(Operation *op, DenseSet<Value> &tmemAccesses) {
+  for (Value operand : op->getOperands()) {
+    if (auto memdesc = dyn_cast<MemDescType>(operand.getType())) {
+      if (isa<ttng::TensorMemorySpaceAttr>(memdesc.getMemorySpace())) {
+        tmemAccesses.insert(operand);
+      }
+    }
+  }
+}
+
+bool mayAliasTMEMOp(const DenseSet<Value> &sinkAccesses, Operation *op) {
+  // Treat barriers as aliasing ops because they may be protecting tensory
+  // memory buffers.
+  if (isa<ttng::ArriveBarrierOp, ttng::WaitBarrierOp>(op)) {
+    return true;
+  }
+
+  // Check if the operation may alias the sink.
+  DenseSet<Value> tmemAccesses;
+  getTensorMemoryAccesses(op, tmemAccesses);
+  if (mayAliasAllocations(tmemAccesses, sinkAccesses)) {
+    return true;
+  }
+  return false;
+}
+
+// Returns the earliest operation that may alias `sink` through tensor memory
+// starting at, but not including, `lhs`. Returns nullptr if no such op exists.
+Operation *findTMEMAliasingOpInBetween(Operation *lhs, Operation *sink) {
+  DenseSet<Value> sinkAccesses;
+  getTensorMemoryAccesses(sink, sinkAccesses);
+
+  Operation *prevNode = sink;
+  Operation *curAliasingOp = nullptr;
+  while (prevNode != lhs) {
     if (prevNode->getPrevNode() == nullptr) {
       prevNode = prevNode->getParentOp();
       if (prevNode == nullptr) {
-        return false;
+        return nullptr;
       }
     } else {
       prevNode = prevNode->getPrevNode();
     }
-    if (auto otherStore = dyn_cast<ttng::TMEMStoreOp>(prevNode)) {
-      if (otherStore.getDst() == store.getDst()) {
-        return true;
-      }
-    }
-    if (prevNode == op) {
+    if (prevNode == lhs) {
       break;
     }
+
+    // Check if this op may alias tensor memory.
+    if (mayAliasTMEMOp(sinkAccesses, prevNode)) {
+      curAliasingOp = prevNode;
+    }
   }
-  return false;
+  return curAliasingOp;
 }
 
 class CombineTMEMStoreAndSelect : public OpRewritePattern<ttng::TMEMStoreOp> {
@@ -62,13 +92,13 @@ public:
     Value falseSrc = select.getFalseValue();
     if (auto load = trueSrc.getDefiningOp<ttng::TMEMLoadOp>()) {
       if (store.getDst() == load.getSrc() &&
-          !aliasingStoresBetween(load, store)) {
+          !findTMEMAliasingOpInBetween(load, store)) {
         valueFromTMEM = kTrue;
       }
     }
     if (auto load = falseSrc.getDefiningOp<ttng::TMEMLoadOp>()) {
       if (store.getDst() == load.getSrc() &&
-          !aliasingStoresBetween(load, store)) {
+          !findTMEMAliasingOpInBetween(load, store)) {
         valueFromTMEM = valueFromTMEM == kTrue ? kUnknown : kFalse;
       }
     }
@@ -105,7 +135,7 @@ public:
         }
         // Can't have other stores to the same tmem_alloc in between the load
         // and the store
-        if (aliasingStoresBetween(load, store)) {
+        if (findTMEMAliasingOpInBetween(load, store)) {
           continue;
         }
         rewriter.eraseOp(store);
@@ -138,8 +168,15 @@ public:
     DominanceInfo domInfo(forOp);
     Operation *domOp =
         findNearestCommonDominator(llvm::to_vector(load->getUsers()), domInfo);
-    if (!domOp || !domInfo.properlyDominates(load.getOperation(), domOp) ||
-        domOp == load->getNextNode()) {
+    if (!domOp || !domInfo.properlyDominates(load.getOperation(), domOp)) {
+      return failure();
+    }
+    // Don't sink past potentially aliasing ops.
+    if (Operation *dst = findTMEMAliasingOpInBetween(load, domOp)) {
+      domOp = dst;
+    }
+    if (domOp == load->getNextNode()) {
+      // The load wasn't moved.
       return failure();
     }
     rewriter.moveOpBefore(load, domOp);
@@ -206,15 +243,6 @@ ttng::TMEMAllocOp hoistTMEMAlloc(ttng::TMEMAllocOp alloc, scf::ForOp forOp) {
   alloc.replaceAllUsesWith(newAlloc.getResult());
   alloc.erase();
 
-  ModuleOp module = forOp->getParentOfType<ModuleOp>();
-  mlir::RewritePatternSet patterns(module.getContext());
-  patterns.add<RotateTMEMStoreInLoop, CombineTMEMLoadAndStore,
-               CombineTMEMStoreAndSelect, SinkTMEMLoad>(module.getContext());
-  scf::ForOp::getCanonicalizationPatterns(patterns, module.getContext());
-  if (applyPatternsGreedily(module, std::move(patterns)).failed()) {
-    llvm_unreachable("Failed to hoist tmem_store");
-  }
-
   return newAlloc;
 }
 
@@ -234,8 +262,7 @@ static void hoistInvariantInputs(Operation *mmaOp, scf::ForOp forOp) {
     while (Operation *defOp = src.getDefiningOp()) {
       if (forOp.isDefinedOutsideOfLoop(src))
         break;
-      if (!(isMemoryEffectFree(defOp) && isSpeculatable(defOp) &&
-            defOp->getNumOperands() == 1))
+      if (!(isPure(defOp) && defOp->getNumOperands() == 1))
         break;
       opToHoist.push_back(defOp);
       src = defOp->getOperand(0);
@@ -261,16 +288,23 @@ struct HoistTMEMAlloc
     for (auto mmaOp : mmaOps) {
       auto forOp = dyn_cast<scf::ForOp>(mmaOp->getParentOp());
       if (!forOp) {
-        return;
+        continue;
       }
       hoistInvariantInputs(mmaOp, forOp);
 
-      auto allocAndLoadOpt = getTMemAllocAndLoad(mmaOp);
-      if (!allocAndLoadOpt) {
-        return;
+      auto alloc = mmaOp.getAccumulator().getDefiningOp<ttng::TMEMAllocOp>();
+      if (!alloc || alloc->getParentRegion() != mmaOp->getParentRegion()) {
+        continue;
       }
-      auto [alloc, load] = allocAndLoadOpt.value();
       hoistTMEMAlloc(alloc, forOp);
+    }
+
+    mlir::RewritePatternSet patterns(&getContext());
+    patterns.add<RotateTMEMStoreInLoop, CombineTMEMLoadAndStore,
+                 CombineTMEMStoreAndSelect, SinkTMEMLoad>(&getContext());
+    scf::ForOp::getCanonicalizationPatterns(patterns, &getContext());
+    if (failed(applyPatternsGreedily(getOperation(), std::move(patterns)))) {
+      llvm_unreachable("Failed to hoist tmem_store");
     }
   }
 };

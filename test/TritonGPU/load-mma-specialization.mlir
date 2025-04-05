@@ -1,5 +1,6 @@
+// RUN: triton-opt %s -allow-unregistered-dialect -tritongpu-hoist-tmem-alloc | FileCheck %s --check-prefix=TMEM --check-prefix=FUNC
 // RUN: triton-opt %s -allow-unregistered-dialect -verify-diagnostics -tritongpu-load-mma-specialization -int-range-optimizations -canonicalize -cse -tritongpu-remove-layout-conversions | FileCheck %s
-// RUN: triton-opt %s -allow-unregistered-dialect -verify-diagnostics -tritongpu-automatic-warp-specialization | FileCheck %s --check-prefix=AWS
+// RUN: triton-opt %s -allow-unregistered-dialect -verify-diagnostics -tritongpu-automatic-warp-specialization | FileCheck %s --check-prefix=AWS --check-prefix=FUNC
 
 #acc_layout = #ttg.blocked<{sizePerThread = [1, 128], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [0, 1]}>
 #oper_layout = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [2, 2], order = [1, 0]}>
@@ -12,7 +13,11 @@
 
 module attributes {"ttg.num-warps" = 4 : i32, ttg.target = "cuda:100"} {
 
-// AWS-LABEL: @warp_specialize_tma_matmul
+// FUNC-LABEL: @warp_specialize_tma_matmul
+
+// TMEM: ttng.tmem_alloc
+// TMEM: scf.for
+
 // AWS: ttg.warp_specialize
 // AWS: num_warps(1)
 // AWS: num_warps(1)
@@ -150,7 +155,11 @@ tt.func @warp_specialize_tma_matmul(
   tt.return
 }
 
-// AWS-LABEL: @unsupported_multiple_dot_ops
+// FUNC-LABEL: @unsupported_multiple_dot_ops
+// TMEM: ttng.tmem_alloc
+// TMEM: ttng.tmem_alloc
+// TMEM: scf.for
+
 // CHECK: @unsupported_multiple_dot_ops
 tt.func @unsupported_multiple_dot_ops() {
   %c0_i32 = arith.constant 0 : i32
@@ -177,7 +186,10 @@ tt.func @unsupported_multiple_dot_ops() {
   tt.return
 }
 
-// AWS-LABEL: @unsupported_load
+// FUNC-LABEL: @unsupported_load
+// TMEM: ttng.tmem_alloc
+// TMEM: scf.for
+
 // CHECK: @unsupported_load
 tt.func @unsupported_load() {
   %c0_i32 = arith.constant 0 : i32
@@ -205,7 +217,10 @@ tt.func @unsupported_load() {
   tt.return
 }
 
-// AWS-LABEL: @cant_pipeline_mma
+// FUNC-LABEL: @cant_pipeline_mma
+// TMEM: ttng.tmem_alloc
+// TMEM: scf.for
+
 // CHECK: @cant_pipeline_mma
 tt.func @cant_pipeline_mma(
   %a_desc: !tt.tensordesc<tensor<128x64xf16, #shared>>,
@@ -233,7 +248,10 @@ tt.func @cant_pipeline_mma(
   tt.return
 }
 
-// AWS-LABEL: @invalid_acc_reset
+// FUNC-LABEL: @invalid_acc_reset
+// TMEM: ttng.tmem_alloc
+// TMEM: scf.for
+
 // CHECK: @invalid_acc_reset
 tt.func @invalid_acc_reset(
   %a_desc: !tt.tensordesc<tensor<128x64xf16, #shared>>,
@@ -263,7 +281,11 @@ tt.func @invalid_acc_reset(
   tt.return
 }
 
-// AWS-LABEL: @matmul_tma_acc_with_unconditional_user
+// FUNC-LABEL: @matmul_tma_acc_with_unconditional_user
+
+// TMEM: ttng.tmem_alloc
+// TMEM: scf.for
+
 // AWS: ttg.warp_specialize
 // AWS: num_warps(4)
 // AWS: num_warps(4)
@@ -383,7 +405,11 @@ tt.func @matmul_tma_acc_with_unconditional_user(
   tt.return
 }
 
-// AWS-LABEL: @matmul_tma_acc_with_conditional_user
+// FUNC-LABEL: @matmul_tma_acc_with_conditional_user
+
+// TMEM: ttng.tmem_alloc
+// TMEM: scf.for
+
 // AWS: ttg.warp_specialize
 // AWS: num_warps(4)
 // AWS: num_warps(4)
@@ -480,7 +506,11 @@ tt.func @matmul_tma_acc_with_conditional_user(
   tt.return
 }
 
-// AWS-LABEL: @matmul_tma_acc_with_conditional_def
+// FUNC-LABEL: @matmul_tma_acc_with_conditional_def
+
+// TMEM: ttng.tmem_alloc
+// TMEM: scf.for
+
 // AWS: ttg.warp_specialize
 // AWS: num_warps(4)
 // AWS: num_warps(2)
@@ -575,7 +605,11 @@ tt.func @matmul_tma_acc_with_conditional_def(
   tt.return
 }
 
-// AWS-LABEL: @matmul_tma_acc_with_conditional_def_and_use
+// FUNC-LABEL: @matmul_tma_acc_with_conditional_def_and_use
+
+// TMEM: ttng.tmem_alloc
+// TMEM: scf.for
+
 // AWS: ttg.warp_specialize
 // AWS: num_warps(4)
 // AWS: num_warps(2)
@@ -673,7 +707,11 @@ tt.func @matmul_tma_acc_with_conditional_def_and_use(
   tt.return
 }
 
-// AWS-LABEL: @matmul_tma_acc_with_conditional_def_and_use_no_multibuf
+// FUNC-LABEL: @matmul_tma_acc_with_conditional_def_and_use_no_multibuf
+
+// TMEM: ttng.tmem_alloc
+// TMEM: scf.for
+
 // AWS: ttg.warp_specialize
 // AWS: num_warps(1)
 // AWS: num_warps(2)
