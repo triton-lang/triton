@@ -249,9 +249,15 @@ static LogicalResult optimizePartitionNumWarps(ModuleAxisInfoAnalysis &axisInfo,
     }
   } while (changed);
 
-  for (auto [partition, newNumWarps, prevNumWarps, tensorRegs] :
+  SmallVector<int32_t> estRegUsage(partitionNumWarps.size());
+  for (auto [partition, newNumWarps, prevNumWarps, tensorRegs, estRegs] :
        llvm::zip(wsOp.getPartitionRegions(), partitionNumWarps,
-                 wsOp.getPartitionNumWarps(), maxTensorRegs)) {
+                 wsOp.getPartitionNumWarps(), maxTensorRegs, estRegUsage)) {
+    // "Guess" the register usage for each partition.
+    estRegs = tensorRegs ? 80 : 48;
+
+    // Layouts need to be reassigned if the number of warps changed and there
+    // are tensor computations.
     if (newNumWarps == prevNumWarps || !tensorRegs)
       continue;
     // We need to reassign layouts.
@@ -259,6 +265,7 @@ static LogicalResult optimizePartitionNumWarps(ModuleAxisInfoAnalysis &axisInfo,
                              runPipeline)))
       return failure();
   }
+  wsOp.setRequestedRegisters(estRegUsage);
   wsOp.setPartitionNumWarps(partitionNumWarps);
   return success();
 }
