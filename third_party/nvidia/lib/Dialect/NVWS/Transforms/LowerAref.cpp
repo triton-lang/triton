@@ -23,6 +23,7 @@
 
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/LLVMIR/NVVMDialect.h"
+#include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/AttrTypeSubElements.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/BuiltinTypes.h"
@@ -70,6 +71,7 @@ struct ArefValue {
   Value fullMbars;
   int depth;
   SmallVector<ArefUseNode *> users;
+  SmallVector<Value> updatedValues;
 };
 
 struct ArefUseGraph {
@@ -250,6 +252,9 @@ LogicalResult lowerRegion(T op, PatternRewriter &rewriter,
   auto fullMbars = graph.arefs[aref].fullMbars;
   auto depth = graph.arefs[aref].depth;
 
+  if (put)
+    graph.arefs[aref].updatedValues.clear();
+
   rewriter.setInsertionPoint(op);
 
   auto zero = rewriter.create<arith::ConstantIntOp>(loc, 0, 32);
@@ -285,23 +290,34 @@ LogicalResult lowerRegion(T op, PatternRewriter &rewriter,
       }
     }
   } else {
-    for (auto value : aref.template getDefiningOp<ArefCreateOp>().getOperands())
-      views.push_back(value);
+    if (graph.arefs[aref].updatedValues.size() > 0) {
+      views.append(graph.arefs[aref].updatedValues.begin(),
+                   graph.arefs[aref].updatedValues.end());
+    } else {
+      for (auto value :
+           aref.template getDefiningOp<ArefCreateOp>().getOperands())
+        views.push_back(value);
+    }
   }
 
-  auto putOpBody = &op->getRegion(0).front();
-  if (putOpBody->getArguments().size() != views.size())
+  auto opBody = &op->getRegion(0).front();
+  if (opBody->getArguments().size() != views.size())
     return op.emitError("number of views and arguments mismatch.");
-
-  for (auto [arg, view] : zip(putOpBody->getArguments(), views))
+  for (auto [arg, view] : zip(opBody->getArguments(), views))
     arg.replaceAllUsesWith(view);
 
   for (auto [ret, val] :
-       llvm::zip(op.getResults(), putOpBody->back().getOperands()))
+       llvm::zip(op.getResults(), opBody->back().getOperands())) {
     ret.replaceAllUsesWith(val);
+  }
 
-  for (auto &bodyOp :
-       llvm::make_early_inc_range(putOpBody->without_terminator()))
+  if (put) {
+    for (auto result : opBody->back().getOperands())
+      if (isa<RankedTensorType>(result.getType()))
+        graph.arefs[op.getOperand()].updatedValues.push_back(result);
+  }
+
+  for (auto &bodyOp : llvm::make_early_inc_range(opBody->without_terminator()))
     bodyOp.moveBefore(op);
 
   if (!graph.nodes[op].containsAsync) {
@@ -309,7 +325,6 @@ LogicalResult lowerRegion(T op, PatternRewriter &rewriter,
   }
 
   rewriter.eraseOp(op);
-
   return success();
 }
 
@@ -540,6 +555,99 @@ public:
   }
 };
 
+class ParallelizeWarpGroupDot : public OpRewritePattern<WarpGroupDotOp> {
+  ArefUseGraph &graph;
+
+public:
+  using OpRewritePattern::OpRewritePattern;
+
+  ParallelizeWarpGroupDot(mlir::MLIRContext *context, ArefUseGraph &graph)
+      : OpRewritePattern<WarpGroupDotOp>(context), graph(graph) {}
+
+  LogicalResult matchAndRewrite(WarpGroupDotOp op,
+                                PatternRewriter &rewriter) const override {
+    auto ctx = op.getContext();
+    auto loc = op.getLoc();
+    auto getOp = dyn_cast<ArefGetOp>(op->getBlock()->getParentOp());
+    if (!getOp)
+      return failure();
+
+    auto kLoop = dyn_cast<scf::ForOp>(getOp->getBlock()->getParentOp());
+    if (!kLoop)
+      return failure();
+
+    auto putOp = dyn_cast<ArefPutOp>(kLoop->getBlock()->getParentOp());
+    if (!putOp)
+      return failure();
+
+    auto putAref = putOp.getOperand();
+    auto getAref = getOp.getOperand();
+    if (!graph.arefs.contains(putAref) || !graph.arefs.contains(getAref))
+      return failure();
+
+    auto getArefValue = graph.arefs[getAref];
+    auto putArefValue = graph.arefs[putAref];
+
+    if (putAref.getType().getBaseType().size() != 1)
+      return failure(
+          "TODO: support putting into more than one accumulator at a time");
+
+    SmallVector<Operation *> users(op->user_begin(), op->user_end());
+    if (users.size() != 1)
+      return failure();
+    auto wait = dyn_cast<WarpGroupDotWaitOp>(users[0]);
+    if (!wait)
+      return failure();
+
+    if (wait.getPendings() == (getArefValue.depth - 1))
+      return failure(); // we've already processed this
+
+    wait.setPendings(getArefValue.depth - 1);
+    rewriter.setInsertionPointAfter(wait);
+
+    // This assumes inputs to an mma are both from a single aref get. Need to
+    // relax that to allow nested aref gets for attention
+    Value getIdx = getArefValue.depth > 1
+                       ? getOp.getIndexes()[0]
+                       : rewriter.create<arith::ConstantIntOp>(loc, 0, 32);
+    auto depthVal =
+        rewriter.create<arith::ConstantIntOp>(loc, getArefValue.depth - 1, 32);
+    Value idx = rewriter.create<arith::SubIOp>(loc, getIdx, depthVal);
+    auto zero = rewriter.create<arith::ConstantIntOp>(loc, 0, 32);
+    Value cond = rewriter.create<arith::CmpIOp>(loc, arith::CmpIPredicate::sge,
+                                                idx, zero);
+    auto ifOp = rewriter.create<scf::IfOp>(loc, SmallVector<Type>(), cond);
+    rewriter.setInsertionPointToStart(&ifOp.getThenRegion().emplaceBlock());
+    signalArrival(rewriter, loc, getArefValue.emptyMbars, idx,
+                  getArefValue.depth);
+    rewriter.create<scf::YieldOp>(loc);
+
+    // Lowering the Put op will tell the get op that reads the mma accumulator
+    // to that the mma loop is done, but we need to wait on the last mma
+    // operation inside the get.
+    for (auto user : putArefValue.users) {
+      Value idx;
+      auto mmaGetOp = dyn_cast<ArefGetOp>(user->op);
+      if (!mmaGetOp)
+        continue;
+      // TODO: relax the assumption about which position the loop-carried
+      // iteration count is in
+      idx = kLoop.getResult(1);
+      rewriter.setInsertionPoint(&mmaGetOp.getRegion().front().front());
+      rewriter.create<WarpGroupDotWaitOp>(
+          loc, mmaGetOp.getRegion().front().getArgument(0), 0);
+    }
+    // Since manually signaled the that the barriers are empty,
+    // we don't need to automatically do it
+    graph.nodes[getOp].containsAsync = true;
+
+    // Since we're returning a register tensor from a put op, we need to lower
+    // it now to ensure the value gets updated for the get.
+    // TODO: This feels gross, think of a better solution
+    return lowerRegion<1>(putOp, rewriter, graph);
+  }
+};
+
 static ArefUseGraph analyzeArefUseDef(ModuleOp m) {
   ArefUseGraph graph;
   DenseSet<Operation *> seen;
@@ -589,9 +697,8 @@ public:
     ArefUseGraph graph = analyzeArefUseDef(m);
 
     mlir::RewritePatternSet patterns(context);
-    patterns
-        .add<LowerArefCreate, ParallelizeDescriptorLoad, ParallelizeTCGen5MMA>(
-            context, graph);
+    patterns.add<LowerArefCreate, ParallelizeDescriptorLoad,
+                 ParallelizeTCGen5MMA, ParallelizeWarpGroupDot>(context, graph);
     GreedyRewriteConfig config;
 
     if (applyPatternsGreedily(m, std::move(patterns), config).failed())
@@ -604,7 +711,7 @@ public:
       return signalPassFailure();
 
     mlir::RewritePatternSet patterns2(context);
-    patterns2.add<LowerArefGet, LowerArefPut>(context, graph);
+    patterns2.add<LowerArefPut, LowerArefGet>(context, graph);
     GreedyRewriteConfig config2;
 
     if (applyPatternsGreedily(m, std::move(patterns2), config2).failed())

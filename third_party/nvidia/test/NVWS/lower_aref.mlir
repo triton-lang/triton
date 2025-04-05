@@ -218,3 +218,93 @@ module attributes {nvws.mma = {num_warps = 4 : i32, start_warp = 0 : i32}, nvws.
     tt.return
   }
 }
+
+// -----
+
+module attributes {nvws.mma = {num_warps = 4 : i32, start_warp = 0 : i32}, nvws.tma_load = {num_warps = 4 : i32, start_warp = 4 : i32}, "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:90", "ttg.threads-per-warp" = 32 : i32, "ttg.warp-specialized" = true} {
+  tt.func public @matmul_kernel(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg2: !tt.ptr<f8E4M3FN> {tt.divisibility = 16 : i32}, %arg3: i32 {tt.divisibility = 16 : i32}, %arg4: i32 {tt.divisibility = 16 : i32}, %arg5: i32 {tt.divisibility = 16 : i32}, %arg6: i32 {tt.divisibility = 16 : i32}) attributes {noinline = false} {
+    %c128_i32 = arith.constant 128 : i32
+    %c0_i32 = arith.constant 0 : i32
+    %c64_i32 = arith.constant 64 : i32
+    %c1_i32 = arith.constant 1 : i32
+    %c127_i32 = arith.constant {} 127 : i32
+    %c63_i32 = arith.constant {} 63 : i32
+    %cst = arith.constant {} dense<0.000000e+00> : tensor<128x128xf32, #ttg.nvidia_mma<{versionMajor = 3, versionMinor = 0, warpsPerCTA = [4, 1], instrShape = [16, 128, 32]}>>
+    %0 = tt.get_program_id x {} : i32
+    %1 = arith.addi %arg3, %c127_i32 {} : i32
+    %2 = arith.divsi %1, %c128_i32 {} : i32
+    %3 = arith.remsi %0, %2 {} : i32
+    %4 = arith.divsi %0, %2 {} : i32
+    %5 = arith.muli %3, %c128_i32 {} : i32
+    %6 = arith.muli %4, %c128_i32 {} : i32
+    %7 = arith.addi %arg5, %c63_i32 {} : i32
+    %8 = arith.divsi %7, %c64_i32 {} : i32
+    %9 = nvvm.read.ptx.sreg.tid.x : i32
+    %10 = arith.divsi %9, %c128_i32 : i32
+    %11 = ttg.local_alloc  {aref_buffer} : () -> !ttg.memdesc<3x128x64xf8E4M3FN, #ttg.nvmma_shared<{swizzlingByteWidth = 64, transposed = false, elementBitWidth = 8}>, #ttg.shared_memory, mutable>
+    %12 = ttg.local_alloc  {aref_buffer} : () -> !ttg.memdesc<3x128x64xf8E4M3FN, #ttg.nvmma_shared<{swizzlingByteWidth = 64, transposed = false, elementBitWidth = 8}>, #ttg.shared_memory, mutable>
+    %13 = nvws.aref.create %11, %12 : !nvws.aref<[!ttg.memdesc<3x128x64xf8E4M3FN, #ttg.nvmma_shared<{swizzlingByteWidth = 64, transposed = false, elementBitWidth = 8}>, #ttg.shared_memory, mutable>, !ttg.memdesc<3x128x64xf8E4M3FN, #ttg.nvmma_shared<{swizzlingByteWidth = 64, transposed = false, elementBitWidth = 8}>, #ttg.shared_memory, mutable>], 1>
+    %acc = nvws.aref.create %cst : !nvws.aref<[tensor<128x128xf32, #ttg.nvidia_mma<{versionMajor = 3, versionMinor = 0, warpsPerCTA = [4, 1], instrShape = [16, 128, 32]}>>]>
+    nvvm.barrier0 {init_barrier_sync}
+    %14 = arith.cmpi eq, %10, %c1_i32 {} : i32
+    nvws.warp_group
+    partition0 num_warps(4) {
+      nvvm.setmaxregister  decrease 40 {}
+      %18:2 = scf.for %arg7 = %c0_i32 to %8 step %c1_i32 iter_args(%arg8 = %c0_i32, %arg9 = %c0_i32) -> (i32, i32)  : i32 {
+        %19 = tt.reinterpret_tensor_descriptor %arg0 {} : !tt.ptr<f32> to !tt.tensordesc<tensor<128x64xf8E4M3FN>>
+        %20 = tt.reinterpret_tensor_descriptor %arg1 {} : !tt.ptr<f32> to !tt.tensordesc<tensor<128x64xf8E4M3FN>>
+        nvws.aref.put %13[%arg9] as (%arg10: !ttg.memdesc<128x64xf8E4M3FN, #ttg.nvmma_shared<{swizzlingByteWidth = 64, transposed = false, elementBitWidth = 8}>, #ttg.shared_memory, mutable>, %arg11: !ttg.memdesc<128x64xf8E4M3FN, #ttg.nvmma_shared<{swizzlingByteWidth = 64, transposed = false, elementBitWidth = 8}>, #ttg.shared_memory, mutable>) {
+          %23 = tt.descriptor_load %19[%5, %arg8] {} : !tt.tensordesc<tensor<128x64xf8E4M3FN>> -> tensor<128x64xf8E4M3FN, #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [2, 2], order = [1, 0]}>>
+          ttg.local_store %23, %arg10 : tensor<128x64xf8E4M3FN, #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [2, 2], order = [1, 0]}>> -> !ttg.memdesc<128x64xf8E4M3FN, #ttg.nvmma_shared<{swizzlingByteWidth = 64, transposed = false, elementBitWidth = 8}>, #ttg.shared_memory, mutable>
+          %24 = tt.descriptor_load %20[%6, %arg8] {} : !tt.tensordesc<tensor<128x64xf8E4M3FN>> -> tensor<128x64xf8E4M3FN, #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [2, 2], order = [1, 0]}>>
+          ttg.local_store %24, %arg11 : tensor<128x64xf8E4M3FN, #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [2, 2], order = [1, 0]}>> -> !ttg.memdesc<128x64xf8E4M3FN, #ttg.nvmma_shared<{swizzlingByteWidth = 64, transposed = false, elementBitWidth = 8}>, #ttg.shared_memory, mutable>
+          nvws.aref.return
+        } : (!nvws.aref<[!ttg.memdesc<3x128x64xf8E4M3FN, #ttg.nvmma_shared<{swizzlingByteWidth = 64, transposed = false, elementBitWidth = 8}>, #ttg.shared_memory, mutable>, !ttg.memdesc<3x128x64xf8E4M3FN, #ttg.nvmma_shared<{swizzlingByteWidth = 64, transposed = false, elementBitWidth = 8}>, #ttg.shared_memory, mutable>], 1>, i32) -> ()
+        %21 = arith.addi %arg8, %c64_i32 {} : i32
+        %22 = arith.addi %arg9, %c1_i32 {} : i32
+        scf.yield {} %21, %22 : i32, i32
+      }
+      nvws.warp_group.return
+    } partition1 num_warps(4) {
+      nvvm.setmaxregister  increase 232 {}
+      nvws.aref.put %acc as (%arg10 : tensor<128x128xf32, #ttg.nvidia_mma<{versionMajor = 3, versionMinor = 0, warpsPerCTA = [4, 1], instrShape = [16, 128, 32]}>>) {
+        %18:2 = scf.for %arg7 = %c0_i32 to %8 step %c1_i32 iter_args(%arg8 = %cst, %arg9 = %c0_i32) -> (tensor<128x128xf32, #ttg.nvidia_mma<{versionMajor = 3, versionMinor = 0, warpsPerCTA = [4, 1], instrShape = [16, 128, 32]}>>, i32)  : i32 {
+          %40 = nvws.aref.get %13[%arg9] as (%arg11 :!ttg.memdesc<128x64xf8E4M3FN, #ttg.nvmma_shared<{swizzlingByteWidth = 64, transposed = false, elementBitWidth = 8}>, #ttg.shared_memory, mutable>, %arg12 : !ttg.memdesc<128x64xf8E4M3FN, #ttg.nvmma_shared<{swizzlingByteWidth = 64, transposed = false, elementBitWidth = 8}>, #ttg.shared_memory, mutable>) {
+            %38 = ttg.memdesc_trans %arg12 {order = array<i32: 1, 0>} : !ttg.memdesc<128x64xf8E4M3FN, #ttg.nvmma_shared<{swizzlingByteWidth = 64, transposed = false, elementBitWidth = 8}>, #ttg.shared_memory, mutable> -> !ttg.memdesc<64x128xf8E4M3FN, #ttg.nvmma_shared<{swizzlingByteWidth = 64, transposed = true, elementBitWidth = 8}>, #ttg.shared_memory, mutable>
+            ttng.fence_async_shared {bCluster = false}
+            %39 = ttng.warp_group_dot %arg11, %38, %arg8 : !ttg.memdesc<128x64xf8E4M3FN, #ttg.nvmma_shared<{swizzlingByteWidth = 64, transposed = false, elementBitWidth = 8}>, #ttg.shared_memory, mutable> * !ttg.memdesc<64x128xf8E4M3FN, #ttg.nvmma_shared<{swizzlingByteWidth = 64, transposed = true, elementBitWidth = 8}>, #ttg.shared_memory, mutable> -> tensor<128x128xf32, #ttg.nvidia_mma<{versionMajor = 3, versionMinor = 0, warpsPerCTA = [4, 1], instrShape = [16, 128, 32]}>>
+            %40 = ttng.warp_group_dot_wait %39 {pendings = 0 : i32} : tensor<128x128xf32, #ttg.nvidia_mma<{versionMajor = 3, versionMinor = 0, warpsPerCTA = [4, 1], instrShape = [16, 128, 32]}>>
+            nvws.aref.return %40 : tensor<128x128xf32, #ttg.nvidia_mma<{versionMajor = 3, versionMinor = 0, warpsPerCTA = [4, 1], instrShape = [16, 128, 32]}>>
+          } : (!nvws.aref<[!ttg.memdesc<3x128x64xf8E4M3FN, #ttg.nvmma_shared<{swizzlingByteWidth = 64, transposed = false, elementBitWidth = 8}>, #ttg.shared_memory, mutable>, !ttg.memdesc<3x128x64xf8E4M3FN, #ttg.nvmma_shared<{swizzlingByteWidth = 64, transposed = false, elementBitWidth = 8}>, #ttg.shared_memory, mutable>], 1>, i32) -> (tensor<128x128xf32, #ttg.nvidia_mma<{versionMajor = 3, versionMinor = 0, warpsPerCTA = [4, 1], instrShape = [16, 128, 32]}>>)
+          %41 = arith.subi %arg9, %c1_i32 : i32
+          %42 = arith.addi %arg9, %c1_i32  : i32
+          scf.yield %40, %42 : tensor<128x128xf32, #ttg.nvidia_mma<{versionMajor = 3, versionMinor = 0, warpsPerCTA = [4, 1], instrShape = [16, 128, 32]}>>, i32
+        }
+        nvws.aref.return %18#0 : tensor<128x128xf32, #ttg.nvidia_mma<{versionMajor = 3, versionMinor = 0, warpsPerCTA = [4, 1], instrShape = [16, 128, 32]}>>
+      } : (!nvws.aref<[tensor<128x128xf32, #ttg.nvidia_mma<{versionMajor = 3, versionMinor = 0, warpsPerCTA = [4, 1], instrShape = [16, 128, 32]}>>]>) -> ()
+      %20 = nvws.aref.get %acc as (%arg10: tensor<128x128xf32, #ttg.nvidia_mma<{versionMajor = 3, versionMinor = 0, warpsPerCTA = [4, 1], instrShape = [16, 128, 32]}>>) {
+        %20 = tt.fp_to_fp %arg10 {}, rounding = rtne : tensor<128x128xf32, #ttg.nvidia_mma<{versionMajor = 3, versionMinor = 0, warpsPerCTA = [4, 1], instrShape = [16, 128, 32]}>> -> tensor<128x128xf8E4M3FN, #ttg.nvidia_mma<{versionMajor = 3, versionMinor = 0, warpsPerCTA = [4, 1], instrShape = [16, 128, 32]}>>
+        nvws.aref.return %20 : tensor<128x128xf8E4M3FN, #ttg.nvidia_mma<{versionMajor = 3, versionMinor = 0, warpsPerCTA = [4, 1], instrShape = [16, 128, 32]}>>
+      } : (!nvws.aref<[tensor<128x128xf32, #ttg.nvidia_mma<{versionMajor = 3, versionMinor = 0, warpsPerCTA = [4, 1], instrShape = [16, 128, 32]}>>]>) -> (tensor<128x128xf8E4M3FN, #ttg.nvidia_mma<{versionMajor = 3, versionMinor = 0, warpsPerCTA = [4, 1], instrShape = [16, 128, 32]}>>)
+      %21 = tt.make_range {end = 128 : i32, start = 0 : i32} : tensor<128xi32, #ttg.slice<{dim = 1, parent = #ttg.blocked<{sizePerThread = [1, 16], threadsPerWarp = [4, 8], warpsPerCTA = [4, 1], order = [1, 0]}>}>>
+      %22 = tt.make_range {end = 128 : i32, start = 0 : i32} : tensor<128xi32, #ttg.slice<{dim = 0, parent = #ttg.blocked<{sizePerThread = [1, 16], threadsPerWarp = [4, 8], warpsPerCTA = [4, 1], order = [1, 0]}>}>>
+      %23 = tt.splat %5 {} : i32 -> tensor<128xi32, #ttg.slice<{dim = 1, parent = #ttg.blocked<{sizePerThread = [1, 16], threadsPerWarp = [4, 8], warpsPerCTA = [4, 1], order = [1, 0]}>}>>
+      %24 = arith.addi %23, %21 {} : tensor<128xi32, #ttg.slice<{dim = 1, parent = #ttg.blocked<{sizePerThread = [1, 16], threadsPerWarp = [4, 8], warpsPerCTA = [4, 1], order = [1, 0]}>}>>
+      %25 = tt.splat %6 {} : i32 -> tensor<128xi32, #ttg.slice<{dim = 0, parent = #ttg.blocked<{sizePerThread = [1, 16], threadsPerWarp = [4, 8], warpsPerCTA = [4, 1], order = [1, 0]}>}>>
+      %26 = arith.addi %25, %22 {} : tensor<128xi32, #ttg.slice<{dim = 0, parent = #ttg.blocked<{sizePerThread = [1, 16], threadsPerWarp = [4, 8], warpsPerCTA = [4, 1], order = [1, 0]}>}>>
+      %27 = tt.expand_dims %24 {axis = 1 : i32} : tensor<128xi32, #ttg.slice<{dim = 1, parent = #ttg.blocked<{sizePerThread = [1, 16], threadsPerWarp = [4, 8], warpsPerCTA = [4, 1], order = [1, 0]}>}>> -> tensor<128x1xi32, #ttg.blocked<{sizePerThread = [1, 16], threadsPerWarp = [4, 8], warpsPerCTA = [4, 1], order = [1, 0]}>>
+      %28 = tt.splat %arg6  : i32 -> tensor<128x1xi32, #ttg.blocked<{sizePerThread = [1, 16], threadsPerWarp = [4, 8], warpsPerCTA = [4, 1], order = [1, 0]}>>
+      %29 = arith.muli %28, %27  : tensor<128x1xi32, #ttg.blocked<{sizePerThread = [1, 16], threadsPerWarp = [4, 8], warpsPerCTA = [4, 1], order = [1, 0]}>>
+      %30 = tt.splat %arg2  : !tt.ptr<f8E4M3FN> -> tensor<128x1x!tt.ptr<f8E4M3FN>, #ttg.blocked<{sizePerThread = [1, 16], threadsPerWarp = [4, 8], warpsPerCTA = [4, 1], order = [1, 0]}>>
+      %31 = tt.addptr %30, %29  : tensor<128x1x!tt.ptr<f8E4M3FN>, #ttg.blocked<{sizePerThread = [1, 16], threadsPerWarp = [4, 8], warpsPerCTA = [4, 1], order = [1, 0]}>>, tensor<128x1xi32, #ttg.blocked<{sizePerThread = [1, 16], threadsPerWarp = [4, 8], warpsPerCTA = [4, 1], order = [1, 0]}>>
+      %32 = tt.expand_dims %26 {axis = 0 : i32} : tensor<128xi32, #ttg.slice<{dim = 0, parent = #ttg.blocked<{sizePerThread = [1, 16], threadsPerWarp = [4, 8], warpsPerCTA = [4, 1], order = [1, 0]}>}>> -> tensor<1x128xi32, #ttg.blocked<{sizePerThread = [1, 16], threadsPerWarp = [4, 8], warpsPerCTA = [4, 1], order = [1, 0]}>>
+      %33 = tt.broadcast %31  : tensor<128x1x!tt.ptr<f8E4M3FN>, #ttg.blocked<{sizePerThread = [1, 16], threadsPerWarp = [4, 8], warpsPerCTA = [4, 1], order = [1, 0]}>> -> tensor<128x128x!tt.ptr<f8E4M3FN>, #ttg.blocked<{sizePerThread = [1, 16], threadsPerWarp = [4, 8], warpsPerCTA = [4, 1], order = [1, 0]}>>
+      %34 = tt.broadcast %32 : tensor<1x128xi32, #ttg.blocked<{sizePerThread = [1, 16], threadsPerWarp = [4, 8], warpsPerCTA = [4, 1], order = [1, 0]}>> -> tensor<128x128xi32, #ttg.blocked<{sizePerThread = [1, 16], threadsPerWarp = [4, 8], warpsPerCTA = [4, 1], order = [1, 0]}>>
+      %35 = tt.addptr %33, %34 : tensor<128x128x!tt.ptr<f8E4M3FN>, #ttg.blocked<{sizePerThread = [1, 16], threadsPerWarp = [4, 8], warpsPerCTA = [4, 1], order = [1, 0]}>>, tensor<128x128xi32, #ttg.blocked<{sizePerThread = [1, 16], threadsPerWarp = [4, 8], warpsPerCTA = [4, 1], order = [1, 0]}>>
+      %36 = ttg.convert_layout %20 : tensor<128x128xf8E4M3FN, #ttg.nvidia_mma<{versionMajor = 3, versionMinor = 0, warpsPerCTA = [4, 1], instrShape = [16, 128, 32]}>> -> tensor<128x128xf8E4M3FN, #ttg.blocked<{sizePerThread = [1, 16], threadsPerWarp = [4, 8], warpsPerCTA = [4, 1], order = [1, 0]}>>
+      tt.store %35, %36 : tensor<128x128x!tt.ptr<f8E4M3FN>, #ttg.blocked<{sizePerThread = [1, 16], threadsPerWarp = [4, 8], warpsPerCTA = [4, 1], order = [1, 0]}>>
+      nvws.warp_group.return
+    }
+    tt.return
+  }
+}
