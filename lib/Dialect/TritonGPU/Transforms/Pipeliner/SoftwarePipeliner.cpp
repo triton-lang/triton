@@ -148,10 +148,6 @@ struct PipelinePass : public impl::TritonGPUPipelineBase<PipelinePass> {
       for (scf::ForOp forOp : loops) {
         mlir::triton::pipelineTMAStores(forOp);
       }
-
-      for (scf::ForOp forOp : loops) {
-        mlir::triton::pipelineMMAWithScaledAcc(forOp);
-      }
     }
   }
 };

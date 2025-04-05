@@ -305,8 +305,7 @@ def test_pipeline_matmul(scale, device):
             if torch.cuda.get_device_capability()[0] == 10:
                 if scale:
                     # A, B, scale, decomposed A shmem
-                    # MMA pipelining fails to identify the MMA pattern in this case, so the barrier is not inserted.
-                    count = 4
+                    count = 5
                 else:
                     # A, B, MMA barrier
                     count = 3
