@@ -33,7 +33,7 @@ module attributes {"ttg.num-warps" = 4 : i32} {
     // expected-remark@+2 {{unsigned : [1024, 1024] signed : [1024, 1024]}}
     // expected-remark@+1 {{non-neg}}
     %c1024_i32 = arith.constant 1024 : i32
-    // expected-remark@+2 {{unsigned : [0, 1024] signed : [0, 1024]}}
+    // expected-remark@+2 {{unsigned : [0, 2147483647] signed : [0, 1024]}}
     // expected-remark@+1 {{non-neg}}
     %pid = tt.get_program_id x : i32
     // expected-remark@+2 {{unsigned : [1, 1] signed : [-1, -1]}}
@@ -1016,7 +1016,7 @@ module attributes {"ttg.num-warps" = 4 : i32} {
 
 // CHECK-LABEL:   tt.func @DynamicKBound
 module attributes {"ttg.num-warps" = 4 : i32} {
-  // expected-remark@+1 {{unsigned : [0, 128] signed : [0, 128]}}
+  // expected-remark@+1 {{unsigned : [0, 4294967295] signed : [-2147483648, 128]}}
   tt.func @DynamicKBound(%K: i32) {
     // expected-remark@+2 {{unsigned : [1024, 1024] signed : [1024, 1024]}}
     // expected-remark@+1 {{non-neg}}
@@ -1069,15 +1069,15 @@ module attributes {"ttg.num-warps" = 4 : i32} {
         %Ksgelhs: i32,
         // expected-remark@+1 {{arg 2: unsigned : [129, 2147483647] signed : [129, 2147483647]}}
         %Ksgtlhs: i32,
-        // expected-remark@+1 {{arg 3: unsigned : [0, 128] signed : [0, 128]}}
+        // expected-remark@+1 {{arg 3: unsigned : [0, 4294967295] signed : [-2147483648, 128]}}
         %Kslelhs: i32,
-        // expected-remark@+1 {{arg 4: unsigned : [0, 127] signed : [0, 127]}}
+        // expected-remark@+1 {{arg 4: unsigned : [0, 4294967295] signed : [-2147483648, 127]}}
         %Ksltlhs: i32,
         // expected-remark@+1 {{arg 5: unsigned : [64, 64] signed : [64, 64]}}
         %Keqrhs: i32,
-        // expected-remark@+1 {{arg 6: unsigned : [0, 128] signed : [0, 128]}}
+        // expected-remark@+1 {{arg 6: unsigned : [0, 4294967295] signed : [-2147483648, 128]}}
         %Ksgerhs: i32,
-        // expected-remark@+1 {{arg 7: unsigned : [0, 127] signed : [0, 127]}}
+        // expected-remark@+1 {{arg 7: unsigned : [0, 4294967295] signed : [-2147483648, 127]}}
         %Ksgtrhs: i32,
         // expected-remark@+1 {{arg 8: unsigned : [128, 2147483647] signed : [128, 2147483647]}}
         %Kslerhs: i32,
@@ -1146,8 +1146,7 @@ module attributes {"ttg.num-warps" = 4 : i32} {
     // expected-remark@+1 {{result is true}}
     %assumesgerhs = arith.cmpi sge, %c128, %Ksgerhs  : i32
     llvm.intr.assume %assumesgerhs : i1
-    // expected-remark@+2 {{unsigned : [0, 128] signed : [0, 128]}}
-    // expected-remark@+1 {{non-neg}}
+    // expected-remark@+1 {{unsigned : [0, 4294967295] signed : [-2147483648, 128]}}
     %testsgerhs1 = arith.addi %Ksgerhs, %c0 : i32
     // expected-remark@+2 {{unsigned : [1, 1] signed : [-1, -1]}}
     // expected-remark@+1 {{result is true}}
@@ -1169,8 +1168,7 @@ module attributes {"ttg.num-warps" = 4 : i32} {
     // expected-remark@+1 {{result is true}}
     %assumesgtrhs = arith.cmpi sgt, %c128, %Ksgtrhs  : i32
     llvm.intr.assume %assumesgtrhs : i1
-    // expected-remark@+2 {{unsigned : [0, 127] signed : [0, 127]}}
-    // expected-remark@+1 {{non-neg}}
+    // expected-remark@+1 {{unsigned : [0, 4294967295] signed : [-2147483648, 127]}}
     %testsgtrhs1 = arith.addi %Ksgtrhs, %c0 : i32
     // expected-remark@+2 {{unsigned : [1, 1] signed : [-1, -1]}}
     // expected-remark@+1 {{result is true}}
@@ -1182,8 +1180,7 @@ module attributes {"ttg.num-warps" = 4 : i32} {
     // expected-remark@+1 {{result is true}}
     %assumeslelhs = arith.cmpi sle, %Kslelhs, %c128 : i32
     llvm.intr.assume %assumeslelhs : i1
-    // expected-remark@+2 {{unsigned : [0, 128] signed : [0, 128]}}
-    // expected-remark@+1 {{non-neg}}
+    // expected-remark@+1 {{unsigned : [0, 4294967295] signed : [-2147483648, 128]}}
     %testslelhs1 = arith.addi %Kslelhs, %c0 : i32
     // expected-remark@+2 {{unsigned : [1, 1] signed : [-1, -1]}}
     // expected-remark@+1 {{result is true}}
@@ -1206,8 +1203,7 @@ module attributes {"ttg.num-warps" = 4 : i32} {
     // expected-remark@+1 {{result is true}}
     %assumesltlhs = arith.cmpi slt, %Ksltlhs, %c128 : i32
     llvm.intr.assume %assumesltlhs : i1
-    // expected-remark@+2 {{unsigned : [0, 127] signed : [0, 127]}}
-    // expected-remark@+1 {{non-neg}}
+    // expected-remark@+1 {{unsigned : [0, 4294967295] signed : [-2147483648, 127]}}
     %testsltlhs1 = arith.addi %Ksltlhs, %c0 : i32
     // expected-remark@+2 {{unsigned : [1, 1] signed : [-1, -1]}}
     // expected-remark@+1 {{result is true}}
@@ -1734,7 +1730,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
   // expected-remark@+5 {{arg 5: unsigned : [0, 4294967295] signed : [-2147483648, 2147483647]}}
   // expected-remark@+4 {{arg 6: unsigned : [1, 2147483647] signed : [1, 2147483647]}}
   // expected-remark@+3 {{arg 7: unsigned : [0, 4294967295] signed : [-2147483648, 2147483647]}}
-  // expected-remark@+2 {{arg 8: unsigned : [1, 1023] signed : [1, 1023]}}
+  // expected-remark@+2 {{arg 8: unsigned : [1, 2147483647] signed : [1, 1023]}}
   // expected-remark@+1 {{arg 9: unsigned : [0, 4294967295] signed : [-2147483648, 2147483647]}}
   tt.func public @buffer_stride(%arg0: !tt.ptr<f16>, %arg1: !tt.ptr<f16>, %arg2: !tt.ptr<f16>, %arg3: i32, %arg4: i32, %arg5: i32, %arg6: i32, %arg7: i32, %arg8: i32, %arg9: i32) attributes {noinline = false} {
     // expected-remark@+2 {{unsigned : [1024, 1024] signed : [1024, 1024]}}
@@ -1801,7 +1797,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
     // expected-remark@+1 {{result is true}}
     %cmp2 = arith.cmpi slt, %arg8, %c1024_i32 : i32
     llvm.intr.assume %cmp2 : i1
-    // expected-remark@+2 {{unsigned : [1, 1023] signed : [1, 1023]}}
+    // expected-remark@+2 {{unsigned : [1, 2147483647] signed : [1, 1023]}}
     // expected-remark@+1 {{non-neg}}
     %17 = tt.splat %arg8 : i32 -> tensor<256x1xi32, #blocked>
     // expected-remark@+2 {{unsigned : [0, 261888] signed : [0, 261888]}}
@@ -2087,26 +2083,25 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
     ttg.local_store %44, %82 {OpIdx = #amdgpu.OpIdx<0>} : tensor<128x64xf16, #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [8, 8], warpsPerCTA = [8, 1], order = [1, 0]}>> -> !ttg.memdesc<128x64xf16, #ttg.swizzled_shared<{vec = 4, perPhase = 1, maxPhase = 16, order = [1, 0]}>, #ttg.shared_memory, mutable>
     %83 = ttg.memdesc_subview %81[%c0_i32, %c0_i32, %c0_i32] : !ttg.memdesc<1x64x256xf16, #ttg.swizzled_shared<{vec = 4, perPhase = 1, maxPhase = 16, order = [0, 1]}>, #ttg.shared_memory, mutable> -> !ttg.memdesc<64x256xf16, #ttg.swizzled_shared<{vec = 4, perPhase = 1, maxPhase = 16, order = [0, 1]}>, #ttg.shared_memory, mutable>
     ttg.local_store %70, %83 {OpIdx = #amdgpu.OpIdx<1>} : tensor<64x256xf16, #ttg.blocked<{sizePerThread = [8, 1], threadsPerWarp = [8, 8], warpsPerCTA = [1, 8], order = [0, 1]}>> -> !ttg.memdesc<64x256xf16, #ttg.swizzled_shared<{vec = 4, perPhase = 1, maxPhase = 16, order = [0, 1]}>, #ttg.shared_memory, mutable>
-    // expected-remark@+2 {{unsigned : [0, 1] signed : [0, 1]}}
-    // expected-remark@+1 {{non-neg}}
+    // expected-remark@+1 {{unsigned : [0, 4294967295] signed : [-2147483648, 1]}}
     %84 = arith.subi %33, %c1_i32 : i32
     // expected-remark@+2 {{unsigned : [1, 1] signed : [-1, -1]}}
     // expected-remark@+1 {{result is true}}
     %165 = arith.cmpi slt, %84, %c2_i32 : i32
     llvm.intr.assume %165 : i1
-    // expected-remark@+13 {{inferred total trip count: 1}}
-    // expected-remark@+12 {{result 0: unsigned : [0, 0] signed : [0, 0]}}
-    // expected-remark@+11 {{result 1: unsigned : [0, 65535] signed : [0, 65535]}}
-    // expected-remark@+10 {{result 2: unsigned : [0, 4294967295] signed : [-2147483648, 2147483647]}}
-    // expected-remark@+9 {{result 3: unsigned : [0, 4294967295] signed : [-2147483648, 2147483647]}}
-    // expected-remark@+8 {{result 5: unsigned : [0, 128] signed : [0, 128]}}
-    // expected-remark@+7 {{result 6: unsigned : [0, 256] signed : [0, 256]}}
-    // expected-remark@+6 {{result 7: unsigned : [0, 0] signed : [0, 0]}}
-    // expected-remark@+5 {{result 0: non-neg}}
-    // expected-remark@+4 {{result 1: non-neg}}
-    // expected-remark@+3 {{result 5: non-neg}}
-    // expected-remark@+2 {{result 6: non-neg}}
-    // expected-remark@+1 {{result 7: non-neg}}
+    // expected-remark@+13 {{result 0: unsigned : [0, 0] signed : [0, 0]}}
+    // expected-remark@+12 {{result 1: unsigned : [0, 65535] signed : [0, 65535]}}
+    // expected-remark@+11 {{result 2: unsigned : [0, 4294967295] signed : [-2147483648, 2147483647]}}
+    // expected-remark@+10 {{result 3: unsigned : [0, 4294967295] signed : [-2147483648, 2147483647]}}
+    // expected-remark@+9 {{result 5: unsigned : [0, 128] signed : [0, 128]}}
+    // expected-remark@+8 {{result 6: unsigned : [0, 256] signed : [0, 256]}}
+    // expected-remark@+7 {{result 7: unsigned : [0, 0] signed : [0, 0]}}
+    // expected-remark@+6 {{result 0: non-neg}}
+    // expected-remark@+5 {{result 1: non-neg}}
+    // expected-remark@+4 {{result 5: non-neg}}
+    // expected-remark@+3 {{result 6: non-neg}}
+    // expected-remark@+2 {{result 7: non-neg}}
+    // expected-remark@+1 {{inferred total trip count: 1}}
     %85:10 = scf.for %arg9 = %c0_i32 to %84 step %c1_i32 iter_args(%arg10 = %c0_i32, %arg11 = %1, %arg12 = %12, %arg13 = %48, %arg14 = %cst, %arg15 = %17, %arg16 = %53, %arg17 = %c0_i32, %arg18 = %82, %arg19 = %83) -> (i32, i32, i32, i32, tensor<128x256xf32, #ttg.amd_mfma<{versionMajor = 3, versionMinor = 0, warpsPerCTA = [2, 4], instrShape = [32, 32], isTransposed = true}>>, tensor<128xi32, #ttg.slice<{dim = 1, parent = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [8, 8], warpsPerCTA = [8, 1], order = [1, 0]}>}>>, tensor<256xi32, #ttg.slice<{dim = 0, parent = #ttg.blocked<{sizePerThread = [8, 1], threadsPerWarp = [8, 8], warpsPerCTA = [1, 8], order = [0, 1]}>}>>, i32, !ttg.memdesc<128x64xf16, #ttg.swizzled_shared<{vec = 4, perPhase = 1, maxPhase = 16, order = [1, 0]}>, #ttg.shared_memory, mutable>, !ttg.memdesc<64x256xf16, #ttg.swizzled_shared<{vec = 4, perPhase = 1, maxPhase = 16, order = [0, 1]}>, #ttg.shared_memory, mutable>)  : i32 {
       // expected-remark@+1 {{unsigned : [0, 1] signed : [-1, 0]}}
       %92 = arith.cmpi eq, %arg10, %79 : i32
