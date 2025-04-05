@@ -88,10 +88,9 @@ class HIPOptions:
 
         default_libdir = Path(__file__).parent / 'lib'
         extern_libs = {} if self.extern_libs is None else dict(self.extern_libs)
-        for lib in libs = ["ocml", "ockl"]:
+        for lib in ["ocml", "ockl"]:
             extern_libs[lib] = str(default_libdir / f'{lib}.bc')
         object.__setattr__(self, 'extern_libs', tuple(extern_libs.items()))
-
 
     def hash(self):
         key = '_'.join([f'{name}-{val}' for name, val in self.__dict__.items()])
@@ -120,7 +119,7 @@ class HIPBackend(BaseBackend):
 
         if "supported_fp8_dtypes" not in opts:
             supported_fp8_dtypes = set(HIPOptions.supported_fp8_dtypes)
-            if self.target.arch  == 'gfx942':
+            if self.target.arch == 'gfx942':
                 supported_fp8_dtypes.update({'fp8e4nv', 'fp8e4b8', 'fp8e5b16'})
             elif self.target.arch == 'gfx950':
                 supported_fp8_dtypes.update({'fp8e4nv', 'fp8e5'})
@@ -252,8 +251,7 @@ class HIPBackend(BaseBackend):
         if options.schedule_hint == "local-prefetch":
             global_prefetch = local_prefetch = 1
 
-        amd.passes.ttgpuir.add_stream_pipeline(pm, options.num_stages, global_prefetch, local_prefetch,
-                                                use_async_copy)
+        amd.passes.ttgpuir.add_stream_pipeline(pm, options.num_stages, global_prefetch, local_prefetch, use_async_copy)
         if use_async_copy:
             amd.passes.ttgpuir.add_coalesce_async_copy(pm, options.arch)
         passes.common.add_canonicalizer(pm)
