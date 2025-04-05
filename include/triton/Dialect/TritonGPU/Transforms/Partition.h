@@ -58,6 +58,9 @@ public:
     SmallVector<Operation *> ops;
   };
 
+  // TODO: This should probably not exist
+  bool hasOp(Operation *op) const { return opToPartition.count(op); }
+
   // Create a new partition with a stage.
   Partition *addPartition(unsigned stage);
   // Give each partition a new index and order. The indices must be unique.
