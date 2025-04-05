@@ -18,12 +18,14 @@ struct TritonAMDFoldTrueCmpIOpPass
   void runOnOperation() override {
     DenseMap<Value, SetVector<Operation *>> assumptions =
         AMD::TritonIntegerRangeAnalysis::collectAssumptions(getOperation());
+    ModuleOp mod = getOperation();
     std::unique_ptr solver = createDataFlowSolver();
-    solver->load<AMD::TritonIntegerRangeAnalysis>(assumptions);
+    AMD::TritonIntegerRangeAnalysis *rangeAnalysis =
+        solver->load<AMD::TritonIntegerRangeAnalysis>(assumptions);
+    AMD::initializeFuncOps(mod, rangeAnalysis);
     if (failed(solver->initializeAndRun(getOperation())))
       return signalPassFailure();
 
-    ModuleOp mod = getOperation();
     RewritePatternSet patterns(&getContext());
     AMD::populateFoldTrueCmpIOpPatterns(patterns, solver.get());
     (void)applyPatternsGreedily(mod, std::move(patterns));
