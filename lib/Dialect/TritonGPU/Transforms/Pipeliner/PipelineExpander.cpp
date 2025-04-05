@@ -19,8 +19,6 @@
 // -Fix bug when a value yield is used outside the loop and the value def is not
 // in the last stage. If we are not peeling the epilgue we need to remap the
 // output correctly.
-// -Allow for distance of 2 or more between producer and consumer for the cases
-// where the producer is in the same stage as the consumer.
 
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
@@ -30,7 +28,6 @@
 #include "mlir/IR/PatternMatch.h"
 #include "mlir/Transforms/RegionUtils.h"
 #include "llvm/ADT/MapVector.h"
-#include "llvm/ADT/SmallSet.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/MathExtras.h"
 
@@ -220,9 +217,7 @@ bool LoopPipelinerInternal::initializeLoopInfo(
       auto [def, distance] = getDefiningOpAndDistance(operand);
       if (!def)
         continue;
-      if (distance > 1 && (stages[def] != stages[&op])) {
-        // Allow the case of loop carried dependency between the ops in the same
-        // stage.
+      if (distance > 1) {
         LDBG("--only support loop carried dependency with a distance of 1 or "
              "defined outside of the loop -> BAIL");
         return false;
@@ -546,6 +541,14 @@ LogicalResult LoopPipelinerInternal::createKernel(
       if (arg && arg.getOwner() == forOp.getBody()) {
         Value ret = forOp.getBody()->getTerminator()->getOperand(
             arg.getArgNumber() - 1);
+        if (forOp.isDefinedOutsideOfLoop(ret)) {
+          // Special case for values defined outside the loop accessed with
+          // distance 1.
+          if (useStage != maxStage) {
+            nestedNewOp->setOperand(operand->getOperandNumber(), ret);
+          }
+          continue;
+        }
         Operation *dep = ret.getDefiningOp();
         if (!dep)
           continue;
