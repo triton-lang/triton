@@ -203,3 +203,35 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     tt.return
   }
 }
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 128], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [1, 0]}>
+#blocked1 = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [2, 16], warpsPerCTA = [4, 1], order = [1, 0]}>
+#shared0 = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0], CTAsPerCGA = [1], CTASplitNum = [1], CTAOrder = [0]}>
+#tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, unpacked = true>
+
+module attributes {"ttg.num-warps" = 4 : i32, ttg.target = "cuda:100"} {
+
+// CHECK-LABEL: @sink_load_arrive
+tt.func public @sink_load_arrive(%arg0: i32, %alloc: !ttg.memdesc<1xi64, #shared0, #ttg.shared_memory>) {
+  %c0_i32 = arith.constant 0 : i32
+  %c1_i32 = arith.constant 1 : i32
+  %acc_tm = ttng.tmem_alloc : ()  -> !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>
+  // CHECK: scf.for
+  scf.for %i = %c0_i32 to %arg0 step %c1_i32 : i32 {
+    %acc_res = ttng.tmem_load %acc_tm : !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable> -> tensor<128x128xf32, #blocked>
+    // CHECK-NEXT: in_between_op
+    "in_between_op"() : () -> ()
+    // CHECK-NEXT: tmem_load
+    // CHECK-NEXT: arrive_barrier
+    ttng.arrive_barrier %alloc, 2 : !ttg.memdesc<1xi64, #shared0, #ttg.shared_memory>
+    // CHECK-NEXT: in_between_op
+    "in_between_op"() : () -> ()
+    // CHECK-NEXT: use
+    "use"(%acc_res) : (tensor<128x128xf32, #blocked>) -> ()
+  } {tt.scheduled_max_stage = 3 : i32}
+  tt.return
+}
+
+}
