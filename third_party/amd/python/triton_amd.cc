@@ -280,20 +280,6 @@ void init_triton_amd(py::module &&m) {
     return false;
   });
 
-  m.def("has_matrix_core_feature", [](const std::string &arch) {
-    using mlir::triton::AMD::ISAFamily;
-    switch (mlir::triton::AMD::deduceISAFamily(arch)) {
-    case ISAFamily::CDNA4:
-    case ISAFamily::CDNA3:
-    case ISAFamily::CDNA2:
-    case ISAFamily::CDNA1:
-    case ISAFamily::RDNA3:
-      return true;
-    default:
-      return false;
-    }
-  });
-
   m.def("set_all_fn_arg_inreg", [](llvm::Function *fn) {
     for (llvm::Argument &arg : fn->args()) {
       // Check for incompatible attributes.
