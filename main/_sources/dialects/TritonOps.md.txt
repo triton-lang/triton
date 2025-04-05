@@ -501,7 +501,7 @@ operation ::= `tt.descriptor_gather` $desc `[` $x_offsets `,` $y_offset `]`
               attr-dict `:` functional-type(operands, results)
 ```
 
-The `tt.desciptor_gather` op will be lowered to NVIDIA TMA
+The `tt.descriptor_gather` op will be lowered to NVIDIA TMA
 load operations on targets that support it.
 
 `desc_ptr` is a pointer to the TMA descriptor allocated in global memory.

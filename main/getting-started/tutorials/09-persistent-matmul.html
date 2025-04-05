@@ -162,15 +162,13 @@ Benchmarking naive: ...
 Benchmarking naive: done
 Benchmarking persistent: ...
 Benchmarking persistent: done
-170.365 16135.059 ROOT
-├─ nan 0.051 _ZN2at6native18elementwise_kernelILi128ELi4EZNS0_22gpu_kernel_impl_nocastIZZZNS0_23direct_copy_kernel_cudaERNS_18TensorIteratorBaseEENKUlvE1_clEvENKUlvE8_clEvEUlN3c104HalfEE_EEvS4_RKT_EUliE_EEviT1_
-├─ nan 0.046 _ZN2at6native54_GLOBAL__N__d8ceb000_21_DistributionNormal_cu_0c5b6e8543distribution_elementwise_grid_stride_kernelIfLi4EZNS0_9templates4cuda20normal_and_transformIN3c104HalfEfPNS_17CUDAGeneratorImplEZZZNS4_13normal_kernelIS9_EEvRKNS_10TensorBaseEddT_ENKUlvE_clEvENKUlvE1_clEvEUlfE_EEvRNS_18TensorIteratorBaseET1_T2_EUlP24curandStatePhilox4_32_10E0_ZNS1_27distribution_nullary_kernelIS7_f6float4S9_SO_SH_EEvSJ_SL_RKT3_T4_EUlifE_EEviNS_15PhiloxCudaStateESK_SL_
-├─ 177.601 3869.697 cublas [M=8192, N=8192, K=512]
-│  └─ nan 3869.697 ampere_fp16_s16816gemm_fp16_128x128_ldg8_f2f_stages_32x5_tn
-├─ 167.503 4102.581 matmul_kernel [M=8192, N=8192, K=512]
-├─ 160.503 4281.496 matmul_kernel_persistent [M=8192, N=8192, K=512]
-└─ 177.058 3881.187 torch [M=8192, N=8192, K=512]
-   └─ nan 3881.187 ampere_fp16_s16816gemm_fp16_128x128_ldg8_f2f_stages_32x5_tn
+170.212 16149.174 ROOT
+├─ 177.284 3876.239 cublas [M=8192, N=8192, K=512]
+│  └─ nan 3876.239 ampere_fp16_s16816gemm_fp16_128x128_ldg8_f2f_stages_32x5_tn
+├─ 167.367 4105.924 matmul_kernel [M=8192, N=8192, K=512]
+├─ 160.653 4277.510 matmul_kernel_persistent [M=8192, N=8192, K=512]
+└─ 176.679 3889.501 torch [M=8192, N=8192, K=512]
+   └─ nan 3889.501 ampere_fp16_s16816gemm_fp16_128x128_ldg8_f2f_stages_32x5_tn
 </pre></div>
 </div>
 <div class="line-block">
@@ -878,7 +876,7 @@ Benchmarking persistent: done
     <span class="n">b</span> <span class="o">=</span> <span class="n">b</span><span class="o">.</span><span class="n">T</span><span class="o">.</span><span class="n">contiguous</span><span class="p">()</span>
 
     <span class="k">if</span> <span class="n">cublas</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
-        <span class="n">bench_fn</span><span class="p">(</span><span class="s2">&quot;cublas&quot;</span><span class="p">,</span> <span class="n">reps</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="n">cublas_matmul</span><span class="p">,</span> <span class="n">a</span><span class="p">,</span> <span class="n">b</span><span class="p">)</span>
+        <span class="n">bench_fn</span><span class="p">(</span><span class="s2">&quot;cublas&quot;</span><span class="p">,</span> <span class="n">reps</span><span class="p">,</span> <span class="n">warmup_reps</span><span class="p">,</span> <span class="n">cublas_matmul</span><span class="p">,</span> <span class="n">a</span><span class="p">,</span> <span class="n">b</span><span class="p">)</span>
     <span class="k">if</span> <span class="n">dtype</span> <span class="o">==</span> <span class="n">torch</span><span class="o">.</span><span class="n">float16</span><span class="p">:</span>
         <span class="n">bench_fn</span><span class="p">(</span><span class="s2">&quot;torch&quot;</span><span class="p">,</span> <span class="n">reps</span><span class="p">,</span> <span class="n">warmup_reps</span><span class="p">,</span> <span class="n">torch_matmul</span><span class="p">,</span> <span class="n">a</span><span class="p">,</span> <span class="n">b</span><span class="p">)</span>
     <span class="n">bench_fn</span><span class="p">(</span><span class="s2">&quot;naive&quot;</span><span class="p">,</span> <span class="n">reps</span><span class="p">,</span> <span class="n">warmup_reps</span><span class="p">,</span> <span class="n">matmul</span><span class="p">,</span> <span class="n">a</span><span class="p">,</span> <span class="n">b</span><span class="o">.</span><span class="n">T</span><span class="p">)</span>
@@ -965,13 +963,14 @@ Benchmarking persistent: done
         <span class="n">validate</span><span class="p">(</span><span class="mi">8192</span><span class="p">,</span> <span class="mi">8192</span><span class="p">,</span> <span class="n">args</span><span class="o">.</span><span class="n">K_range</span><span class="p">[</span><span class="mi">0</span><span class="p">],</span> <span class="n">dtype</span><span class="p">)</span>
 
         <span class="n">proton</span><span class="o">.</span><span class="n">start</span><span class="p">(</span><span class="s2">&quot;matmul&quot;</span><span class="p">,</span> <span class="n">hook</span><span class="o">=</span><span class="s2">&quot;triton&quot;</span><span class="p">)</span>
+        <span class="n">proton</span><span class="o">.</span><span class="n">deactivate</span><span class="p">()</span>
         <span class="k">for</span> <span class="n">K</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="n">args</span><span class="o">.</span><span class="n">K_range</span><span class="p">[</span><span class="mi">0</span><span class="p">],</span> <span class="n">args</span><span class="o">.</span><span class="n">K_range</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span> <span class="o">+</span> <span class="mi">1</span><span class="p">,</span> <span class="n">args</span><span class="o">.</span><span class="n">K_step</span><span class="p">):</span>
             <span class="n">bench</span><span class="p">(</span><span class="n">K</span><span class="p">,</span> <span class="n">dtype</span><span class="p">)</span>
         <span class="n">proton</span><span class="o">.</span><span class="n">finalize</span><span class="p">()</span>
         <span class="n">show_profile</span><span class="p">(</span><span class="n">args</span><span class="o">.</span><span class="n">prec</span><span class="p">,</span> <span class="s2">&quot;matmul&quot;</span><span class="p">)</span>
 </pre></div>
 </div>
-<p class="sphx-glr-timing"><strong>Total running time of the script:</strong> (1 minutes 6.028 seconds)</p>
+<p class="sphx-glr-timing"><strong>Total running time of the script:</strong> (1 minutes 10.168 seconds)</p>
 <div class="sphx-glr-footer sphx-glr-footer-example docutils container" id="sphx-glr-download-getting-started-tutorials-09-persistent-matmul-py">
 <div class="sphx-glr-download sphx-glr-download-jupyter docutils container">
 <p><a class="reference download internal" download="" href="../../_downloads/b5537c431cd73b8ee3c32cdf90c58104/09-persistent-matmul.ipynb"><code class="xref download docutils literal notranslate"><span class="pre">Download</span> <span class="pre">Jupyter</span> <span class="pre">notebook:</span> <span class="pre">09-persistent-matmul.ipynb</span></code></a></p>

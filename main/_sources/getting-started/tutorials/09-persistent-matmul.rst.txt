@@ -37,7 +37,7 @@ Users can pass command-line arguments to specify matrix dimensions and iteration
 
 Note that currently this tutorial will fail on devices with a small shared memory size, such as RTX-4090.
 
-.. GENERATED FROM PYTHON SOURCE LINES 21-815
+.. GENERATED FROM PYTHON SOURCE LINES 21-816
 
 
 
@@ -66,15 +66,13 @@ Note that currently this tutorial will fail on devices with a small shared memor
     Benchmarking torch: ...    Benchmarking torch: done
     Benchmarking naive: ...    Benchmarking naive: done
     Benchmarking persistent: ...    Benchmarking persistent: done
-    170.365 16135.059 ROOT
-    ├─ nan 0.051 _ZN2at6native18elementwise_kernelILi128ELi4EZNS0_22gpu_kernel_impl_nocastIZZZNS0_23direct_copy_kernel_cudaERNS_18TensorIteratorBaseEENKUlvE1_clEvENKUlvE8_clEvEUlN3c104HalfEE_EEvS4_RKT_EUliE_EEviT1_
-    ├─ nan 0.046 _ZN2at6native54_GLOBAL__N__d8ceb000_21_DistributionNormal_cu_0c5b6e8543distribution_elementwise_grid_stride_kernelIfLi4EZNS0_9templates4cuda20normal_and_transformIN3c104HalfEfPNS_17CUDAGeneratorImplEZZZNS4_13normal_kernelIS9_EEvRKNS_10TensorBaseEddT_ENKUlvE_clEvENKUlvE1_clEvEUlfE_EEvRNS_18TensorIteratorBaseET1_T2_EUlP24curandStatePhilox4_32_10E0_ZNS1_27distribution_nullary_kernelIS7_f6float4S9_SO_SH_EEvSJ_SL_RKT3_T4_EUlifE_EEviNS_15PhiloxCudaStateESK_SL_
-    ├─ 177.601 3869.697 cublas [M=8192, N=8192, K=512]
-    │  └─ nan 3869.697 ampere_fp16_s16816gemm_fp16_128x128_ldg8_f2f_stages_32x5_tn
-    ├─ 167.503 4102.581 matmul_kernel [M=8192, N=8192, K=512]
-    ├─ 160.503 4281.496 matmul_kernel_persistent [M=8192, N=8192, K=512]
-    └─ 177.058 3881.187 torch [M=8192, N=8192, K=512]
-       └─ nan 3881.187 ampere_fp16_s16816gemm_fp16_128x128_ldg8_f2f_stages_32x5_tn
+    170.212 16149.174 ROOT
+    ├─ 177.284 3876.239 cublas [M=8192, N=8192, K=512]
+    │  └─ nan 3876.239 ampere_fp16_s16816gemm_fp16_128x128_ldg8_f2f_stages_32x5_tn
+    ├─ 167.367 4105.924 matmul_kernel [M=8192, N=8192, K=512]
+    ├─ 160.653 4277.510 matmul_kernel_persistent [M=8192, N=8192, K=512]
+    └─ 176.679 3889.501 torch [M=8192, N=8192, K=512]
+       └─ nan 3889.501 ampere_fp16_s16816gemm_fp16_128x128_ldg8_f2f_stages_32x5_tn
 
 
 
@@ -789,7 +787,7 @@ Note that currently this tutorial will fail on devices with a small shared memor
         b = b.T.contiguous()
 
         if cublas is not None:
-            bench_fn("cublas", reps, 1, cublas_matmul, a, b)
+            bench_fn("cublas", reps, warmup_reps, cublas_matmul, a, b)
         if dtype == torch.float16:
             bench_fn("torch", reps, warmup_reps, torch_matmul, a, b)
         bench_fn("naive", reps, warmup_reps, matmul, a, b.T)
@@ -876,6 +874,7 @@ Note that currently this tutorial will fail on devices with a small shared memor
             validate(8192, 8192, args.K_range[0], dtype)
 
             proton.start("matmul", hook="triton")
+            proton.deactivate()
             for K in range(args.K_range[0], args.K_range[1] + 1, args.K_step):
                 bench(K, dtype)
             proton.finalize()
@@ -884,7 +883,7 @@ Note that currently this tutorial will fail on devices with a small shared memor
 
 .. rst-class:: sphx-glr-timing
 
-   **Total running time of the script:** (1 minutes 6.028 seconds)
+   **Total running time of the script:** (1 minutes 10.168 seconds)
 
 
 .. _sphx_glr_download_getting-started_tutorials_09-persistent-matmul.py:
