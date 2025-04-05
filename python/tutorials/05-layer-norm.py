@@ -63,21 +63,16 @@ def _layer_norm_fwd_fused(
     Y += row * stride
     X += row * stride
     # Compute mean
-    mean = 0
     _mean = tl.zeros([BLOCK_SIZE], dtype=tl.float32)
+    _sq_sum = tl.zeros([BLOCK_SIZE], dtype=tl.float32)
     for off in range(0, N, BLOCK_SIZE):
         cols = off + tl.arange(0, BLOCK_SIZE)
-        a = tl.load(X + cols, mask=cols < N, other=0.).to(tl.float32)
+        mask = cols < N
+        a = tl.load(X + cols, mask=mask, other=0.).to(tl.float32)
         _mean += a
+        _sq_sum += a * a
     mean = tl.sum(_mean, axis=0) / N
-    # Compute variance
-    _var = tl.zeros([BLOCK_SIZE], dtype=tl.float32)
-    for off in range(0, N, BLOCK_SIZE):
-        cols = off + tl.arange(0, BLOCK_SIZE)
-        x = tl.load(X + cols, mask=cols < N, other=0.).to(tl.float32)
-        x = tl.where(cols < N, x - mean, 0.)
-        _var += x * x
-    var = tl.sum(_var, axis=0) / N
+    var = tl.sum(_sq_sum, axis=0) / N - mean * mean # Var = E[x^2] - E[x]^2
     rstd = 1 / tl.sqrt(var + eps)
     # Write mean / rstd
     tl.store(Mean + row, mean)
