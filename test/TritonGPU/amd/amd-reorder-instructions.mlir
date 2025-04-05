@@ -170,106 +170,6 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
     tt.return %19#2 : tensor<128x128xf32, #mma>
   }
 
-
-// This example tests that tt.load overlaps with independent ttg.local_store which
-// overlaps with independent tt.dot.
-// num_stages == 3, double buffered
-
-// CHECK-LABEL:  tt.func @matmul_loop_mb
-// CHECK:  %{{.*}}:8 = scf.for %[[ARG5:.*]] = %{{.*}} to %{{.*}} step %{{.*}} iter_args(%[[ARG6:.*]] = %{{.*}}, %[[ARG7:.*]] = %{{.*}}, %[[ARG8:.*]] = %{{.*}}, %[[ARG9:.*]] = %{{.*}}, %[[ARG10:.*]] = %{{.*}}, %[[ARG11:.*]] = %{{.*}}, %[[ARG12:.*]] = %{{.*}}, %[[ARG13:.*]] = %{{.*}})
-// Stage 1
-//        CHECK:       %[[ADDI_28:.*]] = arith.addi %[[ARG9]], %{{.*}}
-//        CHECK:       %[[CMPI_29:.*]] = arith.cmpi slt, %[[ADDI_28]], %{{.*}}
-//        CHECK:       %[[SELECT_30:.*]] = arith.select %[[CMPI_29]], %[[ADDI_28]], %{{.*}}
-//        CHECK:       %[[MEMDESC_SUBVIEW_31:.*]] = ttg.memdesc_subview %{{.*}}[%[[SELECT_30]], %{{.*}}, %{{.*}}]
-//        CHECK:       ttg.local_store %[[ARG12]], %[[MEMDESC_SUBVIEW_31]]
-//        CHECK:       %[[MEMDESC_SUBVIEW_32:.*]] = ttg.memdesc_subview %{{.*}}[%[[SELECT_30]], %{{.*}}, %{{.*}}]
-//        CHECK:       ttg.local_store %[[ARG13]], %[[MEMDESC_SUBVIEW_32]]
-// Stage 1
-//        CHECK:       %[[ADDPTR_33:.*]] = tt.addptr %[[ARG6]], %{{.*}}
-//        CHECK:       %[[MULI_34:.*]] = arith.muli %{{.*}}, %{{.*}}
-//        CHECK:       %[[SUBI_35:.*]] = arith.subi %{{.*}}, %[[MULI_34]]
-//        CHECK:       %[[CMPI_36:.*]] = arith.cmpi slt, %[[ARG5]], %[[SUBI_35]]
-//        CHECK:       %[[SPLAT_37:.*]] = tt.splat %[[CMPI_36]]
-//        CHECK:       %[[LOAD_38:.*]] = tt.load %[[ADDPTR_33]], %[[SPLAT_37]]
-//        CHECK:       %[[ADDPTR_39:.*]] = tt.addptr %[[ARG7]], %{{.*}}
-//        CHECK:       %[[SPLAT_40:.*]] = tt.splat %[[CMPI_36]]
-//        CHECK:       %[[LOAD_41:.*]] = tt.load %[[ADDPTR_39]], %[[SPLAT_40]]
-// Stage 2
-//        CHECK:       %[[LOCAL_LOAD_42:.*]] = ttg.local_load %[[ARG10]]
-//        CHECK:       %[[LOCAL_LOAD_43:.*]] = ttg.local_load %[[ARG11]]
-//        CHECK:       %[[MULF_44:.*]] = arith.mulf %[[LOCAL_LOAD_43]], %{{.*}}
-//        CHECK:       %[[DOT_45:.*]] = tt.dot %[[LOCAL_LOAD_42]], %[[MULF_44]], %[[ARG8]]
-//        CHECK:       scf.yield %[[ADDPTR_33]], %[[ADDPTR_39]], %[[DOT_45]], %[[SELECT_30]], %[[MEMDESC_SUBVIEW_31]], %[[MEMDESC_SUBVIEW_32]], %[[LOAD_38]], %[[LOAD_41]]
-//        CHECK:   }
-
-  tt.func @matmul_loop_mb(%arg0: index, %arg1: index, %arg2: index, %arg3: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg4: !tt.ptr<f16> {tt.divisibility = 16 : i32}) -> tensor<128x128xf32, #mma> {
-    %c2 = arith.constant 2 : index
-    %c2_i32 = arith.constant 2 : i32
-    %c1_i32 = arith.constant 1 : i32
-    %c0_i32 = arith.constant 0 : i32
-    %cst = arith.constant dense<4.000000e+00> : tensor<32x128xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>>
-    %cst_0 = arith.constant dense<4> : tensor<32x128xi32, #blocked>
-    %cst_1 = arith.constant dense<4> : tensor<128x32xi32, #blocked1>
-    %cst_2 = arith.constant dense<0.000000e+00> : tensor<128x128xf32, #mma>
-    %cst_3 = arith.constant dense<0.000000e+00> : tensor<32x128xf16, #blocked>
-    %0 = tt.splat %arg3 : !tt.ptr<f16> -> tensor<128x32x!tt.ptr<f16>, #blocked1>
-    %1 = tt.make_range {end = 32 : i32, start = 0 : i32} : tensor<32xi32, #ttg.slice<{dim = 0, parent = #blocked1}>>
-    %2 = tt.expand_dims %1 {axis = 0 : i32} : tensor<32xi32, #ttg.slice<{dim = 0, parent = #blocked1}>> -> tensor<1x32xi32, #blocked1>
-    %3 = tt.broadcast %2 : tensor<1x32xi32, #blocked1> -> tensor<128x32xi32, #blocked1>
-    %4 = tt.addptr %0, %3 : tensor<128x32x!tt.ptr<f16>, #blocked1>, tensor<128x32xi32, #blocked1>
-    %5 = tt.splat %arg4 : !tt.ptr<f16> -> tensor<32x128x!tt.ptr<f16>, #blocked>
-    %6 = tt.make_range {end = 128 : i32, start = 0 : i32} : tensor<128xi32, #ttg.slice<{dim = 0, parent = #blocked}>>
-    %7 = tt.expand_dims %6 {axis = 0 : i32} : tensor<128xi32, #ttg.slice<{dim = 0, parent = #blocked}>> -> tensor<1x128xi32, #blocked>
-    %8 = tt.broadcast %7 : tensor<1x128xi32, #blocked> -> tensor<32x128xi32, #blocked>
-    %9 = tt.addptr %5, %8 : tensor<32x128x!tt.ptr<f16>, #blocked>, tensor<32x128xi32, #blocked>
-    %10 = ttg.local_alloc : () -> !ttg.memdesc<2x128x32xf16, #shared, #smem, mutable>
-    %11 = ttg.local_alloc : () -> !ttg.memdesc<2x32x128xf16, #shared1, #smem, mutable>
-    %12 = arith.cmpi slt, %arg0, %arg1 : index
-    %13 = tt.splat %12 : i1 -> tensor<128x32xi1, #blocked1>
-    %14 = tt.load %4, %13 : tensor<128x32x!tt.ptr<f16>, #blocked1>
-    %15 = tt.splat %12 : i1 -> tensor<32x128xi1, #blocked>
-    %16 = tt.load %9, %15, %cst_3 : tensor<32x128x!tt.ptr<f16>, #blocked>
-    %17 = arith.addi %arg0, %arg2 : index
-    %18 = arith.cmpi slt, %17, %arg1 : index
-    %19 = tt.addptr %4, %cst_1 : tensor<128x32x!tt.ptr<f16>, #blocked1>, tensor<128x32xi32, #blocked1>
-    %20 = tt.addptr %9, %cst_0 : tensor<32x128x!tt.ptr<f16>, #blocked>, tensor<32x128xi32, #blocked>
-    %21 = tt.splat %18 : i1 -> tensor<128x32xi1, #blocked1>
-    %22 = tt.load %19, %21 : tensor<128x32x!tt.ptr<f16>, #blocked1>
-    %23 = tt.splat %18 : i1 -> tensor<32x128xi1, #blocked>
-    %24 = tt.load %20, %23, %cst_3 : tensor<32x128x!tt.ptr<f16>, #blocked>
-    %25 = ttg.memdesc_subview %10[%c0_i32, %c0_i32, %c0_i32] : !ttg.memdesc<2x128x32xf16, #shared, #smem, mutable> -> !ttg.memdesc<128x32xf16, #shared, #smem, mutable, 1x128x32>
-    ttg.local_store %14, %25 : tensor<128x32xf16, #blocked1> -> !ttg.memdesc<128x32xf16, #shared, #smem, mutable, 1x128x32>
-    %26 = ttg.memdesc_subview %11[%c0_i32, %c0_i32, %c0_i32] : !ttg.memdesc<2x32x128xf16, #shared1, #smem, mutable> -> !ttg.memdesc<32x128xf16, #shared1, #smem, mutable, 1x32x128>
-    ttg.local_store %16, %26 : tensor<32x128xf16, #blocked> -> !ttg.memdesc<32x128xf16, #shared1, #smem, mutable, 1x32x128>
-    %27:8 = scf.for %arg5 = %arg0 to %arg1 step %arg2 iter_args(%arg6 = %19, %arg7 = %20, %arg8 = %cst_2, %arg9 = %c0_i32, %arg10 = %25, %arg11 = %26, %arg12 = %22, %arg13 = %24) -> (tensor<128x32x!tt.ptr<f16>, #blocked1>, tensor<32x128x!tt.ptr<f16>, #blocked>, tensor<128x128xf32, #mma>, i32, !ttg.memdesc<128x32xf16, #shared, #smem, mutable, 1x128x32>, !ttg.memdesc<32x128xf16, #shared1, #smem, mutable, 1x32x128>, tensor<128x32xf16, #blocked1>, tensor<32x128xf16, #blocked>) {
-      %28 = arith.muli %arg2, %c2 : index
-      %29 = arith.subi %arg1, %28 : index
-      %30 = arith.cmpi slt, %arg5, %29 : index
-      %31 = ttg.local_load %arg10 : !ttg.memdesc<128x32xf16, #shared, #smem, mutable, 1x128x32> -> tensor<128x32xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 2}>>
-      %32 = ttg.local_load %arg11 : !ttg.memdesc<32x128xf16, #shared1, #smem, mutable, 1x32x128> -> tensor<32x128xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>>
-      %33 = arith.mulf %32, %cst : tensor<32x128xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>>
-      %34 = tt.dot %31, %33, %arg8 : tensor<128x32xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 2}>> * tensor<32x128xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>> -> tensor<128x128xf32, #mma>
-      %35 = tt.addptr %arg6, %cst_1 : tensor<128x32x!tt.ptr<f16>, #blocked1>, tensor<128x32xi32, #blocked1>
-      %36 = tt.addptr %arg7, %cst_0 : tensor<32x128x!tt.ptr<f16>, #blocked>, tensor<32x128xi32, #blocked>
-      %37 = tt.splat %30 : i1 -> tensor<128x32xi1, #blocked1>
-      %38 = tt.load %35, %37 : tensor<128x32x!tt.ptr<f16>, #blocked1>
-      %39 = tt.splat %30 : i1 -> tensor<32x128xi1, #blocked>
-      %40 = tt.load %36, %39, %cst_3 : tensor<32x128x!tt.ptr<f16>, #blocked>
-      %41 = arith.addi %arg9, %c1_i32 : i32
-      %42 = arith.cmpi slt, %41, %c2_i32 : i32
-      %43 = arith.select %42, %41, %c0_i32 : i32
-      %44 = ttg.memdesc_subview %10[%43, %c0_i32, %c0_i32] : !ttg.memdesc<2x128x32xf16, #shared, #smem, mutable> -> !ttg.memdesc<128x32xf16, #shared, #smem, mutable, 1x128x32>
-      ttg.local_store %arg12, %44 : tensor<128x32xf16, #blocked1> -> !ttg.memdesc<128x32xf16, #shared, #smem, mutable, 1x128x32>
-      %45 = ttg.memdesc_subview %11[%43, %c0_i32, %c0_i32] : !ttg.memdesc<2x32x128xf16, #shared1, #smem, mutable> -> !ttg.memdesc<32x128xf16, #shared1, #smem, mutable, 1x32x128>
-      ttg.local_store %arg13, %45 : tensor<32x128xf16, #blocked> -> !ttg.memdesc<32x128xf16, #shared1, #smem, mutable, 1x32x128>
-      scf.yield %35, %36, %34, %43, %44, %45, %38, %40 : tensor<128x32x!tt.ptr<f16>, #blocked1>, tensor<32x128x!tt.ptr<f16>, #blocked>, tensor<128x128xf32, #mma>, i32, !ttg.memdesc<128x32xf16, #shared, #smem, mutable, 1x128x32>, !ttg.memdesc<32x128xf16, #shared1, #smem, mutable, 1x32x128>, tensor<128x32xf16, #blocked1>, tensor<32x128xf16, #blocked>
-    }
-    ttg.local_dealloc %10 : !ttg.memdesc<2x128x32xf16, #shared, #smem, mutable>
-    ttg.local_dealloc %11 : !ttg.memdesc<2x32x128xf16, #shared1, #smem, mutable>
-    tt.return %27#2 : tensor<128x128xf32, #mma>
-  }
-
 // This example shows dependent loads and verifies all are moved early.
 // CHECK-LABEL:  tt.func @indirect_bmm_vector
 // CHECK:  %{{.*}}:7 = scf.for %[[ARG6:.*]] = %{{.*}} to %{{.*}} step %{{.*}} iter_args(%[[ARG7:.*]] = %{{.*}}, %[[ARG8:.*]] = %{{.*}}, %[[ARG9:.*]] = %{{.*}}, %[[ARG10:.*]] = %{{.*}}, %[[ARG11:.*]] = %{{.*}}, %[[ARG12:.*]] = %{{.*}}, %[[ARG13:.*]] = %{{.*}})
@@ -446,5 +346,35 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
       scf.yield %acc : tensor<256x128xf32, #mfma>
     }
     tt.return %54 : tensor<256x128xf32, #mfma>
+  }
+}
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [16, 4], warpsPerCTA = [4, 1], order = [1, 0]}>
+#mma = #ttg.amd_mfma<{versionMajor = 3, versionMinor = 0, warpsPerCTA = [2, 2], instrShape = [16, 16], isTransposed = true}>
+#shared = #ttg.swizzled_shared<{vec = 8, perPhase = 2, maxPhase = 4, order = [1, 0]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "hip:gfx942", "ttg.threads-per-warp" = 64 : i32} {
+// This example tests the case where global loads are moved early.
+// CHECK-LABEL: move_up_global_load
+// CHECK: tt.addptr
+// CHECK: tt.splat
+// CHECK: tt.load
+// CHECK: ttg.local_alloc
+// CHECK: ttg.memdesc_subview
+// CHECK: ttg.local_store
+  tt.func @move_up_global_load(%arg0: tensor<128x32x!tt.ptr<f16>, #blocked>) {
+    %0 = ttg.local_alloc : () -> !ttg.memdesc<3x128x32xf16, #shared, #smem, mutable>
+    %c0_i1 = arith.constant 0 : i1
+    %c0_i32 = arith.constant 0 : i32
+    %cst_0 = arith.constant dense<0> : tensor<128x32xi32, #blocked>
+    %1 = tt.addptr %arg0, %cst_0 : tensor<128x32x!tt.ptr<f16>, #blocked>, tensor<128x32xi32, #blocked>
+
+    %3 = tt.splat %c0_i1 : i1 -> tensor<128x32xi1, #blocked>
+    %4 = tt.load %1, %3 : tensor<128x32x!tt.ptr<f16>, #blocked>
+    %5 = ttg.memdesc_subview %0[%c0_i32, %c0_i32, %c0_i32] : !ttg.memdesc<3x128x32xf16, #shared, #smem, mutable> -> !ttg.memdesc<128x32xf16, #shared, #smem, mutable>
+    ttg.local_store %4, %5 {OpIdx = #amdgpu.OpIdx<0>} : tensor<128x32xf16, #blocked> -> !ttg.memdesc<128x32xf16, #shared, #smem, mutable>
+    tt.return
   }
 }
