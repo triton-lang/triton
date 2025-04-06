@@ -26,8 +26,6 @@ using Partition = WarpSchedule::Partition;
 static void eraseOtherPartitions(scf::ForOp &loop, const WarpSchedule &schedule,
                                  const Partition *partition) {
   auto inPartition = [&](Operation *op) {
-    if (!schedule.hasOp(op))
-      return false;
     const Partition *opPartition = schedule.getPartition(op);
     return llvm::is_contained({partition, schedule.getRootPartition()},
                               opPartition);

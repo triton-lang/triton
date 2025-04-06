@@ -114,6 +114,30 @@ const WarpSchedule::Partition *WarpSchedule::getPartition(unsigned idx) const {
   return partitions[idx].get();
 }
 
+void assignPartitionToBlock(
+    mlir::Block *block, WarpSchedule::Partition *part,
+    DenseMap<Operation *, WarpSchedule::Partition *> &opToPartition);
+
+void assignPartitionToIfOp(
+    scf::IfOp ifOp, WarpSchedule::Partition *part,
+    DenseMap<Operation *, WarpSchedule::Partition *> &opToPartition) {
+  assignPartitionToBlock(ifOp.thenBlock(), part, opToPartition);
+  if (ifOp.elseBlock()) {
+    assignPartitionToBlock(ifOp.elseBlock(), part, opToPartition);
+  }
+}
+
+void assignPartitionToBlock(
+    mlir::Block *block, WarpSchedule::Partition *part,
+    DenseMap<Operation *, WarpSchedule::Partition *> &opToPartition) {
+  for (auto &op : block->getOperations()) {
+    opToPartition[&op] = part;
+    if (auto ifOp = dyn_cast<scf::IfOp>(op)) {
+      assignPartitionToIfOp(ifOp, part, opToPartition);
+    }
+  }
+}
+
 FailureOr<WarpSchedule> WarpSchedule::deserialize(scf::ForOp loop) {
   auto stages = loop->getAttrOfType<ArrayAttr>(kPartitionStagesAttrName);
   if (!stages) {
@@ -146,6 +170,10 @@ FailureOr<WarpSchedule> WarpSchedule::deserialize(scf::ForOp loop) {
 
     partition->insert(&op);
     result.opToPartition[&op] = partition;
+
+    if (auto ifOp = dyn_cast<scf::IfOp>(op)) {
+      assignPartitionToIfOp(ifOp, partition, result.opToPartition);
+    }
   }
 
   return result;
