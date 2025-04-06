@@ -20,12 +20,12 @@ namespace gpu {
 
 // -- StackAllocOp --
 LogicalResult StackAllocOp::verify() {
-    auto bufferTy = mlir::cast<triton::gpu::MemDescType>(getData().getType());
-    auto rank = bufferTy.getRank();
-  if(rank > 1)
+  auto bufferTy = mlir::cast<triton::gpu::MemDescType>(getData().getType());
+  auto rank = bufferTy.getRank();
+  if (rank > 1)
     return emitOpError("Proton stack currently only supports 1-D shapes");
   return success();
-}    
+}
 
 // -- CircularRecordOp --
 LogicalResult CircularStoreOp::verify() {
