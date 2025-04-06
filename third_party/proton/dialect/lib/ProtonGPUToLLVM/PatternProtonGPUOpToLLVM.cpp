@@ -124,8 +124,6 @@ struct StackAllocOpConversion
 
     auto bufferTy =
         mlir::cast<triton::gpu::MemDescType>(op.getData().getType());
-    auto rank = bufferTy.getRank();
-    assert(rank > 0 && "Proton stack currently only supports 1-D shapes");
 
     const int bufferSizeInBytes =
         mlir::ShapedType::getNumElements(bufferTy.getShape()) *
@@ -149,7 +147,6 @@ struct StackAllocOpConversion
     auto structTy =
         LLVM::LLVMStructType::getLiteral(rewriter.getContext(), types);
 
-    // return value
     Value llvmStruct = rewriter.create<LLVM::UndefOp>(loc, structTy);
     for (const auto &v : llvm::enumerate(elems)) {
       llvmStruct = b.insert_val(structTy, llvmStruct, v.value(), v.index());
