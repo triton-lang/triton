@@ -38,6 +38,29 @@ class CudaAllocator:
         return buffer
 
 
+class Instrumentation:
+
+    def __init__(self, ir_map: Dict[str, Any]):
+        self.loaded = False
+        self.manager = ir_map
+
+    def register(self, ir: str, func):
+        if ir in self.manager:
+            raise RuntimeError(f"IR already registered: {ir}")
+        self.manager[ir] = func
+
+    def patch(self, ir: str, pm, context):
+        self.load_dialects(context)
+        if ir in self.manager:
+            self.manager[ir](pm)
+
+    def load_dialects(self, ctx):
+        if self.loaded:
+            return
+        self.loaded = True
+        triton_proton.load_dialects(ctx)
+
+
 class InstrumentationHook(Hook):
     # It's important to note that only one instance of the instrumentation hook can be active at a time.
     active_count = 0
@@ -81,10 +104,10 @@ class InstrumentationHook(Hook):
         else:
             raise RuntimeError(f"Unsupported backend: {backend}")
 
-        backends[backend_name].compiler.instrumentation = {
+        backends[backend_name].compiler.instrumentation = Instrumentation({
             "ttir": triton_proton.add_convert_proton_to_protongpu,
             "ttgpuir": ttgpuir_func,
-        }
+        })
 
         # Set up the profiling allocator
         set_profile_allocator(self.allocator)
@@ -134,6 +157,7 @@ class InstrumentationHook(Hook):
                 # Parse the MLIR module to extract scope IDs
                 context = ir.context()
                 ir.load_dialects(context)
+                triton_proton.load_dialects(context)
                 module = ir.parse_mlir_module(ir_path, context)
                 module.context = context
                 self.function_scope_ids[function] = triton_proton.get_scope_id_pairs(module)

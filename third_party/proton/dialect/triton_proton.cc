@@ -5,6 +5,7 @@
 #include "Conversion/ProtonToProtonGPU/Passes.h"
 #include "Dialect/Proton/IR/Dialect.h"
 #include "Dialect/ProtonGPU/IR/Dialect.h"
+#include "mlir/IR/Builders.h"
 #include "mlir/Pass/PassManager.h"
 #include "passes.h"
 #include <pybind11/pybind11.h>
@@ -30,6 +31,16 @@ void init_triton_proton(py::module &&m) {
         mlir::triton::proton::ModuleScopeIdAllocation(module);
     return moduleScopeIdAllocation.getScopeIdPairs();
   });
+
+  m.def("create_proton_record",
+        [](mlir::OpBuilder &opBuilder, bool isStart,
+           const std::string &name) -> void {
+          auto nameAttr = mlir::StringAttr::get(opBuilder.getContext(),
+                                                llvm::StringRef(name));
+          auto loc = opBuilder.getUnknownLoc();
+          opBuilder.create<mlir::triton::proton::RecordOp>(loc, isStart,
+                                                           nameAttr);
+        });
 
   ADD_PASS_WRAPPER_0("add_convert_proton_to_protongpu",
                      mlir::triton::proton::createConvertProtonToProtonGPUPass);
