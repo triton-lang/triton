@@ -496,28 +496,10 @@ int32_t getCtrlBitsForCacheModifierOnTarget(
   }
 }
 
-Value cvtFp32ToFp16(Location loc, RewriterBase &rewriter, const Value &v,
-                    triton::RoundingMode rounding) {
-  if (rounding == triton::RoundingMode::RTNE) {
-    LLVM::RoundingMode rm = LLVM::RoundingMode::NearestTiesToEven;
-    return rewriter.create<LLVM::ConstrainedFPTruncIntr>(
-        loc, f16_ty, v, rm, LLVM::FPExceptionBehavior::Ignore);
-  }
-
-  // TODO: Figure out the test failure with RTZ LLVM::ConstrainedFPTruncIntr and
-  // switch to not use inline assembly too.
-  assert(rounding == triton::RoundingMode::RTZ);
-  GCNBuilder builder;
-
-  auto &cvt = *builder.create("v_cvt_f16_f32");
-  auto res = builder.newOperand("=v");
-  auto operand = builder.newOperand(v, "v");
-  auto &setRTZ = *builder.create("s_setreg_imm32_b32 0x1801, 0xc");
-  setRTZ();
-  cvt(res, operand);
-  auto &resetRTZ = *builder.create("s_setreg_imm32_b32 0x1801, 0x0");
-  resetRTZ();
-  return builder.launch(rewriter, loc, f16_ty, false);
+Value cvtFp32ToFp16RTNE(Location loc, RewriterBase &rewriter, const Value &v) {
+  LLVM::RoundingMode rm = LLVM::RoundingMode::NearestTiesToEven;
+  return rewriter.create<LLVM::ConstrainedFPTruncIntr>(
+      loc, f16_ty, v, rm, LLVM::FPExceptionBehavior::Ignore);
 }
 
 Type getPointerTypeWithShape(Value basePtr, Value offset) {
