@@ -769,7 +769,7 @@ void WarpSpecializeOp::build(OpBuilder &builder, OperationState &state,
                              ArrayRef<int32_t> partitionNumWarps,
                              unsigned partitionNumRegions) {
   build(builder, state, resultTypes, /*explicitCaptures=*/ValueRange(),
-        partitionNumWarps, /*warpGroupStartIds=*/{});
+        partitionNumWarps, {}, {}, {});
   OpBuilder::InsertionGuard guard(builder);
   Block *container = builder.createBlock(state.regions.back().get());
   builder.create<WarpSpecializePartitionsOp>(state.location,

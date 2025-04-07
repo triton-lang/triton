@@ -22,7 +22,6 @@ add_triton_library(TritonGPUTransforms
   Pipeliner/SoftwarePipeliner.cpp
   Pipeliner/TMAStoresPipeline.cpp
   Pipeliner/MMAv5PipelineUtility.cpp
-  Pipeliner/ModifiedAccMMAPipeline.cpp
   Pipeliner/Partition.cpp
   Pipeliner/PipeliningUtility.cpp
   Pipeliner/Schedule.cpp
