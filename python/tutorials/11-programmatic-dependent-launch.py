@@ -70,26 +70,6 @@ def matmul_kernel(a_ptr, b_ptr, c_ptr,  #
     b_ptrs = None
     c_ptrs = None
 
-    if USE_TMA:
-        a_desc = tl.make_tensor_descriptor(
-            a_ptr,
-            shape=[M, K],
-            strides=[K, 1],
-            block_shape=[BLOCK_SIZE_M, BLOCK_SIZE_K],
-        )
-        b_desc = tl.make_tensor_descriptor(
-            b_ptr,
-            shape=[N, K],
-            strides=[K, 1],
-            block_shape=[BLOCK_SIZE_N, BLOCK_SIZE_K],
-        )
-        c_desc = tl.make_tensor_descriptor(
-            c_ptr,
-            shape=[M, N],
-            strides=[N, 1],
-            block_shape=[BLOCK_SIZE_M, BLOCK_SIZE_N],
-        )
-
     dtype = c_ptr.dtype.element_ty
     start_pid = tl.program_id(axis=0)
     num_pid_m = tl.cdiv(M, BLOCK_SIZE_M)
@@ -117,10 +97,33 @@ def matmul_kernel(a_ptr, b_ptr, c_ptr,  #
 
     if USE_GDC:
         # GDC wait is used to wait for the prior kernel to complete before continuing.
-        # If we utilize Programatic Dependent Launch, we must wait on the prior kernel
+        # If we utilize Programmatic Dependent Launch, we must wait on the prior kernel
         # to complete in case a or b are written to by the prior kernel.
         # This is done to prevent races.
         tl.extra.cuda.gdc_wait()
+
+    if USE_TMA:
+        # We have no guarentees about what memory may be passed for our make tensor descriptor,
+        # and whether there is inter kernel dependencies. We therefore must safely allocate after
+        # Waiting on the prior kernel to finish.
+        a_desc = tl.make_tensor_descriptor(
+            a_ptr,
+            shape=[M, K],
+            strides=[K, 1],
+            block_shape=[BLOCK_SIZE_M, BLOCK_SIZE_K],
+        )
+        b_desc = tl.make_tensor_descriptor(
+            b_ptr,
+            shape=[N, K],
+            strides=[K, 1],
+            block_shape=[BLOCK_SIZE_N, BLOCK_SIZE_K],
+        )
+        c_desc = tl.make_tensor_descriptor(
+            c_ptr,
+            shape=[M, N],
+            strides=[N, 1],
+            block_shape=[BLOCK_SIZE_M, BLOCK_SIZE_N],
+        )
 
     for ki in range(k_tiles):
         a = None
