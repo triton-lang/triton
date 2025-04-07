@@ -242,4 +242,3 @@ ttng::TMEMAllocOp ttng::createTMemAlloc(OpBuilder &builder,
   return builder.create<ttng::TMEMAllocOp>(oldTMemAllocOp.getLoc(),
                                            accMemDescType, nullptr);
 }
-
