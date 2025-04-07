@@ -69,7 +69,7 @@ static void sinkLoad(ttng::TMEMLoadOp load, Operation *cvt) {
   while (next && !next->hasTrait<OpTrait::IsTerminator>()) {
     insertBefore = next;
     bool dep = false;
-    for (auto operand : next->getOperands()) {
+    for (auto operand : getNestedOperands(next)) {
       if (operand == cvt->getResult(0)) {
         dep = true;
         break;
