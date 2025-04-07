@@ -485,6 +485,46 @@ void TMEMCopyOp::getEffects(
                        mlir::triton::gpu::SharedMemory::get());
 }
 
+// -- TMEMSubSliceOp --
+LogicalResult TMEMSubSliceOp::verify() {
+  auto srcTy = cast<triton::gpu::MemDescType>(getSrc().getType());
+  auto encoding = dyn_cast<triton::nvidia_gpu::TensorMemoryEncodingAttr>(
+      srcTy.getEncoding());
+  if (!encoding)
+    return emitOpError("The source must be a tensor memory buffer.");
+  if (encoding.getBlockM() != 128)
+    return emitOpError("The source must be a 128xN layout.");
+  auto dstTy = cast<triton::gpu::MemDescType>(getResult().getType());
+  auto dstEncoding = dyn_cast<triton::nvidia_gpu::TensorMemoryEncodingAttr>(
+      dstTy.getEncoding());
+  if (!dstEncoding)
+    return emitOpError("The destination must be a tensor memory buffer.");
+  if (dstEncoding.getBlockM() != encoding.getBlockM() ||
+      dstEncoding.getCTASplitM() != encoding.getCTASplitM() ||
+      dstEncoding.getCTASplitN() != encoding.getCTASplitN() ||
+      dstEncoding.getUnpacked() != encoding.getUnpacked())
+    return emitOpError("The destination must have the same block size and "
+                       "CTASplit size as the source.");
+  return mlir::success();
+}
+
+void TMEMSubSliceOp::build(OpBuilder &builder, OperationState &state,
+                           Value alloc, int offset, int size) {
+  auto allocTy = cast<triton::gpu::MemDescType>(alloc.getType());
+  SmallVector<int64_t> shape(allocTy.getShape());
+  shape.back() = size;
+  auto encoding =
+      cast<triton::nvidia_gpu::TensorMemoryEncodingAttr>(allocTy.getEncoding());
+  unsigned newBlockN = std::min<unsigned>(encoding.getBlockN(), size);
+  auto newEncoding = triton::nvidia_gpu::TensorMemoryEncodingAttr::get(
+      builder.getContext(), encoding.getBlockM(), newBlockN,
+      encoding.getUnpacked(), encoding.getCTASplitM(), encoding.getCTASplitN());
+  auto subsliceType = gpu::MemDescType::get(
+      shape, allocTy.getElementType(), newEncoding, allocTy.getMemorySpace(),
+      allocTy.getMutableMemory());
+  build(builder, state, subsliceType, alloc, offset);
+}
+
 } // namespace nvidia_gpu
 } // namespace triton
 } // namespace mlir

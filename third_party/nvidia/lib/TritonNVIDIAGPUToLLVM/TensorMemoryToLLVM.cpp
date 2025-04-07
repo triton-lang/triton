@@ -758,14 +758,52 @@ struct MemDescSubviewOpConversion
   }
 };
 
+struct TMEMSubSliceOpConversion
+    : public ConvertOpToLLVMPattern<triton::nvidia_gpu::TMEMSubSliceOp> {
+  using ConvertOpToLLVMPattern<
+      triton::nvidia_gpu::TMEMSubSliceOp>::ConvertOpToLLVMPattern;
+
+  LogicalResult
+  matchAndRewrite(triton::nvidia_gpu::TMEMSubSliceOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    Location loc = op->getLoc();
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
+    auto srcTy = op.getSrc().getType();
+    auto dstTy = op.getResult().getType();
+    auto llvmElemTy = getTypeConverter()->convertType(srcTy.getElementType());
+
+    auto encoding = dyn_cast<triton::nvidia_gpu::TensorMemoryEncodingAttr>(
+        srcTy.getEncoding());
+    if (!encoding) {
+      return failure();
+    }
+    auto shapePerCTA = getShapePerCTA(srcTy);
+    int blockN = encoding.getBlockN();
+    int blockM = encoding.getBlockM();
+    int offsetCol = 0;
+    int offsetRow = 0;
+    // TODO: support the more complex layout when M == 64.
+    if (shapePerCTA[0] != 128) {
+      return failure();
+    }
+    offsetCol = op.getN();
+    Value tmemBase = adaptor.getSrc();
+    Value offsetVal = b.i32_val(offsetCol | offsetRow << 16);
+    Value newBase = b.add(b.ptrtoint(i32_ty, tmemBase), offsetVal);
+    auto elemPtrTy = ptr_ty(rewriter.getContext(), 3);
+    rewriter.replaceOp(op, b.inttoptr(elemPtrTy, newBase));
+    return success();
+  }
+};
+
 } // namespace
 
 void mlir::triton::NVIDIA::populateTensorMemoryOpToLLVMPattern(
     LLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
     PatternBenefit benefit) {
   patterns.add<TensorMemoryAllocOpConversion, TensorMemoryLoadOpConversion,
-               TensorMemoryStoreOpConversion, TensorMemoryCopyOpConversion>(
-      typeConverter, benefit);
+               TensorMemoryStoreOpConversion, TensorMemoryCopyOpConversion,
+               TMEMSubSliceOpConversion>(typeConverter, benefit);
   return;
 }
 
