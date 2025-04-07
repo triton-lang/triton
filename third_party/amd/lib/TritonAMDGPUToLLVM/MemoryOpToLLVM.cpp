@@ -53,7 +53,7 @@ private:
   /// MFMA or WMMA.
   ///
   /// \returns value with packed loaded values or empty value if this local_load
-  /// is not supproted.
+  /// is not supported.
   Value lowerSharedToDotOperandMMA(
       triton::gpu::LocalLoadOp op, triton::gpu::LocalLoadOpAdaptor adaptor,
       const LLVMTypeConverter *typeConverter,

@@ -100,8 +100,8 @@ TMemMessageTraits getTMemMessageFromAtom(const TMemAccessAtom &atom,
 // Only allows half of the thread registers to be used for tensor memory access
 // to avoid register pressure. This ensures the largest tmem message width is
 // used for the workload without inducing spills.
-int getTMemMessageNarrowingFactor(int workloadThreadRegs) {
-  const int allowedRegUsage = maxRegisters / 2;
+int getTMemMessageNarrowingFactor(int workloadThreadRegs, int maxnreg) {
+  const int allowedRegUsage = maxnreg / 2;
   int narrowingFactor = 1;
   while (workloadThreadRegs > allowedRegUsage) {
     workloadThreadRegs /= 2;
@@ -338,13 +338,13 @@ void createWaitOpSt(Location loc, ConversionPatternRewriter &rewriter) {
   ptxBuilder.launch(rewriter, loc, void_ty(rewriter.getContext()));
 }
 
-TMemMessageTraits selectTMemMessage(const TMemRuntimeInfo &info) {
+TMemMessageTraits selectTMemMessage(const TMemRuntimeInfo &info, int maxnreg) {
   auto atom = info.useStridedMessage ? TMemAccess16x32bx2 : TMemAccess32x32b;
 
   int totalRegsNeeded =
       getEffectiveRegs(info.unpackedb16, info.useStridedMessage,
                        info.numCols / info.numWarpGroups);
-  int narrowingFactor = getTMemMessageNarrowingFactor(totalRegsNeeded);
+  int narrowingFactor = getTMemMessageNarrowingFactor(totalRegsNeeded, maxnreg);
   auto narrowedMessage = getTMemMessageFromAtom(atom, narrowingFactor);
   narrowedMessage = constrainMessageFromWorkload(narrowedMessage, info,
                                                  narrowedMessage.numRegs);
@@ -353,6 +353,35 @@ TMemMessageTraits selectTMemMessage(const TMemRuntimeInfo &info) {
   maxWidthMessage = constrainMessageFromWorkload(maxWidthMessage, info,
                                                  info.colsPerWarpGroup);
   return std::min(narrowedMessage, maxWidthMessage);
+}
+
+// Get the maximum number of registers per thread based on the context. This is
+// by default 256, but it can be overridden by `ttg.maxnreg` set on the module.
+// Alternatively, warp groups within warp specialized regions can have a
+// different number of registers allocated.
+static int getContextualMaxNReg(Operation *op) {
+  if (auto mod = dyn_cast<ModuleOp>(op)) {
+    // Check for a maxnreg attribute.
+    if (auto attr = op->getAttrOfType<IntegerAttr>(AttrMaxRegistersName))
+      return std::max<int>(maxRegisters, attr.getInt());
+
+  } else if (auto partitions =
+                 dyn_cast<WarpSpecializePartitionsOp>(op->getParentOp())) {
+    // Check if the partition has reduced registers.
+    unsigned idx = op->getParentRegion()->getRegionNumber();
+    if (auto actRegisters = partitions.getParentOp().getActualRegisters())
+      return std::max<int>(maxRegisters, (*actRegisters)[1 + idx]);
+    return getContextualMaxNReg(partitions.getParentOp());
+
+  } else if (auto wsOp = dyn_cast<WarpSpecializeOp>(op->getParentOp())) {
+    // Check the register usage of the default warpgroup.
+    if (auto actRegisters = wsOp.getActualRegisters())
+      return std::max<int>(maxRegisters, actRegisters->front());
+  }
+
+  if (Operation *parent = op->getParentOp())
+    return getContextualMaxNReg(parent);
+  return maxRegisters;
 }
 
 static void lowerStoreToTensorMemory(Location loc, Operation *op, Value src,
@@ -365,7 +394,8 @@ static void lowerStoreToTensorMemory(Location loc, Operation *op, Value src,
   auto dstType = cast<MemDescType>(dest.getType());
   auto info = getTMemRuntimeInfo(op, cast<RankedTensorType>(src.getType()),
                                  cast<MemDescType>(dest.getType()));
-  const TMemMessageTraits message = selectTMemMessage(info);
+  const TMemMessageTraits message =
+      selectTMemMessage(info, getContextualMaxNReg(op));
   int regIdx = 0;
   calculateAddressAndEmitTmemMessage(
       loc, tmemBase, info, message, rewriter,
@@ -503,7 +533,8 @@ struct TensorMemoryLoadOpConversion
 
     auto info = getTMemRuntimeInfo(op, cast<RankedTensorType>(op.getType()),
                                    cast<MemDescType>(op.getSrc().getType()));
-    const TMemMessageTraits message = selectTMemMessage(info);
+    const TMemMessageTraits message =
+        selectTMemMessage(info, getContextualMaxNReg(op));
     SmallVector<Value> resultVals;
     calculateAddressAndEmitTmemMessage(
         loc, tmemBase, info, message, rewriter,

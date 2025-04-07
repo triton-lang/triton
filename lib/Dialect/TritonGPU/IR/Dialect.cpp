@@ -499,7 +499,7 @@ static LogicalResult parseBoolAttrValue(AsmParser &parser, Attribute attr,
                                         bool &value, StringRef desc) {
   auto boolAttr = mlir::dyn_cast<BoolAttr>(attr);
   if (!boolAttr) {
-    parser.emitError(parser.getNameLoc(), "expected an bool type in ") << desc;
+    parser.emitError(parser.getNameLoc(), "expected a bool type in ") << desc;
     return failure();
   }
   value = boolAttr.getValue();
@@ -2762,7 +2762,7 @@ std::string getSharedLayoutStr(RankedTensorType tensorType,
   // Shared layouts are a mapping of (block, offset) --> (...)
 
   // We can just use a single int to index into elementMapping because
-  // the 'swizzle' operation rearranges the indicies---and we want to keep it
+  // the 'swizzle' operation rearranges the indices---and we want to keep it
   // that way
   int32_t idx = 0;
   // Enumerate all the offsets for each block
