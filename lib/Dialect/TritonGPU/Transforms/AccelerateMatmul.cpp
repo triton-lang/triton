@@ -658,6 +658,8 @@ public:
       else if (dotOp.getBElemType() == ScaleDotElemType::E2M1)
         IsBMixedPrecFp4 = true;
     }
+    // If we use txgen05.mma.kind.mxf864 we need to padd the fp4 operands:
+    // https://docs.nvidia.com/cuda/parallel-thread-execution/#tcgen05-packing-formats-mxf8f6f4-smem
     bool isMMAv5Fp4PaddedLhs = IsAMixedPrecFp4 || !dotOp.getLhsKPack();
     bool isMMAv5Fp4PaddedRhs = IsBMixedPrecFp4 || !dotOp.getRhsKPack();
     // For mixed-precision fp4 operands, set allowTranspose = false, to force

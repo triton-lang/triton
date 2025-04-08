@@ -1640,8 +1640,8 @@ def dot_scaled(lhs: tl.tensor, lhs_scale: tl.tensor, lhs_format: str, rhs: tl.te
     lhs = _bitcast_to_fp_type(lhs, lhs_format, builder)
     rhs = _bitcast_to_fp_type(rhs, rhs_format, builder)
 
-    assert lhs_k_pack or lhs_format == "e2m1", "only fp4 inputs can be packed along a dimension different than K"
-    assert rhs_k_pack or rhs_format == "e2m1", "only fp4 inputs can be packed along a dimension different than K"
+    assert lhs_k_pack or lhs_format == "e2m1", "only mxfp4 inputs can be packed along a dimension different than K"
+    assert rhs_k_pack or rhs_format == "e2m1", "only mxfp4 inputs can be packed along a dimension different than K"
     M, K_LHS = lhs.type.shape[-2:]
     K_RHS, N = rhs.type.shape[-2:]
     PACKED_A = 2 if lhs_format == "e2m1" else 1
