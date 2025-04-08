@@ -16,7 +16,7 @@ from distutils.command.clean import clean
 from pathlib import Path
 from typing import List, Optional
 
-from setuptools import Extension, setup
+from setuptools import Extension, find_packages, setup
 from setuptools.command.build_ext import build_ext
 from setuptools.command.build_py import build_py
 from dataclasses import dataclass
@@ -665,51 +665,6 @@ package_data = {
 }
 
 
-def get_extra_packages(extra_name):
-    packages = []
-    extra_file_extensions = {"language": (".py"), "tools": (".c", ".h", ".cpp")}
-    assert extra_name in extra_file_extensions, f"{extra_name} extra is not valid"
-
-    for backend in backends:
-        backend_extra_dir = getattr(backend, f"{extra_name}_dir", None)
-        if backend_extra_dir is None:
-            continue
-
-        # Walk the specified directory of each backend to enumerate
-        # any subpackages, which will be added to extra_package.
-        for dir, dirs, files in os.walk(backend_extra_dir, followlinks=True):
-            if not any(f for f in files if f.endswith(extra_file_extensions[extra_name])) or dir == backend_extra_dir:
-                # Ignore directories with no relevant files
-                # or the root directory
-                continue
-            subpackage = os.path.relpath(dir, backend_extra_dir)
-            package = os.path.join(f"triton/{extra_name}/extra", subpackage)
-            packages.append(package)
-
-    return list(packages)
-
-
-def get_packages():
-    packages = [
-        "triton",
-        "triton/_C",
-        "triton/compiler",
-        "triton/language",
-        "triton/language/extra",
-        "triton/runtime",
-        "triton/backends",
-        "triton/tools",
-        "triton/tools/extra",
-    ]
-    packages += [f'triton/backends/{backend.name}' for backend in backends]
-    packages += get_extra_packages("language")
-    packages += get_extra_packages("tools")
-    if check_env_flag("TRITON_BUILD_PROTON", "ON"):  # Default ON
-        packages += ["triton/profiler"]
-
-    return packages
-
-
 def get_entry_points():
     entry_points = {}
     if check_env_flag("TRITON_BUILD_PROTON", "ON"):  # Default ON
@@ -759,7 +714,7 @@ setup(
     description="A language and compiler for custom Deep Learning operations",
     long_description="",
     install_requires=["setuptools>=40.8.0"],
-    packages=get_packages(),
+    packages=find_packages(where="python"),
     package_dir={"": "python"},
     entry_points=get_entry_points(),
     package_data=package_data,
