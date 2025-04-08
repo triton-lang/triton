@@ -150,25 +150,31 @@
 <li class="toctree-l4"><a class="reference internal" href="#id22">Operands:</a></li>
 </ul>
 </li>
+<li class="toctree-l3"><a class="reference internal" href="#ttng-tmem-subslice-triton-nvidia-gpu-tmemsubsliceop"><code class="docutils literal notranslate"><span class="pre">ttng.tmem_subslice</span></code> (triton::nvidia_gpu::TMEMSubSliceOp)</a><ul>
+<li class="toctree-l4"><a class="reference internal" href="#id23">Attributes:</a></li>
+<li class="toctree-l4"><a class="reference internal" href="#id24">Operands:</a></li>
+<li class="toctree-l4"><a class="reference internal" href="#id25">Results:</a></li>
+</ul>
+</li>
 <li class="toctree-l3"><a class="reference internal" href="#ttng-tensor-desc-to-tma-ptr-triton-nvidia-gpu-tensordesctotmaptrop"><code class="docutils literal notranslate"><span class="pre">ttng.tensor_desc_to_tma_ptr</span></code> (triton::nvidia_gpu::TensorDescToTMAPtrOp)</a><ul>
-<li class="toctree-l4"><a class="reference internal" href="#id23">Operands:</a></li>
-<li class="toctree-l4"><a class="reference internal" href="#id24">Results:</a></li>
+<li class="toctree-l4"><a class="reference internal" href="#id26">Operands:</a></li>
+<li class="toctree-l4"><a class="reference internal" href="#id27">Results:</a></li>
 </ul>
 </li>
 <li class="toctree-l3"><a class="reference internal" href="#ttng-wait-barrier-triton-nvidia-gpu-waitbarrierop"><code class="docutils literal notranslate"><span class="pre">ttng.wait_barrier</span></code> (triton::nvidia_gpu::WaitBarrierOp)</a><ul>
-<li class="toctree-l4"><a class="reference internal" href="#id25">Operands:</a></li>
+<li class="toctree-l4"><a class="reference internal" href="#id28">Operands:</a></li>
 </ul>
 </li>
 <li class="toctree-l3"><a class="reference internal" href="#ttng-warp-group-dot-triton-nvidia-gpu-warpgroupdotop"><code class="docutils literal notranslate"><span class="pre">ttng.warp_group_dot</span></code> (triton::nvidia_gpu::WarpGroupDotOp)</a><ul>
-<li class="toctree-l4"><a class="reference internal" href="#id26">Attributes:</a></li>
-<li class="toctree-l4"><a class="reference internal" href="#id27">Operands:</a></li>
-<li class="toctree-l4"><a class="reference internal" href="#id28">Results:</a></li>
-</ul>
-</li>
-<li class="toctree-l3"><a class="reference internal" href="#ttng-warp-group-dot-wait-triton-nvidia-gpu-warpgroupdotwaitop"><code class="docutils literal notranslate"><span class="pre">ttng.warp_group_dot_wait</span></code> (triton::nvidia_gpu::WarpGroupDotWaitOp)</a><ul>
 <li class="toctree-l4"><a class="reference internal" href="#id29">Attributes:</a></li>
 <li class="toctree-l4"><a class="reference internal" href="#id30">Operands:</a></li>
 <li class="toctree-l4"><a class="reference internal" href="#id31">Results:</a></li>
+</ul>
+</li>
+<li class="toctree-l3"><a class="reference internal" href="#ttng-warp-group-dot-wait-triton-nvidia-gpu-warpgroupdotwaitop"><code class="docutils literal notranslate"><span class="pre">ttng.warp_group_dot_wait</span></code> (triton::nvidia_gpu::WarpGroupDotWaitOp)</a><ul>
+<li class="toctree-l4"><a class="reference internal" href="#id32">Attributes:</a></li>
+<li class="toctree-l4"><a class="reference internal" href="#id33">Operands:</a></li>
+<li class="toctree-l4"><a class="reference internal" href="#id34">Results:</a></li>
 </ul>
 </li>
 </ul>
@@ -884,6 +890,58 @@ Therefore we cannot combine this op with any convert layout like local_load.</p>
 </table>
 </section>
 </section>
+<section id="ttng-tmem-subslice-triton-nvidia-gpu-tmemsubsliceop">
+<h2><code class="docutils literal notranslate"><span class="pre">ttng.tmem_subslice</span></code> (triton::nvidia_gpu::TMEMSubSliceOp)<a class="headerlink" href="#ttng-tmem-subslice-triton-nvidia-gpu-tmemsubsliceop" title="Link to this heading">¶</a></h2>
+<p><em>Take a subslice of a tensor memory allocation</em></p>
+<p>Syntax:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span>operation ::= `ttng.tmem_subslice` $src attr-dict `:` qualified(type($src)) `-&gt;` qualified(type($result))
+</pre></div>
+</div>
+<p>This operation takes a subslice of a tensor memory allocation and returns a new descriptor
+containing the address and a view of the subslice.
+This is similar to ttg.memdesc_subview except the offset needs to be static and we can only
+slice alog the inner dimension of a 2D memdesc as this is the only one we can do for TMem.</p>
+<p>Traits: <code class="docutils literal notranslate"><span class="pre">AlwaysSpeculatableImplTrait</span></code>, <code class="docutils literal notranslate"><span class="pre">VerifyTensorLayoutsTrait</span></code></p>
+<p>Interfaces: <code class="docutils literal notranslate"><span class="pre">ConditionallySpeculatable</span></code>, <code class="docutils literal notranslate"><span class="pre">NoMemoryEffect</span> <span class="pre">(MemoryEffectOpInterface)</span></code></p>
+<p>Effects: <code class="docutils literal notranslate"><span class="pre">MemoryEffects::Effect{}</span></code></p>
+<section id="id23">
+<h3>Attributes:<a class="headerlink" href="#id23" title="Link to this heading">¶</a></h3>
+<table>
+<tr><th>Attribute</th><th>MLIR Type</th><th>Description</th></tr>
+<tr><td><code>N</code></td><td>::mlir::IntegerAttr</td><td>32-bit signless integer attribute</td></tr>
+</table>
+</section>
+<section id="id24">
+<h3>Operands:<a class="headerlink" href="#id24" title="Link to this heading">¶</a></h3>
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd"><th class="head text-center"><p>Operand</p></th>
+<th class="head"><p>Description</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td class="text-center"><p><code class="docutils literal notranslate"><span class="pre">src</span></code></p></td>
+<td><p>memory descriptor type (<code class="docutils literal notranslate"><span class="pre">::mlir::triton::gpu::MemDescType</span></code>) in Triton IR type system</p></td>
+</tr>
+</tbody>
+</table>
+</section>
+<section id="id25">
+<h3>Results:<a class="headerlink" href="#id25" title="Link to this heading">¶</a></h3>
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd"><th class="head text-center"><p>Result</p></th>
+<th class="head"><p>Description</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td class="text-center"><p><code class="docutils literal notranslate"><span class="pre">result</span></code></p></td>
+<td><p>memory descriptor type (<code class="docutils literal notranslate"><span class="pre">::mlir::triton::gpu::MemDescType</span></code>) in Triton IR type system</p></td>
+</tr>
+</tbody>
+</table>
+</section>
+</section>
 <section id="ttng-tensor-desc-to-tma-ptr-triton-nvidia-gpu-tensordesctotmaptrop">
 <h2><code class="docutils literal notranslate"><span class="pre">ttng.tensor_desc_to_tma_ptr</span></code> (triton::nvidia_gpu::TensorDescToTMAPtrOp)<a class="headerlink" href="#ttng-tensor-desc-to-tma-ptr-triton-nvidia-gpu-tensordesctotmaptrop" title="Link to this heading">¶</a></h2>
 <p><em>Convert tensor descriptor to pointer to tma descriptor</em></p>
@@ -894,8 +952,8 @@ Therefore we cannot combine this op with any convert layout like local_load.</p>
 <p>Traits: <code class="docutils literal notranslate"><span class="pre">AlwaysSpeculatableImplTrait</span></code>, <code class="docutils literal notranslate"><span class="pre">VerifyTensorLayoutsTrait</span></code></p>
 <p>Interfaces: <code class="docutils literal notranslate"><span class="pre">ConditionallySpeculatable</span></code>, <code class="docutils literal notranslate"><span class="pre">NoMemoryEffect</span> <span class="pre">(MemoryEffectOpInterface)</span></code></p>
 <p>Effects: <code class="docutils literal notranslate"><span class="pre">MemoryEffects::Effect{}</span></code></p>
-<section id="id23">
-<h3>Operands:<a class="headerlink" href="#id23" title="Link to this heading">¶</a></h3>
+<section id="id26">
+<h3>Operands:<a class="headerlink" href="#id26" title="Link to this heading">¶</a></h3>
 <table class="docutils align-default">
 <thead>
 <tr class="row-odd"><th class="head text-center"><p>Operand</p></th>
@@ -909,8 +967,8 @@ Therefore we cannot combine this op with any convert layout like local_load.</p>
 </tbody>
 </table>
 </section>
-<section id="id24">
-<h3>Results:<a class="headerlink" href="#id24" title="Link to this heading">¶</a></h3>
+<section id="id27">
+<h3>Results:<a class="headerlink" href="#id27" title="Link to this heading">¶</a></h3>
 <table class="docutils align-default">
 <thead>
 <tr class="row-odd"><th class="head text-center"><p>Result</p></th>
@@ -942,8 +1000,8 @@ dependencies may be accessed until the barrier completes.</p>
 https://docs.nvidia.com/cuda/parallel-thread-execution/index.html#data-movement-and-conversion-instructions-asynchronous-copy-completion-mechanisms</p>
 <p>Traits: <code class="docutils literal notranslate"><span class="pre">AttrSizedOperandSegments</span></code>, <code class="docutils literal notranslate"><span class="pre">VerifyTensorLayoutsTrait</span></code></p>
 <p>Interfaces: <code class="docutils literal notranslate"><span class="pre">MemoryEffectOpInterface</span></code></p>
-<section id="id25">
-<h3>Operands:<a class="headerlink" href="#id25" title="Link to this heading">¶</a></h3>
+<section id="id28">
+<h3>Operands:<a class="headerlink" href="#id28" title="Link to this heading">¶</a></h3>
 <table class="docutils align-default">
 <thead>
 <tr class="row-odd"><th class="head text-center"><p>Operand</p></th>
@@ -977,8 +1035,8 @@ https://docs.nvidia.com/cuda/parallel-thread-execution/index.html#data-movement-
 <p>$d = matrix_multiply($a, $b) + $c. For docs on InputPrecisionAttr, see TT_DotOp</p>
 <p>Traits: <code class="docutils literal notranslate"><span class="pre">VerifyTensorLayoutsTrait</span></code></p>
 <p>Interfaces: <code class="docutils literal notranslate"><span class="pre">DotOpInterface</span></code>, <code class="docutils literal notranslate"><span class="pre">InferTypeOpInterface</span></code>, <code class="docutils literal notranslate"><span class="pre">MemoryEffectOpInterface</span></code></p>
-<section id="id26">
-<h3>Attributes:<a class="headerlink" href="#id26" title="Link to this heading">¶</a></h3>
+<section id="id29">
+<h3>Attributes:<a class="headerlink" href="#id29" title="Link to this heading">¶</a></h3>
 <table>
 <tr><th>Attribute</th><th>MLIR Type</th><th>Description</th></tr>
 <tr><td><code>inputPrecision</code></td><td>::mlir::triton::InputPrecisionAttr</td><td>allowed 32-bit signless integer cases: 0, 1, 2</td></tr>
@@ -986,8 +1044,8 @@ https://docs.nvidia.com/cuda/parallel-thread-execution/index.html#data-movement-
 <tr><td><code>isAsync</code></td><td>::mlir::BoolAttr</td><td>bool attribute</td></tr>
 </table>
 </section>
-<section id="id27">
-<h3>Operands:<a class="headerlink" href="#id27" title="Link to this heading">¶</a></h3>
+<section id="id30">
+<h3>Operands:<a class="headerlink" href="#id30" title="Link to this heading">¶</a></h3>
 <table class="docutils align-default">
 <thead>
 <tr class="row-odd"><th class="head text-center"><p>Operand</p></th>
@@ -1010,8 +1068,8 @@ https://docs.nvidia.com/cuda/parallel-thread-execution/index.html#data-movement-
 </tbody>
 </table>
 </section>
-<section id="id28">
-<h3>Results:<a class="headerlink" href="#id28" title="Link to this heading">¶</a></h3>
+<section id="id31">
+<h3>Results:<a class="headerlink" href="#id31" title="Link to this heading">¶</a></h3>
 <table class="docutils align-default">
 <thead>
 <tr class="row-odd"><th class="head text-center"><p>Result</p></th>
@@ -1039,15 +1097,15 @@ waiting on.  For example, if there are N pending async dot ops and we call
 <code class="docutils literal notranslate"><span class="pre">warp_group_dot_wait</span> <span class="pre">1</span></code>, then $inputs must be the result of the first dot op.</p>
 <p>Traits: <code class="docutils literal notranslate"><span class="pre">VerifyTensorLayoutsTrait</span></code></p>
 <p>Interfaces: <code class="docutils literal notranslate"><span class="pre">InferTypeOpInterface</span></code></p>
-<section id="id29">
-<h3>Attributes:<a class="headerlink" href="#id29" title="Link to this heading">¶</a></h3>
+<section id="id32">
+<h3>Attributes:<a class="headerlink" href="#id32" title="Link to this heading">¶</a></h3>
 <table>
 <tr><th>Attribute</th><th>MLIR Type</th><th>Description</th></tr>
 <tr><td><code>pendings</code></td><td>::mlir::IntegerAttr</td><td>32-bit signless integer attribute</td></tr>
 </table>
 </section>
-<section id="id30">
-<h3>Operands:<a class="headerlink" href="#id30" title="Link to this heading">¶</a></h3>
+<section id="id33">
+<h3>Operands:<a class="headerlink" href="#id33" title="Link to this heading">¶</a></h3>
 <table class="docutils align-default">
 <thead>
 <tr class="row-odd"><th class="head text-center"><p>Operand</p></th>
@@ -1061,8 +1119,8 @@ waiting on.  For example, if there are N pending async dot ops and we call
 </tbody>
 </table>
 </section>
-<section id="id31">
-<h3>Results:<a class="headerlink" href="#id31" title="Link to this heading">¶</a></h3>
+<section id="id34">
+<h3>Results:<a class="headerlink" href="#id34" title="Link to this heading">¶</a></h3>
 <table class="docutils align-default">
 <thead>
 <tr class="row-odd"><th class="head text-center"><p>Result</p></th>

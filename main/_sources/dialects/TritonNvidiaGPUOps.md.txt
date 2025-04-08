@@ -575,6 +575,47 @@ Effects: `MemoryEffects::Effect{MemoryEffects::Write on ::mlir::SideEffects::Def
 | `pred` | 1-bit signless integer |
 
 
+### `ttng.tmem_subslice` (triton::nvidia_gpu::TMEMSubSliceOp)
+
+_Take a subslice of a tensor memory allocation_
+
+Syntax:
+
+```
+operation ::= `ttng.tmem_subslice` $src attr-dict `:` qualified(type($src)) `->` qualified(type($result))
+```
+
+This operation takes a subslice of a tensor memory allocation and returns a new descriptor
+containing the address and a view of the subslice.
+This is similar to ttg.memdesc_subview except the offset needs to be static and we can only
+slice alog the inner dimension of a 2D memdesc as this is the only one we can do for TMem.
+
+Traits: `AlwaysSpeculatableImplTrait`, `VerifyTensorLayoutsTrait`
+
+Interfaces: `ConditionallySpeculatable`, `NoMemoryEffect (MemoryEffectOpInterface)`
+
+Effects: `MemoryEffects::Effect{}`
+
+#### Attributes:
+
+<table>
+<tr><th>Attribute</th><th>MLIR Type</th><th>Description</th></tr>
+<tr><td><code>N</code></td><td>::mlir::IntegerAttr</td><td>32-bit signless integer attribute</td></tr>
+</table>
+
+#### Operands:
+
+| Operand | Description |
+| :-----: | ----------- |
+| `src` | memory descriptor type (`::mlir::triton::gpu::MemDescType`) in Triton IR type system |
+
+#### Results:
+
+| Result | Description |
+| :----: | ----------- |
+| `result` | memory descriptor type (`::mlir::triton::gpu::MemDescType`) in Triton IR type system |
+
+
 ### `ttng.tensor_desc_to_tma_ptr` (triton::nvidia_gpu::TensorDescToTMAPtrOp)
 
 _Convert tensor descriptor to pointer to tma descriptor_
