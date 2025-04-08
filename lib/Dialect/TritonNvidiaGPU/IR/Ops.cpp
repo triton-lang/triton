@@ -426,6 +426,46 @@ void TCGen5MMAScaledOp::setPredicate(Value pred) {
   getPredMutable().assign(pred);
 }
 
+int64_t TCGen5MMAScaledOp::getBlockM() {
+  ArrayRef<int64_t> shape = getA().getType().getShape();
+  int64_t blockM = shape[shape.size() - 2];
+  bool transA = false;
+  if (auto aSharedLayout = dyn_cast<triton::gpu::NVMMASharedEncodingAttr>(
+          getA().getType().getEncoding())) {
+    transA = aSharedLayout.getTransposed();
+  }
+  if (this->getAType() == ScaleDotElemType::E2M1 && transA)
+    blockM *= 2;
+  return blockM;
+}
+
+int64_t TCGen5MMAScaledOp::getBlockN() {
+  ArrayRef<int64_t> shape = getB().getType().getShape();
+  int64_t blockN = shape[shape.size() - 1];
+  bool transB = false;
+  if (auto bSharedLayout = dyn_cast<triton::gpu::NVMMASharedEncodingAttr>(
+          getB().getType().getEncoding())) {
+    transB = !bSharedLayout.getTransposed();
+  }
+  if (this->getBType() == ScaleDotElemType::E2M1 && transB)
+    blockN *= 2;
+  return blockN;
+}
+
+int64_t TCGen5MMAScaledOp::getBlockK() {
+  ArrayRef<int64_t> shape = getA().getType().getShape();
+  int64_t blockK = shape[shape.size() - 1];
+  bool transA = false;
+  if (auto aSharedLayout = dyn_cast<triton::gpu::NVMMASharedEncodingAttr>(
+          getA().getType().getEncoding())) {
+    transA = aSharedLayout.getTransposed();
+  }
+  if (this->getAType() == ScaleDotElemType::E2M1 && !transA)
+    blockK *= 2;
+  return blockK;
+}
+
+// -- TMEMLoadOp --
 // -- TMEMLoadOp --
 LogicalResult TMEMLoadOp::verify() {
   if (!isa<triton::nvidia_gpu::TensorMemorySpaceAttr>(

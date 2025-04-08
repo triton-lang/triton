@@ -423,7 +423,11 @@ def TTNG_TCGen5MMAScaledOp : TTNG_Op<"tc_gen5_mma_scaled", [DeclareOpInterfaceMe
                          I1:$useD,
                          I1:$pred,
                          Optional<TTG_MemDescType>:$barrier);
-
+    let extraClassDeclaration = [{
+      int64_t getBlockM();
+      int64_t getBlockN();
+      int64_t getBlockK();
+    }];
     // TODO: improve printing format.
     let assemblyFormat = "$a `,` $b `,` $d `,` $a_scale `,` $b_scale `,` $useD`,` $pred `lhs` `=` $a_type `rhs` `=` $b_type (`,` $barrier^)? attr-dict `:` functional-type(operands, results)";
 }
