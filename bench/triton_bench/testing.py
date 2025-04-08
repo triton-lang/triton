@@ -33,7 +33,6 @@ def assert_close(ref, tri, maxtol=None, rmstol=None, description="--", verbose=T
         maxtol = 2e-2
     if rmstol is None:
         rmstol = 4e-3
-
     """
     Compare reference values against obtained values.
     """
@@ -70,10 +69,8 @@ def assert_close(ref, tri, maxtol=None, rmstol=None, description="--", verbose=T
         bad_idxs = torch.nonzero(rel_err > maxtol)
         num_nonzero = bad_idxs.size(0)
         bad_idxs = bad_idxs[:1000]
-        print(
-            "%d / %d mismatched elements (shape = %s) at coords %s"
-            % (num_nonzero, rel_err.numel(), tuple(rel_err.shape), bad_idxs.tolist())
-        )
+        print("%d / %d mismatched elements (shape = %s) at coords %s" %
+              (num_nonzero, rel_err.numel(), tuple(rel_err.shape), bad_idxs.tolist()))
 
         bad_idxs = bad_idxs.unbind(-1)
         print("ref values: ", ref[*bad_idxs].cpu())
@@ -101,6 +98,7 @@ def compute_sanitizer(**target_kwargs):
     """
 
     def decorator(test_fn):
+
         @functools.wraps(test_fn)
         def wrapper(*args, **kwargs):
             if os.environ.get("SKIP_COMPUTE_SANITIZER") == "1":
@@ -116,8 +114,7 @@ def compute_sanitizer(**target_kwargs):
             tools_to_check = target_kwargs.pop("tools_to_check", [ComputeSanitizerTool.MEMCHECK])
             assert isinstance(tools_to_check, list), f"{tools_to_check=}"
             assert all(tool in ComputeSanitizerTool for tool in tools_to_check), (
-                f"{(tool for tool in tools_to_check if tool not in ComputeSanitizerTool)=}"
-            )
+                f"{(tool for tool in tools_to_check if tool not in ComputeSanitizerTool)=}")
 
             ppid_name = psutil.Process(os.getppid()).exe()
             run_compute_sanitizer = target_kwargs.items() <= kwargs.items()
@@ -136,8 +133,7 @@ def compute_sanitizer(**target_kwargs):
                     if "CUDA_VISIBLE_DEVICES" in os.environ:
                         env["CUDA_VISIBLE_DEVICES"] = os.environ["CUDA_VISIBLE_DEVICES"]
                     assert "request_fixture" in kwargs, (
-                        "memcheck'ed test must have a (possibly unused) `request` fixture"
-                    )
+                        "memcheck'ed test must have a (possibly unused) `request` fixture")
                     test_id = kwargs["request_fixture"].node.callspec.id
                     cmd = f"{path}::{test_fn.__name__}[{test_id}]"
                     cmd = [
@@ -161,8 +157,7 @@ def compute_sanitizer(**target_kwargs):
                         env=env,
                     )
                     sanitizer_ok = "ERROR SUMMARY: 0 errors" in str(
-                        out.stdout
-                    ) or "RACECHECK SUMMARY: 0 hazards displayed" in str(out.stdout)
+                        out.stdout) or "RACECHECK SUMMARY: 0 hazards displayed" in str(out.stdout)
                     test_output = out.stdout
                     if type(test_output) is bytes:
                         test_output = test_output.decode()

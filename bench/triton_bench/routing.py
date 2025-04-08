@@ -3,6 +3,7 @@ import triton
 from dataclasses import dataclass, field
 import triton.language as tl
 
+
 @dataclass
 class GatherIndx:
     """
@@ -24,6 +25,7 @@ class ScatterIndx:
     src_indx: torch.Tensor
     dst_indx: torch.Tensor
 
+
 @dataclass
 class ExptData:
     hist: torch.Tensor
@@ -31,6 +33,7 @@ class ExptData:
     offs_sum: torch.Tensor
     blocks: torch.Tensor
     buffer: torch.Tensor
+
 
 # Expert data kernel
 @triton.jit
@@ -98,9 +101,7 @@ class RoutingData:
     def _compute_expt_data(self, n_rows, block_m):
         routing_matrix = None
         expt_histogram = self.expt_hist
-        assert routing_matrix is not None or expt_histogram is not None, (
-            "Must pass routing_matrix or expt_histogram"
-        )
+        assert routing_matrix is not None or expt_histogram is not None, ("Must pass routing_matrix or expt_histogram")
         n_experts = routing_matrix.shape[1] if routing_matrix is not None else expt_histogram.numel()
         device = routing_matrix.device if routing_matrix is not None else expt_histogram.device
         if n_rows < n_experts:
@@ -109,14 +110,14 @@ class RoutingData:
             n_blocks = triton.cdiv(n_rows - n_experts + 1, block_m) + n_experts - 1
 
         shape = n_experts * 3 + 2 + n_blocks
-        expt_data = torch.full((shape,), -1, dtype=torch.int32, device=device)
+        expt_data = torch.full((shape, ), -1, dtype=torch.int32, device=device)
         if expt_histogram is not None:
             expt_data[:n_experts] = expt_histogram
         else:
             torch.sum(routing_matrix, dim=0, out=expt_data[:n_experts])
 
         BLOCK_N = triton.next_power_of_2(n_experts + 1)
-        grid = (n_experts,)
+        grid = (n_experts, )
         _fill_expt_data[grid](
             expt_data,
             n_blocks,
@@ -126,9 +127,9 @@ class RoutingData:
         )
         n_expts_tot = self.n_expts_tot
         hist = expt_data[:n_expts_tot]
-        offs = expt_data[n_expts_tot:2*n_expts_tot+1]
+        offs = expt_data[n_expts_tot:2 * n_expts_tot + 1]
         offs_sum = expt_data[3 * n_expts_tot + 2 - 1]
-        blocks = expt_data[n_expts_tot + 2*(n_expts_tot+1):]
+        blocks = expt_data[n_expts_tot + 2 * (n_expts_tot + 1):]
         return ExptData(hist, offs, offs_sum, blocks, expt_data)
 
     def expt_data(self, n_rows, block_m):
@@ -138,16 +139,19 @@ class RoutingData:
         if key not in self.expt_data_map:
             self.expt_data_map[key] = self._compute_expt_data(*key)
         return self.expt_data_map[key]
-       
+
+
 def routing_torch(logits, n_expts_act, expt_indx=None):
+
     def topk(vals, k, expt_indx):
         # topk of experts
         if expt_indx is None:
-            tk_idx = torch.argsort(-vals, dim=1, stable=True)[:,:k]
+            tk_idx = torch.argsort(-vals, dim=1, stable=True)[:, :k]
         else:
             tk_idx = expt_indx
         tk_val = torch.take_along_dim(vals, tk_idx, dim=1)
         return tk_val, tk_idx
+
     _, n_expts_tot = logits.shape
     expt_scal, expt_indx = topk(torch.softmax(logits, dim=-1), n_expts_act, expt_indx)
     # Sort each token's selections by expert
@@ -160,7 +164,7 @@ def routing_torch(logits, n_expts_act, expt_indx=None):
     topk_indx = torch.argsort(expt_indx, stable=True)
     gate_indx = torch.argsort(topk_indx)
     gate_scal = expt_scal[topk_indx]
-    hist = torch.histc(expt_indx, bins=n_expts_tot, max=n_expts_tot-1) # histogram of tokens over experts
+    hist = torch.histc(expt_indx, bins=n_expts_tot, max=n_expts_tot - 1)  # histogram of tokens over experts
     # pack the matmul data structure
     gather_indx = GatherIndx(src_indx=topk_indx.int(), dst_indx=gate_indx.int())
     scatter_indx = ScatterIndx(src_indx=gate_indx.int(), dst_indx=topk_indx.int())
@@ -180,7 +184,7 @@ def simulate_expert_sharded_routing(n_global_rows, routing_data, n_expt_shards, 
         # Sort each token's selections by expert.
         expt_indx, _ = expt_indx.sort(dim=1)
 
-        hist = torch.histc(expt_indx, bins=routing_data.n_expts_tot, max=routing_data.n_expts_tot - 1)[: n_expts_local]
+        hist = torch.histc(expt_indx, bins=routing_data.n_expts_tot, max=routing_data.n_expts_tot - 1)[:n_expts_local]
 
         # for each row, count how many of its experts are local
         num_local_expts = (expt_indx < n_expts_local).sum(dim=1)

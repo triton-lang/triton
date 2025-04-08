@@ -151,7 +151,7 @@ def _p_matmul_ogs(
         tl.static_assert(MxScale.dtype.element_ty == tl.uint8, "mx_scale_ptr must be uint8")
         tl.static_assert(BLOCK_K % MX_PACK_DIVISOR == 0, "BLOCK_K must be a multiple of MX_PACK_DIVISOR")
 
-         # We have pack 2 fp4 values in a byte
+        # We have pack 2 fp4 values in a byte
         W_PACK_DIVISOR: tl.constexpr = 2 if W.dtype.element_ty == tl.uint8 else 1
         PACKED_BLOCK_K_W: tl.constexpr = BLOCK_K // W_PACK_DIVISOR
         MX_SCALE_BLOCK_K: tl.constexpr = BLOCK_K // MX_PACK_DIVISOR

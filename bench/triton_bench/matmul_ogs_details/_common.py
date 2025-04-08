@@ -4,6 +4,7 @@ from ki.safe_import import tl, triton
 #                                  Utilities
 # -----------------------------------------------------------------------------
 
+
 @triton.jit
 def xcd_swizzle(pid, domain_size, XCD_SWIZZLE: tl.constexpr):
     """
@@ -38,6 +39,7 @@ def swizzle2d(pid, grid_m, grid_n, GROUP_M: tl.constexpr):
 
 
 def make_matmul_repr(base_name, order):
+
     def matmul_repr(specialization):
         signature = specialization.signature
         constants = specialization.constants
@@ -45,9 +47,7 @@ def make_matmul_repr(base_name, order):
         layout = lambda stride: "N" if stride in constants else "T"
         convert_dtype = lambda dtype: "mxfp4" if "u8" in dtype else dtype
         dtypes = "x".join([convert_dtype(f"{signature[i][1:]}") for i in reorder(["Y", "X", "W"])])
-        layouts = "".join(
-            [f"{layout(i)}" for i in reorder(["stride_y_n", "stride_x_k", "stride_w_n"])]
-        )
+        layouts = "".join([f"{layout(i)}" for i in reorder(["stride_y_n", "stride_x_k", "stride_w_n"])])
         blocks = "x".join([f"{constants[i]}" for i in ["BLOCK_M", "BLOCK_N", "BLOCK_K", "SPLIT_K"]])
         mode = []
         if "GatherIndx" not in constants:
@@ -90,7 +90,5 @@ def matmul_launch_metadata(grid, kernel, args):
     sindx = args.get("WriteBackIndx", None)
     if sindx is not None:
         skipped = (sindx == -1).sum() / sindx.numel()
-    ret["bytes"] = (
-        (1 - skipped) * Y.numel() * Y.element_size() + X.numel() * X.element_size() + n_w_bytes
-    )
+    ret["bytes"] = ((1 - skipped) * Y.numel() * Y.element_size() + X.numel() * X.element_size() + n_w_bytes)
     return ret

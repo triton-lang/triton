@@ -21,6 +21,7 @@ TL_RCP_MAX_FINITE_FLOAT16 = tl.constexpr(0x37802008)  # 0x1.004010p-16
 
 cached_capabilities = {}
 
+
 def constexpr_function(f):
     """
     Wraps an arbitrary Python function so that it can be called at
@@ -46,6 +47,7 @@ def constexpr_function(f):
     wrapper.__module__ = getattr(tl, "__name__", "triton.language")
     return wrapper
 
+
 def inline_function(f):
     """
     Wraps an arbitrary Python function so that it can be inlined into a Triton function at compile-time.
@@ -61,11 +63,13 @@ def inline_function(f):
     wrapper.__module__ = getattr(tl, "__name__", "triton.language")
     return wrapper
 
+
 @constexpr_function
 def is_hip():
     if "is_hip" not in cached_capabilities:
         cached_capabilities["is_hip"] = torch.cuda.is_available() and torch.version.hip
     return cached_capabilities["is_hip"]
+
 
 @constexpr_function
 def cuda_capability_geq(major, minor=0):
@@ -83,9 +87,11 @@ def cuda_capability_geq(major, minor=0):
             cached_capabilities["cuda"] = (0, 0)
     return cached_capabilities["cuda"] >= (major, minor)
 
+
 @constexpr_function
 def num_sms():
     return torch.cuda.get_device_properties(0).multi_processor_count
+
 
 @constexpr_function
 def threads_per_warp():
@@ -93,6 +99,7 @@ def threads_per_warp():
         return 64
     else:
         return 32
+
 
 @constexpr_function
 def get_scaled_dot_format_string(dtype: tl.dtype):
@@ -104,6 +111,7 @@ def get_scaled_dot_format_string(dtype: tl.dtype):
         tl.float8e5: "e5m2",
     }
     return mapping[dtype]
+
 
 @triton.jit
 def max_finite(dtype):

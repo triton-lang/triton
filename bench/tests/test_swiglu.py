@@ -7,15 +7,17 @@ import pytest
 # initialize data
 # ---------------
 
+
 def alloc_rand(shape, device, dtype, requires_grad=True):
     if dtype.itemsize == 1:
-        tmp = 2 ** -(torch.randint(4, 8, shape, device=device, dtype=torch.float16))
+        tmp = 2**-(torch.randint(4, 8, shape, device=device, dtype=torch.float16))
         return tmp.to(dtype).requires_grad_(requires_grad)
     return torch.randn(shape, device=device, dtype=dtype, requires_grad=requires_grad)
 
 
 def alloc_rand_like(x):
     return alloc_rand(x.shape, x.device, x.dtype, x.requires_grad)
+
 
 # ---------------
 # unit tests

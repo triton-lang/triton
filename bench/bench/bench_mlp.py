@@ -23,11 +23,13 @@ def _query_gpu_specs():
     output = subprocess.check_output(cmd, stderr=subprocess.DEVNULL).decode().strip()
     name = output.splitlines()[0]
     return {
-        "NVIDIA H100 80GB HBM3": {"MAX_TFLOPS8": 1979, "MAX_TFLOPS16": 989, "MAX_TBPS": 3.35},
-        "HGX GB200": {"MAX_TFLOPS8": 4500, "MAX_TFLOPS16": 2250, "MAX_TBPS": 8.0}
+        "NVIDIA H100 80GB HBM3": {"MAX_TFLOPS8": 1979, "MAX_TFLOPS16": 989, "MAX_TBPS": 3.35}, "HGX GB200":
+        {"MAX_TFLOPS8": 4500, "MAX_TFLOPS16": 2250, "MAX_TBPS": 8.0}
     }[name]
 
+
 SPECS = _query_gpu_specs()
+
 
 def quantize(w, dtype, dev, **opt):
     if dtype == "bf16":
@@ -42,29 +44,25 @@ def quantize(w, dtype, dev, **opt):
         swizzle_axis = 2 if swizzle_mx_scale else None
         w = w.to(torch.bfloat16)
         w, mx_scales, weight_scale_shape = downcast_to_mxfp(w, torch.uint8, axis=1, swizzle_axis=swizzle_axis)
-        return w, InFlexData(), MicroscalingCtx(
-                                    weight_scale=mx_scales, 
-                                    swizzle_mx=swizzle_mx_scale,
-                                    actual_weight_scale_shape=weight_scale_shape
-                                )
+        return w, InFlexData(), MicroscalingCtx(weight_scale=mx_scales, swizzle_mx=swizzle_mx_scale,
+                                                actual_weight_scale_shape=weight_scale_shape)
 
-def bench_mlp(batch, dim1, dim2, n_expts_tot, n_expts_act, 
-              x_dtype, w_dtype,
+
+def bench_mlp(batch, dim1, dim2, n_expts_tot, n_expts_act, x_dtype, w_dtype,
               # tensor / expert parallelism
-              TP = 1, EP = 1,
-              name = ""):
+              TP=1, EP=1, name=""):
     assert n_expts_tot % EP == 0
     assert dim2 % TP == 0
     dev = "cuda"
     # input
     # weights
     wg = torch.randn((dim1, n_expts_tot), device=dev)
-    w1 = torch.randn((n_expts_tot//EP, dim1, dim2//TP), device=dev)
-    w2 = torch.randn((n_expts_tot//EP, dim2//TP//2, dim1), device=dev)
+    w1 = torch.randn((n_expts_tot // EP, dim1, dim2 // TP), device=dev)
+    w2 = torch.randn((n_expts_tot // EP, dim2 // TP // 2, dim1), device=dev)
     # biases
-    bg = torch.randn((n_expts_tot,), device=dev)
-    b1 = torch.randn((dim2//TP,), device=dev)
-    b2 = torch.randn((dim1,), device=dev)
+    bg = torch.randn((n_expts_tot, ), device=dev)
+    b1 = torch.randn((dim2 // TP, ), device=dev)
+    b2 = torch.randn((dim1, ), device=dev)
 
     # -- numerics --
     optg = dict()
@@ -86,7 +84,7 @@ def bench_mlp(batch, dim1, dim2, n_expts_tot, n_expts_act,
     # run layer
     x_dtype = {"bf16": torch.bfloat16, "fp8": torch.float8_e4m3fn}[x_dtype]
     for i in range(100):
-        x  = torch.randn((batch, dim1), device=dev)
+        x = torch.randn((batch, dim1), device=dev)
         x = x.to(wg.dtype if n_expts_tot > 1 else x_dtype)
         # TODO: activate proton here when fast routing is done
         if n_expts_tot > 1:
@@ -129,6 +127,7 @@ def bench_mlp(batch, dim1, dim2, n_expts_tot, n_expts_act,
         tbps = tot_bytes / tot_time * 1e-3
 
     return util, tflops, tbps
+
 
 if __name__ == "__main__":
     has_native_mx4 = torch.cuda.get_device_capability(0)[0] >= 10

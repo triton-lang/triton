@@ -53,10 +53,10 @@ def should_upcast_indices(*args):
     return any(tensor is not None and can_overflow_int32(tensor) for tensor in args)
 
 
-
 # -------------------------------
 # Kernels stuff
 # -------------------------------
+
 
 @triton.jit
 def sm86_min_nan_xorsign_abs_f32(a, b):
@@ -67,9 +67,7 @@ def sm86_min_nan_xorsign_abs_f32(a, b):
 
     Requires CUDA compute capability 8.6+ (A100 and A30 Ampere GPUs don't support it, but A40/A16/A10/A2, Ada, and Hopper GPUs do).
     """
-    tl.static_assert(
-        cuda_capability_geq(8, 6), "min.NaN.xorsign.abs.f32 requires CUDA compute capability 8.6+"
-    )
+    tl.static_assert(cuda_capability_geq(8, 6), "min.NaN.xorsign.abs.f32 requires CUDA compute capability 8.6+")
     tl.static_assert(a.dtype == tl.float32, "min.NaN.xorsign.abs.f32 requires float32 inputs")
     tl.static_assert(b.dtype == tl.float32, "min.NaN.xorsign.abs.f32 requires float32 inputs")
 
@@ -94,9 +92,7 @@ def sm86_max_nan_xorsign_abs_f32(a, b):
 
     Requires CUDA compute capability 8.6+ (A100 and A30 Ampere GPUs don't support it, but A40/A16/A10/A2, Ada, and Hopper GPUs do).
     """
-    tl.static_assert(
-        cuda_capability_geq(8, 6), "max.NaN.xorsign.abs.f32 requires CUDA compute capability 8.6+"
-    )
+    tl.static_assert(cuda_capability_geq(8, 6), "max.NaN.xorsign.abs.f32 requires CUDA compute capability 8.6+")
     tl.static_assert(a.dtype == tl.float32, "max.NaN.xorsign.abs.f32 requires float32 inputs")
     tl.static_assert(b.dtype == tl.float32, "max.NaN.xorsign.abs.f32 requires float32 inputs")
 
@@ -110,6 +106,7 @@ def sm86_max_nan_xorsign_abs_f32(a, b):
         is_pure=True,
         pack=1,
     )
+
 
 @triton.jit
 def load_scale(scale_ptr):
