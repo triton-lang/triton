@@ -34,7 +34,7 @@ class CudaAllocator:
         # FIXME(Keren): This is not correct in general, as the buffer will be deallocated by the Torch runtime.
         # We should use a custom allocator to manage the buffer lifecycle.
         buffer = torch.empty((aligned_size, ), dtype=torch.uint8, device="cuda")
-        self.instrumentation_hook.buffer = buffer.data_ptr()
+        self.instrumentation_hook.buffer = buffer
         return buffer
 
 
@@ -64,6 +64,7 @@ class Instrumentation:
 class InstrumentationHook(Hook):
     # It's important to note that only one instance of the instrumentation hook can be active at a time.
     active_count = 0
+    profile_mem = None
 
     def __init__(self, mode: str,  #
                  profile_buffer_size: int = 16 * 1024 * 1024,  #
@@ -89,24 +90,28 @@ class InstrumentationHook(Hook):
 
         backend = triton.runtime.driver.active.get_current_target().backend
 
-        def passes(pm, backend_pass):
-            # TODO(Keren): Confirm if proton shared memory allocation is needed
-            #triton_proton.add_allocate_proton_shared_memory(pm)
+        def to_llvmir_passes(pm, backend_pass):
             triton_proton.add_allocate_proton_global_scratch_buffer(pm)
             backend_pass(pm)
 
+        def to_ttgpuir_passes(pm):
+            triton_proton.add_convert_proton_to_protongpu(pm)
+            triton_proton.add_allocate_proton_shared_memory(pm)
+
         if backend == "cuda":
             backend_name = "nvidia"
-            ttgpuir_func = lambda pm: passes(pm, triton_proton.add_convert_proton_nvidia_gpu_to_llvm)
+            ttgpuir_func = lambda pm: to_ttgpuir_passes(pm)
+            llvmir_func = lambda pm: to_llvmir_passes(pm, triton_proton.add_convert_proton_nvidia_gpu_to_llvm)
         elif backend == "hip":
             backend_name = "amd"
-            ttgpuir_func = lambda pm: passes(pm, triton_proton.add_convert_proton_amd_gpu_to_llvm)
+            ttgpuir_func = lambda pm: to_ttgpuir_passes(pm)
+            llvmir_func = lambda pm: to_llvmir_passes(pm, triton_proton.add_convert_proton_amd_gpu_to_llvm)
         else:
             raise RuntimeError(f"Unsupported backend: {backend}")
 
         backends[backend_name].compiler.instrumentation = Instrumentation({
-            "ttir": triton_proton.add_convert_proton_to_protongpu,
             "ttgpuir": ttgpuir_func,
+            "llvmir": llvmir_func,
         })
 
         # Set up the profiling allocator
@@ -148,6 +153,9 @@ class InstrumentationHook(Hook):
         # Reset profile allocator
         set_profile_allocator(NullAllocator())
 
+        # Reset host memory for external processing
+        InstrumentationHook.profile_mem = None
+
     def init_handle(self, function: Any, module: Any, metadata_group: Dict[str, str]) -> None:
         if function and function not in self.function_scope_ids:
             # Find the IR path in metadata
@@ -166,12 +174,22 @@ class InstrumentationHook(Hook):
         libproton.init_scope_ids(function, scope_id_pairs)
 
     def enter(self, lazy_dict: LazyDict) -> None:
-        libproton.enter_instrumented_op(lazy_dict.data.get("function", None), self.buffer, self.profile_buffer_size)
+        libproton.enter_instrumented_op(lazy_dict.data.get("function", None), self.buffer.data_ptr(),
+                                        self.profile_buffer_size)
+        InstrumentationHook.profile_mem = None
 
     def exit(self, lazy_dict: LazyDict) -> None:
         # FIXME(Keren): exit_instrumented_op will sync the device and copy the buffer back to the host.
         # But this is not necessary if we can delay the copy to reduce the overhead.
         # We should fix it after the profiling buffer is managed by a custom allocator.
-        libproton.exit_instrumented_op(lazy_dict.data.get("function", None), self.buffer, self.profile_buffer_size)
+        libproton.exit_instrumented_op(lazy_dict.data.get("function", None), self.buffer.data_ptr(),
+                                       self.profile_buffer_size)
+
+        # Copy the profiling buffer to the host for external processing (e.g., 3rd party tools).
+        # FIXME(fywkevin): We should provide a config option to control on/off this behavior.
+        import torch
+        InstrumentationHook.profile_mem = torch.empty_like(self.buffer, device='cpu')
+        InstrumentationHook.profile_mem.copy_(self.buffer)
+
         # Release the profiling buffer for recycling
         self.buffer = None

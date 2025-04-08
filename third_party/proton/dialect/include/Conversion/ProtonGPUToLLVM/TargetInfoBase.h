@@ -1,6 +1,7 @@
 #ifndef PROTONGPU_TO_LLVM_TARGETINFO_BASE_H
 #define PROTONGPU_TO_LLVM_TARGETINFO_BASE_H
 
+#include "mlir/IR/Attributes.h"
 #include "triton/Conversion/MLIRTypes.h"
 #include "triton/Conversion/TritonGPUToLLVM/TargetInfoBase.h"
 
@@ -17,6 +18,11 @@ public:
 
   virtual Value clock(ConversionPatternRewriter &rewriter, Location loc,
                       bool isClock64) const = 0;
+
+  virtual Value processorId(ConversionPatternRewriter &rewriter,
+                            Location loc) const = 0;
+
+  virtual int getAddressSpace(Attribute addressSpace) const = 0;
 
   virtual ~TargetInfoBase() = default;
 
