@@ -72,10 +72,7 @@ struct UpdateAsyncWaitCount : public OpRewritePattern<ttg::AsyncWaitOp> {
       // commits between the definition value and the parent op.
       // TODO: We could measure commits in nested regions along the path if
       // necessary.
-      Operation *waitOpPtr = waitOp;
-      while (waitOp->getParentRegion() != operand.getParentRegion())
-        waitOpPtr = waitOp->getParentOp();
-      waitCnt = std::min(waitCnt, findMinCountInDefChain(operand, waitOpPtr));
+      waitCnt = std::min(waitCnt, findMinCountInDefChain(operand, waitOp));
     }
 
     if (waitCnt == std::numeric_limits<int>::max() ||
@@ -93,6 +90,16 @@ struct UpdateAsyncWaitCount : public OpRewritePattern<ttg::AsyncWaitOp> {
   int findMinCountInDefChain(
       Value val, Operation *sinkOp, int pathSum = 0,
       int foundMin = std::numeric_limits<int>::max()) const {
+
+    // If the val is not defined in our region
+    while (sinkOp->getParentRegion() != val.getParentRegion()) {
+      pathSum += countVMCntInstructionBetween(
+          &sinkOp->getParentRegion()->front().front(), sinkOp);
+      llvm::outs() << "Going out of : " << "with count: " << pathSum << "\n";
+
+      sinkOp = sinkOp->getParentOp();
+    }
+
     if (Operation *defOp = val.getDefiningOp()) {
       pathSum += countVMCntInstructionBetween(defOp->getNextNode(), sinkOp);
       foundMin = std::min(foundMin, pathSum);
@@ -103,8 +110,9 @@ struct UpdateAsyncWaitCount : public OpRewritePattern<ttg::AsyncWaitOp> {
       auto forOp = dyn_cast<scf::ForOp>(block->getParentOp());
 
       // Failed to track, return 0 conservatively.
-      if (!forOp)
+      if (!forOp) {
         return 0;
+      }
 
       Operation *firstForInst = &*forOp.getBody()->begin();
       int insertsBetween = countVMCntInstructionBetween(firstForInst, sinkOp);
@@ -162,6 +170,20 @@ struct UpdateAsyncWaitCount : public OpRewritePattern<ttg::AsyncWaitOp> {
                        })
                        .Default([&](auto) { return 0; });
         }
+      } else if (auto ifOp = llvm::dyn_cast<scf::IfOp>(op)) {
+        Operation *startThen = &ifOp.getThenRegion().front().front();
+        Operation *endThen = &ifOp.getThenRegion().front().back();
+
+        Operation *startElse = &ifOp.getElseRegion().front().front();
+        Operation *endElse = &ifOp.getElseRegion().front().back();
+
+        auto minThen = countVMCntInstructionBetween(startThen, endThen);
+        auto minElse = countVMCntInstructionBetween(startElse, endElse);
+        count += std::min(minThen, minElse);
+      } else if (auto forOp = llvm::dyn_cast<scf::ForOp>(op)) {
+        Operation *start = &forOp.getBody()->front();
+        Operation *end = &forOp.getBody()->back();
+        count += countVMCntInstructionBetween(start, end);
       }
     }
     return count;
