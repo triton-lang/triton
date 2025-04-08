@@ -18,7 +18,7 @@ struct TritonAMDFoldTrueCmpIOpPass
   void runOnOperation() override {
     DenseMap<Value, SetVector<Operation *>> assumptions =
         AMD::TritonIntegerRangeAnalysis::collectAssumptions(getOperation());
-    std::unique_ptr solver = createDataFlowSolver();
+    std::unique_ptr<DataFlowSolver> solver = createDataFlowSolver();
     solver->load<AMD::TritonIntegerRangeAnalysis>(assumptions);
     if (failed(solver->initializeAndRun(getOperation())))
       return signalPassFailure();
