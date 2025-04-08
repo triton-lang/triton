@@ -1,6 +1,7 @@
 #include "mlir/IR/Dominance.h"
 #include "triton/Analysis/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
+#include "triton/Dialect/TritonGPU/Transforms/MMAv5PipelineUtility.h"
 #include "triton/Dialect/TritonGPU/Transforms/PipeliningUtility.h"
 #include "triton/Dialect/TritonGPU/Transforms/Schedule.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
@@ -27,33 +28,11 @@ bool hasGpuBarriers(scf::ForOp forOp) {
   return result.wasInterrupted();
 }
 
-// Only pipeline the loops where the MMA happens before the tmem_load,
-// or is in the same stage as the tmem_load. Lowering does not support
-// the case where the MMA is in a different stage as the tmem_load and
-// happens after it.
 bool mmav5DominatesTmemLoads(scf::ForOp forOp,
                              const DenseMap<Operation *, int> &opLatency) {
-  DominanceInfo domInfo(forOp);
-  bool mmav5DominatesTmemLoads = true;
-  forOp.walk([&](ttng::MMAv5OpInterface mma) {
-    int mmaLatency = 0;
-    if (opLatency.count(mma) == 0) {
-      mmaLatency = opLatency.lookup(mma);
-    }
-    auto tmemAlloc = mma.getAccumulator().getDefiningOp<ttng::TMEMAllocOp>();
-    if (!tmemAlloc || !forOp.isDefinedOutsideOfLoop(tmemAlloc)) {
-      return WalkResult::interrupt();
-    }
-    for (auto user : tmemAlloc->getUsers()) {
-      if (isa<ttng::TMEMLoadOp>(user) && forOp->isAncestor(user) &&
-          !domInfo.properlyDominates(mma, user) && opLatency.lookup(mma) > 1) {
-        mmav5DominatesTmemLoads = false;
-        return WalkResult::interrupt();
-      }
-    }
-    return WalkResult::advance();
+  return ttng::mmav5DominatesTmemLoads(forOp, [&](ttng::MMAv5OpInterface mma) {
+    return opLatency.lookup(mma) >= 1;
   });
-  return mmav5DominatesTmemLoads;
 }
 
 // Return true if the preconditions for pipelining the loop are met.
