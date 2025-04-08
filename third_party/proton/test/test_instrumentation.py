@@ -46,6 +46,23 @@ def test_record(tmp_path: pathlib.Path):
     grid = (1, 1, 1)
     proton.start(str(temp_file.with_suffix("")), backend="instrumentation")
     pgm = add_kernel[grid](x, y, output, n_elements, BLOCK_SIZE=1024)
+
+    host_mem = proton.hooks.InstrumentationHook.profile_mem
+    preamble = host_mem[0:4]
+    assert int.from_bytes(preamble.numpy().tobytes(), 'little') == 0xdeadbeef
+    #FIXME(fywkevin): have a dedicated place to put those decoding related constants
+    header_size = 16
+    metadata_size = header_size + pgm.metadata.num_warps * 4
+    start_tag = host_mem[metadata_size:metadata_size + 4]
+    start_clock = host_mem[metadata_size + 4:metadata_size + 8]
+    end_tag = host_mem[metadata_size + 8:metadata_size + 12]
+    end_clock = host_mem[metadata_size + 12:metadata_size + 16]
+    assert int.from_bytes(start_tag.numpy().tobytes(), 'little') == 0
+    assert int.from_bytes(end_tag.numpy().tobytes(), 'little') == 0x80000000
+    start_clock_val = int.from_bytes(start_clock.numpy().tobytes(), 'little')
+    end_clock_val = int.from_bytes(end_clock.numpy().tobytes(), 'little')
+    assert end_clock_val > start_clock_val
+
     proton.finalize()
     ttir = pgm.asm['ttir']
     assert "proton.record start" in ttir
