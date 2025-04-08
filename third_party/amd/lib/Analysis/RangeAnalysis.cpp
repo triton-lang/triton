@@ -186,6 +186,13 @@ std::optional<ConstantIntRanges> maybeGetAssumedRange(Operation *assumption,
 
 namespace mlir::triton::AMD {
 
+bool isEmptyInitializedRange(ConstantIntRanges rv) {
+  if (!rv.umin().getBitWidth() || !rv.umax().getBitWidth() ||
+      !rv.smin().getBitWidth() || !rv.smax().getBitWidth())
+    return true;
+  return false;
+}
+
 std::optional<SmallVector<ConstantIntRanges>>
 collectRanges(const DataFlowSolver &solver, ValueRange values) {
   SmallVector<ConstantIntRanges> ranges;
@@ -196,6 +203,8 @@ collectRanges(const DataFlowSolver &solver, ValueRange values) {
       return {};
     const ConstantIntRanges &inferredRange =
         maybeInferredRange->getValue().getValue();
+    if (isEmptyInitializedRange(inferredRange))
+      return {};
     ranges.push_back(inferredRange);
   }
   return ranges;
@@ -463,6 +472,34 @@ TritonIntegerRangeAnalysis::collectAssumptions(Operation *rootOp,
     }
   });
   return assumptions;
+}
+
+struct FoldTrueCmpIOp : OpRewritePattern<arith::CmpIOp> {
+  using OpRewritePattern::OpRewritePattern;
+
+  FoldTrueCmpIOp(MLIRContext *context, DataFlowSolver *solver)
+      : OpRewritePattern(context), solver(solver) {};
+
+  LogicalResult matchAndRewrite(arith::CmpIOp cmpOp,
+                                PatternRewriter &rewriter) const override {
+    if (cmpIIsStaticallyTrue(*solver, cmpOp)) {
+      if (failed(mlir::dataflow::maybeReplaceWithConstant(*solver, rewriter,
+                                                          cmpOp.getResult()))) {
+        LDBG("failed to replace with constant op: " << cmpOp);
+        return failure();
+      }
+    } else {
+      return failure();
+    }
+    return success();
+  }
+
+  DataFlowSolver *solver;
+};
+
+void populateFoldTrueCmpIOpPatterns(RewritePatternSet &patterns,
+                                    DataFlowSolver *solver) {
+  patterns.add<FoldTrueCmpIOp>(patterns.getContext(), solver);
 }
 
 } // namespace mlir::triton::AMD

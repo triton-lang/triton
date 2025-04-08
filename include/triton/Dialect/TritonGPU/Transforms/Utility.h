@@ -11,6 +11,7 @@
 
 namespace mlir {
 class DominanceInfo;
+class PostDominanceInfo;
 
 namespace triton {
 class ModuleAxisInfoAnalysis;
@@ -222,6 +223,11 @@ getMMAsWithMultiBufferredOperands(scf::ForOp forOp,
 // regions. The result op is not necessarily one of the ops in the list.
 Operation *findNearestCommonDominator(ArrayRef<Operation *> ops,
                                       DominanceInfo &domInfo);
+// Given a list of ops, find the naerest common postdominator of all ops or
+// return null if one could not be found. The ops are allowed to be in different
+// regions. The result op is not necessarily one of the ops in the list.
+Operation *findNearestCommonPostDominator(ArrayRef<Operation *> ops,
+                                          PostDominanceInfo &postDomInfo);
 
 /// Visit the operands of `op` and the operands of any nested ops defined
 /// outside of `op`.
@@ -237,6 +243,11 @@ SetVector<Value> getNestedOperands(Operation *op);
 // Erase the given loop carried values from the loop, where `loop` is replaced
 // with a new loop.
 void eraseLoopCarriedValues(scf::ForOp &loop, llvm::BitVector indices);
+
+// Return true if two value sets may refer to the same allocation.
+bool mayAliasAllocations(const DenseSet<Value> &lhs,
+                         const DenseSet<Value> &rhs);
+
 } // namespace mlir
 
 #endif // TRITON_DIALECT_TRITONGPU_TRANSFORMS_UTILITY_H_

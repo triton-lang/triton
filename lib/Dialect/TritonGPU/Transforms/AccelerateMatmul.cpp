@@ -149,6 +149,7 @@ warpsPerTileV3(DotOp dotOp, const ArrayRef<int64_t> shape, int numWarps,
 static Value
 getSharedMemoryMMAOperand(Value v, mlir::PatternRewriter &rewriter, int opIdx,
                           bool allowTranspose, bool isMMAv5Fp4Padded = false,
+                          bool forceTranspose = false,
                           Operation *op = nullptr /*only for diagnostic*/) {
   OpBuilder::InsertionGuard g(rewriter);
   Value arg = v;
@@ -167,6 +168,8 @@ getSharedMemoryMMAOperand(Value v, mlir::PatternRewriter &rewriter, int opIdx,
     } else {
       newOrder = {1, 0};
     }
+    if (forceTranspose)
+      std::swap(newOrder[0], newOrder[1]);
   }
 
   if (newOrder != order && op) {
@@ -648,49 +651,47 @@ public:
 
     bool IsAMixedPrecFp4 = false;
     bool IsBMixedPrecFp4 = false;
+    bool isAFP4 = dotOp.getAElemType() == ScaleDotElemType::E2M1;
+    bool isBFP4 = dotOp.getBElemType() == ScaleDotElemType::E2M1;
 
     if (dotOp.getAElemType() != dotOp.getBElemType()) {
-      if (dotOp.getAElemType() == ScaleDotElemType::E2M1)
+      if (isAFP4)
         IsAMixedPrecFp4 = true;
-      else if (dotOp.getBElemType() == ScaleDotElemType::E2M1)
+      else if (isBFP4)
         IsBMixedPrecFp4 = true;
     }
-
+    // If we use txgen05.mma.kind.mxf864 we need to padd the fp4 operands:
+    // https://docs.nvidia.com/cuda/parallel-thread-execution/#tcgen05-packing-formats-mxf8f6f4-smem
+    bool isMMAv5Fp4PaddedLhs = IsAMixedPrecFp4 || !dotOp.getLhsKPack();
+    bool isMMAv5Fp4PaddedRhs = IsBMixedPrecFp4 || !dotOp.getRhsKPack();
     // For mixed-precision fp4 operands, set allowTranspose = false, to force
     // the packed axis, K, to be contiguous in SMEM
     a = getSharedMemoryMMAOperand(a, rewriter, 0,
-                                  /*allowTranspose=*/!IsAMixedPrecFp4,
-                                  IsAMixedPrecFp4, dotOp);
+                                  /*allowTranspose=*/!isAFP4,
+                                  /*isMMAv5Fp4Padded=*/isMMAv5Fp4PaddedLhs,
+                                  /*forceTranspose=*/!dotOp.getLhsKPack(),
+                                  dotOp);
     b = getSharedMemoryMMAOperand(b, rewriter, 1,
-                                  /*allowTranspose=*/!IsBMixedPrecFp4,
-                                  IsBMixedPrecFp4, dotOp);
+                                  /*allowTranspose=*/!isBFP4,
+                                  /*isMMAv5Fp4Padded=*/isMMAv5Fp4PaddedRhs,
+                                  /*forceTranspose=*/!dotOp.getRhsKPack(),
+                                  dotOp);
 
     MLIRContext *context = dotOp->getContext();
     unsigned m = 128;
     unsigned n = retShapePerCTA[1] >= 256 ? 256 : retShapePerCTA[1];
-    unsigned k = 32;
-    // If both operands are E2M1, target the FP4 tensor core implicitly.
-    // This may result in a downstream compile-time error if the scaled TC
-    // descriptor requires options that are unavailable to the .kind=mxf4 mma.
-    // This is likely preferable over a silent runtime performance degradation
-    // from running f4xf4 via .kind=mxf8f6f4
-    if (dotOp.getAElemType() == ScaleDotElemType::E2M1 &&
-        dotOp.getBElemType() == ScaleDotElemType::E2M1) {
-      k = 64;
-    }
-    SmallVector<unsigned> instrShape = {m, n, k};
+
     ArrayRef<unsigned> CTASplitNum = CTALayout.getCTASplitNum();
     Attribute accEncoding = triton::nvidia_gpu::TensorMemoryEncodingAttr::get(
-        context, instrShape[0], instrShape[1], /*unpacked=*/true,
-        CTASplitNum[0], CTASplitNum[1]);
+        context, m, n, /*unpacked=*/true, CTASplitNum[0], CTASplitNum[1]);
     Attribute tensorMemorySpace =
         triton::nvidia_gpu::TensorMemorySpaceAttr::get(context);
     Type accMemDescType = triton::gpu::MemDescType::get(
         oldRetType.getShape(), oldRetType.getElementType(), accEncoding,
         tensorMemorySpace,
         /*mutableMemory=*/true);
-    Attribute newDistributedEncoding = nvidia_gpu::getTmemCompatibleLayout(
-        instrShape[0], instrShape[1], oldRetType, numWarps);
+    Attribute newDistributedEncoding =
+        nvidia_gpu::getTmemCompatibleLayout(m, n, oldRetType, numWarps);
     auto newAccType = RankedTensorType::get(oldRetType.getShape(),
                                             oldRetType.getElementType(),
                                             newDistributedEncoding);

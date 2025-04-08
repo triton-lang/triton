@@ -39,6 +39,7 @@ template <> struct hash<CacheKey> {
 
 namespace mlir::triton::gpu {
 
+constexpr static char AttrMaxRegistersName[] = "ttg.maxnreg";
 constexpr static char AttrNumWarpsName[] = "ttg.num-warps";
 constexpr static char AttrNumCTAsName[] = "ttg.num-ctas";
 constexpr static char AttrTargetName[] = "ttg.target";

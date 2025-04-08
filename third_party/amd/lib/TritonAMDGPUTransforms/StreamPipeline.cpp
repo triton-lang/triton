@@ -62,7 +62,7 @@ namespace {
 // main loop and rotating the loop to schedule global load ops for future loop
 // iterations together with compute for the current iteration. In this way, we
 // can 1) issue memory operations earlier to hide the latency and 2) break the
-// strong dependency inside on loop iteration to give backends flexiblity to
+// strong dependency inside on loop iteration to give backends flexibility to
 // better interleave instructions for better instruction-level parallelism.
 //
 // This StreamPipeliner class creates the pipelining schedule and calls the
@@ -386,14 +386,6 @@ bool StreamPipeliner::createAsyncCopy(tt::LoadOp loadOp, Value alloc,
   auto sharedEncodingAttr =
       cast<ttg::SwizzledSharedEncodingAttr>(allocTy.getEncoding());
 
-  // Skip swizzled shared encodings because they are not supported by the
-  // lowering to llvm
-  // TODO: remove once swizzle async copies are supported
-  if (sharedEncodingAttr.getMaxPhase() != 1 ||
-      sharedEncodingAttr.getPerPhase() != 1) {
-    return false;
-  }
-
   // Extract local subview from shared allocation
   Value zero = builder.create<arith::ConstantIntOp>(forOp.getLoc(), 0, 32);
   SmallVector<Value> loadOffsets(allocTy.getRank(), zero);
@@ -431,11 +423,10 @@ bool StreamPipeliner::createAsyncCopy(tt::LoadOp loadOp, Value alloc,
   ttg::AsyncWaitOp wait =
       builder.create<ttg::AsyncWaitOp>(loc, commit->getResult(0), 0);
 
-  // If we have 2 buffers we need to place the prefetches (AsyncCopy)
-  // after the local_reads and therefore also the AsyncWaits to avoid another
-  // barrier. This is done by scheduling it as a local_store.
-  if (numBuffers == 2)
-    scheduleOp(newLoadOp, SCHED_LOCAL_STORE);
+  // We need to place the prefetches (AsyncCopy) after the AsyncWaits which
+  // create a barrier to ensure all warps are finished reading the shared buffer
+  // we will write into. This is done by scheduling it as a local_store.
+  scheduleOp(newLoadOp, SCHED_LOCAL_STORE);
 
   // Create local load which consumes the async token from the AsyncWait
   auto sharedLoad =
@@ -1147,8 +1138,7 @@ struct PipelinePass : public TritonAMDGPUStreamPipelineBase<PipelinePass> {
         continue;
       StreamPipeliner sp(forOp, tt::getNumStagesOrDefault(forOp, numStages),
                          globalPrefetch, localPrefetch, useAsyncCopy);
-      if (failed(sp.pipelineLoop()))
-        continue;
+      (void)sp.pipelineLoop();
     }
   }
 };

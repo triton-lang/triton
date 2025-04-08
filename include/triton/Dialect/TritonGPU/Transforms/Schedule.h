@@ -25,17 +25,8 @@ void lowerLoops(ModuleOp moduleOp);
 
 }; // namespace gpu
 
-/// Pipeline the Tensor Core Gen 05 MMA ops in the module with `numStages`
-/// stages. This will pre-process the loops, lowering the ops related to TG Gen5
-/// MMA, and then pipeline the loops using expander.
-void pipelineTC05MMALoops(ModuleOp module, int numStages,
-                          bool disableExpander = false);
-
 /// Pipeline the TMA stores in the loop.
 bool pipelineTMAStores(scf::ForOp forOp);
-
-/// Simple pipelining for the MMA ops which accumulator is modified in the loop.
-scf::ForOp pipelineMMAWithScaledAcc(scf::ForOp forOp);
 
 /// This does post-processing on the pipelined loop to try to pipeline wgmma
 /// ops.
@@ -81,6 +72,8 @@ public:
     }
 
     bool isBefore(iterator a, iterator b) const {
+      if (a == b)
+        return false;
       for (auto it = begin(); it != end(); ++it) {
         if (it == a)
           return true;

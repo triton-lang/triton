@@ -139,7 +139,7 @@ FailureOr<MfmaIntrinsic>
 chooseMfmaInstruction(int mfmaVersion, RankedTensorType cType, Type aElemType,
                       Type bElemType, int inputKSize, int enforcedNonKDim,
                       bool withScale, bool allowXF32) {
-  // number of matrix elements along k dim per one MFMA intruction
+  // number of matrix elements along k dim per one MFMA instruction
   unsigned kDim = 0;
 
   auto resShape = cType.getShape();
@@ -175,7 +175,7 @@ chooseMfmaInstruction(int mfmaVersion, RankedTensorType cType, Type aElemType,
   assert(kDim != 0);
   assert(enforcedNonKDim != 0 || (M % mDim == 0 && N % nDim == 0));
   // if inputKSize % kDim != 0 this layout will introduce data duplication,
-  // consider FMA dot is prefered, except cases MFMA layout is enforced.
+  // consider FMA dot is preferred, except cases MFMA layout is enforced.
   if (enforcedNonKDim == 0 && inputKSize % kDim != 0)
     return failure();
   return maybeMfmaIntrinsic;
@@ -572,6 +572,9 @@ public:
 
   LogicalResult matchAndRewrite(triton::DotScaledOp dotOp,
                                 PatternRewriter &rewriter) const override {
+    // TODO: add support for m/n packed formats.
+    if (!dotOp.getLhsKPack() || !dotOp.getRhsKPack())
+      return failure();
     using TensorValue = TypedValue<RankedTensorType>;
 
     RankedTensorType oldRetType = dotOp.getType();

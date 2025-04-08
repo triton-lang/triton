@@ -104,22 +104,6 @@ def TritonNvidiaGPUMMALoweringPass : Pass<"triton-nvidia-mma-lowering", "mlir::M
   ];
 }
 
-def TritonNvidiaGPUKeepAccInTMemPass : Pass<"tritongpu-keep-acc-in-tmem", "mlir::ModuleOp"> {
-  let summary = "Keep accumulator in Tensor Memory";
-
-  let description = [{
-    For Tensor Core Gen 05 Dot operations called in the loop, where the accumulator is reused
-    in the next iteration, we want to keep the accumulator in Tensor Memory, so that we can
-    avoid the cost of loading the accumulator from registers to Tensor Memory.
-  }];
-
-  let constructor = "mlir::createTritonNvidiaGPUKeepAccInTMemPass()";
-
-  let dependentDialects = ["mlir::triton::gpu::TritonGPUDialect",
-                           "mlir::triton::nvidia_gpu::TritonNvidiaGPUDialect",
-                           "mlir::triton::TritonDialect"];
-}
-
 def TritonNvidiaGPUPromoteLHSToTMemPass : Pass<"tritongpu-promote-lhs-to-tmem", "mlir::ModuleOp"> {
   let summary = "Promote LHS operand of MMAv5 op to Tensor Memory";
 
@@ -139,6 +123,18 @@ def TritonNvidiaGPUOptimizeDescriptorEncodingPass : Pass<"triton-nvidia-optimize
 
   let description = [{
     Set shared memory encoding on tensor descriptors, which decides the swizzling mode and message size of the tma descriptor.
+  }];
+
+  let dependentDialects = ["mlir::triton::gpu::TritonGPUDialect",
+                           "mlir::triton::nvidia_gpu::TritonNvidiaGPUDialect",
+                           "mlir::triton::TritonDialect"];
+}
+
+def TritonNvidiaGPUOptimizeTMemSubtilingPass : Pass<"triton-nvidia-optimize-tmem-subtiling", "mlir::ModuleOp"> {
+  let summary = "Optimize subtiling.";
+
+  let description = [{
+    Optimize subtiling by trying to split tmem_load when user splits a tensor.
   }];
 
   let dependentDialects = ["mlir::triton::gpu::TritonGPUDialect",

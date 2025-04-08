@@ -63,3 +63,28 @@ tt.func @two_warp_specialize() {
 }
 
 }
+
+// -----
+
+// CHECK: module attributes {ttg.maxnreg = 168 : i32
+module attributes {"ttg.num-warps" = 8 : i32} {
+
+tt.func @setmaxnreg() {
+  // CHECK: actualRegisters = array<i32: 208, 80, 80, 80>
+  ttg.warp_specialize() attributes {requestedRegisters = array<i32: 48, 80, 48>}
+  default {
+    ttg.warp_yield
+  }
+  partition0() num_warps(1) {
+    ttg.warp_return
+  }
+  partition1() num_warps(2) {
+    ttg.warp_return
+  }
+  partition2() num_warps(1) {
+    ttg.warp_return
+  } : () -> ()
+  tt.return
+}
+
+}
