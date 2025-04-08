@@ -18,6 +18,11 @@ public:
   Value clock(ConversionPatternRewriter &rewriter, Location loc,
               bool isClock64) const override;
 
+  Value processorId(ConversionPatternRewriter &rewriter,
+                    Location loc) const override;
+
+  int getAddressSpace(Attribute addressSpace) const override;
+
   ~TargetInfo() = default;
 };
 } // namespace mlir::triton::proton::gpu::AMD

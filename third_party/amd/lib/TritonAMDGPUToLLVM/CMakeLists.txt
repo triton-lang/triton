@@ -35,5 +35,4 @@ add_triton_library(TritonAMDGPUToLLVM
     LLVMCore
     LLVMPasses
     LLVMSupport
-    ProtonGPUToLLVM
 )

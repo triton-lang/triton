@@ -1,4 +1,5 @@
 #include "Conversion/ProtonGPUToLLVM/PatternProtonGPUOpToLLVM.h"
+#include "Conversion/ProtonGPUToLLVM/ProtonAMDGPUToLLVM/AMDPatternProtonGPUOpToLLVM.h"
 #include "Conversion/ProtonGPUToLLVM/ProtonAMDGPUToLLVM/Passes.h"
 #include "Conversion/ProtonGPUToLLVM/ProtonAMDGPUToLLVM/TargetInfo.h"
 #include "Dialect/ProtonGPU/IR/Dialect.h"
@@ -45,6 +46,8 @@ struct ConvertProtonAMDGPUToLLVM
     TritonGPUToLLVMTypeConverter typeConverter(context, option,
                                                tritonTargetInfo);
     mlir::triton::proton::gpu::populateProtonGPUOpPatterns(
+        typeConverter, patterns, protonTargetInfo, 1);
+    mlir::triton::proton::gpu::AMD::populateProtonGPUOpAMDPatterns(
         typeConverter, patterns, protonTargetInfo, 1);
     auto convTarget = ProtonLLVMConversionTarget(*context);
     if (failed(applyPartialConversion(mod, convTarget, std::move(patterns))))
