@@ -29,5 +29,4 @@ add_triton_library(TritonNVIDIAGPUToLLVM
     TritonProtonToLLVM
     TritonInstrumentToLLVM
     MLIRReconcileUnrealizedCasts
-    ProtonGPUToLLVM
 )

@@ -299,8 +299,7 @@ class CUDABackend(BaseBackend):
             nvidia.passes.ttnvgpuir.add_fence_insertion(pm)
         passes.common.add_sccp(pm)
         passes.common.add_canonicalizer(pm)
-        if CUDABackend.instrumentation:
-            CUDABackend.instrumentation.patch("ttir", pm, mod.context)
+
         pm.run(mod)
         metadata["cluster_dims"] = (cluster_info.clusterDimX, cluster_info.clusterDimY, cluster_info.clusterDimZ)
         tensordesc_meta = mod.get_tensordesc_metadata()
@@ -340,6 +339,9 @@ class CUDABackend(BaseBackend):
             # Call ConcurrencySanitizerPass here, before allocating global scratch memory but after allocating tensor and shared
             passes.ttgpuir.add_concurrency_sanitizer(pm)
         passes.ttgpuir.add_allocate_global_scratch_memory(pm)
+        # instrumentation point here so we can override IRs above (e.g., ttir and ttgir)
+        if CUDABackend.instrumentation:
+            CUDABackend.instrumentation.patch("ttgpuir", pm, mod.context)
         nvidia.passes.ttgpuir.add_to_llvmir(pm, capability, ptx_version)
         passes.common.add_canonicalizer(pm)
         passes.common.add_cse(pm)
@@ -351,7 +353,7 @@ class CUDABackend(BaseBackend):
         if not knobs.compilation.disable_line_info:
             passes.llvmir.add_di_scope(pm)
         if CUDABackend.instrumentation:
-            CUDABackend.instrumentation.patch("ttgpuir", pm, mod.context)
+            CUDABackend.instrumentation.patch("llvmir", pm, mod.context)
         pm.run(mod)
         # LLVM-IR (MLIR) -> LLVM-IR (LLVM)
         llvm.init_targets()
