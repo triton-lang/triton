@@ -12,6 +12,7 @@ include "triton/Dialect/Triton/IR/TritonInterfaces.td"
 include "proton/dialect/include/Dialect/Proton/IR/ProtonAttrDefs.td"
 include "proton/dialect/include/Dialect/ProtonGPU/IR/ProtonGPUDialect.td"
 include "proton/dialect/include/Dialect/ProtonGPU/IR/ProtonGPUAttrDefs.td"
+include "proton/dialect/include/Dialect/ProtonGPU/IR/ProtonGPUTypes.td"
 
 def GlobalMemory : Resource<"::mlir::triton::GlobalMemory">;
 def SharedMemory : Resource<"::mlir::triton::gpu::SharedMemory">;
@@ -34,16 +35,16 @@ def PTG_CircularStoreOp : PTG_Op<"circular_store", [
     ins TTG_MemDescType: $data,
     TT_PtrType :$indexPtr,
     I32: $counter,
+    PTG_SegmentBase:$seg,
     UnitAttr: $isStart,
-    I32Attr: $scopeId,
-    DefaultValuedAttr<GranularityAttr, "Granularity::WARPGROUP">:$granularity
+    I32Attr: $scopeId
   );
 
   let hasVerifier = 1;
 
   let assemblyFormat = [{
-    (`start` $isStart^):(`end`)? $data `,` $indexPtr `,` $counter attr-dict `:`
-    qualified(type($data)) `,` type($indexPtr) `,` type($counter)
+    (`start` $isStart^):(`end`)? $data `,` $indexPtr `,` $counter `,` $seg attr-dict `:`
+    qualified(type($data)) `,` type($indexPtr) `,` type($counter) `,` type($seg)
   }];
 }
 
@@ -115,6 +116,36 @@ def PTG_GlobalScratchAllocOp : PTG_Op<"global_scratch_alloc", [MemoryEffects<[Me
   ];
 
   let assemblyFormat = [{attr-dict `:` qualified(type($result))}];
+}
+
+def PTG_SegmentBaseOp : PTG_Op<"segment_base", [Pure]> {
+  let summary = "Get the base offset of the segment of the profiler internal buffer";
+
+  let description = [{
+      Get the location of the memory segment in the profiling buffer.
+      The internal profiler buffer is partitioned into segments.
+      If `selectIds` is none, then it is the full list of ids.
+  }];
+  let arguments = (ins
+    TTG_MemDescType: $data,
+    DefaultValuedAttr<GranularityAttr, "Granularity::WARP">:$granularity,
+    OptionalAttr<DenseI32ArrayAttr>:$selectIds
+  );
+  let results = (outs PTG_SegmentBase:$segBaseOffset);
+  let hasVerifier = 1;
+  let assemblyFormat = "$data `,` attr-dict `:` qualified(type($data)) `->` type($segBaseOffset)";
+}
+
+def PTG_StackAllocOp : PTG_Op<"stack_alloc", [MemoryEffects<[MemAlloc<GlobalMemory>]>]> {
+  let summary = "Allocate a proton stack memory buffer";
+  let description = [{
+    This operation allocates a proton buffer in device stack memory.
+  }];
+  let arguments = (
+    ins
+  );
+  let results = (outs TTG_MemDescType : $data);
+  let assemblyFormat = "attr-dict `:` qualified(type($data))";
 }
 
 #endif  // PROTONGPU_OPS

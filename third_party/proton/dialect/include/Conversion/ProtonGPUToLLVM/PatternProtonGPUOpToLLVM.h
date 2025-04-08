@@ -3,6 +3,7 @@
 
 #include "Conversion/ProtonGPUToLLVM/TargetInfoBase.h"
 #include "mlir/Conversion/LLVMCommon/TypeConverter.h"
+#include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 
 namespace mlir::triton {
 namespace proton::gpu {
@@ -13,10 +14,18 @@ namespace proton::gpu {
 // https://llvm.org/docs/AMDGPUUsage.html#address-spaces
 constexpr int IndexPtrAddrSpace = 5;
 
+constexpr int kGlobalScratchBufferOffset = -1;
+
 void populateProtonGPUOpPatterns(LLVMTypeConverter &typeConverter,
                                  RewritePatternSet &patterns,
                                  const TargetInfoBase &targetInfo,
                                  PatternBenefit benefit);
+
+void populateTypeConversions(LLVMTypeConverter &typeConverter,
+                             const TargetInfoBase &targetInfo);
+
+Value getLinearId(Location loc, ConversionPatternRewriter &rewriter,
+                  ModuleOp mod, const proton::gpu::TargetInfoBase &targetInfo);
 } // namespace proton::gpu
 } // namespace mlir::triton
 
