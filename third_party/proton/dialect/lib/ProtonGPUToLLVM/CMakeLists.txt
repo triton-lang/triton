@@ -1,7 +1,6 @@
 add_triton_library(ProtonGPUToLLVM
     AllocateProtonGlobalScratchBuffer.cpp
     AllocateProtonSharedMemory.cpp
-    GlobalScratchAllocOpToLLVM.cpp
     PatternProtonGPUOpToLLVM.cpp
 
     DEPENDS

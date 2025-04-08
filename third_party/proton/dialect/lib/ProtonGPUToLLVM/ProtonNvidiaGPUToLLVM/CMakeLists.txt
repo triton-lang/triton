@@ -2,6 +2,7 @@ include_directories(${PROJECT_SOURCE_DIR}/third_party/amd/include)
 
 add_triton_library(ProtonNVIDIAGPUToLLVM
     TargetInfo.cpp
+    NvidiaPatternProtonGPUOpToLLVM.cpp
     ConvertProtonGPUToLLVM.cpp
 
     DEPENDS
