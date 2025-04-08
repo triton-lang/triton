@@ -9,7 +9,7 @@ def ConvertProtonToProtonGPU: Pass<"convert-proton-to-protongpu", "mlir::ModuleO
   let description = "Convert the Proton Op into ProtonGPU Op. This includes scaffolding operations"
                     "such as allocation for internal profiling buffers, resources binding, and final cleanup.";
 
-  let constructor = "mlir::triton::proton::createConvertProtonToProtonGPUPass(\"cycle\", \"warpgroup\", 0, 32768, 128, \"circular\", \"shared_mem\", 0)";
+  let constructor = "mlir::triton::proton::createConvertProtonToProtonGPUPass(\"cycle\", \"warp\", \"\", 0, 32768, 128, \"circular\", \"shared_mem\", 0)";
 
   let dependentDialects = ["mlir::triton::proton::ProtonDialect",
                            "mlir::triton::proton::gpu::ProtonGPUDialect",
@@ -21,8 +21,11 @@ def ConvertProtonToProtonGPU: Pass<"convert-proton-to-protongpu", "mlir::ModuleO
               "std::string", /*default*/"\"cycle\"",
               "performance counter metric our lowering targets to">,
        Option<"granularity", "granularity",
-              "std::string", /*default*/"\"warpgroup\"",
-              "profiling granularity: warp or warpgroup">,
+              "std::string", /*default*/"\"warp\"",
+              "profiling granularity: warp or cta">,
+       Option<"selectIds", "select-ids",
+              "std::string", /*default*/"\"\"",
+              "comma-separated list of selected ids">,
        Option<"maxSharedMem", "max-shared-mem",
               "int32_t", /*default*/"0",
               "max shared memory size per CTA">,
