@@ -16,6 +16,12 @@ def ProtonGPU_Dialect : Dialect {
 		"triton::proton::ProtonDialect",
   ];
 
+  let extraClassDeclaration = [{
+    void registerTypes();
+  }];
+
+  let useDefaultTypePrinterParser = 1;
+  let useDefaultAttributePrinterParser = 1;
   let usePropertiesForAttributes = 1;
 }
 
