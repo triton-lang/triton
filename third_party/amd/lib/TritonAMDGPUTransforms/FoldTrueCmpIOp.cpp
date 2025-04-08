@@ -19,7 +19,7 @@ struct TritonAMDFoldTrueCmpIOpPass
     DenseMap<Value, SetVector<Operation *>> assumptions =
         AMD::TritonIntegerRangeAnalysis::collectAssumptions(getOperation());
     ModuleOp mod = getOperation();
-    std::unique_ptr solver = createDataFlowSolver();
+    std::unique_ptr<DataFlowSolver> solver = createDataFlowSolver();
     AMD::TritonIntegerRangeAnalysis *rangeAnalysis =
         solver->load<AMD::TritonIntegerRangeAnalysis>(assumptions);
     AMD::initializeFuncOps(mod, rangeAnalysis);
