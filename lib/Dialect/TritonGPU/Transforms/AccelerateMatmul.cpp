@@ -651,11 +651,13 @@ public:
 
     bool IsAMixedPrecFp4 = false;
     bool IsBMixedPrecFp4 = false;
+    bool isAFP4 = dotOp.getAElemType() == ScaleDotElemType::E2M1;
+    bool isBFP4 = dotOp.getBElemType() == ScaleDotElemType::E2M1;
 
     if (dotOp.getAElemType() != dotOp.getBElemType()) {
-      if (dotOp.getAElemType() == ScaleDotElemType::E2M1)
+      if (isAFP4)
         IsAMixedPrecFp4 = true;
-      else if (dotOp.getBElemType() == ScaleDotElemType::E2M1)
+      else if (isBFP4)
         IsBMixedPrecFp4 = true;
     }
     // If we use txgen05.mma.kind.mxf864 we need to padd the fp4 operands:
@@ -665,12 +667,12 @@ public:
     // For mixed-precision fp4 operands, set allowTranspose = false, to force
     // the packed axis, K, to be contiguous in SMEM
     a = getSharedMemoryMMAOperand(a, rewriter, 0,
-                                  /*allowTranspose=*/!IsAMixedPrecFp4,
+                                  /*allowTranspose=*/!isAFP4,
                                   /*isMMAv5Fp4Padded=*/isMMAv5Fp4PaddedLhs,
                                   /*forceTranspose=*/!dotOp.getLhsKPack(),
                                   dotOp);
     b = getSharedMemoryMMAOperand(b, rewriter, 1,
-                                  /*allowTranspose=*/!IsBMixedPrecFp4,
+                                  /*allowTranspose=*/!isBFP4,
                                   /*isMMAv5Fp4Padded=*/isMMAv5Fp4PaddedRhs,
                                   /*forceTranspose=*/!dotOp.getRhsKPack(),
                                   dotOp);
@@ -678,27 +680,18 @@ public:
     MLIRContext *context = dotOp->getContext();
     unsigned m = 128;
     unsigned n = retShapePerCTA[1] >= 256 ? 256 : retShapePerCTA[1];
-    unsigned k = 32;
-    // If both operands are E2M1 and packed along K, target the FP4 tensor core.
-    // Otherwise target .kind=mxf8f6f4.
-    if (dotOp.getAElemType() == ScaleDotElemType::E2M1 &&
-        dotOp.getBElemType() == ScaleDotElemType::E2M1 && dotOp.getLhsKPack() &&
-        dotOp.getRhsKPack()) {
-      k = 64;
-    }
-    SmallVector<unsigned> instrShape = {m, n, k};
+
     ArrayRef<unsigned> CTASplitNum = CTALayout.getCTASplitNum();
     Attribute accEncoding = triton::nvidia_gpu::TensorMemoryEncodingAttr::get(
-        context, instrShape[0], instrShape[1], /*unpacked=*/true,
-        CTASplitNum[0], CTASplitNum[1]);
+        context, m, n, /*unpacked=*/true, CTASplitNum[0], CTASplitNum[1]);
     Attribute tensorMemorySpace =
         triton::nvidia_gpu::TensorMemorySpaceAttr::get(context);
     Type accMemDescType = triton::gpu::MemDescType::get(
         oldRetType.getShape(), oldRetType.getElementType(), accEncoding,
         tensorMemorySpace,
         /*mutableMemory=*/true);
-    Attribute newDistributedEncoding = nvidia_gpu::getTmemCompatibleLayout(
-        instrShape[0], instrShape[1], oldRetType, numWarps);
+    Attribute newDistributedEncoding =
+        nvidia_gpu::getTmemCompatibleLayout(m, n, oldRetType, numWarps);
     auto newAccType = RankedTensorType::get(oldRetType.getShape(),
                                             oldRetType.getElementType(),
                                             newDistributedEncoding);

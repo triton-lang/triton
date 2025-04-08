@@ -518,16 +518,15 @@ struct TCGen5MMAScaledOpConversion
     baseScaleA = tb.ptrtoint(i32_ty, baseScaleA);
     baseScaleB = tb.ptrtoint(i32_ty, baseScaleB);
 
-    unsigned int M = dTensorTy.getDimSize(0);
-    unsigned int N = dTensorTy.getDimSize(1);
+    unsigned int M = op.getBlockM();
+    unsigned int N = op.getBlockN();
     int numBitsUnpackedPerElementA = opKindIsMXFP4
                                          ? getFormatBitSize(op.getAType())
                                          : aTensorTy.getElementTypeBitWidth();
     int numBitsUnpackedPerElementB = opKindIsMXFP4
                                          ? getFormatBitSize(op.getBType())
                                          : bTensorTy.getElementTypeBitWidth();
-    unsigned int K =
-        (aTensorTy.getDimSize(1) * 8) / getFormatBitSize(op.getAType());
+    unsigned int K = op.getBlockK();
 
     // Get MMA size based on acc layout.
     auto tensorMemAttr = cast<triton::nvidia_gpu::TensorMemoryEncodingAttr>(

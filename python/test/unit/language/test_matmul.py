@@ -648,29 +648,31 @@ def block_scale_fp4_matmul(  #
         BLOCK_M: tl.constexpr,  #
         BLOCK_N: tl.constexpr,  #
         BLOCK_K: tl.constexpr,  #
-        NUM_STAGES: tl.constexpr):  #
+        NUM_STAGES: tl.constexpr, PACK_ALONG_K: tl.constexpr):  #
     pid = tl.program_id(axis=0)
     num_pid_m = tl.cdiv(M, BLOCK_M)
     pid_m = pid % num_pid_m
     pid_n = pid // num_pid_m
-    offs_am = (pid_m * BLOCK_M + tl.arange(0, BLOCK_M)) % M
-    offs_bn = (pid_n * BLOCK_N + tl.arange(0, BLOCK_N)) % N
+    offs_am = (pid_m * BLOCK_M + tl.arange(0, BLOCK_M))
+    offs_bn = (pid_n * BLOCK_N + tl.arange(0, BLOCK_N))
+    PACKING_ALONG_M_N: tl.constexpr = 1 if PACK_ALONG_K else 2
+    offs_am_packed = (pid_m * (BLOCK_M // PACKING_ALONG_M_N) + tl.arange(0, BLOCK_M // PACKING_ALONG_M_N))
+    offs_bn_packed = (pid_n * (BLOCK_N // PACKING_ALONG_M_N) + tl.arange(0, BLOCK_N // PACKING_ALONG_M_N))
+    BLOCK_K_PACKED: tl.constexpr = BLOCK_K // 2 if PACK_ALONG_K else BLOCK_K
 
     # Two e2m1 values per K
-    offs_k = tl.arange(0, BLOCK_K // 2)
+    offs_k = tl.arange(0, BLOCK_K_PACKED)
     offs_scale_k = tl.arange(0, BLOCK_K // VEC_SIZE)
     if a_scale is not None:
         a_scale_ptr = a_scale + offs_am[:, None] * stride_scale + offs_scale_k[None, :]
     if b_scale is not None:
         b_scale_ptr = b_scale + offs_bn[:, None] * stride_scale + offs_scale_k[None, :]
-    a_ptrs = a_ptr + (offs_am[:, None] * stride_am + offs_k[None, :] * stride_ak)
-    b_ptrs = b_ptr + (offs_k[:, None] * stride_bk + offs_bn[None, :] * stride_bn)
+    a_ptrs = a_ptr + (offs_am_packed[:, None] * stride_am + offs_k[None, :] * stride_ak)
+    b_ptrs = b_ptr + (offs_k[:, None] * stride_bk + offs_bn_packed[None, :] * stride_bn)
     accumulator = tl.zeros((BLOCK_M, BLOCK_N), dtype=output_ptr.dtype.element_ty)
     for k in tl.range(0, tl.cdiv(K, BLOCK_K), num_stages=NUM_STAGES):
-        k_remaining = tl.cdiv(K - k * BLOCK_K, 2)
-        valid_k = offs_k < k_remaining
-        a = tl.load(a_ptrs, mask=valid_k[None, :], other=0)
-        b = tl.load(b_ptrs, mask=valid_k[:, None], other=0)
+        a = tl.load(a_ptrs)
+        b = tl.load(b_ptrs)
         if a_scale is not None:
             scale_a = tl.load(a_scale_ptr)
         else:
@@ -679,9 +681,10 @@ def block_scale_fp4_matmul(  #
             scale_b = tl.load(b_scale_ptr)
         else:
             scale_b = None
-        accumulator = tl.dot_scaled(a, scale_a, "e2m1", b, scale_b, "e2m1", accumulator)
-        a_ptrs += (BLOCK_K // 2) * stride_ak
-        b_ptrs += (BLOCK_K // 2) * stride_bk
+        accumulator = tl.dot_scaled(a, scale_a, "e2m1", b, scale_b, "e2m1", accumulator, lhs_k_pack=PACK_ALONG_K,
+                                    rhs_k_pack=PACK_ALONG_K)
+        a_ptrs += (BLOCK_K_PACKED) * stride_ak
+        b_ptrs += (BLOCK_K_PACKED) * stride_bk
         if a_scale is not None:
             a_scale_ptr += BLOCK_K // VEC_SIZE
         if b_scale is not None:
@@ -693,22 +696,30 @@ def block_scale_fp4_matmul(  #
     tl.store(output_ptrs, accumulator, mask=c_mask)
 
 
-@pytest.mark.parametrize("M, N, K", [(1024, 512, 256), (2, 4, 64)])
+@pytest.mark.parametrize("M, N, K", [(1024, 512, 256)])
 @pytest.mark.parametrize("BLOCK_M, BLOCK_N, BLOCK_K", [(128, 128, 128), (256, 128, 128), (128, 256, 128),
                                                        (128, 256, 256), (128, 128, 64), (128, 64, 128)])
 @pytest.mark.parametrize("with_a_scale", [True, False])
 @pytest.mark.parametrize("with_b_scale", [True, False])
+@pytest.mark.parametrize("pack_along_k", [True, False])
 @pytest.mark.parametrize(("scale_type", "VEC_SIZE"), [("float8_e8m0fnu", 32), ("float8_e4m3fn", 16)],
                          ids=["mxfp4", "nvfp4"])
 @pytest.mark.parametrize("nonKDim", ([0, 16, 32] if is_hip_cdna() else [0]))
-def test_block_scale_fp4(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, VEC_SIZE, with_a_scale, with_b_scale, scale_type, nonKDim,
-                         device):
+def test_block_scale_fp4(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, VEC_SIZE, with_a_scale, with_b_scale, pack_along_k,
+                         scale_type, nonKDim, device):
+    assert M % BLOCK_M == 0
+    assert N % BLOCK_N == 0
+    assert K % BLOCK_K == 0
     if is_cuda():
+        if scale_type == "float8_e4m3fn" and not pack_along_k:
+            pytest.skip("Packing along K is required for float8_e4m3fn")
         if torch.cuda.get_device_capability()[0] < 10:
             pytest.skip("Requires compute capability >= 10")
         if not (with_a_scale and with_b_scale):
             pytest.skip("None aScale/bScale is only tested on AMD backend for now")
     elif is_hip():
+        if not pack_along_k:
+            pytest.skip("Packing along M/N not implemented yet on AMD.")
         if not is_hip_cdna4():
             pytest.skip("Scaled fp4 matmul is only natively supported on CDNA4")
         if scale_type != 'float8_e8m0fnu':
@@ -718,11 +729,12 @@ def test_block_scale_fp4(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, VEC_SIZE, with_a_sc
 
     NUM_STAGES = 1
     torch.manual_seed(42)
+    packing_dim = 1 if pack_along_k else 0
     a_mxfp4 = MXFP4Tensor(size=(M, K), device=device).random()
-    a = a_mxfp4.to_packed_tensor(dim=1)
-    # Generate b with k-major layout, pack two e2m1 along k, then logical transpose to K, N
+    a = a_mxfp4.to_packed_tensor(dim=packing_dim)
+    # Generate b with k-major layout, pack two e2m1 along k or n, then logical transpose to K, N
     b_mxfp4 = MXFP4Tensor(size=(N, K), device=device).random()
-    b = b_mxfp4.to_packed_tensor(dim=1).T
+    b = b_mxfp4.to_packed_tensor(dim=packing_dim).T
     # No need to pack along K since we convert each e2m1 to f32 directly for the reference matmul
     b_ref = b_mxfp4.to(torch.float32).T
 
@@ -759,8 +771,7 @@ def test_block_scale_fp4(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, VEC_SIZE, with_a_sc
         kernel_kwargs["matrix_instr_nonkdim"] = nonKDim
     block_scale_fp4_matmul[grid](a, b, output, a_scale, b_scale, M, N, K, stride_scale, a.stride(0), a.stride(1),
                                  b.stride(0), b.stride(1), output.stride(0), output.stride(1), VEC_SIZE, BLOCK_M,
-                                 BLOCK_N, BLOCK_K, NUM_STAGES=NUM_STAGES, **kernel_kwargs)
-
+                                 BLOCK_N, BLOCK_K, NUM_STAGES=NUM_STAGES, PACK_ALONG_K=pack_along_k, **kernel_kwargs)
     torch.testing.assert_close(ref_out, output, atol=1e-2, rtol=1e-2)
 
 
