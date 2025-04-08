@@ -20,9 +20,32 @@ namespace gpu {
 
 // -- CircularRecordOp --
 LogicalResult CircularStoreOp::verify() {
-  // TODO(fywkevin): checks the following:
-  // 1. circular buffer size power of 2.
-  // 2. function's noinline is false.
+  auto segbaseOp =
+      mlir::cast<proton::gpu::SegmentBaseOp>(getSeg().getDefiningOp());
+  auto granularity = segbaseOp.getGranularity();
+  auto selectedIds = segbaseOp.getSelectIdsAttr().asArrayRef();
+  auto mod = getOperation()->getParentOfType<ModuleOp>();
+  int segmentNum = selectedIds.empty() ? mlir::triton::gpu::lookupNumWarps(mod)
+                                       : selectedIds.size();
+  auto memDescTy = mlir::cast<triton::gpu::MemDescType>(getData().getType());
+  const int bufferSizeInBytes =
+      mlir::ShapedType::getNumElements(memDescTy.getShape()) *
+      memDescTy.getElementType().getIntOrFloatBitWidth() / 8;
+
+  if (!llvm::isPowerOf2_32(bufferSizeInBytes / segmentNum))
+    return emitOpError("profiling buffer segment size must be power of 2");
+
+  return success();
+}
+
+// -- SegmentBaseOp --
+LogicalResult SegmentBaseOp::verify() {
+  auto granularity = getGranularity();
+  auto selectIdsAttr = getSelectIdsAttr();
+  if (granularity != Granularity::WARP && selectIdsAttr.asArrayRef().size()) {
+    return emitOpError(
+        "only warp granularity supports non-empty selectIds for now");
+  }
   return success();
 }
 } // namespace gpu
