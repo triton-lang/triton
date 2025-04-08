@@ -217,7 +217,8 @@ bool StreamPipeliner::safeDAG(Value v, int index) {
       // 1 input must be safe
       if (!safeDAG(dotOp.getA(), -1) && !safeDAG(dotOp.getB(), -1))
         return false;
-      return safeDAG(dotOp.getC(), index);
+      auto C = dotOp->getOperand(2);
+      return safeDAG(C, index);
     } else if (auto splatOp = dyn_cast<tt::SplatOp>(defOp)) {
       // both inputs must be safe
       return safeDAG(splatOp.getOperand(), -1);

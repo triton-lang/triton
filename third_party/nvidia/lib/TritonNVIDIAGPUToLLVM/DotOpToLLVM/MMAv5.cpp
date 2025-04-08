@@ -116,7 +116,7 @@ static Value createInstDescriptor(ConversionPatternRewriter &rewriter,
   desc.N = N >> 3;
   desc.aType = getTypeEncoding(op.getA().getType().getElementType());
   desc.bType = getTypeEncoding(op.getB().getType().getElementType());
-  Type dstElType = op.getC().getType().getElementType();
+  Type dstElType = op.getD().getType().getElementType();
   assert(dstElType.isF16() || dstElType.isF32());
   desc.dType = dstElType.isF16() ? 0 : 1;
   return b.int_val(32, desc.descriptor);
@@ -439,8 +439,8 @@ struct TCGen5MMAOpConversion
            "tensorcore op should have a barrier at this point.");
     auto typeConverter = getTypeConverter();
     convertDot(typeConverter, rewriter, op.getLoc(), op, //
-               op.getA(), op.getB(), op.getC(),          //
-               adaptor.getA(), adaptor.getB(), adaptor.getC(),
+               op.getA(), op.getB(), op.getD(),          //
+               adaptor.getA(), adaptor.getB(), adaptor.getD(),
                adaptor.getUseD(), adaptor.getPred(), adaptor.getBarrier());
     rewriter.eraseOp(op);
     return success();
@@ -478,7 +478,7 @@ struct TCGen5MMAScaledOpConversion
     auto tb = TritonLLVMOpBuilder(loc, rewriter);
     auto aTensorTy = cast<MemDescType>(op.getA().getType());
     auto bTensorTy = cast<MemDescType>(op.getB().getType());
-    auto dTensorTy = cast<MemDescType>(op.getC().getType());
+    auto dTensorTy = cast<MemDescType>(op.getD().getType());
     mxfpKind mxfpInstKind = getMXFPKind(
         op.getAType(), op.getBType(), op.getAScale().getType().getElementType(),
         op.getBScale().getType().getElementType());
@@ -507,7 +507,7 @@ struct TCGen5MMAScaledOpConversion
             loc, adaptor.getB(),
             typeConverter->convertType(bTensorTy.getElementType()), rewriter)
             .getBase();
-    Value baseD = adaptor.getC();
+    Value baseD = adaptor.getD();
     baseD = tb.ptrtoint(i32_ty, baseD);
     Value baseScaleA = adaptor.getAScale();
     Value baseScaleB = adaptor.getBScale();

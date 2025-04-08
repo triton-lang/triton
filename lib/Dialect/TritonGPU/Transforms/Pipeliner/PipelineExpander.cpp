@@ -773,9 +773,7 @@ LoopPipelinerInternal::emitEpilogue(RewriterBase &rewriter,
           Value pred = predicates[currentVersion];
           Value prevValue = valueMapping[mapVal][currentVersion];
           Value nextValue = pair.value();
-          // @@@: Is this valid for all results and all epilogue stages
-          // consider loop-carried addptr result needed for next stage
-          // @@@ solution - also guard all results without uses
+
           if (guardEpilogue)
             nextValue = rewriter.create<arith::SelectOp>(loc, pred, nextValue,
                                                          prevValue);

@@ -76,7 +76,7 @@ void WarpGroupDotOp::getEffects(
 
 bool WarpGroupDotOp::needsPartialAccumulator() {
   const auto &a = getA();
-  const auto &d = getC();
+  const auto &d = getD();
   auto aTensorTy = cast<triton::gpu::TensorOrMemDesc>(a.getType());
   auto aElTy = cast<triton::gpu::TensorOrMemDesc>(a.getType()).getElementType();
   bool isFP8 = llvm::isa<Float8E5M2Type, Float8E4M3FNType, Float8E5M2FNUZType,
@@ -272,7 +272,7 @@ void AsyncTMAScatterOp::getEffects(
 void TCGen5MMAOp::getEffects(
     SmallVectorImpl<SideEffects::EffectInstance<MemoryEffects::Effect>>
         &effects) {
-  effects.emplace_back(MemoryEffects::Write::get(), &getCMutable(),
+  effects.emplace_back(MemoryEffects::Write::get(), &getDMutable(),
                        mlir::triton::nvidia_gpu::TensorMemory::get());
   if (isa<triton::gpu::SharedMemorySpaceAttr>(
           getA().getType().getMemorySpace())) {
@@ -304,9 +304,9 @@ void TCGen5MMAOp::setBarrier(Value barrier) {
   getBarrierMutable().assign(barrier);
 }
 
-Value TCGen5MMAOp::getAccumulator() { return getC(); }
+Value TCGen5MMAOp::getAccumulator() { return getD(); }
 
-void TCGen5MMAOp::setAccumulator(Value accum) { getCMutable().assign(accum); }
+void TCGen5MMAOp::setAccumulator(Value accum) { getDMutable().assign(accum); }
 
 Value TCGen5MMAOp::getPredicate() { return getPred(); }
 
@@ -330,7 +330,7 @@ LogicalResult TMEMStoreOp::verify() {
 void TCGen5MMAScaledOp::getEffects(
     SmallVectorImpl<SideEffects::EffectInstance<MemoryEffects::Effect>>
         &effects) {
-  effects.emplace_back(MemoryEffects::Write::get(), &getCMutable(),
+  effects.emplace_back(MemoryEffects::Write::get(), &getDMutable(),
                        mlir::triton::nvidia_gpu::TensorMemory::get());
   if (isa<triton::gpu::SharedMemorySpaceAttr>(
           getA().getType().getMemorySpace())) {
@@ -369,10 +369,10 @@ void TCGen5MMAScaledOp::setBarrier(Value barrier) {
   getBarrierMutable().assign(barrier);
 }
 
-Value TCGen5MMAScaledOp::getAccumulator() { return getC(); }
+Value TCGen5MMAScaledOp::getAccumulator() { return getD(); }
 
 void TCGen5MMAScaledOp::setAccumulator(Value accum) {
-  getCMutable().assign(accum);
+  getDMutable().assign(accum);
 }
 
 Value TCGen5MMAScaledOp::getPredicate() { return getPred(); }

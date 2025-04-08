@@ -392,14 +392,14 @@ def TTNG_TCGen5MMAOp : TTNG_Op<"tc_gen5_mma", [DeclareOpInterfaceMethods<MemoryE
 
     let arguments = (ins TTG_MemDescType:$a,
                          TTG_MemDescType:$b,
-                         TTG_MemDescType:$c,
+                         TTG_MemDescType:$d,
                          I1:$useD,
                          I1:$pred,
                          Optional<TTG_MemDescType>:$barrier,
                          OptionalAttr<UnitAttr>:$two_ctas);
 
     // TODO: improve printing format.
-    let assemblyFormat = "$a`,` $b`,` $c`,` $useD`,` $pred (`,` $barrier^)? attr-dict `:` functional-type(operands, results)";
+    let assemblyFormat = "$a`,` $b`,` $d`,` $useD`,` $pred (`,` $barrier^)? attr-dict `:` functional-type(operands, results)";
 }
 
 def TTNG_TCGen5MMAScaledOp : TTNG_Op<"tc_gen5_mma_scaled", [DeclareOpInterfaceMethods<MemoryEffectsOpInterface>, DeclareOpInterfaceMethods<DotOpInterface>, DeclareOpInterfaceMethods<MMAv5OpInterface>]> {
@@ -413,7 +413,7 @@ def TTNG_TCGen5MMAScaledOp : TTNG_Op<"tc_gen5_mma_scaled", [DeclareOpInterfaceMe
 
     let arguments = (ins TTG_MemDescType:$a,
                          TTG_MemDescType:$b,
-                         TTG_MemDescType:$c,
+                         TTG_MemDescType:$d,
                          TTG_MemDescType:$a_scale,
                          TTG_MemDescType:$b_scale,
                          TT_ScaleDotElemTypeAttr:$a_type,
@@ -423,7 +423,7 @@ def TTNG_TCGen5MMAScaledOp : TTNG_Op<"tc_gen5_mma_scaled", [DeclareOpInterfaceMe
                          Optional<TTG_MemDescType>:$barrier);
 
     // TODO: improve printing format.
-    let assemblyFormat = "$a `,` $b `,` $c `,` $a_scale `,` $b_scale `,` $useD`,` $pred `lhs` `=` $a_type `rhs` `=` $b_type (`,` $barrier^)? attr-dict `:` functional-type(operands, results)";
+    let assemblyFormat = "$a `,` $b `,` $d `,` $a_scale `,` $b_scale `,` $useD`,` $pred `lhs` `=` $a_type `rhs` `=` $b_type (`,` $barrier^)? attr-dict `:` functional-type(operands, results)";
 }
 
 def TTNG_TMEMLoadOp : TTNG_Op<"tmem_load", [MemoryEffects<[MemRead]>]> {
