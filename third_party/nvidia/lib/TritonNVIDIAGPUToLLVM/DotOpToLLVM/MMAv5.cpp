@@ -56,13 +56,16 @@ namespace {
 enum class mxfpKind { mxf8f6f4 = 0, mxf4 = 1, mxf4nvf4 = 2 };
 
 inline mxfpKind getMXFPKind(ScaleDotElemType typeA, ScaleDotElemType typeB,
-                            Type scaleAType, Type scaleBType) {
+                            Type scaleAType, Type scaleBType, bool transpose) {
   if (typeA == ScaleDotElemType::E2M1 && typeB == ScaleDotElemType::E2M1) {
     if (llvm::isa<Float8E4M3FNType>(scaleAType) &&
         llvm::isa<Float8E4M3FNType>(scaleBType)) {
+      assert(!transpose &&
+             "MMAv5 with kind=mxf4nvf4 does not support transpose");
       return mxfpKind::mxf4nvf4;
     }
-    return mxfpKind::mxf4;
+    if (!transpose)
+      return mxfpKind::mxf4;
   }
   return mxfpKind::mxf8f6f4;
 };
@@ -479,10 +482,6 @@ struct TCGen5MMAScaledOpConversion
     auto aTensorTy = cast<MemDescType>(op.getA().getType());
     auto bTensorTy = cast<MemDescType>(op.getB().getType());
     auto dTensorTy = cast<MemDescType>(op.getD().getType());
-    mxfpKind mxfpInstKind = getMXFPKind(
-        op.getAType(), op.getBType(), op.getAScale().getType().getElementType(),
-        op.getBScale().getType().getElementType());
-    bool opKindIsMXFP4 = mxfpInstKind != mxfpKind::mxf8f6f4;
     bool aInTmem = true;
     bool transA = false;
     if (auto aSharedLayout =
@@ -502,6 +501,11 @@ struct TCGen5MMAScaledOpConversion
               typeConverter->convertType(aTensorTy.getElementType()), rewriter)
               .getBase();
     }
+    mxfpKind mxfpInstKind = getMXFPKind(
+        op.getAType(), op.getBType(), op.getAScale().getType().getElementType(),
+        op.getBScale().getType().getElementType(), transA || transB);
+    bool opKindIsMXFP4 = mxfpInstKind != mxfpKind::mxf8f6f4;
+
     Value baseB =
         getSharedMemoryObjectFromStruct(
             loc, adaptor.getB(),

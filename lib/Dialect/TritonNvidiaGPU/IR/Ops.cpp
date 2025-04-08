@@ -355,14 +355,53 @@ bool TCGen5MMAScaledOp::verifyDims() {
   auto aShape = this->getA().getType().getShape();
   auto bShape = this->getB().getType().getShape();
 
+  bool transA = false;
+  if (auto aSharedLayout = dyn_cast<triton::gpu::NVMMASharedEncodingAttr>(
+          getA().getType().getEncoding())) {
+    transA = aSharedLayout.getTransposed();
+  }
+  bool transB = false;
+  if (auto bSharedLayout = dyn_cast<triton::gpu::NVMMASharedEncodingAttr>(
+          getB().getType().getEncoding())) {
+    transB = !bSharedLayout.getTransposed();
+  }
   auto aKdim = aShape[aShape.size() - 1];
   auto bKdim = bShape[aShape.size() - 2];
-  if (this->getAType() == ScaleDotElemType::E2M1)
+  if (this->getAType() == ScaleDotElemType::E2M1 && !transA)
     aKdim *= 2;
-  if (this->getBType() == ScaleDotElemType::E2M1)
+  if (this->getBType() == ScaleDotElemType::E2M1 && !transB)
     bKdim *= 2;
 
   return aKdim == bKdim;
+}
+
+bool TCGen5MMAScaledOp::verifyOutputDims() {
+  auto aShape = this->getA().getType().getShape();
+  auto bShape = this->getB().getType().getShape();
+  auto cShape = this->getD().getType().getShape();
+  auto oMdim = cShape[cShape.size() - 2];
+  auto oNdim = cShape[cShape.size() - 1];
+
+  int aMdim = aShape[aShape.size() - 2];
+  int bNdim = bShape[bShape.size() - 1];
+  bool transA = false;
+  if (auto aSharedLayout = dyn_cast<triton::gpu::NVMMASharedEncodingAttr>(
+          getA().getType().getEncoding())) {
+    transA = aSharedLayout.getTransposed();
+  }
+  bool transB = false;
+  if (auto bSharedLayout = dyn_cast<triton::gpu::NVMMASharedEncodingAttr>(
+          getB().getType().getEncoding())) {
+    transB = !bSharedLayout.getTransposed();
+  }
+  if (this->getAType() == ScaleDotElemType::E2M1 && transA)
+    aMdim *= 2;
+  if (this->getBType() == ScaleDotElemType::E2M1 && transB)
+    bNdim *= 2;
+
+  if (aMdim != oMdim || bNdim != oNdim)
+    return false;
+  return true;
 }
 
 Value TCGen5MMAScaledOp::useAccumulator() { return getUseD(); }

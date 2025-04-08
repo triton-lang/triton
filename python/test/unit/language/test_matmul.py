@@ -779,23 +779,27 @@ def mxfp8_mxfp4_matmul(  #
         BLOCK_M: tl.constexpr,  #
         BLOCK_N: tl.constexpr,  #
         BLOCK_K: tl.constexpr,  #
-        NUM_STAGES: tl.constexpr):  #
+        NUM_STAGES: tl.constexpr,  #
+        PACK_B_ALONG_K: tl.constexpr = True):  #
     DIV_FACTOR_A: tl.constexpr = 2 if DTYPE_A == "e2m1" else 1
     DIV_FACTOR_B: tl.constexpr = 2 if DTYPE_B == "e2m1" else 1
+    DIV_FACTOR_B_K: tl.constexpr = DIV_FACTOR_B if PACK_B_ALONG_K else 1
+    DIV_FACTOR_B_N: tl.constexpr = 1 if PACK_B_ALONG_K else DIV_FACTOR_B
     pid = tl.program_id(axis=0)
     num_pid_m = tl.cdiv(M, BLOCK_M)
     pid_m = pid % num_pid_m
     pid_n = pid // num_pid_m
-    offs_am = (pid_m * BLOCK_M + tl.arange(0, BLOCK_M)) % M
-    offs_bn = (pid_n * BLOCK_N + tl.arange(0, BLOCK_N)) % N
+    offs_am = (pid_m * BLOCK_M + tl.arange(0, BLOCK_M))
+    offs_bn = (pid_n * BLOCK_N // DIV_FACTOR_B_N + tl.arange(0, BLOCK_N // DIV_FACTOR_B_N))
+    offs_bn_scale = (pid_n * BLOCK_N + tl.arange(0, BLOCK_N)) % N
     offs_ak = tl.arange(0, BLOCK_K // DIV_FACTOR_A)
-    offs_bk = tl.arange(0, BLOCK_K // DIV_FACTOR_B)
+    offs_bk = tl.arange(0, BLOCK_K // DIV_FACTOR_B_K)
     offs_scale_k = tl.arange(0, BLOCK_K // 32)
 
     if a_scale is not None:
         a_scale_ptr = a_scale + offs_am[:, None] * stride_scale + offs_scale_k[None, :]
     if b_scale is not None:
-        b_scale_ptr = b_scale + offs_bn[:, None] * stride_scale + offs_scale_k[None, :]
+        b_scale_ptr = b_scale + offs_bn_scale[:, None] * stride_scale + offs_scale_k[None, :]
     a_ptrs = a_ptr + (offs_am[:, None] * stride_am + offs_ak[None, :] * stride_ak)
     b_ptrs = b_ptr + (offs_bk[:, None] * stride_bk + offs_bn[None, :] * stride_bn)
 
@@ -815,9 +819,9 @@ def mxfp8_mxfp4_matmul(  #
             scale_b = tl.load(b_scale_ptr)
         else:
             scale_b = None
-        accumulator = tl.dot_scaled(a, scale_a, DTYPE_A, b, scale_b, DTYPE_B, accumulator)
+        accumulator = tl.dot_scaled(a, scale_a, DTYPE_A, b, scale_b, DTYPE_B, accumulator, rhs_k_pack=PACK_B_ALONG_K)
         a_ptrs += (BLOCK_K // DIV_FACTOR_A) * stride_ak
-        b_ptrs += (BLOCK_K // DIV_FACTOR_B) * stride_bk
+        b_ptrs += (BLOCK_K // DIV_FACTOR_B_K) * stride_bk
         if a_scale is not None:
             a_scale_ptr += BLOCK_K // 32
         if b_scale is not None:
@@ -835,14 +839,15 @@ def mxfp8_mxfp4_matmul(  #
                                                        (128, 256, 256), (128, 128, 64), (128, 64, 128)])
 @pytest.mark.parametrize("NUM_STAGES", [1, 3])
 @pytest.mark.parametrize("B_TRANS", [True, False])
+@pytest.mark.parametrize("PACK_B_ALONG_K", [True, False])
 @pytest.mark.parametrize("CONST_SCALE", [True, False])
 @pytest.mark.parametrize("A_DATA_TYPE", ["float8e5", "float8e4nv", "float4"])
 @pytest.mark.parametrize("B_DATA_TYPE", ["float8e5", "float8e4nv", "float4"])
 @pytest.mark.parametrize("WITH_A_SCALE", [True, False])
 @pytest.mark.parametrize("WITH_B_SCALE", [True, False])
 @pytest.mark.parametrize("nonKDim", ([0, 16, 32] if is_hip_cdna() else [0]))
-def test_mxfp8_mxfp4_matmul(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, NUM_STAGES, B_TRANS, CONST_SCALE, A_DATA_TYPE,
-                            B_DATA_TYPE, WITH_A_SCALE, WITH_B_SCALE, nonKDim, device):
+def test_mxfp8_mxfp4_matmul(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, NUM_STAGES, B_TRANS, PACK_B_ALONG_K, CONST_SCALE,
+                            A_DATA_TYPE, B_DATA_TYPE, WITH_A_SCALE, WITH_B_SCALE, nonKDim, device):
     if is_cuda():
         if torch.cuda.get_device_capability()[0] < 10:
             pytest.skip("Requires compute capability >= 10")
@@ -851,6 +856,8 @@ def test_mxfp8_mxfp4_matmul(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, NUM_STAGES, B_TR
         if not (A_DATA_TYPE == "float8e5" and B_DATA_TYPE == "float4"):
             pytest.skip(f"(A: {A_DATA_TYPE}, B: {B_DATA_TYPE}) has not been tested on NV backend")
     elif is_hip():
+        if not PACK_B_ALONG_K:
+            pytest.skip("Pack along M/N is not enabled on AMD backend")
         if not is_hip_cdna4():
             pytest.skip("Scaled mxfp4 & mxfp8 matmul is only natively supported on CDNA4")
         if CONST_SCALE:
@@ -859,13 +866,15 @@ def test_mxfp8_mxfp4_matmul(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, NUM_STAGES, B_TR
             pytest.skip(f"CDNA4 does not support {BLOCK_K=} for scaled mfma {nonKDim=} variants")
         if (A_DATA_TYPE == 'float4' and not WITH_A_SCALE) or (B_DATA_TYPE == 'float4' and not WITH_B_SCALE):
             pytest.skip("Float4 without scale is tested in test_block_scale_fp4")
-
+    if not PACK_B_ALONG_K and B_DATA_TYPE != "float4":
+        pytest.skip("Pack along K can only be False for float4")
     if BLOCK_N == 256 and BLOCK_K == 256:
         NUM_STAGES = 2
 
     torch.manual_seed(42)
 
-    def create_operand(dtype: str, size0: int, size1: int, k_dim: int, transpose: bool = True):
+    def create_operand(dtype: str, size0: int, size1: int, k_dim: int, transpose: bool = True,
+                       pack_along_k: bool = True):
         if dtype == "float8e5":
             if transpose:
                 v = torch.randint(20, 40, (size0, size1), dtype=torch.uint8).view(torch.float8_e5m2).to(device)
@@ -882,20 +891,24 @@ def test_mxfp8_mxfp4_matmul(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, NUM_STAGES, B_TR
                 v_ref = f8_to_f16(v.view(torch.float8_e4m3fn).T, dtype).to(torch.float32).T
         else:
             # float4
+            if pack_along_k:
+                pack_dim = k_dim
+            else:
+                pack_dim = (k_dim + 1) % 2
             if transpose:
                 v_mxfp4 = MXFP4Tensor(size=(size0, size1), device=device).random()
-                v = v_mxfp4.to_packed_tensor(dim=k_dim)
+                v = v_mxfp4.to_packed_tensor(dim=pack_dim)
                 v_ref = v_mxfp4.to(torch.float32)
             else:
                 v_mxfp4 = MXFP4Tensor(size=(size1, size0), device=device).random()
-                v = v_mxfp4.to_packed_tensor(dim=(k_dim + 1) % 2).T
+                v = v_mxfp4.to_packed_tensor(dim=(pack_dim + 1) % 2).T
                 v_ref = v_mxfp4.to(torch.float32).T
         return v, v_ref
 
     dtype_converter = {'float8e5': 'e5m2', 'float8e4nv': 'e4m3', 'float4': 'e2m1'}
 
     a, a_ref = create_operand(A_DATA_TYPE, M, K, 1)
-    b, b_ref = create_operand(B_DATA_TYPE, K, N, 0, B_TRANS)
+    b, b_ref = create_operand(B_DATA_TYPE, K, N, 0, B_TRANS, PACK_B_ALONG_K)
 
     a_scale_mxfp4 = MXScaleTensor(size=(M, (K + 32 - 1) // 32), device=device).random(high=32.0)
     b_scale_mxfp4 = MXScaleTensor(size=(N, (K + 32 - 1) // 32), device=device).random(high=32.0)
@@ -925,7 +938,7 @@ def test_mxfp8_mxfp4_matmul(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, NUM_STAGES, B_TR
     out = mxfp8_mxfp4_matmul[grid](a, b, output, a_scale, b_scale, M, N, K, stride_scale, a.stride(0), a.stride(1),
                                    b.stride(0), b.stride(1), output.stride(0), output.stride(1), not CONST_SCALE,
                                    dtype_converter[A_DATA_TYPE], dtype_converter[B_DATA_TYPE], BLOCK_M, BLOCK_N,
-                                   BLOCK_K, NUM_STAGES=NUM_STAGES, **kernel_kwargs)
+                                   BLOCK_K, PACK_B_ALONG_K=PACK_B_ALONG_K, NUM_STAGES=NUM_STAGES, **kernel_kwargs)
     if is_cuda():
         ttgir = out.asm["ttgir"]
         assert "fp4Padded = true" in ttgir
