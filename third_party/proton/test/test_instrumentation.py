@@ -48,8 +48,8 @@ def test_record(tmp_path: pathlib.Path):
     pgm = add_kernel[grid](x, y, output, n_elements, BLOCK_SIZE=1024)
 
     host_mem = proton.hooks.InstrumentationHook.profile_mem
-    preample = host_mem[0:4]
-    assert int.from_bytes(preample.numpy().tobytes(), 'little') == 0xdeadbeef
+    preamble = host_mem[0:4]
+    assert int.from_bytes(preamble.numpy().tobytes(), 'little') == 0xdeadbeef
     #FIXME(fywkevin): have a dedicated place to put those decoding related constants
     header_size = 16
     metadata_size = header_size + pgm.metadata.num_warps * 4

@@ -14,7 +14,6 @@
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "llvm/Support/MathExtras.h"
-#include <sstream>
 
 namespace mlir {
 namespace triton {
