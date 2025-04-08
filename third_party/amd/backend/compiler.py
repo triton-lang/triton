@@ -12,12 +12,13 @@ import functools
 from pathlib import Path
 
 
-def min_dot_size(target: GPUTarget):
-    # If some given configuration is not supported in hardware we fallback to FMA and cast arguments
-    return lambda lhsType, rhsType: (1, 1, 1)
+def get_min_dot_size(target: GPUTarget):
+    # We fallback to use FMA and cast arguments if certain configurations is
+    # not supported natively by matrix core units.
+    return lambda lhs_type, rhs_type: (1, 1, 1)
 
 
-def is_pingpong_enabled(arch):
+def is_pingpong_schedule_enabled(arch):
     default = "1" if arch == "gfx942" else "0"
     return os.getenv("TRITON_HIP_USE_BLOCK_PINGPONG", default) == "1"
 
@@ -68,26 +69,28 @@ class HIPOptions:
     schedule_hint: str = 'none'
 
     def __post_init__(self):
-        default_libdir = Path(__file__).parent / 'lib'
-        extern_libs = {} if self.extern_libs is None else dict(self.extern_libs)
-        # Ignore user-defined warp size for gfx9
-        warp_size = 32 if 'gfx10' in self.arch or 'gfx11' in self.arch or 'gfx12' in self.arch else 64
+        gfx_major = int(self.arch[3:-2])  # Drop "gfx" prefix and minor/patch number
+        warp_size = 32 if gfx_major >= 10 else 64
         object.__setattr__(self, 'warp_size', warp_size)
+
         # Error out if max threads per block is exceeded.
         # This is theoretically architecture specific but in reality they are all 1024.
         max_threads = 1024
         assert self.num_warps * warp_size <= max_threads, \
                 f"{self.num_warps} warps * {warp_size} warp size" \
                 f" must not exceed the max threads per block limit ({max_threads})"
-        # Only kpack=1 is supported on gfx950
-        kpack = 1 if self.arch == 'gfx950' else self.kpack
-        object.__setattr__(self, 'kpack', kpack)
-        libs = ["ocml", "ockl"]
-        for lib in libs:
-            extern_libs[lib] = str(default_libdir / f'{lib}.bc')
-        object.__setattr__(self, 'extern_libs', tuple(extern_libs.items()))
+
         assert self.num_warps > 0 and (self.num_warps & (self.num_warps - 1)) == 0, \
                "num_warps must be a power of 2"
+
+        if self.arch == 'gfx950':
+            assert self.kpack == 1, "gfx950 only accepts kpack == 1"
+
+        default_libdir = Path(__file__).parent / 'lib'
+        extern_libs = {} if self.extern_libs is None else dict(self.extern_libs)
+        for lib in ["ocml", "ockl"]:
+            extern_libs[lib] = str(default_libdir / f'{lib}.bc')
+        object.__setattr__(self, 'extern_libs', tuple(extern_libs.items()))
 
     def hash(self):
         key = '_'.join([f'{name}-{val}' for name, val in self.__dict__.items()])
@@ -109,22 +112,23 @@ class HIPBackend(BaseBackend):
         args = {'arch': os.getenv("TRITON_OVERRIDE_ARCH", self.target.arch)}
 
         # Enable XF32 (TF32) for CDNA3 GPUs
-        if self.target.arch in ('gfx940', 'gfx941', 'gfx942'):
+        if self.target.arch == 'gfx942':
             allowed_dot_input_precisions = set(HIPOptions.allowed_dot_input_precisions)
             allowed_dot_input_precisions.update({'tf32'})
             args["allowed_dot_input_precisions"] = tuple(sorted(allowed_dot_input_precisions))
 
         if "supported_fp8_dtypes" not in opts:
             supported_fp8_dtypes = set(HIPOptions.supported_fp8_dtypes)
-            if self.target.arch in ('gfx940', 'gfx941', 'gfx942'):
+            if self.target.arch == 'gfx942':
                 supported_fp8_dtypes.update({'fp8e4nv', 'fp8e4b8', 'fp8e5b16'})
-            elif self.target.arch in ('gfx950'):
+            elif self.target.arch == 'gfx950':
                 supported_fp8_dtypes.update({'fp8e4nv', 'fp8e5'})
             args["supported_fp8_dtypes"] = tuple(sorted(supported_fp8_dtypes))
 
         if "enable_fp_fusion" not in opts:
             args["enable_fp_fusion"] = os.getenv("TRITON_DEFAULT_FP_FUSION", "1") == "1"
-        args.update({k: opts[k] for k in HIPOptions.__dataclass_fields__.keys() if k in opts and opts[k] is not None})
+        args.update({k: opts[k] for k in HIPOptions.__dataclass_fields__.keys() \
+                     if k in opts and opts[k] is not None})
         return HIPOptions(**args)
 
     def pack_metadata(self, metadata):
@@ -138,8 +142,7 @@ class HIPBackend(BaseBackend):
         )
 
     def get_codegen_implementation(self, options):
-        codegen_fns = {"min_dot_size": min_dot_size(self.target)}
-        return codegen_fns
+        return {"min_dot_size": get_min_dot_size(self.target)}
 
     def get_module_map(self) -> Dict[str, ModuleType]:
         from triton.language.extra.hip import libdevice
@@ -248,17 +251,10 @@ class HIPBackend(BaseBackend):
         if options.schedule_hint == "local-prefetch":
             global_prefetch = local_prefetch = 1
 
-        if amd.has_matrix_core_feature(options.arch):
-            assert options.num_stages != 0, ("Triton AMD backend pipeliner has been updated. "
-                                             "We used to trigger software pipelining with "
-                                             "num_stages == 0. Now it will not happen anymore; "
-                                             "please update to use num_stages == 2 for "
-                                             "equivalent behavior in the past.")
-            amd.passes.ttgpuir.add_stream_pipeline(pm, options.num_stages, global_prefetch, local_prefetch,
-                                                   use_async_copy)
-            if use_async_copy:
-                amd.passes.ttgpuir.add_coalesce_async_copy(pm, options.arch)
-            passes.common.add_canonicalizer(pm)
+        amd.passes.ttgpuir.add_stream_pipeline(pm, options.num_stages, global_prefetch, local_prefetch, use_async_copy)
+        if use_async_copy:
+            amd.passes.ttgpuir.add_coalesce_async_copy(pm, options.arch)
+        passes.common.add_canonicalizer(pm)
         if options.schedule_hint.lower() != "none":
             amd.passes.ttgpuir.insert_instruction_sched_hints(pm, options.schedule_hint)
         passes.ttgpuir.add_optimize_dot_operands(pm, True)
@@ -267,16 +263,16 @@ class HIPBackend(BaseBackend):
         if is_in_thread_transpose_enabled(options.arch):
             amd.passes.ttgpuir.add_in_thread_transpose(pm)
             passes.ttgpuir.add_remove_layout_conversions(pm)
-        if amd.has_matrix_core_feature(options.arch):
-            amd.passes.ttgpuir.add_reorder_instructions(pm)
-            use_block_pingpong = is_pingpong_enabled(options.arch)
-            if use_block_pingpong and options.num_stages == 2:
-                amd.passes.ttgpuir.add_block_pingpong(pm, options.num_stages)
+        amd.passes.ttgpuir.add_reorder_instructions(pm)
+        use_block_pingpong = is_pingpong_schedule_enabled(options.arch)
+        if use_block_pingpong and options.num_stages == 2:
+            amd.passes.ttgpuir.add_block_pingpong(pm, options.num_stages)
 
         if HIPBackend.use_buffer_ops():
             amd.passes.ttgpuir.add_canonicalize_pointers(pm)
             passes.common.add_canonicalizer(pm)
             amd.passes.ttgpuir.add_convert_to_buffer_ops(pm, options.arch)
+
         amd.passes.ttgpuir.add_fold_true_cmpi(pm)
         passes.common.add_canonicalizer(pm)
         passes.common.add_cse(pm)
