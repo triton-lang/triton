@@ -37,9 +37,9 @@ int findMinInBlock(Block &block,
 }
 } // namespace findMin
 
-int findMinCountInDefChain(Value value, Operation *consumerOp,
-                           const std::function<int(Operation *)> &countFunc,
-                           int pathSum, int foundMin) {
+int findMinPathCountInDefChain(Value value, Operation *consumerOp,
+                               const std::function<int(Operation *)> &countFunc,
+                               int pathSum, int foundMin) {
 
   // If the value is not defined in the same region as the consumer we need to
   // peel the parent region of consumer until we arrive at value's region
@@ -80,12 +80,14 @@ int findMinCountInDefChain(Value value, Operation *consumerOp,
     // Split the path and traverse the value assigned to the initial loop
     // iteration and the yield from the previous iteation recursively.
     Value incomingVal = forOp.getInitArgs()[arg.getArgNumber() - 1];
-    int countLoopInit = findMinCountInDefChain(incomingVal, forOp, countFunc,
-                                               pathSum, foundMin);
+    int countLoopInit = findMinPathCountInDefChain(
+        incomingVal, forOp, countFunc, pathSum, foundMin);
+
     Operation *yieldOp = block->getTerminator();
     Value prevVal = yieldOp->getOperand(arg.getArgNumber() - 1);
-    int countPreviousIter =
-        findMinCountInDefChain(prevVal, yieldOp, countFunc, pathSum, foundMin);
+    int countPreviousIter = findMinPathCountInDefChain(
+        prevVal, yieldOp, countFunc, pathSum, foundMin);
+
     return std::min(std::min(countLoopInit, countPreviousIter), foundMin);
   }
 

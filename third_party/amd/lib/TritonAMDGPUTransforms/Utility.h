@@ -16,9 +16,9 @@ using namespace mlir;
 //    CountOp(Operation*) should return the value to accumulate for the
 //    operation
 // Returns 0 if there is an error traversing the def chain
-int findMinCountInDefChain(Value value, Operation *consumerOp,
-                           const std::function<int(Operation *)> &countFunc,
-                           int pathSum = 0,
-                           int foundMin = std::numeric_limits<int>::max());
+int findMinPathCountInDefChain(Value value, Operation *consumerOp,
+                               const std::function<int(Operation *)> &countFunc,
+                               int pathSum = 0,
+                               int foundMin = std::numeric_limits<int>::max());
 
 #endif
