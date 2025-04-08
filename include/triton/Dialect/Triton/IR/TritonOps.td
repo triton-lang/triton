@@ -676,7 +676,7 @@ def TT_DotOp : TT_Op<"dot", [Pure,
 //
 def TT_DotScaledOp : TT_Op<"dot_scaled", [Pure,
                              AttrSizedOperandSegments,
-                             DeclareOpInterfaceMethods<DotOpInterface>,
+                             DeclareOpInterfaceMethods<DotOpInterface, ["verifyDims", "verifyOutputDims"]>,
                              TypesMatchWith<"result's type matches accumulator's type",
                                             "d", "c", "$_self">]> {
     let summary = "dot_scaled";
@@ -697,7 +697,9 @@ def TT_DotScaledOp : TT_Op<"dot_scaled", [Pure,
       Optional<RankedTensorOf<[TT_Float, I8]>>:$b_scale,
       TT_ScaleDotElemTypeAttr:$a_elem_type,
       TT_ScaleDotElemTypeAttr:$b_elem_type,
-      BoolAttr:$fastMath
+      BoolAttr:$fastMath,
+      DefaultValuedAttr<BoolAttr, "true">:$lhs_k_pack,
+      DefaultValuedAttr<BoolAttr, "true">:$rhs_k_pack
     );
 
     let results = (outs TT_FloatTensor:$d);

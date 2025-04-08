@@ -323,12 +323,37 @@ bool DotScaledOp::verifyDims() {
 
   auto aKdim = aShape[aShape.size() - 1];
   auto bKdim = bShape[aShape.size() - 2];
-  if (this->getAElemType() == ScaleDotElemType::E2M1)
-    aKdim *= 2;
-  if (this->getBElemType() == ScaleDotElemType::E2M1)
-    bKdim *= 2;
+  if (this->getAElemType() == ScaleDotElemType::E2M1) {
+    if (this->getLhsKPack())
+      aKdim *= 2;
+  }
+  if (this->getBElemType() == ScaleDotElemType::E2M1) {
+    if (this->getRhsKPack())
+      bKdim *= 2;
+  }
 
   return aKdim == bKdim;
+}
+
+bool DotScaledOp::verifyOutputDims() {
+  auto cShape = this->getC().getType().getShape();
+  auto oMdim = cShape[cShape.size() - 2];
+  auto oNdim = cShape[cShape.size() - 1];
+  auto aShape = this->getA().getType().getShape();
+  auto bShape = this->getB().getType().getShape();
+  auto adim = aShape[aShape.size() - 2];
+  auto bdim = bShape[bShape.size() - 1];
+  if (this->getAElemType() == ScaleDotElemType::E2M1) {
+    if (!this->getLhsKPack())
+      adim *= 2;
+  }
+  if (this->getBElemType() == ScaleDotElemType::E2M1) {
+    if (!this->getRhsKPack())
+      bdim *= 2;
+  }
+  if (adim != oMdim || bdim != oNdim)
+    return false;
+  return true;
 }
 
 //-- MakeRangeOp --
