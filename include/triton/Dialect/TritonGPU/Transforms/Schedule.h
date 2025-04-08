@@ -28,9 +28,6 @@ void lowerLoops(ModuleOp moduleOp);
 /// Pipeline the TMA stores in the loop.
 bool pipelineTMAStores(scf::ForOp forOp);
 
-/// Simple pipelining for the MMA ops which accumulator is modified in the loop.
-scf::ForOp pipelineMMAWithScaledAcc(scf::ForOp forOp);
-
 /// This does post-processing on the pipelined loop to try to pipeline wgmma
 /// ops.
 // TODO: this should be included as part of the pipeline but currently the wgmma
@@ -75,6 +72,8 @@ public:
     }
 
     bool isBefore(iterator a, iterator b) const {
+      if (a == b)
+        return false;
       for (auto it = begin(); it != end(); ++it) {
         if (it == a)
           return true;

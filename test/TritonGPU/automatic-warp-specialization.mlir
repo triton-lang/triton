@@ -32,7 +32,7 @@ tt.func @matmul_change_desc_in_prologue(
   // BASE-NOT: tt.make_tensor_descriptor
   // PIPELINE-NOT: tt.experimental_tensormap_create
   // CHECK-LABEL: partition1
-  // CHECK-SAME: num_warps(1)
+  // CHECK-SAME: num_warps(2)
   // BASE-COUNT-2: tt.make_tensor_descriptor
   // PIPELINE-COUNT-2: ttg.global_scratch_alloc {alignment = 128 : i32, nbytes = 512 : i32}
   // PIPELINE-COUNT-2: tt.experimental_tensormap_create
@@ -87,7 +87,7 @@ tt.func @matmul_tma_acc_with_conditional_def_and_use(
   // CHECK-LABEL: partition0
   // CHECK-SAME: num_warps(1)
   // CHECK-LABEL: partition1
-  // CHECK-SAME: num_warps(1)
+  // CHECK-SAME: num_warps(2)
   // CHECK: [[INDICES:%.*]] = tt.splat %{{.*}} : i32 -> tensor<128xi32,
   // CHECK: ttng.async_tma_gather %{{.*}}[[[INDICES]],
   // CHECK-LABEL: partition2
