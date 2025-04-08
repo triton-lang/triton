@@ -32,14 +32,20 @@ const std::unordered_map<std::string, proton::gpu::Granularity> granularityMap =
      {"warpgroup_4", proton::gpu::Granularity::WARPGROUP_4},
      {"warpgroup_8", proton::gpu::Granularity::WARPGROUP_8}};
 
-void parseSelectIds(std::string selectIds,
+void parseSelectIds(llvm::StringRef selectIds,
                     llvm::SmallVectorImpl<int32_t> &selectIdVec) {
-  std::stringstream ss(selectIds);
-  std::string id;
-  // TODO(fywkevin): handle duplicated ids and sort them in ascending order.
-  while (std::getline(ss, id, ',')) {
-    selectIdVec.push_back(std::stoi(id));
+  auto rest = selectIds;
+  while (!rest.empty()) {
+    llvm::StringRef id;
+    std::tie(id, rest) = rest.split(',');
+    if (id.trim().size() > 0) {
+      selectIdVec.push_back(std::stoi(id.str()));
+    }
+    if (rest.trim().size() == 0)
+      break;
   }
+  llvm::sort(selectIdVec);
+  selectIdVec.erase(llvm::unique(selectIdVec), selectIdVec.end());
 }
 
 class RecordOpCircularRewrite : public OpRewritePattern<proton::RecordOp> {
@@ -172,9 +178,6 @@ public:
     auto ctaLayout =
         triton::gpu::CTALayoutAttr::get(context, /*CTAsPerCGA=*/{1},
                                         /*CTASplitNum=*/{1}, /*CTAOrder=*/{0});
-
-    // TODO(fywkevin): add another shared encoding attribute derived from the
-    // SharedEncodingTrait, and use it here.
     auto encoding = triton::gpu::SwizzledSharedEncodingAttr::get(
         context, 1, 1, 1, {0}, ctaLayout);
 

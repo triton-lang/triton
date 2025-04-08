@@ -15,12 +15,12 @@ Value TargetInfo::clock(ConversionPatternRewriter &rewriter, Location loc,
   return Value();
 }
 
-Value TargetInfo::hardwareId(ConversionPatternRewriter &rewriter,
-                             Location loc) const {
+Value TargetInfo::processorId(ConversionPatternRewriter &rewriter,
+                              Location loc) const {
   GCNBuilder builder;
   auto &gethwid = *builder.create("s_getreg_b32");
   auto res = builder.newOperand("=s");
-  auto hwreg = builder.newConstantOperand("hwreg(HW_REG_HW_ID, 0, 32)");
+  auto hwreg = builder.newConstantOperand("hwreg(HW_REG_HW_ID, 8, 4)");
   gethwid(res, hwreg);
   builder.create<>("s_waitcnt lgkmcnt(0)")->operator()();
   return builder.launch(rewriter, loc, i32_ty, false);

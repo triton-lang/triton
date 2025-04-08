@@ -9,18 +9,22 @@
 namespace mlir::triton {
 namespace proton::gpu {
 
-Value getLinearId(Location loc, ConversionPatternRewriter &rewriter,
-                  ModuleOp mod, const proton::gpu::TargetInfoBase &targetInfo) {
-  auto &tritonTargetInfo = targetInfo.getTritonTargetInfo();
+Value getLinearId(Location loc, ConversionPatternRewriter &rewriter) {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
-  // Note: we compute use i64 data type to compute and then truncate to i32 to
-  // support various backend intrinsics (e.g. amd).
-  Value pidX =
-      b.sext(i64_ty, tritonTargetInfo.programId(rewriter, loc, mod, 0));
-  Value pidY =
-      b.sext(i64_ty, tritonTargetInfo.programId(rewriter, loc, mod, 1));
-  Value pidZ =
-      b.sext(i64_ty, tritonTargetInfo.programId(rewriter, loc, mod, 2));
+  // Note:
+  // 1. We compute use i64 data type to compute and then truncate to i32
+  // to support various backend intrinsics (e.g. amd).
+  // 2. We avoid using the targetInfo's programId() because of its coupling
+  // with cluster id in Nvidia TritonGPU's llvm lowering.
+  Value pidX = rewriter.create<arith::IndexCastOp>(
+      loc, i64_ty,
+      rewriter.create<mlir::gpu::BlockIdOp>(loc, mlir::gpu::Dimension::x));
+  Value pidY = rewriter.create<arith::IndexCastOp>(
+      loc, i64_ty,
+      rewriter.create<mlir::gpu::BlockIdOp>(loc, mlir::gpu::Dimension::y));
+  Value pidZ = rewriter.create<arith::IndexCastOp>(
+      loc, i64_ty,
+      rewriter.create<mlir::gpu::BlockIdOp>(loc, mlir::gpu::Dimension::z));
 
   Value gridDimX = rewriter.create<arith::IndexCastOp>(
       loc, i64_ty,
@@ -141,7 +145,7 @@ struct FinalizeOpConversion
 
     auto &tritonTargetInfo = targetInfo.getTritonTargetInfo();
 
-    Value hwid = targetInfo.hardwareId(rewriter, loc);
+    Value hwid = targetInfo.processorId(rewriter, loc);
 
     auto scratchPtrTy = mlir::cast<LLVM::LLVMPointerType>(scratchPtr.getType());
     auto bufferPtrTy =
@@ -185,7 +189,7 @@ struct FinalizeOpConversion
     // Write back 'program id'.
     Value gmemPidOffset = b.i32_val(1);
     Value gmemPidPtr = b.gep(scratchPtrTy, i32_ty, scratchPtr, gmemPidOffset);
-    Value pid = getLinearId(loc, rewriter, mod, targetInfo);
+    Value pid = getLinearId(loc, rewriter);
     b.store(pid, gmemPidPtr);
 
     // Write back 'hw id'.
@@ -389,7 +393,7 @@ struct GlobalScratchAllocOpConversion
         "ttg.profile_scratch_memory_size");
     assert(allocSizeAttr);
 
-    Value linearId = getLinearId(loc, rewriter, mod, targetInfo);
+    Value linearId = getLinearId(loc, rewriter);
 
     auto allocSize = allocSizeAttr.getValue().getZExtValue();
     Value gmemOffset =

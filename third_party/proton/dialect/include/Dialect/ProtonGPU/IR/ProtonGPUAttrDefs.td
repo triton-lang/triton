@@ -10,6 +10,8 @@ def GranularityAttr : I32EnumAttr<
   [
     I32EnumAttrCase<"CTA", 0, "cta">,
     I32EnumAttrCase<"WARP", 1, "warp">,
+    // WARPGROUP_2/4/8 is for all warpgroup of size N (N=2,4,8).
+    // For example, WARPGROUP_2 is essentially warp 0, warp 2, warp 4, warp 6,...
     I32EnumAttrCase<"WARPGROUP_2", 2, "warpgroup_2">,
     I32EnumAttrCase<"WARPGROUP_4", 3, "warpgroup_4">,
     I32EnumAttrCase<"WARPGROUP_8", 4, "warpgroup_8">

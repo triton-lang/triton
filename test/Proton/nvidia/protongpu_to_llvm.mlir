@@ -109,9 +109,9 @@ module attributes {"ttg.num-warps" = 8 : i32} {
 module attributes {"ttg.num-warps" = 8 : i32, ttg.profile_scratch_memory_alignment = 128 : i32, ttg.profile_scratch_memory_size = 384 : i32} {
   // CHECK-LABEL: convert_global_scratch_alloc
   llvm.func @convert_global_scratch_alloc(%arg: !llvm.ptr<1>) attributes {noinline = false, nvvm.kernel = 1 : ui1} {
-    // CHECK-DAG: llvm.nvvm.read.ptx.sreg.ctaid.x
-    // CHECK-DAG: llvm.nvvm.read.ptx.sreg.ctaid.y
-    // CHECK-DAG: llvm.nvvm.read.ptx.sreg.ctaid.z
+    // CHECK-DAG: nvvm.read.ptx.sreg.ctaid.x
+    // CHECK-DAG: nvvm.read.ptx.sreg.ctaid.y
+    // CHECK-DAG: nvvm.read.ptx.sreg.ctaid.z
     // CHECK-DAG: nvvm.read.ptx.sreg.nctaid.x
     // CHECK-DAG: nvvm.read.ptx.sreg.nctaid.y
     // CHECK-DAG: %[[PID:.*]] = llvm.trunc %15 : i64 to i32

@@ -26,8 +26,8 @@ Value TargetInfo::clock(ConversionPatternRewriter &rewriter, Location loc,
   return val;
 }
 
-Value TargetInfo::hardwareId(ConversionPatternRewriter &rewriter,
-                             Location loc) const {
+Value TargetInfo::processorId(ConversionPatternRewriter &rewriter,
+                              Location loc) const {
   return LLVM::NVIDIA::getSRegValue(rewriter, loc, "smid");
 }
 
