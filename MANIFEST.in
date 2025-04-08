@@ -1,5 +1,6 @@
 graft bin
 graft cmake
+graft docs
 graft include
 graft lib
 graft python/src
