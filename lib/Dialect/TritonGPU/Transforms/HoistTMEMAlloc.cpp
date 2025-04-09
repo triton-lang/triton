@@ -142,7 +142,7 @@ public:
         foundStore = true;
       }
     }
-    if (!found) {
+    if (!foundStore) {
       return failure();
     }
     return success();
