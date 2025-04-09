@@ -756,6 +756,8 @@ class InterpreterBuilder:
         np_type = _get_np_dtype(type)
         if "int" in np_type.name:
             return TensorHandle(np.full(1, -1, dtype=np_type), type.scalar)
+        elif np_type == np.bool_:
+            return TensorHandle(np.full(1, True, dtype=np_type), type.scalar)
         else:
             raise TypeError(f"unsupported type {type}")
 
