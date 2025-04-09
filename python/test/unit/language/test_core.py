@@ -1851,6 +1851,26 @@ def test_load_scope_sem_coop_grid_cta_one(device):
     out = kernel_r[(2, )](data, BLOCK_SIZE=block_size, num_ctas=1, launch_cooperative_grid=False)
 
 
+@pytest.mark.interpreter
+def test_atomic_min_max_neg_zero(device):
+
+    @triton.jit
+    def kernel(inp, out_max, out_min):
+        idx = tl.program_id(0)
+        x = tl.load(inp + idx)
+        tl.atomic_max(out_max + idx, x)
+        tl.atomic_min(out_min + idx, x)
+
+    N_PROG = 1
+    dtype = torch.float32
+    out_min = torch.full([N_PROG], torch.finfo(torch.float32).max, device=device, dtype=dtype)
+    out_max = torch.full([N_PROG], torch.finfo(torch.float32).min, device=device, dtype=dtype)
+    inp = torch.full([N_PROG], -0.0, device=device, dtype=dtype)
+    kernel[(N_PROG, )](inp, out_max, out_min)
+    torch.testing.assert_close(out_min, inp, atol=0, rtol=0)
+    torch.testing.assert_close(out_max, inp, atol=0, rtol=0)
+
+
 # ---------------
 # test cast
 # ---------------
