@@ -219,42 +219,17 @@ def benchmark(K, provider, M, N):
     tflops = (lambda ms: (2.0 * M * N * K) * 1e-12 / (ms * 1e-3))
 
     quantiles = [0.5, 0.2, 0.8]
-    if "fp8" in provider:
-        a = torch.randn((M, K), device="cuda", dtype=torch.float16).to(torch.float8_e5m2)
-        b = torch.randn((K, N), device="cuda", dtype=torch.float16).to(torch.float8_e5m2)
-        b = b.T.contiguous()
-        if "pdl" in provider:
-            ms, min_ms, max_ms = triton.testing.do_bench_cudagraph(
-                lambda: matmul(a, b),
-                quantiles=quantiles,
-                rep=1000,
-            )
-            return tflops(ms), tflops(max_ms), tflops(min_ms)
-        else:
-            ms, min_ms, max_ms = triton.testing.do_bench_cudagraph(
-                lambda: matmul(a, b, False),
-                quantiles=quantiles,
-                rep=1000,
-            )
-            return tflops(ms), tflops(max_ms), tflops(min_ms)
-    else:
-        a = torch.randn((M, K), device="cuda", dtype=torch.float16)
-        b = torch.randn((K, N), device="cuda", dtype=torch.float16)
-        b = b.T.contiguous()
-        if "pdl" in provider:
-            ms, min_ms, max_ms = triton.testing.do_bench_cudagraph(
-                lambda: matmul(a, b),
-                quantiles=quantiles,
-                rep=1000,
-            )
-            return tflops(ms), tflops(max_ms), tflops(min_ms)
-        else:
-            ms, min_ms, max_ms = triton.testing.do_bench_cudagraph(
-                lambda: matmul(a, b, False),
-                quantiles=quantiles,
-                rep=1000,
-            )
-            return tflops(ms), tflops(max_ms), tflops(min_ms)
+    dtype = torch.float8_e5m2 if "fp8" in provider else torch.float16
+    a = torch.randn((M, K), device="cuda", dtype=torch.float16).to(dtype)
+    b = torch.randn((N, K), device="cuda", dtype=torch.float16).to(dtype)
+    
+    use_pdl = "pdl" in provider
+    ms, min_ms, max_ms = triton.testing.do_bench_cudagraph(
+        lambda: matmul(a, b, use_pdl),
+        quantiles=quantiles,
+        rep=1000,
+    )
+    return tflops(ms), tflops(max_ms), tflops(min_ms)
 
 
 if __name__ == "__main__":
