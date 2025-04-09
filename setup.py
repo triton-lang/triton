@@ -42,7 +42,6 @@ class Backend:
     backend_dir: str
     language_dir: Optional[str]
     tools_dir: Optional[str]
-    install_dir: str
     is_external: bool
 
 
@@ -66,24 +65,22 @@ class BackendInstaller:
 
             backend_src_dir = os.path.join(root_dir, backend_name)
 
-        backend_path = os.path.abspath(os.path.join(backend_src_dir, "backend"))
+        backend_path = os.path.join(backend_src_dir, "backend")
         assert os.path.exists(backend_path), f"{backend_path} does not exist!"
 
-        language_dir = os.path.abspath(os.path.join(backend_src_dir, "language"))
+        language_dir = os.path.join(backend_src_dir, "language")
         if not os.path.exists(language_dir):
             language_dir = None
 
-        tools_dir = os.path.abspath(os.path.join(backend_src_dir, "tools"))
+        tools_dir = os.path.join(backend_src_dir, "tools")
         if not os.path.exists(tools_dir):
             tools_dir = None
 
         for file in ["compiler.py", "driver.py"]:
             assert os.path.exists(os.path.join(backend_path, file)), f"${file} does not exist in ${backend_path}"
 
-        install_dir = os.path.join(os.path.dirname(__file__), "python", "triton", "backends", backend_name)
-
         return Backend(name=backend_name, src_dir=backend_src_dir, backend_dir=backend_path, language_dir=language_dir,
-                       tools_dir=tools_dir, install_dir=install_dir, is_external=is_external)
+                       tools_dir=tools_dir, is_external=is_external)
 
     # Copy all in-tree backends under triton/third_party.
     @staticmethod
@@ -581,68 +578,26 @@ def download_and_copy_dependencies():
 backends = [*BackendInstaller.copy(["nvidia", "amd"]), *BackendInstaller.copy_externals()]
 
 
-def add_link_to_backends():
+def get_package_dirs():
+    yield ("", "python")
+
     for backend in backends:
-        update_symlink(backend.install_dir, backend.backend_dir)
+        yield (f"triton.backends.{backend.name}", backend.backend_dir)
 
         if backend.language_dir:
-            # Link the contents of each backend's `language` directory into
+            # Install the contents of each backend's `language` directory into
             # `triton.language.extra`.
-            extra_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "python", "triton", "language",
-                                                     "extra"))
             for x in os.listdir(backend.language_dir):
-                src_dir = os.path.join(backend.language_dir, x)
-                install_dir = os.path.join(extra_dir, x)
-                update_symlink(install_dir, src_dir)
+                yield (f"triton.language.extra.{x}", os.path.join(backend.language_dir, x))
 
         if backend.tools_dir:
-            # Link the contents of each backend's `tools` directory into
+            # Install the contents of each backend's `tools` directory into
             # `triton.tools.extra`.
-            extra_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "python", "triton", "tools", "extra"))
             for x in os.listdir(backend.tools_dir):
-                src_dir = os.path.join(backend.tools_dir, x)
-                install_dir = os.path.join(extra_dir, x)
-                update_symlink(install_dir, src_dir)
+                yield (f"triton.tools.extra.{x}", os.path.join(backend.tools_dir, x))
 
-
-def add_link_to_proton():
-    proton_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "third_party", "proton", "proton"))
-    proton_install_dir = os.path.join(os.path.dirname(__file__), "python", "triton", "profiler")
-    update_symlink(proton_install_dir, proton_dir)
-
-
-def add_links():
-    add_link_to_backends()
     if check_env_flag("TRITON_BUILD_PROTON", "ON"):  # Default ON
-        add_link_to_proton()
-
-
-class plugin_install(install):
-
-    def run(self):
-        add_links()
-        install.run(self)
-
-
-class plugin_develop(develop):
-
-    def run(self):
-        add_links()
-        develop.run(self)
-
-
-class plugin_bdist_wheel(bdist_wheel):
-
-    def run(self):
-        add_links()
-        bdist_wheel.run(self)
-
-
-class plugin_egginfo(egg_info):
-
-    def run(self):
-        add_links()
-        egg_info.run(self)
+        yield ("triton.profiler", "third_party/proton/proton")
 
 
 def get_entry_points():
@@ -682,6 +637,9 @@ def get_git_version_suffix():
 # keep it separate for easy substitution
 TRITON_VERSION = "3.3.0" + get_git_version_suffix() + os.environ.get("TRITON_WHEEL_VERSION_SUFFIX", "")
 
+package_dirs = dict(get_package_dirs())
+extra_packages = [x for x in package_dirs if x != ""]
+
 setup(
     name=os.environ.get("TRITON_WHEEL_NAME", "triton"),
     version=TRITON_VERSION,
@@ -690,8 +648,8 @@ setup(
     description="A language and compiler for custom Deep Learning operations",
     long_description="",
     install_requires=["setuptools>=40.8.0"],
-    packages=find_packages(where="python"),
-    package_dir={"": "python"},
+    packages=find_packages(where="python") + extra_packages,
+    package_dir=package_dirs,
     entry_points=get_entry_points(),
     include_package_data=True,
     ext_modules=[CMakeExtension("triton", "triton/_C/")],
@@ -699,10 +657,6 @@ setup(
         "build_ext": CMakeBuild,
         "build_py": CMakeBuildPy,
         "clean": CMakeClean,
-        "install": plugin_install,
-        "develop": plugin_develop,
-        "bdist_wheel": plugin_bdist_wheel,
-        "egg_info": plugin_egginfo,
     },
     zip_safe=False,
     # for PyPI
