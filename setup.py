@@ -13,6 +13,7 @@ import urllib.request
 import json
 from io import BytesIO
 from distutils.command.clean import clean
+from functools import cache
 from pathlib import Path
 from typing import List, Optional
 
@@ -104,6 +105,11 @@ class BackendInstaller:
             BackendInstaller.prepare(backend_name, backend_src_dir=backend_src_dir, is_external=True)
             for backend_name, backend_src_dir in zip(backend_names, backend_dirs)
         ]
+
+
+@cache
+def get_backends():
+    return [*BackendInstaller.copy(["nvidia", "amd"]), *BackendInstaller.copy_externals()]
 
 
 # Taken from https://github.com/pytorch/pytorch/blob/master/tools/setup_helpers/env.py
@@ -429,6 +435,8 @@ class CMakeBuild(build_ext):
             os.makedirs(self.build_temp)
         # python directories
         python_include_dir = sysconfig.get_path("platinclude")
+        # prepare backends
+        backends = get_backends()
         cmake_args = [
             "-G", "Ninja",  # Ninja is much faster than make
             "-DCMAKE_MAKE_PROGRAM=" +
@@ -578,10 +586,8 @@ def download_and_copy_dependencies():
     )
 
 
-backends = [*BackendInstaller.copy(["nvidia", "amd"]), *BackendInstaller.copy_externals()]
-
-
 def add_link_to_backends():
+    backends = get_backends()
     for backend in backends:
         update_symlink(backend.install_dir, backend.backend_dir)
 
