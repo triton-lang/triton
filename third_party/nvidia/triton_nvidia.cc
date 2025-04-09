@@ -46,6 +46,8 @@ void init_triton_nvidia_passes_ttnvgpuir(py::module &&m) {
                      mlir::createTritonNvidiaGPUMMALoweringPass);
   ADD_PASS_WRAPPER_0("add_optimize_descriptor_encoding",
                      mlir::createTritonNvidiaGPUOptimizeDescriptorEncodingPass);
+  ADD_PASS_WRAPPER_0("add_optimize_tmem_subtiling",
+                     mlir::createTritonNvidiaGPUOptimizeTMemSubtilingPass);
 }
 
 void init_triton_nvidia_passes_nvws(py::module &&m) {

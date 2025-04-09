@@ -1621,8 +1621,8 @@ def _bitcast_to_fp_type(val: tl.tensor, float_format: str, builder: ir.builder):
 
 
 def dot_scaled(lhs: tl.tensor, lhs_scale: tl.tensor, lhs_format: str, rhs: tl.tensor, rhs_scale: Optional[tl.tensor],
-               rhs_format: str, acc: tl.tensor | None, fast_math: bool, out_dtype: tl.dtype,
-               builder: ir.builder) -> tl.tensor:
+               rhs_format: str, acc: tl.tensor | None, fast_math: bool, lhs_k_pack: bool, rhs_k_pack: bool,
+               out_dtype: tl.dtype, builder: ir.builder) -> tl.tensor:
     assert lhs.type.is_block() and rhs.type.is_block()
     #TODO: validate types.
     lhs_rank = len(lhs.shape)
@@ -1640,15 +1640,21 @@ def dot_scaled(lhs: tl.tensor, lhs_scale: tl.tensor, lhs_format: str, rhs: tl.te
     lhs = _bitcast_to_fp_type(lhs, lhs_format, builder)
     rhs = _bitcast_to_fp_type(rhs, rhs_format, builder)
 
-    M = lhs.type.shape[-2]
-    K, N = rhs.type.shape[-2:]
+    assert lhs_k_pack or lhs_format == "e2m1", "only mxfp4 inputs can be packed along a dimension different than K"
+    assert rhs_k_pack or rhs_format == "e2m1", "only mxfp4 inputs can be packed along a dimension different than K"
+    M, K_LHS = lhs.type.shape[-2:]
+    K_RHS, N = rhs.type.shape[-2:]
     PACKED_A = 2 if lhs_format == "e2m1" else 1
     PACKED_B = 2 if rhs_format == "e2m1" else 1
-    assert K * PACKED_B == PACKED_A * lhs.type.shape[
-        -1], f"Reduction dimension should pack the same number of elements; (lhs: {lhs.shape} vs rhs: {rhs.shape})"
+    PACKED_A_DIM = PACKED_A * K_LHS if lhs_k_pack else K_LHS
+    PACKED_B_DIM = PACKED_B * K_RHS if rhs_k_pack else K_RHS
+    assert PACKED_B_DIM == PACKED_A_DIM, f"Reduction dimension should pack the same number of elements; (lhs: {lhs.shape} vs rhs: {rhs.shape})"
     #assert K * PACKED_B >= 64, f"scaled_dot NYI for K < 64. Got {K=}"
     B = lhs.type.shape[0] if lhs_rank == 3 else None
-
+    if not lhs_k_pack:
+        M = M * PACKED_A
+    if not rhs_k_pack:
+        N = N * PACKED_B
     ret_ty = tl.block_type(out_dtype, [B, M, N] if B else [M, N])
     _0 = builder.get_fp32(0)
     if acc is None:
@@ -1660,7 +1666,7 @@ def dot_scaled(lhs: tl.tensor, lhs_scale: tl.tensor, lhs_format: str, rhs: tl.te
     lhs_scale_handle = None if lhs_scale_is_none else lhs_scale.handle
     return tl.tensor(
         builder.create_dot_scaled(lhs.handle, lhs_scale_handle, lhs_format_enum, rhs.handle, rhs_scale_handle,
-                                  rhs_format_enum, fast_math, acc_handle), ret_ty)
+                                  rhs_format_enum, fast_math, lhs_k_pack, rhs_k_pack, acc_handle), ret_ty)
 
 
 # ===----------------------------------------------------------------------===//

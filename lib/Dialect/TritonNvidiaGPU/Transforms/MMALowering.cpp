@@ -89,15 +89,8 @@ struct TCGen5MMAScaleSharedToTmemConversion
     MLIRContext *context = op->getContext();
     auto aScaleType = op.getAScale().getType();
     auto bScaleType = op.getBScale().getType();
-    int blockM = op.getA()
-                     .getType()
-                     .getShape()[op.getA().getType().getShape().size() - 2];
-    int blockN = op.getB()
-                     .getType()
-                     .getShape()[op.getB().getType().getShape().size() - 1];
-    int blockK = op.getA()
-                     .getType()
-                     .getShape()[op.getA().getType().getShape().size() - 1];
+    int blockM = op.getBlockM();
+    int blockN = op.getBlockN();
     bool anyChanged = false;
     if (isa<SwizzledSharedEncodingAttr>(aScaleType.getEncoding())) {
       anyChanged = lowerScaleToTmem(op.getAScaleMutable(), rewriter, blockM);
