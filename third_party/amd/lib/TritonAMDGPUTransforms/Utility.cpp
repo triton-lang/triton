@@ -2,24 +2,44 @@
 
 #include "mlir/Dialect/SCF/IR/SCF.h"
 
-namespace findMin {
-int findMinInBlock(Block &block,
-                   const std::function<int(Operation *)> &countFunc);
+namespace deduceMin {
+int deduceMinCountInBlock(Block &block,
+                          const std::function<int(Operation *)> &countFunc);
 
-// Returns the minimum found when accumulating countFunc(op) for all paths
-// between op1 and op2
-int findMinBetweenOps(Operation *op1, Operation *op2,
-                      const std::function<int(Operation *)> &countFunc) {
-  assert(op1 && op2);
+std::optional<int> getIntIfConstant(Value v) {
+  if (auto constantOp = v.getDefiningOp<arith::ConstantOp>()) {
+    if (auto attr = dyn_cast<IntegerAttr>(constantOp.getValue())) {
+      return attr.getInt();
+    }
+  }
+  return std::nullopt;
+}
+
+// Returns the minimum found when accumulating countFunc(op) between begin and
+// end (inclusive)
+int deduceMinCountBetweeOps(Operation *beginOp, Operation *endOp,
+                            const std::function<int(Operation *)> &countFunc) {
+  assert(beginOp && endOp);
+  assert(beginOp == endOp || beginOp->isBeforeInBlock(endOp));
   int count = 0;
-  for (auto op = op1; op != op2; op = op->getNextNode()) {
+  for (auto op = beginOp; op != endOp; op = op->getNextNode()) {
     if (auto ifOp = llvm::dyn_cast<scf::IfOp>(op)) {
       assert(!ifOp.getThenRegion().empty() && !ifOp.getElseRegion().empty());
-      auto minThen = findMinInBlock(ifOp.getThenRegion().front(), countFunc);
-      auto minElse = findMinInBlock(ifOp.getElseRegion().front(), countFunc);
+      auto minThen =
+          deduceMinCountInBlock(ifOp.getThenRegion().front(), countFunc);
+      auto minElse =
+          deduceMinCountInBlock(ifOp.getElseRegion().front(), countFunc);
       count += std::min(minThen, minElse);
     } else if (auto forOp = llvm::dyn_cast<scf::ForOp>(op)) {
-      count += findMinInBlock(*forOp.getBody(), countFunc);
+      auto upperBound = getIntIfConstant(forOp.getUpperBound());
+      auto lowerBound = getIntIfConstant(forOp.getLowerBound());
+      auto step = getIntIfConstant(forOp.getStep());
+      if (upperBound.has_value() && lowerBound.has_value() &&
+          step.has_value() && *step != 0) {
+        float range = static_cast<float>(*upperBound) - *lowerBound;
+        int numSteps = std::ceil(range / *step);
+        count += numSteps * deduceMinCountInBlock(*forOp.getBody(), countFunc);
+      }
     } else {
       count += countFunc(op);
     }
@@ -29,39 +49,38 @@ int findMinBetweenOps(Operation *op1, Operation *op2,
 
 // Returns the minimum found when accumulating countFunc(op) for all paths
 // between the block's start and end op
-int findMinInBlock(Block &block,
-                   const std::function<int(Operation *)> &countFunc) {
+int deduceMinCountInBlock(Block &block,
+                          const std::function<int(Operation *)> &countFunc) {
   if (block.empty())
     return 0;
-  return findMinBetweenOps(&block.front(), &block.back(), countFunc);
+  return deduceMinCountBetweeOps(&block.front(), &block.back(), countFunc);
 }
-} // namespace findMin
+} // namespace deduceMin
 
-int findMinPathCountInDefChain(Value value, Operation *consumerOp,
-                               const std::function<int(Operation *)> &countFunc,
-                               int pathSum, int foundMin) {
-
+int deduceMinCountOnDefChain(Value defValue, Operation *consumerOp,
+                             const std::function<int(Operation *)> &countFunc,
+                             int pathSum, int foundMin) {
+  using namespace deduceMin;
   // If the value is not defined in the same region as the consumer we need to
   // peel the parent region of consumer until we arrive at value's region
-  while (consumerOp->getParentRegion() != value.getParentRegion()) {
-    assert(!consumerOp->getParentRegion()->empty());
-    assert(!consumerOp->getParentRegion()->front().empty());
-    pathSum += findMin::findMinBetweenOps(
-        &consumerOp->getParentRegion()->front().front(), consumerOp, countFunc);
+  while (consumerOp->getParentRegion() != defValue.getParentRegion()) {
+    pathSum += deduceMin::deduceMinCountBetweeOps(
+        &consumerOp->getBlock()->front(), consumerOp, countFunc);
     consumerOp = consumerOp->getParentOp();
   }
 
   // Break recursion if we arrive at the producer updating the path based on the
   // ops between producer and consumer
-  if (Operation *defOp = value.getDefiningOp()) {
+  if (Operation *defOp = defValue.getDefiningOp()) {
     pathSum +=
-        findMin::findMinBetweenOps(defOp->getNextNode(), consumerOp, countFunc);
+        deduceMinCountBetweeOps(defOp->getNextNode(), consumerOp, countFunc);
     foundMin = std::min(foundMin, pathSum);
     return foundMin;
   }
-  // If value is a loop carried value (BlockArgument) we need to look at initial
-  // argumets of the loop and the previous iteration to find all producers
-  if (auto arg = mlir::dyn_cast<BlockArgument>(value)) {
+  // If value is a loop carried argument (BlockArgument) we need to look at
+  // initial argumets of the loop and the previous iteration to find all
+  // producers
+  if (auto arg = mlir::dyn_cast<BlockArgument>(defValue)) {
     Block *block = arg.getOwner();
     auto forOp = dyn_cast<scf::ForOp>(block->getParentOp());
 
@@ -70,8 +89,8 @@ int findMinPathCountInDefChain(Value value, Operation *consumerOp,
       return 0;
     }
 
-    Operation *firstForOp = &*forOp.getBody()->begin();
-    pathSum += findMin::findMinBetweenOps(firstForOp, consumerOp, countFunc);
+    Operation *firstOpInLoop = &*forOp.getBody()->begin();
+    pathSum += deduceMinCountBetweeOps(firstOpInLoop, consumerOp, countFunc);
 
     // Break recursion early if we exceed previous min
     if (pathSum >= foundMin)
@@ -80,12 +99,12 @@ int findMinPathCountInDefChain(Value value, Operation *consumerOp,
     // Split the path and traverse the value assigned to the initial loop
     // iteration and the yield from the previous iteation recursively.
     Value incomingVal = forOp.getInitArgs()[arg.getArgNumber() - 1];
-    int countLoopInit = findMinPathCountInDefChain(
-        incomingVal, forOp, countFunc, pathSum, foundMin);
+    int countLoopInit = deduceMinCountOnDefChain(incomingVal, forOp, countFunc,
+                                                 pathSum, foundMin);
 
     Operation *yieldOp = block->getTerminator();
     Value prevVal = yieldOp->getOperand(arg.getArgNumber() - 1);
-    int countPreviousIter = findMinPathCountInDefChain(
+    int countPreviousIter = deduceMinCountOnDefChain(
         prevVal, yieldOp, countFunc, pathSum, foundMin);
 
     return std::min(std::min(countLoopInit, countPreviousIter), foundMin);
@@ -93,4 +112,10 @@ int findMinPathCountInDefChain(Value value, Operation *consumerOp,
 
   // Unsupported value, return 0 conservatively.
   return 0;
+}
+
+int deduceMinCountOnDefChain(Value defValue, Operation *consumerOp,
+                             const std::function<int(Operation *)> &countFunc) {
+  return deduceMinCountOnDefChain(defValue, consumerOp, countFunc, 0,
+                                  std::numeric_limits<int>::max());
 }
