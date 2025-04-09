@@ -699,10 +699,6 @@ def get_git_version_suffix():
         return get_git_commit_hash()
 
 
-# ensure that triton._C package directory exists, as otherwise packages=
-# will cause errors
-Path(__file__).parent.joinpath("python", "triton", "_C").mkdir(exist_ok=True)
-
 # keep it separate for easy substitution
 TRITON_VERSION = "3.3.0" + get_git_version_suffix() + os.environ.get("TRITON_WHEEL_VERSION_SUFFIX", "")
 
