@@ -38,9 +38,6 @@ except ImportError:
 @dataclass
 class Backend:
     name: str
-    package_data: List[str]
-    language_package_data: List[str]
-    tools_package_data: List[str]
     src_dir: str
     backend_dir: str
     language_dir: Optional[str]
@@ -84,19 +81,9 @@ class BackendInstaller:
             assert os.path.exists(os.path.join(backend_path, file)), f"${file} does not exist in ${backend_path}"
 
         install_dir = os.path.join(os.path.dirname(__file__), "python", "triton", "backends", backend_name)
-        package_data = [f"{os.path.relpath(p, backend_path)}/*" for p, _, _, in os.walk(backend_path)]
 
-        language_package_data = []
-        if language_dir is not None:
-            language_package_data = [f"{os.path.relpath(p, language_dir)}/*" for p, _, _, in os.walk(language_dir)]
-
-        tools_package_data = []
-        if tools_dir is not None:
-            tools_package_data = [f"{os.path.relpath(p, tools_dir)}/*" for p, _, _, in os.walk(tools_dir)]
-
-        return Backend(name=backend_name, package_data=package_data, language_package_data=language_package_data,
-                       tools_package_data=tools_package_data, src_dir=backend_src_dir, backend_dir=backend_path,
-                       language_dir=language_dir, tools_dir=tools_dir, install_dir=install_dir, is_external=is_external)
+        return Backend(name=backend_name, src_dir=backend_src_dir, backend_dir=backend_path, language_dir=language_dir,
+                       tools_dir=tools_dir, install_dir=install_dir, is_external=is_external)
 
     # Copy all in-tree backends under triton/third_party.
     @staticmethod
@@ -658,13 +645,6 @@ class plugin_egginfo(egg_info):
         egg_info.run(self)
 
 
-package_data = {
-    "python/triton/tools/extra": sum((b.tools_package_data for b in backends), []),
-    **{f"python/triton/backends/{b.name}": b.package_data
-       for b in backends}, "python/triton/language/extra": sum((b.language_package_data for b in backends), [])
-}
-
-
 def get_entry_points():
     entry_points = {}
     if check_env_flag("TRITON_BUILD_PROTON", "ON"):  # Default ON
@@ -713,7 +693,6 @@ setup(
     packages=find_packages(where="python"),
     package_dir={"": "python"},
     entry_points=get_entry_points(),
-    package_data=package_data,
     include_package_data=True,
     ext_modules=[CMakeExtension("triton", "triton/_C/")],
     cmdclass={
