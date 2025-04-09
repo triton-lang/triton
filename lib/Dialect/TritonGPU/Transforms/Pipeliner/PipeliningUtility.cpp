@@ -327,6 +327,40 @@ bool mlir::triton::isTMALoad(Operation *op) {
   return isa<tt::DescriptorLoadOp, tt::DescriptorGatherOp>(op);
 }
 
+void mlir::triton::combineRedundantWaitOps(
+    llvm::SmallSetVector<ttg::AsyncWaitOp, 8> &waitOps) {
+  llvm::MapVector<ttg::AsyncWaitOp, ttg::AsyncWaitOp> toDelete;
+  for (auto waitOp : waitOps) {
+    if (toDelete.count(waitOp))
+      continue;
+    SmallVector<ttg::AsyncWaitOp> waitGroup = {waitOp};
+    SmallVector<Value> depTokens = waitOp.getOperands();
+    unsigned minWaitNumber = waitOp.getNum();
+    Operation *next = waitOp->getNextNode();
+    while (next && !isa<ttg::AsyncCommitGroupOp>(next)) {
+      if (auto nextWait = dyn_cast<ttg::AsyncWaitOp>(next)) {
+        waitGroup.push_back(nextWait);
+        minWaitNumber = std::min(minWaitNumber, nextWait.getNum());
+        depTokens.append(nextWait.getOperands().begin(),
+                         nextWait.getOperands().end());
+      }
+      next = next->getNextNode();
+    }
+    if (waitGroup.size() == 1)
+      continue;
+    OpBuilder builder(waitGroup.front());
+    auto newWaitOp = builder.create<ttg::AsyncWaitOp>(waitOp.getLoc(),
+                                                      depTokens, minWaitNumber);
+    for (auto waitOp : waitGroup) {
+      toDelete[waitOp] = newWaitOp;
+    }
+  }
+  for (auto waitOp : toDelete) {
+    waitOp.first->replaceAllUsesWith(waitOp.second);
+    waitOp.first->erase();
+  }
+}
+
 ttg::MemDescType mlir::triton::getBufferViewType(ttg::MemDescType allocTy) {
   Attribute sharedMemorySpace =
       ttg::SharedMemorySpaceAttr::get(allocTy.getContext());

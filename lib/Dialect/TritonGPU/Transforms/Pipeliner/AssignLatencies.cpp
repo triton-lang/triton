@@ -278,8 +278,8 @@ public:
       if (auto mma = dyn_cast<ttng::MMAv5OpInterface>(&op)) {
         if (ttng::mmaHasPipelineableOperands(mma, forOp, isLoadPipelineable) &&
             !ttng::hasAccReadModifyWrite(mma, forOp) &&
-            !getDisallowAccMultiBuffer(forOp) &&
-            isAccMultibufferingPossible(mma, forOp)) {
+            ttng::isAccMultibufferingPossible(mma, forOp) &&
+            !getDisallowAccMultiBuffer(forOp)) {
           opLatency[&op] = 1;
         }
       }
@@ -289,55 +289,6 @@ public:
 private:
   scf::ForOp forOp;
   DenseMap<Operation *, int> &opLatency;
-
-  bool isConstantZero(Value v) {
-    if (auto constantOp = v.getDefiningOp<arith::ConstantOp>()) {
-      if (auto attr = dyn_cast<IntegerAttr>(constantOp.getValue())) {
-        return attr.getValue().isZero();
-      }
-      if (auto attr = dyn_cast<FloatAttr>(constantOp.getValue())) {
-        return attr.getValue().isZero();
-      }
-    }
-    return false;
-  }
-
-  bool accUseFlagSetToFalse(ttng::MMAv5OpInterface mma, scf::ForOp forOp) {
-    Value accUseFlag = mma.useAccumulator();
-    if (isConstantZero(accUseFlag)) {
-      return true;
-    }
-    auto yieldOp = cast<scf::YieldOp>(forOp.getBody()->getTerminator());
-    while (auto blockArg = dyn_cast<BlockArgument>(accUseFlag)) {
-      accUseFlag = yieldOp.getOperand(blockArg.getArgNumber() - 1);
-    }
-    // If the accUseFlag is overwritten in the loop, we treat it as a 'false'
-    // with condition being ~accUseFlag.
-    return accUseFlag.getDefiningOp() &&
-           forOp->isAncestor(accUseFlag.getDefiningOp());
-  }
-
-  bool accOverwrittenInLoop(ttng::MMAv5OpInterface mma, scf::ForOp forOp) {
-    auto tmemAlloc = mma.getAccumulator().getDefiningOp<ttng::TMEMAllocOp>();
-    if (!tmemAlloc || !forOp.isDefinedOutsideOfLoop(tmemAlloc)) {
-      return false;
-    }
-    for (auto user : tmemAlloc->getUsers()) {
-      if (isa<ttng::TMEMStoreOp>(user) &&
-          forOp->isAncestor(user->getParentOp())) {
-        return true;
-      }
-    }
-    return false;
-  }
-
-  bool isAccMultibufferingPossible(ttng::MMAv5OpInterface mma,
-                                   scf::ForOp forOp) {
-    // If the accumulator is never overwritten in the loop, we can't multibuffer
-    // it, as the overwrite point is the only place where we can swap the
-    // buffer.
-    return accUseFlagSetToFalse(mma, forOp) || accOverwrittenInLoop(mma, forOp);
-  }
 };
 
 } // namespace

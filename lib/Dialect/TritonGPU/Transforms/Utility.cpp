@@ -1287,8 +1287,10 @@ getMMAsWithMultiBufferredOperands(scf::ForOp forOp,
   return eligible;
 }
 
-Operation *findNearestCommonDominator(ArrayRef<Operation *> ops,
-                                      DominanceInfo &domInfo) {
+template <typename DomInfoT>
+static Operation *findNearestCommonDominatorImpl(
+    ArrayRef<Operation *> ops, DomInfoT &domInfo,
+    function_ref<bool(Operation *, Operation *)> isBefore) {
   if (ops.size() == 0) {
     return nullptr;
   }
@@ -1309,11 +1311,25 @@ Operation *findNearestCommonDominator(ArrayRef<Operation *> ops,
   }
   Operation *dom = ancestorOps[0];
   for (unsigned i = 1; i < ops.size(); i++) {
-    if (ancestorOps[i]->isBeforeInBlock(dom)) {
+    if (isBefore(ancestorOps[i], dom)) {
       dom = ancestorOps[i];
     }
   }
   return dom;
+}
+
+Operation *findNearestCommonDominator(ArrayRef<Operation *> ops,
+                                      DominanceInfo &domInfo) {
+  return findNearestCommonDominatorImpl(
+      ops, domInfo,
+      [](Operation *a, Operation *b) { return a->isBeforeInBlock(b); });
+}
+
+Operation *findNearestCommonPostDominator(ArrayRef<Operation *> ops,
+                                          PostDominanceInfo &domInfo) {
+  return findNearestCommonDominatorImpl(
+      ops, domInfo,
+      [](Operation *a, Operation *b) { return b->isBeforeInBlock(a); });
 }
 
 void visitNestedOperands(Operation *op,
