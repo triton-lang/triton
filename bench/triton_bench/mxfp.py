@@ -1,10 +1,8 @@
 from enum import Enum
-
+import triton
+import triton.language as tl
 import torch
 import torch.nn.functional as F
-
-from ki.meta import is_float8_dtype
-from ki.safe_import import tl, triton
 
 # -----------------------------------------------------------------------------
 #                      Dequantization / Quantization Utilities
@@ -476,7 +474,7 @@ def upcast_from_mxfp(tensor: torch.Tensor, scale: torch.Tensor, dtype: torch.dty
         assert -ndim <= swizzle_axis < ndim, f"Invalid swizzle axis {swizzle_axis=}"
         swizzle_axis = swizzle_axis if swizzle_axis >= 0 else swizzle_axis + ndim
 
-    multiplier = 1 if is_float8_dtype(tensor.dtype) else 2
+    multiplier = 1 if "float8" in str(tensor.dtype) else 2
     logical_quant_dim_shape = tensor.shape[axis] * multiplier
     assert tensor.ndim == scale.ndim, (f"Weight and scale must have the same number of dimensions. "
                                        f"Got {tensor.ndim=} and {scale.ndim=}")
@@ -560,7 +558,7 @@ def downcast_to_mxfp_torch(src_tensor: torch.Tensor, out_quant_type: torch.dtype
         assert -ndim <= swizzle_axis < ndim, f"Invalid swizzle axis {swizzle_axis=}"
         swizzle_axis = swizzle_axis if swizzle_axis >= 0 else swizzle_axis + ndim
     is_fp4 = out_quant_type == torch.uint8
-    is_fp8 = is_float8_dtype(out_quant_type)
+    is_fp8 = "float8" in str(out_quant_type)
     assert is_fp4 or is_fp8, f"Invalid input tensor dtype {out_quant_type}"
 
     device = src_tensor.device

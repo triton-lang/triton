@@ -1,9 +1,9 @@
 from dataclasses import dataclass
+import triton
 
 import torch
 
-from ki.meta import cuda_capability_geq
-from ki.safe_import import triton
+from triton_bench.meta import cuda_capability_geq
 
 from . import opt_flags_amd, opt_flags_nvidia
 

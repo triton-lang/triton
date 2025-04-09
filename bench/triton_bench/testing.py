@@ -6,7 +6,7 @@ import sys
 
 import torch
 
-from ki.meta import MAX_FINITE_FLOAT8E4B8, MAX_FINITE_FLOAT8E4NV, MAX_FINITE_FLOAT8E5
+from triton_bench.meta import MAX_FINITE_FLOAT8E4B8, MAX_FINITE_FLOAT8E4NV, MAX_FINITE_FLOAT8E5
 
 
 def assert_equal(ref, tri):
@@ -18,12 +18,7 @@ def assert_equal(ref, tri):
 
 def assert_close(ref, tri, maxtol=None, rmstol=None, description="--", verbose=True):
     if tri.dtype.itemsize == 1:
-        # TODO:
-        # switch to ref.to(tri.dtype) when Triton does
-        # RTNE on A100
-        from ki.tritium import type
-
-        ref_as_type = type(ref, tri.dtype)
+        ref_as_type = ref.to(tri.dtype)
         if ref.dtype == tri.dtype:
             assert torch.all(ref_as_type == tri)
             return
