@@ -90,6 +90,6 @@ jobs:
           path: ./wheelhouse/*.whl
 
       - name: Upload wheels to PyPI
-        if: ${{ matrix.config.arh == 'x86_64' }}
+        if: ${{ matrix.config.arch == 'x86_64' }}
         run: |
           python3 -m twine upload wheelhouse/* -u __token__ -p ${{ secrets.PYPY_API_TOKEN }}
