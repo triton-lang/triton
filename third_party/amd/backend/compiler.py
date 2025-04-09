@@ -246,7 +246,7 @@ class HIPBackend(BaseBackend):
         global_prefetch = int(os.getenv("TRITON_HIP_GLOBAL_PREFETCH", "0"))
         local_prefetch = int(os.getenv("TRITON_HIP_LOCAL_PREFETCH", "0"))
         use_async_copy = int(os.getenv("TRITON_HIP_USE_ASYNC_COPY", "0")) == 1
-        must_guard_epilogue = 1
+        must_guard_epilogue = int(os.getenv("TRITON_HIP_GUARD_EPILOGUE", "1"))
 
         # The `local-prefetch` scheduling variant requires turning on buffer ops.
         if options.schedule_hint == "local-prefetch":

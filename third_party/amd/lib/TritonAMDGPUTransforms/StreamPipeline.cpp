@@ -127,14 +127,6 @@ public:
     stages[SCHED_LOCAL_STORE] = _globalPrefetch;
     stages[SCHED_LOCAL_LOAD] = lastStage - _localPrefetch;
     stages[SCHED_COMPUTE] = lastStage;
-
-    options.supportDynamicLoops = true;
-    options.peelEpilogue = true;
-    options.guardEpilogue = _mustGuardEpilogue;
-    if (_mustGuardEpilogue)
-      options.predicateFn = streamPredication;
-    else
-      options.predicateFn = tt::predicateOp;
   }
 
   LogicalResult pipelineLoop();
@@ -210,9 +202,6 @@ private:
 
   // Capture list of new shared memory buffers.
   SmallVector<Value> sharedMemAllocs;
-
-  // Pipelining options for the PipelineExpander
-  tt::PipeliningOption options;
 };
 
 } // namespace
@@ -277,7 +266,8 @@ bool StreamPipeliner::safeDAG(Value v, int index) {
   }
   return false;
 }
-
+// TODO(crobeck): is this valid if we have loop-carried
+// results needed for the next epilogue stage?
 void StreamPipeliner::checkResultResilience() {
   auto yieldVals = forOp.getYieldedValuesMutable().value();
   for (auto [index, res] : llvm::enumerate(forOp.getResults())) {
@@ -1016,18 +1006,6 @@ LogicalResult StreamPipeliner::preprocessLoopAndBuildSchedule() {
     schedule.dump();
   });
 
-  // Create the final schedule for the kernel loop. This will dictate the
-  // stages and order of operations to the pipeline expander.
-  std::vector<std::pair<Operation *, unsigned>> coarseSchedule =
-      schedule.createFinalSchedule(forOp);
-
-  // Fill out the pipeline options.
-  options.getScheduleFn =
-      [coarseSchedule](scf::ForOp,
-                       std::vector<std::pair<Operation *, unsigned>> &s) {
-        s = std::move(coarseSchedule);
-      };
-
   OpBuilder builder(forOp);
   builder.setInsertionPointAfter(forOp);
   // Explicitly deallocate created allocations.
@@ -1041,6 +1019,31 @@ LogicalResult StreamPipeliner::pipelineLoop() {
   if (failed(preprocessLoopAndBuildSchedule()))
     return failure();
   LDBG("Loop before sending to expander:\n" << *forOp);
+  // Create the final schedule for the kernel loop. This will dictate the
+  // stages and order of operations to the pipeline expander.
+  std::vector<std::pair<Operation *, unsigned>> coarseSchedule =
+      schedule.createFinalSchedule(forOp);
+
+  // Pipelining options for the PipelineExpander
+  tt::PipeliningOption options;
+  options.supportDynamicLoops = true;
+  options.peelEpilogue = true;
+  options.guardEpilogue = mustGuardEpilogue;
+
+  // predicateFn sets the control flow for the software pipeliner
+  // streamPredication sets the control flow to conditionally execute the
+  // epilogue dot but if we can provably unconditionalize the epilogue then we
+  // can just use default tt::predicateOp
+  if (mustGuardEpilogue)
+    options.predicateFn = streamPredication;
+  else
+    options.predicateFn = tt::predicateOp;
+
+  options.getScheduleFn =
+      [&coarseSchedule](scf::ForOp,
+                        std::vector<std::pair<Operation *, unsigned>> &s) {
+        s = std::move(coarseSchedule);
+      };
 
   IRRewriter rewriter(forOp->getContext());
   rewriter.setInsertionPoint(forOp);
