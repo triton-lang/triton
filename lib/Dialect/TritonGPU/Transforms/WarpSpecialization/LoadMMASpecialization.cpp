@@ -346,16 +346,14 @@ LogicalResult triton::gpu::specializeLoadMMADependencies(scf::ForOp &loop,
 
   // Now rewrite the MMA by multi-buffering the accumulator if necessary.
   // However, the TMEM multi-buffering may be with respect to the outer loop.
-  auto [mmaIndex, mmaPhase] = addIndexAndPhase(b, loop, numStages);
   Value mmaBars = createBarrierAlloc(loop, numStages);
-
   b.setInsertionPointAfter(mmaOp);
-  Value curMmaBar = createSingleBufferView(b, mmaBars, mmaIndex);
+  Value curMmaBar = createSingleBufferView(b, mmaBars, loadIndex);
   createInPartition<ttng::TCGen5CommitOp>(b, *mmaPartition, curMmaBar);
   mmaOp.setSync(false);
 
   createInPartition<ttng::WaitBarrierOp>(b, *waiterPartition, curMmaBar,
-                                         mmaPhase);
+                                         loadPhase);
   createInPartition<ttng::ArriveBarrierOp>(b, *waiterPartition, curEmptyBar, 1);
   OpBuilder::InsertPoint donePt = b.saveInsertionPoint();
 
