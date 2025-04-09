@@ -351,6 +351,9 @@ bool StreamPipeliner::createAsyncCopy(tt::LoadOp loadOp, Value alloc,
   // create a barrier to ensure all warps are finished reading the shared buffer
   // we will write into. This is done by scheduling it as a local_store.
   scheduleOp(newLoadOp, SCHED_LOCAL_STORE);
+  // Place Commit next to async_load so UpdateAsyncWaitCount can deduce better
+  // waitcnts
+  scheduleOp(commit, SCHED_LOCAL_STORE);
 
   // Create local load which consumes the async token from the AsyncWait
   auto sharedLoad =
