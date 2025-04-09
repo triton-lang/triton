@@ -658,8 +658,11 @@ void init_triton_ir(py::module &&m) {
            })
       .def("create_location_snapshot",
            [](ModuleOp &self, const std::string &fileName) -> void {
-            if (failed(generateLocationsFromIR(fileName, self, {})))
-              throw std::runtime_error("Failed to create location snapshot");
+             auto printingFlags = OpPrintingFlags();
+             printingFlags.elideLargeElementsAttrs(16);
+             printingFlags.enableDebugInfo();
+             if (failed(generateLocationsFromIR(fileName, self, printingFlags)))
+               throw std::runtime_error("Failed to create location snapshot");
            })
       .def("walk",
            [](ModuleOp &self, const std::function<void(Operation *)> &fn) {
