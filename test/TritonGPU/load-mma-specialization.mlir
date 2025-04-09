@@ -161,7 +161,7 @@ tt.func @warp_specialize_tma_matmul(
 // TMEM: ttng.tmem_alloc
 // TMEM: scf.for
 
-// CHECK: @unsupported_multiple_dot_ops
+// CHECK-LABEL: @unsupported_multiple_dot_ops
 tt.func @unsupported_multiple_dot_ops() {
   %c0_i32 = arith.constant 0 : i32
   %c1_i32 = arith.constant 1 : i32
@@ -191,7 +191,7 @@ tt.func @unsupported_multiple_dot_ops() {
 // TMEM: ttng.tmem_alloc
 // TMEM: scf.for
 
-// CHECK: @unsupported_load
+// CHECK-LABEL: @unsupported_load
 tt.func @unsupported_load() {
   %c0_i32 = arith.constant 0 : i32
   %c1_i32 = arith.constant 1 : i32
@@ -222,7 +222,7 @@ tt.func @unsupported_load() {
 // TMEM: ttng.tmem_alloc
 // TMEM: scf.for
 
-// CHECK: @cant_pipeline_mma
+// CHECK-LABEL: @cant_pipeline_mma
 tt.func @cant_pipeline_mma(
   %a_desc: !tt.tensordesc<tensor<128x64xf16, #shared>>,
   %b_desc: !tt.tensordesc<tensor<64x128xf16, #shared>>
@@ -253,7 +253,7 @@ tt.func @cant_pipeline_mma(
 // TMEM: ttng.tmem_alloc
 // TMEM: scf.for
 
-// CHECK: @invalid_acc_reset
+// CHECK-LABEL: @invalid_acc_reset
 tt.func @invalid_acc_reset(
   %a_desc: !tt.tensordesc<tensor<128x64xf16, #shared>>,
   %b_desc: !tt.tensordesc<tensor<64x128xf16, #shared>>
@@ -292,7 +292,7 @@ tt.func @invalid_acc_reset(
 // AWS: num_warps(4)
 // AWS: num_warps(4)
 
-// CHECK: @matmul_tma_acc_with_unconditional_user
+// CHECK-LABEL: @matmul_tma_acc_with_unconditional_user
 // CHECK-SAME: [[A_DESC:%arg[0-9]+]]
 // CHECK-SAME: [[B_DESC:%arg[0-9]+]]
 tt.func @matmul_tma_acc_with_unconditional_user(
@@ -307,7 +307,7 @@ tt.func @matmul_tma_acc_with_unconditional_user(
   // CHECK-DAG: [[K_TILES:%.*]] = arith.constant 32 : i32
   %k_tiles = arith.constant 32 : i32
 
-  // CHECK:      [[ACC_BUFS:%.*]] = ttng.tmem_alloc : () -> !ttg.memdesc<2x128x128xf32, [[ACC_TMEM]], #ttng.tensor_memory, mutable>
+  // CHECK:      [[ACC_BUFS:%.*]] = ttng.tmem_alloc : () -> !ttg.memdesc<2x128x128xf32
   // CHECK-NEXT: [[ACC_BUF0:%.*]] = ttg.memdesc_subview [[ACC_BUFS]][%c0_i32, %c0_i32, %c0_i32]
   // CHECK-NEXT: ttng.tmem_store [[ZERO]], [[ACC_BUF0]]
 
@@ -417,7 +417,7 @@ tt.func @matmul_tma_acc_with_unconditional_user(
 // AWS: num_warps(4)
 // AWS: num_warps(4)
 
-// CHECK: @matmul_tma_acc_with_conditional_user
+// CHECK-LABEL: @matmul_tma_acc_with_conditional_user
 // CHECK-SAME: [[A_DESC:%arg[0-9]+]]
 // CHECK-SAME: [[B_DESC:%arg[0-9]+]]
 tt.func @matmul_tma_acc_with_conditional_user(
@@ -430,7 +430,9 @@ tt.func @matmul_tma_acc_with_conditional_user(
   %zero = arith.constant dense<0.0> : tensor<128x128xf32, #acc_layout>
   %k_tiles = arith.constant 32 : i32
 
-  // CHECK-COUNT-3: ttg.local_alloc : () -> !ttg.memdesc<2xi64
+  // CHECK:      [[ACC_BUFS:%.*]] = ttng.tmem_alloc
+  // CHECK-COUNT-2: ttg.local_alloc : () -> !ttg.memdesc<2xi64
+  // CHECK:      [[MMA_MBARS:%.*]] = ttg.local_alloc : () -> !ttg.memdesc<2xi64
 
   // CHECK: [[ACC_EMPTY_BUFS:%.*]] = ttg.local_alloc : () -> !ttg.memdesc<2xi64
   // CHECK: [[ACC_READY_BUFS:%.*]] = ttg.local_alloc : () -> !ttg.memdesc<2xi64
@@ -521,7 +523,7 @@ tt.func @matmul_tma_acc_with_conditional_user(
 // AWS: num_warps(2)
 // AWS: num_warps(1)
 
-// CHECK: @matmul_tma_acc_with_conditional_def
+// CHECK-LABEL: @matmul_tma_acc_with_conditional_def
 // CHECK-SAME: [[A_DESC:%arg[0-9]+]]
 // CHECK-SAME: [[B_DESC:%arg[0-9]+]]
 tt.func @matmul_tma_acc_with_conditional_def(
@@ -531,10 +533,13 @@ tt.func @matmul_tma_acc_with_conditional_def(
   %c0_i32 = arith.constant 0 : i32
   %c1_i32 = arith.constant 1 : i32
   %true = arith.constant true
+  // CHECK: [[ZERO:%.*]] = arith.constant dense<0.0
   %zero = arith.constant dense<0.0> : tensor<128x128xf32, #acc_layout>
   %k_tiles = arith.constant 32 : i32
 
-  // CHECK-COUNT-3: ttg.local_alloc : () -> !ttg.memdesc<2xi64
+  // CHECK:      [[ACC_BUFS:%.*]] = ttng.tmem_alloc
+  // CHECK-COUNT-2: ttg.local_alloc : () -> !ttg.memdesc<2xi64
+  // CHECK:      [[MMA_MBARS:%.*]] = ttg.local_alloc : () -> !ttg.memdesc<2xi64
 
   // CHECK: [[ACC_EMPTY_BUFS:%.*]] = ttg.local_alloc : () -> !ttg.memdesc<2xi64
   // CHECK: [[ACC_READY_BUFS:%.*]] = ttg.local_alloc : () -> !ttg.memdesc<2xi64
@@ -621,7 +626,7 @@ tt.func @matmul_tma_acc_with_conditional_def(
 // AWS: num_warps(2)
 // AWS: num_warps(1)
 
-// CHECK: @matmul_tma_acc_with_conditional_def_and_use
+// CHECK-LABEL: @matmul_tma_acc_with_conditional_def_and_use
 // CHECK-SAME: [[A_DESC:%arg[0-9]+]]
 // CHECK-SAME: [[B_DESC:%arg[0-9]+]]
 tt.func @matmul_tma_acc_with_conditional_def_and_use(
@@ -631,10 +636,13 @@ tt.func @matmul_tma_acc_with_conditional_def_and_use(
   %c0_i32 = arith.constant 0 : i32
   %c1_i32 = arith.constant 1 : i32
   %true = arith.constant true
+  // CHECK: [[ZERO:%.*]] = arith.constant dense<0.0
   %zero = arith.constant dense<0.0> : tensor<128x128xf32, #acc_layout>
   %k_tiles = arith.constant 32 : i32
 
-  // CHECK-COUNT-3: ttg.local_alloc : () -> !ttg.memdesc<2xi64
+  // CHECK:      [[ACC_BUFS:%.*]] = ttng.tmem_alloc
+  // CHECK-COUNT-2: ttg.local_alloc : () -> !ttg.memdesc<2xi64
+  // CHECK:      [[MMA_MBARS:%.*]] = ttg.local_alloc : () -> !ttg.memdesc<2xi64
 
   // CHECK: [[ACC_EMPTY_BUFS:%.*]] = ttg.local_alloc : () -> !ttg.memdesc<2xi64
   // CHECK: [[ACC_READY_BUFS:%.*]] = ttg.local_alloc : () -> !ttg.memdesc<2xi64
@@ -726,7 +734,7 @@ tt.func @matmul_tma_acc_with_conditional_def_and_use(
 // AWS: num_warps(2)
 // AWS: num_warps(1)
 
-// CHECK: @matmul_tma_acc_with_conditional_def_and_use_no_multibuf_flag
+// CHECK-LABEL: @matmul_tma_acc_with_conditional_def_and_use_no_multibuf_flag
 // CHECK-SAME: [[A_DESC:%arg[0-9]+]]
 // CHECK-SAME: [[B_DESC:%arg[0-9]+]]
 tt.func @matmul_tma_acc_with_conditional_def_and_use_no_multibuf_flag(
@@ -737,10 +745,11 @@ tt.func @matmul_tma_acc_with_conditional_def_and_use_no_multibuf_flag(
   %c1_i32 = arith.constant 1 : i32
   %true = arith.constant true
   %false = arith.constant false
+  // CHECK: [[ZERO:%.*]] = arith.constant dense<0.0
   %zero = arith.constant dense<0.0> : tensor<128x128xf32, #acc_layout>
   %k_tiles = arith.constant 32 : i32
 
-  // CHECK:      [[ACC_BUFS:%.*]] = ttng.tmem_alloc : () -> !ttg.memdesc<1x128x128xf32, [[ACC_TMEM]], #ttng.tensor_memory, mutable>
+  // CHECK:      [[ACC_BUFS:%.*]] = ttng.tmem_alloc
   // CHECK-NEXT: [[ACC_BUF:%.*]] = ttg.memdesc_subview [[ACC_BUFS]][%c0_i32, %c0_i32, %c0_i32]
   // CHECK-NEXT: ttng.tmem_store [[ZERO]], [[ACC_BUF]], %true
 
