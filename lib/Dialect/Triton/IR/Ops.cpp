@@ -323,12 +323,37 @@ bool DotScaledOp::verifyDims() {
 
   auto aKdim = aShape[aShape.size() - 1];
   auto bKdim = bShape[aShape.size() - 2];
-  if (this->getAElemType() == ScaleDotElemType::E2M1)
-    aKdim *= 2;
-  if (this->getBElemType() == ScaleDotElemType::E2M1)
-    bKdim *= 2;
+  if (this->getAElemType() == ScaleDotElemType::E2M1) {
+    if (this->getLhsKPack())
+      aKdim *= 2;
+  }
+  if (this->getBElemType() == ScaleDotElemType::E2M1) {
+    if (this->getRhsKPack())
+      bKdim *= 2;
+  }
 
   return aKdim == bKdim;
+}
+
+bool DotScaledOp::verifyOutputDims() {
+  auto cShape = this->getC().getType().getShape();
+  auto oMdim = cShape[cShape.size() - 2];
+  auto oNdim = cShape[cShape.size() - 1];
+  auto aShape = this->getA().getType().getShape();
+  auto bShape = this->getB().getType().getShape();
+  auto adim = aShape[aShape.size() - 2];
+  auto bdim = bShape[bShape.size() - 1];
+  if (this->getAElemType() == ScaleDotElemType::E2M1) {
+    if (!this->getLhsKPack())
+      adim *= 2;
+  }
+  if (this->getBElemType() == ScaleDotElemType::E2M1) {
+    if (!this->getRhsKPack())
+      bdim *= 2;
+  }
+  if (adim != oMdim || bdim != oNdim)
+    return false;
+  return true;
 }
 
 //-- MakeRangeOp --
@@ -1245,73 +1270,88 @@ LogicalResult GatherOp::inferReturnTypes(
 }
 
 // -- DescriptorGatherOp
-LogicalResult DescriptorGatherOp::verifyResultType(Operation *op,
-                                                   mlir::ShapedType type) {
-  if (type.getRank() != 2)
-    return op->emitOpError("result must be a 2D tensor, but got ") << type;
+LogicalResult
+DescriptorGatherOp::verifyResultType(Operation *op, ShapedType resultType,
+                                     RankedTensorType indicesType) {
+  if (indicesType.getRank() != 1)
+    return op->emitOpError("x offsets must be a 1D tensor, but got ")
+           << indicesType;
+  if (resultType.getRank() != 2)
+    return op->emitOpError("result must be a 2D tensor, but got ")
+           << resultType;
 
   // The swizzling of TMA accesses matches that of the MMAv3 shared memory
   // layouts. However, these have minimum size requirements.
   // TODO: We can support smaller gather sizes by padding the `local_alloc` this
   // lowers to to the nearest minimum tile size.
-  if (unsigned rows = type.getShape()[0]; rows < 8) {
+  if (unsigned rows = resultType.getShape()[0]; rows < 8) {
     return op->emitOpError("gather must have at least 8 rows, but got ")
            << rows;
   }
 
-  Type dtype = type.getElementType();
+  Type dtype = resultType.getElementType();
   if (dtype.getIntOrFloatBitWidth() > 32)
     return op->emitOpError("TMA dtype cannot be greater than 32 bits");
 
   unsigned minCols = 32 / dtype.getIntOrFloatBitWidth() * 8;
-  if (unsigned cols = type.getShape()[1]; cols < minCols) {
+  if (unsigned cols = resultType.getShape()[1]; cols < minCols) {
     return op->emitOpError("gather of ")
            << dtype << " must have at least " << minCols << " columns, but got "
            << cols;
   }
 
+  if (resultType.getShape()[0] != indicesType.getShape()[0]) {
+    return op->emitOpError("result tensor must have as many rows as indices (")
+           << indicesType.getShape()[0] << "), but got " << resultType;
+  }
+
   return success();
 }
 
-LogicalResult DescriptorGatherOp::verify() {
-  RankedTensorType blockType = getDesc().getType().getBlockType();
+static LogicalResult verifyGatherScatterOp(Operation *op,
+                                           RankedTensorType blockType,
+                                           RankedTensorType resultType,
+                                           RankedTensorType indicesType) {
   // Gather from `!tt.tensordesc<tensor<1xMxdtype>>`.
-  if (blockType.getRank() != 2)
-    return emitOpError("block must be a 2D tensor, but got ") << blockType;
-  if (blockType.getShape()[0] != 1)
-    return emitOpError("block must have exactly 1 row, but got ") << blockType;
+  if (blockType.getRank() != 2) {
+    return op->emitOpError("block must be a 2D tensor, but got ") << blockType;
+  }
+  if (blockType.getShape()[0] != 1) {
+    return op->emitOpError("block must have exactly 1 row, but got ")
+           << blockType;
+  }
 
-  // With x offsets `tensor<Nxinttype>`.
-  RankedTensorType indicesType = getXOffsets().getType();
-  if (indicesType.getRank() != 1)
-    return emitOpError("x offsets must be a 1D tensor, but got ")
-           << indicesType;
-
-  // Into `tensor<NxMxdtype>`.
-  RankedTensorType resultType = getType();
-  if (failed(verifyResultType(*this, resultType)))
+  // With x offsets `tensor<Nxinttype>` into `tensor<NxMxdtype>`.
+  if (failed(DescriptorGatherOp::verifyResultType(op, resultType, indicesType)))
     return failure();
 
-  if (resultType.getShape()[0] != indicesType.getShape()[0]) {
-    return emitOpError("result tensor must have as many rows as indices (")
-           << indicesType.getShape()[0] << "), but got " << resultType;
-  }
   if (resultType.getShape()[1] != blockType.getShape()[1]) {
-    return emitOpError("result tensor number of columns must match block (")
+    return op->emitOpError("result tensor number of columns must match block (")
            << blockType.getShape()[1] << "), but got " << resultType;
   }
   if (resultType.getElementType() != blockType.getElementType()) {
-    return emitOpError("result tensor element type must match block (")
+    return op->emitOpError("result tensor element type must match block (")
            << blockType.getElementType() << "), but got " << resultType;
   }
 
   return success();
 }
 
+LogicalResult DescriptorGatherOp::verify() {
+  return verifyGatherScatterOp(*this, getDesc().getType().getBlockType(),
+                               getResult().getType(), getXOffsets().getType());
+}
+
+// -- DescriptorScatterOp --
+LogicalResult DescriptorScatterOp::verify() {
+  return verifyGatherScatterOp(*this, getDesc().getType().getBlockType(),
+                               getSrc().getType(), getXOffsets().getType());
+}
+
 // -- DescriptorLoadOp --
-static LogicalResult verifyDesciptorLoadStoreType(Operation *op,
-                                                  TensorDescType desc,
-                                                  RankedTensorType tensor) {
+static LogicalResult verifyDescriptorLoadStoreType(Operation *op,
+                                                   TensorDescType desc,
+                                                   RankedTensorType tensor) {
   RankedTensorType block = desc.getBlockType();
   ArrayRef<int64_t> blockShape = block.getShape();
   ArrayRef<int64_t> tensorShape = tensor.getShape();
@@ -1328,17 +1368,17 @@ static LogicalResult verifyDesciptorLoadStoreType(Operation *op,
   if (blockShape == tensorShape &&
       block.getElementType() == tensor.getElementType())
     return success();
-  return op->emitOpError("tensor desciptor block and tensor types must match");
+  return op->emitOpError("tensor descriptor block and tensor types must match");
 }
 
 LogicalResult DescriptorLoadOp::verify() {
-  return verifyDesciptorLoadStoreType(*this, getDesc().getType(), getType());
+  return verifyDescriptorLoadStoreType(*this, getDesc().getType(), getType());
 }
 
 // -- DescriptorStoreOp --
 LogicalResult DescriptorStoreOp::verify() {
-  return verifyDesciptorLoadStoreType(*this, getDesc().getType(),
-                                      getSrc().getType());
+  return verifyDescriptorLoadStoreType(*this, getDesc().getType(),
+                                       getSrc().getType());
 }
 
 // -- ExperimentalTensormapCreateOp --

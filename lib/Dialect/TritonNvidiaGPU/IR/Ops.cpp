@@ -244,7 +244,8 @@ LogicalResult AsyncTMAGatherOp::verify() {
   triton::gpu::MemDescType resultType = getResult().getType();
   if (!resultType.getMutableMemory())
     return emitOpError("cannot store into immutable memory");
-  return DescriptorGatherOp::verifyResultType(*this, resultType);
+  return DescriptorGatherOp::verifyResultType(*this, resultType,
+                                              getXOffsets().getType());
 }
 
 void AsyncTMAGatherOp::getEffects(
@@ -259,6 +260,11 @@ void AsyncTMAGatherOp::getEffects(
 }
 
 // -- AsyncTMAScatter --
+LogicalResult AsyncTMAScatterOp::verify() {
+  return DescriptorGatherOp::verifyResultType(*this, getSrc().getType(),
+                                              getXOffsets().getType());
+}
+
 void AsyncTMAScatterOp::getEffects(
     SmallVectorImpl<SideEffects::EffectInstance<MemoryEffects::Effect>>
         &effects) {
@@ -349,14 +355,53 @@ bool TCGen5MMAScaledOp::verifyDims() {
   auto aShape = this->getA().getType().getShape();
   auto bShape = this->getB().getType().getShape();
 
+  bool transA = false;
+  if (auto aSharedLayout = dyn_cast<triton::gpu::NVMMASharedEncodingAttr>(
+          getA().getType().getEncoding())) {
+    transA = aSharedLayout.getTransposed();
+  }
+  bool transB = false;
+  if (auto bSharedLayout = dyn_cast<triton::gpu::NVMMASharedEncodingAttr>(
+          getB().getType().getEncoding())) {
+    transB = !bSharedLayout.getTransposed();
+  }
   auto aKdim = aShape[aShape.size() - 1];
   auto bKdim = bShape[aShape.size() - 2];
-  if (this->getAType() == ScaleDotElemType::E2M1)
+  if (this->getAType() == ScaleDotElemType::E2M1 && !transA)
     aKdim *= 2;
-  if (this->getBType() == ScaleDotElemType::E2M1)
+  if (this->getBType() == ScaleDotElemType::E2M1 && !transB)
     bKdim *= 2;
 
   return aKdim == bKdim;
+}
+
+bool TCGen5MMAScaledOp::verifyOutputDims() {
+  auto aShape = this->getA().getType().getShape();
+  auto bShape = this->getB().getType().getShape();
+  auto cShape = this->getD().getType().getShape();
+  auto oMdim = cShape[cShape.size() - 2];
+  auto oNdim = cShape[cShape.size() - 1];
+
+  int aMdim = aShape[aShape.size() - 2];
+  int bNdim = bShape[bShape.size() - 1];
+  bool transA = false;
+  if (auto aSharedLayout = dyn_cast<triton::gpu::NVMMASharedEncodingAttr>(
+          getA().getType().getEncoding())) {
+    transA = aSharedLayout.getTransposed();
+  }
+  bool transB = false;
+  if (auto bSharedLayout = dyn_cast<triton::gpu::NVMMASharedEncodingAttr>(
+          getB().getType().getEncoding())) {
+    transB = !bSharedLayout.getTransposed();
+  }
+  if (this->getAType() == ScaleDotElemType::E2M1 && transA)
+    aMdim *= 2;
+  if (this->getBType() == ScaleDotElemType::E2M1 && transB)
+    bNdim *= 2;
+
+  if (aMdim != oMdim || bNdim != oNdim)
+    return false;
+  return true;
 }
 
 Value TCGen5MMAScaledOp::useAccumulator() { return getUseD(); }
@@ -381,6 +426,46 @@ void TCGen5MMAScaledOp::setPredicate(Value pred) {
   getPredMutable().assign(pred);
 }
 
+int64_t TCGen5MMAScaledOp::getBlockM() {
+  ArrayRef<int64_t> shape = getA().getType().getShape();
+  int64_t blockM = shape[shape.size() - 2];
+  bool transA = false;
+  if (auto aSharedLayout = dyn_cast<triton::gpu::NVMMASharedEncodingAttr>(
+          getA().getType().getEncoding())) {
+    transA = aSharedLayout.getTransposed();
+  }
+  if (this->getAType() == ScaleDotElemType::E2M1 && transA)
+    blockM *= 2;
+  return blockM;
+}
+
+int64_t TCGen5MMAScaledOp::getBlockN() {
+  ArrayRef<int64_t> shape = getB().getType().getShape();
+  int64_t blockN = shape[shape.size() - 1];
+  bool transB = false;
+  if (auto bSharedLayout = dyn_cast<triton::gpu::NVMMASharedEncodingAttr>(
+          getB().getType().getEncoding())) {
+    transB = !bSharedLayout.getTransposed();
+  }
+  if (this->getBType() == ScaleDotElemType::E2M1 && transB)
+    blockN *= 2;
+  return blockN;
+}
+
+int64_t TCGen5MMAScaledOp::getBlockK() {
+  ArrayRef<int64_t> shape = getA().getType().getShape();
+  int64_t blockK = shape[shape.size() - 1];
+  bool transA = false;
+  if (auto aSharedLayout = dyn_cast<triton::gpu::NVMMASharedEncodingAttr>(
+          getA().getType().getEncoding())) {
+    transA = aSharedLayout.getTransposed();
+  }
+  if (this->getAType() == ScaleDotElemType::E2M1 && !transA)
+    blockK *= 2;
+  return blockK;
+}
+
+// -- TMEMLoadOp --
 // -- TMEMLoadOp --
 LogicalResult TMEMLoadOp::verify() {
   if (!isa<triton::nvidia_gpu::TensorMemorySpaceAttr>(
@@ -477,6 +562,46 @@ void TMEMCopyOp::getEffects(
                        mlir::triton::nvidia_gpu::TensorMemory::get());
   effects.emplace_back(MemoryEffects::Read::get(), &getSrcMutable(),
                        mlir::triton::gpu::SharedMemory::get());
+}
+
+// -- TMEMSubSliceOp --
+LogicalResult TMEMSubSliceOp::verify() {
+  auto srcTy = cast<triton::gpu::MemDescType>(getSrc().getType());
+  auto encoding = dyn_cast<triton::nvidia_gpu::TensorMemoryEncodingAttr>(
+      srcTy.getEncoding());
+  if (!encoding)
+    return emitOpError("The source must be a tensor memory buffer.");
+  if (encoding.getBlockM() != 128)
+    return emitOpError("The source must be a 128xN layout.");
+  auto dstTy = cast<triton::gpu::MemDescType>(getResult().getType());
+  auto dstEncoding = dyn_cast<triton::nvidia_gpu::TensorMemoryEncodingAttr>(
+      dstTy.getEncoding());
+  if (!dstEncoding)
+    return emitOpError("The destination must be a tensor memory buffer.");
+  if (dstEncoding.getBlockM() != encoding.getBlockM() ||
+      dstEncoding.getCTASplitM() != encoding.getCTASplitM() ||
+      dstEncoding.getCTASplitN() != encoding.getCTASplitN() ||
+      dstEncoding.getUnpacked() != encoding.getUnpacked())
+    return emitOpError("The destination must have the same block size and "
+                       "CTASplit size as the source.");
+  return mlir::success();
+}
+
+void TMEMSubSliceOp::build(OpBuilder &builder, OperationState &state,
+                           Value alloc, int offset, int size) {
+  auto allocTy = cast<triton::gpu::MemDescType>(alloc.getType());
+  SmallVector<int64_t> shape(allocTy.getShape());
+  shape.back() = size;
+  auto encoding =
+      cast<triton::nvidia_gpu::TensorMemoryEncodingAttr>(allocTy.getEncoding());
+  unsigned newBlockN = std::min<unsigned>(encoding.getBlockN(), size);
+  auto newEncoding = triton::nvidia_gpu::TensorMemoryEncodingAttr::get(
+      builder.getContext(), encoding.getBlockM(), newBlockN,
+      encoding.getUnpacked(), encoding.getCTASplitM(), encoding.getCTASplitN());
+  auto subsliceType = gpu::MemDescType::get(
+      shape, allocTy.getElementType(), newEncoding, allocTy.getMemorySpace(),
+      allocTy.getMutableMemory());
+  build(builder, state, subsliceType, alloc, offset);
 }
 
 } // namespace nvidia_gpu

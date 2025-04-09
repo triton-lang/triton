@@ -13,22 +13,25 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
   // CHECK-DAG: %[[FALSE:.+]] = arith.constant false
   // CHECK-DAG: %[[C0:.+]] = arith.constant 0 : i32
   // CHECK-DAG: %[[C1:.+]] = arith.constant 1 : i32
-  // CHECK: %[[TMEM_BUF:.+]] = ttng.tmem_alloc %[[C0_F]]
+  // CHECK: %[[TMEM_BUF:.+]] = ttng.tmem_alloc : ()
+  // CHECK: ttng.tmem_store %[[C0_F]], %[[TMEM_BUF]], %[[TRUE]]
   // CHECK: %[[BAR_BUF:.+]] = ttg.local_alloc : () -> !ttg.memdesc<1xi64
-  // CHECK: ttng.init_barrier %[[BAR_BUF]], 1
-  // CHECK: %[[FOR_RET:.+]]:6 = scf.for {{.*}} iter_args({{.*}}, {{.*}}, {{.*}}, {{.*}}, %[[PHASE:.+]] = %[[C0]], %[[NOT_0_ITER:.+]] = %[[FALSE]])
-  // CHECK:   ttng.wait_barrier %[[BAR_BUF]], %[[PHASE]], %[[NOT_0_ITER]]
-  // CHECK:   %[[NOT_0_ITER_I32:.+]] = arith.extui %[[NOT_0_ITER]] : i1 to i32
-  // CHECK:   %[[PHASE_NEXT:.+]] = arith.xori %[[PHASE]], %[[NOT_0_ITER_I32]]
+  // CHECK: %[[BAR_SLICE:.+]] = ttg.memdesc_subview %[[BAR_BUF]][%[[C0]]]
+  // CHECK: ttng.init_barrier %[[BAR_SLICE]], 1
+  // CHECK: %[[FOR_RET:.+]]:8 = scf.for {{.*}} iter_args(%[[PHASE:.+]] = %[[C0]], %[[WAIT_PRED:.+]] = %[[FALSE]]
+  // CHECK:   ttng.wait_barrier %[[BAR_BUF]], %[[PHASE]], %[[WAIT_PRED]]
   // CHECK:   %[[ACC:.+]] = ttng.tmem_load %[[TMEM_BUF]]
   // CHECK:   %[[ACC2:.+]] = arith.mulf %[[ACC]], %[[C2_F]]
   // CHECK:   ttng.tmem_store %[[ACC2]], %[[TMEM_BUF]], %[[TRUE]]
-  // CHECK:   ttng.tc_gen5_mma {{.*}}, {{.*}}, %[[TMEM_BUF]], %[[TRUE]], %[[TRUE]], %[[BAR_BUF]]
-  // CHECK:   scf.yield {{.*}}, {{.*}}, {{.*}}, {{.*}}, %[[PHASE_NEXT]], %[[TRUE]]
-  // CHECK: ttng.wait_barrier %[[BAR_BUF]], %[[FOR_RET]]#4, %[[FOR_RET]]#5
-  // CHECK: ttng.tmem_load %[[TMEM_BUF]]
-  // CHECK: ttng.inval_barrier %[[BAR_BUF]]
+  // CHECK:   ttng.tc_gen5_mma %[[A_OP:.*]], %[[B_OP:.*]], %[[TMEM_BUF]], %[[TRUE]], %[[TRUE]], %[[BAR_BUF]]
+  // CHECK:   %[[PHASE_NEG:.+]] = arith.xori %[[PHASE]], %[[C1]]
+  // CHECK:   %[[PHASE_NEXT:.+]] = arith.select %[[WAIT_PRED]], %[[PHASE_NEG]], %[[PHASE]]
+  // CHECK:   scf.yield %[[PHASE_NEXT]], %[[TRUE]]
+  // CHECK: ttng.wait_barrier %[[BAR_BUF]], %[[FOR_RET]]#0, %[[FOR_RET]]#1
+  // CHECK: %[[BAR_SLICE:.+]] = ttg.memdesc_subview %[[BAR_BUF]][%[[C0]]]
+  // CHECK: ttng.inval_barrier %[[BAR_SLICE]]
   // CHECK: ttg.local_dealloc %[[BAR_BUF]]
+  // CHECK: ttng.tmem_load %[[TMEM_BUF]]
   tt.func public @chained_dot_scaled_acc(%A_ptr: tensor<128x128x!tt.ptr<f16>, #blocked1> {tt.contiguity = 16 : i32, tt.divisibility = 16 : i32}, %B_ptr: tensor<128x128x!tt.ptr<f16>, #blocked1> {tt.contiguity = 16 : i32, tt.divisibility = 16 : i32}, %arg3: i32) -> tensor<128x128xf16, #blocked> attributes {noinline = false} {
     %true = arith.constant true
     %cst = arith.constant dense<0.000000e+00> : tensor<128x128xf32, #blocked>
@@ -108,8 +111,10 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 1 : i32, ttg.targ
                     %A : !tt.ptr<f8E4M3FN> {tt.divisibility = 16 : i32},
                     %B : !tt.ptr<f8E4M3FN> {tt.divisibility = 16 : i32}) -> tensor<128x128xf32, #C> {
 // CHECK-LABEL: tt.func @matmul_loop_cast_load
-// CHECK-NOT: ttng.init_barrier
-// CHECK-NOT: ttng.wait_barrier
+// CHECK: ttng.init_barrier
+// CHECK: scf.for
+// CHECK: ttng.tc_gen5_mma {{.*}}, {{.*}}, {{.*}}, {{.*}}, {{.*}}, %[[BAR:.*]] :
+// CHECK: ttng.wait_barrier %[[BAR]]
     %a_ptr_splat = tt.splat %A : !tt.ptr<f8E4M3FN> -> tensor<128x32x!tt.ptr<f8E4M3FN>, #AL>
     %a_tmp0 = tt.make_range {end = 32: i32, start = 0: i32} : tensor<32xi32, #ALs0>
     %a_tmp1 = tt.expand_dims %a_tmp0 {axis = 0 : i32} : tensor<32xi32, #ALs0> -> tensor<1x32xi32, #AL>
@@ -336,7 +341,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     // CHECK: ttg.local_alloc : () -> !ttg.memdesc<3x256x128xf8E5M2
     // CHECK: ttg.local_alloc : () -> !ttg.memdesc<3x1x2x32x4x4xi8
     // CHECK: ttg.local_alloc : () -> !ttg.memdesc<3x1x2x32x4x4xi8
-
+    %false = arith.constant false
     %true = arith.constant true
     %cst_1 = arith.constant dense<0.000000e+00> : tensor<128x128xf32, #blocked4>
     %incr_A = arith.constant dense<4> : tensor<128x256xi32, #blocked>
@@ -368,7 +373,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     %arg3_init = tt.addptr %arg3_splat, %57 : tensor<1x2x32x4x4x!tt.ptr<i8>, #blocked2>, tensor<1x2x32x4x4xi32, #blocked2>
     %arg4_init = tt.addptr %arg4_splat, %57 : tensor<1x2x32x4x4x!tt.ptr<i8>, #blocked2>, tensor<1x2x32x4x4xi32, #blocked2>
 
-    %99:5 = scf.for %iv = %lb to %ub step %step iter_args(%arg15 = %cst_1, %arg16 = %arg0_init, %arg17 = %arg1_init, %arg18 = %arg3_init, %arg19 = %arg4_init) -> (tensor<128x128xf32, #blocked4>, tensor<128x256x!tt.ptr<f8E5M2>, #blocked>, tensor<256x128x!tt.ptr<f8E5M2>, #blocked1>, tensor<1x2x32x4x4x!tt.ptr<i8>, #blocked2>, tensor<1x2x32x4x4x!tt.ptr<i8>, #blocked2>) {
+    %99:6 = scf.for %iv = %lb to %ub step %step iter_args(%arg15 = %cst_1, %arg16 = %arg0_init, %arg17 = %arg1_init, %arg18 = %arg3_init, %arg19 = %arg4_init, %init_flag=%false) -> (tensor<128x128xf32, #blocked4>, tensor<128x256x!tt.ptr<f8E5M2>, #blocked>, tensor<256x128x!tt.ptr<f8E5M2>, #blocked1>, tensor<1x2x32x4x4x!tt.ptr<i8>, #blocked2>, tensor<1x2x32x4x4x!tt.ptr<i8>, #blocked2>, i1) {
       %117 = tt.load %arg16 : tensor<128x256x!tt.ptr<f8E5M2>, #blocked>
       %118 = ttg.local_alloc %117 : (tensor<128x256xf8E5M2, #blocked>) -> !ttg.memdesc<128x256xf8E5M2, #shared, #ttg.shared_memory>
       %119 = tt.load %arg17 : tensor<256x128x!tt.ptr<f8E5M2>, #blocked1>
@@ -381,14 +386,15 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 
       %127 = ttng.tmem_alloc %arg15 : (tensor<128x128xf32, #blocked4>) -> !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>
 
-      ttng.tc_gen5_mma_scaled %118, %120, %127, %137, %139, %true, %true lhs = e5m2 rhs = e5m2 : (!ttg.memdesc<128x256xf8E5M2, #shared, #ttg.shared_memory>, !ttg.memdesc<256x128xf8E5M2, #shared, #ttg.shared_memory>, !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>, !ttg.memdesc<1x2x32x4x4xi8, #shared1, #smem>, !ttg.memdesc<1x2x32x4x4xi8, #shared1, #smem>, i1, i1) -> ()
+      // CHECK: tc_gen5_mma_scaled %{{.*}}, %{{.*}}, %{{.*}}, %{{.*}}, %{{.*}}, %true, %{{.*}}
+      ttng.tc_gen5_mma_scaled %118, %120, %127, %137, %139, %init_flag, %true lhs = e5m2 rhs = e5m2 : (!ttg.memdesc<128x256xf8E5M2, #shared, #ttg.shared_memory>, !ttg.memdesc<256x128xf8E5M2, #shared, #ttg.shared_memory>, !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>, !ttg.memdesc<1x2x32x4x4xi8, #shared1, #smem>, !ttg.memdesc<1x2x32x4x4xi8, #shared1, #smem>, i1, i1) -> ()
       %132 = ttng.tmem_load %127 : !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable> -> tensor<128x128xf32, #blocked4>
 
       %133 = tt.addptr %arg16, %incr_A : tensor<128x256x!tt.ptr<f8E5M2>, #blocked>, tensor<128x256xi32, #blocked>
       %134 = tt.addptr %arg17, %incr_B : tensor<256x128x!tt.ptr<f8E5M2>, #blocked1>, tensor<256x128xi32, #blocked1>
       %135 = tt.addptr %arg18, %incr_scale : tensor<1x2x32x4x4x!tt.ptr<i8>, #blocked2>, tensor<1x2x32x4x4xi32, #blocked2>
       %136 = tt.addptr %arg19, %incr_scale : tensor<1x2x32x4x4x!tt.ptr<i8>, #blocked2>, tensor<1x2x32x4x4xi32, #blocked2>
-      scf.yield %132, %133, %134, %135, %136 : tensor<128x128xf32, #blocked4>, tensor<128x256x!tt.ptr<f8E5M2>, #blocked>, tensor<256x128x!tt.ptr<f8E5M2>, #blocked1>, tensor<1x2x32x4x4x!tt.ptr<i8>, #blocked2>, tensor<1x2x32x4x4x!tt.ptr<i8>, #blocked2>
+      scf.yield %132, %133, %134, %135, %136, %true : tensor<128x128xf32, #blocked4>, tensor<128x256x!tt.ptr<f8E5M2>, #blocked>, tensor<256x128x!tt.ptr<f8E5M2>, #blocked1>, tensor<1x2x32x4x4x!tt.ptr<i8>, #blocked2>, tensor<1x2x32x4x4x!tt.ptr<i8>, #blocked2>, i1
     } {tt.num_stages = 3 : i32}
      tt.return %99#0 : tensor<128x128xf32, #blocked4>
   }

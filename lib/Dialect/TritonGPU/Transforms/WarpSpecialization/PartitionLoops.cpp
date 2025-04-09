@@ -25,12 +25,16 @@ using Partition = WarpSchedule::Partition;
 // partition or the provided `partition`.
 static void eraseOtherPartitions(scf::ForOp &loop, const WarpSchedule &schedule,
                                  const Partition *partition) {
+  auto inPartition = [&](Operation *op) {
+    const Partition *opPartition =
+        schedule.getPartition(loop.getBody()->findAncestorOpInBlock(*op));
+    return llvm::is_contained({partition, schedule.getRootPartition()},
+                              opPartition);
+  };
   llvm::BitVector toErase(loop.getNumRegionIterArgs(), true);
   for (Operation &op :
        llvm::make_early_inc_range(loop.getBody()->without_terminator())) {
-    const Partition *opPartition = schedule.getPartition(&op);
-    if (!llvm::is_contained({partition, schedule.getRootPartition()},
-                            opPartition)) {
+    if (!inPartition(&op)) {
       op.dropAllUses();
       op.erase();
       continue;
@@ -43,7 +47,9 @@ static void eraseOtherPartitions(scf::ForOp &loop, const WarpSchedule &schedule,
     }
   }
   for (auto [i, arg] : llvm::enumerate(loop.getRegionIterArgs())) {
-    if (toErase.test(i))
+    if (llvm::any_of(arg.getUsers(), inPartition))
+      toErase.reset(i);
+    else if (toErase.test(i))
       arg.dropAllUses();
   }
   eraseLoopCarriedValues(loop, std::move(toErase));

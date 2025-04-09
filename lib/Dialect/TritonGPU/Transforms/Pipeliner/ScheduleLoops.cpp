@@ -1,6 +1,7 @@
 #include "mlir/IR/Dominance.h"
 #include "triton/Analysis/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
+#include "triton/Dialect/TritonGPU/Transforms/MMAv5PipelineUtility.h"
 #include "triton/Dialect/TritonGPU/Transforms/PipeliningUtility.h"
 #include "triton/Dialect/TritonGPU/Transforms/Schedule.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
@@ -27,28 +28,16 @@ bool hasGpuBarriers(scf::ForOp forOp) {
   return result.wasInterrupted();
 }
 
-bool mmav5DominatesTmemLoads(scf::ForOp forOp) {
-  DominanceInfo domInfo(forOp);
-  bool mmav5DominatesTmemLoads = true;
-  forOp.walk([&](ttng::MMAv5OpInterface mma) {
-    auto tmemAlloc = mma.getAccumulator().getDefiningOp<ttng::TMEMAllocOp>();
-    if (!tmemAlloc || !forOp.isDefinedOutsideOfLoop(tmemAlloc)) {
-      return WalkResult::interrupt();
-    }
-    for (auto user : tmemAlloc->getUsers()) {
-      if (isa<ttng::TMEMLoadOp>(user) && forOp->isAncestor(user) &&
-          !domInfo.properlyDominates(mma, user)) {
-        mmav5DominatesTmemLoads = false;
-        return WalkResult::interrupt();
-      }
-    }
-    return WalkResult::advance();
+bool mmav5DominatesTmemLoads(scf::ForOp forOp,
+                             const DenseMap<Operation *, int> &opLatency) {
+  return ttng::mmav5DominatesTmemLoads(forOp, [&](ttng::MMAv5OpInterface mma) {
+    return opLatency.lookup(mma) >= 1;
   });
-  return mmav5DominatesTmemLoads;
 }
 
 // Return true if the preconditions for pipelining the loop are met.
-bool isSafeToPipeline(scf::ForOp forOp) {
+bool isSafeToPipeline(scf::ForOp forOp,
+                      const DenseMap<Operation *, int> &opLatency) {
   // Skip loop with distance > 1.
   if (loopHasDistGreaterThanOne(forOp))
     return false;
@@ -60,7 +49,7 @@ bool isSafeToPipeline(scf::ForOp forOp) {
     return false;
   // Lowering does not currently support cases where tmem_load happens
   // before the mma in the loop
-  if (!mmav5DominatesTmemLoads(forOp))
+  if (!mmav5DominatesTmemLoads(forOp, opLatency))
     return false;
   return true;
 }
@@ -383,7 +372,8 @@ void scheduleRemainingToLastStage(scf::ForOp forOp, CoarseSchedule &schedule,
 
 void scheduleLoop(scf::ForOp forOp,
                   const DenseMap<Operation *, int> &opLatency) {
-  if (!hasLatenciesAssigned(forOp, opLatency) || !isSafeToPipeline(forOp))
+  if (!hasLatenciesAssigned(forOp, opLatency) ||
+      !isSafeToPipeline(forOp, opLatency))
     return;
   // Based on the latencies, schedule the key ops to the stages.
   CoarseSchedule schedule = scheduleKeyOps(forOp, opLatency);

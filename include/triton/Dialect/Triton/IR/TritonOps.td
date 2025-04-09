@@ -676,7 +676,7 @@ def TT_DotOp : TT_Op<"dot", [Pure,
 //
 def TT_DotScaledOp : TT_Op<"dot_scaled", [Pure,
                              AttrSizedOperandSegments,
-                             DeclareOpInterfaceMethods<DotOpInterface>,
+                             DeclareOpInterfaceMethods<DotOpInterface, ["verifyDims", "verifyOutputDims"]>,
                              TypesMatchWith<"result's type matches accumulator's type",
                                             "d", "c", "$_self">]> {
     let summary = "dot_scaled";
@@ -697,7 +697,9 @@ def TT_DotScaledOp : TT_Op<"dot_scaled", [Pure,
       Optional<RankedTensorOf<[TT_Float, I8]>>:$b_scale,
       TT_ScaleDotElemTypeAttr:$a_elem_type,
       TT_ScaleDotElemTypeAttr:$b_elem_type,
-      BoolAttr:$fastMath
+      BoolAttr:$fastMath,
+      DefaultValuedAttr<BoolAttr, "true">:$lhs_k_pack,
+      DefaultValuedAttr<BoolAttr, "true">:$rhs_k_pack
     );
 
     let results = (outs TT_FloatTensor:$d);
@@ -1314,7 +1316,7 @@ def TT_DescriptorStoreOp : TT_Op<"descriptor_store", [
 def TT_DescriptorGatherOp : TT_Op<"descriptor_gather", [MemoryEffects<[MemRead<GlobalMemory>]>]> {
   let summary = "gather multiple rows from a descriptor into a single tensor";
   let description = [{
-    The `tt.desciptor_gather` op will be lowered to NVIDIA TMA
+    The `tt.descriptor_gather` op will be lowered to NVIDIA TMA
     load operations on targets that support it.
 
     `desc_ptr` is a pointer to the TMA descriptor allocated in global memory.
@@ -1340,9 +1342,10 @@ def TT_DescriptorGatherOp : TT_Op<"descriptor_gather", [MemoryEffects<[MemRead<G
   let hasVerifier = 1;
 
   let extraClassDeclaration = [{
-    // TMA gathers have resstrictions on the minimum size of the gather result.
+    // TMA gathers have restrictions on the minimum size of the gather result.
     // This function verifies the result type.
-    static LogicalResult verifyResultType(Operation *op, mlir::ShapedType type);
+    static LogicalResult verifyResultType(Operation *op, ShapedType resultType,
+                                          RankedTensorType indicesType);
   }];
 }
 
@@ -1360,6 +1363,8 @@ def TT_DescriptorScatterOp : TT_Op<"descriptor_scatter", [
     $desc `[` $x_offsets `,` $y_offset `]` `,` $src
     attr-dict `:` type(operands)
   }];
+
+  let hasVerifier = 1;
 }
 
 def TT_ExperimentalTensormapCreateOp: TT_Op<

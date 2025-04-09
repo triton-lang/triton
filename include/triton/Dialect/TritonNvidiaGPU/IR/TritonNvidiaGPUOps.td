@@ -366,6 +366,8 @@ def TTNG_AsyncTMAScatterOp : TTNG_Op<"async_tma_scatter", [DeclareOpInterfaceMet
     $desc_ptr `[` $x_offsets `,` $y_offset `]` $src
     attr-dict `:` type(operands)
   }];
+
+  let hasVerifier = 1;
 }
 
 def TTNG_TMAStoreWaitOp : TTNG_Op<"async_tma_store_wait"> {
@@ -402,7 +404,7 @@ def TTNG_TCGen5MMAOp : TTNG_Op<"tc_gen5_mma", [DeclareOpInterfaceMethods<MemoryE
     let assemblyFormat = "$a`,` $b`,` $d`,` $useD`,` $pred (`,` $barrier^)? attr-dict `:` functional-type(operands, results)";
 }
 
-def TTNG_TCGen5MMAScaledOp : TTNG_Op<"tc_gen5_mma_scaled", [DeclareOpInterfaceMethods<MemoryEffectsOpInterface>, DeclareOpInterfaceMethods<DotOpInterface>, DeclareOpInterfaceMethods<MMAv5OpInterface>]> {
+def TTNG_TCGen5MMAScaledOp : TTNG_Op<"tc_gen5_mma_scaled", [DeclareOpInterfaceMethods<MemoryEffectsOpInterface>, DeclareOpInterfaceMethods<DotOpInterface, ["verifyDims", "verifyOutputDims"]>, DeclareOpInterfaceMethods<MMAv5OpInterface>]> {
     let summary = "block level op mapping to tensorcore gen5 mma";
 
     let description = [{
@@ -421,7 +423,11 @@ def TTNG_TCGen5MMAScaledOp : TTNG_Op<"tc_gen5_mma_scaled", [DeclareOpInterfaceMe
                          I1:$useD,
                          I1:$pred,
                          Optional<TTG_MemDescType>:$barrier);
-
+    let extraClassDeclaration = [{
+      int64_t getBlockM();
+      int64_t getBlockN();
+      int64_t getBlockK();
+    }];
     // TODO: improve printing format.
     let assemblyFormat = "$a `,` $b `,` $d `,` $a_scale `,` $b_scale `,` $useD`,` $pred `lhs` `=` $a_type `rhs` `=` $b_type (`,` $barrier^)? attr-dict `:` functional-type(operands, results)";
 }
@@ -467,6 +473,27 @@ def TTNG_TMEMAllocOp : TTNG_Op<"tmem_alloc", [DeclareOpInterfaceMethods<MemoryEf
     ($src^)? attr-dict `:` functional-type(operands, results)
   }];
 
+  let results = (outs TTG_MemDescType:$result);
+  let hasVerifier = 1;
+}
+
+def TTNG_TMEMSubSliceOp : TTNG_Op<"tmem_subslice", [Pure]> {
+  let summary = "Take a subslice of a tensor memory allocation";
+  let description = [{
+    This operation takes a subslice of a tensor memory allocation and returns a new descriptor
+    containing the address and a view of the subslice.
+    This is similar to ttg.memdesc_subview except the offset needs to be static and we can only
+    slice alog the inner dimension of a 2D memdesc as this is the only one we can do for TMem.
+  }];
+  let arguments = (ins TTG_MemDescType:$src, I32Attr:$N);
+
+  let assemblyFormat = [{
+    $src attr-dict `:` qualified(type($src)) `->` qualified(type($result))
+  }];
+
+  let builders = [
+      OpBuilder<(ins "Value":$alloc, "int":$offset, "int":$size)>,
+    ];
   let results = (outs TTG_MemDescType:$result);
   let hasVerifier = 1;
 }

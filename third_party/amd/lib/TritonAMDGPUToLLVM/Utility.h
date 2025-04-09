@@ -62,8 +62,7 @@ getCtrlBitsForCacheModifierOnTarget(triton::CacheModifier, bool,
 int32_t getCtrlBitsForBufferAtomicsOnGFX_942_950(bool setSC0, bool setSC1,
                                                  bool setNT);
 
-Value cvtFp32ToFp16(Location loc, RewriterBase &rewriter, const Value &v,
-                    triton::RoundingMode rounding);
+Value cvtFp32ToFp16RTNE(Location loc, RewriterBase &rewriter, const Value &v);
 
 // Return a tensor of pointers with the same type of `basePtr` and the same
 // shape of `offset`
@@ -88,9 +87,14 @@ Type scaleDotElemTypeToMLIRType(MLIRContext *ctx, triton::ScaleDotElemType t);
 // Returns true if we can perform coalesced write from the source encoding to
 // the destination encoding.
 bool canCoalesceWriteIntoSharedMemory(RewriterBase &rewriter,
-                                      RankedTensorType srcTy,
-                                      triton::gpu::MemDescType dstTy,
-                                      unsigned vectorSize);
+                                      const LinearLayout &srcToSharedLayout,
+                                      unsigned threadsPerWarp);
+
+// Returns true if the swizzling pattern does only swizzle the shared memory
+// offsets of a warp and does not exchange destination elements across warps
+bool doesSwizzleInsideWarp(RewriterBase &rewriter,
+                           const LinearLayout &srcToSharedLayout,
+                           unsigned threadsPerWarp);
 
 // Return true if op is used by DotScaledOp or UpcastMXFPOp ops.
 bool isUsedByDotScaledOp(Operation *op);

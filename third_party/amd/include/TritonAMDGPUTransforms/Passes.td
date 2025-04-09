@@ -251,5 +251,15 @@ def TritonAMDGPUCoalesceAsyncCopy: Pass<"tritonamdgpu-coalesce-async-copy", "mli
   ];
 }
 
+def TritonAMDFoldTrueCmpI: Pass<"tritonamdgpu-fold-true-cmpi", "mlir::ModuleOp"> {
+  let summary = "Fold true arith.cmpi to %true";
+
+  let description = [{
+    Fold true arith.cmpi to %true. Useful for removing unnecessary predicated loads.
+  }];
+
+  let constructor = "mlir::createTritonAMDGPUFoldTrueCmpIPass()";
+}
+
 
 #endif

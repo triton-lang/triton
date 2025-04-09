@@ -156,8 +156,11 @@ Value convertLayout(int opIdx, ConversionPatternRewriter &rewriter,
   ArrayRef<int64_t> shape = aTensorTy.getShape();
   auto sharedLayout = cast<SwizzledSharedEncodingAttr>(aTensorTy.getEncoding());
   auto order = sharedLayout.getOrder();
-  assert((rank == 2 || order[2] == 0) &&
-         "expect batch to be the slowest dimension");
+
+  // Rely on the linear layout conversion logic in this case, since only slowest
+  // dimension for batch is supported here
+  if (rank != 2 && order.back() != 0)
+    return Value();
 
   auto elemTy = aTensorTy.getElementType();
   int kWidth = encoding.getKWidth();
