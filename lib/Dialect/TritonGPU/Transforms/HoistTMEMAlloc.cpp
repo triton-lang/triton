@@ -127,8 +127,8 @@ public:
 
   LogicalResult matchAndRewrite(ttng::TMEMLoadOp load,
                                 PatternRewriter &rewriter) const override {
-    SmallVector<ttng::TMEMStoreOp> storesToErase;
-    for (auto user : load->getUsers()) {
+    bool foundStore = false;
+    for (auto user : llvm::make_early_inc_range(load->getUsers())) {
       if (auto store = dyn_cast<ttng::TMEMStoreOp>(user)) {
         if (store.getDst() != load.getSrc()) {
           continue;
@@ -138,14 +138,12 @@ public:
         if (findTMEMAliasingOpInBetween(load, store)) {
           continue;
         }
-        storesToErase.push_back(store);
+        rewriter.eraseOp(store);
+        foundStore = true;
       }
     }
-    if (storesToErase.empty()) {
+    if (!found) {
       return failure();
-    }
-    for (auto store : storesToErase) {
-      rewriter.eraseOp(store);
     }
     return success();
   }
