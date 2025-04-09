@@ -4,9 +4,6 @@
 #include "mlir/IR/Operation.h"
 #include "mlir/IR/Value.h"
 
-#include <functional>
-#include <limits>
-
 using namespace mlir;
 
 // DFS the def chain of 'defValue' starting from 'consumer' and will return the
@@ -17,6 +14,6 @@ using namespace mlir;
 //    operation
 // Returns 0 if there is an error traversing the def chain
 int deduceMinCountOnDefChain(Value defValue, Operation *consumerOp,
-                             const std::function<int(Operation *)> &countFunc);
+                             llvm::function_ref<int(Operation *)> countFunc);
 
 #endif

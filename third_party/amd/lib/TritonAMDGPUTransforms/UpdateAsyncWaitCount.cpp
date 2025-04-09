@@ -8,24 +8,27 @@
 
 // This pass updates the waitCount of `AsyncWait` Ops to represent the number of
 // inflight async load operation between the async_wait and the definition of
-// the async_tokens. This value can then be used to wait only on the dependent
-// async loads before accessing the data allowing loads issues after to complete
-// in the future. This also means we should never overestimate the value to
-// ensure correctness wherease underestimating only affects performance.
-// So for each async_wait we need to compute the minimum across all async_token
+// the AsyncToken, thus allowing to wait only on the dependent async loads
+// allowing loads issued after to complete in the future.
+// This also means we should never overestimate the value to ensure
+// correctness; being conservative and underestimating is fine given that only
+// affects performance
+// For each async_wait we need to compute the minimum across all AsyncToken
 // operands.
-// For each token the minimum number of async transaction along it's def chain
-// is deduced. Note that a token can have multiple producers, e.g. if it's loop
-// carried (prologue and loop body). Therefore all paths to all producers of the
-// async_token have to be analyzed.
-// Note that we do not exit early if we encounter another async_wait along the
-// def chain because the pipeliner will merge redundant waits for us already
+// For each token the minimum number of async transaction along it's
+// def chain is deduced. A token can be copied when passing in as loop initial
+// argument and yielded from a loop body in which case we need to take the
+// minimum along both paths.
+// We do not exit early if we encounter another async_wait along the def chain
+// because the pipeliner will merge redundant waits for us already
 
 using namespace mlir;
 namespace tt = triton;
 namespace ttg = triton::gpu;
 
-// Overload to get the number of loads from direct to lds memory layouts
+// Returns the number of individual async load memory transactions when copy
+// data from the given |srcTy| in global memory to the given |dstTy| in shared
+// memory.
 int getNumberOfLoadInstructions(RankedTensorType srcTy,
                                 ttg::MemDescType dstTy) {
   auto shape = srcTy.getShape();

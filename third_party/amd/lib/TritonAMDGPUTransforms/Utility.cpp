@@ -2,18 +2,11 @@
 
 #include "mlir/Dialect/SCF/IR/SCF.h"
 
+#include <limits>
+
 namespace deduceMin {
 int deduceMinCountInBlock(Block &block,
                           const std::function<int(Operation *)> &countFunc);
-
-std::optional<int> getIntIfConstant(Value v) {
-  if (auto constantOp = v.getDefiningOp<arith::ConstantOp>()) {
-    if (auto attr = dyn_cast<IntegerAttr>(constantOp.getValue())) {
-      return attr.getInt();
-    }
-  }
-  return std::nullopt;
-}
 
 // Returns the minimum found when accumulating countFunc(op) between begin and
 // end (inclusive)
@@ -31,14 +24,11 @@ int deduceMinCountBetweeOps(Operation *beginOp, Operation *endOp,
           deduceMinCountInBlock(ifOp.getElseRegion().front(), countFunc);
       count += std::min(minThen, minElse);
     } else if (auto forOp = llvm::dyn_cast<scf::ForOp>(op)) {
-      auto upperBound = getIntIfConstant(forOp.getUpperBound());
-      auto lowerBound = getIntIfConstant(forOp.getLowerBound());
-      auto step = getIntIfConstant(forOp.getStep());
-      if (upperBound.has_value() && lowerBound.has_value() &&
-          step.has_value() && *step != 0) {
-        float range = static_cast<float>(*upperBound) - *lowerBound;
-        int numSteps = std::ceil(range / *step);
-        count += numSteps * deduceMinCountInBlock(*forOp.getBody(), countFunc);
+      auto tripCount = constantTripCount(forOp.getLowerBound(),
+                                         forOp.getUpperBound(), forOp.getStep())
+                           .value_or(0);
+      if (tripCount > 0) {
+        count += tripCount * deduceMinCountInBlock(*forOp.getBody(), countFunc);
       }
     } else {
       count += countFunc(op);
@@ -78,8 +68,7 @@ int deduceMinCountOnDefChain(Value defValue, Operation *consumerOp,
     return foundMin;
   }
   // If value is a loop carried argument (BlockArgument) we need to look at
-  // initial argumets of the loop and the previous iteration to find all
-  // producers
+  // initial arguments of the loop and the previous iteration
   if (auto arg = mlir::dyn_cast<BlockArgument>(defValue)) {
     Block *block = arg.getOwner();
     auto forOp = dyn_cast<scf::ForOp>(block->getParentOp());
@@ -96,8 +85,6 @@ int deduceMinCountOnDefChain(Value defValue, Operation *consumerOp,
     if (pathSum >= foundMin)
       return foundMin;
 
-    // Split the path and traverse the value assigned to the initial loop
-    // iteration and the yield from the previous iteation recursively.
     Value incomingVal = forOp.getInitArgs()[arg.getArgNumber() - 1];
     int countLoopInit = deduceMinCountOnDefChain(incomingVal, forOp, countFunc,
                                                  pathSum, foundMin);
@@ -115,7 +102,7 @@ int deduceMinCountOnDefChain(Value defValue, Operation *consumerOp,
 }
 
 int deduceMinCountOnDefChain(Value defValue, Operation *consumerOp,
-                             const std::function<int(Operation *)> &countFunc) {
+                             llvm::function_ref<int(Operation *)> countFunc) {
   return deduceMinCountOnDefChain(defValue, consumerOp, countFunc, 0,
                                   std::numeric_limits<int>::max());
 }
