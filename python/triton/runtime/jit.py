@@ -7,6 +7,7 @@ import os
 import re
 import textwrap
 from collections import defaultdict
+from dataclasses import dataclass
 from functools import cached_property
 from typing import Callable, Generic, Iterable, Optional, TypeVar, Union, overload, Dict, Any, Tuple
 
@@ -263,13 +264,13 @@ class KernelParam:
         return self._param.name
 
     @cached_property
-    def annotation(self):
+    def annotation(self) -> str:
         if not self._param.annotation or self._param.annotation == inspect.Parameter.empty:
             return ""
         return _normalize_ty(self._param.annotation)
 
     @cached_property
-    def annotation_type(self):
+    def annotation_type(self) -> str:
         a = self.annotation
         if a.startswith("*k"):
             a = a[2:]
@@ -307,7 +308,6 @@ def create_specialize_impl(specialize_extra):
     from ..language import constexpr
 
     def specialize_impl(arg, is_const=False, specialize_value=True, align=True):
-
         if arg is None:
             return ("constexpr", None)
         elif isinstance(arg, bool):
@@ -407,10 +407,9 @@ def create_function_from_signature(sig, kparams, backend):
             align = 'False' if kp.do_not_specialize_on_alignment else 'True'
             ret = f"specialize_impl({name}, {is_const}, {specialize}, {align})"
             if kp.annotation_type:
-                if isinstance(kp.annotation_type, str):
-                    if kp.annotation_type == "u1" or kp.annotation_type[:2] in ["fp", "bf"]:
-                        # we do not specialize non-constexpr floats and bools:
-                        specialize = False
+                if kp.annotation_type == "u1" or kp.annotation_type[:2] in ["fp", "bf"]:
+                    # we do not specialize non-constexpr floats and bools:
+                    specialize = False
                 if specialize:
                     specialization.append(f'("{kp.annotation_type}",) + {ret}[1:]')
                 else:
@@ -485,6 +484,13 @@ for v in list(type_canonicalisation_dict.values()):
     type_canonicalisation_dict[v] = v
 
 
+@dataclass
+class JitFunctionInfo:
+    module: ModuleType
+    name: str
+    jit_function: JITFunction
+
+
 class JITFunction(KernelInterface[T]):
     # Hook for inspecting compiled functions and modules
     cache_hook = None
@@ -511,14 +517,6 @@ class JITFunction(KernelInterface[T]):
         module = self.fn.__module__
         arg_reprs = ", ".join([f"{param.name}: {ty}" for param, ty in zip(self.params, key[1])])
         repr = f"{name}[num_warps={options.num_warps}, num_ctas={options.num_ctas}, num_stages={options.num_stages}, enable_fp_fusion={options.enable_fp_fusion}, launch_cooperative_grid={options.launch_cooperative_grid}]({arg_reprs})"
-
-        class JitFunctionInfo:
-
-            def __init__(self, module, name, jit_function):
-                self.module = module
-                self.name = name
-                self.jit_function = jit_function
-                pass
 
         specialization_data = serialize_specialization_data(name, signature, constants, configs[0], options, key)
 
@@ -579,6 +577,8 @@ class JITFunction(KernelInterface[T]):
             hook(*args, **kwargs)
 
         kernel_cache, target, backend, binder = self.device_caches[device]
+        # specialization is list[tuple[str, Any]], where first element of tuple is
+        # the type and the second parameter is the 'specialization' value.
         bound_args, specialization, options = binder(*args, **kwargs)
 
         # compute cache key
