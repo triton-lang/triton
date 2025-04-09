@@ -218,10 +218,16 @@ struct ConsoleReproducerStream : public mlir::ReproducerStream {
   raw_ostream &os() override { return llvm::errs(); }
 };
 
-static ReproducerStreamFactory makeConsoleReproducer() {
+ReproducerStreamFactory makeConsoleReproducer() {
   return [](std::string &error) -> std::unique_ptr<ReproducerStream> {
     return std::make_unique<ConsoleReproducerStream>();
   };
+}
+
+OpPrintingFlags getOpPrintingFlags() {
+  auto printingFlags = OpPrintingFlags();
+  printingFlags.enableDebugInfo();
+  return printingFlags;
 }
 
 } // anonymous namespace
@@ -511,8 +517,7 @@ void init_triton_ir(py::module &&m) {
            [](OpState &self) -> std::string {
              std::string str;
              llvm::raw_string_ostream os(str);
-             auto printingFlags = OpPrintingFlags();
-             printingFlags.enableDebugInfo();
+             auto printingFlags = getOpPrintingFlags();
              self->print(os, printingFlags);
              return str;
            })
@@ -583,8 +588,7 @@ void init_triton_ir(py::module &&m) {
            [](ModuleOp &self) -> std::string {
              std::string str;
              llvm::raw_string_ostream os(str);
-             auto printingFlags = OpPrintingFlags();
-             printingFlags.enableDebugInfo();
+             auto printingFlags = getOpPrintingFlags();
              self.print(os, printingFlags);
              return str;
            })
@@ -658,9 +662,7 @@ void init_triton_ir(py::module &&m) {
            })
       .def("create_location_snapshot",
            [](ModuleOp &self, const std::string &fileName) -> void {
-             auto printingFlags = OpPrintingFlags();
-             printingFlags.elideLargeElementsAttrs(16);
-             printingFlags.enableDebugInfo();
+             auto printingFlags = getOpPrintingFlags();
              if (failed(generateLocationsFromIR(fileName, self, printingFlags)))
                throw std::runtime_error("Failed to create location snapshot");
            })
@@ -1782,9 +1784,8 @@ void init_triton_ir(py::module &&m) {
              }
              if (haveDump) {
                context->disableMultithreading();
-               auto printingFlags = OpPrintingFlags();
+               auto printingFlags = getOpPrintingFlags();
                printingFlags.elideLargeElementsAttrs(16);
-               printingFlags.enableDebugInfo();
                auto printAlways = [funcToDump](Pass *, Operation *op) -> bool {
                  if (funcToDump.empty())
                    return true;
