@@ -246,12 +246,14 @@ class HIPBackend(BaseBackend):
         global_prefetch = int(os.getenv("TRITON_HIP_GLOBAL_PREFETCH", "0"))
         local_prefetch = int(os.getenv("TRITON_HIP_LOCAL_PREFETCH", "0"))
         use_async_copy = int(os.getenv("TRITON_HIP_USE_ASYNC_COPY", "0")) == 1
+        must_guard_epilogue = 1
 
         # The `local-prefetch` scheduling variant requires turning on buffer ops.
         if options.schedule_hint == "local-prefetch":
             global_prefetch = local_prefetch = 1
 
-        amd.passes.ttgpuir.add_stream_pipeline(pm, options.num_stages, global_prefetch, local_prefetch, use_async_copy)
+        amd.passes.ttgpuir.add_stream_pipeline(pm, options.num_stages, global_prefetch, local_prefetch, use_async_copy,
+                                               must_guard_epilogue)
         if use_async_copy:
             amd.passes.ttgpuir.add_coalesce_async_copy(pm, options.arch)
         passes.common.add_canonicalizer(pm)
