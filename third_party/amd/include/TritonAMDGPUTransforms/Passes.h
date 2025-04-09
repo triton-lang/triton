@@ -41,6 +41,9 @@ std::unique_ptr<Pass> createTritonAMDGPUInThreadTransposePass();
 std::unique_ptr<Pass>
 createTritonAMDGPUCoalesceAsyncCopyPass(std::string archGenName = {});
 
+std::unique_ptr<Pass>
+createTritonAMDGPUUpdateAsyncWaitCountPass(std::string archGenName = {});
+
 std::unique_ptr<Pass> createTritonAMDGPUFoldTrueCmpIPass();
 
 /// Generate the code for registering passes.
