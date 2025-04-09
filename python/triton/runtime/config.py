@@ -7,10 +7,12 @@ import subprocess
 import sysconfig
 
 from dataclasses import field, dataclass
-from typing import Any, Type, TYPE_CHECKING, overload
+from typing import overload, Any, Callable, Protocol, Type, TypedDict, TYPE_CHECKING
 
 if TYPE_CHECKING:
     from .cache import CacheManager, FileCacheManager, RemoteCacheBackend
+    from .jit import JitFunctionInfo, KernelParam
+    from ..compiler.compiler import LazyDict
 
 
 @overload
@@ -145,15 +147,39 @@ class _AutotuningConfig:
     print: bool = _get_bool("TRITON_PRINT_AUTOTUNING")
 
 
+LaunchHook = Callable[[LazyDict], None]
+
+class JitHookCompileInfo(TypedDict):
+    key: str
+    signature: dict[KernelParam, str]
+
+class JitHook(Protocol):
+    def __call__(
+        self,
+        *,
+        key: str,
+        repr: str,
+        fn: JitFunctionInfo,
+        compile: JitHookCompileInfo,
+    ) -> bool:
+        ...
+
+
 @dataclass
 class _RuntimeConfig:
     interpret: bool = _get_bool("TRITON_INTERPRET")
     debug: bool = _get_bool("TRITON_DEBUG")
 
+    launch_enter_hook: LaunchHook | None = None
+    launch_exit_hook: LaunchHook | None = None
+
+    jit_cache_hook: JitHook | None = None
+    jit_post_compile_hook: JitHook | None = None
+
 
 @dataclass
 class _LanguageConfig:
-    fp32_default: str = _get_env("TRITON_F32_DEFAULT",
+    fp32_default: str | None = _get_env("TRITON_F32_DEFAULT")
 
 
 @dataclass
