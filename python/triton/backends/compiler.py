@@ -40,7 +40,7 @@ class BaseBackend(metaclass=ABCMeta):
                         return path, version.group(1)
         raise RuntimeError(f"Cannot find {binary}")
 
-    @classmethod
+    @staticmethod
     @abstractmethod
     def supports_target(target: GPUTarget):
         raise NotImplementedError
