@@ -128,7 +128,7 @@ public:
   LogicalResult matchAndRewrite(ttng::TMEMLoadOp load,
                                 PatternRewriter &rewriter) const override {
     bool foundStore = false;
-    for (auto user : load->getUsers()) {
+    for (auto user : llvm::make_early_inc_range(load->getUsers())) {
       if (auto store = dyn_cast<ttng::TMEMStoreOp>(user)) {
         if (store.getDst() != load.getSrc()) {
           continue;
