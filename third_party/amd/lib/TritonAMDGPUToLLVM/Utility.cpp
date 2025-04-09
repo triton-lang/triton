@@ -693,4 +693,53 @@ bool isChainDotTail(tt::DotOpInterface dotOp) {
   return false;
 }
 
+AliasScopeDomainAttr getAsyncCopyScopeDomain(MLIRContext *ctx) {
+  return AliasScopeDomainAttr::get(
+      ctx, StringAttr::get(ctx, "AsyncCopyDomain"),
+      StringAttr::get(ctx,
+                      "Domain to hold scopes for AsyncCopies and LocalLoads"));
+}
+
+AliasScopeDomainAttr getLoadScopeDomain(MLIRContext *ctx) {
+  return LLVM::AliasScopeDomainAttr::get(
+      ctx, StringAttr::get(ctx, "AsyncCopyDomain"),
+      StringAttr::get(ctx, "LoadFirst"));
+}
+
+AliasScopeAttr getAsyncCopyScope(MLIRContext *ctx) {
+  return LLVM::AliasScopeAttr::get(
+      ctx, StringAttr::get(ctx, "AsyncCopyScope"), getLoadScopeDomain(ctx),
+      StringAttr::get(ctx, "Contains all AsyncCopies"));
+}
+
+AliasScopeAttr getLoadCopyScope(MLIRContext *ctx) {
+  return LLVM::AliasScopeAttr::get(
+      ctx, StringAttr::get(ctx, "LocalLoadScope"), getLoadScopeDomain(ctx),
+      StringAttr::get(
+          ctx,
+          "Contains all local loads which load data synced via AsyncWait"));
+}
+
+void applyAsyncAliasScopes(AliasAnalysisOpInterface directToLdsOp) {
+  auto ctx = directToLdsOp.getContext();
+  auto aliasScopes = ArrayAttr::get(ctx, getAsyncCopyScope(ctx));
+  directToLdsOp.setAliasScopes(aliasScopes);
+}
+
+void applyLocalLoadAliasScopes(triton::gpu::LocalLoadOp localLoadOp,
+                               AliasAnalysisOpInterface llLoadOp) {
+  auto token = localLoadOp.getToken();
+  if (!token)
+    return;
+  if (!llvm::isa<tt::gpu::AsyncWaitOp>(token.getDefiningOp()))
+    return;
+
+  auto ctx = llLoadOp->getContext();
+  auto aliasScopes = ArrayAttr::get(ctx, getLoadCopyScope(ctx));
+  auto noAliasScopes = ArrayAttr::get(ctx, getAsyncCopyScope(ctx));
+
+  llLoadOp.setAliasScopes(aliasScopes);
+  llLoadOp.setNoAliasScopes(noAliasScopes);
+}
+
 } // namespace mlir::LLVM::AMD
