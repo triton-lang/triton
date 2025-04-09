@@ -1388,6 +1388,14 @@ def atom_red_typechecking_impl(ptr: tl.tensor, val: tl.tensor, mask: tl.tensor, 
     return ptr, val, mask
 
 
+def _signbit(x: tl.tensor, builder: ir.builder) -> tl.tensor:
+    bitwidth = x.dtype.primitive_bitwidth
+    idtype = tl.get_int_dtype(bitwidth=bitwidth, signed=False)
+    ix = x.to(idtype, bitcast=True, _builder=builder)
+    signbit = lshr(ix, bitwidth - 1, builder)
+    return signbit.to(tl.int1, _builder=builder)
+
+
 def atomic_max(ptr: tl.tensor, val: tl.tensor, mask: tl.tensor, sem: str, scope: str, builder: ir.builder) -> tl.tensor:
     ptr, val, mask = atom_red_typechecking_impl(ptr, val, mask, 'max', builder)
     sem = _str_to_sem(sem)
@@ -1407,16 +1415,14 @@ def atomic_max(ptr: tl.tensor, val: tl.tensor, mask: tl.tensor, sem: str, scope:
     if sca_ty not in {tl.float32, tl.float64}:
         raise TypeError(f"atomic_max not supported for dtype {sca_ty}")
 
-    zero = full([], 0.0, sca_ty, builder)
-
     i_type = tl.int32 if sca_ty == tl.float32 else tl.int64
     i_val = bitcast(val, i_type, builder)
     i_ptr = bitcast(ptr, tl.pointer_type(i_type, 1), builder)
     ui_type = tl.uint32 if sca_ty == tl.float32 else tl.uint64
     ui_val = bitcast(val, ui_type, builder)
     ui_ptr = bitcast(ptr, tl.pointer_type(ui_type, 1), builder)
-    pos = greater_equal(val, zero, builder)
-    neg = less_than(val, zero, builder)
+    neg = _signbit(val, builder)
+    pos = not_(neg, builder)
     pos_ret = tl.tensor(
         builder.create_atomic_rmw(ir.ATOMIC_OP.MAX, i_ptr.handle, i_val.handle,
                                   and_(mask, pos, builder).handle, sem, scope), i_val.type)
@@ -1446,16 +1452,14 @@ def atomic_min(ptr: tl.tensor, val: tl.tensor, mask: tl.tensor, sem: str, scope:
     if sca_ty not in {tl.float32, tl.float64}:
         raise TypeError(f"atomic_min not supported for dtype {sca_ty}")
 
-    zero = full([], 0.0, sca_ty, builder)
-
     i_type = tl.int32 if sca_ty == tl.float32 else tl.int64
     i_val = bitcast(val, i_type, builder)
     i_ptr = bitcast(ptr, tl.pointer_type(i_type, 1), builder)
     ui_type = tl.uint32 if sca_ty == tl.float32 else tl.uint64
     ui_val = bitcast(val, ui_type, builder)
     ui_ptr = bitcast(ptr, tl.pointer_type(ui_type, 1), builder)
-    pos = greater_equal(val, zero, builder)
-    neg = less_than(val, zero, builder)
+    neg = _signbit(val, builder)
+    pos = not_(neg, builder)
     pos_ret = tl.tensor(
         builder.create_atomic_rmw(ir.ATOMIC_OP.MIN, i_ptr.handle, i_val.handle,
                                   and_(mask, pos, builder).handle, sem, scope), i_val.type)
