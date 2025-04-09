@@ -118,9 +118,10 @@ class StreamPipeliner {
 
 public:
   StreamPipeliner(scf::ForOp _forOp, int _numStages, int _globalPrefetch,
-                  int _localPrefetch, bool _useAsyncCopy)
+                  int _localPrefetch, bool _useAsyncCopy,
+                  bool _mustGuardEpilogue)
       : forOp(_forOp), numStages(_numStages), numBuffers(1),
-        useAsyncCopy(_useAsyncCopy), mustGuardEpilogue(false),
+        useAsyncCopy(_useAsyncCopy), mustGuardEpilogue(_mustGuardEpilogue),
         schedule(numStages),
         axisInfoAnalysis(forOp->getParentOfType<ModuleOp>()) {
     int lastStage = numStages - 1;
@@ -288,7 +289,8 @@ void StreamPipeliner::checkResultResilience() {
 //            can cause invalid schedules to be produced.
 LogicalResult StreamPipeliner::initSchedule(int maxIndirectionLevel) {
 
-  checkResultResilience();
+  if (!mustGuardEpilogue)
+    checkResultResilience();
   bool pairedGlobalLoadLocalStore = stages[SCHED_LOCAL_STORE] == 0;
   stages[SCHED_LOCAL_STORE] += maxIndirectionLevel;
 
@@ -1110,13 +1112,15 @@ void labelLoadOpsForTritonDot(scf::ForOp forOp) {
 struct PipelinePass : public TritonAMDGPUStreamPipelineBase<PipelinePass> {
   PipelinePass() = default;
   PipelinePass(int32_t _numStages, int32_t _globalPrefetch,
-               int32_t _localPrefetch, bool _useAsyncCopy) {
+               int32_t _localPrefetch, bool _useAsyncCopy,
+               bool _mustGuardEpilogue) {
     this->numStages = _numStages;
 
     this->globalPrefetch = _globalPrefetch;
     this->localPrefetch = _localPrefetch;
 
     this->useAsyncCopy = _useAsyncCopy;
+    this->mustGuardEpilogue = _mustGuardEpilogue;
   }
 
   void runOnOperation() override {
@@ -1146,7 +1150,8 @@ struct PipelinePass : public TritonAMDGPUStreamPipelineBase<PipelinePass> {
       if (!checkPrecondition(forOp))
         continue;
       StreamPipeliner sp(forOp, tt::getNumStagesOrDefault(forOp, numStages),
-                         globalPrefetch, localPrefetch, useAsyncCopy);
+                         globalPrefetch, localPrefetch, useAsyncCopy,
+                         mustGuardEpilogue);
       if (failed(sp.pipelineLoop()))
         continue;
     }
@@ -1154,8 +1159,11 @@ struct PipelinePass : public TritonAMDGPUStreamPipelineBase<PipelinePass> {
 };
 } // namespace
 
-std::unique_ptr<Pass> mlir::createTritonAMDGPUStreamPipelinePass(
-    int numStages, int globalPrefetch, int localPrefetch, bool useAsyncCopy) {
+std::unique_ptr<Pass>
+mlir::createTritonAMDGPUStreamPipelinePass(int numStages, int globalPrefetch,
+                                           int localPrefetch, bool useAsyncCopy,
+                                           bool mustGuardEpilogue) {
   return std::make_unique<PipelinePass>(numStages, globalPrefetch,
-                                        localPrefetch, useAsyncCopy);
+                                        localPrefetch, useAsyncCopy,
+                                        mustGuardEpilogue);
 }

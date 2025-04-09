@@ -28,6 +28,9 @@ def TritonAMDGPUStreamPipeline : Pass<"tritonamdgpu-stream-pipeline", "mlir::Mod
     Option<"useAsyncCopy", "use_async_copy",
            "bool", /*default*/"false",
            "Use AsyncCopyGlobalToLocal to directly load to shared memory">,
+    Option<"mustGuardEpilogue", "must_guard_epilogue",
+	    "bool", /*default*/"true",
+	    "Require conditionalized loads in epiloge of pipelined loop">,
   ];
 }
 
