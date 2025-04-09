@@ -73,6 +73,10 @@ Value createAlloc(scf::ForOp forOp, RankedTensorType ty, Location loc,
 // Determine if the operation is a TMA load.
 bool isTMALoad(Operation *op);
 
+// Look for consecutive wait ops and combine them into a single wait op.
+void combineRedundantWaitOps(
+    llvm::SmallSetVector<gpu::AsyncWaitOp, 8> &waitOps);
+
 // Get the type of the view of a multi-buffered tensor value.
 gpu::MemDescType getBufferViewType(gpu::MemDescType allocTy);
 // Get a generic shared encoding for a tensor.
