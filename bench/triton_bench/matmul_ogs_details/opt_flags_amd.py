@@ -1,6 +1,5 @@
 import torch
-
-from ki.safe_import import triton
+import triton
 
 
 def compute_block_nk(n, block_m, grid_m, num_xcds, lhs_dtype, rhs_dtype, microscaling_ctx):

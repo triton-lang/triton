@@ -1,7 +1,6 @@
 import torch
-
-from ki.meta import cuda_capability_geq
-from ki.safe_import import triton
+import triton
+from triton_bench.meta import cuda_capability_geq
 
 
 def compute_grid_size(routing_data, m, n, block_m, block_n):

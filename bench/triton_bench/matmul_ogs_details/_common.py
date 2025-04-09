@@ -1,4 +1,5 @@
-from ki.safe_import import tl, triton
+import triton
+import triton.language as tl
 
 # -----------------------------------------------------------------------------
 #                                  Utilities
