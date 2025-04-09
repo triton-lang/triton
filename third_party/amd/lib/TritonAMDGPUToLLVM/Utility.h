@@ -107,9 +107,15 @@ bool isChainDotHead(mlir::triton::DotOpInterface dotOp);
 // in the same region
 bool isChainDotTail(mlir::triton::DotOpInterface dotOp);
 
-void applyAsyncAliasScopes(AliasAnalysisOpInterface llLoadDirectToLdsOp);
+// LLVM is unable to recognize the dependency between AsyncCopy and
+// LocalLoads between warps and generates conservative waits.
+// For LocalLoads consuming an AsyncToken from an AsyncWait we will disable the
+// implicit waits by marking the ops to not alias. All AsyncCopies will be
+// placed in the same alias scope. Manual synchronized LocalLoadOps are marked
+// to not alias with the scope of AsyncCopies
 void applyLocalLoadAliasScopes(triton::gpu::LocalLoadOp localLoadOp,
                                AliasAnalysisOpInterface llLoadOp);
+void applyAsyncLoadAliasScope(AliasAnalysisOpInterface llLoadDirectToLdsOp);
 
 } // namespace mlir::LLVM::AMD
 
