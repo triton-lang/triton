@@ -3,7 +3,7 @@ import hashlib
 import json
 from .._C.libtriton import get_cache_invalidating_env_vars, ir
 from ..backends import backends
-from ..backends.compiler import GPUTarget
+from ..backends.compiler import BaseBackend, GPUTarget
 from .. import __version__
 from ..runtime.autotuner import OutOfResources
 from ..runtime.cache import get_cache_manager, get_dump_manager, get_override_manager
@@ -326,7 +326,7 @@ def compile(src, target=None, options=None):
     return CompiledKernel(src, metadata_group, hash)
 
 
-def make_backend(target):
+def make_backend(target: GPUTarget) -> BaseBackend:
     actives = [x.compiler for x in backends.values() if x.compiler.supports_target(target)]
     if len(actives) != 1:
         raise RuntimeError(

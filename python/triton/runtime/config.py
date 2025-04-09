@@ -149,9 +149,24 @@ class _AutotuningConfig:
 
 LaunchHook = Callable[[LazyDict], None]
 
+# This is of the form [attr_name, attr_val]
+# TODO: Use tuple instead of list for better typing.
+KernelAttr = list[str | int]
+
 class JitHookCompileInfo(TypedDict):
     key: str
     signature: dict[KernelParam, str]
+    device: int
+    constants: None
+    num_warps: int
+    num_ctas: int
+    num_stages: int
+    enable_fp_fusion: bool
+    launch_cooperative_grid: bool
+    extern_libs: tuple[tuple[str, str], ...]
+    configs: list[dict[tuple[int, ...], list[KernelAttr]]]
+    specialization_data: str
+    is_warmup: bool
 
 class JitHook(Protocol):
     def __call__(
@@ -161,6 +176,8 @@ class JitHook(Protocol):
         repr: str,
         fn: JitFunctionInfo,
         compile: JitHookCompileInfo,
+        is_manual_warmup: bool,
+        already_compiled: bool
     ) -> bool:
         ...
 
