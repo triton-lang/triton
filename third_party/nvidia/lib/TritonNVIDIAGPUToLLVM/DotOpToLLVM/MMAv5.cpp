@@ -309,7 +309,7 @@ void convertDot(const LLVMTypeConverter *typeConverter,
                 Value loadedA, Value loadedB, Value loadedD, Value useDFlag,
                 Value pred, Value barrier) {
   auto tb = TritonLLVMOpBuilder(loc, rewriter);
-  bool twoCTAs = op.getTwoCtas().has_value();
+  bool twoCTAs = op.getTwoCtas();
   // Only run mma on one thread. We currently use elect as ptxas is not able to
   // detect that tid.x == 0 is true only for 1 thread.
   Value warpId = rewriter.create<nvgpu::WarpIdOp>(loc);

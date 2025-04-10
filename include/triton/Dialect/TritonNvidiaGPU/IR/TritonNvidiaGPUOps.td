@@ -382,26 +382,31 @@ def TTNG_TMAStoreWaitOp : TTNG_Op<"async_tma_store_wait"> {
 }
 
 def TTNG_TCGen5MMAOp : TTNG_Op<"tc_gen5_mma", [DeclareOpInterfaceMethods<MemoryEffectsOpInterface>, DeclareOpInterfaceMethods<DotOpInterface>, DeclareOpInterfaceMethods<MMAv5OpInterface>]> {
-    let summary = "block level op mapping to tensorcore gen5 mma";
+  let summary = "block level op mapping to tensorcore gen5 mma";
 
-    let description = [{
-        $d += matrix_multiply($a, $b).
-        If no barrier is given the op is assumed to be synchronous otherwise the op will trigger a commit/arrive on the given barrier.
-        If there is a barrier the result will be safe to read after a barrier wait.
-        If $two_ctas is set the op will execute a matmul across two contiguous CTAs, it will read the data distributed across the two CTAs.
-        and syncronize both CTAs if the op is synchronous.
-    }];
+  let description = [{
+      $d += matrix_multiply($a, $b).
+      If no barrier is given the op is assumed to be synchronous otherwise the op will trigger a commit/arrive on the given barrier.
+      If there is a barrier the result will be safe to read after a barrier wait.
+      If $two_ctas is set the op will execute a matmul across two contiguous CTAs, it will read the data distributed across the two CTAs.
+      and syncronize both CTAs if the op is synchronous.
+  }];
 
-    let arguments = (ins TTG_MemDescType:$a,
-                         TTG_MemDescType:$b,
-                         TTG_MemDescType:$d,
-                         I1:$useD,
-                         I1:$pred,
-                         Optional<TTG_MemDescType>:$barrier,
-                         OptionalAttr<UnitAttr>:$two_ctas);
+  let arguments = (ins
+    TTG_MemDescType:$a,
+    TTG_MemDescType:$b,
+    TTG_MemDescType:$d,
+    I1:$useD,
+    I1:$pred,
+    Optional<TTG_MemDescType>:$barrier,
+    UnitAttr:$two_ctas
+  );
 
-    // TODO: improve printing format.
-    let assemblyFormat = "$a`,` $b`,` $d`,` $useD`,` $pred (`,` $barrier^)? attr-dict `:` functional-type(operands, results)";
+  // TODO: improve printing format.
+  let assemblyFormat = [{
+    $a`,` $b`,` $d`,` $useD`,` $pred (`,` $barrier^)?
+    attr-dict `:` functional-type(operands, results)
+  }];
 }
 
 def TTNG_TCGen5MMAScaledOp : TTNG_Op<"tc_gen5_mma_scaled", [DeclareOpInterfaceMethods<MemoryEffectsOpInterface>, DeclareOpInterfaceMethods<DotOpInterface, ["verifyDims", "verifyOutputDims"]>, DeclareOpInterfaceMethods<MMAv5OpInterface>]> {
