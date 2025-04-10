@@ -218,6 +218,23 @@ def TritonGPUPrefetch : Pass<"tritongpu-prefetch", "mlir::ModuleOp"> {
                            "mlir::arith::ArithDialect"];
 }
 
+def TritonGPUWGMMAPrefetch : Pass<"tritongpu-wgmma-prefetch", "mlir::ModuleOp"> {
+   let summary = "prefetch for wgmma mixed precision";
+
+   let description = [{
+       This pass attempts to prefetch from shared memory for mixed-precision
+       wgmma when operand A is in the shared memory and needs to be loaded
+       to the local registers.
+   }];
+
+   let dependentDialects = [ "mlir::triton::gpu::TritonGPUDialect",
+                             "mlir::triton::nvidia_gpu::TritonNvidiaGPUDialect",
+                             "mlir::scf::SCFDialect",
+                             "mlir::arith::ArithDialect"];
+}
+
+
+
 def TritonGPUAccelerateMatmul : Pass<"tritongpu-accelerate-matmul", "mlir::ModuleOp"> {
   let summary = "accelerate matmul";
 
