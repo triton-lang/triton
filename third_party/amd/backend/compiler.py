@@ -235,7 +235,7 @@ class HIPBackend(BaseBackend):
         amd.passes.ttgpuir.add_accelerate_matmul(pm, options.arch, options.matrix_instr_nonkdim, options.kpack)
         passes.ttgpuir.add_remove_layout_conversions(pm)
         amd.passes.ttgpuir.add_optimize_epilogue(pm)
-        amd.passes.ttgpuir.add_aggregate_load(pm)
+        # amd.passes.ttgpuir.add_aggregate_load(pm)
         passes.ttgpuir.add_optimize_dot_operands(pm, True)
         amd.passes.ttgpuir.add_hoist_layout_conversions(pm)
 
@@ -281,6 +281,20 @@ class HIPBackend(BaseBackend):
         if use_async_copy:
             amd.passes.ttgpuir.add_update_async_wait_count(pm, options.arch)
         pm.run(mod)
+        if "AMD_INSERT_TTGIR" in os.environ.keys():
+            fn = os.environ['AMD_INSERT_TTGIR']
+            if ':' in fn:
+                kernel_name, insert_module_path = fn.split(':')
+                print(f"Replace kernel {kernel_name}'s ttgir with {insert_module_path}")            
+                if not mod.has_function(kernel_name):
+                    return mod
+            else:
+                insert_module_path = fn
+                print(f"Replace kernel's ttgir with {insert_module_path}")
+            ctx = mod.context
+            mod = ir.parse_mlir_module(insert_module_path, ctx)
+            mod.context = ctx
+
         return mod
 
     @staticmethod
@@ -388,6 +402,22 @@ class HIPBackend(BaseBackend):
         # Disable inlining of print related functions,
         # because inlining of these function could slow down compilation significantly
         amd.disable_print_inline(llvm_mod)
+
+        if "AMD_INSERT_LLVM_IR" in os.environ.keys():
+            if ':' in os.environ["AMD_INSERT_LLVM_IR"]:
+                kernel_name, insert_module_path = os.environ["AMD_INSERT_LLVM_IR"].split(':')
+                if kernel_name == fns[0].name:
+                    print(f"Replace kernel {kernel_name}'s llir with {insert_module_path}")
+                else:
+                    return str(llvm_mod)
+            else:
+                insert_module_path = os.environ["AMD_INSERT_LLVM_IR"]
+            if not os.path.exists(insert_module_path):
+                raise RuntimeError(f'cannot find llvm ir file to insert. Given: `{insert_module_path}`')
+            print(f"Replace kernel's llir with {insert_module_path}")
+            with open(insert_module_path, "r") as file:
+                return file.read()
+
         return str(llvm_mod)
 
     @staticmethod

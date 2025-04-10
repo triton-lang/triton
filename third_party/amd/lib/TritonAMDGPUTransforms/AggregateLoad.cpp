@@ -201,10 +201,12 @@ Value createLocalAlloc(OpBuilder &builder, Location loc, Value loadVal) {
                                    tensorTy.getShape().end());
   Type eType = tensorTy.getElementType();
   auto CTALayout = ttg::getCTALayout(tensorTy.getEncoding());
-  auto sharedEnc = ttg::SharedEncodingAttr::get(
+  auto sharedEnc = ttg::SwizzledSharedEncodingAttr::get(
       tensorTy.getContext(), /*vec*/ 1, /*perPhase*/ 1, /*maxPhase*/ 1,
-      ttg::getOrder(tensorTy.getEncoding()), CTALayout);
-  auto ldsBufferType = triton::MemDescType::get(
+      ttg::getOrder(cast<ttg::DistributedEncodingTrait>(tensorTy.getEncoding()),
+                    tensorTy.getShape()),
+      CTALayout);
+  auto ldsBufferType = ttg::MemDescType::get(
       bufferShape, eType, sharedEnc,
       triton::gpu::SharedMemorySpaceAttr::get(tensorTy.getContext()),
       /*mutableMemory=*/true);
@@ -352,10 +354,10 @@ void processLoopBody(scf::ForOp forOp, Operation *op, Value localAllocVal) {
   localBufOff[0] = zero;      // along M dim
   localBufOff[1] = bufOffVal; // along K dim
 
-  tt::MemDescType allocTy = cast<tt::MemDescType>(localAllocVal.getType());
+  ttg::MemDescType allocTy = cast<ttg::MemDescType>(localAllocVal.getType());
   Attribute sharedMemorySpace =
       ttg::SharedMemorySpaceAttr::get(forOp.getContext());
-  tt::MemDescType subviewTy = tt::MemDescType::get(
+  ttg::MemDescType subviewTy = ttg::MemDescType::get(
       subviewShape, allocTy.getElementType(), allocTy.getEncoding(),
       sharedMemorySpace, /*mutableMemory=*/true);
   auto ldsSubview = builder.create<ttg::MemDescSubviewOp>(
@@ -446,6 +448,7 @@ struct AggregateLoad : public TritonAMDGPUAggregateLoadBase<AggregateLoad> {
   AggregateLoad() = default;
 
   void runOnOperation() override {
+    return;
 
     int64_t totalSharedMemoryUsage = 0;
     bool foundDotOp = false;
@@ -465,7 +468,8 @@ struct AggregateLoad : public TritonAMDGPUAggregateLoadBase<AggregateLoad> {
       assert(!foundDotOp && "Currently only support a single dot operation.");
       foundDotOp = true;
     });
-    llvm::outs() << "TOTAL SHARED MEM:" << totalSharedMemoryUsage << "\n";
+    llvm::outs() << "Total smem Usage:" << totalSharedMemoryUsage << "\n";
+    llvm::outs() << "before: " << *getOperation() << "\n";
 
     // Do the pipelining
     getOperation()->walk([&](scf::ForOp forOp) -> void {
@@ -486,7 +490,7 @@ struct AggregateLoad : public TritonAMDGPUAggregateLoadBase<AggregateLoad> {
           generateOuterLoop(forOp, localAllocValue, hoistFactor);
       }
     });
-    // llvm::outs() << "after:" << *getOperation() << "\n";
+    llvm::outs() << "after: " << *getOperation() << "\n";
   }
 };
 } // namespace

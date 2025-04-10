@@ -1,0 +1,1 @@
+- {'M': 16, 'N': 4096, 'K': 2048, 'rowMajorA': 'T', 'rowMajorB': 'N', 'BLOCK_SIZE_M': 16, 'BLOCK_SIZE_N': 64, 'BLOCK_SIZE_K': 128, 'GROUP_SIZE_M': 1, 'SPLIT_K': 1, 'num_warps': 8, 'num_stages': 1, 'waves_per_eu': 2, 'matrix_instr_nonkdim': 16, 'kpack': 1}
