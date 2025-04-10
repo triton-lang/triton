@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import builtins
-import os
 import time
 import inspect
 import hashlib
@@ -283,11 +282,11 @@ class Autotuner(KernelInterface):
     def warmup(self, *args, **kwargs):
         self.nargs = dict(zip(self.arg_names, args))
         ret = []
-        for config in self.prune_configs(kwargs):
+        for autotune_config in self.prune_configs(kwargs):
             ret.append(self.fn.warmup(
                 *args,
                 **kwargs,
-                **config.all_kwargs(),
+                **autotune_config.all_kwargs(),
             ))
         self.nargs = None
         return ret

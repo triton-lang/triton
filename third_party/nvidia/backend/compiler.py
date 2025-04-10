@@ -14,7 +14,6 @@ import signal
 import os
 import subprocess
 from pathlib import Path
-import sysconfig
 
 
 def min_dot_size(target: GPUTarget):

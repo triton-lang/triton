@@ -1,11 +1,11 @@
 from triton.backends.compiler import BaseBackend, GPUTarget
 from triton._C.libtriton import ir, passes, llvm, amd
+from triton.runtime import config
 from dataclasses import dataclass
 from typing import Any, Dict, Tuple
 from types import ModuleType
 import hashlib
 import tempfile
-import os
 import re
 import subprocess
 import functools

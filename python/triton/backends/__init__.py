@@ -2,7 +2,7 @@ import importlib
 import inspect
 import sys
 from dataclasses import dataclass
-from typing import cast, overload, Type, TypeVar
+from typing import Type, TypeVar
 from types import ModuleType
 from .driver import DriverBase
 from .compiler import BaseBackend
@@ -14,6 +14,7 @@ else:
 
 
 T = TypeVar("T", bound=BaseBackend | DriverBase)
+
 
 def _find_concrete_subclasses(module: ModuleType, base_class: Type[T]) -> Type[T]:
     ret: list[Type[T]] = []

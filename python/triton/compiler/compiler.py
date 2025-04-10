@@ -13,7 +13,6 @@ from ..tools.disasm import get_sass
 # TODO: this shouldn't be here
 from .code_generator import ast_to_ttir
 from pathlib import Path
-from typing import Generic, TypeVar
 import re
 import functools
 import os
@@ -252,7 +251,7 @@ def compile(src, target=None, options=None):
     metadata_filename = f"{file_name}.json"
     metadata_group = fn_cache_manager.get_group(metadata_filename) or {}
     metadata_path = metadata_group.get(metadata_filename)
-    always_compile = triton.compilation.always_compile
+    always_compile = config.compilation.always_compile
     if not always_compile and metadata_path is not None:
         # cache hit!
         return CompiledKernel(src, metadata_group, hash)
@@ -365,6 +364,7 @@ class AsmDict(dict):
 
 
 class CompiledKernel:
+
     def __init__(self, src, metadata_group, hash):
         from collections import namedtuple
         metadata_path = next((Path(p) for c, p in metadata_group.items() if c.endswith(".json")))

@@ -3,7 +3,6 @@ import ast
 import hashlib
 import inspect
 import itertools
-import os
 import re
 import textwrap
 from collections import defaultdict
@@ -494,6 +493,7 @@ class JitFunctionInfo:
 
 
 class JITFunction(KernelInterface[T]):
+
     def _call_hook(
         self,
         hook,
@@ -600,13 +600,15 @@ class JITFunction(KernelInterface[T]):
             attrvals = [x[1] for x in specialization]
             attrs = find_paths_if(attrvals, lambda _, x: isinstance(x, str))
             attrs = {k: backend.parse_attr(get_iterable_path(attrvals, k)) for k in attrs}
-            if self._call_hook(config.runtime.jit_cache_hook, key, signature, device, constexprs, options, [attrs], warmup):
+            if self._call_hook(config.runtime.jit_cache_hook, key, signature, device, constexprs, options, [attrs],
+                               warmup):
                 return None
             # compile the kernel
             src = self.ASTSource(self, signature, constexprs, attrs)
             kernel = self.compile(src, target=target, options=options.__dict__)
             kernel_cache[key] = kernel
-            self._call_hook(config.runtime.jit_post_compile_hook, key, signature, device, constexprs, options, [attrs], warmup)
+            self._call_hook(config.runtime.jit_post_compile_hook, key, signature, device, constexprs, options, [attrs],
+                            warmup)
 
         # Check that used global values have not changed.
         not_present = object()
@@ -626,9 +628,8 @@ class JITFunction(KernelInterface[T]):
             grid_2 = grid[2] if grid_size > 2 else 1
             # launch kernel
             launch_metadata = kernel.launch_metadata(grid, stream, *bound_args.values())
-            kernel.run(grid_0, grid_1, grid_2, stream, kernel.function, kernel.packed_metadata,
-                       launch_metadata, config.runtime.launch_enter_hook, config.runtime.launch_exit_hook,
-                       *bound_args.values())
+            kernel.run(grid_0, grid_1, grid_2, stream, kernel.function, kernel.packed_metadata, launch_metadata,
+                       config.runtime.launch_enter_hook, config.runtime.launch_exit_hook, *bound_args.values())
         return kernel
 
     def repr(self, _):

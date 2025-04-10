@@ -2,7 +2,6 @@ import ast
 import inspect
 import re
 import warnings
-import os
 import textwrap
 import itertools
 from types import ModuleType
@@ -357,7 +356,8 @@ class CodeGenerator(ast.NodeVisitor):
             # But actually a bunch of other things, such as module imports, are
             # technically Python globals. We have to allow these too!
             if any([
-                    val is absent, name in self.builtin_namespace,  #
+                    val is absent,
+                    name in self.builtin_namespace,  #
                     type(val) is ModuleType,  #
                     isinstance(val, JITFunction),  #
                     getattr(val, "__triton_builtin__", False),  #

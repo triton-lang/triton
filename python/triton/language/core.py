@@ -1884,9 +1884,8 @@ def dot(input, other, acc=None, input_precision=None, allow_tf32=None, max_num_i
     assert input_precision is None or allow_tf32 is None, "Only one of input_precision and allow_tf32 can be specified"
     if input_precision is None:
         supports_tf32 = _builder and "tf32" in _builder.options.allowed_dot_input_precisions
-        input_precision = config.language.fp32_default or (
-            "tf32" if (supports_tf32 and (allow_tf32 or allow_tf32 is None)) else "ieee"
-        )
+        input_precision = config.language.fp32_default or ("tf32" if (supports_tf32 and
+                                                                      (allow_tf32 or allow_tf32 is None)) else "ieee")
 
     input_precision = _constexpr_to_value(input_precision)
     out_dtype = _constexpr_to_value(out_dtype)

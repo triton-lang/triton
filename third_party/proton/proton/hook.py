@@ -1,6 +1,6 @@
 from .state import enter_state, exit_state
 from .scope import enter_scope, exit_scope
-from triton.compiler import CompiledKernel, LazyDict
+from triton.compiler import LazyDict
 from triton.runtime import config
 
 COMPUTE_METADATA_SCOPE_NAME = "__proton_launch_metadata"
