@@ -533,8 +533,8 @@ bool TargetInfo::supportsDirectToLdsLoadBitWidth(int bitWidth) const {
   return false;
 }
 
-void TargetInfo::setLocalLoadAsyncAliasInfo(
-    triton::gpu::LocalLoadOp localLoadOp, Operation *llLoadOp) const {
+void TargetInfo::setAsyncAliasScopes(triton::gpu::LocalLoadOp localLoadOp,
+                                     Operation *llLoadOp) const {
   LLVM::AMD::addLocalLoadNoAliasScope(localLoadOp,
                                       cast<LLVM::LoadOp>(llLoadOp));
 }

@@ -84,8 +84,8 @@ public:
 
   bool supportsDirectToLdsLoadBitWidth(int bitWidth) const;
 
-  void setLocalLoadAsyncAliasInfo(triton::gpu::LocalLoadOp localLoadOp,
-                                  Operation *llLoadOp) const override;
+  void setAsyncAliasScopes(triton::gpu::LocalLoadOp localLoadOp,
+                           Operation *llLoadOp) const override;
 
 private:
   void printfImpl(Value formatStrStart, int formatStrByteCount, ValueRange args,
