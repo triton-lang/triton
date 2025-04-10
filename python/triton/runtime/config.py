@@ -7,7 +7,7 @@ import subprocess
 import sysconfig
 
 from dataclasses import field, dataclass
-from typing import overload, Any, Callable, Protocol, Type, TypedDict, TYPE_CHECKING
+from typing import overload, Any, Callable, Generic, Protocol, Type, TypedDict, TypeVar, TYPE_CHECKING
 
 if TYPE_CHECKING:
     from .cache import CacheManager, FileCacheManager, RemoteCacheBackend
@@ -16,31 +16,78 @@ if TYPE_CHECKING:
 
 
 @overload
-def _get_env(env_var: str) -> str | None:
+def _get_str(env_var: str) -> str | None:
     ...
 
 @overload
-def _get_env(env_var: str, default: None) -> str | None:
+def _get_str(env_var: str, default: None) -> str | None:
     ...
 
 @overload
-def _get_env(env_var: str, default: str) -> str:
+def _get_str(env_var: str, default: str) -> str:
     ...
 
-def _get_env(env_var: str, default: str | None = None) -> str | None:
+def _get_str(env_var: str, default: str | None = None) -> str | None:
     res = os.getenv(env_var, default)
     return res if not res else res.strip()
 
-def _get_bool(env_var: str) -> bool:
-    return _get_env(env_var, "0").lower() in ("1", "true", "yes", "on", "y")
+def _get_bool(env_var: str, default: bool = False) -> bool:
+    return _get_str(env_var, "1" if default else "0").lower() in ("1", "true", "yes", "on", "y")
 
 
-def _get_set(*env_vars: str) -> set[str]:
-    return { val for key in env_vars if (val := _get_env(key)) }
+class _propogated_str:
+    """
+    Helper descriptor class which updates an environment variable on __set__
+
+    This is necessary so that you can update configuration below and it
+    correctly propogates to the C++ layer.
+
+    E.g.
+
+    class Foo:
+        bar = _propogated_str("BAR")
+
+    f = Foo()
+    f.bar = "baz"
+    assert os.environ["BAR"] == "baz"  # True
+    """
+    def __init__(self, key: str, default: str | None = None) -> None:
+        self.key = key
+        self.value: str | None = _get_str(key, default)
+
+
+    def __get__(self, obj: object | None, objtype: Type[object] | None = None) -> str | None:
+        return self.value
+
+    def __set__(self, obj: object, value: str | None) -> None:
+        self.value = value
+        if value is None:
+            os.unsetenv(self.key)
+        else:
+            os.putenv(self.key, value)
+
+
+class _propogated_bool:
+    """Similar to _propogated_str but handles bools automatically"""
+    def __init__(self, key: str, default: bool = False) -> None:
+        self.key = key
+        self.value: bool = _get_bool(key, default)
+
+
+    def __get__(self, obj: object | None, objtype: Type[object] | None = None) -> bool:
+        return self.value
+
+    def __set__(self, obj: object, value: bool) -> None:
+        self.value = value
+        os.putenv(self.key, "1" if value else "0")
+
+
+def _get_str_set(*env_vars: str) -> set[str]:
+    return { val for key in env_vars if (val := _get_str(key)) }
 
 
 def _load_class_from_env(env_var: str, type: Type[Any]) -> Type[Any] | None:
-    cls_module_str = _get_env(env_var)
+    cls_module_str = _get_str(env_var)
     if not cls_module_str:
         return None
 
@@ -59,7 +106,7 @@ def _load_class_from_env(env_var: str, type: Type[Any]) -> Type[Any] | None:
 
 def _get_triton_dir(dirname: str) -> str:
     return os.path.join(
-        _get_env("TRITON_HOME") or os.path.expanduser("~/"),
+        _get_str("TRITON_HOME") or os.path.expanduser("~/"),
         ".triton",
         dirname,
     )
@@ -76,7 +123,7 @@ def _get_nvidia_tool(binary: str) -> _NvidiaTool:
     # triton module root
     base_dir = os.path.dirname(os.path.dirname(__file__))
     paths = [
-        _get_env(f"TRITON_{binary.upper()}_PATH"),
+        _get_str(f"TRITON_{binary.upper()}_PATH"),
         os.path.join(base_dir, "third_party", "cuda", "bin", binary),
     ]
     for path in paths:
@@ -99,22 +146,22 @@ def _get_nvidia_tool(binary: str) -> _NvidiaTool:
 @dataclass
 class _BuildConfig:
     """Configuration controlling how the native compiler is invoked"""
-    cc: str | None = _get_env("CC")
-    backend_dirs: set[str] = _get_set("TRITON_CUDACRT_PATH", "TRITON_CUDART_PATH")
+    cc: str | None = _get_str("CC")
+    backend_dirs: set[str] = _get_str_set("TRITON_CUDACRT_PATH", "TRITON_CUDART_PATH")
 
 
 @dataclass
 class _RedisConfig:
-    key_format: str = _get_env("TRITON_REDIS_KEY_FORMAT", "triton:{key}:{filename}")
-    host: str = _get_env("TRITON_REDIS_HOST", "localhost")
-    port: int = int(_get_env("TRITON_REDIS_PORT", "6379"))
+    key_format: str = _get_str("TRITON_REDIS_KEY_FORMAT", "triton:{key}:{filename}")
+    host: str = _get_str("TRITON_REDIS_HOST", "localhost")
+    port: int = int(_get_str("TRITON_REDIS_PORT", "6379"))
 
 
 @dataclass
 class _CacheConfig:
-    dump_dir: str = _get_env("TRITON_DUMP_DIR") or _get_triton_dir("dump")
-    override_dir: str = _get_env("TRITON_OVERRIDE_DIR") or _get_triton_dir("override")
-    dir: str = _get_env("TRITON_CACHE_DIR") or _get_triton_dir("cache")
+    dump_dir: str = _get_str("TRITON_DUMP_DIR") or _get_triton_dir("dump")
+    override_dir: str = _get_str("TRITON_OVERRIDE_DIR") or _get_triton_dir("override")
+    dir: str = _get_str("TRITON_CACHE_DIR") or _get_triton_dir("cache")
 
     manager_class: Type[CacheManager] = FileCacheManager
     remote_manager_class: Type[RemoteCacheBackend] | None = None
@@ -134,10 +181,10 @@ class _CompilationConfig:
     dump_ir: bool = _get_bool("TRITON_KERNEL_DUMP")
     store_binary_only: bool = _get_bool("TRITON_STORE_BINARY_ONLY")
     always_compile: bool = _get_bool("TRITON_ALWAYS_COMPILE")
-    use_ir_loc: bool = _get_bool("USE_IR_LOC")
-    enable_asan: bool = _get_bool("TRITON_ENABLE_ASAN")
+    use_ir_loc: _propogated_bool = _propogated_bool("USE_IR_LOC")
+    enable_asan: _propogated_bool = _propogated_bool("TRITON_ENABLE_ASAN")
+    disable_line_info: _propogated_bool = _propogated_bool("TRITON_DISABLE_LINE_INFO")
     frontend_debugging: bool = _get_bool("TRITON_FRONT_END_DEBUGGING")
-
     allow_non_constexpr_globals: bool = _get_bool("TRITON_ALLOW_NON_CONSTEXPR_GLOBALS")
 
 
@@ -186,6 +233,7 @@ class JitHook(Protocol):
 class _RuntimeConfig:
     interpret: bool = _get_bool("TRITON_INTERPRET")
     debug: bool = _get_bool("TRITON_DEBUG")
+    override_arch: _propogated_str = _propogated_str("TRITON_OVERRIDE_ARCH")
 
     launch_enter_hook: LaunchHook | None = None
     launch_exit_hook: LaunchHook | None = None
@@ -196,7 +244,8 @@ class _RuntimeConfig:
 
 @dataclass
 class _LanguageConfig:
-    fp32_default: str | None = _get_env("TRITON_F32_DEFAULT")
+    fp32_default: _propogated_str = _propogated_str("TRITON_F32_DEFAULT")
+    default_fp_fusion: _propogated_bool = _propogated_bool("TRITON_DEFAULT_FP_FUSION", True)
 
 
 @dataclass
@@ -205,10 +254,33 @@ class _NvidiaConfig:
     nvdisasm: _NvidiaTool = _get_nvidia_tool("nvdisasm")
     ptxas: _NvidiaTool = _get_nvidia_tool("ptxas")
 
+    dump_nvptx: bool = _get_bool("NVPTX_ENABLE_DUMP")
+    disable_ptx_opt: bool = _get_bool("DISABLE_PTXAS_OPT")
+    mock_ptx_version: bool = _get_bool("TRITON_MOCK_PTX_VERSION")
+
+    libdevice_path: str | None = _get_str("TRITON_LIBDEVICE_PATH")
+    libcuda_path: str | None = _get_str("TRITON_LIBCUDA_PATH")
+
 
 @dataclass
 class _AMDConfig:
-    use_buffer_ops: bool = _get_bool("AMDGCN_USE_BUFFER_OPS")
+    use_buffer_ops: _propogated_bool = _propogated_bool("AMDGCN_USE_BUFFER_OPS")
+    dump_amdgcn: bool = _get_bool("AMDGCN_ENABLE_DUMP")
+    libhip_path: str | None = _get_str("TRITON_LIBHIP_PATH")
+    lld_path: str | None = _get_str("TRITON_HIP_LLD_PATH")
+
+    # We use strs so that we can have a default value based on other runtime info
+    use_block_pingpong: str | None = _get_str("TRITON_HIP_USE_BLOCK_PINGPONG")
+    use_in_thread_transpose: str | None = _get_str("TRITON_HIP_USE_IN_THREAD_TRANSPOSE")
+
+    global_prefetch: bool = _get_bool("TRITON_HIP_GLOBAL_PREFETCH")
+    local_prefetch: bool = _get_bool("TRITON_HIP_GLOBAL_PREFETCH")
+    use_async_copy: bool = _get_bool("TRITON_HIP_GLOBAL_PREFETCH")
+
+
+@dataclass
+class _ProtonConfig:
+    cupti_path: str | None = _get_str("TRITON_CUPTI_LIB_PATH")
 
 
 @dataclass
@@ -219,9 +291,10 @@ class _TritonConfig:
     autotuning = _AutotuningConfig()
     runtime = _RuntimeConfig()
 
-    # TODO: ack third_party to find environ, getenv, hook
+    # third_party configs
     nvidia = _NvidiaConfig()
     amd = _AMDConfig()
+    proton = _ProtonConfig()
 
 
 config = _TritonConfig()
