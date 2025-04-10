@@ -4,6 +4,7 @@ import hashlib
 import subprocess
 import tempfile
 from pathlib import Path
+from triton.runtime import config
 from triton.runtime.build import _build
 from triton.runtime.cache import get_cache_manager
 from triton.backends.compiler import GPUTarget
