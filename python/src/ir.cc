@@ -1785,7 +1785,6 @@ void init_triton_ir(py::module &&m) {
              if (haveDump) {
                context->disableMultithreading();
                auto printingFlags = getOpPrintingFlags();
-               printingFlags.elideLargeElementsAttrs(16);
                auto printAlways = [funcToDump](Pass *, Operation *op) -> bool {
                  if (funcToDump.empty())
                    return true;
