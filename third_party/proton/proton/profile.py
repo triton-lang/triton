@@ -4,6 +4,7 @@ import os
 import pathlib
 
 from triton._C.libproton import proton as libproton
+from triton.runtime import config
 from .hook import register_triton_hook, unregister_triton_hook
 from .flags import set_profiling_off, set_profiling_on, is_command_line
 from typing import Optional

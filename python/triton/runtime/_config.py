@@ -6,8 +6,8 @@ import re
 import subprocess
 import sysconfig
 
-from dataclasses import field, dataclass
-from typing import overload, Any, Callable, Generic, Protocol, Type, TypedDict, TypeVar, TYPE_CHECKING
+from dataclasses import dataclass
+from typing import overload, Any, Callable, Protocol, Type, TypedDict, TYPE_CHECKING
 
 if TYPE_CHECKING:
     from .cache import CacheManager, FileCacheManager, RemoteCacheBackend
@@ -19,20 +19,25 @@ if TYPE_CHECKING:
 def _get_str(key: str) -> str | None:
     ...
 
+
 @overload
 def _get_str(key: str, default: None) -> str | None:
     ...
+
 
 @overload
 def _get_str(key: str, default: str) -> str:
     ...
 
+
 def _get_str(key: str, default: str | None = None) -> str | None:
     res = os.getenv(key, default)
     return res if not res else res.strip()
 
+
 def _get_bool(key: str, default: bool = False) -> bool:
     return _get_str(key, "1" if default else "0").lower() in ("1", "true", "yes", "on", "y")
+
 
 def _get_int(key: str, default: int = 0) -> int:
     val = _get_str(key, str(default))
@@ -40,6 +45,7 @@ def _get_int(key: str, default: int = 0) -> int:
         return int(val)
     except ValueError as exc:
         raise RuntimeError(f"Unable to use {key}={val}: expected int") from exc
+
 
 class _propogated_str:
     """
@@ -57,10 +63,10 @@ class _propogated_str:
     f.bar = "baz"
     assert os.environ["BAR"] == "baz"  # True
     """
+
     def __init__(self, key: str, default: str | None = None) -> None:
         self.key = key
         self.value: str | None = _get_str(key, default)
-
 
     def __get__(self, obj: object | None, objtype: Type[object] | None = None) -> str | None:
         return self.value
@@ -75,10 +81,10 @@ class _propogated_str:
 
 class _propogated_bool:
     """Similar to _propogated_str but handles bools automatically"""
+
     def __init__(self, key: str, default: bool = False) -> None:
         self.key = key
         self.value: bool = _get_bool(key, default)
-
 
     def __get__(self, obj: object | None, objtype: Type[object] | None = None) -> bool:
         return self.value
@@ -89,7 +95,7 @@ class _propogated_bool:
 
 
 def _get_str_set(*env_vars: str) -> set[str]:
-    return { val for key in env_vars if (val := _get_str(key)) }
+    return {val for key in env_vars if (val := _get_str(key))}
 
 
 def _load_class_from_env(key: str, type: Type[Any]) -> Type[Any] | None:
@@ -212,6 +218,7 @@ LaunchHook = Callable[[LazyDict], None]
 # TODO: Use tuple instead of list for better typing.
 KernelAttr = list[str | int]
 
+
 class JitHookCompileInfo(TypedDict):
     key: str
     signature: dict[KernelParam, str]
@@ -227,17 +234,11 @@ class JitHookCompileInfo(TypedDict):
     specialization_data: str
     is_warmup: bool
 
+
 class JitHook(Protocol):
-    def __call__(
-        self,
-        *,
-        key: str,
-        repr: str,
-        fn: JitFunctionInfo,
-        compile: JitHookCompileInfo,
-        is_manual_warmup: bool,
-        already_compiled: bool
-    ) -> bool | None:
+
+    def __call__(self, *, key: str, repr: str, fn: JitFunctionInfo, compile: JitHookCompileInfo, is_manual_warmup: bool,
+                 already_compiled: bool) -> bool | None:
         ...
 
 
