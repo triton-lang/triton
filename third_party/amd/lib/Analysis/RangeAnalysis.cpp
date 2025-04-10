@@ -34,11 +34,10 @@ triton::AMD::TritonIntegerRangeAnalysis::maybeGetTripCount(
 
   unsigned int width = ConstantIntRanges::getStorageBitwidth(iv->getType());
 
-  auto getLoopBoundFromFold = [&](std::optional<OpFoldResult> loopBound,
-                                  Block *block,
-                                  std::optional<bool> getUpper = std::nullopt,
-                                  std::optional<APInt> defaultVal =
-                                      std::nullopt) {
+  auto getLoopRangeInfo = [&](std::optional<OpFoldResult> loopBound,
+                              Block *block,
+                              std::optional<bool> getUpper = std::nullopt,
+                              std::optional<APInt> defaultVal = std::nullopt) {
     if (loopBound.has_value()) {
       if (auto attr = dyn_cast<Attribute>(*loopBound)) {
         if (auto bound = dyn_cast_or_null<IntegerAttr>(attr))
@@ -58,13 +57,15 @@ triton::AMD::TritonIntegerRangeAnalysis::maybeGetTripCount(
   };
 
   Block *block = iv->getParentBlock();
-  APInt min = getLoopBoundFromFold(lowerBound, block,
-                                   /*getUpper=*/false);
-  APInt max = getLoopBoundFromFold(upperBound, block,
-                                   /*getUpper=*/true);
+  APInt min = getLoopRangeInfo(lowerBound, block,
+                               /*getUpper=*/false);
+  APInt max = getLoopRangeInfo(upperBound, block,
+                               /*getUpper=*/true);
+  // We can assume step is 1 if no range information as that gives us the upper
+  // bound of the number of iterations.
   APInt stepValDefault = {width, 1, /*isSigned=*/true};
   APInt stepVal =
-      getLoopBoundFromFold(step, block, /*getUpper=*/{}, stepValDefault);
+      getLoopRangeInfo(step, block, /*getUpper=*/{}, stepValDefault);
 
   if (stepVal.isNegative())
     std::swap(min, max);
@@ -435,10 +436,9 @@ LogicalResult TritonIntegerRangeAnalysis::visitOperation(
   return success();
 }
 
-void TritonIntegerRangeAnalysis::initializeFuncOp(tt::FuncOp *op) {
-  for (BlockArgument argument : op->getArguments()) {
-    if (auto assumptions = this->assumptions.lookup(argument);
-        !assumptions.empty()) {
+void TritonIntegerRangeAnalysis::initializeFuncOp(tt::FuncOp op) {
+  for (BlockArgument argument : op.getArguments()) {
+    if (!this->assumptions.lookup(argument).empty()) {
       dataflow::IntegerValueRangeLattice *argLattice =
           getLatticeElement(argument);
       auto anchor = argLattice->getAnchor();
@@ -617,7 +617,7 @@ void populateFoldTrueCmpIOpPatterns(RewritePatternSet &patterns,
 void initializeFuncOps(Operation *op,
                        AMD::TritonIntegerRangeAnalysis *rangeAnalysis) {
   op->walk<WalkOrder::PreOrder>([&rangeAnalysis](FuncOp funcOp) {
-    rangeAnalysis->initializeFuncOp(&funcOp);
+    rangeAnalysis->initializeFuncOp(funcOp);
   });
 }
 

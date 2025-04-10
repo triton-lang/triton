@@ -39,7 +39,7 @@ struct TritonIntegerRangeAnalysis : dataflow::IntegerRangeAnalysis {
 
   void setToEntryState(dataflow::IntegerValueRangeLattice *lattice) override;
 
-  void initializeFuncOp(triton::FuncOp *funcOp);
+  void initializeFuncOp(triton::FuncOp funcOp);
 
   LogicalResult visitOperation(
       Operation *op,

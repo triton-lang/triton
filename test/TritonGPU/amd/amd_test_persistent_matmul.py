@@ -12,36 +12,24 @@ def print_test_name_and_run(f):
 
 
 @triton.jit
-def matmul_kernel_persistent(
-    a_ptr,
-    b_ptr,
-    c_ptr,
-    M,
-    N,
-    K,
-    stride_am,
-    stride_ak,
-    stride_bk,
-    stride_bn,
-    stride_cm,
-    stride_cn,
-    BLOCK_SIZE_M: tl.constexpr,
-    BLOCK_SIZE_N: tl.constexpr,
-    BLOCK_SIZE_K: tl.constexpr,
-    GROUP_SIZE_M: tl.constexpr,
-    NUM_SMS: tl.constexpr,
-    USE_BUFFER_OPS: tl.constexpr,
-):
-    if USE_BUFFER_OPS:
-        tl.assume(M > 0)
-        tl.assume(N > 0)
-        tl.assume(K > 0)
-        tl.assume(stride_am > 0)
-        tl.assume(stride_ak > 0)
-        tl.assume(stride_bk > 0)
-        tl.assume(stride_bn > 0)
-        tl.assume(stride_cm > 0)
-        tl.assume(stride_cn > 0)
+def matmul_kernel_persistent(a_ptr, b_ptr, c_ptr,  #
+                             M, N, K,  #
+                             stride_am, stride_ak,  #
+                             stride_bk, stride_bn,  #
+                             stride_cm, stride_cn,  #
+                             BLOCK_SIZE_M: tl.constexpr, BLOCK_SIZE_N: tl.constexpr,  #
+                             BLOCK_SIZE_K: tl.constexpr, GROUP_SIZE_M: tl.constexpr,  #
+                             NUM_SMS: tl.constexpr,  #
+                             ):
+    tl.assume(M > 0)
+    tl.assume(N > 0)
+    tl.assume(K > 0)
+    tl.assume(stride_am > 0)
+    tl.assume(stride_ak > 0)
+    tl.assume(stride_bk > 0)
+    tl.assume(stride_bn > 0)
+    tl.assume(stride_cm > 0)
+    tl.assume(stride_cn > 0)
 
     start_pid = tl.program_id(axis=0)
     num_pid_m = tl.cdiv(M, BLOCK_SIZE_M)
@@ -169,12 +157,10 @@ def test_matmul_kernel_persistent():
                     "BLOCK_SIZE_K": "constexpr",
                     "GROUP_SIZE_M": "constexpr",
                     "NUM_SMS": "constexpr",
-                    "USE_BUFFER_OPS": "constexpr",
                 },
                 constexprs={
                     **c.kwargs,
                     "NUM_SMS": 304,
-                    "USE_BUFFER_OPS": 1,
                 },
             ), target=GPUTarget("hip", "gfx942", 32), options={"num_stages": c.num_stages, "num_warps": c.num_warps})
         print("config: ", c)
