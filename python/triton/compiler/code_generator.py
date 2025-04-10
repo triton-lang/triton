@@ -14,9 +14,8 @@ from ..language import constexpr, semantic, str_to_ty, tensor
 from ..language.core import _unwrap_if_constexpr, base_value, base_type
 from ..runtime.jit import get_jit_fn_file_line
 # ideally we wouldn't need any runtime component
-from ..runtime import JITFunction
+from ..runtime import config, JITFunction
 from .._utils import find_paths_if, get_iterable_path, set_iterable_path
-from . import config
 
 from .errors import (CompilationError, CompileTimeAssertionFailure, UnsupportedLanguageConstruct)
 
@@ -370,7 +369,7 @@ class CodeGenerator(ast.NodeVisitor):
                     # because you should be able to do
                     #   @triton.jit def fn(x: tl.constexpr = GLOBAL): ...
                     self.visiting_arg_default_value,  #
-                    os.environ.get("TRITON_ALLOW_NON_CONSTEXPR_GLOBALS", "0") == "1"
+                    config.compilation.allow_non_constexpr_globals,
             ]):
                 return val
             raise NameError(
@@ -1198,7 +1197,7 @@ class CodeGenerator(ast.NodeVisitor):
                 generator.visit(fn.parse())
             except Exception as e:
                 # Wrap the error in the callee with the location of the call.
-                if config.front_end_debugging():
+                if config.compilation.frontend_debugging:
                     raise
                 raise CompilationError(self.jit_fn.src, self.cur_node, None) from e
 
@@ -1238,7 +1237,7 @@ class CodeGenerator(ast.NodeVisitor):
                     ret = language.tuple(ret)
                 return ret
             except Exception as e:
-                if config.front_end_debugging():
+                if config.compilation.frontend_debugging:
                     raise
                 # Normally when we raise a CompilationError, we raise it as
                 # `from None`, because the original fileline from the exception
@@ -1319,7 +1318,7 @@ class CodeGenerator(ast.NodeVisitor):
             except CompilationError:
                 raise
             except Exception as e:
-                if config.front_end_debugging():
+                if config.compilation.frontend_debugging:
                     raise
                 # Wrap the error in a CompilationError which contains the source
                 # of the @jit function.

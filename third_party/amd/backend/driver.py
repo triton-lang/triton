@@ -66,8 +66,7 @@ def _get_path_to_hip_runtime_dylib():
     lib_name = "libamdhip64.so"
 
     # If we are told explicitly what HIP runtime dynamic library to use, obey that.
-    env_libhip_path = os.getenv("TRITON_LIBHIP_PATH")
-    if env_libhip_path:
+    if env_libhip_path := config.amd.libhip_path:
         if env_libhip_path.endswith(lib_name) and os.path.exists(env_libhip_path):
             return env_libhip_path
         raise RuntimeError(f"TRITON_LIBHIP_PATH '{env_libhip_path}' does not point to a valid {lib_name}")

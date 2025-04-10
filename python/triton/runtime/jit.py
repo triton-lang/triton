@@ -16,6 +16,8 @@ from ..runtime.driver import driver
 from types import ModuleType
 from .._utils import find_paths_if, get_iterable_path
 
+from . import config
+
 TRITON_MODULE = __name__[:-len(".runtime.jit")]
 
 T = TypeVar("T")
@@ -492,14 +494,9 @@ class JitFunctionInfo:
 
 
 class JITFunction(KernelInterface[T]):
-    # Hook for inspecting compiled functions and modules
-    cache_hook = None
-    # Hook to signal that a kernel is done compiling and inspect compiled function.
-    # cache_hook will always be called before compilation and compiled_hook after.
-    compiled_hook = None
-
     def _call_hook(
         self,
+        hook,
         key,
         signature,
         device,
@@ -508,11 +505,7 @@ class JITFunction(KernelInterface[T]):
         configs,
         is_warmup,
         before,
-    ):
-        hook = JITFunction.cache_hook if before else JITFunction.compiled_hook
-        if hook is None:
-            return False
-
+    ) -> bool | None:
         name = self.fn.__name__
         module = self.fn.__module__
         arg_reprs = ", ".join([f"{param.name}: {ty}" for param, ty in zip(self.params, key[1])])
@@ -566,7 +559,7 @@ class JITFunction(KernelInterface[T]):
         return {}, target, backend, binder
 
     def run(self, *args, grid, warmup, **kwargs):
-        kwargs["debug"] = kwargs.get("debug", self.debug) or os.environ.get("TRITON_DEBUG", "0") == "1"
+        kwargs["debug"] = kwargs.get("debug", self.debug) or config.runtime.debug
 
         # parse options
         device = driver.active.get_current_device()
@@ -607,13 +600,13 @@ class JITFunction(KernelInterface[T]):
             attrvals = [x[1] for x in specialization]
             attrs = find_paths_if(attrvals, lambda _, x: isinstance(x, str))
             attrs = {k: backend.parse_attr(get_iterable_path(attrvals, k)) for k in attrs}
-            if self._call_hook(key, signature, device, constexprs, options, [attrs], warmup, before=True):
+            if self._call_hook(config.runtime.jit_cache_hook, key, signature, device, constexprs, options, [attrs], warmup):
                 return None
             # compile the kernel
             src = self.ASTSource(self, signature, constexprs, attrs)
             kernel = self.compile(src, target=target, options=options.__dict__)
             kernel_cache[key] = kernel
-            self._call_hook(key, signature, device, constexprs, options, [attrs], warmup, before=False)
+            self._call_hook(config.runtime.jit_post_compile_hook, key, signature, device, constexprs, options, [attrs], warmup)
 
         # Check that used global values have not changed.
         not_present = object()
@@ -634,7 +627,7 @@ class JITFunction(KernelInterface[T]):
             # launch kernel
             launch_metadata = kernel.launch_metadata(grid, stream, *bound_args.values())
             kernel.run(grid_0, grid_1, grid_2, stream, kernel.function, kernel.packed_metadata,
-                       launch_metadata, self.CompiledKernel.launch_enter_hook, self.CompiledKernel.launch_exit_hook,
+                       launch_metadata, config.runtime.launch_enter_hook, config.runtime.launch_exit_hook,
                        *bound_args.values())
         return kernel
 
@@ -832,7 +825,7 @@ def jit(
 
     def decorator(fn: T) -> JITFunction[T]:
         assert callable(fn)
-        if os.getenv("TRITON_INTERPRET", "0") == "1":
+        if config.runtime.interpret:
             from .interpreter import InterpretedFunction
             return InterpretedFunction(fn, version=version, do_not_specialize=do_not_specialize,
                                        do_not_specialize_on_alignment=do_not_specialize_on_alignment, debug=debug,
