@@ -2,6 +2,7 @@ import argparse
 from collections import namedtuple
 import json
 import pandas as pd
+
 try:
     import hatchet as ht
     from hatchet.query import NegationQuery
@@ -150,7 +151,7 @@ def derive_metrics(gf, metrics, inclusive_metrics, exclusive_metrics, device_inf
 
     def get_time_seconds(df, metric, factor_dict):
         time_metric_name = match_available_metrics(metric, inclusive_metrics, exclusive_metrics)[0]
-        time_unit = (factor_dict.name + "/" + time_metric_name.split("(")[1].split(")")[0])
+        time_unit = factor_dict.name + "/" + time_metric_name.split("(")[1].split(")")[0]
         return df[time_metric_name] * factor_dict.factor[time_unit]
 
     for metric in metrics:
@@ -171,13 +172,13 @@ def derive_metrics(gf, metrics, inclusive_metrics, exclusive_metrics, device_inf
                                                (get_time_seconds(gf.dataframe, "time", time_factor_dict)) /
                                                metric_factor_dict[metric])
             derived_metrics.append(f"{metric} (inc)")
-        elif metric in time_factor_dict.factor or metric in cpu_time_factor_dict.factor or \
-                metric in avg_time_factor_dict.factor or metric in avg_cpu_time_factor_dict.factor:  # inclusive
+        elif (metric in time_factor_dict.factor or metric in cpu_time_factor_dict.factor
+              or metric in avg_time_factor_dict.factor or metric in avg_cpu_time_factor_dict.factor):  # inclusive
             is_cpu = metric in cpu_time_factor_dict.factor or metric in avg_cpu_time_factor_dict.factor
             is_avg = metric in avg_time_factor_dict.factor or metric in avg_cpu_time_factor_dict.factor
 
-            factor_dict = (avg_cpu_time_factor_dict if is_avg else cpu_time_factor_dict) if is_cpu \
-                else (avg_time_factor_dict if is_avg else time_factor_dict)
+            factor_dict = ((avg_cpu_time_factor_dict if is_avg else cpu_time_factor_dict) if is_cpu else
+                           (avg_time_factor_dict if is_avg else time_factor_dict))
             metric_name = "cpu_time" if is_cpu else "time"
             metric_time_unit = factor_dict.name + "/" + metric.split("/")[1]
 
@@ -265,21 +266,26 @@ def print_tree(gf, metrics, depth=100, format=None, print_sorted=False):
         print("Sorted kernels by metric " + metrics[0])
         sorted_df = gf.dataframe.sort_values(by=[metrics[0]], ascending=False)
         for row in range(1, len(sorted_df)):
-            kernel_name = sorted_df.iloc[row]['name'][:100] + "..." if len(
-                sorted_df.iloc[row]['name']) > 100 else sorted_df.iloc[row]['name']
+            kernel_name = (sorted_df.iloc[row]["name"][:100] +
+                           "..." if len(sorted_df.iloc[row]["name"]) > 100 else sorted_df.iloc[row]["name"])
             print("{:105} {:.4}".format(kernel_name, sorted_df.iloc[row][metrics[0]]))
     emit_warnings(gf, metrics)
 
 
-def parse(metrics, filename, include=None, exclude=None, threshold=None):
+def read(filename):
     with open(filename, "r") as f:
         gf, inclusive_metrics, exclusive_metrics, device_info = get_raw_metrics(f)
         assert len(inclusive_metrics + exclusive_metrics) > 0, "No metrics found in the input file"
         gf.update_inclusive_columns()
-        metrics = derive_metrics(gf, metrics, inclusive_metrics, exclusive_metrics, device_info)
-        # TODO: generalize to support multiple metrics, not just the first one
-        gf = filter_frames(gf, include, exclude, threshold, metrics[0])
-        return gf, metrics
+        return gf, inclusive_metrics, exclusive_metrics, device_info
+
+
+def parse(metrics, filename, include=None, exclude=None, threshold=None):
+    gf, inclusive_metrics, exclusive_metrics, device_info = read(filename)
+    metrics = derive_metrics(gf, metrics, inclusive_metrics, exclusive_metrics, device_info)
+    # TODO: generalize to support multiple metrics, not just the first one
+    gf = filter_frames(gf, include, exclude, threshold, metrics[0])
+    return gf, metrics
 
 
 def show_metrics(file_name):
@@ -368,23 +374,32 @@ proton-viewer -e ".*test.*" path/to/file.json
         help="The depth of the tree to display",
     )
     argparser.add_argument(
-        "-f", "--format", type=str, choices=["full", "file_function_line", "function_line", "file_function"],
-        default="full", help="""Formatting the frame name.
+        "-f",
+        "--format",
+        type=str,
+        choices=["full", "file_function_line", "function_line", "file_function"],
+        default="full",
+        help="""Formatting the frame name.
 - full: include the path, file name, function name and line number.
 - file_function_line: include the file name, function name and line number.
 - function_line: include the function name and line number.
 - file_function: include the file name and function name.
-""")
+""",
+    )
     argparser.add_argument(
         "--print-sorted",
-        action='store_true',
+        action="store_true",
         default=False,
         help="Sort output by metric value instead of chronologically",
     )
     argparser.add_argument(
-        "--diff-profile", "-diff", type=str, default=None,
+        "--diff-profile",
+        "-diff",
+        type=str,
+        default=None,
         help="Compare two profiles. When used as 'proton-viewer -m time -diff file1.log file2.log', "
-        "computes the difference: file2['time'] - file1['time']")
+        "computes the difference: file2['time'] - file1['time']",
+    )
 
     args, target_args = argparser.parse_known_args()
     assert len(target_args) == 1, "Must specify a file to read"

@@ -7,7 +7,6 @@ from triton_bench.mxfp import downcast_to_mxfp
 from triton_bench.matmul_ogs import MicroscalingCtx, matmul_ogs, PrecisionConfig, FlexCtx
 from triton_bench.numerics import InFlexData
 from triton_bench.routing import routing_torch, simulate_expert_sharded_routing
-from triton_bench.meta import cuda_capability_geq
 
 if torch.cuda.is_available():
     from triton._C.libtriton import nvidia
@@ -108,23 +107,19 @@ def bench_mlp(batch, dim1, dim2, n_expts_tot, n_expts_act, x_dtype, w_dtype,
     proton.finalize()
 
     # -- analyze --
-    with open(f"{fpath}") as fd:
-        data = json.load(fd)
-        # TODO: this will be broken if kernels use scopes themselves
-        # compute useful (a.k.a. matmul) bytes and flops
-        matmuls = [x for x in data[0]["children"] if "matmul" in x["frame"]["name"]]
-        tot_bytes = sum([x["metrics"]["bytes"] for x in matmuls])
-        tot_flops = {w: sum([x["metrics"].get(f"flops{w}", 0) for x in matmuls]) for w in [8, 16]}
-        # compute total time (incl. "not useful" work)
-        # TODO: proton should really be recording that in the json instead of
-        # relying on the user to aggregate
-        tot_time = sum(x["metrics"].get("time (ns)", 0) for x in data[0]["children"])
-        min_time_flops = sum([tot_flops[w] / SPECS[f"MAX_TFLOPS{w}"] for w in [8, 16]]) * 1e-3
-        min_time_bytes = tot_bytes / SPECS["MAX_TBPS"] * 1e-3
-        min_time = max(min_time_flops, min_time_bytes)
-        util = min_time / tot_time
-        tflops = sum([tot_flops[w] for w in [8, 16]]) / tot_time * 1e-3
-        tbps = tot_bytes / tot_time * 1e-3
+    gf, inclusive_metrics, exclusive_metrics, device_info = proton.viewer.read(fpath)
+    root_df = gf.dataframe.iloc[0]
+    tot_bytes = root_df["bytes (inc)"]
+    tot_flops = sum(root_df.get(f"flops{w} (inc)", 0) for w in [8, 16])
+    tot_time = root_df["time (ns) (inc)"]
+
+    # Calculate theoretical min time based on hardware limits
+    min_time_flops = sum(root_df.get(f"flops{w} (inc)", 0) / SPECS[f"MAX_TFLOPS{w}"] for w in [8, 16]) * 1e-3
+    min_time_bytes = tot_bytes / SPECS["MAX_TBPS"] * 1e-3
+
+    util = max(min_time_flops, min_time_bytes) / tot_time
+    tflops = tot_flops / tot_time * 1e-3
+    tbps = tot_bytes / tot_time * 1e-3
 
     return util, tflops, tbps
 
