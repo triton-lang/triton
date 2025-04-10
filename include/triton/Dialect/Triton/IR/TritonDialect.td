@@ -36,6 +36,11 @@ def Triton_Dialect : Dialect {
     void registerTypes();
   }];
 
+  let discardableAttrs = (ins
+     "::mlir::IntegerAttr":$num_stages,
+     "::mlir::IntegerAttr":$latency
+  );
+
   let hasConstantMaterializer = 1;
   let useDefaultTypePrinterParser = 1;
   let usePropertiesForAttributes = 1;

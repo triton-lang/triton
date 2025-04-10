@@ -168,7 +168,7 @@ tt.func @prologue_backward_slice(%ub: i32, %cond: i1) {
     // CHECK: op.with_region
     "op.with_region"() ({
       "use"(%1) : (i32) -> ()
-    }) {tt_latency = 2 : i32} : () -> ()
+    }) {tt.latency = 2 : i32} : () -> ()
     // CHECK: loop.cluster = 1 : i32, loop.stage = 0 : i32
 
   } {tt.num_stages = 3 : i32}
@@ -186,7 +186,7 @@ tt.func @epilogue_forward_slice(%ub: i32, %cond: i1) {
   // CHECK: scf.for
   scf.for %i = %c0_i32 to %ub step %c1_i32 : i32 {
     // CHECK: "latency.op"() {loop.cluster = 3 : i32, loop.stage = 0 : i32
-    %0 = "latency.op"() {tt_latency = 2 : i32} : () -> i32
+    %0 = "latency.op"() {tt.latency = 2 : i32} : () -> i32
     // CHECK: scf.if
     %1 = scf.if %cond -> i32 {
       scf.yield %0 : i32
@@ -219,7 +219,7 @@ tt.func @prologue_latency(%ub: i32, %cond: i1) {
       scf.yield %0 : i32
     } else {
       scf.yield %c0_i32 : i32
-    } {tt_latency = 2 : i32}
+    } {tt.latency = 2 : i32}
     // CHECK: loop.cluster = 0 : i32, loop.stage = 0 : i32
 
   } {tt.num_stages = 3 : i32}
