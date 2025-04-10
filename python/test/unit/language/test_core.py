@@ -1905,9 +1905,13 @@ def test_cast(dtype_x, dtype_z, bitcast, size, num_ctas, device):
         check_type_supported(dtype_x, device)
         check_type_supported(dtype_z, device)
 
-    if not is_hip_cdna4() and ((dtype_x == 'bfloat16' and dtype_z == "float8_e4m3fn") or
+    if is_hip():
+        if (not is_hip_cdna3() and not is_hip_cdna4() and 
+           (dtype_x == 'float8_e4m3fn' or dtype_z == 'float8_e4m3fn')):
+            pytest.skip(f'test_cast{(dtype_x, dtype_z)} only supported on HIP CDNA3/CDNA4.')
+        if (not is_hip_cdna4()) and ((dtype_x == 'bfloat16' and dtype_z == "float8_e4m3fn") or
                                (dtype_x == "float8_e4m3fn" and dtype_z == 'bfloat16')):
-        pytest.skip(f'test_cast{(dtype_x, dtype_z)} cast to bfloat16 only supported on HIP CDNA4.')
+            pytest.skip(f'test_cast{(dtype_x, dtype_z)} only supported on HIP CDNA4.')
 
     torch.manual_seed(0)
     # This is tricky because numpy doesn't have bfloat, and torch doesn't have uints.
