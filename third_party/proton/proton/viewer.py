@@ -81,10 +81,11 @@ def get_min_time_flops(df, device_info, override_device_id=False):
             clock_rate = device_info[device_type][device_index]["clock_rate"]
             for width in TritonHook.flops_width:
                 if override_device_id:
-                    device_frames = df
+                    idx = range(len(df))
                 else:
                     idx = df["device_id"] == device_index
-                    device_frames = df[idx]
+
+                device_frames = df[idx]
                 if f"flops{width}" not in device_frames.columns:
                     continue
                 max_flops = 0
@@ -115,10 +116,10 @@ def get_min_time_bytes(df, device_info, override_device_id=False):
     for device_type in device_info:
         for device_index in device_info[device_type]:
             if override_device_id:
-                device_frames = df
+                idx = range(len(df))
             else:
                 idx = df["device_id"] == device_index
-                device_frames = df[idx]
+            device_frames = df[idx]
             memory_clock_rate = device_info[device_type][device_index]["memory_clock_rate"]  # in khz
             bus_width = device_info[device_type][device_index]["bus_width"]  # in bits
             peak_bandwidth = 2 * bus_width * memory_clock_rate * 1e3 / 8

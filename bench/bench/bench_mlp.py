@@ -101,8 +101,8 @@ def bench_mlp(batch, dim1, dim2, n_expts_tot, n_expts_act, x_dtype, w_dtype,
     tot_time = summary["time (ns) (inc)"]
 
     # Calculate theoretical min time based on hardware limits
-    min_time_flops = viewer.get_min_time_flops(gf.dataframe.iloc[0], device_info, override_device_id=True)
-    min_time_bytes = viewer.get_min_time_bytes(gf.dataframe.iloc[0], device_info, override_device_id=True)
+    min_time_flops = viewer.get_min_time_flops(gf.dataframe.head(1), device_info, override_device_id=True)
+    min_time_bytes = viewer.get_min_time_bytes(gf.dataframe.head(1), device_info, override_device_id=True)
 
     util = max(min_time_flops, min_time_bytes) / tot_time
     tflops = tot_flops / tot_time * 1e-3
