@@ -77,12 +77,10 @@ def TTG_AsyncCommitGroupOp : TTG_Op<"async_commit_group"> {
 
 def TTG_AsyncCopyGlobalToLocalOp : TTG_Op<"async_copy_global_to_local", [
   AttrSizedOperandSegments,
-  TypesMatchWith<"infer mask type from src type",
-                 "src", "mask", "getI1SameShape($_self)",
-                 "($_op.getOperands().size() <= 3) || std::equal_to<>()">,
-  TypesMatchWith<"infer other type from src type",
-                 "src", "other", "getPointeeType($_self)",
-                 "($_op.getOperands().size() <= 4) || std::equal_to<>()">
+  OptionalTypesMatchWith<"infer mask type from src type",
+                 "src", "mask", "getI1SameShape($_self)">,
+  OptionalTypesMatchWith<"infer other type from src type",
+                 "src", "other", "getPointeeType($_self)">,
 ]> {
   let summary = "copy data from global memory to local memory asynchronously";
 
