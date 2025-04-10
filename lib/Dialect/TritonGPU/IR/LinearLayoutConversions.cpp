@@ -133,7 +133,8 @@ sharedToLinearLayoutNoLeadingOffset(ArrayRef<int64_t> shape,
   int rank = shape.size();
   if (rank == 1) {
     return combineCtaCgaWithShape(
-        LinearLayout::identity1D(shape[0], S("offset"), S("dim0")),
+        LinearLayout::identity1D(shape[0] / shared.getCTASplitNum()[0],
+                                 S("offset"), S("dim0")),
         shared.getCTALayout(), shape);
   }
 
@@ -181,7 +182,8 @@ sharedToLinearLayoutAMDRotating(ArrayRef<int64_t> shape,
   int rank = shape.size();
   if (rank == 1) {
     return combineCtaCgaWithShape(
-        LinearLayout::identity1D(shape[0], S("offset"), S("dim0")),
+        LinearLayout::identity1D(shape[0] / shared.getCTASplitNum()[0],
+                                 S("offset"), S("dim0")),
         shared.getCTALayout(), shape);
   }
 
@@ -235,7 +237,8 @@ LinearLayout sharedToLinearLayoutLeadingOffset(ArrayRef<int64_t> shape,
   if (rank == 1) {
     // TODO: Not sure if this is correct.
     return combineCtaCgaWithShape(
-        LinearLayout::identity1D(shape[0], S("offset"), S("dim0")),
+        LinearLayout::identity1D(shape[0] / shared.getCTASplitNum()[0],
+                                 S("offset"), S("dim0")),
         shared.getCTALayout(), shape);
   }
   int elemBitWidth = shared.getElementBitWidth();
