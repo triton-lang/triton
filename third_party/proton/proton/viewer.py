@@ -72,20 +72,17 @@ def get_raw_metrics(file):
     return gf, inclusive_metrics, exclusive_metrics, device_info
 
 
-def get_min_time_flops(df, device_info, override_device_id=False):
-    min_time_flops = pd.DataFrame(0.0, index=df.index, columns=["min_time"])
+def get_min_time_flops(df, device_info, exclusive=True):
+    min_time_metric = "min_time" if exclusive else "min_time (inc)"
+    min_time_flops = pd.DataFrame(0.0, index=df.index, columns=[min_time_metric])
     for device_type in device_info:
         for device_index in device_info[device_type]:
             arch = device_info[device_type][device_index]["arch"]
             num_sms = device_info[device_type][device_index]["num_sms"]
             clock_rate = device_info[device_type][device_index]["clock_rate"]
             for width in TritonHook.flops_width:
-                if override_device_id:
-                    idx = range(len(df))
-                else:
-                    idx = df["device_id"] == device_index
-
-                device_frames = df[idx]
+                idx = df["device_id"] == device_index if exclusive else df.index
+                device_frames = df.loc[idx]
                 if f"flops{width}" not in device_frames.columns:
                     continue
                 max_flops = 0
@@ -107,23 +104,23 @@ def get_min_time_flops(df, device_info, override_device_id=False):
                         max_flops = 2614.9e12 / (width / 8)
                 else:
                     raise ValueError(f"Unsupported device type: {device_type}")
-                min_time_flops.loc[idx, "min_time"] += device_frames[f"flops{width}"].fillna(0) / max_flops
+                flops_metric = f"flops{width}" if exclusive else f"flops{width} (inc)"
+                min_time_flops.loc[idx, min_time_metric] += device_frames[flops_metric].fillna(0) / max_flops
     return min_time_flops
 
 
-def get_min_time_bytes(df, device_info, override_device_id=False):
-    min_time_bytes = pd.DataFrame(0.0, index=df.index, columns=["min_time"])
+def get_min_time_bytes(df, device_info, exclusive=True):
+    min_time_metric = "min_time" if exclusive else "min_time (inc)"
+    bytes_metric = "bytes" if exclusive else "bytes (inc)"
+    min_time_bytes = pd.DataFrame(0.0, index=df.index, columns=[min_time_metric])
     for device_type in device_info:
         for device_index in device_info[device_type]:
-            if override_device_id:
-                idx = range(len(df))
-            else:
-                idx = df["device_id"] == device_index
-            device_frames = df[idx]
+            idx = df["device_id"] == device_index if exclusive else df.index
+            device_frames = df.loc[idx]
             memory_clock_rate = device_info[device_type][device_index]["memory_clock_rate"]  # in khz
             bus_width = device_info[device_type][device_index]["bus_width"]  # in bits
             peak_bandwidth = 2 * bus_width * memory_clock_rate * 1e3 / 8
-            min_time_bytes.loc[idx, "min_time"] += device_frames["bytes"] / peak_bandwidth
+            min_time_bytes.loc[idx, min_time_metric] += device_frames[bytes_metric] / peak_bandwidth
     return min_time_bytes
 
 
