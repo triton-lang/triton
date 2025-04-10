@@ -1,6 +1,7 @@
 from pathlib import Path
 import json
 import triton.profiler as proton
+import triton.profiler.viewer as viewer
 import torch
 import triton_bench.swiglu
 from triton_bench.mxfp import downcast_to_mxfp
@@ -14,21 +15,6 @@ if torch.cuda.is_available():
     cublas = nvidia.cublas.CublasLt(cublas_workspace)
 else:
     cublas = None
-
-
-def _query_gpu_specs():
-    import subprocess
-    cmd = ["nvidia-smi", "--query-gpu=name", "--format=csv,noheader", "-i=0"]
-    output = subprocess.check_output(cmd, stderr=subprocess.DEVNULL).decode().strip()
-    name = output.splitlines()[0]
-    return {
-        "NVIDIA H100 80GB HBM3": {"MAX_TFLOPS8": 1979, "MAX_TFLOPS16": 989, "MAX_TBPS": 3.35},
-        "NVIDIA GH200 480GB": {"MAX_TFLOPS8": 1979, "MAX_TFLOPS16": 989, "MAX_TBPS": 4.8},
-        "HGX GB200": {"MAX_TFLOPS8": 4500, "MAX_TFLOPS16": 2250, "MAX_TBPS": 8.0},
-    }[name]
-
-
-SPECS = _query_gpu_specs()
 
 
 def quantize(w, dtype, dev, **opt):
@@ -108,15 +94,15 @@ def bench_mlp(batch, dim1, dim2, n_expts_tot, n_expts_act, x_dtype, w_dtype,
     proton.finalize()
 
     # -- analyze --
-    gf, inclusive_metrics, exclusive_metrics, device_info = proton.viewer.read(fpath)
-    root_df = gf.dataframe.iloc[0]
-    tot_bytes = root_df["bytes (inc)"]
-    tot_flops = sum(root_df.get(f"flops{w} (inc)", 0) for w in [8, 16])
-    tot_time = root_df["time (ns) (inc)"]
+    gf, inclusive_metrics, exclusive_metrics, device_info = viewer.read(fpath)
+    summary = gf.dataframe.iloc[0].to_dict()
+    tot_bytes = summary["bytes (inc)"]
+    tot_flops = sum(summary.get(f"flops{w} (inc)", 0) for w in [8, 16])
+    tot_time = summary["time (ns) (inc)"]
 
     # Calculate theoretical min time based on hardware limits
-    min_time_flops = sum(root_df.get(f"flops{w} (inc)", 0) / SPECS[f"MAX_TFLOPS{w}"] for w in [8, 16]) * 1e-3
-    min_time_bytes = tot_bytes / SPECS["MAX_TBPS"] * 1e-3
+    min_time_flops = viewer.get_min_time_flops(gf.dataframe.iloc[0], device_info, override_device_id=True)
+    min_time_bytes = viewer.get_min_time_bytes(gf.dataframe.iloc[0], device_info, override_device_id=True)
 
     util = max(min_time_flops, min_time_bytes) / tot_time
     tflops = tot_flops / tot_time * 1e-3
