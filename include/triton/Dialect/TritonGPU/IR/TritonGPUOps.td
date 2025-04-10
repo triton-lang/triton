@@ -80,10 +80,10 @@ def TTG_AsyncCopyGlobalToLocalOp : TTG_Op<"async_copy_global_to_local", [
   DeclareOpInterfaceMethods<MemoryEffectsOpInterface>,
   TypesMatchWith<"infer mask type from src type",
                  "src", "mask", "getI1SameShape($_self)",
-                 "($_op.getOperands().size() <= 3) || std::equal_to<>()">,
+                 "($_op.getOperands().size() <= 2) || std::equal_to<>()">,
   TypesMatchWith<"infer other type from src type",
                  "src", "other", "getPointeeType($_self)",
-                 "($_op.getOperands().size() <= 4) || std::equal_to<>()">
+                 "($_op.getOperands().size() <= 3) || std::equal_to<>()">
 ]> {
   let summary = "copy data from global memory to local memory asynchronously";
 
