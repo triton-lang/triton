@@ -275,7 +275,7 @@ static void rewritePartitionRegions(WarpSpecializeOp ws, Block *switchLoop,
 
     // Rewrite all warp returns.
     partition->walk([&](WarpReturnOp op) {
-      b.setInsertionPoint(op);
+      TritonLLVMIRRewriter b(op.getLoc(), op);
       createBarrier(b, kSwitchLoopBarrierIdx, /*numThreads=*/std::nullopt,
                     /*aligned=*/false);
       b.replaceOpWithNewOp<LLVM::BrOp>(op, switchLoop);

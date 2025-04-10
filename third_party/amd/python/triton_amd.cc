@@ -84,6 +84,9 @@ void init_triton_amd_passes_ttgpuir(py::module &&m) {
   ADD_PASS_WRAPPER_1("add_coalesce_async_copy",
                      mlir::createTritonAMDGPUCoalesceAsyncCopyPass,
                      std::string);
+  ADD_PASS_WRAPPER_1("add_update_async_wait_count",
+                     mlir::createTritonAMDGPUUpdateAsyncWaitCountPass,
+                     std::string);
   m.def("add_in_thread_transpose", [](mlir::PassManager &pm) {
     pm.addNestedPass<mlir::triton::FuncOp>(
         mlir::createTritonAMDGPUInThreadTransposePass());
@@ -278,20 +281,6 @@ void init_triton_amd(py::module &&m) {
       }
     }
     return false;
-  });
-
-  m.def("has_matrix_core_feature", [](const std::string &arch) {
-    using mlir::triton::AMD::ISAFamily;
-    switch (mlir::triton::AMD::deduceISAFamily(arch)) {
-    case ISAFamily::CDNA4:
-    case ISAFamily::CDNA3:
-    case ISAFamily::CDNA2:
-    case ISAFamily::CDNA1:
-    case ISAFamily::RDNA3:
-      return true;
-    default:
-      return false;
-    }
   });
 
   m.def("set_all_fn_arg_inreg", [](llvm::Function *fn) {

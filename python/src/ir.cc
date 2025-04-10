@@ -218,10 +218,16 @@ struct ConsoleReproducerStream : public mlir::ReproducerStream {
   raw_ostream &os() override { return llvm::errs(); }
 };
 
-static ReproducerStreamFactory makeConsoleReproducer() {
+ReproducerStreamFactory makeConsoleReproducer() {
   return [](std::string &error) -> std::unique_ptr<ReproducerStream> {
     return std::make_unique<ConsoleReproducerStream>();
   };
+}
+
+OpPrintingFlags getOpPrintingFlags() {
+  auto printingFlags = OpPrintingFlags();
+  printingFlags.enableDebugInfo();
+  return printingFlags;
 }
 
 } // anonymous namespace
@@ -511,8 +517,7 @@ void init_triton_ir(py::module &&m) {
            [](OpState &self) -> std::string {
              std::string str;
              llvm::raw_string_ostream os(str);
-             auto printingFlags = OpPrintingFlags();
-             printingFlags.enableDebugInfo();
+             auto printingFlags = getOpPrintingFlags();
              self->print(os, printingFlags);
              return str;
            })
@@ -583,8 +588,7 @@ void init_triton_ir(py::module &&m) {
            [](ModuleOp &self) -> std::string {
              std::string str;
              llvm::raw_string_ostream os(str);
-             auto printingFlags = OpPrintingFlags();
-             printingFlags.enableDebugInfo();
+             auto printingFlags = getOpPrintingFlags();
              self.print(os, printingFlags);
              return str;
            })
@@ -658,9 +662,9 @@ void init_triton_ir(py::module &&m) {
            })
       .def("create_location_snapshot",
            [](ModuleOp &self, const std::string &fileName) -> void {
-             generateLocationsFromIR(/*raw_ostream=*/llvm::nulls(),
-                                     /*fileName=*/fileName,
-                                     /*op=*/self, /*flags=*/{});
+             auto printingFlags = getOpPrintingFlags();
+             if (failed(generateLocationsFromIR(fileName, self, printingFlags)))
+               throw std::runtime_error("Failed to create location snapshot");
            })
       .def("walk",
            [](ModuleOp &self, const std::function<void(Operation *)> &fn) {
@@ -1593,12 +1597,12 @@ void init_triton_ir(py::module &&m) {
               std::optional<mlir::Value> &lhs_scale,
               ScaleDotElemType lhs_format, mlir::Value &rhs,
               std::optional<mlir::Value> &rhs_scale,
-              ScaleDotElemType rhs_format, bool fast_math,
-              mlir::Value &c) -> mlir::Value {
-             return self.create<DotScaledOp>(c.getType(), lhs, rhs, c,
-                                             lhs_scale.value_or(Value()),
-                                             rhs_scale.value_or(Value()),
-                                             lhs_format, rhs_format, fast_math);
+              ScaleDotElemType rhs_format, bool fast_math, bool lhs_k_pack,
+              bool rhs_k_pack, mlir::Value &c) -> mlir::Value {
+             return self.create<DotScaledOp>(
+                 c.getType(), lhs, rhs, c, lhs_scale.value_or(Value()),
+                 rhs_scale.value_or(Value()), lhs_format, rhs_format, fast_math,
+                 lhs_k_pack, rhs_k_pack);
            })
       .def("create_floor",
            [](TritonOpBuilder &self, Value &val) -> Value {
@@ -1780,9 +1784,7 @@ void init_triton_ir(py::module &&m) {
              }
              if (haveDump) {
                context->disableMultithreading();
-               auto printingFlags = OpPrintingFlags();
-               printingFlags.elideLargeElementsAttrs(16);
-               printingFlags.enableDebugInfo();
+               auto printingFlags = getOpPrintingFlags();
                auto printAlways = [funcToDump](Pass *, Operation *op) -> bool {
                  if (funcToDump.empty())
                    return true;

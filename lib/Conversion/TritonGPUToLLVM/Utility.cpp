@@ -667,18 +667,6 @@ createLLVMIntrinsicCallOp(OpBuilder &builder, Location loc, StringRef intrinsic,
   return op;
 }
 
-bool isConstantZero(Value v) {
-  if (auto constantOp = v.getDefiningOp<arith::ConstantOp>()) {
-    if (auto attr = dyn_cast<IntegerAttr>(constantOp.getValue())) {
-      return attr.getValue().isZero();
-    }
-    if (auto attr = dyn_cast<FloatAttr>(constantOp.getValue())) {
-      return attr.getValue().isZero();
-    }
-  }
-  return false;
-}
-
 Value getStructFromSharedMemoryObject(Location loc,
                                       const SharedMemoryObject &smemObj,
                                       RewriterBase &rewriter) {

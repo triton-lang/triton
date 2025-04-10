@@ -1000,3 +1000,45 @@ module attributes {"ttg.num-warps" = 4 : i32} {
     tt.return
   }
 }
+
+// -----
+
+#shared = #ttg.swizzled_shared<{vec = 2, perPhase = 2, maxPhase = 4, order = [1, 0]}>
+
+module attributes {"ttg.num-warps" = 4 : i32, "ttg.target" = "cuda:80"} {
+
+// CHECK-LABEL: @membar_alias_through_warp_specialize
+tt.func @membar_alias_through_warp_specialize() {
+  %0 = ttg.local_alloc : () -> !ttg.memdesc<16x16xf16, #shared, #ttg.shared_memory, mutable>
+  ttg.warp_specialize(%0)
+  default {
+    ttg.warp_yield
+  }
+  // CHECK: partition0
+  partition0(%arg0: !ttg.memdesc<16x16xf16, #shared, #ttg.shared_memory, mutable>) num_warps(2) {
+    %c0 = arith.constant 0 : i32
+    %1 = ttg.memdesc_subview %arg0[%c0, %c0] : !ttg.memdesc<16x16xf16, #shared, #ttg.shared_memory, mutable> -> !ttg.memdesc<16x16xf16, #shared, #ttg.shared_memory, mutable>
+    %c = arith.constant dense<0.0> : tensor<16x16xf16>
+    // CHECK: local_store
+    ttg.local_store %c, %1 : tensor<16x16xf16> -> !ttg.memdesc<16x16xf16, #shared, #ttg.shared_memory, mutable>
+    // CHECK-NEXT: gpu.barrier
+    // CHECK-NEXT: local_store
+    ttg.local_store %c, %1 : tensor<16x16xf16> -> !ttg.memdesc<16x16xf16, #shared, #ttg.shared_memory, mutable>
+    ttg.warp_return
+  }
+  // CHECK: partition1
+  partition1(%arg0: !ttg.memdesc<16x16xf16, #shared, #ttg.shared_memory, mutable>) num_warps(2) {
+    %c0 = arith.constant 0 : i32
+    %1 = ttg.memdesc_subview %arg0[%c0, %c0] : !ttg.memdesc<16x16xf16, #shared, #ttg.shared_memory, mutable> -> !ttg.memdesc<16x16xf16, #shared, #ttg.shared_memory, mutable>
+    %c = arith.constant dense<0.0> : tensor<16x16xf16>
+    // CHECK: local_store
+    ttg.local_store %c, %1 : tensor<16x16xf16> -> !ttg.memdesc<16x16xf16, #shared, #ttg.shared_memory, mutable>
+    // CHECK-NEXT: gpu.barrier
+    // CHECK-NEXT: local_store
+    ttg.local_store %c, %1 : tensor<16x16xf16> -> !ttg.memdesc<16x16xf16, #shared, #ttg.shared_memory, mutable>
+    ttg.warp_return
+  } : (!ttg.memdesc<16x16xf16, #shared, #ttg.shared_memory, mutable>) -> ()
+  tt.return
+}
+
+}

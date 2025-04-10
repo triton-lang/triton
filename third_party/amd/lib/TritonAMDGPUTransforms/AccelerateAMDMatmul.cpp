@@ -572,6 +572,9 @@ public:
 
   LogicalResult matchAndRewrite(triton::DotScaledOp dotOp,
                                 PatternRewriter &rewriter) const override {
+    // TODO: add support for m/n packed formats.
+    if (!dotOp.getLhsKPack() || !dotOp.getRhsKPack())
+      return failure();
     using TensorValue = TypedValue<RankedTensorType>;
 
     RankedTensorType oldRetType = dotOp.getType();
