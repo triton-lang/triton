@@ -14,25 +14,16 @@ import json
 from io import BytesIO
 from distutils.command.clean import clean
 from pathlib import Path
-from typing import List, Optional
+from typing import Optional
 
 from setuptools import Extension, find_packages, setup
 from setuptools.command.build_ext import build_ext
 from setuptools.command.build_py import build_py
 from dataclasses import dataclass
 
-from distutils.command.install import install
-from setuptools.command.develop import develop
-from setuptools.command.egg_info import egg_info
-
 import pybind11
 
 from python.build_helpers import get_base_dir, get_cmake_dir
-
-try:
-    from setuptools.command.bdist_wheel import bdist_wheel
-except ImportError:
-    from wheel.bdist_wheel import bdist_wheel
 
 
 @dataclass
