@@ -243,11 +243,11 @@ LogicalResult WGMMAPrefetcher::initialize() {
   };
 
   for (ttng::WarpGroupDotOp dotOp : dotsInFor) {
-    // If getMaxNumImpreciseAcc > 0, WGMMA.cpp will have
+    // If needsPartialAccumulator, WGMMA.cpp will have
     // extra treatment for dotOp (e.g., add accumulator).
     // Therefore, we disable the optimization here
-    // when getMaxNumImpreciseAcc > 0;
-    if (dotOp.getMaxNumImpreciseAcc() > 0) {
+    // when needsPartialAccumulator() == true;
+    if (dotOp.needsPartialAccumulator()) {
       return failure();
     }
 
