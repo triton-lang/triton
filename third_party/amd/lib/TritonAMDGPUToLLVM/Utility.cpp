@@ -693,53 +693,50 @@ bool isChainDotTail(tt::DotOpInterface dotOp) {
   return false;
 }
 
-AliasScopeDomainAttr getAsyncCopyScopeDomain(MLIRContext *ctx) {
-  return AliasScopeDomainAttr::get(
-      ctx, StringAttr::get(ctx, "AsyncCopyDomain"),
-      StringAttr::get(ctx,
-                      "Domain to hold scopes for AsyncCopies and LocalLoads"));
-}
-
 AliasScopeDomainAttr getLoadScopeDomain(MLIRContext *ctx) {
-  return LLVM::AliasScopeDomainAttr::get(
-      ctx, StringAttr::get(ctx, "AsyncCopyDomain"),
-      StringAttr::get(ctx, "LoadFirst"));
+  return AliasScopeDomainAttr::get(
+      ctx, StringAttr::get(ctx, "AsyncOps"),
+      StringAttr::get(ctx, "Domain to hold scopes for manually syncing "
+                           "AsyncCopies and LocalLoads"));
 }
 
 AliasScopeAttr getAsyncCopyScope(MLIRContext *ctx) {
   return LLVM::AliasScopeAttr::get(
-      ctx, StringAttr::get(ctx, "AsyncCopyScope"), getLoadScopeDomain(ctx),
+      ctx, StringAttr::get(ctx, "AsyncCopies"), getLoadScopeDomain(ctx),
       StringAttr::get(ctx, "Contains all AsyncCopies"));
 }
 
 AliasScopeAttr getLoadCopyScope(MLIRContext *ctx) {
   return LLVM::AliasScopeAttr::get(
-      ctx, StringAttr::get(ctx, "LocalLoadScope"), getLoadScopeDomain(ctx),
+      ctx, StringAttr::get(ctx, "LocalLoads"), getLoadScopeDomain(ctx),
       StringAttr::get(
           ctx,
           "Contains all local loads which load data synced via AsyncWait"));
 }
 
-void applyAsyncAliasScopes(AliasAnalysisOpInterface directToLdsOp) {
+void addAsyncCopyAliasScope(AliasAnalysisOpInterface directToLdsOp) {
   auto ctx = directToLdsOp.getContext();
   auto aliasScopes = ArrayAttr::get(ctx, getAsyncCopyScope(ctx));
   directToLdsOp.setAliasScopes(aliasScopes);
 }
 
-void applyLocalLoadAliasScopes(triton::gpu::LocalLoadOp localLoadOp,
-                               AliasAnalysisOpInterface llLoadOp) {
+void addLocalLoadNoAliasScope(triton::gpu::LocalLoadOp localLoadOp,
+                              AliasAnalysisOpInterface llLoadOp) {
   auto token = localLoadOp.getToken();
   if (!token)
     return;
-  if (!llvm::isa<tt::gpu::AsyncWaitOp>(token.getDefiningOp()))
+  if (!token.getDefiningOp<tt::gpu::AsyncWaitOp>())
     return;
 
   auto ctx = llLoadOp->getContext();
-  auto aliasScopes = ArrayAttr::get(ctx, getLoadCopyScope(ctx));
-  auto noAliasScopes = ArrayAttr::get(ctx, getAsyncCopyScope(ctx));
 
-  llLoadOp.setAliasScopes(aliasScopes);
+  // Do not alias with AsyncCopies
+  auto noAliasScopes = ArrayAttr::get(ctx, getAsyncCopyScope(ctx));
   llLoadOp.setNoAliasScopes(noAliasScopes);
+
+  // Add to different scope as ops without any scope alias with everything
+  auto aliasScopes = ArrayAttr::get(ctx, getLoadCopyScope(ctx));
+  llLoadOp.setAliasScopes(aliasScopes);
 }
 
 } // namespace mlir::LLVM::AMD

@@ -397,7 +397,7 @@ Value convertLayout(int opIdx, ConversionPatternRewriter &rewriter,
       setNumGeneratedDsReads(localLoadOp, numDsReadsCount, loadVecTy);
 
       for (auto llLoad : llLoads) {
-        LLVM::AMD::applyLocalLoadAliasScopes(localLoadOp, llLoad);
+        LLVM::AMD::addLocalLoadNoAliasScope(localLoadOp, llLoad);
       }
     }
   }

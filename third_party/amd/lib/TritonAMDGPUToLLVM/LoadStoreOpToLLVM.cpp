@@ -597,7 +597,7 @@ struct BufferLoadToLocalOpConversion
       auto bufferLoadToLds = bufferEmitter.emitLoadToLds(
           vecTy, vecBytesVal, rsrcDesc, offsetIn, coalescedShmemAddr[i], pred,
           op.getCache());
-      LLVM::AMD::applyAsyncAliasScopes(bufferLoadToLds);
+      LLVM::AMD::addAsyncCopyAliasScope(bufferLoadToLds);
       if (!otherElems.empty()) {
         Value storeVal = packElementRangeIntoVector(
             rewriter, this->getTypeConverter(), loc, vecTy, otherElems, srcIdx);
@@ -724,7 +724,7 @@ struct AsyncCopyGlobalToLocalOpConversion
             /*size=*/vecBytesVal, /*offset=*/b.i32_val(0),
             /*aux=*/cacheModifiers, /*alias_scopes=*/nullptr,
             /*noalias_scopes=*/nullptr, /*tbaa=*/nullptr);
-        LLVM::AMD::applyAsyncAliasScopes(globalLoadLdsOp);
+        LLVM::AMD::addAsyncCopyAliasScope(globalLoadLdsOp);
         continue;
       }
 
@@ -738,7 +738,7 @@ struct AsyncCopyGlobalToLocalOpConversion
       auto globalLoadLdsOp = rewriter.create<ROCDL::GlobalLoadLDSOp>(
           loc, srcPtr, coalescedShmemAddr[i], vecBytesVal,
           /*offset=*/b.i32_val(0), cacheModifiers, nullptr, nullptr, nullptr);
-      LLVM::AMD::applyAsyncAliasScopes(globalLoadLdsOp);
+      LLVM::AMD::addAsyncCopyAliasScope(globalLoadLdsOp);
 
       rewriter.create<LLVM::BrOp>(loc, afterLoad);
       rewriter.setInsertionPointToStart(afterLoad);

@@ -113,9 +113,9 @@ bool isChainDotTail(mlir::triton::DotOpInterface dotOp);
 // implicit waits by marking the ops to not alias. All AsyncCopies will be
 // placed in the same alias scope. Manual synchronized LocalLoadOps are marked
 // to not alias with the scope of AsyncCopies
-void applyLocalLoadAliasScopes(triton::gpu::LocalLoadOp localLoadOp,
-                               AliasAnalysisOpInterface llLoadOp);
-void applyAsyncLoadAliasScope(AliasAnalysisOpInterface llLoadDirectToLdsOp);
+void addLocalLoadNoAliasScope(triton::gpu::LocalLoadOp localLoadOp,
+                              AliasAnalysisOpInterface llLoadOp);
+void addAsyncCopyAliasScope(AliasAnalysisOpInterface llLoadDirectToLdsOp);
 
 } // namespace mlir::LLVM::AMD
 
