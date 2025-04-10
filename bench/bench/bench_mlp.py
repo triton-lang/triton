@@ -95,6 +95,7 @@ def bench_mlp(batch, dim1, dim2, n_expts_tot, n_expts_act, x_dtype, w_dtype,
 
     # -- analyze --
     gf, inclusive_metrics, exclusive_metrics, device_info = viewer.read(fpath)
+    gf = viewer.filter_frames(gf, include="matmul")
     summary = gf.dataframe.iloc[0].to_dict()
     tot_bytes = summary["bytes (inc)"]
     tot_flops = sum(summary.get(f"flops{w} (inc)", 0) for w in [8, 16])
