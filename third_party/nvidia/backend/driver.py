@@ -9,7 +9,7 @@ import triton
 from pathlib import Path
 from triton.runtime.build import _build
 from triton.runtime.cache import get_cache_manager
-from triton.runtime import _allocation
+from triton.runtime import _allocation, config
 from triton.backends.compiler import GPUTarget
 from triton.backends.driver import GPUDriver
 
@@ -23,8 +23,7 @@ libraries = ['cuda']
 
 @functools.lru_cache()
 def libcuda_dirs():
-    env_libcuda_path = os.getenv("TRITON_LIBCUDA_PATH")
-    if env_libcuda_path:
+    if env_libcuda_path := config.nvidia.libcuda_path:
         return [env_libcuda_path]
 
     libs = subprocess.check_output(["/sbin/ldconfig", "-p"]).decode()

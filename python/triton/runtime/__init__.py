@@ -3,11 +3,13 @@ from .cache import RedisRemoteCacheBackend, RemoteCacheBackend
 from .driver import driver
 from .jit import JITFunction, KernelInterface, MockTensor, TensorWrapper, reinterpret
 from .errors import OutOfResources, InterpreterError
+from ._config import config
 
 __all__ = [
     "autotune",
     "Autotuner",
     "Config",
+    "config",
     "driver",
     "Heuristics",
     "heuristics",
