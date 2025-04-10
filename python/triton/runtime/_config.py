@@ -16,24 +16,30 @@ if TYPE_CHECKING:
 
 
 @overload
-def _get_str(env_var: str) -> str | None:
+def _get_str(key: str) -> str | None:
     ...
 
 @overload
-def _get_str(env_var: str, default: None) -> str | None:
+def _get_str(key: str, default: None) -> str | None:
     ...
 
 @overload
-def _get_str(env_var: str, default: str) -> str:
+def _get_str(key: str, default: str) -> str:
     ...
 
-def _get_str(env_var: str, default: str | None = None) -> str | None:
-    res = os.getenv(env_var, default)
+def _get_str(key: str, default: str | None = None) -> str | None:
+    res = os.getenv(key, default)
     return res if not res else res.strip()
 
-def _get_bool(env_var: str, default: bool = False) -> bool:
-    return _get_str(env_var, "1" if default else "0").lower() in ("1", "true", "yes", "on", "y")
+def _get_bool(key: str, default: bool = False) -> bool:
+    return _get_str(key, "1" if default else "0").lower() in ("1", "true", "yes", "on", "y")
 
+def _get_int(key: str, default: int = 0) -> int:
+    val = _get_str(key, str(default))
+    try:
+        return int(val)
+    except ValueError as exc:
+        raise RuntimeError(f"Unable to use {key}={val}: expected int") from exc
 
 class _propogated_str:
     """
@@ -86,20 +92,20 @@ def _get_str_set(*env_vars: str) -> set[str]:
     return { val for key in env_vars if (val := _get_str(key)) }
 
 
-def _load_class_from_env(env_var: str, type: Type[Any]) -> Type[Any] | None:
-    cls_module_str = _get_str(env_var)
+def _load_class_from_env(key: str, type: Type[Any]) -> Type[Any] | None:
+    cls_module_str = _get_str(key)
     if not cls_module_str:
         return None
 
     comps = cls_module_str.split(":", 1)
     if len(comps) != 2:
-        raise RuntimeError(f"Unable to read {env_var}: '{cls_module_str}' isn't of the form MODULE:CLASS")
+        raise RuntimeError(f"Unable to read {key}: '{cls_module_str}' isn't of the form MODULE:CLASS")
 
     module = importlib.import_module(comps[0])
     cls = getattr(module, comps[1])
 
     if not issubclass(cls, type):
-        raise RuntimeError(f"Unable to use '{cls_module_str}' from {env_var}: not a subclass of {type.__name__}")
+        raise RuntimeError(f"Unable to use '{cls_module_str}' from {key}: not a subclass of {type.__name__}")
 
     return cls
 
@@ -120,11 +126,17 @@ class _NvidiaTool:
 
 def _get_nvidia_tool(binary: str) -> _NvidiaTool:
     binary += sysconfig.get_config_var("EXE")
-    # triton module root
-    base_dir = os.path.dirname(os.path.dirname(__file__))
+    # nvidia backend root
     paths = [
         _get_str(f"TRITON_{binary.upper()}_PATH"),
-        os.path.join(base_dir, "third_party", "cuda", "bin", binary),
+        os.path.join(
+            os.path.dirname(os.path.dirname(__file__)),
+            "third_party",
+            "nvidia",
+            "backend",
+            "bin",
+            binary,
+        )
     ]
     for path in paths:
         if not path or not os.access(path, os.X_OK):
@@ -154,7 +166,7 @@ class _BuildConfig:
 class _RedisConfig:
     key_format: str = _get_str("TRITON_REDIS_KEY_FORMAT", "triton:{key}:{filename}")
     host: str = _get_str("TRITON_REDIS_HOST", "localhost")
-    port: int = int(_get_str("TRITON_REDIS_PORT", "6379"))
+    port: int = _get_int("TRITON_REDIS_PORT", 6379)
 
 
 @dataclass
@@ -225,7 +237,7 @@ class JitHook(Protocol):
         compile: JitHookCompileInfo,
         is_manual_warmup: bool,
         already_compiled: bool
-    ) -> bool:
+    ) -> bool | None:
         ...
 
 
@@ -238,7 +250,10 @@ class _RuntimeConfig:
     launch_enter_hook: LaunchHook | None = None
     launch_exit_hook: LaunchHook | None = None
 
+    # Hook for inspecting compiled functions and modules
     jit_cache_hook: JitHook | None = None
+    # Hook to signal that a kernel is done compiling and inspect compiled function.
+    # jit_cache_hook will always be called before compilation and jit_post_compile_hook after.
     jit_post_compile_hook: JitHook | None = None
 
 
@@ -255,8 +270,8 @@ class _NvidiaConfig:
     ptxas: _NvidiaTool = _get_nvidia_tool("ptxas")
 
     dump_nvptx: bool = _get_bool("NVPTX_ENABLE_DUMP")
-    disable_ptx_opt: bool = _get_bool("DISABLE_PTXAS_OPT")
-    mock_ptx_version: bool = _get_bool("TRITON_MOCK_PTX_VERSION")
+    disable_ptxas_opt: bool = _get_bool("DISABLE_PTXAS_OPT")
+    mock_ptx_version: str | None = _get_str("TRITON_MOCK_PTX_VERSION")
 
     libdevice_path: str | None = _get_str("TRITON_LIBDEVICE_PATH")
     libcuda_path: str | None = _get_str("TRITON_LIBCUDA_PATH")
@@ -273,8 +288,8 @@ class _AMDConfig:
     use_block_pingpong: str | None = _get_str("TRITON_HIP_USE_BLOCK_PINGPONG")
     use_in_thread_transpose: str | None = _get_str("TRITON_HIP_USE_IN_THREAD_TRANSPOSE")
 
-    global_prefetch: bool = _get_bool("TRITON_HIP_GLOBAL_PREFETCH")
-    local_prefetch: bool = _get_bool("TRITON_HIP_GLOBAL_PREFETCH")
+    global_prefetch: int = _get_int("TRITON_HIP_GLOBAL_PREFETCH")
+    local_prefetch: int = _get_int("TRITON_HIP_GLOBAL_PREFETCH")
     use_async_copy: bool = _get_bool("TRITON_HIP_GLOBAL_PREFETCH")
 
 
