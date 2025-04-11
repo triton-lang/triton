@@ -7,7 +7,7 @@ import subprocess
 import sysconfig
 
 from dataclasses import dataclass
-from typing import cast, Callable, Generic, Protocol, Type, TypeVar, TypedDict, TYPE_CHECKING
+from typing import cast, Callable, Generic, Optional, Protocol, Type, TypeVar, TypedDict, TYPE_CHECKING
 
 if TYPE_CHECKING:
     from .runtime.cache import CacheManager, RemoteCacheBackend
@@ -22,7 +22,7 @@ class Unset:
 _UNSET = Unset()
 
 
-def getenv(key: str) -> str | None:
+def getenv(key: str) -> Optional[str]:
     res = os.getenv(key)
     return res.strip() if res is not None else res
 
@@ -35,15 +35,15 @@ class env_str:
 
     def __init__(self, key: str) -> None:
         self.key = key
-        self.value: str | Unset | None = _UNSET
+        self.value: Optional[str | Unset] = _UNSET
 
-    def __get__(self, obj: object | None, objtype: Type[object] | None = None) -> str | None:
+    def __get__(self, obj: Optional[object], objtype: Optional[Type[object]] = None) -> Optional[str]:
         if isinstance(self.value, Unset):
             return getenv(self.key)
         else:
             return self.value
 
-    def __set__(self, obj: object, value: str | None) -> None:
+    def __set__(self, obj: object, value: Optional[str]) -> None:
         self.value = value
         if value is None:
             os.unsetenv(self.key)
@@ -57,7 +57,7 @@ class env_str_set:
         self.keys = tuple(keys)
         self.value: set[str] | Unset = _UNSET
 
-    def __get__(self, obj: object | None, objtype: Type[object] | None = None) -> set[str]:
+    def __get__(self, obj: Optional[object], objtype: Optional[Type[object]] = None) -> set[str]:
         if isinstance(self.value, Unset):
             return {val for key in self.keys if (val := getenv(key))}
         else:
@@ -74,7 +74,7 @@ class env_strd(env_str):
         super().__init__(key)
         self.default: Callable[[], str] = (lambda: default) if isinstance(default, str) else default
 
-    def __get__(self, obj: object | None, objtype: Type[object] | None = None) -> str:
+    def __get__(self, obj: Optional[object], objtype: Optional[Type[object]] = None) -> str:
         res = super().__get__(obj, objtype)
         return self.default() if res is None else res
 
@@ -85,7 +85,7 @@ class env_bool:
         # Composition because function signatures change below
         self._internal = env_strd(key, "1" if default else "0")
 
-    def __get__(self, obj: object | None, objtype: Type[object] | None = None) -> bool:
+    def __get__(self, obj: Optional[object], objtype: Optional[Type[object]] = None) -> bool:
         return self._internal.__get__(obj, objtype).lower() in ("1", "true", "yes", "on", "y")
 
     def __set__(self, obj: object, value: bool) -> None:
@@ -98,7 +98,7 @@ class env_int:
         # Composition because function signatures change below
         self._internal = env_strd(key, str(default))
 
-    def __get__(self, obj: object | None, objtype: Type[object] | None = None) -> int:
+    def __get__(self, obj: Optional[object], objtype: Optional[Type[object]] = None) -> int:
         val = self._internal.__get__(obj, objtype)
         try:
             return int(val)
@@ -118,9 +118,9 @@ class env_class(Generic[T]):
         self.key = key
         # We can't pass the type directly to avoid import cycles
         self.type = type
-        self.value: Type[T] | Unset | None = _UNSET
+        self.value: Optional[Type[T] | Unset] = _UNSET
 
-    def __get__(self, obj: object | None, objtype: Type[object] | None = None) -> Type[T] | None:
+    def __get__(self, obj: Optional[object], objtype: Optional[Type[object]] = None) -> Optional[Type[T]]:
         if isinstance(self.value, Unset):
             cls_module_str = getenv(self.key)
             if cls_module_str is None:
@@ -138,7 +138,7 @@ class env_class(Generic[T]):
         else:
             return self.value
 
-    def __set__(self, obj: object, value: Type[T] | None) -> None:
+    def __set__(self, obj: object, value: Optional[Type[T]]) -> None:
         self.value = value
 
 
@@ -235,7 +235,7 @@ class LaunchHook(Protocol):
 KernelAttr = list[str | int]
 
 
-class JitHookCompileInfo(TypedDict):
+class JITHookCompileInfo(TypedDict):
     key: str
     signature: dict[KernelParam, str]
     device: int
@@ -251,10 +251,10 @@ class JitHookCompileInfo(TypedDict):
     is_warmup: bool
 
 
-class JitHook(Protocol):
+class JITHook(Protocol):
 
-    def __call__(self, *, key: str, repr: str, fn: JitFunctionInfo, compile: JitHookCompileInfo, is_manual_warmup: bool,
-                 already_compiled: bool) -> bool | None:
+    def __call__(self, *, key: str, repr: str, fn: JitFunctionInfo, compile: JITHookCompileInfo, is_manual_warmup: bool,
+                 already_compiled: bool) -> Optional[bool]:
         ...
 
 
@@ -263,14 +263,14 @@ class runtime:
     debug: env_bool = env_bool("TRITON_DEBUG")
     override_arch: env_str = env_str("TRITON_OVERRIDE_ARCH")
 
-    launch_enter_hook: LaunchHook | None = None
-    launch_exit_hook: LaunchHook | None = None
+    launch_enter_hook: Optional[LaunchHook] = None
+    launch_exit_hook: Optional[LaunchHook] = None
 
     # Hook for inspecting compiled functions and modules
-    jit_cache_hook: JitHook | None = None
+    jit_cache_hook: Optional[JITHook] = None
     # Hook to signal that a kernel is done compiling and inspect compiled function.
     # jit_cache_hook will always be called before compilation and jit_post_compile_hook after.
-    jit_post_compile_hook: JitHook | None = None
+    jit_post_compile_hook: Optional[JITHook] = None
 
 
 class language:
