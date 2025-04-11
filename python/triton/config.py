@@ -142,48 +142,64 @@ class env_class(Generic[T]):
         self.value = value
 
 
+@dataclass
+class NvidiaTool:
+    path: str
+    version: str
+
+    @staticmethod
+    def from_path(path: str) -> NvidiaTool | None:
+        try:
+            result = subprocess.check_output([path, "--version"], stderr=subprocess.STDOUT)
+            if result is None:
+                return None
+            version = re.search(r".*release (\d+\.\d+).*", result.decode("utf-8"), flags=re.MULTILINE)
+            if version is None:
+                return None
+            return NvidiaTool(path, version.group(1))
+        except subprocess.CalledProcessError:
+            return None
+
+
+class env_nvidia_tool:
+
+    def __init__(self, binary: str) -> None:
+        binary += sysconfig.get_config_var("EXE")
+        self.binary = binary
+        self._internal = env_str(f"TRITON_{binary.upper()}_PATH")
+
+    def __get__(self, obj: Optional[object], objtype: Optional[Type[object]] = None) -> NvidiaTool:
+        paths = [
+            self._internal.__get__(obj, objtype),
+            os.path.join(
+                os.path.dirname(__file__),
+                "backends",
+                "nvidia",
+                "bin",
+                self.binary,
+            )
+        ]
+        for path in paths:
+            if not path or not os.access(path, os.X_OK):
+                continue
+            if tool := NvidiaTool.from_path(path):
+                return tool
+
+        raise RuntimeError(f"Cannot find {self.binary}")
+
+    def __set__(self, obj: object, value: str) -> None:
+        tool = NvidiaTool.from_path(value)
+        if not tool:
+            raise RuntimeError(f"Unable to use {value} for {self.binary}: can't parse output of `{value} --version`")
+        self._internal.__set__(obj, value)
+
+
 def get_triton_dir(dirname: str) -> str:
     return os.path.join(
         getenv("TRITON_HOME") or os.path.expanduser("~/"),
         ".triton",
         dirname,
     )
-
-
-@dataclass
-class NvidiaTool:
-    path: str
-    version: str
-
-
-def get_nvidia_tool(binary: str) -> NvidiaTool:
-    binary += sysconfig.get_config_var("EXE")
-    # nvidia backend root
-    paths = [
-        getenv(f"TRITON_{binary.upper()}_PATH"),
-        os.path.join(
-            os.path.dirname(__file__),
-            "backends",
-            "nvidia",
-            "bin",
-            binary,
-        )
-    ]
-    for path in paths:
-        if not path or not os.access(path, os.X_OK):
-            continue
-        try:
-            result = subprocess.check_output([path, "--version"], stderr=subprocess.STDOUT)
-            if result is None:
-                continue
-            version = re.search(r".*release (\d+\.\d+).*", result.decode("utf-8"), flags=re.MULTILINE)
-            if version is None:
-                continue
-            return NvidiaTool(path, version.group(1))
-        except subprocess.CalledProcessError:
-            pass
-
-    raise RuntimeError(f"Cannot find {binary}")
 
 
 class build:
@@ -279,9 +295,9 @@ class language:
 
 
 class nvidia:
-    cuobjdump: NvidiaTool = get_nvidia_tool("cuobjdump")  #field(default_factory=lambda: _get_nvidia_tool("cuobjdump"))
-    nvdisasm: NvidiaTool = get_nvidia_tool("nvdisasm")  #field(default_factory=lambda: _get_nvidia_tool("nvdisasm"))
-    ptxas: NvidiaTool = get_nvidia_tool("ptxas")  #field(default_factory=lambda: _get_nvidia_tool("ptxas"))
+    cuobjdump: env_nvidia_tool = env_nvidia_tool("cuobjdump")
+    nvdisasm: env_nvidia_tool = env_nvidia_tool("nvdisasm")
+    ptxas: env_nvidia_tool = env_nvidia_tool("ptxas")
 
     dump_nvptx: env_bool = env_bool("NVPTX_ENABLE_DUMP")
     disable_ptxas_opt: env_bool = env_bool("DISABLE_PTXAS_OPT")
