@@ -401,14 +401,17 @@ scf::ForOp WGMMAPrefetcher::createNewForOp() {
         }
         // prefetchWidth + 1 is to prevent the subtile from adding
         // extra imprecise accumulator, See WGMMA.cpp
-        uint32_t NumImpreciseAcc = (RemainNumImpreciseAcc > prefetchWidth) ? prefetchWidth + 1: RemainNumImpreciseAcc;
+        uint32_t NumImpreciseAcc = (RemainNumImpreciseAcc > prefetchWidth)
+                                       ? prefetchWidth + 1
+                                       : RemainNumImpreciseAcc;
         // Deduct the actual consumed imprecise acc
-        RemainNumImpreciseAcc -= (RemainNumImpreciseAcc > prefetchWidth) ? prefetchWidth: RemainNumImpreciseAcc;
+        RemainNumImpreciseAcc -= (RemainNumImpreciseAcc > prefetchWidth)
+                                     ? prefetchWidth
+                                     : RemainNumImpreciseAcc;
 
         auto newDotOp = builder.create<nvidia_gpu::WarpGroupDotOp>(
             newOp->getLoc(), dot.getType(), PrefetchedA[i], bSubtile, OpC, UseC,
-            dot.getInputPrecision(), NumImpreciseAcc,
-            dot.getIsAsync());
+            dot.getInputPrecision(), NumImpreciseAcc, dot.getIsAsync());
         prevDot = newDotOp;
       }
       newOp = (Operation *)prevDot;
