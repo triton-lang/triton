@@ -2,7 +2,6 @@ import argparse
 from collections import namedtuple
 import json
 import pandas as pd
-import specs
 
 try:
     import hatchet as ht
@@ -11,6 +10,7 @@ except ImportError:
     raise ImportError("Failed to import hatchet. `pip install llnl-hatchet` to get the correct version.")
 import numpy as np
 from triton.profiler.hook import COMPUTE_METADATA_SCOPE_NAME, TritonHook
+from triton.profiler import specs
 
 
 def match_available_metrics(metrics, inclusive_metrics, exclusive_metrics):
