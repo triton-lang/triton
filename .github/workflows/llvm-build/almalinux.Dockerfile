@@ -1,5 +1,6 @@
 FROM almalinux:8
 ARG llvm_dir=llvm-project
+ARG short_llvm_commit_hash=git
 # Add the cache artifacts and the LLVM source tree to the container
 ADD sccache /sccache
 ADD "${llvm_dir}" /source/llvm-project
@@ -31,6 +32,7 @@ RUN cmake -GNinja -Bbuild \
   -DLLVM_ENABLE_ASSERTIONS=ON \
   -DMLIR_ENABLE_BINDINGS_PYTHON=ON \
   -DLLVM_ENABLE_PROJECTS="mlir;lld" \
+  -DLLVM_VERSION_SUFFIX="${short_llvm_commit_hash}" \
   -DLLVM_ENABLE_TERMINFO=OFF \
   -DLLVM_INSTALL_UTILS=ON \
   -DLLVM_TARGETS_TO_BUILD="host;NVPTX;AMDGPU" \
