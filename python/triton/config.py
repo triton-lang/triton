@@ -7,26 +7,32 @@ import subprocess
 import sysconfig
 
 from dataclasses import dataclass
-from typing import cast, overload, Any, Callable, Generic, Protocol, Type, TypeVar, TypedDict, TYPE_CHECKING
+from typing import cast, Callable, Generic, Protocol, Type, TypeVar, TypedDict, TYPE_CHECKING
 
 if TYPE_CHECKING:
     from .runtime.cache import CacheManager, RemoteCacheBackend
     from .runtime.jit import JitFunctionInfo, KernelParam
     from .compiler.compiler import LazyDict
 
+
 class Unset:
     pass
 
+
 _UNSET = Unset()
+
 
 def getenv(key: str) -> str | None:
     res = os.getenv(key)
     return res.strip() if res is not None else res
 
+
 def get_str_set(*env_vars: str) -> set[str]:
     return {val for key in env_vars if (val := getenv(key))}
 
+
 class env_str:
+
     def __init__(self, key: str) -> None:
         self.key = key
         self.value: str | Unset | None = _UNSET
@@ -44,26 +50,26 @@ class env_str:
         else:
             os.putenv(self.key, value)
 
+
 class env_str_set:
+
     def __init__(self, *keys: str) -> None:
         self.keys = tuple(keys)
         self.value: set[str] | Unset = _UNSET
 
     def __get__(self, obj: object | None, objtype: Type[object] | None = None) -> set[str]:
         if isinstance(self.value, Unset):
-            return {
-                val
-                for key in self.keys
-                if (val := getenv(key))
-            }
+            return {val for key in self.keys if (val := getenv(key))}
         else:
             return self.value
 
     def __set__(self, obj: object, value: set[str]) -> None:
         self.value = value
 
+
 # Separate class so that types are correct (__get__ is not None)
 class env_strd(env_str):
+
     def __init__(self, key: str, default: str | Callable[[], str]) -> None:
         super().__init__(key)
         self.default: Callable[[], str] = (lambda: default) if isinstance(default, str) else default
@@ -74,6 +80,7 @@ class env_strd(env_str):
 
 
 class env_bool:
+
     def __init__(self, key: str, default: bool = False) -> None:
         # Composition because function signatures change below
         self._internal = env_strd(key, "1" if default else "0")
@@ -84,7 +91,9 @@ class env_bool:
     def __set__(self, obj: object, value: bool) -> None:
         self._internal.__set__(obj, "1" if value else "0")
 
+
 class env_int:
+
     def __init__(self, key: str, default: int = 0) -> None:
         # Composition because function signatures change below
         self._internal = env_strd(key, str(default))
@@ -99,9 +108,12 @@ class env_int:
     def __set__(self, obj: object, value: int) -> None:
         self._internal.__set__(obj, str(value))
 
+
 T = TypeVar("T")
 
+
 class env_class(Generic[T]):
+
     def __init__(self, key: str, type: str) -> None:
         self.key = key
         # We can't pass the type directly to avoid import cycles
@@ -128,6 +140,7 @@ class env_class(Generic[T]):
 
     def __set__(self, obj: object, value: Type[T] | None) -> None:
         self.value = value
+
 
 def get_triton_dir(dirname: str) -> str:
     return os.path.join(
@@ -212,8 +225,10 @@ class autotuning:
 
 
 class LaunchHook(Protocol):
+
     def __call__(self, metadata: LazyDict) -> None:
         ...
+
 
 # This is of the form [attr_name, attr_val]
 # TODO: Use tuple instead of list for better typing.
@@ -264,9 +279,9 @@ class language:
 
 
 class nvidia:
-    cuobjdump: NvidiaTool = get_nvidia_tool("cuobjdump")#field(default_factory=lambda: _get_nvidia_tool("cuobjdump"))
-    nvdisasm: NvidiaTool = get_nvidia_tool("nvdisasm")#field(default_factory=lambda: _get_nvidia_tool("nvdisasm"))
-    ptxas: NvidiaTool = get_nvidia_tool("ptxas")#field(default_factory=lambda: _get_nvidia_tool("ptxas"))
+    cuobjdump: NvidiaTool = get_nvidia_tool("cuobjdump")  #field(default_factory=lambda: _get_nvidia_tool("cuobjdump"))
+    nvdisasm: NvidiaTool = get_nvidia_tool("nvdisasm")  #field(default_factory=lambda: _get_nvidia_tool("nvdisasm"))
+    ptxas: NvidiaTool = get_nvidia_tool("ptxas")  #field(default_factory=lambda: _get_nvidia_tool("ptxas"))
 
     dump_nvptx: env_bool = env_bool("NVPTX_ENABLE_DUMP")
     disable_ptxas_opt: env_bool = env_bool("DISABLE_PTXAS_OPT")
