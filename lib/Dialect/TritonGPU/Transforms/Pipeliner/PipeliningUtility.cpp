@@ -112,7 +112,6 @@ Operation *mlir::triton::predicateOp(RewriterBase &rewriter, Operation *op,
   }
   if (auto commitOp = dyn_cast<ttng::TCGen5CommitOp>(op)) {
     rewriter.setInsertionPoint(commitOp);
-    auto currPred = commitOp.getPred();
     Value mask = pred;
     if (Value currentPred = commitOp.getPred()) {
       mask = getPredMask(rewriter, currentPred.getType(), currentPred, pred);
