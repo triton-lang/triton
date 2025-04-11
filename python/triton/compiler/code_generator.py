@@ -7,13 +7,13 @@ import itertools
 from types import ModuleType
 from typing import Any, Callable, Dict, Optional, Tuple, Type, Union, Iterable, List
 
-from .. import language
+from .. import config, language
 from .._C.libtriton import ir
 from ..language import constexpr, semantic, str_to_ty, tensor
 from ..language.core import _unwrap_if_constexpr, base_value, base_type
 from ..runtime.jit import get_jit_fn_file_line
 # ideally we wouldn't need any runtime component
-from ..runtime import config, JITFunction
+from ..runtime import JITFunction
 from .._utils import find_paths_if, get_iterable_path, set_iterable_path
 
 from .errors import (CompilationError, CompileTimeAssertionFailure, UnsupportedLanguageConstruct)

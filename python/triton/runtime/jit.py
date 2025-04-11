@@ -11,11 +11,12 @@ from functools import cached_property
 from typing import Callable, Generic, Iterable, Optional, TypeVar, Union, overload, Dict, Any, Tuple
 
 from triton.tools.tensor_descriptor import TensorDescriptor
-from ..runtime.driver import driver
 from types import ModuleType
+from .. import config
+from ..runtime.driver import driver
+from ..tools.experimental_descriptor import TensorDescriptor
 from .._utils import find_paths_if, get_iterable_path
 
-from . import config
 
 TRITON_MODULE = __name__[:-len(".runtime.jit")]
 
@@ -504,8 +505,10 @@ class JITFunction(KernelInterface[T]):
         options,
         configs,
         is_warmup,
-        before,
     ) -> bool | None:
+        if not hook:
+            return None
+
         name = self.fn.__name__
         module = self.fn.__module__
         arg_reprs = ", ".join([f"{param.name}: {ty}" for param, ty in zip(self.params, key[1])])

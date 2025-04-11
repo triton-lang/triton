@@ -3,7 +3,7 @@ import os
 import shutil
 import subprocess
 
-from . import config
+from .. import config
 
 
 def _build(name, src, srcdir, library_dirs, include_dirs, libraries):

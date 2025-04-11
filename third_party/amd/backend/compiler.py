@@ -1,6 +1,6 @@
 from triton.backends.compiler import BaseBackend, GPUTarget
 from triton._C.libtriton import ir, passes, llvm, amd
-from triton.runtime import config
+from triton import config
 from dataclasses import dataclass
 from typing import Any, Dict, Tuple
 from types import ModuleType

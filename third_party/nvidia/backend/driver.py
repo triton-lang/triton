@@ -7,9 +7,10 @@ import subprocess
 import tempfile
 import triton
 from pathlib import Path
+from triton import config
 from triton.runtime.build import _build
 from triton.runtime.cache import get_cache_manager
-from triton.runtime import _allocation, config
+from triton.runtime import _allocation
 from triton.backends.compiler import GPUTarget
 from triton.backends.driver import GPUDriver
 
