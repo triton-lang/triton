@@ -265,7 +265,8 @@ py::list getTensorDescMetadata(ModuleOp &mod) {
     metadata["swizzle"] = *swizzle;
     metadata["elem_size"] = descTy.getBlockType().getElementTypeBitWidth() / 8;
     metadata["elem_type"] = *elemType;
-    metadata["block_size"] = std::vector<int>(blockSize.begin(), blockSize.end());
+    metadata["block_size"] =
+        std::vector<int>(blockSize.begin(), blockSize.end());
     metadata["fp4_padded"] = mmaEncoding && mmaEncoding.getFp4Padded();
     result.append(std::move(metadata));
   }

@@ -277,25 +277,26 @@ static PyObject *setPrintfFifoSize(PyObject *self, PyObject *args) {
   return Py_None;
 }
 
-static PyObject* fillTMADescriptor(PyObject *self, PyObject *args) {
+static PyObject *fillTMADescriptor(PyObject *self, PyObject *args) {
   unsigned long long desc_address;
   unsigned long long global_address;
   int swizzle;
   int elemSize;
   int elemType;
-  PyObject* blockSize;
-  PyObject* shape;
-  PyObject* strides;
+  PyObject *blockSize;
+  PyObject *shape;
+  PyObject *strides;
 
-  if (!PyArg_ParseTuple(args, "KKiiiOOO", &desc_address, &global_address, &swizzle, &elemSize, &elemType,
-                        &blockSize, &shape, &strides)) {
+  if (!PyArg_ParseTuple(args, "KKiiiOOO", &desc_address, &global_address,
+                        &swizzle, &elemSize, &elemType, &blockSize, &shape,
+                        &strides)) {
     return NULL;
   }
 
-  PyObject* blockSizeFast = NULL;
-  PyObject* shapeFast = NULL;
-  PyObject* stridesFast = NULL;
-  PyObject* result = NULL;
+  PyObject *blockSizeFast = NULL;
+  PyObject *shapeFast = NULL;
+  PyObject *stridesFast = NULL;
+  PyObject *result = NULL;
 
   uint32_t blockSizeInt[5];
   uint64_t shapeInt[5];
@@ -303,14 +304,14 @@ static PyObject* fillTMADescriptor(PyObject *self, PyObject *args) {
 
   blockSizeFast = PySequence_Fast(blockSize, "blockSize must be a sequence");
   if (!blockSizeFast)
-      goto cleanup;
+    goto cleanup;
   int rank = PySequence_Fast_GET_SIZE(blockSizeFast);
 
   for (int i = 0; i < rank; ++i) {
-    PyObject* item = PySequence_Fast_GET_ITEM(blockSizeFast, i);
+    PyObject *item = PySequence_Fast_GET_ITEM(blockSizeFast, i);
     if (!PyLong_Check(item)) {
-        PyErr_SetString(PyExc_TypeError, "block size must be an int");
-        goto cleanup;
+      PyErr_SetString(PyExc_TypeError, "block size must be an int");
+      goto cleanup;
     }
     blockSizeInt[rank - i - 1] = PyLong_AsLongLong(item);
   }
@@ -324,10 +325,10 @@ static PyObject* fillTMADescriptor(PyObject *self, PyObject *args) {
     goto cleanup;
   }
   for (int i = 0; i < rank; ++i) {
-    PyObject* item = PySequence_Fast_GET_ITEM(shapeFast, i);
+    PyObject *item = PySequence_Fast_GET_ITEM(shapeFast, i);
     if (!PyLong_Check(item)) {
-        PyErr_SetString(PyExc_TypeError, "shape must be an int");
-        goto cleanup;
+      PyErr_SetString(PyExc_TypeError, "shape must be an int");
+      goto cleanup;
     }
     shapeInt[rank - i - 1] = PyLong_AsLong(item);
   }
@@ -341,26 +342,30 @@ static PyObject* fillTMADescriptor(PyObject *self, PyObject *args) {
     goto cleanup;
   }
   for (int i = 0; i + 1 < rank; ++i) {
-    PyObject* item = PySequence_Fast_GET_ITEM(stridesFast, i);
+    PyObject *item = PySequence_Fast_GET_ITEM(stridesFast, i);
     if (!PyLong_Check(item)) {
-        PyErr_SetString(PyExc_TypeError, "shape must be an int");
-        goto cleanup;
+      PyErr_SetString(PyExc_TypeError, "shape must be an int");
+      goto cleanup;
     }
     stridesLL[rank - i - 2] = elemSize * PyLong_AsLongLong(item);
   }
-  stridesLL[rank - 1] = shapeInt[rank - 1] * (rank == 1 ? elemSize : stridesLL[rank - 2]);
-  Py_DECREF(blockSizeFast); blockSizeFast = NULL;
-  Py_DECREF(shapeFast); shapeFast = NULL;
-  Py_DECREF(stridesFast); stridesFast = NULL;
+  stridesLL[rank - 1] =
+      shapeInt[rank - 1] * (rank == 1 ? elemSize : stridesLL[rank - 2]);
+  Py_DECREF(blockSizeFast);
+  blockSizeFast = NULL;
+  Py_DECREF(shapeFast);
+  shapeFast = NULL;
+  Py_DECREF(stridesFast);
+  stridesFast = NULL;
 
   uint32_t elementStrides[5] = {1, 1, 1, 1, 1};
   static cuTensorMapEncodeTiled_t cuTensorMapEncodeTiled = NULL;
   INITIALIZE_FUNCTION_POINTER_IF_NULL(cuTensorMapEncodeTiled,
                                       getCuTensorMapEncodeTiledHandle);
   CUDA_CHECK_AND_RETURN_NULL(cuTensorMapEncodeTiled(
-      (CUtensorMap *)desc_address, elemType, rank, (void *)global_address, shapeInt,
-      stridesLL, blockSizeInt, elementStrides, CU_TENSOR_MAP_INTERLEAVE_NONE,
-      swizzle, CU_TENSOR_MAP_L2_PROMOTION_NONE,
+      (CUtensorMap *)desc_address, elemType, rank, (void *)global_address,
+      shapeInt, stridesLL, blockSizeInt, elementStrides,
+      CU_TENSOR_MAP_INTERLEAVE_NONE, swizzle, CU_TENSOR_MAP_L2_PROMOTION_NONE,
       CU_TENSOR_MAP_FLOAT_OOB_FILL_NONE));
   Py_RETURN_NONE;
 

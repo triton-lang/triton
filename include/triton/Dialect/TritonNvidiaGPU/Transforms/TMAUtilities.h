@@ -184,19 +184,23 @@ inline std::optional<int> getTMAElementType(Operation *op, TensorDescType ty) {
   bool fp4Padded = mmaEncoding && mmaEncoding.getFp4Padded();
 
   if (fp4Padded)
-    return 14;  // .b4x16_p64
+    return 14; // .b4x16_p64
 
   auto elemSize = ty.getBlockType().getElementTypeBitWidth() / 8;
   switch (elemSize) {
-    case 1: return 0;
-    case 2: return 1;
-    case 4: return 2;
-    default: break;
+  case 1:
+    return 0;
+  case 2:
+    return 1;
+  case 4:
+    return 2;
+  default:
+    break;
   }
   if (op) {
     op->emitError()
-          << "Tensor descriptor element type must have size 1, 2, or 4 but got "
-          << elemSize;
+        << "Tensor descriptor element type must have size 1, 2, or 4 but got "
+        << elemSize;
   }
   return std::nullopt;
 }
