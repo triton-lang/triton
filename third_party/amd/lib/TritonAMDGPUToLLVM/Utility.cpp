@@ -693,31 +693,36 @@ bool isChainDotTail(tt::DotOpInterface dotOp) {
   return false;
 }
 
+namespace {
 AliasScopeDomainAttr getLoadScopeDomain(MLIRContext *ctx) {
-  return AliasScopeDomainAttr::get(
-      ctx, StringAttr::get(ctx, "AsyncOps"),
-      StringAttr::get(ctx, "Domain to hold scopes for manually syncing "
-                           "AsyncCopies and LocalLoads"));
+  Builder b(ctx);
+  return b.getAttr<AliasScopeDomainAttr>(
+      b.getStringAttr("amdgpu.AsyncOps"),
+      b.getStringAttr(
+          "Domain to hold alias scopes to specify aliasing information between "
+          "AsyncCopyGlobalToLocal, BufferLoadToLocal and LocalLoad ops"));
 }
 
 AliasScopeAttr getAsyncCopyScope(MLIRContext *ctx) {
-  return LLVM::AliasScopeAttr::get(
-      ctx, StringAttr::get(ctx, "AsyncCopies"), getLoadScopeDomain(ctx),
-      StringAttr::get(ctx, "Contains all AsyncCopies"));
+  Builder b(ctx);
+  auto name = b.getStringAttr("amdgpu.AsyncCopies");
+  auto desc = b.getStringAttr(
+      "Scope containing all AsyncCopyGlobalToLocal and BufferLoadToLocal ops");
+  return b.getAttr<LLVM::AliasScopeAttr>(name, getLoadScopeDomain(ctx), desc);
 }
 
 AliasScopeAttr getLoadCopyScope(MLIRContext *ctx) {
-  return LLVM::AliasScopeAttr::get(
-      ctx, StringAttr::get(ctx, "LocalLoads"), getLoadScopeDomain(ctx),
-      StringAttr::get(
-          ctx,
-          "Contains all local loads which load data synced via AsyncWait"));
+  Builder b(ctx);
+  auto name = b.getStringAttr("amdgpu.LocalLoads");
+  auto desc = b.getStringAttr("Scope containing all LocalLoad ops");
+  return b.getAttr<LLVM::AliasScopeAttr>(name, getLoadScopeDomain(ctx), desc);
 }
+} // namespace
 
 void addAsyncCopyAliasScope(AliasAnalysisOpInterface directToLdsOp) {
-  auto ctx = directToLdsOp.getContext();
-  auto aliasScopes = ArrayAttr::get(ctx, getAsyncCopyScope(ctx));
-  directToLdsOp.setAliasScopes(aliasScopes);
+  auto ctx = directToLdsOp->getContext();
+  Builder b(ctx);
+  directToLdsOp.setAliasScopes(b.getArrayAttr(getAsyncCopyScope(ctx)));
 }
 
 void addLocalLoadNoAliasScope(triton::gpu::LocalLoadOp localLoadOp,

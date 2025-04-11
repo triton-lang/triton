@@ -100,8 +100,8 @@ public:
                                  size_t localStoreOpCount, Type type) const {}
   // Adds alias information to local loads to help llvm interleave with async
   // operations
-  virtual void setAsyncAliasScopes(triton::gpu::LocalLoadOp localLoadOp,
-                                   Operation *llLoadOp) const {};
+  virtual void localLoadOpAnnotation(triton::gpu::LocalLoadOp localLoadOp,
+                                     Operation *llLoadOp) const {}
 
   virtual ~TargetInfoBase() {}
 };

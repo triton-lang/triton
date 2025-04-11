@@ -107,14 +107,27 @@ bool isChainDotHead(mlir::triton::DotOpInterface dotOp);
 // in the same region
 bool isChainDotTail(mlir::triton::DotOpInterface dotOp);
 
-// LLVM is unable to recognize the dependency between AsyncCopy and
-// LocalLoads between warps and generates conservative waits.
-// For LocalLoads consuming an AsyncToken from an AsyncWait we will disable the
-// implicit waits by marking the ops to not alias. All AsyncCopies will be
-// placed in the same alias scope. Manual synchronized LocalLoadOps are marked
-// to not alias with the scope of AsyncCopies
+// LLVM is unable to deduce dependencies across warps and loop iterations for
+// AsyncCopy and LocalLoad and will emit conservative wait counts. In triton the
+// dependency is models via AsyncWait, e.g.
+//   %token1 = ttg.async_copy_global_to_local/amdgpu.buffer_load_to_local
+//   %token2 = ttg.async_wait %token1
+//   %1      = ttg.local_load .. token %token2
+// For such cases AsyncWait will emit the correct wait and the conservative
+// waits are redundant and hindering performance/interleaving.
+// To disable the conservative waits two alias scopes are created:
+//   1) "amdgpu.AsyncCopies" will contain all AsyncCopy ops
+//   2) "amdgpu.LocalLoad" will contain all LocalLoads manually synchronized via
+//      AsyncWait
+// ALl manually synchronized LocalLoads will additionally have "AsyncCopies" as
+// a non alias scope to disable the implicit waits from the LLVM backend
+
+// If localLoadOp has a token from an AsyncWait:
+//  - Attaches "amdgpu.LocalLoad" alias scope to llLoadOp
+//  - Attaches "amdgpu.AsyncCopies" as *non* alias scope to llLoadOp
 void addLocalLoadNoAliasScope(triton::gpu::LocalLoadOp localLoadOp,
                               AliasAnalysisOpInterface llLoadOp);
+// Attaches the "AsyncCopies" alias scope to llLoadDirectToLdsOp
 void addAsyncCopyAliasScope(AliasAnalysisOpInterface llLoadDirectToLdsOp);
 
 } // namespace mlir::LLVM::AMD
