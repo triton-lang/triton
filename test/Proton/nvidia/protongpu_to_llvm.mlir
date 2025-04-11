@@ -48,8 +48,8 @@ module attributes {"ttg.num-warps" = 8 : i32} {
 #shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
 #smem = #ttg.shared_memory
 module attributes {"ttg.num-warps" = 8 : i32} {
-  // CHECK-LABEL: convert_local_segment_setup
-   tt.func @convert_local_segment_setup() -> !proton_gpu.seg {
+  // CHECK-LABEL: convert_smem_segment_setup
+   tt.func @convert_smem_segment_setup() -> !proton_gpu.seg {
     // CHECK-DAG: nvvm.read.ptx.sreg.tid.x
     // CHECK-DAG: %[[WARPID:.*]] = llvm.udiv
     // CHECK-DAG: %[[P1:.*]] = llvm.icmp "eq" %[[WARPID]], %{{.*}}
@@ -148,7 +148,7 @@ module attributes {"ttg.num-warps" = 8 : i32, ttg.profile_scratch_memory_alignme
 #shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
 #smem = #ttg.shared_memory
 module attributes {"ttg.num-warps" = 8 : i32, ttg.profile_scratch_memory_alignment = 128 : i32, ttg.profile_scratch_memory_size = 384 : i32} {
-  // CHECK-LABEL: convert_finalize
+  // CHECK-LABEL: convert_smem_finalize
   // CHECK-DAG: llvm.nvvm.read.ptx.sreg.smid
   // CHECK-DAG: llvm.store
   // CHECK-DAG: llvm.cond_br %{{.*}}, ^bb1, ^bb3
@@ -169,7 +169,7 @@ module attributes {"ttg.num-warps" = 8 : i32, ttg.profile_scratch_memory_alignme
   // CHECK-DAG: llvm.cond_br %[[P2]], ^bb2(%[[I_NEW]] : i32), ^bb3
   // CHECK-DAG: ^bb3:
   // CHECK-DAG: llvm.return
-  llvm.func @convert_finalize(%arg: !llvm.ptr<1>) attributes {noinline = false, nvvm.kernel = 1 : ui1} {
+  llvm.func @convert_smem_finalize(%arg: !llvm.ptr<1>) attributes {noinline = false, nvvm.kernel = 1 : ui1} {
     %0 = ttg.local_alloc : () -> !ttg.memdesc<512xi32, #shared, #smem, mutable>
     %1 = proton_gpu.global_scratch_alloc {alignment = 128 : i32, nbytes = 384 : i32, offset = 0 : i32} : !tt.ptr<i32>
     %2 = proton_gpu.init_buffer_index : <i32, 5>

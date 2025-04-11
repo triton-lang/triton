@@ -126,11 +126,6 @@ public:
       }
     }
 
-    int sharedMemUsed = 0;
-    if (mod->hasAttr("ttg.shared"))
-      sharedMemUsed =
-          mod->getAttrOfType<mlir::IntegerAttr>("ttg.shared").getInt();
-
     const int bytesPerEntry = proton::gpu::getBytesPerClockEntry();
     const int wordsPerEntry = bytesPerEntry / 4; // 1 word = 4 bytes
     const int circularHeaderSize =
@@ -155,24 +150,33 @@ public:
     // choosing stack over shared is most likely because they are already using
     // a large amount of shared memory and want to limit an additional usage by
     // the intra-kernel profiler
+    int sharedMemUsed = 0;
     int segmentByteSize = 0;
 
     if (!hasStackAllocOp) {
       // For the shared memory buffer we take any available shared memory left
       // to allocate the circular
 
+      if (mod->hasAttr("ttg.shared"))
+        sharedMemUsed =
+            mod->getAttrOfType<mlir::IntegerAttr>("ttg.shared").getInt();
+
       segmentByteSize =
           llvm::NextPowerOf2(
               (maxSharedMem - llvm::alignTo(sharedMemUsed, bytesPerEntry)) /
               segmentNum) /
           2;
+    } else {
+      segmentByteSize =
+          llvm::NextPowerOf2(stackAllocationSizeInBytes / segmentNum) / 2;
     }
-    int sharedSlots = segmentByteSize * segmentNum / bytesPerEntry;
+    int stackOrSharedSlots = segmentByteSize * segmentNum / bytesPerEntry;
     // FIXME(fywkevin): this is a hack, remove this after we have decent
     // triton_proton.cc python bindings for passing proper args.
-    sharedSlots = std::max(sharedSlots, 32);
-    int allocSharedMemSize = sharedSlots * bytesPerEntry;
-    int allocBufferSize = bufferSize > 0 ? bufferSize : allocSharedMemSize;
+    stackOrSharedSlots = std::max(stackOrSharedSlots, 32);
+    int allocStackOrSharedMemSize = stackOrSharedSlots * bytesPerEntry;
+    int allocBufferSize =
+        bufferSize > 0 ? bufferSize : allocStackOrSharedMemSize;
     if (!allocBufferSize) {
       mlir::emitError(loc, "profiling buffer size can't be 0.");
       return failure();
@@ -204,18 +208,21 @@ public:
     auto encoding = triton::gpu::SwizzledSharedEncodingAttr::get(
         context, 1, 1, 1, {0}, ctaLayout);
 
+    if (hasStackAllocOp)
+        bufferType = "stack_mem";
+
     if (bufferType == "shared_mem") {
       Attribute sharedMemorySpace =
           triton::gpu::SharedMemorySpaceAttr::get(context);
       auto sharedBufferType = triton::gpu::MemDescType::get(
-          {wordsPerEntry * sharedSlots}, builder.getI32Type(), encoding,
+          {wordsPerEntry * stackOrSharedSlots}, builder.getI32Type(), encoding,
           sharedMemorySpace, /*mutable_memory=*/true);
       buffer = builder.create<triton::gpu::LocalAllocOp>(loc, sharedBufferType);
     } else if (bufferType == "stack_mem") {
       Attribute stackMemorySpace =
           mlir::triton::proton::gpu::StackMemorySpaceAttr::get(context);
       auto stackBufferType = triton::gpu::MemDescType::get(
-          {wordsPerEntry * sharedSlots}, builder.getI32Type(), encoding,
+          {wordsPerEntry * stackOrSharedSlots}, builder.getI32Type(), encoding,
           stackMemorySpace, /*mutable_memory=*/true);
       buffer = builder.create<proton::gpu::StackAllocOp>(loc, stackBufferType);
     } else if (bufferType == "heap_mem") {
