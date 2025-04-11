@@ -11,20 +11,12 @@ from triton_bench.routing import routing_torch, simulate_expert_sharded_routing
 from triton_bench.meta import cuda_capability_geq
 
 
-def is_hip():
+def is_hip_cdna4():
     target = triton.runtime.driver.active.get_current_target()
-    return target.backend == 'hip'
+    return target.backend == 'hip' and target.arch == 'gfx950'
 
 
-def is_cdna4():
-    if is_hip():
-        target = triton.runtime.driver.active.get_current_target()
-        return target.arch == 'gfx950'
-    else:
-        return False
-
-
-if torch.cuda.is_available() and not is_hip():
+if torch.cuda.is_available() and not is_hip_cdna4():
     from triton._C.libtriton import nvidia
     cublas_workspace = torch.empty(32 * 1024 * 1024, device="cuda", dtype=torch.uint8)
     cublas = nvidia.cublas.CublasLt(cublas_workspace)
@@ -33,7 +25,7 @@ else:
 
 
 def _query_gpu_specs():
-    if is_hip():
+    if is_hip_cdna4():
         # no spec data yet.
         return None
     import subprocess
@@ -137,9 +129,10 @@ def bench_mlp(batch, dim1, dim2, n_expts_tot, n_expts_act, x_dtype, w_dtype,
         # TODO: proton should really be recording that in the json instead of
         # relying on the user to aggregate
         tot_time = sum(x["metrics"].get("time (ns)", 0) for x in data[0]["children"])
-        min_time_flops = sum([tot_flops[w] / SPECS[f"MAX_TFLOPS{w}"]
-                              for w in [8, 16]]) * 1e-3 if SPECS is not None else 0
-        min_time_bytes = tot_bytes / SPECS["MAX_TBPS"] * 1e-3 if SPECS is not None else 0
+        min_time_flops = min_time_bytes = 0
+        if SPECS is not None:
+            min_time_flops = sum([tot_flops[w] / SPECS[f"MAX_TFLOPS{w}"] for w in [8, 16]]) * 1e-3
+            min_time_bytes = tot_bytes / SPECS["MAX_TBPS"] * 1e-3
         min_time = max(min_time_flops, min_time_bytes)
         util = min_time / tot_time
         tflops = sum([tot_flops[w] for w in [8, 16]]) / tot_time * 1e-3
@@ -149,7 +142,7 @@ def bench_mlp(batch, dim1, dim2, n_expts_tot, n_expts_act, x_dtype, w_dtype,
 
 
 if __name__ == "__main__":
-    has_native_mx4 = torch.cuda.get_device_capability(0)[0] >= 10 or is_cdna4()
+    has_native_mx4 = torch.cuda.get_device_capability(0)[0] >= 10 or is_hip_cdna4()
     qxdtype = "fp8" if has_native_mx4 else "bf16"
     print(bench_mlp(8192, 8192, 8192, 1, 1, "fp8", "fp8", TP=1, EP=1, name="dense"))
     print(bench_mlp(8192, 8192, 8192, 1, 1, qxdtype, "mx4", TP=1, EP=1, name="dense"))
