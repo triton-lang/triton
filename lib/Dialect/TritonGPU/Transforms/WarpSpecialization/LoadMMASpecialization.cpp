@@ -78,10 +78,26 @@ static LogicalResult findSingleChainToLoad(scf::ForOp loop, Value value,
   return failure();
 }
 
-static std::pair<Value, Value> addIndexAndPhase(ImplicitLocOpBuilder &b,
-                                                scf::ForOp &loop,
-                                                unsigned numStages,
-                                                Value epilogue = {}) {
+static std::pair<Value, Value> postIncrementModulo(ImplicitLocOpBuilder &b,
+                                                   Value index, Value phase,
+                                                   unsigned numStages) {
+  auto intCst = [&](int value) {
+    return b.create<arith::ConstantIntOp>(value, 32);
+  };
+  Value nextIndex = b.create<arith::AddIOp>(index, intCst(1));
+  Value nextPhase = b.create<arith::XOrIOp>(phase, intCst(1));
+
+  Value rollover = b.create<arith::CmpIOp>(arith::CmpIPredicate::eq, nextIndex,
+                                           intCst(numStages));
+  nextIndex = b.create<arith::SelectOp>(rollover, intCst(0), nextIndex);
+  nextPhase = b.create<arith::SelectOp>(rollover, nextPhase, phase);
+
+  return {nextIndex, nextPhase};
+}
+
+static std::pair<BlockArgument, BlockArgument>
+addIndexAndPhase(ImplicitLocOpBuilder &b, scf::ForOp &loop, unsigned numStages,
+                 Value epilogue = {}) {
   OpBuilder::InsertionGuard guard(b);
   b.setInsertionPoint(loop);
   auto intCst = [&](int value) {
@@ -91,26 +107,17 @@ static std::pair<Value, Value> addIndexAndPhase(ImplicitLocOpBuilder &b,
   // Index and phase both start at 0.
   unsigned curArgIdx = loop.getNumRegionIterArgs();
   auto newArgs = addIterArgsToLoop(b, loop, {intCst(0), intCst(0)});
-  Value index = newArgs[0];
-  Value phase = newArgs[1];
-
-  auto yield = cast<scf::YieldOp>(loop.getBody()->getTerminator());
-  b.setInsertionPoint(yield);
+  BlockArgument index = newArgs[0];
+  BlockArgument phase = newArgs[1];
 
   // Post-increment the index and phase.
-  Value nextIndex = b.create<arith::AddIOp>(index, intCst(1));
-  Value nextPhase = b.create<arith::XOrIOp>(phase, intCst(1));
-
-  Value rollover = b.create<arith::CmpIOp>(arith::CmpIPredicate::eq, nextIndex,
-                                           intCst(numStages));
-  nextIndex = b.create<arith::SelectOp>(rollover, intCst(0), nextIndex);
-  nextPhase = b.create<arith::SelectOp>(rollover, nextPhase, phase);
-
+  auto yield = cast<scf::YieldOp>(loop.getBody()->getTerminator());
+  b.setInsertionPoint(yield);
+  auto [nextIndex, nextPhase] = postIncrementModulo(b, index, phase, numStages);
   if (epilogue) {
     nextIndex = b.create<arith::SelectOp>(epilogue, nextIndex, index);
     nextPhase = b.create<arith::SelectOp>(epilogue, nextPhase, phase);
   }
-
   yield->insertOperands(yield.getNumOperands(), {nextIndex, nextPhase});
 
   return {index, phase};
@@ -372,7 +379,7 @@ LogicalResult triton::gpu::specializeLoadMMADependencies(scf::ForOp &loop,
     if (auto store = dyn_cast<ttng::TMEMStoreOp>(user)) {
       if (loop->isAncestor(store)) {
         mmaPartition->insert(store);
-        bufIdx = b.create<arith::AddIOp>(accIndex, intCst(numMmaStages - 1));
+        bufIdx = b.create<arith::AddIOp>(accIndex, intCst(1));
         bufIdx = b.create<arith::RemUIOp>(bufIdx, intCst(numMmaStages));
       } else {
         if (!store->isBeforeInBlock(loop))
@@ -386,8 +393,7 @@ LogicalResult triton::gpu::specializeLoadMMADependencies(scf::ForOp &loop,
       } else {
         if (!loop->isBeforeInBlock(load))
           return mlir::emitWarning(load.getLoc(), "load not after loop?");
-        bufIdx =
-            loop.getResult(cast<BlockArgument>(accIndex).getArgNumber() - 1);
+        bufIdx = loop.getResult(accIndex.getArgNumber() - 1);
       }
     } else if (user == mmaOp) {
       bufIdx = accIndex;
@@ -458,10 +464,10 @@ LogicalResult triton::gpu::specializeLoadMMADependencies(scf::ForOp &loop,
       b.setInsertionPointAfter(
           findNearestCommonPostDominator(loadsInLoop, postDomInfo));
     }
-    Value nextIndex =
+    Value prevIndex =
         b.create<arith::AddIOp>(accIndex, intCst(numMmaStages - 1));
-    nextIndex = b.create<arith::RemUIOp>(nextIndex, intCst(numMmaStages));
-    Value nextAccEmptyBar = createSingleBufferView(b, accEmptyBars, nextIndex);
+    prevIndex = b.create<arith::RemUIOp>(prevIndex, intCst(numMmaStages));
+    Value nextAccEmptyBar = createSingleBufferView(b, accEmptyBars, prevIndex);
     createInPartition<ttng::ArriveBarrierOp>(b, *userPartition, nextAccEmptyBar,
                                              1);
 
@@ -484,6 +490,19 @@ LogicalResult triton::gpu::specializeLoadMMADependencies(scf::ForOp &loop,
     // number of warps to the nearest warpgroup.
     schedule.addPartition(0);
     schedule.reorderPartitions({2, 1, 0, 3});
+
+  } else {
+    b.setInsertionPointAfter(loop);
+    // The MMA has no direct use in the loop, so we have to drain the pipeline
+    // of MMA waits.
+    Value lastIdx = loop.getResult(loadIndex.getArgNumber() - 1);
+    Value lastPhase = loop.getResult(loadPhase.getArgNumber() - 1);
+    for (auto i : llvm::seq(numStages)) {
+      Value emptyBar = createSingleBufferView(b, emptyBars, lastIdx);
+      b.create<ttng::WaitBarrierOp>(emptyBar, lastPhase);
+      std::tie(lastIdx, lastPhase) =
+          postIncrementModulo(b, lastIdx, lastPhase, numStages);
+    }
   }
 
   schedule.serialize(loop);
