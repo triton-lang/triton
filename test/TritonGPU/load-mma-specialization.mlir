@@ -70,7 +70,7 @@ tt.func @warp_specialize_tma_matmul(
   // CHECK-NEXT: ttng.arrive_barrier [[READY_MBAR0]], 1
   // CHECK-NEXT: ttng.arrive_barrier [[READY_MBAR1]], 1
 
-  // CHECK-NEXT: {{[0-9]+}}:2 = scf.for [[K:%arg[0-9]+]] = [[C0]] to [[K_TILES]] step [[C1]]
+  // CHECK-NEXT: [[LAST:%.*]]:2 = scf.for [[K:%arg[0-9]+]] = [[C0]] to [[K_TILES]] step [[C1]]
   // CHECK-SAME: [[IDX:%arg[0-9]+]] = [[C0]]
   // CHECK-SAME: [[PHASE:%arg[0-9]+]] = [[C0]]
   // CHECK-SAME: -> (i32, i32)
@@ -116,6 +116,16 @@ tt.func @warp_specialize_tma_matmul(
 
   // CHECK-NEXT: ttg.partition.stages = [0 : i32, 2 : i32]
   } {tt.warp_specialize, tt.num_stages = 2 : i32}
+
+  // CHECK-NEXT: [[LAST_READY_MBAR0:%.*]] = ttg.memdesc_subview [[READY_MBARS]][[[LAST]]#0]
+  // CHECK-NEXT: ttng.wait_barrier [[LAST_READY_MBAR0]], [[LAST]]#1
+  // CHECK-NEXT: [[IDX_INCR:%.*]] = arith.addi [[LAST]]#0, [[C1]]
+  // CHECK-NEXT: [[PHASE_INCR:%.*]] = arith.xori [[LAST]]#1, [[C1]]
+  // CHECK-NEXT: [[ROLLOVER:%.*]] = arith.cmpi eq, [[IDX_INCR]], [[C2]]
+  // CHECK-NEXT: [[IDX_NEXT:%.*]] = arith.select [[ROLLOVER]], [[C0]], [[IDX_INCR]]
+  // CHECK-NEXT: [[PHASE_NEXT:%.*]] = arith.select [[ROLLOVER]], [[PHASE_INCR]], [[LAST]]#1
+  // CHECK-NEXT: [[LAST_READY_MBAR1:%.*]] = ttg.memdesc_subview [[READY_MBARS]][[[IDX_NEXT]]
+  // CHECK-NEXT: ttng.wait_barrier [[LAST_READY_MBAR1]], [[PHASE_NEXT]]
 
   // CHECK-NEXT: ttng.inval_barrier [[OPER_MBAR0]]
   // CHECK-NEXT: ttng.inval_barrier [[OPER_MBAR1]]
