@@ -185,7 +185,7 @@ For detailed instructions on how to debug Triton's frontend, please refer to thi
 
 **Configuration knobs**
 
-See [`python/config.py`](python/config.py) for the full list of configuration knobs. You can set those knobs directly in python or use environment variables to control them. Below are some of the environment variables you can specify (see `config.py` for the full list):
+See [`python/triton/config.py`](python/triton/config.py) for the full list of configuration knobs. You can set those knobs directly in python or use environment variables to control them. Below are some of the environment variables you can specify (see `config.py` for the full list):
 
 - `MLIR_ENABLE_DUMP=1` dumps the IR before every MLIR pass Triton runs, for all
    kernels. Use `MLIR_ENABLE_DUMP=kernelName` to dump for a specific kernel only.
