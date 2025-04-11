@@ -113,7 +113,7 @@ class HIPBackend(BaseBackend):
         self.binary_ext = "hsaco"
 
     def parse_options(self, opts) -> Any:
-        args = {'arch': config.runtime.override_arch or self.target_arch}
+        args = {'arch': config.runtime.override_arch or self.target.arch}
 
         # Enable XF32 (TF32) for CDNA3 GPUs
         if self.target.arch == 'gfx942':

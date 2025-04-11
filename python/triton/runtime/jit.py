@@ -17,7 +17,6 @@ from ..runtime.driver import driver
 from ..tools.experimental_descriptor import TensorDescriptor
 from .._utils import find_paths_if, get_iterable_path
 
-
 TRITON_MODULE = __name__[:-len(".runtime.jit")]
 
 T = TypeVar("T")
