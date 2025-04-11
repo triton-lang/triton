@@ -39,8 +39,8 @@ get_occ_per_CU() {
 
 $1 > output.mlir 2>&1
 
-LDS_line=$(sed -n '/triton_gpu\.shared\ /p' output.mlir | tail -n 1 | grep -o 'triton_gpu.shared = [0-9]*')
-numWarps_line=$(sed -n '/triton_gpu\.num-warps/p' output.mlir | tail -n 1 | grep -o 'triton_gpu.num-warps. = [0-9]*')
+LDS_line=$(sed -n '/ttg\.shared\ /p' output.mlir | tail -n 1 | grep -o 'ttg.shared = [0-9]*')
+numWarps_line=$(sed -n '/ttg\.num-warps/p' output.mlir | tail -n 1 | grep -o 'ttg.num-warps. = [0-9]*')
 
 LDS=${LDS_line##*=}
 num_warps=${numWarps_line##*=}
