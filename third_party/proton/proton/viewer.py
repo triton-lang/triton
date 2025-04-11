@@ -85,7 +85,7 @@ def get_min_time_flops(df, device_info):
                 device_frames = df[idx]
                 if f"flops{width}" not in device_frames.columns:
                     continue
-                max_flops = specs.max_flops(arch, width, num_sms, clock_rate)
+                max_flops = specs.max_flops(device_type, arch, width, num_sms, clock_rate)
                 min_time_flops.loc[idx, "min_time"] += device_frames[f"flops{width}"].fillna(0) / max_flops
     return min_time_flops
 
