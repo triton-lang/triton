@@ -103,16 +103,20 @@ def bench_mlp(batch, dim1, dim2, n_expts_tot, n_expts_act, x_dtype, w_dtype,
 
     # Calculate theoretical min time based on hardware limits
     device_types = gf.dataframe["device_type"].dropna().unique()
-    assert len(device_types) == 1, f"Multiple device types found: {device_types}"
     device_ids = gf.dataframe["device_id"].dropna().unique()
+    assert len(device_types) == 1, f"Multiple device types found: {device_types}"
     assert len(device_ids) == 1, f"Multiple device ids found: {device_ids}"
+
     device_type = device_types[0]
     device_id = device_ids[0]
-    arch = device_info[device_type][device_id]["arch"]
-    num_sms = device_info[device_type][device_id]["num_sms"]
-    clock_rate = device_info[device_type][device_id]["clock_rate"]
-    bus_width = device_info[device_type][device_id]["bus_width"]
-    memory_clock_rate = device_info[device_type][device_id]["memory_clock_rate"]
+    device_info_entry = device_info[device_type][device_id]
+
+    arch = device_info_entry["arch"]
+    num_sms = device_info_entry["num_sms"]
+    clock_rate = device_info_entry["clock_rate"]
+    bus_width = device_info_entry["bus_width"]
+    memory_clock_rate = device_info_entry["memory_clock_rate"]
+
     peak_bandwidth = proton.specs.max_bytes(bus_width, memory_clock_rate)
     min_time_flops_sec = tot_flops / proton.specs.max_flops(device_type, arch, 8, num_sms, clock_rate)
     min_time_bytes_sec = tot_bytes / peak_bandwidth
