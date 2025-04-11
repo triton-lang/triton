@@ -25,10 +25,13 @@ public:
   LogicalResult matchAndRewrite(TCGen5MMAOpTy op,
                                 PatternRewriter &rewriter) const override {
     // If the op doesn't have synchronous semantic skip the pattern.
-    if (op.getBarrier())
+    if (!op.getSync())
       return failure();
+
     MLIRContext *ctx = op.getContext();
     Location loc = op.getLoc();
+    rewriter.setInsertionPointAfter(op);
+
     Attribute sharedMemorySpace = SharedMemorySpaceAttr::get(ctx);
     auto barrierCTALayout = CTALayoutAttr::get(
         /*context=*/ctx, /*CTAsPerCGA=*/{1},
@@ -38,12 +41,13 @@ public:
     MemDescType barrierMemDescType =
         MemDescType::get({1}, rewriter.getI64Type(), barrierEncoding,
                          sharedMemorySpace, /*mutableMemory=*/true);
-    Value barrierAlloc =
-        rewriter.create<LocalAllocOp>(loc, barrierMemDescType, Value());
-    rewriter.create<InitBarrierOp>(loc, barrierAlloc, 1);
-    op.getBarrierMutable().assign(barrierAlloc);
 
-    rewriter.setInsertionPointAfter(op);
+    Value barrierAlloc = rewriter.create<LocalAllocOp>(loc, barrierMemDescType);
+    rewriter.create<InitBarrierOp>(loc, barrierAlloc, 1);
+    rewriter.create<TCGen5CommitOp>(loc, barrierAlloc, op.getPred(),
+                                    op.getTwoCtas());
+    op.setSync(false);
+
     Value phase = rewriter.create<arith::ConstantIntOp>(loc, 0, 32);
     rewriter.create<WaitBarrierOp>(loc, barrierAlloc, phase, op.getPred());
     rewriter.create<InvalBarrierOp>(loc, barrierAlloc);
@@ -76,9 +80,9 @@ struct TCGen5MMAScaleSharedToTmemConversion
     Type scaleAType =
         MemDescType::get(shape, elType, scaleEncoding, tensorMemorySpace,
                          /*mutableMemory=*/true);
-    auto tmemAlloc = rewriter.create<TMEMAllocOp>(loc, scaleAType, Value());
-    rewriter.create<TMEMCopyOp>(loc, operand.get(), tmemAlloc,
-                                /*barrier*/ Value());
+    auto tmemAlloc = rewriter.create<TMEMAllocOp>(loc, scaleAType);
+    rewriter.create<TMEMCopyOp>(loc, operand.get(), tmemAlloc);
+
     operand.set(tmemAlloc);
     return true;
   }

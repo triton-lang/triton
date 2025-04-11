@@ -240,5 +240,5 @@ ttng::TMEMAllocOp ttng::createTMemAlloc(OpBuilder &builder,
       shape, oldRetType.getElementType(), oldRetType.getEncoding(),
       oldRetType.getMemorySpace(), /*mutableMemory=*/true);
   return builder.create<ttng::TMEMAllocOp>(oldTMemAllocOp.getLoc(),
-                                           accMemDescType, nullptr);
+                                           accMemDescType);
 }

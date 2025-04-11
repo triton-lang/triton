@@ -9,6 +9,7 @@ using namespace mlir;
 using namespace mlir::triton;
 using namespace mlir::triton::gpu;
 using namespace mlir::triton::NVIDIA;
+namespace ttng = mlir::triton::nvidia_gpu;
 
 using ::mlir::LLVM::getSharedMemoryObjectFromStruct;
 using ::mlir::triton::gpu::NVMMASharedEncodingAttr;
@@ -19,8 +20,7 @@ mlir::triton::NVIDIA::DotOpMmaV5TmemLoader::DotOpMmaV5TmemLoader(
     : base(base), instrShape(instrShape), interleaved(interleaved),
       trans(trans) {
   auto ty = cast<MemDescType>(tensor.getType());
-  auto tmemEncoding =
-      cast<nvidia_gpu::TensorMemoryEncodingAttr>(ty.getEncoding());
+  auto tmemEncoding = cast<ttng::TensorMemoryEncodingAttr>(ty.getEncoding());
   unpacked = tmemEncoding.getUnpacked();
   int elTyWidth = ty.getElementTypeBitWidth();
   numElementsPer32b = unpacked ? 1 : 32 / elTyWidth;
@@ -55,8 +55,8 @@ namespace {
 
 enum class mxfpKind { mxf8f6f4 = 0, mxf4 = 1, mxf4nvf4 = 2 };
 
-inline mxfpKind getMXFPKind(ScaleDotElemType typeA, ScaleDotElemType typeB,
-                            Type scaleAType, Type scaleBType, bool transpose) {
+mxfpKind getMXFPKind(ScaleDotElemType typeA, ScaleDotElemType typeB,
+                     Type scaleAType, Type scaleBType, bool transpose) {
   if (typeA == ScaleDotElemType::E2M1 && typeB == ScaleDotElemType::E2M1) {
     if (llvm::isa<Float8E4M3FNType>(scaleAType) &&
         llvm::isa<Float8E4M3FNType>(scaleBType)) {
@@ -70,9 +70,9 @@ inline mxfpKind getMXFPKind(ScaleDotElemType typeA, ScaleDotElemType typeB,
   return mxfpKind::mxf8f6f4;
 };
 
-static Value createInstDescriptor(ConversionPatternRewriter &rewriter,
-                                  triton::nvidia_gpu::TCGen5MMAOp op, int M,
-                                  int N, bool transposeA, bool transposeB) {
+Value createInstDescriptor(ConversionPatternRewriter &rewriter,
+                           ttng::TCGen5MMAOp op, int M, int N, bool transposeA,
+                           bool transposeB) {
   Location loc = op.getLoc();
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   union TCGen5InstructionDescriptor {
@@ -125,12 +125,11 @@ static Value createInstDescriptor(ConversionPatternRewriter &rewriter,
   return b.int_val(32, desc.descriptor);
 }
 
-static Value createScaleInstDescriptor(ConversionPatternRewriter &rewriter,
-                                       triton::nvidia_gpu::TCGen5MMAScaledOp op,
-                                       int M, int N, bool transposeA,
-                                       bool transposeB, int scaleFactorsubIdxA,
-                                       int scaleFactorsubIdxB,
-                                       mxfpKind mxfpInstKind) {
+Value createScaleInstDescriptor(ConversionPatternRewriter &rewriter,
+                                ttng::TCGen5MMAScaledOp op, int M, int N,
+                                bool transposeA, bool transposeB,
+                                int scaleFactorsubIdxA, int scaleFactorsubIdxB,
+                                mxfpKind mxfpInstKind) {
   Location loc = op.getLoc();
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   union TCGen5InstructionDescriptor {
@@ -216,10 +215,10 @@ static Value createScaleInstDescriptor(ConversionPatternRewriter &rewriter,
   return b.int_val(32, desc.descriptor);
 }
 
-static void createGen5MMA(ConversionPatternRewriter &rewriter, Location loc,
-                          triton::nvidia_gpu::TCGen5MMAOp op, Value a, Value b,
-                          Value d, Value pred, Value instDescriptor,
-                          Value useInitAcc, bool aInTMem, bool twoCTAs) {
+void createGen5MMA(ConversionPatternRewriter &rewriter, Location loc,
+                   ttng::TCGen5MMAOp op, Value a, Value b, Value d, Value pred,
+                   Value instDescriptor, Value useInitAcc, bool aInTMem,
+                   bool twoCTAs) {
   PTXBuilder ptxBuilder;
   std::string opcode =
       "tcgen05.mma.cta_group::" + std::to_string(twoCTAs ? 2 : 1) + ".kind::";
@@ -243,13 +242,11 @@ static void createGen5MMA(ConversionPatternRewriter &rewriter, Location loc,
   ptxBuilder.launch(rewriter, loc, void_ty(rewriter.getContext()));
 }
 
-static void createScaledGen5MMA(ConversionPatternRewriter &rewriter,
-                                Location loc,
-                                triton::nvidia_gpu::TCGen5MMAScaledOp op,
-                                Value a, Value b, Value d, Value scaleA,
-                                Value scaleB, Value pred, Value instDescriptor,
-                                Value useInitAcc, bool aInTmem,
-                                mxfpKind mxfpInstKind) {
+void createScaledGen5MMA(ConversionPatternRewriter &rewriter, Location loc,
+                         ttng::TCGen5MMAScaledOp op, Value a, Value b, Value d,
+                         Value scaleA, Value scaleB, Value pred,
+                         Value instDescriptor, Value useInitAcc, bool aInTmem,
+                         mxfpKind mxfpInstKind) {
   PTXBuilder ptxBuilder;
   std::string opcode;
   if (mxfpInstKind == mxfpKind::mxf8f6f4) {
@@ -277,8 +274,8 @@ static void createScaledGen5MMA(ConversionPatternRewriter &rewriter,
   ptxBuilder.launch(rewriter, loc, void_ty(rewriter.getContext()));
 }
 
-static void createMMACommit(ConversionPatternRewriter &rewriter, Location loc,
-                            Value barrier, Value pred, bool twoCTAs = false) {
+void createMMACommit(ConversionPatternRewriter &rewriter, Location loc,
+                     Value barrier, Value pred, bool twoCTAs = false) {
   PTXBuilder ptxBuilder;
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   SmallVector<PTXBuilder::Operand *> ptxOperands;
@@ -305,9 +302,8 @@ static void createMMACommit(ConversionPatternRewriter &rewriter, Location loc,
 
 void convertDot(const LLVMTypeConverter *typeConverter,
                 ConversionPatternRewriter &rewriter, Location loc,
-                triton::nvidia_gpu::TCGen5MMAOp op, Value a, Value b, Value d,
-                Value loadedA, Value loadedB, Value loadedD, Value useDFlag,
-                Value pred, Value barrier) {
+                ttng::TCGen5MMAOp op, Value a, Value b, Value d, Value loadedA,
+                Value loadedB, Value loadedD, Value useDFlag, Value pred) {
   auto tb = TritonLLVMOpBuilder(loc, rewriter);
   bool twoCTAs = op.getTwoCtas();
   // Only run mma on one thread. We currently use elect as ptxas is not able to
@@ -317,8 +313,8 @@ void convertDot(const LLVMTypeConverter *typeConverter,
   if (twoCTAs) {
     // TODO: we have to sync the two CTAs because we currently don't use remove
     // barriers for the copies.
-    rewriter.create<triton::nvidia_gpu::ClusterArriveOp>(loc, false);
-    rewriter.create<triton::nvidia_gpu::ClusterWaitOp>(loc);
+    rewriter.create<ttng::ClusterArriveOp>(loc, false);
+    rewriter.create<ttng::ClusterWaitOp>(loc);
 
     Value clusterId = rewriter.create<nvgpu::ClusterCTAIdOp>(loc);
     Value cluster0 = tb.icmp_eq(clusterId, tb.i32_val(0));
@@ -371,8 +367,8 @@ void convertDot(const LLVMTypeConverter *typeConverter,
   unsigned int N = dstPerCTA[1];
   unsigned int K = aTensorTy.getDimSize(1);
   // Get MMA size based on acc layout.
-  auto tensorMemAttr = cast<triton::nvidia_gpu::TensorMemoryEncodingAttr>(
-      dTensorTy.getEncoding());
+  auto tensorMemAttr =
+      cast<ttng::TensorMemoryEncodingAttr>(dTensorTy.getEncoding());
   int mmaSizeM = tensorMemAttr.getBlockM();
   int mmaSizeN = tensorMemAttr.getBlockN();
   int mmaSizeK = 256 / aTensorTy.getElementTypeBitWidth();
@@ -418,39 +414,35 @@ void convertDot(const LLVMTypeConverter *typeConverter,
       }
     }
   }
-  auto smemObj =
-      LLVM::getSharedMemoryObjectFromStruct(loc, barrier, i64_ty, rewriter);
-  createMMACommit(rewriter, loc, smemObj.getBase(), pred, twoCTAs);
   rewriter.create<LLVM::BrOp>(loc, endBlock);
 }
 
 struct TCGen5MMAOpConversion
-    : public ConvertOpToLLVMPattern<triton::nvidia_gpu::TCGen5MMAOp> {
+    : public ConvertOpToLLVMPattern<ttng::TCGen5MMAOp> {
   using ConvertOpToLLVMPattern::ConvertOpToLLVMPattern;
 
   LogicalResult
-  matchAndRewrite(triton::nvidia_gpu::TCGen5MMAOp op, OpAdaptor adaptor,
+  matchAndRewrite(ttng::TCGen5MMAOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     auto AEnc = op.getA().getType().getEncoding();
     auto BEnc = op.getB().getType().getEncoding();
     assert(mlir::isa<NVMMASharedEncodingAttr>(AEnc) ||
-           mlir::isa<triton::nvidia_gpu::TensorMemoryEncodingAttr>(AEnc) &&
+           mlir::isa<ttng::TensorMemoryEncodingAttr>(AEnc) &&
                "Operand A should use Shared or Tensor memory layout.");
     assert(mlir::isa<NVMMASharedEncodingAttr>(BEnc) &&
            "Operand B should use Shared layout.");
-    assert(op.getBarrier() &&
-           "tensorcore op should have a barrier at this point.");
+    assert(!op.getSync() && "tensorcore op should be async at this point.");
     auto typeConverter = getTypeConverter();
     convertDot(typeConverter, rewriter, op.getLoc(), op, //
                op.getA(), op.getB(), op.getD(),          //
                adaptor.getA(), adaptor.getB(), adaptor.getD(),
-               adaptor.getUseD(), adaptor.getPred(), adaptor.getBarrier());
+               adaptor.getUseD(), adaptor.getPred());
     rewriter.eraseOp(op);
     return success();
   }
 };
 
-static int64_t getFormatBitSize(ScaleDotElemType type) {
+int64_t getFormatBitSize(ScaleDotElemType type) {
   switch (type) {
   case ScaleDotElemType::E4M3:
     return 8;
@@ -468,14 +460,13 @@ static int64_t getFormatBitSize(ScaleDotElemType type) {
 }
 
 struct TCGen5MMAScaledOpConversion
-    : public ConvertOpToLLVMPattern<triton::nvidia_gpu::TCGen5MMAScaledOp> {
+    : public ConvertOpToLLVMPattern<ttng::TCGen5MMAScaledOp> {
   using ConvertOpToLLVMPattern::ConvertOpToLLVMPattern;
 
   LogicalResult
-  matchAndRewrite(triton::nvidia_gpu::TCGen5MMAScaledOp op, OpAdaptor adaptor,
+  matchAndRewrite(ttng::TCGen5MMAScaledOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    assert(op.getBarrier() &&
-           "tensorcore op should have a barrier at this point.");
+    assert(!op.getSync() && "tensorcore op should be async at this point.");
     auto typeConverter = getTypeConverter();
     Location loc = op.getLoc();
     auto tb = TritonLLVMOpBuilder(loc, rewriter);
@@ -529,8 +520,8 @@ struct TCGen5MMAScaledOpConversion
     unsigned int K = op.getBlockK();
 
     // Get MMA size based on acc layout.
-    auto tensorMemAttr = cast<triton::nvidia_gpu::TensorMemoryEncodingAttr>(
-        dTensorTy.getEncoding());
+    auto tensorMemAttr =
+        cast<ttng::TensorMemoryEncodingAttr>(dTensorTy.getEncoding());
     int mmaSizeM = tensorMemAttr.getBlockM();
     int mmaSizeN = tensorMemAttr.getBlockN();
     int mmaSizeK = !opKindIsMXFP4 ? 32 : 64;
@@ -587,16 +578,14 @@ struct TCGen5MMAScaledOpConversion
         llvm_unreachable("Unsupported mxfp kind.");
       }
     }(mxfpInstKind);
-    int numColPerScaleBlockA =
-        ceil<int>(triton::nvidia_gpu::getTmemAllocSizes(
-                      cast<MemDescType>(op.getAScale().getType()))
-                      .numCols,
-                  numRepM * (ceil<int>(numRepK, 4 / scaleFactorColsPerSet)));
-    int numColPerScaleBlockB =
-        ceil<int>(triton::nvidia_gpu::getTmemAllocSizes(
-                      cast<MemDescType>(op.getBScale().getType()))
-                      .numCols,
-                  numRepN * (ceil<int>(numRepK, 4 / scaleFactorColsPerSet)));
+    int numColPerScaleBlockA = ceil<int>(
+        ttng::getTmemAllocSizes(cast<MemDescType>(op.getAScale().getType()))
+            .numCols,
+        numRepM * (ceil<int>(numRepK, 4 / scaleFactorColsPerSet)));
+    int numColPerScaleBlockB = ceil<int>(
+        ttng::getTmemAllocSizes(cast<MemDescType>(op.getBScale().getType()))
+            .numCols,
+        numRepN * (ceil<int>(numRepK, 4 / scaleFactorColsPerSet)));
     for (int m = 0; m < numRepM; m++) {
       for (int n = 0; n < numRepN; n++) {
         // Blocks are laid out along M first then N as described in
@@ -623,13 +612,35 @@ struct TCGen5MMAScaledOpConversion
         }
       }
     }
-    auto smemObj = LLVM::getSharedMemoryObjectFromStruct(
-        op.getLoc(), adaptor.getBarrier(), i64_ty, rewriter);
-    createMMACommit(rewriter, loc, smemObj.getBase(), pred);
     rewriter.eraseOp(op);
     return success();
   }
 };
+
+struct TCGen5CommitOpConversion
+    : public ConvertOpToLLVMPattern<ttng::TCGen5CommitOp> {
+  using ConvertOpToLLVMPattern::ConvertOpToLLVMPattern;
+
+  LogicalResult
+  matchAndRewrite(ttng::TCGen5CommitOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    Location loc = op.getLoc();
+    TritonLLVMOpBuilder b(loc, rewriter);
+
+    auto smemObj = LLVM::getSharedMemoryObjectFromStruct(
+        loc, adaptor.getBarrier(), rewriter.getI64Type(), rewriter);
+
+    Value pred = LLVM::NVIDIA::createElectPredicateWarp0(loc, rewriter);
+    if (adaptor.getPred())
+      pred = b.and_(adaptor.getPred(), pred);
+
+    createMMACommit(rewriter, op.getLoc(), smemObj.getBase(), pred,
+                    op.getTwoCtas());
+    rewriter.eraseOp(op);
+    return success();
+  }
+};
+
 } // namespace
 
 namespace mlir {
@@ -639,8 +650,8 @@ namespace NVIDIA {
 void populateTCGen5MMAOpToLLVMPattern(LLVMTypeConverter &typeConverter,
                                       RewritePatternSet &patterns,
                                       PatternBenefit benefit) {
-  patterns.add<TCGen5MMAOpConversion, TCGen5MMAScaledOpConversion>(
-      typeConverter, benefit);
+  patterns.add<TCGen5MMAOpConversion, TCGen5MMAScaledOpConversion,
+               TCGen5CommitOpConversion>(typeConverter, benefit);
 }
 
 } // namespace NVIDIA

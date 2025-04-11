@@ -906,14 +906,15 @@ scf::ForOp createBarrierAndWaitOps(scf::ForOp forOp, CoarseSchedule &schedule,
   Value barrierAlloc = createBarrierAlloc(forOp, numStages);
 
   builder.setStageCluster(schedule[mma]);
-  builder.setInsertionPoint(mma);
+  builder.setInsertionPointAfter(mma);
   Location loc = mma->getLoc();
   Value barrierSlice = barrierAlloc;
   if (numStages > 1) {
     barrierSlice =
         triton::createSingleBufferView(builder, barrierAlloc, barrierIdx);
   }
-  mma.setBarrier(barrierSlice);
+  auto commitOp = builder.create<ttng::TCGen5CommitOp>(loc, barrierSlice);
+  mma.setSync(false);
 
   // List of buffers that may be used until wait completes
   SmallVector<Value> waitBuffers;
@@ -935,7 +936,7 @@ scf::ForOp createBarrierAndWaitOps(scf::ForOp forOp, CoarseSchedule &schedule,
   SmallVector<WaitPoint> waitPoints;
   auto [mmaStage, mmaCluster] = schedule[mma];
   waitPoints.push_back(
-      {mma->getNextNode(), mmaStage + numStages - 1, mmaCluster});
+      {commitOp->getNextNode(), mmaStage + numStages - 1, mmaCluster});
 
   // Would wait before operation a be redundant given existence of wait before
   // operation b?

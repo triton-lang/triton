@@ -349,11 +349,11 @@ LogicalResult triton::gpu::specializeLoadMMADependencies(scf::ForOp &loop,
   auto [mmaIndex, mmaPhase] = addIndexAndPhase(b, loop, numStages);
   Value mmaBars = createBarrierAlloc(loop, numStages);
 
-  b.setInsertionPoint(mmaOp);
-  Value curMmaBar = createSingleBufferView(b, mmaBars, mmaIndex);
-  mmaOp.setBarrier(curMmaBar);
-
   b.setInsertionPointAfter(mmaOp);
+  Value curMmaBar = createSingleBufferView(b, mmaBars, mmaIndex);
+  createInPartition<ttng::TCGen5CommitOp>(b, *mmaPartition, curMmaBar);
+  mmaOp.setSync(false);
+
   createInPartition<ttng::WaitBarrierOp>(b, *waiterPartition, curMmaBar,
                                          mmaPhase);
   createInPartition<ttng::ArriveBarrierOp>(b, *waiterPartition, curEmptyBar, 1);
