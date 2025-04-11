@@ -79,7 +79,7 @@ def matmul_kernel(A, B, C, M, N, K,  #
 
 @pytest.mark.parametrize("M, K, N, BLOCK_K, BLOCK_M, BLOCK_N, w_dtype, x_dtype, out_dtype",
                          [(M, K, N, BLOCK_K, BLOCK_M, BLOCK_N, w, x, o)  #
-                          for BLOCK_K in [16, 32]  #
+                          for BLOCK_K in [16, 32, 64]  #
                           for BLOCK_M in [16, 64]  #
                           for BLOCK_N in [16, 64]  #
                           for (M, K, N) in [(128, 128, 128), (768, 768, 1024)]  #

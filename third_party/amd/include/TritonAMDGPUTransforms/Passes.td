@@ -248,6 +248,26 @@ def TritonAMDGPUCoalesceAsyncCopy: Pass<"tritonamdgpu-coalesce-async-copy", "mli
   ];
 }
 
+def TritonAMDGPUUpdateAsyncWaitCount: Pass<"tritonamdgpu-update-async-wait-count", "mlir::ModuleOp"> {
+  let summary = "Adjust async wait count to allow prefetching over multiple loop iterations";
+
+  let description = [{
+    GFX9:
+      LLVM cannot see the dependency across loop iterations between AsyncCopy and local_reads. So we
+      compute the number of interleaving global memory instructions to emit the correct waitcnt during lowering.
+  }];
+
+  let constructor = "mlir::createTritonAMDGPUUpdateAsyncWaitCountPass()";
+
+  let dependentDialects = [];
+
+  let options = [
+    Option<"archGenerationName", "arch-generation-name",
+           "std::string", /*default=*/"std::string{}",
+           "GFX generation name of target device.">,
+  ];
+}
+
 def TritonAMDFoldTrueCmpI: Pass<"tritonamdgpu-fold-true-cmpi", "mlir::ModuleOp"> {
   let summary = "Fold true arith.cmpi to %true";
 
