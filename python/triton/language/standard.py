@@ -396,7 +396,6 @@ def sort_impl(x, k: core.constexpr = None, dim: core.constexpr = None, descendin
     # handle default dimension or check that it is the most minor dim
     _dim: core.constexpr = len(x.shape) - 1 if dim is None else dim
     core.static_assert(_dim == len(x.shape) - 1, "only minor dimension is currently supported")
-    core.static_assert(k is None or k > 0)
     # iteratively run bitonic merge-sort steps
     n_outer: core.constexpr = x.numel >> _log2(x.shape[_dim])
     log_n: core.constexpr = _log2(x.shape[_dim])
@@ -407,7 +406,7 @@ def sort_impl(x, k: core.constexpr = None, dim: core.constexpr = None, descendin
     # https://www.doc.ic.ac.uk/~hlgr/pdfs/MassivelyParallelTopK.pdf
     for i in core.static_range(log_k + 1, log_n + 1):
         x = core.reshape(x, [n_outer * 2**(log_n - i), 2, 2**log_k])
-        x = core.max(x, axis=1) if descending else core.min(x, axis=1)
+        x = max(x, axis=1) if descending else min(x, axis=1)
         x = core.reshape(x, [n_outer, 2**(log_n - i + log_k)])
         x = _bitonic_merge(x, log_k, 2 if i < log_n else descending, _log2(x.shape[_dim]))
     return x
