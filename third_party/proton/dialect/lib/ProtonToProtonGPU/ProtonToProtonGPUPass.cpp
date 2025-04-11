@@ -136,13 +136,37 @@ public:
     const int circularHeaderSize =
         proton::gpu::getCircularHeaderSize(); // byte size
 
-    // We take any available shared memory left to allocate the circular
-    // buffer. The buffer size per segment must be power of 2.
-    int segmentByteSize =
-        llvm::NextPowerOf2(
-            (maxSharedMem - llvm::alignTo(sharedMemUsed, bytesPerEntry)) /
-            segmentNum) /
-        2;
+    bool hasStackAllocOp = false;
+    int stackAllocationSizeInBytes = 0;
+    func.walk([&](triton::proton::gpu::StackAllocOp stackOp) {
+      hasStackAllocOp = true;
+      auto bufferTy =
+          mlir::cast<triton::gpu::MemDescType>(stackOp.getData().getType());
+
+      stackAllocationSizeInBytes +=
+          mlir::ShapedType::getNumElements(bufferTy.getShape()) *
+          bufferTy.getElementType().getIntOrFloatBitWidth() / 8;
+    });
+
+    // If using shared memory for the profiling data we take any available
+    // shared memory left after Triton allocates what is needs. However if using
+    // stack memory for the profiling data we set the profiling shared memory to
+    // zero since there is currently not a way to use both together and the user
+    // choosing stack over shared is most likely because they are already using
+    // a large amount of shared memory and want to limit an additional usage by
+    // the intra-kernel profiler
+    int segmentByteSize = 0;
+
+    if (!hasStackAllocOp) {
+      // For the shared memory buffer we take any available shared memory left
+      // to allocate the circular
+
+      segmentByteSize =
+          llvm::NextPowerOf2(
+              (maxSharedMem - llvm::alignTo(sharedMemUsed, bytesPerEntry)) /
+              segmentNum) /
+          2;
+    }
     int sharedSlots = segmentByteSize * segmentNum / bytesPerEntry;
     // FIXME(fywkevin): this is a hack, remove this after we have decent
     // triton_proton.cc python bindings for passing proper args.
