@@ -96,12 +96,12 @@ def bench_mlp(batch, dim1, dim2, n_expts_tot, n_expts_act, x_dtype, w_dtype,
     # -- analyze --
     gf, inclusive_metrics, exclusive_metrics, device_info = viewer.read(fpath)
     # Now the dataframe only contains leave nodes (i.e., kernels) that perform matmuls
-    matmuls = gf.dataframe[gf.dataframe["name"].str.contains("matmul") & gf.dataframe["device_id"].notna()]
+    matmuls = gf.filter("MATCH ('*', c) WHERE c.'name' =~ '.*matmul.*' AND c IS LEAF").dataframe
     tot_bytes = matmuls["bytes"].sum()
     tot_flops = sum(matmuls[[c for c in ['flops8', 'flops16'] if c in matmuls.columns]].sum())
     tot_time = matmuls["time (ns)"].sum()
 
-    # Calculate theoretical min time based on hardware limits
+    # Calculate theoretical min time based on hardware limits.
     device_type = matmuls["device_type"].iloc[0]
     device_id = matmuls["device_id"].iloc[0]
     info = device_info[device_type][device_id]
