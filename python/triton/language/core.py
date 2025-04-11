@@ -7,7 +7,7 @@ from functools import partial, wraps
 import typing
 from typing import Union, Callable, List, Sequence, TypeVar, Optional, Tuple
 import builtins
-from ..runtime import config
+from .. import config
 from ..runtime.jit import jit
 import inspect
 import os

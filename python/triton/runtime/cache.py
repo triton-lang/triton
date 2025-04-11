@@ -6,12 +6,12 @@ from typing import Dict, List, Optional
 import base64
 import hashlib
 
-from . import config
+from .. import config
 
 
 class CacheManager(ABC):
 
-    def __init__(self, key):
+    def __init__(self, key, override=False, dump=False):
         pass
 
     @abstractmethod
@@ -236,25 +236,24 @@ class RemoteCacheManager(CacheManager):
         return self.put(grp_contents, grp_filename)
 
 
-__cache_cls = FileCacheManager
-__cache_cls_nme = "DEFAULT"
-
-
 def _base32(key):
     # Assume key is a hex string.
     return base64.b32encode(bytes.fromhex(key)).decode("utf-8").rstrip("=")
 
 
 def get_cache_manager(key) -> CacheManager:
-    return config.cache.manager_class(_base32(key))
+    cls = config.cache.manager_class or FileCacheManager
+    return cls(_base32(key))
 
 
 def get_override_manager(key) -> CacheManager:
-    return __cache_cls(_base32(key), override=True)
+    cls = config.cache.manager_class or FileCacheManager
+    return cls(_base32(key), override=True)
 
 
 def get_dump_manager(key) -> CacheManager:
-    return __cache_cls(_base32(key), dump=True)
+    cls = config.cache.manager_class or FileCacheManager
+    return cls(_base32(key), dump=True)
 
 
 def make_so_cache_key(version_hash, signature, constants, ids, **kwargs):
