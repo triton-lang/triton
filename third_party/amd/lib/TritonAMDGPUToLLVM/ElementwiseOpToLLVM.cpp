@@ -1494,24 +1494,12 @@ static SmallVector<Value> S8_to_Bf16(Location loc,
   SmallVector<Value> inValues = {v[0], v[1], v[2], v[3]};
   SmallVector<Value> outValues = {};
   for (Value inVal : inValues) {
-    Value i32Val = b.sext(i32_ty, inVal);
-
-    GCNBuilder builder;
-    auto &cvt = *builder.create("v_cvt_f32_i32");
-    auto res = builder.newOperand("=v");
-    auto operand = builder.newOperand(i32Val, "v");
-    cvt(res, operand);
-    auto f32Val = builder.launch(rewriter, loc, f32_ty, false);
-
-    f32Val = b.bitcast(f32Val, i32_ty);
-    auto shifted = b.lshr(i32_ty, f32Val, b.i32_val(16));
-    auto truncated = b.trunc(i16_ty, shifted);
-    outValues.push_back(b.bitcast(truncated, bf16_ty));
+    Value bf16Val = rewriter.create<LLVM::SIToFPOp>(loc, bf16_ty, inVal);
+    outValues.push_back(bf16Val);
   }
   return outValues;
 }
 
-// Uses inline ptx to convert s8/u8 to bf16, since the
 struct SIToFPOpConversion
     : ElementwiseOpConversionBase<arith::SIToFPOp, SIToFPOpConversion> {
   using ElementwiseOpConversionBase::ElementwiseOpConversionBase;
