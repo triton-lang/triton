@@ -251,7 +251,41 @@ struct StackAllocOpConversion
   LogicalResult
   matchAndRewrite(mlir::triton::proton::gpu::StackAllocOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    rewriter.eraseOp(op);
+    auto moduleOp =
+        rewriter.getBlock()->getParent()->getParentOfType<ModuleOp>();
+    Location loc = op.getLoc();
+    auto ctx = moduleOp.getContext();
+
+    auto bufferTy =
+        mlir::cast<triton::gpu::MemDescType>(op.getData().getType());
+
+    const int bufferSizeInBytes =
+        mlir::ShapedType::getNumElements(bufferTy.getShape()) *
+        bufferTy.getElementType().getIntOrFloatBitWidth() / 8;
+
+    auto bufferSizeVal = rewriter.create<LLVM::ConstantOp>(
+        loc, rewriter.getIntegerType(32),
+        IntegerAttr::get(rewriter.getIntegerType(32), bufferSizeInBytes / 4));
+
+    auto llvmPointerType = LLVM::LLVMPointerType::get(op->getContext());
+    Type llvmInt32Type = IntegerType::get(op->getContext(), 32);
+    Value arrayVal = rewriter.create<LLVM::AllocaOp>(
+        loc, llvmPointerType, llvmInt32Type, bufferSizeVal);
+
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
+
+    // TODO(crobeck): update if we ever support multi-rank stack alloc ops
+    SmallVector<Type, 4> types = {ptr_ty(ctx)};
+    SmallVector<Value, 4> elems = {arrayVal}; // i32 ptr - the start address
+
+    auto structTy =
+        LLVM::LLVMStructType::getLiteral(rewriter.getContext(), types);
+
+    Value llvmStruct = rewriter.create<LLVM::UndefOp>(loc, structTy);
+    for (const auto &v : llvm::enumerate(elems)) {
+      llvmStruct = b.insert_val(structTy, llvmStruct, v.value(), v.index());
+    }
+    rewriter.replaceOp(op, llvmStruct);
     return success();
   }
 
