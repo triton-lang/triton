@@ -95,19 +95,18 @@ def bench_mlp(batch, dim1, dim2, n_expts_tot, n_expts_act, x_dtype, w_dtype,
 
     # -- analyze --
     gf, inclusive_metrics, exclusive_metrics, device_info = viewer.read(fpath)
-    gf = viewer.filter_frames(gf, include=".*matmul.*")
-    summary = gf.dataframe.iloc[0].to_dict()
-    tot_bytes = summary["bytes (inc)"]
-    tot_flops = sum(summary.get(f"flops{w} (inc)", 0) for w in [8, 16])
-    tot_time = summary["time (ns) (inc)"]
+    matmuls = gf.dataframe[gf.dataframe["name"].str.contains("matmul")]
+    tot_bytes = matmuls["bytes"].sum()
+    tot_flops = sum(matmuls[[c for c in ['flops8', 'flops16'] if c in matmuls.columns]].sum())
+    tot_time = matmuls["time (ns)"].sum()
 
     # Calculate theoretical min time based on hardware limits
-    device_type = gf.dataframe["device_type"].dropna().iloc[0]
-    device_id = gf.dataframe["device_id"].dropna().iloc[0]
+    device_type = matmuls["device_type"].dropna().iloc[0]
+    device_id = matmuls["device_id"].dropna().iloc[0]
     info = device_info[device_type][device_id]
 
     min_time_flops_sec = sum(
-        summary.get(f"flops{width} (inc)", 0) /
+        (matmuls[f"flops{width}"].sum() if f"flops{width}" in matmuls.columns else 0) /
         proton.specs.max_flops(device_type, info["arch"], width, info["num_sms"], info["clock_rate"])
         for width in [8, 16])
     min_time_bytes_sec = tot_bytes / proton.specs.max_bytes(info["bus_width"], info["memory_clock_rate"])
@@ -116,7 +115,7 @@ def bench_mlp(batch, dim1, dim2, n_expts_tot, n_expts_act, x_dtype, w_dtype,
     tflops = tot_flops / tot_time * 1e-3
     tbps = tot_bytes / tot_time * 1e-3
 
-    return util, tflops, tbps
+    return {"util": float(util), "tflops": float(tflops), "tbps": float(tbps)}
 
 
 if __name__ == "__main__":
