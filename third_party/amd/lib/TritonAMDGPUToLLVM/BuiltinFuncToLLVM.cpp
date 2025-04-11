@@ -133,6 +133,80 @@ private:
 
     auto loc = callOp.getLoc();
 
+    // clang-format off
+    // define internal noundef i64 @_Z22load_acquire_workgroupPU3AS1m(ptr addrspace(1) nocapture noundef readonly %0) #0 {
+    //   %2 = load atomic i64, ptr addrspace(1) %0 syncscope("workgroup-one-as") acquire, align 8
+    //   ret i64 %2
+    // }
+    // define internal noundef i32 @_Z19load_acquire_systemPU3AS1i(ptr addrspace(1) nocapture noundef readonly %0) #0 {
+    //   %2 = load atomic i32, ptr addrspace(1) %0 syncscope("one-as") acquire, align 4
+    //   ret i32 %2
+    // }
+    // clang-format on
+    auto buildAtomicLoad =
+        [&rewriter, &loc](Type dtype, Value inputPtr, int align,
+                          LLVM::AtomicOrdering ordering,
+                          std::optional<StringRef> syncGroup = std::nullopt) {
+          return rewriter.create<LLVM::LoadOp>(
+              loc, dtype, inputPtr, /*alignment=*/align,
+              /*isVolatile=*/false, /*isNonTemporal=*/false,
+              /*isInvariant =*/false, /*isInvariantGroup=*/false, ordering,
+              syncGroup.value_or(StringRef()));
+        };
+
+    auto buildAtomicStore =
+        [&rewriter, &loc](Value value, Value inputPtr, int align,
+                          LLVM::AtomicOrdering ordering,
+                          std::optional<StringRef> syncGroup = std::nullopt) {
+          return rewriter.create<LLVM::StoreOp>(
+              loc, value, inputPtr, /*alignment=*/align,
+              /*isVolatile =*/false, /*isNonTemporal*/ false,
+              /*isInvariantGroup=*/false, ordering,
+              syncGroup.value_or(StringRef()));
+        };
+
+    auto buildAtomicFetchAdd =
+        [&rewriter, &loc](Value atomicAddress, Value value,
+                          LLVM::AtomicOrdering ordering,
+                          std::optional<StringRef> syncGroup = std::nullopt) {
+          return rewriter.create<LLVM::AtomicRMWOp>(
+              loc, LLVM::AtomicBinOp::add, atomicAddress, value, ordering,
+              syncGroup.value_or(StringRef()), /*alignment=*/4);
+        };
+
+    auto buildAtomicCompareExchangeStrong =
+        [&rewriter, &loc](Value atomicAddress, Value compare, Value value,
+                          LLVM::AtomicOrdering successOrdering,
+                          LLVM::AtomicOrdering failureOrdering,
+                          std::optional<StringRef> syncGroup = std::nullopt) {
+          auto cmp = rewriter.create<LLVM::LoadOp>(loc, i32_ty, compare,
+                                                   /*alignment=*/4);
+          auto cmpxchg = rewriter.create<LLVM::AtomicCmpXchgOp>(
+              loc, atomicAddress, cmp, value, successOrdering, failureOrdering,
+              syncGroup.value_or(StringRef()),
+              /*alignment=*/4);
+          auto extractOne = rewriter.create<LLVM::ExtractValueOp>(
+              loc, cmpxchg, SmallVector<int64_t>{1});
+          Block *currentBlock = rewriter.getInsertionBlock();
+          Block *afterStore =
+              rewriter.splitBlock(currentBlock, rewriter.getInsertionPoint());
+          Block *trueBlock = rewriter.createBlock(afterStore);
+          rewriter.setInsertionPointToEnd(currentBlock);
+          rewriter.create<LLVM::CondBrOp>(loc, extractOne, trueBlock,
+                                          afterStore);
+          rewriter.setInsertionPointToStart(trueBlock);
+          // cmpxchg.store_expected:
+          auto extractZero = rewriter.create<LLVM::ExtractValueOp>(
+              loc, cmpxchg, SmallVector<int64_t>{0});
+          (void)rewriter.create<LLVM::StoreOp>(loc, extractZero, compare,
+                                               /*alignment=*/4);
+          rewriter.create<LLVM::BrOp>(loc, afterStore);
+          rewriter.setInsertionPointToStart(afterStore);
+          // cmpxchg.continue:
+          return rewriter.create<LLVM::ZExtOp>(loc, i64_ty, extractOne,
+                                               /*nonNeg=*/true);
+        };
+
     Operation *replacementOp = nullptr;
     if (calleeName == "__triton_hip_iabs") {
       assert(operands.size() == 1);
@@ -170,6 +244,183 @@ private:
 
       replacementOp = LLVM::createLLVMIntrinsicCallOp(
           rewriter, loc, intrinsic, returnType, mulOp->getResult(0));
+    } else if (calleeName == "__triton_hip_load_acquire_workgroup") {
+      assert(operands.size() == 1);
+      replacementOp =
+          buildAtomicLoad(i64_ty, operands[0], 8, LLVM::AtomicOrdering::acquire,
+                          "workgroup-one-as");
+    } else if (calleeName == "__triton_hip_load_relaxed_workgroup") {
+      assert(operands.size() == 1);
+      replacementOp =
+          buildAtomicLoad(i64_ty, operands[0], 8,
+                          LLVM::AtomicOrdering::monotonic, "workgroup-one-as");
+    }
+
+    else if (calleeName == "__triton_hip_load_acquire_agent") {
+      assert(operands.size() == 1);
+      replacementOp =
+          buildAtomicLoad(i64_ty, operands[0], 8, LLVM::AtomicOrdering::acquire,
+                          "agent-one-as");
+    } else if (calleeName == "__triton_hip_load_relaxed_agent") {
+      assert(operands.size() == 1);
+      replacementOp =
+          buildAtomicLoad(i64_ty, operands[0], 8,
+                          LLVM::AtomicOrdering::monotonic, "agent-one-as");
+    } else if (calleeName == "__triton_hip_load_acquire_system") {
+      assert(operands.size() == 1);
+      replacementOp = buildAtomicLoad(i32_ty, operands[0], 4,
+                                      LLVM::AtomicOrdering::acquire);
+    } else if (calleeName == "__triton_hip_load_relaxed_system") {
+      assert(operands.size() == 1);
+      replacementOp = buildAtomicLoad(i32_ty, operands[0], 4,
+                                      LLVM::AtomicOrdering::monotonic);
+    }
+
+    else if (calleeName == "__triton_hip_store_release_workgroup") {
+      assert(operands.size() == 1);
+      Value one = rewriter.create<LLVM::ConstantOp>(
+          loc, i64_ty, IntegerAttr::get(i64_ty, 1));
+      (void)buildAtomicStore(one, operands[0], 8, LLVM::AtomicOrdering::release,
+                             "workgroup-one-as");
+      replacementOp = one.getDefiningOp();
+    } else if (calleeName == "__triton_hip_store_relaxed_workgroup") {
+      assert(operands.size() == 1);
+      Value one = rewriter.create<LLVM::ConstantOp>(
+          loc, i64_ty, IntegerAttr::get(i64_ty, 1));
+      (void)buildAtomicStore(one, operands[0], 8,
+                             LLVM::AtomicOrdering::monotonic,
+                             "workgroup-one-as");
+      replacementOp = one.getDefiningOp();
+    }
+
+    else if (calleeName == "__triton_hip_store_release_agent") {
+      assert(operands.size() == 2);
+      (void)buildAtomicStore(operands[1], operands[0], 4,
+                             LLVM::AtomicOrdering::release, "agent-one-as");
+      replacementOp = operands[1].getDefiningOp();
+    } else if (calleeName == "__triton_hip_store_relaxed_agent") {
+      assert(operands.size() == 1);
+      Value one = rewriter.create<LLVM::ConstantOp>(
+          loc, i64_ty, IntegerAttr::get(i64_ty, 1));
+      (void)buildAtomicStore(one, operands[0], 8,
+                             LLVM::AtomicOrdering::monotonic, "agent-one-as");
+      replacementOp = one.getDefiningOp();
+    }
+
+    else if (calleeName == "__triton_hip_store_release_system") {
+      assert(operands.size() == 2);
+      (void)buildAtomicStore(operands[1], operands[0], 4,
+                             LLVM::AtomicOrdering::release);
+      replacementOp = operands[1].getDefiningOp();
+    } else if (calleeName == "__triton_hip_store_relaxed_system") {
+      assert(operands.size() == 2);
+      (void)buildAtomicStore(operands[1], operands[0], 4,
+                             LLVM::AtomicOrdering::monotonic);
+      replacementOp = operands[1].getDefiningOp();
+    }
+
+    // define internal noundef i64 @syncthreads()() #1 !dbg !51 {
+    // entry:
+    //   fence syncscope("workgroup") release, !dbg !52
+    //   tail call void @llvm.amdgcn.s.barrier(), !dbg !60
+    //   fence syncscope("workgroup") acquire, !dbg !61
+    //   ret i64 0, !dbg !62
+    // }
+    else if (calleeName == "__triton_hip_syncthreads") {
+      assert(operands.size() == 0);
+      (void)rewriter.create<LLVM::FenceOp>(loc, LLVM::AtomicOrdering::release,
+                                           "workgroup");
+      (void)rewriter.create<ROCDL::SBarrierOp>(loc);
+      (void)rewriter.create<LLVM::FenceOp>(loc, LLVM::AtomicOrdering::acquire,
+                                           "workgroup");
+      Value zero = rewriter.create<LLVM::ConstantOp>(
+          loc, i64_ty, IntegerAttr::get(i64_ty, 0));
+      replacementOp = zero.getDefiningOp();
+    }
+
+    else if (calleeName == "__triton_hip_red_add_release_agent") {
+      assert(operands.size() == 2);
+      replacementOp =
+          buildAtomicFetchAdd(operands[0], operands[1],
+                              LLVM::AtomicOrdering::release, "agent-one-as");
+    } else if (calleeName == "__triton_hip_atom_add_acquire_agent") {
+      assert(operands.size() == 2);
+      replacementOp =
+          buildAtomicFetchAdd(operands[0], operands[1],
+                              LLVM::AtomicOrdering::acquire, "agent-one-as");
+    } else if (calleeName == "__triton_hip_atom_add_relaxed_agent") {
+      assert(operands.size() == 2);
+      replacementOp =
+          buildAtomicFetchAdd(operands[0], operands[1],
+                              LLVM::AtomicOrdering::monotonic, "agent-one-as");
+    } else if (calleeName == "__triton_hip_atom_add_acqrel_agent") {
+      assert(operands.size() == 2);
+      replacementOp =
+          buildAtomicFetchAdd(operands[0], operands[1],
+                              LLVM::AtomicOrdering::acq_rel, "agent-one-as");
+    }
+
+    else if (calleeName == "__triton_hip_red_add_release_system") {
+      assert(operands.size() == 2);
+      replacementOp = buildAtomicFetchAdd(operands[0], operands[1],
+                                          LLVM::AtomicOrdering::release);
+    } else if (calleeName == "__triton_hip_atom_add_acquire_system") {
+      assert(operands.size() == 2);
+      replacementOp = buildAtomicFetchAdd(operands[0], operands[1],
+                                          LLVM::AtomicOrdering::acquire);
+    } else if (calleeName == "__triton_hip_atom_add_relaxed_system") {
+      assert(operands.size() == 2);
+      replacementOp = buildAtomicFetchAdd(operands[0], operands[1],
+                                          LLVM::AtomicOrdering::monotonic);
+    } else if (calleeName == "__triton_hip_atom_add_acqrel_system") {
+      assert(operands.size() == 2);
+      replacementOp = buildAtomicFetchAdd(operands[0], operands[1],
+                                          LLVM::AtomicOrdering::acq_rel);
+    }
+
+    else if (calleeName == "__triton_hip_atom_cas_acquire_relaxed_agent") {
+      assert(operands.size() == 3);
+      replacementOp = buildAtomicCompareExchangeStrong(
+          operands[0], operands[1], operands[2], LLVM::AtomicOrdering::acquire,
+          LLVM::AtomicOrdering::monotonic, "agent-one-as");
+    } else if (calleeName == "__triton_hip_atom_cas_release_relaxed_agent") {
+      assert(operands.size() == 3);
+      replacementOp = buildAtomicCompareExchangeStrong(
+          operands[0], operands[1], operands[2], LLVM::AtomicOrdering::release,
+          LLVM::AtomicOrdering::monotonic, "agent-one-as");
+    } else if (calleeName == "__triton_hip_atom_cas_relaxed_relaxed_agent") {
+      assert(operands.size() == 3);
+      replacementOp = buildAtomicCompareExchangeStrong(
+          operands[0], operands[1], operands[2],
+          LLVM::AtomicOrdering::monotonic, LLVM::AtomicOrdering::monotonic,
+          "agent-one-as");
+    } else if (calleeName == "__triton_hip_atom_cas_acqrel_relaxed_agent") {
+      assert(operands.size() == 3);
+      replacementOp = buildAtomicCompareExchangeStrong(
+          operands[0], operands[1], operands[2], LLVM::AtomicOrdering::acq_rel,
+          LLVM::AtomicOrdering::monotonic, "agent-one-as");
+    }
+
+    else if (calleeName == "__triton_hip_atom_cas_acquire_relaxed_system") {
+      assert(operands.size() == 3);
+      replacementOp = buildAtomicCompareExchangeStrong(
+          operands[0], operands[1], operands[2], LLVM::AtomicOrdering::acquire,
+          LLVM::AtomicOrdering::monotonic);
+    } else if (calleeName == "__triton_hip_atom_cas_release_relaxed_system") {
+      assert(operands.size() == 3);
+      replacementOp = buildAtomicCompareExchangeStrong(
+          operands[0], operands[1], operands[2], LLVM::AtomicOrdering::release,
+          LLVM::AtomicOrdering::monotonic);
+    } else if (calleeName == "__triton_hip_atom_cas_relaxed_relaxed_system") {
+      assert(operands.size() == 3);
+      replacementOp = buildAtomicCompareExchangeStrong(
+          operands[0], operands[1], operands[2],
+          LLVM::AtomicOrdering::monotonic, LLVM::AtomicOrdering::monotonic);
+    } else if (calleeName == "__triton_hip_atom_cas_acqrel_relaxed_system") {
+      assert(operands.size() == 3);
+      replacementOp = buildAtomicCompareExchangeStrong(
+          operands[0], operands[1], operands[2], LLVM::AtomicOrdering::acq_rel,
+          LLVM::AtomicOrdering::monotonic);
     }
 
     if (replacementOp) {
@@ -201,6 +452,7 @@ struct ConvertBuiltinFuncToLLVM
 
     if (mlir::applyPatternsGreedily(mod, std::move(patterns), config)
             .failed()) {
+      mod.emitError("failed to convert builtins/externs to llvm");
       signalPassFailure();
     }
   }

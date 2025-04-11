@@ -473,3 +473,222 @@ def ilogb(arg0, _builder=None):
             (core.dtype("fp32"), ): ("__ocml_ilogb_f32", core.dtype("int32")),
             (core.dtype("fp64"), ): ("__ocml_ilogb_f64", core.dtype("int32")),
         }, is_pure=True, _builder=_builder)
+
+
+@core.extern
+def load_acquire_workgroup(arg0, _builder=None):
+    return core.extern_elementwise("", "", [arg0], {
+        (core.pointer_type(core.uint64), ): ("__triton_hip_load_acquire_workgroup", core.uint64),
+    }, is_pure=False, _builder=_builder)
+
+
+@core.extern
+def load_relaxed_workgroup(arg0, _builder=None):
+    return core.extern_elementwise("", "", [arg0], {
+        (core.pointer_type(core.uint64), ): ("__triton_hip_load_relaxed_workgroup", core.uint64),
+    }, is_pure=False, _builder=_builder)
+
+
+@core.extern
+def load_acquire_agent(arg0, _builder=None):
+    return core.extern_elementwise("", "", [arg0], {
+        (core.pointer_type(core.uint64), ): ("__triton_hip_load_acquire_agent", core.uint64),
+    }, is_pure=False, _builder=_builder)
+
+
+@core.extern
+def load_relaxed_agent(arg0, _builder=None):
+    return core.extern_elementwise("", "", [arg0], {
+        (core.pointer_type(core.uint64), ): ("__triton_hip_load_relaxed_agent", core.uint64),
+    }, is_pure=False, _builder=_builder)
+
+
+@core.extern
+def load_acquire_system(arg0, _builder=None):
+    return core.extern_elementwise("", "", [arg0], {
+        (core.pointer_type(core.uint64), ): ("__triton_hip_load_acquire_system", core.uint64),
+    }, is_pure=False, _builder=_builder)
+
+
+@core.extern
+def load_relaxed_system(arg0, _builder=None):
+    return core.extern_elementwise("", "", [arg0], {
+        (core.pointer_type(core.uint64), ): ("__triton_hip_load_relaxed_system", core.uint64),
+    }, is_pure=False, _builder=_builder)
+
+
+@core.extern
+def store_release_workgroup(arg0, _builder=None):
+    return core.extern_elementwise("", "", [arg0], {
+        (core.pointer_type(core.uint64), ): ("__triton_hip_store_release_workgroup", core.uint64),
+    }, is_pure=False, _builder=_builder)
+
+
+@core.extern
+def store_relaxed_workgroup(arg0, _builder=None):
+    return core.extern_elementwise("", "", [arg0], {
+        (core.pointer_type(core.uint64), ): ("__triton_hip_store_relaxed_workgroup", core.uint64),
+    }, is_pure=False, _builder=_builder)
+
+
+@core.extern
+def store_release_agent(arg0, _builder=None):
+    return core.extern_elementwise("", "", [arg0], {
+        (core.pointer_type(core.uint64), ): ("__triton_hip_store_release_agent", core.uint64),
+    }, is_pure=False, _builder=_builder)
+
+
+@core.extern
+def store_relaxed_agent(arg0, _builder=None):
+    return core.extern_elementwise("", "", [arg0], {
+        (core.pointer_type(core.uint64), ): ("__triton_hip_store_relaxed_agent", core.uint64),
+    }, is_pure=False, _builder=_builder)
+
+
+@core.extern
+def store_release_system(arg0, _builder=None):
+    return core.extern_elementwise("", "", [arg0], {
+        (core.pointer_type(core.uint64), ): ("__triton_hip_store_release_system", core.uint64),
+    }, is_pure=False, _builder=_builder)
+
+
+@core.extern
+def store_relaxed_system(arg0, _builder=None):
+    return core.extern_elementwise("", "", [arg0], {
+        (core.pointer_type(core.uint64), ): ("__triton_hip_store_relaxed_system", core.uint64),
+    }, is_pure=False, _builder=_builder)
+
+
+@core.extern
+def syncthreads(_builder=None):
+    return core.extern_elementwise("", "", [], {
+        (): ("__triton_hip_syncthreads", core.uint64),
+    }, is_pure=False, _builder=_builder)
+
+
+@core.extern
+def red_add_release_agent(arg0, arg1, _builder=None):
+    return core.extern_elementwise("", "", [arg0, arg1], {
+        (core.pointer_type(core.int32), core.int32): ("__triton_hip_red_add_release_agent", core.int32),
+    }, is_pure=False, _builder=_builder)
+
+
+@core.extern
+def red_add_release_system(arg0, arg1, _builder=None):
+    return core.extern_elementwise("", "", [arg0, arg1], {
+        (core.pointer_type(core.int32), core.int32): ("__triton_hip_red_add_release_system", core.int32),
+    }, is_pure=False, _builder=_builder)
+
+
+@core.extern
+def atom_add_acquire_agent(arg0, arg1, _builder=None):
+    return core.extern_elementwise("", "", [arg0, arg1], {
+        (core.pointer_type(core.int32), core.int32): ("__triton_hip_atom_add_acquire_agent", core.int32),
+    }, is_pure=False, _builder=_builder)
+
+
+@core.extern
+def atom_add_relaxed_agent(arg0, arg1, _builder=None):
+    return core.extern_elementwise("", "", [arg0, arg1], {
+        (core.pointer_type(core.int32), core.int32): ("__triton_hip_atom_add_relaxed_agent", core.int32),
+    }, is_pure=False, _builder=_builder)
+
+
+@core.extern
+def atom_add_acqrel_agent(arg0, arg1, _builder=None):
+    return core.extern_elementwise("", "", [arg0, arg1], {
+        (core.pointer_type(core.int32), core.int32): ("__triton_hip_atom_add_acqrel_agent", core.int32),
+    }, is_pure=False, _builder=_builder)
+
+
+@core.extern
+def atom_add_acquire_system(arg0, arg1, _builder=None):
+    return core.extern_elementwise("", "", [arg0, arg1], {
+        (core.pointer_type(core.int32), core.int32): ("__triton_hip_atom_add_acquire_system", core.int32),
+    }, is_pure=False, _builder=_builder)
+
+
+@core.extern
+def atom_add_relaxed_system(arg0, arg1, _builder=None):
+    return core.extern_elementwise("", "", [arg0, arg1], {
+        (core.pointer_type(core.int32), core.int32): ("__triton_hip_atom_add_relaxed_system", core.int32),
+    }, is_pure=False, _builder=_builder)
+
+
+@core.extern
+def atom_add_acqrel_system(arg0, arg1, _builder=None):
+    return core.extern_elementwise("", "", [arg0, arg1], {
+        (core.pointer_type(core.int32), core.int32): ("__triton_hip_atom_add_acqrel_system", core.int32),
+    }, is_pure=False, _builder=_builder)
+
+
+@core.extern
+def atom_cas_acquire_relaxed_agent(arg0, arg1, arg2, _builder=None):
+    return core.extern_elementwise(
+        "", "", [arg0, arg1, arg2], {
+            (core.pointer_type(core.int32), core.pointer_type(core.int32), core.int32):
+            ("__triton_hip_atom_cas_acquire_relaxed_agent", core.uint64),
+        }, is_pure=False, _builder=_builder)
+
+
+@core.extern
+def atom_cas_release_relaxed_agent(arg0, arg1, arg2, _builder=None):
+    return core.extern_elementwise(
+        "", "", [arg0, arg1, arg2], {
+            (core.pointer_type(core.int32), core.pointer_type(core.int32), core.int32):
+            ("__triton_hip_atom_cas_release_relaxed_agent", core.uint64),
+        }, is_pure=False, _builder=_builder)
+
+
+@core.extern
+def atom_cas_relaxed_relaxed_agent(arg0, arg1, arg2, _builder=None):
+    return core.extern_elementwise(
+        "", "", [arg0, arg1, arg2], {
+            (core.pointer_type(core.int32), core.pointer_type(core.int32), core.int32):
+            ("__triton_hip_atom_cas_relaxed_relaxed_agent", core.uint64),
+        }, is_pure=False, _builder=_builder)
+
+
+@core.extern
+def atom_cas_acqrel_relaxed_agent(arg0, arg1, arg2, _builder=None):
+    return core.extern_elementwise(
+        "", "", [arg0, arg1, arg2], {
+            (core.pointer_type(core.int32), core.pointer_type(core.int32), core.int32):
+            ("__triton_hip_atom_cas_acqrel_relaxed_agent", core.uint64),
+        }, is_pure=False, _builder=_builder)
+
+
+@core.extern
+def atom_cas_acquire_relaxed_system(arg0, arg1, arg2, _builder=None):
+    return core.extern_elementwise(
+        "", "", [arg0, arg1, arg2], {
+            (core.pointer_type(core.int32), core.pointer_type(core.int32), core.int32):
+            ("__triton_hip_atom_cas_acquire_relaxed_system", core.uint64),
+        }, is_pure=False, _builder=_builder)
+
+
+@core.extern
+def atom_cas_release_relaxed_system(arg0, arg1, arg2, _builder=None):
+    return core.extern_elementwise(
+        "", "", [arg0, arg1, arg2], {
+            (core.pointer_type(core.int32), core.pointer_type(core.int32), core.int32):
+            ("__triton_hip_atom_cas_release_relaxed_system", core.uint64),
+        }, is_pure=False, _builder=_builder)
+
+
+@core.extern
+def atom_cas_relaxed_relaxed_system(arg0, arg1, arg2, _builder=None):
+    return core.extern_elementwise(
+        "", "", [arg0, arg1, arg2], {
+            (core.pointer_type(core.int32), core.pointer_type(core.int32), core.int32):
+            ("__triton_hip_atom_cas_relaxed_relaxed_system", core.uint64),
+        }, is_pure=False, _builder=_builder)
+
+
+@core.extern
+def atom_cas_acqrel_relaxed_system(arg0, arg1, arg2, _builder=None):
+    return core.extern_elementwise(
+        "", "", [arg0, arg1, arg2], {
+            (core.pointer_type(core.int32), core.pointer_type(core.int32), core.int32):
+            ("__triton_hip_atom_cas_acqrel_relaxed_system", core.uint64),
+        }, is_pure=False, _builder=_builder)

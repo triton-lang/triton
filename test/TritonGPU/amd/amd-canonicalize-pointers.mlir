@@ -1390,3 +1390,34 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
 // CHECK:           tt.store %[[VAL_8]], %[[VAL_6]] : tensor<512x!tt.ptr<i8>>
 // CHECK:           tt.return
 // CHECK:         }
+
+// -----
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "hip:gfx1100", "ttg.threads-per-warp" = 32 : i32} {
+  tt.func public @asin_kernel(%arg0: !tt.ptr<i64>) attributes {noinline = false} {
+    %c1024_i32 = arith.constant 1024 : i32
+    %0 = tt.get_program_id x : i32
+    %1 = arith.muli %0, %c1024_i32 : i32
+    %2 = tt.make_range {end = 1024 : i32, start = 0 : i32} : tensor<1024xi32>
+    %3 = tt.splat %1 : i32 -> tensor<1024xi32>
+    %4 = arith.addi %3, %2 : tensor<1024xi32>
+    %5 = tt.splat %arg0 : !tt.ptr<i64> -> tensor<1024x!tt.ptr<i64>>
+    %6 = tt.addptr %5, %4 : tensor<1024x!tt.ptr<i64>>, tensor<1024xi32>
+    %7 = tt.extern_elementwise %6 {libname = "", libpath = "", pure = false, symbol = "__triton_hip_load_acquire_workgroup"} : (tensor<1024x!tt.ptr<i64>>) -> tensor<1024xi64>
+    tt.return
+  }
+}
+
+// CHECK-LABEL:   tt.func public @asin_kernel(
+// CHECK-SAME                                 %[[VAL_0:.*]]: !tt.ptr<i64>) attributes {noinline = false} {
+// CHECK:           %[[VAL_1:.*]] = arith.constant {__amdgpuconvertbufferops.output_range = [1024, 1024]} 1024 : i32
+// CHECK:           %[[VAL_2:.*]] = tt.get_program_id x {__amdgpuconvertbufferops.output_range = [0, 65536]} : i32
+// CHECK:           %[[VAL_3:.*]] = arith.muli %[[VAL_2]], %[[VAL_1]] {__amdgpuconvertbufferops.output_range = [0, 67108864]} : i32
+// CHECK:           %[[VAL_4:.*]] = tt.make_range {__amdgpuconvertbufferops.output_range = [0, 1024], end = 1024 : i32, start = 0 : i32} : tensor<1024xi32>
+// CHECK:           %[[VAL_5:.*]] = tt.splat %[[VAL_3]] {__amdgpuconvertbufferops.output_range = [0, 67108864]} : i32 -> tensor<1024xi32>
+// CHECK:           %[[VAL_6:.*]] = arith.addi %[[VAL_5]], %[[VAL_4]] {__amdgpuconvertbufferops.output_range = [0, 67109888]} : tensor<1024xi32>
+// CHECK:           %[[VAL_7:.*]] = tt.splat %[[VAL_0]] : !tt.ptr<i64> -> tensor<1024x!tt.ptr<i64>>
+// CHECK:           %[[VAL_8:.*]] = tt.addptr %[[VAL_7]], %[[VAL_6]] : tensor<1024x!tt.ptr<i64>>, tensor<1024xi32>
+// CHECK:           %[[VAL_9:.*]] = tt.extern_elementwise %[[VAL_8]] {__amdgpuconvertbufferops.output_range = [-9223372036854775808, 9223372036854775807], libname = "", libpath = "", pure = false, symbol = "__triton_hip_load_acquire_workgroup"} : (tensor<1024x!tt.ptr<i64>>) -> tensor<1024xi64>
+// CHECK:           tt.return
+// CHECK:         }
