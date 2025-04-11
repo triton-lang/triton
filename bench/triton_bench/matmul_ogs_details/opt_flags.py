@@ -91,7 +91,7 @@ def make_default_opt_flags_amd(
     num_stages = 2
     is_persistent = False
     # AMD-specific
-    target_kernel_kwargs = {"waves_per_eu": 0, "matrix_instr_nonkdim": 32, "kpack": 1}
+    target_kernel_kwargs = {"waves_per_eu": 0, "matrix_instr_nonkdim": 16, "kpack": 1}
     return OptFlags(
         block_m=block_m,
         block_n=block_n,
