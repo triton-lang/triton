@@ -18,12 +18,13 @@ flops_by_device = {
 }
 
 
-def max_flops(device_type, width, num_sms, clock_rate):
+def max_flops(device_type, arch, width, num_sms, clock_rate):
     """
     Calculate the maximum FLOPS for a given device type and width.
 
     Args:
         device_type (str): The type of device (e.g., "CUDA", "HIP").
+        arch (str): The architecture of the device (e.g., "80", "90").
         width (int): The width in bits.
         num_sms (int): The number of streaming multiprocessors.
         clock_rate (float): The clock rate in GHz.
@@ -34,10 +35,10 @@ def max_flops(device_type, width, num_sms, clock_rate):
     if device_type not in flops_by_device:
         raise ValueError(f"Unsupported device type: {device_type}")
 
-    flops_func = flops_by_device[device_type]
+    if arch not in flops_by_device[device_type]:
+        raise ValueError(f"Unsupported architecture: {arch}")
 
-    if not flops_func:
-        raise ValueError(f"No FLOPS function defined for device type: {device_type}")
+    flops_func = flops_by_device[device_type][arch]
 
     return flops_func(width, num_sms=num_sms, clock_rate=clock_rate)
 
