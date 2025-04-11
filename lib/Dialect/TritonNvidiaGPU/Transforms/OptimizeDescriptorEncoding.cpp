@@ -1,5 +1,6 @@
 #include "mlir/IR/TypeUtilities.h"
 #include "mlir/Pass/PassManager.h"
+#include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Types.h"
 #include "triton/Dialect/TritonGPU/IR/Attributes.h"
@@ -312,12 +313,13 @@ void assignMemoryLayouts(tt::FuncOp &func) {
     }
   };
 
-  // 1. Set seed values from either TMA ops, or function boundary ops which we
-  // fallback to default encoding
+  // 1. Set seed values from either TMA ops, or device function boundaries for
+  // which we fallback to default encoding
+  auto isKernel = LLVM::isKernel(func);
   for (auto blockArg : func.getBlocks().front().getArguments())
     if (auto desc = dyn_cast<TypedValue<tt::TensorDescType>>(blockArg))
       updateEncoding({desc},
-                     EncodingInfo{{}, {}, {}, /*forcedToDefault=*/true});
+                     EncodingInfo{{}, {}, {}, /*forcedToDefault=*/!isKernel});
 
   func.walk([&](Operation *op) {
     if (auto info = getUseInfo(op)) {
@@ -397,15 +399,8 @@ void assignMemoryLayouts(tt::FuncOp &func) {
                                                newEncoding));
   }
 
-  SmallVector<Type> argTys(func.getArgumentTypes());
+  SmallVector<Type> argTys(func.getBlocks().front().getArgumentTypes());
   SmallVector<Type> resultTys(func.getResultTypes());
-  for (auto [i, argTy] : llvm::enumerate(argTys)) {
-    if (auto descTy = dyn_cast<tt::TensorDescType>(argTy)) {
-      auto encoding = getFallbackSharedEncoding(descTy.getBlockType(), {}, {});
-      argTys[i] = getTensorDescTypeWithEncoding(nullptr, descTy.getBlockType(),
-                                                encoding);
-    }
-  }
   for (auto [i, resultTy] : llvm::enumerate(resultTys)) {
     if (auto descTy = dyn_cast<tt::TensorDescType>(resultTy)) {
       auto encoding = getFallbackSharedEncoding(descTy.getBlockType(), {}, {});
