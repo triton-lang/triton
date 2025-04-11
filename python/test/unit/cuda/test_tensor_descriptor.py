@@ -507,10 +507,10 @@ def test_tensor_descriptor_argument():
 
 @triton.jit
 def matmul_kernel_make_tensor_descriptor(a_ptr, b_ptr, c_ptr,  #
-                                        M, N, K,  #
-                                        BLOCK_SIZE_M: tl.constexpr, BLOCK_SIZE_N: tl.constexpr,
-                                        BLOCK_SIZE_K: tl.constexpr,  #
-                                        ):
+                                         M, N, K,  #
+                                         BLOCK_SIZE_M: tl.constexpr, BLOCK_SIZE_N: tl.constexpr,
+                                         BLOCK_SIZE_K: tl.constexpr,  #
+                                         ):
     pid_m = tl.program_id(axis=0)
     pid_n = tl.program_id(axis=1)
     offs_am = pid_m * BLOCK_SIZE_M
@@ -1386,7 +1386,9 @@ def test_host_tensor_descriptor_matmul(num_stages, num_ctas, BLOCK_M, BLOCK_N, B
     C_desc = TensorDescriptor(C, C.shape, C.stride(), [BLOCK_M, BLOCK_N])
 
     kernel = matmul_kernel_host_tensor_descriptor[grid](
-        A_desc, B_desc, C_desc, #
+        A_desc,
+        B_desc,
+        C_desc,  #
         num_warps=8,
         num_stages=num_stages,
         num_ctas=num_ctas,

@@ -109,7 +109,7 @@ def ty_to_cpp(ty):
     if ty[0] == '*':
         return "CUdeviceptr"
     if ty.startswith("tensordesc"):
-        return "CUtensorMap";
+        return "CUtensorMap"
     return {
         "i1": "int32_t",
         "i8": "int8_t",
@@ -582,8 +582,6 @@ def wrap_handle_tensordesc(launcher, tensordesc_meta):
         return launcher(*meta_args, *final_args)
 
     return inner
-
-
 
 
 class CudaLauncher(object):
