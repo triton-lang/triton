@@ -7,7 +7,7 @@ import hashlib
 import json
 from typing import Dict, Tuple, List, Optional
 
-from . import config
+from .. import config
 from .jit import KernelInterface
 from .errors import OutOfResources, PTXASError
 from .driver import driver

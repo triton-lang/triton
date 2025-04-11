@@ -1,6 +1,6 @@
 from triton.backends.compiler import BaseBackend, GPUTarget
 from triton._C.libtriton import ir, passes, llvm, nvidia
-from triton.runtime import config, _NvidiaTool
+from triton import config
 from triton.runtime.errors import PTXASError
 
 from dataclasses import dataclass
@@ -30,7 +30,7 @@ def min_dot_size(target: GPUTarget):
     return check_dot_compatibility
 
 
-def get_ptxas() -> _NvidiaTool:
+def get_ptxas() -> config.NvidiaTool:
     return config.nvidia.ptxas
 
 
