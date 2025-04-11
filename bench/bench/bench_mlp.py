@@ -102,8 +102,8 @@ def bench_mlp(batch, dim1, dim2, n_expts_tot, n_expts_act, x_dtype, w_dtype,
     tot_time = summary["time (ns) (inc)"]
 
     # Calculate theoretical min time based on hardware limits
-    device_type = gf.dataframe["device_type"].dropna()[0]
-    device_id = gf.dataframe["device_id"].dropna()[0]
+    device_type = gf.dataframe["device_type"].dropna().iloc[0]
+    device_id = gf.dataframe["device_id"].dropna().iloc[0]
     info = device_info[device_type][device_id]
 
     min_time_flops_sec = sum(
