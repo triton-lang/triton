@@ -43,6 +43,7 @@ def _query_gpu_specs():
             {"MAX_TFLOPS8": 4500, "MAX_TFLOPS16": 2250, "MAX_TBPS": 8.0}
         }[name]
     else:
+        # no spec data yet.
         return None
 
 
