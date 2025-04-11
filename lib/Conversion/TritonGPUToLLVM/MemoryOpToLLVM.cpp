@@ -178,7 +178,8 @@ public:
                              adaptor.getSrc(), smemObj, getTypeConverter(),
                              rewriter, targetInfo, &llvmOpCount);
 
-    targetInfo.storeOpAnnotation(op, llvmOpCount.first, llvmOpCount.second);
+    targetInfo.localStoreOpAnnotation(op, llvmOpCount.first,
+                                      llvmOpCount.second);
 
     rewriter.eraseOp(op);
     return success();

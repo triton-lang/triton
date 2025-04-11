@@ -512,8 +512,9 @@ bool TargetInfo::supportVectorizedAtomics() const {
   return true;
 }
 
-void TargetInfo::storeOpAnnotation(triton::gpu::LocalStoreOp op,
-                                   size_t localStoreOpCount, Type type) const {
+void TargetInfo::localStoreOpAnnotation(triton::gpu::LocalStoreOp op,
+                                        size_t localStoreOpCount,
+                                        Type type) const {
   storeOpSchedAnnotations(op, localStoreOpCount, type);
 }
 
