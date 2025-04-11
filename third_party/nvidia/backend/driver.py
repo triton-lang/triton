@@ -192,7 +192,7 @@ def make_launcher(constants, signature):
         else:
             new_signature.append(sig)
 
-    signature = {i: s for i, s in enumerate(expand_signature)}
+    signature = {i: s for i, s in enumerate(new_signature)}
     args_list = ', ' + ', '.join(f"&_arg{i}" for i, ty in signature.items()) if len(signature) > 0 else ''
     # Record the end of regular arguments;
     # subsequent arguments are architecture-specific descriptors, such as tensor descriptors for CUDA.
@@ -595,7 +595,11 @@ class CudaLauncher(object):
         src = make_launcher(constants, signature)
         mod = compile_module_from_src(src, "__triton_launcher")
         self.num_ctas = functools.reduce(operator.mul, metadata.cluster_dims, 1)
-        self.launch = wrap_handle_tensordesc(mod.launch, metadata.tensordesc_meta)
+        tensordesc_meta = getattr(metadata, "tensordesc_meta", None)
+        if tensordesc_meta is not None:
+            self.launch = wrap_handle_tensordesc(mod.launch, tensordesc_meta)
+        else:
+            self.launch = mod.launch
         self.global_scratch_size = metadata.global_scratch_size
         self.global_scratch_align = metadata.global_scratch_align
         self.launch_cooperative_grid = metadata.launch_cooperative_grid
