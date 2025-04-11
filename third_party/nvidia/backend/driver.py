@@ -596,7 +596,6 @@ class CudaLauncher(object):
         arg_idx = lambda x: (src.fn.arg_names.index(x), ) if isinstance(x, str) else x
         constants = {arg_idx(idx): value for idx, value in constants.items()}
         signature = {idx: value for idx, value in src.signature.items()}
-
         src = make_launcher(constants, signature)
         mod = compile_module_from_src(src, "__triton_launcher")
         self.num_ctas = functools.reduce(operator.mul, metadata.cluster_dims, 1)
