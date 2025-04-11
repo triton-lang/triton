@@ -1,0 +1,10 @@
+diff a/bench/triton_bench/matmul_ogs_details/opt_flags.py b/bench/triton_bench/matmul_ogs_details/opt_flags.py	(rejected hunks)
+@@ -90,7 +91,7 @@ def make_default_opt_flags_amd(
+     num_stages = 2
+     is_persistent = False
+ if __name__ == "__main__":
+-    has_native_mx4 = torch.cuda.get_device_capability(0)[0] >= 10
++    has_native_mx4 = torch.cuda.get_device_capability(0)[0] >= 10 or is_cdna4()
+     qxdtype = "fp8" if has_native_mx4 else "bf16"
+     print(bench_mlp(8192, 8192, 8192, 1, 1, "fp8", "fp8", TP=1, EP=1, name="dense"))
+     print(bench_mlp(8192, 8192, 8192, 1, 1, qxdtype, "mx4", TP=1, EP=1, name="dense"))
