@@ -211,8 +211,7 @@ if __name__ == "__main__":
               'GROUP_SIZE_M': 1, 'SPLIT_K': 1,
             #   'num_warps': 4,
               'num_warps': 8,
-            #   'num_stages': 0,
-              'num_stages': 1,
+              'num_stages': 2,
               'waves_per_eu': 2,
               'matrix_instr_nonkdim': 16,
               'kpack': 1
@@ -226,8 +225,8 @@ if __name__ == "__main__":
     dtype_a = "fp16"
     dtype_b = "fp16"
     dtype_c = "fp16"
-    # init_type = "randn"
-    init_type = "const_layer"
+    init_type = "randn"
+    # init_type = "const_layer"
     # init_type = "trig_float"
     bias_vector = False
 
@@ -240,8 +239,8 @@ if __name__ == "__main__":
     # a = torch.randn((M, K), device='cuda', dtype=datatype)
     # b = torch.randn((K, N), device='cuda', dtype=datatype)
     a, a_fp16 = gen_input(M, K, dtype_a, col_a, 1, init_type, device='cuda')
-    # b, b_fp16 = gen_input(K, N, dtype_b, col_b, 2, init_type, device='cuda')
-    b, b_fp16 = gen_input(K, N, dtype_b, col_b, 2, 'ones', device='cuda')
+    b, b_fp16 = gen_input(K, N, dtype_b, col_b, 2, init_type, device='cuda')
+    # b, b_fp16 = gen_input(K, N, dtype_b, col_b, 2, 'ones', device='cuda')
     bias = None
     if use_bias:
         bias, bias_fp16 = gen_input(M,
@@ -260,14 +259,12 @@ if __name__ == "__main__":
 
     # Allocate a fake expert_ids_ptr as 0,1,...,M-1
     sorted_token_ids_ptr = torch.arange(0, M, dtype=torch.int32, device=a.device)
-    # num_valid_tokens = 8
-    num_valid_tokens = 16
+    num_valid_tokens = 8
+    # num_valid_tokens = 16
     triton_output = invoke_moe(a, b, c, bias, block_m, block_n, block_k, group_m,
                                split_k, num_warps, num_stages, waves_per_eu,
                                mfmaInstrSize, kpack, use_bias, sorted_token_ids_ptr, num_valid_tokens)
-    # a[8:16, :] = 0
-    # a[:, :1024] = 0
-    # a[:, 1024:] *= 2
+    a[8:16, :] = 0
     torch_output = torch.matmul(a, b)
     # torch.save(torch_output, 'tensor_cache_16x40961024_num-valid-tokens=8.pt')
     # torch_output = torch.load('tensor_cache_16x40961024_num-valid-tokens=8.pt', weights_only=True)
@@ -278,7 +275,6 @@ if __name__ == "__main__":
     row_a_str = 'N' if col_a else 'T'
     row_b_str = 'N' if col_b else 'T'
     size_str = ''
-    # torch.set_printoptions(precision=2)
     torch.set_printoptions(linewidth=400)
     torch.set_printoptions(threshold=2048)
     torch.set_printoptions(sci_mode=False)
@@ -294,7 +290,6 @@ if __name__ == "__main__":
     else:
         print(f"triton_output={triton_output}")
         print(f"torch_output={torch_output}")
-        # print(f"{torch.mean(torch.abs(triton_output), 1)=}")
         print(f"diff={torch_output - triton_output}")
         print(f"div={torch_output / triton_output}")
         mismatch = torch_output[:8, :] != triton_output[:8, :]

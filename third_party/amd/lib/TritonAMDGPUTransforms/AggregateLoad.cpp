@@ -238,8 +238,6 @@ Value hoistLoad(scf::ForOp forOp, Operation *op, int64_t hoistKSize, int ub) {
     // Dealing with other
     Value other = loadOp.getOther();
     auto otherConstant = dyn_cast<arith::ConstantOp>(other.getDefiningOp());
-    llvm::outs() << "OTHER OG:" << other << "\n";
-    llvm::outs() << "OTHER CONST:" << otherConstant << "\n";
     // auto attr = otherConstant.getValue();
     auto denseAttr =
         dyn_cast<DenseFPElementsAttr>(otherConstant.getValueAttr());
@@ -359,7 +357,7 @@ void processLoopBody(scf::ForOp forOp, Operation *op, Value localAllocVal) {
       ttg::SharedMemorySpaceAttr::get(forOp.getContext());
   ttg::MemDescType subviewTy = ttg::MemDescType::get(
       subviewShape, allocTy.getElementType(), allocTy.getEncoding(),
-      sharedMemorySpace, /*mutableMemory=*/true);
+      sharedMemorySpace, /*mutableMemory=*/true, allocTy.getShape());
   auto ldsSubview = builder.create<ttg::MemDescSubviewOp>(
       loc, subviewTy, localAllocVal, localBufOff);
 
@@ -389,8 +387,7 @@ void processLoopBody(scf::ForOp forOp, Operation *op, Value localAllocVal) {
 }
 
 void generateOuterLoop(scf::ForOp forOp, Value localAllocVal,
-                       int64_t hoistFactor) {
-
+                       int64_t hoistFactor, int64_t hoistKSize) {
   // Set up ops/info required to build outer loop.
   auto localAllocOp =
       llvm::cast<ttg::LocalAllocOp>(localAllocVal.getDefiningOp());
@@ -408,19 +405,37 @@ void generateOuterLoop(scf::ForOp forOp, Value localAllocVal,
   Value step =
       builder.create<arith::ConstantOp>(loc, builder.getI32IntegerAttr(1));
   Value init = forOp.getInits()[0];
+  Value bPtr = forOp.getInits()[2];
   int innerUB = isUpperBoundConstant(forOp);
   Value newInnerUB = builder.create<arith::ConstantOp>(
       loc, builder.getI32IntegerAttr(innerUB / hoistFactor));
   auto outerDimLoop = builder.create<scf::ForOp>(
-      loc, lb, ub, step, ValueRange{init},
+      loc, lb, ub, step, ValueRange{init, bPtr},
       [&](OpBuilder &b, Location loc, Value iv, ValueRange args) {
-        Operation *newLoadOp = builder.clone(*loadOp.getOperation());
+        Value offsetEl = builder.create<arith::MulIOp>(
+            loc, iv,
+            builder.create<arith::ConstantOp>(
+                loc, builder.getI32IntegerAttr(hoistKSize)));
+        auto aPtr = loadOp.getPtr();
+        auto aPtrTy = cast<RankedTensorType>(aPtr.getType());
+        auto offsetTy =
+            RankedTensorType::get(aPtrTy.getShape(), builder.getIntegerType(32),
+                                  aPtrTy.getEncoding());
+        Value offset = builder.create<tt::SplatOp>(loc, offsetTy, offsetEl);
+        Value newAPtr = builder.create<tt::AddPtrOp>(loc, aPtrTy, aPtr, offset);
+
+        IRMapping loadMapping;
+        loadMapping.map(aPtr, newAPtr);
+        Operation *newLoadOp =
+            builder.clone(*loadOp.getOperation(), loadMapping);
+
         auto newLocalAllocOp = builder.create<ttg::LocalAllocOp>(
             loc, localAllocVal.getType(), newLoadOp->getResults()[0]);
         IRMapping mapping;
         mapping.map(loadOp.getResult(), newLoadOp->getResults()[0]);
         mapping.map(localAllocVal, newLocalAllocOp.getResult());
         mapping.map(init, args[0]);
+        mapping.map(bPtr, args[1]);
         // TODO: Need to hoist B-matrix local_alloc to be out of this loop.
         // TODO: Setup matmul test with 2048.
         // TODO: Generalize figuring out/(error out when not the case) that old
@@ -429,7 +444,8 @@ void generateOuterLoop(scf::ForOp forOp, Value localAllocVal,
         auto newInnerForOp = llvm::cast<scf::ForOp>(newInnerLoop);
         newInnerForOp.setUpperBound(newInnerUB);
         builder.create<scf::YieldOp>(loc,
-                                     ValueRange{newInnerLoop->getResults()[0]});
+                                     ValueRange{newInnerLoop->getResults()[0],
+                                                newInnerLoop->getResults()[2]});
       });
   forOp.getResults()[0].replaceAllUsesWith(outerDimLoop.getResults()[0]);
   forOp.erase();
@@ -485,7 +501,7 @@ struct AggregateLoad : public TritonAMDGPUAggregateLoadBase<AggregateLoad> {
         auto localAllocValue = hoistLoad(forOp, loadOp, hoistKSize, ub);
         processLoopBody(forOp, loadOp, localAllocValue);
         if (hoistFactor > 1)
-          generateOuterLoop(forOp, localAllocValue, hoistFactor);
+          generateOuterLoop(forOp, localAllocValue, hoistFactor, hoistKSize);
       }
     });
     llvm::outs() << "after: " << *getOperation() << "\n";
