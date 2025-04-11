@@ -133,6 +133,7 @@ def ty_to_cpp(ty):
 def make_launcher(constants, signature):
 
     def _expand_signature(sig, output):
+        # Expand tensordesc arguments
         if isinstance(sig, str) and sig.startswith("tensordesc"):
             output.append("nvTmaDesc")
             ndim = sig.count(",") + 1
@@ -140,6 +141,14 @@ def make_launcher(constants, signature):
                 output.append("i32")
             for _ in range(ndim):
                 output.append("i64")
+        else:
+            output.append(sig)
+
+    def _flatten_signature(sig, output):
+        # Flatten tuples
+        if isinstance(sig, tuple):
+            for x in sig:
+                _flatten_signature(x, output)
         else:
             output.append(sig)
 
@@ -185,14 +194,10 @@ def make_launcher(constants, signature):
     args_format = ''.join([format_of(ty) for ty in signature.values()])
     format = "iiiKKpOOOOO" + args_format
 
-    new_signature = []
+    flat_signature = []
     for sig in signature.values():
-        if isinstance(sig, tuple):
-            new_signature.extend(sig)
-        else:
-            new_signature.append(sig)
-
-    signature = {i: s for i, s in enumerate(new_signature)}
+        _flatten_signature(sig, flat_signature)
+    signature = {i: s for i, s in enumerate(flat_signature)}
     args_list = ', ' + ', '.join(f"&_arg{i}" for i, ty in signature.items()) if len(signature) > 0 else ''
     # Record the end of regular arguments;
     # subsequent arguments are architecture-specific descriptors, such as tensor descriptors for CUDA.
