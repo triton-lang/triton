@@ -448,8 +448,6 @@ struct AggregateLoad : public TritonAMDGPUAggregateLoadBase<AggregateLoad> {
   AggregateLoad() = default;
 
   void runOnOperation() override {
-    return;
-
     int64_t totalSharedMemoryUsage = 0;
     bool foundDotOp = false;
     getOperation()->walk([&](triton::DotOp dotOp) -> void {

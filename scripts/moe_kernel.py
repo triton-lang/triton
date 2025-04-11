@@ -36,12 +36,15 @@ def matmul_kernel(
         offs_k = pid_z * BLOCK_SIZE_K + tl.arange(0, BLOCK_SIZE_K)
 
     offs_token_id = pid_m * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M)
+    # tl.device_print("offs_token_id", offs_token_id)
     offs_token = tl.load(sorted_token_ids_ptr + offs_token_id)
+    # tl.device_print("offs_token", offs_token)
     token_mask = offs_token < num_valid_tokens
 
     offs_bn = (pid_n * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N))
 
     a_ptrs = a_ptr + offs_token[:, None] * stride_am + offs_k[None, :] * stride_ak
+    # a_ptrs = a_ptr + offs_token_id[:, None] * stride_am + offs_k[None, :] * stride_ak
     b_ptrs = b_ptr + offs_k[:, None] * stride_bk + offs_bn[None, :] * stride_bn
 
     acc_dtype = tl.float32 if a_ptr.type.element_ty != tl.int8 else tl.int32
@@ -98,7 +101,7 @@ def gen_input(M, N, ty_name, needTrans, seed, init_type, device='cuda'):
             ret = []
             dim0, dim1 = size
             for i in range(dim0):
-                ret.append(torch.full((dim1,), float(i) / dim0, dtype=dtype, device='cuda'))
+                ret.append(torch.full((dim1,), float(i + 1) / dim0, dtype=dtype, device='cuda'))
             return torch.stack(ret).contiguous()
         else:
             raise ValueError("Bad matrix initialization type.")
@@ -224,8 +227,8 @@ if __name__ == "__main__":
     dtype_b = "fp16"
     dtype_c = "fp16"
     # init_type = "randn"
-    # init_type = "const_layer"
-    init_type = "trig_float"
+    init_type = "const_layer"
+    # init_type = "trig_float"
     bias_vector = False
 
     # Load Configs
@@ -237,7 +240,8 @@ if __name__ == "__main__":
     # a = torch.randn((M, K), device='cuda', dtype=datatype)
     # b = torch.randn((K, N), device='cuda', dtype=datatype)
     a, a_fp16 = gen_input(M, K, dtype_a, col_a, 1, init_type, device='cuda')
-    b, b_fp16 = gen_input(K, N, dtype_b, col_b, 2, init_type, device='cuda')
+    # b, b_fp16 = gen_input(K, N, dtype_b, col_b, 2, init_type, device='cuda')
+    b, b_fp16 = gen_input(K, N, dtype_b, col_b, 2, 'ones', device='cuda')
     bias = None
     if use_bias:
         bias, bias_fp16 = gen_input(M,
@@ -256,12 +260,14 @@ if __name__ == "__main__":
 
     # Allocate a fake expert_ids_ptr as 0,1,...,M-1
     sorted_token_ids_ptr = torch.arange(0, M, dtype=torch.int32, device=a.device)
-    num_valid_tokens = 8
-    # num_valid_tokens = 16
+    # num_valid_tokens = 8
+    num_valid_tokens = 16
     triton_output = invoke_moe(a, b, c, bias, block_m, block_n, block_k, group_m,
                                split_k, num_warps, num_stages, waves_per_eu,
                                mfmaInstrSize, kpack, use_bias, sorted_token_ids_ptr, num_valid_tokens)
-    a[8:16, :] = 0
+    # a[8:16, :] = 0
+    # a[:, :1024] = 0
+    # a[:, 1024:] *= 2
     torch_output = torch.matmul(a, b)
     # torch.save(torch_output, 'tensor_cache_16x40961024_num-valid-tokens=8.pt')
     # torch_output = torch.load('tensor_cache_16x40961024_num-valid-tokens=8.pt', weights_only=True)
@@ -278,8 +284,8 @@ if __name__ == "__main__":
     torch.set_printoptions(sci_mode=False)
     print(f'{a=}')
     print(f'{b=}')
-    # if verbose:
     size_str = f'SIZE M: {M}, N: {N}, K: {K}, trans: {row_a_str}{row_b_str}'
+    # torch_output /= 8
     if torch.allclose(triton_output.to(torch.float16),
                       torch_output,
                       atol=atol,
@@ -293,9 +299,5 @@ if __name__ == "__main__":
         print(f"div={torch_output / triton_output}")
         mismatch = torch_output[:8, :] != triton_output[:8, :]
         print(f'Num mismatch: {torch.sum(mismatch, dim=1)}')
-        # for i in range(8):
-        #     for j in range(4096):
-        #         if (match[i, j]):
-        #             print(f'({i}, {j})')
         print(f'{size_str} Incorrect❌')
         torch.testing.assert_close(triton_output.to(torch.float16), torch_output, atol=atol, rtol=rtol)

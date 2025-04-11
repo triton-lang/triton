@@ -330,6 +330,14 @@ def gen_input(M, N, ty_name, needTrans, seed, init_type, device='cuda'):
             return torch.zeros(size, dtype=dtype, device='cuda')
         elif init_type == "randn":
             temp = torch.randn(size, dtype=dtype, device='cuda')
+        elif init_type == 'ones':
+            return torch.ones(size, dtype=dtype, device='cuda')
+        elif init_type == 'const_layer':
+            ret = []
+            dim0, dim1 = size
+            for i in range(dim0):
+                ret.append(torch.full((dim1,), float(i) / dim0, dtype=dtype, device='cuda'))
+            return torch.stack(ret).contiguous()
             return temp
         else:
             raise ValueError("Bad matrix initialization type.")
@@ -475,6 +483,7 @@ def test_correctness(M, N, K, col_a, col_b, dtype_a, dtype_b, dtype_c,
     torch.manual_seed(0)
     #a = torch.randn((M, K), device='cuda', dtype=datatype)
     #b = torch.randn((K, N), device='cuda', dtype=datatype)
+    init_type = 'const_layer'
     a, a_fp16 = gen_input(M, K, dtype_a, col_a, 1, init_type, device='cuda')
     b, b_fp16 = gen_input(K, N, dtype_b, col_b, 2, init_type, device='cuda')
     bias = None
