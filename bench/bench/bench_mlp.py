@@ -104,17 +104,13 @@ def bench_mlp(batch, dim1, dim2, n_expts_tot, n_expts_act, x_dtype, w_dtype,
     # Calculate theoretical min time based on hardware limits
     device_type = gf.dataframe["device_type"].dropna()[0]
     device_id = gf.dataframe["device_id"].dropna()[0]
-    device_info_entry = device_info[device_type][device_id]
+    info = device_info[device_type][device_id]
 
-    arch = device_info_entry["arch"]
-    num_sms = device_info_entry["num_sms"]
-    clock_rate = device_info_entry["clock_rate"]
-    bus_width = device_info_entry["bus_width"]
-    memory_clock_rate = device_info_entry["memory_clock_rate"]
-
-    peak_bandwidth = proton.specs.max_bytes(bus_width, memory_clock_rate)
-    min_time_flops_sec = tot_flops / proton.specs.max_flops(device_type, arch, 8, num_sms, clock_rate)
-    min_time_bytes_sec = tot_bytes / peak_bandwidth
+    min_time_flops_sec = sum(
+        summary.get(f"flops{width} (inc)", 0) /
+        proton.specs.max_flops(device_type, info["arch"], width, info["num_sms"], info["clock_rate"])
+        for width in [8, 16])
+    min_time_bytes_sec = tot_bytes / proton.specs.max_bytes(info["bus_width"], info["memory_clock_rate"])
 
     util = max(min_time_flops_sec, min_time_bytes_sec) / (tot_time / 1e9)
     tflops = tot_flops / tot_time * 1e-3
