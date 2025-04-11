@@ -31,7 +31,7 @@ env:
 jobs:
   Runner-Preparation:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
     outputs:
       matrix-CUDA: ${{ steps.set-matrix.outputs.matrix-CUDA }}
       matrix-HIP: ${{ steps.set-matrix.outputs.matrix-HIP }}
@@ -198,12 +198,7 @@ jobs:
             ~/.triton/nvidia
             ~/.triton/json
           key: ${{ runner.os }}-${{ runner.arch }}-llvm-${{ steps.cache-key.outputs.llvm }}-nvidia-${{ steps.cache-key.outputs.nvidia }}-json-${{ steps.cache-key.outputs.json }}
-      - # Cache ~/.triton/cache because the vast majority of unit test time is
-        # spent compiling.  Triton won't (well, should not) use these cached files
-        # if something internal to Triton changes, because Triton's internal
-        # source code is part of the cache key.
-        #
-        # Similarly, cache ~/.cache/ccache to speed up compilation.
+      - # Cache ~/.cache/ccache to speed up compilation.
         #
         # On branch `main` we always start from an empty cache, i.e. we skip the
         # "restore" step.  This is to prevent the caches from accumulating stale
@@ -214,7 +209,6 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: |
-            ~/.triton/cache
             ~/.ccache
           # Restore the most recent cache entry.
           restore-keys: |
@@ -285,7 +279,6 @@ jobs:
         uses: actions/cache/save@v4
         with:
           path: |
-            ~/.triton/cache
             ~/.ccache
           key: triton-artifacts-${{ runner.os }}-${{ runner.arch }}-${{ env.RUNNER_TYPE }}-llvm-${{ steps.cache-key.outputs.llvm }}-${{ steps.cache-key.outputs.datetime }}
   Integration-Tests-AMD:
@@ -336,12 +329,7 @@ jobs:
             ~/.triton/nvidia
             ~/.triton/json
           key: ${{ runner.os }}-${{ runner.arch }}-llvm-${{ steps.cache-key.outputs.llvm }}-nvidia-${{ steps.cache-key.outputs.nvidia }}-json-${{ steps.cache-key.outputs.json }}
-      - # Cache ~/.triton/cache because the vast majority of unit test time is
-        # spent compiling.  Triton won't (well, should not) use these cached files
-        # if something internal to Triton changes, because Triton's internal
-        # source code is part of the cache key.
-        #
-        # Similarly, cache ~/.cache/ccache to speed up compilation.
+      - # Cache ~/.cache/ccache to speed up compilation.
         #
         # On branch `main` we always start from an empty cache, i.e. we skip the
         # "restore" step.  This is to prevent the caches from accumulating stale
@@ -352,7 +340,6 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: |
-            ~/.triton/cache
             ~/.ccache
           # Restore the most recent cache entry.
           restore-keys: |
@@ -443,7 +430,6 @@ jobs:
         uses: actions/cache/save@v4
         with:
           path: |
-            ~/.triton/cache
             ~/.ccache
           key: triton-artifacts-${{ runner.os }}-${{ runner.arch }}-${{ env.RUNNER_TYPE }}-llvm-${{ steps.cache-key.outputs.llvm }}-${{ steps.cache-key.outputs.datetime }}
       - name: Clean up caches
@@ -500,12 +486,7 @@ jobs:
             ~/.triton/nvidia
             ~/.triton/json
           key: ${{ runner.os }}-${{ runner.arch }}-llvm-${{ steps.cache-key.outputs.llvm }}-nvidia-${{ steps.cache-key.outputs.nvidia }}-json-${{ steps.cache-key.outputs.json }}
-      - # Cache ~/.triton/cache because the vast majority of unit test time is
-        # spent compiling.  Triton won't (well, should not) use these cached files
-        # if something internal to Triton changes, because Triton's internal
-        # source code is part of the cache key.
-        #
-        # Similarly, cache ~/.cache/ccache to speed up compilation.
+      - # Cache ~/.cache/ccache to speed up compilation.
         #
         # On branch `main` we always start from an empty cache, i.e. we skip the
         # "restore" step.  This is to prevent the caches from accumulating stale
@@ -516,7 +497,6 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: |
-            ~/.triton/cache
             ~/.ccache
           # Restore the most recent cache entry.
           restore-keys: |
@@ -572,6 +552,5 @@ jobs:
         uses: actions/cache/save@v4
         with:
           path: |
-            ~/.triton/cache
             ~/.ccache
           key: triton-artifacts-${{ runner.os }}-${{ runner.arch }}-${{ env.RUNNER_TYPE }}-llvm-${{ steps.cache-key.outputs.llvm }}-${{ steps.cache-key.outputs.datetime }}
