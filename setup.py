@@ -598,6 +598,7 @@ def get_entry_points():
             "proton-viewer = triton.profiler.viewer:main",
             "proton = triton.profiler.proton:main",
         ]
+    entry_points["triton.backends"] = [f"{b.name} = triton.backends.{b.name}" for b in backends]
     return entry_points
 
 
@@ -638,7 +639,10 @@ setup(
     author_email="phil@openai.com",
     description="A language and compiler for custom Deep Learning operations",
     long_description="",
-    install_requires=["setuptools>=40.8.0"],
+    install_requires=[
+        "setuptools>=40.8.0",
+        "importlib-metadata; python_version < '3.10'",
+    ],
     packages=find_packages(where="python") + extra_packages,
     package_dir=package_dirs,
     entry_points=get_entry_points(),
