@@ -8,7 +8,7 @@ import json
 from functools import cached_property
 from typing import Dict, Tuple, List, Optional
 
-from .. import config
+from .. import config as triton_config
 from .jit import KernelInterface
 from .errors import OutOfResources, PTXASError
 from .driver import driver
@@ -32,7 +32,7 @@ class Autotuner(KernelInterface):
         self.keys = key
         self.cache: Dict[Tuple, Config] = {}
         self.arg_names = arg_names
-        self.cache_results = cache_results or config.env.cache
+        self.cache_results = cache_results or triton_config.autotuning.cache
 
         # Reset to zero or restore values
         self.reset_to_zero = []
@@ -124,7 +124,7 @@ class Autotuner(KernelInterface):
     def _bench(self, *args, config, **meta):
         from ..compiler.errors import CompileTimeAssertionFailure
 
-        verbose = config.autotuning.print
+        verbose = triton_config.autotuning.print
         if verbose:
             print(f"Autotuning kernel {self.base_fn.__name__} with config {config}")
 
@@ -241,7 +241,7 @@ class Autotuner(KernelInterface):
         else:
             config = self.configs[0]
         self.best_config = config
-        if config.autotuning.print and not used_cached_result:
+        if triton_config.autotuning.print and not used_cached_result:
             print(f"Triton autotuning for function {self.base_fn.__name__} finished after "
                   f"{self.bench_time:.2f}s; best config selected: {self.best_config};")
         if config.pre_hook is not None:

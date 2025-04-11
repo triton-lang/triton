@@ -76,7 +76,7 @@ def get_sass(cubin_asm, fun=None):
 
 
 def path_to_cuobjdump():
-    from triton.runtime.config import config
+    from triton import config
     return config.nvidia.cuobjdump.path
 
 

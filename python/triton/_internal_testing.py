@@ -4,7 +4,7 @@ import numpy as np
 import torch
 import triton
 import triton.language as tl
-from triton.runtime.config import config
+from triton import config
 import pytest
 
 from numpy.random import RandomState

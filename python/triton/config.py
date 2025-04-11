@@ -149,7 +149,7 @@ def get_nvidia_tool(binary: str) -> NvidiaTool:
     paths = [
         getenv(f"TRITON_{binary.upper()}_PATH"),
         os.path.join(
-            os.path.dirname(os.path.dirname(__file__)),
+            os.path.dirname(__file__),
             "backends",
             "nvidia",
             "bin",
