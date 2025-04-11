@@ -9,7 +9,7 @@ from . import math
 
 def _log2(i: core.constexpr):
     log2 = 0
-    n = i.value
+    n = core.constexpr(i).value
     while n > 1:
         n >>= 1
         log2 += 1
