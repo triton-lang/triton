@@ -270,7 +270,6 @@ LogicalResult triton::gpu::specializeLoadMMADependencies(scf::ForOp &loop,
   WarpSchedule schedule;
   Partition *loadPartition = schedule.addPartition(0);
   Partition *mmaPartition = schedule.addPartition(numStages);
-  Partition *waiterPartition = schedule.addPartition(numStages + numMmaStages);
 
   // Multi-buffer the loads.
   auto [loadIndex, loadPhase] = addIndexAndPhase(b, loop, numStages);
@@ -346,15 +345,9 @@ LogicalResult triton::gpu::specializeLoadMMADependencies(scf::ForOp &loop,
 
   // Now rewrite the MMA by multi-buffering the accumulator if necessary.
   // However, the TMEM multi-buffering may be with respect to the outer loop.
-  Value mmaBars = createBarrierAlloc(loop, numStages);
   b.setInsertionPointAfter(mmaOp);
-  Value curMmaBar = createSingleBufferView(b, mmaBars, loadIndex);
-  createInPartition<ttng::TCGen5CommitOp>(b, *mmaPartition, curMmaBar);
+  createInPartition<ttng::TCGen5CommitOp>(b, *mmaPartition, curEmptyBar);
   mmaOp.setSync(false);
-
-  createInPartition<ttng::WaitBarrierOp>(b, *waiterPartition, curMmaBar,
-                                         loadPhase);
-  createInPartition<ttng::ArriveBarrierOp>(b, *waiterPartition, curEmptyBar, 1);
   OpBuilder::InsertPoint donePt = b.saveInsertionPoint();
 
   // Now handle the accumulator, which is the tricky bit. The accumulator value
@@ -433,8 +426,8 @@ LogicalResult triton::gpu::specializeLoadMMADependencies(scf::ForOp &loop,
 
     // Set up production of the accumulator result.
     b.setInsertionPointAfter(pred.getDefiningOp());
-    createInPartition<ttng::ArriveBarrierOp>(b, *waiterPartition,
-                                             curAccReadyBar, 1, pred);
+    createInPartition<ttng::TCGen5CommitOp>(b, *mmaPartition, curAccReadyBar,
+                                            pred);
     createInPartition<ttng::WaitBarrierOp>(b, *mmaPartition, curAccEmptyBar,
                                            accPhase, pred);
     assert(donePt.getPoint() == b.getInsertionPoint() ||
@@ -487,8 +480,10 @@ LogicalResult triton::gpu::specializeLoadMMADependencies(scf::ForOp &loop,
 
     // Place the epilogue partition in the default warpgroup. The MMA and load
     // partitions shouldn't have tensor computations in them, which means they
-    // will get assigned just 1 warp each.
-    schedule.reorderPartitions({2, 1, 3, 0});
+    // will get assigned just 1 warp each. Add an extra partition to pad the
+    // number of warps to the nearest warpgroup.
+    schedule.addPartition(0);
+    schedule.reorderPartitions({2, 1, 0, 3});
   }
 
   schedule.serialize(loop);
