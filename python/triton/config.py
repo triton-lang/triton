@@ -292,7 +292,7 @@ class nvidia:
 
 
 class amd:
-    use_buffer_ops: env_bool = env_bool("AMDGCN_USE_BUFFER_OPS")
+    use_buffer_ops: env_bool = env_bool("AMDGCN_USE_BUFFER_OPS", True)
     dump_amdgcn: env_bool = env_bool("AMDGCN_ENABLE_DUMP")
     libhip_path: env_str = env_str("TRITON_LIBHIP_PATH")
     lld_path: env_str = env_str("TRITON_HIP_LLD_PATH")
