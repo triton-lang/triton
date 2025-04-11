@@ -7,6 +7,7 @@ add_triton_library(TritonNvidiaGPUTransforms
   PromoteLHSToTMem.cpp
   TensorMemoryAllocation.cpp
   TMALowering.cpp
+  TMAUtilities.cpp
 
   DEPENDS
   TritonNvidiaGPUTransformsIncGen
