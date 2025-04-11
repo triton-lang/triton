@@ -49,7 +49,7 @@ std::string mangleFunc(std::string name, Type type) {
 Value createVectorMaskFromPredicate(RewriterBase &rewriter, Location loc,
                                     Value pred, int64_t vecSize) {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
-  auto vecMaskTy = LLVM::getFixedVectorType(rewriter.getI1Type(), vecSize);
+  auto vecMaskTy = LLVM::getVectorType(rewriter.getI1Type(), vecSize);
   Value maskVal = b.undef(vecMaskTy);
   for (size_t s = 0; s < vecSize; ++s) {
     Value indexVal =
@@ -70,7 +70,7 @@ int64_t getNumElements(Type ty) {
 Type castToVectorType(Type ty) {
   if (isa<VectorType>(ty))
     return ty;
-  return LLVM::getFixedVectorType(ty, 1);
+  return LLVM::getVectorType(ty, 1);
 }
 
 } // namespace
