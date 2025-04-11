@@ -102,13 +102,8 @@ def bench_mlp(batch, dim1, dim2, n_expts_tot, n_expts_act, x_dtype, w_dtype,
     tot_time = summary["time (ns) (inc)"]
 
     # Calculate theoretical min time based on hardware limits
-    device_types = gf.dataframe["device_type"].dropna().unique()
-    device_ids = gf.dataframe["device_id"].dropna().unique()
-    assert len(device_types) == 1, f"Multiple device types found: {device_types}"
-    assert len(device_ids) == 1, f"Multiple device ids found: {device_ids}"
-
-    device_type = device_types[0]
-    device_id = device_ids[0]
+    device_type = gf.dataframe["device_type"].dropna()[0]
+    device_id = gf.dataframe["device_id"].dropna()[0]
     device_info_entry = device_info[device_type][device_id]
 
     arch = device_info_entry["arch"]
