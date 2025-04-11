@@ -1,13 +1,13 @@
 from pathlib import Path
 import json
 import triton.profiler as proton
+import triton.profiler.viewer as viewer
 import torch
 import triton_bench.swiglu
 from triton_bench.mxfp import downcast_to_mxfp
 from triton_bench.matmul_ogs import MicroscalingCtx, matmul_ogs, PrecisionConfig, FlexCtx
 from triton_bench.numerics import InFlexData
 from triton_bench.routing import routing_torch, simulate_expert_sharded_routing
-from triton_bench.meta import cuda_capability_geq
 
 if torch.cuda.is_available():
     from triton._C.libtriton import nvidia
@@ -15,20 +15,6 @@ if torch.cuda.is_available():
     cublas = nvidia.cublas.CublasLt(cublas_workspace)
 else:
     cublas = None
-
-
-def _query_gpu_specs():
-    import subprocess
-    cmd = ["nvidia-smi", "--query-gpu=name", "--format=csv,noheader", "-i=0"]
-    output = subprocess.check_output(cmd, stderr=subprocess.DEVNULL).decode().strip()
-    name = output.splitlines()[0]
-    return {
-        "NVIDIA H100 80GB HBM3": {"MAX_TFLOPS8": 1979, "MAX_TFLOPS16": 989, "MAX_TBPS": 3.35}, "HGX GB200":
-        {"MAX_TFLOPS8": 4500, "MAX_TFLOPS16": 2250, "MAX_TBPS": 8.0}
-    }[name]
-
-
-SPECS = _query_gpu_specs()
 
 
 def quantize(w, dtype, dev, **opt):
@@ -108,25 +94,29 @@ def bench_mlp(batch, dim1, dim2, n_expts_tot, n_expts_act, x_dtype, w_dtype,
     proton.finalize()
 
     # -- analyze --
-    with open(f"{fpath}") as fd:
-        data = json.load(fd)
-        # TODO: this will be broken if kernels use scopes themselves
-        # compute useful (a.k.a. matmul) bytes and flops
-        matmuls = [x for x in data[0]["children"] if "matmul" in x["frame"]["name"]]
-        tot_bytes = sum([x["metrics"]["bytes"] for x in matmuls])
-        tot_flops = {w: sum([x["metrics"].get(f"flops{w}", 0) for x in matmuls]) for w in [8, 16]}
-        # compute total time (incl. "not useful" work)
-        # TODO: proton should really be recording that in the json instead of
-        # relying on the user to aggregate
-        tot_time = sum(x["metrics"].get("time (ns)", 0) for x in data[0]["children"])
-        min_time_flops = sum([tot_flops[w] / SPECS[f"MAX_TFLOPS{w}"] for w in [8, 16]]) * 1e-3
-        min_time_bytes = tot_bytes / SPECS["MAX_TBPS"] * 1e-3
-        min_time = max(min_time_flops, min_time_bytes)
-        util = min_time / tot_time
-        tflops = sum([tot_flops[w] for w in [8, 16]]) / tot_time * 1e-3
-        tbps = tot_bytes / tot_time * 1e-3
+    gf, inclusive_metrics, exclusive_metrics, device_info = viewer.read(fpath)
+    # Now the dataframe only contains leave nodes (i.e., kernels) that perform matmuls
+    matmuls = gf.dataframe[gf.dataframe["name"].str.contains("matmul") & gf.dataframe["device_id"].notna()]
+    tot_bytes = matmuls["bytes"].sum()
+    tot_flops = sum(matmuls[[c for c in ['flops8', 'flops16'] if c in matmuls.columns]].sum())
+    tot_time = matmuls["time (ns)"].sum()
 
-    return util, tflops, tbps
+    # Calculate theoretical min time based on hardware limits
+    device_type = matmuls["device_type"].iloc[0]
+    device_id = matmuls["device_id"].iloc[0]
+    info = device_info[device_type][device_id]
+
+    min_time_flops_sec = sum(
+        (matmuls[f"flops{width}"].sum() if f"flops{width}" in matmuls.columns else 0) /
+        proton.specs.max_flops(device_type, info["arch"], width, info["num_sms"], info["clock_rate"])
+        for width in [8, 16])
+    min_time_bytes_sec = tot_bytes / proton.specs.max_bytes(info["bus_width"], info["memory_clock_rate"])
+
+    util = max(min_time_flops_sec, min_time_bytes_sec) / (tot_time / 1e9)
+    tflops = tot_flops / tot_time * 1e-3
+    tbps = tot_bytes / tot_time * 1e-3
+
+    return {"util": float(util), "tflops": float(tflops), "tbps": float(tbps)}
 
 
 if __name__ == "__main__":
