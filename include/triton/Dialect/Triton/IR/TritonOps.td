@@ -1294,7 +1294,7 @@ def TT_DescriptorStoreOp : TT_Op<"descriptor_store"> {
     The shape and types of `src` must match the descriptor otherwise the result is undefined.
   }];
   let arguments = (ins
-    Arg<TT_TensorDescType, "", [MemWrite<GlobalMemory>]>:$desc,
+    Arg<TT_TensorDescType, "", [MemRead<GlobalMemory>, MemWrite<GlobalMemory>]>:$desc,
     TT_Tensor:$src,
     Variadic<I32>:$indices
   );
@@ -1352,7 +1352,7 @@ def TT_DescriptorScatterOp : TT_Op<"descriptor_scatter"> {
   }];
 
   let arguments = (ins
-    Arg<TT_TensorDescType, "", [MemWrite<GlobalMemory>]>:$desc,
+    Arg<TT_TensorDescType, "", [MemRead<GlobalMemory>, MemWrite<GlobalMemory>]>:$desc,
     RankedTensorOf<[I32]>:$x_offsets,
     I32:$y_offset,
     TT_Tensor:$src
