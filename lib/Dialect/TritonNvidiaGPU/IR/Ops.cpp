@@ -209,8 +209,8 @@ static void getMMAEffects(
                          TensorMemory::get());
   }
   if (op.getBarrier()) {
-    effects.emplace_back(MemoryEffects::Write::get(), &op.getBarrierMutable(),
-                         SharedMemory::get());
+    effects.emplace_back(MemoryEffects::Write::get(),
+                         op.getBarrierMutable().begin(), SharedMemory::get());
   }
 
   effects.emplace_back(MemoryEffects::Read::get(), &op.getBMutable(),
