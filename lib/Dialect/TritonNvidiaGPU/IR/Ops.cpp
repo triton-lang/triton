@@ -306,10 +306,6 @@ void TCGen5MMAOp::setUseAccumulator(Value flag) {
   getUseDMutable().assign(flag);
 }
 
-void TCGen5MMAOp::setBarrier(Value barrier) {
-  getBarrierMutable().assign(barrier);
-}
-
 Value TCGen5MMAOp::getAccumulator() { return getD(); }
 
 void TCGen5MMAOp::setAccumulator(Value accum) { getDMutable().assign(accum); }
@@ -410,10 +406,6 @@ void TCGen5MMAScaledOp::setUseAccumulator(Value flag) {
   getUseDMutable().assign(flag);
 }
 
-void TCGen5MMAScaledOp::setBarrier(Value barrier) {
-  getBarrierMutable().assign(barrier);
-}
-
 Value TCGen5MMAScaledOp::getAccumulator() { return getD(); }
 
 void TCGen5MMAScaledOp::setAccumulator(Value accum) {
@@ -465,7 +457,18 @@ int64_t TCGen5MMAScaledOp::getBlockK() {
   return blockK;
 }
 
-// -- TMEMLoadOp --
+// -- TCGen5CommitOp --
+LogicalResult TCGen5CommitOp::verify() {
+  return verifyBarrierType(*this, getBarrier().getType());
+}
+
+void TCGen5CommitOp::getEffects(
+    SmallVectorImpl<SideEffects::EffectInstance<MemoryEffects::Effect>>
+        &effects) {
+  effects.emplace_back(MemoryEffects::Write::get(), &getBarrierMutable(),
+                       mlir::triton::gpu::SharedMemory::get());
+}
+
 // -- TMEMLoadOp --
 LogicalResult TMEMLoadOp::verify() {
   if (!isa<triton::nvidia_gpu::TensorMemorySpaceAttr>(
@@ -529,10 +532,6 @@ LogicalResult TMEMCopyOp::verify() {
           getDst().getType().getEncoding()))
     return emitOpError("The destination must be a tensor memory buffer.");
 
-  if (getBarrier() && !isa<triton::gpu::SharedMemorySpaceAttr>(
-                          getBarrier().getType().getMemorySpace())) {
-    return emitOpError("The optional barrier should be a shared memory buffer");
-  }
   if (!getDst().getType().getMutableMemory()) {
     return emitOpError("Cannot copy into an immutable alloc");
   }
@@ -558,7 +557,7 @@ LogicalResult TMEMCopyOp::verify() {
 void TMEMCopyOp::getEffects(
     SmallVectorImpl<SideEffects::EffectInstance<MemoryEffects::Effect>>
         &effects) {
-  effects.emplace_back(MemoryEffects::Write::get(),
+  effects.emplace_back(MemoryEffects::Write::get(), &getDstMutable(),
                        mlir::triton::nvidia_gpu::TensorMemory::get());
   effects.emplace_back(MemoryEffects::Read::get(), &getSrcMutable(),
                        mlir::triton::gpu::SharedMemory::get());
