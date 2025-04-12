@@ -133,8 +133,10 @@ public:
 
     bool hasStackAllocOp = false;
     int stackAllocationSizeInBytes = 0;
+    int stackAllocOpCount = 0;
     func.walk([&](triton::proton::gpu::StackAllocOp stackOp) {
       hasStackAllocOp = true;
+      stackAllocOpCount += 1;
       auto bufferTy =
           mlir::cast<triton::gpu::MemDescType>(stackOp.getData().getType());
 
@@ -142,6 +144,11 @@ public:
           mlir::ShapedType::getNumElements(bufferTy.getShape()) *
           bufferTy.getElementType().getIntOrFloatBitWidth() / 8;
     });
+    if (stackAllocOpCount > 1) {
+      mlir::emitError(loc, "only a single proton stack op can be defined for "
+                           "circular store op for now");
+      return failure();
+    }
 
     // If using shared memory for the profiling data we take any available
     // shared memory left after Triton allocates what is needs. However if using
@@ -209,7 +216,7 @@ public:
         context, 1, 1, 1, {0}, ctaLayout);
 
     if (hasStackAllocOp)
-        bufferType = "stack_mem";
+      bufferType = "stack_mem";
 
     if (bufferType == "shared_mem") {
       Attribute sharedMemorySpace =

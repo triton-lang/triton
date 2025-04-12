@@ -124,6 +124,22 @@ module attributes {"ttg.num-warps" = 8 : i32} {
 }
 
 // -----
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-warps" = 8 : i32} {
+  // CHECK-LABEL: convert_circular_stack_store
+  llvm.func @convert_circular_stack_store() {
+   %0 = proton_gpu.stack_alloc : !ttg.memdesc<512xi32, #shared, #proton_gpu.stack_memory, mutable>
+   %2 = proton_gpu.init_buffer_index : <i32, 5>
+   %3 = proton_gpu.segment_base %0, {granularity = 1 : i32, selectIds = array<i32: 0, 1>} : !ttg.memdesc<512xi32, #shared, #proton_gpu.stack_memory, mutable> -> !proton_gpu.seg
+   %8 = proton_gpu.read_counter : i32
+   proton_gpu.circular_store start %0, %2, %8, %3 {scopeId = 1 : i32} : !ttg.memdesc<512xi32, #shared, #proton_gpu.stack_memory, mutable>, <i32, 5>, i32, !proton_gpu.seg
+llvm.return
+}
+}
+
+// -----
+
 
 #shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
 #smem = #ttg.shared_memory
@@ -177,14 +193,3 @@ module attributes {"ttg.num-warps" = 8 : i32, ttg.profile_scratch_memory_alignme
     llvm.return
   }
 }
-
-// -----
-#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
-module attributes {"ttg.num-warps" = 8 : i32} {
-   tt.func @convert_stack_alloc_invalid(){
-     // expected-error @+1 {{'proton_gpu.stack_alloc' op only a single proton stack op can be defined}}
-     %1 = proton_gpu.stack_alloc : !ttg.memdesc<96xi32, #shared, #proton_gpu.stack_memory, mutable>
-     %2 = proton_gpu.stack_alloc : !ttg.memdesc<96xi32, #shared, #proton_gpu.stack_memory, mutable>
-     tt.return
-   }
- }

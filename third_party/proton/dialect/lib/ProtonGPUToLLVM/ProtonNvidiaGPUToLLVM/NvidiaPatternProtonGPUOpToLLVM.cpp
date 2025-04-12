@@ -98,11 +98,14 @@ struct CircularStoreOpConversion
       Value isCurWarpEnabled = b.icmp_ne(segmentBase, b.i32_val(-1));
       isWriter = b.and_(isCurWarpEnabled, isWarpMaster);
     }
+    uint32_t AddrSpace =
+        cast<LLVM::LLVMPointerType>(bufferPtrTy).getAddressSpace();
 
-    targetInfo.getTritonTargetInfo().storeDShared(rewriter, loc, vecPtr,
-                                                  std::nullopt, valsVec,
-                                                  /*pred=*/isWriter);
-
+    if (AddrSpace == 3) {
+      targetInfo.getTritonTargetInfo().storeDShared(rewriter, loc, vecPtr,
+                                                    std::nullopt, valsVec,
+                                                    /*pred=*/isWriter);
+    }
     rewriter.eraseOp(op);
     return success();
   }

@@ -24,14 +24,6 @@ LogicalResult StackAllocOp::verify() {
   auto rank = bufferTy.getRank();
   if (rank > 1)
     return emitOpError("Proton stack currently only supports 1-D shapes");
-  auto func = getOperation()->getParentOfType<FuncOp>();
-  int stackAllocOpCount = 0;
-  func.walk([&](triton::proton::gpu::StackAllocOp stackOp) {
-    stackAllocOpCount += 1;
-  });
-
-  if (stackAllocOpCount > 1)
-    return emitOpError("only a single proton stack op can be defined");
   return success();
 }
 
