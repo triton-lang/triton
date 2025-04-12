@@ -33,28 +33,6 @@ def _get_backend_default_path(backend: str) -> str:
     return lib_path
 
 
-def _get_backend_default_mode(backend: str, mode: Optional[str]) -> str:
-    # Define supported modes for each backend
-    backend_modes = {
-        "cupti": ["", "pcsampling"],
-        "roctracer": [""],
-        "instrumentation": ["cycles"],
-    }
-
-    # Validate backend
-    if backend not in backend_modes:
-        raise ValueError(f"Unsupported backend: {backend}")
-
-    # Set default mode if none provided
-    if mode is None:
-        mode = "cycles" if backend == "instrumentation" else ""
-
-    # Validate mode
-    if mode not in backend_modes[backend]:
-        raise ValueError(f"Invalid mode {mode} for backend {backend}")
-
-    return mode
-
 
 def _check_env(backend: str) -> None:
     if backend == "roctracer":
@@ -102,7 +80,9 @@ def start(
                               Defaults to None.
                               For "cupti", available options are [None, "pcsampling"].
                               For "roctracer", available options are [None].
-                              For "instrumentation", available options are [None].
+                              For "instrumentation", available options are [None, "mma"].
+                              Each mode has a set of control knobs following with the mode name.
+                              For example, "pcsampling" has "interval" control knob, expressed as "pcsampling:interval=1000".
         hook (str, optional): The hook to use for profiling.
                               Available options are [None, "triton"].
                               Defaults to None.
@@ -118,7 +98,6 @@ def start(
     name = DEFAULT_PROFILE_NAME if name is None else name
     backend = _select_backend() if backend is None else backend
     backend_path = _get_backend_default_path(backend)
-    mode = _get_backend_default_mode(backend, mode)
 
     _check_env(backend)
 
@@ -184,7 +163,7 @@ def finalize(session: Optional[int] = None, output_format: str = "hatchet") -> N
     Args:
         session (int, optional): The session ID to finalize. If None, all sessions are finalized. Defaults to None.
         output_format (str, optional): The output format for the profiling results.
-                                       Aavailable options are ["hatchet"].
+                                       Available options are ["hatchet"].
 
     Returns:
         None

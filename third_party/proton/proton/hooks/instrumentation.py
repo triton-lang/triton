@@ -1,4 +1,5 @@
 import functools
+from dataclasses import dataclass
 from typing import Dict, List, Optional, Tuple, Any
 
 import triton
@@ -31,8 +32,6 @@ class CudaAllocator:
         aligned_size = max(aligned_size, self.instrumentation_hook.profile_buffer_size)
 
         # Create the buffer
-        # FIXME(Keren): This is not correct in general, as the buffer will be deallocated by the Torch runtime.
-        # We should use a custom allocator to manage the buffer lifecycle.
         buffer = torch.empty((aligned_size, ), dtype=torch.uint8, device="cuda")
         self.instrumentation_hook.buffer = buffer
         return buffer
@@ -61,22 +60,72 @@ class Instrumentation:
         triton_proton.load_dialects(ctx)
 
 
+class BaseMode:
+    def __init__(self, name: str, metric: str):
+        self.name = name
+        self.metric = metric
+
+
+@dataclass(frozen=True)
+class DefaultMode(BaseMode):
+    name: str
+    metric: str = "cycle"
+    buffer: str = "shared"
+    granularity: int = "block"
+    sampling_mode: str = "none"
+    sampling_interval: int = 0
+
+    def __str__(self):
+        return f"{self.name}:metric={self.metric}:buffer={self.buffer}:granularity={self.granularity}:sampling_mode={self.sampling_mode}:sampling_interval={self.sampling_interval}"
+
+@dataclass(frozen=True)
+class MMAMode(BaseMode):
+    name: str
+    metric: str = "cycle"
+    buffer: str = "shared"
+    granularity: int = "warp"
+    sampling_mode: str = "none"
+    sampling_interval: int = 0
+
+    def __str__(self):
+        return f"{self.name}:granularity={self.granularity}:sampling_mode={self.sampling_mode}:sampling_interval={self.sampling_interval}"
+
+
+def interpret_mode(mode: str) -> BaseMode:
+    parts = mode.split(":")
+    mode_name = parts[0]
+    options = parts[1:] if len(parts) > 1 else []
+    if mode_name == "mma" or mode_name == "default":
+        # mma:granularity=<granularity>:sampling_mode=<sampling_mode>:sampling_interval=<sampling_interval>
+        granularity = "warp"
+        sampling_mode = "none"
+        sampling_interval = 0
+        for option in options:
+            key, value = option.split("=")
+            if key == "granularity":
+                granularity = value
+            elif key == "sampling_mode":
+                sampling_mode = value
+            elif key == "sampling_interval":
+                sampling_interval = int(value)
+        if mode_name == "default":
+            return DefaultMode(granularity=granularity, sampling_mode=sampling_mode, sampling_interval=sampling_interval)
+        return MMAMode(granularity=granularity, sampling_mode=sampling_mode, sampling_interval=sampling_interval)
+    raise ValueError(f"Unknown mode: {mode}")
+
 class InstrumentationHook(Hook):
     # It's important to note that only one instance of the instrumentation hook can be active at a time.
     active_count = 0
-    profile_mem = None
+    enable_cpu_buffer = False
+    cpu_buffer = None
+    profile_buffer_size: int = 16 * 1024 * 1024
+    profile_buffer_alignment: int = 128
 
-    def __init__(self, mode: str,  #
-                 profile_buffer_size: int = 16 * 1024 * 1024,  #
-                 profile_buffer_alignment: int = 128,  #
-                 ):
+    def __init__(self, mode: str):
         # Mapping of function objects to their scope ID pairs
         self.function_scope_ids: Dict[Any, List[Tuple[int, int]]] = {}
-        self.mode = mode
+        self.mode = interpret_mode(mode)
 
-        # Default buffer configuration
-        self.profile_buffer_size = profile_buffer_size
-        self.profile_buffer_alignment = profile_buffer_alignment
         self.allocator = CudaAllocator(self)
         self.buffer = None
 
@@ -154,7 +203,7 @@ class InstrumentationHook(Hook):
         set_profile_allocator(NullAllocator())
 
         # Reset host memory for external processing
-        InstrumentationHook.profile_mem = None
+        InstrumentationHook.cpu_buffer = None
 
     def init_handle(self, function: Any, module: Any, metadata_group: Dict[str, str]) -> None:
         if function and function not in self.function_scope_ids:
@@ -176,20 +225,15 @@ class InstrumentationHook(Hook):
     def enter(self, lazy_dict: LazyDict) -> None:
         libproton.enter_instrumented_op(lazy_dict.data.get("function", None), self.buffer.data_ptr(),
                                         self.profile_buffer_size)
-        InstrumentationHook.profile_mem = None
+        InstrumentationHook.cpu_buffer = None
 
     def exit(self, lazy_dict: LazyDict) -> None:
-        # FIXME(Keren): exit_instrumented_op will sync the device and copy the buffer back to the host.
-        # But this is not necessary if we can delay the copy to reduce the overhead.
-        # We should fix it after the profiling buffer is managed by a custom allocator.
         libproton.exit_instrumented_op(lazy_dict.data.get("function", None), self.buffer.data_ptr(),
                                        self.profile_buffer_size)
 
-        # Copy the profiling buffer to the host for external processing (e.g., 3rd party tools).
-        # FIXME(fywkevin): We should provide a config option to control on/off this behavior.
-        import torch
-        InstrumentationHook.profile_mem = torch.empty_like(self.buffer, device='cpu')
-        InstrumentationHook.profile_mem.copy_(self.buffer)
+        if InstrumentationHook.enable_cpu_buffer:
+            # Copy the profiling buffer to the CPU for debugging and processing by external tools
+            import torch
+            InstrumentationHook.cpu_buffer = torch.empty_like(self.buffer, device='cpu')
+            InstrumentationHook.cpu_buffer.copy_(self.buffer)
 
-        # Release the profiling buffer for recycling
-        self.buffer = None
