@@ -162,13 +162,13 @@ Benchmarking naive: ...
 Benchmarking naive: done
 Benchmarking persistent: ...
 Benchmarking persistent: done
-169.146 16250.971 ROOT
-├─ 176.047 3903.474 cublas [M=8192, N=8192, K=512]
-│  └─ nan 3903.474 ampere_fp16_s16816gemm_fp16_128x128_ldg8_f2f_stages_32x5_tn
-├─ 166.318 4131.820 matmul_kernel [M=8192, N=8192, K=512]
-├─ 159.390 4311.413 matmul_kernel_persistent [M=8192, N=8192, K=512]
-└─ 176.011 3904.264 torch [M=8192, N=8192, K=512]
-   └─ nan 3904.264 ampere_fp16_s16816gemm_fp16_128x128_ldg8_f2f_stages_32x5_tn
+169.022 16262.805 ROOT
+├─ 176.313 3897.589 cublas [M=8192, N=8192, K=512]
+│  └─ nan 3897.589 ampere_fp16_s16816gemm_fp16_128x128_ldg8_f2f_stages_32x5_tn
+├─ 166.146 4136.079 matmul_kernel [M=8192, N=8192, K=512]
+├─ 159.025 4321.305 matmul_kernel_persistent [M=8192, N=8192, K=512]
+└─ 175.851 3907.831 torch [M=8192, N=8192, K=512]
+   └─ nan 3907.831 ampere_fp16_s16816gemm_fp16_128x128_ldg8_f2f_stages_32x5_tn
 </pre></div>
 </div>
 <div class="line-block">
@@ -182,6 +182,7 @@ Benchmarking persistent: done
 <span class="kn">import</span><span class="w"> </span><span class="nn">triton.language</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">tl</span>
 <span class="kn">import</span><span class="w"> </span><span class="nn">triton.tools.experimental_descriptor</span>
 <span class="kn">import</span><span class="w"> </span><span class="nn">triton.profiler</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">proton</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">triton.tools.experimental_descriptor</span><span class="w"> </span><span class="kn">import</span> <span class="n">TensorDescriptor</span>
 <span class="kn">from</span><span class="w"> </span><span class="nn">contextlib</span><span class="w"> </span><span class="kn">import</span> <span class="n">contextmanager</span>
 
 <span class="kn">from</span><span class="w"> </span><span class="nn">typing</span><span class="w"> </span><span class="kn">import</span> <span class="n">Optional</span>
@@ -220,54 +221,14 @@ Benchmarking persistent: done
     <span class="k">return</span> <span class="n">ret</span>
 
 
-<span class="n">HAS_TMA_DESC</span> <span class="o">=</span> <span class="n">supports_tma</span><span class="p">()</span> <span class="ow">and</span> <span class="nb">hasattr</span><span class="p">(</span><span class="n">tl</span><span class="p">,</span> <span class="s2">&quot;nv_tma_desc_type&quot;</span><span class="p">)</span>
 <span class="n">HAS_TENSOR_DESC</span> <span class="o">=</span> <span class="n">supports_tma</span><span class="p">()</span> <span class="ow">and</span> <span class="nb">hasattr</span><span class="p">(</span><span class="n">tl</span><span class="p">,</span> <span class="s2">&quot;make_tensor_descriptor&quot;</span><span class="p">)</span>
+<span class="n">HAS_HOST_TENSOR_DESC</span> <span class="o">=</span> <span class="n">supports_tma</span><span class="p">()</span> <span class="ow">and</span> <span class="nb">hasattr</span><span class="p">(</span><span class="n">triton</span><span class="o">.</span><span class="n">tools</span><span class="o">.</span><span class="n">experimental_descriptor</span><span class="p">,</span> <span class="s2">&quot;TensorDescriptor&quot;</span><span class="p">)</span>
 <span class="n">HAS_WARP_SPECIALIZE</span> <span class="o">=</span> <span class="n">supports_ws</span><span class="p">()</span> <span class="ow">and</span> <span class="n">HAS_TENSOR_DESC</span>
 
 
-<span class="c1"># TmaAutoTuneHelper used in htyu&#39;s PR #5622</span>
-<span class="k">class</span><span class="w"> </span><span class="nc">TmaAutoTuneHelper</span><span class="p">:</span>
-
-    <span class="c1"># duck typing wrapper to implement the same interface as TmaDescKernelParam in Triton PR #4498</span>
-    <span class="k">class</span><span class="w"> </span><span class="nc">KernelParamWrapper</span><span class="p">:</span>
-
-        <span class="k">def</span><span class="w"> </span><span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">desc</span><span class="p">):</span>
-            <span class="bp">self</span><span class="o">.</span><span class="n">desc</span> <span class="o">=</span> <span class="n">desc</span>
-
-        <span class="k">def</span><span class="w"> </span><span class="nf">tma_desc_cpu_ptr</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
-            <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">desc</span><span class="o">.</span><span class="n">data_ptr</span><span class="p">()</span>
-
-    <span class="n">TMA_SIZE</span> <span class="o">=</span> <span class="mi">128</span>
-
-    <span class="k">def</span><span class="w"> </span><span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
-        <span class="bp">self</span><span class="o">.</span><span class="n">fill_1d_tma_descriptor_inner</span> <span class="o">=</span> <span class="p">(</span><span class="n">triton</span><span class="o">.</span><span class="n">runtime</span><span class="o">.</span><span class="n">driver</span><span class="o">.</span><span class="n">active</span><span class="o">.</span><span class="n">utils</span><span class="o">.</span><span class="n">fill_1d_tma_descriptor</span><span class="p">)</span>
-        <span class="bp">self</span><span class="o">.</span><span class="n">fill_2d_tma_descriptor_inner</span> <span class="o">=</span> <span class="p">(</span><span class="n">triton</span><span class="o">.</span><span class="n">runtime</span><span class="o">.</span><span class="n">driver</span><span class="o">.</span><span class="n">active</span><span class="o">.</span><span class="n">utils</span><span class="o">.</span><span class="n">fill_2d_tma_descriptor</span><span class="p">)</span>
-        <span class="bp">self</span><span class="o">.</span><span class="n">descriptors</span> <span class="o">=</span> <span class="p">{}</span>
-
-    <span class="c1"># Call this method outside of the lambda function for grid size</span>
-    <span class="k">def</span><span class="w"> </span><span class="nf">init_tma_descriptor</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">name</span><span class="p">):</span>
-        <span class="bp">self</span><span class="o">.</span><span class="n">descriptors</span><span class="p">[</span><span class="n">name</span><span class="p">]</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">empty</span><span class="p">(</span><span class="n">TmaAutoTuneHelper</span><span class="o">.</span><span class="n">TMA_SIZE</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="s2">&quot;cpu&quot;</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">int8</span><span class="p">)</span>
-
-    <span class="c1"># Call this method inside the lambda function for grid size</span>
-    <span class="k">def</span><span class="w"> </span><span class="nf">fill_1d_tma_descriptor</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">name</span><span class="p">,</span> <span class="n">ptr</span><span class="p">,</span> <span class="n">dim</span><span class="p">,</span> <span class="n">block_dim</span><span class="p">,</span> <span class="n">element_size</span><span class="p">):</span>
-        <span class="n">desc_x</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">descriptors</span><span class="p">[</span><span class="n">name</span><span class="p">]</span>
-        <span class="k">assert</span> <span class="n">desc_x</span><span class="o">.</span><span class="n">data_ptr</span><span class="p">()</span> <span class="o">%</span> <span class="mi">64</span> <span class="o">==</span> <span class="mi">0</span>
-        <span class="bp">self</span><span class="o">.</span><span class="n">fill_1d_tma_descriptor_inner</span><span class="p">(</span><span class="n">ptr</span><span class="p">,</span> <span class="n">dim</span><span class="p">,</span> <span class="n">block_dim</span><span class="p">,</span> <span class="n">element_size</span><span class="p">,</span> <span class="n">desc_x</span><span class="o">.</span><span class="n">data_ptr</span><span class="p">())</span>
-
-    <span class="c1"># Call this method inside the lambda function for grid size</span>
-    <span class="k">def</span><span class="w"> </span><span class="nf">fill_2d_tma_descriptor</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">name</span><span class="p">,</span> <span class="n">ptr</span><span class="p">,</span> <span class="n">dim1</span><span class="p">,</span> <span class="n">dim0</span><span class="p">,</span> <span class="n">block_dim1</span><span class="p">,</span> <span class="n">block_dim0</span><span class="p">,</span> <span class="n">element_size</span><span class="p">):</span>
-        <span class="n">desc_x</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">descriptors</span><span class="p">[</span><span class="n">name</span><span class="p">]</span>
-        <span class="k">assert</span> <span class="n">desc_x</span><span class="o">.</span><span class="n">data_ptr</span><span class="p">()</span> <span class="o">%</span> <span class="mi">64</span> <span class="o">==</span> <span class="mi">0</span>
-        <span class="bp">self</span><span class="o">.</span><span class="n">fill_2d_tma_descriptor_inner</span><span class="p">(</span><span class="n">ptr</span><span class="p">,</span> <span class="n">dim1</span><span class="p">,</span> <span class="n">dim0</span><span class="p">,</span> <span class="n">block_dim1</span><span class="p">,</span> <span class="n">block_dim0</span><span class="p">,</span> <span class="n">element_size</span><span class="p">,</span> <span class="n">desc_x</span><span class="o">.</span><span class="n">data_ptr</span><span class="p">())</span>
-
-    <span class="k">def</span><span class="w"> </span><span class="nf">get_tma_descriptor_kernel_param</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">name</span><span class="p">):</span>
-        <span class="k">assert</span> <span class="bp">self</span><span class="o">.</span><span class="n">descriptors</span><span class="p">[</span><span class="n">name</span><span class="p">]</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span>
-        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">KernelParamWrapper</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">descriptors</span><span class="p">[</span><span class="n">name</span><span class="p">])</span>
-
-
-<span class="k">def</span><span class="w"> </span><span class="nf">matmul_get_configs</span><span class="p">():</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">matmul_get_configs</span><span class="p">(</span><span class="n">pre_hook</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
     <span class="k">return</span> <span class="p">[</span>
-        <span class="n">triton</span><span class="o">.</span><span class="n">Config</span><span class="p">({</span><span class="s1">&#39;BLOCK_SIZE_M&#39;</span><span class="p">:</span> <span class="n">BM</span><span class="p">,</span> <span class="s1">&#39;BLOCK_SIZE_N&#39;</span><span class="p">:</span> <span class="n">BN</span><span class="p">,</span> <span class="s2">&quot;BLOCK_SIZE_K&quot;</span> <span class="p">:</span> <span class="n">BK</span><span class="p">,</span> <span class="s2">&quot;GROUP_SIZE_M&quot;</span> <span class="p">:</span> <span class="mi">8</span><span class="p">},</span> <span class="n">num_stages</span><span class="o">=</span><span class="n">s</span><span class="p">,</span> <span class="n">num_warps</span><span class="o">=</span><span class="n">w</span><span class="p">)</span> \
+        <span class="n">triton</span><span class="o">.</span><span class="n">Config</span><span class="p">({</span><span class="s1">&#39;BLOCK_SIZE_M&#39;</span><span class="p">:</span> <span class="n">BM</span><span class="p">,</span> <span class="s1">&#39;BLOCK_SIZE_N&#39;</span><span class="p">:</span> <span class="n">BN</span><span class="p">,</span> <span class="s2">&quot;BLOCK_SIZE_K&quot;</span> <span class="p">:</span> <span class="n">BK</span><span class="p">,</span> <span class="s2">&quot;GROUP_SIZE_M&quot;</span> <span class="p">:</span> <span class="mi">8</span><span class="p">},</span> <span class="n">num_stages</span><span class="o">=</span><span class="n">s</span><span class="p">,</span> <span class="n">num_warps</span><span class="o">=</span><span class="n">w</span><span class="p">,</span> <span class="n">pre_hook</span><span class="o">=</span><span class="n">pre_hook</span><span class="p">)</span> \
         <span class="k">for</span> <span class="n">BM</span> <span class="ow">in</span> <span class="p">[</span><span class="mi">128</span><span class="p">]</span> \
         <span class="k">for</span> <span class="n">BN</span> <span class="ow">in</span> <span class="p">[</span><span class="mi">128</span><span class="p">,</span> <span class="mi">256</span><span class="p">]</span> \
         <span class="k">for</span> <span class="n">BK</span> <span class="ow">in</span> <span class="p">[</span><span class="mi">64</span><span class="p">,</span><span class="mi">128</span><span class="p">]</span> \
@@ -357,12 +318,25 @@ Benchmarking persistent: done
     <span class="k">return</span> <span class="n">c</span>
 
 
+<span class="k">def</span><span class="w"> </span><span class="nf">matmul_tma_set_block_size_hook</span><span class="p">(</span><span class="n">nargs</span><span class="p">):</span>
+    <span class="n">EPILOGUE_SUBTILE</span> <span class="o">=</span> <span class="n">nargs</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;EPILOGUE_SUBTILE&quot;</span><span class="p">,</span> <span class="kc">False</span><span class="p">)</span>
+    <span class="n">BLOCK_M</span> <span class="o">=</span> <span class="n">nargs</span><span class="p">[</span><span class="s2">&quot;BLOCK_SIZE_M&quot;</span><span class="p">]</span>
+    <span class="n">BLOCK_N</span> <span class="o">=</span> <span class="n">nargs</span><span class="p">[</span><span class="s2">&quot;BLOCK_SIZE_N&quot;</span><span class="p">]</span>
+    <span class="n">BLOCK_K</span> <span class="o">=</span> <span class="n">nargs</span><span class="p">[</span><span class="s2">&quot;BLOCK_SIZE_K&quot;</span><span class="p">]</span>
+    <span class="n">nargs</span><span class="p">[</span><span class="s2">&quot;a_desc&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">block_shape</span> <span class="o">=</span> <span class="p">[</span><span class="n">BLOCK_M</span><span class="p">,</span> <span class="n">BLOCK_K</span><span class="p">]</span>
+    <span class="n">nargs</span><span class="p">[</span><span class="s2">&quot;b_desc&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">block_shape</span> <span class="o">=</span> <span class="p">[</span><span class="n">BLOCK_N</span><span class="p">,</span> <span class="n">BLOCK_K</span><span class="p">]</span>
+    <span class="k">if</span> <span class="n">EPILOGUE_SUBTILE</span><span class="p">:</span>
+        <span class="n">nargs</span><span class="p">[</span><span class="s2">&quot;c_desc&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">block_shape</span> <span class="o">=</span> <span class="p">[</span><span class="n">BLOCK_M</span><span class="p">,</span> <span class="n">BLOCK_N</span> <span class="o">//</span> <span class="mi">2</span><span class="p">]</span>
+    <span class="k">else</span><span class="p">:</span>
+        <span class="n">nargs</span><span class="p">[</span><span class="s2">&quot;c_desc&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">block_shape</span> <span class="o">=</span> <span class="p">[</span><span class="n">BLOCK_M</span><span class="p">,</span> <span class="n">BLOCK_N</span><span class="p">]</span>
+
+
 <span class="nd">@triton</span><span class="o">.</span><span class="n">autotune</span><span class="p">(</span>
-    <span class="n">configs</span><span class="o">=</span><span class="n">matmul_get_configs</span><span class="p">(),</span>
+    <span class="n">configs</span><span class="o">=</span><span class="n">matmul_get_configs</span><span class="p">(</span><span class="n">pre_hook</span><span class="o">=</span><span class="n">matmul_tma_set_block_size_hook</span><span class="p">),</span>
     <span class="n">key</span><span class="o">=</span><span class="p">[</span><span class="s2">&quot;M&quot;</span><span class="p">,</span> <span class="s2">&quot;N&quot;</span><span class="p">,</span> <span class="s2">&quot;K&quot;</span><span class="p">,</span> <span class="s2">&quot;WARP_SPECIALIZE&quot;</span><span class="p">],</span>
 <span class="p">)</span>
 <span class="nd">@triton</span><span class="o">.</span><span class="n">jit</span><span class="p">(</span><span class="n">launch_metadata</span><span class="o">=</span><span class="n">_matmul_launch_metadata</span><span class="p">)</span>
-<span class="k">def</span><span class="w"> </span><span class="nf">matmul_kernel_tma</span><span class="p">(</span><span class="n">a_desc_ptr</span><span class="p">,</span> <span class="n">b_desc_ptr</span><span class="p">,</span> <span class="n">c_desc_ptr</span><span class="p">,</span>  <span class="c1">#</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">matmul_kernel_tma</span><span class="p">(</span><span class="n">a_desc</span><span class="p">,</span> <span class="n">b_desc</span><span class="p">,</span> <span class="n">c_desc</span><span class="p">,</span>  <span class="c1">#</span>
                       <span class="n">M</span><span class="p">,</span> <span class="n">N</span><span class="p">,</span> <span class="n">K</span><span class="p">,</span>  <span class="c1">#</span>
                       <span class="n">BLOCK_SIZE_M</span><span class="p">:</span> <span class="n">tl</span><span class="o">.</span><span class="n">constexpr</span><span class="p">,</span>  <span class="c1">#</span>
                       <span class="n">BLOCK_SIZE_N</span><span class="p">:</span> <span class="n">tl</span><span class="o">.</span><span class="n">constexpr</span><span class="p">,</span>  <span class="c1">#</span>
@@ -392,15 +366,15 @@ Benchmarking persistent: done
 
     <span class="k">for</span> <span class="n">k</span> <span class="ow">in</span> <span class="n">tl</span><span class="o">.</span><span class="n">range</span><span class="p">(</span><span class="n">k_tiles</span><span class="p">,</span> <span class="n">warp_specialize</span><span class="o">=</span><span class="n">WARP_SPECIALIZE</span><span class="p">):</span>
         <span class="n">offs_k</span> <span class="o">=</span> <span class="n">k</span> <span class="o">*</span> <span class="n">BLOCK_SIZE_K</span>
-        <span class="n">a</span> <span class="o">=</span> <span class="n">tl</span><span class="o">.</span><span class="n">_experimental_descriptor_load</span><span class="p">(</span><span class="n">a_desc_ptr</span><span class="p">,</span> <span class="p">[</span><span class="n">offs_am</span><span class="p">,</span> <span class="n">offs_k</span><span class="p">],</span> <span class="p">[</span><span class="n">BLOCK_SIZE_M</span><span class="p">,</span> <span class="n">BLOCK_SIZE_K</span><span class="p">],</span> <span class="n">dtype</span><span class="p">)</span>
-        <span class="n">b</span> <span class="o">=</span> <span class="n">tl</span><span class="o">.</span><span class="n">_experimental_descriptor_load</span><span class="p">(</span><span class="n">b_desc_ptr</span><span class="p">,</span> <span class="p">[</span><span class="n">offs_bn</span><span class="p">,</span> <span class="n">offs_k</span><span class="p">],</span> <span class="p">[</span><span class="n">BLOCK_SIZE_N</span><span class="p">,</span> <span class="n">BLOCK_SIZE_K</span><span class="p">],</span> <span class="n">dtype</span><span class="p">)</span>
+        <span class="n">a</span> <span class="o">=</span> <span class="n">a_desc</span><span class="o">.</span><span class="n">load</span><span class="p">([</span><span class="n">offs_am</span><span class="p">,</span> <span class="n">offs_k</span><span class="p">])</span>
+        <span class="n">b</span> <span class="o">=</span> <span class="n">b_desc</span><span class="o">.</span><span class="n">load</span><span class="p">([</span><span class="n">offs_bn</span><span class="p">,</span> <span class="n">offs_k</span><span class="p">])</span>
         <span class="n">accumulator</span> <span class="o">=</span> <span class="n">tl</span><span class="o">.</span><span class="n">dot</span><span class="p">(</span><span class="n">a</span><span class="p">,</span> <span class="n">b</span><span class="o">.</span><span class="n">T</span><span class="p">,</span> <span class="n">accumulator</span><span class="p">)</span>
 
     <span class="n">c</span> <span class="o">=</span> <span class="n">accumulator</span><span class="o">.</span><span class="n">to</span><span class="p">(</span><span class="n">dtype</span><span class="p">)</span>
 
     <span class="n">offs_cm</span> <span class="o">=</span> <span class="n">pid_m</span> <span class="o">*</span> <span class="n">BLOCK_SIZE_M</span>
     <span class="n">offs_cn</span> <span class="o">=</span> <span class="n">pid_n</span> <span class="o">*</span> <span class="n">BLOCK_SIZE_N</span>
-    <span class="n">tl</span><span class="o">.</span><span class="n">_experimental_descriptor_store</span><span class="p">(</span><span class="n">c_desc_ptr</span><span class="p">,</span> <span class="n">c</span><span class="p">,</span> <span class="p">[</span><span class="n">offs_cm</span><span class="p">,</span> <span class="n">offs_cn</span><span class="p">])</span>
+    <span class="n">c_desc</span><span class="o">.</span><span class="n">store</span><span class="p">([</span><span class="n">offs_cm</span><span class="p">,</span> <span class="n">offs_cn</span><span class="p">],</span> <span class="n">c</span><span class="p">)</span>
 
 
 <span class="k">def</span><span class="w"> </span><span class="nf">matmul_tma</span><span class="p">(</span><span class="n">a</span><span class="p">,</span> <span class="n">b</span><span class="p">,</span> <span class="n">warp_specialize</span><span class="p">:</span> <span class="nb">bool</span><span class="p">):</span>
@@ -414,53 +388,19 @@ Benchmarking persistent: done
 
     <span class="n">c</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">empty</span><span class="p">((</span><span class="n">M</span><span class="p">,</span> <span class="n">N</span><span class="p">),</span> <span class="n">device</span><span class="o">=</span><span class="n">a</span><span class="o">.</span><span class="n">device</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">dtype</span><span class="p">)</span>
 
-    <span class="n">desc_helper</span> <span class="o">=</span> <span class="n">TmaAutoTuneHelper</span><span class="p">()</span>
-    <span class="n">desc_helper</span><span class="o">.</span><span class="n">init_tma_descriptor</span><span class="p">(</span><span class="s2">&quot;a&quot;</span><span class="p">)</span>
-    <span class="n">desc_helper</span><span class="o">.</span><span class="n">init_tma_descriptor</span><span class="p">(</span><span class="s2">&quot;b&quot;</span><span class="p">)</span>
-    <span class="n">desc_helper</span><span class="o">.</span><span class="n">init_tma_descriptor</span><span class="p">(</span><span class="s2">&quot;c&quot;</span><span class="p">)</span>
+    <span class="c1"># A dummy block value that will be overwritten when we have the real block size</span>
+    <span class="n">dummy_block</span> <span class="o">=</span> <span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">1</span><span class="p">]</span>
+    <span class="n">a_desc</span> <span class="o">=</span> <span class="n">TensorDescriptor</span><span class="p">(</span><span class="n">a</span><span class="p">,</span> <span class="n">a</span><span class="o">.</span><span class="n">shape</span><span class="p">,</span> <span class="n">a</span><span class="o">.</span><span class="n">stride</span><span class="p">(),</span> <span class="n">dummy_block</span><span class="p">)</span>
+    <span class="n">b_desc</span> <span class="o">=</span> <span class="n">TensorDescriptor</span><span class="p">(</span><span class="n">b</span><span class="p">,</span> <span class="n">b</span><span class="o">.</span><span class="n">shape</span><span class="p">,</span> <span class="n">b</span><span class="o">.</span><span class="n">stride</span><span class="p">(),</span> <span class="n">dummy_block</span><span class="p">)</span>
+    <span class="n">c_desc</span> <span class="o">=</span> <span class="n">TensorDescriptor</span><span class="p">(</span><span class="n">c</span><span class="p">,</span> <span class="n">c</span><span class="o">.</span><span class="n">shape</span><span class="p">,</span> <span class="n">c</span><span class="o">.</span><span class="n">stride</span><span class="p">(),</span> <span class="n">dummy_block</span><span class="p">)</span>
 
     <span class="k">def</span><span class="w"> </span><span class="nf">grid</span><span class="p">(</span><span class="n">META</span><span class="p">):</span>
-        <span class="k">nonlocal</span> <span class="n">desc_helper</span>
-        <span class="n">desc_helper</span><span class="o">.</span><span class="n">fill_2d_tma_descriptor</span><span class="p">(</span>
-            <span class="s2">&quot;a&quot;</span><span class="p">,</span>
-            <span class="n">a</span><span class="o">.</span><span class="n">data_ptr</span><span class="p">(),</span>
-            <span class="n">M</span><span class="p">,</span>
-            <span class="n">K</span><span class="p">,</span>
-            <span class="n">META</span><span class="p">[</span><span class="s2">&quot;BLOCK_SIZE_M&quot;</span><span class="p">],</span>
-            <span class="n">META</span><span class="p">[</span><span class="s2">&quot;BLOCK_SIZE_K&quot;</span><span class="p">],</span>
-            <span class="n">a</span><span class="o">.</span><span class="n">element_size</span><span class="p">(),</span>
-        <span class="p">)</span>
-
-        <span class="n">desc_helper</span><span class="o">.</span><span class="n">fill_2d_tma_descriptor</span><span class="p">(</span>
-            <span class="s2">&quot;b&quot;</span><span class="p">,</span>
-            <span class="n">b</span><span class="o">.</span><span class="n">data_ptr</span><span class="p">(),</span>
-            <span class="n">N</span><span class="p">,</span>
-            <span class="n">K</span><span class="p">,</span>
-            <span class="n">META</span><span class="p">[</span><span class="s2">&quot;BLOCK_SIZE_N&quot;</span><span class="p">],</span>
-            <span class="n">META</span><span class="p">[</span><span class="s2">&quot;BLOCK_SIZE_K&quot;</span><span class="p">],</span>
-            <span class="n">b</span><span class="o">.</span><span class="n">element_size</span><span class="p">(),</span>
-        <span class="p">)</span>
-
-        <span class="n">store_block_n</span> <span class="o">=</span> <span class="n">META</span><span class="p">[</span><span class="s2">&quot;BLOCK_SIZE_N&quot;</span><span class="p">]</span>
-
-        <span class="n">desc_helper</span><span class="o">.</span><span class="n">fill_2d_tma_descriptor</span><span class="p">(</span>
-            <span class="s2">&quot;c&quot;</span><span class="p">,</span>
-            <span class="n">c</span><span class="o">.</span><span class="n">data_ptr</span><span class="p">(),</span>
-            <span class="n">M</span><span class="p">,</span>
-            <span class="n">N</span><span class="p">,</span>
-            <span class="n">META</span><span class="p">[</span><span class="s2">&quot;BLOCK_SIZE_M&quot;</span><span class="p">],</span>
-            <span class="n">store_block_n</span><span class="p">,</span>
-            <span class="n">c</span><span class="o">.</span><span class="n">element_size</span><span class="p">(),</span>
-        <span class="p">)</span>
-
-        <span class="k">return</span> <span class="p">(</span><span class="n">triton</span><span class="o">.</span><span class="n">cdiv</span><span class="p">(</span><span class="n">M</span><span class="p">,</span> <span class="n">META</span><span class="p">[</span><span class="s2">&quot;BLOCK_SIZE_M&quot;</span><span class="p">])</span> <span class="o">*</span> <span class="n">triton</span><span class="o">.</span><span class="n">cdiv</span><span class="p">(</span><span class="n">N</span><span class="p">,</span> <span class="n">META</span><span class="p">[</span><span class="s2">&quot;BLOCK_SIZE_N&quot;</span><span class="p">]),</span> <span class="p">)</span>
-
-    <span class="n">desc_a</span> <span class="o">=</span> <span class="n">desc_helper</span><span class="o">.</span><span class="n">get_tma_descriptor_kernel_param</span><span class="p">(</span><span class="s2">&quot;a&quot;</span><span class="p">)</span>
-    <span class="n">desc_b</span> <span class="o">=</span> <span class="n">desc_helper</span><span class="o">.</span><span class="n">get_tma_descriptor_kernel_param</span><span class="p">(</span><span class="s2">&quot;b&quot;</span><span class="p">)</span>
-    <span class="n">desc_c</span> <span class="o">=</span> <span class="n">desc_helper</span><span class="o">.</span><span class="n">get_tma_descriptor_kernel_param</span><span class="p">(</span><span class="s2">&quot;c&quot;</span><span class="p">)</span>
+        <span class="n">BLOCK_M</span> <span class="o">=</span> <span class="n">META</span><span class="p">[</span><span class="s2">&quot;BLOCK_SIZE_M&quot;</span><span class="p">]</span>
+        <span class="n">BLOCK_N</span> <span class="o">=</span> <span class="n">META</span><span class="p">[</span><span class="s2">&quot;BLOCK_SIZE_N&quot;</span><span class="p">]</span>
+        <span class="k">return</span> <span class="p">(</span><span class="n">triton</span><span class="o">.</span><span class="n">cdiv</span><span class="p">(</span><span class="n">M</span><span class="p">,</span> <span class="n">BLOCK_M</span><span class="p">)</span> <span class="o">*</span> <span class="n">triton</span><span class="o">.</span><span class="n">cdiv</span><span class="p">(</span><span class="n">N</span><span class="p">,</span> <span class="n">BLOCK_N</span><span class="p">),</span> <span class="p">)</span>
 
     <span class="n">matmul_kernel_tma</span><span class="p">[</span><span class="n">grid</span><span class="p">](</span>
-        <span class="n">desc_a</span><span class="p">,</span> <span class="n">desc_b</span><span class="p">,</span> <span class="n">desc_c</span><span class="p">,</span>  <span class="c1">#</span>
+        <span class="n">a_desc</span><span class="p">,</span> <span class="n">b_desc</span><span class="p">,</span> <span class="n">c_desc</span><span class="p">,</span>  <span class="c1">#</span>
         <span class="n">M</span><span class="p">,</span> <span class="n">N</span><span class="p">,</span> <span class="n">K</span><span class="p">,</span>  <span class="c1">#</span>
         <span class="n">FP8_OUTPUT</span><span class="o">=</span><span class="n">dtype</span> <span class="o">==</span> <span class="n">torch</span><span class="o">.</span><span class="n">float8_e4m3fn</span><span class="p">,</span>  <span class="c1">#</span>
         <span class="n">WARP_SPECIALIZE</span><span class="o">=</span><span class="n">warp_specialize</span><span class="p">,</span>  <span class="c1">#</span>
@@ -564,13 +504,13 @@ Benchmarking persistent: done
     <span class="k">return</span> <span class="n">c</span>
 
 
-<span class="k">def</span><span class="w"> </span><span class="nf">matmul_tma_persistent_get_configs</span><span class="p">():</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">matmul_tma_persistent_get_configs</span><span class="p">(</span><span class="n">pre_hook</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
     <span class="k">return</span> <span class="p">[</span>
         <span class="n">triton</span><span class="o">.</span><span class="n">Config</span><span class="p">(</span>
             <span class="p">{</span>
                 <span class="s1">&#39;BLOCK_SIZE_M&#39;</span><span class="p">:</span> <span class="n">BM</span><span class="p">,</span> <span class="s1">&#39;BLOCK_SIZE_N&#39;</span><span class="p">:</span> <span class="n">BN</span><span class="p">,</span> <span class="s2">&quot;BLOCK_SIZE_K&quot;</span><span class="p">:</span> <span class="n">BK</span><span class="p">,</span> <span class="s2">&quot;GROUP_SIZE_M&quot;</span><span class="p">:</span> <span class="mi">8</span><span class="p">,</span> <span class="s2">&quot;EPILOGUE_SUBTILE&quot;</span><span class="p">:</span>
                 <span class="n">SUBTILE</span>
-            <span class="p">},</span> <span class="n">num_stages</span><span class="o">=</span><span class="n">s</span><span class="p">,</span> <span class="n">num_warps</span><span class="o">=</span><span class="n">w</span><span class="p">)</span>  <span class="c1">#</span>
+            <span class="p">},</span> <span class="n">num_stages</span><span class="o">=</span><span class="n">s</span><span class="p">,</span> <span class="n">num_warps</span><span class="o">=</span><span class="n">w</span><span class="p">,</span> <span class="n">pre_hook</span><span class="o">=</span><span class="n">pre_hook</span><span class="p">)</span>  <span class="c1">#</span>
         <span class="k">for</span> <span class="n">BM</span> <span class="ow">in</span> <span class="p">[</span><span class="mi">128</span><span class="p">]</span>  <span class="c1">#</span>
         <span class="k">for</span> <span class="n">BN</span> <span class="ow">in</span> <span class="p">[</span><span class="mi">128</span><span class="p">,</span> <span class="mi">256</span><span class="p">]</span>  <span class="c1">#</span>
         <span class="k">for</span> <span class="n">BK</span> <span class="ow">in</span> <span class="p">[</span><span class="mi">64</span><span class="p">,</span> <span class="mi">128</span><span class="p">]</span>  <span class="c1">#</span>
@@ -581,11 +521,11 @@ Benchmarking persistent: done
 
 
 <span class="nd">@triton</span><span class="o">.</span><span class="n">autotune</span><span class="p">(</span>
-    <span class="n">configs</span><span class="o">=</span><span class="n">matmul_tma_persistent_get_configs</span><span class="p">(),</span>
+    <span class="n">configs</span><span class="o">=</span><span class="n">matmul_tma_persistent_get_configs</span><span class="p">(</span><span class="n">pre_hook</span><span class="o">=</span><span class="n">matmul_tma_set_block_size_hook</span><span class="p">),</span>
     <span class="n">key</span><span class="o">=</span><span class="p">[</span><span class="s2">&quot;M&quot;</span><span class="p">,</span> <span class="s2">&quot;N&quot;</span><span class="p">,</span> <span class="s2">&quot;K&quot;</span><span class="p">,</span> <span class="s2">&quot;WARP_SPECIALIZE&quot;</span><span class="p">],</span>
 <span class="p">)</span>
 <span class="nd">@triton</span><span class="o">.</span><span class="n">jit</span><span class="p">(</span><span class="n">launch_metadata</span><span class="o">=</span><span class="n">_matmul_launch_metadata</span><span class="p">)</span>
-<span class="k">def</span><span class="w"> </span><span class="nf">matmul_kernel_tma_persistent</span><span class="p">(</span><span class="n">a_desc_ptr</span><span class="p">,</span> <span class="n">b_desc_ptr</span><span class="p">,</span> <span class="n">c_desc_ptr</span><span class="p">,</span>  <span class="c1">#</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">matmul_kernel_tma_persistent</span><span class="p">(</span><span class="n">a_desc</span><span class="p">,</span> <span class="n">b_desc</span><span class="p">,</span> <span class="n">c_desc</span><span class="p">,</span>  <span class="c1">#</span>
                                  <span class="n">M</span><span class="p">,</span> <span class="n">N</span><span class="p">,</span> <span class="n">K</span><span class="p">,</span>  <span class="c1">#</span>
                                  <span class="n">BLOCK_SIZE_M</span><span class="p">:</span> <span class="n">tl</span><span class="o">.</span><span class="n">constexpr</span><span class="p">,</span>  <span class="c1">#</span>
                                  <span class="n">BLOCK_SIZE_N</span><span class="p">:</span> <span class="n">tl</span><span class="o">.</span><span class="n">constexpr</span><span class="p">,</span>  <span class="c1">#</span>
@@ -617,8 +557,8 @@ Benchmarking persistent: done
         <span class="n">accumulator</span> <span class="o">=</span> <span class="n">tl</span><span class="o">.</span><span class="n">zeros</span><span class="p">((</span><span class="n">BLOCK_SIZE_M</span><span class="p">,</span> <span class="n">BLOCK_SIZE_N</span><span class="p">),</span> <span class="n">dtype</span><span class="o">=</span><span class="n">tl</span><span class="o">.</span><span class="n">float32</span><span class="p">)</span>
         <span class="k">for</span> <span class="n">ki</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="n">k_tiles</span><span class="p">):</span>
             <span class="n">offs_k</span> <span class="o">=</span> <span class="n">ki</span> <span class="o">*</span> <span class="n">BLOCK_SIZE_K</span>
-            <span class="n">a</span> <span class="o">=</span> <span class="n">tl</span><span class="o">.</span><span class="n">_experimental_descriptor_load</span><span class="p">(</span><span class="n">a_desc_ptr</span><span class="p">,</span> <span class="p">[</span><span class="n">offs_am</span><span class="p">,</span> <span class="n">offs_k</span><span class="p">],</span> <span class="p">[</span><span class="n">BLOCK_SIZE_M</span><span class="p">,</span> <span class="n">BLOCK_SIZE_K</span><span class="p">],</span> <span class="n">dtype</span><span class="p">)</span>
-            <span class="n">b</span> <span class="o">=</span> <span class="n">tl</span><span class="o">.</span><span class="n">_experimental_descriptor_load</span><span class="p">(</span><span class="n">b_desc_ptr</span><span class="p">,</span> <span class="p">[</span><span class="n">offs_bn</span><span class="p">,</span> <span class="n">offs_k</span><span class="p">],</span> <span class="p">[</span><span class="n">BLOCK_SIZE_N</span><span class="p">,</span> <span class="n">BLOCK_SIZE_K</span><span class="p">],</span> <span class="n">dtype</span><span class="p">)</span>
+            <span class="n">a</span> <span class="o">=</span> <span class="n">a_desc</span><span class="o">.</span><span class="n">load</span><span class="p">([</span><span class="n">offs_am</span><span class="p">,</span> <span class="n">offs_k</span><span class="p">])</span>
+            <span class="n">b</span> <span class="o">=</span> <span class="n">b_desc</span><span class="o">.</span><span class="n">load</span><span class="p">([</span><span class="n">offs_bn</span><span class="p">,</span> <span class="n">offs_k</span><span class="p">])</span>
             <span class="n">accumulator</span> <span class="o">=</span> <span class="n">tl</span><span class="o">.</span><span class="n">dot</span><span class="p">(</span><span class="n">a</span><span class="p">,</span> <span class="n">b</span><span class="o">.</span><span class="n">T</span><span class="p">,</span> <span class="n">accumulator</span><span class="p">)</span>
 
         <span class="n">tile_id_c</span> <span class="o">+=</span> <span class="n">NUM_SMS</span>
@@ -635,12 +575,12 @@ Benchmarking persistent: done
             <span class="n">acc</span> <span class="o">=</span> <span class="n">tl</span><span class="o">.</span><span class="n">permute</span><span class="p">(</span><span class="n">acc</span><span class="p">,</span> <span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">1</span><span class="p">))</span>
             <span class="n">acc0</span><span class="p">,</span> <span class="n">acc1</span> <span class="o">=</span> <span class="n">tl</span><span class="o">.</span><span class="n">split</span><span class="p">(</span><span class="n">acc</span><span class="p">)</span>
             <span class="n">c0</span> <span class="o">=</span> <span class="n">acc0</span><span class="o">.</span><span class="n">to</span><span class="p">(</span><span class="n">dtype</span><span class="p">)</span>
-            <span class="n">tl</span><span class="o">.</span><span class="n">_experimental_descriptor_store</span><span class="p">(</span><span class="n">c_desc_ptr</span><span class="p">,</span> <span class="n">c0</span><span class="p">,</span> <span class="p">[</span><span class="n">offs_am_c</span><span class="p">,</span> <span class="n">offs_bn_c</span><span class="p">])</span>
+            <span class="n">c_desc</span><span class="o">.</span><span class="n">store</span><span class="p">([</span><span class="n">offs_am_c</span><span class="p">,</span> <span class="n">offs_bn_c</span><span class="p">],</span> <span class="n">c0</span><span class="p">)</span>
             <span class="n">c1</span> <span class="o">=</span> <span class="n">acc1</span><span class="o">.</span><span class="n">to</span><span class="p">(</span><span class="n">dtype</span><span class="p">)</span>
-            <span class="n">tl</span><span class="o">.</span><span class="n">_experimental_descriptor_store</span><span class="p">(</span><span class="n">c_desc_ptr</span><span class="p">,</span> <span class="n">c1</span><span class="p">,</span> <span class="p">[</span><span class="n">offs_am_c</span><span class="p">,</span> <span class="n">offs_bn_c</span> <span class="o">+</span> <span class="n">BLOCK_SIZE_N</span> <span class="o">//</span> <span class="mi">2</span><span class="p">])</span>
+            <span class="n">c_desc</span><span class="o">.</span><span class="n">store</span><span class="p">([</span><span class="n">offs_am_c</span><span class="p">,</span> <span class="n">offs_bn_c</span> <span class="o">+</span> <span class="n">BLOCK_SIZE_N</span> <span class="o">//</span> <span class="mi">2</span><span class="p">],</span> <span class="n">c1</span><span class="p">)</span>
         <span class="k">else</span><span class="p">:</span>
             <span class="n">accumulator</span> <span class="o">=</span> <span class="n">accumulator</span><span class="o">.</span><span class="n">to</span><span class="p">(</span><span class="n">dtype</span><span class="p">)</span>
-            <span class="n">tl</span><span class="o">.</span><span class="n">_experimental_descriptor_store</span><span class="p">(</span><span class="n">c_desc_ptr</span><span class="p">,</span> <span class="n">accumulator</span><span class="p">,</span> <span class="p">[</span><span class="n">offs_am_c</span><span class="p">,</span> <span class="n">offs_bn_c</span><span class="p">])</span>
+            <span class="n">c_desc</span><span class="o">.</span><span class="n">store</span><span class="p">([</span><span class="n">offs_am_c</span><span class="p">,</span> <span class="n">offs_bn_c</span><span class="p">],</span> <span class="n">accumulator</span><span class="p">)</span>
 
 
 <span class="k">def</span><span class="w"> </span><span class="nf">matmul_tma_persistent</span><span class="p">(</span><span class="n">a</span><span class="p">,</span> <span class="n">b</span><span class="p">,</span> <span class="n">warp_specialize</span><span class="p">:</span> <span class="nb">bool</span><span class="p">):</span>
@@ -654,61 +594,25 @@ Benchmarking persistent: done
 
     <span class="n">c</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">empty</span><span class="p">((</span><span class="n">M</span><span class="p">,</span> <span class="n">N</span><span class="p">),</span> <span class="n">device</span><span class="o">=</span><span class="n">a</span><span class="o">.</span><span class="n">device</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">dtype</span><span class="p">)</span>
 
-    <span class="n">desc_helper</span> <span class="o">=</span> <span class="n">TmaAutoTuneHelper</span><span class="p">()</span>
-    <span class="n">desc_helper</span><span class="o">.</span><span class="n">init_tma_descriptor</span><span class="p">(</span><span class="s2">&quot;a&quot;</span><span class="p">)</span>
-    <span class="n">desc_helper</span><span class="o">.</span><span class="n">init_tma_descriptor</span><span class="p">(</span><span class="s2">&quot;b&quot;</span><span class="p">)</span>
-    <span class="n">desc_helper</span><span class="o">.</span><span class="n">init_tma_descriptor</span><span class="p">(</span><span class="s2">&quot;c&quot;</span><span class="p">)</span>
-
     <span class="n">NUM_SMS</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">cuda</span><span class="o">.</span><span class="n">get_device_properties</span><span class="p">(</span><span class="s2">&quot;cuda&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">multi_processor_count</span>
 
+    <span class="c1"># A dummy block value that will be overwritten when we have the real block size</span>
+    <span class="n">dummy_block</span> <span class="o">=</span> <span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">1</span><span class="p">]</span>
+    <span class="n">a_desc</span> <span class="o">=</span> <span class="n">TensorDescriptor</span><span class="p">(</span><span class="n">a</span><span class="p">,</span> <span class="n">a</span><span class="o">.</span><span class="n">shape</span><span class="p">,</span> <span class="n">a</span><span class="o">.</span><span class="n">stride</span><span class="p">(),</span> <span class="n">dummy_block</span><span class="p">)</span>
+    <span class="n">b_desc</span> <span class="o">=</span> <span class="n">TensorDescriptor</span><span class="p">(</span><span class="n">b</span><span class="p">,</span> <span class="n">b</span><span class="o">.</span><span class="n">shape</span><span class="p">,</span> <span class="n">b</span><span class="o">.</span><span class="n">stride</span><span class="p">(),</span> <span class="n">dummy_block</span><span class="p">)</span>
+    <span class="n">c_desc</span> <span class="o">=</span> <span class="n">TensorDescriptor</span><span class="p">(</span><span class="n">c</span><span class="p">,</span> <span class="n">c</span><span class="o">.</span><span class="n">shape</span><span class="p">,</span> <span class="n">c</span><span class="o">.</span><span class="n">stride</span><span class="p">(),</span> <span class="n">dummy_block</span><span class="p">)</span>
+
     <span class="k">def</span><span class="w"> </span><span class="nf">grid</span><span class="p">(</span><span class="n">META</span><span class="p">):</span>
-        <span class="k">nonlocal</span> <span class="n">desc_helper</span>
-        <span class="n">desc_helper</span><span class="o">.</span><span class="n">fill_2d_tma_descriptor</span><span class="p">(</span>
-            <span class="s2">&quot;a&quot;</span><span class="p">,</span>
-            <span class="n">a</span><span class="o">.</span><span class="n">data_ptr</span><span class="p">(),</span>
-            <span class="n">M</span><span class="p">,</span>
-            <span class="n">K</span><span class="p">,</span>
-            <span class="n">META</span><span class="p">[</span><span class="s2">&quot;BLOCK_SIZE_M&quot;</span><span class="p">],</span>
-            <span class="n">META</span><span class="p">[</span><span class="s2">&quot;BLOCK_SIZE_K&quot;</span><span class="p">],</span>
-            <span class="n">a</span><span class="o">.</span><span class="n">element_size</span><span class="p">(),</span>
-        <span class="p">)</span>
-
-        <span class="n">desc_helper</span><span class="o">.</span><span class="n">fill_2d_tma_descriptor</span><span class="p">(</span>
-            <span class="s2">&quot;b&quot;</span><span class="p">,</span>
-            <span class="n">b</span><span class="o">.</span><span class="n">data_ptr</span><span class="p">(),</span>
-            <span class="n">N</span><span class="p">,</span>
-            <span class="n">K</span><span class="p">,</span>
-            <span class="n">META</span><span class="p">[</span><span class="s2">&quot;BLOCK_SIZE_N&quot;</span><span class="p">],</span>
-            <span class="n">META</span><span class="p">[</span><span class="s2">&quot;BLOCK_SIZE_K&quot;</span><span class="p">],</span>
-            <span class="n">b</span><span class="o">.</span><span class="n">element_size</span><span class="p">(),</span>
-        <span class="p">)</span>
-
-        <span class="n">store_block_n</span> <span class="o">=</span> <span class="n">META</span><span class="p">[</span><span class="s2">&quot;BLOCK_SIZE_N&quot;</span><span class="p">]</span>
-
-        <span class="k">if</span> <span class="n">META</span><span class="p">[</span><span class="s2">&quot;EPILOGUE_SUBTILE&quot;</span><span class="p">]:</span>
-            <span class="n">store_block_n</span> <span class="o">=</span> <span class="n">store_block_n</span> <span class="o">//</span> <span class="mi">2</span>
-
-        <span class="n">desc_helper</span><span class="o">.</span><span class="n">fill_2d_tma_descriptor</span><span class="p">(</span>
-            <span class="s2">&quot;c&quot;</span><span class="p">,</span>
-            <span class="n">c</span><span class="o">.</span><span class="n">data_ptr</span><span class="p">(),</span>
-            <span class="n">M</span><span class="p">,</span>
-            <span class="n">N</span><span class="p">,</span>
-            <span class="n">META</span><span class="p">[</span><span class="s2">&quot;BLOCK_SIZE_M&quot;</span><span class="p">],</span>
-            <span class="n">store_block_n</span><span class="p">,</span>
-            <span class="n">c</span><span class="o">.</span><span class="n">element_size</span><span class="p">(),</span>
-        <span class="p">)</span>
-
+        <span class="k">nonlocal</span> <span class="n">a_desc</span><span class="p">,</span> <span class="n">b_desc</span><span class="p">,</span> <span class="n">c_desc</span>
+        <span class="n">BLOCK_M</span> <span class="o">=</span> <span class="n">META</span><span class="p">[</span><span class="s2">&quot;BLOCK_SIZE_M&quot;</span><span class="p">]</span>
+        <span class="n">BLOCK_N</span> <span class="o">=</span> <span class="n">META</span><span class="p">[</span><span class="s2">&quot;BLOCK_SIZE_N&quot;</span><span class="p">]</span>
         <span class="k">return</span> <span class="p">(</span><span class="nb">min</span><span class="p">(</span>
             <span class="n">NUM_SMS</span><span class="p">,</span>
-            <span class="n">triton</span><span class="o">.</span><span class="n">cdiv</span><span class="p">(</span><span class="n">M</span><span class="p">,</span> <span class="n">META</span><span class="p">[</span><span class="s2">&quot;BLOCK_SIZE_M&quot;</span><span class="p">])</span> <span class="o">*</span> <span class="n">triton</span><span class="o">.</span><span class="n">cdiv</span><span class="p">(</span><span class="n">N</span><span class="p">,</span> <span class="n">META</span><span class="p">[</span><span class="s2">&quot;BLOCK_SIZE_N&quot;</span><span class="p">]),</span>
+            <span class="n">triton</span><span class="o">.</span><span class="n">cdiv</span><span class="p">(</span><span class="n">M</span><span class="p">,</span> <span class="n">BLOCK_M</span><span class="p">)</span> <span class="o">*</span> <span class="n">triton</span><span class="o">.</span><span class="n">cdiv</span><span class="p">(</span><span class="n">N</span><span class="p">,</span> <span class="n">BLOCK_N</span><span class="p">),</span>
         <span class="p">),</span> <span class="p">)</span>
 
-    <span class="n">desc_a</span> <span class="o">=</span> <span class="n">desc_helper</span><span class="o">.</span><span class="n">get_tma_descriptor_kernel_param</span><span class="p">(</span><span class="s2">&quot;a&quot;</span><span class="p">)</span>
-    <span class="n">desc_b</span> <span class="o">=</span> <span class="n">desc_helper</span><span class="o">.</span><span class="n">get_tma_descriptor_kernel_param</span><span class="p">(</span><span class="s2">&quot;b&quot;</span><span class="p">)</span>
-    <span class="n">desc_c</span> <span class="o">=</span> <span class="n">desc_helper</span><span class="o">.</span><span class="n">get_tma_descriptor_kernel_param</span><span class="p">(</span><span class="s2">&quot;c&quot;</span><span class="p">)</span>
-
     <span class="n">matmul_kernel_tma_persistent</span><span class="p">[</span><span class="n">grid</span><span class="p">](</span>
-        <span class="n">desc_a</span><span class="p">,</span> <span class="n">desc_b</span><span class="p">,</span> <span class="n">desc_c</span><span class="p">,</span>  <span class="c1">#</span>
+        <span class="n">a_desc</span><span class="p">,</span> <span class="n">b_desc</span><span class="p">,</span> <span class="n">c_desc</span><span class="p">,</span>  <span class="c1">#</span>
         <span class="n">M</span><span class="p">,</span> <span class="n">N</span><span class="p">,</span> <span class="n">K</span><span class="p">,</span>  <span class="c1">#</span>
         <span class="n">FP8_OUTPUT</span><span class="o">=</span><span class="n">dtype</span> <span class="o">==</span> <span class="n">torch</span><span class="o">.</span><span class="n">float8_e4m3fn</span><span class="p">,</span>  <span class="c1">#</span>
         <span class="n">NUM_SMS</span><span class="o">=</span><span class="n">NUM_SMS</span><span class="p">,</span>  <span class="c1">#</span>
@@ -884,7 +788,7 @@ Benchmarking persistent: done
     <span class="n">warp_specialize</span> <span class="o">=</span> <span class="p">[</span><span class="kc">False</span><span class="p">,</span> <span class="kc">True</span><span class="p">]</span> <span class="k">if</span> <span class="n">HAS_WARP_SPECIALIZE</span> <span class="k">else</span> <span class="p">[</span><span class="kc">False</span><span class="p">]</span>
     <span class="k">for</span> <span class="n">ws</span> <span class="ow">in</span> <span class="n">warp_specialize</span><span class="p">:</span>
         <span class="n">ws_str</span> <span class="o">=</span> <span class="s2">&quot;_ws&quot;</span> <span class="k">if</span> <span class="n">ws</span> <span class="k">else</span> <span class="s2">&quot;&quot;</span>
-        <span class="k">if</span> <span class="n">HAS_TMA_DESC</span><span class="p">:</span>
+        <span class="k">if</span> <span class="n">HAS_HOST_TENSOR_DESC</span><span class="p">:</span>
             <span class="n">bench_fn</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;tma_persistent</span><span class="si">{</span><span class="n">ws_str</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">,</span> <span class="n">reps</span><span class="p">,</span> <span class="n">warmup_reps</span><span class="p">,</span> <span class="k">lambda</span> <span class="n">a</span><span class="p">,</span> <span class="n">b</span><span class="p">:</span> <span class="n">matmul_tma_persistent</span><span class="p">(</span><span class="n">a</span><span class="p">,</span> <span class="n">b</span><span class="p">,</span> <span class="n">ws</span><span class="p">),</span> <span class="n">a</span><span class="p">,</span> <span class="n">b</span><span class="p">)</span>
             <span class="n">bench_fn</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;tma</span><span class="si">{</span><span class="n">ws_str</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">,</span> <span class="n">reps</span><span class="p">,</span> <span class="n">warmup_reps</span><span class="p">,</span> <span class="k">lambda</span> <span class="n">a</span><span class="p">,</span> <span class="n">b</span><span class="p">:</span> <span class="n">matmul_tma</span><span class="p">(</span><span class="n">a</span><span class="p">,</span> <span class="n">b</span><span class="p">,</span> <span class="n">ws</span><span class="p">),</span> <span class="n">a</span><span class="p">,</span> <span class="n">b</span><span class="p">)</span>
         <span class="k">if</span> <span class="n">HAS_TENSOR_DESC</span><span class="p">:</span>
@@ -915,8 +819,8 @@ Benchmarking persistent: done
     <span class="n">run_test</span><span class="p">(</span><span class="n">naive_result</span><span class="p">,</span> <span class="n">matmul_persistent</span><span class="p">,</span> <span class="n">a</span><span class="p">,</span> <span class="n">b</span><span class="o">.</span><span class="n">T</span><span class="p">,</span> <span class="s2">&quot;Persistent&quot;</span><span class="p">)</span>
 
     <span class="n">kernels</span> <span class="o">=</span> <span class="p">[</span>
-        <span class="p">(</span><span class="n">matmul_tma</span><span class="p">,</span> <span class="s2">&quot;TMA&quot;</span><span class="p">,</span> <span class="n">HAS_TMA_DESC</span><span class="p">),</span>
-        <span class="p">(</span><span class="n">matmul_tma_persistent</span><span class="p">,</span> <span class="s2">&quot;TMA Persistent&quot;</span><span class="p">,</span> <span class="n">HAS_TMA_DESC</span><span class="p">),</span>
+        <span class="p">(</span><span class="n">matmul_tma</span><span class="p">,</span> <span class="s2">&quot;TMA&quot;</span><span class="p">,</span> <span class="n">HAS_HOST_TENSOR_DESC</span><span class="p">),</span>
+        <span class="p">(</span><span class="n">matmul_tma_persistent</span><span class="p">,</span> <span class="s2">&quot;TMA Persistent&quot;</span><span class="p">,</span> <span class="n">HAS_HOST_TENSOR_DESC</span><span class="p">),</span>
         <span class="p">(</span><span class="n">matmul_descriptor_persistent</span><span class="p">,</span> <span class="s2">&quot;Tensor Descriptor Persistent&quot;</span><span class="p">,</span> <span class="n">HAS_TENSOR_DESC</span><span class="p">),</span>
     <span class="p">]</span>
     <span class="n">warp_specialize</span> <span class="o">=</span> <span class="p">[</span><span class="kc">False</span><span class="p">,</span> <span class="kc">True</span><span class="p">]</span> <span class="k">if</span> <span class="n">HAS_WARP_SPECIALIZE</span> <span class="k">else</span> <span class="p">[</span><span class="kc">False</span><span class="p">]</span>
@@ -970,7 +874,7 @@ Benchmarking persistent: done
         <span class="n">show_profile</span><span class="p">(</span><span class="n">args</span><span class="o">.</span><span class="n">prec</span><span class="p">,</span> <span class="s2">&quot;matmul&quot;</span><span class="p">)</span>
 </pre></div>
 </div>
-<p class="sphx-glr-timing"><strong>Total running time of the script:</strong> (1 minutes 10.224 seconds)</p>
+<p class="sphx-glr-timing"><strong>Total running time of the script:</strong> (1 minutes 10.893 seconds)</p>
 <div class="sphx-glr-footer sphx-glr-footer-example docutils container" id="sphx-glr-download-getting-started-tutorials-09-persistent-matmul-py">
 <div class="sphx-glr-download sphx-glr-download-jupyter docutils container">
 <p><a class="reference download internal" download="" href="../../_downloads/b5537c431cd73b8ee3c32cdf90c58104/09-persistent-matmul.ipynb"><code class="xref download docutils literal notranslate"><span class="pre">Download</span> <span class="pre">Jupyter</span> <span class="pre">notebook:</span> <span class="pre">09-persistent-matmul.ipynb</span></code></a></p>
