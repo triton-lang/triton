@@ -147,7 +147,9 @@ module attributes {"ttg.num-warps" = 4 : i32} {
     // expected-remark@+2 {{unsigned : [0, 1024] signed : [0, 1024]}}
     // expected-remark@+1 {{non-neg}}
     %4 = arith.extsi %2 : tensor<1024xi32> to tensor<1024xi64>
-    // expected-remark@+1 {{result 1: non-neg}}
+    // expected-remark@+3 {{result 1: unsigned : [0, 131072] signed : [0, 131072]}}
+    // expected-remark@+2 {{result 1: non-neg}}
+    // expected-remark@+1 {{inferred total trip count: 128}}
     %5:3 = scf.for %arg2 = %c0 to %c128 step %c1 iter_args(%arg3 = %3, %arg4 = %4, %arg5 = %arg1) -> (!tt.ptr<f32>, tensor<1024xi64>, tensor<1024xf32>) {
       %12 = tt.addptr %arg3, %1 : !tt.ptr<f32>, i32
       // expected-remark@+2 {{unsigned : [0, 1024] signed : [0, 1024]}}
@@ -193,7 +195,9 @@ module attributes {"ttg.num-warps" = 4 : i32} {
     // expected-remark@+1 {{non-neg}}
     %1 = arith.muli %0, %c1024_i32 : i32
     %2 = tt.make_range {end = 1024 : i32, start = 0 : i32} : tensor<1024xi32>
-    // expected-remark@+1 {{result 1: non-neg}}
+    // expected-remark@+3 {{result 1: unsigned : [0, 130048] signed : [0, 130048]}}
+    // expected-remark@+2 {{result 1: non-neg}}
+    // expected-remark@+1 {{inferred total trip count: 128}}
     %3:3 = scf.for %arg2 = %c0 to %c128 step %c1 iter_args(%arg3 = %arg0, %arg4 = %cst, %arg5 = %arg1) -> (!tt.ptr<f32>, tensor<1024xi64>, tensor<1024xf32>) {
       %10 = tt.addptr %arg3, %1 : !tt.ptr<f32>, i32
       // expected-remark@+2 {{unsigned : [0, 1024] signed : [0, 1024]}}
@@ -239,9 +243,13 @@ module attributes {"ttg.num-warps" = 4 : i32} {
     // expected-remark@+1 {{non-neg}}
     %1 = arith.muli %0, %c1024_i32 : i32
     %2 = tt.make_range {end = 1024 : i32, start = 0 : i32} : tensor<1024xi32>
-    // expected-remark@+1 {{result 1: non-neg}}
+    // expected-remark@+3 {{result 1: unsigned : [0, 15360] signed : [0, 15360]}}
+    // expected-remark@+2 {{result 1: non-neg}}
+    // expected-remark@+1 {{inferred total trip count: 16}}
     %3:3 = scf.for %arg2 = %c0 to %c16 step %c1 iter_args(%arg3 = %arg0, %arg4 = %cst, %arg5 = %arg1) -> (!tt.ptr<f32>, tensor<1024xi64>, tensor<1024xf32>) {
-      // expected-remark@+1 {{result 1: non-neg}}
+      // expected-remark@+3 {{result 1: unsigned : [0, 261120] signed : [0, 261120]}}
+      // expected-remark@+2 {{result 1: non-neg}}
+      // expected-remark@+1 {{inferred total trip count: 256}}
       %10:3 = scf.for %arg6 = %c0 to %c16 step %c1 iter_args(%arg7 = %arg3, %arg8 = %arg4, %arg9 = %arg5) -> (!tt.ptr<f32>, tensor<1024xi64>, tensor<1024xf32>) {
         %11 = tt.addptr %arg7, %1 : !tt.ptr<f32>, i32
         // expected-remark@+2 {{unsigned : [0, 1024] signed : [0, 1024]}}
@@ -289,7 +297,11 @@ module attributes {"ttg.num-warps" = 4 : i32} {
     // expected-remark@+1 {{non-neg}}
     %1 = arith.muli %0, %c1024_i32 : i32
     %2 = tt.make_range {end = 1024 : i32, start = 0 : i32} : tensor<1024xi32>
+    // expected-remark@+2 {{result 1: unsigned : [0, 18446744073709551615] signed : [-9223372036854775808, 9223372036854775807]}}
+    // expected-remark@+1 {{inferred total trip count: 128}}
     %3:3 = scf.for %arg2 = %c0 to %c128 step %c1 iter_args(%arg3 = %arg0, %arg4 = %cst, %arg5 = %arg1) -> (!tt.ptr<f32>, tensor<1024xi64>, tensor<1024xf32>) {
+      // expected-remark@+2 {{result 1: unsigned : [0, 18446744073709551615] signed : [-9223372036854775808, 9223372036854775807]}}
+      // expected-remark@+1 {{inferred total trip count: 16384}}
       %10:3 = scf.for %arg6 = %c0 to %c128 step %c1 iter_args(%arg7 = %arg3, %arg8 = %arg4, %arg9 = %arg5) -> (!tt.ptr<f32>, tensor<1024xi64>, tensor<1024xf32>) {
         %11 = tt.addptr %arg7, %1 : !tt.ptr<f32>, i32
         // expected-remark@+2 {{unsigned : [0, 1024] signed : [0, 1024]}}
@@ -322,6 +334,7 @@ module attributes {"ttg.num-warps" = 4 : i32} {
 
 // CHECK-LABEL:   tt.func @ifOp
 module attributes {"ttg.num-warps" = 4 : i32} {
+  // expected-remark@+1 {{arg 2: unsigned : [0, 1] signed : [-1, 0]}}
   tt.func @ifOp(%arg0: !tt.ptr<f32>, %arg1: tensor<1024xf32>, %arg2: i1) -> tensor<1024xf32> {
     %cst = arith.constant dense<0> : tensor<1024xi64>
     %c1024_i32 = arith.constant 1024 : i32
@@ -332,6 +345,7 @@ module attributes {"ttg.num-warps" = 4 : i32} {
     // expected-remark@+1 {{non-neg}}
     %1 = arith.muli %0, %c1024_i32 : i32
     %2 = tt.make_range {end = 1024 : i32, start = 0 : i32} : tensor<1024xi32>
+    // expected-remark@+2 {{result 1: unsigned : [0, 1024] signed : [0, 1024]}}
     // expected-remark@+1 {{result 1: non-neg}}
     %3:2 = scf.if %arg2 -> (!tt.ptr<f32>, tensor<1024xi64>) {
       %8 = tt.addptr %arg0, %1 : !tt.ptr<f32>, i32
@@ -357,6 +371,7 @@ module attributes {"ttg.num-warps" = 4 : i32} {
 
 // CHECK-LABEL:   tt.func @condBranch
 module attributes {"ttg.num-warps" = 4 : i32} {
+  // expected-remark@+1 {{arg 1: unsigned : [0, 1] signed : [-1, 0]}}
   tt.func @condBranch(%arg0: !tt.ptr<f32>, %arg1: i1) -> tensor<1024xf32> {
     %cst = arith.constant dense<0> : tensor<1024xi64>
     %c1024_i32 = arith.constant 1024 : i32
@@ -395,6 +410,7 @@ module attributes {"ttg.num-warps" = 4 : i32} {
 
 // CHECK-LABEL:   tt.func @branch
 module attributes {"ttg.num-warps" = 4 : i32} {
+  // expected-remark@+1 {{arg 1: unsigned : [0, 1] signed : [-1, 0]}}
   tt.func @branch(%arg0: !tt.ptr<f32>, %arg1: i1) -> tensor<1024xf32> {
     %c1024_i32 = arith.constant 1024 : i32
     // expected-remark@+2 {{unsigned : [0, 65535] signed : [0, 65535]}}
@@ -416,6 +432,8 @@ module attributes {"ttg.num-warps" = 4 : i32} {
 
 #blocked = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [1, 0]}>
 module attributes {"ttg.num-warps" = 4 : i32} {
+  // expected-remark@+2 {{arg 1: unsigned : [0, 4294967295] signed : [-2147483648, 2147483647]}}
+  // expected-remark@+1 {{arg 2: unsigned : [0, 4294967295] signed : [-2147483648, 2147483647]}}
   tt.func @tile_offset(%arg0: !tt.ptr<f16>, %arg1: i32, %arg2: i32) -> tensor<16x256xf16, #blocked> {
     %c256_i32 = arith.constant 256 : i32
     // expected-remark@+2 {{unsigned : [0, 65535] signed : [0, 65535]}}
@@ -455,7 +473,8 @@ module attributes {"ttg.num-warps" = 4 : i32} {
 
 #blocked = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [1, 0]}>
 module attributes {"ttg.num-warps" = 4 : i32} {
-  tt.func public @matmul_kernel(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg1: i32 {tt.divisibility = 16 : i32}) -> tensor<128x16xf16, #blocked> {
+  // expected-remark@+1 {{arg 1: unsigned : [0, 4294967295] signed : [-2147483648, 2147483647]}}
+  tt.func public @matmul_kernel(%arg0: !tt.ptr<f16>, %arg1: i32) -> tensor<128x16xf16, #blocked> {
     %c128_i32 = arith.constant 128 : i32
     // expected-remark@+2 {{unsigned : [0, 65535] signed : [0, 65535]}}
     // expected-remark@+1 {{non-neg}}
@@ -491,6 +510,7 @@ module attributes {"ttg.num-warps" = 4 : i32} {
 
 // CHECK-LABEL:   tt.func @select
 module attributes {"ttg.num-warps" = 4 : i32} {
+  // expected-remark@+1 {{arg 1: unsigned : [0, 1] signed : [-1, 0]}}
   tt.func @select(%arg0: !tt.ptr<f32>, %arg1: i1) -> tensor<1024xf32> {
     %cst = arith.constant dense<0> : tensor<1024xi64>
     %c1024_i32 = arith.constant 1024 : i32
@@ -523,6 +543,7 @@ module attributes {"ttg.num-warps" = 4 : i32} {
 
 // CHECK-LABEL:   tt.func @where_kernel
 module attributes {"ttg.num-ctas" = 1 : i32} {
+  // expected-remark@+1 {{arg 2: unsigned : [0, 255] signed : [-128, 127]}}
   tt.func @where_kernel(%arg0: !tt.ptr<i64>, %arg1: !tt.ptr<i64>, %arg2: i8) -> tensor<1024xi64> {
     %c0_i8 = arith.constant 0 : i8
     %c1024_i32 = arith.constant 1024 : i32
@@ -561,7 +582,9 @@ module attributes {"ttg.num-warps" = 4 : i32} {
     // expected-remark@+2 {{unsigned : [0, 1024] signed : [0, 1024]}}
     // expected-remark@+1 {{non-neg}}
     %3 = arith.extsi %1 : tensor<1024xi32> to tensor<1024xi64>
-    // expected-remark@+1 {{result 1: non-neg}}
+    // expected-remark@+3 {{result 1: unsigned : [0, 131072] signed : [0, 131072]}}
+    // expected-remark@+2 {{result 1: non-neg}}
+    // expected-remark@+1 {{inferred total trip count: 128}}
     %4:3 = scf.for %arg2 = %c0 to %c128 step %c1 iter_args(%arg3 = %2, %arg4 = %3, %arg5 = %arg1) -> (!tt.ptr<f32>, tensor<1024xi64>, tensor<1024xf32>) {
       // expected-remark@+2 {{unsigned : [0, 131072] signed : [0, 131072]}}
       // expected-remark@+1 {{non-neg}}
@@ -598,11 +621,12 @@ module attributes {"ttg.num-warps" = 4 : i32} {
 
 // CHECK-LABEL:   tt.func public @scalar_pointers
 module attributes {"ttg.num-warps" = 4 : i32} {
-  tt.func public @scalar_pointers(%arg0: !tt.ptr<i64> {tt.divisibility = 16 : i32}) attributes {noinline = false} {
+  tt.func public @scalar_pointers(%arg0: !tt.ptr<i64>) attributes {noinline = false} {
     %c0_i64 = arith.constant 0 : i64
     %c1_i32 = arith.constant 1 : i32
     %c100_i32 = arith.constant 100 : i32
     %0 = tt.addptr %arg0, %c1_i32 : !tt.ptr<i64>, i32
+    // expected-remark@+1 {{inferred total trip count: 99}}
     %1 = scf.for %arg1 = %c1_i32 to %c100_i32 step %c1_i32 iter_args(%arg2 = %0) -> (!tt.ptr<i64>)  : i32 {
       tt.store %arg2, %c0_i64 : !tt.ptr<i64>
       %2 = tt.addptr %arg2, %c1_i32 : !tt.ptr<i64>, i32
@@ -616,6 +640,7 @@ module attributes {"ttg.num-warps" = 4 : i32} {
 
 // CHECK-LABEL:   tt.func @scalar_if
 module attributes {"ttg.num-warps" = 4 : i32} {
+  // expected-remark@+1 {{arg 2: unsigned : [0, 1] signed : [-1, 0]}}
   tt.func @scalar_if(%arg0: !tt.ptr<f32>, %arg1: tensor<1024xf32>, %arg2: i1) -> f32 {
     %c1_i32 = arith.constant 1 : i32
     %c100_i32 = arith.constant 100 : i32
@@ -636,6 +661,7 @@ module attributes {"ttg.num-warps" = 4 : i32} {
 
 // CHECK-LABEL:   tt.func @scalar_cond_branch
 module attributes {"ttg.num-warps" = 4 : i32} {
+  // expected-remark@+1 {{arg 2: unsigned : [0, 1] signed : [-1, 0]}}
   tt.func @scalar_cond_branch(%arg0: !tt.ptr<f32>, %arg1: !tt.ptr<f32>, %arg2: i1) -> f32 {
     cf.cond_br %arg2, ^bb1(%arg0 : !tt.ptr<f32>), ^bb2(%arg1 : !tt.ptr<f32>)
   ^bb1(%0: !tt.ptr<f32>):  // pred: ^bb0
@@ -671,8 +697,11 @@ module attributes {"ttg.num-warps" = 4 : i32} {
     // expected-remark@+2 {{unsigned : [0, 1024] signed : [0, 1024]}}
     // expected-remark@+1 {{non-neg}}
     %6 = arith.extsi %2 : tensor<1024xi32> to tensor<1024xi64>
-    // expected-remark@+2 {{result 1: non-neg}}
-    // expected-remark@+1 {{result 3: non-neg}}
+    // expected-remark@+5 {{result 1: unsigned : [0, 131072] signed : [0, 131072]}}
+    // expected-remark@+4 {{result 3: unsigned : [0, 131072] signed : [0, 131072]}}
+    // expected-remark@+3 {{result 1: non-neg}}
+    // expected-remark@+2 {{result 3: non-neg}}
+    // expected-remark@+1 {{inferred total trip count: 128}}
     %7:5 = scf.for %arg2 = %c0 to %c128 step %c1 iter_args(%arg3 = %5, %arg4 = %6, %arg5 = %3, %arg6 = %4, %arg7 = %arg1) -> (!tt.ptr<f32>, tensor<1024xi64>, !tt.ptr<f32>, tensor<1024xi64>, tensor<1024xf32>) {
       %14 = tt.addptr %arg5, %1 : !tt.ptr<f32>, i32
       // expected-remark@+2 {{unsigned : [0, 1024] signed : [0, 1024]}}
@@ -725,8 +754,11 @@ module attributes {"ttg.num-warps" = 4 : i32} {
     // expected-remark@+2 {{unsigned : [0, 1024] signed : [0, 1024]}}
     // expected-remark@+1 {{non-neg}}
     %6 = arith.extsi %2 : tensor<1024xi32> to tensor<1024xi64>
-    // expected-remark@+2 {{result 1: non-neg}}
-    // expected-remark@+1 {{result 4: non-neg}}
+    // expected-remark@+5 {{result 1: unsigned : [0, 131072] signed : [0, 131072]}}
+    // expected-remark@+4 {{result 4: unsigned : [0, 131072] signed : [0, 131072]}}
+    // expected-remark@+3 {{result 1: non-neg}}
+    // expected-remark@+2 {{result 4: non-neg}}
+    // expected-remark@+1 {{inferred total trip count: 128}}
     %7:6 = scf.for %arg3 = %c0 to %c128 step %c1 iter_args(%arg4 = %3, %arg5 = %4, %arg6 = %arg2, %arg7 = %5, %arg8 = %6, %arg9 = %arg2) -> (!tt.ptr<f32>, tensor<1024xi64>, tensor<1024xf32>, !tt.ptr<f32>, tensor<1024xi64>, tensor<1024xf32>) {
       %20 = tt.addptr %arg4, %1 : !tt.ptr<f32>, i32
       // expected-remark@+2 {{unsigned : [0, 1024] signed : [0, 1024]}}
@@ -780,6 +812,7 @@ module attributes {"ttg.num-warps" = 4 : i32} {
 
 // CHECK-LABEL:   tt.func @forOpDynamicKBound
 module attributes {"ttg.num-warps" = 4 : i32} {
+  // expected-remark@+1 {{arg 2: unsigned : [0, 18446744073709551615] signed : [-9223372036854775808, 9223372036854775807]}}
   tt.func @forOpDynamicKBound(%arg0: !tt.ptr<f32>, %arg1: tensor<1024xf32>, %K: index) -> tensor<1024xf32> {
     %c1024_i32 = arith.constant 1024 : i32
     %c0 = arith.constant 0 : index
@@ -796,6 +829,8 @@ module attributes {"ttg.num-warps" = 4 : i32} {
     // expected-remark@+2 {{unsigned : [0, 1024] signed : [0, 1024]}}
     // expected-remark@+1 {{non-neg}}
     %4 = arith.extsi %2 : tensor<1024xi32> to tensor<1024xi64>
+    // expected-remark@+2 {{result 1: unsigned : [0, 18446744073709551615] signed : [-9223372036854775808, 9223372036854775807]}}
+    // expected-remark@+1 {{inferred total trip count: 1025}}
     %5:3 = scf.for %arg2 = %c0 to %c128 step %K iter_args(%arg3 = %3, %arg4 = %4, %arg5 = %arg1) -> (!tt.ptr<f32>, tensor<1024xi64>, tensor<1024xf32>) {
       %12 = tt.addptr %arg3, %1 : !tt.ptr<f32>, i32
       // expected-remark@+2 {{unsigned : [0, 1024] signed : [0, 1024]}}
@@ -826,6 +861,7 @@ module attributes {"ttg.num-warps" = 4 : i32} {
 
 // CHECK-LABEL:   tt.func @DynamicKBound
 module attributes {"ttg.num-warps" = 4 : i32} {
+  // expected-remark@+1 {{unsigned : [0, 4294967295] signed : [-2147483648, 128]}}
   tt.func @DynamicKBound(%K: i32) {
     %c1024_i32 = arith.constant 1024 : i32
     %c128 = arith.constant 128 : i32
@@ -844,14 +880,16 @@ module attributes {"ttg.num-warps" = 4 : i32} {
 
 // CHECK-LABEL:   tt.func @unsupportedAssumption
 module attributes {"ttg.num-warps" = 4 : i32} {
+  // expected-remark@+1 {{unsigned : [0, 128] signed : [0, 128]}}
   tt.func @unsupportedAssumption(%K: i32) {
     %c1024_i32 = arith.constant 1024 : i32
     %c128 = arith.constant 128 : i32
-    // expected-remark@+2 {{unsigned : [0, 1] signed : [-1, 0]}}
-    // expected-remark@+1 {{unsigned arithmetic not currently supported}}
+    // expected-remark@+2 {{unsigned : [1, 1] signed : [-1, -1]}}
+    // expected-remark@+1 {{result is true}}
     %cmp = arith.cmpi ule, %K, %c128 : i32
     llvm.intr.assume %cmp : i1
-    // expected-remark@+1 {{unsigned : [0, 1] signed : [-1, 0]}}
+    // expected-remark@+2 {{unsigned : [1, 1] signed : [-1, -1]}}
+    // expected-remark@+1 {{result is true}}
     %condtest = arith.cmpi sle, %K, %c1024_i32 : i32
     tt.return
   }
@@ -862,15 +900,25 @@ module attributes {"ttg.num-warps" = 4 : i32} {
 // CHECK-LABEL:   tt.func @moreDynamicKBound
 module attributes {"ttg.num-warps" = 4 : i32} {
   tt.func @moreDynamicKBound(
+        // expected-remark@+1 {{arg 0: unsigned : [128, 128] signed : [128, 128]}}
         %Keqlhs: i32,
+        // expected-remark@+1 {{arg 1: unsigned : [128, 2147483647] signed : [128, 2147483647]}}
         %Ksgelhs: i32,
+        // expected-remark@+1 {{arg 2: unsigned : [129, 2147483647] signed : [129, 2147483647]}}
         %Ksgtlhs: i32,
+        // expected-remark@+1 {{arg 3: unsigned : [0, 4294967295] signed : [-2147483648, 128]}}
         %Kslelhs: i32,
+        // expected-remark@+1 {{arg 4: unsigned : [0, 4294967295] signed : [-2147483648, 127]}}
         %Ksltlhs: i32,
+        // expected-remark@+1 {{arg 5: unsigned : [64, 64] signed : [64, 64]}}
         %Keqrhs: i32,
+        // expected-remark@+1 {{arg 6: unsigned : [0, 4294967295] signed : [-2147483648, 128]}}
         %Ksgerhs: i32,
+        // expected-remark@+1 {{arg 7: unsigned : [0, 4294967295] signed : [-2147483648, 127]}}
         %Ksgtrhs: i32,
+        // expected-remark@+1 {{arg 8: unsigned : [128, 2147483647] signed : [128, 2147483647]}}
         %Kslerhs: i32,
+        // expected-remark@+1 {{arg 9: unsigned : [129, 2147483647] signed : [129, 2147483647]}}
         %Ksltrhs: i32
     ) {
     %c0 = arith.constant 0 : i32
@@ -1001,6 +1049,126 @@ module attributes {"ttg.num-warps" = 4 : i32} {
 
 // -----
 
+// CHECK-LABEL:   tt.func @moreDynamicKBoundUnsigned
+module attributes {"ttg.num-warps" = 4 : i32} {
+  tt.func @moreDynamicKBoundUnsigned(
+        // expected-remark@+1 {{arg 0: unsigned : [128, 4294967295] signed : [-2147483648, 2147483647]}}
+        %Kugelhs: i32,
+        // expected-remark@+1 {{arg 1: unsigned : [129, 4294967295] signed : [-2147483648, 2147483647]}}
+        %Kugtlhs: i32,
+        // expected-remark@+1 {{arg 2: unsigned : [0, 128] signed : [0, 128]}}
+        %Kulelhs: i32,
+        // expected-remark@+1 {{arg 3: unsigned : [0, 127] signed : [0, 127]}}
+        %Kultlhs: i32,
+        // expected-remark@+1 {{arg 4: unsigned : [0, 128] signed : [0, 128]}}
+        %Kugerhs: i32,
+        // expected-remark@+1 {{arg 5: unsigned : [0, 127] signed : [0, 127]}}
+        %Kugtrhs: i32,
+        // expected-remark@+1 {{arg 6: unsigned : [128, 4294967295] signed : [-2147483648, 2147483647]}}
+        %Kulerhs: i32,
+        // expected-remark@+1 {{arg 7: unsigned : [129, 4294967295] signed : [-2147483648, 2147483647]}}
+        %Kultrhs: i32
+    ) {
+    %c0 = arith.constant 0 : i32
+    %c16 = arith.constant 16 : i32
+    %c32 = arith.constant 32 : i32
+    %c64 = arith.constant 64 : i32
+    %c128 = arith.constant 128 : i32
+    %c256 = arith.constant 256 : i32
+    %c1024_i32 = arith.constant 1024 : i32
+
+    //// uge comparison
+
+    // expected-remark@+2 {{unsigned : [1, 1] signed : [-1, -1]}}
+    // expected-remark@+1 {{result is true}}
+    %assumeugelhs = arith.cmpi uge, %Kugelhs, %c128 : i32
+    llvm.intr.assume %assumeugelhs : i1
+    // expected-remark@+1 {{unsigned : [128, 4294967295] signed : [-2147483648, 2147483647]}}
+    %testugelhs1 = arith.addi %Kugelhs, %c0 : i32
+    // expected-remark@+1 {{unsigned : [0, 1] signed : [-1, 0]}}
+    %testugelhs2 = arith.cmpi uge, %Kugelhs, %c1024_i32 : i32
+    // expected-remark@+2 {{unsigned : [1, 1] signed : [-1, -1]}}
+    // expected-remark@+1 {{result is true}}
+    %assumeugerhs = arith.cmpi uge, %c128, %Kugerhs  : i32
+    llvm.intr.assume %assumeugerhs : i1
+    // expected-remark@+2 {{unsigned : [0, 128] signed : [0, 128]}}
+    // expected-remark@+1 {{non-neg}}
+    %testugerhs1 = arith.addi %Kugerhs, %c0 : i32
+    // expected-remark@+2 {{unsigned : [1, 1] signed : [-1, -1]}}
+    // expected-remark@+1 {{result is true}}
+    %testugerhs2 = arith.cmpi uge, %c1024_i32, %Kugerhs : i32
+
+    //// ugt comparison
+
+    // expected-remark@+2 {{unsigned : [1, 1] signed : [-1, -1]}}
+    // expected-remark@+1 {{result is true}}
+    %assumeugtlhs = arith.cmpi ugt, %Kugtlhs, %c128 : i32
+    llvm.intr.assume %assumeugtlhs : i1
+    // expected-remark@+1 {{unsigned : [129, 4294967295] signed : [-2147483648, 2147483647]}}
+    %testugtlhs1 = arith.addi %Kugtlhs, %c0 : i32
+    // expected-remark@+1 {{unsigned : [0, 1] signed : [-1, 0]}}
+    %testugtlhs2 = arith.cmpi ugt, %Kugtlhs, %c1024_i32 : i32
+    // expected-remark@+2 {{unsigned : [1, 1] signed : [-1, -1]}}
+    // expected-remark@+1 {{result is true}}
+    %assumeugtrhs = arith.cmpi ugt, %c128, %Kugtrhs  : i32
+    llvm.intr.assume %assumeugtrhs : i1
+    // expected-remark@+2 {{unsigned : [0, 127] signed : [0, 127]}}
+    // expected-remark@+1 {{non-neg}}
+    %testugtrhs1 = arith.addi %Kugtrhs, %c0 : i32
+    // expected-remark@+2 {{unsigned : [1, 1] signed : [-1, -1]}}
+    // expected-remark@+1 {{result is true}}
+    %testugtrhs2 = arith.cmpi ugt, %c1024_i32, %Kugtrhs : i32
+
+    //// ule comparison
+
+    // expected-remark@+2 {{unsigned : [1, 1] signed : [-1, -1]}}
+    // expected-remark@+1 {{result is true}}
+    %assumeulelhs = arith.cmpi ule, %Kulelhs, %c128 : i32
+    llvm.intr.assume %assumeulelhs : i1
+    // expected-remark@+2 {{unsigned : [0, 128] signed : [0, 128]}}
+    // expected-remark@+1 {{non-neg}}
+    %testulelhs1 = arith.addi %Kulelhs, %c0 : i32
+    // expected-remark@+2 {{unsigned : [1, 1] signed : [-1, -1]}}
+    // expected-remark@+1 {{result is true}}
+    %testulelhs2 = arith.cmpi ule, %Kulelhs, %c1024_i32 : i32
+    // expected-remark@+2 {{unsigned : [1, 1] signed : [-1, -1]}}
+    // expected-remark@+1 {{result is true}}
+    %assumeulerhs = arith.cmpi ule, %c128, %Kulerhs  : i32
+    llvm.intr.assume %assumeulerhs : i1
+    // expected-remark@+1 {{unsigned : [128, 4294967295] signed : [-2147483648, 2147483647]}}
+    %testulerhs1 = arith.addi %Kulerhs, %c0 : i32
+    // expected-remark@+2 {{unsigned : [1, 1] signed : [-1, -1]}}
+    // expected-remark@+1 {{result is true}}
+    %testulerhs2 = arith.cmpi ule, %c64, %Kulerhs : i32
+
+    //// ult comparison
+
+    // expected-remark@+2 {{unsigned : [1, 1] signed : [-1, -1]}}
+    // expected-remark@+1 {{result is true}}
+    %assumeultlhs = arith.cmpi ult, %Kultlhs, %c128 : i32
+    llvm.intr.assume %assumeultlhs : i1
+    // expected-remark@+2 {{unsigned : [0, 127] signed : [0, 127]}}
+    // expected-remark@+1 {{non-neg}}
+    %testultlhs1 = arith.addi %Kultlhs, %c0 : i32
+    // expected-remark@+2 {{unsigned : [1, 1] signed : [-1, -1]}}
+    // expected-remark@+1 {{result is true}}
+    %testultlhs2 = arith.cmpi ult, %Kultlhs, %c1024_i32 : i32
+    // expected-remark@+2 {{unsigned : [1, 1] signed : [-1, -1]}}
+    // expected-remark@+1 {{result is true}}
+    %assumeultrhs = arith.cmpi ult, %c128, %Kultrhs  : i32
+    llvm.intr.assume %assumeultrhs : i1
+    // expected-remark@+1 {{unsigned : [129, 4294967295] signed : [-2147483648, 2147483647]}}
+    %testultrhs1 = arith.addi %Kultrhs, %c0 : i32
+    // expected-remark@+2 {{unsigned : [1, 1] signed : [-1, -1]}}
+    // expected-remark@+1 {{result is true}}
+    %testultrhs2 = arith.cmpi ult, %c64, %Kultrhs : i32
+
+    tt.return
+  }
+}
+
+// -----
+
 
 // CHECK-LABEL: join_cat_transitive_nonneg
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
@@ -1043,6 +1211,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
 
 // CHECK-LABEL: histo_nonneg
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
+  // expected-remark@+1 {{arg 2: unsigned : [0, 4294967295] signed : [-2147483648, 2147483647]}}
   tt.func @histo_nonneg(%arg0: !tt.ptr<bf16>, %arg1: !tt.ptr<bf16>, %arg2 : tensor<256xi32>) {
     // expected-remark@+2 {{unsigned : [0, 4294967295] signed : [0, -1]}}
     // expected-remark@+1 {{non-neg}}
@@ -1056,6 +1225,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
 
 // CHECK-LABEL: get_num_prog_nonneg
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
+  // expected-remark@+1 {{arg 2: unsigned : [0, 4294967295] signed : [-2147483648, 2147483647]}}
   tt.func @get_num_prog_nonneg(%arg0: !tt.ptr<bf16>, %arg1: !tt.ptr<bf16>, %arg2 : i32) {
     // expected-remark@+2 {{unsigned : [0, 65536] signed : [0, 65536]}}
     // expected-remark@+1 {{non-neg}}
@@ -1075,7 +1245,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
     // expected-remark@+2 {{unsigned : [0, 2147483647] signed : [0, 2147483647]}}
     // expected-remark@+1 {{non-neg}}
     %5 = arith.maxsi %arg2, %4 : i32
-    // expected-remark@+2 {{[0, 2147483647] signed : [0, 2147483647]}}
+    // expected-remark@+2 {{unsigned : [0, 2147483647] signed : [0, 2147483647]}}
     // expected-remark@+1 {{non-neg}}
     %6 = tt.splat %5 : i32 -> tensor<8xi32>
     %7 = tt.make_range {end = 8 : i32, start = 0 : i32} : tensor<8xi32>
@@ -1145,7 +1315,10 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
 #shared1 = #ttg.swizzled_shared<{vec = 8, perPhase = 1, maxPhase = 8, order = [1, 0]}>
 #smem = #ttg.shared_memory
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
-  tt.func @assume_matmul(%arg0: index, %arg1: index, %arg2: index, %arg3: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg4: !tt.ptr<f16> {tt.divisibility = 16 : i32}) -> tensor<128x128xf32, #mma> {
+  // expected-remark@+3 {{arg 0: unsigned : [0, 18446744073709551615] signed : [-9223372036854775808, 9223372036854775807]}}
+  // expected-remark@+2 {{arg 1: unsigned : [0, 18446744073709551615] signed : [-9223372036854775808, 9223372036854775807]}}
+  // expected-remark@+1 {{arg 2: unsigned : [0, 18446744073709551615] signed : [-9223372036854775808, 9223372036854775807]}}
+  tt.func @assume_matmul(%arg0: index, %arg1: index, %arg2: index, %arg3: !tt.ptr<f16>, %arg4: !tt.ptr<f16>) -> tensor<128x128xf32, #mma> {
     // expected-remark@+1 {{unsigned : [18446744073709551615, 18446744073709551615] signed : [-1, -1]}}
     %c-1 = arith.constant -1 : index
     %c1 = arith.constant 1 : index
@@ -1185,6 +1358,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
     ttg.local_store %16, %18 : tensor<32x128xf16, #blocked> -> !ttg.memdesc<32x128xf16, #shared1, #smem, mutable>
     // expected-remark@+1 {{unsigned : [0, 18446744073709551615] signed : [-9223372036854775808, 9223372036854775807]}}
     %19 = arith.subi %arg1, %arg2 : index
+    // expected-remark@+1 {{inferred total trip count: 0}}
     %20:6 = scf.for %arg5 = %arg0 to %19 step %arg2 iter_args(%arg6 = %4, %arg7 = %9, %arg8 = %cst_2, %arg9 = %c0_i32, %arg10 = %17, %arg11 = %18) -> (tensor<128x32x!tt.ptr<f16>, #blocked1>, tensor<32x128x!tt.ptr<f16>, #blocked>, tensor<128x128xf32, #mma>, i32, !ttg.memdesc<128x32xf16, #shared, #smem, mutable>, !ttg.memdesc<32x128xf16, #shared1, #smem, mutable>) {
       %33 = tt.addptr %arg6, %cst_1 : tensor<128x32x!tt.ptr<f16>, #blocked1>, tensor<128x32xi32, #blocked1>
       %34 = tt.addptr %arg7, %cst_0 : tensor<32x128x!tt.ptr<f16>, #blocked>, tensor<32x128xi32, #blocked>
@@ -1195,11 +1369,10 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
       %38 = ttg.local_load %arg11 : !ttg.memdesc<32x128xf16, #shared1, #smem, mutable> -> tensor<32x128xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>>
       %39 = arith.mulf %38, %cst : tensor<32x128xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>>
       %40 = tt.dot %36, %39, %arg8 : tensor<128x32xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 2}>> * tensor<32x128xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>> -> tensor<128x128xf32, #mma>
-      // expected-remark@+1 {{unsigned : [0, 4294967295] signed : [-2147483648, 2147483647]}}
       %41 = arith.addi %arg9, %c1_i32 : i32
-      // expected-remark@+1 {{unsigned : [0, 1] signed : [-1, 0]}}
       %42 = arith.cmpi slt, %41, %c1_i32 : i32
-      // expected-remark@+1 {{unsigned : [0, 4294967295] signed : [-2147483648, 2147483647]}}
+      // expected-remark@+2 {{unsigned : [0, 0] signed : [0, 0]}}
+      // expected-remark@+1 {{non-neg}}
       %43 = arith.select %42, %41, %c0_i32 : i32
       %44 = ttg.memdesc_subview %10[%43, %c0_i32, %c0_i32] : !ttg.memdesc<1x128x32xf16, #shared, #smem, mutable> -> !ttg.memdesc<128x32xf16, #shared, #smem, mutable>
       ttg.local_store %35, %44 {OpIdx = #amdgpu.OpIdx<0>} : tensor<128x32xf16, #blocked1> -> !ttg.memdesc<128x32xf16, #shared, #smem, mutable>
@@ -1237,5 +1410,244 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
     ttg.local_dealloc %10 : !ttg.memdesc<1x128x32xf16, #shared, #smem, mutable>
     ttg.local_dealloc %11 : !ttg.memdesc<1x32x128xf16, #shared1, #smem, mutable>
     tt.return %32 : tensor<128x128xf32, #mma>
+  }
+}
+
+// -----
+
+// CHECK-LABEL:   tt.func @assume_func_args
+module attributes {"ttg.num-warps" = 4 : i32} {
+  // expected-remark@+1 {{unsigned : [1024, 2147483647] signed : [1024, 2147483647]}}
+  tt.func @assume_func_args(%arg0: i32) -> i1 {
+    %c1024_i32 = arith.constant 1024 : i32
+    // expected-remark@+2 {{unsigned : [1, 1] signed : [-1, -1]}}
+    // expected-remark@+1 {{result is true}}
+    %assumege = arith.cmpi sge, %arg0, %c1024_i32 : i32
+    llvm.intr.assume %assumege : i1
+    %c256_i32 = arith.constant 256 : i32
+    // expected-remark@+2 {{unsigned : [1, 1] signed : [-1, -1]}}
+    // expected-remark@+1 {{result is true}}
+    %cmpge = arith.cmpi sge, %arg0, %c256_i32 : i32
+    tt.return %cmpge : i1
+  }
+}
+
+// -----
+
+// CHECK-LABEL:   tt.func @assume_func_args_two_bounds
+module attributes {"ttg.num-warps" = 4 : i32} {
+  // expected-remark@+1 {{unsigned : [256, 1024] signed : [256, 1024]}}
+  tt.func @assume_func_args_two_bounds(%arg0: i32) -> i1 {
+    %c1024_i32 = arith.constant 1024 : i32
+    // expected-remark@+2 {{unsigned : [1, 1] signed : [-1, -1]}}
+    // expected-remark@+1 {{result is true}}
+    %assume_sle_1024 = arith.cmpi sle, %arg0, %c1024_i32 : i32
+    llvm.intr.assume %assume_sle_1024 : i1
+    %c256_i32 = arith.constant 256 : i32
+    // expected-remark@+2 {{unsigned : [1, 1] signed : [-1, -1]}}
+    // expected-remark@+1 {{result is true}}
+    %assume_sge_256 = arith.cmpi sge, %arg0, %c256_i32 : i32
+    llvm.intr.assume %assume_sge_256 : i1
+    // expected-remark@+2 {{unsigned : [1, 1] signed : [-1, -1]}}
+    // expected-remark@+1 {{result is true}}
+    %assume_ule_1024 = arith.cmpi ule, %arg0, %c1024_i32 : i32
+    llvm.intr.assume %assume_ule_1024 : i1
+    // expected-remark@+2 {{unsigned : [1, 1] signed : [-1, -1]}}
+    // expected-remark@+1 {{result is true}}
+    %assume_uge_256 = arith.cmpi uge, %arg0, %c256_i32 : i32
+    llvm.intr.assume %assume_uge_256 : i1
+
+    tt.return %assume_sge_256 : i1
+  }
+}
+
+// -----
+
+// CHECK-LABEL: buffer_stride
+#blocked = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [8, 8], warpsPerCTA = [8, 1], order = [1, 0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.target = "hip:gfx942", "ttg.threads-per-warp" = 64 : i32} {
+  // expected-remark@+7 {{arg 3: unsigned : [0, 4294967295] signed : [-2147483648, 2147483647]}}
+  // expected-remark@+6 {{arg 4: unsigned : [0, 4294967295] signed : [-2147483648, 2147483647]}}
+  // expected-remark@+5 {{arg 5: unsigned : [0, 4294967295] signed : [-2147483648, 2147483647]}}
+  // expected-remark@+4 {{arg 6: unsigned : [1, 2147483647] signed : [1, 2147483647]}}
+  // expected-remark@+3 {{arg 7: unsigned : [0, 4294967295] signed : [-2147483648, 2147483647]}}
+  // expected-remark@+2 {{arg 8: unsigned : [1, 2147483647] signed : [1, 1023]}}
+  // expected-remark@+1 {{arg 9: unsigned : [0, 4294967295] signed : [-2147483648, 2147483647]}}
+  tt.func public @buffer_stride(%arg0: !tt.ptr<f16>, %arg1: !tt.ptr<f16>, %arg2: !tt.ptr<f16>, %arg3: i32, %arg4: i32, %arg5: i32, %arg6: i32, %arg7: i32, %arg8: i32, %arg9: i32) attributes {noinline = false} {
+    %c1024_i32 = arith.constant 1024 : i32
+    %c48_i32 = arith.constant 48 : i32
+    %c32_i32 = arith.constant 32 : i32
+    %c0_i32 = arith.constant 0 : i32
+    %0 = tt.make_range {end = 256 : i32, start = 0 : i32} : tensor<256xi32, #ttg.slice<{dim = 1, parent = #blocked}>>
+    // expected-remark@+2 {{unsigned : [0, 256] signed : [0, 256]}}
+    // expected-remark@+1 {{non-neg}}
+    %1 = tt.expand_dims %0 {axis = 1 : i32} : tensor<256xi32, #ttg.slice<{dim = 1, parent = #blocked}>> -> tensor<256x1xi32, #blocked>
+    // expected-remark@+2 {{unsigned : [1, 1] signed : [-1, -1]}}
+    // expected-remark@+1 {{result is true}}
+    %cmp = arith.cmpi sgt, %arg6, %c0_i32 : i32
+    llvm.intr.assume %cmp : i1
+    // expected-remark@+2 {{unsigned : [1, 2147483647] signed : [1, 2147483647]}}
+    // expected-remark@+1 {{non-neg}}
+    %2 = tt.splat %arg6 : i32 -> tensor<256x1xi32, #blocked>
+    // expected-remark@+1 {{unsigned : [0, 4294967295] signed : [-2147483648, 2147483647]}}
+    %3 = arith.muli %1, %2 : tensor<256x1xi32, #blocked>
+    %4 = tt.addptr %arg0, %c32_i32 : !tt.ptr<f16>, i32
+    // expected-remark@+1 {{unsigned : [0, 4294967295] signed : [-2147483648, 2147483647]}}
+    %5 = tt.broadcast %3 : tensor<256x1xi32, #blocked> -> tensor<256x64xi32, #blocked>
+    %6 = tt.make_range {end = 64 : i32, start = 0 : i32} : tensor<64xi32, #ttg.slice<{dim = 0, parent = #blocked}>>
+    // expected-remark@+2 {{unsigned : [0, 64] signed : [0, 64]}}
+    // expected-remark@+1 {{non-neg}}
+    %7 = tt.expand_dims %6 {axis = 0 : i32} : tensor<64xi32, #ttg.slice<{dim = 0, parent = #blocked}>> -> tensor<1x64xi32, #blocked>
+    // expected-remark@+2 {{unsigned : [0, 64] signed : [0, 64]}}
+    // expected-remark@+1 {{non-neg}}
+    %8 = tt.broadcast %7 : tensor<1x64xi32, #blocked> -> tensor<256x64xi32, #blocked>
+    // expected-remark@+1 {{unsigned : [0, 4294967295] signed : [-2147483648, 2147483647]}}
+    %9 = arith.addi %8, %5 : tensor<256x64xi32, #blocked>
+    %10 = tt.splat %4 : !tt.ptr<f16> -> tensor<256x64x!tt.ptr<f16>, #blocked>
+    %11 = tt.addptr %10, %9 : tensor<256x64x!tt.ptr<f16>, #blocked>, tensor<256x64xi32, #blocked>
+    %12 = tt.load %11 {OpIdx = #amdgpu.OpIdx<0>} : tensor<256x64x!tt.ptr<f16>, #blocked>
+    %13 = tt.make_range {end = 256 : i32, start = 0 : i32} : tensor<256xi32, #ttg.slice<{dim = 1, parent = #blocked}>>
+    %14 = tt.make_range {end = 64 : i32, start = 0 : i32} : tensor<64xi32, #ttg.slice<{dim = 0, parent = #blocked}>>
+    // expected-remark@+2 {{unsigned : [0, 256] signed : [0, 256]}}
+    // expected-remark@+1 {{non-neg}}
+    %15 = tt.expand_dims %13 {axis = 1 : i32} : tensor<256xi32, #ttg.slice<{dim = 1, parent = #blocked}>> -> tensor<256x1xi32, #blocked>
+    // expected-remark@+2 {{unsigned : [0, 64] signed : [0, 64]}}
+    // expected-remark@+1 {{non-neg}}
+    %16 = tt.expand_dims %14 {axis = 0 : i32} : tensor<64xi32, #ttg.slice<{dim = 0, parent = #blocked}>> -> tensor<1x64xi32, #blocked>
+    // expected-remark@+2 {{unsigned : [1, 1] signed : [-1, -1]}}
+    // expected-remark@+1 {{result is true}}
+    %cmp1 = arith.cmpi sgt, %arg8, %c0_i32 : i32
+    llvm.intr.assume %cmp1 : i1
+    // expected-remark@+2 {{unsigned : [1, 1] signed : [-1, -1]}}
+    // expected-remark@+1 {{result is true}}
+    %cmp2 = arith.cmpi slt, %arg8, %c1024_i32 : i32
+    llvm.intr.assume %cmp2 : i1
+    // expected-remark@+2 {{unsigned : [1, 2147483647] signed : [1, 1023]}}
+    // expected-remark@+1 {{non-neg}}
+    %17 = tt.splat %arg8 : i32 -> tensor<256x1xi32, #blocked>
+    // expected-remark@+2 {{unsigned : [0, 261888] signed : [0, 261888]}}
+    // expected-remark@+1 {{non-neg}}
+    %18 = arith.muli %17, %15 : tensor<256x1xi32, #blocked>
+    %19 = tt.addptr %arg2, %c48_i32 : !tt.ptr<f16>, i32
+    // expected-remark@+2 {{unsigned : [0, 261888] signed : [0, 261888]}}
+    // expected-remark@+1 {{non-neg}}
+    %20 = tt.broadcast %18 : tensor<256x1xi32, #blocked> -> tensor<256x64xi32, #blocked>
+    // expected-remark@+2 {{unsigned : [0, 64] signed : [0, 64]}}
+    // expected-remark@+1 {{non-neg}}
+    %21 = tt.broadcast %16 : tensor<1x64xi32, #blocked> -> tensor<256x64xi32, #blocked>
+    %22 = tt.addptr %19, %c48_i32 : !tt.ptr<f16>, i32
+    // expected-remark@+2 {{unsigned : [0, 261952] signed : [0, 261952]}}
+    // expected-remark@+1 {{non-neg}}
+    %23 = arith.addi %21, %20 : tensor<256x64xi32, #blocked>
+    %24 = tt.splat %22 : !tt.ptr<f16> -> tensor<256x64x!tt.ptr<f16>, #blocked>
+    %25 = tt.addptr %24, %23 : tensor<256x64x!tt.ptr<f16>, #blocked>, tensor<256x64xi32, #blocked>
+    tt.store %25, %12 : tensor<256x64x!tt.ptr<f16>, #blocked>
+    tt.return
+  }
+}
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [64], warpsPerCTA = [4], order = [0]}>
+#blocked1 = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [64, 1], warpsPerCTA = [4, 1], order = [0, 1]}>
+#blocked2 = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [64, 1], warpsPerCTA = [4, 1], order = [1, 0]}>
+#blocked3 = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 64], warpsPerCTA = [2, 2], order = [1, 0]}>
+#blocked4 = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 64], warpsPerCTA = [1, 4], order = [0, 1]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "hip:gfx90a", "ttg.threads-per-warp" = 64 : i32} {
+  // CHECK-LABEL: zero_divisor_for_loop_step
+  // expected-remark@+1 {{arg 2: unsigned : [0, 4294967295] signed : [-2147483648, 2147483647]}}
+  tt.func public @zero_divisor_for_loop_step(%arg0: !tt.ptr<f32>, %arg1: !tt.ptr<f32>, %arg2: i32) attributes {noinline = false} {
+    %c127_i32 = arith.constant 127 : i32
+    %c128_i32 = arith.constant 128 : i32
+    %c32_i32 = arith.constant 32 : i32
+    %cst = arith.constant dense<0xFF800000> : tensor<32xf32, #blocked>
+    // expected-remark@+2 {{unsigned : [0, 65535] signed : [0, 65535]}}
+    // expected-remark@+1 {{non-neg}}
+    %0 = tt.get_program_id x : i32
+    // expected-remark@+2 {{unsigned : [0, 65535] signed : [0, 65535]}}
+    // expected-remark@+1 {{non-neg}}
+    %1 = tt.get_program_id y : i32
+    // expected-remark@+2 {{unsigned : [0, 65536] signed : [0, 65536]}}
+    // expected-remark@+1 {{non-neg}}
+    %2 = tt.get_num_programs y : i32
+    // expected-remark@+2 {{unsigned : [0, 2097120] signed : [0, 2097120]}}
+    // expected-remark@+1 {{non-neg}}
+    %3 = arith.muli %0, %c32_i32 : i32
+    %4 = tt.make_range {end = 32 : i32, start = 0 : i32} : tensor<32xi32, #blocked>
+    // expected-remark@+2 {{unsigned : [0, 2097120] signed : [0, 2097120]}}
+    // expected-remark@+1 {{non-neg}}
+    %5 = tt.splat %3 : i32 -> tensor<32xi32, #blocked>
+    // expected-remark@+2 {{unsigned : [0, 2097152] signed : [0, 2097152]}}
+    // expected-remark@+1 {{non-neg}}
+    %6 = arith.addi %5, %4 : tensor<32xi32, #blocked>
+    // expected-remark@+1 {{unsigned : [0, 4294967295] signed : [-2147483648, 2147483647]}}
+    %7 = arith.addi %arg2, %c127_i32 : i32
+    // expected-remark@+1 {{unsigned : [0, 4294967295] signed : [-16777216, 16777215]}}
+    %8 = arith.divsi %7, %c128_i32 : i32
+    %9 = tt.make_range {end = 128 : i32, start = 0 : i32} : tensor<128xi32, #blocked>
+    // expected-remark@+2 {{unsigned : [0, 2097152] signed : [0, 2097152]}}
+    // expected-remark@+1 {{non-neg}}
+    %10 = ttg.convert_layout %6 : tensor<32xi32, #blocked> -> tensor<32xi32, #ttg.slice<{dim = 1, parent = #blocked1}>>
+    // expected-remark@+2 {{unsigned : [0, 2097152] signed : [0, 2097152]}}
+    // expected-remark@+1 {{non-neg}}
+    %11 = tt.expand_dims %10 {axis = 1 : i32} : tensor<32xi32, #ttg.slice<{dim = 1, parent = #blocked1}>> -> tensor<32x1xi32, #blocked1>
+    // expected-remark@+2 {{unsigned : [0, 2097152] signed : [0, 2097152]}}
+    // expected-remark@+1 {{non-neg}}
+    %12 = ttg.convert_layout %11 : tensor<32x1xi32, #blocked1> -> tensor<32x1xi32, #blocked2>
+    // expected-remark@+1 {{unsigned : [0, 4294967295] signed : [-2147483648, 2147483647]}}
+    %13 = tt.splat %arg2 : i32 -> tensor<32x1xi32, #blocked2>
+    // expected-remark@+1 {{unsigned : [0, 4294967295] signed : [-2147483648, 2147483647]}}
+    %14 = arith.muli %12, %13 : tensor<32x1xi32, #blocked2>
+    %15 = tt.splat %arg0 : !tt.ptr<f32> -> tensor<32x1x!tt.ptr<f32>, #blocked2>
+    %16 = tt.addptr %15, %14 : tensor<32x1x!tt.ptr<f32>, #blocked2>, tensor<32x1xi32, #blocked2>
+    %17 = tt.broadcast %16 : tensor<32x1x!tt.ptr<f32>, #blocked2> -> tensor<32x128x!tt.ptr<f32>, #blocked2>
+    %18 = ttg.convert_layout %17 : tensor<32x128x!tt.ptr<f32>, #blocked2> -> tensor<32x128x!tt.ptr<f32>, #blocked3>
+    // expected-remark@+1 {{inferred total trip count: 16711680}}
+    %19 = scf.for %arg3 = %1 to %8 step %2 iter_args(%arg4 = %cst) -> (tensor<32xf32, #blocked>)  : i32 {
+      // expected-remark@+2 {{unsigned : [0, 2147483392] signed : [0, 2147483392]}}
+      // expected-remark@+1 {{non-neg}}
+      %26 = arith.muli %arg3, %c128_i32 : i32
+      // expected-remark@+2 {{unsigned : [0, 2147483392] signed : [0, 2147483392]}}
+      // expected-remark@+1 {{non-neg}}
+      %27 = tt.splat %26 : i32 -> tensor<128xi32, #blocked>
+      // expected-remark@+2 {{unsigned : [0, 2147483520] signed : [0, 2147483520]}}
+      // expected-remark@+1 {{non-neg}}
+      %28 = arith.addi %27, %9 : tensor<128xi32, #blocked>
+      // expected-remark@+2 {{unsigned : [0, 2147483520] signed : [0, 2147483520]}}
+      // expected-remark@+1 {{non-neg}}
+      %29 = ttg.convert_layout %28 : tensor<128xi32, #blocked> -> tensor<128xi32, #ttg.slice<{dim = 0, parent = #blocked4}>>
+      // expected-remark@+2 {{unsigned : [0, 2147483520] signed : [0, 2147483520]}}
+      // expected-remark@+1 {{non-neg}}
+      %30 = tt.expand_dims %29 {axis = 0 : i32} : tensor<128xi32, #ttg.slice<{dim = 0, parent = #blocked4}>> -> tensor<1x128xi32, #blocked4>
+      // expected-remark@+2 {{unsigned : [0, 2147483520] signed : [0, 2147483520]}}
+      // expected-remark@+1 {{non-neg}}
+      %31 = ttg.convert_layout %30 : tensor<1x128xi32, #blocked4> -> tensor<1x128xi32, #blocked3>
+      // expected-remark@+2 {{unsigned : [0, 2147483520] signed : [0, 2147483520]}}
+      // expected-remark@+1 {{non-neg}}
+      %32 = tt.broadcast %31 : tensor<1x128xi32, #blocked3> -> tensor<32x128xi32, #blocked3>
+      %33 = tt.addptr %18, %32 : tensor<32x128x!tt.ptr<f32>, #blocked3>, tensor<32x128xi32, #blocked3>
+      %34 = tt.load %33 : tensor<32x128x!tt.ptr<f32>, #blocked3>
+      %35 = "tt.reduce"(%34) <{axis = 1 : i32}> ({
+      ^bb0(%arg5: f32, %arg6: f32):
+        %38 = arith.maxnumf %arg5, %arg6 : f32
+        tt.reduce.return %38 : f32
+      }) : (tensor<32x128xf32, #blocked3>) -> tensor<32xf32, #ttg.slice<{dim = 1, parent = #blocked3}>>
+      %36 = ttg.convert_layout %35 : tensor<32xf32, #ttg.slice<{dim = 1, parent = #blocked3}>> -> tensor<32xf32, #blocked>
+      %37 = arith.maxnumf %arg4, %36 : tensor<32xf32, #blocked>
+      scf.yield %37 : tensor<32xf32, #blocked>
+    }
+    // expected-remark@+2 {{unsigned : [0, 65536] signed : [0, 65536]}}
+    // expected-remark@+1 {{non-neg}}
+    %20 = tt.splat %2 : i32 -> tensor<32xi32, #blocked>
+    // expected-remark@+1 {{unsigned : [0, 4294967295] signed : [-2147483648, 2147483647]}}
+    %21 = arith.muli %6, %20 : tensor<32xi32, #blocked>
+    %22 = tt.splat %arg1 : !tt.ptr<f32> -> tensor<32x!tt.ptr<f32>, #blocked>
+    %23 = tt.addptr %22, %21 : tensor<32x!tt.ptr<f32>, #blocked>, tensor<32xi32, #blocked>
+    // expected-remark@+2 {{unsigned : [0, 65535] signed : [0, 65535]}}
+    // expected-remark@+1 {{non-neg}}
+    %24 = tt.splat %1 : i32 -> tensor<32xi32, #blocked>
+    %25 = tt.addptr %23, %24 : tensor<32x!tt.ptr<f32>, #blocked>, tensor<32xi32, #blocked>
+    tt.store %25, %19 : tensor<32x!tt.ptr<f32>, #blocked>
+    tt.return
   }
 }
