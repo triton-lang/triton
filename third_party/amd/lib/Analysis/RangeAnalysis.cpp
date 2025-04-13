@@ -69,6 +69,13 @@ triton::AMD::TritonIntegerRangeAnalysis::maybeGetTripCount(
 
   if (stepVal.isNegative())
     std::swap(min, max);
+  // This is necessary to catch a case like this:
+  //  # range = [0 1024]
+  //  K = ....
+  //  # range = [1, 64]
+  //  k = ...
+  //  # range = [0, 16] -> stepVal = range.smin() = 0
+  //  step = ceildiv(K, k)
   if (stepVal.isZero())
     stepVal = stepValDefault;
   if (max.sge(min))
