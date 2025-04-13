@@ -26,8 +26,6 @@ ttng.arrive_barrier %barrier, 1, %pred : !ttg.memdesc<1xi64, #shared, #smem, mut
 
 Traits: `VerifyTensorLayoutsTrait`
 
-Interfaces: `MemoryEffectOpInterface`
-
 #### Attributes:
 
 <table>
@@ -62,8 +60,6 @@ tensor. The data copied depends on the global memory descriptor pointed to
 by `desc_ptr`.
 
 Traits: `VerifyTensorLayoutsTrait`
-
-Interfaces: `MemoryEffectOpInterface`
 
 #### Attributes:
 
@@ -104,8 +100,6 @@ by `desc_ptr`.
 
 Traits: `VerifyTensorLayoutsTrait`
 
-Interfaces: `MemoryEffectOpInterface`
-
 #### Operands:
 
 | Operand | Description |
@@ -131,8 +125,6 @@ local memory asynchronously.  This is similar to
 async_tma_copy_global_to_local except that each row is indexed independently.
 
 Traits: `VerifyTensorLayoutsTrait`
-
-Interfaces: `MemoryEffectOpInterface`
 
 #### Operands:
 
@@ -165,8 +157,6 @@ memory at a given `y` offset.
 
 Traits: `VerifyTensorLayoutsTrait`
 
-Interfaces: `MemoryEffectOpInterface`
-
 #### Operands:
 
 | Operand | Description |
@@ -191,8 +181,6 @@ This signal the barrier that `size` bytes are expected to be copied. The
 associated barrier wait will block until the expected number of bytes are copied.
 
 Traits: `VerifyTensorLayoutsTrait`
-
-Interfaces: `MemoryEffectOpInterface`
 
 #### Attributes:
 
@@ -276,8 +264,6 @@ This lowers to PTX mbarrier.init.shared::cta.b64.
 
 Traits: `VerifyTensorLayoutsTrait`
 
-Interfaces: `MemoryEffectOpInterface`
-
 #### Attributes:
 
 <table>
@@ -308,8 +294,6 @@ spec this has to be done before any reuse of the memory used by mbarrier.
 https://docs.nvidia.com/cuda/parallel-thread-execution/index.html#parallel-synchronization-and-communication-instructions-mbarrier-inval
 
 Traits: `VerifyTensorLayoutsTrait`
-
-Interfaces: `MemoryEffectOpInterface`
 
 #### Operands:
 
@@ -505,8 +489,6 @@ In the absence of such operations on memdesc, we resort to implicitly encoding t
 
 Traits: `VerifyTensorLayoutsTrait`
 
-Interfaces: `MemoryEffectOpInterface`
-
 #### Operands:
 
 | Operand | Description |
@@ -530,10 +512,6 @@ This is similar to ttg.local_load except the result layout is restricted to only
 Therefore we cannot combine this op with any convert layout like local_load.
 
 Traits: `VerifyTensorLayoutsTrait`
-
-Interfaces: `MemoryEffectOpInterface (MemoryEffectOpInterface)`
-
-Effects: `MemoryEffects::Effect{MemoryEffects::Read on ::mlir::SideEffects::DefaultResource}`
 
 #### Operands:
 
@@ -561,10 +539,6 @@ operation ::= `ttng.tmem_store` $src `,` $dst `,` $pred attr-dict `:` type($src)
 This is similar to ttg.local_local except the source layout is restricted to only few possibility.
 
 Traits: `VerifyTensorLayoutsTrait`
-
-Interfaces: `MemoryEffectOpInterface (MemoryEffectOpInterface)`
-
-Effects: `MemoryEffects::Effect{MemoryEffects::Write on ::mlir::SideEffects::DefaultResource}`
 
 #### Operands:
 
@@ -668,8 +642,6 @@ The barrier behavior is described here:
 https://docs.nvidia.com/cuda/parallel-thread-execution/index.html#data-movement-and-conversion-instructions-asynchronous-copy-completion-mechanisms
 
 Traits: `AttrSizedOperandSegments`, `VerifyTensorLayoutsTrait`
-
-Interfaces: `MemoryEffectOpInterface`
 
 #### Operands:
 

@@ -236,7 +236,6 @@ ttng.arrive_barrier %barrier, 1, %pred : !ttg.memdesc&lt;1xi64, #shared, #smem, 
 </pre></div>
 </div>
 <p>Traits: <code class="docutils literal notranslate"><span class="pre">VerifyTensorLayoutsTrait</span></code></p>
-<p>Interfaces: <code class="docutils literal notranslate"><span class="pre">MemoryEffectOpInterface</span></code></p>
 <section id="attributes">
 <h3>Attributes:<a class="headerlink" href="#attributes" title="Link to this heading">¶</a></h3>
 <table>
@@ -278,7 +277,6 @@ local memory pointed by the memory descriptor instead of a distributed
 tensor. The data copied depends on the global memory descriptor pointed to
 by <code class="docutils literal notranslate"><span class="pre">desc_ptr</span></code>.</p>
 <p>Traits: <code class="docutils literal notranslate"><span class="pre">VerifyTensorLayoutsTrait</span></code></p>
-<p>Interfaces: <code class="docutils literal notranslate"><span class="pre">MemoryEffectOpInterface</span></code></p>
 <section id="id1">
 <h3>Attributes:<a class="headerlink" href="#id1" title="Link to this heading">¶</a></h3>
 <table>
@@ -330,7 +328,6 @@ local memory pointed by the memory descriptor instead of a distributed
 tensor. The data copied depends on the global memory descriptor pointed to
 by <code class="docutils literal notranslate"><span class="pre">desc_ptr</span></code>.</p>
 <p>Traits: <code class="docutils literal notranslate"><span class="pre">VerifyTensorLayoutsTrait</span></code></p>
-<p>Interfaces: <code class="docutils literal notranslate"><span class="pre">MemoryEffectOpInterface</span></code></p>
 <section id="id3">
 <h3>Operands:<a class="headerlink" href="#id3" title="Link to this heading">¶</a></h3>
 <table class="docutils align-default">
@@ -365,7 +362,6 @@ by <code class="docutils literal notranslate"><span class="pre">desc_ptr</span><
 local memory asynchronously.  This is similar to
 async_tma_copy_global_to_local except that each row is indexed independently.</p>
 <p>Traits: <code class="docutils literal notranslate"><span class="pre">VerifyTensorLayoutsTrait</span></code></p>
-<p>Interfaces: <code class="docutils literal notranslate"><span class="pre">MemoryEffectOpInterface</span></code></p>
 <section id="id4">
 <h3>Operands:<a class="headerlink" href="#id4" title="Link to this heading">¶</a></h3>
 <table class="docutils align-default">
@@ -411,7 +407,6 @@ operation scatters a 2D tensor in shared memory, laid out by core tensor
 tiles nvmma_shared layout into separately indexed rows in global
 memory at a given <code class="docutils literal notranslate"><span class="pre">y</span></code> offset.</p>
 <p>Traits: <code class="docutils literal notranslate"><span class="pre">VerifyTensorLayoutsTrait</span></code></p>
-<p>Interfaces: <code class="docutils literal notranslate"><span class="pre">MemoryEffectOpInterface</span></code></p>
 <section id="id5">
 <h3>Operands:<a class="headerlink" href="#id5" title="Link to this heading">¶</a></h3>
 <table class="docutils align-default">
@@ -447,7 +442,6 @@ memory at a given <code class="docutils literal notranslate"><span class="pre">y
 <p>This signal the barrier that <code class="docutils literal notranslate"><span class="pre">size</span></code> bytes are expected to be copied. The
 associated barrier wait will block until the expected number of bytes are copied.</p>
 <p>Traits: <code class="docutils literal notranslate"><span class="pre">VerifyTensorLayoutsTrait</span></code></p>
-<p>Interfaces: <code class="docutils literal notranslate"><span class="pre">MemoryEffectOpInterface</span></code></p>
 <section id="id6">
 <h3>Attributes:<a class="headerlink" href="#id6" title="Link to this heading">¶</a></h3>
 <table>
@@ -525,7 +519,6 @@ associated barrier wait will block until the expected number of bytes are copied
 number of arrives expected by the barrier.</p>
 <p>This lowers to PTX mbarrier.init.shared::cta.b64.</p>
 <p>Traits: <code class="docutils literal notranslate"><span class="pre">VerifyTensorLayoutsTrait</span></code></p>
-<p>Interfaces: <code class="docutils literal notranslate"><span class="pre">MemoryEffectOpInterface</span></code></p>
 <section id="id10">
 <h3>Attributes:<a class="headerlink" href="#id10" title="Link to this heading">¶</a></h3>
 <table>
@@ -560,7 +553,6 @@ number of arrives expected by the barrier.</p>
 spec this has to be done before any reuse of the memory used by mbarrier.</p>
 <p>https://docs.nvidia.com/cuda/parallel-thread-execution/index.html#parallel-synchronization-and-communication-instructions-mbarrier-inval</p>
 <p>Traits: <code class="docutils literal notranslate"><span class="pre">VerifyTensorLayoutsTrait</span></code></p>
-<p>Interfaces: <code class="docutils literal notranslate"><span class="pre">MemoryEffectOpInterface</span></code></p>
 <section id="id12">
 <h3>Operands:<a class="headerlink" href="#id12" title="Link to this heading">¶</a></h3>
 <table class="docutils align-default">
@@ -791,7 +783,6 @@ registers is now understood to be incorporated into tmem_copy itself. Ideally, w
 the SMEM memdesc, making tmem_copy a straightforward 2D copy operation: (BLOCK_MN, BLOCK_K / scale_vec_size) -&gt; (BLOCK_MN, BLOCK_K / scale_vec_size).
 In the absence of such operations on memdesc, we resort to implicitly encoding the reshape/transpose semantics in tmem_copy.</p>
 <p>Traits: <code class="docutils literal notranslate"><span class="pre">VerifyTensorLayoutsTrait</span></code></p>
-<p>Interfaces: <code class="docutils literal notranslate"><span class="pre">MemoryEffectOpInterface</span></code></p>
 <section id="id19">
 <h3>Operands:<a class="headerlink" href="#id19" title="Link to this heading">¶</a></h3>
 <table class="docutils align-default">
@@ -824,8 +815,6 @@ In the absence of such operations on memdesc, we resort to implicitly encoding t
 <p>This is similar to ttg.local_load except the result layout is restricted to only few possibility.
 Therefore we cannot combine this op with any convert layout like local_load.</p>
 <p>Traits: <code class="docutils literal notranslate"><span class="pre">VerifyTensorLayoutsTrait</span></code></p>
-<p>Interfaces: <code class="docutils literal notranslate"><span class="pre">MemoryEffectOpInterface</span> <span class="pre">(MemoryEffectOpInterface)</span></code></p>
-<p>Effects: <code class="docutils literal notranslate"><span class="pre">MemoryEffects::Effect{MemoryEffects::Read</span> <span class="pre">on</span> <span class="pre">::mlir::SideEffects::DefaultResource}</span></code></p>
 <section id="id20">
 <h3>Operands:<a class="headerlink" href="#id20" title="Link to this heading">¶</a></h3>
 <table class="docutils align-default">
@@ -866,8 +855,6 @@ Therefore we cannot combine this op with any convert layout like local_load.</p>
 </div>
 <p>This is similar to ttg.local_local except the source layout is restricted to only few possibility.</p>
 <p>Traits: <code class="docutils literal notranslate"><span class="pre">VerifyTensorLayoutsTrait</span></code></p>
-<p>Interfaces: <code class="docutils literal notranslate"><span class="pre">MemoryEffectOpInterface</span> <span class="pre">(MemoryEffectOpInterface)</span></code></p>
-<p>Effects: <code class="docutils literal notranslate"><span class="pre">MemoryEffects::Effect{MemoryEffects::Write</span> <span class="pre">on</span> <span class="pre">::mlir::SideEffects::DefaultResource}</span></code></p>
 <section id="id22">
 <h3>Operands:<a class="headerlink" href="#id22" title="Link to this heading">¶</a></h3>
 <table class="docutils align-default">
@@ -999,7 +986,6 @@ dependencies may be accessed until the barrier completes.</p>
 <p>The barrier behavior is described here:
 https://docs.nvidia.com/cuda/parallel-thread-execution/index.html#data-movement-and-conversion-instructions-asynchronous-copy-completion-mechanisms</p>
 <p>Traits: <code class="docutils literal notranslate"><span class="pre">AttrSizedOperandSegments</span></code>, <code class="docutils literal notranslate"><span class="pre">VerifyTensorLayoutsTrait</span></code></p>
-<p>Interfaces: <code class="docutils literal notranslate"><span class="pre">MemoryEffectOpInterface</span></code></p>
 <section id="id28">
 <h3>Operands:<a class="headerlink" href="#id28" title="Link to this heading">¶</a></h3>
 <table class="docutils align-default">

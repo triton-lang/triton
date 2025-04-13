@@ -46,7 +46,7 @@ operands are the same as tt.load.
 
 Traits: `AttrSizedOperandSegments`, `VerifyTensorLayoutsTrait`
 
-Interfaces: `InferTypeOpInterface`, `MemoryEffectOpInterface`
+Interfaces: `InferTypeOpInterface`
 
 #### Attributes:
 
@@ -193,10 +193,6 @@ This operation allocates a buffer in global memory that is private to the curren
 
 Traits: `VerifyTensorLayoutsTrait`
 
-Interfaces: `MemoryEffectOpInterface (MemoryEffectOpInterface)`
-
-Effects: `MemoryEffects::Effect{MemoryEffects::Allocate on ::mlir::triton::GlobalMemory}`
-
 #### Attributes:
 
 <table>
@@ -275,10 +271,6 @@ operand.
 
 Traits: `VerifyTensorLayoutsTrait`
 
-Interfaces: `MemoryEffectOpInterface (MemoryEffectOpInterface)`
-
-Effects: `MemoryEffects::Effect{MemoryEffects::Free on ::mlir::triton::gpu::SharedMemory}`
-
 #### Operands:
 
 | Operand | Description |
@@ -299,8 +291,6 @@ operation ::= `ttg.local_load` $src (`token` $token^)? attr-dict `:` qualified(t
 Load a tensor from the local memory descriptor into a distributed tensor.
 
 Traits: `VerifyTensorLayoutsTrait`
-
-Interfaces: `MemoryEffectOpInterface`
 
 #### Operands:
 
@@ -329,8 +319,6 @@ operation ::= `ttg.local_store` $src `,` $dst attr-dict `:` type($src) `->` qual
 Store a distributed tensor into a buffer in local memory.
 
 Traits: `VerifyTensorLayoutsTrait`
-
-Interfaces: `MemoryEffectOpInterface`
 
 #### Operands:
 

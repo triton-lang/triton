@@ -243,7 +243,7 @@ This is analogue to tt.load except the data are copied to local memory pointed
 by by the memory descriptor instead of a distributed tensor. The rest of the
 operands are the same as tt.load.</p>
 <p>Traits: <code class="docutils literal notranslate"><span class="pre">AttrSizedOperandSegments</span></code>, <code class="docutils literal notranslate"><span class="pre">VerifyTensorLayoutsTrait</span></code></p>
-<p>Interfaces: <code class="docutils literal notranslate"><span class="pre">InferTypeOpInterface</span></code>, <code class="docutils literal notranslate"><span class="pre">MemoryEffectOpInterface</span></code></p>
+<p>Interfaces: <code class="docutils literal notranslate"><span class="pre">InferTypeOpInterface</span></code></p>
 <section id="attributes">
 <h3>Attributes:<a class="headerlink" href="#attributes" title="Link to this heading">¶</a></h3>
 <table>
@@ -442,8 +442,6 @@ the second fp4 element.</p>
 </div>
 <p>This operation allocates a buffer in global memory that is private to the current program.</p>
 <p>Traits: <code class="docutils literal notranslate"><span class="pre">VerifyTensorLayoutsTrait</span></code></p>
-<p>Interfaces: <code class="docutils literal notranslate"><span class="pre">MemoryEffectOpInterface</span> <span class="pre">(MemoryEffectOpInterface)</span></code></p>
-<p>Effects: <code class="docutils literal notranslate"><span class="pre">MemoryEffects::Effect{MemoryEffects::Allocate</span> <span class="pre">on</span> <span class="pre">::mlir::triton::GlobalMemory}</span></code></p>
 <section id="id11">
 <h3>Attributes:<a class="headerlink" href="#id11" title="Link to this heading">¶</a></h3>
 <table>
@@ -535,8 +533,6 @@ its uses, ops that wait for an async operation on a memdesc to complete
 (such as ttng.warp_group_dot_wait) should also take the memdesc as an
 operand.</p>
 <p>Traits: <code class="docutils literal notranslate"><span class="pre">VerifyTensorLayoutsTrait</span></code></p>
-<p>Interfaces: <code class="docutils literal notranslate"><span class="pre">MemoryEffectOpInterface</span> <span class="pre">(MemoryEffectOpInterface)</span></code></p>
-<p>Effects: <code class="docutils literal notranslate"><span class="pre">MemoryEffects::Effect{MemoryEffects::Free</span> <span class="pre">on</span> <span class="pre">::mlir::triton::gpu::SharedMemory}</span></code></p>
 <section id="id16">
 <h3>Operands:<a class="headerlink" href="#id16" title="Link to this heading">¶</a></h3>
 <table class="docutils align-default">
@@ -562,7 +558,6 @@ operand.</p>
 </div>
 <p>Load a tensor from the local memory descriptor into a distributed tensor.</p>
 <p>Traits: <code class="docutils literal notranslate"><span class="pre">VerifyTensorLayoutsTrait</span></code></p>
-<p>Interfaces: <code class="docutils literal notranslate"><span class="pre">MemoryEffectOpInterface</span></code></p>
 <section id="id17">
 <h3>Operands:<a class="headerlink" href="#id17" title="Link to this heading">¶</a></h3>
 <table class="docutils align-default">
@@ -606,7 +601,6 @@ operand.</p>
 </div>
 <p>Store a distributed tensor into a buffer in local memory.</p>
 <p>Traits: <code class="docutils literal notranslate"><span class="pre">VerifyTensorLayoutsTrait</span></code></p>
-<p>Interfaces: <code class="docutils literal notranslate"><span class="pre">MemoryEffectOpInterface</span></code></p>
 <section id="id19">
 <h3>Operands:<a class="headerlink" href="#id19" title="Link to this heading">¶</a></h3>
 <table class="docutils align-default">

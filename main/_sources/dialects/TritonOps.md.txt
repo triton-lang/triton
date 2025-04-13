@@ -284,10 +284,6 @@ return $old
 
 Traits: `SameOperandsAndResultEncoding`, `SameOperandsAndResultShape`, `TensorSizeTrait`, `VerifyTensorLayoutsTrait`
 
-Interfaces: `MemoryEffectOpInterface (MemoryEffectOpInterface)`
-
-Effects: `MemoryEffects::Effect{MemoryEffects::Read on ::mlir::triton::GlobalMemory}`, `MemoryEffects::Effect{MemoryEffects::Write on ::mlir::triton::GlobalMemory}`
-
 #### Attributes:
 
 <table>
@@ -327,10 +323,6 @@ load data at $ptr, do $rmw_op with $val, and store result to $ptr.
 return old value at $ptr
 
 Traits: `SameOperandsAndResultEncoding`, `SameOperandsAndResultShape`, `TensorSizeTrait`, `VerifyTensorLayoutsTrait`
-
-Interfaces: `MemoryEffectOpInterface (MemoryEffectOpInterface)`
-
-Effects: `MemoryEffects::Effect{MemoryEffects::Read on ::mlir::triton::GlobalMemory}`, `MemoryEffects::Effect{MemoryEffects::Write on ::mlir::triton::GlobalMemory}`
 
 #### Attributes:
 
@@ -428,9 +420,9 @@ Syntax:
 operation ::= `tt.cat` $lhs `,` $rhs attr-dict `:` type($lhs) `->` type($result)
 ```
 
-Traits: `SameOperandsAndResultElementType`, `SameTypeOperands`, `TensorSizeTrait`, `VerifyTensorLayoutsTrait`
+Traits: `AlwaysSpeculatableImplTrait`, `SameOperandsAndResultElementType`, `SameTypeOperands`, `TensorSizeTrait`, `VerifyTensorLayoutsTrait`
 
-Interfaces: `NoMemoryEffect (MemoryEffectOpInterface)`
+Interfaces: `ConditionallySpeculatable`, `NoMemoryEffect (MemoryEffectOpInterface)`
 
 Effects: `MemoryEffects::Effect{}`
 
@@ -502,20 +494,13 @@ operation ::= `tt.descriptor_gather` $desc `[` $x_offsets `,` $y_offset `]`
 ```
 
 The `tt.descriptor_gather` op will be lowered to NVIDIA TMA
-load operations on targets that support it.
+gather operations on targets that support it.
 
 `desc_ptr` is a pointer to the TMA descriptor allocated in global memory.
 The descriptor block must have 1 row and the indices must be a 1D tensor.
 Accordingly, the result is a 2D tensor multiple rows.
 
-This is an escape hatch and is only there for testing/experimenting. This
-op will be removed in the future.
-
 Traits: `TensorSizeTrait`, `VerifyTensorLayoutsTrait`
-
-Interfaces: `MemoryEffectOpInterface (MemoryEffectOpInterface)`
-
-Effects: `MemoryEffects::Effect{MemoryEffects::Read on ::mlir::triton::GlobalMemory}`
 
 #### Operands:
 
@@ -551,14 +536,7 @@ This operation will be lowered to Nvidia TMA load operation on targets supportin
 `desc` is a tensor descriptor object.
 The destination tensor type and shape must match the descriptor otherwise the result is undefined.
 
-This is an escape hatch and is only there for testing/experimenting.
-This op will be removed in the future.
-
 Traits: `TensorSizeTrait`, `VerifyTensorLayoutsTrait`
-
-Interfaces: `MemoryEffectOpInterface (MemoryEffectOpInterface)`
-
-Effects: `MemoryEffects::Effect{MemoryEffects::Read on ::mlir::triton::GlobalMemory}`
 
 #### Attributes:
 
@@ -584,6 +562,8 @@ Effects: `MemoryEffects::Effect{MemoryEffects::Read on ::mlir::triton::GlobalMem
 
 ### `tt.descriptor_scatter` (triton::DescriptorScatterOp)
 
+_Scatter multiple rows from a tensor into a descriptor_
+
 Syntax:
 
 ```
@@ -591,11 +571,14 @@ operation ::= `tt.descriptor_scatter` $desc `[` $x_offsets `,` $y_offset `]` `,`
               attr-dict `:` type(operands)
 ```
 
+The `tt.descriptor_scatter` op will be lowered to NVIDIA TMA
+scatter operations on targets that support it.
+
+`desc_ptr` is a pointer to the TMA descriptor allocated in global memory.
+The descriptor block must have 1 row and the indices must be a 1D tensor.
+Accordingly, the result is a 2D tensor multiple rows.
+
 Traits: `TensorSizeTrait`, `VerifyTensorLayoutsTrait`
-
-Interfaces: `MemoryEffectOpInterface (MemoryEffectOpInterface)`
-
-Effects: `MemoryEffects::Effect{MemoryEffects::Read on ::mlir::triton::GlobalMemory, MemoryEffects::Write on ::mlir::triton::GlobalMemory}`
 
 #### Operands:
 
@@ -622,14 +605,7 @@ This operation will be lowered to Nvidia TMA store operation on targets supporti
 `desc` is a tensor descriptor object.
 The shape and types of `src` must match the descriptor otherwise the result is undefined.
 
-This is an escape hatch and is only there for testing/experimenting.
-This op will be removed in the future.
-
 Traits: `TensorSizeTrait`, `VerifyTensorLayoutsTrait`
-
-Interfaces: `MemoryEffectOpInterface (MemoryEffectOpInterface)`
-
-Effects: `MemoryEffects::Effect{MemoryEffects::Read on ::mlir::triton::GlobalMemory, MemoryEffects::Write on ::mlir::triton::GlobalMemory}`
 
 #### Operands:
 
@@ -1142,9 +1118,9 @@ shape 4x8x2xf32.
 Because Triton tensors always have a power-of-two number of elements,
 the two input tensors must have the same shape.
 
-Traits: `SameTypeOperands`, `TensorSizeTrait`, `VerifyTensorLayoutsTrait`
+Traits: `AlwaysSpeculatableImplTrait`, `SameTypeOperands`, `TensorSizeTrait`, `VerifyTensorLayoutsTrait`
 
-Interfaces: `NoMemoryEffect (MemoryEffectOpInterface)`
+Interfaces: `ConditionallySpeculatable`, `NoMemoryEffect (MemoryEffectOpInterface)`
 
 Effects: `MemoryEffects::Effect{}`
 
@@ -1674,9 +1650,9 @@ tensors, src[..., 0] and src[..., 1].
 For example, if the input shape is 4x8x2xf32, returns two tensors of
 shape 4x8xf32.
 
-Traits: `InferTypeOpAdaptor`, `TensorSizeTrait`, `VerifyTensorLayoutsTrait`
+Traits: `AlwaysSpeculatableImplTrait`, `InferTypeOpAdaptor`, `TensorSizeTrait`, `VerifyTensorLayoutsTrait`
 
-Interfaces: `InferTypeOpInterface`, `NoMemoryEffect (MemoryEffectOpInterface)`
+Interfaces: `ConditionallySpeculatable`, `InferTypeOpInterface`, `NoMemoryEffect (MemoryEffectOpInterface)`
 
 Effects: `MemoryEffects::Effect{}`
 
@@ -1707,10 +1683,6 @@ operation ::= `tt.store` $ptr `,` $value (`,` $mask^)?
 ```
 
 Traits: `SameLoadStoreOperandsEncoding`, `SameLoadStoreOperandsShape`, `TensorSizeTrait`, `VerifyTensorLayoutsTrait`
-
-Interfaces: `MemoryEffectOpInterface (MemoryEffectOpInterface)`
-
-Effects: `MemoryEffects::Effect{MemoryEffects::Write on ::mlir::triton::GlobalMemory}`
 
 #### Attributes:
 
