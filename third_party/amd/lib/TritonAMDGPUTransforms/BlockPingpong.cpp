@@ -730,27 +730,44 @@ void Pingponger::getDotPingponged() {
   auto gLoadIt = std::stable_partition(
       gLoadOps.begin(), gLoadOps.end(),
       [&dotGlobalLoads](tt::LoadOp op) { return dotGlobalLoads.contains(op); });
-  auto effectiveGlobalLoadCount = estimateNonDotMemoryImpact<tt::LoadOp>(
-      gLoadIt, gLoadOps.end(), assumeNotTaken);
-  gLoadOps.erase(gLoadIt, gLoadOps.end());
-  effectiveGlobalLoadCount += gLoadOps.size();
   auto lLoadIt = std::stable_partition(lLoadOps.begin(), lLoadOps.end(),
                                        [&dotLocalLoads](ttg::LocalLoadOp op) {
                                          return dotLocalLoads.contains(op);
                                        });
-  auto effectiveLocalLoadCount = estimateNonDotMemoryImpact<ttg::LocalLoadOp>(
-      lLoadIt, lLoadOps.end(), assumeNotTaken);
-  lLoadOps.erase(lLoadIt, lLoadOps.end());
-  effectiveLocalLoadCount += lLoadOps.size();
   auto lStoreIt =
       std::stable_partition(lStoreOps.begin(), lStoreOps.end(),
                             [&dotLocalStores](ttg::LocalStoreOp op) {
                               return dotLocalStores.contains(op);
                             });
-  auto effectiveLocalStoreCount = estimateNonDotMemoryImpact<ttg::LocalStoreOp>(
-      lStoreIt, lStoreOps.end(), assumeNotTaken);
+  if (estimateNonDotMemoryImpact<tt::LoadOp>(gLoadIt, gLoadOps.end(),
+                                             assumeNotTaken) != 0) {
+    std::stringstream message;
+    message << "Unable to match ping pong scheduling pattern. Details: "
+            << "Non-dot global loads found in non-persistent GEMM";
+    LDBG(message.str());
+    return;
+  }
+  if (estimateNonDotMemoryImpact<ttg::LocalLoadOp>(lLoadIt, lLoadOps.end(),
+                                                   assumeNotTaken) != 0) {
+    std::stringstream message;
+    message << "Unable to match ping pong scheduling pattern. Details: "
+            << "Non-dot local loads found in non-persistent GEMM";
+    LDBG(message.str());
+    return;
+  }
+  if (estimateNonDotMemoryImpact<ttg::LocalStoreOp>(lStoreIt, lStoreOps.end(),
+                                                    assumeNotTaken) != 0) {
+    std::stringstream message;
+    message << "Unable to match ping pong scheduling pattern. Details: "
+            << "Non-dot local stores found in non-persistent GEMM";
+    LDBG(message.str());
+    return;
+  }
+
+  // Remove non-dot memory operations.
+  gLoadOps.erase(gLoadIt, gLoadOps.end());
+  lLoadOps.erase(lLoadIt, lLoadOps.end());
   lStoreOps.erase(lStoreIt, lStoreOps.end());
-  effectiveLocalStoreCount += lStoreOps.size();
   // All PingPong Scheduler assumes there are 2 movable global loads and 2
   // movable local loads.
   if (gLoadOps.size() != 2 || lLoadOps.size() != 2) {
@@ -758,19 +775,6 @@ void Pingponger::getDotPingponged() {
     message << "Unable to match ping pong slicing pattern. Details: "
             << gLoadOps.size() << " global loads in dot computation, "
             << lLoadOps.size() << " local loads in dot computation";
-    LDBG(message.str());
-    return;
-  }
-
-  // Restrict based on "effective loads" because this influenced the
-  // calculations used to generate the clusters.
-  if (effectiveGlobalLoadCount != 2 || effectiveLocalLoadCount != 2 ||
-      effectiveLocalStoreCount != 2) {
-    std::stringstream message;
-    message << "Unable to match memory expectations. Details: "
-            << effectiveGlobalLoadCount << " effective global load count, "
-            << effectiveLocalLoadCount << " effective local load count, "
-            << effectiveLocalStoreCount << " effective local store count";
     LDBG(message.str());
     return;
   }
