@@ -338,19 +338,20 @@ def cumprod(input, axis=0, reverse=False):
 def _compare_and_swap(x, flip, i: core.constexpr, n_dims: core.constexpr):
     n_outer: core.constexpr = x.numel >> n_dims
     shape: core.constexpr = [n_outer * 2**i, 2, 2**(n_dims - i - 1)]
-
-    # flip along middle dimension (the bitwise XORs will be optimised away):
+    y = core.reshape(x, shape)
+    # slice left/right with 'stride' 2**(n_dims - i - 1)
+    left, right = core.split(core.permute(y, (0, 2, 1)))
+    left = core.reshape(core.broadcast_to(left[:, None, :], shape), x.shape)
+    right = core.reshape(core.broadcast_to(right[:, None, :], shape), x.shape)
+    left = left.to(y.dtype)
+    right = right.to(y.dtype)
+    # actual compare-and-swap
     idtype = core.get_int_dtype(bitwidth=x.dtype.primitive_bitwidth, signed=True)
-    ix = core.reshape(x, shape).to(idtype, bitcast=True)
-    iy = ix ^ xor_sum(ix, 1, True)
-    y = core.reshape(iy.to(x.dtype, bitcast=True), x.shape)
-
-    # determines whether we are in the right (rather than left) position along the axis:
-    is_right = core.reshape(core.broadcast_to(core.arange(0, 2)[None, :, None], shape), x.shape)
-
-    # conditional swap:
-    ret = core.where((x > y) != (flip ^ is_right), y, x)
-    return ret
+    ileft = left.to(idtype, bitcast=True)
+    iright = right.to(idtype, bitcast=True)
+    ix = x.to(idtype, bitcast=True)
+    ret = ix ^ core.where((left > right) != flip, ileft ^ iright, zeros_like(ix))
+    return ret.to(x.dtype, bitcast=True)
 
 
 @jit
@@ -450,8 +451,14 @@ def flip(x, dim=None):
 
     idtype = core.get_int_dtype(bitwidth=x.dtype.primitive_bitwidth, signed=True)
     y = core.reshape(x.to(idtype, bitcast=True), [2] * steps)
+    y = core.expand_dims(y, start)
+    flip = (core.arange(0, 2)[:, None] == 1 - core.arange(0, 2))
     for i in core.static_range(start, steps):
-        y = y ^ xor_sum(y, i, True)
+        flip2 = flip
+        for j in core.static_range(0, steps + 1):
+            if j != i and j != i + 1:
+                flip2 = core.expand_dims(flip2, j)
+        y = sum(y * flip2, i + 1, keep_dims=True, dtype=y.dtype)
     x = core.reshape(y, x.shape).to(x.dtype, bitcast=True)
     return x
 
