@@ -4,7 +4,7 @@
 include "mlir/IR/EnumAttr.td"
 
 def MetricTypeAttr : I32EnumAttr<
-  "MetricType", "",
+  "MetricType", "The type of metric to be profiled",
   [
     I32EnumAttrCase<"CYCLE", 0, "cycle">,
   ]> {
@@ -17,7 +17,7 @@ def MetricTypeAttr : I32EnumAttr<
 }
 
 def SamplingStrategyAttr : I32EnumAttr<
-  "SamplingStrategy", "",
+  "SamplingStrategy", "The strategy for sampling the profiling data",
   [
     I32EnumAttrCase<"NONE", 0, "none">,
     I32EnumAttrCase<"SELECTIVE", 1, "selective">,
@@ -31,5 +31,18 @@ def SamplingStrategyAttr : I32EnumAttr<
   }];
 }
 
+// TODO(Keren): Expose it in the frontend
+def ModeAttr : I32EnumAttr<
+  "Mode", "The mode of profiling",
+  [
+    I32EnumAttrCase<"DEFAULT", 0, "default">,
+    I32EnumAttrCase<"MMA", 1, "mma">,
+  ]> {
+  let cppNamespace = "::mlir::triton::proton";
+  let description = [{
+    Attribute to indicate the mode of profiling, which specifies passes and instructions to monitor.
+  }];
+}
+>
 
 #endif // PROTON_ATTR_DEFS

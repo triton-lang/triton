@@ -60,41 +60,46 @@ class Instrumentation:
         triton_proton.load_dialects(ctx)
 
 
-def _interpret_mode(mode_str: Union[str, mode.InstrumentationMode]) -> mode.InstrumentationMode:
-    if isinstance(mode_str, str):
-        parts = mode_str.split(":")
-        mode_name = parts[0]
-        opts = dict(opt.split("=") for opt in parts[1:])
+def _interpret_mode(mode_obj: Union[str, mode.InstrumentationMode]) -> mode.InstrumentationMode:
+    if isinstance(mode_obj, mode.InstrumentationMode):
+        return mode_obj
 
-        # Get option values or empty strings
-        options = {
-            "metric_type": opts.get("metric_type", ""), "buffer_type": opts.get("buffer_type", ""), "granularity":
-            opts.get("granularity", ""), "sampling_strategy": opts.get("sampling_strategy", ""), "sampling_options":
-            opts.get("sampling_options", "")
-        }
+    parts = mode_obj.split(":")
+    mode_name = parts[0]
+    opts = dict(opt.split("=") for opt in parts[1:])
 
-        # Helper function to validate and map options to their enum values
-        def get_option_value(opt_name, mapping):
-            value = options[opt_name]
-            if value and value not in mapping:
-                raise ValueError(f"Unknown {opt_name}: {value}")
-            return mapping[value] if value else value
+    # Get option values or empty strings
+    options = {
+        "metric_type": opts.get("metric_type", ""),
+        "buffer_type": opts.get("buffer_type", ""),
+        "buffer_strategy": opts.get("buffer_strategy", ""),
+        "buffer_size": int(opts.get("buffer_size", "0")),
+        "granularity": opts.get("granularity", ""),
+        "sampling_strategy": opts.get("sampling_strategy", ""),
+        "sampling_options": opts.get("sampling_options", ""),
+    }
 
-        # Look up enum values for each option
-        options["metric_type"] = get_option_value("metric_type", mode.metric_types)
-        options["buffer_type"] = get_option_value("buffer_type", mode.buffer_types)
-        options["granularity"] = get_option_value("granularity", mode.granularities)
-        options["sampling_strategy"] = get_option_value("sampling_strategy", mode.sampling_strategies)
+    # Helper function to validate and map options to their enum values
+    def get_option_value(opt_name, mapping):
+        value = options[opt_name]
+        if value and value not in mapping:
+            raise ValueError(f"Unknown {opt_name}: {value}")
+        return mapping[value] if value else value
 
-        # Create the appropriate mode instance
-        if mode_name in ("default", ""):
-            return mode.Default(**options)
-        elif mode_name == "mma":
-            return mode.MMA(**options)
-        else:
-            raise ValueError(f"Unknown mode: {mode_str}")
+    # Look up enum values for each option
+    options["metric_type"] = get_option_value("metric_type", mode.metric_types)
+    options["buffer_type"] = get_option_value("buffer_type", mode.buffer_types)
+    options["buffer_strategy"] = get_option_value("buffer_strategy", mode.buffer_strategies)
+    options["granularity"] = get_option_value("granularity", mode.granularities)
+    options["sampling_strategy"] = get_option_value("sampling_strategy", mode.sampling_strategies)
+
+    # Create the appropriate mode instance
+    if mode_name in ("default", ""):
+        return mode.Default(**options)
+    elif mode_name == "mma":
+        return mode.MMA(**options)
     else:
-        return mode_str
+        raise ValueError(f"Unknown mode: {mode_obj}")
 
 
 class InstrumentationHook(Hook):
@@ -105,10 +110,10 @@ class InstrumentationHook(Hook):
     profile_buffer_size: int = 16 * 1024 * 1024
     profile_buffer_alignment: int = 128
 
-    def __init__(self, mode_str: str):
+    def __init__(self, mode_obj: Union[str, mode.InstrumentationMode]):
         # Mapping of function objects to their scope ID pairs
         self.function_scope_ids: Dict[Any, List[Tuple[int, int]]] = {}
-        self.mode: mode.InstrumentationMode = _interpret_mode(mode_str)
+        self.mode: mode.InstrumentationMode = _interpret_mode(mode_obj)
 
         self.allocator = CudaAllocator(self)
         self.buffer = None

@@ -20,7 +20,7 @@ void init_triton_proton(py::module &&m) {
 
   // Proton enums
   py::enum_<proton::MetricType>(m, "METRIC_TYPE", py::module_local())
-      .value("CYCLES", proton::MetricType::CYCLE)
+      .value("CYCLE", proton::MetricType::CYCLE)
       .export_values();
 
   py::enum_<proton::SamplingStrategy>(m, "SAMPLING_STRATEGY",
