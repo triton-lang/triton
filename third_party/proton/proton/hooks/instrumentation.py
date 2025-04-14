@@ -60,7 +60,7 @@ class Instrumentation:
         triton_proton.load_dialects(ctx)
 
 
-def _interpret_mode(mode_str: Union[str, mode.BaseMode]) -> mode.BaseMode:
+def _interpret_mode(mode_str: Union[str, mode.InstrumentationMode]) -> mode.InstrumentationMode:
     if isinstance(mode_str, str):
         parts = mode_str.split(":")
         mode_name = parts[0]
@@ -105,10 +105,10 @@ class InstrumentationHook(Hook):
     profile_buffer_size: int = 16 * 1024 * 1024
     profile_buffer_alignment: int = 128
 
-    def __init__(self, mode: str):
+    def __init__(self, mode_str: str):
         # Mapping of function objects to their scope ID pairs
         self.function_scope_ids: Dict[Any, List[Tuple[int, int]]] = {}
-        self.mode = _interpret_mode(mode)
+        self.mode: mode.InstrumentationMode = _interpret_mode(mode_str)
 
         self.allocator = CudaAllocator(self)
         self.buffer = None
@@ -128,7 +128,12 @@ class InstrumentationHook(Hook):
             backend_pass(pm)
 
         def to_ttgpuir_passes(pm):
-            triton_proton.add_convert_proton_to_protongpu(pm)
+            triton_proton.add_convert_proton_to_protongpu(pm, self.mode.metric_type, self.mode.sampling_strategy,
+                                                          self.mode.sampling_options, self.mode.granularity,
+                                                          self.mode.buffer_strategy, self.mode.buffer_type,
+                                                          self.mode.buffer_size, self.profile_buffer_size,
+                                                          self.profile_buffer_alignment)
+
             triton_proton.add_allocate_proton_shared_memory(pm)
 
         if backend == "cuda":

@@ -80,17 +80,18 @@ void init_triton_proton(py::module &&m) {
 
   m.def("add_convert_proton_to_protongpu",
         [](mlir::PassManager &pm, proton::MetricType &metricType,
-           proton::gpu::Granularity granularity, const std::string &selectIds,
-           int32_t maxSharedMem, int32_t scratchMem, int32_t alignment,
+           proton::SamplingStrategy samplingStrategy,
+           const std::string &samplingOptions,
+           proton::gpu::Granularity granularity,
            proton::gpu::BufferStrategy bufferStrategy,
-           proton::gpu::BufferType bufferType, int32_t bufferSize) {
+           proton::gpu::BufferType bufferType, int32_t bufferSize,
+           int64_t profileScratchSize, int32_t profileScratchAlignment) {
           pm.addPass(proton::createConvertProtonToProtonGPUPass(
-              metricType, granularity, selectIds, maxSharedMem, scratchMem,
-              alignment, bufferStrategy, bufferType, bufferSize));
+              metricType, samplingStrategy, samplingOptions, granularity,
+              bufferStrategy, bufferType, bufferSize, profileScratchSize,
+              profileScratchAlignment));
         });
 
-  ADD_PASS_WRAPPER_0("add_convert_proton_to_protongpu",
-                     proton::createConvertProtonToProtonGPUPass);
   ADD_PASS_WRAPPER_0("add_convert_proton_nvidia_gpu_to_llvm",
                      proton::gpu::createConvertProtonNvidiaGPUToLLVMPass);
   ADD_PASS_WRAPPER_0("add_convert_proton_amd_gpu_to_llvm",

@@ -3,6 +3,11 @@ from triton._C.libtriton import proton as triton_proton
 
 metric_types = {"cycle": triton_proton.MetricType.CYCLE}
 
+buffer_strategies = {
+    "circular": triton_proton.BufferStrategy.CIRCULAR,
+    "flush": triton_proton.BufferStrategy.FLUSH,
+}
+
 buffer_types = {
     "shared": triton_proton.BufferType.SHARED,
     "global": triton_proton.BufferType.GLOBAL,
@@ -45,30 +50,28 @@ class PCSampling(BaseMode):
 
 
 @dataclass(frozen=True)
-class Default(BaseMode):
-    name: str = field(default="default", init=False)
+class InstrumentationMode(BaseMode):
+    """Common base class for instrumentation modes with shared configuration."""
     metric_type: triton_proton.MetricType = field(default=triton_proton.MetricType.CYCLE, init=False)
-    buffer_type: triton_proton.BufferType = triton_proton.BufferType.SHARED
-    granularity: triton_proton.Granularity = triton_proton.Granularity.WARP
     sampling_strategy: triton_proton.SamplingStrategy = triton_proton.SamplingStrategy.NONE
     sampling_options: str = ""
+    granularity: triton_proton.Granularity = triton_proton.Granularity.WARP
+    buffer_strategy: triton_proton.BufferStrategy = triton_proton.BufferStrategy.CIRCULAR
+    buffer_type: triton_proton.BufferType = triton_proton.BufferType.SHARED
+    buffer_size: int = 0
 
     def __str__(self):
-        return (f"{self.name}:metric_type={self.metric_type}:buffer_type={self.buffer_type}:"
-                f"granularity={self.granularity}:sampling={self.sampling_strategy}:"
-                f"sampling_options={self.sampling_options}")
+        return (f"{self.name}:metric_type={self.metric_type}:sampling_strategy={self.sampling_strategy}"
+                f":sampling_options={self.sampling_options}:granularity={self.granularity}"
+                f":buffer_strategy={self.buffer_strategy}:buffer_type={self.buffer_type}"
+                f":buffer_size={self.buffer_size}")
 
 
 @dataclass(frozen=True)
-class MMA(BaseMode):
-    name: str = field(default="mma", init=False)
-    metric_type: triton_proton.MetricType = field(default=triton_proton.MetricType.CYCLE, init=False)
-    buffer_type: triton_proton.BufferType = triton_proton.BufferType.SHARED
-    granularity: triton_proton.Granularity = triton_proton.Granularity.WARP
-    sampling_strategy: triton_proton.SamplingStrategy = triton_proton.SamplingStrategy.NONE
-    sampling_options: str = ""
+class Default(InstrumentationMode):
+    name: str = field(default="default", init=False)
 
-    def __str__(self):
-        return (f"{self.name}:metric_type={self.metric_type}:buffer_type={self.buffer_type}:"
-                f"granularity={self.granularity}:sampling={self.sampling_strategy}:"
-                f"sampling_options={self.sampling_options}")
+
+@dataclass(frozen=True)
+class MMA(InstrumentationMode):
+    name: str = field(default="mma", init=False)

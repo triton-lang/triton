@@ -81,21 +81,23 @@ class ConvertProtonToProtonGPUPass
     : public impl::ConvertProtonToProtonGPUBase<ConvertProtonToProtonGPUPass> {
 public:
   ConvertProtonToProtonGPUPass(MetricType metricType,
+                               SamplingStrategy samplingStrategy,
+                               llvm::StringRef samplingOptions,
                                gpu::Granularity granularity,
-                               std::string selectIds, int32_t maxSharedMem,
-                               int32_t scratchMem, int32_t alignment,
                                gpu::BufferStrategy bufferStrategy,
-                               gpu::BufferType bufferType, int32_t bufferSize)
+                               gpu::BufferType bufferType, int32_t bufferSize,
+                               int64_t profileScratchSize,
+                               int32_t profileScratchAlignment)
       : ConvertProtonToProtonGPUBase<ConvertProtonToProtonGPUPass>() {
     this->metricType = metricType;
+    this->samplingStrategy = samplingStrategy;
     this->granularity = granularity;
-    this->selectIds = selectIds;
-    this->maxSharedMem = maxSharedMem;
-    this->scratchMem = scratchMem;
-    this->alignment = alignment;
+    this->samplingOptions = samplingOptions.str();
     this->bufferStrategy = bufferStrategy;
     this->bufferType = bufferType;
     this->bufferSize = bufferSize;
+    this->profileScratchSize = profileScratchSize;
+    this->profileScratchAlignment = profileScratchAlignment;
   }
 
   LogicalResult circularRecordStrategyLowering(FuncOp func) {
@@ -108,8 +110,9 @@ public:
 
     llvm::SmallVector<int32_t, 8> selectIdVec;
     int segmentNum = numWarps;
-    if (selectIds != "") {
-      parseSelectIds(selectIds, selectIdVec);
+    if (!samplingOptions.empty() &&
+        samplingStrategy == SamplingStrategy::SELECTIVE) {
+      parseSelectIds(samplingOptions, selectIdVec);
       segmentNum = selectIdVec.size();
       if (segmentNum && granularity != proton::gpu::Granularity::WARP) {
         mlir::emitError(
@@ -130,23 +133,27 @@ public:
 
     // We take any available shared memory left to allocate the circular
     // buffer. The buffer size per segment must be power of 2.
+    // Let's conservatively use the maximum shared memory size as 64KB bytes
+    // because using a larger size may cause the kernel to perform poorly due to
+    // L1 cache inefficiencies. In the future, we should construct device
+    // specific targetInfo here to estimate the shared memory size
+    auto maxSharedMemSize = 64 * 1024;
     int segmentByteSize =
         llvm::NextPowerOf2(
-            (maxSharedMem - llvm::alignTo(sharedMemUsed, bytesPerEntry)) /
+            (maxSharedMemSize - llvm::alignTo(sharedMemUsed, bytesPerEntry)) /
             segmentNum) /
         2;
-    int sharedSlots = segmentByteSize * segmentNum / bytesPerEntry;
-    // FIXME(fywkevin): this is a hack, remove this after we have decent
-    // triton_proton.cc python bindings for passing proper args.
-    sharedSlots = std::max(sharedSlots, 32);
-    int allocSharedMemSize = sharedSlots * bytesPerEntry;
+    int numSharedEntries = segmentByteSize * segmentNum / bytesPerEntry;
+    int allocSharedMemSize = numSharedEntries * bytesPerEntry;
+    if (bufferSize != 0)
+      bufferSize = llvm::alignTo(bufferSize, bytesPerEntry);
     int allocBufferSize = bufferSize > 0 ? bufferSize : allocSharedMemSize;
     if (!allocBufferSize) {
       mlir::emitError(loc, "profiling buffer size can't be 0.");
       return failure();
     }
 
-    // Circular strategy memory layout (total: allocScratchMemSize bytes)
+    // Circular strategy memory layout (total: allocprofileScratchSize bytes)
     //  +-----------------------------------------------+
     //  | header (circularHeaderSize bytes)             |
     //  +-----------------------------------------------+
@@ -154,14 +161,15 @@ public:
     //  +-----------------------------------------------+
     //  | profiled data (allocBufferSize bytes)         |
     //  +-----------------------------------------------+
-    int allocScratchMemSize = llvm::alignTo(
-        allocBufferSize + circularHeaderSize + numWarps * 4, alignment);
+    int allocprofileScratchSize =
+        llvm::alignTo(allocBufferSize + circularHeaderSize + numWarps * 4,
+                      profileScratchAlignment);
 
-    if (scratchMem < allocScratchMemSize) {
+    if (profileScratchSize < allocprofileScratchSize) {
       mlir::emitError(loc,
                       "Global scratch memory for proton profiling is not large "
                       "enough, should be at least " +
-                          llvm::Twine(allocScratchMemSize) + " bytes.");
+                          llvm::Twine(allocprofileScratchSize) + " bytes.");
       return failure();
     }
 
@@ -176,14 +184,14 @@ public:
       Attribute sharedMemorySpace =
           triton::gpu::SharedMemorySpaceAttr::get(context);
       auto sharedBufferType = triton::gpu::MemDescType::get(
-          {wordsPerEntry * sharedSlots}, builder.getI32Type(), encoding,
+          {wordsPerEntry * numSharedEntries}, builder.getI32Type(), encoding,
           sharedMemorySpace, /*mutable_memory=*/true);
       buffer = builder.create<triton::gpu::LocalAllocOp>(loc, sharedBufferType);
     } else if (bufferType == gpu::BufferType::LOCAL) {
       Attribute stackMemorySpace =
           mlir::triton::proton::gpu::StackMemorySpaceAttr::get(context);
       auto stackBufferType = triton::gpu::MemDescType::get(
-          {wordsPerEntry * sharedSlots}, builder.getI32Type(), encoding,
+          {wordsPerEntry * numSharedEntries}, builder.getI32Type(), encoding,
           stackMemorySpace, /*mutable_memory=*/true);
       buffer = builder.create<proton::gpu::StackAllocOp>(loc, stackBufferType);
     } else if (bufferType == gpu::BufferType::GLOBAL) {
@@ -195,8 +203,8 @@ public:
     }
 
     Value profileMem = builder.create<proton::gpu::GlobalScratchAllocOp>(
-        loc, triton::getPointerType(builder.getI32Type()), allocScratchMemSize,
-        alignment);
+        loc, triton::getPointerType(builder.getI32Type()),
+        allocprofileScratchSize, profileScratchAlignment);
 
     // Profiler index is private to each thread, address space is 5. In
     // practice, it doesn't prevent us from register promotion.
@@ -253,8 +261,8 @@ public:
       return;
     }
 
-    if (!llvm::isPowerOf2_32(alignment)) {
-      mlir::emitError(loc, "alignment must be power of 2");
+    if (!llvm::isPowerOf2_32(profileScratchAlignment)) {
+      mlir::emitError(loc, "profileScratchAlignment must be power of 2");
       signalPassFailure();
       return;
     }
@@ -272,13 +280,15 @@ public:
 };
 
 std::unique_ptr<OperationPass<ModuleOp>> createConvertProtonToProtonGPUPass(
-    MetricType metricType, gpu::Granularity granularity, std::string selectIds,
-    int32_t maxSharedMem, int32_t scratchMem, int32_t alignment,
+    MetricType metricType, SamplingStrategy samplingStrategy,
+    llvm::StringRef samplingOptions, gpu::Granularity granularity,
     gpu::BufferStrategy bufferStrategy, gpu::BufferType bufferType,
-    int32_t bufferSize) {
+    int32_t bufferSize, int64_t profileScratchSize,
+    int32_t profileScratchAlignment) {
   return std::make_unique<ConvertProtonToProtonGPUPass>(
-      metricType, granularity, selectIds, maxSharedMem, scratchMem, alignment,
-      bufferStrategy, bufferType, bufferSize);
+      metricType, samplingStrategy, samplingOptions, granularity,
+      bufferStrategy, bufferType, bufferSize, profileScratchSize,
+      profileScratchAlignment);
 }
 
 } // namespace proton
