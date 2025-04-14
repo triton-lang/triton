@@ -28,7 +28,7 @@ class DotOpMmaMemLoader {
 public:
   virtual ~DotOpMmaMemLoader() = default;
   virtual Value memLoad(int a, int b, ConversionPatternRewriter &rewriter,
-                        Location loc) = 0;
+                        Location loc) const = 0;
 };
 
 // Helper class to load shared memory slices following MMAv3 layout.
@@ -44,10 +44,10 @@ public:
   // Return a descriptor pointing to the shared memory slice at coordinates (a,
   // b)
   Value smemLoad(int a, int b, ConversionPatternRewriter &rewriter,
-                 Location loc);
+                 Location loc) const;
 
   Value memLoad(int a, int b, ConversionPatternRewriter &rewriter,
-                Location loc) override {
+                Location loc) const override {
     return smemLoad(a, b, rewriter, loc);
   }
 
@@ -74,10 +74,10 @@ public:
                        SmallVector<unsigned int> instrShape, bool interleaved,
                        bool trans);
   Value tmemLoad(int a, int b, ConversionPatternRewriter &rewriter,
-                 Location loc);
+                 Location loc) const;
 
   Value memLoad(int a, int b, ConversionPatternRewriter &rewriter,
-                Location loc) override {
+                Location loc) const override {
     return tmemLoad(a, b, rewriter, loc);
   }
 

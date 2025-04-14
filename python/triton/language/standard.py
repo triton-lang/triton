@@ -9,7 +9,7 @@ from . import math
 
 def _log2(i: core.constexpr):
     log2 = 0
-    n = i.value
+    n = core.constexpr(i).value
     while n > 1:
         n >>= 1
         log2 += 1
@@ -340,11 +340,11 @@ def _compare_and_swap(x, flip, i: core.constexpr, n_dims: core.constexpr):
     shape: core.constexpr = [n_outer * 2**i, 2, 2**(n_dims - i - 1)]
     y = core.reshape(x, shape)
     # slice left/right with 'stride' 2**(n_dims - i - 1)
-    mask = core.arange(0, 2)[None, :, None]
-    left = core.broadcast_to(sum(y * (1 - mask), 1)[:, None, :], shape).to(y.dtype)
-    right = core.broadcast_to(sum(y * mask, 1)[:, None, :], shape).to(y.dtype)
-    left = core.reshape(left, x.shape)
-    right = core.reshape(right, x.shape)
+    left, right = core.split(core.permute(y, (0, 2, 1)))
+    left = core.reshape(core.broadcast_to(left[:, None, :], shape), x.shape)
+    right = core.reshape(core.broadcast_to(right[:, None, :], shape), x.shape)
+    left = left.to(y.dtype)
+    right = right.to(y.dtype)
     # actual compare-and-swap
     idtype = core.get_int_dtype(bitwidth=x.dtype.primitive_bitwidth, signed=True)
     ileft = left.to(idtype, bitcast=True)
@@ -362,14 +362,14 @@ def _bitonic_merge(x, stage: core.constexpr, order: core.constexpr, n_dims: core
     order_type 2 == alternating
     '''
     n_outer: core.constexpr = x.numel >> n_dims
-    core.static_assert(stage <= n_dims)
     # flip denotes whether to re-arrange sub-sequences of elements in ascending or
     # descending order.
     # if flip = 00000000... then all elements will be re-arranged ascendingly at this stage
     # if flip = 00110011... then all the elements will be re-arranged alternatingly (with
     # a stride of 2) at this stage
     if order == 2:
-        shape: core.constexpr = [n_outer * 2**(n_dims - 1 - stage), 2, 2**stage]
+        core.static_assert(stage <= (n_dims))
+        shape: core.constexpr = [n_outer * 2**(n_dims - 1 - stage), 2, 2**(stage)]
         flip = core.reshape(core.broadcast_to(core.arange(0, 2)[None, :, None], shape), x.shape)
     else:
         flip = order
@@ -379,9 +379,8 @@ def _bitonic_merge(x, stage: core.constexpr, order: core.constexpr, n_dims: core
     return x
 
 
-@core._tensor_member_fn
 @jit
-def sort(x, dim: core.constexpr = None, descending: core.constexpr = core.CONSTEXPR_0):
+def sort_impl(x, k: core.constexpr = None, dim: core.constexpr = None, descending: core.constexpr = core.CONSTEXPR_0):
     """
     Sorts a tensor along a specified dimension.
 
@@ -389,6 +388,8 @@ def sort(x, dim: core.constexpr = None, descending: core.constexpr = core.CONSTE
     :type x: Tensor
     :param dim: The dimension along which to sort the tensor. If None, the tensor is sorted along the last dimension. Currently, only sorting along the last dimension is supported.
     :type dim: int, optional
+    :param k: the number of top elements to select. If none, assume k = x.shape[dim]
+    :type k: int, optional
     :param descending: If set to True, the tensor is sorted in descending order. If set to False, the tensor is sorted in ascending order.
     :type descending: bool, optional
     """
@@ -396,13 +397,29 @@ def sort(x, dim: core.constexpr = None, descending: core.constexpr = core.CONSTE
     _dim: core.constexpr = len(x.shape) - 1 if dim is None else dim
     core.static_assert(_dim == len(x.shape) - 1, "only minor dimension is currently supported")
     # iteratively run bitonic merge-sort steps
-    n_dims: core.constexpr = _log2(x.shape[_dim])
-    for i in core.static_range(1, n_dims + 1):
-        x = _bitonic_merge(x, i, 2 if i < n_dims else descending, n_dims)
+    n_outer: core.constexpr = x.numel >> _log2(x.shape[_dim])
+    log_n: core.constexpr = _log2(x.shape[_dim])
+    log_k: core.constexpr = log_n if k is None else _log2(k)
+    for i in core.static_range(1, log_k + 1):
+        x = _bitonic_merge(x, i, 2 if i < log_n else descending, log_n)
+    # select top k elements using bitonic top-k
+    # https://www.doc.ic.ac.uk/~hlgr/pdfs/MassivelyParallelTopK.pdf
+    for i in core.static_range(log_k + 1, log_n + 1):
+        x = core.reshape(x, [n_outer * 2**(log_n - i), 2, 2**log_k])
+        x = max(x, axis=1) if descending else min(x, axis=1)
+        x = core.reshape(x, [n_outer, 2**(log_n - i + log_k)])
+        x = _bitonic_merge(x, log_k, 2 if i < log_n else descending, _log2(x.shape[_dim]))
     return x
 
 
-# flip
+@jit
+def sort(x, dim: core.constexpr = None, descending: core.constexpr = core.CONSTEXPR_0):
+    return sort_impl(x, dim=dim, descending=descending)
+
+
+@jit
+def topk(x, k: core.constexpr, dim: core.constexpr = None):
+    return sort_impl(x, k=k, dim=dim, descending=True)
 
 
 def _get_flip_dim(dim, shape):

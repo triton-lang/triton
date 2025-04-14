@@ -61,6 +61,7 @@ def make_default_opt_flags_amd(
         block_m = 128
     elif tokens_per_expt >= 512 and n >= 2048:
         block_m = 128
+
     else:
         block_m = max(32, min(triton.next_power_of_2(tokens_per_expt), 64))
     if routing_data is not None:
@@ -90,7 +91,7 @@ def make_default_opt_flags_amd(
     num_stages = 2
     is_persistent = False
     # AMD-specific
-    target_kernel_kwargs = {"waves_per_eu": 0, "matrix_instr_nonkdim": 16, "kpack": 2}
+    target_kernel_kwargs = {"waves_per_eu": 0, "matrix_instr_nonkdim": 16, "kpack": 1}
     return OptFlags(
         block_m=block_m,
         block_n=block_n,

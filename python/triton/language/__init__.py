@@ -19,6 +19,7 @@ from .standard import (
     sort,
     sum,
     swizzle2d,
+    topk,
     xor_sum,
     zeros,
     zeros_like,
@@ -33,6 +34,7 @@ from .core import (
     make_tensor_descriptor,
     _experimental_reinterpret_tensor_descriptor,
     tensor_descriptor,
+    tensor_descriptor_type,
     add,
     advance,
     arange,
@@ -251,6 +253,7 @@ __all__ = [
     "sum",
     "swizzle2d",
     "tensor",
+    "topk",
     "trans",
     "tuple",
     "uint16",
@@ -283,6 +286,18 @@ def str_to_ty(name):
             const = True
         ty = str_to_ty(name)
         return pointer_type(element_ty=ty, const=const)
+
+    if name.startswith("tensordesc"):
+        inner = name.split("<")[1].rstrip(">")
+        dtype, block_shape = inner.split("[")
+        block_shape = [int(s.strip()) for s in block_shape.rstrip("]").split(",")]
+        dtype = str_to_ty(dtype)
+        ndim = len(block_shape)
+        shape_type = tuple_type([int32] * ndim)
+        # FIXME: Last dim stride should be constexpr(1)
+        stride_type = tuple_type(([int64] * ndim))
+        block = block_type(dtype, block_shape)
+        return tensor_descriptor_type(block, shape_type, stride_type)
 
     if name == "nvTmaDesc":
         return nv_tma_desc_type()

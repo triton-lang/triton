@@ -1,32 +1,36 @@
+from __future__ import annotations
 import ast
 import textwrap
 import inspect
-from typing import Tuple, List
+from typing import Tuple, List, Dict
 
 import math
 import numpy as np
 
 import triton
 import triton.language as tl
+import dataclasses
 from dataclasses import dataclass
+
+from triton.language import semantic
+from triton.tools.experimental_descriptor import TensorDescriptor
 from .errors import InterpreterError
 from functools import partial
 from .._C.libtriton import interpreter as _interpreter
 from .._C.libtriton import ir as _ir
 
 
+@dataclass
 class TensorHandle:
-
-    def __init__(self, data, dtype):
-        '''
-            data: numpy array
-            dtype: triton type, either pointer_type or scalar_type.
-            we don't store block_type here because the shape information is already available in the data field
-            attr: a dictionary of attributes
-        '''
-        self.data = data
-        self.dtype = dtype
-        self.attr = {}
+    '''
+        data: numpy array
+        dtype: triton type, either pointer_type or scalar_type.
+        we don't store block_type here because the shape information is already available in the data field
+        attr: a dictionary of attributes
+    '''
+    data: np.array
+    dtype: tl.dtype
+    attr: Dict = dataclasses.field(default_factory=dict)
 
     def __bool__(self):
         return bool(self.data.all())
@@ -103,6 +107,7 @@ class TensorDescHandle:
             off = (offsets[dim].data + np.arange(self.block_shape[dim])).reshape(bcast_dims)
             ptrs = ptrs + (itemsize * off * self.strides[dim].data).astype(np.uint64)
             masks = masks & (0 <= off) & (off < self.shape[dim].data)
+        assert ptrs.dtype == np.uint64
         ptrs = TensorHandle(ptrs, self.base.dtype.scalar)
         return ptrs, masks
 
@@ -1132,6 +1137,17 @@ def _implicit_cvt(arg):
         return tl.tensor(handle, ty)
     elif isinstance(arg, tuple):
         return _tuple_create(arg, map(_implicit_cvt, arg))
+    elif isinstance(arg, TensorDescriptor):
+        strides = [_implicit_cvt(s) for s in arg.strides]
+        assert arg.strides[-1] == 1
+        strides[-1] = tl.constexpr(1)
+        return semantic.make_tensor_descriptor(
+            base=_implicit_cvt(arg.base),
+            shape=[_implicit_cvt(s) for s in arg.shape],
+            strides=strides,
+            block_shape=[tl.constexpr(b) for b in arg.block_shape],
+            builder=InterpreterBuilder(),
+        )
     return arg
 
 
@@ -1167,6 +1183,13 @@ class GridExecutor:
         def _to_cpu(arg):
             if isinstance(arg, tuple):
                 return _tuple_create(arg, map(_to_cpu, arg))
+            elif isinstance(arg, TensorDescriptor):
+                return TensorDescriptor(
+                    _to_cpu(arg.base),
+                    arg.shape,
+                    arg.strides,
+                    arg.block_shape,
+                )
             elif not hasattr(arg, "data_ptr"):
                 return arg
 
@@ -1200,6 +1223,8 @@ class GridExecutor:
             elif isinstance(arg_dev, tuple):
                 for (arg_dev, arg_hst) in zip(arg_dev, arg_hst):
                     _from_cpu(arg_dev, arg_hst)
+            elif isinstance(arg_dev, TensorDescriptor):
+                _from_cpu(arg_dev.base, arg_hst.base)
 
         for arg_dev, arg_hst in zip(args_dev, args_hst):
             _from_cpu(arg_dev, arg_hst)

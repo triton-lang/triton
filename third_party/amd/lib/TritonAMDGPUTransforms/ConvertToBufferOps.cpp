@@ -35,53 +35,49 @@ namespace tt = mlir::triton;
 namespace {
 
 bool verifyNonSmallerByAssumption(
-    Value expr, const DenseSet<Value> &assumptions,
+    Value expr, const DenseMap<Value, SetVector<Operation *>> &assumptions,
     const std::function<bool(Value)> &matchesOther) {
-  for (Value assume : assumptions) {
-    if (auto cmpOp = assume.getDefiningOp<arith::CmpIOp>()) {
-      switch (cmpOp.getPredicate()) {
-      case arith::CmpIPredicate::eq:
-      case arith::CmpIPredicate::sge:
-      case arith::CmpIPredicate::sgt: {
-        if (cmpOp.getLhs() == expr && matchesOther(cmpOp.getRhs())) {
-          LDBG("  " << expr << " non-neg by assumption " << cmpOp);
-          return true;
-        }
-        break;
+  if (!assumptions.contains(expr))
+    return false;
+  for (Operation *assume : assumptions.at(expr)) {
+    auto cmpOp = llvm::dyn_cast<arith::CmpIOp>(assume);
+    if (!cmpOp)
+      continue;
+    switch (cmpOp.getPredicate()) {
+    case arith::CmpIPredicate::eq:
+    case arith::CmpIPredicate::sge:
+    case arith::CmpIPredicate::sgt: {
+      if (cmpOp.getLhs() == expr && matchesOther(cmpOp.getRhs())) {
+        LDBG("  " << expr << " non-neg by assumption " << cmpOp);
+        return true;
       }
-      case arith::CmpIPredicate::sle:
-      case arith::CmpIPredicate::slt: {
-        if (cmpOp.getRhs() == expr && matchesOther(cmpOp.getLhs())) {
-          LDBG("  " << expr << " non-neg by assumption " << cmpOp);
-          return true;
-        }
-        break;
+      break;
+    }
+    case arith::CmpIPredicate::sle:
+    case arith::CmpIPredicate::slt: {
+      if (cmpOp.getRhs() == expr && matchesOther(cmpOp.getLhs())) {
+        LDBG("  " << expr << " non-neg by assumption " << cmpOp);
+        return true;
       }
-      default:
-        break;
-      }
+      break;
+    }
+    default:
+      break;
     }
   }
   return false;
 }
 
-bool verifyNonNegativeByAssumption(Value expr,
-                                   const DenseSet<Value> &assumptions) {
-  return verifyNonSmallerByAssumption(expr, assumptions, [](auto otherExpr) {
-    APInt cst;
-    return matchPattern(otherExpr, m_ConstantInt(&cst)) && cst.isNonNegative();
-  });
-}
-
-bool verifyNonSmallerByAssumption(Value expr,
-                                  const DenseSet<Value> &assumptions,
-                                  Value other) {
+bool verifyNonSmallerByAssumption(
+    Value expr, const DenseMap<Value, SetVector<Operation *>> &assumptions,
+    Value other) {
   return verifyNonSmallerByAssumption(
       expr, assumptions, [&](auto otherAssum) { return otherAssum == other; });
 }
 
-bool verifyNonNegativeExpr(Value expr, const DenseSet<Value> &assumptions,
-                           std::shared_ptr<DataFlowSolver> solver) {
+bool verifyNonNegativeExpr(
+    Value expr, const DenseMap<Value, SetVector<Operation *>> &assumptions,
+    std::shared_ptr<DataFlowSolver> solver) {
   LDBG("Determing if non-negative: " << expr);
 
   auto nonNegativePred = [&solver](Value v) -> bool {
@@ -95,14 +91,8 @@ bool verifyNonNegativeExpr(Value expr, const DenseSet<Value> &assumptions,
     return succeeded(dataflow::staticallyNonNegative(*solver, v));
   };
 
-  if (nonNegativePred(expr)) {
+  if (nonNegativePred(expr))
     return true;
-  }
-
-  // Check if the expression is contained in any assumption
-  if (verifyNonNegativeByAssumption(expr, assumptions)) {
-    return true;
-  }
 
   // Recurse if the operation is defined
   Operation *op = expr.getDefiningOp();
@@ -220,7 +210,8 @@ bool verifyNonNegativeExpr(Value expr, const DenseSet<Value> &assumptions,
 
 // Quick analysis on the Triton IR to decide if we can safely use
 // buffer operations
-bool canUseBufferOps(Value ptr, const DenseSet<Value> &assumptions,
+bool canUseBufferOps(Value ptr,
+                     const DenseMap<Value, SetVector<Operation *>> &assumptions,
                      std::shared_ptr<DataFlowSolver> solver) {
   // 1. Check if the pointer is uniform: i.e., if it comes from a uniform
   // pointer(splatted) and non-uniform offset addition
@@ -268,7 +259,8 @@ struct ConvertTritonAtomicRMWOpToBufferAtomicRMW
   using OpRewritePattern::OpRewritePattern;
 
   ConvertTritonAtomicRMWOpToBufferAtomicRMW(
-      mlir::MLIRContext *context, DenseSet<Value> &assumptions,
+      mlir::MLIRContext *context,
+      DenseMap<Value, SetVector<Operation *>> &assumptions,
       ModuleAxisInfoAnalysis &axisAnalysisPass,
       std::shared_ptr<DataFlowSolver> solver)
       : mlir::OpRewritePattern<triton::AtomicRMWOp>(context),
@@ -392,7 +384,7 @@ struct ConvertTritonAtomicRMWOpToBufferAtomicRMW
 
 private:
   // Assumptions collected through the function
-  DenseSet<Value> assumptions;
+  DenseMap<Value, SetVector<Operation *>> assumptions;
   ModuleAxisInfoAnalysis &axisAnalysisPass;
   std::shared_ptr<DataFlowSolver> solver;
 };
@@ -406,9 +398,10 @@ template <typename SourceOp>
 struct ConvertTritonLoadToBufferLoad : public mlir::OpRewritePattern<SourceOp> {
   using OpRewritePattern<SourceOp>::OpRewritePattern;
 
-  ConvertTritonLoadToBufferLoad(mlir::MLIRContext *context,
-                                DenseSet<Value> &assumptions,
-                                std::shared_ptr<DataFlowSolver> solver)
+  ConvertTritonLoadToBufferLoad(
+      mlir::MLIRContext *context,
+      DenseMap<Value, SetVector<Operation *>> &assumptions,
+      std::shared_ptr<DataFlowSolver> solver)
       : mlir::OpRewritePattern<SourceOp>(context), assumptions(assumptions),
         solver(std::move(solver)) {}
 
@@ -469,7 +462,7 @@ struct ConvertTritonLoadToBufferLoad : public mlir::OpRewritePattern<SourceOp> {
 
 private:
   // Assumptions collected through the function
-  DenseSet<Value> assumptions;
+  DenseMap<Value, SetVector<Operation *>> assumptions;
   std::shared_ptr<DataFlowSolver> solver;
 };
 
@@ -477,9 +470,10 @@ struct ConvertTritonStoreToBufferStore
     : public mlir::OpRewritePattern<triton::StoreOp> {
   using OpRewritePattern::OpRewritePattern;
 
-  ConvertTritonStoreToBufferStore(mlir::MLIRContext *context,
-                                  DenseSet<Value> &assumptions,
-                                  std::shared_ptr<DataFlowSolver> solver)
+  ConvertTritonStoreToBufferStore(
+      mlir::MLIRContext *context,
+      DenseMap<Value, SetVector<Operation *>> &assumptions,
+      std::shared_ptr<DataFlowSolver> solver)
       : mlir::OpRewritePattern<triton::StoreOp>(context),
         assumptions(assumptions), solver(std::move(solver)) {}
 
@@ -510,7 +504,7 @@ struct ConvertTritonStoreToBufferStore
 
 private:
   // Assumptions collected through the function
-  DenseSet<Value> assumptions;
+  DenseMap<Value, SetVector<Operation *>> assumptions;
   std::shared_ptr<DataFlowSolver> solver;
 };
 
@@ -529,21 +523,12 @@ public:
     ModuleOp mod = getOperation();
 
     // Collect assumptions in the function
-    DenseSet<Value> assumptions;
-    mod.walk([&](LLVM::AssumeOp op) {
-      auto oper = op->getOperand(0);
-      if (oper.getDefiningOp<arith::CmpIOp>())
-        assumptions.insert(oper);
-    });
-    LLVM_DEBUG({
-      DBGS() << "Number of assumptions found: " << assumptions.size() << "\n";
-      for (Value assume : assumptions) {
-        DBGS() << "Assumption:" << assume << "\n";
-      }
-    });
-
+    DenseMap<Value, SetVector<Operation *>> assumptions =
+        AMD::TritonIntegerRangeAnalysis::collectAssumptions(getOperation());
     std::shared_ptr<DataFlowSolver> solver = createDataFlowSolver();
-    solver->load<AMD::TritonIntegerRangeAnalysis>();
+    AMD::TritonIntegerRangeAnalysis *rangeAnalysis =
+        solver->load<AMD::TritonIntegerRangeAnalysis>(assumptions);
+    AMD::initializeFuncOps(mod, rangeAnalysis);
     if (failed(solver->initializeAndRun(getOperation())))
       return signalPassFailure();
 

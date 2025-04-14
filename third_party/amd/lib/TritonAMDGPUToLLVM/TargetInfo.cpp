@@ -512,8 +512,9 @@ bool TargetInfo::supportVectorizedAtomics() const {
   return true;
 }
 
-void TargetInfo::storeOpAnnotation(triton::gpu::LocalStoreOp op,
-                                   size_t localStoreOpCount, Type type) const {
+void TargetInfo::localStoreOpAnnotation(triton::gpu::LocalStoreOp op,
+                                        size_t localStoreOpCount,
+                                        Type type) const {
   storeOpSchedAnnotations(op, localStoreOpCount, type);
 }
 
@@ -531,6 +532,12 @@ bool TargetInfo::supportsDirectToLdsLoadBitWidth(int bitWidth) const {
   }
 
   return false;
+}
+
+void TargetInfo::localLoadOpAnnotation(triton::gpu::LocalLoadOp localLoadOp,
+                                       Operation *llLoadOp) const {
+  LLVM::AMD::addLocalLoadNoAliasScope(localLoadOp,
+                                      cast<LLVM::LoadOp>(llLoadOp));
 }
 
 } // namespace mlir::triton::AMD

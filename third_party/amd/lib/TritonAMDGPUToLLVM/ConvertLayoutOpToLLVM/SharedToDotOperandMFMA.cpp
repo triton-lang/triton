@@ -297,6 +297,7 @@ Value convertLayout(int opIdx, ConversionPatternRewriter &rewriter,
   Value warpIdInBatch = tb.urem(linearWarpId, tb.i32_val(warpsPerBatch));
   elemTy = typeConverter->convertType(elemTy);
 
+  SmallVector<LLVM::LoadOp> llLoads;
   SmallVector<Value> loadedValues;
   SmallVector<Value> offsets;
   Value smemBase;
@@ -377,7 +378,8 @@ Value convertLayout(int opIdx, ConversionPatternRewriter &rewriter,
                                k * loadsPerThread + loadId];
           loadOffset = tb.add(loadOffset, batchOffset);
           Value loadAddress = tb.gep(smemPtrTy, elemTy, smemBase, loadOffset);
-          Value loadedValue = tb.load(loadVecTy, loadAddress);
+          llLoads.push_back(tb.load(loadVecTy, loadAddress));
+          Value loadedValue = llLoads.back();
           for (int elemId = 0; elemId < elemsPerLoad; ++elemId) {
             Value elemVal =
                 tb.extract_element(elemTy, loadedValue, tb.i32_val(elemId));
@@ -393,6 +395,10 @@ Value convertLayout(int opIdx, ConversionPatternRewriter &rewriter,
       const size_t numDsReadsCount =
           repB * numRepNonK * numRepK * loadsPerThread;
       setNumGeneratedDsReads(localLoadOp, numDsReadsCount, loadVecTy);
+
+      for (auto llLoad : llLoads) {
+        LLVM::AMD::addLocalLoadNoAliasScope(localLoadOp, llLoad);
+      }
     }
   }
 
