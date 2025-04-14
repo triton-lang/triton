@@ -25,6 +25,7 @@ def fresh_triton_cache():
         finally:
             os.environ.pop("TRITON_CACHE_DIR", None)
 
+
 @pytest.fixture
 def fresh_config(request):
     from triton import config
@@ -39,7 +40,7 @@ def fresh_config(request):
             new_cls = type(f"{name}_{test_name}", cls.__bases__, dict(cls.__dict__))
             new_cls.reset()
             setattr(config, name, new_cls)
-        yield
+        yield config
     finally:
         for name, cls in config_map.items():
             setattr(config, name, cls)
