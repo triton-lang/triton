@@ -14,7 +14,6 @@ from triton.tools.tensor_descriptor import TensorDescriptor
 from types import ModuleType
 from .. import config
 from ..runtime.driver import driver
-from ..tools.experimental_descriptor import TensorDescriptor
 from .._utils import find_paths_if, get_iterable_path
 
 TRITON_MODULE = __name__[:-len(".runtime.jit")]
@@ -408,9 +407,10 @@ def create_function_from_signature(sig, kparams, backend):
             align = 'False' if kp.do_not_specialize_on_alignment else 'True'
             ret = f"specialize_impl({name}, {is_const}, {specialize}, {align})"
             if kp.annotation_type:
-                if kp.annotation_type == "u1" or kp.annotation_type[:2] in ["fp", "bf"]:
-                    # we do not specialize non-constexpr floats and bools:
-                    specialize = False
+                if isinstance(kp.annotation_type, str):
+                    if kp.annotation_type == "u1" or kp.annotation_type[:2] in ["fp", "bf"]:
+                        # we do not specialize non-constexpr floats and bools:
+                        specialize = False
                 if specialize:
                     specialization.append(f'("{kp.annotation_type}",) + {ret}[1:]')
                 else:

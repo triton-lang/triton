@@ -184,7 +184,7 @@ def filter_traceback(e: BaseException):
 
     These are uninteresting to the user -- "just show me *my* code!"
     """
-    if config.compilation.frontend_debugging:
+    if config.compilation.front_end_debugging:
         return
 
     if e.__cause__ is not None:

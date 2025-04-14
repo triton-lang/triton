@@ -1197,7 +1197,7 @@ class CodeGenerator(ast.NodeVisitor):
                 generator.visit(fn.parse())
             except Exception as e:
                 # Wrap the error in the callee with the location of the call.
-                if config.compilation.frontend_debugging:
+                if config.compilation.front_end_debugging:
                     raise
                 raise CompilationError(self.jit_fn.src, self.cur_node, None) from e
 
@@ -1237,7 +1237,7 @@ class CodeGenerator(ast.NodeVisitor):
                     ret = language.tuple(ret)
                 return ret
             except Exception as e:
-                if config.compilation.frontend_debugging:
+                if config.compilation.front_end_debugging:
                     raise
                 # Normally when we raise a CompilationError, we raise it as
                 # `from None`, because the original fileline from the exception
@@ -1318,7 +1318,7 @@ class CodeGenerator(ast.NodeVisitor):
             except CompilationError:
                 raise
             except Exception as e:
-                if config.compilation.frontend_debugging:
+                if config.compilation.front_end_debugging:
                     raise
                 # Wrap the error in a CompilationError which contains the source
                 # of the @jit function.
