@@ -27,10 +27,6 @@ def getenv(key: str) -> Optional[str]:
     return res.strip() if res is not None else res
 
 
-def get_str_set(*env_vars: str) -> set[str]:
-    return {val for key in env_vars if (val := getenv(key))}
-
-
 class env_str:
 
     def __init__(self, key: str) -> None:
@@ -264,6 +260,7 @@ class compilation(_base):
     dump_ir: env_bool = env_bool("TRITON_KERNEL_DUMP")
     store_binary_only: env_bool = env_bool("TRITON_STORE_BINARY_ONLY")
     always_compile: env_bool = env_bool("TRITON_ALWAYS_COMPILE")
+    # TODO: Use enum to constrain / 'typecheck' the values
     use_ir_loc: env_str = env_str("USE_IR_LOC")
     enable_asan: env_bool = env_bool("TRITON_ENABLE_ASAN")
     disable_line_info: env_bool = env_bool("TRITON_DISABLE_LINE_INFO")
