@@ -299,6 +299,8 @@ class CUDABackend(BaseBackend):
         passes.common.add_canonicalizer(pm)
         pm.run(mod)
         metadata["cluster_dims"] = (cluster_info.clusterDimX, cluster_info.clusterDimY, cluster_info.clusterDimZ)
+        tensordesc_meta = mod.get_tensordesc_metadata()
+        metadata["tensordesc_meta"] = tensordesc_meta
         return mod
 
     def make_llir(self, src, metadata, options, capability):

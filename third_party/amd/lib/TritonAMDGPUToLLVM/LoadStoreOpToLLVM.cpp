@@ -366,7 +366,7 @@ struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp>,
 
     auto cacheMod = op.getCache();
     SmallVector<Value> loadedVals;
-    Type vecTy = LLVM::getFixedVectorType(valueElemTy, vec);
+    Type vecTy = LLVM::getVectorType(valueElemTy, vec);
     for (size_t vecStart = 0; vecStart < numElems; vecStart += vec) {
       const size_t maxWordWidth = std::max<size_t>(32, valueElemNBits);
       const size_t totalWidth = valueElemNBits * vec;
@@ -466,7 +466,7 @@ struct BufferLoadOpConversion
     // Create the resource descriptor and then emit the buffer_load intrinsic(s)
     Value rsrcDesc = bufferEmitter.createResourceDescriptor(llPtr, llStride);
     SmallVector<Value> loadedVals;
-    Type vecTy = LLVM::getFixedVectorType(valueElemTy, vec);
+    Type vecTy = LLVM::getVectorType(valueElemTy, vec);
     for (size_t vecStart = 0; vecStart < numElems; vecStart += vec) {
       Value pred = mask ? maskElems[vecStart] : b.int_val(1, 1);
       Value falseVal = createZeroVector(rewriter, loc, cast<VectorType>(vecTy));
@@ -594,8 +594,10 @@ struct BufferLoadToLocalOpConversion
         }
       }
 
-      bufferEmitter.emitLoadToLds(vecTy, vecBytesVal, rsrcDesc, offsetIn,
-                                  coalescedShmemAddr[i], pred, op.getCache());
+      auto bufferLoadToLds = bufferEmitter.emitLoadToLds(
+          vecTy, vecBytesVal, rsrcDesc, offsetIn, coalescedShmemAddr[i], pred,
+          op.getCache());
+      LLVM::AMD::addAsyncCopyAliasScope(bufferLoadToLds);
       if (!otherElems.empty()) {
         Value storeVal = packElementRangeIntoVector(
             rewriter, this->getTypeConverter(), loc, vecTy, otherElems, srcIdx);
@@ -716,12 +718,13 @@ struct AsyncCopyGlobalToLocalOpConversion
       }
 
       if (maskElems.empty()) {
-        rewriter.create<ROCDL::GlobalLoadLDSOp>(
+        auto globalLoadLdsOp = rewriter.create<ROCDL::GlobalLoadLDSOp>(
             loc,
             /*globalPtr=*/srcPtr, /*ldsPtr=*/coalescedShmemAddr[i],
             /*size=*/vecBytesVal, /*offset=*/b.i32_val(0),
             /*aux=*/cacheModifiers, /*alias_scopes=*/nullptr,
             /*noalias_scopes=*/nullptr, /*tbaa=*/nullptr);
+        LLVM::AMD::addAsyncCopyAliasScope(globalLoadLdsOp);
         continue;
       }
 
@@ -732,9 +735,10 @@ struct AsyncCopyGlobalToLocalOpConversion
       rewriter.setInsertionPointToEnd(currentBlock);
       rewriter.create<LLVM::CondBrOp>(loc, pred, loadBlock, afterLoad);
       rewriter.setInsertionPointToStart(loadBlock);
-      rewriter.create<ROCDL::GlobalLoadLDSOp>(
+      auto globalLoadLdsOp = rewriter.create<ROCDL::GlobalLoadLDSOp>(
           loc, srcPtr, coalescedShmemAddr[i], vecBytesVal,
           /*offset=*/b.i32_val(0), cacheModifiers, nullptr, nullptr, nullptr);
+      LLVM::AMD::addAsyncCopyAliasScope(globalLoadLdsOp);
 
       rewriter.create<LLVM::BrOp>(loc, afterLoad);
       rewriter.setInsertionPointToStart(afterLoad);
@@ -818,7 +822,7 @@ struct StoreOpConversion : public ConvertOpToLLVMPattern<triton::StoreOp>,
       Value pred =
           llMask ? b.and_(threadPred, maskElems[vecStart]) : threadPred;
 
-      auto vecTy = LLVM::getFixedVectorType(valueElemTy, vec);
+      auto vecTy = LLVM::getVectorType(valueElemTy, vec);
 
       const size_t maxWordWidth = std::max<size_t>(32, valueElemNBits);
       const size_t totalWidth = valueElemNBits * vec;
@@ -1038,7 +1042,7 @@ struct BufferAtomicRMWOpConversion
       Value pred =
           llMask ? b.and_(threadPred, maskElems[vecStart]) : threadPred;
 
-      Type vecTy = LLVM::getFixedVectorType(valueElemTy, vec);
+      Type vecTy = LLVM::getVectorType(valueElemTy, vec);
       Value falseVal = createZeroVector(rewriter, loc, cast<VectorType>(vecTy));
       // Create the store val
       Value storeVal = packElementRangeIntoVector(
@@ -1148,7 +1152,7 @@ struct BufferStoreOpConversion
       Value pred =
           llMask ? b.and_(threadPred, maskElems[vecStart]) : threadPred;
 
-      Type vecTy = LLVM::getFixedVectorType(valueElemTy, vec);
+      Type vecTy = LLVM::getVectorType(valueElemTy, vec);
       // Create the store val
       Value storeVal = packElementRangeIntoVector(
           rewriter, this->getTypeConverter(), loc, cast<VectorType>(vecTy),

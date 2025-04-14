@@ -1,4 +1,5 @@
 #include <optional>
+#include <pybind11/cast.h>
 #include <pybind11/functional.h>
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
@@ -28,6 +29,7 @@
 #include "triton/Dialect/Triton/IR/Types.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
+#include "triton/Dialect/TritonNvidiaGPU/Transforms/TMAUtilities.h"
 #include "triton/Tools/Sys/GetEnv.hpp"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/SourceMgr.h"
@@ -39,6 +41,9 @@ namespace {
 namespace py = pybind11;
 using namespace mlir;
 using namespace triton;
+namespace tt = triton;
+namespace ttg = triton::gpu;
+namespace ttng = triton::nvidia_gpu;
 
 llvm::raw_fd_ostream &mlir_dumps() {
   std::error_code EC;
@@ -228,6 +233,44 @@ OpPrintingFlags getOpPrintingFlags() {
   auto printingFlags = OpPrintingFlags();
   printingFlags.enableDebugInfo();
   return printingFlags;
+}
+
+py::list getTensorDescMetadata(ModuleOp &mod) {
+  py::list result;
+  triton::FuncOp kernelFunc;
+  mod.walk([&](triton::FuncOp func) {
+    if (LLVM::isKernel(func)) {
+      kernelFunc = func;
+      return WalkResult::interrupt();
+    }
+    return WalkResult::skip();
+  });
+  assert(kernelFunc);
+
+  for (auto [i, argTy] : llvm::enumerate(kernelFunc.getArgumentTypes())) {
+    auto descTy = dyn_cast<TensorDescType>(argTy);
+    if (!descTy)
+      continue;
+
+    auto blockType = descTy.getBlockType();
+    auto encoding = blockType.getEncoding();
+    auto mmaEncoding = dyn_cast<triton::gpu::NVMMASharedEncodingAttr>(encoding);
+    auto swizzle = ttng::getTMASwizzleMode(nullptr, descTy);
+    auto elemType = ttng::getTMAElementType(nullptr, descTy);
+    assert(swizzle.has_value());
+    assert(elemType.has_value());
+    auto blockSize = ttg::getShapePerCTA(blockType);
+    blockSize.back() = ttng::getTMAContigDim(blockType);
+    py::dict metadata;
+    metadata["swizzle"] = *swizzle;
+    metadata["elem_size"] = descTy.getBlockType().getElementTypeBitWidth() / 8;
+    metadata["elem_type"] = *elemType;
+    metadata["block_size"] =
+        std::vector<int>(blockSize.begin(), blockSize.end());
+    metadata["fp4_padded"] = mmaEncoding && mmaEncoding.getFp4Padded();
+    result.append(std::move(metadata));
+  }
+  return result;
 }
 
 } // anonymous namespace
@@ -660,6 +703,7 @@ void init_triton_ir(py::module &&m) {
                return py::none();
              return py::int_(ret.getInt());
            })
+      .def("get_tensordesc_metadata", getTensorDescMetadata)
       .def("create_location_snapshot",
            [](ModuleOp &self, const std::string &fileName) -> void {
              auto printingFlags = getOpPrintingFlags();

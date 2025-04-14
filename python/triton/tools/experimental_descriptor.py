@@ -1,4 +1,6 @@
 import torch
+from dataclasses import dataclass
+from typing import List, Any
 
 import triton
 
@@ -6,8 +8,10 @@ import triton
 class TmaDescKernelParam:
     TMA_DESC_SIZE = 128
 
-    def __init__(self, ptr, dims, block_dims, element_size):
+    def __init__(self):
         self.desc = torch.empty(self.TMA_DESC_SIZE, dtype=torch.uint8, device="cpu")
+
+    def fill_(self, ptr, dims, block_dims, element_size):
         assert len(dims) == len(block_dims)
         assert 1 <= len(dims) <= 2
         assert self.desc.data_ptr() % 64 == 0
@@ -25,8 +29,28 @@ class TmaDescKernelParam:
 
 
 def create_1d_tma_descriptor(ptr, dim, block_dim, element_size):
-    return TmaDescKernelParam(ptr, [dim], [block_dim], element_size)
+    desc = TmaDescKernelParam()
+    desc.fill_(ptr, [dim], [block_dim], element_size)
+    return desc
 
 
 def create_2d_tma_descriptor(ptr, dim1, dim0, block_dim1, block_dim0, element_size):
-    return TmaDescKernelParam(ptr, [dim1, dim0], [block_dim1, block_dim0], element_size)
+    desc = TmaDescKernelParam()
+    desc.fill_(ptr, [dim1, dim0], [block_dim1, block_dim0], element_size)
+    return desc
+
+
+@dataclass
+class TensorDescriptor:
+    base: Any
+    shape: List[int]
+    strides: List[int]
+    block_shape: List[int]
+
+    def from_tensor(tensor: Any, block_shape: List[int]):
+        return TensorDescriptor(
+            tensor,
+            tensor.shape,
+            tensor.stride(),
+            block_shape,
+        )

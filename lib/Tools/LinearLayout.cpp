@@ -837,6 +837,8 @@ LinearLayout lstsq(const LinearLayout &A, const LinearLayout &B) {
 
   // We need names for the in/out dim of the flattened layout we're going to
   // read off from `m`.  These could be anything, doesn't matter.
+  assert(!A.getInDimNames().empty() &&
+         "attempt to solve lstsq for empty layout");
   StringAttr inDim1D = *A.getInDimNames().begin();
   StringAttr outDim1D = *A.getOutDimNames().begin();
 
@@ -927,9 +929,8 @@ LinearLayout LinearLayout::invertAndCompose(const LinearLayout &outer) const {
   auto BReduced = B.sublayout(BNonIdentityInDims, outDims);
 
   // If one is empty, the other must be empty as well
-  assert((AReduced == LinearLayout::empty()) ==
-         (BReduced == LinearLayout::empty()));
-  bool isEmpty = AReduced == LinearLayout::empty();
+  assert((ANonIdentityInDims.empty()) == (BNonIdentityInDims.empty()));
+  bool isEmpty = ANonIdentityInDims.empty();
 
   auto ret = isEmpty ? LinearLayout::empty() : lstsq(AReduced, BReduced);
 
