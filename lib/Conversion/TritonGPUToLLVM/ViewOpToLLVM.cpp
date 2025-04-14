@@ -316,6 +316,30 @@ struct MemDescTransOpConversion
   }
 };
 
+struct MemDescReshapeOpConversion
+    : public ConvertOpToLLVMPattern<MemDescReshapeOp> {
+  using ConvertOpToLLVMPattern::ConvertOpToLLVMPattern;
+  LogicalResult
+  matchAndRewrite(MemDescReshapeOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    Location loc = op->getLoc();
+    auto resultTy = cast<TensorOrMemDesc>(op.getType());
+    auto llvmElemTy =
+        getTypeConverter()->convertType(resultTy.getElementType());
+    auto srcSmemObj = getSharedMemoryObjectFromStruct(loc, adaptor.getSrc(),
+                                                      llvmElemTy, rewriter);
+    SmallVector<Value> offsets = srcSmemObj.getOffsets();
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
+    // TODO: handle offsets correctly.
+    offsets.resize(resultTy.getRank(), b.i32_val(0));
+    auto dstSmemObj = SharedMemoryObject(srcSmemObj.getBase(),
+                                         srcSmemObj.getBaseElemType(), offsets);
+    auto retVal = getStructFromSharedMemoryObject(loc, dstSmemObj, rewriter);
+    rewriter.replaceOp(op, retVal);
+    return success();
+  }
+};
+
 struct TransOpConversion : public ConvertOpToLLVMPattern<TransOp> {
   using ConvertOpToLLVMPattern::ConvertOpToLLVMPattern;
   LogicalResult
@@ -470,7 +494,8 @@ void mlir::triton::populateViewOpToLLVMPatterns(
   patterns.add<CatOpConversion>(typeConverter, benefit);
   patterns.add<JoinOpConversion>(typeConverter, benefit);
   patterns.add<SplitOpConversion>(typeConverter, benefit);
-  patterns.add<MemDescTransOpConversion>(typeConverter, benefit);
+  patterns.add<MemDescTransOpConversion, MemDescReshapeOpConversion>(
+      typeConverter, benefit);
   patterns.add<TransOpConversion>(typeConverter, benefit);
   patterns.add<BroadcastOpConversion>(typeConverter, benefit);
   patterns.add<MemDescSubviewOpConversion>(typeConverter, benefit);
