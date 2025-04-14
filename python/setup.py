@@ -655,62 +655,46 @@ package_data = {
 }
 
 
-def get_extra_packages(extra_name):
-    packages = []
-    extra_file_extensions = {"language": (".py"), "tools": (".c", ".h", ".cpp")}
-    assert extra_name in extra_file_extensions, f"{extra_name} extra is not valid"
-
-    for backend in backends:
-        backend_extra_dir = getattr(backend, f"{extra_name}_dir", None)
-        if backend_extra_dir is None:
-            continue
-
-        # Walk the specified directory of each backend to enumerate
-        # any subpackages, which will be added to extra_package.
-        for dir, dirs, files in os.walk(backend_extra_dir, followlinks=True):
-            if not any(f for f in files if f.endswith(extra_file_extensions[extra_name])) or dir == backend_extra_dir:
-                # Ignore directories with no relevant files
-                # or the root directory
-                continue
-            subpackage = os.path.relpath(dir, backend_extra_dir)
-            package = os.path.join(f"triton/{extra_name}/extra", subpackage)
-            packages.append(package)
-
-    return list(packages)
-
-
 def get_packages():
-    triton_package_dir = Path(__file__).resolve().parent / "triton"
-    if not triton_package_dir.exists():
+    """
+    Discover Triton packages dynamically using namespace package discovery and symlink resolution.
+    Returns package names in dot notation format suitable for setup.py and wheel installations.
+
+    Pure paths are used for OS-agnostic path manipulation.
+    """
+
+    triton_packages_dir = Path(__file__).resolve().parent / "triton"
+    if not triton_packages_dir.exists():
         return []
 
-    # Fetch all package names by recursively discovering namespace packages, i.e., those with and without
-    # `__init__.py` files, within the python/triton directory.
-    standard_packages = [f"triton.{package}" for package in find_namespace_packages(where="triton")]
+    # Add the base package.
+    packages = {"triton"}
 
-    symlink_packages = []
+    # Discover all namespace packages, i.e. with or without __init__.py, under triton/ dir.
+    for pkg in find_namespace_packages(where="triton"):
+        packages.add(f"triton.{pkg}")
 
-    # Fetch all symlinks within the python/triton directory by recursively traversing its subdirectories and files.
-    for path in triton_package_dir.glob('**/*'):
+    # Find and add subpackages in symlinked directories.
+    for path in triton_packages_dir.glob('**/*'):
         if path.is_symlink():
             try:
-                relative_path = path.relative_to(triton_package_dir)
-
-                # Resolve the symlink path and skip non-directory symlinks.
+                relative_path = path.relative_to(triton_packages_dir)
                 resolved_path = path.resolve(strict=True)
                 if resolved_path.is_dir():
-                    # Convert path to dotted package name format.
-                    package_name = f"triton.{str(relative_path).replace('/', '.')}"
-                    symlink_packages.append(package_name)
+                    # Join path parts with dots for proper package naming.
+                    base_package = "triton." + ".".join(relative_path.parts)
+                    packages.add(base_package)
 
-                    # Find all namespace packages within symlinked directories.
-                    subpackages = find_namespace_packages(where=str(resolved_path))
-                    for subpackage in subpackages:
-                        symlink_packages.append(f"{package_name}.{subpackage}")
-            except (FileNotFoundError, RuntimeError, ValueError):
-                pass
+                    for subpkg in find_namespace_packages(where=str(resolved_path)):
+                        packages.add(f"{base_package}.{subpkg}")
+            except (FileNotFoundError, RuntimeError, ValueError) as e:
+                print(f"**** [get_packages] ERROR: Skipped symlink '{path}' because: {e} ****")
 
-    return standard_packages + symlink_packages
+    # Conditionally include the profiler package. Default ON.
+    if check_env_flag("TRITON_BUILD_PROTON", "ON") and (triton_packages_dir / "profiler").is_dir():
+        packages.add("triton.profiler")
+
+    return sorted(packages)
 
 
 def get_entry_points():
