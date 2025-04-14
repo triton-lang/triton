@@ -390,54 +390,114 @@ def TTNG_TMAStoreWaitOp : TTNG_Op<"async_tma_store_wait"> {
 }
 
 def TTNG_TCGen5MMAOp : TTNG_Op<"tc_gen5_mma", [DeclareOpInterfaceMethods<MemoryEffectsOpInterface>, DeclareOpInterfaceMethods<DotOpInterface>, DeclareOpInterfaceMethods<MMAv5OpInterface>]> {
-    let summary = "block level op mapping to tensorcore gen5 mma";
+  let summary = "block level op mapping to tensorcore gen5 mma";
 
-    let description = [{
-        $d += matrix_multiply($a, $b).
-        If no barrier is given the op is assumed to be synchronous otherwise the op will trigger a commit/arrive on the given barrier.
-        If there is a barrier the result will be safe to read after a barrier wait.
-        If $two_ctas is set the op will execute a matmul across two contiguous CTAs, it will read the data distributed across the two CTAs.
-        and syncronize both CTAs if the op is synchronous.
-    }];
+  let description = [{
+    $d += matrix_multiply($a, $b).
+    If no barrier is given the op is assumed to be synchronous otherwise the op will trigger a commit/arrive on the given barrier.
+    If there is a barrier the result will be safe to read after a barrier wait.
+    If $two_ctas is set the op will execute a matmul across two contiguous CTAs, it will read the data distributed across the two CTAs.
+    and syncronize both CTAs if the op is synchronous.
+  }];
 
-    let arguments = (ins TTG_MemDescType:$a,
-                         TTG_MemDescType:$b,
-                         TTG_MemDescType:$d,
-                         I1:$useD,
-                         I1:$pred,
-                         Optional<TTG_MemDescType>:$barrier,
-                         OptionalAttr<UnitAttr>:$two_ctas);
+  let arguments = (ins
+    TTG_MemDescType:$a,
+    TTG_MemDescType:$b,
+    TTG_MemDescType:$d,
+    I1:$useD,
+    I1:$pred,
+    Optional<TTG_MemDescType>:$barrier,
+    OptionalAttr<UnitAttr>:$two_ctas
+  );
 
-    // TODO: improve printing format.
-    let assemblyFormat = "$a`,` $b`,` $d`,` $useD`,` $pred (`,` $barrier^)? attr-dict `:` functional-type(operands, results)";
+  // TODO: improve printing format.
+  let assemblyFormat = [{
+    $a`,` $b`,` $d`,` $useD`,` $pred (`,` $barrier^)?
+    attr-dict `:` functional-type(operands, results)
+  }];
 }
 
 def TTNG_TCGen5MMAScaledOp : TTNG_Op<"tc_gen5_mma_scaled", [DeclareOpInterfaceMethods<MemoryEffectsOpInterface>, DeclareOpInterfaceMethods<DotOpInterface, ["verifyDims", "verifyOutputDims"]>, DeclareOpInterfaceMethods<MMAv5OpInterface>]> {
-    let summary = "block level op mapping to tensorcore gen5 mma";
+  let summary = "block level op mapping to tensorcore gen5 mma";
 
-    let description = [{
-        $d += matrix_multiply(scale($lhs, $lhs_scale), scale(rlhs, $rhs_scale))
-        If no barrier is given the op is assumed to be synchronous otherwise the op will trigger a commit/arrive on the given barrier.
-        If there is a barrier the result will be safe to read after a barrier wait.
-    }];
+  let description = [{
+    $d += matrix_multiply(scale($lhs, $lhs_scale), scale(rlhs, $rhs_scale))
+    If no barrier is given the op is assumed to be synchronous otherwise the op will trigger a commit/arrive on the given barrier.
+    If there is a barrier the result will be safe to read after a barrier wait.
+  }];
 
-    let arguments = (ins TTG_MemDescType:$a,
-                         TTG_MemDescType:$b,
-                         TTG_MemDescType:$d,
-                         TTG_MemDescType:$a_scale,
-                         TTG_MemDescType:$b_scale,
-                         TT_ScaleDotElemTypeAttr:$a_type,
-                         TT_ScaleDotElemTypeAttr:$b_type,
-                         I1:$useD,
-                         I1:$pred,
-                         Optional<TTG_MemDescType>:$barrier);
-    let extraClassDeclaration = [{
-      int64_t getBlockM();
-      int64_t getBlockN();
-      int64_t getBlockK();
-    }];
-    // TODO: improve printing format.
-    let assemblyFormat = "$a `,` $b `,` $d `,` $a_scale `,` $b_scale `,` $useD`,` $pred `lhs` `=` $a_type `rhs` `=` $b_type (`,` $barrier^)? attr-dict `:` functional-type(operands, results)";
+  let arguments = (ins
+    TTG_MemDescType:$a,
+    TTG_MemDescType:$b,
+    TTG_MemDescType:$d,
+    TTG_MemDescType:$a_scale,
+    TTG_MemDescType:$b_scale,
+    TT_ScaleDotElemTypeAttr:$a_type,
+    TT_ScaleDotElemTypeAttr:$b_type,
+    I1:$useD,
+    I1:$pred,
+    Optional<TTG_MemDescType>:$barrier
+  );
+  let extraClassDeclaration = [{
+    int64_t getBlockM();
+    int64_t getBlockN();
+    int64_t getBlockK();
+  }];
+
+  // TODO: improve printing format.
+  let assemblyFormat = [{
+    $a `,` $b `,` $d `,` $a_scale `,` $b_scale `,` $useD`,` $pred
+    `lhs` `=` $a_type `rhs` `=` $b_type (`,` $barrier^)?
+    attr-dict `:` functional-type(operands, results)
+  }];
+}
+
+def TTNG_TCGen5CommitOp : TTNG_Op<"tc_gen5_commit", [DeclareOpInterfaceMethods<MemoryEffectsOpInterface>]> {
+  let summary = "make an mbarrier track completion of all prior async tcgen5 ops";
+
+  let description = [{
+    The `ttng.tc_gen5_commit` is an asynchronous operation that makes the
+    mbarrier object track the completion of all prior asynchronous tcgen5
+    operations. Upon completion of all asynchronous operations, the mbarrier
+    arrive operation is performed on the mbarrier with a count of 1.
+
+    If `two_ctas` is set, then the mbarrier tracks all prior operations
+    initiated with `two_ctas` set as well. Otherwise, it tracks all prior
+    operations initiated without `two_ctas`.
+
+    Note that the completion mechanisms are guaranteed to occur sequentially in
+    the order the commit operations were issued. This means, for example:
+
+    ```mlir
+    ttng.tmem_copy
+    ttng.tc_gen5_mma
+    ttng.tc_gen5_commit %barrierA
+    ttng.tc_gen5_commit %barrierB
+    ```
+
+    `%barrierA` tracks the completion of the previous TMEM copy and MMA
+    operations, but since the commit groups are sequential, the arrive-on
+    operation on `%barrierA` is guaranteed to be performed before the arrive-on
+    operation on `%barrierB`, even though its commit group is empty.
+  }];
+
+  let arguments = (ins
+    TTG_MemDescType:$barrier,
+    Optional<I1>:$pred,
+    UnitAttr:$two_ctas
+  );
+
+  let assemblyFormat = [{
+    $barrier (`,` $pred^)? attr-dict `:` qualified(type($barrier))
+  }];
+
+  let builders = [
+    OpBuilder<(ins "Value":$barrier, CArg<"bool", "false">:$two_ctas), [{
+      build($_builder, $_state, barrier, /*pred=*/Value(), two_ctas);
+    }]>,
+  ];
+
+  let hasVerifier = 1;
 }
 
 def TTNG_TMEMLoadOp : TTNG_Op<"tmem_load"> {

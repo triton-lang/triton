@@ -385,6 +385,18 @@ int64_t TCGen5MMAScaledOp::getBlockK() {
   return blockK;
 }
 
+// -- TCGen5CommitOp --
+LogicalResult TCGen5CommitOp::verify() {
+  return verifyBarrierType(*this, getBarrier().getType());
+}
+
+void TCGen5CommitOp::getEffects(
+    SmallVectorImpl<SideEffects::EffectInstance<MemoryEffects::Effect>>
+        &effects) {
+  effects.emplace_back(MemoryEffects::Write::get(),
+                       SideEffects::DefaultResource::get());
+}
+
 // -- TMEMLoadOp --
 LogicalResult TMEMLoadOp::verify() {
   if (!isa<triton::nvidia_gpu::TensorMemorySpaceAttr>(

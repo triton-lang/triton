@@ -670,6 +670,24 @@ struct TCGen5MMAScaledOpConversion
     return success();
   }
 };
+
+struct TCGen5CommitOpConversion
+    : public ConvertOpToLLVMPattern<ttng::TCGen5CommitOp> {
+  using ConvertOpToLLVMPattern::ConvertOpToLLVMPattern;
+
+  LogicalResult
+  matchAndRewrite(ttng::TCGen5CommitOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    Value pred = LLVM::NVIDIA::createElectPredicateWarp0(op.getLoc(), rewriter);
+    TritonLLVMOpBuilder b(op.getLoc(), rewriter);
+    if (Value opPred = op.getPred())
+      pred = b.and_(pred, opPred);
+    createMMACommit(rewriter, op.getLoc(), adaptor.getBarrier(), pred,
+                    op.getTwoCtas());
+    rewriter.eraseOp(op);
+    return success();
+  }
+};
 } // namespace
 
 namespace mlir {
@@ -679,8 +697,8 @@ namespace NVIDIA {
 void populateTCGen5MMAOpToLLVMPattern(LLVMTypeConverter &typeConverter,
                                       RewritePatternSet &patterns,
                                       PatternBenefit benefit) {
-  patterns.add<TCGen5MMAOpConversion, TCGen5MMAScaledOpConversion>(
-      typeConverter, benefit);
+  patterns.add<TCGen5MMAOpConversion, TCGen5MMAScaledOpConversion,
+               TCGen5CommitOpConversion>(typeConverter, benefit);
 }
 
 } // namespace NVIDIA
