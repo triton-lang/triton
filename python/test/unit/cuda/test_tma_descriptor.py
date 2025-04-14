@@ -1,6 +1,12 @@
 import pytest
 import torch
-from triton.tools.experimental_descriptor import create_1d_tma_descriptor, create_2d_tma_descriptor
+import triton
+from triton.tools.tensor_descriptor import TensorDescriptor
+
+
+@triton.jit
+def dummy_kernel(desc):
+    pass
 
 
 @pytest.mark.parametrize("M, BLOCK_M, expect_error", [(128, 32, False), (127, 32, False), (128, 31, True)])
@@ -17,7 +23,8 @@ def test_1d_tma_descriptor_exception(M, BLOCK_M, expect_error):
     is_error = False
 
     try:
-        create_1d_tma_descriptor(x.data_ptr(), M, BLOCK_M, x.element_size())
+        desc = TensorDescriptor.from_tensor(x, [BLOCK_M])
+        dummy_kernel[(1, )](desc)
     except RuntimeError as e:
         is_error = True
         assert e.args[0] == "Triton Error [CUDA]: invalid argument"
@@ -41,7 +48,8 @@ def test_2d_tma_descriptor_exception(M, N, BLOCK_M, BLOCK_N, expect_error):
     is_error = False
 
     try:
-        create_2d_tma_descriptor(A.data_ptr(), M, N, BLOCK_M, BLOCK_N, A.element_size())
+        desc = TensorDescriptor.from_tensor(A, [BLOCK_M, BLOCK_N])
+        dummy_kernel[(1, )](desc)
     except RuntimeError as e:
         is_error = True
         assert e.args[0] == "Triton Error [CUDA]: invalid argument"

@@ -1456,13 +1456,6 @@ void init_triton_ir(py::module &&m) {
              return triton::TensorDescType::get(
                  ctx, cast<RankedTensorType>(blockTy));
            })
-      .def("create_reinterpret_tensor_descriptor",
-           [](TritonOpBuilder &self, Value desc_ptr, Type blockTy) -> Value {
-             auto ctx = self.getContext();
-             auto resultTy = triton::TensorDescType::get(
-                 ctx, cast<RankedTensorType>(blockTy));
-             return self.create<ReinterpretTensorDescOp>(resultTy, desc_ptr);
-           })
       .def("create_descriptor_load",
            [](TritonOpBuilder &self, Value desc, std::vector<Value> &indices,
               CacheModifier cacheModifier,

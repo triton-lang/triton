@@ -6,6 +6,7 @@ import hashlib
 import subprocess
 import tempfile
 import triton
+import torch
 from pathlib import Path
 from triton.runtime.build import _build
 from triton.runtime.cache import get_cache_manager
@@ -13,7 +14,7 @@ from triton.runtime import _allocation
 from triton.backends.compiler import GPUTarget
 from triton.backends.driver import GPUDriver
 
-from triton.tools.experimental_descriptor import TensorDescriptor, TmaDescKernelParam
+from triton.tools.tensor_descriptor import TensorDescriptor
 
 dirname = os.path.dirname(os.path.realpath(__file__))
 include_dir = [os.path.join(dirname, "include")]
@@ -96,8 +97,6 @@ class CudaUtils(object):
         self.cuOccupancyMaxActiveClusters = mod.cuOccupancyMaxActiveClusters
         self.set_printf_fifo_size = mod.set_printf_fifo_size
         self.fill_tma_descriptor = mod.fill_tma_descriptor
-        self.fill_1d_tma_descriptor = mod.fill_1d_tma_descriptor
-        self.fill_2d_tma_descriptor = mod.fill_2d_tma_descriptor
 
 
 # ------------------------
@@ -534,6 +533,17 @@ PyMODINIT_FUNC PyInit___triton_launcher(void) {{
 }}
 """
     return src
+
+
+class TmaDescKernelParam:
+    TMA_DESC_SIZE = 128
+
+    def __init__(self):
+        self.desc = torch.empty(self.TMA_DESC_SIZE, dtype=torch.uint8, device="cpu")
+
+    # Return a CUtensorMap* pointer in host memory
+    def tma_desc_cpu_ptr(self):
+        return self.desc.data_ptr()
 
 
 def make_tensordesc_arg(arg, metadata):

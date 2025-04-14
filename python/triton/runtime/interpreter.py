@@ -13,7 +13,7 @@ import dataclasses
 from dataclasses import dataclass
 
 from triton.language import semantic
-from triton.tools.experimental_descriptor import TensorDescriptor
+from triton.tools.tensor_descriptor import TensorDescriptor
 from .errors import InterpreterError
 from functools import partial
 from .._C.libtriton import interpreter as _interpreter
