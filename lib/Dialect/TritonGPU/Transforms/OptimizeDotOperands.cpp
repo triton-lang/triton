@@ -212,12 +212,47 @@ private:
       return failure();
     }
 
-    auto localLoad = getNextOp<triton::gpu::LocalLoadOp>(reshapeOp5D.getSrc());
-    if (!localLoad || !isTmemCopyCompatible(localLoad.getSrc().getType())) {
-      return failure();
+    auto descriptorLoad =
+        getNextOp<triton::DescriptorLoadOp>(reshapeOp5D.getSrc());
+    if (descriptorLoad) {
+      auto resultType = descriptorLoad.getResult().getType();
+      auto resultShape = resultType.getShape();
+      auto resultElemType = resultType.getElementType();
+      auto ctx = getContext();
+
+      auto rank = resultShape.size();
+      SmallVector<unsigned> order(rank);
+      for (int i = 0; i < rank; ++i) {
+        order[i] = rank - 1 - i;
+      }
+      auto ctaLayout = triton::gpu::getCTALayout(resultType.getEncoding());
+      if (!ctaLayout)
+        return failure();
+
+      auto sharedEnc = triton::gpu::SwizzledSharedEncodingAttr::get(
+          ctx, /*vec=*/1, /*perPhase=*/1, /*maxPhase=*/1, order, ctaLayout);
+
+      auto sharedMemorySpace = SharedMemorySpaceAttr::get(ctx);
+      auto allocTy = MemDescType::get(resultShape, resultElemType, sharedEnc,
+                                      sharedMemorySpace);
+
+      rewriter.setInsertionPointAfter(descriptorLoad);
+      auto localAlloc = rewriter.create<LocalAllocOp>(descriptorLoad.getLoc(),
+                                                      allocTy, descriptorLoad);
+
+      opOperand.assign(localAlloc);
+      return success();
     }
-    opOperand.assign(localLoad.getSrc());
-    return success();
+
+    auto localLoad = getNextOp<triton::gpu::LocalLoadOp>(reshapeOp5D.getSrc());
+    if (localLoad) {
+      if (!isTmemCopyCompatible(localLoad.getSrc().getType())) {
+        return failure();
+      }
+      opOperand.assign(localLoad.getSrc());
+      return success();
+    }
+    return failure();
   }
 
   template <typename Op> Op getNextOp(Value op) const {
