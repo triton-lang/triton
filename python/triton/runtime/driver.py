@@ -34,7 +34,6 @@ class LazyProxy(Generic[T]):
             setattr(self._initialize_obj(), name, value)
 
     def __delattr__(self, name: str) -> None:
-        self._initialize_obj()
         delattr(self._initialize_obj(), name)
 
     def __repr__(self) -> str:

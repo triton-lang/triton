@@ -38,6 +38,11 @@ class env_str:
         self.value: Optional[str | Unset] = _UNSET
 
     def __get__(self, obj: Optional[object], objtype: Optional[Type[object]] = None) -> Optional[str]:
+        return self._get()
+
+    def _get(self) -> Optional[str]:
+        # Break this helper out so env_strd doesn't infinitely recurse between
+        # __get__ and with_default.
         if isinstance(self.value, Unset):
             return getenv(self.key)
         else:
@@ -49,6 +54,15 @@ class env_str:
             os.unsetenv(self.key)
         else:
             os.putenv(self.key, value)
+
+    def with_default(self, default: str | Callable[[], str]) -> str:
+        res = self._get()
+        if res is not None:
+            return res
+        return default if isinstance(default, str) else default()
+
+    def reset(self) -> None:
+        self.value = _UNSET
 
 
 class env_str_set:
@@ -75,8 +89,7 @@ class env_strd(env_str):
         self.default: Callable[[], str] = (lambda: default) if isinstance(default, str) else default
 
     def __get__(self, obj: Optional[object], objtype: Optional[Type[object]] = None) -> str:
-        res = super().__get__(obj, objtype)
-        return self.default() if res is None else res
+        return self.with_default(self.default)
 
 
 class env_bool:
@@ -84,12 +97,19 @@ class env_bool:
     def __init__(self, key: str, default: bool = False) -> None:
         # Composition because function signatures change below
         self._internal = env_strd(key, "1" if default else "0")
+        self.default = default
 
     def __get__(self, obj: Optional[object], objtype: Optional[Type[object]] = None) -> bool:
-        return self._internal.__get__(obj, objtype).lower() in ("1", "true", "yes", "on", "y")
+        return self.with_default(self.default)
 
     def __set__(self, obj: object, value: bool) -> None:
         self._internal.__set__(obj, "1" if value else "0")
+
+    def with_default(self, default: bool) -> bool:
+        return self._internal.with_default("1" if default else "0").lower() in ("1", "true", "yes", "on", "y")
+
+    def reset(self) -> None:
+        self._internal.reset()
 
 
 class env_int:
@@ -97,16 +117,23 @@ class env_int:
     def __init__(self, key: str, default: int = 0) -> None:
         # Composition because function signatures change below
         self._internal = env_strd(key, str(default))
+        self.default = default
 
     def __get__(self, obj: Optional[object], objtype: Optional[Type[object]] = None) -> int:
-        val = self._internal.__get__(obj, objtype)
+        return self.with_default(self.default)
+
+    def __set__(self, obj: object, value: int) -> None:
+        self._internal.__set__(obj, str(value))
+
+    def with_default(self, default: int) -> int:
+        val = self._internal.with_default(str(default))
         try:
             return int(val)
         except ValueError as exc:
             raise RuntimeError(f"Unable to use {self._internal.key}={val}: expected int") from exc
 
-    def __set__(self, obj: object, value: int) -> None:
-        self._internal.__set__(obj, str(value))
+    def reset(self) -> None:
+        self._internal.reset()
 
 
 T = TypeVar("T")
@@ -202,19 +229,28 @@ def get_triton_dir(dirname: str) -> str:
     )
 
 
-class build:
+class _base:
+
+    @classmethod
+    def reset(cls) -> None:
+        for v in cls.__dict__.values():
+            if hasattr(v, "reset"):
+                v.reset()
+
+
+class build(_base):
     """Configuration controlling how the native compiler is invoked"""
     cc: env_str = env_str("CC")
     backend_dirs: env_str_set = env_str_set("TRITON_CUDACRT_PATH", "TRITON_CUDART_PATH")
 
 
-class redis:
+class redis(_base):
     key_format: env_strd = env_strd("TRITON_REDIS_KEY_FORMAT", "triton:{key}:{filename}")
     host: env_strd = env_strd("TRITON_REDIS_HOST", "localhost")
     port: env_int = env_int("TRITON_REDIS_PORT", 6379)
 
 
-class cache:
+class cache(_base):
     dump_dir: env_strd = env_strd("TRITON_DUMP_DIR", lambda: get_triton_dir("dump"))
     override_dir: env_strd = env_strd("TRITON_OVERRIDE_DIR", lambda: get_triton_dir("override"))
     dir: env_strd = env_strd("TRITON_CACHE_DIR", lambda: get_triton_dir("cache"))
@@ -223,19 +259,19 @@ class cache:
     remote_manager_class: env_class[RemoteCacheBackend] = env_class("TRITON_REMOTE_CACHE_BACKEND", "RemoteCacheBackend")
 
 
-class compilation:
+class compilation(_base):
     override: env_bool = env_bool("TRITON_KERNEL_OVERRIDE")
     dump_ir: env_bool = env_bool("TRITON_KERNEL_DUMP")
     store_binary_only: env_bool = env_bool("TRITON_STORE_BINARY_ONLY")
     always_compile: env_bool = env_bool("TRITON_ALWAYS_COMPILE")
-    use_ir_loc: env_bool = env_bool("USE_IR_LOC")
+    use_ir_loc: env_str = env_str("USE_IR_LOC")
     enable_asan: env_bool = env_bool("TRITON_ENABLE_ASAN")
     disable_line_info: env_bool = env_bool("TRITON_DISABLE_LINE_INFO")
-    frontend_debugging: env_bool = env_bool("TRITON_FRONT_END_DEBUGGING")
+    front_end_debugging: env_bool = env_bool("TRITON_FRONT_END_DEBUGGING")
     allow_non_constexpr_globals: env_bool = env_bool("TRITON_ALLOW_NON_CONSTEXPR_GLOBALS")
 
 
-class autotuning:
+class autotuning(_base):
     cache: env_bool = env_bool("TRITON_CACHE_AUTOTUNING")
     print: env_bool = env_bool("TRITON_PRINT_AUTOTUNING")
 
@@ -274,7 +310,7 @@ class JITHook(Protocol):
         ...
 
 
-class runtime:
+class runtime(_base):
     interpret: env_bool = env_bool("TRITON_INTERPRET")
     debug: env_bool = env_bool("TRITON_DEBUG")
     override_arch: env_str = env_str("TRITON_OVERRIDE_ARCH")
@@ -289,12 +325,12 @@ class runtime:
     jit_post_compile_hook: Optional[JITHook] = None
 
 
-class language:
+class language(_base):
     fp32_default: env_str = env_str("TRITON_F32_DEFAULT")
     default_fp_fusion: env_bool = env_bool("TRITON_DEFAULT_FP_FUSION", True)
 
 
-class nvidia:
+class nvidia(_base):
     cuobjdump: env_nvidia_tool = env_nvidia_tool("cuobjdump")
     nvdisasm: env_nvidia_tool = env_nvidia_tool("nvdisasm")
     ptxas: env_nvidia_tool = env_nvidia_tool("ptxas")
@@ -307,7 +343,7 @@ class nvidia:
     libcuda_path: env_str = env_str("TRITON_LIBCUDA_PATH")
 
 
-class amd:
+class amd(_base):
     use_buffer_ops: env_bool = env_bool("AMDGCN_USE_BUFFER_OPS", True)
     dump_amdgcn: env_bool = env_bool("AMDGCN_ENABLE_DUMP")
     libhip_path: env_str = env_str("TRITON_LIBHIP_PATH")
@@ -322,5 +358,5 @@ class amd:
     use_async_copy: env_bool = env_bool("TRITON_HIP_GLOBAL_PREFETCH")
 
 
-class proton:
+class proton(_base):
     cupti_path: env_str = env_str("TRITON_CUPTI_LIB_PATH")

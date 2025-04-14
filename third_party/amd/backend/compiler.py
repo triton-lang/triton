@@ -19,17 +19,11 @@ def get_min_dot_size(target: GPUTarget):
 
 
 def is_pingpong_schedule_enabled(arch):
-    if var := config.amd.use_block_pingpong:
-        return var == "1"
-    else:
-        return arch == "gfx942"
+    return config.amd.use_block_pingpong.with_default(arch == "gfx942")
 
 
 def is_in_thread_transpose_enabled(arch):
-    if var := config.amd.use_in_thread_transpose:
-        return var == "1"
-    else:
-        return arch == "gfx942"
+    return config.amd.use_in_thread_transpose.with_default(arch == "gfx942")
 
 
 @dataclass(frozen=True)
