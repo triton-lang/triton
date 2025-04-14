@@ -464,16 +464,6 @@ void TMEMAllocOp::getEffects(
                          getOperation()->getOpResult(0), TensorMemory::get());
 }
 
-static bool isDescendingOrder(triton::gpu::MemDescType type) {
-  auto order = triton::gpu::getOrder(type);
-  auto rank = type.getRank();
-  for (int i = 0; i < rank; ++i) {
-    if (order[i] != rank - 1 - i)
-      return false;
-  }
-  return true;
-}
-
 // -- TMEMCopyOp --
 LogicalResult TMEMCopyOp::verify() {
   if (!isa<triton::gpu::SharedMemorySpaceAttr>(
@@ -499,7 +489,7 @@ LogicalResult TMEMCopyOp::verify() {
       sharedEnc.getVec() != 1)
     return emitOpError("The source should not have swizzling applied for now");
 
-  if (!isDescendingOrder(srcTy)) {
+  if (!triton::gpu::isInnermostContiguous(srcTy, 512)) {
     return emitOpError("The source must be in a row-major order.");
   }
 
