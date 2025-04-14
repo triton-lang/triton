@@ -4,10 +4,25 @@
 #include "mlir/Conversion/LLVMCommon/Pattern.h"
 #include "mlir/Conversion/LLVMCommon/TypeConverter.h"
 #include "mlir/IR/PatternMatch.h"
+#include "third_party/nvidia/include/TritonNVIDIAGPUToLLVM/PTXAsmFormat.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 
 using namespace mlir;
 using namespace mlir::triton;
+
+static std::string getConstraintForBitwidth(unsigned bitwidth) {
+  switch (bitwidth) {
+  case 8:
+  case 16:
+    return "h";
+  case 32:
+    return "r";
+  case 64:
+    return "l";
+  default:
+    llvm_unreachable("unsupported bitwidth");
+  }
+}
 
 namespace {
 
@@ -37,6 +52,7 @@ struct CircularStoreOpConversion
                   ConversionPatternRewriter &rewriter) const override {
     auto loc = op.getLoc();
     auto mod = op.getOperation()->getParentOfType<ModuleOp>();
+    auto ctx = rewriter.getContext();
     auto b = TritonLLVMOpBuilder(loc, rewriter);
     const int bytesPerEntry = proton::gpu::getBytesPerClockEntry();
     const int wordsPerEntry = bytesPerEntry / 4; // 1 word = 4 bytes
@@ -77,7 +93,7 @@ struct CircularStoreOpConversion
     Value tag = op.getIsStart() ? b.i32_val(op.getScopeId())
                                 : b.i32_val(1 << 31 | op.getScopeId());
     Value clock = op.getCounter();
-    Value valsVec = packLLVector(loc, {tag, clock}, rewriter);
+    Value val = packLLVector(loc, {tag, clock}, rewriter);
 
     // Compute the predicate for the writer.
     const int warpSize = triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod);
@@ -100,10 +116,34 @@ struct CircularStoreOpConversion
     }
     uint32_t AddrSpace =
         cast<LLVM::LLVMPointerType>(bufferPtrTy).getAddressSpace();
+    if (AddrSpace == 1) {
+      auto vecTy = cast<VectorType>(val.getType());
+      Type elemTy = vecTy.getElementType();
+      unsigned vec = vecTy.getNumElements();
+      unsigned elemBitwidth = elemTy.getIntOrFloatBitWidth();
+      PTXBuilder builder;
+      auto &st = builder.create<>("st")
+                     ->global()
+                     .v(vec, /*predicate=*/vec > 1)
+                     .b(elemBitwidth);
+      auto *ptrOpr = builder.newAddrOperand(vecPtr, "r");
 
-    if (AddrSpace == 3) {
+      PTXBuilder::Operand *valOpr;
+      std::string constraint = getConstraintForBitwidth(elemBitwidth);
+      if (vec > 1) {
+        SmallVector<std::pair<Value, std::string>> vecVals;
+        for (int i = 0; i < vec; i++) {
+          vecVals.push_back({b.extract_element(val, b.i32_val(i)), constraint});
+        }
+        valOpr = builder.newListOperand(vecVals);
+      } else {
+        valOpr = builder.newOperand(val, constraint);
+      }
+      st(ptrOpr, valOpr).predicate(isWriter, "b");
+      builder.launch(rewriter, loc, void_ty(ctx));
+    } else if (AddrSpace == 3) {
       targetInfo.getTritonTargetInfo().storeDShared(rewriter, loc, vecPtr,
-                                                    std::nullopt, valsVec,
+                                                    std::nullopt, val,
                                                     /*pred=*/isWriter);
     }
     rewriter.eraseOp(op);

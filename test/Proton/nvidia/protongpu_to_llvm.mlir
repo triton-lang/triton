@@ -93,6 +93,55 @@ module attributes {"ttg.num-warps" = 8 : i32} {
 module attributes {"ttg.num-warps" = 8 : i32} {
   // CHECK-LABEL: convert_circular_smem_store
   llvm.func @convert_circular_smem_store() {
+    // CHECK-DAG: nvvm.read.ptx.sreg.tid.x
+    // CHECK-DAG: %[[WARPID:.*]] = llvm.udiv
+    // CHECK-DAG: %[[P1:.*]] = llvm.icmp "eq" %[[WARPID]], %{{.*}}
+    // CHECK-DAG: %[[ADDR1:.*]] = llvm.select %[[P1]]
+    // CHECK-DAG: %[[P2:.*]] = llvm.icmp "eq" %[[WARPID]], %{{.*}}
+    // CHECK-DAG: %[[ADDR2:.*]] = llvm.select %[[P2]], %{{.*}}, %[[ADDR1]]
+    // CHECK-DAG: scf.for
+    // CHECK-DAG: scf.for
+    // CHECK-DAG: %[[CYCLE1:.*]] = llvm.inline_asm has_side_effects{{.*}}%clock
+    // CHECK-DAG: %[[INDEX:.*]] = llvm.urem
+    // CHECK-DAG: %[[SMEM_OFFSET:.*]] = llvm.add %[[ADDR2]], %[[INDEX]]
+    // CHECK-DAG: %[[SMEM_PTR:.*]] = llvm.getelementptr %{{.*}}[%[[SMEM_OFFSET]]] : (!llvm.ptr<3>, i32) -> !llvm.ptr<3>, i32
+    // CHECK-DAG: %[[SMEM_P:.*]] = llvm.and
+    // CHECK-DAG: llvm.inline_asm has_side_effects{{.*}}st.shared.v2.b32{{.*}}%[[SMEM_PTR]], %{{.*}}, %{{.*}}, %[[SMEM_P]]
+    %c4 = arith.constant 4 : index
+    %c1 = arith.constant 1 : index
+    %c0 = arith.constant 0 : index
+    %0 = ttg.local_alloc : () -> !ttg.memdesc<512xi32, #shared, #smem, mutable>
+    %2 = proton_gpu.init_buffer_index : <i32, 5>
+    %3 = proton_gpu.segment_base %0, {granularity = 1 : i32, selectIds = array<i32: 0, 1>} : !ttg.memdesc<512xi32, #shared, #smem, mutable> -> !proton_gpu.seg
+    scf.for %arg0 = %c0 to %c4 step %c1 {
+      scf.for %arg1 = %c0 to %c4 step %c1 {
+        %8 = proton_gpu.read_counter : i32
+        proton_gpu.circular_store start %0, %2, %8, %3 {scopeId = 1 : i32} : !ttg.memdesc<512xi32, #shared, #smem, mutable>, <i32, 5>, i32, !proton_gpu.seg
+      }
+    }
+    llvm.return
+  }
+}
+
+// -----
+
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-warps" = 8 : i32} {
+  // CHECK-LABEL: convert_circular_store_smem
+  llvm.func @convert_circular_store_smem() {
+    // CHECK-DAG: nvvm.read.ptx.sreg.tid.x
+    // CHECK-DAG: %[[WARPID:.*]] = llvm.udiv
+    // CHECK-DAG: %[[P1:.*]] = llvm.icmp "eq" %[[WARPID]], %{{.*}}
+    // CHECK-DAG: %[[ADDR1:.*]] = llvm.select %[[P1]]
+    // CHECK-DAG: %[[P2:.*]] = llvm.icmp "eq" %[[WARPID]], %{{.*}}
+    // CHECK-DAG: %[[ADDR2:.*]] = llvm.select %[[P2]], %{{.*}}, %[[ADDR1]]
+    // CHECK-DAG: %[[CYCLE1:.*]] = llvm.inline_asm has_side_effects{{.*}}%clock
+    // CHECK-DAG: %[[INDEX:.*]] = llvm.urem
+    // CHECK-DAG: %[[SMEM_OFFSET:.*]] = llvm.add %[[ADDR2]], %[[INDEX]]
+    // CHECK-DAG: %[[SMEM_PTR:.*]] = llvm.getelementptr %{{.*}}[%[[SMEM_OFFSET]]] : (!llvm.ptr<3>, i32) -> !llvm.ptr<3>, i32
+    // CHECK-DAG: %[[SMEM_P:.*]] = llvm.and
+    // CHECK-DAG: llvm.inline_asm has_side_effects{{.*}}st.shared.v2.b32{{.*}}%[[SMEM_PTR]], %{{.*}}, %{{.*}}, %[[SMEM_P]]
     %0 = ttg.local_alloc : () -> !ttg.memdesc<512xi32, #shared, #smem, mutable>
     %2 = proton_gpu.init_buffer_index : <i32, 5>
     %3 = proton_gpu.segment_base %0, {granularity = 1 : i32, selectIds = array<i32: 0, 1>} : !ttg.memdesc<512xi32, #shared, #smem, mutable> -> !proton_gpu.seg
@@ -103,11 +152,24 @@ module attributes {"ttg.num-warps" = 8 : i32} {
 }
 
 // -----
+
 #shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
 #smem = #ttg.shared_memory
 module attributes {"ttg.num-warps" = 8 : i32} {
-  // CHECK-LABEL: convert_circular_stack_store
-  llvm.func @convert_circular_stack_store() {
+  // CHECK-LABEL: convert_circular_store_stack
+  llvm.func @convert_circular_store_stack() {
+    // CHECK-DAG: nvvm.read.ptx.sreg.tid.x
+    // CHECK-DAG: %[[WARPID:.*]] = llvm.udiv
+    // CHECK-DAG: %[[P1:.*]] = llvm.icmp "eq" %[[WARPID]], %{{.*}}
+    // CHECK-DAG: %[[ADDR1:.*]] = llvm.select %[[P1]]
+    // CHECK-DAG: %[[P2:.*]] = llvm.icmp "eq" %[[WARPID]], %{{.*}}
+    // CHECK-DAG: %[[ADDR2:.*]] = llvm.select %[[P2]], %{{.*}}, %[[ADDR1]]
+    // CHECK-DAG: %[[CYCLE1:.*]] = llvm.inline_asm has_side_effects{{.*}}%clock
+    // CHECK-DAG: %[[INDEX:.*]] = llvm.urem
+    // CHECK-DAG: %[[GMEM_OFFSET:.*]] = llvm.add %[[ADDR2]], %[[INDEX]]
+    // CHECK-DAG: %[[GMEM_PTR:.*]] = llvm.getelementptr %{{.*}}[%[[GMEM_OFFSET]]] : (!llvm.ptr<1>, i32) -> !llvm.ptr<1>, i32
+    // CHECK-DAG: %[[GMEM_P:.*]] = llvm.and
+    // CHECK-DAG: llvm.inline_asm has_side_effects{{.*}}st.global.v2.b32{{.*}}%[[GMEM_PTR]], %{{.*}}, %{{.*}}, %[[GMEM_P]]
    %0 = proton_gpu.stack_alloc : !ttg.memdesc<512xi32, #shared, #proton_gpu.stack_memory, mutable>
    %2 = proton_gpu.init_buffer_index : <i32, 5>
    %3 = proton_gpu.segment_base %0, {granularity = 1 : i32, selectIds = array<i32: 0, 1>} : !ttg.memdesc<512xi32, #shared, #proton_gpu.stack_memory, mutable> -> !proton_gpu.seg
