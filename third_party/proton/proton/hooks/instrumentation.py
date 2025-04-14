@@ -1,6 +1,5 @@
 import functools
-from dataclasses import dataclass
-from typing import Dict, List, Optional, Tuple, Any
+from typing import Dict, List, Optional, Tuple, Union, Any
 
 import triton
 from triton._C.libtriton import ir
@@ -13,6 +12,7 @@ from triton.backends import backends
 
 from .hook import Hook
 from ..flags import set_instrumentation_on, set_instrumentation_off
+from .. import mode
 
 
 class CudaAllocator:
@@ -60,71 +60,55 @@ class Instrumentation:
         triton_proton.load_dialects(ctx)
 
 
-class BaseMode:
-    def __init__(self, name: str, metric: str):
-        self.name = name
-        self.metric = metric
+def _interpret_mode(mode_str: Union[str, mode.BaseMode]) -> mode.BaseMode:
+    if isinstance(mode_str, str):
+        parts = mode_str.split(":")
+        mode_name = parts[0]
+        opts = dict(opt.split("=") for opt in parts[1:])
 
+        # Get option values or empty strings
+        options = {
+            "metric_type": opts.get("metric_type", ""), "buffer_type": opts.get("buffer_type", ""), "granularity":
+            opts.get("granularity", ""), "sampling_strategy": opts.get("sampling_strategy", ""), "sampling_options":
+            opts.get("sampling_options", "")
+        }
 
-@dataclass(frozen=True)
-class DefaultMode(BaseMode):
-    name: str
-    metric: str = "cycle"
-    buffer: str = "shared"
-    granularity: int = "block"
-    sampling_mode: str = "none"
-    sampling_interval: int = 0
+        # Helper function to validate and map options to their enum values
+        def get_option_value(opt_name, mapping):
+            value = options[opt_name]
+            if value and value not in mapping:
+                raise ValueError(f"Unknown {opt_name}: {value}")
+            return mapping[value] if value else value
 
-    def __str__(self):
-        return f"{self.name}:metric={self.metric}:buffer={self.buffer}:granularity={self.granularity}:sampling_mode={self.sampling_mode}:sampling_interval={self.sampling_interval}"
+        # Look up enum values for each option
+        options["metric_type"] = get_option_value("metric_type", mode.metric_types)
+        options["buffer_type"] = get_option_value("buffer_type", mode.buffer_types)
+        options["granularity"] = get_option_value("granularity", mode.granularities)
+        options["sampling_strategy"] = get_option_value("sampling_strategy", mode.sampling_strategies)
 
-@dataclass(frozen=True)
-class MMAMode(BaseMode):
-    name: str
-    metric: str = "cycle"
-    buffer: str = "shared"
-    granularity: int = "warp"
-    sampling_mode: str = "none"
-    sampling_interval: int = 0
+        # Create the appropriate mode instance
+        if mode_name in ("default", ""):
+            return mode.Default(**options)
+        elif mode_name == "mma":
+            return mode.MMA(**options)
+        else:
+            raise ValueError(f"Unknown mode: {mode_str}")
+    else:
+        return mode_str
 
-    def __str__(self):
-        return f"{self.name}:granularity={self.granularity}:sampling_mode={self.sampling_mode}:sampling_interval={self.sampling_interval}"
-
-
-def interpret_mode(mode: str) -> BaseMode:
-    parts = mode.split(":")
-    mode_name = parts[0]
-    options = parts[1:] if len(parts) > 1 else []
-    if mode_name == "mma" or mode_name == "default":
-        # mma:granularity=<granularity>:sampling_mode=<sampling_mode>:sampling_interval=<sampling_interval>
-        granularity = "warp"
-        sampling_mode = "none"
-        sampling_interval = 0
-        for option in options:
-            key, value = option.split("=")
-            if key == "granularity":
-                granularity = value
-            elif key == "sampling_mode":
-                sampling_mode = value
-            elif key == "sampling_interval":
-                sampling_interval = int(value)
-        if mode_name == "default":
-            return DefaultMode(granularity=granularity, sampling_mode=sampling_mode, sampling_interval=sampling_interval)
-        return MMAMode(granularity=granularity, sampling_mode=sampling_mode, sampling_interval=sampling_interval)
-    raise ValueError(f"Unknown mode: {mode}")
 
 class InstrumentationHook(Hook):
     # It's important to note that only one instance of the instrumentation hook can be active at a time.
-    active_count = 0
-    enable_cpu_buffer = False
-    cpu_buffer = None
+    active_count: int = 0
+    enable_cpu_buffer: bool = False
+    cpu_buffer: Optional[Any] = None
     profile_buffer_size: int = 16 * 1024 * 1024
     profile_buffer_alignment: int = 128
 
     def __init__(self, mode: str):
         # Mapping of function objects to their scope ID pairs
         self.function_scope_ids: Dict[Any, List[Tuple[int, int]]] = {}
-        self.mode = interpret_mode(mode)
+        self.mode = _interpret_mode(mode)
 
         self.allocator = CudaAllocator(self)
         self.buffer = None
@@ -203,7 +187,8 @@ class InstrumentationHook(Hook):
         set_profile_allocator(NullAllocator())
 
         # Reset host memory for external processing
-        InstrumentationHook.cpu_buffer = None
+        if InstrumentationHook.enable_cpu_buffer:
+            InstrumentationHook.cpu_buffer = None
 
     def init_handle(self, function: Any, module: Any, metadata_group: Dict[str, str]) -> None:
         if function and function not in self.function_scope_ids:
@@ -225,7 +210,8 @@ class InstrumentationHook(Hook):
     def enter(self, lazy_dict: LazyDict) -> None:
         libproton.enter_instrumented_op(lazy_dict.data.get("function", None), self.buffer.data_ptr(),
                                         self.profile_buffer_size)
-        InstrumentationHook.cpu_buffer = None
+        if InstrumentationHook.enable_cpu_buffer:
+            InstrumentationHook.cpu_buffer = None
 
     def exit(self, lazy_dict: LazyDict) -> None:
         libproton.exit_instrumented_op(lazy_dict.data.get("function", None), self.buffer.data_ptr(),
@@ -234,6 +220,6 @@ class InstrumentationHook(Hook):
         if InstrumentationHook.enable_cpu_buffer:
             # Copy the profiling buffer to the CPU for debugging and processing by external tools
             import torch
-            InstrumentationHook.cpu_buffer = torch.empty_like(self.buffer, device='cpu')
-            InstrumentationHook.cpu_buffer.copy_(self.buffer)
 
+            InstrumentationHook.cpu_buffer = torch.empty_like(self.buffer, device="cpu")
+            InstrumentationHook.cpu_buffer.copy_(self.buffer)

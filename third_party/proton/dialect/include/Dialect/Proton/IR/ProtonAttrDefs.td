@@ -3,12 +3,31 @@
 
 include "mlir/IR/EnumAttr.td"
 
-def MetricAttr : I32EnumAttr<
-  "Metric", "",
+def MetricTypeAttr : I32EnumAttr<
+  "MetricType", "",
   [
     I32EnumAttrCase<"CYCLE", 0, "cycle">,
   ]> {
   let cppNamespace = "::mlir::triton::proton";
+  let description = [{
+    Attribute to indicate the metric to be profiled.
+    The following metrics are supported:
+    - CYCLE: Cycle count metric.
+  }];
 }
+
+def SamplingStrategyAttr : I32EnumAttr<
+  "SamplingStrategy", "",
+  [
+    I32EnumAttrCase<"NONE", 0, "none">,
+  ]> {
+  let cppNamespace = "::mlir::triton::proton";
+  let description = [{
+    Attribute to indicate the sampling strategy for profiling.
+    The following sampling strategies are supported:
+    - NONE: No sampling.
+  }];
+}
+
 
 #endif // PROTON_ATTR_DEFS

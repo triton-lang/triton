@@ -9,20 +9,20 @@ def ConvertProtonToProtonGPU: Pass<"convert-proton-to-protongpu", "mlir::ModuleO
   let description = "Convert the Proton Op into ProtonGPU Op. This includes scaffolding operations"
                     "such as allocation for internal profiling buffers, resources binding, and final cleanup.";
 
-  let constructor = "mlir::triton::proton::createConvertProtonToProtonGPUPass(\"cycle\", \"warp\", \"\", 0, 32768, 128, \"circular\", \"shared_mem\", 0)";
+  let constructor = "createConvertProtonToProtonGPUPass()";
 
-  let dependentDialects = ["mlir::triton::proton::ProtonDialect",
-                           "mlir::triton::proton::gpu::ProtonGPUDialect",
+  let dependentDialects = ["ProtonDialect",
+                           "gpu::ProtonGPUDialect",
                            "mlir::triton::gpu::TritonGPUDialect",
                            "mlir::triton::TritonDialect"];
 
     let options = [
-       Option<"metric", "metric",
-              "std::string", /*default*/"\"cycle\"",
-              "performance counter metric our lowering targets to">,
+       Option<"metricType", "metric-type",
+              "MetricType", /*default*/"MetricType::CYCLE",
+              "The performance counter metric type we are profiling">,
        Option<"granularity", "granularity",
-              "std::string", /*default*/"\"warp\"",
-              "profiling granularity: warp or cta">,
+              "gpu::Granularity", /*default*/"gpu::Granularity::WARP",
+              "profiling granularity: warp, warp_group, or cta">,
        Option<"selectIds", "select-ids",
               "std::string", /*default*/"\"\"",
               "comma-separated list of selected ids">,
@@ -35,10 +35,10 @@ def ConvertProtonToProtonGPU: Pass<"convert-proton-to-protongpu", "mlir::ModuleO
        Option<"alignment", "alignment",
               "int32_t", /*default*/"128",
               "profiler global scratch memory alignment">,
-       Option<"strategy", "strategy", "std::string", /*default*/"\"circular\"",
-              "profiler record strategy (circular or flush)">,
-       Option<"bufferType", "buffer-type", "std::string", /*default*/"\"shared_mem\"",
-              "internal buffer type (shared_mem or stack_mem) that backs the profiling data">,
+       Option<"bufferStrategy", "buffer-strategy", "gpu::BufferStrategy", /*default*/"gpu::BufferStrategy::CIRCULAR",
+              "profiler buffer recording strategy (circular or flush)">,
+       Option<"bufferType", "buffer-type", "gpu::BufferType", /*default*/"gpu::BufferType::SHARED",
+              "internal buffer type (SHARED, GLOBAL, LOCAL) that backs the profiling data">,
        Option<"bufferSize", "buffer-size", "int32_t", /*default*/"0",
               "internal buffer byte size that backs the profiling data">,
   ];

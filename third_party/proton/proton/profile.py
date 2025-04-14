@@ -6,7 +6,8 @@ import pathlib
 from triton._C.libproton import proton as libproton
 from .flags import set_profiling_off, set_profiling_on, is_command_line
 from .hooks import HookManager, LaunchHook, InstrumentationHook
-from typing import Optional
+from .mode import BaseMode
+from typing import Optional, Union
 
 DEFAULT_PROFILE_NAME = "proton"
 
@@ -33,7 +34,6 @@ def _get_backend_default_path(backend: str) -> str:
     return lib_path
 
 
-
 def _check_env(backend: str) -> None:
     if backend == "roctracer":
         hip_device_envs = ["HIP_VISIBLE_DEVICES", "CUDA_VISIBLE_DEVICES"]
@@ -50,7 +50,7 @@ def start(
     context: Optional[str] = "shadow",
     data: Optional[str] = "tree",
     backend: Optional[str] = None,
-    mode: Optional[str] = None,
+    mode: Optional[Union[str, BaseMode]] = None,
     hook: Optional[str] = None,
 ):
     """
@@ -76,13 +76,14 @@ def start(
         backend (str, optional): The backend to use for profiling.
                                  Available options are [None, "cupti", "roctracer", "instrumentation"].
                                  Defaults to None, which automatically selects the backend matching the current active runtime.
-        mode (str, optional): The "mode" to use for profiling, which is specific to the backend.
-                              Defaults to None.
-                              For "cupti", available options are [None, "pcsampling"].
-                              For "roctracer", available options are [None].
-                              For "instrumentation", available options are [None, "mma"].
-                              Each mode has a set of control knobs following with the mode name.
-                              For example, "pcsampling" has "interval" control knob, expressed as "pcsampling:interval=1000".
+        mode (Union[str, BaseMode], optional): The "mode" to use for profiling, which is specific to the backend.
+                                               Can be a string or an instance of BaseMode (or any subclass thereof).
+                                               Defaults to None.
+                                               For "cupti", available options are [None, "pcsampling"].
+                                               For "roctracer", available options are [None].
+                                               For "instrumentation", available options are [None, "mma"].
+                                               Each mode has a set of control knobs following with the mode name.
+                                               For example, "pcsampling" has an "interval" control knob, expressed as "pcsampling:interval=1000".
         hook (str, optional): The hook to use for profiling.
                               Available options are [None, "triton"].
                               Defaults to None.
@@ -101,7 +102,8 @@ def start(
 
     _check_env(backend)
 
-    session = libproton.start(name, context, data, backend, mode, backend_path)
+    # Convert mode to its string representation for libproton's runtime
+    session = libproton.start(name, context, data, backend, str(mode), backend_path)
 
     if hook == "triton":
         HookManager.register(LaunchHook(), session)

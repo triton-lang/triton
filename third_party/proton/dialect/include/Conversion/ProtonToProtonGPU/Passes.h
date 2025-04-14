@@ -12,10 +12,12 @@ namespace mlir::triton::proton {
 #include "proton/dialect/include/Conversion/ProtonToProtonGPU/Passes.h.inc"
 
 std::unique_ptr<OperationPass<ModuleOp>> createConvertProtonToProtonGPUPass(
-    std::string metric = "cycle", std::string granularity = "warp",
+    MetricType metricType = MetricType::CYCLE,
+    gpu::Granularity granularity = gpu::Granularity::WARP,
     std::string selectIds = "", int32_t maxSharedMem = 0,
     int32_t scratchMem = 32768, int32_t alignment = 128,
-    std::string strategy = "circular", std::string bufferType = "shared_mem",
+    gpu::BufferStrategy bufferStrategy = gpu::BufferStrategy::CIRCULAR,
+    gpu::BufferType bufferType = gpu::BufferType::SHARED,
     int32_t bufferSize = 0);
 
 /// Generate the code for registering passes.
