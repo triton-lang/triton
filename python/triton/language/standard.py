@@ -451,7 +451,7 @@ def flip(x, dim=None):
     idtype = core.get_int_dtype(bitwidth=x.dtype.primitive_bitwidth, signed=True)
     y = core.reshape(x.to(idtype, bitcast=True), [2] * steps)
     for i in core.static_range(start, steps):
-        y = y ^ xor_sum(ix, i, True)
+        y = y ^ xor_sum(y, i, True)
     x = core.reshape(y, x.shape).to(x.dtype, bitcast=True)
     return x
 
