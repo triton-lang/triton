@@ -16,7 +16,7 @@ from distutils.command.clean import clean
 from pathlib import Path
 from typing import List, Optional
 
-from setuptools import Extension, setup
+from setuptools import Extension, find_namespace_packages, setup
 from setuptools.command.build_ext import build_ext
 from setuptools.command.build_py import build_py
 from dataclasses import dataclass
@@ -680,24 +680,37 @@ def get_extra_packages(extra_name):
 
 
 def get_packages():
-    packages = [
-        "triton",
-        "triton/_C",
-        "triton/compiler",
-        "triton/language",
-        "triton/language/extra",
-        "triton/runtime",
-        "triton/backends",
-        "triton/tools",
-        "triton/tools/extra",
-    ]
-    packages += [f'triton/backends/{backend.name}' for backend in backends]
-    packages += get_extra_packages("language")
-    packages += get_extra_packages("tools")
-    if check_env_flag("TRITON_BUILD_PROTON", "ON"):  # Default ON
-        packages += ["triton/profiler"]
+    triton_package_dir = Path(__file__).resolve().parent / "triton"
+    if not triton_package_dir.exists():
+        return []
 
-    return packages
+    # Fetch all package names by recursively discovering namespace packages, i.e., those with and without
+    # `__init__.py` files, within the python/triton directory.
+    standard_packages = [f"triton.{package}" for package in find_namespace_packages(where="triton")]
+
+    symlink_packages = []
+
+    # Fetch all symlinks within the python/triton directory by recursively traversing its subdirectories and files.
+    for path in triton_package_dir.glob('**/*'):
+        if path.is_symlink():
+            try:
+                relative_path = path.relative_to(triton_package_dir)
+
+                # Resolve the symlink path and skip non-directory symlinks.
+                resolved_path = path.resolve(strict=True)
+                if resolved_path.is_dir():
+                    # Convert path to dotted package name format.
+                    package_name = f"triton.{str(relative_path).replace('/', '.')}"
+                    symlink_packages.append(package_name)
+
+                    # Find all namespace packages within symlinked directories.
+                    subpackages = find_namespace_packages(where=str(resolved_path))
+                    for subpackage in subpackages:
+                        symlink_packages.append(f"{package_name}.{subpackage}")
+            except (FileNotFoundError, RuntimeError, ValueError):
+                pass
+
+    return standard_packages + symlink_packages
 
 
 def get_entry_points():
