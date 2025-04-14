@@ -450,3 +450,24 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32} {
     tt.return
   }
 }
+
+// -----
+
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0], CTAsPerCGA = [1], CTASplitNum = [1], CTAOrder = [0]}>
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32} {
+
+// CHECK-LABEL: @tc_gen5_commit
+tt.func @tc_gen5_commit(%barrier: !ttg.memdesc<1xi64, #shared, #ttg.shared_memory>, %pred: i1) {
+  // CHECK: [[TID:%.*]] = nvvm.read.ptx.sreg.tid.x
+  // CHECK: [[C32:%.*]] = llvm.mlir.constant(32 : i32)
+  // CHECK: [[WARP0:%.*]] = llvm.icmp "ult" [[TID]], [[C32]]
+  // CHECK: [[ELECT:%.*]] = nvvm.elect.sync
+  // CHECK: [[P0:%.*]] = llvm.and [[WARP0]], [[ELECT]]
+  // CHECK: [[PRED:%.*]] = llvm.and [[P0]], %arg1
+  // CHECK: @$0 tcgen05.commit.cta_group::1.mbarrier::arrive::one.b64 [$1];", "b,l" [[PRED]], %arg0
+  ttng.tc_gen5_commit %barrier, %pred : !ttg.memdesc<1xi64, #shared, #ttg.shared_memory>
+  tt.return
+}
+
+}
