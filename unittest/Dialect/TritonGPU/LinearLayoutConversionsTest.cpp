@@ -859,6 +859,20 @@ TEST_F(LinearLayoutConversionsTest, SliceDot) {
                 {S("dim0")}));
 }
 
+TEST_F(LinearLayoutConversionsTest, MFMA32_Skinny_Tensor) {
+  auto mfmaT = mfma(/*warps=*/{4, 1}, /*mDim=*/32, /*nDim=*/32,
+                    /*isTransposed=*/true);
+  auto testLinearLayout = toLinearLayout({128, 8}, mfmaT);
+
+  EXPECT_EQ(testLinearLayout,
+            LinearLayout(
+                {{S("register"), {{0, 1}, {0, 2}}},
+                 {S("lane"), {{1, 0}, {2, 0}, {4, 0}, {8, 0}, {16, 0}, {0, 4}}},
+                 {S("warp"), {{32, 0}, {64, 0}}},
+                 {S("block"), {}}},
+                {S("dim0"), S("dim1")}));
+}
+
 TEST_F(LinearLayoutConversionsTest, MFMA32_2x4Warps) {
   auto mfmaNT = mfma(/*warps=*/{2, 4}, /*mDim=*/32, /*nDim=*/32,
                      /*isTransposed=*/false);
