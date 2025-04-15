@@ -507,7 +507,7 @@ public:
     auto getArefValue = graph.arefs[getAref];
     auto putArefValue = graph.arefs[putAref];
 
-    if (op.getBarrier())
+    if (!op.getBarriers().empty())
       return failure(); // Can't paralleize an already parallel mma
 
     if (putAref.getType().getBaseType().size() != 1)
@@ -525,7 +525,8 @@ public:
                        : rewriter.create<arith::ConstantIntOp>(loc, 0, 32);
     auto getEmptyBarrier = getBarrier(rewriter, loc, getArefValue.emptyMbars,
                                       getIdx, getArefValue.depth);
-    op.setBarrier(getEmptyBarrier);
+    op.addCompletionBarrier(getEmptyBarrier,
+                            rewriter.create<arith::ConstantIntOp>(loc, 1, 1));
 
     // Lowering the Put op will tell the get op that reads the mma accumulator
     // to that the mma loop is done, but we need to wait on the last mma

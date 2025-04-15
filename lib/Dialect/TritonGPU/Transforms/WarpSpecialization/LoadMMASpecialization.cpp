@@ -78,10 +78,26 @@ static LogicalResult findSingleChainToLoad(scf::ForOp loop, Value value,
   return failure();
 }
 
-static std::pair<Value, Value> addIndexAndPhase(ImplicitLocOpBuilder &b,
-                                                scf::ForOp &loop,
-                                                unsigned numStages,
-                                                Value epilogue = {}) {
+static std::pair<Value, Value> postIncrementModulo(ImplicitLocOpBuilder &b,
+                                                   Value index, Value phase,
+                                                   unsigned numStages) {
+  auto intCst = [&](int value) {
+    return b.create<arith::ConstantIntOp>(value, 32);
+  };
+  Value nextIndex = b.create<arith::AddIOp>(index, intCst(1));
+  Value nextPhase = b.create<arith::XOrIOp>(phase, intCst(1));
+
+  Value rollover = b.create<arith::CmpIOp>(arith::CmpIPredicate::eq, nextIndex,
+                                           intCst(numStages));
+  nextIndex = b.create<arith::SelectOp>(rollover, intCst(0), nextIndex);
+  nextPhase = b.create<arith::SelectOp>(rollover, nextPhase, phase);
+
+  return {nextIndex, nextPhase};
+}
+
+static std::pair<BlockArgument, BlockArgument>
+addIndexAndPhase(ImplicitLocOpBuilder &b, scf::ForOp &loop, unsigned numStages,
+                 Value epilogue = {}) {
   OpBuilder::InsertionGuard guard(b);
   b.setInsertionPoint(loop);
   auto intCst = [&](int value) {
@@ -91,26 +107,18 @@ static std::pair<Value, Value> addIndexAndPhase(ImplicitLocOpBuilder &b,
   // Index and phase both start at 0.
   unsigned curArgIdx = loop.getNumRegionIterArgs();
   auto newArgs = addIterArgsToLoop(b, loop, {intCst(0), intCst(0)});
-  Value index = newArgs[0];
-  Value phase = newArgs[1];
+  BlockArgument index = newArgs[0];
+  BlockArgument phase = newArgs[1];
 
+  // Post-increment the index and phase.
   auto yield = cast<scf::YieldOp>(loop.getBody()->getTerminator());
   b.setInsertionPoint(yield);
 
-  // Post-increment the index and phase.
-  Value nextIndex = b.create<arith::AddIOp>(index, intCst(1));
-  Value nextPhase = b.create<arith::XOrIOp>(phase, intCst(1));
-
-  Value rollover = b.create<arith::CmpIOp>(arith::CmpIPredicate::eq, nextIndex,
-                                           intCst(numStages));
-  nextIndex = b.create<arith::SelectOp>(rollover, intCst(0), nextIndex);
-  nextPhase = b.create<arith::SelectOp>(rollover, nextPhase, phase);
-
+  auto [nextIndex, nextPhase] = postIncrementModulo(b, index, phase, numStages);
   if (epilogue) {
     nextIndex = b.create<arith::SelectOp>(epilogue, nextIndex, index);
     nextPhase = b.create<arith::SelectOp>(epilogue, nextPhase, phase);
   }
-
   yield->insertOperands(yield.getNumOperands(), {nextIndex, nextPhase});
 
   return {index, phase};
@@ -270,7 +278,6 @@ LogicalResult triton::gpu::specializeLoadMMADependencies(scf::ForOp &loop,
   WarpSchedule schedule;
   Partition *loadPartition = schedule.addPartition(0);
   Partition *mmaPartition = schedule.addPartition(numStages);
-  Partition *waiterPartition = schedule.addPartition(numStages + numMmaStages);
 
   // Multi-buffer the loads.
   auto [loadIndex, loadPhase] = addIndexAndPhase(b, loop, numStages);
@@ -346,17 +353,10 @@ LogicalResult triton::gpu::specializeLoadMMADependencies(scf::ForOp &loop,
 
   // Now rewrite the MMA by multi-buffering the accumulator if necessary.
   // However, the TMEM multi-buffering may be with respect to the outer loop.
-  auto [mmaIndex, mmaPhase] = addIndexAndPhase(b, loop, numStages);
-  Value mmaBars = createBarrierAlloc(loop, numStages);
-
   b.setInsertionPoint(mmaOp);
-  Value curMmaBar = createSingleBufferView(b, mmaBars, mmaIndex);
-  mmaOp.setBarrier(curMmaBar);
+  mmaOp.addCompletionBarrier(curEmptyBar, intCst(true, 1));
 
   b.setInsertionPointAfter(mmaOp);
-  createInPartition<ttng::WaitBarrierOp>(b, *waiterPartition, curMmaBar,
-                                         mmaPhase);
-  createInPartition<ttng::ArriveBarrierOp>(b, *waiterPartition, curEmptyBar, 1);
   OpBuilder::InsertPoint donePt = b.saveInsertionPoint();
 
   // Now handle the accumulator, which is the tricky bit. The accumulator value
@@ -381,7 +381,7 @@ LogicalResult triton::gpu::specializeLoadMMADependencies(scf::ForOp &loop,
     if (auto store = dyn_cast<ttng::TMEMStoreOp>(user)) {
       if (loop->isAncestor(store)) {
         mmaPartition->insert(store);
-        bufIdx = b.create<arith::AddIOp>(accIndex, intCst(numMmaStages - 1));
+        bufIdx = b.create<arith::AddIOp>(accIndex, intCst(1));
         bufIdx = b.create<arith::RemUIOp>(bufIdx, intCst(numMmaStages));
       } else {
         if (!store->isBeforeInBlock(loop))
@@ -395,8 +395,7 @@ LogicalResult triton::gpu::specializeLoadMMADependencies(scf::ForOp &loop,
       } else {
         if (!loop->isBeforeInBlock(load))
           return mlir::emitWarning(load.getLoc(), "load not after loop?");
-        bufIdx =
-            loop.getResult(cast<BlockArgument>(accIndex).getArgNumber() - 1);
+        bufIdx = loop.getResult(accIndex.getArgNumber() - 1);
       }
     } else if (user == mmaOp) {
       bufIdx = accIndex;
@@ -433,15 +432,21 @@ LogicalResult triton::gpu::specializeLoadMMADependencies(scf::ForOp &loop,
     b.restoreInsertionPoint(donePt);
     std::tie(pred, domOp) = getUserPrecondition(b, loop, domOp);
 
-    // Set up production of the accumulator result.
+    // We have to hoist the predicate above the MMA op to add the barrier.
     b.setInsertionPointAfter(pred.getDefiningOp());
-    createInPartition<ttng::ArriveBarrierOp>(b, *waiterPartition,
-                                             curAccReadyBar, 1, pred);
+    llvm::SetVector<Operation *> predOps;
+    if (!getDominatingValueSetOpsToHoist(domInfo, mmaOp, pred, predOps)) {
+      return mlir::emitWarning(pred.getLoc(),
+                               "failed to hoist user predicate above MMA op");
+    }
+    hoistOpsBefore(mmaOp, predOps);
+
+    // Set up production of the accumulator result.
+    mmaOp.addCompletionBarrier(curAccReadyBar, pred);
     createInPartition<ttng::WaitBarrierOp>(b, *mmaPartition, curAccEmptyBar,
                                            accPhase, pred);
     assert(donePt.getPoint() == b.getInsertionPoint() ||
            donePt.getPoint()->isBeforeInBlock(&*b.getInsertionPoint()));
-    donePt = b.saveInsertionPoint();
 
     Partition *userPartition = schedule.addPartition(numStages + numMmaStages);
     // Acquire and get the accumulator result. Normally, we want to acquire the
@@ -467,10 +472,10 @@ LogicalResult triton::gpu::specializeLoadMMADependencies(scf::ForOp &loop,
       b.setInsertionPointAfter(
           findNearestCommonPostDominator(loadsInLoop, postDomInfo));
     }
-    Value nextIndex =
+    Value prevIndex =
         b.create<arith::AddIOp>(accIndex, intCst(numMmaStages - 1));
-    nextIndex = b.create<arith::RemUIOp>(nextIndex, intCst(numMmaStages));
-    Value nextAccEmptyBar = createSingleBufferView(b, accEmptyBars, nextIndex);
+    prevIndex = b.create<arith::RemUIOp>(prevIndex, intCst(numMmaStages));
+    Value nextAccEmptyBar = createSingleBufferView(b, accEmptyBars, prevIndex);
     createInPartition<ttng::ArriveBarrierOp>(b, *userPartition, nextAccEmptyBar,
                                              1);
 
@@ -489,8 +494,23 @@ LogicalResult triton::gpu::specializeLoadMMADependencies(scf::ForOp &loop,
 
     // Place the epilogue partition in the default warpgroup. The MMA and load
     // partitions shouldn't have tensor computations in them, which means they
-    // will get assigned just 1 warp each.
-    schedule.reorderPartitions({2, 1, 3, 0});
+    // will get assigned just 1 warp each. Add an extra partition to pad the
+    // number of warps to the nearest warpgroup.
+    schedule.addPartition(0);
+    schedule.reorderPartitions({2, 1, 0, 3});
+
+  } else {
+    b.setInsertionPointAfter(loop);
+    // The MMA has no direct use in the loop, so we have to drain the pipeline
+    // of MMA waits.
+    Value lastIdx = loop.getResult(loadIndex.getArgNumber() - 1);
+    Value lastPhase = loop.getResult(loadPhase.getArgNumber() - 1);
+    for (auto i : llvm::seq(numStages)) {
+      Value emptyBar = createSingleBufferView(b, emptyBars, lastIdx);
+      b.create<ttng::WaitBarrierOp>(emptyBar, lastPhase);
+      std::tie(lastIdx, lastPhase) =
+          postIncrementModulo(b, lastIdx, lastPhase, numStages);
+    }
   }
 
   schedule.serialize(loop);
