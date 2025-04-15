@@ -146,8 +146,8 @@ module attributes {"ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 64 : i32}
 // Should NOT apply: tile size 256x64x128 with single dot
 // CHECK-LABEL: sink_2nd_load_256x64x128
 //       CHECK: %[[tileA:.*]] = tt.load
-//  CHECK-NEXT: local_load
 //  CHECK-NEXT: %[[tileB:.*]] = tt.load
+//  CHECK-NEXT: local_load
 //  CHECK-NEXT: local_load
 //  CHECK-NEXT: tt.dot
 //  CHECK-NEXT: ttg.local_store %[[tileA]]
@@ -159,8 +159,8 @@ module attributes {"ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 64 : i32}
     %cst = arith.constant dense<0.000000e+00> : tensor<256x64xf32, #mma>
     %0:1 = scf.for %arg0 = %c0 to %c1 step %c1 iter_args(%arg1 = %cst) -> (tensor<256x64xf32, #mma>)  : i32 {
       %4 = tt.load %A_ptr : tensor<256x128x!tt.ptr<f16>, #blocked>
-      %1 = ttg.local_load %A_LDS : !ttg.memdesc<256x128xf16, #shared, #smem, mutable> -> tensor<256x128xf16, #dotOp0>
       %5 = tt.load %B_ptr : tensor<128x64x!tt.ptr<f16>, #blocked1>
+      %1 = ttg.local_load %A_LDS : !ttg.memdesc<256x128xf16, #shared, #smem, mutable> -> tensor<256x128xf16, #dotOp0>
       %2 = ttg.local_load %B_LDS : !ttg.memdesc<128x64xf16, #shared1, #smem, mutable> -> tensor<128x64xf16, #dotOp1>
       %3 = tt.dot %1, %2, %arg1 : tensor<256x128xf16, #dotOp0> * tensor<128x64xf16, #dotOp1> -> tensor<256x64xf32, #mma>
       ttg.local_store %4, %A_LDS : tensor<256x128xf16, #blocked> -> !ttg.memdesc<256x128xf16, #shared, #smem, mutable>
@@ -186,8 +186,8 @@ module attributes {"ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 64 : i32}
 // Should NOT apply: tile size 256x256x32 with single dot
 // CHECK-LABEL: sink_2nd_load_256x256x32
 //       CHECK: %[[tileA:.*]] = tt.load
-//  CHECK-NEXT: local_load
 //  CHECK-NEXT: %[[tileB:.*]] = tt.load
+//  CHECK-NEXT: local_load
 //  CHECK-NEXT: local_load
 //  CHECK-NEXT: tt.dot
 //  CHECK-NEXT: ttg.local_store %[[tileA]]
@@ -199,8 +199,8 @@ module attributes {"ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 64 : i32}
     %cst = arith.constant dense<0.000000e+00> : tensor<256x256xf32, #mma>
     %0:1 = scf.for %arg0 = %c0 to %c1 step %c1 iter_args(%arg1 = %cst) -> (tensor<256x256xf32, #mma>)  : i32 {
       %4 = tt.load %A_ptr : tensor<256x32x!tt.ptr<f16>, #blocked>
-      %1 = ttg.local_load %A_LDS : !ttg.memdesc<256x32xf16, #shared, #smem, mutable> -> tensor<256x32xf16, #dotOp0>
       %5 = tt.load %B_ptr : tensor<32x256x!tt.ptr<f16>, #blocked1>
+      %1 = ttg.local_load %A_LDS : !ttg.memdesc<256x32xf16, #shared, #smem, mutable> -> tensor<256x32xf16, #dotOp0>
       %2 = ttg.local_load %B_LDS : !ttg.memdesc<32x256xf16, #shared1, #smem, mutable> -> tensor<32x256xf16, #dotOp1>
       %3 = tt.dot %1, %2, %arg1 : tensor<256x32xf16, #dotOp0> * tensor<32x256xf16, #dotOp1> -> tensor<256x256xf32, #mma>
       ttg.local_store %4, %A_LDS : tensor<256x32xf16, #blocked> -> !ttg.memdesc<256x32xf16, #shared, #smem, mutable>
@@ -228,8 +228,8 @@ module attributes {"ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 64 : i32}
 // Should NOT apply: the 2nd load has a user before the dot
 // CHECK-LABEL: sink_2nd_load_128x128x128_user_before_dot
 //       CHECK: %[[tileA:.*]] = tt.load
-//  CHECK-NEXT: local_load
 //  CHECK-NEXT: %[[tileB:.*]] = tt.load
+//  CHECK-NEXT: local_load
 //  CHECK-NEXT: local_load
 //  CHECK-NEXT: tt.store
 //  CHECK-NEXT: tt.dot
@@ -241,8 +241,8 @@ module attributes {"ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 64 : i32}
     %cst = arith.constant dense<0.000000e+00> : tensor<128x128xf32, #mma>
     %0:1 = scf.for %arg0 = %c0 to %c1 step %c1 iter_args(%arg1 = %cst) -> (tensor<128x128xf32, #mma>)  : i32 {
       %4 = tt.load %A_ptr : tensor<128x128x!tt.ptr<f16>, #blocked>
-      %1 = ttg.local_load %A_LDS : !ttg.memdesc<128x128xf16, #shared, #smem, mutable> -> tensor<128x128xf16, #dotOp0>
       %5 = tt.load %B_ptr : tensor<128x128x!tt.ptr<i64>, #blocked>
+      %1 = ttg.local_load %A_LDS : !ttg.memdesc<128x128xf16, #shared, #smem, mutable> -> tensor<128x128xf16, #dotOp0>
       %2 = ttg.local_load %B_LDS : !ttg.memdesc<128x128xf16, #shared1, #smem, mutable> -> tensor<128x128xf16, #dotOp1>
       tt.store %B_ptr, %5 : tensor<128x128x!tt.ptr<i64>, #blocked>
       %3 = tt.dot %1, %2, %arg1 : tensor<128x128xf16, #dotOp0> * tensor<128x128xf16, #dotOp1> -> tensor<128x128xf32, #mma>
@@ -304,9 +304,9 @@ module attributes {"ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 64 : i32}
 // should NOT apply: load scalar
 // CHECK-LABEL: sink_2nd_load_scalar
 //       CHECK: tt.load
+//  CHECK-NEXT: tt.load
 //  CHECK-NEXT: tt.splat
 //  CHECK-NEXT: tt.broadcast
-//  CHECK-NEXT: tt.load
 //  CHECK-NEXT: ttg.convert_layout
 //  CHECK-NEXT: ttg.convert_layout
 //  CHECK-NEXT: tt.dot
@@ -323,9 +323,9 @@ tt.func public @sink_2nd_load_scalar(%A_ptr: !tt.ptr<f16>, %B_ptr: tensor<64x256
     %cst = arith.constant dense<0.000000e+00> : tensor<256x256xf32, #mma>
     %0:1 = scf.for %arg0 = %c0 to %c1 step %c1 iter_args(%arg1 = %cst) -> (tensor<256x256xf32, #mma>)  : i32 {
       %1 = tt.load %A_ptr : !tt.ptr<f16>
+      %4 = tt.load %B_ptr : tensor<64x256x!tt.ptr<f16>, #blocked1>
       %2 = tt.splat %1 : f16 -> tensor<1x64xf16, #blocked>
       %3 = tt.broadcast %2 : tensor<1x64xf16, #blocked> -> tensor<256x64xf16, #blocked>
-      %4 = tt.load %B_ptr : tensor<64x256x!tt.ptr<f16>, #blocked1>
       %5 = ttg.convert_layout %3 : tensor<256x64xf16, #blocked> -> tensor<256x64xf16, #dotOp0>
       %6 = ttg.convert_layout %4 : tensor<64x256xf16, #blocked1> -> tensor<64x256xf16, #dotOp1>
       %7 = tt.dot %5, %6, %arg1 : tensor<256x64xf16, #dotOp0> * tensor<64x256xf16, #dotOp1> -> tensor<256x256xf32, #mma>
@@ -343,9 +343,9 @@ tt.func public @sink_2nd_load_scalar(%A_ptr: !tt.ptr<f16>, %B_ptr: tensor<64x256
 // should NOT apply: load scalar
 // CHECK-LABEL: sink_2nd_load_1D_tensor
 //       CHECK: tt.load
+//  CHECK-NEXT: tt.load
 //  CHECK-NEXT: tt.expand_dims
 //  CHECK-NEXT: tt.broadcast
-//  CHECK-NEXT: tt.load
 //  CHECK-NEXT: ttg.convert_layout
 //  CHECK-NEXT: ttg.convert_layout
 //  CHECK-NEXT: tt.dot
@@ -362,9 +362,9 @@ tt.func public @sink_2nd_load_1D_tensor(%A_ptr: tensor<256x!tt.ptr<f16>, #ttg.sl
     %cst = arith.constant dense<0.000000e+00> : tensor<256x256xf32, #mma>
     %0:1 = scf.for %arg0 = %c0 to %c1 step %c1 iter_args(%arg1 = %cst) -> (tensor<256x256xf32, #mma>)  : i32 {
       %1 = tt.load %A_ptr : tensor<256x!tt.ptr<f16>, #ttg.slice<{dim = 1, parent = #blocked}>>
+      %4 = tt.load %B_ptr : tensor<64x256x!tt.ptr<f16>, #blocked1>
       %2 = tt.expand_dims %1 {axis = 1 : i32} : tensor<256xf16, #ttg.slice<{dim = 1, parent = #blocked}>> -> tensor<256x1xf16, #blocked>
       %3 = tt.broadcast %2 : tensor<256x1xf16, #blocked> -> tensor<256x64xf16, #blocked>
-      %4 = tt.load %B_ptr : tensor<64x256x!tt.ptr<f16>, #blocked1>
       %5 = ttg.convert_layout %3 : tensor<256x64xf16, #blocked> -> tensor<256x64xf16, #dotOp0>
       %6 = ttg.convert_layout %4 : tensor<64x256xf16, #blocked1> -> tensor<64x256xf16, #dotOp1>
       %7 = tt.dot %5, %6, %arg1 : tensor<256x64xf16, #dotOp0> * tensor<64x256xf16, #dotOp1> -> tensor<256x256xf32, #mma>

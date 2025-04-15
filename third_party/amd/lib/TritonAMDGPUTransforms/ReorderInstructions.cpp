@@ -150,8 +150,8 @@ static void moveUpTranspose(triton::FuncOp funcOp) {
       op->moveAfter(argOp);
 }
 
-// Schedule global load ops for better GEMM performance.
-static void moveUpGlobalLoad(triton::FuncOp funcOp) {
+// Schedule global load ops in prologue for better GEMM performance.
+static void moveUpGlobalLoadInPrologue(triton::FuncOp funcOp) {
   // Move global_load ops early to prefetch. This may increase
   // register pressure but it enables issuing global loads early.
   auto globalLoadOps =
@@ -304,7 +304,7 @@ struct TritonAMDGPUReorderInstructionsPass
       moveDownCoversion(funcOp);
 
       moveUpTranspose(funcOp);
-      moveUpGlobalLoad(funcOp);
+      moveUpGlobalLoadInPrologue(funcOp);
 
       if (isPureMatmulFunc(funcOp)) {
         funcOp.walk([&](scf::ForOp forOp) -> void { sinkSecondLoad(forOp); });
