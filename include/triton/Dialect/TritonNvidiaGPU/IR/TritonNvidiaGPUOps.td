@@ -410,10 +410,10 @@ def TTNG_TCGen5MMAOp : TTNG_Op<"tc_gen5_mma", [DeclareOpInterfaceMethods<MemoryE
     OptionalAttr<UnitAttr>:$two_ctas
   );
 
-  // TODO: improve printing format.
   let assemblyFormat = [{
     $a`,` $b`,` $d`,` $useD`,` $pred (`,` $barrier^)?
-    attr-dict `:` functional-type(operands, results)
+    attr-dict `:` qualified(type($a)) `,` qualified(type($b)) `,`
+    qualified(type($d)) (`,` qualified(type($barrier))^)?
   }];
 }
 
@@ -444,11 +444,12 @@ def TTNG_TCGen5MMAScaledOp : TTNG_Op<"tc_gen5_mma_scaled", [DeclareOpInterfaceMe
     int64_t getBlockK();
   }];
 
-  // TODO: improve printing format.
   let assemblyFormat = [{
     $a `,` $b `,` $d `,` $a_scale `,` $b_scale `,` $useD`,` $pred
     `lhs` `=` $a_type `rhs` `=` $b_type (`,` $barrier^)?
-    attr-dict `:` functional-type(operands, results)
+    attr-dict `:` qualified(type($a)) `,` qualified(type($b)) `,`
+    qualified(type($d)) `,` qualified(type($a_scale)) `,`
+    qualified(type($b_scale)) (`,` qualified(type($barrier))^)?
   }];
 }
 

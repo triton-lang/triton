@@ -144,11 +144,10 @@ tt.func @wait_after_mma(
   %barrier = ttg.local_alloc : () -> !ttg.memdesc<1xi64, #shared2, #smem, mutable>
   // CHECK: ttng.tc_gen5_mma
   ttng.tc_gen5_mma %a, %b, %c, %useAcc, %pred, %barrier :
-   (!ttg.memdesc<128x128xf16, #shared, #smem>,
+     !ttg.memdesc<128x128xf16, #shared, #smem>,
      !ttg.memdesc<128x128xf16, #shared1, #smem>,
      !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>,
-     i1, i1,
-     !ttg.memdesc<1xi64, #shared2, #smem, mutable>) -> ()
+     !ttg.memdesc<1xi64, #shared2, #smem, mutable>
   // CHECK-NEXT: ttng.wait_barrier
   ttng.wait_barrier %barrier, %phase : !ttg.memdesc<1xi64, #shared2, #smem, mutable>
   tt.return
