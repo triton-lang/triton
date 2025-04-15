@@ -1,7 +1,3 @@
-import os
-import re
-import subprocess
-import sysconfig
 from abc import ABCMeta, abstractmethod
 from dataclasses import dataclass
 from typing import Dict, Union
@@ -24,23 +20,6 @@ class BaseBackend(metaclass=ABCMeta):
         assert self.supports_target(target)
 
     @staticmethod
-    def _path_to_binary(binary: str):
-        binary += sysconfig.get_config_var("EXE")
-        base_dir = os.path.join(os.path.dirname(__file__), os.pardir)
-        paths = [
-            os.environ.get(f"TRITON_{binary.upper()}_PATH", ""),
-            os.path.join(base_dir, "third_party", "cuda", "bin", binary),
-        ]
-        for path in paths:
-            if os.path.exists(path) and os.path.isfile(path):
-                result = subprocess.check_output([path, "--version"], stderr=subprocess.STDOUT)
-                if result is not None:
-                    version = re.search(r".*release (\d+\.\d+).*", result.decode("utf-8"), flags=re.MULTILINE)
-                    if version is not None:
-                        return path, version.group(1)
-        raise RuntimeError(f"Cannot find {binary}")
-
-    @classmethod
     @abstractmethod
     def supports_target(target: GPUTarget):
         raise NotImplementedError
