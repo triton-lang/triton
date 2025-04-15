@@ -8,6 +8,7 @@
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "triton/Tools/LayoutUtils.h"
+#include "llvm/ADT/STLExtras.h"
 #include "llvm/Support/Debug.h"
 
 // InThreadTranspose pass optimizes inefficient
@@ -627,7 +628,8 @@ matchInThreadTransposePattern(ttg::LocalLoadOp lLoad) {
       LDBG("Failed to traverse path to global loads");
       return failure();
     }
-    pattern.globalLoads.insert_range(globalLoadSearch.value());
+    for (auto loadOp : globalLoadSearch.value())
+      pattern.globalLoads.insert(loadOp);
   }
 
   LDBG("found global loads: " << pattern.globalLoads.size());
