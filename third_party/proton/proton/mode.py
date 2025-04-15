@@ -52,7 +52,7 @@ class PCSampling(BaseMode):
 @dataclass(frozen=True)
 class InstrumentationMode(BaseMode):
     """Common base class for instrumentation modes with shared configuration."""
-    metric_type: triton_proton.METRIC_TYPE = field(default=triton_proton.METRIC_TYPE.CYCLE, init=False)
+    metric_type: triton_proton.METRIC_TYPE = triton_proton.METRIC_TYPE.CYCLE
     sampling_strategy: triton_proton.SAMPLING_STRATEGY = triton_proton.SAMPLING_STRATEGY.NONE
     sampling_options: str = ""
     granularity: triton_proton.GRANULARITY = triton_proton.GRANULARITY.WARP

@@ -43,6 +43,5 @@ def ModeAttr : I32EnumAttr<
     Attribute to indicate the mode of profiling, which specifies passes and instructions to monitor.
   }];
 }
->
 
 #endif // PROTON_ATTR_DEFS

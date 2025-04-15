@@ -99,6 +99,7 @@ def start(
     name = DEFAULT_PROFILE_NAME if name is None else name
     backend = _select_backend() if backend is None else backend
     backend_path = _get_backend_default_path(backend)
+    mode = "" if mode is None else mode
 
     _check_env(backend)
 
