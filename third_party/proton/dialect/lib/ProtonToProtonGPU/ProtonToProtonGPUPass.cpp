@@ -153,7 +153,7 @@ public:
       return failure();
     }
 
-    // Circular strategy memory layout (total: allocprofileScratchSize bytes)
+    // Circular strategy memory layout (total: allocProfileScratchSize bytes)
     //  +-----------------------------------------------+
     //  | header (circularHeaderSize bytes)             |
     //  +-----------------------------------------------+
@@ -161,15 +161,15 @@ public:
     //  +-----------------------------------------------+
     //  | profiled data (allocBufferSize bytes)         |
     //  +-----------------------------------------------+
-    int allocprofileScratchSize =
+    int allocProfileScratchSize =
         llvm::alignTo(allocBufferSize + circularHeaderSize + numWarps * 4,
                       profileScratchAlignment);
 
-    if (profileScratchSize < allocprofileScratchSize) {
+    if (profileScratchSize < allocProfileScratchSize) {
       mlir::emitError(loc,
                       "Global scratch memory for proton profiling is not large "
                       "enough, should be at least " +
-                          llvm::Twine(allocprofileScratchSize) + " bytes.");
+                          llvm::Twine(allocProfileScratchSize) + " bytes.");
       return failure();
     }
 
@@ -204,7 +204,7 @@ public:
 
     Value profileMem = builder.create<proton::gpu::GlobalScratchAllocOp>(
         loc, triton::getPointerType(builder.getI32Type()),
-        allocprofileScratchSize, profileScratchAlignment);
+        allocProfileScratchSize, profileScratchAlignment);
 
     // Profiler index is private to each thread, address space is 5. In
     // practice, it doesn't prevent us from register promotion.
