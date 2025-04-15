@@ -53,7 +53,6 @@ static std::string getConstraintForBitwidth(unsigned bitwidth) {
   }
 }
 
-
 Value loadStack(RewriterBase &rewriter, Location loc, Value ptr, Type loadTy,
                 Value pred) {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
@@ -230,12 +229,12 @@ struct FinalizeOpConversion
       Value gmemPtr = b.gep(scratchPtrTy, i32_ty, scratchPtr, gmemOffset);
       b.store(load, gmemPtr);
     };
-    // Write back 'preample'.
-    Value preample = b.i32_val(0xdeadbeef);
-    Value gmemPreampleOffset = b.i32_val(0);
-    Value gmemPreamplePtr =
-        b.gep(scratchPtrTy, i32_ty, scratchPtr, gmemPreampleOffset);
-    b.store(preample, gmemPreamplePtr);
+    // Write back 'preamble'.
+    Value preamble = b.i32_val(0xdeadbeef);
+    Value gmemPreambleOffset = b.i32_val(0);
+    Value gmemPreamblePtr =
+        b.gep(scratchPtrTy, i32_ty, scratchPtr, gmemPreambleOffset);
+    b.store(preamble, gmemPreamblePtr);
 
     // Write back 'program id'.
     Value gmemPidOffset = b.i32_val(1);

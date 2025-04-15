@@ -210,8 +210,8 @@ module attributes {"ttg.num-warps" = 8 : i32, ttg.profile_scratch_memory_alignme
   // CHECK-DAG: llvm.store
   // CHECK-DAG: llvm.cond_br %{{.*}}, ^bb1, ^bb3
   // CHECK-DAG: ^bb1:
-  // CHECK-DAG: %[[PREAMPLE:.*]] = llvm.mlir.constant(-559038737 : i32)
-  // CHECK-DAG: llvm.store %[[PREAMPLE]], %{{.*}} : i32, !llvm.ptr<1>
+  // CHECK-DAG: %[[PREAMBLE:.*]] = llvm.mlir.constant(-559038737 : i32)
+  // CHECK-DAG: llvm.store %[[PREAMBLE]], %{{.*}} : i32, !llvm.ptr<1>
   // CHECK-DAG: %[[PID:.*]] = llvm.trunc %{{.*}} : i64 to i32
   // CHECK-DAG: llvm.store
   // CHECK-DAG: %[[STEP:.*]] = llvm.mlir.constant(2 : i32) : i32
@@ -245,8 +245,8 @@ module attributes {"ttg.num-warps" = 8 : i32, ttg.profile_scratch_memory_alignme
   // CHECK-DAG: llvm.store
   // CHECK-DAG: llvm.cond_br %{{.*}}, ^bb1, ^bb3
   // CHECK-DAG: ^bb1:
-  // CHECK-DAG: %[[PREAMPLE:.*]] = llvm.mlir.constant(-559038737 : i32)
-  // CHECK-DAG: llvm.store %[[PREAMPLE]], %{{.*}} : i32, !llvm.ptr<1>
+  // CHECK-DAG: %[[PREAMBLE:.*]] = llvm.mlir.constant(-559038737 : i32)
+  // CHECK-DAG: llvm.store %[[PREAMBLE]], %{{.*}} : i32, !llvm.ptr<1>
   // CHECK-DAG: %[[PID:.*]] = llvm.trunc %{{.*}} : i64 to i32
   // CHECK-DAG: llvm.store
   // CHECK-DAG: %[[STEP:.*]] = llvm.mlir.constant(2 : i32) : i32
