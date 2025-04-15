@@ -24,10 +24,6 @@ when it converts to the buffer ops because it is important for optimizing the ca
 
 Traits: `AttrSizedOperandSegments`, `SameLoadStoreOperandsAndResultEncoding`
 
-Interfaces: `MemoryEffectOpInterface (MemoryEffectOpInterface)`
-
-Effects: `MemoryEffects::Effect{MemoryEffects::Read on ::mlir::triton::GlobalMemory}`, `MemoryEffects::Effect{MemoryEffects::Write on ::mlir::triton::GlobalMemory}`
-
 #### Attributes:
 
 <table>
@@ -81,10 +77,6 @@ the cache memory access.
 
 Traits: `AttrSizedOperandSegments`, `SameLoadStoreOperandsAndResultEncoding`
 
-Interfaces: `MemoryEffectOpInterface (MemoryEffectOpInterface)`
-
-Effects: `MemoryEffects::Effect{MemoryEffects::Read on ::mlir::triton::GlobalMemory}`
-
 #### Attributes:
 
 <table>
@@ -125,9 +117,7 @@ AMD Buffer load operation. Similar to amdgpu.buffer_load op but directly wirtes 
 
 Traits: `AttrSizedOperandSegments`
 
-Interfaces: `InferTypeOpInterface`, `MemoryEffectOpInterface (MemoryEffectOpInterface)`
-
-Effects: `MemoryEffects::Effect{MemoryEffects::Read on ::mlir::triton::GlobalMemory}`, `MemoryEffects::Effect{MemoryEffects::Write on ::mlir::triton::gpu::SharedMemory}`
+Interfaces: `InferTypeOpInterface`
 
 #### Attributes:
 
@@ -180,10 +170,6 @@ when it converts to the buffer ops because it is important for optimizing
 the cache memory access.
 
 Traits: `AttrSizedOperandSegments`, `SameLoadStoreOperandsEncoding`
-
-Interfaces: `MemoryEffectOpInterface (MemoryEffectOpInterface)`
-
-Effects: `MemoryEffects::Effect{MemoryEffects::Write on ::mlir::triton::GlobalMemory}`
 
 #### Attributes:
 

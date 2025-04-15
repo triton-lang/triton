@@ -181,8 +181,6 @@ Stride is the distance between the beginning of contiguous memory chunks. When p
 the address difference between the first elements of each row in bytes. Compiler tries to obtain the <code class="docutils literal notranslate"><span class="pre">stride</span></code>
 when it converts to the buffer ops because it is important for optimizing the cache memory access.</p>
 <p>Traits: <code class="docutils literal notranslate"><span class="pre">AttrSizedOperandSegments</span></code>, <code class="docutils literal notranslate"><span class="pre">SameLoadStoreOperandsAndResultEncoding</span></code></p>
-<p>Interfaces: <code class="docutils literal notranslate"><span class="pre">MemoryEffectOpInterface</span> <span class="pre">(MemoryEffectOpInterface)</span></code></p>
-<p>Effects: <code class="docutils literal notranslate"><span class="pre">MemoryEffects::Effect{MemoryEffects::Read</span> <span class="pre">on</span> <span class="pre">::mlir::triton::GlobalMemory}</span></code>, <code class="docutils literal notranslate"><span class="pre">MemoryEffects::Effect{MemoryEffects::Write</span> <span class="pre">on</span> <span class="pre">::mlir::triton::GlobalMemory}</span></code></p>
 <section id="attributes">
 <h3>Attributes:<a class="headerlink" href="#attributes" title="Link to this heading">¶</a></h3>
 <table>
@@ -257,8 +255,6 @@ the first elements of each row in bytes. Compiler tries to obtain the <code clas
 when it converts to the buffer ops because it is important for optimizing
 the cache memory access.</p>
 <p>Traits: <code class="docutils literal notranslate"><span class="pre">AttrSizedOperandSegments</span></code>, <code class="docutils literal notranslate"><span class="pre">SameLoadStoreOperandsAndResultEncoding</span></code></p>
-<p>Interfaces: <code class="docutils literal notranslate"><span class="pre">MemoryEffectOpInterface</span> <span class="pre">(MemoryEffectOpInterface)</span></code></p>
-<p>Effects: <code class="docutils literal notranslate"><span class="pre">MemoryEffects::Effect{MemoryEffects::Read</span> <span class="pre">on</span> <span class="pre">::mlir::triton::GlobalMemory}</span></code></p>
 <section id="id1">
 <h3>Attributes:<a class="headerlink" href="#id1" title="Link to this heading">¶</a></h3>
 <table>
@@ -320,8 +316,7 @@ the cache memory access.</p>
 </div>
 <p>AMD Buffer load operation. Similar to amdgpu.buffer_load op but directly wirtes to shared memory instead of into registers.</p>
 <p>Traits: <code class="docutils literal notranslate"><span class="pre">AttrSizedOperandSegments</span></code></p>
-<p>Interfaces: <code class="docutils literal notranslate"><span class="pre">InferTypeOpInterface</span></code>, <code class="docutils literal notranslate"><span class="pre">MemoryEffectOpInterface</span> <span class="pre">(MemoryEffectOpInterface)</span></code></p>
-<p>Effects: <code class="docutils literal notranslate"><span class="pre">MemoryEffects::Effect{MemoryEffects::Read</span> <span class="pre">on</span> <span class="pre">::mlir::triton::GlobalMemory}</span></code>, <code class="docutils literal notranslate"><span class="pre">MemoryEffects::Effect{MemoryEffects::Write</span> <span class="pre">on</span> <span class="pre">::mlir::triton::gpu::SharedMemory}</span></code></p>
+<p>Interfaces: <code class="docutils literal notranslate"><span class="pre">InferTypeOpInterface</span></code></p>
 <section id="id4">
 <h3>Attributes:<a class="headerlink" href="#id4" title="Link to this heading">¶</a></h3>
 <table>
@@ -397,8 +392,6 @@ the first elements of each row in bytes. Compiler tries to obtain the <code clas
 when it converts to the buffer ops because it is important for optimizing
 the cache memory access.</p>
 <p>Traits: <code class="docutils literal notranslate"><span class="pre">AttrSizedOperandSegments</span></code>, <code class="docutils literal notranslate"><span class="pre">SameLoadStoreOperandsEncoding</span></code></p>
-<p>Interfaces: <code class="docutils literal notranslate"><span class="pre">MemoryEffectOpInterface</span> <span class="pre">(MemoryEffectOpInterface)</span></code></p>
-<p>Effects: <code class="docutils literal notranslate"><span class="pre">MemoryEffects::Effect{MemoryEffects::Write</span> <span class="pre">on</span> <span class="pre">::mlir::triton::GlobalMemory}</span></code></p>
 <section id="id7">
 <h3>Attributes:<a class="headerlink" href="#id7" title="Link to this heading">¶</a></h3>
 <table>
