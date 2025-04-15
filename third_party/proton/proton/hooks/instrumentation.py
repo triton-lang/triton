@@ -105,8 +105,8 @@ def _interpret_mode(mode_obj: Union[str, mode.InstrumentationMode]) -> mode.Inst
 class InstrumentationHook(Hook):
     # It's important to note that only one instance of the instrumentation hook can be active at a time.
     active_count: int = 0
-    enable_cpu_buffer: bool = False
-    cpu_buffer: Optional[Any] = None
+    enable_host_buffer: bool = False
+    host_buffer: Optional[Any] = None
     profile_buffer_size: int = 16 * 1024 * 1024
     profile_buffer_alignment: int = 128
 
@@ -197,8 +197,8 @@ class InstrumentationHook(Hook):
         set_profile_allocator(NullAllocator())
 
         # Reset host memory for external processing
-        if InstrumentationHook.enable_cpu_buffer:
-            InstrumentationHook.cpu_buffer = None
+        if InstrumentationHook.enable_host_buffer:
+            InstrumentationHook.host_buffer = None
 
     def init_handle(self, function: Any, module: Any, metadata_group: Dict[str, str]) -> None:
         if function and function not in self.function_scope_ids:
@@ -220,16 +220,16 @@ class InstrumentationHook(Hook):
     def enter(self, lazy_dict: LazyDict) -> None:
         libproton.enter_instrumented_op(lazy_dict.data.get("function", None), self.buffer.data_ptr(),
                                         self.profile_buffer_size)
-        if InstrumentationHook.enable_cpu_buffer:
-            InstrumentationHook.cpu_buffer = None
+        if InstrumentationHook.enable_host_buffer:
+            InstrumentationHook.host_buffer = None
 
     def exit(self, lazy_dict: LazyDict) -> None:
         libproton.exit_instrumented_op(lazy_dict.data.get("function", None), self.buffer.data_ptr(),
                                        self.profile_buffer_size)
 
-        if InstrumentationHook.enable_cpu_buffer:
+        if InstrumentationHook.enable_host_buffer:
             # Copy the profiling buffer to the CPU for debugging and processing by external tools
             import torch
 
-            InstrumentationHook.cpu_buffer = torch.empty_like(self.buffer, device="cpu")
-            InstrumentationHook.cpu_buffer.copy_(self.buffer)
+            InstrumentationHook.host_buffer = torch.empty_like(self.buffer, device="cpu")
+            InstrumentationHook.host_buffer.copy_(self.buffer)
