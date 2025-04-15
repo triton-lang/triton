@@ -255,14 +255,14 @@ public:
     }
 
     FuncOp func = *m.getOps<triton::FuncOp>().begin();
-    
+
     // Check if there are any proton records to process
     bool hasProtonRecord = false;
-    func.walk([&](proton::RecordOp op) { 
+    func.walk([&](proton::RecordOp op) {
       hasProtonRecord = true;
       return WalkResult::interrupt(); // Early exit once we find one record
     });
-    
+
     if (!hasProtonRecord) {
       return; // No proton records to process, silently return
     }
@@ -284,13 +284,16 @@ public:
     // Process based on buffer strategy
     if (bufferStrategy == gpu::BufferStrategy::CIRCULAR) {
       if (failed(circularRecordStrategyLowering(func))) {
-        // No need to call signalPassFailure() here as it's already called in circularRecordStrategyLowering
+        // No need to call signalPassFailure() here as it's already called in
+        // circularRecordStrategyLowering
         signalPassFailure();
       }
     } else {
-      mlir::emitError(loc, "buffer-strategy '" + 
-                      std::to_string(static_cast<int>(static_cast<gpu::BufferStrategy>(bufferStrategy))) + 
-                      "' is not supported");
+      mlir::emitError(
+          loc, "buffer-strategy '" +
+                   std::to_string(static_cast<int>(
+                       static_cast<gpu::BufferStrategy>(bufferStrategy))) +
+                   "' is not supported");
       signalPassFailure();
     }
   }
