@@ -428,7 +428,8 @@ public:
   ArrayRef<int32_t> getBasis(StringAttr inDim, int32_t pos) const {
     auto it = bases.find(inDim);
     assert(it != bases.end());
-    assert(pos < it->second.size());
+    assert(pos >= 0);
+    assert(static_cast<size_t>(pos) < it->second.size());
     return it->second[pos];
   }
 
