@@ -5,7 +5,7 @@ import triton
 import triton.language as tl
 from triton._internal_testing import is_interpreter, numpy_random, to_triton, requires_tma, unwrap_tensor, tma_dtypes
 from triton.tools.mxfp import MXFP4Tensor, MXScaleTensor
-from triton.tools.experimental_descriptor import TensorDescriptor
+from triton.tools.tensor_descriptor import TensorDescriptor
 from typing import Optional
 
 

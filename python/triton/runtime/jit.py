@@ -10,7 +10,7 @@ from collections import defaultdict
 from functools import cached_property
 from typing import Callable, Generic, Iterable, Optional, TypeVar, Union, overload, Dict, Any, Tuple
 
-from triton.tools.experimental_descriptor import TensorDescriptor
+from triton.tools.tensor_descriptor import TensorDescriptor
 from ..runtime.driver import driver
 from types import ModuleType
 from .._utils import find_paths_if, get_iterable_path

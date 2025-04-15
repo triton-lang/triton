@@ -15,7 +15,7 @@ Extra Credits:
 
 import pytest
 import torch
-from triton.tools.experimental_descriptor import TensorDescriptor
+from triton.tools.tensor_descriptor import TensorDescriptor
 
 import triton
 import triton.language as tl
