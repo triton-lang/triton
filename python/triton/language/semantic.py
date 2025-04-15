@@ -1882,8 +1882,8 @@ def make_tensor_descriptor(
     builder: ir.builder,
 ) -> tl.tensor_descriptor:
     ndim = len(shape)
-    if not (2 <= ndim <= 5):
-        raise ValueError(f"Expected 2 <= ndim <= 5 but got {ndim} dimensions")
+    if not (1 <= ndim <= 5):
+        raise ValueError(f"Expected 1 <= ndim <= 5 but got {ndim} dimensions")
     if len(strides) != ndim:
         raise ValueError(f"Expected {ndim} strides but got {len(strides)}")
     if len(block_shape) != ndim:
