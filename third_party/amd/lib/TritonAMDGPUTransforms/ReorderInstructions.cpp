@@ -49,10 +49,8 @@ static bool isPureMatmulLoop(scf::ForOp forOp) {
 // be either an atomic op or last usage of source pointer. Search ends when move
 // op is encountered.
 static llvm::ilist<Operation>::iterator
-findEarlyInsertionPoint(Block *block, Operation *move) {
-  Value src;
-  if (auto ld = dyn_cast<triton::LoadOp>(move))
-    src = ld.getPtr();
+findEarlyInsertionPoint(Block *block, triton::LoadOp move) {
+  Value src = move.getPtr();
 
   auto ipnt = block->end();
   for (auto bi = block->begin(); bi != block->end(); ++bi) {
@@ -60,24 +58,20 @@ findEarlyInsertionPoint(Block *block, Operation *move) {
     if (op == move) // Don't move later than current location
       break;
 
-    op->walk([&](Operation *wop) {
-      if (src) {
-        // Check for ops accessing src value.
-        for (auto opr : wop->getOperands()) {
-          if (opr == src)
-            ipnt = bi;
-        }
-      }
-      // Atomics used for global synchronization.
-      if (isa<triton::AtomicRMWOp, triton::AtomicCASOp>(wop))
+    // Check for ops accessing src value.
+    for (auto opr : op->getOperands()) {
+      if (opr == src)
         ipnt = bi;
-      // Break at barrier
-      if (isa<gpu::BarrierOp>(wop))
-        ipnt = bi;
-      // Break at loops.
-      if (isa<scf::ForOp, scf::WhileOp>(wop))
-        ipnt = bi;
-    });
+    }
+
+    // Break at:
+    // - Atomics used for global synchronization.
+    // - barriers
+    // - loops
+    if (isa<triton::AtomicRMWOp, triton::AtomicCASOp, gpu::BarrierOp,
+            scf::ForOp, scf::WhileOp>(op)) {
+      ipnt = bi;
+    }
   }
   return ipnt;
 }
@@ -158,13 +152,18 @@ static void moveUpTranspose(triton::FuncOp funcOp) {
 
 // Schedule global load ops for better GEMM performance.
 static void moveUpGlobalLoad(triton::FuncOp funcOp) {
-  SmallVector<Operation *> moveOps;
-
   // Move global_load ops early to prefetch. This may increase
   // register pressure but it enables issuing global loads early.
-  funcOp->walk([&](triton::LoadOp op) { moveOps.push_back(op); });
+  auto globalLoadOps =
+      llvm::to_vector(funcOp.getBody().getOps<triton::LoadOp>());
 
-  for (auto op : llvm::reverse(moveOps)) {
+  // Avoid moving up global_load ops that don't belong to any prologue to avoid
+  // extra register pressure.
+  llvm::erase_if(globalLoadOps, [](triton::LoadOp op) {
+    return !op->getAttr("PipelinerPart");
+  });
+
+  for (auto op : llvm::reverse(globalLoadOps)) {
     // Gather use-def chain in block.
     Block *block = op->getBlock();
     SetVector<Operation *> backwardSet;
@@ -182,7 +181,8 @@ static void moveUpGlobalLoad(triton::FuncOp funcOp) {
       // Only move ops residing in the same block.
       return defBlock == block;
     };
-    mlir::getBackwardSlice(op, &backwardSet, options);
+    mlir::getBackwardSlice(static_cast<mlir::Operation *>(op), &backwardSet,
+                           options);
     backwardSet.insert(op);
 
     auto ipoint = findEarlyInsertionPoint(block, op);

@@ -129,9 +129,23 @@ public:
     options.supportDynamicLoops = true;
     options.peelEpilogue = true;
     options.predicateFn = streamPredication;
+
+    // Annotate loadOp in prologue for further moving up
+    options.annotateFn = [this](Operation *op,
+                                tt::PipeliningOption::PipelinerPart part,
+                                unsigned stage) {
+      if (part != tt::PipeliningOption::PipelinerPart::Prologue)
+        return;
+
+      if (auto loadOp = dyn_cast<tt::LoadOp>(op)) {
+        loadOp->setAttr("PipelinerPart",
+                        StringAttr::get(this->getContext(), "prologue"));
+      }
+    };
   }
 
   LogicalResult pipelineLoop();
+  MLIRContext *getContext() { return forOp->getContext(); }
 
 private:
   LogicalResult initSchedule(int maxIndirectionLevel);
