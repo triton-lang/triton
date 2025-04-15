@@ -4,6 +4,7 @@
 #include "mlir/Conversion/LLVMCommon/Pattern.h"
 #include "mlir/Conversion/LLVMCommon/TypeConverter.h"
 #include "mlir/IR/PatternMatch.h"
+#include "third_party/nvidia/include/TritonNVIDIAGPUToLLVM/PTXAsmFormat.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 
 namespace mlir::triton {
@@ -36,6 +37,53 @@ Value getLinearId(Location loc, ConversionPatternRewriter &rewriter) {
       b.trunc(i32_ty, b.add(b.add(pidX, b.mul(pidY, gridDimX)),
                             b.mul(pidZ, b.mul(gridDimX, gridDimY))));
   return linearId;
+}
+
+static std::string getConstraintForBitwidth(unsigned bitwidth) {
+  switch (bitwidth) {
+  case 8:
+  case 16:
+    return "h";
+  case 32:
+    return "r";
+  case 64:
+    return "l";
+  default:
+    llvm_unreachable("unsupported bitwidth");
+  }
+}
+
+
+Value loadStack(RewriterBase &rewriter, Location loc, Value ptr, Type loadTy,
+                Value pred) {
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
+  MLIRContext *ctx = rewriter.getContext();
+  auto ptrTy = cast<LLVM::LLVMPointerType>(ptr.getType());
+  if (!isa<VectorType>(loadTy)) {
+    SmallVector<Value> values = unpackLLVector(
+        loc, loadStack(rewriter, loc, ptr, vec_ty(loadTy, 1), pred), rewriter);
+    assert(values.size() == 1);
+    return values[0];
+  }
+  auto vecTy = cast<VectorType>(loadTy);
+  Type elemTy = vecTy.getElementType();
+  unsigned vec = vecTy.getNumElements();
+  unsigned elemBitwidth = elemTy.getIntOrFloatBitWidth();
+  PTXBuilder builder;
+  auto ld = builder.create<>("ld")
+                ->global()
+                .v(vec, /*predicate=*/vec > 1)
+                .b(elemBitwidth);
+  std::string elemConstraint = "=" + getConstraintForBitwidth(elemBitwidth);
+  auto *outOpr = vec == 1 ? builder.newOperand(elemConstraint)
+                          : builder.newListOperand(vec, elemConstraint);
+  ld(outOpr, builder.newAddrOperand(ptr, "r")).predicate(pred, "b");
+  Type resultTy =
+      vec == 1 ? Type(int_ty(elemBitwidth))
+               : Type(struct_ty(SmallVector<Type>(vec, int_ty(elemBitwidth))));
+  Value load = builder.launch(rewriter, loc, resultTy, /*hasSideEffects=*/true);
+  SmallVector<Value> resultVals = unpackLLElements(loc, load, rewriter);
+  return packLLVector(loc, resultVals, rewriter);
 }
 
 namespace {
@@ -168,17 +216,20 @@ struct FinalizeOpConversion
       // Load the value from buffer
       Value ptr = b.gep(bufferPtrTy, i32_ty, bufferBasePtr, bufOffset);
       Value load;
-      if (mlir::isa<triton::gpu::SharedMemorySpaceAttr>(memSpace))
+      if (mlir::isa<triton::proton::gpu::StackMemorySpaceAttr>(memSpace)) {
+        load = loadStack(rewriter, loc, ptr, i32_ty, b.true_val());
+      } else if (mlir::isa<triton::gpu::SharedMemorySpaceAttr>(memSpace)) {
         load = tritonTargetInfo.loadShared(rewriter, loc, ptr, i32_ty,
                                            b.true_val());
-      else
-        llvm::report_fatal_error("only support smem buffer finalize copy");
+      } else {
+        llvm::report_fatal_error(
+            "unsupported memory space buffer in finalize copy");
+      }
 
       // Store the value to global memory
       Value gmemPtr = b.gep(scratchPtrTy, i32_ty, scratchPtr, gmemOffset);
       b.store(load, gmemPtr);
     };
-
     // Write back 'preample'.
     Value preample = b.i32_val(0xdeadbeef);
     Value gmemPreampleOffset = b.i32_val(0);

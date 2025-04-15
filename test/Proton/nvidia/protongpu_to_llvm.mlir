@@ -234,3 +234,38 @@ module attributes {"ttg.num-warps" = 8 : i32, ttg.profile_scratch_memory_alignme
     llvm.return
   }
 }
+
+// -----
+
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-warps" = 8 : i32, ttg.profile_scratch_memory_alignment = 128 : i32, ttg.profile_scratch_memory_size = 384 : i32} {
+  // CHECK-LABEL: convert_stack_finalize
+  // CHECK-DAG: llvm.nvvm.read.ptx.sreg.smid
+  // CHECK-DAG: llvm.store
+  // CHECK-DAG: llvm.cond_br %{{.*}}, ^bb1, ^bb3
+  // CHECK-DAG: ^bb1:
+  // CHECK-DAG: %[[PREAMPLE:.*]] = llvm.mlir.constant(-559038737 : i32)
+  // CHECK-DAG: llvm.store %[[PREAMPLE]], %{{.*}} : i32, !llvm.ptr<1>
+  // CHECK-DAG: %[[PID:.*]] = llvm.trunc %{{.*}} : i64 to i32
+  // CHECK-DAG: llvm.store
+  // CHECK-DAG: %[[STEP:.*]] = llvm.mlir.constant(2 : i32) : i32
+  // CHECK-DAG: llvm.store
+  // CHECK-DAG: llvm.br ^bb2
+  // CHECK-DAG: ^bb2(%[[I:.*]]: i32):
+  // CHECK-DAG: llvm.store
+  // CHECK-DAG: llvm.store
+  // CHECK-DAG: %[[UPPER:.*]] = llvm.mlir.constant(510 : i32) : i32
+  // CHECK-DAG: %[[P2:.*]] = llvm.icmp "slt" %[[I]], %[[UPPER]] : i32
+  // CHECK-DAG: %[[I_NEW:.*]] = llvm.add %[[I]], %[[STEP]] : i32
+  // CHECK-DAG: llvm.cond_br %[[P2]], ^bb2(%[[I_NEW]] : i32), ^bb3
+  // CHECK-DAG: ^bb3:
+  // CHECK-DAG: llvm.return
+  llvm.func @convert_stack_finalize(%arg: !llvm.ptr<1>) attributes {noinline = false, nvvm.kernel = 1 : ui1} {
+    %0 = proton_gpu.stack_alloc : !ttg.memdesc<512xi32, #shared, #proton_gpu.stack_memory, mutable>
+    %1 = proton_gpu.global_scratch_alloc {alignment = 128 : i32, nbytes = 384 : i32, offset = 0 : i32} : !tt.ptr<i32>
+    %2 = proton_gpu.init_buffer_index : <i32, 5>
+    proton_gpu.finalize %0, %2, %1 : !ttg.memdesc<512xi32, #shared, #proton_gpu.stack_memory, mutable>, <i32, 5>, <i32>
+    llvm.return
+  }
+}
