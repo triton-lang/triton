@@ -427,7 +427,7 @@ def sort_impl(x, k: core.constexpr = None, dim: core.constexpr = None, descendin
         h = _bitonic_merge_hypercube(h, log_k, 2 if i < log_n else descending)
 
     # reshape back:
-    x = core.reshape(h, x.shape[:-1] + [1 << log_k])
+    x = core.reshape(h, x.shape[:-1] + [2 ** log_k])
     return x
 
 
