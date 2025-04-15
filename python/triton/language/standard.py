@@ -420,12 +420,10 @@ def sort_impl(x, k: core.constexpr = None, dim: core.constexpr = None, descendin
     for i in core.static_range(1, log_k + 1):
         h = _bitonic_merge_hypercube(h, i, 2 if i < log_n else descending)
 
-    merge_axis : core.constexpr = n_dims - 1 - log_k
-
     # select top k elements using bitonic top-k
     # https://www.doc.ic.ac.uk/~hlgr/pdfs/MassivelyParallelTopK.pdf
     for i in core.static_range(log_k + 1, log_n + 1):
-        h = max(h, axis=merge_axis) if descending else min(h, axis=merge_axis)
+        h = max(h, axis=(_log2(h.numel) - 1 - log_k)) if descending else min(h, axis=(_log2(h.numel) - 1 - log_k))
         h = _bitonic_merge_hypercube(h, log_k, 2 if i < log_n else descending)
 
     # reshape back:
