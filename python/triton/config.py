@@ -8,7 +8,7 @@ import sysconfig
 
 from dataclasses import dataclass
 from contextlib import contextmanager
-from typing import cast, Any, Callable, Generator, Generic, Optional, Protocol, Self, Type, TypeVar, TypedDict, TYPE_CHECKING
+from typing import cast, Any, Callable, Generator, Generic, Optional, Protocol, Self, Type, TypeVar, TypedDict, TYPE_CHECKING, Union
 
 if TYPE_CHECKING:
     from .runtime.cache import CacheManager, RemoteCacheBackend
@@ -36,7 +36,7 @@ GetType = TypeVar("GetType")
 
 class env_base(Generic[SetType, GetType]):
 
-    def __init__(self, key: str, default: SetType | Callable[[], SetType]) -> None:
+    def __init__(self, key: str, default: Union[SetType, Callable[[], SetType]]) -> None:
         self.key = key
         self.default: Callable[[], SetType] = default if callable(default) else lambda: default
 
@@ -56,7 +56,7 @@ class env_base(Generic[SetType, GetType]):
         env = getenv(self.key)
         return self.transform(self.default() if env is None else self.from_env(env))
 
-    def __set__(self, obj: object, value: SetType | Env) -> None:
+    def __set__(self, obj: object, value: Union[SetType, Env]) -> None:
         if isinstance(value, Env):
             obj.__dict__.pop(self.name, None)
         else:
@@ -92,7 +92,7 @@ class env_str(env_base[str, str]):
 
 class env_bool(env_base[bool, bool]):
 
-    def __init__(self, key: str, default: bool | Callable[[], bool] = False) -> None:
+    def __init__(self, key: str, default: Union[bool, Callable[[], bool]] = False) -> None:
         super().__init__(key, default)
 
     def from_env(self, val: str) -> bool:
@@ -101,7 +101,7 @@ class env_bool(env_base[bool, bool]):
 
 class env_int(env_base[int, int]):
 
-    def __init__(self, key: str, default: int | Callable[[], int] = 0) -> None:
+    def __init__(self, key: str, default: Union[int, Callable[[], int]] = 0) -> None:
         super().__init__(key, default)
 
     def from_env(self, val: str) -> int:
@@ -145,7 +145,7 @@ class NvidiaTool:
     version: str
 
     @staticmethod
-    def from_path(path: str) -> NvidiaTool | None:
+    def from_path(path: str) -> Optional[NvidiaTool]:
         try:
             result = subprocess.check_output([path, "--version"], stderr=subprocess.STDOUT)
             if result is None:
@@ -292,7 +292,7 @@ class LaunchHook(Protocol):
 
 # This is of the form [attr_name, attr_val]
 # TODO: Use tuple instead of list for better typing.
-KernelAttr = list[str | int]
+KernelAttr = list[Union[str, int]]
 
 
 class JITHookCompileInfo(TypedDict):
