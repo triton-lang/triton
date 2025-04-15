@@ -230,8 +230,7 @@ def test_line_info_ir_source(monkeypatch, status, tmp_path):
         pytest.skip("disassembler is not available")
 
     src = """
-    #loc = loc("/path/test.py":7:0)
-    module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:90", "ttg.threads-per-warp" = 32 : i32} {
+    module {
     tt.func public @test(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32} loc("/path/test.py":7:0), %arg1: !tt.ptr<f32> {tt.divisibility = 16 : i32} loc("/path/test.py":7:0)) attributes {noinline = false} {
         %0 = tt.load %arg0 : !tt.ptr<f32> loc(#loc1)
         tt.store %arg1, %0 : !tt.ptr<f32> loc(#loc2)
