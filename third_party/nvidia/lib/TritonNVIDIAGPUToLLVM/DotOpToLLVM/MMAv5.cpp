@@ -685,8 +685,8 @@ namespace NVIDIA {
 void populateTCGen5MMAOpToLLVMPattern(LLVMTypeConverter &typeConverter,
                                       RewritePatternSet &patterns,
                                       PatternBenefit benefit) {
-  patterns.add<TCGen5MMAOpConversion, TCGen5MMAScaledOpConversion
-               >(typeConverter, benefit);
+  patterns.add<TCGen5MMAOpConversion, TCGen5MMAScaledOpConversion>(
+      typeConverter, benefit);
 }
 
 } // namespace NVIDIA
