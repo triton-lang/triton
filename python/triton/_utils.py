@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from functools import reduce
-from typing import cast, Any, Callable, TYPE_CHECKING
+from typing import Any, Callable, TYPE_CHECKING
 
 if TYPE_CHECKING:
     from .language import core
