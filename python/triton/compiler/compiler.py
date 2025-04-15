@@ -286,6 +286,10 @@ def compile(src, target=None, options=None):
         filter_traceback(e)
         raise
     use_ir_loc = os.environ.get("USE_IR_LOC", None)
+    if ir_source and use_ir_loc:
+        module.create_location_snapshot(src.path)
+        print(f"Creating new locations for {src.path}")
+
     for ext, compile_ir in list(stages.items())[first_stage:]:
         next_module = compile_ir(module, metadata)
         ir_filename = f"{file_name}.{ext}"
