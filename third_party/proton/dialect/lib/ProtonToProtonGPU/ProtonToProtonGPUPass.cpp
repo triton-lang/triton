@@ -236,46 +236,63 @@ public:
     ModuleOp m = getOperation();
     Location loc = m->getLoc();
 
-    assert(metricType == MetricType::CYCLE &&
-           "only cycle metric is supported now");
-
-    int numFuncs = llvm::range_size(m.getOps<triton::FuncOp>());
-    if (numFuncs > 0)
-      // We currently only support one function in the module, which means all
-      // functions needs to be marked as inlined.
-      assert(numFuncs == 1 && "we only support one function in the module now");
-    else
-      return;
-
-    FuncOp func = *m.getOps<triton::FuncOp>().begin();
-    // Return if there is no proton record in the function.
-    bool hasProtonRecord = false;
-    func.walk([&](proton::RecordOp op) { hasProtonRecord = true; });
-    if (!hasProtonRecord) {
+    // Validate metric type at runtime instead of using assert
+    if (metricType != MetricType::CYCLE) {
+      mlir::emitError(loc, "only CYCLE metric type is supported currently");
+      signalPassFailure();
       return;
     }
 
+    // Check if there are any functions in the module
+    int numFuncs = llvm::range_size(m.getOps<triton::FuncOp>());
+    if (numFuncs == 0) {
+      return; // No functions to process, silently return
+    } else if (numFuncs > 1) {
+      // We currently only support one function in the module
+      mlir::emitError(loc, "only one function per module is supported");
+      signalPassFailure();
+      return;
+    }
+
+    FuncOp func = *m.getOps<triton::FuncOp>().begin();
+    
+    // Check if there are any proton records to process
+    bool hasProtonRecord = false;
+    func.walk([&](proton::RecordOp op) { 
+      hasProtonRecord = true;
+      return WalkResult::interrupt(); // Early exit once we find one record
+    });
+    
+    if (!hasProtonRecord) {
+      return; // No proton records to process, silently return
+    }
+
+    // Validate buffer size if specified
     if (bufferSize > 0 && !llvm::isPowerOf2_32(bufferSize)) {
       mlir::emitError(loc, "buffer-size must be power of 2");
       signalPassFailure();
       return;
     }
 
+    // Validate profile scratch alignment
     if (!llvm::isPowerOf2_32(profileScratchAlignment)) {
       mlir::emitError(loc, "profileScratchAlignment must be power of 2");
       signalPassFailure();
       return;
     }
 
+    // Process based on buffer strategy
     if (bufferStrategy == gpu::BufferStrategy::CIRCULAR) {
-      if (failed(circularRecordStrategyLowering(func)))
+      if (failed(circularRecordStrategyLowering(func))) {
+        // No need to call signalPassFailure() here as it's already called in circularRecordStrategyLowering
         signalPassFailure();
+      }
     } else {
-      mlir::emitError(loc, "buffer-strategy is not supported");
+      mlir::emitError(loc, "buffer-strategy '" + 
+                      std::to_string(static_cast<int>(static_cast<gpu::BufferStrategy>(bufferStrategy))) + 
+                      "' is not supported");
       signalPassFailure();
     }
-
-    return;
   }
 };
 

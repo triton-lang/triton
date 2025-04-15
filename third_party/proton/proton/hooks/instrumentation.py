@@ -166,7 +166,7 @@ class InstrumentationHook(Hook):
 
         @functools.wraps(original_run)
         def instrumented_run(self, *args, **kwargs):
-            kwargs["instrumentation_mode"] = mode
+            kwargs["instrumentation_mode"] = str(mode)
             return original_run(self, *args, **kwargs)
 
         JITFunction.run = instrumented_run
