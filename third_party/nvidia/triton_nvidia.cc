@@ -53,6 +53,7 @@ void init_triton_nvidia_passes_ttnvgpuir(py::module &&m) {
 void init_triton_nvidia_passes_nvws(py::module &&m) {
   ADD_PASS_WRAPPER_0("add_lower_warp_group",
                      mlir::createNVWSLowerWarpGroupPass);
+  ADD_PASS_WRAPPER_0("add_lower_aref", mlir::createNVWSLowerArefPass);
 }
 
 void init_triton_nvidia(py::module &&m) {
