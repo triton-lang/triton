@@ -29,18 +29,15 @@ def fresh_triton_cache():
 @pytest.fixture
 def fresh_config(request):
     from triton import config
-    test_name = request.node.name
     config_map = {
-        name: cls
-        for name, cls in config.__dict__.items()
-        if isinstance(cls, config._base) and cls != config._base
+        name: conf
+        for name, conf in config.__dict__.items()
+        if isinstance(conf, config.base_config) and conf != config.base_config
     }
     try:
-        for name, cls in config_map.items():
-            new_cls = type(f"{name}_{test_name}", cls.__bases__, dict(cls.__dict__))
-            new_cls.reset()
-            setattr(config, name, new_cls)
+        for name, conf in config_map.items():
+            setattr(config, name, conf.copy().reset())
         yield config
     finally:
-        for name, cls in config_map.items():
-            setattr(config, name, cls)
+        for name, conf in config_map.items():
+            setattr(config, name, conf)

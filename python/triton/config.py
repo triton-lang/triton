@@ -7,7 +7,7 @@ import subprocess
 import sysconfig
 
 from dataclasses import dataclass
-from typing import cast, Callable, Generic, Optional, Protocol, Type, TypeVar, TypedDict, TYPE_CHECKING
+from typing import cast, Any, Callable, Generic, Optional, Protocol, Self, Type, TypeVar, TypedDict, TYPE_CHECKING
 
 if TYPE_CHECKING:
     from .runtime.cache import CacheManager, RemoteCacheBackend
@@ -15,11 +15,11 @@ if TYPE_CHECKING:
     from .compiler.compiler import LazyDict
 
 
-class Unset:
+class Env:
     pass
 
 
-_UNSET = Unset()
+env = Env()
 
 
 def getenv(key: str) -> Optional[str]:
@@ -27,142 +27,115 @@ def getenv(key: str) -> Optional[str]:
     return res.strip() if res is not None else res
 
 
-class env_str:
+# There's an asymmetry here so that e.g. env_nvidia_tool can be specified with a
+# a string but return an NvidiaTool.
+SetType = TypeVar("SetType")
+GetType = TypeVar("GetType")
 
-    def __init__(self, key: str) -> None:
+
+class env_base(Generic[SetType, GetType]):
+
+    def __init__(self, key: str, default: SetType | Callable[[], SetType]) -> None:
         self.key = key
-        self.value: Optional[str | Unset] = _UNSET
+        self.default: Callable[[], SetType] = default if callable(default) else lambda: default
 
-    def __get__(self, obj: Optional[object], objtype: Optional[Type[object]] = None) -> Optional[str]:
-        return self._get()
+    def __set_name__(self, objclass: Type[object], name: str) -> None:
+        self.name = name
 
-    def _get(self) -> Optional[str]:
-        # Break this helper out so env_strd doesn't infinitely recurse between
-        # __get__ and with_default.
-        if isinstance(self.value, Unset):
-            return getenv(self.key)
+    def __get__(self, obj: Optional[object], objclass: Optional[Type[object]]) -> GetType:
+        if obj is None:
+            raise AttributeError("Cannot access {type(self)} on non-instance")
+
+        if self.name in obj.__dict__:
+            return self.transform(obj.__dict__[self.name])
         else:
-            return self.value
+            return self.get()
 
-    def __set__(self, obj: object, value: Optional[str]) -> None:
-        self.value = value
+    def get(self) -> GetType:
+        env = getenv(self.key)
+        return self.transform(self.default() if env is None else self.from_env(env))
+
+    def __set__(self, obj: object, value: SetType | Env) -> None:
+        if isinstance(value, Env):
+            obj.__dict__.pop(self.name, None)
+        else:
+            obj.__dict__[self.name] = value
+            self.set(value)
+
+    def __delete__(self, obj: object) -> None:
+        obj.__dict__.pop(self.name, None)
+
+    def transform(self, val: SetType) -> GetType:
+        # See comment about GetType/SetType in their definition above. Only needed
+        # if GetType != SetType.
+        return cast(GetType, val)
+
+    def set(self, val: SetType) -> None:
+        pass
+
+    def from_env(self, val: str) -> SetType:
+        raise NotImplementedError()
+
+
+class env_str(env_base[str, str]):
+
+    def set(self, value: Optional[str]) -> None:
         if value is None:
             os.unsetenv(self.key)
         else:
             os.putenv(self.key, value)
 
-    def with_default(self, default: str | Callable[[], str]) -> str:
-        res = self._get()
-        if res is not None:
-            return res
-        return default if isinstance(default, str) else default()
-
-    def reset(self) -> None:
-        self.value = _UNSET
+    def from_env(self, val: str) -> str:
+        return val
 
 
-class env_str_set:
+class env_bool(env_base[bool, bool]):
 
-    def __init__(self, *keys: str) -> None:
-        self.keys = tuple(keys)
-        self.value: set[str] | Unset = _UNSET
+    def __init__(self, key: str, default: bool | Callable[[], bool] = False) -> None:
+        super().__init__(key, default)
 
-    def __get__(self, obj: Optional[object], objtype: Optional[Type[object]] = None) -> set[str]:
-        if isinstance(self.value, Unset):
-            return {val for key in self.keys if (val := getenv(key))}
-        else:
-            return self.value
-
-    def __set__(self, obj: object, value: set[str]) -> None:
-        self.value = value
+    def from_env(self, val: str) -> bool:
+        return val.lower() in ("1", "true", "yes", "on", "y")
 
 
-# Separate class so that types are correct (__get__ is not None)
-class env_strd(env_str):
+class env_int(env_base[int, int]):
 
-    def __init__(self, key: str, default: str | Callable[[], str]) -> None:
-        super().__init__(key)
-        self.default: Callable[[], str] = (lambda: default) if isinstance(default, str) else default
+    def __init__(self, key: str, default: int | Callable[[], int] = 0) -> None:
+        super().__init__(key, default)
 
-    def __get__(self, obj: Optional[object], objtype: Optional[Type[object]] = None) -> str:
-        return self.with_default(self.default)
-
-
-class env_bool:
-
-    def __init__(self, key: str, default: bool = False) -> None:
-        # Composition because function signatures change below
-        self._internal = env_strd(key, "1" if default else "0")
-        self.default = default
-
-    def __get__(self, obj: Optional[object], objtype: Optional[Type[object]] = None) -> bool:
-        return self.with_default(self.default)
-
-    def __set__(self, obj: object, value: bool) -> None:
-        self._internal.__set__(obj, "1" if value else "0")
-
-    def with_default(self, default: bool) -> bool:
-        return self._internal.with_default("1" if default else "0").lower() in ("1", "true", "yes", "on", "y")
-
-    def reset(self) -> None:
-        self._internal.reset()
-
-
-class env_int:
-
-    def __init__(self, key: str, default: int = 0) -> None:
-        # Composition because function signatures change below
-        self._internal = env_strd(key, str(default))
-        self.default = default
-
-    def __get__(self, obj: Optional[object], objtype: Optional[Type[object]] = None) -> int:
-        return self.with_default(self.default)
-
-    def __set__(self, obj: object, value: int) -> None:
-        self._internal.__set__(obj, str(value))
-
-    def with_default(self, default: int) -> int:
-        val = self._internal.with_default(str(default))
+    def from_env(self, val: str) -> int:
         try:
             return int(val)
         except ValueError as exc:
-            raise RuntimeError(f"Unable to use {self._internal.key}={val}: expected int") from exc
-
-    def reset(self) -> None:
-        self._internal.reset()
+            raise RuntimeError(f"Unable to use {self.key}={val}: expected int") from exc
 
 
-T = TypeVar("T")
+class env_opt_base(Generic[GetType, SetType], env_base[Optional[GetType], Optional[SetType]]):
+
+    def __init__(self, key: str) -> None:
+        super().__init__(key, None)
 
 
-class env_class(Generic[T]):
+ClassType = TypeVar("ClassType")
+
+
+class env_class(Generic[ClassType], env_opt_base[Type[ClassType], Type[ClassType]]):
 
     def __init__(self, key: str, type: str) -> None:
-        self.key = key
+        super().__init__(key)
         # We can't pass the type directly to avoid import cycles
         self.type = type
-        self.value: Optional[Type[T] | Unset] = _UNSET
 
-    def __get__(self, obj: Optional[object], objtype: Optional[Type[object]] = None) -> Optional[Type[T]]:
-        if isinstance(self.value, Unset):
-            cls_module_str = getenv(self.key)
-            if cls_module_str is None:
-                return None
+    def from_env(self, val: str) -> Type[ClassType]:
+        comps = val.split(":", 1)
+        if len(comps) != 2:
+            raise RuntimeError(f"Unable to read {self.key}: '{val}' isn't of the form MODULE:CLASS")
+        cls = getattr(importlib.import_module(comps[0]), comps[1])
 
-            comps = cls_module_str.split(":", 1)
-            if len(comps) != 2:
-                raise RuntimeError(f"Unable to read {self.key}: '{cls_module_str}' isn't of the form MODULE:CLASS")
-            cls = getattr(importlib.import_module(comps[0]), comps[1])
+        if not any((c.__name__ == self.type for c in cls.mro())):
+            raise RuntimeError(f"Unable to use '{val}' from {self.key}: not of type '{self.type}'")
 
-            if not any((c.__name__ == self.type for c in cls.mro())):
-                raise RuntimeError(f"Unable to use '{cls_module_str}' from {self.key}: not of type '{self.type}'")
-
-            return cast(Type[T], cls)
-        else:
-            return self.value
-
-    def __set__(self, obj: object, value: Optional[Type[T]]) -> None:
-        self.value = value
+        return cast(Type[ClassType], cls)
 
 
 @dataclass
@@ -184,23 +157,25 @@ class NvidiaTool:
             return None
 
 
-class env_nvidia_tool:
+class env_nvidia_tool(env_base[str, NvidiaTool]):
 
     def __init__(self, binary: str) -> None:
         binary += sysconfig.get_config_var("EXE")
         self.binary = binary
-        self._internal = env_str(f"TRITON_{binary.upper()}_PATH")
+        super().__init__(f"TRITON_{binary.upper()}_PATH", lambda: os.path.join(
+            os.path.dirname(__file__),
+            "backends",
+            "nvidia",
+            "bin",
+            self.binary,
+        ))
 
-    def __get__(self, obj: Optional[object], objtype: Optional[Type[object]] = None) -> NvidiaTool:
+    def transform(self, path: str) -> NvidiaTool:
         paths = [
-            self._internal.__get__(obj, objtype),
-            os.path.join(
-                os.path.dirname(__file__),
-                "backends",
-                "nvidia",
-                "bin",
-                self.binary,
-            )
+            path,
+            # We still add default as fallback in case the pointed binary isn't
+            # accessible.
+            self.default(),
         ]
         for path in paths:
             if not path or not os.access(path, os.X_OK):
@@ -210,11 +185,17 @@ class env_nvidia_tool:
 
         raise RuntimeError(f"Cannot find {self.binary}")
 
-    def __set__(self, obj: object, value: str) -> None:
-        tool = NvidiaTool.from_path(value)
-        if not tool:
-            raise RuntimeError(f"Unable to use {value} for {self.binary}: can't parse output of `{value} --version`")
-        self._internal.__set__(obj, value)
+    def from_env(self, val: str) -> str:
+        return val
+
+
+# Separate classes so that types are correct
+class env_opt_str(env_opt_base[str, str], env_str):
+    pass
+
+
+class env_opt_bool(env_opt_base[bool, bool], env_bool):
+    pass
 
 
 def get_triton_dir(dirname: str) -> str:
@@ -225,50 +206,70 @@ def get_triton_dir(dirname: str) -> str:
     )
 
 
-class _base:
+class base_config:
 
-    @classmethod
-    def reset(cls) -> None:
-        for v in cls.__dict__.values():
-            if hasattr(v, "reset"):
-                v.reset()
+    @property
+    def knobs(self) -> dict[str, Any]:
+        return {
+            k: getattr(self, k)
+            # data descriptors live on the class object
+            for k, v in type(self).__dict__.items()
+            if isinstance(v, env_base)
+        }
+
+    def copy(self) -> Self:
+        res = type(self)()
+        for k, v in self.__dict__.items():
+            res.__dict__[k] = v
+        return res
+
+    def reset(self) -> Self:
+        for knob in self.knobs.keys():
+            delattr(self, knob)
+        return self
 
 
-class build(_base):
+class build_config(base_config):
     """Configuration controlling how the native compiler is invoked"""
-    cc: env_str = env_str("CC")
-    backend_dirs: env_str_set = env_str_set("TRITON_CUDACRT_PATH", "TRITON_CUDART_PATH")
+    cc: env_opt_str = env_opt_str("CC")
+
+    cudacrt_path: env_opt_str = env_opt_str("TRITON_CUDACRT_PATH")
+    cudart_path: env_opt_str = env_opt_str("TRITON_CUDART_PATH")
+
+    @property
+    def backend_dirs(self) -> set[str]:
+        return {path for path in (self.cudacrt_path, self.cudart_path) if path is not None}
 
 
-class redis(_base):
-    key_format: env_strd = env_strd("TRITON_REDIS_KEY_FORMAT", "triton:{key}:{filename}")
-    host: env_strd = env_strd("TRITON_REDIS_HOST", "localhost")
+class redis_config(base_config):
+    key_format: env_str = env_str("TRITON_REDIS_KEY_FORMAT", "triton:{key}:{filename}")
+    host: env_str = env_str("TRITON_REDIS_HOST", "localhost")
     port: env_int = env_int("TRITON_REDIS_PORT", 6379)
 
 
-class cache(_base):
-    dump_dir: env_strd = env_strd("TRITON_DUMP_DIR", lambda: get_triton_dir("dump"))
-    override_dir: env_strd = env_strd("TRITON_OVERRIDE_DIR", lambda: get_triton_dir("override"))
-    dir: env_strd = env_strd("TRITON_CACHE_DIR", lambda: get_triton_dir("cache"))
+class cache_config(base_config):
+    dump_dir: env_str = env_str("TRITON_DUMP_DIR", lambda: get_triton_dir("dump"))
+    override_dir: env_str = env_str("TRITON_OVERRIDE_DIR", lambda: get_triton_dir("override"))
+    dir: env_str = env_str("TRITON_CACHE_DIR", lambda: get_triton_dir("cache"))
 
     manager_class: env_class[CacheManager] = env_class("TRITON_CACHE_MANAGER", "CacheManager")
     remote_manager_class: env_class[RemoteCacheBackend] = env_class("TRITON_REMOTE_CACHE_BACKEND", "RemoteCacheBackend")
 
 
-class compilation(_base):
+class compilation_config(base_config):
     override: env_bool = env_bool("TRITON_KERNEL_OVERRIDE")
     dump_ir: env_bool = env_bool("TRITON_KERNEL_DUMP")
     store_binary_only: env_bool = env_bool("TRITON_STORE_BINARY_ONLY")
     always_compile: env_bool = env_bool("TRITON_ALWAYS_COMPILE")
     # TODO: Use enum to constrain / 'typecheck' the values
-    use_ir_loc: env_str = env_str("USE_IR_LOC")
+    use_ir_loc: env_opt_str = env_opt_str("USE_IR_LOC")
     enable_asan: env_bool = env_bool("TRITON_ENABLE_ASAN")
     disable_line_info: env_bool = env_bool("TRITON_DISABLE_LINE_INFO")
     front_end_debugging: env_bool = env_bool("TRITON_FRONT_END_DEBUGGING")
     allow_non_constexpr_globals: env_bool = env_bool("TRITON_ALLOW_NON_CONSTEXPR_GLOBALS")
 
 
-class autotuning(_base):
+class autotuning_config(base_config):
     cache: env_bool = env_bool("TRITON_CACHE_AUTOTUNING")
     print: env_bool = env_bool("TRITON_PRINT_AUTOTUNING")
 
@@ -307,10 +308,10 @@ class JITHook(Protocol):
         ...
 
 
-class runtime(_base):
+class runtime_config(base_config):
     interpret: env_bool = env_bool("TRITON_INTERPRET")
     debug: env_bool = env_bool("TRITON_DEBUG")
-    override_arch: env_str = env_str("TRITON_OVERRIDE_ARCH")
+    override_arch: env_opt_str = env_opt_str("TRITON_OVERRIDE_ARCH")
 
     launch_enter_hook: Optional[LaunchHook] = None
     launch_exit_hook: Optional[LaunchHook] = None
@@ -322,38 +323,50 @@ class runtime(_base):
     jit_post_compile_hook: Optional[JITHook] = None
 
 
-class language(_base):
-    fp32_default: env_str = env_str("TRITON_F32_DEFAULT")
+class language_config(base_config):
+    fp32_default: env_opt_str = env_opt_str("TRITON_F32_DEFAULT")
     default_fp_fusion: env_bool = env_bool("TRITON_DEFAULT_FP_FUSION", True)
 
 
-class nvidia(_base):
+class nvidia_config(base_config):
     cuobjdump: env_nvidia_tool = env_nvidia_tool("cuobjdump")
     nvdisasm: env_nvidia_tool = env_nvidia_tool("nvdisasm")
     ptxas: env_nvidia_tool = env_nvidia_tool("ptxas")
 
     dump_nvptx: env_bool = env_bool("NVPTX_ENABLE_DUMP")
     disable_ptxas_opt: env_bool = env_bool("DISABLE_PTXAS_OPT")
-    mock_ptx_version: env_str = env_str("TRITON_MOCK_PTX_VERSION")
+    mock_ptx_version: env_opt_str = env_opt_str("TRITON_MOCK_PTX_VERSION")
 
-    libdevice_path: env_str = env_str("TRITON_LIBDEVICE_PATH")
-    libcuda_path: env_str = env_str("TRITON_LIBCUDA_PATH")
+    libdevice_path: env_opt_str = env_opt_str("TRITON_LIBDEVICE_PATH")
+    libcuda_path: env_opt_str = env_opt_str("TRITON_LIBCUDA_PATH")
 
 
-class amd(_base):
+class amd_config(base_config):
     use_buffer_ops: env_bool = env_bool("AMDGCN_USE_BUFFER_OPS", True)
     dump_amdgcn: env_bool = env_bool("AMDGCN_ENABLE_DUMP")
-    libhip_path: env_str = env_str("TRITON_LIBHIP_PATH")
-    lld_path: env_str = env_str("TRITON_HIP_LLD_PATH")
+    libhip_path: env_opt_str = env_opt_str("TRITON_LIBHIP_PATH")
+    lld_path: env_opt_str = env_opt_str("TRITON_HIP_LLD_PATH")
 
     # We use strs so that we can have a default value based on other runtime info
-    use_block_pingpong: env_str = env_str("TRITON_HIP_USE_BLOCK_PINGPONG")
-    use_in_thread_transpose: env_str = env_str("TRITON_HIP_USE_IN_THREAD_TRANSPOSE")
+    use_block_pingpong: env_opt_bool = env_opt_bool("TRITON_HIP_USE_BLOCK_PINGPONG")
+    use_in_thread_transpose: env_opt_bool = env_opt_bool("TRITON_HIP_USE_IN_THREAD_TRANSPOSE")
 
     global_prefetch: env_int = env_int("TRITON_HIP_GLOBAL_PREFETCH")
     local_prefetch: env_int = env_int("TRITON_HIP_GLOBAL_PREFETCH")
     use_async_copy: env_bool = env_bool("TRITON_HIP_GLOBAL_PREFETCH")
 
 
-class proton(_base):
-    cupti_path: env_str = env_str("TRITON_CUPTI_LIB_PATH")
+class proton_config(base_config):
+    cupti_path: env_opt_str = env_opt_str("TRITON_CUPTI_LIB_PATH")
+
+
+build = build_config()
+redis = redis_config()
+cache = cache_config()
+compilation = compilation_config()
+autotuning = autotuning_config()
+runtime = runtime_config()
+language = language_config()
+nvidia = nvidia_config()
+amd = amd_config()
+proton = proton_config()
