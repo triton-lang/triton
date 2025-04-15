@@ -547,12 +547,14 @@ public:
     auto acc = rewriter.create<triton::nvidia_gpu::TMEMAllocOp>(
         loc, accMemDescType, cvtAcc);
     auto vTrue = rewriter.create<arith::ConstantIntOp>(dotOp.getLoc(), 1, 1);
+    auto tokType = rewriter.getType<AsyncTokenType>();
     auto mma = rewriter.create<triton::nvidia_gpu::TCGen5MMAOp>(
-        loc, a, b, acc, /*useD=*/vTrue, /*pred=*/vTrue);
+        loc, tokType, a, b, acc, /*d_deps=*/ValueRange(), /*useD=*/vTrue,
+        /*pred=*/vTrue);
     mma.setTwoCtas(useTwoCTAs);
 
-    auto ld =
-        rewriter.create<triton::nvidia_gpu::TMEMLoadOp>(loc, newAccType, acc);
+    auto ld = rewriter.create<triton::nvidia_gpu::TMEMLoadOp>(
+        loc, newAccType, tokType, acc, /*dep=*/mma.getToken());
     rewriter.replaceOpWithNewOp<ConvertLayoutOp>(dotOp, oldRetType, ld);
     return success();
   }
@@ -723,6 +725,7 @@ public:
 
     auto lhsScale = addSmemStageToScaleLoad(dotOp.getAScale(), rewriter);
     auto rhsScale = addSmemStageToScaleLoad(dotOp.getBScale(), rewriter);
+    auto tokType = rewriter.getType<AsyncTokenType>();
 
     Value newScaleA =
         rewriter.create<ConvertLayoutOp>(loc, newScaleAType, lhsScale);
@@ -733,12 +736,13 @@ public:
     Value scaleB = rewriter.create<triton::nvidia_gpu::TMEMAllocOp>(
         loc, scaleBType, newScaleB);
     auto vTrue = rewriter.create<arith::ConstantIntOp>(dotOp.getLoc(), 1, 1);
-    rewriter.create<triton::nvidia_gpu::TCGen5MMAScaledOp>(
-        loc, a, b, acc, scaleA, scaleB, dotOp.getAElemType(),
-        dotOp.getBElemType(), /*useD=*/vTrue, /*pred=*/vTrue);
+    auto mmaOp = rewriter.create<triton::nvidia_gpu::TCGen5MMAScaledOp>(
+        loc, tokType, a, b, acc, /*d_deps=*/ValueRange(), scaleA, scaleB,
+        dotOp.getAElemType(), dotOp.getBElemType(), /*useD=*/vTrue,
+        /*pred=*/vTrue);
 
-    auto ld =
-        rewriter.create<triton::nvidia_gpu::TMEMLoadOp>(loc, newAccType, acc);
+    auto ld = rewriter.create<triton::nvidia_gpu::TMEMLoadOp>(
+        loc, newAccType, tokType, acc, mmaOp.getToken());
     rewriter.replaceOpWithNewOp<ConvertLayoutOp>(dotOp, oldRetType, ld);
     return success();
   }

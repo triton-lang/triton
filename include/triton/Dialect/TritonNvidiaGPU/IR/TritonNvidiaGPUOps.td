@@ -393,7 +393,7 @@ def TTNG_TCGen5MMAOp : TTNG_Op<"tc_gen5_mma", [
     DeclareOpInterfaceMethods<MemoryEffectsOpInterface>,
     DeclareOpInterfaceMethods<DotOpInterface>,
     DeclareOpInterfaceMethods<MMAv5OpInterface>,
-    SameVariadicOperandSize
+    AttrSizedOperandSegments
 ]> {
   let summary = "block level op mapping to tensorcore gen5 mma";
 
@@ -409,22 +409,25 @@ def TTNG_TCGen5MMAOp : TTNG_Op<"tc_gen5_mma", [
     TTG_MemDescType:$a,
     TTG_MemDescType:$b,
     TTG_MemDescType:$d,
+    Variadic<TTG_AsyncToken>:$d_deps,
     I1:$useD,
     I1:$pred,
     Variadic<TTG_MemDescType>:$barriers,
     Variadic<I1>:$barrier_preds,
     OptionalAttr<UnitAttr>:$two_ctas
   );
+  let results = (outs Optional<TTG_AsyncToken>:$token);
 
   let builders = [
-    OpBuilder<(ins
-      "Value":$a, "Value":$b, "Value":$d, "Value":$useD, "Value":$pred,
-      CArg<"bool", "false">:$two_ctas, CArg<"ValueRange", "{}">:$barriers,
+    OpBuilder<(ins "Type":$token,
+      "Value":$a, "Value":$b, "Value":$d, "ValueRange":$d_dep, "Value":$useD,
+      "Value":$pred, CArg<"bool", "false">:$two_ctas,
+      CArg<"ValueRange", "{}">:$barriers,
       CArg<"ValueRange", "{}">:$barrier_preds)>
   ];
 
   let assemblyFormat = [{
-    $a`,` $b`,` $d`,` $useD`,` $pred
+    $a `,` $b `,` $d `` custom<Token>($d_deps, type($token)) `,` $useD`,` $pred
     `` custom<BarriersAndPreds>($barriers, $barrier_preds)
     attr-dict `:` qualified(type($a)) `,` qualified(type($b)) `,`
     qualified(type($d)) (`,` qualified(type($barriers))^)?
@@ -435,7 +438,7 @@ def TTNG_TCGen5MMAScaledOp : TTNG_Op<"tc_gen5_mma_scaled", [
     DeclareOpInterfaceMethods<MemoryEffectsOpInterface>,
     DeclareOpInterfaceMethods<DotOpInterface, ["verifyDims", "verifyOutputDims"]>,
     DeclareOpInterfaceMethods<MMAv5OpInterface>,
-    SameVariadicOperandSize
+    AttrSizedOperandSegments
 ]> {
   let summary = "block level op mapping to tensorcore gen5 mma";
 
@@ -449,6 +452,7 @@ def TTNG_TCGen5MMAScaledOp : TTNG_Op<"tc_gen5_mma_scaled", [
     TTG_MemDescType:$a,
     TTG_MemDescType:$b,
     TTG_MemDescType:$d,
+    Variadic<TTG_AsyncToken>:$d_deps,
     TTG_MemDescType:$a_scale,
     TTG_MemDescType:$b_scale,
     TT_ScaleDotElemTypeAttr:$a_type,
@@ -458,6 +462,8 @@ def TTNG_TCGen5MMAScaledOp : TTNG_Op<"tc_gen5_mma_scaled", [
     Variadic<TTG_MemDescType>:$barriers,
     Variadic<I1>:$barrier_preds
   );
+  let results = (outs Optional<TTG_AsyncToken>:$token);
+
   let extraClassDeclaration = [{
     int64_t getBlockM();
     int64_t getBlockN();
@@ -467,10 +473,10 @@ def TTNG_TCGen5MMAScaledOp : TTNG_Op<"tc_gen5_mma_scaled", [
   let builders = [
     // Namespaces need to be prefixed so ODS prefers our
     // custom builder signature over the default-generated one.
-    OpBuilder<(ins
+    OpBuilder<(ins "::mlir::Type":$token,
       "::mlir::Value":$a, "::mlir::Value":$b, "::mlir::Value":$d,
-      "::mlir::Value":$a_scale, "::mlir::Value":$b_scale,
-      "::mlir::triton::ScaleDotElemType":$a_type,
+      "::mlir::ValueRange":$d_deps, "::mlir::Value":$a_scale,
+      "::mlir::Value":$b_scale, "::mlir::triton::ScaleDotElemType":$a_type,
       "::mlir::triton::ScaleDotElemType":$b_type,
       "::mlir::Value":$useD, "::mlir::Value":$pred,
       CArg<"::mlir::ValueRange", "{}">:$barriers,
@@ -478,8 +484,8 @@ def TTNG_TCGen5MMAScaledOp : TTNG_Op<"tc_gen5_mma_scaled", [
   ];
 
   let assemblyFormat = [{
-    $a `,` $b `,` $d `,` $a_scale `,` $b_scale `,` $useD`,` $pred
-    `lhs` `=` $a_type `rhs` `=` $b_type
+    $a `,` $b `,` $d `` custom<Token>($d_deps, type($token)) `,` $a_scale `,`
+    $b_scale `,` $useD `,` $pred `lhs` `=` $a_type `rhs` `=` $b_type
     `` custom<BarriersAndPreds>($barriers, $barrier_preds)
     attr-dict `:` qualified(type($a)) `,` qualified(type($b)) `,`
     qualified(type($d)) `,` qualified(type($a_scale)) `,`
@@ -494,13 +500,25 @@ def TTNG_TMEMLoadOp : TTNG_Op<"tmem_load"> {
     This is similar to ttg.local_load except the result layout is restricted to only few possibility.
     Therefore we cannot combine this op with any convert layout like local_load.
   }];
-  let arguments = (ins Arg<TTG_MemDescType, "", [MemRead<TensorMemory>]>:$src);
-  let results = (outs TT_Tensor:$result);
+  let arguments = (ins
+    Arg<TTG_MemDescType, "", [MemRead<TensorMemory>]>:$src,
+    Optional<TTG_AsyncToken>:$dep
+  );
+  let results = (outs
+    TT_Tensor:$result,
+    Optional<TTG_AsyncToken>:$token
+  );
 
   let assemblyFormat = [{
-    $src attr-dict `:` qualified(type($src)) `->` type($result)
+    $src `` custom<Token>($dep, type($token))
+    attr-dict `:` qualified(type($src)) `->` type($result)
   }];
   let hasVerifier = 1;
+
+  let extraClassDeclaration = [{
+    RankedTensorType getType() { return getResult().getType(); }
+    operator TypedValue<RankedTensorType>() { return getResult(); }
+  }];
 }
 
 def TTNG_TMEMStoreOp : TTNG_Op<"tmem_store"> {
@@ -511,12 +529,15 @@ def TTNG_TMEMStoreOp : TTNG_Op<"tmem_store"> {
   }];
   let arguments = (ins
     Arg<TTG_MemDescType, "", [MemWrite<TensorMemory>]>:$dst,
+    Variadic<TTG_AsyncToken>:$deps,
     TT_Tensor:$src,
     I1:$pred
   );
+  let results = (outs Optional<TTG_AsyncToken>:$token);
 
   let assemblyFormat = [{
-    $src `,` $dst `,` $pred attr-dict `:` type($src) `->` qualified(type($dst))
+    $src `` custom<Token>($deps, type($token)) `,` $dst `,` $pred
+    attr-dict `:` type($src) `->` qualified(type($dst))
   }];
   let hasVerifier = 1;
 }

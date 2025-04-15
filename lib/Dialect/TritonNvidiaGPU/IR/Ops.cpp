@@ -214,6 +214,8 @@ static void printBarriersAndPreds(OpAsmPrinter &p, Operation *op,
   }
 }
 
+// token := `[` (ssa-value (`,` ssa-value)*)? `]`
+
 template <typename MMAOpT>
 static void getMMAEffects(
     MMAOpT op,
