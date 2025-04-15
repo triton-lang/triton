@@ -1,15 +1,16 @@
+from __future__ import annotations
+
 from functools import reduce
 from typing import cast, Any, Callable, TYPE_CHECKING
 
 if TYPE_CHECKING:
     from .language import core
-
-IterableType = list[Any] | tuple[Any, ...] | core.tuple | core.tuple_type
-ObjPath = tuple[int, ...]
+    IterableType = list[Any] | tuple[Any, ...] | core.tuple | core.tuple_type
+    ObjPath = tuple[int, ...]
 
 
 def get_iterable_path(iterable: IterableType, path: ObjPath) -> Any:
-    return reduce(lambda a, idx: cast(IterableType, a[idx]), path, iterable)  # type: ignore[index]
+    return reduce(lambda a, idx: a[idx], path, iterable)  # type: ignore[index]
 
 
 def set_iterable_path(iterable: IterableType, path: tuple[int, ...], val: Any):
