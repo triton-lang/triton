@@ -16,6 +16,8 @@ def test_record(tmp_path: pathlib.Path):
     if is_hip():
         pytest.skip("HIP backend does not support record")
 
+    proton.hooks.InstrumentationHook.enable_host_buffer = True
+
     @triton.jit
     def add_kernel(
         x_ptr,
@@ -47,7 +49,8 @@ def test_record(tmp_path: pathlib.Path):
     proton.start(str(temp_file.with_suffix("")), backend="instrumentation")
     pgm = add_kernel[grid](x, y, output, n_elements, BLOCK_SIZE=1024)
 
-    proton.hooks.InstrumentationHook.enable_host_buffer = True
+    proton.hooks.InstrumentationHook.enable_host_buffer = False
+
     host_buffer = proton.hooks.InstrumentationHook.host_buffer
     preamble = host_buffer[0:4]
     assert int.from_bytes(preamble.numpy().tobytes(), 'little') == 0xdeadbeef
