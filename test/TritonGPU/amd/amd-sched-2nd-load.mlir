@@ -146,8 +146,8 @@ module attributes {"ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 64 : i32}
 // Should NOT apply: tile size 256x64x128 with single dot
 // CHECK-LABEL: sink_2nd_load_256x64x128
 //       CHECK: %[[tileA:.*]] = tt.load
-//  CHECK-NEXT: %[[tileB:.*]] = tt.load
 //  CHECK-NEXT: local_load
+//  CHECK-NEXT: %[[tileB:.*]] = tt.load
 //  CHECK-NEXT: local_load
 //  CHECK-NEXT: tt.dot
 //  CHECK-NEXT: ttg.local_store %[[tileA]]
@@ -186,8 +186,8 @@ module attributes {"ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 64 : i32}
 // Should NOT apply: tile size 256x256x32 with single dot
 // CHECK-LABEL: sink_2nd_load_256x256x32
 //       CHECK: %[[tileA:.*]] = tt.load
-//  CHECK-NEXT: %[[tileB:.*]] = tt.load
 //  CHECK-NEXT: local_load
+//  CHECK-NEXT: %[[tileB:.*]] = tt.load
 //  CHECK-NEXT: local_load
 //  CHECK-NEXT: tt.dot
 //  CHECK-NEXT: ttg.local_store %[[tileA]]
@@ -228,8 +228,8 @@ module attributes {"ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 64 : i32}
 // Should NOT apply: the 2nd load has a user before the dot
 // CHECK-LABEL: sink_2nd_load_128x128x128_user_before_dot
 //       CHECK: %[[tileA:.*]] = tt.load
-//  CHECK-NEXT: %[[tileB:.*]] = tt.load
 //  CHECK-NEXT: local_load
+//  CHECK-NEXT: %[[tileB:.*]] = tt.load
 //  CHECK-NEXT: local_load
 //  CHECK-NEXT: tt.store
 //  CHECK-NEXT: tt.dot
@@ -304,9 +304,9 @@ module attributes {"ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 64 : i32}
 // should NOT apply: load scalar
 // CHECK-LABEL: sink_2nd_load_scalar
 //       CHECK: tt.load
-//  CHECK-NEXT: tt.load
 //  CHECK-NEXT: tt.splat
 //  CHECK-NEXT: tt.broadcast
+//  CHECK-NEXT: tt.load
 //  CHECK-NEXT: ttg.convert_layout
 //  CHECK-NEXT: ttg.convert_layout
 //  CHECK-NEXT: tt.dot
@@ -343,9 +343,9 @@ tt.func public @sink_2nd_load_scalar(%A_ptr: !tt.ptr<f16>, %B_ptr: tensor<64x256
 // should NOT apply: load scalar
 // CHECK-LABEL: sink_2nd_load_1D_tensor
 //       CHECK: tt.load
-//  CHECK-NEXT: tt.load
 //  CHECK-NEXT: tt.expand_dims
 //  CHECK-NEXT: tt.broadcast
+//  CHECK-NEXT: tt.load
 //  CHECK-NEXT: ttg.convert_layout
 //  CHECK-NEXT: ttg.convert_layout
 //  CHECK-NEXT: tt.dot

@@ -160,7 +160,7 @@ static void moveUpGlobalLoad(triton::FuncOp funcOp) {
   // Avoid moving up global_load ops that don't belong to any prologue to avoid
   // extra register pressure.
   llvm::erase_if(globalLoadOps, [](triton::LoadOp op) {
-    return !op->getAttr("PipelinerPart");
+    return !op->getAttr("amd.pipeliner_part");
   });
 
   for (auto op : llvm::reverse(globalLoadOps)) {
@@ -181,8 +181,7 @@ static void moveUpGlobalLoad(triton::FuncOp funcOp) {
       // Only move ops residing in the same block.
       return defBlock == block;
     };
-    mlir::getBackwardSlice(static_cast<mlir::Operation *>(op), &backwardSet,
-                           options);
+    mlir::getBackwardSlice(op.getOperation(), &backwardSet, options);
     backwardSet.insert(op);
 
     auto ipoint = findEarlyInsertionPoint(block, op);

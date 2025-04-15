@@ -138,14 +138,13 @@ public:
         return;
 
       if (auto loadOp = dyn_cast<tt::LoadOp>(op)) {
-        loadOp->setAttr("PipelinerPart",
-                        StringAttr::get(this->getContext(), "prologue"));
+        loadOp->setAttr("amd.pipeliner_part",
+                        StringAttr::get(op->getContext(), "prologue"));
       }
     };
   }
 
   LogicalResult pipelineLoop();
-  MLIRContext *getContext() { return forOp->getContext(); }
 
 private:
   LogicalResult initSchedule(int maxIndirectionLevel);
