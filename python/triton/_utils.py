@@ -22,15 +22,16 @@ def set_iterable_path(iterable: IterableType, path: tuple[int, ...], val: Any):
 def find_paths_if(iterable: IterableType | Any, pred: Callable[[ObjPath, Any], bool]) -> list[ObjPath]:
     from .language import core
     is_iterable: Callable[[Any], bool] = lambda x: isinstance(x, (list, tuple, core.tuple, core.tuple_type))
-    ret = set()
+    # We need to use dict so that ordering is maintained, while set doesn't guarantee order
+    ret: dict[ObjPath, None] = {}
 
     def _impl(path: tuple[int, ...], current: Any):
         if is_iterable(current):
             for idx, item in enumerate(current):
                 _impl((*path, idx), item)
         elif pred(path, current):
-            ret.add(path)
+            ret[path] = None
 
     _impl((), iterable)
 
-    return list(ret)
+    return list(ret.keys())
