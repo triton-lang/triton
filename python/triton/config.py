@@ -7,7 +7,8 @@ import subprocess
 import sysconfig
 
 from dataclasses import dataclass
-from typing import cast, Any, Callable, Generic, Optional, Protocol, Self, Type, TypeVar, TypedDict, TYPE_CHECKING
+from contextlib import contextmanager
+from typing import cast, Any, Callable, Generator, Generic, Optional, Protocol, Self, Type, TypeVar, TypedDict, TYPE_CHECKING
 
 if TYPE_CHECKING:
     from .runtime.cache import CacheManager, RemoteCacheBackend
@@ -228,6 +229,15 @@ class base_config:
             delattr(self, knob)
         return self
 
+    @contextmanager
+    def scope(self) -> Generator[None, None, None]:
+        try:
+            orig = dict(self.__dict__)
+            yield
+        finally:
+            self.__dict__.clear()
+            self.__dict__.update(orig)
+
 
 class build_config(base_config):
     """Configuration controlling how the native compiler is invoked"""
@@ -352,8 +362,8 @@ class amd_config(base_config):
     use_in_thread_transpose: env_opt_bool = env_opt_bool("TRITON_HIP_USE_IN_THREAD_TRANSPOSE")
 
     global_prefetch: env_int = env_int("TRITON_HIP_GLOBAL_PREFETCH")
-    local_prefetch: env_int = env_int("TRITON_HIP_GLOBAL_PREFETCH")
-    use_async_copy: env_bool = env_bool("TRITON_HIP_GLOBAL_PREFETCH")
+    local_prefetch: env_int = env_int("TRITON_HIP_LOCAL_PREFETCH")
+    use_async_copy: env_bool = env_bool("TRITON_HIP_USE_ASYNC_COPY")
 
 
 class proton_config(base_config):
