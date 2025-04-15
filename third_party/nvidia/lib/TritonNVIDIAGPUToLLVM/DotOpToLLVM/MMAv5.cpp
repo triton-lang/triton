@@ -366,7 +366,8 @@ void convertDotImpl(const LLVMTypeConverter &typeConverter,
                     ConversionPatternRewriter &rewriter, Location loc, Value a,
                     Value b, Value loadedA, Value loadedB,
                     MemDescType dTensorTy, Value useDFlag, Value pred,
-                    Value barrier, bool twoCTAs, const DotConversion &op) {
+                    ValueRange barriers, ValueRange barrierPreds, bool twoCTAs,
+                    const DotConversion &op) {
   auto tb = TritonLLVMOpBuilder(loc, rewriter);
 
   // Only run mma on one thread. We currently use elect as ptxas is not able to
@@ -395,7 +396,7 @@ void convertDotImpl(const LLVMTypeConverter &typeConverter,
   // Emit the rest in mmaBlock
   rewriter.setInsertionPointToEnd(mmaBlock);
 
-  pred = LLVM::NVIDIA::createElectPredicate(loc, rewriter);
+  Value elect = LLVM::NVIDIA::createElectPredicate(loc, rewriter);
 
   auto aTensorTy = cast<MemDescType>(a.getType());
   auto bTensorTy = cast<MemDescType>(b.getType());
@@ -459,16 +460,19 @@ void convertDotImpl(const LLVMTypeConverter &typeConverter,
       for (int k = 0; k < numRepK; k++) {
         Value a = aLoader->memLoad(m, k, rewriter, loc);
         Value b = bLoader.smemLoad(n, k, rewriter, loc);
-        op.createMMAInst(rewriter, loc, accAddress, a, b, pred, useInitAcc,
+        op.createMMAInst(rewriter, loc, accAddress, a, b, elect, useInitAcc,
                          desc, m, n, k);
         useInitAcc = tb.i1_val(1);
       }
     }
   }
 
-  auto smemObj =
-      LLVM::getSharedMemoryObjectFromStruct(loc, barrier, i64_ty, rewriter);
-  createMMACommit(rewriter, loc, smemObj.getBase(), pred, twoCTAs);
+  for (auto [barrier, barrierPred] : llvm::zip(barriers, barrierPreds)) {
+    Value commitPred = tb.and_(barrierPred, elect);
+    auto smemObj =
+        LLVM::getSharedMemoryObjectFromStruct(loc, barrier, i64_ty, rewriter);
+    createMMACommit(rewriter, loc, smemObj.getBase(), commitPred, twoCTAs);
+  }
   rewriter.create<LLVM::BrOp>(loc, endBlock);
 }
 
@@ -514,7 +518,8 @@ void convertDot(const LLVMTypeConverter &typeConverter,
 
   convertDotImpl(typeConverter, rewriter, loc, op.getA(), op.getB(),
                  adaptor.getA(), adaptor.getB(), dTensorTy, adaptor.getUseD(),
-                 adaptor.getPred(), adaptor.getBarrier(), twoCTAs, dot);
+                 adaptor.getPred(), adaptor.getBarriers(),
+                 adaptor.getBarrierPreds(), twoCTAs, dot);
 }
 
 int64_t getFormatBitSize(ScaleDotElemType type) {
@@ -626,8 +631,8 @@ void convertScaledDot(const LLVMTypeConverter &typeConverter,
 
   convertDotImpl(typeConverter, rewriter, loc, op.getA(), op.getB(),
                  adaptor.getA(), adaptor.getB(), dTensorTy, adaptor.getUseD(),
-                 adaptor.getPred(), adaptor.getBarrier(), /*twoCTAs=*/false,
-                 dot);
+                 adaptor.getPred(), adaptor.getBarriers(),
+                 adaptor.getBarrierPreds(), /*twoCTAs=*/false, dot);
 }
 
 //===----------------------------------------------------------------------===//
@@ -648,7 +653,7 @@ struct TCGen5MMAOpConversion
         "Operand A should use Shared or Tensor memory layout.");
     assert(isa<NVMMASharedEncodingAttr>(BEnc) &&
            "Operand B should use Shared layout.");
-    assert(op.getBarrier() &&
+    assert(!op.getBarriers().empty() &&
            "tensorcore op should have a barrier at this point.");
     convertDot(*getTypeConverter(), rewriter, op.getLoc(), op, adaptor);
     rewriter.eraseOp(op);
@@ -663,13 +668,14 @@ struct TCGen5MMAScaledOpConversion
   LogicalResult
   matchAndRewrite(ttng::TCGen5MMAScaledOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    assert(op.getBarrier() &&
+    assert(!op.getBarriers().empty() &&
            "tensorcore op should have a barrier at this point.");
     convertScaledDot(*getTypeConverter(), rewriter, op.getLoc(), op, adaptor);
     rewriter.eraseOp(op);
     return success();
   }
 };
+
 } // namespace
 
 namespace mlir {
