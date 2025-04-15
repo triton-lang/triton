@@ -248,9 +248,7 @@ int mlir::triton::getCopyVecBytes(RankedTensorType registerTy,
 
 void mlir::triton::serializeLatencies(ModuleOp module,
                                       DenseMap<Operation *, int> &opLatency) {
-  auto helper = module.getContext()
-                    ->getLoadedDialect<TritonDialect>()
-                    ->getLatencyAttrHelper();
+  auto helper = TritonDialect::getLoaded(module)->getLatencyAttrHelper();
   auto builder = Builder(module);
   for (auto &[op, latency] : opLatency) {
     helper.setAttr(op, builder.getI32IntegerAttr(latency));
@@ -258,9 +256,7 @@ void mlir::triton::serializeLatencies(ModuleOp module,
 }
 
 DenseMap<Operation *, int> mlir::triton::deserializeLatencies(Operation *op) {
-  auto helper = op->getContext()
-                    ->getLoadedDialect<TritonDialect>()
-                    ->getLatencyAttrHelper();
+  auto helper = TritonDialect::getLoaded(op)->getLatencyAttrHelper();
   DenseMap<Operation *, int> opLatency;
   op->walk([&](Operation *op) {
     if (auto attr = helper.getAttr(op)) {
@@ -413,9 +409,7 @@ int mlir::triton::getNumStagesOrDefault(scf::ForOp forOp,
                                         int defaultNumStages) {
   // Use the attribute attached to the loop if it exists otherwise use the
   // global control.
-  auto helper = forOp.getContext()
-                    ->getLoadedDialect<TritonDialect>()
-                    ->getNumStagesAttrHelper();
+  auto helper = TritonDialect::getLoaded(forOp)->getNumStagesAttrHelper();
   if (auto attr = helper.getAttr(forOp))
     return attr.getInt();
   return defaultNumStages;

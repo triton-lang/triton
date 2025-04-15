@@ -37,9 +37,7 @@ bool preCondition(scf::ForOp forOp) {
 }
 
 bool hasLatenciesAssigned(scf::ForOp forOp) {
-  auto helper = forOp.getContext()
-                    ->getLoadedDialect<TritonDialect>()
-                    ->getLatencyAttrHelper();
+  auto helper = TritonDialect::getLoaded(forOp)->getLatencyAttrHelper();
   for (auto &op : forOp.getBody()->without_terminator()) {
     if (helper.getAttr(&op))
       return true;
@@ -49,9 +47,7 @@ bool hasLatenciesAssigned(scf::ForOp forOp) {
 
 void assignUserProvidedLatencies(scf::ForOp forOp,
                                  DenseMap<Operation *, int> &opLatency) {
-  auto helper = forOp.getContext()
-                    ->getLoadedDialect<TritonDialect>()
-                    ->getLatencyAttrHelper();
+  auto helper = TritonDialect::getLoaded(forOp)->getLatencyAttrHelper();
   for (auto &op : forOp.getBody()->without_terminator()) {
     if (auto latencyAttr = helper.getAttr(&op)) {
       opLatency[&op] = latencyAttr.getInt();

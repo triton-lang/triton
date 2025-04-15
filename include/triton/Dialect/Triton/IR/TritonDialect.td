@@ -34,6 +34,13 @@ def Triton_Dialect : Dialect {
 
   let extraClassDeclaration = [{
     void registerTypes();
+
+    static TritonDialect *getLoaded(MLIRContext *ctx) {
+      return ctx->getLoadedDialect<TritonDialect>();
+    }
+    static TritonDialect *getLoaded(Operation *op) {
+      return getLoaded(op->getContext());
+    }
   }];
 
   let discardableAttrs = (ins
