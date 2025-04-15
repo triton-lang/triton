@@ -1,11 +1,11 @@
 from __future__ import annotations
 
 from functools import reduce
-from typing import Any, Callable, TYPE_CHECKING
+from typing import Any, Callable, TYPE_CHECKING, Union
 
 if TYPE_CHECKING:
     from .language import core
-    IterableType = list[Any] | tuple[Any, ...] | core.tuple | core.tuple_type
+    IterableType = Union[list[Any], tuple[Any, ...], core.tuple, core.tuple_type]
     ObjPath = tuple[int, ...]
 
 
@@ -19,7 +19,7 @@ def set_iterable_path(iterable: IterableType, path: tuple[int, ...], val: Any):
     prev[path[-1]] = val  # type: ignore[index]
 
 
-def find_paths_if(iterable: IterableType | Any, pred: Callable[[ObjPath, Any], bool]) -> list[ObjPath]:
+def find_paths_if(iterable: Union[IterableType, Any], pred: Callable[[ObjPath, Any], bool]) -> list[ObjPath]:
     from .language import core
     is_iterable: Callable[[Any], bool] = lambda x: isinstance(x, (list, tuple, core.tuple, core.tuple_type))
     # We need to use dict so that ordering is maintained, while set doesn't guarantee order
