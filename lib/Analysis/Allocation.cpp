@@ -428,16 +428,17 @@ private:
   ///     apply the real buffers allocation during interference graphing.
   ///
   /// Example: (numbers represent op liveness index)
-  ///  3    %b0 = convert_layout %g0                  -- Buffer #0
+  ///  2    %g0 = load %pc0
+  ///  3    %b0 = local_alloc %g0                     -- Buffer #0
   ///  4    %fr = for (.., %arg0 = %b0) {             -+ Alias #1
   ///  5        %gn = load %pc                         |   Buffers #0,#1
-  ///  6        %bc = convert_layout %arg0            -+
+  ///  6        %bc = local_load %arg0                -+
   ///  7        %v = add %bc, ...
-  ///  8        %bn = convert_layout %gn              -+ Buffer #1
+  ///  8        %bn = local_alloc %gn                 -+ Buffer #1
   ///  9        %pn = addptr %pc, %cst                 |   #1 is loop-carried
   ///  10       yield ... %bn                         -+   does not overlap #0
   ///       }
-  ///  11   %be = convert_layout %fr#1                -- Alias #2: Buffer #0,#1
+  ///  11   %be = local_load %fr#1                    -- Alias #2: Buffer #0,#1
   ///  12   %ve = add %be
   void resolveAliasBufferLiveness(LivenessF getLiveness) {
     for (auto aliasBufferIter : allocation->aliasBuffer) {
