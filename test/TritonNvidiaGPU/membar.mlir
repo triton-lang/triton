@@ -138,12 +138,13 @@ tt.func @wait_after_mma(
   %b: !ttg.memdesc<128x128xf16, #shared1, #smem>,
   %c: !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>,
   %useAcc: i1,
-  %pred: i1
+  %pred: i1,
+  %barrierPred: i1
 ) {
   %phase = arith.constant 0 : i32
   %barrier = ttg.local_alloc : () -> !ttg.memdesc<1xi64, #shared2, #smem, mutable>
   // CHECK: ttng.tc_gen5_mma
-  ttng.tc_gen5_mma %a, %b, %c, %useAcc, %pred, %barrier :
+  ttng.tc_gen5_mma %a, %b, %c, %useAcc, %pred, %barrier[%barrierPred] :
      !ttg.memdesc<128x128xf16, #shared, #smem>,
      !ttg.memdesc<128x128xf16, #shared1, #smem>,
      !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>,

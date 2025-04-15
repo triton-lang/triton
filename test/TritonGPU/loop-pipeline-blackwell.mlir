@@ -113,7 +113,7 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 1 : i32, ttg.targ
 // CHECK-LABEL: tt.func @matmul_loop_cast_load
 // CHECK: ttng.init_barrier
 // CHECK: scf.for
-// CHECK: ttng.tc_gen5_mma {{.*}}, {{.*}}, {{.*}}, {{.*}}, {{.*}}, %[[BAR:.*]] :
+// CHECK: ttng.tc_gen5_mma {{.*}}, {{.*}}, {{.*}}, {{.*}}, {{.*}}, %[[BAR:.*]][%true] :
 // CHECK: ttng.wait_barrier %[[BAR]]
     %a_ptr_splat = tt.splat %A : !tt.ptr<f8E4M3FN> -> tensor<128x32x!tt.ptr<f8E4M3FN>, #AL>
     %a_tmp0 = tt.make_range {end = 32: i32, start = 0: i32} : tensor<32xi32, #ALs0>

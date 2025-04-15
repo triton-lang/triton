@@ -354,7 +354,7 @@ LogicalResult triton::gpu::specializeLoadMMADependencies(scf::ForOp &loop,
   // Now rewrite the MMA by multi-buffering the accumulator if necessary.
   // However, the TMEM multi-buffering may be with respect to the outer loop.
   b.setInsertionPoint(mmaOp);
-  mmaOp.setBarrier(curEmptyBar);
+  mmaOp.addCompletionBarrier(curEmptyBar, intCst(true, 1));
 
   b.setInsertionPointAfter(mmaOp);
   OpBuilder::InsertPoint donePt = b.saveInsertionPoint();
@@ -432,15 +432,21 @@ LogicalResult triton::gpu::specializeLoadMMADependencies(scf::ForOp &loop,
     b.restoreInsertionPoint(donePt);
     std::tie(pred, domOp) = getUserPrecondition(b, loop, domOp);
 
-    // Set up production of the accumulator result.
+    // We have to hoist the predicate above the MMA op to add the barrier.
     b.setInsertionPointAfter(pred.getDefiningOp());
-    createInPartition<ttng::TCGen5CommitOp>(b, *mmaPartition, curAccReadyBar,
-                                            pred);
+    llvm::SetVector<Operation *> predOps;
+    if (!getDominatingValueSetOpsToHoist(domInfo, mmaOp, pred, predOps)) {
+      return mlir::emitWarning(pred.getLoc(),
+                               "failed to hoist user predicate above MMA op");
+    }
+    hoistOpsBefore(mmaOp, predOps);
+
+    // Set up production of the accumulator result.
+    mmaOp.addCompletionBarrier(curAccReadyBar, pred);
     createInPartition<ttng::WaitBarrierOp>(b, *mmaPartition, curAccEmptyBar,
                                            accPhase, pred);
     assert(donePt.getPoint() == b.getInsertionPoint() ||
            donePt.getPoint()->isBeforeInBlock(&*b.getInsertionPoint()));
-    donePt = b.saveInsertionPoint();
 
     Partition *userPartition = schedule.addPartition(numStages + numMmaStages);
     // Acquire and get the accumulator result. Normally, we want to acquire the
