@@ -95,8 +95,8 @@ void setNumGeneratedDsReads(gpu::LocalLoadOp op, size_t dsReadsCount,
   });
 }
 
-void storeOpSchedAnnotations(Operation *op,
-                             size_t localStoreOpCount, Type type) {
+void storeOpSchedAnnotations(Operation *op, size_t localStoreOpCount,
+                             Type type) {
   MLIRContext *ctx = op->getContext();
   auto counterAttr =
       triton::amdgpu::InstCounterAttr::get(ctx, localStoreOpCount, type);

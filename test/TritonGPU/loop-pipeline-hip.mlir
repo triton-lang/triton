@@ -35,12 +35,12 @@ module attributes {"ttg.target" = "hip:gfx942", "ttg.num-ctas" = 1 : i32, "ttg.n
     %14 = tt.broadcast %11 : tensor<1x16x!tt.ptr<f16>, #blocked> -> tensor<64x16x!tt.ptr<f16>, #blocked>
     %15 = tt.broadcast %13 : tensor<64x1xi32, #blocked> -> tensor<64x16xi32, #blocked>
     %16 = tt.addptr %14, %15 : tensor<64x16x!tt.ptr<f16>, #blocked>, tensor<64x16xi32, #blocked>
-    // SYNC: ttg.local_store
+    // SYNC: ttg.local_alloc %
     // SYNC: scf.for
     // SYNC:   tt.load
     // SYNC:   tt.dot
     // SYNC:   tt.dot
-    // SYNC:   ttg.local_store
+    // SYNC:   ttg.local_alloc %
     // SYNC:   scf.yield
 
     // ASYNC: ttg.async_copy_global_to_local
@@ -248,16 +248,9 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 // -----
 
 // Check that the stream pipeliner updates the resulting memory layout of transpose ops to mutable if immutable local buffers are replaced
-// <<<<<<< HEAD
 // COMMON-LABEL: loop_with_dot_and_transpose
 // COMMON: ttg.local_alloc {{.*}}, mutable>
-// COMMON: ttg.memdesc_trans {{.*}}, mutable> -> {{.*}}, mutable>
-// =======
-// CHECK-LABEL: loop_with_dot_and_transpose
-// CHECK: scf.for
-// CHECK: %[[TRANS_LD:.*]] = ttg.local_alloc {{.*}}>
-// CHECK-NEXT: ttg.memdesc_trans %[[TRANS_LD]] {{.*}}> -> {{.*}}>
-// >>>>>>> 8c088aeb (* added support for local_alloc in sched hints)
+// COMMON: ttg.memdesc_trans {{.*}}> -> {{.*}}>
 
 #blocked = #ttg.blocked<{sizePerThread = [2, 2], threadsPerWarp = [2, 16], warpsPerCTA = [4, 1], order = [1, 0]}>
 #blocked1 = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [32, 1], warpsPerCTA = [1, 4], order = [0, 1]}>
@@ -376,7 +369,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 //         COMMON: scf.if
 //         COMMON:   tt.dot_scaled
 // COMMON-COUNT-2:   scf.yield
-// COMMON-COUNT-3: ttg.local_dealloc
+// ASYNC-COUNT-3: ttg.local_dealloc
 
 #blocked = #ttg.blocked<{sizePerThread = [1, 16], threadsPerWarp = [4, 16], warpsPerCTA = [4, 1], order = [1, 0]}>
 #blocked1 = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [64, 1], warpsPerCTA = [4, 1], order = [1, 0]}>
@@ -493,9 +486,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 // COMMON-LABEL: simple_matmul_kernel
 
 // Prologue
-// COMMON-COUNT-2: ttg.local_alloc
   // SYNC-COUNT-2: tt.load
-  // SYNC-COUNT-2: ttg.local_store
+// COMMON-COUNT-2: ttg.local_alloc
   //
   // ASYNC-COUNT-2: ttg.async_copy_global_to_local
 
@@ -517,7 +509,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 //         COMMON: scf.if
 //         COMMON:   tt.dot
 // COMMON-COUNT-2:   scf.yield
-// COMMON-COUNT-2: ttg.local_dealloc
+// ASYNC-COUNT-2: ttg.local_dealloc
 
 #blocked = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [8, 8], warpsPerCTA = [8, 1], order = [1, 0]}>
 #blocked1 = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [4, 16], warpsPerCTA = [8, 1], order = [1, 0]}>

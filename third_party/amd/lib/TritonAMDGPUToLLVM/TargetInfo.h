@@ -86,6 +86,7 @@ public:
                          Type type) const override;
 
   bool supportsDirectToLdsLoadBitWidth(int bitWidth) const;
+
 private:
   void printfImpl(Value formatStrStart, int formatStrByteCount, ValueRange args,
                   ArrayRef<bool> isSigned, RewriterBase &rewriter,
