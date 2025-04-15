@@ -401,7 +401,8 @@ void StreamPipeliner::createStreamCopy(tt::LoadOp loadOp, Value alloc,
       allocTy.getEncoding(), sharedMemorySpace, /*mutableMemory=*/true);
   Value viewRes;
   if (numBuffers > 1) {
-    auto viewLoad = builder.create<ttg::MemDescSubviewOp>(loc, subviewTy, alloc, loadOffsets);
+    auto viewLoad = builder.create<ttg::MemDescSubviewOp>(loc, subviewTy, alloc,
+                                                          loadOffsets);
     scheduleOp(viewLoad, SCHED_LOCAL_STORE);
     viewRes = viewLoad;
     // Clean up old local caches.
@@ -419,19 +420,21 @@ void StreamPipeliner::createStreamCopy(tt::LoadOp loadOp, Value alloc,
 
   // Prefetch load ahead of the dot stage if is used by the dot.
   auto copyVal = copy->getResult(0);
-  Operation* storeOp;
-  if (numBuffers == 1) {
-    storeOp = builder.create<ttg::LocalAllocOp>(loc, subviewTy, copyVal);
-    storeRes = storeOp->getResult(0);
-  } else {
-    storeOp = builder.create<ttg::LocalStoreOp>(loc, copyVal, viewRes);
-    scheduleOp(viewLoad, SCHED_LOCAL_STORE);
-  }
-  scheduleOp(storeOp, SCHED_LOCAL_STORE);
+  Operation *localStoreOp;
+  if (numBuffers == 1)
+    localStoreOp = builder.create<ttg::LocalAllocOp>(loc, subviewTy, copyVal);
+  else
+    localStoreOp = builder.create<ttg::LocalStoreOp>(loc, copyVal, viewRes);
+  scheduleOp(localStoreOp, SCHED_LOCAL_STORE);
 
   // Create local load
-  auto sloadOp = builder.create<ttg::LocalLoadOp>(loc, loadOp.getType(), storeOp->getResult(0));
-  Value result = sloadOp.getResult();
+  Operation *localLoadOp;
+  if (numBuffers == 1)
+    localLoadOp = builder.create<ttg::LocalLoadOp>(loc, loadOp.getType(),
+                                                   localStoreOp->getResult(0));
+  else
+    localLoadOp =
+        builder.create<ttg::LocalLoadOp>(loc, loadOp.getType(), viewRes);
   if (stages[SCHED_LOCAL_LOAD] != stages[SCHED_COMPUTE])
     scheduleOp(localLoadOp, SCHED_LOCAL_LOAD);
 
@@ -443,7 +446,7 @@ void StreamPipeliner::createStreamCopy(tt::LoadOp loadOp, Value alloc,
   // instruction scheduling hints to correctly count the emitted `ds_write`
   // instructions for each GEMM tile.
   if (auto attr = loadOp->getAttr(tt::amdgpu::OpIdxAttr::getMnemonic())) {
-    storeOp.setAttr(tt::amdgpu::OpIdxAttr::getMnemonic(), attr);
+    localStoreOp->setAttr(tt::amdgpu::OpIdxAttr::getMnemonic(), attr);
   }
 
   loadOp->replaceAllUsesWith(ValueRange{result});
@@ -1086,19 +1089,18 @@ struct PipelinePass : public TritonAMDGPUStreamPipelineBase<PipelinePass> {
       return signalPassFailure();
     }
 
-    SmallVector<scf::ForOp> loops;
+    DenseMap<scf::ForOp, int32_t> loops;
     getOperation()->walk([&](scf::ForOp forOp) {
       labelLoadOpsForTritonDot(forOp);
       // Bail out for loops with num_stage <= 1.
-      if (tt::getNumStagesOrDefault(forOp, numStages) > 1)
-        loops.push_back(forOp);
+      int32_t loopNumStages = tt::getNumStagesOrDefault(forOp, numStages);
+      if (loopNumStages > 1 && checkPrecondition(forOp))
+        loops.insert({forOp, loopNumStages});
     });
 
-    for (scf::ForOp forOp : loops) {
-      if (!checkPrecondition(forOp))
-        continue;
-      StreamPipeliner sp(forOp, getNumStagesOrDefault(forOp), maxDepth,
-                         globalPrefetch, localPrefetch, useAsyncCopy);
+    for (auto [forOp, loopNumStages] : loops) {
+      StreamPipeliner sp(forOp, loopNumStages, maxDepth, globalPrefetch,
+                         localPrefetch, useAsyncCopy);
       if (failed(sp.pipelineLoop()))
         continue;
     }
@@ -1112,9 +1114,9 @@ struct PipelinePass : public TritonAMDGPUStreamPipelineBase<PipelinePass> {
 };
 } // namespace
 
-std::unique_ptr<Pass>
-mlir::createTritonAMDGPUStreamPipelinePass(int numStages, int maxDepth, int globalPrefetch,
-                                           int localPrefetch, bool useAsyncCopy) {
+std::unique_ptr<Pass> mlir::createTritonAMDGPUStreamPipelinePass(
+    int numStages, int maxDepth, int globalPrefetch, int localPrefetch,
+    bool useAsyncCopy) {
   return std::make_unique<PipelinePass>(numStages, maxDepth, globalPrefetch,
                                         localPrefetch, useAsyncCopy);
 }

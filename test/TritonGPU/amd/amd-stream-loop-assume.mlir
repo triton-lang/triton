@@ -12,7 +12,7 @@
 
 // CHECK-LABEL: tt.func @assume_matmul
 // CHECK-COUNT-2: tt.load
-// CHECK-COUNT-2: ttg.local_store
+// CHECK-COUNT-2: ttg.local_alloc
 // CHECK: scf.for
 // CHECK: llvm.intr.assume
 // CHECK: tt.load
@@ -20,7 +20,7 @@
 // CHECK: tt.load
 // CHECK: ttg.local_load
 // CHECK: tt.dot
-// CHECK-COUNT-2: ttg.local_store
+// CHECK-COUNT-2: ttg.local_alloc
 // CHECK: scf.yield
 // CHECK: llvm.intr.assume
 // CHECK-COUNT-2: ttg.local_load

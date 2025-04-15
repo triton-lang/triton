@@ -79,6 +79,8 @@ public:
   Interval(T S, T E) : Start(S), End(E) { assert(Start < End); }
   T start() const { return Start; }
   T end() const { return End; }
+  T first() const { return Start; }
+  T last() const { return End - 1; }
   T size() const { return End - Start; }
   bool contains(T Addr) const { return Start <= Addr && Addr < End; }
   bool contains(const Interval &R) const {
@@ -240,8 +242,6 @@ private:
       } else
         f(this);
     }
-
-    void dump() const;
   };
 
   /// Op -> Scratch Buffer
@@ -253,24 +253,32 @@ private:
   /// BufferId -> Buffer
   using BufferSetT = std::map<BufferId, BufferT>;
 
-public:
-  void dump() const;
-
 private:
   template <BufferT::BufferKind Kind, typename KeyType, typename... Args>
   BufferT *addBuffer(KeyType &key, Args &&...args) {
-    auto buffer = BufferT(Kind, std::forward<Args>(args)...);
-    bufferSet[buffer.id] = std::move(buffer);
-    auto *bufP = &bufferSet[buffer.id];
-    if constexpr (Kind == BufferT::BufferKind::Explicit ||
-                  Kind == BufferT::BufferKind::Alias) {
-      valueBuffer[key] = bufP;
+    BufferId nextId = bufferIdCounter++;
+    auto [it, inserted] = bufferSet.insert_or_assign(
+        nextId, BufferT(Kind, nextId, key, std::forward<Args>(args)...));
+    BufferT *buffer = &it->second;
+    if constexpr (Kind == BufferT::BufferKind::Explicit) {
+      valueBuffer[key] = buffer;
     } else if constexpr (Kind == BufferT::BufferKind::Virtual) {
-      opVirtual[key] = bufP;
+      opVirtual[key] = buffer;
     } else {
-      opScratch[key] = bufP;
+      static_assert(Kind == BufferT::BufferKind::Scratch);
+      opScratch[key] = buffer;
     }
-    return bufP;
+    return buffer;
+  }
+
+  BufferT *addAlias(Value key, size_t size, size_t alignment) {
+    BufferId nextId = bufferIdCounter++;
+    auto [it, inserted] = bufferSet.insert_or_assign(
+        nextId,
+        BufferT(BufferT::BufferKind::Alias, nextId, nullptr, size, alignment));
+    BufferT *buffer = &it->second;
+    valueBuffer[key] = buffer;
+    return buffer;
   }
 
   void addAlias(Value value, Value alloc) {
