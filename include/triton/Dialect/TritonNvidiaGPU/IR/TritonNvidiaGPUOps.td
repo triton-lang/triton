@@ -488,27 +488,31 @@ def TTNG_TCGen5MMAScaledOp : TTNG_Op<"tc_gen5_mma_scaled", [
   }];
 }
 
-def TTNG_TMEMLoadOp : TTNG_Op<"tmem_load", [MemoryEffects<[MemRead]>]> {
+def TTNG_TMEMLoadOp : TTNG_Op<"tmem_load"> {
   let summary = "Load a buffer from tensor memory into a distributed tensor";
 
   let description = [{
     This is similar to ttg.local_load except the result layout is restricted to only few possibility.
     Therefore we cannot combine this op with any convert layout like local_load.
   }];
-  let arguments = (ins TTG_MemDescType:$src);
+  let arguments = (ins Arg<TTG_MemDescType, "", [MemRead<TensorMemory>]>:$src);
 
   let assemblyFormat = [{$src attr-dict `:` qualified(type($src)) `->` type($result)}];
   let results = (outs TT_Tensor:$result);
   let hasVerifier = 1;
 }
 
-def TTNG_TMEMStoreOp : TTNG_Op<"tmem_store", [MemoryEffects<[MemWrite]>]> {
+def TTNG_TMEMStoreOp : TTNG_Op<"tmem_store"> {
   let summary = "Store a distributed tensor into a buffer in tensor memory";
 
   let description = [{
     This is similar to ttg.local_local except the source layout is restricted to only few possibility.
   }];
-  let arguments = (ins TTG_MemDescType:$dst, TT_Tensor:$src, I1:$pred);
+  let arguments = (ins
+    Arg<TTG_MemDescType, "", [MemWrite<TensorMemory>]>:$dst,
+    TT_Tensor:$src,
+    I1:$pred
+  );
 
   let assemblyFormat = [{$src `,` $dst `,` $pred attr-dict `:` type($src) `->` qualified(type($dst))}];
   let hasVerifier = 1;
@@ -554,7 +558,7 @@ def TTNG_TMEMSubSliceOp : TTNG_Op<"tmem_subslice", [Pure]> {
   let hasVerifier = 1;
 }
 
-def TTNG_TMEMCopyOp : TTNG_Op<"tmem_copy", [MemoryEffects<[MemWrite<TensorMemory>]>]> {
+def TTNG_TMEMCopyOp : TTNG_Op<"tmem_copy"> {
   let summary = "Initiate an asynchronous copy operation from shared memory to the Tensor Memory.";
 
   let description = [{
@@ -600,7 +604,7 @@ def TTNG_TMEMCopyOp : TTNG_Op<"tmem_copy", [MemoryEffects<[MemWrite<TensorMemory
   }];
   let arguments = (ins
     Arg<TTG_MemDescType, "", [MemRead<SharedMemory>]>:$src,
-    TTG_MemDescType:$dst,
+    Arg<TTG_MemDescType, "", [MemWrite<TensorMemory>]>:$dst,
     Optional<TTG_MemDescType>:$barrier
   );
 
