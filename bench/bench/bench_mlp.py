@@ -8,15 +8,10 @@ from triton_bench.mxfp import downcast_to_mxfp
 from triton_bench.matmul_ogs import MicroscalingCtx, matmul_ogs, PrecisionConfig, FlexCtx
 from triton_bench.numerics import InFlexData
 from triton_bench.routing import routing, simulate_expert_sharded_routing
-from triton_bench.meta import cuda_capability_geq
+from triton_bench.meta import cuda_capability_geq, is_hip, get_cdna_version
 
 
-def is_hip_cdna4():
-    target = triton.runtime.driver.active.get_current_target()
-    return target.backend == 'hip' and target.arch == 'gfx950'
-
-
-if torch.cuda.is_available() and not is_hip_cdna4():
+if torch.cuda.is_available() and not is_hip():
     from triton._C.libtriton import nvidia
     cublas_workspace = torch.empty(32 * 1024 * 1024, device="cuda", dtype=torch.uint8)
     cublas = nvidia.cublas.CublasLt(cublas_workspace)
@@ -24,10 +19,7 @@ else:
     cublas = None
 
 
-def _query_gpu_specs():
-    if is_hip_cdna4():
-        # no spec data yet.
-        return None
+def _query_cuda_gpu_specs():
     import subprocess
     cmd = ["nvidia-smi", "--query-gpu=name", "--format=csv,noheader", "-i=0"]
     output = subprocess.check_output(cmd, stderr=subprocess.DEVNULL).decode().strip()
@@ -38,14 +30,16 @@ def _query_gpu_specs():
     }[name]
 
 
-SPECS = _query_gpu_specs()
+SPECS = _query_cuda_gpu_specs() if not is_hip() else None
 
 
 def quantize(w, dtype, dev, **opt):
     if dtype == "bf16":
         return w.to(torch.bfloat16), InFlexData(), MicroscalingCtx()
     elif dtype == "fp8":
-        wq = w.to(torch.float8_e4m3fn).transpose(-1, -2).contiguous().transpose(-1, -2)
+        fp8e4_dtype = torch.float8_e4m3fn if get_cdna_version() != 3 \
+            else torch.float8_e4m3fnuz
+        wq = w.to(fp8e4_dtype).transpose(-1, -2).contiguous().transpose(-1, -2)
         return wq, InFlexData(dtype=wq.dtype, scale=w.abs().max().unsqueeze(0)), \
                    MicroscalingCtx()
     else:
@@ -64,6 +58,9 @@ def bench_mlp(batch, dim1, dim2, n_expts_tot, n_expts_act, x_dtype, w_dtype,
     assert n_expts_tot % EP == 0
     assert dim2 % TP == 0
     dev = "cuda"
+
+    # special treatment of fp8_e4m3 on AMD CDNA3 because it uses fp8_e4m3fnuz
+    x_dtype = "fp8_cdna3" if x_dtype == "fp8" and get_cdna_version() == 3 else x_dtype
     # input
     # weights
     wg = torch.randn((dim1, n_expts_tot), device=dev)
@@ -92,7 +89,7 @@ def bench_mlp(batch, dim1, dim2, n_expts_tot, n_expts_act, x_dtype, w_dtype,
     proton.start(str(fpath.with_suffix('')), hook="triton")
     proton.deactivate()
     # run layer
-    x_dtype = {"bf16": torch.bfloat16, "fp8": torch.float8_e4m3fn}[x_dtype]
+    x_dtype = {"bf16": torch.bfloat16, "fp8": torch.float8_e4m3fn, "fp8_cdna3": torch.float8_e4m3fnuz}[x_dtype]
     for i in range(100):
         x = torch.randn((batch, dim1), device=dev)
         x = x.to(wg.dtype if n_expts_tot > 1 else x_dtype)
@@ -111,6 +108,7 @@ def bench_mlp(batch, dim1, dim2, n_expts_tot, n_expts_act, x_dtype, w_dtype,
             rdata, gather_indx, scatter_indx = None, None, None
         # c0 = torch.empty((x.shape[0], w1.shape[-1]), device=dev, dtype=x.dtype)
         # c1 = torch.empty((x.shape[0], w2.shape[-1]), device=dev, dtype=x.dtype)
+        # TODO: cublas is simply set to None on AMD and may cause this to fail if uncommented
         # cublas.matmul(x, w1.squeeze(0), c0)
         # cublas.matmul(c0, w2.squeeze(0), c1)
         x = matmul_ogs(x, w1, b1, rdata, gather_indx=gather_indx, precision_config=pc1)
@@ -135,8 +133,10 @@ def bench_mlp(batch, dim1, dim2, n_expts_tot, n_expts_act, x_dtype, w_dtype,
         if SPECS is not None:
             min_time_flops = sum([tot_flops[w] / SPECS[f"MAX_TFLOPS{w}"] for w in [8, 16]]) * 1e-3
             min_time_bytes = tot_bytes / SPECS["MAX_TBPS"] * 1e-3
-        min_time = max(min_time_flops, min_time_bytes)
-        util = min_time / tot_time
+            min_time = max(min_time_flops, min_time_bytes)
+            util = min_time / tot_time
+        else:
+            util = "N/A"
         tflops = sum([tot_flops[w] for w in [8, 16]]) / tot_time * 1e-3
         tbps = tot_bytes / tot_time * 1e-3
 
@@ -144,7 +144,7 @@ def bench_mlp(batch, dim1, dim2, n_expts_tot, n_expts_act, x_dtype, w_dtype,
 
 
 if __name__ == "__main__":
-    has_native_mx4 = torch.cuda.get_device_capability(0)[0] >= 10 or is_hip_cdna4()
+    has_native_mx4 = torch.cuda.get_device_capability(0)[0] >= 10 or get_cdna_version() == 4
     qxdtype = "fp8" if has_native_mx4 else "bf16"
     print(bench_mlp(8192, 8192, 8192, 1, 1, "fp8", "fp8", TP=1, EP=1, name="dense"))
     print(bench_mlp(8192, 8192, 8192, 1, 1, qxdtype, "mx4", TP=1, EP=1, name="dense"))
