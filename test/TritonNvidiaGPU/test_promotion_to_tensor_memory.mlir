@@ -25,9 +25,10 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32} {
     %rhs_shared = ttg.local_alloc %rhs : (tensor<32x256xf32, #blocked2>) -> !ttg.memdesc<32x256xf32, #shared1, #ttg.shared_memory>
 
     ttng.tc_gen5_mma %lhs_shared, %rhs_shared, %tmem, %true, %true :
-       !ttg.memdesc<128x32xf32, #shared, #ttg.shared_memory>,
+      (!ttg.memdesc<128x32xf32, #shared, #ttg.shared_memory>,
        !ttg.memdesc<32x256xf32, #shared1, #ttg.shared_memory>,
-       !ttg.memdesc<128x256xf32, #tmem, #ttng.tensor_memory, mutable>
+       !ttg.memdesc<128x256xf32, #tmem, #ttng.tensor_memory, mutable>,
+       i1, i1) -> ()
 
     tt.return
   }
@@ -60,9 +61,10 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32} {
     %rhs_shared = ttg.local_alloc %rhs : (tensor<32x256xf32, #blocked2>) -> !ttg.memdesc<32x256xf32, #shared1, #ttg.shared_memory>
 
     ttng.tc_gen5_mma %lhs_shared, %rhs_shared, %tmem, %true, %true :
-       !ttg.memdesc<128x32xf32, #shared, #ttg.shared_memory>,
+      (!ttg.memdesc<128x32xf32, #shared, #ttg.shared_memory>,
        !ttg.memdesc<32x256xf32, #shared1, #ttg.shared_memory>,
-       !ttg.memdesc<128x256xf32, #tmem, #ttng.tensor_memory, mutable>
+       !ttg.memdesc<128x256xf32, #tmem, #ttng.tensor_memory, mutable>,
+       i1, i1) -> ()
 
     tt.return
   }
