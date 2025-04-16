@@ -144,6 +144,7 @@ public:
           mlir::ShapedType::getNumElements(bufferTy.getShape()) *
           bufferTy.getElementType().getIntOrFloatBitWidth() / 8;
     });
+
     if (stackAllocOpCount > 1) {
       mlir::emitError(loc, "only a single proton stack op can be defined for "
                            "circular store op for now");

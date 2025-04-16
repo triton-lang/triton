@@ -22,8 +22,15 @@ namespace gpu {
 LogicalResult StackAllocOp::verify() {
   auto bufferTy = mlir::cast<triton::gpu::MemDescType>(getData().getType());
   auto rank = bufferTy.getRank();
+
   if (rank > 1)
-    return emitOpError("Proton stack currently only supports 1-D shapes");
+    return emitOpError("proton stack currently only supports 1-D shapes");
+
+  int stackAllocationSize =
+      mlir::ShapedType::getNumElements(bufferTy.getShape());
+  if (stackAllocationSize <= 0)
+    return emitOpError("proton stack size must be positive and non-zero");
+
   return success();
 }
 

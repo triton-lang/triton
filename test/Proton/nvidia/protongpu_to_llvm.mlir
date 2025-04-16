@@ -107,6 +107,7 @@ module attributes {"ttg.num-warps" = 8 : i32} {
     // CHECK-DAG: %[[SMEM_PTR:.*]] = llvm.getelementptr %{{.*}}[%[[SMEM_OFFSET]]] : (!llvm.ptr<3>, i32) -> !llvm.ptr<3>, i32
     // CHECK-DAG: %[[SMEM_P:.*]] = llvm.and
     // CHECK-DAG: llvm.inline_asm has_side_effects{{.*}}st.shared.v2.b32{{.*}}%[[SMEM_PTR]], %{{.*}}, %{{.*}}, %[[SMEM_P]]
+    // CHECK-DAG: llvm.extractvalue {{.*}}[0] : !llvm.struct<(ptr<3>, i32)>
     %c4 = arith.constant 4 : index
     %c1 = arith.constant 1 : index
     %c0 = arith.constant 0 : index
@@ -207,6 +208,7 @@ module attributes {"ttg.num-warps" = 8 : i32, ttg.profile_scratch_memory_alignme
 module attributes {"ttg.num-warps" = 8 : i32, ttg.profile_scratch_memory_alignment = 128 : i32, ttg.profile_scratch_memory_size = 384 : i32} {
   // CHECK-LABEL: convert_smem_finalize
   // CHECK-DAG: llvm.nvvm.read.ptx.sreg.smid
+  // CHECK-DAG: llvm.extractvalue %{{.*}}[0] : !llvm.struct<(ptr<3>, i32)>
   // CHECK-DAG: llvm.store
   // CHECK-DAG: llvm.cond_br %{{.*}}, ^bb1, ^bb3
   // CHECK-DAG: ^bb1:
@@ -242,6 +244,7 @@ module attributes {"ttg.num-warps" = 8 : i32, ttg.profile_scratch_memory_alignme
 module attributes {"ttg.num-warps" = 8 : i32, ttg.profile_scratch_memory_alignment = 128 : i32, ttg.profile_scratch_memory_size = 384 : i32} {
   // CHECK-LABEL: convert_stack_finalize
   // CHECK-DAG: llvm.nvvm.read.ptx.sreg.smid
+  // CHECK-DAG: llvm.extractvalue %{{.*}}[0] : !llvm.struct<(ptr<1>, i32)>
   // CHECK-DAG: llvm.store
   // CHECK-DAG: llvm.cond_br %{{.*}}, ^bb1, ^bb3
   // CHECK-DAG: ^bb1:
@@ -269,3 +272,13 @@ module attributes {"ttg.num-warps" = 8 : i32, ttg.profile_scratch_memory_alignme
     llvm.return
   }
 }
+
+// -----
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
+module attributes {"ttg.num-warps" = 8 : i32} {
+   tt.func @convert_stack_alloc_invalid(){
+     // expected-error @+1 {{'proton_gpu.stack_alloc' op proton stack size must be positive and non-zero}}
+     %1 = proton_gpu.stack_alloc : !ttg.memdesc<0xi32, #shared, #proton_gpu.stack_memory, mutable>
+     tt.return
+   }
+ }
