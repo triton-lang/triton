@@ -130,10 +130,13 @@ LinearLayout
 sharedToLinearLayoutNoLeadingOffset(ArrayRef<int64_t> shape,
                                     SwizzledSharedEncodingAttr shared) {
   MLIRContext *ctx = shared.getContext();
+
+  auto shapePerCTA = getShapePerCTA(shared, shape);
+
   int rank = shape.size();
   if (rank == 1) {
     return combineCtaCgaWithShape(
-        LinearLayout::identity1D(shape[0], S("offset"), S("dim0")),
+        LinearLayout::identity1D(shapePerCTA[0], S("offset"), S("dim0")),
         shared.getCTALayout(), shape);
   }
 
@@ -142,7 +145,6 @@ sharedToLinearLayoutNoLeadingOffset(ArrayRef<int64_t> shape,
   // Construct bases for the 2 most minor dimensions of the layout.  These are
   // the dims that get swizzled.
   assert(shape.size() >= 2);
-  auto shapePerCTA = getShapePerCTA(shared, shape);
   int colDim = shared.getOrder()[0];
   int rowDim = shared.getOrder()[1];
   int numCols = shapePerCTA[colDim];
@@ -178,10 +180,13 @@ LinearLayout
 sharedToLinearLayoutAMDRotating(ArrayRef<int64_t> shape,
                                 AMDRotatingSharedEncodingAttr shared) {
   MLIRContext *ctx = shared.getContext();
+
+  auto shapePerCTA = getShapePerCTA(shared, shape);
+
   int rank = shape.size();
   if (rank == 1) {
     return combineCtaCgaWithShape(
-        LinearLayout::identity1D(shape[0], S("offset"), S("dim0")),
+        LinearLayout::identity1D(shapePerCTA[0], S("offset"), S("dim0")),
         shared.getCTALayout(), shape);
   }
 
@@ -231,11 +236,14 @@ LinearLayout sharedToLinearLayoutLeadingOffset(ArrayRef<int64_t> shape,
                                                NVMMASharedEncodingAttr shared,
                                                bool disableSwizzle) {
   MLIRContext *ctx = shared.getContext();
+
+  auto shapePerCTA = getShapePerCTA(shared, shape);
+
   int rank = shape.size();
   if (rank == 1) {
     // TODO: Not sure if this is correct.
     return combineCtaCgaWithShape(
-        LinearLayout::identity1D(shape[0], S("offset"), S("dim0")),
+        LinearLayout::identity1D(shapePerCTA[0], S("offset"), S("dim0")),
         shared.getCTALayout(), shape);
   }
   int elemBitWidth = shared.getElementBitWidth();
@@ -271,7 +279,6 @@ LinearLayout sharedToLinearLayoutLeadingOffset(ArrayRef<int64_t> shape,
     }
   }
   int packingFactor = isFp4Padded ? 2 : 1;
-  auto shapePerCTA = getShapePerCTA(shared, shape);
 
   if (shapePerCTA[colDim] * packingFactor < tileCols ||
       shapePerCTA[rowDim] < tileRows) {

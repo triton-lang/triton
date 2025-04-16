@@ -163,6 +163,11 @@ def triton_key():
     return f'{__version__}' + '-'.join(contents)
 
 
+@functools.lru_cache()
+def max_shared_mem(device):
+    return driver.active.utils.get_device_properties(device)["max_shared_mem"]
+
+
 def parse(full_name, ext, context):
     if ext == "ttir" or ext == "ttgir":
         module = ir.parse_mlir_module(full_name, context)
@@ -281,6 +286,10 @@ def compile(src, target=None, options=None):
         filter_traceback(e)
         raise
     use_ir_loc = os.environ.get("USE_IR_LOC", None)
+    if ir_source and use_ir_loc:
+        module.create_location_snapshot(src.path)
+        print(f"Creating new locations for {src.path}")
+
     for ext, compile_ir in list(stages.items())[first_stage:]:
         next_module = compile_ir(module, metadata)
         ir_filename = f"{file_name}.{ext}"
@@ -397,7 +406,7 @@ class CompiledKernel:
         # create launcher
         self.run = driver.active.launcher_cls(self.src, self.metadata)
         # not enough shared memory to run the kernel
-        max_shared = driver.active.utils.get_device_properties(device)["max_shared_mem"]
+        max_shared = max_shared_mem(device)
         if self.metadata.shared > max_shared:
             raise OutOfResources(self.metadata.shared, max_shared, "shared memory")
         if hasattr(self.metadata, "tmem_size") and self.metadata.tmem_size is not None:

@@ -130,7 +130,7 @@ mlir::triton::NVIDIA::DotOpMmaV3SmemLoader::DotOpMmaV3SmemLoader(
 }
 
 Value mlir::triton::NVIDIA::DotOpMmaV3SmemLoader::smemLoad(
-    int a, int b, ConversionPatternRewriter &rewriter, Location loc) {
+    int a, int b, ConversionPatternRewriter &rewriter, Location loc) const {
   auto tb = TritonLLVMOpBuilder(loc, rewriter);
   Value k = tb.i32_val(b * instrShape[1]);
   Value m = tb.add(tb.i32_val(a * dimWpt * instrShape[0]),

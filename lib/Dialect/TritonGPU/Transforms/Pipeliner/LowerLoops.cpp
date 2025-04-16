@@ -913,7 +913,8 @@ scf::ForOp createBarrierAndWaitOps(scf::ForOp forOp, CoarseSchedule &schedule,
     barrierSlice =
         triton::createSingleBufferView(builder, barrierAlloc, barrierIdx);
   }
-  mma.setBarrier(barrierSlice);
+  mma.addCompletionBarrier(barrierSlice,
+                           builder.create<arith::ConstantIntOp>(loc, 1, 1));
 
   // List of buffers that may be used until wait completes
   SmallVector<Value> waitBuffers;

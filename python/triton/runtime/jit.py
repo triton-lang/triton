@@ -9,6 +9,8 @@ import textwrap
 from collections import defaultdict
 from functools import cached_property
 from typing import Callable, Generic, Iterable, Optional, TypeVar, Union, overload, Dict, Any, Tuple
+
+from triton.tools.tensor_descriptor import TensorDescriptor
 from ..runtime.driver import driver
 from types import ModuleType
 from .._utils import find_paths_if, get_iterable_path
@@ -343,6 +345,10 @@ def create_specialize_impl(specialize_extra):
             tys = make_tuple([x[0] for x in spec])
             keys = make_tuple([x[1] for x in spec])
             return (tys, keys)
+        elif isinstance(arg, TensorDescriptor):
+            assert hasattr(arg.base, "data_ptr")
+            inner = type_canonicalisation_dict[str(arg.base.dtype).split('.')[-1]]
+            return (f"tensordesc<{inner}{list(arg.block_shape)}>", None)
         else:
             raise TypeError("Unsupported type: %s" % type(arg))
 
