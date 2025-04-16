@@ -2,6 +2,7 @@ import pytest
 import torch
 from triton_bench.routing import routing, routing_torch
 from triton_bench.testing import assert_close
+from triton_bench.matmul_ogs_details.metadata import compute_metadata
 from ki.testing import assert_equal
 
 
@@ -52,7 +53,7 @@ def test_op(n_tokens, n_expts_tot, n_expts_act, block_m):
     ref_routing_data, ref_gather, ref_scatter = routing_torch(ref_logits, n_expts_act)
     tri_routing_data, tri_gather, tri_scatter = routing(tri_logits, n_expts_act)
     ref_metadata = ref_expt_data(ref_routing_data, n_tokens * n_expts_act, block_m)
-    tri_metadata = tri_routing_data.expt_data(n_tokens * n_expts_act, block_m).buffer
+    tri_metadata = compute_metadata(tri_routing_data, n_tokens * n_expts_act, block_m).buffer
 
     assert_close(ref_routing_data.gate_scal, tri_routing_data.gate_scal, 2e-2, 4e-3)
     assert_equal(ref_routing_data.expt_hist, tri_routing_data.expt_hist)
