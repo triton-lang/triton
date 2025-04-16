@@ -10,7 +10,6 @@ from triton_bench.numerics import InFlexData
 from triton_bench.routing import routing, simulate_expert_sharded_routing
 from triton_bench.meta import cuda_capability_geq, is_hip, get_cdna_version
 
-
 if torch.cuda.is_available() and not is_hip():
     from triton._C.libtriton import nvidia
     cublas_workspace = torch.empty(32 * 1024 * 1024, device="cuda", dtype=torch.uint8)

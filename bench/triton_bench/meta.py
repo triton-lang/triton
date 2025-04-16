@@ -87,6 +87,7 @@ def cuda_capability_geq(major, minor=0):
             cached_capabilities["cuda"] = (0, 0)
     return cached_capabilities["cuda"] >= (major, minor)
 
+
 @constexpr_function
 def get_cdna_version():
     """
