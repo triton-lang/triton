@@ -16,6 +16,7 @@ from .matmul_ogs_details._matmul_ogs import (
 )
 from .matmul_ogs_details._p_matmul_ogs import _p_matmul_ogs, get_per_device_per_stream_alloc_fn
 from .matmul_ogs_details.opt_flags import make_opt_flags
+from .matmul_ogs_details.metadata import compute_metadata
 
 # -----------------------------------------------------------------------------
 #                    Matrix Multiplication + Outer Gather/Scatter
@@ -243,7 +244,8 @@ def apply_preprocessing_features(x, w, gather_indx, scatter_indx, routing_data, 
         w = w.transpose(-1, -2).contiguous().transpose(-1, -2)
     # preprocess routing information and ptr lookup table
     M = x.shape[1] if gather_indx is None else gather_indx.src_indx.shape[0]
-    expt_data = routing_data.expt_data(M, opt_flags.block_m)
+    # compute expt_data
+    expt_data = compute_metadata(routing_data, M, opt_flags.block_m)
     return x, w, preprocessing_features.swap_xw, writeback_idxs, writeback_size, expt_data
 
 # ---------------------

@@ -7,7 +7,7 @@ import triton_bench.swiglu
 from triton_bench.mxfp import downcast_to_mxfp
 from triton_bench.matmul_ogs import MicroscalingCtx, matmul_ogs, PrecisionConfig, FlexCtx
 from triton_bench.numerics import InFlexData
-from triton_bench.routing import routing_torch, simulate_expert_sharded_routing
+from triton_bench.routing import routing, simulate_expert_sharded_routing
 from triton_bench.meta import cuda_capability_geq
 
 
@@ -96,17 +96,19 @@ def bench_mlp(batch, dim1, dim2, n_expts_tot, n_expts_act, x_dtype, w_dtype,
     for i in range(100):
         x = torch.randn((batch, dim1), device=dev)
         x = x.to(wg.dtype if n_expts_tot > 1 else x_dtype)
-        # TODO: activate proton here when fast routing is done
+        proton.activate()
         if n_expts_tot > 1:
             logits = matmul_ogs(x, wg, bg, precision_config=pcg)
-            rdata, gather_indx, scatter_indx = routing_torch(logits, n_expts_act)
+            rdata, gather_indx, scatter_indx = routing(logits, n_expts_act)
             if EP > 1:
+                proton.deactivate()
+                # TODO: activate proton here when fast expert parallelism simulation is done
                 m = logits.shape[0] * EP
                 _, rdata, gather_indx, scatter_indx = simulate_expert_sharded_routing(m, rdata, EP, device=dev)
+                proton.activate()
             x = x.to(x_dtype)
         else:
             rdata, gather_indx, scatter_indx = None, None, None
-        proton.activate()
         # c0 = torch.empty((x.shape[0], w1.shape[-1]), device=dev, dtype=x.dtype)
         # c1 = torch.empty((x.shape[0], w2.shape[-1]), device=dev, dtype=x.dtype)
         # cublas.matmul(x, w1.squeeze(0), c0)
@@ -146,5 +148,5 @@ if __name__ == "__main__":
     qxdtype = "fp8" if has_native_mx4 else "bf16"
     print(bench_mlp(8192, 8192, 8192, 1, 1, "fp8", "fp8", TP=1, EP=1, name="dense"))
     print(bench_mlp(8192, 8192, 8192, 1, 1, qxdtype, "mx4", TP=1, EP=1, name="dense"))
-    print(bench_mlp(1024, 5120, 8192, 128, 4, "fp8", "fp8", TP=4, EP=2, name="llama4"))
-    print(bench_mlp(1024, 5120, 8192, 128, 4, qxdtype, "mx4", TP=4, EP=2, name="llama4"))
+    print(bench_mlp(2048, 5120, 8192, 128, 4, "fp8", "fp8", TP=4, EP=1, name="llama4"))
+    print(bench_mlp(2048, 5120, 8192, 128, 4, qxdtype, "mx4", TP=4, EP=1, name="llama4"))
