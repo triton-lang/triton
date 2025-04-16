@@ -27,6 +27,8 @@
 
 #include "triton/Dialect/TritonNvidiaGPU/IR/TritonNvidiaGPUOpInterfaces.cpp.inc"
 
+using namespace mlir::triton::gpu;
+
 namespace mlir {
 namespace triton {
 namespace nvidia_gpu {
@@ -63,12 +65,10 @@ void WarpGroupDotOp::getEffects(
         &effects) {
   auto &a = getAMutable();
   auto &b = getBMutable();
-  if (isa<mlir::triton::gpu::MemDescType>(a.get().getType()))
-    effects.emplace_back(MemoryEffects::Read::get(), &a,
-                         mlir::triton::gpu::SharedMemory::get());
-  if (isa<mlir::triton::gpu::MemDescType>(b.get().getType()))
-    effects.emplace_back(MemoryEffects::Read::get(), &b,
-                         mlir::triton::gpu::SharedMemory::get());
+  if (isa<MemDescType>(a.get().getType()))
+    effects.emplace_back(MemoryEffects::Read::get(), &a, SharedMemory::get());
+  if (isa<MemDescType>(b.get().getType()))
+    effects.emplace_back(MemoryEffects::Read::get(), &b, SharedMemory::get());
 }
 
 bool WarpGroupDotOp::needsPartialAccumulator() {
@@ -118,25 +118,11 @@ LogicalResult InitBarrierOp::verify() {
   return success();
 }
 
-void InitBarrierOp::getEffects(
-    SmallVectorImpl<SideEffects::EffectInstance<MemoryEffects::Effect>>
-        &effects) {
-  effects.emplace_back(MemoryEffects::Write::get(), &getAllocMutable(),
-                       mlir::triton::gpu::SharedMemory::get());
-}
-
 // -- InvalBarrierOp --
 LogicalResult InvalBarrierOp::verify() {
   if (failed(verifyBarrierType(*this, getAlloc().getType())))
     return failure();
   return success();
-}
-
-void InvalBarrierOp::getEffects(
-    SmallVectorImpl<SideEffects::EffectInstance<MemoryEffects::Effect>>
-        &effects) {
-  effects.emplace_back(MemoryEffects::Write::get(), &getAllocMutable(),
-                       mlir::triton::gpu::SharedMemory::get());
 }
 
 // -- BarrierExpectOp --
@@ -146,28 +132,11 @@ LogicalResult BarrierExpectOp::verify() {
   return success();
 }
 
-void BarrierExpectOp::getEffects(
-    SmallVectorImpl<SideEffects::EffectInstance<MemoryEffects::Effect>>
-        &effects) {
-  effects.emplace_back(MemoryEffects::Write::get(), &getAllocMutable(),
-                       mlir::triton::gpu::SharedMemory::get());
-}
-
 // -- WaitBarrierOp --
 LogicalResult WaitBarrierOp::verify() {
   if (failed(verifyBarrierType(*this, getAlloc().getType())))
     return failure();
   return success();
-}
-
-void WaitBarrierOp::getEffects(
-    SmallVectorImpl<SideEffects::EffectInstance<MemoryEffects::Effect>>
-        &effects) {
-  // The wait will flip the phase therefore it reads and writes the barrier.
-  effects.emplace_back(MemoryEffects::Read::get(), &getAllocMutable(),
-                       mlir::triton::gpu::SharedMemory::get());
-  effects.emplace_back(MemoryEffects::Write::get(), &getAllocMutable(),
-                       mlir::triton::gpu::SharedMemory::get());
 }
 
 // -- ArriveBarrierOp --
@@ -177,16 +146,6 @@ LogicalResult ArriveBarrierOp::verify() {
   if (getCount() < 1)
     return emitOpError("count must be greater than or equal to 1");
   return success();
-}
-
-void ArriveBarrierOp::getEffects(
-    SmallVectorImpl<SideEffects::EffectInstance<MemoryEffects::Effect>>
-        &effects) {
-  // The arrive will increment the pending arrival count inside the barrier.
-  effects.emplace_back(MemoryEffects::Read::get(), &getAllocMutable(),
-                       mlir::triton::gpu::SharedMemory::get());
-  effects.emplace_back(MemoryEffects::Write::get(), &getAllocMutable(),
-                       mlir::triton::gpu::SharedMemory::get());
 }
 
 // -- TensorDescToTMAPtrOp --
@@ -212,27 +171,6 @@ LogicalResult AsyncTMACopyGlobalToLocalOp::verify() {
   return success();
 }
 
-void AsyncTMACopyGlobalToLocalOp::getEffects(
-    SmallVectorImpl<SideEffects::EffectInstance<MemoryEffects::Effect>>
-        &effects) {
-  effects.emplace_back(MemoryEffects::Read::get(), &getDescPtrMutable(),
-                       mlir::triton::GlobalMemory::get());
-  effects.emplace_back(MemoryEffects::Write::get(), &getBarrierMutable(),
-                       mlir::triton::gpu::SharedMemory::get());
-  effects.emplace_back(MemoryEffects::Write::get(), &getResultMutable(),
-                       mlir::triton::gpu::SharedMemory::get());
-}
-
-// -- AsyncTMACopyLocalToGlobalOp --
-void AsyncTMACopyLocalToGlobalOp::getEffects(
-    SmallVectorImpl<SideEffects::EffectInstance<MemoryEffects::Effect>>
-        &effects) {
-  effects.emplace_back(MemoryEffects::Write::get(), &getDescPtrMutable(),
-                       mlir::triton::GlobalMemory::get());
-  effects.emplace_back(MemoryEffects::Read::get(), &getSrcMutable(),
-                       mlir::triton::gpu::SharedMemory::get());
-}
-
 // -- AsyncTMAGatherOp --
 LogicalResult AsyncTMAGatherOp::verify() {
   if (failed(verifyBarrierType(*this, getBarrier().getType())))
@@ -245,30 +183,10 @@ LogicalResult AsyncTMAGatherOp::verify() {
                                               getXOffsets().getType());
 }
 
-void AsyncTMAGatherOp::getEffects(
-    SmallVectorImpl<SideEffects::EffectInstance<MemoryEffects::Effect>>
-        &effects) {
-  effects.emplace_back(MemoryEffects::Read::get(), &getDescPtrMutable(),
-                       mlir::triton::GlobalMemory::get());
-  effects.emplace_back(MemoryEffects::Write::get(), &getBarrierMutable(),
-                       mlir::triton::gpu::SharedMemory::get());
-  effects.emplace_back(MemoryEffects::Write::get(), &getResultMutable(),
-                       mlir::triton::gpu::SharedMemory::get());
-}
-
 // -- AsyncTMAScatter --
 LogicalResult AsyncTMAScatterOp::verify() {
   return DescriptorGatherOp::verifyResultType(*this, getSrc().getType(),
                                               getXOffsets().getType());
-}
-
-void AsyncTMAScatterOp::getEffects(
-    SmallVectorImpl<SideEffects::EffectInstance<MemoryEffects::Effect>>
-        &effects) {
-  effects.emplace_back(MemoryEffects::Write::get(), &getDescPtrMutable(),
-                       mlir::triton::GlobalMemory::get());
-  effects.emplace_back(MemoryEffects::Read::get(), &getSrcMutable(),
-                       mlir::triton::gpu::SharedMemory::get());
 }
 
 // -- TCGen5MMAOp --
@@ -298,18 +216,17 @@ void TCGen5MMAOp::getEffects(
     SmallVectorImpl<SideEffects::EffectInstance<MemoryEffects::Effect>>
         &effects) {
   effects.emplace_back(MemoryEffects::Write::get(), &getDMutable(),
-                       mlir::triton::nvidia_gpu::TensorMemory::get());
-  if (isa<triton::gpu::SharedMemorySpaceAttr>(
-          getA().getType().getMemorySpace())) {
+                       TensorMemory::get());
+  if (isa<SharedMemorySpaceAttr>(getA().getType().getMemorySpace())) {
     effects.emplace_back(MemoryEffects::Read::get(), &getAMutable(),
-                         mlir::triton::gpu::SharedMemory::get());
+                         SharedMemory::get());
 
   } else {
     effects.emplace_back(MemoryEffects::Read::get(), &getAMutable(),
-                         mlir::triton::nvidia_gpu::TensorMemory::get());
+                         TensorMemory::get());
   }
   effects.emplace_back(MemoryEffects::Read::get(), &getBMutable(),
-                       mlir::triton::gpu::SharedMemory::get());
+                       SharedMemory::get());
 }
 
 bool TCGen5MMAOp::verifyDims() {
@@ -351,18 +268,17 @@ void TCGen5MMAScaledOp::getEffects(
     SmallVectorImpl<SideEffects::EffectInstance<MemoryEffects::Effect>>
         &effects) {
   effects.emplace_back(MemoryEffects::Write::get(), &getDMutable(),
-                       mlir::triton::nvidia_gpu::TensorMemory::get());
-  if (isa<triton::gpu::SharedMemorySpaceAttr>(
-          getA().getType().getMemorySpace())) {
+                       TensorMemory::get());
+  if (isa<SharedMemorySpaceAttr>(getA().getType().getMemorySpace())) {
     effects.emplace_back(MemoryEffects::Read::get(), &getAMutable(),
-                         mlir::triton::gpu::SharedMemory::get());
+                         SharedMemory::get());
 
   } else {
     effects.emplace_back(MemoryEffects::Read::get(), &getAMutable(),
-                         mlir::triton::nvidia_gpu::TensorMemory::get());
+                         TensorMemory::get());
   }
   effects.emplace_back(MemoryEffects::Read::get(), &getBMutable(),
-                       mlir::triton::gpu::SharedMemory::get());
+                       SharedMemory::get());
 }
 
 bool TCGen5MMAScaledOp::verifyDims() {
@@ -543,12 +459,10 @@ void TMEMAllocOp::getEffects(
   // op.
   if (!getType().getMutableMemory() && !op->hasAttr("tensor_memory_col_offset"))
     return;
-  effects.emplace_back(MemoryEffects::Allocate::get(),
-                       mlir::triton::nvidia_gpu::TensorMemory::get());
+  effects.emplace_back(MemoryEffects::Allocate::get(), TensorMemory::get());
   if (getSrc())
     effects.emplace_back(MemoryEffects::Write::get(),
-                         getOperation()->getOpResult(0),
-                         mlir::triton::nvidia_gpu::TensorMemory::get());
+                         getOperation()->getOpResult(0), TensorMemory::get());
 }
 
 static bool isDescendingOrder(triton::gpu::MemDescType type) {
@@ -594,15 +508,6 @@ LogicalResult TMEMCopyOp::verify() {
   // checking we can do here are limited. For simplicity, shape checking is
   // omitted.
   return success();
-}
-
-void TMEMCopyOp::getEffects(
-    SmallVectorImpl<SideEffects::EffectInstance<MemoryEffects::Effect>>
-        &effects) {
-  effects.emplace_back(MemoryEffects::Write::get(),
-                       mlir::triton::nvidia_gpu::TensorMemory::get());
-  effects.emplace_back(MemoryEffects::Read::get(), &getSrcMutable(),
-                       mlir::triton::gpu::SharedMemory::get());
 }
 
 // -- TMEMSubSliceOp --

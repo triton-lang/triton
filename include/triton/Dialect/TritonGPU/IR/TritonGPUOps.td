@@ -77,7 +77,6 @@ def TTG_AsyncCommitGroupOp : TTG_Op<"async_commit_group"> {
 
 def TTG_AsyncCopyGlobalToLocalOp : TTG_Op<"async_copy_global_to_local", [
   AttrSizedOperandSegments,
-  DeclareOpInterfaceMethods<MemoryEffectsOpInterface>,
   TypesMatchWith<"infer mask type from src type",
                  "src", "mask", "getI1SameShape($_self)",
                  "($_op.getOperands().size() <= 3) || std::equal_to<>()">,
@@ -95,9 +94,9 @@ def TTG_AsyncCopyGlobalToLocalOp : TTG_Op<"async_copy_global_to_local", [
     operands are the same as tt.load.
   }];
 
-  let arguments = (
-    ins TT_PtrTensor:$src,
-    TTG_MemDescType:$result,
+  let arguments = (ins
+    Arg<TT_PtrTensor, "", [MemRead<GlobalMemory>]>:$src,
+    Arg<TTG_MemDescType, "", [MemWrite<SharedMemory>]>:$result,
     Optional<I1Tensor>:$mask,
     Optional<TT_Type>:$other,
     DefaultValuedAttr<TT_CacheModifierAttr, "triton::CacheModifier::NONE">:$cache,
@@ -251,13 +250,16 @@ def TTG_MemDescTransOp : TTG_Op<"memdesc_trans", [Pure,
   let hasFolder = 1;
 }
 
-def TTG_LocalLoadOp : TTG_Op<"local_load", [DeclareOpInterfaceMethods<MemoryEffectsOpInterface>]> {
+def TTG_LocalLoadOp : TTG_Op<"local_load"> {
   let summary = "Load a buffer from local memory into a distributed tensor";
 
   let description = [{
     Load a tensor from the local memory descriptor into a distributed tensor.
   }];
-  let arguments = (ins TTG_MemDescType:$src, Optional<TTG_AsyncToken> :$token);
+  let arguments = (ins
+    Arg<TTG_MemDescType, "", [MemRead<SharedMemory>]>:$src,
+    Optional<TTG_AsyncToken>:$token
+  );
 
   let builders = [
       OpBuilder<(ins "Type":$retType, "Value":$src),
@@ -271,13 +273,16 @@ def TTG_LocalLoadOp : TTG_Op<"local_load", [DeclareOpInterfaceMethods<MemoryEffe
   let results = (outs TT_Tensor:$result);
 }
 
-def TTG_LocalStoreOp : TTG_Op<"local_store", [DeclareOpInterfaceMethods<MemoryEffectsOpInterface>]> {
+def TTG_LocalStoreOp : TTG_Op<"local_store"> {
   let summary = "Store a distributed tensor into a buffer in local memory";
 
   let description = [{
     Store a distributed tensor into a buffer in local memory.
   }];
-  let arguments = (ins TT_Tensor:$src, TTG_MemDescType:$dst);
+  let arguments = (ins
+    TT_Tensor:$src,
+    Arg<TTG_MemDescType, "", [MemWrite<SharedMemory>]>:$dst
+  );
 
   let hasVerifier = 1;
   // Use qualified() otherwise "!ttg.memdesc<X>" is printed as "<X>".
