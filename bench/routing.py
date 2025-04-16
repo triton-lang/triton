@@ -135,14 +135,18 @@ def _compute_bitmatrix(X, stride_xm,  # logits
     tl.store(R_ptrs, r, mask=mask_m)
 
 @triton.jit
-def _memset_metadata(Hist, hist_size, Metadata, metadata_size, BLOCK: tl.constexpr):
+def _memset_hist(Hist, hist_size, BLOCK: tl.constexpr):
     pid = tl.program_id(0)
     offs = pid * BLOCK + tl.arange(0, BLOCK)
-    mask_hist = offs < hist_size
-    mask_metadata = offs < metadata_size
-    tl.store(Hist + offs, 0, mask=mask_hist)
-    tl.store(Metadata + offs, 0xffffffff, mask=mask_metadata)
+    tl.store(Hist + offs, 0, mask = offs < hist_size)
 
+@triton.jit
+def _memset_metadata(Metadata, metadata_size, Lock, BLOCK: tl.constexpr):
+    pid = tl.program_id(0)
+    if pid == 0:
+        tl.store(Lock, 0)
+    offs = pid * BLOCK + tl.arange(0, BLOCK)
+    tl.store(Metadata + offs, 0xffffffff, mask=offs < metadata_size)
 
 @triton.jit
 def _compute_hist(R, shape_rm, stride_rm,  # routing bitmatrix
@@ -173,13 +177,9 @@ def _compute_hist(R, shape_rm, stride_rm,  # routing bitmatrix
     tok_starts = tl.cumsum(hist, 0)
     tl.store(TokensStart, 0)
     tl.store(TokensStart + 1 + offs_n, tok_starts, mask=offs_n < shape_pn)
-    # tile_starts = tl.cumsum(tl.cdiv(hist, TILE_DIM), 0)
-    # tl.store(TilesStart, 0)
-    # tl.store(TilesStart + 1 + offs_n, tile_starts, mask=offs_n < shape_pn)
-
 
 @triton.jit
-def _finalize_hist(TokensStart, FinalHist, PartialHist, PartialOffs, shape_pm, stride_pm,
+def _finalize_hist(TokensStart, PartialHist, PartialOffs, shape_pm, stride_pm,
                    BLOCK_M: tl.constexpr):
     expt_id = tl.program_id(0)
     offs_m = tl.arange(0, BLOCK_M)
@@ -196,19 +196,41 @@ def _finalize_hist(TokensStart, FinalHist, PartialHist, PartialOffs, shape_pm, s
         offs = (1 + offs_m) * stride_pm + expt_id
         tl.store(PartialOffs + offs, out, mask=offs_m < shape_pm - 1)
         offs_m += BLOCK_M
-    # n_tokens = tl.load(FinalHist + expt_id)
-    # fill up metadata
-    # start_off = tl.load(TileOffs + expt_id)
-    # n_blocks = tl.cdiv(n_tokens, TILE_DIM)
-    # TileMetadata += start_off
-    # for block_off in range(0, n_blocks, BLOCK_M):
-    #     block_offs = block_off + tl.arange(0, BLOCK_M)
-    #     data = (block_offs << 16) + expt_id
-    #     tl.store(TileMetadata + block_offs, data, mask=block_offs < n_blocks)
 
 @triton.jit
-def _compute_metadata():
-    pass
+def _compute_metadata(Hist, n_expts_tot,
+                      Lock, MDHist, MDTokensStart, MDTilesStart, MDTileInfo,
+                      N_EXPTS_PAD: tl.constexpr,
+                      BLOCK: tl.constexpr,
+                      TILE_DIM: tl.constexpr):
+    expt_id = tl.program_id(0)
+    n_tokens = tl.load(Hist + expt_id)
+    n_blocks = tl.cdiv(n_tokens, TILE_DIM)
+    # first pid to reach this initializes histograms and cumsums
+    if tl.atomic_cas(Lock, 0, 1) == 0:
+        offs_n = tl.arange(0, N_EXPTS_PAD)
+        mask = offs_n < n_expts_tot
+        hist = tl.load(Hist + offs_n, mask=mask)
+        tl.store(MDHist + offs_n, hist, mask=mask)
+        tokens_start = tl.cumsum(hist, 0)
+        tl.store(MDTokensStart, 0)
+        tl.store(MDTokensStart + 1 + offs_n, tokens_start, mask=mask)
+        tiles_start = tl.cumsum(tl.cdiv(hist, TILE_DIM), 0)
+        tl.store(MDTilesStart, 0)
+        tl.store(MDTilesStart + 1 + offs_n, tiles_start, mask=mask)
+        tl.debug_barrier()
+        tl.atomic_xchg(Lock, 0)
+        tl.debug_barrier()
+    # spin until content of `MDTilesStart` is initialized
+    while tl.atomic_add(Lock, 0) == 1:
+        pass
+    MDTileInfo += tl.load(MDTilesStart + expt_id)
+    for block_off in range(0, n_blocks, BLOCK):
+        block_offs = block_off + tl.arange(0, BLOCK)
+        data = (block_offs << 16) + expt_id
+        tl.store(MDTileInfo + block_offs, data, mask=block_offs < n_blocks)
+
+
 
 @triton.jit
 def _compute_indx(GatherIndx, ScatterIndx, GateScal, ExptScal, ExptIndx,
@@ -256,18 +278,12 @@ def triton_routing(x, n_expts_act):
     hist_size = n_expts_tot * 2 + 1
     metadata_size = hist_size + n_expts_tot + 1 + grid_m
     hist_data =  torch.empty(hist_size, dtype=torch.int32, device=x.device)
-    metadata = torch.empty(metadata_size, dtype=torch.int32, device=x.device)
-    # metadata = torch.empty(n_expts_tot * 3 + 2 + grid_m, dtype=torch.int32, device=x.device)
-    # metadata views
     hist = hist_data[:n_expts_tot]
     tokens_start = hist_data[n_expts_tot: n_expts_tot * 2 + 1]
-    tiles_start = metadata[n_expts_tot * 2 + 1: n_expts_tot * 3 + 2]
-    blocks_info = metadata[n_expts_tot * 3 + 2:]
     # reordered indices
     topk_indx = torch.empty(n_gates, dtype=torch.int32, device=dev)
     gate_indx = torch.empty(n_gates, dtype=torch.int32, device=dev)
     gate_scal = torch.empty(n_gates, dtype=x.dtype, device=dev)
-    # compute routing bitmatrix
     _compute_bitmatrix[(cdiv(n_tokens, ROUTING_BLOCK_M), )](
         x, x.stride(0),
         expt_scal, expt_indx, expt_scal.stride(0),
@@ -276,9 +292,8 @@ def triton_routing(x, n_expts_act):
         BLOCK_M=ROUTING_BLOCK_M,
         N_EXPTS_PAD=n_expts_pad, N_EXPTS_ACT=n_expts_act,
     )
-    # compute metadata
-    _memset_metadata[(cdiv(max(metadata_size, hist_size), MEMSET_BLOCK), )](
-        hist, hist_size, metadata, metadata_size,
+    _memset_hist[(cdiv(hist_size, MEMSET_BLOCK), )](
+        hist, hist_size,
         BLOCK=MEMSET_BLOCK
     )
     _compute_hist[(cdiv(n_tokens, HIST1_BLOCK_M), cdiv(n_expts_tot, HIST1_BLOCK_N))](
@@ -289,18 +304,35 @@ def triton_routing(x, n_expts_act):
         N_EXPTS_PAD=n_expts_pad,
     )
     _finalize_hist[(n_expts_tot, )](
-        tokens_start, hist, partial_hist, partial_offs,
+        tokens_start, partial_hist, partial_offs,
         partial_hist.shape[0], partial_hist.stride(0),
         BLOCK_M=HIST2_BLOCK_M,
     )
-    # reorder indices
     _compute_indx[(cdiv(n_tokens, HIST1_BLOCK_M), )](
         topk_indx, gate_indx, gate_scal, expt_scal, expt_indx,
         partial_offs, partial_offs.stride(0), n_gates,
         BLOCK_M=HIST1_BLOCK_M,
         N_EXPTS_ACT=n_expts_act,
     )
-    return topk_indx, gate_indx, gate_scal, None #metadata
+    # matrix multiplication metadata
+    metadata = torch.empty(metadata_size, dtype=torch.int32, device=x.device)
+    md_hist = metadata[:n_expts_tot]
+    md_tokens_start = metadata[n_expts_tot: n_expts_tot*2 + 1]
+    md_tiles_start = metadata[n_expts_tot * 2 + 1: n_expts_tot * 3 + 2]
+    md_tiles_info = metadata[n_expts_tot * 3 + 2:]
+    lock = torch.empty((1,), dtype=torch.int32, device=x.device)
+    _memset_metadata[(cdiv(metadata_size, MEMSET_BLOCK), )](
+        metadata, metadata_size, lock,
+        BLOCK=MEMSET_BLOCK
+    )
+    _compute_metadata[(n_expts_tot, )](
+        hist, n_expts_tot,
+        lock, md_hist, md_tokens_start, md_tiles_start, md_tiles_info,
+        N_EXPTS_PAD=n_expts_pad,
+        BLOCK=HIST2_BLOCK_M,
+        TILE_DIM=128
+    )
+    return topk_indx, gate_indx, gate_scal, metadata
 
 def torch_routing(x, n_expts_act):
     n_tokens, n_expts_tot = x.shape
@@ -342,7 +374,7 @@ def torch_routing(x, n_expts_act):
     metadata[n_expts_tot + 1 : n_expts_tot * 2 + 1] = tsum
     metadata[n_expts_tot * 2 + 2 : n_expts_tot * 3 + 2] = bsum
     metadata[n_expts_tot * 3 + 2 :] = block_metadata
-    return topk_indx, gate_indx, gate_scal, None #metadata
+    return topk_indx, gate_indx, gate_scal, metadata
 
 
 M = 32768
@@ -360,4 +392,4 @@ ref_topk_indx, ref_gate_indx, ref_gate_scal, ref_metadata = torch_routing(x, N_E
 assert torch.all(tri_gate_indx == ref_gate_indx)
 assert torch.all(tri_topk_indx == ref_topk_indx)
 assert torch.all(tri_gate_scal == ref_gate_scal)
-# assert torch.all(tri_metadata == ref_metadata)
+assert torch.all(tri_metadata == ref_metadata)
