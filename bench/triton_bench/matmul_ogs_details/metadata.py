@@ -66,7 +66,10 @@ def compute_metadata(routing_data, n_rows, block_m):
     md_tok_starts = metadata[n_expts_tot:n_expts_tot * 2 + 1]
     md_tile_starts = metadata[n_expts_tot * 2 + 1:n_expts_tot * 3 + 2]
     md_tile_infos = metadata[n_expts_tot * 3 + 2:]
-    _memset_metadata[(cdiv(metadata_size, MEMSET_BLOCK), )](metadata, metadata_size, BLOCK=MEMSET_BLOCK)
+    _memset_metadata[(cdiv(metadata_size, MEMSET_BLOCK), )](
+        metadata, metadata_size,  # inputs
+        BLOCK=MEMSET_BLOCK  # optimization parameters
+    )
     _compute_metadata[(n_expts_tot, )](
         routing_data.expt_hist, n_expts_tot,  # inputs
         md_hist, md_tok_starts, md_tile_starts, md_tile_infos,  # outputs
