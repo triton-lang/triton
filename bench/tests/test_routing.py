@@ -3,7 +3,7 @@ import torch
 from triton_bench.routing import routing, routing_torch
 from triton_bench.testing import assert_close
 from triton_bench.matmul_ogs_details.metadata import compute_metadata
-from ki.testing import assert_equal
+from triton_bench.testing import assert_equal
 
 
 def init_data(n_tokens, n_expts_tot, dtype=torch.float16):
