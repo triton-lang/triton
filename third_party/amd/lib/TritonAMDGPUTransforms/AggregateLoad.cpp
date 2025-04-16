@@ -482,6 +482,12 @@ struct AggregateLoad : public TritonAMDGPUAggregateLoadBase<AggregateLoad> {
       assert(!foundDotOp && "Currently only support a single dot operation.");
       foundDotOp = true;
     });
+
+    if (!foundDotOp) {
+      llvm::outs() << "Didn't find dotOp for AggregateLoad\n";
+      return;
+    }
+
     llvm::outs() << "Total smem Usage:" << totalSharedMemoryUsage << "\n";
     llvm::outs() << "before: " << *getOperation() << "\n";
 

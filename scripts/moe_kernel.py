@@ -2,6 +2,8 @@ import torch
 import triton
 import triton.language as tl
 
+from triton.tools.mxfp import MXScaleTensor, MXFP4Tensor
+
 
 @triton.jit
 def matmul_kernel(
@@ -43,7 +45,8 @@ def matmul_kernel(
 
     offs_bn = (pid_n * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N))
 
-    a_ptrs = a_ptr + offs_token[:, None] * stride_am + offs_k[None, :] * stride_ak
+    a_ptrs = a_ptr + offs_token[:, None] * \
+        stride_am + offs_k[None, :] * stride_ak
     # a_ptrs = a_ptr + offs_token_id[:, None] * stride_am + offs_k[None, :] * stride_ak
     b_ptrs = b_ptr + offs_k[:, None] * stride_bk + offs_bn[None, :] * stride_bn
 
@@ -61,12 +64,110 @@ def matmul_kernel(
     c = accumulator.to(c_ptr.type.element_ty)
     offs_cm = pid_m * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M)
     offs_cn = pid_n * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N)
-    c_ptrs = c_ptr + stride_cm * offs_token[:, None] + stride_cn * offs_cn[None, :]
+    c_ptrs = c_ptr + stride_cm * \
+        offs_token[:, None] + stride_cn * offs_cn[None, :]
     c_mask = token_mask[:, None] & (offs_cn[None, :] < N)
     if SPLIT_K == 1:
         tl.store(c_ptrs, c, mask=c_mask)
     else:
         tl.atomic_add(c_ptrs, c, mask=c_mask)
+
+
+@triton.jit
+def scaled_dot_kernel(
+    a_ptr, b_ptr, c_ptr,
+    a_scale, b_scale,
+    M, N, K: tl.constexpr,
+    stride_scale,  #
+    stride_am, stride_ak,
+    stride_bk, stride_bn,
+    stride_cm, stride_cn,
+    sorted_token_ids_ptr,
+    num_valid_tokens,
+    DTYPE_A: tl.constexpr,  #
+    DTYPE_B: tl.constexpr,  #
+    BLOCK_SIZE_M: tl.constexpr, BLOCK_SIZE_N: tl.constexpr, BLOCK_SIZE_K: tl.constexpr,
+    SPLIT_K: tl.constexpr, GROUP_SIZE_M: tl.constexpr,
+    EVEN_K: tl.constexpr
+):
+    DIV_FACTOR_A: tl.constexpr = 2 if DTYPE_A == "e2m1" else 1
+    DIV_FACTOR_B: tl.constexpr = 2 if DTYPE_B == "e2m1" else 1
+    pid = tl.program_id(axis=0)
+    pid_z = tl.program_id(1)
+    num_pid_m = tl.cdiv(M, BLOCK_SIZE_M)
+    num_pid_n = tl.cdiv(N, BLOCK_SIZE_N)
+    if GROUP_SIZE_M == 1:
+        pid_m = pid // num_pid_n
+        pid_n = pid % num_pid_n
+        # pid_m = pid % num_pid_m
+        # pid_n = pid // num_pid_m
+    else:
+        num_pid_in_group = GROUP_SIZE_M * num_pid_n
+        group_id = pid // num_pid_in_group
+        first_pid_m = group_id * GROUP_SIZE_M
+        group_size_m = min(num_pid_m - first_pid_m, GROUP_SIZE_M)
+        pid_m = first_pid_m + (pid % group_size_m)
+        pid_n = (pid % num_pid_in_group) // group_size_m
+    if SPLIT_K == 1:
+        # offs_k = tl.arange(0, BLOCK_SIZE_K)
+        offs_ak = tl.arange(0, BLOCK_SIZE_K // DIV_FACTOR_A)
+        offs_bk = tl.arange(0, BLOCK_SIZE_K // DIV_FACTOR_B)
+    else:
+        offs_k = pid_z * BLOCK_SIZE_K + tl.arange(0, BLOCK_SIZE_K)
+
+    offs_token_id = pid_m * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M)
+    offs_token = tl.load(sorted_token_ids_ptr + offs_token_id)
+    token_mask = offs_token < num_valid_tokens
+
+    offs_bn = (pid_n * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N))
+    # offs_bn_scale = (pid_n * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N)) % N
+    offs_bn_scale = pid_n * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N)
+
+    # a_ptrs = a_ptr + offs_token[:, None] * stride_am + offs_k[None, :] * stride_ak
+    # b_ptrs = b_ptr + offs_k[:, None] * stride_bk + offs_bn[None, :] * stride_bn
+    a_ptrs = a_ptr + offs_token[:, None] * \
+        stride_am + offs_ak[None, :] * stride_ak
+    b_ptrs = b_ptr + offs_bk[:, None] * \
+        stride_bk + offs_bn[None, :] * stride_bn
+    offs_scale_k = tl.arange(0, BLOCK_SIZE_K // 32)
+
+    a_scale_ptr = a_scale + offs_token[:, None] * \
+        stride_scale + offs_scale_k[None, :]
+    b_scale_ptr = b_scale + \
+        offs_bn_scale[:, None] * stride_scale + offs_scale_k[None, :]
+
+    # acc_dtype = tl.float32 if a_ptr.type.element_ty != tl.int8 else tl.int32
+    # accumulator = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=c_ptr.dtype.element_ty)
+    accumulator = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=tl.float32)
+
+    for k in range(0, tl.cdiv(K, BLOCK_SIZE_K * SPLIT_K)):
+        a = tl.load(a_ptrs, mask=token_mask[:, None], other=0.0)
+        # a = tl.load(a_ptrs, mask=token_mask[:, None] & (offs_k[None, :] < K - k * BLOCK_SIZE_K), other=0.0)
+        b = tl.load(b_ptrs)
+        scale_a = tl.load(a_scale_ptr)
+        scale_b = tl.load(b_scale_ptr)
+        # scale_a = tl.full(a_scale_ptr.shape, 127, dtype=tl.int8)
+        # scale_b = tl.full(b_scale_ptr.shape, 127, dtype=tl.int8)
+        # accumulator += tl.dot(a, b)
+        accumulator = tl.dot_scaled(
+            a, scale_a, DTYPE_A, b, scale_b, DTYPE_B, accumulator)
+        a_ptrs += (BLOCK_SIZE_K // DIV_FACTOR_A) * SPLIT_K * stride_ak
+        b_ptrs += (BLOCK_SIZE_K // DIV_FACTOR_B) * SPLIT_K * stride_bk
+        a_scale_ptr += (BLOCK_SIZE_K // 32) * SPLIT_K
+        b_scale_ptr += (BLOCK_SIZE_K // 32) * SPLIT_K
+
+    c = accumulator.to(c_ptr.type.element_ty)
+    # c = accumulator
+    offs_cm = pid_m * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M)
+    offs_cn = pid_n * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N)
+    c_ptrs = c_ptr + stride_cm * \
+        offs_token[:, None] + stride_cn * offs_cn[None, :]
+    c_mask = token_mask[:, None] & (offs_cn[None, :] < N)
+    if SPLIT_K == 1:
+        tl.store(c_ptrs, c, mask=c_mask)
+    else:
+        tl.atomic_add(c_ptrs, c, mask=c_mask)
+
 
 def gen_input(M, N, ty_name, needTrans, seed, init_type, device='cuda'):
     d_type = name_to_tl_types[ty_name]
@@ -101,7 +202,8 @@ def gen_input(M, N, ty_name, needTrans, seed, init_type, device='cuda'):
             ret = []
             dim0, dim1 = size
             for i in range(dim0):
-                ret.append(torch.full((dim1,), float(i + 1) / dim0, dtype=dtype, device='cuda'))
+                ret.append(torch.full((dim1,), float(i + 1) /
+                           dim0, dtype=dtype, device='cuda'))
             return torch.stack(ret).contiguous()
         else:
             raise ValueError("Bad matrix initialization type.")
@@ -120,7 +222,7 @@ def gen_input(M, N, ty_name, needTrans, seed, init_type, device='cuda'):
         f8_tensor = f8_tensor & 0b00111111
         input = triton.reinterpret(f8_tensor, d_type)
         input_f16 = torch.empty_like(f8_tensor, dtype=torch.float16)
-        grid = lambda meta: (triton.cdiv(n_elements, meta['BLOCK_SIZE']), )
+        def grid(meta): return (triton.cdiv(n_elements, meta['BLOCK_SIZE']), )
         n_elements = raw_data.numel()
         copy_kernel[grid](input, input_f16, n_elements, BLOCK_SIZE=1024)
 
@@ -169,6 +271,67 @@ def invoke_moe(a, b, c, bias, block_m, block_n, block_k, group_m, split_k,
                         EVEN_K=EVEN_K)
     return c
 
+
+def invoke_scaled_moe(a, b, c, a_scale, b_scale, bias, block_m, block_n, block_k,
+                      dtype_a, dtype_b, group_m, split_k, num_warps, num_stages, waves_per_eu,
+                      mfmaInstrSize, kpack, use_bias, sorted_token_ids_ptr, num_valid_tokens):
+    # Check constraints.
+    div_factor_a = 2 if dtype_a == 'float4' else 1
+    div_factor_b = 2 if dtype_b == 'float4' else 1
+
+    print(f'{a.shape=}, {b.shape=}, {div_factor_a=}, {div_factor_b=}')
+
+    assert (a.shape[1] * div_factor_a) == (b.shape[0]
+                                           * div_factor_b), "Incompatible dimensions"
+    # assert a.is_contiguous(), "Matrix A must be contiguous"
+    # assert b.is_contiguous(), "Matrix B must be contiguous"
+    M, K = a.shape
+    K, N = b.shape
+    K *= div_factor_b
+    assert a_scale.stride(0) == b_scale.stride(0)
+    print(f'stride_scale: {a_scale.stride(0)}')
+    # 1D launch kernel where each block gets its own program.
+
+    dtype_converter = {'float8e5': 'e5m2',
+                       'float8e4nv': 'e4m3', 'float4': 'e2m1'}
+
+    grid = (triton.cdiv(M, block_m) * triton.cdiv(N, block_n), split_k)
+    stride_bias = bias.stride(0) if use_bias else 0
+    EVEN_K = K % block_k == 0
+    print(f'{M=}, {N=}, {K=}, {block_m=}, {block_n=}, {block_k=}')
+    scaled_dot_kernel[grid](a,
+                            b,
+                            c,
+                            a_scale,
+                            b_scale,
+                            M,
+                            N,
+                            K,
+                            b_scale.stride(0),
+                            a.stride(0),
+                            a.stride(1),
+                            b.stride(0),
+                            b.stride(1),
+                            c.stride(0),
+                            c.stride(1),
+                            sorted_token_ids_ptr,
+                            num_valid_tokens,
+                            DTYPE_A=dtype_converter[dtype_a],
+                            DTYPE_B=dtype_converter[dtype_b],
+                            BLOCK_SIZE_M=block_m,
+                            BLOCK_SIZE_N=block_n,
+                            BLOCK_SIZE_K=block_k,
+                            GROUP_SIZE_M=group_m,
+                            SPLIT_K=split_k,
+                            num_warps=num_warps,
+                            num_stages=num_stages,
+                            waves_per_eu=waves_per_eu,
+                            matrix_instr_nonkdim=mfmaInstrSize,
+                            kpack=kpack,
+                            EVEN_K=EVEN_K)
+    return c
+
+
 def read_config(config):
     block_m = config["BLOCK_SIZE_M"]
     block_n = config["BLOCK_SIZE_N"]
@@ -201,15 +364,72 @@ tl_to_torch_types = {
     tl.int32: torch.int32,
 }
 
-# test_correctness(M, N, K, col_a, col_b, dtype_a, dtype_b, dtype_c,
-#                  init_type, config, bias_vector, verbose):
+
+def f8_to_f16(x, dtype):
+
+    @triton.jit
+    def kernel(Y, X, N, BLOCK_SIZE: tl.constexpr):
+        pid = tl.program_id(0)
+        offs = pid * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
+        mask = offs < N
+        x = tl.load(X + offs, mask=mask)
+        tl.store(Y + offs, x, mask=mask)
+
+    ret = torch.empty(x.shape, dtype=torch.float16, device=x.device)
+    def grid(META): return (triton.cdiv(x.numel(), META['BLOCK_SIZE']), )
+    dtype = getattr(tl, dtype)
+    kernel[grid](ret, triton.reinterpret(x, dtype),
+                 ret.numel(), BLOCK_SIZE=1024)
+    return ret
+
+
+def create_operand(dtype: str, size0: int, size1: int, k_dim: int, transpose: bool = True,
+                   pack_along_k: bool = True):
+    if dtype == "float8e5":
+        if transpose:
+            v = torch.randint(20, 40, (size0, size1), dtype=torch.uint8).view(
+                torch.float8_e5m2).to('cuda')
+            v_ref = f8_to_f16(v.view(torch.float8_e5m2),
+                              dtype).to(torch.float32)
+        else:
+            v = torch.randint(20, 40, (size1, size0), dtype=torch.uint8).view(
+                torch.float8_e5m2).to('cuda').T
+            v_ref = f8_to_f16(v.view(torch.float8_e5m2).T,
+                              dtype).to(torch.float32).T
+    elif dtype == "float8e4nv":
+        if transpose:
+            v = torch.randint(20, 40, (size0, size1), dtype=torch.uint8).view(
+                torch.float8_e4m3fn).to('cuda')
+            v_ref = f8_to_f16(v.view(torch.float8_e4m3fn),
+                              dtype).to(torch.float32)
+        else:
+            v = torch.randint(20, 40, (size1, size0), dtype=torch.uint8).view(
+                torch.float8_e4m3fn).to('cuda').T
+            v_ref = f8_to_f16(v.view(torch.float8_e4m3fn).T,
+                              dtype).to(torch.float32).T
+    else:
+        # float4
+        if pack_along_k:
+            pack_dim = k_dim
+        else:
+            pack_dim = (k_dim + 1) % 2
+        if transpose:
+            v_mxfp4 = MXFP4Tensor(size=(size0, size1), device='cuda').random()
+            v = v_mxfp4.to_packed_tensor(dim=pack_dim)
+            v_ref = v_mxfp4.to(torch.float32)
+        else:
+            v_mxfp4 = MXFP4Tensor(size=(size1, size0), device='cuda').random()
+            v = v_mxfp4.to_packed_tensor(dim=(pack_dim + 1) % 2).T
+            v_ref = v_mxfp4.to(torch.float32).T
+    return v, v_ref
+
+
 if __name__ == "__main__":
     config = {'M': 16, 'N': 4096, 'K': 2048,
               'rowMajorA': 'T', 'rowMajorB': 'N',
               'BLOCK_SIZE_M': 16, 'BLOCK_SIZE_N': 64, 'BLOCK_SIZE_K': 128,
-            #   'BLOCK_SIZE_M': 16, 'BLOCK_SIZE_N': 64, 'BLOCK_SIZE_K': 1024,
+              #   'BLOCK_SIZE_M': 16, 'BLOCK_SIZE_N': 64, 'BLOCK_SIZE_K': 1024,
               'GROUP_SIZE_M': 1, 'SPLIT_K': 1,
-            #   'num_warps': 4,
               'num_warps': 8,
               'num_stages': 2,
               'waves_per_eu': 2,
@@ -222,13 +442,17 @@ if __name__ == "__main__":
     K = config["K"]
     col_a = config["rowMajorA"] == "N"
     col_b = config["rowMajorB"] == "N"
-    dtype_a = "fp16"
-    dtype_b = "fp16"
-    dtype_c = "fp16"
+    # dtype_a = "fp16"
+    # dtype_b = "fp16"
+    # dtype_c = "fp16"
+    dtype_a = "float8e4nv"
+    dtype_b = "float4"
+    dtype_c = "fp32"
     init_type = "randn"
     # init_type = "const_layer"
     # init_type = "trig_float"
     bias_vector = False
+    scaled = True
 
     # Load Configs
     block_m, block_n, block_k, group_m, split_k, num_warps, num_stages, waves_per_eu, mfmaInstrSize, kpack = read_config(
@@ -236,11 +460,26 @@ if __name__ == "__main__":
 
     use_bias = bias_vector
     torch.manual_seed(0)
-    # a = torch.randn((M, K), device='cuda', dtype=datatype)
-    # b = torch.randn((K, N), device='cuda', dtype=datatype)
-    a, a_fp16 = gen_input(M, K, dtype_a, col_a, 1, init_type, device='cuda')
-    b, b_fp16 = gen_input(K, N, dtype_b, col_b, 2, init_type, device='cuda')
-    # b, b_fp16 = gen_input(K, N, dtype_b, col_b, 2, 'ones', device='cuda')
+
+    if scaled:
+        a, a_fp16 = create_operand(dtype_a, M, K, 1)
+        b, b_fp16 = create_operand(dtype_b, K, N, 0, False)  # TN
+        a_scale_mxfp4 = MXScaleTensor(
+            size=(M, (K + 32 - 1) // 32), device='cuda').random(high=32.0)
+        b_scale_mxfp4 = MXScaleTensor(
+            size=(N, (K + 32 - 1) // 32), device='cuda').random(high=32.0)
+        a_scale = a_scale_mxfp4.data
+        b_scale = b_scale_mxfp4.data
+        a_scale_ref = a_scale_mxfp4.to(
+            torch.float32).repeat_interleave(32, dim=1)[:M, :K]
+        b_scale_ref = b_scale_mxfp4.to(torch.float32).repeat_interleave(
+            32, dim=1).T.contiguous()[:K, :N]
+    else:
+        a, a_fp16 = gen_input(M, K, dtype_a, col_a, 1,
+                              init_type, device='cuda')
+        b, b_fp16 = gen_input(K, N, dtype_b, col_b, 2,
+                              init_type, device='cuda')
+
     bias = None
     if use_bias:
         bias, bias_fp16 = gen_input(M,
@@ -258,14 +497,24 @@ if __name__ == "__main__":
                     dtype=tl_to_torch_types[name_to_tl_types[dtype_c]])
 
     # Allocate a fake expert_ids_ptr as 0,1,...,M-1
-    sorted_token_ids_ptr = torch.arange(0, M, dtype=torch.int32, device=a.device)
+    sorted_token_ids_ptr = torch.arange(
+        0, M, dtype=torch.int32, device=a.device)
     num_valid_tokens = 8
     # num_valid_tokens = 16
-    triton_output = invoke_moe(a, b, c, bias, block_m, block_n, block_k, group_m,
-                               split_k, num_warps, num_stages, waves_per_eu,
-                               mfmaInstrSize, kpack, use_bias, sorted_token_ids_ptr, num_valid_tokens)
-    a[8:16, :] = 0
-    torch_output = torch.matmul(a, b)
+    if scaled:
+        triton_output = invoke_scaled_moe(a, b, c, a_scale, b_scale, bias, block_m, block_n, block_k,
+                                          dtype_a, dtype_b, group_m,
+                                          split_k, num_warps, num_stages, waves_per_eu,
+                                          mfmaInstrSize, kpack, use_bias, sorted_token_ids_ptr, num_valid_tokens)
+        a_fp16[8:16, :] = 0
+        a_scale_ref[8:16, :] = 0
+        torch_output = torch.matmul(a_fp16 * a_scale_ref, b_fp16 * b_scale_ref)
+    else:
+        triton_output = invoke_moe(a, b, c, bias, block_m, block_n, block_k, group_m,
+                                   split_k, num_warps, num_stages, waves_per_eu,
+                                   mfmaInstrSize, kpack, use_bias, sorted_token_ids_ptr, num_valid_tokens)
+        a[8:16, :] = 0
+        torch_output = torch.matmul(a, b)
     # torch.save(torch_output, 'tensor_cache_16x40961024_num-valid-tokens=8.pt')
     # torch_output = torch.load('tensor_cache_16x40961024_num-valid-tokens=8.pt', weights_only=True)
     if use_bias:
@@ -278,14 +527,12 @@ if __name__ == "__main__":
     torch.set_printoptions(linewidth=400)
     torch.set_printoptions(threshold=2048)
     torch.set_printoptions(sci_mode=False)
-    print(f'{a=}')
-    print(f'{b=}')
     size_str = f'SIZE M: {M}, N: {N}, K: {K}, trans: {row_a_str}{row_b_str}'
-    # torch_output /= 8
-    if torch.allclose(triton_output.to(torch.float16),
-                      torch_output,
-                      atol=atol,
-                      rtol=rtol):
+    if torch.allclose(
+            triton_output,
+            torch_output,
+            atol=atol,
+            rtol=rtol):
         print(f'{size_str} Correct✅')
     else:
         print(f"triton_output={triton_output}")
@@ -295,4 +542,5 @@ if __name__ == "__main__":
         mismatch = torch_output[:8, :] != triton_output[:8, :]
         print(f'Num mismatch: {torch.sum(mismatch, dim=1)}')
         print(f'{size_str} Incorrect❌')
-        torch.testing.assert_close(triton_output.to(torch.float16), torch_output, atol=atol, rtol=rtol)
+        torch.testing.assert_close(
+            triton_output, torch_output, atol=atol, rtol=rtol)
