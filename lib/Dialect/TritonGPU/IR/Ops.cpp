@@ -452,10 +452,12 @@ void LocalAllocOp::getEffects(
   // op.
   if (!getType().getMutableMemory() && !op->hasAttr("allocation.offset"))
     return;
-  effects.emplace_back(MemoryEffects::Allocate::get(), SharedMemory::get());
+  OpResult alloc = getOperation()->getOpResult(0);
+  effects.emplace_back(MemoryEffects::Allocate::get(), alloc,
+                       SharedMemory::get());
   if (getSrc())
-    effects.emplace_back(MemoryEffects::Write::get(),
-                         getOperation()->getOpResult(0), SharedMemory::get());
+    effects.emplace_back(MemoryEffects::Write::get(), alloc,
+                         SharedMemory::get());
 }
 
 OpFoldResult LocalAllocOp::fold(FoldAdaptor adaptor) {
