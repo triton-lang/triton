@@ -69,3 +69,21 @@ def test_op(n_tokens, n_expts_tot, n_expts_act, block_m):
     _assert_indx_equal(ref_gather.dst_indx, tri_gather.dst_indx)
     _assert_indx_equal(ref_scatter.src_indx, tri_scatter.src_indx)
     _assert_indx_equal(ref_scatter.dst_indx, tri_scatter.dst_indx)
+
+
+def bench_routing():
+    import triton.profiler as proton
+    n_tokens = 2048
+    block_m = 128
+    n_expts_tot, n_expts_act = 128, 4
+    tri_logits = init_data(n_tokens, n_expts_tot)
+    proton.start("routing")
+    proton.activate()
+    for i in range(100):
+        tri_routing_data, tri_gather, tri_scatter = routing(tri_logits, n_expts_act)
+        tri_metadata = compute_metadata(tri_routing_data, n_tokens * n_expts_act, block_m)
+    proton.finalize()
+
+
+if __name__ == "__main__":
+    bench_routing()

@@ -14,39 +14,33 @@ class ExptData:
 
 
 @triton.jit
-def _memset_metadata(Metadata, metadata_size, Lock, BLOCK: tl.constexpr):
+def _memset_metadata(Metadata, metadata_size, BLOCK: tl.constexpr):
     pid = tl.program_id(0)
-    if pid == 0:
-        tl.store(Lock, 0)
     offs = pid * BLOCK + tl.arange(0, BLOCK)
     tl.store(Metadata + offs, 0xffffffff, mask=offs < metadata_size)
 
 
 @triton.jit
-def _compute_metadata(Hist, n_expts_tot, Lock, MDHist, MDTokensStart, MDTilesStart, MDTileInfo,
-                      N_EXPTS_PAD: tl.constexpr, BLOCK: tl.constexpr, TILE_DIM: tl.constexpr):
+def _compute_metadata(Hist, n_expts_tot, MDHist, MDTokStarts, MDTileStarts, MDTileInfo, N_EXPTS_PAD: tl.constexpr,
+                      BLOCK: tl.constexpr, TILE_DIM: tl.constexpr):
     expt_id = tl.program_id(0)
     n_tokens = tl.load(Hist + expt_id)
     n_blocks = tl.cdiv(n_tokens, TILE_DIM)
+    offs_n = tl.arange(0, N_EXPTS_PAD)
+    mask = offs_n < n_expts_tot
+    hist = tl.load(Hist + offs_n, mask=mask)
+    tile_starts = tl.cumsum(tl.cdiv(hist, TILE_DIM), 0)
     # first pid to reach this initializes histograms and cumsums
-    if tl.atomic_cas(Lock, 0, 1) == 0:
-        offs_n = tl.arange(0, N_EXPTS_PAD)
-        mask = offs_n < n_expts_tot
-        hist = tl.load(Hist + offs_n, mask=mask)
+    if expt_id == 0:
+        tok_starts = tl.cumsum(hist, 0)
         tl.store(MDHist + offs_n, hist, mask=mask)
-        tokens_start = tl.cumsum(hist, 0)
-        tl.store(MDTokensStart, 0)
-        tl.store(MDTokensStart + 1 + offs_n, tokens_start, mask=mask)
-        tiles_start = tl.cumsum(tl.cdiv(hist, TILE_DIM), 0)
-        tl.store(MDTilesStart, 0)
-        tl.store(MDTilesStart + 1 + offs_n, tiles_start, mask=mask)
-        tl.debug_barrier()
-        tl.atomic_xchg(Lock, 0)
-        tl.debug_barrier()
-    # spin until content of `MDTilesStart` is initialized
-    while tl.atomic_add(Lock, 0) == 1:
-        pass
-    MDTileInfo += tl.load(MDTilesStart + expt_id)
+        tl.store(MDTokStarts, 0)
+        tl.store(MDTokStarts + 1 + offs_n, tok_starts, mask=mask)
+        tl.store(MDTileStarts, 0)
+        tl.store(MDTileStarts + 1 + offs_n, tile_starts, mask=mask)
+    tile_off = tl.sum(tl.where(offs_n == expt_id - 1, tile_starts, 0), 0)
+    MDTileInfo += tile_off
+    # MDTileInfo += tl.load(MDTilesStart + expt_id)
     for block_off in range(0, n_blocks, BLOCK):
         block_offs = block_off + tl.arange(0, BLOCK)
         data = (block_offs << 16) + expt_id
@@ -72,11 +66,9 @@ def compute_metadata(routing_data, n_rows, block_m):
     md_tok_starts = metadata[n_expts_tot:n_expts_tot * 2 + 1]
     md_tile_starts = metadata[n_expts_tot * 2 + 1:n_expts_tot * 3 + 2]
     md_tile_infos = metadata[n_expts_tot * 3 + 2:]
-    lock = torch.empty((1, ), dtype=torch.int32, device=device)
-    _memset_metadata[(cdiv(metadata_size, MEMSET_BLOCK), )](metadata, metadata_size, lock, BLOCK=MEMSET_BLOCK)
-    _compute_metadata[(n_expts_tot, )](routing_data.expt_hist, n_expts_tot, lock, md_hist, md_tok_starts,
-                                       md_tile_starts, md_tile_infos, N_EXPTS_PAD=n_expts_pad, BLOCK=HIST2_BLOCK_M,
-                                       TILE_DIM=block_m)
+    _memset_metadata[(cdiv(metadata_size, MEMSET_BLOCK), )](metadata, metadata_size, BLOCK=MEMSET_BLOCK)
+    _compute_metadata[(n_expts_tot, )](routing_data.expt_hist, n_expts_tot, md_hist, md_tok_starts, md_tile_starts,
+                                       md_tile_infos, N_EXPTS_PAD=n_expts_pad, BLOCK=HIST2_BLOCK_M, TILE_DIM=block_m)
 
     hist = metadata[:n_expts_tot]
     offs = metadata[n_expts_tot:2 * n_expts_tot + 1]
