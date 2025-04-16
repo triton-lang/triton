@@ -49,6 +49,14 @@ void hoistOpsBefore(Block *block, Block::iterator it,
                     const llvm::SetVector<Operation *> &toHoist);
 
 //===----------------------------------------------------------------------===//
+// Sinking Utilities
+//===----------------------------------------------------------------------===//
+
+// Sink a value redefinition into a block, provided that the block is dominated
+// by `in` and postdominated by `out`.
+Value sinkValueRedefinition(Value in, Value out, Block *block);
+
+//===----------------------------------------------------------------------===//
 // Loop Pipelining Utilities
 //===----------------------------------------------------------------------===//
 

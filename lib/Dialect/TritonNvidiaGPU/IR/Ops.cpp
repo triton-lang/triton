@@ -215,6 +215,21 @@ static void printBarriersAndPreds(OpAsmPrinter &p, Operation *op,
 }
 
 // token := `[` (ssa-value (`,` ssa-value)*)? `]`
+// dep-operand := token?
+static ParseResult
+parseToken(OpAsmParser &p, std::optional<OpAsmParser::UnresolvedOperand> &dep,
+           Type &token) {
+  if (failed(p.parseOptionalLSquare()))
+    return success();
+  token = p.getBuilder().getType<AsyncTokenType>();
+  if (p.parseOperand(dep.emplace()) || p.parseRSquare())
+    return failure();
+  return success();
+}
+static void printToken(OpAsmPrinter &p, Operation *op, Value dep, Type token) {
+  if (dep)
+    p << '[' << dep << ']';
+}
 
 template <typename MMAOpT>
 static void getMMAEffects(
@@ -268,12 +283,12 @@ Value TCGen5MMAOp::getPredicate() { return getPred(); }
 
 void TCGen5MMAOp::setPredicate(Value pred) { getPredMutable().assign(pred); }
 
-void TCGen5MMAOp::build(OpBuilder &builder, OperationState &state, Value a,
-                        Value b, Value d, Value useD, Value pred,
-                        bool useTwoCTAs, ValueRange barriers,
+void TCGen5MMAOp::build(OpBuilder &builder, OperationState &state, Type token,
+                        Value a, Value b, Value d, Value accDep, Value useD,
+                        Value pred, bool useTwoCTAs, ValueRange barriers,
                         ValueRange barrierPreds) {
-  build(builder, state, a, b, d, useD, pred, barriers, barrierPreds,
-        useTwoCTAs ? builder.getUnitAttr() : UnitAttr());
+  build(builder, state, token, a, b, d, accDep, useD, pred, barriers,
+        barrierPreds, useTwoCTAs ? builder.getUnitAttr() : UnitAttr());
 }
 
 // -- TCGen5MMAScaledOp --
@@ -403,12 +418,13 @@ int64_t TCGen5MMAScaledOp::getBlockK() {
 }
 
 void TCGen5MMAScaledOp::build(OpBuilder &builder, OperationState &state,
-                              Value a, Value b, Value d, Value aScale,
-                              Value bScale, ScaleDotElemType aType,
-                              ScaleDotElemType bType, Value useD, Value pred,
-                              ValueRange barriers, ValueRange barrierPreds) {
+                              Type token, Value a, Value b, Value d,
+                              Value accDep, Value aScale, Value bScale,
+                              ScaleDotElemType aType, ScaleDotElemType bType,
+                              Value useD, Value pred, ValueRange barriers,
+                              ValueRange barrierPreds) {
   MLIRContext *ctx = builder.getContext();
-  build(builder, state, a, b, d, aScale, bScale,
+  build(builder, state, token, a, b, d, accDep, aScale, bScale,
         ScaleDotElemTypeAttr::get(ctx, aType),
         ScaleDotElemTypeAttr::get(ctx, bType), useD, pred, barriers,
         barrierPreds);

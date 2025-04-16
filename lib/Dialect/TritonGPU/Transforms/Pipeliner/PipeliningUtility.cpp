@@ -92,6 +92,47 @@ void triton::hoistOpsBefore(Block *block, Block::iterator it,
 }
 
 //===----------------------------------------------------------------------===//
+// Sinking Utilities
+//===----------------------------------------------------------------------===//
+
+Value triton::sinkValueRedefinition(Value in, Value out, Block *block) {
+  while (block != in.getParentBlock()) {
+    Operation *op = block->getParentOp();
+    OpBuilder b(op);
+
+    // `in` is live into the loop body. `out` becomes the live-out if the
+    // loop executes at least once.
+    if (auto forOp = dyn_cast<scf::ForOp>(op)) {
+      (void)addIterArgsToLoop(b, forOp, in);
+      appendToForOpYield(forOp, out);
+      out = forOp.getResults().back();
+      continue;
+    }
+
+    // `in` is live into both branches. `out` becomes the live-out if the
+    // particular branch is taken.
+    if (auto ifOp = dyn_cast<scf::IfOp>(op)) {
+      scf::IfOp newIfOp = replaceIfOpWithNewSignature(b, ifOp, out.getType());
+      scf::YieldOp taken = newIfOp.thenYield();
+      scf::YieldOp other = newIfOp.elseYield();
+      if (block == newIfOp.elseBlock())
+        std::swap(taken, other);
+      taken->insertOperands(taken.getNumOperands(), out);
+      other->insertOperands(other.getNumOperands(), in);
+      out = newIfOp.getResults().back();
+      ifOp.erase();
+      continue;
+    }
+
+    // TODO: Handle `scf.while`, etc.
+    llvm::report_fatal_error("FIXME: sinking into unhandled control flow op: " +
+                             op->getName().getStringRef());
+  }
+
+  return out;
+}
+
+//===----------------------------------------------------------------------===//
 // Loop Pipelining Utilities
 //===----------------------------------------------------------------------===//
 

@@ -409,7 +409,7 @@ def TTNG_TCGen5MMAOp : TTNG_Op<"tc_gen5_mma", [
     TTG_MemDescType:$a,
     TTG_MemDescType:$b,
     TTG_MemDescType:$d,
-    Variadic<TTG_AsyncToken>:$d_deps,
+    Optional<TTG_AsyncToken>:$acc_dep,
     I1:$useD,
     I1:$pred,
     Variadic<TTG_MemDescType>:$barriers,
@@ -420,15 +420,15 @@ def TTNG_TCGen5MMAOp : TTNG_Op<"tc_gen5_mma", [
 
   let builders = [
     OpBuilder<(ins "Type":$token,
-      "Value":$a, "Value":$b, "Value":$d, "ValueRange":$d_dep, "Value":$useD,
+      "Value":$a, "Value":$b, "Value":$d, "Value":$acc_dep, "Value":$useD,
       "Value":$pred, CArg<"bool", "false">:$two_ctas,
       CArg<"ValueRange", "{}">:$barriers,
       CArg<"ValueRange", "{}">:$barrier_preds)>
   ];
 
   let assemblyFormat = [{
-    $a `,` $b `,` $d `` custom<Token>($d_deps, type($token)) `,` $useD`,` $pred
-    `` custom<BarriersAndPreds>($barriers, $barrier_preds)
+    $a `,` $b `,` $d `` custom<Token>($acc_dep, type($token)) `,` $useD`,`
+    $pred `` custom<BarriersAndPreds>($barriers, $barrier_preds)
     attr-dict `:` qualified(type($a)) `,` qualified(type($b)) `,`
     qualified(type($d)) (`,` qualified(type($barriers))^)?
   }];
@@ -452,7 +452,7 @@ def TTNG_TCGen5MMAScaledOp : TTNG_Op<"tc_gen5_mma_scaled", [
     TTG_MemDescType:$a,
     TTG_MemDescType:$b,
     TTG_MemDescType:$d,
-    Variadic<TTG_AsyncToken>:$d_deps,
+    Optional<TTG_AsyncToken>:$acc_dep,
     TTG_MemDescType:$a_scale,
     TTG_MemDescType:$b_scale,
     TT_ScaleDotElemTypeAttr:$a_type,
@@ -475,7 +475,7 @@ def TTNG_TCGen5MMAScaledOp : TTNG_Op<"tc_gen5_mma_scaled", [
     // custom builder signature over the default-generated one.
     OpBuilder<(ins "::mlir::Type":$token,
       "::mlir::Value":$a, "::mlir::Value":$b, "::mlir::Value":$d,
-      "::mlir::ValueRange":$d_deps, "::mlir::Value":$a_scale,
+      "::mlir::Value":$acc_dep, "::mlir::Value":$a_scale,
       "::mlir::Value":$b_scale, "::mlir::triton::ScaleDotElemType":$a_type,
       "::mlir::triton::ScaleDotElemType":$b_type,
       "::mlir::Value":$useD, "::mlir::Value":$pred,
@@ -484,7 +484,7 @@ def TTNG_TCGen5MMAScaledOp : TTNG_Op<"tc_gen5_mma_scaled", [
   ];
 
   let assemblyFormat = [{
-    $a `,` $b `,` $d `` custom<Token>($d_deps, type($token)) `,` $a_scale `,`
+    $a `,` $b `,` $d `` custom<Token>($acc_dep, type($token)) `,` $a_scale `,`
     $b_scale `,` $useD `,` $pred `lhs` `=` $a_type `rhs` `=` $b_type
     `` custom<BarriersAndPreds>($barriers, $barrier_preds)
     attr-dict `:` qualified(type($a)) `,` qualified(type($b)) `,`
@@ -529,14 +529,14 @@ def TTNG_TMEMStoreOp : TTNG_Op<"tmem_store"> {
   }];
   let arguments = (ins
     Arg<TTG_MemDescType, "", [MemWrite<TensorMemory>]>:$dst,
-    Variadic<TTG_AsyncToken>:$deps,
+    Optional<TTG_AsyncToken>:$dep,
     TT_Tensor:$src,
     I1:$pred
   );
   let results = (outs Optional<TTG_AsyncToken>:$token);
 
   let assemblyFormat = [{
-    $src `` custom<Token>($deps, type($token)) `,` $dst `,` $pred
+    $src `,` $dst `` custom<Token>($dep, type($token)) `,` $pred
     attr-dict `:` type($src) `->` qualified(type($dst))
   }];
   let hasVerifier = 1;
@@ -552,13 +552,21 @@ def TTNG_TMEMAllocOp : TTNG_Op<"tmem_alloc", [DeclareOpInterfaceMethods<MemoryEf
     Explicitly deallocating a buffer is optional; see local_dealloc.
   }];
   let arguments = (ins Optional<TT_Tensor>:$src);
+  let results = (outs
+    TTG_MemDescType:$result,
+    Optional<TTG_AsyncToken>:$token
+  );
 
   let assemblyFormat = [{
     ($src^)? attr-dict `:` functional-type(operands, results)
   }];
 
-  let results = (outs TTG_MemDescType:$result);
   let hasVerifier = 1;
+
+  let extraClassDeclaration = [{
+    triton::gpu::MemDescType getType() { return getResult().getType(); }
+    operator TypedValue<triton::gpu::MemDescType>() { return getResult(); }
+  }];
 }
 
 def TTNG_TMEMSubSliceOp : TTNG_Op<"tmem_subslice", [Pure]> {

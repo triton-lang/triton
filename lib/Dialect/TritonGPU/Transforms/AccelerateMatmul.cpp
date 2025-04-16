@@ -549,7 +549,7 @@ public:
     auto vTrue = rewriter.create<arith::ConstantIntOp>(dotOp.getLoc(), 1, 1);
     auto tokType = rewriter.getType<AsyncTokenType>();
     auto mma = rewriter.create<triton::nvidia_gpu::TCGen5MMAOp>(
-        loc, tokType, a, b, acc, /*d_deps=*/ValueRange(), /*useD=*/vTrue,
+        loc, tokType, a, b, acc, acc.getToken(), /*useD=*/vTrue,
         /*pred=*/vTrue);
     mma.setTwoCtas(useTwoCTAs);
 
@@ -731,15 +731,19 @@ public:
         rewriter.create<ConvertLayoutOp>(loc, newScaleAType, lhsScale);
     Value newScaleB =
         rewriter.create<ConvertLayoutOp>(loc, newScaleBType, rhsScale);
-    Value scaleA = rewriter.create<triton::nvidia_gpu::TMEMAllocOp>(
-        loc, scaleAType, newScaleA);
-    Value scaleB = rewriter.create<triton::nvidia_gpu::TMEMAllocOp>(
-        loc, scaleBType, newScaleB);
+
+    // We don't need to track memory dependencies for the scale operands since
+    // they are not pipelined.
+    auto scaleA = rewriter.create<triton::nvidia_gpu::TMEMAllocOp>(
+        loc, scaleAType, /*token=*/Type(), newScaleA);
+    auto scaleB = rewriter.create<triton::nvidia_gpu::TMEMAllocOp>(
+        loc, scaleBType, /*token=*/Type(), newScaleB);
+
     auto vTrue = rewriter.create<arith::ConstantIntOp>(dotOp.getLoc(), 1, 1);
     auto mmaOp = rewriter.create<triton::nvidia_gpu::TCGen5MMAScaledOp>(
-        loc, tokType, a, b, acc, /*d_deps=*/ValueRange(), scaleA, scaleB,
-        dotOp.getAElemType(), dotOp.getBElemType(), /*useD=*/vTrue,
-        /*pred=*/vTrue);
+        loc, tokType, a, b, acc.getResult(), acc.getToken(), scaleA.getResult(),
+        scaleB.getResult(), dotOp.getAElemType(), dotOp.getBElemType(),
+        /*useD=*/vTrue, /*pred=*/vTrue);
 
     auto ld = rewriter.create<triton::nvidia_gpu::TMEMLoadOp>(
         loc, newAccType, tokType, acc, mmaOp.getToken());
