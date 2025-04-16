@@ -86,7 +86,7 @@ public:
     if (!load || load.getResult() != store.getSrc() ||
         load.getSrc() != store.getDst())
       return failure();
-    rewriter.replaceOp(store, load.getDep());
+    rewriter.replaceOp(store, load.getToken());
     return success();
   }
 };
