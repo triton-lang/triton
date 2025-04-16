@@ -141,6 +141,292 @@ class RoutingData:
         return self.expt_data_map[key]
 
 
+# --------------------------
+# Triton routing
+# --------------------------
+
+
+@triton.jit
+def vertical_popcount(x):
+    """
+    Input  x : uint32[..., N]
+    Output y : uint32[..., 32]
+    semantics : y[..., i] = sum_j((x[..., j] >> i) & 1)
+    credits: @apgoucher
+    """
+
+    tl.static_assert(x.dtype == tl.uint32, "x should consist of 32-bit unsigned integers")
+
+    BLOCK_N: tl.constexpr = x.shape[-1]  # summation axis
+    BATCHES: tl.constexpr = x.numel // BLOCK_N  # number of batches
+    if BLOCK_N >= 8:
+        sa1: tl.constexpr = 8
+    else:
+        sa1: tl.constexpr = BLOCK_N
+    # create 8-way sums in 4-bit fields:
+    y = tl.reshape(x, [BATCHES, BLOCK_N // sa1, sa1, 1])
+    y = (y >> tl.arange(0, 4)[None, None, None, :]) & 0x11111111
+    y = tl.sum(y, 2)  # [BATCHES, BLOCK_N // sa1, 4]
+    if BLOCK_N >= 128:
+        sa2: tl.constexpr = 16
+    else:
+        sa2: tl.constexpr = BLOCK_N // sa1
+    # create 128-way sums in 8-bit fields:
+    y = tl.reshape(y, [BATCHES, BLOCK_N // (sa1 * sa2), sa2, 1, 4])
+    y = (y >> (4 * tl.arange(0, 2))[None, None, None, :, None]) & 0x0f0f0f0f
+    y = tl.sum(y, 2)  # [BATCHES, BLOCK_N // (sa1 * sa2), 2, 4]
+    sa3: tl.constexpr = BLOCK_N // (sa1 * sa2)
+    # create N-way sums in 32-bit fields:
+    y = tl.reshape(y, [BATCHES, 1, sa3, 8])
+    y = (y >> (8 * tl.arange(0, 4))[None, :, None, None]) & 0x000000ff
+    y = tl.sum(y, 2)  # [BATCHES, 4, 8]
+    y = tl.reshape(y, x.shape[:-1] + [32])
+    return y
+
+
+@triton.jit
+def keyed_add(x, y):
+
+    # we keep the key in the upper 16 bits of a uint32:
+    key_mask: tl.constexpr = 0xffff0000
+
+    kx = x & key_mask
+    ky = y & key_mask
+    z = tl.where(kx == ky, x + y - kx, y)
+    return z
+
+
+@triton.jit
+def count_previous(x):
+    """
+    Input  x : uint16[..., N]
+    Output y : uint32[..., N]
+    semantics : y[..., i] = sum_j((x[..., j] == x[..., i]) & (j < i))
+    credits: @apgoucher
+    """
+
+    BLOCK_N: tl.constexpr = x.shape[-1]  # summation axis
+    BATCHES: tl.constexpr = x.numel // BLOCK_N  # number of batches
+
+    # reduce to two-dimensional case:
+    y = tl.reshape(x, [BATCHES, BLOCK_N]).to(tl.uint32)
+
+    tl.static_assert(BLOCK_N <= 32768, "compute_run_lengths requires axis to have length <= 32768")
+
+    # sort (expert, position) ordered pairs to perform an argsort:
+    kv_pairs = ((y << 16) | tl.arange(0, BLOCK_N)[None, :]).to(tl.uint32)
+    sorted_kv_pairs = tl.sort(kv_pairs, 1)
+
+    # compute run lengths in expert-sorted order:
+    x = (sorted_kv_pairs & 0xffff0000 | 0x00000001)
+    expts_and_inclusive_run_lengths = tl.associative_scan(x, 1, keyed_add)
+    exclusive_run_lengths = (expts_and_inclusive_run_lengths - 1) & 0xffff
+
+    # undo permutation by doing another sort
+    # TODO rewrite this when tl.scatter becomes available
+    kv_pairs = ((sorted_kv_pairs << 16) | exclusive_run_lengths).to(tl.uint32)
+    unsorted_run_lengths = tl.sort(kv_pairs) & 0xffff
+
+    res = tl.reshape(unsorted_run_lengths, x.shape)
+    return res
+
+
+@triton.jit
+def or_combine(x, y):
+    return x | y
+
+
+@triton.jit
+def _compute_bitmatrix(X, stride_xm,  # logits
+                       Yv, Yi, stride_ym,  # topk values/indices
+                       R, stride_rm, n_rows,  # routing bitmatrix
+                       n_expts_tot, BLOCK_M: tl.constexpr, N_EXPTS_PAD: tl.constexpr, N_EXPTS_ACT: tl.constexpr):
+    tl.static_assert(N_EXPTS_PAD % 32 == 0)
+    offs_m = tl.program_id(0) * BLOCK_M + tl.arange(0, BLOCK_M)
+    offs_x_n = tl.arange(0, N_EXPTS_PAD)
+    mask_m = offs_m[:, None] < n_rows
+    mask_n = offs_x_n[None, :] < n_expts_tot
+    mask = mask_m & mask_n
+    # load
+    X_ptrs = X + offs_m[:, None] * stride_xm + offs_x_n[None, :]
+    x = tl.load(X_ptrs, mask=mask, other=float("-inf"))
+    x = (x.to(tl.uint16, bitcast=True).to(tl.int32) << 16) | offs_x_n[None, :]
+    # top-k experts
+    y = tl.topk(x, N_EXPTS_ACT, dim=1)
+    # TODO: maybe not necessary ?
+    # sort result in direction of ascending expert index
+    x_sgns = (y >> 16) & 0x00008000
+    y = (y << 16) | ((y >> 16) ^ x_sgns)
+    y = tl.sort(y, dim=1)
+    y_indices = y >> 16
+    y_values = ((y & 0x0000FFFF) ^ x_sgns).to(tl.uint16).to(tl.float16, bitcast=True)
+    # write back
+    offs_y_n = tl.arange(0, N_EXPTS_ACT)
+    Yv_ptrs = Yv + offs_m[:, None] * stride_ym + offs_y_n[None, :]
+    Yi_ptrs = Yi + offs_m[:, None] * stride_ym + offs_y_n[None, :]
+    tl.store(Yv_ptrs, y_values, mask=mask_m)
+    tl.store(Yi_ptrs, y_indices, mask=mask_m)
+    # pack into bitmatrix
+    y_div = y_indices // 32
+    y_rem = y_indices % 32
+    y = tl.where(y_div[:, :, None] == tl.arange(0, N_EXPTS_PAD // 32)[None, :, :], (1 << y_rem)[:, :, None], 0)
+    r = tl.reduce(y, combine_fn=or_combine, axis=1)
+    offs_r_n = tl.arange(0, N_EXPTS_PAD // 32)
+    R_ptrs = R + offs_m[:, None] * stride_rm + offs_r_n[None, :]
+    tl.store(R_ptrs, r, mask=mask_m)
+
+
+@triton.jit
+def _memset_hist(Hist, hist_size, BLOCK: tl.constexpr):
+    pid = tl.program_id(0)
+    offs = pid * BLOCK + tl.arange(0, BLOCK)
+    tl.store(Hist + offs, 0, mask=offs < hist_size)
+
+
+@triton.jit
+def _compute_hist(R, shape_rm, stride_rm,  # routing bitmatrix
+                  Hist, TokensStart, PartialHist, stride_pm, shape_pn,  # histogram
+                  BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr, N_EXPTS_PAD: tl.constexpr):
+    tl.static_assert(BLOCK_N % 32 == 0)
+    pid_m = tl.program_id(0)
+    pid_n = tl.program_id(1)
+    BLOCK_B: tl.constexpr = BLOCK_N // 32
+    offs_m = pid_m * BLOCK_M + tl.arange(0, BLOCK_M)
+    offs_n = pid_n * BLOCK_N + tl.arange(0, BLOCK_N)
+    offs_b = pid_n * BLOCK_B + tl.arange(0, BLOCK_B)
+    r = tl.load(R + offs_m[None, :] * stride_rm + offs_b[:, None], mask=offs_m[None, :] < shape_rm)
+    hist = tl.reshape(vertical_popcount(r), [BLOCK_N])
+    mask = offs_n < shape_pn
+    tl.atomic_add(Hist + offs_n, hist, mask=mask)
+    tl.store(PartialHist + pid_m * stride_pm + offs_n, hist, mask=mask)
+    # update atomic block counter (reuse tokens offset memory)
+    tl.debug_barrier()
+    if tl.atomic_add(TokensStart, 1) != tl.num_programs(0) * tl.num_programs(1) - 1:
+        return
+    tl.debug_barrier()
+    # we are the only block left and all atomics are visible; compute cumsum
+    offs_n = tl.arange(0, N_EXPTS_PAD)
+    hist = tl.load(Hist + offs_n)
+    tok_starts = tl.cumsum(hist, 0)
+    tl.store(TokensStart, 0)
+    tl.store(TokensStart + 1 + offs_n, tok_starts, mask=offs_n < shape_pn)
+
+
+@triton.jit
+def _finalize_hist(TokensStart, PartialHist, PartialOffs, shape_pm, stride_pm, BLOCK_M: tl.constexpr):
+    expt_id = tl.program_id(0)
+    offs_m = tl.arange(0, BLOCK_M)
+    # initialize first row of the output
+    tokens_off = tl.load(TokensStart + expt_id)
+    tl.store(PartialOffs + expt_id, tokens_off)
+    # iterate over input data
+    curr_sum = tokens_off
+    for _ in range(0, shape_pm, BLOCK_M):
+        offs = offs_m * stride_pm + expt_id
+        curr = tl.load(PartialHist + offs, mask=offs_m < shape_pm)
+        out = tl.cumsum(curr, 0) + curr_sum
+        curr_sum += tl.sum(curr, 0)
+        offs = (1 + offs_m) * stride_pm + expt_id
+        tl.store(PartialOffs + offs, out, mask=offs_m < shape_pm - 1)
+        offs_m += BLOCK_M
+
+
+@triton.jit
+def _compute_indx(GatherIndx, ScatterIndx, GateScal, ExptScal, ExptIndx, PartialOffs, stride_pm, n_gates,
+                  BLOCK_M: tl.constexpr, N_EXPTS_ACT: tl.constexpr):
+    pid_m = tl.program_id(0)
+    offs = pid_m * BLOCK_M * N_EXPTS_ACT + tl.arange(0, N_EXPTS_ACT * BLOCK_M)
+    mask = offs < n_gates
+    indx = tl.load(ExptIndx + offs, mask=mask)
+    gates = tl.load(PartialOffs + pid_m * stride_pm + indx, mask=mask)
+    gates += tl.reshape(count_previous(indx), [BLOCK_M * N_EXPTS_ACT])
+    gate_scal = tl.load(ExptScal + offs, mask=mask)
+    tl.store(ScatterIndx + offs, gates, mask=mask)
+    tl.store(GatherIndx + gates, offs, mask=mask)
+    tl.store(GateScal + gates, gate_scal, mask=mask)
+
+
+def routing(logits, n_expts_act, expt_indx=None):
+    assert expt_indx is None
+    cdiv = triton.cdiv
+    ROUTING_BLOCK_M = 8
+    HIST1_BLOCK_M = 64
+    HIST1_BLOCK_N = 32
+    HIST2_BLOCK_M = 512
+    MEMSET_BLOCK = 512
+    assert logits.dtype.itemsize == 2
+    n_tokens, n_expts_tot = logits.shape
+    n_gates = n_tokens * n_expts_act
+    dev = logits.device
+    n_expts_pad = cdiv(n_expts_tot, 128) * 128
+    n_expts_words = n_expts_pad // 32
+    # scratchpad tensors
+    # NOTE: these are not returned
+    expt_scal = torch.empty((n_tokens, n_expts_act), dtype=logits.dtype, device=dev)
+    expt_indx = torch.empty((n_tokens, n_expts_act), dtype=torch.int16, device=dev)
+    bitmatrix = torch.empty((n_tokens, n_expts_words), dtype=torch.uint32, device=dev)
+    tok_starts = torch.empty(n_expts_tot + 1, dtype=torch.int32, device=dev)
+    partial_hist = torch.empty((cdiv(n_tokens, HIST1_BLOCK_M), n_expts_tot), dtype=torch.int32, device=dev)
+    partial_offs = torch.empty((cdiv(n_tokens, HIST1_BLOCK_M), n_expts_tot), dtype=torch.int32, device=dev)
+    # output tensors
+    hist = torch.empty(n_expts_tot, dtype=torch.int32, device=dev)
+    topk_indx = torch.empty(n_gates, dtype=torch.int32, device=dev)
+    gate_indx = torch.empty(n_gates, dtype=torch.int32, device=dev)
+    gate_scal = torch.empty(n_gates, dtype=logits.dtype, device=dev)
+    _compute_bitmatrix[(cdiv(n_tokens, ROUTING_BLOCK_M), )](
+        logits,
+        logits.stride(0),
+        expt_scal,
+        expt_indx,
+        expt_scal.stride(0),
+        bitmatrix,
+        bitmatrix.stride(0),
+        n_tokens,
+        n_expts_tot,
+        BLOCK_M=ROUTING_BLOCK_M,
+        N_EXPTS_PAD=n_expts_pad,
+        N_EXPTS_ACT=n_expts_act,
+    )
+    _memset_hist[(cdiv(hist.shape[0], MEMSET_BLOCK), )](hist, hist.shape[0], BLOCK=MEMSET_BLOCK)
+    _compute_hist[(cdiv(n_tokens, HIST1_BLOCK_M), cdiv(n_expts_tot, HIST1_BLOCK_N))](
+        bitmatrix,
+        bitmatrix.shape[0],
+        bitmatrix.stride(0),
+        hist,
+        tok_starts,
+        partial_hist,
+        partial_hist.stride(0),
+        partial_hist.shape[1],
+        BLOCK_M=HIST1_BLOCK_M,
+        BLOCK_N=HIST1_BLOCK_N,
+        N_EXPTS_PAD=n_expts_pad,
+    )
+    _finalize_hist[(n_expts_tot, )](
+        tok_starts,
+        partial_hist,
+        partial_offs,
+        partial_hist.shape[0],
+        partial_hist.stride(0),
+        BLOCK_M=HIST2_BLOCK_M,
+    )
+    _compute_indx[(cdiv(n_tokens, HIST1_BLOCK_M), )](
+        topk_indx,
+        gate_indx,
+        gate_scal,
+        expt_scal,
+        expt_indx,
+        partial_offs,
+        partial_offs.stride(0),
+        n_gates,
+        BLOCK_M=HIST1_BLOCK_M,
+        N_EXPTS_ACT=n_expts_act,
+    )
+    # pack the matmul data structure
+    gather_indx = GatherIndx(src_indx=topk_indx, dst_indx=gate_indx)
+    scatter_indx = ScatterIndx(src_indx=gate_indx, dst_indx=topk_indx)
+    return RoutingData(gate_scal, hist, n_expts_tot, n_expts_act), gather_indx, scatter_indx
+
+
 def routing_torch(logits, n_expts_act, expt_indx=None):
 
     def topk(vals, k, expt_indx):

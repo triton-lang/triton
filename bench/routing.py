@@ -266,21 +266,11 @@ def triton_routing(x, n_expts_act):
     expt_scal = torch.empty((n_tokens, n_expts_act), dtype=x.dtype, device=dev)
     expt_indx = torch.empty((n_tokens, n_expts_act), dtype=torch.int16, device=dev)
     bitmatrix = torch.empty((n_tokens, n_expts_words), dtype=torch.uint32, device=dev)
+    tok_starts = torch.empty(n_expts_tot + 1, dtype=torch.int32, device=dev)
     partial_hist = torch.empty((cdiv(n_tokens, HIST1_BLOCK_M), n_expts_tot), dtype=torch.int32, device=dev)
     partial_offs = torch.empty((cdiv(n_tokens, HIST1_BLOCK_M), n_expts_tot), dtype=torch.int32, device=dev)
     # output tensors
-    # metadata
-    tile_dim = 128
-    if n_gates <= n_expts_tot:
-        grid_m = n_gates
-    else:
-        grid_m = n_expts_tot - 1 - ((n_expts_tot - n_gates - 1) // tile_dim)
-    hist_size = n_expts_tot * 2 + 1
-    metadata_size = hist_size + n_expts_tot + 1 + grid_m
-    hist_data =  torch.empty(hist_size, dtype=torch.int32, device=x.device)
-    hist = hist_data[:n_expts_tot]
-    tokens_start = hist_data[n_expts_tot: n_expts_tot * 2 + 1]
-    # reordered indices
+    hist = torch.empty(n_expts_tot, dtype=torch.int32, device=dev)
     topk_indx = torch.empty(n_gates, dtype=torch.int32, device=dev)
     gate_indx = torch.empty(n_gates, dtype=torch.int32, device=dev)
     gate_scal = torch.empty(n_gates, dtype=x.dtype, device=dev)
@@ -292,19 +282,19 @@ def triton_routing(x, n_expts_act):
         BLOCK_M=ROUTING_BLOCK_M,
         N_EXPTS_PAD=n_expts_pad, N_EXPTS_ACT=n_expts_act,
     )
-    _memset_hist[(cdiv(hist_size, MEMSET_BLOCK), )](
-        hist, hist_size,
+    _memset_hist[(cdiv(hist.shape[0], MEMSET_BLOCK), )](
+        hist, hist.shape[0],
         BLOCK=MEMSET_BLOCK
     )
     _compute_hist[(cdiv(n_tokens, HIST1_BLOCK_M), cdiv(n_expts_tot, HIST1_BLOCK_N))](
         bitmatrix, bitmatrix.shape[0], bitmatrix.stride(0),
-        hist, tokens_start,
+        hist, tok_starts,
         partial_hist, partial_hist.stride(0), partial_hist.shape[1],
         BLOCK_M=HIST1_BLOCK_M, BLOCK_N=HIST1_BLOCK_N,
         N_EXPTS_PAD=n_expts_pad,
     )
     _finalize_hist[(n_expts_tot, )](
-        tokens_start, partial_hist, partial_offs,
+        tok_starts, partial_hist, partial_offs,
         partial_hist.shape[0], partial_hist.stride(0),
         BLOCK_M=HIST2_BLOCK_M,
     )
@@ -315,11 +305,17 @@ def triton_routing(x, n_expts_act):
         N_EXPTS_ACT=n_expts_act,
     )
     # matrix multiplication metadata
+    tile_dim = 128
+    if n_gates <= n_expts_tot:
+        grid_m = n_gates
+    else:
+        grid_m = n_expts_tot - 1 - ((n_expts_tot - n_gates - 1) // tile_dim)
+    metadata_size = 3*n_expts_tot + 2 + grid_m
     metadata = torch.empty(metadata_size, dtype=torch.int32, device=x.device)
     md_hist = metadata[:n_expts_tot]
-    md_tokens_start = metadata[n_expts_tot: n_expts_tot*2 + 1]
-    md_tiles_start = metadata[n_expts_tot * 2 + 1: n_expts_tot * 3 + 2]
-    md_tiles_info = metadata[n_expts_tot * 3 + 2:]
+    md_tok_starts = metadata[n_expts_tot: n_expts_tot*2 + 1]
+    md_tile_starts = metadata[n_expts_tot * 2 + 1: n_expts_tot * 3 + 2]
+    md_tile_infos = metadata[n_expts_tot * 3 + 2:]
     lock = torch.empty((1,), dtype=torch.int32, device=x.device)
     _memset_metadata[(cdiv(metadata_size, MEMSET_BLOCK), )](
         metadata, metadata_size, lock,
@@ -327,7 +323,7 @@ def triton_routing(x, n_expts_act):
     )
     _compute_metadata[(n_expts_tot, )](
         hist, n_expts_tot,
-        lock, md_hist, md_tokens_start, md_tiles_start, md_tiles_info,
+        lock, md_hist, md_tok_starts, md_tile_starts, md_tile_infos,
         N_EXPTS_PAD=n_expts_pad,
         BLOCK=HIST2_BLOCK_M,
         TILE_DIM=128
@@ -377,10 +373,10 @@ def torch_routing(x, n_expts_act):
     return topk_indx, gate_indx, gate_scal, metadata
 
 
-M = 32768
+M = 371
 N_EXPTS_TOT, N_EXPTS_ACT = 128, 4
 torch.manual_seed(0)
-x = [(-1)**0 * ((16384 + ((_ * 512) % 4096) + torch.randperm(N_EXPTS_TOT)).to(torch.int16).view(torch.float16)) for _ in range(M)]
+x = [(-1)**_ * ((16384 + ((_ * 512) % 4096) + torch.randperm(N_EXPTS_TOT)).to(torch.int16).view(torch.float16)) for _ in range(M)]
 x = torch.stack(x).cuda()
 # x = torch.rand((M, N_EXPTS_TOT), dtype=torch.float16, device="cuda")
 import triton.profiler as proton
