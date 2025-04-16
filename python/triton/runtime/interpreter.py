@@ -825,7 +825,7 @@ class ReduceScanOpInterface:
             ret_type = dtype
         return tl.core.tensor(TensorHandle(ret, dtype.scalar), ret_type)
 
-    def apply(self, input) -> Tuple:
+    def apply(self, input):
         if not isinstance(input, tuple):
             return self.apply((input, ))[0]
         self.check_tensor(input)
