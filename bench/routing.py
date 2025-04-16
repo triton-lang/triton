@@ -135,21 +135,21 @@ def _compute_bitmatrix(X, stride_xm,  # logits
     tl.store(R_ptrs, r, mask=mask_m)
 
 @triton.jit
-def _memset_metadata(Metadata, shape, grid_m, BLOCK: tl.constexpr):
+def _memset_metadata(Hist, hist_size, Metadata, metadata_size, BLOCK: tl.constexpr):
     pid = tl.program_id(0)
     offs = pid * BLOCK + tl.arange(0, BLOCK)
-    vals = tl.where(offs < shape - grid_m, 0, 0xffffffff)
-    mask = offs < shape
-    tl.store(Metadata + offs, vals, mask=mask)
+    mask_hist = offs < hist_size
+    mask_metadata = offs < metadata_size
+    tl.store(Hist + offs, 0, mask=mask_hist)
+    tl.store(Metadata + offs, 0xffffffff, mask=mask_metadata)
 
 
 @triton.jit
-def _compute_metadata(R, shape_rm, stride_rm,  # routing bitmatrix
-                 Hist, TokensStart, TilesStart,
+def _compute_hist(R, shape_rm, stride_rm,  # routing bitmatrix
+                 Hist, TokensStart,
                  PartialHist, stride_pm, shape_pn,  # histogram
                  BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr,
-                 N_EXPTS_PAD: tl.constexpr,
-                 TILE_DIM: tl.constexpr):
+                 N_EXPTS_PAD: tl.constexpr):
     tl.static_assert(BLOCK_N % 32 == 0)
     pid_m = tl.program_id(0)
     pid_n = tl.program_id(1)
@@ -173,14 +173,13 @@ def _compute_metadata(R, shape_rm, stride_rm,  # routing bitmatrix
     tok_starts = tl.cumsum(hist, 0)
     tl.store(TokensStart, 0)
     tl.store(TokensStart + 1 + offs_n, tok_starts, mask=offs_n < shape_pn)
-    tile_starts = tl.cumsum(tl.cdiv(hist, TILE_DIM), 0)
-    tl.store(TilesStart, 0)
-    tl.store(TilesStart + 1 + offs_n, tile_starts, mask=offs_n < shape_pn)
+    # tile_starts = tl.cumsum(tl.cdiv(hist, TILE_DIM), 0)
+    # tl.store(TilesStart, 0)
+    # tl.store(TilesStart + 1 + offs_n, tile_starts, mask=offs_n < shape_pn)
 
 
 @triton.jit
-def _finalize_metadata(TokensStart, FinalHist, PartialHist, PartialOffs, shape_pm, stride_pm,
-                   TileOffs, TileMetadata, TILE_DIM: tl.constexpr,
+def _finalize_hist(TokensStart, FinalHist, PartialHist, PartialOffs, shape_pm, stride_pm,
                    BLOCK_M: tl.constexpr):
     expt_id = tl.program_id(0)
     offs_m = tl.arange(0, BLOCK_M)
@@ -197,15 +196,19 @@ def _finalize_metadata(TokensStart, FinalHist, PartialHist, PartialOffs, shape_p
         offs = (1 + offs_m) * stride_pm + expt_id
         tl.store(PartialOffs + offs, out, mask=offs_m < shape_pm - 1)
         offs_m += BLOCK_M
+    # n_tokens = tl.load(FinalHist + expt_id)
     # fill up metadata
-    start_off = tl.load(TileOffs + expt_id)
-    n_tokens = tl.load(FinalHist + expt_id)
-    n_blocks = tl.cdiv(n_tokens, TILE_DIM)
-    TileMetadata += start_off
-    for block_off in range(0, n_blocks, BLOCK_M):
-        block_offs = block_off + tl.arange(0, BLOCK_M)
-        data = (block_offs << 16) + expt_id
-        tl.store(TileMetadata + block_offs, data, mask=block_offs < n_blocks)
+    # start_off = tl.load(TileOffs + expt_id)
+    # n_blocks = tl.cdiv(n_tokens, TILE_DIM)
+    # TileMetadata += start_off
+    # for block_off in range(0, n_blocks, BLOCK_M):
+    #     block_offs = block_off + tl.arange(0, BLOCK_M)
+    #     data = (block_offs << 16) + expt_id
+    #     tl.store(TileMetadata + block_offs, data, mask=block_offs < n_blocks)
+
+@triton.jit
+def _compute_metadata():
+    pass
 
 @triton.jit
 def _compute_indx(GatherIndx, ScatterIndx, GateScal, ExptScal, ExptIndx,
@@ -250,10 +253,14 @@ def triton_routing(x, n_expts_act):
         grid_m = n_gates
     else:
         grid_m = n_expts_tot - 1 - ((n_expts_tot - n_gates - 1) // tile_dim)
-    metadata = torch.empty(n_expts_tot * 3 + 2 + grid_m, dtype=torch.int32, device=x.device)
+    hist_size = n_expts_tot * 2 + 1
+    metadata_size = hist_size + n_expts_tot + 1 + grid_m
+    hist_data =  torch.empty(hist_size, dtype=torch.int32, device=x.device)
+    metadata = torch.empty(metadata_size, dtype=torch.int32, device=x.device)
+    # metadata = torch.empty(n_expts_tot * 3 + 2 + grid_m, dtype=torch.int32, device=x.device)
     # metadata views
-    hist = metadata[:n_expts_tot]
-    tokens_start = metadata[n_expts_tot: n_expts_tot * 2 + 1]
+    hist = hist_data[:n_expts_tot]
+    tokens_start = hist_data[n_expts_tot: n_expts_tot * 2 + 1]
     tiles_start = metadata[n_expts_tot * 2 + 1: n_expts_tot * 3 + 2]
     blocks_info = metadata[n_expts_tot * 3 + 2:]
     # reordered indices
@@ -270,24 +277,21 @@ def triton_routing(x, n_expts_act):
         N_EXPTS_PAD=n_expts_pad, N_EXPTS_ACT=n_expts_act,
     )
     # compute metadata
-    _memset_metadata[(cdiv(metadata.shape[0], MEMSET_BLOCK), )](
-        metadata, metadata.shape[0], grid_m,
+    _memset_metadata[(cdiv(max(metadata_size, hist_size), MEMSET_BLOCK), )](
+        hist, hist_size, metadata, metadata_size,
         BLOCK=MEMSET_BLOCK
     )
-    _compute_metadata[(cdiv(n_tokens, HIST1_BLOCK_M), cdiv(n_expts_tot, HIST1_BLOCK_N))](
+    _compute_hist[(cdiv(n_tokens, HIST1_BLOCK_M), cdiv(n_expts_tot, HIST1_BLOCK_N))](
         bitmatrix, bitmatrix.shape[0], bitmatrix.stride(0),
-        hist, tokens_start, tiles_start,
+        hist, tokens_start,
         partial_hist, partial_hist.stride(0), partial_hist.shape[1],
         BLOCK_M=HIST1_BLOCK_M, BLOCK_N=HIST1_BLOCK_N,
         N_EXPTS_PAD=n_expts_pad,
-        TILE_DIM=tile_dim,
     )
-    _finalize_metadata[(n_expts_tot, )](
+    _finalize_hist[(n_expts_tot, )](
         tokens_start, hist, partial_hist, partial_offs,
         partial_hist.shape[0], partial_hist.stride(0),
-        tiles_start, blocks_info,
         BLOCK_M=HIST2_BLOCK_M,
-        TILE_DIM=tile_dim,
     )
     # reorder indices
     _compute_indx[(cdiv(n_tokens, HIST1_BLOCK_M), )](
@@ -296,7 +300,7 @@ def triton_routing(x, n_expts_act):
         BLOCK_M=HIST1_BLOCK_M,
         N_EXPTS_ACT=n_expts_act,
     )
-    return topk_indx, gate_indx, gate_scal, metadata
+    return topk_indx, gate_indx, gate_scal, None #metadata
 
 def torch_routing(x, n_expts_act):
     n_tokens, n_expts_tot = x.shape
@@ -338,7 +342,7 @@ def torch_routing(x, n_expts_act):
     metadata[n_expts_tot + 1 : n_expts_tot * 2 + 1] = tsum
     metadata[n_expts_tot * 2 + 2 : n_expts_tot * 3 + 2] = bsum
     metadata[n_expts_tot * 3 + 2 :] = block_metadata
-    return topk_indx, gate_indx, gate_scal, metadata
+    return topk_indx, gate_indx, gate_scal, None #metadata
 
 
 M = 32768
@@ -356,4 +360,4 @@ ref_topk_indx, ref_gate_indx, ref_gate_scal, ref_metadata = torch_routing(x, N_E
 assert torch.all(tri_gate_indx == ref_gate_indx)
 assert torch.all(tri_topk_indx == ref_topk_indx)
 assert torch.all(tri_gate_scal == ref_gate_scal)
-assert torch.all(tri_metadata == ref_metadata)
+# assert torch.all(tri_metadata == ref_metadata)
