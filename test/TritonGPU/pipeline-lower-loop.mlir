@@ -1203,14 +1203,20 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
   // CHECK: ttng.init_barrier %[[BAR_SLICE0]], 1
   // CHECK: %[[BAR_SLICE1:.+]] = ttg.memdesc_subview %[[BAR_BUF]][%[[C1]]]
   // CHECK: ttng.init_barrier %[[BAR_SLICE1]], 1
+  // CHECK: %[[LHS_BUFS:.+]] = ttg.local_alloc
+  // CHECK: %[[RHS_BUFS:.+]] = ttg.local_alloc
   // CHECK: scf.for {{.*}} iter_args(%[[PHASE:[^,]+]] = %[[C0]], %[[BAR_IDX:[^,]+]] = %[[C0]],
+  // CHECK:   %[[IDX0:.+]] = arith.select
+  // CHECK:   %[[IDX1:.+]] = arith.select
+  // CHECK:   %[[LHS_DEP:.+]] = ttg.memdesc_subview %[[LHS_BUFS]][%[[IDX1]],
+  // CHECK:   %[[RHS_DEP:.+]] = ttg.memdesc_subview %[[RHS_BUFS]][%[[IDX1]],
   // CHECK:   %[[BAR_SLICE:.+]] = ttg.memdesc_subview %[[BAR_BUF]][%[[BAR_IDX]]] {loop.cluster = 0 : i32, loop.stage = 2 : i32}
   // CHECK:   ttng.tc_gen5_mma {{.*}}, {{.*}}, %[[TMEM_BUF]], %[[TRUE]], %[[TRUE]], %[[BAR_SLICE]][%true] {loop.cluster = 0 : i32, loop.stage = 2 : i32}
   // CHECK:   %[[BAR_SLICE:.+]] = ttg.memdesc_subview %[[BAR_BUF]][%[[BAR_IDX]]] {loop.cluster = 0 : i32, loop.stage = 3 : i32}
-  // CHECK:   ttng.wait_barrier %[[BAR_SLICE]], %[[PHASE]] deps %22, %27 {loop.cluster = 0 : i32, loop.stage = 3 : i32}
+  // CHECK:   ttng.wait_barrier %[[BAR_SLICE]], %[[PHASE]] deps %[[LHS_DEP]], %[[RHS_DEP]] {loop.cluster = 0 : i32, loop.stage = 3 : i32}
   // CHECK:   scf.if
   // CHECK:     %[[BAR_SLICE:.+]] = ttg.memdesc_subview %[[BAR_BUF]][%[[BAR_IDX]]]
-  // CHECK:     ttng.wait_barrier %[[BAR_SLICE]], %[[PHASE]] deps %22, %27
+  // CHECK:     ttng.wait_barrier %[[BAR_SLICE]], %[[PHASE]] deps %[[LHS_DEP]], %[[RHS_DEP]]
   // CHECK:     %[[ACC_RES:.+]] = ttng.tmem_load %[[TMEM_BUF]]
   // CHECK:     tt.store %{{.*}}, %[[ACC_RES]]
   // CHECK:   } {loop.cluster = 3 : i32, loop.stage = 2 : i32}
