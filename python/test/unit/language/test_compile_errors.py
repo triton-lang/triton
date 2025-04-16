@@ -453,3 +453,16 @@ def test_max_num_imprecise_acc_limit():
         assert (str(e.value.__cause__) == "max_num_imprecise_acc (128) must be <= K (64)")
     except AssertionError as assertion_err:
         raise assertion_err from e.value
+
+
+def test_string_as_constexpr_default_value():
+
+    @triton.jit
+    def returns(a: int, N: tl.constexpr = ""):
+        return tl.arange(0, 4)
+
+    @triton.jit
+    def kernel(a: tl.int32):
+        returns(a)
+
+    triton.compile(triton.compiler.ASTSource(fn=kernel, signature={"a": "i32"}, constexprs={}))
