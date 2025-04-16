@@ -3340,7 +3340,7 @@ def test_generic_reduction(device):
         m2 = tl.zeros_like(x)
         weight = tl.full(x.shape, 1, x.dtype)
         # Test return a tuple and a single value
-        sum0, = tl.reduce((x,), 0, _sum_combine)
+        sum0, = tl.reduce((x, ), 0, _sum_combine)
         sum1 = tl.reduce(x, 0, _sum_combine)
         # Test multiple values in a tuple
         (mean, m2, weight) = tl.reduce((mean, m2, weight), 0, _welford_combine)
