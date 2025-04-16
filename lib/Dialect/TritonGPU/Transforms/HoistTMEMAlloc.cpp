@@ -1,4 +1,3 @@
-#include "mlir/Dialect/UB/IR/UBOps.h"
 #include "mlir/IR/Dominance.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
@@ -87,7 +86,6 @@ public:
     if (!load || load.getResult() != store.getSrc() ||
         load.getSrc() != store.getDst())
       return failure();
-    assert(load.getToken().hasOneUse());
     rewriter.replaceOp(store, load.getDep());
     return success();
   }
@@ -104,18 +102,17 @@ public:
       return failure();
     }
     DominanceInfo domInfo(forOp);
-    PostDominanceInfo postDomInfo(forOp);
     Operation *domOp = findNearestCommonDominator(
         llvm::to_vector(load.getResult().getUsers()), domInfo);
     if (!domOp || !domInfo.properlyDominates(load.getOperation(), domOp)) {
       return failure();
     }
     // Don't sink past potentially aliasing ops.
+    PostDominanceInfo postDomInfo(forOp);
     if (!llvm::all_of(load.getToken().getUsers(), [&](Operation *def) {
           return postDomInfo.properlyPostDominates(def, domOp);
         }))
       return failure();
-
     if (domOp == load->getNextNode()) {
       // The load wasn't moved.
       return failure();
