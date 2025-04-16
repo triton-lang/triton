@@ -27,6 +27,9 @@
 
 #include "triton/Dialect/TritonNvidiaGPU/IR/TritonNvidiaGPUOpInterfaces.cpp.inc"
 
+#define GET_OP_CLASSES
+#include "triton/Dialect/TritonNvidiaGPU/IR/Ops.cpp.inc"
+
 namespace mlir {
 namespace triton {
 using namespace gpu;
@@ -192,28 +195,6 @@ LogicalResult AsyncTMAScatterOp::verify() {
 }
 
 // -- TCGen5MMAOp --
-
-// barrier-and-pred := `,` ssa-value `[` ssa-value `]`
-// barriers-and-preds := (barrier-and-pred)*
-static ParseResult
-parseBarriersAndPreds(OpAsmParser &p,
-                      SmallVectorImpl<OpAsmParser::UnresolvedOperand> &barriers,
-                      SmallVectorImpl<OpAsmParser::UnresolvedOperand> &preds) {
-  while (succeeded(p.parseOptionalComma())) {
-    if (p.parseOperand(barriers.emplace_back()) || p.parseLSquare() ||
-        p.parseOperand(preds.emplace_back()) || p.parseRSquare())
-      return failure();
-  }
-  return success();
-}
-static void printBarriersAndPreds(OpAsmPrinter &p, Operation *op,
-                                  OperandRange barriers, OperandRange preds) {
-  assert(barriers.size() == preds.size());
-  for (auto [barrier, pred] : llvm::zip(barriers, preds)) {
-    p << ", " << barrier << '[' << pred << ']';
-  }
-}
-
 template <typename MMAOpT>
 static void getMMAEffects(
     MMAOpT op,
@@ -253,9 +234,8 @@ void TCGen5MMAOp::setUseAccumulator(Value flag) {
   getUseDMutable().assign(flag);
 }
 
-void TCGen5MMAOp::addCompletionBarrier(Value barrier, Value pred) {
-  getBarrierPredsMutable().append(pred);
-  getBarriersMutable().append(barrier);
+void TCGen5MMAOp::setBarrier(Value barrier) {
+  getBarrierMutable().assign(barrier);
 }
 
 Value TCGen5MMAOp::getAccumulator() { return getD(); }
@@ -266,12 +246,18 @@ Value TCGen5MMAOp::getPredicate() { return getPred(); }
 
 void TCGen5MMAOp::setPredicate(Value pred) { getPredMutable().assign(pred); }
 
-void TCGen5MMAOp::build(OpBuilder &builder, OperationState &state, Value a,
-                        Value b, Value d, Value useD, Value pred,
-                        bool useTwoCTAs, ValueRange barriers,
-                        ValueRange barrierPreds) {
-  build(builder, state, a, b, d, useD, pred, barriers, barrierPreds,
-        useTwoCTAs ? builder.getUnitAttr() : UnitAttr());
+// -- TMEMStoreOp --
+LogicalResult TMEMStoreOp::verify() {
+  if (!isa<triton::nvidia_gpu::TensorMemorySpaceAttr>(
+          getDst().getType().getMemorySpace()))
+    return emitOpError("destination must be a tensor memory buffer.");
+  if (!isa<triton::nvidia_gpu::TensorMemoryEncodingAttr,
+           TensorMemoryScalesEncodingAttr>(getDst().getType().getEncoding()))
+    return emitOpError("should use tensor memory encoding.");
+  if (!getDst().getType().getMutableMemory()) {
+    return emitOpError("Cannot store into an immutable alloc");
+  }
+  return success();
 }
 
 // -- TCGen5MMAScaledOp --
@@ -344,9 +330,8 @@ void TCGen5MMAScaledOp::setUseAccumulator(Value flag) {
   getUseDMutable().assign(flag);
 }
 
-void TCGen5MMAScaledOp::addCompletionBarrier(Value barrier, Value pred) {
-  getBarrierPredsMutable().append(pred);
-  getBarriersMutable().append(barrier);
+void TCGen5MMAScaledOp::setBarrier(Value barrier) {
+  getBarrierMutable().assign(barrier);
 }
 
 Value TCGen5MMAScaledOp::getAccumulator() { return getD(); }
@@ -398,32 +383,6 @@ int64_t TCGen5MMAScaledOp::getBlockK() {
   if (this->getAType() == ScaleDotElemType::E2M1 && !transA)
     blockK *= 2;
   return blockK;
-}
-
-void TCGen5MMAScaledOp::build(OpBuilder &builder, OperationState &state,
-                              Value a, Value b, Value d, Value aScale,
-                              Value bScale, ScaleDotElemType aType,
-                              ScaleDotElemType bType, Value useD, Value pred,
-                              ValueRange barriers, ValueRange barrierPreds) {
-  MLIRContext *ctx = builder.getContext();
-  build(builder, state, a, b, d, aScale, bScale,
-        ScaleDotElemTypeAttr::get(ctx, aType),
-        ScaleDotElemTypeAttr::get(ctx, bType), useD, pred, barriers,
-        barrierPreds);
-}
-
-// -- TMEMStoreOp --
-LogicalResult TMEMStoreOp::verify() {
-  if (!isa<triton::nvidia_gpu::TensorMemorySpaceAttr>(
-          getDst().getType().getMemorySpace()))
-    return emitOpError("destination must be a tensor memory buffer.");
-  if (!isa<triton::nvidia_gpu::TensorMemoryEncodingAttr,
-           TensorMemoryScalesEncodingAttr>(getDst().getType().getEncoding()))
-    return emitOpError("should use tensor memory encoding.");
-  if (!getDst().getType().getMutableMemory()) {
-    return emitOpError("Cannot store into an immutable alloc");
-  }
-  return success();
 }
 
 // -- TMEMLoadOp --
@@ -556,6 +515,3 @@ void TMEMSubSliceOp::build(OpBuilder &builder, OperationState &state,
 } // namespace nvidia_gpu
 } // namespace triton
 } // namespace mlir
-
-#define GET_OP_CLASSES
-#include "triton/Dialect/TritonNvidiaGPU/IR/Ops.cpp.inc"
