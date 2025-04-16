@@ -643,13 +643,6 @@ class pointer_type(dtype):
         return f"P{self.element_ty.mangle()}"
 
 
-class nv_tma_desc_type(pointer_type):
-
-    def __init__(self, const=True, address_space=0):
-        super().__init__(uint8, const=const, address_space=address_space)
-        self.name = 'nv_tma_desc_type'
-
-
 class block_type(dtype):
 
     def __init__(self, element_ty: dtype, shape: List):
