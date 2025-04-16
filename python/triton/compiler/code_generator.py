@@ -253,16 +253,16 @@ class ASTFunction:
         vals = make_template(self.arg_types)
         is_val = lambda path, _: path not in self.constants and _ is not None
         val_paths = list(find_paths_if(self.arg_types, is_val))
-        # > set attributes
-        for attr_path, attr_specs in self.attrs.items():
-            for attr_name, attr_val in attr_specs:
-                if attr_path in val_paths:
-                    fn.set_arg_attr(val_paths.index(attr_path), attr_name, attr_val)
         # > add IR values to the template
         cursor = 0
         handles = [fn.args(i) for i in range(fn.get_num_args())]
         for path in val_paths:
             ty = get_iterable_path(self.arg_types, path)
+            # > set attributes
+            attr_specs = self.attrs.get(path, [])
+            for attr_name, attr_val in attr_specs:
+                fn.set_arg_attr(cursor, attr_name, attr_val)
+            # > build frontend value
             val, cursor = ty._unflatten_ir(handles, cursor)
             set_iterable_path(vals, path, val)
         # > add constexpr values to the template
