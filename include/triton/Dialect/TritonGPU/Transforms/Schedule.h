@@ -10,6 +10,7 @@
 
 namespace mlir {
 namespace triton {
+class FuncOp;
 
 namespace gpu {
 
@@ -19,6 +20,9 @@ void assignLatencies(ModuleOp moduleOp, int numStages);
 
 /// Schedule the loops based on the latencies assigned to the operations.
 void scheduleLoops(ModuleOp moduleOp);
+
+/// Remove TMEM dependency tokens from the IR.
+void removeTMEMTokens(FuncOp funcOp);
 
 /// Lower the loops to prepare them for pipeline expansion.
 void lowerLoops(ModuleOp moduleOp);

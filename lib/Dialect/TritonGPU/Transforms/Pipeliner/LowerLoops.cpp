@@ -1,3 +1,4 @@
+#include "mlir/Dialect/UB/IR/UBOps.h"
 #include "mlir/IR/Dominance.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 #include "triton/Analysis/Utility.h"
@@ -1075,7 +1076,8 @@ void multibufferTensorMemory(scf::ForOp forOp, CoarseSchedule &schedule,
 
   bool multibufferingIsValid = false;
 
-  SmallVector<Operation *> allocUsers = llvm::to_vector(alloc->getUsers());
+  SmallVector<Operation *> allocUsers =
+      llvm::to_vector(alloc.getResult().getUsers());
   for (auto user : allocUsers) {
     if (auto store = dyn_cast<ttng::TMEMStoreOp>(user)) {
       if (forOp->isAncestor(store)) {
@@ -1157,7 +1159,9 @@ void multibufferTensorMemory(scf::ForOp forOp, CoarseSchedule &schedule,
         "Trying to multibuffer TMEM while there is no store to the "
         "accumulator, and the mma uses the accumulator all the time.");
   }
+  alloc.getToken().replaceAllUsesWith(newAlloc.getToken());
   alloc->erase();
+
   Value newBufIdx = bufIdxDefs.back().second;
   replaceAllUsesDominatedBy(newBufIdx.getDefiningOp(), newBufIdx, bufIdx,
                             domInfo);
@@ -1269,6 +1273,57 @@ void lowerLoops(ModuleOp moduleOp) {
   for (auto forOp : loops) {
     lowerLoop(forOp);
   }
+}
+
+/////////////////////////////
+// removeTMEMTokens
+/////////////////////////////
+
+static void eraseResult(Operation *op, unsigned resultIdx, Value replacement) {
+  OperationState state(op->getLoc(), op->getName(), op->getOperands(),
+                       op->getResultTypes(), op->getAttrs());
+  state.types.erase(std::next(state.types.begin(), resultIdx));
+  OpBuilder b(op);
+  Operation *newOp = b.create(state);
+  SmallVector<Value> replacements = newOp->getResults();
+  replacements.insert(std::next(replacements.begin(), resultIdx), replacement);
+  op->replaceAllUsesWith(replacements);
+  op->erase();
+}
+
+static void removeTMEMToken(Operation *op, Value dummy) {
+  if (auto mmaOp = dyn_cast<ttng::TCGen5MMAOp>(op)) {
+    if (mmaOp.getAccDep()) {
+      mmaOp.getAccDepMutable().clear();
+      eraseResult(mmaOp, 0, dummy);
+    }
+  } else if (auto mmaScaledOp = dyn_cast<ttng::TCGen5MMAScaledOp>(op)) {
+    if (mmaScaledOp.getAccDep()) {
+      mmaScaledOp.getAccDepMutable().clear();
+      eraseResult(mmaScaledOp, 0, dummy);
+    }
+  } else if (auto store = dyn_cast<ttng::TMEMStoreOp>(op)) {
+    if (store.getDep()) {
+      store.getDepMutable().clear();
+      eraseResult(store, 0, dummy);
+    }
+  } else if (auto alloc = dyn_cast<ttng::TMEMAllocOp>(op)) {
+    if (alloc.getToken())
+      eraseResult(alloc, 1, dummy);
+  } else if (auto load = dyn_cast<ttng::TMEMLoadOp>(op)) {
+    if (load.getDep()) {
+      load.getDepMutable().clear();
+      eraseResult(load, 1, dummy);
+    }
+  }
+}
+
+void removeTMEMTokens(FuncOp func) {
+  auto b = OpBuilder::atBlockBegin(&func.getBody().front());
+  // Placeholder value that will get DCE'd by the canonicalizer.
+  Value dummy =
+      b.create<ub::PoisonOp>(func.getLoc(), b.getType<AsyncTokenType>());
+  func.walk([&](Operation *op) { removeTMEMToken(op, dummy); });
 }
 
 } // namespace gpu

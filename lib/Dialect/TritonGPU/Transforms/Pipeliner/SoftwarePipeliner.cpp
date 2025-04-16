@@ -112,6 +112,16 @@ struct PipelinePass : public impl::TritonGPUPipelineBase<PipelinePass> {
           << moduleOp << "\n\n\n";
     }
 
+    // Now that dependency analysis is complete, remove memory dependency tokens
+    // from the IR.
+    for (auto func : moduleOp.getOps<FuncOp>())
+      removeTMEMTokens(func);
+    if (dumpIntermediateSteps) {
+      llvm::dbgs() << "// -----// SoftwarePipeliner internal IR Dump After: "
+                      "RemoveTMEMTokens\n"
+                   << moduleOp << "\n\n\n";
+    }
+
     // Apply the pipeline expansion.
     expandLoops(moduleOp);
     if (dumpIntermediateSteps) {

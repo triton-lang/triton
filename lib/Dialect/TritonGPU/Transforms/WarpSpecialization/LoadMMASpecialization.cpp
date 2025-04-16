@@ -374,7 +374,8 @@ LogicalResult triton::gpu::specializeLoadMMADependencies(scf::ForOp &loop,
   // Replace uses of the original accumulator with the right subview before,
   // inside, and after the loop.
   SmallVector<Operation *> loadsInLoop;
-  for (OpOperand &use : llvm::make_early_inc_range(oldAccAlloc->getUses())) {
+  for (OpOperand &use :
+       llvm::make_early_inc_range(oldAccAlloc.getResult().getUses())) {
     Operation *user = use.getOwner();
     b.setInsertionPoint(user);
     Value bufIdx;
@@ -405,6 +406,7 @@ LogicalResult triton::gpu::specializeLoadMMADependencies(scf::ForOp &loop,
     Value buf = createSingleBufferView(b, accAlloc, bufIdx);
     use.set(buf);
   }
+  oldAccAlloc.getToken().replaceAllUsesWith(accAlloc.getToken());
   oldAccAlloc->erase();
 
   // Replace uses of the accumulator inside the loop with a value loaded from
