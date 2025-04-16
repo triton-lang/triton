@@ -825,14 +825,12 @@ class ReduceScanOpInterface:
             ret_type = dtype
         return tl.core.tensor(TensorHandle(ret, dtype.scalar), ret_type)
 
-    def apply(self, input):
+    def apply(self, input) -> Tuple:
         if not isinstance(input, tuple):
-            input = (input, )
+            return self.apply((input, ))[0]
         self.check_tensor(input)
-        return self.apply_impl(input)
-
-    def apply_impl(self, input):
-        raise NotImplementedError("apply_impl not implemented")
+        ret = self.apply_impl(input)
+        return tuple(ret) if isinstance(ret, (list, tuple)) else (ret,)
 
 
 class ReduceOps(ReduceScanOpInterface):
@@ -892,7 +890,7 @@ class ReduceOps(ReduceScanOpInterface):
                 # Take a scalar
                 data = data.item()
             ret.append(self.to_tensor(data, input[i].dtype))
-        return ret[0] if len(ret) == 1 else tuple(ret)
+        return ret
 
     def min_max(self, input, val_reduce_op, idx_reduce_op=None):
         # If input is a tuple, it must be (val, index), and we only take val
@@ -990,7 +988,7 @@ class ScanOps(ReduceScanOpInterface):
         if self.reverse:
             for arg in ret:
                 arg.handle.data = np.flip(arg.handle.data, axis=self.axis)
-        return len(ret) == 1 and ret[0] or tuple(ret)
+        return ret
 
 
 def _patch_reduce_scan():
