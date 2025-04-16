@@ -8,6 +8,16 @@ def or_combine(x, y):
 
 
 @triton.jit
+def softmax(x):
+    x = x.to(tl.float32)
+    z = x - tl.max(x, 1)[:, None]
+    num = tl.math.exp(z)
+    den = tl.sum(num, 1)[:, None]
+    x = tl.math.fdiv(num, den, False)
+    return x
+
+
+@triton.jit
 def _compute_bitmatrix(X, stride_xm,  # logits
                        Yv, Yi, stride_ym,  # topk values/indices
                        Routing, stride_rm, n_rows,  # routing bitmatrix
@@ -22,6 +32,7 @@ def _compute_bitmatrix(X, stride_xm,  # logits
     # load
     X_ptrs = X + offs_m[:, None] * stride_xm + offs_x_n[None, :]
     x = tl.load(X_ptrs, mask=mask, other=float("-inf"))
+    x = softmax(x).to(x_dtype)
     x = (x.to(tl.uint16, bitcast=True).to(tl.int32) << 16) | offs_x_n[None, :]
     # top-k experts
     x = x.to(tl.float32, bitcast=True)

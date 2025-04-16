@@ -102,7 +102,7 @@ def bench_mlp(batch, dim1, dim2, n_expts_tot, n_expts_act, x_dtype, w_dtype,
             rdata, gather_indx, scatter_indx = routing(logits, n_expts_act)
             if EP > 1:
                 proton.deactivate()
-                # TODO: activate proton here when fast routing is done
+                # TODO: activate proton here when fast expert parallelism simulation is done
                 m = logits.shape[0] * EP
                 _, rdata, gather_indx, scatter_indx = simulate_expert_sharded_routing(m, rdata, EP, device=dev)
                 proton.activate()

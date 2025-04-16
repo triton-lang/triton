@@ -125,7 +125,7 @@ def routing_torch(logits, n_expts_act, expt_indx=None):
         return tk_val, tk_idx
 
     _, n_expts_tot = logits.shape
-    expt_scal, expt_indx = topk(logits, n_expts_act, expt_indx)
+    expt_scal, expt_indx = topk(torch.softmax(logits, -1), n_expts_act, expt_indx)
     # Sort each token's selections by expert
     expt_indx, sort_indices = torch.sort(expt_indx, dim=1)
     expt_scal = torch.gather(expt_scal, 1, sort_indices)
