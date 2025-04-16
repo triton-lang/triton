@@ -23,14 +23,14 @@ def _compute_bitmatrix(X, stride_xm,  # logits
     x = tl.load(X_ptrs, mask=mask, other=float("-inf"))
     x = (x.to(tl.uint16, bitcast=True).to(tl.int32) << 16) | offs_x_n[None, :]
     # top-k experts
+    x = x.to(tl.float32, bitcast=True)
     y = tl.topk(x, N_EXPTS_ACT, dim=1)
-    # TODO: maybe not necessary ?
+    y = y.to(tl.uint32, bitcast=True)
     # sort result in direction of ascending expert index
-    x_sgns = (y >> 16) & 0x00008000
-    y = (y << 16) | ((y >> 16) ^ x_sgns)
+    y = (y << 16) | (y >> 16)
     y = tl.sort(y, dim=1)
     y_indices = y >> 16
-    y_values = ((y & 0x0000FFFF) ^ x_sgns).to(tl.uint16).to(tl.float16, bitcast=True)
+    y_values = (y & 0x0000FFFF).to(tl.uint16).to(tl.float16, bitcast=True)
     # write back
     offs_y_n = tl.arange(0, N_EXPTS_ACT)
     Yv_ptrs = Yv + offs_m[:, None] * stride_ym + offs_y_n[None, :]

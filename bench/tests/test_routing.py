@@ -10,7 +10,7 @@ def init_data(n_tokens, n_expts_tot, dtype=torch.float16):
     dev = "cuda"
     # the reference implementation and the triton implementation do not tie-break experts the same way
     randbits = [torch.randperm(n_expts_tot) for _ in range(n_tokens)]
-    x = [(-1)**0 * ((16384 + ((i * 512) % 4096) + bits).to(torch.int16).view(dtype)) for i, bits in enumerate(randbits)]
+    x = [(-1)**i * ((16384 + ((i * 512) % 4096) + bits).to(torch.int16).view(dtype)) for i, bits in enumerate(randbits)]
     return torch.stack(x).to(device=dev)
 
 
