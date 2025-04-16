@@ -79,7 +79,7 @@ def validate(n_elements):
 @triton.testing.perf_report(
     triton.testing.Benchmark(
         x_names=["size"],
-        x_vals=[2**i for i in range(12, 28, 1)],
+        x_vals=[2**i for i in range(23, 28, 1)],
         x_log=False,
         line_arg="provider",
         line_vals=["pdl-fp32", "fp32"],
@@ -90,33 +90,17 @@ def validate(n_elements):
         args={},
     ))
 def benchmark(size, provider):
+    x = torch.rand(size, device="cuda", dtype=torch.float32)
+    y = torch.rand(size, device="cuda", dtype=torch.float32)
 
-    x = list()
-    y = list()
+    quantiles = [0.5, 0.2, 0.8]
 
-    for _ in range(100):
-        x.append(torch.rand(size, device="cuda", dtype=torch.float32))
-        y.append(torch.rand(size, device="cuda", dtype=torch.float32))
+    fn = lambda: add(x, y, "pdl" in provider)
 
-    start = torch.cuda.Event(enable_timing=True)
-    end = torch.cuda.Event(enable_timing=True)
+    ms, min_ms, max_ms = triton.testing.do_bench_cudagraph(fn, quantiles=quantiles, rep=100)
 
-    g = torch.cuda.CUDAGraph()
-    i = 0
-    with torch.cuda.graph(g):
-        for _ in range(1000):  # 1000 runs
-            add(x[i], y[i], "pdl" in provider)
-            i = (i + 1) % 100
-
-    g.replay()
-    start.record()
-    g.replay()
-    end.record()
-    torch.cuda.synchronize()
-    ms = start.elapsed_time(end) / 1000.0
-
-    gbps = lambda ms: 3 * x[0].numel() * x[0].element_size() * 1e-9 / (ms * 1e-3)
-    return gbps(ms)
+    gbps = lambda ms: 3 * x.numel() * x.element_size() * 1e-9 / (ms * 1e-3)
+    return gbps(ms), gbps(max_ms), gbps(min_ms)
 
 
 if __name__ == "__main__":
