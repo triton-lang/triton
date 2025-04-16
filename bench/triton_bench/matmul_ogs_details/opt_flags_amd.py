@@ -1,10 +1,7 @@
 import torch
 import triton
 
-
-def is_hip_cdna4():
-    target = triton.runtime.driver.active.get_current_target()
-    return target.backend == 'hip' and target.arch == 'gfx950'
+from triton_bench.meta import get_cdna_version
 
 
 def compute_block_nk(n, block_m, grid_m, num_xcds, lhs_dtype, rhs_dtype, microscaling_ctx):
@@ -23,7 +20,7 @@ def compute_block_nk(n, block_m, grid_m, num_xcds, lhs_dtype, rhs_dtype, microsc
     else:
         block_n = 128
 
-    if is_hip_cdna4() and block_m == 128:
+    if get_cdna_version() == 4 and block_m == 128:
         block_n = 512
 
     # block_k needs to match the cacheline size (128B)
