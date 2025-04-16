@@ -151,6 +151,9 @@ The inputs can be of any type, but if the numBatchAxes attribute is
 set on the result type, the inputs are expected to be array-like
 (i.e., Tensor, MemDesc, etc) and have matching values for the first
 numBatchAxes of the shapes.</p>
+<p>Traits: <code class="docutils literal notranslate"><span class="pre">AlwaysSpeculatableImplTrait</span></code></p>
+<p>Interfaces: <code class="docutils literal notranslate"><span class="pre">ConditionallySpeculatable</span></code>, <code class="docutils literal notranslate"><span class="pre">NoMemoryEffect</span> <span class="pre">(MemoryEffectOpInterface)</span></code></p>
+<p>Effects: <code class="docutils literal notranslate"><span class="pre">MemoryEffects::Effect{}</span></code></p>
 <section id="operands">
 <h3>Operands:<a class="headerlink" href="#operands" title="Link to this heading">¶</a></h3>
 <table class="docutils align-default">
@@ -189,7 +192,8 @@ numBatchAxes of the shapes.</p>
 <p>If indexes is empty, the op will return the entire underlying value(s).
 If the indexes is size 1, the op will ensure that the underlying
 value is Tensor-Like (i.e, has a shape parameter) with rank at least 1,
-and index into the first dimension.
+and index into the first dimension in a circular fashion, by wrapping the
+index around the boundaries of that dimension.
 Similarly, if indexes is size 2, the op will index into the first 2 dimensions
 etc.</p>
 <p>These values are passed as arguments to the region.
@@ -238,7 +242,8 @@ so that a producer group can write to the aref.</p>
 <p>If indexes is empty, the op will return the entire underlying value(s).
 If the indexes is size 1, the op will ensure that the underlying
 value is Tensor-Like (i.e, has a shape parameter) with rank at least 1,
-and index into the first dimension.
+and index into the first dimension in a circular fashion, by wrapping the
+index around the boundaries of that dimension.
 Similarly, if indexes is size 2, the op will index into the first 2 dimensions
 etc.</p>
 <p>These values are passed as arguments to the region.

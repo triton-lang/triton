@@ -176,9 +176,8 @@ the 2D layout [1] expected by tl.dot_scaled.</p>
 <span class="kn">import</span><span class="w"> </span><span class="nn">torch</span>
 <span class="kn">import</span><span class="w"> </span><span class="nn">triton</span>
 <span class="kn">import</span><span class="w"> </span><span class="nn">triton.language</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">tl</span>
-<span class="kn">import</span><span class="w"> </span><span class="nn">triton.tools.experimental_descriptor</span>
 <span class="kn">import</span><span class="w"> </span><span class="nn">triton.profiler</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">proton</span>
-<span class="kn">from</span><span class="w"> </span><span class="nn">triton.tools.experimental_descriptor</span><span class="w"> </span><span class="kn">import</span> <span class="n">TensorDescriptor</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">triton.tools.tensor_descriptor</span><span class="w"> </span><span class="kn">import</span> <span class="n">TensorDescriptor</span>
 <span class="kn">from</span><span class="w"> </span><span class="nn">triton.tools.mxfp</span><span class="w"> </span><span class="kn">import</span> <span class="n">MXFP4Tensor</span><span class="p">,</span> <span class="n">MXScaleTensor</span>
 
 

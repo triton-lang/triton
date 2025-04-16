@@ -84,7 +84,7 @@ For more detailed information on the scale factor layout, see
  2. https://docs.nvidia.com/cuda/cublas/#d-block-scaling-factors-layout
 
 
-.. GENERATED FROM PYTHON SOURCE LINES 67-369
+.. GENERATED FROM PYTHON SOURCE LINES 67-368
 
 .. code-block:: Python
 
@@ -94,9 +94,8 @@ For more detailed information on the scale factor layout, see
     import torch
     import triton
     import triton.language as tl
-    import triton.tools.experimental_descriptor
     import triton.profiler as proton
-    from triton.tools.experimental_descriptor import TensorDescriptor
+    from triton.tools.tensor_descriptor import TensorDescriptor
     from triton.tools.mxfp import MXFP4Tensor, MXScaleTensor
 
 

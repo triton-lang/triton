@@ -70,9 +70,8 @@ import argparse
 import torch
 import triton
 import triton.language as tl
-import triton.tools.experimental_descriptor
 import triton.profiler as proton
-from triton.tools.experimental_descriptor import TensorDescriptor
+from triton.tools.tensor_descriptor import TensorDescriptor
 from triton.tools.mxfp import MXFP4Tensor, MXScaleTensor
 
 

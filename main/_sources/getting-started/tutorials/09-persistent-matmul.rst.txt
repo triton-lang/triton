@@ -37,7 +37,7 @@ Users can pass command-line arguments to specify matrix dimensions and iteration
 
 Note that currently this tutorial will fail on devices with a small shared memory size, such as RTX-4090.
 
-.. GENERATED FROM PYTHON SOURCE LINES 21-720
+.. GENERATED FROM PYTHON SOURCE LINES 21-719
 
 
 
@@ -66,13 +66,13 @@ Note that currently this tutorial will fail on devices with a small shared memor
     Benchmarking torch: ...    Benchmarking torch: done
     Benchmarking naive: ...    Benchmarking naive: done
     Benchmarking persistent: ...    Benchmarking persistent: done
-    169.032 16261.893 ROOT
-    ├─ 176.123 3901.783 cublas [M=8192, N=8192, K=512]
-    │  └─ nan 3901.783 ampere_fp16_s16816gemm_fp16_128x128_ldg8_f2f_stages_32x5_tn
-    ├─ 166.286 4132.600 matmul_kernel [M=8192, N=8192, K=512]
-    ├─ 159.047 4320.711 matmul_kernel_persistent [M=8192, N=8192, K=512]
-    └─ 175.897 3906.798 torch [M=8192, N=8192, K=512]
-       └─ nan 3906.798 ampere_fp16_s16816gemm_fp16_128x128_ldg8_f2f_stages_32x5_tn
+    169.000 16264.975 ROOT
+    ├─ 176.035 3903.739 cublas [M=8192, N=8192, K=512]
+    │  └─ nan 3903.739 ampere_fp16_s16816gemm_fp16_128x128_ldg8_f2f_stages_32x5_tn
+    ├─ 166.203 4134.670 matmul_kernel [M=8192, N=8192, K=512]
+    ├─ 159.226 4315.852 matmul_kernel_persistent [M=8192, N=8192, K=512]
+    └─ 175.721 3910.714 torch [M=8192, N=8192, K=512]
+       └─ nan 3910.714 ampere_fp16_s16816gemm_fp16_128x128_ldg8_f2f_stages_32x5_tn
 
 
 
@@ -91,9 +91,8 @@ Note that currently this tutorial will fail on devices with a small shared memor
     import torch
     import triton
     import triton.language as tl
-    import triton.tools.experimental_descriptor
     import triton.profiler as proton
-    from triton.tools.experimental_descriptor import TensorDescriptor
+    from triton.tools.tensor_descriptor import TensorDescriptor
     from contextlib import contextmanager
 
     from typing import Optional
@@ -133,7 +132,7 @@ Note that currently this tutorial will fail on devices with a small shared memor
 
 
     HAS_TENSOR_DESC = supports_tma() and hasattr(tl, "make_tensor_descriptor")
-    HAS_HOST_TENSOR_DESC = supports_tma() and hasattr(triton.tools.experimental_descriptor, "TensorDescriptor")
+    HAS_HOST_TENSOR_DESC = supports_tma() and hasattr(triton.tools.tensor_descriptor, "TensorDescriptor")
     HAS_WARP_SPECIALIZE = supports_ws() and HAS_TENSOR_DESC
 
 

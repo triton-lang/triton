@@ -573,7 +573,10 @@ spec this has to be done before any reuse of the memory used by mbarrier.</p>
 <h2><code class="docutils literal notranslate"><span class="pre">ttng.tc_gen5_mma</span></code> (triton::nvidia_gpu::TCGen5MMAOp)<a class="headerlink" href="#ttng-tc-gen5-mma-triton-nvidia-gpu-tcgen5mmaop" title="Link to this heading">¶</a></h2>
 <p><em>Block level op mapping to tensorcore gen5 mma</em></p>
 <p>Syntax:</p>
-<div class="highlight-default notranslate"><div class="highlight"><pre><span></span>operation ::= `ttng.tc_gen5_mma` $a`,` $b`,` $d`,` $useD`,` $pred (`,` $barrier^)? attr-dict `:` functional-type(operands, results)
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span>operation ::= `ttng.tc_gen5_mma` $a`,` $b`,` $d`,` $useD`,` $pred
+              `` custom&lt;BarriersAndPreds&gt;($barriers, $barrier_preds)
+              attr-dict `:` qualified(type($a)) `,` qualified(type($b)) `,`
+              qualified(type($d)) (`,` qualified(type($barriers))^)?
 </pre></div>
 </div>
 <p>$d += matrix_multiply($a, $b).
@@ -581,7 +584,7 @@ If no barrier is given the op is assumed to be synchronous otherwise the op will
 If there is a barrier the result will be safe to read after a barrier wait.
 If $two_ctas is set the op will execute a matmul across two contiguous CTAs, it will read the data distributed across the two CTAs.
 and syncronize both CTAs if the op is synchronous.</p>
-<p>Traits: <code class="docutils literal notranslate"><span class="pre">VerifyTensorLayoutsTrait</span></code></p>
+<p>Traits: <code class="docutils literal notranslate"><span class="pre">SameVariadicOperandSize</span></code>, <code class="docutils literal notranslate"><span class="pre">VerifyTensorLayoutsTrait</span></code></p>
 <p>Interfaces: <code class="docutils literal notranslate"><span class="pre">DotOpInterface</span></code>, <code class="docutils literal notranslate"><span class="pre">MMAv5OpInterface</span></code>, <code class="docutils literal notranslate"><span class="pre">MemoryEffectOpInterface</span></code></p>
 <section id="id13">
 <h3>Attributes:<a class="headerlink" href="#id13" title="Link to this heading">¶</a></h3>
@@ -614,8 +617,11 @@ and syncronize both CTAs if the op is synchronous.</p>
 <tr class="row-even"><td class="text-center"><p><code class="docutils literal notranslate"><span class="pre">pred</span></code></p></td>
 <td><p>1-bit signless integer</p></td>
 </tr>
-<tr class="row-odd"><td class="text-center"><p><code class="docutils literal notranslate"><span class="pre">barrier</span></code></p></td>
-<td><p>memory descriptor type (<code class="docutils literal notranslate"><span class="pre">::mlir::triton::gpu::MemDescType</span></code>) in Triton IR type system</p></td>
+<tr class="row-odd"><td class="text-center"><p><code class="docutils literal notranslate"><span class="pre">barriers</span></code></p></td>
+<td><p>variadic of memory descriptor type (<code class="docutils literal notranslate"><span class="pre">::mlir::triton::gpu::MemDescType</span></code>) in Triton IR type system</p></td>
+</tr>
+<tr class="row-even"><td class="text-center"><p><code class="docutils literal notranslate"><span class="pre">barrier_preds</span></code></p></td>
+<td><p>variadic of 1-bit signless integer</p></td>
 </tr>
 </tbody>
 </table>
@@ -625,13 +631,18 @@ and syncronize both CTAs if the op is synchronous.</p>
 <h2><code class="docutils literal notranslate"><span class="pre">ttng.tc_gen5_mma_scaled</span></code> (triton::nvidia_gpu::TCGen5MMAScaledOp)<a class="headerlink" href="#ttng-tc-gen5-mma-scaled-triton-nvidia-gpu-tcgen5mmascaledop" title="Link to this heading">¶</a></h2>
 <p><em>Block level op mapping to tensorcore gen5 mma</em></p>
 <p>Syntax:</p>
-<div class="highlight-default notranslate"><div class="highlight"><pre><span></span>operation ::= `ttng.tc_gen5_mma_scaled` $a `,` $b `,` $d `,` $a_scale `,` $b_scale `,` $useD`,` $pred `lhs` `=` $a_type `rhs` `=` $b_type (`,` $barrier^)? attr-dict `:` functional-type(operands, results)
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span>operation ::= `ttng.tc_gen5_mma_scaled` $a `,` $b `,` $d `,` $a_scale `,` $b_scale `,` $useD`,` $pred
+              `lhs` `=` $a_type `rhs` `=` $b_type
+              `` custom&lt;BarriersAndPreds&gt;($barriers, $barrier_preds)
+              attr-dict `:` qualified(type($a)) `,` qualified(type($b)) `,`
+              qualified(type($d)) `,` qualified(type($a_scale)) `,`
+              qualified(type($b_scale)) (`,` qualified(type($barriers))^)?
 </pre></div>
 </div>
 <p>$d += matrix_multiply(scale($lhs, $lhs_scale), scale(rlhs, $rhs_scale))
 If no barrier is given the op is assumed to be synchronous otherwise the op will trigger a commit/arrive on the given barrier.
 If there is a barrier the result will be safe to read after a barrier wait.</p>
-<p>Traits: <code class="docutils literal notranslate"><span class="pre">VerifyTensorLayoutsTrait</span></code></p>
+<p>Traits: <code class="docutils literal notranslate"><span class="pre">SameVariadicOperandSize</span></code>, <code class="docutils literal notranslate"><span class="pre">VerifyTensorLayoutsTrait</span></code></p>
 <p>Interfaces: <code class="docutils literal notranslate"><span class="pre">DotOpInterface</span></code>, <code class="docutils literal notranslate"><span class="pre">MMAv5OpInterface</span></code>, <code class="docutils literal notranslate"><span class="pre">MemoryEffectOpInterface</span></code></p>
 <section id="id15">
 <h3>Attributes:<a class="headerlink" href="#id15" title="Link to this heading">¶</a></h3>
@@ -671,8 +682,11 @@ If there is a barrier the result will be safe to read after a barrier wait.</p>
 <tr class="row-even"><td class="text-center"><p><code class="docutils literal notranslate"><span class="pre">pred</span></code></p></td>
 <td><p>1-bit signless integer</p></td>
 </tr>
-<tr class="row-odd"><td class="text-center"><p><code class="docutils literal notranslate"><span class="pre">barrier</span></code></p></td>
-<td><p>memory descriptor type (<code class="docutils literal notranslate"><span class="pre">::mlir::triton::gpu::MemDescType</span></code>) in Triton IR type system</p></td>
+<tr class="row-odd"><td class="text-center"><p><code class="docutils literal notranslate"><span class="pre">barriers</span></code></p></td>
+<td><p>variadic of memory descriptor type (<code class="docutils literal notranslate"><span class="pre">::mlir::triton::gpu::MemDescType</span></code>) in Triton IR type system</p></td>
+</tr>
+<tr class="row-even"><td class="text-center"><p><code class="docutils literal notranslate"><span class="pre">barrier_preds</span></code></p></td>
+<td><p>variadic of 1-bit signless integer</p></td>
 </tr>
 </tbody>
 </table>
