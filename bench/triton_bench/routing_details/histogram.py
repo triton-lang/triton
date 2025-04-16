@@ -41,8 +41,10 @@ def _vertical_popcount(x):
 
 
 @triton.jit
-def _memset_hist(Hist, hist_size, BLOCK: tl.constexpr):
+def _memset_hist(Hist, hist_size, TokStarts, BLOCK: tl.constexpr):
     pid = tl.program_id(0)
+    if pid == 0:
+        tl.store(TokStarts, 0)
     offs = pid * BLOCK + tl.arange(0, BLOCK)
     tl.store(Hist + offs, 0, mask=offs < hist_size)
 

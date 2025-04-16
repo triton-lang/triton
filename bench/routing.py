@@ -283,7 +283,7 @@ def triton_routing(x, n_expts_act):
         N_EXPTS_PAD=n_expts_pad, N_EXPTS_ACT=n_expts_act,
     )
     _memset_hist[(cdiv(hist.shape[0], MEMSET_BLOCK), )](
-        hist, hist.shape[0],
+        hist, hist.shape[0], tok_starts,
         BLOCK=MEMSET_BLOCK
     )
     _compute_hist[(cdiv(n_tokens, HIST1_BLOCK_M), cdiv(n_expts_tot, HIST1_BLOCK_N))](
