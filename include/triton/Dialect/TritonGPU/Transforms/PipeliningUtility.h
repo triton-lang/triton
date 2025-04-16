@@ -54,7 +54,8 @@ void hoistOpsBefore(Block *block, Block::iterator it,
 
 // Sink a value redefinition into a block, provided that the block is dominated
 // by `in` and postdominated by `out`.
-Value sinkValueRedefinition(Value in, Value out, Block *block);
+Value sinkValueRedefinition(RewriterBase &rewriter, Value in, Value out,
+                            Block *block);
 
 //===----------------------------------------------------------------------===//
 // Loop Pipelining Utilities

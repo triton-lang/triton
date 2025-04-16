@@ -109,8 +109,11 @@ public:
     }
     // Don't sink past potentially aliasing ops.
     PostDominanceInfo postDomInfo(forOp);
-    if (!llvm::all_of(load.getToken().getUsers(), [&](Operation *def) {
-          return postDomInfo.properlyPostDominates(def, domOp);
+    SmallVector<OpOperand *> uses;
+    for (OpOperand &use : load.getToken().getUses())
+      uses.push_back(&use);
+    if (!llvm::all_of(uses, [&](OpOperand *use) {
+          return postDomInfo.properlyPostDominates(use->getOwner(), domOp);
         }))
       return failure();
     if (domOp == load->getNextNode()) {
@@ -118,10 +121,12 @@ public:
       return failure();
     }
     rewriter.moveOpBefore(load, domOp);
-    Value newToken = sinkValueRedefinition(load.getDep(), load.getToken(),
-                                           domOp->getBlock());
-    if (newToken != load.getToken())
-      load.getToken().replaceAllUsesWith(newToken);
+    Value newToken = sinkValueRedefinition(rewriter, load.getDep(),
+                                           load.getToken(), domOp->getBlock());
+    if (newToken != load.getToken()) {
+      for (OpOperand *use : uses)
+        use->set(newToken);
+    }
     return success();
   }
 };
