@@ -66,12 +66,11 @@ LogicalResult ExtractSliceOp::verify() {
   auto resultTy = getResult().getType();
   auto resultLayout = resultTy.getEncoding();
   auto resultElementType = getElementTypeOrSelf(resultTy);
+  auto srcShape = srcTy.getShape();
+  auto resShape = resultTy.getShape();
 
   if (srcElementType != resultElementType) {
     return emitError("result element type must match source element type");
-  }
-  if (srcLayout != resultLayout) {
-    return emitError("result layout must match source layout");
   }
   if (srcTy.getRank() != resultTy.getRank()) {
     return emitError("result rank must be equal to source rank");
@@ -79,8 +78,6 @@ LogicalResult ExtractSliceOp::verify() {
   if (srcTy.getRank() != 2) {
     return emitError("currently only 2D tensors are supported");
   }
-
-  auto srcShape = srcTy.getShape();
 
   // ExtractSlice only supports slicing where offsets and sizes are multiples of
   // shapePerCTATile. This condition ensures that slice has the same layout as
@@ -130,6 +127,46 @@ LogicalResult ExtractSliceOp::verify() {
     return emitError() << "offset [" << offsets
                        << "] must be a multiple of shapePerCTATile ["
                        << shapePerCTATile << "]";
+  }
+
+  auto llSrc = triton::gpu::toLinearLayout(srcShape, srcLayout);
+  auto llRes = triton::gpu::toLinearLayout(resShape, resultLayout);
+  auto ctx = srcTy.getContext();
+
+  auto kReg = mlir::StringAttr::get(ctx, "register");
+  auto kLane = mlir::StringAttr::get(ctx, "lane");
+  auto kWarp = mlir::StringAttr::get(ctx, "warp");
+  auto kBlock = mlir::StringAttr::get(ctx, "block");
+
+  const auto &srcBases = llSrc.getBases();
+  const auto &regsSrc = srcBases.find(kReg)->second;
+  const auto &lanesSrc = srcBases.find(kLane)->second;
+  const auto &warpsSrc = srcBases.find(kWarp)->second;
+  const auto &blocksSrc = srcBases.find(kBlock)->second;
+
+  const auto &resBases = llRes.getBases();
+  const auto &regsRes = resBases.find(kReg)->second;
+  const auto &lanesRes = resBases.find(kLane)->second;
+  const auto &warpsRes = resBases.find(kWarp)->second;
+  const auto &blocksRes = resBases.find(kBlock)->second;
+
+  if (blocksSrc != blocksRes || lanesSrc != lanesRes || warpsSrc != warpsRes ||
+      blocksSrc != blocksRes) {
+    return emitError(
+        "result LL must match source LL lane, warp and block basis");
+  }
+
+  llvm::outs() << regsRes.size() << " " << regsSrc.size() << "\n";
+  if (regsRes.size() > regsSrc.size()) {
+    return emitError("result LL register dim size must me smaller than source "
+                     "LL register dim");
+  }
+
+  for (int i = 0; i < regsRes.size(); i++) {
+    if (regsRes[i] != regsRes[i]) {
+      return emitError("result LL register bases must be subset of source LL "
+                       "register bases");
+    }
   }
 
   return success();
