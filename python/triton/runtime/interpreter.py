@@ -830,7 +830,7 @@ class ReduceScanOpInterface:
             return self.apply((input, ))[0]
         self.check_tensor(input)
         ret = self.apply_impl(input)
-        return tuple(ret) if isinstance(ret, (list, tuple)) else (ret,)
+        return tuple(ret) if isinstance(ret, (list, tuple)) else (ret, )
 
 
 class ReduceOps(ReduceScanOpInterface):
