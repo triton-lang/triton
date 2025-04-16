@@ -5,6 +5,7 @@
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Attributes.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
+#include "triton/Dialect/TritonGPU/IR/LinearLayoutConversions.h"
 #include "triton/Dialect/TritonGPU/IR/Types.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
@@ -438,6 +439,25 @@ MemDescTransOp::inferReturnTypes(MLIRContext *context,
   inferredReturnTypes.push_back(
       MemDescType::get(retShape, retEltTy, retEncoding, argTy.getMemorySpace(),
                        argTy.getMutableMemory()));
+  return success();
+}
+
+// MemDescReshapeOp
+
+LogicalResult MemDescReshapeOp::verify() {
+  // Infer the dst layout from the source and verify that it is equivalent.
+  MemDescType dstType = getResult().getType();
+  MemDescType srcType = getSrc().getType();
+  auto srcEncoding = srcType.getEncoding();
+  Attribute inferedDstEncoding;
+
+  LinearLayout ll = inferReshapeLinearLayout(
+      srcType.getShape(), srcType.getEncoding(), dstType.getShape());
+  LinearLayout llDst =
+      triton::gpu::toLinearLayout(dstType.getShape(), dstType.getEncoding());
+  if (ll != llDst) {
+    return emitError("source and destination layout are incompatible.");
+  }
   return success();
 }
 

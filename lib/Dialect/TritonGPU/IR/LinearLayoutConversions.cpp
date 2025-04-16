@@ -321,13 +321,24 @@ LinearLayout sharedToLinearLayoutLeadingOffset(ArrayRef<int64_t> shape,
       bases2D.push_back({row, vec * ((row / perPhase) % maxPhase)});
     }
   }
+
+  // Replicate the tiles to fill out the inner dims of shapePerCTA.
+  for (int logRow = llvm::Log2_32(tileRows);
+       logRow < llvm::Log2_32(shapePerCTA[rowDim]); logRow++) {
+    bases2D.push_back({1 << logRow, 0});
+  }
+
   LinearLayout tileLayout =
       LinearLayout({{S("offset"), bases2D}}, {rowDimName, colDimName});
-
   // Add the remaining dimensions.
   for (int dim = batchDims - 1; dim >= 0; --dim) {
     tileLayout *= LinearLayout::identity1D(shapePerCTA[dim], S("offset"),
                                            outDimNames[dim]);
+  }
+
+  for (int logCol = llvm::Log2_32(tileCols);
+       logCol < llvm::Log2_32(shapePerCTA[colDim]); logCol++) {
+    bases2D.push_back({0, 1 << logCol});
   }
 
   return combineCtaCgaWithShape(tileLayout, shared.getCTALayout(), shape);

@@ -249,6 +249,28 @@ def TTG_MemDescTransOp : TTG_Op<"memdesc_trans", [Pure,
   let hasFolder = 1;
 }
 
+def TTG_MemDescReshapeOp : TTG_Op<"memdesc_reshape", [Pure,
+                                                  SameOperandsAndResultElementType]> {
+  let summary = "creates a descriptor for the new shape";
+
+  let description = [{
+    This operation returns a new descriptor representing a reshaped view of the underlying buffer.
+    This doesn't affect the memory.
+  }];
+
+  let arguments = (ins TTG_MemDescType:$src);
+
+  let arguments = (
+    ins TTG_MemDescType:$src
+  );
+
+  let results = (outs TTG_MemDescType:$result);
+
+  let assemblyFormat = "$src attr-dict `:` qualified(type($src)) `->` qualified(type($result))";
+
+  let hasVerifier = 1;
+}
+
 def TTG_LocalLoadOp : TTG_Op<"local_load"> {
   let summary = "Load a buffer from local memory into a distributed tensor";
 
