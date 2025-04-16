@@ -593,6 +593,29 @@ convertFp32ToFp16RTZ(Location loc, ConversionPatternRewriter &rewriter,
   return ret;
 }
 
+// Fp32->Fp16 (RTNE) in GFX950
+static SmallVector<Value>
+convertPkFp32ToFp16(Location loc, ConversionPatternRewriter &rewriter,
+                    arith::TruncFOp op, MultipleOperandsRange operands) {
+  auto outElemTy = getElementType(op.getOut());
+  if (operands.size() == 1)
+    return {rewriter.create<LLVM::FPTruncOp>(loc, outElemTy, operands[0][0])};
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
+  auto inElemTy = getElementType(op.getIn());
+  auto inVecTy = vec_ty(inElemTy, 2);
+  auto retVecTy = vec_ty(outElemTy, 2);
+  Value inVec = b.undef(inVecTy);
+  auto idx0 = b.i32_val(0);
+  auto idx1 = b.i32_val(1);
+  inVec = b.insert_element(inVecTy, inVec, operands[0][0], idx0);
+  inVec = b.insert_element(inVecTy, inVec, operands[1][0], idx1);
+  Value retVec = rewriter.create<LLVM::FPTruncOp>(loc, retVecTy, inVec);
+  SmallVector<Value> ret(2);
+  ret[0] = b.extract_element(outElemTy, retVec, idx0);
+  ret[1] = b.extract_element(outElemTy, retVec, idx1);
+  return ret;
+}
+
 static SmallVector<Value>
 Fp32_to_Fp8E5M2_RTZ(Location loc, ConversionPatternRewriter &rewriter,
                     const SmallVector<Value> &v) {
@@ -1578,7 +1601,10 @@ struct TruncFOpConversion
                                    Type elemTy, MultipleOperandsRange operands,
                                    Location loc) const {
     auto outElemTy = getElementType(op.getOut());
-    if (outElemTy.isBF16() && gpuKind != llvm::AMDGPU::GK_GFX950) {
+    if (gpuKind == llvm::AMDGPU::GK_GFX950 &&
+        (outElemTy.isBF16() || outElemTy.isF16()))
+      return convertPkFp32ToFp16(loc, rewriter, op, operands);
+    else if (outElemTy.isBF16()) {
       auto inElemTy = getElementType(op.getIn());
       assert(inElemTy.isF32() && "unsupported conversion");
       return {
