@@ -4,7 +4,7 @@ import pathlib
 import triton
 import triton.language as tl
 
-from triton._internal_testing import is_cuda
+from triton._internal_testing import is_cuda, is_hip
 
 if torch.cuda.is_available() and torch.cuda.get_device_capability()[0] == 10:
     from triton._C.libtriton import nvidia
@@ -174,6 +174,7 @@ def exceeds_smem_capacity(num_stages, BLOCK_M, BLOCK_N, BLOCK_K, use_fp8):
 @pytest.mark.parametrize("num_stages", [2, 3, 4])
 @pytest.mark.parametrize("num_warps", [4, 8])
 @pytest.mark.parametrize("use_fp8", [False, True])
+@pytest.mark.skipif(is_hip(), reason="warp specialization is not supported on hip devices")
 @pytest.mark.skipif(torch.cuda.get_device_capability()[0] < 10, reason="Requires compute capability >= 10")
 def test_warp_specialize_tma_matmul(M, N, K, BLOCK_SIZE_M, BLOCK_SIZE_N, BLOCK_SIZE_K, num_stages, num_warps, use_fp8):
     if exceeds_smem_capacity(num_stages, BLOCK_SIZE_M, BLOCK_SIZE_N, BLOCK_SIZE_K, use_fp8=use_fp8):
@@ -257,6 +258,7 @@ def matmul_tma_persistent_ws_kernel(  #
 @pytest.mark.parametrize("num_stages", [2, 3, 4])
 @pytest.mark.parametrize("num_warps", [4, 8])
 @pytest.mark.parametrize("use_fp8", [False, True])
+@pytest.mark.skipif(is_hip(), reason="warp specialization is not supported on hip devices")
 @pytest.mark.skipif(torch.cuda.get_device_capability()[0] < 10, reason="Requires compute capability >= 10")
 def test_warp_specialize_tma_matmul_persistent(M, N, K, BLOCK_SIZE_M, BLOCK_SIZE_N, BLOCK_SIZE_K, num_stages, num_warps,
                                                use_fp8):
