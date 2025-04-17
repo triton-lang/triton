@@ -28,6 +28,7 @@ def ConvertProtonToProtonGPU: Pass<"convert-proton-to-protongpu", "mlir::ModuleO
               "Profiling granularity: warp, warp_group, or cta",
               /*parser*/[{::llvm::cl::values(
                     clEnumValN(gpu::Granularity::CTA, "cta", "CTA"),
+                    clEnumValN(gpu::Granularity::THREAD, "thread", "Thread"),
                     clEnumValN(gpu::Granularity::WARP, "warp", "Warp"),
                     clEnumValN(gpu::Granularity::WARP_2, "warp-2", "2 Warps"),
                     clEnumValN(gpu::Granularity::WARP_4, "warp-4", "4 Warps"),
@@ -54,12 +55,11 @@ def ConvertProtonToProtonGPU: Pass<"convert-proton-to-protongpu", "mlir::ModuleO
                     clEnumValN(gpu::BufferStrategy::FLUSH, "flush", "Flush Buffer")
               )}]>,
        Option<"bufferType", "buffer-type", "gpu::BufferType", /*default*/"gpu::BufferType::SHARED",
-              "Internal buffer type (SHARED, GLOBAL, LOCAL) that stores the profiling data",
+              "Internal buffer type (STACK, SHARED, GLOBAL) that stores the profiling data",
               /*parser*/[{::llvm::cl::values(
-                    clEnumValN(gpu::BufferType::DEFAULT, "default", "Default Memory"),
+                    clEnumValN(gpu::BufferType::STACK, "stack", "Stack Memory"),
                     clEnumValN(gpu::BufferType::SHARED, "shared", "Shared Memory"),
-                    clEnumValN(gpu::BufferType::GLOBAL, "global", "Global Memory"),
-                    clEnumValN(gpu::BufferType::LOCAL, "local", "Local Memory")
+                    clEnumValN(gpu::BufferType::GLOBAL, "global", "Global Memory")
               )}]>,
        Option<"bufferSize", "buffer-size", "int32_t", /*default*/"0",
               "Internal buffer byte size that stores the profiling data">,

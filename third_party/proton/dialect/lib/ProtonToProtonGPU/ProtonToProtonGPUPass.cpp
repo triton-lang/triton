@@ -148,7 +148,7 @@ public:
     if (bufferSize != 0)
       bufferSize = llvm::alignTo(bufferSize, bytesPerEntry);
     int allocBufferSize = bufferSize > 0 ? bufferSize : allocSharedMemSize;
-    if (!allocBufferSize) {
+    if (allocBufferSize > 0) {
       mlir::emitError(loc, "profiling buffer size can't be 0.");
       return failure();
     }
@@ -187,7 +187,7 @@ public:
           {wordsPerEntry * numSharedEntries}, builder.getI32Type(), encoding,
           sharedMemorySpace, /*mutable_memory=*/true);
       buffer = builder.create<triton::gpu::LocalAllocOp>(loc, sharedBufferType);
-    } else if (bufferType == gpu::BufferType::LOCAL) {
+    } else if (bufferType == gpu::BufferType::STACK) {
       Attribute stackMemorySpace =
           mlir::triton::proton::gpu::StackMemorySpaceAttr::get(context);
       auto stackBufferType = triton::gpu::MemDescType::get(

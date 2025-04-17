@@ -48,10 +48,9 @@ void init_triton_proton(py::module &&m) {
       .export_values();
 
   py::enum_<proton::gpu::BufferType>(m, "BUFFER_TYPE", py::module_local())
-      .value("DEFAULT", proton::gpu::BufferType::DEFAULT)
+      .value("STACK", proton::gpu::BufferType::STACK)
       .value("SHARED", proton::gpu::BufferType::SHARED)
       .value("GLOBAL", proton::gpu::BufferType::GLOBAL)
-      .value("LOCAL", proton::gpu::BufferType::LOCAL)
       .export_values();
 
   // Load proton dialects
