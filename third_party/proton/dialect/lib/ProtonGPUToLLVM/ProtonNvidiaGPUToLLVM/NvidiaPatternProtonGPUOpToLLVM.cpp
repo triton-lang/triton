@@ -78,7 +78,7 @@ struct CircularStoreOpConversion
     Value tag = op.getIsStart() ? b.i32_val(op.getScopeId())
                                 : b.i32_val(1 << 31 | op.getScopeId());
     Value clock = op.getCounter();
-    Value valsVec  = packLLVector(loc, {tag, clock}, rewriter);
+    Value valsVec = packLLVector(loc, {tag, clock}, rewriter);
 
     // Compute the predicate for the writer.
     const int warpSize = triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod);
@@ -105,7 +105,7 @@ struct CircularStoreOpConversion
       llvm::report_fatal_error("unimplemented");
     } else if (AddrSpace == 3) {
       targetInfo.getTritonTargetInfo().storeDShared(rewriter, loc, vecPtr,
-                                                    std::nullopt, valsVec ,
+                                                    std::nullopt, valsVec,
                                                     /*pred=*/isWriter);
     } else {
       llvm::report_fatal_error("unsupported address space in circular store");

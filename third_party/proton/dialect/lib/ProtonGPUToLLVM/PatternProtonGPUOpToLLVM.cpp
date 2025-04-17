@@ -39,7 +39,6 @@ Value getLinearId(Location loc, ConversionPatternRewriter &rewriter) {
   return linearId;
 }
 
-
 namespace {
 
 struct InitBufferIndexOpConversion
@@ -171,7 +170,7 @@ struct FinalizeOpConversion
       Value ptr = b.gep(bufferPtrTy, i32_ty, bufferBasePtr, bufOffset);
       Value load;
       if (mlir::isa<triton::proton::gpu::StackMemorySpaceAttr>(memSpace)) {
-	llvm::report_fatal_error("unimplemented");
+        llvm::report_fatal_error("unimplemented");
       } else if (mlir::isa<triton::gpu::SharedMemorySpaceAttr>(memSpace)) {
         load = tritonTargetInfo.loadShared(rewriter, loc, ptr, i32_ty,
                                            b.true_val());
@@ -281,7 +280,8 @@ struct StackAllocOpConversion
 
     // TODO(crobeck): update if we ever support multi-rank stack alloc ops
     SmallVector<Type, 4> types = {ptr_ty(ctx), llvmInt32Type};
-    SmallVector<Value, 4> elems = {arrayVal, bufferSizeVal}; // i32 ptr, shape[0]
+    SmallVector<Value, 4> elems = {arrayVal,
+                                   bufferSizeVal}; // i32 ptr, shape[0]
 
     auto structTy =
         LLVM::LLVMStructType::getLiteral(rewriter.getContext(), types);

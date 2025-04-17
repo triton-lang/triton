@@ -219,4 +219,3 @@ module attributes {"ttg.num-warps" = 8 : i32} {
      tt.return
    }
  }
-
