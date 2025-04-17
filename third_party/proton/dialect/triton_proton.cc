@@ -84,8 +84,8 @@ void init_triton_proton(py::module &&m) {
            proton::gpu::Granularity granularity,
            proton::gpu::BufferStrategy bufferStrategy,
            proton::gpu::BufferType bufferType, int32_t bufferSize,
-           int32_t maxSharedMemSize,
-           int64_t profileScratchSize, int32_t profileScratchAlignment) {
+           int32_t maxSharedMemSize, int64_t profileScratchSize,
+           int32_t profileScratchAlignment) {
           pm.addPass(proton::createConvertProtonToProtonGPUPass(
               metricType, samplingStrategy, samplingOptions, granularity,
               bufferStrategy, bufferType, bufferSize, maxSharedMemSize,

@@ -80,15 +80,12 @@ private:
 class ConvertProtonToProtonGPUPass
     : public impl::ConvertProtonToProtonGPUBase<ConvertProtonToProtonGPUPass> {
 public:
-  ConvertProtonToProtonGPUPass(MetricType metricType,
-                               SamplingStrategy samplingStrategy,
-                               llvm::StringRef samplingOptions,
-                               gpu::Granularity granularity,
-                               gpu::BufferStrategy bufferStrategy,
-                               gpu::BufferType bufferType, int32_t bufferSize,
-                               int32_t maxSharedMemSize,
-                               int64_t profileScratchSize,
-                               int32_t profileScratchAlignment)
+  ConvertProtonToProtonGPUPass(
+      MetricType metricType, SamplingStrategy samplingStrategy,
+      llvm::StringRef samplingOptions, gpu::Granularity granularity,
+      gpu::BufferStrategy bufferStrategy, gpu::BufferType bufferType,
+      int32_t bufferSize, int32_t maxSharedMemSize, int64_t profileScratchSize,
+      int32_t profileScratchAlignment)
       : ConvertProtonToProtonGPUBase<ConvertProtonToProtonGPUPass>() {
     this->metricType = metricType;
     this->samplingStrategy = samplingStrategy;

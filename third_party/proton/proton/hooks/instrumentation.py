@@ -139,8 +139,7 @@ class InstrumentationHook(Hook):
                                                           self.mode.sampling_options, self.mode.granularity,
                                                           self.mode.buffer_strategy, self.mode.buffer_type,
                                                           self.mode.buffer_size, max_shared_mem,
-                                                          self.profile_buffer_size,
-                                                          self.profile_buffer_alignment)
+                                                          self.profile_buffer_size, self.profile_buffer_alignment)
 
             triton_proton.add_allocate_proton_shared_memory(pm)
 
