@@ -47,7 +47,7 @@ def load_logits_topk(X, stride_xm, n_expts_tot, offs_m, mask_m, N_EXPTS_PAD, N_E
         X_ptrs -= BLOCK_N
         offs_x_n -= BLOCK_N
 
-        x = tl.load(X_ptrs, mask=mask_n, other=float("-inf"))
+        x = tl.load(X_ptrs, mask=mask_m, other=float("-inf"))
         x = (x.to(tl.uint16, bitcast=True).to(tl.int32) << 16) | offs_x_n[None, :]
         x = x.to(tl.float32, bitcast=True)
         acc = bitonic_merge(tl.maximum(acc, tl.topk(x, N_EXPTS_ACT, dim=1)), False)
