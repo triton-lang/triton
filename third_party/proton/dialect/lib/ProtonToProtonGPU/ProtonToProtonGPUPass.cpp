@@ -24,13 +24,6 @@ namespace proton {
 
 namespace {
 
-const std::unordered_map<std::string, proton::gpu::Granularity> granularityMap =
-    {{"cta", proton::gpu::Granularity::CTA},
-     {"warp", proton::gpu::Granularity::WARP},
-     {"warpgroup_2", proton::gpu::Granularity::WARPGROUP_2},
-     {"warpgroup_4", proton::gpu::Granularity::WARPGROUP_4},
-     {"warpgroup_8", proton::gpu::Granularity::WARPGROUP_8}};
-
 void parseSelectIds(llvm::StringRef selectIds,
                     llvm::SmallVectorImpl<int32_t> &selectIdVec) {
   auto rest = selectIds;
@@ -50,10 +43,11 @@ void parseSelectIds(llvm::StringRef selectIds,
 class RecordOpCircularRewrite : public OpRewritePattern<proton::RecordOp> {
 public:
   RecordOpCircularRewrite(MLIRContext *ctx, Value buffer, Value index,
-                          Value segmentBase, StringRef metric,
+                          Value segmentBase, MetricType metricType,
                           ModuleScopeIdAllocation &scopeInfo)
       : OpRewritePattern::OpRewritePattern(ctx), buffer(buffer), index(index),
-        segmentBase(segmentBase), metric(metric), scopeInfo(scopeInfo) {}
+        segmentBase(segmentBase), metricType(metricType), scopeInfo(scopeInfo) {
+  }
 
   LogicalResult matchAndRewrite(proton::RecordOp op,
                                 PatternRewriter &rewriter) const override {
@@ -63,8 +57,7 @@ public:
     rewriter.setInsertionPointAfter(op);
 
     Value counter = rewriter.create<proton::gpu::ReadCounterOp>(
-        op.getLoc(), mlir::IntegerType::get(context, 32),
-        proton::Metric::CYCLE);
+        op.getLoc(), mlir::IntegerType::get(context, 32), metricType);
 
     int scopeId = scopeInfo.getOpScopeId(op);
     rewriter.create<proton::gpu::CircularStoreOp>(op.getLoc(), buffer, index,
@@ -79,7 +72,7 @@ private:
   Value buffer;
   Value index;
   Value segmentBase;
-  StringRef metric;
+  MetricType metricType;
   ModuleScopeIdAllocation &scopeInfo;
 };
 } // namespace
@@ -87,21 +80,23 @@ private:
 class ConvertProtonToProtonGPUPass
     : public impl::ConvertProtonToProtonGPUBase<ConvertProtonToProtonGPUPass> {
 public:
-  ConvertProtonToProtonGPUPass(std::string metric, std::string granularity,
-                               std::string selectIds, int32_t maxSharedMem,
-                               int32_t scratchMem, int32_t alignment,
-                               std::string strategy, std::string bufferType,
-                               int32_t bufferSize)
+  ConvertProtonToProtonGPUPass(
+      MetricType metricType, SamplingStrategy samplingStrategy,
+      llvm::StringRef samplingOptions, gpu::Granularity granularity,
+      gpu::BufferStrategy bufferStrategy, gpu::BufferType bufferType,
+      int32_t bufferSize, int32_t maxSharedMemSize, int64_t profileScratchSize,
+      int32_t profileScratchAlignment)
       : ConvertProtonToProtonGPUBase<ConvertProtonToProtonGPUPass>() {
-    this->metric = metric;
+    this->metricType = metricType;
+    this->samplingStrategy = samplingStrategy;
     this->granularity = granularity;
-    this->selectIds = selectIds;
-    this->maxSharedMem = maxSharedMem;
-    this->scratchMem = scratchMem;
-    this->alignment = alignment;
-    this->strategy = strategy;
+    this->samplingOptions = samplingOptions.str();
+    this->bufferStrategy = bufferStrategy;
     this->bufferType = bufferType;
     this->bufferSize = bufferSize;
+    this->maxSharedMemSize = maxSharedMemSize;
+    this->profileScratchSize = profileScratchSize;
+    this->profileScratchAlignment = profileScratchAlignment;
   }
 
   LogicalResult circularRecordStrategyLowering(FuncOp func) {
@@ -112,14 +107,13 @@ public:
     builder.setInsertionPointToStart(&func.getBody().front());
     int numWarps = mlir::triton::gpu::lookupNumWarps(mod);
 
-    auto granularityEnum = granularityMap.at(granularity);
-
     llvm::SmallVector<int32_t, 8> selectIdVec;
     int segmentNum = numWarps;
-    if (selectIds != "") {
-      parseSelectIds(selectIds, selectIdVec);
+    if (!samplingOptions.empty() &&
+        samplingStrategy == SamplingStrategy::SELECTIVE) {
+      parseSelectIds(samplingOptions, selectIdVec);
       segmentNum = selectIdVec.size();
-      if (segmentNum && granularityEnum != proton::gpu::Granularity::WARP) {
+      if (segmentNum && granularity != proton::gpu::Granularity::WARP) {
         mlir::emitError(
             loc, "only warp granularity supports selective ids for now.");
         return failure();
@@ -136,25 +130,22 @@ public:
     const int circularHeaderSize =
         proton::gpu::getCircularHeaderSize(); // byte size
 
-    // We take any available shared memory left to allocate the circular
-    // buffer. The buffer size per segment must be power of 2.
     int segmentByteSize =
         llvm::NextPowerOf2(
-            (maxSharedMem - llvm::alignTo(sharedMemUsed, bytesPerEntry)) /
+            (maxSharedMemSize - llvm::alignTo(sharedMemUsed, bytesPerEntry)) /
             segmentNum) /
         2;
-    int sharedSlots = segmentByteSize * segmentNum / bytesPerEntry;
-    // FIXME(fywkevin): this is a hack, remove this after we have decent
-    // triton_proton.cc python bindings for passing proper args.
-    sharedSlots = std::max(sharedSlots, 32);
-    int allocSharedMemSize = sharedSlots * bytesPerEntry;
+    int numSharedEntries = segmentByteSize * segmentNum / bytesPerEntry;
+    int allocSharedMemSize = numSharedEntries * bytesPerEntry;
+    if (bufferSize != 0)
+      bufferSize = llvm::alignTo(bufferSize, bytesPerEntry);
     int allocBufferSize = bufferSize > 0 ? bufferSize : allocSharedMemSize;
-    if (!allocBufferSize) {
-      mlir::emitError(loc, "profiling buffer size can't be 0.");
+    if (allocBufferSize <= 0) {
+      mlir::emitError(loc, "profiling buffer size should be greater than 0");
       return failure();
     }
 
-    // Circular strategy memory layout (total: allocScratchMemSize bytes)
+    // Circular strategy memory layout (total: allocProfileScratchSize bytes)
     //  +-----------------------------------------------+
     //  | header (circularHeaderSize bytes)             |
     //  +-----------------------------------------------+
@@ -162,14 +153,15 @@ public:
     //  +-----------------------------------------------+
     //  | profiled data (allocBufferSize bytes)         |
     //  +-----------------------------------------------+
-    int allocScratchMemSize = llvm::alignTo(
-        allocBufferSize + circularHeaderSize + numWarps * 4, alignment);
+    int allocProfileScratchSize =
+        llvm::alignTo(allocBufferSize + circularHeaderSize + numWarps * 4,
+                      profileScratchAlignment);
 
-    if (scratchMem < allocScratchMemSize) {
+    if (profileScratchSize < allocProfileScratchSize) {
       mlir::emitError(loc,
                       "Global scratch memory for proton profiling is not large "
                       "enough, should be at least " +
-                          llvm::Twine(allocScratchMemSize) + " bytes.");
+                          llvm::Twine(allocProfileScratchSize) + " bytes.");
       return failure();
     }
 
@@ -180,21 +172,21 @@ public:
     auto encoding = triton::gpu::SwizzledSharedEncodingAttr::get(
         context, 1, 1, 1, {0}, ctaLayout);
 
-    if (bufferType == "shared_mem") {
+    if (bufferType == gpu::BufferType::SHARED) {
       Attribute sharedMemorySpace =
           triton::gpu::SharedMemorySpaceAttr::get(context);
       auto sharedBufferType = triton::gpu::MemDescType::get(
-          {wordsPerEntry * sharedSlots}, builder.getI32Type(), encoding,
+          {wordsPerEntry * numSharedEntries}, builder.getI32Type(), encoding,
           sharedMemorySpace, /*mutable_memory=*/true);
       buffer = builder.create<triton::gpu::LocalAllocOp>(loc, sharedBufferType);
-    } else if (bufferType == "stack_mem") {
+    } else if (bufferType == gpu::BufferType::STACK) {
       Attribute stackMemorySpace =
           mlir::triton::proton::gpu::StackMemorySpaceAttr::get(context);
       auto stackBufferType = triton::gpu::MemDescType::get(
-          {wordsPerEntry * sharedSlots}, builder.getI32Type(), encoding,
+          {wordsPerEntry * numSharedEntries}, builder.getI32Type(), encoding,
           stackMemorySpace, /*mutable_memory=*/true);
       buffer = builder.create<proton::gpu::StackAllocOp>(loc, stackBufferType);
-    } else if (bufferType == "heap_mem") {
+    } else if (bufferType == gpu::BufferType::GLOBAL) {
       mlir::emitError(loc, "not implemented yet");
       return failure();
     } else {
@@ -203,8 +195,8 @@ public:
     }
 
     Value profileMem = builder.create<proton::gpu::GlobalScratchAllocOp>(
-        loc, triton::getPointerType(builder.getI32Type()), allocScratchMemSize,
-        alignment);
+        loc, triton::getPointerType(builder.getI32Type()),
+        allocProfileScratchSize, profileScratchAlignment);
 
     // Profiler index is private to each thread, address space is 5. In
     // practice, it doesn't prevent us from register promotion.
@@ -213,13 +205,13 @@ public:
     Value index = builder.create<proton::gpu::InitBufferIndexOp>(loc, ptrTy);
 
     Value segmentBase = builder.create<proton::gpu::SegmentBaseOp>(
-        loc, proton::gpu::SegmentBaseType::get(context), buffer,
-        granularityEnum, builder.getDenseI32ArrayAttr(selectIdVec));
+        loc, proton::gpu::SegmentBaseType::get(context), buffer, granularity,
+        builder.getDenseI32ArrayAttr(selectIdVec));
 
     mlir::RewritePatternSet patterns(context);
     ModuleScopeIdAllocation &scopeInfo = getAnalysis<ModuleScopeIdAllocation>();
     patterns.add<RecordOpCircularRewrite>(context, buffer, index, segmentBase,
-                                          metric, scopeInfo);
+                                          metricType, scopeInfo);
     if (applyPatternsGreedily(mod, std::move(patterns)).failed())
       return failure();
 
@@ -236,75 +228,79 @@ public:
     ModuleOp m = getOperation();
     Location loc = m->getLoc();
 
-    assert(metric == "cycle" && "only cycle metric is supported now");
-
-    int numFuncs = llvm::range_size(m.getOps<triton::FuncOp>());
-    if (numFuncs > 0)
-      // We currently only support one function in the module, which means all
-      // functions needs to be marked as inlined.
-      assert(numFuncs == 1 && "we only support one function in the module now");
-    else
+    // Validate metric type at runtime instead of using assert
+    if (metricType != MetricType::CYCLE) {
+      mlir::emitError(loc, "only CYCLE metric type is supported currently");
+      signalPassFailure();
       return;
+    }
+
+    // Check if there are any functions in the module
+    int numFuncs = llvm::range_size(m.getOps<triton::FuncOp>());
+    if (numFuncs == 0) {
+      return; // No functions to process, silently return
+    } else if (numFuncs > 1) {
+      // We currently only support one function in the module
+      mlir::emitError(loc, "only one function per module is supported");
+      signalPassFailure();
+      return;
+    }
 
     FuncOp func = *m.getOps<triton::FuncOp>().begin();
-    // Return if there is no proton record in the function.
+
+    // Check if there are any proton records to process
     bool hasProtonRecord = false;
-    func.walk([&](proton::RecordOp op) { hasProtonRecord = true; });
+    func.walk([&](proton::RecordOp op) {
+      hasProtonRecord = true;
+      return WalkResult::interrupt(); // Early exit once we find one record
+    });
+
     if (!hasProtonRecord) {
-      return;
+      return; // No proton records to process, silently return
     }
 
-    if (bufferType != "shared_mem" && bufferType != "stack_mem" &&
-        bufferType != "heap_mem") {
-      mlir::emitError(
-          loc, "buffer-type must be shared_mem or stack_mem or heap_mem");
-      signalPassFailure();
-      return;
-    }
-
-    if (bufferType != "shared_mem" && bufferSize == 0) {
-      mlir::emitError(loc, "buffer-size must be greater than 0");
-      signalPassFailure();
-      return;
-    }
-
+    // Validate buffer size if specified
     if (bufferSize > 0 && !llvm::isPowerOf2_32(bufferSize)) {
       mlir::emitError(loc, "buffer-size must be power of 2");
       signalPassFailure();
       return;
     }
 
-    if (!llvm::isPowerOf2_32(alignment)) {
-      mlir::emitError(loc, "alignment must be power of 2");
+    // Validate profile scratch alignment
+    if (!llvm::isPowerOf2_32(profileScratchAlignment)) {
+      mlir::emitError(loc, "profileScratchAlignment must be power of 2");
       signalPassFailure();
       return;
     }
 
-    if (!granularityMap.count(granularity)) {
-      mlir::emitError(loc, "granularity not supported");
-      signalPassFailure();
-      return;
-    }
-
-    if (strategy == "circular") {
-      if (failed(circularRecordStrategyLowering(func)))
+    // Process based on buffer strategy
+    if (bufferStrategy == gpu::BufferStrategy::CIRCULAR) {
+      if (failed(circularRecordStrategyLowering(func))) {
+        // No need to call signalPassFailure() here as it's already called in
+        // circularRecordStrategyLowering
         signalPassFailure();
+      }
     } else {
-      mlir::emitError(loc, "strategy is not supported");
+      mlir::emitError(
+          loc, "buffer-strategy '" +
+                   std::to_string(static_cast<int>(
+                       static_cast<gpu::BufferStrategy>(bufferStrategy))) +
+                   "' is not supported");
       signalPassFailure();
     }
-
-    return;
   }
 };
 
 std::unique_ptr<OperationPass<ModuleOp>> createConvertProtonToProtonGPUPass(
-    std::string metric, std::string granularity, std::string selectIds,
-    int32_t maxSharedMem, int32_t scratchMem, int32_t alignment,
-    std::string strategy, std::string bufferType, int32_t bufferSize) {
+    MetricType metricType, SamplingStrategy samplingStrategy,
+    llvm::StringRef samplingOptions, gpu::Granularity granularity,
+    gpu::BufferStrategy bufferStrategy, gpu::BufferType bufferType,
+    int32_t bufferSize, int32_t maxSharedMemSize, int64_t profileScratchSize,
+    int32_t profileScratchAlignment) {
   return std::make_unique<ConvertProtonToProtonGPUPass>(
-      metric, granularity, selectIds, maxSharedMem, scratchMem, alignment,
-      strategy, bufferType, bufferSize);
+      metricType, samplingStrategy, samplingOptions, granularity,
+      bufferStrategy, bufferType, bufferSize, maxSharedMemSize,
+      profileScratchSize, profileScratchAlignment);
 }
 
 } // namespace proton
