@@ -9,38 +9,69 @@ def ConvertProtonToProtonGPU: Pass<"convert-proton-to-protongpu", "mlir::ModuleO
   let description = "Convert the Proton Op into ProtonGPU Op. This includes scaffolding operations"
                     "such as allocation for internal profiling buffers, resources binding, and final cleanup.";
 
-  let constructor = "mlir::triton::proton::createConvertProtonToProtonGPUPass(\"cycle\", \"warp\", \"\", 0, 32768, 128, \"circular\", \"shared_mem\", 0)";
+  let constructor = "createConvertProtonToProtonGPUPass()";
 
-  let dependentDialects = ["mlir::triton::proton::ProtonDialect",
-                           "mlir::triton::proton::gpu::ProtonGPUDialect",
+  let dependentDialects = ["ProtonDialect",
+                           "gpu::ProtonGPUDialect",
                            "mlir::triton::gpu::TritonGPUDialect",
                            "mlir::triton::TritonDialect"];
 
     let options = [
-       Option<"metric", "metric",
-              "std::string", /*default*/"\"cycle\"",
-              "performance counter metric our lowering targets to">,
+       Option<"metricType", "metric-type",
+              "MetricType", /*default*/"MetricType::CYCLE",
+              "The performance counter metric type we are profiling",
+              /*parser*/[{::llvm::cl::values(
+                    clEnumValN(MetricType::CYCLE, "cycle", "Cycle")
+              )}]>,
        Option<"granularity", "granularity",
-              "std::string", /*default*/"\"warp\"",
-              "profiling granularity: warp or cta">,
-       Option<"selectIds", "select-ids",
+              "gpu::Granularity", /*default*/"gpu::Granularity::WARP",
+              "Profiling granularity: warp, warp_group, or cta",
+              /*parser*/[{::llvm::cl::values(
+                    clEnumValN(gpu::Granularity::THREAD, "thread", "Thread"),
+                    clEnumValN(gpu::Granularity::WARP, "warp", "Warp"),
+                    clEnumValN(gpu::Granularity::WARP_2, "warp-2", "2 Warps"),
+                    clEnumValN(gpu::Granularity::WARP_4, "warp-4", "4 Warps"),
+                    clEnumValN(gpu::Granularity::WARP_8, "warp-8", "8 Warps"),
+                    clEnumValN(gpu::Granularity::CTA, "cta", "CTA"),
+                    clEnumValN(gpu::Granularity::WARP_GROUP, "warp-group", "Warp Group"),
+                    clEnumValN(gpu::Granularity::WARP_GROUP_2, "warp-group-2", "2 Warp Groups"),
+                    clEnumValN(gpu::Granularity::WARP_GROUP_4, "warp-group-4", "4 Warp Groups"),
+                    clEnumValN(gpu::Granularity::WARP_GROUP_8, "warp-group-8", "8 Warp Groups")
+              )}]>,
+       Option<"samplingStrategy", "sampling-strategy",
+              "SamplingStrategy", /*default*/"SamplingStrategy::NONE",
+              "Profiling sampling strategy",
+              /*parser*/[{::llvm::cl::values(
+                    clEnumValN(SamplingStrategy::NONE, "none", "No Sampling"),
+                    clEnumValN(SamplingStrategy::SELECTIVE, "selective", "Selective Sampling")
+              )}]>,
+       Option<"samplingOptions", "sampling-options",
               "std::string", /*default*/"\"\"",
-              "comma-separated list of selected ids">,
-       Option<"maxSharedMem", "max-shared-mem",
-              "int32_t", /*default*/"0",
-              "max shared memory size per CTA">,
-       Option<"scratchMem", "scratch-mem",
-              "int32_t", /*default*/"32768",
-              "profiler global scratch memory size per CTA">,
-       Option<"alignment", "alignment",
-              "int32_t", /*default*/"128",
-              "profiler global scratch memory alignment">,
-       Option<"strategy", "strategy", "std::string", /*default*/"\"circular\"",
-              "profiler record strategy (circular or flush)">,
-       Option<"bufferType", "buffer-type", "std::string", /*default*/"\"shared_mem\"",
-              "internal buffer type (shared_mem or stack_mem) that backs the profiling data">,
+              "Profiling sampling options">,
+       Option<"bufferStrategy", "buffer-strategy", "gpu::BufferStrategy", /*default*/"gpu::BufferStrategy::CIRCULAR",
+              "Profiler buffer recording strategy (circular or flush)",
+              /*parser*/[{::llvm::cl::values(
+                    clEnumValN(gpu::BufferStrategy::CIRCULAR, "circular", "Circular Buffer"),
+                    clEnumValN(gpu::BufferStrategy::FLUSH, "flush", "Flush Buffer")
+              )}]>,
+       Option<"bufferType", "buffer-type", "gpu::BufferType", /*default*/"gpu::BufferType::SHARED",
+              "Internal buffer type (STACK, SHARED, GLOBAL) that stores the profiling data",
+              /*parser*/[{::llvm::cl::values(
+                    clEnumValN(gpu::BufferType::STACK, "stack", "Stack Memory"),
+                    clEnumValN(gpu::BufferType::SHARED, "shared", "Shared Memory"),
+                    clEnumValN(gpu::BufferType::GLOBAL, "global", "Global Memory")
+              )}]>,
        Option<"bufferSize", "buffer-size", "int32_t", /*default*/"0",
-              "internal buffer byte size that backs the profiling data">,
+              "Internal buffer byte size that stores the profiling data. 0 means auto-size based on the device's `maxSharedMemSize`">,
+       Option<"maxSharedMemSize", "max-shared-mem-size",
+              "int32_t", /*default*/"32768",
+              "Maximum available shared memory size per CTA">,
+       Option<"profileScratchSize", "scratch-mem-size",
+              "int64_t", /*default*/"32768",
+              "Profiler global scratch memory size per CTA">,
+       Option<"profileScratchAlignment", "scratch-mem-alignment",
+              "int32_t", /*default*/"128",
+              "Profiler global scratch memory alignment">,
   ];
 }
 

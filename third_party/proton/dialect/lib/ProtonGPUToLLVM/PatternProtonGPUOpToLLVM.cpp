@@ -132,7 +132,7 @@ struct FinalizeOpConversion
     // Header: preamble (1 word), threadblock id (1 word), SM id (1 word),
     // unused (1 word)
 
-    // Circular strategy memory layout (total: allocScratchMemSize bytes)
+    // Circular strategy memory layout (total: allocprofileScratchSize bytes)
     //  +-----------------------------------------------+
     //  | header (circularHeaderSize bytes)             |
     //  +-----------------------------------------------+
