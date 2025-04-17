@@ -144,6 +144,7 @@ def PTG_StackAllocOp : PTG_Op<"stack_alloc", [MemoryEffects<[MemAlloc<GlobalMemo
   let arguments = (
     ins
   );
+  let hasVerifier = 1;
   let results = (outs TTG_MemDescType : $data);
   let assemblyFormat = "attr-dict `:` qualified(type($data))";
 }
