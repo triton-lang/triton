@@ -35,15 +35,14 @@ def load_logits_topk(X, stride_xm, n_expts_tot, offs_m, mask_m, N_EXPTS_PAD: tl.
     acc = tl.topk(x, N_EXPTS_ACT, dim=1)
 
     # subsequent iterations:
-    if loop_iterations > 0:
-        for _i in range(loop_iterations):
-            acc = tl.bitonic_merge(acc)
-            X_ptrs -= BLOCK_N
-            offs_x_n -= BLOCK_N
-            x = tl.load(X_ptrs, mask=mask_m, other=float("-inf"))
-            x = (x.to(tl.uint16, bitcast=True).to(tl.int32) << 16) | offs_x_n[None, :]
-            x = x.to(tl.float32, bitcast=True)
-            acc = tl.maximum(acc, tl.topk(x, N_EXPTS_ACT, dim=1))
+    for _i in range(loop_iterations):
+        acc = tl.bitonic_merge(acc)  # ensure sorted ascending for the merge
+        X_ptrs -= BLOCK_N
+        offs_x_n -= BLOCK_N
+        x = tl.load(X_ptrs, mask=mask_m, other=float("-inf"))
+        x = (x.to(tl.uint16, bitcast=True).to(tl.int32) << 16) | offs_x_n[None, :]
+        x = x.to(tl.float32, bitcast=True)
+        acc = tl.maximum(acc, tl.topk(x, N_EXPTS_ACT, dim=1))
 
     return acc
 
