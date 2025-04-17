@@ -46,8 +46,20 @@ static int getMMAVersionSafe(int computeCapability, DotOp op) {
   for (int baseVersion : versionsSupported) {
     if (supportMMA(op, baseVersion))
       return baseVersion;
-    if (baseVersion == 3)
-      op.emitRemark() << "Warning: can't use MMA V3 for the dot op";
+    if (baseVersion == 3) {
+      auto remark = op.emitRemark()
+                    << "MMA version 3 (Tensor Core) optimization not applied.";
+      remark.attachNote() << "Target compute capability (" << computeCapability
+                          << ") supports MMA v3.";
+    }
+
+    if (baseVersion == 5) {
+      auto remark =
+          op.emitRemark()
+          << "MMA version 5 (Warp-Group MMA) optimization not applied.";
+      remark.attachNote() << "Target compute capability (" << computeCapability
+                          << ") supports MMA v5.";
+    }
   }
   return 0;
 }
