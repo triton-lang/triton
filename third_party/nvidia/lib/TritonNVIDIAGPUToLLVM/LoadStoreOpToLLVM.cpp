@@ -1249,6 +1249,42 @@ struct AsyncTMACopyGlobalToLocalOpConversion
     auto ctaOffset = getCtaOffset(rewriter, loc, encoding, shapePerCTA);
     int elementsPerCTA = product(shapePerCTA) * packingFactor;
 
+    // The fast‑varying coordinate that will be passed to cp.async.bulk.tensor
+    // must itself be a multiple of 128 logical elements (PTX §9.7.9.25.5).
+    // Try to prove that property statically; bail out with a fatal error
+    // if we can prove it is violated.
+    if (packingFactor == 2) {
+      Value contigCoord = op.getCoord().back();
+
+      // Emit a regular MLIR diagnostic instead of aborting so that the pass
+      // fails gracefully and tests can use --verify-diagnostics.
+      auto alignError = [&](int64_t v) -> LogicalResult {
+        op.emitError(
+            "Illegal fp4 padded tensor coordinate; contiguous coordinate (")
+            << v << ") is not a multiple of 128";
+        return failure();
+      };
+
+      // Case 1: simple constant
+      if (auto constOp = llvm::dyn_cast_or_null<arith::ConstantOp>(
+              contigCoord.getDefiningOp())) {
+        if (auto intAttr = llvm::dyn_cast<IntegerAttr>(constOp.getValue()))
+          if (intAttr.getInt() % 128 != 0)
+            return alignError(intAttr.getInt());
+
+      }
+      // Case 2: pattern like (expr * C)  or  (C * expr)
+      else if (auto mulOp = llvm::dyn_cast_or_null<arith::MulIOp>(
+                   contigCoord.getDefiningOp())) {
+        APInt imm;
+        if (matchPattern(mulOp.getLhs(), m_ConstantInt(&imm)) ||
+            matchPattern(mulOp.getRhs(), m_ConstantInt(&imm))) {
+          if (imm.getSExtValue() % 128 != 0)
+            return alignError(imm.getSExtValue());
+        }
+      }
+    }
+
     // The bounding box inner dimension must be less than or equal to the
     // swizzle size.
     // https://docs.nvidia.com/cuda/cuda-driver-api/group__CUDA__TENSOR__MEMORY.html#group__CUDA__TENSOR__MEMORY_1ga7c7d2aaac9e49294304e755e6f341d7
