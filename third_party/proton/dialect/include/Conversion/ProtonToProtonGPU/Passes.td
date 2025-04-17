@@ -62,7 +62,7 @@ def ConvertProtonToProtonGPU: Pass<"convert-proton-to-protongpu", "mlir::ModuleO
                     clEnumValN(gpu::BufferType::GLOBAL, "global", "Global Memory")
               )}]>,
        Option<"bufferSize", "buffer-size", "int32_t", /*default*/"0",
-              "Internal buffer byte size that stores the profiling data">,
+              "Internal buffer byte size that stores the profiling data. 0 means auto-size based on the device's `maxSharedMemSize`">,
        Option<"maxSharedMemSize", "max-shared-mem-size",
               "int32_t", /*default*/"32768",
               "Maximum available shared memory size per CTA">,

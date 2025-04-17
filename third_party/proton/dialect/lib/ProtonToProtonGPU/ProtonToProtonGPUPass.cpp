@@ -140,8 +140,8 @@ public:
     if (bufferSize != 0)
       bufferSize = llvm::alignTo(bufferSize, bytesPerEntry);
     int allocBufferSize = bufferSize > 0 ? bufferSize : allocSharedMemSize;
-    if (allocBufferSize > 0) {
-      mlir::emitError(loc, "profiling buffer size can't be 0.");
+    if (allocBufferSize <= 0) {
+      mlir::emitError(loc, "profiling buffer size should be greater than 0");
       return failure();
     }
 
