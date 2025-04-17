@@ -17,9 +17,10 @@ void LoadOp::getEffects(
     SmallVectorImpl<SideEffects::EffectInstance<MemoryEffects::Effect>>
         &effects) {
   effects.emplace_back(MemoryEffects::Read::get(), &getPtrMutable(),
-                       GlobalMemory::get());
+                       triton::GlobalMemory::get());
   if (getIsVolatile())
-    effects.emplace_back(MemoryEffects::Write::get());
+    effects.emplace_back(MemoryEffects::Write::get(),
+                         SideEffects::DefaultResource::get());
 }
 
 } // namespace triton
@@ -1176,8 +1177,10 @@ void ElementwiseInlineAsmOp::getEffects(
         &effects) {
   if (getPure())
     return;
-  effects.emplace_back(MemoryEffects::Write::get());
-  effects.emplace_back(MemoryEffects::Read::get());
+  effects.emplace_back(MemoryEffects::Write::get(),
+                       SideEffects::DefaultResource::get());
+  effects.emplace_back(MemoryEffects::Read::get(),
+                       SideEffects::DefaultResource::get());
 }
 
 Speculation::Speculatability ElementwiseInlineAsmOp::getSpeculatability() {
@@ -1206,8 +1209,10 @@ void ExternElementwiseOp::getEffects(
         &effects) {
   if (getPure())
     return;
-  effects.emplace_back(MemoryEffects::Write::get());
-  effects.emplace_back(MemoryEffects::Read::get());
+  effects.emplace_back(MemoryEffects::Write::get(),
+                       SideEffects::DefaultResource::get());
+  effects.emplace_back(MemoryEffects::Read::get(),
+                       SideEffects::DefaultResource::get());
 }
 
 Speculation::Speculatability ExternElementwiseOp::getSpeculatability() {
