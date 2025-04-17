@@ -1026,26 +1026,23 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
   // CHECK:   %[[BUF_IDX_NEXT:.*]] = arith.select %[[BUF_IDX_CND]], %[[C_0]], %[[BUF_IDX_P1]] {loop.cluster = 0 : i32, loop.stage = 2 : i32}
   // CHECK:   %[[BUF_IDX_NEXT_CND:.*]] = arith.select %[[CND]], %[[BUF_IDX]], %[[BUF_IDX_NEXT]]
   // CHECK:   %[[TM_SLICE:.*]] = ttg.memdesc_subview %[[ACC_TM]][%[[BUF_IDX_NEXT_CND]], {{.*}} {loop.cluster = 0 : i32, loop.stage = 2 : i32}
-  // CHECK:   %[[STORE_TOK:.*]] = ttng.tmem_store %[[OVERRIDE_ACC]], %[[TM_SLICE]][%[[TOK]]], {{.*}} {loop.cluster = 0 : i32, loop.stage = 2 : i32}
+  // CHECK:   %[[STORE_TOK:.*]] = ttng.tmem_store %[[OVERRIDE_ACC]], %[[TM_SLICE]][], {{.*}} {loop.cluster = 0 : i32, loop.stage = 2 : i32}
   // CHECK:   %[[BAR_SLICE:.*]] = ttg.memdesc_subview %[[BAR]][%[[BAR_IDX]]] {loop.cluster = 0 : i32, loop.stage = 2 : i32}
   // CHECK:   %[[ACC_TM_SLICE:.*]] = ttg.memdesc_subview %[[ACC_TM]][%[[BUF_IDX_NEXT_CND]]{{.*}} {loop.cluster = 0 : i32, loop.stage = 2 : i32}
-  // CHECK:   %[[MMA_TOK:.*]] = ttng.tc_gen5_mma %{{.*}}, %{{.*}}, %[[ACC_TM_SLICE]][%[[STORE_TOK]]], %[[TRUE]], %[[TRUE]], %[[BAR_SLICE]][%true] {loop.cluster = 0 : i32, loop.stage = 2 : i32}
+  // CHECK:   %[[MMA_TOK:.*]] = ttng.tc_gen5_mma %{{.*}}, %{{.*}}, %[[ACC_TM_SLICE]][], %[[TRUE]], %[[TRUE]], %[[BAR_SLICE]][%true] {loop.cluster = 0 : i32, loop.stage = 2 : i32}
   // CHECK:   %[[BAR_SLICE:.*]] = ttg.memdesc_subview %[[BAR]][%[[BAR_IDX]]] {loop.cluster = 0 : i32, loop.stage = 3 : i32}
   // CHECK:   ttng.wait_barrier %[[BAR_SLICE]], %[[PHASE]] deps %{{.*}}, %{{.*}} {loop.cluster = 0 : i32, loop.stage = 3 : i32}
-  // CHECK:   %[[CND_TOK:.*]] = scf.if
+  // CHECK:   scf.if
   // CHECK:     %[[ACC_TM_SLICE:.*]] = ttg.memdesc_subview %[[ACC_TM]][%[[BUF_IDX_NEXT_CND]]
-  // CHECK:     %[[LOAD_ACC:.*]], %[[USER_TOK:.*]] = ttng.tmem_load %[[ACC_TM_SLICE]][%[[MMA_TOK]]]
+  // CHECK:     %[[LOAD_ACC:.*]], %[[USER_TOK:.*]] = ttng.tmem_load %[[ACC_TM_SLICE]][]
   // CHECK:     "use"(%[[LOAD_ACC]])
-  // CHECK:     yield %[[USER_TOK]]
-  // CHECK:   } else {
-  // CHECK:     yield %[[MMA_TOK]]
-  // CHECK:   } {loop.cluster = 3 : i32, loop.stage = 3 : i32}
+  // CHECK:   }
   // CHECK:   %[[PHASE_NEG:.*]] = arith.xori %[[PHASE]], %[[C_1]] {loop.cluster = 0 : i32, loop.stage = 2 : i32}
   // CHECK:   %[[BAR_IDX_P1:.*]] = arith.addi %[[BAR_IDX]], %[[C_1]] {loop.cluster = 0 : i32, loop.stage = 2 : i32}
   // CHECK:   %[[BAR_IDX_CND:.*]] = arith.cmpi sge, %[[BAR_IDX_P1]], %[[C_2]] {loop.cluster = 0 : i32, loop.stage = 2 : i32}
   // CHECK:   %[[BAR_IDX_NEXT:.*]] = arith.select %[[BAR_IDX_CND]], %[[C_0]], %[[BAR_IDX_P1]] {loop.cluster = 0 : i32, loop.stage = 2 : i32}
   // CHECK:   %[[PHASE_NEXT:.*]] = arith.select %[[BAR_IDX_CND]], %[[PHASE_NEG]], %[[PHASE]] {loop.cluster = 0 : i32, loop.stage = 2 : i32}
-  // CHECK:   scf.yield %[[CND_TOK]], %[[PHASE_NEXT]], %[[BAR_IDX_NEXT]], %[[BUF_IDX_NEXT_CND]]
+  // CHECK:   scf.yield %{{[0-9]+}}, %[[PHASE_NEXT]], %[[BAR_IDX_NEXT]], %[[BUF_IDX_NEXT_CND]]
   // CHECK: } {tt.scheduled_max_stage = 3 : i32}
   // CHECK: %[[ACC_TM_SLICE:.*]] = ttg.memdesc_subview %[[ACC_TM]][%[[FOR_RES]]#3,
   // CHECK: %[[LOAD_ACC:.*]], %[[RES_TOK:.*]] = ttng.tmem_load %[[ACC_TM_SLICE]][%[[FOR_RES]]#0]
@@ -1113,23 +1110,20 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
   // CHECK:   %[[BUF_IDX_NEXT:.*]] = arith.select %[[BUF_IDX_CND]], %[[C_0]], %[[BUF_IDX_P1]] {loop.cluster = 0 : i32, loop.stage = 2 : i32}
   // CHECK:   %[[BUF_IDX_NEXT_CND:.*]] = arith.select %[[CND]], %[[BUF_IDX]], %[[BUF_IDX_NEXT]]
   // CHECK:   %[[ACC_TM_SLICE:.*]] = ttg.memdesc_subview %[[ACC_TM]][%[[BUF_IDX_NEXT_CND]]{{.*}} {loop.cluster = 0 : i32, loop.stage = 2 : i32}
-  // CHECK:   %[[MMA_TOK:.*]] = ttng.tc_gen5_mma %{{.*}}, %{{.*}}, %[[ACC_TM_SLICE]][%[[TOK]]], %[[CND]], %[[TRUE]], %[[BAR_SLICE]][%true] {loop.cluster = 0 : i32, loop.stage = 2 : i32}
+  // CHECK:   %[[MMA_TOK:.*]] = ttng.tc_gen5_mma %{{.*}}, %{{.*}}, %[[ACC_TM_SLICE]][], %[[CND]], %[[TRUE]], %[[BAR_SLICE]][%true] {loop.cluster = 0 : i32, loop.stage = 2 : i32}
   // CHECK:   %[[BAR_SLICE:.*]] = ttg.memdesc_subview %[[BAR]][%[[BAR_IDX]]] {loop.cluster = 0 : i32, loop.stage = 3 : i32}
   // CHECK:   ttng.wait_barrier %[[BAR_SLICE]], %[[PHASE]] deps %{{.*}}, %{{.*}} {loop.cluster = 0 : i32, loop.stage = 3 : i32}
-  // CHECK:   %[[CND_TOK:.*]] = scf.if
+  // CHECK:   scf.if
   // CHECK:     %[[ACC_TM_SLICE:.*]] = ttg.memdesc_subview %[[ACC_TM]][%[[BUF_IDX_NEXT_CND]]
-  // CHECK:     %[[LOAD_ACC:.*]], %[[USER_TOK:.*]] = ttng.tmem_load %[[ACC_TM_SLICE]][%[[MMA_TOK]]]
+  // CHECK:     %[[LOAD_ACC:.*]], %[[USER_TOK:.*]] = ttng.tmem_load %[[ACC_TM_SLICE]][]
   // CHECK:     "use"(%[[LOAD_ACC]])
-  // CHECK:     scf.yield %[[USER_TOK]]
-  // CHECK:   } else {
-  // CHECK:     scf.yield %[[MMA_TOK]]
-  // CHECK:   } {loop.cluster = 3 : i32, loop.stage = 3 : i32}
+  // CHECK:   }
   // CHECK:   %[[PHASE_NEG:.*]] = arith.xori %[[PHASE]], %[[C_1]] {loop.cluster = 0 : i32, loop.stage = 2 : i32}
   // CHECK:   %[[BAR_IDX_P1:.*]] = arith.addi %[[BAR_IDX]], %[[C_1]] {loop.cluster = 0 : i32, loop.stage = 2 : i32}
   // CHECK:   %[[BAR_IDX_CND:.*]] = arith.cmpi sge, %[[BAR_IDX_P1]], %[[C_2]] {loop.cluster = 0 : i32, loop.stage = 2 : i32}
   // CHECK:   %[[BAR_IDX_NEXT:.*]] = arith.select %[[BAR_IDX_CND]], %[[C_0]], %[[BAR_IDX_P1]] {loop.cluster = 0 : i32, loop.stage = 2 : i32}
   // CHECK:   %[[PHASE_NEXT:.*]] = arith.select %[[BAR_IDX_CND]], %[[PHASE_NEG]], %[[PHASE]] {loop.cluster = 0 : i32, loop.stage = 2 : i32}
-  // CHECK:   scf.yield %[[CND_TOK]], %[[PHASE_NEXT]], %[[BAR_IDX_NEXT]], %[[BUF_IDX_NEXT_CND]]
+  // CHECK:   scf.yield %{{[0-9]+}}, %[[PHASE_NEXT]], %[[BAR_IDX_NEXT]], %[[BUF_IDX_NEXT_CND]]
   // CHECK: } {tt.scheduled_max_stage = 3 : i32}
   // CHECK: %[[ACC_TM_SLICE:.*]] = ttg.memdesc_subview %[[ACC_TM]][%[[FOR_RES]]#3,
   // CHECK: %[[LOAD_ACC:.*]], %[[RES_TOK:.*]] = ttng.tmem_load %[[ACC_TM_SLICE]][%[[FOR_RES]]#0]
