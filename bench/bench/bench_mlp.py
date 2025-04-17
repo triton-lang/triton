@@ -27,7 +27,7 @@ def _query_gpu_specs():
     else:
         cmd = ["rocm-smi", "--showproductname", "-d=0", "--csv"]
         output = subprocess.check_output(cmd, stderr=subprocess.DEVNULL).decode().strip()
-        name = output.splitlines()[1]
+        name = output.splitlines()[1].split(",")[1]
 
     gpu_specs = {
         "NVIDIA H100 80GB HBM3": {"MAX_TFLOPS8": 1979, "MAX_TFLOPS16": 989, "MAX_TBPS": 3.35},
@@ -37,7 +37,7 @@ def _query_gpu_specs():
     return gpu_specs.get(name)
 
 
-SPECS = _query_gpu_specs() if not is_hip() else None
+SPECS = _query_gpu_specs()
 
 
 def quantize(w, dtype, dev, **opt):
