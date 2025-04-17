@@ -71,11 +71,19 @@ def _compute_hist(R, shape_rm, stride_rm,  # routing bitmatrix
         return
     tl.debug_barrier()
     # we are the only block left and all atomics are visible; compute cumsum
-    offs_n = tl.arange(0, N_EXPTS_PAD)
-    hist = tl.load(Hist + offs_n)
-    tok_starts = tl.cumsum(hist, 0)
-    tl.store(TokensStart, 0)
-    tl.store(TokensStart + 1 + offs_n, tok_starts, mask=offs_n < shape_pn)
+
+    loop_iterations = N_EXPTS_PAD // BLOCK_N
+
+    x = tl.zeros([BLOCK_N], Hist.dtype.element_ty)
+    offs_n = tl.arange(0, BLOCK_N)
+
+    for i in range(loop_iterations):
+        hist2 = tl.load(Hist + offs_n)
+        tok_starts = tl.cumsum(hist2, 0) + x
+        x += tl.sum(hist2, 0)
+        tl.store(TokensStart, 0)
+        tl.store(TokensStart + 1 + offs_n, tok_starts, mask=offs_n < shape_pn)
+        offs_n += BLOCK_N
 
 
 @triton.jit

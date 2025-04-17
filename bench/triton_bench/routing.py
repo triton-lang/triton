@@ -54,6 +54,7 @@ def routing(logits, n_expts_act, expt_indx=None):
     assert expt_indx is None
     cdiv = triton.cdiv
     ROUTING_BLOCK_M = 8
+    ROUTING_BLOCK_N = 128
     HIST1_BLOCK_M = 64
     HIST1_BLOCK_N = 32
     HIST2_BLOCK_M = 512
@@ -62,7 +63,7 @@ def routing(logits, n_expts_act, expt_indx=None):
     n_tokens, n_expts_tot = logits.shape
     n_gates = n_tokens * n_expts_act
     dev = logits.device
-    n_expts_pad = cdiv(n_expts_tot, 128) * 128
+    n_expts_pad = cdiv(n_expts_tot, ROUTING_BLOCK_N) * ROUTING_BLOCK_N
     n_expts_words = n_expts_pad // 32
     # scratchpad tensors
     # NOTE: these are not returned
@@ -84,6 +85,7 @@ def routing(logits, n_expts_act, expt_indx=None):
         n_tokens, n_expts_tot,  # shapes
         BLOCK_M=ROUTING_BLOCK_M,  # tunable parameter
         N_EXPTS_PAD=n_expts_pad, N_EXPTS_ACT=n_expts_act,  # constants
+        BLOCK_N=ROUTING_BLOCK_N
     )
     routing_details.histogram._memset_hist[(cdiv(hist.shape[0], MEMSET_BLOCK), )](
         hist, hist.shape[0], tok_starts,  # outputs
