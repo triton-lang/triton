@@ -7,7 +7,7 @@ import triton_bench.swiglu
 from triton_bench.mxfp import downcast_to_mxfp
 from triton_bench.matmul_ogs import MicroscalingCtx, matmul_ogs, PrecisionConfig, FlexCtx
 from triton_bench.numerics import InFlexData
-from triton_bench.routing import routing, routing_torch, simulate_expert_sharded_routing
+from triton_bench.routing import routing, simulate_expert_sharded_routing
 from triton_bench.meta import cuda_capability_geq, is_hip, get_cdna_version
 
 if torch.cuda.is_available() and not is_hip():
@@ -20,20 +20,20 @@ else:
 
 def _query_gpu_specs():
     import subprocess
-    if not is_hip():
-        cmd = ["nvidia-smi", "--query-gpu=name", "--format=csv,noheader", "-i=0"]
-        output = subprocess.check_output(cmd, stderr=subprocess.DEVNULL).decode().strip()
-        name = output.splitlines()[0]
-    else:
+    if is_hip():
         cmd = ["rocm-smi", "--showproductname", "-d=0", "--csv"]
         output = subprocess.check_output(cmd, stderr=subprocess.DEVNULL).decode().strip()
         model = output.splitlines()[1].split(",")[2]
         if model in ["0x74a9", "0x74a1"]:
-            name = "AMD MI300X"
+            name = "AMD Instinct MI300X"
         elif model == "0x74a5":
-            name = "AMD MI325X"
+            name = "AMD Instinct MI325X"
         else:
             name = "AMD"
+    else:
+        cmd = ["nvidia-smi", "--query-gpu=name", "--format=csv,noheader", "-i=0"]
+        output = subprocess.check_output(cmd, stderr=subprocess.DEVNULL).decode().strip()
+        name = output.splitlines()[0]
 
     gpu_specs = {
         "NVIDIA H100 80GB HBM3": {"MAX_TFLOPS8": 1979, "MAX_TFLOPS16": 989, "MAX_TBPS": 3.35},
@@ -73,8 +73,6 @@ def bench_mlp(batch, dim1, dim2, n_expts_tot, n_expts_act, x_dtype, w_dtype,
     assert dim2 % TP == 0
     dev = "cuda"
 
-    # special treatment of fp8_e4m3 on AMD CDNA3 because it uses fp8_e4m3fnuz
-    x_dtype = "fp8_cdna3" if x_dtype == "fp8" and get_cdna_version() == 3 else x_dtype
     # input
     # weights
     wg = torch.randn((dim1, n_expts_tot), device=dev)
@@ -103,7 +101,10 @@ def bench_mlp(batch, dim1, dim2, n_expts_tot, n_expts_act, x_dtype, w_dtype,
     proton.start(str(fpath.with_suffix('')), hook="triton")
     proton.deactivate()
     # run layer
-    x_dtype = {"bf16": torch.bfloat16, "fp8": torch.float8_e4m3fn, "fp8_cdna3": torch.float8_e4m3fnuz}[x_dtype]
+    x_dtype = {"bf16": torch.bfloat16, "fp8": torch.float8_e4m3fn}[x_dtype]
+    # special treatment of fp8_e4m3 on AMD CDNA3 because it uses fp8_e4m3fnuz
+    if x_dtype == torch.float8_e4m3fn and get_cdna_version() == 3:
+        x_dtype = torch.float8_e4m3fnuz
     for i in range(100):
         x = torch.randn((batch, dim1), device=dev)
         x = x.to(wg.dtype if n_expts_tot > 1 else x_dtype)
@@ -111,7 +112,6 @@ def bench_mlp(batch, dim1, dim2, n_expts_tot, n_expts_act, x_dtype, w_dtype,
         if n_expts_tot > 1:
             logits = matmul_ogs(x, wg, bg, precision_config=pcg)
             rdata, gather_indx, scatter_indx = routing(logits, n_expts_act)
-            # rdata, gather_indx, scatter_indx = routing_torch(logits, n_expts_act)
             if EP > 1:
                 proton.deactivate()
                 # TODO: activate proton here when fast expert parallelism simulation is done
