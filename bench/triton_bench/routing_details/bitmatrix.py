@@ -18,10 +18,11 @@ def softmax(x):
 
 
 @triton.jit
-def load_logits_topk(X, stride_xm, n_expts_tot, offs_m, mask_m, N_EXPTS_PAD: tl.constexpr, N_EXPTS_ACT: tl.constexpr, BLOCK_N: tl.constexpr):
+def load_logits_topk(X, stride_xm, n_expts_tot, offs_m, mask_m, N_EXPTS_PAD: tl.constexpr, N_EXPTS_ACT: tl.constexpr,
+                     BLOCK_N: tl.constexpr):
 
     # subtract 1 from loop iterations because we peel the first (masked) iteration:
-    loop_iterations : tl.constexpr = N_EXPTS_PAD // BLOCK_N - 1
+    loop_iterations: tl.constexpr = N_EXPTS_PAD // BLOCK_N - 1
 
     offs_x_n = loop_iterations * BLOCK_N + tl.arange(0, BLOCK_N)
     mask_n = offs_x_n[None, :] < n_expts_tot
@@ -51,7 +52,8 @@ def load_logits_topk(X, stride_xm, n_expts_tot, offs_m, mask_m, N_EXPTS_PAD: tl.
 def _compute_bitmatrix(X, stride_xm,  # logits
                        Yv, Yi, stride_ym,  # topk values/indices
                        Routing, stride_rm, n_rows,  # routing bitmatrix
-                       n_expts_tot, BLOCK_M: tl.constexpr, N_EXPTS_PAD: tl.constexpr, N_EXPTS_ACT: tl.constexpr, BLOCK_N: tl.constexpr):
+                       n_expts_tot, BLOCK_M: tl.constexpr, N_EXPTS_PAD: tl.constexpr, N_EXPTS_ACT: tl.constexpr,
+                       BLOCK_N: tl.constexpr):
 
     tl.static_assert(BLOCK_N % 32 == 0)
     tl.static_assert(N_EXPTS_PAD % BLOCK_N == 0)

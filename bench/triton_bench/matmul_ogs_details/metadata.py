@@ -22,9 +22,9 @@ def _memset_metadata(Metadata, metadata_size, BLOCK: tl.constexpr):
 
 @triton.jit
 def _compute_metadata_1(Hist, n_expts_tot, MDHist, MDTokStarts, MDTileStarts, MDTileInfo, N_EXPTS_PAD: tl.constexpr,
-                      BLOCK: tl.constexpr, TILE_DIM: tl.constexpr):
+                        BLOCK: tl.constexpr, TILE_DIM: tl.constexpr):
 
-    BLOCK_N : tl.constexpr = 1024
+    BLOCK_N: tl.constexpr = 1024
 
     x_tok = tl.zeros([BLOCK_N], dtype=MDTokStarts.dtype.element_ty)
     x_tile = tl.zeros([BLOCK_N], dtype=MDTileStarts.dtype.element_ty)
@@ -36,7 +36,7 @@ def _compute_metadata_1(Hist, n_expts_tot, MDHist, MDTokStarts, MDTileStarts, MD
         offs_n = tl.arange(0, BLOCK_N) + i
         mask = offs_n < n_expts_tot
         hist_tok = tl.load(Hist + offs_n, mask=mask)
-        hist_tile = tl.cdiv(hist_tok, TILE_DIM)        
+        hist_tile = tl.cdiv(hist_tok, TILE_DIM)
         tok_starts = tl.cumsum(hist_tok, 0) + x_tok
         x_tok += tl.sum(hist_tok, 0)
         tile_starts = tl.cumsum(hist_tile, 0) + x_tile
@@ -48,7 +48,7 @@ def _compute_metadata_1(Hist, n_expts_tot, MDHist, MDTokStarts, MDTileStarts, MD
 
 @triton.jit
 def _compute_metadata_2(Hist, n_expts_tot, MDHist, MDTokStarts, MDTileStarts, MDTileInfo, N_EXPTS_PAD: tl.constexpr,
-                      BLOCK: tl.constexpr, TILE_DIM: tl.constexpr):
+                        BLOCK: tl.constexpr, TILE_DIM: tl.constexpr):
 
     expt_id = tl.program_id(0)
     n_tokens = tl.load(Hist + expt_id)
@@ -88,11 +88,11 @@ def compute_metadata(routing_data, n_rows, block_m):
     )
     for kernel, num_blocks in [(_compute_metadata_1, 1), (_compute_metadata_2, n_expts_tot)]:
         kernel[(num_blocks, )](
-        routing_data.expt_hist, n_expts_tot,  # inputs
-        md_hist, md_tok_starts, md_tile_starts, md_tile_infos,  # outputs
-        BLOCK=HIST2_BLOCK_M,  # optimization parameters
-        N_EXPTS_PAD=n_expts_pad, TILE_DIM=block_m,  # constants
-    )
+            routing_data.expt_hist, n_expts_tot,  # inputs
+            md_hist, md_tok_starts, md_tile_starts, md_tile_infos,  # outputs
+            BLOCK=HIST2_BLOCK_M,  # optimization parameters
+            N_EXPTS_PAD=n_expts_pad, TILE_DIM=block_m,  # constants
+        )
     hist = metadata[:n_expts_tot]
     offs = metadata[n_expts_tot:2 * n_expts_tot + 1]
     offs_sum = metadata[3 * n_expts_tot + 2 - 1]

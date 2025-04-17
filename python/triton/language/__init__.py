@@ -152,6 +152,7 @@ __all__ = [
     "atomic_xchg",
     "atomic_xor",
     "bfloat16",
+    "bitonic_merge",
     "block_type",
     "broadcast",
     "broadcast_to",

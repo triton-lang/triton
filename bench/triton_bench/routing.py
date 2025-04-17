@@ -85,8 +85,7 @@ def routing(logits, n_expts_act, expt_indx=None):
         n_tokens, n_expts_tot,  # shapes
         BLOCK_M=ROUTING_BLOCK_M,  # tunable parameter
         N_EXPTS_PAD=n_expts_pad, N_EXPTS_ACT=n_expts_act,  # constants
-        BLOCK_N=ROUTING_BLOCK_N
-    )
+        BLOCK_N=ROUTING_BLOCK_N)
     routing_details.histogram._memset_hist[(cdiv(hist.shape[0], MEMSET_BLOCK), )](
         hist, hist.shape[0], tok_starts,  # outputs
         BLOCK=MEMSET_BLOCK  # tunable parameter
