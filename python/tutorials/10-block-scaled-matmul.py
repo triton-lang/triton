@@ -346,6 +346,7 @@ def show_profile(profile_name):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
+    parser.add_argument("-K", type=int, required=False, default=512)
     parser.add_argument("--K_range", type=int, nargs=2)
     parser.add_argument("--K_step", type=int, default=512)
     parser.add_argument("--bench", action="store_true", default=True)
