@@ -145,11 +145,11 @@ def TTG_LocalAllocOp : TTG_Op<"local_alloc", [DeclareOpInterfaceMethods<MemoryEf
 
     Explicitly deallocating a buffer is optional; see local_dealloc.
   }];
-  let arguments = (ins
+  let arguments = (
+    ins
     Optional<TT_Tensor>:$src,
     OptionalAttr<I32Attr>:$alignment
   );
-  let results = (outs TTG_MemDescType:$result);
 
   let builders = [
     OpBuilder<(ins "Type":$result),
@@ -171,12 +171,13 @@ def TTG_LocalAllocOp : TTG_Op<"local_alloc", [DeclareOpInterfaceMethods<MemoryEf
     ($src^)? attr-dict `:` functional-type(operands, results)
   }];
 
+  let results = (outs TTG_MemDescType:$result);
   let hasFolder = 1;
   let hasVerifier = 1;
 }
 
 // Deallocate shared memory
-def TTG_LocalDeallocOp : TTG_Op<"local_dealloc"> {
+def TTG_LocalDeallocOp : TTG_Op<"local_dealloc", [MemoryEffects<[MemFree<SharedMemory>]>]> {
   let summary = "dealloc buffer";
 
   let description = [{
@@ -193,7 +194,7 @@ def TTG_LocalDeallocOp : TTG_Op<"local_dealloc"> {
     operand.
   }];
 
-  let arguments = (ins Arg<TTG_MemDescType, "", [MemFree<SharedMemory>]>:$src);
+  let arguments = (ins TTG_MemDescType:$src);
 
   // Use qualified() otherwise "!ttg.memdesc<X>" is printed as "<X>".
   let assemblyFormat = [{$src attr-dict `:` qualified(type($src))}];
@@ -259,7 +260,6 @@ def TTG_LocalLoadOp : TTG_Op<"local_load"> {
     Arg<TTG_MemDescType, "", [MemRead<SharedMemory>]>:$src,
     Optional<TTG_AsyncToken>:$token
   );
-  let results = (outs TT_Tensor:$result);
 
   let builders = [
       OpBuilder<(ins "Type":$retType, "Value":$src),
@@ -270,6 +270,7 @@ def TTG_LocalLoadOp : TTG_Op<"local_load"> {
   // Use qualified() otherwise "!ttg.memdesc<X>" is printed as "<X>".
   let assemblyFormat = [{$src (`token` $token^)? attr-dict `:` qualified(type($src)) `->` type($result)}];
 
+  let results = (outs TT_Tensor:$result);
 }
 
 def TTG_LocalStoreOp : TTG_Op<"local_store"> {
@@ -317,7 +318,7 @@ def TTG_Fp4ToFpOp : TTG_Op<"fp4_to_fp", [Pure]> {
 }
 
 // Allocate global memory
-def TTG_GlobalScratchAllocOp : TTG_Op<"global_scratch_alloc"> {
+def TTG_GlobalScratchAllocOp : TTG_Op<"global_scratch_alloc", [MemoryEffects<[MemAlloc<GlobalMemory>]>]> {
   let summary = "allocate a global memory buffer";
   let description = [{
     This operation allocates a buffer in global memory that is private to the current program.
@@ -327,7 +328,7 @@ def TTG_GlobalScratchAllocOp : TTG_Op<"global_scratch_alloc"> {
     I32Attr:$nbytes,
     I32Attr:$alignment
   );
-  let results = (outs Arg<TT_Ptr, "", [MemAlloc<GlobalMemory>]>:$result);
+  let results = (outs TT_Ptr:$result);
 
   let builders = [
     OpBuilder<(ins "Type":$result, "int32_t":$nbytes, "int32_t":$alignment),

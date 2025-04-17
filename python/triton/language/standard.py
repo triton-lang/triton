@@ -441,6 +441,15 @@ def topk(x, k: core.constexpr, dim: core.constexpr = None):
     return sort_impl(x, k=k, dim=dim, descending=True)
 
 
+@jit
+def bitonic_merge(x, dim: core.constexpr = None, descending: core.constexpr = core.CONSTEXPR_0):
+    # handle default dimension or check that it is the most minor dim
+    _dim: core.constexpr = len(x.shape) - 1 if dim is None else dim
+    core.static_assert(_dim == len(x.shape) - 1, "only minor dimension is currently supported")
+    n_dims: core.constexpr = _log2(x.shape[-1])
+    return _bitonic_merge(x, n_dims, descending, n_dims)
+
+
 def _get_flip_dim(dim, shape):
     dim = core._unwrap_if_constexpr(dim)
     shape = core._unwrap_if_constexpr(shape)

@@ -54,15 +54,17 @@ def routing(logits, n_expts_act, expt_indx=None):
     assert expt_indx is None
     cdiv = triton.cdiv
     ROUTING_BLOCK_M = 8
+    ROUTING_BLOCK_N = 128
     HIST1_BLOCK_M = 64
     HIST1_BLOCK_N = 32
+    HIST1_BLOCK_N2 = 512
     HIST2_BLOCK_M = 512
     MEMSET_BLOCK = 512
     assert logits.dtype.itemsize == 2
     n_tokens, n_expts_tot = logits.shape
     n_gates = n_tokens * n_expts_act
     dev = logits.device
-    n_expts_pad = cdiv(n_expts_tot, 128) * 128
+    n_expts_pad = cdiv(n_expts_tot, ROUTING_BLOCK_N) * ROUTING_BLOCK_N
     n_expts_words = n_expts_pad // 32
     # scratchpad tensors
     # NOTE: these are not returned
@@ -84,7 +86,7 @@ def routing(logits, n_expts_act, expt_indx=None):
         n_tokens, n_expts_tot,  # shapes
         BLOCK_M=ROUTING_BLOCK_M,  # tunable parameter
         N_EXPTS_PAD=n_expts_pad, N_EXPTS_ACT=n_expts_act,  # constants
-    )
+        BLOCK_N=ROUTING_BLOCK_N)
     routing_details.histogram._memset_hist[(cdiv(hist.shape[0], MEMSET_BLOCK), )](
         hist, hist.shape[0], tok_starts,  # outputs
         BLOCK=MEMSET_BLOCK  # tunable parameter
@@ -94,7 +96,7 @@ def routing(logits, n_expts_act, expt_indx=None):
         hist,  # output [histogram]
         tok_starts, partial_hist, partial_hist.stride(0), partial_hist.shape[1],  # output [cumsums]
         BLOCK_M=HIST1_BLOCK_M, BLOCK_N=HIST1_BLOCK_N,  # tunable parameters
-        N_EXPTS_PAD=n_expts_pad,  # constants
+        BLOCK_N2=HIST1_BLOCK_N2,  # constants
     )
     routing_details.histogram._finalize_hist[(n_expts_tot, )](
         tok_starts, partial_hist,  # inputs
@@ -106,7 +108,7 @@ def routing(logits, n_expts_act, expt_indx=None):
         expt_scal, expt_indx, partial_offs, partial_offs.stride(0), n_gates,  # input
         BLOCK_M=HIST1_BLOCK_M,  # tunable parameters
         N_EXPTS_ACT=n_expts_act,  # constants
-    )
+        num_warps=1 if HIST1_BLOCK_M * n_expts_act // 32 < 4 else 4)
     # pack the matmul data structure
     gather_indx = GatherIndx(src_indx=topk_indx, dst_indx=gate_indx)
     scatter_indx = ScatterIndx(src_indx=gate_indx, dst_indx=topk_indx)
@@ -125,7 +127,8 @@ def routing_torch(logits, n_expts_act, expt_indx=None):
         return tk_val, tk_idx
 
     _, n_expts_tot = logits.shape
-    expt_scal, expt_indx = topk(torch.softmax(logits, -1), n_expts_act, expt_indx)
+    expt_scal, expt_indx = topk(logits, n_expts_act, expt_indx)
+    expt_scal = torch.softmax(expt_scal, dim=-1)
     # Sort each token's selections by expert
     expt_indx, sort_indices = torch.sort(expt_indx, dim=1)
     expt_scal = torch.gather(expt_scal, 1, sort_indices)

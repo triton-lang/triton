@@ -488,17 +488,6 @@ LogicalResult LocalAllocOp::verify() {
   return success();
 }
 
-int32_t LocalAllocOp::getAlignmentOrDefault() {
-  auto align = getAlignment();
-  if (align) {
-    return *align;
-  }
-
-  auto ty = getType();
-  auto enc = dyn_cast<SharedEncodingTrait>(ty.getEncoding());
-  return enc ? enc.getAlignment() : 16;
-}
-
 // LocalStoreOp
 LogicalResult LocalStoreOp::verify() {
   if (!getDst().getType().getMutableMemory())
@@ -578,6 +567,19 @@ LogicalResult MemDescSubviewOp::verify() {
   // resulting code ultimately works.
 
   return success();
+}
+
+// -- LocalAllocOp --
+
+int32_t LocalAllocOp::getAlignmentOrDefault() {
+  auto align = getAlignment();
+  if (align) {
+    return *align;
+  }
+
+  auto ty = getType();
+  auto enc = dyn_cast<SharedEncodingTrait>(ty.getEncoding());
+  return enc ? enc.getAlignment() : 16;
 }
 
 // -- WarpSpecializeOp --
