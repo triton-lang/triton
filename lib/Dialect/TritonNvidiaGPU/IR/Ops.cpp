@@ -423,7 +423,6 @@ LogicalResult TMEMStoreOp::verify() {
 }
 
 // -- TMEMLoadOp --
-// -- TMEMLoadOp --
 LogicalResult TMEMLoadOp::verify() {
   if (!isa<triton::nvidia_gpu::TensorMemorySpaceAttr>(
           getSrc().getType().getMemorySpace()))
