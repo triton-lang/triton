@@ -6,6 +6,7 @@ from . import extra
 from .standard import (
     argmax,
     argmin,
+    bitonic_merge,
     cdiv,
     cumprod,
     cumsum,
@@ -151,6 +152,7 @@ __all__ = [
     "atomic_xchg",
     "atomic_xor",
     "bfloat16",
+    "bitonic_merge",
     "block_type",
     "broadcast",
     "broadcast_to",

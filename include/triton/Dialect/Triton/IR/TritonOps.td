@@ -309,8 +309,7 @@ def TT_StoreOp : TT_Op<"store", [
 ]> {
     let summary = "Store by a tensor of pointers or by a tensor pointer";
 
-    let arguments = (
-      ins
+    let arguments = (ins
       Arg<AnyTypeOf<[TT_PtrLike, TT_TensorPtr]>, "", [MemWrite<GlobalMemory>]>:$ptr,
       TT_Type:$value,
       Optional<TT_BoolLike>:$mask,
@@ -367,7 +366,7 @@ def TT_AtomicRMWOp : TT_Op<"atomic_rmw", [
 
     let arguments = (ins
       TT_AtomicRMWAttr:$atomic_rmw_op,
-      Arg<TT_PtrLike, "", [MemWrite<GlobalMemory>, MemRead<GlobalMemory>]>:$ptr,
+      Arg<TT_PtrLike, "", [MemRead<GlobalMemory>, MemWrite<GlobalMemory>]>:$ptr,
       TT_Type:$val,
       Optional<TT_BoolLike>:$mask,
       TT_MemSemanticAttr:$sem,
@@ -399,11 +398,12 @@ def TT_AtomicCASOp : TT_Op<"atomic_cas", [SameOperandsAndResultShape,
     }];
 
     let arguments = (ins
-      Arg<TT_PtrLike, "", [MemWrite<GlobalMemory>, MemRead<GlobalMemory>]>:$ptr,
+      Arg<TT_PtrLike, "", [MemRead<GlobalMemory>, MemWrite<GlobalMemory>]>:$ptr,
       TT_Type:$cmp,
       TT_Type:$val,
       TT_MemSemanticAttr:$sem,
-      TT_MemSyncScopeAttr:$scope);
+      TT_MemSyncScopeAttr:$scope
+    );
 
     let results = (outs TT_Type:$result);
 
@@ -505,7 +505,8 @@ def TT_CatOp : TT_Op<"cat", [Pure,
     let assemblyFormat = "$lhs `,` $rhs attr-dict `:` type($lhs) `->` type($result)";
 }
 
-def TT_JoinOp : TT_Op<"join", [Pure, SameTypeOperands]> {
+def TT_JoinOp : TT_Op<"join", [
+    Pure, SameTypeOperands]> {
     let summary = "join two tensors along a new, minor dimension";
     let description = [{
         For example, if the two input tensors are 4x8xf32, returns a tensor of
@@ -1341,7 +1342,7 @@ def TT_DescriptorGatherOp : TT_Op<"descriptor_gather"> {
 }
 
 def TT_DescriptorScatterOp : TT_Op<"descriptor_scatter"> {
-  let summary = "scatter multiple rows from a tensor into a descriptor";
+  let summary = "scatter multiple rows to a descriptor from a single tensor";
   let description = [{
     The `tt.descriptor_scatter` op will be lowered to NVIDIA TMA
     scatter operations on targets that support it.
