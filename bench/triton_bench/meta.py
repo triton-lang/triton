@@ -92,8 +92,8 @@ def cuda_capability_geq(major, minor=0):
 def get_cdna_version():
     """
     Gets the AMD architecture version, i.e. CDNA3 or CDNA4, currently
-    only supports 3 (gfx942) or 4 (gfx950). Returns -1 if either not AMD
-    or unsupported architecture
+    only supports 3 (gfx942) or 4 (gfx950). Returns -1 if it is not AMD
+    hardware or unsupported architecture
     """
     target = triton.runtime.driver.active.get_current_target()
     if target.backend != 'hip':
