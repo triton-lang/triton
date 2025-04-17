@@ -319,9 +319,13 @@ static void _launch(int gridX, int gridY, int gridZ, int num_warps, int num_ctas
       clusterAttr.value.clusterDim.x = clusterDimX;
       clusterAttr.value.clusterDim.y = clusterDimY;
       clusterAttr.value.clusterDim.z = clusterDimZ;
-      clusterAttr.id = CU_LAUNCH_ATTRIBUTE_CLUSTER_SCHEDULING_POLICY_PREFERENCE;
-      clusterAttr.value.clusterSchedulingPolicyPreference = CU_CLUSTER_SCHEDULING_POLICY_SPREAD;
       launchAttr[num_attrs] = clusterAttr;
+      ++num_attrs;
+
+      CUlaunchAttribute clusterSchedulingAttr = {{}};
+      clusterSchedulingAttr.id = CU_LAUNCH_ATTRIBUTE_CLUSTER_SCHEDULING_POLICY_PREFERENCE;
+      clusterSchedulingAttr.value.clusterSchedulingPolicyPreference = CU_CLUSTER_SCHEDULING_POLICY_SPREAD;
+      launchAttr[num_attrs] = clusterSchedulingAttr;
       ++num_attrs;
     }}
 
