@@ -6,7 +6,6 @@ import hashlib
 import subprocess
 import tempfile
 import triton
-import torch
 from pathlib import Path
 from triton.runtime.build import _build
 from triton.runtime.cache import get_cache_manager
@@ -539,6 +538,7 @@ class TmaDescKernelParam:
     TMA_DESC_SIZE = 128
 
     def __init__(self):
+        import torch
         self.desc = torch.empty(self.TMA_DESC_SIZE, dtype=torch.uint8, device="cpu")
 
     # Return a CUtensorMap* pointer in host memory
