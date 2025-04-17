@@ -21,7 +21,11 @@ namespace gpu {
 // -- StackAllocOp --
 LogicalResult StackAllocOp::verify() {
   auto bufferTy = mlir::cast<triton::gpu::MemDescType>(getData().getType());
+  auto elemTy = bufferTy.getElementType();
   auto rank = bufferTy.getRank();
+  
+  if(!isa<IntegerType>(elemTy) || elemTy.getIntOrFloatBitWidth() != 32)
+	  return emitOpError("proton stack buffer element type must be int 32");
 
   if (rank > 1)
     return emitOpError("proton stack currently only supports 1-D shapes");

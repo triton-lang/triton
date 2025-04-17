@@ -10,20 +10,6 @@
 using namespace mlir;
 using namespace mlir::triton;
 
-static std::string getConstraintForBitwidth(unsigned bitwidth) {
-  switch (bitwidth) {
-  case 8:
-  case 16:
-    return "h";
-  case 32:
-    return "r";
-  case 64:
-    return "l";
-  default:
-    llvm_unreachable("unsupported bitwidth");
-  }
-}
-
 namespace {
 
 // Circular strategy memory layout of profiled data (total: N bytes).
@@ -52,7 +38,6 @@ struct CircularStoreOpConversion
                   ConversionPatternRewriter &rewriter) const override {
     auto loc = op.getLoc();
     auto mod = op.getOperation()->getParentOfType<ModuleOp>();
-    auto ctx = rewriter.getContext();
     auto b = TritonLLVMOpBuilder(loc, rewriter);
     const int bytesPerEntry = proton::gpu::getBytesPerClockEntry();
     const int wordsPerEntry = bytesPerEntry / 4; // 1 word = 4 bytes
@@ -93,7 +78,7 @@ struct CircularStoreOpConversion
     Value tag = op.getIsStart() ? b.i32_val(op.getScopeId())
                                 : b.i32_val(1 << 31 | op.getScopeId());
     Value clock = op.getCounter();
-    Value vecVal = packLLVector(loc, {tag, clock}, rewriter);
+    Value valsVec  = packLLVector(loc, {tag, clock}, rewriter);
 
     // Compute the predicate for the writer.
     const int warpSize = triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod);
@@ -117,31 +102,10 @@ struct CircularStoreOpConversion
     uint32_t AddrSpace =
         cast<LLVM::LLVMPointerType>(bufferPtrTy).getAddressSpace();
     if (AddrSpace == 1) {
-      // Store stack
-      auto vecTy = cast<VectorType>(vecVal.getType());
-      Type elemTy = vecTy.getElementType();
-      unsigned vecSize = vecTy.getNumElements();
-      unsigned elemBitwidth = elemTy.getIntOrFloatBitWidth();
-      PTXBuilder builder;
-      auto &st = builder.create<>("st")
-                     ->global()
-                     .v(vecSize, /*predicate=*/vecSize > 1)
-                     .b(elemBitwidth);
-      auto *ptrOpr = builder.newAddrOperand(vecPtr, "r");
-
-      PTXBuilder::Operand *valOpr;
-      std::string constraint = getConstraintForBitwidth(elemBitwidth);
-      SmallVector<std::pair<Value, std::string>> vecVals;
-      for (int i = 0; i < vecSize; i++) {
-        vecVals.push_back(
-            {b.extract_element(vecVal, b.i32_val(i)), constraint});
-      }
-      valOpr = builder.newListOperand(vecVals);
-      st(ptrOpr, valOpr).predicate(isWriter, "b");
-      builder.launch(rewriter, loc, void_ty(ctx));
+      llvm::report_fatal_error("unimplemented");
     } else if (AddrSpace == 3) {
       targetInfo.getTritonTargetInfo().storeDShared(rewriter, loc, vecPtr,
-                                                    std::nullopt, vecVal,
+                                                    std::nullopt, valsVec ,
                                                     /*pred=*/isWriter);
     } else {
       llvm::report_fatal_error("unsupported address space in circular store");
