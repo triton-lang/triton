@@ -30,7 +30,7 @@ Extra Credits:
 * Original flash attention paper (https://arxiv.org/abs/2205.14135)
 * Rabe and Staats (https://arxiv.org/pdf/2112.05682v2.pdf)
 
-.. GENERATED FROM PYTHON SOURCE LINES 15-824
+.. GENERATED FROM PYTHON SOURCE LINES 15-821
 
 
 
@@ -63,28 +63,27 @@ Extra Credits:
 
  .. code-block:: none
 
-    TMA benchmarks will be running with experimental grid constant TMA descriptor.
     fused-attention-batch4-head32-d64-fwd-causal=True:
          N_CTX  Triton [FP16]  Triton [FP8]
-    0   1024.0     113.204197     84.703311
-    1   2048.0     139.307325    103.605346
-    2   4096.0     152.008453    114.892261
-    3   8192.0     164.105429    120.638371
-    4  16384.0     168.575529    123.824235
+    0   1024.0     112.921513     84.895183
+    1   2048.0     138.561085    103.715245
+    2   4096.0     154.154567    114.702181
+    3   8192.0     164.593447    121.239085
+    4  16384.0     170.753680    123.706539
     fused-attention-batch4-head32-d64-fwd-causal=False:
          N_CTX  Triton [FP16]  Triton [FP8]
-    0   1024.0     157.778507    116.275302
-    1   2048.0     166.687194    117.213804
-    2   4096.0     170.232549    117.097148
-    3   8192.0     175.044006    119.537084
-    4  16384.0     174.556685    119.562033
+    0   1024.0     158.840438    116.747120
+    1   2048.0     168.186998    117.186145
+    2   4096.0     170.867514    118.179133
+    3   8192.0     171.337793    118.964936
+    4  16384.0     160.649607    119.578688
     fused-attention-batch4-head32-d64-bwd-causal=True:
          N_CTX  Triton [FP16]  Triton [FP8]
-    0   1024.0      36.000433     35.933003
-    1   2048.0      44.039022     44.144760
-    2   4096.0      49.277980     49.200562
-    3   8192.0      52.135537     52.223780
-    4  16384.0      53.665087     53.673942
+    0   1024.0      36.069692     35.913877
+    1   2048.0      44.058297     44.092069
+    2   4096.0      49.240273     49.210871
+    3   8192.0      52.188245     52.424705
+    4  16384.0      53.790907     53.780669
 
 
 
@@ -98,10 +97,15 @@ Extra Credits:
 
     import pytest
     import torch
-    from triton.tools.tensor_descriptor import TensorDescriptor
 
     import triton
     import triton.language as tl
+
+    try:
+        from triton.tools.tensor_descriptor import TensorDescriptor
+        HAS_TENSOR_DESC = True
+    except ModuleNotFoundError:
+        HAS_TENSOR_DESC = False
 
     DEVICE = triton.runtime.driver.active.get_active_torch_device()
 
@@ -115,15 +119,7 @@ Extra Credits:
 
 
     def supports_tma():
-        return is_cuda() and torch.cuda.get_device_capability()[0] >= 9
-
-
-    HAS_TMA_DESC = "nv_tma_desc_type" in dir(tl)
-
-    if HAS_TMA_DESC:
-        print("TMA benchmarks will be running with experimental grid constant TMA descriptor.", )
-    else:
-        print("TMA benchmarks will be running without grid constant TMA descriptor.", )
+        return HAS_TENSOR_DESC and is_cuda() and torch.cuda.get_device_capability()[0] >= 9
 
 
     @triton.jit
@@ -908,7 +904,7 @@ Extra Credits:
 
 .. rst-class:: sphx-glr-timing
 
-   **Total running time of the script:** (0 minutes 52.699 seconds)
+   **Total running time of the script:** (0 minutes 53.336 seconds)
 
 
 .. _sphx_glr_download_getting-started_tutorials_06-fused-attention.py:

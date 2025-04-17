@@ -125,28 +125,27 @@ to download the full example code.</p>
 <li><img src="../../_images/sphx_glr_06-fused-attention_002.png" srcset="../../_images/sphx_glr_06-fused-attention_002.png" alt="06 fused attention" class = "sphx-glr-multi-img"/></li>
 <li><img src="../../_images/sphx_glr_06-fused-attention_003.png" srcset="../../_images/sphx_glr_06-fused-attention_003.png" alt="06 fused attention" class = "sphx-glr-multi-img"/></li>
 </ul>
-<div class="sphx-glr-script-out highlight-none notranslate"><div class="highlight"><pre><span></span>TMA benchmarks will be running with experimental grid constant TMA descriptor.
-fused-attention-batch4-head32-d64-fwd-causal=True:
+<div class="sphx-glr-script-out highlight-none notranslate"><div class="highlight"><pre><span></span>fused-attention-batch4-head32-d64-fwd-causal=True:
      N_CTX  Triton [FP16]  Triton [FP8]
-0   1024.0     113.204197     84.703311
-1   2048.0     139.307325    103.605346
-2   4096.0     152.008453    114.892261
-3   8192.0     164.105429    120.638371
-4  16384.0     168.575529    123.824235
+0   1024.0     112.921513     84.895183
+1   2048.0     138.561085    103.715245
+2   4096.0     154.154567    114.702181
+3   8192.0     164.593447    121.239085
+4  16384.0     170.753680    123.706539
 fused-attention-batch4-head32-d64-fwd-causal=False:
      N_CTX  Triton [FP16]  Triton [FP8]
-0   1024.0     157.778507    116.275302
-1   2048.0     166.687194    117.213804
-2   4096.0     170.232549    117.097148
-3   8192.0     175.044006    119.537084
-4  16384.0     174.556685    119.562033
+0   1024.0     158.840438    116.747120
+1   2048.0     168.186998    117.186145
+2   4096.0     170.867514    118.179133
+3   8192.0     171.337793    118.964936
+4  16384.0     160.649607    119.578688
 fused-attention-batch4-head32-d64-bwd-causal=True:
      N_CTX  Triton [FP16]  Triton [FP8]
-0   1024.0      36.000433     35.933003
-1   2048.0      44.039022     44.144760
-2   4096.0      49.277980     49.200562
-3   8192.0      52.135537     52.223780
-4  16384.0      53.665087     53.673942
+0   1024.0      36.069692     35.913877
+1   2048.0      44.058297     44.092069
+2   4096.0      49.240273     49.210871
+3   8192.0      52.188245     52.424705
+4  16384.0      53.790907     53.780669
 </pre></div>
 </div>
 <div class="line-block">
@@ -154,10 +153,15 @@ fused-attention-batch4-head32-d64-bwd-causal=True:
 </div>
 <div class="highlight-Python notranslate"><div class="highlight"><pre><span></span><span class="kn">import</span><span class="w"> </span><span class="nn">pytest</span>
 <span class="kn">import</span><span class="w"> </span><span class="nn">torch</span>
-<span class="kn">from</span><span class="w"> </span><span class="nn">triton.tools.tensor_descriptor</span><span class="w"> </span><span class="kn">import</span> <span class="n">TensorDescriptor</span>
 
 <span class="kn">import</span><span class="w"> </span><span class="nn">triton</span>
 <span class="kn">import</span><span class="w"> </span><span class="nn">triton.language</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">tl</span>
+
+<span class="k">try</span><span class="p">:</span>
+    <span class="kn">from</span><span class="w"> </span><span class="nn">triton.tools.tensor_descriptor</span><span class="w"> </span><span class="kn">import</span> <span class="n">TensorDescriptor</span>
+    <span class="n">HAS_TENSOR_DESC</span> <span class="o">=</span> <span class="kc">True</span>
+<span class="k">except</span> <span class="ne">ModuleNotFoundError</span><span class="p">:</span>
+    <span class="n">HAS_TENSOR_DESC</span> <span class="o">=</span> <span class="kc">False</span>
 
 <span class="n">DEVICE</span> <span class="o">=</span> <span class="n">triton</span><span class="o">.</span><span class="n">runtime</span><span class="o">.</span><span class="n">driver</span><span class="o">.</span><span class="n">active</span><span class="o">.</span><span class="n">get_active_torch_device</span><span class="p">()</span>
 
@@ -171,15 +175,7 @@ fused-attention-batch4-head32-d64-bwd-causal=True:
 
 
 <span class="k">def</span><span class="w"> </span><span class="nf">supports_tma</span><span class="p">():</span>
-    <span class="k">return</span> <span class="n">is_cuda</span><span class="p">()</span> <span class="ow">and</span> <span class="n">torch</span><span class="o">.</span><span class="n">cuda</span><span class="o">.</span><span class="n">get_device_capability</span><span class="p">()[</span><span class="mi">0</span><span class="p">]</span> <span class="o">&gt;=</span> <span class="mi">9</span>
-
-
-<span class="n">HAS_TMA_DESC</span> <span class="o">=</span> <span class="s2">&quot;nv_tma_desc_type&quot;</span> <span class="ow">in</span> <span class="nb">dir</span><span class="p">(</span><span class="n">tl</span><span class="p">)</span>
-
-<span class="k">if</span> <span class="n">HAS_TMA_DESC</span><span class="p">:</span>
-    <span class="nb">print</span><span class="p">(</span><span class="s2">&quot;TMA benchmarks will be running with experimental grid constant TMA descriptor.&quot;</span><span class="p">,</span> <span class="p">)</span>
-<span class="k">else</span><span class="p">:</span>
-    <span class="nb">print</span><span class="p">(</span><span class="s2">&quot;TMA benchmarks will be running without grid constant TMA descriptor.&quot;</span><span class="p">,</span> <span class="p">)</span>
+    <span class="k">return</span> <span class="n">HAS_TENSOR_DESC</span> <span class="ow">and</span> <span class="n">is_cuda</span><span class="p">()</span> <span class="ow">and</span> <span class="n">torch</span><span class="o">.</span><span class="n">cuda</span><span class="o">.</span><span class="n">get_device_capability</span><span class="p">()[</span><span class="mi">0</span><span class="p">]</span> <span class="o">&gt;=</span> <span class="mi">9</span>
 
 
 <span class="nd">@triton</span><span class="o">.</span><span class="n">jit</span>
@@ -962,7 +958,7 @@ fused-attention-batch4-head32-d64-bwd-causal=True:
     <span class="n">bench_flash_attention</span><span class="o">.</span><span class="n">run</span><span class="p">(</span><span class="n">save_path</span><span class="o">=</span><span class="s2">&quot;.&quot;</span><span class="p">,</span> <span class="n">print_data</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
 </pre></div>
 </div>
-<p class="sphx-glr-timing"><strong>Total running time of the script:</strong> (0 minutes 52.699 seconds)</p>
+<p class="sphx-glr-timing"><strong>Total running time of the script:</strong> (0 minutes 53.336 seconds)</p>
 <div class="sphx-glr-footer sphx-glr-footer-example docutils container" id="sphx-glr-download-getting-started-tutorials-06-fused-attention-py">
 <div class="sphx-glr-download sphx-glr-download-jupyter docutils container">
 <p><a class="reference download internal" download="" href="../../_downloads/3176accb6c7288b0e45f41d94eebacb9/06-fused-attention.ipynb"><code class="xref download docutils literal notranslate"><span class="pre">Download</span> <span class="pre">Jupyter</span> <span class="pre">notebook:</span> <span class="pre">06-fused-attention.ipynb</span></code></a></p>
