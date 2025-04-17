@@ -4,6 +4,7 @@
 #include "mlir/Conversion/LLVMCommon/Pattern.h"
 #include "mlir/Conversion/LLVMCommon/TypeConverter.h"
 #include "mlir/IR/PatternMatch.h"
+#include "third_party/nvidia/include/TritonNVIDIAGPUToLLVM/PTXAsmFormat.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 
 using namespace mlir;
@@ -98,11 +99,17 @@ struct CircularStoreOpConversion
       Value isCurWarpEnabled = b.icmp_ne(segmentBase, b.i32_val(-1));
       isWriter = b.and_(isCurWarpEnabled, isWarpMaster);
     }
-
-    targetInfo.getTritonTargetInfo().storeDShared(rewriter, loc, vecPtr,
-                                                  std::nullopt, valsVec,
-                                                  /*pred=*/isWriter);
-
+    uint32_t AddrSpace =
+        cast<LLVM::LLVMPointerType>(bufferPtrTy).getAddressSpace();
+    if (AddrSpace == 1) {
+      llvm::report_fatal_error("unimplemented");
+    } else if (AddrSpace == 3) {
+      targetInfo.getTritonTargetInfo().storeDShared(rewriter, loc, vecPtr,
+                                                    std::nullopt, valsVec,
+                                                    /*pred=*/isWriter);
+    } else {
+      llvm::report_fatal_error("unsupported address space in circular store");
+    }
     rewriter.eraseOp(op);
     return success();
   }
