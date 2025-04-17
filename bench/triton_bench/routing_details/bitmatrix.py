@@ -27,10 +27,10 @@ def softmax(x):
 
 
 @triton.jit
-def load_logits_topk(X, stride_xm, n_expts_tot, offs_m, mask_m, N_EXPTS_PAD, N_EXPTS_ACT: tl.constexpr, BLOCK_N: tl.constexpr):
+def load_logits_topk(X, stride_xm, n_expts_tot, offs_m, mask_m, N_EXPTS_PAD: tl.constexpr, N_EXPTS_ACT: tl.constexpr, BLOCK_N: tl.constexpr):
 
     # subtract 1 from loop iterations because we peel the first (masked) iteration:
-    loop_iterations = N_EXPTS_PAD // BLOCK_N - 1
+    loop_iterations : tl.constexpr = N_EXPTS_PAD // BLOCK_N - 1
 
     offs_x_n = loop_iterations * BLOCK_N + tl.arange(0, BLOCK_N)
     mask_n = offs_x_n[None, :] < n_expts_tot
@@ -40,17 +40,19 @@ def load_logits_topk(X, stride_xm, n_expts_tot, offs_m, mask_m, N_EXPTS_PAD, N_E
     x = tl.load(X_ptrs, mask=(mask_m & mask_n), other=float("-inf"))
     x = (x.to(tl.uint16, bitcast=True).to(tl.int32) << 16) | offs_x_n[None, :]
     x = x.to(tl.float32, bitcast=True)
-    acc = bitonic_merge(tl.topk(x, N_EXPTS_ACT, dim=1), False)
+
+    acc = tl.topk(x, N_EXPTS_ACT, dim=1)
 
     # subsequent iterations:
-    for _i in range(loop_iterations):
-        X_ptrs -= BLOCK_N
-        offs_x_n -= BLOCK_N
-
-        x = tl.load(X_ptrs, mask=mask_m, other=float("-inf"))
-        x = (x.to(tl.uint16, bitcast=True).to(tl.int32) << 16) | offs_x_n[None, :]
-        x = x.to(tl.float32, bitcast=True)
-        acc = bitonic_merge(tl.maximum(acc, tl.topk(x, N_EXPTS_ACT, dim=1)), False)
+    if loop_iterations > 0:
+        for _i in range(loop_iterations):
+            acc = bitonic_merge(acc, False)
+            X_ptrs -= BLOCK_N
+            offs_x_n -= BLOCK_N
+            x = tl.load(X_ptrs, mask=mask_m, other=float("-inf"))
+            x = (x.to(tl.uint16, bitcast=True).to(tl.int32) << 16) | offs_x_n[None, :]
+            x = x.to(tl.float32, bitcast=True)
+            acc = tl.maximum(acc, tl.topk(x, N_EXPTS_ACT, dim=1))
 
     return acc
 
