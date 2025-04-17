@@ -52,7 +52,7 @@ def _memset_hist(Hist, hist_size, TokStarts, BLOCK: tl.constexpr):
 @triton.jit
 def _compute_hist(R, shape_rm, stride_rm,  # routing bitmatrix
                   Hist, TokensStart, PartialHist, stride_pm, shape_pn,  # histogram
-                  BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr, N_EXPTS_PAD: tl.constexpr):
+                  BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr, BLOCK_N2: tl.constexpr):
     tl.static_assert(BLOCK_N % 32 == 0)
     pid_m = tl.program_id(0)
     pid_n = tl.program_id(1)
@@ -72,10 +72,10 @@ def _compute_hist(R, shape_rm, stride_rm,  # routing bitmatrix
     tl.debug_barrier()
     # we are the only block left and all atomics are visible; compute cumsum
 
-    loop_iterations = N_EXPTS_PAD // BLOCK_N
+    loop_iterations = (shape_pn + BLOCK_N2 - 1) // BLOCK_N2
 
-    x = tl.zeros([BLOCK_N], Hist.dtype.element_ty)
-    offs_n = tl.arange(0, BLOCK_N)
+    x = tl.zeros([BLOCK_N2], Hist.dtype.element_ty)
+    offs_n = tl.arange(0, BLOCK_N2)
 
     for i in range(loop_iterations):
         hist2 = tl.load(Hist + offs_n)
@@ -83,7 +83,7 @@ def _compute_hist(R, shape_rm, stride_rm,  # routing bitmatrix
         x += tl.sum(hist2, 0)
         tl.store(TokensStart, 0)
         tl.store(TokensStart + 1 + offs_n, tok_starts, mask=offs_n < shape_pn)
-        offs_n += BLOCK_N
+        offs_n += BLOCK_N2
 
 
 @triton.jit

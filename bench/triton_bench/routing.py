@@ -57,6 +57,7 @@ def routing(logits, n_expts_act, expt_indx=None):
     ROUTING_BLOCK_N = 128
     HIST1_BLOCK_M = 64
     HIST1_BLOCK_N = 32
+    HIST1_BLOCK_N2 = 512
     HIST2_BLOCK_M = 512
     MEMSET_BLOCK = 512
     assert logits.dtype.itemsize == 2
@@ -95,7 +96,7 @@ def routing(logits, n_expts_act, expt_indx=None):
         hist,  # output [histogram]
         tok_starts, partial_hist, partial_hist.stride(0), partial_hist.shape[1],  # output [cumsums]
         BLOCK_M=HIST1_BLOCK_M, BLOCK_N=HIST1_BLOCK_N,  # tunable parameters
-        N_EXPTS_PAD=n_expts_pad,  # constants
+        BLOCK_N2=HIST1_BLOCK_N2,  # constants
     )
     routing_details.histogram._finalize_hist[(n_expts_tot, )](
         tok_starts, partial_hist,  # inputs
