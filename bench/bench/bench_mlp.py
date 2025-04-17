@@ -7,7 +7,7 @@ import triton_bench.swiglu
 from triton_bench.mxfp import downcast_to_mxfp
 from triton_bench.matmul_ogs import MicroscalingCtx, matmul_ogs, PrecisionConfig, FlexCtx
 from triton_bench.numerics import InFlexData
-from triton_bench.routing import routing, simulate_expert_sharded_routing
+from triton_bench.routing import routing, routing_torch, simulate_expert_sharded_routing
 from triton_bench.meta import cuda_capability_geq, is_hip, get_cdna_version
 
 if torch.cuda.is_available() and not is_hip():
@@ -18,18 +18,26 @@ else:
     cublas = None
 
 
-def _query_cuda_gpu_specs():
+def _query_gpu_specs():
     import subprocess
-    cmd = ["nvidia-smi", "--query-gpu=name", "--format=csv,noheader", "-i=0"]
-    output = subprocess.check_output(cmd, stderr=subprocess.DEVNULL).decode().strip()
-    name = output.splitlines()[0]
-    return {
-        "NVIDIA H100 80GB HBM3": {"MAX_TFLOPS8": 1979, "MAX_TFLOPS16": 989, "MAX_TBPS": 3.35}, "HGX GB200":
-        {"MAX_TFLOPS8": 4500, "MAX_TFLOPS16": 2250, "MAX_TBPS": 8.0}
-    }[name]
+    if not is_hip():
+        cmd = ["nvidia-smi", "--query-gpu=name", "--format=csv,noheader", "-i=0"]
+        output = subprocess.check_output(cmd, stderr=subprocess.DEVNULL).decode().strip()
+        name = output.splitlines()[0]
+    else:
+        cmd = ["rocm-smi", "--showproductname", "-d=0", "--csv"]
+        output = subprocess.check_output(cmd, stderr=subprocess.DEVNULL).decode().strip()
+        name = output.splitlines()[1]
+
+    gpu_specs = {
+        "NVIDIA H100 80GB HBM3": {"MAX_TFLOPS8": 1979, "MAX_TFLOPS16": 989, "MAX_TBPS": 3.35},
+        "HGX GB200": {"MAX_TFLOPS8": 4500, "MAX_TFLOPS16": 2250, "MAX_TBPS": 8.0},
+        "AMD Instinct MI300X OAM": {"MAX_TFLOPS8": 2615, "MAX_TFLOPS16": 1307 , "MAX_TBPS": 5.3},
+    }
+    return gpu_specs.get(name)
 
 
-SPECS = _query_cuda_gpu_specs() if not is_hip() else None
+SPECS = _query_gpu_specs() if not is_hip() else None
 
 
 def quantize(w, dtype, dev, **opt):
@@ -96,6 +104,7 @@ def bench_mlp(batch, dim1, dim2, n_expts_tot, n_expts_act, x_dtype, w_dtype,
         if n_expts_tot > 1:
             logits = matmul_ogs(x, wg, bg, precision_config=pcg)
             rdata, gather_indx, scatter_indx = routing(logits, n_expts_act)
+            # rdata, gather_indx, scatter_indx = routing_torch(logits, n_expts_act)
             if EP > 1:
                 proton.deactivate()
                 # TODO: activate proton here when fast expert parallelism simulation is done
