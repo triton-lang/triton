@@ -14,22 +14,6 @@ namespace ttng = mlir::triton::nvidia_gpu;
 // MMA Pipeline Analysis
 //===----------------------------------------------------------------------===//
 
-std::optional<std::pair<ttng::TMEMAllocOp, ttng::TMEMLoadOp>>
-ttng::getTMemAllocAndLoad(ttng::MMAv5OpInterface mmaOp) {
-  auto acc = mmaOp.getAccumulator().getDefiningOp<ttng::TMEMAllocOp>();
-  if (!acc || acc->getParentRegion() != mmaOp->getParentRegion()) {
-    return std::nullopt;
-  }
-  for (auto user : acc->getUsers()) {
-    if (auto load = dyn_cast<ttng::TMEMLoadOp>(user)) {
-      if (load->getParentRegion() == mmaOp->getParentRegion()) {
-        return std::make_pair(acc, load);
-      }
-    }
-  }
-  return std::nullopt;
-}
-
 bool ttng::mmaHasPipelineableOperands(
     ttng::MMAv5OpInterface mmaOp, scf::ForOp forOp,
     std::function<bool(Operation *)> isLoadPipelineable) {
