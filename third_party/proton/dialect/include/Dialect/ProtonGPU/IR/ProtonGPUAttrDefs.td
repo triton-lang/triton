@@ -8,12 +8,12 @@ include "proton/dialect/include/Dialect/ProtonGPU/IR/ProtonGPUDialect.td"
 def GranularityAttr : I32EnumAttr<
   "Granularity", "The granularity of the profiling metric",
   [
-    I32EnumAttrCase<"CTA", 0, "cta">,
     I32EnumAttrCase<"THREAD", 1, "thread">,
     I32EnumAttrCase<"WARP", 2, "warp">,
     I32EnumAttrCase<"WARP_2", 3, "warp_2">,
     I32EnumAttrCase<"WARP_4", 4, "warp_4">,
     I32EnumAttrCase<"WARP_8", 5, "warp_8">,
+    I32EnumAttrCase<"CTA", 0, "cta">,
     I32EnumAttrCase<"WARP_GROUP", 6, "warp_group">,
     I32EnumAttrCase<"WARP_GROUP_2", 7, "warp_group_2">,
     I32EnumAttrCase<"WARP_GROUP_4", 8, "warp_group_4">,

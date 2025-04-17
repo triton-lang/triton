@@ -127,6 +127,8 @@ class InstrumentationHook(Hook):
         set_instrumentation_on()
 
         backend = triton.runtime.driver.active.get_current_target().backend
+        device = triton.runtime.driver.active.get_current_device()
+        max_shared_mem = triton.runtime.driver.active.utils.get_device_properties(device)["max_shared_mem"]
 
         def to_llvmir_passes(pm, backend_pass):
             triton_proton.add_allocate_proton_global_scratch_buffer(pm)
@@ -136,7 +138,8 @@ class InstrumentationHook(Hook):
             triton_proton.add_convert_proton_to_protongpu(pm, self.mode.metric_type, self.mode.sampling_strategy,
                                                           self.mode.sampling_options, self.mode.granularity,
                                                           self.mode.buffer_strategy, self.mode.buffer_type,
-                                                          self.mode.buffer_size, self.profile_buffer_size,
+                                                          self.mode.buffer_size, max_shared_mem,
+                                                          self.profile_buffer_size,
                                                           self.profile_buffer_alignment)
 
             triton_proton.add_allocate_proton_shared_memory(pm)

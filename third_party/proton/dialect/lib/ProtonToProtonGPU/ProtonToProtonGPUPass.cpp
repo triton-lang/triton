@@ -86,6 +86,7 @@ public:
                                gpu::Granularity granularity,
                                gpu::BufferStrategy bufferStrategy,
                                gpu::BufferType bufferType, int32_t bufferSize,
+                               int32_t maxSharedMemSize,
                                int64_t profileScratchSize,
                                int32_t profileScratchAlignment)
       : ConvertProtonToProtonGPUBase<ConvertProtonToProtonGPUPass>() {
@@ -96,6 +97,7 @@ public:
     this->bufferStrategy = bufferStrategy;
     this->bufferType = bufferType;
     this->bufferSize = bufferSize;
+    this->maxSharedMemSize = maxSharedMemSize;
     this->profileScratchSize = profileScratchSize;
     this->profileScratchAlignment = profileScratchAlignment;
   }
@@ -131,13 +133,6 @@ public:
     const int circularHeaderSize =
         proton::gpu::getCircularHeaderSize(); // byte size
 
-    // We take any available shared memory left to allocate the circular
-    // buffer. The buffer size per segment must be power of 2.
-    // Let's conservatively use the maximum shared memory size as 64KB bytes
-    // because using a larger size may cause the kernel to perform poorly due to
-    // L1 cache inefficiencies. In the future, we should construct device
-    // specific targetInfo here to estimate the shared memory size
-    auto maxSharedMemSize = 64 * 1024;
     int segmentByteSize =
         llvm::NextPowerOf2(
             (maxSharedMemSize - llvm::alignTo(sharedMemUsed, bytesPerEntry)) /
@@ -303,12 +298,12 @@ std::unique_ptr<OperationPass<ModuleOp>> createConvertProtonToProtonGPUPass(
     MetricType metricType, SamplingStrategy samplingStrategy,
     llvm::StringRef samplingOptions, gpu::Granularity granularity,
     gpu::BufferStrategy bufferStrategy, gpu::BufferType bufferType,
-    int32_t bufferSize, int64_t profileScratchSize,
+    int32_t bufferSize, int32_t maxSharedMemSize, int64_t profileScratchSize,
     int32_t profileScratchAlignment) {
   return std::make_unique<ConvertProtonToProtonGPUPass>(
       metricType, samplingStrategy, samplingOptions, granularity,
-      bufferStrategy, bufferType, bufferSize, profileScratchSize,
-      profileScratchAlignment);
+      bufferStrategy, bufferType, bufferSize, maxSharedMemSize,
+      profileScratchSize, profileScratchAlignment);
 }
 
 } // namespace proton

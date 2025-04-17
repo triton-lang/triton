@@ -84,11 +84,12 @@ void init_triton_proton(py::module &&m) {
            proton::gpu::Granularity granularity,
            proton::gpu::BufferStrategy bufferStrategy,
            proton::gpu::BufferType bufferType, int32_t bufferSize,
+           int32_t maxSharedMemSize,
            int64_t profileScratchSize, int32_t profileScratchAlignment) {
           pm.addPass(proton::createConvertProtonToProtonGPUPass(
               metricType, samplingStrategy, samplingOptions, granularity,
-              bufferStrategy, bufferType, bufferSize, profileScratchSize,
-              profileScratchAlignment));
+              bufferStrategy, bufferType, bufferSize, maxSharedMemSize,
+              profileScratchSize, profileScratchAlignment));
         });
 
   ADD_PASS_WRAPPER_0("add_convert_proton_nvidia_gpu_to_llvm",
