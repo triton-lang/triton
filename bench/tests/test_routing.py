@@ -44,7 +44,7 @@ def ref_expt_data(routing_data, n_gates, block_m):
 
 
 @pytest.mark.parametrize("n_tokens", [371, 255, 256, 8192, 1023, 1024])
-@pytest.mark.parametrize("n_expts_tot, n_expts_act", [(128, 4)])
+@pytest.mark.parametrize("n_expts_tot, n_expts_act", [(128, 4), (1500, 8)])
 @pytest.mark.parametrize("block_m", [64, 128])
 def test_op(n_tokens, n_expts_tot, n_expts_act, block_m):
     torch.manual_seed(2)
