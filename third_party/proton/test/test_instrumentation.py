@@ -16,6 +16,8 @@ def test_record(tmp_path: pathlib.Path):
     if is_hip():
         pytest.skip("HIP backend does not support record")
 
+    proton.hooks.InstrumentationHook.enable_host_buffer = True
+
     @triton.jit
     def add_kernel(
         x_ptr,
@@ -47,16 +49,18 @@ def test_record(tmp_path: pathlib.Path):
     proton.start(str(temp_file.with_suffix("")), backend="instrumentation")
     pgm = add_kernel[grid](x, y, output, n_elements, BLOCK_SIZE=1024)
 
-    host_mem = proton.hooks.InstrumentationHook.profile_mem
-    preamble = host_mem[0:4]
+    proton.hooks.InstrumentationHook.enable_host_buffer = False
+
+    host_buffer = proton.hooks.InstrumentationHook.host_buffer
+    preamble = host_buffer[0:4]
     assert int.from_bytes(preamble.numpy().tobytes(), 'little') == 0xdeadbeef
     #FIXME(fywkevin): have a dedicated place to put those decoding related constants
     header_size = 16
     metadata_size = header_size + pgm.metadata.num_warps * 4
-    start_tag = host_mem[metadata_size:metadata_size + 4]
-    start_clock = host_mem[metadata_size + 4:metadata_size + 8]
-    end_tag = host_mem[metadata_size + 8:metadata_size + 12]
-    end_clock = host_mem[metadata_size + 12:metadata_size + 16]
+    start_tag = host_buffer[metadata_size:metadata_size + 4]
+    start_clock = host_buffer[metadata_size + 4:metadata_size + 8]
+    end_tag = host_buffer[metadata_size + 8:metadata_size + 12]
+    end_clock = host_buffer[metadata_size + 12:metadata_size + 16]
     assert int.from_bytes(start_tag.numpy().tobytes(), 'little') == 0
     assert int.from_bytes(end_tag.numpy().tobytes(), 'little') == 0x80000000
     start_clock_val = int.from_bytes(start_clock.numpy().tobytes(), 'little')

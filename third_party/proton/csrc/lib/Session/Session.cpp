@@ -13,10 +13,11 @@ namespace {
 
 Profiler *getProfiler(const std::string &name, const std::string &path,
                       const std::string &mode) {
+  std::vector<std::string> modeAndOptions = proton::split(mode, ":");
   if (proton::toLower(name) == "cupti") {
     auto *profiler = &CuptiProfiler::instance();
     profiler->setLibPath(path);
-    if (proton::toLower(mode) == "pcsampling")
+    if (proton::toLower(modeAndOptions[0]) == "pcsampling")
       profiler->enablePCSampling();
     return profiler;
   }
