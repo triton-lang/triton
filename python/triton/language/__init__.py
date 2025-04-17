@@ -6,6 +6,7 @@ from . import extra
 from .standard import (
     argmax,
     argmin,
+    bitonic_merge,
     cdiv,
     cumprod,
     cumsum,

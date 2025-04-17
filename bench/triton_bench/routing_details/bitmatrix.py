@@ -1,15 +1,6 @@
 import triton
 import triton.language as tl
 
-from triton.language.standard import _bitonic_merge, _log2
-
-
-@triton.jit
-def bitonic_merge(x, descending : tl.constexpr):
-    n_dims : tl.constexpr = _log2(x.shape[-1])
-    x = _bitonic_merge(x, n_dims, descending, n_dims)
-    return x
-
 
 @triton.jit
 def or_combine(x, y):
@@ -46,7 +37,7 @@ def load_logits_topk(X, stride_xm, n_expts_tot, offs_m, mask_m, N_EXPTS_PAD: tl.
     # subsequent iterations:
     if loop_iterations > 0:
         for _i in range(loop_iterations):
-            acc = bitonic_merge(acc, False)
+            acc = tl.bitonic_merge(acc)
             X_ptrs -= BLOCK_N
             offs_x_n -= BLOCK_N
             x = tl.load(X_ptrs, mask=mask_m, other=float("-inf"))
