@@ -106,7 +106,7 @@ def routing(logits, n_expts_act, expt_indx=None):
         expt_scal, expt_indx, partial_offs, partial_offs.stride(0), n_gates,  # input
         BLOCK_M=HIST1_BLOCK_M,  # tunable parameters
         N_EXPTS_ACT=n_expts_act,  # constants
-    )
+        num_warps=1 if HIST1_BLOCK_M * n_expts_act // 32 < 4 else 4)
     # pack the matmul data structure
     gather_indx = GatherIndx(src_indx=topk_indx, dst_indx=gate_indx)
     scatter_indx = ScatterIndx(src_indx=gate_indx, dst_indx=topk_indx)
@@ -125,7 +125,8 @@ def routing_torch(logits, n_expts_act, expt_indx=None):
         return tk_val, tk_idx
 
     _, n_expts_tot = logits.shape
-    expt_scal, expt_indx = topk(torch.softmax(logits, -1), n_expts_act, expt_indx)
+    expt_scal, expt_indx = topk(logits, n_expts_act, expt_indx)
+    expt_scal = torch.softmax(expt_scal, dim=-1)
     # Sort each token's selections by expert
     expt_indx, sort_indices = torch.sort(expt_indx, dim=1)
     expt_scal = torch.gather(expt_scal, 1, sort_indices)

@@ -32,7 +32,6 @@ def _compute_bitmatrix(X, stride_xm,  # logits
     # load
     X_ptrs = X + offs_m[:, None] * stride_xm + offs_x_n[None, :]
     x = tl.load(X_ptrs, mask=mask, other=float("-inf"))
-    x = softmax(x).to(x_dtype)
     x = (x.to(tl.uint16, bitcast=True).to(tl.int32) << 16) | offs_x_n[None, :]
     # top-k experts
     x = x.to(tl.float32, bitcast=True)
@@ -43,6 +42,7 @@ def _compute_bitmatrix(X, stride_xm,  # logits
     y = tl.sort(y, dim=1)
     y_indices = y >> 16
     y_values = (y & 0x0000FFFF).to(tl.uint16).to(x_dtype, bitcast=True)
+    y_values = softmax(y_values).to(x_dtype)
     # write back
     offs_y_n = tl.arange(0, N_EXPTS_ACT)
     Yv_ptrs = Yv + offs_m[:, None] * stride_ym + offs_y_n[None, :]
