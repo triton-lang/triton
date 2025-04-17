@@ -81,23 +81,27 @@ def test_mma_remark(capfd, fresh_triton_cache):
         "stride_cm": "i32",
         "stride_cn": "i32",
     }
-    with enable_diagnostics_context('remarks'):
-        triton.compile(triton.compiler.ASTSource(
-            fn=matmul_kernel,
-            signature=signature,
-            constexprs={},
-        ))
+    with enable_diagnostics_context("remarks"):
+        triton.compile(
+            triton.compiler.ASTSource(
+                fn=matmul_kernel,
+                signature=signature,
+                constexprs={},
+            )
+        )
     captured = capfd.readouterr()
 
-    assert ("can't use MMA V3 for the dot op" in captured.err), "expect MMA V3 remark"
+    assert "MMA version 3" in captured.err, "expect MMA V3 remark"
     assert "note: see current operation:" not in captured.err
 
-    with enable_diagnostics_context('remarks,operations,stacktraces'):
-        triton.compile(triton.compiler.ASTSource(
-            fn=matmul_kernel,
-            signature=signature,
-            constexprs={},
-        ))
+    with enable_diagnostics_context("remarks,operations,stacktraces"):
+        triton.compile(
+            triton.compiler.ASTSource(
+                fn=matmul_kernel,
+                signature=signature,
+                constexprs={},
+            )
+        )
     captured = capfd.readouterr()
     assert "note: diagnostic emitted with trace:" in captured.err
     assert "note: see current operation:" in captured.err
@@ -143,17 +147,19 @@ def test_remark_vectorization(capfd, fresh_triton_cache):
         "constexprs": {"XBLOCK": XBLOCK},
     }
 
-    with enable_diagnostics_context('remarks'):
+    with enable_diagnostics_context("remarks"):
         triton.compile(
             triton.compiler.ASTSource(**astsource_args),
             options={"num_warps": 1},
         )
 
     _, err = capfd.readouterr()
-    assert ("remark: Warning: vectorization fails" in err), "expect vectorization failure remark"
+    assert (
+        "remark: Warning: vectorization fails" in err
+    ), "expect vectorization failure remark"
     assert "note: see current operation:" not in err
 
-    with enable_diagnostics_context('remarks,operations,stacktraces'):
+    with enable_diagnostics_context("remarks,operations,stacktraces"):
         triton.compile(
             triton.compiler.ASTSource(**astsource_args),
             options={"num_warps": 1},
@@ -170,7 +176,7 @@ def test_remark_swp_op_before_operands(capfd, fresh_triton_cache):
     def kernel_pipe_error(in_ptr, out_ptr):
         SIZE: tl.constexpr = 64
         in_ptrs = in_ptr + tl.arange(0, SIZE)
-        val = tl.zeros((SIZE, ), dtype=tl.float32)
+        val = tl.zeros((SIZE,), dtype=tl.float32)
         k = 0
         for i in tl.range(0, 64, num_stages=3):
             in_ptrs = in_ptr + tl.arange(0, SIZE) + SIZE * k
@@ -182,4 +188,4 @@ def test_remark_swp_op_before_operands(capfd, fresh_triton_cache):
 
     i = torch.empty(64 * 64, dtype=torch.float32).cuda()
     o = torch.empty(64 * 64, dtype=torch.float32).cuda()
-    kernel_pipe_error[(1, )](i, o)
+    kernel_pipe_error[(1,)](i, o)
