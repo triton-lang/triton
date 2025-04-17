@@ -75,11 +75,10 @@ unsigned getCyclesPerMfma(DotOp dotOp) {
 Calculate how many mfmas are in a rep, e.g. 1x1x2.
 // TODO(dtanner) Is there a more direct method for this?
 */
-SmallVector<unsigned, 3>
-getMfmasPerRep(const SmallVector<int64_t> &ctaTile,
-               const SmallVector<unsigned> &warpsPerCta,
-               const SmallVector<int64_t> &numReps,
-               const SmallVector<unsigned> &mfmaShape) {
+SmallVector<unsigned, 3> getMfmasPerRep(const ArrayRef<int64_t> &ctaTile,
+                                        const ArrayRef<unsigned> &warpsPerCta,
+                                        const ArrayRef<int64_t> &numReps,
+                                        const ArrayRef<unsigned> &mfmaShape) {
   LDBG("ctaTile: " << ctaTile[0] << "x" << ctaTile[1] << "x" << ctaTile[2]);
   LDBG("warpsPerCtaTile: " << warpsPerCta[0] << "x" << warpsPerCta[1]);
   LDBG("numReps: " << numReps[0] << "x" << numReps[1] << "x" << numReps[2]);

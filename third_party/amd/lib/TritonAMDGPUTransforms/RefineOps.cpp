@@ -126,8 +126,17 @@ LogicalResult rewriteLocalLoad(OpBuilder &rewriter,
 
   auto memDesc = op->getOperand(0);
   auto memDescType = cast<ttg::MemDescType>(memDesc.getType());
-  auto memDescEncoding =
-      cast<triton::gpu::SwizzledSharedEncodingAttr>(memDescType.getEncoding());
+  auto memDescEncoding = memDescType.getEncoding();
+  SmallVector<unsigned int> order;
+  if (auto enc =
+          dyn_cast<triton::gpu::SwizzledSharedEncodingAttr>(memDescEncoding)) {
+    order = decltype(order)(enc.getOrder());
+  }
+  if (auto enc = dyn_cast<triton::gpu::AMDRotatingSharedEncodingAttr>(
+          memDescEncoding)) {
+    order = decltype(order)(enc.getOrder());
+  }
+  assert(!order.empty());
 
   SmallVector<int64_t> refinedShape = {resultShape[0] / numReps2D[0],
                                        resultShape[1] / numReps2D[1]};
@@ -144,7 +153,6 @@ LogicalResult rewriteLocalLoad(OpBuilder &rewriter,
 
   rewriter.setInsertionPointAfter(op);
   SmallVector<Value> subtiles;
-  auto order = memDescEncoding.getOrder();
   for (int32_t i = 0; i < numReps2D[0]; ++i) {
     for (int32_t j = 0; j < numReps2D[1]; ++j) {
       int32_t offset0 = i * refinedShape[0];
