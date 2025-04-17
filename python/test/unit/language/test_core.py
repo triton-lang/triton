@@ -3240,18 +3240,6 @@ def test_convert1d_bool(M, src_layout, dst_layout, src_dim, dst_dim, device, tmp
     np.testing.assert_allclose(y_ref, y_tri.cpu().numpy(), rtol=0, atol=0)
 
 
-@triton.jit
-def _welford_combine(mean_1, m2_1, weight_1, mean_2, m2_2, weight_2):
-    delta = mean_2 - mean_1
-    new_weight = weight_1 + weight_2
-    w2_over_w = weight_2 / new_weight
-    return (
-        mean_1 + delta * w2_over_w,
-        m2_1 + m2_2 + delta * delta * weight_1 * w2_over_w,
-        new_weight,
-    )
-
-
 layouts = [
     BlockedLayout([1, 4], [1, THREADS_PER_WARP], [4, 1], [1, 0], [1, 1], [1, 1], [0, 1]),
     BlockedLayout([1, 4], [1, THREADS_PER_WARP], [2, 2], [1, 0], [1, 1], [1, 1], [0, 1]),
@@ -3328,30 +3316,58 @@ def test_chain_reduce(M, N, src_layout, op, device, first_axis, tmp_path: pathli
     np.testing.assert_allclose(z_ref, z_tri.cpu().numpy(), rtol=0.01, atol=1e-3)
 
 
+@triton.jit
+def _welford_combine(mean_1, m2_1, weight_1, mean_2, m2_2, weight_2):
+    delta = mean_2 - mean_1
+    new_weight = weight_1 + weight_2
+    w2_over_w = weight_2 / new_weight
+    return (
+        mean_1 + delta * w2_over_w,
+        m2_1 + m2_2 + delta * delta * weight_1 * w2_over_w,
+        new_weight,
+    )
+
+
+@triton.jit
+def _sum_combine(a, b):
+    return a + b
+
+
 @pytest.mark.interpreter
 def test_generic_reduction(device):
 
     @triton.jit
-    def var_mean_kernel(X, out_mean, out_var, BLOCK: tl.constexpr):
+    def var_mean_kernel(X, out_mean, out_var, out_sum0, out_sum1, BLOCK: tl.constexpr):
         xindex = tl.arange(0, BLOCK)
         x = tl.load(X + xindex)
         mean = x
         m2 = tl.zeros_like(x)
         weight = tl.full(x.shape, 1, x.dtype)
+        # Test return a tuple and a single value
+        sum0, = tl.reduce((x, ), 0, _sum_combine)
+        sum1 = tl.reduce(x, 0, _sum_combine)
+        # Test multiple values in a tuple
         (mean, m2, weight) = tl.reduce((mean, m2, weight), 0, _welford_combine)
         tl.store(out_mean, mean)
         tl.store(out_var, m2 / weight)
+        tl.store(out_sum0, sum0)
+        tl.store(out_sum1, sum1)
 
     SIZE = 512
     x = torch.rand(SIZE, device=device)
     out_mean = torch.empty((), device=device)
     out_var = torch.empty((), device=device)
+    sum0 = torch.empty((), device=device)
+    sum1 = torch.empty((), device=device)
 
-    var_mean_kernel[(1, )](x, out_mean, out_var, BLOCK=SIZE)
+    var_mean_kernel[(1, )](x, out_mean, out_var, sum0, sum1, BLOCK=SIZE)
 
     expect_var, expect_mean = torch.var_mean(x, dim=0, correction=0)
+    sum_ref = torch.sum(x)
     torch.testing.assert_close(out_mean, expect_mean)
     torch.testing.assert_close(out_var, expect_var)
+    torch.testing.assert_close(sum0, sum_ref)
+    torch.testing.assert_close(sum1, sum_ref)
 
 
 # ---------------
