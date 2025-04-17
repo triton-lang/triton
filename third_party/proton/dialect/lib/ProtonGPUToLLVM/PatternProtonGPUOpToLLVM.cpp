@@ -4,6 +4,7 @@
 #include "mlir/Conversion/LLVMCommon/Pattern.h"
 #include "mlir/Conversion/LLVMCommon/TypeConverter.h"
 #include "mlir/IR/PatternMatch.h"
+#include "third_party/nvidia/include/TritonNVIDIAGPUToLLVM/PTXAsmFormat.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 
 namespace mlir::triton {
@@ -168,23 +169,26 @@ struct FinalizeOpConversion
       // Load the value from buffer
       Value ptr = b.gep(bufferPtrTy, i32_ty, bufferBasePtr, bufOffset);
       Value load;
-      if (mlir::isa<triton::gpu::SharedMemorySpaceAttr>(memSpace))
+      if (mlir::isa<triton::proton::gpu::StackMemorySpaceAttr>(memSpace)) {
+        llvm::report_fatal_error("unimplemented");
+      } else if (mlir::isa<triton::gpu::SharedMemorySpaceAttr>(memSpace)) {
         load = tritonTargetInfo.loadShared(rewriter, loc, ptr, i32_ty,
                                            b.true_val());
-      else
-        llvm::report_fatal_error("only support smem buffer finalize copy");
+      } else {
+        llvm::report_fatal_error(
+            "unsupported memory space buffer in finalize copy");
+      }
 
       // Store the value to global memory
       Value gmemPtr = b.gep(scratchPtrTy, i32_ty, scratchPtr, gmemOffset);
       b.store(load, gmemPtr);
     };
-
-    // Write back 'preample'.
-    Value preample = b.i32_val(0xdeadbeef);
-    Value gmemPreampleOffset = b.i32_val(0);
-    Value gmemPreamplePtr =
-        b.gep(scratchPtrTy, i32_ty, scratchPtr, gmemPreampleOffset);
-    b.store(preample, gmemPreamplePtr);
+    // Write back 'preamble'.
+    Value preamble = b.i32_val(0xdeadbeef);
+    Value gmemPreambleOffset = b.i32_val(0);
+    Value gmemPreamblePtr =
+        b.gep(scratchPtrTy, i32_ty, scratchPtr, gmemPreambleOffset);
+    b.store(preamble, gmemPreamblePtr);
 
     // Write back 'program id'.
     Value gmemPidOffset = b.i32_val(1);
@@ -251,7 +255,42 @@ struct StackAllocOpConversion
   LogicalResult
   matchAndRewrite(mlir::triton::proton::gpu::StackAllocOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    rewriter.eraseOp(op);
+    auto moduleOp =
+        rewriter.getBlock()->getParent()->getParentOfType<ModuleOp>();
+    Location loc = op.getLoc();
+    auto ctx = moduleOp.getContext();
+
+    auto bufferTy =
+        mlir::cast<triton::gpu::MemDescType>(op.getData().getType());
+
+    const int bufferSizeInBytes =
+        mlir::ShapedType::getNumElements(bufferTy.getShape()) *
+        bufferTy.getElementType().getIntOrFloatBitWidth() / 8;
+
+    auto bufferSizeVal = rewriter.create<LLVM::ConstantOp>(
+        loc, rewriter.getIntegerType(32),
+        IntegerAttr::get(rewriter.getIntegerType(32), bufferSizeInBytes / 4));
+
+    auto llvmPointerType = LLVM::LLVMPointerType::get(op->getContext());
+    Type llvmInt32Type = IntegerType::get(op->getContext(), 32);
+    Value arrayVal = rewriter.create<LLVM::AllocaOp>(
+        loc, llvmPointerType, llvmInt32Type, bufferSizeVal);
+
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
+
+    // TODO(crobeck): update if we ever support multi-rank stack alloc ops
+    SmallVector<Type, 4> types = {ptr_ty(ctx), llvmInt32Type};
+    SmallVector<Value, 4> elems = {arrayVal,
+                                   bufferSizeVal}; // i32 ptr, shape[0]
+
+    auto structTy =
+        LLVM::LLVMStructType::getLiteral(rewriter.getContext(), types);
+
+    Value llvmStruct = rewriter.create<LLVM::UndefOp>(loc, structTy);
+    for (const auto &v : llvm::enumerate(elems)) {
+      llvmStruct = b.insert_val(structTy, llvmStruct, v.value(), v.index());
+    }
+    rewriter.replaceOp(op, llvmStruct);
     return success();
   }
 
