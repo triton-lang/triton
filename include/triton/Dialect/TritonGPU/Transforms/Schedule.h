@@ -10,7 +10,6 @@
 
 namespace mlir {
 namespace triton {
-class FuncOp;
 
 namespace gpu {
 
