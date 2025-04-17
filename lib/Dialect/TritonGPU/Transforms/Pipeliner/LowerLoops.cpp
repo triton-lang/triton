@@ -1078,9 +1078,13 @@ void multibufferTensorMemory(scf::ForOp forOp, CoarseSchedule &schedule,
 
   SmallVector<Operation *> allocUsers =
       llvm::to_vector(alloc.getResult().getUsers());
+  Value replTok = OpBuilder(forOp).create<ub::PoisonOp>(
+      forOp.getLoc(), builder.getType<AsyncTokenType>());
   for (auto user : allocUsers) {
     if (auto store = dyn_cast<ttng::TMEMStoreOp>(user)) {
       if (forOp->isAncestor(store)) {
+        store.getDepMutable().clear();
+        store.getToken().replaceAllUsesWith(replTok);
         // We can multibuffer, since the store is a point where we can
         // change the buffer index
         multibufferingIsValid = true;
@@ -1109,6 +1113,8 @@ void multibufferTensorMemory(scf::ForOp forOp, CoarseSchedule &schedule,
       }
     } else if (auto load = dyn_cast<ttng::TMEMLoadOp>(user)) {
       if (forOp->isAncestor(load)) {
+        load.getDepMutable().clear();
+        load.getToken().replaceAllUsesWith(replTok);
         builder.setStageCluster(schedule[load]);
         builder.setInsertionPoint(load);
         Value curBufIdx = getCurrBufIdx(load);
@@ -1124,6 +1130,8 @@ void multibufferTensorMemory(scf::ForOp forOp, CoarseSchedule &schedule,
         load.getSrcMutable().assign(tmemSlice);
       }
     } else if (auto mma = dyn_cast<ttng::MMAv5OpInterface>(user)) {
+      mma.getAccDepMutable().clear();
+      mma.getToken().replaceAllUsesWith(replTok);
       builder.setStageCluster(schedule[mma]);
       builder.setInsertionPoint(mma);
       // We can legally switch to next buffer index if the mma does not use the
@@ -1273,57 +1281,6 @@ void lowerLoops(ModuleOp moduleOp) {
   for (auto forOp : loops) {
     lowerLoop(forOp);
   }
-}
-
-/////////////////////////////
-// removeTMEMTokens
-/////////////////////////////
-
-static void eraseResult(Operation *op, unsigned resultIdx, Value replacement) {
-  OperationState state(op->getLoc(), op->getName(), op->getOperands(),
-                       op->getResultTypes(), op->getAttrs());
-  state.types.erase(std::next(state.types.begin(), resultIdx));
-  OpBuilder b(op);
-  Operation *newOp = b.create(state);
-  SmallVector<Value> replacements = newOp->getResults();
-  replacements.insert(std::next(replacements.begin(), resultIdx), replacement);
-  op->replaceAllUsesWith(replacements);
-  op->erase();
-}
-
-static void removeTMEMToken(Operation *op, Value dummy) {
-  if (auto mmaOp = dyn_cast<ttng::TCGen5MMAOp>(op)) {
-    if (mmaOp.getAccDep()) {
-      mmaOp.getAccDepMutable().clear();
-      eraseResult(mmaOp, 0, dummy);
-    }
-  } else if (auto mmaScaledOp = dyn_cast<ttng::TCGen5MMAScaledOp>(op)) {
-    if (mmaScaledOp.getAccDep()) {
-      mmaScaledOp.getAccDepMutable().clear();
-      eraseResult(mmaScaledOp, 0, dummy);
-    }
-  } else if (auto store = dyn_cast<ttng::TMEMStoreOp>(op)) {
-    if (store.getDep()) {
-      store.getDepMutable().clear();
-      eraseResult(store, 0, dummy);
-    }
-  } else if (auto alloc = dyn_cast<ttng::TMEMAllocOp>(op)) {
-    if (alloc.getToken())
-      eraseResult(alloc, 1, dummy);
-  } else if (auto load = dyn_cast<ttng::TMEMLoadOp>(op)) {
-    if (load.getDep()) {
-      load.getDepMutable().clear();
-      eraseResult(load, 1, dummy);
-    }
-  }
-}
-
-void removeTMEMTokens(FuncOp func) {
-  auto b = OpBuilder::atBlockBegin(&func.getBody().front());
-  // Placeholder value that will get DCE'd by the canonicalizer.
-  Value dummy =
-      b.create<ub::PoisonOp>(func.getLoc(), b.getType<AsyncTokenType>());
-  func.walk([&](Operation *op) { removeTMEMToken(op, dummy); });
 }
 
 } // namespace gpu

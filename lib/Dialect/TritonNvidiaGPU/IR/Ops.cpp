@@ -222,13 +222,19 @@ parseToken(OpAsmParser &p, std::optional<OpAsmParser::UnresolvedOperand> &dep,
   if (failed(p.parseOptionalLSquare()))
     return success();
   token = p.getBuilder().getType<AsyncTokenType>();
+  if (succeeded(p.parseOptionalRSquare()))
+    return success();
   if (p.parseOperand(dep.emplace()) || p.parseRSquare())
     return failure();
   return success();
 }
 static void printToken(OpAsmPrinter &p, Operation *op, Value dep, Type token) {
+  if (!token)
+    return;
+  p << '[';
   if (dep)
-    p << '[' << dep << ']';
+    p << dep;
+  p << ']';
 }
 
 template <typename MMAOpT>

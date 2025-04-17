@@ -1,3 +1,4 @@
+#include "mlir/Dialect/UB/IR/UBOps.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/Dominance.h"
 #include "mlir/IR/ImplicitLocOpBuilder.h"
@@ -374,6 +375,8 @@ LogicalResult triton::gpu::specializeLoadMMADependencies(scf::ForOp &loop,
   // Replace uses of the original accumulator with the right subview before,
   // inside, and after the loop.
   SmallVector<Operation *> loadsInLoop;
+  b.setInsertionPoint(loop);
+  Value replTok = b.create<ub::PoisonOp>(b.getType<AsyncTokenType>());
   for (OpOperand &use :
        llvm::make_early_inc_range(oldAccAlloc.getResult().getUses())) {
     Operation *user = use.getOwner();
@@ -381,6 +384,8 @@ LogicalResult triton::gpu::specializeLoadMMADependencies(scf::ForOp &loop,
     Value bufIdx;
     if (auto store = dyn_cast<ttng::TMEMStoreOp>(user)) {
       if (loop->isAncestor(store)) {
+        store.getDepMutable().clear();
+        store.getToken().replaceAllUsesWith(replTok);
         mmaPartition->insert(store);
         bufIdx = b.create<arith::AddIOp>(accIndex, intCst(1));
         bufIdx = b.create<arith::RemUIOp>(bufIdx, intCst(numMmaStages));
@@ -391,6 +396,8 @@ LogicalResult triton::gpu::specializeLoadMMADependencies(scf::ForOp &loop,
       }
     } else if (auto load = dyn_cast<ttng::TMEMLoadOp>(user)) {
       if (loop->isAncestor(load)) {
+        load.getDepMutable().clear();
+        load.getToken().replaceAllUsesWith(replTok);
         loadsInLoop.push_back(load);
         bufIdx = accIndex;
       } else {
@@ -399,6 +406,8 @@ LogicalResult triton::gpu::specializeLoadMMADependencies(scf::ForOp &loop,
         bufIdx = loop.getResult(accIndex.getArgNumber() - 1);
       }
     } else if (user == mmaOp) {
+      mmaOp.getAccDepMutable().clear();
+      mmaOp.getToken().replaceAllUsesWith(replTok);
       bufIdx = accIndex;
     } else {
       return mlir::emitWarning(user->getLoc(), "unknown acc user");
