@@ -57,7 +57,7 @@ def PTG_ReadCounterOp : PTG_Op<"read_counter", [
     Read a GPU metric counter into a scalar register.
   }];
   let arguments = (
-    ins DefaultValuedAttr<MetricAttr, "Metric::CYCLE">:$metric
+    ins DefaultValuedAttr<MetricTypeAttr, "MetricType::CYCLE">:$metric
   );
   let results = (outs I32 : $counter);
 

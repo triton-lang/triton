@@ -37,11 +37,11 @@ int TargetInfo::getAddressSpace(Attribute addressSpace) const {
     spaceId = 3;
   } else if (mlir::isa<proton::gpu::StackMemorySpaceAttr>(addressSpace)) {
     spaceId = 1;
-  } else if (mlir::isa<proton::gpu::HeapMemorySpaceAttr>(addressSpace)) {
+  } else if (mlir::isa<proton::gpu::GlobalMemorySpaceAttr>(addressSpace)) {
     spaceId = 1;
   } else {
     llvm::report_fatal_error("Only support SharedMemorySpace, "
-                             "StackMemorySpace, and HeapMemorySpace for now");
+                             "StackMemorySpace, and GlobalMemorySpace for now");
   }
   return spaceId;
 }

@@ -1,5 +1,5 @@
 import functools
-from typing import Dict, List, Optional, Tuple, Any
+from typing import Dict, List, Optional, Tuple, Union, Any
 
 import triton
 from triton._C.libtriton import ir
@@ -12,6 +12,7 @@ from triton.backends import backends
 
 from .hook import Hook
 from ..flags import set_instrumentation_on, set_instrumentation_off
+from .. import mode
 
 
 class CudaAllocator:
@@ -31,8 +32,6 @@ class CudaAllocator:
         aligned_size = max(aligned_size, self.instrumentation_hook.profile_buffer_size)
 
         # Create the buffer
-        # FIXME(Keren): This is not correct in general, as the buffer will be deallocated by the Torch runtime.
-        # We should use a custom allocator to manage the buffer lifecycle.
         buffer = torch.empty((aligned_size, ), dtype=torch.uint8, device="cuda")
         self.instrumentation_hook.buffer = buffer
         return buffer
@@ -61,22 +60,61 @@ class Instrumentation:
         triton_proton.load_dialects(ctx)
 
 
+def _interpret_mode(mode_obj: Union[str, mode.InstrumentationMode]) -> mode.InstrumentationMode:
+    if isinstance(mode_obj, mode.InstrumentationMode):
+        return mode_obj
+
+    parts = mode_obj.split(":")
+    mode_name = parts[0]
+    opts = dict(opt.split("=") for opt in parts[1:])
+
+    # Get option values or empty strings
+    options = {
+        "metric_type": opts.get("metric_type", "cycle"),
+        "buffer_type": opts.get("buffer_type", "shared"),
+        "buffer_strategy": opts.get("buffer_strategy", "circular"),
+        "buffer_size": int(opts.get("buffer_size", "0")),
+        "granularity": opts.get("granularity", "warp"),
+        "sampling_strategy": opts.get("sampling_strategy", "none"),
+        "sampling_options": opts.get("sampling_options", ""),
+    }
+
+    # Helper function to validate and map options to their enum values
+    def get_option_value(opt_name, mapping):
+        value = options[opt_name]
+        if value and value not in mapping:
+            raise ValueError(f"Unknown {opt_name}: {value}")
+        return mapping[value] if value else value
+
+    # Look up enum values for each option
+    options["metric_type"] = get_option_value("metric_type", mode.metric_types)
+    options["buffer_type"] = get_option_value("buffer_type", mode.buffer_types)
+    options["buffer_strategy"] = get_option_value("buffer_strategy", mode.buffer_strategies)
+    options["granularity"] = get_option_value("granularity", mode.granularities)
+    options["sampling_strategy"] = get_option_value("sampling_strategy", mode.sampling_strategies)
+
+    # Create the appropriate mode instance
+    if mode_name in ("default", ""):
+        return mode.Default(**options)
+    elif mode_name == "mma":
+        return mode.MMA(**options)
+    else:
+        raise ValueError(f"Unknown mode: {mode_obj}")
+
+
 class InstrumentationHook(Hook):
     # It's important to note that only one instance of the instrumentation hook can be active at a time.
-    active_count = 0
-    profile_mem = None
+    active_count: int = 0
+    enable_host_buffer: bool = False
+    host_buffer: Optional[Any] = None
+    profile_buffer_size: int = 16 * 1024 * 1024
+    profile_buffer_alignment: int = 128
 
-    def __init__(self, mode: str,  #
-                 profile_buffer_size: int = 16 * 1024 * 1024,  #
-                 profile_buffer_alignment: int = 128,  #
-                 ):
+    def __init__(self, mode_obj: Union[str, mode.InstrumentationMode]):
         # Mapping of function objects to their scope ID pairs
         self.function_scope_ids: Dict[Any, List[Tuple[int, int]]] = {}
-        self.mode = mode
+        self.mode: mode.InstrumentationMode = _interpret_mode(mode_obj)
 
-        # Default buffer configuration
-        self.profile_buffer_size = profile_buffer_size
-        self.profile_buffer_alignment = profile_buffer_alignment
         self.allocator = CudaAllocator(self)
         self.buffer = None
 
@@ -89,13 +127,20 @@ class InstrumentationHook(Hook):
         set_instrumentation_on()
 
         backend = triton.runtime.driver.active.get_current_target().backend
+        device = triton.runtime.driver.active.get_current_device()
+        max_shared_mem = triton.runtime.driver.active.utils.get_device_properties(device)["max_shared_mem"]
 
         def to_llvmir_passes(pm, backend_pass):
             triton_proton.add_allocate_proton_global_scratch_buffer(pm)
             backend_pass(pm)
 
         def to_ttgpuir_passes(pm):
-            triton_proton.add_convert_proton_to_protongpu(pm)
+            triton_proton.add_convert_proton_to_protongpu(pm, self.mode.metric_type, self.mode.sampling_strategy,
+                                                          self.mode.sampling_options, self.mode.granularity,
+                                                          self.mode.buffer_strategy, self.mode.buffer_type,
+                                                          self.mode.buffer_size, max_shared_mem,
+                                                          self.profile_buffer_size, self.profile_buffer_alignment)
+
             triton_proton.add_allocate_proton_shared_memory(pm)
 
         if backend == "cuda":
@@ -123,7 +168,7 @@ class InstrumentationHook(Hook):
 
         @functools.wraps(original_run)
         def instrumented_run(self, *args, **kwargs):
-            kwargs["instrumentation_mode"] = mode
+            kwargs["instrumentation_mode"] = str(mode)
             return original_run(self, *args, **kwargs)
 
         JITFunction.run = instrumented_run
@@ -154,7 +199,8 @@ class InstrumentationHook(Hook):
         set_profile_allocator(NullAllocator())
 
         # Reset host memory for external processing
-        InstrumentationHook.profile_mem = None
+        if InstrumentationHook.enable_host_buffer:
+            InstrumentationHook.host_buffer = None
 
     def init_handle(self, function: Any, module: Any, metadata_group: Dict[str, str]) -> None:
         if function and function not in self.function_scope_ids:
@@ -176,20 +222,16 @@ class InstrumentationHook(Hook):
     def enter(self, lazy_dict: LazyDict) -> None:
         libproton.enter_instrumented_op(lazy_dict.data.get("function", None), self.buffer.data_ptr(),
                                         self.profile_buffer_size)
-        InstrumentationHook.profile_mem = None
+        if InstrumentationHook.enable_host_buffer:
+            InstrumentationHook.host_buffer = None
 
     def exit(self, lazy_dict: LazyDict) -> None:
-        # FIXME(Keren): exit_instrumented_op will sync the device and copy the buffer back to the host.
-        # But this is not necessary if we can delay the copy to reduce the overhead.
-        # We should fix it after the profiling buffer is managed by a custom allocator.
         libproton.exit_instrumented_op(lazy_dict.data.get("function", None), self.buffer.data_ptr(),
                                        self.profile_buffer_size)
 
-        # Copy the profiling buffer to the host for external processing (e.g., 3rd party tools).
-        # FIXME(fywkevin): We should provide a config option to control on/off this behavior.
-        import torch
-        InstrumentationHook.profile_mem = torch.empty_like(self.buffer, device='cpu')
-        InstrumentationHook.profile_mem.copy_(self.buffer)
+        if InstrumentationHook.enable_host_buffer:
+            # Copy the profiling buffer to the CPU for debugging and processing by external tools
+            import torch
 
-        # Release the profiling buffer for recycling
-        self.buffer = None
+            InstrumentationHook.host_buffer = torch.empty_like(self.buffer, device="cpu")
+            InstrumentationHook.host_buffer.copy_(self.buffer)

@@ -7,7 +7,8 @@ from triton import knobs
 from triton._C.libproton import proton as libproton
 from .flags import set_profiling_off, set_profiling_on, is_command_line
 from .hooks import HookManager, LaunchHook, InstrumentationHook
-from typing import Optional
+from .mode import BaseMode
+from typing import Optional, Union
 
 DEFAULT_PROFILE_NAME = "proton"
 
@@ -34,29 +35,6 @@ def _get_backend_default_path(backend: str) -> str:
     return lib_path
 
 
-def _get_backend_default_mode(backend: str, mode: Optional[str]) -> str:
-    # Define supported modes for each backend
-    backend_modes = {
-        "cupti": ["", "pcsampling"],
-        "roctracer": [""],
-        "instrumentation": ["cycles"],
-    }
-
-    # Validate backend
-    if backend not in backend_modes:
-        raise ValueError(f"Unsupported backend: {backend}")
-
-    # Set default mode if none provided
-    if mode is None:
-        mode = "cycles" if backend == "instrumentation" else ""
-
-    # Validate mode
-    if mode not in backend_modes[backend]:
-        raise ValueError(f"Invalid mode {mode} for backend {backend}")
-
-    return mode
-
-
 def _check_env(backend: str) -> None:
     if backend == "roctracer":
         hip_device_envs = ["HIP_VISIBLE_DEVICES", "CUDA_VISIBLE_DEVICES"]
@@ -73,7 +51,7 @@ def start(
     context: Optional[str] = "shadow",
     data: Optional[str] = "tree",
     backend: Optional[str] = None,
-    mode: Optional[str] = None,
+    mode: Optional[Union[str, BaseMode]] = None,
     hook: Optional[str] = None,
 ):
     """
@@ -99,11 +77,14 @@ def start(
         backend (str, optional): The backend to use for profiling.
                                  Available options are [None, "cupti", "roctracer", "instrumentation"].
                                  Defaults to None, which automatically selects the backend matching the current active runtime.
-        mode (str, optional): The "mode" to use for profiling, which is specific to the backend.
-                              Defaults to None.
-                              For "cupti", available options are [None, "pcsampling"].
-                              For "roctracer", available options are [None].
-                              For "instrumentation", available options are [None].
+        mode (Union[str, BaseMode], optional): The "mode" to use for profiling, which is specific to the backend.
+                                               Can be a string or an instance of BaseMode (or any subclass thereof).
+                                               Defaults to None.
+                                               For "cupti", available options are [None, "pcsampling"].
+                                               For "roctracer", available options are [None].
+                                               For "instrumentation", available options are [None, "mma"].
+                                               Each mode has a set of control knobs following with the mode name.
+                                               For example, "pcsampling" has an "interval" control knob, expressed as "pcsampling:interval=1000".
         hook (str, optional): The hook to use for profiling.
                               Available options are [None, "triton"].
                               Defaults to None.
@@ -119,11 +100,12 @@ def start(
     name = DEFAULT_PROFILE_NAME if name is None else name
     backend = _select_backend() if backend is None else backend
     backend_path = _get_backend_default_path(backend)
-    mode = _get_backend_default_mode(backend, mode)
+    mode = "" if mode is None else mode
 
     _check_env(backend)
 
-    session = libproton.start(name, context, data, backend, mode, backend_path)
+    # Convert mode to its string representation for libproton's runtime
+    session = libproton.start(name, context, data, backend, str(mode), backend_path)
 
     if hook == "triton":
         HookManager.register(LaunchHook(), session)
@@ -185,7 +167,7 @@ def finalize(session: Optional[int] = None, output_format: str = "hatchet") -> N
     Args:
         session (int, optional): The session ID to finalize. If None, all sessions are finalized. Defaults to None.
         output_format (str, optional): The output format for the profiling results.
-                                       Aavailable options are ["hatchet"].
+                                       Available options are ["hatchet"].
 
     Returns:
         None
