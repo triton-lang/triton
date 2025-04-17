@@ -53,19 +53,11 @@ struct AllocateProtonGlobalScratchBuffer
 
 } // namespace
 
-namespace mlir {
-
-namespace triton::proton {
-
-namespace gpu {
+namespace mlir::triton::proton::gpu {
 
 std::unique_ptr<OperationPass<ModuleOp>>
 createAllocateProtonGlobalScratchBufferPass() {
   return std::make_unique<AllocateProtonGlobalScratchBuffer>();
 }
 
-} // namespace gpu
-
-} // namespace triton::proton
-
-} // namespace mlir
+} // namespace mlir::triton::proton::gpu
