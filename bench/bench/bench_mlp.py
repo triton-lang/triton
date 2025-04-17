@@ -27,12 +27,19 @@ def _query_gpu_specs():
     else:
         cmd = ["rocm-smi", "--showproductname", "-d=0", "--csv"]
         output = subprocess.check_output(cmd, stderr=subprocess.DEVNULL).decode().strip()
-        name = output.splitlines()[1].split(",")[1]
+        model = output.splitlines()[1].split(",")[2]
+        if model in ["0x74a9", "0x74a1"]:
+            name = "AMD MI300X"
+        elif model == "0x74a5":
+            name = "AMD MI325X"
+        else:
+            name = "AMD"
 
     gpu_specs = {
         "NVIDIA H100 80GB HBM3": {"MAX_TFLOPS8": 1979, "MAX_TFLOPS16": 989, "MAX_TBPS": 3.35},
         "HGX GB200": {"MAX_TFLOPS8": 4500, "MAX_TFLOPS16": 2250, "MAX_TBPS": 8.0},
-        "AMD Instinct MI300X OAM": {"MAX_TFLOPS8": 2615, "MAX_TFLOPS16": 1307, "MAX_TBPS": 5.3},
+        "AMD Instinct MI300X": {"MAX_TFLOPS8": 2615, "MAX_TFLOPS16": 1307, "MAX_TBPS": 5.3},
+        "AMD Instinct MI325X": {"MAX_TFLOPS8": 2615, "MAX_TFLOPS16": 1307, "MAX_TBPS": 6.0},
     }
     return gpu_specs.get(name)
 
