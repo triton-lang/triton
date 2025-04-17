@@ -1,4 +1,4 @@
-// RUN: triton-opt --split-input-file -convert-proton-to-protongpu="max-shared-mem=1024" -canonicalize -cse %s | FileCheck %s
+// RUN: triton-opt --split-input-file -convert-proton-to-protongpu="max-shared-mem-size=1024" -canonicalize -cse %s | FileCheck %s
 
 module {
   // CHECK-LABEL: no_record

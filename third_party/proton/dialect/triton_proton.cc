@@ -13,47 +13,91 @@
 #include <pybind11/stl_bind.h>
 
 namespace py = pybind11;
+using namespace mlir::triton;
 
 void init_triton_proton(py::module &&m) {
   m.doc() = "Python bindings to the Proton backend";
 
-  // load dialects
+  // Proton enums
+  py::enum_<proton::MetricType>(m, "METRIC_TYPE", py::module_local())
+      .value("CYCLE", proton::MetricType::CYCLE)
+      .export_values();
+
+  py::enum_<proton::SamplingStrategy>(m, "SAMPLING_STRATEGY",
+                                      py::module_local())
+      .value("NONE", proton::SamplingStrategy::NONE)
+      .export_values();
+
+  // ProtonGPU enums
+  py::enum_<proton::gpu::Granularity>(m, "GRANULARITY", py::module_local())
+      .value("CTA", proton::gpu::Granularity::CTA)
+      .value("WARP", proton::gpu::Granularity::WARP)
+      .value("WARP_2", proton::gpu::Granularity::WARP_2)
+      .value("WARP_4", proton::gpu::Granularity::WARP_4)
+      .value("WARP_8", proton::gpu::Granularity::WARP_8)
+      .value("WARP_GROUP", proton::gpu::Granularity::WARP_GROUP)
+      .value("WARP_GROUP_2", proton::gpu::Granularity::WARP_GROUP_2)
+      .value("WARP_GROUP_4", proton::gpu::Granularity::WARP_GROUP_4)
+      .value("WARP_GROUP_8", proton::gpu::Granularity::WARP_GROUP_8)
+      .export_values();
+
+  py::enum_<proton::gpu::BufferStrategy>(m, "BUFFER_STRATEGY",
+                                         py::module_local())
+      .value("CIRCULAR", proton::gpu::BufferStrategy::CIRCULAR)
+      .value("FLUSH", proton::gpu::BufferStrategy::FLUSH)
+      .export_values();
+
+  py::enum_<proton::gpu::BufferType>(m, "BUFFER_TYPE", py::module_local())
+      .value("STACK", proton::gpu::BufferType::STACK)
+      .value("SHARED", proton::gpu::BufferType::SHARED)
+      .value("GLOBAL", proton::gpu::BufferType::GLOBAL)
+      .export_values();
+
+  // Load proton dialects
   m.def("load_dialects", [](mlir::MLIRContext &context) {
     mlir::DialectRegistry registry;
-    registry.insert<mlir::triton::proton::ProtonDialect>();
-    registry.insert<mlir::triton::proton::gpu::ProtonGPUDialect>();
+    registry.insert<proton::ProtonDialect>();
+    registry.insert<proton::gpu::ProtonGPUDialect>();
     context.appendDialectRegistry(registry);
     context.loadAllAvailableDialects();
   });
 
   m.def("get_scope_id_pairs", [](mlir::ModuleOp &module) {
-    auto moduleScopeIdAllocation =
-        mlir::triton::proton::ModuleScopeIdAllocation(module);
+    auto moduleScopeIdAllocation = proton::ModuleScopeIdAllocation(module);
     return moduleScopeIdAllocation.getScopeIdPairs();
   });
 
+  // Proton operations
   m.def("create_proton_record",
         [](mlir::OpBuilder &opBuilder, bool isStart,
            const std::string &name) -> void {
           auto nameAttr = mlir::StringAttr::get(opBuilder.getContext(),
                                                 llvm::StringRef(name));
           auto loc = opBuilder.getUnknownLoc();
-          opBuilder.create<mlir::triton::proton::RecordOp>(loc, isStart,
-                                                           nameAttr);
+          opBuilder.create<proton::RecordOp>(loc, isStart, nameAttr);
         });
 
-  ADD_PASS_WRAPPER_0("add_convert_proton_to_protongpu",
-                     mlir::triton::proton::createConvertProtonToProtonGPUPass);
-  ADD_PASS_WRAPPER_0(
-      "add_convert_proton_nvidia_gpu_to_llvm",
-      mlir::triton::proton::gpu::createConvertProtonNvidiaGPUToLLVMPass);
-  ADD_PASS_WRAPPER_0(
-      "add_convert_proton_amd_gpu_to_llvm",
-      mlir::triton::proton::gpu::createConvertProtonAMDGPUToLLVMPass);
-  ADD_PASS_WRAPPER_0(
-      "add_allocate_proton_shared_memory",
-      mlir::triton::proton::gpu::createAllocateProtonSharedMemoryPass);
-  ADD_PASS_WRAPPER_0(
-      "add_allocate_proton_global_scratch_buffer",
-      mlir::triton::proton::gpu::createAllocateProtonGlobalScratchBufferPass);
+  m.def("add_convert_proton_to_protongpu",
+        [](mlir::PassManager &pm, proton::MetricType &metricType,
+           proton::SamplingStrategy samplingStrategy,
+           const std::string &samplingOptions,
+           proton::gpu::Granularity granularity,
+           proton::gpu::BufferStrategy bufferStrategy,
+           proton::gpu::BufferType bufferType, int32_t bufferSize,
+           int32_t maxSharedMemSize, int64_t profileScratchSize,
+           int32_t profileScratchAlignment) {
+          pm.addPass(proton::createConvertProtonToProtonGPUPass(
+              metricType, samplingStrategy, samplingOptions, granularity,
+              bufferStrategy, bufferType, bufferSize, maxSharedMemSize,
+              profileScratchSize, profileScratchAlignment));
+        });
+
+  ADD_PASS_WRAPPER_0("add_convert_proton_nvidia_gpu_to_llvm",
+                     proton::gpu::createConvertProtonNvidiaGPUToLLVMPass);
+  ADD_PASS_WRAPPER_0("add_convert_proton_amd_gpu_to_llvm",
+                     proton::gpu::createConvertProtonAMDGPUToLLVMPass);
+  ADD_PASS_WRAPPER_0("add_allocate_proton_shared_memory",
+                     proton::gpu::createAllocateProtonSharedMemoryPass);
+  ADD_PASS_WRAPPER_0("add_allocate_proton_global_scratch_buffer",
+                     proton::gpu::createAllocateProtonGlobalScratchBufferPass);
 }
