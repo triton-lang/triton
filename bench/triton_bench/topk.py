@@ -1,6 +1,13 @@
+from dataclasses import dataclass
 import torch
 import triton
 import triton.language as tl
+
+
+@dataclass
+class Bitmatrix:
+    data: torch.Tensor
+    shape: tuple[int]
 
 
 @triton.jit
@@ -66,16 +73,15 @@ def _compute_topk(X, stride_xm,  # inputs
     tl.store(Yi_ptrs, y_indices, mask=mask_m)
 
     # pack into bitmatrix
-    if Bits is None:
-        y_div = y_indices // 32
-        y_rem = y_indices % 32
-        loop_iterations = N_EXPTS_PAD // BLOCK_N
-        for i in range(loop_iterations):
-            offs_r_n = tl.arange(0, BLOCK_N // 32) + i * (BLOCK_N // 32)
-            y2 = tl.where(y_div[:, :, None] == offs_r_n[None, None, :], (1 << y_rem)[:, :, None], 0)
-            r = tl.reduce_or(y2, axis=1)
-            BitsPtrs = Bits + offs_m[:, None] * stride_rm + offs_r_n[None, :]
-            tl.store(BitsPtrs, r, mask=mask_m)
+    y_div = y_indices // 32
+    y_rem = y_indices % 32
+    loop_iterations = N_EXPTS_PAD // BLOCK_N
+    for i in range(loop_iterations):
+        offs_r_n = tl.arange(0, BLOCK_N // 32) + i * (BLOCK_N // 32)
+        y2 = tl.where(y_div[:, :, None] == offs_r_n[None, None, :], (1 << y_rem)[:, :, None], 0)
+        r = tl.reduce_or(y2, axis=1)
+        BitsPtrs = Bits + offs_m[:, None] * stride_rm + offs_r_n[None, :]
+        tl.store(BitsPtrs, r, mask=mask_m)
 
 
 def topk(x, k, dim=1, return_bitmatrix=True):
@@ -86,6 +92,7 @@ def topk(x, k, dim=1, return_bitmatrix=True):
     assert x.ndim == 2
     assert x.shape[-1] < 32768
     assert dim == 1
+    assert return_bitmatrix
     n_rows, n_cols = x.shape
     dev = x.device
     n_cols_pad = cdiv(n_cols, BLOCK_N) * BLOCK_N
@@ -94,10 +101,7 @@ def topk(x, k, dim=1, return_bitmatrix=True):
     # NOTE: these are not returned
     y_vals = torch.empty((n_rows, k), dtype=x.dtype, device=dev)
     y_indx = torch.empty((n_rows, k), dtype=torch.int16, device=dev)
-    if return_bitmatrix:
-        bitmatrix = torch.empty((n_rows, n_cols_words), dtype=torch.uint32, device=dev)
-    else:
-        bitmatrix = None
+    bitmatrix = torch.empty((n_rows, n_cols_words), dtype=torch.uint32, device=dev)
     _compute_topk[(cdiv(n_rows, BLOCK_M), )](
         x, x.stride(0),  # inputs
         y_vals, y_indx, y_vals.stride(0),  # output [topk]
@@ -106,4 +110,4 @@ def topk(x, k, dim=1, return_bitmatrix=True):
         BLOCK_M=BLOCK_M, BLOCK_N=BLOCK_N,  # tunable parameter
         N_EXPTS_PAD=n_cols_pad, N_EXPTS_ACT=k,  # constants
     )
-    return y_vals, y_indx, bitmatrix
+    return y_vals, y_indx, Bitmatrix(bitmatrix, [n_rows, n_cols])

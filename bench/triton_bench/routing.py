@@ -51,16 +51,17 @@ class RoutingData:
 
 
 def routing(logits, n_expts_act, expt_indx=None):
-    assert expt_indx is None
     from .topk import topk
     from .hist import hist
-    dev = logits.device
+    assert expt_indx is None
     cdiv = triton.cdiv
     HIST1_BLOCK_M = 64
+    assert logits.dtype.itemsize == 2
     n_tokens, n_expts_tot = logits.shape
     n_gates = n_tokens * n_expts_act
+    dev = logits.device
     expt_scal, expt_indx, bitmatrix = topk(logits, n_expts_act)
-    histogram, partial_offs = hist(bitmatrix, n_expts_tot, output_mode=(True, HIST1_BLOCK_M))
+    counts, offs, partial_counts, partial_offs = hist(bitmatrix, output_mode=(True, HIST1_BLOCK_M))
     topk_indx = torch.empty(n_gates, dtype=torch.int32, device=dev)
     gate_indx = torch.empty(n_gates, dtype=torch.int32, device=dev)
     gate_scal = torch.empty(n_gates, dtype=logits.dtype, device=dev)
@@ -73,7 +74,7 @@ def routing(logits, n_expts_act, expt_indx=None):
     # pack the matmul data structure
     gather_indx = GatherIndx(src_indx=topk_indx, dst_indx=gate_indx)
     scatter_indx = ScatterIndx(src_indx=gate_indx, dst_indx=topk_indx)
-    return RoutingData(gate_scal, histogram, n_expts_tot, n_expts_act), gather_indx, scatter_indx
+    return RoutingData(gate_scal, counts, n_expts_tot, n_expts_act), gather_indx, scatter_indx
 
 
 def routing_torch(logits, n_expts_act, expt_indx=None):

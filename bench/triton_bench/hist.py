@@ -1,3 +1,4 @@
+from dataclasses import dataclass
 import torch
 import triton
 import triton.language as tl
@@ -106,40 +107,38 @@ def _finalize_hist(TokensStart, PartialHist, PartialOffs, shape_pm, stride_pm, B
         offs_m += BLOCK_M
 
 
-def hist(x, n_cols, input_mode="bitmatrix", output_mode=(True, 64), dim=0):
-    assert input_mode == "bitmatrix", "only bitmatrix histograms currently supported"
+def hist(x, output_mode=(True, 64), dim=0):
     assert dim == 0
-    assert x.ndim == 2
     return_partials, PARTIALS_BLOCK_M = output_mode
     assert return_partials
     cdiv = triton.cdiv
-    dev = x.device
+    dev = x.data.device
     HIST1_BLOCK_N = 32
     HIST1_BLOCK_N2 = 512
     HIST2_BLOCK_M = 512
     MEMSET_BLOCK = 512
-    n_rows = x.shape[0]
+    n_rows, n_cols = x.shape
     # scratchpad tensors
     # NOTE: these are not returned
-    hist = torch.empty(n_cols, dtype=torch.int32, device=dev)
+    counts = torch.empty(n_cols, dtype=torch.int32, device=dev)
     offs = torch.empty(n_cols + 1, dtype=torch.int32, device=dev)
-    partial_hist = torch.empty((cdiv(n_rows, PARTIALS_BLOCK_M), n_cols), dtype=torch.int32, device=dev)
+    partial_counts = torch.empty((cdiv(n_rows, PARTIALS_BLOCK_M), n_cols), dtype=torch.int32, device=dev)
     partial_offs = torch.empty((cdiv(n_rows, PARTIALS_BLOCK_M), n_cols), dtype=torch.int32, device=dev)
     # output tensors
-    _memset_hist[(cdiv(hist.shape[0], MEMSET_BLOCK), )](
-        hist, hist.shape[0], offs,  # outputs
+    _memset_hist[(cdiv(counts.shape[0], MEMSET_BLOCK), )](
+        counts, counts.shape[0], offs,  # outputs
         BLOCK=512  # tunable parameter
     )
     _compute_hist[(cdiv(n_rows, PARTIALS_BLOCK_M), cdiv(n_cols, HIST1_BLOCK_N))](
-        x, x.shape[0], x.stride(0),  # input
-        hist,  # output [histogram]
-        offs, partial_hist, partial_hist.stride(0), partial_hist.shape[1],  # output [cumsums]
+        x.data, x.data.shape[0], x.data.stride(0),  # input
+        counts,  # output [histogram]
+        offs, partial_counts, partial_counts.stride(0), partial_counts.shape[1],  # output [cumsums]
         BLOCK_N=HIST1_BLOCK_N, BLOCK_N2=HIST1_BLOCK_N2,  # tunable parameters
         BLOCK_M=PARTIALS_BLOCK_M,  # constants
     )
     _finalize_hist[(n_cols, )](
-        offs, partial_hist,  # inputs
-        partial_offs, partial_hist.shape[0], partial_hist.stride(0),  # outputs
+        offs, partial_counts,  # inputs
+        partial_offs, partial_counts.shape[0], partial_counts.stride(0),  # outputs
         BLOCK_M=HIST2_BLOCK_M,  # tunable parameters
     )
-    return hist, partial_offs
+    return counts, offs, partial_counts, partial_offs
