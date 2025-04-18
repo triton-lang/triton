@@ -562,7 +562,7 @@ Traits: `TensorSizeTrait`, `VerifyTensorLayoutsTrait`
 
 ### `tt.descriptor_scatter` (triton::DescriptorScatterOp)
 
-_Scatter multiple rows from a tensor into a descriptor_
+_Scatter multiple rows to a descriptor from a single tensor_
 
 Syntax:
 

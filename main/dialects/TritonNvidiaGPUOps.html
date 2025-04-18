@@ -988,7 +988,8 @@ slice alog the inner dimension of a 2D memdesc as this is the only one we can do
 <h2><code class="docutils literal notranslate"><span class="pre">ttng.wait_barrier</span></code> (triton::nvidia_gpu::WaitBarrierOp)<a class="headerlink" href="#ttng-wait-barrier-triton-nvidia-gpu-waitbarrierop" title="Link to this heading">¶</a></h2>
 <p><em>Wait until the mbarrier phase completes.</em></p>
 <p>Syntax:</p>
-<div class="highlight-default notranslate"><div class="highlight"><pre><span></span>operation ::= `ttng.wait_barrier` $alloc `,` $phase (`,` $pred^)? (`deps` $deps^)? attr-dict `:` qualified(type($alloc)) (`,` type($deps)^)?
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span>operation ::= `ttng.wait_barrier` $alloc `,` $phase (`,` $pred^)? (`deps` $deps^)?
+              attr-dict `:` qualified(type($alloc)) (`,` type($deps)^)?
 </pre></div>
 </div>
 <p>Blocks the program progress until the mbarrier object in <code class="docutils literal notranslate"><span class="pre">alloc</span></code> completes
