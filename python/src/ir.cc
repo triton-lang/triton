@@ -1329,6 +1329,72 @@ void init_triton_ir(py::module &&m) {
              auto op = self.create<SplitOp>(a);
              return std::vector<Value>(op->result_begin(), op->result_end());
            })
+      .def("create_slice",
+           [](TritonOpBuilder &self, Value &ful,
+              std::vector<Value> &offs_vec, std::vector<int> &sizs_vec,
+              std::vector<int> &strd_vec) -> Value {
+             llvm::SmallVector<Value> offsets;
+             for (const auto &o : offs_vec) {
+              auto oTy = o.getType();
+              if (!oTy.isIndex()) {
+                auto v = self.create<arith::IndexCastOp>(
+                  self.getBuilder().getIndexType(), o);
+                offsets.push_back(v);
+              } else {
+                offsets.push_back(o);
+              }
+             }
+             llvm::SmallVector<Value> sizes;
+             llvm::SmallVector<int64_t> retSizes;
+             for (const auto &s : sizs_vec) {
+               auto v = self.create<arith::ConstantIndexOp>(s);
+               sizes.push_back(v);
+               retSizes.push_back(s);
+             }
+             llvm::SmallVector<Value> strides;
+             for (const auto &s : strd_vec) {
+               auto v = self.create<arith::ConstantIndexOp>(s);
+               strides.push_back(v);
+             }
+             auto retTy = RankedTensorType::get(retSizes,
+              cast<RankedTensorType>(ful.getType()).getElementType());
+             auto ret = self.create<tensor::ExtractSliceOp>(
+               retTy, ful, offsets, sizes, strides);
+             return ret;
+           })
+      .def("create_insert",
+            [](TritonOpBuilder &self, Value &ful, Value &sub,
+               std::vector<Value> &offs_vec, std::vector<int> &sizs_vec,
+               std::vector<int> &strd_vec) -> Value {
+              llvm::SmallVector<Value> offsets;
+              for (const auto &o : offs_vec) {
+                auto oTy = o.getType();
+                if (!oTy.isIndex()) {
+                  auto v = self.create<arith::IndexCastOp>(
+                    self.getBuilder().getIndexType(), o);
+                  offsets.push_back(v);
+                } else {
+                  offsets.push_back(o);
+                }
+              }
+              llvm::SmallVector<Value> sizes;
+              llvm::SmallVector<int64_t> retSizes;
+              for (const auto &s : sizs_vec) {
+                auto v = self.create<arith::ConstantIndexOp>(s);
+                sizes.push_back(v);
+                retSizes.push_back(s);
+              }
+              llvm::SmallVector<Value> strides;
+              for (const auto &s : strd_vec) {
+                auto v = self.create<arith::ConstantIndexOp>(s);
+                strides.push_back(v);
+              }
+              auto retTy = RankedTensorType::get(retSizes,
+                cast<RankedTensorType>(ful.getType()).getElementType());
+              auto ret = self.create<tensor::InsertSliceOp>(
+                sub, ful, offsets, sizes, strides);
+              return ret;
+            })
       // Implements tl.trans and tl.permute.
       .def("create_trans",
            [](TritonOpBuilder &self, Value &arg,
@@ -1466,6 +1532,10 @@ void init_triton_ir(py::module &&m) {
            [](TritonOpBuilder &self, Value &val) -> Value {
              return self.create<math::ErfOp>(val);
            })
+      .def("create_tanh",
+            [](TritonOpBuilder &self, Value &val) -> Value {
+              return self.create<math::TanhOp>(val);
+            })
       .def("create_sqrt",
            [](TritonOpBuilder &self, Value &val) -> Value {
              return self.create<math::SqrtOp>(val);

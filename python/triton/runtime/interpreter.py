@@ -270,6 +270,9 @@ class InterpreterBuilder:
     def get_double_ty(self):
         return tl.float64
 
+    def get_int1_ty(self):
+        return tl.int1
+
     def get_int8_ty(self):
         return tl.int8
 
@@ -528,6 +531,7 @@ class InterpreterBuilder:
     create_precise_sqrt = lambda self, arg: self.unary_op(arg, np.sqrt)
     create_sqrt = lambda self, arg: self.unary_op(arg, np.sqrt)
     create_sin = lambda self, arg: self.unary_op(arg, np.sin)
+    create_tanh = lambda self, arg: self.unary_op(arg, np.tanh)
 
     def create_erf(self, arg):
         ret = np_erf_fp32(arg.data) if arg.data.dtype == np.float32 else np_erf_fp64(arg.data)
@@ -1069,7 +1073,6 @@ class GridExecutor:
         for arg_dev, arg_hst in zip(args_dev, args_hst):
             if hasattr(arg_dev, "data_ptr"):
                 arg_dev.data.copy_(arg_hst.to(arg_dev.device).data)
-
         # Restore keyword arguments
         for key, kwarg_dev in kwargs.items():
             kwarg_hst = kwargs_hst[key]
@@ -1081,6 +1084,28 @@ class GridExecutor:
         kwargs = {k: v for k, v in kwargs.items() if k not in RESERVED_KWS}
         if kwargs.pop("warmup", False):
             return
+        kwargs_backup = {}
+        import inspect
+        sig = inspect.signature(self.fn)
+        if (not 'NBLOCKS' in sig.parameters) and ('NBLOCKS' in kwargs.keys()):
+            kwargs_backup['NBLOCKS'] = kwargs['NBLOCKS']
+            del kwargs['NBLOCKS']
+        # if ('RBLOCK' in kwargs.keys() and kwargs['RBLOCK'] == 1):
+        if (not 'RBLOCK' in sig.parameters) and ('RBLOCK' in kwargs.keys()):
+            kwargs_backup['RBLOCK'] = kwargs['RBLOCK']
+            del kwargs['RBLOCK']
+        if (not 'split_axis_order' in sig.parameters) and ('split_axis_order' in kwargs.keys()):
+            kwargs_backup['split_axis_order'] = kwargs['split_axis_order']
+            del kwargs['split_axis_order']
+        if (not 'axis2_order' in sig.parameters) and ('axis2_order' in kwargs.keys()):
+            kwargs_backup['axis2_order'] = kwargs['axis2_order']
+            del kwargs['axis2_order']
+        if (not 'is_low_dim' in sig.parameters) and ('is_low_dim' in kwargs.keys()):
+            kwargs_backup['is_low_dim'] = kwargs['is_low_dim']
+            del kwargs['is_low_dim']
+        if (not 'split_axis_dtype' in sig.parameters) and ('split_axis_dtype' in kwargs.keys()):
+            kwargs_backup['split_axis_dtype'] = kwargs['split_axis_dtype']
+            del kwargs['split_axis_dtype']
         # copy arguments to the host
         args_hst, kwargs_hst = self._init_args_hst(args_dev, kwargs)
         # remaps core language functions to interpreted ones
@@ -1090,10 +1115,34 @@ class GridExecutor:
         args = inspect.getcallargs(self.fn, *args_hst, **kwargs_hst)
         args = {name: arg if name in self.constexprs else _implicit_cvt(arg) for name, arg in args.items()}
         # iterate through grid
+        if ('NBLOCKS' in kwargs_backup.keys()):
+            args['NBLOCKS'] = kwargs_backup['NBLOCKS']
+        if ('RBLOCK' in kwargs_backup.keys()):
+            args['RBLOCK'] = kwargs_backup['RBLOCK']
+        if ('split_axis_order' in kwargs_backup.keys()):
+            args['split_axis_order'] = kwargs_backup['split_axis_order']
+        if ('axis2_order' in kwargs_backup.keys()):
+            args['axis2_order'] = kwargs_backup['axis2_order']
+        if ('is_low_dim' in kwargs_backup.keys()):
+            args['is_low_dim'] = kwargs_backup['is_low_dim']
+        if ('split_axis_dtype' in kwargs_backup.keys()):
+            args['split_axis_dtype'] = kwargs_backup['split_axis_dtype']
         grid = self.grid(args) if callable(self.grid) else self.grid
         assert len(grid) <= 3, "grid must have at most 3 dimensions"
         grid = grid + (1, ) * (3 - len(grid))
         interpreter_builder.set_grid_dim(*grid)
+        if ('NBLOCKS' not in sig.parameters) and ('NBLOCKS' in args):
+            del args['NBLOCKS']
+        if ('RBLOCK' not in sig.parameters) and ('RBLOCK' in args):
+            del args['RBLOCK']
+        if ('split_axis_order' not in sig.parameters) and ('split_axis_order' in args):
+            del args['split_axis_order']
+        if ('axis2_order' not in sig.parameters) and ('axis2_order' in args):
+            del args['axis2_order']
+        if ('is_low_dim' not in sig.parameters) and ('is_low_dim' in args):
+            del args['is_low_dim']
+        if ('split_axis_dtype' not in sig.parameters) and ('split_axis_dtype' in args):
+            del args['split_axis_dtype']
         try:
             for x in range(grid[0]):
                 for y in range(grid[1]):
@@ -1101,6 +1150,7 @@ class GridExecutor:
                         interpreter_builder.set_grid_idx(x, y, z)
                         self.fn(**args)
         except Exception as e:
+            breakpoint()
             raise InterpreterError(repr(e)) from e
         # copy arguments back to propagate side-effects
         self._restore_args_dev(args_dev, args_hst, kwargs, kwargs_hst)

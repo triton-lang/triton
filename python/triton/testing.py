@@ -112,6 +112,10 @@ def do_bench(fn, warmup=25, rep=100, grad_to_none=None, quantiles=None, return_m
     assert return_mode in ["min", "max", "mean", "median", "all"]
     import torch
 
+    enable_bench_npu = os.getenv("TRITON_BENCH_METHOD", 'default').lower() in ('npu')
+    if torch.npu.is_available() and enable_bench_npu:
+        return do_bench_npu(fn, warmup=max(5, warmup), active=max(30, rep))
+
     di = runtime.driver.active.get_device_interface()
 
     fn()
@@ -157,6 +161,67 @@ def do_bench(fn, warmup=25, rep=100, grad_to_none=None, quantiles=None, return_m
     times = torch.tensor([s.elapsed_time(e) for s, e in zip(start_event, end_event)], dtype=torch.float)
     return _summarize_statistics(times, quantiles, return_mode)
 
+def collect_files(base_dir):
+    import pandas as pd
+    for root, dirs, files in os.walk(base_dir):
+        for file in files:
+            if file != 'op_statistic.csv':
+                continue
+            target_file = os.path.join(root, file)
+            df = pd.read_csv(target_file)
+            triton_rows = df[df['OP Type'].str.startswith('triton', na=False)]
+            if not triton_rows.empty:
+                return triton_rows['Avg Time(us)'].values[0]
+            return float('inf')
+    return float('inf')
+
+def do_bench_npu(fn, warmup=5, active=30):
+    import torch
+    import torch_npu
+    import hashlib
+    from datetime import datetime
+
+    stream = torch.npu.current_stream()
+    experimental_config = torch_npu.profiler._ExperimentalConfig(
+        aic_metrics=torch_npu.profiler.AiCMetrics.PipeUtilization,
+        profiler_level=torch_npu.profiler.ProfilerLevel.Level1,
+        l2_cache=False,
+        data_simplification=False
+    )
+    skip_first = 1
+    wait = 0
+    repeat = 1
+    total = skip_first + (wait + warmup + active) * repeat
+    md5_hash = hashlib.md5(datetime.now().strftime('%Y-%m-%d').encode('utf-8')).hexdigest()
+    torch_path="./profile_result/"+md5_hash
+    with torch_npu.profiler.profile(
+        activities=[
+            torch_npu.profiler.ProfilerActivity.NPU
+            ],
+        schedule=torch_npu.profiler.schedule(wait=wait, warmup=warmup, active=active, repeat=repeat, skip_first=skip_first),
+        on_trace_ready=torch_npu.profiler.tensorboard_trace_handler(torch_path),
+        record_shapes=False,
+        profile_memory=False,
+        with_stack=False,
+        with_flops=False,
+        with_modules=False,
+        experimental_config=experimental_config) as prof:
+        stream.synchronize()
+
+        for i in range(total):
+            fn()
+            prof.step()
+        stream.synchronize()
+
+    time = collect_files(torch_path)
+
+    import shutil
+    import os
+    if os.path.exists(torch_path):
+        shutil.rmtree(torch_path)
+    # TODO: use logging
+    # print("avg time = ", time, type(time))
+    return time
 
 def assert_close(x, y, atol=None, rtol=None, err_msg=''):
     """

@@ -252,6 +252,12 @@ def compile(src, target=None, options=None):
         # cache hit!
         metadata = json.loads(Path(metadata_path).read_text())
         return CompiledKernel(src, metadata_group, hash)
+    compile_speed_opt = os.getenv("TRITON_ASCEND_COMPILE_SPEED_OPT", 'false').lower() in ('true', '1')
+    if (compile_speed_opt):
+        ttir_path = f"{file_name}.ttir"
+        if (metadata_path is None) and (fn_cache_manager.has_file(ttir_path)):
+            # Already compile once but failed. So directly return
+            raise Exception("already failed once")
     # initialize metadata
     metadata = {
         "hash": hash,
@@ -381,10 +387,12 @@ class CompiledKernel:
     def _init_handles(self):
         if self.module is not None:
             return
-        device = driver.active.get_current_device()
         # create launcher
         self.run = driver.active.launcher_cls(self.src, self.metadata)
         # not enough shared memory to run the kernel
+        # on NPU, get_device_properties in fact does not use the device param
+        # but we still need to preserve it because triton defines the API
+        device = 0
         max_shared = driver.active.utils.get_device_properties(device)["max_shared_mem"]
         if self.metadata.shared > max_shared:
             raise OutOfResources(self.metadata.shared, max_shared, "shared memory")
