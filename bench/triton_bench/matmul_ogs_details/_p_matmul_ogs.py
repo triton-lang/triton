@@ -272,7 +272,7 @@ def _p_matmul_ogs(
     # Enable warp specialization when all loads are TMA loads. Don't enable it
     # for mixed-precision yet.
     ENABLE_WS: tl.constexpr = True
-    WARP_SPECIALIZE: tl.constexpr = ((USE_GATHER_TMA or X_USE_LOAD_TMA) and not is_microscaled_format) and ENABLE_WS
+    WARP_SPECIALIZE: tl.constexpr = (USE_GATHER_TMA or X_USE_LOAD_TMA) and ENABLE_WS
 
     for tile_id in tl.range(tl.program_id(0), num_tiles, NUM_SMS, flatten=True, disallow_acc_multi_buffer=DISALLOW_ACC_MULTI_BUFFER, warp_specialize=WARP_SPECIALIZE):
         expt_id, start_z, start_m, eM, off_m, off_n, pid_k = _load_tile_attrs(
