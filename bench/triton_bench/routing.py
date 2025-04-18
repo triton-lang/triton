@@ -48,6 +48,43 @@ class RoutingData:
 # --------------------------
 # Triton routing
 # --------------------------
+import triton
+import triton.language as tl
+
+
+@triton.jit
+def _routing_compute_final_expert_offs(ExpertHist, FinalExpertOffs, hist_size,  # histogram
+                                       BLOCK_N: tl.constexpr):
+    loop_iterations = (hist_size + BLOCK_N - 1) // BLOCK_N
+    x = tl.zeros([BLOCK_N], ExpertHist.dtype.element_ty)
+    offs_n = tl.arange(0, BLOCK_N)
+    for i in range(loop_iterations):
+        hist2 = tl.load(ExpertHist + offs_n)
+        tok_starts = tl.cumsum(hist2, 0) + x
+        x += tl.sum(hist2, 0)
+        tl.store(FinalExpertOffs, 0)
+        tl.store(FinalExpertOffs + 1 + offs_n, tok_starts, mask=offs_n < hist_size)
+        offs_n += BLOCK_N
+
+
+@triton.jit
+def _routing_compute_partial_expert_offs(TokensStart, PartialHist, PartialOffs, shape_pm, stride_pm,
+                                         BLOCK_M: tl.constexpr):
+    expt_id = tl.program_id(0)
+    offs_m = tl.arange(0, BLOCK_M)
+    # initialize first row of the output
+    start = tl.load(TokensStart + expt_id)
+    tl.store(PartialOffs + expt_id, start)
+    # iterate over input data
+    curr_sum = start
+    for _ in range(0, shape_pm, BLOCK_M):
+        offs = offs_m * stride_pm + expt_id
+        curr = tl.load(PartialHist + offs, mask=offs_m < shape_pm)
+        out = tl.cumsum(curr, 0) + curr_sum
+        curr_sum += tl.sum(curr, 0)
+        offs = (1 + offs_m) * stride_pm + expt_id
+        tl.store(PartialOffs + offs, out, mask=offs_m < shape_pm - 1)
+        offs_m += BLOCK_M
 
 
 def routing(logits, n_expts_act, expt_indx=None):
@@ -56,12 +93,25 @@ def routing(logits, n_expts_act, expt_indx=None):
     assert expt_indx is None
     cdiv = triton.cdiv
     HIST1_BLOCK_M = 64
+    HIST2_BLOCK_M = 512
     assert logits.dtype.itemsize == 2
     n_tokens, n_expts_tot = logits.shape
     n_gates = n_tokens * n_expts_act
     dev = logits.device
     expt_scal, expt_indx, bitmatrix = topk(logits, n_expts_act)
-    counts, offs, partial_counts, partial_offs = hist(bitmatrix, output_mode=(True, HIST1_BLOCK_M))
+    counts, partial_counts = hist(bitmatrix, partials_block_size=HIST1_BLOCK_M)
+    # scratchpad
+    offs = torch.empty(n_expts_tot + 1, dtype=torch.int32, device=dev)
+    partial_offs = torch.empty((cdiv(n_tokens, HIST1_BLOCK_M), n_expts_tot), dtype=torch.int32, device=dev)
+    _routing_compute_final_expert_offs[(1, )](
+        counts, offs, counts.shape[0], BLOCK_N=512  # tunable parameters
+    )
+    _routing_compute_partial_expert_offs[(n_expts_tot, )](
+        offs, partial_counts,  # inputs
+        partial_offs, partial_counts.shape[0], partial_counts.stride(0),  # outputs
+        BLOCK_M=HIST2_BLOCK_M,  # tunable parameters
+    )
+    # output
     topk_indx = torch.empty(n_gates, dtype=torch.int32, device=dev)
     gate_indx = torch.empty(n_gates, dtype=torch.int32, device=dev)
     gate_scal = torch.empty(n_gates, dtype=logits.dtype, device=dev)

@@ -1,13 +1,7 @@
-from dataclasses import dataclass
 import torch
 import triton
 import triton.language as tl
-
-
-@dataclass
-class Bitmatrix:
-    data: torch.Tensor
-    shape: tuple[int]
+from . import Bitmatrix
 
 
 @triton.jit
