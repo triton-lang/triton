@@ -224,6 +224,11 @@ def wget_url(url):
     triton_cache_path = get_triton_cache_path()
     npu_compiler_path = os.path.abspath(os.path.join(triton_cache_path, "npu"))
     npu_compiler_file = os.path.join(npu_compiler_path, "npu_compiler.tar.gz")
+    subprocess.run([
+        'mkdir',
+        '-p',
+        npu_compiler_path
+    ])
     # 调用wget命令
     subprocess.run([
         'wget',
@@ -632,7 +637,7 @@ download_and_copy_npu(
     name="npu_compiler", src_path="npu_compiler", dst_path="npu_compiler", variable="TRITON_NPU_COMPILER_PATH",
     version=NPU_TOOLCHAIN_VERSION["npu_compiler"], url_func=lambda system, arch, version:
     ((lambda version_major, version_minor1, version_minor2:
-      f"https://gitee.com/ascend/triton-ascend/releases/download/{version_major}.{version_minor1}.{version_minor2}/npu_compiler_aarch64.tar.gz")
+      f"https://gitee.com/ascend/triton-ascend/releases/download/{version_major}.{version_minor1}.{version_minor2}/npu_compiler_{platform.machine()}.tar.gz")
      (*version.split('.'))))
 
 backends = [*BackendInstaller.copy(["nvidia", "amd"]), *BackendInstaller.copy_externals()]
@@ -771,8 +776,8 @@ def get_git_commit_hash(length=8):
 setup(
     name=os.environ.get("TRITON_WHEEL_NAME", "triton"),
     version="3.0.0" + get_git_commit_hash() + os.environ.get("TRITON_WHEEL_VERSION_SUFFIX", ""),
-    author="Philippe Tillet",
-    author_email="phil@openai.com",
+    author="bytedance triton-x",
+    author_email="wangmingfa@bytedance.com",
     description="A language and compiler for custom Deep Learning operations",
     long_description="",
     packages=get_packages(),
