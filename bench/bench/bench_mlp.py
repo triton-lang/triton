@@ -147,13 +147,15 @@ def bench_mlp(batch, dim1, dim2, n_expts_tot, n_expts_act, x_dtype, w_dtype,
             util = 0.0
         tflops = sum([tot_flops[w] for w in [8, 16]]) / tot_time * 1e-3
         tbps = tot_bytes / tot_time * 1e-3
-        print(f"Utilization: {util:.0%}; {tflops:.1f} TFLOPs, {tbps:.1f} TB/s")
+        print(f"Utilization: {util:.0%}; {tflops:>6.1f} TFLOPs, {tbps:.1f} TB/s")
 
     return util, tflops, tbps
 
 
 if __name__ == "__main__":
     has_native_mx4 = torch.cuda.get_device_capability(0)[0] >= 10 or get_cdna_version() == 4
+    if SPECS is None:
+        print("Current GPU has no specs provided, utilization is N/A")
     if has_native_mx4:
         bench_mlp(8192, 8192, 8192, 1, 1, "fp8", "fp8", TP=1, EP=1, name="dense")
         bench_mlp(8192, 8192, 8192, 1, 1, "fp8", "mx4", TP=1, EP=1, name="dense")
