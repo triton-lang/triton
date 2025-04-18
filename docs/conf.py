@@ -98,7 +98,7 @@ def setup(app):
     import sphinx
 
     app.connect("autodoc-process-signature", process_sig)
-    max_jobs = os.getenv("MAX_JOBS", str(2 * os.cpu_count()))
+    max_jobs = os.getenv("MAX_JOBS", str(os.cpu_count()))
     print(f"Installing Triton Python package using {max_jobs} threads")
     subprocess.run("pip install -e ../python", shell=True, env=os.environ.copy())
 
