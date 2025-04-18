@@ -52,57 +52,18 @@ class RoutingData:
 
 def routing(logits, n_expts_act, expt_indx=None):
     assert expt_indx is None
+    from .topk import topk
+    from .hist import hist
+    dev = logits.device
     cdiv = triton.cdiv
-    ROUTING_BLOCK_M = 8
-    ROUTING_BLOCK_N = 128
     HIST1_BLOCK_M = 64
-    HIST1_BLOCK_N = 32
-    HIST1_BLOCK_N2 = 512
-    HIST2_BLOCK_M = 512
-    MEMSET_BLOCK = 512
-    assert logits.dtype.itemsize == 2
     n_tokens, n_expts_tot = logits.shape
     n_gates = n_tokens * n_expts_act
-    dev = logits.device
-    n_expts_pad = cdiv(n_expts_tot, ROUTING_BLOCK_N) * ROUTING_BLOCK_N
-    n_expts_words = n_expts_pad // 32
-    # scratchpad tensors
-    # NOTE: these are not returned
-    expt_scal = torch.empty((n_tokens, n_expts_act), dtype=logits.dtype, device=dev)
-    expt_indx = torch.empty((n_tokens, n_expts_act), dtype=torch.int16, device=dev)
-    bitmatrix = torch.empty((n_tokens, n_expts_words), dtype=torch.uint32, device=dev)
-    tok_starts = torch.empty(n_expts_tot + 1, dtype=torch.int32, device=dev)
-    partial_hist = torch.empty((cdiv(n_tokens, HIST1_BLOCK_M), n_expts_tot), dtype=torch.int32, device=dev)
-    partial_offs = torch.empty((cdiv(n_tokens, HIST1_BLOCK_M), n_expts_tot), dtype=torch.int32, device=dev)
-    # output tensors
-    hist = torch.empty(n_expts_tot, dtype=torch.int32, device=dev)
+    expt_scal, expt_indx, bitmatrix = topk(logits, n_expts_act)
+    histogram, partial_offs = hist(bitmatrix, n_expts_tot, output_mode=(True, HIST1_BLOCK_M))
     topk_indx = torch.empty(n_gates, dtype=torch.int32, device=dev)
     gate_indx = torch.empty(n_gates, dtype=torch.int32, device=dev)
     gate_scal = torch.empty(n_gates, dtype=logits.dtype, device=dev)
-    routing_details.bitmatrix._compute_bitmatrix[(cdiv(n_tokens, ROUTING_BLOCK_M), )](
-        logits, logits.stride(0),  # inputs
-        expt_scal, expt_indx, expt_scal.stride(0),  # output [topk]
-        bitmatrix, bitmatrix.stride(0),  # output [bitmatrix]
-        n_tokens, n_expts_tot,  # shapes
-        BLOCK_M=ROUTING_BLOCK_M,  # tunable parameter
-        N_EXPTS_PAD=n_expts_pad, N_EXPTS_ACT=n_expts_act,  # constants
-        BLOCK_N=ROUTING_BLOCK_N)
-    routing_details.histogram._memset_hist[(cdiv(hist.shape[0], MEMSET_BLOCK), )](
-        hist, hist.shape[0], tok_starts,  # outputs
-        BLOCK=MEMSET_BLOCK  # tunable parameter
-    )
-    routing_details.histogram._compute_hist[(cdiv(n_tokens, HIST1_BLOCK_M), cdiv(n_expts_tot, HIST1_BLOCK_N))](
-        bitmatrix, bitmatrix.shape[0], bitmatrix.stride(0),  # input
-        hist,  # output [histogram]
-        tok_starts, partial_hist, partial_hist.stride(0), partial_hist.shape[1],  # output [cumsums]
-        BLOCK_M=HIST1_BLOCK_M, BLOCK_N=HIST1_BLOCK_N,  # tunable parameters
-        BLOCK_N2=HIST1_BLOCK_N2,  # constants
-    )
-    routing_details.histogram._finalize_hist[(n_expts_tot, )](
-        tok_starts, partial_hist,  # inputs
-        partial_offs, partial_hist.shape[0], partial_hist.stride(0),  # outputs
-        BLOCK_M=HIST2_BLOCK_M,  # tunable parameters
-    )
     routing_details.indexing._compute_indx[(cdiv(n_tokens, HIST1_BLOCK_M), )](
         topk_indx, gate_indx, gate_scal,  # outputs
         expt_scal, expt_indx, partial_offs, partial_offs.stride(0), n_gates,  # input
@@ -112,7 +73,7 @@ def routing(logits, n_expts_act, expt_indx=None):
     # pack the matmul data structure
     gather_indx = GatherIndx(src_indx=topk_indx, dst_indx=gate_indx)
     scatter_indx = ScatterIndx(src_indx=gate_indx, dst_indx=topk_indx)
-    return RoutingData(gate_scal, hist, n_expts_tot, n_expts_act), gather_indx, scatter_indx
+    return RoutingData(gate_scal, histogram, n_expts_tot, n_expts_act), gather_indx, scatter_indx
 
 
 def routing_torch(logits, n_expts_act, expt_indx=None):

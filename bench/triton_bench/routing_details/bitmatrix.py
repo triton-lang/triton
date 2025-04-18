@@ -3,21 +3,6 @@ import triton.language as tl
 
 
 @triton.jit
-def or_combine(x, y):
-    return x | y
-
-
-@triton.jit
-def softmax(x):
-    x = x.to(tl.float32)
-    z = x - tl.max(x, 1)[:, None]
-    num = tl.math.exp(z)
-    den = tl.sum(num, 1)[:, None]
-    x = tl.math.fdiv(num, den, False)
-    return x
-
-
-@triton.jit
 def load_logits_topk(X, stride_xm, n_expts_tot, offs_m, mask_m, N_EXPTS_PAD: tl.constexpr, N_EXPTS_ACT: tl.constexpr,
                      BLOCK_N: tl.constexpr):
 
@@ -70,7 +55,7 @@ def _compute_bitmatrix(X, stride_xm,  # logits
     y = tl.sort(y, dim=1)
     y_indices = y >> 16
     y_values = (y & 0x0000FFFF).to(tl.uint16).to(x_dtype, bitcast=True)
-    y_values = softmax(y_values).to(x_dtype)
+    y_values = tl.softmax(y_values.to(tl.float32), dim=1).to(x_dtype)
 
     # write back
     offs_y_n = tl.arange(0, N_EXPTS_ACT)
@@ -88,6 +73,6 @@ def _compute_bitmatrix(X, stride_xm,  # logits
     for i in range(loop_iterations):
         offs_r_n = tl.arange(0, BLOCK_N // 32) + i * (BLOCK_N // 32)
         y2 = tl.where(y_div[:, :, None] == offs_r_n[None, None, :], (1 << y_rem)[:, :, None], 0)
-        r = tl.reduce(y2, combine_fn=or_combine, axis=1)
+        r = tl.reduce_or(y2, axis=1)
         RoutingPtrs = Routing + offs_m[:, None] * stride_rm + offs_r_n[None, :]
         tl.store(RoutingPtrs, r, mask=mask_m)
