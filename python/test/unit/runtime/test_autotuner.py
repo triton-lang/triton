@@ -224,4 +224,5 @@ def test_exceed_threads(device):
 
     add_kernel[grid](x, y, output, x.numel(), BLOCK_SIZE=128)
 
-    assert exception_out_of_resource is not None and "out of resource: threads, Required: 4096" in str(exception_out_of_resource)
+    assert exception_out_of_resource is not None and "out of resource: threads, Required: 4096" in str(
+        exception_out_of_resource)
