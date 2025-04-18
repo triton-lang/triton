@@ -196,7 +196,7 @@ bool Pingponger::isPersistentGemm(size_t num_dots) {
     return false;
   bool seenIfSection = false;
   bool seenDot = false;
-  for (auto &&op : forOp.getBody()->getOperations()) {
+  for (auto &op : *forOp.getBody()) {
     if (auto ifOp = dyn_cast<scf::IfOp>(op)) {
       if (seenIfSection) {
         // Violate our two if statement assumption.
@@ -276,24 +276,16 @@ void Pingponger::findClosestPredOps(Value v, DenseSet<T> &matchingOps) {
 // to execute each iteration of the outermost for loop for the ifOp.
 template <typename T>
 size_t Pingponger::countIfMemoryOps(scf::IfOp ifOp, bool assumeNotTaken) {
-  size_t thenCount = 0;
-  size_t elseCount = 0;
   // Don't do a nested traversal as we are only estimating the "same level"
-  for (auto _ : ifOp.thenBlock()->getOps<T>()) {
-    thenCount++;
-  }
+  auto thenOps = ifOp.thenBlock()->getOps<T>();
+  size_t thenCount = std::distance(thenOps.begin(), thenOps.end());
+  size_t elseCount = 0;
   if (ifOp.elseBlock()) {
-    for (auto _ : ifOp.elseBlock()->getOps<T>()) {
-      elseCount++;
-    }
+    auto elseOps = ifOp.elseBlock()->getOps<T>();
+    elseCount = std::distance(elseOps.begin(), elseOps.end());
   }
-  if (assumeNotTaken) {
-    return elseCount;
-  } else {
-    // By default make no assumptions about which branch is more
-    // likely and assume the worst case.
-    return std::max(thenCount, elseCount);
-  }
+  // Estimate the worst case unless we have assumeNotTaken == true.
+  return assumeNotTaken ? elseCount : std::max(thenCount, elseCount);
 }
 
 // Estimate the expected number of memory operations of type T
