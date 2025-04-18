@@ -593,6 +593,26 @@ convertFp32ToFp16RTZ(Location loc, ConversionPatternRewriter &rewriter,
   return ret;
 }
 
+// Fp32->Fp16/Bf16 (RTNE) in GFX950
+static SmallVector<Value>
+convertFp32ToFp16RTNE(Location loc, ConversionPatternRewriter &rewriter,
+                      const SmallVector<Value> &v, Type outElemTy) {
+  assert(v.size() == 2);
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
+  auto inVecTy = vec_ty(f32_ty, 2);
+  auto retVecTy = vec_ty(outElemTy, 2);
+  Value inVec = b.undef(inVecTy);
+  auto idx0 = b.i32_val(0);
+  auto idx1 = b.i32_val(1);
+  inVec = b.insert_element(inVecTy, inVec, v[0], idx0);
+  inVec = b.insert_element(inVecTy, inVec, v[1], idx1);
+  Value retVec = rewriter.create<LLVM::FPTruncOp>(loc, retVecTy, inVec);
+  SmallVector<Value> ret(2);
+  ret[0] = b.extract_element(outElemTy, retVec, idx0);
+  ret[1] = b.extract_element(outElemTy, retVec, idx1);
+  return ret;
+}
+
 static SmallVector<Value>
 Fp32_to_Fp8E5M2_RTZ(Location loc, ConversionPatternRewriter &rewriter,
                     const SmallVector<Value> &v) {
@@ -654,6 +674,30 @@ static Value convertFp32ToBf16(Location loc,
   return b.bitcast(truncated, bf16_ty);
 }
 
+// Fp32_to_F16/Bf16 RTNE
+static SmallVector<Value> Fp32_to_F16_RTNE(Location loc,
+                                           ConversionPatternRewriter &rewriter,
+                                           Type inElemTy, Type outElemTy,
+                                           MultipleOperandsRange operands,
+                                           AMD::ISAFamily isaFamily) {
+  if (isaFamily == AMD::ISAFamily::CDNA4) {
+    SmallVector<Value> inVals;
+    size_t numElem = std::min(size_t(2), operands.size());
+    inVals.reserve(numElem);
+    for (unsigned i = 0; i < numElem; i++) {
+      inVals.push_back(operands[i][0]);
+    }
+    return convertFp32ToFp16RTNE(loc, rewriter, inVals, outElemTy);
+  }
+
+  if (outElemTy.isBF16()) {
+    assert(inElemTy.isF32() && "unsupported conversion");
+    return {
+        convertFp32ToBf16(loc, rewriter, operands[0][0], RoundingMode::RTNE)};
+  }
+  return {rewriter.create<LLVM::FPTruncOp>(loc, outElemTy, operands[0][0])};
+}
+
 static Value Fp8E5M2FNUZ_to_Fp16_oneValue(Location loc,
                                           ConversionPatternRewriter &rewriter,
                                           Value v) {
@@ -707,8 +751,8 @@ Fp8E5M2FNUZ_to_Fp16_HW(Location loc, ConversionPatternRewriter &rewriter,
       cvtPkF8ToFp32<ROCDL::CvtPkF32Bf8Op>(loc, rewriter, v[0], v[1]);
 
   // Convert fp32 to fp16
-  ret[0] = LLVM::AMD::cvtFp32ToFp16RTNE(loc, rewriter, ret[0]);
-  ret[1] = LLVM::AMD::cvtFp32ToFp16RTNE(loc, rewriter, ret[1]);
+  ret[0] = LLVM::AMD::cvtFp32ToFp16RTNE_oneValue(loc, rewriter, ret[0]);
+  ret[1] = LLVM::AMD::cvtFp32ToFp16RTNE_oneValue(loc, rewriter, ret[1]);
 
   return ret;
 }
@@ -1043,8 +1087,8 @@ Fp8E4M3FNUZ_to_Fp16_HW(Location loc, ConversionPatternRewriter &rewriter,
       cvtPkF8ToFp32<ROCDL::CvtPkF32Fp8Op>(loc, rewriter, v[0], v[1]);
 
   // Convert fp32 to fp16
-  ret[0] = LLVM::AMD::cvtFp32ToFp16RTNE(loc, rewriter, ret[0]);
-  ret[1] = LLVM::AMD::cvtFp32ToFp16RTNE(loc, rewriter, ret[1]);
+  ret[0] = LLVM::AMD::cvtFp32ToFp16RTNE_oneValue(loc, rewriter, ret[0]);
+  ret[1] = LLVM::AMD::cvtFp32ToFp16RTNE_oneValue(loc, rewriter, ret[1]);
 
   return ret;
 }
@@ -1235,28 +1279,18 @@ struct FpToFpOpConversion
     auto dstElementType = getElementType(op.getResult());
 
     auto roundingMode = op.getRounding();
-    if (srcElementType.isF32() && dstElementType.isF16() &&
-        roundingMode.value() == RoundingMode::RTNE) {
+    if (srcElementType.isF32() &&
+        (dstElementType.isF16() || dstElementType.isBF16())) {
       assert(roundingMode.has_value() &&
-             "rounding mode must be specified for fp32->fp16 conversion");
-      SmallVector<Value> outVals;
-      outVals.reserve(operands[0].size());
-      for (Value v : operands[0]) {
-        outVals.push_back(LLVM::AMD::cvtFp32ToFp16RTNE(loc, rewriter, v));
+             "rounding mode must be specified for fp32->fp16/bf16 conversion");
+      if (roundingMode.value() == RoundingMode::RTNE) {
+        return Fp32_to_F16_RTNE(loc, rewriter, srcElementType, dstElementType,
+                                operands, isaFamily);
       }
-      return outVals;
     }
-
     if (srcElementType.isF32() && dstElementType.isBF16()) {
-      assert(roundingMode.has_value() &&
-             "rounding mode must be specified for fp32->bf16 conversion");
-      SmallVector<Value> outVals;
-      outVals.reserve(operands[0].size());
-      for (Value v : operands[0]) {
-        outVals.push_back(
-            convertFp32ToBf16(loc, rewriter, v, roundingMode.value()));
-      }
-      return outVals;
+      return {
+          convertFp32ToBf16(loc, rewriter, operands[0][0], RoundingMode::RTZ)};
     }
 
     // numElements = 4 for conversions:
@@ -1316,9 +1350,14 @@ struct FpToFpOpConversion
       }
       return outVals;
     }
-    if (useFP16IntermediateSrc)
-      for (Value &v : inVals)
-        v = LLVM::AMD::cvtFp32ToFp16RTNE(loc, rewriter, v);
+    if (useFP16IntermediateSrc) {
+      if (isaFamily == AMD::ISAFamily::CDNA4)
+        inVals = convertFp32ToFp16RTNE(loc, rewriter, inVals, f16_ty);
+      else {
+        for (Value &v : inVals)
+          v = LLVM::AMD::cvtFp32ToFp16RTNE_oneValue(loc, rewriter, v);
+      }
+    }
 
     inVals.resize(numElements, b.undef(typeConverter->convertType(srcType)));
     SmallVector<Value> outVals;
@@ -1568,28 +1607,26 @@ struct TruncFOpConversion
 
   explicit TruncFOpConversion(LLVMTypeConverter &typeConverter,
                               ModuleAxisInfoAnalysis &axisAnalysisPass,
-                              llvm::AMDGPU::GPUKind gpuKind,
+                              AMD::ISAFamily isaFamily,
                               PatternBenefit benefit = patternBenefitDefault)
       : ElementwiseOpConversionBase(typeConverter, axisAnalysisPass, benefit),
-        gpuKind(gpuKind) {}
+        isaFamily(isaFamily) {}
 
   SmallVector<Value> createDestOps(arith::TruncFOp op, OpAdaptor adaptor,
                                    ConversionPatternRewriter &rewriter,
                                    Type elemTy, MultipleOperandsRange operands,
                                    Location loc) const {
     auto outElemTy = getElementType(op.getOut());
-    if (outElemTy.isBF16() && gpuKind != llvm::AMDGPU::GK_GFX950) {
-      auto inElemTy = getElementType(op.getIn());
-      assert(inElemTy.isF32() && "unsupported conversion");
-      return {
-          convertFp32ToBf16(loc, rewriter, operands[0][0], RoundingMode::RTNE)};
-    } else {
-      return {rewriter.create<LLVM::FPTruncOp>(loc, elemTy, operands[0][0])};
+    auto inElemTy = getElementType(op.getIn());
+    if (inElemTy.isF32() && (outElemTy.isBF16() || outElemTy.isF16())) {
+      return Fp32_to_F16_RTNE(loc, rewriter, inElemTy, outElemTy, operands,
+                              isaFamily);
     }
+    return {rewriter.create<LLVM::FPTruncOp>(loc, elemTy, operands[0][0])};
   }
 
 private:
-  llvm::AMDGPU::GPUKind gpuKind;
+  AMD::ISAFamily isaFamily;
 };
 
 struct ExpOpConversionApprox
@@ -1868,7 +1905,7 @@ void populateElementwiseOpToLLVMPatterns(
 
   patterns.add<ExtFOpConversion>(typeConverter, axisInfoAnalysis, benefit);
   patterns.add<TruncFOpConversion>(typeConverter, axisInfoAnalysis,
-                                   targetInfo.getGPUKind(), benefit);
+                                   targetInfo.getISAFamily(), benefit);
   patterns.add<FPToSIOpConversion>(typeConverter, axisInfoAnalysis, benefit);
   patterns.add<SIToFPOpConversion>(typeConverter, axisInfoAnalysis, benefit);
   patterns.add<FpToFpOpConversion>(typeConverter, axisInfoAnalysis,
