@@ -1,5 +1,6 @@
 from triton.backends.compiler import BaseBackend, GPUTarget
 from triton._C.libtriton import ir, passes, llvm, amd
+from triton.runtime.errors import OutOfResources
 from dataclasses import dataclass
 from typing import Any, Dict, Tuple
 from types import ModuleType
@@ -76,9 +77,8 @@ class HIPOptions:
         # Error out if max threads per block is exceeded.
         # This is theoretically architecture specific but in reality they are all 1024.
         max_threads = 1024
-        assert self.num_warps * warp_size <= max_threads, \
-                f"{self.num_warps} warps * {warp_size} warp size" \
-                f" must not exceed the max threads per block limit ({max_threads})"
+        if self.num_warps * warp_size > max_threads:
+            raise OutOfResources(self.num_warps * warp_size, max_threads, "threads")
 
         assert self.num_warps > 0 and (self.num_warps & (self.num_warps - 1)) == 0, \
                "num_warps must be a power of 2"
