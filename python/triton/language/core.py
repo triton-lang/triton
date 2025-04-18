@@ -1015,6 +1015,12 @@ class tensor(_value):
     def split(self) -> tuple[tensor, tensor]:
         ...
 
+    def subview(self, offsets, sizes, strides) -> tensor:
+        ...
+
+    def insert(self, src, offsets, sizes, strides) -> tensor:
+        ...
+
     def view(self, *shape) -> tensor:
         ...
 
@@ -1400,6 +1406,48 @@ def split(a, _builder=None, _generator=None) -> tuple[tensor, tensor]:
 
     return out_lhs, out_rhs
 
+@_tensor_member_fn
+@builtin
+def subview(ful, offsets, sizes, strides, _builder=None, _generator=None) -> tensor:
+    """
+    Extract a tensor from another tensor as specified by the operation’s offsets, sizes and strides arguments.
+
+    :param ful: The tensor to split.
+    :type ful: Tensor
+    :param offsets:
+    :type offsets: tuple of ints
+    :param sizes:
+    :type sizes: tuple of ints
+    :param strides:
+    :type strides: tuple of ints
+    """
+    assert(len(ful.shape) > 0)
+    new_offsets = [semantic.to_tensor(o, _builder) if isinstance(o, constexpr) else o for o in offsets]
+    sub = semantic.subview(ful, new_offsets, sizes, strides, _builder)
+    return sub
+
+@_tensor_member_fn
+@builtin
+def insert(ful, sub, offsets, sizes, strides, _builder=None, _generator=None) -> tensor:
+    """
+    Insert a tensor to another tensor as specified by the operation’s offsets, sizes and strides arguments.
+
+    :param ful: The tensor to receive tensor.
+    :type ful: Tensor
+    :param sub: The tensor to be inserted.
+    :type sub: Tensor
+    :param offsets:
+    :type offsets: tuple of ints
+    :param sizes:
+    :type sizes: tuple of ints
+    :param strides:
+    :type strides: tuple of ints
+    """
+    assert(len(ful.shape) > 0)
+    assert(len(ful.shape) == len(sub.shape))
+    new_offsets = [semantic.to_tensor(o, _builder) if isinstance(o, constexpr) else o for o in offsets]
+    out = semantic.insert(ful, sub, new_offsets, sizes, strides, _builder)
+    return out
 
 @_tensor_member_fn
 @builtin

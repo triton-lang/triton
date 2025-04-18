@@ -118,8 +118,7 @@ def get_build_type():
     elif check_env_flag("TRITON_BUILD_WITH_O1"):
         return "TritonBuildWithO1"
     else:
-        # TODO: change to release when stable enough
-        return "TritonRelBuildWithAsserts"
+        return "Release"
 
 
 def get_env_with_keys(key: list):

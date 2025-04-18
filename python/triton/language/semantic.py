@@ -609,8 +609,8 @@ def arange(start: int, end: int, builder: ir.builder) -> tl.tensor:
     if end <= start:
         raise ValueError("arange's end argument must be greater than the start argument")
     range = end - start
-    if (range & (range - 1)) != 0:
-        raise ValueError("arange's range must be a power of 2")
+    # if (range & (range - 1)) != 0:
+    #     raise ValueError("arange's range must be a power of 2")
     shape = [range]
     ret_ty = tl.block_type(tl.int32, shape)
     return tl.tensor(builder.create_make_range(start, end), ret_ty)
@@ -712,6 +712,27 @@ def split(a: tl.tensor, builder: ir.builder) -> Tuple[tl.tensor, tl.tensor]:
         tl.tensor(outRHS, ret_type),
     )
 
+def subview(ful: tl.tensor, offsets: List[tl.tensor], sizes: List[int], strides: List[int], builder: ir.builder) -> tl.tensor:
+    assert(len(ful.shape) == len(offsets))
+    assert(len(ful.shape) == len(sizes))
+    assert(len(ful.shape) == len(strides))
+    assert(all([s>=1 for s in sizes]))
+    assert(all([s>=0 for s in strides]))
+    new_offsets = [o.handle for o in offsets]
+    ret_type = tl.block_type(ful.type.scalar, sizes)
+    out = builder.create_slice(ful.handle, new_offsets, sizes, strides)
+    return tl.tensor(out, ret_type)
+
+def insert(ful: tl.tensor, sub: tl.tensor, offsets: List[tl.tensor], sizes: List[int], strides: List[int], builder: ir.builder) -> tl.tensor:
+    assert(len(ful.shape) == len(offsets))
+    assert(len(ful.shape) == len(sizes))
+    assert(len(ful.shape) == len(strides))
+    assert(all([s>=1 for s in sizes]))
+    assert(all([s>=0 for s in strides]))
+    new_offsets = [o.handle for o in offsets]
+    ret_type = tl.block_type(ful.type.scalar, ful.shape)
+    out = builder.create_insert(ful.handle, sub.handle, new_offsets, sizes, strides)
+    return tl.tensor(out, ret_type)
 
 def permute(input: tl.tensor, dims: Tuple[int], builder: ir.builder) -> tl.tensor:
     if len(input.shape) != len(dims):
