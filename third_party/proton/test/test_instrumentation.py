@@ -7,20 +7,25 @@ import triton.language as tl
 import triton.profiler.language as pl
 import triton.profiler as proton
 
+
 def is_hip():
     return triton.runtime.driver.active.get_current_target().backend == "hip"
 
 
-@pytest.mark.parametrize("mode", ["default", "default:metric_type=cycle", "default:metric_type=cycle:buffer_size=4096", "mma"])
+@pytest.mark.parametrize("mode",
+                         ["default", "default:metric_type=cycle", "default:metric_type=cycle:buffer_size=4096", "mma"])
 def test_mode_str(mode, tmp_path: pathlib.Path):
     temp_file = tmp_path / "test_mode_str.hatchet"
     proton.start(str(temp_file.with_suffix("")), backend="instrumentation", mode=mode)
     proton.finalize()
 
 
-@pytest.mark.parametrize("mode", [proton.mode.Default(), proton.mode.Default(metric_type="cycle"), 
-                                  proton.mode.Default(metric_type="cycle", buffer_size=4096),
-                                  proton.mode.MMA()])
+@pytest.mark.parametrize("mode", [
+    proton.mode.Default(),
+    proton.mode.Default(metric_type="cycle"),
+    proton.mode.Default(metric_type="cycle", buffer_size=4096),
+    proton.mode.MMA()
+])
 def test_mode_obj(mode, tmp_path: pathlib.Path):
     temp_file = tmp_path / "test_mode_simple.hatchet"
     proton.start(str(temp_file.with_suffix("")), backend="instrumentation", mode=mode)

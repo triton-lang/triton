@@ -227,14 +227,14 @@ class InstrumentationHook(Hook):
         libproton.init_scope_ids(function, scope_id_pairs)
 
     def enter(self, lazy_dict: LazyDict) -> None:
-        libproton.enter_instrumented_op(lazy_dict.data.get("function", None), self.buffer.data_ptr(),
-                                        self.profile_buffer_size)
+        data_ptr = 0 if self.buffer is None else self.buffer.data_ptr()
+        libproton.enter_instrumented_op(lazy_dict.data.get("function", None), data_ptr, self.profile_buffer_size)
         if InstrumentationHook.enable_host_buffer:
             InstrumentationHook.host_buffer = None
 
     def exit(self, lazy_dict: LazyDict) -> None:
-        libproton.exit_instrumented_op(lazy_dict.data.get("function", None), self.buffer.data_ptr(),
-                                       self.profile_buffer_size)
+        data_ptr = 0 if self.buffer is None else self.buffer.data_ptr()
+        libproton.exit_instrumented_op(lazy_dict.data.get("function", None), data_ptr, self.profile_buffer_size)
 
         if InstrumentationHook.enable_host_buffer:
             # Copy the profiling buffer to the CPU for debugging and processing by external tools
