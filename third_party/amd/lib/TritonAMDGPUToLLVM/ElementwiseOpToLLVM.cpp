@@ -674,13 +674,13 @@ static Value convertFp32ToBf16(Location loc,
   return b.bitcast(truncated, bf16_ty);
 }
 
-// Fp32_to_F16/Bf16
-static SmallVector<Value>
-Fp32_to_F16(Location loc, ConversionPatternRewriter &rewriter, Type inElemTy,
-            Type outElemTy, MultipleOperandsRange operands,
-            AMD::ISAFamily isaFamily, RoundingMode roundingMode) {
-  if (isaFamily == AMD::ISAFamily::CDNA4 &&
-      roundingMode == RoundingMode::RTNE) {
+// Fp32_to_F16/Bf16 RTNE
+static SmallVector<Value> Fp32_to_F16_RTNE(Location loc,
+                                           ConversionPatternRewriter &rewriter,
+                                           Type inElemTy, Type outElemTy,
+                                           MultipleOperandsRange operands,
+                                           AMD::ISAFamily isaFamily) {
+  if (isaFamily == AMD::ISAFamily::CDNA4) {
     SmallVector<Value> inVals;
     size_t numElem = std::min(size_t(2), operands.size());
     inVals.reserve(numElem);
@@ -692,7 +692,8 @@ Fp32_to_F16(Location loc, ConversionPatternRewriter &rewriter, Type inElemTy,
 
   if (outElemTy.isBF16()) {
     assert(inElemTy.isF32() && "unsupported conversion");
-    return {convertFp32ToBf16(loc, rewriter, operands[0][0], roundingMode)};
+    return {
+        convertFp32ToBf16(loc, rewriter, operands[0][0], RoundingMode::RTNE)};
   }
   return {rewriter.create<LLVM::FPTruncOp>(loc, outElemTy, operands[0][0])};
 }
@@ -1278,19 +1279,18 @@ struct FpToFpOpConversion
     auto dstElementType = getElementType(op.getResult());
 
     auto roundingMode = op.getRounding();
-    if (srcElementType.isF32() && dstElementType.isF16()) {
+    if (srcElementType.isF32() &&
+        (dstElementType.isF16() || dstElementType.isBF16())) {
       assert(roundingMode.has_value() &&
-             "rounding mode must be specified for fp32->fp16 conversion");
+             "rounding mode must be specified for fp32->fp16/bf16 conversion");
       if (roundingMode.value() == RoundingMode::RTNE) {
-        return Fp32_to_F16(loc, rewriter, srcElementType, dstElementType,
-                           operands, isaFamily, RoundingMode::RTNE);
+        return Fp32_to_F16_RTNE(loc, rewriter, srcElementType, dstElementType,
+                                operands, isaFamily);
       }
     }
     if (srcElementType.isF32() && dstElementType.isBF16()) {
-      assert(roundingMode.has_value() &&
-             "rounding mode must be specified for fp32->bf16 conversion");
-      return Fp32_to_F16(loc, rewriter, srcElementType, dstElementType,
-                         operands, isaFamily, roundingMode.value());
+      return {
+          convertFp32ToBf16(loc, rewriter, operands[0][0], RoundingMode::RTZ)};
     }
 
     // numElements = 4 for conversions:
@@ -1619,8 +1619,8 @@ struct TruncFOpConversion
     auto outElemTy = getElementType(op.getOut());
     auto inElemTy = getElementType(op.getIn());
     if (inElemTy.isF32() && (outElemTy.isBF16() || outElemTy.isF16())) {
-      return Fp32_to_F16(loc, rewriter, inElemTy, outElemTy, operands,
-                         isaFamily, RoundingMode::RTNE);
+      return Fp32_to_F16_RTNE(loc, rewriter, inElemTy, outElemTy, operands,
+                              isaFamily);
     }
     return {rewriter.create<LLVM::FPTruncOp>(loc, elemTy, operands[0][0])};
   }
