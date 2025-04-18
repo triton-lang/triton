@@ -1,7 +1,6 @@
 import torch
 import triton
 from dataclasses import dataclass, field
-from . import routing_details
 
 
 @dataclass
@@ -53,8 +52,8 @@ import triton.language as tl
 
 
 @triton.jit
-def _routing_compute_final_expert_offs(ExpertHist, FinalExpertOffs, hist_size,  # histogram
-                                       BLOCK_N: tl.constexpr):
+def _routing_compute_expt_offs(ExpertHist, FinalExpertOffs, hist_size,  # histogram
+                               BLOCK_N: tl.constexpr):
     loop_iterations = (hist_size + BLOCK_N - 1) // BLOCK_N
     x = tl.zeros([BLOCK_N], ExpertHist.dtype.element_ty)
     offs_n = tl.arange(0, BLOCK_N)
@@ -68,8 +67,7 @@ def _routing_compute_final_expert_offs(ExpertHist, FinalExpertOffs, hist_size,  
 
 
 @triton.jit
-def _routing_compute_partial_expert_offs(TokensStart, PartialHist, PartialOffs, shape_pm, stride_pm,
-                                         BLOCK_M: tl.constexpr):
+def _routing_compute_indx_offs(TokensStart, PartialHist, PartialOffs, shape_pm, stride_pm, BLOCK_M: tl.constexpr):
     expt_id = tl.program_id(0)
     offs_m = tl.arange(0, BLOCK_M)
     # initialize first row of the output
@@ -87,44 +85,106 @@ def _routing_compute_partial_expert_offs(TokensStart, PartialHist, PartialOffs, 
         offs_m += BLOCK_M
 
 
+@triton.jit
+def _keyed_add(x, y):
+
+    # we keep the key in the upper 16 bits of a uint32:
+    key_mask: tl.constexpr = 0xffff0000
+
+    kx = x & key_mask
+    ky = y & key_mask
+    z = tl.where(kx == ky, x + y - kx, y)
+    return z
+
+
+@triton.jit
+def _count_previous(x):
+    """
+    Input  x : uint16[..., N]
+    Output y : uint32[..., N]
+    semantics : y[..., i] = sum_j((x[..., j] == x[..., i]) & (j < i))
+    credits: @apgoucher
+    """
+
+    BLOCK_N: tl.constexpr = x.shape[-1]  # summation axis
+    BATCHES: tl.constexpr = x.numel // BLOCK_N  # number of batches
+
+    # reduce to two-dimensional case:
+    y = tl.reshape(x, [BATCHES, BLOCK_N]).to(tl.uint32)
+
+    tl.static_assert(BLOCK_N <= 32768, "compute_run_lengths requires axis to have length <= 32768")
+
+    # sort (expert, position) ordered pairs to perform an argsort:
+    kv_pairs = ((y << 16) | tl.arange(0, BLOCK_N)[None, :]).to(tl.uint32)
+    sorted_kv_pairs = tl.sort(kv_pairs, 1)
+
+    # compute run lengths in expert-sorted order:
+    x = (sorted_kv_pairs & 0xffff0000 | 0x00000001)
+    expts_and_inclusive_run_lengths = tl.associative_scan(x, 1, _keyed_add)
+    exclusive_run_lengths = (expts_and_inclusive_run_lengths - 1) & 0xffff
+
+    # undo permutation by doing another sort
+    # TODO rewrite this when tl.scatter becomes available
+    kv_pairs = ((sorted_kv_pairs << 16) | exclusive_run_lengths).to(tl.uint32)
+    unsorted_run_lengths = tl.sort(kv_pairs) & 0xffff
+
+    res = tl.reshape(unsorted_run_lengths, x.shape)
+    return res
+
+
+@triton.jit
+def _routing_compute_indx(GatherIndx, ScatterIndx, GateScal, ExptScal, ExptIndx, PartialOffs, stride_pm, n_gates,
+                          BLOCK_M: tl.constexpr, N_EXPTS_ACT: tl.constexpr):
+    pid_m = tl.program_id(0)
+    offs = pid_m * BLOCK_M * N_EXPTS_ACT + tl.arange(0, N_EXPTS_ACT * BLOCK_M)
+    mask = offs < n_gates
+    indx = tl.load(ExptIndx + offs, mask=mask)
+    gates = tl.load(PartialOffs + pid_m * stride_pm + indx, mask=mask)
+    gates += tl.reshape(_count_previous(indx), [BLOCK_M * N_EXPTS_ACT])
+    gate_scal = tl.load(ExptScal + offs, mask=mask)
+    tl.store(ScatterIndx + offs, gates, mask=mask)
+    tl.store(GatherIndx + gates, offs, mask=mask)
+    tl.store(GateScal + gates, gate_scal, mask=mask)
+
+
 def routing(logits, n_expts_act, expt_indx=None):
     from .topk import topk
     from .reduce import reduce
     assert expt_indx is None
     cdiv = triton.cdiv
-    HIST1_BLOCK_M = 64
+    HIST_BLOCK_M = 64
     HIST2_BLOCK_M = 512
     assert logits.dtype.itemsize == 2
     n_tokens, n_expts_tot = logits.shape
     n_gates = n_tokens * n_expts_act
-    dev = logits.device
+    device = logits.device
     expt_scal, expt_indx, bitmatrix = topk(logits, n_expts_act)
-    counts, partial_counts = reduce(bitmatrix, partials_block_size=HIST1_BLOCK_M, mode="sum")
+    hist, partial_hist = reduce(bitmatrix, partials_block_size=HIST_BLOCK_M, mode="sum")
     # scratchpad
-    offs = torch.empty(n_expts_tot + 1, dtype=torch.int32, device=dev)
-    partial_offs = torch.empty((cdiv(n_tokens, HIST1_BLOCK_M), n_expts_tot), dtype=torch.int32, device=dev)
-    _routing_compute_final_expert_offs[(1, )](
-        counts, offs, counts.shape[0], BLOCK_N=512  # tunable parameters
+    expt_offs = torch.empty(n_expts_tot + 1, dtype=torch.int32, device=device)
+    indx_offs = torch.empty((cdiv(n_tokens, HIST_BLOCK_M), n_expts_tot), dtype=torch.int32, device=device)
+    # output
+    topk_indx = torch.empty(n_gates, dtype=torch.int32, device=device)
+    gate_indx = torch.empty(n_gates, dtype=torch.int32, device=device)
+    gate_scal = torch.empty(n_gates, dtype=logits.dtype, device=device)
+    _routing_compute_expt_offs[(1, )](
+        hist, expt_offs, hist.shape[0], BLOCK_N=512  # tunable parameters
     )
-    _routing_compute_partial_expert_offs[(n_expts_tot, )](
-        offs, partial_counts,  # inputs
-        partial_offs, partial_counts.shape[0], partial_counts.stride(0),  # outputs
+    _routing_compute_indx_offs[(n_expts_tot, )](
+        expt_offs, partial_hist,  # inputs
+        indx_offs, partial_hist.shape[0], partial_hist.stride(0),  # outputs
         BLOCK_M=HIST2_BLOCK_M,  # tunable parameters
     )
-    # output
-    topk_indx = torch.empty(n_gates, dtype=torch.int32, device=dev)
-    gate_indx = torch.empty(n_gates, dtype=torch.int32, device=dev)
-    gate_scal = torch.empty(n_gates, dtype=logits.dtype, device=dev)
-    routing_details.indexing._compute_indx[(cdiv(n_tokens, HIST1_BLOCK_M), )](
+    _routing_compute_indx[(cdiv(n_tokens, HIST_BLOCK_M), )](
         topk_indx, gate_indx, gate_scal,  # outputs
-        expt_scal, expt_indx, partial_offs, partial_offs.stride(0), n_gates,  # input
-        BLOCK_M=HIST1_BLOCK_M,  # tunable parameters
+        expt_scal, expt_indx, indx_offs, indx_offs.stride(0), n_gates,  # input
+        BLOCK_M=HIST_BLOCK_M,  # tunable parameters
         N_EXPTS_ACT=n_expts_act,  # constants
-        num_warps=1 if HIST1_BLOCK_M * n_expts_act // 32 < 4 else 4)
+        num_warps=1 if HIST_BLOCK_M * n_expts_act // 32 < 4 else 4)
     # pack the matmul data structure
     gather_indx = GatherIndx(src_indx=topk_indx, dst_indx=gate_indx)
     scatter_indx = ScatterIndx(src_indx=gate_indx, dst_indx=topk_indx)
-    return RoutingData(gate_scal, counts, n_expts_tot, n_expts_act), gather_indx, scatter_indx
+    return RoutingData(gate_scal, hist, n_expts_tot, n_expts_act), gather_indx, scatter_indx
 
 
 def routing_torch(logits, n_expts_act, expt_indx=None):
