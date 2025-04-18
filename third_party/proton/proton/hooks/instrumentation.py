@@ -66,7 +66,13 @@ def _interpret_mode(mode_obj: Union[str, mode.InstrumentationMode]) -> mode.Inst
 
     parts = mode_obj.split(":")
     mode_name = parts[0]
-    opts = dict(opt.split("=") for opt in parts[1:])
+    opts: Dict[str, str] = {}
+    for opt in parts[1:]:
+        if "=" in opt:
+            key, val = opt.split("=", 1)
+            opts[key] = val
+        else:
+            raise ValueError(f"Malformed instrumentation option: '{opt}'")
 
     # Get option values or empty strings
     options = {
@@ -201,6 +207,8 @@ class InstrumentationHook(Hook):
         # Reset host memory for external processing
         if InstrumentationHook.enable_host_buffer:
             InstrumentationHook.host_buffer = None
+        # Reset the buffer reference
+        self.buffer = None
 
     def init_handle(self, function: Any, module: Any, metadata_group: Dict[str, str]) -> None:
         if function and function not in self.function_scope_ids:
@@ -208,7 +216,6 @@ class InstrumentationHook(Hook):
             ir_path = next((path for key, path in metadata_group.items() if key.endswith(("ttgir", "ttir"))), None)
 
             if ir_path:
-                # Parse the MLIR module to extract scope IDs
                 context = ir.context()
                 ir.load_dialects(context)
                 triton_proton.load_dialects(context)
