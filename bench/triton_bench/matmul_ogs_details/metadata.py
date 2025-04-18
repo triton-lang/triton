@@ -72,12 +72,13 @@ def compute_metadata(routing_data, n_rows, block_m):
     metadata_size = 3 * n_expts_tot + 2 + grid_m
     metadata = torch.empty(metadata_size, dtype=torch.int32, device=device)
     md_hist = metadata[:n_expts_tot]
-    md_tok_starts = metadata[n_expts_tot:n_expts_tot * 2 + 1]
+    md_offs = metadata[n_expts_tot:n_expts_tot * 2 + 1]
+    md_offs_sum = metadata[3 * n_expts_tot + 2 - 1]
     md_tile_starts = metadata[n_expts_tot * 2 + 1:n_expts_tot * 3 + 2]
     md_tile_infos = metadata[n_expts_tot * 3 + 2:]
     _memset_metadata[(cdiv(metadata_size, MEMSET_BLOCK), )](
-        routing_data.expt_hist, n_expts_tot, md_hist, md_tok_starts, md_tile_starts, md_tile_infos,
-        md_tile_infos.shape[0], BLOCK=MEMSET_BLOCK,  # optimization parameters
+        routing_data.expt_hist, n_expts_tot, md_hist, md_offs, md_tile_starts, md_tile_infos, md_tile_infos.shape[0],
+        BLOCK=MEMSET_BLOCK,  # optimization parameters
         TILE_DIM=block_m,  # constants
     )
     _compute_metadata[(n_expts_tot, )](
@@ -85,8 +86,4 @@ def compute_metadata(routing_data, n_rows, block_m):
         BLOCK=HIST2_BLOCK_M,  # optimization parameters
         TILE_DIM=block_m,  # constants
     )
-    hist = metadata[:n_expts_tot]
-    offs = metadata[n_expts_tot:2 * n_expts_tot + 1]
-    offs_sum = metadata[3 * n_expts_tot + 2 - 1]
-    blocks = metadata[n_expts_tot + 2 * (n_expts_tot + 1):]
-    return ExptData(hist, offs, offs_sum, blocks, metadata)
+    return ExptData(md_hist, md_offs, md_offs_sum, md_tile_infos, metadata)
