@@ -276,12 +276,26 @@ struct DotOpMFMAConversionHelper {
     if (failed(maybeMfmaIntrinsic))
       llvm::report_fatal_error("No match found in MFMA database\n");
 
-    intrinsicName = maybeMfmaIntrinsic->name;
+    // If the kBase of the selected mfma instruction is larger than
+    // kWidth of the operand, it means the shape is large enough to
+    // use double rated mfma, but we (AccelerateAMDMatmul pass) choose
+    // to use single rated mfma.
     unsigned kBase = maybeMfmaIntrinsic->kBase;
 
     auto aEncoding = cast<DotOperandEncodingAttr>(aTensorTy.getEncoding());
     auto bEncoding = cast<DotOperandEncodingAttr>(bTensorTy.getEncoding());
     int kWidth = aEncoding.getKWidth();
+    if (kBase > kWidth) {
+      int kDimOperandSizeNew = 64 / mDim * kWidth;
+      maybeMfmaIntrinsic = MfmaIntrinsic::selectFor(
+          mfmaVersion, mDim, nDim, kDimOperandSizeNew, elemTyA, elemTyB,
+          /*withScale=*/false, allowXF32);
+      if (failed(maybeMfmaIntrinsic))
+        llvm::report_fatal_error("No match found in MFMA database\n");
+    }
+
+    intrinsicName = maybeMfmaIntrinsic->name;
+    kBase = maybeMfmaIntrinsic->kBase;
 
     // If we are using XF32, the kWidth (and kBase) is double that of F32.
     if (aTensorTy.getElementType().isF32() && allowXF32)
