@@ -20,6 +20,26 @@ static const char *kLoopStageAttrName = "loop.stage";
 static const char *kLoopClusterAttrName = "loop.cluster";
 static const char *kScheduledMaxStageAttrName = "tt.scheduled_max_stage";
 
+// Reasons why a loop cannot be pipelined.
+enum class PipelineFailureReason {
+  // No latency is assigned.
+  NoLatencyAssigned,
+  // NumStages is smaller than or equal to 1.
+  NumStagesTooSmall,
+  // The loop has a distance greater than 1.
+  DistanceGreaterThanOne,
+  // The loop is a outer loop.
+  OuterLoop,
+  // The loop contains a BarrierOp.
+  BarrierOp,
+  // An MMAv5 operation happens after the tmem_load.
+  Mmav5AfterTmemLoad,
+};
+
+const char *getFailureReasonString(PipelineFailureReason reason);
+
+using PipelineStatus = std::optional<PipelineFailureReason>;
+
 //===----------------------------------------------------------------------===//
 // Hoisting Utilities
 //===----------------------------------------------------------------------===//

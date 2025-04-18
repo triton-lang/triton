@@ -59,7 +59,7 @@ class AssignLoadLatencies {
 public:
   AssignLoadLatencies(scf::ForOp forOp, int numStages,
                       DenseMap<Operation *, int> &opLatency)
-      : forOp(forOp), numStages(numStages), opLatency(opLatency) {};
+      : forOp(forOp), numStages(numStages), opLatency(opLatency){};
 
   void run() {
     bool pipelineWithoutDot = forOp->hasAttr(mlir::triton::kNumStagesAttrName);
@@ -257,7 +257,7 @@ private:
 class AssignMMALatencies {
 public:
   AssignMMALatencies(scf::ForOp forOp, DenseMap<Operation *, int> &opLatency)
-      : forOp(forOp), opLatency(opLatency) {};
+      : forOp(forOp), opLatency(opLatency){};
 
   void run() {
     if (!triton::tools::getBoolEnv("ENABLE_MMA_V5_ATT_PIPELINE")) {
@@ -299,7 +299,7 @@ private:
 // on the requested number of stages assign the latencies in a way that
 // cover all the stages with the sum of latencies in the chain from the first
 // load to the final dot op.
-void assignLatencies(ModuleOp moduleOp, int defaultNumStages) {
+bool assignLatencies(ModuleOp moduleOp, int defaultNumStages) {
   SmallVector<scf::ForOp> loops;
   moduleOp->walk([&](scf::ForOp forOp) {
     // Bail out for loops with num_stage <= 1.
@@ -308,7 +308,7 @@ void assignLatencies(ModuleOp moduleOp, int defaultNumStages) {
       loops.push_back(forOp);
   });
   if (loops.empty())
-    return;
+    return false;
 
   DenseMap<Operation *, int> opLatency;
   for (auto forOp : loops) {
@@ -321,6 +321,7 @@ void assignLatencies(ModuleOp moduleOp, int defaultNumStages) {
     AssignMMALatencies(forOp, opLatency).run();
   }
   serializeLatencies(moduleOp, opLatency);
+  return true;
 }
 } // namespace gpu
 } // namespace triton
