@@ -48,16 +48,16 @@ static int getMMAVersionSafe(int computeCapability, DotOp op) {
       return baseVersion;
     if (baseVersion == 3) {
       auto remark = op.emitRemark()
-                    << "MMA version 3 acceleration not applied "
-                       "due to unsupported shapes or data types.";
+                    << "MMA version 3 acceleration not applied due to "
+                       "unsupported shapes or data types.";
       remark.attachNote() << "Target compute capability (" << computeCapability
                           << ") supports MMA v3.";
     }
 
     if (baseVersion == 5) {
       auto remark = op.emitRemark()
-                    << "MMA version 5 acceleration not "
-                       "applied due to unsupported shapes or data types.";
+                    << "MMA version 5 acceleration not applied due to "
+                       "unsupported shapes or data types.";
       remark.attachNote() << "Target compute capability (" << computeCapability
                           << ") supports MMA v5.";
     }
