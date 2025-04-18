@@ -89,7 +89,8 @@ def test_mma_remark(capfd, fresh_triton_cache):
         ))
     captured = capfd.readouterr()
 
-    assert ("can't use MMA V3 for the dot op" in captured.err), "expect MMA V3 remark"
+    assert "MMA version 3" in captured.err, "expect MMA V3 in the remark"
+    assert ("due to unsupported shapes or data types" in captured.err), "expect explanation in the remark"
     assert "note: see current operation:" not in captured.err
 
     with enable_diagnostics_context('remarks,operations,stacktraces'):
