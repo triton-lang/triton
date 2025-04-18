@@ -89,7 +89,7 @@ def _routing_compute_partial_expert_offs(TokensStart, PartialHist, PartialOffs, 
 
 def routing(logits, n_expts_act, expt_indx=None):
     from .topk import topk
-    from .hist import hist
+    from .reduce import reduce
     assert expt_indx is None
     cdiv = triton.cdiv
     HIST1_BLOCK_M = 64
@@ -99,7 +99,7 @@ def routing(logits, n_expts_act, expt_indx=None):
     n_gates = n_tokens * n_expts_act
     dev = logits.device
     expt_scal, expt_indx, bitmatrix = topk(logits, n_expts_act)
-    counts, partial_counts = hist(bitmatrix, partials_block_size=HIST1_BLOCK_M)
+    counts, partial_counts = reduce(bitmatrix, partials_block_size=HIST1_BLOCK_M, mode="sum")
     # scratchpad
     offs = torch.empty(n_expts_tot + 1, dtype=torch.int32, device=dev)
     partial_offs = torch.empty((cdiv(n_tokens, HIST1_BLOCK_M), n_expts_tot), dtype=torch.int32, device=dev)

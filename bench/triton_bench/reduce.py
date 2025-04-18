@@ -44,16 +44,16 @@ def _vpopc(x):
 
 
 @triton.jit
-def _memset_hist(Hist, hist_size, BLOCK: tl.constexpr):
+def _reduce_memset(Ret, ret_size, BLOCK: tl.constexpr):
     pid = tl.program_id(0)
     offs = pid * BLOCK + tl.arange(0, BLOCK)
-    tl.store(Hist + offs, 0, mask=offs < hist_size)
+    tl.store(Ret + offs, 0, mask=offs < ret_size)
 
 
 @triton.jit
-def _compute_hist(B, shape_bm, stride_bm,  # routing bitmatrix
-                  Hist, PartialHist, stride_pm, shape_pn,  # histogram
-                  BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr):
+def _reduce_compute(B, shape_bm, stride_bm,  # input bitmatrix
+                    Ret, Partials, stride_pm, shape_pn,  # outputs
+                    BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr):
     tl.static_assert(BLOCK_N % 32 == 0)
     pid_m = tl.program_id(0)
     pid_n = tl.program_id(1)
@@ -62,36 +62,37 @@ def _compute_hist(B, shape_bm, stride_bm,  # routing bitmatrix
     offs_n = pid_n * BLOCK_N + tl.arange(0, BLOCK_N)
     offs_b = pid_n * BLOCK_B + tl.arange(0, BLOCK_B)
     bits = tl.load(B + offs_m[None, :] * stride_bm + offs_b[:, None], mask=offs_m[None, :] < shape_bm)
-    hist = tl.reshape(_vpopc(bits), [BLOCK_N])
+    ret = tl.reshape(_vpopc(bits), [BLOCK_N])
     mask = offs_n < shape_pn
-    tl.atomic_add(Hist + offs_n, hist, mask=mask)
-    tl.store(PartialHist + pid_m * stride_pm + offs_n, hist, mask=mask)
+    tl.atomic_add(Ret + offs_n, ret, mask=mask)
+    tl.store(Partials + pid_m * stride_pm + offs_n, ret, mask=mask)
 
 
-def hist(x, partials_block_size=None, dim=0):
+def reduce(x, mode="sum", partials_block_size=None, dim=0):
     assert isinstance(x, Bitmatrix)
+    assert mode == "sum"
     assert dim == 0
     assert partials_block_size is not None
     cdiv = triton.cdiv
     dev = x.data.device
     PARTIALS_BLOCK_M = partials_block_size
-    HIST1_BLOCK_N = 32
+    BLOCK_N = 32
     MEMSET_BLOCK = 512
     n_rows, n_cols = x.shape
     # scratchpad tensors
     # NOTE: these are not returned
-    counts = torch.empty(n_cols, dtype=torch.int32, device=dev)
-    partial_counts = torch.empty((cdiv(n_rows, PARTIALS_BLOCK_M), n_cols), dtype=torch.int32, device=dev)
+    ret = torch.empty(n_cols, dtype=torch.int32, device=dev)
+    partials = torch.empty((cdiv(n_rows, PARTIALS_BLOCK_M), n_cols), dtype=torch.int32, device=dev)
     # output tensors
-    _memset_hist[(cdiv(counts.shape[0], MEMSET_BLOCK), )](
-        counts, counts.shape[0],  # outputs
+    _reduce_memset[(cdiv(ret.shape[0], MEMSET_BLOCK), )](
+        ret, ret.shape[0],  # outputs
         BLOCK=512  # tunable parameter
     )
-    _compute_hist[(cdiv(n_rows, PARTIALS_BLOCK_M), cdiv(n_cols, HIST1_BLOCK_N))](
+    _reduce_compute[(cdiv(n_rows, PARTIALS_BLOCK_M), cdiv(n_cols, BLOCK_N))](
         x.data, x.data.shape[0], x.data.stride(0),  # input
-        counts,  # output [histogram]
-        partial_counts, partial_counts.stride(0), partial_counts.shape[1],  # output [cumsums]
-        BLOCK_N=HIST1_BLOCK_N,  # tunable parameters
+        ret,  # output [final reduction]
+        partials, partials.stride(0), partials.shape[1],  # output [partial reductions]
+        BLOCK_N=BLOCK_N,  # tunable parameters
         BLOCK_M=PARTIALS_BLOCK_M,  # constants
     )
-    return counts, partial_counts,
+    return ret, partials
