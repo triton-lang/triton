@@ -496,10 +496,10 @@ int32_t getCtrlBitsForCacheModifierOnTarget(
   }
 }
 
-Value cvtFp32ToFp16RTNE_oneValue(Location loc, RewriterBase &rewriter, const Value &v) {
+Value cvtFp32ToFp16RTNE_oneValue(Location loc, RewriterBase &rewriter,
+                                 const Value &v) {
   LLVM::RoundingMode rm = LLVM::RoundingMode::NearestTiesToEven;
-  return rewriter.create<LLVM::FPTruncOp>(
-      loc, f16_ty, v);
+  return rewriter.create<LLVM::FPTruncOp>(loc, f16_ty, v);
 }
 
 Type getPointerTypeWithShape(Value basePtr, Value offset) {
