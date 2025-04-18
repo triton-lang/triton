@@ -21,8 +21,6 @@ class CudaAllocator:
         self.instrumentation_hook = instrumentation_hook
 
     def __call__(self, size: int, alignment: int, stream: Optional[int]):
-        import torch
-
         # Ensure proper alignment and minimum size
         # `alignment` and `size` are specified by the instrumentation engine to specify the minimum required
         # alignment and size of the buffer.
@@ -32,6 +30,7 @@ class CudaAllocator:
         aligned_size = max(aligned_size, self.instrumentation_hook.profile_buffer_size)
 
         # Create the buffer
+        import torch
         buffer = torch.empty((aligned_size, ), dtype=torch.uint8, device="cuda")
         self.instrumentation_hook.buffer = buffer
         return buffer
@@ -226,19 +225,19 @@ class InstrumentationHook(Hook):
         scope_id_pairs = self.function_scope_ids.get(function, [])
         libproton.init_scope_ids(function, scope_id_pairs)
 
+    def _data_ptr(self) -> int:
+        return 0 if self.buffer is None else self.buffer.data_ptr()
+
     def enter(self, lazy_dict: LazyDict) -> None:
-        data_ptr = 0 if self.buffer is None else self.buffer.data_ptr()
-        libproton.enter_instrumented_op(lazy_dict.data.get("function", None), data_ptr, self.profile_buffer_size)
+        func = lazy_dict.data.get("function")
+        libproton.enter_instrumented_op(func, self._data_ptr(), self.profile_buffer_size)
         if InstrumentationHook.enable_host_buffer:
             InstrumentationHook.host_buffer = None
 
     def exit(self, lazy_dict: LazyDict) -> None:
-        data_ptr = 0 if self.buffer is None else self.buffer.data_ptr()
-        libproton.exit_instrumented_op(lazy_dict.data.get("function", None), data_ptr, self.profile_buffer_size)
+        func = lazy_dict.data.get("function")
+        libproton.exit_instrumented_op(func, self._data_ptr(), self.profile_buffer_size)
 
         if InstrumentationHook.enable_host_buffer:
-            # Copy the profiling buffer to the CPU for debugging and processing by external tools
-            import torch
-
-            InstrumentationHook.host_buffer = torch.empty_like(self.buffer, device="cpu")
-            InstrumentationHook.host_buffer.copy_(self.buffer)
+            # copy profiling buffer to CPU for external processing
+            InstrumentationHook.host_buffer = self.buffer.cpu().clone()
