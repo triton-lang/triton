@@ -183,3 +183,28 @@ def test_remark_swp_op_before_operands(capfd, fresh_triton_cache):
     i = torch.empty(64 * 64, dtype=torch.float32).cuda()
     o = torch.empty(64 * 64, dtype=torch.float32).cuda()
     kernel_pipe_error[(1, )](i, o)
+
+def test_remark_swp_failure_on_num_stages_1(capfd, fresh_triton_cache):
+
+    @triton.jit
+    def kernel_pipe_error(in_ptr, out_ptr):
+        SIZE: tl.constexpr = 64
+        in_ptrs = in_ptr + tl.arange(0, SIZE)
+        val = tl.zeros((SIZE, ), dtype=tl.float32)
+        k = 0
+        for i in tl.range(0, 64, num_stages=1):
+            in_ptrs = in_ptr + tl.arange(0, SIZE) + SIZE * k
+            val = tl.load(in_ptrs)
+            out_ptrs = out_ptr + (tl.arange(0, SIZE) + i * SIZE)
+            tl.store(out_ptrs, val)
+            if tl.max(val) > 0:
+                k += 1
+
+    i = torch.empty(64 * 64, dtype=torch.float32).cuda()
+    o = torch.empty(64 * 64, dtype=torch.float32).cuda()
+    with enable_diagnostics_context('remarks'):
+        kernel_pipe_error[(1, )](i, o)
+
+    _, err = capfd.readouterr()
+    assert ("remark: sadfsdf" in err), "expect vectorization failure remark"
+    assert "note: see current operation:" not in err

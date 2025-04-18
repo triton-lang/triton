@@ -418,6 +418,8 @@ PipelineStatus scheduleLoop(scf::ForOp forOp,
 
 } // namespace
 
+PipelineFailureReason findReasonForNoLatencyAssigned(scf::ForOp forOp) {}
+
 void scheduleLoops(ModuleOp moduleOp) {
   DenseMap<Operation *, int> opLatency = deserializeLatencies(moduleOp);
   SmallVector<scf::ForOp> loops;
@@ -435,14 +437,15 @@ void scheduleLoops(ModuleOp moduleOp) {
   }
 
   if (allLoopsUnscheduled) {
-    moduleOp.emitRemark() << "All loops are not scheduled to pipeline.";
+    moduleOp.emitRemark()
+        << "All loops failed to assign a schedule for pipelining.";
     for (size_t i = 0; i < loops.size(); i++) {
       auto forOp = loops[i];
       if (!scheduleLoopResult[i]) {
         llvm_unreachable("LoopResult should contain a value");
       }
       PipelineFailureReason reason = scheduleLoopResult[i].value();
-      forOp.emitRemark() << "Loop is not scheduled to pipeline."
+      forOp.emitRemark() << "Loop failed to be scheduled because "
                          << getFailureReasonString(reason);
     }
     return;

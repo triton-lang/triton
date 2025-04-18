@@ -1,3 +1,4 @@
+#include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/Dialect/Tensor/IR/Tensor.h"
 #include "mlir/IR/IRMapping.h"
 #include "mlir/IR/TypeUtilities.h"
@@ -82,16 +83,25 @@ struct PipelinePass : public impl::TritonGPUPipelineBase<PipelinePass> {
 
   void runOnOperation() override {
     ModuleOp moduleOp = getOperation();
+
+    DenseMap<scf::ForOp, PipelineStatus> loopPipelineStatus;
     // Go over the interesting ops and assign latencies (based on the
     // numStages) to the them, trying to populate the allowed stages. This
     // step will be at some point extracted to separate pass that will be run
     // only for loops missing the latency information.
-    assignLatencies(moduleOp, numStages);
+    auto assignedLatency = assignLatencies(moduleOp, numStages);
+
     if (dumpIntermediateSteps) {
       llvm::dbgs() << "// -----// SoftwarePipeliner internal IR Dump After: "
                       "AssignLatencies\n"
                    << moduleOp << "\n\n\n";
     }
+
+    if (!assignedLatency) {
+
+      return;
+    }
+
     // numStages should not be used below this point. We should know
     // everything based on the assigned stages
 
