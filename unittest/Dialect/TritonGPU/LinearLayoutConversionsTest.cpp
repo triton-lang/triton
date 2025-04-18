@@ -1850,7 +1850,7 @@ TEST_F(LinearLayoutConversionsTest, mfma32_dot_op_rhs_trans) {
   auto parentTMfma16 = mfma(/*warps=*/{2, 4}, /*mDim=*/32, /*nDim=*/32,
                             /*isTransposed=*/true);
   auto tmfmaDotOp1_kwidth_16 =
-      mfmaDotOp(parentTMfma16, /*opIdx=*/1, /*kWidth=*/8);
+      mfmaDotOp(parentTMfma16, /*opIdx=*/1, /*kWidth=*/16);
   auto tmfmaDotOp1_kwidth_8 =
       mfmaDotOp(parentTMfma16, /*opIdx=*/1, /*kWidth=*/8);
   auto tmfmaDotOp1_kwidth_4 =
