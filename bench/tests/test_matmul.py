@@ -1,11 +1,9 @@
-import itertools
 from dataclasses import dataclass, fields
 import pytest
 import torch
 # benchmarking utilities
-import triton.profiler as proton
 # routing utilities
-from triton_bench.routing import routing, simulate_expert_sharded_routing
+from triton_bench.routing import routing
 # matmul utilities
 import triton_bench.matmul_ogs_details.opt_flags as opt_flags
 from triton_bench.matmul_ogs import FlexCtx, PrecisionConfig, MicroscalingCtx
@@ -45,10 +43,6 @@ def init_routing_data(m, n_expts_tot, n_expts_act, n_expt_shards, do_gather, do_
     dev = "cuda"
     logits = torch.randn((m, n_expts_tot), dtype=torch.float16, device=dev, requires_grad=True)
     routing_data, gather_idx, scatter_idx = routing(logits, n_expts_act, simulated_ep=n_expt_shards)
-    # if n_expt_shards > 1:
-    #     m = logits.shape[0] * n_expt_shards
-    #     _, routing_data, gather_idx, scatter_idx = simulate_expert_sharded_routing(m, routing_data, n_expt_shards,
-    #                                                                                device=logits.device)
     routing_data.gate_scal = None
     gather_idx = gather_idx if do_gather else None
     scatter_idx = scatter_idx if do_scatter else None
