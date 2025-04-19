@@ -118,7 +118,9 @@ def bench_mlp(batch, dim1, dim2, n_expts_tot, n_expts_act, x_dtype, w_dtype,
         data = json.load(fd)
         # TODO: this will be broken if kernels use scopes themselves
         # compute useful (a.k.a. matmul) bytes and flops
-        matmuls = [x for x in data[0]["children"] if "matmul" in x["frame"]["name"]]
+        matmuls = [
+            x for x in data[0]["children"] if "_matmul" in x["frame"]["name"] and "metadata" not in x["frame"]["name"]
+        ]
         tot_bytes = sum([x["metrics"]["bytes"] for x in matmuls])
         tot_flops = {w: sum([x["metrics"].get(f"flops{w}", 0) for x in matmuls]) for w in [8, 16]}
         # compute total time (incl. "not useful" work)
