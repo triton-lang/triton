@@ -29,9 +29,9 @@ def _memset_metadata(Hist, n_expts_tot, MDHist, MDTokStarts, MDTileStarts, MDTil
             hist_tok = tl.load(Hist + offs_n, mask=mask)
             hist_tile = tl.cdiv(hist_tok, TILE_DIM)
             tok_starts = tl.cumsum(hist_tok, 0) + x_tok
-            x_tok += tl.sum(hist_tok, 0)
+            x_tok += tl.sum(hist_tok, 0).to(MDTokStarts.dtype.element_ty)
             tile_starts = tl.cumsum(hist_tile, 0) + x_tile
-            x_tile += tl.sum(hist_tile, 0)
+            x_tile += tl.sum(hist_tile, 0).to(MDTileStarts.dtype.element_ty)
             tl.store(MDHist + offs_n, hist_tok, mask=mask)
             tl.store(MDTokStarts + 1 + offs_n, tok_starts, mask=mask)
             tl.store(MDTileStarts + 1 + offs_n, tile_starts, mask=mask)

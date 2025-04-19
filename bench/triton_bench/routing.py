@@ -152,13 +152,13 @@ def routing(logits, n_expts_act, expt_indx=None):
     assert expt_indx is None
     cdiv = triton.cdiv
     HIST_BLOCK_M = 64
-    HIST2_BLOCK_M = 512
+    INDX_OFFS_BLOCK_M = 512
     assert logits.dtype.itemsize == 2
     n_tokens, n_expts_tot = logits.shape
     n_gates = n_tokens * n_expts_act
     device = logits.device
     expt_scal, expt_indx, bitmatrix = topk(logits, n_expts_act)
-    hist, partial_hist = sum(bitmatrix, partials_block_size=HIST_BLOCK_M)
+    hist, partial_hist = sum(bitmatrix, partials_block_size=HIST_BLOCK_M, dim=0)
     # scratchpad
     expt_offs = torch.empty(n_expts_tot + 1, dtype=torch.int32, device=device)
     indx_offs = torch.empty((cdiv(n_tokens, HIST_BLOCK_M), n_expts_tot), dtype=torch.int32, device=device)
@@ -172,7 +172,7 @@ def routing(logits, n_expts_act, expt_indx=None):
     _routing_compute_indx_offs[(n_expts_tot, )](
         expt_offs, partial_hist,  # inputs
         indx_offs, partial_hist.shape[0], partial_hist.stride(0),  # outputs
-        BLOCK_M=HIST2_BLOCK_M,  # tunable parameters
+        BLOCK_M=INDX_OFFS_BLOCK_M,  # tunable parameters
     )
     _routing_compute_indx[(cdiv(n_tokens, HIST_BLOCK_M), )](
         topk_indx, gate_indx, gate_scal,  # outputs
