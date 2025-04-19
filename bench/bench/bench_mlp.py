@@ -150,7 +150,7 @@ def bench_mlp(batch, dim1, dim2, n_expts_tot, n_expts_act, x_dtype, w_dtype,
 if __name__ == "__main__":
     has_native_mx4 = torch.cuda.get_device_capability(0)[0] >= 10 or get_cdna_version() == 4
     qxdtype = "fp8" if has_native_mx4 else "bf16"
-    print(bench_mlp(2048, 8192, 8192, 1, 1, "fp8", "fp8", TP=1, EP=1, name="dense"))
-    print(bench_mlp(2048, 8192, 8192, 1, 1, qxdtype, "mx4", TP=1, EP=1, name="dense"))
+    print(bench_mlp(8192, 8192, 8192, 1, 1, "fp8", "fp8", TP=1, EP=1, name="dense"))
+    print(bench_mlp(8192, 8192, 8192, 1, 1, qxdtype, "mx4", TP=1, EP=1, name="dense"))
     print(bench_mlp(2048, 5120, 8192, 128, 4, "fp8", "fp8", TP=4, EP=2, name="llama4"))
     print(bench_mlp(2048, 5120, 8192, 128, 4, qxdtype, "mx4", TP=4, EP=2, name="llama4"))
