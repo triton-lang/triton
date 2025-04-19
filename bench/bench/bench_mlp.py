@@ -99,7 +99,7 @@ def bench_mlp(batch, dim1, dim2, n_expts_tot, n_expts_act, x_dtype, w_dtype,
         proton.activate()
         if n_expts_tot > 1:
             logits = matmul_ogs(x, wg, bg, precision_config=pcg)
-            rdata, gather_indx, scatter_indx = routing(logits, n_expts_act, simulated_ep=EP)
+            rdata, gather_indx, scatter_indx = routing(logits, n_expts_act)  #, simulated_ep=EP)
             x = x.to(x_dtype)
         else:
             rdata, gather_indx, scatter_indx = None, None, None

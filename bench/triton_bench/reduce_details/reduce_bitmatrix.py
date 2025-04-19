@@ -49,9 +49,9 @@ def _sum_bitmatrix_memset(Ret, ret_size, BLOCK: tl.constexpr):
 
 
 @triton.jit
-def _sum_bimatrix_rows(B, shape_bm, stride_bm,  # input bitmatrix
-                       Ret, Partials, stride_pm, shape_pn,  # outputs
-                       BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr):
+def _sum_bitmatrix_rows(B, shape_bm, stride_bm,  # input bitmatrix
+                        Ret, Partials, stride_pm, shape_pn,  # outputs
+                        BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr):
     tl.static_assert(BLOCK_N % 32 == 0)
     pid_m = tl.program_id(0)
     pid_n = tl.program_id(1)
@@ -80,7 +80,7 @@ def sum_bitmatrix_rows(x, out_ret, out_partials, partials_block_size=None):
         out_ret, out_ret.shape[0],  # outputs
         BLOCK=512  # tunable parameter
     )
-    _sum_bimatrix_rows[(cdiv(n_rows, PARTIALS_BLOCK_M), cdiv(n_cols, BLOCK_N))](
+    _sum_bitmatrix_rows[(cdiv(n_rows, PARTIALS_BLOCK_M), cdiv(n_cols, BLOCK_N))](
         x.data, x.data.shape[0], x.data.stride(0),  # input
         out_ret,  # output [final reduction]
         out_partials, out_partials.stride(0), out_partials.shape[1],  # output [partial reductions]
