@@ -89,6 +89,23 @@ def cuda_capability_geq(major, minor=0):
 
 
 @constexpr_function
+def get_cdna_version():
+    """
+    Gets the AMD architecture version, i.e. CDNA3 or CDNA4, currently
+    only supports 3 (gfx942) or 4 (gfx950). Returns -1 if it is not AMD
+    hardware or unsupported architecture
+    """
+    target = triton.runtime.driver.active.get_current_target()
+    if target.backend != 'hip':
+        return -1
+    if target.arch == 'gfx942':
+        return 3
+    if target.arch == 'gfx950':
+        return 4
+    return -1
+
+
+@constexpr_function
 def num_sms():
     return torch.cuda.get_device_properties(0).multi_processor_count
 
