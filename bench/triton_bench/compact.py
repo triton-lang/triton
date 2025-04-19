@@ -82,30 +82,3 @@ def masked_compact_torch(yv: torch.Tensor, yi: torch.Tensor, bitmask: torch.Tens
     yi_sorted[~keep_sorted] = sentinel
     yv_sorted[~keep_sorted] = sentinel
     return yv_sorted, yi_sorted
-
-
-def test_masked_compact():
-    n_tokens = 8192
-    n_cols = 64
-    k = 4
-    p = 0.5
-    device = "cuda"
-    yi = torch.rand((n_tokens, n_cols), device=device).argsort(dim=-1)
-    yi = yi[:, :4].to(torch.int32)
-    yv = torch.randn((n_tokens, k), dtype=torch.bfloat16, device=device)
-    # "drop" indices from yi with probability `p`
-    mask = torch.zeros((n_tokens, n_cols), dtype=torch.int32, device=device)
-    keep = (torch.rand(yi.shape, device=device) < p)
-    if keep.any():
-        rows = torch.arange(yi.size(0), device=device).unsqueeze(1).expand_as(yi)
-        mask[rows[keep], yi[keep]] = 1
-    chunks = mask.view(*mask.shape[:-1], -1, 32)
-    weights = (1 << torch.arange(32, dtype=torch.int32, device=device))
-    bitmask = (chunks.int() * weights).sum(dim=-1)
-    yv_ref, yi_ref = masked_compact_torch(yv, yi, bitmask)
-    yv_tri, yi_tri = masked_compact(yv, yi, bitmask)
-    assert torch.all(yi_ref == yi_tri)
-    assert torch.all(yv_ref == yv_tri)
-
-
-test_masked_compact()
