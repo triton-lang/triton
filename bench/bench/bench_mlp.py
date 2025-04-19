@@ -104,10 +104,6 @@ def bench_mlp(batch, dim1, dim2, n_expts_tot, n_expts_act, x_dtype, w_dtype,
             rdata, gather_indx, scatter_indx = routing(logits, n_expts_act, simulated_ep=EP)
         else:
             rdata, gather_indx, scatter_indx = None, None, None
-        # c0 = torch.empty((x.shape[0], w1.shape[-1]), device=dev, dtype=x.dtype)
-        # c1 = torch.empty((x.shape[0], w2.shape[-1]), device=dev, dtype=x.dtype)
-        # cublas.matmul(x, w1.squeeze(0), c0)
-        # cublas.matmul(c0, w2.squeeze(0), c1)
         x = matmul_ogs(x, w1, b1, rdata, gather_indx=gather_indx, precision_config=pc1)
         x = triton_bench.swiglu.swiglu(x, 1.0, pcs)
         x = matmul_ogs(x, w2, b2, rdata, scatter_indx=scatter_indx, precision_config=pc2)
@@ -145,5 +141,5 @@ if __name__ == "__main__":
     qxdtype = "fp8" if has_native_mx4 else "bf16"
     # print(bench_mlp(8192, 8192, 8192, 1, 1, "fp8", "fp8", TP=1, EP=1, name="dense"))
     # print(bench_mlp(8192, 8192, 8192, 1, 1, qxdtype, "mx4", TP=1, EP=1, name="dense"))
-    print(bench_mlp(2048, 5120, 8192, 64, 4, "fp8", "fp8", TP=4, EP=1, name="llama4"))
+    print(bench_mlp(1024, 5120, 8192, 64, 4, "fp8", "fp8", TP=4, EP=1, name="llama4"))
     # print(bench_mlp(2048, 5120, 8192, 128, 4, qxdtype, "mx4", TP=4, EP=2, name="llama4"))
