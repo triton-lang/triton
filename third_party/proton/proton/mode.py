@@ -60,6 +60,22 @@ class InstrumentationMode(BaseMode):
     buffer_type: triton_proton.BUFFER_TYPE = triton_proton.BUFFER_TYPE.SHARED
     buffer_size: int = 0
 
+    def __post_init__(self):
+        # automatically map string inputs to enums using the global lookup dicts
+        mappings = [
+            ("metric_type", metric_types),
+            ("sampling_strategy", sampling_strategies),
+            ("granularity", granularities),
+            ("buffer_strategy", buffer_strategies),
+            ("buffer_type", buffer_types),
+        ]
+        for field_name, lookup in mappings:
+            value = getattr(self, field_name)
+            if isinstance(value, str):
+                if value not in lookup:
+                    raise ValueError(f"Unknown {field_name}: {value}")
+                object.__setattr__(self, field_name, lookup[value])
+
     def __str__(self):
         return (f"{self.name}:metric_type={self.metric_type}:sampling_strategy={self.sampling_strategy}"
                 f":sampling_options={self.sampling_options}:granularity={self.granularity}"
