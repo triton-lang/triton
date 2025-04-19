@@ -193,8 +193,8 @@ def routing(logits, n_expts_act, expt_indx=None, simulated_ep=1):
     expt_offs = torch.empty(n_expts_tot + 1, dtype=torch.int32, device=device)
     indx_offs = torch.empty((cdiv(n_tokens, HIST_BLOCK_M), n_expts_tot), dtype=torch.int32, device=device)
     # output
-    topk_indx = -torch.ones(n_gates, dtype=torch.int32, device=device)
-    gate_indx = -torch.ones(n_gates, dtype=torch.int32, device=device)
+    topk_indx = torch.empty(n_gates, dtype=torch.int32, device=device)
+    gate_indx = torch.empty(n_gates, dtype=torch.int32, device=device)
     gate_scal = torch.empty(n_gates, dtype=logits.dtype, device=device)
     _routing_compute_expt_offs[(1, )](
         hist, expt_offs, hist.shape[0], BLOCK_N=512  # tunable parameters

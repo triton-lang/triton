@@ -7,7 +7,7 @@ import triton_bench.swiglu
 from triton_bench.mxfp import downcast_to_mxfp
 from triton_bench.matmul_ogs import MicroscalingCtx, matmul_ogs, PrecisionConfig, FlexCtx
 from triton_bench.numerics import InFlexData
-from triton_bench.routing import routing, simulate_expert_sharded_routing
+from triton_bench.routing import routing
 from triton_bench.meta import cuda_capability_geq
 
 
@@ -99,13 +99,7 @@ def bench_mlp(batch, dim1, dim2, n_expts_tot, n_expts_act, x_dtype, w_dtype,
         proton.activate()
         if n_expts_tot > 1:
             logits = matmul_ogs(x, wg, bg, precision_config=pcg)
-            rdata, gather_indx, scatter_indx = routing(logits, n_expts_act)
-            if EP > 1:
-                proton.deactivate()
-                # TODO: activate proton here when fast expert parallelism simulation is done
-                m = logits.shape[0] * EP
-                _, rdata, gather_indx, scatter_indx = simulate_expert_sharded_routing(m, rdata, EP, device=dev)
-                proton.activate()
+            rdata, gather_indx, scatter_indx = routing(logits, n_expts_act, simulated_ep=EP)
             x = x.to(x_dtype)
         else:
             rdata, gather_indx, scatter_indx = None, None, None
