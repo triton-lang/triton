@@ -1,6 +1,5 @@
 from pathlib import Path
 import json
-import triton
 import triton.profiler as proton
 import torch
 import triton_bench.swiglu
@@ -8,15 +7,9 @@ from triton_bench.mxfp import downcast_to_mxfp
 from triton_bench.matmul_ogs import MicroscalingCtx, matmul_ogs, PrecisionConfig, FlexCtx
 from triton_bench.numerics import InFlexData
 from triton_bench.routing import routing
-from triton_bench.meta import cuda_capability_geq
+from triton_bench.meta import cuda_capability_geq, is_hip, get_cdna_version
 
-
-def is_hip_cdna4():
-    target = triton.runtime.driver.active.get_current_target()
-    return target.backend == 'hip' and target.arch == 'gfx950'
-
-
-if torch.cuda.is_available() and not is_hip_cdna4():
+if torch.cuda.is_available() and not is_hip():
     from triton._C.libtriton import nvidia
     cublas_workspace = torch.empty(32 * 1024 * 1024, device="cuda", dtype=torch.uint8)
     cublas = nvidia.cublas.CublasLt(cublas_workspace)
@@ -25,17 +18,29 @@ else:
 
 
 def _query_gpu_specs():
-    if is_hip_cdna4():
-        # no spec data yet.
-        return None
     import subprocess
-    cmd = ["nvidia-smi", "--query-gpu=name", "--format=csv,noheader", "-i=0"]
-    output = subprocess.check_output(cmd, stderr=subprocess.DEVNULL).decode().strip()
-    name = output.splitlines()[0]
-    return {
-        "NVIDIA H100 80GB HBM3": {"MAX_TFLOPS8": 1979, "MAX_TFLOPS16": 989, "MAX_TBPS": 3.35}, "HGX GB200":
-        {"MAX_TFLOPS8": 4500, "MAX_TFLOPS16": 2250, "MAX_TBPS": 8.0}
-    }[name]
+    if is_hip():
+        cmd = ["rocm-smi", "--showproductname", "-d=0", "--csv"]
+        output = subprocess.check_output(cmd, stderr=subprocess.DEVNULL).decode().strip()
+        model = output.splitlines()[1].split(",")[2]
+        if model in ["0x74a9", "0x74a1"]:
+            name = "AMD Instinct MI300X"
+        elif model == "0x74a5":
+            name = "AMD Instinct MI325X"
+        else:
+            name = "AMD"
+    else:
+        cmd = ["nvidia-smi", "--query-gpu=name", "--format=csv,noheader", "-i=0"]
+        output = subprocess.check_output(cmd, stderr=subprocess.DEVNULL).decode().strip()
+        name = output.splitlines()[0]
+
+    gpu_specs = {
+        "NVIDIA H100 80GB HBM3": {"MAX_TFLOPS8": 1979, "MAX_TFLOPS16": 989, "MAX_TBPS": 3.35},
+        "HGX GB200": {"MAX_TFLOPS8": 4500, "MAX_TFLOPS16": 2250, "MAX_TBPS": 8.0},
+        "AMD Instinct MI300X": {"MAX_TFLOPS8": 2615, "MAX_TFLOPS16": 1307, "MAX_TBPS": 5.3},
+        "AMD Instinct MI325X": {"MAX_TFLOPS8": 2615, "MAX_TFLOPS16": 1307, "MAX_TBPS": 6.0},
+    }
+    return gpu_specs.get(name)
 
 
 SPECS = _query_gpu_specs()
@@ -46,7 +51,9 @@ def quantize(w, dtype, dev, **opt):
         wq = w.to(torch.bfloat16).transpose(-1, -2).contiguous().transpose(-1, -2)
         return wq, InFlexData(), MicroscalingCtx()
     elif dtype == "fp8":
-        wq = w.to(torch.float8_e4m3fn).transpose(-1, -2).contiguous().transpose(-1, -2)
+        fp8e4_dtype = torch.float8_e4m3fn if get_cdna_version() != 3 \
+            else torch.float8_e4m3fnuz
+        wq = w.to(fp8e4_dtype).transpose(-1, -2).contiguous().transpose(-1, -2)
         return wq, InFlexData(dtype=wq.dtype, scale=w.abs().max().unsqueeze(0)), \
                    MicroscalingCtx()
     else:
@@ -65,6 +72,7 @@ def bench_mlp(batch, dim1, dim2, n_expts_tot, n_expts_act, x_dtype, w_dtype,
     assert n_expts_tot % EP == 0
     assert dim2 % TP == 0
     dev = "cuda"
+
     # input
     # weights
     wg = torch.randn((dim1, n_expts_tot), device=dev)
@@ -91,12 +99,16 @@ def bench_mlp(batch, dim1, dim2, n_expts_tot, n_expts_act, x_dtype, w_dtype,
     fpath = Path(f"logs/{name}/{batch}-{dim1}-{dim2}-{n_expts_tot}-{n_expts_act}-{x_dtype}-{w_dtype}.hatchet")
     fpath.parent.mkdir(parents=True, exist_ok=True)
     x_dtype = {"bf16": torch.bfloat16, "fp8": torch.float8_e4m3fn}[x_dtype]
+    # special treatment of fp8_e4m3 on AMD CDNA3 because it uses fp8_e4m3fnuz
+    if x_dtype == torch.float8_e4m3fn and get_cdna_version() == 3:
+        x_dtype = torch.float8_e4m3fnuz
+
     x = torch.randn((batch, dim1), device=dev)
     xg = x.to(wg.dtype if n_expts_tot > 1 else x_dtype)
     x = x.to(x_dtype)
     # run layer
     proton.start(str(fpath.with_suffix('')), hook="triton")
-    for i in range(10):
+    for i in range(100):
         if n_expts_tot > 1:
             logits = matmul_ogs(xg, wg, bg, precision_config=pcg)
             rdata, gather_indx, scatter_indx = routing(logits, n_expts_act, simulated_ep=EP)
@@ -125,8 +137,10 @@ def bench_mlp(batch, dim1, dim2, n_expts_tot, n_expts_act, x_dtype, w_dtype,
         if SPECS is not None:
             min_time_flops = sum([tot_flops[w] / SPECS[f"MAX_TFLOPS{w}"] for w in [8, 16]]) * 1e-3
             min_time_bytes = tot_bytes / SPECS["MAX_TBPS"] * 1e-3
-        min_time = max(min_time_flops, min_time_bytes)
-        util = min_time / tot_time
+            min_time = max(min_time_flops, min_time_bytes)
+            util = min_time / tot_time
+        else:
+            util = "N/A"
         tflops = sum([tot_flops[w] for w in [8, 16]]) / tot_time * 1e-3
         tbps = tot_bytes / tot_time * 1e-3
 
@@ -134,7 +148,7 @@ def bench_mlp(batch, dim1, dim2, n_expts_tot, n_expts_act, x_dtype, w_dtype,
 
 
 if __name__ == "__main__":
-    has_native_mx4 = torch.cuda.get_device_capability(0)[0] >= 10 or is_hip_cdna4()
+    has_native_mx4 = torch.cuda.get_device_capability(0)[0] >= 10 or get_cdna_version() == 4
     qxdtype = "fp8" if has_native_mx4 else "bf16"
     print(bench_mlp(2048, 8192, 8192, 1, 1, "fp8", "fp8", TP=1, EP=1, name="dense"))
     print(bench_mlp(2048, 8192, 8192, 1, 1, qxdtype, "mx4", TP=1, EP=1, name="dense"))
