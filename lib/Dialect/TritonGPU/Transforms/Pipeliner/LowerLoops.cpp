@@ -1,3 +1,4 @@
+#include "mlir/Dialect/UB/IR/UBOps.h"
 #include "mlir/IR/Dominance.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 #include "triton/Analysis/Utility.h"
@@ -1075,10 +1076,15 @@ void multibufferTensorMemory(scf::ForOp forOp, CoarseSchedule &schedule,
 
   bool multibufferingIsValid = false;
 
-  SmallVector<Operation *> allocUsers = llvm::to_vector(alloc->getUsers());
+  SmallVector<Operation *> allocUsers =
+      llvm::to_vector(alloc.getResult().getUsers());
+  Value replTok = OpBuilder(forOp).create<ub::PoisonOp>(
+      forOp.getLoc(), builder.getType<AsyncTokenType>());
   for (auto user : allocUsers) {
     if (auto store = dyn_cast<ttng::TMEMStoreOp>(user)) {
       if (forOp->isAncestor(store)) {
+        store.getDepMutable().clear();
+        store.getToken().replaceAllUsesWith(replTok);
         // We can multibuffer, since the store is a point where we can
         // change the buffer index
         multibufferingIsValid = true;
@@ -1107,6 +1113,8 @@ void multibufferTensorMemory(scf::ForOp forOp, CoarseSchedule &schedule,
       }
     } else if (auto load = dyn_cast<ttng::TMEMLoadOp>(user)) {
       if (forOp->isAncestor(load)) {
+        load.getDepMutable().clear();
+        load.getToken().replaceAllUsesWith(replTok);
         builder.setStageCluster(schedule[load]);
         builder.setInsertionPoint(load);
         Value curBufIdx = getCurrBufIdx(load);
@@ -1122,6 +1130,8 @@ void multibufferTensorMemory(scf::ForOp forOp, CoarseSchedule &schedule,
         load.getSrcMutable().assign(tmemSlice);
       }
     } else if (auto mma = dyn_cast<ttng::MMAv5OpInterface>(user)) {
+      mma.getAccDepMutable().clear();
+      mma.getToken().replaceAllUsesWith(replTok);
       builder.setStageCluster(schedule[mma]);
       builder.setInsertionPoint(mma);
       // We can legally switch to next buffer index if the mma does not use the
@@ -1157,7 +1167,9 @@ void multibufferTensorMemory(scf::ForOp forOp, CoarseSchedule &schedule,
         "Trying to multibuffer TMEM while there is no store to the "
         "accumulator, and the mma uses the accumulator all the time.");
   }
+  alloc.getToken().replaceAllUsesWith(newAlloc.getToken());
   alloc->erase();
+
   Value newBufIdx = bufIdxDefs.back().second;
   replaceAllUsesDominatedBy(newBufIdx.getDefiningOp(), newBufIdx, bufIdx,
                             domInfo);

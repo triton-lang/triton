@@ -5,6 +5,7 @@ add_triton_library(TritonNvidiaGPUTransforms
   OptimizeTMemSubtiling.cpp
   PlanCTA.cpp
   PromoteLHSToTMem.cpp
+  RemoveTMEMTokens.cpp
   TensorMemoryAllocation.cpp
   TMALowering.cpp
   TMAUtilities.cpp
