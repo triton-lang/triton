@@ -128,6 +128,7 @@ class CUDAOptions:
     ptx_version: int = None
     enable_fp_fusion: bool = True
     launch_cooperative_grid: bool = False
+    launch_pdl: bool = False
     supported_fp8_dtypes: Tuple[str] = ("fp8e5", "fp8e4b15")
     deprecated_fp8_dtypes: Tuple[str] = ()
     default_dot_input_precision: str = "tf32"
