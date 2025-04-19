@@ -184,7 +184,7 @@ def make_launcher(constants, signature):
     signature = {i: s for i, s in enumerate(expand_signature)}
 
     args_format = ''.join([format_of(ty) for ty in signature.values()])
-    format = "iiiKKpOOOOO" + args_format
+    format = "iiiKKpOOOOOO" + args_format
 
     flat_signature = []
     for sig in signature.values():
