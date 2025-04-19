@@ -115,6 +115,18 @@ def _routing_clear_bitmatrix(Bitmatrix, stride_bm, shape_bn, cutoff, BLOCK_N: tl
         tl.store(Bitmatrix + pid_m * stride_bm + offs_n, values, mask=offs_n < shape_bn)
 
 
+@triton.jit
+def _routing_memset_indx(Indx0, Indx1, size, sentinel, BLOCK: tl.constexpr):
+    pid = tl.program_id(0)
+    buf = tl.program_id(1)
+    offs = pid * BLOCK + tl.arange(0, BLOCK)
+    mask = offs < size
+    if buf == 0:
+        tl.store(Indx0 + offs, sentinel, mask=mask)
+    if buf == 1:
+        tl.store(Indx1 + offs, sentinel, mask=mask)
+
+
 @dataclass
 class GatherIndx:
     """
@@ -169,6 +181,7 @@ def routing(logits, n_expts_act, expt_indx=None, simulated_ep=1):
     cdiv = triton.cdiv
     HIST_BLOCK_M = 64
     INDX_OFFS_BLOCK_M = 512
+    MEMSET_BLOCK = 1024
     assert logits.dtype.itemsize == 2
     n_tokens, n_expts_tot = logits.shape
     n_gates = n_tokens * n_expts_act
@@ -196,6 +209,13 @@ def routing(logits, n_expts_act, expt_indx=None, simulated_ep=1):
     topk_indx = torch.empty(n_gates, dtype=torch.int32, device=device)
     gate_indx = torch.empty(n_gates, dtype=torch.int32, device=device)
     gate_scal = torch.empty(n_gates, dtype=logits.dtype, device=device)
+    _routing_memset_indx[(cdiv(n_gates, MEMSET_BLOCK), 2)](
+        topk_indx,
+        gate_indx,
+        n_gates,
+        -1,
+        BLOCK=MEMSET_BLOCK,
+    )
     _routing_compute_expt_offs[(1, )](
         hist, expt_offs, hist.shape[0], BLOCK_N=512  # tunable parameters
     )

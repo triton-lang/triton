@@ -43,7 +43,8 @@ SPECS = _query_gpu_specs()
 
 def quantize(w, dtype, dev, **opt):
     if dtype == "bf16":
-        return w.to(torch.bfloat16), InFlexData(), MicroscalingCtx()
+        wq = w.to(torch.bfloat16).transpose(-1, -2).contiguous().transpose(-1, -2)
+        return wq, InFlexData(), MicroscalingCtx()
     elif dtype == "fp8":
         wq = w.to(torch.float8_e4m3fn).transpose(-1, -2).contiguous().transpose(-1, -2)
         return wq, InFlexData(dtype=wq.dtype, scale=w.abs().max().unsqueeze(0)), \
@@ -95,12 +96,12 @@ def bench_mlp(batch, dim1, dim2, n_expts_tot, n_expts_act, x_dtype, w_dtype,
     x_dtype = {"bf16": torch.bfloat16, "fp8": torch.float8_e4m3fn}[x_dtype]
     for i in range(100):
         x = torch.randn((batch, dim1), device=dev)
-        x = x.to(wg.dtype if n_expts_tot > 1 else x_dtype)
+        xg = x.to(wg.dtype if n_expts_tot > 1 else x_dtype)
+        x = x.to(x_dtype)
         proton.activate()
         if n_expts_tot > 1:
-            logits = matmul_ogs(x, wg, bg, precision_config=pcg)
-            rdata, gather_indx, scatter_indx = routing(logits, n_expts_act)  #, simulated_ep=EP)
-            x = x.to(x_dtype)
+            logits = matmul_ogs(xg, wg, bg, precision_config=pcg)
+            rdata, gather_indx, scatter_indx = routing(logits, n_expts_act, simulated_ep=EP)
         else:
             rdata, gather_indx, scatter_indx = None, None, None
         # c0 = torch.empty((x.shape[0], w1.shape[-1]), device=dev, dtype=x.dtype)
@@ -142,7 +143,7 @@ def bench_mlp(batch, dim1, dim2, n_expts_tot, n_expts_act, x_dtype, w_dtype,
 if __name__ == "__main__":
     has_native_mx4 = torch.cuda.get_device_capability(0)[0] >= 10 or is_hip_cdna4()
     qxdtype = "fp8" if has_native_mx4 else "bf16"
-    print(bench_mlp(8192, 8192, 8192, 1, 1, "fp8", "fp8", TP=1, EP=1, name="dense"))
-    print(bench_mlp(8192, 8192, 8192, 1, 1, qxdtype, "mx4", TP=1, EP=1, name="dense"))
-    print(bench_mlp(2048, 5120, 8192, 128, 4, "fp8", "fp8", TP=4, EP=1, name="llama4"))
-    print(bench_mlp(2048, 5120, 8192, 128, 4, qxdtype, "mx4", TP=4, EP=1, name="llama4"))
+    # print(bench_mlp(8192, 8192, 8192, 1, 1, "fp8", "fp8", TP=1, EP=1, name="dense"))
+    # print(bench_mlp(8192, 8192, 8192, 1, 1, qxdtype, "mx4", TP=1, EP=1, name="dense"))
+    print(bench_mlp(2048, 5120, 8192, 64, 4, "fp8", "fp8", TP=4, EP=1, name="llama4"))
+    # print(bench_mlp(2048, 5120, 8192, 128, 4, qxdtype, "mx4", TP=4, EP=2, name="llama4"))

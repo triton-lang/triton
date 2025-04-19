@@ -36,11 +36,11 @@ def streaming_topk(X, stride_xm, n_expts_tot, offs_m, mask_m, N_EXPTS_PAD: tl.co
 
 
 @triton.jit
-def _topk_compute(X, stride_xm,  # inputs
-                  Yv, Yi, stride_ym,  # topk values/indices
-                  Bits, stride_rm, n_rows,  # bitmatrix
-                  n_expts_tot, BLOCK_M: tl.constexpr, N_EXPTS_PAD: tl.constexpr, N_EXPTS_ACT: tl.constexpr,
-                  BLOCK_N: tl.constexpr):
+def _topk(X, stride_xm,  # inputs
+          Yv, Yi, stride_ym,  # topk values/indices
+          Bits, stride_rm, n_rows,  # bitmatrix
+          n_expts_tot, BLOCK_M: tl.constexpr, N_EXPTS_PAD: tl.constexpr, N_EXPTS_ACT: tl.constexpr,
+          BLOCK_N: tl.constexpr):
 
     tl.static_assert(BLOCK_N % 32 == 0)
     tl.static_assert(N_EXPTS_PAD % BLOCK_N == 0)
@@ -96,7 +96,7 @@ def topk(x, k, dim=1, return_bitmatrix=True):
     y_vals = torch.empty((n_rows, k), dtype=x.dtype, device=dev)
     y_indx = torch.empty((n_rows, k), dtype=torch.int16, device=dev)
     bitmatrix = torch.empty((n_rows, n_cols_words), dtype=torch.uint32, device=dev)
-    _topk_compute[(cdiv(n_rows, BLOCK_M), )](
+    _topk[(cdiv(n_rows, BLOCK_M), )](
         x, x.stride(0),  # inputs
         y_vals, y_indx, y_vals.stride(0),  # output [topk]
         bitmatrix, bitmatrix.stride(0),  # output [bitmatrix]

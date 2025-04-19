@@ -14,8 +14,8 @@ class ExptData:
 
 
 @triton.jit
-def _matmul_ogs_metadata_memset(Hist, n_expts_tot, MDHist, MDTokStarts, MDTileStarts, MDTileInfo, md_n_tiles,
-                                BLOCK: tl.constexpr, TILE_DIM: tl.constexpr):
+def _matmul_metadata_memset(Hist, n_expts_tot, MDHist, MDTokStarts, MDTileStarts, MDTileInfo, md_n_tiles,
+                            BLOCK: tl.constexpr, TILE_DIM: tl.constexpr):
     pid = tl.program_id(0)
     # if pid == 0 - initialize cumsums
     if pid == 0:
@@ -42,7 +42,7 @@ def _matmul_ogs_metadata_memset(Hist, n_expts_tot, MDHist, MDTokStarts, MDTileSt
 
 
 @triton.jit
-def _matmul_ogs_metadata_compute(Hist, MDTileStarts, MDTileInfo, BLOCK: tl.constexpr, TILE_DIM: tl.constexpr):
+def _matmul_metadata_compute(Hist, MDTileStarts, MDTileInfo, BLOCK: tl.constexpr, TILE_DIM: tl.constexpr):
 
     expt_id = tl.program_id(0)
     n_tokens = tl.load(Hist + expt_id)
@@ -76,12 +76,12 @@ def compute_metadata(routing_data, n_rows, block_m):
     md_offs_sum = metadata[3 * n_expts_tot + 2 - 1]
     md_tile_starts = metadata[n_expts_tot * 2 + 1:n_expts_tot * 3 + 2]
     md_tile_infos = metadata[n_expts_tot * 3 + 2:]
-    _matmul_ogs_metadata_memset[(cdiv(metadata_size, MEMSET_BLOCK), )](
+    _matmul_metadata_memset[(cdiv(metadata_size, MEMSET_BLOCK), )](
         routing_data.expt_hist, n_expts_tot, md_hist, md_offs, md_tile_starts, md_tile_infos, md_tile_infos.shape[0],
         BLOCK=MEMSET_BLOCK,  # optimization parameters
         TILE_DIM=block_m,  # constants
     )
-    _matmul_ogs_metadata_compute[(n_expts_tot, )](
+    _matmul_metadata_compute[(n_expts_tot, )](
         routing_data.expt_hist, md_tile_starts, md_tile_infos,  # outputs
         BLOCK=HIST2_BLOCK_M,  # optimization parameters
         TILE_DIM=block_m,  # constants
