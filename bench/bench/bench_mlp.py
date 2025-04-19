@@ -138,5 +138,5 @@ if __name__ == "__main__":
     qxdtype = "fp8" if has_native_mx4 else "bf16"
     # print(bench_mlp(8192, 8192, 8192, 1, 1, "fp8", "fp8", TP=1, EP=1, name="dense"))
     # print(bench_mlp(8192, 8192, 8192, 1, 1, qxdtype, "mx4", TP=1, EP=1, name="dense"))
-    print(bench_mlp(2048, 5120, 8192, 128, 4, "fp8", "fp8", TP=4, EP=1, name="llama4"))
+    print(bench_mlp(8192, 5120, 8192, 128, 4, "fp8", "fp8", TP=4, EP=1, name="llama4"))
     # print(bench_mlp(2048, 5120, 8192, 128, 4, qxdtype, "mx4", TP=4, EP=2, name="llama4"))
