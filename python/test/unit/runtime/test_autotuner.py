@@ -224,5 +224,6 @@ def test_exceed_threads(device):
 
     add_kernel[grid](x, y, output, x.numel(), BLOCK_SIZE=128)
 
-    assert exception_out_of_resource is not None and "out of resource: threads, Required: 4096" in str(
+    warp_size = triton.runtime.driver.active.get_current_target().warp_size
+    assert exception_out_of_resource is not None and f"out of resource: threads, Required: {128 * warp_size}" in str(
         exception_out_of_resource)
