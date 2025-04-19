@@ -21,8 +21,6 @@ class CudaAllocator:
         self.instrumentation_hook = instrumentation_hook
 
     def __call__(self, size: int, alignment: int, stream: Optional[int]):
-        import torch
-
         # Ensure proper alignment and minimum size
         # `alignment` and `size` are specified by the instrumentation engine to specify the minimum required
         # alignment and size of the buffer.
@@ -32,6 +30,7 @@ class CudaAllocator:
         aligned_size = max(aligned_size, self.instrumentation_hook.profile_buffer_size)
 
         # Create the buffer
+        import torch
         buffer = torch.empty((aligned_size, ), dtype=torch.uint8, device="cuda")
         self.instrumentation_hook.buffer = buffer
         return buffer
@@ -66,7 +65,13 @@ def _interpret_mode(mode_obj: Union[str, mode.InstrumentationMode]) -> mode.Inst
 
     parts = mode_obj.split(":")
     mode_name = parts[0]
-    opts = dict(opt.split("=") for opt in parts[1:])
+    opts: Dict[str, str] = {}
+    for opt in parts[1:]:
+        if "=" in opt:
+            key, val = opt.split("=", 1)
+            opts[key] = val
+        else:
+            raise ValueError(f"Malformed instrumentation option: '{opt}'")
 
     # Get option values or empty strings
     options = {
@@ -201,6 +206,8 @@ class InstrumentationHook(Hook):
         # Reset host memory for external processing
         if InstrumentationHook.enable_host_buffer:
             InstrumentationHook.host_buffer = None
+        # Reset the buffer reference
+        self.buffer = None
 
     def init_handle(self, function: Any, module: Any, metadata_group: Dict[str, str]) -> None:
         if function and function not in self.function_scope_ids:
@@ -208,7 +215,6 @@ class InstrumentationHook(Hook):
             ir_path = next((path for key, path in metadata_group.items() if key.endswith(("ttgir", "ttir"))), None)
 
             if ir_path:
-                # Parse the MLIR module to extract scope IDs
                 context = ir.context()
                 ir.load_dialects(context)
                 triton_proton.load_dialects(context)
@@ -219,19 +225,19 @@ class InstrumentationHook(Hook):
         scope_id_pairs = self.function_scope_ids.get(function, [])
         libproton.init_scope_ids(function, scope_id_pairs)
 
+    def _data_ptr(self) -> int:
+        return 0 if self.buffer is None else self.buffer.data_ptr()
+
     def enter(self, lazy_dict: LazyDict) -> None:
-        libproton.enter_instrumented_op(lazy_dict.data.get("function", None), self.buffer.data_ptr(),
-                                        self.profile_buffer_size)
+        func = lazy_dict.data.get("function")
+        libproton.enter_instrumented_op(func, self._data_ptr(), self.profile_buffer_size)
         if InstrumentationHook.enable_host_buffer:
             InstrumentationHook.host_buffer = None
 
     def exit(self, lazy_dict: LazyDict) -> None:
-        libproton.exit_instrumented_op(lazy_dict.data.get("function", None), self.buffer.data_ptr(),
-                                       self.profile_buffer_size)
+        func = lazy_dict.data.get("function")
+        libproton.exit_instrumented_op(func, self._data_ptr(), self.profile_buffer_size)
 
         if InstrumentationHook.enable_host_buffer:
-            # Copy the profiling buffer to the CPU for debugging and processing by external tools
-            import torch
-
-            InstrumentationHook.host_buffer = torch.empty_like(self.buffer, device="cpu")
-            InstrumentationHook.host_buffer.copy_(self.buffer)
+            # copy profiling buffer to CPU for external processing
+            InstrumentationHook.host_buffer = self.buffer.cpu().clone()
