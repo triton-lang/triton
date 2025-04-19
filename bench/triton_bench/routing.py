@@ -9,13 +9,14 @@ def _routing_compute_expt_offs(ExpertHist, FinalExpertOffs, hist_size,  # histog
                                BLOCK_N: tl.constexpr):
     loop_iterations = (hist_size + BLOCK_N - 1) // BLOCK_N
     x = tl.zeros([BLOCK_N], ExpertHist.dtype.element_ty)
-    offs_n = tl.arange(0, BLOCK_N)
     for i in range(loop_iterations):
-        hist2 = tl.load(ExpertHist + offs_n)
+        offs_n = i * BLOCK_N + tl.arange(0, BLOCK_N)
+        mask_n = offs_n < hist_size
+        hist2 = tl.load(ExpertHist + offs_n, mask=mask_n)
         tok_starts = tl.cumsum(hist2, 0) + x
         x += tl.sum(hist2, 0)
         tl.store(FinalExpertOffs, 0)
-        tl.store(FinalExpertOffs + 1 + offs_n, tok_starts, mask=offs_n < hist_size)
+        tl.store(FinalExpertOffs + 1 + offs_n, tok_starts, mask=mask_n)
         offs_n += BLOCK_N
 
 

@@ -96,7 +96,7 @@ def bench_mlp(batch, dim1, dim2, n_expts_tot, n_expts_act, x_dtype, w_dtype,
     x = x.to(x_dtype)
     # run layer
     proton.start(str(fpath.with_suffix('')), hook="triton")
-    for i in range(100):
+    for i in range(10):
         if n_expts_tot > 1:
             logits = matmul_ogs(xg, wg, bg, precision_config=pcg)
             rdata, gather_indx, scatter_indx = routing(logits, n_expts_act, simulated_ep=EP)
@@ -136,7 +136,7 @@ def bench_mlp(batch, dim1, dim2, n_expts_tot, n_expts_act, x_dtype, w_dtype,
 if __name__ == "__main__":
     has_native_mx4 = torch.cuda.get_device_capability(0)[0] >= 10 or is_hip_cdna4()
     qxdtype = "fp8" if has_native_mx4 else "bf16"
-    # print(bench_mlp(8192, 8192, 8192, 1, 1, "fp8", "fp8", TP=1, EP=1, name="dense"))
-    # print(bench_mlp(8192, 8192, 8192, 1, 1, qxdtype, "mx4", TP=1, EP=1, name="dense"))
-    print(bench_mlp(8192, 5120, 8192, 128, 4, "fp8", "fp8", TP=4, EP=1, name="llama4"))
-    # print(bench_mlp(2048, 5120, 8192, 128, 4, qxdtype, "mx4", TP=4, EP=2, name="llama4"))
+    print(bench_mlp(2048, 8192, 8192, 1, 1, "fp8", "fp8", TP=1, EP=1, name="dense"))
+    print(bench_mlp(2048, 8192, 8192, 1, 1, qxdtype, "mx4", TP=1, EP=1, name="dense"))
+    print(bench_mlp(2048, 5120, 8192, 128, 4, "fp8", "fp8", TP=4, EP=2, name="llama4"))
+    print(bench_mlp(2048, 5120, 8192, 128, 4, qxdtype, "mx4", TP=4, EP=2, name="llama4"))
