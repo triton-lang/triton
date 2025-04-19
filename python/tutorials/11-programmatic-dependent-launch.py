@@ -34,18 +34,18 @@ def add_kernel(x_ptr,  #
     offsets = block_start + tl.arange(0, BLOCK_SIZE)
     mask = offsets < n_elements
     if USE_GDC:
-        # GDC wait is used to wait for the prior kernel to complete before continuing.
-        # If we utilize Programmatic Dependent Launch, we must wait on the prior kernel
-        # to complete in case a or b are written to by the prior kernel.
-        # This is done to prevent races.
+        # GDC wait waits for ALL programs in the the prior kernel to complete before continuing.
+        # This ensures any memory operations happen before the wait in program order, 
+        # e.g. if the prior kernel writes to a or b the new values will be visible.
         tl.extra.cuda.gdc_wait()
 
     x = tl.load(x_ptr + offsets, mask=mask)
     y = tl.load(y_ptr + offsets, mask=mask)
     if USE_GDC:
         # GDC launch dependents is used to launch dependent kernels.
-        # Once GDC launch it is possible for the next kernel to begin if
-        # there are enough resources.
+        # Once GDC launch has been issued at least once on all active hardware SMs, 
+        # it is possible for the next kernel to begin if there are enough resources.
+        # Note this provides no additional memory-ordering guaruntees, unlike `gdc_wait`.
         tl.extra.cuda.gdc_launch_dependents()
     output = x + y
     tl.store(output_ptr + offsets, output, mask=mask)
