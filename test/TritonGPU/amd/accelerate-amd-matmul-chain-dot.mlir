@@ -1,7 +1,7 @@
 // RUN: triton-opt %s -split-input-file --tritonamdgpu-accelerate-matmul="arch-generation-name=gfx942 matrix-instruction-size=16" | FileCheck %s --check-prefixes MFMA16,CHECK
 // RUN: triton-opt %s -split-input-file --tritonamdgpu-accelerate-matmul="arch-generation-name=gfx942 matrix-instruction-size=32" | FileCheck %s --check-prefixes MFMA32,CHECK
-// RUN: triton-opt %s -split-input-file --tritonamdgpu-accelerate-matmul="arch-generation-name=gfx950 matrix-instruction-size=32" | FileCheck %s --check-prefixes CHECK_GFX950
-// RUN: triton-opt %s -split-input-file --tritonamdgpu-accelerate-matmul="arch-generation-name=gfx950 matrix-instruction-size=16" | FileCheck %s --check-prefixes CHECK_GFX950
+// RUN: triton-opt %s -split-input-file --tritonamdgpu-accelerate-matmul="arch-generation-name=gfx950 matrix-instruction-size=32" | FileCheck %s --check-prefixes CHECK-GFX950
+// RUN: triton-opt %s -split-input-file --tritonamdgpu-accelerate-matmul="arch-generation-name=gfx950 matrix-instruction-size=16" | FileCheck %s --check-prefixes CHECK-GFX950
 
 // Check the warpsPerCTA parameter of #mma layout of the two dot's.
 // The 1st dot always has warpsPerCTA = [4, 1].
@@ -142,8 +142,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 #dotOp0 = #ttg.dot_op<{opIdx = 0, parent = #blocked}>
 #dotOp1 = #ttg.dot_op<{opIdx = 1, parent = #blocked}>
 // CHECK-LABEL: mfma_chain_dot_kWidth_f16
-// CHECK_GFX950: tt.dot {{.*}} : {{.*}} -> tensor<128x128xf32, #mma>
-// CHECK_GFX950: tt.dot {{.*}} : tensor<128x128xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 4}>> * tensor<128x128xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 4}>> -> {{.*}}
+// CHECK-GFX950: tt.dot {{.*}} : {{.*}} -> tensor<128x128xf32, #mma>
+// CHECK-GFX950: tt.dot {{.*}} : tensor<128x128xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 4}>> * tensor<128x128xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 4}>> -> {{.*}}
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "hip:gfx950", "ttg.threads-per-warp" = 64 : i32} {
   tt.func public @mfma_chain_dot_kWidth_f16(
       %q: tensor<128x128xf16, #dotOp0>,
@@ -166,8 +166,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 #dotOp0 = #ttg.dot_op<{opIdx = 0, parent = #blocked}>
 #dotOp1 = #ttg.dot_op<{opIdx = 1, parent = #blocked}>
 // CHECK-LABEL: mfma_chain_dot_kWidth_bf16
-// CHECK_GFX950: tt.dot {{.*}} : {{.*}} -> tensor<128x128xf32, #mma>
-// CHECK_GFX950: tt.dot {{.*}} : tensor<128x128xbf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 4}>> * tensor<128x128xbf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 4}>> -> {{.*}}
+// CHECK-GFX950: tt.dot {{.*}} : {{.*}} -> tensor<128x128xf32, #mma>
+// CHECK-GFX950: tt.dot {{.*}} : tensor<128x128xbf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 4}>> * tensor<128x128xbf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 4}>> -> {{.*}}
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "hip:gfx950", "ttg.threads-per-warp" = 64 : i32} {
   tt.func public @mfma_chain_dot_kWidth_bf16(
       %q: tensor<128x128xbf16, #dotOp0>,

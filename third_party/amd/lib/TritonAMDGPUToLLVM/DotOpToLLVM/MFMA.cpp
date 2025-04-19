@@ -276,15 +276,15 @@ struct DotOpMFMAConversionHelper {
     if (failed(maybeMfmaIntrinsic))
       llvm::report_fatal_error("No match found in MFMA database\n");
 
-    // If the kBase of the selected mfma instruction is larger than
-    // kWidth of the operand, it means the shape is large enough to
-    // use double rated mfma, but we (AccelerateAMDMatmul pass) choose
-    // to use single rated mfma.
     unsigned kBase = maybeMfmaIntrinsic->kBase;
 
     auto aEncoding = cast<DotOperandEncodingAttr>(aTensorTy.getEncoding());
     auto bEncoding = cast<DotOperandEncodingAttr>(bTensorTy.getEncoding());
     int kWidth = aEncoding.getKWidth();
+    // If the kBase of the selected mfma instruction is larger than
+    // kWidth of the operand, it means the shape is large enough to
+    // use double rated mfma, but we (AccelerateAMDMatmul pass) choose
+    // to use single rated mfma.
     if (kBase > kWidth) {
       int kDimOperandSizeNew = 64 / mDim * kWidth;
       maybeMfmaIntrinsic = MfmaIntrinsic::selectFor(
