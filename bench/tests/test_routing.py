@@ -75,13 +75,14 @@ def bench_routing():
     import triton.profiler as proton
     n_tokens = 2048
     block_m = 128
-    n_expts_tot, n_expts_act = 128, 4
+    n_expts_tot, n_expts_act = 32, 4
     tri_logits = init_data(n_tokens, n_expts_tot)
     proton.start("routing")
     proton.activate()
-    for i in range(100):
-        tri_routing_data, tri_gather, tri_scatter = routing(tri_logits, n_expts_act)
-        tri_metadata = compute_metadata(tri_routing_data, n_tokens * n_expts_act, block_m)
+    # for i in range(100):
+    tri_routing_data, tri_gather, tri_scatter = routing(tri_logits, n_expts_act, simulated_ep=2)
+    ref_routing_data, ref_gather, ref_scatter = routing_torch(tri_logits, n_expts_act)
+    tri_metadata = compute_metadata(tri_routing_data, n_tokens * n_expts_act, block_m)
     proton.finalize()
 
 

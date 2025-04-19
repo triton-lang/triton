@@ -1,6 +1,7 @@
 import torch
 import triton
 import triton.language as tl
+from triton_bench import Bitmatrix
 
 
 @triton.jit
@@ -49,6 +50,8 @@ def masked_compact(yv, yi, bitmask, sentinel=-1):
     n_rows, n_cols = yi.shape
     ret_yv = torch.empty_like(yv)
     ret_yi = torch.empty_like(yi)
+    if isinstance(bitmask, Bitmatrix):
+        bitmask = bitmask.data
 
     _masked_compact[(n_rows, )](
         yv, yi, bitmask, bitmask.stride(0),  # inputs

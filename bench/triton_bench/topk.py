@@ -1,7 +1,7 @@
 import torch
 import triton
 import triton.language as tl
-from . import Bitmatrix
+from triton_bench import Bitmatrix
 
 
 @triton.jit

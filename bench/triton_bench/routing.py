@@ -92,12 +92,27 @@ def _routing_compute_indx(GatherIndx, ScatterIndx, GateScal, ExptScal, ExptIndx,
     offs = pid_m * BLOCK_M * N_EXPTS_ACT + tl.arange(0, N_EXPTS_ACT * BLOCK_M)
     mask = offs < n_gates
     indx = tl.load(ExptIndx + offs, mask=mask)
+    mask = mask & (indx != -1)
     gates = tl.load(PartialOffs + pid_m * stride_pm + indx, mask=mask)
     gates += tl.reshape(_count_previous(indx), [BLOCK_M * N_EXPTS_ACT])
     gate_scal = tl.load(ExptScal + offs, mask=mask)
     tl.store(ScatterIndx + offs, gates, mask=mask)
     tl.store(GatherIndx + gates, offs, mask=mask)
     tl.store(GateScal + gates, gate_scal, mask=mask)
+
+
+@triton.jit
+def _routing_clear_bitmatrix(Bitmatrix, stride_bm, shape_bn, cutoff, BLOCK_N: tl.constexpr):
+    pid_m = tl.program_id(0)
+    cutoff_word = cutoff // 32
+    cutoff_bit = cutoff % 32
+    cutoff_mask = (1 << (cutoff_bit)) - 1
+    for start_n in range(0, shape_bn, BLOCK_N):
+        offs_n = start_n + tl.arange(0, BLOCK_N)
+        values = tl.load(Bitmatrix + pid_m * stride_bm + offs_n, mask=offs_n < shape_bn)
+        values = tl.where(offs_n == cutoff_word, values & cutoff_mask, values)
+        values = tl.where(offs_n > cutoff_word, 0, values)
+        tl.store(Bitmatrix + pid_m * stride_bm + offs_n, values, mask=offs_n < shape_bn)
 
 
 @dataclass
@@ -146,9 +161,10 @@ class RoutingData:
 # --------------------------
 
 
-def routing(logits, n_expts_act, expt_indx=None):
+def routing(logits, n_expts_act, expt_indx=None, simulated_ep=1):
     from .topk import topk
     from .reduce import sum
+    from .compact import masked_compact
     assert expt_indx is None
     cdiv = triton.cdiv
     HIST_BLOCK_M = 64
@@ -158,13 +174,27 @@ def routing(logits, n_expts_act, expt_indx=None):
     n_gates = n_tokens * n_expts_act
     device = logits.device
     expt_scal, expt_indx, bitmatrix = topk(logits, n_expts_act)
+    # mutate bitmatrix
+    if simulated_ep > 1:
+        assert n_expts_tot % simulated_ep == 0
+        _routing_clear_bitmatrix[(n_tokens, )](
+            bitmatrix.data,
+            bitmatrix.data.stride(0),
+            bitmatrix.data.shape[1],
+            n_expts_tot // simulated_ep,
+            BLOCK_N=512,
+        )
+        expt_scal, expt_indx = masked_compact(expt_scal, expt_indx, bitmatrix)
+        n_expts_tot = n_expts_tot // simulated_ep
+        bitmatrix.shape[-1] = n_expts_tot
+    # perform compaction to update expt_scal / expt_indx
     hist, partial_hist = sum(bitmatrix, partials_block_size=HIST_BLOCK_M, dim=0)
     # scratchpad
     expt_offs = torch.empty(n_expts_tot + 1, dtype=torch.int32, device=device)
     indx_offs = torch.empty((cdiv(n_tokens, HIST_BLOCK_M), n_expts_tot), dtype=torch.int32, device=device)
     # output
-    topk_indx = torch.empty(n_gates, dtype=torch.int32, device=device)
-    gate_indx = torch.empty(n_gates, dtype=torch.int32, device=device)
+    topk_indx = -torch.ones(n_gates, dtype=torch.int32, device=device)
+    gate_indx = -torch.ones(n_gates, dtype=torch.int32, device=device)
     gate_scal = torch.empty(n_gates, dtype=logits.dtype, device=device)
     _routing_compute_expt_offs[(1, )](
         hist, expt_offs, hist.shape[0], BLOCK_N=512  # tunable parameters
