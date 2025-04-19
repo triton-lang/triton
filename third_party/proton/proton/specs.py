@@ -12,7 +12,6 @@ flops_by_device = {
     },
     "HIP": {
         "gfx90a": lambda width, **kwargs: 383e12 / (width / 8),
-        "gfx941": lambda width, **kwargs: 2614.9e12 / (width / 8),
         "gfx942": lambda width, **kwargs: 2614.9e12 / (width / 8),
     },
 }
@@ -33,10 +32,10 @@ def max_flops(device_type, arch, width, num_sms, clock_rate):
         float: The maximum FLOPS for the given device type and width.
     """
     if device_type not in flops_by_device:
-        raise ValueError(f"Unsupported device type: {device_type}")
+        return float("nan")
 
     if arch not in flops_by_device[device_type]:
-        raise ValueError(f"Unsupported architecture: {arch}")
+        return float("nan")
 
     flops_func = flops_by_device[device_type][arch]
 
