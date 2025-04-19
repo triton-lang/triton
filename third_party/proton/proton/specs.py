@@ -30,6 +30,7 @@ def max_flops(device_type, arch, width, num_sms, clock_rate):
 
     Returns:
         float: The maximum FLOPS for the given device type and width.
+        If not found, returns NaN.
     """
     if device_type not in flops_by_device:
         return float("nan")
