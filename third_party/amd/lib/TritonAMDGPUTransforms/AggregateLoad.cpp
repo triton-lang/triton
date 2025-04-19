@@ -334,7 +334,7 @@ void processLoopBody(scf::ForOp forOp, Operation *op, Value localAllocVal) {
   Location loc = forOp.getLoc();
   // step 1: bufOff = i * BLOCK_K
   auto loadOp = dyn_cast<tt::LoadOp>(op);
-  llvm::outs() << "ORIGINAL LOAD:" << loadOp << "\n";
+  // llvm::outs() << "ORIGINAL LOAD:" << loadOp << "\n";
   auto subviewShape = dyn_cast<RankedTensorType>(loadOp.getType()).getShape();
 
   Value BLOCK_K =
@@ -508,14 +508,14 @@ struct AggregateLoad : public TritonAMDGPUAggregateLoadBase<AggregateLoad> {
              "Currently only support a single dot operation.");
       foundDotScaledOp = true;
     });
-    llvm::outs() << "before: " << *getOperation() << "\n";
+    // llvm::outs() << "before: " << *getOperation() << "\n";
 
     if (!foundDotScaledOp) {
       llvm::outs() << "Didn't find dotOp for AggregateLoad\n";
       return;
     }
 
-    llvm::outs() << "Total smem Usage:" << totalSharedMemoryUsage << "\n";
+    // llvm::outs() << "Total smem Usage:" << totalSharedMemoryUsage << "\n";
 
     // Do the pipelining
     getOperation()->walk([&](scf::ForOp forOp) -> void {
@@ -543,7 +543,7 @@ struct AggregateLoad : public TritonAMDGPUAggregateLoadBase<AggregateLoad> {
                             hoistFactor, hoistKSize);
       }
     });
-    llvm::outs() << "after: " << *getOperation() << "\n";
+    // llvm::outs() << "after: " << *getOperation() << "\n";
   }
 };
 } // namespace
