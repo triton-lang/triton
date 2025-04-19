@@ -1,54 +1,7 @@
 import torch
 import triton
-from dataclasses import dataclass, field
-
-
-@dataclass
-class GatherIndx:
-    """
-    Indices for an operation that performs:
-    Y = X[src_idx, :]
-    """
-    # array such that `dst_idx[src_idx] = arange(0, N)`
-    src_indx: torch.Tensor
-    dst_indx: torch.Tensor
-
-
-@dataclass
-class ScatterIndx:
-    """
-    Indices for an operation that performs:
-    Y[dst_idx, :] = X
-    """
-    # array such that `dst_idx[src_idx] = arange(0, N)`
-    src_indx: torch.Tensor
-    dst_indx: torch.Tensor
-
-
-@dataclass
-class RoutingData:
-    gate_scal: torch.Tensor = field()
-    expt_hist: torch.Tensor = field()
-    n_expts_tot: int = field()
-    n_expts_act: int = field()
-
-    # Used to make perf annotation cleaner: when we use expert sharding, we can
-    # use this to tell the "expected" number of local tokens per expert, because
-    # the actual number can vary per each input.
-    expected_tokens_per_expt: int = field(default=None)
-
-    def n_blocks(self, n_rows, block_m):
-        if n_rows <= self.n_expts_tot:
-            return n_rows
-        else:
-            return triton.cdiv(max(n_rows - self.n_expts_tot + 1, 0), block_m) + self.n_expts_tot - 1
-
-
-# --------------------------
-# Triton routing
-# --------------------------
-import triton
 import triton.language as tl
+from dataclasses import dataclass, field
 
 
 @triton.jit
@@ -147,9 +100,55 @@ def _routing_compute_indx(GatherIndx, ScatterIndx, GateScal, ExptScal, ExptIndx,
     tl.store(GateScal + gates, gate_scal, mask=mask)
 
 
+@dataclass
+class GatherIndx:
+    """
+    Indices for an operation that performs:
+    Y = X[src_idx, :]
+    """
+    # array such that `dst_idx[src_idx] = arange(0, N)`
+    src_indx: torch.Tensor
+    dst_indx: torch.Tensor
+
+
+@dataclass
+class ScatterIndx:
+    """
+    Indices for an operation that performs:
+    Y[dst_idx, :] = X
+    """
+    # array such that `dst_idx[src_idx] = arange(0, N)`
+    src_indx: torch.Tensor
+    dst_indx: torch.Tensor
+
+
+@dataclass
+class RoutingData:
+    gate_scal: torch.Tensor = field()
+    expt_hist: torch.Tensor = field()
+    n_expts_tot: int = field()
+    n_expts_act: int = field()
+
+    # Used to make perf annotation cleaner: when we use expert sharding, we can
+    # use this to tell the "expected" number of local tokens per expert, because
+    # the actual number can vary per each input.
+    expected_tokens_per_expt: int = field(default=None)
+
+    def n_blocks(self, n_rows, block_m):
+        if n_rows <= self.n_expts_tot:
+            return n_rows
+        else:
+            return triton.cdiv(max(n_rows - self.n_expts_tot + 1, 0), block_m) + self.n_expts_tot - 1
+
+
+# --------------------------
+# Triton routing
+# --------------------------
+
+
 def routing(logits, n_expts_act, expt_indx=None):
     from .topk import topk
-    from .reduce import reduce
+    from .reduce import sum
     assert expt_indx is None
     cdiv = triton.cdiv
     HIST_BLOCK_M = 64
@@ -159,7 +158,7 @@ def routing(logits, n_expts_act, expt_indx=None):
     n_gates = n_tokens * n_expts_act
     device = logits.device
     expt_scal, expt_indx, bitmatrix = topk(logits, n_expts_act)
-    hist, partial_hist = reduce(bitmatrix, partials_block_size=HIST_BLOCK_M, mode="sum")
+    hist, partial_hist = sum(bitmatrix, partials_block_size=HIST_BLOCK_M)
     # scratchpad
     expt_offs = torch.empty(n_expts_tot + 1, dtype=torch.int32, device=device)
     indx_offs = torch.empty((cdiv(n_tokens, HIST_BLOCK_M), n_expts_tot), dtype=torch.int32, device=device)
