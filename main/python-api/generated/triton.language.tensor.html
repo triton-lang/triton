@@ -256,49 +256,52 @@ write <code class="code docutils literal notranslate"><span class="pre">x+y</spa
 <tr class="row-even"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">reduce</span></code>(self, axis, combine_fn[, keep_dims])</p></td>
 <td><p>Forwards to <a class="reference internal" href="triton.language.reduce.html#triton.language.reduce" title="triton.language.reduce"><code class="xref py py-func docutils literal notranslate"><span class="pre">reduce()</span></code></a> free function</p></td>
 </tr>
-<tr class="row-odd"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">reshape</span></code>(self, *shape[, can_reorder])</p></td>
+<tr class="row-odd"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">reduce_or</span></code>(*self, **kwargs)</p></td>
+<td><p>Forwards to <code class="xref py py-func docutils literal notranslate"><span class="pre">reduce_or()</span></code> free function</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">reshape</span></code>(self, *shape[, can_reorder])</p></td>
 <td><p>Forwards to <a class="reference internal" href="triton.language.reshape.html#triton.language.reshape" title="triton.language.reshape"><code class="xref py py-func docutils literal notranslate"><span class="pre">reshape()</span></code></a> free function</p></td>
 </tr>
-<tr class="row-even"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">rsqrt</span></code>(self)</p></td>
+<tr class="row-odd"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">rsqrt</span></code>(self)</p></td>
 <td><p>Forwards to <a class="reference internal" href="triton.language.rsqrt.html#triton.language.rsqrt" title="triton.language.rsqrt"><code class="xref py py-func docutils literal notranslate"><span class="pre">rsqrt()</span></code></a> free function</p></td>
 </tr>
-<tr class="row-odd"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">sigmoid</span></code>(*self, **kwargs)</p></td>
+<tr class="row-even"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">sigmoid</span></code>(*self, **kwargs)</p></td>
 <td><p>Forwards to <a class="reference internal" href="triton.language.sigmoid.html#triton.language.sigmoid" title="triton.language.sigmoid"><code class="xref py py-func docutils literal notranslate"><span class="pre">sigmoid()</span></code></a> free function</p></td>
 </tr>
-<tr class="row-even"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">sin</span></code>(self)</p></td>
+<tr class="row-odd"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">sin</span></code>(self)</p></td>
 <td><p>Forwards to <a class="reference internal" href="triton.language.sin.html#triton.language.sin" title="triton.language.sin"><code class="xref py py-func docutils literal notranslate"><span class="pre">sin()</span></code></a> free function</p></td>
 </tr>
-<tr class="row-odd"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">softmax</span></code>(*self, **kwargs)</p></td>
+<tr class="row-even"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">softmax</span></code>(*self, **kwargs)</p></td>
 <td><p>Forwards to <a class="reference internal" href="triton.language.softmax.html#triton.language.softmax" title="triton.language.softmax"><code class="xref py py-func docutils literal notranslate"><span class="pre">softmax()</span></code></a> free function</p></td>
 </tr>
-<tr class="row-even"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">sort</span></code>(self[, dim, descending])</p></td>
+<tr class="row-odd"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">sort</span></code>(self[, dim, descending])</p></td>
 <td><p></p></td>
 </tr>
-<tr class="row-odd"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">split</span></code>(self)</p></td>
+<tr class="row-even"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">split</span></code>(self)</p></td>
 <td><p>Forwards to <a class="reference internal" href="triton.language.split.html#triton.language.split" title="triton.language.split"><code class="xref py py-func docutils literal notranslate"><span class="pre">split()</span></code></a> free function</p></td>
 </tr>
-<tr class="row-even"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">sqrt</span></code>(self)</p></td>
+<tr class="row-odd"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">sqrt</span></code>(self)</p></td>
 <td><p>Forwards to <a class="reference internal" href="triton.language.sqrt.html#triton.language.sqrt" title="triton.language.sqrt"><code class="xref py py-func docutils literal notranslate"><span class="pre">sqrt()</span></code></a> free function</p></td>
 </tr>
-<tr class="row-odd"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">sqrt_rn</span></code>(self)</p></td>
+<tr class="row-even"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">sqrt_rn</span></code>(self)</p></td>
 <td><p>Forwards to <a class="reference internal" href="triton.language.sqrt_rn.html#triton.language.sqrt_rn" title="triton.language.sqrt_rn"><code class="xref py py-func docutils literal notranslate"><span class="pre">sqrt_rn()</span></code></a> free function</p></td>
 </tr>
-<tr class="row-even"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">store</span></code>(self, value[, mask, boundary_check, ...])</p></td>
+<tr class="row-odd"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">store</span></code>(self, value[, mask, boundary_check, ...])</p></td>
 <td><p>Forwards to <a class="reference internal" href="triton.language.store.html#triton.language.store" title="triton.language.store"><code class="xref py py-func docutils literal notranslate"><span class="pre">store()</span></code></a> free function</p></td>
 </tr>
-<tr class="row-odd"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">sum</span></code>(*self, **kwargs)</p></td>
+<tr class="row-even"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">sum</span></code>(*self, **kwargs)</p></td>
 <td><p>Forwards to <a class="reference internal" href="triton.language.sum.html#triton.language.sum" title="triton.language.sum"><code class="xref py py-func docutils literal notranslate"><span class="pre">sum()</span></code></a> free function</p></td>
 </tr>
-<tr class="row-even"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">to</span></code>(self, dtype[, fp_downcast_rounding, bitcast])</p></td>
+<tr class="row-odd"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">to</span></code>(self, dtype[, fp_downcast_rounding, bitcast])</p></td>
 <td><p>Alias for <code class="xref py py-func docutils literal notranslate"><span class="pre">tensor.cast()</span></code>.</p></td>
 </tr>
-<tr class="row-odd"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">trans</span></code>(self, *dims)</p></td>
+<tr class="row-even"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">trans</span></code>(self, *dims)</p></td>
 <td><p>Forwards to <a class="reference internal" href="triton.language.trans.html#triton.language.trans" title="triton.language.trans"><code class="xref py py-func docutils literal notranslate"><span class="pre">trans()</span></code></a> free function</p></td>
 </tr>
-<tr class="row-even"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">view</span></code>(self, *shape)</p></td>
+<tr class="row-odd"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">view</span></code>(self, *shape)</p></td>
 <td><p>Forwards to <a class="reference internal" href="triton.language.view.html#triton.language.view" title="triton.language.view"><code class="xref py py-func docutils literal notranslate"><span class="pre">view()</span></code></a> free function</p></td>
 </tr>
-<tr class="row-odd"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">xor_sum</span></code>(*self, **kwargs)</p></td>
+<tr class="row-even"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">xor_sum</span></code>(*self, **kwargs)</p></td>
 <td><p>Forwards to <a class="reference internal" href="triton.language.xor_sum.html#triton.language.xor_sum" title="triton.language.xor_sum"><code class="xref py py-func docutils literal notranslate"><span class="pre">xor_sum()</span></code></a> free function</p></td>
 </tr>
 </tbody>

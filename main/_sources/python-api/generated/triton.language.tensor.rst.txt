@@ -51,6 +51,7 @@
       ~tensor.permute
       ~tensor.ravel
       ~tensor.reduce
+      ~tensor.reduce_or
       ~tensor.reshape
       ~tensor.rsqrt
       ~tensor.sigmoid
