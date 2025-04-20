@@ -459,8 +459,7 @@ struct DotOpMFMAConversionHelper {
           Type ty = vec_ty(elemTy, kBase);
           Value rawElems = tb.undef(ty);
           for (int k = 0; k < kBase; ++k) {
-            SmallVector<int64_t> indices = {b, nonK, kBaseVec, k};
-            auto index = linearize(indices, strides);
+            auto index = linearize({b, nonK, kBaseVec, k}, strides);
             rawElems =
                 tb.insert_element(ty, rawElems, elems[index], tb.i32_val(k));
           }
