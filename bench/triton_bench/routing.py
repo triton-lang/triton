@@ -210,15 +210,14 @@ def routing(logits, n_expts_act, expt_indx=None, simulated_ep=1):
     topk_indx = torch.empty(n_gates, dtype=torch.int32, device=device)
     gate_indx = torch.empty(n_gates, dtype=torch.int32, device=device)
     gate_scal = torch.empty(n_gates, dtype=logits.dtype, device=device)
-    _routing_memset_indx[(cdiv(n_gates, MEMSET_BLOCK), 2)](
-        topk_indx,
-        gate_indx,
-        n_gates,
-        -1,
-        BLOCK=MEMSET_BLOCK,
-    )
+    if simulated_ep > 1:
+        _routing_memset_indx[(cdiv(n_gates, MEMSET_BLOCK), 2)](
+            topk_indx, gate_indx, n_gates, -1,  #
+            BLOCK=MEMSET_BLOCK,  #
+        )
     _routing_compute_expt_offs[(1, )](
-        hist, expt_offs, hist.shape[0], BLOCK_N=512  # tunable parameters
+        hist, expt_offs, hist.shape[0],  #
+        BLOCK_N=512  # tunable parameters
     )
     _routing_compute_indx_offs[(n_expts_tot, )](
         expt_offs, partial_hist,  # inputs

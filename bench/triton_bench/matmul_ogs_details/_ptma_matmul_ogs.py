@@ -1,10 +1,9 @@
 import torch
-import torch
 import triton
 import triton.language as tl
 from triton_bench.meta import get_scaled_dot_format_string, inline_function, cuda_capability_geq
-from triton_bench.mxfp import _unswizzle_mx_block
-from triton_bench.numerics import float_to_flex, load_scale, nan_propagating_absmax_reduce, compute_scale
+from triton_bench.numerics_details.mxfp import _unswizzle_mx_block
+from triton_bench.numerics_details.flexpoint import float_to_flex, load_scale, nan_propagating_absmax_reduce, compute_scale
 from ._common import make_matmul_repr, matmul_launch_metadata, swizzle2d, xcd_swizzle
 
 # fmt: off
@@ -102,9 +101,9 @@ def _load_writeback_idx_and_mask(WriteBackIndx, writeback_size, offs, mask):
     return (offs, mask)
 
 
-_matmul_ogs_repr = make_matmul_repr("_p_matmul_ogs", [0, 1, 2])
+_matmul_ogs_repr = make_matmul_repr("_ptma_matmul_ogs", [0, 1, 2])
 @triton.jit(repr=_matmul_ogs_repr, launch_metadata=matmul_launch_metadata)
-def _p_matmul_ogs(
+def _ptma_matmul_ogs(
              Y, Out, stride_y_k, stride_y_z, stride_y_m, stride_y_n,
              YExpectedScale, YActualScale, YChecksumScale,
              X, stride_x_z, stride_x_m, stride_x_k,

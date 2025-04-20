@@ -11,7 +11,7 @@ from triton_bench.matmul_ogs import can_use_persistent_tma
 from triton_bench.matmul_ogs import matmul_ogs, matmul_ogs_torch
 # numerics utilities
 from triton_bench.numerics import InFlexData, OutFlexData
-from triton_bench.mxfp import downcast_to_mxfp, upcast_from_mxfp
+from triton_bench.numerics_details.mxfp import downcast_to_mxfp, upcast_from_mxfp
 # testing utilities
 from triton_bench.testing import assert_close, compute_actual_scale
 # target-specific utilities

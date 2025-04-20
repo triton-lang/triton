@@ -4,23 +4,32 @@ import torch
 import triton
 # utilities
 from triton_bench import meta
-from triton_bench.numerics import InFlexData, OutFlexData, should_upcast_indices
-from triton_bench.numerics import should_upcast_indices
+from triton_bench.numerics import InFlexData, OutFlexData
 from triton_bench.routing import GatherIndx, RoutingData, ScatterIndx
 # details
-from .matmul_ogs_details._matmul_ogs import (
-    _compute_writeback_idx,
-    _finalize_split_k,
-    _matmul_ogs,
-    _matmul_postprocess,
-)
-from .matmul_ogs_details._p_matmul_ogs import _p_matmul_ogs, get_per_device_per_stream_alloc_fn
+from .matmul_ogs_details._matmul_ogs import _compute_scatter_indx, _matmul_ogs
+from .matmul_ogs_details._ptma_matmul_ogs import _ptma_matmul_ogs, get_per_device_per_stream_alloc_fn
+from .matmul_ogs_details._finalize_split_k import _finalize_split_k
+from .matmul_ogs_details._finalize_scatter import _finalize_scatter
 from .matmul_ogs_details.opt_flags import make_opt_flags
 from .matmul_ogs_details.metadata import compute_metadata
 
 # -----------------------------------------------------------------------------
 #                    Matrix Multiplication + Outer Gather/Scatter
 # -----------------------------------------------------------------------------
+
+
+def can_overflow_int32(tensor: torch.Tensor):
+    max_int32 = (1 << 31) - 1
+    offset = 0
+    for i in range(tensor.ndim):
+        offset += (tensor.shape[i] - 1) * tensor.stride(i)
+    return offset > max_int32
+
+
+def should_upcast_indices(*args):
+    return any(tensor is not None and can_overflow_int32(tensor) for tensor in args)
+
 
 # ---------------------
 # Numerics
@@ -221,7 +230,7 @@ def apply_preprocessing_features(x, w, gather_indx, scatter_indx, routing_data, 
         writeback_idxs = torch.empty((M,), dtype=torch.int32, device=x.device)
         writeback_size = writeback_idxs.shape[0]
         BLOCK_M=256
-        _compute_writeback_idx[(triton.cdiv(M, BLOCK_M),)](
+        _compute_scatter_indx[(triton.cdiv(M, BLOCK_M),)](
             writeback_idxs,
             scatter_indx.dst_indx,
             scatter_indx.src_indx,
@@ -320,7 +329,7 @@ def apply_postprocessing_features(scatter_indx, opt_flags, expt_offs, num_indx, 
         N_BLOCKS = triton.cdiv(N, BLOCK_N)
         M_BLOCKS = min(M, max(1, triton.cdiv(num_pid, N_BLOCKS)))
         grid = (M_BLOCKS, N_BLOCKS)
-        _matmul_postprocess[grid](
+        _finalize_scatter[grid](
             flex_ctx.out_data.reinterpret(out_scatter),
             *out_scatter_flex,
             flex_ctx.out_data.reinterpret(inp), inp.stride(0), inp.stride(2),
@@ -400,7 +409,7 @@ def apply_allocation(allocation: MatmulAllocation, output):
     return ret
 
 # -----------------------------------------------------------------------------
-# Reference Implementation
+# Triton Implementation
 # -----------------------------------------------------------------------------
 
 def matmul_ogs(x, w, bias,
@@ -437,8 +446,6 @@ def matmul_ogs(x, w, bias,
     mx_ctx = precision_config.mx_ctx
     # determine shapes
     M = x.shape[1] if gather_indx is None else gather_indx.src_indx.shape[0]
-    # if scatter_indx is not None:
-    #     M = scatter_indx.src_indx.shape[0]
     if routing_data is None:
         routing_data = RoutingData(None, None, w.shape[0], 1)
     batch_size = w.shape[0] if routing_data.expt_hist is None else 1
@@ -472,7 +479,6 @@ def matmul_ogs(x, w, bias,
     if opt_flags.is_persistent:
         triton.set_allocator(get_per_device_per_stream_alloc_fn(x.device))
     # Intermediate tensors and postprocess kernels for each situation
-    Mc = M // routing_data.n_expts_act
     out0, out0_flex = memory["output"], precision_config.flex_ctx.out_data
     if postprocessing_features.finalize_scatter or postprocessing_features.finalize_splitk:
         if opt_flags.fused_scatter:
@@ -493,7 +499,7 @@ def matmul_ogs(x, w, bias,
     flex = precision_config.flex_ctx
     bias_stride = None if bias is None else bias.stride(0)
     num_indx = None if scatter_indx is None else scatter_indx.src_indx.shape[0]
-    (_p_matmul_ogs if opt_flags.is_persistent else _matmul_ogs)[(n_cta,)](
+    (_ptma_matmul_ogs if opt_flags.is_persistent else _matmul_ogs)[(n_cta,)](
                    flex.out_data.reinterpret(memory["output"]),
                    flex.out_data.reinterpret(out0), *out0.stride(),
                    *out0_flex,
