@@ -32,7 +32,8 @@ def test_mode_obj(mode, tmp_path: pathlib.Path):
     proton.finalize()
 
 
-def test_record(tmp_path: pathlib.Path):
+@pytest.mark.parametrize("method", ["operator", "context_manager"])
+def test_record(method, tmp_path: pathlib.Path):
     if is_hip():
         pytest.skip("HIP backend does not support record")
 
@@ -55,15 +56,20 @@ def test_record(tmp_path: pathlib.Path):
         output_ptr,
         n_elements,
         BLOCK_SIZE: tl.constexpr,
+        METHOD: tl.constexpr,
     ):
         pid = tl.program_id(axis=0)
         block_start = pid * BLOCK_SIZE
         offsets = block_start + tl.arange(0, BLOCK_SIZE)
         mask = offsets < n_elements
         x = tl.load(x_ptr + offsets, mask=mask)
-        pl.enter_scope("load0")
-        y = tl.load(y_ptr + offsets, mask=mask)
-        pl.exit_scope("load0")
+        if METHOD == "operator":
+            pl.enter_scope("load0")
+            y = tl.load(y_ptr + offsets, mask=mask)
+            pl.exit_scope("load0")
+        else:
+            with pl.scope("load0"):
+                y = tl.load(y_ptr + offsets, mask=mask)
         output = x + y
         tl.store(output_ptr + offsets, output, mask=mask)
 
@@ -76,7 +82,7 @@ def test_record(tmp_path: pathlib.Path):
     n_elements = output.numel()
     grid = (1, 1, 1)
     with instrumentation(temp_file):
-        pgm = add_kernel[grid](x, y, output, n_elements, BLOCK_SIZE=1024)
+        pgm = add_kernel[grid](x, y, output, n_elements, BLOCK_SIZE=1024, METHOD=method)
         host_buffer = proton.hooks.InstrumentationHook.host_buffer
         preamble = host_buffer[0:4]
         assert int.from_bytes(preamble.numpy().tobytes(), 'little') == 0xdeadbeef
