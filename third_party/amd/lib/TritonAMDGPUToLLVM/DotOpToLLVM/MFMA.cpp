@@ -25,6 +25,7 @@
 #include "TritonAMDGPUTransforms/MfmaGroup.h"
 #include "Utility.h"
 #include "mlir/Dialect/LLVMIR/ROCDLDialect.h"
+#include "mlir/Dialect/Utils/IndexingUtils.h"
 #include "llvm/ADT/TypeSwitch.h"
 
 using namespace mlir;
@@ -443,6 +444,9 @@ struct DotOpMFMAConversionHelper {
     // number of kBase-element vectors
     int numVecInKBase = kRepInKWidth * kWidth / kBase;
     ValueTable dotOpVals;
+
+    SmallVector<int64_t> bounds = {batch, nonKRep, numVecInKBase, kBase};
+    SmallVector<int64_t> strides = computeStrides(bounds);
     for (int b = 0; b < batch; ++b) {
       for (int nonK = 0; nonK < nonKRep; nonK++) {
         for (int kBaseVec = 0; kBaseVec < numVecInKBase; kBaseVec++) {
@@ -454,14 +458,12 @@ struct DotOpMFMAConversionHelper {
           Type elemTy = typeConverter->convertType(type);
           Type ty = vec_ty(elemTy, kBase);
           Value rawElems = tb.undef(ty);
-          for (int k = 0; k < kBase; ++k)
+          for (int k = 0; k < kBase; ++k) {
+            SmallVector<int64_t> indices = {b, nonK, kBaseVec, k};
+            auto index = linearize(indices, strides);
             rawElems =
-                tb.insert_element(ty, rawElems,
-                                  elems[(b * nonKRep * numVecInKBase +
-                                         nonK * numVecInKBase + kBaseVec) *
-                                            kBase +
-                                        k],
-                                  tb.i32_val(k));
+                tb.insert_element(ty, rawElems, elems[index], tb.i32_val(k));
+          }
 
           // Step 2: process rawElems based on element type
           // Note that for f32 input and XF32 is not allowed, nothing needs to
