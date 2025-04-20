@@ -61,8 +61,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
 
 // -----
 
-// When kWidth is set to 4, generate single rated mfma instructions.
-// In a future PR, such cases will still generate double rated mfma instructions with kWidth = 4.
+// When kWidth is set to 4, still generate double rated mfma instructions.
 
 // CHECK-LABEL:mfma_16x16x32_f16
 
@@ -74,7 +73,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
       %q: tensor<128x128xf16, #dotOp0>,
       %k: tensor<128x128xf16, #dotOp1>) {
     %cst = arith.constant dense<0.000000e+00> : tensor<128x128xf32, #mma>
-    // CHECK: rocdl.mfma.f32.16x16x16f16 {{.*}} : (vector<4xf16>, vector<4xf16>
+    // CHECK: rocdl.mfma.f32.16x16x32.f16 {{.*}} : (vector<8xf16>, vector<8xf16>
     %qk = tt.dot %q, %k, %cst : tensor<128x128xf16, #dotOp0> * tensor<128x128xf16, #dotOp1> -> tensor<128x128xf32, #mma>
     tt.return
  }
@@ -92,7 +91,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
       %q: tensor<128x128xbf16, #dotOp0>,
       %k: tensor<128x128xbf16, #dotOp1>) {
     %cst = arith.constant dense<0.000000e+00> : tensor<128x128xf32, #mma>
-    // CHECK: rocdl.mfma.f32.16x16x16bf16.1k {{.*}} : (vector<4xi16>, vector<4xi16>
+    // CHECK: rocdl.mfma.f32.16x16x32.bf16 {{.*}} : (vector<8xbf16>, vector<8xbf16>
     %qk = tt.dot %q, %k, %cst : tensor<128x128xbf16, #dotOp0> * tensor<128x128xbf16, #dotOp1> -> tensor<128x128xf32, #mma>
     tt.return
  }
@@ -110,7 +109,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
       %q: tensor<128x128xf16, #dotOp0>,
       %k: tensor<128x128xf16, #dotOp1>) {
     %cst = arith.constant dense<0.000000e+00> : tensor<128x128xf32, #mma>
-    // CHECK: rocdl.mfma.f32.32x32x8f16 {{.*}} : (vector<4xf16>, vector<4xf16>
+    // CHECK: rocdl.mfma.f32.32x32x16.f16 {{.*}} : (vector<8xf16>, vector<8xf16>
     %qk = tt.dot %q, %k, %cst : tensor<128x128xf16, #dotOp0> * tensor<128x128xf16, #dotOp1> -> tensor<128x128xf32, #mma>
     tt.return
  }
@@ -128,7 +127,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
       %q: tensor<128x128xbf16, #dotOp0>,
       %k: tensor<128x128xbf16, #dotOp1>) {
     %cst = arith.constant dense<0.000000e+00> : tensor<128x128xf32, #mma>
-    // CHECK: rocdl.mfma.f32.32x32x8bf16.1k {{.*}} : (vector<4xi16>, vector<4xi16>
+    // CHECK: rocdl.mfma.f32.32x32x16.bf16 {{.*}} : (vector<8xbf16>, vector<8xbf16>
     %qk = tt.dot %q, %k, %cst : tensor<128x128xbf16, #dotOp0> * tensor<128x128xbf16, #dotOp1> -> tensor<128x128xf32, #mma>
     tt.return
  }
