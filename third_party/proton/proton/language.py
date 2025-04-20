@@ -23,3 +23,16 @@ def enter_scope(name: tl.constexpr, _builder=None):
 @builtin
 def exit_scope(name: tl.constexpr, _builder=None):
     record(is_start=False, scope_name=name, triton_builder=_builder)
+
+
+class scope:
+
+    def __init__(self, name: str, _builder=None):
+        self.name = name
+        self._builder = _builder
+
+    def __enter__(self):
+        enter_scope(self.name, _builder=self._builder)
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        exit_scope(self.name, _builder=self._builder)
