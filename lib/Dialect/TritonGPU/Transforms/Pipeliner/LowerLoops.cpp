@@ -273,17 +273,13 @@ void createAsyncCopy(scf::ForOp forOp, tt::LoadOp loadOp, Value alloc,
     // Remove redundant local_load -> local_alloc, but only if
     // we are not using the other value. AsyncCopyGlobalToLocalOp does not
     // support the masking.
-    SmallVector<ttg::LocalAllocOp> allocsToErase;
-    for (Operation *user : loadOp->getUsers()) {
+    for (Operation *user : llvm::make_early_inc_range(loadOp->getUsers())) {
       if (auto userAlloc = dyn_cast<ttg::LocalAllocOp>(user)) {
         if (allocTy.getEncoding() == userAlloc.getType().getEncoding()) {
           tt::replaceUsesAndPropagateType(builder, userAlloc, viewLoad);
-          allocsToErase.push_back(userAlloc);
+          userAlloc.erase();
         }
       }
-    }
-    for (auto alloc : allocsToErase) {
-      alloc.erase();
     }
   }
 
@@ -343,16 +339,13 @@ void createTMAAsyncCopy(
   Value viewLoad = createSingleBufferView(builder, alloc, extractIdx);
   //  Remove redundant local_load -> local_alloc
   SmallVector<ttg::LocalAllocOp> allocsToErase;
-  for (Operation *user : loadOp->getUsers()) {
+  for (Operation *user : llvm::make_early_inc_range(loadOp->getUsers())) {
     if (auto userAlloc = dyn_cast<ttg::LocalAllocOp>(user)) {
       if (allocTy.getEncoding() == userAlloc.getType().getEncoding()) {
         tt::replaceUsesAndPropagateType(builder, userAlloc, viewLoad);
-        allocsToErase.push_back(userAlloc);
+        userAlloc.erase();
       }
     }
-  }
-  for (auto alloc : allocsToErase) {
-    alloc.erase();
   }
 
   // If there are some uses that were not local_allocs, we need to create a

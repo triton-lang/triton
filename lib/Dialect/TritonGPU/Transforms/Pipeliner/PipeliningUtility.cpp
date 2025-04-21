@@ -281,16 +281,11 @@ Operation *mlir::triton::predicateOp(RewriterBase &rewriter, Operation *op,
 
 void mlir::triton::replaceUsesAndPropagateType(OpBuilder &builder,
                                                Operation *oldUse, Value val) {
-  SmallVector<Operation *> opsToDelete;
-  SmallVector<OpOperand *> operandsToReplace;
-
-  // Save the operand to replace / delete later (avoid iterator invalidation).
-  // TODO: can we use an early_inc iterator?
-  for (OpOperand &use : oldUse->getUses()) {
+  for (OpOperand &use : llvm::make_early_inc_range(oldUse->getUses())) {
     // Non-subview/trans ops will be replaced by `val`.
     if (!isa<triton::gpu::MemDescTransOp, triton::gpu::MemDescSubviewOp>(
             use.getOwner())) {
-      operandsToReplace.push_back(&use);
+      use.set(val);
       continue;
     }
     Operation *user = use.getOwner();
@@ -315,18 +310,8 @@ void mlir::triton::replaceUsesAndPropagateType(OpBuilder &builder,
     }
     assert(newVal);
     replaceUsesAndPropagateType(builder, user, newVal);
-    opsToDelete.push_back(use.getOwner());
+    use.getOwner()->erase();
   }
-
-  // Perform late replacement.
-  for (OpOperand *operand : operandsToReplace) {
-    Operation *op = operand->getOwner();
-    operand->set(val);
-  }
-
-  // Perform late op erasure.
-  for (Operation *op : opsToDelete)
-    op->erase();
 }
 
 // Return true if the given ForOp has the attribute
