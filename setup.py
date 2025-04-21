@@ -19,6 +19,8 @@ from typing import Optional
 from setuptools import Extension, find_packages, setup
 from setuptools.command.build_ext import build_ext
 from setuptools.command.build_py import build_py
+from setuptools.command.develop import develop
+from setuptools.command.editable_wheel import editable_wheel
 from dataclasses import dataclass
 
 import pybind11
@@ -33,6 +35,7 @@ class Backend:
     backend_dir: str
     language_dir: Optional[str]
     tools_dir: Optional[str]
+    install_dir: str
     is_external: bool
 
 
@@ -70,8 +73,10 @@ class BackendInstaller:
         for file in ["compiler.py", "driver.py"]:
             assert os.path.exists(os.path.join(backend_path, file)), f"${file} does not exist in ${backend_path}"
 
+        install_dir = os.path.join(os.path.dirname(__file__), "python", "triton", "backends", backend_name)
+
         return Backend(name=backend_name, src_dir=backend_src_dir, backend_dir=backend_path, language_dir=language_dir,
-                       tools_dir=tools_dir, is_external=is_external)
+                       tools_dir=tools_dir, install_dir=install_dir, is_external=is_external)
 
     # Copy all in-tree backends under triton/third_party.
     @staticmethod
@@ -249,7 +254,7 @@ def update_symlink(link_path, source_path):
 
     print(f"creating symlink: {link_path} -> {source_path}", file=sys.stderr)
     link_path.absolute().parent.mkdir(parents=True, exist_ok=True)  # Ensure link's parent directory exists
-    link_path.symlink_to(source_path, target_is_directory=True)
+    link_path.symlink_to(source_path.absolute(), target_is_directory=True)
 
 
 def get_thirdparty_packages(packages: list):
@@ -591,6 +596,56 @@ def get_package_dirs():
         yield ("triton.profiler", "third_party/proton/proton")
 
 
+def add_link_to_backends():
+    for backend in backends:
+        update_symlink(backend.install_dir, backend.backend_dir)
+
+        if backend.language_dir:
+            # Link the contents of each backend's `language` directory into
+            # `triton.language.extra`.
+            extra_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "python", "triton", "language",
+                                                     "extra"))
+            for x in os.listdir(backend.language_dir):
+                src_dir = os.path.join(backend.language_dir, x)
+                install_dir = os.path.join(extra_dir, x)
+                update_symlink(install_dir, src_dir)
+
+        if backend.tools_dir:
+            # Link the contents of each backend's `tools` directory into
+            # `triton.tools.extra`.
+            extra_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "python", "triton", "tools", "extra"))
+            for x in os.listdir(backend.tools_dir):
+                src_dir = os.path.join(backend.tools_dir, x)
+                install_dir = os.path.join(extra_dir, x)
+                update_symlink(install_dir, src_dir)
+
+
+def add_link_to_proton():
+    proton_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "third_party", "proton", "proton"))
+    proton_install_dir = os.path.join(os.path.dirname(__file__), "python", "triton", "profiler")
+    update_symlink(proton_install_dir, proton_dir)
+
+
+def add_links():
+    add_link_to_backends()
+    if check_env_flag("TRITON_BUILD_PROTON", "ON"):  # Default ON
+        add_link_to_proton()
+
+
+class plugin_develop(develop):
+
+    def run(self):
+        add_links()
+        super().run()
+
+
+class plugin_editable_wheel(editable_wheel):
+
+    def run(self):
+        add_links()
+        super().run()
+
+
 def get_entry_points():
     entry_points = {}
     if check_env_flag("TRITON_BUILD_PROTON", "ON"):  # Default ON
@@ -652,6 +707,8 @@ setup(
         "build_ext": CMakeBuild,
         "build_py": CMakeBuildPy,
         "clean": CMakeClean,
+        "develop": plugin_develop,
+        "editable_wheel": plugin_editable_wheel,
     },
     zip_safe=False,
     # for PyPI
