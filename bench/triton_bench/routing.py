@@ -117,8 +117,8 @@ def _routing_clear_bitmatrix(Bitmatrix, stride_bm, shape_bn, cutoff, BLOCK_N: tl
 
 
 @triton.jit
-def _routing_memset_indx(Indx0, Indx1, size, sentinel, BLOCK: tl.constexpr,
-                         ExpertHist, FinalExpertOffs, hist_size, BLOCK_N: tl.constexpr):
+def _routing_memset_indx(Indx0, Indx1, size, sentinel, BLOCK: tl.constexpr, ExpertHist, FinalExpertOffs, hist_size,
+                         BLOCK_N: tl.constexpr):
     pid = tl.program_id(0)
 
     if pid == 0:
@@ -217,13 +217,9 @@ def routing(logits, n_expts_act, expt_indx=None, simulated_ep=1):
     topk_indx = torch.empty(n_gates, dtype=torch.int32, device=device)
     gate_indx = torch.empty(n_gates, dtype=torch.int32, device=device)
     gate_scal = torch.empty(n_gates, dtype=logits.dtype, device=device)
-    _routing_memset_indx[(cdiv(n_gates, MEMSET_BLOCK) * 2 + 1,)](
-        topk_indx,
-        gate_indx,
-        n_gates,
-        -1,
-        MEMSET_BLOCK,
-        hist, expt_offs, hist.shape[0], BLOCK_N=512  # tunable parameters
+    _routing_memset_indx[(cdiv(n_gates, MEMSET_BLOCK) * 2 + 1, )](
+        topk_indx, gate_indx, n_gates, -1, MEMSET_BLOCK, hist, expt_offs, hist.shape[0],
+        BLOCK_N=512  # tunable parameters
     )
     _routing_compute_indx_offs[(n_expts_tot, )](
         expt_offs, partial_hist,  # inputs
