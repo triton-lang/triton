@@ -242,11 +242,12 @@ LogicalResult triton::gpu::specializeLoadMMADependencies(scf::ForOp &loop,
   if (ops.empty())
     return success();
   // Support only 1 MMA op.
-  if (ops.size() > 1) {
-    return mlir::emitWarning(
-        loop.getLoc(),
-        "failed to warp specialize: more than one `tt.dot` found in the loop");
-  }
+  // if (ops.size() > 1) {
+  //  return mlir::emitWarning(
+  //      loop.getLoc(),
+  //      "failed to warp specialize: more than one `tt.dot` found in the
+  //      loop");
+  //}
   ttng::MMAv5OpInterface mmaOp = ops.front();
 
   // Look for the loads that feed into the MMA operands.
@@ -305,7 +306,9 @@ LogicalResult triton::gpu::specializeLoadMMADependencies(scf::ForOp &loop,
   for (Operation *user : accUsersInLoop) {
     if (auto mmaOp = dyn_cast<ttng::MMAv5OpInterface>(user)) {
       Value flag = mmaOp.useAccumulator();
-      if (!matchPattern(flag, m_One())) {
+      if (matchPattern(flag, m_Zero())) {
+        overridePred = intCst(true, 1);
+      } else if (!matchPattern(flag, m_One())) {
         if (auto arg = dyn_cast<BlockArgument>(flag)) {
           auto yield = cast<scf::YieldOp>(loop.getBody()->getTerminator());
           overridePred = yield.getOperand(arg.getArgNumber() - 1);
@@ -549,13 +552,26 @@ LogicalResult triton::gpu::specializeLoadMMADependencies(scf::ForOp &loop,
     // cycle, subsequent warp specialization steps will fail.
     SmallVector<Operation *> transitiveUsers(loadsInLoop.begin(),
                                              loadsInLoop.end());
+    DenseSet<Operation *> seen;
     while (!transitiveUsers.empty()) {
       Operation *op = transitiveUsers.pop_back_val();
-      if (isa<scf::YieldOp>(op))
-        continue;
       op = loop.getBody()->findAncestorOpInBlock(*op);
+      if (!seen.insert(op).second)
+        continue;
       userPartition->insert(op);
-      llvm::append_range(transitiveUsers, op->getUsers());
+      SmallVector<OpOperand *> uses;
+      for (OpOperand &use : op->getUses())
+        uses.push_back(&use);
+      for (unsigned i = 0; i < uses.size(); ++i) {
+        Operation *user = uses[i]->getOwner();
+        if (user == loop.getBody()->getTerminator()) {
+          for (OpOperand &use :
+               loop.getRegionIterArgs()[uses[i]->getOperandNumber()].getUses())
+            uses.push_back(&use);
+        } else {
+          transitiveUsers.push_back(user);
+        }
+      }
     }
 
     // Place the epilogue partition in the default warpgroup. The MMA and load

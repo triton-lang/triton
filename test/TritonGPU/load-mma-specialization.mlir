@@ -144,37 +144,6 @@ tt.func @warp_specialize_tma_matmul(
   tt.return
 }
 
-// FUNC-LABEL: @unsupported_multiple_dot_ops
-// TMEM: ttng.tmem_alloc
-// TMEM: ttng.tmem_alloc
-// TMEM: scf.for
-
-// CHECK-LABEL: @unsupported_multiple_dot_ops
-tt.func @unsupported_multiple_dot_ops() {
-  %c0_i32 = arith.constant 0 : i32
-  %c1_i32 = arith.constant 1 : i32
-  %true = arith.constant true
-  %zero = arith.constant dense<0.0> : tensor<128x128xf32, #acc_layout>
-  %k_tiles = arith.constant 32 : i32
-
-  // expected-warning @below {{failed to warp specialize: more than one `tt.dot` found in the loop}}
-  scf.for %k = %c0_i32 to %k_tiles step %c1_i32 iter_args(%acc0 = %zero, %acc1 = %zero) -> (tensor<128x128xf32, #acc_layout>, tensor<128x128xf32, #acc_layout>) : i32 {
-    %a, %b = "load"() : () -> (!ttg.memdesc<128x64xf16, #shared, #smem>, !ttg.memdesc<64x128xf16, #shared, #smem>)
-
-    %c0, %c0_tok = ttng.tmem_alloc %acc0 : (tensor<128x128xf32, #acc_layout>) -> (!ttg.memdesc<128x128xf32, #acc_tmem, #ttng.tensor_memory, mutable>, !ttg.async.token)
-    %mma0_tok = ttng.tc_gen5_mma %a, %b, %c0[%c0_tok], %true, %true : !ttg.memdesc<128x64xf16, #shared, #smem>, !ttg.memdesc<64x128xf16, #shared, #smem>, !ttg.memdesc<128x128xf32, #acc_tmem, #ttng.tensor_memory, mutable>
-    %cnext0, %load0_tok = ttng.tmem_load %c0[%mma0_tok] : !ttg.memdesc<128x128xf32, #acc_tmem, #ttng.tensor_memory, mutable> -> tensor<128x128xf32, #acc_layout>
-
-    %c1, %c1_tok = ttng.tmem_alloc %acc0 : (tensor<128x128xf32, #acc_layout>) -> (!ttg.memdesc<128x128xf32, #acc_tmem, #ttng.tensor_memory, mutable>, !ttg.async.token)
-    %mma1_tok = ttng.tc_gen5_mma %a, %b, %c1[%c1_tok], %true, %true : !ttg.memdesc<128x64xf16, #shared, #smem>, !ttg.memdesc<64x128xf16, #shared, #smem>, !ttg.memdesc<128x128xf32, #acc_tmem, #ttng.tensor_memory, mutable>
-    %cnext1, %load1_tok = ttng.tmem_load %c1[%mma1_tok] : !ttg.memdesc<128x128xf32, #acc_tmem, #ttng.tensor_memory, mutable> -> tensor<128x128xf32, #acc_layout>
-
-    scf.yield %cnext0, %cnext1 : tensor<128x128xf32, #acc_layout>, tensor<128x128xf32, #acc_layout>
-  } {tt.warp_specialize}
-
-  tt.return
-}
-
 // FUNC-LABEL: @unsupported_load
 // TMEM: ttng.tmem_alloc
 // TMEM: scf.for
@@ -807,6 +776,54 @@ tt.func @warp_specialize_only_rhs_is_loaded(
   } {tt.warp_specialize, tt.num_stages = 2 : i32}
 
   "use"(%result) : (tensor<128x128xf32, #acc_layout>) -> ()
+  tt.return
+}
+
+// CHECK-LABEL: @user_partition_has_cycle
+tt.func @user_partition_has_cycle(
+  %k_tiles: i32,
+  %off_m: i32,
+  %off_n: i32,
+  %a_desc: !tt.tensordesc<tensor<128x64xf16, #shared>>,
+  %b_desc: !tt.tensordesc<tensor<128x64xf16, #shared>>
+) {
+  %true = arith.constant true
+  %false = arith.constant false
+  %c0_i32 = arith.constant 0 : i32
+  %c1_i32 = arith.constant 1 : i32
+
+  %BLOCK_K = arith.constant 64 : i32
+  %zero = arith.constant dense<0.0> : tensor<128x128xf32, #acc_layout>
+
+  %a_reg = tt.descriptor_load %a_desc[%c0_i32, %c0_i32] : !tt.tensordesc<tensor<128x64xf16, #shared>> -> tensor<128x64xf16, #oper_layout>
+  %a_shared = ttg.local_alloc %a_reg : (tensor<128x64xf16, #oper_layout>) -> !ttg.memdesc<128x64xf16, #shared, #smem>
+
+  // CHECK: scf.for
+  // CHECK-SAME: [[PRODUCT:%arg[0-9]+]] = %cst
+  %result = scf.for %k = %c0_i32 to %k_tiles step %c1_i32 iter_args(%product = %zero) -> (tensor<128x128xf32, #acc_layout>) : i32 {
+    %off_k = arith.muli %k, %BLOCK_K : i32
+
+    %b_reg = tt.descriptor_load %b_desc[%off_n, %off_k] : !tt.tensordesc<tensor<128x64xf16, #shared>> -> tensor<128x64xf16, #oper_layout>
+    %b_shared = ttg.local_alloc %b_reg : (tensor<128x64xf16, #oper_layout>) -> !ttg.memdesc<128x64xf16, #shared, #smem>
+    %b_T_shared = ttg.memdesc_trans %b_shared {order = array<i32: 1, 0>} : !ttg.memdesc<128x64xf16, #shared, #smem> -> !ttg.memdesc<64x128xf16, #shared_trans, #smem>
+
+    %c_tmem, %c_tok = ttng.tmem_alloc : () -> (!ttg.memdesc<128x128xf32, #acc_tmem, #ttng.tensor_memory, mutable>, !ttg.async.token)
+    %mma_tok = ttng.tc_gen5_mma %a_shared, %b_T_shared, %c_tmem[%c_tok], %false, %true : !ttg.memdesc<128x64xf16, #shared, #smem>, !ttg.memdesc<64x128xf16, #shared_trans, #smem>, !ttg.memdesc<128x128xf32, #acc_tmem, #ttng.tensor_memory, mutable>
+    %c, %load_tok = ttng.tmem_load %c_tmem[%mma_tok] : !ttg.memdesc<128x128xf32, #acc_tmem, #ttng.tensor_memory, mutable> -> tensor<128x128xf32, #acc_layout>
+
+    // CHECK: [[TIMES_TWO:%.*]] = arith.addf [[PRODUCT]], [[PRODUCT]] {ttg.partition = 0 : i32}
+    %times_two = arith.addf %product, %product : tensor<128x128xf32, #acc_layout>
+    // CHECK: [[C:%.*]], %{{.*}} = ttng.tmem_load {{.*}} {ttg.partition = 0 : i32}
+    // CHECK: arrive_barrier
+    // CHECK: [[NEXT_PRODUCT:%.*]] = arith.mulf [[TIMES_TWO]], [[C]] {ttg.partition = 0 : i32}
+    %next_product = arith.mulf %times_two, %c : tensor<128x128xf32, #acc_layout>
+
+    // CHECK: yield [[NEXT_PRODUCT]]
+    scf.yield %next_product : tensor<128x128xf32, #acc_layout>
+  } {tt.warp_specialize, tt.num_stages = 2 : i32}
+
+  "use"(%result) : (tensor<128x128xf32, #acc_layout>) -> ()
+
   tt.return
 }
 
