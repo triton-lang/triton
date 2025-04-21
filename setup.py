@@ -20,10 +20,17 @@ from setuptools import Extension, find_packages, setup
 from setuptools.command.build_ext import build_ext
 from setuptools.command.build_py import build_py
 from setuptools.command.develop import develop
-from setuptools.command.editable_wheel import editable_wheel
 from dataclasses import dataclass
 
 import pybind11
+
+try:
+    from setuptools.command.editable_wheel import editable_wheel
+except ImportError:
+    # create a dummy class, since there is no command to override
+    class editable_wheel:
+        pass
+
 
 sys.path.insert(0, os.path.dirname(__file__))
 
