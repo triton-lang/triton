@@ -9,14 +9,13 @@ def _routing_compute_expt_offs(ExpertHist, FinalExpertOffs, hist_size,  # histog
                                BLOCK_N: tl.constexpr):
     loop_iterations = (hist_size + BLOCK_N - 1) // BLOCK_N
     x = tl.zeros([BLOCK_N], ExpertHist.dtype.element_ty)
-    tl.store(FinalExpertOffs, 0)
     for i in range(loop_iterations):
         offs_n = i * BLOCK_N + tl.arange(0, BLOCK_N)
         mask_n = offs_n < hist_size
         hist2 = tl.load(ExpertHist + offs_n, mask=mask_n)
-        tok_starts = tl.cumsum(hist2, 0) + x
+        tok_starts = tl.cumsum(hist2, 0) - hist2 + x
         x += tl.sum(hist2, 0)
-        tl.store(FinalExpertOffs + 1 + offs_n, tok_starts, mask=mask_n)
+        tl.store(FinalExpertOffs + offs_n, tok_starts, mask=mask_n)
         offs_n += BLOCK_N
 
 
@@ -211,7 +210,7 @@ def routing(logits, n_expts_act, expt_indx=None, simulated_ep=1):
     # perform compaction to update expt_scal / expt_indx
     hist, partial_hist = sum(bitmatrix, partials_block_size=HIST_BLOCK_M, dim=0)
     # scratchpad
-    expt_offs = torch.empty(n_expts_tot + 1, dtype=torch.int32, device=device)
+    expt_offs = torch.empty(n_expts_tot, dtype=torch.int32, device=device)
     indx_offs = torch.empty((cdiv(n_tokens, HIST_BLOCK_M), n_expts_tot), dtype=torch.int32, device=device)
     # output
     topk_indx = torch.empty(n_gates, dtype=torch.int32, device=device)
