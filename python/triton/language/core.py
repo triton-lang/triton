@@ -1183,6 +1183,9 @@ class tensor(base_value):
     def xor_sum(self, axis=None, keep_dims=False) -> tensor:
         ...
 
+    def reduce_or(self, axis=None, keep_dims=False) -> tensor:
+        ...
+
     def cumsum(self, axis=0, reverse=False) -> tensor:
         ...
 

@@ -1,25 +1,12 @@
+import torch
 import triton
 import triton.language as tl
+from triton_bench import Bitmatrix
 
 
 @triton.jit
-def or_combine(x, y):
-    return x | y
-
-
-@triton.jit
-def softmax(x):
-    x = x.to(tl.float32)
-    z = x - tl.max(x, 1)[:, None]
-    num = tl.math.exp(z)
-    den = tl.sum(num, 1)[:, None]
-    x = tl.math.fdiv(num, den, False)
-    return x
-
-
-@triton.jit
-def load_logits_topk(X, stride_xm, n_expts_tot, offs_m, mask_m, N_EXPTS_PAD: tl.constexpr, N_EXPTS_ACT: tl.constexpr,
-                     BLOCK_N: tl.constexpr):
+def streaming_topk(X, stride_xm, n_expts_tot, offs_m, mask_m, N_EXPTS_PAD: tl.constexpr, N_EXPTS_ACT: tl.constexpr,
+                   BLOCK_N: tl.constexpr):
 
     # subtract 1 from loop iterations because we peel the first (masked) iteration:
     loop_iterations: tl.constexpr = N_EXPTS_PAD // BLOCK_N - 1
@@ -49,11 +36,11 @@ def load_logits_topk(X, stride_xm, n_expts_tot, offs_m, mask_m, N_EXPTS_PAD: tl.
 
 
 @triton.jit
-def _compute_bitmatrix(X, stride_xm,  # logits
-                       Yv, Yi, stride_ym,  # topk values/indices
-                       Routing, stride_rm, n_rows,  # routing bitmatrix
-                       n_expts_tot, BLOCK_M: tl.constexpr, N_EXPTS_PAD: tl.constexpr, N_EXPTS_ACT: tl.constexpr,
-                       BLOCK_N: tl.constexpr):
+def _topk(X, stride_xm,  # inputs
+          Yv, Yi, stride_ym,  # topk values/indices
+          Bits, stride_rm, n_rows,  # bitmatrix
+          n_expts_tot, BLOCK_M: tl.constexpr, N_EXPTS_PAD: tl.constexpr, N_EXPTS_ACT: tl.constexpr,
+          BLOCK_N: tl.constexpr):
 
     tl.static_assert(BLOCK_N % 32 == 0)
     tl.static_assert(N_EXPTS_PAD % BLOCK_N == 0)
@@ -62,7 +49,7 @@ def _compute_bitmatrix(X, stride_xm,  # logits
     # load logits
     offs_m = tl.program_id(0) * BLOCK_M + tl.arange(0, BLOCK_M)
     mask_m = offs_m[:, None] < n_rows
-    y = load_logits_topk(X, stride_xm, n_expts_tot, offs_m, mask_m, N_EXPTS_PAD, N_EXPTS_ACT, BLOCK_N)
+    y = streaming_topk(X, stride_xm, n_expts_tot, offs_m, mask_m, N_EXPTS_PAD, N_EXPTS_ACT, BLOCK_N)
     y = y.to(tl.uint32, bitcast=True)
 
     # sort result in direction of ascending expert index
@@ -70,7 +57,7 @@ def _compute_bitmatrix(X, stride_xm,  # logits
     y = tl.sort(y, dim=1)
     y_indices = y >> 16
     y_values = (y & 0x0000FFFF).to(tl.uint16).to(x_dtype, bitcast=True)
-    y_values = softmax(y_values).to(x_dtype)
+    y_values = tl.softmax(y_values.to(tl.float32), dim=1).to(x_dtype)
 
     # write back
     offs_y_n = tl.arange(0, N_EXPTS_ACT)
@@ -82,12 +69,39 @@ def _compute_bitmatrix(X, stride_xm,  # logits
     # pack into bitmatrix
     y_div = y_indices // 32
     y_rem = y_indices % 32
-
     loop_iterations = N_EXPTS_PAD // BLOCK_N
-
     for i in range(loop_iterations):
         offs_r_n = tl.arange(0, BLOCK_N // 32) + i * (BLOCK_N // 32)
         y2 = tl.where(y_div[:, :, None] == offs_r_n[None, None, :], (1 << y_rem)[:, :, None], 0)
-        r = tl.reduce(y2, combine_fn=or_combine, axis=1)
-        RoutingPtrs = Routing + offs_m[:, None] * stride_rm + offs_r_n[None, :]
-        tl.store(RoutingPtrs, r, mask=mask_m)
+        r = tl.reduce_or(y2, axis=1)
+        BitsPtrs = Bits + offs_m[:, None] * stride_rm + offs_r_n[None, :]
+        tl.store(BitsPtrs, r, mask=mask_m)
+
+
+def topk(x, k, dim=1, return_bitmatrix=True):
+    cdiv = triton.cdiv
+    BLOCK_M = 8
+    BLOCK_N = 128
+    assert x.dtype.itemsize == 2
+    assert x.ndim == 2
+    assert x.shape[-1] < 32768
+    assert dim == 1
+    assert return_bitmatrix
+    n_rows, n_cols = x.shape
+    dev = x.device
+    n_cols_pad = cdiv(n_cols, BLOCK_N) * BLOCK_N
+    n_cols_words = n_cols_pad // 32
+    # scratchpad tensors
+    # NOTE: these are not returned
+    y_vals = torch.empty((n_rows, k), dtype=x.dtype, device=dev)
+    y_indx = torch.empty((n_rows, k), dtype=torch.int16, device=dev)
+    bitmatrix = torch.empty((n_rows, n_cols_words), dtype=torch.uint32, device=dev)
+    _topk[(cdiv(n_rows, BLOCK_M), )](
+        x, x.stride(0),  # inputs
+        y_vals, y_indx, y_vals.stride(0),  # output [topk]
+        bitmatrix, bitmatrix.stride(0),  # output [bitmatrix]
+        n_rows, n_cols,  # shapes
+        BLOCK_M=BLOCK_M, BLOCK_N=BLOCK_N,  # tunable parameter
+        N_EXPTS_PAD=n_cols_pad, N_EXPTS_ACT=k,  # constants
+    )
+    return y_vals, y_indx, Bitmatrix(bitmatrix, [n_rows, n_cols])
