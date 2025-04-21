@@ -609,7 +609,7 @@ def download_and_copy_npu(name, src_path, dst_path, variable, version, url_func)
     url = url_func(supported[system], arch, version)
     # tmp_path = os.path.join(triton_cache_path, "npu", name)  # path to cache the download
     tmp_path = os.path.join(triton_cache_path, "npu")
-    dst_path = os.path.join(base_dir, "triton", "backends", "triton_x", "npu", dst_path)  # final binary path
+    dst_path = os.path.join(base_dir, "..", "..", "backend", "npu", dst_path)  # final binary path
 
     platform_name = "sbsa-linux" if arch == "aarch64" else "x86_64-linux"
     src_path = src_path(platform_name, version) if callable(src_path) else src_path
