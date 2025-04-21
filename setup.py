@@ -25,6 +25,8 @@ from dataclasses import dataclass
 
 import pybind11
 
+sys.path.insert(0, os.path.dirname(__file__))
+
 from python.build_helpers import get_base_dir, get_cmake_dir
 
 
