@@ -1,4 +1,3 @@
-from dataclasses import dataclass
 import functools
 import torch
 import triton
@@ -40,22 +39,6 @@ def constexpr_function(f):
 
         # convert result back to a Triton constexpr:
         return tl.constexpr(res)
-
-    # disguise the function as a Triton builtin to avoid raising an error
-    # that we're calling a non-JIT function from within a Triton kernel:
-    wrapper.__triton_builtin__ = True
-    wrapper.__module__ = getattr(tl, "__name__", "triton.language")
-    return wrapper
-
-
-def inline_function(f):
-    """
-    Wraps an arbitrary Python function so that it can be inlined into a Triton function at compile-time.
-    """
-
-    @functools.wraps(f)
-    def wrapper(*args, **kwargs):
-        return f(*args, **kwargs)
 
     # disguise the function as a Triton builtin to avoid raising an error
     # that we're calling a non-JIT function from within a Triton kernel:

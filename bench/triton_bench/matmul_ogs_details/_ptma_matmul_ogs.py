@@ -1,35 +1,30 @@
+import functools
 import torch
 import triton
 import triton.language as tl
-from triton_bench.meta import get_scaled_dot_format_string, inline_function, cuda_capability_geq
+from triton_bench.meta import get_scaled_dot_format_string, cuda_capability_geq
 from triton_bench.numerics_details.mxfp import _unswizzle_mx_block
 from triton_bench.numerics_details.flexpoint import float_to_flex, load_scale, nan_propagating_absmax_reduce, compute_scale
 from ._common import make_matmul_repr, matmul_launch_metadata, swizzle2d, xcd_swizzle
 
 # fmt: off
 
-@triton.jit
-def _make_tensor_desc(ptr, shape, strides, block_shape, transpose: tl.constexpr = False):
-    tl.static_assert(len(shape) == len(strides))
-    tl.static_assert(len(strides) == len(block_shape))
-    if transpose:
-        # Pass constexpr(1) to workaround torchflow tracer changing values of 1 to 2 during compile.
-        # We check that the stride is actually 1 before launching the kernel.
-        return tl.make_tensor_descriptor(
-            ptr,
-            shape=shape[:-2] + [shape[-1], shape[-2]],
-            strides=strides[:-2] + [strides[-1], tl.constexpr(1)],
-            block_shape=block_shape[:-2] + [block_shape[-1], block_shape[-2]],
-        )
-    else:
-        # Pass constexpr(1) to workaround torchflow tracer changing values of 1 to 2 during compile.
-        # We check that the stride is actually 1 before launching the kernel.
-        return tl.make_tensor_descriptor(
-            ptr,
-            shape=shape,
-            strides=strides[:-1] + [tl.constexpr(1)],
-            block_shape=block_shape,
-        )
+# TODO: this is a limitation of the triton frontend
+# we shouldn't have to do that!
+def inline_function(f):
+    """
+    Wraps an arbitrary Python function so that it can be inlined into a Triton function at compile-time.
+    """
+
+    @functools.wraps(f)
+    def wrapper(*args, **kwargs):
+        return f(*args, **kwargs)
+
+    # disguise the function as a Triton builtin to avoid raising an error
+    # that we're calling a non-JIT function from within a Triton kernel:
+    wrapper.__triton_builtin__ = True
+    wrapper.__module__ = getattr(tl, "__name__", "triton.language")
+    return wrapper
 
 @inline_function
 def _load_tensor_desc(desc, offs, transpose: tl.constexpr = False, _builder=None):
@@ -53,6 +48,29 @@ def _update_tensor_desc(desc, ptr, shape=None, _builder=None):
         block_shape=desc.block_shape,
         _builder=_builder,
     )
+
+@triton.jit
+def _make_tensor_desc(ptr, shape, strides, block_shape, transpose: tl.constexpr = False):
+    tl.static_assert(len(shape) == len(strides))
+    tl.static_assert(len(strides) == len(block_shape))
+    if transpose:
+        # Pass constexpr(1) to workaround torchflow tracer changing values of 1 to 2 during compile.
+        # We check that the stride is actually 1 before launching the kernel.
+        return tl.make_tensor_descriptor(
+            ptr,
+            shape=shape[:-2] + [shape[-1], shape[-2]],
+            strides=strides[:-2] + [strides[-1], tl.constexpr(1)],
+            block_shape=block_shape[:-2] + [block_shape[-1], block_shape[-2]],
+        )
+    else:
+        # Pass constexpr(1) to workaround torchflow tracer changing values of 1 to 2 during compile.
+        # We check that the stride is actually 1 before launching the kernel.
+        return tl.make_tensor_descriptor(
+            ptr,
+            shape=shape,
+            strides=strides[:-1] + [tl.constexpr(1)],
+            block_shape=block_shape,
+        )
 
 @triton.jit
 def _load_tile_attrs(
