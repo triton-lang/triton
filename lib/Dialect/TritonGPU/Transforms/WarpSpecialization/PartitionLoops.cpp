@@ -46,8 +46,9 @@ static void eraseOtherPartitions(scf::ForOp &loop, const WarpSchedule &schedule,
         toErase.reset(use.getOperandNumber());
     }
   }
-  for (auto [i, arg] : llvm::enumerate(loop.getRegionIterArgs())) {
-    if (llvm::any_of(arg.getUsers(), inPartition))
+  for (auto [i, arg, result] :
+       llvm::enumerate(loop.getRegionIterArgs(), loop.getResults())) {
+    if (llvm::any_of(arg.getUsers(), inPartition) || !result.use_empty())
       toErase.reset(i);
     else if (toErase.test(i))
       arg.dropAllUses();
