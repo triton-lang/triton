@@ -9,13 +9,13 @@ def _routing_compute_expt_offs(ExpertHist, FinalExpertOffs, hist_size,  # histog
                                BLOCK_N: tl.constexpr):
     loop_iterations = (hist_size + BLOCK_N - 1) // BLOCK_N
     x = tl.zeros([BLOCK_N], ExpertHist.dtype.element_ty)
+    tl.store(FinalExpertOffs, 0)
     for i in range(loop_iterations):
         offs_n = i * BLOCK_N + tl.arange(0, BLOCK_N)
         mask_n = offs_n < hist_size
         hist2 = tl.load(ExpertHist + offs_n, mask=mask_n)
         tok_starts = tl.cumsum(hist2, 0) + x
         x += tl.sum(hist2, 0)
-        tl.store(FinalExpertOffs, 0)
         tl.store(FinalExpertOffs + 1 + offs_n, tok_starts, mask=mask_n)
         offs_n += BLOCK_N
 
@@ -117,15 +117,22 @@ def _routing_clear_bitmatrix(Bitmatrix, stride_bm, shape_bn, cutoff, BLOCK_N: tl
 
 
 @triton.jit
-def _routing_memset_indx(Indx0, Indx1, size, sentinel, BLOCK: tl.constexpr):
+def _routing_memset_indx(Indx0, Indx1, size, sentinel, BLOCK: tl.constexpr,
+                         ExpertHist, FinalExpertOffs, hist_size, BLOCK_N: tl.constexpr):
     pid = tl.program_id(0)
-    buf = tl.program_id(1)
-    offs = pid * BLOCK + tl.arange(0, BLOCK)
-    mask = offs < size
-    if buf == 0:
-        tl.store(Indx0 + offs, sentinel, mask=mask)
-    if buf == 1:
-        tl.store(Indx1 + offs, sentinel, mask=mask)
+
+    if pid == 0:
+        _routing_compute_expt_offs(ExpertHist, FinalExpertOffs, hist_size, BLOCK_N)
+    else:
+        buf = pid & 1
+        pid = (pid - 1) >> 1
+
+        offs = pid * BLOCK + tl.arange(0, BLOCK)
+        mask = offs < size
+        if buf == 0:
+            tl.store(Indx0 + offs, sentinel, mask=mask)
+        if buf == 1:
+            tl.store(Indx1 + offs, sentinel, mask=mask)
 
 
 @dataclass
@@ -210,14 +217,12 @@ def routing(logits, n_expts_act, expt_indx=None, simulated_ep=1):
     topk_indx = torch.empty(n_gates, dtype=torch.int32, device=device)
     gate_indx = torch.empty(n_gates, dtype=torch.int32, device=device)
     gate_scal = torch.empty(n_gates, dtype=logits.dtype, device=device)
-    _routing_memset_indx[(cdiv(n_gates, MEMSET_BLOCK), 2)](
+    _routing_memset_indx[(cdiv(n_gates, MEMSET_BLOCK) * 2 + 1,)](
         topk_indx,
         gate_indx,
         n_gates,
         -1,
-        BLOCK=MEMSET_BLOCK,
-    )
-    _routing_compute_expt_offs[(1, )](
+        MEMSET_BLOCK,
         hist, expt_offs, hist.shape[0], BLOCK_N=512  # tunable parameters
     )
     _routing_compute_indx_offs[(n_expts_tot, )](
