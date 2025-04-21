@@ -3,7 +3,6 @@ import pytest
 import torch
 import triton
 import triton.language as tl
-import triton.tools.experimental_descriptor
 from test_mxfp import MXFP4Tensor, MXScaleTensor
 import re
 from triton._internal_testing import is_cuda, is_hip, is_hip_cdna3, is_hip_cdna4, is_hip_cdna
@@ -381,9 +380,10 @@ def test_mxfp(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, NUM_STAGES, nonKDim, NUM_WARPS
     rtol = 0.0001
     torch.testing.assert_close(ref_out, output, atol=atol, rtol=rtol)
 
-    # Pipelining of dot_scaled requires tmem_copy to be used, which in turn
-    # requires the scales to be in the blocked layout in global memory.
-    assert out.asm["ttgir"].count("ttng.tc_gen5_mma") == 1
+    if is_cuda():
+        # Pipelining of dot_scaled requires tmem_copy to be used, which in turn
+        # requires the scales to be in the blocked layout in global memory.
+        assert out.asm["ttgir"].count("ttng.tc_gen5_mma") == 1
 
 
 def _knob_promote_lhs_to_tmem(monkeypatch):

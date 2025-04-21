@@ -1,5 +1,6 @@
 #include "triton/Dialect/TritonGPU/Transforms/PipeliningUtility.h"
 
+#include "mlir/Analysis/TopologicalSortUtils.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/Tensor/IR/Tensor.h"
 #include "mlir/IR/ImplicitLocOpBuilder.h"
@@ -12,11 +13,87 @@
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/TMAUtilities.h"
 #include "llvm/Support/Casting.h"
+#include <queue>
 
 using namespace mlir;
 namespace tt = mlir::triton;
 namespace ttg = mlir::triton::gpu;
 namespace ttng = mlir::triton::nvidia_gpu;
+
+//===----------------------------------------------------------------------===//
+// Hoisting Utilities
+//===----------------------------------------------------------------------===//
+
+bool triton::isPureScalarOp(Operation *op) {
+  auto isScalar = [](Type type) { return type.isIntOrIndexOrFloat(); };
+  return isPure(op) && llvm::all_of(op->getOperandTypes(), isScalar) &&
+         llvm::all_of(op->getResultTypes(), isScalar);
+}
+
+bool triton::getDominatingValueSetOpsToHoist(
+    DominanceInfo &domInfo, Operation *refOp, ArrayRef<Value> valueSet,
+    llvm::SetVector<Operation *> &toHoist,
+    function_ref<bool(Operation *)> canHoist) {
+  // The set of operations below `refOp` that are being checked if they can be
+  // hoisted. This set prevents checking operations twice but also if the
+  // computation can be hoisted, this becomes the set of operations to hoist.
+  llvm::SetVector<Operation *> visited;
+
+  // Climb the use-def chain breadth-first so that operations can be hoisted in
+  // the reverse visitation order.
+  std::queue<Value> queue;
+  for (Value value : valueSet)
+    queue.push(value);
+
+  while (!queue.empty()) {
+    Value value = queue.front();
+    queue.pop();
+
+    // If the value properly dominates the outer loop, then it must be invariant
+    // to it.
+    if (domInfo.properlyDominates(value, refOp))
+      continue;
+    // If the value is a block argument, it cannot be hoisted.
+    if (auto arg = dyn_cast<BlockArgument>(value))
+      return false;
+
+    Operation *op = value.getDefiningOp();
+    // Check if the op was already visited.
+    if (visited.contains(op))
+      continue;
+    // If the defining op cannot be hoisted, then the value cannot be made loop
+    // invariant.
+    if (!canHoist(op))
+      return false;
+    visited.insert(op);
+    // Recurse on the operands of the op.
+    for (Value operand : op->getOperands())
+      queue.push(operand);
+  }
+
+  // The operations in `visited` must be hoisted. Note that operations are not
+  // added to `toHoist` unless all of `values` can be hoisted. This is to avoid
+  // hoisting operations for loops that don't end up getting fused if one of
+  // their bounds operands cannot be hoisted.
+  toHoist.insert(visited.begin(), visited.end());
+
+  return true;
+}
+
+void triton::hoistOpsBefore(Operation *refOp,
+                            const llvm::SetVector<Operation *> &toHoist) {
+  return hoistOpsBefore(refOp->getBlock(), refOp->getIterator(), toHoist);
+}
+void triton::hoistOpsBefore(Block *block, Block::iterator it,
+                            const llvm::SetVector<Operation *> &toHoist) {
+  for (Operation *op : topologicalSort(toHoist)) {
+    op->moveBefore(block, it);
+  }
+}
+
+//===----------------------------------------------------------------------===//
+// Loop Pipelining Utilities
+//===----------------------------------------------------------------------===//
 
 bool mlir::triton::loopHasDistGreaterThanOne(scf::ForOp forOp) {
   return llvm::any_of(forOp.getBody()->getTerminator()->getOperands(),
@@ -248,19 +325,20 @@ int mlir::triton::getCopyVecBytes(RankedTensorType registerTy,
 
 void mlir::triton::serializeLatencies(ModuleOp module,
                                       DenseMap<Operation *, int> &opLatency) {
+  auto helper = TritonDialect::getLoaded(module)->getLatencyAttrHelper();
+  auto builder = Builder(module);
   for (auto &[op, latency] : opLatency) {
-    op->setAttr(
-        kLatencyAttrName,
-        IntegerAttr::get(IntegerType::get(module.getContext(), 32), latency));
+    helper.setAttr(op, builder.getI32IntegerAttr(latency));
   }
 }
 
 DenseMap<Operation *, int> mlir::triton::deserializeLatencies(Operation *op) {
+  auto helper = TritonDialect::getLoaded(op)->getLatencyAttrHelper();
   DenseMap<Operation *, int> opLatency;
   op->walk([&](Operation *op) {
-    if (op->hasAttr(kLatencyAttrName)) {
-      opLatency[op] = op->getAttrOfType<IntegerAttr>(kLatencyAttrName).getInt();
-      op->removeAttr(kLatencyAttrName);
+    if (auto attr = helper.getAttr(op)) {
+      opLatency[op] = attr.getInt();
+      helper.removeAttr(op);
     }
   });
   return opLatency;
@@ -442,9 +520,8 @@ int mlir::triton::getNumStagesOrDefault(scf::ForOp forOp,
                                         int defaultNumStages) {
   // Use the attribute attached to the loop if it exists otherwise use the
   // global control.
-  if (!forOp->hasAttr(mlir::triton::kNumStagesAttrName))
-    return defaultNumStages;
-  return mlir::cast<IntegerAttr>(
-             forOp->getAttr(mlir::triton::kNumStagesAttrName))
-      .getInt();
+  auto helper = TritonDialect::getLoaded(forOp)->getNumStagesAttrHelper();
+  if (auto attr = helper.getAttr(forOp))
+    return attr.getInt();
+  return defaultNumStages;
 }

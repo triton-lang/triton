@@ -220,3 +220,35 @@ def test_line_info_env(monkeypatch, status: str):
     kernel_info = kernel_single.warmup(torch.float32, torch.float32, BLOCK=shape[0], grid=(1, ))
     file_lines = extract_file_lines(command, anchor, separator, kernel_info.asm[obj_kind])
     assert len(file_lines) == 0 if status == "1" else len(file_lines) > 0
+
+
+@pytest.mark.parametrize("status", ["ttir", ""])
+def test_line_info_ir_source(monkeypatch, status, tmp_path):
+    try:
+        obj_kind, command, anchor, separator = get_disassembler_command_and_debug_line_format()
+    except BaseException:
+        pytest.skip("disassembler is not available")
+
+    src = """
+    #loc = loc("/path/test.py":7:0)
+    module {
+    tt.func public @test(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32} loc("/path/test.py":7:0), %arg1: !tt.ptr<f32> {tt.divisibility = 16 : i32} loc("/path/test.py":7:0)) attributes {noinline = false} {
+        %0 = tt.load %arg0 : !tt.ptr<f32> loc(#loc1)
+        tt.store %arg1, %0 : !tt.ptr<f32> loc(#loc2)
+        tt.return loc(#loc3)
+    } loc(#loc)
+    } loc(#loc)
+    #loc1 = loc("/path/test.py":8:16)
+    #loc2 = loc("/path/test.py":9:20)
+    #loc3 = loc("/path/test.py":9:4)
+    """
+    monkeypatch.setenv("USE_IR_LOC", status)
+    temp_file = tmp_path / "test.ttir"
+    temp_file.write_text(src)
+    kernel_info = triton.compile(str(temp_file))
+    file_lines = extract_file_lines(command, anchor, separator, kernel_info.asm[obj_kind])
+    if status == "ttir":
+        assert check_file_lines(file_lines, "/path/test.py", 8, should_contain=False)
+        assert check_file_lines(file_lines, str(temp_file), -1, should_contain=True)
+    else:
+        assert check_file_lines(file_lines, "/path/test.py", 8, should_contain=True)

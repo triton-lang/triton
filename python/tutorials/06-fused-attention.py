@@ -15,10 +15,15 @@ Extra Credits:
 
 import pytest
 import torch
-from triton.tools.experimental_descriptor import TensorDescriptor
 
 import triton
 import triton.language as tl
+
+try:
+    from triton.tools.tensor_descriptor import TensorDescriptor
+    HAS_TENSOR_DESC = True
+except ModuleNotFoundError:
+    HAS_TENSOR_DESC = False
 
 DEVICE = triton.runtime.driver.active.get_active_torch_device()
 
@@ -32,15 +37,7 @@ def is_cuda():
 
 
 def supports_tma():
-    return is_cuda() and torch.cuda.get_device_capability()[0] >= 9
-
-
-HAS_TMA_DESC = "nv_tma_desc_type" in dir(tl)
-
-if HAS_TMA_DESC:
-    print("TMA benchmarks will be running with experimental grid constant TMA descriptor.", )
-else:
-    print("TMA benchmarks will be running without grid constant TMA descriptor.", )
+    return HAS_TENSOR_DESC and is_cuda() and torch.cuda.get_device_capability()[0] >= 9
 
 
 @triton.jit

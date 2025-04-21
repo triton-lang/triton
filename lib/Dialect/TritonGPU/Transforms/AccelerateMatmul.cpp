@@ -548,7 +548,7 @@ public:
         loc, accMemDescType, cvtAcc);
     auto vTrue = rewriter.create<arith::ConstantIntOp>(dotOp.getLoc(), 1, 1);
     auto mma = rewriter.create<triton::nvidia_gpu::TCGen5MMAOp>(
-        loc, a, b, acc, vTrue, vTrue, Value(), UnitAttr());
+        loc, a, b, acc, /*useD=*/vTrue, /*pred=*/vTrue);
     mma.setTwoCtas(useTwoCTAs);
 
     auto ld =
@@ -735,7 +735,7 @@ public:
     auto vTrue = rewriter.create<arith::ConstantIntOp>(dotOp.getLoc(), 1, 1);
     rewriter.create<triton::nvidia_gpu::TCGen5MMAScaledOp>(
         loc, a, b, acc, scaleA, scaleB, dotOp.getAElemType(),
-        dotOp.getBElemType(), vTrue, vTrue, Value());
+        dotOp.getBElemType(), /*useD=*/vTrue, /*pred=*/vTrue);
 
     auto ld =
         rewriter.create<triton::nvidia_gpu::TMEMLoadOp>(loc, newAccType, acc);

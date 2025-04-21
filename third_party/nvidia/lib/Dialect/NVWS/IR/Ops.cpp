@@ -1,7 +1,6 @@
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/Diagnostics.h"
 #include "nvidia/include/Dialect/NVWS/IR/Dialect.h"
-#include "triton/Conversion/MLIRTypes.h"
 #include "triton/Dialect/Triton/IR/Types.h"
 #include "triton/Dialect/TritonGPU/IR/Attributes.h"
 #include "triton/Dialect/TritonGPU/IR/Types.h"
@@ -12,6 +11,33 @@
 #include "Dialect/NVWS/IR/Ops.cpp.inc"
 
 namespace mlir::triton::nvws {
+
+LogicalResult ArefCreateOp::verify() {
+  auto rank = getResult().getType().getNumBatchAxes();
+  if (!rank)
+    return success();
+  for (size_t i = 0, e = *rank; i < e; i++) {
+    SmallVector<int> dims;
+    for (auto operand : getOperands()) {
+      SmallVector<Operation *> users(operand.user_begin(), operand.user_end());
+      if (users.size() != 1)
+        return emitError("Aref buffer is used elsewhere, Aref cannot guarantee "
+                         "async safety");
+      auto type = operand.getType();
+      if (auto mType = dyn_cast<gpu::MemDescType>(type)) {
+        dims.push_back(mType.getShape()[i]);
+      } else if (auto rType = dyn_cast<RankedTensorType>(type)) {
+        dims.push_back(rType.getShape()[i]);
+      } else {
+        return emitError("Aref is sliced, but input type isn't supported.");
+      }
+      if (!llvm::all_equal(dims)) {
+        return emitError("Leading dims of sliced aref inputs don't match.");
+      }
+    }
+  }
+  return success();
+}
 
 template <typename T>
 static std::optional<Twine> verifySlice(T &origType, T &newType, size_t rank) {

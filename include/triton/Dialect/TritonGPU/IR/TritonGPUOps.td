@@ -145,11 +145,11 @@ def TTG_LocalAllocOp : TTG_Op<"local_alloc", [DeclareOpInterfaceMethods<MemoryEf
 
     Explicitly deallocating a buffer is optional; see local_dealloc.
   }];
-  let arguments = (ins
+  let arguments = (
+    ins
     Optional<TT_Tensor>:$src,
     OptionalAttr<I32Attr>:$alignment
   );
-  let results = (outs TTG_MemDescType:$result);
 
   let builders = [
     OpBuilder<(ins "Type":$result),
@@ -171,6 +171,7 @@ def TTG_LocalAllocOp : TTG_Op<"local_alloc", [DeclareOpInterfaceMethods<MemoryEf
     ($src^)? attr-dict `:` functional-type(operands, results)
   }];
 
+  let results = (outs TTG_MemDescType:$result);
   let hasFolder = 1;
   let hasVerifier = 1;
 }
@@ -259,7 +260,6 @@ def TTG_LocalLoadOp : TTG_Op<"local_load"> {
     Arg<TTG_MemDescType, "", [MemRead<SharedMemory>]>:$src,
     Optional<TTG_AsyncToken>:$token
   );
-  let results = (outs TT_Tensor:$result);
 
   let builders = [
       OpBuilder<(ins "Type":$retType, "Value":$src),
@@ -270,6 +270,7 @@ def TTG_LocalLoadOp : TTG_Op<"local_load"> {
   // Use qualified() otherwise "!ttg.memdesc<X>" is printed as "<X>".
   let assemblyFormat = [{$src (`token` $token^)? attr-dict `:` qualified(type($src)) `->` type($result)}];
 
+  let results = (outs TT_Tensor:$result);
 }
 
 def TTG_LocalStoreOp : TTG_Op<"local_store"> {

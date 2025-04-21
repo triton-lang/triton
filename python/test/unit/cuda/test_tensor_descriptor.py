@@ -5,7 +5,7 @@ import triton
 import triton.language as tl
 from triton._internal_testing import is_interpreter, numpy_random, to_triton, requires_tma, unwrap_tensor, tma_dtypes
 from triton.tools.mxfp import MXFP4Tensor, MXScaleTensor
-from triton.tools.experimental_descriptor import TensorDescriptor
+from triton.tools.tensor_descriptor import TensorDescriptor
 from typing import Optional
 
 
@@ -254,7 +254,7 @@ def test_tensor_descriptor_store3d(dtype_str, K_BLOCK):
 @requires_tma
 @pytest.mark.parametrize("dtype_str", tma_dtypes)
 @pytest.mark.parametrize("num_ctas", [1, 2])
-@pytest.mark.parametrize("ndim", [2, 3, 4, 5])
+@pytest.mark.parametrize("ndim", [1, 2, 3, 4, 5])
 @pytest.mark.parametrize("INNER_BLOCK", [16, 32, 64, 128])
 def test_tensor_descriptor_load_nd(dtype_str, num_ctas, ndim, INNER_BLOCK):
 
@@ -318,7 +318,7 @@ def test_tensor_descriptor_load_nd(dtype_str, num_ctas, ndim, INNER_BLOCK):
 @requires_tma
 @pytest.mark.parametrize("dtype_str", tma_dtypes)
 @pytest.mark.parametrize("num_ctas", [1, 2])
-@pytest.mark.parametrize("ndim", [2, 3, 4, 5])
+@pytest.mark.parametrize("ndim", [1, 2, 3, 4, 5])
 @pytest.mark.parametrize("INNER_BLOCK", [16, 32, 64, 128])
 def test_tensor_descriptor_store_nd(dtype_str, num_ctas, ndim, INNER_BLOCK):
 
@@ -1402,3 +1402,17 @@ def test_host_tensor_descriptor_matmul(num_stages, num_ctas, BLOCK_M, BLOCK_N, B
         # TODO: The use of stmatrix for Blackwell is currently not supported.
         # Only a subset of TMEM and stmatrix layout pairs are compatible, for example 16x256bx2 and m8n8x4.
         assert "stmatrix.sync.aligned.m8n8.x4.shared.b16" in kernel.asm["ptx"]
+
+
+@requires_tma
+def test_specialization_after_host_tensordesc():
+
+    @triton.jit
+    def kernel(a, b):
+        pass
+
+    device = "cuda"
+    A = torch.randn(1024, device=device)
+    desc = TensorDescriptor.from_tensor(A, [128])
+    h = kernel.warmup(desc, 16, grid=(1, ))
+    assert ", %arg3: i32 {tt.divisibility = 16 : i32}" in h.asm["ttir"]

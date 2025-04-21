@@ -132,7 +132,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
       %B_r2 = tt.reshape %B_cv : tensor<2x4x32x1x4xi8, #blocked10> -> tensor<256x4xi8, #blocked11>
       %A_tm = ttng.tmem_alloc %A_r2 : (tensor<256x4xi8, #blocked11>) -> !ttg.memdesc<256x4xi8, #tmem_scales, #ttng.tensor_memory>
       %B_tm = ttng.tmem_alloc %B_r2 : (tensor<256x4xi8, #blocked11>) -> !ttg.memdesc<256x4xi8, #tmem_scales, #ttng.tensor_memory>
-      ttng.tc_gen5_mma_scaled %A_sh, %B_sh, %acc_tm, %A_tm, %B_tm, %true, %true lhs = e5m2 rhs = e5m2 {loop.cluster = 0 : i32, loop.stage = 2 : i32} : (!ttg.memdesc<128x128xf8E5M2, #shared, #ttg.shared_memory>, !ttg.memdesc<128x128xf8E5M2, #shared, #ttg.shared_memory>, !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory>, !ttg.memdesc<256x4xi8, #tmem_scales, #ttng.tensor_memory>, !ttg.memdesc<256x4xi8, #tmem_scales, #ttng.tensor_memory>, i1, i1) -> ()
+      ttng.tc_gen5_mma_scaled %A_sh, %B_sh, %acc_tm, %A_tm, %B_tm, %true, %true lhs = e5m2 rhs = e5m2 {loop.cluster = 0 : i32, loop.stage = 2 : i32} : !ttg.memdesc<128x128xf8E5M2, #shared, #ttg.shared_memory>, !ttg.memdesc<128x128xf8E5M2, #shared, #ttg.shared_memory>, !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory>, !ttg.memdesc<256x4xi8, #tmem_scales, #ttng.tensor_memory>, !ttg.memdesc<256x4xi8, #tmem_scales, #ttng.tensor_memory>
       tt.return
 }
 }
@@ -156,7 +156,7 @@ module attributes {"ttg.target" = "cuda:100", "ttg.num-ctas" = 2 : i32, "ttg.num
     %true = arith.constant true
     %trans = tt.trans %b_trans {order = array<i32: 1, 0>} : tensor<128x64xf8E4M3FN, #blocked1> -> tensor<64x128xf8E4M3FN, #blocked2>
     %dotb = ttg.local_alloc %trans : (tensor<64x128xf8E4M3FN, #blocked2>) -> !ttg.memdesc<64x128xf8E4M3FN, #shared1, #smem>
-    ttng.tc_gen5_mma %dota, %dotb, %dotc, %true, %true : (!ttg.memdesc<256x64xf8E4M3FN, #shared, #smem>, !ttg.memdesc<64x128xf8E4M3FN, #shared1, #smem>, !ttg.memdesc<256x128xf32, #tmem, #ttng.tensor_memory>, i1, i1) -> ()
+    ttng.tc_gen5_mma %dota, %dotb, %dotc, %true, %true : !ttg.memdesc<256x64xf8E4M3FN, #shared, #smem>, !ttg.memdesc<64x128xf8E4M3FN, #shared1, #smem>, !ttg.memdesc<256x128xf32, #tmem, #ttng.tensor_memory>
     tt.return
   }
 }
