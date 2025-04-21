@@ -211,9 +211,8 @@ def routing(logits, n_expts_act, expt_indx=None, simulated_ep=1):
     topk_indx = combined_indx[:n_gates]
     gate_indx = combined_indx[n_gates:]
     gate_scal = torch.empty(n_gates, dtype=logits.dtype, device=device)
-    _routing_memset_indx[(cdiv(n_gates * 2, MEMSET_BLOCK) + 1, )](
-        combined_indx, n_gates * 2, -1, MEMSET_BLOCK, hist, expt_offs, hist.shape[0], BLOCK_N=512
-    )
+    _routing_memset_indx[(cdiv(n_gates * 2, MEMSET_BLOCK) + 1, )](combined_indx, n_gates * 2, -1, MEMSET_BLOCK, hist,
+                                                                  expt_offs, hist.shape[0], BLOCK_N=512)
     _routing_compute_indx_offs[(n_expts_tot, )](
         expt_offs, partial_hist,  # inputs
         indx_offs, partial_hist.shape[0], partial_hist.stride(0),  # outputs
