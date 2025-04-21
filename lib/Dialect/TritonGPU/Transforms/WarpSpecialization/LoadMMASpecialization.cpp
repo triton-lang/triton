@@ -22,62 +22,8 @@ namespace ttng = triton::nvidia_gpu;
 using Partition = WarpSchedule::Partition;
 
 //===----------------------------------------------------------------------===//
-// specializeLoadMMADependencies
+// Utilities
 //===----------------------------------------------------------------------===//
-
-// Pattern match a simple `tma_load -> ... -> tl.dot` single-user chain. This
-// ensures there are extraneous users of the load or intermediate values and
-// that a valid partition schedule can be formed.
-//
-// TODO: Expand partioning scheme to support arbitrary DAG of loads and MMAs.
-static LogicalResult findSingleChainToLoad(scf::ForOp loop, Value value,
-                                           SmallVectorImpl<Operation *> &ops) {
-  Operation *defOp = value.getDefiningOp();
-  if (!defOp || !value.hasOneUse() || defOp->getParentOp() != loop)
-    return failure();
-
-  // This only works on TMA loads because they directly use the mbarrier
-  // mechanism. Since async groups are per-thread, commit groups cannot be used
-  // to synchronize across warp groups. We have to wait on the async group in
-  // the same partition as the loads and arrive an mbarrier to synchronize with
-  // the MMA partition, and then software pipeline the load partition.
-  //
-  // Triple-buffered example:
-  //
-  //   cp.async %a_ptrs[0], %a_buf[0]
-  //   cp.async %b_ptrs[0], %b_buf[0]
-  //   cp.async.commit_group
-  //
-  //   cp.async %a_ptrs[1], %a_buf[1]
-  //   cp.async %b_ptrs[1], %b_buf[1]
-  //   cp.async.commit_group
-  //
-  //   for i in range(2, N+2):
-  //     @i<N mbarrier.wait %empty_mbars[i%3]
-  //     @i<N cp.async %a_ptrs[i], %a_buf[i%3]
-  //     @i<N cp.async %b_ptrs[i], %b_buf[i%3]
-  //     @i<N cp.async.commit_group
-  //
-  //     cp.async.wait_group 2 # the i-2 load group is complete
-  //     mbarrier.arrive %load_mbars[(i-2)%3]
-  if (isa<DescriptorLoadOp, DescriptorGatherOp>(defOp)) {
-    ops.push_back(defOp);
-    return success();
-  }
-
-  // See through allocations and layout conversions.
-  if (isa<ttng::TMEMAllocOp, LocalAllocOp, MemDescTransOp, ConvertLayoutOp>(
-          defOp)) {
-    assert(llvm::is_contained({0, 1}, defOp->getNumOperands()));
-    // Alloc ops have an optional source operand.
-    if (defOp->getNumOperands() != 1)
-      return failure();
-    ops.push_back(defOp);
-    return findSingleChainToLoad(loop, defOp->getOperand(0), ops);
-  }
-
-  return failure();
-}
 
 static std::pair<Value, Value> postIncrementModulo(ImplicitLocOpBuilder &b,
                                                    Value index, Value phase,
@@ -134,6 +80,61 @@ static auto createInPartition(ImplicitLocOpBuilder &b, Partition &partition,
   return op;
 }
 
+//===----------------------------------------------------------------------===//
+// Load Pipelining
+//===----------------------------------------------------------------------===//
+
+// Pattern match a simple `tma_load -> ... -> tl.dot` single-user chain. This
+// ensures there are no extraneous users of the load or intermediate values and
+// that a valid partition schedule can be formed.
+static LogicalResult findSingleChainToLoad(scf::ForOp loop, Value value,
+                                           SmallVectorImpl<Operation *> &ops) {
+  Operation *defOp = value.getDefiningOp();
+  if (!defOp || !value.hasOneUse() || defOp->getParentOp() != loop)
+    return failure();
+
+  // This only works on TMA loads because they directly use the mbarrier
+  // mechanism. Since async groups are per-thread, commit groups cannot be used
+  // to synchronize across warp groups. We have to wait on the async group in
+  // the same partition as the loads and arrive an mbarrier to synchronize with
+  // the MMA partition, and then software pipeline the load partition.
+  //
+  // Triple-buffered example:
+  //
+  //   cp.async %a_ptrs[0], %a_buf[0]
+  //   cp.async %b_ptrs[0], %b_buf[0]
+  //   cp.async.commit_group
+  //
+  //   cp.async %a_ptrs[1], %a_buf[1]
+  //   cp.async %b_ptrs[1], %b_buf[1]
+  //   cp.async.commit_group
+  //
+  //   for i in range(2, N+2):
+  //     @i<N mbarrier.wait %empty_mbars[i%3]
+  //     @i<N cp.async %a_ptrs[i], %a_buf[i%3]
+  //     @i<N cp.async %b_ptrs[i], %b_buf[i%3]
+  //     @i<N cp.async.commit_group
+  //
+  //     cp.async.wait_group 2 # the i-2 load group is complete
+  //     mbarrier.arrive %load_mbars[(i-2)%3]
+  if (isa<DescriptorLoadOp, DescriptorGatherOp>(defOp)) {
+    ops.push_back(defOp);
+    return success();
+  }
+
+  // See through allocations and layout conversions.
+  if (isa<LocalAllocOp, MemDescTransOp>(defOp)) {
+    assert(llvm::is_contained({0, 1}, defOp->getNumOperands()));
+    // Alloc ops have an optional source operand.
+    if (defOp->getNumOperands() != 1)
+      return failure();
+    ops.push_back(defOp);
+    return findSingleChainToLoad(loop, defOp->getOperand(0), ops);
+  }
+
+  return failure();
+}
+
 static void lowerTMACopy(ImplicitLocOpBuilder &b, Partition &partition,
                          Operation *op, Value barrier, Value view) {
   Value truePred = b.create<arith::ConstantIntOp>(true, /*width=*/1);
@@ -151,6 +152,56 @@ static void lowerTMACopy(ImplicitLocOpBuilder &b, Partition &partition,
         barrier, view, truePred);
   }
 }
+
+namespace {
+struct PipelineableLoad {
+  PipelineableLoad(OpOperand &mmaUse, SmallVector<Operation *> useChain)
+      : mmaUse(&mmaUse), loadOp(useChain.pop_back_val()),
+        allocOp(cast<LocalAllocOp>(useChain.pop_back_val())),
+        viewOps(std::move(useChain)),
+        type(cast<RankedTensorType>(loadOp->getResult(0).getType())),
+        sharedEnc(getSharedEncoding(loadOp)) {}
+
+  Value allocate(scf::ForOp loop, unsigned numStages) const {
+    return createAlloc(loop, type, loadOp->getLoc(), sharedEnc, numStages);
+  }
+  unsigned getLoadSizeInBytes() const {
+    return type.getNumElements() * type.getElementTypeBitWidth() / 8;
+  }
+  void lowerLoadAndPropagate(ImplicitLocOpBuilder &b, Value alloc,
+                             Value barrier, Value loadIndex,
+                             Partition *loadPartition, scf::ForOp loop,
+                             SmallVectorImpl<Operation *> &loadUsers) && {
+    OpBuilder::InsertionGuard guard(b);
+    b.setInsertionPoint(loadOp);
+    Value view = createSingleBufferView(b, alloc, loadIndex);
+    lowerTMACopy(b, *loadPartition, loadOp, barrier, view);
+    replaceUsesAndPropagateType(b, allocOp, view);
+    allocOp->erase();
+    loadOp->erase();
+    (void)findSingleChainToLoad(loop, mmaUse->get(), loadUsers);
+  }
+
+  OpOperand *mmaUse;
+  Operation *loadOp;
+  LocalAllocOp allocOp;
+  SmallVector<Operation *> viewOps;
+  RankedTensorType type;
+  SharedEncodingTrait sharedEnc;
+};
+} // namespace
+
+static std::optional<PipelineableLoad>
+findPipelineableLoad(scf::ForOp loop, OpOperand &operand) {
+  SmallVector<Operation *> ops;
+  if (failed(findSingleChainToLoad(loop, operand.get(), ops)))
+    return std::nullopt;
+  return PipelineableLoad(operand, std::move(ops));
+}
+
+//===----------------------------------------------------------------------===//
+// specializeLoadMMADependencies
+//===----------------------------------------------------------------------===//
 
 static std::pair<Value, Operation *>
 getUserPrecondition(ImplicitLocOpBuilder &b, scf::ForOp loop, Operation *domOp,
@@ -197,26 +248,13 @@ LogicalResult triton::gpu::specializeLoadMMADependencies(scf::ForOp &loop,
         "failed to warp specialize: more than one `tt.dot` found in the loop");
   }
   ttng::MMAv5OpInterface mmaOp = ops.front();
-  auto dot = cast<DotOpInterface>(*mmaOp);
 
-  // Look for the loads that feed the A and B operands.
-  SmallVector<Operation *> aChain, bChain;
-  if (failed(findSingleChainToLoad(loop, dot.getA(), aChain)) ||
-      failed(findSingleChainToLoad(loop, dot.getB(), bChain))) {
-    return mlir::emitWarning(loop.getLoc(),
-                             "failed to warp specialize: could not find TMA "
-                             "loads for `tt.dot` operands");
-  }
-
-  SmallVector<Operation *> aScaleChain, bScaleChain;
-  auto scaledMMAOp = dyn_cast<ttng::TCGen5MMAScaledOp>(mmaOp.getOperation());
-  if (scaledMMAOp) {
-    if (failed(
-            findSingleChainToLoad(loop, scaledMMAOp.getAScale(), aScaleChain)))
-      aScaleChain.clear();
-    if (failed(
-            findSingleChainToLoad(loop, scaledMMAOp.getBScale(), bScaleChain)))
-      bScaleChain.clear();
+  // Look for the loads that feed into the MMA operands.
+  SmallVector<PipelineableLoad> loads;
+  for (OpOperand &operand : mmaOp->getOpOperands()) {
+    if (std::optional<PipelineableLoad> load =
+            findPipelineableLoad(loop, operand))
+      loads.push_back(std::move(*load));
   }
 
   ttng::TMEMAllocOp oldAccAlloc =
@@ -230,9 +268,9 @@ LogicalResult triton::gpu::specializeLoadMMADependencies(scf::ForOp &loop,
 
   // Determine if the MMA accumulator can be multibuffered.
   auto isLoadPipelineable = [&](Operation *op) {
-    return llvm::is_contained(llvm::to_vector(llvm::concat<Operation *>(
-                                  aChain, bChain, aScaleChain, bScaleChain)),
-                              op);
+    auto it = llvm::find_if(
+        loads, [&](const PipelineableLoad &load) { return load.loadOp == op; });
+    return it != loads.end();
   };
   bool accIsMultiBuffered =
       // All operand feeds are pipelineable.
@@ -311,10 +349,14 @@ LogicalResult triton::gpu::specializeLoadMMADependencies(scf::ForOp &loop,
     return {load, type, enc, alloc};
   };
 
-  auto [aLoad, aType, aEnc, aAlloc] = allocate(aChain);
-  auto [bLoad, bType, bEnc, bAlloc] = allocate(bChain);
-  auto [aScaleLoad, aScaleType, aScaleEnc, aScaleAlloc] = allocate(aScaleChain);
-  auto [bScaleLoad, bScaleType, bScaleEnc, bScaleAlloc] = allocate(bScaleChain);
+  SmallVector<Value> loadBuffers;
+  for (const PipelineableLoad &load : loads)
+    loadBuffers.push_back(load.allocate(loop, numStages));
+  if (loads.empty()) {
+    return mlir::emitWarning(loop.getLoc(),
+                             "failed to warp specialize: could not find TMA "
+                             "loads for `tt.dot` operands");
+  }
 
   // Share the same set of barriers for both.
   Value emptyBars = createBarrierAlloc(loop, numStages);
@@ -326,25 +368,15 @@ LogicalResult triton::gpu::specializeLoadMMADependencies(scf::ForOp &loop,
     b.create<ttng::ArriveBarrierOp>(emptyBar, 1);
   }
 
-  int loadSizeInBytes =
-      product(aType.getShape()) * aType.getElementTypeBitWidth() / 8 +
-      product(bType.getShape()) * bType.getElementTypeBitWidth() / 8;
-  if (aScaleLoad)
-    loadSizeInBytes += product(aScaleType.getShape()) *
-                       aScaleType.getElementTypeBitWidth() / 8;
-  if (bScaleLoad)
-    loadSizeInBytes += product(bScaleType.getShape()) *
-                       bScaleType.getElementTypeBitWidth() / 8;
+  unsigned loadSizeInBytes = 0;
+  for (const PipelineableLoad &load : loads)
+    loadSizeInBytes += load.getLoadSizeInBytes();
 
   // Insert before the group of loads.
-  SmallVector<Operation *> allLoads{aLoad, bLoad};
-  if (aScaleLoad)
-    allLoads.push_back(aScaleLoad);
-  if (bScaleLoad)
-    allLoads.push_back(bScaleLoad);
-  std::sort(allLoads.begin(), allLoads.end(),
-            [](Operation *a, Operation *b) { return a->isBeforeInBlock(b); });
-  b.setInsertionPoint(allLoads.front());
+  std::sort(loads.begin(), loads.end(), [](auto &lhs, auto &rhs) {
+    return lhs.loadOp->isBeforeInBlock(rhs.loadOp);
+  });
+  b.setInsertionPoint(loads.front().loadOp);
 
   // Wait for the buffer to be empty and the corresponding barrier to be
   // exhausted.
@@ -356,47 +388,21 @@ LogicalResult triton::gpu::specializeLoadMMADependencies(scf::ForOp &loop,
   createInPartition<ttng::BarrierExpectOp>(b, *loadPartition, curLoadBar,
                                            loadSizeInBytes, intCst(true, 1));
 
-  // Replace the loads with async copies.
-  auto lowerLoadAndPropagate = [&](Operation *load, Value alloc,
-                                   Value barrier) {
-    b.setInsertionPoint(load);
-    Value view = createSingleBufferView(b, alloc, loadIndex);
-    lowerTMACopy(b, *loadPartition, load, barrier, view);
-    replaceUsesAndPropagateType(b, *load->user_begin(), view);
-    load->user_begin()->erase();
-    load->erase();
-  };
-  lowerLoadAndPropagate(aLoad, aAlloc, curLoadBar);
-  lowerLoadAndPropagate(bLoad, bAlloc, curLoadBar);
-  if (aScaleLoad)
-    lowerLoadAndPropagate(aScaleLoad, aScaleAlloc, curLoadBar);
-  if (bScaleLoad)
-    lowerLoadAndPropagate(bScaleLoad, bScaleAlloc, curLoadBar);
-
-  // Place the remaining users in the MMA partition. Re-acquire the use chain
-  // because some ops were invalidated by `replaceUsesAndPropagateType`.
-  aChain.clear();
-  bChain.clear();
-  aChain.push_back(mmaOp);
-  (void)findSingleChainToLoad(loop, dot.getA(), aChain);
-  (void)findSingleChainToLoad(loop, dot.getB(), bChain);
-  if (aScaleLoad) {
-    aScaleChain.clear();
-    (void)findSingleChainToLoad(loop, scaledMMAOp.getAScale(), aScaleChain);
-  }
-  if (bScaleLoad) {
-    bScaleChain.clear();
-    (void)findSingleChainToLoad(loop, scaledMMAOp.getBScale(), bScaleChain);
+  // Replace the loads with async copies and place the remaining users in the
+  // MMA partition. Re-acquire the use chain because some ops were invalidated
+  // by `replaceUsesAndPropagateType`.
+  SmallVector<Operation *> loadUsers{mmaOp};
+  for (auto [load, alloc] : llvm::zip(loads, loadBuffers)) {
+    std::move(load).lowerLoadAndPropagate(b, alloc, curLoadBar, loadIndex,
+                                          loadPartition, loop, loadUsers);
   }
 
   // Place users in the MMA partition.
-  auto allUsers = llvm::to_vector(
-      llvm::concat<Operation *>(aChain, bChain, aScaleChain, bScaleChain));
-  for (Operation *user : allUsers)
+  for (Operation *user : loadUsers)
     mmaPartition->insert(user);
 
   // Insert the load wait before the first user.
-  Operation *minOp = findNearestCommonDominator(allUsers, domInfo);
+  Operation *minOp = findNearestCommonDominator(loadUsers, domInfo);
   b.setInsertionPoint(minOp);
   createInPartition<ttng::WaitBarrierOp>(b, *mmaPartition, curLoadBar,
                                          loadPhase);

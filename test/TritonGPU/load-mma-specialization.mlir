@@ -763,4 +763,51 @@ tt.func @matmul_tma_acc_with_conditional_def_and_use_no_multibuf_flag(
   tt.return
 }
 
+// CHECK-LABEL: @warp_specialize_only_rhs_is_loaded
+tt.func @warp_specialize_only_rhs_is_loaded(
+  %k_tiles: i32,
+  %off_m: i32,
+  %off_n: i32,
+  %a_desc: !tt.tensordesc<tensor<128x64xf16, #shared>>,
+  %b_desc: !tt.tensordesc<tensor<128x64xf16, #shared>>
+) {
+  %true = arith.constant true
+  %c0_i32 = arith.constant 0 : i32
+  %c1_i32 = arith.constant 1 : i32
+
+  %BLOCK_K = arith.constant 64 : i32
+  %zero = arith.constant dense<0.0> : tensor<128x128xf32, #acc_layout>
+
+  %a_reg = tt.descriptor_load %a_desc[%c0_i32, %c0_i32] : !tt.tensordesc<tensor<128x64xf16, #shared>> -> tensor<128x64xf16, #oper_layout>
+  %a_shared = ttg.local_alloc %a_reg : (tensor<128x64xf16, #oper_layout>) -> !ttg.memdesc<128x64xf16, #shared, #smem>
+
+  // CHECK-COUNT-1: ttg.local_alloc : () -> !ttg.memdesc<2x128x64xf16
+  // CHECK-NOT: ttg.local_alloc : () -> !ttg.memdesc<2x128x64xf16
+
+  // CHECK: scf.for
+  %result = scf.for %k = %c0_i32 to %k_tiles step %c1_i32
+      iter_args(%acc = %zero) -> tensor<128x128xf32, #acc_layout> : i32 {
+    %off_k = arith.muli %k, %BLOCK_K : i32
+
+    // CHECK: wait_barrier
+    // CHECK: barrier_expect %{{[0-9]+}}, 16384
+    // CHECK: async_tma_copy_global_to_local
+    // CHECK-NEXT: wait_barrier
+    %b_reg = tt.descriptor_load %b_desc[%off_n, %off_k] : !tt.tensordesc<tensor<128x64xf16, #shared>> -> tensor<128x64xf16, #oper_layout>
+    %b_shared = ttg.local_alloc %b_reg : (tensor<128x64xf16, #oper_layout>) -> !ttg.memdesc<128x64xf16, #shared, #smem>
+    // CHECK-NEXT: memdesc_trans
+    %b_T_shared = ttg.memdesc_trans %b_shared {order = array<i32: 1, 0>} : !ttg.memdesc<128x64xf16, #shared, #smem> -> !ttg.memdesc<64x128xf16, #shared_trans, #smem>
+
+    %c_tmem, %c_tok = ttng.tmem_alloc %acc : (tensor<128x128xf32, #acc_layout>) -> (!ttg.memdesc<128x128xf32, #acc_tmem, #ttng.tensor_memory, mutable>, !ttg.async.token)
+    %mma_tok = ttng.tc_gen5_mma %a_shared, %b_T_shared, %c_tmem[%c_tok], %true, %true : !ttg.memdesc<128x64xf16, #shared, #smem>, !ttg.memdesc<64x128xf16, #shared_trans, #smem>, !ttg.memdesc<128x128xf32, #acc_tmem, #ttng.tensor_memory, mutable>
+    %c, %load_tok = ttng.tmem_load %c_tmem[%mma_tok] : !ttg.memdesc<128x128xf32, #acc_tmem, #ttng.tensor_memory, mutable> -> tensor<128x128xf32, #acc_layout>
+
+    scf.yield %c : tensor<128x128xf32, #acc_layout>
+
+  } {tt.warp_specialize, tt.num_stages = 2 : i32}
+
+  "use"(%result) : (tensor<128x128xf32, #acc_layout>) -> ()
+  tt.return
+}
+
 }
