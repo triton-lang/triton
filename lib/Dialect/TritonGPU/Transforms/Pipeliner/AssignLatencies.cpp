@@ -25,15 +25,15 @@ namespace gpu {
 namespace {
 
 // Return true if the preconditions for pipelining the loop are met.
-bool preCondition(scf::ForOp forOp) {
+PipelineStatus collectPrecondition(scf::ForOp forOp) {
   // Skip loop with distance > 1 for now.
   // TODO: relax the constraint in the expander.
   if (loopHasDistGreaterThanOne(forOp))
-    return false;
+    return std::make_optional(PipelineFailureReason::DistanceGreaterThanOne);
   // Don't pipeline outer loops.
   if (isOuterLoop(forOp))
-    return false;
-  return true;
+    return std::make_optional(PipelineFailureReason::OuterLoop);
+  return std::nullopt;
 }
 
 bool hasLatenciesAssigned(scf::ForOp forOp) {

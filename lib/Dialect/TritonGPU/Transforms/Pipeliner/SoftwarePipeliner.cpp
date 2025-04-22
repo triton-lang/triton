@@ -89,7 +89,8 @@ struct PipelinePass : public impl::TritonGPUPipelineBase<PipelinePass> {
     // numStages) to the them, trying to populate the allowed stages. This
     // step will be at some point extracted to separate pass that will be run
     // only for loops missing the latency information.
-    auto assignedLatency = assignLatencies(moduleOp, numStages);
+    auto assignedLatency =
+        assignLatencies(moduleOp, numStages, loopPipelineStatus);
 
     if (dumpIntermediateSteps) {
       llvm::dbgs() << "// -----// SoftwarePipeliner internal IR Dump After: "
@@ -98,7 +99,7 @@ struct PipelinePass : public impl::TritonGPUPipelineBase<PipelinePass> {
     }
 
     if (!assignedLatency) {
-
+      // no latency assigned. we can print some remarks and bail out.
       return;
     }
 
