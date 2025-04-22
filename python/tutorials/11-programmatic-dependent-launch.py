@@ -1,7 +1,10 @@
 """
 Programmatic Dependent Launch
 =====================
-This script demonstrates the use of programmatic dependent launch ontop of the vector-add example using Triton.
+This script demonstrates the use of programmatic dependent launch (PDL) ontop of the vector-add example using Triton.
+
+For CUDA reference on programmatic dependent launch see https://docs.nvidia.com/cuda/cuda-c-programming-guide/index.html#programmatic-dependent-launch-and-synchronization.
+For PTX reference on programmatic dependent launch see https://docs.nvidia.com/cuda/parallel-thread-execution/index.html#parallel-synchronization-and-communication-instructions-griddepcontrol.
 
 .. code-block:: bash
     python 11-programmatic-dependent-launch.py
@@ -35,17 +38,18 @@ def add_kernel(x_ptr,  #
     mask = offsets < n_elements
     if USE_GDC:
         # GDC wait waits for ALL programs in the the prior kernel to complete before continuing.
-        # This ensures any memory operations happen before the wait in program order, 
-        # e.g. if the prior kernel writes to a or b the new values will be visible.
+        # This ensures any memory operations happen before the wait in program order,
+        # e.g. if the prior kernel writes to x or y the new values will be visible.
         tl.extra.cuda.gdc_wait()
 
     x = tl.load(x_ptr + offsets, mask=mask)
     y = tl.load(y_ptr + offsets, mask=mask)
     if USE_GDC:
-        # GDC launch dependents is used to launch dependent kernels.
-        # Once GDC launch has been issued at least once on all active hardware SMs, 
-        # it is possible for the next kernel to begin if there are enough resources.
-        # Note this provides no additional memory-ordering guaruntees, unlike `gdc_wait`.
+        # GDC launch dependents hints the runtime system to launch dependent kernels.
+        # These dependent kernels must also be launched with PDL enabled.
+        # Once GDC launch has been issued by at least one thread on ALL programs or
+        # programs have finished, the dependent grid can begin if there are enough resources.
+        # Note: this by itself provides no additional memory-ordering guarentees, unlike `gdc_wait`
         tl.extra.cuda.gdc_launch_dependents()
     output = x + y
     tl.store(output_ptr + offsets, output, mask=mask)
