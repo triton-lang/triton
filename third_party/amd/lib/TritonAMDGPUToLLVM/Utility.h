@@ -62,7 +62,8 @@ getCtrlBitsForCacheModifierOnTarget(triton::CacheModifier, bool,
 int32_t getCtrlBitsForBufferAtomicsOnGFX_942_950(bool setSC0, bool setSC1,
                                                  bool setNT);
 
-Value cvtFp32ToFp16RTNE(Location loc, RewriterBase &rewriter, const Value &v);
+Value cvtFp32ToFp16RTNE_oneValue(Location loc, RewriterBase &rewriter,
+                                 const Value &v);
 
 // Return a tensor of pointers with the same type of `basePtr` and the same
 // shape of `offset`

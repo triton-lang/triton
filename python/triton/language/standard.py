@@ -50,10 +50,14 @@ def sigmoid(x):
 @core._tensor_member_fn
 @jit
 @math._add_math_1arg_docstr("softmax")
-def softmax(x, ieee_rounding=False):
-    z = x - max(x, 0)
+def softmax(x, dim=None, keep_dims=False, ieee_rounding=False):
+    if dim is None:
+        _dim: core.constexpr = 0
+    else:
+        _dim: core.constexpr = dim
+    z = x - max(x, _dim, keep_dims=keep_dims)
     num = math.exp(z)
-    den = sum(num, 0)
+    den = sum(num, _dim, keep_dims=keep_dims)
     return math.fdiv(num, den, ieee_rounding)
 
 
@@ -300,6 +304,22 @@ def _xor_combine(a, b):
 def xor_sum(input, axis=None, keep_dims=False):
     core.static_assert(input.type.scalar.is_int(), "xor_sum only supported for integers")
     return core.reduce(input, axis, _xor_combine, keep_dims=keep_dims)
+
+
+# or reduction
+
+
+@jit
+def _or_combine(x, y):
+    return x | y
+
+
+@core._tensor_member_fn
+@jit
+@core._add_reduction_docstr("reduce_of")
+def reduce_or(input, axis, keep_dims=False):
+    core.static_assert(input.type.scalar.is_int(), "reduce_of only supported for integers")
+    return core.reduce(input, axis, _or_combine, keep_dims=keep_dims)
 
 
 # cumsum
