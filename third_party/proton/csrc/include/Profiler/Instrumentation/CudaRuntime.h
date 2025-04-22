@@ -8,7 +8,7 @@ namespace proton {
 class CudaRuntime : public Runtime {
 public:
   CudaRuntime() : Runtime(DeviceType::CUDA) {}
-  ~CudaRuntime() override = default;
+  ~CudaRuntime() = default;
 
   void allocateHostBuffer(uint8_t **buffer, size_t size) override;
   void freeHostBuffer(uint8_t *buffer) override;

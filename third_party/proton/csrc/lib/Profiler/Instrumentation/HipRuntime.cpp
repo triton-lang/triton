@@ -1,4 +1,4 @@
-#include "Instrumentation/HipRuntime.h"
+#include "Profiler/Instrumentation/HipRuntime.h"
 
 namespace proton {
 

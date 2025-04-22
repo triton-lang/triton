@@ -8,7 +8,7 @@ namespace proton {
 class HipRuntime : public Runtime {
 public:
   HipRuntime() : Runtime(DeviceType::HIP) {}
-  ~HipRuntime() override = default;
+  ~HipRuntime() = default;
 
   void allocateHostBuffer(uint8_t **buffer, size_t size) override;
   void freeHostBuffer(uint8_t *buffer) override;

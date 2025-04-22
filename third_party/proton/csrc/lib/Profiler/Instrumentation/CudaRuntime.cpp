@@ -1,4 +1,4 @@
-#include "Instrumentation/CudaRuntime.h"
+#include "Profiler/Instrumentation/CudaRuntime.h"
 
 #include "Driver/GPU/CudaApi.h"
 namespace proton {
@@ -23,7 +23,7 @@ void CudaRuntime::freeHostBuffer(uint8_t *buffer) {
 
 uint64_t CudaRuntime::getDevice() {
   CUdevice device;
-  cuda::cuCtxGetDevice<true>(&device);
+  cuda::ctxGetDevice<true>(&device);
   return static_cast<uint64_t>(device);
 }
 
