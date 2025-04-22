@@ -2,10 +2,10 @@
 #define PROTON_PROFILER_INSTRUMENTATION_PROFILER_H_
 
 #include "Context/Context.h"
-#include "Profiler/Profiler.h"
-#include "Utility/Singleton.h"
 #include "Driver/Device.h"
+#include "Profiler/Profiler.h"
 #include "Runtime.h"
+#include "Utility/Singleton.h"
 
 namespace proton {
 
@@ -42,7 +42,6 @@ private:
   // functionId -> scopeId -> functionName
   std::map<uint64_t, std::vector<std::pair<size_t, std::string>>>
       functionScopeIds;
-
 };
 
 } // namespace proton

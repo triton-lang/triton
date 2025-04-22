@@ -31,8 +31,8 @@ DEFINE_DISPATCH(ExternLibCuda, deviceGet, cuDeviceGet, CUdevice *, int)
 DEFINE_DISPATCH(ExternLibCuda, deviceGetAttribute, cuDeviceGetAttribute, int *,
                 CUdevice_attribute, CUdevice)
 
-DEFINE_DISPATCH(ExternLibCuda, streamCreateWithPriority, cuStreamCreateWithPriority,
-                CUstream *, unsigned int, int)
+DEFINE_DISPATCH(ExternLibCuda, streamCreateWithPriority,
+                cuStreamCreateWithPriority, CUstream *, unsigned int, int)
 
 DEFINE_DISPATCH(ExternLibCuda, streamSynchronize, cuStreamSynchronize, CUstream)
 
@@ -42,7 +42,6 @@ DEFINE_DISPATCH(ExternLibCuda, memcpyAsync, cuMemcpyAsync, void *, const void *,
 DEFINE_DISPATCH(ExternLibCuda, memAllocHost, cuMemAllocHost, void **, size_t)
 
 DEFINE_DISPATCH(ExternLibCuda, memFreeHost, cuMemFreeHost, void *)
-
 
 Device getDevice(uint64_t index) {
   CUdevice device;
