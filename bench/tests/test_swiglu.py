@@ -24,7 +24,6 @@ def alloc_rand(shape, device, dtype, requires_grad=True):
 # ---------------
 
 
-
 @pytest.mark.parametrize("M, N", [(1311, 4352)])
 @pytest.mark.parametrize("limit", [1e-2, 10])
 def test_op(M, N, limit, alpha=0.5):
