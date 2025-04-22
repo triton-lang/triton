@@ -3,6 +3,7 @@
 #include "Driver/GPU/CudaApi.h"
 #include "Profiler/Instrumentation/CudaRuntime.h"
 #include "Profiler/Instrumentation/HipRuntime.h"
+#include "Utility/String.h"
 #include <memory>
 #include <stdexcept>
 
@@ -33,9 +34,9 @@ InstrumentationProfiler::setMode(const std::vector<std::string> &mode) {
   if (mode.empty()) {
     throw std::runtime_error("Mode cannot be empty");
   }
-  if (mode[0] == DeviceTraits<DeviceType::CUDA>::name) {
+  if (toLower(mode[0]) == toLower(DeviceTraits<DeviceType::CUDA>::name)) {
     runtime = std::make_unique<CudaRuntime>();
-  } else if (mode[0] == DeviceTraits<DeviceType::HIP>::name) {
+  } else if (toLower(mode[0]) == toLower(DeviceTraits<DeviceType::HIP>::name)) {
     runtime = std::make_unique<HipRuntime>();
   } else {
     throw std::runtime_error("Unknown device type: " + mode[0]);
