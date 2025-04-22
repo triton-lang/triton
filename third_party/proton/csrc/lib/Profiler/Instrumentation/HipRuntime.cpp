@@ -2,11 +2,13 @@
 
 namespace proton {
 
-void HipRuntime::allocateHostBuffer(uint8_t **buffer) {}
+void HipRuntime::allocateHostBuffer(uint8_t **buffer, size_t size) {}
 
 void HipRuntime::freeHostBuffer(uint8_t *buffer) {}
 
-void *HipRuntime::getPriorityStream() {}
+uint64_t HipRuntime::getDevice() { return 0; }
+
+void *HipRuntime::getPriorityStream() { return nullptr; }
 
 void HipRuntime::processHostBuffer(
     uint8_t *hostBuffer, size_t hostBufferSize, const uint8_t *deviceBuffer,

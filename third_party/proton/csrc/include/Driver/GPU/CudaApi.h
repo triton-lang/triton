@@ -14,7 +14,7 @@ template <bool CheckSuccess> CUresult ctxSynchronize();
 
 template <bool CheckSuccess> CUresult ctxGetCurrent(CUcontext *pctx);
 
-template <bool CheckSuccess> CUresult cuCtxGetDevice(CUdevice *device);
+template <bool CheckSuccess> CUresult ctxGetDevice(CUdevice *device);
 
 template <bool CheckSuccess>
 CUresult deviceGetAttribute(int *pi, CUdevice_attribute attrib, CUdevice dev);

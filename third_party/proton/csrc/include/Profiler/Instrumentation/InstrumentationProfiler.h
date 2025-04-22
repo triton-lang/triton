@@ -5,6 +5,7 @@
 #include "Profiler/Profiler.h"
 #include "Utility/Singleton.h"
 #include "Driver/Device.h"
+#include "Runtime.h"
 
 namespace proton {
 
@@ -13,7 +14,7 @@ class InstrumentationProfiler : public Profiler,
                                 public Singleton<InstrumentationProfiler> {
 public:
   InstrumentationProfiler() = default;
-  virtual ~InstrumentationProfiler() = default;
+  virtual ~InstrumentationProfiler();
 
   InstrumentationProfiler *setMode(const std::vector<std::string> &mode);
 
@@ -33,7 +34,7 @@ protected:
                           size_t size) override;
 
 private:
-  DeviceType deviceType{T};
+  std::unique_ptr<Runtime> runtime;
   // device -> deviceStream
   std::map<void *, void *> deviceStreams;
   std::string mode;

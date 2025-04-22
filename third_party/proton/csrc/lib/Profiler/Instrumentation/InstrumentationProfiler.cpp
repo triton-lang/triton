@@ -1,69 +1,19 @@
 #include "Profiler/Instrumentation/InstrumentationProfiler.h"
 
-#include <memory>
 #include "Driver/GPU/CudaApi.h"
+#include "Profiler/Instrumentation/CudaRuntime.h"
+#include "Profiler/Instrumentation/HipRuntime.h"
+#include <memory>
+
 namespace proton {
 
 constexpr size_t HOST_BUFFER_SIZE = 64 * 1024 * 1024;
-namespace {
 
-void allocateHostBuffer(uint8_t **buffer, DeviceType deviceType) {
-  if (deviceType == DeviceType::CUDA) {
-    cuda::memAllocHost<true>(reinterpret_cast<void **>(buffer), HOST_BUFFER_SIZE);
-  } else {
-    throw std::runtime_error("Unsupported device type for host buffer allocation");
+InstrumentationProfiler::~InstrumentationProfiler() {
+  if (hostBuffer != nullptr) {
+    runtime->freeHostBuffer(hostBuffer);
   }
 }
-
-void freeHostBuffer(uint8_t *buffer, DeviceType deviceType) {
-  if (deviceType == DeviceType::CUDA) {
-    cuda::memFreeHost<true>(buffer);
-  } else {
-    throw std::runtime_error("Unsupported device type for host buffer deallocation");
-  }
-}
-
-void *getPriorityStream(std::map<void *, void *> &deviceStreams,
-                        DeviceType deviceType) {
-  if (deviceType == DeviceType::CUDA) {
-    CUdevice device;
-    cuda::cuCtxGetDevice<true>(&device);
-    if (deviceStreams.find(reinterpret_cast<void *>(device)) !=
-        deviceStreams.end()) {
-      return deviceStreams[reinterpret_cast<void *>(device)];
-    }
-    CUstream stream;
-    cuda::streamCreateWithPriority<true>(&stream, 0, 0);
-    deviceStreams[reinterpret_cast<void *>(device)] =
-        reinterpret_cast<void *>(stream);
-    return reinterpret_cast<void *>(stream);
-  } else {
-    throw std::runtime_error("Unsupported device type for stream creation");
-  }
-}
-
-void processHostBuffer(uint8_t *hostBuffer, size_t hostBufferSize,
-                      const uint8_t *deviceBuffer, size_t deviceBufferSize,
-                      DeviceType deviceType, void *stream,
-                      std::function<void(uint8_t *, size_t)> callback) {
-  int64_t chunkSize = std::min(hostBufferSize, deviceBufferSize);
-  int64_t sizeLeftOnDevice = deviceBufferSize;
-  while (chunkSize > 0) {
-    if (deviceType == DeviceType::CUDA) {
-      cuda::memcpyAsync<true>(reinterpret_cast<void *>(hostBuffer),
-                              reinterpret_cast<const void *>(deviceBuffer),
-                              chunkSize, reinterpret_cast<CUstream>(stream));
-      cuda::streamSynchronize<true>(reinterpret_cast<CUstream>(stream));
-    } else {
-      throw std::runtime_error("Unsupported device type for memory copy");
-    }
-    callback(hostBuffer, chunkSize);
-    sizeLeftOnDevice -= chunkSize;
-    chunkSize = std::min(static_cast<int64_t>(hostBufferSize), sizeLeftOnDevice);
-  }
-}
-}
-
 
 void InstrumentationProfiler::doStart() {
   // Start the instrumentation profiler.
@@ -83,12 +33,13 @@ InstrumentationProfiler::setMode(const std::vector<std::string> &mode) {
     throw std::runtime_error("Mode cannot be empty");
   }
   if (mode[0] == DeviceTraits<DeviceType::CUDA>::name) {
-    deviceType = DeviceType::CUDA;
+    runtime = std::make_unique<CudaRuntime>();
   } else if (mode[0] == DeviceTraits<DeviceType::HIP>::name) {
-    deviceType = DeviceType::HIP;
+    runtime = std::make_unique<HipRuntime>();
   } else {
     throw std::runtime_error("Unknown device type: " + mode[0]);
   }
+  return this;
 }
 
 void InstrumentationProfiler::initScopeIds(
@@ -103,7 +54,7 @@ void InstrumentationProfiler::enterInstrumentedOp(uint64_t functionId,
                                                   size_t size) {
   // Enter an instrumented operation.
   if (hostBuffer == nullptr) {
-    allocateHostBuffer(&hostBuffer, deviceType);
+    runtime->allocateHostBuffer(&hostBuffer, HOST_BUFFER_SIZE);
   }
 }
 
@@ -111,15 +62,18 @@ void InstrumentationProfiler::exitInstrumentedOp(uint64_t functionId,
                                                  const uint8_t *buffer,
                                                  size_t size) {
   // Exit an instrumented operation.
-  auto stream = getPriorityStream(deviceStreams, deviceType);
-  if (stream == nullptr) {
-    throw std::runtime_error("Failed to get priority stream");
+  uint64_t device = runtime->getDevice();
+  void *&stream = deviceStreams[reinterpret_cast<void *>(device)];
+  if (!stream) {
+    stream = runtime->getPriorityStream();
   }
-  processHostBuffer(hostBuffer, HOST_BUFFER_SIZE, buffer, size, deviceType,
-                    stream, [this](uint8_t *data, size_t size) {
-                      // Process the data in the host buffer.
-                      // This is where you would implement your callback logic.
-                    });
+  runtime->processHostBuffer(hostBuffer, HOST_BUFFER_SIZE, buffer, size,
+                             deviceStreams[reinterpret_cast<void *>(device)],
+                             [this](uint8_t *data, size_t size) {
+                               // Process the data in the host buffer.
+                               // This is where you would implement your
+                               // callback logic.
+                             });
 }
 
 } // namespace proton
