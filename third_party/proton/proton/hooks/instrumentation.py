@@ -63,7 +63,7 @@ def _interpret_mode(mode_obj: Union[str, mode.InstrumentationMode]) -> mode.Inst
     if isinstance(mode_obj, mode.InstrumentationMode):
         return mode_obj
     elif not mode_obj:
-        mode_obj = "default" 
+        mode_obj = "default"
 
     parts = mode_obj.split(":")
     mode_name = parts[0]
