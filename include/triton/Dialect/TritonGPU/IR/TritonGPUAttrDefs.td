@@ -335,9 +335,8 @@ When vec=2, elements are swizzled in pairs of 2.  In other words, the element at
         int mmaStride = 8;
         int vec = 4 * kWidth;
         // needsTrans is equiv. to flipping the opIdx
-        if (needTrans) {
+        if (needTrans)
           std::swap(vec, mmaStride);
-        }
         assert(opIdx == 0 || opIdx == 1);
         int rank = order.size();
         int kDim = opIdx == 0 ? rank-1 : rank-2;
