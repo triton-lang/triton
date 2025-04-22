@@ -4,6 +4,7 @@
 #include "Profiler/Instrumentation/CudaRuntime.h"
 #include "Profiler/Instrumentation/HipRuntime.h"
 #include <memory>
+#include <stdexcept>
 
 namespace proton {
 
