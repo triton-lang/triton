@@ -1286,7 +1286,8 @@ class tensor_descriptor_base_type(base_type):
         return value, cursor + 1
 
     def _flatten_ir_types(self, builder: ir.builder, out: List[ir.type]) -> None:
-        out.append(builder.create_tensor_descriptor_type(self.block_type.to_ir(builder)))
+        is_signed = self.block_type.element_ty.is_int_signed()
+        out.append(builder.create_tensor_descriptor_type(self.block_type.to_ir(builder), is_signed))
 
     def __str__(self) -> str:
         # ex. "tensor_descriptor<float32[16, 32]>"
@@ -1353,6 +1354,30 @@ class tensor_descriptor_base(base_value):
         :note: Offset must be a multiple of 16-bytes
         """
         return semantic.descriptor_store(self, value, offsets, _builder)
+
+    @builtin
+    def atomic_add(self, offsets: Sequence[constexpr | tensor], value: tensor, _builder=None) -> tensor:
+        return semantic.descriptor_atomic_add(self, value, offsets, _builder)
+
+    @builtin
+    def atomic_min(self, offsets: Sequence[constexpr | tensor], value: tensor, _builder=None) -> tensor:
+        return semantic.descriptor_atomic_min(self, value, offsets, _builder)
+
+    @builtin
+    def atomic_max(self, offsets: Sequence[constexpr | tensor], value: tensor, _builder=None) -> tensor:
+        return semantic.descriptor_atomic_max(self, value, offsets, _builder)
+
+    @builtin
+    def atomic_and(self, offsets: Sequence[constexpr | tensor], value: tensor, _builder=None) -> tensor:
+        return semantic.descriptor_atomic_and(self, value, offsets, _builder)
+
+    @builtin
+    def atomic_or(self, offsets: Sequence[constexpr | tensor], value: tensor, _builder=None) -> tensor:
+        return semantic.descriptor_atomic_or(self, value, offsets, _builder)
+
+    @builtin
+    def atomic_xor(self, offsets: Sequence[constexpr | tensor], value: tensor, _builder=None) -> tensor:
+        return semantic.descriptor_atomic_xor(self, value, offsets, _builder)
 
     @builtin
     def gather(self, *args, _builder=None) -> tensor:

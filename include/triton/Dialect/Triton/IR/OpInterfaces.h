@@ -2,6 +2,7 @@
 #define TRITON_IR_OP_INTERFACES_H_
 
 #include "mlir/IR/OpDefinition.h"
+#include "triton/Dialect/Triton/IR/Types.h"
 
 namespace mlir {
 
@@ -12,6 +13,8 @@ namespace impl {
 LogicalResult verifyTransposeOpInterface(Operation *op);
 
 LogicalResult verifyDotOpInterface(Operation *op);
+
+LogicalResult verifyDescriptorStoreLikeOpInterface(Operation *op);
 
 } // namespace impl
 

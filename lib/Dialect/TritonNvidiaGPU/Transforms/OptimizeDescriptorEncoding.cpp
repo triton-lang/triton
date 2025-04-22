@@ -101,7 +101,7 @@ std::optional<UseInfo> getUseInfo(Operation *op) {
     info.shape = expandToRank(shape, rank);
     return info;
   }
-  if (auto store = dyn_cast<tt::DescriptorStoreOp>(op)) {
+  if (auto store = dyn_cast<tt::DescriptorStoreLikeOpInterface>(op)) {
     info.descriptor = store.getDesc();
     auto encoding = store.getSrc().getType().getEncoding();
     info.ctaLayout = ttg::getCTALayout(encoding);

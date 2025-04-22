@@ -102,6 +102,28 @@ def TT_TensorDescType : TritonTypeDef<"TensorDesc", "tensordesc", []> {
 
   let parameters = (ins "RankedTensorType":$blockType);
   let assemblyFormat = "`<` $blockType `>`";
+
+  let builders = [
+    TypeBuilder<(ins "RankedTensorType":$blockType, "bool":$isSigned), [{
+      if (isSigned) {
+        auto intTy = llvm::cast<IntegerType>(blockType.getElementType());
+        auto elemTy = IntegerType::get($_ctxt, intTy.getWidth(), IntegerType::Signed);
+        blockType = RankedTensorType::get(blockType.getShape(), elemTy);
+      }
+      return Base::get($_ctxt, blockType);
+    }]>,
+  ];
+  let extraClassDeclaration = [{
+    RankedTensorType getSignlessBlockType() const {
+      auto resTy = getBlockType();
+      if (resTy.getElementType().isSignedInteger()) {
+        auto width = resTy.getElementTypeBitWidth();
+        auto signlessTy = IntegerType::get(getContext(), width);
+        resTy = RankedTensorType::get(resTy.getShape(), signlessTy);
+      }
+      return resTy;
+    }
+  }];
 }
 
 #endif

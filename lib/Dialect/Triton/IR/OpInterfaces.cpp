@@ -2,6 +2,7 @@
 #include "mlir/IR/Diagnostics.h"
 #include "mlir/Support/LogicalResult.h"
 
+#include "./Verify.h"
 #include "triton/Dialect/Triton/IR/OpInterfaces.h"
 #include "triton/Dialect/Triton/IR/Types.h"
 
@@ -70,6 +71,13 @@ LogicalResult verifyDotOpInterface(Operation *op) {
         "dimension of the first operand and the last dimension of the "
         "second ");
   return success();
+}
+
+LogicalResult verifyDescriptorStoreLikeOpInterface(Operation *op) {
+  auto storeLike = cast<DescriptorStoreLikeOpInterface>(op);
+  auto srcTy = storeLike.getSrc().getType();
+  auto descTy = storeLike.getDesc().getType();
+  return triton::verifyDescriptorLoadStoreType(op, descTy, srcTy);
 }
 
 } // namespace impl

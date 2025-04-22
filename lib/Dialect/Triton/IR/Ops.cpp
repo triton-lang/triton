@@ -969,12 +969,18 @@ OpFoldResult AdvanceOp::fold(FoldAdaptor adaptor) {
 //-- MakeTensorDescOp --
 void MakeTensorDescOp::build(OpBuilder &builder, OperationState &state,
                              Value base, ValueRange shape, ValueRange strides,
-                             ArrayRef<int32_t> blockShape) {
+                             ArrayRef<int32_t> blockShape,
+                             bool isSignedInteger) {
   auto ptrTy = dyn_cast<triton::PointerType>(base.getType());
   if (!ptrTy) {
     llvm::report_fatal_error("Expected pointer type");
   }
   auto elemTy = ptrTy.getPointeeType();
+  if (isSignedInteger) {
+    auto intTy = cast<IntegerType>(elemTy);
+    auto ctx = builder.getContext();
+    elemTy = IntegerType::get(ctx, intTy.getWidth(), IntegerType::Signed);
+  }
 
   SmallVector<int64_t> blockShape64(blockShape);
   auto blockTy = RankedTensorType::get(blockShape64, elemTy);
@@ -1344,10 +1350,9 @@ LogicalResult DescriptorScatterOp::verify() {
 }
 
 // -- DescriptorLoadOp --
-static LogicalResult verifyDescriptorLoadStoreType(Operation *op,
-                                                   TensorDescType desc,
-                                                   RankedTensorType tensor) {
-  RankedTensorType block = desc.getBlockType();
+LogicalResult verifyDescriptorLoadStoreType(Operation *op, TensorDescType desc,
+                                            RankedTensorType tensor) {
+  RankedTensorType block = desc.getSignlessBlockType();
   ArrayRef<int64_t> blockShape = block.getShape();
   ArrayRef<int64_t> tensorShape = tensor.getShape();
   if (blockShape.size() > tensorShape.size()) {
@@ -1368,12 +1373,6 @@ static LogicalResult verifyDescriptorLoadStoreType(Operation *op,
 
 LogicalResult DescriptorLoadOp::verify() {
   return verifyDescriptorLoadStoreType(*this, getDesc().getType(), getType());
-}
-
-// -- DescriptorStoreOp --
-LogicalResult DescriptorStoreOp::verify() {
-  return verifyDescriptorLoadStoreType(*this, getDesc().getType(),
-                                       getSrc().getType());
 }
 
 // -- ExperimentalTensormapCreateOp --
