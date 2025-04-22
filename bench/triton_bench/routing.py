@@ -13,10 +13,9 @@ def _routing_compute_expt_offs(ExpertHist, FinalExpertOffs, hist_size,  # histog
         offs_n = i * BLOCK_N + tl.arange(0, BLOCK_N)
         mask_n = offs_n < hist_size
         hist2 = tl.load(ExpertHist + offs_n, mask=mask_n)
-        tok_starts = tl.cumsum(hist2, 0) + x
+        tok_starts = tl.cumsum(hist2, 0) - hist2 + x
         x += tl.sum(hist2, 0)
-        tl.store(FinalExpertOffs, 0)
-        tl.store(FinalExpertOffs + 1 + offs_n, tok_starts, mask=mask_n)
+        tl.store(FinalExpertOffs + offs_n, tok_starts, mask=mask_n)
         offs_n += BLOCK_N
 
 
@@ -52,51 +51,33 @@ def _keyed_add(x, y):
 
 
 @triton.jit
-def _count_previous(x):
-    """
-    Input  x : uint16[..., N]
-    Output y : uint32[..., N]
-    semantics : y[..., i] = sum_j((x[..., j] == x[..., i]) & (j < i))
-    credits: @apgoucher
-    """
-
-    BLOCK_N: tl.constexpr = x.shape[-1]  # summation axis
-    BATCHES: tl.constexpr = x.numel // BLOCK_N  # number of batches
-
-    # reduce to two-dimensional case:
-    y = tl.reshape(x, [BATCHES, BLOCK_N]).to(tl.uint32)
-
-    tl.static_assert(BLOCK_N <= 32768, "compute_run_lengths requires axis to have length <= 32768")
-
-    # sort (expert, position) ordered pairs to perform an argsort:
-    kv_pairs = ((y << 16) | tl.arange(0, BLOCK_N)[None, :]).to(tl.uint32)
-    sorted_kv_pairs = tl.sort(kv_pairs, 1)
-
-    # compute run lengths in expert-sorted order:
-    x = (sorted_kv_pairs & 0xffff0000 | 0x00000001)
-    expts_and_inclusive_run_lengths = tl.associative_scan(x, 1, _keyed_add)
-    exclusive_run_lengths = (expts_and_inclusive_run_lengths - 1) & 0xffff
-
-    # undo permutation by doing another sort
-    # TODO rewrite this when tl.scatter becomes available
-    kv_pairs = ((sorted_kv_pairs << 16) | exclusive_run_lengths).to(tl.uint32)
-    unsorted_run_lengths = tl.sort(kv_pairs) & 0xffff
-
-    res = tl.reshape(unsorted_run_lengths, x.shape)
-    return res
-
-
-@triton.jit
 def _routing_compute_indx(GatherIndx, ScatterIndx, GateScal, ExptScal, ExptIndx, PartialOffs, stride_pm, n_gates,
                           BLOCK_M: tl.constexpr, N_EXPTS_ACT: tl.constexpr):
+
     pid_m = tl.program_id(0)
-    offs = pid_m * BLOCK_M * N_EXPTS_ACT + tl.arange(0, N_EXPTS_ACT * BLOCK_M)
-    mask = offs < n_gates
-    indx = tl.load(ExptIndx + offs, mask=mask)
-    mask = mask & (indx != -1)
-    gates = tl.load(PartialOffs + pid_m * stride_pm + indx, mask=mask)
-    gates += tl.reshape(_count_previous(indx), [BLOCK_M * N_EXPTS_ACT])
+
+    tl.static_assert(N_EXPTS_ACT * BLOCK_M <= 32768)
+
+    local_offs = tl.arange(0, N_EXPTS_ACT * BLOCK_M)
+    offs = pid_m * BLOCK_M * N_EXPTS_ACT + local_offs
+    expert = tl.load(ExptIndx + offs, mask=(offs < n_gates), other=-1).to(tl.uint32)
+
+    # stable-sort by expert ID:
+    kv_pairs = ((expert << 16) | local_offs).to(tl.uint32)
+    kv_pairs = tl.sort(kv_pairs, 0)
+    expert = kv_pairs >> 16
+    offs = pid_m * BLOCK_M * N_EXPTS_ACT + (kv_pairs & 0xffff)
+    mask = expert != 0xffff
     gate_scal = tl.load(ExptScal + offs, mask=mask)
+
+    # compute run lengths in expert-sorted order:
+    x = (kv_pairs & 0xffff0000 | 0x00000001)
+    expts_and_inclusive_run_lengths = tl.associative_scan(x, 0, _keyed_add)
+    exclusive_run_lengths = (expts_and_inclusive_run_lengths - 1) & 0xffff
+
+    gates = tl.load(PartialOffs + pid_m * stride_pm + expert, mask=(expert != 0xffff))
+    gates += exclusive_run_lengths
+
     tl.store(ScatterIndx + offs, gates, mask=mask)
     tl.store(GatherIndx + gates, offs, mask=mask)
     tl.store(GateScal + gates, gate_scal, mask=mask)
@@ -117,15 +98,16 @@ def _routing_clear_bitmatrix(Bitmatrix, stride_bm, shape_bn, cutoff, BLOCK_N: tl
 
 
 @triton.jit
-def _routing_memset_indx(Indx0, Indx1, size, sentinel, BLOCK: tl.constexpr):
+def _routing_memset_indx(Indx, size, sentinel, BLOCK: tl.constexpr, ExpertHist, FinalExpertOffs, hist_size,
+                         BLOCK_N: tl.constexpr):
     pid = tl.program_id(0)
-    buf = tl.program_id(1)
-    offs = pid * BLOCK + tl.arange(0, BLOCK)
-    mask = offs < size
-    if buf == 0:
-        tl.store(Indx0 + offs, sentinel, mask=mask)
-    if buf == 1:
-        tl.store(Indx1 + offs, sentinel, mask=mask)
+
+    if pid == 0:
+        _routing_compute_expt_offs(ExpertHist, FinalExpertOffs, hist_size, BLOCK_N)
+    else:
+        offs = (pid - 1) * BLOCK + tl.arange(0, BLOCK)
+        mask = offs < size
+        tl.store(Indx + offs, sentinel, mask=mask)
 
 
 @dataclass
@@ -204,21 +186,15 @@ def routing(logits, n_expts_act, expt_indx=None, simulated_ep=1):
     # perform compaction to update expt_scal / expt_indx
     hist, partial_hist = sum(bitmatrix, partials_block_size=HIST_BLOCK_M, dim=0)
     # scratchpad
-    expt_offs = torch.empty(n_expts_tot + 1, dtype=torch.int32, device=device)
+    expt_offs = torch.empty(n_expts_tot, dtype=torch.int32, device=device)
     indx_offs = torch.empty((cdiv(n_tokens, HIST_BLOCK_M), n_expts_tot), dtype=torch.int32, device=device)
+    combined_indx = torch.empty(n_gates * 2, dtype=torch.int32, device=device)
     # output
-    topk_indx = torch.empty(n_gates, dtype=torch.int32, device=device)
-    gate_indx = torch.empty(n_gates, dtype=torch.int32, device=device)
+    topk_indx = combined_indx[:n_gates]
+    gate_indx = combined_indx[n_gates:]
     gate_scal = torch.empty(n_gates, dtype=logits.dtype, device=device)
-    if simulated_ep > 1:
-        _routing_memset_indx[(cdiv(n_gates, MEMSET_BLOCK), 2)](
-            topk_indx, gate_indx, n_gates, -1,  #
-            BLOCK=MEMSET_BLOCK,  #
-        )
-    _routing_compute_expt_offs[(1, )](
-        hist, expt_offs, hist.shape[0],  #
-        BLOCK_N=512  # tunable parameters
-    )
+    _routing_memset_indx[(cdiv(n_gates * 2, MEMSET_BLOCK) + 1, )](combined_indx, n_gates * 2, -1, MEMSET_BLOCK, hist,
+                                                                  expt_offs, hist.shape[0], BLOCK_N=512)
     _routing_compute_indx_offs[(n_expts_tot, )](
         expt_offs, partial_hist,  # inputs
         indx_offs, partial_hist.shape[0], partial_hist.stride(0),  # outputs

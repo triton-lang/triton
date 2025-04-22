@@ -1,4 +1,4 @@
-from triton_bench.numerics_details.flexpoint import flex_to_float, float_to_flex, update_scale
+from triton_bench.numerics_details.flexpoint import load_scale, float_to_flex, update_scale
 import triton
 import triton.language as tl
 
@@ -35,45 +35,67 @@ def swiglu_launch_metadata(grid, kernel, args):
 
 
 @triton.jit(repr=swiglu_repr, launch_metadata=swiglu_launch_metadata)
-def _swiglu(Out, OutExpectedScale, OutActualScale, A, AScale, alpha, M, N, stride_am, stride_an, stride_outm,
-            stride_outn,
-            # optional PID-indexed arrays for tracking RMS of linear and nonlinear parts
-            limit: tl.constexpr, BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr, M_BLOCKS, NUM_THREADS: tl.constexpr,
+def _swiglu(out_desc, Out, OutExpectedScale, OutActualScale, OutChecksumScale, a_desc, A, AScale, alpha, M, N,
+            stride_am, stride_an, stride_outm, stride_outn, limit: tl.constexpr, ExptData, NUM_EXPERTS: tl.constexpr,
+            BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr, EVEN_N: tl.constexpr, M_BLOCKS, N_BLOCKS,
             flexpoint_saturate_inf: tl.constexpr):
-    pid_m = tl.program_id(axis=0).to(tl.int64)
-    pid_n = tl.program_id(axis=1).to(tl.int64)
-    # iterate over M blocks until M is reached
-    base_m = pid_m * BLOCK_M
-    local_max = tl.full([NUM_THREADS], 0.0, tl.float32)
-    while base_m < M:
-        off_m = base_m + tl.arange(0, BLOCK_M)
+    if ExptData is not None:
+        M = tl.load(ExptData + 2 * NUM_EXPERTS)
+        M_BLOCKS = (M + BLOCK_M - 1) // BLOCK_M
+
+    local_max = tl.full([tl.extra.cuda.num_threads()], 0.0, tl.float32)
+
+    a_scale = load_scale(AScale)
+    out_expected_scale = load_scale(OutExpectedScale)
+
+    for pid in tl.range(tl.program_id(0), M_BLOCKS * N_BLOCKS, tl.num_programs(0), num_stages=2):
+        pid_m = (pid // N_BLOCKS)
+        pid_n = (pid % N_BLOCKS)
+        off_m = pid_m * BLOCK_M + tl.arange(0, BLOCK_M)
         off_n = pid_n * BLOCK_N + tl.arange(0, BLOCK_N)
-        mask = off_m[:, None] < M and off_n[None, :] < N
-        # column offsets
-        off_a_gelu = off_m[:, None] * stride_am + 2 * off_n[None, :] * stride_an
-        off_a_linear = off_m[:, None] * stride_am + 2 * off_n[None, :] * stride_an + 1
+        mask_m = off_m < M
+        mask_n = off_n < N
+        packed_off_n = pid_n * BLOCK_N + tl.arange(0, 2 * BLOCK_N) // 2
+        packed_mask_n = packed_off_n < N
+        packed_mask_n = tl.max_constancy(packed_mask_n, [16])
+        # load a
+        packed_off_n = pid_n * 2 * BLOCK_N + tl.arange(0, 2 * BLOCK_N)
+        packed_offs = off_m[:, None] * stride_am + packed_off_n[None, :] * stride_an
+        if a_desc is not None:
+            a_packed = a_desc.load([pid_m * BLOCK_M, pid_n * 2 * BLOCK_N])
+        if EVEN_N:
+            a_packed = tl.load(A + packed_offs, mask=mask_m[:, None], other=0.)
+        else:
+            if pid_n * BLOCK_N + BLOCK_N <= N:
+                a_packed = tl.load(A + packed_offs, mask=mask_m[:, None], other=0.)
+            else:
+                packed_mask = mask_m[:, None] and packed_mask_n[None, :]
+                a_packed = tl.load(A + packed_offs, mask=packed_mask, other=0.)
+        a_gelu, a_linear = tl.split(tl.reshape(a_packed, (BLOCK_M, BLOCK_N, 2)))
         # a gelu
-        a_gelu = tl.load(A + off_a_gelu, mask=mask, other=0.)
-        a_gelu = flex_to_float(a_gelu, scale_ptr=AScale)
+        a_gelu = a_gelu.to(tl.float32) * a_scale
         if limit is not None:
             a_gelu = clip(a_gelu, limit, clip_lower=False)
         # a linear
-        a_linear = tl.load(A + off_a_linear, mask=mask, other=0.)
-        a_linear = flex_to_float(a_linear, scale_ptr=AScale)
+        a_linear = a_linear.to(tl.float32) * a_scale
         if limit is not None:
             a_linear = clip(a_linear, limit, clip_lower=True)
         # compute output
-        out_gelu = a_gelu / (1 + tl.exp(-alpha * a_gelu))
-        out = out_gelu * (a_linear + 1)
+        s = a_gelu / (1 + tl.exp(-alpha * a_gelu))
+        out = tl.fma(s, a_linear, s)  # (s * (a_linear + 1))
         # update flexpoint stats and divide by scale
         # we don't need masking because of the `other` when loading `A`
         if OutActualScale is not None:
-            absmax = thread_local_absmax(out, BLOCK_M * BLOCK_N, NUM_THREADS)
+            absmax = thread_local_absmax(out, out.numel, tl.extra.cuda.num_threads())
             local_max = tl.maximum(local_max, absmax)
-        out = float_to_flex(out, OutExpectedScale, None, None, Out, None, flexpoint_saturate_inf)
-        # write-back
-        tl.store(Out + off_m[:, None] * stride_outm + off_n[None, :] * stride_outn, out, mask=mask)
-        # increment block base
-        base_m += (M_BLOCKS * BLOCK_M)
-    # reduce flexpoint scale
+        out = float_to_flex(out, out_expected_scale,
+                            None,  # ActualScale: local absmax is tracked and updated after the loop
+                            OutChecksumScale, None, Out, flexpoint_saturate_inf)
+
+        if out_desc is not None:
+            out_desc.store([pid_m * BLOCK_M, pid_n * BLOCK_N], out.to(Out.dtype.element_ty))
+        else:
+            mask = mask_m[:, None] if EVEN_N else mask_m[:, None] and mask_n[None, :]
+            tl.store(Out + off_m[:, None] * stride_outm + off_n[None, :] * stride_outn, out, mask)
+
     update_scale(local_max, OutActualScale, Out)

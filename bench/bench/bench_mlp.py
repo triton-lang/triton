@@ -3,7 +3,7 @@ import json
 import triton.profiler as proton
 import torch
 import triton_bench.swiglu
-from triton_bench.mxfp import downcast_to_mxfp
+from triton_bench.numerics_details.mxfp import downcast_to_mxfp
 from triton_bench.matmul_ogs import MicroscalingCtx, matmul_ogs, PrecisionConfig, FlexCtx
 from triton_bench.numerics import InFlexData
 from triton_bench.routing import routing

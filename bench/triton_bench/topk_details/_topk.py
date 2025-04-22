@@ -55,7 +55,7 @@ def _topk(X, stride_xm,  # inputs
     y = tl.sort(y, dim=1)
     y_indices = y >> 16
     y_values = (y & 0x0000FFFF).to(tl.uint16).to(x_dtype, bitcast=True)
-    y_values = tl.softmax(y_values.to(tl.float32), dim=1).to(x_dtype)
+    y_values = tl.softmax(y_values.to(tl.float32), dim=1, keep_dims=True).to(x_dtype)
 
     # write back
     offs_y_n = tl.arange(0, N_EXPTS_ACT)
