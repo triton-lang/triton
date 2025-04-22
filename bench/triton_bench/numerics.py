@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from triton_bench.meta import cuda_capability_geq, rcp_max_finite
+from triton_bench.meta import cuda_capability_geq, rcp_max_finite, max_finite
 import torch
 import triton
 import triton.language as tl
@@ -162,14 +162,20 @@ def update_scale(x, scale_ptr, Out) -> None:
 @triton.jit
 def float_to_flex(
     x,
-    expected_scale_ptr,
+    expected_scale_ptr_or_val,
     actual_scale_ptr,
     checksum_scale_ptr,
     mask,
     Out,
     saturate_infs: tl.constexpr,
 ):
-    invscale = 1.0 / load_scale(expected_scale_ptr)
+    if expected_scale_ptr_or_val is not None:
+        if expected_scale_ptr_or_val.dtype.is_ptr():
+            invscale = 1.0 / tl.load(expected_scale_ptr_or_val)
+        else:
+            invscale = 1.0 / expected_scale_ptr_or_val
+    else:
+        invscale = 1.0
     if checksum_scale_ptr is not None:
         x_int32 = x.to(tl.int32, bitcast=True)
         zero = tl.cast(0.0, tl.int32)
@@ -183,7 +189,7 @@ def float_to_flex(
     update_scale(x, actual_scale_ptr, Out)
     x = x * invscale
     # if expected_scale_ptr is not None, we applied flexpoint scale. We only want to clip in this case.
-    if expected_scale_ptr is not None:
+    if expected_scale_ptr_or_val is not None:
         if saturate_infs:
             CLIP_VALUE = max_finite(Out.dtype.element_ty)
             x = clip(x, CLIP_VALUE)

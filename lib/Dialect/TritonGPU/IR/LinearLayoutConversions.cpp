@@ -464,7 +464,8 @@ LinearLayout chooseDotDsReadB64TrLayout(DotOperandEncodingAttr dotMfmaLayout,
                                         ArrayRef<int64_t> shape,
                                         int32_t elemBitWidth) {
   auto mfmaLayout = llvm::cast<AMDMfmaEncodingAttr>(dotMfmaLayout.getParent());
-  assert(mfmaLayout.getMDim() == 16 || mfmaLayout.getNDim() == 32);
+  auto mDim = mfmaLayout.getMDim();
+  assert(mDim == 16 || mDim == 32);
   assert(elemBitWidth == 16 || elemBitWidth == 8);
 
   auto rank = shape.size();
@@ -548,8 +549,8 @@ LinearLayout chooseDotDsReadB64TrLayout(DotOperandEncodingAttr dotMfmaLayout,
   }
 
   // Function to extend register base for multiple tiles K dim.
-  auto extendRegisterBaseForKDim = [&](int kTileSize) {
-    const int regsPerTile = kWidthTransRead * 2; // Two subtiles per tile
+  auto extendRegisterBaseForKDim = [&](int kTileSize, int numSubtilesPerTile) {
+    const int regsPerTile = kWidthTransRead * numSubtilesPerTile;
     int totalRegs = (kSize / kTileSize) * regsPerTile;
 
     for (int reg = regsPerTile; reg < totalRegs; reg *= 2) {
@@ -557,19 +558,27 @@ LinearLayout chooseDotDsReadB64TrLayout(DotOperandEncodingAttr dotMfmaLayout,
     }
   };
 
-  const bool isMfma32 = (mfmaLayout.getMDim() == 32);
-  const bool isMfma16 = (mfmaLayout.getMDim() == 16);
-  const int kTileSize = isMfma32 ? 32 / elemByteWidth : 64 / elemByteWidth;
-  const bool largeKSize = kSize >= kTileSize;
+  const bool isMfma32 = (mDim == 32);
+  const bool isMfma16 = (mDim == 16);
+
+  // kDoubleTileSize is the k dimension of a tile when double rated
+  // mfma instructions are used.
+  const int kDoubleTileSize =
+      isMfma32 ? 32 / elemByteWidth : 64 / elemByteWidth;
+  // kTileSize is the actually k dimention of a tile, which is
+  // determined by kWidthDot.
+  const int kTileSize = kWidthDot * 64 / mDim;
+  // We use kDoubleTileSize as a reference to check whether the given
+  // kWidthDot leads to double or single sub-tiles in each tile.
+  const int numSubtilesPerTile = (kTileSize == kDoubleTileSize) ? 2 : 1;
 
   // Extend register base for large K sizes.
-  if (largeKSize) {
+  if (numSubtilesPerTile == 2)
     registerBase.push_back({0, threadsPerSubtileK}); // Second subtile
-    extendRegisterBaseForKDim(kTileSize);
-  }
+
+  extendRegisterBaseForKDim(kTileSize, numSubtilesPerTile);
 
   // Extend lane base based on MFMA size.
-  const int numSubtilesPerTile = largeKSize ? 2 : 1;
   std::vector<std::vector<int32_t>> laneBaseExt;
 
   if (isMfma32) {

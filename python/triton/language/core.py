@@ -1159,7 +1159,7 @@ class tensor(base_value):
     def sigmoid(self) -> tensor:
         ...
 
-    def softmax(self, ieee_rounding=False) -> tensor:
+    def softmax(self, dim=None, keep_dims=False, ieee_rounding=False) -> tensor:
         ...
 
     def ravel(self) -> tensor:
@@ -1181,6 +1181,9 @@ class tensor(base_value):
         ...
 
     def xor_sum(self, axis=None, keep_dims=False) -> tensor:
+        ...
+
+    def reduce_or(self, axis=None, keep_dims=False) -> tensor:
         ...
 
     def cumsum(self, axis=0, reverse=False) -> tensor:

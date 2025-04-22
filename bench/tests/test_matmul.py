@@ -1,11 +1,9 @@
-import itertools
 from dataclasses import dataclass, fields
 import pytest
 import torch
 # benchmarking utilities
-import triton.profiler as proton
 # routing utilities
-from triton_bench.routing import routing_torch, simulate_expert_sharded_routing
+from triton_bench.routing import routing
 # matmul utilities
 import triton_bench.matmul_ogs_details.opt_flags as opt_flags
 from triton_bench.matmul_ogs import FlexCtx, PrecisionConfig, MicroscalingCtx
@@ -43,22 +41,11 @@ def mask_indx(idx, n_expts_act):
 
 def init_routing_data(m, n_expts_tot, n_expts_act, n_expt_shards, do_gather, do_scatter):
     dev = "cuda"
-    logits = torch.randn((m, n_expts_tot), dtype=torch.float32, device=dev, requires_grad=True)
-    routing_data, gather_idx, scatter_idx = routing_torch(logits, n_expts_act)
-    if n_expt_shards > 1:
-        m = logits.shape[0] * n_expt_shards
-        _, routing_data, gather_idx, scatter_idx = simulate_expert_sharded_routing(m, routing_data, n_expt_shards,
-                                                                                   device=logits.device)
+    logits = torch.randn((m, n_expts_tot), dtype=torch.float16, device=dev, requires_grad=True)
+    routing_data, gather_idx, scatter_idx = routing(logits, n_expts_act, simulated_ep=n_expt_shards)
     routing_data.gate_scal = None
     gather_idx = gather_idx if do_gather else None
     scatter_idx = scatter_idx if do_scatter else None
-    if do_gather and do_scatter and n_expts_act == 1 and n_expt_shards == 1:
-        # Compute expt_indx as in routing_torch to access routing_data.expt_hist
-        expt_indx = torch.argsort(-torch.softmax(logits, dim=-1), dim=1,
-                                  stable=True)[:, :n_expts_act].reshape(-1).to(torch.int32)
-        assert (torch.argsort(expt_indx, stable=True) == scatter_idx.dst_indx).all()
-        routing_data.expt_hist[expt_indx[scatter_idx.dst_indx[-n_expts_act:]]] -= 1
-        scatter_idx = mask_indx(scatter_idx, n_expts_act)
     return m, routing_data, gather_idx, scatter_idx
 
 
@@ -315,7 +302,7 @@ def test_op(m, n, k, split_k, do_gather, do_scatter, fused_scatter, has_y_gammas
     scale = lambda val, scal: val if scal is None else val / scal
     if n_expt_shards > 1:
         if not do_scatter:
-            n_rows = rdata.expt_hist[-1].item()
+            n_rows = rdata.expt_hist.sum()
             assert n_rows > 0
             ref_y = ref_y[:n_rows]
             tri_y = tri_y[:n_rows]
