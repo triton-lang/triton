@@ -207,6 +207,17 @@ LogicalResult triton::gpu::specializeLoadMMADependencies(scf::ForOp &loop,
                              "loads for `tt.dot` operands");
   }
 
+  SmallVector<Operation *> aScaleChain, bScaleChain;
+  auto scaledMMAOp = dyn_cast<ttng::TCGen5MMAScaledOp>(mmaOp.getOperation());
+  if (scaledMMAOp) {
+    if (failed(
+            findSingleChainToLoad(loop, scaledMMAOp.getAScale(), aScaleChain)))
+      aScaleChain.clear();
+    if (failed(
+            findSingleChainToLoad(loop, scaledMMAOp.getBScale(), bScaleChain)))
+      bScaleChain.clear();
+  }
+
   ttng::TMEMAllocOp oldAccAlloc =
       mmaOp.getAccumulator().getDefiningOp<ttng::TMEMAllocOp>();
   if (!oldAccAlloc)
@@ -218,7 +229,9 @@ LogicalResult triton::gpu::specializeLoadMMADependencies(scf::ForOp &loop,
 
   // Determine if the MMA accumulator can be multibuffered.
   auto isLoadPipelineable = [&](Operation *op) {
-    return llvm::is_contained({aChain.back(), bChain.back()}, op);
+    return llvm::is_contained(llvm::to_vector(llvm::concat<Operation *>(
+                                  aChain, bChain, aScaleChain, bScaleChain)),
+                              op);
   };
   bool accIsMultiBuffered =
       // All operand feeds are pipelineable.
@@ -280,16 +293,27 @@ LogicalResult triton::gpu::specializeLoadMMADependencies(scf::ForOp &loop,
   Partition *mmaPartition = schedule.addPartition(numStages);
 
   // Multi-buffer the loads.
-  auto [loadIndex, loadPhase] = addIndexAndPhase(b, loop, numStages);
+  BlockArgument loadIndex;
+  BlockArgument loadPhase;
+  std::tie(loadIndex, loadPhase) = addIndexAndPhase(b, loop, numStages);
 
-  Operation *aLoad = aChain.back();
-  Operation *bLoad = bChain.back();
-  auto aType = cast<RankedTensorType>(aLoad->getResult(0).getType());
-  auto bType = cast<RankedTensorType>(bLoad->getResult(0).getType());
-  SharedEncodingTrait aEnc = getSharedEncoding(aChain.back());
-  SharedEncodingTrait bEnc = getSharedEncoding(bChain.back());
-  Value aAlloc = createAlloc(loop, aType, aLoad->getLoc(), aEnc, numStages);
-  Value bAlloc = createAlloc(loop, bType, bLoad->getLoc(), bEnc, numStages);
+  auto allocate = [&](const SmallVector<Operation *> &chain)
+      -> std::tuple<Operation *, RankedTensorType, SharedEncodingTrait, Value> {
+    if (chain.empty())
+      return {nullptr, RankedTensorType(), SharedEncodingTrait(), Value()};
+
+    Operation *load = chain.back();
+    auto type = cast<RankedTensorType>(load->getResult(0).getType());
+    SharedEncodingTrait enc = getSharedEncoding(chain.back());
+    Value alloc = createAlloc(loop, type, load->getLoc(), enc, numStages);
+
+    return {load, type, enc, alloc};
+  };
+
+  auto [aLoad, aType, aEnc, aAlloc] = allocate(aChain);
+  auto [bLoad, bType, bEnc, bAlloc] = allocate(bChain);
+  auto [aScaleLoad, aScaleType, aScaleEnc, aScaleAlloc] = allocate(aScaleChain);
+  auto [bScaleLoad, bScaleType, bScaleEnc, bScaleAlloc] = allocate(bScaleChain);
 
   // Share the same set of barriers for both.
   Value emptyBars = createBarrierAlloc(loop, numStages);
@@ -304,9 +328,23 @@ LogicalResult triton::gpu::specializeLoadMMADependencies(scf::ForOp &loop,
   int loadSizeInBytes =
       product(aType.getShape()) * aType.getElementTypeBitWidth() / 8 +
       product(bType.getShape()) * bType.getElementTypeBitWidth() / 8;
+  if (aScaleLoad)
+    loadSizeInBytes += product(aScaleType.getShape()) *
+                       aScaleType.getElementTypeBitWidth() / 8;
+  if (bScaleLoad)
+    loadSizeInBytes += product(bScaleType.getShape()) *
+                       bScaleType.getElementTypeBitWidth() / 8;
 
   // Insert before the group of loads.
-  b.setInsertionPoint(aLoad->isBeforeInBlock(bLoad) ? aLoad : bLoad);
+  SmallVector<Operation *> allLoads{aLoad, bLoad};
+  if (aScaleLoad)
+    allLoads.push_back(aScaleLoad);
+  if (bScaleLoad)
+    allLoads.push_back(bScaleLoad);
+  std::sort(allLoads.begin(), allLoads.end(),
+            [](Operation *a, Operation *b) { return a->isBeforeInBlock(b); });
+  b.setInsertionPoint(allLoads.front());
+
   // Wait for the buffer to be empty and the corresponding barrier to be
   // exhausted.
   Value curEmptyBar = createSingleBufferView(b, emptyBars, loadIndex);
@@ -318,19 +356,21 @@ LogicalResult triton::gpu::specializeLoadMMADependencies(scf::ForOp &loop,
                                            loadSizeInBytes, intCst(true, 1));
 
   // Replace the loads with async copies.
-  b.setInsertionPoint(aLoad);
-  Value aView = createSingleBufferView(b, aAlloc, loadIndex);
-  lowerTMACopy(b, *loadPartition, aLoad, curLoadBar, aView);
-  replaceUsesAndPropagateType(b, *aLoad->user_begin(), aView);
-  aLoad->user_begin()->erase();
-  aLoad->erase();
-
-  b.setInsertionPoint(bLoad);
-  Value bView = createSingleBufferView(b, bAlloc, loadIndex);
-  lowerTMACopy(b, *loadPartition, bLoad, curLoadBar, bView);
-  replaceUsesAndPropagateType(b, *bLoad->user_begin(), bView);
-  bLoad->user_begin()->erase();
-  bLoad->erase();
+  auto lowerLoadAndPropagate = [&](Operation *load, Value alloc,
+                                   Value barrier) {
+    b.setInsertionPoint(load);
+    Value view = createSingleBufferView(b, alloc, loadIndex);
+    lowerTMACopy(b, *loadPartition, load, barrier, view);
+    replaceUsesAndPropagateType(b, *load->user_begin(), view);
+    load->user_begin()->erase();
+    load->erase();
+  };
+  lowerLoadAndPropagate(aLoad, aAlloc, curLoadBar);
+  lowerLoadAndPropagate(bLoad, bAlloc, curLoadBar);
+  if (aScaleLoad)
+    lowerLoadAndPropagate(aScaleLoad, aScaleAlloc, curLoadBar);
+  if (bScaleLoad)
+    lowerLoadAndPropagate(bScaleLoad, bScaleAlloc, curLoadBar);
 
   // Place the remaining users in the MMA partition. Re-acquire the use chain
   // because some ops were invalidated by `replaceUsesAndPropagateType`.
@@ -339,9 +379,18 @@ LogicalResult triton::gpu::specializeLoadMMADependencies(scf::ForOp &loop,
   aChain.push_back(mmaOp);
   (void)findSingleChainToLoad(loop, dot.getA(), aChain);
   (void)findSingleChainToLoad(loop, dot.getB(), bChain);
+  if (aScaleLoad) {
+    aScaleChain.clear();
+    (void)findSingleChainToLoad(loop, scaledMMAOp.getAScale(), aScaleChain);
+  }
+  if (bScaleLoad) {
+    bScaleChain.clear();
+    (void)findSingleChainToLoad(loop, scaledMMAOp.getBScale(), bScaleChain);
+  }
 
   // Place users in the MMA partition.
-  auto allUsers = llvm::to_vector(llvm::concat<Operation *>(aChain, bChain));
+  auto allUsers = llvm::to_vector(
+      llvm::concat<Operation *>(aChain, bChain, aScaleChain, bScaleChain));
   for (Operation *user : allUsers)
     mmaPartition->insert(user);
 
