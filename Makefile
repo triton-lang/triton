@@ -22,6 +22,7 @@ triton-opt:
 .PHONY: test-lit
 test-lit:
 	ninja -C $(BUILD_DIR) check-triton-lit-tests
+	ninja -C $(BUILD_DIR) check-triton-nvidia-lit-tests
 
 .PHONY: test-cpp
 test-cpp:
