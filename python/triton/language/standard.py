@@ -52,10 +52,12 @@ def sigmoid(x):
 @math._add_math_1arg_docstr("softmax")
 def softmax(x, dim=None, ieee_rounding=False):
     if dim is None:
-        dim: core.constexpr = x.shape[-1]
-    z = x - max(x, dim, keep_dims=True)
+        _dim: core.constexpr = x.shape[-1]
+    else:
+        _dim: core.constexpr = dim
+    z = x - max(x, _dim, keep_dims=True)
     num = math.exp(z)
-    den = sum(num, dim, keep_dims=True)
+    den = sum(num, _dim, keep_dims=True)
     return math.fdiv(num, den, ieee_rounding)
 
 
