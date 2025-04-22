@@ -1,6 +1,7 @@
 #include "Profiler/Instrumentation/CudaRuntime.h"
 
 #include "Driver/GPU/CudaApi.h"
+#include <stdexcept>
 namespace proton {
 
 void CudaRuntime::allocateHostBuffer(uint8_t **buffer, size_t size) {
