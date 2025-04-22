@@ -25,7 +25,7 @@ Profiler *getProfiler(const std::string &name, const std::string &path,
     return &RoctracerProfiler::instance();
   }
   if (proton::toLower(name) == "instrumentation") {
-    return InstrumentationProfiler::instance().setMode(mode);
+    return InstrumentationProfiler::instance().setMode(modeAndOptions);
   }
   throw std::runtime_error("Unknown profiler: " + name);
 }
