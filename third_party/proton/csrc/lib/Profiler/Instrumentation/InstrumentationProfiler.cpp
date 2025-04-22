@@ -52,7 +52,7 @@ void InstrumentationProfiler::initScopeIds(
 }
 
 void InstrumentationProfiler::enterInstrumentedOp(uint64_t functionId,
-                                                  const uint8_t *buffer,
+                                                  uint8_t *buffer,
                                                   size_t size) {
   // Enter an instrumented operation.
   if (hostBuffer == nullptr) {
@@ -61,7 +61,7 @@ void InstrumentationProfiler::enterInstrumentedOp(uint64_t functionId,
 }
 
 void InstrumentationProfiler::exitInstrumentedOp(uint64_t functionId,
-                                                 const uint8_t *buffer,
+                                                 uint8_t *buffer,
                                                  size_t size) {
   // Exit an instrumented operation.
   uint64_t device = runtime->getDevice();

@@ -28,9 +28,9 @@ protected:
   void initScopeIds(
       uint64_t functionId,
       const std::vector<std::pair<size_t, std::string>> &scopeIdPairs) override;
-  void enterInstrumentedOp(uint64_t functionId, const uint8_t *buffer,
+  void enterInstrumentedOp(uint64_t functionId, uint8_t *buffer,
                            size_t size) override;
-  void exitInstrumentedOp(uint64_t functionId, const uint8_t *buffer,
+  void exitInstrumentedOp(uint64_t functionId, uint8_t *buffer,
                           size_t size) override;
 
 private:

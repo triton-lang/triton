@@ -30,20 +30,24 @@ uint64_t CudaRuntime::getDevice() {
 
 void *CudaRuntime::getPriorityStream() {
   CUstream stream;
-  cuda::streamCreateWithPriority<true>(&stream, 0, 0);
+  // TODO: Change priority
+  int lowestPriority, highestPriority;
+  cuda::ctxGetStreamPriorityRange<true>(&lowestPriority, &highestPriority);
+  cuda::streamCreateWithPriority<true>(&stream, CU_STREAM_NON_BLOCKING, highestPriority);
   return reinterpret_cast<void *>(stream);
 }
 
 void CudaRuntime::processHostBuffer(
-    uint8_t *hostBuffer, size_t hostBufferSize, const uint8_t *deviceBuffer,
+    uint8_t *hostBuffer, size_t hostBufferSize, uint8_t *deviceBuffer,
     size_t deviceBufferSize, void *stream,
     std::function<void(uint8_t *, size_t)> callback) {
   int64_t chunkSize = std::min(hostBufferSize, deviceBufferSize);
   int64_t sizeLeftOnDevice = deviceBufferSize;
   while (chunkSize > 0) {
-    cuda::memcpyAsync<true>(reinterpret_cast<void *>(hostBuffer),
-                            reinterpret_cast<const void *>(deviceBuffer),
-                            chunkSize, reinterpret_cast<CUstream>(stream));
+    cuda::memcpyDToHAsync<true>(
+        reinterpret_cast<void *>(hostBuffer),
+        reinterpret_cast<CUdeviceptr>(deviceBuffer), chunkSize,
+        reinterpret_cast<CUstream>(stream));
     // We should not use synchronization here in general if we want to copy
     // buffer while the kernel is running. But for the sake of simplicity, we
     // only copy the buffer after the kernel is finished for now.

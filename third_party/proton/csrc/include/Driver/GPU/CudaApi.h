@@ -17,9 +17,13 @@ template <bool CheckSuccess> CUresult ctxGetCurrent(CUcontext *pctx);
 template <bool CheckSuccess> CUresult ctxGetDevice(CUdevice *device);
 
 template <bool CheckSuccess>
+CUresult ctxGetStreamPriorityRange(int *leastPriority, int *greatestPriority);
+
+template <bool CheckSuccess>
 CUresult deviceGetAttribute(int *pi, CUdevice_attribute attrib, CUdevice dev);
 
 template <bool CheckSuccess> CUresult deviceGet(CUdevice *device, int ordinal);
+
 
 template <bool CheckSuccess>
 CUresult streamCreateWithPriority(CUstream *pStream, unsigned int flags,
@@ -28,7 +32,8 @@ CUresult streamCreateWithPriority(CUstream *pStream, unsigned int flags,
 template <bool CheckSuccess> CUresult streamSynchronize(CUstream stream);
 
 template <bool CheckSuccess>
-CUresult memcpyAsync(void *dst, const void *src, size_t count, CUstream stream);
+CUresult memcpyDToHAsync(void *dst, CUdeviceptr src, size_t count,
+                         CUstream stream);
 
 template <bool CheckSuccess> CUresult memAllocHost(void **pp, size_t bytesize);
 

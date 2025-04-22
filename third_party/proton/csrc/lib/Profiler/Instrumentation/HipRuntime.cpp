@@ -11,7 +11,7 @@ uint64_t HipRuntime::getDevice() { return 0; }
 void *HipRuntime::getPriorityStream() { return nullptr; }
 
 void HipRuntime::processHostBuffer(
-    uint8_t *hostBuffer, size_t hostBufferSize, const uint8_t *deviceBuffer,
+    uint8_t *hostBuffer, size_t hostBufferSize, uint8_t *deviceBuffer,
     size_t deviceBufferSize, void *stream,
     std::function<void(uint8_t *, size_t)> callback) {}
 } // namespace proton

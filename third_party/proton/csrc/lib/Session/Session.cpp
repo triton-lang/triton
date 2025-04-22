@@ -232,7 +232,7 @@ void SessionManager::initScopeIds(
 }
 
 void SessionManager::enterInstrumentedOp(uint64_t functionId,
-                                         const uint8_t *buffer, size_t size) {
+                                         uint8_t *buffer, size_t size) {
   std::lock_guard<std::mutex> lock(mutex);
   executeInterface(
       instrumentationInterfaceCounts, [&](auto *instrumentationInterface) {
@@ -241,7 +241,7 @@ void SessionManager::enterInstrumentedOp(uint64_t functionId,
 }
 
 void SessionManager::exitInstrumentedOp(uint64_t functionId,
-                                        const uint8_t *buffer, size_t size) {
+                                        uint8_t *buffer, size_t size) {
   std::lock_guard<std::mutex> lock(mutex);
   executeInterface(
       instrumentationInterfaceCounts, [&](auto *instrumentationInterface) {
