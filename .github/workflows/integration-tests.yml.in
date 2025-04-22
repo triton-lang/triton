@@ -264,7 +264,7 @@ jobs:
         env:
           CUDA_HOME: "/usr/local/cuda"
         run: |
-          if [ "${{ matrix.runner[0] }}" == "gb200-runner-set" ]; then
+          if [ "${{ matrix.runner[0] }}" == "nvidia-gb200" ]; then
             source /venv/bin/activate
           fi
           echo "PATH is '$PATH'"
@@ -281,18 +281,18 @@ jobs:
 
       - name: Run python tests on CUDA
         run:  |
-          if [ "${{ matrix.runner[0] }}" == "gb200-runner-set" ]; then
+          if [ "${{ matrix.runner[0] }}" == "nvidia-gb200" ]; then
             source /venv/bin/activate
           fi
           make test-unit
 
       - name: Run interpreter tests
-        if: ${{ matrix.runner[0] == 'h100-runner-set' }}
+        if: ${{ matrix.runner[0] == 'nvidia-h100' }}
         run: make test-interpret
 
       - name: Run regression tests
         run:  |
-          if [ "${{ matrix.runner[0] }}" == "gb200-runner-set" ]; then
+          if [ "${{ matrix.runner[0] }}" == "nvidia-gb200" ]; then
             source /venv/bin/activate
           fi
           make test-regression
@@ -303,7 +303,7 @@ jobs:
 
       - &run-proton-tests-step
         name: Run Proton tests
-        if: ${{ matrix.runner[0] != 'gb200-runner-set' }}
+        if: ${{ matrix.runner[0] != 'nvidia-gb200' }}
         run: make test-proton
 
       - *inspect-cache-directories-step

@@ -232,7 +232,7 @@ jobs:
         env:
           CUDA_HOME: "/usr/local/cuda"
         run: |
-          if [ "${{ matrix.runner[0] }}" == "gb200-runner-set" ]; then
+          if [ "${{ matrix.runner[0] }}" == "nvidia-gb200" ]; then
             source /venv/bin/activate
           fi
           echo "PATH is '$PATH'"
@@ -244,23 +244,23 @@ jobs:
         run: make test-lit
       - name: Run python tests on CUDA
         run: |
-          if [ "${{ matrix.runner[0] }}" == "gb200-runner-set" ]; then
+          if [ "${{ matrix.runner[0] }}" == "nvidia-gb200" ]; then
             source /venv/bin/activate
           fi
           make test-unit
       - name: Run interpreter tests
-        if: ${{ matrix.runner[0] == 'h100-runner-set' }}
+        if: ${{ matrix.runner[0] == 'nvidia-h100' }}
         run: make test-interpret
       - name: Run regression tests
         run: |
-          if [ "${{ matrix.runner[0] }}" == "gb200-runner-set" ]; then
+          if [ "${{ matrix.runner[0] }}" == "nvidia-gb200" ]; then
             source /venv/bin/activate
           fi
           make test-regression
       - name: Run C++ unittests
         run: make test-cpp
       - name: Run Proton tests
-        if: ${{ matrix.runner[0] != 'gb200-runner-set' }}
+        if: ${{ matrix.runner[0] != 'nvidia-gb200' }}
         run: make test-proton
       - name: Inspect cache directories
         run: |
@@ -409,7 +409,7 @@ jobs:
           cd python/test/regression
           python3 -m pytest -s -n 8 ./test_cast_matmul.py
       - name: Run Proton tests
-        if: ${{ matrix.runner[0] != 'gb200-runner-set' }}
+        if: ${{ matrix.runner[0] != 'nvidia-gb200' }}
         run: make test-proton
       - name: Run C++ unittests
         run: make test-cpp
