@@ -156,8 +156,9 @@ tt.func @unsupported_load() {
   %zero = arith.constant dense<0.0> : tensor<128x128xf32, #acc_layout>
   %k_tiles = arith.constant 32 : i32
 
-  // expected-warning @below {{failed to warp specialize: could not find TMA loads for `tt.dot` operands}}
+  // CHECK: scf.for
   scf.for %k = %c0_i32 to %k_tiles step %c1_i32 iter_args(%acc = %zero) -> tensor<128x128xf32, #acc_layout> : i32 {
+    // CHECK-NOT: ttg.partition =
     %a_ptrs, %b_ptrs = "get_ptrs"(%k) : (i32) -> (tensor<128x64x!tt.ptr<f16>, #oper_layout>, tensor<64x128x!tt.ptr<f16>, #oper_layout>)
     %a = tt.load %a_ptrs : tensor<128x64x!tt.ptr<f16>, #oper_layout>
     %b = tt.load %b_ptrs : tensor<64x128x!tt.ptr<f16>, #oper_layout>
