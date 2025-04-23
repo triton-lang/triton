@@ -1,6 +1,10 @@
 import torch
 from dataclasses import dataclass
 
+MAX_FINITE_FLOAT8E5 = 57344.0
+MAX_FINITE_FLOAT8E4NV = 448.0
+MAX_FINITE_FLOAT8E4B8 = 240.0
+
 
 @dataclass(frozen=True)
 class BaseFlexData:

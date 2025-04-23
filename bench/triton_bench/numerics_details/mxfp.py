@@ -1,4 +1,5 @@
 from enum import Enum
+from triton_bench.meta import constexpr_function
 import triton
 import triton.language as tl
 import torch
@@ -13,6 +14,18 @@ def get_max_quant_val(dtype: torch.dtype):
     d = {torch.uint8: 6.0, torch.float8_e5m2: 57344.0, torch.float8_e4m3fn: 448.0}
     assert dtype in d
     return d[dtype]
+
+
+@constexpr_function
+def get_scaled_dot_format_string(dtype: tl.dtype):
+    mapping = {
+        tl.float16: "fp16",
+        tl.bfloat16: "bf16",
+        tl.uint8: "e2m1",
+        tl.float8e4nv: "e4m3",
+        tl.float8e5: "e5m2",
+    }
+    return mapping[dtype]
 
 
 @triton.jit

@@ -1,7 +1,6 @@
 import triton
 import triton.language as tl
-from triton_bench.meta import get_scaled_dot_format_string
-from triton_bench.numerics_details.mxfp import _unswizzle_mx_block
+from triton_bench.numerics_details.mxfp import _unswizzle_mx_block, get_scaled_dot_format_string
 from triton_bench.numerics_details.flexpoint import float_to_flex, load_scale
 from ._common import make_matmul_repr, matmul_launch_metadata, swizzle2d, xcd_swizzle
 

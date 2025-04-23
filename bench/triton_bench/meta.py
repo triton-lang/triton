@@ -18,8 +18,6 @@ TL_RCP_MAX_FINITE_FLOAT8E4B8 = tl.constexpr(0x3B888889)  # 0x1.111112p-8
 TL_RCP_MAX_FINITE_FLOAT8E4B15 = tl.constexpr(0x3F124925)  # 0x1.24924Ap-1
 TL_RCP_MAX_FINITE_FLOAT16 = tl.constexpr(0x37802008)  # 0x1.004010p-16
 
-cached_capabilities = {}
-
 
 def constexpr_function(f):
     """
@@ -45,47 +43,3 @@ def constexpr_function(f):
     wrapper.__triton_builtin__ = True
     wrapper.__module__ = getattr(tl, "__name__", "triton.language")
     return wrapper
-
-
-@constexpr_function
-def get_scaled_dot_format_string(dtype: tl.dtype):
-    mapping = {
-        tl.float16: "fp16",
-        tl.bfloat16: "bf16",
-        tl.uint8: "e2m1",
-        tl.float8e4nv: "e4m3",
-        tl.float8e5: "e5m2",
-    }
-    return mapping[dtype]
-
-
-@triton.jit
-def max_finite(dtype):
-    if dtype == tl.constexpr(tl.float8e5):
-        return TL_MAX_FINITE_FLOAT8E5
-    elif dtype == tl.constexpr(tl.float8e4nv):
-        return TL_MAX_FINITE_FLOAT8E4NV
-    elif dtype == tl.constexpr(tl.float8e4b8):
-        return TL_MAX_FINITE_FLOAT8E4B8
-    elif dtype == tl.constexpr(tl.float8e4b15):
-        return TL_MAX_FINITE_FLOAT8E4B15
-    elif dtype == tl.constexpr(tl.float16):
-        return TL_MAX_FINITE_FLOAT16
-    else:
-        tl.static_assert(tl.constexpr(False), f"{dtype} not supported in flexpoint")
-
-
-@triton.jit
-def rcp_max_finite(dtype):
-    if dtype == tl.constexpr(tl.float8e5):
-        return TL_RCP_MAX_FINITE_FLOAT8E5
-    elif dtype == tl.constexpr(tl.float8e4nv):
-        return TL_RCP_MAX_FINITE_FLOAT8E4NV
-    elif dtype == tl.constexpr(tl.float8e4b8):
-        return TL_RCP_MAX_FINITE_FLOAT8E4B8
-    elif dtype == tl.constexpr(tl.float8e4b15):
-        return TL_RCP_MAX_FINITE_FLOAT8E4B15
-    elif dtype == tl.constexpr(tl.float16):
-        return TL_RCP_MAX_FINITE_FLOAT16
-    else:
-        tl.static_assert(tl.constexpr(False), f"{dtype} not supported in flexpoint")
