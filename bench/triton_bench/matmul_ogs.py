@@ -3,7 +3,7 @@ import itertools
 import torch
 import triton
 # utilities
-from triton_bench import meta
+from triton_bench import target_info
 from triton_bench.numerics import InFlexData, OutFlexData
 from triton_bench.routing import GatherIndx, RoutingData, ScatterIndx
 # details
@@ -165,7 +165,7 @@ def can_use_persistent_tma(x, w, gather_indx, precision_config):
     mx_ctx = precision_config.mx_ctx
     return (
         # TMA requires CUDA 9.0, last dim contiguous, and multiple of 16-byte strides otherwise.
-        meta.cuda_capability_geq(9, 0) and
+        target_info.cuda_capability_geq(9, 0) and
         (True if gather_indx is not None else
             # Check strides of X.
             x.stride(1) * x.element_size() % 16 == 0 and x.stride(2) == 1
@@ -205,12 +205,12 @@ def init_preprocessing_features(w, precision_config, opt_flags):
     swap_xw = False  # Whether or not to swap X and W operands to the tl.dot
     w_want_k_major = False
     w_want_n_major = False
-    if not meta.cuda_capability_geq(10, 0):
+    if not target_info.cuda_capability_geq(10, 0):
         # Hopper transpose. Reduction dimension must be contiguous.
         if w.stride(1) != 1 and w.dtype.itemsize == 1:
             w_want_k_major = True
 
-    if meta.cuda_capability_geq(10, 0):
+    if target_info.cuda_capability_geq(10, 0):
         swap_xw = mx_ctx.weight_scale is not None and opt_flags.block_m <= 64 and opt_flags.is_persistent
         if swap_xw:
             w_want_k_major = True
@@ -314,7 +314,7 @@ def apply_postprocessing_features(scatter_indx, opt_flags, expt_offs, num_indx, 
         out_scatter = memory["output"]
         out_scatter_flex = precision_config.flex_ctx.out_data
         assert inp.shape[1] == 1
-        if meta.is_hip():
+        if target_info.is_hip():
             num_warps = 2
             BLOCK_N = 2048
             warps_per_sm = 32
@@ -322,7 +322,7 @@ def apply_postprocessing_features(scatter_indx, opt_flags, expt_offs, num_indx, 
             num_warps = 16
             BLOCK_N = 4096
             warps_per_sm = 128
-        num_pid = meta.num_sms() * (warps_per_sm // num_warps)
+        num_pid = target_info.num_sms() * (warps_per_sm // num_warps)
         N = inp.shape[3]
         M = n_final_rows
         # assert M == out_scatter.shape[1], f"{M}, {out_scatter.shape}"
@@ -495,7 +495,7 @@ def matmul_ogs(x, w, bias,
             f"invalid expt_data, {expt_data.buffer.shape}, {n_expts_tot=}, {grid_m=}"
     # matrix multiplication
     n_cta = batch_size * grid_m * grid_n * opt_flags.split_k
-    n_cta = min(meta.num_sms(), n_cta) if opt_flags.is_persistent else n_cta
+    n_cta = min(target_info.num_sms(), n_cta) if opt_flags.is_persistent else n_cta
     flex = precision_config.flex_ctx
     bias_stride = None if bias is None else bias.stride(0)
     num_indx = None if scatter_indx is None else scatter_indx.src_indx.shape[0]

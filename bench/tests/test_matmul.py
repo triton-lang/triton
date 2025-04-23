@@ -15,7 +15,7 @@ from triton_bench.numerics_details.mxfp import downcast_to_mxfp, upcast_from_mxf
 # testing utilities
 from triton_bench.testing import assert_close, compute_actual_scale
 # target-specific utilities
-from triton_bench.meta import is_hip
+from triton_bench.target_info import is_hip
 
 # ---------------
 # initialize data

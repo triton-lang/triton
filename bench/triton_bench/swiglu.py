@@ -1,10 +1,10 @@
 from dataclasses import dataclass
 from triton_bench.numerics import InFlexData, OutFlexData
-from triton_bench.meta import num_sms, is_hip, cuda_capability_geq
 import torch
 import triton
 from triton.tools.tensor_descriptor import TensorDescriptor
 from .swiglu_details._swiglu import _swiglu
+from triton_bench import target_info
 
 
 @dataclass(frozen=True)
@@ -33,11 +33,11 @@ class SwiGLU(torch.autograd.Function):
         # optimization hyperparameters
         BLOCK_M, BLOCK_N = 32 // a.itemsize, 128
         num_warps = 4
-        kwargs = {'maxnreg': 64} if not is_hip() else {}
+        kwargs = {'maxnreg': 64} if not target_info.is_hip() else {}
         # TMA descriptors
         out_desc = None
         a_desc = None
-        if cuda_capability_geq(9, 0) and flex_ctx.out_data.actual_scale is not None:
+        if target_info.cuda_capability_geq(9, 0) and flex_ctx.out_data.actual_scale is not None:
             # We need TMA to store the outputs otherwise Triton will aggressively removing layout conversions at
             # the cost of duplicating too much compute. With TMA, the layout conversion gets folded into the TMA store,
             # and the duplication doesn't occur.
@@ -47,17 +47,18 @@ class SwiGLU(torch.autograd.Function):
             a_desc = TensorDescriptor.from_tensor(a, (BLOCK_M, 2 * BLOCK_N))
         # launch semi-persistent kernel
         N_BLOCKS = triton.cdiv(N // 2, BLOCK_N)
+        num_sms = target_info.num_sms()
         if expt_data is not None:
-            waves_per_sm = 32 if is_hip() else 128
-            num_pid = num_sms() * (waves_per_sm // num_warps)
+            waves_per_sm = 32 if target_info.is_hip() else 128
+            num_pid = num_sms * (waves_per_sm // num_warps)
             M_BLOCKS = max(1, triton.cdiv(num_pid, N_BLOCKS))
-            grid = (min(M_BLOCKS * N_BLOCKS, 4 * num_sms()), )
+            grid = (min(M_BLOCKS * N_BLOCKS, 4 * num_sms), )
         else:
             M_BLOCKS = triton.cdiv(M, BLOCK_M)
-            if M_BLOCKS * N_BLOCKS >= 8 * num_sms():
-                grid = (8 * num_sms(), )
+            if M_BLOCKS * N_BLOCKS >= 8 * num_sms:
+                grid = (8 * num_sms, )
             else:
-                grid = (min(M_BLOCKS * N_BLOCKS, 4 * num_sms()), )
+                grid = (min(M_BLOCKS * N_BLOCKS, 4 * num_sms), )
         _swiglu[grid](
             out_desc,
             flex_ctx.out_data.reinterpret(out),

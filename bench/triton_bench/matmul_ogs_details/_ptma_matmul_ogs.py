@@ -2,12 +2,17 @@ import functools
 import torch
 import triton
 import triton.language as tl
-from triton_bench.meta import get_scaled_dot_format_string, cuda_capability_geq
+from triton_bench.meta import constexpr_function, get_scaled_dot_format_string
+from triton_bench import target_info
 from triton_bench.numerics_details.mxfp import _unswizzle_mx_block
 from triton_bench.numerics_details.flexpoint import float_to_flex, load_scale, nan_propagating_absmax_reduce, compute_scale
 from ._common import make_matmul_repr, matmul_launch_metadata, swizzle2d, xcd_swizzle
 
 # fmt: off
+
+@constexpr_function
+def cuda_capability_geq(major, minor):
+    return target_info.cuda_capability_geq(major, minor)
 
 # TODO: this is a limitation of the triton frontend
 # we shouldn't have to do that!

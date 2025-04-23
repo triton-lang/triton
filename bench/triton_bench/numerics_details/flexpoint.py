@@ -1,10 +1,17 @@
-from triton_bench.meta import cuda_capability_geq, rcp_max_finite
+from triton_bench.meta import max_finite, rcp_max_finite
+from triton_bench.meta import constexpr_function
+from triton_bench import target_info
 import triton
 import triton.language as tl
 
 # -------------------------------
 # Kernels stuff
 # -------------------------------
+
+
+@constexpr_function
+def cuda_capability_geq(major, minor):
+    return target_info.cuda_capability_geq(major, minor)
 
 
 @triton.jit
