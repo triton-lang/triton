@@ -1780,6 +1780,12 @@ SwizzledSharedEncodingAttr AMDMfmaEncodingAttr::composeSharedLayoutForOperand(
   int maxPhase =
       std::max(std::min(simdWidth / perPhase, innerDimLength / vectorSize), 1u);
 
+  llvm::outs() << "[composeSharedLayoutForOperand]: innerDimLength: "
+               << innerDimLength << ", elemBitWidth: " << elemBitWidth
+               << ", elemsPerOneBanksRow: " << elemsPerOneBanksRow
+               << ", perPhase: " << perPhase << ", maxPhase: " << maxPhase
+               << ", vectorSize: " << vectorSize << "\n";
+
   // TODO (zhanglx): figure out better parameters for mfma4
   if (getMDim() == 4)
     maxPhase = 4;

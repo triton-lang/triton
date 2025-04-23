@@ -14,6 +14,12 @@ def TritonAMDGPUAggregateLoad : Pass<"tritonamdgpu-aggregate-load", "mlir::Modul
 
   let constructor = "mlir::createTritonAMDGPUAggregateLoadPass()";
 
+  let options = [
+    Option<"archGenerationName", "arch-generation-name",
+           "std::string", /*default=*/"std::string{}",
+           "GFX generation name of target device.">,
+  ];
+
   let dependentDialects = [];
 }
 

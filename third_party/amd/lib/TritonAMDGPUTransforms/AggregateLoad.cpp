@@ -31,6 +31,18 @@ int64_t getAllocSize(ShapedType type) {
   return allocSize;
 }
 
+Operation *getLoadOpFromScale(Value scale) {
+  Operation *op = scale.getDefiningOp();
+  if (isa<triton::LoadOp>(op)) {
+    return op;
+  } else if (isa<ttg::ConvertLayoutOp>(op)) {
+    op = dyn_cast<ttg::ConvertLayoutOp>(op).getSrc().getDefiningOp();
+    return isa<triton::LoadOp>(op) ? op : nullptr;
+  }
+
+  return nullptr;
+}
+
 void findValidLoads(scf::ForOp forOp,
                     SetVector<std::pair<Operation *, Operation *>> &validLoads,
                     SmallVector<std::pair<int64_t, int64_t>> &hoistLoopSpecs,
@@ -38,17 +50,23 @@ void findValidLoads(scf::ForOp forOp,
   int64_t currentSharedMemoryUsage = totalSharedMemoryUsage;
   for (Operation &op : forOp) {
     if (auto dotScaledOp = dyn_cast<triton::DotScaledOp>(&op)) {
-      auto aScale = dotScaledOp.getAScale();
-      auto bScale = dotScaledOp.getBScale();
-      auto aScaleLoadOp = aScale.getDefiningOp();
-      auto bScaleLoadOp = bScale.getDefiningOp();
-      if (!isa<triton::LoadOp>(aScaleLoadOp) ||
-          !isa<triton::LoadOp>(bScaleLoadOp)) {
+      Value aScale = dotScaledOp.getAScale();
+      Value bScale = dotScaledOp.getBScale();
+      Operation *aScaleLoadOp = getLoadOpFromScale(aScale);
+      Operation *bScaleLoadOp = getLoadOpFromScale(bScale);
+      if (!aScaleLoadOp || !bScaleLoadOp) {
+        llvm::outs() << "Can't find loadOp of aScale or bScale;\n";
         continue;
       }
 
       auto aScaleTy = dyn_cast<RankedTensorType>(aScale.getType());
       auto bScaleTy = dyn_cast<RankedTensorType>(bScale.getType());
+      if (!isa<ttg::LinearEncodingAttr>(aScaleTy.getEncoding())) {
+        llvm::outs() << "aScale is not linear layout\n";
+      }
+      if (!isa<ttg::LinearEncodingAttr>(bScaleTy.getEncoding())) {
+        llvm::outs() << "bScale is not linear layout\n";
+      }
       assert(isa<ttg::LinearEncodingAttr>(aScaleTy.getEncoding()) &&
              isa<ttg::LinearEncodingAttr>(bScaleTy.getEncoding()) &&
              "Both aScale and bScale should be linear layout.");
@@ -62,6 +80,11 @@ void findValidLoads(scf::ForOp forOp,
       auto aScaleShape = aScaleTy.getShape();
       auto bScaleShape = bScaleTy.getShape();
 
+      llvm::outs() << "ub: " << ub << "\n";
+      llvm::outs() << "aScaleShape: (" << aScaleShape[0] << ", "
+                   << aScaleShape[1] << ")\n";
+      llvm::outs() << "bScaleShape: (" << bScaleShape[0] << ", "
+                   << bScaleShape[1] << ")\n";
       assert((aScaleShape[1] == bScaleShape[1]) &&
              "aScale and bScale should have the same K size.");
 
@@ -72,7 +95,7 @@ void findValidLoads(scf::ForOp forOp,
       }
 
       constexpr int byteWidth = 1;
-      int64_t globalScaleKDim = aScaleShape[1] * ub;
+      int64_t globalScaleKDim = llvm::PowerOf2Ceil(aScaleShape[1] * ub);
       int64_t largestScaleK =
           expandableMemory / ((aScaleShape[0] + bScaleShape[0]) * byteWidth);
 
@@ -189,14 +212,29 @@ Value expandPathBcastK(Operation *bcastK, OpBuilder &builder, int ub) {
   return broadcastOp.getResult();
 }
 
-Value createLocalAlloc(OpBuilder &builder, Location loc, Value loadVal) {
+Value createLocalAlloc(OpBuilder &builder, Location loc, Value loadVal,
+                       int64_t hoistKSize, int64_t blockKSize,
+                       StringRef archGen) {
   auto tensorTy = dyn_cast<RankedTensorType>(loadVal.getType());
   SmallVector<int64_t> bufferShape(tensorTy.getShape().begin(),
                                    tensorTy.getShape().end());
+  llvm::outs() << "bufferShape(" << bufferShape.size() << "): ("
+               << bufferShape[0] << ", " << bufferShape[1] << ")\n";
+
+  auto isaFamily = triton::AMD::deduceISAFamily(archGenerationName);
+  const unsigned numBanks = (isaFamily == ISAFamily::CDNA4) ? 64 : 32;
+  const unsigned bankBitWidth = 32;
+  const unsigned simdWidth = 16;
+  constexpr int elemBitWidth = 8; // scale is 8-bit E8M0 float
+  int elemsPerOneBanksRow = (numBanks * bankBitWidth) / elemBitWidth;
+  int perPhase = std::max(1, elemsPerOneBanksRow / hoistKSize);
+  int maxPhase =
+      std::max(std::min(simdWidth / perPhase, hoistKSize / blockKSize), 1u);
+
   Type eType = tensorTy.getElementType();
   auto CTALayout = ttg::getCTALayout(tensorTy.getEncoding());
   auto sharedEnc = ttg::SwizzledSharedEncodingAttr::get(
-      tensorTy.getContext(), /*vec*/ 1, /*perPhase*/ 1, /*maxPhase*/ 1,
+      tensorTy.getContext(), blockKSize, perPhase, maxPhase,
       ttg::getOrder(cast<ttg::DistributedEncodingTrait>(tensorTy.getEncoding()),
                     tensorTy.getShape()),
       CTALayout);
@@ -207,8 +245,11 @@ Value createLocalAlloc(OpBuilder &builder, Location loc, Value loadVal) {
   return builder.create<ttg::LocalAllocOp>(loc, ldsBufferType, loadVal);
 }
 
-Value hoistLoad(scf::ForOp forOp, Operation *op, int64_t hoistKSize, int ub) {
+Value hoistLoad(scf::ForOp forOp, Operation *op, int64_t hoistKSize, int ub,
+                StringRef archGen) {
   triton::LoadOp loadOp = dyn_cast<triton::LoadOp>(op);
+  int64_t blockKSize =
+      dyn_cast<RankedTensorType>(loadOp.getPtr().getType()).getShape().back();
   // Here I assume
   // 1. There is no mask along k dim in the loadOp
   // 2. The ptr of loadOp comes from a block arg of the loop
@@ -307,7 +348,8 @@ Value hoistLoad(scf::ForOp forOp, Operation *op, int64_t hoistKSize, int ub) {
 
   // Store loaded tensor into LDS
   auto localAllocVal =
-      createLocalAlloc(builder, forOp.getLoc(), aggregatedLoadVal);
+      createLocalAlloc(builder, forOp.getLoc(), aggregatedLoadVal, hoistKSize,
+                       blockKSize, archGen);
 
   return localAllocVal;
 }
@@ -357,17 +399,23 @@ void processLoopBody(scf::ForOp forOp, Operation *op, Value localAllocVal) {
   auto ldsSubview = builder.create<ttg::MemDescSubviewOp>(
       loc, subviewTy, localAllocVal, localBufOff);
 
-  // step 3: local_load
-  // TODO: Change to dotScaledOp
+  // step 3 & 4: local_load & replace opA in dotScaledOp
   Operation *use = *loadOp.getResult().getUsers().begin();
-  assert(isa<triton::DotScaledOp>(use) &&
-         "The load of scale should be directly used by dotScaledOp");
+  if (isa<triton::DotScaledOp>(use)) {
+    // direct load
+    auto localLoadVal =
+        builder.create<ttg::LocalLoadOp>(loc, loadOp.getType(), ldsSubview);
+    loadOp.getResult().replaceAllUsesWith(localLoadVal);
+  } else {
+    assert(isa<ttg::ConvertLayoutOp>(use) &&
+           "User of load scale should be either cvt or dot_scaled");
+    auto cvt = dyn_cast<ttg::ConvertLayoutOp>(use);
+    auto localLoadVal =
+        builder.create<ttg::LocalLoadOp>(loc, cvt.getType(), ldsSubview);
 
-  auto localLoadVal =
-      builder.create<ttg::LocalLoadOp>(loc, loadOp.getType(), ldsSubview);
-
-  // Step 4: replace opA in dotScaledOp
-  loadOp.getResult().replaceAllUsesWith(localLoadVal);
+    cvt.getResult().replaceAllUsesWith(localLoadVal);
+    cvt.erase();
+  }
 
   // step 5: cleanup
   auto blockArg = dyn_cast<BlockArgument>(loadOp.getOperand(0));
@@ -392,11 +440,11 @@ void generateOuterLoop(scf::ForOp forOp, Value aScaleLocalAllocVal,
       llvm::cast<ttg::LocalAllocOp>(aScaleLocalAllocVal.getDefiningOp());
   auto bScaleLocalAllocOp =
       llvm::cast<ttg::LocalAllocOp>(bScaleLocalAllocVal.getDefiningOp());
-  auto aScaleLoadOp = llvm::dyn_cast<triton::LoadOp>(
-      aScaleLocalAllocOp.getSrc().getDefiningOp());
-  auto bScaleLoadOp = llvm::dyn_cast<triton::LoadOp>(
-      bScaleLocalAllocOp.getSrc().getDefiningOp());
-  assert(aScaleLoadOp && aScaleLoadOp &&
+  auto aScaleLoadOp = dyn_cast_or_null<triton::LoadOp>(
+      getLoadOpFromScale(aScaleLocalAllocOp.getSrc()));
+  auto bScaleLoadOp = dyn_cast_or_null<triton::LoadOp>(
+      getLoadOpFromScale(bScaleLocalAllocOp.getSrc()));
+  assert(aScaleLoadOp && bScaleLoadOp &&
          "Expected src of local alloc to be loadOp to generate outer loop.");
 
   OpBuilder builder(forOp);
@@ -487,8 +535,12 @@ void generateOuterLoop(scf::ForOp forOp, Value aScaleLocalAllocVal,
 // Stream Pipeline
 struct AggregateLoad : public TritonAMDGPUAggregateLoadBase<AggregateLoad> {
   AggregateLoad() = default;
+  AggregateLoad(StringRef archGen) {
+    this->archGenerationName = archGen.data();
+  }
 
   void runOnOperation() override {
+    // return;
     int64_t totalSharedMemoryUsage = 0;
     bool foundDotScaledOp = false;
     getOperation()->walk([&](triton::DotScaledOp dotScaledOp) -> void {
@@ -497,13 +549,22 @@ struct AggregateLoad : public TritonAMDGPUAggregateLoadBase<AggregateLoad> {
       // Get aScale and bScale size.
       auto aScaleType = llvm::cast<ShapedType>(aScale.getType());
       auto bScaleType = llvm::cast<ShapedType>(bScale.getType());
+      if (!aScaleType.hasStaticShape()) {
+        llvm::outs() << "aScaleType doesn't have static shape\n";
+      }
+      if (!bScaleType.hasStaticShape()) {
+        llvm::outs() << "bScaleType doesn't have static shape\n";
+      }
       assert(aScaleType.hasStaticShape() &&
              "Expected tt.dot to have aScale as static shape.");
       assert(bScaleType.hasStaticShape() &&
              "Expected tt.dot to have bScale as static shape.");
       int64_t aScaleAllocSize = getAllocSize(aScaleType);
-      int64_t bScaleAllocSize = getAllocSize(aScaleType);
+      int64_t bScaleAllocSize = getAllocSize(bScaleType);
       totalSharedMemoryUsage += aScaleAllocSize + bScaleAllocSize;
+      if (foundDotScaledOp) {
+        llvm::outs() << "Currently only support a single dot operation.\n";
+      }
       assert(!foundDotScaledOp &&
              "Currently only support a single dot operation.");
       foundDotScaledOp = true;
@@ -511,13 +572,14 @@ struct AggregateLoad : public TritonAMDGPUAggregateLoadBase<AggregateLoad> {
     // llvm::outs() << "before: " << *getOperation() << "\n";
 
     if (!foundDotScaledOp) {
-      llvm::outs() << "Didn't find dotOp for AggregateLoad\n";
+      llvm::outs() << "Didn't find dotScaledOp for AggregateLoad\n";
       return;
     }
 
-    // llvm::outs() << "Total smem Usage:" << totalSharedMemoryUsage << "\n";
+    llvm::outs() << "Total smem Usage:" << totalSharedMemoryUsage << "\n";
 
     // Do the pipelining
+    size_t cnt = 0;
     getOperation()->walk([&](scf::ForOp forOp) -> void {
       // We need K to be constant, i.e. the upper bound of the loop is a
       // constant
@@ -528,26 +590,37 @@ struct AggregateLoad : public TritonAMDGPUAggregateLoadBase<AggregateLoad> {
       SmallVector<std::pair<int64_t, int64_t>> hoistLoopSpecs;
       findValidLoads(forOp, validLoads, hoistLoopSpecs, ub,
                      totalSharedMemoryUsage);
+      llvm::outs() << "validLoads.size(): " << validLoads.size() << "\n";
       for (auto [index, loadOps] : llvm::enumerate(validLoads)) {
         auto [hoistKSize, hoistFactor] = hoistLoopSpecs[index];
+        llvm::outs() << "hoistKSize: " << hoistKSize
+                     << ", hoistFactor: " << hoistFactor << "\n";
         auto aScaleLoadOp = loadOps.first;
         auto bScaleLoadOp = loadOps.second;
-        auto aScaleLocalAllocValue =
-            hoistLoad(forOp, aScaleLoadOp, hoistKSize, ub);
-        auto bScaleLocalAllocValue =
-            hoistLoad(forOp, bScaleLoadOp, hoistKSize, ub);
+        auto aScaleLocalAllocValue = hoistLoad(forOp, aScaleLoadOp, hoistKSize,
+                                               ub, this->archGenerationName);
+        // llvm::outs() << "hoist aScale\n";
+        auto bScaleLocalAllocValue = hoistLoad(forOp, bScaleLoadOp, hoistKSize,
+                                               ub, this->archGenerationName);
+        // llvm::outs() << "hoist bScale\n";
         processLoopBody(forOp, aScaleLoadOp, aScaleLocalAllocValue);
+        // llvm::outs() << "process loop body for aScale\n";
         processLoopBody(forOp, bScaleLoadOp, bScaleLocalAllocValue);
-        if (hoistFactor > 1)
+        // llvm::outs() << "process loop body for bScale\n";
+        if (hoistFactor > 1) {
           generateOuterLoop(forOp, aScaleLocalAllocValue, bScaleLocalAllocValue,
                             hoistFactor, hoistKSize);
+        }
+        cnt++;
       }
     });
+    llvm::outs() << cnt << " for-loop has been modified\n";
     // llvm::outs() << "after: " << *getOperation() << "\n";
   }
 };
 } // namespace
 
-std::unique_ptr<Pass> mlir::createTritonAMDGPUAggregateLoadPass() {
-  return std::make_unique<AggregateLoad>();
+std::unique_ptr<Pass>
+mlir::createTritonAMDGPUAggregateLoadPass(std::string archGen) {
+  return std::make_unique<AggregateLoad>(archGen);
 }

@@ -92,7 +92,8 @@ void init_triton_amd_passes_ttgpuir(py::module &&m) {
         mlir::createTritonAMDGPUInThreadTransposePass());
   });
   ADD_PASS_WRAPPER_0("add_aggregate_load",
-                     mlir::createTritonAMDGPUAggregateLoadPass);
+                     mlir::createTritonAMDGPUAggregateLoadPass,
+                     const std::string);
 }
 
 void addControlConstant(llvm::Module *module, const char *name,

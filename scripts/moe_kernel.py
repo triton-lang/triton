@@ -67,41 +67,41 @@ def matmul_kernel(a_ptr, b_ptr, c_ptr, M, N, K: tl.constexpr, stride_am, stride_
         tl.atomic_add(c_ptrs, c, mask=c_mask)
 
 
-@triton.autotune(
-    configs=[
-        triton.Config(
-            {
-                'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 128, 'BLOCK_SIZE_K': 128, 'GROUP_SIZE_M': 4, 'waves_per_eu': 2,
-                'kpack': 2, 'matrix_instr_nonkdim': 16
-            }, num_warps=4, num_stages=2),
-        triton.Config(
-            {
-                'BLOCK_SIZE_M': 256, 'BLOCK_SIZE_N': 128, 'BLOCK_SIZE_K': 64, 'GROUP_SIZE_M': 4, 'waves_per_eu': 2,
-                'kpack': 2, 'matrix_instr_nonkdim': 0
-            }, num_warps=8, num_stages=2),
-        triton.Config(
-            {'BLOCK_SIZE_M': 256, 'BLOCK_SIZE_N': 256, 'BLOCK_SIZE_K': 128, 'GROUP_SIZE_M': 4, 'waves_per_eu': 0},
-            num_warps=8, num_stages=2),
-        triton.Config(
-            {
-                'BLOCK_SIZE_M': 256, 'BLOCK_SIZE_N': 256, 'BLOCK_SIZE_K': 64, 'GROUP_SIZE_M': 4, 'waves_per_eu': 2,
-                'kpack': 1, 'matrix_instr_nonkdim': 0
-            }, num_warps=8, num_stages=2),
-        triton.Config(
-            {
-                'BLOCK_SIZE_M': 256, 'BLOCK_SIZE_N': 256, 'BLOCK_SIZE_K': 64, 'GROUP_SIZE_M': 1, 'waves_per_eu': 0,
-                'kpack': 1
-            }, num_warps=8, num_stages=2),
-        triton.Config(
-            {'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 256, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 4, 'waves_per_eu': 0},
-            num_warps=8, num_stages=2),
-        triton.Config(
-            {'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 128, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 1, 'waves_per_eu': 2},
-            num_warps=8, num_stages=2),
-    ],
-    key=['M', 'N', 'K'],
-    use_cuda_graph=True,
-)
+# @triton.autotune(
+#     configs=[
+#         triton.Config(
+#             {
+#                 'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 128, 'BLOCK_SIZE_K': 128, 'GROUP_SIZE_M': 4, 'waves_per_eu': 2,
+#                 'kpack': 2, 'matrix_instr_nonkdim': 16
+#             }, num_warps=4, num_stages=2),
+#         triton.Config(
+#             {
+#                 'BLOCK_SIZE_M': 256, 'BLOCK_SIZE_N': 128, 'BLOCK_SIZE_K': 64, 'GROUP_SIZE_M': 4, 'waves_per_eu': 2,
+#                 'kpack': 2, 'matrix_instr_nonkdim': 0
+#             }, num_warps=8, num_stages=2),
+#         triton.Config(
+#             {'BLOCK_SIZE_M': 256, 'BLOCK_SIZE_N': 256, 'BLOCK_SIZE_K': 128, 'GROUP_SIZE_M': 4, 'waves_per_eu': 0},
+#             num_warps=8, num_stages=2),
+#         triton.Config(
+#             {
+#                 'BLOCK_SIZE_M': 256, 'BLOCK_SIZE_N': 256, 'BLOCK_SIZE_K': 64, 'GROUP_SIZE_M': 4, 'waves_per_eu': 2,
+#                 'kpack': 1, 'matrix_instr_nonkdim': 0
+#             }, num_warps=8, num_stages=2),
+#         triton.Config(
+#             {
+#                 'BLOCK_SIZE_M': 256, 'BLOCK_SIZE_N': 256, 'BLOCK_SIZE_K': 64, 'GROUP_SIZE_M': 1, 'waves_per_eu': 0,
+#                 'kpack': 1
+#             }, num_warps=8, num_stages=2),
+#         triton.Config(
+#             {'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 256, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 4, 'waves_per_eu': 0},
+#             num_warps=8, num_stages=2),
+#         triton.Config(
+#             {'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 128, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 1, 'waves_per_eu': 2},
+#             num_warps=8, num_stages=2),
+#     ],
+#     key=['M', 'N', 'K'],
+#     use_cuda_graph=True,
+# )
 @triton.jit
 def scaled_dot_kernel(a_ptr, b_ptr, c_ptr, a_scale, b_scale, M, N, K: tl.constexpr, stride_scale,  #
                       stride_am, stride_ak, stride_bk, stride_bn, stride_cm, stride_cn, sorted_token_ids_ptr,
@@ -128,7 +128,7 @@ def scaled_dot_kernel(a_ptr, b_ptr, c_ptr, a_scale, b_scale, M, N, K: tl.constex
         pid_m = first_pid_m + (pid % group_size_m)
         pid_n = (pid % num_pid_in_group) // group_size_m
     if SPLIT_K == 1:
-        # offs_k = tl.arange(0, BLOCK_SIZE_K)
+        offs_k = tl.arange(0, BLOCK_SIZE_K)
         offs_ak = tl.arange(0, BLOCK_SIZE_K // DIV_FACTOR_A)
         offs_bk = tl.arange(0, BLOCK_SIZE_K // DIV_FACTOR_B)
     else:
@@ -139,11 +139,8 @@ def scaled_dot_kernel(a_ptr, b_ptr, c_ptr, a_scale, b_scale, M, N, K: tl.constex
     token_mask = offs_token < num_valid_tokens
 
     offs_bn = (pid_n * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N))
-    # offs_bn_scale = (pid_n * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N)) % N
     offs_bn_scale = pid_n * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N)
 
-    # a_ptrs = a_ptr + offs_token[:, None] * stride_am + offs_k[None, :] * stride_ak
-    # b_ptrs = b_ptr + offs_k[:, None] * stride_bk + offs_bn[None, :] * stride_bn
     a_ptrs = a_ptr + offs_token[:, None] * \
         stride_am + offs_ak[None, :] * stride_ak
     b_ptrs = b_ptr + offs_bk[:, None] * \
@@ -155,8 +152,6 @@ def scaled_dot_kernel(a_ptr, b_ptr, c_ptr, a_scale, b_scale, M, N, K: tl.constex
     b_scale_ptr = b_scale + \
         offs_bn_scale[:, None] * stride_scale + offs_scale_k[None, :]
 
-    # acc_dtype = tl.float32 if a_ptr.type.element_ty != tl.int8 else tl.int32
-    # accumulator = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=c_ptr.dtype.element_ty)
     accumulator = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=tl.float32)
 
     for k in range(0, tl.cdiv(K, BLOCK_SIZE_K * SPLIT_K)):
@@ -165,9 +160,6 @@ def scaled_dot_kernel(a_ptr, b_ptr, c_ptr, a_scale, b_scale, M, N, K: tl.constex
         b = tl.load(b_ptrs)
         scale_a = tl.load(a_scale_ptr)
         scale_b = tl.load(b_scale_ptr)
-        # scale_a = tl.full(a_scale_ptr.shape, 127, dtype=tl.int8)
-        # scale_b = tl.full(b_scale_ptr.shape, 127, dtype=tl.int8)
-        # accumulator += tl.dot(a, b)
         accumulator = tl.dot_scaled(a, scale_a, DTYPE_A, b, scale_b, DTYPE_B, accumulator)
         a_ptrs += (BLOCK_SIZE_K // DIV_FACTOR_A) * SPLIT_K * stride_ak
         b_ptrs += (BLOCK_SIZE_K // DIV_FACTOR_B) * SPLIT_K * stride_bk
@@ -175,7 +167,6 @@ def scaled_dot_kernel(a_ptr, b_ptr, c_ptr, a_scale, b_scale, M, N, K: tl.constex
         b_scale_ptr += (BLOCK_SIZE_K // 32) * SPLIT_K
 
     c = accumulator.to(c_ptr.type.element_ty)
-    # c = accumulator
     offs_cm = pid_m * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M)
     offs_cn = pid_n * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N)
     c_ptrs = c_ptr + stride_cm * \
@@ -394,46 +385,49 @@ def get_type(provider):
 
 x_vals = [(1024 * v, 1024 * v, 1024 * v) for v in range(1, 9)]
 x_vals += [(4864, 4096, 8192), (9728, 8192, 65536), (4864, 8192, 4160)]
-x_vals += [(16, 4096, 2048)]
+# x_vals = []
+x_vals += [(16, 4096, 2048), (16, 4096, 4096)]
+# x_vals += [(16, 16, 1024 * v) for v in range(1, 9)]
+# x_vals += [(32, 32, 1024 * v) for v in range(1, 9)]
 
-configs = []
-for backend in ('triton', 'torch'):
-    for dtype_a in ('float8e5', 'float8e4nv', 'float4'):
-        for dtype_b in ('float8e5', 'float8e4nv', 'float4'):
-            configs.append(
-                triton.testing.Benchmark(
-                    x_names=["M", "N", "K"],
-                    x_vals=x_vals,
-                    line_arg="provider",
-                    line_vals=[f'{backend}({dtype_a}/{dtype_b})'],
-                    line_names=[f'{backend}({dtype_a}/{dtype_b})'],
-                    ylabel="TFLOPS",  # Label name for the y-axis
-                    plot_name="scaled-moe-performance",
-                    args={},
-                ))
+line_vals = []
+line_names = []
+for dtype_a, dtype_b in (('float8e4nv', 'float8e4nv'), ('float8e4nv', 'float4'), ('float4', 'float4')):
+    for backend in ('triton', 'torch'):
+        line_vals.append(f'{backend}({dtype_a}/{dtype_b})')
+        line_names.append(f'{backend}({dtype_a}/{dtype_b})')
 
 
-@triton.testing.perf_report(configs)
+@triton.testing.perf_report(
+    triton.testing.Benchmark(
+        x_names=["M", "N", "K"],
+        x_vals=x_vals,
+        line_arg="provider",
+        line_vals=line_vals,
+        line_names=line_names,
+        ylabel="TFLOPS",  # Label name for the y-axis
+        plot_name="scaled-moe-performance",
+        args={},
+    ))
 def benchmark(M, N, K, provider):
     dtype_c = "fp32"
-    config = {
-        'M': 16, 'N': 4096, 'K': 2048, 'rowMajorA': 'T', 'rowMajorB': 'N', 'BLOCK_SIZE_M': 16, 'BLOCK_SIZE_N': 64,
-        'BLOCK_SIZE_K': 128,
-        #   'BLOCK_SIZE_M': 16, 'BLOCK_SIZE_N': 64, 'BLOCK_SIZE_K': 1024,
-        'GROUP_SIZE_M': 1, 'SPLIT_K': 1, 'num_warps': 8, 'num_stages': 2, 'waves_per_eu': 2, 'matrix_instr_nonkdim': 16,
-        'kpack': 1
-    }
-    (block_m, block_n, block_k, group_m, split_k, num_warps, num_stages, waves_per_eu, mfmaInstrSize,
-     kpack) = read_config(config)
-    block_m = 32
-    block_n = 32
-    block_k = 64
+    # block_m = 256
+    # block_n = 256
+    # block_k = 128
+    block_m = 16
+    block_n = 256
+    block_k = 256
     group_m = 1
     split_k = 1
     num_warps = 8
-    num_stages = 2
+    # num_stages = 3
+    num_stages = 1
+    waves_per_eu = 2
+    mfmaInstrSize = 16
+    kpack = 1
 
     bias = None
+    use_bias = False
 
     dtype_a, dtype_b = get_type(provider)
     a, a_fp16 = create_operand(dtype_a, M, K, 1)
@@ -462,22 +456,8 @@ def benchmark(M, N, K, provider):
         ms, min_ms, max_ms = triton.testing.do_bench(lambda: torch.matmul(a_fp16 * a_scale_ref, b_fp16 * b_scale_ref),
                                                      quantiles=quantiles)
 
-    # a = torch.randn((M, K), device=DEVICE, dtype=torch.float16)
-    # b = torch.randn((K, N), device=DEVICE, dtype=torch.float16)
-    # if TORCH_HAS_FP8 and fp8_inputs:
-    #     a = a.to(torch.float8_e5m2)
-    #     b = b.T
-    #     b = b.to(torch.float8_e5m2)
-    # quantiles = [0.5, 0.2, 0.8]
-    # if provider == ref_lib.lower():
-    #     ms, min_ms, max_ms = triton.testing.do_bench(
-    #         lambda: torch.matmul(a, b), quantiles=quantiles)
-    # if provider == 'triton':
-    #     ms, min_ms, max_ms = triton.testing.do_bench(
-    #         lambda: matmul(a, b), quantiles=quantiles)
-
     def perf(ms):
-        return 2 * M * N * K * 1e-12 / (ms * 1e-3)
+        return (2 * M * N * K + 2 * M * N * K / 32) * 1e-12 / (ms * 1e-3)
 
     return perf(ms), perf(max_ms), perf(min_ms)
 
@@ -485,10 +465,8 @@ def benchmark(M, N, K, provider):
 if __name__ == "__main__":
     config = {
         'M': 16, 'N': 4096, 'K': 2048, 'rowMajorA': 'T', 'rowMajorB': 'N', 'BLOCK_SIZE_M': 16, 'BLOCK_SIZE_N': 64,
-        'BLOCK_SIZE_K': 128,
-        #   'BLOCK_SIZE_M': 16, 'BLOCK_SIZE_N': 64, 'BLOCK_SIZE_K': 1024,
-        'GROUP_SIZE_M': 1, 'SPLIT_K': 1, 'num_warps': 8, 'num_stages': 2, 'waves_per_eu': 2, 'matrix_instr_nonkdim': 16,
-        'kpack': 1
+        'BLOCK_SIZE_K': 128, 'GROUP_SIZE_M': 1, 'SPLIT_K': 1, 'num_warps': 8, 'num_stages': 2, 'waves_per_eu': 2,
+        'matrix_instr_nonkdim': 16, 'kpack': 1
     }
     config.update({
         'M': 4096,
@@ -516,11 +494,6 @@ if __name__ == "__main__":
     bias_vector = False
     scaled = True
     run_benchmark = True
-
-    # if run_benchmark:
-    #     benchmark.run(print_data=True)
-    #     import sys
-    #     sys.exit(0)
 
     # Load Configs
     block_m, block_n, block_k, group_m, split_k, num_warps, num_stages, waves_per_eu, mfmaInstrSize, kpack = read_config(
@@ -591,20 +564,4 @@ if __name__ == "__main__":
         torch.testing.assert_close(triton_output, torch_output, atol=atol, rtol=rtol)
 
     if run_benchmark:
-        for _ in range(100):
-            invoke_scaled_moe(a, b, c, a_scale, b_scale, bias, block_m, block_n, block_k, dtype_a, dtype_b, group_m,
-                              split_k, num_warps, num_stages, waves_per_eu, mfmaInstrSize, kpack, use_bias,
-                              sorted_token_ids_ptr, num_valid_tokens)
-
-        NUM_RUNS = 1000
-        start_t = time.time()
-        for _ in range(NUM_RUNS):
-            invoke_scaled_moe(a, b, c, a_scale, b_scale, bias, block_m, block_n, block_k, dtype_a, dtype_b, group_m,
-                              split_k, num_warps, num_stages, waves_per_eu, mfmaInstrSize, kpack, use_bias,
-                              sorted_token_ids_ptr, num_valid_tokens)
-        elapsed_t = time.time() - start_t
-
-        def perf(s):
-            return 2 * M * N * K * 1e-12 / s
-
-        print(f'Time elapsed: {elapsed_t/NUM_RUNS}, TFLOPS: {perf(elapsed_t/NUM_RUNS)}')
+        benchmark.run(print_data=True)

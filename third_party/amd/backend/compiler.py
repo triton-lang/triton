@@ -235,7 +235,7 @@ class HIPBackend(BaseBackend):
         amd.passes.ttgpuir.add_accelerate_matmul(pm, options.arch, options.matrix_instr_nonkdim, options.kpack)
         passes.ttgpuir.add_remove_layout_conversions(pm)
         amd.passes.ttgpuir.add_optimize_epilogue(pm)
-        amd.passes.ttgpuir.add_aggregate_load(pm)
+        amd.passes.ttgpuir.add_aggregate_load(pm, options.arch)
         passes.ttgpuir.add_optimize_dot_operands(pm, True)
         amd.passes.ttgpuir.add_hoist_layout_conversions(pm)
 
@@ -285,7 +285,7 @@ class HIPBackend(BaseBackend):
             fn = os.environ['AMD_INSERT_TTGIR']
             if ':' in fn:
                 kernel_name, insert_module_path = fn.split(':')
-                print(f"Replace kernel {kernel_name}'s ttgir with {insert_module_path}")            
+                print(f"Replace kernel {kernel_name}'s ttgir with {insert_module_path}")
                 if not mod.has_function(kernel_name):
                     return mod
             else:
