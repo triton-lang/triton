@@ -39,8 +39,8 @@ DEFINE_DISPATCH(ExternLibCuda, streamCreateWithPriority,
 
 DEFINE_DISPATCH(ExternLibCuda, streamSynchronize, cuStreamSynchronize, CUstream)
 
-DEFINE_DISPATCH(ExternLibCuda, memcpyDToHAsync, cuMemcpyDtoHAsync, void *, CUdeviceptr,
-                size_t, CUstream)
+DEFINE_DISPATCH(ExternLibCuda, memcpyDToHAsync, cuMemcpyDtoHAsync, void *,
+                CUdeviceptr, size_t, CUstream)
 
 DEFINE_DISPATCH(ExternLibCuda, memAllocHost, cuMemAllocHost, void **, size_t)
 

@@ -24,7 +24,6 @@ CUresult deviceGetAttribute(int *pi, CUdevice_attribute attrib, CUdevice dev);
 
 template <bool CheckSuccess> CUresult deviceGet(CUdevice *device, int ordinal);
 
-
 template <bool CheckSuccess>
 CUresult streamCreateWithPriority(CUstream *pStream, unsigned int flags,
                                   int priority);
