@@ -55,7 +55,7 @@ class RoutingData:
 
 def routing(logits, n_expts_act, expt_indx=None, simulated_ep=1):
     from .topk import topk
-    from .reduce import sum
+    from .reduction import sum
     from .compaction import compaction
     assert expt_indx is None
     cdiv = triton.cdiv
