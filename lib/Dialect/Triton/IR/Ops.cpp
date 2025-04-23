@@ -976,15 +976,10 @@ void MakeTensorDescOp::build(OpBuilder &builder, OperationState &state,
     llvm::report_fatal_error("Expected pointer type");
   }
   auto elemTy = ptrTy.getPointeeType();
-  if (isSignedInteger) {
-    auto intTy = cast<IntegerType>(elemTy);
-    auto ctx = builder.getContext();
-    elemTy = IntegerType::get(ctx, intTy.getWidth(), IntegerType::Signed);
-  }
-
   SmallVector<int64_t> blockShape64(blockShape);
   auto blockTy = RankedTensorType::get(blockShape64, elemTy);
-  auto descTy = TensorDescType::get(builder.getContext(), blockTy);
+  auto descTy =
+      TensorDescType::get(builder.getContext(), blockTy, isSignedInteger);
   return build(builder, state, descTy, base, shape, strides);
 }
 
