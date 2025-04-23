@@ -247,7 +247,7 @@ void TCGen5MMAOp::addCompletionBarrier(Value barrier, Value pred) {
   getBarriersMutable().append(barrier);
 }
 
-Value TCGen5MMAOp::getAccumulator() { return getD(); }
+TypedValue<MemDescType> TCGen5MMAOp::getAccumulator() { return getD(); }
 
 void TCGen5MMAOp::setAccumulator(Value accum) { getDMutable().assign(accum); }
 
@@ -279,6 +279,10 @@ void TCGen5MMAScaledOp::getEffects(
   }
   effects.emplace_back(MemoryEffects::Read::get(), &getBMutable(),
                        SharedMemory::get());
+  effects.emplace_back(MemoryEffects::Read::get(), &getAScaleMutable(),
+                       TensorMemory::get());
+  effects.emplace_back(MemoryEffects::Read::get(), &getBScaleMutable(),
+                       TensorMemory::get());
 }
 
 bool TCGen5MMAScaledOp::verifyDims() {
@@ -345,7 +349,7 @@ void TCGen5MMAScaledOp::addCompletionBarrier(Value barrier, Value pred) {
   getBarriersMutable().append(barrier);
 }
 
-Value TCGen5MMAScaledOp::getAccumulator() { return getD(); }
+TypedValue<MemDescType> TCGen5MMAScaledOp::getAccumulator() { return getD(); }
 
 void TCGen5MMAScaledOp::setAccumulator(Value accum) {
   getDMutable().assign(accum);

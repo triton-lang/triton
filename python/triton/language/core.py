@@ -264,6 +264,32 @@ class constexpr:
         return self.value(*args, **kwds)
 
 
+def constexpr_function(f):
+    """
+    Wraps an arbitrary Python function so that it can be called at
+    compile-time on constexpr arguments in a Triton function and
+    returns a constexpr result.
+    """
+
+    @wraps(f)
+    def wrapper(*args, **kwargs):
+        # de-constexpr arguments and discard the _builder keyword argument:
+        args = [getattr(x, "value", x) for x in args]
+        kwargs = {k: getattr(v, "value", v) for (k, v) in kwargs.items() if k != "_builder"}
+
+        # call the raw Python function f:
+        res = f(*args, **kwargs)
+
+        # convert result back to a Triton constexpr:
+        return constexpr(res)
+
+    # disguise the function as a Triton builtin to avoid raising an error
+    # that we're calling a non-JIT function from within a Triton kernel:
+    wrapper.__triton_builtin__ = True
+    wrapper.__module__ = constexpr_function.__module__
+    return wrapper
+
+
 CONSTEXPR_0 = constexpr(0)
 
 
@@ -1159,7 +1185,7 @@ class tensor(base_value):
     def sigmoid(self) -> tensor:
         ...
 
-    def softmax(self, ieee_rounding=False) -> tensor:
+    def softmax(self, dim=None, keep_dims=False, ieee_rounding=False) -> tensor:
         ...
 
     def ravel(self) -> tensor:
@@ -1181,6 +1207,9 @@ class tensor(base_value):
         ...
 
     def xor_sum(self, axis=None, keep_dims=False) -> tensor:
+        ...
+
+    def reduce_or(self, axis=None, keep_dims=False) -> tensor:
         ...
 
     def cumsum(self, axis=0, reverse=False) -> tensor:
