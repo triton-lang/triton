@@ -99,8 +99,6 @@ def TT_DescriptorStoreLikeOpInterface : OpInterface<"DescriptorStoreLikeOpInterf
       /*methodName=*/"getSrc",
       /*args=*/(ins)>,
   ];
-
-  let verify = [{ return ::mlir::triton::impl::verifyDescriptorStoreLikeOpInterface($_op); }];
 }
 
 

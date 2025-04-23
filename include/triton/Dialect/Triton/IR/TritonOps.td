@@ -1304,6 +1304,7 @@ def TT_DescriptorStoreOp : TT_Op<"descriptor_store", [TT_DescriptorStoreLikeOpIn
     $desc `[` $indices `]` `,` $src
     attr-dict `:` qualified(type($desc)) `,` type($src)
   }];
+  let hasVerifier = 1;
 }
 
 def TT_DescriptorReduceOp : TT_Op<"descriptor_reduce", [TT_DescriptorStoreLikeOpInterface]> {
@@ -1359,7 +1360,7 @@ def TT_DescriptorGatherOp : TT_Op<"descriptor_gather", [TT_DescriptorOpInterface
   }];
 }
 
-def TT_DescriptorScatterOp : TT_Op<"descriptor_scatter", [TT_DescriptorOpInterface]> {
+def TT_DescriptorScatterOp : TT_Op<"descriptor_scatter", [TT_DescriptorStoreLikeOpInterface]> {
   let summary = "scatter multiple rows to a descriptor from a single tensor";
   let description = [{
     The `tt.descriptor_scatter` op will be lowered to NVIDIA TMA

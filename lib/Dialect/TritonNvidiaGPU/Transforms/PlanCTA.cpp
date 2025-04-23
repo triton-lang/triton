@@ -393,8 +393,7 @@ void CTAPlanner::processStoreLikeOps(triton::FuncOp &funcOp) {
   llvm::SmallVector<Operation *> stores;
   funcOp.walk([&](Operation *op) {
     if (llvm::isa<triton::StoreOp, triton::AtomicRMWOp, triton::AtomicCASOp,
-                  triton::DescriptorStoreLikeOpInterface,
-                  triton::DescriptorScatterOp>(op))
+                  triton::DescriptorStoreLikeOpInterface>(op))
       stores.push_back(op);
   });
   assert(stores.size() > 0 && "Cannot find store-like ops");
@@ -406,8 +405,6 @@ void CTAPlanner::processStoreLikeOps(triton::FuncOp &funcOp) {
       if (auto descStore =
               dyn_cast<triton::DescriptorStoreLikeOpInterface>(store))
         return descStore.getSrc();
-      if (auto descScatter = dyn_cast<triton::DescriptorScatterOp>(store))
-        return descScatter.getSrc();
       return store->getOperand(0);
     }();
     if (auto tensorTy = dyn_cast<RankedTensorType>(val.getType())) {
@@ -622,7 +619,7 @@ bool CTAPlanner::isLoadStoreOp(Operation *op) const {
   return llvm::isa<triton::LoadOp, triton::StoreOp, triton::AtomicRMWOp,
                    triton::AtomicCASOp, triton::DescriptorLoadOp,
                    triton::DescriptorStoreLikeOpInterface,
-                   triton::DescriptorGatherOp, triton::DescriptorScatterOp>(op);
+                   triton::DescriptorGatherOp>(op);
 }
 
 bool CTAPlanner::processLoadStore(Operation *op, Attribute layout) {

@@ -1352,8 +1352,9 @@ LogicalResult DescriptorScatterOp::verify() {
 }
 
 // -- DescriptorLoadOp --
-LogicalResult verifyDescriptorLoadStoreType(Operation *op, TensorDescType desc,
-                                            RankedTensorType tensor) {
+static LogicalResult verifyDescriptorLoadStoreType(Operation *op,
+                                                   TensorDescType desc,
+                                                   RankedTensorType tensor) {
   RankedTensorType block = desc.getSignlessBlockType();
   ArrayRef<int64_t> blockShape = block.getShape();
   ArrayRef<int64_t> tensorShape = tensor.getShape();
@@ -1375,6 +1376,12 @@ LogicalResult verifyDescriptorLoadStoreType(Operation *op, TensorDescType desc,
 
 LogicalResult DescriptorLoadOp::verify() {
   return verifyDescriptorLoadStoreType(*this, getDesc().getType(), getType());
+}
+
+// -- DescriptorStoreOp --
+LogicalResult DescriptorStoreOp::verify() {
+  return verifyDescriptorLoadStoreType(*this, getDesc().getType(),
+                                       getSrc().getType());
 }
 
 // -- ExperimentalTensormapCreateOp --

@@ -110,15 +110,6 @@ std::optional<UseInfo> getUseInfo(Operation *op) {
     info.shape = expandToRank(shape, rank);
     return info;
   }
-  if (auto scatter = dyn_cast<tt::DescriptorScatterOp>(op)) {
-    info.descriptor = scatter.getDesc();
-    auto encoding = scatter.getSrc().getType().getEncoding();
-    info.ctaLayout = ttg::getCTALayout(encoding);
-    auto shape = scatter.getSrc().getType().getShape();
-    auto rank = scatter.getDesc().getType().getBlockType().getRank();
-    info.shape = expandToRank(shape, rank);
-    return info;
-  }
   return std::nullopt;
 }
 

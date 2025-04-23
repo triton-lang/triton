@@ -105,9 +105,9 @@ def TT_TensorDescType : TritonTypeDef<"TensorDesc", "tensordesc", []> {
 
   let builders = [
     TypeBuilder<(ins "RankedTensorType":$blockType, "bool":$isSigned), [{
-      if (isSigned) {
-        auto intTy = llvm::cast<IntegerType>(blockType.getElementType());
-        auto elemTy = IntegerType::get($_ctxt, intTy.getWidth(), IntegerType::Signed);
+      if (auto intTy = llvm::dyn_cast<IntegerType>(blockType.getElementType())) {
+        auto sem = isSigned ? IntegerType::Signed : IntegerType::Unsigned;
+        auto elemTy = IntegerType::get($_ctxt, intTy.getWidth(), sem);
         blockType = RankedTensorType::get(blockType.getShape(), elemTy);
       }
       return Base::get($_ctxt, blockType);
@@ -116,7 +116,7 @@ def TT_TensorDescType : TritonTypeDef<"TensorDesc", "tensordesc", []> {
   let extraClassDeclaration = [{
     RankedTensorType getSignlessBlockType() const {
       auto resTy = getBlockType();
-      if (resTy.getElementType().isSignedInteger()) {
+      if (auto intTy = llvm::dyn_cast<IntegerType>(resTy.getElementType())) {
         auto width = resTy.getElementTypeBitWidth();
         auto signlessTy = IntegerType::get(getContext(), width);
         resTy = RankedTensorType::get(resTy.getShape(), signlessTy);

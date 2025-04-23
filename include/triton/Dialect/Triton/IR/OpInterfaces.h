@@ -14,8 +14,6 @@ LogicalResult verifyTransposeOpInterface(Operation *op);
 
 LogicalResult verifyDotOpInterface(Operation *op);
 
-LogicalResult verifyDescriptorStoreLikeOpInterface(Operation *op);
-
 } // namespace impl
 
 } // namespace triton

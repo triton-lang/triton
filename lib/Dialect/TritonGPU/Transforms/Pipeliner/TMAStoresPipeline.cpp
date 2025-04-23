@@ -20,9 +20,6 @@ static SmallVector<TMAStore> getTMAStores(scf::ForOp forOp) {
   forOp.getBody()->walk<mlir::WalkOrder::PreOrder>([&](Operation *op) {
     if (auto storeOp = dyn_cast<tt::DescriptorStoreLikeOpInterface>(op)) {
       tmaStores.push_back({storeOp, storeOp.getDesc(), storeOp.getSrc()});
-    } else if (auto scatterOp = dyn_cast<tt::DescriptorScatterOp>(op)) {
-      tmaStores.push_back({scatterOp, scatterOp.getDesc(), scatterOp.getSrc()});
-
       // Don't walk into nested loops.
     } else if (isa<scf::ForOp>(op)) {
       return WalkResult::skip();
