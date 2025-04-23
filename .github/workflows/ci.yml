@@ -33,22 +33,19 @@ jobs:
     needs: runner-preparation
     if: needs.runner-preparation.outputs.matrix-NVIDIA != ''
     uses: ./.github/workflows/integration-tests-nvidia.yml
-    strategy:
-      matrix:
-        runner: ${{fromJson(needs.runner-preparation.outputs.matrix-NVIDIA)}}
+    with:
+      matrix: ${{fromJson(needs.runner-preparation.outputs.matrix-NVIDIA)}}
 
   integration-tests-amd:
     needs: runner-preparation
     if: needs.runner-preparation.outputs.matrix-AMD != ''
     uses: ./.github/workflows/integration-tests-amd.yml
-    strategy:
-      matrix:
-        runner: ${{fromJson(needs.runner-preparation.outputs.matrix-AMD)}}
+    with:
+      matrix: ${{fromJson(needs.runner-preparation.outputs.matrix-AMD)}}
 
   build-macos:
     needs: runner-preparation
     if: needs.runner-preparation.outputs.matrix-MACOS != ''
     uses: ./.github/workflows/build-macos.yml
-    strategy:
-      matrix:
-        runner: ${{fromJson(needs.runner-preparation.outputs.matrix-MACOS)}}
+    with:
+      matrix: ${{fromJson(needs.runner-preparation.outputs.matrix-MACOS)}}
