@@ -35,6 +35,13 @@ def _get_backend_default_path(backend: str) -> str:
     return lib_path
 
 
+def _get_mode_str(backend: str, mode: Optional[Union[str, BaseMode]]) -> str:
+    if backend == "instrumentation":
+        prefix = triton.runtime.driver.active.get_current_target().backend
+        return f"{prefix}:{mode}" if mode else prefix
+    return str(mode) if mode else ""
+
+
 def _check_env(backend: str) -> None:
     if backend == "roctracer":
         hip_device_envs = ["HIP_VISIBLE_DEVICES", "CUDA_VISIBLE_DEVICES"]
@@ -100,12 +107,12 @@ def start(
     name = DEFAULT_PROFILE_NAME if name is None else name
     backend = _select_backend() if backend is None else backend
     backend_path = _get_backend_default_path(backend)
-    mode = "" if mode is None else mode
+    mode_str = _get_mode_str(backend, mode)
 
     _check_env(backend)
 
     # Convert mode to its string representation for libproton's runtime
-    session = libproton.start(name, context, data, backend, str(mode), backend_path)
+    session = libproton.start(name, context, data, backend, mode_str, backend_path)
 
     if hook == "triton":
         HookManager.register(LaunchHook(), session)
