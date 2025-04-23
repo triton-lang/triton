@@ -10,9 +10,12 @@ namespace mlir::triton::proton::gpu::AMD {
 
 Value TargetInfo::clock(ConversionPatternRewriter &rewriter, Location loc,
                         bool isClock64) const {
-
-  llvm_unreachable("AMDGPU clock not implemented yet");
-  return Value();
+  //TODO(crobeck): fix this to actually support the 64-bit clock value
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
+  StringRef clock64IntrinsicName = "llvm.amdgcn.s.memtime";
+  Value clock64Val =  LLVM::createLLVMIntrinsicCallOp(
+        rewriter, loc, clock64IntrinsicName, i64_ty, {}).getResult(0);
+  return rewriter.create<LLVM::TruncOp>(loc, i32_ty, clock64Val);
 }
 
 Value TargetInfo::processorId(ConversionPatternRewriter &rewriter,
