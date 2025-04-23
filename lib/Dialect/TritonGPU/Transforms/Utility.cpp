@@ -1078,35 +1078,11 @@ swizzleDotOperandLike(RankedTensorType type, ttg::CTALayoutAttr ctaLayout) {
   SmallVector<unsigned> microtileShape(rank, 1);
   microtileShape[order[0]] = 4 * kWidth;
   microtileShape[order[1]] = 8;
-  // LinearLayouts are stored in the IR with order [0, 1, 2, ...]
+  // All the LinearLayouts contained within LinearEncoidngAttr have order [0, 1,
+  // 2, ...]
   auto repOrder = to_vector(llvm::seq<unsigned>(rank));
   auto tile = ttg::nvidiaMmaTile(ctx, microtileShape, kWidth, order, repOrder);
-  // This is where I'd put my division algorithm... if I had one!
-  auto canLeftDivide = [](const LinearLayout &layout,
-                          const LinearLayout &tile) {
-    // We check that tile is a "prefix" of layout
-    if (!llvm::equal(layout.getOutDimNames(), tile.getOutDimNames())) {
-      return false;
-    }
-    const auto &basesSrc = layout.getBases();
-    const auto &basesTile = tile.getBases();
-    for (const auto &[kDimName, baseTile] : basesTile) {
-      auto it = basesSrc.find(kDimName);
-      if (it == basesSrc.end()) {
-        return false;
-      }
-      const auto &baseSrc = it->second;
-      if (baseTile.size() > baseSrc.size()) {
-        return false;
-      }
-      for (auto i : llvm::seq(baseTile.size())) {
-        if (baseTile[i] != baseSrc[i])
-          return false;
-      }
-    }
-    return true;
-  };
-  if (!canLeftDivide(layout.getLinearLayout(), tile)) {
+  if (!divideLeft(layout.getLinearLayout(), tile).has_value()) {
     return {};
   }
   return ttg::SwizzledSharedEncodingAttr::get(
