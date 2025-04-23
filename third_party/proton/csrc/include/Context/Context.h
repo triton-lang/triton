@@ -140,9 +140,9 @@ public:
   virtual void initScopeIds(
       uint64_t functionId,
       const std::vector<std::pair<size_t, std::string>> &scopeIdPairs) = 0;
-  virtual void enterInstrumentedOp(uint64_t functionId, const uint8_t *buffer,
+  virtual void enterInstrumentedOp(uint64_t functionId, uint8_t *buffer,
                                    size_t size) = 0;
-  virtual void exitInstrumentedOp(uint64_t functionId, const uint8_t *buffer,
+  virtual void exitInstrumentedOp(uint64_t functionId, uint8_t *buffer,
                                   size_t size) = 0;
 };
 
