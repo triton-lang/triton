@@ -428,28 +428,12 @@ LogicalResult tryJoinOnAxis(MLIRContext *ctx, const LinearLayout &inLl,
                             std::optional<Location> loc) {
   auto kRegister = StringAttr::get(ctx, "register");
   auto outDims = llvm::to_vector(inLl.getOutDimNames());
+  auto split = LinearLayout::identity1D(2, kRegister, outDims[axis]);
   if (fwdInference) {
-    auto split = LinearLayout::identity1D(2, kRegister, outDims[axis]);
     outLl = split * inLl;
   } else {
-    // TODO This requires a division algorithm!
-    // Implement manually ll.divideLeft(split)
-    auto contiguousElems =
-        LinearEncodingAttr::get(ctx, inLl).getContigPerThread();
-    if (contiguousElems[axis] > 1) {
-      LinearLayout::BasesT newBases;
-      for (const auto &basesDim : inLl.getBases()) {
-        std::vector<std::vector<int32_t>> newBasesDim;
-        for (auto base : basesDim.second) {
-          if (base[axis] == 1) {
-            continue;
-          }
-          base[axis] /= 2;
-          newBasesDim.push_back(std::move(base));
-        }
-        newBases.insert({basesDim.first, std::move(newBasesDim)});
-      }
-      outLl = LinearLayout(std::move(newBases), std::move(outDims));
+    if (auto div = divideLeft(inLl, split)) {
+      outLl = *div;
     } else {
       return emitOptionalError(loc,
                                "Fp4ToFpOp/SplitOp requires at least 2 elements "
