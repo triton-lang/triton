@@ -9,6 +9,7 @@ on:
 
 jobs:
   build-macos:
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 40
     env:
       RUNNER_TYPE: ${{ matrix.runner[0] }}
