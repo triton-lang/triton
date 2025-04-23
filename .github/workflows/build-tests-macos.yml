@@ -1,13 +1,18 @@
-Build-Tests:
-    needs: runner-preparation
-    if: needs.runner-preparation.outputs.matrix-MACOS != ''
-    runs-on: ${{ matrix.runner }}
-    timeout-minutes: 40
-    strategy:
+name: Build MacOS
+
+on:
+  workflow_call:
+    inputs:
       matrix:
-        runner: ${{fromJson(needs.runner-preparation.outputs.matrix-MACOS)}}
+        required: true
+        type: string
+
+jobs:
+  build-macos:
+    timeout-minutes: 40
     env:
       RUNNER_TYPE: ${{ matrix.runner[0] }}
+    name: Build MacOS
     steps:
       - name: Checkout
         uses: actions/checkout@v4
