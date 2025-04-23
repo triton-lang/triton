@@ -1,4 +1,3 @@
-from triton_bench.meta import constexpr_function
 from ..numerics import MAX_FINITE_FLOAT8E4B8, MAX_FINITE_FLOAT8E4NV, MAX_FINITE_FLOAT8E5
 from triton_bench import target_info
 import triton
@@ -53,7 +52,7 @@ def rcp_max_finite(dtype):
         tl.static_assert(tl.constexpr(False), f"{dtype} not supported in flexpoint")
 
 
-@constexpr_function
+@tl.constexpr_function
 def cuda_capability_geq(major, minor):
     return target_info.cuda_capability_geq(major, minor)
 

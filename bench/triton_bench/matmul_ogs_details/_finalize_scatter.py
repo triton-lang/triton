@@ -1,10 +1,9 @@
 import triton
 import triton.language as tl
-from triton_bench.meta import constexpr_function
 from triton_bench.numerics_details.flexpoint import float_to_flex, load_scale, update_scale
 
 
-@constexpr_function
+@tl.constexpr_function
 def is_hip():
     from triton_bench import target_info
     return target_info.is_hip()
