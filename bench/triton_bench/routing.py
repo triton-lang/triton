@@ -56,7 +56,7 @@ class RoutingData:
 def routing(logits, n_expts_act, expt_indx=None, simulated_ep=1):
     from .topk import topk
     from .reduce import sum
-    from .compact import masked_compact
+    from .compaction import compaction
     assert expt_indx is None
     cdiv = triton.cdiv
     HIST_BLOCK_M = 64
@@ -77,7 +77,7 @@ def routing(logits, n_expts_act, expt_indx=None, simulated_ep=1):
             n_expts_tot // simulated_ep,
             BLOCK_N=512,
         )
-        expt_scal, expt_indx = masked_compact(expt_scal, expt_indx, bitmatrix)
+        expt_scal, expt_indx = compaction(expt_scal, expt_indx, bitmatrix)
         n_expts_tot = n_expts_tot // simulated_ep
         bitmatrix.shape[-1] = n_expts_tot
     # perform compaction to update expt_scal / expt_indx

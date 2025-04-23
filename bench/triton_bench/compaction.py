@@ -1,9 +1,9 @@
 import torch
-from .compact_details._masked_compact import _masked_compact
+from .compaction_details._masked_compaction import _masked_compaction
 from triton_bench import Bitmatrix
 
 
-def masked_compact(yv, yi, bitmask, sentinel=-1):
+def compaction(yv, yi, bitmask, sentinel=-1):
     """
     Return compacted copies of *yv* and *yi* based on a per-row bitmask.
 
@@ -35,7 +35,7 @@ def masked_compact(yv, yi, bitmask, sentinel=-1):
     if isinstance(bitmask, Bitmatrix):
         bitmask = bitmask.data
 
-    _masked_compact[(n_rows, )](
+    _masked_compaction[(n_rows, )](
         yv, yi, bitmask, bitmask.stride(0),  # inputs
         ret_yv, ret_yi,  # outputs
         sentinel,  # sentinel
@@ -44,7 +44,7 @@ def masked_compact(yv, yi, bitmask, sentinel=-1):
     return ret_yv, ret_yi
 
 
-def masked_compact_torch(yv: torch.Tensor, yi: torch.Tensor, bitmask: torch.Tensor, sentinel=-1):
+def compaction_torch(yv: torch.Tensor, yi: torch.Tensor, bitmask: torch.Tensor, sentinel=-1):
     """
     reference implementation of `masked_compact`
     """
