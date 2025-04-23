@@ -515,7 +515,7 @@ class HIPDriver(GPUDriver):
     def is_active():
         try:
             import torch
-            return torch.version.hip is not None
+            return torch.cuda.is_available() and (torch.version.hip is not None)
         except ImportError:
             return False
 
