@@ -1,27 +1,9 @@
 import torch
-import triton
-import triton.language as tl
+from .compaction_details._masked_compaction import _masked_compaction
 from triton_bench import Bitmatrix
 
 
-@triton.jit
-def _masked_compact(Yv, Yi, BitMask, stride_bm, RetYv, RetYi, sentinel, K: tl.constexpr):
-    pid_m = tl.program_id(0)
-    yv = tl.load(Yv + pid_m * K + tl.arange(0, K))
-    yi = tl.load(Yi + pid_m * K + tl.arange(0, K))
-    div = yi // 32
-    rem = yi % 32
-    active_bits = (tl.load(BitMask + pid_m * stride_bm + div) >> rem) & 1
-    exc_cumsum = tl.cumsum(active_bits, 0) - active_bits
-    rev_arange = tl.where(active_bits, 0, K - 1 - tl.arange(0, K))
-    write_indx = exc_cumsum + rev_arange
-    yv = tl.where(active_bits, yv, sentinel)
-    yi = tl.where(active_bits, yi, sentinel)
-    tl.store(RetYv + pid_m * K + write_indx, yv)
-    tl.store(RetYi + pid_m * K + write_indx, yi)
-
-
-def masked_compact(yv, yi, bitmask, sentinel=-1):
+def compaction(yv, yi, bitmask, sentinel=-1):
     """
     Return compacted copies of *yv* and *yi* based on a per-row bitmask.
 
@@ -53,7 +35,7 @@ def masked_compact(yv, yi, bitmask, sentinel=-1):
     if isinstance(bitmask, Bitmatrix):
         bitmask = bitmask.data
 
-    _masked_compact[(n_rows, )](
+    _masked_compaction[(n_rows, )](
         yv, yi, bitmask, bitmask.stride(0),  # inputs
         ret_yv, ret_yi,  # outputs
         sentinel,  # sentinel
@@ -62,7 +44,7 @@ def masked_compact(yv, yi, bitmask, sentinel=-1):
     return ret_yv, ret_yi
 
 
-def masked_compact_torch(yv: torch.Tensor, yi: torch.Tensor, bitmask: torch.Tensor, sentinel=-1):
+def compaction_torch(yv: torch.Tensor, yi: torch.Tensor, bitmask: torch.Tensor, sentinel=-1):
     """
     reference implementation of `masked_compact`
     """
