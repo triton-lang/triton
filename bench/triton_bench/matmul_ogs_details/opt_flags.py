@@ -1,9 +1,7 @@
 from dataclasses import dataclass
 import triton
-
+from triton_bench import target_info
 import torch
-
-from triton_bench.meta import cuda_capability_geq
 
 from . import opt_flags_amd, opt_flags_nvidia
 
@@ -148,7 +146,7 @@ def make_default_opt_flags_nvidia(
         block_m < 128
         and rhs_dtype == torch.uint8
         and microscaling_ctx.weight_scale is not None
-        and not cuda_capability_geq(10, 0)
+        and not target_info.cuda_capability_geq(10, 0)
     ):
         arch = "sm80"
     # block n

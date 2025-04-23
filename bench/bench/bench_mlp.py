@@ -3,11 +3,11 @@ import json
 import triton.profiler as proton
 import torch
 import triton_bench.swiglu
-from triton_bench.mxfp import downcast_to_mxfp
+from triton_bench.numerics_details.mxfp import downcast_to_mxfp
 from triton_bench.matmul_ogs import MicroscalingCtx, matmul_ogs, PrecisionConfig, FlexCtx
 from triton_bench.numerics import InFlexData
 from triton_bench.routing import routing
-from triton_bench.meta import cuda_capability_geq, is_hip, get_cdna_version
+from triton_bench.target_info import is_hip, get_cdna_version
 
 if torch.cuda.is_available() and not is_hip():
     from triton._C.libtriton import nvidia
@@ -152,5 +152,5 @@ if __name__ == "__main__":
     qxdtype = "fp8" if has_native_mx4 else "bf16"
     print(bench_mlp(8192, 8192, 8192, 1, 1, "fp8", "fp8", TP=1, EP=1, name="dense"))
     print(bench_mlp(8192, 8192, 8192, 1, 1, qxdtype, "mx4", TP=1, EP=1, name="dense"))
-    print(bench_mlp(2048, 5120, 8192, 128, 4, "fp8", "fp8", TP=4, EP=2, name="llama4"))
-    print(bench_mlp(2048, 5120, 8192, 128, 4, qxdtype, "mx4", TP=4, EP=2, name="llama4"))
+    print(bench_mlp(2048, 5120, 8192, 128, 4, "fp8", "fp8", TP=4, EP=1, name="llama4"))
+    print(bench_mlp(2048, 5120, 8192, 128, 4, qxdtype, "mx4", TP=4, EP=1, name="llama4"))
