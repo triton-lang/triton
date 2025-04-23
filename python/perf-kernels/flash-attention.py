@@ -286,11 +286,11 @@ def _attn_fwd_inner(acc, l_i, m_i, q, k_ptrs, v_ptrs, bias_ptrs, stride_kn, stri
         qk = tl.where(mask, qk, float("-inf"))
         # -- compute qk ----
         if INT8_GEMM:
-            qk += ((((tl.dot(q, k).to(tl.float32) * q_descale)) * k_descale) * QK_SCALE)
+            qk += ((tl.dot(q, k).to(tl.float32) * q_descale)) * k_descale
         else:
             if INT8_KV:
                 k = (k * k_descale).to(q.type.element_ty)
-            qk += (tl.dot(q, k) * QK_SCALE)
+            qk += tl.dot(q, k)
 
         if bias_ptrs is not None:
             bias_offs_n = start_n + tl.arange(0, BLOCK_N) if MASK_STEPS else None
@@ -298,7 +298,7 @@ def _attn_fwd_inner(acc, l_i, m_i, q, k_ptrs, v_ptrs, bias_ptrs, stride_kn, stri
             # While bias is added after multiplying qk with sm_scale,
             # our optimization to use 2^x instead of e^x results in an additional
             # scale factor of log2(e) which we must also multiply the bias with.
-            qk += (bias * 1.44269504089)
+            qk += (bias * 1.44269504089 / QK_SCALE)
 
         if alibi_slope is not None:
             # Compute the global position of each token within the sequence
@@ -306,11 +306,12 @@ def _attn_fwd_inner(acc, l_i, m_i, q, k_ptrs, v_ptrs, bias_ptrs, stride_kn, stri
             global_n_positions = start_n + tl.arange(0, BLOCK_N)
             alibi_block = compute_alibi_block(alibi_slope, actual_seqlen_q, actual_seqlen_k, global_m_positions,
                                               global_n_positions)
-            qk += (alibi_block * 1.44269504089)  # scale factor of log2(e)
+            qk += (alibi_block * 1.44269504089 / QK_SCALE)  # scale factor of log2(e)
 
         # softmax
         m_ij = tl.maximum(m_i, tl.max(qk, 1))
-        qk = qk - m_ij[:, None]
+        m_ij_scaled = m_ij * QK_SCALE
+        qk = qk * QK_SCALE - m_ij_scaled[:, None]
         p = tl.math.exp2(qk)
 
         # CAVEAT: Must update l_ij before applying dropout
@@ -324,7 +325,7 @@ def _attn_fwd_inner(acc, l_i, m_i, q, k_ptrs, v_ptrs, bias_ptrs, stride_kn, stri
         elif RETURN_ENCODED_SOFTMAX:
             tl.store(encoded_sm_ptrs, p.to(encoded_sm_ptrs.type.element_ty))
         # -- update output accumulator --
-        alpha = tl.math.exp2(m_i - m_ij)
+        alpha = tl.math.exp2(m_i * QK_SCALE - m_ij_scaled)
         acc = acc * alpha[:, None]
         if not PRE_LOAD_V:
             v = load_fn(v_ptrs, k_offs_n, k_offs_k, actual_seqlen_k, ACTUAL_BLOCK_DMODEL)
