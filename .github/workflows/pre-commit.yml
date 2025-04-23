@@ -6,7 +6,6 @@ on:
 jobs:
   pre-commit:
     name: pre-commit (code formatting)
-    needs: runner-preparation
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
