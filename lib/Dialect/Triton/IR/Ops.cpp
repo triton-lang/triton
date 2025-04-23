@@ -1339,13 +1339,15 @@ static LogicalResult verifyGatherScatterOp(Operation *op,
 }
 
 LogicalResult DescriptorGatherOp::verify() {
-  return verifyGatherScatterOp(*this, getDesc().getType().getBlockType(),
+  return verifyGatherScatterOp(*this,
+                               getDesc().getType().getSignlessBlockType(),
                                getResult().getType(), getXOffsets().getType());
 }
 
 // -- DescriptorScatterOp --
 LogicalResult DescriptorScatterOp::verify() {
-  return verifyGatherScatterOp(*this, getDesc().getType().getBlockType(),
+  return verifyGatherScatterOp(*this,
+                               getDesc().getType().getSignlessBlockType(),
                                getSrc().getType(), getXOffsets().getType());
 }
 
