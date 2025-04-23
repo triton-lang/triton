@@ -10,6 +10,7 @@ on:
 jobs:
   integration-tests-nvidia:
     runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
     strategy:
       matrix:
         runner: ${{ fromJson(inputs.matrix) }}
