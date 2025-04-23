@@ -1,6 +1,7 @@
 from __future__ import annotations
 import hashlib
 import json
+import mmap
 from .._C.libtriton import get_cache_invalidating_env_vars, ir
 from ..backends import backends
 from ..backends.compiler import BaseBackend, GPUTarget
@@ -47,6 +48,13 @@ def convert_type_repr(x):
     if match is not None:
         return '*' + convert_type_repr(match.group(1))
     return x
+
+
+def readonly_mmap(arg):
+    '''MMAP the file pointed to by path'''
+    f = arg.open(mode='rb')
+    # do not fold the above into the mmap args, it does not work
+    return mmap.mmap(f.fileno(), 0, prot=mmap.PROT_READ)
 
 
 class ASTSource:
@@ -175,7 +183,7 @@ def parse(full_name, ext, context):
     if ext == "llir" or ext == "ptx" or ext == "amdgcn":
         return Path(full_name).read_text()
     if ext == "cubin" or ext == "hsaco":
-        return Path(full_name).read_bytes()
+        return readonly_mmap(Path(full_name))
 
 
 def filter_traceback(e: BaseException):
@@ -383,7 +391,7 @@ class CompiledKernel:
         asm_files = [Path(p) for c, p in metadata_group.items() if not c.endswith(".json")]
         binary_ext = backend.binary_ext
         self.asm = AsmDict({
-            file.suffix[1:]: file.read_bytes() if file.suffix[1:] == binary_ext else file.read_text()
+            file.suffix[1:]: readonly_mmap(file) if file.suffix[1:] == binary_ext else file.read_text()
             for file in asm_files
         })
         self.kernel = self.asm[binary_ext]
