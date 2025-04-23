@@ -28,7 +28,7 @@ def gdc_wait(_builder=None):
 def gdc_launch_dependents(_builder=None):
     """
     This operation when launched with programmatic dependent launch signals that
-    the next program may launch as soon as on thread within all programs in the current kernel
+    the next program may launch once all programs in the current kernel
     call this function or complete.
 
     Repeated calls to this function have no effect past the first call, and the first call should be
