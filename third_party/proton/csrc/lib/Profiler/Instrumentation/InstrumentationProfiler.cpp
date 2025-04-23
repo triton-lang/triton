@@ -54,6 +54,9 @@ void InstrumentationProfiler::initScopeIds(
 void InstrumentationProfiler::enterInstrumentedOp(uint64_t functionId,
                                                   uint8_t *buffer,
                                                   size_t size) {
+  // If the buffer is null, we cannot process it.
+  if (!buffer)
+    return;
   // Enter an instrumented operation.
   if (hostBuffer == nullptr) {
     runtime->allocateHostBuffer(&hostBuffer, HOST_BUFFER_SIZE);
@@ -61,8 +64,10 @@ void InstrumentationProfiler::enterInstrumentedOp(uint64_t functionId,
 }
 
 void InstrumentationProfiler::exitInstrumentedOp(uint64_t functionId,
-                                                 uint8_t *buffer,
-                                                 size_t size) {
+                                                 uint8_t *buffer, size_t size) {
+  // If the buffer is null, we cannot process it.
+  if (!buffer)
+    return;
   // Exit an instrumented operation.
   uint64_t device = runtime->getDevice();
   void *&stream = deviceStreams[reinterpret_cast<void *>(device)];
