@@ -33,7 +33,6 @@ jobs:
     needs: runner-preparation
     if: needs.runner-preparation.outputs.matrix-NVIDIA != ''
     uses: ./.github/workflows/integration-tests-nvidia.yml
-    runs-on: ${{ needs.runner-preparation.outputs.matrix.runner }}
     timeout-minutes: 30
     strategy:
       matrix:
@@ -45,8 +44,9 @@ jobs:
     uses: ./.github/workflows/integration-tests-amd.yml
     runs-on: ${{ needs.runner-preparation.outputs.matrix.runner }}
     timeout-minutes: 30
-    with:
-      matrix: ${{ needs.runner-preparation.outputs.matrix-AMD }}
+    strategy:
+      matrix:
+        runner: ${{fromJson(needs.runner-preparation.outputs.matrix-AMD)}}
 
   build-macos:
     needs: runner-preparation
