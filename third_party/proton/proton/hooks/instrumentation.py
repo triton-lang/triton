@@ -62,6 +62,8 @@ class Instrumentation:
 def _interpret_mode(mode_obj: Union[str, mode.InstrumentationMode]) -> mode.InstrumentationMode:
     if isinstance(mode_obj, mode.InstrumentationMode):
         return mode_obj
+    elif not mode_obj:
+        mode_obj = "default"
 
     parts = mode_obj.split(":")
     mode_name = parts[0]
@@ -99,7 +101,7 @@ def _interpret_mode(mode_obj: Union[str, mode.InstrumentationMode]) -> mode.Inst
     options["sampling_strategy"] = get_option_value("sampling_strategy", mode.sampling_strategies)
 
     # Create the appropriate mode instance
-    if mode_name in ("default", ""):
+    if mode_name == "default":
         return mode.Default(**options)
     elif mode_name == "mma":
         return mode.MMA(**options)
@@ -115,7 +117,7 @@ class InstrumentationHook(Hook):
     profile_buffer_size: int = 16 * 1024 * 1024
     profile_buffer_alignment: int = 128
 
-    def __init__(self, mode_obj: Union[str, mode.InstrumentationMode]):
+    def __init__(self, mode_obj: Union[None, str, mode.InstrumentationMode]):
         # Mapping of function objects to their scope ID pairs
         self.function_scope_ids: Dict[Any, List[Tuple[int, int]]] = {}
         self.mode: mode.InstrumentationMode = _interpret_mode(mode_obj)
