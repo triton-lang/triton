@@ -16,7 +16,7 @@ from distutils.command.clean import clean
 from pathlib import Path
 from typing import List, Optional
 
-from setuptools import Extension, setup
+from setuptools import Extension, find_namespace_packages, setup
 from setuptools.command.build_ext import build_ext
 from setuptools.command.build_py import build_py
 from dataclasses import dataclass
@@ -655,49 +655,46 @@ package_data = {
 }
 
 
-def get_extra_packages(extra_name):
-    packages = []
-    extra_file_extensions = {"language": (".py"), "tools": (".c", ".h", ".cpp")}
-    assert extra_name in extra_file_extensions, f"{extra_name} extra is not valid"
-
-    for backend in backends:
-        backend_extra_dir = getattr(backend, f"{extra_name}_dir", None)
-        if backend_extra_dir is None:
-            continue
-
-        # Walk the specified directory of each backend to enumerate
-        # any subpackages, which will be added to extra_package.
-        for dir, dirs, files in os.walk(backend_extra_dir, followlinks=True):
-            if not any(f for f in files if f.endswith(extra_file_extensions[extra_name])) or dir == backend_extra_dir:
-                # Ignore directories with no relevant files
-                # or the root directory
-                continue
-            subpackage = os.path.relpath(dir, backend_extra_dir)
-            package = os.path.join(f"triton/{extra_name}/extra", subpackage)
-            packages.append(package)
-
-    return list(packages)
-
-
 def get_packages():
-    packages = [
-        "triton",
-        "triton/_C",
-        "triton/compiler",
-        "triton/language",
-        "triton/language/extra",
-        "triton/runtime",
-        "triton/backends",
-        "triton/tools",
-        "triton/tools/extra",
-    ]
-    packages += [f'triton/backends/{backend.name}' for backend in backends]
-    packages += get_extra_packages("language")
-    packages += get_extra_packages("tools")
-    if check_env_flag("TRITON_BUILD_PROTON", "ON"):  # Default ON
-        packages += ["triton/profiler"]
+    """
+    Discover Triton packages dynamically using namespace package discovery and symlink resolution.
+    Returns package names in dot notation format suitable for setup.py and wheel installations.
 
-    return packages
+    Pure paths are used for OS-agnostic path manipulation.
+    """
+
+    triton_packages_dir = Path(__file__).resolve().parent / "triton"
+    if not triton_packages_dir.exists():
+        return []
+
+    # Add the base package.
+    packages = {"triton"}
+
+    # Discover all namespace packages, i.e. with or without __init__.py, under triton/ dir.
+    for pkg in find_namespace_packages(where="triton"):
+        packages.add(f"triton.{pkg}")
+
+    # Find and add subpackages in symlinked directories.
+    for path in triton_packages_dir.glob('**/*'):
+        if path.is_symlink():
+            try:
+                relative_path = path.relative_to(triton_packages_dir)
+                resolved_path = path.resolve(strict=True)
+                if resolved_path.is_dir():
+                    # Join path parts with dots for proper package naming.
+                    base_package = "triton." + ".".join(relative_path.parts)
+                    packages.add(base_package)
+
+                    for subpkg in find_namespace_packages(where=str(resolved_path)):
+                        packages.add(f"{base_package}.{subpkg}")
+            except (FileNotFoundError, RuntimeError, ValueError) as e:
+                print(f"**** [get_packages] ERROR: Skipped symlink '{path}' because: {e} ****")
+
+    # Conditionally include the profiler package. Default ON.
+    if check_env_flag("TRITON_BUILD_PROTON", "ON") and (triton_packages_dir / "profiler").is_dir():
+        packages.add("triton.profiler")
+
+    return sorted(packages)
 
 
 def get_entry_points():
