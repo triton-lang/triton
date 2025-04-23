@@ -25,7 +25,7 @@ Profiler *getProfiler(const std::string &name, const std::string &path,
     return &RoctracerProfiler::instance();
   }
   if (proton::toLower(name) == "instrumentation") {
-    return InstrumentationProfiler::instance().setMode(mode);
+    return InstrumentationProfiler::instance().setMode(modeAndOptions);
   }
   throw std::runtime_error("Unknown profiler: " + name);
 }
@@ -231,8 +231,8 @@ void SessionManager::initScopeIds(
       });
 }
 
-void SessionManager::enterInstrumentedOp(uint64_t functionId,
-                                         const uint8_t *buffer, size_t size) {
+void SessionManager::enterInstrumentedOp(uint64_t functionId, uint8_t *buffer,
+                                         size_t size) {
   std::lock_guard<std::mutex> lock(mutex);
   executeInterface(
       instrumentationInterfaceCounts, [&](auto *instrumentationInterface) {
@@ -240,8 +240,8 @@ void SessionManager::enterInstrumentedOp(uint64_t functionId,
       });
 }
 
-void SessionManager::exitInstrumentedOp(uint64_t functionId,
-                                        const uint8_t *buffer, size_t size) {
+void SessionManager::exitInstrumentedOp(uint64_t functionId, uint8_t *buffer,
+                                        size_t size) {
   std::lock_guard<std::mutex> lock(mutex);
   executeInterface(
       instrumentationInterfaceCounts, [&](auto *instrumentationInterface) {
