@@ -137,7 +137,8 @@ REDUCE_OP = {
 
 
 @requires_tma
-@pytest.mark.interpreter
+# TODO: interpreter support
+# @pytest.mark.interpreter
 @pytest.mark.parametrize("kind", ["add", "min", "max", "and", "or", "xor"])
 @pytest.mark.parametrize("dtype_str", tma_dtypes)
 @pytest.mark.parametrize("num_ctas", [1, 2])
