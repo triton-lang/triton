@@ -15,6 +15,7 @@ jobs:
         runner: ${{ fromJson(inputs.matrix) }}
     env:
       RUNNER_TYPE: ${{ matrix.runner[0] }}
+      PYTHON: "python3"
     steps:
       - name: Checkout
         uses: actions/checkout@v4

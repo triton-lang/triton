@@ -13,6 +13,7 @@ jobs:
     timeout-minutes: 45
     env:
       RUNNER_TYPE: ${{ matrix.runner[1] }}
+      PYTHON: "python3"
     name: Integration-Tests (${{matrix.runner[1] == 'gfx90a' && 'mi210' || 'mi300x'}})
     container:
       image: rocm/pytorch:rocm6.2.2_ubuntu22.04_py3.10_pytorch_2.5.1_asan
