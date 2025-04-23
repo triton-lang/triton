@@ -8,7 +8,7 @@ on:
         type: string
 
 jobs:
-  run-cuda-tests:
+  integration-tests-nvidia:
     runs-on: ${{ matrix.runner }}
     strategy:
       matrix:

@@ -9,6 +9,7 @@ on:
 
 jobs:
   integration-tests-amd:
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 45
     env:
       RUNNER_TYPE: ${{ matrix.runner[1] }}
