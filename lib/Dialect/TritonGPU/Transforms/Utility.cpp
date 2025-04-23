@@ -1063,6 +1063,9 @@ swizzleDotOperandLike(RankedTensorType type, ttg::CTALayoutAttr ctaLayout) {
   auto layout = ttg::toLinearEncoding(type);
   auto order = layout.getThreadOrder();
   auto rank = order.size();
+  if (rank < 2) {
+    return {};
+  }
   int opIdx;
   if (ttg::getOrderForDotOperand(0, rank, /*kContig=*/true) == order) {
     opIdx = 0;
