@@ -733,8 +733,8 @@ tt.func @matmul_tma_acc_with_conditional_def_and_use_no_multibuf_flag(
   tt.return
 }
 
+// CHECK-LABEL: @matmul_scaled_rhs_scales_tma
 tt.func @matmul_scaled_rhs_scales_tma(
-  // CHECK-LABEL: @matmul_scaled_rhs_scales_tma
   %k_tiles: i32,
   %off_m: i32,
   %off_n: i32,
