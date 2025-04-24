@@ -729,6 +729,17 @@ LogicalResult triton::gpu::specializeLoadMMADependencies(scf::ForOp &loop,
       loadGroups.push_back(std::move(group));
   }
 
+  SmallVector<Operation *> aScaleChain, bScaleChain;
+  auto scaledMMAOp = dyn_cast<ttng::TCGen5MMAScaledOp>(mmaOp.getOperation());
+  if (scaledMMAOp) {
+    if (failed(
+            findSingleChainToLoad(loop, scaledMMAOp.getAScale(), aScaleChain)))
+      aScaleChain.clear();
+    if (failed(
+            findSingleChainToLoad(loop, scaledMMAOp.getBScale(), bScaleChain)))
+      bScaleChain.clear();
+  }
+
   ttng::TMEMAllocOp oldAccAlloc =
       mmaOp.getAccumulator().getDefiningOp<ttng::TMEMAllocOp>();
   if (!oldAccAlloc)

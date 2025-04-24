@@ -2,6 +2,7 @@
 #include "TargetInfo.h"
 #include "mlir/Conversion/LLVMCommon/TypeConverter.h"
 #include "mlir/Dialect/LLVMIR/NVVMDialect.h"
+#include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/Matchers.h"
 #include "mlir/IR/TypeUtilities.h"
 
@@ -1301,6 +1302,78 @@ struct AsyncTMACopyGlobalToLocalOpConversion
   }
 };
 
+LogicalResult convertTMAStoreLikeOp(Operation *op,
+                                    const TypeConverter *typeConverter,
+                                    ConversionPatternRewriter &rewriter,
+                                    Value tmaPtr, ttg::MemDescType srcTy,
+                                    Value src, ValueRange coords,
+                                    const std::string &tmaInst) {
+  auto loc = op->getLoc();
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
+  Type llvmElemTy = typeConverter->convertType(srcTy.getElementType());
+  auto dstMemObj =
+      LLVM::getSharedMemoryObjectFromStruct(loc, src, llvmElemTy, rewriter);
+  auto voidTy = void_ty(op->getContext());
+  auto id = getThreadId(rewriter, loc);
+  // Select just one thread for the TMA copy. This also helps the compiler to
+  // figure out that the op is uniform.
+  Value pred = LLVM::NVIDIA::createElectPredicate(loc, rewriter);
+  int elementSizeInBytes = srcTy.getElementType().getIntOrFloatBitWidth() / 8;
+
+  auto mod = op->getParentOfType<ModuleOp>();
+  int numWarps = ttg::lookupNumWarps(op);
+  int warpSize = ttg::TritonGPUDialect::getThreadsPerWarp(mod);
+  Value warpID = rewriter.create<nvgpu::WarpIdOp>(loc);
+  auto shapePerCTA = ttg::getShapePerCTA(srcTy);
+  int elementsPerCTA = product(shapePerCTA);
+
+  auto contigDimSize = nvidia_gpu::getTMAContigDim(srcTy);
+  int numCopies = shapePerCTA.back() / contigDimSize;
+  auto rank = coords.size();
+  auto encoding = srcTy.getEncoding();
+  auto ctaOffset = getCtaOffset(rewriter, loc, encoding, shapePerCTA);
+
+  for (int copyIdx = 0; copyIdx < numCopies; copyIdx += numWarps) {
+    int numWarpsToCopy = std::min(numCopies - copyIdx, numWarps);
+    if (numWarpsToCopy == 1)
+      warpID = b.i32_val(0);
+    Value boxPred =
+        b.and_(pred, b.icmp_ult(id, b.i32_val(numWarpsToCopy * warpSize)));
+    ::mlir::triton::PTXBuilder ptxBuilderTMA;
+    Type elemPtrTy = ptr_ty(rewriter.getContext(), 3);
+    Value copyIdxVal = b.add(warpID, b.i32_val(copyIdx));
+    Value shMemOffset =
+        b.mul(copyIdxVal, b.i32_val(elementsPerCTA / numCopies));
+    Value shMemPtr =
+        b.gep(elemPtrTy, llvmElemTy, dstMemObj.getBase(), shMemOffset);
+    SmallVector<PTXBuilder::Operand *> operands = {
+        ptxBuilderTMA.newOperand(boxPred, "b"),
+        ptxBuilderTMA.newOperand(tmaPtr, "l")};
+    int operandIdx = 2;
+    for (int i = 0; i < rank; i++) {
+      Value coord = coords[rank - i - 1];
+      if (i < ctaOffset.size() && ctaOffset[ctaOffset.size() - i - 1])
+        coord = b.add(coord, ctaOffset[ctaOffset.size() - i - 1]);
+      if (i == 0) {
+        Value offset = b.mul(copyIdxVal, b.i32_val(contigDimSize));
+        coord = b.add(coord, offset);
+      }
+      operands.push_back(ptxBuilderTMA.newOperand(coord, "r"));
+    }
+    operands.push_back(ptxBuilderTMA.newOperand(shMemPtr, "r"));
+    auto &tma = *ptxBuilderTMA.create<>(tmaInst);
+    tma(operands, /*onlyAttachMLIRArgs=*/true);
+    ptxBuilderTMA.launch(rewriter, loc, voidTy);
+  }
+
+  // TODO: Separate the syncronizations operations into separate TTGIR ops to
+  // be able to schedule them at the high level.
+  rewriter.create<NVVM::CpAsyncBulkCommitGroupOp>(loc);
+
+  rewriter.eraseOp(op);
+  return success();
+};
+
 struct AsyncTMACopyLocalToGlobalOpConversion
     : public ConvertOpToLLVMPattern<
           triton::nvidia_gpu::AsyncTMACopyLocalToGlobalOp> {
@@ -1310,78 +1383,47 @@ struct AsyncTMACopyLocalToGlobalOpConversion
   matchAndRewrite(triton::nvidia_gpu::AsyncTMACopyLocalToGlobalOp op,
                   OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    auto loc = op.getLoc();
-    auto b = TritonLLVMOpBuilder(loc, rewriter);
-    Type llvmElemTy =
-        typeConverter->convertType(op.getSrc().getType().getElementType());
-    auto dstMemObj = LLVM::getSharedMemoryObjectFromStruct(
-        loc, adaptor.getSrc(), llvmElemTy, rewriter);
-    auto voidTy = void_ty(op->getContext());
-    auto id = getThreadId(rewriter, loc);
-    // Select just one thread for the TMA copy. This also helps the compiler to
-    // figure out that the op is uniform.
-    Value pred = LLVM::NVIDIA::createElectPredicate(loc, rewriter);
-    int elementSizeInBytes =
-        op.getSrc().getType().getElementType().getIntOrFloatBitWidth() / 8;
-
-    auto mod = op->getParentOfType<ModuleOp>();
-    int numWarps = ttg::lookupNumWarps(op);
-    int warpSize = ttg::TritonGPUDialect::getThreadsPerWarp(mod);
-    Value warpID = rewriter.create<nvgpu::WarpIdOp>(loc);
-    auto shapePerCTA = ttg::getShapePerCTA(op.getSrc().getType());
-    int elementsPerCTA = product(shapePerCTA);
-
-    auto contigDimSize = nvidia_gpu::getTMAContigDim(op.getSrc().getType());
-    int numCopies = shapePerCTA.back() / contigDimSize;
+    std::ostringstream tmaInst;
     auto rank = op.getCoord().size();
-    auto encoding = op.getSrc().getType().getEncoding();
-    auto ctaOffset = getCtaOffset(rewriter, loc, encoding, shapePerCTA);
-
-    for (int copyIdx = 0; copyIdx < numCopies; copyIdx += numWarps) {
-      int numWarpsToCopy = std::min(numCopies - copyIdx, numWarps);
-      if (numWarpsToCopy == 1)
-        warpID = b.i32_val(0);
-      Value boxPred =
-          b.and_(pred, b.icmp_ult(id, b.i32_val(numWarpsToCopy * warpSize)));
-      ::mlir::triton::PTXBuilder ptxBuilderTMA;
-      Type elemPtrTy = ptr_ty(rewriter.getContext(), 3);
-      Value copyIdxVal = b.add(warpID, b.i32_val(copyIdx));
-      Value shMemOffset =
-          b.mul(copyIdxVal, b.i32_val(elementsPerCTA / numCopies));
-      Value shMemPtr =
-          b.gep(elemPtrTy, llvmElemTy, dstMemObj.getBase(), shMemOffset);
-      SmallVector<PTXBuilder::Operand *> operands = {
-          ptxBuilderTMA.newOperand(boxPred, "b"),
-          ptxBuilderTMA.newOperand(adaptor.getDescPtr(), "l")};
-      std::string tmaInst = "@$0 cp.async.bulk.tensor." + std::to_string(rank) +
-                            "d.global.shared::cta.bulk_group [$1, {";
-      int operandIdx = 2;
-      for (int i = 0; i < rank; i++) {
-        Value coord = adaptor.getCoord()[rank - i - 1];
-        if (i < ctaOffset.size() && ctaOffset[ctaOffset.size() - i - 1])
-          coord = b.add(coord, ctaOffset[ctaOffset.size() - i - 1]);
-        if (i == 0) {
-          Value offset = b.mul(copyIdxVal, b.i32_val(contigDimSize));
-          coord = b.add(coord, offset);
-        }
-        operands.push_back(ptxBuilderTMA.newOperand(coord, "r"));
-        tmaInst += "$" + std::to_string(operandIdx++);
-        if (i != rank - 1)
-          tmaInst += ", ";
-      }
-      operands.push_back(ptxBuilderTMA.newOperand(shMemPtr, "r"));
-      tmaInst += "}], [$" + std::to_string(operandIdx++) + "];";
-      auto &tma = *ptxBuilderTMA.create<>(tmaInst);
-      tma(operands, /*onlyAttachMLIRArgs=*/true);
-      ptxBuilderTMA.launch(rewriter, loc, voidTy);
+    tmaInst << "@$0 cp.async.bulk.tensor." << rank;
+    tmaInst << "d.global.shared::cta.bulk_group [$1, {";
+    int operandIdx = 2;
+    for (int i = 0; i < rank; i++) {
+      tmaInst << "$" << operandIdx++;
+      if (i != rank - 1)
+        tmaInst << ", ";
     }
+    tmaInst << "}], [$" << (operandIdx++) << "];";
+    return convertTMAStoreLikeOp(op, typeConverter, rewriter,
+                                 adaptor.getDescPtr(), op.getSrc().getType(),
+                                 adaptor.getSrc(), adaptor.getCoord(),
+                                 tmaInst.str());
+  }
+};
 
-    // TODO: Separate the syncronizations operations into separate TTGIR ops to
-    // be able to schedule them at the high level.
-    rewriter.create<NVVM::CpAsyncBulkCommitGroupOp>(loc);
+struct AsyncTMAReduceOpConversion
+    : public ConvertOpToLLVMPattern<triton::nvidia_gpu::AsyncTMAReduceOp> {
+  using ConvertOpToLLVMPattern::ConvertOpToLLVMPattern;
 
-    rewriter.eraseOp(op);
-    return success();
+  LogicalResult
+  matchAndRewrite(triton::nvidia_gpu::AsyncTMAReduceOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    std::ostringstream tmaInst;
+    auto rank = op.getCoord().size();
+    auto kind = stringifyDescriptorReduceKind(op.getKind());
+    tmaInst << "@$0 cp.reduce.async.bulk.tensor." << rank;
+    tmaInst << "d.global.shared::cta." << kind.str() << ".bulk_group [$1, {";
+    int operandIdx = 2;
+    for (int i = 0; i < rank; i++) {
+      tmaInst << "$" << operandIdx++;
+      if (i != rank - 1)
+        tmaInst << ", ";
+    }
+    tmaInst << "}], [$" << (operandIdx++) << "];";
+    return convertTMAStoreLikeOp(op, typeConverter, rewriter,
+                                 adaptor.getDescPtr(), op.getSrc().getType(),
+                                 adaptor.getSrc(), adaptor.getCoord(),
+                                 tmaInst.str());
   }
 };
 
@@ -1705,9 +1747,9 @@ void mlir::triton::NVIDIA::populateLoadStoreOpToLLVMPatterns(
       typeConverter, targetInfo, axisInfoAnalysis, benefit);
   patterns.add<AsyncCommitGroupOpConversion>(typeConverter, benefit);
   patterns.add<AsyncWaitOpConversion>(typeConverter, benefit);
-  patterns
-      .add<AsyncTMACopyGlobalToLocalOpConversion,
-           AsyncTMACopyLocalToGlobalOpConversion, AsyncTMAGatherOpConversion,
-           AsyncTMAScatterOpConversion, TMAStoreWaitOpConversion>(typeConverter,
-                                                                  benefit);
+  patterns.add<AsyncTMACopyGlobalToLocalOpConversion,
+               AsyncTMACopyLocalToGlobalOpConversion,
+               AsyncTMAReduceOpConversion, AsyncTMAGatherOpConversion,
+               AsyncTMAScatterOpConversion, TMAStoreWaitOpConversion>(
+      typeConverter, benefit);
 }
