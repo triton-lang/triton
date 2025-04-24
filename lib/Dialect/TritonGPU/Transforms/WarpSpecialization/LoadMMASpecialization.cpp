@@ -740,11 +740,7 @@ LogicalResult triton::gpu::specializeLoadMMADependencies(scf::ForOp &loop,
 
   // Determine if the MMA accumulator can be multibuffered.
   auto isLoadPipelineable = [&](Operation *op) {
-<<<<<<< HEAD
     return allLoadOps.contains(op);
-=======
-    return llvm::is_contained({aChain.back(), bChain.back()}, op);
->>>>>>> parent of 7e608e3b0 ([Bench][Blackwell] Support optional scale TMAs in warp specialization for tl.dot_scaled)
   };
   bool accIsMultiBuffered =
       // All operand feeds are pipelineable.
