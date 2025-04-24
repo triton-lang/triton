@@ -98,7 +98,7 @@ def bench_mlp(batch, dim1, dim2, n_expts_tot, n_expts_act, x_dtype, w_dtype,
     # -- benchmark --
     fpath = Path(f"logs/{name}/{batch}-{dim1}-{dim2}-{n_expts_tot}-{n_expts_act}-{x_dtype}-{w_dtype}.hatchet")
     fpath.parent.mkdir(parents=True, exist_ok=True)
-    x_dtype = {"bf16": torch.bfloat16, "fp8": torch.float8_e4m3fn}[x_dtype]
+    x_dtype = {"fp16": torch.float16, "bf16": torch.bfloat16, "fp8": torch.float8_e4m3fn}[x_dtype]
     # special treatment of fp8_e4m3 on AMD CDNA3 because it uses fp8_e4m3fnuz
     if x_dtype == torch.float8_e4m3fn and get_cdna_version() == 3:
         x_dtype = torch.float8_e4m3fnuz
@@ -140,17 +140,29 @@ def bench_mlp(batch, dim1, dim2, n_expts_tot, n_expts_act, x_dtype, w_dtype,
             min_time = max(min_time_flops, min_time_bytes)
             util = min_time / tot_time
         else:
-            util = "N/A"
+            util = 0.0
         tflops = sum([tot_flops[w] for w in [8, 16]]) / tot_time * 1e-3
         tbps = tot_bytes / tot_time * 1e-3
+        print(f"Utilization: {util:.0%}; {tflops:>6.1f} TFLOPs, {tbps:.1f} TB/s")
 
     return util, tflops, tbps
 
 
 if __name__ == "__main__":
     has_native_mx4 = torch.cuda.get_device_capability(0)[0] >= 10 or get_cdna_version() == 4
-    qxdtype = "fp8" if has_native_mx4 else "bf16"
-    print(bench_mlp(8192, 8192, 8192, 1, 1, "fp8", "fp8", TP=1, EP=1, name="dense"))
-    print(bench_mlp(8192, 8192, 8192, 1, 1, qxdtype, "mx4", TP=1, EP=1, name="dense"))
-    print(bench_mlp(2048, 5120, 8192, 128, 4, "fp8", "fp8", TP=4, EP=1, name="llama4"))
-    print(bench_mlp(2048, 5120, 8192, 128, 4, qxdtype, "mx4", TP=4, EP=1, name="llama4"))
+    if SPECS is None:
+        print("Current GPU has no specs provided, utilization is N/A")
+    if has_native_mx4:
+        bench_mlp(8192, 8192, 8192, 1, 1, "fp8", "fp8", TP=1, EP=1, name="dense")
+        bench_mlp(8192, 8192, 8192, 1, 1, "fp8", "mx4", TP=1, EP=1, name="dense")
+        bench_mlp(2048, 5120, 8192, 128, 4, "fp8", "fp8", TP=4, EP=1, name="llama4")
+        bench_mlp(2048, 5120, 8192, 128, 4, "fp8", "mx4", TP=4, EP=1, name="llama4")
+    else:
+        # bf16/fp16 x fp8 is skipped because matmul_ogs requires x and w has the
+        # same type when not doing mxfp operation
+        bench_mlp(8192, 8192, 8192, 1, 1, "fp8", "fp8", TP=1, EP=1, name="dense")
+        bench_mlp(8192, 8192, 8192, 1, 1, "fp16", "mx4", TP=1, EP=1, name="dense")
+        bench_mlp(8192, 8192, 8192, 1, 1, "bf16", "mx4", TP=1, EP=1, name="dense")
+        bench_mlp(2048, 5120, 8192, 128, 4, "fp8", "fp8", TP=4, EP=1, name="llama4")
+        bench_mlp(2048, 5120, 8192, 128, 4, "bf16", "mx4", TP=4, EP=1, name="llama4")
+        bench_mlp(2048, 5120, 8192, 128, 4, "fp16", "mx4", TP=4, EP=1, name="llama4")
