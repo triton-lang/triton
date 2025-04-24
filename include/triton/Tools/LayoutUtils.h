@@ -98,6 +98,10 @@ standardOutDimPairs(MLIRContext *ctx, ArrayRef<int64_t> dstShape);
 LinearLayout identityStandardND(StringAttr inDimName, ArrayRef<unsigned> shape,
                                 ArrayRef<unsigned> order);
 
+// Return a layout with the same in/out dimensions as `layout` but with all
+// bases set to 0.
+LinearLayout zerosLike(const LinearLayout &layout);
+
 // Compute the supremum of two lists.
 // Error out if the supremum does not exist (e.g. [a, b] and [b, a]).
 // If the supremum is not unique, we return the first list first

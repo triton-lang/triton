@@ -185,6 +185,24 @@ LinearLayout identityStandardND(StringAttr inDimName, ArrayRef<unsigned> shape,
   return ret;
 }
 
+LinearLayout zerosLike(const LinearLayout &layout) {
+  auto bases = layout.getBases();
+  for (auto &basis : bases) {
+    for (auto &vec : basis.second) {
+      for (auto &val : vec) {
+        val = 0;
+      }
+    }
+  }
+
+  SmallVector<std::pair<StringAttr, int32_t>> outDims;
+  for (auto outDim : layout.getOutDimNames()) {
+    outDims.emplace_back(outDim, layout.getOutDimSize(outDim));
+  }
+  return LinearLayout(std::move(bases), std::move(outDims),
+                      /*requireSurjective=*/false);
+}
+
 // Compute the supremum of two lists.
 // If the supremum is not unique, we return the first list first
 // Error out if the supremum does not exist
