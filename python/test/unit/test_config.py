@@ -101,11 +101,9 @@ def test_config_scope(fresh_config, monkeypatch):
     assert fresh_config.amd.use_buffer_ops
 
 
-@pytest.mark.parametrize("truthy_falsey", [("1", "0"), ("true", "false"), ("True", "False"), ("TRUE", "FALSE"),
-                                           ("y", "n"), ("YES", "NO"), ("ON", "OFF")])
-def test_read_env(truthy_falsey, fresh_config, monkeypatch):
-    truthy, falsey = truthy_falsey
-
+@pytest.mark.parametrize("truthy, falsey", [("1", "0"), ("true", "false"), ("True", "False"), ("TRUE", "FALSE"),
+                                            ("y", "n"), ("YES", "NO"), ("ON", "OFF")])
+def test_read_env(truthy, falsey, fresh_config, monkeypatch):
     # bool defaulting to False
     assert not fresh_config.runtime.debug
     # bool defaulting to True
