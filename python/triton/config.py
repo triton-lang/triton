@@ -8,7 +8,8 @@ import sysconfig
 
 from dataclasses import dataclass
 from contextlib import contextmanager
-from typing import cast, Any, Callable, Generator, Generic, Optional, Protocol, Self, Type, TypeVar, TypedDict, TYPE_CHECKING, Union
+from typing import cast, Any, Callable, Generator, Generic, Optional, Protocol, Type, TypeVar, TypedDict, TYPE_CHECKING, Union
+from typing_extensions import Self
 
 if TYPE_CHECKING:
     from .runtime.cache import CacheManager, RemoteCacheBackend
