@@ -224,10 +224,13 @@ static inline Value truncAndCastFromInt(RewriterBase &rewriter, Location loc,
   return toVal;
 }
 
+// Permute lanes of the input val and apply reduction to permuted values.
 static Value permuteAndReduce(RewriterBase &rewriter, Location loc,
-                              std::string intrinsic, Value val,
+                              StringRef intrinsic, Value val,
                               Operation *reduxOp) {
   Type valType = val.getType();
+  assert(valType.getIntOrFloatBitWidth() <= 32);
+
   Type actualType = valType;
   if (!valType.isInteger(32))
     actualType = castToAndSExtInt(rewriter, loc, val, valType, 32);
@@ -254,14 +257,29 @@ static Value permuteAndReduce(RewriterBase &rewriter, Location loc,
   return redx;
 }
 
+// Apply warp reduction across lanes using llvm intrinsics in GFX950.
+// The input acc has the partial accumulated value from reduction within
+// threads. The output acc has the final accumulated value.
+//
+// The thread layout must be mfma input layout.
+// For the mfma_32x32 layout:
+//   step 1: use permlane32_swap() to swap the row 2 and 3 of acc and
+//           the row 0 and 1 of the copy of acc
+//   step 2: apply reduction to the result values to get final result
+// For the mfma_16x16 layout:
+//   step 1: use permlane32_swap() to swap the row 2 and 3 of acc and
+//           the row 0 and 1 of the copy of acc
+//   step 2: apply reduction to the result values to get the partial result
+//   step 3: use permlane16_swap() to swap the odd and even rows of
+//           the partial results
+//   step 4: apply reduction to get the final results
 static bool warpReduceCDNA4(RewriterBase &rewriter, Location loc,
-                            SmallVector<Value> &acc, triton::ReduceOp op,
-                            unsigned numLaneToReduce, unsigned interleave) {
+                            SmallVector<Value> &acc, triton::ReduceOp op) {
   Operation *reduxOp = op.getSingleCombiner();
   if (!reduxOp)
     return false;
 
-  if (acc.size() > 1)
+  if (acc.size() != 1)
     return false;
   Value val = acc[0];
   unsigned bits = val.getType().getIntOrFloatBitWidth();
@@ -269,13 +287,13 @@ static bool warpReduceCDNA4(RewriterBase &rewriter, Location loc,
     return false;
 
   auto resultTy = op.getInputTypes()[0];
-  if (!isa<AMDMfmaEncodingAttr>(resultTy.getEncoding()))
+  auto mfmaLayout = dyn_cast<AMDMfmaEncodingAttr>(resultTy.getEncoding());
+  if (!mfmaLayout)
     return false;
 
-  auto mfmaLayout = cast<AMDMfmaEncodingAttr>(resultTy.getEncoding());
   auto MDim = mfmaLayout.getMDim();
   auto NDim = mfmaLayout.getNDim();
-  std::string intrinsic;
+  StringRef intrinsic;
   if (MDim == 32 && NDim == 32 || MDim == 16 && NDim == 16)
     intrinsic = "llvm.amdgcn.permlane32.swap";
   else
@@ -299,7 +317,7 @@ bool TargetInfo::warpReduce(RewriterBase &rewriter, Location loc,
   auto b = TritonLLVMOpBuilder(loc, rewriter);
 
   if (isCDNA() && getISAFamily() == ISAFamily::CDNA4 &&
-      warpReduceCDNA4(rewriter, loc, acc, op, numLaneToReduce, interleave))
+      warpReduceCDNA4(rewriter, loc, acc, op))
     return true;
   if (numLaneToReduce != getWarpSize())
     return false;
