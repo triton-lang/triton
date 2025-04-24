@@ -2,7 +2,7 @@ import importlib
 import inspect
 import sys
 from dataclasses import dataclass
-from typing import Type, TypeVar
+from typing import Type, TypeVar, Union
 from types import ModuleType
 from .driver import DriverBase
 from .compiler import BaseBackend
@@ -12,8 +12,7 @@ if sys.version_info >= (3, 10):
 else:
     from importlib_metadata import entry_points
 
-
-T = TypeVar("T", bound=BaseBackend | DriverBase)
+T = TypeVar("T", bound=Union[BaseBackend, DriverBase])
 
 
 def _find_concrete_subclasses(module: ModuleType, base_class: Type[T]) -> Type[T]:
