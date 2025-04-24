@@ -10,21 +10,34 @@ namespace mlir::triton::proton::gpu::AMD {
 
 Value TargetInfo::clock(ConversionPatternRewriter &rewriter, Location loc,
                         bool isClock64) const {
-  //TODO(crobeck): fix this to actually support the 64-bit clock value
+  // NV has both a 32 bit and 64 bit clock intrinsic. On AMD we only have
+  // s_memtime which is 64 bit. However truncating the 64 bit version
+  // in cases of requesting 32 bit should be fine, since in 64 bits, 
+  // after 0x0000.0000.ffff.ffff comes 0x0000.0001.0000.0000, and 
+  // truncating that to 32 bits gives zero, effectively wrapping from 
+  // 0xffff.ffff to 0x0000.0000. 
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   StringRef clock64IntrinsicName = "llvm.amdgcn.s.memtime";
-  Value clock64Val =  LLVM::createLLVMIntrinsicCallOp(
+  Value clockVal =  LLVM::createLLVMIntrinsicCallOp(
         rewriter, loc, clock64IntrinsicName, i64_ty, {}).getResult(0);
-  return rewriter.create<LLVM::TruncOp>(loc, i32_ty, clock64Val);
+  if(!isClock64)
+	  clockVal = rewriter.create<LLVM::TruncOp>(loc, i32_ty, clockVal);
+  return clockVal;
 }
 
 Value TargetInfo::processorId(ConversionPatternRewriter &rewriter,
                               Location loc) const {
   GCNBuilder builder;
   auto &gethwid = *builder.create("s_getreg_b32");
-  auto res = builder.newOperand("=s");
+  auto cu_id = builder.newOperand("=s");
   auto hwreg = builder.newConstantOperand("hwreg(HW_REG_HW_ID, 8, 4)");
-  gethwid(res, hwreg);
+  gethwid(cu_id, hwreg);
+
+//  	auto &getxccid = *builder.create("s_getreg_b32");
+//  	auto xcc_res = builder.newOperand("=s");
+//	auto xcc_reg = builder.newConstantOperand("hwreg(HW_REG_XCC_ID)");
+//  	gethwid(xcc_res, xcc_reg);
+  
   builder.create<>("s_waitcnt lgkmcnt(0)")->operator()();
   return builder.launch(rewriter, loc, i32_ty, false);
 }
