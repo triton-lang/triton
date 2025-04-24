@@ -305,10 +305,10 @@ static PyObject *fillTMADescriptor(PyObject *self, PyObject *args) {
   blockSizeFast = PySequence_Fast(blockSize, "blockSize must be a sequence");
   if (!blockSizeFast)
     goto cleanup;
-  int rank = PySequence_Fast_GET_SIZE(blockSizeFast);
+  int rank = PySequence_Size(blockSizeFast);
 
   for (int i = 0; i < rank; ++i) {
-    PyObject *item = PySequence_Fast_GET_ITEM(blockSizeFast, i);
+    PyObject *item = PySequence_GetItem(blockSizeFast, i);
     if (!PyLong_Check(item)) {
       PyErr_SetString(PyExc_TypeError, "block size must be an int");
       goto cleanup;
@@ -320,12 +320,12 @@ static PyObject *fillTMADescriptor(PyObject *self, PyObject *args) {
   if (!shapeFast)
     goto cleanup;
 
-  if (rank != PySequence_Fast_GET_SIZE(shapeFast)) {
+  if (rank != PySequence_Size(shapeFast)) {
     PyErr_SetString(PyExc_RuntimeError, "Rank mismatch");
     goto cleanup;
   }
   for (int i = 0; i < rank; ++i) {
-    PyObject *item = PySequence_Fast_GET_ITEM(shapeFast, i);
+    PyObject *item = PySequence_GetItem(shapeFast, i);
     if (!PyLong_Check(item)) {
       PyErr_SetString(PyExc_TypeError, "shape must be an int");
       goto cleanup;
@@ -337,12 +337,12 @@ static PyObject *fillTMADescriptor(PyObject *self, PyObject *args) {
   if (!stridesFast)
     goto cleanup;
 
-  if (rank != PySequence_Fast_GET_SIZE(stridesFast)) {
+  if (rank != PySequence_Size(stridesFast)) {
     PyErr_SetString(PyExc_RuntimeError, "Rank mismatch");
     goto cleanup;
   }
   for (int i = 0; i + 1 < rank; ++i) {
-    PyObject *item = PySequence_Fast_GET_ITEM(stridesFast, i);
+    PyObject *item = PySequence_GetItem(stridesFast, i);
     if (!PyLong_Check(item)) {
       PyErr_SetString(PyExc_TypeError, "shape must be an int");
       goto cleanup;
