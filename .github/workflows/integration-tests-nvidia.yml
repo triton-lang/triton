@@ -16,7 +16,13 @@ jobs:
         runner: ${{ fromJson(inputs.matrix) }}
     env:
       RUNNER_TYPE: ${{ matrix.runner[0] }}
+      TRITON_BUILD_WITH_CCACHE: "true"
+      TRITON_BUILD_WITH_CLANG_LLD: "TRUE"
+      TRITON_USE_ASSERT_ENABLED_LLVM: "TRUE"
+      TRITON_DISABLE_LINE_INFO: 1
+      PROTON_SKIP_PC_SAMPLING_TEST: 1
       PYTHON: "python3"
+      CCACHE_COMPRESS: "true"
     steps:
       - name: Checkout
         uses: actions/checkout@v4
