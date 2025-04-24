@@ -1,3 +1,4 @@
+#include "mlir/Analysis/SliceAnalysis.h"
 #include "mlir/Dialect/UB/IR/UBOps.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/Dominance.h"
@@ -20,6 +21,201 @@ using namespace triton::gpu;
 namespace ttng = triton::nvidia_gpu;
 
 using Partition = WarpSchedule::Partition;
+
+//===----------------------------------------------------------------------===//
+// assignPartitions
+//===----------------------------------------------------------------------===//
+
+namespace {
+struct PipelinedLoad {
+  PipelinedLoad(Operation *loadOp)
+      : loadOp(loadOp), type(getResult().getType()),
+        sharedEnc(getSharedEncoding(loadOp)) {}
+
+  TypedValue<RankedTensorType> getResult() const {
+    return cast<TypedValue<RankedTensorType>>(loadOp->getResult(0));
+  }
+  unsigned getLoadSizeInBytes() const {
+    return type.getNumElements() * type.getElementTypeBitWidth() / 8;
+  }
+  LogicalResult determineLiveRange(Block &container, DominanceInfo &domInfo,
+                                   PostDominanceInfo &postDomInfo,
+                                   WarpSchedule &schedule);
+
+  Operation *loadOp;
+  RankedTensorType type;
+  SharedEncodingTrait sharedEnc;
+
+  SmallVector<LocalAllocOp> allocOps;
+  Operation *liveBeforeOp = nullptr;
+  Operation *liveUntilOp = nullptr;
+};
+
+struct PipelinedMMA {
+  PipelinedMMA(ttng::MMAv5OpInterface mmaOp) : mmaOp(mmaOp) {}
+
+  ttng::MMAv5OpInterface mmaOp;
+  ttng::TMEMStoreOp storeOp;
+  SmallVector<Operation *> operandViews;
+};
+
+struct PartitionScheme {
+  SmallVector<PipelinedLoad> loads;
+  SmallVector<PipelinedMMA> mmas;
+  SetVector<Operation *> userOps;
+};
+} // namespace
+
+// Find the last operation in the loop body that defined this value, with a
+// maximum of distance 1.
+static Operation *findDefOpInLoop(scf::ForOp loop, Value value,
+                                  int distance = 0) {
+  if (auto arg = dyn_cast<BlockArgument>(value)) {
+    if (arg.getParentBlock() != loop.getBody())
+      return {};
+    // Don't look back more than distance 1.
+    if (distance == 1)
+      return {};
+    return findDefOpInLoop(
+        loop, loop.getYieldedValues()[arg.getArgNumber() - 1], distance + 1);
+  }
+  Operation *defOp = value.getDefiningOp();
+  if (!loop.getBodyRegion().isAncestor(defOp->getParentRegion()))
+    return {};
+  return defOp;
+}
+
+// Assign load and MMAs to partitions and figure out where the user partition
+// is.
+static PartitionScheme assignPartitions(scf::ForOp loop) {
+  // Find loads to pipeline.
+  SmallVector<PipelinedLoad> loads;
+  for (Operation &loadOp : loop.getOps()) {
+    if (loadOp.use_empty())
+      continue;
+
+    // Only TMA loads are supported at the moment.
+    if (!isa<DescriptorLoadOp, DescriptorGatherOp>(loadOp))
+      continue;
+
+    PipelinedLoad &load = loads.emplace_back(&loadOp);
+    // Local alloc users of the load with matching encoding will cause the
+    // underlying buffer to be pass through. Keep track of them.
+    for (Operation *user : loadOp.getUsers()) {
+      if (auto alloc = dyn_cast<LocalAllocOp>(user)) {
+        if (load.sharedEnc == alloc.getType().getEncoding())
+          load.allocOps.push_back(alloc);
+      }
+    }
+  }
+
+  // Find MMAs to pipeline.
+  SmallVector<PipelinedMMA> mmas;
+  for (auto mmaOp : loop.getOps<ttng::MMAv5OpInterface>()) {
+    PipelinedMMA &mma = mmas.emplace_back(mmaOp);
+
+    // If the store is unrelated to the use of the MMA, then it gets placed in
+    // the MMA partition.
+    auto storeOp = dyn_cast_or_null<ttng::TMEMStoreOp>(
+        findDefOpInLoop(loop, mmaOp.getAccDep()));
+    if (!ttng::hasAccReadModifyWrite(mmaOp, loop) && storeOp)
+      mma.storeOp = storeOp;
+
+    // Look for views into the operands.
+    SmallVector<Operation *> operandViews;
+    for (Value operand : mmaOp->getOperands()) {
+      if (Operation *defOp = operand.getDefiningOp())
+        operandViews.push_back(defOp);
+    }
+    while (!operandViews.empty()) {
+      Operation *op = operandViews.pop_back_val();
+      if (!op->hasOneUse() || !isa<MemDescSubviewOp, MemDescTransOp>(op))
+        continue;
+      mma.operandViews.push_back(op);
+      if (Operation *defOp = op->getOperand(0).getDefiningOp())
+        operandViews.push_back(defOp);
+    }
+    mmas.push_back(std::move(mma));
+  }
+
+  // Assign initial partitions.
+  Builder b(loop.getContext());
+  SmallVector<Operation *> transitiveUsers;
+
+  DenseSet<Operation *> scheduled;
+  for (PipelinedLoad &load : loads) {
+    for (LocalAllocOp allocOp : load.allocOps) {
+      scheduled.insert(allocOp);
+      transitiveUsers.push_back(allocOp);
+    }
+    scheduled.insert(load.loadOp);
+    transitiveUsers.push_back(load.loadOp);
+  }
+
+  for (PipelinedMMA &mma : mmas) {
+    scheduled.insert(mma.mmaOp);
+    if (mma.storeOp)
+      scheduled.insert(mma.storeOp);
+    for (Operation *view : mma.operandViews)
+      scheduled.insert(view);
+    transitiveUsers.push_back(mma.mmaOp);
+  }
+
+  // Recursively propagate partitions to the users.
+  SetVector<Operation *> userOps;
+  while (!transitiveUsers.empty()) {
+    Operation *op = transitiveUsers.pop_back_val();
+
+    SmallVector<OpOperand *> uses;
+    for (OpOperand &use : op->getUses())
+      uses.push_back(&use);
+    for (unsigned i = 0; i < uses.size(); ++i) {
+      OpOperand *use = uses[i];
+      Operation *user = use->getOwner();
+      if (user == loop.getBody()->getTerminator()) {
+        for (OpOperand &use :
+             loop.getRegionIterArg(use->getOperandNumber()).getUses())
+          uses.push_back(&use);
+      } else {
+        if (!scheduled.insert(user).second)
+          continue;
+        user = loop.getBody()->findAncestorOpInBlock(*user);
+        userOps.insert(user);
+        transitiveUsers.push_back(user);
+      }
+    }
+  }
+
+  return PartitionScheme{std::move(loads), std::move(mmas), std::move(userOps)};
+}
+
+static WarpSchedule getInitialSchedule(const PartitionScheme &scheme) {
+  WarpSchedule schedule;
+
+  Partition *loadPartition = schedule.addPartition(0);
+  for (const PipelinedLoad &load : scheme.loads) {
+    loadPartition->insert(load.loadOp);
+    for (LocalAllocOp allocOp : load.allocOps)
+      loadPartition->insert(allocOp);
+  }
+
+  Partition *mmaPartition = schedule.addPartition(1);
+  for (const PipelinedMMA &mma : scheme.mmas) {
+    mmaPartition->insert(mma.mmaOp);
+    if (mma.storeOp)
+      mmaPartition->insert(mma.storeOp);
+    for (Operation *viewOp : mma.operandViews)
+      mmaPartition->insert(viewOp);
+  }
+
+  if (!scheme.userOps.empty()) {
+    Partition *userPartition = schedule.addPartition(2);
+    for (Operation *userOp : scheme.userOps)
+      userPartition->insert(userOp);
+  }
+
+  return schedule;
+}
 
 //===----------------------------------------------------------------------===//
 // Utilities
@@ -88,6 +284,162 @@ addIndexAndPhase(PartitionBuilder &b, scf::ForOp &loop, unsigned numStages,
 //===----------------------------------------------------------------------===//
 // Load Pipelining
 //===----------------------------------------------------------------------===//
+
+// Find the last operation that consumes the in-memory result of a load. This
+// only looks at the current loop iteration.
+static LogicalResult
+findSharedMemorySinkOps(Value value, SmallVectorImpl<Operation *> &sinkOps) {
+  for (Operation *user : value.getUsers()) {
+    if (isa<ttng::MMAv5OpInterface, LocalLoadOp>(user)) {
+      sinkOps.push_back(user);
+    } else if (isa<MemDescTransOp, MemDescSubviewOp>(user)) {
+      if (failed(findSharedMemorySinkOps(user->getResult(0), sinkOps)))
+        return failure();
+    } else {
+      return mlir::emitWarning(user->getLoc(),
+                               "failed to warp specialize: cannot handle sink "
+                               "of in-memory load operation");
+    }
+  }
+  return success();
+}
+
+LogicalResult PipelinedLoad::determineLiveRange(Block &container,
+                                                DominanceInfo &domInfo,
+                                                PostDominanceInfo &postDomInfo,
+                                                WarpSchedule &schedule) {
+  // Find the liveBefore and liveUntil operations of the load.
+  SmallVector<Operation *> regSinks, shmemSinks;
+  for (Operation *user : loadOp->getUsers()) {
+    auto it = llvm::find(allocOps, dyn_cast_or_null<LocalAllocOp>(user));
+    if (it == allocOps.end()) {
+      // This is an in-register use of the load. The result must be live before
+      // the op. Since it will be loaded out of shared memory, it only needs to
+      // be live until the op as well.
+      regSinks.push_back(user);
+      continue;
+    }
+    if (failed(findSharedMemorySinkOps(it->getResult(), shmemSinks)))
+      return failure();
+  }
+
+  // The result must be live before all the sinks.
+  auto liveBeforeOps =
+      llvm::to_vector(llvm::concat<Operation *>(regSinks, shmemSinks));
+  liveBeforeOp = findNearestCommonDominator(liveBeforeOps, domInfo);
+  assert(liveBeforeOp && "expected a common dominator");
+  liveBeforeOp = container.findAncestorOpInBlock(*liveBeforeOp);
+
+  // The result must be live until the earliest register sink but after all the
+  // shared memory sinks.
+  Operation *liveUntilReg = findNearestCommonDominator(regSinks, domInfo);
+  assert(liveUntilReg && "expected a common dominator");
+  Operation *liveUntilMem =
+      findNearestCommonPostDominator(shmemSinks, postDomInfo);
+  assert(liveUntilMem && "expected a common post-dominator");
+
+  liveUntilReg = container.findAncestorOpInBlock(*liveUntilReg);
+  liveUntilMem = container.findAncestorOpInBlock(*liveUntilMem);
+  liveUntilMem = liveUntilMem->getNextNode();
+
+  liveUntilOp =
+      findNearestCommonPostDominator({liveUntilReg, liveUntilMem}, postDomInfo);
+  assert(liveUntilOp && "expected a common post-dominator");
+
+  // Require that all the consumers are in the same partition.
+  auto userPartitions = llvm::map_to_vector(liveBeforeOps, [&](Operation *op) {
+    return schedule.getPartition(container.findAncestorOpInBlock(*op));
+  });
+  if (!llvm::all_equal(userPartitions)) {
+    return mlir::emitWarning(loadOp->getLoc(),
+                             "failed to warp specialize: multiple load "
+                             "consumer partitions not supported");
+  }
+}
+
+namespace {
+
+struct PipelinedLoadGroup {
+  Location getLoc();
+  void allocateAref(scf::ForOp loop, int numStages);
+  LogicalResult lowerLoads(WarpSchedule &schedule, DominanceInfo &domInfo,
+                           PostDominanceInfo &postDomInfo);
+
+  SmallVector<PipelinedLoad> loads;
+  Operation *liveBeforeOp;
+
+  SmallVector<Value> loadBuffers;
+  Value emptyBars;
+  Value readyBars;
+  BlockArgument index;
+  BlockArgument phase;
+};
+} // namespace
+
+Location PipelinedLoadGroup::getLoc() {
+  SmallVector<Location> locs = llvm::map_to_vector(
+      loads, [](PipelinedLoad &load) { return load.loadOp->getLoc(); });
+  return FusedLoc::get(locs.front().getContext(), locs);
+}
+
+void PipelinedLoadGroup::allocateAref(scf::ForOp loop, int numStages) {
+  assert(loadBuffers.empty() && "already allocated");
+
+  for (PipelinedLoad &load : loads) {
+    loadBuffers.push_back(createAlloc(loop, load.type, load.loadOp->getLoc(),
+                                      load.sharedEnc, numStages));
+  }
+
+  // Share the same set of barriers all loads in the group.
+  emptyBars = createBarrierAlloc(loop, numStages);
+  readyBars = createBarrierAlloc(loop, numStages);
+  // All buffers are initially in the empty state.
+  PartitionBuilder b(getLoc(), loop);
+  for (auto i : llvm::seq(numStages)) {
+    Value emptyBar = createSingleBufferView(b, emptyBars, i);
+    b.create<ttng::ArriveBarrierOp>(emptyBar, 1);
+  }
+
+  std::tie(index, phase) = addIndexAndPhase(b, loop, numStages);
+}
+
+LogicalResult PipelinedLoadGroup::lowerLoads(WarpSchedule &schedule,
+                                             DominanceInfo &domInfo,
+                                             PostDominanceInfo &postDomInfo) {
+  // Insert before the group of loads.
+  auto firstLoadIt = llvm::min_element(loads, [&](auto &lhs, auto &rhs) {
+    return domInfo.properlyDominates(lhs.loadOp, rhs.loadOp);
+  });
+  Operation *firstLoad = firstLoadIt->loadOp;
+  Partition &loadPartition = *schedule.getPartition(firstLoad);
+  Partition &userPartition = *schedule.getPartition(liveBeforeOp);
+  PartitionBuilder b(getLoc(), firstLoad);
+
+  // Producer acquire.
+  Value curEmptyBar = createSingleBufferView(b, emptyBars, index);
+  b.createInPartition<ttng::WaitBarrierOp>(loadPartition, curEmptyBar, phase);
+
+  // Indicate the expected size of the loads.
+  unsigned loadSizeInBytes = 0;
+  for (const PipelinedLoad &load : loads)
+    loadSizeInBytes += load.getLoadSizeInBytes();
+  Value curLoadBar = createSingleBufferView(b, readyBars, index);
+  b.createInPartition<ttng::BarrierExpectOp>(loadPartition, curLoadBar,
+                                             loadSizeInBytes, b.boolCst(true));
+  OpBuilder::InsertPoint asyncPt = b.saveInsertionPoint();
+
+  // Set up the consumer wait.
+  b.setInsertionPoint(liveBeforeOp);
+  Operation *liveAfter = b.createInPartition<ttng::WaitBarrierOp>(
+      userPartition, curLoadBar, phase);
+
+  // Set up the consumer release.
+  SmallVector<Operation *> liveUntilOps = llvm::map_to_vector(
+      loads, [](PipelinedLoad &load) { return load.liveUntilOp; });
+  Operation *liveUntilOp =
+      findNearestCommonPostDominator(liveUntilOps, postDomInfo);
+  assert(liveUntilOp && "expected a common post-dominator");
+}
 
 // Pattern match a simple `tma_load -> ... -> tl.dot` single-user chain. This
 // ensures there are no extraneous users of the load or intermediate values and
@@ -319,6 +671,32 @@ void LoadGroup::lowerLoads(DominanceInfo &domInfo, PartitionBuilder &b,
 
   // Add a completion on the MMA to signal the load empty barrier.
   mmaOp.addCompletionBarrier(curEmptyBar, b.boolCst(true));
+}
+
+LogicalResult lowerLoops(scf::ForOp &loop, PartitionScheme &scheme,
+                         WarpSchedule &schedule, int numLoadStages) {
+  Block &body = *loop.getBody();
+  DominanceInfo domInfo(loop);
+  PostDominanceInfo postDomInfo(loop);
+
+  // Group loads by common first user operations. This ensures, for example,
+  // that multiple loads feeding into the same MMA op are placed together.
+  llvm::MapVector<Operation *, SmallVector<PipelinedLoad>> liveBeforeGroups;
+  for (PipelinedLoad &load : scheme.loads) {
+    if (failed(load.determineLiveRange(body, domInfo, postDomInfo, schedule)))
+      return failure();
+    liveBeforeGroups[load.liveBeforeOp].push_back(std::move(load));
+  }
+  SmallVector<PipelinedLoadGroup> loadGroups;
+  for (auto &[liveBeforeOp, loads] : liveBeforeGroups)
+    loadGroups.push_back({std::move(loads), liveBeforeOp});
+
+  // Multi-buffer and lower the loads.
+  for (PipelinedLoadGroup &group : loadGroups) {
+    group.allocateAref(loop, numLoadStages);
+  }
+
+  return success();
 }
 
 LogicalResult triton::gpu::specializeLoadMMADependencies(scf::ForOp &loop,
@@ -648,7 +1026,8 @@ void LoadMMASpecialization::runOnOperation() {
       loops.push_back(loop);
   });
   for (scf::ForOp loop : loops) {
-    if (failed(specializeLoadMMADependencies(loop, numStages)))
-      continue;
+    assignPartitions(loop);
+    // if (failed(specializeLoadMMADependencies(loop, numStages)))
+    //   continue;
   }
 }

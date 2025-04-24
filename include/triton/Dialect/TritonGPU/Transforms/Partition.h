@@ -45,6 +45,7 @@ public:
     ArrayRef<Operation *> getOps() const { return ops; }
 
     void insert(Operation *op) { ops.push_back(op); }
+    void remove(Operation *op) { ops.erase(llvm::find(ops, op)); }
 
   private:
     void setIndex(int idx) { this->idx = idx; }
