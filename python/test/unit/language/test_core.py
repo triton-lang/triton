@@ -3811,7 +3811,9 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, input_precision, in_dty
     if not (is_cuda() or is_hip_cdna()):
         return
 
-    if (M == 4) and is_hip_cdna():
+    if is_hip_cdna():
+        if M != 4:
+            return
         amdgcn = pgm.asm['amdgcn']
         if in_dtype == 'float16':
             assert 'v_dot2c_f32_f16' in amdgcn
