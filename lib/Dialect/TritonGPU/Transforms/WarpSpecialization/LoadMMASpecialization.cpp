@@ -729,17 +729,6 @@ LogicalResult triton::gpu::specializeLoadMMADependencies(scf::ForOp &loop,
       loadGroups.push_back(std::move(group));
   }
 
-  SmallVector<Operation *> aScaleChain, bScaleChain;
-  auto scaledMMAOp = dyn_cast<ttng::TCGen5MMAScaledOp>(mmaOp.getOperation());
-  if (scaledMMAOp) {
-    if (failed(
-            findSingleChainToLoad(loop, scaledMMAOp.getAScale(), aScaleChain)))
-      aScaleChain.clear();
-    if (failed(
-            findSingleChainToLoad(loop, scaledMMAOp.getBScale(), bScaleChain)))
-      bScaleChain.clear();
-  }
-
   ttng::TMEMAllocOp oldAccAlloc =
       mmaOp.getAccumulator().getDefiningOp<ttng::TMEMAllocOp>();
   if (!oldAccAlloc)
@@ -751,7 +740,11 @@ LogicalResult triton::gpu::specializeLoadMMADependencies(scf::ForOp &loop,
 
   // Determine if the MMA accumulator can be multibuffered.
   auto isLoadPipelineable = [&](Operation *op) {
+<<<<<<< HEAD
     return allLoadOps.contains(op);
+=======
+    return llvm::is_contained({aChain.back(), bChain.back()}, op);
+>>>>>>> parent of 7e608e3b0 ([Bench][Blackwell] Support optional scale TMAs in warp specialization for tl.dot_scaled)
   };
   bool accIsMultiBuffered =
       // All operand feeds are pipelineable.
