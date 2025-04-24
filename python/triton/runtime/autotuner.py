@@ -6,8 +6,9 @@ import time
 import inspect
 import hashlib
 import json
+from dataclasses import dataclass
 from functools import cached_property
-from typing import Dict, Tuple, List, Optional
+from typing import Any, Callable, Dict, Tuple, List, Optional
 
 from .jit import KernelInterface
 from .errors import OutOfResources, PTXASError
@@ -292,6 +293,7 @@ class Autotuner(KernelInterface):
         return ret
 
 
+@dataclass(frozen=True)
 class Config:
     """
     An object that represents a possible kernel configuration for the auto-tuner to try.
@@ -304,31 +306,36 @@ class Config:
     :type num_warps: int
     :ivar num_stages: the number of stages that the compiler should use when software-pipelining loops.
                        Mostly useful for matrix multiplication workloads on SM80+ GPUs.
-    :type num_ctas: int
+    :type num_stages: int
     :ivar num_ctas: number of blocks in a block cluster. SM90+ only.
+    :type num_ctas: int
     :type maxnreg: Optional[int]
     :ivar maxnreg: maximum number of registers one thread can use.  Corresponds
                        to ptx .maxnreg directive.  Not supported on all platforms.
     :ivar pre_hook: a function that will be called before the kernel is called. Parameters of this
                     function are args.
     """
+    kwargs: Tuple[[str, Any], ...] = ()
+    num_warps: int = 4
+    num_stages: int = 3
+    num_ctas: int = 1
+    maxnreg: Optional[int] = None
+    pre_hook: Optional[Callable] = None
 
-    def __init__(self, kwargs, num_warps=4, num_stages=3, num_ctas=1, maxnreg=None, pre_hook=None):
-        self.kwargs = kwargs
-        self.num_warps = num_warps
-        self.num_ctas = num_ctas
-        self.num_stages = num_stages
-        self.maxnreg = maxnreg
-        self.pre_hook = pre_hook
+    def __post_init__(self):
+        if isinstance(self.kwargs, dict):
+            object.__setattr__(self, "kwargs", tuple(sorted(self.kwargs.items())))
+        else:
+            object.__setattr__(self, "kwargs", tuple(sorted(self.kwargs)))
 
     def all_kwargs(self):
         return {
-            **self.kwargs, **{
+            **dict(self.kwargs), **{
                 k: v
                 for (k, v) in (
                     ("num_warps", self.num_warps),
-                    ("num_ctas", self.num_ctas),
                     ("num_stages", self.num_stages),
+                    ("num_ctas", self.num_ctas),
                     ("maxnreg", self.maxnreg),
                 ) if v is not None
             }
@@ -336,27 +343,13 @@ class Config:
 
     def __str__(self):
         res = []
-        for k, v in self.kwargs.items():
+        for k, v in self.kwargs:
             res.append(f"{k}: {v}")
         res.append(f"num_warps: {self.num_warps}")
-        res.append(f"num_ctas: {self.num_ctas}")
         res.append(f"num_stages: {self.num_stages}")
+        res.append(f"num_ctas: {self.num_ctas}")
         res.append(f"maxnreg: {self.maxnreg}")
         return ", ".join(res)
-
-    def __hash__(self):
-        return hash((*self.all_kwargs().items(), self.pre_hook))
-
-    def __eq__(self, other):
-        self_tuple = tuple((
-            *self.all_kwargs().items(),
-            self.pre_hook,
-        ))
-        other_tuple = tuple((
-            *other.all_kwargs().items(),
-            other.pre_hook,
-        ))
-        return self_tuple == other_tuple
 
 
 def autotune(configs, key, prune_configs_by=None, reset_to_zero=None, restore_value=None, pre_hook=None, post_hook=None,
