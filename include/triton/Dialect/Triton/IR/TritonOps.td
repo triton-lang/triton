@@ -1019,7 +1019,7 @@ def TT_MakeTensorDescOp : TT_Op<"make_tensor_descriptor", [
   let assemblyFormat = "$base `,` `[` $shape `]` `,` `[` $strides `]` attr-dict `:` type($base) `,` type($result)";
 
   let builders = [
-    OpBuilder<(ins "Value":$base, "ValueRange":$shape, "ValueRange":$strides, "ArrayRef<int32_t>":$blockShape)>
+    OpBuilder<(ins "Value":$base, "ValueRange":$shape, "ValueRange":$strides, "ArrayRef<int32_t>":$blockShape, "bool":$isSignedInteger)>
   ];
 
   let extraClassDeclaration = [{
@@ -1259,7 +1259,7 @@ def ReturnOp : TT_Op<"return", [Pure, HasParent<"FuncOp">, /*MemRefsNormalizable
 }
 
 
-def TT_DescriptorLoadOp : TT_Op<"descriptor_load"> {
+def TT_DescriptorLoadOp : TT_Op<"descriptor_load", [TT_DescriptorOpInterface]> {
   let summary = "Load from descriptor";
   let description = [{
     This operation will be lowered to Nvidia TMA load operation on targets supporting it.
@@ -1287,7 +1287,7 @@ def TT_DescriptorLoadOp : TT_Op<"descriptor_load"> {
   let hasVerifier = 1;
 }
 
-def TT_DescriptorStoreOp : TT_Op<"descriptor_store"> {
+def TT_DescriptorStoreOp : TT_Op<"descriptor_store", [TT_DescriptorStoreLikeOpInterface]> {
   let summary = "store value based on descriptor";
   let description = [{
     This operation will be lowered to Nvidia TMA store operation on targets supporting it.
@@ -1304,11 +1304,30 @@ def TT_DescriptorStoreOp : TT_Op<"descriptor_store"> {
     $desc `[` $indices `]` `,` $src
     attr-dict `:` qualified(type($desc)) `,` type($src)
   }];
-
   let hasVerifier = 1;
 }
 
-def TT_DescriptorGatherOp : TT_Op<"descriptor_gather"> {
+def TT_DescriptorReduceOp : TT_Op<"descriptor_reduce", [TT_DescriptorStoreLikeOpInterface]> {
+  let summary = "performs a reducing store operation based on a descriptor";
+  let description = [{
+    This operation will be lowered to Nvidia TMA store operation on targets supporting it.
+    `desc` is a tensor descriptor object.
+    The shape and types of `src` must match the descriptor otherwise the result is undefined.
+  }];
+  let arguments = (ins
+    TT_DescriptorReduceKindAttr:$kind,
+    Arg<TT_TensorDescType, "", [MemRead<GlobalMemory>, MemWrite<GlobalMemory>]>:$desc,
+    TT_Tensor:$src,
+    Variadic<I32>:$indices
+  );
+
+  let assemblyFormat = [{
+    $kind `,` $desc `[` $indices `]` `,` $src
+    attr-dict `:` qualified(type($desc)) `,` type($src)
+  }];
+}
+
+def TT_DescriptorGatherOp : TT_Op<"descriptor_gather", [TT_DescriptorOpInterface]> {
   let summary = "gather multiple rows from a descriptor into a single tensor";
   let description = [{
     The `tt.descriptor_gather` op will be lowered to NVIDIA TMA
@@ -1341,7 +1360,7 @@ def TT_DescriptorGatherOp : TT_Op<"descriptor_gather"> {
   }];
 }
 
-def TT_DescriptorScatterOp : TT_Op<"descriptor_scatter"> {
+def TT_DescriptorScatterOp : TT_Op<"descriptor_scatter", [TT_DescriptorStoreLikeOpInterface]> {
   let summary = "scatter multiple rows to a descriptor from a single tensor";
   let description = [{
     The `tt.descriptor_scatter` op will be lowered to NVIDIA TMA
