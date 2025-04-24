@@ -224,7 +224,9 @@ static inline Value truncAndCastFromInt(RewriterBase &rewriter, Location loc,
   return toVal;
 }
 
-static Value permuteAndReduce(RewriterBase &rewriter, Location loc, std::string intrinsic, Value val, Operation *reduxOp) {
+static Value permuteAndReduce(RewriterBase &rewriter, Location loc,
+                              std::string intrinsic, Value val,
+                              Operation *reduxOp) {
   Type valType = val.getType();
   Type actualType = valType;
   if (!valType.isInteger(32))
@@ -234,18 +236,14 @@ static Value permuteAndReduce(RewriterBase &rewriter, Location loc, std::string 
   Value falseVal = b.false_val();
   MLIRContext *ctx = rewriter.getContext();
   Type retType = struct_ty({i32_ty, i32_ty});
-  Value perm =  LLVM::createLLVMIntrinsicCallOp(rewriter, loc, intrinsic, retType,
-                                         ValueRange{val, val, falseVal, falseVal})
-      ->getResult(0);
+  Value perm =
+      LLVM::createLLVMIntrinsicCallOp(rewriter, loc, intrinsic, retType,
+                                      ValueRange{val, val, falseVal, falseVal})
+          ->getResult(0);
   Value v0 = b.extract_val(i32_ty, perm, 0);
- Value v1 = b.extract_val(i32_ty, perm, 1);
-//falseVal.dump();
-//perm.dump();
-//v0.dump();
-//v1.dump();
+  Value v1 = b.extract_val(i32_ty, perm, 1);
 
-  if (!valType.isInteger(32))
-  {
+  if (!valType.isInteger(32)) {
     v0 = truncAndCastFromInt(rewriter, loc, v0, valType, 32);
     v1 = truncAndCastFromInt(rewriter, loc, v1, valType, 32);
   }
@@ -258,17 +256,17 @@ static Value permuteAndReduce(RewriterBase &rewriter, Location loc, std::string 
 
 static bool warpReduceCDNA4(RewriterBase &rewriter, Location loc,
                             SmallVector<Value> &acc, triton::ReduceOp op,
-                            unsigned numLaneToReduce,
-                            unsigned interleave)
-{
+                            unsigned numLaneToReduce, unsigned interleave) {
   Operation *reduxOp = op.getSingleCombiner();
   if (!reduxOp)
     return false;
 
-  if (acc.size() > 1) return false;
+  if (acc.size() > 1)
+    return false;
   Value val = acc[0];
   unsigned bits = val.getType().getIntOrFloatBitWidth();
-  if ( bits > 32) return false;
+  if (bits > 32)
+    return false;
 
   auto resultTy = op.getInputTypes()[0];
   if (!isa<AMDMfmaEncodingAttr>(resultTy.getEncoding()))
@@ -278,16 +276,15 @@ static bool warpReduceCDNA4(RewriterBase &rewriter, Location loc,
   auto MDim = mfmaLayout.getMDim();
   auto NDim = mfmaLayout.getNDim();
   std::string intrinsic;
-  if (MDim==32 && NDim == 32 )
-    intrinsic = "llvm.amdgcn.permlane16.swap";
-  else if (MDim==16 && NDim == 16 )
+  if (MDim == 32 && NDim == 32 || MDim == 16 && NDim == 16)
     intrinsic = "llvm.amdgcn.permlane32.swap";
   else
     return false;
 
-  Value  redx = permuteAndReduce(rewriter, loc, intrinsic, val, reduxOp);
+  Value redx = permuteAndReduce(rewriter, loc, intrinsic, val, reduxOp);
 
-  if (MDim==16 && NDim == 16 ) {
+  if (MDim == 16 && NDim == 16) {
+    intrinsic = "llvm.amdgcn.permlane16.swap";
     redx = permuteAndReduce(rewriter, loc, intrinsic, redx, reduxOp);
   }
 
@@ -301,7 +298,8 @@ bool TargetInfo::warpReduce(RewriterBase &rewriter, Location loc,
                             unsigned interleave) const {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
 
-  if( isCDNA() && getISAFamily() == ISAFamily::CDNA4 && warpReduceCDNA4(rewriter, loc, acc, op, numLaneToReduce, interleave))
+  if (isCDNA() && getISAFamily() == ISAFamily::CDNA4 &&
+      warpReduceCDNA4(rewriter, loc, acc, op, numLaneToReduce, interleave))
     return true;
   if (numLaneToReduce != getWarpSize())
     return false;
