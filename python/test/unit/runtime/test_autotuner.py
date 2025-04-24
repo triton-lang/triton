@@ -38,6 +38,26 @@ def test_kwargs(use_cuda_graph: bool, device: str):
     assert len(_kernel.cache) == 2
 
 
+def test_no_do_bench(device: str):
+    M, N = 1024, 16
+    src = torch.randn(M * N, device=device)
+    dst = torch.empty(M * N, device=device)
+
+    configs = [triton.Config(kwargs={'BLOCK_SIZE_M': 32}), triton.Config(kwargs={'BLOCK_SIZE_M': 128})]
+
+    @triton.autotune(configs=configs, key=["M"])
+    @triton.jit
+    def _kernel(dst, src, stride_m: tl.constexpr, M, BLOCK_SIZE_N: tl.constexpr, BLOCK_SIZE_M: tl.constexpr):
+        offsets_m = tl.program_id(0) * stride_m + tl.arange(0, BLOCK_SIZE_M)
+        offsets_n = tl.arange(0, BLOCK_SIZE_N)
+        x = tl.load(src + offsets_m[:, None] * BLOCK_SIZE_N + offsets_n[None, :])
+        tl.store(dst + offsets_m[:, None] * BLOCK_SIZE_N + offsets_n[None, :], x)
+
+    grid = lambda META: (triton.cdiv(N, META['BLOCK_SIZE_M']), )
+    _kernel[grid](dst, src, N, M, N)
+    assert len(_kernel.cache) == 1
+
+
 @pytest.mark.parametrize('pass_kwargs_to_kernel', [False, True])
 def test_restore(pass_kwargs_to_kernel, device):
     N = 1024
