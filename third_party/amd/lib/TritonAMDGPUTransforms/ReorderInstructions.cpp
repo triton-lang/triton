@@ -46,8 +46,8 @@ static bool isPureMatmulLoop(scf::ForOp forOp) {
 }
 
 // Search through block to find earliest insertion point for move op. This can
-// be either an atomic op or last usage of source pointer. Search ends when move
-// op is encountered.
+// be either an atomic op or the defining op of source pointer. Search ends when
+// move op is encountered.
 static llvm::ilist<Operation>::iterator
 findEarlyInsertionPoint(Block *block, triton::LoadOp move) {
   Value src = move.getPtr();
@@ -58,10 +58,12 @@ findEarlyInsertionPoint(Block *block, triton::LoadOp move) {
     if (op == move) // Don't move later than current location
       break;
 
-    // Check for ops accessing src value.
-    for (auto opr : op->getOperands()) {
-      if (opr == src)
+    // Check for ops defining the source ptr
+    for (auto opr : op->getResults()) {
+      if (opr == src) {
         ipnt = bi;
+        break;
+      }
     }
 
     // Break at:

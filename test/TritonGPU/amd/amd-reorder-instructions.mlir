@@ -516,3 +516,56 @@ tt.func public @sink_2nd_load_1D_tensor(%A_ptr: tensor<256x!tt.ptr<f16>, #ttg.sl
     tt.return
   }
 }
+
+// -----
+
+// CHECK-LABEL: keep_double_loads_order
+// CHECK: %[[A0:.*]] = tt.load %arg0
+// CHECK-NEXT: %[[B0:.*]] = tt.load %arg1
+// CHECK-COUNT-4: arith.constant
+// CHECK-NEXT: %[[APTR:.*]] = tt.addptr %arg0
+// CHECK-NEXT: %[[A1:.*]] = tt.load %[[APTR]]
+// CHECK-NEXT: %[[BPTR:.*]] = tt.addptr %arg1
+// CHECK-NEXT: %[[B1:.*]] = tt.load %[[BPTR]]
+// CHECK: ttg.local_store %[[A0]]
+// CHECK-NEXT: ttg.local_store %[[B0]]
+// CHECK-NEXT: ttg.local_store %[[A1]]
+// CHECK-NEXT: ttg.local_store %[[B1]]
+#shared=#ttg.swizzled_shared<{vec = 8, perPhase = 1, maxPhase = 16, order = [1, 0]}>
+#shared1=#ttg.swizzled_shared<{vec = 8, perPhase = 1, maxPhase = 16, order = [0, 1]}>
+#smem = #ttg.shared_memory
+#blocked=#ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [4, 16], warpsPerCTA = [4, 1], order = [1, 0]}>
+#blocked1=#ttg.blocked<{sizePerThread = [16, 1], threadsPerWarp = [8, 8], warpsPerCTA = [1, 4], order = [0, 1]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "hip:gfx942", "ttg.threads-per-warp" = 64 : i32} {
+  tt.func public @keep_double_loads_order(
+    %arg0: tensor<32x128x!tt.ptr<f16>, #blocked>,
+    %arg1: tensor<128x32x!tt.ptr<f8E5M2FNUZ>, #blocked1>
+  ) {
+    %c0_i32 = arith.constant 0 : i32
+    %c1_i32 = arith.constant 1 : i32
+    %cst = arith.constant dense<128> : tensor<32x128xi32, #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [4, 16], warpsPerCTA = [4, 1], order = [1, 0]}>>
+    %cst_0 = arith.constant dense<128> : tensor<128x32xi32, #ttg.blocked<{sizePerThread = [16, 1], threadsPerWarp = [8, 8], warpsPerCTA = [1, 4], order = [0, 1]}>>
+    %0 = tt.addptr %arg0, %cst : tensor<32x128x!tt.ptr<f16>, #blocked>, tensor<32x128xi32, #blocked>
+    %1 = tt.addptr %arg1, %cst_0 : tensor<128x32x!tt.ptr<f8E5M2FNUZ>, #blocked1>, tensor<128x32xi32, #blocked1>
+
+    %2 = ttg.local_alloc : () -> !ttg.memdesc<2x32x128xf16, #shared, #smem, mutable>
+    %3 = ttg.local_alloc : () -> !ttg.memdesc<2x128x32xf8E5M2FNUZ, #shared1, #smem, mutable>
+    %4 = tt.load %arg0 {OpIdx = #amdgpu.OpIdx<0>, amd.pipeliner_part = "prologue"} : tensor<32x128x!tt.ptr<f16>, #blocked>
+    %5 = tt.load %arg1 {OpIdx = #amdgpu.OpIdx<1>, amd.pipeliner_part = "prologue"} : tensor<128x32x!tt.ptr<f8E5M2FNUZ>, #blocked1>
+
+    %6 = tt.load %0 {OpIdx = #amdgpu.OpIdx<0>, amd.pipeliner_part = "prologue"} : tensor<32x128x!tt.ptr<f16>, #blocked>
+    %7 = tt.load %1 {OpIdx = #amdgpu.OpIdx<1>, amd.pipeliner_part = "prologue"} : tensor<128x32x!tt.ptr<f8E5M2FNUZ>, #blocked1>
+
+    %8 = ttg.memdesc_subview %2[%c0_i32, %c0_i32, %c0_i32] : !ttg.memdesc<2x32x128xf16, #shared, #smem, mutable> -> !ttg.memdesc<32x128xf16, #shared, #smem, mutable>
+    %9 = ttg.memdesc_subview %3[%c0_i32, %c0_i32, %c0_i32] : !ttg.memdesc<2x128x32xf8E5M2FNUZ, #shared1, #smem, mutable> -> !ttg.memdesc<128x32xf8E5M2FNUZ, #shared1, #smem, mutable>
+    %10 = ttg.memdesc_subview %2[%c1_i32, %c0_i32, %c0_i32] : !ttg.memdesc<2x32x128xf16, #shared, #smem, mutable> -> !ttg.memdesc<32x128xf16, #shared, #smem, mutable>
+    %11 = ttg.memdesc_subview %3[%c1_i32, %c0_i32, %c0_i32] : !ttg.memdesc<2x128x32xf8E5M2FNUZ, #shared1, #smem, mutable> -> !ttg.memdesc<128x32xf8E5M2FNUZ, #shared1, #smem, mutable>
+
+    ttg.local_store %4, %8 {OpIdx = #amdgpu.OpIdx<0>} : tensor<32x128xf16, #blocked> -> !ttg.memdesc<32x128xf16, #shared, #smem, mutable>
+    ttg.local_store %5, %9 {OpIdx = #amdgpu.OpIdx<1>} : tensor<128x32xf8E5M2FNUZ, #blocked1> -> !ttg.memdesc<128x32xf8E5M2FNUZ, #shared1, #smem, mutable>
+
+    ttg.local_store %6, %10 {OpIdx = #amdgpu.OpIdx<0>} : tensor<32x128xf16, #blocked> -> !ttg.memdesc<32x128xf16, #shared, #smem, mutable>
+    ttg.local_store %7, %11 {OpIdx = #amdgpu.OpIdx<1>} : tensor<128x32xf8E5M2FNUZ, #blocked1> -> !ttg.memdesc<128x32xf8E5M2FNUZ, #shared1, #smem, mutable>
+    tt.return
+  }
+}
