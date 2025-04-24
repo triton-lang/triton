@@ -546,6 +546,13 @@ class TmaDescKernelParam:
         return self.desc.data_ptr()
 
 
+# The TMA dtype enum values are slightly different on host vs device...
+TMA_DTYPE_DEVICE_TO_HOST = dict((i, i) for i in range(16))
+TMA_DTYPE_DEVICE_TO_HOST[8] = 10
+TMA_DTYPE_DEVICE_TO_HOST[9] = 8
+TMA_DTYPE_DEVICE_TO_HOST[10] = 9
+
+
 def make_tensordesc_arg(arg, metadata):
     assert isinstance(arg, TensorDescriptor)
     swizzle = metadata["swizzle"]
@@ -569,7 +576,7 @@ def make_tensordesc_arg(arg, metadata):
         data_ptr,
         swizzle,
         elem_size,
-        elem_type,
+        TMA_DTYPE_DEVICE_TO_HOST[elem_type],
         block_size,
         shape,
         strides,

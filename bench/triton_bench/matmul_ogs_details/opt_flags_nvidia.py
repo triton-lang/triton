@@ -1,6 +1,6 @@
 import torch
 import triton
-from triton_bench.meta import cuda_capability_geq
+from triton_bench import target_info
 
 
 def compute_grid_size(routing_data, m, n, block_m, block_n):
@@ -30,12 +30,13 @@ def compute_block_k(k: int | None, is_persistent: bool, lhs_dtype, rhs_dtype, mx
     # block_k needs to match the cacheline size (128B)
     block_k = int(128 // min(lhs_width, rhs_width))
     # TODO: revisit when Triton is better for H100 + MXFP4
-    if rhs_width == 0.5 and not cuda_capability_geq(10, 0):
+    has_native_mxfp = target_info.cuda_capability_geq(10, 0)
+    if rhs_width == 0.5 and not has_native_mxfp:
         block_k = 128
     elif k is not None:
         block_k = max(32, min(triton.next_power_of_2(k), block_k))
 
-    if cuda_capability_geq(10, 0) and is_persistent and has_mx_weight_scale:
+    if has_native_mxfp and is_persistent and has_mx_weight_scale:
         # Cap block_k to conserve smem to increase num_stages
         block_k = min(block_k, 128)
     return block_k
@@ -74,7 +75,8 @@ def compute_num_stages(
     stage_size = block_m * block_k * lhs_dtype.itemsize + block_k * block_n * weight_size
     device_props = torch.cuda.get_device_properties(0)
     smem_capacity = device_props.shared_memory_per_block_optin
-    if cuda_capability_geq(10, 0) and microscaling_ctx is not None:
+    has_native_mxfp = target_info.cuda_capability_geq(10, 0)
+    if has_native_mxfp and microscaling_ctx is not None:
         if microscaling_ctx.weight_scale is not None:
             if rhs_dtype == torch.uint8:
                 # 4-bit e2m1 weights are padded 2x
@@ -92,7 +94,7 @@ def compute_num_stages(
         if microscaling_ctx.weight_scale is not None:
             # mx scales
             stage_size += block_n * (block_k // 32)
-    elif cuda_capability_geq(10, 0):
+    elif has_native_mxfp:
         # mx scales
         stage_size += block_n * (block_k // 32)
     num_stages = min(4, smem_capacity // int(stage_size))

@@ -316,13 +316,36 @@ def TTNG_AsyncTMACopyLocalToGlobalOp : TTNG_Op<"async_tma_copy_local_to_global">
   }];
 
   let arguments = (ins
-    Arg<TT_PtrType, "", [MemWrite<GlobalMemory>]>:$desc_ptr,
+    Arg<TT_PtrType, "", [MemRead<GlobalMemory>, MemWrite<GlobalMemory>]>:$desc_ptr,
     Variadic<I32>:$coord,
     Arg<TTG_MemDescType, "", [MemRead<SharedMemory>]>:$src
   );
 
   let assemblyFormat = [{
     $desc_ptr `[` $coord `]` $src
+    attr-dict `:` qualified(type($desc_ptr)) `,` qualified(type($src))
+  }];
+}
+
+def TTNG_AsyncTMAReduceOp : TTNG_Op<"async_tma_reduce", [MemoryEffects<[MemRead<GlobalMemory>, MemWrite<GlobalMemory>]>]> {
+  let summary = "reduce result in gmem based on a TMA descriptor";
+
+  let description = [{
+    This operation copies data from local memory to global memory
+    asynchronously, and atomically performs the specified reduction kind.
+    Atomicity is at the granularity of individual elements, and only relaxed
+    semantics are implied.
+  }];
+
+  let arguments = (ins
+    TT_DescriptorReduceKindAttr:$kind,
+    Arg<TT_PtrType, "", [MemRead<GlobalMemory>]>:$desc_ptr,
+    Variadic<I32>:$coord,
+    Arg<TTG_MemDescType, "", [MemRead<SharedMemory>]>:$src
+  );
+
+  let assemblyFormat = [{
+    $kind `,` $desc_ptr `[` $coord `]` $src
     attr-dict `:` qualified(type($desc_ptr)) `,` qualified(type($src))
   }];
 }
@@ -365,7 +388,7 @@ def TTNG_AsyncTMAScatterOp : TTNG_Op<"async_tma_scatter"> {
   }];
 
   let arguments = (ins
-    Arg<TT_PtrType, "", [MemWrite<GlobalMemory>]>:$desc_ptr,
+    Arg<TT_PtrType, "", [MemRead<GlobalMemory>, MemWrite<GlobalMemory>]>:$desc_ptr,
     RankedTensorOf<[I32]>:$x_offsets,
     I32:$y_offset,
     Arg<TTG_MemDescType, "", [MemRead<SharedMemory>]>:$src
