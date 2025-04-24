@@ -3604,9 +3604,17 @@ def get_test_dot_double_rate_cases():
             (16, 16, 32, 4, False, False, 'None', 'ieee', 'bfloat16', 'float32', 1, None)]
 
 
+def get_test_dot_vdot2_cases():
+    if not is_hip_cdna():
+        return []
+    return [(4, 32, 32, 4, False, False, 'None', 'ieee', 'float16', 'float32', 1, None),
+            (4, 32, 32, 4, False, False, 'None', 'ieee', 'bfloat16', 'float32', 1, None)]
+
+
 @pytest.mark.interpreter
 @pytest.mark.parametrize(
     "M, N, K, num_warps, col_a, col_b, epilogue, input_precision, in_dtype, out_dtype, kpack, mma_nonk_size",
+    get_test_dot_vdot2_cases() + \
     get_test_dot_double_rate_cases() + \
     get_test_dot_base_cases() + \
     get_test_dot_mixed_sizes_cases() + \
@@ -3799,8 +3807,20 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, input_precision, in_dty
     else:
         # added atol, to loose precision for float16xfloat16->float32 case
         np.testing.assert_allclose(z_ref, to_numpy(z_tri), rtol=0.01, atol=1e-3)
-    if not is_cuda():
+
+    if not (is_cuda() or is_hip_cdna()):
         return
+
+    if is_hip_cdna():
+        if M != 4:
+            return
+        amdgcn = pgm.asm['amdgcn']
+        if in_dtype == 'float16':
+            assert 'v_dot2c_f32_f16' in amdgcn
+        elif (in_dtype == 'bfloat16') and is_hip_cdna4():
+            assert 'v_dot2c_f32_bf16' in amdgcn
+        return
+
     # make sure ld/st are vectorized
     ptx = pgm.asm['ptx']
     if (K > 16 or N > 16 or M > 16) and (M * N // (num_warps * 32) >= 4):
