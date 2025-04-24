@@ -1588,8 +1588,19 @@ void replaceUsesAndPropagateType(OpBuilder &builder, Operation *oldUse,
 
   // Perform late replacement.
   for (OpOperand *operand : operandsToReplace) {
-    Operation *op = operand->getOwner();
-    operand->set(val);
+    if (auto wait = dyn_cast<ttng::WarpGroupDotWaitOp>(operand->getOwner())) {
+      // Need to update the return type on the wait op as well
+      builder.setInsertionPointAfter(wait);
+      auto operands = llvm::to_vector(wait.getOperands());
+      operands[operand->getOperandNumber()] = val;
+      auto newWait = builder.create<ttng::WarpGroupDotWaitOp>(
+          wait.getLoc(), operands, wait.getPendings());
+      wait.replaceAllUsesWith(newWait.getResults());
+      wait.erase();
+    } else {
+      Operation *op = operand->getOwner();
+      operand->set(val);
+    }
   }
 
   // Perform late op erasure.
