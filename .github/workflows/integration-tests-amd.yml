@@ -11,6 +11,9 @@ jobs:
   integration-tests-amd:
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 45
+    strategy:
+      matrix:
+        runner: ${{ fromJson(inputs.matrix) }}
     env:
       RUNNER_TYPE: ${{ matrix.runner[1] }}
       TRITON_BUILD_WITH_CCACHE: "true"

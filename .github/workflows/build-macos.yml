@@ -10,6 +10,9 @@ on:
 jobs:
   build-macos:
     runs-on: ${{ matrix.runner }}
+    strategy:
+      matrix:
+        runner: ${{ fromJson(inputs.matrix) }}
     timeout-minutes: 40
     env:
       RUNNER_TYPE: ${{ matrix.runner[0] }}
