@@ -12,119 +12,114 @@ Value TargetInfo::clock(ConversionPatternRewriter &rewriter, Location loc,
                         bool isClock64) const {
   // NV has both a 32 bit and 64 bit clock intrinsic. On AMD we only have
   // s_memtime which is 64 bit. However truncating the 64 bit version
-  // in cases of requesting 32 bit should be fine, since in 64 bits, 
-  // after 0x0000.0000.ffff.ffff comes 0x0000.0001.0000.0000, and 
-  // truncating that to 32 bits gives zero, effectively wrapping from 
-  // 0xffff.ffff to 0x0000.0000. 
+  // in cases of requesting 32 bit should be fine, since in 64 bits,
+  // after 0x0000.0000.ffff.ffff comes 0x0000.0001.0000.0000, and
+  // truncating that to 32 bits gives zero, effectively wrapping from
+  // 0xffff.ffff to 0x0000.0000.
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   StringRef clock64IntrinsicName = "llvm.amdgcn.s.memtime";
-  Value clockVal =  LLVM::createLLVMIntrinsicCallOp(
-        rewriter, loc, clock64IntrinsicName, i64_ty, {}).getResult(0);
-  if(!isClock64)
-	  clockVal = rewriter.create<LLVM::TruncOp>(loc, i32_ty, clockVal);
+  Value clockVal = LLVM::createLLVMIntrinsicCallOp(
+                       rewriter, loc, clock64IntrinsicName, i64_ty, {})
+                       .getResult(0);
+  if (!isClock64)
+    clockVal = rewriter.create<LLVM::TruncOp>(loc, i32_ty, clockVal);
   return clockVal;
-
 }
-#define HW_ID_CU_ID_SIZE    4
-#define HW_ID_CU_ID_OFFSET  8
+#define HW_ID_CU_ID_SIZE 4 // bits
+#define HW_ID_CU_ID_OFFSET 8
 
-#define HW_ID_SE_ID_SIZE    3
-#define HW_ID_SE_ID_OFFSET  13
+#define HW_ID_SE_ID_SIZE 3
+#define HW_ID_SE_ID_OFFSET 13
 
-#define HW_REG_XCC_ID_SIZE    3
-#define HW_REG_XCC_ID_OFFSET  0
+#define HW_REG_XCC_ID_SIZE 3
+#define HW_REG_XCC_ID_OFFSET 0
 
-//gfx942
-//#define CU_PER_XCD 40
-//#define CU_PER_SE 10
-
-//gfx950
-//#define CU_PER_XCD 32
-//#define CU_PER_SE 10
-
-static Value getXCCID(ConversionPatternRewriter &rewriter,
-                              Location loc) {
+// TODO(crobeck): move these into a util file
+static Value getXCCID(ConversionPatternRewriter &rewriter, Location loc) {
   GCNBuilder builder;
   auto &gethwid = *builder.create("s_getreg_b32");
   auto xcc_id = builder.newOperand("=s");
-  auto xcc_reg = builder.newConstantOperand("hwreg(HW_REG_XCC_ID, HW_REG_XCC_ID_OFFSET, HW_REG_XCC_ID_SIZE)");
+  auto xcc_reg = builder.newConstantOperand(
+      "hwreg(HW_REG_XCC_ID, HW_REG_XCC_ID_OFFSET, HW_REG_XCC_ID_SIZE)");
   gethwid(xcc_id, xcc_reg);
   return builder.launch(rewriter, loc, i32_ty, false);
 }
 
-static Value getCUID(ConversionPatternRewriter &rewriter,
-                              Location loc) {
+static Value getCUID(ConversionPatternRewriter &rewriter, Location loc) {
   GCNBuilder builder;
   auto &gethwid = *builder.create("s_getreg_b32");
   auto cu_id = builder.newOperand("=s");
-  auto hwreg = builder.newConstantOperand("hwreg(HW_REG_HW_ID, HW_ID_CU_ID_OFFSET, HW_ID_CU_ID_SIZE)");
+  auto hwreg = builder.newConstantOperand(
+      "hwreg(HW_REG_HW_ID, HW_ID_CU_ID_OFFSET, HW_ID_CU_ID_SIZE)");
   gethwid(cu_id, hwreg);
   return builder.launch(rewriter, loc, i32_ty, false);
 }
 
-static Value getSEID(ConversionPatternRewriter &rewriter,
-                              Location loc) {
+static Value getSEID(ConversionPatternRewriter &rewriter, Location loc) {
   GCNBuilder builder;
   auto &gethwid = *builder.create("s_getreg_b32");
   auto se_id = builder.newOperand("=s");
-  auto hwreg = builder.newConstantOperand("hwreg(HW_REG_HW_ID, HW_ID_SE_ID_OFFSET, HW_ID_SE_ID_SIZE)");
+  auto hwreg = builder.newConstantOperand(
+      "hwreg(HW_REG_HW_ID, HW_ID_SE_ID_OFFSET, HW_ID_SE_ID_SIZE)");
   gethwid(se_id, hwreg);
   return builder.launch(rewriter, loc, i32_ty, false);
 }
 
-static uint32_t getCU_PER_XCD(llvm::AMDGPU::GPUKind GPUKind){
+static uint32_t getCU_PER_XCD(llvm::AMDGPU::GPUKind GPUKind) {
   switch (GPUKind) {
   case llvm::AMDGPU::GK_GFX942:
-	  return 40;
+    return 40;
   case llvm::AMDGPU::GK_GFX950:
-	  return 32;
+    return 32;
   default:
-     llvm_unreachable("unsupported arch");
-  }	
-}  
-
-static uint32_t getCU_PER_SE(llvm::AMDGPU::GPUKind GPUKind){
-  switch (GPUKind) {
-  case llvm::AMDGPU::GK_GFX942:
-          return 10;
-  case llvm::AMDGPU::GK_GFX950:
-          return 10;
-  default:
-     llvm_unreachable("unsupported arch");
+    llvm_unreachable("unsupported arch");
   }
 }
 
+static uint32_t getCU_PER_SE(llvm::AMDGPU::GPUKind GPUKind) {
+  switch (GPUKind) {
+  case llvm::AMDGPU::GK_GFX942:
+    return 10;
+  case llvm::AMDGPU::GK_GFX950:
+    return 10;
+  default:
+    llvm_unreachable("unsupported arch");
+  }
+}
 
 Value TargetInfo::processorId(ConversionPatternRewriter &rewriter,
                               Location loc) const {
-  GCNBuilder builder; 
+  GCNBuilder builder;
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   auto &gethwid = *builder.create("s_getreg_b32");
 
   Value xcc_id;
   llvm::AMDGPU::GPUKind GPUKind = llvm::AMDGPU::parseArchAMDGCN(this->arch);
-  //For now only support gfx90a, gfx942, and gfx950
+  // For now only support gfx90a, gfx942, and gfx950
   switch (GPUKind) {
   case llvm::AMDGPU::GK_GFX90A:
-	   xcc_id = b.i32_val(0);
+    xcc_id = b.i32_val(0);
   case llvm::AMDGPU::GK_GFX942:
   case llvm::AMDGPU::GK_GFX950:
-	  xcc_id = getXCCID(rewriter, loc);
+    xcc_id = getXCCID(rewriter, loc);
   default:
-     llvm::report_fatal_error("unsupported arch");
+    llvm::report_fatal_error("unsupported arch");
   }
-  //on gfx90a the local cu_id == global cu_id
-  Value cu_id = getCUID(rewriter, loc); //local CU ID
-  Value se_id = getSEID(rewriter, loc); 
+  // on gfx90a the local cu_id == global cu_id
+  Value cu_id = getCUID(rewriter, loc); // local CU ID
+  Value se_id = getSEID(rewriter, loc);
   builder.create<>("s_waitcnt lgkmcnt(0)")->operator()();
 
-  //For XCC based architectures to get a unique CU id for a wave:
-  //global_cu_id = xcc_id * CU_PER_XCD + se_id * CU_PER_SE + cu_id (local)
-  if(GPUKind==llvm::AMDGPU::GK_GFX942 || GPUKind==llvm::AMDGPU::GK_GFX950){
-	  uint32_t CU_PER_XCD = getCU_PER_XCD(GPUKind);
-	  uint32_t CU_PER_SE = getCU_PER_SE(GPUKind);
-	  cu_id = b.add(b.add(b.mul(xcc_id, b.i32_val(CU_PER_XCD)), b.mul(se_id, b.i32_val(CU_PER_SE))), cu_id);
- }
+  // For XCC based architectures to get a unique CU id for a wave:
+  // global_cu_id = xcc_id * CU_PER_XCD + se_id * CU_PER_SE + cu_id (local)
+  if (GPUKind == llvm::AMDGPU::GK_GFX942 ||
+      GPUKind == llvm::AMDGPU::GK_GFX950) {
+    uint32_t CU_PER_XCD = getCU_PER_XCD(GPUKind);
+    uint32_t CU_PER_SE = getCU_PER_SE(GPUKind);
+    cu_id = b.add(b.add(b.mul(xcc_id, b.i32_val(CU_PER_XCD)),
+                        b.mul(se_id, b.i32_val(CU_PER_SE))),
+                  cu_id);
+  }
 
   return cu_id;
 }
