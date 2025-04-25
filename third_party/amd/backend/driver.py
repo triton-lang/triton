@@ -2,13 +2,14 @@ import functools
 import os
 import hashlib
 import subprocess
+import sysconfig
 import tempfile
 from pathlib import Path
 from triton.runtime.build import _build
 from triton import config
 from triton.runtime.cache import get_cache_manager
 from triton.backends.compiler import GPUTarget
-from triton.backends.driver import GPUDriver
+from triton.backends.driver import GPUDriver, platform_key
 
 dirname = os.path.dirname(os.path.realpath(__file__))
 include_dir = [os.path.join(dirname, "include")]
@@ -131,9 +132,10 @@ def _get_path_to_hip_runtime_dylib():
 
 
 def compile_module_from_src(src, name):
-    key = hashlib.sha256(src.encode("utf-8")).hexdigest()
+    key = hashlib.sha256((src + platform_key()).encode("utf-8")).hexdigest()
     cache = get_cache_manager(key)
-    cache_path = cache.get_file(f"{name}.so")
+    suffix = sysconfig.get_config_var("EXT_SUFFIX")
+    cache_path = cache.get_file(f"{name}{suffix}")
     if cache_path is None:
         with tempfile.TemporaryDirectory() as tmpdir:
             src_path = os.path.join(tmpdir, "main.c")
@@ -141,7 +143,7 @@ def compile_module_from_src(src, name):
                 f.write(src)
             so = _build(name, src_path, tmpdir, [], include_dir, [])
             with open(so, "rb") as f:
-                cache_path = cache.put(f.read(), f"{name}.so", binary=True)
+                cache_path = cache.put(f.read(), f"{name}{suffix}", binary=True)
     import importlib.util
     spec = importlib.util.spec_from_file_location(name, cache_path)
     mod = importlib.util.module_from_spec(spec)
