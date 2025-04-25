@@ -24,3 +24,19 @@ module attributes {"ttg.num-warps" = 8 : i32} {
     llvm.return
   }
 }
+
+// -----
+
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-warps" = 8 : i32} {
+  // CHECK-LABEL: convert_init
+  llvm.func @convert_init() {
+  // CHECK: %[[SIZE:.*]] = llvm.mlir.constant(1 : i32) : i32
+  // CHECK: %[[PTR:.*]] = llvm.alloca %[[SIZE]] x i32 : (i32) -> !llvm.ptr<5>
+  // CHECK: %[[VAL:.*]] = llvm.mlir.constant(0 : i32) : i32
+  // CHECK: llvm.store %[[VAL]], %[[PTR]] : i32, !llvm.ptr<5>
+    %0 = proton_gpu.init_buffer_index : <i32, 5>
+    llvm.return
+  }
+}
