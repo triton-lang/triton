@@ -261,7 +261,7 @@ static Value permuteAndReduce(RewriterBase &rewriter, Location loc,
 // The input acc has the partial accumulated value from reduction within
 // threads. The output acc has the final accumulated value.
 //
-// The thread layout must be mfma input layout with isTransposed=true.
+// The thread layout must be mfma input layout,
 // For the mfma_32x32 layout:
 //   step 1: use permlane32_swap() to swap the row 2 and 3 of acc and
 //           the row 0 and 1 of the copy of acc
@@ -274,16 +274,10 @@ static Value permuteAndReduce(RewriterBase &rewriter, Location loc,
 //           the partial results
 //   step 4: apply reduction to get the final results
 static bool warpReduceCDNA4(RewriterBase &rewriter, Location loc,
-                            SmallVector<Value> &acc, triton::ReduceOp op) {
+                            SmallVector<Value> &acc, triton::ReduceOp op,
+                            unsigned numLaneToReduce, unsigned interleave) {
   Operation *reduxOp = op.getSingleCombiner();
   if (!reduxOp)
-    return false;
-
-  if (acc.size() != 1)
-    return false;
-  Value val = acc[0];
-  unsigned bits = val.getType().getIntOrFloatBitWidth();
-  if (bits > 32)
     return false;
 
   auto srcTy = op.getInputTypes()[0];
@@ -291,25 +285,27 @@ static bool warpReduceCDNA4(RewriterBase &rewriter, Location loc,
   if (!mfmaLayout)
     return false;
 
-  if (!mfmaLayout.getIsTransposed())
+  bool mfma32Case = numLaneToReduce == 2 && interleave == 32;
+  bool mfma16Case = numLaneToReduce == 4 && interleave == 16;
+  if (!(mfma32Case || mfma16Case))
     return false;
 
-  auto MDim = mfmaLayout.getMDim();
-  auto NDim = mfmaLayout.getNDim();
-  StringRef intrinsic;
-  if (MDim == 32 && NDim == 32 || MDim == 16 && NDim == 16)
-    intrinsic = "llvm.amdgcn.permlane32.swap";
-  else
+  Value val = acc[0];
+  unsigned bits = val.getType().getIntOrFloatBitWidth();
+  if (bits > 32)
     return false;
 
-  Value redx = permuteAndReduce(rewriter, loc, intrinsic, val, reduxOp);
+  StringRef intrinsic = "llvm.amdgcn.permlane32.swap";
+  for (auto i = 0; i < acc.size(); i++) {
+    Value redx = permuteAndReduce(rewriter, loc, intrinsic, acc[i], reduxOp);
 
-  if (MDim == 16 && NDim == 16) {
-    intrinsic = "llvm.amdgcn.permlane16.swap";
-    redx = permuteAndReduce(rewriter, loc, intrinsic, redx, reduxOp);
+    if (mfma16Case) {
+      intrinsic = "llvm.amdgcn.permlane16.swap";
+      redx = permuteAndReduce(rewriter, loc, intrinsic, redx, reduxOp);
+    }
+
+    acc[i] = redx;
   }
-
-  acc[0] = redx;
   return true;
 }
 
@@ -320,7 +316,7 @@ bool TargetInfo::warpReduce(RewriterBase &rewriter, Location loc,
   auto b = TritonLLVMOpBuilder(loc, rewriter);
 
   if (isCDNA() && getISAFamily() == ISAFamily::CDNA4 &&
-      warpReduceCDNA4(rewriter, loc, acc, op))
+      warpReduceCDNA4(rewriter, loc, acc, op, numLaneToReduce, interleave))
     return true;
   if (numLaneToReduce != getWarpSize())
     return false;
