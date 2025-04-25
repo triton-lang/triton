@@ -71,7 +71,7 @@ git clone https://github.com/triton-lang/triton.git
 cd triton
 
 pip install -r python/requirements.txt # build-time dependencies
-pip install -e python
+pip install -e .
 ```
 
 Or with a virtualenv:
@@ -84,7 +84,7 @@ python -m venv .venv --prompt triton
 source .venv/bin/activate
 
 pip install -r python/requirements.txt # build-time dependencies
-pip install -e python
+pip install -e .
 ```
 
 # Building with a custom LLVM
@@ -124,7 +124,7 @@ arbitrary LLVM version.
        $ LLVM_INCLUDE_DIRS=$LLVM_BUILD_DIR/include \
          LLVM_LIBRARY_DIR=$LLVM_BUILD_DIR/lib \
          LLVM_SYSPATH=$LLVM_BUILD_DIR \
-         pip install -e python
+         pip install -e .
 
 # Tips for building
 
@@ -139,7 +139,7 @@ arbitrary LLVM version.
   can be changed anytime.
 
 - If you're running out of memory when building Triton, specify the `MAX_JOBS`
-  environment variable (to the `pip install -e python` command) to limit the
+  environment variable (to the `pip install -e .` command) to limit the
   number of jobs.
 
 - Pass `--no-build-isolation` to `pip install` to make nop builds faster.
@@ -150,7 +150,7 @@ arbitrary LLVM version.
   (probably because, in our build, users don't invoke cmake directly, but
   instead use setup.py).  Teach vscode how to compile Triton as follows.
 
-    - Do a local build. Run command `pip install -e python`
+    - Do a local build. Run command `pip install -e .`
     - Get the full path to the `compile_commands.json` file produced by the build:
       `find python/build -name 'compile_commands.json' | xargs readlink -f`.
       You might get a full path similar to `/Users/{username}/triton/python/build/cmake.macosx-11.1-arm64-cpython-3.12/compile_commands.json`

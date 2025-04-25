@@ -1103,6 +1103,13 @@ public:
         return true;
       }
 
+      // CDNA4 has Bf16 v_dot2
+      if (AMD::deduceISAFamily(arch) == ISAFamily::CDNA4 &&
+          dotTypes.a.isBF16() && dotTypes.b.isBF16() && dotTypes.c.isF32() &&
+          dotTypes.d.isF32() && k % 2 == 0) {
+        return true;
+      }
+
       // TODO: enable this condition, when fp32 -> fp16 cast works correctly
       // Consider this case as non legal, despite this case is covered by fp16
       // FMA. Because v_dot expected to give both better performance and
