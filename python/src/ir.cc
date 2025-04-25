@@ -1714,7 +1714,7 @@ void init_triton_ir(py::module &&m) {
               std::vector<Value> &strides, std::vector<int32_t> &tensorShape,
               bool isSignedInteger) -> Value {
              return self.create<MakeTensorDescOp>(base, shape, strides,
-                                                  tensorShape);
+                                                  tensorShape, isSignedInteger);
            });
 
   py::class_<PassManager>(m, "pass_manager", py::module_local())
