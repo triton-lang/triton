@@ -223,8 +223,8 @@ class InstrumentationHook(Hook):
                 triton_proton.load_dialects(context)
                 module = ir.parse_mlir_module(ir_path, context)
                 module.context = context
-                self.function_scope_id_names[function] = triton_proton.get_scope_id_name(module)
-                self.function_scope_id_parents[function] = triton_proton.get_scope_id_parent(module)
+                self.function_scope_id_names[function] = triton_proton.get_scope_id_names(module)
+                self.function_scope_id_parents[function] = triton_proton.get_scope_id_parents(module)
 
         scope_id_names = self.function_scope_id_names.get(function, [])
         scope_id_parents = self.function_scope_id_parents.get(function, [])

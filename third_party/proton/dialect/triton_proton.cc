@@ -62,7 +62,7 @@ void init_triton_proton(py::module &&m) {
     context.loadAllAvailableDialects();
   });
 
-  m.def("get_scope_id_name", [](mlir::ModuleOp &module) {
+  m.def("get_scope_id_names", [](mlir::ModuleOp &module) {
     return proton::ScopeIdAllocation(module).getScopeIdNames();
   });
 
