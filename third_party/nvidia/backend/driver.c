@@ -103,7 +103,7 @@ static PyObject *loadBinary(PyObject *self, PyObject *args) {
   CUmodule mod;
   int32_t n_regs = 0;
   int32_t n_spills = 0;
-  int32_t n_threads = 0;
+  int32_t n_max_threads = 0;
   // create driver handles
   CUcontext pctx = 0;
 
@@ -125,7 +125,7 @@ static PyObject *loadBinary(PyObject *self, PyObject *args) {
       cuFuncGetAttribute(&n_spills, CU_FUNC_ATTRIBUTE_LOCAL_SIZE_BYTES, fun));
   n_spills /= 4;
   CUDA_CHECK_AND_RETURN_NULL_ALLOW_THREADS(cuFuncGetAttribute(
-      &n_threads, CU_FUNC_ATTRIBUTE_MAX_THREADS_PER_BLOCK, fun));
+      &n_max_threads, CU_FUNC_ATTRIBUTE_MAX_THREADS_PER_BLOCK, fun));
   // set dynamic shared memory if necessary
   int shared_optin;
   CUDA_CHECK_AND_RETURN_NULL_ALLOW_THREADS(cuDeviceGetAttribute(
@@ -150,7 +150,7 @@ static PyObject *loadBinary(PyObject *self, PyObject *args) {
     return NULL;
   }
   return Py_BuildValue("(KKiii)", (uint64_t)mod, (uint64_t)fun, n_regs,
-                       n_spills, n_threads);
+                       n_spills, n_max_threads);
 }
 
 typedef CUresult (*cuOccupancyMaxActiveClusters_t)(
