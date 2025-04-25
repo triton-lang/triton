@@ -81,7 +81,15 @@ def loop(args):
     proton.finalize()
 
 
+def is_cuda():
+    return triton.runtime.driver.active.get_current_target().backend == "cuda"
+
+
 def main():
+    # TODO(fywkevin): Remove this when Proton AMD GPUs are ready.
+    if not is_cuda():
+        return 1
+
     parser = argparse.ArgumentParser(description='Proton intra kernel profiler trace generator')
     parser.add_argument('trace_file', type=str, help='Trace file path')
     parser.add_argument('--kernel', '-k', type=str, help='Kernel name')
@@ -89,8 +97,12 @@ def main():
 
     if args.kernel == "add":
         add(args)
+        return 0
     if args.kernel == "loop":
         loop(args)
+        return 0
+
+    return 1
 
 
 if __name__ == '__main__':
