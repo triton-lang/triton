@@ -695,9 +695,10 @@ static LogicalResult pipelineMMA(scf::ForOp &loop, PipelinedMMA &mma,
   if (!!overwriteOp != !!readOp)
     return fail("accumulator read but not overwritten");
   if (!overwriteOp) {
-    b.setInsertionPoint(mma.mmaOp);
+    b.setInsertionPoint(loop);
     Value doneBar = createBarrierAlloc(loop, /*numBarriers=*/1);
     doneBar = createSingleBufferView(b, doneBar, 0);
+    b.setInsertionPoint(mma.mmaOp);
     Value pred = b.create<arith::CmpIOp>(
         arith::CmpIPredicate::eq, loop.getInductionVar(),
         b.create<arith::SubIOp>(loop.getUpperBound(), b.intCst(1)));
