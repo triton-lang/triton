@@ -1,6 +1,7 @@
 #ifndef PROTON_DATA_BYTE_SPAN_H_
 #define PROTON_DATA_BYTE_SPAN_H_
 
+#include <cstdint>
 #include <stdexcept>
 #include <string>
 #include <vector>

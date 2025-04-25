@@ -3,6 +3,7 @@
 
 #include "ByteSpan.h"
 #include "EntryDecoder.h"
+#include <cstdint>
 #include <stdexcept>
 
 namespace proton {

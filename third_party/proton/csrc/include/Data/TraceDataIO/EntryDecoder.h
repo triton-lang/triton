@@ -2,6 +2,7 @@
 #define PROTON_DATA_ENTRY_DECODER_H_
 
 #include "ByteSpan.h"
+#include <cstdint>
 #include <iostream>
 #include <memory>
 

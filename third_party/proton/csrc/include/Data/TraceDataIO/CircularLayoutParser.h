@@ -2,6 +2,7 @@
 #define PROTON_DATA_CIRCULAR_LAYOUT_PARSER_H_
 
 #include "Parser.h"
+#include <cstdint>
 
 namespace proton {
 
