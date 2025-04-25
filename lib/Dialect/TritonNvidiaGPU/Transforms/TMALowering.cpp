@@ -8,6 +8,7 @@
 #include "triton/Dialect/TritonGPU/IR/Attributes.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/TritonGPUInterfaces.h"
+#include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/Passes.h"
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/TMAUtilities.h"
@@ -80,7 +81,7 @@ lowerTMALoad(Operation *op, RankedTensorType tensorType, Value desc,
   MemDescType memDescType =
       MemDescType::get(tensorType.getShape(), tensorType.getElementType(),
                        encoding, sharedMemorySpace, /*mutableMemory=*/true);
-  Value alloc = rewriter.create<LocalAllocOp>(loc, memDescType);
+  auto alloc = rewriter.create<LocalAllocOp>(loc, memDescType).getResult();
   auto barrierCTALayout = CTALayoutAttr::get(
       /*context=*/tensorType.getContext(), /*CTAsPerCGA=*/{1},
       /*CTASplitNum=*/{1}, /*CTAOrder=*/{0});
@@ -103,7 +104,8 @@ lowerTMALoad(Operation *op, RankedTensorType tensorType, Value desc,
   Value phase = rewriter.create<arith::ConstantIntOp>(loc, 0, 32);
   rewriter.create<WaitBarrierOp>(loc, barrierAlloc, phase);
   rewriter.create<InvalBarrierOp>(loc, barrierAlloc);
-  rewriter.replaceOpWithNewOp<LocalLoadOp>(op, tensorType, alloc);
+  replaceUsesWithLocalLoad(rewriter, op->getResult(0), alloc);
+  op->erase();
 }
 
 class TMALoadLowering : public OpRewritePattern<DescriptorLoadOp> {
