@@ -265,6 +265,10 @@ LogicalResult lowerDistributedToSharedStmatrix(
   // FIXME Change the constants below / pack things into uint32_t to support
   // bitwidths other than 16
   assert(bitwidth == 16);
+
+  // Here we implement the stmatrix.x4 addressing. In particular, the lowest 3
+  // bits of the thread id are mapped to the columns, while the top two bits
+  // are mapped to each of the 4 submatrices
   auto regBase = applyLinearLayout(loc, rewriter, quot,
                                    {{kReg, b.lshr(laneId, b.i32_val(3))},
                                     {kLane, b.and_(laneId, b.i32_val(0x7))},
