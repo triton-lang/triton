@@ -125,6 +125,15 @@ public:
 
   auto find(Operation *op) const { return opToStageAndCluster.find(op); }
 
+  // Check if op a will show up before op b in the final unrolled code.
+  bool isOpBefore(Operation *a, Operation *b);
+
+  // Check if op a is in earlier cluster than op b.
+  bool isOpInEarlierCluster(Operation *a, Operation *b);
+
+  // Check if op a is in the same cluster as op b.
+  bool isOpInSameCluster(Operation *a, Operation *b);
+
   SmallVector<std::tuple<Operation *, int, Cluster>>
   getOpsInOrder(scf::ForOp forOp);
   std::vector<std::pair<Operation *, unsigned>>

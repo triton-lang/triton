@@ -808,24 +808,28 @@ scf::ForOp lowerTMADescriptors(scf::ForOp forOp, CoarseSchedule &schedule) {
 // LOWER MMA
 /////////////////////////////
 
-std::pair<int, int> getTmemUseStageBounds(ttng::TMEMAllocOp alloc,
-                                          scf::ForOp forOp,
-                                          CoarseSchedule &schedule) {
-  std::pair<int, int> bounds = {std::numeric_limits<int>::max(),
-                                std::numeric_limits<int>::min()};
+std::pair<Operation *, Operation *>
+getTmemUseStageBoundOps(ttng::TMEMAllocOp alloc, scf::ForOp forOp,
+                        CoarseSchedule &schedule) {
+  std::pair<Operation *, Operation *> bounds = {nullptr, nullptr};
   for (auto user : alloc->getUsers()) {
     if (!forOp->isAncestor(user->getParentOp())) {
       continue;
     }
     auto topLevelUser = forOp.getBody()->findAncestorOpInBlock(*user);
-    if (schedule[topLevelUser].first < bounds.first) {
-      bounds.first = schedule[topLevelUser].first;
+    if (!bounds.first) {
+      bounds.first = topLevelUser;
     }
-    if (schedule[topLevelUser].first > bounds.second) {
-      bounds.second = schedule[topLevelUser].first;
+    if (!bounds.second) {
+      bounds.second = topLevelUser;
+    }
+    if (schedule.isOpBefore(topLevelUser, bounds.first)) {
+      bounds.first = topLevelUser;
+    }
+    if (schedule.isOpBefore(bounds.second, topLevelUser)) {
+      bounds.second = topLevelUser;
     }
   }
-  assert(bounds.first <= bounds.second && "Invalid stage bounds");
   return bounds;
 }
 
@@ -1145,11 +1149,22 @@ scf::ForOp lowerMMA(ttng::MMAv5OpInterface mma, scf::ForOp forOp,
   }
 
   // Create barrier and wait ops
-  std::pair<int, int> tmemUseStageBounds =
-      getTmemUseStageBounds(alloc, forOp, schedule);
-  int tmemUseNumStages =
-      tmemUseStageBounds.second - tmemUseStageBounds.first + 1;
-  int waitNumStages = tmemUseStageBounds.second - schedule[mma].first + 1;
+  std::pair<Operation *, Operation *> tmemUseStageBoundOps =
+      getTmemUseStageBoundOps(alloc, forOp, schedule);
+  int tmemUseNumStages = schedule[tmemUseStageBoundOps.second].first -
+                         schedule[tmemUseStageBoundOps.first].first;
+  // If def is in the earlier cluster than the use, we will have a liverange
+  // overlap and need to add an extra buffer.
+  if (schedule.isOpInEarlierCluster(tmemUseStageBoundOps.first,
+                                    tmemUseStageBoundOps.second) ||
+      (schedule.isOpInSameCluster(tmemUseStageBoundOps.first,
+                                  tmemUseStageBoundOps.second) &&
+       schedule.isOpBefore(tmemUseStageBoundOps.first,
+                           tmemUseStageBoundOps.second))) {
+    tmemUseNumStages += 1;
+  }
+  int waitNumStages =
+      schedule[tmemUseStageBoundOps.second].first - schedule[mma].first + 1;
   if (waitNumStages == 1 && !hasAccReadModifyWrite(mma, forOp) &&
       mmaHasPipelineableOperands(mma, forOp, isLoadPipelineable)) {
     // Overlap the mma with itself, even if there is no use of the accumulator

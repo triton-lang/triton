@@ -87,6 +87,34 @@ bool tt::CoarseSchedule::insertDepsOfOp(Operation *op, int stage,
   return inserted;
 }
 
+// Check if op a will show up before op b in the final unrolled code.
+bool tt::CoarseSchedule::isOpBefore(Operation *a, Operation *b) {
+  assert(opToStageAndCluster.count(a) && opToStageAndCluster.count(b) &&
+         "Operations must be in the schedule");
+  auto [aStage, aCluster] = opToStageAndCluster[a];
+  auto [bStage, bCluster] = opToStageAndCluster[b];
+  if (aStage != bStage) {
+    return aStage < bStage;
+  }
+  if (aCluster != bCluster) {
+    return clusters.isBefore(aCluster, bCluster);
+  }
+  return a->isBeforeInBlock(b);
+}
+
+bool tt::CoarseSchedule::isOpInEarlierCluster(Operation *a, Operation *b) {
+  assert(opToStageAndCluster.count(a) && opToStageAndCluster.count(b) &&
+         "Operations must be in the schedule");
+  return clusters.isBefore(opToStageAndCluster[a].second,
+                           opToStageAndCluster[b].second);
+}
+
+bool tt::CoarseSchedule::isOpInSameCluster(Operation *a, Operation *b) {
+  assert(opToStageAndCluster.count(a) && opToStageAndCluster.count(b) &&
+         "Operations must be in the schedule");
+  return opToStageAndCluster[a].second == opToStageAndCluster[b].second;
+}
+
 SmallVector<std::tuple<Operation *, int, tt::CoarseSchedule::Cluster>>
 tt::CoarseSchedule::getOpsInOrder(scf::ForOp forOp) {
   SmallVector<SmallVector<std::tuple<Operation *, int, Cluster>>, 8>
