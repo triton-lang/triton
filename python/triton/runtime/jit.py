@@ -491,6 +491,8 @@ class JITFunction(KernelInterface[T]):
     # Hook to signal that a kernel is done compiling and inspect compiled function.
     # cache_hook will always be called before compilation and compiled_hook after.
     compiled_hook = None
+    # Default run hooks - provide means of overriding run hooks globally
+    default_prerun_hooks = []
 
     def _call_hook(
         self,
@@ -694,7 +696,7 @@ class JITFunction(KernelInterface[T]):
         self.constexprs = [p.num for p in self.params if p.is_constexpr]
 
         # Hooks that will be called prior to executing "run"
-        self.pre_run_hooks = []
+        self.pre_run_hooks = JITFunction.default_prerun_hooks
 
         # reuse docs of wrapped function
         self.__doc__ = fn.__doc__
