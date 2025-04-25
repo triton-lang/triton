@@ -586,8 +586,10 @@ backends = [*BackendInstaller.copy(["nvidia", "amd"]), *BackendInstaller.copy_ex
 def language_extras_install_path():
     return os.path.abspath(os.path.join(os.path.dirname(__file__), "python", "triton", "language", "extra"))
 
+
 def tools_extra_install_path():
     return os.path.abspath(os.path.join(os.path.dirname(__file__), "python", "triton", "tools", "extra"))
+
 
 def get_package_dirs():
     yield ("", "python")
