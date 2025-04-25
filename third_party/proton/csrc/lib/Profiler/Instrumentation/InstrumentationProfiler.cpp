@@ -15,7 +15,6 @@ InstrumentationProfiler::~InstrumentationProfiler() {}
 
 void InstrumentationProfiler::doStart() {
   // Start the instrumentation profiler.
-  runtime->allocateHostBuffer(&hostBuffer, HOST_BUFFER_SIZE);
 }
 
 void InstrumentationProfiler::doFlush() {
@@ -24,6 +23,8 @@ void InstrumentationProfiler::doFlush() {
 
 void InstrumentationProfiler::doStop() {
   // Stop the instrumentation profiler.
+  // FIXME: Also we should ensure the context is valid before releasing the
+  // memory
   if (hostBuffer != nullptr) {
     runtime->freeHostBuffer(hostBuffer);
     hostBuffer = nullptr;
@@ -49,22 +50,22 @@ void InstrumentationProfiler::initFunctionScopeIds(
     uint64_t functionId,
     const std::vector<std::pair<size_t, std::string>> &scopeIdPairs,
     const std::vector<std::pair<size_t, size_t>> &scopeIdParentPairs) {
-  // Initialize the scope IDs.
   functionScopeIdNames[functionId] = scopeIdPairs;
   functionScopeIdParentIds[functionId] = scopeIdParentPairs;
 }
 
 void InstrumentationProfiler::enterInstrumentedOp(uint64_t functionId,
                                                   uint8_t *buffer,
-                                                  size_t size) {}
+                                                  size_t size) {
+  if (!hostBuffer) {
+    runtime->allocateHostBuffer(&hostBuffer, HOST_BUFFER_SIZE);
+  }
+}
 
 void InstrumentationProfiler::exitInstrumentedOp(uint64_t functionId,
                                                  uint8_t *buffer, size_t size) {
-  // If the buffer is null, we cannot process it.
-  // It means the hook or the profiler is not active.
   if (!buffer || !hostBuffer)
     return;
-  // Exit an instrumented operation.
   uint64_t device = runtime->getDevice();
   void *&stream = deviceStreams[reinterpret_cast<void *>(device)];
   if (!stream) {
