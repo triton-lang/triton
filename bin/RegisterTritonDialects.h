@@ -86,6 +86,9 @@ inline void registerTritonDialects(mlir::DialectRegistry &registry) {
   mlir::triton::registerTritonAMDGPULowerInstructionSchedHints();
   mlir::registerTritonAMDFoldTrueCmpI();
 
+  // NVWS passes
+  mlir::registerNVWSTransformsPasses();
+
   // Proton passes
   mlir::test::proton::registerTestScopeIdAllocationPass();
   mlir::triton::proton::registerConvertProtonToProtonGPU();
@@ -94,14 +97,14 @@ inline void registerTritonDialects(mlir::DialectRegistry &registry) {
   mlir::triton::proton::gpu::registerAllocateProtonSharedMemoryPass();
   mlir::triton::proton::gpu::registerAllocateProtonGlobalScratchBufferPass();
 
-  registry.insert<mlir::triton::TritonDialect, mlir::cf::ControlFlowDialect,
-                  mlir::triton::nvidia_gpu::TritonNvidiaGPUDialect,
-                  mlir::triton::gpu::TritonGPUDialect, mlir::math::MathDialect,
-                  mlir::arith::ArithDialect, mlir::scf::SCFDialect,
-                  mlir::gpu::GPUDialect, mlir::LLVM::LLVMDialect,
-                  mlir::NVVM::NVVMDialect, mlir::triton::nvgpu::NVGPUDialect,
-                  mlir::triton::amdgpu::TritonAMDGPUDialect,
-                  mlir::triton::proton::ProtonDialect,
-                  mlir::triton::proton::gpu::ProtonGPUDialect,
-                  mlir::ROCDL::ROCDLDialect>();
+  registry.insert<
+      mlir::triton::TritonDialect, mlir::cf::ControlFlowDialect,
+      mlir::triton::nvidia_gpu::TritonNvidiaGPUDialect,
+      mlir::triton::gpu::TritonGPUDialect, mlir::math::MathDialect,
+      mlir::arith::ArithDialect, mlir::scf::SCFDialect, mlir::gpu::GPUDialect,
+      mlir::LLVM::LLVMDialect, mlir::NVVM::NVVMDialect,
+      mlir::triton::nvgpu::NVGPUDialect, mlir::triton::nvws::NVWSDialect,
+      mlir::triton::amdgpu::TritonAMDGPUDialect,
+      mlir::triton::proton::ProtonDialect,
+      mlir::triton::proton::gpu::ProtonGPUDialect, mlir::ROCDL::ROCDLDialect>();
 }
