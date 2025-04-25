@@ -264,6 +264,32 @@ class constexpr:
         return self.value(*args, **kwds)
 
 
+def constexpr_function(f):
+    """
+    Wraps an arbitrary Python function so that it can be called at
+    compile-time on constexpr arguments in a Triton function and
+    returns a constexpr result.
+    """
+
+    @wraps(f)
+    def wrapper(*args, **kwargs):
+        # de-constexpr arguments and discard the _builder keyword argument:
+        args = [getattr(x, "value", x) for x in args]
+        kwargs = {k: getattr(v, "value", v) for (k, v) in kwargs.items() if k != "_builder"}
+
+        # call the raw Python function f:
+        res = f(*args, **kwargs)
+
+        # convert result back to a Triton constexpr:
+        return constexpr(res)
+
+    # disguise the function as a Triton builtin to avoid raising an error
+    # that we're calling a non-JIT function from within a Triton kernel:
+    wrapper.__triton_builtin__ = True
+    wrapper.__module__ = constexpr_function.__module__
+    return wrapper
+
+
 CONSTEXPR_0 = constexpr(0)
 
 
@@ -641,13 +667,6 @@ class pointer_type(dtype):
 
     def mangle(self) -> str:
         return f"P{self.element_ty.mangle()}"
-
-
-class nv_tma_desc_type(pointer_type):
-
-    def __init__(self, const=True, address_space=0):
-        super().__init__(uint8, const=const, address_space=address_space)
-        self.name = 'nv_tma_desc_type'
 
 
 class block_type(dtype):
@@ -1166,7 +1185,7 @@ class tensor(base_value):
     def sigmoid(self) -> tensor:
         ...
 
-    def softmax(self, ieee_rounding=False) -> tensor:
+    def softmax(self, dim=None, keep_dims=False, ieee_rounding=False) -> tensor:
         ...
 
     def ravel(self) -> tensor:
@@ -1188,6 +1207,9 @@ class tensor(base_value):
         ...
 
     def xor_sum(self, axis=None, keep_dims=False) -> tensor:
+        ...
+
+    def reduce_or(self, axis=None, keep_dims=False) -> tensor:
         ...
 
     def cumsum(self, axis=0, reverse=False) -> tensor:
@@ -1290,7 +1312,8 @@ class tensor_descriptor_base_type(base_type):
         return value, cursor + 1
 
     def _flatten_ir_types(self, builder: ir.builder, out: List[ir.type]) -> None:
-        out.append(builder.create_tensor_descriptor_type(self.block_type.to_ir(builder)))
+        is_signed = self.block_type.element_ty.is_int_signed()
+        out.append(builder.create_tensor_descriptor_type(self.block_type.to_ir(builder), is_signed))
 
     def __str__(self) -> str:
         # ex. "tensor_descriptor<float32[16, 32]>"
@@ -1357,6 +1380,30 @@ class tensor_descriptor_base(base_value):
         :note: Offset must be a multiple of 16-bytes
         """
         return semantic.descriptor_store(self, value, offsets, _builder)
+
+    @builtin
+    def atomic_add(self, offsets: Sequence[constexpr | tensor], value: tensor, _builder=None) -> tensor:
+        return semantic.descriptor_atomic_add(self, value, offsets, _builder)
+
+    @builtin
+    def atomic_min(self, offsets: Sequence[constexpr | tensor], value: tensor, _builder=None) -> tensor:
+        return semantic.descriptor_atomic_min(self, value, offsets, _builder)
+
+    @builtin
+    def atomic_max(self, offsets: Sequence[constexpr | tensor], value: tensor, _builder=None) -> tensor:
+        return semantic.descriptor_atomic_max(self, value, offsets, _builder)
+
+    @builtin
+    def atomic_and(self, offsets: Sequence[constexpr | tensor], value: tensor, _builder=None) -> tensor:
+        return semantic.descriptor_atomic_and(self, value, offsets, _builder)
+
+    @builtin
+    def atomic_or(self, offsets: Sequence[constexpr | tensor], value: tensor, _builder=None) -> tensor:
+        return semantic.descriptor_atomic_or(self, value, offsets, _builder)
+
+    @builtin
+    def atomic_xor(self, offsets: Sequence[constexpr | tensor], value: tensor, _builder=None) -> tensor:
+        return semantic.descriptor_atomic_xor(self, value, offsets, _builder)
 
     @builtin
     def gather(self, *args, _builder=None) -> tensor:

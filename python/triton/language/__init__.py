@@ -6,6 +6,7 @@ from . import extra
 from .standard import (
     argmax,
     argmin,
+    bitonic_merge,
     cdiv,
     cumprod,
     cumsum,
@@ -14,6 +15,7 @@ from .standard import (
     max,
     min,
     ravel,
+    reduce_or,
     sigmoid,
     softmax,
     sort,
@@ -54,6 +56,7 @@ from .core import (
     clamp,
     const,
     constexpr,
+    constexpr_function,
     debug_barrier,
     device_assert,
     device_print,
@@ -90,7 +93,6 @@ from .core import (
     permute,
     pi32_t,
     pointer_type,
-    nv_tma_desc_type,
     program_id,
     range,
     reduce,
@@ -152,6 +154,7 @@ __all__ = [
     "atomic_xchg",
     "atomic_xor",
     "bfloat16",
+    "bitonic_merge",
     "block_type",
     "broadcast",
     "broadcast_to",
@@ -162,6 +165,7 @@ __all__ = [
     "clamp",
     "const",
     "constexpr",
+    "constexpr_function",
     "cos",
     "cumprod",
     "cumsum",
@@ -219,7 +223,6 @@ __all__ = [
     "philox_impl",
     "pi32_t",
     "pointer_type",
-    "nv_tma_desc_type",
     "program_id",
     "rand",
     "rand4x",
@@ -230,6 +233,7 @@ __all__ = [
     "range",
     "ravel",
     "reduce",
+    "reduce_or",
     "reshape",
     "rsqrt",
     "slice",
@@ -292,9 +296,6 @@ def str_to_ty(name):
         stride_type = tuple_type(([int64] * ndim))
         block = block_type(dtype, block_shape)
         return tensor_descriptor_type(block, shape_type, stride_type)
-
-    if name == "nvTmaDesc":
-        return nv_tma_desc_type()
 
     if name == "constexpr":
         return constexpr

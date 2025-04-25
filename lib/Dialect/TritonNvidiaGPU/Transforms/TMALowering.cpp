@@ -181,6 +181,23 @@ struct TMAStoreLowering : public OpRewritePattern<DescriptorStoreOp> {
   }
 };
 
+struct TMAReduceLowering : public OpRewritePattern<DescriptorReduceOp> {
+  using OpRewritePattern::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(DescriptorReduceOp op,
+                                PatternRewriter &rewriter) const override {
+    auto createStore = [&](Value tmaPtr, Value alloc) {
+      auto indices = translateTMAIndices(
+          rewriter, op.getLoc(),
+          op.getDesc().getType().getBlockType().getEncoding(), op.getIndices());
+      rewriter.create<triton::nvidia_gpu::AsyncTMAReduceOp>(
+          op.getLoc(), op.getKind(), tmaPtr, indices, alloc);
+    };
+    lowerTMAStore(op, op.getSrc(), op.getDesc(), createStore, rewriter);
+    return success();
+  }
+};
+
 struct TMAScatterLowering : public OpRewritePattern<DescriptorScatterOp> {
   using OpRewritePattern::OpRewritePattern;
 
@@ -227,7 +244,8 @@ public:
 
     mlir::RewritePatternSet patterns(context);
     patterns.add<TMALoadLowering, TMAGatherLowering, TMAStoreLowering,
-                 TMAScatterLowering, TMACreateDescLowering>(context);
+                 TMAScatterLowering, TMAReduceLowering, TMACreateDescLowering>(
+        context);
     if (applyPatternsGreedily(m, std::move(patterns)).failed())
       signalPassFailure();
   }

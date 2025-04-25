@@ -81,6 +81,12 @@ def _get_path_to_hip_runtime_dylib():
 
     paths = []
 
+    # Check backend
+    local_lib = os.path.join(os.path.dirname(__file__), "lib", lib_name)
+    if os.path.exists(local_lib):
+        return local_lib
+    paths.append(local_lib)
+
     import site
     # First search the HIP runtime dynamic library packaged with PyTorch. It's very likely
     # that we run Triton together with PyTorch. This makes sure we use the same dynamic
@@ -515,7 +521,7 @@ class HIPDriver(GPUDriver):
     def is_active():
         try:
             import torch
-            return torch.version.hip is not None
+            return torch.cuda.is_available() and (torch.version.hip is not None)
         except ImportError:
             return False
 

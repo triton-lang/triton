@@ -6,7 +6,6 @@ import hashlib
 import subprocess
 import tempfile
 import triton
-import torch
 from pathlib import Path
 from triton.runtime.build import _build
 from triton.runtime.cache import get_cache_manager
@@ -539,11 +538,19 @@ class TmaDescKernelParam:
     TMA_DESC_SIZE = 128
 
     def __init__(self):
+        import torch
         self.desc = torch.empty(self.TMA_DESC_SIZE, dtype=torch.uint8, device="cpu")
 
     # Return a CUtensorMap* pointer in host memory
     def tma_desc_cpu_ptr(self):
         return self.desc.data_ptr()
+
+
+# The TMA dtype enum values are slightly different on host vs device...
+TMA_DTYPE_DEVICE_TO_HOST = dict((i, i) for i in range(16))
+TMA_DTYPE_DEVICE_TO_HOST[8] = 10
+TMA_DTYPE_DEVICE_TO_HOST[9] = 8
+TMA_DTYPE_DEVICE_TO_HOST[10] = 9
 
 
 def make_tensordesc_arg(arg, metadata):
@@ -569,7 +576,7 @@ def make_tensordesc_arg(arg, metadata):
         data_ptr,
         swizzle,
         elem_size,
-        elem_type,
+        TMA_DTYPE_DEVICE_TO_HOST[elem_type],
         block_size,
         shape,
         strides,

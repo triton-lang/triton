@@ -15,6 +15,18 @@ def get_max_quant_val(dtype: torch.dtype):
     return d[dtype]
 
 
+@tl.constexpr_function
+def get_scaled_dot_format_string(dtype: tl.dtype):
+    mapping = {
+        tl.float16: "fp16",
+        tl.bfloat16: "bf16",
+        tl.uint8: "e2m1",
+        tl.float8e4nv: "e4m3",
+        tl.float8e5: "e5m2",
+    }
+    return mapping[dtype]
+
+
 @triton.jit
 def _get_max_quant_val(dtype: tl.constexpr):
     if dtype == tl.uint8:

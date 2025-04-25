@@ -49,23 +49,17 @@ def is_hip():
 
 def is_hip_cdna2():
     target = get_current_target()
-    if target is None or target.backend != 'hip':
-        return False
-    return target.arch == 'gfx90a'
+    return target is not None and target.backend == 'hip' and target.arch == 'gfx90a'
 
 
 def is_hip_cdna3():
     target = get_current_target()
-    if target is None or target.backend != 'hip':
-        return False
-    return target.arch in ('gfx940', 'gfx941', 'gfx942')
+    return target is not None and target.backend == 'hip' and target.arch == 'gfx942'
 
 
 def is_hip_cdna4():
     target = get_current_target()
-    if target is None or target.backend != 'hip':
-        return False
-    return target.arch in ('gfx950')
+    return target is not None and target.backend == 'hip' and target.arch == 'gfx950'
 
 
 def is_hip_cdna():

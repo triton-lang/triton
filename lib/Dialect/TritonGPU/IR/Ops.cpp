@@ -452,10 +452,12 @@ void LocalAllocOp::getEffects(
   // op.
   if (!getType().getMutableMemory() && !op->hasAttr("allocation.offset"))
     return;
-  effects.emplace_back(MemoryEffects::Allocate::get(), SharedMemory::get());
+  OpResult alloc = getOperation()->getOpResult(0);
+  effects.emplace_back(MemoryEffects::Allocate::get(), alloc,
+                       SharedMemory::get());
   if (getSrc())
-    effects.emplace_back(MemoryEffects::Write::get(),
-                         getOperation()->getOpResult(0), SharedMemory::get());
+    effects.emplace_back(MemoryEffects::Write::get(), alloc,
+                         SharedMemory::get());
 }
 
 OpFoldResult LocalAllocOp::fold(FoldAdaptor adaptor) {
@@ -486,17 +488,6 @@ LogicalResult LocalAllocOp::verify() {
     return emitError("result element type must match desc element type");
   }
   return success();
-}
-
-int32_t LocalAllocOp::getAlignmentOrDefault() {
-  auto align = getAlignment();
-  if (align) {
-    return *align;
-  }
-
-  auto ty = getType();
-  auto enc = dyn_cast<SharedEncodingTrait>(ty.getEncoding());
-  return enc ? enc.getAlignment() : 16;
 }
 
 // LocalStoreOp
@@ -578,6 +569,19 @@ LogicalResult MemDescSubviewOp::verify() {
   // resulting code ultimately works.
 
   return success();
+}
+
+// -- LocalAllocOp --
+
+int32_t LocalAllocOp::getAlignmentOrDefault() {
+  auto align = getAlignment();
+  if (align) {
+    return *align;
+  }
+
+  auto ty = getType();
+  auto enc = dyn_cast<SharedEncodingTrait>(ty.getEncoding());
+  return enc ? enc.getAlignment() : 16;
 }
 
 // -- WarpSpecializeOp --

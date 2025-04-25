@@ -91,5 +91,5 @@ def matmul_launch_metadata(grid, kernel, args):
     sindx = args.get("WriteBackIndx", None)
     if sindx is not None:
         skipped = (sindx == -1).sum() / sindx.numel()
-    ret["bytes"] = ((1 - skipped) * Y.numel() * Y.element_size() + X.numel() * X.element_size() + n_w_bytes)
+    ret["bytes"] = int((1 - skipped) * Y.numel() * Y.element_size() + X.numel() * X.element_size() + n_w_bytes)
     return ret

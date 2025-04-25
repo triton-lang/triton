@@ -145,9 +145,9 @@ def TTNG_InvalBarrierOp : TTNG_Op<"inval_barrier"> {
     https://docs.nvidia.com/cuda/parallel-thread-execution/index.html#parallel-synchronization-and-communication-instructions-mbarrier-inval
   }];
 
+  let hasVerifier = 1;
   let arguments = (ins Arg<TTG_MemDescType, "", [MemWrite<SharedMemory>]>:$alloc);
   let assemblyFormat = "$alloc attr-dict `:` qualified(type($alloc))";
-  let hasVerifier = 1;
 }
 
 def TTNG_BarrierExpectOp : TTNG_Op<"barrier_expect"> {
@@ -194,11 +194,6 @@ def TTNG_WaitBarrierOp : TTNG_Op<"wait_barrier", [AttrSizedOperandSegments]> {
     Variadic<TTG_MemDescType>:$deps
   );
 
-  let assemblyFormat = [{
-    $alloc `,` $phase (`,` $pred^)? (`deps` $deps^)? attr-dict `:` qualified(type($alloc)) (`,` type($deps)^)?
-  }];
-  let hasVerifier = 1;
-
   let builders = [
     OpBuilder<(ins "Value":$alloc, "Value":$phase),
     [{
@@ -213,6 +208,12 @@ def TTNG_WaitBarrierOp : TTNG_Op<"wait_barrier", [AttrSizedOperandSegments]> {
     build($_builder, $_state, alloc, phase, /*pred=*/static_cast<mlir::Value>(nullptr), deps);
     }]>,
   ];
+
+  let assemblyFormat = [{
+    $alloc `,` $phase (`,` $pred^)? (`deps` $deps^)?
+    attr-dict `:` qualified(type($alloc)) (`,` type($deps)^)?
+  }];
+  let hasVerifier = 1;
 }
 
 def TTNG_ArriveBarrierOp : TTNG_Op<"arrive_barrier"> {
@@ -315,13 +316,36 @@ def TTNG_AsyncTMACopyLocalToGlobalOp : TTNG_Op<"async_tma_copy_local_to_global">
   }];
 
   let arguments = (ins
-    Arg<TT_PtrType, "", [MemRead<GlobalMemory>, MemWrite<GlobalMemory>]>:$desc_ptr,
+    Arg<TT_PtrType, "", [MemWrite<GlobalMemory>]>:$desc_ptr,
     Variadic<I32>:$coord,
     Arg<TTG_MemDescType, "", [MemRead<SharedMemory>]>:$src
   );
 
   let assemblyFormat = [{
     $desc_ptr `[` $coord `]` $src
+    attr-dict `:` qualified(type($desc_ptr)) `,` qualified(type($src))
+  }];
+}
+
+def TTNG_AsyncTMAReduceOp : TTNG_Op<"async_tma_reduce", [MemoryEffects<[MemRead<GlobalMemory>, MemWrite<GlobalMemory>]>]> {
+  let summary = "reduce result in gmem based on a TMA descriptor";
+
+  let description = [{
+    This operation copies data from local memory to global memory
+    asynchronously, and atomically performs the specified reduction kind.
+    Atomicity is at the granularity of individual elements, and only relaxed
+    semantics are implied.
+  }];
+
+  let arguments = (ins
+    TT_DescriptorReduceKindAttr:$kind,
+    Arg<TT_PtrType, "", [MemRead<GlobalMemory>]>:$desc_ptr,
+    Variadic<I32>:$coord,
+    Arg<TTG_MemDescType, "", [MemRead<SharedMemory>]>:$src
+  );
+
+  let assemblyFormat = [{
+    $kind `,` $desc_ptr `[` $coord `]` $src
     attr-dict `:` qualified(type($desc_ptr)) `,` qualified(type($src))
   }];
 }
@@ -364,7 +388,7 @@ def TTNG_AsyncTMAScatterOp : TTNG_Op<"async_tma_scatter"> {
   }];
 
   let arguments = (ins
-    Arg<TT_PtrType ,"", [MemRead<GlobalMemory>, MemWrite<GlobalMemory>]>:$desc_ptr,
+    Arg<TT_PtrType, "", [MemWrite<GlobalMemory>]>:$desc_ptr,
     RankedTensorOf<[I32]>:$x_offsets,
     I32:$y_offset,
     Arg<TTG_MemDescType, "", [MemRead<SharedMemory>]>:$src
@@ -495,11 +519,9 @@ def TTNG_TMEMLoadOp : TTNG_Op<"tmem_load"> {
     Therefore we cannot combine this op with any convert layout like local_load.
   }];
   let arguments = (ins Arg<TTG_MemDescType, "", [MemRead<TensorMemory>]>:$src);
-  let results = (outs TT_Tensor:$result);
 
-  let assemblyFormat = [{
-    $src attr-dict `:` qualified(type($src)) `->` type($result)
-  }];
+  let assemblyFormat = [{$src attr-dict `:` qualified(type($src)) `->` type($result)}];
+  let results = (outs TT_Tensor:$result);
   let hasVerifier = 1;
 }
 
@@ -515,9 +537,7 @@ def TTNG_TMEMStoreOp : TTNG_Op<"tmem_store"> {
     I1:$pred
   );
 
-  let assemblyFormat = [{
-    $src `,` $dst `,` $pred attr-dict `:` type($src) `->` qualified(type($dst))
-  }];
+  let assemblyFormat = [{$src `,` $dst `,` $pred attr-dict `:` type($src) `->` qualified(type($dst))}];
   let hasVerifier = 1;
 }
 
@@ -608,7 +628,7 @@ def TTNG_TMEMCopyOp : TTNG_Op<"tmem_copy"> {
   let arguments = (ins
     Arg<TTG_MemDescType, "", [MemRead<SharedMemory>]>:$src,
     Arg<TTG_MemDescType, "", [MemWrite<TensorMemory>]>:$dst,
-    Arg<Optional<TTG_MemDescType>, "", [MemWrite<SharedMemory>]>:$barrier
+    Optional<TTG_MemDescType>:$barrier
   );
 
   let assemblyFormat = [{$src `,` $dst `,` $barrier attr-dict `:` functional-type(operands, results)}];

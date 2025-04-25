@@ -27,10 +27,10 @@
 
 #include "triton/Dialect/TritonNvidiaGPU/IR/TritonNvidiaGPUOpInterfaces.cpp.inc"
 
+using namespace mlir::triton::gpu;
+
 namespace mlir {
 namespace triton {
-using namespace gpu;
-
 namespace nvidia_gpu {
 
 // -- WarpGroupDotOp --
@@ -65,12 +65,10 @@ void WarpGroupDotOp::getEffects(
         &effects) {
   auto &a = getAMutable();
   auto &b = getBMutable();
-  if (isa<mlir::triton::gpu::MemDescType>(a.get().getType()))
-    effects.emplace_back(MemoryEffects::Read::get(), &a,
-                         mlir::triton::gpu::SharedMemory::get());
-  if (isa<mlir::triton::gpu::MemDescType>(b.get().getType()))
-    effects.emplace_back(MemoryEffects::Read::get(), &b,
-                         mlir::triton::gpu::SharedMemory::get());
+  if (isa<MemDescType>(a.get().getType()))
+    effects.emplace_back(MemoryEffects::Read::get(), &a, SharedMemory::get());
+  if (isa<MemDescType>(b.get().getType()))
+    effects.emplace_back(MemoryEffects::Read::get(), &b, SharedMemory::get());
 }
 
 bool WarpGroupDotOp::needsPartialAccumulator() {
@@ -214,30 +212,21 @@ static void printBarriersAndPreds(OpAsmPrinter &p, Operation *op,
   }
 }
 
-template <typename MMAOpT>
-static void getMMAEffects(
-    MMAOpT op,
-    SmallVectorImpl<SideEffects::EffectInstance<MemoryEffects::Effect>>
-        &effects) {
-  // A can be in shared or tensor memory.
-  if (isa<SharedMemorySpaceAttr>(op.getA().getType().getMemorySpace())) {
-    effects.emplace_back(MemoryEffects::Read::get(), &op.getAMutable(),
-                         SharedMemory::get());
-  } else {
-    effects.emplace_back(MemoryEffects::Read::get(), &op.getAMutable(),
-                         TensorMemory::get());
-  }
-
-  effects.emplace_back(MemoryEffects::Read::get(), &op.getBMutable(),
-                       SharedMemory::get());
-  effects.emplace_back(MemoryEffects::Write::get(), &op.getDMutable(),
-                       TensorMemory::get());
-}
-
 void TCGen5MMAOp::getEffects(
     SmallVectorImpl<SideEffects::EffectInstance<MemoryEffects::Effect>>
         &effects) {
-  getMMAEffects(*this, effects);
+  effects.emplace_back(MemoryEffects::Write::get(), &getDMutable(),
+                       TensorMemory::get());
+  if (isa<SharedMemorySpaceAttr>(getA().getType().getMemorySpace())) {
+    effects.emplace_back(MemoryEffects::Read::get(), &getAMutable(),
+                         SharedMemory::get());
+
+  } else {
+    effects.emplace_back(MemoryEffects::Read::get(), &getAMutable(),
+                         TensorMemory::get());
+  }
+  effects.emplace_back(MemoryEffects::Read::get(), &getBMutable(),
+                       SharedMemory::get());
 }
 
 bool TCGen5MMAOp::verifyDims() {
@@ -258,7 +247,7 @@ void TCGen5MMAOp::addCompletionBarrier(Value barrier, Value pred) {
   getBarriersMutable().append(barrier);
 }
 
-Value TCGen5MMAOp::getAccumulator() { return getD(); }
+TypedValue<MemDescType> TCGen5MMAOp::getAccumulator() { return getD(); }
 
 void TCGen5MMAOp::setAccumulator(Value accum) { getDMutable().assign(accum); }
 
@@ -278,11 +267,18 @@ void TCGen5MMAOp::build(OpBuilder &builder, OperationState &state, Value a,
 void TCGen5MMAScaledOp::getEffects(
     SmallVectorImpl<SideEffects::EffectInstance<MemoryEffects::Effect>>
         &effects) {
-  getMMAEffects(*this, effects);
-  effects.emplace_back(MemoryEffects::Read::get(), &getAScaleMutable(),
+  effects.emplace_back(MemoryEffects::Write::get(), &getDMutable(),
                        TensorMemory::get());
-  effects.emplace_back(MemoryEffects::Read::get(), &getBScaleMutable(),
-                       TensorMemory::get());
+  if (isa<SharedMemorySpaceAttr>(getA().getType().getMemorySpace())) {
+    effects.emplace_back(MemoryEffects::Read::get(), &getAMutable(),
+                         SharedMemory::get());
+
+  } else {
+    effects.emplace_back(MemoryEffects::Read::get(), &getAMutable(),
+                         TensorMemory::get());
+  }
+  effects.emplace_back(MemoryEffects::Read::get(), &getBMutable(),
+                       SharedMemory::get());
 }
 
 bool TCGen5MMAScaledOp::verifyDims() {
@@ -349,7 +345,7 @@ void TCGen5MMAScaledOp::addCompletionBarrier(Value barrier, Value pred) {
   getBarriersMutable().append(barrier);
 }
 
-Value TCGen5MMAScaledOp::getAccumulator() { return getD(); }
+TypedValue<MemDescType> TCGen5MMAScaledOp::getAccumulator() { return getD(); }
 
 void TCGen5MMAScaledOp::setAccumulator(Value accum) {
   getDMutable().assign(accum);
