@@ -570,6 +570,7 @@ def make_tensordesc_arg(arg, metadata):
     result = [desc, *shape, *strides]
 
     if fp4_padded:
+        shape = list(shape)
         shape[-1] *= 2
     triton.runtime.driver.active.utils.fill_tma_descriptor(
         desc.tma_desc_cpu_ptr(),
