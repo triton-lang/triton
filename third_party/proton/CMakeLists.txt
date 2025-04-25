@@ -49,6 +49,9 @@ endfunction()
 # ============ Add subdirectory with actual code that calls add_proton_library ============
 add_subdirectory("${PROTON_SRC_DIR}")
 
+# ============ Add subdirectory with proton tests ============
+add_subdirectory(test)
+
 # ============ Possibly handle macOS specifics ============
 if(APPLE)
   set(CMAKE_SHARED_LIBRARY_SUFFIX ".so")

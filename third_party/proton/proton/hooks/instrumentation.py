@@ -19,6 +19,7 @@ class CudaAllocator:
 
     def __init__(self, instrumentation_hook):
         self.instrumentation_hook = instrumentation_hook
+        self.alloc_size = 0
 
     def __call__(self, size: int, alignment: int, stream: Optional[int]):
         # Ensure proper alignment and minimum size
@@ -33,6 +34,7 @@ class CudaAllocator:
         import torch
         buffer = torch.empty((aligned_size, ), dtype=torch.uint8, device="cuda")
         self.instrumentation_hook.buffer = buffer
+        self.alloc_size = aligned_size
         return buffer
 
 
@@ -232,13 +234,13 @@ class InstrumentationHook(Hook):
 
     def enter(self, lazy_dict: LazyDict) -> None:
         func = lazy_dict.data.get("function")
-        libproton.enter_instrumented_op(func, self._data_ptr(), self.profile_buffer_size)
+        libproton.enter_instrumented_op(func, self._data_ptr(), self.allocator.alloc_size)
         if InstrumentationHook.enable_host_buffer:
             InstrumentationHook.host_buffer = None
 
     def exit(self, lazy_dict: LazyDict) -> None:
         func = lazy_dict.data.get("function")
-        libproton.exit_instrumented_op(func, self._data_ptr(), self.profile_buffer_size)
+        libproton.exit_instrumented_op(func, self._data_ptr(), self.allocator.alloc_size)
 
         if InstrumentationHook.enable_host_buffer:
             # copy profiling buffer to CPU for external processing
