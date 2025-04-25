@@ -11,7 +11,7 @@ from triton.runtime.build import _build
 from triton.runtime.cache import get_cache_manager
 from triton.runtime import _allocation
 from triton.backends.compiler import GPUTarget
-from triton.backends.driver import GPUDriver
+from triton.backends.driver import GPUDriver, platform_key
 
 from triton.tools.tensor_descriptor import TensorDescriptor
 
@@ -51,17 +51,11 @@ def library_dirs():
     return [libdevice_dir, *libcuda_dirs()]
 
 
-@functools.lru_cache()
-def platform_key():
-    from platform import machine, system, architecture
-    return ",".join([machine(), system(), *architecture()])
-
-
 def compile_module_from_src(src, name):
     key = hashlib.sha256((src + platform_key()).encode("utf-8")).hexdigest()
     cache = get_cache_manager(key)
-    ext = sysconfig.get_config_var("EXT_SUFFIX").split(".")[-1]
-    cache_path = cache.get_file(f"{name}.{ext}")
+    suffix = sysconfig.get_config_var("EXT_SUFFIX")
+    cache_path = cache.get_file(f"{name}{suffix}")
     if cache_path is None:
         with tempfile.TemporaryDirectory() as tmpdir:
             src_path = os.path.join(tmpdir, "main.c")
@@ -69,7 +63,7 @@ def compile_module_from_src(src, name):
                 f.write(src)
             so = _build(name, src_path, tmpdir, library_dirs(), include_dir, libraries)
             with open(so, "rb") as f:
-                cache_path = cache.put(f.read(), f"{name}.{ext}", binary=True)
+                cache_path = cache.put(f.read(), f"{name}{suffix}", binary=True)
     import importlib.util
     spec = importlib.util.spec_from_file_location(name, cache_path)
     mod = importlib.util.module_from_spec(spec)
@@ -570,6 +564,7 @@ def make_tensordesc_arg(arg, metadata):
     result = [desc, *shape, *strides]
 
     if fp4_padded:
+        shape = list(shape)
         shape[-1] *= 2
     triton.runtime.driver.active.utils.fill_tma_descriptor(
         desc.tma_desc_cpu_ptr(),

@@ -304,8 +304,9 @@ class Config:
     :type num_warps: int
     :ivar num_stages: the number of stages that the compiler should use when software-pipelining loops.
                        Mostly useful for matrix multiplication workloads on SM80+ GPUs.
-    :type num_ctas: int
+    :type num_stages: int
     :ivar num_ctas: number of blocks in a block cluster. SM90+ only.
+    :type num_ctas: int
     :type maxnreg: Optional[int]
     :ivar maxnreg: maximum number of registers one thread can use.  Corresponds
                        to ptx .maxnreg directive.  Not supported on all platforms.
@@ -320,6 +321,14 @@ class Config:
         self.num_stages = num_stages
         self.maxnreg = maxnreg
         self.pre_hook = pre_hook
+
+    def __setstate__(self, state):
+        self.kwargs = state.get("kwargs", {})
+        self.num_warps = state.get("num_warps", 4)
+        self.num_stages = state.get("num_stages", 3)
+        self.num_ctas = state.get("num_ctas", 1)
+        self.maxnreg = state.get("maxnreg", None)
+        self.pre_hook = state.get("pre_hook", None)
 
     def all_kwargs(self):
         return {
