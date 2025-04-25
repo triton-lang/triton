@@ -11,7 +11,7 @@ from triton.runtime.build import _build
 from triton.runtime.cache import get_cache_manager
 from triton.runtime import _allocation
 from triton.backends.compiler import GPUTarget
-from triton.backends.driver import GPUDriver
+from triton.backends.driver import GPUDriver, platform_key
 
 from triton.tools.tensor_descriptor import TensorDescriptor
 
@@ -49,12 +49,6 @@ def libcuda_dirs():
 @functools.lru_cache()
 def library_dirs():
     return [libdevice_dir, *libcuda_dirs()]
-
-
-@functools.lru_cache()
-def platform_key():
-    from platform import machine, system, architecture
-    return ",".join([machine(), system(), *architecture()])
 
 
 def compile_module_from_src(src, name):

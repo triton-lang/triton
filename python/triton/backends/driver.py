@@ -1,5 +1,14 @@
+import functools
 from abc import ABCMeta, abstractmethod
 from typing import Callable, List, Protocol, Sequence
+
+
+@functools.lru_cache()
+def platform_key():
+    import sysconfig
+    from platform import machine, system, architecture
+    suffix = sysconfig.get_config_var('EXT_SUFFIX')
+    return ",".join([machine(), system(), *architecture(), suffix])
 
 
 class Benchmarker(Protocol):
