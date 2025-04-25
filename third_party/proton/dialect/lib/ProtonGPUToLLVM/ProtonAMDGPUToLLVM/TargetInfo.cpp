@@ -35,8 +35,8 @@ Value TargetInfo::clock(ConversionPatternRewriter &rewriter, Location loc,
 #define HW_REG_XCC_ID_OFFSET  0
 
 //gfx942
-#define CU_PER_XCD 40
-#define CU_PER_SE 10
+//#define CU_PER_XCD 40
+//#define CU_PER_SE 10
 
 //gfx950
 //#define CU_PER_XCD 32
@@ -72,6 +72,28 @@ static Value getSEID(ConversionPatternRewriter &rewriter,
   return builder.launch(rewriter, loc, i32_ty, false);
 }
 
+static uint32_t getCU_PER_XCD(llvm::AMDGPU::GPUKind GPUKind){
+  switch (GPUKind) {
+  case llvm::AMDGPU::GK_GFX942:
+	  return 40;
+  case llvm::AMDGPU::GK_GFX950:
+	  return 32;
+  default:
+     llvm_unreachable("unsupported arch");
+  }	
+}  
+
+static uint32_t getCU_PER_SE(llvm::AMDGPU::GPUKind GPUKind){
+  switch (GPUKind) {
+  case llvm::AMDGPU::GK_GFX942:
+          return 10;
+  case llvm::AMDGPU::GK_GFX950:
+          return 10;
+  default:
+     llvm_unreachable("unsupported arch");
+  }
+}
+
 
 Value TargetInfo::processorId(ConversionPatternRewriter &rewriter,
                               Location loc) const {
@@ -81,6 +103,7 @@ Value TargetInfo::processorId(ConversionPatternRewriter &rewriter,
 
   Value xcc_id;
   llvm::AMDGPU::GPUKind GPUKind = llvm::AMDGPU::parseArchAMDGCN(this->arch);
+  //For now only support gfx90a, gfx942, and gfx950
   switch (GPUKind) {
   case llvm::AMDGPU::GK_GFX90A:
 	   xcc_id = b.i32_val(0);
@@ -90,13 +113,18 @@ Value TargetInfo::processorId(ConversionPatternRewriter &rewriter,
   default:
      llvm::report_fatal_error("unsupported arch");
   }
+  //on gfx90a the local cu_id == global cu_id
   Value cu_id = getCUID(rewriter, loc); //local CU ID
   Value se_id = getSEID(rewriter, loc); 
   builder.create<>("s_waitcnt lgkmcnt(0)")->operator()();
 
-  //global_cu_id = xcc_id * CU_PER_XCD + se_id * CU_PER_SE + cu_id 
-  if(GPUKind==llvm::AMDGPU::GK_GFX942)
+  //For XCC based architectures to get a unique CU id for a wave:
+  //global_cu_id = xcc_id * CU_PER_XCD + se_id * CU_PER_SE + cu_id (local)
+  if(GPUKind==llvm::AMDGPU::GK_GFX942 || GPUKind==llvm::AMDGPU::GK_GFX950){
+	  uint32_t CU_PER_XCD = getCU_PER_XCD(GPUKind);
+	  uint32_t CU_PER_SE = getCU_PER_SE(GPUKind);
 	  cu_id = b.add(b.add(b.mul(xcc_id, b.i32_val(CU_PER_XCD)), b.mul(se_id, b.i32_val(CU_PER_SE))), cu_id);
+ }
 
   return cu_id;
 }
