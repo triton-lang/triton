@@ -261,7 +261,7 @@ static Value permuteAndReduce(RewriterBase &rewriter, Location loc,
 // The input acc has the partial accumulated value from reduction within
 // threads. The output acc has the final accumulated value.
 //
-// The thread layout must be mfma input layout.
+// The thread layout must be mfma input layout with isTransposed=true.
 // For the mfma_32x32 layout:
 //   step 1: use permlane32_swap() to swap the row 2 and 3 of acc and
 //           the row 0 and 1 of the copy of acc
@@ -286,9 +286,12 @@ static bool warpReduceCDNA4(RewriterBase &rewriter, Location loc,
   if (bits > 32)
     return false;
 
-  auto resultTy = op.getInputTypes()[0];
-  auto mfmaLayout = dyn_cast<AMDMfmaEncodingAttr>(resultTy.getEncoding());
+  auto srcTy = op.getInputTypes()[0];
+  auto mfmaLayout = dyn_cast<AMDMfmaEncodingAttr>(srcTy.getEncoding());
   if (!mfmaLayout)
+    return false;
+
+  if (!mfmaLayout.getIsTransposed())
     return false;
 
   auto MDim = mfmaLayout.getMDim();
