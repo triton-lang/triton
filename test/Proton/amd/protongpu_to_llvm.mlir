@@ -1,4 +1,4 @@
-// RUN: triton-opt %s -split-input-file -convert-proton-amd-gpu-to-llvm -cse --verify-diagnostics | FileCheck %s
+// RUN: triton-opt %s -split-input-file -convert-proton-amd-gpu-to-llvm --verify-diagnostics | FileCheck %s
 
 #shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
 #smem = #ttg.shared_memory
@@ -18,6 +18,8 @@ module attributes {"ttg.num-warps" = 8 : i32} {
 module attributes {"ttg.num-warps" = 8 : i32} {
   // CHECK-LABEL: convert_read_counter
   llvm.func @convert_read_counter() {
+    //CHECK: llvm.call_intrinsic "llvm.amdgcn.s.memtime"() : () -> i64
+    //CHECK: llvm.trunc %{{.*}} : i64 to i32
     %1 = proton_gpu.read_counter : i32
     llvm.return
   }
