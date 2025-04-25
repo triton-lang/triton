@@ -51,7 +51,7 @@ void InstrumentationProfiler::initFunctionScopeId(
     const std::vector<std::pair<size_t, size_t>> &scopeIdParentPairs) {
   // Initialize the scope IDs.
   functionScopeIdName[functionId] = scopeIdPairs;
-  functionScopeIdParentIds[functionId] = scopeIdParentPairs;
+  functionScopeIdParentId[functionId] = scopeIdParentPairs;
 }
 
 void InstrumentationProfiler::enterInstrumentedOp(uint64_t functionId,

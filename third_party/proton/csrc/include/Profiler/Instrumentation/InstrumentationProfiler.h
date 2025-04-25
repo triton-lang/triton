@@ -46,7 +46,7 @@ private:
       functionScopeIdName;
   // functionId -> scopeId -> parentScopeId
   std::map<uint64_t, std::vector<std::pair<size_t, size_t>>>
-      functionScopeIdParentIds;
+      functionScopeIdParentId;
 };
 
 } // namespace proton
