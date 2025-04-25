@@ -1,4 +1,4 @@
-// RUN: triton-opt %s -split-input-file -convert-proton-amd-gpu-to-llvm --verify-diagnostics | FileCheck %s
+// RUN: triton-opt %s -split-input-file -convert-proton-amd-gpu-to-llvm="arch=gfx942" --verify-diagnostics | FileCheck %s
 
 #shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
 #smem = #ttg.shared_memory
@@ -38,5 +38,18 @@ module attributes {"ttg.num-warps" = 8 : i32} {
   // CHECK: llvm.store %[[VAL]], %[[PTR]] : i32, !llvm.ptr<5>
     %0 = proton_gpu.init_buffer_index : <i32, 5>
     llvm.return
+  }
+}
+
+// -----
+
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-warps" = 8 : i32} {
+  // CHECK-LABEL: convert_smem_segment_setup
+   tt.func @convert_smem_segment_setup() -> !proton_gpu.seg {
+    %0 = ttg.local_alloc : () -> !ttg.memdesc<96xi32, #shared, #smem, mutable>
+    %3 = proton_gpu.segment_base %0, {selectIds = array<i32: 0, 1, 2>} : !ttg.memdesc<96xi32, #shared, #smem, mutable> -> !proton_gpu.seg
+    tt.return %3 : !proton_gpu.seg
   }
 }

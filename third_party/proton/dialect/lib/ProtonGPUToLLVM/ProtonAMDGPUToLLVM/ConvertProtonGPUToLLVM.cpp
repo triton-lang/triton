@@ -3,6 +3,9 @@
 #include "Conversion/ProtonGPUToLLVM/ProtonAMDGPUToLLVM/Passes.h"
 #include "Conversion/ProtonGPUToLLVM/ProtonAMDGPUToLLVM/TargetInfo.h"
 #include "Dialect/ProtonGPU/IR/Dialect.h"
+#include "mlir/Dialect/LLVMIR/ROCDLDialect.h"
+#include "mlir/Conversion/ArithToLLVM/ArithToLLVM.h"
+#include "mlir/Conversion/GPUToROCDL/GPUToROCDLPass.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 #include "triton/Conversion/TritonGPUToLLVM/TypeConverter.h"
@@ -24,9 +27,12 @@ public:
   explicit ProtonLLVMConversionTarget(MLIRContext &ctx)
       : ConversionTarget(ctx) {
     addLegalDialect<LLVM::LLVMDialect>();
+    addLegalDialect<ROCDL::ROCDLDialect>();
     addIllegalDialect<mlir::triton::proton::gpu::ProtonGPUDialect>();
     addIllegalDialect<mlir::triton::proton::ProtonDialect>();
     addLegalOp<mlir::UnrealizedConversionCastOp>();
+    addLegalOp<mlir::gpu::ThreadIdOp>();
+    addLegalOp<arith::IndexCastOp>();
   }
 };
 
@@ -49,6 +55,9 @@ struct ConvertProtonAMDGPUToLLVM
         typeConverter, patterns, protonTargetInfo, 1);
     mlir::triton::proton::gpu::AMD::populateProtonGPUOpAMDPatterns(
         typeConverter, patterns, protonTargetInfo, 1);
+    mlir::arith::populateArithToLLVMConversionPatterns(typeConverter, patterns);
+//    mlir::populateGpuToROCDLConversionPatterns(typeConverter, patterns,
+//                                               mlir::gpu::amd::HIP);    
     auto convTarget = ProtonLLVMConversionTarget(*context);
     if (failed(applyPartialConversion(mod, convTarget, std::move(patterns))))
       return signalPassFailure();
