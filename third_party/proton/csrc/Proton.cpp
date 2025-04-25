@@ -72,8 +72,10 @@ static void initProton(pybind11::module &&m) {
 
   m.def("init_scope_ids",
         [](uint64_t functionId,
-           const std::vector<std::pair<size_t, std::string>> &scopeIds) {
-          SessionManager::instance().initScopeIds(functionId, scopeIds);
+           const std::vector<std::pair<size_t, std::string>> &scopeIdName,
+           const std::vector<std::pair<size_t, size_t>> &scopeIdParent) {
+          SessionManager::instance().initFunctionScopeId(
+              functionId, scopeIdName, scopeIdParent);
         });
 
   m.def("enter_instrumented_op",

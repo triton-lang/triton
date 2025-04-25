@@ -17,7 +17,10 @@ namespace triton::proton {
 class ScopeIdAllocation {
 public:
   using ScopeId = size_t;
-  using ScopeIdPairs = std::vector<std::pair<ScopeId, std::string>>;
+  // id -> name
+  using ScopeIdName = std::vector<std::pair<ScopeId, std::string>>;
+  // id -> parent id
+  using ScopeIdParent = std::vector<std::pair<ScopeId, ScopeId>>;
 
   ScopeIdAllocation() = default;
   explicit ScopeIdAllocation(Operation *op) : funcOp(op) { run(); }
@@ -29,13 +32,15 @@ public:
     llvm_unreachable("unexpected operation type");
   }
 
-  ScopeIdPairs getScopeIdPairs() const {
-    ScopeIdPairs pairs;
+  ScopeIdName getScopeIdName() const {
+    ScopeIdName scopeIdName;
     for (const auto &pair : idToNameMap) {
-      pairs.push_back({pair.first, pair.second.str()});
+      scopeIdName.push_back({pair.first, pair.second.str()});
     }
-    return pairs;
+    return scopeIdName;
   }
+
+  ScopeIdParent getScopeIdParent() const { return scopeParentId; }
 
   size_t getNumScopes() const { return idToNameMap.size(); }
 
@@ -45,21 +50,33 @@ private:
   Operation *funcOp;
   llvm::DenseMap<ScopeId, StringRef> idToNameMap;
   llvm::DenseMap<Operation *, ScopeId> opToIdMap;
+  ScopeIdParent scopeParentId;
 };
 
 class ModuleScopeIdAllocation : public CallGraph<ScopeIdAllocation> {
 public:
   using FuncOffsetMapT =
-      DenseMap<FunctionOpInterface, ScopeIdAllocation::ScopeId>;
+      llvm::DenseMap<FunctionOpInterface, ScopeIdAllocation::ScopeId>;
+  // Alias for per-function name and parent maps
+  using ScopeIdNameMap =
+      llvm::DenseMap<FunctionOpInterface, ScopeIdAllocation::ScopeIdName>;
+  using ScopeIdParentMap =
+      llvm::DenseMap<FunctionOpInterface, ScopeIdAllocation::ScopeIdParent>;
 
   explicit ModuleScopeIdAllocation(ModuleOp moduleOp);
 
   ScopeIdAllocation::ScopeId getOpScopeId(Operation *op) const;
-  ScopeIdAllocation::ScopeIdPairs getScopeIdPairs(triton::FuncOp funcOp) const;
-  ScopeIdAllocation::ScopeIdPairs getScopeIdPairs() const;
+  ScopeIdAllocation::ScopeIdName getScopeIdName(triton::FuncOp funcOp) const;
+  ScopeIdAllocation::ScopeIdName getScopeIdName() const;
+  ScopeIdAllocation::ScopeIdParent
+  getScopeIdParent(triton::FuncOp funcOp) const;
+  ScopeIdAllocation::ScopeIdParent getScopeIdParent() const;
 
 private:
   FuncOffsetMapT funcScopeIdMap;
+  // Precomputed per-function mappings
+  ScopeIdNameMap scopeIdNames;
+  ScopeIdParentMap scopeIdParents;
 };
 
 } // namespace triton::proton

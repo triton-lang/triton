@@ -119,7 +119,8 @@ class InstrumentationHook(Hook):
 
     def __init__(self, mode_obj: Union[None, str, mode.InstrumentationMode]):
         # Mapping of function objects to their scope ID pairs
-        self.function_scope_ids: Dict[Any, List[Tuple[int, int]]] = {}
+        self.function_scope_id_name: Dict[Any, List[Tuple[int, str]]] = {}
+        self.function_scope_id_parent: Dict[Any, List[Tuple[int, int]]] = {}
         self.mode: mode.InstrumentationMode = _interpret_mode(mode_obj)
 
         self.allocator = CudaAllocator(self)
@@ -212,7 +213,7 @@ class InstrumentationHook(Hook):
         self.buffer = None
 
     def init_handle(self, function: Any, module: Any, metadata_group: Dict[str, str]) -> None:
-        if function and function not in self.function_scope_ids:
+        if function and function not in self.function_scope_id_name:
             # Find the IR path in metadata
             ir_path = next((path for key, path in metadata_group.items() if key.endswith(("ttgir", "ttir"))), None)
 
@@ -222,10 +223,12 @@ class InstrumentationHook(Hook):
                 triton_proton.load_dialects(context)
                 module = ir.parse_mlir_module(ir_path, context)
                 module.context = context
-                self.function_scope_ids[function] = triton_proton.get_scope_id_pairs(module)
+                self.function_scope_id_name[function] = triton_proton.get_scope_id_name(module)
+                self.function_scope_id_parent[function] = triton_proton.get_scope_id_parent(module)
 
-        scope_id_pairs = self.function_scope_ids.get(function, [])
-        libproton.init_scope_ids(function, scope_id_pairs)
+        scope_id_name = self.function_scope_id_name.get(function, [])
+        scope_id_parent = self.function_scope_id_parent.get(function, [])
+        libproton.init_scope_ids(function, scope_id_name, scope_id_parent)
 
     def _data_ptr(self) -> int:
         return 0 if self.buffer is None else self.buffer.data_ptr()

@@ -223,12 +223,14 @@ void SessionManager::exitOp(const Scope &scope) {
 
 void SessionManager::initScopeIds(
     uint64_t functionId,
-    const std::vector<std::pair<size_t, std::string>> &scopeIds) {
+    const std::vector<std::pair<size_t, std::string>> &scopeIdName,
+    const std::vector<std::pair<size_t, size_t>> &scopeIdParent) {
   std::lock_guard<std::mutex> lock(mutex);
-  executeInterface(
-      instrumentationInterfaceCounts, [&](auto *instrumentationInterface) {
-        instrumentationInterface->initScopeIds(functionId, scopeIds);
-      });
+  executeInterface(instrumentationInterfaceCounts,
+                   [&](auto *instrumentationInterface) {
+                     instrumentationInterface->initScopeIds(
+                         functionId, scopeIdName, scopeIdParent);
+                   });
 }
 
 void SessionManager::enterInstrumentedOp(uint64_t functionId, uint8_t *buffer,
