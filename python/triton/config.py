@@ -9,7 +9,6 @@ import sysconfig
 from dataclasses import dataclass
 from contextlib import contextmanager
 from typing import cast, Any, Callable, Generator, Generic, Optional, Protocol, Type, TypeVar, TypedDict, TYPE_CHECKING, Union
-from typing_extensions import Self
 
 if TYPE_CHECKING:
     from .runtime.cache import CacheManager, RemoteCacheBackend
@@ -208,6 +207,9 @@ def get_triton_dir(dirname: str) -> str:
     )
 
 
+config_type = TypeVar("config_type", bound='base_config')
+
+
 class base_config:
 
     @property
@@ -219,13 +221,13 @@ class base_config:
             if isinstance(v, env_base)
         }
 
-    def copy(self) -> Self:
+    def copy(self: config_type) -> config_type:
         res = type(self)()
         for k, v in self.__dict__.items():
             res.__dict__[k] = v
         return res
 
-    def reset(self) -> Self:
+    def reset(self: config_type) -> config_type:
         for knob in self.knobs.keys():
             delattr(self, knob)
         return self
