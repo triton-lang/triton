@@ -384,9 +384,8 @@ def get_type(provider):
 
 
 x_vals = [(1024 * v, 1024 * v, 1024 * v) for v in range(1, 9)]
-x_vals += [(4864, 4096, 8192), (9728, 8192, 65536), (4864, 8192, 4160)]
-# x_vals = []
-x_vals += [(16, 4096, 2048), (16, 4096, 4096)]
+x_vals += [(4864, 4096, 8192), (9728, 8192, 65536), (4864, 8192, 4096)]
+# x_vals += [(16, 4096, 2048), (16, 4096, 4096)]
 # x_vals += [(16, 16, 1024 * v) for v in range(1, 9)]
 # x_vals += [(32, 32, 1024 * v) for v in range(1, 9)]
 
@@ -411,19 +410,22 @@ for dtype_a, dtype_b in (('float8e4nv', 'float8e4nv'), ('float8e4nv', 'float4'),
     ))
 def benchmark(M, N, K, provider):
     dtype_c = "fp32"
-    # block_m = 256
-    # block_n = 256
-    # block_k = 128
-    block_m = 16
+    block_m = 256
     block_n = 256
-    block_k = 256
+    block_k = 128
+
+    # block_m = 16
+    # block_n = 256
+    # block_k = 256
     group_m = 1
     split_k = 1
-    num_warps = 8
     # num_stages = 3
     num_stages = 1
-    waves_per_eu = 2
-    mfmaInstrSize = 16
+    # waves_per_eu = 2
+    # num_warps = 8
+    num_warps = 4
+    waves_per_eu = 1
+    mfmaInstrSize = 0
     kpack = 1
 
     bias = None
@@ -468,32 +470,61 @@ if __name__ == "__main__":
         'BLOCK_SIZE_K': 128, 'GROUP_SIZE_M': 1, 'SPLIT_K': 1, 'num_warps': 8, 'num_stages': 2, 'waves_per_eu': 2,
         'matrix_instr_nonkdim': 16, 'kpack': 1
     }
+
+    # config.update({
+    #     'M': 4096,
+    #     'N': 4096,
+    #     'K': 4096,
+    #     'BLOCK_SIZE_M': 32,
+    #     'BLOCK_SIZE_N': 32,
+    #     'BLOCK_SIZE_K': 128,
+    # })
+
+    # config.update({
+    #     'M': 4096,
+    #     'N': 8192,
+    #     'K': 4096,
+    #     'BLOCK_SIZE_M': 16,
+    #     'BLOCK_SIZE_N': 256,
+    #     'BLOCK_SIZE_K': 256,
+    # })
+
     config.update({
-        'M': 4096,
-        'N': 4096,
-        'K': 4096,
-        'BLOCK_SIZE_M': 32,
-        'BLOCK_SIZE_N': 32,
-        'BLOCK_SIZE_K': 128,
+        'M': 4864, 'N': 8192,
+        # 'K': 4160,
+        'K': 4096, 'BLOCK_SIZE_M': 16, 'BLOCK_SIZE_N': 256, 'BLOCK_SIZE_K': 256, 'num_stages': 1
     })
+
+    # config.update({
+    #     'M': 7168,
+    #     'N': 7168,
+    #     'K': 7168,
+    #     'BLOCK_SIZE_M': 16,
+    #     'BLOCK_SIZE_N': 256,
+    #     'BLOCK_SIZE_K': 256,
+    #     'num_stages': 1
+    # })
+
     # Processing Items
     M = config["M"]
     N = config["N"]
     K = config["K"]
     col_a = config["rowMajorA"] == "N"
     col_b = config["rowMajorB"] == "N"
-    # dtype_a = "fp16"
-    # dtype_b = "fp16"
-    # dtype_c = "fp16"
-    dtype_a = "float8e4nv"
-    dtype_b = "float4"
-    dtype_c = "fp32"
+
     init_type = "randn"
-    # init_type = "const_layer"
-    # init_type = "trig_float"
     bias_vector = False
     scaled = True
     run_benchmark = True
+
+    if scaled:
+        dtype_a = "float8e4nv"
+        dtype_b = "float4"
+        dtype_c = "fp32"
+    else:
+        dtype_a = "fp16"
+        dtype_b = "fp16"
+        dtype_c = "fp16"
 
     # Load Configs
     block_m, block_n, block_k, group_m, split_k, num_warps, num_stages, waves_per_eu, mfmaInstrSize, kpack = read_config(

@@ -91,7 +91,7 @@ void init_triton_amd_passes_ttgpuir(py::module &&m) {
     pm.addNestedPass<mlir::triton::FuncOp>(
         mlir::createTritonAMDGPUInThreadTransposePass());
   });
-  ADD_PASS_WRAPPER_0("add_aggregate_load",
+  ADD_PASS_WRAPPER_1("add_aggregate_load",
                      mlir::createTritonAMDGPUAggregateLoadPass,
                      const std::string);
 }

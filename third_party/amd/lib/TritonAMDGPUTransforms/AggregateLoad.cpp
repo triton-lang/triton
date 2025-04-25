@@ -1,3 +1,4 @@
+#include "TritonAMDGPUToLLVM/TargetUtils.h"
 #include "TritonAMDGPUTransforms/Passes.h"
 #include "mlir/Dialect/Tensor/IR/Tensor.h"
 #include "mlir/IR/IRMapping.h"
@@ -19,6 +20,7 @@ namespace ttg = triton::gpu;
 #include "TritonAMDGPUTransforms/Passes.h.inc"
 
 namespace {
+using triton::AMD::ISAFamily;
 
 int64_t getAllocSize(ShapedType type) {
   int64_t numel = ShapedType::getNumElements(type.getShape());
@@ -61,12 +63,12 @@ void findValidLoads(scf::ForOp forOp,
 
       auto aScaleTy = dyn_cast<RankedTensorType>(aScale.getType());
       auto bScaleTy = dyn_cast<RankedTensorType>(bScale.getType());
-      if (!isa<ttg::LinearEncodingAttr>(aScaleTy.getEncoding())) {
-        llvm::outs() << "aScale is not linear layout\n";
-      }
-      if (!isa<ttg::LinearEncodingAttr>(bScaleTy.getEncoding())) {
-        llvm::outs() << "bScale is not linear layout\n";
-      }
+      // if (!isa<ttg::LinearEncodingAttr>(aScaleTy.getEncoding())) {
+      //   llvm::outs() << "aScale is not linear layout\n";
+      // }
+      // if (!isa<ttg::LinearEncodingAttr>(bScaleTy.getEncoding())) {
+      //   llvm::outs() << "bScale is not linear layout\n";
+      // }
       assert(isa<ttg::LinearEncodingAttr>(aScaleTy.getEncoding()) &&
              isa<ttg::LinearEncodingAttr>(bScaleTy.getEncoding()) &&
              "Both aScale and bScale should be linear layout.");
@@ -80,11 +82,11 @@ void findValidLoads(scf::ForOp forOp,
       auto aScaleShape = aScaleTy.getShape();
       auto bScaleShape = bScaleTy.getShape();
 
-      llvm::outs() << "ub: " << ub << "\n";
-      llvm::outs() << "aScaleShape: (" << aScaleShape[0] << ", "
-                   << aScaleShape[1] << ")\n";
-      llvm::outs() << "bScaleShape: (" << bScaleShape[0] << ", "
-                   << bScaleShape[1] << ")\n";
+      // llvm::outs() << "ub: " << ub << "\n";
+      // llvm::outs() << "aScaleShape: (" << aScaleShape[0] << ", "
+      //              << aScaleShape[1] << ")\n";
+      // llvm::outs() << "bScaleShape: (" << bScaleShape[0] << ", "
+      //              << bScaleShape[1] << ")\n";
       assert((aScaleShape[1] == bScaleShape[1]) &&
              "aScale and bScale should have the same K size.");
 
@@ -95,30 +97,38 @@ void findValidLoads(scf::ForOp forOp,
       }
 
       constexpr int byteWidth = 1;
-      int64_t globalScaleKDim = llvm::PowerOf2Ceil(aScaleShape[1] * ub);
+      // int limitedUpperBound = std::min(ub, 4);
+      int limitedUpperBound = ub;
+      // int64_t globalScaleKDim = llvm::PowerOf2Ceil(aScaleShape[1] * ub);
+      int64_t globalScaleKDim = aScaleShape[1] * ub;
+      if (!llvm::isPowerOf2_64(globalScaleKDim))
+        continue;
+      int64_t limitedScaleKDim =
+          llvm::PowerOf2Ceil(aScaleShape[1] * limitedUpperBound);
       int64_t largestScaleK =
           expandableMemory / ((aScaleShape[0] + bScaleShape[0]) * byteWidth);
 
       int64_t alignedHoistK = -1;
       int64_t hoistFactor = 1;
 
-      if (globalScaleKDim <= largestScaleK) {
+      if (limitedScaleKDim <= largestScaleK) {
         // TODO: Hoist entire aScale and bScale.
-        alignedHoistK = globalScaleKDim;
+        // alignedHoistK = globalScaleKDim;
+        alignedHoistK = limitedScaleKDim;
       } else {
         // Determine largest hoist K size, by getting largest divisor of globalK
         // that is <= largestK.
         // TODO: Need to add assert to make sure %2 == 0 and or K needs to be
         // power of 2 aligned.
-        for (int i = globalScaleKDim; i > 0; i /= 2) {
+        for (int i = limitedScaleKDim; i > 0; i /= 2) {
           if (i <= largestScaleK) {
             alignedHoistK = i;
             break;
           }
         }
         assert(alignedHoistK > 0 && "Cannot determine hoisted-K size.");
-        hoistFactor = globalScaleKDim / alignedHoistK;
       }
+      hoistFactor = (globalScaleKDim + alignedHoistK - 1) / alignedHoistK;
 
       int64_t newMemoryUsed =
           (aScaleShape[0] + bScaleShape[0]) * alignedHoistK * byteWidth;
@@ -218,18 +228,21 @@ Value createLocalAlloc(OpBuilder &builder, Location loc, Value loadVal,
   auto tensorTy = dyn_cast<RankedTensorType>(loadVal.getType());
   SmallVector<int64_t> bufferShape(tensorTy.getShape().begin(),
                                    tensorTy.getShape().end());
-  llvm::outs() << "bufferShape(" << bufferShape.size() << "): ("
-               << bufferShape[0] << ", " << bufferShape[1] << ")\n";
+  // llvm::outs() << "bufferShape(" << bufferShape.size() << "): ("
+  //              << bufferShape[0] << ", " << bufferShape[1] << ")\n";
 
-  auto isaFamily = triton::AMD::deduceISAFamily(archGenerationName);
+  auto isaFamily = triton::AMD::deduceISAFamily(archGen);
   const unsigned numBanks = (isaFamily == ISAFamily::CDNA4) ? 64 : 32;
   const unsigned bankBitWidth = 32;
   const unsigned simdWidth = 16;
   constexpr int elemBitWidth = 8; // scale is 8-bit E8M0 float
   int elemsPerOneBanksRow = (numBanks * bankBitWidth) / elemBitWidth;
-  int perPhase = std::max(1, elemsPerOneBanksRow / hoistKSize);
+  int perPhase =
+      std::max(1, static_cast<int>(elemsPerOneBanksRow / hoistKSize));
   int maxPhase =
-      std::max(std::min(simdWidth / perPhase, hoistKSize / blockKSize), 1u);
+      std::max(std::min(simdWidth / perPhase,
+                        static_cast<unsigned>(hoistKSize / blockKSize)),
+               1u);
 
   Type eType = tensorTy.getElementType();
   auto CTALayout = ttg::getCTALayout(tensorTy.getEncoding());
@@ -549,12 +562,12 @@ struct AggregateLoad : public TritonAMDGPUAggregateLoadBase<AggregateLoad> {
       // Get aScale and bScale size.
       auto aScaleType = llvm::cast<ShapedType>(aScale.getType());
       auto bScaleType = llvm::cast<ShapedType>(bScale.getType());
-      if (!aScaleType.hasStaticShape()) {
-        llvm::outs() << "aScaleType doesn't have static shape\n";
-      }
-      if (!bScaleType.hasStaticShape()) {
-        llvm::outs() << "bScaleType doesn't have static shape\n";
-      }
+      // if (!aScaleType.hasStaticShape()) {
+      //   llvm::outs() << "aScaleType doesn't have static shape\n";
+      // }
+      // if (!bScaleType.hasStaticShape()) {
+      //   llvm::outs() << "bScaleType doesn't have static shape\n";
+      // }
       assert(aScaleType.hasStaticShape() &&
              "Expected tt.dot to have aScale as static shape.");
       assert(bScaleType.hasStaticShape() &&
@@ -562,9 +575,9 @@ struct AggregateLoad : public TritonAMDGPUAggregateLoadBase<AggregateLoad> {
       int64_t aScaleAllocSize = getAllocSize(aScaleType);
       int64_t bScaleAllocSize = getAllocSize(bScaleType);
       totalSharedMemoryUsage += aScaleAllocSize + bScaleAllocSize;
-      if (foundDotScaledOp) {
-        llvm::outs() << "Currently only support a single dot operation.\n";
-      }
+      // if (foundDotScaledOp) {
+      //   llvm::outs() << "Currently only support a single dot operation.\n";
+      // }
       assert(!foundDotScaledOp &&
              "Currently only support a single dot operation.");
       foundDotScaledOp = true;
@@ -572,11 +585,11 @@ struct AggregateLoad : public TritonAMDGPUAggregateLoadBase<AggregateLoad> {
     // llvm::outs() << "before: " << *getOperation() << "\n";
 
     if (!foundDotScaledOp) {
-      llvm::outs() << "Didn't find dotScaledOp for AggregateLoad\n";
+      // llvm::outs() << "Didn't find dotScaledOp for AggregateLoad\n";
       return;
     }
 
-    llvm::outs() << "Total smem Usage:" << totalSharedMemoryUsage << "\n";
+    // llvm::outs() << "Total smem Usage:" << totalSharedMemoryUsage << "\n";
 
     // Do the pipelining
     size_t cnt = 0;
@@ -590,23 +603,19 @@ struct AggregateLoad : public TritonAMDGPUAggregateLoadBase<AggregateLoad> {
       SmallVector<std::pair<int64_t, int64_t>> hoistLoopSpecs;
       findValidLoads(forOp, validLoads, hoistLoopSpecs, ub,
                      totalSharedMemoryUsage);
-      llvm::outs() << "validLoads.size(): " << validLoads.size() << "\n";
+      // llvm::outs() << "validLoads.size(): " << validLoads.size() << "\n";
       for (auto [index, loadOps] : llvm::enumerate(validLoads)) {
         auto [hoistKSize, hoistFactor] = hoistLoopSpecs[index];
-        llvm::outs() << "hoistKSize: " << hoistKSize
-                     << ", hoistFactor: " << hoistFactor << "\n";
+        // llvm::outs() << "hoistKSize: " << hoistKSize
+        //              << ", hoistFactor: " << hoistFactor << "\n";
         auto aScaleLoadOp = loadOps.first;
         auto bScaleLoadOp = loadOps.second;
         auto aScaleLocalAllocValue = hoistLoad(forOp, aScaleLoadOp, hoistKSize,
                                                ub, this->archGenerationName);
-        // llvm::outs() << "hoist aScale\n";
         auto bScaleLocalAllocValue = hoistLoad(forOp, bScaleLoadOp, hoistKSize,
                                                ub, this->archGenerationName);
-        // llvm::outs() << "hoist bScale\n";
         processLoopBody(forOp, aScaleLoadOp, aScaleLocalAllocValue);
-        // llvm::outs() << "process loop body for aScale\n";
         processLoopBody(forOp, bScaleLoadOp, bScaleLocalAllocValue);
-        // llvm::outs() << "process loop body for bScale\n";
         if (hoistFactor > 1) {
           generateOuterLoop(forOp, aScaleLocalAllocValue, bScaleLocalAllocValue,
                             hoistFactor, hoistKSize);
@@ -614,7 +623,7 @@ struct AggregateLoad : public TritonAMDGPUAggregateLoadBase<AggregateLoad> {
         cnt++;
       }
     });
-    llvm::outs() << cnt << " for-loop has been modified\n";
+    // llvm::outs() << cnt << " for-loop has been modified\n";
     // llvm::outs() << "after: " << *getOperation() << "\n";
   }
 };
