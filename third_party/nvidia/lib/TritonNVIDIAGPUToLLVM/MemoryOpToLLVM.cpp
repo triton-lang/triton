@@ -178,6 +178,9 @@ LogicalResult lowerDistributedToSharedStmatrix(
     Value adaptorSrc, Value smemBase, Type llvmElemTy,
     ConversionPatternRewriter &rewriter, const TargetInfoBase &targetInfo,
     std::pair<size_t, Type> *const llvmOpCount = nullptr) {
+  if (targetInfo.getComputeCapability() < 90)
+    return failure();
+
   assert(llvmOpCount == nullptr && "NYI");
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   auto *ctx = tensorTy.getContext();
@@ -196,13 +199,12 @@ LogicalResult lowerDistributedToSharedStmatrix(
   // Just stmatrix for now
   // 1) NYI in the stmatrix lowering
   auto bitwidth = tensorTy.getElementTypeBitWidth();
-  if (bitwidth != 16) {
+  if (bitwidth != 16)
     return failure();
-  }
+
   // NYI.
-  if (regL.getInDimSize(kBlock) != 1) {
+  if (regL.getInDimSize(kBlock) != 1)
     return failure();
-  }
 
   // Compute quotient
   auto tile = LinearLayout::identity1D(32 / bitwidth, kReg, kOffset) *
