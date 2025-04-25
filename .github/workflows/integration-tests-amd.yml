@@ -23,7 +23,6 @@ jobs:
       PROTON_SKIP_PC_SAMPLING_TEST: 1
       PYTHON: "python3"
       CCACHE_COMPRESS: "true"
-    name: Integration-Tests (${{matrix.runner[1] == 'gfx90a' && 'mi210' || 'mi300x'}})
     container:
       image: rocm/pytorch:rocm6.2.2_ubuntu22.04_py3.10_pytorch_2.5.1_asan
       options: --device=/dev/kfd --device=/dev/dri --security-opt seccomp=unconfined --group-add video --user root
