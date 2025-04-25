@@ -258,31 +258,27 @@ static Value permuteAndReduce(RewriterBase &rewriter, Location loc,
 }
 
 // Apply warp reduction across lanes using llvm intrinsics in GFX950.
-// The input acc has the partial accumulated value from reduction within
-// threads. The output acc has the final accumulated value.
+// The input acc has the partial accumulated values from reduction within
+// threads. The output acc has the final accumulated values.
 //
-// The thread layout must be mfma input layout,
-// For the mfma_32x32 layout:
+// Two special cases are supported:
+// When numLaneToReduce == 2 && interleave == 32:
 //   step 1: use permlane32_swap() to swap the row 2 and 3 of acc and
 //           the row 0 and 1 of the copy of acc
 //   step 2: apply reduction to the result values to get final result
-// For the mfma_16x16 layout:
+// When numLaneToReduce == 4 && interleave == 16:
 //   step 1: use permlane32_swap() to swap the row 2 and 3 of acc and
 //           the row 0 and 1 of the copy of acc
 //   step 2: apply reduction to the result values to get the partial result
 //   step 3: use permlane16_swap() to swap the odd and even rows of
 //           the partial results
 //   step 4: apply reduction to get the final results
-static bool warpReduceCDNA4(RewriterBase &rewriter, Location loc,
-                            SmallVector<Value> &acc, triton::ReduceOp op,
-                            unsigned numLaneToReduce, unsigned interleave) {
+static bool warpReduceSwap16or32(RewriterBase &rewriter, Location loc,
+                                 SmallVector<Value> &acc, triton::ReduceOp op,
+                                 unsigned numLaneToReduce,
+                                 unsigned interleave) {
   Operation *reduxOp = op.getSingleCombiner();
   if (!reduxOp)
-    return false;
-
-  auto srcTy = op.getInputTypes()[0];
-  auto mfmaLayout = dyn_cast<AMDMfmaEncodingAttr>(srcTy.getEncoding());
-  if (!mfmaLayout)
     return false;
 
   bool mfma32Case = numLaneToReduce == 2 && interleave == 32;
@@ -316,7 +312,7 @@ bool TargetInfo::warpReduce(RewriterBase &rewriter, Location loc,
   auto b = TritonLLVMOpBuilder(loc, rewriter);
 
   if (isCDNA() && getISAFamily() == ISAFamily::CDNA4 &&
-      warpReduceCDNA4(rewriter, loc, acc, op, numLaneToReduce, interleave))
+      warpReduceSwap16or32(rewriter, loc, acc, op, numLaneToReduce, interleave))
     return true;
   if (numLaneToReduce != getWarpSize())
     return false;
