@@ -692,9 +692,7 @@ static LogicalResult pipelineMMA(scf::ForOp &loop, PipelinedMMA &mma,
   oldAllocOp.erase();
 
   // Case 1: The MMA result is only read after the loop.
-  if (!!overwriteOp != !!readOp)
-    return fail("accumulator read but not overwritten");
-  if (!overwriteOp) {
+  if (!readOp) {
     b.setInsertionPoint(loop);
     Value doneBar = createBarrierAlloc(loop, /*numBarriers=*/1);
     doneBar = createSingleBufferView(b, doneBar, 0);
