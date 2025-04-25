@@ -18,7 +18,7 @@ void ScopeIdAllocation::run() {
         idToNameMap[id] = name;
         opToIdMap[recordOp] = id;
         if (!scopeIdStack.empty()) {
-          scopeParentId.push_back({id, scopeIdStack.top()});
+          scopeParentIds.push_back({id, scopeIdStack.top()});
         }
         scopeIdStack.push(id);
         id++;
@@ -61,12 +61,12 @@ ModuleScopeIdAllocation::ModuleScopeIdAllocation(ModuleOp moduleOp)
   // Precompute per-function scope id mappings
   for (auto [funcOp, offset] : funcScopeIdMap) {
     // Names
-    auto names = funcMap.lookup(funcOp).getScopeIdName();
+    auto names = funcMap.lookup(funcOp).getScopeIdNames();
     for (auto &p : names)
       p.first += offset;
     scopeIdNames[funcOp] = std::move(names);
     // Parents
-    auto parents = funcMap.lookup(funcOp).getScopeIdParent();
+    auto parents = funcMap.lookup(funcOp).getScopeIdParents();
     for (auto &p : parents) {
       p.first += offset;
       p.second += offset;
@@ -83,11 +83,12 @@ ModuleScopeIdAllocation::getOpScopeId(Operation *op) const {
 }
 
 ScopeIdAllocation::ScopeIdName
-ModuleScopeIdAllocation::getScopeIdName(triton::FuncOp funcOp) const {
+ModuleScopeIdAllocation::getScopeIdNames(triton::FuncOp funcOp) const {
   return scopeIdNames.lookup(funcOp);
 }
 
-ScopeIdAllocation::ScopeIdName ModuleScopeIdAllocation::getScopeIdName() const {
+ScopeIdAllocation::ScopeIdName
+ModuleScopeIdAllocation::getScopeIdNames() const {
   ScopeIdAllocation::ScopeIdName combined;
   for (auto &entry : scopeIdNames)
     combined.insert(combined.end(), entry.second.begin(), entry.second.end());
@@ -95,12 +96,12 @@ ScopeIdAllocation::ScopeIdName ModuleScopeIdAllocation::getScopeIdName() const {
 }
 
 ScopeIdAllocation::ScopeIdParent
-ModuleScopeIdAllocation::getScopeIdParent(triton::FuncOp funcOp) const {
+ModuleScopeIdAllocation::getScopeIdParents(triton::FuncOp funcOp) const {
   return scopeIdParents.lookup(funcOp);
 }
 
 ScopeIdAllocation::ScopeIdParent
-ModuleScopeIdAllocation::getScopeIdParent() const {
+ModuleScopeIdAllocation::getScopeIdParents() const {
   ScopeIdAllocation::ScopeIdParent combined;
   for (auto &entry : scopeIdParents)
     combined.insert(combined.end(), entry.second.begin(), entry.second.end());

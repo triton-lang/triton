@@ -45,13 +45,13 @@ InstrumentationProfiler::setMode(const std::vector<std::string> &mode) {
   return this;
 }
 
-void InstrumentationProfiler::initFunctionScopeId(
+void InstrumentationProfiler::initFunctionScopeIds(
     uint64_t functionId,
     const std::vector<std::pair<size_t, std::string>> &scopeIdPairs,
     const std::vector<std::pair<size_t, size_t>> &scopeIdParentPairs) {
   // Initialize the scope IDs.
-  functionScopeIdName[functionId] = scopeIdPairs;
-  functionScopeIdParentId[functionId] = scopeIdParentPairs;
+  functionScopeIdNames[functionId] = scopeIdPairs;
+  functionScopeIdParentIds[functionId] = scopeIdParentPairs;
 }
 
 void InstrumentationProfiler::enterInstrumentedOp(uint64_t functionId,

@@ -137,10 +137,10 @@ public:
   InstrumentationInterface() = default;
   virtual ~InstrumentationInterface() = default;
 
-  virtual void initFunctionScopeId(
+  virtual void initFunctionScopeIds(
       uint64_t functionId,
-      const std::vector<std::pair<size_t, std::string>> &scopeIdName,
-      const std::vector<std::pair<size_t, size_t>> &scopeIdParent) = 0;
+      const std::vector<std::pair<size_t, std::string>> &scopeIdNames,
+      const std::vector<std::pair<size_t, size_t>> &scopeIdParents) = 0;
   virtual void enterInstrumentedOp(uint64_t functionId, uint8_t *buffer,
                                    size_t size) = 0;
   virtual void exitInstrumentedOp(uint64_t functionId, uint8_t *buffer,

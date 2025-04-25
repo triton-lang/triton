@@ -101,10 +101,10 @@ public:
 
   void exitOp(const Scope &scope);
 
-  void initFunctionScopeId(
+  void initFunctionScopeIds(
       uint64_t functionId,
-      const std::vector<std::pair<size_t, std::string>> &scopeIdName,
-      const std::vector<std::pair<size_t, size_t>> &scopeIdParent);
+      const std::vector<std::pair<size_t, std::string>> &scopeIdNames,
+      const std::vector<std::pair<size_t, size_t>> &scopeIdParents);
 
   void enterInstrumentedOp(uint64_t functionId, uint8_t *buffer, size_t size);
 

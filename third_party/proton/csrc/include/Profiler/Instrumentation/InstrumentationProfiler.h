@@ -25,11 +25,10 @@ protected:
   virtual void doStop() override;
 
   // InstrumentationInterface
-  void initFunctionScopeId(
+  void initFunctionScopeIds(
       uint64_t functionId,
-      const std::vector<std::pair<size_t, std::string>> &scopeIdPairs,
-      const std::vector<std::pair<size_t, size_t>> &scopeIdParentPairs)
-      override;
+      const std::vector<std::pair<size_t, std::string>> &scopeIdNames,
+      const std::vector<std::pair<size_t, size_t>> &scopeIdParentIds) override;
   void enterInstrumentedOp(uint64_t functionId, uint8_t *buffer,
                            size_t size) override;
   void exitInstrumentedOp(uint64_t functionId, uint8_t *buffer,
@@ -43,10 +42,10 @@ private:
   uint8_t *hostBuffer{nullptr};
   // functionId -> scopeId -> functionName
   std::map<uint64_t, std::vector<std::pair<size_t, std::string>>>
-      functionScopeIdName;
+      functionScopeIdNames;
   // functionId -> scopeId -> parentScopeId
   std::map<uint64_t, std::vector<std::pair<size_t, size_t>>>
-      functionScopeIdParentId;
+      functionScopeIdParentIds;
 };
 
 } // namespace proton

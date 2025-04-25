@@ -32,15 +32,15 @@ public:
     llvm_unreachable("unexpected operation type");
   }
 
-  ScopeIdName getScopeIdName() const {
-    ScopeIdName scopeIdName;
+  ScopeIdName getScopeIdNames() const {
+    ScopeIdName scopeIdNames;
     for (const auto &pair : idToNameMap) {
-      scopeIdName.push_back({pair.first, pair.second.str()});
+      scopeIdNames.push_back({pair.first, pair.second.str()});
     }
-    return scopeIdName;
+    return scopeIdNames;
   }
 
-  ScopeIdParent getScopeIdParent() const { return scopeParentId; }
+  ScopeIdParent getScopeIdParents() const { return scopeParentIds; }
 
   size_t getNumScopes() const { return idToNameMap.size(); }
 
@@ -50,7 +50,7 @@ private:
   Operation *funcOp;
   llvm::DenseMap<ScopeId, StringRef> idToNameMap;
   llvm::DenseMap<Operation *, ScopeId> opToIdMap;
-  ScopeIdParent scopeParentId;
+  ScopeIdParent scopeParentIds;
 };
 
 class ModuleScopeIdAllocation : public CallGraph<ScopeIdAllocation> {
@@ -66,11 +66,11 @@ public:
   explicit ModuleScopeIdAllocation(ModuleOp moduleOp);
 
   ScopeIdAllocation::ScopeId getOpScopeId(Operation *op) const;
-  ScopeIdAllocation::ScopeIdName getScopeIdName(triton::FuncOp funcOp) const;
-  ScopeIdAllocation::ScopeIdName getScopeIdName() const;
+  ScopeIdAllocation::ScopeIdName getScopeIdNames(triton::FuncOp funcOp) const;
+  ScopeIdAllocation::ScopeIdName getScopeIdNames() const;
   ScopeIdAllocation::ScopeIdParent
-  getScopeIdParent(triton::FuncOp funcOp) const;
-  ScopeIdAllocation::ScopeIdParent getScopeIdParent() const;
+  getScopeIdParents(triton::FuncOp funcOp) const;
+  ScopeIdAllocation::ScopeIdParent getScopeIdParents() const;
 
 private:
   FuncOffsetMapT funcScopeIdMap;
