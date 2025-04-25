@@ -583,23 +583,37 @@ def download_and_copy_dependencies():
 backends = [*BackendInstaller.copy(["nvidia", "amd"]), *BackendInstaller.copy_externals()]
 
 
+def language_extras_install_path():
+    return os.path.abspath(os.path.join(os.path.dirname(__file__), "python", "triton", "language", "extra"))
+
+def tools_extra_install_path():
+    return os.path.abspath(os.path.join(os.path.dirname(__file__), "python", "triton", "tools", "extra"))
+
 def get_package_dirs():
     yield ("", "python")
 
     for backend in backends:
-        yield (f"triton.backends.{backend.name}", backend.backend_dir)
+        # Note that all paths must be relative to the specified package.
+
+        yield (f"triton.backends.{backend.name}", os.path.relpath(backend.install_dir))
 
         if backend.language_dir:
+            extra_dir = language_extras_install_path()
+
             # Install the contents of each backend's `language` directory into
             # `triton.language.extra`.
             for x in os.listdir(backend.language_dir):
-                yield (f"triton.language.extra.{x}", os.path.join(backend.language_dir, x))
+                install_path = os.path.relpath(os.path.join(extra_dir, x))
+                yield (f"triton.language.extra.{x}", install_path)
 
         if backend.tools_dir:
             # Install the contents of each backend's `tools` directory into
             # `triton.tools.extra`.
+            extra_dir = tools_extra_install_path()
+
             for x in os.listdir(backend.tools_dir):
-                yield (f"triton.tools.extra.{x}", os.path.join(backend.tools_dir, x))
+                install_path = os.path.relpath(os.path.join(extra_dir, x))
+                yield (f"triton.tools.extra.{x}", install_path)
 
     if check_env_flag("TRITON_BUILD_PROTON", "ON"):  # Default ON
         yield ("triton.profiler", "third_party/proton/proton")
@@ -612,8 +626,7 @@ def add_link_to_backends():
         if backend.language_dir:
             # Link the contents of each backend's `language` directory into
             # `triton.language.extra`.
-            extra_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "python", "triton", "language",
-                                                     "extra"))
+            extra_dir = language_extras_install_path()
             for x in os.listdir(backend.language_dir):
                 src_dir = os.path.join(backend.language_dir, x)
                 install_dir = os.path.join(extra_dir, x)
@@ -622,7 +635,7 @@ def add_link_to_backends():
         if backend.tools_dir:
             # Link the contents of each backend's `tools` directory into
             # `triton.tools.extra`.
-            extra_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "python", "triton", "tools", "extra"))
+            extra_dir = tools_extra_install_path()
             for x in os.listdir(backend.tools_dir):
                 src_dir = os.path.join(backend.tools_dir, x)
                 install_dir = os.path.join(extra_dir, x)
