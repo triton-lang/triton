@@ -167,6 +167,8 @@ void WarpSchedule::serialize(scf::ForOp loop) const {
                  b.getI32IntegerAttr(partition->getIndex()));
     }
   }
+  for (Partition &partition : getPartitions())
+    stages.push_back(b.getI32IntegerAttr(partition.getStage()));
   loop->setAttr(kPartitionStagesAttrName, b.getArrayAttr(stages));
 }
 
