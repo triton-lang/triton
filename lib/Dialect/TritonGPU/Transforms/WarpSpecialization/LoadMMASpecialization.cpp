@@ -237,6 +237,7 @@ struct PartitionBuilder : public ImplicitLocOpBuilder {
   template <typename OpT, typename... Args>
   auto createInPartition(Partition &partition, Args &&...args) {
     auto op = create<OpT>(std::forward<Args>(args)...);
+    op->setAttr(kPartitionAttrName, getI32IntegerAttr(partition.getIndex()));
     partition.insert(op);
     return op;
   }
@@ -751,10 +752,6 @@ static LogicalResult pipelineMMA(scf::ForOp &loop, PipelinedMMA &mma,
       *schedule.getPartition(producerAcquire), emptyBar, phase, userPred);
 
   // Producer commit.
-  llvm::SetVector<Operation *> predOps;
-  if (!getDominatingValueSetOpsToHoist(domInfo, mma.mmaOp, userPred, predOps))
-    return fail("failed to hoist predicate ops above MMA");
-  hoistOpsBefore(mma.mmaOp, predOps);
   b.setInsertionPoint(mma.mmaOp);
   Value readyBar = createSingleBufferView(b, readyBars, index);
   mma.mmaOp.addCompletionBarrier(readyBar, userPred);
@@ -782,6 +779,14 @@ static LogicalResult pipelineMMA(scf::ForOp &loop, PipelinedMMA &mma,
                             domInfo);
   replaceAllUsesDominatedBy(nextPhase.getDefiningOp(), nextPhase, phase,
                             domInfo);
+
+  llvm::SetVector<Operation *> predOps;
+  Operation *hoistPt =
+      findNearestCommonDominator(llvm::to_vector(userPred.getUsers()), domInfo);
+  if (!getDominatingValueSetOpsToHoist(
+          domInfo, body.findAncestorOpInBlock(*hoistPt), userPred, predOps))
+    return fail("failed to hoist predicate ops above MMA");
+  hoistOpsBefore(hoistPt, predOps);
   return success();
 }
 
@@ -853,14 +858,16 @@ void LoadMMASpecialization::runOnOperation() {
   });
   for (scf::ForOp loop : loops) {
     PartitionScheme scheme = assignPartitions(loop);
-    WarpSchedule schedule = getInitialSchedule(scheme);
-    if (failed(lowerLoops(loop, scheme, schedule,
-                          getNumStagesOrDefault(loop, numStages))))
+    if (scheme.loads.empty() && scheme.mmas.empty())
       continue;
+    WarpSchedule schedule = getInitialSchedule(scheme);
     schedule.serialize(loop);
+    int loopNumStages = getNumStagesOrDefault(loop, numStages);
+    if (failed(lowerLoops(loop, scheme, schedule, loopNumStages)))
+      continue;
     // HACK: Set this attribute so that LowerLoops will multi-buffer TMA
     // descriptors.
     loop->setAttr(kScheduledMaxStageAttrName,
-                  Builder(&getContext()).getI32IntegerAttr(numStages));
+                  Builder(&getContext()).getI32IntegerAttr(loopNumStages));
   }
 }
