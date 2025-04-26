@@ -15,6 +15,7 @@ def ConvertProtonAMDGPUToLLVM : Pass<"convert-proton-amd-gpu-to-llvm", "mlir::Mo
                              "mlir::gpu::GPUDialect",
                              "mlir::scf::SCFDialect",
                              "mlir::LLVM::LLVMDialect",
+      						 "mlir::ROCDL::ROCDLDialect",
                              "mlir::triton::TritonDialect",
                              "mlir::triton::gpu::TritonGPUDialect",
                              "mlir::triton::proton::ProtonDialect",
