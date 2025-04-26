@@ -39,7 +39,6 @@ Value getLinearId(Location loc, ConversionPatternRewriter &rewriter) {
   return linearId;
 }
 
-
 namespace {
 
 struct InitBufferIndexOpConversion

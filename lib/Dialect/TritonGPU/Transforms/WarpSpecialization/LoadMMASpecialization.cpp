@@ -12,6 +12,7 @@
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "triton/Dialect/TritonGPU/Transforms/WarpSpecialization.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
+#include "triton/Dialect/TritonNvidiaGPU/Transforms/TMAUtilities.h"
 
 using namespace mlir;
 using namespace triton;
@@ -139,8 +140,11 @@ static void lowerTMACopy(ImplicitLocOpBuilder &b, Partition &partition,
   if (auto load = dyn_cast<DescriptorLoadOp>(op)) {
     Value tmaPtr = createInPartition<ttng::TensorDescToTMAPtrOp>(
         b, partition, load.getDesc());
+    auto indices = ttng::translateTMAIndices(
+        b, load.getLoc(), load.getDesc().getType().getBlockType().getEncoding(),
+        load.getIndices());
     createInPartition<ttng::AsyncTMACopyGlobalToLocalOp>(
-        b, partition, tmaPtr, load.getIndices(), barrier, view, truePred);
+        b, partition, tmaPtr, indices, barrier, view, truePred);
   } else {
     auto gather = cast<DescriptorGatherOp>(op);
     Value tmaPtr = createInPartition<ttng::TensorDescToTMAPtrOp>(

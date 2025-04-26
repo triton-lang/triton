@@ -11,11 +11,7 @@ namespace proton {
 
 constexpr size_t HOST_BUFFER_SIZE = 64 * 1024 * 1024;
 
-InstrumentationProfiler::~InstrumentationProfiler() {
-  if (hostBuffer != nullptr) {
-    runtime->freeHostBuffer(hostBuffer);
-  }
-}
+InstrumentationProfiler::~InstrumentationProfiler() {}
 
 void InstrumentationProfiler::doStart() {
   // Start the instrumentation profiler.
@@ -27,6 +23,12 @@ void InstrumentationProfiler::doFlush() {
 
 void InstrumentationProfiler::doStop() {
   // Stop the instrumentation profiler.
+  // FIXME: Also we should ensure the context is valid before releasing the
+  // memory
+  if (hostBuffer != nullptr) {
+    runtime->freeHostBuffer(hostBuffer);
+    hostBuffer = nullptr;
+  }
 }
 
 InstrumentationProfiler *
@@ -44,31 +46,26 @@ InstrumentationProfiler::setMode(const std::vector<std::string> &mode) {
   return this;
 }
 
-void InstrumentationProfiler::initScopeIds(
+void InstrumentationProfiler::initFunctionScopeIds(
     uint64_t functionId,
-    const std::vector<std::pair<size_t, std::string>> &scopeIdPairs) {
-  // Initialize the scope IDs.
-  functionScopeIds[functionId] = scopeIdPairs;
+    const std::vector<std::pair<size_t, std::string>> &scopeIdPairs,
+    const std::vector<std::pair<size_t, size_t>> &scopeIdParentPairs) {
+  functionScopeIdNames[functionId] = scopeIdPairs;
+  functionScopeIdParentIds[functionId] = scopeIdParentPairs;
 }
 
 void InstrumentationProfiler::enterInstrumentedOp(uint64_t functionId,
                                                   uint8_t *buffer,
                                                   size_t size) {
-  // If the buffer is null, we cannot process it.
-  if (!buffer)
-    return;
-  // Enter an instrumented operation.
-  if (hostBuffer == nullptr) {
+  if (!hostBuffer) {
     runtime->allocateHostBuffer(&hostBuffer, HOST_BUFFER_SIZE);
   }
 }
 
 void InstrumentationProfiler::exitInstrumentedOp(uint64_t functionId,
                                                  uint8_t *buffer, size_t size) {
-  // If the buffer is null, we cannot process it.
-  if (!buffer)
+  if (!buffer || !hostBuffer)
     return;
-  // Exit an instrumented operation.
   uint64_t device = runtime->getDevice();
   void *&stream = deviceStreams[reinterpret_cast<void *>(device)];
   if (!stream) {
