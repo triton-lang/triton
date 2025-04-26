@@ -726,58 +726,46 @@ static LogicalResult pipelineMMA(scf::ForOp &loop, PipelinedMMA &mma,
   }
 
   Partition &mmaPartition = *schedule.getPartition(mma.mmaOp);
-  Partition &resetPartition = *schedule.getPartition(overwriteOp);
   Partition &readPartition =
       *schedule.getPartition(body.findAncestorOpInBlock(*readOp));
-
-  Operation *producerAcquire, *consumerRelease;
-  if (&mmaPartition == &resetPartition) {
-    // Case 2a: The reset occurs in the MMA partition.
-    producerAcquire = overwriteOp;
-    consumerRelease = readOp;
-  } else if (&readPartition == &resetPartition) {
-    // Case 2b: The reset occurs in the read partition.
-    producerAcquire = mma.mmaOp;
-    consumerRelease = overwriteOp;
-  } else {
-    // Case 2c: Reset and read are in two different partitions.
-    return fail("accumulator def and use in distinct partitions from MMA");
-  }
-
-  // Producer acquire.
-  b.setInsertionPoint(producerAcquire);
-  Value emptyBar = createSingleBufferView(b, emptyBars, index);
-  b.createInPartition<ttng::WaitBarrierOp>(
-      *schedule.getPartition(producerAcquire), emptyBar, phase, userPred);
 
   // Producer commit.
   b.setInsertionPoint(mma.mmaOp);
   Value readyBar = createSingleBufferView(b, readyBars, index);
   mma.mmaOp.addCompletionBarrier(readyBar, userPred);
 
-  // Consumer wait.
+  // Place the consumer wait before the read.
   b.setInsertionPoint(readOp);
   readyBar = createSingleBufferView(b, readyBars, index);
   b.createInPartition<ttng::WaitBarrierOp>(readPartition, readyBar, phase);
 
-  // Consumer release.
+  // Place the consumer release after the read, and after the write as well if
+  // it is in the user partition.
+  Operation *consumerRelease = overwriteOp;
+  if (mma.storeOp)
+    consumerRelease = readOp;
   b.setInsertionPointAfter(consumerRelease);
-  emptyBar = createSingleBufferView(b, emptyBars, index);
-  b.createInPartition<ttng::ArriveBarrierOp>(
-      *schedule.getPartition(body.findAncestorOpInBlock(*consumerRelease)),
-      emptyBar, /*arriveCount=*/1);
-  if (consumerRelease == readOp)
-    consumerRelease = consumerRelease->getNextNode();
+  Value emptyBar = createSingleBufferView(b, emptyBars, index);
+  b.createInPartition<ttng::ArriveBarrierOp>(readPartition, emptyBar,
+                                             /*arriveCount=*/1);
 
-  b.setInsertionPointAfter(body.findAncestorOpInBlock(*consumerRelease));
+  // Always place the producer acquire after the producer commit.
+  emptyBar = createSingleBufferView(b, emptyBars, index);
+  b.createInPartition<ttng::WaitBarrierOp>(mmaPartition, emptyBar, phase,
+                                           userPred);
+
+  // Increment after the read, but also after the producer commit if it is after
+  // the read.
+  Operation *afterRead = readOp;
+  if (consumerRelease == readOp)
+    afterRead = afterRead->getNextNode();
+  b.setInsertionPointAfter(afterRead);
   auto [nextIndex, nextPhase] =
       postIncrementModulo(b, index, phase, numMmaStages);
   nextIndex = b.create<arith::SelectOp>(userPred, nextIndex, index);
   nextPhase = b.create<arith::SelectOp>(userPred, nextPhase, phase);
-  replaceAllUsesDominatedBy(nextIndex.getDefiningOp(), nextIndex, index,
-                            domInfo);
-  replaceAllUsesDominatedBy(nextPhase.getDefiningOp(), nextPhase, phase,
-                            domInfo);
+  replaceAllUsesDominatedBy(afterRead, nextIndex, index, domInfo);
+  replaceAllUsesDominatedBy(afterRead, nextPhase, phase, domInfo);
 
   llvm::SetVector<Operation *> predOps;
   Operation *hoistPt =
