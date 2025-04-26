@@ -328,6 +328,12 @@ getUserPrecondition(ImplicitLocOpBuilder &b, scf::ForOp loop, Operation *domOp,
   return {precondition, domOp};
 }
 
+static MemDescType getAsMutable(MemDescType type) {
+  return MemDescType::get(type.getShape(), type.getElementType(),
+                          type.getEncoding(), type.getMemorySpace(),
+                          /*mutableMemory=*/true);
+}
+
 //===----------------------------------------------------------------------===//
 // Load Pipelining
 //===----------------------------------------------------------------------===//
@@ -590,8 +596,8 @@ LogicalResult PipelinedLoadGroup::lowerLoads(WarpSchedule &schedule,
 //===----------------------------------------------------------------------===//
 
 static LogicalResult pipelineMMA(scf::ForOp &loop, PipelinedMMA &mma,
-                                 WarpSchedule &schedule,
-                                 DominanceInfo &domInfo) {
+                                 WarpSchedule &schedule, DominanceInfo &domInfo,
+                                 PostDominanceInfo &postDomInfo) {
   auto fail = [&](StringRef msg) {
     return emitWarning(mma.mmaOp.getLoc(), msg);
   };
@@ -661,8 +667,7 @@ static LogicalResult pipelineMMA(scf::ForOp &loop, PipelinedMMA &mma,
   b.setInsertionPoint(loop);
   Value replTok = b.create<ub::PoisonOp>(b.getType<AsyncTokenType>());
   b.setInsertionPointToStart(&body);
-  Operation *overwriteOp = nullptr;
-  ttng::TMEMLoadOp readOp;
+  Operation *overwriteOp = nullptr, *readOp = nullptr;
   for (Operation *user : usersInLoop) {
     b.setInsertionPoint(user);
     if (auto storeOp = dyn_cast<ttng::TMEMStoreOp>(user)) {
@@ -729,21 +734,53 @@ static LogicalResult pipelineMMA(scf::ForOp &loop, PipelinedMMA &mma,
   Partition &readPartition =
       *schedule.getPartition(body.findAncestorOpInBlock(*readOp));
 
+  // Find operands that need to be pipelined through shmem.
+  SmallVector<Operation *> operandDefs;
+  for (Value operand : mma.mmaOp->getOperands()) {
+    Operation *defOp = operand.getDefiningOp();
+    if (!defOp || !loop.getBodyRegion().isAncestor(defOp->getParentRegion()))
+      continue;
+    defOp = body.findAncestorOpInBlock(*defOp);
+    if (schedule.getPartition(defOp) != &readPartition)
+      continue;
+    if (auto allocOp = operand.getDefiningOp<LocalAllocOp>()) {
+      PartitionBuilder b(allocOp.getLoc(), allocOp);
+      auto store = b.createInPartition<LocalStoreOp>(readPartition,
+                                                     allocOp.getSrc(), allocOp);
+      operandDefs.push_back(body.findAncestorOpInBlock(*store));
+      allocOp->moveBefore(loop);
+      allocOp.getSrcMutable().clear();
+      allocOp.getResult().setType(getAsMutable(allocOp.getType()));
+    } else if (auto tmemAllocOp = operand.getDefiningOp<ttng::TMEMAllocOp>()) {
+      PartitionBuilder b(tmemAllocOp.getLoc(), tmemAllocOp);
+      auto store = b.createInPartition<ttng::TMEMStoreOp>(
+          readPartition, Type(), tmemAllocOp.getResult(), Value(),
+          tmemAllocOp.getSrc(), b.boolCst(true));
+      operandDefs.push_back(body.findAncestorOpInBlock(*store));
+      tmemAllocOp->moveBefore(loop);
+      tmemAllocOp.getSrcMutable().clear();
+      tmemAllocOp.getResult().setType(getAsMutable(tmemAllocOp.getType()));
+    }
+  }
+
   // Producer commit.
   b.setInsertionPoint(mma.mmaOp);
   Value readyBar = createSingleBufferView(b, readyBars, index);
   mma.mmaOp.addCompletionBarrier(readyBar, userPred);
 
   // Place the consumer wait before the read.
-  b.setInsertionPoint(readOp);
+  operandDefs.push_back(readOp);
+  Operation *consumerWait = findNearestCommonDominator(operandDefs, domInfo);
+  b.setInsertionPoint(consumerWait);
   readyBar = createSingleBufferView(b, readyBars, index);
   b.createInPartition<ttng::WaitBarrierOp>(readPartition, readyBar, phase);
 
   // Place the consumer release after the read, and after the write as well if
   // it is in the user partition.
-  Operation *consumerRelease = overwriteOp;
-  if (&mmaPartition == schedule.getPartition(overwriteOp))
-    consumerRelease = readOp;
+  if (overwriteOp != mma.mmaOp && !mma.storeOp)
+    operandDefs.push_back(overwriteOp);
+  Operation *consumerRelease =
+      findNearestCommonPostDominator(operandDefs, postDomInfo);
   b.setInsertionPointAfter(consumerRelease);
   Value emptyBar = createSingleBufferView(b, emptyBars, index);
   auto producerCommit = b.createInPartition<ttng::ArriveBarrierOp>(
@@ -755,11 +792,11 @@ static LogicalResult pipelineMMA(scf::ForOp &loop, PipelinedMMA &mma,
   b.createInPartition<ttng::WaitBarrierOp>(mmaPartition, emptyBar, phase,
                                            userPred);
 
-  // Increment after the read, but also after the producer commit if it is after
+  // Increment after the read, but also after the mbarrier arrive if it is after
   // the read.
   Operation *afterRead = readOp;
-  if (consumerRelease == readOp)
-    afterRead = afterRead->getNextNode();
+  if (readOp->getNextNode() == producerCommit)
+    afterRead = producerCommit;
   afterRead = body.findAncestorOpInBlock(*afterRead);
   b.setInsertionPointAfter(afterRead);
   auto [nextIndex, nextPhase] =
@@ -814,7 +851,7 @@ LogicalResult lowerLoops(scf::ForOp &loop, PartitionScheme &scheme,
 
   // Multi-buffer and lower the MMAs.
   for (PipelinedMMA &mma : scheme.mmas) {
-    if (failed(pipelineMMA(loop, mma, schedule, domInfo)))
+    if (failed(pipelineMMA(loop, mma, schedule, domInfo, postDomInfo)))
       return failure();
   }
 

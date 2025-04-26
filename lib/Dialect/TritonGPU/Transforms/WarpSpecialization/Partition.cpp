@@ -108,7 +108,7 @@ void WarpSchedule::updatePartitions() {
 }
 
 WarpSchedule::Partition *WarpSchedule::getPartition(Operation *op) {
-  return opToPartition.at(op);
+  return opToPartition.lookup(op);
 }
 const WarpSchedule::Partition *WarpSchedule::getPartition(Operation *op) const {
   return opToPartition.at(op);
