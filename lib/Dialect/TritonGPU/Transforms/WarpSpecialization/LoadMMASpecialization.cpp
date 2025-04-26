@@ -772,6 +772,10 @@ static LogicalResult pipelineMMA(scf::ForOp &loop, PipelinedMMA &mma,
   operandDefs.push_back(readOp);
   Operation *consumerWait = findNearestCommonDominator(operandDefs, domInfo);
   b.setInsertionPoint(consumerWait);
+  // If the consumer is inside a conditional, have it acquire the buffer for the
+  // whole of the conditional block to improve instruction scheduling.
+  if (isa<scf::IfOp>(consumerWait->getParentOp()))
+    b.setInsertionPointToStart(consumerWait->getBlock());
   readyBar = createSingleBufferView(b, readyBars, index);
   b.createInPartition<ttng::WaitBarrierOp>(readPartition, readyBar, phase);
 
@@ -782,6 +786,8 @@ static LogicalResult pipelineMMA(scf::ForOp &loop, PipelinedMMA &mma,
   Operation *consumerRelease =
       findNearestCommonPostDominator(operandDefs, postDomInfo);
   b.setInsertionPointAfter(consumerRelease);
+  if (isa<scf::IfOp>(consumerRelease->getParentOp()))
+    b.setInsertionPoint(consumerRelease->getBlock()->getTerminator());
   Value emptyBar = createSingleBufferView(b, emptyBars, index);
   auto producerCommit = b.createInPartition<ttng::ArriveBarrierOp>(
       readPartition, emptyBar, /*arriveCount=*/1);
