@@ -332,51 +332,50 @@ struct SegmentBaseOpConversion
       return failure();
     }
     Value curThreadId = getThreadId(rewriter, loc);
-//    Value threadsPerWarp =
-//        b.i32_val(triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod));
-//    Value curWarpId = b.udiv(curThreadId, threadsPerWarp);
-//
-//    auto bufferTy =
-//        mlir::cast<triton::gpu::MemDescType>(op.getData().getType());
-//    const int bufferSizeInBytes =
-//        mlir::ShapedType::getNumElements(bufferTy.getShape()) *
-//        bufferTy.getElementType().getIntOrFloatBitWidth() / 8;
-//
-//    auto defaultSegmentBaseFunc = [&](int bufferSize) -> Value {
-//      const int segmentWordSize = bufferSize / selectedIds.size() / 4;
-//      int warpSegmentBase = 0;
-//
-//      Value segmentBase = b.i32_val(-1);
-//      for (int warpId : selectedIds) {
-//        segmentBase = b.select(b.icmp_eq(curWarpId, b.i32_val(warpId)),
-//                               b.i32_val(warpSegmentBase), segmentBase);
-//        warpSegmentBase += segmentWordSize;
-//      }
-//      return segmentBase;
-//    };
-//
-//    auto allWarpSegmentBaseFunc = [&](int bufferSize) -> Value {
-//      const int segmentWordSize = bufferSize / numWarps / 4;
-//      // TODO(fywkevin): assert segmentWordSize and numWarps power of 2
-//      Value segmentBase = b.mul(curWarpId, b.i32_val(segmentWordSize));
-//      return segmentBase;
-//    };
-//
-//    // Specialize the segment base address calculation might bring a few cycles
-//    // saving per record measurement overhead.
-//    Value res;
-//    if (isAllIds) {
-//      if (granularity == proton::gpu::Granularity::WARP)
-//        res = allWarpSegmentBaseFunc(bufferSizeInBytes);
-//      else
-//        llvm::report_fatal_error(
-//            "segment address specialization not implemented yet");
-//    } else {
-//      res = defaultSegmentBaseFunc(bufferSizeInBytes);
-//    }
-//
-//    rewriter.replaceOp(op, res);
-    rewriter.eraseOp(op);
+    Value threadsPerWarp =
+        b.i32_val(triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod));
+    Value curWarpId = b.udiv(curThreadId, threadsPerWarp);
+
+    auto bufferTy =
+        mlir::cast<triton::gpu::MemDescType>(op.getData().getType());
+    const int bufferSizeInBytes =
+        mlir::ShapedType::getNumElements(bufferTy.getShape()) *
+        bufferTy.getElementType().getIntOrFloatBitWidth() / 8;
+
+    auto defaultSegmentBaseFunc = [&](int bufferSize) -> Value {
+      const int segmentWordSize = bufferSize / selectedIds.size() / 4;
+      int warpSegmentBase = 0;
+
+      Value segmentBase = b.i32_val(-1);
+      for (int warpId : selectedIds) {
+        segmentBase = b.select(b.icmp_eq(curWarpId, b.i32_val(warpId)),
+                               b.i32_val(warpSegmentBase), segmentBase);
+        warpSegmentBase += segmentWordSize;
+      }
+      return segmentBase;
+    };
+
+    auto allWarpSegmentBaseFunc = [&](int bufferSize) -> Value {
+      const int segmentWordSize = bufferSize / numWarps / 4;
+      // TODO(fywkevin): assert segmentWordSize and numWarps power of 2
+      Value segmentBase = b.mul(curWarpId, b.i32_val(segmentWordSize));
+      return segmentBase;
+    };
+
+    // Specialize the segment base address calculation might bring a few cycles
+    // saving per record measurement overhead.
+    Value res;
+    if (isAllIds) {
+      if (granularity == proton::gpu::Granularity::WARP)
+        res = allWarpSegmentBaseFunc(bufferSizeInBytes);
+      else
+        llvm::report_fatal_error(
+            "segment address specialization not implemented yet");
+    } else {
+      res = defaultSegmentBaseFunc(bufferSizeInBytes);
+    }
+
+    rewriter.replaceOp(op, res);
     return success();
   }
 

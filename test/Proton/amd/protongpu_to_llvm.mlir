@@ -50,6 +50,14 @@ module attributes {"ttg.num-warps" = 8 : i32} {
   // CHECK-LABEL: convert_smem_segment_setup
    tt.func @convert_smem_segment_setup() -> !proton_gpu.seg {
     // CHECK-DAG: rocdl.workitem.id.x
+    // CHECK-DAG: %[[WARPID:.*]] = llvm.udiv
+    // CHECK-DAG: %[[P1:.*]] = llvm.icmp "eq" %[[WARPID]], %{{.*}}
+    // CHECK-DAG: %[[ADDR1:.*]] = llvm.select %[[P1]]
+    // CHECK-DAG: %[[P2:.*]] = llvm.icmp "eq" %[[WARPID]], %{{.*}}
+    // CHECK-DAG: %[[ADDR2:.*]] = llvm.select %[[P2]], %{{.*}}, %[[ADDR1]]
+    // CHECK-DAG: %[[P3:.*]] = llvm.icmp "eq" %[[WARPID]], %{{.*}}
+    // CHECK-DAG: %[[ADDR3:.*]] = llvm.select %[[P3]], %{{.*}}, %[[ADDR2]]
+    // CHECK-DAG: builtin.unrealized_conversion_cast %[[ADDR3]]
     %0 = ttg.local_alloc : () -> !ttg.memdesc<96xi32, #shared, #smem, mutable>
     %3 = proton_gpu.segment_base %0, {selectIds = array<i32: 0, 1, 2>} : !ttg.memdesc<96xi32, #shared, #smem, mutable> -> !proton_gpu.seg
     tt.return %3 : !proton_gpu.seg
