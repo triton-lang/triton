@@ -742,14 +742,15 @@ static LogicalResult pipelineMMA(scf::ForOp &loop, PipelinedMMA &mma,
   // Place the consumer release after the read, and after the write as well if
   // it is in the user partition.
   Operation *consumerRelease = overwriteOp;
-  if (mma.storeOp)
+  if (&mmaPartition == schedule.getPartition(overwriteOp))
     consumerRelease = readOp;
   b.setInsertionPointAfter(consumerRelease);
   Value emptyBar = createSingleBufferView(b, emptyBars, index);
-  b.createInPartition<ttng::ArriveBarrierOp>(readPartition, emptyBar,
-                                             /*arriveCount=*/1);
+  auto producerCommit = b.createInPartition<ttng::ArriveBarrierOp>(
+      readPartition, emptyBar, /*arriveCount=*/1);
 
   // Always place the producer acquire after the producer commit.
+  b.setInsertionPointAfter(body.findAncestorOpInBlock(*producerCommit));
   emptyBar = createSingleBufferView(b, emptyBars, index);
   b.createInPartition<ttng::WaitBarrierOp>(mmaPartition, emptyBar, phase,
                                            userPred);
@@ -759,13 +760,16 @@ static LogicalResult pipelineMMA(scf::ForOp &loop, PipelinedMMA &mma,
   Operation *afterRead = readOp;
   if (consumerRelease == readOp)
     afterRead = afterRead->getNextNode();
+  afterRead = body.findAncestorOpInBlock(*afterRead);
   b.setInsertionPointAfter(afterRead);
   auto [nextIndex, nextPhase] =
       postIncrementModulo(b, index, phase, numMmaStages);
   nextIndex = b.create<arith::SelectOp>(userPred, nextIndex, index);
   nextPhase = b.create<arith::SelectOp>(userPred, nextPhase, phase);
-  replaceAllUsesDominatedBy(afterRead, nextIndex, index, domInfo);
-  replaceAllUsesDominatedBy(afterRead, nextPhase, phase, domInfo);
+  replaceAllUsesDominatedBy(nextIndex.getDefiningOp(), nextIndex, index,
+                            domInfo);
+  replaceAllUsesDominatedBy(nextPhase.getDefiningOp(), nextPhase, phase,
+                            domInfo);
 
   llvm::SetVector<Operation *> predOps;
   Operation *hoistPt =
