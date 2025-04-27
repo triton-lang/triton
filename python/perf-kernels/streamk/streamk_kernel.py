@@ -105,6 +105,9 @@ def streamk_gemm(
         mask = (rm < M)[:, None] & (rn < N)[None, :]
         tl.store(C_, c, mask=mask)
 
+    if STREAMK_TILES == 0:
+        return
+
     tl.assume(pid >= 0)
     total_streamk_iters = STREAMK_TILES * iters_per_tile
     streamk_iters_pcu = total_streamk_iters // NUM_SMS

@@ -9,7 +9,23 @@ from streamk_kernel import streamk_gemm
 torch.manual_seed(123)
 random.seed(123)
 
-total_sm = 304
+
+def is_hip_cdna3():
+    target = triton.runtime.driver.active.get_current_target()
+    return target.backend == 'hip' and target.arch == 'gfx942'
+
+def is_hip_cdna4():
+    target = triton.runtime.driver.active.get_current_target()
+    return target.backend == 'hip' and target.arch == 'gfx950'
+
+if is_hip_cdna3():
+    total_sm = 304
+elif is_hip_cdna4():
+    total_sm = 256
+else:
+    print("Unknown target")
+    exit(0)
+
 print(f"total SMs: {total_sm}")
 
 
@@ -171,7 +187,14 @@ num_stages = 2
 num_warps = 8
 waves_per_eu = 0
 mfmaInstrSize = 16
-kpack = 2
+
+if is_hip_cdna3():
+    kpack = 2
+elif is_hip_cdna4():
+    kpack = 1
+else:
+    print("Unknown target")
+    exit(0)
 
 ##for total_sm in range(1, 305):
 ##    print(f"{total_sm=}")
