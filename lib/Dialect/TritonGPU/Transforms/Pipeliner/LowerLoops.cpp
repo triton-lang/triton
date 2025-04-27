@@ -504,8 +504,8 @@ scf::ForOp lowerLoads(scf::ForOp forOp, CoarseSchedule &schedule) {
           // Allocate additional buffer required by the wgmma pipelining.
           stageDiff += 1;
         }
-        asyncLoads[&op] = {.stageDiff = stageDiff,
-                           .sharedEncoding = sharedEncoding};
+        asyncLoads[&op].stageDiff = stageDiff;
+        asyncLoads[&op].sharedEncoding = sharedEncoding;
       } else if (stageDiff > 1) {
         // Distance-1 loads can in most cases be pipelined in registers without
         // any performance degradation, as the schedule will usually reorder the
