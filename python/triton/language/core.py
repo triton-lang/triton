@@ -1067,10 +1067,10 @@ class tensor(base_value):
             slices = slices.values
         ret = self
         for dim, sl in enumerate(slices):
-            if sl is None or isinstance(sl, constexpr) and sl.value is None:
+            if _unwrap_if_constexpr(sl) is None:
                 ret = semantic.expand_dims(ret, dim, _builder)
-            elif isinstance(sl, (builtins.slice, slice)) and sl.start is None and sl.stop is None and sl.step is None:
-                pass
+            elif isinstance(sl, (builtins.slice, slice)) and all(_unwrap_if_constexpr(arg) is None for arg in (sl.start, sl.stop, sl.step)):
+                pass # an unsqueeze
             else:
                 raise ValueError(f"unsupported tensor index: {sl}")
         return ret
