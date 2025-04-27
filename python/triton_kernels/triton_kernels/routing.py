@@ -109,7 +109,9 @@ def routing(logits, n_expts_act, expt_indx=None, simulated_ep=1):
     return RoutingData(gate_scal, hist, n_expts_tot, n_expts_act), gather_indx, scatter_indx
 
 
-def routing_torch(logits, n_expts_act, expt_indx=None):
+def routing_torch(logits, n_expts_act, expt_indx=None, simulated_ep=1):
+    assert expt_indx is None
+    assert simulated_ep == 1
 
     def topk(vals, k, expt_indx):
         # topk of experts

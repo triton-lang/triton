@@ -3,13 +3,14 @@ import matplotlib.pyplot as plt
 import json
 import triton.profiler as proton
 import torch
-import triton_kernels.swiglu
-from triton_kernels.numerics_details.mxfp import downcast_to_mxfp
-from triton_kernels.matmul_ogs import MicroscalingCtx, matmul_ogs, PrecisionConfig, FlexCtx
-from triton_kernels.numerics import InFlexData
-from triton_kernels.routing import routing
-from triton_kernels.target_info import is_hip, get_cdna_version
-from dataclasses import dataclass
+import triton_bench.swiglu
+
+import triton_bench.distributed as triton_dist
+
+from triton_bench.numerics_details.mxfp import downcast_to_mxfp
+from triton_bench.matmul_ogs import MicroscalingCtx, matmul_ogs, PrecisionConfig, FlexCtx
+from triton_bench.numerics import InFlexData
+from triton_bench.target_info import is_hip, get_cdna_version
 
 if torch.cuda.is_available() and not is_hip():
     from triton._C.libtriton import nvidia
@@ -102,7 +103,14 @@ class PerfData:
 def bench_mlp(batch, dim1, dim2, n_expts_tot, n_expts_act, x_dtype, w_dtype, TP, EP, name):
     assert n_expts_tot % EP == 0
     assert dim2 % TP == 0
-    dev = "cuda"
+    local_rank, world_size = triton_dist.setup()
+    dev = f"cuda:{local_rank}"
+    EP = world_size // TP
+    DP = world_size
+
+    assert n_expts_tot % EP == 0, f"{n_expts_tot=}, {EP=}, n_expts_tot must be divisible by EP"
+    assert dim2 % TP == 0, f"{dim2=}, {TP=}, dim2 must be divisible by TP"
+    assert EP * TP == world_size, f"{EP=}, {TP=}, {world_size=}, EP * TP must be equal to world size"
 
     # input
     # weights
@@ -127,27 +135,29 @@ def bench_mlp(batch, dim1, dim2, n_expts_tot, n_expts_act, x_dtype, w_dtype, TP,
     pc2 = PrecisionConfig(mx_ctx=w2_mx, flex_ctx=FlexCtx(rhs_data=w2_flex))
 
     # -- benchmark --
-    fpath = Path(f"logs/{name}/{x_dtype}-{w_dtype}-TP{TP}-EP{EP}/profiles/batch-{batch}.hatchet")
+    fpath = Path(f"logs/{name}/{rank}/{batch}-{dim1}-{dim2}-{n_expts_tot}-{n_expts_act}-{x_dtype}-{w_dtype}.hatchet")
     fpath.parent.mkdir(parents=True, exist_ok=True)
     x_dtype = {"fp16": torch.float16, "bf16": torch.bfloat16, "fp8": torch.float8_e4m3fn}[x_dtype]
     # special treatment of fp8_e4m3 on AMD CDNA3 because it uses fp8_e4m3fnuz
     if x_dtype == torch.float8_e4m3fn and get_cdna_version() == 3:
         x_dtype = torch.float8_e4m3fnuz
 
-    x = torch.randn((batch, dim1), device=dev)
-    xg = x.to(wg.dtype if n_expts_tot > 1 else x_dtype)
+    x = torch.randn((batch // DP, dim1), device=dev)
     x = x.to(x_dtype)
     # run layer
     proton.start(str(fpath.with_suffix('')), hook="triton")
+    xg = x.to(wg.dtype if n_expts_tot > 1 else x_dtype)
+    x = triton_dist.all_gather(x, dim=0)
     for i in range(100):
         if n_expts_tot > 1:
             logits = matmul_ogs(xg, wg, bg, precision_config=pcg)
-            rdata, gather_indx, scatter_indx = routing(logits, n_expts_act, simulated_ep=EP)
+            rdata, gather_indx, scatter_indx, token_mask = triton_dist.routing(logits, n_expts_act, EP=EP)
         else:
-            rdata, gather_indx, scatter_indx = None, None, None
+            rdata, gather_indx, scatter_indx, token_mask = None, None, None, None
         x = matmul_ogs(x, w1, b1, rdata, gather_indx=gather_indx, precision_config=pc1)
         x = triton_kernels.swiglu.swiglu(x, 1.0, pcs, routing_data=rdata)
         x = matmul_ogs(x, w2, b2, rdata, scatter_indx=scatter_indx, precision_config=pc2)
+    x = triton_dist.reduce_scatter(x, token_mask=token_mask, dim=0)
     proton.finalize()
 
     # -- analyze --
@@ -209,12 +219,14 @@ def roofline_mlp(batch_ranges, dim1, dim2, n_expts_tot, n_expts_act, x_dtype, w_
     ax.legend(frameon=False, loc="lower right")
     ax.grid(True, which="both", ls=":", lw=0.5)
     fig.tight_layout()
-    fpath = Path(f"logs/{name}/{x_dtype}-{w_dtype}-TP{TP}-EP{EP}/roofline.png")
+    rank, _ = triton_dist.setup()
+    fpath = Path(f"logs/{name}/{rank}/{x_dtype}-{w_dtype}-TP{TP}-EP{EP}/roofline.png")
     plt.savefig(fpath)
 
 
 if __name__ == "__main__":
     has_native_mx4 = torch.cuda.get_device_capability(0)[0] >= 10 or get_cdna_version() == 4
+    rank, world_size = triton_dist.setup()
     if SPECS is None:
         print("Current GPU has no specs provided, utilization is N/A")
     batch_ranges = [(1024, 32768, 1024)]
