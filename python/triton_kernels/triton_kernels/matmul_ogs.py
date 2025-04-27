@@ -11,6 +11,7 @@ from triton_kernels import target_info
 from triton_kernels.numerics import InFlexData, OutFlexData
 from triton_kernels.routing import GatherIndx, RoutingData, ScatterIndx
 from triton_kernels.target_info import is_cuda
+
 # details
 from .matmul_ogs_details._matmul_ogs import _compute_writeback_idx
 from .matmul_ogs_details._matmul_ogs import _matmul_ogs
@@ -170,6 +171,8 @@ def apply_preprocessing_features(x, w, gather_indx, scatter_indx, routing_data, 
     # preprocess routing information and ptr lookup table
     M = x.shape[1] if gather_indx is None else gather_indx.src_indx.shape[0]
     return x, w, writeback_idxs, writeback_size, finalize_scatter_idxs
+
+
 
 
 # ---------------------
