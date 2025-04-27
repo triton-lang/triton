@@ -71,6 +71,13 @@ module attributes {"ttg.num-warps" = 8 : i32} {
 module attributes {"ttg.num-warps" = 8 : i32} {
   // CHECK-LABEL: convert_circular_store_smem
   llvm.func @convert_circular_store_smem() {
+    // CHECK-DAG: rocdl.workitem.id.x
+    // CHECK-DAG: %[[WARPID:.*]] = llvm.udiv
+    // CHECK-DAG: %[[P1:.*]] = llvm.icmp "eq" %[[WARPID]], %{{.*}}
+    // CHECK-DAG: %[[ADDR1:.*]] = llvm.select %[[P1]]
+    // CHECK-DAG: %[[P2:.*]] = llvm.icmp "eq" %[[WARPID]], %{{.*}}
+    // CHECK-DAG: %[[ADDR2:.*]] = llvm.select %[[P2]], %{{.*}}, %[[ADDR1]]
+	// CHECK-DAG: %[[CYCLE1:.*]] = llvm.call_intrinsic "llvm.amdgcn.s.memtime"()
     %0 = ttg.local_alloc : () -> !ttg.memdesc<512xi32, #shared, #smem, mutable>
     %2 = proton_gpu.init_buffer_index : <i32, 5>
     %3 = proton_gpu.segment_base %0, {granularity = 1 : i32, selectIds = array<i32: 0, 1>} : !ttg.memdesc<512xi32, #shared, #smem, mutable> -> !proton_gpu.seg
