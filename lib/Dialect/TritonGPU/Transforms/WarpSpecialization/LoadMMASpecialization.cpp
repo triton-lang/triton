@@ -792,11 +792,11 @@ static LogicalResult pipelineMMA(scf::ForOp &loop, PipelinedMMA &mma,
   if (isa<scf::IfOp>(consumerRelease->getParentOp()))
     b.setInsertionPoint(consumerRelease->getBlock()->getTerminator());
   Value emptyBar = createSingleBufferView(b, emptyBars, index);
-  auto producerCommit = b.createInPartition<ttng::ArriveBarrierOp>(
+  auto releaseOp = b.createInPartition<ttng::ArriveBarrierOp>(
       readPartition, emptyBar, /*arriveCount=*/1);
 
-  // Always place the producer acquire after the producer commit.
-  b.setInsertionPointAfter(body.findAncestorOpInBlock(*producerCommit));
+  // Always place the producer acquire after the consumer release.
+  b.setInsertionPointAfter(body.findAncestorOpInBlock(*releaseOp));
   emptyBar = createSingleBufferView(b, emptyBars, index);
   b.createInPartition<ttng::WaitBarrierOp>(mmaPartition, emptyBar, phase,
                                            userPred);
@@ -804,8 +804,8 @@ static LogicalResult pipelineMMA(scf::ForOp &loop, PipelinedMMA &mma,
   // Increment after the read, but also after the mbarrier arrive if it is after
   // the read.
   Operation *afterRead = readOp;
-  if (readOp->getNextNode() == producerCommit)
-    afterRead = producerCommit;
+  if (readOp->getNextNode() == releaseOp)
+    afterRead = releaseOp;
   afterRead = body.findAncestorOpInBlock(*afterRead);
   b.setInsertionPointAfter(afterRead);
   auto [nextIndex, nextPhase] =
