@@ -199,14 +199,6 @@ class env_opt_bool(env_opt_base[bool, bool], env_bool):
     pass
 
 
-def get_triton_dir(dirname: str) -> str:
-    return os.path.join(
-        getenv("TRITON_HOME") or os.path.expanduser("~/"),
-        ".triton",
-        dirname,
-    )
-
-
 config_type = TypeVar("config_type", bound='base_config')
 
 
@@ -260,13 +252,21 @@ class redis_config(base_config):
     port: env_int = env_int("TRITON_REDIS_PORT", 6379)
 
 
+cache: cache_config
+
+
 class cache_config(base_config):
-    dump_dir: env_str = env_str("TRITON_DUMP_DIR", lambda: get_triton_dir("dump"))
-    override_dir: env_str = env_str("TRITON_OVERRIDE_DIR", lambda: get_triton_dir("override"))
-    dir: env_str = env_str("TRITON_CACHE_DIR", lambda: get_triton_dir("cache"))
+    home_dir: env_str = env_str("TRITON_HOME", lambda: os.path.expanduser("~/"))
+
+    dump_dir: env_str = env_str("TRITON_DUMP_DIR", lambda: cache.get_triton_dir("dump"))
+    override_dir: env_str = env_str("TRITON_OVERRIDE_DIR", lambda: cache.get_triton_dir("override"))
+    dir: env_str = env_str("TRITON_CACHE_DIR", lambda: cache.get_triton_dir("cache"))
 
     manager_class: env_class[CacheManager] = env_class("TRITON_CACHE_MANAGER", "CacheManager")
     remote_manager_class: env_class[RemoteCacheBackend] = env_class("TRITON_REMOTE_CACHE_BACKEND", "RemoteCacheBackend")
+
+    def get_triton_dir(self, dirname: str) -> str:
+        return os.path.join(self.home_dir, ".triton", dirname)
 
 
 class compilation_config(base_config):
