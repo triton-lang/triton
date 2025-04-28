@@ -17,10 +17,9 @@ void LoadOp::getEffects(
     SmallVectorImpl<SideEffects::EffectInstance<MemoryEffects::Effect>>
         &effects) {
   effects.emplace_back(MemoryEffects::Read::get(), &getPtrMutable(),
-                       triton::GlobalMemory::get());
+                       GlobalMemory::get());
   if (getIsVolatile())
-    effects.emplace_back(MemoryEffects::Write::get(),
-                         SideEffects::DefaultResource::get());
+    effects.emplace_back(MemoryEffects::Write::get());
 }
 
 } // namespace triton
@@ -970,16 +969,17 @@ OpFoldResult AdvanceOp::fold(FoldAdaptor adaptor) {
 //-- MakeTensorDescOp --
 void MakeTensorDescOp::build(OpBuilder &builder, OperationState &state,
                              Value base, ValueRange shape, ValueRange strides,
-                             ArrayRef<int32_t> blockShape) {
+                             ArrayRef<int32_t> blockShape,
+                             bool isSignedInteger) {
   auto ptrTy = dyn_cast<triton::PointerType>(base.getType());
   if (!ptrTy) {
     llvm::report_fatal_error("Expected pointer type");
   }
   auto elemTy = ptrTy.getPointeeType();
-
   SmallVector<int64_t> blockShape64(blockShape);
   auto blockTy = RankedTensorType::get(blockShape64, elemTy);
-  auto descTy = TensorDescType::get(builder.getContext(), blockTy);
+  auto descTy =
+      TensorDescType::get(builder.getContext(), blockTy, isSignedInteger);
   return build(builder, state, descTy, base, shape, strides);
 }
 
@@ -1177,10 +1177,8 @@ void ElementwiseInlineAsmOp::getEffects(
         &effects) {
   if (getPure())
     return;
-  effects.emplace_back(MemoryEffects::Write::get(),
-                       SideEffects::DefaultResource::get());
-  effects.emplace_back(MemoryEffects::Read::get(),
-                       SideEffects::DefaultResource::get());
+  effects.emplace_back(MemoryEffects::Write::get());
+  effects.emplace_back(MemoryEffects::Read::get());
 }
 
 Speculation::Speculatability ElementwiseInlineAsmOp::getSpeculatability() {
@@ -1209,10 +1207,8 @@ void ExternElementwiseOp::getEffects(
         &effects) {
   if (getPure())
     return;
-  effects.emplace_back(MemoryEffects::Write::get(),
-                       SideEffects::DefaultResource::get());
-  effects.emplace_back(MemoryEffects::Read::get(),
-                       SideEffects::DefaultResource::get());
+  effects.emplace_back(MemoryEffects::Write::get());
+  effects.emplace_back(MemoryEffects::Read::get());
 }
 
 Speculation::Speculatability ExternElementwiseOp::getSpeculatability() {
@@ -1338,13 +1334,15 @@ static LogicalResult verifyGatherScatterOp(Operation *op,
 }
 
 LogicalResult DescriptorGatherOp::verify() {
-  return verifyGatherScatterOp(*this, getDesc().getType().getBlockType(),
+  return verifyGatherScatterOp(*this,
+                               getDesc().getType().getSignlessBlockType(),
                                getResult().getType(), getXOffsets().getType());
 }
 
 // -- DescriptorScatterOp --
 LogicalResult DescriptorScatterOp::verify() {
-  return verifyGatherScatterOp(*this, getDesc().getType().getBlockType(),
+  return verifyGatherScatterOp(*this,
+                               getDesc().getType().getSignlessBlockType(),
                                getSrc().getType(), getXOffsets().getType());
 }
 
@@ -1352,7 +1350,7 @@ LogicalResult DescriptorScatterOp::verify() {
 static LogicalResult verifyDescriptorLoadStoreType(Operation *op,
                                                    TensorDescType desc,
                                                    RankedTensorType tensor) {
-  RankedTensorType block = desc.getBlockType();
+  RankedTensorType block = desc.getSignlessBlockType();
   ArrayRef<int64_t> blockShape = block.getShape();
   ArrayRef<int64_t> tensorShape = tensor.getShape();
   if (blockShape.size() > tensorShape.size()) {

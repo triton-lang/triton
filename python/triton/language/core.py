@@ -7,6 +7,7 @@ from functools import partial, wraps
 import typing
 from typing import Union, Callable, List, Sequence, TypeVar, Optional, Tuple
 import builtins
+from .. import config
 from ..runtime.jit import jit
 import inspect
 import os
@@ -262,6 +263,32 @@ class constexpr:
 
     def __call__(self, *args, **kwds):
         return self.value(*args, **kwds)
+
+
+def constexpr_function(f):
+    """
+    Wraps an arbitrary Python function so that it can be called at
+    compile-time on constexpr arguments in a Triton function and
+    returns a constexpr result.
+    """
+
+    @wraps(f)
+    def wrapper(*args, **kwargs):
+        # de-constexpr arguments and discard the _builder keyword argument:
+        args = [getattr(x, "value", x) for x in args]
+        kwargs = {k: getattr(v, "value", v) for (k, v) in kwargs.items() if k != "_builder"}
+
+        # call the raw Python function f:
+        res = f(*args, **kwargs)
+
+        # convert result back to a Triton constexpr:
+        return constexpr(res)
+
+    # disguise the function as a Triton builtin to avoid raising an error
+    # that we're calling a non-JIT function from within a Triton kernel:
+    wrapper.__triton_builtin__ = True
+    wrapper.__module__ = constexpr_function.__module__
+    return wrapper
 
 
 CONSTEXPR_0 = constexpr(0)
@@ -641,13 +668,6 @@ class pointer_type(dtype):
 
     def mangle(self) -> str:
         return f"P{self.element_ty.mangle()}"
-
-
-class nv_tma_desc_type(pointer_type):
-
-    def __init__(self, const=True, address_space=0):
-        super().__init__(uint8, const=const, address_space=address_space)
-        self.name = 'nv_tma_desc_type'
 
 
 class block_type(dtype):
@@ -1048,10 +1068,11 @@ class tensor(base_value):
             slices = slices.values
         ret = self
         for dim, sl in enumerate(slices):
-            if sl is None or isinstance(sl, constexpr) and sl.value is None:
+            if _unwrap_if_constexpr(sl) is None:
                 ret = semantic.expand_dims(ret, dim, _builder)
-            elif isinstance(sl, (builtins.slice, slice)) and sl.start is None and sl.stop is None and sl.step is None:
-                pass
+            elif isinstance(sl, (builtins.slice, slice)) and all(
+                    _unwrap_if_constexpr(arg) is None for arg in (sl.start, sl.stop, sl.step)):
+                pass  # an unsqueeze
             else:
                 raise ValueError(f"unsupported tensor index: {sl}")
         return ret
@@ -1166,7 +1187,7 @@ class tensor(base_value):
     def sigmoid(self) -> tensor:
         ...
 
-    def softmax(self, ieee_rounding=False) -> tensor:
+    def softmax(self, dim=None, keep_dims=False, ieee_rounding=False) -> tensor:
         ...
 
     def ravel(self) -> tensor:
@@ -1188,6 +1209,9 @@ class tensor(base_value):
         ...
 
     def xor_sum(self, axis=None, keep_dims=False) -> tensor:
+        ...
+
+    def reduce_or(self, axis=None, keep_dims=False) -> tensor:
         ...
 
     def cumsum(self, axis=0, reverse=False) -> tensor:
@@ -1290,7 +1314,8 @@ class tensor_descriptor_base_type(base_type):
         return value, cursor + 1
 
     def _flatten_ir_types(self, builder: ir.builder, out: List[ir.type]) -> None:
-        out.append(builder.create_tensor_descriptor_type(self.block_type.to_ir(builder)))
+        is_signed = self.block_type.element_ty.is_int_signed()
+        out.append(builder.create_tensor_descriptor_type(self.block_type.to_ir(builder), is_signed))
 
     def __str__(self) -> str:
         # ex. "tensor_descriptor<float32[16, 32]>"
@@ -1357,6 +1382,30 @@ class tensor_descriptor_base(base_value):
         :note: Offset must be a multiple of 16-bytes
         """
         return semantic.descriptor_store(self, value, offsets, _builder)
+
+    @builtin
+    def atomic_add(self, offsets: Sequence[constexpr | tensor], value: tensor, _builder=None) -> tensor:
+        return semantic.descriptor_atomic_add(self, value, offsets, _builder)
+
+    @builtin
+    def atomic_min(self, offsets: Sequence[constexpr | tensor], value: tensor, _builder=None) -> tensor:
+        return semantic.descriptor_atomic_min(self, value, offsets, _builder)
+
+    @builtin
+    def atomic_max(self, offsets: Sequence[constexpr | tensor], value: tensor, _builder=None) -> tensor:
+        return semantic.descriptor_atomic_max(self, value, offsets, _builder)
+
+    @builtin
+    def atomic_and(self, offsets: Sequence[constexpr | tensor], value: tensor, _builder=None) -> tensor:
+        return semantic.descriptor_atomic_and(self, value, offsets, _builder)
+
+    @builtin
+    def atomic_or(self, offsets: Sequence[constexpr | tensor], value: tensor, _builder=None) -> tensor:
+        return semantic.descriptor_atomic_or(self, value, offsets, _builder)
+
+    @builtin
+    def atomic_xor(self, offsets: Sequence[constexpr | tensor], value: tensor, _builder=None) -> tensor:
+        return semantic.descriptor_atomic_xor(self, value, offsets, _builder)
 
     @builtin
     def gather(self, *args, _builder=None) -> tensor:
@@ -1836,8 +1885,8 @@ def dot(input, other, acc=None, input_precision=None, allow_tf32=None, max_num_i
     assert input_precision is None or allow_tf32 is None, "Only one of input_precision and allow_tf32 can be specified"
     if input_precision is None:
         supports_tf32 = _builder and "tf32" in _builder.options.allowed_dot_input_precisions
-        default_precision = "tf32" if (supports_tf32 and (allow_tf32 or allow_tf32 is None)) else "ieee"
-        input_precision = os.getenv("TRITON_F32_DEFAULT", default_precision)
+        input_precision = config.language.fp32_default or ("tf32" if (supports_tf32 and
+                                                                      (allow_tf32 or allow_tf32 is None)) else "ieee")
 
     input_precision = _constexpr_to_value(input_precision)
     out_dtype = _constexpr_to_value(out_dtype)
@@ -1949,39 +1998,6 @@ def load(pointer, mask=None, other=None, boundary_check=(), padding_option="", c
     volatile = _constexpr_to_value(volatile)
     return semantic.load(pointer, mask, other, boundary_check, padding_option, cache_modifier, eviction_policy,
                          volatile, _builder)
-
-
-@builtin
-def _experimental_reinterpret_tensor_descriptor(desc_ptr, block_shape, dtype, _builder=None) -> tensor_descriptor_base:
-    """
-    Reinterpret a generic pointer as a TMA-backed tensor descriptor object.
-    """
-    block_ty = block_type(_constexpr_to_value(dtype), block_shape)
-    return semantic.reinterpret_tensor_descriptor(desc_ptr, block_ty, _builder)
-
-
-@builtin
-def _experimental_descriptor_load(desc_pointer, offsets, shape, dtype, _builder=None):
-    """
-    Experimental feature to access TMA descriptors loads. This is an escape hatch to easily exercise TTGIR operations.
-    This will be removed in the future and shouldn't be used in production code.
-
-    This loads a tensor of data based on the descriptor and offsets.
-    """
-    desc = _experimental_reinterpret_tensor_descriptor(desc_pointer, shape, dtype, _builder=_builder)
-    return desc.load(offsets, _builder=_builder)
-
-
-@builtin
-def _experimental_descriptor_store(desc_pointer, value, offsets, _builder=None):
-    """
-    Experimental feature to access TMA descriptors stores. This is an escape hatch to easily exercise TTGIR operations.
-    This will be removed in the future and shouldn't be used in production code.
-
-    This stores a tensor of data based on the descriptor and offsets.
-    """
-    desc = _experimental_reinterpret_tensor_descriptor(desc_pointer, value.shape, value.dtype, _builder=_builder)
-    return desc.store(offsets, value, _builder=_builder)
 
 
 @builtin

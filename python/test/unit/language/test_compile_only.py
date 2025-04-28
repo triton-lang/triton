@@ -2,6 +2,7 @@ import triton
 import triton.language as tl
 from triton.backends.compiler import GPUTarget
 import re
+from triton.compiler import ASTSource
 
 
 def test_compile_only_sm100() -> None:
@@ -156,3 +157,28 @@ def test_compile_only_dot_mxfp() -> None:
     pattern = (r"tcgen05.mma.cta_group::1.kind::mxf8f6f4.block_scale.scale_vec::1X")
     assert re.search(pattern, str(ptx)), "The PTX does not match the expected pattern."
     assert k.asm["cubin"] != b""
+
+
+def test_signature_ordering():
+    """
+    Checks that ASTSource always uses the argument order from
+    fn.arg_names and not the signature.
+    """
+
+    @triton.jit
+    def kernel(a, o, N: tl.constexpr):
+        tl.store(o + N, tl.load(a + N))
+
+    # Add the arguments so the order always differs
+    # from the order in fn.arg_names.
+    signature = {}
+    signature["N"] = "constexpr"
+    signature["a"] = "*fp32"
+    signature["o"] = "*fp32"
+    src = ASTSource(
+        fn=kernel,
+        constexprs={"N": 32},
+        signature=signature,
+    )
+    target = triton.runtime.driver.active.get_current_target()
+    triton.compile(src=src, target=target)

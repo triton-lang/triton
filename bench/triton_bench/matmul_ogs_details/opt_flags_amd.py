@@ -1,5 +1,6 @@
 import torch
 import triton
+from triton_bench.target_info import get_cdna_version
 
 
 def compute_block_nk(n, block_m, grid_m, num_xcds, lhs_dtype, rhs_dtype, microscaling_ctx):
@@ -17,6 +18,9 @@ def compute_block_nk(n, block_m, grid_m, num_xcds, lhs_dtype, rhs_dtype, microsc
         block_n = 256
     else:
         block_n = 128
+
+    if get_cdna_version() == 4 and block_m == 128:
+        block_n = 512
 
     # block_k needs to match the cacheline size (128B)
     block_k = int(128 // min(lhs_width, rhs_width))

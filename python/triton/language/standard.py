@@ -9,7 +9,7 @@ from . import math
 
 def _log2(i: core.constexpr):
     log2 = 0
-    n = i.value
+    n = core.constexpr(i).value
     while n > 1:
         n >>= 1
         log2 += 1
@@ -50,10 +50,14 @@ def sigmoid(x):
 @core._tensor_member_fn
 @jit
 @math._add_math_1arg_docstr("softmax")
-def softmax(x, ieee_rounding=False):
-    z = x - max(x, 0)
+def softmax(x, dim=None, keep_dims=False, ieee_rounding=False):
+    if dim is None:
+        _dim: core.constexpr = 0
+    else:
+        _dim: core.constexpr = dim
+    z = x - max(x, _dim, keep_dims=keep_dims)
     num = math.exp(z)
-    den = sum(num, 0)
+    den = sum(num, _dim, keep_dims=keep_dims)
     return math.fdiv(num, den, ieee_rounding)
 
 
@@ -302,6 +306,22 @@ def xor_sum(input, axis=None, keep_dims=False):
     return core.reduce(input, axis, _xor_combine, keep_dims=keep_dims)
 
 
+# or reduction
+
+
+@jit
+def _or_combine(x, y):
+    return x | y
+
+
+@core._tensor_member_fn
+@jit
+@core._add_reduction_docstr("reduce_of")
+def reduce_or(input, axis, keep_dims=False):
+    core.static_assert(input.type.scalar.is_int(), "reduce_of only supported for integers")
+    return core.reduce(input, axis, _or_combine, keep_dims=keep_dims)
+
+
 # cumsum
 
 
@@ -335,53 +355,63 @@ def cumprod(input, axis=0, reverse=False):
 
 
 @jit
-def _compare_and_swap(x, flip, i: core.constexpr, n_dims: core.constexpr):
-    n_outer: core.constexpr = x.numel >> n_dims
-    shape: core.constexpr = [n_outer * 2**i, 2, 2**(n_dims - i - 1)]
-    y = core.reshape(x, shape)
-    # slice left/right with 'stride' 2**(n_dims - i - 1)
-    mask = core.arange(0, 2)[None, :, None]
-    left = core.broadcast_to(sum(y * (1 - mask), 1)[:, None, :], shape).to(y.dtype)
-    right = core.broadcast_to(sum(y * mask, 1)[:, None, :], shape).to(y.dtype)
-    left = core.reshape(left, x.shape)
-    right = core.reshape(right, x.shape)
-    # actual compare-and-swap
-    idtype = core.get_int_dtype(bitwidth=x.dtype.primitive_bitwidth, signed=True)
-    ileft = left.to(idtype, bitcast=True)
-    iright = right.to(idtype, bitcast=True)
-    ix = x.to(idtype, bitcast=True)
-    ret = ix ^ core.where((left > right) != flip, ileft ^ iright, zeros_like(ix))
-    return ret.to(x.dtype, bitcast=True)
+def _indicator(n_dims: core.constexpr, j: core.constexpr):
+    ar = core.arange(0, 2)
+    ar = core.reshape(ar, [1] * (n_dims - j - 1) + [2] + [1] * j)
+    return ar
 
 
 @jit
-def _bitonic_merge(x, stage: core.constexpr, order: core.constexpr, n_dims: core.constexpr):
+def _compare_and_swap(x, flip, i: core.constexpr):
+    # compare-and-swap on the ith *innermost* dimension
+    n_dims: core.constexpr = _log2(x.numel)
+
+    # flip along middle dimension (the bitwise XORs will be optimised away):
+    idtype = core.get_int_dtype(bitwidth=x.dtype.primitive_bitwidth, signed=True)
+    ix = x.to(idtype, bitcast=True)
+    iy = ix ^ xor_sum(ix, n_dims - 1 - i, True)
+    y = iy.to(x.dtype, bitcast=True)
+
+    # determines whether we are in the right (rather than left) position along the axis:
+    is_right = _indicator(n_dims, i)
+
+    # conditional swap:
+    ret = core.where((x > y) != (flip ^ is_right), y, x)
+    return ret
+
+
+@jit
+def _bitonic_merge_hypercube(x, stage: core.constexpr, order: core.constexpr):
     '''
     order_type 0 == ascending
     order_type 1 == descending
     order_type 2 == alternating
     '''
-    n_outer: core.constexpr = x.numel >> n_dims
-    core.static_assert(stage <= n_dims)
     # flip denotes whether to re-arrange sub-sequences of elements in ascending or
     # descending order.
     # if flip = 00000000... then all elements will be re-arranged ascendingly at this stage
     # if flip = 00110011... then all the elements will be re-arranged alternatingly (with
     # a stride of 2) at this stage
     if order == 2:
-        shape: core.constexpr = [n_outer * 2**(n_dims - 1 - stage), 2, 2**stage]
-        flip = core.reshape(core.broadcast_to(core.arange(0, 2)[None, :, None], shape), x.shape)
+        flip = _indicator(_log2(x.numel), stage)
     else:
         flip = order
     # perform `stage` rounds of `compare-and-swap`
     for i in core.static_range(stage):
-        x = _compare_and_swap(x, flip, i + (n_dims - stage), n_dims)
+        x = _compare_and_swap(x, flip, stage - 1 - i)
     return x
 
 
-@core._tensor_member_fn
 @jit
-def sort(x, dim: core.constexpr = None, descending: core.constexpr = core.CONSTEXPR_0):
+def _bitonic_merge(x, stage: core.constexpr, order: core.constexpr, n_dims: core.constexpr):
+    h = core.reshape(x, [2] * _log2(x.numel))
+    h = _bitonic_merge_hypercube(h, stage, order)
+    x = core.reshape(h, x.shape)
+    return x
+
+
+@jit
+def sort_impl(x, k: core.constexpr = None, dim: core.constexpr = None, descending: core.constexpr = core.CONSTEXPR_0):
     """
     Sorts a tensor along a specified dimension.
 
@@ -389,20 +419,55 @@ def sort(x, dim: core.constexpr = None, descending: core.constexpr = core.CONSTE
     :type x: Tensor
     :param dim: The dimension along which to sort the tensor. If None, the tensor is sorted along the last dimension. Currently, only sorting along the last dimension is supported.
     :type dim: int, optional
+    :param k: the number of top elements to select. If none, assume k = x.shape[dim]
+    :type k: int, optional
     :param descending: If set to True, the tensor is sorted in descending order. If set to False, the tensor is sorted in ascending order.
     :type descending: bool, optional
     """
     # handle default dimension or check that it is the most minor dim
     _dim: core.constexpr = len(x.shape) - 1 if dim is None else dim
     core.static_assert(_dim == len(x.shape) - 1, "only minor dimension is currently supported")
-    # iteratively run bitonic merge-sort steps
-    n_dims: core.constexpr = _log2(x.shape[_dim])
-    for i in core.static_range(1, n_dims + 1):
-        x = _bitonic_merge(x, i, 2 if i < n_dims else descending, n_dims)
+
+    log_n: core.constexpr = _log2(x.shape[_dim])
+    log_k: core.constexpr = log_n if k is None else _log2(k)
+
+    n_dims: core.constexpr = _log2(x.numel)
+
+    # reshape to hypercube:
+    h = core.reshape(x, [2] * n_dims)
+
+    # run first log_k bitonic sort iterations:
+    for i in core.static_range(1, log_k + 1):
+        h = _bitonic_merge_hypercube(h, i, 2 if i < log_n else descending)
+
+    # select top k elements using bitonic top-k
+    # https://www.doc.ic.ac.uk/~hlgr/pdfs/MassivelyParallelTopK.pdf
+    for i in core.static_range(log_k + 1, log_n + 1):
+        h = max(h, axis=(_log2(h.numel) - 1 - log_k)) if descending else min(h, axis=(_log2(h.numel) - 1 - log_k))
+        h = _bitonic_merge_hypercube(h, log_k, 2 if i < log_n else descending)
+
+    # reshape back:
+    x = core.reshape(h, x.shape[:-1] + [2**log_k])
     return x
 
 
-# flip
+@jit
+def sort(x, dim: core.constexpr = None, descending: core.constexpr = core.CONSTEXPR_0):
+    return sort_impl(x, dim=dim, descending=descending)
+
+
+@jit
+def topk(x, k: core.constexpr, dim: core.constexpr = None):
+    return sort_impl(x, k=k, dim=dim, descending=True)
+
+
+@jit
+def bitonic_merge(x, dim: core.constexpr = None, descending: core.constexpr = core.CONSTEXPR_0):
+    # handle default dimension or check that it is the most minor dim
+    _dim: core.constexpr = len(x.shape) - 1 if dim is None else dim
+    core.static_assert(_dim == len(x.shape) - 1, "only minor dimension is currently supported")
+    n_dims: core.constexpr = _log2(x.shape[-1])
+    return _bitonic_merge(x, n_dims, descending, n_dims)
 
 
 def _get_flip_dim(dim, shape):
@@ -434,14 +499,8 @@ def flip(x, dim=None):
 
     idtype = core.get_int_dtype(bitwidth=x.dtype.primitive_bitwidth, signed=True)
     y = core.reshape(x.to(idtype, bitcast=True), [2] * steps)
-    y = core.expand_dims(y, start)
-    flip = (core.arange(0, 2)[:, None] == 1 - core.arange(0, 2))
     for i in core.static_range(start, steps):
-        flip2 = flip
-        for j in core.static_range(0, steps + 1):
-            if j != i and j != i + 1:
-                flip2 = core.expand_dims(flip2, j)
-        y = sum(y * flip2, i + 1, keep_dims=True, dtype=y.dtype)
+        y = y ^ xor_sum(y, i, True)
     x = core.reshape(y, x.shape).to(x.dtype, bitcast=True)
     return x
 

@@ -2,21 +2,19 @@ import ast
 import inspect
 import re
 import warnings
-import os
 import textwrap
 import itertools
 from types import ModuleType
 from typing import Any, Callable, Dict, Optional, Tuple, Type, Union, Iterable, List
 
-from .. import language
+from .. import config, language
 from .._C.libtriton import ir
 from ..language import constexpr, semantic, str_to_ty, tensor
-from ..language.core import _unwrap_if_constexpr, nv_tma_desc_type, base_value, base_type
+from ..language.core import _unwrap_if_constexpr, base_value, base_type
 from ..runtime.jit import get_jit_fn_file_line
 # ideally we wouldn't need any runtime component
 from ..runtime import JITFunction
 from .._utils import find_paths_if, get_iterable_path, set_iterable_path
-from . import config
 
 from .errors import (CompilationError, CompileTimeAssertionFailure, UnsupportedLanguageConstruct)
 
@@ -253,20 +251,16 @@ class ASTFunction:
         vals = make_template(self.arg_types)
         is_val = lambda path, _: path not in self.constants and _ is not None
         val_paths = list(find_paths_if(self.arg_types, is_val))
-        # > set attributes
-        for attr_path, attr_specs in self.attrs.items():
-            for attr_name, attr_val in attr_specs:
-                if attr_path in val_paths:
-                    fn.set_arg_attr(val_paths.index(attr_path), attr_name, attr_val)
-        for i, path in enumerate(val_paths):
-            ty = get_iterable_path(self.arg_types, path)
-            if isinstance(ty, nv_tma_desc_type):
-                fn.set_arg_attr(i, "tt.nv_tma_desc", 1)
         # > add IR values to the template
         cursor = 0
         handles = [fn.args(i) for i in range(fn.get_num_args())]
         for path in val_paths:
             ty = get_iterable_path(self.arg_types, path)
+            # > set attributes
+            attr_specs = self.attrs.get(path, [])
+            for attr_name, attr_val in attr_specs:
+                fn.set_arg_attr(cursor, attr_name, attr_val)
+            # > build frontend value
             val, cursor = ty._unflatten_ir(handles, cursor)
             set_iterable_path(vals, path, val)
         # > add constexpr values to the template
@@ -362,7 +356,8 @@ class CodeGenerator(ast.NodeVisitor):
             # But actually a bunch of other things, such as module imports, are
             # technically Python globals. We have to allow these too!
             if any([
-                    val is absent, name in self.builtin_namespace,  #
+                    val is absent,
+                    name in self.builtin_namespace,  #
                     type(val) is ModuleType,  #
                     isinstance(val, JITFunction),  #
                     getattr(val, "__triton_builtin__", False),  #
@@ -374,7 +369,7 @@ class CodeGenerator(ast.NodeVisitor):
                     # because you should be able to do
                     #   @triton.jit def fn(x: tl.constexpr = GLOBAL): ...
                     self.visiting_arg_default_value,  #
-                    os.environ.get("TRITON_ALLOW_NON_CONSTEXPR_GLOBALS", "0") == "1"
+                    config.compilation.allow_non_constexpr_globals,
             ]):
                 return val
             raise NameError(
@@ -1202,7 +1197,7 @@ class CodeGenerator(ast.NodeVisitor):
                 generator.visit(fn.parse())
             except Exception as e:
                 # Wrap the error in the callee with the location of the call.
-                if config.front_end_debugging():
+                if config.compilation.front_end_debugging:
                     raise
                 raise CompilationError(self.jit_fn.src, self.cur_node, None) from e
 
@@ -1242,7 +1237,7 @@ class CodeGenerator(ast.NodeVisitor):
                     ret = language.tuple(ret)
                 return ret
             except Exception as e:
-                if config.front_end_debugging():
+                if config.compilation.front_end_debugging:
                     raise
                 # Normally when we raise a CompilationError, we raise it as
                 # `from None`, because the original fileline from the exception
@@ -1323,7 +1318,7 @@ class CodeGenerator(ast.NodeVisitor):
             except CompilationError:
                 raise
             except Exception as e:
-                if config.front_end_debugging():
+                if config.compilation.front_end_debugging:
                     raise
                 # Wrap the error in a CompilationError which contains the source
                 # of the @jit function.
@@ -1381,7 +1376,10 @@ class CodeGenerator(ast.NodeVisitor):
 
 
 def ast_to_ttir(fn, src, context, options, codegen_fns, module_map):
-    arg_types = list(map(str_to_ty, src.signature.values()))
+    arg_types = [None] * len(fn.arg_names)
+    for k, v in src.signature.items():
+        idx = fn.arg_names.index(k)
+        arg_types[idx] = str_to_ty(v)
     prototype = ASTFunction([], arg_types, src.constants, src.attrs)
     file_name, begin_line = get_jit_fn_file_line(fn)
     # query function representation

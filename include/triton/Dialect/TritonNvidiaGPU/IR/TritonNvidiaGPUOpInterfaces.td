@@ -12,6 +12,9 @@ def MMAv5OpInterface : OpInterface<"MMAv5OpInterface"> {
 
   // We can add more methods as needed.
   let methods = [
+    InterfaceMethod<"Return the A operand.",
+                    "::mlir::TypedValue<::mlir::triton::gpu::MemDescType>",
+                    "getA">,
     InterfaceMethod<"Return the accumulator init flag.",
                     "::mlir::Value",
                     "useAccumulator">,
@@ -19,12 +22,12 @@ def MMAv5OpInterface : OpInterface<"MMAv5OpInterface"> {
                     "void",
                     "setUseAccumulator",
                     (ins "::mlir::Value":$flag)>,
-    InterfaceMethod<"Associate a new barrier to this MMAv5 op.",
+    InterfaceMethod<"Associate a new completion barrier to this MMAv5 op.",
                     "void",
-                    "setBarrier",
-                    (ins "::mlir::Value":$barrier)>,
+                    "addCompletionBarrier",
+                    (ins "::mlir::Value":$barrier, "::mlir::Value":$pred)>,
     InterfaceMethod<"Return the accumulator.",
-                    "::mlir::Value",
+                    "::mlir::TypedValue<::mlir::triton::gpu::MemDescType>",
                     "getAccumulator">,
     InterfaceMethod<"Set the accumulator.",
                     "void",

@@ -15,8 +15,6 @@ namespace gpu {
 #define GEN_PASS_DEF_TRITONGPUTESTPIPELINESCHEDULELOOP
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h.inc"
 
-static const char *kLatencyAttrName = "tt.latency";
-
 struct TestPipelineScheduleLoop
     : public impl::TritonGPUTestPipelineScheduleLoopBase<
           TestPipelineScheduleLoop> {

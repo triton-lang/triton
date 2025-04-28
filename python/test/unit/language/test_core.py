@@ -803,7 +803,25 @@ def test_slice(device):
         t = data[None, :]
         tl.static_assert(t.shape == [1, XBLOCK])
 
+        t = data[None, None:]
+        tl.static_assert(t.shape == [1, XBLOCK])
+
+        t = data[None, :None]
+        tl.static_assert(t.shape == [1, XBLOCK])
+
         t = data[None, :, None]
+        tl.static_assert(t.shape == [1, XBLOCK, 1])
+
+        t = data[None, None:None, None]
+        tl.static_assert(t.shape == [1, XBLOCK, 1])
+
+        t = data[None, None:None:None, None]
+        tl.static_assert(t.shape == [1, XBLOCK, 1])
+
+        t = data[None, ::None, None]
+        tl.static_assert(t.shape == [1, XBLOCK, 1])
+
+        t = data[None, None::None, None]
         tl.static_assert(t.shape == [1, XBLOCK, 1])
 
         scalar = tl.full([], 1, tl.int32)
@@ -3240,18 +3258,6 @@ def test_convert1d_bool(M, src_layout, dst_layout, src_dim, dst_dim, device, tmp
     np.testing.assert_allclose(y_ref, y_tri.cpu().numpy(), rtol=0, atol=0)
 
 
-@triton.jit
-def _welford_combine(mean_1, m2_1, weight_1, mean_2, m2_2, weight_2):
-    delta = mean_2 - mean_1
-    new_weight = weight_1 + weight_2
-    w2_over_w = weight_2 / new_weight
-    return (
-        mean_1 + delta * w2_over_w,
-        m2_1 + m2_2 + delta * delta * weight_1 * w2_over_w,
-        new_weight,
-    )
-
-
 layouts = [
     BlockedLayout([1, 4], [1, THREADS_PER_WARP], [4, 1], [1, 0], [1, 1], [1, 1], [0, 1]),
     BlockedLayout([1, 4], [1, THREADS_PER_WARP], [2, 2], [1, 0], [1, 1], [1, 1], [0, 1]),
@@ -3328,30 +3334,58 @@ def test_chain_reduce(M, N, src_layout, op, device, first_axis, tmp_path: pathli
     np.testing.assert_allclose(z_ref, z_tri.cpu().numpy(), rtol=0.01, atol=1e-3)
 
 
+@triton.jit
+def _welford_combine(mean_1, m2_1, weight_1, mean_2, m2_2, weight_2):
+    delta = mean_2 - mean_1
+    new_weight = weight_1 + weight_2
+    w2_over_w = weight_2 / new_weight
+    return (
+        mean_1 + delta * w2_over_w,
+        m2_1 + m2_2 + delta * delta * weight_1 * w2_over_w,
+        new_weight,
+    )
+
+
+@triton.jit
+def _sum_combine(a, b):
+    return a + b
+
+
 @pytest.mark.interpreter
 def test_generic_reduction(device):
 
     @triton.jit
-    def var_mean_kernel(X, out_mean, out_var, BLOCK: tl.constexpr):
+    def var_mean_kernel(X, out_mean, out_var, out_sum0, out_sum1, BLOCK: tl.constexpr):
         xindex = tl.arange(0, BLOCK)
         x = tl.load(X + xindex)
         mean = x
         m2 = tl.zeros_like(x)
         weight = tl.full(x.shape, 1, x.dtype)
+        # Test return a tuple and a single value
+        sum0, = tl.reduce((x, ), 0, _sum_combine)
+        sum1 = tl.reduce(x, 0, _sum_combine)
+        # Test multiple values in a tuple
         (mean, m2, weight) = tl.reduce((mean, m2, weight), 0, _welford_combine)
         tl.store(out_mean, mean)
         tl.store(out_var, m2 / weight)
+        tl.store(out_sum0, sum0)
+        tl.store(out_sum1, sum1)
 
     SIZE = 512
     x = torch.rand(SIZE, device=device)
     out_mean = torch.empty((), device=device)
     out_var = torch.empty((), device=device)
+    sum0 = torch.empty((), device=device)
+    sum1 = torch.empty((), device=device)
 
-    var_mean_kernel[(1, )](x, out_mean, out_var, BLOCK=SIZE)
+    var_mean_kernel[(1, )](x, out_mean, out_var, sum0, sum1, BLOCK=SIZE)
 
     expect_var, expect_mean = torch.var_mean(x, dim=0, correction=0)
+    sum_ref = torch.sum(x)
     torch.testing.assert_close(out_mean, expect_mean)
     torch.testing.assert_close(out_var, expect_var)
+    torch.testing.assert_close(sum0, sum_ref)
+    torch.testing.assert_close(sum1, sum_ref)
 
 
 # ---------------
@@ -3588,9 +3622,17 @@ def get_test_dot_double_rate_cases():
             (16, 16, 32, 4, False, False, 'None', 'ieee', 'bfloat16', 'float32', 1, None)]
 
 
+def get_test_dot_vdot2_cases():
+    if not is_hip_cdna():
+        return []
+    return [(4, 32, 32, 4, False, False, 'None', 'ieee', 'float16', 'float32', 1, None),
+            (4, 32, 32, 4, False, False, 'None', 'ieee', 'bfloat16', 'float32', 1, None)]
+
+
 @pytest.mark.interpreter
 @pytest.mark.parametrize(
     "M, N, K, num_warps, col_a, col_b, epilogue, input_precision, in_dtype, out_dtype, kpack, mma_nonk_size",
+    get_test_dot_vdot2_cases() + \
     get_test_dot_double_rate_cases() + \
     get_test_dot_base_cases() + \
     get_test_dot_mixed_sizes_cases() + \
@@ -3783,8 +3825,20 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, input_precision, in_dty
     else:
         # added atol, to loose precision for float16xfloat16->float32 case
         np.testing.assert_allclose(z_ref, to_numpy(z_tri), rtol=0.01, atol=1e-3)
-    if not is_cuda():
+
+    if not (is_cuda() or is_hip_cdna()):
         return
+
+    if is_hip_cdna():
+        if M != 4:
+            return
+        amdgcn = pgm.asm['amdgcn']
+        if in_dtype == 'float16':
+            assert 'v_dot2c_f32_f16' in amdgcn
+        elif (in_dtype == 'bfloat16') and is_hip_cdna4():
+            assert 'v_dot2c_f32_bf16' in amdgcn
+        return
+
     # make sure ld/st are vectorized
     ptx = pgm.asm['ptx']
     if (K > 16 or N > 16 or M > 16) and (M * N // (num_warps * 32) >= 4):
@@ -6568,6 +6622,7 @@ def test_enable_fp_fusion(enable_fp_fusion, default_override, device):
     data = torch.randn((128, ), device=device, dtype=torch.float32)
     if default_override:
         os.environ["TRITON_DEFAULT_FP_FUSION"] = "1" if enable_fp_fusion else "0"
+        assert triton.config.language.default_fp_fusion == enable_fp_fusion
         h = mul_add[(1, )](data)
     else:
         h = mul_add[(1, )](data, enable_fp_fusion=enable_fp_fusion)
