@@ -144,16 +144,18 @@ def triton_key():
             with open(lib.module_finder.find_spec(lib.name).origin, "rb") as f:
                 contents += [hashlib.sha256(f.read()).hexdigest()]
 
-    # backend
-    libtriton_hash = hashlib.sha256()
-    ext = sysconfig.get_config_var("EXT_SUFFIX").split(".")[-1]
-    with open(os.path.join(TRITON_PATH, "_C", f"libtriton.{ext}"), "rb") as f:
-        while True:
-            chunk = f.read(1024**2)
-            if not chunk:
-                break
-            libtriton_hash.update(chunk)
-    contents.append(libtriton_hash.hexdigest())
+    if os.environ.get("TRITON_IGNORE_LIBTRITON_HASH", "0") == "0":
+        # backend
+        libtriton_hash = hashlib.sha256()
+        ext = sysconfig.get_config_var("EXT_SUFFIX").split(".")[-1]
+        with open(os.path.join(TRITON_PATH, "_C", f"libtriton.{ext}"), "rb") as f:
+            while True:
+                chunk = f.read(1024**2)
+                if not chunk:
+                    break
+                libtriton_hash.update(chunk)
+        contents.append(libtriton_hash.hexdigest())
+
     # language
     language_path = os.path.join(TRITON_PATH, 'language')
     for lib in pkgutil.walk_packages([language_path], prefix="triton.language."):
