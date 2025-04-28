@@ -11,17 +11,10 @@
 #include "triton/Tools/LayoutUtils.h"
 namespace {
 
-#if defined(_MSC_VER) && !defined(__clang__)
-#include <intrin.h>
-
-static int __builtin_popcount(uint32_t x) { return __popcnt(x); }
-
-static int __builtin_popcountll(uint64_t x) { return __popcnt64(x); }
-#endif
-
 using namespace mlir;
 using namespace mlir::triton;
 using namespace mlir::triton::gpu;
+using namespace mlir::triton::NVIDIA;
 
 struct LocalLoadOpConversion
     : public ConvertOpToLLVMPattern<triton::gpu::LocalLoadOp> {
@@ -144,41 +137,12 @@ private:
   const NVIDIA::TargetInfo &targetInfo;
 };
 
-// Given a mask that selects certain bases of a layout's input dimension,
-// permute those bases to the front of the layout.
-inline LinearLayout permuteInDimToFront(const LinearLayout &layout,
-                                        StringAttr dim, uint32_t mask) {
-  assert(layout.hasInDim(dim));
-  auto n = __builtin_popcount(mask);
-  if (n == 0)
-    return layout;
-  assert(n <= layout.getInDimSizeLog2(dim));
-
-  SetVector<int> perm;
-  while (mask != 0) {
-    auto lowest = mask & -mask;
-    perm.insert(__builtin_ctz(lowest));
-    mask -= lowest;
-  }
-  for (int i = 0; i < layout.getInDimSizeLog2(dim); ++i) {
-    if (perm.count(i) == 0)
-      perm.insert(i);
-  }
-
-  auto newBases = layout.getBases();
-  auto basesDim = newBases[dim];
-  for (auto [i, p] : llvm::enumerate(perm)) {
-    newBases[dim][i] = basesDim[p];
-  }
-  return LinearLayout(newBases, to_vector(layout.getOutDimNames()));
-}
-
 LogicalResult lowerDistributedToSharedStmatrix(
     Location loc, RankedTensorType tensorTy, MemDescType memDescType,
     Value adaptorSrc, Value smemBase, Type llvmElemTy,
-    ConversionPatternRewriter &rewriter, const TargetInfoBase &targetInfo,
+    ConversionPatternRewriter &rewriter, const TargetInfo &targetInfo,
     std::pair<size_t, Type> *const llvmOpCount = nullptr) {
-  if (targetInfo.getComputeCapability() < 90)
+  if (!targetInfo.supportLdStMatrix())
     return failure();
 
   assert(llvmOpCount == nullptr && "NYI");
@@ -198,6 +162,7 @@ LogicalResult lowerDistributedToSharedStmatrix(
 
   // Just stmatrix for now
   // 1) NYI in the stmatrix lowering
+  //    Pack everything into uint32_t to support bitwidths other than 16
   auto bitwidth = tensorTy.getElementTypeBitWidth();
   if (bitwidth != 16)
     return failure();
@@ -206,81 +171,72 @@ LogicalResult lowerDistributedToSharedStmatrix(
   if (regL.getInDimSize(kBlock) != 1)
     return failure();
 
-  // Compute quotient
+  auto srcVals = unpackLLElements(loc, adaptorSrc, rewriter);
+
+  // Remove broadcasting on the register dimension
+  auto removeBroadcast = actionRemoveBroadcastedRegs(cvt);
+  llvm::errs() << removeBroadcast.toString() << "\n";
+  cvt = removeBroadcast.apply(cvt);
+  srcVals = removeBroadcast.apply(srcVals);
+
   auto tile = LinearLayout::identity1D(32 / bitwidth, kReg, kOffset) *
               LinearLayout::identity1D(4, kLane, kOffset);
+  // Find if there is a register permutation that allows us to divideLeft
+  auto maybeAction = actionDivideLeft(cvt, tile);
+  if (!maybeAction.has_value()) {
+    return failure();
+  }
+  auto action = maybeAction.value();
+  llvm::errs() << action.toString() << "\n";
+  // Check if the action indeed allows us to divideLeft
+  cvt = action.apply(cvt);
   auto maybeQuot = divideLeft(cvt, tile);
   if (!maybeQuot.has_value()) {
     return failure();
   }
   auto quot = maybeQuot.value();
+  srcVals = action.apply(srcVals);
 
-  // Compute the registers that don't broadcast to see how many elements we can
-  // vectorise over
-  auto mask =
-      (~quot.getFreeVariableMasks()[kReg]) & (quot.getInDimSize(kReg) - 1);
-  auto vec = std::min(2, __builtin_popcount(mask));
-  // 2) NYI. stmatrix.x4 is the only supported for now
+  // Choose the 4 elements indexed by the next to bases as the vectorisation
+  // factor
+  auto vec = std::min(2, quot.getInDimSize(kReg));
+  // 2) NYI stmatrix.x1 and stmatrix.x2
   if (vec != 2) {
     return failure();
   }
 
-  uint32_t newMask = 0;
-  for (int i = 0; i < vec; ++i) {
-    auto lowest = mask & -mask;
-    newMask |= lowest;
-    mask -= lowest;
-  }
-  mask = newMask;
-
-  auto srcVals = unpackLLElements(loc, adaptorSrc, rewriter);
-  // If the permutation is non-trivial, we need to permute the layout and values
-  if (!llvm::isPowerOf2_32(mask + 1)) {
-    // 1) Move the bases that we want to use to the lowest bits
-    quot = permuteInDimToFront(quot, kReg, mask);
-    // 2) Permute the values accordingly
-    // We don't need to touch the values that go in each segement
-    auto n = tile.getInDimSizeLog2(kReg);
-    auto maskReps = (mask << n) | ((1 << n) - 1);
-    LinearLayout permRegs = permuteInDimToFront(
-        LinearLayout::identity1D(srcVals.size(), kReg, kReg), kReg, maskReps);
-    SmallVector<Value> permVals(srcVals.size());
-    for (int i = 0; i < srcVals.size(); i++) {
-      auto srcIdx = permRegs.apply({{kReg, i}}).begin()->second;
-      permVals[i] = srcVals[srcIdx];
-    }
-    srcVals = std::move(permVals);
-  }
-  auto reps = zerosLike(tile) * quot;
-
-  // Compute the common components of the register
-  auto [laneId, warpId] = getLaneAndWarpId(rewriter, loc);
-
   // FIXME(Lezcano): Should we bail if any of the other 3 lane bases is zero?
 
-  // Just implement .x4 for now
-  // We want to use the last 2 bits of the lane id to select the start of the
-  // vectorisation and the fist 3 bits to select the column
-
-  // FIXME Change the constants below / pack things into uint32_t to support
-  // bitwidths other than 16
-  assert(bitwidth == 16);
-
-  // Here we implement the stmatrix.x4 addressing. In particular, the lowest 3
-  // bits of the thread id are mapped to the columns, while the top two bits
-  // are mapped to each of the 4 submatrices
+  // Compute the addresses for the 0th tile
+  // Here we implement the stmatrix.x4 addressing. As per the PTX docs, the
+  // threads 0-7 hold the address of the first element of the 8 columns of the
+  // first submatrix, threads 8-15 for the second submatrix, etc. In general we
+  // map:
+  // - The lowest 3 bits of the thread id to the columns of each submatrix
+  // - The top 2 bits to the submatrix number (which is indexed by the next 2
+  // reg bases)
+  auto [laneId, warpId] = getLaneAndWarpId(rewriter, loc);
+  assert(0 <= vec && vec <= 2);
+  // Pick the appropriate lane for the vectorisation factor: no basis, one
+  // basis, or two bases using the 4th or 4th and 5th bit of the lane id
+  // FIXME we can remove the lshr / and_ below by modifying the bases of the
+  // layout
+  auto vecPicker =
+      vec == 0   ? b.i32_val(0)
+      : vec == 1 ? Value(b.and_(b.lshr(laneId, b.i32_val(3)), b.i32_val(0x1)))
+                 : Value(b.lshr(laneId, b.i32_val(3)));
   auto regBase = applyLinearLayout(loc, rewriter, quot,
-                                   {{kReg, b.lshr(laneId, b.i32_val(3))},
+                                   {{kReg, vecPicker},
                                     {kLane, b.and_(laneId, b.i32_val(0x7))},
                                     {kWarp, warpId}})[0]
                      .second;
+  // We computed regBase using quot rather than reps (below). We now add an
+  // stride equal to the tile size to correct for this
   regBase = b.shl(regBase, b.i32_val(tile.getTotalOutDimSizeLog2()));
-  auto broadcast = quot.getFreeVariableMasks()[kReg];
+  auto reps = zerosLike(tile) * quot;
   // Elements per op
   auto step = (1 << vec) * (32 / bitwidth);
   for (int i = 0; i < srcVals.size(); i += step) {
-    if (i & broadcast)
-      continue;
     auto regIdx = reps.apply({{kReg, i}, {kLane, 0}, {kWarp, 0}})[0].second;
     Value offset = b.xor_(regBase, b.i32_val(regIdx));
     auto vecAddr = b.gep(smemPtrTy, llvmElemTy, smemBase, offset);

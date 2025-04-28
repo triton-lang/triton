@@ -9,6 +9,7 @@
 #include <vector>
 
 #include "mlir/IR/BuiltinAttributes.h"
+#include "mlir/IR/ValueRange.h"
 #include "llvm/ADT/Hashing.h"
 #include "llvm/ADT/MapVector.h"
 #include "llvm/ADT/STLExtras.h"
@@ -538,18 +539,16 @@ public:
     return reshapeOuts({{*getOutDimNames().begin(), getTotalOutDimSize()}});
   }
 
-  // Concatenates two layouts by their input dimensions. The layouts must have
-  // the same output dimensions and sizes and different input dimensions. The
-  // input dimensions of this layout are placed before those of 'other'. This
-  // can be thought of as the opposite of `sublayout`, which slices a layout
-  // from a larger one.
+  // Concatenates two layouts by their in (resp. out) dimensions. The layouts
+  // must have the same output (resp. input) dimensions and sizes and different
+  // input (resp. output) dimensions. The input dimensions of this layout are
+  // placed before those of 'other'. This can be thought of as the opposite of
+  // `sublayout`, which slices a layout from a larger one.
   [[nodiscard]] LinearLayout concatIns(const LinearLayout &other) const;
-  // Concatenates two layouts by their output dimensions. The layouts must have
-  // the same input dimensions and sizes and different output dimensions. The
-  // output dimensions of this layout are placed before those of 'other'. This
-  // can be thought of as the opposite of `sublayout`, which slices a layout
-  // from a larger one.
   [[nodiscard]] LinearLayout concatOuts(const LinearLayout &other) const;
+
+  // Remove all the bases that equal to 0 for the given input dimension.
+  [[nodiscard]] LinearLayout unsqueezeIns(StringAttr dim) const;
 
   // Computes the direct sum of two layouts.
   // https://en.wikipedia.org/wiki/Direct_sum#Direct_sum_of_matrices
@@ -772,6 +771,53 @@ inline std::ostream &operator<<(std::ostream &os, const LinearLayout &layout) {
   os << layout.toString();
   return os;
 }
+
+// Defines a map acting on the columns (i.e. bases) a given input dimension of a
+// layout as per:
+//  action[i] -> i.
+// This action can be:
+//  - Applied to a layout to get a new layout with the same input dimensions
+//    but with the bases permuted (and perhaps some of them dropped).
+//  - Applied to a range of Values to apply the same transformation to them
+//
+// E.g. if action = [2, 0, 1] and basesDim = [1, 2, 4]
+//  - action.apply(layout) returns a LL with basesDim = [4, 1, 2]
+//  - action.apply(range) with range.size() == 8, returns a range permuted as
+//    [x[0], x[4], x[1], x[5], x[2], x[6], x[3], x[7]]
+class ColumnAction {
+private:
+  SmallVector<size_t> action;
+  StringAttr inDim;
+  size_t inSizeLog2;
+  bool isIdentity;
+
+public:
+  ColumnAction(ArrayRef<size_t> action, StringAttr inDim, size_t inSizeLog2)
+      : action(action), inDim(inDim), inSizeLog2(inSizeLog2) {
+    auto it = llvm::max_element(action);
+    // Assert in the constructor... ugh
+    assert(it == action.end() || *it < inSizeLog2);
+    // In many cases the action will be the identity, so we save that as an
+    // early return
+    isIdentity = action.size() == inSizeLog2 && llvm::is_sorted(action);
+  }
+
+  // Act on the columns of a layout
+  // Examples:
+  //  - if action = [2, 0, 1] and layout.getBases()[inDim] = [[1], [2], [4]]
+  //    - action.apply(layout) returns a LL with basesDim = [[4], [1], [2]]
+  //  - if action = [2, 0] and layout.getBases()[inDim] = [[1], [4], [2]]
+  //    - action.apply(layout) returns a LL with bases[inDim] = [[2], [1]]
+  LinearLayout apply(const LinearLayout &layout) const;
+
+  // Act on a range of values (representing registers)
+  // e.g. if action = [2, 0, 1] and inSizeLog2 = 3 and inDim.str() = "register"
+  //  - action.apply(range) with range.size() == 8, returns
+  //    [x[0], x[4], x[1], x[5], x[2], x[6], x[3], x[7]]
+  SmallVector<Value> apply(ValueRange values) const;
+
+  std::string toString() const;
+};
 
 } // namespace mlir::triton
 

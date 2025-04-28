@@ -102,6 +102,15 @@ LinearLayout identityStandardND(StringAttr inDimName, ArrayRef<unsigned> shape,
 // bases set to 0.
 LinearLayout zerosLike(const LinearLayout &layout);
 
+// For a layout A with A.hasInDim(kReg), find a permutation of registers action
+// such that action.apply(A) may be divisible by B
+std::optional<ColumnAction> actionDivideLeft(const LinearLayout &A,
+                                             const LinearLayout &B);
+
+// For a layout A with A.hasInDim(kReg), find a permutation of registers action
+// such that action.apply(A) has the broadcasted registers removed
+ColumnAction actionRemoveBroadcastedRegs(const LinearLayout &layout);
+
 // Compute the supremum of two lists.
 // Error out if the supremum does not exist (e.g. [a, b] and [b, a]).
 // If the supremum is not unique, we return the first list first

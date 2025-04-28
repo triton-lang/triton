@@ -285,7 +285,7 @@ module attributes {"ttg.target" = "cuda:90", "ttg.num-ctas" = 1 : i32, "ttg.num-
 // CHECK-LABEL: distribute_to_swizzled_st_matrix_local_store
 module attributes {"ttg.target" = "cuda:90", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
   tt.func @distribute_to_swizzled_st_matrix_local_store(%a: tensor<8x64xf16, #mma>) {
-    // CHECK-COUNT-4: nvgpu.stmatrix
+    // CHECK-COUNT-2: nvgpu.stmatrix
     //          CHECK: llvm.return
     %b = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !ttg.memdesc<8x64xf16, #shared, #smem, mutable>
     ttg.local_store %a, %b : tensor<8x64xf16, #mma> -> !ttg.memdesc<8x64xf16, #shared, #smem, mutable>
@@ -318,7 +318,7 @@ module attributes {"ttg.target" = "cuda:90", "ttg.num-ctas" = 1 : i32, "ttg.num-
 // It is of course possible to design a shared memory layout that makes the lowering
 // via stmatrix not have any bank conflicts, but yeah.
 #shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
-#linear = #ttg.linear<{register = [[0, 1], [4, 0], [0, 16], [2, 0]], lane = [[0, 2], [0, 4], [0, 0], [8, 0], [0, 8]], warp = [[1, 0], [16, 0]], block = []}>
+#linear = #ttg.linear<{register = [[0, 1], [4, 0], [0, 0], [0, 16], [2, 0]], lane = [[0, 2], [0, 4], [0, 0], [8, 0], [0, 8]], warp = [[1, 0], [16, 0]], block = []}>
 #smem = #ttg.shared_memory
 // CHECK-LABEL: linear_to_swizzled_st_matrix_local_store
 module attributes {"ttg.target" = "cuda:90", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
