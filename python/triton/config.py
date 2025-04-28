@@ -205,13 +205,17 @@ config_type = TypeVar("config_type", bound='base_config')
 class base_config:
 
     @property
-    def knobs(self) -> dict[str, Any]:
+    def knob_descriptors(self) -> dict[str, env_base]:
         return {
-            k: getattr(self, k)
+            k: v
             # data descriptors live on the class object
             for k, v in type(self).__dict__.items()
             if isinstance(v, env_base)
         }
+
+    @property
+    def knobs(self) -> dict[str, Any]:
+        return {k: getattr(self, k) for k in self.knob_descriptors.keys()}
 
     def copy(self: config_type) -> config_type:
         res = type(self)()
