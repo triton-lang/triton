@@ -111,6 +111,7 @@ jobs:
         -DLLVM_INSTALL_UTILS=ON
         -DLLVM_TARGETS_TO_BUILD="host;NVPTX;AMDGPU"
         -DLLVM_ENABLE_TERMINFO=OFF
+        -DLLVM_ENABLE_ZSTD=OFF
         llvm-project/llvm
 
         ninja -C llvm-project/build check-mlir install
