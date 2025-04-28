@@ -346,6 +346,8 @@ bool StreamPipeliner::createAsyncCopy(tt::LoadOp loadOp, Value alloc,
   for (auto alloc : allocsToErase)
     alloc.erase();
 
+  auto [loadStage, loadCluster] = schedule[loadOp];
+
   auto copyOp = builder.create<ttg::AsyncCopyGlobalToLocalOp>(
       loadOp.getLoc(), src, viewLoad, loadOp.getMask(), loadOp.getOther(),
       loadOp.getCache(), loadOp.getEvict(), loadOp.getIsVolatile());
@@ -356,11 +358,14 @@ bool StreamPipeliner::createAsyncCopy(tt::LoadOp loadOp, Value alloc,
       builder.create<ttg::AsyncCommitGroupOp>(loc, copyOp->getResult(0));
   ttg::AsyncWaitOp waitOp =
       builder.create<ttg::AsyncWaitOp>(loc, commit->getResult(0), 0);
-  // We need to place the AsyncCopy prefetches after the AsyncWaits which
-  // create a barrier to ensure all warps are finished reading the shared
-  // buffer we will write into. This is done by scheduling AsyncWait as the
-  // first cluster and scheduling AsyncCopy as a global load.
-  scheduleOp(waitOp, SCHED_ASYNC_WAIT);
+  // If the LocalLoads are schedule to a later stage than AsyncCopy we need to
+  // place the AsyncCopy prefetches after the AsyncWaits which create a barrier
+  // to ensure all warps are finished reading the shared buffer we will write
+  // into. This is done by scheduling AsyncWait as the first cluster.
+  // If AsyncCopy and LocalLoads are in the same stage we do not assign a
+  // schdule so they are placed before the LocalLoads
+  if (loadStage != stages[SCHED_LOCAL_LOAD])
+    scheduleOp(waitOp, SCHED_ASYNC_WAIT);
   scheduleOp(copyOp, SCHED_GLOBAL_LOAD);
   // Place ttg.async_commit_group op next to async load so the later
   // UpdateAsyncWaitCount pass can deduce better waitcnts
