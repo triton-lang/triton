@@ -267,7 +267,7 @@ public:
           mmav5Count++;
         }
       }
-      if (mmav5Count > 1)
+      if (mmav5Count > 2)
         return;
     }
     // Check if the load op (mma operand) is pipelineable.
