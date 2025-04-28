@@ -230,10 +230,57 @@ private:
   using BufferT = Allocation::BufferT;
 
   /// Value -> Liveness Range
+  using IntervalT = Interval<size_t>;
   /// Use MapVector to ensure determinism.
-  using BufferRangeMapT = llvm::MapVector<BufferT *, Interval<size_t>>;
+  using BufferRangeMapT = llvm::MapVector<BufferT *, IntervalT>;
   /// Nodes -> Nodes
   using GraphT = DenseMap<BufferT *, DenseSet<BufferT *>>;
+
+  /// Set of Liveness Intervals
+  /// - Helper to capture and track disjoint intervals
+  class LiveIntervals {
+  public:
+    LiveIntervals() = default;
+    LiveIntervals(const LiveIntervals &) = default;
+
+    void push_back(const IntervalT &ival) { intervals.push_back(ival); }
+    auto begin() const { return intervals.begin(); }
+    auto end() const { return intervals.end(); }
+    auto size() const { return intervals.size(); }
+    auto empty() const { return intervals.empty(); }
+
+    void sortAndJoin() {
+      if (size() <= 1)
+        return;
+      llvm::sort(intervals, [](const auto &lhs, const auto &rhs) {
+        return lhs.start() <= rhs.start();
+      });
+      SmallVector<IntervalT> newIntervals;
+      IntervalT interval = intervals.front();
+      for (auto &I : *this) {
+        if (interval.adjacent(I) || interval.intersects(I))
+          interval = interval.span(I);
+        else {
+          newIntervals.push_back(interval);
+          interval = I;
+        }
+      }
+      newIntervals.push_back(interval);
+      intervals.assign(newIntervals);
+    }
+    IntervalT span() const {
+      assert(!empty());
+      IntervalT interval = intervals.front();
+      for (auto &I : intervals)
+        interval = interval.span(I);
+      return interval;
+    }
+
+  private:
+    SmallVector<IntervalT> intervals;
+  };
+
+  typedef function_ref<LiveIntervals(Value value)> LivenessF;
 
   void run() {
     getValuesAndSizes();
@@ -349,37 +396,68 @@ private:
     });
   }
 
+  void updateBufferRange(BufferT *buffer, IntervalT interval) {
+    if (bufferRange.contains(buffer))
+      interval = interval.span(bufferRange[buffer]);
+    bufferRange[buffer] = interval;
+  }
+
   /// Computes the liveness range of the allocated value.
   /// Each buffer is allocated only once.
-  void resolveExplicitBufferLiveness(
-      function_ref<Interval<size_t>(Value value)> getLiveness) {
+  void resolveExplicitBufferLiveness(LivenessF getLiveness) {
     for (auto valueBufferIter : allocation->valueBuffer) {
       auto value = valueBufferIter.first;
       auto *buffer = valueBufferIter.second;
-      bufferRange[buffer] = getLiveness(value);
-      LLVM_DEBUG({
-        llvm::dbgs() << "-- buffer " << buffer->id << "; value: ";
-        value.dump();
-      });
+      auto ranges = getLiveness(value);
+      if (!ranges.empty()) {
+        updateBufferRange(buffer, ranges.span());
+        LLVM_DEBUG({
+          llvm::dbgs() << "-- buffer " << buffer->id << "; value: ";
+          value.dump();
+        });
+      }
     }
   }
 
-  /// Extends the liveness range by unionizing the liveness range of the aliased
-  /// values because each allocated buffer could be an alias of others, if block
-  /// arguments are involved.
-  void resolveAliasBufferLiveness(
-      function_ref<Interval<size_t>(Value value)> getLiveness) {
-    for (const auto &[value, buffers] : allocation->aliasBuffer) {
-      auto range = getLiveness(value);
-      for (auto *buffer : buffers) {
-        auto minId = range.start();
-        auto maxId = range.end();
-        if (bufferRange.count(buffer)) {
-          // Extend the allocated buffer's range
-          minId = std::min(minId, bufferRange[buffer].start());
-          maxId = std::max(maxId, bufferRange[buffer].end());
+  /// Following the alias lattice, an alias that:
+  ///   - References a single buffer, will simply update the live range of
+  ///     that buffer. Note that this will cover gaps also.
+  ///   - References multiple buffers as in the case of loop-carried variables,
+  ///     creates a new Buffer<Alias> for each disjoint range. The new Alias
+  ///     Buffer will represent the live-range for all referenced buffers and
+  ///     apply the real buffers allocation during interference graphing.
+  ///
+  /// Example: (numbers represent op liveness index)
+  ///  2    %g0 = load %pc0
+  ///  3    %b0 = local_alloc %g0                     -- Buffer #0
+  ///  4    %fr = for (.., %arg0 = %b0) {             -+ Alias #1
+  ///  5        %gn = load %pc                         |   Buffers #0,#1
+  ///  6        %bc = local_load %arg0                -+
+  ///  7        %v = add %bc, ...
+  ///  8        %bn = local_alloc %gn                 -+ Buffer #1
+  ///  9        %pn = addptr %pc, %cst                 |   #1 is loop-carried
+  ///  10       yield ... %bn                         -+   does not overlap #0
+  ///       }
+  ///  11   %be = local_load %fr#1                    -- Alias #2: Buffer #0,#1
+  ///  12   %ve = add %be
+  void resolveAliasBufferLiveness(LivenessF getLiveness) {
+    for (auto aliasBufferIter : allocation->aliasBuffer) {
+      auto value = aliasBufferIter.first;
+      auto buffers = aliasBufferIter.second;
+      auto ranges = getLiveness(value);
+      auto *buffer = buffers.front();
+      if (buffers.size() == 1) {
+        for (auto interval : ranges)
+          updateBufferRange(buffer, interval);
+      } else {
+        for (auto interval : ranges) {
+          // Create Alias Buffer for each disjoint interval
+          BufferT *aliasBuf =
+              allocation->addAlias(value, buffer->size, buffer->alignment);
+          updateBufferRange(aliasBuf, interval);
+          for (auto buffer : buffers)
+            aliasBuf->aliases.push_back(buffer);
         }
-        bufferRange[buffer] = Interval(minId, maxId);
       }
     }
   }
@@ -388,7 +466,7 @@ private:
   /// Some operations may have a temporary buffer that is not explicitly
   /// allocated, but is used to store intermediate results.
   void resolveScratchBufferLiveness(
-      const DenseMap<Operation *, size_t> &operationId) {
+      const DenseMap<Operation *, IntervalT> &operationId) {
     // Analyze liveness of scratch buffers and virtual buffers.
     auto processScratchMemory = [&](const auto &container) {
       for (auto [op, buffer] : container) {
@@ -396,15 +474,13 @@ private:
         // function. This memory is used for warp specialization codegen.
         // FIXME: Spooky-action-at-a-distance. Find a better way to model this.
         if (op == operation) {
-          bufferRange.insert(
-              {buffer, Interval(size_t(), std::numeric_limits<size_t>::max())});
+          updateBufferRange(buffer, IntervalT());
           continue;
         }
 
         // Any scratch memory's live range is the current operation's live
         // range.
-        bufferRange.insert(
-            {buffer, Interval(operationId.at(op), operationId.at(op) + 1)});
+        updateBufferRange(buffer, operationId.lookup(op).last());
         LLVM_DEBUG({
           llvm::dbgs() << "-- buffer " << buffer->id << "; value: ";
           op->dump();
@@ -417,45 +493,60 @@ private:
 
   /// Resolves liveness of all values involved under the root operation.
   void resolveLiveness() {
-    // Assign an ID to each operation using post-order traversal.
-    // To achieve the correct liveness range, the parent operation's ID
-    // should be greater than each of its child operation's ID .
+    // Assign an ID to each operation for the inputs (first) and results (last).
+    // Generally this will be the same ID but when the operation has regions the
+    // first will be at the entry point, and the last will be an ID just past
+    // the final terminator of the final region.
     // Example:
-    //     ...
-    //     %5 = triton.convert_layout %4
-    //     %6 = scf.for ... iter_args(%arg0 = %0) -> (i32) {
-    //       %2 = triton.convert_layout %5
     //       ...
-    //       scf.yield %arg0
-    //     }
-    // For example, %5 is defined in the parent region and used in
-    // the child region, and is not passed as a block argument.
-    // %6 should should have an ID greater than its child operations,
-    // otherwise %5 liveness range ends before the child operation's liveness
-    // range ends.
-    DenseMap<Operation *, size_t> operationId;
-    operation->walk<WalkOrder::PostOrder>(
-        [&](Operation *op) { operationId[op] = operationId.size(); });
+    //   1:    %5 = triton.convert_layout %4
+    //   2:    %6 = scf.for ... iter_args(%arg0 = %0) -> (i32) {
+    //   3:      %2 = triton.convert_layout %5
+    //  ..:      ...
+    //   7:      scf.yield %arg0
+    //   8:    }
+    // The last ID will generally be used to account for loop invariant
+    // references. But when an op is an operand to the loop (scf.for above),
+    // the start ID (2) will be used and an Alias Buffer will be referenced
+    // for the loop input and the last ID (8) will be used for the loop-
+    // carried result.
+    // Note: for an op with async-regions, the last ID will always be used
+    // since order is not guaranteed.
+    DenseMap<Operation *, IntervalT> operationId;
+    size_t id = 0;
+    operation->walk([&](Operation *op, const WalkStage &stage) {
+      size_t nid = id++;
+      if (op->getNumRegions()) {
+        if (stage.isBeforeAllRegions()) {
+          operationId[op] = nid;
+        } else if (stage.isAfterAllRegions()) {
+          operationId[op] = IntervalT(operationId[op].first(), nid + 1);
+        }
+      } else
+        operationId[op] = nid;
+    });
 
     // Analyze liveness of explicit buffers
     Liveness liveness(operation);
-    auto getValueLivenessRange = [&](Value value) {
+    auto getValueLiveRanges = [&](Value value) {
+      LiveIntervals intervals;
       auto liveOperations = liveness.resolveLiveness(value);
-      auto minId = std::numeric_limits<size_t>::max();
-      auto maxId = std::numeric_limits<size_t>::min();
       llvm::for_each(liveOperations, [&](Operation *liveOp) {
-        if (operationId[liveOp] < minId) {
-          minId = operationId[liveOp];
-        }
-        if ((operationId[liveOp] + 1) > maxId) {
-          maxId = operationId[liveOp] + 1;
-        }
+        // Default to the last ID
+        if (liveOp->hasTrait<OpTrait::AsyncRegions>() ||
+            !llvm::any_of(liveOp->getOperands(),
+                          [&value](Value v) { return v == value; }))
+          intervals.push_back(operationId[liveOp].last());
+        else
+          // except when value == operand (and not async regions)
+          intervals.push_back(operationId[liveOp].first());
       });
-      return Interval(minId, maxId);
+      intervals.sortAndJoin();
+      return intervals;
     };
 
-    resolveExplicitBufferLiveness(getValueLivenessRange);
-    resolveAliasBufferLiveness(getValueLivenessRange);
+    resolveExplicitBufferLiveness(getValueLiveRanges);
+    resolveAliasBufferLiveness(getValueLiveRanges);
     resolveScratchBufferLiveness(operationId);
   }
 
@@ -552,24 +643,28 @@ private:
     // If the available triple's range is less than a given buffer range,
     // we won't know if there has been an overlap without using graph coloring.
     // Start -> Liveness Range
-    using TripleMapT = std::multimap<size_t, Interval<size_t>>;
+    using TripleMapT = std::multimap<size_t, IntervalT>;
     TripleMapT tripleMap;
-    tripleMap.insert(std::make_pair(0, Interval<size_t>()));
-    SmallVector<BufferT *> xBuffers = buffers;
+    tripleMap.insert(std::make_pair(0, IntervalT()));
+    SmallVector<BufferT *> xBuffers;
+    for (auto *buf : buffers) {
+      if (buf->kind != BufferT::BufferKind::Alias)
+        xBuffers.push_back(buf);
+    }
+
     while (!xBuffers.empty()) {
       auto tripleIt = tripleMap.begin();
       auto offset = tripleIt->first;
       auto range = tripleIt->second;
       tripleMap.erase(tripleIt);
-      auto bufferIt =
-          std::find_if(xBuffers.begin(), xBuffers.end(), [&](auto *buffer) {
-            auto xRange = bufferRange[buffer];
-            bool res = xRange.intersects(range);
-            for (const auto &val : tripleMap)
-              res = res &&
-                    !val.second.intersects(xRange); // only one buffer intersect
-            return res;
-          });
+      auto bufferIt = llvm::find_if(xBuffers, [&](auto *buffer) {
+        auto xRange = bufferRange[buffer];
+        bool res = xRange.intersects(range);
+        for (const auto &val : tripleMap)
+          res = res &&
+                !val.second.intersects(xRange); // only one buffer intersect
+        return res;
+      });
       if (bufferIt != xBuffers.end()) {
         auto buffer = *bufferIt;
         auto xSize = buffer->size;
@@ -601,34 +696,41 @@ private:
     // Reset interference graph
     interference.clear();
     for (auto x : buffers) {
-      for (auto y : buffers) {
-        if (x == y)
-          continue;
-        auto xStart = x->offset;
-        auto yStart = y->offset;
-        auto xSize = x->size;
-        auto ySize = y->size;
-        Interval xSizeRange = {xStart, xStart + xSize};
-        Interval ySizeRange = {yStart, yStart + ySize};
-        auto xOpRange = bufferRange.lookup(x);
-        auto yOpRange = bufferRange.lookup(y);
+      if (x->kind != BufferT::BufferKind::Alias) {
+        for (auto y : buffers) {
+          if (x == y)
+            continue;
+          y->applyToBufferAndAliases([&](BufferT *yActual) {
+            if (yActual != x) {
+              auto xStart = x->offset;
+              auto yStart = yActual->offset;
+              auto xSize = x->size;
+              auto ySize = yActual->size;
+              Interval xSizeRange = {xStart, xStart + xSize};
+              Interval ySizeRange = {yStart, yStart + ySize};
+              auto xOpRange = bufferRange.lookup(x);
+              auto yOpRange = bufferRange.lookup(y);
 
-        // Buffers interfere if their allocation offsets overlap and they are
-        // live at the same time.
-        if (xOpRange.intersects(yOpRange) &&
-            xSizeRange.intersects(ySizeRange)) {
-          interference[x].insert(y);
-        }
-
-        // Buffers also interfere if their allocation offsets overlap and they
-        // exist within regions that may execute simultaneously with respect to
-        // each other.
-        auto wsx = x->owner->getParentWithTrait<OpTrait::AsyncRegions>();
-        auto wsy = y->owner->getParentWithTrait<OpTrait::AsyncRegions>();
-        if (wsx && wsy && wsx == wsy &&
-            x->owner->getParentRegion() != y->owner->getParentRegion() &&
-            xSizeRange.intersects(ySizeRange)) {
-          interference[x].insert(y);
+              // Buffers interfere if their allocation offsets overlap and they
+              // are live at the same time.
+              if (xOpRange.intersects(yOpRange) &&
+                  xSizeRange.intersects(ySizeRange)) {
+                interference[x].insert(y);
+              }
+              // Buffers also interfere if their allocation offsets overlap and
+              // they exist within regions that may execute simultaneously with
+              // respect to each other.
+              auto wsx = x->owner->getParentWithTrait<OpTrait::AsyncRegions>();
+              auto wsy =
+                  yActual->owner->getParentWithTrait<OpTrait::AsyncRegions>();
+              if (wsx && wsy && wsx == wsy &&
+                  x->owner->getParentRegion() !=
+                      yActual->owner->getParentRegion() &&
+                  xSizeRange.intersects(ySizeRange)) {
+                interference[x].insert(y);
+              }
+            }
+          });
         }
       }
     }
@@ -641,25 +743,34 @@ private:
                 const GraphT &interference) {
     // Reset shared memory size
     allocation->sharedMemorySize = 0;
+
+    SmallVector<BufferT *> xBuffers;
+    llvm::copy_if(buffers, std::back_inserter(xBuffers), [](BufferT *buf) {
+      return buf->kind != BufferT::BufferKind::Alias;
+    });
+
     // First-fit graph coloring
     // Neighbors are nodes that interfere with each other.
     // We color a node by finding the index of the first available
     // non-neighboring node or the first neighboring node without any color.
     // Nodes with the same color do not interfere with each other.
     DenseMap<BufferT *, int> colors;
-    for (auto value : buffers) {
-      colors[value] = (value == buffers[0]) ? 0 : -1;
+    for (auto value : xBuffers) {
+      colors[value] = (value == xBuffers.front()) ? 0 : -1;
     }
-    SmallVector<bool> available(buffers.size());
-    for (auto x : buffers) {
+    SmallVector<bool> available(xBuffers.size());
+    for (auto x : xBuffers) {
       std::fill(available.begin(), available.end(), true);
       for (auto y : interference.lookup(x)) {
-        int color = colors[y];
-        if (color >= 0) {
-          available[color] = false;
-        }
+        y->applyToBufferAndAliases([&](BufferT *actual) {
+          if (actual != x) {
+            int color = colors[actual];
+            if (color >= 0)
+              available[color] = false;
+          }
+        });
       }
-      auto it = std::find(available.begin(), available.end(), true);
+      auto it = llvm::find(available, true);
       colors[x] = std::distance(available.begin(), it);
       LLVM_DEBUG({
         llvm::dbgs() << "-- color " << x->id << " " << colors[x] << "\n";
@@ -671,10 +782,13 @@ private:
     // color2: [8, 12) -> [8 + 2 * 15, 12 + 2 * 15) -> [38, 42)
     // TODO(Keren): We are wasting memory here.
     // Nodes with color2 can actually start with 24.
-    for (auto x : buffers) {
+    for (auto x : xBuffers) {
       size_t newOffset = 0;
       for (auto y : interference.lookup(x)) {
-        newOffset = std::max(newOffset, y->offset + y->size);
+        y->applyToBufferAndAliases([&](BufferT *actual) {
+          if (actual != x)
+            newOffset = std::max(newOffset, actual->offset + actual->size);
+        });
       }
       if (colors.lookup(x) != 0)
         x->setOffsetAligned(newOffset);

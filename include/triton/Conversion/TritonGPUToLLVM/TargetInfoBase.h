@@ -99,6 +99,8 @@ public:
   virtual void localStoreOpAnnotation(triton::gpu::LocalStoreOp op,
                                       size_t localStoreOpCount,
                                       Type type) const {}
+  virtual void allocOpAnnotation(triton::gpu::LocalAllocOp op,
+                                 size_t localStoreOpCount, Type type) const {}
   // Annotate target specific information to local load operations during
   // lowering to LLVM. `llLoadOp` is the generated LLVM load op.
   virtual void localLoadOpAnnotation(triton::gpu::LocalLoadOp localLoadOp,
