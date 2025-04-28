@@ -47,7 +47,7 @@ struct PipelinedLoad {
   RankedTensorType type;
   SharedEncodingTrait sharedEnc;
 
-  SmallVector<LocalAllocOp, 1> allocOps;
+  SmallVector<Operation *, 1> allocOps;
   SmallVector<Operation *, 1> liveBeforeOps;
   SmallVector<Operation *, 0> liveUntilOps;
   SmallVector<Operation *, 1> asyncUsers;
@@ -104,6 +104,8 @@ static PartitionScheme assignPartitions(scf::ForOp loop) {
       if (auto alloc = dyn_cast<LocalAllocOp>(user)) {
         if (load.sharedEnc == alloc.getType().getEncoding())
           load.allocOps.push_back(alloc);
+      } else if (isa<ttng::TMEMAllocOp>(user)) {
+        load.allocOps.push_back(user);
       }
     }
   }
@@ -142,7 +144,7 @@ static PartitionScheme assignPartitions(scf::ForOp loop) {
 
   DenseSet<Operation *> scheduled;
   for (PipelinedLoad &load : loads) {
-    for (LocalAllocOp allocOp : load.allocOps) {
+    for (Operation *allocOp : load.allocOps) {
       scheduled.insert(allocOp);
       transitiveUsers.push_back(allocOp);
     }
@@ -193,7 +195,7 @@ static WarpSchedule getInitialSchedule(const PartitionScheme &scheme) {
   Partition *loadPartition = schedule.addPartition(0);
   for (const PipelinedLoad &load : scheme.loads) {
     loadPartition->insert(load.loadOp);
-    for (LocalAllocOp allocOp : load.allocOps)
+    for (Operation *allocOp : load.allocOps)
       loadPartition->insert(allocOp);
   }
 
@@ -364,7 +366,7 @@ LogicalResult PipelinedLoad::determineLiveRange(Block &container,
   // Find the liveBefore and liveUntil operations of the load.
   llvm::MapVector<Partition *, SmallVector<Operation *>> regSinks, shmemSinks;
   for (Operation *user : loadOp->getUsers()) {
-    auto it = llvm::find(allocOps, dyn_cast_or_null<LocalAllocOp>(user));
+    auto it = llvm::find(allocOps, user);
     if (it == allocOps.end()) {
       // This is an in-register use of the load. The result must be live before
       // the op. Since it will be loaded out of shared memory, it only needs to
@@ -373,7 +375,7 @@ LogicalResult PipelinedLoad::determineLiveRange(Block &container,
       continue;
     }
     SmallVector<Operation *> sinkOps;
-    if (failed(findSharedMemorySinkOps(it->getResult(), sinkOps)))
+    if (failed(findSharedMemorySinkOps((*it)->getResult(0), sinkOps)))
       return failure();
     for (Operation *sinkOp : sinkOps)
       shmemSinks[schedule.getPartition(sinkOp)].push_back(sinkOp);
@@ -574,7 +576,7 @@ LogicalResult PipelinedLoadGroup::lowerLoads(WarpSchedule &schedule,
     Value view = createSingleBufferView(b, buffer, index);
     lowerTMACopy(b, loadPartition, load.loadOp, curLoadBar, view);
     // Propagate through shared memory uses.
-    for (LocalAllocOp allocOp : load.allocOps) {
+    for (Operation *allocOp : load.allocOps) {
       replaceUsesAndPropagateType(b, allocOp, view);
       allocOp->erase();
     }
