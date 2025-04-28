@@ -175,7 +175,6 @@ LogicalResult lowerDistributedToSharedStmatrix(
 
   // Remove broadcasting on the register dimension
   auto removeBroadcast = actionRemoveBroadcastedRegs(cvt);
-  llvm::errs() << removeBroadcast.toString() << "\n";
   cvt = removeBroadcast.apply(cvt);
   srcVals = removeBroadcast.apply(srcVals);
 
@@ -187,7 +186,6 @@ LogicalResult lowerDistributedToSharedStmatrix(
     return failure();
   }
   auto action = maybeAction.value();
-  llvm::errs() << action.toString() << "\n";
   // Check if the action indeed allows us to divideLeft
   cvt = action.apply(cvt);
   auto maybeQuot = divideLeft(cvt, tile);
