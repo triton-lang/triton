@@ -87,3 +87,23 @@ module attributes {"ttg.num-warps" = 8 : i32} {
     llvm.return
   }
 }
+
+// -----
+
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-warps" = 8 : i32, ttg.profile_scratch_memory_alignment = 128 : i32, ttg.profile_scratch_memory_size = 384 : i32} {
+  // CHECK-LABEL: convert_global_scratch_alloc
+  llvm.func @convert_global_scratch_alloc(%arg: !llvm.ptr<1>) attributes {noinline = false, nvvm.kernel = 1 : ui1} {
+    // CHECK-DAG: rocdl.workgroup.id.x
+    // CHECK-DAG: rocdl.workgroup.id.y
+    // CHECK-DAG: rocdl.workgroup.id.z
+    // CHECK-DAG: rocdl.grid.dim.x
+    // CHECK-DAG: rocdl.grid.dim.y
+    // CHECK-DAG: %[[PID:.*]] = llvm.trunc %15 : i64 to i32
+    // CHECK-DAG: %[[SIZE:.*]] = llvm.mlir.constant(384 : i32)
+    // CHECK-DAG: %{{.*}} = llvm.mul %[[PID]], %[[SIZE]] : i32
+    %1 = proton_gpu.global_scratch_alloc {alignment = 128 : i32, nbytes = 384 : i32, offset = 0 : i32} : !tt.ptr<i32>
+    llvm.return
+  }
+}
