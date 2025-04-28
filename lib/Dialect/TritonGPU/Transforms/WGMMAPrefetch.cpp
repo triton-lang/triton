@@ -399,10 +399,10 @@ scf::ForOp WGMMAPrefetcher::createNewForOp() {
           UseC =
               builder.create<mlir::arith::ConstantIntOp>(newOp->getLoc(), 1, 1);
         }
-        // prefetchWidth + 1 is to prevent the subtile from adding
+        //  2**30 is to prevent the subtile from adding
         // extra imprecise accumulator, See WGMMA.cpp
         uint32_t NumImpreciseAcc = (RemainNumImpreciseAcc > prefetchWidth)
-                                       ? prefetchWidth + 1
+                                       ? 1073741824  // 2**30
                                        : RemainNumImpreciseAcc;
         // Deduct the actual consumed imprecise acc
         RemainNumImpreciseAcc -= (RemainNumImpreciseAcc > prefetchWidth)

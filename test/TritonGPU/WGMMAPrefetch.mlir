@@ -337,13 +337,13 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
 // CHECK:       %[[A_SUBTILE_4_SMEM:.*]] = ttg.memdesc_subview %[[A_TILE_SMEM]][%[[C0]], %[[C96]]]
 // CHECK:       %[[A_SUBITLE_4_REG:.*]] = ttg.local_load %[[A_SUBTILE_4_SMEM]]
 // CHECK:       %[[A_SUBITLE_1_REG_CVT:.*]] = arith.sitofp %[[A_SUBITLE_1_REG]]
-// CHECK:       %[[D_1:.*]] = ttng.warp_group_dot %[[A_SUBITLE_1_REG_CVT]], %[[B_SUBTILE_1_SMEM:.*]], %[[D_arg]] {{{.*}}, {{.*}}, maxNumImpreciseAcc = 33 : i32}
+// CHECK:       %[[D_1:.*]] = ttng.warp_group_dot %[[A_SUBITLE_1_REG_CVT]], %[[B_SUBTILE_1_SMEM:.*]], %[[D_arg]] {{{.*}}, {{.*}}, maxNumImpreciseAcc = 1073741824 : i32}
 // CHECK:       %[[A_SUBITLE_2_REG_CVT:.*]] = arith.sitofp %[[A_SUBITLE_2_REG]]
-// CHECK:       %[[D_2:.*]] = ttng.warp_group_dot %[[A_SUBITLE_2_REG_CVT]], %[[B_SUBTILE_2_SMEM:.*]], %[[D_1]], %[[TRUE]] {{{.*}}, {{.*}}, maxNumImpreciseAcc = 33 : i32}
+// CHECK:       %[[D_2:.*]] = ttng.warp_group_dot %[[A_SUBITLE_2_REG_CVT]], %[[B_SUBTILE_2_SMEM:.*]], %[[D_1]], %[[TRUE]] {{{.*}}, {{.*}}, maxNumImpreciseAcc = 1073741824 : i32}
 // CHECK:       %[[A_SUBITLE_3_REG_CVT:.*]] = arith.sitofp %[[A_SUBITLE_3_REG]]
-// CHECK:       %[[D_3:.*]] = ttng.warp_group_dot %[[A_SUBITLE_3_REG_CVT]], %[[B_SUBTILE_3_SMEM:.*]], %[[D_2]], %[[TRUE]] {{{.*}}, {{.*}}, maxNumImpreciseAcc = 33 : i32}
+// CHECK:       %[[D_3:.*]] = ttng.warp_group_dot %[[A_SUBITLE_3_REG_CVT]], %[[B_SUBTILE_3_SMEM:.*]], %[[D_2]], %[[TRUE]] {{{.*}}, {{.*}}, maxNumImpreciseAcc = 1073741824 : i32}
 // CHECK:       %[[A_SUBITLE_4_REG_CVT:.*]] = arith.sitofp %[[A_SUBITLE_4_REG]]
-// CHECK:       %[[D_4:.*]] = ttng.warp_group_dot %[[A_SUBITLE_4_REG_CVT]], %[[B_SUBTILE_4_SMEM:.*]], %[[D_3]], %[[TRUE]] {{{.*}}, {{.*}}, maxNumImpreciseAcc = 33 : i32}
+// CHECK:       %[[D_4:.*]] = ttng.warp_group_dot %[[A_SUBITLE_4_REG_CVT]], %[[B_SUBTILE_4_SMEM:.*]], %[[D_3]], %[[TRUE]] {{{.*}}, {{.*}}, maxNumImpreciseAcc = 1073741824 : i32}
 // CHECK-DAG:   %[[D:.*]] = ttng.warp_group_dot_wait %[[D_4]]
 // CHECK-NEXT:  %[[D_ADD_CONSTANT:.*]] = arith.addf %[[D]]
 // CHECK:       scf.yield {{.*}}, {{.*}}, {{.*}}, {{.*}}, %[[D_ADD_CONSTANT]]
@@ -424,11 +424,11 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
 // CHECK:       %[[A_SUBTILE_4_SMEM:.*]] = ttg.memdesc_subview %[[A_TILE_SMEM]][%[[C0]], %[[C96]]]
 // CHECK:       %[[A_SUBITLE_4_REG:.*]] = ttg.local_load %[[A_SUBTILE_4_SMEM]]
 // CHECK:       %[[A_SUBITLE_1_REG_CVT:.*]] = arith.sitofp %[[A_SUBITLE_1_REG]]
-// CHECK:       %[[D_1:.*]] = ttng.warp_group_dot %[[A_SUBITLE_1_REG_CVT]], %[[B_SUBTILE_1_SMEM:.*]], %[[D_arg]] {{{.*}}, {{.*}}, maxNumImpreciseAcc = 33 : i32}
+// CHECK:       %[[D_1:.*]] = ttng.warp_group_dot %[[A_SUBITLE_1_REG_CVT]], %[[B_SUBTILE_1_SMEM:.*]], %[[D_arg]] {{{.*}}, {{.*}}, maxNumImpreciseAcc = 1073741824 : i32}
 // CHECK:       %[[A_SUBITLE_2_REG_CVT:.*]] = arith.sitofp %[[A_SUBITLE_2_REG]]
-// CHECK:       %[[D_2:.*]] = ttng.warp_group_dot %[[A_SUBITLE_2_REG_CVT]], %[[B_SUBTILE_2_SMEM:.*]], %[[D_1]], %[[TRUE]] {{{.*}}, {{.*}}, maxNumImpreciseAcc = 33 : i32}
+// CHECK:       %[[D_2:.*]] = ttng.warp_group_dot %[[A_SUBITLE_2_REG_CVT]], %[[B_SUBTILE_2_SMEM:.*]], %[[D_1]], %[[TRUE]] {{{.*}}, {{.*}}, maxNumImpreciseAcc = 1073741824 : i32}
 // CHECK:       %[[A_SUBITLE_3_REG_CVT:.*]] = arith.sitofp %[[A_SUBITLE_3_REG]]
-// CHECK:       %[[D_3:.*]] = ttng.warp_group_dot %[[A_SUBITLE_3_REG_CVT]], %[[B_SUBTILE_3_SMEM:.*]], %[[D_2]], %[[TRUE]] {{{.*}}, {{.*}}, maxNumImpreciseAcc = 33 : i32}
+// CHECK:       %[[D_3:.*]] = ttng.warp_group_dot %[[A_SUBITLE_3_REG_CVT]], %[[B_SUBTILE_3_SMEM:.*]], %[[D_2]], %[[TRUE]] {{{.*}}, {{.*}}, maxNumImpreciseAcc = 1073741824 : i32}
 // CHECK:       %[[A_SUBITLE_4_REG_CVT:.*]] = arith.sitofp %[[A_SUBITLE_4_REG]]
 // CHECK:       %[[D_4:.*]] = ttng.warp_group_dot %[[A_SUBITLE_4_REG_CVT]], %[[B_SUBTILE_4_SMEM:.*]], %[[D_3]], %[[TRUE]] {{{.*}}, {{.*}}, maxNumImpreciseAcc = 32 : i32}
 // CHECK-DAG:   %[[D:.*]] = ttng.warp_group_dot_wait %[[D_4]]
@@ -512,9 +512,9 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
 // CHECK:       %[[A_SUBTILE_4_SMEM:.*]] = ttg.memdesc_subview %[[A_TILE_SMEM]][%[[C0]], %[[C96]]]
 // CHECK:       %[[A_SUBITLE_4_REG:.*]] = ttg.local_load %[[A_SUBTILE_4_SMEM]]
 // CHECK:       %[[A_SUBITLE_1_REG_CVT:.*]] = arith.sitofp %[[A_SUBITLE_1_REG]]
-// CHECK:       %[[D_1:.*]] = ttng.warp_group_dot %[[A_SUBITLE_1_REG_CVT]], %[[B_SUBTILE_1_SMEM:.*]], %[[D_arg]] {{{.*}}, {{.*}}, maxNumImpreciseAcc = 33 : i32}
+// CHECK:       %[[D_1:.*]] = ttng.warp_group_dot %[[A_SUBITLE_1_REG_CVT]], %[[B_SUBTILE_1_SMEM:.*]], %[[D_arg]] {{{.*}}, {{.*}}, maxNumImpreciseAcc = 1073741824 : i32}
 // CHECK:       %[[A_SUBITLE_2_REG_CVT:.*]] = arith.sitofp %[[A_SUBITLE_2_REG]]
-// CHECK:       %[[D_2:.*]] = ttng.warp_group_dot %[[A_SUBITLE_2_REG_CVT]], %[[B_SUBTILE_2_SMEM:.*]], %[[D_1]], %[[TRUE]] {{{.*}}, {{.*}}, maxNumImpreciseAcc = 33 : i32}
+// CHECK:       %[[D_2:.*]] = ttng.warp_group_dot %[[A_SUBITLE_2_REG_CVT]], %[[B_SUBTILE_2_SMEM:.*]], %[[D_1]], %[[TRUE]] {{{.*}}, {{.*}}, maxNumImpreciseAcc = 1073741824 : i32}
 // CHECK:       %[[A_SUBITLE_3_REG_CVT:.*]] = arith.sitofp %[[A_SUBITLE_3_REG]]
 // CHECK:       %[[D_3:.*]] = ttng.warp_group_dot %[[A_SUBITLE_3_REG_CVT]], %[[B_SUBTILE_3_SMEM:.*]], %[[D_2]], %[[TRUE]] {{{.*}}, {{.*}}, maxNumImpreciseAcc = 32 : i32}
 // CHECK:       %[[A_SUBITLE_4_REG_CVT:.*]] = arith.sitofp %[[A_SUBITLE_4_REG]]
