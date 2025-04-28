@@ -402,7 +402,7 @@ scf::ForOp WGMMAPrefetcher::createNewForOp() {
         //  2**30 is to prevent the subtile from adding
         // extra imprecise accumulator, See WGMMA.cpp
         uint32_t NumImpreciseAcc = (RemainNumImpreciseAcc > prefetchWidth)
-                                       ? 1073741824  // 2**30
+                                       ? 1073741824 // 2**30
                                        : RemainNumImpreciseAcc;
         // Deduct the actual consumed imprecise acc
         RemainNumImpreciseAcc -= (RemainNumImpreciseAcc > prefetchWidth)
