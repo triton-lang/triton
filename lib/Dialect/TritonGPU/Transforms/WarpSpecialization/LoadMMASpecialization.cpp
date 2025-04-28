@@ -537,7 +537,7 @@ LogicalResult PipelinedLoadGroup::lowerLoads(WarpSchedule &schedule,
   // Set up the consumer wait. We know the live before ops are the same for all
   // loads since that's how they were grouped.
   SetVector<Operation *> distinctAsyncUsers;
-  SmallVector<ttng::ArriveBarrierOp> arriveOps;
+  DenseMap<Partition *, ttng::ArriveBarrierOp> arriveOps;
   for (auto [i, liveBeforeOp] : llvm::enumerate(firstLoad->liveBeforeOps)) {
     b.setInsertionPoint(liveBeforeOp);
     Partition &userPartition = *schedule.getPartition(liveBeforeOp);
@@ -552,9 +552,9 @@ LogicalResult PipelinedLoadGroup::lowerLoads(WarpSchedule &schedule,
       Operation *liveUntilOp =
           findNearestCommonPostDominator(liveUntilOps, postDomInfo);
       b.setInsertionPoint(liveUntilOp);
-      arriveOps.push_back(
+      arriveOps[schedule.getPartition(liveUntilOp)] =
           b.createInPartition<ttng::ArriveBarrierOp>(userPartition, curEmptyBar,
-                                                     /*arriveCount=*/1));
+                                                     /*arriveCount=*/1);
     }
   }
 
@@ -581,14 +581,20 @@ LogicalResult PipelinedLoadGroup::lowerLoads(WarpSchedule &schedule,
       allocOp->erase();
     }
     // If there are remaining users, they must be in-register.
-    if (!load.loadOp->use_empty()) {
-      SmallVector<Operation *> regUsers =
-          llvm::to_vector(load.loadOp->getUsers());
-      llvm::append_range(regUsers, arriveOps);
-      Operation *firstRegUser = findNearestCommonDominator(regUsers, domInfo);
-      b.setInsertionPoint(firstRegUser);
-      Value loaded = b.create<LocalLoadOp>(load.type, view);
-      load.loadOp->replaceAllUsesWith(ValueRange{loaded});
+    llvm::MapVector<Partition *, SmallVector<OpOperand *>> regUses;
+    for (OpOperand &use : load.loadOp->getUses())
+      regUses[schedule.getPartition(use.getOwner())].push_back(&use);
+    for (auto &[partition, uses] : regUses) {
+      auto users = llvm::to_vector(llvm::map_range(
+          uses, [](OpOperand *use) { return use->getOwner(); }));
+      if (Operation *arriveOp = arriveOps.lookup(partition))
+        users.push_back(arriveOp);
+      Operation *loadBeforeOp = findNearestCommonDominator(users, domInfo);
+      b.setInsertionPoint(loadBeforeOp);
+      Value loaded =
+          b.createInPartition<LocalLoadOp>(*partition, load.type, view);
+      for (OpOperand *use : uses)
+        use->set(loaded);
     }
     load.loadOp->erase();
   }
