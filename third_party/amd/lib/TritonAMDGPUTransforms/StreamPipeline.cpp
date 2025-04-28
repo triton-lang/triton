@@ -128,7 +128,7 @@ public:
     stages[SCHED_LOCAL_STORE] = _globalPrefetch;
     stages[SCHED_LOCAL_LOAD] = lastStage - _localPrefetch;
     stages[SCHED_COMPUTE] = lastStage;
-    stages[SCHED_ASYNC_WAIT] = lastStage;
+    stages[SCHED_ASYNC_WAIT] = stages[SCHED_LOCAL_LOAD];
 
     options.supportDynamicLoops = true;
     options.peelEpilogue = true;
