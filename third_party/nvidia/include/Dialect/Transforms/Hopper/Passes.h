@@ -8,11 +8,11 @@ namespace mlir {
 
 // Generate the pass class declarations.
 #define GEN_PASS_DECL
-#include "nvidia/include/Dialect/Transforms/Passes.h.inc"
+#include "nvidia/include/Dialect/Transforms/Hopper/Passes.h.inc"
 
 /// Generate the code for registering passes.
 #define GEN_PASS_REGISTRATION
-#include "nvidia/include/Dialect/Transforms/Passes.h.inc"
+#include "nvidia/include/Dialect/Transforms/Hopper/Passes.h.inc"
 
 } // namespace mlir
 #endif // DIALECT_NV_TRANSFORMS_PASSES_H_

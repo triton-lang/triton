@@ -18,7 +18,7 @@
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/Passes.h"
 
 #include "nvidia/include/Dialect/NVWS/Transforms/Passes.h"
-#include "nvidia/include/Dialect/Transforms/Passes.h"
+#include "nvidia/include/Dialect/Transforms/Hopper/Passes.h"
 #include "nvidia/include/NVGPUToLLVM/Passes.h"
 #include "nvidia/include/TritonNVIDIAGPUToLLVM/Passes.h"
 #include "triton/Conversion/TritonGPUToLLVM/Passes.h"
@@ -83,7 +83,7 @@ inline void registerTritonDialects(mlir::DialectRegistry &registry) {
   mlir::registerNVWSTransformsPasses();
 
   // NVGPU transform passes
-  mlir::registerNVTransformsPasses();
+  mlir::registerNVHopperTransformsPasses();
 
   registry.insert<
       mlir::triton::TritonDialect, mlir::cf::ControlFlowDialect,

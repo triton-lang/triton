@@ -1,3 +1,1 @@
-set(LLVM_TARGET_DEFINITIONS Passes.td)
-mlir_tablegen(Passes.h.inc -gen-pass-decls -name NVTransforms)
-add_public_tablegen_target(NVTransformsIncGen)
+add_subdirectory(Hopper)
