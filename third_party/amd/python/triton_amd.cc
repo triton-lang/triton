@@ -2,6 +2,7 @@
 #include "TritonAMDGPUToLLVM/Passes.h"
 #include "TritonAMDGPUToLLVM/TargetUtils.h"
 #include "TritonAMDGPUTransforms/Passes.h"
+#include "lld/Common/Driver.h"
 #include "mlir/Pass/PassManager.h"
 #include "mlir/Target/LLVMIR/Dialect/ROCDL/ROCDLToLLVMIRTranslation.h"
 #include "passes.h"
@@ -27,6 +28,8 @@
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/SourceMgr.h"
 #include "llvm/TargetParser/TargetParser.h"
+
+#include <iostream>
 #include <pybind11/pybind11.h>
 #include <stdexcept>
 
@@ -109,7 +112,30 @@ void addControlConstant(llvm::Module *module, const char *name,
   constant->setUnnamedAddr(GlobalVariable::UnnamedAddr::Local);
   constant->setVisibility(GlobalVariable::VisibilityTypes::ProtectedVisibility);
 }
+
 } // namespace
+
+namespace lld {
+namespace elf {
+bool link(llvm::ArrayRef<const char *> args, llvm::raw_ostream &stdoutOS,
+          llvm::raw_ostream &stderrOS, bool exitEarly, bool disableOutput);
+}
+} // namespace lld
+
+static std::optional<std::string> lldInvoke(const char *inPath,
+                                            const char *outPath) {
+  llvm::SmallVector<const char *> args{"ld.lld", "-shared", inPath, "-o",
+                                       outPath};
+  std::string errString;
+  llvm::raw_string_ostream errStream(errString);
+  bool noErrors = lld::elf::link(args, llvm::outs(), errStream,
+                                 /*exitEarly=*/false, /*disableOutput*/ false);
+  if (!noErrors) {
+    errStream.flush();
+    return errString;
+  }
+  return {};
+}
 
 void init_triton_amd(py::module &&m) {
   m.doc() = "Python bindings to the AMD Triton backend";
@@ -291,4 +317,12 @@ void init_triton_amd(py::module &&m) {
       arg.addAttr(llvm::Attribute::InReg);
     }
   });
+
+  m.def("link_hsaco",
+        [](const std::string &inPath, const std::string &outPath) {
+          if (auto errString = lldInvoke(inPath.c_str(), outPath.c_str()))
+            throw std::runtime_error("LLD failed to link hsaco source " +
+                                     inPath + " into object file " + outPath +
+                                     " because " + errString.value());
+        });
 }
