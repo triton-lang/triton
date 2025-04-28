@@ -3149,3 +3149,21 @@ bool triton::gpu::areLayoutsEquivalent(ArrayRef<int64_t> shape, Attribute lhs,
   auto rhsLL = triton::gpu::toLinearLayout(shape, rhs);
   return lhsLL == rhsLL;
 }
+
+bool triton::gpu::isInnermostContiguous(MemDescType type, unsigned numElems) {
+  ArrayRef<int64_t> shape = type.getShape();
+  Attribute enc = type.getEncoding();
+  MLIRContext *ctx = enc.getContext();
+
+  LinearLayout actual = toLinearLayout(shape, enc);
+  StringAttr fastestIn = *actual.getInDimNames().begin();
+
+  // Flatten actual outs in reverse order to produce a row-major flattening
+  // of the layout
+  auto outNames = actual.getOutDimNames();
+  SmallVector<StringAttr> revOut(outNames.begin(), outNames.end());
+  std::reverse(revOut.begin(), revOut.end());
+  actual = actual.transposeOuts(revOut).flattenOuts();
+
+  return actual.getNumConsecutiveInOut() >= numElems;
+}

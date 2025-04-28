@@ -70,14 +70,6 @@ class HIPOptions:
         gfx_major = int(self.arch[3:-2])  # Drop "gfx" prefix and minor/patch number
         warp_size = 32 if gfx_major >= 10 else 64
         object.__setattr__(self, 'warp_size', warp_size)
-
-        # Error out if max threads per block is exceeded.
-        # This is theoretically architecture specific but in reality they are all 1024.
-        max_threads = 1024
-        assert self.num_warps * warp_size <= max_threads, \
-                f"{self.num_warps} warps * {warp_size} warp size" \
-                f" must not exceed the max threads per block limit ({max_threads})"
-
         assert self.num_warps > 0 and (self.num_warps & (self.num_warps - 1)) == 0, \
                "num_warps must be a power of 2"
 
