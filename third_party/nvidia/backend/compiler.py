@@ -284,6 +284,7 @@ class CUDABackend(BaseBackend):
         else:
             passes.ttir.add_triton_licm(pm)
         passes.ttgpuir.add_prefetch(pm)
+        passes.ttgpuir.add_WGMMAPrefetch(pm)
         passes.ttgpuir.add_optimize_dot_operands(pm, capability >= 80)
         passes.ttgpuir.add_coalesce_async_copy(pm)
         nvidia.passes.ttnvgpuir.add_optimize_tmem_subtiling(pm)
@@ -298,6 +299,8 @@ class CUDABackend(BaseBackend):
         passes.common.add_canonicalizer(pm)
         pm.run(mod)
         metadata["cluster_dims"] = (cluster_info.clusterDimX, cluster_info.clusterDimY, cluster_info.clusterDimZ)
+        tensordesc_meta = mod.get_tensordesc_metadata()
+        metadata["tensordesc_meta"] = tensordesc_meta
         return mod
 
     def make_llir(self, src, metadata, options, capability):

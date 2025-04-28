@@ -22,16 +22,17 @@ add_triton_library(TritonGPUTransforms
   Pipeliner/SoftwarePipeliner.cpp
   Pipeliner/TMAStoresPipeline.cpp
   Pipeliner/MMAv5PipelineUtility.cpp
-  Pipeliner/Partition.cpp
   Pipeliner/PipeliningUtility.cpp
   Pipeliner/Schedule.cpp
   Prefetch.cpp
+  WGMMAPrefetch.cpp
   RemoveLayoutConversions.cpp
   ReorderInstructions.cpp
   CoalesceAsyncCopy.cpp
   Utility.cpp
   WarpSpecialization/AutomaticWarpSpecialization.cpp
   WarpSpecialization/LoadMMASpecialization.cpp
+  WarpSpecialization/Partition.cpp
   WarpSpecialization/OptimizePartitionWarps.cpp
   WarpSpecialization/PartitionLoops.cpp
   WarpSpecialization/RewritePartitionDependencies.cpp

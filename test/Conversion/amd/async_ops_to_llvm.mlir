@@ -95,6 +95,10 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
     // CHECK: rocdl.s.waitcnt -1
     // CHECK: rocdl.barrier
     ttg.async_wait {num = 63 : i32}
+    // Check that we clamp values > 63
+    // CHECK: rocdl.s.waitcnt -1
+    // CHECK: rocdl.barrier
+    ttg.async_wait {num = 64 : i32}
     tt.return
   }
 }

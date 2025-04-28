@@ -8,6 +8,7 @@
 #include <vector>
 
 namespace mlir {
+class DominanceInfo;
 class ImplicitLocOpBuilder;
 namespace triton {
 
@@ -18,7 +19,38 @@ static const char *kWarpSpecializeAttrName = "tt.warp_specialize";
 static const char *kLoopStageAttrName = "loop.stage";
 static const char *kLoopClusterAttrName = "loop.cluster";
 static const char *kScheduledMaxStageAttrName = "tt.scheduled_max_stage";
-static const char *kLatencyAttrName = "tt.latency";
+
+//===----------------------------------------------------------------------===//
+// Hoisting Utilities
+//===----------------------------------------------------------------------===//
+
+// By default, an operation can be hoisted if it is pure scalar operation.
+bool isPureScalarOp(Operation *op);
+
+// Given a set of values and a reference operation, return true if all of the
+// values dominate the reference operation OR a set of "trivial" operations can
+// be moved before the reference operation such that the value set dominates the
+// reference operation.
+//
+// Returns false if it is not possible to make the values dominate the reference
+// operation. The function determines "trivial"-ness with the given callback.
+// By default, it determines that memory-effect-free and scalar operations are
+// trivial.
+bool getDominatingValueSetOpsToHoist(
+    DominanceInfo &domInfo, Operation *refOp, ArrayRef<Value> valueSet,
+    llvm::SetVector<Operation *> &toHoist,
+    function_ref<bool(Operation *)> canHoist = isPureScalarOp);
+
+// Hoist the given set of operations above the reference operation.
+void hoistOpsBefore(Operation *refOp,
+                    const llvm::SetVector<Operation *> &toHoist);
+// Hoist the given set of operations before the iterator.
+void hoistOpsBefore(Block *block, Block::iterator it,
+                    const llvm::SetVector<Operation *> &toHoist);
+
+//===----------------------------------------------------------------------===//
+// Loop Pipelining Utilities
+//===----------------------------------------------------------------------===//
 
 bool loopHasDistGreaterThanOne(scf::ForOp forOp);
 bool isOuterLoop(scf::ForOp forOp);
@@ -28,12 +60,6 @@ Value getPredMask(RewriterBase &rewriter, Type typeLike, Value currentMask,
 
 /// Function to mask operations during scheduling.
 Operation *predicateOp(RewriterBase &rewriter, Operation *op, Value pred);
-
-/// Replace all uses of `oldUse` with `val` and propagate the type if needed.
-/// This is useful when we need to change a memory descriptor from immutable to
-/// mutable.
-void replaceUsesAndPropagateType(OpBuilder &builder, Operation *oldUse,
-                                 Value val);
 
 // Return true if the given ForOp has the attribute
 // `tt.disallow_acc_multi_buffer` set to true.
@@ -91,7 +117,8 @@ int getNumStagesOrDefault(scf::ForOp forOp, int defaultNumStages);
 // Given a result of MemDescSubview, or Alloca, create a MemDescSubview with a
 // single buffer slice (leading dimension equal to 1), at the given index.
 template <typename TBuilder>
-Value createSingleBufferView(TBuilder &builder, Value alloc, Value idx) {
+TypedValue<triton::gpu::MemDescType>
+createSingleBufferView(TBuilder &builder, Value alloc, Value idx) {
   assert(isa<triton::gpu::MemDescType>(alloc.getType()) &&
          "Expected MemDescType");
   auto allocDescType = cast<triton::gpu::MemDescType>(alloc.getType());
@@ -119,7 +146,8 @@ Value createSingleBufferView(TBuilder &builder, Value alloc, Value idx) {
 }
 
 template <typename TBuilder>
-Value createSingleBufferView(TBuilder &builder, Value alloc, int idx) {
+TypedValue<triton::gpu::MemDescType>
+createSingleBufferView(TBuilder &builder, Value alloc, int idx) {
   return createSingleBufferView(
       builder, alloc,
       builder.template create<arith::ConstantIntOp>(alloc.getLoc(), idx, 32));

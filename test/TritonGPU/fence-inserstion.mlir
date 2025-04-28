@@ -37,7 +37,7 @@ module attributes {"ttg.target" = "cuda:90", "ttg.num-ctas" = 1 : i32, "ttg.num-
     %1 = ttg.local_alloc %arg1 : (tensor<128x64xf16, #blocked2>) -> !ttg.memdesc<128x64xf16, #shared1, #smem>
     %acc_tm = ttng.tmem_alloc %cst : (tensor<128x64xf32, #blocked1>) -> !ttg.memdesc<128x64xf32, #tmem, #ttng.tensor_memory>
     // CHECK: ttng.fence_async_shared
-    ttng.tc_gen5_mma %0, %1, %acc_tm, %true, %true : (!ttg.memdesc<128x128xf16, #shared, #ttg.shared_memory>, !ttg.memdesc<128x64xf16, #shared1, #ttg.shared_memory>, !ttg.memdesc<128x64xf32, #tmem, #ttng.tensor_memory>, i1, i1) -> ()
+    ttng.tc_gen5_mma %0, %1, %acc_tm, %true, %true : !ttg.memdesc<128x128xf16, #shared, #ttg.shared_memory>, !ttg.memdesc<128x64xf16, #shared1, #ttg.shared_memory>, !ttg.memdesc<128x64xf32, #tmem, #ttng.tensor_memory>
     tt.return
   }
 }

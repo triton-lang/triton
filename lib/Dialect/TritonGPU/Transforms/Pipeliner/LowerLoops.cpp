@@ -264,46 +264,24 @@ void createAsyncCopy(scf::ForOp forOp, tt::LoadOp loadOp, Value alloc,
 
   // Create wait and local load
   builder.setStageCluster(schedule[firstUse]);
-  Operation *wait =
-      builder.create<ttg::AsyncWaitOp>(loc, commit->getResult(0), 0);
-  Value viewLoad = createSingleBufferView(builder, alloc, extractIdx);
+  auto wait = builder.create<ttg::AsyncWaitOp>(loc, commit->getResult(0), 0);
+  auto viewLoad = createSingleBufferView(builder, alloc, extractIdx);
 
   if (!loadOp.getOther() || isZeroConst(loadOp.getOther())) {
-    // Remove redundant local_load -> local_alloc, but only if
-    // we are not using the other value. AsyncCopyGlobalToLocalOp does not
-    // support the masking.
-    SmallVector<ttg::LocalAllocOp> allocsToErase;
-    for (Operation *user : loadOp->getUsers()) {
-      if (auto userAlloc = dyn_cast<ttg::LocalAllocOp>(user)) {
-        if (allocTy.getEncoding() == userAlloc.getType().getEncoding()) {
-          tt::replaceUsesAndPropagateType(builder, userAlloc, viewLoad);
-          allocsToErase.push_back(userAlloc);
-        }
-      }
-    }
-    for (auto alloc : allocsToErase) {
-      alloc.erase();
-    }
-  }
-
-  // If there are some uses that were not local_allocs, we need to create a
-  // local_load for them.
-  if (loadOp->use_begin() != loadOp->use_end()) {
+    // If masking isn't required, load directly from shared
+    replaceUsesWithLocalLoad(builder, loadOp->getResult(0), viewLoad,
+                             wait.getResult());
+  } else if (loadOp->use_begin() != loadOp->use_end()) {
+    // Otherwise, create a select for non-zero other values as they are not
+    // handled by AsyncCopyGlobalToLocalOp for now.
     auto sharedLoad = builder.create<ttg::LocalLoadOp>(
-        loc, loadOp.getType(), viewLoad, wait->getResult(0));
-    auto result = sharedLoad->getResults();
-
-    // Create a select for non-zero other values as they are not handled by
-    // AsyncCopyGlobalToLocalOp for now.
-    if (other && !isZeroConst(other)) {
-      auto select = builder.create<arith::SelectOp>(
-          loc, loadOp.getType(),
-          // Use the mask operand from the original load, not the one with a
-          // potentially transformed layout.
-          loadOp.getMask(), sharedLoad.getResult(), other);
-      result = select->getResults();
-    }
-    loadOp->replaceAllUsesWith(result);
+        loc, loadOp.getType(), viewLoad, wait.getResult());
+    auto select = builder.create<arith::SelectOp>(
+        loc, loadOp.getType(),
+        // Use the mask operand from the original load, not the one with a
+        // potentially transformed layout.
+        loadOp.getMask(), sharedLoad.getResult(), other);
+    loadOp->replaceAllUsesWith(select->getResults());
   }
   schedule.erase(loadOp);
   loadOp->erase();
@@ -339,29 +317,9 @@ void createTMAAsyncCopy(
   // Create local load after the wait
   builder.setInsertionPointAfter(waitOp);
   builder.setStageCluster(schedule[firstUse]);
-  Value viewLoad = createSingleBufferView(builder, alloc, extractIdx);
-  //  Remove redundant local_load -> local_alloc
-  SmallVector<ttg::LocalAllocOp> allocsToErase;
-  for (Operation *user : loadOp->getUsers()) {
-    if (auto userAlloc = dyn_cast<ttg::LocalAllocOp>(user)) {
-      if (allocTy.getEncoding() == userAlloc.getType().getEncoding()) {
-        tt::replaceUsesAndPropagateType(builder, userAlloc, viewLoad);
-        allocsToErase.push_back(userAlloc);
-      }
-    }
-  }
-  for (auto alloc : allocsToErase) {
-    alloc.erase();
-  }
+  auto viewLoad = createSingleBufferView(builder, alloc, extractIdx);
+  replaceUsesWithLocalLoad(builder, loadOp->getResult(0), viewLoad);
 
-  // If there are some uses that were not local_allocs, we need to create a
-  // local_load for them.
-  if (loadOp->use_begin() != loadOp->use_end()) {
-    auto sharedLoad = builder.create<ttg::LocalLoadOp>(
-        loc, loadOp->getResultTypes().front(), viewLoad);
-    auto result = sharedLoad->getResults();
-    loadOp->replaceAllUsesWith(result);
-  }
   schedule.erase(loadOp);
   loadOp->erase();
 }
@@ -546,8 +504,9 @@ scf::ForOp lowerLoads(scf::ForOp forOp, CoarseSchedule &schedule) {
           // Allocate additional buffer required by the wgmma pipelining.
           stageDiff += 1;
         }
-        asyncLoads[&op] = {.stageDiff = stageDiff,
-                           .sharedEncoding = sharedEncoding};
+        auto &asyncLoad = asyncLoads[&op];
+        asyncLoad.stageDiff = stageDiff;
+        asyncLoad.sharedEncoding = sharedEncoding;
       } else if (stageDiff > 1) {
         // Distance-1 loads can in most cases be pipelined in registers without
         // any performance degradation, as the schedule will usually reorder the
@@ -913,7 +872,8 @@ scf::ForOp createBarrierAndWaitOps(scf::ForOp forOp, CoarseSchedule &schedule,
     barrierSlice =
         triton::createSingleBufferView(builder, barrierAlloc, barrierIdx);
   }
-  mma.setBarrier(barrierSlice);
+  mma.addCompletionBarrier(barrierSlice,
+                           builder.create<arith::ConstantIntOp>(loc, 1, 1));
 
   // List of buffers that may be used until wait completes
   SmallVector<Value> waitBuffers;
@@ -1233,7 +1193,7 @@ scf::ForOp lowerMMAs(scf::ForOp forOp, CoarseSchedule &schedule) {
   SmallVector<ttng::MMAv5OpInterface> mmas;
   forOp.walk([&](ttng::MMAv5OpInterface mma) { mmas.push_back(mma); });
   if (!triton::tools::getBoolEnv("ENABLE_MMA_V5_ATT_PIPELINE")) {
-    if (mmas.size() > 1) {
+    if (mmas.size() > 2) {
       return forOp;
     }
   }
