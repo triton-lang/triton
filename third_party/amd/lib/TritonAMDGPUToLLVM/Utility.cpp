@@ -316,29 +316,35 @@ Value llLoad(RewriterBase &rewriter, Location loc, Value ptr, Type elemTy,
 }
 
 void llStore(RewriterBase &rewriter, Location loc, Value ptr, Value val,
-             Value pred, triton::CacheModifier cm) {
+             Value pred, triton::CacheModifier cm, bool aliasAsyncLoad) {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
 
   auto ctx = ptr.getContext();
   Type funcType = getFunctionType(void_ty(ctx), ValueRange({ptr, val, pred}));
   auto parent = ptr.getParentRegion()->getParentOfType<LLVM::LLVMFuncOp>();
-  auto getStoreNameRaw = [](triton::CacheModifier cm) {
-    switch (cm) {
-    case triton::CacheModifier::WT:
-      return predicatedStoreWT;
-    case triton::CacheModifier::CG:
-      return predicatedStoreCG;
-    case triton::CacheModifier::CS:
-      return predicatedStoreCS;
-    default:
-      // Do not fail in compile time in the case of unsupported modifier.
-      // Just apply default config.
-      return predicatedStore;
-    }
-  };
-  auto funcName = mangleFunc(getStoreNameRaw(cm), funcType);
+
+  std::string funcName;
+  switch (cm) {
+  case triton::CacheModifier::NONE:
+    funcName += predicatedStore;
+  case triton::CacheModifier::WT:
+    funcName += predicatedStoreWT;
+  case triton::CacheModifier::CG:
+    funcName += predicatedStoreCG;
+  case triton::CacheModifier::CS:
+    funcName += predicatedStoreCS;
+  default:
+    // Do not fail in compile time in the case of unsupported modifier.
+    // Just apply default config.
+    funcName += predicatedStore;
+    // TODO proper error handling
+  }
+  if (!aliasAsyncLoad) {
+    funcName += noAliasAsyncLoads;
+  }
+  auto mangledName = mangleFunc(funcName, funcType);
   LLVM::LLVMFuncOp funcOp =
-      appendOrGetExternFuncOp(rewriter, parent, funcName, funcType);
+      appendOrGetExternFuncOp(rewriter, parent, mangledName, funcType);
   LLVM::createLLVMCallOp(rewriter, loc, funcOp, ValueRange({ptr, val, pred}));
 }
 
@@ -728,11 +734,13 @@ void addAsyncCopyAliasScope(AliasAnalysisOpInterface directToLdsOp) {
 void addLocalLoadNoAliasScope(triton::gpu::LocalLoadOp localLoadOp,
                               AliasAnalysisOpInterface llLoadOp) {
   auto token = localLoadOp.getToken();
-  if (!token)
-    return;
-  if (!token.getDefiningOp<tt::gpu::AsyncWaitOp>())
+  if (!token || !token.getDefiningOp<tt::gpu::AsyncWaitOp>())
     return;
 
+  return addLocalLoadNoAliasScope(llLoadOp);
+}
+
+void addLocalLoadNoAliasScope(AliasAnalysisOpInterface llLoadOp) {
   auto ctx = llLoadOp->getContext();
 
   // Do not alias with AsyncCopies

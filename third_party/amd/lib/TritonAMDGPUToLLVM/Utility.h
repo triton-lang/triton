@@ -22,6 +22,7 @@ const char predicatedStore[] = "__predicated_store";
 const char predicatedStoreCG[] = "__predicated_store_CG";
 const char predicatedStoreCS[] = "__predicated_store_CS";
 const char predicatedStoreWT[] = "__predicated_store_WT";
+const char noAliasAsyncLoads[] = "__no_alias_async_loads";
 
 Value shuffleXor(Location loc, RewriterBase &rewriter, Value val, int i,
                  mlir::triton::AMD::ISAFamily isaFamily =
@@ -47,8 +48,8 @@ Value llLoad(RewriterBase &rewriter, Location loc, Value ptr, Type elemTy,
 
 // Stores to shared or global memory with predication.
 void llStore(RewriterBase &rewriter, Location loc, Value ptr, Value val,
-             Value pred,
-             triton::CacheModifier cm = triton::CacheModifier::NONE);
+             Value pred, triton::CacheModifier cm = triton::CacheModifier::NONE,
+             bool aliasAsyncLoads = true);
 
 // Get cache modifier information for creating load or store instruction
 // Get flags <volatile, nontemporal> for a predicated Load or Store
@@ -128,6 +129,8 @@ bool isChainDotTail(mlir::triton::DotOpInterface dotOp);
 //  - Attaches "amdgpu.AsyncCopies" as *non* alias scope to llLoadOp
 void addLocalLoadNoAliasScope(triton::gpu::LocalLoadOp localLoadOp,
                               AliasAnalysisOpInterface llLoadOp);
+// Overload from above without checking the AsyncToken
+void addLocalLoadNoAliasScope(AliasAnalysisOpInterface llLoadOp);
 // Attaches the "AsyncCopies" alias scope to llLoadDirectToLdsOp
 void addAsyncCopyAliasScope(AliasAnalysisOpInterface llLoadDirectToLdsOp);
 

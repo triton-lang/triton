@@ -77,6 +77,11 @@ private:
         mlir::LLVM::AMD::getCacheModifierFlagsForPredicatedCall(callOp);
     auto storeOp = rewriter.create<LLVM::StoreOp>(
         loc, val, ptr, /*alignment=*/0, volatileFlag, nonTmpFlag);
+    bool addAsyncNoAliasInfo =
+        callOp.getCallee().value().contains(mlir::LLVM::AMD::noAliasAsyncLoads);
+    if (addAsyncNoAliasInfo) {
+      LLVM::AMD::addLocalLoadNoAliasScope(storeOp);
+    }
     rewriter.create<LLVM::BrOp>(loc, afterStore);
     rewriter.setInsertionPointToStart(afterStore);
     rewriter.eraseOp(callOp);
