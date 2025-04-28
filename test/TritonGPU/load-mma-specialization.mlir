@@ -881,4 +881,15 @@ tt.func @user_partition_has_cycle(
   tt.return
 }
 
+// CHECK-LABEL: @specialize_load_only
+tt.func @specialize_load_only(%desc: !tt.tensordesc<tensor<128x64xf16, #shared>>, %ub: i32) {
+  %c0_i32 = arith.constant 0 : i32
+  %c1_i32 = arith.constant 1 : i32
+  scf.for %i = %c0_i32 to %ub step %c1_i32 : i32 {
+    %val = tt.descriptor_load %desc[%i, %i] : !tt.tensordesc<tensor<128x64xf16, #shared>> -> tensor<128x64xf16, #oper_layout>
+    "use"(%val) : (tensor<128x64xf16, #oper_layout>) -> ()
+  } {tt.warp_specialize}
+  tt.return
+}
+
 }

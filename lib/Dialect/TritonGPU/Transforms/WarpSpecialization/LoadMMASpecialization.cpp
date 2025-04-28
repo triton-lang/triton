@@ -535,6 +535,7 @@ LogicalResult PipelinedLoadGroup::lowerLoads(WarpSchedule &schedule,
   // Set up the consumer wait. We know the live before ops are the same for all
   // loads since that's how they were grouped.
   SetVector<Operation *> distinctAsyncUsers;
+  SmallVector<ttng::ArriveBarrierOp> arriveOps;
   for (auto [i, liveBeforeOp] : llvm::enumerate(firstLoad->liveBeforeOps)) {
     b.setInsertionPoint(liveBeforeOp);
     Partition &userPartition = *schedule.getPartition(liveBeforeOp);
@@ -549,8 +550,9 @@ LogicalResult PipelinedLoadGroup::lowerLoads(WarpSchedule &schedule,
       Operation *liveUntilOp =
           findNearestCommonPostDominator(liveUntilOps, postDomInfo);
       b.setInsertionPoint(liveUntilOp);
-      b.createInPartition<ttng::ArriveBarrierOp>(userPartition, curEmptyBar,
-                                                 /*arriveCount=*/1);
+      arriveOps.push_back(
+          b.createInPartition<ttng::ArriveBarrierOp>(userPartition, curEmptyBar,
+                                                     /*arriveCount=*/1));
     }
   }
 
@@ -580,6 +582,7 @@ LogicalResult PipelinedLoadGroup::lowerLoads(WarpSchedule &schedule,
     if (!load.loadOp->use_empty()) {
       SmallVector<Operation *> regUsers =
           llvm::to_vector(load.loadOp->getUsers());
+      llvm::append_range(regUsers, arriveOps);
       Operation *firstRegUser = findNearestCommonDominator(regUsers, domInfo);
       b.setInsertionPoint(firstRegUser);
       Value loaded = b.create<LocalLoadOp>(load.type, view);
