@@ -352,12 +352,17 @@ bool StreamPipeliner::createAsyncCopy(tt::LoadOp loadOp, Value alloc,
       loadOp.getLoc(), src, viewLoad, loadOp.getMask(), loadOp.getOther(),
       loadOp.getCache(), loadOp.getEvict(), loadOp.getIsVolatile());
   schedule.erase(loadOp);
+  schedule.insert(copyOp, loadStage, loadCluster);
 
   // Insert synchronization primitives to create barriers during lowering
-  auto commit =
+  auto commitOp =
       builder.create<ttg::AsyncCommitGroupOp>(loc, copyOp->getResult(0));
+  // Place ttg.async_commit_group op next to async load so the later
+  // UpdateAsyncWaitCount pass can deduce better waitcnts
+  schedule.insert(commitOp, loadStage, loadCluster);
+
   ttg::AsyncWaitOp waitOp =
-      builder.create<ttg::AsyncWaitOp>(loc, commit->getResult(0), 0);
+      builder.create<ttg::AsyncWaitOp>(loc, commitOp->getResult(0), 0);
   // If the LocalLoads are schedule to a later stage than AsyncCopy we need to
   // place the AsyncCopy prefetches after the AsyncWaits which create a barrier
   // to ensure all warps are finished reading the shared buffer we will write
@@ -366,10 +371,6 @@ bool StreamPipeliner::createAsyncCopy(tt::LoadOp loadOp, Value alloc,
   // schdule so they are placed before the LocalLoads
   if (loadStage != stages[SCHED_LOCAL_LOAD])
     scheduleOp(waitOp, SCHED_ASYNC_WAIT);
-  scheduleOp(copyOp, SCHED_GLOBAL_LOAD);
-  // Place ttg.async_commit_group op next to async load so the later
-  // UpdateAsyncWaitCount pass can deduce better waitcnts
-  scheduleOp(commit, SCHED_LOCAL_STORE);
 
   // Create local load which consumes the async token from the AsyncWait
   auto sharedLoad =
