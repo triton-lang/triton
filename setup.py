@@ -20,6 +20,11 @@ from setuptools import Extension, find_packages, setup
 from setuptools.command.build_ext import build_ext
 from setuptools.command.build_py import build_py
 from setuptools.command.develop import develop
+from distutils.command.install import install
+from setuptools.command.egg_info import egg_info
+from setuptools.command.sdist import sdist
+from wheel.bdist_wheel import bdist_wheel
+
 from dataclasses import dataclass
 
 import pybind11
@@ -583,23 +588,37 @@ def download_and_copy_dependencies():
 backends = [*BackendInstaller.copy(["nvidia", "amd"]), *BackendInstaller.copy_externals()]
 
 
+def language_extras_install_path():
+    return os.path.abspath(os.path.join(os.path.dirname(__file__), "python", "triton", "language", "extra"))
+
+
+def tools_extra_install_path():
+    return os.path.abspath(os.path.join(os.path.dirname(__file__), "python", "triton", "tools", "extra"))
+
+
 def get_package_dirs():
     yield ("", "python")
 
     for backend in backends:
-        yield (f"triton.backends.{backend.name}", backend.backend_dir)
+        # Note that all paths must be relative to setup.py
+        yield (f"triton.backends.{backend.name}", os.path.relpath(backend.install_dir))
 
         if backend.language_dir:
+            lang_extra_dir = language_extras_install_path()
+
             # Install the contents of each backend's `language` directory into
             # `triton.language.extra`.
             for x in os.listdir(backend.language_dir):
-                yield (f"triton.language.extra.{x}", os.path.join(backend.language_dir, x))
+                lang_install_path = os.path.relpath(os.path.join(lang_extra_dir, x))
+                yield (f"triton.language.extra.{x}", lang_install_path)
 
         if backend.tools_dir:
+            tools_extra_dir = language_extras_install_path()
             # Install the contents of each backend's `tools` directory into
             # `triton.tools.extra`.
             for x in os.listdir(backend.tools_dir):
-                yield (f"triton.tools.extra.{x}", os.path.join(backend.tools_dir, x))
+                tools_install_path = os.path.relpath(os.path.join(tools_extra_dir, x))
+                yield (f"triton.tools.extra.{x}", tools_install_path)
 
     if check_env_flag("TRITON_BUILD_PROTON", "ON"):  # Default ON
         yield ("triton.profiler", "third_party/proton/proton")
@@ -612,8 +631,7 @@ def add_link_to_backends():
         if backend.language_dir:
             # Link the contents of each backend's `language` directory into
             # `triton.language.extra`.
-            extra_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "python", "triton", "language",
-                                                     "extra"))
+            extra_dir = language_extras_install_path()
             for x in os.listdir(backend.language_dir):
                 src_dir = os.path.join(backend.language_dir, x)
                 install_dir = os.path.join(extra_dir, x)
@@ -622,7 +640,7 @@ def add_link_to_backends():
         if backend.tools_dir:
             # Link the contents of each backend's `tools` directory into
             # `triton.tools.extra`.
-            extra_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "python", "triton", "tools", "extra"))
+            extra_dir = tools_extra_install_path()
             for x in os.listdir(backend.tools_dir):
                 src_dir = os.path.join(backend.tools_dir, x)
                 install_dir = os.path.join(extra_dir, x)
@@ -641,6 +659,13 @@ def add_links():
         add_link_to_proton()
 
 
+class plugin_install(install):
+
+    def run(self):
+        add_links()
+        install.run(self)
+
+
 class plugin_develop(develop):
 
     def run(self):
@@ -653,6 +678,27 @@ class plugin_editable_wheel(editable_wheel):
     def run(self):
         add_links()
         super().run()
+
+
+class plugin_bdist_wheel(bdist_wheel):
+
+    def run(self):
+        add_links()
+        bdist_wheel.run(self)
+
+
+class plugin_egginfo(egg_info):
+
+    def run(self):
+        add_links()
+        egg_info.run(self)
+
+
+class plugin_sdist(sdist):
+
+    def run(self):
+        add_links()
+        sdist.run(self)
 
 
 def get_entry_points():
@@ -716,8 +762,12 @@ setup(
         "build_ext": CMakeBuild,
         "build_py": CMakeBuildPy,
         "clean": CMakeClean,
+        "install": plugin_install,
         "develop": plugin_develop,
         "editable_wheel": plugin_editable_wheel,
+        "bdist_wheel": plugin_bdist_wheel,
+        "egg_info": plugin_egginfo,
+        "sdist": plugin_sdist,
     },
     zip_safe=False,
     # for PyPI
