@@ -618,6 +618,28 @@ def get_package_dirs():
         yield ("triton.profiler", "third_party/proton/proton")
 
 
+def get_packages():
+    yield from find_packages(where="python")
+
+    for backend in backends:
+        yield f"triton.backends.{backend.name}"
+
+        if backend.language_dir:
+            # Install the contents of each backend's `language` directory into
+            # `triton.language.extra`.
+            for x in os.listdir(backend.language_dir):
+                yield f"triton.language.extra.{x}"
+
+        if backend.tools_dir:
+            # Install the contents of each backend's `tools` directory into
+            # `triton.tools.extra`.
+            for x in os.listdir(backend.tools_dir):
+                yield f"triton.tools.extra.{x}"
+
+    if check_env_flag("TRITON_BUILD_PROTON", "ON"):  # Default ON
+        yield "triton.profiler"
+
+
 def add_link_to_backends(external_only):
     for backend in backends:
         if external_only and not backend.is_external:
@@ -739,9 +761,6 @@ def get_git_version_suffix():
 # keep it separate for easy substitution
 TRITON_VERSION = "3.3.0" + get_git_version_suffix() + os.environ.get("TRITON_WHEEL_VERSION_SUFFIX", "")
 
-package_dirs = dict(get_package_dirs())
-extra_packages = [x for x in package_dirs if x != ""]
-
 setup(
     name=os.environ.get("TRITON_WHEEL_NAME", "triton"),
     version=TRITON_VERSION,
@@ -753,8 +772,8 @@ setup(
         "setuptools>=40.8.0",
         "importlib-metadata; python_version < '3.10'",
     ],
-    packages=find_packages(where="python") + extra_packages,
-    package_dir=package_dirs,
+    packages=list(get_packages()),
+    package_dir=dict(get_package_dirs()),
     entry_points=get_entry_points(),
     include_package_data=True,
     ext_modules=[CMakeExtension("triton", "triton/_C/")],
