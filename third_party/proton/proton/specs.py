@@ -33,9 +33,11 @@ def max_flops(device_type, arch, width, num_sms, clock_rate):
         If not found, returns NaN.
     """
     if device_type not in flops_by_device:
+        print(f"Unknown device type: {device_type}")
         return float("nan")
 
     if arch not in flops_by_device[device_type]:
+        print(f"Unknown architecture: {arch}")
         return float("nan")
 
     flops_func = flops_by_device[device_type][arch]
