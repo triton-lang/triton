@@ -49,7 +49,7 @@ Value llLoad(RewriterBase &rewriter, Location loc, Value ptr, Type elemTy,
 // Stores to shared or global memory with predication.
 void llStore(RewriterBase &rewriter, Location loc, Value ptr, Value val,
              Value pred, triton::CacheModifier cm = triton::CacheModifier::NONE,
-             bool aliasAsyncLoads = true);
+             bool forceNoAliasAsyncLoads = false);
 
 // Get cache modifier information for creating load or store instruction
 // Get flags <volatile, nontemporal> for a predicated Load or Store
