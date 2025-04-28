@@ -3,15 +3,14 @@ import hashlib
 import json
 from .._C.libtriton import get_cache_invalidating_env_vars, ir
 from ..backends import backends
-from ..backends.compiler import GPUTarget
-from .. import __version__
+from ..backends.compiler import BaseBackend, GPUTarget
+from .. import __version__, config
 from ..runtime.autotuner import OutOfResources
 from ..runtime.cache import get_cache_manager, get_dump_manager, get_override_manager
 from ..runtime.driver import driver
 from ..tools.disasm import get_sass
 # TODO: this shouldn't be here
 from .code_generator import ast_to_ttir
-from . import config
 from pathlib import Path
 import re
 import functools
@@ -185,7 +184,7 @@ def filter_traceback(e: BaseException):
 
     These are uninteresting to the user -- "just show me *my* code!"
     """
-    if config.front_end_debugging():
+    if config.compilation.front_end_debugging:
         return
 
     if e.__cause__ is not None:
@@ -238,9 +237,9 @@ def compile(src, target=None, options=None):
     fn_cache_manager = get_cache_manager(hash)
     # For dumping/overriding only hash the source as we want it to be independent of triton
     # core changes to make it easier to track kernels by hash.
-    enable_override = os.environ.get("TRITON_KERNEL_OVERRIDE", "0") == "1"
-    enable_ir_dump = os.environ.get("TRITON_KERNEL_DUMP", "0") == "1"
-    store_only_binary = os.environ.get("TRITON_STORE_BINARY_ONLY", "0") == "1"
+    enable_override = config.compilation.override
+    enable_ir_dump = config.compilation.dump_ir
+    store_only_binary = config.compilation.store_binary_only
     fn_override_manager = get_override_manager(src.hash()) if enable_override else None
     fn_dump_manager = get_dump_manager(src.hash()) if enable_ir_dump else None
     # Pre-truncate the file name here to avoid hitting the 255 character limit on common platforms.
@@ -251,7 +250,7 @@ def compile(src, target=None, options=None):
     metadata_filename = f"{file_name}.json"
     metadata_group = fn_cache_manager.get_group(metadata_filename) or {}
     metadata_path = metadata_group.get(metadata_filename)
-    always_compile = os.environ.get("TRITON_ALWAYS_COMPILE", "0") == "1"
+    always_compile = config.compilation.always_compile
     if not always_compile and metadata_path is not None:
         # cache hit!
         return CompiledKernel(src, metadata_group, hash)
@@ -285,7 +284,7 @@ def compile(src, target=None, options=None):
     except Exception as e:
         filter_traceback(e)
         raise
-    use_ir_loc = os.environ.get("USE_IR_LOC", None)
+    use_ir_loc = config.compilation.use_ir_loc
     if ir_source and use_ir_loc:
         module.create_location_snapshot(src.path)
         print(f"Creating new locations for {src.path}")
@@ -320,13 +319,13 @@ def compile(src, target=None, options=None):
     # this is likely due to the llvm-symbolizer forking a process
     # TODO: Reconcile the difference here between the ASAN and non-ASAN path with enabling
     # multithreading in the MLIR context
-    if not os.environ.get("TRITON_ENABLE_ASAN", "0") == "1":
+    if not config.compilation.enable_asan:
         context.disable_multithreading()
     # return handle to compiled kernel
     return CompiledKernel(src, metadata_group, hash)
 
 
-def make_backend(target):
+def make_backend(target: GPUTarget) -> BaseBackend:
     actives = [x.compiler for x in backends.values() if x.compiler.supports_target(target)]
     if len(actives) != 1:
         raise RuntimeError(
@@ -340,7 +339,7 @@ class LazyDict:
         self.data = data
         self.extras = []
 
-    def get(self) -> None:
+    def get(self):
         for func, args in self.extras:
             self.data = self.data | func(*args)
         self.extras.clear()
@@ -364,11 +363,6 @@ class AsmDict(dict):
 
 
 class CompiledKernel:
-
-    # Hooks for external tools to monitor the execution of triton kernels
-    # TODO: move out of this namespace since it's a runtime thing
-    launch_enter_hook = None
-    launch_exit_hook = None
 
     def __init__(self, src, metadata_group, hash):
         from collections import namedtuple
@@ -427,7 +421,7 @@ class CompiledKernel:
         return super().__getattribute__(name)
 
     def launch_metadata(self, grid, stream, *args):
-        if CompiledKernel.launch_enter_hook is None:
+        if config.runtime.launch_enter_hook is None:
             return None
         ret = LazyDict({"name": self.name, "function": self.function, "stream": stream})
         if not isinstance(self.src, ASTSource) or self.src.fn.launch_metadata is None:
@@ -449,6 +443,6 @@ class CompiledKernel:
                 stream = driver.active.get_current_stream(device)
             launch_metadata = self.launch_metadata(grid, stream, *args)
             self.run(grid[0], grid[1], grid[2], stream, self.function, self.packed_metadata, launch_metadata,
-                     CompiledKernel.launch_enter_hook, CompiledKernel.launch_exit_hook, *args)
+                     config.runtime.launch_enter_hook, config.runtime.launch_exit_hook, *args)
 
         return runner
