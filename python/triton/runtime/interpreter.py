@@ -723,6 +723,7 @@ class InterpreterBuilder:
         shape: List[TensorHandle],
         strides: List[TensorHandle],
         tensor_shape: List[int],
+        is_signed: bool,
     ):
         desc = TensorDescHandle(base, shape, strides, tensor_shape)
         desc.validate()

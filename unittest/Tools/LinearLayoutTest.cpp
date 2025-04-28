@@ -921,6 +921,113 @@ TEST(SupremumTest, ErrorOnInconsistentOrder) {
   ASSERT_DEATH({ supremum(x, y); }, "Supremum does not exist");
 }
 #endif
+
+TEST_F(LinearLayoutTest, DivideLeft_Basic) {
+  // Test division when A = B * C.
+  auto B = LinearLayout::identity1D(8, S("in"), S("out"));
+  auto C = LinearLayout::zeros1D(16, S("in"), S("out"));
+  auto isC = divideLeft(B * C, B);
+  EXPECT_TRUE(isC.has_value());
+  EXPECT_EQ(isC.value(), C);
+
+  auto isB = divideLeft(C * B, C);
+  EXPECT_TRUE(isB.has_value());
+  EXPECT_EQ(isB.value(), B);
+}
+
+TEST_F(LinearLayoutTest, DivideLeft_NonMatchingDims) {
+  // If B contains an extra input dimension not present in A, division should
+  // fail.
+  LinearLayout A = LinearLayout::identity1D(32, S("in"), S("out"));
+  LinearLayout B({{S("in"), {{1}, {2}, {4}, {8}}}, {S("extra"), {{0}}}},
+                 {S("out")});
+  auto candidateOpt = divideLeft(A, B);
+  EXPECT_FALSE(candidateOpt.has_value());
+}
+
+TEST_F(LinearLayoutTest, DivideLeft_Simple) {
+  EXPECT_EQ(divideLeft(LinearLayout::identity1D(8, S("in"), S("out")),
+                       LinearLayout::identity1D(4, S("in"), S("out"))),
+            LinearLayout::identity1D(2, S("in"), S("out")));
+
+  EXPECT_EQ(divideLeft(LinearLayout::identity1D(8, S("in"), S("out")),
+                       LinearLayout::identity1D(8, S("in"), S("out"))),
+            LinearLayout::identity1D(1, S("in"), S("out")));
+}
+
+TEST_F(LinearLayoutTest, DivideLeft_2D) {
+  LinearLayout l1(
+      {
+          {S("in1"), {{1, 1}, {2, 2}, {0, 8}, {0, 4}}},
+          {S("in2"), {{0, 2}, {0, 1}}},
+      },
+      {S("out1"), S("out2")});
+  LinearLayout l2(
+      {
+          {S("in1"), {{1, 1}, {2, 2}}},
+          {S("in2"), {{0, 2}, {0, 1}}},
+      },
+      {S("out1"), S("out2")});
+  LinearLayout l3({{S("in1"), {{0, 2}, {0, 1}}}, {S("in2"), {}}},
+                  {S("out1"), S("out2")});
+  ASSERT_EQ(l2 * l3, l1);
+  ASSERT_EQ(divideLeft(l1, l2).value(), l3);
+}
+
+TEST_F(LinearLayoutTest, DivideLeft_EliminateInDim) {
+  LinearLayout l1(
+      {
+          {S("in2"), {{0, 1}, {1, 0}}},
+          {S("in1"), {{2, 0}, {0, 2}}},
+      },
+      {S("out1"), S("out2")});
+  LinearLayout l2({{S("in2"), {{0, 1}, {1, 0}}}}, {S("out1"), S("out2")});
+  LinearLayout l3({{S("in2"), {}}, {S("in1"), {{1, 0}, {0, 1}}}},
+                  {S("out1"), S("out2")});
+  ASSERT_EQ(l2 * l3, l1);
+  EXPECT_EQ(divideLeft(l1, l2).value(), l3);
+
+  LinearLayout l4({{S("in1"), {{0, 1}, {0, 2}}}, {S("in2"), {}}},
+                  {S("out1"), S("out2")});
+  LinearLayout l5({{S("in1"), {{0, 1}, {0, 2}}}}, {S("out1"), S("out2")});
+  LinearLayout l6({{S("in1"), {}}, {S("in2"), {}}}, {S("out1"), S("out2")});
+  ASSERT_EQ(l5 * l6, l4);
+  EXPECT_EQ(divideLeft(l4, l5).value(), l6);
+
+  LinearLayout l7({{S("in1"), {}}, {S("in2"), {{0, 1}}}, {S("in3"), {}}},
+                  {S("out1"), S("out2")});
+  LinearLayout l8({{S("in2"), {{0, 1}}}}, {S("out1"), S("out2")});
+  LinearLayout l9({{S("in1"), {}}, {S("in2"), {}}, {S("in3"), {}}},
+                  {S("out1"), S("out2")});
+  ASSERT_EQ(l8 * l9, l7);
+  EXPECT_EQ(divideLeft(l7, l8).value(), l9);
+}
+
+TEST_F(LinearLayoutTest, DivideLeft_EliminateOutDim) {
+  LinearLayout l1(
+      {
+          {S("in2"), {{1, 0}, {1, 0}}},
+          {S("in1"), {{2, 0}, {0, 1}}},
+      },
+      {S("out1"), S("out2")});
+  LinearLayout l2({{S("in2"), {{1, 0}, {1, 0}}}}, {S("out1"), S("out2")});
+  LinearLayout l3({{S("in2"), {}}, {S("in1"), {{1, 0}, {0, 1}}}},
+                  {S("out1"), S("out2")});
+  ASSERT_EQ(l2 * l3, l1);
+  EXPECT_EQ(divideLeft(l1, l2).value(), l3);
+
+  LinearLayout l4(
+      {
+          {S("in1"), {{0, 1}, {0, 2}}},
+      },
+      {S("out1"), S("out2")});
+  using BasesArray =
+      ArrayRef<std::pair<StringAttr, std::vector<std::vector<int32_t>>>>;
+  LinearLayout l5(BasesArray{}, {S("out1")});
+  LinearLayout l6({{S("in1"), {{0, 1}, {0, 2}}}}, {S("out1"), S("out2")});
+  ASSERT_EQ(l5 * l6, l4);
+  EXPECT_EQ(divideLeft(l4, l5).value(), l6);
+}
 } // anonymous namespace
 } // namespace mlir::triton
 

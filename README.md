@@ -71,7 +71,7 @@ git clone https://github.com/triton-lang/triton.git
 cd triton
 
 pip install -r python/requirements.txt # build-time dependencies
-pip install -e python
+pip install -e .
 ```
 
 Or with a virtualenv:
@@ -84,7 +84,7 @@ python -m venv .venv --prompt triton
 source .venv/bin/activate
 
 pip install -r python/requirements.txt # build-time dependencies
-pip install -e python
+pip install -e .
 ```
 
 # Building with a custom LLVM
@@ -124,7 +124,7 @@ arbitrary LLVM version.
        $ LLVM_INCLUDE_DIRS=$LLVM_BUILD_DIR/include \
          LLVM_LIBRARY_DIR=$LLVM_BUILD_DIR/lib \
          LLVM_SYSPATH=$LLVM_BUILD_DIR \
-         pip install -e python
+         pip install -e .
 
 # Tips for building
 
@@ -139,7 +139,7 @@ arbitrary LLVM version.
   can be changed anytime.
 
 - If you're running out of memory when building Triton, specify the `MAX_JOBS`
-  environment variable (to the `pip install -e python` command) to limit the
+  environment variable (to the `pip install -e .` command) to limit the
   number of jobs.
 
 - Pass `--no-build-isolation` to `pip install` to make nop builds faster.
@@ -150,7 +150,7 @@ arbitrary LLVM version.
   (probably because, in our build, users don't invoke cmake directly, but
   instead use setup.py).  Teach vscode how to compile Triton as follows.
 
-    - Do a local build. Run command `pip install -e python`
+    - Do a local build. Run command `pip install -e .`
     - Get the full path to the `compile_commands.json` file produced by the build:
       `find python/build -name 'compile_commands.json' | xargs readlink -f`.
       You might get a full path similar to `/Users/{username}/triton/python/build/cmake.macosx-11.1-arm64-cpython-3.12/compile_commands.json`
@@ -183,7 +183,9 @@ $ make test-nogpu
 
 For detailed instructions on how to debug Triton's frontend, please refer to this [tutorial](https://triton-lang.org/main/programming-guide/chapter-3/debugging.html). The following includes additional tips for hacking on Triton's backend.
 
-**Helpful environment variables**
+**Configuration knobs**
+
+See [`python/triton/config.py`](python/triton/config.py) for the full list of configuration knobs. You can set those knobs directly in python or use environment variables to control them. Below are some of the environment variables you can specify (see `config.py` for the full list):
 
 - `MLIR_ENABLE_DUMP=1` dumps the IR before every MLIR pass Triton runs, for all
    kernels. Use `MLIR_ENABLE_DUMP=kernelName` to dump for a specific kernel only.
@@ -250,6 +252,8 @@ For detailed instructions on how to debug Triton's frontend, please refer to thi
 - `TRITON_OVERRIDE_DIR` specifies the directory from which to load the IR/ptx/amdgcn files when `TRITON_KERNEL_OVERRIDE` is set to 1.
 - `TRITON_F32_DEFAULT` sets the default input precision of `tl.dot` when using 32-bit floats, which can be either `ieee`, `tf32`, or `tf32x3`.
 - `TRITON_FRONT_END_DEBUGGING=1` disables exception wrapping when an error occurs in the compiler frontend, allowing the full stack trace to be seen.
+
+N.B. Some of these environment variables don't have a knob in `config.py`-- those are only relevant to the C++ layer(s), hence they don't exist in the python layer.
 
 **Kernel Override Steps**
 

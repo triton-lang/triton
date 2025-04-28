@@ -86,7 +86,10 @@ module attributes {nvws.mma = {num_warps = 4 : i32, start_warp = 0 : i32}, nvws.
             // CHECK-NEXT: ttg.memdesc_subview
             // CHECK-NEXT: ttng.tc_gen5_mma
             %36 = ttg.memdesc_trans %arg10 {order=array<i32: 1,0>} : !ttg.memdesc<128x64xf8E4M3FN, #shared, #smem, mutable> -> !ttg.memdesc<64x128xf8E4M3FN, #shared1, #smem, mutable>
-            ttng.tc_gen5_mma %arg9, %36, %arg11, %true, %true {} : (!ttg.memdesc<128x64xf8E4M3FN, #shared, #smem, mutable>, !ttg.memdesc<64x128xf8E4M3FN, #shared1, #smem, mutable>, !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>, i1, i1) -> ()
+            ttng.tc_gen5_mma %arg9, %36, %arg11, %true, %true :
+              !ttg.memdesc<128x64xf8E4M3FN, #shared, #smem, mutable>,
+              !ttg.memdesc<64x128xf8E4M3FN, #shared1, #smem, mutable>,
+              !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>
             nvws.aref.return
           } : (!nvws.aref<[!ttg.memdesc<3x128x64xf8E4M3FN, #shared, #smem, mutable>, !ttg.memdesc<3x128x64xf8E4M3FN, #shared, #smem, mutable>], 1>, i32) -> ()
           %37 = arith.addi %arg8, %c1_i32 {} : i32
@@ -228,7 +231,10 @@ module attributes {nvws.mma = {num_warps = 4 : i32, start_warp = 0 : i32}, nvws.
             // CHECK-NEXT: ttg.memdesc_subview
             // CHECK-NEXT: ttng.tc_gen5_mma
               %37 = ttg.memdesc_trans %arg13 {order = array<i32: 1, 0>} : !ttg.memdesc<128x128xf8E4M3FN, #shared, #smem, mutable> -> !ttg.memdesc<128x128xf8E4M3FN, #shared1, #smem, mutable>
-              ttng.tc_gen5_mma %arg12, %37, %arg11, %arg9, %true : (!ttg.memdesc<128x128xf8E4M3FN, #shared, #smem, mutable>, !ttg.memdesc<128x128xf8E4M3FN, #shared1, #smem, mutable>, !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>, i1, i1) -> ()
+              ttng.tc_gen5_mma %arg12, %37, %arg11, %arg9, %true :
+                !ttg.memdesc<128x128xf8E4M3FN, #shared, #smem, mutable>,
+                !ttg.memdesc<128x128xf8E4M3FN, #shared1, #smem, mutable>,
+                !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>
               nvws.aref.return
             } : (!nvws.aref<[!ttg.memdesc<3x128x128xf8E4M3FN, #shared, #smem, mutable>, !ttg.memdesc<3x128x128xf8E4M3FN, #shared, #smem, mutable>], 1>, i32) -> ()
             %38 = arith.addi %arg10, %c1_i32  : i32

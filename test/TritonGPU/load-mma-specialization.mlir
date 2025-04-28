@@ -762,4 +762,59 @@ tt.func @matmul_tma_acc_with_conditional_def_and_use_no_multibuf_flag(
   tt.return
 }
 
+
+
+tt.func @matmul_scaled_rhs_scales_tma(
+  // CHECK-LABEL: @matmul_scaled_rhs_scales_tma
+  %k_tiles: i32,
+  %off_m: i32,
+  %off_n: i32,
+  %a_desc: !tt.tensordesc<tensor<128x64xf8E4M3FN, #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 8}>>>,
+  %b_desc: !tt.tensordesc<tensor<128x64xf8E4M3FN, #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 8}>>>,
+  %b_scale_desc: !tt.tensordesc<tensor<128x8xi8, #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [4, 3, 2, 1, 0]}>>>
+) {
+  %true = arith.constant true
+  %c0_i32 = arith.constant 0 : i32
+  %c1_i32 = arith.constant 1 : i32
+  %BLOCK_K = arith.constant 64 : i32
+  %zero = arith.constant dense<0.0> : tensor<128x128xf32, #acc_layout>
+
+  %a_scales_const = arith.constant dense<127> : tensor<128x8xi8, #oper_layout>
+  %a_scales_tmem = ttng.tmem_alloc %a_scales_const : (tensor<128x8xi8, #oper_layout>) -> !ttg.memdesc<128x8xi8, #ttng.tensor_memory_scales_encoding<>, #ttng.tensor_memory>
+
+  %result = scf.for %k = %c0_i32 to %k_tiles step %c1_i32 iter_args(%acc = %zero) -> tensor<128x128xf32, #acc_layout> : i32 {
+    %off_k = arith.muli %k, %BLOCK_K : i32
+
+    // CHECK: %{{[0-9]+}} = ttg.memdesc_subview %{{[0-9]+}}[%arg7, %c0_i32, %c0_i32]
+    // CHECK-NEXT: %{{[0-9]+}} = ttng.tensor_desc_to_tma_ptr %arg3 {ttg.partition = 0 : i32}
+    // CHECK-NEXT: ttng.async_tma_copy_global_to_local %{{[0-9]+}}[%arg1, %{{[0-9]+}}] %{{[0-9]+}}, %{{[0-9]+}}, %true {ttg.partition = 0 : i32}
+    %a_reg = tt.descriptor_load %a_desc[%off_m, %off_k] : !tt.tensordesc<tensor<128x64xf8E4M3FN, #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 8}>>> -> tensor<128x64xf8E4M3FN, #oper_layout>
+
+    // CHECK-NEXT: %{{[0-9]+}} = ttg.memdesc_subview %{{[0-9]+}}[%arg7, %c0_i32, %c0_i32]
+    // CHECK-NEXT: %{{[0-9]+}} = ttng.tensor_desc_to_tma_ptr %arg4 {ttg.partition = 0 : i32}
+    // CHECK-NEXT: ttng.async_tma_copy_global_to_local %{{[0-9]+}}[%arg2, %{{[0-9]+}}] %{{[0-9]+}}, %{{[0-9]+}}, %true {ttg.partition = 0 : i32}
+    %b_reg = tt.descriptor_load %b_desc[%off_n, %off_k] : !tt.tensordesc<tensor<128x64xf8E4M3FN, #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 8}>>> -> tensor<128x64xf8E4M3FN, #oper_layout>
+
+    // CHECK-NEXT: %{{[0-9]+}} = ttg.memdesc_subview %{{[0-9]+}}[%arg7, %c0_i32, %c0_i32]
+    // CHECK-NEXT: %{{[0-9]+}} = ttng.tensor_desc_to_tma_ptr %arg5 {ttg.partition = 0 : i32}
+    // CHECK-NEXT: ttng.async_tma_copy_global_to_local %{{[0-9]+}}[%arg1, %c0_i32] %{{[0-9]+}}, %{{[0-9]+}}, %true {ttg.partition = 0 : i32}
+    %b_scales_reg = tt.descriptor_load %b_scale_desc[%off_m, %c0_i32] : !tt.tensordesc<tensor<128x8xi8, #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [4, 3, 2, 1, 0]}>>> -> tensor<128x8xi8, #oper_layout>
+
+    %a_sh = ttg.local_alloc %a_reg : (tensor<128x64xf8E4M3FN, #oper_layout>) -> !ttg.memdesc<128x64xf8E4M3FN, #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 8}>, #smem>
+    %b_sh_raw = ttg.local_alloc %b_reg : (tensor<128x64xf8E4M3FN, #oper_layout>) -> !ttg.memdesc<128x64xf8E4M3FN, #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 8}>, #smem>
+    %b_sh = ttg.memdesc_trans %b_sh_raw {order = array<i32: 1, 0>} : !ttg.memdesc<128x64xf8E4M3FN, #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 8}>, #smem> -> !ttg.memdesc<64x128xf8E4M3FN, #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = true, elementBitWidth = 8}>, #smem>
+
+    %b_scales_tmem = ttng.tmem_alloc %b_scales_reg : (tensor<128x8xi8, #oper_layout>) -> !ttg.memdesc<128x8xi8, #ttng.tensor_memory_scales_encoding<>, #ttng.tensor_memory>
+
+    %c_tmem = ttng.tmem_alloc %acc : (tensor<128x128xf32, #acc_layout>) -> !ttg.memdesc<128x128xf32, #acc_tmem, #ttng.tensor_memory, mutable>
+
+    ttng.tc_gen5_mma_scaled %a_sh, %b_sh, %c_tmem, %a_scales_tmem, %b_scales_tmem, %true, %true lhs = e4m3 rhs = e4m3 : !ttg.memdesc<128x64xf8E4M3FN, #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 8}>, #smem>, !ttg.memdesc<64x128xf8E4M3FN, #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = true, elementBitWidth = 8}>, #smem>, !ttg.memdesc<128x128xf32, #acc_tmem, #ttng.tensor_memory, mutable>, !ttg.memdesc<128x8xi8, #ttng.tensor_memory_scales_encoding<>, #ttng.tensor_memory>, !ttg.memdesc<128x8xi8, #ttng.tensor_memory_scales_encoding<>, #ttng.tensor_memory>
+
+    %c = ttng.tmem_load %c_tmem : !ttg.memdesc<128x128xf32, #acc_tmem, #ttng.tensor_memory, mutable> -> tensor<128x128xf32, #acc_layout>
+    scf.yield %c : tensor<128x128xf32, #acc_layout>
+  } {tt.warp_specialize}
+
+  tt.return
+}
+
 }

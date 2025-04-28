@@ -596,9 +596,12 @@ convertFp32ToFp16RTZ(Location loc, ConversionPatternRewriter &rewriter,
 // Fp32->Fp16/Bf16 (RTNE) in GFX950
 static SmallVector<Value>
 convertFp32ToFp16RTNE(Location loc, ConversionPatternRewriter &rewriter,
-                      const SmallVector<Value> &v, Type outElemTy) {
-  assert(v.size() == 2);
+                      ArrayRef<Value> v, Type outElemTy) {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
+  if (v.size() == 1)
+    return {b.fptrunc(outElemTy, v.front())};
+
+  assert(v.size() == 2);
   auto inVecTy = vec_ty(f32_ty, 2);
   auto retVecTy = vec_ty(outElemTy, 2);
   Value inVec = b.undef(inVecTy);
@@ -606,7 +609,7 @@ convertFp32ToFp16RTNE(Location loc, ConversionPatternRewriter &rewriter,
   auto idx1 = b.i32_val(1);
   inVec = b.insert_element(inVecTy, inVec, v[0], idx0);
   inVec = b.insert_element(inVecTy, inVec, v[1], idx1);
-  Value retVec = rewriter.create<LLVM::FPTruncOp>(loc, retVecTy, inVec);
+  Value retVec = b.fptrunc(retVecTy, inVec);
   SmallVector<Value> ret(2);
   ret[0] = b.extract_element(outElemTy, retVec, idx0);
   ret[1] = b.extract_element(outElemTy, retVec, idx1);
@@ -680,6 +683,7 @@ static SmallVector<Value> Fp32_to_F16_RTNE(Location loc,
                                            Type inElemTy, Type outElemTy,
                                            MultipleOperandsRange operands,
                                            AMD::ISAFamily isaFamily) {
+  // For CDNA4 we can potentially use packed v_cvt_pk_[b]f16_f32 instructions.
   if (isaFamily == AMD::ISAFamily::CDNA4) {
     SmallVector<Value> inVals;
     size_t numElem = std::min(size_t(2), operands.size());

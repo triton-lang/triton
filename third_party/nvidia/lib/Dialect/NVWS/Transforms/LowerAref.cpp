@@ -604,7 +604,7 @@ public:
 
     // This assumes inputs to an mma are both from a single aref get. Need to
     // relax that to allow nested aref gets for attention
-    Value getIdx = getArefValue.depth > 1
+    Value getIdx = getOp.getIndexes().size() > 0
                        ? getOp.getIndexes()[0]
                        : rewriter.create<arith::ConstantIntOp>(loc, 0, 32);
     auto depthVal =
@@ -628,7 +628,7 @@ public:
     auto yieldIdx =
         llvm::find(yieldOp.getOperands(), getOp.getResult(getRetIdx))
             .getIndex();
-    assert(yieldIdx > 0 && yieldIdx < yieldOp.getNumResults());
+
     Value acc = kLoop.getResult(yieldIdx);
 
     rewriter.setInsertionPointAfter(kLoop);

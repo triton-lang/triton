@@ -147,22 +147,55 @@ std::optional<int> getTMASwizzleMode(Operation *op, TensorDescType ty) {
   return swizzleMode;
 }
 
+enum TMA_ELEMENT_TYPES {
+  TMA_U8 = 0,
+  TMA_U16 = 1,
+  TMA_U32 = 2,
+  TMA_S32 = 3,
+  TMA_U64 = 4,
+  TMA_S64 = 5,
+  TMA_F16 = 6,
+  TMA_F32 = 7,
+  TMA_F32_FTZ = 8,
+  TMA_F64 = 9,
+  TMA_BF16 = 10,
+  TMA_TF32 = 11,
+  TMA_TF32_FTZ = 12,
+  TMA_B4X16 = 13,
+  TMA_B4X16_P64 = 14,
+  TMA_B6X16_P32 = 15,
+  TMA_B6P2X16 = 15,
+};
+
 std::optional<int> getTMAElementType(Operation *op, TensorDescType ty) {
   auto encoding = ty.getBlockType().getEncoding();
   auto mmaEncoding = dyn_cast<ttg::NVMMASharedEncodingAttr>(encoding);
   bool fp4Padded = isFp4Padded(encoding);
 
   if (fp4Padded)
-    return 14; // .b4x16_p64
+    return TMA_B4X16_P64;
 
-  auto elemSize = ty.getBlockType().getElementTypeBitWidth() / 8;
+  auto elemTy = ty.getBlockType().getElementType();
+  if (elemTy.isBF16()) {
+    return TMA_BF16;
+  } else if (elemTy.isF16()) {
+    return TMA_F16;
+  } else if (elemTy.isF32()) {
+    return TMA_F32;
+  } else if (elemTy.isF64()) {
+    return TMA_F64;
+  }
+
+  auto elemSize = elemTy.getIntOrFloatBitWidth() / 8;
   switch (elemSize) {
   case 1:
-    return 0;
+    return TMA_U8;
   case 2:
-    return 1;
+    return TMA_U16;
   case 4:
-    return 2;
+    return elemTy.isSignedInteger() ? TMA_S32 : TMA_U32;
+  case 8:
+    return elemTy.isSignedInteger() ? TMA_S64 : TMA_U64;
   default:
     break;
   }

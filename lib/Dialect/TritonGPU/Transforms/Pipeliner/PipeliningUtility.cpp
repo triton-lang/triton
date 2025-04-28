@@ -234,56 +234,6 @@ Operation *mlir::triton::predicateOp(RewriterBase &rewriter, Operation *op,
   return op;
 }
 
-void mlir::triton::replaceUsesAndPropagateType(OpBuilder &builder,
-                                               Operation *oldUse, Value val) {
-  SmallVector<Operation *> opsToDelete;
-  SmallVector<OpOperand *> operandsToReplace;
-
-  // Save the operand to replace / delete later (avoid iterator invalidation).
-  // TODO: can we use an early_inc iterator?
-  for (OpOperand &use : oldUse->getUses()) {
-    // Non-subview/trans ops will be replaced by `val`.
-    if (!isa<triton::gpu::MemDescTransOp, triton::gpu::MemDescSubviewOp>(
-            use.getOwner())) {
-      operandsToReplace.push_back(&use);
-      continue;
-    }
-    Operation *user = use.getOwner();
-    // `subview(old_op)` is replaced by a new `subview(val)`.
-    OpBuilder::InsertionGuard g(builder);
-    builder.setInsertionPoint(user);
-    Value newVal;
-    if (auto subview = dyn_cast<triton::gpu::MemDescSubviewOp>(user)) {
-      triton::gpu::MemDescType oldType = subview.getType();
-      bool isMutable =
-          cast<triton::gpu::MemDescType>(val.getType()).getMutableMemory();
-      Type newDstType = triton::gpu::MemDescType::get(
-          oldType.getShape(), oldType.getElementType(), oldType.getEncoding(),
-          oldType.getMemorySpace(), isMutable);
-      newVal = builder.create<triton::gpu::MemDescSubviewOp>(
-          subview.getLoc(), newDstType, val, subview.getOffsets());
-      newVal.getDefiningOp()->setAttrs(user->getAttrs());
-    } else if (auto trans = dyn_cast<triton::gpu::MemDescTransOp>(user)) {
-      newVal = builder.create<triton::gpu::MemDescTransOp>(trans.getLoc(), val,
-                                                           trans.getOrder());
-      newVal.getDefiningOp()->setAttrs(user->getAttrs());
-    }
-    assert(newVal);
-    replaceUsesAndPropagateType(builder, user, newVal);
-    opsToDelete.push_back(use.getOwner());
-  }
-
-  // Perform late replacement.
-  for (OpOperand *operand : operandsToReplace) {
-    Operation *op = operand->getOwner();
-    operand->set(val);
-  }
-
-  // Perform late op erasure.
-  for (Operation *op : opsToDelete)
-    op->erase();
-}
-
 // Return true if the given ForOp has the attribute
 // `tt.disallow_acc_multi_buffer` set to true.
 bool mlir::triton::getDisallowAccMultiBuffer(scf::ForOp forOp) {

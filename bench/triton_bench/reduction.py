@@ -1,6 +1,6 @@
 import torch
 import triton
-from .reduce_details.reduce_bitmatrix import sum_bitmatrix_rows
+from .reduction_details.reduce_bitmatrix import sum_bitmatrix_rows
 from . import Bitmatrix
 
 

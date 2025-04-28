@@ -221,23 +221,22 @@ allocateTMem(Operation *parentOp,
     if (auto alloc = dyn_cast<triton::nvidia_gpu::TMEMAllocOp>(op)) {
       allocs.push_back(alloc);
     }
-    if (auto mmaOp = dyn_cast<triton::nvidia_gpu::TCGen5MMAOp>(op)) {
-      if (isa<triton::nvidia_gpu::TensorMemoryEncodingAttr>(
-              mmaOp.getA().getType().getEncoding())) {
+    if (auto mmaOp = dyn_cast<MMAv5OpInterface>(op)) {
+      if (isa<TensorMemoryEncodingAttr>(mmaOp.getA().getType().getEncoding())) {
         TMemAllocation allocSize = getTmemAllocSizes(mmaOp.getA().getType());
         if (allocSize.numRows == 64) {
           // HW restriction, the A alloc and accumulator needs to be in the same
           // rows.
           rowIdConstraints.joinOps(getAlloc(mmaOp.getA()),
-                                   getAlloc(mmaOp.getD()));
+                                   getAlloc(mmaOp.getAccumulator()));
         } else {
           // TODO: we need to handle cases where the format is blockM and we
           // have multiple blocks.
-          assert((cast<triton::nvidia_gpu::TensorMemoryEncodingAttr>(
+          assert((cast<TensorMemoryEncodingAttr>(
                       mmaOp.getA().getType().getEncoding())
                           .getBlockM() != 64 &&
-                  cast<triton::nvidia_gpu::TensorMemoryEncodingAttr>(
-                      mmaOp.getD().getType().getEncoding())
+                  cast<TensorMemoryEncodingAttr>(
+                      mmaOp.getAccumulator().getType().getEncoding())
                           .getBlockM() != 64) &&
                  "interleaved layout with TMEM operand is not supported yet.");
         }

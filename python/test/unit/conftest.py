@@ -24,3 +24,22 @@ def fresh_triton_cache():
             yield tmpdir
         finally:
             os.environ.pop("TRITON_CACHE_DIR", None)
+
+
+@pytest.fixture
+def fresh_config(request, monkeypatch):
+    from triton import config
+    config_map = {
+        name: conf
+        for name, conf in config.__dict__.items()
+        if isinstance(conf, config.base_config) and conf != config.base_config
+    }
+    try:
+        for name, conf in config_map.items():
+            setattr(config, name, conf.copy().reset())
+            for knob in conf.knob_descriptors.values():
+                monkeypatch.delenv(knob.key, raising=False)
+        yield config
+    finally:
+        for name, conf in config_map.items():
+            setattr(config, name, conf)

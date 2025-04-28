@@ -329,6 +329,17 @@ void init_triton_ir(py::module &&m) {
       .value("UMIN", RMWOp::UMIN)
       .value("UMAX", RMWOp::UMAX);
 
+  py::enum_<DescriptorReduceKind>(m, "DESCRIPTOR_REDUCE_KIND",
+                                  py::module_local())
+      .value("ADD", DescriptorReduceKind::ADD)
+      .value("AND", DescriptorReduceKind::AND)
+      .value("OR", DescriptorReduceKind::OR)
+      .value("XOR", DescriptorReduceKind::XOR)
+      .value("MAX", DescriptorReduceKind::MAX)
+      .value("MIN", DescriptorReduceKind::MIN)
+      .value("INC", DescriptorReduceKind::INC)
+      .value("DEC", DescriptorReduceKind::DEC);
+
   py::enum_<RoundingMode>(m, "ROUNDING_MODE", py::module_local())
       .value("RTZ", RoundingMode::RTZ)
       .value("RTNE", RoundingMode::RTNE);
@@ -1451,17 +1462,17 @@ void init_triton_ir(py::module &&m) {
                                   evictionPolicy);
            })
       .def("create_tensor_descriptor_type",
-           [](TritonOpBuilder &self, Type blockTy) -> Type {
+           [](TritonOpBuilder &self, Type blockTy, bool isSigned) -> Type {
              auto ctx = self.getContext();
              return triton::TensorDescType::get(
-                 ctx, cast<RankedTensorType>(blockTy));
+                 ctx, cast<RankedTensorType>(blockTy), isSigned);
            })
       .def("create_descriptor_load",
            [](TritonOpBuilder &self, Value desc, std::vector<Value> &indices,
               CacheModifier cacheModifier,
               EvictionPolicy evictionPolicy) -> Value {
              auto descTy = cast<triton::TensorDescType>(desc.getType());
-             auto resTy = descTy.getBlockType();
+             auto resTy = descTy.getSignlessBlockType();
              return self.create<DescriptorLoadOp>(
                  resTy, desc, indices, cacheModifier, evictionPolicy);
            })
@@ -1475,6 +1486,11 @@ void init_triton_ir(py::module &&m) {
            [](TritonOpBuilder &self, Value desc, Value value,
               std::vector<Value> &indices) -> void {
              self.create<DescriptorStoreOp>(desc, value, indices);
+           })
+      .def("create_descriptor_reduce",
+           [](TritonOpBuilder &self, DescriptorReduceKind kind, Value desc,
+              Value value, std::vector<Value> &indices) -> void {
+             self.create<DescriptorReduceOp>(kind, desc, value, indices);
            })
       .def("create_descriptor_scatter",
            [](TritonOpBuilder &self, Value desc, Value value, Value x_indices,
@@ -1778,10 +1794,10 @@ void init_triton_ir(py::module &&m) {
       // Make a tensor descriptor
       .def("create_make_tensor_descriptor",
            [](TritonOpBuilder &self, Value &base, std::vector<Value> &shape,
-              std::vector<Value> &strides,
-              std::vector<int32_t> &tensorShape) -> Value {
+              std::vector<Value> &strides, std::vector<int32_t> &tensorShape,
+              bool isSignedInteger) -> Value {
              return self.create<MakeTensorDescOp>(base, shape, strides,
-                                                  tensorShape);
+                                                  tensorShape, isSignedInteger);
            })
       // Proton Ops
       .def("create_proton_record",

@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 import builtins
-import os
 import time
 import inspect
 import hashlib
 import json
+from functools import cached_property
 from typing import Dict, Tuple, List, Optional
 
+from .. import config as triton_config
 from .jit import KernelInterface
 from .errors import OutOfResources, PTXASError
 from .driver import driver
@@ -31,7 +32,7 @@ class Autotuner(KernelInterface):
         self.keys = key
         self.cache: Dict[Tuple, Config] = {}
         self.arg_names = arg_names
-        self.cache_results = cache_results or os.getenv("TRITON_CACHE_AUTOTUNING", None) == "1"
+        self.cache_results = cache_results or triton_config.autotuning.cache
 
         # Reset to zero or restore values
         self.reset_to_zero = []
@@ -84,6 +85,7 @@ class Autotuner(KernelInterface):
         while not inspect.isfunction(self.base_fn):
             self.base_fn = self.base_fn.fn
 
+        self._do_bench = do_bench
         self.num_warmups = warmup
         self.num_reps = rep
         self.use_cuda_graph = use_cuda_graph
@@ -97,7 +99,7 @@ class Autotuner(KernelInterface):
                           stacklevel=1)
             if use_cuda_graph:
                 from ..testing import do_bench_cudagraph
-                self.do_bench = lambda kernel_call, quantiles: do_bench_cudagraph(
+                self._do_bench = lambda kernel_call, quantiles: do_bench_cudagraph(
                     kernel_call,
                     rep=rep if rep is not None else 100,
                     quantiles=quantiles,
@@ -105,7 +107,7 @@ class Autotuner(KernelInterface):
                 return
 
             import triton.testing
-            self.do_bench = lambda kernel_call, quantiles: triton.testing.do_bench(
+            self._do_bench = lambda kernel_call, quantiles: triton.testing.do_bench(
                 kernel_call,
                 warmup=warmup if warmup is not None else 25,
                 rep=rep if rep is not None else 100,
@@ -113,15 +115,16 @@ class Autotuner(KernelInterface):
             )
             return
 
-        if do_bench is None:
-            self.do_bench = driver.active.get_benchmarker()
-        else:
-            self.do_bench = do_bench
+    @cached_property
+    def do_bench(self):
+        if self._do_bench is None:
+            return driver.active.get_benchmarker()
+        return self._do_bench
 
     def _bench(self, *args, config, **meta):
         from ..compiler.errors import CompileTimeAssertionFailure
 
-        verbose = os.environ.get("TRITON_PRINT_AUTOTUNING", None) == "1"
+        verbose = triton_config.autotuning.print
         if verbose:
             print(f"Autotuning kernel {self.base_fn.__name__} with config {config}")
 
@@ -238,7 +241,7 @@ class Autotuner(KernelInterface):
         else:
             config = self.configs[0]
         self.best_config = config
-        if os.getenv("TRITON_PRINT_AUTOTUNING", None) == "1" and not used_cached_result:
+        if triton_config.autotuning.print and not used_cached_result:
             print(f"Triton autotuning for function {self.base_fn.__name__} finished after "
                   f"{self.bench_time:.2f}s; best config selected: {self.best_config};")
         if config.pre_hook is not None:
@@ -279,11 +282,11 @@ class Autotuner(KernelInterface):
     def warmup(self, *args, **kwargs):
         self.nargs = dict(zip(self.arg_names, args))
         ret = []
-        for config in self.prune_configs(kwargs):
+        for autotune_config in self.prune_configs(kwargs):
             ret.append(self.fn.warmup(
                 *args,
                 **kwargs,
-                **config.all_kwargs(),
+                **autotune_config.all_kwargs(),
             ))
         self.nargs = None
         return ret
@@ -301,8 +304,9 @@ class Config:
     :type num_warps: int
     :ivar num_stages: the number of stages that the compiler should use when software-pipelining loops.
                        Mostly useful for matrix multiplication workloads on SM80+ GPUs.
-    :type num_ctas: int
+    :type num_stages: int
     :ivar num_ctas: number of blocks in a block cluster. SM90+ only.
+    :type num_ctas: int
     :type maxnreg: Optional[int]
     :ivar maxnreg: maximum number of registers one thread can use.  Corresponds
                        to ptx .maxnreg directive.  Not supported on all platforms.
@@ -317,6 +321,14 @@ class Config:
         self.num_stages = num_stages
         self.maxnreg = maxnreg
         self.pre_hook = pre_hook
+
+    def __setstate__(self, state):
+        self.kwargs = state.get("kwargs", {})
+        self.num_warps = state.get("num_warps", 4)
+        self.num_stages = state.get("num_stages", 3)
+        self.num_ctas = state.get("num_ctas", 1)
+        self.maxnreg = state.get("maxnreg", None)
+        self.pre_hook = state.get("pre_hook", None)
 
     def all_kwargs(self):
         return {

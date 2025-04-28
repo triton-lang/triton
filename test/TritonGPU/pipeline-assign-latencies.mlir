@@ -1,4 +1,4 @@
-// RUN: ENABLE_MMA_V5_ATT_PIPELINE=1 triton-opt %s -split-input-file -allow-unregistered-dialect -tritongpu-test-pipeline-assign-latencies=num-stages=3 -canonicalize | FileCheck %s
+// RUN: env ENABLE_MMA_V5_ATT_PIPELINE=1 triton-opt %s -split-input-file -allow-unregistered-dialect -tritongpu-test-pipeline-assign-latencies=num-stages=3 -canonicalize | FileCheck %s
 
 #AL = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [4, 8], warpsPerCTA = [4, 1], order = [1, 0]}>
 #BL = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [1, 0]}>

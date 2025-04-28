@@ -306,7 +306,7 @@ TritonIntegerRangeAnalysis::maybeGetAssumedRange(Value anchor) const {
 
 int64_t
 TritonIntegerRangeAnalysis::getTotalLoopTripCount(LoopLikeOpInterface loop) {
-  SmallVector loops{loop};
+  SmallVector<LoopLikeOpInterface> loops{loop};
   getEnclosingLoops(*loop, loops);
   return std::accumulate(loops.begin(), loops.end(), (int64_t)1,
                          [this](int64_t accum, LoopLikeOpInterface loop) {

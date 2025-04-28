@@ -61,6 +61,24 @@ struct TMemMessageTraits {
   bool operator<(const TMemMessageTraits &other) const {
     return numRegs < other.numRegs;
   }
+
+  LLVM_DUMP_METHOD void dump() const {
+    llvm::dbgs() << "TMemMessageTraits:\n";
+    llvm::dbgs() << "  atom.opBitWidth: " << atom.opBitWidth << "\n";
+    llvm::dbgs() << "  atom.colsPerThread: " << atom.colsPerThread << "\n";
+    llvm::dbgs() << "  atom.rowsPerThread: " << atom.rowsPerThread << "\n";
+    llvm::dbgs() << "  atom.opShape: " << atom.opShape << "\n";
+    llvm::dbgs() << "  atom.usesSecondHalfOffset: " << atom.usesSecondHalfOffset
+                 << "\n";
+    llvm::dbgs() << "  usesSecondHalfOffset: " << usesSecondHalfOffset << "\n";
+    llvm::dbgs() << "  numThreadsPerWarp: " << numThreadsPerWarp << "\n";
+    llvm::dbgs() << "  maxNumRepeats: " << maxNumRepeats << "\n";
+    llvm::dbgs() << "  maxCols: " << maxCols << "\n";
+    llvm::dbgs() << "  numRows: " << numRows << "\n";
+    llvm::dbgs() << "  numCols: " << numCols << "\n";
+    llvm::dbgs() << "  numRepeats: " << numRepeats << "\n";
+    llvm::dbgs() << "  numRegs: " << numRegs << "\n";
+  }
 };
 
 struct TMemRuntimeInfo {
@@ -79,6 +97,25 @@ struct TMemRuntimeInfo {
   int numColsPerBlock;
   int colsPerWarpGroup;
   bool splitWarpgroupsAlongM;
+
+  LLVM_DUMP_METHOD void dump() const {
+    llvm::dbgs() << "TMemRuntimeInfo:\n";
+    llvm::dbgs() << "  numWarps: " << numWarps << "\n";
+    llvm::dbgs() << "  numWarpGroups: " << numWarpGroups << "\n";
+    llvm::dbgs() << "  numElementsPer32B: " << numElementsPer32B << "\n";
+    llvm::dbgs() << "  numElements: " << numElements << "\n";
+    llvm::dbgs() << "  numCols: " << numCols << "\n";
+    llvm::dbgs() << "  blockM: " << blockM << "\n";
+    llvm::dbgs() << "  blockN: " << blockN << "\n";
+    llvm::dbgs() << "  unpackedb16: " << unpackedb16 << "\n";
+    llvm::dbgs() << "  useStridedMessage: " << useStridedMessage << "\n";
+    llvm::dbgs() << "  numBlocks: " << numBlocks << "\n";
+    llvm::dbgs() << "  blocksInterleaved: " << blocksInterleaved << "\n";
+    llvm::dbgs() << "  numColsPerBlock: " << numColsPerBlock << "\n";
+    llvm::dbgs() << "  colsPerWarpGroup: " << colsPerWarpGroup << "\n";
+    llvm::dbgs() << "  splitWarpgroupsAlongM: " << splitWarpgroupsAlongM
+                 << "\n";
+  }
 };
 
 TMemMessageTraits getTMemMessageFromAtom(const TMemAccessAtom &atom,
@@ -236,7 +273,10 @@ void calculateAddressAndEmitTmemMessage(
   Value warpIdInGroup = b.urem(warpId, b.i32_val(4));
   Value warpGroupId = b.udiv(warpId, b.i32_val(4));
 
-  for (int block = 0; block < info.numBlocks; block += info.numWarpGroups) {
+  // When split along M, blockM=128 and num_warps=8, and a strided message is
+  // selected such that all 8 warps read a 16 rows of a block at a time.
+  int blocksPerWarpTile = info.splitWarpgroupsAlongM ? 1 : info.numWarpGroups;
+  for (int block = 0; block < info.numBlocks; block += blocksPerWarpTile) {
     Value address = b.ptrtoint(i32_ty, baseAddress);
     Value blockId = b.i32_val(block);
     Value startColumnId = b.i32_val(0);

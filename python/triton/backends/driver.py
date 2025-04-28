@@ -1,5 +1,12 @@
+import functools
 from abc import ABCMeta, abstractmethod
 from typing import Callable, List, Protocol, Sequence
+
+
+@functools.lru_cache()
+def platform_key():
+    from platform import machine, system, architecture
+    return ",".join([machine(), system(), *architecture()])
 
 
 class Benchmarker(Protocol):

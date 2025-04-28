@@ -152,10 +152,8 @@ SmallVector<unsigned> getOrderForDotOperand(unsigned opIdx, unsigned rank,
                                             bool kContig) {
   // kContig: if true, the matrix is fastest-running on k,
   //         otherwise it is on m (resp. n)
-  // opIdx=0: [batch, m, k] if rank == 3 else [m, k]
-  // opIdx=1: [batch, k, n] if rank == 3 else [k, n]
-  // batch (if rank == 3) is always the slowest running dimension
-  assert(rank == 2 || rank == 3);
+  // opIdx=0: [*batch, m, k]
+  // opIdx=1: [*batch, k, n]
   assert(opIdx == 0 || opIdx == 1);
   auto rowMajor = bool(opIdx) != kContig;
   return getMatrixOrder(rank, rowMajor);
@@ -428,28 +426,12 @@ LogicalResult tryJoinOnAxis(MLIRContext *ctx, const LinearLayout &inLl,
                             std::optional<Location> loc) {
   auto kRegister = StringAttr::get(ctx, "register");
   auto outDims = llvm::to_vector(inLl.getOutDimNames());
+  auto split = LinearLayout::identity1D(2, kRegister, outDims[axis]);
   if (fwdInference) {
-    auto split = LinearLayout::identity1D(2, kRegister, outDims[axis]);
     outLl = split * inLl;
   } else {
-    // TODO This requires a division algorithm!
-    // Implement manually ll.divideLeft(split)
-    auto contiguousElems =
-        LinearEncodingAttr::get(ctx, inLl).getContigPerThread();
-    if (contiguousElems[axis] > 1) {
-      LinearLayout::BasesT newBases;
-      for (const auto &basesDim : inLl.getBases()) {
-        std::vector<std::vector<int32_t>> newBasesDim;
-        for (auto base : basesDim.second) {
-          if (base[axis] == 1) {
-            continue;
-          }
-          base[axis] /= 2;
-          newBasesDim.push_back(std::move(base));
-        }
-        newBases.insert({basesDim.first, std::move(newBasesDim)});
-      }
-      outLl = LinearLayout(std::move(newBases), std::move(outDims));
+    if (auto div = divideLeft(inLl, split)) {
+      outLl = *div;
     } else {
       return emitOptionalError(loc,
                                "Fp4ToFpOp/SplitOp requires at least 2 elements "
@@ -3166,4 +3148,22 @@ bool triton::gpu::areLayoutsEquivalent(ArrayRef<int64_t> shape, Attribute lhs,
   auto lhsLL = triton::gpu::toLinearLayout(shape, lhs);
   auto rhsLL = triton::gpu::toLinearLayout(shape, rhs);
   return lhsLL == rhsLL;
+}
+
+bool triton::gpu::isInnermostContiguous(MemDescType type, unsigned numElems) {
+  ArrayRef<int64_t> shape = type.getShape();
+  Attribute enc = type.getEncoding();
+  MLIRContext *ctx = enc.getContext();
+
+  LinearLayout actual = toLinearLayout(shape, enc);
+  StringAttr fastestIn = *actual.getInDimNames().begin();
+
+  // Flatten actual outs in reverse order to produce a row-major flattening
+  // of the layout
+  auto outNames = actual.getOutDimNames();
+  SmallVector<StringAttr> revOut(outNames.begin(), outNames.end());
+  std::reverse(revOut.begin(), revOut.end());
+  actual = actual.transposeOuts(revOut).flattenOuts();
+
+  return actual.getNumConsecutiveInOut() >= numElems;
 }

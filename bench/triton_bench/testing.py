@@ -3,10 +3,8 @@ import functools
 import os
 import subprocess
 import sys
-
 import torch
-
-from triton_bench.meta import MAX_FINITE_FLOAT8E4B8, MAX_FINITE_FLOAT8E4NV, MAX_FINITE_FLOAT8E5
+from triton_bench.numerics import MAX_FINITE_FLOAT8E4B8, MAX_FINITE_FLOAT8E4NV, MAX_FINITE_FLOAT8E5
 
 
 def assert_equal(ref, tri):

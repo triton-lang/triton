@@ -83,6 +83,11 @@ def bench_routing():
         tri_routing_data, tri_gather, tri_scatter = routing(tri_logits, n_expts_act)
         tri_metadata = compute_metadata(tri_routing_data, n_tokens * n_expts_act, block_m)
     proton.finalize()
+    try:
+        import os
+        os.system("proton-viewer -m time/ms routing.hatchet")
+    except:
+        pass
 
 
 if __name__ == "__main__":

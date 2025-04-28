@@ -1,6 +1,6 @@
 import pytest
 import torch
-from triton_bench.compact import masked_compact, masked_compact_torch
+from triton_bench.compaction import compaction, compaction_torch
 
 
 @pytest.mark.parametrize("n_tokens, n_cols, k, p", [
@@ -9,7 +9,7 @@ from triton_bench.compact import masked_compact, masked_compact_torch
     (131, 128, 16, 0.6),
     (496, 128, 16, 0.),
 ])
-def test_masked_compact(n_tokens, n_cols, k, p):
+def test_compaction(n_tokens, n_cols, k, p):
     device = "cuda"
     yi = torch.rand((n_tokens, n_cols), device=device).argsort(dim=-1)
     yi = yi[:, :k].to(torch.int32)
@@ -23,7 +23,7 @@ def test_masked_compact(n_tokens, n_cols, k, p):
     chunks = mask.view(*mask.shape[:-1], -1, 32)
     weights = (1 << torch.arange(32, dtype=torch.int32, device=device))
     bitmask = (chunks.int() * weights).sum(dim=-1)
-    yv_ref, yi_ref = masked_compact_torch(yv, yi, bitmask)
-    yv_tri, yi_tri = masked_compact(yv, yi, bitmask)
+    yv_ref, yi_ref = compaction_torch(yv, yi, bitmask)
+    yv_tri, yi_tri = compaction(yv, yi, bitmask)
     assert torch.all(yi_ref == yi_tri)
     assert torch.all(yv_ref == yv_tri)

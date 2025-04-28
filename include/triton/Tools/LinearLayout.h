@@ -503,7 +503,7 @@ public:
   // This only works across the first (i.e. the most-minor) dimension of in/out.
   // If you want it to work across more dimensions, flatten the layout.
   //
-  // TODO(jlebar): Replace with divideLeft.
+  // TODO: Replace the uses with flattenIns/Outs + divideLeft.
   int32_t getNumConsecutiveInOut() const;
 
   // Reorders the in/out dimensions of the layout.  This is mostly cosmetic
@@ -609,6 +609,22 @@ public:
     *this = *this * outer;
     return *this;
   }
+
+  // Compute a C such that A = B * C if it exists.
+  // In other words, C = B^{-1} * A.
+  // Note that such a C exists iff (every pair of input/output dim of) A is
+  // of the form
+  // [[B, 0],
+  //  [0, C]]
+  // as a matrix, whenever those dimensions are present in B.
+  //
+  // C will always have the same input/output dimensions as A.
+  // When there are dimensions of size 1 there is some ambiguity in the
+  // division, as in `operator*` we treat missing dimensions as dimensions
+  // of size 1 whenever it makes sense to do so. The rule that C has the
+  // same dimensions as A ensures that C is well-defined.
+  friend std::optional<LinearLayout> divideLeft(const LinearLayout &A,
+                                                const LinearLayout &B);
 
   // Returns true if this layout acts trivially (as the identity) on the given
   // dimensions. This means that it's the identity on those dimensions, and it

@@ -1159,14 +1159,65 @@ def descriptor_load(desc: tl.tensor_descriptor_base, offsets, cache_modifier: st
     return tl.tensor(x, desc.block_type)
 
 
-def descriptor_store(desc: tl.tensor_descriptor_base, value: tl.tensor, offsets, builder: ir.builder) -> tl.tensor:
+def validate_store_like(desc: tl.tensor_descriptor_base, value: tl.tensor, offsets) -> None:
     assert isinstance(desc, tl.tensor_descriptor_base)
     ndim = len(desc.block_shape)
     assert len(offsets) == ndim, f"expected {ndim} offsets, but got {len(offsets)}"
     assert value.shape == desc.block_shape
 
+
+def descriptor_store(desc: tl.tensor_descriptor_base, value: tl.tensor, offsets, builder: ir.builder) -> tl.tensor:
+    validate_store_like(desc, value, offsets)
     offsets = _convert_to_ir_values(builder, offsets, require_i64=False)
     return tl.tensor(builder.create_descriptor_store(desc.handle, value.handle, offsets), tl.void)
+
+
+def descriptor_atomic_add(desc: tl.tensor_descriptor_base, value: tl.tensor, offsets, builder: ir.builder) -> tl.tensor:
+    validate_store_like(desc, value, offsets)
+    assert desc.dtype in {tl.uint32, tl.int32, tl.uint64, tl.float32, tl.float16, tl.bfloat16}, "Unsupported dtype"
+    offsets = _convert_to_ir_values(builder, offsets, require_i64=False)
+    kind = ir.DESCRIPTOR_REDUCE_KIND.ADD
+    return tl.tensor(builder.create_descriptor_reduce(kind, desc.handle, value.handle, offsets), tl.void)
+
+
+def descriptor_atomic_min(desc: tl.tensor_descriptor_base, value: tl.tensor, offsets, builder: ir.builder) -> tl.tensor:
+    validate_store_like(desc, value, offsets)
+    assert desc.dtype in {tl.uint32, tl.int32, tl.uint64, tl.int64, tl.float16, tl.bfloat16}, "Unsupported dtype"
+    offsets = _convert_to_ir_values(builder, offsets, require_i64=False)
+    kind = ir.DESCRIPTOR_REDUCE_KIND.MIN
+    return tl.tensor(builder.create_descriptor_reduce(kind, desc.handle, value.handle, offsets), tl.void)
+
+
+def descriptor_atomic_max(desc: tl.tensor_descriptor_base, value: tl.tensor, offsets, builder: ir.builder) -> tl.tensor:
+    validate_store_like(desc, value, offsets)
+    assert desc.dtype in {tl.uint32, tl.int32, tl.uint64, tl.int64, tl.float16, tl.bfloat16}, "Unsupported dtype"
+    offsets = _convert_to_ir_values(builder, offsets, require_i64=False)
+    kind = ir.DESCRIPTOR_REDUCE_KIND.MAX
+    return tl.tensor(builder.create_descriptor_reduce(kind, desc.handle, value.handle, offsets), tl.void)
+
+
+def descriptor_atomic_and(desc: tl.tensor_descriptor_base, value: tl.tensor, offsets, builder: ir.builder) -> tl.tensor:
+    validate_store_like(desc, value, offsets)
+    assert desc.dtype in {tl.uint32, tl.int32, tl.uint64, tl.int64}, "Unsupported dtype"
+    offsets = _convert_to_ir_values(builder, offsets, require_i64=False)
+    kind = ir.DESCRIPTOR_REDUCE_KIND.AND
+    return tl.tensor(builder.create_descriptor_reduce(kind, desc.handle, value.handle, offsets), tl.void)
+
+
+def descriptor_atomic_or(desc: tl.tensor_descriptor_base, value: tl.tensor, offsets, builder: ir.builder) -> tl.tensor:
+    validate_store_like(desc, value, offsets)
+    assert desc.dtype in {tl.uint32, tl.int32, tl.uint64, tl.int64}, "Unsupported dtype"
+    offsets = _convert_to_ir_values(builder, offsets, require_i64=False)
+    kind = ir.DESCRIPTOR_REDUCE_KIND.OR
+    return tl.tensor(builder.create_descriptor_reduce(kind, desc.handle, value.handle, offsets), tl.void)
+
+
+def descriptor_atomic_xor(desc: tl.tensor_descriptor_base, value: tl.tensor, offsets, builder: ir.builder) -> tl.tensor:
+    validate_store_like(desc, value, offsets)
+    assert desc.dtype in {tl.uint32, tl.int32, tl.uint64, tl.int64}, "Unsupported dtype"
+    offsets = _convert_to_ir_values(builder, offsets, require_i64=False)
+    kind = ir.DESCRIPTOR_REDUCE_KIND.XOR
+    return tl.tensor(builder.create_descriptor_reduce(kind, desc.handle, value.handle, offsets), tl.void)
 
 
 def descriptor_gather(desc, x_offsets, y_offset, cache_modifier: str, eviction_policy: str,
@@ -1783,7 +1834,7 @@ def device_print(prefix: str, args: List[tl.tensor], hex: bool, builder: ir.buil
         prefix = " " + prefix
 
     new_args = [arg.handle for arg in args]
-    is_signed = [arg.dtype in (tl.int1, tl.int8, tl.int16, tl.int32, tl.int64) for arg in args]
+    is_signed = [arg.dtype.is_int_signed() for arg in args]
     return tl.tensor(builder.create_print(prefix, hex, new_args, is_signed), tl.void)
 
 
@@ -1908,6 +1959,9 @@ def make_tensor_descriptor(
 
     assert isinstance(base.type, tl.pointer_type)
     type = tl.block_type(base.type.element_ty, block_shape)
-    handle = builder.create_make_tensor_descriptor(base.handle, [s.handle for s in shape], [s.handle for s in strides],
-                                                   block_shape)
+    base_handle = base.handle
+    is_signed_int = base.type.element_ty.is_int_signed()
+
+    handle = builder.create_make_tensor_descriptor(base_handle, [s.handle for s in shape], [s.handle for s in strides],
+                                                   block_shape, is_signed_int)
     return tl.tensor_descriptor(handle, shape, strides, type)
