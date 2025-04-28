@@ -10,5 +10,6 @@ add_triton_ut(
 target_include_directories(TraceDataIO
 PRIVATE
     "${JSON_INCLUDE_DIR}"
+	"${PROTON_COMMON_DIR}/include"
     "${PROTON_SRC_DIR}/include"
 )

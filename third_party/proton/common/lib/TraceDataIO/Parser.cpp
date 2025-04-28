@@ -1,4 +1,4 @@
-#include "Data/TraceDataIO/Parser.h"
+#include "TraceDataIO/Parser.h"
 
 using namespace proton;
 

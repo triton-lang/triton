@@ -1,4 +1,4 @@
-#include "Data/TraceDataIO/CircularLayoutParser.h"
+#include "TraceDataIO/CircularLayoutParser.h"
 #include <algorithm>
 #include <cassert>
 #include <iostream>
@@ -63,13 +63,11 @@ void CircularLayoutParser::parseProfileEvents() {
   const int numSegments = getConfig().uidVec.size();
   const int segmentByteSize = bufferSize / numSegments;
   auto position = buffer.position();
-  int traceId = 0;
   for (int i = 0; i < numSegments; i++) {
     buffer.seek(position);
-    auto &trace = bt.traces[traceId];
+    auto &trace = bt.traces[i];
     parseSegment(segmentByteSize, trace);
     position += segmentByteSize;
-    traceId++;
   }
 }
 

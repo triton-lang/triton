@@ -1,4 +1,4 @@
-#include "Data/TraceDataIO/ByteSpan.h"
+#include "TraceDataIO/ByteSpan.h"
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 #include <vector>
@@ -67,7 +67,7 @@ TEST(ByteSpanTest, ReadAndNavigation) {
 
   // Test navigation - at the end
   EXPECT_EQ(span.remaining(), 0);
-  EXPECT_FALSE(span.hasRemaining());
+  EXPECT_FALSE(span.hasRemaining(1));
 }
 
 int main(int argc, char *argv[]) {

@@ -16,10 +16,10 @@ template <typename EntryT> void decodeFn(ByteSpan &buffer, EntryT &entry) {
 
 class EntryDecoder {
 private:
-  ByteSpan &buffer_;
+  ByteSpan &buf;
 
 public:
-  explicit EntryDecoder(ByteSpan &buffer) : buffer_(buffer) {}
+  explicit EntryDecoder(ByteSpan &buffer) : buf(buffer) {}
 
   template <typename EntryT> std::shared_ptr<EntryT> decode() {
     auto entry = std::make_shared<EntryT>();
@@ -29,7 +29,7 @@ public:
 
 protected:
   // Protected accessor for the buffer
-  ByteSpan &buffer() { return buffer_; }
+  ByteSpan &buffer() { return buf; }
 };
 
 struct EntryBase {

@@ -16,7 +16,8 @@ enum class ParseState { START, END, INIT };
 struct CircularLayoutParserConfig : public ParserConfig {
   // The total number of unit (e.g., num of warps) in CTA
   size_t totalUnits = 0;
-  // Scratch memory size in bytes per CTA
+  // Scratch memory size in bytes per CTA (scratchMemSize = metadata_size +
+  // bufSize)
   size_t scratchMemSize = 0;
   // The number of blocks in the grid
   size_t numBlocks = 0;

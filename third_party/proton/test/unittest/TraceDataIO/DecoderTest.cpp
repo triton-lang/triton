@@ -1,4 +1,4 @@
-#include "Data/TraceDataIO/EntryDecoder.h"
+#include "TraceDataIO/EntryDecoder.h"
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 #include <iostream>

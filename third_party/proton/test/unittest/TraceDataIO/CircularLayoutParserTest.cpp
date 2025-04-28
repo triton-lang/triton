@@ -1,4 +1,4 @@
-#include "Data/TraceDataIO/CircularLayoutParser.h"
+#include "TraceDataIO/CircularLayoutParser.h"
 #include <cstdlib>
 #include <fstream>
 #include <gmock/gmock.h>
@@ -15,24 +15,12 @@ public:
 
   void SetUp() override {
     if (!kernel.empty()) {
-      std::string command = "python3 ";
-      command += PROTON_TEST_UTIL_PATH;
-      command += "/trace_gen.py ";
-      output = kernel + ".bin";
-      command += output + " -k " + kernel;
-      int result = std::system(command.c_str());
-      if (result == 1)
-        skip = true;
+      output = PROTON_TEST_UTIL_PATH;
+      output += "/" + kernel + ".bin";
     }
   }
 
-  void TearDown() override {
-    if (!kernel.empty()) {
-      std::string command = "rm -rf " + output;
-      int result = std::system(command.c_str());
-      ASSERT_EQ(0, result) << "Failed to remove test file";
-    }
-  }
+  void TearDown() override {}
 
   ByteSpan getBuffer(std::string binPath) {
     std::ifstream file(binPath, std::ios::binary);
@@ -76,7 +64,6 @@ protected:
   std::vector<uint8_t> testData;
   std::string kernel;
   std::string output;
-  bool skip = false;
   static constexpr int binHeaderSize = 12;
 };
 
@@ -189,15 +176,12 @@ TEST_F(CircularLayoutParserTest, MultipleSegment) {
   }
 }
 
-class CLParserAddTraceTest : public CircularLayoutParserTest {
+class CLParserSeqTraceTest : public CircularLayoutParserTest {
 public:
-  CLParserAddTraceTest() : CircularLayoutParserTest("add") {}
+  CLParserSeqTraceTest() : CircularLayoutParserTest("seq") {}
 };
 
-TEST_F(CLParserAddTraceTest, Trace) {
-  if (skip)
-    return;
-
+TEST_F(CLParserSeqTraceTest, Trace) {
   updateConfig();
   auto buffer = getBuffer(output);
   buffer.skip(binHeaderSize);
@@ -218,9 +202,6 @@ public:
 };
 
 TEST_F(CLParserLoopTraceTest, Trace) {
-  if (skip)
-    return;
-
   updateConfig();
   auto buffer = getBuffer(output);
   buffer.skip(binHeaderSize);

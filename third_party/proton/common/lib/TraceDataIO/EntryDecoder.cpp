@@ -1,4 +1,4 @@
-#include "Data/TraceDataIO/EntryDecoder.h"
+#include "TraceDataIO/EntryDecoder.h"
 
 using namespace proton;
 
