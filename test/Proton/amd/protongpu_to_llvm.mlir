@@ -107,3 +107,39 @@ module attributes {"ttg.num-warps" = 8 : i32, ttg.profile_scratch_memory_alignme
     llvm.return
   }
 }
+
+// -----
+
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-warps" = 8 : i32, ttg.profile_scratch_memory_alignment = 128 : i32, ttg.profile_scratch_memory_size = 384 : i32} {
+  // CHECK-LABEL: convert_smem_finalize
+  // CHECK-DAG: llvm.inline_asm asm_dialect = att operand_attrs = [] "s_getreg_b32 $0, hwreg(HW_REG_XCC_ID, 0, 3)", "=s"  : () -> i32
+  // CHECK-DAG: llvm.inline_asm asm_dialect = att operand_attrs = [] "s_getreg_b32 $0, hwreg(HW_REG_HW_ID, 8, 4)", "=s"  : () -> i32
+  // CHECK-DAG: llvm.inline_asm asm_dialect = att operand_attrs = [] "s_getreg_b32 $0, hwreg(HW_REG_HW_ID, 13, 3)", "=s"  : () -> i32
+  // CHECK-DAG: llvm.extractvalue %{{.*}}[0] : !llvm.struct<(ptr<3>, i32)>
+  // CHECK-DAG: llvm.store
+  // CHECK-DAG: llvm.cond_br %{{.*}}, ^bb1, ^bb3
+  // CHECK-DAG: ^bb1:
+  // CHECK-DAG: %[[PREAMBLE:.*]] = llvm.mlir.constant(-559038737 : i32)
+  // CHECK-DAG: llvm.store %[[PREAMBLE]], %{{.*}} : i32, !llvm.ptr<1>
+  // CHECK-DAG: %[[PID:.*]] = llvm.trunc %{{.*}} : i64 to i32
+  // CHECK-DAG: llvm.store
+  // CHECK-DAG: %[[STEP:.*]] = llvm.mlir.constant(2 : i32) : i32
+  // CHECK-DAG: llvm.store
+  // CHECK-DAG: llvm.br ^bb2
+  // CHECK-DAG: ^bb2(%[[I:.*]]: i32):
+  // CHECK-DAG: llvm.store
+  // CHECK-DAG: llvm.store
+  // CHECK-DAG: %[[UPPER:.*]] = llvm.mlir.constant(510 : i32) : i32
+  // CHECK-DAG: %[[P2:.*]] = llvm.icmp "slt" %[[I]], %[[UPPER]] : i32
+  // CHECK-DAG: ^bb3:
+  // CHECK-DAG: llvm.return
+  llvm.func @convert_smem_finalize(%arg: !llvm.ptr<1>) attributes {noinline = false, nvvm.kernel = 1 : ui1} {
+    %0 = ttg.local_alloc : () -> !ttg.memdesc<512xi32, #shared, #smem, mutable>
+    %1 = proton_gpu.global_scratch_alloc {alignment = 128 : i32, nbytes = 384 : i32, offset = 0 : i32} : !tt.ptr<i32>
+    %2 = proton_gpu.init_buffer_index : <i32, 5>
+    proton_gpu.finalize %0, %2, %1 : !ttg.memdesc<512xi32, #shared, #smem, mutable>, <i32, 5>, <i32>
+    llvm.return
+  }
+}

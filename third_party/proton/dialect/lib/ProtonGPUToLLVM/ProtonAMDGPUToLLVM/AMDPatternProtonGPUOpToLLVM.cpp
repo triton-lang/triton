@@ -81,8 +81,7 @@ struct CircularStoreOpConversion
       if (granularity == proton::gpu::Granularity::WARP) {
         isWriter = isWarpMaster;
       } else {
-        llvm::report_fatal_error(
-            "segment address specialization not implemented yet");
+        llvm::report_fatal_error("unimplemented");
       }
     } else {
       Value isCurWarpEnabled = b.icmp_ne(segmentBase, b.i32_val(-1));
@@ -93,7 +92,7 @@ struct CircularStoreOpConversion
     if (AddrSpace == 1) {
       llvm::report_fatal_error("unimplemented");
     } else if (AddrSpace == 3) {
-      // TODO(crobeck): this is lowered as a predicated store which is non very
+      // TODO(crobeck): this is lowered as a predicated store which is not very
       // efficient. probably want this swapped out for bufferops
       targetInfo.getTritonTargetInfo().storeDShared(rewriter, loc, vecPtr,
                                                     std::nullopt, valsVec,

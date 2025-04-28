@@ -331,6 +331,7 @@ struct SegmentBaseOpConversion
       mlir::emitError(loc, "granularity must be warp for now");
       return failure();
     }
+
     Value curThreadId = getThreadId(rewriter, loc);
     Value threadsPerWarp =
         b.i32_val(triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod));
