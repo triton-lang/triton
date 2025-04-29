@@ -169,10 +169,8 @@ Value WGMMAPrefetcher::generatePrefetch(Value v, unsigned opIdx,
     auto dotOperandEnc = triton::gpu::DotOperandEncodingAttr::get(
         builder.getContext(), opIdx, dotEncoding, kWidth);
     Value prefetchSlice = builder.create<triton::gpu::LocalLoadOp>(
-        v.getLoc(), 
-        RankedTensorType::get(shape, elementType, dotOperandEnc),
-        newSmem,
-        asyn_token.value_or(Value()));
+        v.getLoc(), RankedTensorType::get(shape, elementType, dotOperandEnc),
+        newSmem, asyn_token.value_or(Value()));
     return prefetchSlice;
   }
 
@@ -223,7 +221,8 @@ LogicalResult WGMMAPrefetcher::initialize() {
       return rets;
     LDBG("Prefetch src: " << *op);
     while (op) {
-      if ((!dyn_cast<triton::gpu::LocalLoadOp>(op)) && op->getNumOperands() != 1)
+      if ((!dyn_cast<triton::gpu::LocalLoadOp>(op)) &&
+          op->getNumOperands() != 1)
         break;
       if (!op->getResult(0).hasOneUse())
         break;
@@ -308,8 +307,7 @@ LogicalResult WGMMAPrefetcher::initialize() {
       dot2aSrcMemDesc[dotOp] = aSmem;
       dot2bSrcMemDesc[dotOp] = bSmem;
       dot2Wait[dotOp] = dotWait;
-    }
-    else{
+    } else {
       return failure();
     }
   }
@@ -375,14 +373,15 @@ scf::ForOp WGMMAPrefetcher::createNewForOp() {
       int64_t subTileCnt = ceil<int64_t>(kShape, prefetchWidth);
 
       SmallVector<Value> PrefetchedA;
-      auto aLocalLoadOp = dyn_cast<LocalLoadOp>(mapping.lookup(dot2aValsLocalLoad[dot].back()).getDefiningOp());
+      auto aLocalLoadOp = dyn_cast<LocalLoadOp>(
+          mapping.lookup(dot2aValsLocalLoad[dot].back()).getDefiningOp());
       auto asyn_token = aLocalLoadOp.getToken();
-      
+
       // Prefetching
       for (int i = 0; i < subTileCnt; i++) {
         std::optional<Value> token = std::nullopt;
         // Let the first subtile wait for the async token
-        if((i == 0) && asyn_token){
+        if ((i == 0) && asyn_token) {
           token = asyn_token;
         }
         Value aRem = generatePrefetch(mapping.lookup(dot2aSrcMemDesc[dot]), 0,
