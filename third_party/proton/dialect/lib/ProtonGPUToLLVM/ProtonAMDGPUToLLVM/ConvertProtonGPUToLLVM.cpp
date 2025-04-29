@@ -3,6 +3,10 @@
 #include "Conversion/ProtonGPUToLLVM/ProtonAMDGPUToLLVM/Passes.h"
 #include "Conversion/ProtonGPUToLLVM/ProtonAMDGPUToLLVM/TargetInfo.h"
 #include "Dialect/ProtonGPU/IR/Dialect.h"
+#include "mlir/Conversion/ArithToLLVM/ArithToLLVM.h"
+#include "mlir/Conversion/ControlFlowToLLVM/ControlFlowToLLVM.h"
+#include "mlir/Conversion/GPUToROCDL/GPUToROCDLPass.h"
+#include "mlir/Dialect/LLVMIR/ROCDLDialect.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 #include "triton/Conversion/TritonGPUToLLVM/TypeConverter.h"
@@ -24,6 +28,7 @@ public:
   explicit ProtonLLVMConversionTarget(MLIRContext &ctx)
       : ConversionTarget(ctx) {
     addLegalDialect<LLVM::LLVMDialect>();
+    addLegalDialect<ROCDL::ROCDLDialect>();
     addIllegalDialect<mlir::triton::proton::gpu::ProtonGPUDialect>();
     addIllegalDialect<mlir::triton::proton::ProtonDialect>();
     addLegalOp<mlir::UnrealizedConversionCastOp>();
@@ -41,14 +46,20 @@ struct ConvertProtonAMDGPUToLLVM
     ModuleOp mod = getOperation();
     auto tritonTargetInfo = mlir::triton::AMD::TargetInfo(arch);
     auto protonTargetInfo =
-        mlir::triton::proton::gpu::AMD::TargetInfo(tritonTargetInfo);
+        mlir::triton::proton::gpu::AMD::TargetInfo(tritonTargetInfo, arch);
     mlir::LowerToLLVMOptions option(context);
     TritonGPUToLLVMTypeConverter typeConverter(context, option,
                                                tritonTargetInfo);
+    populateTypeConversions(typeConverter, protonTargetInfo);
     mlir::triton::proton::gpu::populateProtonGPUOpPatterns(
         typeConverter, patterns, protonTargetInfo, 1);
     mlir::triton::proton::gpu::AMD::populateProtonGPUOpAMDPatterns(
         typeConverter, patterns, protonTargetInfo, 1);
+    mlir::arith::populateArithToLLVMConversionPatterns(typeConverter, patterns);
+    mlir::populateGpuToROCDLConversionPatterns(typeConverter, patterns,
+                                               mlir::gpu::amd::HIP);
+    mlir::cf::populateControlFlowToLLVMConversionPatterns(typeConverter,
+                                                          patterns);
     auto convTarget = ProtonLLVMConversionTarget(*context);
     if (failed(applyPartialConversion(mod, convTarget, std::move(patterns))))
       return signalPassFailure();
