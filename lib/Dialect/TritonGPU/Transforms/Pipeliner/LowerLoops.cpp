@@ -1159,8 +1159,8 @@ scf::ForOp lowerMMA(ttng::MMAv5OpInterface mma, scf::ForOp forOp,
                                     tmemUseStageBoundOps.second) ||
       (schedule.isOpInSameCluster(tmemUseStageBoundOps.first,
                                   tmemUseStageBoundOps.second) &&
-       schedule.isOpBefore(tmemUseStageBoundOps.first,
-                           tmemUseStageBoundOps.second))) {
+       tmemUseStageBoundOps.first->isBeforeInBlock(
+           tmemUseStageBoundOps.second))) {
     tmemUseNumStages += 1;
   }
   int waitNumStages =
