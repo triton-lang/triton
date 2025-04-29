@@ -5,6 +5,7 @@ import triton
 from triton.tools.tensor_descriptor import TensorDescriptor
 from .swiglu_details._swiglu import _swiglu
 from triton_bench import target_info
+from .matmul_ogs_details.metadata import compute_metadata
 
 
 @dataclass(frozen=True)
@@ -23,7 +24,7 @@ class PrecisionConfig:
 class SwiGLU(torch.autograd.Function):
 
     @staticmethod
-    def forward(ctx, a, alpha, precision_config, expt_data, num_experts):
+    def forward(ctx, a, alpha, precision_config, routing_data, num_experts):
         N = a.shape[-1]
         M = a.numel() // N
         assert a.stride()[-1] == 1
@@ -48,7 +49,7 @@ class SwiGLU(torch.autograd.Function):
         # launch semi-persistent kernel
         N_BLOCKS = triton.cdiv(N // 2, BLOCK_N)
         num_sms = target_info.num_sms()
-        if expt_data is not None:
+        if routing_data is not None:
             waves_per_sm = 32 if target_info.is_hip() else 128
             num_pid = num_sms * (waves_per_sm // num_warps)
             M_BLOCKS = max(1, triton.cdiv(num_pid, N_BLOCKS))
@@ -59,6 +60,9 @@ class SwiGLU(torch.autograd.Function):
                 grid = (8 * num_sms, )
             else:
                 grid = (min(M_BLOCKS * N_BLOCKS, 4 * num_sms), )
+        expt_data = None
+        if routing_data is not None:
+            expt_data = compute_metadata(routing_data, M, BLOCK_M).buffer
         _swiglu[grid](
             out_desc,
             flex_ctx.out_data.reinterpret(out),
@@ -91,8 +95,8 @@ class SwiGLU(torch.autograd.Function):
         return out
 
 
-def swiglu(a, alpha, precision_config, expt_data=None, num_experts=0):
-    return SwiGLU.apply(a, alpha, precision_config, expt_data, num_experts)
+def swiglu(a, alpha, precision_config, routing_data=None, num_experts=0):
+    return SwiGLU.apply(a, alpha, precision_config, routing_data, num_experts)
 
 
 def swiglu_torch(a, alpha, precision_config):
