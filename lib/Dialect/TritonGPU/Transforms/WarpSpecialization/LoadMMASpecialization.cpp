@@ -647,6 +647,7 @@ static LogicalResult pipelineMMA(scf::ForOp &loop, PipelinedMMA &mma,
   Value firstView = createSingleBufferView(b, allocOp, b.intCst(0));
   b.setInsertionPointAfter(loop);
   Value lastIndex = loop.getResult(index.getArgNumber() - 1);
+  Value lastPhase = loop.getResult(phase.getArgNumber() - 1);
   Value lastView = createSingleBufferView(b, allocOp, lastIndex);
 
   // Find users of the accumulator in the loop and sort them by program order.
@@ -725,10 +726,17 @@ static LogicalResult pipelineMMA(scf::ForOp &loop, PipelinedMMA &mma,
       b.create<ttng::ArriveBarrierOp>(bar, /*arriveCount=*/1);
     }
   }
+  Value userPred = b.boolCst(true);
+  if (readOp == mmaOp) {
+    PartitionBuilder b(mmaOp.getLoc(), mmaOp);
+    userPred = b.create<arith::CmpIOp>(
+        arith::CmpIPredicate::eq, loop.getInductionVar(),
+        b.create<arith::SubIOp>(loop.getUpperBound(), b.intCst(1)));
+    nodes.back().barNext = createBarrierAlloc(loop, /*numBarriers=*/1);
+  }
 
   Value curIndex = index, curPhase = phase;
   b.setInsertionPoint(loop);
-  Value userPred = b.boolCst(true);
   Value replTok = b.create<ub::PoisonOp>(b.getType<AsyncTokenType>());
   DenseSet<Operation *> seen;
   std::optional<OpBuilder::InsertPoint> incrementPt;
@@ -821,9 +829,11 @@ static LogicalResult pipelineMMA(scf::ForOp &loop, PipelinedMMA &mma,
     Operation *lastOp = findNearestCommonPostDominator(defs, postDomInfo);
 
     if (node.barPrev) {
-      if (!isa<ttng::TMEMLoadOp>(node.op) && incrementPt &&
-          node.op->isBeforeInBlock(&*incrementPt->getPoint())) {
-        b.restoreInsertionPoint(*incrementPt);
+      if (!isa<ttng::TMEMLoadOp>(node.op)) {
+        if (incrementPt && domOp->isBeforeInBlock(&*incrementPt->getPoint()))
+          b.restoreInsertionPoint(*incrementPt);
+        else
+          b.setInsertionPoint(domOp);
         Value bar = createSingleBufferView(b, node.barPrev, curIndex);
         b.createInPartition<ttng::WaitBarrierOp>(*partition, bar, curPhase,
                                                  userPred);
@@ -848,6 +858,12 @@ static LogicalResult pipelineMMA(scf::ForOp &loop, PipelinedMMA &mma,
         b.createInPartition<ttng::ArriveBarrierOp>(*partition, bar, 1);
       }
     }
+  }
+
+  if (nodes.back().barNext) {
+    b.setInsertionPointAfter(loop);
+    Value lastBar = createSingleBufferView(b, nodes.back().barNext, lastIndex);
+    b.create<ttng::WaitBarrierOp>(lastBar, lastPhase);
   }
 
   llvm::SetVector<Operation *> predOps;

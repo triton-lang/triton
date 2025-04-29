@@ -356,12 +356,12 @@ tt.func @matmul_tma_acc_with_unconditional_user(
     // CHECK-NEXT: [[ACC_ROLLVER:%.*]] = arith.cmpi eq, [[ACC_INDEX_INCR]], %c2_i32
     // CHECK-NEXT: [[ACC_NEXT_INDEX:%.*]] = arith.select [[ACC_ROLLVER]], %c0_i32, [[ACC_INDEX_INCR]]
     // CHECK-NEXT: [[ACC_NEXT_PHASE:%.*]] = arith.select [[ACC_ROLLVER]], [[ACC_PHASE_INCR]], [[ACC_PHASE]]
-    // CHECK-NEXT: [[NEXT_ACC_EMPTY_BAR:%.*]] = ttg.memdesc_subview [[ACC_EMPTY_BUFS]][[[ACC_NEXT_INDEX]]]
-    // CHECK-NEXT: ttng.wait_barrier [[NEXT_ACC_EMPTY_BAR]], [[ACC_NEXT_PHASE]], %true {ttg.partition = 1 : i32}
 
     // CHECK-NEXT: "acc_user"([[C]]) {ttg.partition = 0 : i32}
 
     // CHECK-NEXT: [[NEXT_ACC_BUF:%.*]] = ttg.memdesc_subview [[ACC_BUFS]][[[ACC_NEXT_INDEX]], %c0_i32, %c0_i32]
+    // CHECK-NEXT: [[NEXT_ACC_EMPTY_BAR:%.*]] = ttg.memdesc_subview [[ACC_EMPTY_BUFS]][[[ACC_NEXT_INDEX]]]
+    // CHECK-NEXT: ttng.wait_barrier [[NEXT_ACC_EMPTY_BAR]], [[ACC_NEXT_PHASE]], %true {ttg.partition = 1 : i32}
     // CHECK-NEXT: [[STORE_TOK:%.*]] = ttng.tmem_store [[ACC_RESET]], [[NEXT_ACC_BUF]][], %true {ttg.partition = 1 : i32}
 
     // CHECK: arith.addi
@@ -543,13 +543,12 @@ tt.func @matmul_tma_acc_with_conditional_def(
     // CHECK-NEXT: [[ACC_NEXT_INDEX:%.*]] = arith.select [[ACC_ROLLVER]], %c0_i32, [[ACC_INDEX_INCR]]
     // CHECK-NEXT: [[ACC_NEXT_PHASE:%.*]] = arith.select [[ACC_ROLLVER]], [[ACC_PHASE_INCR]], [[ACC_PHASE]]
 
-    // CHECK-NEXT: [[NEXT_ACC_EMPTY_BAR:%.*]] = ttg.memdesc_subview [[ACC_EMPTY_BUFS]][[[ACC_NEXT_INDEX]]]
-    // CHECK-NEXT: ttng.wait_barrier [[NEXT_ACC_EMPTY_BAR]], [[ACC_NEXT_PHASE]], %true {ttg.partition = 1 : i32}
-
     // CHECK-NEXT: "acc_user"([[C]])
     "acc_user"(%c) : (tensor<128x128xf32, #acc_layout>) -> ()
 
     // CHECK-NEXT: [[NEXT_ACC_BUF:%.*]] = ttg.memdesc_subview [[ACC_BUFS]][[[ACC_NEXT_INDEX]], %c0_i32, %c0_i32]
+    // CHECK-NEXT: [[NEXT_ACC_EMPTY_BAR:%.*]] = ttg.memdesc_subview [[ACC_EMPTY_BUFS]][[[ACC_NEXT_INDEX]]]
+    // CHECK-NEXT: ttng.wait_barrier [[NEXT_ACC_EMPTY_BAR]], [[ACC_NEXT_PHASE]], %true {ttg.partition = 1 : i32}
     // CHECK-NEXT: [[STORE_TOK:%.*]] = ttng.tmem_store [[ZERO]], [[NEXT_ACC_BUF]][], [[DO_EPILOGUE]] {ttg.partition = 1 : i32}
 
     // CHECK: arith.addi
