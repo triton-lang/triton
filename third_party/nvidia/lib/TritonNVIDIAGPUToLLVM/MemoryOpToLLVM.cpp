@@ -196,6 +196,7 @@ LogicalResult lowerDistributedToSharedStmatrix(
   srcVals = action.apply(srcVals);
   // Map from kReg, kLane, kWarp to beginning of each tile
   auto reps = zerosLike(tile) * quot;
+  assert(reps.getOutDimSize(kOffset) == cvt.getOutDimSize(kOffset));
 
   // Choose the 4 elements indexed by the next to bases as the vectorisation
   // factor
@@ -220,6 +221,7 @@ LogicalResult lowerDistributedToSharedStmatrix(
   // given
   //   by the first `vec` reg bases that are not part of the tile
   std::vector<std::vector<int32_t>> laneBases;
+  assert(tile.getInDimSizeLog2(kLane) == 2);
   for (int i = 0; i < 3; ++i) {
     laneBases.push_back(reps.getBasis(kLane, tile.getInDimSizeLog2(kLane) + i));
   }
@@ -228,7 +230,7 @@ LogicalResult lowerDistributedToSharedStmatrix(
   }
 
   LinearLayout addrLayout =
-      LinearLayout({{kLane, laneBases}, {kWarp, quot.getBases().lookup(kWarp)}},
+      LinearLayout({{kLane, laneBases}, {kWarp, reps.getBases().lookup(kWarp)}},
                    {{kOffset, reps.getOutDimSize(kOffset)}}, false);
   auto regBase = applyLinearLayout(loc, rewriter, addrLayout,
                                    {{kLane, laneId}, {kWarp, warpId}})[0]
