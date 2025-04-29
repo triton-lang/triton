@@ -76,8 +76,8 @@ def get_sass(cubin_asm, fun=None):
 
 
 def path_to_cuobjdump():
-    from triton import config
-    return config.nvidia.cuobjdump.path
+    from triton import knobs
+    return knobs.nvidia.cuobjdump.path
 
 
 def extract(file_path, fun):

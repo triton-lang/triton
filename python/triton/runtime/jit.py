@@ -12,7 +12,7 @@ from typing import Callable, Generic, Iterable, Optional, TypeVar, Union, overlo
 
 from triton.tools.tensor_descriptor import TensorDescriptor
 from types import ModuleType
-from .. import config
+from .. import knobs
 from ..runtime.driver import driver
 from .._utils import find_paths_if, get_iterable_path
 
@@ -561,7 +561,7 @@ class JITFunction(KernelInterface[T]):
         return {}, target, backend, binder
 
     def run(self, *args, grid, warmup, **kwargs):
-        kwargs["debug"] = kwargs.get("debug", self.debug) or config.runtime.debug
+        kwargs["debug"] = kwargs.get("debug", self.debug) or knobs.runtime.debug
 
         # parse options
         device = driver.active.get_current_device()
@@ -602,14 +602,14 @@ class JITFunction(KernelInterface[T]):
             attrvals = [x[1] for x in specialization]
             attrs = find_paths_if(attrvals, lambda _, x: isinstance(x, str))
             attrs = {k: backend.parse_attr(get_iterable_path(attrvals, k)) for k in attrs}
-            if self._call_hook(config.runtime.jit_cache_hook, key, signature, device, constexprs, options, [attrs],
+            if self._call_hook(knobs.runtime.jit_cache_hook, key, signature, device, constexprs, options, [attrs],
                                warmup):
                 return None
             # compile the kernel
             src = self.ASTSource(self, signature, constexprs, attrs)
             kernel = self.compile(src, target=target, options=options.__dict__)
             kernel_cache[key] = kernel
-            self._call_hook(config.runtime.jit_post_compile_hook, key, signature, device, constexprs, options, [attrs],
+            self._call_hook(knobs.runtime.jit_post_compile_hook, key, signature, device, constexprs, options, [attrs],
                             warmup)
 
         # Check that used global values have not changed.
@@ -631,7 +631,7 @@ class JITFunction(KernelInterface[T]):
             # launch kernel
             launch_metadata = kernel.launch_metadata(grid, stream, *bound_args.values())
             kernel.run(grid_0, grid_1, grid_2, stream, kernel.function, kernel.packed_metadata, launch_metadata,
-                       config.runtime.launch_enter_hook, config.runtime.launch_exit_hook, *bound_args.values())
+                       knobs.runtime.launch_enter_hook, knobs.runtime.launch_exit_hook, *bound_args.values())
         return kernel
 
     def repr(self, _):
@@ -828,7 +828,7 @@ def jit(
 
     def decorator(fn: T) -> JITFunction[T]:
         assert callable(fn)
-        if config.runtime.interpret:
+        if knobs.runtime.interpret:
             from .interpreter import InterpretedFunction
             return InterpretedFunction(fn, version=version, do_not_specialize=do_not_specialize,
                                        do_not_specialize_on_alignment=do_not_specialize_on_alignment, debug=debug,

@@ -3,7 +3,7 @@ import os
 import shutil
 import subprocess
 
-from .. import config
+from .. import knobs
 
 
 def _build(name, src, srcdir, library_dirs, include_dirs, libraries):
@@ -28,7 +28,7 @@ def _build(name, src, srcdir, library_dirs, include_dirs, libraries):
     if scheme == 'posix_local':
         scheme = 'posix_prefix'
     py_include_dir = sysconfig.get_paths(scheme=scheme)["include"]
-    custom_backend_dirs = config.build.backend_dirs
+    custom_backend_dirs = knobs.build.backend_dirs
     include_dirs = include_dirs + [srcdir, py_include_dir, *custom_backend_dirs]
     # for -Wno-psabi, see https://gcc.gnu.org/bugzilla/show_bug.cgi?id=111047
     cc_cmd = [cc, src, "-O3", "-shared", "-fPIC", "-Wno-psabi", "-o", so]
