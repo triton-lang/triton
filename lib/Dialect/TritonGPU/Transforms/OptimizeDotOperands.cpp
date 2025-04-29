@@ -73,7 +73,11 @@ public:
         trans.getSrc());
     auto newTrans = rewriter.create<MemDescTransOp>(trans.getLoc(), alloc,
                                                     ArrayRef<int32_t>({1, 0}));
-    rewriter.replaceOpWithNewOp<LocalLoadOp>(trans, sharedLoadTy, newTrans);
+    auto localLoadOp =
+        rewriter.create<LocalLoadOp>(trans.getLoc(), sharedLoadTy, newTrans);
+    rewriter.modifyOpInPlace(cvtOp, [&]() {
+      cvtOp.getSrcMutable().assign(localLoadOp.getResult());
+    });
     return success();
   }
 };
