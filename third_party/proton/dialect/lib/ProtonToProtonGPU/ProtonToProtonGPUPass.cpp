@@ -130,16 +130,37 @@ public:
     const int circularHeaderSize =
         proton::gpu::getCircularHeaderSize(); // byte size
 
-    int segmentByteSize =
+    int segmentByteSizeShared =
         llvm::NextPowerOf2(
             (maxSharedMemSize - llvm::alignTo(sharedMemUsed, bytesPerEntry)) /
             segmentNum) /
         2;
-    int numSharedEntries = segmentByteSize * segmentNum / bytesPerEntry;
+    int numSharedEntries = segmentByteSizeShared * segmentNum / bytesPerEntry;
     int allocSharedMemSize = numSharedEntries * bytesPerEntry;
+
     if (bufferSize != 0)
       bufferSize = llvm::alignTo(bufferSize, bytesPerEntry);
-    int allocBufferSize = bufferSize > 0 ? bufferSize : allocSharedMemSize;
+    // Validate buffer size
+    if (bufferSize != 0 && !llvm::isPowerOf2_32(bufferSize / segmentNum)) {
+      mlir::emitError(loc, "buffer-size per segment(" +
+                               llvm::Twine(segmentNum) +
+                               ") must be power of 2");
+      return failure();
+    }
+
+    int allocBufferSize;
+    if (bufferType == gpu::BufferType::SHARED) {
+      if (bufferSize > 0)
+        allocBufferSize =
+            (allocSharedMemSize > bufferSize) ? bufferSize : allocSharedMemSize;
+      else
+        allocBufferSize = allocSharedMemSize;
+    } else if (bufferType == gpu::BufferType::GLOBAL) {
+      allocBufferSize = bufferSize;
+    } else {
+      allocBufferSize = 0;
+    }
+
     if (allocBufferSize <= 0) {
       mlir::emitError(loc, "profiling buffer size should be greater than 0");
       return failure();
@@ -153,6 +174,7 @@ public:
     //  +-----------------------------------------------+
     //  | profiled data (allocBufferSize bytes)         |
     //  +-----------------------------------------------+
+
     int allocProfileScratchSize =
         llvm::alignTo(allocBufferSize + circularHeaderSize + numWarps * 4,
                       profileScratchAlignment);
@@ -176,14 +198,14 @@ public:
       Attribute sharedMemorySpace =
           triton::gpu::SharedMemorySpaceAttr::get(context);
       auto sharedBufferType = triton::gpu::MemDescType::get(
-          {wordsPerEntry * numSharedEntries}, builder.getI32Type(), encoding,
+          {allocBufferSize / 4}, builder.getI32Type(), encoding,
           sharedMemorySpace, /*mutable_memory=*/true);
       buffer = builder.create<triton::gpu::LocalAllocOp>(loc, sharedBufferType);
     } else if (bufferType == gpu::BufferType::STACK) {
       Attribute stackMemorySpace =
           mlir::triton::proton::gpu::StackMemorySpaceAttr::get(context);
       auto stackBufferType = triton::gpu::MemDescType::get(
-          {wordsPerEntry * numSharedEntries}, builder.getI32Type(), encoding,
+          {allocBufferSize / 4}, builder.getI32Type(), encoding,
           stackMemorySpace, /*mutable_memory=*/true);
       buffer = builder.create<proton::gpu::StackAllocOp>(loc, stackBufferType);
     } else if (bufferType == gpu::BufferType::GLOBAL) {
@@ -257,13 +279,6 @@ public:
 
     if (!hasProtonRecord) {
       return; // No proton records to process, silently return
-    }
-
-    // Validate buffer size if specified
-    if (bufferSize > 0 && !llvm::isPowerOf2_32(bufferSize)) {
-      mlir::emitError(loc, "buffer-size must be power of 2");
-      signalPassFailure();
-      return;
     }
 
     // Validate profile scratch alignment
