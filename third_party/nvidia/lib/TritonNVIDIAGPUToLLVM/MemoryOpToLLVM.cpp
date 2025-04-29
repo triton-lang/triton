@@ -194,6 +194,8 @@ LogicalResult lowerDistributedToSharedStmatrix(
   }
   auto quot = maybeQuot.value();
   srcVals = action.apply(srcVals);
+  // Map from kReg, kLane, kWarp to beginning of each tile
+  auto reps = zerosLike(tile) * quot;
 
   // Choose the 4 elements indexed by the next to bases as the vectorisation
   // factor
@@ -205,33 +207,33 @@ LogicalResult lowerDistributedToSharedStmatrix(
 
   // FIXME(Lezcano): Should we bail if any of the other 3 lane bases is zero?
 
+  auto [laneId, warpId] = getLaneAndWarpId(rewriter, loc);
   // Compute the addresses for the 0th tile
   // Here we implement the stmatrix.x4 addressing. As per the PTX docs, the
   // threads 0-7 hold the address of the first element of the 8 columns of the
   // first submatrix, threads 8-15 for the second submatrix, etc. In general we
   // map:
-  // - The lowest 3 bits of the thread id to the columns of each submatrix
-  // - The top 2 bits to the submatrix number (which is indexed by the next 2
-  // reg bases)
-  auto [laneId, warpId] = getLaneAndWarpId(rewriter, loc);
-  assert(0 <= vec && vec <= 2);
-  // Pick the appropriate lane for the vectorisation factor: no basis, one
-  // basis, or two bases using the 4th or 4th and 5th bit of the lane id
-  // FIXME we can remove the lshr / and_ below by modifying the bases of the
-  // layout
-  auto vecPicker =
-      vec == 0   ? b.i32_val(0)
-      : vec == 1 ? Value(b.and_(b.lshr(laneId, b.i32_val(3)), b.i32_val(0x1)))
-                 : Value(b.lshr(laneId, b.i32_val(3)));
-  auto regBase = applyLinearLayout(loc, rewriter, quot,
-                                   {{kReg, vecPicker},
-                                    {kLane, b.and_(laneId, b.i32_val(0x7))},
-                                    {kWarp, warpId}})[0]
+  // - The lowest 3 bits of the laneId to the columns of each submatrix, which
+  // is
+  //   given by the 3 kLane bases of quotient that are not part of the tile
+  // - The top `vec` bits of the thread id to the submatrix number, which is
+  // given
+  //   by the first `vec` reg bases that are not part of the tile
+  std::vector<std::vector<int32_t>> laneBases;
+  for (int i = 0; i < 3; ++i) {
+    laneBases.push_back(reps.getBasis(kLane, tile.getInDimSizeLog2(kLane) + i));
+  }
+  for (int i = 0; i < vec; ++i) {
+    laneBases.push_back(reps.getBasis(kReg, tile.getInDimSizeLog2(kReg) + i));
+  }
+
+  LinearLayout addrLayout =
+      LinearLayout({{kLane, laneBases}, {kWarp, quot.getBases().lookup(kWarp)}},
+                   {{kOffset, reps.getOutDimSize(kOffset)}}, false);
+  auto regBase = applyLinearLayout(loc, rewriter, addrLayout,
+                                   {{kLane, laneId}, {kWarp, warpId}})[0]
                      .second;
-  // We computed regBase using quot rather than reps (below). We now add an
-  // stride equal to the tile size to correct for this
-  regBase = b.shl(regBase, b.i32_val(tile.getTotalOutDimSizeLog2()));
-  auto reps = zerosLike(tile) * quot;
+
   // Elements per op
   auto step = (1 << vec) * (32 / bitwidth);
   for (int i = 0; i < srcVals.size(); i += step) {
