@@ -8,8 +8,10 @@
 namespace mlir::triton::proton::gpu::AMD {
 class TargetInfo : public mlir::triton::proton::gpu::TargetInfoBase {
 public:
-  explicit TargetInfo(const mlir::triton::AMD::TargetInfo &helper)
-      : mlir::triton::proton::gpu::TargetInfoBase(helper) {}
+  explicit TargetInfo(const mlir::triton::AMD::TargetInfo &helper,
+                      std::string arch)
+      : mlir::triton::proton::gpu::TargetInfoBase(helper),
+        arch(std::move(arch)) {}
 
   const mlir::triton::AMD::TargetInfo &getTritonTargetInfo() const override {
     return static_cast<const mlir::triton::AMD::TargetInfo &>(helper);
@@ -24,6 +26,9 @@ public:
   int getAddressSpace(Attribute addressSpace) const override;
 
   ~TargetInfo() = default;
+
+private:
+  std::string arch;
 };
 } // namespace mlir::triton::proton::gpu::AMD
 

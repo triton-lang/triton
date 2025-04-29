@@ -25,6 +25,85 @@ struct CircularStoreOpConversion
   matchAndRewrite(mlir::triton::proton::gpu::CircularStoreOp op,
                   OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
+    auto loc = op.getLoc();
+    auto mod = op.getOperation()->getParentOfType<ModuleOp>();
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
+
+    const int bytesPerEntry = proton::gpu::getBytesPerClockEntry();
+    const int wordsPerEntry = bytesPerEntry / 4; // 1 word = 4 bytes
+
+    Value indexPtr = adaptor.getIndexPtr();
+    Value dataStruct = adaptor.getData();
+    auto bufferPtrTy =
+        mlir::cast<LLVM::LLVMStructType>(dataStruct.getType()).getBody()[0];
+
+    Value bufferDataBasePtr = b.extract_val(bufferPtrTy, dataStruct, 0);
+
+    Value curIdx = b.load(i32_ty, indexPtr);
+    Value newIdx = b.add(curIdx, b.i32_val(wordsPerEntry));
+    b.store(newIdx, indexPtr);
+
+    auto segbaseOp =
+        mlir::cast<proton::gpu::SegmentBaseOp>(op.getSeg().getDefiningOp());
+    int selectedWarpNum = mlir::triton::gpu::lookupNumWarps(mod);
+    auto selectedIds = segbaseOp.getSelectIdsAttr().asArrayRef();
+    if (!selectedIds.empty())
+      selectedWarpNum = selectedIds.size();
+    auto memDescTy =
+        mlir::cast<triton::gpu::MemDescType>(op.getData().getType());
+    const int bufferSizeInBytes =
+        mlir::ShapedType::getNumElements(memDescTy.getShape()) *
+        memDescTy.getElementType().getIntOrFloatBitWidth() / 8;
+    const int segmentWordSize = bufferSizeInBytes / selectedWarpNum / 4;
+    Value segmentBase = adaptor.getSeg();
+    Value tagOffset =
+        b.add(segmentBase, b.urem(curIdx, b.i32_val(segmentWordSize)));
+
+    Value vecPtr = b.gep(bufferPtrTy, i32_ty, bufferDataBasePtr, tagOffset);
+    Value tag = op.getIsStart() ? b.i32_val(op.getScopeId())
+                                : b.i32_val(1 << 31 | op.getScopeId());
+    Value clock = op.getCounter();
+    Value valsVec = packLLVector(loc, {tag, clock}, rewriter);
+
+    Value warpSize =
+        b.i32_val(mlir::triton::gpu::lookupThreadsPerWarp(rewriter));
+    Value curLaneId = b.urem(getThreadId(rewriter, loc), warpSize);
+    // TODO: document this assumption that thread zero is always the first
+    // active lane. We could a ballot op + llvm.cttz to get the "true" active
+    // first lane but that would probably add too much overhead in a perf
+    // critical section.
+    Value isWarpMaster = b.icmp_eq(curLaneId, b.i32_val(0));
+
+    Value isWriter;
+
+    auto granularity = segbaseOp.getGranularity();
+    if (selectedIds.empty()) {
+      if (granularity == proton::gpu::Granularity::WARP) {
+        isWriter = isWarpMaster;
+      } else {
+        llvm::report_fatal_error("unimplemented");
+      }
+    } else {
+      Value isCurWarpEnabled = b.icmp_ne(segmentBase, b.i32_val(-1));
+      isWriter = b.and_(isCurWarpEnabled, isWarpMaster);
+    }
+    uint32_t AddrSpace =
+        cast<LLVM::LLVMPointerType>(bufferPtrTy).getAddressSpace();
+    if (AddrSpace == 1) {
+      llvm::report_fatal_error("unimplemented");
+    } else if (AddrSpace == 3) {
+      // TODO(crobeck): this is lowered as a predicated store which is not very
+      // efficient. probably want this swapped out for bufferops
+      // we also need to compare "this version" vs. isWriter always = true
+      // for this predicated version, there could be unexpected instruction
+      // cache miss. Setting isWriter always true has bank conflicts but it is
+      // expected and stable.
+      targetInfo.getTritonTargetInfo().storeDShared(rewriter, loc, vecPtr,
+                                                    std::nullopt, valsVec,
+                                                    /*pred=*/isWriter);
+    } else {
+      llvm::report_fatal_error("unsupported address space in circular store");
+    }
     rewriter.eraseOp(op);
     return success();
   }
