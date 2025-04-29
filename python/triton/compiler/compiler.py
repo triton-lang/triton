@@ -340,7 +340,7 @@ def compile(src, target=None, options=None):
         module.create_location_snapshot(src.path)
         print(f"Creating new locations for {src.path}")
 
-    timer.finished_parsing()
+    timer.finished_ir_initialization()
     for ext, compile_ir in list(stages.items())[first_stage:]:
         next_module = compile_ir(module, metadata)
         ir_filename = f"{file_name}.{ext}"
