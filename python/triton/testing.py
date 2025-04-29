@@ -142,8 +142,19 @@ def do_bench(fn, warmup=25, rep=100, grad_to_none=None, quantiles=None, return_m
 
     di = runtime.driver.active.get_device_interface()
 
+    synchronize_with_timing = di.synchronize
+    try:
+        from torch._dynamo.utils import CHROMIUM_EVENT_LOG, chromium_event_timed
+        if CHROMIUM_EVENT_LOG is not None:
+
+            def synchronize_with_timing():
+                with chromium_event_timed("triton_do_bench_synchronize"):
+                    di.synchronize()
+    except ImportError:
+        pass
+
     fn()
-    di.synchronize()
+    synchronize_with_timing()
 
     cache = runtime.driver.active.get_empty_cache_for_benchmark()
 
@@ -155,7 +166,7 @@ def do_bench(fn, warmup=25, rep=100, grad_to_none=None, quantiles=None, return_m
         runtime.driver.active.clear_cache(cache)
         fn()
     end_event.record()
-    di.synchronize()
+    synchronize_with_timing()
     estimate_ms = start_event.elapsed_time(end_event) / 5
 
     # compute number of warmup and repeat
@@ -181,7 +192,7 @@ def do_bench(fn, warmup=25, rep=100, grad_to_none=None, quantiles=None, return_m
         fn()
         end_event[i].record()
     # Record clocks
-    di.synchronize()
+    synchronize_with_timing()
     times = [s.elapsed_time(e) for s, e in zip(start_event, end_event)]
     return _summarize_statistics(times, quantiles, return_mode)
 
