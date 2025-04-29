@@ -12,6 +12,7 @@
 // #include "mlir/Dialect/LLVMIR/NVVMDialect.h"
 #include "mlir/Dialect/LLVMIR/ROCDLDialect.h"
 #include "mlir/Pass/Pass.h"
+#include "mlir/Transforms/WalkPatternRewriteDriver.h"
 #include "third_party/amd/include/Dialect/TritonAMDGPU/IR/Dialect.h"
 // #include "triton/Analysis/Allocation.h"
 // #include "triton/Analysis/AxisInfo.h"
@@ -91,7 +92,7 @@ inline bool isRowMajor(::llvm::ArrayRef<unsigned> order) {
   return order[rank - 1] == 0;
 }
 
-LogicalResult rewriteLocalLoad(OpBuilder &rewriter,
+LogicalResult rewriteLocalLoad(PatternRewriter &rewriter,
                                triton::gpu::LocalLoadOp op) {
   auto *ctx = op->getContext();
   auto loc = op->getLoc();
@@ -181,18 +182,18 @@ LogicalResult rewriteLocalLoad(OpBuilder &rewriter,
       loc, resultType, subtiles, numReps2D, loweringOrder);
   LDBG("ConcatOp: " << *joinedResult);
 
-  op.replaceAllUsesWith(joinedResult.getResult());
+  rewriter.replaceOp(op, joinedResult);
   return success();
 }
 
 struct DotOpMFMAConverter {
   AMDMfmaEncodingAttr mfmaLayout;
-  OpBuilder &rewriter;
+  PatternRewriter &rewriter;
   Location loc;
   MLIRContext *ctx{};
 
   explicit DotOpMFMAConverter(AMDMfmaEncodingAttr mfmaLayout,
-                              OpBuilder &rewriter, Location loc)
+                              PatternRewriter &rewriter, Location loc)
       : mfmaLayout(mfmaLayout), rewriter(rewriter), loc(loc),
         ctx(mfmaLayout.getContext()) {}
 
@@ -463,16 +464,16 @@ struct DotOpMFMAConverter {
 
     // Note: dangling localLoadA or/and localLoadB (if exist)
     // should be removed by the dead code elimination pass
-    dotOp.erase();
+    rewriter.eraseOp(dotOp);
     return success();
   }
 };
 
 inline RankedTensorType rankedTType(Value tensor) {
   return cast<RankedTensorType>(tensor.getType());
-};
+}
 
-LogicalResult rewriteMFMA(OpBuilder &rewriter, triton::DotOp op) {
+LogicalResult rewriteMFMA(PatternRewriter &rewriter, triton::DotOp op) {
   if (!(isa<DotOperandEncodingAttr>(rankedTType(op.getA()).getEncoding()) &&
         isa<DotOperandEncodingAttr>(rankedTType(op.getB()).getEncoding()))) {
     LDBG("Both $a and %b should be DotOperand layout");
@@ -536,7 +537,7 @@ struct RefinedBlock {
   RankedTensorType tensorType;
 };
 
-LogicalResult rewriteLoadOp(OpBuilder &rewriter, triton::LoadOp loadOp) {
+LogicalResult rewriteLoadOp(PatternRewriter &rewriter, triton::LoadOp loadOp) {
   auto ctx = loadOp->getContext();
   auto loc = loadOp.getLoc();
 
@@ -589,7 +590,7 @@ LogicalResult rewriteLoadOp(OpBuilder &rewriter, triton::LoadOp loadOp) {
   return success();
 }
 
-LogicalResult rewriteLocalStoreOp(OpBuilder &rewriter,
+LogicalResult rewriteLocalStoreOp(PatternRewriter &rewriter,
                                   triton::gpu::LocalStoreOp loadStoreOp) {
   auto ctx = loadStoreOp->getContext();
   auto loc = loadStoreOp.getLoc();
@@ -640,14 +641,14 @@ LogicalResult rewriteLocalStoreOp(OpBuilder &rewriter,
     rewriter.create<ttg::LocalStoreOp>(loc, slice, slicedSharedMemView);
   }
 
-  loadStoreOp.erase();
+  rewriter.eraseOp(loadStoreOp);
   return success();
 }
 
 // Reduce ops have different intput and output shapes and produce
 // sliced layouts.
 // This currently only supports 2d inputs.
-LogicalResult rewriteReduceOp(OpBuilder &rewriter, triton::ReduceOp op) {
+LogicalResult rewriteReduceOp(PatternRewriter &rewriter, triton::ReduceOp op) {
   auto ctx = op->getContext();
   auto loc = op.getLoc();
   uint32_t axisReduce = op.getAxis();
@@ -698,7 +699,7 @@ LogicalResult rewriteReduceOp(OpBuilder &rewriter, triton::ReduceOp op) {
       loc, reduceResultType, refinedReduces, concatDims);
   auto origOpResult = op.getResult();
   origOpResult.replaceAllUsesWith(concatOp);
-  op.erase();
+  rewriter.eraseOp(op);
   return success();
 }
 
@@ -710,7 +711,7 @@ SmallVector<unsigned> getRefinedShapePerCTATile(Type type) {
 // Refine ops with distributed layouts.
 // Assumes same layout for operands.
 template <typename OpTy>
-LogicalResult rewriteElementWiseOp(OpBuilder &rewriter, OpTy op) {
+LogicalResult rewriteElementWiseOp(PatternRewriter &rewriter, OpTy op) {
   // Verify opd[0] is valid.
   int numOperands = op->getNumOperands();
   if (op->getNumOperands() < 1)
@@ -816,14 +817,10 @@ LogicalResult rewriteElementWiseOp(OpBuilder &rewriter, OpTy op) {
   auto concatOp = rewriter.create<triton::amdgpu::ConcatOp>(
       op.getLoc(), resultType, refinedOps, concatDims);
 
-  // DEBUG check if concat op results in correct linear layout
-  auto leConcat = ttg::toLinearEncoding(rankedTType(concatOp->getResult(0)));
-  auto llConcat = leConcat.getLinearLayout();
-
   auto origOpResult = op.getResult();
   origOpResult.replaceAllUsesWith(concatOp);
   LDBG("rewriteElementWiseOp() - SUCCESS " << op);
-  op.erase();
+  rewriter.replaceOp(op, concatOp);
 
   return success();
 }
@@ -835,7 +832,7 @@ LogicalResult rewriteElementWiseOp(OpBuilder &rewriter, OpTy op) {
 // <M> -> <M/m> -> <M/m x 1> -> <Mx1>.
 // TODO(dtanner) only need to support 1D sliceLayout input, same as
 // ViewOpToLLVM.cpp ?
-LogicalResult rewriteExpandDimsOp(OpBuilder &rewriter,
+LogicalResult rewriteExpandDimsOp(PatternRewriter &rewriter,
                                   triton::ExpandDimsOp op) {
   int numOperands = op->getNumOperands();
   if (op->getNumOperands() != 1)
@@ -936,7 +933,7 @@ LogicalResult rewriteExpandDimsOp(OpBuilder &rewriter,
       cast<mlir::RankedTensorType>(refinedReduces.front().getType()));
 
   origOpResult.replaceAllUsesWith(concatOp);
-  op.erase();
+  rewriter.eraseOp(op);
   return success();
 }
 
@@ -955,7 +952,8 @@ LogicalResult rewriteExpandDimsOp(OpBuilder &rewriter,
 //        \             <64x32>   /
 //         -> <64x1> -> <64x32>  /
 //                      <64x32> /
-LogicalResult rewriteBroadcastOp(OpBuilder &rewriter, BroadcastOp op) {
+LogicalResult rewriteBroadcastOp(PatternRewriter &rewriter,
+                                 triton::BroadcastOp op) {
   // src tensor e.g. <128x1>.
   int numOperands = op->getNumOperands();
   if (op->getNumOperands() != 1)
@@ -1043,18 +1041,163 @@ LogicalResult rewriteBroadcastOp(OpBuilder &rewriter, BroadcastOp op) {
 
   auto origOpResult = op.getResult();
   origOpResult.replaceAllUsesWith(concatOp);
-  op.erase();
+  rewriter.eraseOp(op);
   return success();
 }
 
-// Refine Element-Wise Ops.
-#define REFINE_ELEMENTWISE_OP(OP_TYPE)                                         \
-  block->walk([&](OP_TYPE op) {                                                \
-    OpBuilder rewriter(op->getContext());                                      \
-    if (failed(rewriteElementWiseOp<OP_TYPE>(rewriter, op))) {                 \
-      LDBG("failed to refine binary op: " << *op);                             \
-    }                                                                          \
-  });
+template <typename OpTy>
+struct RefineRewritePattern : public OpRewritePattern<OpTy> {
+  RefineRewritePattern(MLIRContext *context, PatternBenefit benefit = 1)
+      : OpRewritePattern<OpTy>(context, benefit) {}
+
+  virtual LogicalResult apply(OpTy op, PatternRewriter &rewriter) const = 0;
+
+  LogicalResult matchAndRewrite(OpTy op,
+                                PatternRewriter &rewriter) const final {
+    if (!isRefinable(op))
+      return failure();
+    return apply(op, rewriter);
+  }
+
+private:
+  bool isRefinable(Operation *op) const {
+    mlir::Block *block = op->getBlock();
+    while (block) {
+      for (auto &op : block->getOperations()) {
+        if (auto hint = dyn_cast<triton::amdgpu::InstructionSchedHint>(op)) {
+          if (hint.getVariant() == triton::amdgpu::SchedHint::refine_ops) {
+            return true;
+          }
+        }
+      }
+      block = block->getParentOp()->getBlock();
+    }
+    return false;
+  }
+};
+
+struct LocalLoadOpPattern
+    : public RefineRewritePattern<triton::gpu::LocalLoadOp> {
+  LocalLoadOpPattern(MLIRContext *context, PatternBenefit benefit = 1)
+      : RefineRewritePattern(context, benefit) {}
+
+  LogicalResult apply(triton::gpu::LocalLoadOp op,
+                      PatternRewriter &rewriter) const override {
+    if (op->getNumOperands() != 1) {
+      return failure();
+    }
+    auto result = rewriteLocalLoad(rewriter, op);
+    if (failed(result)) {
+      LDBG("failed to refine ttg.localLoad: " << *op);
+    }
+    return result;
+  }
+};
+
+struct DotOpPattern : public RefineRewritePattern<triton::DotOp> {
+  DotOpPattern(MLIRContext *context, PatternBenefit benefit = 1)
+      : RefineRewritePattern(context, benefit) {}
+
+  LogicalResult apply(triton::DotOp op,
+                      PatternRewriter &rewriter) const override {
+    auto result = rewriteMFMA(rewriter, op);
+    if (failed(result)) {
+      LDBG("failed to refine tt.Dot: " << *op);
+    }
+    return result;
+  }
+};
+
+struct LoadOpPattern : public RefineRewritePattern<triton::LoadOp> {
+  LoadOpPattern(MLIRContext *context, PatternBenefit benefit = 1)
+      : RefineRewritePattern(context, benefit) {}
+
+  LogicalResult apply(triton::LoadOp op,
+                      PatternRewriter &rewriter) const override {
+    if (op->getNumOperands() != 1) {
+      return failure();
+    }
+    auto result = rewriteLoadOp(rewriter, op);
+    if (failed(result)) {
+      LDBG("failed to refine tt.loadOp: " << *op);
+    }
+    return result;
+  }
+};
+
+struct LocalStoreOpPattern
+    : public RefineRewritePattern<triton::gpu::LocalStoreOp> {
+  LocalStoreOpPattern(MLIRContext *context, PatternBenefit benefit = 1)
+      : RefineRewritePattern(context, benefit) {}
+
+  LogicalResult apply(triton::gpu::LocalStoreOp op,
+                      PatternRewriter &rewriter) const override {
+    if (op->getNumOperands() != 2) {
+      return failure();
+    }
+    auto result = rewriteLocalStoreOp(rewriter, op);
+    if (failed(result)) {
+      LDBG("failed to refine ttg.localLoadOp: " << *op);
+    }
+    return result;
+  }
+};
+
+struct ReduceOpPattern : public RefineRewritePattern<triton::ReduceOp> {
+  ReduceOpPattern(MLIRContext *context, PatternBenefit benefit = 1)
+      : RefineRewritePattern(context, benefit) {}
+
+  LogicalResult apply(triton::ReduceOp op,
+                      PatternRewriter &rewriter) const override {
+    auto result = rewriteReduceOp(rewriter, op);
+    if (failed(result)) {
+      LDBG("failed to refine tt.reduce: " << *op);
+    }
+    return result;
+  }
+};
+
+template <typename OpTy>
+struct ElementWiseOpPattern : public RefineRewritePattern<OpTy> {
+  ElementWiseOpPattern(MLIRContext *context, PatternBenefit benefit = 1)
+      : RefineRewritePattern<OpTy>(context, benefit) {}
+
+  LogicalResult apply(OpTy op, PatternRewriter &rewriter) const override {
+    auto result = rewriteElementWiseOp<OpTy>(rewriter, op);
+    if (failed(result)) {
+      LDBG("failed to refine elementwise op: " << *op);
+    }
+    return result;
+  }
+};
+
+struct ExpandDimsOpPattern : public RefineRewritePattern<triton::ExpandDimsOp> {
+  ExpandDimsOpPattern(MLIRContext *context, PatternBenefit benefit = 1)
+      : RefineRewritePattern(context, benefit) {}
+
+  LogicalResult apply(triton::ExpandDimsOp op,
+                      PatternRewriter &rewriter) const override {
+    auto result = rewriteExpandDimsOp(rewriter, op);
+    if (failed(result)) {
+      LDBG("failed to refine tt.expand_dims: " << *op);
+    }
+    return result;
+  }
+};
+
+struct BroadcastOpPattern : public RefineRewritePattern<BroadcastOp> {
+  BroadcastOpPattern(MLIRContext *context, PatternBenefit benefit = 1)
+      : RefineRewritePattern(context, benefit) {}
+
+  LogicalResult apply(triton::BroadcastOp op,
+                      PatternRewriter &rewriter) const override {
+    auto result = rewriteBroadcastOp(rewriter, op);
+    if (failed(result)) {
+      LDBG("failed to refine tt.broadcast: " << *op);
+    }
+    return result;
+  }
+};
 
 struct TritonAMDGPURefineOps
     : public TritonAMDGPURefineOpsBase<TritonAMDGPURefineOps> {
@@ -1064,130 +1207,74 @@ struct TritonAMDGPURefineOps
 
   void runOnOperation() override {
     MLIRContext *context = &getContext();
-    ModuleOp mod = getOperation();
+    triton::FuncOp func = getOperation();
     mlir::triton::AMD::TargetInfo targetInfo(this->arch.getValue());
     if (targetInfo.getISAFamily() == mlir::triton::AMD::ISAFamily::Unknown) {
-      mod.emitError("unsupported target: '") << this->arch.getValue() << "'";
+      func.emitError("unsupported target: '") << this->arch.getValue() << "'";
       return signalPassFailure();
     }
 
-    mod->walk([&](amdgpu::InstructionSchedHint hint) {
-      if (hint.getVariant() != amdgpu::SchedHint::refine_ops) {
-        return WalkResult::advance();
-      }
+    RewritePatternSet patterns(context);
+    patterns.add<LocalLoadOpPattern>(context, /*benefit=*/1);
+    patterns.add<DotOpPattern>(context, /*benefit=*/1);
+    patterns.add<LoadOpPattern>(context, /*benefit=*/1);
+    patterns.add<LocalStoreOpPattern>(context, /*benefit=*/1);
+    patterns.add<ReduceOpPattern>(context, /*benefit=*/1);
+    patterns.add<ExpandDimsOpPattern>(context, /*benefit=*/1);
+    patterns.add<BroadcastOpPattern>(context, /*benefit=*/1);
 
-      auto *block = hint->getBlock();
+    // Elementwise patterns
+#define REFINE_ELEMENTWISE_OP(OP_TYPE)                                         \
+  patterns.add<ElementWiseOpPattern<OP_TYPE>>(context, /*benefit=*/1);
 
-      block->walk([&](triton::gpu::LocalLoadOp localLoadOp) {
-        OpBuilder rewriter(localLoadOp->getContext());
-        if (localLoadOp->getNumOperands() == 1) {
-          if (failed(rewriteLocalLoad(rewriter, localLoadOp))) {
-            LDBG("failed to refine ttg.localLoad: " << *localLoadOp);
-          }
-        }
-      });
+    REFINE_ELEMENTWISE_OP(math::RsqrtOp)
+    REFINE_ELEMENTWISE_OP(math::Exp2Op)
+    REFINE_ELEMENTWISE_OP(arith::TruncFOp)
+    REFINE_ELEMENTWISE_OP(arith::ExtFOp)
+    REFINE_ELEMENTWISE_OP(arith::FPToSIOp)
+    REFINE_ELEMENTWISE_OP(arith::SIToFPOp)
+    REFINE_ELEMENTWISE_OP(triton::FpToFpOp)
+    REFINE_ELEMENTWISE_OP(triton::PreciseSqrtOp)
+    REFINE_ELEMENTWISE_OP(math::SqrtOp)
+    REFINE_ELEMENTWISE_OP(math::ExpOp)
+    REFINE_ELEMENTWISE_OP(arith::SubIOp)
+    REFINE_ELEMENTWISE_OP(arith::AddIOp)
+    REFINE_ELEMENTWISE_OP(arith::MulIOp)
+    REFINE_ELEMENTWISE_OP(arith::DivSIOp)
+    REFINE_ELEMENTWISE_OP(arith::DivUIOp)
+    REFINE_ELEMENTWISE_OP(arith::RemFOp)
+    REFINE_ELEMENTWISE_OP(arith::RemSIOp)
+    REFINE_ELEMENTWISE_OP(arith::RemUIOp)
+    REFINE_ELEMENTWISE_OP(arith::AndIOp)
+    REFINE_ELEMENTWISE_OP(arith::OrIOp)
+    REFINE_ELEMENTWISE_OP(arith::XOrIOp)
+    REFINE_ELEMENTWISE_OP(arith::ShLIOp)
+    REFINE_ELEMENTWISE_OP(arith::ShRSIOp)
+    REFINE_ELEMENTWISE_OP(arith::ShRUIOp)
+    REFINE_ELEMENTWISE_OP(arith::MinNumFOp)
+    REFINE_ELEMENTWISE_OP(arith::MaxNumFOp)
+    REFINE_ELEMENTWISE_OP(arith::MinSIOp)
+    REFINE_ELEMENTWISE_OP(arith::MaxSIOp)
+    REFINE_ELEMENTWISE_OP(arith::MinUIOp)
+    REFINE_ELEMENTWISE_OP(arith::MaxUIOp)
+    REFINE_ELEMENTWISE_OP(arith::AddFOp)
+    REFINE_ELEMENTWISE_OP(arith::SubFOp)
+    REFINE_ELEMENTWISE_OP(arith::MulFOp)
+    REFINE_ELEMENTWISE_OP(arith::DivFOp)
+    REFINE_ELEMENTWISE_OP(arith::MaximumFOp)
+    REFINE_ELEMENTWISE_OP(arith::MinimumFOp)
+    REFINE_ELEMENTWISE_OP(triton::gpu::ConvertLayoutOp)
 
-      block->walk([&](triton::DotOp dotOp) {
-        OpBuilder rewriter(dotOp->getContext());
-        // TODO: extend to WMMA instructions
-        if (failed(rewriteMFMA(rewriter, dotOp))) {
-          LDBG("failed to refine tt.dotOp: " << *dotOp);
-        }
-      });
-
-      block->walk([&](triton::LoadOp loadOp) {
-        OpBuilder rewriter(loadOp->getContext());
-        if (loadOp->getNumOperands() == 1) {
-          if (failed(rewriteLoadOp(rewriter, loadOp))) {
-            LDBG("failed to refine tt.loadOp: " << *loadOp);
-          }
-        }
-      });
-
-      block->walk([&](triton::gpu::LocalStoreOp storeOp) {
-        OpBuilder rewriter(storeOp->getContext());
-        if (storeOp->getNumOperands() == 2) {
-          if (failed(rewriteLocalStoreOp(rewriter, storeOp))) {
-            LDBG("failed to refine ttg.localLoadOp: " << *storeOp);
-          }
-        }
-      });
-
-      block->walk([&](triton::ReduceOp reduceOp) {
-        OpBuilder rewriter(reduceOp->getContext());
-        if (failed(rewriteReduceOp(rewriter, reduceOp))) {
-          LDBG("failed to refine tt.reduce: " << *reduceOp);
-        }
-      });
-
-      // Refine Unary Element-Wise Ops.
-      REFINE_ELEMENTWISE_OP(math::RsqrtOp)
-      REFINE_ELEMENTWISE_OP(math::Exp2Op)
-      REFINE_ELEMENTWISE_OP(arith::TruncFOp)
-      REFINE_ELEMENTWISE_OP(arith::ExtFOp)
-      REFINE_ELEMENTWISE_OP(arith::FPToSIOp)
-      REFINE_ELEMENTWISE_OP(arith::SIToFPOp)
-      REFINE_ELEMENTWISE_OP(triton::FpToFpOp)
-      REFINE_ELEMENTWISE_OP(triton::PreciseSqrtOp)
-      REFINE_ELEMENTWISE_OP(math::SqrtOp)
-      REFINE_ELEMENTWISE_OP(math::ExpOp)
-      REFINE_ELEMENTWISE_OP(arith::SubIOp)
-      REFINE_ELEMENTWISE_OP(arith::AddIOp)
-      REFINE_ELEMENTWISE_OP(arith::MulIOp)
-      REFINE_ELEMENTWISE_OP(arith::DivSIOp)
-      REFINE_ELEMENTWISE_OP(arith::DivUIOp)
-      REFINE_ELEMENTWISE_OP(arith::RemFOp)
-      REFINE_ELEMENTWISE_OP(arith::RemSIOp)
-      REFINE_ELEMENTWISE_OP(arith::RemUIOp)
-      REFINE_ELEMENTWISE_OP(arith::AndIOp)
-      REFINE_ELEMENTWISE_OP(arith::OrIOp)
-      REFINE_ELEMENTWISE_OP(arith::XOrIOp)
-      REFINE_ELEMENTWISE_OP(arith::ShLIOp)
-      REFINE_ELEMENTWISE_OP(arith::ShRSIOp)
-      REFINE_ELEMENTWISE_OP(arith::ShRUIOp)
-      REFINE_ELEMENTWISE_OP(arith::MinNumFOp)
-      REFINE_ELEMENTWISE_OP(arith::MaxNumFOp)
-      REFINE_ELEMENTWISE_OP(arith::MinSIOp)
-      REFINE_ELEMENTWISE_OP(arith::MaxSIOp)
-      REFINE_ELEMENTWISE_OP(arith::MinUIOp)
-      REFINE_ELEMENTWISE_OP(arith::MaxUIOp)
-      REFINE_ELEMENTWISE_OP(arith::AddFOp)
-      REFINE_ELEMENTWISE_OP(arith::SubFOp)
-      REFINE_ELEMENTWISE_OP(arith::MulFOp)
-      REFINE_ELEMENTWISE_OP(arith::DivFOp)
-      REFINE_ELEMENTWISE_OP(arith::MaximumFOp)
-      REFINE_ELEMENTWISE_OP(arith::MinimumFOp)
-      REFINE_ELEMENTWISE_OP(triton::gpu::ConvertLayoutOp)
-
-      // Refine ExpandDimsOp: 128 -> 128x1
-      block->walk([&](triton::ExpandDimsOp op) {
-        OpBuilder rewriter(op->getContext());
-        if (failed(rewriteExpandDimsOp(rewriter, op))) {
-          LDBG("failed to refine tt.expand_dims: " << *op);
-        }
-      });
-
-#if 0
-      // Refine BroadcastOp: 128x1 -> 128x64
-      block->walk([&](triton::BroadcastOp op) {
-        OpBuilder rewriter(op->getContext());
-        if (failed(rewriteBroadcastOp(rewriter, op))) {
-          LDBG("failed to refine tt.broadcast: " << *op);
-        }
-      });
-#endif
-      return WalkResult::advance();
-    });
+#undef REFINE_ELEMENTWISE_OP
+    walkAndApplyPatterns(func, std::move(patterns));
   }
-
-private:
 };
 
 } // namespace
 
 namespace mlir {
 
-std::unique_ptr<OperationPass<ModuleOp>>
+std::unique_ptr<OperationPass<triton::FuncOp>>
 createTritonAMDGPURefineOpsPass(StringRef targetArch) {
   return std::make_unique<TritonAMDGPURefineOps>(targetArch);
 }

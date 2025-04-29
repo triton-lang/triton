@@ -265,7 +265,7 @@ def TritonAMDGPUMembarAnalysis : Pass<"triton-amdgpu-membar-analysis", "mlir::Mo
 }
 
 
-def TritonAMDGPURefineOps : Pass<"triton-amdgpu-refine-ops", "mlir::ModuleOp"> {
+def TritonAMDGPURefineOps : Pass<"triton-amdgpu-refine-ops", "mlir::triton::FuncOp"> {
     let summary = "Convert Triton Ops to fine-grain ones";
     let constructor = "mlir::createTritonAMDGPURefineOpsPass(\"\")";
 
