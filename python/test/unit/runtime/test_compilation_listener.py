@@ -11,13 +11,13 @@ import torch
 
 
 @triton.jit
-def add_kernel(ptr):
+def cumsum_kernel(ptr):
     block = ptr + tl.arange(0, 4)
     x = tl.load(block)
     tl.store(block, tl.cumsum(x, 0))
 
 
-def test_compile_stats(device: str, fresh_triton_cache: str, fresh_config: Any) -> None:
+def test_compile_stats(device: str, fresh_config: Any, fresh_triton_cache: str) -> None:
     captured: Union[tuple[Union[ASTSource, IRSource], dict[str, Any], CompileTimes, bool], None] = None
 
     def compile_listener(src: Union[ASTSource, IRSource], metadata: dict[str, Any], times: CompileTimes,
@@ -29,7 +29,7 @@ def test_compile_stats(device: str, fresh_triton_cache: str, fresh_config: Any) 
     fresh_config.compilation.listener = compile_listener
 
     x = torch.randn(4, device=device)
-    add_kernel[(1, )](x)
+    cumsum_kernel[(1, )](x)
 
     assert captured is not None
 
@@ -47,9 +47,9 @@ def test_compile_stats(device: str, fresh_triton_cache: str, fresh_config: Any) 
     assert captured[2].total > 0
 
     # Now lets create a new instance of the same kernel to pick up cache_hit=True
-    add_kernel.device_caches.clear()
+    cumsum_kernel.device_caches.clear()
     captured = None
-    add_kernel[(1, )](x)
+    cumsum_kernel[(1, )](x)
 
     assert captured is not None
     # Cache hit!
