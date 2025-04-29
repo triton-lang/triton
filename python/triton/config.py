@@ -269,6 +269,8 @@ class cache_config(base_config):
     manager_class: env_class[CacheManager] = env_class("TRITON_CACHE_MANAGER", "CacheManager")
     remote_manager_class: env_class[RemoteCacheBackend] = env_class("TRITON_REMOTE_CACHE_BACKEND", "RemoteCacheBackend")
 
+    ignore_libtriton_hash: env_bool = env_bool("TRITON_IGNORE_LIBTRITON_HASH")
+
     def get_triton_dir(self, dirname: str) -> str:
         return os.path.join(self.home_dir, ".triton", dirname)
 

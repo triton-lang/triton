@@ -144,7 +144,7 @@ def triton_key():
             with open(lib.module_finder.find_spec(lib.name).origin, "rb") as f:
                 contents += [hashlib.sha256(f.read()).hexdigest()]
 
-    if os.environ.get("TRITON_IGNORE_LIBTRITON_HASH", "0") == "1":
+    if config.cache.ignore_libtriton_hash:
         import importlib
         contents.append(importlib.metadata.version("triton"))
     else:
