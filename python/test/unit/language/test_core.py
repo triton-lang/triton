@@ -803,7 +803,25 @@ def test_slice(device):
         t = data[None, :]
         tl.static_assert(t.shape == [1, XBLOCK])
 
+        t = data[None, None:]
+        tl.static_assert(t.shape == [1, XBLOCK])
+
+        t = data[None, :None]
+        tl.static_assert(t.shape == [1, XBLOCK])
+
         t = data[None, :, None]
+        tl.static_assert(t.shape == [1, XBLOCK, 1])
+
+        t = data[None, None:None, None]
+        tl.static_assert(t.shape == [1, XBLOCK, 1])
+
+        t = data[None, None:None:None, None]
+        tl.static_assert(t.shape == [1, XBLOCK, 1])
+
+        t = data[None, ::None, None]
+        tl.static_assert(t.shape == [1, XBLOCK, 1])
+
+        t = data[None, None::None, None]
         tl.static_assert(t.shape == [1, XBLOCK, 1])
 
         scalar = tl.full([], 1, tl.int32)
@@ -6604,6 +6622,7 @@ def test_enable_fp_fusion(enable_fp_fusion, default_override, device):
     data = torch.randn((128, ), device=device, dtype=torch.float32)
     if default_override:
         os.environ["TRITON_DEFAULT_FP_FUSION"] = "1" if enable_fp_fusion else "0"
+        assert triton.config.language.default_fp_fusion == enable_fp_fusion
         h = mul_add[(1, )](data)
     else:
         h = mul_add[(1, )](data, enable_fp_fusion=enable_fp_fusion)
