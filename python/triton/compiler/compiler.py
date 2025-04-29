@@ -221,38 +221,38 @@ class CompileTimer:
 
     def __init__(self) -> None:
         self.start: float = time.time()
-        self.prologue_end: float = -1.0
+        self.ir_initialization_end: float | None = None
         self.lowering_stage_ends: list[tuple[str, float]] = []
-        self.epilogue_end: float = -1.0
+        self.store_results_end: float | None = None
 
-    def prologue_finished(self) -> None:
-        self.prologue_end = time.time()
+    def finished_ir_initialization(self) -> None:
+        self.ir_initialization_end = time.time()
 
     def stage_finished(self, stage_name: str) -> None:
         self.lowering_stage_ends.append((stage_name, time.time()))
 
     def end(self) -> config.CompileTimes:
         timestamp = time.time()
-        if self.prologue_end < 0.0:
-            self.prologue_end = timestamp
+        if self.ir_initialization_end is None:
+            self.ir_initialization_end = timestamp
         else:
-            self.epilogue_end = timestamp
+            self.store_results_end = timestamp
 
-        def delta(start: float, end: float) -> int:
-            if end < 0.0:
+        def delta(start: float, end: float | None) -> int:
+            if end is None:
                 return 0
             return int((end - start) * 1000000)
 
         lowering_stage_durations = []
-        stage_start = self.prologue_end
+        stage_start = self.ir_initialization_end
         for stage_name, stage_end in self.lowering_stage_ends:
             lowering_stage_durations.append((stage_name, delta(stage_start, stage_end)))
             stage_start = stage_end
 
         return config.CompileTimes(
-            prologue=delta(self.start, self.prologue_end),
+            ir_initialization=delta(self.start, self.ir_initialization_end),
             lowering_stages=lowering_stage_durations,
-            epilogue=delta(stage_start, self.epilogue_end),
+            store_results=delta(stage_start, self.store_results_end),
         )
 
 
@@ -340,7 +340,7 @@ def compile(src, target=None, options=None):
         module.create_location_snapshot(src.path)
         print(f"Creating new locations for {src.path}")
 
-    timer.prologue_finished()
+    timer.finished_parsing()
     for ext, compile_ir in list(stages.items())[first_stage:]:
         next_module = compile_ir(module, metadata)
         ir_filename = f"{file_name}.{ext}"

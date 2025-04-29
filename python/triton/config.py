@@ -208,14 +208,14 @@ class CompileTimes:
     """
 
     # Duration of make_ir
-    prologue: int
+    ir_initialization: int
 
     # Ordered mapping from lowering stage to duration spent in that stage.
     # Keyed by stage extension, e.g. ttir, ttgir
     lowering_stages: list[tuple[str, int]]
 
-    # Duration of post-lowering
-    epilogue: int
+    # Duration of saving artifacts/metadata to cache
+    store_results: int
 
     @property
     def total_lowering(self) -> int:
@@ -223,7 +223,7 @@ class CompileTimes:
 
     @property
     def total(self) -> int:
-        return self.prologue + self.total_lowering + self.epilogue
+        return self.ir_initialization + self.total_lowering + self.store_results
 
 
 class CompilationListener(Protocol):
