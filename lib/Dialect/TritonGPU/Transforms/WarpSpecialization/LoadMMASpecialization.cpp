@@ -608,23 +608,23 @@ LogicalResult PipelinedLoadGroup::lowerLoads(WarpSchedule &schedule,
 static LogicalResult pipelineMMA(scf::ForOp &loop, PipelinedMMA &mma,
                                  WarpSchedule &schedule, DominanceInfo &domInfo,
                                  PostDominanceInfo &postDomInfo) {
-  auto fail = [&](StringRef msg) {
-    return emitWarning(mma.mmaOp.getLoc(), msg);
-  };
+  ttng::MMAv5OpInterface mmaOp = mma.mmaOp;
+  auto fail = [&](StringRef msg) { return emitWarning(mmaOp.getLoc(), msg); };
   Block &body = *loop.getBody();
+  auto inBody = [&](Operation *op) { return body.findAncestorOpInBlock(*op); };
 
   // Determine if the MMA accumulator can be multibuffered.
   bool accIsMultiBuffered =
       // MMAs in subsequent iterations can be overlapped.
-      !ttng::hasAccReadModifyWrite(mma.mmaOp, loop) &&
+      !ttng::hasAccReadModifyWrite(mmaOp, loop) &&
       // The accumulator is reset at some point, thus allowing multibuffering.
-      ttng::isAccMultibufferingPossible(mma.mmaOp, loop) &&
+      ttng::isAccMultibufferingPossible(mmaOp, loop) &&
       // The user didn't disable it with a flag.
       !getDisallowAccMultiBuffer(loop);
 
   // Check that the accumulator can be multi-buffered.
   ttng::TMEMAllocOp oldAllocOp =
-      mma.mmaOp.getAccumulator().getDefiningOp<ttng::TMEMAllocOp>();
+      mmaOp.getAccumulator().getDefiningOp<ttng::TMEMAllocOp>();
   if (!oldAllocOp)
     return fail("accumulator is not a TMEM alloc");
   for (Operation *user : oldAllocOp.getResult().getUsers()) {
@@ -632,7 +632,7 @@ static LogicalResult pipelineMMA(scf::ForOp &loop, PipelinedMMA &mma,
       return fail("cannot track accumulator uses");
   }
 
-  PartitionBuilder b(mma.mmaOp.getLoc(), oldAllocOp);
+  PartitionBuilder b(mmaOp.getLoc(), oldAllocOp);
   int numMmaStages = 1 + accIsMultiBuffered;
   ttng::TMEMAllocOp allocOp =
       createTMemAlloc(b, oldAllocOp, /*multiBuffered=*/true, numMmaStages);
@@ -641,9 +641,6 @@ static LogicalResult pipelineMMA(scf::ForOp &loop, PipelinedMMA &mma,
   auto indexPhase = addIterArgsToLoop(b, loop, {b.intCst(0), b.intCst(0)});
   BlockArgument index = indexPhase[0];
   BlockArgument phase = indexPhase[1];
-  cast<scf::YieldOp>(loop.getBody()->getTerminator())
-      .getResultsMutable()
-      .append({index, phase});
 
   // Replace uses of the accumulator before the loop with buffer 0, and replace
   // those after the loop with the last buffer.
@@ -669,164 +666,195 @@ static LogicalResult pipelineMMA(scf::ForOp &loop, PipelinedMMA &mma,
     }
   }
   llvm::sort(usersInLoop, [&](Operation *lhs, Operation *rhs) {
-    return body.findAncestorOpInBlock(*lhs)->isBeforeInBlock(
-        body.findAncestorOpInBlock(*rhs));
+    return inBody(lhs)->isBeforeInBlock(inBody(rhs));
   });
 
-  // Replace uses of the accumulator in the loop.
-  b.setInsertionPoint(loop);
-  Value replTok = b.create<ub::PoisonOp>(b.getType<AsyncTokenType>());
-  b.setInsertionPointToStart(&body);
+  // Find the read and overwrite points.
   Operation *overwriteOp = nullptr, *readOp = nullptr;
   for (Operation *user : usersInLoop) {
-    b.setInsertionPoint(user);
     if (auto storeOp = dyn_cast<ttng::TMEMStoreOp>(user)) {
       overwriteOp = storeOp;
-      storeOp.getDepMutable().clear();
-      storeOp.getToken().replaceAllUsesWith(replTok);
-      Value view = createSingleBufferView(b, allocOp, index);
-      storeOp.getDstMutable().assign(view);
     } else if (auto mmaOp = dyn_cast<ttng::MMAv5OpInterface>(user)) {
       if (!matchPattern(mmaOp.useAccumulator(), m_One()))
         overwriteOp = mmaOp;
-      mmaOp.getAccDepMutable().clear();
-      mmaOp.getToken().replaceAllUsesWith(replTok);
-      Value view = createSingleBufferView(b, allocOp, index);
-      mmaOp.setAccumulator(view);
     } else if (auto loadOp = dyn_cast<ttng::TMEMLoadOp>(user)) {
       readOp = loadOp;
-      loadOp.getDepMutable().clear();
-      loadOp.getToken().replaceAllUsesWith(replTok);
-      Value view = createSingleBufferView(b, allocOp, index);
-      loadOp.getSrcMutable().assign(view);
     } else {
       llvm::report_fatal_error("FIXME: unhandled MMA accumulator user");
     }
   }
+
+  if (!overwriteOp)
+    overwriteOp = mmaOp;
+  if (!readOp)
+    readOp = overwriteOp;
+
+  struct Node {
+    Operation *op;
+    Partition *partition;
+    Value barPrev;
+    Value barNext;
+    Value index;
+    Value phase;
+  };
+
+  SmallVector<Node, 3> nodes{Node{overwriteOp}, Node{mmaOp}, Node{readOp}};
+  llvm::sort(nodes, [&](Node &lhs, Node &rhs) {
+    return inBody(lhs.op)->isBeforeInBlock(inBody(rhs.op));
+  });
+
+  for (int i = 0; i < nodes.size(); ++i) {
+    Node &cur = nodes[i];
+    Node &next = nodes[(i + 1) % nodes.size()];
+    if (schedule.getPartition(inBody(cur.op)) !=
+        schedule.getPartition(inBody(next.op))) {
+      cur.barNext = createBarrierAlloc(loop, numMmaStages);
+      next.barPrev = cur.barNext;
+    }
+  }
+
+  Value firstBar;
+  for (int i = nodes.size(); i > 0; --i) {
+    if ((firstBar = nodes[i % nodes.size()].barPrev))
+      break;
+  }
+  if (firstBar) {
+    for (auto i : llvm::seq(numMmaStages)) {
+      b.setInsertionPoint(loop);
+      Value bar = createSingleBufferView(b, firstBar, i);
+      b.create<ttng::ArriveBarrierOp>(bar, /*arriveCount=*/1);
+    }
+  }
+
+  Value curIndex = index, curPhase = phase;
+  b.setInsertionPoint(loop);
+  Value userPred = b.boolCst(true);
+  Value replTok = b.create<ub::PoisonOp>(b.getType<AsyncTokenType>());
+  DenseSet<Operation *> seen;
+  std::optional<OpBuilder::InsertPoint> incrementPt;
+  for (Node &node : nodes) {
+    node.index = curIndex;
+    node.phase = curPhase;
+    if (incrementPt && node.barPrev && node.barPrev != firstBar) {
+      b.setInsertionPoint(loop);
+      b.create<ttng::ArriveBarrierOp>(
+          createSingleBufferView(b, node.barPrev, 0), /*arriveCount=*/1);
+    }
+    if (!seen.insert(node.op).second)
+      continue;
+    b.setInsertionPoint(node.op);
+    Value view = createSingleBufferView(b, allocOp, node.index);
+    if (auto storeOp = dyn_cast<ttng::TMEMStoreOp>(node.op)) {
+      storeOp.getDstMutable().assign(view);
+      storeOp.getDepMutable().clear();
+      storeOp.getToken().replaceAllUsesWith(replTok);
+    } else if (auto loadOp = dyn_cast<ttng::TMEMLoadOp>(node.op)) {
+      loadOp.getSrcMutable().assign(view);
+      loadOp.getDepMutable().clear();
+      loadOp.getToken().replaceAllUsesWith(replTok);
+    } else {
+      assert(node.op == mmaOp);
+      mmaOp.setAccumulator(view);
+      mmaOp.getAccDepMutable().clear();
+      mmaOp.getToken().replaceAllUsesWith(replTok);
+    }
+    if (node.op == dyn_cast<ttng::TMEMLoadOp>(readOp)) {
+      ImplicitLocOpBuilder b(readOp->getLoc(), loop);
+      userPred = getUserPrecondition(b, loop, node.op).first;
+      b.setInsertionPointAfter(inBody(readOp));
+      auto [nextIndex, nextPhase] =
+          postIncrementModulo(b, index, phase, numMmaStages);
+      curIndex = b.create<arith::SelectOp>(userPred, nextIndex, index);
+      curPhase = b.create<arith::SelectOp>(userPred, nextPhase, phase);
+      incrementPt = b.saveInsertionPoint();
+    }
+  }
   oldAllocOp.getToken().replaceAllUsesWith(allocOp.getToken());
   oldAllocOp.erase();
-
-  // Case 1: The MMA result is only read after the loop.
-  if (!readOp) {
-    b.setInsertionPoint(loop);
-    Value doneBar = createBarrierAlloc(loop, /*numBarriers=*/1);
-    doneBar = createSingleBufferView(b, doneBar, 0);
-    b.setInsertionPoint(mma.mmaOp);
-    Value pred = b.create<arith::CmpIOp>(
-        arith::CmpIPredicate::eq, loop.getInductionVar(),
-        b.create<arith::SubIOp>(loop.getUpperBound(), b.intCst(1)));
-    mma.mmaOp.addCompletionBarrier(doneBar, pred);
-    b.setInsertionPointAfter(loop);
-    b.create<ttng::WaitBarrierOp>(doneBar, b.intCst(0));
-    return success();
-  }
-
-  // Allocate producer and consumer barriers.
-  b.setInsertionPoint(loop);
-  Value userPred = getUserPrecondition(b, loop, readOp).first;
-  Value emptyBars = createBarrierAlloc(loop, numMmaStages);
-  Value readyBars = createBarrierAlloc(loop, numMmaStages);
-  for (auto i : llvm::seq(numMmaStages)) {
-    Value emptyBar = createSingleBufferView(b, emptyBars, i);
-    // Mark all empty barriers as phase 0 complete.
-    b.create<ttng::ArriveBarrierOp>(emptyBar, /*arriveCount=*/1);
-  }
-
-  bool startReady =
-      body.findAncestorOpInBlock(*readOp)->isBeforeInBlock(mma.mmaOp);
-  if (startReady) {
-    // Mark the first ready barrier as phase 0 complete.
-    Value firstReadyBar = createSingleBufferView(b, readyBars, 0);
-    b.create<ttng::ArriveBarrierOp>(firstReadyBar, /*arriveCount=*/1);
-  }
-
-  Partition &mmaPartition = *schedule.getPartition(mma.mmaOp);
-  Partition &readPartition =
-      *schedule.getPartition(body.findAncestorOpInBlock(*readOp));
+  cast<scf::YieldOp>(loop.getBody()->getTerminator())
+      .getResultsMutable()
+      .append({curIndex, curPhase});
 
   // Find operands that need to be pipelined through shmem.
-  SmallVector<Operation *> operandDefs;
+  SmallVector<std::pair<Operation *, Partition *>> operandDefs;
   for (Value operand : mma.mmaOp->getOperands()) {
     Operation *defOp = operand.getDefiningOp();
     if (!defOp || !loop.getBodyRegion().isAncestor(defOp->getParentRegion()))
       continue;
-    defOp = body.findAncestorOpInBlock(*defOp);
-    if (schedule.getPartition(defOp) != &readPartition)
+    defOp = inBody(defOp);
+    Partition *defPartition = schedule.getPartition(defOp);
+    if (!defPartition)
       continue;
     if (auto allocOp = operand.getDefiningOp<LocalAllocOp>()) {
       PartitionBuilder b(allocOp.getLoc(), allocOp);
-      auto store = b.createInPartition<LocalStoreOp>(readPartition,
+      auto store = b.createInPartition<LocalStoreOp>(*defPartition,
                                                      allocOp.getSrc(), allocOp);
-      operandDefs.push_back(body.findAncestorOpInBlock(*store));
+      operandDefs.emplace_back(body.findAncestorOpInBlock(*store),
+                               defPartition);
       allocOp->moveBefore(loop);
       allocOp.getSrcMutable().clear();
       allocOp.getResult().setType(getAsMutable(allocOp.getType()));
     } else if (auto tmemAllocOp = operand.getDefiningOp<ttng::TMEMAllocOp>()) {
       PartitionBuilder b(tmemAllocOp.getLoc(), tmemAllocOp);
       auto store = b.createInPartition<ttng::TMEMStoreOp>(
-          readPartition, Type(), tmemAllocOp.getResult(), Value(),
+          *defPartition, Type(), tmemAllocOp.getResult(), Value(),
           tmemAllocOp.getSrc(), b.boolCst(true));
-      operandDefs.push_back(body.findAncestorOpInBlock(*store));
+      operandDefs.emplace_back(body.findAncestorOpInBlock(*store),
+                               defPartition);
       tmemAllocOp->moveBefore(loop);
       tmemAllocOp.getSrcMutable().clear();
       tmemAllocOp.getResult().setType(getAsMutable(tmemAllocOp.getType()));
     }
   }
 
-  // Producer commit.
-  b.setInsertionPoint(mma.mmaOp);
-  Value readyBar = createSingleBufferView(b, readyBars, index);
-  mma.mmaOp.addCompletionBarrier(readyBar, userPred);
+  for (Node &node : nodes) {
+    Partition *partition = schedule.getPartition(inBody(node.op));
+    PartitionBuilder b(node.op->getLoc(), loop);
 
-  // Place the consumer wait before the read.
-  operandDefs.push_back(readOp);
-  Operation *consumerWait = findNearestCommonDominator(operandDefs, domInfo);
-  b.setInsertionPoint(consumerWait);
-  // If the consumer is inside a conditional, have it acquire the buffer for the
-  // whole of the conditional block to improve instruction scheduling.
-  if (isa<scf::IfOp>(consumerWait->getParentOp()))
-    b.setInsertionPointToStart(consumerWait->getBlock());
-  readyBar = createSingleBufferView(b, readyBars, index);
-  b.createInPartition<ttng::WaitBarrierOp>(readPartition, readyBar, phase);
+    SmallVector<Operation *> defs;
+    defs.push_back(node.op);
+    for (auto &[defOp, defPartition] : operandDefs) {
+      if (defPartition == partition)
+        defs.push_back(defOp);
+    }
+    Operation *domOp = findNearestCommonDominator(defs, domInfo);
+    Operation *lastOp = findNearestCommonPostDominator(defs, postDomInfo);
 
-  // Place the consumer release after the read, and after the write as well if
-  // it is in the user partition.
-  if (overwriteOp != mma.mmaOp && !mma.storeOp)
-    operandDefs.push_back(overwriteOp);
-  Operation *consumerRelease =
-      findNearestCommonPostDominator(operandDefs, postDomInfo);
-  b.setInsertionPointAfter(consumerRelease);
-  if (isa<scf::IfOp>(consumerRelease->getParentOp()))
-    b.setInsertionPoint(consumerRelease->getBlock()->getTerminator());
-  Value emptyBar = createSingleBufferView(b, emptyBars, index);
-  auto releaseOp = b.createInPartition<ttng::ArriveBarrierOp>(
-      readPartition, emptyBar, /*arriveCount=*/1);
-
-  // Always place the producer acquire after the consumer release.
-  b.setInsertionPointAfter(body.findAncestorOpInBlock(*releaseOp));
-  emptyBar = createSingleBufferView(b, emptyBars, index);
-  b.createInPartition<ttng::WaitBarrierOp>(mmaPartition, emptyBar, phase,
-                                           userPred);
-
-  // Increment after the read, but also after the mbarrier arrive if it is after
-  // the read.
-  Operation *afterRead = readOp;
-  if (readOp->getNextNode() == releaseOp)
-    afterRead = releaseOp;
-  afterRead = body.findAncestorOpInBlock(*afterRead);
-  b.setInsertionPointAfter(afterRead);
-  auto [nextIndex, nextPhase] =
-      postIncrementModulo(b, index, phase, numMmaStages);
-  nextIndex = b.create<arith::SelectOp>(userPred, nextIndex, index);
-  nextPhase = b.create<arith::SelectOp>(userPred, nextPhase, phase);
-  replaceAllUsesDominatedBy(nextIndex.getDefiningOp(), nextIndex, index,
-                            domInfo);
-  replaceAllUsesDominatedBy(nextPhase.getDefiningOp(), nextPhase, phase,
-                            domInfo);
+    if (node.barPrev) {
+      if (!isa<ttng::TMEMLoadOp>(node.op) && incrementPt &&
+          node.op->isBeforeInBlock(&*incrementPt->getPoint())) {
+        b.restoreInsertionPoint(*incrementPt);
+        Value bar = createSingleBufferView(b, node.barPrev, curIndex);
+        b.createInPartition<ttng::WaitBarrierOp>(*partition, bar, curPhase,
+                                                 userPred);
+      } else {
+        b.setInsertionPoint(domOp);
+        if (isa<scf::IfOp>(domOp->getParentOp()))
+          b.setInsertionPointToStart(domOp->getBlock());
+        Value bar = createSingleBufferView(b, node.barPrev, node.index);
+        b.createInPartition<ttng::WaitBarrierOp>(*partition, bar, node.phase);
+      }
+    }
+    if (node.barNext) {
+      if (mmaOp == node.op) {
+        b.setInsertionPoint(mmaOp);
+        Value bar = createSingleBufferView(b, node.barNext, node.index);
+        mmaOp.addCompletionBarrier(bar, userPred);
+      } else {
+        b.setInsertionPointAfter(lastOp);
+        if (isa<scf::IfOp>(lastOp->getParentOp()))
+          b.setInsertionPoint(lastOp->getBlock()->getTerminator());
+        Value bar = createSingleBufferView(b, node.barNext, node.index);
+        b.createInPartition<ttng::ArriveBarrierOp>(*partition, bar, 1);
+      }
+    }
+  }
 
   llvm::SetVector<Operation *> predOps;
   Operation *hoistPt =
       findNearestCommonDominator(llvm::to_vector(userPred.getUsers()), domInfo);
+  if (!hoistPt)
+    return success();
   if (!getDominatingValueSetOpsToHoist(
           domInfo, body.findAncestorOpInBlock(*hoistPt), userPred, predOps))
     return fail("failed to hoist predicate ops above MMA");

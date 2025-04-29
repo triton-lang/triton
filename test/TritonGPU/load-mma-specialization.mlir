@@ -299,17 +299,17 @@ tt.func @matmul_tma_acc_with_unconditional_user(
 
   // CHECK-COUNT-2: ttg.local_alloc : () -> !ttg.memdesc<2xi64
 
-  // CHECK:      [[ACC_EMPTY_BUFS:%.*]] = ttg.local_alloc : () -> !ttg.memdesc<2xi64
-  // CHECK-NEXT: [[ACC_EMPTY_BUF0:%.*]] = ttg.memdesc_subview [[ACC_EMPTY_BUFS]][%c0_i32]
-  // CHECK-NEXT: ttng.init_barrier [[ACC_EMPTY_BUF0]], 1
-  // CHECK-NEXT: [[ACC_EMPTY_BUF1:%.*]] = ttg.memdesc_subview [[ACC_EMPTY_BUFS]][%c1_i32]
-  // CHECK-NEXT: ttng.init_barrier [[ACC_EMPTY_BUF1]], 1
-
-  // CHECK-NEXT: [[ACC_READY_BUFS:%.*]] = ttg.local_alloc : () -> !ttg.memdesc<2xi64
+  // CHECK:      [[ACC_READY_BUFS:%.*]] = ttg.local_alloc : () -> !ttg.memdesc<2xi64
   // CHECK-NEXT: [[ACC_READY_BUF0:%.*]] = ttg.memdesc_subview [[ACC_READY_BUFS]][%c0_i32]
   // CHECK-NEXT: ttng.init_barrier [[ACC_READY_BUF0]], 1
   // CHECK-NEXT: [[ACC_READY_BUF1:%.*]] = ttg.memdesc_subview [[ACC_READY_BUFS]][%c1_i32]
   // CHECK-NEXT: ttng.init_barrier [[ACC_READY_BUF1]], 1
+
+  // CHECK-NEXT: [[ACC_EMPTY_BUFS:%.*]] = ttg.local_alloc : () -> !ttg.memdesc<2xi64
+  // CHECK-NEXT: [[ACC_EMPTY_BUF0:%.*]] = ttg.memdesc_subview [[ACC_EMPTY_BUFS]][%c0_i32]
+  // CHECK-NEXT: ttng.init_barrier [[ACC_EMPTY_BUF0]], 1
+  // CHECK-NEXT: [[ACC_EMPTY_BUF1:%.*]] = ttg.memdesc_subview [[ACC_EMPTY_BUFS]][%c1_i32]
+  // CHECK-NEXT: ttng.init_barrier [[ACC_EMPTY_BUF1]], 1
 
   // CHECK-NEXT: ttng.arrive_barrier [[ACC_EMPTY_BUF0]], 1
   // CHECK-NEXT: ttng.arrive_barrier [[ACC_EMPTY_BUF1]], 1
@@ -347,17 +347,19 @@ tt.func @matmul_tma_acc_with_unconditional_user(
     // CHECK-NEXT: [[C:%.*]], [[LOAD_TOK:%.*]] = ttng.tmem_load [[ACC_BUF]][] {ttg.partition = 0 : i32}
     %c, %load_tok = ttng.tmem_load %c_tmem[%mma_tok] : !ttg.memdesc<128x128xf32, #acc_tmem, #ttng.tensor_memory, mutable> -> tensor<128x128xf32, #acc_layout>
 
+    // CHECK-NEXT: [[CUR_ACC_EMPTY_BAR:%.*]] = ttg.memdesc_subview [[ACC_EMPTY_BUFS]][[[ACC_INDEX]]]
+    // CHECK-NEXT: ttng.arrive_barrier [[CUR_ACC_EMPTY_BAR]], 1 {ttg.partition = 0 : i32}
+    "acc_user"(%c) : (tensor<128x128xf32, #acc_layout>) -> ()
+
     // CHECK-NEXT: [[ACC_INDEX_INCR:%.*]] = arith.addi [[ACC_INDEX]], %c1_i32
     // CHECK-NEXT: [[ACC_PHASE_INCR:%.*]] = arith.xori [[ACC_PHASE]], %c1_i32
     // CHECK-NEXT: [[ACC_ROLLVER:%.*]] = arith.cmpi eq, [[ACC_INDEX_INCR]], %c2_i32
     // CHECK-NEXT: [[ACC_NEXT_INDEX:%.*]] = arith.select [[ACC_ROLLVER]], %c0_i32, [[ACC_INDEX_INCR]]
     // CHECK-NEXT: [[ACC_NEXT_PHASE:%.*]] = arith.select [[ACC_ROLLVER]], [[ACC_PHASE_INCR]], [[ACC_PHASE]]
-
     // CHECK-NEXT: [[NEXT_ACC_EMPTY_BAR:%.*]] = ttg.memdesc_subview [[ACC_EMPTY_BUFS]][[[ACC_NEXT_INDEX]]]
-    // CHECK-NEXT: ttng.arrive_barrier [[NEXT_ACC_EMPTY_BAR]], 1 {ttg.partition = 0 : i32}
     // CHECK-NEXT: ttng.wait_barrier [[NEXT_ACC_EMPTY_BAR]], [[ACC_NEXT_PHASE]], %true {ttg.partition = 1 : i32}
-    // CHECK-NEXT: "acc_user"([[C]])
-    "acc_user"(%c) : (tensor<128x128xf32, #acc_layout>) -> ()
+
+    // CHECK-NEXT: "acc_user"([[C]]) {ttg.partition = 0 : i32}
 
     // CHECK-NEXT: [[NEXT_ACC_BUF:%.*]] = ttg.memdesc_subview [[ACC_BUFS]][[[ACC_NEXT_INDEX]], %c0_i32, %c0_i32]
     // CHECK-NEXT: [[STORE_TOK:%.*]] = ttng.tmem_store [[ACC_RESET]], [[NEXT_ACC_BUF]][], %true {ttg.partition = 1 : i32}
@@ -399,8 +401,8 @@ tt.func @matmul_tma_acc_with_conditional_user(
   // CHECK: [[ACC_BUFS:%.*]], [[ACC_TOK:%.*]] = ttng.tmem_alloc
   // CHECK-COUNT-2: ttg.local_alloc : () -> !ttg.memdesc<2xi64
 
-  // CHECK: [[ACC_EMPTY_BUFS:%.*]] = ttg.local_alloc : () -> !ttg.memdesc<2xi64
   // CHECK: [[ACC_READY_BUFS:%.*]] = ttg.local_alloc : () -> !ttg.memdesc<2xi64
+  // CHECK: [[ACC_EMPTY_BUFS:%.*]] = ttg.local_alloc : () -> !ttg.memdesc<2xi64
 
   // CHECK:      {{[0-9]+}}:4 = scf.for [[K:%arg[0-9]+]]
   // CHECK-SAME: [[LOAD_INDEX:%arg[0-9]+]] = %c0_i32
@@ -452,8 +454,10 @@ tt.func @matmul_tma_acc_with_conditional_user(
     // CHECK-NEXT: [[EPILOGUE_ACC_NEXT_INDEX:%.*]] = arith.select [[DO_EPILOGUE]], [[ACC_NEXT_INDEX]], [[ACC_INDEX]]
     // CHECK-NEXT: [[EPILOGUE_ACC_NEXT_PHASE:%.*]] = arith.select [[DO_EPILOGUE]], [[ACC_NEXT_PHASE]], [[ACC_PHASE]]
 
+    // CHECK-NEXT: [[ACC_NEXT_BUF:%.*]] = ttg.memdesc_subview [[ACC_BUFS]][[[EPILOGUE_ACC_NEXT_INDEX]], %c0_i32, %c0_i32]
     // CHECK-NEXT: [[NEXT_ACC_EMPTY_BAR:%.*]] = ttg.memdesc_subview [[ACC_EMPTY_BUFS]][[[EPILOGUE_ACC_NEXT_INDEX]]]
     // CHECK-NEXT: ttng.wait_barrier [[NEXT_ACC_EMPTY_BAR]], [[EPILOGUE_ACC_NEXT_PHASE]], [[DO_EPILOGUE]] {ttg.partition = 1 : i32}
+    // CHECK-NEXT: ttng.tmem_store [[ACC_RESET]], [[ACC_NEXT_BUF]][], %true {ttg.partition = 1 : i32}
 
     // CHECK: arith.addi
     // CHECK-NOT: arith.addi
@@ -493,8 +497,8 @@ tt.func @matmul_tma_acc_with_conditional_def(
   // CHECK: [[ACC_BUFS:%.*]], [[ACC_TOK:%.*]] = ttng.tmem_alloc
   // CHECK-COUNT-2: ttg.local_alloc : () -> !ttg.memdesc<2xi64
 
-  // CHECK: [[ACC_EMPTY_BUFS:%.*]] = ttg.local_alloc : () -> !ttg.memdesc<2xi64
   // CHECK: [[ACC_READY_BUFS:%.*]] = ttg.local_alloc : () -> !ttg.memdesc<2xi64
+  // CHECK: [[ACC_EMPTY_BUFS:%.*]] = ttg.local_alloc : () -> !ttg.memdesc<2xi64
 
   // CHECK:      {{[0-9]+}}:4 = scf.for [[K:%arg[0-9]+]]
   // CHECK-SAME: [[LOAD_INDEX:%arg[0-9]+]] = %c0_i32
@@ -530,6 +534,8 @@ tt.func @matmul_tma_acc_with_conditional_def(
 
     // CHECK-NEXT: ttng.wait_barrier [[CUR_ACC_READY_BAR]], [[ACC_PHASE]] {ttg.partition = 0 : i32}
     // CHECK-NEXT: [[C:%.*]], [[LOAD_TOK:%.*]] = ttng.tmem_load [[ACC_BUF]][] {ttg.partition = 0 : i32}
+    // CHECK-NEXT: [[CUR_ACC_EMPTY_BAR:%.*]] = ttg.memdesc_subview [[ACC_EMPTY_BUFS]][[[ACC_INDEX]]]
+    // CHECK-NEXT: ttng.arrive_barrier [[CUR_ACC_EMPTY_BAR]], 1 {ttg.partition = 0 : i32}
 
     // CHECK-NEXT: [[ACC_INDEX_INCR:%.*]] = arith.addi [[ACC_INDEX]], %c1_i32
     // CHECK-NEXT: [[ACC_PHASE_INCR:%.*]] = arith.xori [[ACC_PHASE]], %c1_i32
@@ -538,7 +544,6 @@ tt.func @matmul_tma_acc_with_conditional_def(
     // CHECK-NEXT: [[ACC_NEXT_PHASE:%.*]] = arith.select [[ACC_ROLLVER]], [[ACC_PHASE_INCR]], [[ACC_PHASE]]
 
     // CHECK-NEXT: [[NEXT_ACC_EMPTY_BAR:%.*]] = ttg.memdesc_subview [[ACC_EMPTY_BUFS]][[[ACC_NEXT_INDEX]]]
-    // CHECK-NEXT: ttng.arrive_barrier [[NEXT_ACC_EMPTY_BAR]], 1 {ttg.partition = 0 : i32}
     // CHECK-NEXT: ttng.wait_barrier [[NEXT_ACC_EMPTY_BAR]], [[ACC_NEXT_PHASE]], %true {ttg.partition = 1 : i32}
 
     // CHECK-NEXT: "acc_user"([[C]])
@@ -585,8 +590,8 @@ tt.func @matmul_tma_acc_with_conditional_def_and_use(
   // CHECK: [[ACC_BUFS:%.*]], [[ACC_TOK:%.*]] = ttng.tmem_alloc
   // CHECK-COUNT-2: ttg.local_alloc : () -> !ttg.memdesc<2xi64
 
-  // CHECK: [[ACC_EMPTY_BUFS:%.*]] = ttg.local_alloc : () -> !ttg.memdesc<2xi64
   // CHECK: [[ACC_READY_BUFS:%.*]] = ttg.local_alloc : () -> !ttg.memdesc<2xi64
+  // CHECK: [[ACC_EMPTY_BUFS:%.*]] = ttg.local_alloc : () -> !ttg.memdesc<2xi64
 
   // CHECK:      {{[0-9]+}}:4 = scf.for [[K:%arg[0-9]+]]
   // CHECK-SAME: [[LOAD_INDEX:%arg[0-9]+]] = %c0_i32
@@ -638,10 +643,9 @@ tt.func @matmul_tma_acc_with_conditional_def_and_use(
     // CHECK-NEXT: [[EPILOGUE_ACC_NEXT_INDEX:%.*]] = arith.select [[DO_EPILOGUE]], [[ACC_NEXT_INDEX]], [[ACC_INDEX]]
     // CHECK-NEXT: [[EPILOGUE_ACC_NEXT_PHASE:%.*]] = arith.select [[DO_EPILOGUE]], [[ACC_NEXT_PHASE]], [[ACC_PHASE]]
 
+    // CHECK-NEXT: [[NEXT_ACC_BUF:%.*]] = ttg.memdesc_subview [[ACC_BUFS]][[[EPILOGUE_ACC_NEXT_INDEX]], %c0_i32, %c0_i32]
     // CHECK-NEXT: [[NEXT_ACC_EMPTY_BAR:%.*]] = ttg.memdesc_subview [[ACC_EMPTY_BUFS]][[[EPILOGUE_ACC_NEXT_INDEX]]]
     // CHECK-NEXT: ttng.wait_barrier [[NEXT_ACC_EMPTY_BAR]], [[EPILOGUE_ACC_NEXT_PHASE]], [[DO_EPILOGUE]] {ttg.partition = 1 : i32}
-
-    // CHECK-NEXT: [[NEXT_ACC_BUF:%.*]] = ttg.memdesc_subview [[ACC_BUFS]][[[EPILOGUE_ACC_NEXT_INDEX]], %c0_i32, %c0_i32]
     // CHECK-NEXT: [[STORE_TOK:%.*]] = ttng.tmem_store [[ZERO]], [[NEXT_ACC_BUF]][], [[DO_EPILOGUE]] {ttg.partition = 1 : i32}
 
     // CHECK: arith.addi
@@ -686,13 +690,14 @@ tt.func @matmul_tma_acc_with_conditional_def_and_use_no_multibuf_flag(
 
   // CHECK-COUNT-2: ttg.local_alloc : () -> !ttg.memdesc<2xi64
 
-  // CHECK:      [[ACC_EMPTY_BUFS:%.*]] = ttg.local_alloc : () -> !ttg.memdesc<1xi64
+  // CHECK:      [[ACC_READY_BUFS:%.*]] = ttg.local_alloc : () -> !ttg.memdesc<1xi64
+  // CHECK-NEXT: [[ACC_READY_BUF0:%.*]] = ttg.memdesc_subview [[ACC_READY_BUFS]][%c0_i32]
+  // CHECK-NEXT: ttng.init_barrier [[ACC_READY_BUF0]], 1
+
+  // CHECK-NEXT: [[ACC_EMPTY_BUFS:%.*]] = ttg.local_alloc : () -> !ttg.memdesc<1xi64
   // CHECK-NEXT: [[ACC_EMPTY_BUF0:%.*]] = ttg.memdesc_subview [[ACC_EMPTY_BUFS]][%c0_i32]
   // CHECK-NEXT: ttng.init_barrier [[ACC_EMPTY_BUF0]], 1
 
-  // CHECK-NEXT: [[ACC_READY_BUFS:%.*]] = ttg.local_alloc : () -> !ttg.memdesc<1xi64
-  // CHECK-NEXT: [[ACC_READY_BUF0:%.*]] = ttg.memdesc_subview [[ACC_READY_BUFS]][%c0_i32]
-  // CHECK-NEXT: ttng.init_barrier [[ACC_READY_BUF0]], 1
   // CHECK-NEXT: ttng.arrive_barrier [[ACC_EMPTY_BUF0]], 1
 
   // CHECK-NEXT: {{[0-9]+}}:4 = scf.for [[K:%arg[0-9]+]]
@@ -924,17 +929,17 @@ tt.func @matmul_tma_acc_with_conditional_def_and_use_flag(
   // CHECK-COUNT-2: ttg.local_alloc : () -> !ttg.memdesc<4xi64
   // CHECK-COUNT-4: ttng.arrive_barrier
 
-  // CHECK:      [[ACC_EMPTY_BUFS:%.*]] = ttg.local_alloc : () -> !ttg.memdesc<2xi64
-  // CHECK-NEXT: [[ACC_EMPTY_BUF0:%.*]] = ttg.memdesc_subview [[ACC_EMPTY_BUFS]][%c0_i32]
-  // CHECK-NEXT: ttng.init_barrier [[ACC_EMPTY_BUF0]], 1
-  // CHECK-NEXT: [[ACC_EMPTY_BUF1:%.*]] = ttg.memdesc_subview [[ACC_EMPTY_BUFS]][%c1_i32]
-  // CHECK-NEXT: ttng.init_barrier [[ACC_EMPTY_BUF1]], 1
-
-  // CHECK-NEXT: [[ACC_READY_BUFS:%.*]] = ttg.local_alloc : () -> !ttg.memdesc<2xi64
+  // CHECK:      [[ACC_READY_BUFS:%.*]] = ttg.local_alloc : () -> !ttg.memdesc<2xi64
   // CHECK-NEXT: [[ACC_READY_BUF0:%.*]] = ttg.memdesc_subview [[ACC_READY_BUFS]][%c0_i32]
   // CHECK-NEXT: ttng.init_barrier [[ACC_READY_BUF0]], 1
   // CHECK-NEXT: [[ACC_READY_BUF1:%.*]] = ttg.memdesc_subview [[ACC_READY_BUFS]][%c1_i32]
   // CHECK-NEXT: ttng.init_barrier [[ACC_READY_BUF1]], 1
+
+  // CHECK-NEXT: [[ACC_EMPTY_BUFS:%.*]] = ttg.local_alloc : () -> !ttg.memdesc<2xi64
+  // CHECK-NEXT: [[ACC_EMPTY_BUF0:%.*]] = ttg.memdesc_subview [[ACC_EMPTY_BUFS]][%c0_i32]
+  // CHECK-NEXT: ttng.init_barrier [[ACC_EMPTY_BUF0]], 1
+  // CHECK-NEXT: [[ACC_EMPTY_BUF1:%.*]] = ttg.memdesc_subview [[ACC_EMPTY_BUFS]][%c1_i32]
+  // CHECK-NEXT: ttng.init_barrier [[ACC_EMPTY_BUF1]], 1
 
   // CHECK-NEXT: ttng.arrive_barrier [[ACC_EMPTY_BUF0]], 1
   // CHECK-NEXT: ttng.arrive_barrier [[ACC_EMPTY_BUF1]], 1
@@ -1041,8 +1046,8 @@ tt.func @specialize_mma_only(%rhs_desc: !tt.tensordesc<tensor<64x128xf16, #share
   // CHECK-NEXT: [[READY_BAR0:%.*]] = ttg.memdesc_subview [[READY_BARS]][%c0_i32]
   // CHECK-NEXT: ttng.init_barrier [[READY_BAR0]], 1
 
-  // CHECK-NEXT: ttng.arrive_barrier [[EMPTY_BAR0]], 1
   // CHECK-NEXT: ttng.arrive_barrier [[READY_BAR0]], 1
+  // CHECK-NEXT: ttng.arrive_barrier [[EMPTY_BAR0]], 1
 
   // CHECK-NEXT: [[OPERAND:%.*]] = ttg.local_alloc {{.*}} : () -> !ttg.memdesc<64x128xf16,
 
