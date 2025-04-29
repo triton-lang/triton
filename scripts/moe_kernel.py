@@ -383,7 +383,7 @@ def get_type(provider):
 
 x_vals = [(1024 * v, 1024 * v, 1024 * v) for v in range(1, 9)]
 x_vals += [(4864, 4096, 8192), (9728, 8192, 65536), (4864, 8192, 4096)]
-# x_vals += [(16, 4096, 2048), (16, 4096, 4096)]
+x_vals += [(16, 4096, 2048), (16, 4096, 4096)]
 # x_vals += [(16, 16, 1024 * v) for v in range(1, 9)]
 # x_vals += [(32, 32, 1024 * v) for v in range(1, 9)]
 
@@ -407,24 +407,10 @@ for dtype_a, dtype_b in (('float8e4nv', 'float8e4nv'), ('float8e4nv', 'float4'),
         args={},
     ))
 def benchmark(M, N, K, provider):
-    dtype_c = "fp32"
-    block_m = 256
-    block_n = 256
-    block_k = 128
-
-    # block_m = 16
-    # block_n = 256
-    # block_k = 256
+    global block_m, block_n, block_k, dtype_c, num_stages, num_warps, waves_per_eu, mfmaInstrSize
 
     group_m = 1
     split_k = 1
-    # num_stages = 3
-    num_stages = 1
-    # waves_per_eu = 2
-    # num_warps = 8
-    num_warps = 4
-    waves_per_eu = 1
-    mfmaInstrSize = 0
     kpack = 1
 
     bias = None
@@ -535,28 +521,33 @@ if __name__ == "__main__":
     parser.add_argument('--benchmark', action='store_true')
     args = parser.parse_args()
 
+    # block_m = 256
+    # block_n = 256
+    # block_k = 128
+
+    block_m = 16
+    block_n = 256
+    block_k = 256
+
+    num_stages = 1
+    num_warps = 4
+    waves_per_eu = 1
+    mfmaInstrSize = 16
+    dtype_c = "fp32"
+
     if args.benchmark:
         benchmark.run(print_data=True)
     else:
-        block_m = 256
-        block_n = 256
-        block_k = 128
-
-        num_stages = 1
-        num_warps = 4
-        waves_per_eu = 1
-        mfmaInstrSize = 16
-        dtype_c = "fp32"
-
         for M, N, K in x_vals:
             for dtype_a, dtype_b in (("float8e4nv", "float8e4nv"), ("float8e4nv", "float4"), ("float4", "float4")):
                 try:
                     run_test(M, N, K, block_m, block_n, block_k, dtype_a, dtype_b, dtype_c, num_stages=num_stages,
                              num_warps=num_warps, waves_per_eu=waves_per_eu, mfmaInstrSize=mfmaInstrSize)
-                except Exception:
+                except Exception as e:
                     print(f'Failed test: {M=}, {N=}, {K=}, '
                           f'{block_m=}, {block_n=}, {block_k=}, '
                           f'{dtype_a=}, {dtype_b=}, '
                           f'{num_stages=}, {num_warps=}, '
                           f'{waves_per_eu=}, {mfmaInstrSize=}')
+                    raise e
         print(f'All tests pass✅')
