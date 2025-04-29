@@ -12,6 +12,7 @@ std::unique_ptr<Pass> createLoopInvariantCodeMotionPass();
 std::unique_ptr<Pass> createReorderBroadcastPass();
 std::unique_ptr<Pass> createRewriteTensorPointerPass();
 std::unique_ptr<Pass> createLoopUnrollPass();
+std::unique_ptr<Pass> createLoopSplitPass();
 
 } // namespace triton
 
