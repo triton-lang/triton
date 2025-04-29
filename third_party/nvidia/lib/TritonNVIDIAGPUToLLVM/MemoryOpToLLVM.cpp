@@ -167,8 +167,8 @@ LogicalResult lowerDistributedToSharedStmatrix(
   if (bitwidth != 16)
     return failure();
 
-  // NYI.
-  if (regL.getInDimSize(kBlock) != 1)
+  // Inter block stmatrix is not supported
+  if (cvt.hasInDim(kBlock))
     return failure();
 
   auto srcVals = unpackLLElements(loc, adaptorSrc, rewriter);
