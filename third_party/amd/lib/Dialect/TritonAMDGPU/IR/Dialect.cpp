@@ -438,9 +438,9 @@ struct CanonicalizeConcatOpFromExtractSlice
     std::vector<unsigned> defaultOrder(rank);
     std::iota(defaultOrder.rbegin(), defaultOrder.rend(), 0);
 
-    auto multiDimSrcIdx = LLVM::AMD::multiDimElementwise<long, long>(
+    auto multiDimSrcIdx = LLVM::AMD::multiDimElementwise<int64_t, int64_t>(
         offset, srcShape, std::divides<unsigned>());
-    auto srcToDstShape = LLVM::AMD::multiDimElementwise<long, long>(
+    auto srcToDstShape = LLVM::AMD::multiDimElementwise<int64_t, int64_t>(
         dstShape, srcShape, std::divides<unsigned>());
     auto linearSrcIdx =
         mlir::LLVM::linearize(multiDimSrcIdx, srcToDstShape, defaultOrder);
