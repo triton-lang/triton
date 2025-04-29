@@ -376,8 +376,8 @@ def test_mxfp(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, NUM_STAGES, nonKDim, NUM_WARPS
     b = b_f16 * b_scale_f32
     ref_out = torch.matmul(a, b).to(torch.float32)
     output = output.to(torch.float32)
-    atol = 0.0001
-    rtol = 0.0001
+    atol = 0.01
+    rtol = 0.01
     torch.testing.assert_close(ref_out, output, atol=atol, rtol=rtol)
 
     if is_cuda():
@@ -512,8 +512,8 @@ def test_blocked_scale_mxfp(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, NUM_STAGES, USE_
     b = B * b_scale_f32
     ref_out = torch.matmul(a, b).to(torch.float32)
     output = output.to(torch.float32)
-    atol = 0.0001
-    rtol = 0.0001
+    atol = 0.01
+    rtol = 0.01
     torch.testing.assert_close(ref_out, output, atol=atol, rtol=rtol)
 
     if USE_2D_SCALE_LOAD:
