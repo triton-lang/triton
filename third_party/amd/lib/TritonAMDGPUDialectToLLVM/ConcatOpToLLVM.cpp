@@ -50,7 +50,7 @@ struct ConcatOpConversion : public ConvertOpToLLVMPattern<amdgpu::ConcatOp> {
     auto shapePerCTATile = triton::gpu::getShapePerCTATile(resultType);
     auto sources = adaptor.getSources();
 
-    unsigned totalElems = ::getNumElements<long>(dstShape);
+    unsigned totalElems = ::getNumElements<int64_t>(dstShape);
     unsigned elemsPerTile = ::getNumElements<unsigned>(shapePerCTATile);
     unsigned numCTATiles = totalElems / elemsPerTile;
 
@@ -58,11 +58,11 @@ struct ConcatOpConversion : public ConvertOpToLLVMPattern<amdgpu::ConcatOp> {
     std::vector<unsigned> defaultOrder(rank);
     std::iota(defaultOrder.rbegin(), defaultOrder.rend(), 0);
 
-    auto dstCTAShape = LLVM::AMD::multiDimElementwise<long, unsigned>(
+    auto dstCTAShape = LLVM::AMD::multiDimElementwise<int64_t, unsigned>(
         dstShape, shapePerCTATile, std::divides<unsigned>());
-    auto srcCTAShape = LLVM::AMD::multiDimElementwise<long, unsigned>(
+    auto srcCTAShape = LLVM::AMD::multiDimElementwise<int64_t, unsigned>(
         srcShape, shapePerCTATile, std::divides<unsigned>());
-    auto srcToDstShape = LLVM::AMD::multiDimElementwise<long, long>(
+    auto srcToDstShape = LLVM::AMD::multiDimElementwise<int64_t, int64_t>(
         dstShape, srcShape, std::divides<unsigned>());
 
     unsigned elemsPerThreadPerCTA =
