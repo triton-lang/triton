@@ -131,7 +131,7 @@ struct FinalizeOpConversion
     const int circularHeaderWordSize = proton::gpu::getCircularHeaderSize() / 4;
 
     // Header: preamble (1 word), threadblock id (1 word), SM id (1 word),
-    // unused (1 word)
+    // buffer size (1 word)
 
     // Circular strategy memory layout (total: allocprofileScratchSize bytes)
     //  +-----------------------------------------------+
@@ -200,6 +200,12 @@ struct FinalizeOpConversion
     Value gmemHwidOffset = b.i32_val(2);
     Value gmemHwidPtr = b.gep(scratchPtrTy, i32_ty, scratchPtr, gmemHwidOffset);
     b.store(hwid, gmemHwidPtr);
+
+    // Write back 'buffer size in byte'.
+    Value gmemBufSizeOffset = b.i32_val(3);
+    Value gmemBufSizePtr =
+        b.gep(scratchPtrTy, i32_ty, scratchPtr, gmemBufSizeOffset);
+    b.store(b.i32_val(bufferSizeInWords * 4), gmemBufSizePtr);
 
     // Add the 'else' block and the condition.
     Block *thenBlock = rewriter.splitBlock(ifBlock, op->getIterator());
