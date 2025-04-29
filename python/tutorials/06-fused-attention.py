@@ -45,17 +45,14 @@ def _attn_fwd_inner(acc, l_i, m_i, q,  #
                     K_block_ptr, V_block_ptr,  #
                     start_m, qk_scale,  #
                     BLOCK_M: tl.constexpr, HEAD_DIM: tl.constexpr, BLOCK_N: tl.constexpr,  #
-                    STAGE: tl.constexpr, offs_m: tl.constexpr, offs_n: tl.constexpr,  #
+                    CAUSAL: tl.constexpr, offs_m: tl.constexpr, offs_n: tl.constexpr,  #
                     N_CTX: tl.constexpr, fp8_v: tl.constexpr):
     # range of values handled by this stage
-    if STAGE == 1:
-        lo, hi = 0, start_m * BLOCK_M
-    elif STAGE == 2:
-        lo, hi = start_m * BLOCK_M, (start_m + 1) * BLOCK_M
-        lo = tl.multiple_of(lo, BLOCK_M)
-    # causal = False
+    if CAUSAL:
+        causal_start = start_m * BLOCK_M
     else:
-        lo, hi = 0, N_CTX
+        causal_start = N_CTX
+    lo, hi = 0, N_CTX
     K_block_ptr = tl.advance(K_block_ptr, (0, lo))
     V_block_ptr = tl.advance(V_block_ptr, (lo, 0))
     # loop over k, v and update accumulator
@@ -64,7 +61,7 @@ def _attn_fwd_inner(acc, l_i, m_i, q,  #
         # -- compute qk ----
         k = tl.load(K_block_ptr)
         qk = tl.dot(q, k)
-        if STAGE == 2:
+        if start_n >= causal_start:
             mask = offs_m[:, None] >= (start_n + offs_n[None, :])
             qk = qk * qk_scale + tl.where(mask, 0, -1.0e6)
             m_ij = tl.maximum(m_i, tl.max(qk, 1))
@@ -173,7 +170,7 @@ def _attn_fwd(Q, K, V, sm_scale, M, Out,  #
               HEAD_DIM: tl.constexpr,  #
               BLOCK_M: tl.constexpr,  #
               BLOCK_N: tl.constexpr,  #
-              STAGE: tl.constexpr  #
+              CAUSAL: tl.constexpr  #
               ):
     tl.static_assert(BLOCK_N <= HEAD_DIM)
     start_m = tl.program_id(0)
@@ -228,24 +225,13 @@ def _attn_fwd(Q, K, V, sm_scale, M, Out,  #
     qk_scale *= 1.44269504  # 1/log(2)
     # load q: it will stay in SRAM throughout
     q = tl.load(Q_block_ptr)
-    # stage 1: off-band
-    # For causal = True, STAGE = 3 and _attn_fwd_inner gets 1 as its STAGE
-    # For causal = False, STAGE = 1, and _attn_fwd_inner gets 3 as its STAGE
-    if STAGE & 1:
-        acc, l_i, m_i = _attn_fwd_inner(acc, l_i, m_i, q, K_block_ptr, V_block_ptr,  #
-                                        start_m, qk_scale,  #
-                                        BLOCK_M, HEAD_DIM, BLOCK_N,  #
-                                        4 - STAGE, offs_m, offs_n, N_CTX, V.dtype.element_ty == tl.float8e5  #
-                                        )
-    # stage 2: on-band
-    if STAGE & 2:
-        # barrier makes it easier for compielr to schedule the
-        # two loops independently
-        acc, l_i, m_i = _attn_fwd_inner(acc, l_i, m_i, q, K_block_ptr, V_block_ptr,  #
-                                        start_m, qk_scale,  #
-                                        BLOCK_M, HEAD_DIM, BLOCK_N,  #
-                                        2, offs_m, offs_n, N_CTX, V.dtype.element_ty == tl.float8e5  #
-                                        )
+
+    # Rely on causal condition to split loop into off-band, on-band
+    acc, l_i, m_i = _attn_fwd_inner(acc, l_i, m_i, q, K_block_ptr, V_block_ptr,  #
+                                    start_m, qk_scale,  #
+                                    BLOCK_M, HEAD_DIM, BLOCK_N,  #
+                                    CAUSAL, offs_m, offs_n, N_CTX, V.dtype.element_ty == tl.float8e5  #
+                                    )
     # epilogue
     m_i += tl.math.log2(l_i)
     acc = acc / l_i[:, None]
@@ -646,7 +632,7 @@ class _attention(torch.autograd.Function):
                 q.shape[0], q.shape[1],  #
                 N_CTX=q.shape[2],  #
                 HEAD_DIM=HEAD_DIM_K,  #
-                STAGE=stage,  #
+                CAUSAL=causal,  #
                 **extra_kern_args)
 
         ctx.save_for_backward(q, k, v, o, M)

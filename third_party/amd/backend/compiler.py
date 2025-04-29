@@ -228,6 +228,9 @@ class HIPBackend(BaseBackend):
         passes.ttir.add_triton_licm(pm)
         passes.common.add_canonicalizer(pm)
 
+        passes.ttir.add_loop_split(pm)
+        passes.common.add_canonicalizer(pm)
+
         global_prefetch = config.amd.global_prefetch
         local_prefetch = config.amd.local_prefetch
         use_async_copy = config.amd.use_async_copy
