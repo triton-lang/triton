@@ -14,6 +14,7 @@
 #include "triton/Dialect/TritonGPU/Transforms/WarpSpecialization.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/TMAUtilities.h"
+#include "triton/Tools/Sys/GetEnv.hpp"
 
 using namespace mlir;
 using namespace triton;
@@ -135,6 +136,8 @@ static PartitionScheme assignPartitions(scf::ForOp loop) {
       if (Operation *defOp = op->getOperand(0).getDefiningOp())
         operandViews.push_back(defOp);
     }
+    if (triton::tools::getBoolEnv("WARP_SPECIALIZE_ATTENTION_FLAG"))
+      break;
   }
 
   // Assign initial partitions.
@@ -211,12 +214,18 @@ static WarpSchedule getInitialSchedule(const PartitionScheme &scheme) {
     Partition *userPartition = schedule.addPartition(2);
     for (Operation *userOp : scheme.userOps)
       userPartition->insert(userOp);
+
     // Place the epilogue partition in the default warpgroup. The MMA and load
     // partitions shouldn't have tensor computations in them, which means they
-    // will get assigned just 1 warp each. Add an extra partition to pad the
-    // number of warps to the nearest warpgroup.
-    schedule.addPartition(0);
-    schedule.reorderPartitions({2, 1, 0, 3});
+    // will get assigned just 1 warp each.
+    if (triton::tools::getBoolEnv("WARP_SPECIALIZE_ATTENTION_FLAG")) {
+      schedule.reorderPartitions({2, 1, 0});
+    } else {
+      // Add an extra partition to pad the number of warps to the nearest
+      // warpgroup.
+      schedule.addPartition(0);
+      schedule.reorderPartitions({2, 1, 0, 3});
+    }
   }
 
   schedule.updatePartitions();
