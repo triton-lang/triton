@@ -47,7 +47,7 @@ def add_kernel(x_ptr,  #
     if USE_GDC:
         # GDC launch dependents hints the runtime system to launch dependent kernels.
         # These dependent kernels must also be launched with PDL enabled.
-        # Once GDC launch has been issued by at least one thread on ALL programs or
+        # Once GDC launch has been issued by ALL programs or
         # programs have finished, the dependent grid can begin if there are enough resources.
         # Note: this by itself provides no additional memory-ordering guarentees, unlike `gdc_wait`
         tl.extra.cuda.gdc_launch_dependents()
