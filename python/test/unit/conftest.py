@@ -27,7 +27,7 @@ def fresh_triton_cache():
 
 
 @pytest.fixture
-def fresh_config(request):
+def fresh_config(request, monkeypatch):
     from triton import config
     config_map = {
         name: conf
@@ -37,6 +37,8 @@ def fresh_config(request):
     try:
         for name, conf in config_map.items():
             setattr(config, name, conf.copy().reset())
+            for knob in conf.knob_descriptors.values():
+                monkeypatch.delenv(knob.key, raising=False)
         yield config
     finally:
         for name, conf in config_map.items():

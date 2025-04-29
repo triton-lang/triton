@@ -1,3 +1,4 @@
+import os
 import pytest
 import shutil
 import triton
@@ -129,6 +130,7 @@ def test_read_env(truthy, falsey, fresh_config, monkeypatch):
     assert fresh_config.runtime.debug
     assert not fresh_config.language.default_fp_fusion
     assert fresh_config.compilation.use_ir_loc == "ttir"
+    assert fresh_config.cache.home_dir == "/tmp/triton_home"
     assert fresh_config.cache.dir == "/tmp/triton_cache"
     assert fresh_config.cache.dump_dir == "/tmp/triton_home/.triton/dump"
     assert fresh_config.cache.override_dir == "/tmp/triton_home/.triton/override"
@@ -137,6 +139,24 @@ def test_read_env(truthy, falsey, fresh_config, monkeypatch):
     assert fresh_config.cache.manager_class == FileCacheManager
 
     assert fresh_config.build.backend_dirs == {"/tmp/cuda/crt", "/tmp/cuda/rt"}
+
+
+def test_triton_home(fresh_config, monkeypatch):
+    initial_home = fresh_config.cache.home_dir
+    assert initial_home == os.path.expanduser("~/")
+    assert fresh_config.cache.dir == os.path.join(initial_home, ".triton/cache")
+    assert fresh_config.cache.dump_dir == os.path.join(initial_home, ".triton/dump")
+    assert fresh_config.cache.override_dir == os.path.join(initial_home, ".triton/override")
+
+    monkeypatch.setenv("TRITON_HOME", "/tmp/triton_home")
+    assert fresh_config.cache.dir == "/tmp/triton_home/.triton/cache"
+    assert fresh_config.cache.dump_dir == "/tmp/triton_home/.triton/dump"
+    assert fresh_config.cache.override_dir == "/tmp/triton_home/.triton/override"
+
+    fresh_config.cache.home_dir = "/tmp/user/triton_home"
+    assert fresh_config.cache.dir == "/tmp/user/triton_home/.triton/cache"
+    assert fresh_config.cache.dump_dir == "/tmp/user/triton_home/.triton/dump"
+    assert fresh_config.cache.override_dir == "/tmp/user/triton_home/.triton/override"
 
 
 def test_set_config_directly(fresh_config, monkeypatch):

@@ -261,6 +261,7 @@ class CUDABackend(BaseBackend):
             passes.ttgpuir.add_pipeline(pm, opt.num_stages, dump_enabled)
             passes.ttgpuir.add_combine_tensor_select_and_if(pm)
             nvidia.passes.ttnvgpuir.add_promote_lhs_to_tmem(pm)
+            nvidia.passes.ttnvgpuir.add_remove_tmem_tokens(pm)
             passes.common.add_canonicalizer(pm)
         else:
             passes.ttir.add_triton_licm(pm)
