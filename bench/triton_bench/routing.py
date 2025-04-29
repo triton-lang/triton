@@ -1,7 +1,10 @@
 import torch
 import triton
 from dataclasses import dataclass, field
-from . import routing_details
+from .routing_details._routing_compute import _routing_memset_indx
+from .routing_details._routing_compute import _routing_compute_indx_offs
+from .routing_details._routing_compute import _routing_compute_indx
+from .routing_details._routing_compute import _routing_clear_bitmatrix
 
 
 @dataclass
@@ -50,65 +53,56 @@ class RoutingData:
 # --------------------------
 
 
-def routing(logits, n_expts_act, expt_indx=None):
+def routing(logits, n_expts_act, expt_indx=None, simulated_ep=1):
+    from .topk import topk
+    from .reduction import sum
+    from .compaction import compaction
     assert expt_indx is None
     cdiv = triton.cdiv
-    ROUTING_BLOCK_M = 8
-    ROUTING_BLOCK_N = 128
-    HIST1_BLOCK_M = 64
-    HIST1_BLOCK_N = 32
-    HIST1_BLOCK_N2 = 512
-    HIST2_BLOCK_M = 512
-    MEMSET_BLOCK = 512
+    HIST_BLOCK_M = 64
+    INDX_OFFS_BLOCK_M = 512
+    MEMSET_BLOCK = 1024
     assert logits.dtype.itemsize == 2
     n_tokens, n_expts_tot = logits.shape
     n_gates = n_tokens * n_expts_act
-    dev = logits.device
-    n_expts_pad = cdiv(n_expts_tot, ROUTING_BLOCK_N) * ROUTING_BLOCK_N
-    n_expts_words = n_expts_pad // 32
-    # scratchpad tensors
-    # NOTE: these are not returned
-    expt_scal = torch.empty((n_tokens, n_expts_act), dtype=logits.dtype, device=dev)
-    expt_indx = torch.empty((n_tokens, n_expts_act), dtype=torch.int16, device=dev)
-    bitmatrix = torch.empty((n_tokens, n_expts_words), dtype=torch.uint32, device=dev)
-    tok_starts = torch.empty(n_expts_tot + 1, dtype=torch.int32, device=dev)
-    partial_hist = torch.empty((cdiv(n_tokens, HIST1_BLOCK_M), n_expts_tot), dtype=torch.int32, device=dev)
-    partial_offs = torch.empty((cdiv(n_tokens, HIST1_BLOCK_M), n_expts_tot), dtype=torch.int32, device=dev)
-    # output tensors
-    hist = torch.empty(n_expts_tot, dtype=torch.int32, device=dev)
-    topk_indx = torch.empty(n_gates, dtype=torch.int32, device=dev)
-    gate_indx = torch.empty(n_gates, dtype=torch.int32, device=dev)
-    gate_scal = torch.empty(n_gates, dtype=logits.dtype, device=dev)
-    routing_details.bitmatrix._compute_bitmatrix[(cdiv(n_tokens, ROUTING_BLOCK_M), )](
-        logits, logits.stride(0),  # inputs
-        expt_scal, expt_indx, expt_scal.stride(0),  # output [topk]
-        bitmatrix, bitmatrix.stride(0),  # output [bitmatrix]
-        n_tokens, n_expts_tot,  # shapes
-        BLOCK_M=ROUTING_BLOCK_M,  # tunable parameter
-        N_EXPTS_PAD=n_expts_pad, N_EXPTS_ACT=n_expts_act,  # constants
-        BLOCK_N=ROUTING_BLOCK_N)
-    routing_details.histogram._memset_hist[(cdiv(hist.shape[0], MEMSET_BLOCK), )](
-        hist, hist.shape[0], tok_starts,  # outputs
-        BLOCK=MEMSET_BLOCK  # tunable parameter
+    device = logits.device
+    expt_scal, expt_indx, bitmatrix = topk(logits, n_expts_act)
+    # mutate bitmatrix
+    if simulated_ep > 1:
+        assert n_expts_tot % simulated_ep == 0
+        _routing_clear_bitmatrix[(n_tokens, )](
+            bitmatrix.data,
+            bitmatrix.data.stride(0),
+            bitmatrix.data.shape[1],
+            n_expts_tot // simulated_ep,
+            BLOCK_N=512,
+        )
+        expt_scal, expt_indx = compaction(expt_scal, expt_indx, bitmatrix)
+        n_expts_tot = n_expts_tot // simulated_ep
+        bitmatrix.shape[-1] = n_expts_tot
+    # perform compaction to update expt_scal / expt_indx
+    hist, partial_hist = sum(bitmatrix, partials_block_size=HIST_BLOCK_M, dim=0)
+    # scratchpad
+    expt_offs = torch.empty(n_expts_tot, dtype=torch.int32, device=device)
+    indx_offs = torch.empty((cdiv(n_tokens, HIST_BLOCK_M), n_expts_tot), dtype=torch.int32, device=device)
+    combined_indx = torch.empty(n_gates * 2, dtype=torch.int32, device=device)
+    # output
+    topk_indx = combined_indx[:n_gates]
+    gate_indx = combined_indx[n_gates:]
+    gate_scal = torch.empty(n_gates, dtype=logits.dtype, device=device)
+    _routing_memset_indx[(cdiv(n_gates * 2, MEMSET_BLOCK) + 1, )](combined_indx, n_gates * 2, -1, MEMSET_BLOCK, hist,
+                                                                  expt_offs, hist.shape[0], BLOCK_N=512)
+    _routing_compute_indx_offs[(n_expts_tot, )](
+        expt_offs, partial_hist,  # inputs
+        indx_offs, partial_hist.shape[0], partial_hist.stride(0),  # outputs
+        BLOCK_M=INDX_OFFS_BLOCK_M,  # tunable parameters
     )
-    routing_details.histogram._compute_hist[(cdiv(n_tokens, HIST1_BLOCK_M), cdiv(n_expts_tot, HIST1_BLOCK_N))](
-        bitmatrix, bitmatrix.shape[0], bitmatrix.stride(0),  # input
-        hist,  # output [histogram]
-        tok_starts, partial_hist, partial_hist.stride(0), partial_hist.shape[1],  # output [cumsums]
-        BLOCK_M=HIST1_BLOCK_M, BLOCK_N=HIST1_BLOCK_N,  # tunable parameters
-        BLOCK_N2=HIST1_BLOCK_N2,  # constants
-    )
-    routing_details.histogram._finalize_hist[(n_expts_tot, )](
-        tok_starts, partial_hist,  # inputs
-        partial_offs, partial_hist.shape[0], partial_hist.stride(0),  # outputs
-        BLOCK_M=HIST2_BLOCK_M,  # tunable parameters
-    )
-    routing_details.indexing._compute_indx[(cdiv(n_tokens, HIST1_BLOCK_M), )](
+    _routing_compute_indx[(cdiv(n_tokens, HIST_BLOCK_M), )](
         topk_indx, gate_indx, gate_scal,  # outputs
-        expt_scal, expt_indx, partial_offs, partial_offs.stride(0), n_gates,  # input
-        BLOCK_M=HIST1_BLOCK_M,  # tunable parameters
+        expt_scal, expt_indx, indx_offs, indx_offs.stride(0), n_gates,  # input
+        BLOCK_M=HIST_BLOCK_M,  # tunable parameters
         N_EXPTS_ACT=n_expts_act,  # constants
-        num_warps=1 if HIST1_BLOCK_M * n_expts_act // 32 < 4 else 4)
+        num_warps=1 if HIST_BLOCK_M * n_expts_act // 32 < 4 else 4)
     # pack the matmul data structure
     gather_indx = GatherIndx(src_indx=topk_indx, dst_indx=gate_indx)
     scatter_indx = ScatterIndx(src_indx=gate_indx, dst_indx=topk_indx)
@@ -144,62 +138,3 @@ def routing_torch(logits, n_expts_act, expt_indx=None):
     gather_indx = GatherIndx(src_indx=topk_indx.int(), dst_indx=gate_indx.int())
     scatter_indx = ScatterIndx(src_indx=gate_indx.int(), dst_indx=topk_indx.int())
     return RoutingData(gate_scal, hist, n_expts_tot, n_expts_act), gather_indx, scatter_indx
-
-
-def simulate_expert_sharded_routing(n_global_rows, routing_data, n_expt_shards, row_align=1, device="cuda", cache=None):
-    n_expts_local = routing_data.n_expts_tot // n_expt_shards
-    # Ignore gate projection, and create a random routing that simulates
-    # routing data gathered from all expert shards. The resulting data will
-    # be bogus; it's only intended for perf measurement.
-    if cache is None or n_global_rows not in cache:
-        # Choose n_expts_act experts for each row, with even distribution.
-        weights = torch.ones(n_global_rows, routing_data.n_expts_tot, device=device)
-        expt_indx = torch.multinomial(weights, num_samples=routing_data.n_expts_act, replacement=False)
-
-        # Sort each token's selections by expert.
-        expt_indx, _ = expt_indx.sort(dim=1)
-
-        hist = torch.histc(expt_indx, bins=routing_data.n_expts_tot, max=routing_data.n_expts_tot - 1)[:n_expts_local]
-
-        # for each row, count how many of its experts are local
-        num_local_expts = (expt_indx < n_expts_local).sum(dim=1)
-        # Count the number of rows that are for local experts, padded to an alignment.
-        n_local_rows = (num_local_expts != 0).sum()
-        n_local_rows = ((n_local_rows + row_align - 1) // row_align) * row_align
-
-        is_active = torch.argsort((num_local_expts == 0).to(torch.int8), stable=True)
-        expt_indx = expt_indx[is_active].view(-1)
-        # Note: Because the number of rows routed to each expert is only known at runtime,
-        # we do not drop tokens that are not routed to the local expert. This ensures that
-        # the tensor shapes are fixed.
-        # Create topk_indx/gate_indx.
-        topk_indx = torch.argsort(expt_indx.view(-1), stable=True).to(torch.int32)
-        gate_indx = torch.argsort(topk_indx).to(torch.int32)
-        # Now filter out all experts >= n_expts_local
-        expt_indx = torch.where(expt_indx < n_expts_local, expt_indx, -1)
-        gate_indx = torch.where(expt_indx == -1, -1, gate_indx)
-        topk_indx = torch.where(gate_indx[topk_indx] == -1, -1, topk_indx)
-
-        if cache is not None:
-            cache[n_global_rows] = hist, gate_indx, topk_indx, n_local_rows
-    else:
-        hist, gate_indx, topk_indx, n_local_rows = cache[n_global_rows]
-
-    tokens_per_expt = ((n_global_rows // n_expt_shards) * routing_data.n_expts_act) // n_expts_local
-
-    # Expand gate_scal to the global number of rows.
-    # TODO: This currently adds a bogus "elementwise" kernel to the profile.
-    gate_scal = routing_data.gate_scal.repeat_interleave(n_expt_shards, dim=0)
-
-    return (
-        n_local_rows,
-        RoutingData(
-            gate_scal,
-            hist,
-            n_expts_local,
-            routing_data.n_expts_act,
-            expected_tokens_per_expt=tokens_per_expt,
-        ),
-        GatherIndx(src_indx=topk_indx, dst_indx=gate_indx),
-        ScatterIndx(src_indx=gate_indx, dst_indx=topk_indx),
-    )

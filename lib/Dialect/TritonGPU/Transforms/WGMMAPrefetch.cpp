@@ -243,14 +243,6 @@ LogicalResult WGMMAPrefetcher::initialize() {
   };
 
   for (ttng::WarpGroupDotOp dotOp : dotsInFor) {
-    // If getMaxNumImpreciseAcc > 0, WGMMA.cpp will have
-    // extra treatment for dotOp (e.g., add accumulator).
-    // Therefore, we disable the optimization here
-    // when getMaxNumImpreciseAcc > 0;
-    if (dotOp.getMaxNumImpreciseAcc() > 0) {
-      return failure();
-    }
-
     auto aType = dotOp.getA().getType();
     auto bType = dotOp.getB().getType();
 
@@ -392,6 +384,7 @@ scf::ForOp WGMMAPrefetcher::createNewForOp() {
         UseC = mapping.lookup(dot.getUseC());
       }
       Value OpC = mapping.lookup(dot.getC());
+      uint32_t RemainNumImpreciseAcc = dot.getMaxNumImpreciseAcc();
 
       for (int i = 0; i < subTileCnt; i++) {
         cloneElementwiseOps(PrefetchedA[i], dot2aValsElementWise[dot],
@@ -406,10 +399,19 @@ scf::ForOp WGMMAPrefetcher::createNewForOp() {
           UseC =
               builder.create<mlir::arith::ConstantIntOp>(newOp->getLoc(), 1, 1);
         }
+        //  2**30 is to prevent the subtile from adding
+        // extra imprecise accumulator, See WGMMA.cpp
+        uint32_t NumImpreciseAcc = (RemainNumImpreciseAcc > prefetchWidth)
+                                       ? 1073741824 // 2**30
+                                       : RemainNumImpreciseAcc;
+        // Deduct the actual consumed imprecise acc
+        RemainNumImpreciseAcc -= (RemainNumImpreciseAcc > prefetchWidth)
+                                     ? prefetchWidth
+                                     : RemainNumImpreciseAcc;
+
         auto newDotOp = builder.create<nvidia_gpu::WarpGroupDotOp>(
             newOp->getLoc(), dot.getType(), PrefetchedA[i], bSubtile, OpC, UseC,
-            dot.getInputPrecision(), dot.getMaxNumImpreciseAcc(),
-            dot.getIsAsync());
+            dot.getInputPrecision(), NumImpreciseAcc, dot.getIsAsync());
         prevDot = newDotOp;
       }
       newOp = (Operation *)prevDot;

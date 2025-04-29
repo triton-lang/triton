@@ -3,10 +3,8 @@ import functools
 import os
 import subprocess
 import sys
-
 import torch
-
-from triton_bench.meta import MAX_FINITE_FLOAT8E4B8, MAX_FINITE_FLOAT8E4NV, MAX_FINITE_FLOAT8E5
+from triton_bench.numerics import MAX_FINITE_FLOAT8E4B8, MAX_FINITE_FLOAT8E4NV, MAX_FINITE_FLOAT8E5
 
 
 def assert_equal(ref, tri):
@@ -68,8 +66,8 @@ def assert_close(ref, tri, maxtol=None, rmstol=None, description="--", verbose=T
               (num_nonzero, rel_err.numel(), tuple(rel_err.shape), bad_idxs.tolist()))
 
         bad_idxs = bad_idxs.unbind(-1)
-        print("ref values: ", ref[*bad_idxs].cpu())
-        print("tri values: ", tri[*bad_idxs].cpu())
+        print("ref values: ", ref[tuple(bad_idxs)].cpu())
+        print("tri values: ", tri[tuple(bad_idxs)].cpu())
 
     assert max_err <= maxtol
     assert rms_err <= rmstol

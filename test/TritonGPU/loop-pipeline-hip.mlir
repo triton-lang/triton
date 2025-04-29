@@ -46,9 +46,9 @@ module attributes {"ttg.target" = "hip:gfx942", "ttg.num-ctas" = 1 : i32, "ttg.n
     // ASYNC: ttg.async_copy_global_to_local
     // ASYNC: scf.for
     // ASYNC:  ttg.async_wait
-    // ASYNC:  tt.dot
-    // ASYNC:  tt.dot
     // ASYNC:  ttg.async_copy_global_to_local
+    // ASYNC:  tt.dot
+    // ASYNC:  tt.dot
     // ASYNC:  scf.yield
     %17:2 = scf.for %arg2 = %c0_i32 to %c8_i32 step %c1_i32 iter_args(%arg3 = %cst_1, %arg4 = %cst_2) -> (tensor<128x16xf32, #mma>, tensor<128x64xf32, #mma>)  : i32 {
       %18 = tt.load %16 : tensor<64x16x!tt.ptr<f16>, #blocked>
@@ -500,9 +500,11 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
   //         SYNC:   scf.yield
   //
   //         ASYNC:    ttg.async_wait
-  // ASYNC-COUNT-2:    ttg.local_load
+  //         ASYNC:    ttg.async_copy_global_to_local
+  //         ASYNC:    ttg.local_load
+  //         ASYNC:    ttg.async_copy_global_to_local
+  //         ASYNC:    ttg.local_load
   //         ASYNC:    ttg.dot
-  // ASYNC-COUNT-2:    ttg.async_copy_global_to_local
 
 // Epilogue
 //          ASYNC: ttg.async_wait

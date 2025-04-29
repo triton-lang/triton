@@ -49,6 +49,15 @@ void hoistOpsBefore(Block *block, Block::iterator it,
                     const llvm::SetVector<Operation *> &toHoist);
 
 //===----------------------------------------------------------------------===//
+// Sinking Utilities
+//===----------------------------------------------------------------------===//
+
+// Sink a value redefinition into a block, provided that the block is dominated
+// by `in` and postdominated by `out`.
+Value sinkValueRedefinition(RewriterBase &rewriter, Value in, Value out,
+                            Block *block);
+
+//===----------------------------------------------------------------------===//
 // Loop Pipelining Utilities
 //===----------------------------------------------------------------------===//
 
@@ -60,12 +69,6 @@ Value getPredMask(RewriterBase &rewriter, Type typeLike, Value currentMask,
 
 /// Function to mask operations during scheduling.
 Operation *predicateOp(RewriterBase &rewriter, Operation *op, Value pred);
-
-/// Replace all uses of `oldUse` with `val` and propagate the type if needed.
-/// This is useful when we need to change a memory descriptor from immutable to
-/// mutable.
-void replaceUsesAndPropagateType(OpBuilder &builder, Operation *oldUse,
-                                 Value val);
 
 // Return true if the given ForOp has the attribute
 // `tt.disallow_acc_multi_buffer` set to true.
@@ -123,7 +126,8 @@ int getNumStagesOrDefault(scf::ForOp forOp, int defaultNumStages);
 // Given a result of MemDescSubview, or Alloca, create a MemDescSubview with a
 // single buffer slice (leading dimension equal to 1), at the given index.
 template <typename TBuilder>
-Value createSingleBufferView(TBuilder &builder, Value alloc, Value idx) {
+TypedValue<triton::gpu::MemDescType>
+createSingleBufferView(TBuilder &builder, Value alloc, Value idx) {
   assert(isa<triton::gpu::MemDescType>(alloc.getType()) &&
          "Expected MemDescType");
   auto allocDescType = cast<triton::gpu::MemDescType>(alloc.getType());
@@ -151,7 +155,8 @@ Value createSingleBufferView(TBuilder &builder, Value alloc, Value idx) {
 }
 
 template <typename TBuilder>
-Value createSingleBufferView(TBuilder &builder, Value alloc, int idx) {
+TypedValue<triton::gpu::MemDescType>
+createSingleBufferView(TBuilder &builder, Value alloc, int idx) {
   return createSingleBufferView(
       builder, alloc,
       builder.template create<arith::ConstantIntOp>(alloc.getLoc(), idx, 32));

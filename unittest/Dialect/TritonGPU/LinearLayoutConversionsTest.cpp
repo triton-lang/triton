@@ -1535,6 +1535,7 @@ TEST_F(LinearLayoutConversionsTest, mfma16_dot_op_rhs_kwidth4) {
 TEST_F(LinearLayoutConversionsTest, mfma16_dot_op_lhs_trans) {
   auto parentMfma16 = mfma(/*warps=*/{2, 4}, /*mDim=*/16, /*nDim=*/16,
                            /*isTransposed=*/false);
+  // double rated mfma with large enough shape
   auto mfmaDotOp0_kwidth_8 = mfmaDotOp(parentMfma16, /*opIdx=*/0, /*kWidth=*/8);
   EXPECT_EQ(chooseDsReadB64TrLayout(mfmaDotOp0_kwidth_8, {128, 128},
                                     /*elemBitWidth=*/16),
@@ -1554,16 +1555,6 @@ TEST_F(LinearLayoutConversionsTest, mfma16_dot_op_lhs_trans) {
                  {S("block"), {}}},
                 {S("dim0"), S("dim1")}));
 
-  auto mfmaDotOp0_kwidth_4 = mfmaDotOp(parentMfma16, /*opIdx=*/0, /*kWidth=*/4);
-  EXPECT_EQ(chooseDsReadB64TrLayout(mfmaDotOp0_kwidth_4, {16, 16},
-                                    /*elemBitWidth=*/16),
-            LinearLayout(
-                {{S("register"), {{1, 0}, {2, 0}}},
-                 {S("lane"), {{4, 0}, {8, 0}, {0, 1}, {0, 2}, {0, 4}, {0, 8}}},
-                 {S("warp"), {{0, 0}, {0, 0}, {0, 0}}},
-                 {S("block"), {}}},
-                {S("dim0"), S("dim1")}));
-
   auto mfmaDotOp0_kwidth_16 =
       mfmaDotOp(parentMfma16, /*opIdx=*/0, /*kWidth=*/16);
   EXPECT_EQ(
@@ -1577,10 +1568,41 @@ TEST_F(LinearLayoutConversionsTest, mfma16_dot_op_lhs_trans) {
            {S("block"), {}}},
           {S("dim0"), S("dim1")}));
 
+  // Single rated mfma with small shape
+  auto mfmaDotOp0_kwidth_4 = mfmaDotOp(parentMfma16, /*opIdx=*/0, /*kWidth=*/4);
+  EXPECT_EQ(chooseDsReadB64TrLayout(mfmaDotOp0_kwidth_4, {16, 16},
+                                    /*elemBitWidth=*/16),
+            LinearLayout(
+                {{S("register"), {{1, 0}, {2, 0}}},
+                 {S("lane"), {{4, 0}, {8, 0}, {0, 1}, {0, 2}, {0, 4}, {0, 8}}},
+                 {S("warp"), {{0, 0}, {0, 0}, {0, 0}}},
+                 {S("block"), {}}},
+                {S("dim0"), S("dim1")}));
+
   EXPECT_EQ(chooseDsReadB64TrLayout(mfmaDotOp0_kwidth_8, {16, 32},
                                     /*elemBitWidth=*/8),
             LinearLayout(
                 {{S("register"), {{1, 0}, {2, 0}, {4, 0}}},
+                 {S("lane"), {{8, 0}, {0, 1}, {0, 2}, {0, 4}, {0, 8}, {0, 16}}},
+                 {S("warp"), {{0, 0}, {0, 0}, {0, 0}}},
+                 {S("block"), {}}},
+                {S("dim0"), S("dim1")}));
+
+  // Single rated mfma with large shape. In this case, single rated mfma
+  // will be used due to kWidth = 4 (16-bit) or 8 (8-bit)
+  EXPECT_EQ(chooseDsReadB64TrLayout(mfmaDotOp0_kwidth_4, {16, 32},
+                                    /*elemBitWidth=*/16),
+            LinearLayout(
+                {{S("register"), {{1, 0}, {2, 0}, {0, 16}}},
+                 {S("lane"), {{4, 0}, {8, 0}, {0, 1}, {0, 2}, {0, 4}, {0, 8}}},
+                 {S("warp"), {{0, 0}, {0, 0}, {0, 0}}},
+                 {S("block"), {}}},
+                {S("dim0"), S("dim1")}));
+
+  EXPECT_EQ(chooseDsReadB64TrLayout(mfmaDotOp0_kwidth_8, {16, 64},
+                                    /*elemBitWidth=*/8),
+            LinearLayout(
+                {{S("register"), {{1, 0}, {2, 0}, {4, 0}, {0, 32}}},
                  {S("lane"), {{8, 0}, {0, 1}, {0, 2}, {0, 4}, {0, 8}, {0, 16}}},
                  {S("warp"), {{0, 0}, {0, 0}, {0, 0}}},
                  {S("block"), {}}},
@@ -1622,6 +1644,8 @@ TEST_F(LinearLayoutConversionsTest, mfma16_dot_op_lhs_trans) {
 TEST_F(LinearLayoutConversionsTest, mfma16_dot_op_rhs_trans) {
   auto parentMfma16 = mfma(/*warps=*/{2, 4}, /*mDim=*/16, /*nDim=*/16,
                            /*isTransposed=*/false);
+
+  // double rated mfma with large enough shape
   auto mfmaDotOp1_kwidth_8 = mfmaDotOp(parentMfma16, /*opIdx=*/1, /*kWidth=*/8);
   auto mfmaDotOp1_kwidth_16 =
       mfmaDotOp(parentMfma16, /*opIdx=*/1, /*kWidth=*/16);
@@ -1653,6 +1677,7 @@ TEST_F(LinearLayoutConversionsTest, mfma16_dot_op_rhs_trans) {
                  {S("block"), {}}},
                 {S("dim0"), S("dim1")}));
 
+  // Single rated mfma with small shape
   auto mfmaDotOp1_kwidth_4 = mfmaDotOp(parentMfma16, /*opIdx=*/1, /*kWidth=*/4);
   EXPECT_EQ(chooseDsReadB64TrLayout(mfmaDotOp1_kwidth_4, {16, 16},
                                     /*elemBitWidth=*/16),
@@ -1667,6 +1692,26 @@ TEST_F(LinearLayoutConversionsTest, mfma16_dot_op_rhs_trans) {
                                     /*elemBitWidth=*/8),
             LinearLayout(
                 {{S("register"), {{0, 1}, {0, 2}, {0, 4}}},
+                 {S("lane"), {{0, 8}, {1, 0}, {2, 0}, {4, 0}, {8, 0}, {16, 0}}},
+                 {S("warp"), {{0, 0}, {0, 0}, {0, 0}}},
+                 {S("block"), {}}},
+                {S("dim0"), S("dim1")}));
+
+  // Single rated mfma with large shape. In this case, single rated mfma
+  // will be used due to kWidth = 4 (16-bit) or 8 (8-bit)
+  EXPECT_EQ(chooseDsReadB64TrLayout(mfmaDotOp1_kwidth_4, {32, 16},
+                                    /*elemBitWidth=*/16),
+            LinearLayout(
+                {{S("register"), {{0, 1}, {0, 2}, {16, 0}}},
+                 {S("lane"), {{0, 4}, {0, 8}, {1, 0}, {2, 0}, {4, 0}, {8, 0}}},
+                 {S("warp"), {{0, 0}, {0, 0}, {0, 0}}},
+                 {S("block"), {}}},
+                {S("dim0"), S("dim1")}));
+
+  EXPECT_EQ(chooseDsReadB64TrLayout(mfmaDotOp1_kwidth_8, {64, 16},
+                                    /*elemBitWidth=*/8),
+            LinearLayout(
+                {{S("register"), {{0, 1}, {0, 2}, {0, 4}, {32, 0}}},
                  {S("lane"), {{0, 8}, {1, 0}, {2, 0}, {4, 0}, {8, 0}, {16, 0}}},
                  {S("warp"), {{0, 0}, {0, 0}, {0, 0}}},
                  {S("block"), {}}},
@@ -1850,7 +1895,7 @@ TEST_F(LinearLayoutConversionsTest, mfma32_dot_op_rhs_trans) {
   auto parentTMfma16 = mfma(/*warps=*/{2, 4}, /*mDim=*/32, /*nDim=*/32,
                             /*isTransposed=*/true);
   auto tmfmaDotOp1_kwidth_16 =
-      mfmaDotOp(parentTMfma16, /*opIdx=*/1, /*kWidth=*/8);
+      mfmaDotOp(parentTMfma16, /*opIdx=*/1, /*kWidth=*/16);
   auto tmfmaDotOp1_kwidth_8 =
       mfmaDotOp(parentTMfma16, /*opIdx=*/1, /*kWidth=*/8);
   auto tmfmaDotOp1_kwidth_4 =

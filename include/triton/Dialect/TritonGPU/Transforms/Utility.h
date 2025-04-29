@@ -243,11 +243,46 @@ SetVector<Value> getNestedOperands(Operation *op);
 // Erase the given loop carried values from the loop, where `loop` is replaced
 // with a new loop.
 void eraseLoopCarriedValues(scf::ForOp &loop, llvm::BitVector indices);
-
-// Return true if two value sets may refer to the same allocation.
-bool mayAliasAllocations(const DenseSet<Value> &lhs,
-                         const DenseSet<Value> &rhs);
-
 } // namespace mlir
+
+namespace mlir::triton {
+
+/// Replace all uses of `oldUse` with `val` and propagate the type if needed.
+/// This is useful when we need to change a memory descriptor from immutable to
+/// mutable.
+void replaceUsesAndPropagateType(OpBuilder &builder, Operation *oldUse,
+                                 Value val);
+
+template <typename BuilderT>
+void replaceUsesWithLocalLoad(
+    BuilderT &builder, OpResult old, TypedValue<triton::gpu::MemDescType> alloc,
+    TypedValue<triton::gpu::AsyncTokenType> token = {}) {
+  //  Remove redundant local_load -> local_alloc
+  namespace ttg = triton::gpu;
+  using triton::gpu::LocalAllocOp;
+  auto allocTy = alloc.getType();
+  SmallVector<LocalAllocOp> allocsToErase;
+  for (Operation *user : old.getUsers()) {
+    if (auto userAlloc = dyn_cast<LocalAllocOp>(user)) {
+      if (allocTy.getEncoding() == userAlloc.getType().getEncoding()) {
+        replaceUsesAndPropagateType(builder, userAlloc, alloc);
+        allocsToErase.push_back(userAlloc);
+      }
+    }
+  }
+  for (auto alloc : allocsToErase) {
+    alloc.erase();
+  }
+
+  // If there are some uses that were not local_allocs, we need to create a
+  // local_load for them.
+  if (!old.getUsers().empty()) {
+    auto loc = old.getOwner()->getLoc();
+    auto sharedLoad = builder.template create<ttg::LocalLoadOp>(
+        loc, old.getType(), alloc, token);
+    old.replaceAllUsesWith(sharedLoad.getResult());
+  }
+}
+} // namespace mlir::triton
 
 #endif // TRITON_DIALECT_TRITONGPU_TRANSFORMS_UTILITY_H_
