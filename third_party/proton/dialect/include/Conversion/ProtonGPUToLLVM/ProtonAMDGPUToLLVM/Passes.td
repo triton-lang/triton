@@ -3,7 +3,7 @@
 
 include "mlir/Pass/PassBase.td"
 
-def ConvertProtonAMDGPUToLLVM : Pass<"convert-proton-amdgpu-to-llvm", "mlir::ModuleOp"> {
+def ConvertProtonAMDGPUToLLVM : Pass<"convert-proton-amd-gpu-to-llvm", "mlir::ModuleOp"> {
     let summary = "Convert ProtonGPU to LLVM";
     let description = [{
         Convert ProtonGPU to LLVM using AMD-specific lowering patterns.
@@ -15,6 +15,7 @@ def ConvertProtonAMDGPUToLLVM : Pass<"convert-proton-amdgpu-to-llvm", "mlir::Mod
                              "mlir::gpu::GPUDialect",
                              "mlir::scf::SCFDialect",
                              "mlir::LLVM::LLVMDialect",
+      						 "mlir::ROCDL::ROCDLDialect",
                              "mlir::triton::TritonDialect",
                              "mlir::triton::gpu::TritonGPUDialect",
                              "mlir::triton::proton::ProtonDialect",
