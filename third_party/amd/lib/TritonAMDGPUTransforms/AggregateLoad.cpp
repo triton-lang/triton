@@ -63,17 +63,11 @@ void findValidLoads(scf::ForOp forOp,
 
       auto aScaleTy = dyn_cast<RankedTensorType>(aScale.getType());
       auto bScaleTy = dyn_cast<RankedTensorType>(bScale.getType());
-      // if (!isa<ttg::LinearEncodingAttr>(aScaleTy.getEncoding())) {
-      //   llvm::outs() << "aScale is not linear layout\n";
-      // }
-      // if (!isa<ttg::LinearEncodingAttr>(bScaleTy.getEncoding())) {
-      //   llvm::outs() << "bScale is not linear layout\n";
-      // }
       assert(isa<ttg::LinearEncodingAttr>(aScaleTy.getEncoding()) &&
              isa<ttg::LinearEncodingAttr>(bScaleTy.getEncoding()) &&
              "Both aScale and bScale should be linear layout.");
 
-      const int64_t kMaxSharedMemory = 65536;
+      const int64_t kMaxSharedMemory = 163840;
       assert(currentSharedMemoryUsage <= kMaxSharedMemory &&
              "Even without hoisting, block size is too large.");
 
@@ -96,43 +90,40 @@ void findValidLoads(scf::ForOp forOp,
         continue;
       }
 
+      // Scale is always E8M0-encoded, so its width is always 1B.
       constexpr int byteWidth = 1;
-      // int limitedUpperBound = std::min(ub, 4);
-      int limitedUpperBound = ub;
-      // int64_t globalScaleKDim = llvm::PowerOf2Ceil(aScaleShape[1] * ub);
-      int64_t globalScaleKDim = aScaleShape[1] * ub;
-      if (!llvm::isPowerOf2_64(globalScaleKDim))
-        continue;
-      int64_t limitedScaleKDim =
-          llvm::PowerOf2Ceil(aScaleShape[1] * limitedUpperBound);
-      int64_t largestScaleK =
-          expandableMemory / ((aScaleShape[0] + bScaleShape[0]) * byteWidth);
 
-      int64_t alignedHoistK = -1;
+      int newUpperBound = ub;
       int64_t hoistFactor = 1;
 
-      if (limitedScaleKDim <= largestScaleK) {
-        // TODO: Hoist entire aScale and bScale.
-        // alignedHoistK = globalScaleKDim;
-        alignedHoistK = limitedScaleKDim;
-      } else {
-        // Determine largest hoist K size, by getting largest divisor of globalK
-        // that is <= largestK.
-        // TODO: Need to add assert to make sure %2 == 0 and or K needs to be
-        // power of 2 aligned.
-        for (int i = limitedScaleKDim; i > 0; i /= 2) {
-          if (i <= largestScaleK) {
-            alignedHoistK = i;
-            break;
-          }
-        }
-        assert(alignedHoistK > 0 && "Cannot determine hoisted-K size.");
-      }
-      hoistFactor = (globalScaleKDim + alignedHoistK - 1) / alignedHoistK;
+      auto getAlignedScaleLDSUsage = [&](int numBlocks) {
+        return (aScaleShape[0] + bScaleShape[0]) *
+               llvm::PowerOf2Ceil(aScaleShape[1] * numBlocks) * byteWidth;
+      };
 
-      int64_t newMemoryUsed =
-          (aScaleShape[0] + bScaleShape[0]) * alignedHoistK * byteWidth;
-      hoistLoopSpecs.push_back({alignedHoistK, hoistFactor});
+      // The following binary search may fail if the overall K dimension doesn't
+      // have enough factors of 2. But it should be fine in common cases. May
+      // consider better algorithm if needed.
+      //
+      // Due to Linear Layout's requirement, the aggregated blocks need to be
+      // power of 2. This is done by padding LDS, which may introduce LDS
+      // overhead. Considering scales are relatively small and LDS hasn't become
+      // the bottleneck on gfx950, this should be fine.
+      int64_t newMemoryUsed = 0;
+      bool foundHoistKDim = false;
+      while (newUpperBound > 0 && newUpperBound % 2 == 0) {
+        newMemoryUsed = getAlignedScaleLDSUsage(newUpperBound);
+        if (newMemoryUsed < expandableMemory) {
+          hoistFactor = ub / newUpperBound;
+          foundHoistKDim = true;
+          break;
+        }
+        newUpperBound /= 2;
+      }
+
+      assert(foundHoistKDim && "Cannot determine hoisted-K size.");
+
+      hoistLoopSpecs.push_back({newUpperBound, hoistFactor});
       currentSharedMemoryUsage -= newMemoryUsed;
       validLoads.insert({aScaleLoadOp, bScaleLoadOp});
     }
@@ -258,7 +249,7 @@ Value createLocalAlloc(OpBuilder &builder, Location loc, Value loadVal,
   return builder.create<ttg::LocalAllocOp>(loc, ldsBufferType, loadVal);
 }
 
-Value hoistLoad(scf::ForOp forOp, Operation *op, int64_t hoistKSize, int ub,
+Value hoistLoad(scf::ForOp forOp, Operation *op, int64_t newUpperBound, int ub,
                 StringRef archGen) {
   triton::LoadOp loadOp = dyn_cast<triton::LoadOp>(op);
   int64_t blockKSize =
@@ -272,6 +263,7 @@ Value hoistLoad(scf::ForOp forOp, Operation *op, int64_t hoistKSize, int ub,
   // Dealing with mask
   Value maskM = loadOp.getMask();
   Value newMaskVal, newOtherVal;
+  int64_t hoistKSize = llvm::PowerOf2Ceil(blockKSize * newUpperBound);
   if (maskM) {
     // We assume the mask along the M dim is NOT loop carried
     assert(maskM.getParentRegion() != forOp.getRegion() &&
@@ -447,7 +439,7 @@ void processLoopBody(scf::ForOp forOp, Operation *op, Value localAllocVal) {
 
 void generateOuterLoop(scf::ForOp forOp, Value aScaleLocalAllocVal,
                        Value bScaleLocalAllocVal, int64_t hoistFactor,
-                       int64_t hoistKSize) {
+                       int64_t newUpperBound) {
   // Set up ops/info required to build outer loop.
   auto aScaleLocalAllocOp =
       llvm::cast<ttg::LocalAllocOp>(aScaleLocalAllocVal.getDefiningOp());
@@ -460,6 +452,10 @@ void generateOuterLoop(scf::ForOp forOp, Value aScaleLocalAllocVal,
   assert(aScaleLoadOp && bScaleLoadOp &&
          "Expected src of local alloc to be loadOp to generate outer loop.");
 
+  int64_t hoistKSize =
+      dyn_cast<RankedTensorType>(aScaleLoadOp.getPtr().getType())
+          .getShape()
+          .back();
   OpBuilder builder(forOp);
   Location loc = forOp.getLoc();
   Value lb =
@@ -473,7 +469,7 @@ void generateOuterLoop(scf::ForOp forOp, Value aScaleLocalAllocVal,
   Value bPtr = forOp.getInits()[2];
   int innerUB = isUpperBoundConstant(forOp);
   Value newInnerUB = builder.create<arith::ConstantOp>(
-      loc, builder.getI32IntegerAttr(innerUB / hoistFactor));
+      loc, builder.getI32IntegerAttr(newUpperBound));
 
   auto createGlobalLoadLocalAlloc =
       [&builder,
@@ -562,12 +558,6 @@ struct AggregateLoad : public TritonAMDGPUAggregateLoadBase<AggregateLoad> {
       // Get aScale and bScale size.
       auto aScaleType = llvm::cast<ShapedType>(aScale.getType());
       auto bScaleType = llvm::cast<ShapedType>(bScale.getType());
-      // if (!aScaleType.hasStaticShape()) {
-      //   llvm::outs() << "aScaleType doesn't have static shape\n";
-      // }
-      // if (!bScaleType.hasStaticShape()) {
-      //   llvm::outs() << "bScaleType doesn't have static shape\n";
-      // }
       assert(aScaleType.hasStaticShape() &&
              "Expected tt.dot to have aScale as static shape.");
       assert(bScaleType.hasStaticShape() &&
@@ -575,17 +565,14 @@ struct AggregateLoad : public TritonAMDGPUAggregateLoadBase<AggregateLoad> {
       int64_t aScaleAllocSize = getAllocSize(aScaleType);
       int64_t bScaleAllocSize = getAllocSize(bScaleType);
       totalSharedMemoryUsage += aScaleAllocSize + bScaleAllocSize;
-      // if (foundDotScaledOp) {
-      //   llvm::outs() << "Currently only support a single dot operation.\n";
-      // }
       assert(!foundDotScaledOp &&
-             "Currently only support a single dot operation.");
+             "Currently only support a single dot_scaled operation.");
       foundDotScaledOp = true;
     });
     // llvm::outs() << "before: " << *getOperation() << "\n";
 
     if (!foundDotScaledOp) {
-      // llvm::outs() << "Didn't find dotScaledOp for AggregateLoad\n";
+      llvm::outs() << "Didn't find dotScaledOp for AggregateLoad\n";
       return;
     }
 
@@ -600,25 +587,23 @@ struct AggregateLoad : public TritonAMDGPUAggregateLoadBase<AggregateLoad> {
       if (!ub)
         return;
       SetVector<std::pair<Operation *, Operation *>> validLoads;
+      // newUpperBound, hoistFactor
       SmallVector<std::pair<int64_t, int64_t>> hoistLoopSpecs;
       findValidLoads(forOp, validLoads, hoistLoopSpecs, ub,
                      totalSharedMemoryUsage);
       // llvm::outs() << "validLoads.size(): " << validLoads.size() << "\n";
       for (auto [index, loadOps] : llvm::enumerate(validLoads)) {
-        auto [hoistKSize, hoistFactor] = hoistLoopSpecs[index];
-        // llvm::outs() << "hoistKSize: " << hoistKSize
-        //              << ", hoistFactor: " << hoistFactor << "\n";
-        auto aScaleLoadOp = loadOps.first;
-        auto bScaleLoadOp = loadOps.second;
-        auto aScaleLocalAllocValue = hoistLoad(forOp, aScaleLoadOp, hoistKSize,
-                                               ub, this->archGenerationName);
-        auto bScaleLocalAllocValue = hoistLoad(forOp, bScaleLoadOp, hoistKSize,
-                                               ub, this->archGenerationName);
+        auto [newUpperBound, hoistFactor] = hoistLoopSpecs[index];
+        auto [aScaleLoadOp, bScaleLoadOp] = loadOps;
+        auto aScaleLocalAllocValue = hoistLoad(
+            forOp, aScaleLoadOp, newUpperBound, ub, this->archGenerationName);
+        auto bScaleLocalAllocValue = hoistLoad(
+            forOp, bScaleLoadOp, newUpperBound, ub, this->archGenerationName);
         processLoopBody(forOp, aScaleLoadOp, aScaleLocalAllocValue);
         processLoopBody(forOp, bScaleLoadOp, bScaleLocalAllocValue);
         if (hoistFactor > 1) {
           generateOuterLoop(forOp, aScaleLocalAllocValue, bScaleLocalAllocValue,
-                            hoistFactor, hoistKSize);
+                            hoistFactor, newUpperBound);
         }
         cnt++;
       }
