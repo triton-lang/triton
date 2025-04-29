@@ -197,7 +197,7 @@ LogicalResult lowerDistributedToSharedStmatrix(
 
   // Choose the 4 elements indexed by the next to bases as the vectorisation
   // factor
-  auto vec = std::min(2, quot.getInDimSize(kReg));
+  auto vec = std::min(2, quot.getInDimSizeLog2(kReg));
   // 2) NYI stmatrix.x1 and stmatrix.x2
   if (vec != 2) {
     return failure();
