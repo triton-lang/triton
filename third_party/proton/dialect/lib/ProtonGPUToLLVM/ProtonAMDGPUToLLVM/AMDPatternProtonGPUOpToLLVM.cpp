@@ -94,6 +94,10 @@ struct CircularStoreOpConversion
     } else if (AddrSpace == 3) {
       // TODO(crobeck): this is lowered as a predicated store which is not very
       // efficient. probably want this swapped out for bufferops
+      // we also need to compare "this version" vs. isWriter always = true
+      // for this predicated version, there could be unexpected instruction
+      // cache miss. Setting isWriter always true has bank conflicts but it is
+      // expected and stable.
       targetInfo.getTritonTargetInfo().storeDShared(rewriter, loc, vecPtr,
                                                     std::nullopt, valsVec,
                                                     /*pred=*/isWriter);
