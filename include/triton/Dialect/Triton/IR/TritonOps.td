@@ -493,6 +493,7 @@ def TT_BroadcastOp : TT_Op<"broadcast", [Pure,
     let hasVerifier = 1;
 }
 
+// Cat is not pure because it may reorder elements.
 def TT_CatOp : TT_Op<"cat", [NoMemoryEffect,
                              SameTypeOperands,
                              SameOperandsAndResultElementType]> {
@@ -506,7 +507,7 @@ def TT_CatOp : TT_Op<"cat", [NoMemoryEffect,
 }
 
 def TT_JoinOp : TT_Op<"join", [
-    NoMemoryEffect, SameTypeOperands]> {
+    Pure, SameTypeOperands]> {
     let summary = "join two tensors along a new, minor dimension";
     let description = [{
         For example, if the two input tensors are 4x8xf32, returns a tensor of
@@ -526,7 +527,7 @@ def TT_JoinOp : TT_Op<"join", [
 }
 
 def TT_SplitOp : TT_Op<"split", [
-  NoMemoryEffect,
+  Pure,
   InferTypeOpWithLayoutEquivalence,
   TypesMatchWith<"outLHS and outRHS types match",
                   "outLHS", "outRHS", "$_self">,
