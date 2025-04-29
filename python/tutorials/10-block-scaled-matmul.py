@@ -346,21 +346,27 @@ def show_profile(profile_name):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
+    parser.add_argument("-K", type=int, required=False, default=512)
     parser.add_argument("--K_range", type=int, nargs=2)
     parser.add_argument("--K_step", type=int, default=512)
-    parser.add_argument("--bench", action="store_true")
+    parser.add_argument("--bench", action="store_true", default=True)
     parser.add_argument("--format", type=str, choices=["mxfp4", "nvfp4", "mxfp8", "mixed"], default="nvfp4")
     args = parser.parse_args()
 
     if not supports_block_scaling():
         print("⛔ This example requires GPU support for block scaled matmul")
     else:
+        if args.K and args.K_range is None:
+            args.K_range = [args.K, args.K]
+            args.K_step = 1  # doesn't matter as long as it's not 0
+
         torch.manual_seed(42)
 
         validate_block_scaled(8192, 8192, 8192, block_scale_type=args.format)
 
         if args.bench:
             proton.start("block_scaled_matmul", hook="triton")
+            proton.deactivate(0)  # Skip argument creation
             for K in range(args.K_range[0], args.K_range[1] + 1, args.K_step):
                 bench_block_scaled(K, reps=10000, block_scale_type=args.format)
             proton.finalize()

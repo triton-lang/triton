@@ -36,10 +36,11 @@ class AMDFMAVectorMultiplier : public FMAVectorMultiplier {
     bool dotAvailable = AMD::supportsVDot(arch);
     auto b = TritonLLVMOpBuilder(loc, rewriter);
     if (dotAvailable) {
-      if (aElemTy.isF16() && dElemTy.isF32()) {
+      if ((aElemTy.isF16() || aElemTy.isBF16()) && dElemTy.isF32()) {
         chosenOp.vectorSize = 2;
         chosenOp.outElemTy = f32_ty;
-        chosenOp.intrinsicName = "llvm.amdgcn.fdot2";
+        chosenOp.intrinsicName = aElemTy.isF16() ? "llvm.amdgcn.fdot2"
+                                                 : "llvm.amdgcn.fdot2.f32.bf16";
         chosenOp.additionalArgs = {b.false_val()};
         return chosenOp;
       }

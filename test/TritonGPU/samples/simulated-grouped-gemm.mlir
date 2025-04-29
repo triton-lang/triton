@@ -113,17 +113,17 @@
 // CHECK:             %[[VAL_87:.*]]:3 = scf.if %[[VAL_82]] -> (!tt.tensordesc<tensor<128x64xf16, #[[$ATTR_1]]>>, !tt.tensordesc<tensor<256x64xf16, #[[$ATTR_1]]>>, !tt.tensordesc<tensor<128x256xf16, #[[$ATTR_1]]>>) {
 // CHECK:               %[[VAL_88:.*]] = tt.addptr %[[VAL_0]], %[[VAL_43]] : !tt.ptr<f16>, i32
 // CHECK:               %[[VAL_89:.*]] = arith.muli %[[VAL_31]], %[[VAL_6]] : i64
-// CHECK:               tt.experimental_tensormap_create %[[VAL_52]], %[[VAL_88]], {{\[}}%[[VAL_17]], %[[VAL_15]]], {{\[}}%[[VAL_5]], %[[VAL_3]]], {{\[}}%[[VAL_89]]], {{\[}}%[[VAL_10]], %[[VAL_10]]] {elem_type = 1 : i32, fill_mode = 0 : i32, interleave_layout = 0 : i32, swizzle_mode = 3 : i32} : (!tt.ptr<i8>, !tt.ptr<f16>, i32, i32, i32, i32, i64, i32, i32) -> ()
+// CHECK:               tt.experimental_tensormap_create %[[VAL_52]], %[[VAL_88]], {{\[}}%[[VAL_17]], %[[VAL_15]]], {{\[}}%[[VAL_5]], %[[VAL_3]]], {{\[}}%[[VAL_89]]], {{\[}}%[[VAL_10]], %[[VAL_10]]] {elem_type = 6 : i32, fill_mode = 0 : i32, interleave_layout = 0 : i32, swizzle_mode = 3 : i32} : (!tt.ptr<i8>, !tt.ptr<f16>, i32, i32, i32, i32, i64, i32, i32) -> ()
 // CHECK:               tt.experimental_tensormap_fenceproxy_acquire %[[VAL_52]] : !tt.ptr<i8>
 // CHECK:               %[[VAL_90:.*]] = tt.reinterpret_tensor_descriptor %[[VAL_52]] : !tt.ptr<i8> to !tt.tensordesc<tensor<128x64xf16, #[[$ATTR_1]]>>
 // CHECK:               %[[VAL_91:.*]] = tt.addptr %[[VAL_1]], %[[VAL_43]] : !tt.ptr<f16>, i32
 // CHECK:               %[[VAL_92:.*]] = arith.muli %[[VAL_31]], %[[VAL_6]] : i64
-// CHECK:               tt.experimental_tensormap_create %[[VAL_53]], %[[VAL_91]], {{\[}}%[[VAL_17]], %[[VAL_16]]], {{\[}}%[[VAL_5]], %[[VAL_4]]], {{\[}}%[[VAL_92]]], {{\[}}%[[VAL_10]], %[[VAL_10]]] {elem_type = 1 : i32, fill_mode = 0 : i32, interleave_layout = 0 : i32, swizzle_mode = 3 : i32} : (!tt.ptr<i8>, !tt.ptr<f16>, i32, i32, i32, i32, i64, i32, i32) -> ()
+// CHECK:               tt.experimental_tensormap_create %[[VAL_53]], %[[VAL_91]], {{\[}}%[[VAL_17]], %[[VAL_16]]], {{\[}}%[[VAL_5]], %[[VAL_4]]], {{\[}}%[[VAL_92]]], {{\[}}%[[VAL_10]], %[[VAL_10]]] {elem_type = 6 : i32, fill_mode = 0 : i32, interleave_layout = 0 : i32, swizzle_mode = 3 : i32} : (!tt.ptr<i8>, !tt.ptr<f16>, i32, i32, i32, i32, i64, i32, i32) -> ()
 // CHECK:               tt.experimental_tensormap_fenceproxy_acquire %[[VAL_53]] : !tt.ptr<i8>
 // CHECK:               %[[VAL_93:.*]] = tt.reinterpret_tensor_descriptor %[[VAL_53]] : !tt.ptr<i8> to !tt.tensordesc<tensor<256x64xf16, #[[$ATTR_1]]>>
 // CHECK:               %[[VAL_94:.*]] = tt.addptr %[[VAL_2]], %[[VAL_43]] : !tt.ptr<f16>, i32
 // CHECK:               %[[VAL_95:.*]] = arith.muli %[[VAL_34]], %[[VAL_6]] : i64
-// CHECK:               tt.experimental_tensormap_create %[[VAL_54]], %[[VAL_94]], {{\[}}%[[VAL_17]], %[[VAL_15]]], {{\[}}%[[VAL_4]], %[[VAL_3]]], {{\[}}%[[VAL_95]]], {{\[}}%[[VAL_10]], %[[VAL_10]]] {elem_type = 1 : i32, fill_mode = 0 : i32, interleave_layout = 0 : i32, swizzle_mode = 3 : i32} : (!tt.ptr<i8>, !tt.ptr<f16>, i32, i32, i32, i32, i64, i32, i32) -> ()
+// CHECK:               tt.experimental_tensormap_create %[[VAL_54]], %[[VAL_94]], {{\[}}%[[VAL_17]], %[[VAL_15]]], {{\[}}%[[VAL_4]], %[[VAL_3]]], {{\[}}%[[VAL_95]]], {{\[}}%[[VAL_10]], %[[VAL_10]]] {elem_type = 6 : i32, fill_mode = 0 : i32, interleave_layout = 0 : i32, swizzle_mode = 3 : i32} : (!tt.ptr<i8>, !tt.ptr<f16>, i32, i32, i32, i32, i64, i32, i32) -> ()
 // CHECK:               tt.experimental_tensormap_fenceproxy_acquire %[[VAL_54]] : !tt.ptr<i8>
 // CHECK:               %[[VAL_96:.*]] = tt.reinterpret_tensor_descriptor %[[VAL_54]] : !tt.ptr<i8> to !tt.tensordesc<tensor<128x256xf16, #[[$ATTR_1]]>>
 // CHECK:               scf.yield %[[VAL_90]], %[[VAL_93]], %[[VAL_96]] : !tt.tensordesc<tensor<128x64xf16, #[[$ATTR_1]]>>, !tt.tensordesc<tensor<256x64xf16, #[[$ATTR_1]]>>, !tt.tensordesc<tensor<128x256xf16, #[[$ATTR_1]]>>
@@ -172,7 +172,7 @@
 // CHECK:                 %[[VAL_152:.*]] = arith.muli %[[VAL_132]], %[[VAL_15]] : i32
 // CHECK:                 %[[VAL_153:.*]] = tt.addptr %[[VAL_52]], %[[VAL_152]] : !tt.ptr<i8>, i32
 // CHECK:                 %[[VAL_154:.*]] = arith.muli %[[VAL_31]], %[[VAL_6]] : i64
-// CHECK:                 tt.experimental_tensormap_create %[[VAL_153]], %[[VAL_151]], {{\[}}%[[VAL_17]], %[[VAL_15]]], {{\[}}%[[VAL_5]], %[[VAL_3]]], {{\[}}%[[VAL_154]]], {{\[}}%[[VAL_10]], %[[VAL_10]]] {elem_type = 1 : i32, fill_mode = 0 : i32, interleave_layout = 0 : i32, swizzle_mode = 3 : i32} : (!tt.ptr<i8>, !tt.ptr<f16>, i32, i32, i32, i32, i64, i32, i32) -> ()
+// CHECK:                 tt.experimental_tensormap_create %[[VAL_153]], %[[VAL_151]], {{\[}}%[[VAL_17]], %[[VAL_15]]], {{\[}}%[[VAL_5]], %[[VAL_3]]], {{\[}}%[[VAL_154]]], {{\[}}%[[VAL_10]], %[[VAL_10]]] {elem_type = 6 : i32, fill_mode = 0 : i32, interleave_layout = 0 : i32, swizzle_mode = 3 : i32} : (!tt.ptr<i8>, !tt.ptr<f16>, i32, i32, i32, i32, i64, i32, i32) -> ()
 // CHECK:                 tt.experimental_tensormap_fenceproxy_acquire %[[VAL_153]] : !tt.ptr<i8>
 // CHECK:                 %[[VAL_155:.*]] = tt.reinterpret_tensor_descriptor %[[VAL_153]] : !tt.ptr<i8> to !tt.tensordesc<tensor<128x64xf16, #[[$ATTR_1]]>>
 // CHECK:                 %[[VAL_156:.*]] = arith.addi %[[VAL_132]], %[[VAL_10]] : i32
@@ -182,7 +182,7 @@
 // CHECK:                 %[[VAL_160:.*]] = arith.muli %[[VAL_133]], %[[VAL_15]] : i32
 // CHECK:                 %[[VAL_161:.*]] = tt.addptr %[[VAL_53]], %[[VAL_160]] : !tt.ptr<i8>, i32
 // CHECK:                 %[[VAL_162:.*]] = arith.muli %[[VAL_31]], %[[VAL_6]] : i64
-// CHECK:                 tt.experimental_tensormap_create %[[VAL_161]], %[[VAL_159]], {{\[}}%[[VAL_17]], %[[VAL_16]]], {{\[}}%[[VAL_5]], %[[VAL_4]]], {{\[}}%[[VAL_162]]], {{\[}}%[[VAL_10]], %[[VAL_10]]] {elem_type = 1 : i32, fill_mode = 0 : i32, interleave_layout = 0 : i32, swizzle_mode = 3 : i32} : (!tt.ptr<i8>, !tt.ptr<f16>, i32, i32, i32, i32, i64, i32, i32) -> ()
+// CHECK:                 tt.experimental_tensormap_create %[[VAL_161]], %[[VAL_159]], {{\[}}%[[VAL_17]], %[[VAL_16]]], {{\[}}%[[VAL_5]], %[[VAL_4]]], {{\[}}%[[VAL_162]]], {{\[}}%[[VAL_10]], %[[VAL_10]]] {elem_type = 6 : i32, fill_mode = 0 : i32, interleave_layout = 0 : i32, swizzle_mode = 3 : i32} : (!tt.ptr<i8>, !tt.ptr<f16>, i32, i32, i32, i32, i64, i32, i32) -> ()
 // CHECK:                 tt.experimental_tensormap_fenceproxy_acquire %[[VAL_161]] : !tt.ptr<i8>
 // CHECK:                 %[[VAL_163:.*]] = tt.reinterpret_tensor_descriptor %[[VAL_161]] : !tt.ptr<i8> to !tt.tensordesc<tensor<256x64xf16, #[[$ATTR_1]]>>
 // CHECK:                 %[[VAL_164:.*]] = arith.addi %[[VAL_133]], %[[VAL_10]] : i32
@@ -192,7 +192,7 @@
 // CHECK:                 %[[VAL_168:.*]] = arith.muli %[[VAL_134]], %[[VAL_15]] : i32
 // CHECK:                 %[[VAL_169:.*]] = tt.addptr %[[VAL_54]], %[[VAL_168]] : !tt.ptr<i8>, i32
 // CHECK:                 %[[VAL_170:.*]] = arith.muli %[[VAL_34]], %[[VAL_6]] : i64
-// CHECK:                 tt.experimental_tensormap_create %[[VAL_169]], %[[VAL_167]], {{\[}}%[[VAL_17]], %[[VAL_15]]], {{\[}}%[[VAL_4]], %[[VAL_3]]], {{\[}}%[[VAL_170]]], {{\[}}%[[VAL_10]], %[[VAL_10]]] {elem_type = 1 : i32, fill_mode = 0 : i32, interleave_layout = 0 : i32, swizzle_mode = 3 : i32} : (!tt.ptr<i8>, !tt.ptr<f16>, i32, i32, i32, i32, i64, i32, i32) -> ()
+// CHECK:                 tt.experimental_tensormap_create %[[VAL_169]], %[[VAL_167]], {{\[}}%[[VAL_17]], %[[VAL_15]]], {{\[}}%[[VAL_4]], %[[VAL_3]]], {{\[}}%[[VAL_170]]], {{\[}}%[[VAL_10]], %[[VAL_10]]] {elem_type = 6 : i32, fill_mode = 0 : i32, interleave_layout = 0 : i32, swizzle_mode = 3 : i32} : (!tt.ptr<i8>, !tt.ptr<f16>, i32, i32, i32, i32, i64, i32, i32) -> ()
 // CHECK:                 tt.experimental_tensormap_fenceproxy_acquire %[[VAL_169]] : !tt.ptr<i8>
 // CHECK:                 %[[VAL_171:.*]] = tt.reinterpret_tensor_descriptor %[[VAL_169]] : !tt.ptr<i8> to !tt.tensordesc<tensor<128x256xf16, #[[$ATTR_1]]>>
 // CHECK:                 %[[VAL_172:.*]] = arith.addi %[[VAL_134]], %[[VAL_10]] : i32

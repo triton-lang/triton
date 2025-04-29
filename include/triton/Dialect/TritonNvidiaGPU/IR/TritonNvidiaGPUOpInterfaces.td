@@ -12,6 +12,9 @@ def MMAv5OpInterface : OpInterface<"MMAv5OpInterface"> {
 
   // We can add more methods as needed.
   let methods = [
+    InterfaceMethod<"Return the A operand.",
+                    "::mlir::TypedValue<::mlir::triton::gpu::MemDescType>",
+                    "getA">,
     InterfaceMethod<"Return the accumulator init flag.",
                     "::mlir::Value",
                     "useAccumulator">,
@@ -24,7 +27,7 @@ def MMAv5OpInterface : OpInterface<"MMAv5OpInterface"> {
                     "addCompletionBarrier",
                     (ins "::mlir::Value":$barrier, "::mlir::Value":$pred)>,
     InterfaceMethod<"Return the accumulator.",
-                    "::mlir::Value",
+                    "::mlir::TypedValue<::mlir::triton::gpu::MemDescType>",
                     "getAccumulator">,
     InterfaceMethod<"Set the accumulator.",
                     "void",
@@ -37,6 +40,15 @@ def MMAv5OpInterface : OpInterface<"MMAv5OpInterface"> {
                     "void",
                     "setPredicate",
                     (ins "::mlir::Value":$pred)>,
+    InterfaceMethod<"Get the memory dependencies of the accumulator.",
+                    "::mlir::Value",
+                    "getAccDep">,
+    InterfaceMethod<"Get the mutable memory dependencies of the accumulator.",
+                    "::mlir::MutableOperandRange",
+                    "getAccDepMutable">,
+    InterfaceMethod<"Get the produced write dependency of the accumulator.",
+                    "::mlir::Value",
+                    "getToken">,
   ];
 }
 #endif // TRITON_NVIDIAGPU_OP_INTERFACES

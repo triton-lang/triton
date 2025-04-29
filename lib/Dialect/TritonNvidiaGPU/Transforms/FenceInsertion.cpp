@@ -52,8 +52,8 @@ public:
         if (!mmaEncoding || !mmaEncoding.isHopper())
           return WalkResult::advance();
       }
-      bool aDependsOnShared = dependOnSharedEncOperand(a);
-      bool bDependsOnShared = dependOnSharedEncOperand(b);
+      bool aDependsOnShared = dependOnCopyRegToShared(a);
+      bool bDependsOnShared = dependOnCopyRegToShared(b);
       if (!aDependsOnShared && !bDependsOnShared)
         return WalkResult::advance();
       Operation *fence = builder.create<ttng::FenceAsyncSharedOp>(
@@ -74,59 +74,54 @@ public:
   }
 
 private:
-  bool dependOnSharedEncOperand(Value operand) {
-    static DenseSet<std::pair<Operation *, unsigned>> trace;
+  // Return true if the operand depends on a copy from register to shared.
+  bool dependOnCopyRegToShared(Value operand) {
+    DenseSet<Value> visited;
+    return dependOnCopyRegToShared(operand, visited);
+  }
+
+  bool dependOnCopyRegToShared(Value operand, DenseSet<Value> &visited) {
+    // If the value has already been visited we can safely return false as we
+    // would early return when true.
+    if (visited.count(operand))
+      return false;
+    visited.insert(operand);
+    if (!isa<triton::gpu::MemDescType>(operand.getType()))
+      return false;
     auto op = operand.getDefiningOp();
-    // avoid redundant insertion
-    if (op && isa<mlir::triton::DotOpInterface>(op))
-      return false;
-    // reach convertlayout
-    if (op && isa<ttg::LocalAllocOp>(op) &&
-        cast<ttg::LocalAllocOp>(op).getSrc())
-      return true;
-    // root and not BlockArgument
-    if (!op && !isa<BlockArgument>(operand))
-      return false;
-    // op and not BlockArgument
-    if (op && !isa<BlockArgument>(operand)) {
+    if (op) {
+      // reach an alloc copying from register, we need a fence.
+      if (isa<ttg::LocalAllocOp>(op) && cast<ttg::LocalAllocOp>(op).getSrc())
+        return true;
+      // if it is not an alloc, iterate over the operands.
       for (auto v : op->getOperands()) {
-        if (dependOnSharedEncOperand(v))
+        if (dependOnCopyRegToShared(v))
           return true;
       }
+      return false;
     }
     // reach BlockArgument
-    // TODO: support other scf ops, IfOp, WhileOp, etc.
-    if (BlockArgument arg = dyn_cast<BlockArgument>(operand)) {
-      unsigned argNum = arg.getArgNumber();
-      Operation *argOwner = arg.getOwner()->getParentOp();
-      // support ForOp only
-      if (auto forOp = dyn_cast<scf::ForOp>(argOwner)) {
-        // prologue
-        auto iterOperands = forOp.getInitArgs();
-        if (argNum == 0)
-          return false;
-        if (dependOnSharedEncOperand(iterOperands[argNum - 1]))
-          return true;
-        // yield
-        auto yieldOp = forOp.getBody()->getTerminator();
-        Value v = yieldOp->getOperand(argNum - 1);
-        auto entry = std::make_pair<Operation *, unsigned>(std::move(yieldOp),
-                                                           std::move(argNum));
-        // avoid cyclic
-        if (trace.contains(entry))
-          return false;
-        else
-          trace.insert(entry);
-
-        if (dependOnSharedEncOperand(v))
-          return true;
-      } else if (auto whileOp = dyn_cast<scf::WhileOp>(argOwner)) {
-        assert(false && "FenceInsertionPass does not supported WhileOp");
-      } else if (auto ifOp = dyn_cast<scf::IfOp>(argOwner)) {
-        assert(false && "FenceInsertionPass does not supported IfOp");
-      }
+    BlockArgument arg = cast<BlockArgument>(operand);
+    unsigned argNum = arg.getArgNumber();
+    Operation *argOwner = arg.getOwner()->getParentOp();
+    // support ForOp only
+    if (auto forOp = dyn_cast<scf::ForOp>(argOwner)) {
+      // prologue
+      auto iterOperands = forOp.getInitArgs();
+      if (argNum == 0)
+        return false;
+      if (dependOnCopyRegToShared(iterOperands[argNum - 1], visited))
+        return true;
+      // yield
+      auto yieldOp = forOp.getBody()->getTerminator();
+      Value v = yieldOp->getOperand(argNum - 1);
+      auto entry = std::make_pair<Operation *, unsigned>(std::move(yieldOp),
+                                                         std::move(argNum));
+      if (dependOnCopyRegToShared(v, visited))
+        return true;
     }
-    return false;
+    // Conservatively return true for other ops
+    return true;
   }
 };
 } // namespace

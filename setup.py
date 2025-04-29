@@ -14,29 +14,32 @@ import json
 from io import BytesIO
 from distutils.command.clean import clean
 from pathlib import Path
-from typing import List, Optional
+from typing import Optional
 
-from setuptools import Extension, setup
+from setuptools import Extension, find_packages, setup
 from setuptools.command.build_ext import build_ext
 from setuptools.command.build_py import build_py
-from dataclasses import dataclass
-
-from distutils.command.install import install
 from setuptools.command.develop import develop
-from setuptools.command.egg_info import egg_info
-from wheel.bdist_wheel import bdist_wheel
+from dataclasses import dataclass
 
 import pybind11
 
-from build_helpers import get_base_dir, get_cmake_dir
+try:
+    from setuptools.command.editable_wheel import editable_wheel
+except ImportError:
+    # create a dummy class, since there is no command to override
+    class editable_wheel:
+        pass
+
+
+sys.path.insert(0, os.path.dirname(__file__))
+
+from python.build_helpers import get_base_dir, get_cmake_dir
 
 
 @dataclass
 class Backend:
     name: str
-    package_data: List[str]
-    language_package_data: List[str]
-    tools_package_data: List[str]
     src_dir: str
     backend_dir: str
     language_dir: Optional[str]
@@ -51,7 +54,7 @@ class BackendInstaller:
     def prepare(backend_name: str, backend_src_dir: str = None, is_external: bool = False):
         # Initialize submodule if there is one for in-tree backends.
         if not is_external:
-            root_dir = os.path.join(os.pardir, "third_party")
+            root_dir = "third_party"
             assert backend_name in os.listdir(
                 root_dir), f"{backend_name} is requested for install but not present in {root_dir}"
 
@@ -65,34 +68,24 @@ class BackendInstaller:
 
             backend_src_dir = os.path.join(root_dir, backend_name)
 
-        backend_path = os.path.abspath(os.path.join(backend_src_dir, "backend"))
+        backend_path = os.path.join(backend_src_dir, "backend")
         assert os.path.exists(backend_path), f"{backend_path} does not exist!"
 
-        language_dir = os.path.abspath(os.path.join(backend_src_dir, "language"))
+        language_dir = os.path.join(backend_src_dir, "language")
         if not os.path.exists(language_dir):
             language_dir = None
 
-        tools_dir = os.path.abspath(os.path.join(backend_src_dir, "tools"))
+        tools_dir = os.path.join(backend_src_dir, "tools")
         if not os.path.exists(tools_dir):
             tools_dir = None
 
         for file in ["compiler.py", "driver.py"]:
             assert os.path.exists(os.path.join(backend_path, file)), f"${file} does not exist in ${backend_path}"
 
-        install_dir = os.path.join(os.path.dirname(__file__), "triton", "backends", backend_name)
-        package_data = [f"{os.path.relpath(p, backend_path)}/*" for p, _, _, in os.walk(backend_path)]
+        install_dir = os.path.join(os.path.dirname(__file__), "python", "triton", "backends", backend_name)
 
-        language_package_data = []
-        if language_dir is not None:
-            language_package_data = [f"{os.path.relpath(p, language_dir)}/*" for p, _, _, in os.walk(language_dir)]
-
-        tools_package_data = []
-        if tools_dir is not None:
-            tools_package_data = [f"{os.path.relpath(p, tools_dir)}/*" for p, _, _, in os.walk(tools_dir)]
-
-        return Backend(name=backend_name, package_data=package_data, language_package_data=language_package_data,
-                       tools_package_data=tools_package_data, src_dir=backend_src_dir, backend_dir=backend_path,
-                       language_dir=language_dir, tools_dir=tools_dir, install_dir=install_dir, is_external=is_external)
+        return Backend(name=backend_name, src_dir=backend_src_dir, backend_dir=backend_path, language_dir=language_dir,
+                       tools_dir=tools_dir, install_dir=install_dir, is_external=is_external)
 
     # Copy all in-tree backends under triton/third_party.
     @staticmethod
@@ -270,7 +263,7 @@ def update_symlink(link_path, source_path):
 
     print(f"creating symlink: {link_path} -> {source_path}", file=sys.stderr)
     link_path.absolute().parent.mkdir(parents=True, exist_ok=True)  # Ensure link's parent directory exists
-    link_path.symlink_to(source_path, target_is_directory=True)
+    link_path.symlink_to(source_path.absolute(), target_is_directory=True)
 
 
 def get_thirdparty_packages(packages: list):
@@ -331,7 +324,7 @@ def download_and_copy(name, src_func, dst_path, variable, version, url_func):
     url = url_func(supported[system], arch, version)
     src_path = src_func(supported[system], arch, version)
     tmp_path = os.path.join(triton_cache_path, "nvidia", name)  # path to cache the download
-    dst_path = os.path.join(base_dir, os.pardir, "third_party", "nvidia", "backend", dst_path)  # final binary path
+    dst_path = os.path.join(base_dir, "third_party", "nvidia", "backend", dst_path)  # final binary path
     src_path = os.path.join(tmp_path, src_path)
     download = not os.path.exists(src_path)
     if os.path.exists(dst_path) and system == "Linux" and shutil.which(dst_path) is not None:
@@ -389,6 +382,8 @@ class CMakeBuild(build_ext):
         build_ext.finalize_options(self)
 
     def run(self):
+        download_and_copy_dependencies()
+
         try:
             out = subprocess.check_output(["cmake", "--version"])
         except OSError:
@@ -511,78 +506,103 @@ class CMakeBuild(build_ext):
         subprocess.check_call(["cmake", "--build", ".", "--target", "mlir-doc"], cwd=cmake_dir)
 
 
-nvidia_version_path = os.path.join(get_base_dir(), "cmake", "nvidia-toolchain-version.json")
-with open(nvidia_version_path, "r") as nvidia_version_file:
-    # parse this json file to get the version of the nvidia toolchain
-    NVIDIA_TOOLCHAIN_VERSION = json.load(nvidia_version_file)
+def download_and_copy_dependencies():
+    nvidia_version_path = os.path.join(get_base_dir(), "cmake", "nvidia-toolchain-version.json")
+    with open(nvidia_version_path, "r") as nvidia_version_file:
+        # parse this json file to get the version of the nvidia toolchain
+        NVIDIA_TOOLCHAIN_VERSION = json.load(nvidia_version_file)
 
-exe_extension = sysconfig.get_config_var("EXE")
-download_and_copy(
-    name="nvcc",
-    src_func=lambda system, arch, version: f"cuda_nvcc-{system}-{arch}-{version}-archive/bin/ptxas{exe_extension}",
-    dst_path="bin/ptxas",
-    variable="TRITON_PTXAS_PATH",
-    version=NVIDIA_TOOLCHAIN_VERSION["ptxas"],
-    url_func=lambda system, arch, version:
-    f"https://developer.download.nvidia.com/compute/cuda/redist/cuda_nvcc/{system}-{arch}/cuda_nvcc-{system}-{arch}-{version}-archive.tar.xz",
-)
-download_and_copy(
-    name="cuobjdump",
-    src_func=lambda system, arch, version:
-    f"cuda_cuobjdump-{system}-{arch}-{version}-archive/bin/cuobjdump{exe_extension}",
-    dst_path="bin/cuobjdump",
-    variable="TRITON_CUOBJDUMP_PATH",
-    version=NVIDIA_TOOLCHAIN_VERSION["cuobjdump"],
-    url_func=lambda system, arch, version:
-    f"https://developer.download.nvidia.com/compute/cuda/redist/cuda_cuobjdump/{system}-{arch}/cuda_cuobjdump-{system}-{arch}-{version}-archive.tar.xz",
-)
-download_and_copy(
-    name="nvdisasm",
-    src_func=lambda system, arch, version:
-    f"cuda_nvdisasm-{system}-{arch}-{version}-archive/bin/nvdisasm{exe_extension}",
-    dst_path="bin/nvdisasm",
-    variable="TRITON_NVDISASM_PATH",
-    version=NVIDIA_TOOLCHAIN_VERSION["nvdisasm"],
-    url_func=lambda system, arch, version:
-    f"https://developer.download.nvidia.com/compute/cuda/redist/cuda_nvdisasm/{system}-{arch}/cuda_nvdisasm-{system}-{arch}-{version}-archive.tar.xz",
-)
-download_and_copy(
-    name="nvcc",
-    src_func=lambda system, arch, version: f"cuda_nvcc-{system}-{arch}-{version}-archive/include",
-    dst_path="include",
-    variable="TRITON_CUDACRT_PATH",
-    version=NVIDIA_TOOLCHAIN_VERSION["cudacrt"],
-    url_func=lambda system, arch, version:
-    f"https://developer.download.nvidia.com/compute/cuda/redist/cuda_nvcc/{system}-{arch}/cuda_nvcc-{system}-{arch}-{version}-archive.tar.xz",
-)
-download_and_copy(
-    name="cudart",
-    src_func=lambda system, arch, version: f"cuda_cudart-{system}-{arch}-{version}-archive/include",
-    dst_path="include",
-    variable="TRITON_CUDART_PATH",
-    version=NVIDIA_TOOLCHAIN_VERSION["cudart"],
-    url_func=lambda system, arch, version:
-    f"https://developer.download.nvidia.com/compute/cuda/redist/cuda_cudart/{system}-{arch}/cuda_cudart-{system}-{arch}-{version}-archive.tar.xz",
-)
-download_and_copy(
-    name="cupti",
-    src_func=lambda system, arch, version: f"cuda_cupti-{system}-{arch}-{version}-archive/include",
-    dst_path="include",
-    variable="TRITON_CUPTI_INCLUDE_PATH",
-    version=NVIDIA_TOOLCHAIN_VERSION["cupti"],
-    url_func=lambda system, arch, version:
-    f"https://developer.download.nvidia.com/compute/cuda/redist/cuda_cupti/{system}-{arch}/cuda_cupti-{system}-{arch}-{version}-archive.tar.xz",
-)
-download_and_copy(
-    name="cupti",
-    src_func=lambda system, arch, version: f"cuda_cupti-{system}-{arch}-{version}-archive/lib",
-    dst_path="lib/cupti",
-    variable="TRITON_CUPTI_LIB_PATH",
-    version=NVIDIA_TOOLCHAIN_VERSION["cupti"],
-    url_func=lambda system, arch, version:
-    f"https://developer.download.nvidia.com/compute/cuda/redist/cuda_cupti/{system}-{arch}/cuda_cupti-{system}-{arch}-{version}-archive.tar.xz",
-)
+    exe_extension = sysconfig.get_config_var("EXE")
+    download_and_copy(
+        name="nvcc",
+        src_func=lambda system, arch, version: f"cuda_nvcc-{system}-{arch}-{version}-archive/bin/ptxas{exe_extension}",
+        dst_path="bin/ptxas",
+        variable="TRITON_PTXAS_PATH",
+        version=NVIDIA_TOOLCHAIN_VERSION["ptxas"],
+        url_func=lambda system, arch, version:
+        f"https://developer.download.nvidia.com/compute/cuda/redist/cuda_nvcc/{system}-{arch}/cuda_nvcc-{system}-{arch}-{version}-archive.tar.xz",
+    )
+    download_and_copy(
+        name="cuobjdump",
+        src_func=lambda system, arch, version:
+        f"cuda_cuobjdump-{system}-{arch}-{version}-archive/bin/cuobjdump{exe_extension}",
+        dst_path="bin/cuobjdump",
+        variable="TRITON_CUOBJDUMP_PATH",
+        version=NVIDIA_TOOLCHAIN_VERSION["cuobjdump"],
+        url_func=lambda system, arch, version:
+        f"https://developer.download.nvidia.com/compute/cuda/redist/cuda_cuobjdump/{system}-{arch}/cuda_cuobjdump-{system}-{arch}-{version}-archive.tar.xz",
+    )
+    download_and_copy(
+        name="nvdisasm",
+        src_func=lambda system, arch, version:
+        f"cuda_nvdisasm-{system}-{arch}-{version}-archive/bin/nvdisasm{exe_extension}",
+        dst_path="bin/nvdisasm",
+        variable="TRITON_NVDISASM_PATH",
+        version=NVIDIA_TOOLCHAIN_VERSION["nvdisasm"],
+        url_func=lambda system, arch, version:
+        f"https://developer.download.nvidia.com/compute/cuda/redist/cuda_nvdisasm/{system}-{arch}/cuda_nvdisasm-{system}-{arch}-{version}-archive.tar.xz",
+    )
+    download_and_copy(
+        name="nvcc",
+        src_func=lambda system, arch, version: f"cuda_nvcc-{system}-{arch}-{version}-archive/include",
+        dst_path="include",
+        variable="TRITON_CUDACRT_PATH",
+        version=NVIDIA_TOOLCHAIN_VERSION["cudacrt"],
+        url_func=lambda system, arch, version:
+        f"https://developer.download.nvidia.com/compute/cuda/redist/cuda_nvcc/{system}-{arch}/cuda_nvcc-{system}-{arch}-{version}-archive.tar.xz",
+    )
+    download_and_copy(
+        name="cudart",
+        src_func=lambda system, arch, version: f"cuda_cudart-{system}-{arch}-{version}-archive/include",
+        dst_path="include",
+        variable="TRITON_CUDART_PATH",
+        version=NVIDIA_TOOLCHAIN_VERSION["cudart"],
+        url_func=lambda system, arch, version:
+        f"https://developer.download.nvidia.com/compute/cuda/redist/cuda_cudart/{system}-{arch}/cuda_cudart-{system}-{arch}-{version}-archive.tar.xz",
+    )
+    download_and_copy(
+        name="cupti",
+        src_func=lambda system, arch, version: f"cuda_cupti-{system}-{arch}-{version}-archive/include",
+        dst_path="include",
+        variable="TRITON_CUPTI_INCLUDE_PATH",
+        version=NVIDIA_TOOLCHAIN_VERSION["cupti"],
+        url_func=lambda system, arch, version:
+        f"https://developer.download.nvidia.com/compute/cuda/redist/cuda_cupti/{system}-{arch}/cuda_cupti-{system}-{arch}-{version}-archive.tar.xz",
+    )
+    download_and_copy(
+        name="cupti",
+        src_func=lambda system, arch, version: f"cuda_cupti-{system}-{arch}-{version}-archive/lib",
+        dst_path="lib/cupti",
+        variable="TRITON_CUPTI_LIB_PATH",
+        version=NVIDIA_TOOLCHAIN_VERSION["cupti"],
+        url_func=lambda system, arch, version:
+        f"https://developer.download.nvidia.com/compute/cuda/redist/cuda_cupti/{system}-{arch}/cuda_cupti-{system}-{arch}-{version}-archive.tar.xz",
+    )
+
+
 backends = [*BackendInstaller.copy(["nvidia", "amd"]), *BackendInstaller.copy_externals()]
+
+
+def get_package_dirs():
+    yield ("", "python")
+
+    for backend in backends:
+        yield (f"triton.backends.{backend.name}", backend.backend_dir)
+
+        if backend.language_dir:
+            # Install the contents of each backend's `language` directory into
+            # `triton.language.extra`.
+            for x in os.listdir(backend.language_dir):
+                yield (f"triton.language.extra.{x}", os.path.join(backend.language_dir, x))
+
+        if backend.tools_dir:
+            # Install the contents of each backend's `tools` directory into
+            # `triton.tools.extra`.
+            for x in os.listdir(backend.tools_dir):
+                yield (f"triton.tools.extra.{x}", os.path.join(backend.tools_dir, x))
+
+    if check_env_flag("TRITON_BUILD_PROTON", "ON"):  # Default ON
+        yield ("triton.profiler", "third_party/proton/proton")
 
 
 def add_link_to_backends():
@@ -592,7 +612,8 @@ def add_link_to_backends():
         if backend.language_dir:
             # Link the contents of each backend's `language` directory into
             # `triton.language.extra`.
-            extra_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "triton", "language", "extra"))
+            extra_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "python", "triton", "language",
+                                                     "extra"))
             for x in os.listdir(backend.language_dir):
                 src_dir = os.path.join(backend.language_dir, x)
                 install_dir = os.path.join(extra_dir, x)
@@ -601,7 +622,7 @@ def add_link_to_backends():
         if backend.tools_dir:
             # Link the contents of each backend's `tools` directory into
             # `triton.tools.extra`.
-            extra_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "triton", "tools", "extra"))
+            extra_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "python", "triton", "tools", "extra"))
             for x in os.listdir(backend.tools_dir):
                 src_dir = os.path.join(backend.tools_dir, x)
                 install_dir = os.path.join(extra_dir, x)
@@ -609,8 +630,8 @@ def add_link_to_backends():
 
 
 def add_link_to_proton():
-    proton_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), os.pardir, "third_party", "proton", "proton"))
-    proton_install_dir = os.path.join(os.path.dirname(__file__), "triton", "profiler")
+    proton_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "third_party", "proton", "proton"))
+    proton_install_dir = os.path.join(os.path.dirname(__file__), "python", "triton", "profiler")
     update_symlink(proton_install_dir, proton_dir)
 
 
@@ -620,84 +641,18 @@ def add_links():
         add_link_to_proton()
 
 
-class plugin_install(install):
-
-    def run(self):
-        add_links()
-        install.run(self)
-
-
 class plugin_develop(develop):
 
     def run(self):
         add_links()
-        develop.run(self)
+        super().run()
 
 
-class plugin_bdist_wheel(bdist_wheel):
-
-    def run(self):
-        add_links()
-        bdist_wheel.run(self)
-
-
-class plugin_egginfo(egg_info):
+class plugin_editable_wheel(editable_wheel):
 
     def run(self):
         add_links()
-        egg_info.run(self)
-
-
-package_data = {
-    "triton/tools/extra": sum((b.tools_package_data for b in backends), []),
-    **{f"triton/backends/{b.name}": b.package_data
-       for b in backends}, "triton/language/extra": sum((b.language_package_data for b in backends), [])
-}
-
-
-def get_extra_packages(extra_name):
-    packages = []
-    extra_file_extensions = {"language": (".py"), "tools": (".c", ".h", ".cpp")}
-    assert extra_name in extra_file_extensions, f"{extra_name} extra is not valid"
-
-    for backend in backends:
-        backend_extra_dir = getattr(backend, f"{extra_name}_dir", None)
-        if backend_extra_dir is None:
-            continue
-
-        # Walk the specified directory of each backend to enumerate
-        # any subpackages, which will be added to extra_package.
-        for dir, dirs, files in os.walk(backend_extra_dir, followlinks=True):
-            if not any(f for f in files if f.endswith(extra_file_extensions[extra_name])) or dir == backend_extra_dir:
-                # Ignore directories with no relevant files
-                # or the root directory
-                continue
-            subpackage = os.path.relpath(dir, backend_extra_dir)
-            package = os.path.join(f"triton/{extra_name}/extra", subpackage)
-            packages.append(package)
-
-    return list(packages)
-
-
-def get_packages():
-    packages = [
-        "triton",
-        "triton/_C",
-        "triton/compiler",
-        "triton/language",
-        "triton/language/extra",
-        "triton/runtime",
-        "triton/backends",
-        "triton/tools",
-        "triton/tools/extra",
-    ]
-    packages += [f'triton/backends/{backend.name}' for backend in backends]
-    packages += get_extra_packages("language")
-    packages += get_extra_packages("tools")
-    if check_env_flag("TRITON_BUILD_PROTON", "ON"):  # Default ON
-        packages += ["triton/profiler"]
-
-    return packages
+        super().run()
 
 
 def get_entry_points():
@@ -707,6 +662,7 @@ def get_entry_points():
             "proton-viewer = triton.profiler.viewer:main",
             "proton = triton.profiler.proton:main",
         ]
+    entry_points["triton.backends"] = [f"{b.name} = triton.backends.{b.name}" for b in backends]
     return entry_points
 
 
@@ -734,27 +690,34 @@ def get_git_version_suffix():
         return get_git_commit_hash()
 
 
+# keep it separate for easy substitution
+TRITON_VERSION = "3.3.0" + get_git_version_suffix() + os.environ.get("TRITON_WHEEL_VERSION_SUFFIX", "")
+
+package_dirs = dict(get_package_dirs())
+extra_packages = [x for x in package_dirs if x != ""]
+
 setup(
     name=os.environ.get("TRITON_WHEEL_NAME", "triton"),
-    version="3.3.0" + get_git_version_suffix() + os.environ.get("TRITON_WHEEL_VERSION_SUFFIX", ""),
+    version=TRITON_VERSION,
     author="Philippe Tillet",
     author_email="phil@openai.com",
     description="A language and compiler for custom Deep Learning operations",
     long_description="",
-    install_requires=["setuptools>=40.8.0"],
-    packages=get_packages(),
+    install_requires=[
+        "setuptools>=40.8.0",
+        "importlib-metadata; python_version < '3.10'",
+    ],
+    packages=find_packages(where="python") + extra_packages,
+    package_dir=package_dirs,
     entry_points=get_entry_points(),
-    package_data=package_data,
     include_package_data=True,
     ext_modules=[CMakeExtension("triton", "triton/_C/")],
     cmdclass={
         "build_ext": CMakeBuild,
         "build_py": CMakeBuildPy,
         "clean": CMakeClean,
-        "install": plugin_install,
         "develop": plugin_develop,
-        "bdist_wheel": plugin_bdist_wheel,
-        "egg_info": plugin_egginfo,
+        "editable_wheel": plugin_editable_wheel,
     },
     zip_safe=False,
     # for PyPI
