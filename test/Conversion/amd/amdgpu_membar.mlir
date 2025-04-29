@@ -54,7 +54,7 @@ tt.func @pipelined_async_copy_local_to_global_2(%A: !tt.ptr<f16>) {
   // CHECK: tt.return
   tt.return
 }
-// Check that AsyncWaits waiting on multiple values produce one barrier
+// Check that multiple LocalLoads waiting on the same AsyncWait produce one barrier
 // CHECK-LABEL: pipelined_async_copy_local_to_global_3
 tt.func @pipelined_async_copy_local_to_global_3(%A: !tt.ptr<f16>, %B: !tt.ptr<f16>) {
   %index_0 = arith.constant 0 : i32

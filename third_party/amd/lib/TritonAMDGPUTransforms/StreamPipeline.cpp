@@ -307,6 +307,8 @@ bool StreamPipeliner::createAsyncCopy(tt::LoadOp loadOp, Value alloc,
   assert(useAsyncCopy);
   // If we have a single buffer we would require another barrier after the
   // local_reads so instead we fall back to pipeline with registers
+  // Removing this check will create incorrect IR, see
+  // MembarUtility.cpp:isSyncedByAsyncWait
   if (numBuffers == 1)
     return false;
 
