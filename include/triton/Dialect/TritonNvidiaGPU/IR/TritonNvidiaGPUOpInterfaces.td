@@ -40,6 +40,15 @@ def MMAv5OpInterface : OpInterface<"MMAv5OpInterface"> {
                     "void",
                     "setPredicate",
                     (ins "::mlir::Value":$pred)>,
+    InterfaceMethod<"Get the memory dependencies of the accumulator.",
+                    "::mlir::Value",
+                    "getAccDep">,
+    InterfaceMethod<"Get the mutable memory dependencies of the accumulator.",
+                    "::mlir::MutableOperandRange",
+                    "getAccDepMutable">,
+    InterfaceMethod<"Get the produced write dependency of the accumulator.",
+                    "::mlir::Value",
+                    "getToken">,
   ];
 }
 #endif // TRITON_NVIDIAGPU_OP_INTERFACES
