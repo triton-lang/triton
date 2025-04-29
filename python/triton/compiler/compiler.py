@@ -257,7 +257,9 @@ class CompileTimer:
 
 
 def compile(src, target=None, options=None):
-    timer = CompileTimer()
+    compilation_listener = config.compilation.listener
+    if compilation_listener:
+        timer = CompileTimer()
 
     if target is None:
         target = driver.active.get_current_target()
@@ -296,7 +298,7 @@ def compile(src, target=None, options=None):
     if not always_compile and metadata_path is not None:
         # cache hit!
         res = CompiledKernel(src, metadata_group, hash)
-        if compilation_listener := config.compilation.listener:
+        if compilation_listener:
             compilation_listener(
                 src=src,
                 metadata=res.metadata._asdict(),
@@ -340,7 +342,8 @@ def compile(src, target=None, options=None):
         module.create_location_snapshot(src.path)
         print(f"Creating new locations for {src.path}")
 
-    timer.finished_ir_initialization()
+    if compilation_listener:
+        timer.finished_ir_initialization()
     for ext, compile_ir in list(stages.items())[first_stage:]:
         next_module = compile_ir(module, metadata)
         ir_filename = f"{file_name}.{ext}"
@@ -358,7 +361,8 @@ def compile(src, target=None, options=None):
             next_module.create_location_snapshot(ir_full_name)
             print(f"Creating new locations for {ir_full_name}")
         module = next_module
-        timer.stage_finished(ext)
+        if compilation_listener:
+            timer.stage_finished(ext)
     # write-back metadata
     metadata_group[metadata_filename] = fn_cache_manager.put(json.dumps(metadata, default=vars), metadata_filename,
                                                              binary=False)
@@ -376,7 +380,7 @@ def compile(src, target=None, options=None):
         context.disable_multithreading()
 
     # notify any listener
-    if compilation_listener := config.compilation.listener:
+    if compilation_listener:
         compilation_listener(src=src, metadata=metadata, times=timer.end(), cache_hit=False)
     # return handle to compiled kernel
     return CompiledKernel(src, metadata_group, hash)
