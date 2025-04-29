@@ -181,7 +181,7 @@ LogicalResult lowerDistributedToSharedStmatrix(
   auto tile = LinearLayout::identity1D(32 / bitwidth, kReg, kOffset) *
               LinearLayout::identity1D(4, kLane, kOffset);
   // Find if there is a register permutation that allows us to divideLeft
-  auto maybeAction = actionDivideLeft(cvt, tile);
+  auto maybeAction = regPermForDivideLeft(cvt, tile);
   if (!maybeAction.has_value()) {
     return failure();
   }

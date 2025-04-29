@@ -203,8 +203,8 @@ LinearLayout zerosLike(const LinearLayout &layout) {
                       /*requireSurjective=*/false);
 }
 
-std::optional<ColumnAction> actionDivideLeft(const LinearLayout &A,
-                                             const LinearLayout &B) {
+std::optional<ColumnAction> regPermForDivideLeft(const LinearLayout &A,
+                                                 const LinearLayout &B) {
   // We can implement this generically of any dimension, but for now we only do
   // it for regs to keep the API simpler
   assert(A.getNumInDims() != 0);
