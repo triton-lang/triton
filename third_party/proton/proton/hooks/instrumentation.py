@@ -114,7 +114,7 @@ class InstrumentationHook(Hook):
     active_count: int = 0
     enable_host_buffer: bool = False
     host_buffer: Optional[Any] = None
-    profile_buffer_size: int = 16 * 1024 * 1024
+    profile_buffer_size: int = 256 * 1024
     profile_buffer_alignment: int = 128
 
     def __init__(self, mode_obj: Union[None, str, mode.InstrumentationMode]):
@@ -235,13 +235,15 @@ class InstrumentationHook(Hook):
 
     def enter(self, lazy_dict: LazyDict) -> None:
         func = lazy_dict.data.get("function")
-        libproton.enter_instrumented_op(func, self._data_ptr(), self.profile_buffer_size)
+        alloc_size = 0 if self.buffer is None else self.buffer.element_size() * self.buffer.numel()
+        libproton.enter_instrumented_op(func, self._data_ptr(), alloc_size)
         if InstrumentationHook.enable_host_buffer:
             InstrumentationHook.host_buffer = None
 
     def exit(self, lazy_dict: LazyDict) -> None:
         func = lazy_dict.data.get("function")
-        libproton.exit_instrumented_op(func, self._data_ptr(), self.profile_buffer_size)
+        alloc_size = 0 if self.buffer is None else self.buffer.element_size() * self.buffer.numel()
+        libproton.exit_instrumented_op(func, self._data_ptr(), alloc_size)
 
         if InstrumentationHook.enable_host_buffer:
             # copy profiling buffer to CPU for external processing
