@@ -1,6 +1,6 @@
 from .state import enter_state, exit_state
 from .scope import enter_scope, exit_scope
-from triton import config
+from triton import knobs
 from triton.compiler import LazyDict
 
 COMPUTE_METADATA_SCOPE_NAME = "__proton_launch_metadata"
@@ -24,12 +24,12 @@ class TritonHook:
 
 
 def register_triton_hook() -> None:
-    if config.runtime.launch_enter_hook is None:
-        config.runtime.launch_enter_hook = TritonHook.enter
-        config.runtime.launch_exit_hook = TritonHook.exit
+    if knobs.runtime.launch_enter_hook is None:
+        knobs.runtime.launch_enter_hook = TritonHook.enter
+        knobs.runtime.launch_exit_hook = TritonHook.exit
 
 
 def unregister_triton_hook() -> None:
-    if config.runtime.launch_enter_hook == TritonHook.enter:
-        config.runtime.launch_enter_hook = None
-        config.runtime.launch_exit_hook = None
+    if knobs.runtime.launch_enter_hook == TritonHook.enter:
+        knobs.runtime.launch_enter_hook = None
+        knobs.runtime.launch_exit_hook = None
