@@ -6,7 +6,7 @@ from typing import Dict, List, Optional
 import base64
 import hashlib
 
-from .. import config
+from .. import knobs
 
 
 class CacheManager(ABC):
@@ -37,16 +37,16 @@ class FileCacheManager(CacheManager):
         self.key = key
         self.lock_path = None
         if dump:
-            self.cache_dir = config.cache.dump_dir
+            self.cache_dir = knobs.cache.dump_dir
             self.cache_dir = os.path.join(self.cache_dir, self.key)
             self.lock_path = os.path.join(self.cache_dir, "lock")
             os.makedirs(self.cache_dir, exist_ok=True)
         elif override:
-            self.cache_dir = config.cache.override_dir
+            self.cache_dir = knobs.cache.override_dir
             self.cache_dir = os.path.join(self.cache_dir, self.key)
         else:
             # create cache directory if it doesn't exist
-            self.cache_dir = config.cache.dir
+            self.cache_dir = knobs.cache.dir
             if self.cache_dir:
                 self.cache_dir = os.path.join(self.cache_dir, self.key)
                 self.lock_path = os.path.join(self.cache_dir, "lock")
@@ -142,10 +142,10 @@ class RedisRemoteCacheBackend(RemoteCacheBackend):
     def __init__(self, key):
         import redis
         self._key = key
-        self._key_fmt = config.cache.redis.key_format
+        self._key_fmt = knobs.cache.redis.key_format
         self._redis = redis.Redis(
-            host=config.cache.redis.host,
-            port=config.cache.redis.port,
+            host=knobs.cache.redis.host,
+            port=knobs.cache.redis.port,
         )
 
     def _get_key(self, filename: str) -> str:
@@ -163,7 +163,7 @@ class RemoteCacheManager(CacheManager):
 
     def __init__(self, key, override=False, dump=False):
         # Setup backend pointed too by `TRITON_REMOTE_CACHE_BACKEND`.
-        remote_cache_cls = config.cache.remote_manager_class
+        remote_cache_cls = knobs.cache.remote_manager_class
         if not remote_cache_cls:
             raise RuntimeError(
                 "Unable to instantiate RemoteCacheManager, TRITON_REMOTE_CACHE_BACKEND doesn't point to a valid class")
@@ -242,17 +242,17 @@ def _base32(key):
 
 
 def get_cache_manager(key) -> CacheManager:
-    cls = config.cache.manager_class or FileCacheManager
+    cls = knobs.cache.manager_class or FileCacheManager
     return cls(_base32(key))
 
 
 def get_override_manager(key) -> CacheManager:
-    cls = config.cache.manager_class or FileCacheManager
+    cls = knobs.cache.manager_class or FileCacheManager
     return cls(_base32(key), override=True)
 
 
 def get_dump_manager(key) -> CacheManager:
-    cls = config.cache.manager_class or FileCacheManager
+    cls = knobs.cache.manager_class or FileCacheManager
     return cls(_base32(key), dump=True)
 
 

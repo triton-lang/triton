@@ -7,7 +7,7 @@ import itertools
 from types import ModuleType
 from typing import Any, Callable, Dict, Optional, Tuple, Type, Union, Iterable, List
 
-from .. import config, language
+from .. import knobs, language
 from .._C.libtriton import ir
 from ..language import constexpr, semantic, str_to_ty, tensor
 from ..language.core import _unwrap_if_constexpr, base_value, base_type
@@ -369,7 +369,7 @@ class CodeGenerator(ast.NodeVisitor):
                     # because you should be able to do
                     #   @triton.jit def fn(x: tl.constexpr = GLOBAL): ...
                     self.visiting_arg_default_value,  #
-                    config.compilation.allow_non_constexpr_globals,
+                    knobs.compilation.allow_non_constexpr_globals,
             ]):
                 return val
             raise NameError(
@@ -1197,7 +1197,7 @@ class CodeGenerator(ast.NodeVisitor):
                 generator.visit(fn.parse())
             except Exception as e:
                 # Wrap the error in the callee with the location of the call.
-                if config.compilation.front_end_debugging:
+                if knobs.compilation.front_end_debugging:
                     raise
                 raise CompilationError(self.jit_fn.src, self.cur_node, None) from e
 
@@ -1237,7 +1237,7 @@ class CodeGenerator(ast.NodeVisitor):
                     ret = language.tuple(ret)
                 return ret
             except Exception as e:
-                if config.compilation.front_end_debugging:
+                if knobs.compilation.front_end_debugging:
                     raise
                 # Normally when we raise a CompilationError, we raise it as
                 # `from None`, because the original fileline from the exception
@@ -1318,7 +1318,7 @@ class CodeGenerator(ast.NodeVisitor):
             except CompilationError:
                 raise
             except Exception as e:
-                if config.compilation.front_end_debugging:
+                if knobs.compilation.front_end_debugging:
                     raise
                 # Wrap the error in a CompilationError which contains the source
                 # of the @jit function.

@@ -4,7 +4,7 @@ import json
 from .._C.libtriton import get_cache_invalidating_env_vars, ir
 from ..backends import backends
 from ..backends.compiler import BaseBackend, GPUTarget
-from .. import __version__, config
+from .. import __version__, knobs
 from ..runtime.autotuner import OutOfResources
 from ..runtime.cache import get_cache_manager, get_dump_manager, get_override_manager
 from ..runtime.driver import driver
@@ -185,7 +185,7 @@ def filter_traceback(e: BaseException):
 
     These are uninteresting to the user -- "just show me *my* code!"
     """
-    if config.compilation.front_end_debugging:
+    if knobs.compilation.front_end_debugging:
         return
 
     if e.__cause__ is not None:
@@ -231,7 +231,7 @@ class CompileTimer:
     def stage_finished(self, stage_name: str) -> None:
         self.lowering_stage_ends.append((stage_name, time.time()))
 
-    def end(self) -> config.CompileTimes:
+    def end(self) -> knobs.CompileTimes:
         timestamp = time.time()
         if self.ir_initialization_end is None:
             self.ir_initialization_end = timestamp
@@ -249,7 +249,7 @@ class CompileTimer:
             lowering_stage_durations.append((stage_name, delta(stage_start, stage_end)))
             stage_start = stage_end
 
-        return config.CompileTimes(
+        return knobs.CompileTimes(
             ir_initialization=delta(self.start, self.ir_initialization_end),
             lowering_stages=lowering_stage_durations,
             store_results=delta(stage_start, self.store_results_end),
@@ -257,7 +257,7 @@ class CompileTimer:
 
 
 def compile(src, target=None, options=None):
-    compilation_listener = config.compilation.listener
+    compilation_listener = knobs.compilation.listener
     if compilation_listener:
         timer = CompileTimer()
 
@@ -281,9 +281,9 @@ def compile(src, target=None, options=None):
     fn_cache_manager = get_cache_manager(hash)
     # For dumping/overriding only hash the source as we want it to be independent of triton
     # core changes to make it easier to track kernels by hash.
-    enable_override = config.compilation.override
-    enable_ir_dump = config.compilation.dump_ir
-    store_only_binary = config.compilation.store_binary_only
+    enable_override = knobs.compilation.override
+    enable_ir_dump = knobs.compilation.dump_ir
+    store_only_binary = knobs.compilation.store_binary_only
     fn_override_manager = get_override_manager(src.hash()) if enable_override else None
     fn_dump_manager = get_dump_manager(src.hash()) if enable_ir_dump else None
     # Pre-truncate the file name here to avoid hitting the 255 character limit on common platforms.
@@ -294,7 +294,7 @@ def compile(src, target=None, options=None):
     metadata_filename = f"{file_name}.json"
     metadata_group = fn_cache_manager.get_group(metadata_filename) or {}
     metadata_path = metadata_group.get(metadata_filename)
-    always_compile = config.compilation.always_compile
+    always_compile = knobs.compilation.always_compile
     if not always_compile and metadata_path is not None:
         # cache hit!
         res = CompiledKernel(src, metadata_group, hash)
@@ -337,7 +337,7 @@ def compile(src, target=None, options=None):
     except Exception as e:
         filter_traceback(e)
         raise
-    use_ir_loc = config.compilation.use_ir_loc
+    use_ir_loc = knobs.compilation.use_ir_loc
     if ir_source and use_ir_loc:
         module.create_location_snapshot(src.path)
         print(f"Creating new locations for {src.path}")
@@ -376,7 +376,7 @@ def compile(src, target=None, options=None):
     # this is likely due to the llvm-symbolizer forking a process
     # TODO: Reconcile the difference here between the ASAN and non-ASAN path with enabling
     # multithreading in the MLIR context
-    if not config.compilation.enable_asan:
+    if not knobs.compilation.enable_asan:
         context.disable_multithreading()
 
     # notify any listener
@@ -482,7 +482,7 @@ class CompiledKernel:
         return super().__getattribute__(name)
 
     def launch_metadata(self, grid, stream, *args):
-        if config.runtime.launch_enter_hook is None:
+        if knobs.runtime.launch_enter_hook is None:
             return None
         ret = LazyDict({"name": self.name, "function": self.function, "stream": stream})
         if not isinstance(self.src, ASTSource) or self.src.fn.launch_metadata is None:
@@ -504,6 +504,6 @@ class CompiledKernel:
                 stream = driver.active.get_current_stream(device)
             launch_metadata = self.launch_metadata(grid, stream, *args)
             self.run(grid[0], grid[1], grid[2], stream, self.function, self.packed_metadata, launch_metadata,
-                     config.runtime.launch_enter_hook, config.runtime.launch_exit_hook, *args)
+                     knobs.runtime.launch_enter_hook, knobs.runtime.launch_exit_hook, *args)
 
         return runner
