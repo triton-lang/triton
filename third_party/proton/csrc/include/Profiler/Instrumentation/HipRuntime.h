@@ -14,6 +14,7 @@ public:
   void freeHostBuffer(uint8_t *buffer) override;
   uint64_t getDevice() override;
   void *getPriorityStream() override;
+  void synchronizeStream(void *stream) override;
   void
   processHostBuffer(uint8_t *hostBuffer, size_t hostBufferSize,
                     uint8_t *deviceBuffer, size_t deviceBufferSize,

@@ -38,6 +38,15 @@ void *CudaRuntime::getPriorityStream() {
   return reinterpret_cast<void *>(stream);
 }
 
+void CudaRuntime::synchronizeStream(void *stream) {
+  if (deviceType == DeviceType::CUDA) {
+    cuda::streamSynchronize<true>(reinterpret_cast<CUstream>(stream));
+  } else {
+    throw std::runtime_error(
+        "Unsupported device type for stream synchronization");
+  }
+}
+
 void CudaRuntime::processHostBuffer(
     uint8_t *hostBuffer, size_t hostBufferSize, uint8_t *deviceBuffer,
     size_t deviceBufferSize, void *stream,
