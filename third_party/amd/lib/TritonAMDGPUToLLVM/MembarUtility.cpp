@@ -4,7 +4,7 @@
 namespace mlir::triton::AMD {
 namespace {
 // Returns true if one of the operands is a LocalLoad synced via AsyncWait.
-bool filterAsyncLocalLoads(Operation *op1, Operation *op2) {
+bool filterAsyncLocalLoadsDeppendencies(Operation *op1, Operation *op2) {
   auto isLocalLoadWithAsyncWaitToken = [](Operation *op) {
     auto localLoad = llvm::dyn_cast<triton::gpu::LocalLoadOp>(op);
     if (!localLoad)
@@ -21,6 +21,6 @@ bool filterAsyncLocalLoads(Operation *op1, Operation *op2) {
 } // namespace
 
 bool membarFilter(Operation *op1, Operation *op2) {
-  return filterAsyncLocalLoads(op1, op2);
+  return filterAsyncLocalLoadsDeppendencies(op1, op2);
 }
 } // namespace mlir::triton::AMD

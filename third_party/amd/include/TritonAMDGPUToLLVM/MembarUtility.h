@@ -4,12 +4,13 @@
 #include "mlir/IR/Operation.h"
 
 namespace mlir::triton::AMD {
-// Should be used to filter barriers during Membar Analysis.
-// There is one filter applied:
+// Filter function used in the AMDGPU backend to filter unnecessary barriers
+// during Membar Analysis. Filters applied by this function:
 // 1) Do not create barriers if one operand is a LocalLoad synced by an
-// AsyncWait. This prevents a redundant barrier because AsyncWait will already
-// create a barrier. (see amdgpu_membar.mlir for examples).
-// This fitler can produce incorrect assembly for the following IR:
+// AsyncWait. This prevents a redundant barrier between LocalLoad and prefetches
+// because membar cannot see that subviews from the same shared allocation do
+// not alias when pipelining loads. See amdgpu_membar.mlir for examples.
+// This filter can produce assembly for the following IR:
 //   %tile_a = ttg.subview
 //   %1 = AsyncCopyGlobalToLocal %ptr %tile_a
 //   scf.for
