@@ -15,7 +15,7 @@ from collections import defaultdict
 from pathlib import Path
 from typing import Any, Callable, cast, Dict, Optional, Union
 
-from .. import config
+from .. import knobs
 
 
 # Define a custom LogRecord type with additional attributes for structured logging
@@ -29,7 +29,7 @@ MAX_FILE_SIZE = 100 * 1024 * 1024  # 100MB limit for file content extraction
 
 log = logging.getLogger(__name__)
 triton_trace_log = logging.getLogger("triton.trace")
-triton_trace_folder = config.structured_logging.triton_trace
+triton_trace_folder = knobs.structured_logging.triton_trace
 TRITON_TRACE_HANDLER = None
 
 
