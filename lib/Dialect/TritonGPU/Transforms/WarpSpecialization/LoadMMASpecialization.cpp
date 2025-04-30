@@ -1317,7 +1317,6 @@ void LoadMMASpecialization::runOnOperation() {
       continue;
     WarpSchedule schedule = getInitialSchedule(scheme, loop);
     schedule.serialize(loop);
-    continue;
     int loopNumStages = getNumStagesOrDefault(loop, numStages);
     if (failed(lowerLoops(loop, scheme, schedule, loopNumStages)))
       continue;
