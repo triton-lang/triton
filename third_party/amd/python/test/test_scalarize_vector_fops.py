@@ -96,6 +96,6 @@ def test_check_scalarized():
             assert not ("mfma" in bb or "wmma" in bb)
             found_fmul = True
         # we don't check for v_pk_add because for this kernel,
-        # there are no remaining v_pk_adds (the remaining v_pk_muls are in the prologue)
+        # there are no remaining v_pk_adds (the remaining v_pk_muls are in the epilogue)
 
     assert found_mfma and found_fmul, "couldn't find mfma or fmul"
