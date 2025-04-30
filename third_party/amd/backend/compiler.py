@@ -145,17 +145,6 @@ class HIPBackend(BaseBackend):
         amd.load_dialects(ctx)
 
     @staticmethod
-    def is_within_2gb(arg):
-        import torch
-
-        MAX_INT_32 = 2**31 - 1
-        if hasattr(arg, "ptr_range"):
-            return arg.ptr_range() <= MAX_INT_32
-        if isinstance(arg, torch.Tensor) and hasattr(arg, "untyped_storage"):
-            return arg.untyped_storage().size() <= MAX_INT_32
-        return False
-
-    @staticmethod
     def parse_attr(desc):
         ret = BaseBackend.parse_attr(desc)
         if "S" in desc:
@@ -166,8 +155,7 @@ class HIPBackend(BaseBackend):
     def get_arg_specialization(arg, ty, **kwargs):
         ret = BaseBackend.get_arg_specialization(arg, ty, **kwargs)
         # Only attempt to do buffer ops specialization if buffer ops are enabled.
-        # Otherwise the is_within_2gb check is unnecessary overhead.
-        if knobs.amd.use_buffer_ops and ty == "tensor" and HIPBackend.is_within_2gb(arg):
+        if knobs.amd.use_buffer_ops and ty == "tensor":
             ret += "S"
         return ret
 
