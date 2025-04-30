@@ -1,4 +1,4 @@
-// RUN: triton-opt %s -test-print-alignment -split-input-file -o /dev/null
+// RUN: triton-opt %s -test-print-alignment -split-input-file -verify-diagnostics=only-expected -o /dev/null
 
 tt.func @cast() {
   // expected-remark @below {{contiguity = [1], divisibility = [1], constancy = [1], constant_value = 1}}
@@ -7,8 +7,8 @@ tt.func @cast() {
   %0 = arith.extsi %cst : i32 to i64
   // expected-remark @below {{contiguity = [1], divisibility = [1], constancy = [128], constant_value = 1}}
   %cst_tensor = arith.constant dense<1> : tensor<128xi32>
-  // expected-remark @below {{contiguity = [1], divisibility = [1], constancy = [128], constant_value = 1}}
   // Bitcast preserves axis info for same-width types.
+  // expected-remark @below {{contiguity = [1], divisibility = [1], constancy = [128], constant_value = 1}}
   %1 = tt.bitcast %cst_tensor : tensor<128xi32> -> tensor<128xf32>
   tt.return
 }
@@ -466,9 +466,9 @@ tt.func @for() {
   %a, %b, %c = scf.for %iv = %lb to %ub step %step iter_args(%a = %a_init, %b = %b_init, %c = %c_init) -> (tensor<128x32xi32>, tensor<128x32xi32>, tensor<128x32xi32>) : i32 {
     // expected-remark @below {{contiguity = [1], divisibility = [16], constancy = [1], constant_value = <none>}}
     %t = arith.addi %iv, %lb : i32
-    // expected-remark @below {{contiguity = [1, 1], divisibility = [1, 1], constancy = [128, 32], constant_value = <none>}}
-    // expected-remark @below {{contiguity = [1, 1], divisibility = [1, 1], constancy = [128, 32], constant_value = <none>}}
-    // expected-remark @below {{contiguity = [1, 1], divisibility = [4, 4], constancy = [128, 32], constant_value = 4}}
+    // TODO-remark(this remark is wrong, needs to be fixed) @below {{contiguity = [1, 1], divisibility = [1, 1], constancy = [128, 32], constant_value = <none>}}
+    // TODO-remark(this remark is wrong, needs to be fixed) @below {{contiguity = [1, 1], divisibility = [1, 1], constancy = [128, 32], constant_value = <none>}}
+    // TODO-remark(this remark is wrong, needs to be fixed) @below {{contiguity = [1, 1], divisibility = [4, 4], constancy = [128, 32], constant_value = 4}}
     scf.yield %b, %a, %c : tensor<128x32xi32>, tensor<128x32xi32>, tensor<128x32xi32>
   }
   tt.return
@@ -500,18 +500,18 @@ tt.func @for_if(%i1: i1, %arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}) {
   // expected-remark @below {{contiguity = [1, 1], divisibility = [16, 16], constancy = [128, 64], constant_value = <none>}}
   %1 = tt.splat %arg0 : !tt.ptr<f16> -> tensor<128x64x!tt.ptr<f16>>
   %2 = scf.for %arg9 = %c0_i32 to %c10_i32 step %c1_i32 iter_args(%arg1 = %1) -> (tensor<128x64x!tt.ptr<f16>>): i32 {
-    // expected-remark @below {{scf.if}}
-    // expected-remark @below {{contiguity = [1, 1], divisibility = [16, 16], constancy = [128, 64], constant_value = <none>}}
+    // TODO-remark(this remark is wrong, needs to be fixed) @below {{scf.if}}
+    // TODO-remark(this remark is wrong, needs to be fixed) @below {{contiguity = [1, 1], divisibility = [16, 16], constancy = [128, 64], constant_value = <none>}}
     %3 = scf.if %i1 -> (tensor<128x64x!tt.ptr<f16>>) {
       scf.yield %arg1 : tensor<128x64x!tt.ptr<f16>>
     } else {
       scf.yield %arg1 : tensor<128x64x!tt.ptr<f16>>
     }
-    // expected-remark @below {{tt.addptr}}
-    // expected-remark @below {{contiguity = [1, 1], divisibility = [16, 16], constancy = [128, 64], constant_value = <none>}}
+    // TODO-remark(this remark is wrong, needs to be fixed) @below {{tt.addptr}}
+    // TODO-remark(this remark is wrong, needs to be fixed) @below {{contiguity = [1, 1], divisibility = [16, 16], constancy = [128, 64], constant_value = <none>}}
     %4 = tt.addptr %3, %cst : tensor<128x64x!tt.ptr<f16>>, tensor<128x64xi32>
-    // expected-remark @below {{scf.for}}
-    // expected-remark @below {{contiguity = [1, 1], divisibility = [16, 16], constancy = [128, 64], constant_value = <none>}}
+    // TODO-remark(this remark is wrong, needs to be fixed) @below {{scf.for}}
+    // TODO-remark(this remark is wrong, needs to be fixed) @below {{contiguity = [1, 1], divisibility = [16, 16], constancy = [128, 64], constant_value = <none>}}
     scf.yield %1 : tensor<128x64x!tt.ptr<f16>>
   }
   tt.return
@@ -532,14 +532,14 @@ tt.func @for_if_for(%i1: i1, %arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %
   %1 = tt.splat %arg0 : !tt.ptr<f16> -> tensor<128x64x!tt.ptr<f16>>
   // expected-remark @below {{contiguity = [1, 1], divisibility = [8, 8], constancy = [128, 64], constant_value = <none>}}
   %2 = tt.splat %arg1 : !tt.ptr<f16> -> tensor<128x64x!tt.ptr<f16>>
-  // expected-remark @below {{scf.for}}
-  // expected-remark @below {{contiguity = [1, 1], divisibility = [8, 8], constancy = [128, 64], constant_value = <none>}}
-  // expected-remark @below {{scf.if}}
-  // expected-remark @below {{contiguity = [1, 1], divisibility = [8, 8], constancy = [128, 64], constant_value = <none>}}
-  // expected-remark @below {{tt.addptr}}
-  // expected-remark @below {{contiguity = [1, 1], divisibility = [8, 8], constancy = [128, 64], constant_value = <none>}}
-  // expected-remark @below {{scf.for}}
-  // expected-remark @below {{contiguity = [1, 1], divisibility = [16, 16], constancy = [128, 64], constant_value = <none>}}
+  // TODO-remark(this remark is wrong, needs to be fixed) @below {{scf.for}}
+  // TODO-remark(this remark is wrong, needs to be fixed) @below {{contiguity = [1, 1], divisibility = [8, 8], constancy = [128, 64], constant_value = <none>}}
+  // TODO-remark(this remark is wrong, needs to be fixed) @below {{scf.if}}
+  // TODO-remark(this remark is wrong, needs to be fixed) @below {{contiguity = [1, 1], divisibility = [8, 8], constancy = [128, 64], constant_value = <none>}}
+  // TODO-remark(this remark is wrong, needs to be fixed) @below {{tt.addptr}}
+  // TODO-remark(this remark is wrong, needs to be fixed) @below {{contiguity = [1, 1], divisibility = [8, 8], constancy = [128, 64], constant_value = <none>}}
+  // TODO-remark(this remark is wrong, needs to be fixed) @below {{scf.for}}
+  // TODO-remark(this remark is wrong, needs to be fixed) @below {{contiguity = [1, 1], divisibility = [16, 16], constancy = [128, 64], constant_value = <none>}}
   %3 = scf.for %arg9 = %c0_i32 to %c10_i32 step %c1_i32 iter_args(%arg2 = %1) -> (tensor<128x64x!tt.ptr<f16>>) : i32 {
     %4 = scf.if %i1 -> (tensor<128x64x!tt.ptr<f16>>) {
       %5 = scf.for %arg10 = %c0_i32 to %c10_i32 step %c1_i32 iter_args(%arg3 = %2) -> (tensor<128x64x!tt.ptr<f16>>) : i32 {
@@ -682,13 +682,13 @@ tt.func @vecadd_mask_align_16(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32}, 
   %7 = tt.splat %arg1 : !tt.ptr<f32> -> tensor<64x!tt.ptr<f32>>
   %8 = tt.addptr %7, %4 : tensor<64x!tt.ptr<f32>>, tensor<64xi32>
   %9 = tt.splat %n_elements : i32 -> tensor<64xi32>
-  // expected-remark @below {{arith.cmpi slt, %{{.*}} => contiguity = [1], divisibility = [1], constancy = [16], constant_value = <none>}}
+  // TODO-remark(this remark is wrong, needs to be fixed) @below {{arith.cmpi slt, %{{.*}} => contiguity = [1], divisibility = [1], constancy = [16], constant_value = <none>}}
   %mask = arith.cmpi slt, %4, %9 : tensor<64xi32>
   %11 = tt.load %6, %mask : tensor<64x!tt.ptr<f32>>
   %12 = tt.load %8, %mask : tensor<64x!tt.ptr<f32>>
   %13 = arith.addf %11, %12 : tensor<64xf32>
   %14 = tt.splat %arg2 : !tt.ptr<f32> -> tensor<64x!tt.ptr<f32>>
-  // expected-remark @below {{tt.addptr %{{.*}} => contiguity = [64], divisibility = [16], constancy = [1], constant_value = <none>}}
+  // TODO-remark(this remark is wrong, needs to be fixed) @below {{tt.addptr %{{.*}} => contiguity = [64], divisibility = [16], constancy = [1], constant_value = <none>}}
   %15 = tt.addptr %14, %4 : tensor<64x!tt.ptr<f32>>, tensor<64xi32>
   tt.store %15, %13, %mask : tensor<64x!tt.ptr<f32>>
   tt.return
@@ -710,7 +710,7 @@ tt.func @vecadd_mask_align_1(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %
   %7 = tt.splat %arg1 : !tt.ptr<f32> -> tensor<64x!tt.ptr<f32>>
   %8 = tt.addptr %7, %4 : tensor<64x!tt.ptr<f32>>, tensor<64xi32>
   %9 = tt.splat %n_elements : i32 -> tensor<64xi32>
-  // expected-remark @below {{arith.cmpi slt, %{{.*}} => contiguity = [1], divisibility = [1], constancy = [1], constant_value = <none>}}
+  // TODO-remark(this remark is wrong, needs to be fixed) @below {{arith.cmpi slt, %{{.*}} => contiguity = [1], divisibility = [1], constancy = [1], constant_value = <none>}}
   %10 = arith.cmpi slt, %4, %9 : tensor<64xi32>
   %11 = tt.load %6, %10 : tensor<64x!tt.ptr<f32>>
   %12 = tt.load %8, %10 : tensor<64x!tt.ptr<f32>>
@@ -825,8 +825,8 @@ tt.func public @chained_for(%8: tensor<128x64x!tt.ptr<bf16>> {tt.divisibility = 
     %11 = tt.addptr %arg8, %cst_0 : tensor<128x64x!tt.ptr<bf16>>, tensor<128x64xi32>
     scf.yield %11 : tensor<128x64x!tt.ptr<bf16>>
   }
-  // expected-remark @below {{contiguity = [1, 1], divisibility = [16, 16], constancy = [1, 1], constant_value = <none>}}
-  // expected-remark @below {{contiguity = [1, 1], divisibility = [16, 16], constancy = [1, 1], constant_value = <none>}}
+  // TODO-remark(this remark is wrong, needs to be fixed) @below {{contiguity = [1, 1], divisibility = [16, 16], constancy = [1, 1], constant_value = <none>}}
+  // TODO-remark(this remark is wrong, needs to be fixed) @below {{contiguity = [1, 1], divisibility = [16, 16], constancy = [1, 1], constant_value = <none>}}
   %10 = scf.for %arg7 = %c0_i32 to %c16_i32 step %c1_i32 iter_args(%arg8 = %9) -> (tensor<128x64x!tt.ptr<bf16>>)  : i32 {
     tt.store %arg8, %cst : tensor<128x64x!tt.ptr<bf16>>
     %11 = tt.addptr %arg8, %cst_0 : tensor<128x64x!tt.ptr<bf16>>, tensor<128x64xi32>
