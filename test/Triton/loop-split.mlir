@@ -157,4 +157,3 @@ tt.func @split_kernel_step10(%arg0: tensor<256x!tt.ptr<f32>>, %arg1: i32, %arg2:
   }
   tt.return %2#0 : tensor<256xf32>
 }
-
