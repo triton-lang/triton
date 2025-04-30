@@ -805,6 +805,7 @@ setup(
         "sdist": plugin_sdist,
     },
     zip_safe=False,
+    # for PyPI
     keywords=["Compiler", "Deep Learning"],
     url="https://github.com/triton-lang/triton/",
     python_requires=PYTHON_REQUIRES,
