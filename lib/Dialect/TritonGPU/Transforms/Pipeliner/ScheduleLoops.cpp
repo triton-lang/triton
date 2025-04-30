@@ -59,6 +59,8 @@ bool hasLatenciesAssigned(scf::ForOp forOp,
   for (auto &op : forOp.getBody()->without_terminator()) {
     if (opLatency.count(&op))
       return true;
+    if (op.getAttr("ttg.assigned_stage"))
+      return true;
   }
   return false;
 }
@@ -70,12 +72,15 @@ CoarseSchedule scheduleKeyOps(scf::ForOp forOp,
   auto terminator = cast<scf::YieldOp>(forOp.getBody()->getTerminator());
   // Determine all operations that have a non-zero latency
   SmallVector<Operation *> latOps;
+  SmallVector<Operation *> stagedOps;
   for (auto &op : forOp.getBody()->without_terminator()) {
     if (opLatency.count(&op))
       latOps.push_back(&op);
+    if (op.getAttr("ttg.assigned_stage"))
+      stagedOps.push_back(&op);
   }
   // If no latency ops, nothing to schedule
-  if (latOps.empty())
+  if (latOps.empty() && stagedOps.empty())
     return CoarseSchedule(0);
 
   DominanceInfo domInfo(forOp);
@@ -121,6 +126,11 @@ CoarseSchedule scheduleKeyOps(scf::ForOp forOp,
     // (had a non-negative distance due to a latency op).
     if (dist >= 0)
       opToStage[op] = maxDistance - dist;
+  }
+
+  for (Operation *op : stagedOps) {
+    auto stageAttr = op->getAttrOfType<IntegerAttr>("ttg.assigned_stage");
+    opToStage[op] = stageAttr.getInt();
   }
 
   auto stages = llvm::make_second_range(opToStage);

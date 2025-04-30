@@ -64,7 +64,7 @@ struct PipelinedMMA {
 struct PartitionScheme {
   SmallVector<PipelinedLoad> loads;
   SmallVector<PipelinedMMA> mmas;
-  SetVector<Operation *> userOps;
+  SmallVector<math::Exp2Op> exps;
 };
 } // namespace
 
@@ -136,93 +136,180 @@ static PartitionScheme assignPartitions(scf::ForOp loop) {
       if (Operation *defOp = op->getOperand(0).getDefiningOp())
         operandViews.push_back(defOp);
     }
-    if (triton::tools::getBoolEnv("WARP_SPECIALIZE_ATTENTION_FLAG"))
-      break;
+    // if (triton::tools::getBoolEnv("WARP_SPECIALIZE_ATTENTION_FLAG"))
+    //   break;
+  }
+
+  SmallVector<math::Exp2Op> exps;
+  for (auto expOp : loop.getOps<math::Exp2Op>()) {
+    auto tensorTy = dyn_cast<RankedTensorType>(expOp.getType());
+    if (tensorTy && tensorTy.getNumElements() > 256)
+      exps.push_back(expOp);
   }
 
   // Assign initial partitions.
-  Builder b(loop.getContext());
-  SmallVector<Operation *> transitiveUsers;
+  // SmallVector<Operation *> transitiveUsers;
 
+  // DenseSet<Operation *> scheduled;
+  // for (PipelinedLoad &load : loads) {
+  //   for (Operation *allocOp : load.allocOps) {
+  //     scheduled.insert(allocOp);
+  //     transitiveUsers.push_back(allocOp);
+  //   }
+  //   scheduled.insert(load.loadOp);
+  //   transitiveUsers.push_back(load.loadOp);
+  // }
+
+  // for (PipelinedMMA &mma : mmas) {
+  //   scheduled.insert(mma.mmaOp);
+  //   if (mma.storeOp)
+  //     scheduled.insert(mma.storeOp);
+  //   for (Operation *view : mma.operandViews)
+  //     scheduled.insert(view);
+  //   transitiveUsers.push_back(mma.mmaOp);
+  // }
+
+  //// Recursively propagate partitions to the users.
+  // SetVector<Operation *> userOps;
+  // while (!transitiveUsers.empty()) {
+  //   Operation *op = transitiveUsers.pop_back_val();
+
+  //  SmallVector<OpOperand *> uses;
+  //  for (OpOperand &use : op->getUses())
+  //    uses.push_back(&use);
+  //  for (unsigned i = 0; i < uses.size(); ++i) {
+  //    OpOperand *use = uses[i];
+  //    Operation *user = use->getOwner();
+  //    if (user == loop.getBody()->getTerminator()) {
+  //      for (OpOperand &use :
+  //           loop.getRegionIterArg(use->getOperandNumber()).getUses())
+  //        uses.push_back(&use);
+  //    } else {
+  //      if (!scheduled.insert(user).second)
+  //        continue;
+  //      user = loop.getBody()->findAncestorOpInBlock(*user);
+  //      userOps.insert(user);
+  //      transitiveUsers.push_back(user);
+  //    }
+  //  }
+  //}
+
+  return PartitionScheme{std::move(loads), std::move(mmas), std::move(exps)};
+}
+
+static WarpSchedule getInitialSchedule(const PartitionScheme &scheme,
+                                       scf::ForOp loop) {
+  WarpSchedule schedule;
   DenseSet<Operation *> scheduled;
-  for (PipelinedLoad &load : loads) {
-    for (Operation *allocOp : load.allocOps) {
-      scheduled.insert(allocOp);
-      transitiveUsers.push_back(allocOp);
+  auto scheduleOp = [&](Partition *partition, Operation *op) {
+    if (scheduled.insert(op).second) {
+      partition->insert(op);
+      return true;
     }
-    scheduled.insert(load.loadOp);
-    transitiveUsers.push_back(load.loadOp);
-  }
+    return false;
+  };
 
-  for (PipelinedMMA &mma : mmas) {
-    scheduled.insert(mma.mmaOp);
-    if (mma.storeOp)
-      scheduled.insert(mma.storeOp);
-    for (Operation *view : mma.operandViews)
-      scheduled.insert(view);
-    transitiveUsers.push_back(mma.mmaOp);
-  }
+  auto scheduleDependencies = [&](Partition *partition, Operation *op) {
+    SmallVector<Value> deps = getNestedOperands(op).takeVector();
+    while (!deps.empty()) {
+      Value dep = deps.pop_back_val();
 
-  // Recursively propagate partitions to the users.
-  SetVector<Operation *> userOps;
-  while (!transitiveUsers.empty()) {
-    Operation *op = transitiveUsers.pop_back_val();
+      if (auto arg = dyn_cast<BlockArgument>(dep)) {
+        if (arg.getOwner() == loop.getBody() && arg != loop.getInductionVar())
+          deps.push_back(loop.getYieldedValues()[arg.getArgNumber() - 1]);
+        continue;
+      }
 
+      Operation *defOp =
+          loop.getBody()->findAncestorOpInBlock(*dep.getDefiningOp());
+      if (!defOp || !scheduleOp(partition, defOp))
+        continue;
+      llvm::append_range(deps, getNestedOperands(defOp));
+    }
+  };
+
+  auto scheduleUsers = [&](Partition *partition, Operation *op) {
     SmallVector<OpOperand *> uses;
     for (OpOperand &use : op->getUses())
       uses.push_back(&use);
-    for (unsigned i = 0; i < uses.size(); ++i) {
-      OpOperand *use = uses[i];
-      Operation *user = use->getOwner();
+    while (!uses.empty()) {
+      OpOperand *use = uses.pop_back_val();
+      Operation *user = loop.getBody()->findAncestorOpInBlock(*use->getOwner());
+
       if (user == loop.getBody()->getTerminator()) {
         for (OpOperand &use :
              loop.getRegionIterArg(use->getOperandNumber()).getUses())
           uses.push_back(&use);
-      } else {
-        if (!scheduled.insert(user).second)
-          continue;
-        user = loop.getBody()->findAncestorOpInBlock(*user);
-        userOps.insert(user);
-        transitiveUsers.push_back(user);
+        continue;
       }
+
+      if (!scheduleOp(partition, user))
+        continue;
+      for (OpOperand &use : user->getUses())
+        uses.push_back(&use);
     }
-  }
-
-  return PartitionScheme{std::move(loads), std::move(mmas), std::move(userOps)};
-}
-
-static WarpSchedule getInitialSchedule(const PartitionScheme &scheme) {
-  WarpSchedule schedule;
+  };
 
   Partition *loadPartition = schedule.addPartition(0);
   for (const PipelinedLoad &load : scheme.loads) {
-    loadPartition->insert(load.loadOp);
+    scheduleOp(loadPartition, load.loadOp);
     for (Operation *allocOp : load.allocOps)
-      loadPartition->insert(allocOp);
+      scheduleOp(loadPartition, allocOp);
   }
 
   Partition *mmaPartition = schedule.addPartition(1);
   for (const PipelinedMMA &mma : scheme.mmas) {
-    mmaPartition->insert(mma.mmaOp);
+    scheduleOp(mmaPartition, mma.mmaOp);
     if (mma.storeOp)
-      mmaPartition->insert(mma.storeOp);
+      scheduleOp(mmaPartition, mma.storeOp);
     for (Operation *viewOp : mma.operandViews)
-      mmaPartition->insert(viewOp);
+      scheduleOp(mmaPartition, viewOp);
   }
 
-  if (!scheme.userOps.empty()) {
-    Partition *userPartition = schedule.addPartition(2);
-    for (Operation *userOp : scheme.userOps)
-      userPartition->insert(userOp);
+  // Propagate defs of exp.
+  Partition *userPartition = schedule.addPartition(0);
 
-    // Place the epilogue partition in the default warpgroup. The MMA and load
-    // partitions shouldn't have tensor computations in them, which means they
-    // will get assigned just 1 warp each.
-    if (triton::tools::getBoolEnv("WARP_SPECIALIZE_ATTENTION_FLAG")) {
-      schedule.reorderPartitions({2, 1, 0});
-    } else {
-      // Add an extra partition to pad the number of warps to the nearest
-      // warpgroup.
+  for (const PipelinedLoad &load : scheme.loads) {
+    scheduleUsers(userPartition, load.loadOp);
+    for (Operation *allocOp : load.allocOps)
+      scheduleUsers(userPartition, allocOp);
+  }
+  for (const PipelinedMMA &mma : scheme.mmas) {
+    scheduleUsers(userPartition, mma.mmaOp);
+  }
+
+  //for (math::Exp2Op exp : scheme.exps) {
+  //  scheduleOp(userPartition, exp);
+  //  scheduleDependencies(userPartition, exp);
+  //}
+
+  //// Propagate users of loads and MMAs.
+  //for (const PipelinedLoad &load : scheme.loads) {
+  //  scheduleUsers(userPartition, load.loadOp);
+  //  for (Operation *allocOp : load.allocOps)
+  //    scheduleUsers(userPartition, allocOp);
+  //}
+
+  //SmallVector<Partition *> userPartitions{userPartition};
+  //while (userPartitions.size() != scheme.mmas.size()) {
+  //  userPartitions.push_back(schedule.addPartition(userPartitions.size()));
+  //}
+  //for (auto [mma, userPartition] : llvm::zip(scheme.mmas, userPartitions)) {
+  //  scheduleUsers(userPartition, mma.mmaOp);
+  //}
+  //for (const PipelinedMMA &mma : scheme.mmas) {
+  //  scheduleDependencies(userPartition, mma.mmaOp);
+  //}
+
+  // Place the epilogue partition in the default warpgroup. The MMA and load
+  // partitions shouldn't have tensor computations in them, which means they
+  // will get assigned just 1 warp each.
+  if (triton::tools::getBoolEnv("WARP_SPECIALIZE_ATTENTION_FLAG")) {
+    schedule.reorderPartitions({2, 1, 0});
+  } else {
+    // Add an extra partition to pad the number of warps to the nearest
+    // warpgroup.
+    if (!userPartition->getOps().empty()) {
       schedule.addPartition(0);
       schedule.reorderPartitions({2, 1, 0, 3});
     }
@@ -248,6 +335,15 @@ struct PartitionBuilder : public ImplicitLocOpBuilder {
   auto createInPartition(Partition &partition, Args &&...args) {
     auto op = create<OpT>(std::forward<Args>(args)...);
     op->setAttr(kPartitionAttrName, getI32IntegerAttr(partition.getIndex()));
+    partition.insert(op);
+    return op;
+  }
+
+  template <typename OpT, typename... Args>
+  auto createInStage(Partition &partition, unsigned stage, Args &&...args) {
+    auto op = create<OpT>(std::forward<Args>(args)...);
+    op->setAttr(kPartitionAttrName, getI32IntegerAttr(partition.getIndex()));
+    op->setAttr("ttg.assigned_stage", getI32IntegerAttr(stage));
     partition.insert(op);
     return op;
   }
@@ -451,7 +547,8 @@ struct PipelinedLoadGroup {
   Location getLoc();
   void allocateAref(scf::ForOp &loop, int numStages);
   LogicalResult lowerLoads(WarpSchedule &schedule, DominanceInfo &domInfo,
-                           PostDominanceInfo &postDomInfo);
+                           PostDominanceInfo &postDomInfo, unsigned stage,
+                           const DenseMap<Operation *, unsigned> &userStage);
 
   SmallVector<PipelinedLoad> loads;
 
@@ -503,26 +600,29 @@ void PipelinedLoadGroup::allocateAref(scf::ForOp &loop, int numStages) {
 }
 
 static void lowerTMACopy(PartitionBuilder &b, Partition &loadPartition,
-                         Operation *op, Value barrier, Value view) {
+                         unsigned stage, Operation *op, Value barrier,
+                         Value view) {
   Value truePred = b.create<arith::ConstantIntOp>(true, /*width=*/1);
   if (auto load = dyn_cast<DescriptorLoadOp>(op)) {
     Value tmaPtr = b.createInPartition<ttng::TensorDescToTMAPtrOp>(
         loadPartition, load.getDesc());
-    b.createInPartition<ttng::AsyncTMACopyGlobalToLocalOp>(
-        loadPartition, tmaPtr, load.getIndices(), barrier, view, truePred);
+    b.createInStage<ttng::AsyncTMACopyGlobalToLocalOp>(
+        loadPartition, stage, tmaPtr, load.getIndices(), barrier, view,
+        truePred);
   } else {
     auto gather = cast<DescriptorGatherOp>(op);
     Value tmaPtr = b.createInPartition<ttng::TensorDescToTMAPtrOp>(
         loadPartition, gather.getDesc());
-    b.createInPartition<ttng::AsyncTMAGatherOp>(
-        loadPartition, tmaPtr, gather.getXOffsets(), gather.getYOffset(),
+    b.createInStage<ttng::AsyncTMAGatherOp>(
+        loadPartition, stage, tmaPtr, gather.getXOffsets(), gather.getYOffset(),
         barrier, view, truePred);
   }
 }
 
-LogicalResult PipelinedLoadGroup::lowerLoads(WarpSchedule &schedule,
-                                             DominanceInfo &domInfo,
-                                             PostDominanceInfo &postDomInfo) {
+LogicalResult PipelinedLoadGroup::lowerLoads(
+    WarpSchedule &schedule, DominanceInfo &domInfo,
+    PostDominanceInfo &postDomInfo, unsigned stage,
+    const DenseMap<Operation *, unsigned> &userStage) {
   // Insert before the group of loads.
   auto firstLoad = llvm::min_element(loads, [&](auto &lhs, auto &rhs) {
     return domInfo.properlyDominates(lhs.loadOp, rhs.loadOp);
@@ -532,15 +632,16 @@ LogicalResult PipelinedLoadGroup::lowerLoads(WarpSchedule &schedule,
 
   // Producer acquire.
   Value curEmptyBar = createSingleBufferView(b, emptyBars, index);
-  b.createInPartition<ttng::WaitBarrierOp>(loadPartition, curEmptyBar, phase);
+  b.createInStage<ttng::WaitBarrierOp>(loadPartition, stage, curEmptyBar,
+                                       phase);
 
   // Indicate the expected size of the loads.
   unsigned loadSizeInBytes = 0;
   for (const PipelinedLoad &load : loads)
     loadSizeInBytes += load.getLoadSizeInBytes();
   Value curLoadBar = createSingleBufferView(b, readyBars, index);
-  b.createInPartition<ttng::BarrierExpectOp>(loadPartition, curLoadBar,
-                                             loadSizeInBytes, b.boolCst(true));
+  b.createInStage<ttng::BarrierExpectOp>(loadPartition, stage, curLoadBar,
+                                         loadSizeInBytes, b.boolCst(true));
 
   // Set up the consumer wait. We know the live before ops are the same for all
   // loads since that's how they were grouped.
@@ -549,7 +650,13 @@ LogicalResult PipelinedLoadGroup::lowerLoads(WarpSchedule &schedule,
   for (auto [i, liveBeforeOp] : llvm::enumerate(firstLoad->liveBeforeOps)) {
     b.setInsertionPoint(liveBeforeOp);
     Partition &userPartition = *schedule.getPartition(liveBeforeOp);
-    b.createInPartition<ttng::WaitBarrierOp>(userPartition, curLoadBar, phase);
+    if (auto it = userStage.find(liveBeforeOp); it != userStage.end()) {
+      b.createInStage<ttng::WaitBarrierOp>(userPartition, it->second,
+                                           curLoadBar, phase);
+    } else {
+      b.createInPartition<ttng::WaitBarrierOp>(userPartition, curLoadBar,
+                                               phase);
+    }
 
     SmallVector<Operation *> liveUntilOps;
     for (PipelinedLoad &load : loads) {
@@ -582,7 +689,7 @@ LogicalResult PipelinedLoadGroup::lowerLoads(WarpSchedule &schedule,
   for (auto [load, buffer] : llvm::zip(loads, loadBuffers)) {
     b.setInsertionPoint(load.loadOp);
     Value view = createSingleBufferView(b, buffer, index);
-    lowerTMACopy(b, loadPartition, load.loadOp, curLoadBar, view);
+    lowerTMACopy(b, loadPartition, stage, load.loadOp, curLoadBar, view);
     // Propagate through shared memory uses.
     for (Operation *allocOp : load.allocOps) {
       replaceUsesAndPropagateType(b, allocOp, view);
@@ -616,7 +723,8 @@ LogicalResult PipelinedLoadGroup::lowerLoads(WarpSchedule &schedule,
 
 static LogicalResult pipelineMMA(scf::ForOp &loop, PipelinedMMA &mma,
                                  WarpSchedule &schedule, DominanceInfo &domInfo,
-                                 PostDominanceInfo &postDomInfo) {
+                                 PostDominanceInfo &postDomInfo,
+                                 unsigned stage) {
   ttng::MMAv5OpInterface mmaOp = mma.mmaOp;
   auto fail = [&](StringRef msg) { return emitWarning(mmaOp.getLoc(), msg); };
   Block &body = *loop.getBody();
@@ -844,14 +952,24 @@ static LogicalResult pipelineMMA(scf::ForOp &loop, PipelinedMMA &mma,
         else
           b.setInsertionPoint(domOp);
         Value bar = createSingleBufferView(b, node.barPrev, curIndex);
-        b.createInPartition<ttng::WaitBarrierOp>(*partition, bar, curPhase,
-                                                 userPred);
+        if (node.op == mmaOp) {
+          b.createInStage<ttng::WaitBarrierOp>(*partition, stage, bar, curPhase,
+                                               userPred);
+        } else {
+          b.createInPartition<ttng::WaitBarrierOp>(*partition, bar, curPhase,
+                                                   userPred);
+        }
       } else {
         b.setInsertionPoint(domOp);
         if (isa<scf::IfOp>(domOp->getParentOp()))
           b.setInsertionPointToStart(domOp->getBlock());
         Value bar = createSingleBufferView(b, node.barPrev, node.index);
-        b.createInPartition<ttng::WaitBarrierOp>(*partition, bar, node.phase);
+        if (node.op == mmaOp) {
+          b.createInStage<ttng::WaitBarrierOp>(*partition, stage, bar,
+                                               node.phase);
+        } else {
+          b.createInPartition<ttng::WaitBarrierOp>(*partition, bar, node.phase);
+        }
       }
     }
     if (node.barNext) {
@@ -859,6 +977,7 @@ static LogicalResult pipelineMMA(scf::ForOp &loop, PipelinedMMA &mma,
         b.setInsertionPoint(mmaOp);
         Value bar = createSingleBufferView(b, node.barNext, node.index);
         mmaOp.addCompletionBarrier(bar, userPred);
+        mmaOp->setAttr("ttg.assigned_stage", b.getI32IntegerAttr(stage));
       } else {
         b.setInsertionPointAfter(lastOp);
         if (isa<scf::IfOp>(lastOp->getParentOp()))
@@ -911,16 +1030,31 @@ LogicalResult lowerLoops(scf::ForOp &loop, PartitionScheme &scheme,
     loadGroups.push_back({std::move(loads)});
 
   // Multi-buffer and lower the loads.
-  for (PipelinedLoadGroup &group : loadGroups)
-    group.allocateAref(loop, numLoadStages);
+  unsigned curLoadStages = numLoadStages;
   for (PipelinedLoadGroup &group : loadGroups) {
-    if (failed(group.lowerLoads(schedule, domInfo, postDomInfo)))
+    group.allocateAref(loop, curLoadStages);
+    curLoadStages -= 0;
+  }
+
+  unsigned curMMAStage = 0;
+  DenseMap<Operation *, unsigned> userStage;
+  for (PipelinedMMA &mma : scheme.mmas) {
+    userStage[mma.mmaOp] = curMMAStage;
+    curMMAStage += 2;
+  }
+
+  unsigned curLoadStage = 0;
+  for (PipelinedLoadGroup &group : loadGroups) {
+    if (failed(group.lowerLoads(schedule, domInfo, postDomInfo, curLoadStage,
+                                userStage)))
       return failure();
+    curLoadStage += 2;
   }
 
   // Multi-buffer and lower the MMAs.
   for (PipelinedMMA &mma : scheme.mmas) {
-    if (failed(pipelineMMA(loop, mma, schedule, domInfo, postDomInfo)))
+    if (failed(pipelineMMA(loop, mma, schedule, domInfo, postDomInfo,
+                           userStage[mma.mmaOp])))
       return failure();
   }
 
@@ -957,8 +1091,9 @@ void LoadMMASpecialization::runOnOperation() {
     PartitionScheme scheme = assignPartitions(loop);
     if (scheme.loads.empty() && scheme.mmas.empty())
       continue;
-    WarpSchedule schedule = getInitialSchedule(scheme);
+    WarpSchedule schedule = getInitialSchedule(scheme, loop);
     schedule.serialize(loop);
+    //continue;
     int loopNumStages = getNumStagesOrDefault(loop, numStages);
     if (failed(lowerLoops(loop, scheme, schedule, loopNumStages)))
       continue;
