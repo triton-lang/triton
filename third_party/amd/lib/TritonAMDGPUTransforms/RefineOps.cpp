@@ -38,22 +38,6 @@ llvm::raw_ostream &operator<<(llvm::raw_ostream &stream, SmallVector<T> vec) {
 }
 
 namespace {
-
-// TODO: take the implementation from `ReorderInstructions.cpp`
-static SmallVector<scf::ForOp> getLeafForOps(triton::FuncOp funcOp) {
-  SmallVector<scf::ForOp> allOps;
-  funcOp->walk([&](scf::ForOp forOp) { allOps.push_back(forOp); });
-
-  SmallVector<scf::ForOp> leafOps;
-  for (scf::ForOp forOp : allOps) {
-    auto searchResult = forOp.getBody()->walk(
-        [](scf::ForOp) { return WalkResult::interrupt(); });
-    if (!searchResult.wasInterrupted())
-      leafOps.push_back(forOp);
-  }
-  return leafOps;
-}
-
 SmallVector<Value> createOffset(llvm::ArrayRef<Value> valueOffset,
                                 llvm::ArrayRef<int64_t> intOffset,
                                 OpBuilder &rewriter, Location loc) {
@@ -74,99 +58,81 @@ inline bool isRowMajor(::llvm::ArrayRef<unsigned> order) {
   return order[rank - 1] == 0;
 }
 
-LogicalResult rewriteLocalLoad(PatternRewriter &rewriter,
-                               triton::gpu::LocalLoadOp op) {
-  auto *ctx = op->getContext();
-  auto loc = op->getLoc();
-
-  auto resultType = cast<RankedTensorType>(op.getType());
-  auto resultElementType = resultType.getElementType();
-  auto resultEncode = cast<DotOperandEncodingAttr>(resultType.getEncoding());
-  auto resultShape = resultType.getShape();
-
-  const auto rank = resultShape.size();
-  assert(rank == 2);
-
-  auto opIdx = resultEncode.getOpIdx();
-  const int kDimIdx = opIdx == 0 ? rank - 1 : rank - 2;
-  const int nonKDimIdx = opIdx == 0 ? rank - 2 : rank - 1;
-
-  auto mfmaLayout = cast<AMDMfmaEncodingAttr>(resultEncode.getParent());
-  int kWidth = resultEncode.getKWidth();
-  auto numReps = mfmaLayout.getRepForOperand(resultShape, kWidth, opIdx);
-
-  // indices into 3D numReps
-  int kRepsIdx = opIdx == 0 ? 2 : 1;
-  int nonKRepsIdx = opIdx == 0 ? 1 : 2;
-  int bRepsIdx = 0;
-
-  // 2D shape which drops batch dimension.
-  SmallVector<int64_t> numReps2D = {numReps[1], numReps[2]};
-
-  auto numRepsNonK = numReps[nonKRepsIdx];
-  auto numRepsK = numReps[kRepsIdx];
-  auto numRepsB = numReps[bRepsIdx];
-
-  auto memDesc = op->getOperand(0);
-  auto memDescType = cast<ttg::MemDescType>(memDesc.getType());
-  auto memDescEncoding = memDescType.getEncoding();
-  SmallVector<unsigned int> order;
-  if (auto enc =
-          dyn_cast<triton::gpu::SwizzledSharedEncodingAttr>(memDescEncoding)) {
-    order = decltype(order)(enc.getOrder());
-  }
-  if (auto enc = dyn_cast<triton::gpu::AMDRotatingSharedEncodingAttr>(
-          memDescEncoding)) {
-    order = decltype(order)(enc.getOrder());
-  }
-  assert(!order.empty());
-
-  SmallVector<int64_t> refinedShape = {resultShape[0] / numReps2D[0],
-                                       resultShape[1] / numReps2D[1]};
-  LDBG("refinedShape: " << refinedShape[0] << "x" << refinedShape[1]);
-
-  auto refinedTensorType =
-      RankedTensorType::get(refinedShape, resultElementType, resultEncode);
-
-  constexpr bool mutableMemory = true;
-  auto sharedMemorySpace = triton::gpu::SharedMemorySpaceAttr::get(ctx);
-  auto subviewType = ttg::MemDescType::get(
-      refinedShape, memDescType.getElementType(), memDescType.getEncoding(),
-      sharedMemorySpace, mutableMemory, memDescType.getAllocShape());
-
-  rewriter.setInsertionPointAfter(op);
-  SmallVector<Value> subtiles;
-  for (int32_t i = 0; i < numReps2D[0]; ++i) {
-    for (int32_t j = 0; j < numReps2D[1]; ++j) {
-      int32_t offset0 = i * refinedShape[0];
-      int32_t offset1 = j * refinedShape[1];
-      auto offset = createOffset({}, {offset0, offset1}, rewriter, loc);
-      auto refinedView = rewriter.create<ttg::MemDescSubviewOp>(
-          loc, subviewType, memDesc, offset);
-      LDBG("RefinedLocalLoadSubvew: " << *refinedView);
-
-      auto refinedLoad = rewriter.create<ttg::LocalLoadOp>(
-          loc, refinedTensorType, refinedView);
-      subtiles.push_back(refinedLoad);
-    }
-  }
-
-  // concat dims is correct shape 8x1 vs 1x8, else gives wrong output shape.
-  std::vector<int64_t> loweringOrder(numReps2D.size());
-  int64_t counter = 0;
-  auto increment = [&counter](int64_t &val) { val = counter++; };
-  if (opIdx == 0)
-    std::for_each(loweringOrder.rbegin(), loweringOrder.rend(), increment);
-  else
-    std::for_each(loweringOrder.begin(), loweringOrder.end(), increment);
-
-  auto joinedResult = rewriter.create<triton::amdgpu::ConcatOp>(
-      loc, resultType, subtiles, numReps2D, loweringOrder);
-  LDBG("ConcatOp: " << *joinedResult);
-
-  rewriter.replaceOp(op, joinedResult);
-  return success();
+inline RankedTensorType rankedTType(Value tensor) {
+  return cast<RankedTensorType>(tensor.getType());
 }
+
+SmallVector<unsigned> getRefinedShapePerCTATile(Type type) {
+  auto tensorType = cast<mlir::RankedTensorType>(type);
+  return mlir::triton::gpu::getShapePerCTATile(tensorType);
+}
+
+struct RefinedBlock {
+  RefinedBlock(ArrayRef<int64_t> shape, Type elemType,
+               BlockedEncodingAttr encoding)
+      : encoding(encoding), elemType(elemType) {
+    auto ctaOrder = encoding.getCTAOrder();
+    auto warpsPerCTA = encoding.getWarpsPerCTA();
+    auto threadsPerWarp = encoding.getThreadsPerWarp();
+    auto sizePerThread = encoding.getSizePerThread();
+
+    numDims = warpsPerCTA.size();
+    elementsPerWorkGroup.resize(numDims);
+    numPerDims.resize(numDims);
+    refinedShape.resize(numDims);
+    numSubTiles = 1;
+    for (size_t dim = 0; dim < numDims; ++dim) {
+      elementsPerWorkGroup[dim] =
+          sizePerThread[dim] * threadsPerWarp[dim] * warpsPerCTA[dim];
+      numPerDims[dim] = shape[dim] / elementsPerWorkGroup[dim];
+      refinedShape[dim] = shape[dim] / numPerDims[dim];
+      numSubTiles *= numPerDims[dim];
+    }
+
+    tensorType =
+        RankedTensorType::get(elementsPerWorkGroup, elemType, encoding);
+  }
+
+  BlockedEncodingAttr encoding;
+  Type elemType;
+  SmallVector<int64_t> elementsPerWorkGroup;
+  SmallVector<int64_t> numPerDims;
+  SmallVector<int64_t> refinedShape;
+  size_t numDims;
+  size_t numSubTiles;
+  RankedTensorType tensorType;
+};
+
+template <typename OpTy>
+struct RefineRewritePattern : public OpRewritePattern<OpTy> {
+  RefineRewritePattern(MLIRContext *context, PatternBenefit benefit = 1)
+      : OpRewritePattern<OpTy>(context, benefit) {}
+
+  virtual LogicalResult apply(OpTy op, PatternRewriter &rewriter) const = 0;
+
+  LogicalResult matchAndRewrite(OpTy op,
+                                PatternRewriter &rewriter) const final {
+    if (!isRefinable(op))
+      return failure();
+    return apply(op, rewriter);
+  }
+
+private:
+  bool isRefinable(Operation *op) const {
+    mlir::Block *block = op->getBlock();
+    while (block) {
+      for (auto &op : block->getOperations()) {
+        if (auto hint = dyn_cast<triton::amdgpu::InstructionSchedHint>(op)) {
+          if (hint.getVariant() == triton::amdgpu::SchedHint::refine_ops) {
+            return true;
+          }
+        }
+      }
+      block = block->getParentOp()->getBlock();
+    }
+    return false;
+  }
+};
 
 struct DotOpMFMAConverter {
   AMDMfmaEncodingAttr mfmaLayout;
@@ -451,10 +417,6 @@ struct DotOpMFMAConverter {
   }
 };
 
-inline RankedTensorType rankedTType(Value tensor) {
-  return cast<RankedTensorType>(tensor.getType());
-}
-
 LogicalResult rewriteMFMA(PatternRewriter &rewriter, triton::DotOp op) {
   if (!(isa<DotOperandEncodingAttr>(rankedTType(op.getA()).getEncoding()) &&
         isa<DotOperandEncodingAttr>(rankedTType(op.getB()).getEncoding()))) {
@@ -483,599 +445,6 @@ LogicalResult rewriteMFMA(PatternRewriter &rewriter, triton::DotOp op) {
   return converter.convert(op, DotOpAdaptor(op));
 }
 
-struct RefinedBlock {
-  RefinedBlock(ArrayRef<int64_t> shape, Type elemType,
-               BlockedEncodingAttr encoding)
-      : encoding(encoding), elemType(elemType) {
-    auto ctaOrder = encoding.getCTAOrder();
-    auto warpsPerCTA = encoding.getWarpsPerCTA();
-    auto threadsPerWarp = encoding.getThreadsPerWarp();
-    auto sizePerThread = encoding.getSizePerThread();
-
-    numDims = warpsPerCTA.size();
-    elementsPerWorkGroup.resize(numDims);
-    numPerDims.resize(numDims);
-    refinedShape.resize(numDims);
-    numSubTiles = 1;
-    for (size_t dim = 0; dim < numDims; ++dim) {
-      elementsPerWorkGroup[dim] =
-          sizePerThread[dim] * threadsPerWarp[dim] * warpsPerCTA[dim];
-      numPerDims[dim] = shape[dim] / elementsPerWorkGroup[dim];
-      refinedShape[dim] = shape[dim] / numPerDims[dim];
-      numSubTiles *= numPerDims[dim];
-    }
-
-    tensorType =
-        RankedTensorType::get(elementsPerWorkGroup, elemType, encoding);
-  }
-
-  BlockedEncodingAttr encoding;
-  Type elemType;
-  SmallVector<int64_t> elementsPerWorkGroup;
-  SmallVector<int64_t> numPerDims;
-  SmallVector<int64_t> refinedShape;
-  size_t numDims;
-  size_t numSubTiles;
-  RankedTensorType tensorType;
-};
-
-LogicalResult rewriteLoadOp(PatternRewriter &rewriter, triton::LoadOp loadOp) {
-  auto ctx = loadOp->getContext();
-  auto loc = loadOp.getLoc();
-
-  Value origSrc = loadOp->getOperand(0);
-  Value origResult = loadOp.getResult();
-  Type origResultType = loadOp.getResult().getType();
-  auto origPtrs = rankedTType(origSrc);
-  auto origShape = origPtrs.getShape();
-  auto elemType = origPtrs.getElementType();
-  auto encoding = dyn_cast<BlockedEncodingAttr>(origPtrs.getEncoding());
-  if (encoding == nullptr)
-    return failure();
-
-  RefinedBlock refinedBlock(origShape, elemType, encoding);
-
-  rewriter.setInsertionPointAfter(loadOp);
-  SmallVector<Value> refinedTensors;
-
-  Value mask = loadOp.getMask();
-  Value other = loadOp.getOther();
-  auto boundaryCheck = loadOp.getBoundaryCheck();
-  auto padding = loadOp.getPadding();
-  auto cache = loadOp.getCache();
-  auto evict = loadOp.getEvict();
-  auto isVolatile = loadOp.getIsVolatile();
-
-  AMD::CoordinateMapper coordsMapper(refinedBlock.numPerDims);
-  for (size_t linearIdx = 0; linearIdx < refinedBlock.numSubTiles;
-       ++linearIdx) {
-    auto coords = coordsMapper.map(linearIdx);
-    SmallVector<int64_t> offset(refinedBlock.numDims, 0);
-    for (auto [dim, coord] : llvm::enumerate(coords)) {
-      offset[dim] = coord * refinedBlock.elementsPerWorkGroup[dim];
-    }
-
-    auto slice = rewriter.create<triton::amdgpu::ExtractSliceOp>(
-        loc, Type{refinedBlock.tensorType}, Value{origSrc}, offset);
-
-    auto refinedTensor =
-        rewriter.create<triton::LoadOp>(loc, slice, mask, other, boundaryCheck,
-                                        padding, cache, evict, isVolatile);
-    refinedTensors.push_back(refinedTensor);
-  }
-
-  auto concatDims = DenseI64ArrayAttr::get(ctx, refinedBlock.numPerDims);
-  auto joinedResult = rewriter.create<triton::amdgpu::ConcatOp>(
-      loc, origResultType, refinedTensors, concatDims);
-
-  origResult.replaceAllUsesWith(joinedResult);
-  return success();
-}
-
-LogicalResult rewriteLocalStoreOp(PatternRewriter &rewriter,
-                                  triton::gpu::LocalStoreOp loadStoreOp) {
-  auto ctx = loadStoreOp->getContext();
-  auto loc = loadStoreOp.getLoc();
-
-  Value origSrc = loadStoreOp->getOperand(0);
-  auto origMemViewOp =
-      cast<ttg::MemDescSubviewOp>(loadStoreOp->getOperand(1).getDefiningOp());
-  Value origMemView = origMemViewOp->getOperand(0);
-  Value selectValue = origMemViewOp.getOffsets().front();
-
-  auto origSrcType = rankedTType(origSrc);
-  auto blockEncoding = dyn_cast<BlockedEncodingAttr>(origSrcType.getEncoding());
-  if (blockEncoding == nullptr)
-    return failure();
-
-  auto origMemViewType = cast<ttg::MemDescType>(origMemView.getType());
-  auto sharedEncoding = cast<triton::gpu::SwizzledSharedEncodingAttr>(
-      origMemViewType.getEncoding());
-  if (sharedEncoding == nullptr)
-    return failure();
-
-  RefinedBlock refinedBlock(origSrcType.getShape(),
-                            origSrcType.getElementType(), blockEncoding);
-
-  constexpr bool mutableMemory = true;
-  auto sharedMemorySpace = triton::gpu::SharedMemorySpaceAttr::get(ctx);
-
-  auto subviewType = ttg::MemDescType::get(
-      refinedBlock.refinedShape, refinedBlock.elemType, sharedEncoding,
-      sharedMemorySpace, mutableMemory, origMemViewType.getAllocShape());
-
-  rewriter.setInsertionPointAfter(loadStoreOp);
-  AMD::CoordinateMapper coordsMapper(refinedBlock.numPerDims);
-  for (size_t linearIdx = 0; linearIdx < refinedBlock.numSubTiles;
-       ++linearIdx) {
-    auto coords = coordsMapper.map(linearIdx);
-    SmallVector<int64_t> offset(refinedBlock.numDims, 0);
-    for (auto [dim, coord] : llvm::enumerate(coords)) {
-      offset[dim] = coord * refinedBlock.elementsPerWorkGroup[dim];
-    }
-    auto offsetValues = createOffset({selectValue}, offset, rewriter, loc);
-    auto slicedSharedMemView = rewriter.create<ttg::MemDescSubviewOp>(
-        loc, subviewType, origMemView, offsetValues);
-
-    auto slice = rewriter.create<triton::amdgpu::ExtractSliceOp>(
-        loc, Type{refinedBlock.tensorType}, Value{origSrc}, offset);
-
-    rewriter.create<ttg::LocalStoreOp>(loc, slice, slicedSharedMemView);
-  }
-
-  rewriter.eraseOp(loadStoreOp);
-  return success();
-}
-
-// Reduce ops have different intput and output shapes and produce
-// sliced layouts.
-// This currently only supports 2d inputs.
-LogicalResult rewriteReduceOp(PatternRewriter &rewriter, triton::ReduceOp op) {
-  auto ctx = op->getContext();
-  auto loc = op.getLoc();
-  uint32_t axisReduce = op.getAxis();
-  uint32_t axisNonReduce = (axisReduce + 1) % 2;
-  if (op.getNumOperands() != 1)
-    return failure();
-
-  // Calculate refined shape.
-  auto src = op->getOperand(0);
-  auto srcType = rankedTType(src);
-  if (srcType.getRank() != 2)
-    return failure();
-  auto srcShape = srcType.getShape();
-  auto srcEncoding = srcType.getEncoding();
-  auto srcShapePerCtaTile = triton::gpu::getShapePerCTATile(srcType);
-  SmallVector<int64_t> repShape = {srcShape[0] / srcShapePerCtaTile[0],
-                                   srcShape[1] / srcShapePerCtaTile[1]};
-  int numReps = repShape[axisNonReduce];
-  SmallVector<int64_t> refinedSrcShape = {srcShape[0], srcShape[1]};
-  refinedSrcShape[axisNonReduce] /= numReps;
-  int64_t elementsPerRep = refinedSrcShape[axisNonReduce];
-  auto elemTy = srcType.getElementType();
-  auto refinedTensorType =
-      RankedTensorType::get(refinedSrcShape, elemTy, srcEncoding);
-
-  // Create refined ops.
-  rewriter.setInsertionPointAfter(op);
-  SmallVector<Value> refinedReduces;
-  for (int i = 0; i < numReps; ++i) {
-    SmallVector<int64_t> offset(refinedSrcShape.size(), 0);
-    offset[axisReduce] = 0;
-    offset[axisNonReduce] = i * elementsPerRep;
-    auto sliceOp = rewriter.create<triton::amdgpu::ExtractSliceOp>(
-        loc, Type{refinedTensorType}, Value{src}, offset);
-    auto reduceOp =
-        rewriter.create<triton::ReduceOp>(loc, ValueRange{sliceOp}, axisReduce);
-    IRMapping mapping;
-    mapping.map(reduceOp.getOperand(0), sliceOp);
-    op.getCombineOp().cloneInto(&reduceOp->getRegion(0), mapping);
-    refinedReduces.push_back(reduceOp->getResult(0));
-  }
-
-  // Concat reduce slices.
-  auto reduceResultType = op.getResultTypes()[0];
-  SmallVector<int64_t> concatDimShape = {numReps};
-  auto concatDims = DenseI64ArrayAttr::get(ctx, concatDimShape);
-  auto concatOp = rewriter.create<triton::amdgpu::ConcatOp>(
-      loc, reduceResultType, refinedReduces, concatDims);
-  auto origOpResult = op.getResult();
-  origOpResult.replaceAllUsesWith(concatOp);
-  rewriter.eraseOp(op);
-  return success();
-}
-
-SmallVector<unsigned> getRefinedShapePerCTATile(Type type) {
-  auto tensorType = cast<mlir::RankedTensorType>(type);
-  return mlir::triton::gpu::getShapePerCTATile(tensorType);
-}
-
-// Refine ops with distributed layouts.
-// Assumes same layout for operands.
-template <typename OpTy>
-LogicalResult rewriteElementWiseOp(PatternRewriter &rewriter, OpTy op) {
-  // Verify opd[0] is valid.
-  int numOperands = op->getNumOperands();
-  if (op->getNumOperands() < 1)
-    return failure();
-  auto src = op->getOperand(0);
-  if (!isa<mlir::RankedTensorType>(src.getType()))
-    return failure();
-  auto srcType = rankedTType(src);
-  auto rank = srcType.getRank();
-  if (rank != 2) { // TODO(dtanner) remove me
-    return failure();
-  }
-
-  auto srcShape = srcType.getShape();
-  auto srcEncoding = srcType.getEncoding();
-  auto srcLL = ttg::toLinearEncoding(srcType);
-  auto srcShapePerCtaTile = getRefinedShapePerCTATile(srcType);
-
-  // Verify subsequent operands match opd[0].
-  for (int i = 1; i < numOperands; ++i) {
-    if (!isa<mlir::RankedTensorType>(op->getOperand(i).getType()))
-      return failure();
-    if (rankedTType(op->getOperand(i)).getRank() != rank)
-      return failure();
-    if (getRefinedShapePerCTATile(op->getOperand(i).getType()) !=
-        srcShapePerCtaTile)
-      return failure();
-  }
-
-  // Result tensor.
-  auto res = op->getResult(0);
-  if (!isa<mlir::RankedTensorType>(res.getType()))
-    return failure();
-  auto resType = rankedTType(res);
-  auto resShape = resType.getShape();
-  if (resShape != srcShape)
-    return failure();
-
-  LDBG("rewriteElementWiseOp(): " << op);
-
-  // DEBUG check if concat op results in correct linear layout
-  auto leRes = ttg::toLinearEncoding(resType);
-  auto llRes = leRes.getLinearLayout();
-
-  auto resEncoding = resType.getEncoding();
-  auto resShapePerCtaTile = getRefinedShapePerCTATile(resType);
-
-  // Calculate refined shapes.
-  SmallVector<int64_t> refinedShape;
-  SmallVector<int64_t> numReps;
-  for (int i = 0; i < rank; ++i) {
-    // src and res can have different refineable shapes if different layouts.
-    refinedShape.push_back(
-        std::max(srcShapePerCtaTile[i], resShapePerCtaTile[i]));
-    numReps.push_back(srcShape[i] / srcShapePerCtaTile[i]);
-  }
-
-  if (product<int64_t>(numReps) == 1)
-    return success();
-
-  // Create refined ops.
-  auto refinedTensorTypeSrc = RankedTensorType::get(
-      refinedShape, srcType.getElementType(), srcEncoding);
-  auto refinedTensorTypeRes = RankedTensorType::get(
-      refinedShape, resType.getElementType(), resEncoding);
-
-  rewriter.setInsertionPointAfter(op);
-  SmallVector<Value> refinedOps;
-  SmallVector<int64_t> offset(rank, 0);
-  int outerIdx = 0; // rank-1;
-  int innerIdx = 1; // rank-2;
-
-  auto sliceOperation = [&]() {
-    SmallVector<Value> slicedOperands;
-    for (int opdIdx = 0; opdIdx < numOperands; ++opdIdx) {
-      auto slicedOperand = rewriter.create<triton::amdgpu::ExtractSliceOp>(
-          op.getLoc(), Type{refinedTensorTypeSrc},
-          Value{op->getOperand(opdIdx)}, offset);
-      slicedOperands.push_back(slicedOperand);
-    }
-    auto refinedOp = rewriter.create<OpTy>(op.getLoc(), refinedTensorTypeRes,
-                                           slicedOperands);
-    refinedOps.push_back(refinedOp->getResult(0));
-  };
-
-  for (int i = 0; i < numReps[outerIdx]; ++i) {
-    offset[outerIdx] = i * refinedShape[outerIdx];
-
-    if (rank == 2) {
-      for (int j = 0; j < numReps[innerIdx]; ++j) {
-        offset[innerIdx] = j * refinedShape[innerIdx];
-        sliceOperation();
-      }
-    } else {
-      assert(rank == 1 && "rank is expected to be `1`");
-      sliceOperation();
-    }
-  }
-
-  // Concat slices.
-  auto resultType = op->getResultTypes()[0];
-  auto concatDims = DenseI64ArrayAttr::get(op->getContext(), numReps);
-  auto concatOp = rewriter.create<triton::amdgpu::ConcatOp>(
-      op.getLoc(), resultType, refinedOps, concatDims);
-
-  auto origOpResult = op.getResult();
-  origOpResult.replaceAllUsesWith(concatOp);
-  LDBG("rewriteElementWiseOp() - SUCCESS " << op);
-  rewriter.replaceOp(op, concatOp);
-
-  return success();
-}
-
-// Refine ExpandDims ops.
-// Since expanding dims increases tensor rank,
-// this refinement multipe intermediate shapes,
-//    ExSl     ExpD        Conct
-// <M> -> <M/m> -> <M/m x 1> -> <Mx1>.
-// TODO(dtanner) only need to support 1D sliceLayout input, same as
-// ViewOpToLLVM.cpp ?
-LogicalResult rewriteExpandDimsOp(PatternRewriter &rewriter,
-                                  triton::ExpandDimsOp op) {
-  int numOperands = op->getNumOperands();
-  if (op->getNumOperands() != 1)
-    return failure();
-  auto src = op->getOperand(0);
-  if (!isa<mlir::RankedTensorType>(src.getType()))
-    return failure();
-  auto srcType = rankedTType(src);
-  if (srcType.getElementTypeBitWidth() == 1)
-    return failure();
-
-  auto rank = srcType.getRank();
-  auto srcShape = srcType.getShape();
-  auto srcEncoding = srcType.getEncoding();
-  auto srcShapePerCtaTile = getRefinedShapePerCTATile(srcType);
-
-  auto ll = triton::gpu::toLinearEncoding(srcType);
-
-  // Calculate refined shape.
-  SmallVector<int64_t> refinedSrcShape;
-  SmallVector<int64_t> numReps;
-  for (int i = 0; i < rank; ++i) {
-    refinedSrcShape.push_back(srcShapePerCtaTile[i]);
-    numReps.push_back(srcShape[i] / srcShapePerCtaTile[i]);
-  }
-
-  if (product<int64_t>(numReps) == 1)
-    return success();
-
-  auto refinedResultShape = refinedSrcShape;
-  refinedResultShape.insert(refinedResultShape.begin() + op.getAxis(), 1);
-  auto refinedSrcTensorType = RankedTensorType::get(
-      refinedSrcShape, srcType.getElementType(), srcEncoding);
-
-  // Create refined ops.
-  rewriter.setInsertionPointAfter(op);
-  SmallVector<Value> refinedReduces;
-  SmallVector<int64_t> offset(rank, 0);
-
-  auto sliceOperation = [&]() {
-    auto slicedOp = rewriter.create<triton::amdgpu::ExtractSliceOp>(
-        op.getLoc(), Type{refinedSrcTensorType}, Value{op->getOperand(0)},
-        offset);
-
-    auto sliceRes = ::llvm::cast<::mlir::TypedValue<::mlir::RankedTensorType>>(
-        slicedOp->getResult(0));
-
-    auto sliceResTy = sliceRes.getType();
-    Attribute refinedResultEncoding;
-
-    if (auto refinedSrcEncoding = sliceResTy.getEncoding()) {
-      if (cast<DialectInferLayoutInterface>(&srcEncoding.getDialect())
-              ->inferExpandDimsOpEncoding(refinedSrcEncoding, op.getAxis(),
-                                          refinedResultEncoding, op.getLoc())
-              .failed()) {
-        return emitOptionalError(op.getLoc(),
-                                 "Failed to infer layout for ExpandDimsOp");
-      }
-    }
-
-    auto sliceResTensorType = RankedTensorType::get(
-        refinedResultShape, sliceResTy.getElementType(), refinedResultEncoding);
-
-    auto refinedOp = rewriter.create<triton::ExpandDimsOp>(
-        op.getLoc(), sliceResTensorType, sliceRes, op.getAxis());
-
-    refinedReduces.push_back(refinedOp->getResult(0));
-    return success();
-  };
-
-  for (int i = 0; i < numReps[rank - 1]; ++i) {
-    offset[rank - 1] = i * refinedSrcShape[rank - 1];
-
-    // TODO(dtanner) how to iterate over Nd array?
-    if (rank == 2) {
-      for (int j = 0; j < numReps[rank - 2]; ++j) {
-        offset[rank - 2] = j * refinedSrcShape[rank - 2];
-        if (llvm::failed(sliceOperation()))
-          return failure();
-      }
-    } else {
-      assert(rank == 1 && "rank is expected to be `1`");
-      if (llvm::failed(sliceOperation()))
-        return failure();
-    }
-  }
-
-  // Concat refined ops.
-  auto reduceResultType = op->getResultTypes()[0];
-  // Expand dims of numReps also before concat.
-  numReps.insert(numReps.begin() + op.getAxis(), 1);
-  auto concatDims = DenseI64ArrayAttr::get(op->getContext(), numReps);
-  auto concatOp = rewriter.create<triton::amdgpu::ConcatOp>(
-      op.getLoc(), reduceResultType, refinedReduces, concatDims);
-  auto origOpResult = op.getResult();
-
-  auto checkLL = triton::gpu::toLinearEncoding(
-      cast<mlir::RankedTensorType>(refinedReduces.front().getType()));
-
-  origOpResult.replaceAllUsesWith(concatOp);
-  rewriter.eraseOp(op);
-  return success();
-}
-
-// Refine Broadcast ops.
-// Since inputs are roughtly 1D and outputs are roughly 2D,
-// Then the op and outputs are sliced more than the inputs.
-// In the below example, shapePerCtaTile is 64x32,
-// so the input can be cut in half, while the BroadcastOp
-// can be cut into fourths, and the Concat will have dims=2x2.
-// Presumably this means the 1st and 3rd Broadcasts are redundant,
-// the 2nd and 4th Broadcasts are redundant, and some will be
-// eliminated by CSE in the backend compiler.
-// Example:
-//       ExSl      Brdcst       Concat
-//<128x1> ->  <64x1> -> <64x32>    -> 128x64
-//        \             <64x32>   /
-//         -> <64x1> -> <64x32>  /
-//                      <64x32> /
-LogicalResult rewriteBroadcastOp(PatternRewriter &rewriter,
-                                 triton::BroadcastOp op) {
-  // src tensor e.g. <128x1>.
-  int numOperands = op->getNumOperands();
-  if (op->getNumOperands() != 1)
-    return failure();
-  auto src = op->getOperand(0);
-  if (!isa<mlir::RankedTensorType>(src.getType()))
-    return failure();
-  auto srcType = rankedTType(src);
-  auto rank = srcType.getRank();
-  if (rank != 2)
-    return failure();
-  if (srcType.getElementTypeBitWidth() == 1)
-    return failure();
-  auto srcShape = srcType.getShape();
-  auto srcEncoding = srcType.getEncoding();
-  auto srcShapePerCtaTile = getRefinedShapePerCTATile(srcType);
-
-  // Result tensor e.g. <128x64>.
-  auto res = op->getResult(0);
-  if (!isa<mlir::RankedTensorType>(res.getType()))
-    return failure();
-  auto resType = rankedTType(res);
-  auto resShape = resType.getShape();
-  auto resEncoding = resType.getEncoding();
-  auto resShapePerCtaTile = getRefinedShapePerCTATile(resType);
-
-  // numReps
-  SmallVector<int64_t> refinedSrcShape;
-  SmallVector<int64_t> refinedResShape;
-  SmallVector<int64_t> numReps;
-  for (int i = 0; i < rank; ++i) {
-    refinedSrcShape.push_back(srcShapePerCtaTile[i]);
-    refinedResShape.push_back(resShapePerCtaTile[i]);
-    numReps.push_back(resShape[i] / resShapePerCtaTile[i]);
-  }
-
-  if (product<int64_t>(numReps) == 1)
-    return success();
-
-  // Determine indices and values of reps.
-  // numRepsSrc is the non-one size, because the src can be sliced.
-  // numRepsRes is the one size, because the result will be repeated.
-  unsigned numRepsSrcIdx = 0; // <*128x 1>
-  unsigned numRepsResIdx = 1; // < 128x*1>
-  if (refinedSrcShape[numRepsSrcIdx] == 1) {
-    numRepsSrcIdx = 1; // < 1x*64>
-    numRepsResIdx = 0; // <*1x 64>
-  }
-  unsigned numRepsSrc = numReps[numRepsSrcIdx];
-  unsigned numRepsRes = numReps[numRepsResIdx];
-
-  // Refined src/result tensor types.
-  auto refinedSrcTensorType = RankedTensorType::get(
-      refinedSrcShape, srcType.getElementType(), srcEncoding);
-  auto refinedResTensorType = RankedTensorType::get(
-      refinedResShape, srcType.getElementType(), srcEncoding);
-
-  // Create refined ops.
-  rewriter.setInsertionPointAfter(op);
-  SmallVector<Value> refinedBroadcasts;
-  SmallVector<int64_t> offset(rank, 0);
-  for (int i = 0; i < numRepsSrc; ++i) {
-    offset[numRepsSrcIdx] = i * refinedSrcShape[numRepsSrcIdx];
-    // Create slice.
-    auto slicedOp = rewriter.create<triton::amdgpu::ExtractSliceOp>(
-        op.getLoc(), Type{refinedSrcTensorType}, Value{op->getOperand(0)},
-        offset);
-    auto sliceRes = ::llvm::cast<::mlir::TypedValue<::mlir::RankedTensorType>>(
-        slicedOp->getResult(0));
-    auto sliceResTensorType = RankedTensorType::get(
-        refinedResShape, srcType.getElementType(), resEncoding);
-    for (int j = 0; j < numRepsRes; ++j) {
-      // Create broadcast.
-      auto broadcastOp = rewriter.create<triton::BroadcastOp>(
-          op.getLoc(), sliceResTensorType, sliceRes);
-      refinedBroadcasts.push_back(broadcastOp->getResult(0));
-    }
-  }
-
-  // Concat refined ops.
-  auto reduceResultType = op->getResultTypes()[0];
-  auto concatDims = DenseI64ArrayAttr::get(op->getContext(), numReps);
-  auto concatOp = rewriter.create<triton::amdgpu::ConcatOp>(
-      op.getLoc(), reduceResultType, refinedBroadcasts, concatDims);
-
-  auto origOpResult = op.getResult();
-  origOpResult.replaceAllUsesWith(concatOp);
-  rewriter.eraseOp(op);
-  return success();
-}
-
-template <typename OpTy>
-struct RefineRewritePattern : public OpRewritePattern<OpTy> {
-  RefineRewritePattern(MLIRContext *context, PatternBenefit benefit = 1)
-      : OpRewritePattern<OpTy>(context, benefit) {}
-
-  virtual LogicalResult apply(OpTy op, PatternRewriter &rewriter) const = 0;
-
-  LogicalResult matchAndRewrite(OpTy op,
-                                PatternRewriter &rewriter) const final {
-    if (!isRefinable(op))
-      return failure();
-    return apply(op, rewriter);
-  }
-
-private:
-  bool isRefinable(Operation *op) const {
-    mlir::Block *block = op->getBlock();
-    while (block) {
-      for (auto &op : block->getOperations()) {
-        if (auto hint = dyn_cast<triton::amdgpu::InstructionSchedHint>(op)) {
-          if (hint.getVariant() == triton::amdgpu::SchedHint::refine_ops) {
-            return true;
-          }
-        }
-      }
-      block = block->getParentOp()->getBlock();
-    }
-    return false;
-  }
-};
-
-struct LocalLoadOpPattern
-    : public RefineRewritePattern<triton::gpu::LocalLoadOp> {
-  LocalLoadOpPattern(MLIRContext *context, PatternBenefit benefit = 1)
-      : RefineRewritePattern(context, benefit) {}
-
-  LogicalResult apply(triton::gpu::LocalLoadOp op,
-                      PatternRewriter &rewriter) const override {
-    if (op->getNumOperands() != 1) {
-      return failure();
-    }
-    auto result = rewriteLocalLoad(rewriter, op);
-    if (failed(result)) {
-      LDBG("failed to refine ttg.localLoad: " << *op);
-    }
-    return result;
-  }
-};
-
 struct DotOpPattern : public RefineRewritePattern<triton::DotOp> {
   DotOpPattern(MLIRContext *context, PatternBenefit benefit = 1)
       : RefineRewritePattern(context, benefit) {}
@@ -1090,6 +459,110 @@ struct DotOpPattern : public RefineRewritePattern<triton::DotOp> {
   }
 };
 
+struct LocalLoadOpPattern
+    : public RefineRewritePattern<triton::gpu::LocalLoadOp> {
+  LocalLoadOpPattern(MLIRContext *context, PatternBenefit benefit = 1)
+      : RefineRewritePattern(context, benefit) {}
+
+  LogicalResult apply(triton::gpu::LocalLoadOp op,
+                      PatternRewriter &rewriter) const override {
+    if (op->getNumOperands() != 1) {
+      return failure();
+    }
+
+    auto *ctx = op->getContext();
+    auto loc = op->getLoc();
+
+    auto resultType = cast<RankedTensorType>(op.getType());
+    auto resultElementType = resultType.getElementType();
+    auto resultEncode = cast<DotOperandEncodingAttr>(resultType.getEncoding());
+    auto resultShape = resultType.getShape();
+
+    const auto rank = resultShape.size();
+    assert(rank == 2);
+
+    auto opIdx = resultEncode.getOpIdx();
+    const int kDimIdx = opIdx == 0 ? rank - 1 : rank - 2;
+    const int nonKDimIdx = opIdx == 0 ? rank - 2 : rank - 1;
+
+    auto mfmaLayout = cast<AMDMfmaEncodingAttr>(resultEncode.getParent());
+    int kWidth = resultEncode.getKWidth();
+    auto numReps = mfmaLayout.getRepForOperand(resultShape, kWidth, opIdx);
+
+    // indices into 3D numReps
+    int kRepsIdx = opIdx == 0 ? 2 : 1;
+    int nonKRepsIdx = opIdx == 0 ? 1 : 2;
+    int bRepsIdx = 0;
+
+    // 2D shape which drops batch dimension.
+    SmallVector<int64_t> numReps2D = {numReps[1], numReps[2]};
+
+    auto numRepsNonK = numReps[nonKRepsIdx];
+    auto numRepsK = numReps[kRepsIdx];
+    auto numRepsB = numReps[bRepsIdx];
+
+    auto memDesc = op->getOperand(0);
+    auto memDescType = cast<ttg::MemDescType>(memDesc.getType());
+    auto memDescEncoding = memDescType.getEncoding();
+    SmallVector<unsigned int> order;
+    if (auto enc = dyn_cast<triton::gpu::SwizzledSharedEncodingAttr>(
+            memDescEncoding)) {
+      order = decltype(order)(enc.getOrder());
+    }
+    if (auto enc = dyn_cast<triton::gpu::AMDRotatingSharedEncodingAttr>(
+            memDescEncoding)) {
+      order = decltype(order)(enc.getOrder());
+    }
+    assert(!order.empty());
+
+    SmallVector<int64_t> refinedShape = {resultShape[0] / numReps2D[0],
+                                         resultShape[1] / numReps2D[1]};
+    LDBG("refinedShape: " << refinedShape[0] << "x" << refinedShape[1]);
+
+    auto refinedTensorType =
+        RankedTensorType::get(refinedShape, resultElementType, resultEncode);
+
+    constexpr bool mutableMemory = true;
+    auto sharedMemorySpace = triton::gpu::SharedMemorySpaceAttr::get(ctx);
+    auto subviewType = ttg::MemDescType::get(
+        refinedShape, memDescType.getElementType(), memDescType.getEncoding(),
+        sharedMemorySpace, mutableMemory, memDescType.getAllocShape());
+
+    rewriter.setInsertionPointAfter(op);
+    SmallVector<Value> subtiles;
+    for (int32_t i = 0; i < numReps2D[0]; ++i) {
+      for (int32_t j = 0; j < numReps2D[1]; ++j) {
+        int32_t offset0 = i * refinedShape[0];
+        int32_t offset1 = j * refinedShape[1];
+        auto offset = createOffset({}, {offset0, offset1}, rewriter, loc);
+        auto refinedView = rewriter.create<ttg::MemDescSubviewOp>(
+            loc, subviewType, memDesc, offset);
+        LDBG("RefinedLocalLoadSubvew: " << *refinedView);
+
+        auto refinedLoad = rewriter.create<ttg::LocalLoadOp>(
+            loc, refinedTensorType, refinedView);
+        subtiles.push_back(refinedLoad);
+      }
+    }
+
+    // concat dims is correct shape 8x1 vs 1x8, else gives wrong output shape.
+    std::vector<int64_t> loweringOrder(numReps2D.size());
+    int64_t counter = 0;
+    auto increment = [&counter](int64_t &val) { val = counter++; };
+    if (opIdx == 0)
+      std::for_each(loweringOrder.rbegin(), loweringOrder.rend(), increment);
+    else
+      std::for_each(loweringOrder.begin(), loweringOrder.end(), increment);
+
+    auto joinedResult = rewriter.create<triton::amdgpu::ConcatOp>(
+        loc, resultType, subtiles, numReps2D, loweringOrder);
+    LDBG("ConcatOp: " << *joinedResult);
+
+    rewriter.replaceOp(op, joinedResult);
+    return success();
+  }
+};
+
 struct LoadOpPattern : public RefineRewritePattern<triton::LoadOp> {
   LoadOpPattern(MLIRContext *context, PatternBenefit benefit = 1)
       : RefineRewritePattern(context, benefit) {}
@@ -1099,11 +572,57 @@ struct LoadOpPattern : public RefineRewritePattern<triton::LoadOp> {
     if (op->getNumOperands() != 1) {
       return failure();
     }
-    auto result = rewriteLoadOp(rewriter, op);
-    if (failed(result)) {
-      LDBG("failed to refine tt.loadOp: " << *op);
+
+    auto ctx = op->getContext();
+    auto loc = op.getLoc();
+
+    Value origSrc = op->getOperand(0);
+    Value origResult = op.getResult();
+    Type origResultType = op.getResult().getType();
+    auto origPtrs = rankedTType(origSrc);
+    auto origShape = origPtrs.getShape();
+    auto elemType = origPtrs.getElementType();
+    auto encoding = dyn_cast<BlockedEncodingAttr>(origPtrs.getEncoding());
+    if (encoding == nullptr)
+      return failure();
+
+    RefinedBlock refinedBlock(origShape, elemType, encoding);
+
+    rewriter.setInsertionPointAfter(op);
+    SmallVector<Value> refinedTensors;
+
+    Value mask = op.getMask();
+    Value other = op.getOther();
+    auto boundaryCheck = op.getBoundaryCheck();
+    auto padding = op.getPadding();
+    auto cache = op.getCache();
+    auto evict = op.getEvict();
+    auto isVolatile = op.getIsVolatile();
+
+    AMD::CoordinateMapper coordsMapper(refinedBlock.numPerDims);
+    for (size_t linearIdx = 0; linearIdx < refinedBlock.numSubTiles;
+         ++linearIdx) {
+      auto coords = coordsMapper.map(linearIdx);
+      SmallVector<int64_t> offset(refinedBlock.numDims, 0);
+      for (auto [dim, coord] : llvm::enumerate(coords)) {
+        offset[dim] = coord * refinedBlock.elementsPerWorkGroup[dim];
+      }
+
+      auto slice = rewriter.create<triton::amdgpu::ExtractSliceOp>(
+          loc, Type{refinedBlock.tensorType}, Value{origSrc}, offset);
+
+      auto refinedTensor = rewriter.create<triton::LoadOp>(
+          loc, slice, mask, other, boundaryCheck, padding, cache, evict,
+          isVolatile);
+      refinedTensors.push_back(refinedTensor);
     }
-    return result;
+
+    auto concatDims = DenseI64ArrayAttr::get(ctx, refinedBlock.numPerDims);
+    auto joinedResult = rewriter.create<triton::amdgpu::ConcatOp>(
+        loc, origResultType, refinedTensors, concatDims);
+
+    origResult.replaceAllUsesWith(joinedResult);
+    return success();
   }
 };
 
@@ -1117,11 +636,59 @@ struct LocalStoreOpPattern
     if (op->getNumOperands() != 2) {
       return failure();
     }
-    auto result = rewriteLocalStoreOp(rewriter, op);
-    if (failed(result)) {
-      LDBG("failed to refine ttg.localLoadOp: " << *op);
+
+    auto ctx = op->getContext();
+    auto loc = op.getLoc();
+
+    Value origSrc = op->getOperand(0);
+    auto origMemViewOp =
+        cast<ttg::MemDescSubviewOp>(op->getOperand(1).getDefiningOp());
+    Value origMemView = origMemViewOp->getOperand(0);
+    Value selectValue = origMemViewOp.getOffsets().front();
+
+    auto origSrcType = rankedTType(origSrc);
+    auto blockEncoding =
+        dyn_cast<BlockedEncodingAttr>(origSrcType.getEncoding());
+    if (blockEncoding == nullptr)
+      return failure();
+
+    auto origMemViewType = cast<ttg::MemDescType>(origMemView.getType());
+    auto sharedEncoding = cast<triton::gpu::SwizzledSharedEncodingAttr>(
+        origMemViewType.getEncoding());
+    if (sharedEncoding == nullptr)
+      return failure();
+
+    RefinedBlock refinedBlock(origSrcType.getShape(),
+                              origSrcType.getElementType(), blockEncoding);
+
+    constexpr bool mutableMemory = true;
+    auto sharedMemorySpace = triton::gpu::SharedMemorySpaceAttr::get(ctx);
+
+    auto subviewType = ttg::MemDescType::get(
+        refinedBlock.refinedShape, refinedBlock.elemType, sharedEncoding,
+        sharedMemorySpace, mutableMemory, origMemViewType.getAllocShape());
+
+    rewriter.setInsertionPointAfter(op);
+    AMD::CoordinateMapper coordsMapper(refinedBlock.numPerDims);
+    for (size_t linearIdx = 0; linearIdx < refinedBlock.numSubTiles;
+         ++linearIdx) {
+      auto coords = coordsMapper.map(linearIdx);
+      SmallVector<int64_t> offset(refinedBlock.numDims, 0);
+      for (auto [dim, coord] : llvm::enumerate(coords)) {
+        offset[dim] = coord * refinedBlock.elementsPerWorkGroup[dim];
+      }
+      auto offsetValues = createOffset({selectValue}, offset, rewriter, loc);
+      auto slicedSharedMemView = rewriter.create<ttg::MemDescSubviewOp>(
+          loc, subviewType, origMemView, offsetValues);
+
+      auto slice = rewriter.create<triton::amdgpu::ExtractSliceOp>(
+          loc, Type{refinedBlock.tensorType}, Value{origSrc}, offset);
+
+      rewriter.create<ttg::LocalStoreOp>(loc, slice, slicedSharedMemView);
     }
-    return result;
+
+    rewriter.eraseOp(op);
+    return success();
   }
 };
 
@@ -1129,13 +696,63 @@ struct ReduceOpPattern : public RefineRewritePattern<triton::ReduceOp> {
   ReduceOpPattern(MLIRContext *context, PatternBenefit benefit = 1)
       : RefineRewritePattern(context, benefit) {}
 
+  // Reduce ops have different intput and output shapes and produce
+  // sliced layouts.
+  // This currently only supports 2d inputs.
   LogicalResult apply(triton::ReduceOp op,
                       PatternRewriter &rewriter) const override {
-    auto result = rewriteReduceOp(rewriter, op);
-    if (failed(result)) {
-      LDBG("failed to refine tt.reduce: " << *op);
+    auto ctx = op->getContext();
+    auto loc = op.getLoc();
+    uint32_t axisReduce = op.getAxis();
+    uint32_t axisNonReduce = (axisReduce + 1) % 2;
+    if (op.getNumOperands() != 1)
+      return failure();
+
+    // Calculate refined shape.
+    auto src = op->getOperand(0);
+    auto srcType = rankedTType(src);
+    if (srcType.getRank() != 2)
+      return failure();
+    auto srcShape = srcType.getShape();
+    auto srcEncoding = srcType.getEncoding();
+    auto srcShapePerCtaTile = triton::gpu::getShapePerCTATile(srcType);
+    SmallVector<int64_t> repShape = {srcShape[0] / srcShapePerCtaTile[0],
+                                     srcShape[1] / srcShapePerCtaTile[1]};
+    int numReps = repShape[axisNonReduce];
+    SmallVector<int64_t> refinedSrcShape = {srcShape[0], srcShape[1]};
+    refinedSrcShape[axisNonReduce] /= numReps;
+    int64_t elementsPerRep = refinedSrcShape[axisNonReduce];
+    auto elemTy = srcType.getElementType();
+    auto refinedTensorType =
+        RankedTensorType::get(refinedSrcShape, elemTy, srcEncoding);
+
+    // Create refined ops.
+    rewriter.setInsertionPointAfter(op);
+    SmallVector<Value> refinedReduces;
+    for (int i = 0; i < numReps; ++i) {
+      SmallVector<int64_t> offset(refinedSrcShape.size(), 0);
+      offset[axisReduce] = 0;
+      offset[axisNonReduce] = i * elementsPerRep;
+      auto sliceOp = rewriter.create<triton::amdgpu::ExtractSliceOp>(
+          loc, Type{refinedTensorType}, Value{src}, offset);
+      auto reduceOp = rewriter.create<triton::ReduceOp>(
+          loc, ValueRange{sliceOp}, axisReduce);
+      IRMapping mapping;
+      mapping.map(reduceOp.getOperand(0), sliceOp);
+      op.getCombineOp().cloneInto(&reduceOp->getRegion(0), mapping);
+      refinedReduces.push_back(reduceOp->getResult(0));
     }
-    return result;
+
+    // Concat reduce slices.
+    auto reduceResultType = op.getResultTypes()[0];
+    SmallVector<int64_t> concatDimShape = {numReps};
+    auto concatDims = DenseI64ArrayAttr::get(ctx, concatDimShape);
+    auto concatOp = rewriter.create<triton::amdgpu::ConcatOp>(
+        loc, reduceResultType, refinedReduces, concatDims);
+    auto origOpResult = op.getResult();
+    origOpResult.replaceAllUsesWith(concatOp);
+    rewriter.eraseOp(op);
+    return success();
   }
 };
 
@@ -1144,8 +761,124 @@ struct ElementWiseOpPattern : public RefineRewritePattern<OpTy> {
   ElementWiseOpPattern(MLIRContext *context, PatternBenefit benefit = 1)
       : RefineRewritePattern<OpTy>(context, benefit) {}
 
+  // Refine ops with distributed layouts.
+  // Assumes same layout for operands.
+  LogicalResult rewriteElementWiseOp(PatternRewriter &rewriter, OpTy op) const {
+    // Verify opd[0] is valid.
+    int numOperands = op->getNumOperands();
+    if (op->getNumOperands() < 1)
+      return failure();
+    auto src = op->getOperand(0);
+    if (!isa<mlir::RankedTensorType>(src.getType()))
+      return failure();
+    auto srcType = rankedTType(src);
+    auto rank = srcType.getRank();
+    if (rank != 2) { // TODO(dtanner) remove me
+      return failure();
+    }
+
+    auto srcShape = srcType.getShape();
+    auto srcEncoding = srcType.getEncoding();
+    auto srcLL = ttg::toLinearEncoding(srcType);
+    auto srcShapePerCtaTile = getRefinedShapePerCTATile(srcType);
+
+    // Verify subsequent operands match opd[0].
+    for (int i = 1; i < numOperands; ++i) {
+      if (!isa<mlir::RankedTensorType>(op->getOperand(i).getType()))
+        return failure();
+      if (rankedTType(op->getOperand(i)).getRank() != rank)
+        return failure();
+      if (getRefinedShapePerCTATile(op->getOperand(i).getType()) !=
+          srcShapePerCtaTile)
+        return failure();
+    }
+
+    // Result tensor.
+    auto res = op->getResult(0);
+    if (!isa<mlir::RankedTensorType>(res.getType()))
+      return failure();
+    auto resType = rankedTType(res);
+    auto resShape = resType.getShape();
+    if (resShape != srcShape)
+      return failure();
+
+    LDBG("rewriteElementWiseOp(): " << op);
+
+    // DEBUG check if concat op results in correct linear layout
+    auto leRes = ttg::toLinearEncoding(resType);
+    auto llRes = leRes.getLinearLayout();
+
+    auto resEncoding = resType.getEncoding();
+    auto resShapePerCtaTile = getRefinedShapePerCTATile(resType);
+
+    // Calculate refined shapes.
+    SmallVector<int64_t> refinedShape;
+    SmallVector<int64_t> numReps;
+    for (int i = 0; i < rank; ++i) {
+      // src and res can have different refineable shapes if different layouts.
+      refinedShape.push_back(
+          std::max(srcShapePerCtaTile[i], resShapePerCtaTile[i]));
+      numReps.push_back(srcShape[i] / srcShapePerCtaTile[i]);
+    }
+
+    if (product<int64_t>(numReps) == 1)
+      return success();
+
+    // Create refined ops.
+    auto refinedTensorTypeSrc = RankedTensorType::get(
+        refinedShape, srcType.getElementType(), srcEncoding);
+    auto refinedTensorTypeRes = RankedTensorType::get(
+        refinedShape, resType.getElementType(), resEncoding);
+
+    rewriter.setInsertionPointAfter(op);
+    SmallVector<Value> refinedOps;
+    SmallVector<int64_t> offset(rank, 0);
+    int outerIdx = 0; // rank-1;
+    int innerIdx = 1; // rank-2;
+
+    auto sliceOperation = [&]() {
+      SmallVector<Value> slicedOperands;
+      for (int opdIdx = 0; opdIdx < numOperands; ++opdIdx) {
+        auto slicedOperand = rewriter.create<triton::amdgpu::ExtractSliceOp>(
+            op.getLoc(), Type{refinedTensorTypeSrc},
+            Value{op->getOperand(opdIdx)}, offset);
+        slicedOperands.push_back(slicedOperand);
+      }
+      auto refinedOp = rewriter.create<OpTy>(op.getLoc(), refinedTensorTypeRes,
+                                             slicedOperands);
+      refinedOps.push_back(refinedOp->getResult(0));
+    };
+
+    for (int i = 0; i < numReps[outerIdx]; ++i) {
+      offset[outerIdx] = i * refinedShape[outerIdx];
+
+      if (rank == 2) {
+        for (int j = 0; j < numReps[innerIdx]; ++j) {
+          offset[innerIdx] = j * refinedShape[innerIdx];
+          sliceOperation();
+        }
+      } else {
+        assert(rank == 1 && "rank is expected to be `1`");
+        sliceOperation();
+      }
+    }
+
+    // Concat slices.
+    auto resultType = op->getResultTypes()[0];
+    auto concatDims = DenseI64ArrayAttr::get(op->getContext(), numReps);
+    auto concatOp = rewriter.create<triton::amdgpu::ConcatOp>(
+        op.getLoc(), resultType, refinedOps, concatDims);
+
+    auto origOpResult = op.getResult();
+    origOpResult.replaceAllUsesWith(concatOp);
+    LDBG("rewriteElementWiseOp() - SUCCESS " << op);
+    rewriter.replaceOp(op, concatOp);
+
+    return success();
+  }
+
   LogicalResult apply(OpTy op, PatternRewriter &rewriter) const override {
-    auto result = rewriteElementWiseOp<OpTy>(rewriter, op);
+    auto result = rewriteElementWiseOp(rewriter, op);
     if (failed(result)) {
       LDBG("failed to refine elementwise op: " << *op);
     }
@@ -1157,13 +890,118 @@ struct ExpandDimsOpPattern : public RefineRewritePattern<triton::ExpandDimsOp> {
   ExpandDimsOpPattern(MLIRContext *context, PatternBenefit benefit = 1)
       : RefineRewritePattern(context, benefit) {}
 
+  // Refine ExpandDims ops.
+  // Since expanding dims increases tensor rank,
+  // this refinement multipe intermediate shapes,
+  //    ExSl     ExpD        Conct
+  // <M> -> <M/m> -> <M/m x 1> -> <Mx1>.
+  // TODO(dtanner) only need to support 1D sliceLayout input, same as
+  // ViewOpToLLVM.cpp ?
   LogicalResult apply(triton::ExpandDimsOp op,
                       PatternRewriter &rewriter) const override {
-    auto result = rewriteExpandDimsOp(rewriter, op);
-    if (failed(result)) {
-      LDBG("failed to refine tt.expand_dims: " << *op);
+    int numOperands = op->getNumOperands();
+    if (op->getNumOperands() != 1)
+      return failure();
+    auto src = op->getOperand(0);
+    if (!isa<mlir::RankedTensorType>(src.getType()))
+      return failure();
+    auto srcType = rankedTType(src);
+    if (srcType.getElementTypeBitWidth() == 1)
+      return failure();
+
+    auto rank = srcType.getRank();
+    auto srcShape = srcType.getShape();
+    auto srcEncoding = srcType.getEncoding();
+    auto srcShapePerCtaTile = getRefinedShapePerCTATile(srcType);
+
+    auto ll = triton::gpu::toLinearEncoding(srcType);
+
+    // Calculate refined shape.
+    SmallVector<int64_t> refinedSrcShape;
+    SmallVector<int64_t> numReps;
+    for (int i = 0; i < rank; ++i) {
+      refinedSrcShape.push_back(srcShapePerCtaTile[i]);
+      numReps.push_back(srcShape[i] / srcShapePerCtaTile[i]);
     }
-    return result;
+
+    if (product<int64_t>(numReps) == 1)
+      return success();
+
+    auto refinedResultShape = refinedSrcShape;
+    refinedResultShape.insert(refinedResultShape.begin() + op.getAxis(), 1);
+    auto refinedSrcTensorType = RankedTensorType::get(
+        refinedSrcShape, srcType.getElementType(), srcEncoding);
+
+    // Create refined ops.
+    rewriter.setInsertionPointAfter(op);
+    SmallVector<Value> refinedReduces;
+    SmallVector<int64_t> offset(rank, 0);
+
+    auto sliceOperation = [&]() {
+      auto slicedOp = rewriter.create<triton::amdgpu::ExtractSliceOp>(
+          op.getLoc(), Type{refinedSrcTensorType}, Value{op->getOperand(0)},
+          offset);
+
+      auto sliceRes =
+          ::llvm::cast<::mlir::TypedValue<::mlir::RankedTensorType>>(
+              slicedOp->getResult(0));
+
+      auto sliceResTy = sliceRes.getType();
+      Attribute refinedResultEncoding;
+
+      if (auto refinedSrcEncoding = sliceResTy.getEncoding()) {
+        if (cast<DialectInferLayoutInterface>(&srcEncoding.getDialect())
+                ->inferExpandDimsOpEncoding(refinedSrcEncoding, op.getAxis(),
+                                            refinedResultEncoding, op.getLoc())
+                .failed()) {
+          return emitOptionalError(op.getLoc(),
+                                   "Failed to infer layout for ExpandDimsOp");
+        }
+      }
+
+      auto sliceResTensorType =
+          RankedTensorType::get(refinedResultShape, sliceResTy.getElementType(),
+                                refinedResultEncoding);
+
+      auto refinedOp = rewriter.create<triton::ExpandDimsOp>(
+          op.getLoc(), sliceResTensorType, sliceRes, op.getAxis());
+
+      refinedReduces.push_back(refinedOp->getResult(0));
+      return success();
+    };
+
+    for (int i = 0; i < numReps[rank - 1]; ++i) {
+      offset[rank - 1] = i * refinedSrcShape[rank - 1];
+
+      // TODO(dtanner) how to iterate over Nd array?
+      if (rank == 2) {
+        for (int j = 0; j < numReps[rank - 2]; ++j) {
+          offset[rank - 2] = j * refinedSrcShape[rank - 2];
+          if (llvm::failed(sliceOperation()))
+            return failure();
+        }
+      } else {
+        assert(rank == 1 && "rank is expected to be `1`");
+        if (llvm::failed(sliceOperation()))
+          return failure();
+      }
+    }
+
+    // Concat refined ops.
+    auto reduceResultType = op->getResultTypes()[0];
+    // Expand dims of numReps also before concat.
+    numReps.insert(numReps.begin() + op.getAxis(), 1);
+    auto concatDims = DenseI64ArrayAttr::get(op->getContext(), numReps);
+    auto concatOp = rewriter.create<triton::amdgpu::ConcatOp>(
+        op.getLoc(), reduceResultType, refinedReduces, concatDims);
+    auto origOpResult = op.getResult();
+
+    auto checkLL = triton::gpu::toLinearEncoding(
+        cast<mlir::RankedTensorType>(refinedReduces.front().getType()));
+
+    origOpResult.replaceAllUsesWith(concatOp);
+    rewriter.eraseOp(op);
+    return success();
   }
 };
 
@@ -1171,13 +1009,113 @@ struct BroadcastOpPattern : public RefineRewritePattern<BroadcastOp> {
   BroadcastOpPattern(MLIRContext *context, PatternBenefit benefit = 1)
       : RefineRewritePattern(context, benefit) {}
 
+  // Refine Broadcast ops.
+  // Since inputs are roughtly 1D and outputs are roughly 2D,
+  // Then the op and outputs are sliced more than the inputs.
+  // In the below example, shapePerCtaTile is 64x32,
+  // so the input can be cut in half, while the BroadcastOp
+  // can be cut into fourths, and the Concat will have dims=2x2.
+  // Presumably this means the 1st and 3rd Broadcasts are redundant,
+  // the 2nd and 4th Broadcasts are redundant, and some will be
+  // eliminated by CSE in the backend compiler.
+  // Example:
+  //       ExSl      Brdcst       Concat
+  //<128x1> ->  <64x1> -> <64x32>    -> 128x64
+  //        \             <64x32>   /
+  //         -> <64x1> -> <64x32>  /
+  //                      <64x32> /
   LogicalResult apply(triton::BroadcastOp op,
                       PatternRewriter &rewriter) const override {
-    auto result = rewriteBroadcastOp(rewriter, op);
-    if (failed(result)) {
-      LDBG("failed to refine tt.broadcast: " << *op);
+    // src tensor e.g. <128x1>.
+    int numOperands = op->getNumOperands();
+    if (op->getNumOperands() != 1)
+      return failure();
+    auto src = op->getOperand(0);
+    if (!isa<mlir::RankedTensorType>(src.getType()))
+      return failure();
+    auto srcType = rankedTType(src);
+    auto rank = srcType.getRank();
+    if (rank != 2)
+      return failure();
+    if (srcType.getElementTypeBitWidth() == 1)
+      return failure();
+    auto srcShape = srcType.getShape();
+    auto srcEncoding = srcType.getEncoding();
+    auto srcShapePerCtaTile = getRefinedShapePerCTATile(srcType);
+
+    // Result tensor e.g. <128x64>.
+    auto res = op->getResult(0);
+    if (!isa<mlir::RankedTensorType>(res.getType()))
+      return failure();
+    auto resType = rankedTType(res);
+    auto resShape = resType.getShape();
+    auto resEncoding = resType.getEncoding();
+    auto resShapePerCtaTile = getRefinedShapePerCTATile(resType);
+
+    // numReps
+    SmallVector<int64_t> refinedSrcShape;
+    SmallVector<int64_t> refinedResShape;
+    SmallVector<int64_t> numReps;
+    for (int i = 0; i < rank; ++i) {
+      refinedSrcShape.push_back(srcShapePerCtaTile[i]);
+      refinedResShape.push_back(resShapePerCtaTile[i]);
+      numReps.push_back(resShape[i] / resShapePerCtaTile[i]);
     }
-    return result;
+
+    if (product<int64_t>(numReps) == 1)
+      return success();
+
+    // Determine indices and values of reps.
+    // numRepsSrc is the non-one size, because the src can be sliced.
+    // numRepsRes is the one size, because the result will be repeated.
+    unsigned numRepsSrcIdx = 0; // <*128x 1>
+    unsigned numRepsResIdx = 1; // < 128x*1>
+    if (refinedSrcShape[numRepsSrcIdx] == 1) {
+      numRepsSrcIdx = 1; // < 1x*64>
+      numRepsResIdx = 0; // <*1x 64>
+    }
+    unsigned numRepsSrc = numReps[numRepsSrcIdx];
+    unsigned numRepsRes = numReps[numRepsResIdx];
+
+    // Refined src/result tensor types.
+    auto refinedSrcTensorType = RankedTensorType::get(
+        refinedSrcShape, srcType.getElementType(), srcEncoding);
+    auto refinedResTensorType = RankedTensorType::get(
+        refinedResShape, srcType.getElementType(), srcEncoding);
+
+    // Create refined ops.
+    rewriter.setInsertionPointAfter(op);
+    SmallVector<Value> refinedBroadcasts;
+    SmallVector<int64_t> offset(rank, 0);
+    for (int i = 0; i < numRepsSrc; ++i) {
+      offset[numRepsSrcIdx] = i * refinedSrcShape[numRepsSrcIdx];
+      // Create slice.
+      auto slicedOp = rewriter.create<triton::amdgpu::ExtractSliceOp>(
+          op.getLoc(), Type{refinedSrcTensorType}, Value{op->getOperand(0)},
+          offset);
+      auto sliceRes =
+          ::llvm::cast<::mlir::TypedValue<::mlir::RankedTensorType>>(
+              slicedOp->getResult(0));
+      auto sliceResTensorType = RankedTensorType::get(
+          refinedResShape, srcType.getElementType(), resEncoding);
+      for (int j = 0; j < numRepsRes; ++j) {
+        // Create broadcast.
+        auto broadcastOp = rewriter.create<triton::BroadcastOp>(
+            op.getLoc(), sliceResTensorType, sliceRes);
+        refinedBroadcasts.push_back(broadcastOp->getResult(0));
+      }
+    }
+
+    // Concat refined ops.
+    auto reduceResultType = op->getResultTypes()[0];
+    auto concatDims = DenseI64ArrayAttr::get(op->getContext(), numReps);
+    auto concatOp = rewriter.create<triton::amdgpu::ConcatOp>(
+        op.getLoc(), reduceResultType, refinedBroadcasts, concatDims);
+
+    auto origOpResult = op.getResult();
+    origOpResult.replaceAllUsesWith(concatOp);
+    rewriter.eraseOp(op);
+    return success();
   }
 };
 
