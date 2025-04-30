@@ -80,6 +80,8 @@ public:
   auto getPartitions() { return llvm::make_pointee_range(partitions); }
   // Return an iterator range over the partitions.
   auto getPartitions() const { return llvm::make_pointee_range(partitions); }
+  // Get the number of partitions.
+  unsigned getNumPartitions() const { return partitions.size(); }
   // Get the root partition.
   Partition *getRootPartition() { return rootPartition.get(); }
   // Get the root partition.

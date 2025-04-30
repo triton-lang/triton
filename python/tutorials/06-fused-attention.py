@@ -646,7 +646,7 @@ class _attention(torch.autograd.Function):
 
                 BLOCK_M=BLOCK_M,
                 BLOCK_N=min(HEAD_DIM, 128),
-                num_warps=8,
+                num_warps=4,
                 num_stages=2,
                 num_ctas=1,
 

@@ -137,8 +137,6 @@ static PartitionScheme assignPartitions(scf::ForOp loop) {
       if (Operation *defOp = op->getOperand(0).getDefiningOp())
         operandViews.push_back(defOp);
     }
-    // if (triton::tools::getBoolEnv("WARP_SPECIALIZE_ATTENTION_FLAG"))
-    //   break;
   }
 
   SmallVector<math::Exp2Op> exps;
@@ -147,53 +145,6 @@ static PartitionScheme assignPartitions(scf::ForOp loop) {
     if (tensorTy && tensorTy.getNumElements() > 256)
       exps.push_back(expOp);
   }
-
-  // Assign initial partitions.
-  // SmallVector<Operation *> transitiveUsers;
-
-  // DenseSet<Operation *> scheduled;
-  // for (PipelinedLoad &load : loads) {
-  //   for (Operation *allocOp : load.allocOps) {
-  //     scheduled.insert(allocOp);
-  //     transitiveUsers.push_back(allocOp);
-  //   }
-  //   scheduled.insert(load.loadOp);
-  //   transitiveUsers.push_back(load.loadOp);
-  // }
-
-  // for (PipelinedMMA &mma : mmas) {
-  //   scheduled.insert(mma.mmaOp);
-  //   if (mma.storeOp)
-  //     scheduled.insert(mma.storeOp);
-  //   for (Operation *view : mma.operandViews)
-  //     scheduled.insert(view);
-  //   transitiveUsers.push_back(mma.mmaOp);
-  // }
-
-  //// Recursively propagate partitions to the users.
-  // SetVector<Operation *> userOps;
-  // while (!transitiveUsers.empty()) {
-  //   Operation *op = transitiveUsers.pop_back_val();
-
-  //  SmallVector<OpOperand *> uses;
-  //  for (OpOperand &use : op->getUses())
-  //    uses.push_back(&use);
-  //  for (unsigned i = 0; i < uses.size(); ++i) {
-  //    OpOperand *use = uses[i];
-  //    Operation *user = use->getOwner();
-  //    if (user == loop.getBody()->getTerminator()) {
-  //      for (OpOperand &use :
-  //           loop.getRegionIterArg(use->getOperandNumber()).getUses())
-  //        uses.push_back(&use);
-  //    } else {
-  //      if (!scheduled.insert(user).second)
-  //        continue;
-  //      user = loop.getBody()->findAncestorOpInBlock(*user);
-  //      userOps.insert(user);
-  //      transitiveUsers.push_back(user);
-  //    }
-  //  }
-  //}
 
   return PartitionScheme{std::move(loads), std::move(mmas), std::move(exps)};
 }
@@ -319,16 +270,6 @@ static WarpSchedule getInitialSchedule(const PartitionScheme &scheme,
 
   // Propagate defs of exp.
   Partition *userPartition = schedule.addPartition(0);
-
-  // for (const PipelinedLoad &load : scheme.loads) {
-  //   scheduleUsers(userPartition, load.loadOp);
-  //   for (Operation *allocOp : load.allocOps)
-  //     scheduleUsers(userPartition, allocOp);
-  // }
-  // for (const PipelinedMMA &mma : scheme.mmas) {
-  //   scheduleUsers(userPartition, mma.mmaOp);
-  // }
-
   for (math::Exp2Op exp : scheme.exps) {
     scheduleOp(userPartition, exp);
     scheduleDependencies(userPartition, exp);
@@ -529,7 +470,10 @@ static WarpSchedule getInitialSchedule(const PartitionScheme &scheme,
   // partitions shouldn't have tensor computations in them, which means they
   // will get assigned just 1 warp each.
   if (triton::tools::getBoolEnv("WARP_SPECIALIZE_ATTENTION_FLAG")) {
-    // schedule.reorderPartitions({2, 1, 0});
+    SmallVector<unsigned> order{2, 1, 0};
+    while (order.size() != schedule.getNumPartitions())
+      order.push_back(order.size());
+    schedule.reorderPartitions(order);
   } else {
     // Add an extra partition to pad the number of warps to the nearest
     // warpgroup.
@@ -1162,10 +1106,18 @@ static LogicalResult pipelineMMA(scf::ForOp &loop, PipelinedMMA &mma,
 
     SmallVector<Operation *> defs;
     defs.push_back(node.op);
+
+    // Find operand defs that come from the same partition and incorporate them
+    // in this synchronization edge.
+    decltype(operandDefs) nextOperandDefs;
     for (auto &[defOp, defPartition] : operandDefs) {
       if (defPartition == partition)
         defs.push_back(defOp);
+      else
+        nextOperandDefs.emplace_back(defOp, defPartition);
     }
+    operandDefs = std::move(nextOperandDefs);
+
     Operation *domOp = findNearestCommonDominator(defs, domInfo);
     Operation *lastOp = findNearestCommonPostDominator(defs, postDomInfo);
 
@@ -1212,6 +1164,35 @@ static LogicalResult pipelineMMA(scf::ForOp &loop, PipelinedMMA &mma,
     }
   }
 
+  // Handle leftover operand defs.
+  llvm::MapVector<Partition *, SmallVector<Operation *>> operandDefsMap;
+  for (auto &[defOp, defPartition] : operandDefs)
+    operandDefsMap[defPartition].push_back(defOp);
+  for (auto &[partition, defs] : operandDefsMap) {
+    Value emptyBar = createBarrierAlloc(loop, /*numBarriers=*/1);
+    Value readyBar = createBarrierAlloc(loop, /*numBarriers=*/1);
+    PartitionBuilder b(defs.front()->getLoc(), loop);
+    b.create<ttng::ArriveBarrierOp>(emptyBar, /*arriveCount=*/1);
+
+    Operation *domOp = findNearestCommonDominator(defs, domInfo);
+    Operation *lastOp = findNearestCommonPostDominator(defs, postDomInfo);
+
+    b.setInsertionPoint(domOp);
+    Value loopIterCount =
+        b.create<arith::SubIOp>(loop.getInductionVar(), loop.getLowerBound());
+    Value phase = b.create<arith::AndIOp>(loopIterCount, b.intCst(1));
+    b.createInPartition<ttng::WaitBarrierOp>(*partition, emptyBar, phase);
+
+    b.setInsertionPointAfter(lastOp);
+    b.createInPartition<ttng::ArriveBarrierOp>(*partition, readyBar,
+                                               /*arriveCount=*/1);
+
+    b.setInsertionPoint(mmaOp);
+    b.createInStage<ttng::WaitBarrierOp>(*schedule.getPartition(mmaOp), stage,
+                                         readyBar, phase);
+    mmaOp.addCompletionBarrier(emptyBar, b.boolCst(true));
+  }
+
   if (nodes.back().barNext) {
     b.setInsertionPointAfter(loop);
     Value lastBar = createSingleBufferView(b, nodes.back().barNext, lastIndex);
@@ -1254,12 +1235,14 @@ LogicalResult lowerLoops(scf::ForOp &loop, PartitionScheme &scheme,
     loadGroups.push_back({std::move(loads)});
 
   // Multi-buffer and lower the loads.
+  // FIXME: Serial stage assignment.
   unsigned curLoadStages = numLoadStages;
   for (PipelinedLoadGroup &group : loadGroups) {
     group.allocateAref(loop, curLoadStages);
     curLoadStages -= 0;
   }
 
+  // FIXME: Serial stage assignment.
   unsigned curMMAStage = 0;
   DenseMap<Operation *, unsigned> userStage;
   for (PipelinedMMA &mma : scheme.mmas) {
