@@ -129,7 +129,7 @@ tt.func @mul(%arg0: i64 {tt.divisibility = 16 : i32}) {
 
 // -----
 
-tt.func @div() {
+tt.func @div(%arg0: i32 {tt.divisibility = 16 : i32}) {
   // expected-remark @below {{contiguity = [128], divisibility = [1073741824], constancy = [1], constant_value = <none>}}
   %0 = tt.make_range {end = 128 : i32, start = 0 : i32} : tensor<128xi32>
   // expected-remark @below {{contiguity = [1], divisibility = [1], constancy = [128], constant_value = 1}}
@@ -154,6 +154,23 @@ tt.func @div() {
   %10 = tt.make_range {end = 8320 : i32, start = 8192 : i32} : tensor<128xi32>
   // expected-remark @below {{contiguity = [1], divisibility = [1], constancy = [64], constant_value = <none>}}
   %11 = arith.divsi %10, %4 : tensor<128xi32>
+  // expected-remark @below {{contiguity = [1], divisibility = [2], constancy = [1], constant_value = 2}}
+  %12 = arith.constant 2 : i32
+  // dividing a scalar by a power of two should give predictable divisibility
+  // expected-remark @below {{contiguity = [1], divisibility = [8], constancy = [1], constant_value = <none>}}
+  %13 = arith.divsi %arg0, %12 : i32
+  // expected-remark @below {{contiguity = [1], divisibility = [32], constancy = [1], constant_value = 32}}
+  %14 = arith.constant 32 : i32
+  // expected-remark @below {{contiguity = [1], divisibility = [1], constancy = [1], constant_value = <none>}}
+  %15 = arith.divsi %arg0, %14 : i32
+  // expected-remark @below {{contiguity = [1], divisibility = [2], constancy = [1], constant_value = 6}}
+  %16 = arith.constant 6 : i32
+  // expected-remark @below {{contiguity = [1], divisibility = [1], constancy = [1], constant_value = <none>}}
+  %17 = arith.divsi %arg0, %16 : i32
+  // expected-remark @below {{contiguity = [1], divisibility = [2], constancy = [128], constant_value = 2}}
+  %18 = arith.constant dense<2> : tensor<128xi32>
+  // expected-remark @below {{contiguity = [1], divisibility = [1], constancy = [2], constant_value = <none>}}
+  %19 = arith.divsi %0, %18 : tensor<128xi32>
   tt.return
 }
 
