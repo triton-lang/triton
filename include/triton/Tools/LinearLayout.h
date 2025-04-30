@@ -503,7 +503,7 @@ public:
   // This only works across the first (i.e. the most-minor) dimension of in/out.
   // If you want it to work across more dimensions, flatten the layout.
   //
-  // TODO: Replace the uses with flattenIns/Outs + divideLeft.
+  // TODO(jlebar): Replace with divideLeft.
   int32_t getNumConsecutiveInOut() const;
 
   // Reorders the in/out dimensions of the layout.  This is mostly cosmetic
