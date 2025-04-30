@@ -1205,7 +1205,7 @@ scf::ForOp lowerMMAs(scf::ForOp forOp, CoarseSchedule &schedule) {
   SmallVector<ttng::MMAv5OpInterface> mmas;
   forOp.walk([&](ttng::MMAv5OpInterface mma) { mmas.push_back(mma); });
   if (!triton::tools::getBoolEnv("ENABLE_MMA_V5_ATT_PIPELINE")) {
-    if (mmas.size() > 2) {
+    if (mmas.size() > 1) {
       return forOp;
     }
   }
