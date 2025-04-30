@@ -9,17 +9,13 @@ namespace mlir {
 
 SmallVector<AsyncTaskId> getAsyncTaskIds(Operation *op) {
   SmallVector<AsyncTaskId> asyncTaskIds;
-  if (auto attr = op->getAttrOfType<DenseIntElementsAttr>("async_task_id"))
-    for (AsyncTaskId asyncTaskId : attr.getValues<AsyncTaskId>())
-      asyncTaskIds.push_back(asyncTaskId);
+  if (auto attr = op->getAttrOfType<DenseI32ArrayAttr>("async_task_id"))
+    llvm::append_range(asyncTaskIds, attr.asArrayRef());
   return asyncTaskIds;
 }
 
 bool hasAsyncTaskId(Operation *op, AsyncTaskId asyncTaskId) {
-  for (AsyncTaskId candidate : getAsyncTaskIds(op))
-    if (candidate == asyncTaskId)
-      return true;
-  return false;
+  return llvm::is_contained(getAsyncTaskIds(op), asyncTaskId);
 }
 
 void setAsyncTaskIds(Operation *op, ArrayRef<AsyncTaskId> asyncTaskIds) {
@@ -30,16 +26,15 @@ void setAsyncTaskIds(Operation *op, ArrayRef<AsyncTaskId> asyncTaskIds) {
   auto size = static_cast<int64_t>(sortedAsyncTaskIds.size());
   auto vecTy = VectorType::get(size, i32Ty);
   op->setAttr("async_task_id",
-              DenseIntElementsAttr::get(vecTy, sortedAsyncTaskIds));
+              DenseI32ArrayAttr::get(op->getContext(), sortedAsyncTaskIds));
 }
 
 SmallVector<AsyncTaskId> getNestedAsyncTaskIds(Operation *op) {
   SetVector<AsyncTaskId> asyncTaskIds;
   op->walk([&](Operation *curOp) {
-    for (AsyncTaskId asyncTaskId : getAsyncTaskIds(curOp))
-      asyncTaskIds.insert(asyncTaskId);
+    asyncTaskIds.insert_range(getAsyncTaskIds(curOp));
   });
-  SmallVector<AsyncTaskId> res(asyncTaskIds.begin(), asyncTaskIds.end());
+  SmallVector<AsyncTaskId> res = asyncTaskIds.takeVector();
   llvm::sort(res);
   return res;
 }
@@ -60,9 +55,7 @@ void addAsyncTaskIds(Operation *op, ArrayRef<AsyncTaskId> asyncTasks) {
 
 void removeAsyncTaskId(Operation *op, AsyncTaskId asyncTaskId) {
   auto origAsyncTaskIds = getAsyncTaskIds(op);
-  auto end = std::remove(origAsyncTaskIds.begin(), origAsyncTaskIds.end(),
-                         asyncTaskId);
-  origAsyncTaskIds.erase(end, origAsyncTaskIds.end());
+  llvm::erase(origAsyncTaskIds, asyncTaskId);
   if (origAsyncTaskIds.empty())
     op->removeAttr("async_task_id");
   else

@@ -17,11 +17,6 @@ namespace ttg = mlir::triton::gpu;
 namespace ttng = ::mlir::triton::nvidia_gpu;
 namespace mlir {
 
-struct TaskSchedule {
-  unsigned numTasks = 0;
-  DenseMap<Operation *, unsigned> opToTaskId;
-};
-
 // Compute a partition schedule for later passes to actually partition the
 // program into async tasks.
 void doTaskPartition(triton::FuncOp &funcOp, unsigned numWarpGroups) {
@@ -32,7 +27,7 @@ void doTaskPartition(triton::FuncOp &funcOp, unsigned numWarpGroups) {
   DenseSet<int> allAsyncTasks;
   funcOp->walk([&](Operation *op) {
     auto asyncTasks = getAsyncTaskIds(op);
-    allAsyncTasks.insert(asyncTasks.begin(), asyncTasks.end());
+    allAsyncTasks.insert_range(getAsyncTaskIds(op));
   });
 
   if (!allAsyncTasks.empty())
