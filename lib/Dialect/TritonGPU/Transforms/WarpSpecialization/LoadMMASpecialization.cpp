@@ -1,3 +1,4 @@
+#include "mlir/Analysis/TopologicalSortUtils.h"
 #include "mlir/Dialect/UB/IR/UBOps.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/Dominance.h"
@@ -197,6 +198,56 @@ static PartitionScheme assignPartitions(scf::ForOp loop) {
   return PartitionScheme{std::move(loads), std::move(mmas), std::move(exps)};
 }
 
+static void iterateDefs(scf::ForOp loop, Operation *op,
+                        function_ref<void(OpResult)> callback) {
+  visitNestedOperands(op, [&](OpOperand &operand) {
+    Value value = operand.get();
+    if (value.getParentBlock() != loop.getBody())
+      return;
+    auto arg = dyn_cast<BlockArgument>(value);
+    if (arg == loop.getInductionVar())
+      return;
+    auto [def, distance] = getDefinitionAndDistance(loop, operand.get());
+    if (def && def.getParentBlock() == loop.getBody())
+      callback(def);
+  });
+}
+
+static bool hasDefPartition(scf::ForOp loop, Operation *op,
+                            WarpSchedule &schedule) {
+  SmallVector<Operation *> worklist{op};
+  DenseSet<Operation *> seen;
+  while (!worklist.empty()) {
+    Operation *op = worklist.pop_back_val();
+    if (!seen.insert(op).second)
+      continue;
+    Partition *p = schedule.getPartition(op);
+    if (p && p != schedule.getRootPartition())
+      return true;
+    iterateDefs(loop, op,
+                [&](OpResult def) { worklist.push_back(def.getDefiningOp()); });
+  }
+  return false;
+}
+
+static void iterateUsers(scf::ForOp loop, Operation *op,
+                         function_ref<void(Operation *)> callback) {
+  SmallVector<OpOperand *> uses;
+  for (OpOperand &use : op->getUses())
+    uses.push_back(&use);
+  while (!uses.empty()) {
+    OpOperand *use = uses.pop_back_val();
+    Operation *owner = loop.getBody()->findAncestorOpInBlock(*use->getOwner());
+    if (!isa<scf::YieldOp>(owner)) {
+      callback(owner);
+      continue;
+    }
+    BlockArgument arg = loop.getRegionIterArg(use->getOperandNumber());
+    for (OpOperand &use : arg.getUses())
+      uses.emplace_back(&use);
+  }
+}
+
 static WarpSchedule getInitialSchedule(const PartitionScheme &scheme,
                                        scf::ForOp loop) {
   WarpSchedule schedule;
@@ -269,43 +320,144 @@ static WarpSchedule getInitialSchedule(const PartitionScheme &scheme,
   // Propagate defs of exp.
   Partition *userPartition = schedule.addPartition(0);
 
+  // for (const PipelinedLoad &load : scheme.loads) {
+  //   scheduleUsers(userPartition, load.loadOp);
+  //   for (Operation *allocOp : load.allocOps)
+  //     scheduleUsers(userPartition, allocOp);
+  // }
+  // for (const PipelinedMMA &mma : scheme.mmas) {
+  //   scheduleUsers(userPartition, mma.mmaOp);
+  // }
+
+  for (math::Exp2Op exp : scheme.exps) {
+    scheduleOp(userPartition, exp);
+    scheduleDependencies(userPartition, exp);
+  }
+
+  // Propagate users of loads and MMAs.
   for (const PipelinedLoad &load : scheme.loads) {
     scheduleUsers(userPartition, load.loadOp);
     for (Operation *allocOp : load.allocOps)
       scheduleUsers(userPartition, allocOp);
   }
-  for (const PipelinedMMA &mma : scheme.mmas) {
+
+  SmallVector<Partition *> userPartitions{userPartition};
+  while (userPartitions.size() != scheme.mmas.size()) {
+    userPartitions.push_back(schedule.addPartition(userPartitions.size()));
+  }
+  for (auto [mma, userPartition] : llvm::zip(scheme.mmas, userPartitions)) {
     scheduleUsers(userPartition, mma.mmaOp);
   }
+  for (const PipelinedMMA &mma : scheme.mmas) {
+    scheduleDependencies(userPartition, mma.mmaOp);
+  }
 
-  //for (math::Exp2Op exp : scheme.exps) {
-  //  scheduleOp(userPartition, exp);
-  //  scheduleDependencies(userPartition, exp);
-  //}
+  schedule.updatePartitions();
 
-  //// Propagate users of loads and MMAs.
-  //for (const PipelinedLoad &load : scheme.loads) {
-  //  scheduleUsers(userPartition, load.loadOp);
-  //  for (Operation *allocOp : load.allocOps)
-  //    scheduleUsers(userPartition, allocOp);
-  //}
+  struct OpCluster {
+    SetVector<Operation *> ops;
+    SetVector<Partition *> defPartitions;
+    SetVector<Partition *> sinkPartitions;
+  };
+  SmallVector<std::unique_ptr<OpCluster>> clusters;
+  llvm::MapVector<Operation *, OpCluster *> opToCluster;
+  auto getOrCreateCluster = [&](Operation *op) {
+    OpCluster *&cluster = opToCluster[op];
+    if (!cluster) {
+      cluster = clusters.emplace_back(new OpCluster).get();
+      cluster->ops.insert(op);
+    }
+    return cluster;
+  };
 
-  //SmallVector<Partition *> userPartitions{userPartition};
-  //while (userPartitions.size() != scheme.mmas.size()) {
-  //  userPartitions.push_back(schedule.addPartition(userPartitions.size()));
-  //}
-  //for (auto [mma, userPartition] : llvm::zip(scheme.mmas, userPartitions)) {
-  //  scheduleUsers(userPartition, mma.mmaOp);
-  //}
-  //for (const PipelinedMMA &mma : scheme.mmas) {
-  //  scheduleDependencies(userPartition, mma.mmaOp);
-  //}
+  // Find all def ops with unassigned partitions and spawn clusters for them.
+  for (Partition &partition : schedule.getPartitions()) {
+    auto defCallback = [&](OpResult result, unsigned distance) {
+      Operation *defOp = result.getDefiningOp();
+      Partition *defPartition = schedule.getPartition(defOp);
+      if ((!defPartition || defPartition == schedule.getRootPartition()) &&
+          hasDefPartition(loop, defOp, schedule)) {
+        // Add the current partition as a sink to the cluster.
+        getOrCreateCluster(defOp)->sinkPartitions.insert(&partition);
+      }
+    };
+    schedule.iterateDefs(loop, &partition, defCallback);
+
+    auto useCallback = [&](OpResult result, OpOperand &use, unsigned distance) {
+      Partition *usePartition = schedule.getPartition(use.getOwner());
+      if (!usePartition || usePartition == schedule.getRootPartition()) {
+        // Add the current partition as a def to the cluster.
+        getOrCreateCluster(use.getOwner())->defPartitions.insert(&partition);
+      }
+    };
+    schedule.iterateUses(loop, &partition, useCallback);
+  }
+
+  // Now grow the clusters and merge them as necessary.
+  SmallVector<Operation *> worklist =
+      llvm::to_vector(llvm::make_first_range(opToCluster));
+  while (!worklist.empty()) {
+    Operation *op = worklist.pop_back_val();
+    OpCluster *cluster = opToCluster.find(op)->second;
+    iterateDefs(loop, op, [&](OpResult def) {
+      Operation *defOp = def.getDefiningOp();
+      Partition *defPartition = schedule.getPartition(defOp);
+      if (defPartition && defPartition != schedule.getRootPartition()) {
+        // Found an input edge from a scheduled partition. Add this as a def.
+        cluster->defPartitions.insert(defPartition);
+      } else {
+        if (!hasDefPartition(loop, defOp, schedule))
+          return;
+        // This op is unassigned.
+        OpCluster *&defCluster = opToCluster[defOp];
+        if (!defCluster) {
+          // Add this op to the current cluster and recurse on it.
+          defCluster = cluster;
+          cluster->ops.insert(defOp);
+          worklist.push_back(defOp);
+        } else if (defCluster != cluster) {
+          // Merge clusters. Merge the def cluster into the current one.
+          cluster->ops.insert_range(defCluster->ops);
+          cluster->defPartitions.insert_range(defCluster->defPartitions);
+          cluster->sinkPartitions.insert_range(defCluster->sinkPartitions);
+          for (Operation *op : defCluster->ops)
+            opToCluster[op] = cluster;
+          defCluster->ops.clear();
+          defCluster->defPartitions.clear();
+          defCluster->sinkPartitions.clear();
+        }
+      }
+      iterateUsers(loop, op, [&](Operation *user) {
+        OpCluster *&userCluster = opToCluster[user];
+        if (userCluster)
+          return;
+        userCluster = cluster;
+        cluster->ops.insert(user);
+        worklist.push_back(user);
+      });
+    });
+  }
+
+  for (OpCluster &cluster : llvm::make_pointee_range(clusters)) {
+    // Skip dead clusters.
+    if (cluster.ops.empty())
+      continue;
+    assert(!cluster.defPartitions.empty());
+
+    // Fixed point propagation.
+    SmallVector<Operation *> worklist =
+        topologicalSort(cluster.ops).takeVector();
+    llvm::errs() << "\nBEGIN CLUSTER\n";
+    for (Operation *op : worklist)
+      llvm::errs() << *op << "\n";
+    llvm::errs() << "\n";
+  }
 
   // Place the epilogue partition in the default warpgroup. The MMA and load
   // partitions shouldn't have tensor computations in them, which means they
   // will get assigned just 1 warp each.
   if (triton::tools::getBoolEnv("WARP_SPECIALIZE_ATTENTION_FLAG")) {
-    schedule.reorderPartitions({2, 1, 0});
+    // schedule.reorderPartitions({2, 1, 0});
   } else {
     // Add an extra partition to pad the number of warps to the nearest
     // warpgroup.
@@ -1093,7 +1245,7 @@ void LoadMMASpecialization::runOnOperation() {
       continue;
     WarpSchedule schedule = getInitialSchedule(scheme, loop);
     schedule.serialize(loop);
-    //continue;
+    continue;
     int loopNumStages = getNumStagesOrDefault(loop, numStages);
     if (failed(lowerLoops(loop, scheme, schedule, loopNumStages)))
       continue;

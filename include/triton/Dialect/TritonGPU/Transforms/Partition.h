@@ -74,6 +74,8 @@ public:
   Partition *getPartition(unsigned idx);
   // Get the partition at the index.
   const Partition *getPartition(unsigned idx) const;
+  // Insert an operation into a partition.
+  void insert(Partition *partition, Operation *op);
   // Return an iterator range over the partitions.
   auto getPartitions() { return llvm::make_pointee_range(partitions); }
   // Return an iterator range over the partitions.

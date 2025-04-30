@@ -111,7 +111,7 @@ WarpSchedule::Partition *WarpSchedule::getPartition(Operation *op) {
   return opToPartition.lookup(op);
 }
 const WarpSchedule::Partition *WarpSchedule::getPartition(Operation *op) const {
-  return opToPartition.at(op);
+  return opToPartition.lookup(op);
 }
 
 WarpSchedule::Partition *WarpSchedule::getPartition(unsigned idx) {
@@ -119,6 +119,11 @@ WarpSchedule::Partition *WarpSchedule::getPartition(unsigned idx) {
 }
 const WarpSchedule::Partition *WarpSchedule::getPartition(unsigned idx) const {
   return partitions[idx].get();
+}
+
+void WarpSchedule::insert(Partition *partition, Operation *op) {
+  partition->insert(op);
+  opToPartition[op] = partition;
 }
 
 FailureOr<WarpSchedule> WarpSchedule::deserialize(scf::ForOp loop) {
@@ -274,7 +279,7 @@ void WarpSchedule::iterateInputs(
         // This value originates from a previous iteration.
         assert(llvm::is_contained(loop.getRegionIterArgs(), arg));
         callback(operand);
-      } else if (opToPartition.at(value.getDefiningOp()) != partition) {
+      } else if (getPartition(value.getDefiningOp()) != partition) {
         // This value originates from a different partition in the same
         // iteration.
         assert(value.getDefiningOp()->getParentOp() == loop);
@@ -288,17 +293,14 @@ void WarpSchedule::iterateOutputs(
     scf::ForOp loop, const Partition *partition,
     function_ref<void(Operation *, OpOperand &)> callback) const {
   for (Operation *op : partition->getOps()) {
-    for (OpResult result : op->getOpResults()) {
-      for (OpOperand &use : result.getUses()) {
-        Operation *owner =
-            loop.getBody()->findAncestorOpInBlock(*use.getOwner());
-        if (isa<scf::YieldOp>(owner)) {
-          // This value is used in a subsequent iteration.
-          callback(owner, use);
-        } else if (opToPartition.at(owner) != partition) {
-          // This value is used in a different partition in the same iteration.
-          callback(owner, use);
-        }
+    for (OpOperand &use : op->getUses()) {
+      Operation *owner = loop.getBody()->findAncestorOpInBlock(*use.getOwner());
+      if (isa<scf::YieldOp>(owner)) {
+        // This value is used in a subsequent iteration.
+        callback(owner, use);
+      } else if (getPartition(owner) != partition) {
+        // This value is used in a different partition in the same iteration.
+        callback(owner, use);
       }
     }
   }
