@@ -355,6 +355,7 @@ static WarpSchedule getInitialSchedule(const PartitionScheme &scheme,
   schedule.updatePartitions();
 
   struct OpCluster {
+    size_t id;
     SetVector<Operation *> ops;
     SetVector<Partition *> defPartitions;
     SetVector<Partition *> sinkPartitions;
@@ -364,7 +365,7 @@ static WarpSchedule getInitialSchedule(const PartitionScheme &scheme,
   auto getOrCreateCluster = [&](Operation *op) {
     OpCluster *&cluster = opToCluster[op];
     if (!cluster) {
-      cluster = clusters.emplace_back(new OpCluster).get();
+      cluster = clusters.emplace_back(new OpCluster{clusters.size()}).get();
       cluster->ops.insert(op);
     }
     return cluster;
@@ -420,14 +421,20 @@ static WarpSchedule getInitialSchedule(const PartitionScheme &scheme,
           cluster->ops.insert_range(defCluster->ops);
           cluster->defPartitions.insert_range(defCluster->defPartitions);
           cluster->sinkPartitions.insert_range(defCluster->sinkPartitions);
-          for (Operation *op : defCluster->ops)
+          OpCluster *oldCluster = defCluster;
+          for (Operation *op : oldCluster->ops)
             opToCluster[op] = cluster;
-          defCluster->ops.clear();
-          defCluster->defPartitions.clear();
-          defCluster->sinkPartitions.clear();
+          oldCluster->ops.clear();
+          oldCluster->defPartitions.clear();
+          oldCluster->sinkPartitions.clear();
         }
       }
       iterateUsers(loop, op, [&](Operation *user) {
+        Partition *userPartition = schedule.getPartition(user);
+        if (userPartition && userPartition != schedule.getRootPartition()) {
+          cluster->sinkPartitions.insert(userPartition);
+          return;
+        }
         OpCluster *&userCluster = opToCluster[user];
         if (userCluster)
           return;
@@ -438,19 +445,84 @@ static WarpSchedule getInitialSchedule(const PartitionScheme &scheme,
     });
   }
 
+  // We have clustered unassigned ops in the liveouts of ops in assigned
+  // partitions and in the critical paths between ops in different partitions.
+  // Ops that are next to each other are placed in the same cluster. Now the
+  // task is to figure out how to assign partitions to the ops in each cluster
+  // based on the def and sink partitions, which is very non-trivial.
   for (OpCluster &cluster : llvm::make_pointee_range(clusters)) {
     // Skip dead clusters.
     if (cluster.ops.empty())
       continue;
     assert(!cluster.defPartitions.empty());
+#ifndef NDEBUG
+    for (Operation *op : cluster.ops) {
+      Partition *partition = schedule.getPartition(op);
+      assert(!partition || partition == schedule.getRootPartition());
+    }
+#endif
 
-    // Fixed point propagation.
-    SmallVector<Operation *> worklist =
-        topologicalSort(cluster.ops).takeVector();
-    llvm::errs() << "\nBEGIN CLUSTER\n";
-    for (Operation *op : worklist)
-      llvm::errs() << *op << "\n";
-    llvm::errs() << "\n";
+    // If there are multiple def or sink partitions, don't know what to do.
+    // Assign the whole cluster to its own partition.
+    if (cluster.defPartitions.size() > 1 || cluster.sinkPartitions.size() > 1) {
+      Partition *newPartition = schedule.addPartition(0);
+      for (Operation *op : cluster.ops)
+        schedule.insert(newPartition, op);
+      continue;
+    }
+
+    // If there is no sink partition, this means there is a backedge somewhere,
+    // for now assign the cluster to the def partition.
+    Partition *defPartition = cluster.defPartitions.front();
+    if (cluster.sinkPartitions.empty()) {
+      for (Operation *op : cluster.ops)
+        schedule.insert(defPartition, op);
+      continue;
+    }
+
+    // Find the critical path between the def partition and sink partition.
+    Partition *sinkPartition = cluster.sinkPartitions.front();
+    SetVector<Operation *> critPath;
+    DenseSet<Operation *> opsInCluster(cluster.ops.begin(), cluster.ops.end());
+    auto callback = [&](OpResult result, unsigned distance) {
+      Operation *defOp = result.getDefiningOp();
+      if (opsInCluster.contains(defOp))
+        critPath.insert(defOp);
+    };
+    schedule.iterateDefs(loop, sinkPartition, callback);
+    for (unsigned i = 0; i < critPath.size(); ++i) {
+      Operation *op = critPath[i];
+      iterateDefs(loop, op, [&](OpResult def) {
+        Operation *defOp = def.getDefiningOp();
+        if (opsInCluster.contains(defOp))
+          critPath.insert(defOp);
+      });
+    }
+
+    // If all ops are on the critical path, assign them to the sink partition.
+    if (critPath.size() == cluster.ops.size()) {
+      for (Operation *op : cluster.ops)
+        schedule.insert(sinkPartition, op);
+      continue;
+    }
+
+    // Some ops are on the critical path, and there is also a backedge.
+    // Rematerialize the critical path ops into the sink partition. Leave the
+    // rest in the def partition and rely on DCE to remove them.
+    critPath = topologicalSort(critPath);
+    DenseSet<Operation *> sinkOps(sinkPartition->getOps().begin(),
+                                  sinkPartition->getOps().end());
+    for (Operation *op : llvm::reverse(critPath)) {
+      OpBuilder b(op);
+      Operation *clone = b.clone(*op);
+      op->replaceUsesWithIf(clone->getResults(), [&](OpOperand &use) {
+        return sinkOps.contains(use.getOwner());
+      });
+      sinkOps.insert(clone);
+      schedule.insert(sinkPartition, clone);
+    }
+    for (Operation *op : cluster.ops)
+      schedule.insert(defPartition, op);
   }
 
   // Place the epilogue partition in the default warpgroup. The MMA and load
