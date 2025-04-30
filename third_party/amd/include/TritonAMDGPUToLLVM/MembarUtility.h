@@ -6,15 +6,15 @@
 namespace mlir::triton::AMD {
 // Filter function used in the AMDGPU backend to filter unnecessary barriers
 // during Membar Analysis. Filters applied by this function:
-// 1) Do not create barriers if one operand is a LocalLoad synced by an
-// AsyncWait. This prevents a redundant barrier between LocalLoad and prefetches
-// because membar cannot see that subviews from the same shared allocation do
-// not alias when pipelining loads. See amdgpu_membar.mlir for examples.
-// This filter can produce wrong IR/assembly if we pipeline with a single buffer
-// in lds because it filters out a required gpu.barrier between the LocalLoad
-// and the prefetches. However the pipeliner will always use at least 2 buffers
-// so this IR cannot be produced. Example membar input IR to produce incorrect
-// results:
+// 1) Do not create barriers between AsyncCopyGlobalToLocal and LocalLoad if the
+// LocalLoad is synced by AsyncWait. This prevents a redundant barrier between
+// LocalLoad and prefetches because membar cannot see that subviews from the
+// same shared allocation do not alias when pipelining loads. See
+// amdgpu_membar.mlir for examples. This filter can produce wrong IR/assembly if
+// we pipeline with a single buffer in lds because it filters out a required
+// gpu.barrier between the LocalLoad and the prefetches. However the pipeliner
+// will always use at least 2 buffers so this IR cannot be produced. Example
+// membar input IR to produce incorrect results:
 //   %tile_a = ttg.memdesc_subview
 //   %1 = AsyncCopyGlobalToLocal %ptr %tile_a
 //   scf.for
