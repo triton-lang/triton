@@ -1,6 +1,6 @@
 from triton.backends.compiler import BaseBackend, GPUTarget
 from triton._C.libtriton import ir, passes, llvm, amd
-from triton import config
+from triton import knobs
 from dataclasses import dataclass
 from typing import Any, Dict, Tuple
 from types import ModuleType
@@ -19,11 +19,11 @@ def get_min_dot_size(target: GPUTarget):
 
 
 def is_pingpong_schedule_enabled(arch):
-    return (arch == "gfx942") if config.amd.use_block_pingpong is None else config.amd.use_block_pingpong
+    return (arch == "gfx942") if knobs.amd.use_block_pingpong is None else knobs.amd.use_block_pingpong
 
 
 def is_in_thread_transpose_enabled(arch):
-    return (arch == "gfx942") if config.amd.use_in_thread_transpose is None else config.amd.use_in_thread_transpose
+    return (arch == "gfx942") if knobs.amd.use_in_thread_transpose is None else knobs.amd.use_in_thread_transpose
 
 
 @dataclass(frozen=True)
@@ -99,7 +99,7 @@ class HIPBackend(BaseBackend):
         self.binary_ext = "hsaco"
 
     def parse_options(self, opts) -> Any:
-        args = {'arch': config.runtime.override_arch or self.target.arch}
+        args = {'arch': knobs.runtime.override_arch or self.target.arch}
 
         # Enable XF32 (TF32) for CDNA3 GPUs
         if self.target.arch == 'gfx942':
@@ -116,7 +116,7 @@ class HIPBackend(BaseBackend):
             args["supported_fp8_dtypes"] = tuple(sorted(supported_fp8_dtypes))
 
         if "enable_fp_fusion" not in opts:
-            args["enable_fp_fusion"] = config.language.default_fp_fusion
+            args["enable_fp_fusion"] = knobs.language.default_fp_fusion
         args.update({k: opts[k] for k in HIPOptions.__dataclass_fields__.keys() \
                      if k in opts and opts[k] is not None})
         return HIPOptions(**args)
@@ -165,14 +165,14 @@ class HIPBackend(BaseBackend):
         ret = BaseBackend.get_arg_specialization(arg, ty, **kwargs)
         # Only attempt to do buffer ops specialization if buffer ops are enabled.
         # Otherwise the is_within_2gb check is unnecessary overhead.
-        if config.amd.use_buffer_ops and ty == "tensor" and HIPBackend.is_within_2gb(arg):
+        if knobs.amd.use_buffer_ops and ty == "tensor" and HIPBackend.is_within_2gb(arg):
             ret += "S"
         return ret
 
     @staticmethod
     def path_to_rocm_lld():
         # Check env path for ld.lld
-        lld_env_path = config.amd.lld_path
+        lld_env_path = knobs.amd.lld_path
         if lld_env_path is not None:
             lld = Path(lld_env_path)
             if lld.is_file():
@@ -231,9 +231,9 @@ class HIPBackend(BaseBackend):
         passes.ttir.add_loop_split(pm)
         passes.common.add_canonicalizer(pm)
 
-        global_prefetch = config.amd.global_prefetch
-        local_prefetch = config.amd.local_prefetch
-        use_async_copy = config.amd.use_async_copy
+        global_prefetch = knobs.amd.global_prefetch
+        local_prefetch = knobs.amd.local_prefetch
+        use_async_copy = knobs.amd.use_async_copy
 
         # The `local-prefetch` scheduling variant requires turning on buffer ops.
         if options.schedule_hint == "local-prefetch":
@@ -256,7 +256,7 @@ class HIPBackend(BaseBackend):
         if use_block_pingpong and options.num_stages == 2:
             amd.passes.ttgpuir.add_block_pingpong(pm, options.num_stages)
 
-        if config.amd.use_buffer_ops:
+        if knobs.amd.use_buffer_ops:
             amd.passes.ttgpuir.add_canonicalize_pointers(pm)
             passes.common.add_canonicalizer(pm)
             amd.passes.ttgpuir.add_convert_to_buffer_ops(pm, options.arch)
@@ -306,7 +306,7 @@ class HIPBackend(BaseBackend):
         passes.common.add_symbol_dce(pm)
         if options.schedule_hint.lower() != "none":
             amd.passes.ttgpuir.lower_instruction_sched_hints(pm, options.arch, options.num_stages)
-        if not config.compilation.disable_line_info:
+        if not knobs.compilation.disable_line_info:
             passes.llvmir.add_di_scope(pm)
         amd.passes.ttgpuir.add_builtin_func_to_llvmir(pm, __HIP_FTZ)
         pm.run(mod)
@@ -317,7 +317,7 @@ class HIPBackend(BaseBackend):
         llvm_mod = llvm.to_module(mod, context)
         amd.attach_target_triple(llvm_mod)
         target_features = ''
-        if config.compilation.enable_asan:
+        if knobs.compilation.enable_asan:
             target_features = '+xnack'
         llvm.attach_datalayout(llvm_mod, amd.TARGET_TRIPLE, options.arch, target_features)
 
@@ -345,7 +345,7 @@ class HIPBackend(BaseBackend):
         fns[0].add_fn_attr("amdgpu-waves-per-eu", f"{options.waves_per_eu}")
         denormal_mode = "preserve-sign" if options.allow_flush_denorm else "ieee"
         fns[0].add_fn_attr("denormal-fp-math-f32", denormal_mode)
-        if config.compilation.enable_asan:
+        if knobs.compilation.enable_asan:
             fns[0].add_fn_target_feature("+xnack")
             fns[0].add_fn_asan_attr()
 
@@ -354,7 +354,7 @@ class HIPBackend(BaseBackend):
         # from memory.
         amd.set_all_fn_arg_inreg(fns[0])
 
-        if config.compilation.enable_asan:
+        if knobs.compilation.enable_asan:
             default_libdir = Path(__file__).parent / 'lib'
             paths = [
                 str(default_libdir / 'asanrtl.bc'),
@@ -394,7 +394,7 @@ class HIPBackend(BaseBackend):
         if options.schedule_hint == 'attention':
             flags.append('sink-insts-to-avoid-spills')
         amdgcn = llvm.translate_to_asm(src, amd.TARGET_TRIPLE, options.arch, '', flags, options.enable_fp_fusion, False)
-        if config.amd.dump_amdgcn:
+        if knobs.amd.dump_amdgcn:
             print("// -----// AMDGCN Dump //----- //")
             print(amdgcn)
         return amdgcn
@@ -402,7 +402,7 @@ class HIPBackend(BaseBackend):
     @staticmethod
     def make_hsaco(src, metadata, options):
         target_features = ''
-        if config.compilation.enable_asan:
+        if knobs.compilation.enable_asan:
             target_features = '+xnack'
         hsaco = amd.assemble_amdgcn(src, options.arch, target_features)
 
