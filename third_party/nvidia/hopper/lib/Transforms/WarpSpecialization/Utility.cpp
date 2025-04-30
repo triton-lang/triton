@@ -1,4 +1,4 @@
-#include "third_party/nvidia/hopper/include/Transforms/Utility.h"
+#include "Utility.h"
 #include "llvm/ADT/SetVector.h"
 
 namespace mlir {
