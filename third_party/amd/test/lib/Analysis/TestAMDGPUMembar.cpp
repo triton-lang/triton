@@ -20,8 +20,7 @@ struct TestAMDGPUMembarPass
   }
 
   void runOnOperation() override {
-    Operation *operation = getOperation();
-    ModuleOp moduleOp = cast<ModuleOp>(operation);
+    ModuleOp moduleOp = getOperation();
     // Print all ops after membar pass
     ModuleAllocation allocation(moduleOp);
     ModuleMembarAnalysis membarPass(&allocation,
@@ -33,7 +32,7 @@ struct TestAMDGPUMembarPass
 } // namespace
 
 namespace mlir::test {
-void registerTestAMDGPUTestMembarPass() {
+void registerTestAMDGPUMembarPass() {
   PassRegistration<TestAMDGPUMembarPass>();
 }
 } // namespace mlir::test

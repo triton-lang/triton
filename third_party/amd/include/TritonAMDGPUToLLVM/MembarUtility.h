@@ -10,17 +10,20 @@ namespace mlir::triton::AMD {
 // AsyncWait. This prevents a redundant barrier between LocalLoad and prefetches
 // because membar cannot see that subviews from the same shared allocation do
 // not alias when pipelining loads. See amdgpu_membar.mlir for examples.
-// This filter can produce assembly for the following IR:
-//   %tile_a = ttg.subview
+// This filter can produce wrong IR/assembly if we pipeline with a single buffer
+// in lds because it filters out a required gpu.barrier between the LocalLoad
+// and the prefetches. However the pipeliner will always use at least 2 buffers
+// so this IR cannot be produced. Example membar input IR to produce incorrect
+// results:
+//   %tile_a = ttg.memdesc_subview
 //   %1 = AsyncCopyGlobalToLocal %ptr %tile_a
 //   scf.for
 //     %2 = AsyncWait %1
+//      # Membar will add a required gpu.barrier here
 //     %3 = LocalLoad %tile_a
-//     %4 = AsyncCopy %ptr_2 %tile_a
+//      # Requires gpu.barrier but filter will prevent it
+//     %4 = AsyncCopyGlobalToLocal %ptr_2 %tile_a
 //     scf.yield
-// Because there will be no barrier between %3 and %4 but they read/write to
-// the same location in shared memory. However, the pipeliner does always use at
-// least 2 buffers so this IR cannot be produced.
 bool membarFilter(Operation *op1, Operation *op2);
 } // namespace mlir::triton::AMD
 
