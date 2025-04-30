@@ -17,11 +17,6 @@ namespace triton::nvidia_gpu {
 // MMA Pipeline Analysis
 //===----------------------------------------------------------------------===//
 
-// Returns the TMEMAllocOp and TMEMLoadOp that are used to allocate and load the
-// accumulator for the given MMA operation. The TMEMAllocOp and TMEMLoadOp must
-// be in the same region as the MMA operation.
-std::optional<std::pair<TMEMAllocOp, TMEMLoadOp>>
-getTMemAllocAndLoad(MMAv5OpInterface mmaOp);
 // Given an MMAv5 operation in a loop, determine if its accumulator can be
 // multibuffered.
 bool isAccMultibufferingPossible(MMAv5OpInterface mma, scf::ForOp forOp);

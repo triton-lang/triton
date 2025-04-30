@@ -27,19 +27,19 @@ def fresh_triton_cache():
 
 
 @pytest.fixture
-def fresh_config(request, monkeypatch):
-    from triton import config
-    config_map = {
-        name: conf
-        for name, conf in config.__dict__.items()
-        if isinstance(conf, config.base_config) and conf != config.base_config
+def fresh_knobs(request, monkeypatch):
+    from triton import knobs
+    knobs_map = {
+        name: knobset
+        for name, knobset in knobs.__dict__.items()
+        if isinstance(knobset, knobs.base_knobs) and knobset != knobs.base_knobs
     }
     try:
-        for name, conf in config_map.items():
-            setattr(config, name, conf.copy().reset())
-            for knob in conf.knob_descriptors.values():
+        for name, knobset in knobs_map.items():
+            setattr(knobs, name, knobset.copy().reset())
+            for knob in knobset.knob_descriptors.values():
                 monkeypatch.delenv(knob.key, raising=False)
-        yield config
+        yield knobs
     finally:
-        for name, conf in config_map.items():
-            setattr(config, name, conf)
+        for name, knobset in knobs_map.items():
+            setattr(knobs, name, knobset)

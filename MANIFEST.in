@@ -5,9 +5,7 @@ graft include
 graft lib
 graft python/src
 graft python/test
-graft python/triton/backends/amd
-graft python/triton/backends/nvidia
-graft python/triton/tools/extra/cuda
+graft python/triton
 graft test
 graft third_party
 graft unittest

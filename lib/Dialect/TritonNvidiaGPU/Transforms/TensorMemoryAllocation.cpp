@@ -176,8 +176,17 @@ static TMemChunk allocFirstFit(MemoryBitMap &memoryMap,
 
 static Operation *getAlloc(Value value) {
   Operation *op = value.getDefiningOp();
-  while (isa<triton::gpu::MemDescSubviewOp>(op)) {
-    op = op->getResult(0).getDefiningOp();
+  while (auto subOp = dyn_cast<triton::gpu::MemDescSubviewOp>(op)) {
+    if (subOp.getSrc().getDefiningOp()) {
+      op = subOp.getSrc().getDefiningOp();
+    } else {
+      auto arg = cast<BlockArgument>(subOp.getSrc());
+      auto partitions =
+          cast<WarpSpecializePartitionsOp>(arg.getOwner()->getParentOp());
+      WarpSpecializeOp wsOp = partitions.getParentOp();
+      auto capture = wsOp.getExplicitCaptures()[arg.getArgNumber()];
+      op = capture.getDefiningOp();
+    }
   }
   assert(isa<triton::nvidia_gpu::TMEMAllocOp>(op) && "Expected a TMEMAllocOp");
   return op;

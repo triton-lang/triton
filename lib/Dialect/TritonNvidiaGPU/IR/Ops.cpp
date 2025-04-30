@@ -212,6 +212,29 @@ static void printBarriersAndPreds(OpAsmPrinter &p, Operation *op,
   }
 }
 
+// token := `[` (ssa-value (`,` ssa-value)*)? `]`
+// dep-operand := token?
+static ParseResult
+parseToken(OpAsmParser &p, std::optional<OpAsmParser::UnresolvedOperand> &dep,
+           Type &token) {
+  if (failed(p.parseOptionalLSquare()))
+    return success();
+  token = p.getBuilder().getType<AsyncTokenType>();
+  if (succeeded(p.parseOptionalRSquare()))
+    return success();
+  if (p.parseOperand(dep.emplace()) || p.parseRSquare())
+    return failure();
+  return success();
+}
+static void printToken(OpAsmPrinter &p, Operation *op, Value dep, Type token) {
+  if (!token)
+    return;
+  p << '[';
+  if (dep)
+    p << dep;
+  p << ']';
+}
+
 void TCGen5MMAOp::getEffects(
     SmallVectorImpl<SideEffects::EffectInstance<MemoryEffects::Effect>>
         &effects) {
@@ -255,12 +278,12 @@ Value TCGen5MMAOp::getPredicate() { return getPred(); }
 
 void TCGen5MMAOp::setPredicate(Value pred) { getPredMutable().assign(pred); }
 
-void TCGen5MMAOp::build(OpBuilder &builder, OperationState &state, Value a,
-                        Value b, Value d, Value useD, Value pred,
-                        bool useTwoCTAs, ValueRange barriers,
+void TCGen5MMAOp::build(OpBuilder &builder, OperationState &state, Type token,
+                        Value a, Value b, Value d, Value accDep, Value useD,
+                        Value pred, bool useTwoCTAs, ValueRange barriers,
                         ValueRange barrierPreds) {
-  build(builder, state, a, b, d, useD, pred, barriers, barrierPreds,
-        useTwoCTAs ? builder.getUnitAttr() : UnitAttr());
+  build(builder, state, token, a, b, d, accDep, useD, pred, barriers,
+        barrierPreds, useTwoCTAs ? builder.getUnitAttr() : UnitAttr());
 }
 
 // -- TCGen5MMAScaledOp --
@@ -279,6 +302,10 @@ void TCGen5MMAScaledOp::getEffects(
   }
   effects.emplace_back(MemoryEffects::Read::get(), &getBMutable(),
                        SharedMemory::get());
+  effects.emplace_back(MemoryEffects::Read::get(), &getAScaleMutable(),
+                       TensorMemory::get());
+  effects.emplace_back(MemoryEffects::Read::get(), &getBScaleMutable(),
+                       TensorMemory::get());
 }
 
 bool TCGen5MMAScaledOp::verifyDims() {
@@ -397,12 +424,13 @@ int64_t TCGen5MMAScaledOp::getBlockK() {
 }
 
 void TCGen5MMAScaledOp::build(OpBuilder &builder, OperationState &state,
-                              Value a, Value b, Value d, Value aScale,
-                              Value bScale, ScaleDotElemType aType,
-                              ScaleDotElemType bType, Value useD, Value pred,
-                              ValueRange barriers, ValueRange barrierPreds) {
+                              Type token, Value a, Value b, Value d,
+                              Value accDep, Value aScale, Value bScale,
+                              ScaleDotElemType aType, ScaleDotElemType bType,
+                              Value useD, Value pred, ValueRange barriers,
+                              ValueRange barrierPreds) {
   MLIRContext *ctx = builder.getContext();
-  build(builder, state, a, b, d, aScale, bScale,
+  build(builder, state, token, a, b, d, accDep, aScale, bScale,
         ScaleDotElemTypeAttr::get(ctx, aType),
         ScaleDotElemTypeAttr::get(ctx, bType), useD, pred, barriers,
         barrierPreds);
