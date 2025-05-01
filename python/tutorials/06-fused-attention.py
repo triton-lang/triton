@@ -270,9 +270,9 @@ def _tma_pre_hook(nargs):
 configs_tma = [
     triton.Config({'BLOCK_M': BM, 'BLOCK_N': BN}, num_stages=s, num_warps=w, pre_hook=_tma_pre_hook) \
     for BM in [64, 128, 256]\
-    for BN in [64]\
-    for s in [3, 4, 5]\
-    for w in [4, 8]\
+    for BN in [64, 128]\
+    for s in [2, 3, 4]\
+    for w in [4]\
 ]
 
 
@@ -624,7 +624,7 @@ class _attention(torch.autograd.Function):
 
             BLOCK_M = 128
             HEAD_DIM = HEAD_DIM_K
-            BLOCK_N = min(64, HEAD_DIM)
+            BLOCK_N = min(128, HEAD_DIM)
             desc_q = TensorDescriptor(q, shape=[y_dim, HEAD_DIM_K], strides=[HEAD_DIM, 1], block_shape=[BLOCK_M, HEAD_DIM])
             desc_v = TensorDescriptor(v, shape=[y_dim, HEAD_DIM_K], strides=[HEAD_DIM, 1], block_shape=[BLOCK_N, HEAD_DIM])
             desc_k = TensorDescriptor(k, shape=[y_dim, HEAD_DIM_K], strides=[HEAD_DIM, 1], block_shape=[BLOCK_N, HEAD_DIM])
@@ -645,7 +645,7 @@ class _attention(torch.autograd.Function):
                 warp_specialize=warp_specialize,  #
 
                 BLOCK_M=BLOCK_M,
-                BLOCK_N=min(HEAD_DIM, 128),
+                BLOCK_N=BLOCK_N,
                 num_warps=4,
                 num_stages=2,
                 num_ctas=1,
@@ -718,7 +718,7 @@ class _attention(torch.autograd.Function):
 attention = _attention.apply
 
 
-@pytest.mark.parametrize("Z, H, N_CTX, HEAD_DIM", [(1, 2, 1024, 64)])
+@pytest.mark.parametrize("Z, H, N_CTX, HEAD_DIM", [(4, 128, 1024, 128)])
 @pytest.mark.parametrize("causal", [True])
 def test_op(Z, H, N_CTX, HEAD_DIM, causal, dtype=torch.float16):
     torch.manual_seed(20)
@@ -766,7 +766,7 @@ except BaseException:
 
 #TORCH_HAS_FP8 = hasattr(torch, 'float8_e5m2')
 TORCH_HAS_FP8 = False
-BATCH, N_HEADS, HEAD_DIM = 4, 32, 64
+BATCH, N_HEADS, HEAD_DIM = 4, 128, 128
 # vary seq length for fixed head and batch=4
 configs = []
 for mode in ["fwd"]:
