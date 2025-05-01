@@ -137,11 +137,11 @@ TMemMessageTraits getTMemMessageFromAtom(const TMemAccessAtom &atom,
 // Only allows half of the thread registers to be used for tensor memory access
 // to avoid register pressure. This ensures the largest tmem message width is
 // used for the workload without inducing spills.
-int getTMemMessageNarrowingFactor(int workloadThreadRegs, int maxnreg) {
+int getTMemMessageNarrowingFactor(const TMemAccessAtom &atom, int maxnreg) {
   const int allowedRegUsage = maxnreg / 2;
   int narrowingFactor = 1;
-  while (workloadThreadRegs > allowedRegUsage) {
-    workloadThreadRegs /= 2;
+  while (getTMemMessageFromAtom(atom, narrowingFactor).numRegs >
+         allowedRegUsage) {
     narrowingFactor *= 2;
   }
   return narrowingFactor;
@@ -381,10 +381,7 @@ void createWaitOpSt(Location loc, ConversionPatternRewriter &rewriter) {
 TMemMessageTraits selectTMemMessage(const TMemRuntimeInfo &info, int maxnreg) {
   auto atom = info.useStridedMessage ? TMemAccess16x32bx2 : TMemAccess32x32b;
 
-  int totalRegsNeeded =
-      getEffectiveRegs(info.unpackedb16, info.useStridedMessage,
-                       info.numCols / info.numWarpGroups);
-  int narrowingFactor = getTMemMessageNarrowingFactor(totalRegsNeeded, maxnreg);
+  int narrowingFactor = getTMemMessageNarrowingFactor(atom, maxnreg);
   auto narrowedMessage = getTMemMessageFromAtom(atom, narrowingFactor);
   narrowedMessage = constrainMessageFromWorkload(narrowedMessage, info,
                                                  narrowedMessage.numRegs);
@@ -403,20 +400,20 @@ static int getContextualMaxNReg(Operation *op) {
   if (auto mod = dyn_cast<ModuleOp>(op)) {
     // Check for a maxnreg attribute.
     if (auto attr = op->getAttrOfType<IntegerAttr>(AttrMaxRegistersName))
-      return std::max<int>(maxRegisters, attr.getInt());
+      return std::min<int>(maxRegisters, attr.getInt());
 
   } else if (auto partitions =
                  dyn_cast<WarpSpecializePartitionsOp>(op->getParentOp())) {
     // Check if the partition has reduced registers.
     unsigned idx = op->getParentRegion()->getRegionNumber();
     if (auto actRegisters = partitions.getParentOp().getActualRegisters())
-      return std::max<int>(maxRegisters, (*actRegisters)[1 + idx]);
+      return std::min<int>(maxRegisters, (*actRegisters)[1 + idx]);
     return getContextualMaxNReg(partitions.getParentOp());
 
   } else if (auto wsOp = dyn_cast<WarpSpecializeOp>(op->getParentOp())) {
     // Check the register usage of the default warpgroup.
     if (auto actRegisters = wsOp.getActualRegisters())
-      return std::max<int>(maxRegisters, actRegisters->front());
+      return std::min<int>(maxRegisters, actRegisters->front());
   }
 
   if (Operation *parent = op->getParentOp())
