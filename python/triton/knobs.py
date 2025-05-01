@@ -64,8 +64,12 @@ class env_base(Generic[SetType, GetType]):
         else:
             return self.get()
 
+    @property
+    def env_val(self) -> str | None:
+        return getenv(self.key)
+
     def get(self) -> GetType:
-        env = getenv(self.key)
+        env = self.env_val
         return self.transform(self.default() if env is None else self.from_env(env))
 
     def __set__(self, obj: object, value: Union[SetType, Env]) -> None:
@@ -265,8 +269,7 @@ class base_knobs:
 
     def copy(self: knobs_type) -> knobs_type:
         res = type(self)()
-        for k, v in self.__dict__.items():
-            res.__dict__[k] = v
+        res.__dict__.update(self.__dict__)
         return res
 
     def reset(self: knobs_type) -> knobs_type:
@@ -277,11 +280,18 @@ class base_knobs:
     @contextmanager
     def scope(self) -> Generator[None, None, None]:
         try:
+            initial_env = {knob.key: knob.env_val for knob in self.knob_descriptors.values()}
             orig = dict(self.__dict__)
             yield
         finally:
             self.__dict__.clear()
             self.__dict__.update(orig)
+
+            for k, v in initial_env.items():
+                if v is not None:
+                    os.environ[k] = v
+                elif k in os.environ:
+                    del os.environ[k]
 
 
 class build_knobs(base_knobs):
