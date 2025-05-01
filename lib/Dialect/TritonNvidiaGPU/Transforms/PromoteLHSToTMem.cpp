@@ -47,6 +47,7 @@ public:
     auto localAllocOp = lhs.template getDefiningOp<ttg::LocalAllocOp>();
     if (!localAllocOp)
       return failure();
+    auto localAllocResult = localAllocOp.getResult();
     // Limit the liverange of the TMem allocations to single block.
     if (localAllocOp->getParentRegion() != tcGen5MMAOp->getParentRegion())
       return failure();
@@ -87,6 +88,12 @@ public:
     Value tMemAlloc =
         rewriter.create<ttng::TMEMAllocOp>(loc, lhsMemDescType, src);
     tcGen5MMAOp.getAMutable().assign(tMemAlloc);
+    if (localAllocResult.hasOneUse()) {
+      auto localAllocUser = *localAllocResult.user_begin();
+      if (isa<ttng::WaitBarrierOp>(localAllocUser)) {
+        rewriter.replaceAllUsesWith(localAllocResult, tMemAlloc);
+      }
+    }
     return success();
   }
 };

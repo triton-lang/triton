@@ -11,9 +11,11 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
   // CHECK-LABEL: @promote_lhs
   // CHECK: scf.for
   // CHECK: %[[A:.+]] = tt.load
+  // CHECK-NOT: ttg.local_alloc
   // CHECK: %[[A_TMEM:.+]] = ttng.tmem_alloc %[[A]]
   // CHECK: ttng.tc_gen5_mma %[[A_TMEM]]
-  tt.func public @promote_lhs(%A_ptr: tensor<128x128x!tt.ptr<f16>, #blocked1>, %B_ptr: tensor<128x128x!tt.ptr<f16>, #blocked1>, %arg3: i32) -> tensor<128x128xf16, #blocked1> attributes {noinline = false} {
+  // CHECK: ttng.wait_barrier {{.*}}, {{.*}} deps %[[A_TMEM]]
+  tt.func public @promote_lhs(%A_ptr: tensor<128x128x!tt.ptr<f16>, #blocked1>, %B_ptr: tensor<128x128x!tt.ptr<f16>, #blocked1>, %arg3: i32, %barrier: !ttg.memdesc<1xi64, #shared, #ttg.shared_memory, mutable>, %phase: i32) -> tensor<128x128xf16, #blocked1> attributes {noinline = false} {
     %true = arith.constant true
     %cst = arith.constant dense<0.000000e+00> : tensor<128x128xf32, #blocked1>
     %c0_i32 = arith.constant 0 : i32
@@ -26,6 +28,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
       %acc_tm = ttng.tmem_alloc %acc : (tensor<128x128xf32, #blocked1>) -> !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>
       ttng.tc_gen5_mma %A_sh, %B_sh, %acc_tm, %true, %true : !ttg.memdesc<128x128xf16, #shared, #ttg.shared_memory, mutable>, !ttg.memdesc<128x128xf16, #shared, #ttg.shared_memory, mutable>, !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>
       %acc_res = ttng.tmem_load %acc_tm : !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable> -> tensor<128x128xf32, #blocked1>
+      ttng.wait_barrier %barrier, %phase deps %A_sh, %B_sh: !ttg.memdesc<1xi64, #shared, #ttg.shared_memory, mutable>, !ttg.memdesc<128x128xf16, #shared, #ttg.shared_memory, mutable>, !ttg.memdesc<128x128xf16, #shared, #ttg.shared_memory, mutable>
       scf.yield %acc_res : tensor<128x128xf32, #blocked1>
     }
     ttg.local_dealloc %B_multibuf : !ttg.memdesc<1x128x128xf16, #shared, #ttg.shared_memory, mutable>
