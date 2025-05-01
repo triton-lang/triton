@@ -154,7 +154,6 @@ std::vector<unsigned> multiDimElementwise(const ArrayRef<T> &lhs,
   }
   return result;
 }
-
 } // namespace mlir::LLVM::AMD
 
 #endif // TRITON_THIRD_PARTY_AMD_LIB_TRITONAMDGPUTOLLVM_UTILITY_H_

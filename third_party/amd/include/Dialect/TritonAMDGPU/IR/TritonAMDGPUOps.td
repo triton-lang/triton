@@ -65,6 +65,34 @@ def ExtractSliceOp : TT_AMDGPU_Op<"extract_slice", [Pure]> {
     * source: the base tensor on which to create a view tensor
     * offsets: offsets into the base tensor at which to create the view
 
+    In distributed layouts, tensors are divided into CTA tiles.
+    A CTA tile represents the smallest contiguous portion of a tensor that is distributed across all threads and warps within a workgroup.
+    The ExtractSlice operation extracts a portion of the tensor that aligns with CTA tile boundaries.
+
+    The source and destination must have matching linear layouts at the CTA tile level.
+    This ensures that the extract_slice is a no-op, meaning no data rearrangement between threads is required
+    to extract the destination tensor with the given shape and layout.
+
+      +-------+-------+
+      |  W0   |  W1   |
+      |       |       |
+      |   +   |   +   |
+      |  W2   |  W3   |  <-- Single CTA tile (distributed across warps W0-W3)
+      |       |       |
+      |   +   |   +   |
+      |       |       |
+      |          Source Tensor                    Extracted Slice
+      |             .                           +--------------+
+      |             .                           |  W0  |  W1   |
+      |             .                           |      |       |
+      |                                         |  +   |   +   |
+      |                                         |  W2  |  W3   |
+      |                                         |      |       |
+      |                                         |  +   |   +   |
+      |                                         |             .|
+      |                                         |             .|
+      |                                         +--------------+
+
     Example 1:
 
     ```mlir
