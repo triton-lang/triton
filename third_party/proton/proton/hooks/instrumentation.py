@@ -306,7 +306,8 @@ class InstrumentationHook(Hook):
             payload_offset = header_size
             payload_size = alloc_size
             header_values = [
-                VERSION, header_offset, header_size, payload_offset, payload_size, block_num, total_unit, scratch_mem_size, *uid_vec
+                VERSION, header_offset, header_size, payload_offset, payload_size, block_num, total_unit,
+                scratch_mem_size, *uid_vec
             ]
             header_bytes = struct.pack("I" * len(header_values), *header_values)
 
