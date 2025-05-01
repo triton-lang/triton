@@ -1148,7 +1148,16 @@ void LayoutRematerialization::backwardRematerialization(
       // so it does not contribute to our cost model:
       continue;
     }
-    // TODO appropriately increment rematerialisation cost:
+    if (op->getDialect()->getNamespace() == "arith") {
+      // this is an arithmetic operation
+      for (Value result : op->getResults()) {
+        int64_t elementCount = 1;
+        if (auto tensorTy = dyn_cast<RankedTensorType>(result.getType())) {
+          elementCount = tensorTy.getNumElements();
+        }
+        rematerialisationCost += elementCount;
+      }
+    }
   }
 
   if (rematerialisationCost > convertLayoutCost) {
