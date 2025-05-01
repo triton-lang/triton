@@ -2795,7 +2795,7 @@ TEST_F(LinearLayoutConversionsTest, LeadingOffset_128x128_1_8_128b_transposed) {
                             {64, 0}}},
                           {S("block"), {}}},
                          {{S("dim0"), 128}, {S("dim1"), 128}},
-                         /*requireSurjective=*/false));
+                         /*requireSurjective=*/true));
 }
 
 TEST_F(LinearLayoutConversionsTest, LeadingOffset_32x4x64_1_8_32b) {
@@ -2818,7 +2818,7 @@ TEST_F(LinearLayoutConversionsTest, LeadingOffset_32x4x64_1_8_32b) {
                       {0, 0, 32}}},
                     {S("block"), {}}},
                    {{S("dim0"), 32}, {S("dim1"), 4}, {S("dim2"), 64}},
-                   /*requireSurjective=*/false));
+                   /*requireSurjective=*/true));
 }
 
 TEST_F(LinearLayoutConversionsTest, LeadingOffset_64x4x32_1_8_32b_transposed) {
@@ -2842,7 +2842,7 @@ TEST_F(LinearLayoutConversionsTest, LeadingOffset_64x4x32_1_8_32b_transposed) {
                       {32, 0, 0}}},
                     {S("block"), {}}},
                    {{S("dim0"), 64}, {S("dim1"), 4}, {S("dim2"), 32}},
-                   /*requireSurjective=*/false));
+                   /*requireSurjective=*/true));
 }
 
 TEST_F(LinearLayoutConversionsTest, Shared1DSwizzle) {
