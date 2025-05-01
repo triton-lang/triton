@@ -432,29 +432,32 @@ LogicalResult tryJoinOnAxis(MLIRContext *ctx, const LinearLayout &inLl,
     auto split = LinearLayout::identity1D(2, kRegister, outDims[axis]);
     outLl = split * inLl;
   } else {
-    // TODO This requires a division algorithm!
-    // Implement manually ll.divideLeft(split)
-    auto contiguousElems =
-        LinearEncodingAttr::get(ctx, inLl).getContigPerThread();
-    if (contiguousElems[axis] > 1) {
-      LinearLayout::BasesT newBases;
-      for (const auto &basesDim : inLl.getBases()) {
-        std::vector<std::vector<int32_t>> newBasesDim;
-        for (auto base : basesDim.second) {
-          if (base[axis] == 1) {
-            continue;
-          }
-          base[axis] /= 2;
-          newBasesDim.push_back(std::move(base));
+    // Assert that there is a dimension with size 2 in the axis
+    // that has contiguous elements
+    // Note that this is more general than the fwdInference case in that
+    // - It allows the dimension not to be the fastest running
+    // - It allows broadcasting
+    // In general, this allows us to split along any axis as long as
+    // the basis (0, 0, ..., 0, 1, 0, ..., 0) is in the registers.
+    bool found = false;
+    LinearLayout::BasesT newBases;
+    for (const auto &basesDim : inLl.getBases()) {
+      std::vector<std::vector<int32_t>> newBasesDim;
+      for (auto base : basesDim.second) {
+        if (base[axis] == 1 && basesDim.first == kRegister) {
+          found = true;
+          continue;
         }
-        newBases.insert({basesDim.first, std::move(newBasesDim)});
+        base[axis] /= 2;
+        newBasesDim.push_back(std::move(base));
       }
-      outLl = LinearLayout(std::move(newBases), std::move(outDims));
-    } else {
+      newBases.insert({basesDim.first, std::move(newBasesDim)});
+    }
+    if (!found)
       return emitOptionalError(loc,
                                "Fp4ToFpOp/SplitOp requires at least 2 elements "
                                "per thread in the axis/last dimension");
-    }
+    outLl = LinearLayout(std::move(newBases), std::move(outDims));
   }
   return success();
 }
@@ -2474,14 +2477,15 @@ struct TritonGPUInferLayoutInterface
                              std::optional<Location> loc) const override {
     if (auto enc = mlir::dyn_cast<BlockedEncodingAttr>(srcEnc)) {
       // JoinOp takes two tensors of shape AxBxC and generates a tensor of shape
-      // AxBxCx2.  The encoding is the same as the input, but with 2 elems per
-      // thread in the new dimension.  The new dimension is most-minor.
+      // AxBxCx2. The encoding is the same as the input, but with 2 elems per
+      // thread in the new dimension. The new dimension is the fastest running
+      // dimension.
       auto append = [](ArrayRef<unsigned> vals, int val) {
         SmallVector<unsigned> ret(vals);
         ret.push_back(val);
         return ret;
       };
-      auto appendMinorDim = [](ArrayRef<unsigned> order) {
+      auto appendMajorDim = [](ArrayRef<unsigned> order) {
         SmallVector<unsigned> ret(order);
         ret.insert(ret.begin(), ret.size());
         return ret;
@@ -2489,10 +2493,10 @@ struct TritonGPUInferLayoutInterface
       dstEnc = BlockedEncodingAttr::get(
           enc.getContext(), append(enc.getSizePerThread(), 2),
           append(enc.getThreadsPerWarp(), 1), append(enc.getWarpsPerCTA(), 1),
-          appendMinorDim(enc.getOrder()),
+          appendMajorDim(enc.getOrder()),
           CTALayoutAttr::get(enc.getContext(), append(enc.getCTAsPerCGA(), 1),
                              append(enc.getCTASplitNum(), 1),
-                             appendMinorDim(enc.getCTAOrder())));
+                             appendMajorDim(enc.getCTAOrder())));
       return success();
     }
 
@@ -2523,8 +2527,8 @@ struct TritonGPUInferLayoutInterface
     if (enc) {
       // SplitOp takes a tensor of shape AxBxCx2 and generates two tensors of
       // shape AxBxC.  The input must have 2 elements per thread in the last
-      // dimension, which must be most-minor.  The result encoding is the same
-      // as the input, but with the last dimension removed.
+      // dimension, which must be the fastest running dimension. The result
+      // encoding is the same as the input, but with the last dimension removed.
       if (enc.getSizePerThread().back() != 2) {
         return emitOptionalError(
             loc, "SplitOp requires 2 elements per thread in the "
