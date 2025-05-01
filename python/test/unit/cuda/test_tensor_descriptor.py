@@ -1556,9 +1556,9 @@ def matmul_kernel_reshape(a_ptr, b_ptr, c_ptr,  #
     )
     b_desc = tl.make_tensor_descriptor(
         b_ptr,
-        shape=[N, K],
-        strides=[K, 1],
-        block_shape=[BLOCK_SIZE_N, BLOCK_SIZE_K],
+        shape=[2, N // 2, K],
+        strides=[(N // 2) * K, K, 1],
+        block_shape=[2, BLOCK_SIZE_N // 2, BLOCK_SIZE_K],
     )
     c_desc = tl.make_tensor_descriptor(
         c_ptr,
@@ -1573,13 +1573,13 @@ def matmul_kernel_reshape(a_ptr, b_ptr, c_ptr,  #
     for tile_id in tl.range(start_pid, num_tiles, NUM_SMS, flatten=True):
         pid_m, pid_n = _compute_pid(tile_id, num_pid_in_group, num_pid_m, GROUP_SIZE_M, NUM_SMS)
         offs_am = pid_m * (BLOCK_SIZE_M // 2)
-        offs_bn = pid_n * BLOCK_SIZE_N
+        offs_bn = pid_n * (BLOCK_SIZE_N // 2)
 
         accumulator = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=tl.float32)
         for ki in range(k_tiles):
             offs_k = ki * BLOCK_SIZE_K
             a = a_desc.load([0, offs_am, offs_k]).reshape(BLOCK_SIZE_M, BLOCK_SIZE_K)
-            b = b_desc.load([offs_bn, offs_k])
+            b = b_desc.load([0, offs_bn, offs_k]).reshape(BLOCK_SIZE_N, BLOCK_SIZE_K)
             accumulator = tl.dot(a, b.T, accumulator)
 
         tile_id_c += NUM_SMS
@@ -1608,28 +1608,37 @@ def test_tensor_descriptor_reshape_matmul(dtype_str):
         tf32_simulated = masked_int.view(np.float32)
         return tf32_simulated
 
-    # test a layout where block_m is split into two separate chunks.
+    # test a layout where block_m and block_N are split into two separate chunks.
     A = numpy_random((M, K), dtype_str)
     if dtype_str == "float32":
         A = trunc_to_tf32(A)
-    A_reshaped = (A.reshape(M // BLOCK_SIZE_M, 2, BLOCK_SIZE_M // 2, K).transpose(1, 0, 2, 3).reshape(2, M // 2, K))
 
+    def chunk(X, BLOCK0, BLOCK1):
+        s0, s1 = X.shape
+        X_reshaped = (X.reshape(s0 // BLOCK0, 2, BLOCK0 // 2, s1).transpose(1, 0, 2, 3).reshape(2, s0 // 2, s1))
+        return X_reshaped
+
+    A_reshaped = chunk(A, BLOCK_SIZE_M, BLOCK_SIZE_K)
     A = to_triton(A, device="cuda", dst_type=dtype_str)
     A_reshaped = to_triton(A_reshaped, device="cuda", dst_type=dtype_str)
 
     B = numpy_random((N, K), dtype_str)
     if dtype_str == "float32":
         B = trunc_to_tf32(B)
+
+    B_reshaped = chunk(B, BLOCK_SIZE_N, BLOCK_SIZE_K)
     B = to_triton(B, device="cuda", dst_type=dtype_str)
+    B_reshaped = to_triton(B_reshaped, device="cuda", dst_type=dtype_str)
+
     C = A.new_empty(M, N)
 
     def alloc_fn(size: int, align: int, stream: Optional[int]):
         return torch.empty(size, dtype=torch.int8, device="cuda")
 
     triton.set_allocator(alloc_fn)
-    kernel = matmul_kernel_reshape[(NUM_SMS, )](
+    matmul_kernel_reshape[(NUM_SMS, )](
         A_reshaped,
-        B,
+        B_reshaped,
         C,
         M,
         N,
@@ -1643,5 +1652,3 @@ def test_tensor_descriptor_reshape_matmul(dtype_str):
     actual = unwrap_tensor(C)
     expect = torch.matmul(A, B.mT)
     torch.testing.assert_close(expect, actual, atol=1e-1, rtol=1e-4)
-
-    kernel.asm["ttgir"]
