@@ -1087,12 +1087,81 @@ void LayoutRematerialization::backwardRematerialization(
     return;
   }
 
+  // 2. Determine whether rematerialisation is beneficial.
+
+  // Identify all operations in the slice
+  SetVector<Operation *> sliceOps;
+  for (Value v : slice) {
+    if (Operation *op = v.getDefiningOp()) {
+      sliceOps.insert(op);
+    }
+  }
+
+  // Compute single-use operations
+  DenseMap<Operation *, bool> isSingleUse;
+  std::function<bool(Operation *)> isOpSingleUse;
+  isOpSingleUse = [&](Operation *op) -> bool {
+
+    // lookup in memoization array:
+    auto it = isSingleUse.find(op);
+    if (it != isSingleUse.end()) { return it->second; }
+
+    bool singleUse = true;
+
+    for (Value result : op->getResults()) {
+      for (Operation *user : result.getUsers()) {
+        if (user == convertOp) { continue; }
+        if (sliceOps.contains(user)) {
+          if (!isOpSingleUse(user)) {
+            singleUse = false;
+            break;
+          }
+        } else {
+          singleUse = false;
+          break;
+        }
+      }
+      if (!singleUse) { break; }
+    }
+
+    // insert into memoization array:
+    isSingleUse[op] = singleUse;
+    return singleUse;
+  };
+
+  int64_t convertLayoutCost = 0;
+  int64_t rematerialisationCost = 0;
+
+  {
+    Value result = convertOp.getSrc();
+    int64_t elementCount = 1;
+    if (auto tensorTy = dyn_cast<RankedTensorType>(result.getType())) {
+      elementCount = tensorTy.getNumElements();
+    }
+    convertLayoutCost += elementCount * 16;
+  }
+
+  // Evaluate single-use status for every operation in slice
+  for (Operation *op : sliceOps) {
+    if (isOpSingleUse(op)) {
+      // when we rematerialise, this operation does not get duplicated
+      // so it does not contribute to our cost model:
+      continue;
+    }
+    // TODO appropriately increment rematerialisation cost:
+  }
+
+  if (rematerialisationCost > convertLayoutCost) {
+    LDBG("  skipped rematerialization due to higher cost");
+    return;
+  }
+
   LLVM_DEBUG({
     DBGS() << "  remat convert op " << convertOp << '\n';
     for (Value v : slice)
       DBGS() << "    " << v << '\n';
   });
-  // 2. Rewrite the slice.
+  // 3. Rewrite the slice.
   rewriteSlice(slice, layout, convertOp);
 }
 
