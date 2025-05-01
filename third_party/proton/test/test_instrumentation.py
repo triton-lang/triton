@@ -99,7 +99,6 @@ def test_record(method, tmp_path: pathlib.Path):
         start_clock_val = int.from_bytes(start_clock.numpy().tobytes(), 'little')
         end_clock_val = int.from_bytes(end_clock.numpy().tobytes(), 'little')
         assert end_clock_val > start_clock_val
-        
 
     # instrumentation context has finalized, now validate assembly
     ttir = pgm.asm['ttir']

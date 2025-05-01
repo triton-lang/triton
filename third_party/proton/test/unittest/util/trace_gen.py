@@ -1,7 +1,6 @@
 import triton
 import argparse
 import ctypes
-import struct
 import triton.profiler as proton
 import triton.profiler.language as pl
 from triton.profiler.hooks import InstrumentationHook

@@ -14,7 +14,6 @@ from .hook import Hook
 from ..flags import set_instrumentation_on, set_instrumentation_off
 from .. import mode
 
-
 # TODO(fywkevin): add support for major.minor
 VERSION = 1
 
@@ -255,7 +254,6 @@ class InstrumentationHook(Hook):
         if InstrumentationHook.enable_host_buffer:
             self.populate_host_buffer()
 
-    
     def populate_host_buffer(self) -> None:
         if self.metadata_path:
             import torch
@@ -304,7 +302,9 @@ class InstrumentationHook(Hook):
                 uid_vec = [int(i) for i in self.mode.sampling_options.strip().split(",")]
 
             header_size = 32 + total_unit * 4
-            header_values = [VERSION, 4, header_size, header_size, alloc_size, block_num, total_unit, scratch_mem_size, *uid_vec]
+            header_values = [
+                VERSION, 4, header_size, header_size, alloc_size, block_num, total_unit, scratch_mem_size, *uid_vec
+            ]
             header_bytes = struct.pack("I" * len(header_values), *header_values)
 
             InstrumentationHook.host_buffer = torch.empty(header_size + alloc_size, dtype=torch.uint8, device="cpu")
