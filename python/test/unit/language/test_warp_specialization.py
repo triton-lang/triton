@@ -49,6 +49,73 @@ def test_warp_specialize_basic_ir(tmp_path: pathlib.Path):
 
 
 @pytest.mark.skipif(not is_cuda(), reason="warp specialization is only supported on NVIDIA")
+def test_warp_specialize_tmem_ir(tmp_path: pathlib.Path):
+    ir = """
+    #blocked = #ttg.blocked<{sizePerThread = [1, 64], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [0, 1]}>
+    #shared = #ttg.swizzled_shared<{vec=1, perPhase=1, maxPhase=1, order=[1, 0]}>
+    #tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 64, unpacked = true>
+
+    module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
+
+    tt.func @test_tmem_ws(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<f32> {tt.divisibility = 16 : i32}) {
+      %cst = arith.constant dense<64> : tensor<128x64xi32, #blocked>
+      %0 = tt.make_range {end = 128 : i32, start = 0 : i32} : tensor<128xi32, #ttg.slice<{dim = 1, parent = #blocked}>>
+      %1 = tt.expand_dims %0 {axis = 1 : i32} : tensor<128xi32, #ttg.slice<{dim = 1, parent = #blocked}>> -> tensor<128x1xi32, #blocked>
+      %2 = tt.make_range {end = 64 : i32, start = 0 : i32} : tensor<64xi32, #ttg.slice<{dim = 0, parent = #blocked}>>
+      %3 = tt.expand_dims %2 {axis = 0 : i32} : tensor<64xi32, #ttg.slice<{dim = 0, parent = #blocked}>> -> tensor<1x64xi32, #blocked>
+      %4 = tt.broadcast %1 {axis = 1 : i32} : tensor<128x1xi32, #blocked> -> tensor<128x64xi32, #blocked>
+      %5 = tt.broadcast %3 {axis = 0 : i32} : tensor<1x64xi32, #blocked> -> tensor<128x64xi32, #blocked>
+      %6 = arith.muli %4, %cst : tensor<128x64xi32, #blocked>
+      %7 = arith.addi %6, %5 : tensor<128x64xi32, #blocked>
+      %8 = tt.splat %arg0 : !tt.ptr<f32> -> tensor<128x64x!tt.ptr<f32>, #blocked>
+      %9 = tt.splat %arg1 : !tt.ptr<f32> -> tensor<128x64x!tt.ptr<f32>, #blocked>
+
+      %ptrs_in = tt.addptr %8, %7 : tensor<128x64x!tt.ptr<f32>, #blocked>, tensor<128x64xi32, #blocked>
+      %ptrs_out = tt.addptr %9, %7 : tensor<128x64x!tt.ptr<f32>, #blocked>, tensor<128x64xi32, #blocked>
+
+      %v_init = tt.load %ptrs_in : tensor<128x64x!tt.ptr<f32>, #blocked>
+
+      %v_shared = ttg.local_alloc %v_init : (tensor<128x64xf32, #blocked>) -> !ttg.memdesc<128x64xf32, #shared, #ttg.shared_memory>
+      %v = ttg.local_load %v_shared : !ttg.memdesc<128x64xf32, #shared, #ttg.shared_memory> -> tensor<128x64xf32, #blocked>
+
+      %tmem_in = ttng.tmem_alloc %v : (tensor<128x64xf32, #blocked>) -> !ttg.memdesc<128x64xf32, #tmem, #ttng.tensor_memory>
+      %tmem_out = ttng.tmem_alloc : () -> !ttg.memdesc<128x64xf32, #tmem, #ttng.tensor_memory, mutable>
+
+      ttg.warp_specialize(%tmem_in, %tmem_out)
+      default {
+        ttg.warp_yield
+      }
+      partition0(%in: !ttg.memdesc<128x64xf32, #tmem, #ttng.tensor_memory>, %out: !ttg.memdesc<128x64xf32, #tmem, #ttng.tensor_memory, mutable>) num_warps(1) {
+        ttg.warp_return
+      }
+      partition1(%in: !ttg.memdesc<128x64xf32, #tmem, #ttng.tensor_memory>, %out: !ttg.memdesc<128x64xf32, #tmem, #ttng.tensor_memory, mutable>) num_warps(2) {
+        ttg.warp_return
+      }
+      partition2(%in: !ttg.memdesc<128x64xf32, #tmem, #ttng.tensor_memory>, %out: !ttg.memdesc<128x64xf32, #tmem, #ttng.tensor_memory, mutable>) num_warps(4) {
+        %x = ttng.tmem_load %in : !ttg.memdesc<128x64xf32, #tmem, #ttng.tensor_memory> -> tensor<128x64xf32, #blocked>
+        %true = arith.constant true
+        ttng.tmem_store %x, %out, %true : tensor<128x64xf32, #blocked> -> !ttg.memdesc<128x64xf32, #tmem, #ttng.tensor_memory, mutable>
+        ttg.warp_return
+      } : (!ttg.memdesc<128x64xf32, #tmem, #ttng.tensor_memory>, !ttg.memdesc<128x64xf32, #tmem, #ttng.tensor_memory, mutable>) -> ()
+
+      %result = ttng.tmem_load %tmem_out : !ttg.memdesc<128x64xf32, #tmem, #ttng.tensor_memory, mutable> -> tensor<128x64xf32, #blocked>
+      tt.store %ptrs_out, %result : tensor<128x64x!tt.ptr<f32>, #blocked>
+      tt.return
+    }
+
+    }
+    """
+
+    temp_file = tmp_path / "test_warp_specialize_tmem_ir.ttgir"
+    temp_file.write_text(ir)
+    kernel = triton.compile(str(temp_file))
+    input = torch.arange(128 * 64, dtype=torch.float32, device='cuda').reshape(128, 64)
+    output = torch.empty_like(input)
+    kernel[(1, 1, 1)](input, output)
+    torch.testing.assert_close(input, output, atol=0, rtol=0)
+
+
+@pytest.mark.skipif(not is_cuda(), reason="warp specialization is only supported on NVIDIA")
 def test_warpgroup_reduction(tmp_path: pathlib.Path):
 
     def template(i, num_warps, in_ptr, out_ptr):
