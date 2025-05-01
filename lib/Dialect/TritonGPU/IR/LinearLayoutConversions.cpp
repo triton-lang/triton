@@ -336,7 +336,14 @@ LinearLayout nvmmaSharedToLinearLayout(ArrayRef<int64_t> shape,
   // Reshape the layout to the N-D pre-transposed shape per CTA.
   SmallVector<int64_t> maybeTransposedShapePerCTA = shapePerCTA;
   if (shared.getTransposed()) {
-    std::swap(maybeTransposedShapePerCTA[0], maybeTransposedShapePerCTA[1]);
+    // Move the outer dim to the inner position.
+    // TODO: we should move back to using `order` instead of transposed to make
+    // the order more explicit.
+    maybeTransposedShapePerCTA.clear();
+    for (int i = 1; i < rank; i++) {
+      maybeTransposedShapePerCTA.push_back(shapePerCTA[i]);
+    }
+    maybeTransposedShapePerCTA.push_back(shapePerCTA[0]);
   }
   auto reshapedLayout =
       reshapeLayout(ctx, tileLayout, maybeTransposedShapePerCTA);
