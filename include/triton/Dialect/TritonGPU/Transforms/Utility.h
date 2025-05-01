@@ -270,9 +270,6 @@ void replaceUsesWithLocalLoad(
       }
     }
   }
-  for (auto alloc : allocsToErase) {
-    alloc.erase();
-  }
 
   // If there are some uses that were not local_allocs, we need to create a
   // local_load for them.
@@ -281,6 +278,9 @@ void replaceUsesWithLocalLoad(
     auto sharedLoad = builder.template create<ttg::LocalLoadOp>(
         loc, old.getType(), alloc, token);
     old.replaceAllUsesWith(sharedLoad.getResult());
+  }
+  for (auto alloc : allocsToErase) {
+    alloc.erase();
   }
 }
 } // namespace mlir::triton
