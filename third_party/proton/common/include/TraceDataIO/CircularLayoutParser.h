@@ -82,15 +82,8 @@ struct ClockOverflowException : public ParserException {
   ClockOverflowException(const std::string &msg);
 };
 
-class CLTraceReader {
-public:
-  explicit CLTraceReader(ByteSpan &buffer);
-
-  std::shared_ptr<CircularLayoutParserResult> getResult();
-
-private:
-  std::shared_ptr<CircularLayoutParserResult> result = nullptr;
-};
+std::shared_ptr<CircularLayoutParserResult>
+readCircularLayoutTrace(ByteSpan &buffer);
 
 } // namespace proton
 

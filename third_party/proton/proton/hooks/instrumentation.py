@@ -252,9 +252,9 @@ class InstrumentationHook(Hook):
         libproton.exit_instrumented_op(func, self._data_ptr(), alloc_size)
 
         if InstrumentationHook.enable_host_buffer:
-            self.populate_host_buffer()
+            self._populate_host_buffer()
 
-    def populate_host_buffer(self) -> None:
+    def _populate_host_buffer(self) -> None:
         if self.metadata_path:
             import torch
             import struct
@@ -268,17 +268,17 @@ class InstrumentationHook(Hook):
             total_unit = data["num_warps"]
             block_num = int(alloc_size / scratch_mem_size)
 
-            # Binary trace Layout:
+            # Binary trace layout:
             # +------------------+
             # |     version      |  4 bytes
             # +------------------+
-            # |  offset_header   |  4 bytes
+            # |  header_offset   |  4 bytes
             # +------------------+
-            # |   size_header    |  4 bytes
+            # |   header_size    |  4 bytes
             # +------------------+
-            # |  offset_payload  |  4 bytes
+            # |  payload_offset  |  4 bytes
             # +------------------+
-            # |   size_payload   |  4 bytes
+            # |   payload_size   |  4 bytes
             # +------------------+
             # |    block_num     |  4 bytes
             # +------------------+
@@ -296,14 +296,17 @@ class InstrumentationHook(Hook):
             # +------------------+
 
             is_all_warps = self.mode.sampling_options == "" and self.mode.granularity == triton_proton.GRANULARITY.WARP
-            if (is_all_warps):
+            if is_all_warps:
                 uid_vec = [i for i in range(total_unit)]
             else:
                 uid_vec = [int(i) for i in self.mode.sampling_options.strip().split(",")]
 
             header_size = 32 + total_unit * 4
+            header_offset = 4
+            payload_offset = header_size
+            payload_size = alloc_size
             header_values = [
-                VERSION, 4, header_size, header_size, alloc_size, block_num, total_unit, scratch_mem_size, *uid_vec
+                VERSION, header_offset, header_size, payload_offset, payload_size, block_num, total_unit, scratch_mem_size, *uid_vec
             ]
             header_bytes = struct.pack("I" * len(header_values), *header_values)
 

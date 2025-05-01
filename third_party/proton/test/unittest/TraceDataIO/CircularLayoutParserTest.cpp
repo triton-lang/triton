@@ -169,7 +169,7 @@ public:
 
 TEST_F(CLParserSeqTraceTest, Trace) {
   auto buffer = getBuffer(output);
-  auto result = CLTraceReader(buffer).getResult();
+  auto result = proton::readCircularLayoutTrace(buffer);
   EXPECT_EQ(result->blockTraces.size(), 2);
   EXPECT_EQ(result->blockTraces[1].blockId, 1);
   EXPECT_EQ(result->blockTraces[0].traces.size(), 4);
@@ -184,7 +184,7 @@ public:
 
 TEST_F(CLParserLoopTraceTest, Trace) {
   auto buffer = getBuffer(output);
-  auto result = CLTraceReader(buffer).getResult();
+  auto result = proton::readCircularLayoutTrace(buffer);
   EXPECT_EQ(result->blockTraces.size(), 1);
   EXPECT_EQ(result->blockTraces[0].traces.size(), 4);
   EXPECT_EQ(result->blockTraces[0].traces[0].count, 80);

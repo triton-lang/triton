@@ -142,10 +142,13 @@ ScopeMisMatchException::ScopeMisMatchException(const std::string &msg)
 ClockOverflowException::ClockOverflowException(const std::string &msg)
     : ParserException(msg, ExceptionSeverity::WARNING) {}
 
-CLTraceReader::CLTraceReader(ByteSpan &buffer) {
+std::shared_ptr<CircularLayoutParserResult>
+proton::readCircularLayoutTrace(ByteSpan &buffer) {
   CircularLayoutParserConfig config;
   auto decoder = EntryDecoder(buffer);
-  buffer.seek(12);
+  uint32_t version = decoder.decode<I32Entry>()->value;
+  assert(version == 1 && "Version mismatch");
+  buffer.skip(8);
   uint32_t payloadOffset = decoder.decode<I32Entry>()->value;
   uint32_t payloadSize = decoder.decode<I32Entry>()->value;
   config.numBlocks = decoder.decode<I32Entry>()->value;
@@ -160,9 +163,5 @@ CLTraceReader::CLTraceReader(ByteSpan &buffer) {
   buffer.seek(payloadOffset);
   auto parser = std::make_unique<CircularLayoutParser>(buffer, config);
   parser->parse();
-  result = parser->getResult();
-}
-
-std::shared_ptr<CircularLayoutParserResult> CLTraceReader::getResult() {
-  return result;
+  return parser->getResult();
 }
