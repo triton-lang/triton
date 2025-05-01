@@ -1667,12 +1667,21 @@ void init_triton_ir(py::module &&m) {
              return self.create<ub::PoisonOp>(type);
            })
       .def("create_histogram",
-           [](TritonOpBuilder &self, Value operand, int numBins) -> Value {
-             return self.create<HistogramOp>(
-                 RankedTensorType::get(
-                     {static_cast<int64_t>(numBins)},
-                     IntegerType::get(operand.getContext(), 32)),
-                 operand);
+           [](TritonOpBuilder &self, Value operand, int numBins,
+              std::optional<Value> mask) -> Value {
+             if (!mask) {
+               return self.create<HistogramOp>(
+                   RankedTensorType::get(
+                       {static_cast<int64_t>(numBins)},
+                       IntegerType::get(operand.getContext(), 32)),
+                   operand);
+             } else {
+               return self.create<HistogramOp>(
+                   RankedTensorType::get(
+                       {static_cast<int64_t>(numBins)},
+                       IntegerType::get(operand.getContext(), 32)),
+                   operand, *mask);
+             }
            })
       .def("create_gather",
            [](TritonOpBuilder &self, Value src, Value indices, int axis)
