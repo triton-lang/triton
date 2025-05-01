@@ -126,9 +126,8 @@ LinearLayout combineCtaCgaWithShape(LinearLayout ctaLayout,
   return ret;
 }
 
-LinearLayout
-sharedToLinearLayoutNoLeadingOffset(ArrayRef<int64_t> shape,
-                                    SwizzledSharedEncodingAttr shared) {
+LinearLayout swizzledSharedToLinearLayout(ArrayRef<int64_t> shape,
+                                          SwizzledSharedEncodingAttr shared) {
   MLIRContext *ctx = shared.getContext();
 
   auto shapePerCTA = getShapePerCTA(shared, shape);
@@ -153,11 +152,10 @@ sharedToLinearLayoutNoLeadingOffset(ArrayRef<int64_t> shape,
   StringAttr rowDimName = outDimNames[rowDim];
 
   std::vector<std::vector<int>> bases2D;
-  for (int logCol = 0; logCol < llvm::Log2_32(numCols); logCol++) {
-    bases2D.push_back({0, 1 << logCol});
+  for (int col = 1; col < numCols; col *= 2) {
+    bases2D.push_back({0, col});
   }
-  for (int logRow = 0; logRow < llvm::Log2_32(numRows); logRow++) {
-    int row = 1 << logRow;
+  for (int row = 1; row < numRows; row *= 2) {
     int vec = shared.getVec();
     int perPhase = shared.getPerPhase();
     int maxPhase = shared.getMaxPhase();
@@ -203,11 +201,10 @@ sharedToLinearLayoutAMDRotating(ArrayRef<int64_t> shape,
   StringAttr rowDimName = outDimNames[rowDim];
 
   std::vector<std::vector<int>> bases2D;
-  for (int logCol = 0; logCol < llvm::Log2_32(numCols); logCol++) {
-    bases2D.push_back({0, 1 << logCol});
+  for (int col = 1; col < numCols; col *= 2) {
+    bases2D.push_back({0, col});
   }
-  for (int logRow = 0; logRow < llvm::Log2_32(numRows); logRow++) {
-    int row = 1 << logRow;
+  for (int row = 1; row < numRows; row *= 2) {
     int vec = shared.getVec();
     int perPhase = shared.getPerPhase();
     int maxPhase = shared.getMaxPhase();
@@ -232,9 +229,9 @@ sharedToLinearLayoutAMDRotating(ArrayRef<int64_t> shape,
 
 } // namespace
 
-LinearLayout sharedToLinearLayoutLeadingOffset(ArrayRef<int64_t> shape,
-                                               NVMMASharedEncodingAttr shared,
-                                               bool disableSwizzle) {
+LinearLayout nvmmaSharedToLinearLayout(ArrayRef<int64_t> shape,
+                                       NVMMASharedEncodingAttr shared,
+                                       bool disableSwizzle) {
   MLIRContext *ctx = shared.getContext();
   int rank = shape.size();
   auto shapePerCTA = getShapePerCTA(shared, shape);
@@ -295,22 +292,20 @@ LinearLayout sharedToLinearLayoutLeadingOffset(ArrayRef<int64_t> shape,
   }
 
   std::vector<std::vector<int>> bases2D;
-  for (int logCol = 0; logCol < llvm::Log2_32(tileCols); logCol++) {
+  for (int col = 1; col < tileCols; col *= 2) {
     if (isFp4Padded) {
-      int colPadded = 1 << logCol;
       // Each group of 16 offsets consists of 8 "real" and 8 "padded" offsets.
       // We represent the padded layout by mapping 8 padded offsets to the same
       // coordinates as the real ones. When computing the inverse of this LL,
       // the offsets correspoding to the real ones are picked in the image by
       // invertAndCompose.
-      int colPacked = colPadded / 16 * 8 + colPadded % 8;
+      int colPacked = col / 16 * 8 + col % 8;
       bases2D.push_back({0, colPacked});
     } else {
-      bases2D.push_back({0, 1 << logCol});
+      bases2D.push_back({0, col});
     }
   }
-  for (int logRow = 0; logRow < llvm::Log2_32(tileRows); logRow++) {
-    int row = 1 << logRow;
+  for (int row = 1; row < tileRows; row *= 2) {
     if (disableSwizzle) {
       bases2D.push_back({row, 0});
       continue;
@@ -1138,9 +1133,9 @@ LinearLayout TritonGPUDialect::toLinearLayout(ArrayRef<int64_t> shape,
     result = distributed.toLinearLayout(shape);
   } else {
     if (auto shared = dyn_cast<SwizzledSharedEncodingAttr>(layout)) {
-      result = sharedToLinearLayoutNoLeadingOffset(shape, shared);
+      result = swizzledSharedToLinearLayout(shape, shared);
     } else if (auto shared = dyn_cast<NVMMASharedEncodingAttr>(layout)) {
-      result = sharedToLinearLayoutLeadingOffset(shape, shared);
+      result = nvmmaSharedToLinearLayout(shape, shared);
     } else if (auto sbl = dyn_cast<AMDRotatingSharedEncodingAttr>(layout)) {
       result = sharedToLinearLayoutAMDRotating(shape, sbl);
     } else {
@@ -1209,9 +1204,9 @@ LinearLayout chooseShemLayoutForRegToRegConversion(
 }
 
 namespace {
-LinearLayout chooseStMatrixLayoutLeadingOffset(MLIRContext *ctx,
-                                               RankedTensorType tensorTy,
-                                               int swizzleByteSize) {
+LinearLayout chooseStMatrixLayoutNVMMA(MLIRContext *ctx,
+                                       RankedTensorType tensorTy,
+                                       int swizzleByteSize) {
   int perPhase;
   int maxPhase;
   if (swizzleByteSize == 32) {
@@ -1237,8 +1232,7 @@ LinearLayout chooseStMatrixLayoutLeadingOffset(MLIRContext *ctx,
   // Construct a single stmatrix.x4 (16x16) tile
   std::vector<std::vector<int>> basesReg = {{1, 0}, {2, 0}, {4, 0}};
   std::vector<std::vector<int>> basesLane;
-  for (int logRow = 0; logRow < llvm::Log2_32(numRowsPerTile); logRow++) {
-    int row = 1 << logRow;
+  for (int row = 1; row < numRowsPerTile; row *= 2) {
     basesLane.push_back({vecSize * ((row / perPhase) % maxPhase), row});
   }
   basesLane.push_back({8, 0});
@@ -1255,8 +1249,7 @@ LinearLayout chooseStMatrixLayoutLeadingOffset(MLIRContext *ctx,
   // suboptimal. Swizzling should happen within a warp.
   assert(instrN >= numColsPerChunk &&
          "Each chunk is filled in with a single warp");
-  for (int logCol = 0; logCol < llvm::Log2_32(numColsPerChunk / 16); logCol++) {
-    int col = 1 << logCol;
+  for (int col = 1; col < numColsPerChunk / 16; col *= 2) {
     basesReg.push_back({16 * col, 0});
   }
 
@@ -1264,8 +1257,7 @@ LinearLayout chooseStMatrixLayoutLeadingOffset(MLIRContext *ctx,
   std::vector<std::vector<int>> basesWarp;
   auto warpsPerCTA = mma.getWarpsPerCTA();
   auto shapePerCTA = getShapePerCTA(tensorTy);
-  for (int logWarp = 0; logWarp < llvm::Log2_32(warpsPerCTA[0]); logWarp++) {
-    int warp = 1 << logWarp;
+  for (int warp = 1; warp < warpsPerCTA[0]; warp *= 2) {
     basesWarp.push_back({0, warp * instrM});
   }
 
@@ -1274,26 +1266,23 @@ LinearLayout chooseStMatrixLayoutLeadingOffset(MLIRContext *ctx,
   auto numColsPerWarp = std::max<int>(instrN, shapePerCTA[1] / warpsPerCTA[1]);
   assert(warpsPerCTA[1] * instrN >= shapePerCTA[1] &&
          "There must be enough columns to use MMAv3");
-  auto logNumCols = llvm::Log2_32(numColsPerWarp / numColsPerChunk);
-  for (int logCol = 0; logCol < logNumCols; logCol++) {
-    int chunk = 1 << logCol;
-    int basis = chunk * shapePerCTA[0];
+  auto numCols = numColsPerWarp / numColsPerChunk;
+  for (int col = 1; col < numCols; col *= 2) {
+    int basis = col * shapePerCTA[0];
     basesReg.push_back({0, basis});
   }
 
   // Expand the `register` dimension so that the size of rows matches `shape[0]`
   assert(warpsPerCTA[0] * instrM <= shapePerCTA[0] &&
          "There must be enough rows to use MMAv3");
-  auto logNumRows = llvm::Log2_32(shapePerCTA[0] / (warpsPerCTA[0] * instrM));
-  for (int logRow = 0; logRow < logNumRows; logRow++) {
-    int chunk = 1 << logRow;
-    int basis = chunk * warpsPerCTA[0] * instrM;
+  auto numRows = shapePerCTA[0] / (warpsPerCTA[0] * instrM);
+  for (int row = 1; row < numRows; row *= 2) {
+    int basis = row * warpsPerCTA[0] * instrM;
     basesReg.push_back({0, basis});
   }
 
   // Expand the `warp` dimension so that the size of cols matches `shape[1]`
-  for (int logWarp = 0; logWarp < llvm::Log2_32(warpsPerCTA[1]); logWarp++) {
-    int warp = 1 << logWarp;
+  for (int warp = 1; warp < warpsPerCTA[1]; warp *= 2) {
     if (warp * numColsPerWarp >= shapePerCTA[1]) {
       basesWarp.push_back({0, 0});
     } else {
@@ -1311,9 +1300,8 @@ LinearLayout chooseStMatrixLayoutLeadingOffset(MLIRContext *ctx,
       {{S("offset"), layout.getTotalOutDimSize()}, {S("iteration"), 1}});
 }
 
-LinearLayout chooseStMatrixLayoutNoLeadingOffset(MLIRContext *ctx,
-                                                 Attribute encoding,
-                                                 ArrayRef<int64_t> shape) {
+LinearLayout chooseStMatrixLayoutSwizzled(MLIRContext *ctx, Attribute encoding,
+                                          ArrayRef<int64_t> shape) {
   StringAttr kReg = S("register");
   StringAttr kLane = S("lane");
   StringAttr kWarp = S("warp");
@@ -1368,9 +1356,7 @@ LinearLayout chooseDotLdMatrixLayout(DotOperandEncodingAttr dot,
                                  : (needTrans ? S("dim0") : S("dim1"));
 
   std::vector<std::vector<int>> basesReg;
-  for (int logReg = 0; logReg < llvm::Log2_32(8 * 16 / elemBitWidth);
-       logReg++) {
-    auto reg = 1 << logReg;
+  for (int reg = 1; reg < 8 * 16 / elemBitWidth; reg *= 2) {
     basesReg.push_back({0, reg});
   }
   std::vector<std::vector<int>> basesLane = {
@@ -1443,10 +1429,10 @@ LinearLayout chooseDotLdMatrixLayout(DotOperandEncodingAttr dot,
 LinearLayout chooseStMatrixLayout(MLIRContext *ctx, RankedTensorType tensorTy,
                                   int swizzleByteSize) {
   if (swizzleByteSize == 0)
-    return chooseStMatrixLayoutNoLeadingOffset(ctx, tensorTy.getEncoding(),
-                                               tensorTy.getShape());
+    return chooseStMatrixLayoutSwizzled(ctx, tensorTy.getEncoding(),
+                                        tensorTy.getShape());
   else
-    return chooseStMatrixLayoutLeadingOffset(ctx, tensorTy, swizzleByteSize);
+    return chooseStMatrixLayoutNVMMA(ctx, tensorTy, swizzleByteSize);
 }
 
 LinearLayout chooseLdMatrixLayout(Attribute enc, ArrayRef<int64_t> shape,
