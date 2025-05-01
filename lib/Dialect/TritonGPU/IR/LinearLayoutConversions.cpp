@@ -320,9 +320,8 @@ LinearLayout nvmmaSharedToLinearLayout(ArrayRef<int64_t> shape,
   }
 
   // Then distribute the remaining rows.
-  for (int logRow = llvm::Log2_32(tileRows);
-       logRow < llvm::Log2_32(collapsedShapePerCTA[0]); logRow++) {
-    bases2D.push_back({1 << logRow, 0});
+  for (int row = tileRows; row < collapsedShapePerCTA[0]; row *= 2) {
+    bases2D.push_back({row, 0});
   }
 
   auto outDimNames = standardOutDimNames(ctx, 2);
