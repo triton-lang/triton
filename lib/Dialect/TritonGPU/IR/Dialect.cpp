@@ -2087,19 +2087,8 @@ struct TritonGPUInferLayoutInterface
       return success();
     }
     auto ll = toLinearLayout(shape, operandEncoding);
-    auto namedBases = ll.getBases();
-    for (auto &bases : llvm::make_second_range(namedBases)) {
-      for (auto &b : bases) {
-        std::vector<int32_t> newB;
-        for (auto i : order) {
-          newB.push_back(b[i]);
-        }
-        b = std::move(newB);
-      }
-    }
-    auto retLl = LinearLayout(std::move(namedBases),
-                              llvm::to_vector(ll.getOutDimNames()));
-    resultEncoding = LinearEncodingAttr::get(ctx, std::move(retLl));
+    auto transposedLl = transposeLinearLayout(ll, order);
+    resultEncoding = LinearEncodingAttr::get(ctx, std::move(transposedLl));
     return success();
   }
 
@@ -2438,36 +2427,21 @@ struct TritonGPUInferLayoutInterface
   inferReshapeOpEncoding(ArrayRef<int64_t> srcShape, Attribute srcEnc,
                          ArrayRef<int64_t> dstShape, Attribute &dstEnc,
                          std::optional<Location> loc) const override {
+    if (product(srcShape) != product(dstShape)) {
+      return emitOptionalError(loc, "numel of dst shape does not match "
+                                    "numel of src shape");
+    }
     auto result =
         inferReshapeOpLegacyEncoding(srcShape, srcEnc, dstShape, dstEnc);
     if (succeeded(result)) {
       return result;
     }
-
     // If the legacy encoding failed use LinearLayouts.
     // Once LinearLayouts are more widely used, we can remove
     // inferReshapeOpLegacyEncoding and simply use LLs.
-    auto *ctx = getContext();
-    auto src = toLinearLayout(srcShape, srcEnc);
+    LinearLayout ll = inferReshapeLinearLayout(srcShape, srcEnc, dstShape);
 
-    if (product(srcShape) != product(dstShape)) {
-      return emitOptionalError(loc, "numel of dst shape does not match "
-                                    "numel of src shape");
-    }
-
-    auto newRank = dstShape.size();
-
-    auto newOutDims = standardOutDimPairs(ctx, dstShape);
-
-    // reshapeOp assumes minor-to-major, so we need to transpose the out dims
-    // before the reshape
-    auto srcOutDims = to_vector(src.getOutDimNames());
-    std::reverse(srcOutDims.begin(), srcOutDims.end());
-    std::reverse(newOutDims.begin(), newOutDims.end());
-    auto dst = src.transposeOuts(srcOutDims)
-                   .reshapeOuts(newOutDims)
-                   .transposeOuts(standardOutDimNames(ctx, newRank));
-    dstEnc = LinearEncodingAttr::get(ctx, dst);
+    dstEnc = LinearEncodingAttr::get(srcEnc.getContext(), ll);
     return success();
   }
 
@@ -3188,4 +3162,14 @@ bool triton::gpu::isInnermostContiguous(MemDescType type, unsigned numElems) {
   actual = actual.transposeOuts(revOut).flattenOuts();
 
   return actual.getNumConsecutiveInOut() >= numElems;
+}
+
+LinearLayout triton::gpu::inferReshapeLinearLayout(ArrayRef<int64_t> srcShape,
+                                                   Attribute srcEnc,
+                                                   ArrayRef<int64_t> dstShape) {
+  auto *ctx = srcEnc.getContext();
+  auto src = toLinearLayout(srcShape, srcEnc);
+  assert(product(srcShape) == product(dstShape));
+  auto dst = reshapeLayout(ctx, src, dstShape);
+  return dst;
 }
