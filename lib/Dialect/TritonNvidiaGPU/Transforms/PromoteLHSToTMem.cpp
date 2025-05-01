@@ -88,10 +88,16 @@ public:
     Value tMemAlloc =
         rewriter.create<ttng::TMEMAllocOp>(loc, lhsMemDescType, src);
     tcGen5MMAOp.getAMutable().assign(tMemAlloc);
-    if (localAllocResult.hasOneUse()) {
-      auto localAllocUser = *localAllocResult.user_begin();
-      if (isa<ttng::WaitBarrierOp>(localAllocUser)) {
-        rewriter.replaceAllUsesWith(localAllocResult, tMemAlloc);
+    // Check all users of localAllocResult
+    for (Operation *user : localAllocResult.getUsers()) {
+      // Check if the user is a WaitBarrierOp
+      if (isa<ttng::WaitBarrierOp>(user)) {
+        // Replace only this specific use in the WaitBarrierOp
+        for (OpOperand &operand : user->getOpOperands()) {
+          if (operand.get() == localAllocResult) {
+            operand.set(tMemAlloc);
+          }
+        }
       }
     }
     return success();
