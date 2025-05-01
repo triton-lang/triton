@@ -889,6 +889,17 @@ LogicalResult PipelinedLoadGroup::lowerLoads(
 // MMA Pipelining
 //===----------------------------------------------------------------------===//
 
+static Value getLastInductionValue(PartitionBuilder &b, scf::ForOp loop) {
+  OpBuilder::InsertionGuard guard(b);
+  b.setInsertionPoint(loop);
+  // (ub - lb) // step * step + lb
+  Value diff =
+      b.create<arith::SubIOp>(loop.getUpperBound(), loop.getLowerBound());
+  Value ceilStep = b.create<arith::MulIOp>(
+      b.create<arith::DivSIOp>(diff, loop.getStep()), loop.getStep());
+  return b.create<arith::AddIOp>(ceilStep, loop.getLowerBound());
+}
+
 static LogicalResult pipelineMMA(scf::ForOp &loop, PipelinedMMA &mma,
                                  WarpSchedule &schedule, DominanceInfo &domInfo,
                                  PostDominanceInfo &postDomInfo,
@@ -1014,9 +1025,9 @@ static LogicalResult pipelineMMA(scf::ForOp &loop, PipelinedMMA &mma,
   Value userPred = b.boolCst(true);
   if (readOp == mmaOp) {
     PartitionBuilder b(mmaOp.getLoc(), mmaOp);
+    Value lastInductionValue = getLastInductionValue(b, loop);
     userPred = b.create<arith::CmpIOp>(
-        arith::CmpIPredicate::eq, loop.getInductionVar(),
-        b.create<arith::SubIOp>(loop.getUpperBound(), b.intCst(1)));
+        arith::CmpIPredicate::eq, loop.getInductionVar(), lastInductionValue);
     nodes.back().barNext = createBarrierAlloc(loop, /*numBarriers=*/1);
   }
 
@@ -1177,10 +1188,8 @@ static LogicalResult pipelineMMA(scf::ForOp &loop, PipelinedMMA &mma,
     Operation *domOp = findNearestCommonDominator(defs, domInfo);
     Operation *lastOp = findNearestCommonPostDominator(defs, postDomInfo);
 
+    auto [index, phase] = addIndexAndPhase(b, loop, /*numStages=*/1);
     b.setInsertionPoint(domOp);
-    Value loopIterCount =
-        b.create<arith::SubIOp>(loop.getInductionVar(), loop.getLowerBound());
-    Value phase = b.create<arith::AndIOp>(loopIterCount, b.intCst(1));
     b.createInPartition<ttng::WaitBarrierOp>(*partition, emptyBar, phase);
 
     b.setInsertionPointAfter(lastOp);
@@ -1195,6 +1204,9 @@ static LogicalResult pipelineMMA(scf::ForOp &loop, PipelinedMMA &mma,
 
   if (nodes.back().barNext) {
     b.setInsertionPointAfter(loop);
+    // Re-acquire loop results as they may have been invalidated.
+    Value lastIndex = loop.getResult(index.getArgNumber() - 1);
+    Value lastPhase = loop.getResult(phase.getArgNumber() - 1);
     Value lastBar = createSingleBufferView(b, nodes.back().barNext, lastIndex);
     b.create<ttng::WaitBarrierOp>(lastBar, lastPhase);
   }
