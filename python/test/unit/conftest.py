@@ -39,7 +39,10 @@ def fresh_knobs(request, monkeypatch):
             setattr(knobs, name, knobset.copy().reset())
             for knob in knobset.knob_descriptors.values():
                 monkeypatch.delenv(knob.key, raising=False)
+        prev_propagate_env = knobs.propagate_env
+        knobs.propagate_env = True
         yield knobs
+        knobs.propagate_env = prev_propagate_env
     finally:
         for name, knobset in knobs_map.items():
             setattr(knobs, name, knobset)

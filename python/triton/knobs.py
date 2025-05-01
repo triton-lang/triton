@@ -22,10 +22,22 @@ class Env:
 
 env = Env()
 
+propagate_env: bool = True
+
 
 def getenv(key: str) -> Optional[str]:
     res = os.getenv(key)
     return res.strip() if res is not None else res
+
+
+def setenv(key: str, value: Optional[str]) -> None:
+    if not propagate_env:
+        return
+
+    if value is not None:
+        os.environ[key] = value
+    elif key in os.environ:
+        del os.environ[key]
 
 
 # There's an asymmetry here so that e.g. env_nvidia_tool can be specified with a
@@ -81,10 +93,7 @@ class env_base(Generic[SetType, GetType]):
 class env_str(env_base[str, str]):
 
     def set(self, value: Optional[str]) -> None:
-        if value is None:
-            os.unsetenv(self.key)
-        else:
-            os.putenv(self.key, value)
+        setenv(self.key, value)
 
     def from_env(self, val: str) -> str:
         return val
@@ -94,6 +103,9 @@ class env_bool(env_base[bool, bool]):
 
     def __init__(self, key: str, default: Union[bool, Callable[[], bool]] = False) -> None:
         super().__init__(key, default)
+
+    def set(self, value: Optional[bool]) -> None:
+        setenv(self.key, value if value is None else ("1" if value else "0"))
 
     def from_env(self, val: str) -> bool:
         return val.lower() in ("1", "true", "yes", "on", "y")
