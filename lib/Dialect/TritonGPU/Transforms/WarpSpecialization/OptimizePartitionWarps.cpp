@@ -203,6 +203,8 @@ static LogicalResult optimizePartitionNumWarps(ModuleAxisInfoAnalysis &axisInfo,
       if (isa<ttng::AsyncTMAGatherOp, ttng::AsyncTMAScatterOp,
               ttng::AsyncTMACopyGlobalToLocalOp>(op))
         *minWarps = 2;
+      else if (isa<ttng::TMEMLoadOp, ttng::TMEMStoreOp>(op))
+        *minWarps = 4;
     });
   }
 

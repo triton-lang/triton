@@ -284,7 +284,11 @@ static WarpSchedule getInitialSchedule(const PartitionScheme &scheme,
 
   SmallVector<Partition *> userPartitions{userPartition};
   while (userPartitions.size() != scheme.mmas.size()) {
-    userPartitions.push_back(schedule.addPartition(userPartitions.size()));
+    if (triton::tools::getBoolEnv("WARP_SPECIALIZE_ATTENTION_NO_CORRECTION")) {
+      userPartitions.push_back(userPartition);
+    } else {
+      userPartitions.push_back(schedule.addPartition(userPartitions.size()));
+    }
   }
   for (auto [mma, userPartition] : llvm::zip(scheme.mmas, userPartitions)) {
     scheduleUsers(userPartition, mma.mmaOp);

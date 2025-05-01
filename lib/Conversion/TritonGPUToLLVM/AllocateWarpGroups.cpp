@@ -1,6 +1,7 @@
 #include "mlir/IR/BuiltinOps.h"
 #include "triton/Conversion/TritonGPUToLLVM/Passes.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
+#include "triton/Tools/Sys/GetEnv.hpp"
 
 namespace mlir::triton::gpu {
 #define GEN_PASS_DEF_TRITONGPUALLOCATEWARPGROUPS
@@ -59,7 +60,8 @@ struct AllocateWarpGroups
 
       // Require that an estimate has been set and that we have even warpgroups.
       auto regsAttr = op.getRequestedRegisters();
-      if (!regsAttr || op.getTotalPartitionWarps() % 4 != 0)
+      if (!regsAttr || op.getTotalPartitionWarps() % 4 != 0 ||
+          triton::tools::getBoolEnv("WARP_SPECIALIZE_ATTENTION_FLAG"))
         return;
 
       // Group the partitions into warpgroups.
