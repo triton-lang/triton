@@ -416,11 +416,12 @@ AMDMfmaEncodingAttr::toLinearLayout(ArrayRef<int64_t> shape) const {
         {outDimNames[order[0]], outDimNames[order[1]]});
     // For mfma.transposed layout, the element ownership among threads are
     // "transposed" within each warp.
-    if (getIsTransposed())
+    if (getIsTransposed()) {
       tileLayout = LinearLayout(
           {{kRegister, {{1, 0}, {2, 0}, {8, 0}, /*gap*/ {16, 0}}},
            {kLane, {{0, 1}, {0, 2}, {0, 4}, {0, 8}, {0, 16}, /*gap*/ {4, 0}}}},
           {outDimNames[order[0]], outDimNames[order[1]]});
+    }
   } else {
     assert(getMDim() == 16);
     // For mfma with 16x16 output, each of the 64 threads holds 4 elements.
@@ -1519,6 +1520,38 @@ LinearLayout chooseScaledMfmaScaleLayout(
   }
   newLL = newLL.transposeOuts(standardOutDims);
   return newLL;
+}
+
+// Create a LinearLayout similar to mfmaLayout where each thread holds 8
+// consecutive elements.
+LinearLayout chooseMfma8Layout(AMDMfmaEncodingAttr mfmaLayout,
+                               ArrayRef<int64_t> shape) {
+  assert(mfmaLayout.getMDim() == 32 && mfmaLayout.getNDim() == 32 &&
+         mfmaLayout.getIsTransposed());
+
+  MLIRContext *ctx = mfmaLayout.getContext();
+  StringAttr kRegister = S("register");
+  StringAttr kLane = S("lane");
+  StringAttr kWarp = S("warp");
+  StringAttr kBlock = S("block");
+
+  SmallVector<unsigned> order = {1, 0};
+  auto standardOutDims = standardOutDimNames(ctx, 2);
+  LinearLayout mfma8Layout = LinearLayout::empty();
+  mfma8Layout =
+      LinearLayout({{kRegister, {{1, 0}, {2, 0}, {4, 0}}},
+                    {kLane, {{0, 1}, {0, 2}, {0, 4}, {0, 8}, {0, 16}, {8, 0}}},
+                    {kWarp, {}},
+                    {kBlock, {}}},
+                   {standardOutDims[order[0]], standardOutDims[order[1]]});
+
+  LinearLayout warpLayout =
+      identityStandardND(kWarp, mfmaLayout.getWarpsPerCTA(), order);
+  LinearLayout ctaLayout = mfma8Layout.transposeOuts(standardOutDims) *
+                           warpLayout.transposeOuts(standardOutDims);
+  mfma8Layout =
+      combineCtaCgaWithShape(ctaLayout, mfmaLayout.getCTALayout(), shape);
+  return mfma8Layout;
 }
 
 LinearLayout getScaleTMEMStoreLinearLayout(RankedTensorType scaleType,

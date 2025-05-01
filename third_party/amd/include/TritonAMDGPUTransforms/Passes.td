@@ -65,7 +65,6 @@ def TritonAMDGPUOptimizeEpilogue : Pass<"tritonamdgpu-optimize-epilogue", "mlir:
   let constructor = "mlir::createTritonAMDGPUOptimizeEpiloguePass()";
 
   let dependentDialects = [];
-
 }
 
 def TritonAMDGPUHoistLayoutConversions : Pass<"tritonamdgpu-hoist-layout-conversions", "mlir::triton::FuncOp"> {

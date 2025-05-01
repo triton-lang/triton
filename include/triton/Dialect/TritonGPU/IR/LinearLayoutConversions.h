@@ -282,6 +282,9 @@ LinearLayout chooseScaledMfmaScaleLayout(
     MLIRContext *ctx, int dotOperandIdx,
     const std::vector<std::vector<int32_t>> &dotOperandWarpBasis,
     ArrayRef<int64_t> dotOperandShape, unsigned mfmaMDim);
-} // namespace mlir::triton::gpu
 
+// Create a LinearLayuot similar to mfmaLayout where each thread holds 8 consecutive elements. The goal is to store dwordx4 in the epilogue.
+LinearLayout chooseMfma8Layout(AMDMfmaEncodingAttr mfmaLayout, ArrayRef<int64_t> shape);
+
+} // namespace mlir::triton::gpu
 #endif // TRITON_DIALECT_TRITONGPU_IR_LINEARLAYOUTCONVERSIONS_H
