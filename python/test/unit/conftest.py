@@ -35,10 +35,17 @@ def fresh_knobs(request, monkeypatch):
         if isinstance(knobset, knobs.base_knobs) and knobset != knobs.base_knobs
     }
     try:
+        # We store which variables we need to unset below in finally because
+        # monkeypatch doesn't appear to reset variables that were never set
+        # before the monkeypatch.delenv call below.
+        env_to_unset = []
         for name, knobset in knobs_map.items():
             setattr(knobs, name, knobset.copy().reset())
             for knob in knobset.knob_descriptors.values():
-                monkeypatch.delenv(knob.key, raising=False)
+                if knob.key in os.environ:
+                    monkeypatch.delenv(knob.key, raising=False)
+                else:
+                    env_to_unset.append(knob.key)
         prev_propagate_env = knobs.propagate_env
         knobs.propagate_env = True
         yield knobs
@@ -46,3 +53,6 @@ def fresh_knobs(request, monkeypatch):
     finally:
         for name, knobset in knobs_map.items():
             setattr(knobs, name, knobset)
+        for k in env_to_unset:
+            if k in os.environ:
+                del os.environ[k]
