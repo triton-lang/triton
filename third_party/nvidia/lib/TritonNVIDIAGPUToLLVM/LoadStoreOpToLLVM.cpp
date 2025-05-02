@@ -1432,7 +1432,7 @@ static LinearLayout getUnswizzledLayout(triton::gpu::MemDescType type) {
     assert(isa<ttg::SwizzledSharedEncodingAttr>(encoding));
     return ttg::toLinearLayout(type.getShape(), encoding);
   }
-  return ttg::sharedToLinearLayoutLeadingOffset(
+  return ttg::nvmmaSharedToLinearLayout(
       type.getShape(), cast<NVMMASharedEncodingAttr>(type.getEncoding()),
       /*disableSwizzle=*/true);
 }

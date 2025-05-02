@@ -16,6 +16,7 @@ import re
 import functools
 import os
 import sysconfig
+import time
 
 # - ^\s*tt\.func\s+ : match the start of the string, any leading whitespace, the keyword func,
 #    and any following whitespace
@@ -216,7 +217,50 @@ def filter_traceback(e: BaseException):
         e.__traceback__ = frames[0]
 
 
+class CompileTimer:
+
+    def __init__(self) -> None:
+        self.start: float = time.time()
+        self.ir_initialization_end: float | None = None
+        self.lowering_stage_ends: list[tuple[str, float]] = []
+        self.store_results_end: float | None = None
+
+    def finished_ir_initialization(self) -> None:
+        self.ir_initialization_end = time.time()
+
+    def stage_finished(self, stage_name: str) -> None:
+        self.lowering_stage_ends.append((stage_name, time.time()))
+
+    def end(self) -> knobs.CompileTimes:
+        timestamp = time.time()
+        if self.ir_initialization_end is None:
+            self.ir_initialization_end = timestamp
+        else:
+            self.store_results_end = timestamp
+
+        def delta(start: float, end: float | None) -> int:
+            if end is None:
+                return 0
+            return int((end - start) * 1000000)
+
+        lowering_stage_durations = []
+        stage_start = self.ir_initialization_end
+        for stage_name, stage_end in self.lowering_stage_ends:
+            lowering_stage_durations.append((stage_name, delta(stage_start, stage_end)))
+            stage_start = stage_end
+
+        return knobs.CompileTimes(
+            ir_initialization=delta(self.start, self.ir_initialization_end),
+            lowering_stages=lowering_stage_durations,
+            store_results=delta(stage_start, self.store_results_end),
+        )
+
+
 def compile(src, target=None, options=None):
+    compilation_listener = knobs.compilation.listener
+    if compilation_listener:
+        timer = CompileTimer()
+
     if target is None:
         target = driver.active.get_current_target()
     assert isinstance(target, GPUTarget), "target must be of GPUTarget type"
@@ -253,7 +297,16 @@ def compile(src, target=None, options=None):
     always_compile = knobs.compilation.always_compile
     if not always_compile and metadata_path is not None:
         # cache hit!
-        return CompiledKernel(src, metadata_group, hash)
+        res = CompiledKernel(src, metadata_group, hash)
+        if compilation_listener:
+            compilation_listener(
+                src=src,
+                metadata=res.metadata._asdict(),
+                times=timer.end(),
+                cache_hit=True,
+            )
+        return res
+
     # initialize metadata
     metadata = {
         "hash": hash,
@@ -289,6 +342,8 @@ def compile(src, target=None, options=None):
         module.create_location_snapshot(src.path)
         print(f"Creating new locations for {src.path}")
 
+    if compilation_listener:
+        timer.finished_ir_initialization()
     for ext, compile_ir in list(stages.items())[first_stage:]:
         next_module = compile_ir(module, metadata)
         ir_filename = f"{file_name}.{ext}"
@@ -306,6 +361,8 @@ def compile(src, target=None, options=None):
             next_module.create_location_snapshot(ir_full_name)
             print(f"Creating new locations for {ir_full_name}")
         module = next_module
+        if compilation_listener:
+            timer.stage_finished(ext)
     # write-back metadata
     metadata_group[metadata_filename] = fn_cache_manager.put(json.dumps(metadata, default=vars), metadata_filename,
                                                              binary=False)
@@ -321,6 +378,10 @@ def compile(src, target=None, options=None):
     # multithreading in the MLIR context
     if not knobs.compilation.enable_asan:
         context.disable_multithreading()
+
+    # notify any listener
+    if compilation_listener:
+        compilation_listener(src=src, metadata=metadata, times=timer.end(), cache_hit=False)
     # return handle to compiled kernel
     return CompiledKernel(src, metadata_group, hash)
 
