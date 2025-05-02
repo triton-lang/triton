@@ -83,10 +83,11 @@ def test_record(method, tmp_path: pathlib.Path):
     grid = (1, 1, 1)
     with instrumentation(temp_file):
         pgm = add_kernel[grid](x, y, output, n_elements, BLOCK_SIZE=1024, METHOD=method)
-        host_buffer = proton.hooks.InstrumentationHook.host_buffer
+        #FIXME(fywkevin): have a dedicated place to put those decoding related constants
+        payload_offset = int.from_bytes(proton.hooks.InstrumentationHook.host_buffer[12:16].numpy().tobytes(), 'little')
+        host_buffer = proton.hooks.InstrumentationHook.host_buffer[payload_offset:]
         preamble = host_buffer[0:4]
         assert int.from_bytes(preamble.numpy().tobytes(), 'little') == 0xdeadbeef
-        #FIXME(fywkevin): have a dedicated place to put those decoding related constants
         header_size = 16
         metadata_size = header_size + pgm.metadata.num_warps * 4
         start_tag = host_buffer[metadata_size:metadata_size + 4]

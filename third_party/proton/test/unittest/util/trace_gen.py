@@ -1,20 +1,18 @@
 import triton
 import argparse
 import ctypes
-import struct
 import triton.profiler as proton
 import triton.profiler.language as pl
 from triton.profiler.hooks import InstrumentationHook
 
 
-def write_tensor_to_file(num_blocks, metadata, tensor, filename):
+def write_tensor_to_file(tensor, filename):
     data_ptr = tensor.data_ptr()
     size = tensor.numel()
     dtype_size = tensor.element_size()
     total_bytes = size * dtype_size
 
     with open(filename, 'wb') as f:
-        f.write(struct.pack('III', num_blocks, metadata.num_warps, metadata.profile_scratch_size))
         data_arr = ctypes.cast(data_ptr, ctypes.POINTER(ctypes.c_ubyte * total_bytes))
         f.write(bytes(data_arr.contents))
 
@@ -35,8 +33,8 @@ def seq(args):
     proton.start("", backend="instrumentation", mode=proton.mode.Default(buffer_size=256))
     InstrumentationHook.enable_host_buffer = True
     InstrumentationHook.profile_buffer_size = 512
-    pgm = seq_kernel[grid]()
-    write_tensor_to_file(grid_size, pgm.metadata, InstrumentationHook.host_buffer, args.trace_file)
+    seq_kernel[grid]()
+    write_tensor_to_file(InstrumentationHook.host_buffer, args.trace_file)
     proton.finalize()
 
 
@@ -53,8 +51,8 @@ def loop(args):
     proton.start("", backend="instrumentation", mode=proton.mode.Default(buffer_size=256))
     InstrumentationHook.enable_host_buffer = True
     InstrumentationHook.profile_buffer_size = 512
-    pgm = loop_kernel[grid]()
-    write_tensor_to_file(grid_size, pgm.metadata, InstrumentationHook.host_buffer, args.trace_file)
+    loop_kernel[grid]()
+    write_tensor_to_file(InstrumentationHook.host_buffer, args.trace_file)
     proton.finalize()
 
 
