@@ -12,6 +12,52 @@ using namespace mlir;
 using namespace mlir::triton;
 using namespace mlir::triton::gpu;
 
+// Given a `ttg.warp_specialize` with a certain number of existing warps, pad it
+// with extra warps until it has the same number of full warp groups as the
+// largest partitioning. This ensures that all threads can be present to
+// surrender registers.
+static void padToMaxWarpGroups(WarpSpecializeOp op, int numExtraWarpGroups) {
+  int numExtraWarps = op.getTotalPartitionWarps();
+  int warpsToAdd = numExtraWarpGroups * 4 - numExtraWarps;
+  assert(warpsToAdd >= 0);
+
+  SmallVector<int> paddingPartitionSizes;
+  while (warpsToAdd > 0) {
+    int paddingSize = llvm::NextPowerOf2(warpsToAdd) / 2;
+    paddingPartitionSizes.push_back(paddingSize);
+    warpsToAdd -= paddingSize;
+  }
+
+  auto partitions = cast<WarpSpecializePartitionsOp>(
+      op.getPartitionOpHolder().front().front());
+  OperationState state(partitions.getLoc(), partitions.getOperationName());
+  for (Region *region : partitions.getRegions())
+    state.addRegion()->takeBody(*region);
+
+  SmallVector<int32_t> partitionNumWarps(op.getPartitionNumWarps());
+  for (int paddingSize : paddingPartitionSizes) {
+    partitionNumWarps.push_back(paddingSize);
+
+    Block &body = state.addRegion()->emplaceBlock();
+    for (Value capture : op.getExplicitCaptures())
+      body.addArgument(capture.getType(), capture.getLoc());
+    OpBuilder b(op.getContext());
+    b.setInsertionPointToStart(&body);
+    b.create<WarpReturnOp>(op.getLoc());
+  }
+  op.setPartitionNumWarps(partitionNumWarps);
+
+  if (auto reqRegs = op.getRequestedRegisters()) {
+    SmallVector<int32_t> newReqRegs(*reqRegs);
+    newReqRegs.append(paddingPartitionSizes.size(), 16);
+    op.setRequestedRegisters(newReqRegs);
+  }
+
+  OpBuilder b(partitions);
+  b.create(state);
+  partitions.erase();
+}
+
 namespace {
 struct AllocateWarpGroups
     : public mlir::triton::gpu::impl::TritonGPUAllocateWarpGroupsBase<
@@ -19,7 +65,32 @@ struct AllocateWarpGroups
   void runOnOperation() override {
     ModuleOp mod = getOperation();
 
+    // First determine the maximum number of extra warps.
+    int maxExtraWarps = 0;
+    mod.walk([&](WarpSpecializeOp op) {
+      maxExtraWarps = std::max<int>(maxExtraWarps, op.getTotalPartitionWarps());
+    });
+
+    // Round this up to the nearest warpgroup (multiple of 4) and then pad each
+    // `ttg.warp_specialize` to the nearest warpgroup.
+    int numExtraWarpGroups = llvm::divideCeil(maxExtraWarps, 4);
+    mod.walk([&](WarpSpecializeOp op) {
+      padToMaxWarpGroups(op, numExtraWarpGroups);
+    });
+
+    // Determine the maximum number of registers per thread. This may have
+    // been set by the user.
     int threadsPerWarp = TritonGPUDialect::getThreadsPerWarp(mod);
+    int baseNumWarps = lookupNumWarps(mod);
+    int maxnreg;
+    if (auto maxnregAttr =
+            mod->getAttrOfType<IntegerAttr>(AttrMaxRegistersName)) {
+      maxnreg = maxnregAttr.getInt();
+    } else {
+      maxnreg = (64 * 1024) / (baseNumWarps + numExtraWarpGroups * 4) /
+                threadsPerWarp;
+      maxnreg = maxnreg / 8 * 8;
+    }
 
     struct WarpGroupInfo {
       SmallVector<Region *> partitions;
@@ -34,12 +105,8 @@ struct AllocateWarpGroups
     };
 
     // Compute the total number of warps required at any given time.
-    int baseNumWarps = lookupNumWarps(mod);
-    int maxExtraWarps = 0;
     mod.walk([&](WarpSpecializeOp op) {
       ArrayRef<int32_t> arr = op.getPartitionNumWarps();
-      int req = op.getTotalPartitionWarps();
-      maxExtraWarps = std::max(maxExtraWarps, req);
 
       // Allocate the start IDs such that the largest warpgroups have lower
       // starting warp IDs.
@@ -84,18 +151,6 @@ struct AllocateWarpGroups
         warpGroups.back().maxRequestedRegs =
             std::max<int>(warpGroups.back().maxRequestedRegs, estRegsCeil8);
         warpGroups.back().numWarps += numWarps;
-      }
-
-      // Determine the maximum number of registers per thread. This may have
-      // been set by the user.
-      int maxnreg;
-      if (auto maxnregAttr =
-              op->getAttrOfType<IntegerAttr>(AttrMaxRegistersName)) {
-        maxnreg = maxnregAttr.getInt();
-      } else {
-        maxnreg = (1 << 16) / (baseNumWarps + op.getTotalPartitionWarps()) /
-                  threadsPerWarp;
-        maxnreg = maxnreg / 8 * 8;
       }
 
       // Compute the register deficit over the partition warp groups.

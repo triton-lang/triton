@@ -393,16 +393,54 @@ TMemMessageTraits selectTMemMessage(const TMemRuntimeInfo &info, int maxnreg) {
 }
 
 // Get the maximum number of registers per thread based on the context. This is
-// by default 256, but it can be overridden by `ttg.maxnreg` set on the module.
+// by default 256, but it can be overridden by `ttg.maxnreg` set on the module
+// or a contextual register limit set by the compiler on partitions.
 static int getContextualMaxNReg(Operation *op) {
-  // PTXAS validates the allocation of `tcgen05.ld` and `tcgen05.st`
-  // instructions based on the static number of registers, not the dynamic
-  // allocation. So query the module for a limit.
+  // Check the immediate parent op to see if it places a register constraint.
+  auto getFromParent = [](Operation *op) -> std::optional<int> {
+    Operation *parent = op->getParentOp();
+    if (auto mod = dyn_cast<ModuleOp>(parent)) {
+      if (auto attr = mod->getAttrOfType<IntegerAttr>(AttrMaxRegistersName))
+        return attr.getInt();
+      return {};
+    }
+
+    if (auto partitions = dyn_cast<WarpSpecializePartitionsOp>(parent)) {
+      // Check if the partition has reduced registers.
+      unsigned idx = op->getParentRegion()->getRegionNumber();
+      if (auto actRegisters = partitions.getParentOp().getActualRegisters())
+        return (*actRegisters)[1 + idx];
+      return {};
+    }
+
+    if (auto wsOp = dyn_cast<WarpSpecializeOp>(op->getParentOp())) {
+      // Check the register usage of the default warpgroup.
+      if (auto actRegisters = wsOp.getActualRegisters())
+        return actRegisters->front();
+      return {};
+    }
+
+    return {};
+  };
+
+  // PTXAS validates the register usage of `tcgen05.ld` and `tcgen05.st`
+  // instructions based on the static number of registers set on the module, not
+  // the dynamic allocation. This just means the register limit used for the
+  // purpose of subtiling TMEM messages cannot be higher than the module's.
   auto mod = op->getParentOfType<ModuleOp>();
-  if (auto maxnreg =
-          mod->getAttrOfType<IntegerAttr>(triton::gpu::AttrMaxRegistersName))
-    return std::min<int>(maxRegisters, maxnreg.getInt());
-  return maxRegisters;
+  int maxnreg = maxRegisters;
+
+  for (; op != mod; op = op->getParentOp()) {
+    if (std::optional<int> limit = getFromParent(op)) {
+      maxnreg = std::min(maxnreg, *limit);
+      break;
+    }
+  }
+
+  if (auto maxnregAttr = mod->getAttrOfType<IntegerAttr>(AttrMaxRegistersName))
+    maxnreg = std::min<int>(maxnreg, maxnregAttr.getInt());
+
+  return maxnreg;
 }
 
 static void lowerStoreToTensorMemory(Location loc, Operation *op, Value src,
