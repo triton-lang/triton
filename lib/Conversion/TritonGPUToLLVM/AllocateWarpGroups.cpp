@@ -191,7 +191,7 @@ struct AllocateWarpGroups
 
     Builder b(&getContext());
     mod->setAttr("ttg.total-num-warps",
-                 b.getI32IntegerAttr(baseNumWarps + maxExtraWarps));
+                 b.getI32IntegerAttr(baseNumWarps + numExtraWarpGroups * 4));
   }
 };
 } // namespace
