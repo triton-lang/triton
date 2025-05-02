@@ -1093,7 +1093,7 @@ LinearLayout LinearLayout::removeZeroBasesAlongDim(StringAttr stripDim) const {
     newOutDimSizes.push_back({outDim, getOutDimSize(outDim)});
   }
   auto newLayout = LinearLayout(std::move(result), ArrayRef(newOutDimSizes),
-                                true /*requireSurjective*/);
+                                this->isSurjective() /*requireSurjective*/);
   // assert(
   //     newLayout.isSurjective() == this->isSurjective() &&
   //     "Removing zero bases along a dimension should not change
