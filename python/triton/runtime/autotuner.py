@@ -172,10 +172,13 @@ class Autotuner(KernelInterface):
         from triton._C.libtriton import get_cache_invalidating_env_vars
         from triton.compiler.compiler import make_backend, triton_key
         from triton.runtime.cache import get_cache_manager
+        from triton.runtime.interpreter import InterpretedFunction
         from triton.runtime.jit import JITFunction
 
         fn = self.fn
         while not isinstance(fn, JITFunction):
+            if isinstance(fn, InterpretedFunction):
+                return bench_fn()
             fn = fn.fn
 
         env_vars = get_cache_invalidating_env_vars()
