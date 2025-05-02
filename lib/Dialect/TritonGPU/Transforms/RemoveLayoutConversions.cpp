@@ -1058,16 +1058,15 @@ void LayoutRematerialization::hoistConvertIntoConditionals() {
 
 static bool isExpensiveMathOp(Operation *op) {
   static const llvm::DenseSet<llvm::StringRef> expensiveOps = {
-    "math.exp", "math.exp2", "math.expm1", "math.log", "math.log2",
-    "math.log10", "math.log1p", "math.sin", "math.cos", "math.tan",
-    "math.asin", "math.acos", "math.atan", "math.atan2", "math.powf",
-    "math.sqrt", "math.rsqrt", "math.erf", "math.tanh", "math.cbrt"
-  };
+      "math.exp",   "math.exp2",  "math.expm1", "math.log",   "math.log2",
+      "math.log10", "math.log1p", "math.sin",   "math.cos",   "math.tan",
+      "math.asin",  "math.acos",  "math.atan",  "math.atan2", "math.powf",
+      "math.sqrt",  "math.rsqrt", "math.erf",   "math.tanh",  "math.cbrt"};
   return expensiveOps.contains(op->getName().getStringRef());
 }
 
-static int64_t getByteCount(
-    Value result, int64_t minElementCount = 0, int64_t minBitWidth = 0) {
+static int64_t getByteCount(Value result, int64_t minElementCount = 0,
+                            int64_t minBitWidth = 0) {
   int64_t elementCount = 0;
   int64_t dtypeBitWidth = 0;
   if (auto tensorTy = dyn_cast<RankedTensorType>(result.getType())) {
