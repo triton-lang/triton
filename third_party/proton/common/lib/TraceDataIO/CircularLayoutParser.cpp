@@ -141,3 +141,27 @@ ScopeMisMatchException::ScopeMisMatchException(const std::string &msg)
 
 ClockOverflowException::ClockOverflowException(const std::string &msg)
     : ParserException(msg, ExceptionSeverity::WARNING) {}
+
+std::shared_ptr<CircularLayoutParserResult>
+proton::readCircularLayoutTrace(ByteSpan &buffer) {
+  CircularLayoutParserConfig config;
+  auto decoder = EntryDecoder(buffer);
+  uint32_t version = decoder.decode<I32Entry>()->value;
+  assert(version == 1 && "Version mismatch");
+  buffer.skip(8);
+  uint32_t payloadOffset = decoder.decode<I32Entry>()->value;
+  uint32_t payloadSize = decoder.decode<I32Entry>()->value;
+  config.numBlocks = decoder.decode<I32Entry>()->value;
+  config.totalUnits = decoder.decode<I32Entry>()->value;
+  config.scratchMemSize = decoder.decode<I32Entry>()->value;
+
+  config.uidVec.clear();
+  for (int i = 0; i < config.totalUnits; i++) {
+    config.uidVec.push_back(i);
+  }
+
+  buffer.seek(payloadOffset);
+  auto parser = std::make_unique<CircularLayoutParser>(buffer, config);
+  parser->parse();
+  return parser->getResult();
+}

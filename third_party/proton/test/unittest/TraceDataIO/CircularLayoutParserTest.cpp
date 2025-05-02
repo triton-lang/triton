@@ -45,30 +45,16 @@ public:
     return ByteSpan(testData.data(), size);
   }
 
-  void updateConfig() {
-    auto buffer = getBuffer(output);
-    auto decoder = EntryDecoder(buffer);
-
-    config.numBlocks = decoder.decode<I32Entry>()->value;
-    config.totalUnits = decoder.decode<I32Entry>()->value;
-    config.scratchMemSize = decoder.decode<I32Entry>()->value;
-
-    config.uidVec.clear();
-    for (int i = 0; i < config.totalUnits; i++) {
-      config.uidVec.push_back(i);
-    }
-  }
-
 protected:
   CircularLayoutParserConfig config;
   std::vector<uint8_t> testData;
   std::string kernel;
   std::string output;
-  static constexpr int binHeaderSize = 12;
 };
 
 TEST_F(CircularLayoutParserTest, WrongPreamble) {
   config.numBlocks = 1;
+  config.uidVec = {0};
   testData = {0x78, 0x56, 0x34, 0x12, 0x01, 0x00,
               0x00, 0x80, 0xFF, 0xFF, 0xFF, 0xFF};
   auto buffer = ByteSpan(testData.data(), testData.size());
@@ -182,13 +168,8 @@ public:
 };
 
 TEST_F(CLParserSeqTraceTest, Trace) {
-  updateConfig();
   auto buffer = getBuffer(output);
-  buffer.skip(binHeaderSize);
-  auto decoder = EntryDecoder(buffer);
-  auto parser = CircularLayoutParser(buffer, config);
-  parser.parse();
-  auto result = parser.getResult();
+  auto result = proton::readCircularLayoutTrace(buffer);
   EXPECT_EQ(result->blockTraces.size(), 2);
   EXPECT_EQ(result->blockTraces[1].blockId, 1);
   EXPECT_EQ(result->blockTraces[0].traces.size(), 4);
@@ -202,13 +183,8 @@ public:
 };
 
 TEST_F(CLParserLoopTraceTest, Trace) {
-  updateConfig();
   auto buffer = getBuffer(output);
-  buffer.skip(binHeaderSize);
-  auto decoder = EntryDecoder(buffer);
-  auto parser = CircularLayoutParser(buffer, config);
-  parser.parse();
-  auto result = parser.getResult();
+  auto result = proton::readCircularLayoutTrace(buffer);
   EXPECT_EQ(result->blockTraces.size(), 1);
   EXPECT_EQ(result->blockTraces[0].traces.size(), 4);
   EXPECT_EQ(result->blockTraces[0].traces[0].count, 80);

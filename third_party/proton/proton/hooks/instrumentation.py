@@ -14,6 +14,9 @@ from .hook import Hook
 from ..flags import set_instrumentation_on, set_instrumentation_off
 from .. import mode
 
+# TODO(fywkevin): add support for major.minor
+VERSION = 1
+
 
 class CudaAllocator:
 
@@ -125,6 +128,7 @@ class InstrumentationHook(Hook):
 
         self.allocator = CudaAllocator(self)
         self.buffer = None
+        self.metadata_path: Dict[Any, Optional[str]] = {}
 
     def activate(self):
         if InstrumentationHook.active_count > 0:
@@ -230,6 +234,10 @@ class InstrumentationHook(Hook):
         scope_id_parents = self.function_scope_id_parents.get(function, [])
         libproton.init_function_scope_ids(function, scope_id_names, scope_id_parents)
 
+        if function:
+            self.metadata_path[function] = next(
+                (path for key, path in metadata_group.items() if key.endswith(("json"))), None)
+
     def _data_ptr(self) -> int:
         return 0 if self.buffer is None else self.buffer.data_ptr()
 
@@ -246,5 +254,67 @@ class InstrumentationHook(Hook):
         libproton.exit_instrumented_op(func, self._data_ptr(), alloc_size)
 
         if InstrumentationHook.enable_host_buffer:
-            # copy profiling buffer to CPU for external processing
-            InstrumentationHook.host_buffer = self.buffer.cpu().clone()
+            self._populate_host_buffer(func)
+
+    def _populate_host_buffer(self, function: Any) -> None:
+        if function and self.metadata_path[function]:
+            import torch
+            import struct
+            import json
+
+            alloc_size = 0 if self.buffer is None else self.buffer.element_size() * self.buffer.numel()
+            data = {}
+            with open(self.metadata_path[function], 'r') as file:
+                data = json.load(file)
+            scratch_mem_size = data["profile_scratch_size"]
+            total_unit = data["num_warps"]
+            block_num = int(alloc_size / scratch_mem_size)
+
+            # Binary trace layout:
+            # +------------------+
+            # |     version      |  4 bytes
+            # +------------------+
+            # |  header_offset   |  4 bytes
+            # +------------------+
+            # |   header_size    |  4 bytes
+            # +------------------+
+            # |  payload_offset  |  4 bytes
+            # +------------------+
+            # |   payload_size   |  4 bytes
+            # +------------------+
+            # |    block_num     |  4 bytes
+            # +------------------+
+            # |   total_unit     |  4 bytes
+            # +------------------+
+            # | scratch_mem_size |  4 bytes
+            # +------------------+
+            # |                  |
+            # |     uid_vec      |  total_unit * 4 bytes
+            # |                  |
+            # +------------------+
+            # |                  |
+            # |     payload      |  size_payload bytes
+            # |                  |
+            # +------------------+
+
+            is_all_warps = self.mode.sampling_options == "" and self.mode.granularity == triton_proton.GRANULARITY.WARP
+            if is_all_warps:
+                uid_vec = [i for i in range(total_unit)]
+            else:
+                uid_vec = [int(i) for i in self.mode.sampling_options.strip().split(",")]
+
+            header_size = 32 + total_unit * 4
+            header_offset = 4
+            payload_offset = header_size
+            payload_size = alloc_size
+            header_values = [
+                VERSION, header_offset, header_size, payload_offset, payload_size, block_num, total_unit,
+                scratch_mem_size, *uid_vec
+            ]
+            header_bytes = struct.pack("I" * len(header_values), *header_values)
+
+            InstrumentationHook.host_buffer = torch.empty(header_size + alloc_size, dtype=torch.uint8, device="cpu")
+            config_portion = InstrumentationHook.host_buffer[:header_size]
+            config_portion.copy_(torch.tensor(list(header_bytes), dtype=torch.uint8))
+            data_portion = InstrumentationHook.host_buffer[header_size:].view_as(self.buffer)
+            data_portion.copy_(self.buffer.cpu())
