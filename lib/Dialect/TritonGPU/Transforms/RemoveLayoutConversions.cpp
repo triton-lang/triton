@@ -1057,7 +1057,12 @@ void LayoutRematerialization::hoistConvertIntoConditionals() {
 }
 
 static bool isExpensiveMathOp(Operation *op) {
+  // These operations are either multiple instructions or have throughput
+  // lower than 16 according to the arithmetic instructions table in:
+  // https://docs.nvidia.com/cuda/cuda-c-programming-guide/index.html#arithmetic-instructions
   static const llvm::DenseSet<llvm::StringRef> expensiveOps = {
+      "arith.divf", "math.erfc",  "math.sinh",  "math.cosh",  "math.tanh",
+      "math.asinh", "math.acosh", "math.atanh", "math.ctlz",  "math.cttz",
       "math.exp",   "math.exp2",  "math.expm1", "math.log",   "math.log2",
       "math.log10", "math.log1p", "math.sin",   "math.cos",   "math.tan",
       "math.asin",  "math.acos",  "math.atan",  "math.atan2", "math.powf",
