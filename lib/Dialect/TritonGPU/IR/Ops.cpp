@@ -51,7 +51,9 @@ static SmallVector<Operation *> getElementwiseLocalLoadChain(Operation *op) {
   while (current) {
     // Check if it's a local_load operation
     if (isa<LocalLoadOp>(current)) {
-      chain.push_back(current);
+      if (current->getResult(0).hasOneUse()) {
+        chain.push_back(current);
+      }
       break;
     }
 
