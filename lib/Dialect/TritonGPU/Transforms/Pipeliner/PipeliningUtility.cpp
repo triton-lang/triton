@@ -288,6 +288,7 @@ bool mlir::triton::getDisallowAccMultiBuffer(scf::ForOp forOp) {
 std::pair<OpResult, int64_t>
 mlir::triton::getDefinitionAndDistance(scf::ForOp forOp, Value value) {
   int64_t distance = 0;
+  DenseSet<Value> seen;
   while (auto arg = dyn_cast<BlockArgument>(value)) {
     // Ignore implicit captures.
     if (arg.getOwner() != forOp.getBody())
@@ -297,6 +298,8 @@ mlir::triton::getDefinitionAndDistance(scf::ForOp forOp, Value value) {
       return {nullptr, 0};
     ++distance;
     value = forOp.getYieldedValues()[arg.getArgNumber() - 1];
+    if (!seen.insert(value).second)
+      return {nullptr, 0};
   }
   return {cast<OpResult>(value), distance};
 }
@@ -358,14 +361,15 @@ Value mlir::triton::createScalarAlloc(ImplicitLocOpBuilder &rewriter, Type type,
 }
 
 // Create an allocation and init the mbarriers.
-Value mlir::triton::createBarrierAlloc(scf::ForOp forOp, int numBarriers) {
+Value mlir::triton::createBarrierAlloc(scf::ForOp forOp, int numBarriers,
+                                       int arriveCount) {
   ImplicitLocOpBuilder rewriter(forOp.getLoc(), forOp);
 
   Value barrierAlloc =
       createScalarAlloc(rewriter, rewriter.getI64Type(), numBarriers);
   for (unsigned i = 0; i < numBarriers; i++) {
     Value barrierView = createSingleBufferView(rewriter, barrierAlloc, i);
-    rewriter.create<ttng::InitBarrierOp>(barrierView, 1);
+    rewriter.create<ttng::InitBarrierOp>(barrierView, arriveCount);
   }
   // Invalidate and deallocate the barriers.
   rewriter.setInsertionPointAfter(forOp);
