@@ -1,9 +1,11 @@
 import os
-import pytest
 import shutil
-import triton
 
 from pathlib import Path
+
+import pytest
+import triton
+from triton._internal_testing import is_hip
 
 
 def test_knobs_utils() -> None:
@@ -102,8 +104,18 @@ def test_knobs_scope(fresh_knobs, monkeypatch):
     assert fresh_knobs.amd.use_buffer_ops
 
 
-@pytest.mark.parametrize("truthy, falsey", [("1", "0"), ("true", "false"), ("True", "False"), ("TRUE", "FALSE"),
-                                            ("y", "n"), ("YES", "NO"), ("ON", "OFF")])
+@pytest.mark.parametrize(
+    "truthy, falsey",
+    [
+        ("1", "0"),
+        ("true", "false"),
+        ("True", "False"),
+        ("TRUE", "FALSE"),
+        ("y", "n"),
+        ("YES", "NO"),
+        ("ON", "OFF"),
+    ],
+)
 def test_read_env(truthy, falsey, fresh_knobs, monkeypatch):
     # bool defaulting to False
     assert not fresh_knobs.runtime.debug
@@ -136,6 +148,7 @@ def test_read_env(truthy, falsey, fresh_knobs, monkeypatch):
     assert fresh_knobs.cache.override_dir == "/tmp/triton_home/.triton/override"
 
     from triton.runtime.cache import FileCacheManager
+
     assert fresh_knobs.cache.manager_class == FileCacheManager
 
     assert fresh_knobs.build.backend_dirs == {"/tmp/cuda/crt", "/tmp/cuda/rt"}
@@ -216,6 +229,7 @@ def test_set_knob_directly(fresh_knobs, monkeypatch):
     assert fresh_knobs.cache.manager_class == FileCacheManager
 
 
+@pytest.mark.skipif(is_hip(), reason="AMD shouldn't check for ptxas")
 def test_nvidia_tool(fresh_knobs, tmp_path, monkeypatch):
     triton_root = Path(__file__).parent.parent.parent / "triton"
     default_ptxas = triton_root / "backends/nvidia/bin/ptxas"
