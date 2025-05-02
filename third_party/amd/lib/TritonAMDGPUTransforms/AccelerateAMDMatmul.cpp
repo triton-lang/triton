@@ -1047,12 +1047,6 @@ public:
         convertAndCastTensor(rewriter, newDot, oldRetType.getEncoding(),
                              oldRetType.getElementType());
 
-    // TODO: if new acc is provided, rewrite the output so that it converts
-    // acc1 = tl.sparse_dot(a, b, aMeta, acc2)
-    // into...
-    // acc1 = tl.sparse_dot(a, b, aMeta).to(float32) + acc2
-    // The cast to float32 is implicit
-
     rewriter.replaceOp(dotOp, dotOutput);
 
     return success();
