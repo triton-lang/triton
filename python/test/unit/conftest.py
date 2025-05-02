@@ -42,6 +42,7 @@ def _fresh_knobs_impl(monkeypatch, skipped_attr: Optional[Set[str]] = None):
 
     def fresh_function():
         for name, knobset in knobs_map.items():
+            setattr(knobs, name, knobset.copy().reset())
             for knob in knobset.knob_descriptors.values():
                 monkeypatch.delenv(knob.key, raising=False)
         return knobs
