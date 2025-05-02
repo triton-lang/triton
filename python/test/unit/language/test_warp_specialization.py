@@ -6,7 +6,7 @@ import triton.language as tl
 
 from triton._internal_testing import is_cuda, is_hip
 
-if torch.cuda.is_available():
+if torch.cuda.is_available() and torch.cuda.get_device_capability()[0] == 10:
     from triton._C.libtriton import nvidia
     cublas_workspace = torch.empty(32 * 1024 * 1024, device="cuda", dtype=torch.uint8)
     cublas = nvidia.cublas.CublasLt(cublas_workspace)
@@ -14,7 +14,8 @@ else:
     cublas = None
 
 
-@pytest.mark.skipif(not is_cuda(), reason="warp specialization is only supported on NVIDIA")
+@pytest.mark.skipif(not is_cuda() and torch.cuda.get_device_capability()[0] != 10,
+                    reason="warp specialization is only supported on NVIDIA Blackwell")
 def test_warp_specialize_basic_ir(tmp_path: pathlib.Path):
     ir = """
     tt.func @kernel(%arg0: !tt.ptr<i32>) {
