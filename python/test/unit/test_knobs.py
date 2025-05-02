@@ -230,11 +230,11 @@ def test_set_knob_directly(fresh_knobs, monkeypatch):
 
 
 @pytest.mark.skipif(
-    is_hip() or "TRITON_PTXAS_PATH" in os.environ,
-    reason="Only default ptxas Nvidia installations are supported.",
+    is_hip(),
+    reason="PTXAS is not installed on AMD",
 )
 def test_nvidia_tool(fresh_knobs, tmp_path, monkeypatch):
-    triton_root = Path(__file__).parent.parent.parent / "triton"
+    triton_root = Path(fresh_knobs.__file__).parent
     default_ptxas = triton_root / "backends/nvidia/bin/ptxas"
 
     assert default_ptxas.exists()
