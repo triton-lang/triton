@@ -137,11 +137,11 @@ TMemMessageTraits getTMemMessageFromAtom(const TMemAccessAtom &atom,
 // Only allows half of the thread registers to be used for tensor memory access
 // to avoid register pressure. This ensures the largest tmem message width is
 // used for the workload without inducing spills.
-int getTMemMessageNarrowingFactor(int workloadThreadRegs, int maxnreg) {
+int getTMemMessageNarrowingFactor(const TMemAccessAtom &atom, int maxnreg) {
   const int allowedRegUsage = maxnreg / 2;
   int narrowingFactor = 1;
-  while (workloadThreadRegs > allowedRegUsage) {
-    workloadThreadRegs /= 2;
+  while (getTMemMessageFromAtom(atom, narrowingFactor).numRegs >
+         allowedRegUsage) {
     narrowingFactor *= 2;
   }
   return narrowingFactor;
@@ -381,10 +381,7 @@ void createWaitOpSt(Location loc, ConversionPatternRewriter &rewriter) {
 TMemMessageTraits selectTMemMessage(const TMemRuntimeInfo &info, int maxnreg) {
   auto atom = info.useStridedMessage ? TMemAccess16x32bx2 : TMemAccess32x32b;
 
-  int totalRegsNeeded =
-      getEffectiveRegs(info.unpackedb16, info.useStridedMessage,
-                       info.numCols / info.numWarpGroups);
-  int narrowingFactor = getTMemMessageNarrowingFactor(totalRegsNeeded, maxnreg);
+  int narrowingFactor = getTMemMessageNarrowingFactor(atom, maxnreg);
   auto narrowedMessage = getTMemMessageFromAtom(atom, narrowingFactor);
   narrowedMessage = constrainMessageFromWorkload(narrowedMessage, info,
                                                  narrowedMessage.numRegs);
@@ -396,32 +393,54 @@ TMemMessageTraits selectTMemMessage(const TMemRuntimeInfo &info, int maxnreg) {
 }
 
 // Get the maximum number of registers per thread based on the context. This is
-// by default 256, but it can be overridden by `ttg.maxnreg` set on the module.
-// Alternatively, warp groups within warp specialized regions can have a
-// different number of registers allocated.
+// by default 256, but it can be overridden by `ttg.maxnreg` set on the module
+// or a contextual register limit set by the compiler on partitions.
 static int getContextualMaxNReg(Operation *op) {
-  if (auto mod = dyn_cast<ModuleOp>(op)) {
-    // Check for a maxnreg attribute.
-    if (auto attr = op->getAttrOfType<IntegerAttr>(AttrMaxRegistersName))
-      return std::max<int>(maxRegisters, attr.getInt());
+  // Check the immediate parent op to see if it places a register constraint.
+  auto getFromParent = [](Operation *op) -> std::optional<int> {
+    Operation *parent = op->getParentOp();
+    if (auto mod = dyn_cast<ModuleOp>(parent)) {
+      if (auto attr = mod->getAttrOfType<IntegerAttr>(AttrMaxRegistersName))
+        return attr.getInt();
+      return {};
+    }
 
-  } else if (auto partitions =
-                 dyn_cast<WarpSpecializePartitionsOp>(op->getParentOp())) {
-    // Check if the partition has reduced registers.
-    unsigned idx = op->getParentRegion()->getRegionNumber();
-    if (auto actRegisters = partitions.getParentOp().getActualRegisters())
-      return std::max<int>(maxRegisters, (*actRegisters)[1 + idx]);
-    return getContextualMaxNReg(partitions.getParentOp());
+    if (auto partitions = dyn_cast<WarpSpecializePartitionsOp>(parent)) {
+      // Check if the partition has reduced registers.
+      unsigned idx = op->getParentRegion()->getRegionNumber();
+      if (auto actRegisters = partitions.getParentOp().getActualRegisters())
+        return (*actRegisters)[1 + idx];
+      return {};
+    }
 
-  } else if (auto wsOp = dyn_cast<WarpSpecializeOp>(op->getParentOp())) {
-    // Check the register usage of the default warpgroup.
-    if (auto actRegisters = wsOp.getActualRegisters())
-      return std::max<int>(maxRegisters, actRegisters->front());
+    if (auto wsOp = dyn_cast<WarpSpecializeOp>(op->getParentOp())) {
+      // Check the register usage of the default warpgroup.
+      if (auto actRegisters = wsOp.getActualRegisters())
+        return actRegisters->front();
+      return {};
+    }
+
+    return {};
+  };
+
+  // PTXAS validates the register usage of `tcgen05.ld` and `tcgen05.st`
+  // instructions based on the static number of registers set on the module, not
+  // the dynamic allocation. This just means the register limit used for the
+  // purpose of subtiling TMEM messages cannot be higher than the module's.
+  auto mod = op->getParentOfType<ModuleOp>();
+  int maxnreg = maxRegisters;
+
+  for (; op != mod; op = op->getParentOp()) {
+    if (std::optional<int> limit = getFromParent(op)) {
+      maxnreg = std::min(maxnreg, *limit);
+      break;
+    }
   }
 
-  if (Operation *parent = op->getParentOp())
-    return getContextualMaxNReg(parent);
-  return maxRegisters;
+  if (auto maxnregAttr = mod->getAttrOfType<IntegerAttr>(AttrMaxRegistersName))
+    maxnreg = std::min<int>(maxnreg, maxnregAttr.getInt());
+
+  return maxnreg;
 }
 
 static void lowerStoreToTensorMemory(Location loc, Operation *op, Value src,
