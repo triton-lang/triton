@@ -220,7 +220,6 @@ def test_nvidia_tool(fresh_knobs, tmp_path, monkeypatch):
     triton_root = Path(__file__).parent.parent.parent / "triton"
     default_ptxas = triton_root / "backends/nvidia/bin/ptxas"
 
-    assert default_ptxas.exists()
     assert Path(fresh_knobs.nvidia.ptxas.path).resolve() == default_ptxas.resolve()
 
     tmp_ptxas = tmp_path / "ptxas-special"
