@@ -235,7 +235,8 @@ class InstrumentationHook(Hook):
         libproton.init_function_scope_ids(function, scope_id_names, scope_id_parents)
 
         if function:
-            self.metadata_path[function] = next((path for key, path in metadata_group.items() if key.endswith(("json"))), None)
+            self.metadata_path[function] = next(
+                (path for key, path in metadata_group.items() if key.endswith(("json"))), None)
 
     def _data_ptr(self) -> int:
         return 0 if self.buffer is None else self.buffer.data_ptr()
