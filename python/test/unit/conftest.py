@@ -54,7 +54,7 @@ def _fresh_knobs_impl(monkeypatch, skipped_attr: Optional[Set[str]] = None):
 
 
 @pytest.fixture
-def fresh_knobs(request, monkeypatch):
+def fresh_knobs(monkeypatch):
     fresh_function, reset_function = _fresh_knobs_impl(monkeypatch)
     try:
         yield fresh_function()
@@ -63,7 +63,7 @@ def fresh_knobs(request, monkeypatch):
 
 
 @pytest.fixture
-def fresh_knobs_except_libraries(fresh_knobs):
+def fresh_knobs_except_libraries(monkeypatch):
     """
     A variant of `fresh_knobs` that keeps library path
     information from the environment as these may be
