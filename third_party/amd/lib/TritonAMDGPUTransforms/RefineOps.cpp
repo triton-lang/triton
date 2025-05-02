@@ -692,6 +692,92 @@ struct LocalStoreOpPattern
   }
 };
 
+struct LocalAllocOpPattern
+    : public RefineRewritePattern<triton::gpu::LocalAllocOp> {
+  LocalAllocOpPattern(MLIRContext *context, PatternBenefit benefit = 1)
+      : RefineRewritePattern(context, benefit) {}
+
+  // Refines non-mutable memory `LocalAllocOp` ops. The non-mutable variant
+  // is used as a not-pipelined version of the op. To be able to refine the op,
+  // we replace the non-mutable variant with the mutable one that requires
+  // `LocalDeallocOp` after the last user of the result of `LocalAllocOp`.
+  // The `LocalStoreOp` is used to move data from registers to the LDS.
+  // The refinement of the resulting `LocalStoreOp` is left to the dedicated
+  // rewrite pattern.
+  LogicalResult apply(triton::gpu::LocalAllocOp op,
+                      PatternRewriter &rewriter) const override {
+    auto ctx = op->getContext();
+    auto loc = op.getLoc();
+    auto alignment = op.getAlignment();
+
+    if (op->getNumOperands() == 0)
+      return failure();
+
+    auto allocType = cast<triton::gpu::MemDescType>(op.getResult().getType());
+    auto origShape = allocType.getShape();
+    SmallVector<int64_t> newShape(origShape);
+    SmallVector<int64_t> newAllocShape(allocType.getAllocShape());
+
+    if (newShape.size() == 2) {
+      newShape.insert(newShape.begin(), 1);
+    }
+    assert(newShape.size() == 3);
+
+    if (newAllocShape.size() == 2) {
+      newAllocShape.insert(newAllocShape.begin(), 1);
+    }
+    assert(newAllocShape.size() == 3);
+
+    auto newAllocType = triton::gpu::MemDescType::get(
+        ctx, newShape, allocType.getElementType(), allocType.getEncoding(),
+        allocType.getMemorySpace(),
+        /*mutableMemory=*/true, newAllocShape);
+
+    rewriter.setInsertionPointAfter(op);
+    auto newAlloc =
+        rewriter.create<triton::gpu::LocalAllocOp>(loc, newAllocType);
+    newAlloc->setAttrs(op->getAttrs());
+
+    auto newSubviewType = triton::gpu::MemDescType::get(
+        ctx, origShape, allocType.getElementType(), allocType.getEncoding(),
+        allocType.getMemorySpace(),
+        /*mutableMemory=*/true, newAllocShape);
+
+    auto offset = createOffset({}, {0, 0, 0}, rewriter, loc);
+    auto newSubview = rewriter.create<ttg::MemDescSubviewOp>(
+        loc, newSubviewType, newAlloc, offset);
+    rewriter.create<ttg::LocalStoreOp>(loc, op.getOperand(0), newSubview);
+
+    mlir::Operation *lastUser = nullptr;
+    for (auto *user : op.getResult().getUsers()) {
+      if (!lastUser || user->isBeforeInBlock(lastUser) == false) {
+        lastUser = user;
+      }
+    }
+
+    Operation &lastOpInBlock = op->getBlock()->back();
+    const bool noUsers = lastUser == nullptr;
+    const bool isLastInstr = noUsers
+                                 ? false
+                                 : mlir::OperationEquivalence::isEquivalentTo(
+                                       &lastOpInBlock, lastUser,
+                                       mlir::OperationEquivalence::Flags::None);
+    ;
+    if (noUsers || isLastInstr) {
+      rewriter.setInsertionPoint(&lastOpInBlock);
+    } else {
+      rewriter.setInsertionPointAfter(lastUser);
+    }
+
+    rewriter.create<triton::gpu::LocalDeallocOp>(loc, newAlloc.getResult());
+
+    op.replaceAllUsesWith(newSubview.getResult());
+    rewriter.eraseOp(op);
+
+    return success();
+  }
+};
+
 struct ReduceOpPattern : public RefineRewritePattern<triton::ReduceOp> {
   ReduceOpPattern(MLIRContext *context, PatternBenefit benefit = 1)
       : RefineRewritePattern(context, benefit) {}
@@ -1133,6 +1219,10 @@ struct TritonAMDGPURefineOps
       func.emitError("unsupported target: '") << this->arch.getValue() << "'";
       return signalPassFailure();
     }
+
+    RewritePatternSet primaryPatterns(context);
+    primaryPatterns.add<LocalAllocOpPattern>(context, /*benefit=*/1);
+    walkAndApplyPatterns(func, std::move(primaryPatterns));
 
     RewritePatternSet patterns(context);
     patterns.add<LocalLoadOpPattern>(context, /*benefit=*/1);
