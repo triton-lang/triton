@@ -389,10 +389,10 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
 
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shared = 65544 : i32, ttg.target = "cuda:100", ttg.tensor_memory_size = 128 : i32, "ttg.threads-per-warp" = 32 : i32} {
   // CHECK-LABEL: @tensor_memory_ld_128x256
-  // CHECK-COUNT-2: tcgen05.st.sync.aligned.32x32b.x128.b32
+  // CHECK-COUNT-4: tcgen05.st.sync.aligned.32x32b.x64.b32
   // CHECK-NOT: tcgen05.st
   // CHECK: tcgen05.wait::st.sync.aligned
-  // CHECK-COUNT-2: tcgen05.ld.sync.aligned.32x32b.x128.b32
+  // CHECK-COUNT-4: tcgen05.ld.sync.aligned.32x32b.x64.b32
   // CHECK-NOT: tcgen05.ld
   // CHECK: tcgen05.wait::ld.sync.aligned
   tt.func public @tensor_memory_ld_128x256(%arg0: !tt.ptr<f16>, %arg1: !tt.ptr<f16>, %arg2: !tt.ptr<f16>) {
