@@ -1,8 +1,7 @@
 import os
+import pytest
 import tempfile
 from typing import Optional, Set
-
-import pytest
 
 
 def pytest_configure(config):
@@ -70,7 +69,7 @@ def fresh_knobs_except_libraries(monkeypatch):
     information from the environment as these may be
     needed to successfully compile kernels.
     """
-    fresh_function, reset_function = _fresh_knobs_impl({"build", "nvidia", "amd"})
+    fresh_function, reset_function = _fresh_knobs_impl(monkeypatch, skipped_attr={"build", "nvidia", "amd"})
     try:
         yield fresh_function()
     finally:
