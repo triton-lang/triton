@@ -89,11 +89,12 @@ public:
         rewriter.create<ttng::TMEMAllocOp>(loc, lhsMemDescType, src);
     tcGen5MMAOp.getAMutable().assign(tMemAlloc);
     // Check if all users of localAllocResult are WaitBarrierOp
-    if (llvm::all_of(localAllocResult.getUsers(), 
-    [](Operation *user) { return isa<ttng::WaitBarrierOp>(user); })) {
+    if (llvm::all_of(localAllocResult.getUsers(), [](Operation *user) {
+          return isa<ttng::WaitBarrierOp>(user);
+        })) {
       // Replace localAllocResult with tMemAlloc for all users
       rewriter.replaceAllUsesWith(localAllocResult, tMemAlloc);
-    } 
+    }
     return success();
   }
 };
