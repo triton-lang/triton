@@ -57,7 +57,7 @@ class env_base(Generic[SetType, GetType]):
 
     def __get__(self, obj: Optional[object], objclass: Optional[Type[object]]) -> GetType:
         if obj is None:
-            raise AttributeError("Cannot access {type(self)} on non-instance")
+            raise AttributeError(f"Cannot access {type(self)} on non-instance")
 
         if self.name in obj.__dict__:
             return self.transform(obj.__dict__[self.name])
@@ -273,7 +273,7 @@ class base_knobs:
         return res
 
     def reset(self: knobs_type) -> knobs_type:
-        for knob in self.knobs.keys():
+        for knob in self.knob_descriptors.keys():
             delattr(self, knob)
         return self
 

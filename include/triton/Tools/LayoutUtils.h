@@ -104,6 +104,15 @@ LinearLayout identityStandardND(StringAttr inDimName, ArrayRef<unsigned> shape,
 // (e.g. [a, b], [a, c] -> [a, b, c]).
 SmallVector<StringAttr> supremum(const SmallVector<StringAttr> &x,
                                  const SmallVector<StringAttr> &y);
+
+// Return a new layout reshaped to the given shape.
+LinearLayout reshapeLayout(MLIRContext *ctx, LinearLayout layout,
+                           ArrayRef<int64_t> shape);
+
+// Return a new layout with the dimensions transposed according to the given
+// order.
+LinearLayout transposeLinearLayout(LinearLayout layout, ArrayRef<int> order);
+
 } // namespace mlir::triton
 
 #endif // TRITON_TOOLS_LAYOUTUTILS_H
