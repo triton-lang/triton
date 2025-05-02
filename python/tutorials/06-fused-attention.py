@@ -18,12 +18,24 @@ import torch
 
 import triton
 import triton.language as tl
+import triton.profiler as proton
+from contextlib import contextmanager
 
 try:
     from triton.tools.tensor_descriptor import TensorDescriptor
     HAS_TENSOR_DESC = True
 except ModuleNotFoundError:
     HAS_TENSOR_DESC = False
+
+
+@contextmanager
+def proton_context():
+    proton.activate(0)
+    try:
+        yield
+    finally:
+        proton.deactivate(0)
+
 
 DEVICE = triton.runtime.driver.active.get_active_torch_device()
 
@@ -162,8 +174,30 @@ def keep(conf):
     return True
 
 
+def _attn_launch_metadata(grid, kernel, args):
+    ret = {}
+
+    # Get dimensions based on available arguments
+    if "Z" in args and "H" in args and "N_CTX" in args and "HEAD_DIM" in args:
+        # Forward pass
+        Z, H, N_CTX, HEAD_DIM = args["Z"], args["H"], args["N_CTX"], args["HEAD_DIM"]
+        ret["name"] = f"{kernel.name} [Z={Z}, H={H}, N_CTX={N_CTX}, HEAD_DIM={HEAD_DIM}]"
+    else:
+        # Backward pass or other operations
+        # For backward pass, we need to get dimensions from the input tensors
+        if "Q" in args:
+            Q = args["Q"]
+            Z, H, N_CTX, HEAD_DIM = Q.shape
+            ret["name"] = f"{kernel.name} [Z={Z}, H={H}, N_CTX={N_CTX}, HEAD_DIM={HEAD_DIM}]"
+        else:
+            # For other operations, use a default name
+            ret["name"] = kernel.name
+
+    return ret
+
+
 @triton.autotune(list(filter(keep, configs)), key=["N_CTX", "HEAD_DIM"])
-@triton.jit
+@triton.jit(launch_metadata=_attn_launch_metadata)
 def _attn_fwd(Q, K, V, sm_scale, M, Out,  #
               stride_qz, stride_qh, stride_qm, stride_qk,  #
               stride_kz, stride_kh, stride_kn, stride_kk,  #
@@ -285,7 +319,7 @@ def keep_tma(conf):
 
 
 @triton.autotune(configs=list(filter(keep_tma, configs_tma)), key=["N_CTX", "HEAD_DIM", "FP8_OUTPUT"])
-@triton.jit
+@triton.jit(launch_metadata=_attn_launch_metadata)
 def _attn_fwd_tma(sm_scale, M,  #
                   Z, H, desc_q, desc_k, desc_v, desc_o, N_CTX,  #
                   HEAD_DIM: tl.constexpr,  #
@@ -343,7 +377,7 @@ def _attn_fwd_tma(sm_scale, M,  #
     desc_o.store([qo_offset_y, 0], acc.to(dtype))
 
 
-@triton.jit
+@triton.jit(launch_metadata=_attn_launch_metadata)
 def _attn_bwd_preprocess(O, DO,  #
                          Delta,  #
                          Z, H, N_CTX,  #
@@ -361,7 +395,7 @@ def _attn_bwd_preprocess(O, DO,  #
 
 
 # The main inner-loop logic for computing dK and dV.
-@triton.jit
+@triton.jit(launch_metadata=_attn_launch_metadata)
 def _attn_bwd_dkdv(dk, dv,  #
                    Q, k, v, sm_scale,  #
                    DO,  #
@@ -414,7 +448,7 @@ def _attn_bwd_dkdv(dk, dv,  #
 
 
 # the main inner-loop logic for computing dQ
-@triton.jit
+@triton.jit(launch_metadata=_attn_launch_metadata)
 def _attn_bwd_dq(dq, q, K, V,  #
                  do, m, D,
                  # shared by Q/K/V/DO.
@@ -461,7 +495,7 @@ def _attn_bwd_dq(dq, q, K, V,  #
     return dq
 
 
-@triton.jit
+@triton.jit(launch_metadata=_attn_launch_metadata)
 def _attn_bwd(Q, K, V, sm_scale,  #
               DO,  #
               DQ, DK, DV,  #
@@ -797,7 +831,8 @@ def bench_flash_attention(BATCH, H, N_CTX, HEAD_DIM, causal, mode, provider, dev
             o = fn()
             do = torch.randn_like(o)
             fn = lambda: o.backward(do, retain_graph=True)
-        ms = triton.testing.do_bench(fn)
+        with proton.scope(f"triton_{provider}_{mode}"):
+            ms = triton.testing.do_bench(fn)
     if provider == "flash":
         qkv = torch.randn((BATCH, N_CTX, 3, H, HEAD_DIM), dtype=dtype, device=device, requires_grad=True)
         fn = lambda: flash_attn_func(qkv, causal=causal)
@@ -805,7 +840,8 @@ def bench_flash_attention(BATCH, H, N_CTX, HEAD_DIM, causal, mode, provider, dev
             o = fn()
             do = torch.randn_like(o)
             fn = lambda: o.backward(do, retain_graph=True)
-        ms = triton.testing.do_bench(fn)
+        with proton.scope(f"flash_{mode}"):
+            ms = triton.testing.do_bench(fn)
     flops_per_matmul = 2.0 * BATCH * H * N_CTX * N_CTX * HEAD_DIM
     total_flops = 2 * flops_per_matmul
     if causal:
@@ -815,6 +851,23 @@ def bench_flash_attention(BATCH, H, N_CTX, HEAD_DIM, causal, mode, provider, dev
     return total_flops * 1e-12 / (ms * 1e-3)
 
 
+def show_profile(profile_name, precision='fp16'):
+    import triton.profiler.viewer as proton_viewer
+    file_name = f"{profile_name}.hatchet"
+
+    # Show profile with time metrics
+    tree, metrics = proton_viewer.parse(["time/ms"], file_name)
+    proton_viewer.print_tree(tree, metrics)
+
+
 if __name__ == "__main__":
     # only works on post-Ampere GPUs right now
+    proton.start("fused_attention", hook="triton")
+
+    # Run the full benchmark configuration
     bench_flash_attention.run(save_path=".", print_data=True)
+
+    proton.finalize()
+
+    # Show profile with timing metrics
+    show_profile("fused_attention")

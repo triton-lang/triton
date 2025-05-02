@@ -31,6 +31,8 @@ import torch
 
 import triton
 import triton.language as tl
+import triton.profiler as proton
+from contextlib import contextmanager
 
 DEVICE = triton.runtime.driver.active.get_active_torch_device()
 
@@ -47,6 +49,45 @@ def num_sms():
     if is_cuda():
         return torch.cuda.get_device_properties("cuda").multi_processor_count
     return 148
+
+
+@contextmanager
+def proton_context():
+    proton.activate(0)
+    try:
+        yield
+    finally:
+        proton.deactivate(0)
+
+
+def show_profile(profile_name):
+    import triton.profiler.viewer as proton_viewer
+    file_name = f"{profile_name}.hatchet"
+
+    # Show profile with time metrics
+    tree, metrics = proton_viewer.parse(["time/ms"], file_name)
+    proton_viewer.print_tree(tree, metrics)
+
+
+def _gemm_launch_metadata(grid, kernel, args):
+    ret = {}
+
+    # Get dimensions from the gemm sizes
+    if "group_gemm_sizes" in args:
+        sizes = args["group_gemm_sizes"]
+        # For grouped GEMM, we'll show the total size across all matrices
+        total_m = 0
+        total_n = 0
+        total_k = 0
+        for i in range(args["group_size"]):
+            total_m += sizes[i * 3]
+            total_n += sizes[i * 3 + 1]
+            total_k += sizes[i * 3 + 2]
+        ret["name"] = f"{kernel.name} [Total M={total_m}, N={total_n}, K={total_k}]"
+    else:
+        ret["name"] = kernel.name
+
+    return ret
 
 
 @triton.autotune(
@@ -90,7 +131,7 @@ def num_sms():
     ],
     key=['group_size'],
 )
-@triton.jit
+@triton.jit(launch_metadata=_gemm_launch_metadata)
 def grouped_matmul_kernel(
     # device tensor of matrices pointers
     group_a_ptrs,
@@ -227,7 +268,7 @@ tma_configs = [
     tma_configs,
     key=['group_a_ptrs', 'group_b_ptrs', 'gropup_c_ptrs', 'group_size'],
 )
-@triton.jit
+@triton.jit(launch_metadata=_gemm_launch_metadata)
 def grouped_matmul_tma_kernel(
     # device tensor of matrices pointers
     group_a_ptrs,
@@ -479,14 +520,18 @@ def benchmark_square_matrices(N, provider):
 
     quantiles = [0.5, 0.2, 0.8]
     if provider == 'cublas':
-        ms, min_ms, max_ms = triton.testing.do_bench(lambda: torch_perf_fn(group_A, group_B), quantiles=quantiles)
+        with proton.scope(f"cublas_{N}"):
+            ms, min_ms, max_ms = triton.testing.do_bench(lambda: torch_perf_fn(group_A, group_B), quantiles=quantiles)
     if provider == 'triton':
-        ms, min_ms, max_ms = triton.testing.do_bench(
-            lambda: triton_perf_fn(d_a_ptrs, d_b_ptrs, d_c_ptrs, d_g_sizes, d_g_lds, group_size), quantiles=quantiles)
+        with proton.scope(f"triton_{N}"):
+            ms, min_ms, max_ms = triton.testing.do_bench(
+                lambda: triton_perf_fn(d_a_ptrs, d_b_ptrs, d_c_ptrs, d_g_sizes, d_g_lds, group_size),
+                quantiles=quantiles)
     if provider == 'triton-tma':
-        ms, min_ms, max_ms = triton.testing.do_bench(
-            lambda: triton_tma_perf_fn(d_a_ptrs, d_b_t_ptrs, d_c_ptrs, d_g_sizes, d_g_lds, group_size, dtype=torch.
-                                       float16), quantiles=quantiles)
+        with proton.scope(f"triton_tma_{N}"):
+            ms, min_ms, max_ms = triton.testing.do_bench(
+                lambda: triton_tma_perf_fn(d_a_ptrs, d_b_t_ptrs, d_c_ptrs, d_g_sizes, d_g_lds, group_size, dtype=torch.
+                                           float16), quantiles=quantiles)
     return ms, max_ms, min_ms
 
 
@@ -550,16 +595,31 @@ def benchmark_batches(M, provider):
 
     quantiles = [0.5, 0.2, 0.8]
     if provider == 'cublas':
-        ms, min_ms, max_ms = triton.testing.do_bench(lambda: torch_perf_fn(group_A, group_B), quantiles=quantiles)
+        with proton.scope(f"cublas_batch_{M}"):
+            ms, min_ms, max_ms = triton.testing.do_bench(lambda: torch_perf_fn(group_A, group_B), quantiles=quantiles)
     if provider == 'triton':
-        ms, min_ms, max_ms = triton.testing.do_bench(
-            lambda: triton_perf_fn(d_a_ptrs, d_b_ptrs, d_c_ptrs, d_g_sizes, d_g_lds, group_size), quantiles=quantiles)
+        with proton.scope(f"triton_batch_{M}"):
+            ms, min_ms, max_ms = triton.testing.do_bench(
+                lambda: triton_perf_fn(d_a_ptrs, d_b_ptrs, d_c_ptrs, d_g_sizes, d_g_lds, group_size),
+                quantiles=quantiles)
     if provider == 'triton-tma':
-        ms, min_ms, max_ms = triton.testing.do_bench(
-            lambda: triton_tma_perf_fn(d_a_ptrs, d_b_t_ptrs, d_c_ptrs, d_g_sizes, d_g_t_lds, group_size, dtype=torch.
-                                       float16), quantiles=quantiles)
+        with proton.scope(f"triton_tma_batch_{M}"):
+            ms, min_ms, max_ms = triton.testing.do_bench(
+                lambda: triton_tma_perf_fn(d_a_ptrs, d_b_t_ptrs, d_c_ptrs, d_g_sizes, d_g_t_lds, group_size, dtype=torch
+                                           .float16), quantiles=quantiles)
     return ms, max_ms, min_ms
 
 
-benchmark_square_matrices.run(show_plots=True, print_data=True)
-benchmark_batches.run(show_plots=True, print_data=True)
+if __name__ == "__main__":
+    # Start proton profiler
+    proton.start("grouped_gemm", hook="triton")
+
+    # Run benchmarks
+    benchmark_square_matrices.run(show_plots=True, print_data=True)
+    benchmark_batches.run(show_plots=True, print_data=True)
+
+    # Finalize profiler
+    proton.finalize()
+
+    # Show profile
+    show_profile("grouped_gemm")
