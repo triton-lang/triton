@@ -3478,7 +3478,7 @@ module attributes {"ttg.target" = "cuda:90", "ttg.num-ctas" = 1 : i32, "ttg.num-
   //    CHECK: %[[R:.*]] = ttng.warp_group_dot %[[A_NEGATED]], %{{.*}}, %{{.*}} : tensor<128x64xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 2}>> * !ttg.memdesc<64x64xf16, #shared, #smem> -> tensor<128x64xf32, #mma>
   tt.func @mma_v3_reg_push_elementwise_chained_descritor_load(%pa: !tt.tensordesc<tensor<128x64xsi8>>, %dotb: !ttg.memdesc<64x64xf16, #shared, #smem>, %dotc: tensor<128x64xf32, #mma>, %A_dim1: i32, %A_dim2: i32) -> tensor<128x64xf32, #mma>{
     %cst = arith.constant dense<0.000000e+00> : tensor<128x64xf16, #blocked>
-    %a_i8 = tt.descriptor_load %pa[%A_dim1, %A_dim2]: !tt.tensordesc<tensor<128x64xsi8>> -> tensor<128x64xi8, #blocked> 
+    %a_i8 = tt.descriptor_load %pa[%A_dim1, %A_dim2]: !tt.tensordesc<tensor<128x64xsi8>> -> tensor<128x64xi8, #blocked>
     %a_f16 = arith.sitofp %a_i8 : tensor<128x64xi8, #blocked> to tensor<128x64xf16, #blocked>
     %a_scaled = arith.mulf %a_f16, %cst : tensor<128x64xf16, #blocked>
     %a_negated = arith.negf %a_scaled : tensor<128x64xf16, #blocked>

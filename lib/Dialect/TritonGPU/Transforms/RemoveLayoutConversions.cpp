@@ -1180,8 +1180,8 @@ void LayoutRematerialization::hoistConvertDotOperand(
       return;
     }
 
-    // We expect the leaves of the slice to be Load, DescriptorLoad or arith::Constant
-    // This could be generalised if necessary
+    // We expect the leaves of the slice to be Load, DescriptorLoad or
+    // arith::Constant This could be generalised if necessary
     if (!isa<LoadOp, DescriptorLoadOp>(v.getDefiningOp())) {
       auto op = v.getDefiningOp();
       if (isa<arith::ConstantOp>(op) || noDataMovement(op)) {
@@ -1189,7 +1189,8 @@ void LayoutRematerialization::hoistConvertDotOperand(
         continue;
       } else {
         LLVM_DEBUG({
-          DBGS() << "  Leaves must be Load, DescriptorLoad or Constant. Got " << v << "\n";
+          DBGS() << "  Leaves must be Load, DescriptorLoad or Constant. Got "
+                 << v << "\n";
         });
         return;
       }
