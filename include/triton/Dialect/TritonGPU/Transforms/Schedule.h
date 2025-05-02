@@ -125,6 +125,11 @@ public:
 
   auto find(Operation *op) const { return opToStageAndCluster.find(op); }
 
+  // Split the cluster containing op into two clusters, one containing all
+  // operations before the op and one containing op and all operations after the
+  // op. Return the cluster containing op and all operations after the op.
+  Cluster splitClusterBefore(Operation *op, scf::ForOp forOp);
+
   // Check if op a will show up before op b in the final unrolled code.
   bool isOpBefore(Operation *a, Operation *b);
 

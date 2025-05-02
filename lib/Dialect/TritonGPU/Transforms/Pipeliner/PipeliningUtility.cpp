@@ -273,6 +273,10 @@ Operation *mlir::triton::predicateOp(RewriterBase &rewriter, Operation *op,
     atomicRMWOp.getMaskMutable().assign(mask);
     return op;
   }
+  if (!op->isRegistered()) {
+    // Skip ops from unregistered dialects to make writing lit tests easier.
+    return op;
+  }
 
   op->emitError("pipeliner doesn't know how to predicate this op.");
   llvm::report_fatal_error("Fatal pipeliner error");

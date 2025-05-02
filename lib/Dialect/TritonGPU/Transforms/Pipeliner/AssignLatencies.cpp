@@ -278,7 +278,9 @@ public:
       // If the acc can not be multibuffered, do not pipeline the uses of
       // the MMA to later stages.
       if (auto mma = dyn_cast<ttng::MMAv5OpInterface>(&op)) {
-        if (ttng::mmaHasPipelineableOperands(mma, forOp, isLoadPipelineable) &&
+        if (ttng::MMAv5PipelineableOperandsHelper(mma, forOp,
+                                                  isLoadPipelineable)
+                .isPipelineable &&
             !ttng::hasAccReadModifyWrite(mma, forOp) &&
             ttng::isAccMultibufferingPossible(mma, forOp) &&
             !getDisallowAccMultiBuffer(forOp)) {
