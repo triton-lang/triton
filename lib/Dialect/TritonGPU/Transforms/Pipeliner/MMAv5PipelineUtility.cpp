@@ -35,7 +35,7 @@ bool ttng::mmaHasPipelineableOperands(
     if (!v.getDefiningOp()) {
       return false;
     }
-    while (isa<ttg::MemDescTransOp>(v.getDefiningOp())) {
+    while (isa<ttg::MemDescTransOp, ttg::MemDescReshapeOp>(v.getDefiningOp())) {
       v = v.getDefiningOp()->getOperand(0);
     }
     if (auto localAlloc = dyn_cast<ttg::LocalAllocOp>(v.getDefiningOp())) {

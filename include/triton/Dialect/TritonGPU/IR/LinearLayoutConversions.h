@@ -54,9 +54,9 @@ LinearLayout toLinearLayout(ArrayRef<int64_t> shape, Attribute layout);
 //
 // If `disableSwizzle` is set, then the resulting layout does not include
 // swizzling.
-LinearLayout sharedToLinearLayoutLeadingOffset(ArrayRef<int64_t> shape,
-                                               NVMMASharedEncodingAttr shared,
-                                               bool disableSwizzle = false);
+LinearLayout nvmmaSharedToLinearLayout(ArrayRef<int64_t> shape,
+                                       NVMMASharedEncodingAttr shared,
+                                       bool disableSwizzle = false);
 
 // Given a linear layout where the input dimensions contain a "block" dimension,
 // this method sets the "block" dimension to 0 and removes the corresponding

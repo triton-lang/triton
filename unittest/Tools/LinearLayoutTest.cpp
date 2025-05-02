@@ -758,17 +758,15 @@ TEST_F(LinearLayoutTest, QuotientIdentityMultipleDimensions) {
 LinearLayout getPackedCoordtoPaddedOffset(int M, int KPacked8b, StringAttr row,
                                           StringAttr col, StringAttr offset) {
   std::vector<std::vector<int>> basesRows, basesCols;
-  for (int i = 0; i < llvm::Log2_32(M); ++i) {
-    int row = 1 << i;
+  for (int row = 1; row < M; row *= 2) {
     int col = 0;
     int linearCoord = row * KPacked8b + col;
     int offset = (linearCoord / 8) * 16 + (linearCoord % 8);
     basesRows.push_back({offset});
   }
 
-  for (int j = 0; j < llvm::Log2_32(KPacked8b); ++j) {
+  for (int col = 1; col < KPacked8b; col *= 2) {
     int row = 0;
-    int col = 1 << j;
     int linearCoord = row * KPacked8b + col;
     int offset = (linearCoord / 8) * 16 + (linearCoord % 8);
     basesCols.push_back({offset});
@@ -785,8 +783,7 @@ TEST_F(LinearLayoutTest, BlackwellMixedPrecisionDotScaledSMEM) {
   int KPacked8b = numFp4Elems / M / 2;
   int KPadded8b = numFp4Elems / M;
 
-  for (int i = 0; i < llvm::Log2_32(M * KPadded8b); ++i) {
-    int offset = 1 << i;
+  for (int offset = 1; offset < M * KPadded8b; offset *= 2) {
     int linearCoordPacked = offset / 16 * 8 + offset % 8;
     int row = linearCoordPacked / KPacked8b;
     int col = linearCoordPacked % KPacked8b;
@@ -819,13 +816,11 @@ TEST_F(LinearLayoutTest, BlackwellMixedPrecisionDotScaledSMEMSwizzled) {
   int vec = 16;
 
   std::vector<std::vector<int>> bases2D;
-  for (int logCol = 0; logCol < llvm::Log2_32(tileCols); logCol++) {
-    int colPadded = 1 << logCol;
+  for (int colPadded = 1; colPadded < tileCols; colPadded *= 2) {
     int colPacked = colPadded / 16 * 8 + colPadded % 8;
     bases2D.push_back({0, colPacked});
   }
-  for (int logRow = 0; logRow < llvm::Log2_32(tileRows); logRow++) {
-    int row = 1 << logRow;
+  for (int row = 1; row < tileRows; row *= 2) {
     int perPhase = 1;
     int maxPhase = 8;
     int colPadded = vec * ((row / perPhase) % maxPhase);

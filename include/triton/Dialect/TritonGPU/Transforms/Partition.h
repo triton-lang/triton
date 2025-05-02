@@ -45,6 +45,7 @@ public:
     ArrayRef<Operation *> getOps() const { return ops; }
 
     void insert(Operation *op) { ops.push_back(op); }
+    void remove(Operation *op) { ops.erase(llvm::find(ops, op)); }
 
   private:
     void setIndex(int idx) { this->idx = idx; }
@@ -62,6 +63,8 @@ public:
   Partition *addPartition(unsigned stage);
   // Give each partition a new index and order. The indices must be unique.
   void reorderPartitions(ArrayRef<unsigned> order);
+  // Update the op to partition mapping.
+  void updatePartitions();
 
   // Get the partition the op belongs to.
   Partition *getPartition(Operation *op);
@@ -114,6 +117,9 @@ public:
   void iterateUses(
       scf::ForOp loop, const Partition *partition,
       function_ref<void(OpResult, OpOperand &, unsigned)> callback) const;
+
+  // Debug dump the schedule.
+  LLVM_DUMP_METHOD void dump() const;
 
 private:
   // Partitions are numbered [0, N).

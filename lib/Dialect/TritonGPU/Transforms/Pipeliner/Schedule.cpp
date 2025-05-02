@@ -92,17 +92,19 @@ tt::CoarseSchedule::getOpsInOrder(scf::ForOp forOp) {
   SmallVector<SmallVector<std::tuple<Operation *, int, Cluster>>, 8>
       orderClusters(clusters.size());
   for (auto &op : forOp.getBody()->without_terminator()) {
-    if (opToStageAndCluster.count(&op) == 0) {
+    auto it = opToStageAndCluster.find(&op);
+    if (it == opToStageAndCluster.end()) {
       continue;
     }
-    assert(opToStageAndCluster[&op].first < numStages &&
-           "Op with invalid stage!");
-    int clusterId = *opToStageAndCluster[&op].second;
-    assert(clusterId == std::distance(clusters.begin(),
-                                      opToStageAndCluster[&op].second) &&
+    auto [stage, cluster] = it->second;
+    if (cluster == Cluster{}) {
+      continue;
+    }
+    assert(stage < numStages && "Op with invalid stage!");
+    int clusterId = *cluster;
+    assert(clusterId == std::distance(clusters.begin(), cluster) &&
            "Cluster ID mismatch!");
-    orderClusters[clusterId].push_back(make_tuple(
-        &op, opToStageAndCluster[&op].first, opToStageAndCluster[&op].second));
+    orderClusters[clusterId].push_back(make_tuple(&op, stage, cluster));
   }
   SmallVector<std::tuple<Operation *, int, Cluster>> opsInOrder;
   for (int i = 0; i < orderClusters.size(); i++) {
