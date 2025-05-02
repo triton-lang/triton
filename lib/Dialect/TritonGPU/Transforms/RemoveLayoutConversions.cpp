@@ -1179,30 +1179,31 @@ void LayoutRematerialization::hoistConvertDotOperand(
           { DBGS() << "  Block arguments not supported. Got " << v << "\n"; });
       return;
     }
-    auto loadOp = dyn_cast<LoadOp>(v.getDefiningOp());
-    // We expect the leaves of the slice to be Load or arith::Constant
+
+    // We expect the leaves of the slice to be Load, DescriptorLoad or arith::Constant
     // This could be generalised if necessary
-    if (!loadOp) {
+    if (!isa<LoadOp, DescriptorLoadOp>(v.getDefiningOp())) {
       auto op = v.getDefiningOp();
       if (isa<arith::ConstantOp>(op) || noDataMovement(op)) {
         innerSlice.insert(v);
         continue;
       } else {
         LLVM_DEBUG({
-          DBGS() << "  Leaves must be Load or Constant. Got " << v << "\n";
+          DBGS() << "  Leaves must be Load, DescriptorLoad or Constant. Got " << v << "\n";
         });
         return;
       }
     }
+    Operation *loadOp = v.getDefiningOp();
     builder.setInsertionPointAfter(loadOp);
-    auto type = dyn_cast<RankedTensorType>(loadOp.getType());
+    auto type = dyn_cast<RankedTensorType>(loadOp->getResult(0).getType());
     if (!type)
       continue;
     auto newType = RankedTensorType::get(type.getShape(), type.getElementType(),
-                                         layout[loadOp]);
+                                         layout[loadOp->getResult(0)]);
     auto newConvertOp = builder.create<ConvertLayoutOp>(
-        convertOp.getLoc(), newType, loadOp.getResult());
-    mapping.map(loadOp.getResult(), newConvertOp.getResult());
+        convertOp.getLoc(), newType, loadOp->getResult(0));
+    mapping.map(loadOp->getResult(0), newConvertOp.getResult());
   }
 
   if (innerSlice.empty()) {
