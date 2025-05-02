@@ -6,6 +6,7 @@
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/ImplicitLocOpBuilder.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
+#include "mlir/Transforms/RegionUtils.h" // For inlineBlockBefore
 #include "triton/Conversion/TritonGPUToLLVM/Passes.h"
 #include "triton/Conversion/TritonGPUToLLVM/TypeConverter.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
@@ -282,6 +283,19 @@ static void rewritePartitionRegions(WarpSpecializeOp ws, Block *switchLoop,
     });
   }
 }
+static void verifyNoCTABarrierInWarpSpecializeWithBarIds(
+    const SmallVector<WarpSpecializeOp> &wsOps) {
+  // verify not CTABarrier inside ttg.ws with barIds
+  // barIds are added to ttg.ws when we converted ttng.wg -> ttg.ws
+  for (auto wsOp : wsOps) {
+    if (wsOp->getAttrOfType<mlir::DenseIntElementsAttr>("barIds")) {
+      wsOp.walk([&](NVVM::Barrier0Op bar) {
+        llvm_unreachable(
+            "ttg.ws with barIds op must not have a CTA barrier in it.");
+      });
+    }
+  }
+}
 
 static LogicalResult lowerWarpSpecialize(LLVM::LLVMFuncOp func,
                                          const NVIDIA::TargetInfo &targetInfo) {
@@ -290,6 +304,8 @@ static LogicalResult lowerWarpSpecialize(LLVM::LLVMFuncOp func,
   // Nothing to do. This kernel is not warp specialized.
   if (wsOps.empty())
     return success();
+
+  verifyNoCTABarrierInWarpSpecializeWithBarIds(wsOps);
 
   // Before lowering away `ttg.warp_specialize`, lower warp group barriers.
   auto module = cast<ModuleOp>(func->getParentOp());
@@ -488,6 +504,127 @@ static LogicalResult lowerWarpSpecialize(LLVM::LLVMFuncOp func,
   return success();
 }
 
+static void verifyNoCTABarrierInWarpGroup(
+    const SmallVector<triton::nvidia_gpu::WarpGroupOp> &wgOps) {
+  for (auto wgOp : wgOps) {
+    for (auto &block : wgOp.getRegion(0)) {
+      block.walk([&](NVVM::Barrier0Op bar) {
+        llvm_unreachable("WarpGroup op must not have a CTA barrier in it.");
+      });
+    }
+  }
+}
+
+static LogicalResult removeTtngWarpGroup(LLVM::LLVMFuncOp func) {
+  SmallVector<triton::nvidia_gpu::WarpGroupOp> wgOps;
+  func.walk([&](triton::nvidia_gpu::WarpGroupOp op) { wgOps.push_back(op); });
+  // Nothing to do. This kernel is not warp specialized.
+  if (wgOps.empty())
+    return success();
+
+  verifyNoCTABarrierInWarpGroup(wgOps);
+
+  /*
+   br.cond &cond, ^bbThen, ^bbElse
+   ^bbThen:
+      wg {
+        ^bb_wg1a:
+           ..
+        ^bb_wg1b:
+          wg_return
+      }
+      br ^bbOut
+   ^bbElse:
+      wg {
+        ^bb_wg2a:
+           ..
+        ^bb_wg2b:
+          wg_return
+      }
+      br ^bbOut
+   ^bbOut:
+      ..
+
+      rewrite to
+
+   br.cond &cond, ^bbThen, ^bbElse
+   ^bb_wg1a:
+      ..
+   ^bb_wg1b:
+       br ^bbOut
+   ^bbThen:
+      br ^wg1a
+
+   ^bb_wg2a:
+       ..
+   ^bb_wg2b:
+     br ^bbOut
+   ^bbElse:
+     br ^bb_wg2a
+
+   ^bbOut:
+      ..
+   */
+
+  SmallVector<Block *> groupBlocks, getTargetBlock;
+  for (auto &wg : wgOps) {
+    auto &region = wg.getPartitionRegions().front();
+    groupBlocks.push_back(&region.front());
+    auto block = wg->getBlock();
+    auto blockTerminator = block->getTerminator();
+    auto brOp = dyn_cast<LLVM::BrOp>(blockTerminator);
+    assert(brOp && "terminator must be llvm.br <target>");
+    getTargetBlock.push_back(brOp.getDest());
+  }
+
+  // rewrite WarpGroupReturnOp with Jump to associated target block
+  for (auto [wg, bb] : llvm::zip(wgOps, getTargetBlock)) {
+    llvm::SmallVector<mlir::triton::nvidia_gpu::WarpGroupReturnOp>
+        returnsToErase;
+
+    wg->walk([&](mlir::triton::nvidia_gpu::WarpGroupReturnOp returnOp) {
+      returnsToErase.push_back(returnOp);
+    });
+    assert(returnsToErase.size() == 1);
+    auto returnOp = returnsToErase[0];
+
+    // Now erase all the collected return operations
+    TritonLLVMIRRewriter b(wg.getLoc(), wg.getContext());
+    b.setInsertionPoint(returnOp);
+    b.replaceOpWithNewOp<LLVM::BrOp>(returnOp, bb);
+  }
+
+  // splice blocks in regions into parent block, and keep point
+  Region::BlockListType &funcBlocks = func.getBody().getBlocks();
+  // funcBlocks.splice(lastOp->getIterator(), region->getBlocks());
+  SmallVector<Block *> parentBlocks, firstBlocks;
+  for (Block *block : llvm::reverse(groupBlocks)) {
+    Region *region = block->getParent();
+
+    Block *parentBlock = region->getParentOp()->getBlock();
+    parentBlocks.push_back(parentBlock);
+    // emplace region blocks, and get iterator for the first emplaced block
+    Block *firstBlock = &region->getBlocks().front();
+    firstBlocks.push_back(firstBlock);
+    funcBlocks.splice(parentBlock->getIterator(), region->getBlocks());
+  }
+  for (auto [parentBlock, firstBlock] :
+       llvm::reverse(llvm::zip(parentBlocks, firstBlocks))) {
+    auto blockTerminator = parentBlock->getTerminator();
+
+    // Now erase all the collected return operations
+    TritonLLVMIRRewriter b(blockTerminator->getLoc(),
+                           blockTerminator->getContext());
+    b.setInsertionPoint(blockTerminator);
+    b.replaceOpWithNewOp<LLVM::BrOp>(blockTerminator, firstBlock);
+  }
+
+  for (auto &wg : wgOps)
+    wg.erase();
+
+  return success();
+}
+
 //===----------------------------------------------------------------------===//
 // Pass Definition
 //===----------------------------------------------------------------------===//
@@ -523,6 +660,10 @@ struct ConvertWarpSpecializeToLLVM
     }
     for (LLVM::LLVMFuncOp kernel : kernels)
       if (failed(lowerWarpSpecialize(kernel, targetInfo)))
+        return signalPassFailure();
+
+    for (LLVM::LLVMFuncOp kernel : kernels)
+      if (failed(removeTtngWarpGroup(kernel)))
         return signalPassFailure();
   }
 };

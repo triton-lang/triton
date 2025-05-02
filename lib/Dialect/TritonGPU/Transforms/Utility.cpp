@@ -2,7 +2,9 @@
 
 #include <fstream>
 
+#include "WSUtility.h"
 #include "mlir/Analysis/SliceAnalysis.h"
+#include "mlir/Dialect/LLVMIR/NVVMDialect.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/Dialect/UB/IR/UBOps.h"
 #include "mlir/IR/Dominance.h"
@@ -1542,6 +1544,76 @@ bool mayAliasAllocations(const DenseSet<Value> &lhs,
 
   // The allocations alias if they may share the same underlying allocations.
   return !llvm::set_intersection(lhsAllocs, rhsAllocs).empty();
+}
+
+Operation *insertBarrier(OpBuilder &rewriter, Location loc) {
+  auto makeCstI32 = [&](int c) {
+    return rewriter.create<arith::ConstantIntOp>(loc, c, 32);
+  };
+
+  auto barrier = [&](int barId, int numWarps) {
+    // TODO: Remove the dependency on NVVM dialect?
+    return rewriter.create<NVVM::BarrierOp>(loc, makeCstI32(barId),
+                                            makeCstI32(numWarps * 32));
+  };
+
+  {
+    // check if we are inside ttng::WarpGroupOp
+    auto block = rewriter.getInsertionBlock();
+    while (block && block->getParentOp() &&
+           !isa<triton::nvidia_gpu::WarpGroupOp>(block->getParentOp()))
+      block = block->getParentOp()->getBlock();
+    if (block && block->getParentOp()) {
+      auto wgOp = cast<triton::nvidia_gpu::WarpGroupOp>(block->getParentOp());
+      auto barId = triton::gpu::getBarrierID(wgOp);
+      int numWarps = wgOp.getNumWarps();
+      return barrier(barId, numWarps);
+    }
+  }
+
+  {
+    // check if we are inside
+    //      ttg::WarpSpecializePartitionsOp or ttg:WarpSpecailizeOp
+    auto block = rewriter.getInsertionBlock();
+    while (
+        block && block->getParentOp() &&
+        !isa<triton::gpu::WarpSpecializePartitionsOp>(block->getParentOp()) &&
+        !isa<triton::gpu::WarpSpecializeOp>(block->getParentOp()))
+      block = block->getParentOp()->getBlock();
+
+    if (block && block->getParentOp()) {
+      auto ws = dyn_cast<triton::gpu::WarpSpecializeOp>(block->getParentOp());
+      auto groupIdx = 0;
+      if (auto partitions = dyn_cast<triton::gpu::WarpSpecializePartitionsOp>(
+              block->getParentOp())) {
+        // if we are inside WarpSpecializePartitionsOp, get partition index
+        unsigned groupIdx = block->getParent()->getRegionNumber() + 1;
+        ws = partitions.getParentOp();
+      }
+      assert(ws);
+
+      // get barId attribute dense vector from WarpSpecializeOp
+      if (auto barIdAttr =
+              ws->getAttrOfType<mlir::DenseIntElementsAttr>("barIds")) {
+        // convert to SmallVector
+        SmallVector<int> barIds;
+        for (auto val : barIdAttr.getValues<mlir::IntegerAttr>()) {
+          barIds.push_back(val.getInt());
+        }
+
+        auto barId = barIds[groupIdx];
+        auto numWarps = block->getParentOp()
+                            ->getParentOfType<ModuleOp>()
+                            ->getAttrOfType<IntegerAttr>("ttg.num-warps")
+                            .getInt();
+        if (groupIdx > 0)
+          numWarps = ws.getPartitionNumWarps()[groupIdx - 1];
+        return barrier(barId, numWarps);
+      }
+    }
+  }
+
+  return rewriter.create<mlir::gpu::BarrierOp>(loc);
 }
 
 } // namespace mlir

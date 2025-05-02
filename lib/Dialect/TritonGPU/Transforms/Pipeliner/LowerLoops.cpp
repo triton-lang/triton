@@ -754,9 +754,9 @@ LogicalResult rewriteTMABufferUpdates(
   return success();
 }
 
-scf::ForOp lowerTMADescriptors(scf::ForOp forOp, CoarseSchedule &schedule) {
+
+scf::ForOp lowerTMADescriptors(scf::ForOp forOp, CoarseSchedule &schedule, int maxStage) {
   llvm::MapVector<Operation *, Value> tmaBufferMapping;
-  int maxStage = schedule.getNumStages() - 1;
   for (auto &op : forOp.getBody()->without_terminator()) {
     if (auto wgMmaOp = dyn_cast<ttng::WarpGroupDotOp>(&op)) {
       // Hopper only: Add one more buffer slice if there is a WarpGroupDotOp,
@@ -1213,11 +1213,16 @@ void lowerLoop(scf::ForOp forOp) {
   }
   scf::ForOp newForOp = lowerMMAs(forOp, schedule);
   newForOp = lowerLoads(newForOp, schedule);
-  newForOp = lowerTMADescriptors(newForOp, schedule);
+  newForOp = lowerTMADescriptors(newForOp, schedule, schedule.getNumStages() - 1);
   schedule.serialize(newForOp);
 }
 
 } // namespace
+
+scf::ForOp lowerTMADescriptors(scf::ForOp forOp, int maxStage) {
+  CoarseSchedule sch;
+  return lowerTMADescriptors(forOp, sch, maxStage);
+}
 
 void lowerLoops(ModuleOp moduleOp) {
   SmallVector<scf::ForOp> loops;

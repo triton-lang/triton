@@ -149,6 +149,7 @@ private:
                        SmallVector<VirtualBlock> &successors);
 
   void insertBarrier(Operation *operation, OpBuilder *builder);
+  bool isBarrier(Operation *op);
 
 private:
   Allocation *allocation = nullptr;

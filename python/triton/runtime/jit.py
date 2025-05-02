@@ -510,7 +510,8 @@ class JITFunction(KernelInterface[T]):
         name = self.fn.__name__
         module = self.fn.__module__
         arg_reprs = ", ".join([f"{param.name}: {ty}" for param, ty in zip(self.params, key[1])])
-        repr = f"{name}[num_warps={options.num_warps}, num_ctas={options.num_ctas}, num_stages={options.num_stages}, enable_fp_fusion={options.enable_fp_fusion}, launch_cooperative_grid={options.launch_cooperative_grid}]({arg_reprs})"
+        repr = f"{name}[num_warps={options.num_warps}, num_ctas={options.num_ctas}, num_stages={options.num_stages}, mma_depth={options.mma_depth}, enable_fp_fusion={options.enable_fp_fusion}, launch_cooperative_grid={options.launch_cooperative_grid}, " \
+               f"enable_warp_specialization={options.enable_warp_specialization}, use_ttg_ws={options.use_ttg_ws}, wg_spec_override={options.wg_spec_override}, math_wg_pipe={options.math_wg_pipe}, force_membar={options.force_membar}]({arg_reprs})"
 
         class JitFunctionInfo:
 
@@ -529,9 +530,15 @@ class JITFunction(KernelInterface[T]):
             'num_warps': options.num_warps,
             'num_ctas': options.num_ctas,
             'num_stages': options.num_stages,
+            'mma_depth': options.mma_depth,
             'enable_fp_fusion': options.enable_fp_fusion,
             'launch_cooperative_grid': options.launch_cooperative_grid,
             'extern_libs': options.extern_libs,
+            'enable_warp_specialization': options.enable_warp_specialization,
+            'use_ttg_ws': options.use_ttg_ws,
+            'wg_spec_override' : options.wg_spec_override,
+            'math_wg_pipe': options.math_wg_pipe,
+            'force_membar': options.force_membar,
             'configs': configs,
             'specialization_data': specialization_data,
             'is_warmup': is_warmup,

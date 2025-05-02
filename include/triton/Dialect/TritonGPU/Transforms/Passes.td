@@ -370,9 +370,52 @@ def TritonGPUCoalesceAsyncCopy: Pass<"tritongpu-coalesce-async-copy", "mlir::Mod
   let description = "For AsyncCopyGlobalToLocal ops where the shared encoding's vec is less than "
                     "the blocked encoding's sizePerThread, this pass improves coalescing by clipping the "
                     "sizePerThread value";
+  let dependentDialects = ["mlir::triton::gpu::TritonGPUDialect",
+                           "mlir::triton::TritonDialect"];
+}
+
+def TritonGPUAnalyzeWarpSpecialization : Pass</*cli-arg*/"tritongpu-analyze-warp-specialization", /*Op*/"mlir::ModuleOp"> {
+  let summary = "Analyzes the warp specialization pattern";
+  let description = [{
+    This pass analyzes the warp specialization pattern.
+  }];
 
   let dependentDialects = ["mlir::triton::gpu::TritonGPUDialect",
                            "mlir::triton::TritonDialect"];
 }
+
+
+def TritonGPUSplitWarpGroupLoops : Pass</*cli-arg*/"tritongpu-split-warp-group-loops", /*Op*/"mlir::ModuleOp"> {
+  let summary = "Split warp group loops for warp specialization";
+  let description = [{
+    This pass splits the loop into a loop for each partition, based on warp specialization analysis.
+  }];
+
+  let dependentDialects = ["mlir::triton::gpu::TritonGPUDialect",
+                           "mlir::triton::TritonDialect",
+                           "mlir::NVVM::NVVMDialect"];
+  let options = [
+    Option<"numStages", "num-stages",
+           "int32_t", /*default*/"3",
+           "number of warp specialization pipeline stages">,
+    Option<"mmaDepth", "mma-depth",
+           "int32_t", /*default*/"2",
+           "number of MMA pipeline stages">
+  ];
+}
+
+def TritonGPUFMHAMathLoopPipeline: Pass<"triton-nvidia-fmha-math-loop-pipeline", "mlir::ModuleOp"> {
+  let summary = "fmha math loop pipelining";
+
+  let description = [{
+    Pipeline the FMHA math loop in TritonNvidiaGPUDialect.
+  }];
+
+  let dependentDialects = [
+    "mlir::triton::gpu::TritonGPUDialect",
+    "mlir::triton::TritonDialect",
+  ];
+}
+
 
 #endif

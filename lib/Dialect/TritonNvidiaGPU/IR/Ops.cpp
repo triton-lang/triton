@@ -212,6 +212,175 @@ static void printBarriersAndPreds(OpAsmPrinter &p, Operation *op,
   }
 }
 
+ParseResult TCGen5MMAOp::parse(OpAsmParser &parser, OperationState &result) {
+  OpAsmParser::UnresolvedOperand a, b, d, useD, pred;
+  SmallVector<OpAsmParser::UnresolvedOperand, 4> barriers, barrierPreds;
+
+  // Parse the main operands
+  if (parser.parseOperand(a) || parser.parseComma() || parser.parseOperand(b) ||
+      parser.parseComma() || parser.parseOperand(d) || parser.parseComma() ||
+      parser.parseOperand(useD) || parser.parseComma() ||
+      parser.parseOperand(pred))
+    return failure();
+
+  // Parse optional comma-separated barriers
+  if (succeeded(parser.parseOptionalComma())) {
+    // Parse barrier
+    OpAsmParser::UnresolvedOperand barrier;
+    if (parser.parseOperand(barrier))
+      return failure();
+    barriers.push_back(barrier);
+
+    // Check if there's a predicate in square brackets
+    if (!succeeded(parser.parseOptionalLSquare()))
+      return failure();
+    OpAsmParser::UnresolvedOperand barrierPred;
+    if (parser.parseOperand(barrierPred) || parser.parseRSquare())
+      return failure();
+    barrierPreds.push_back(barrierPred);
+
+    // Parse any additional barriers
+    while (succeeded(parser.parseOptionalComma())) {
+      if (parser.parseOperand(barrier))
+        return failure();
+      barriers.push_back(barrier);
+
+      if (!succeeded(parser.parseOptionalLSquare()))
+        return failure();
+      OpAsmParser::UnresolvedOperand barrierPred;
+      if (parser.parseOperand(barrierPred) || parser.parseRSquare())
+        return failure();
+      barrierPreds.push_back(barrierPred);
+    }
+  }
+
+  // Parse the operation attributes
+  if (parser.parseOptionalAttrDict(result.attributes))
+    return failure();
+
+  // Parse types for a, b, d
+  Type aType, bType, dType;
+  if (parser.parseColon() || parser.parseType(aType) || parser.parseComma() ||
+      parser.parseType(bType) || parser.parseComma() || parser.parseType(dType))
+    return failure();
+
+  // Parse optional types for barriers
+  SmallVector<Type, 4> barrierTypes, barrierPredTypes;
+
+  // If we have barriers, we need to parse their types
+  if (!barriers.empty()) {
+    if (parser.parseComma())
+      return failure();
+
+    // Parse barrier types
+    for (unsigned i = 0; i < barriers.size(); ++i) {
+      if (i > 0 && parser.parseComma())
+        return failure();
+
+      Type barrierType;
+      if (parser.parseType(barrierType))
+        return failure();
+
+      barrierTypes.push_back(barrierType);
+    }
+
+    // Check if there's a type for the predicates
+    if (succeeded(parser.parseOptionalComma())) {
+      Type predType;
+      if (parser.parseType(predType))
+        return failure();
+
+      // Use the same predicate type for all barriers
+      for (unsigned i = 0; i < barrierPreds.size(); ++i) {
+        barrierPredTypes.push_back(predType);
+      }
+    } else {
+      // Default to i1 if no type is specified
+      for (unsigned i = 0; i < barrierPreds.size(); ++i) {
+        barrierPredTypes.push_back(parser.getBuilder().getI1Type());
+      }
+    }
+  }
+
+  // Resolve the main operands
+  if (parser.resolveOperand(a, aType, result.operands) ||
+      parser.resolveOperand(b, bType, result.operands) ||
+      parser.resolveOperand(d, dType, result.operands) ||
+      parser.resolveOperand(useD, parser.getBuilder().getI1Type(),
+                            result.operands) ||
+      parser.resolveOperand(pred, parser.getBuilder().getI1Type(),
+                            result.operands))
+    return failure();
+
+  // Resolve the barriers
+  for (unsigned i = 0; i < barriers.size(); ++i) {
+    if (parser.resolveOperand(barriers[i], barrierTypes[i], result.operands))
+      return failure();
+  }
+
+  // Resolve the barrier predicates
+  for (unsigned i = 0; i < barrierPreds.size(); ++i) {
+    if (parser.resolveOperand(barrierPreds[i], barrierPredTypes[i],
+                              result.operands))
+      return failure();
+  }
+
+  // Add result types
+  result.addTypes({});
+
+  return success();
+}
+
+void TCGen5MMAOp::print(OpAsmPrinter &p) {
+
+  Operation *op = *this;
+  auto mmaOp = cast<TCGen5MMAOp>(op);
+
+  // Print the main operands
+  p << ' ' << mmaOp.getA() << ", " << mmaOp.getB() << ", " << mmaOp.getD()
+    << ", " << mmaOp.getUseD() << ", " << mmaOp.getPred();
+
+  // Print barriers and their predicates if any
+  auto barriers = mmaOp.getBarriers();
+  auto barrierPreds = mmaOp.getBarrierPreds();
+  assert(barriers.size() == barrierPreds.size());
+
+  if (!barriers.empty()) {
+    for (unsigned i = 0; i < barriers.size(); ++i) {
+      // Print each barrier and its predicate
+      p << ", " << barriers[i];
+      // Print predicate if available
+      p << "[" << barrierPreds[i] << "]";
+    }
+  }
+
+  // Print attributes
+  p.printOptionalAttrDict(op->getAttrs());
+
+  // Print types
+  p << " : " << mmaOp.getA().getType() << ", " << mmaOp.getB().getType() << ", "
+    << mmaOp.getD().getType();
+
+  if (!barriers.empty()) {
+    // Print barrier types
+    for (auto barrier : barriers) {
+      p << ", " << barrier.getType();
+    }
+
+    // Print barrier predicate types
+    auto predType = barrierPreds[0].getType();
+    // Verify that all barrier predicates have the same type
+    for (auto pred : barrierPreds) {
+      assert(pred.getType() == predType);
+    }
+    auto intType = cast<IntegerType>(predType);
+    // print the type of the predicate if it is not I1
+    if (intType.getWidth() != 1) {
+      p << ", " << predType;
+    }
+  }
+}
+
 void TCGen5MMAOp::getEffects(
     SmallVectorImpl<SideEffects::EffectInstance<MemoryEffects::Effect>>
         &effects) {
@@ -264,6 +433,208 @@ void TCGen5MMAOp::build(OpBuilder &builder, OperationState &state, Value a,
 }
 
 // -- TCGen5MMAScaledOp --
+ParseResult TCGen5MMAScaledOp::parse(OpAsmParser &parser,
+                                     OperationState &result) {
+  OpAsmParser::UnresolvedOperand a, b, d, a_scale, b_scale, useD, pred;
+  SmallVector<OpAsmParser::UnresolvedOperand, 4> barriers, barrierPreds;
+
+  // Parse the main operands
+  if (parser.parseOperand(a) || parser.parseComma() || parser.parseOperand(b) ||
+      parser.parseComma() || parser.parseOperand(d) || parser.parseComma() ||
+      parser.parseOperand(a_scale) || parser.parseComma() ||
+      parser.parseOperand(b_scale) || parser.parseComma() ||
+      parser.parseOperand(useD) || parser.parseComma() ||
+      parser.parseOperand(pred))
+    return failure();
+
+  // Parse lhs and rhs scaling types
+  StringRef keyword;
+  triton::ScaleDotElemType a_type, b_type;
+
+  // Parse "lhs = a_type" format
+  if (parser.parseKeyword("lhs") || parser.parseEqual() ||
+      parser.parseKeyword(&keyword))
+    return failure();
+
+  // Set a_type based on the keyword
+  a_type = *triton::symbolizeScaleDotElemType(keyword);
+  result.addAttribute("a_type",
+                      ScaleDotElemTypeAttr::get(parser.getContext(), a_type));
+
+  // Parse "rhs = b_type" format
+  if (parser.parseKeyword("rhs") || parser.parseEqual() ||
+      parser.parseKeyword(&keyword))
+    return failure();
+
+  // Set b_type based on the keyword
+  b_type = *triton::symbolizeScaleDotElemType(keyword);
+  result.addAttribute("b_type",
+                      ScaleDotElemTypeAttr::get(parser.getContext(), b_type));
+
+  // Parse optional comma-separated barriers
+  if (succeeded(parser.parseOptionalComma())) {
+    // Parse barrier
+    OpAsmParser::UnresolvedOperand barrier;
+    if (parser.parseOperand(barrier))
+      return failure();
+    barriers.push_back(barrier);
+
+    // Check if there's a predicate in square brackets
+    if (!succeeded(parser.parseOptionalLSquare()))
+      return failure();
+    OpAsmParser::UnresolvedOperand barrierPred;
+    if (parser.parseOperand(barrierPred) || parser.parseRSquare())
+      return failure();
+    barrierPreds.push_back(barrierPred);
+
+    // Parse any additional barriers
+    while (succeeded(parser.parseOptionalComma())) {
+      if (parser.parseOperand(barrier))
+        return failure();
+      barriers.push_back(barrier);
+
+      if (!succeeded(parser.parseOptionalLSquare()))
+        return failure();
+      OpAsmParser::UnresolvedOperand barrierPred;
+      if (parser.parseOperand(barrierPred) || parser.parseRSquare())
+        return failure();
+      barrierPreds.push_back(barrierPred);
+    }
+  }
+
+  // Parse the operation attributes
+  if (parser.parseOptionalAttrDict(result.attributes))
+    return failure();
+
+  // Parse types for a, b, d, a_scale, b_scale
+  Type aType, bType, dType, aScaleType, bScaleType;
+  if (parser.parseColon() || parser.parseType(aType) || parser.parseComma() ||
+      parser.parseType(bType) || parser.parseComma() ||
+      parser.parseType(dType) || parser.parseComma() ||
+      parser.parseType(aScaleType) || parser.parseComma() ||
+      parser.parseType(bScaleType))
+    return failure();
+
+  // Parse optional types for barriers
+  SmallVector<Type, 4> barrierTypes, barrierPredTypes;
+
+  // If we have barriers, we need to parse their types
+  if (!barriers.empty()) {
+    if (parser.parseComma())
+      return failure();
+
+    // Parse barrier types
+    for (unsigned i = 0; i < barriers.size(); ++i) {
+      if (i > 0 && parser.parseComma())
+        return failure();
+
+      Type barrierType;
+      if (parser.parseType(barrierType))
+        return failure();
+
+      barrierTypes.push_back(barrierType);
+    }
+
+    // Check if there's a type for the predicates
+    if (succeeded(parser.parseOptionalComma())) {
+      Type predType;
+      if (parser.parseType(predType))
+        return failure();
+
+      // Use the same predicate type for all barriers
+      for (unsigned i = 0; i < barrierPreds.size(); ++i) {
+        barrierPredTypes.push_back(predType);
+      }
+    } else {
+      // Default to i1 if no type is specified
+      for (unsigned i = 0; i < barrierPreds.size(); ++i) {
+        barrierPredTypes.push_back(parser.getBuilder().getI1Type());
+      }
+    }
+  }
+
+  // Resolve the main operands
+  if (parser.resolveOperand(a, aType, result.operands) ||
+      parser.resolveOperand(b, bType, result.operands) ||
+      parser.resolveOperand(d, dType, result.operands) ||
+      parser.resolveOperand(a_scale, aScaleType, result.operands) ||
+      parser.resolveOperand(b_scale, bScaleType, result.operands) ||
+      parser.resolveOperand(useD, parser.getBuilder().getI1Type(),
+                            result.operands) ||
+      parser.resolveOperand(pred, parser.getBuilder().getI1Type(),
+                            result.operands))
+    return failure();
+
+  // Resolve the barriers
+  for (unsigned i = 0; i < barriers.size(); ++i) {
+    if (parser.resolveOperand(barriers[i], barrierTypes[i], result.operands))
+      return failure();
+  }
+
+  // Resolve the barrier predicates
+  for (unsigned i = 0; i < barrierPreds.size(); ++i) {
+    if (parser.resolveOperand(barrierPreds[i], barrierPredTypes[i],
+                              result.operands))
+      return failure();
+  }
+
+  // Add result types
+  result.addTypes({});
+
+  return success();
+}
+
+void TCGen5MMAScaledOp::print(OpAsmPrinter &p) {
+  // Print the main operands
+  p << ' ' << getA() << ", " << getB() << ", " << getD() << ", " << getAScale()
+    << ", " << getBScale() << ", " << getUseD() << ", " << getPred();
+
+  // Print the scaling type attributes
+  p << " lhs = " << stringifyScaleDotElemType(getAType())
+    << " rhs = " << stringifyScaleDotElemType(getBType());
+
+  // Print barriers and their predicates if any
+  auto barriers = getBarriers();
+  auto barrierPreds = getBarrierPreds();
+  assert(barriers.size() == barrierPreds.size());
+
+  if (!barriers.empty()) {
+    for (unsigned i = 0; i < barriers.size(); ++i) {
+      // Print each barrier and its predicate
+      p << ", " << barriers[i];
+      // Print predicate if available
+      p << "[" << barrierPreds[i] << "]";
+    }
+  }
+
+  // Print attributes (excluding a_type and b_type which are printed separately)
+  p.printOptionalAttrDict(getOperation()->getAttrs(), {"a_type", "b_type"});
+
+  // Print types
+  p << " : " << getA().getType() << ", " << getB().getType() << ", "
+    << getD().getType() << ", " << getAScale().getType() << ", "
+    << getBScale().getType();
+
+  if (!barriers.empty()) {
+    // Print barrier types
+    for (auto barrier : barriers) {
+      p << ", " << barrier.getType();
+    }
+
+    // Print barrier predicate types
+    auto predType = barrierPreds[0].getType();
+    // Verify that all barrier predicates have the same type
+    for (auto pred : barrierPreds) {
+      assert(pred.getType() == predType);
+    }
+    auto intType = cast<IntegerType>(predType);
+    // print the type of the predicate if it is not I1
+    if (intType.getWidth() != 1) {
+      p << ", " << predType;
+    }
+  }
+}
+
 void TCGen5MMAScaledOp::getEffects(
     SmallVectorImpl<SideEffects::EffectInstance<MemoryEffects::Effect>>
         &effects) {

@@ -158,8 +158,29 @@ applyLinearLayout(Location loc, RewriterBase &rewriter,
   return outIndices;
 }
 
+std::optional<int> getWarpGroupStart(Block *block) {
+  using namespace triton::gpu;
+  // Look for an enclosing `ttng.warp_group` op.
+  while (block && block->getParentOp() &&
+         !isa<triton::nvidia_gpu::WarpGroupOp>(block->getParentOp()))
+    block = block->getParentOp()->getBlock();
+  if (block && block->getParentOp()) {
+    auto wg = cast<triton::nvidia_gpu::WarpGroupOp>(block->getParentOp());
+    int32_t startWarp = wg.getStartWarp();
+    if (startWarp > 0)
+      return startWarp;
+  }
+  return {}; // if startWarp 0 do not emit additional code
+}
+
 std::optional<int> getWarpGroupStartThreadId(Block *block) {
   using namespace triton::gpu;
+
+  if (std::optional<int> startWarp = getWarpGroupStart(block)) {
+    int threadsPerWarp = TritonGPUDialect::getThreadsPerWarp(
+        block->getParentOp()->getParentOfType<ModuleOp>());
+    return (*startWarp) * threadsPerWarp;
+  }
 
   // Look for an enclosing `ttg.warp_specialize` op.
   while (block && block->getParentOp() &&
@@ -215,7 +236,8 @@ std::pair<Value, Value> getLaneAndWarpId(OpBuilder &rewriter, Location loc) {
 
 SmallVector<SmallVector<Value>>
 emitIndices(Location loc, RewriterBase &rewriter, const TargetInfoBase &target,
-            Attribute layout, RankedTensorType type, bool withCTAOffset) {
+            Attribute layout, RankedTensorType type, bool withCTAOffset,
+            std::optional<int> warpGroupStart) {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   MLIRContext *ctx = rewriter.getContext();
   auto shape = type.getShape();
@@ -230,6 +252,9 @@ emitIndices(Location loc, RewriterBase &rewriter, const TargetInfoBase &target,
   StringAttr kBlock = str_attr("block");
 
   auto [laneId, warpId] = getLaneAndWarpId(rewriter, loc);
+  if (warpGroupStart) {
+    warpId = b.sub(warpId, b.i32_val(*warpGroupStart));
+  }
   Value blockId =
       withCTAOffset ? target.getClusterCTAId(rewriter, loc) : b.i32_val(0);
   unsigned rank = shape.size();

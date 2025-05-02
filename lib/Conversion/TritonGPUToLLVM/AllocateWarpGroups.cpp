@@ -1,6 +1,7 @@
 #include "mlir/IR/BuiltinOps.h"
 #include "triton/Conversion/TritonGPUToLLVM/Passes.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
+#include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 
 namespace mlir::triton::gpu {
 #define GEN_PASS_DEF_TRITONGPUALLOCATEWARPGROUPS
@@ -134,8 +135,17 @@ struct AllocateWarpGroups
     });
 
     Builder b(&getContext());
-    mod->setAttr("ttg.total-num-warps",
-                 b.getI32IntegerAttr(baseNumWarps + maxExtraWarps));
+    if (triton::gpu::TritonGPUDialect::isWarpSpecialized(mod)) {
+      int32_t numWarps = 0;
+      mod.walk([&](triton::nvidia_gpu::WarpGroupOp wg) {
+        numWarps =
+            std::max(numWarps, int32_t(wg.getStartWarp() + wg.getNumWarps()));
+      });
+      mod->setAttr("ttg.total-num-warps", b.getI32IntegerAttr(numWarps));
+    } else {
+      mod->setAttr("ttg.total-num-warps",
+                   b.getI32IntegerAttr(baseNumWarps + maxExtraWarps));
+    }
   }
 };
 } // namespace

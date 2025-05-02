@@ -153,6 +153,10 @@ createSingleBufferView(TBuilder &builder, Value alloc, int idx) {
       builder.template create<arith::ConstantIntOp>(alloc.getLoc(), idx, 32));
 }
 
+namespace gpu {
+scf::ForOp lowerTMADescriptors(scf::ForOp forOp, int maxStage);
+}
+
 } // namespace triton
 } // namespace mlir
 

@@ -90,6 +90,48 @@ def TritionTensorMemoryAllocationPass : Pass<"triton-tensor-memory-allocation", 
   ];
 }
 
+def TritonNvidiaGPUArefLoweringPass : Pass<"triton-nvidia-aref-lowering", "mlir::ModuleOp"> {
+  let summary = "lower aref and TMA operations";
+
+  let description = [{
+    Lower aref operations in TritonNvidiaGPUDialect.
+  }];
+
+  let constructor = "mlir::createTritonNvidiaGPUArefLoweringPass()";
+
+  let dependentDialects = [
+    "mlir::triton::nvidia_gpu::TritonNvidiaGPUDialect"
+  ];
+}
+
+def TritonNvidiaGPUTtngWgToArefIf : Pass<"triton-nvidia-ttng-wg-to-aref-if", "mlir::ModuleOp"> {
+  let summary = "convert aref-if to ttg.warp_specialize";
+
+  let description = [{
+    Convert aref-if to ttg.warp_specialize operations in TritonNvidiaGPUDialect.
+  }];
+
+  let constructor = "mlir::createTritonNvidiaGPUTtngWgToArefIfPass()";
+
+  let dependentDialects = [
+    "mlir::triton::nvidia_gpu::TritonNvidiaGPUDialect"
+  ];
+}
+
+def TritonNvidiaGPUTtngWgToTtgWs : Pass<"triton-nvidia-ttng-wg-to-ttg-ws", "mlir::ModuleOp"> {
+  let summary = "convert ttng.warp_group to ttg.warp_specialize";
+
+  let description = [{
+    Convert aref-if to ttg.warp_specialize operations in TritonNvidiaGPUDialect.
+  }];
+
+  let constructor = "mlir::createTritonNvidiaGPUTtngWgToTtgWsPass()";
+
+  let dependentDialects = [
+    "mlir::triton::nvidia_gpu::TritonNvidiaGPUDialect"
+  ];
+}
+
 def TritonNvidiaGPUMMALoweringPass : Pass<"triton-nvidia-mma-lowering", "mlir::ModuleOp"> {
   let summary = "lower mma operations if needed";
 

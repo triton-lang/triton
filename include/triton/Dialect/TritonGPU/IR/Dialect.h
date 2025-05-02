@@ -41,9 +41,13 @@ namespace mlir::triton::gpu {
 
 constexpr static char AttrMaxRegistersName[] = "ttg.maxnreg";
 constexpr static char AttrNumWarpsName[] = "ttg.num-warps";
+constexpr static char AttrNumStagesName[] = "ttg.num-stages";
 constexpr static char AttrNumCTAsName[] = "ttg.num-ctas";
 constexpr static char AttrTargetName[] = "ttg.target";
 constexpr static char AttrNumThreadsPerWarp[] = "ttg.threads-per-warp";
+constexpr static char AttrWarpSpecializedName[] = "ttg.warp-specialized";
+constexpr static char AttrUseTtgWsName[] = "ttg.use-ttg-ws";
+constexpr static char AttrMathWGPipeName[] = "ttg.math-wg-pipe";
 
 // Find the contextual number of warps on which this operation is executed.
 int lookupNumWarps(Operation *op);
@@ -55,6 +59,11 @@ std::optional<int> maybeLookupNumWarps(Operation *op);
 // FIXME: Make this API and that of maybeLookupNumWarps consistent!
 // Utility to find the number of threads per warp
 int lookupThreadsPerWarp(OpBuilder &rewriter);
+
+// Same behaviour as lookupNumWarps, except for module/func ops return
+// ttg.total-num-warps attribute rather than ttg.num-warps
+int lookupTotalNumWarps(Operation *op);
+std::optional<int> maybeLookupTotalNumWarps(Operation *op);
 
 template <typename Key, typename Value> class Cache {
 public:

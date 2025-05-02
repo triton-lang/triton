@@ -602,6 +602,10 @@ Value mxfpScaleBf16(RewriterBase &rewriter, Location loc, Value v, Value scale,
 // -----------------------------------------------------------------------
 
 // If an operation is contained within a warp specialize region, this returns
+// the starting warp of the group
+std::optional<int> getWarpGroupStart(Block *block);
+
+// If an operation is contained within a warp specialize region, this returns
 // the thread ID offset of that warpgroup.
 std::optional<int> getWarpGroupStartThreadId(Block *block);
 
@@ -679,7 +683,8 @@ SmallVector<SmallVector<unsigned>> emitOffsetForLayout(Attribute layout,
 // access the corresponding element, starting from the inner dimension.
 SmallVector<SmallVector<Value>>
 emitIndices(Location loc, RewriterBase &rewriter, const TargetInfoBase &target,
-            Attribute layout, RankedTensorType type, bool withCTAOffset);
+            Attribute layout, RankedTensorType type, bool withCTAOffset,
+            std::optional<int> warpGroupStart = std::nullopt);
 
 // Emits IR to load data from shared memory into registers, or to store data
 // from registers into shared memory.

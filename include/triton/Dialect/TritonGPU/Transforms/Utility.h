@@ -1,6 +1,7 @@
 #ifndef TRITON_DIALECT_TRITONGPU_TRANSFORMS_UTILITY_H_
 #define TRITON_DIALECT_TRITONGPU_TRANSFORMS_UTILITY_H_
 
+#include "mlir/IR/Builders.h"
 #include "mlir/IR/Matchers.h"
 #include "mlir/IR/PatternMatch.h"
 
@@ -247,6 +248,9 @@ void eraseLoopCarriedValues(scf::ForOp &loop, llvm::BitVector indices);
 // Return true if two value sets may refer to the same allocation.
 bool mayAliasAllocations(const DenseSet<Value> &lhs,
                          const DenseSet<Value> &rhs);
+
+// inserts barrier, interface is aligned with getThreadId(rewriter, loc)
+Operation* insertBarrier(OpBuilder &rewriter, Location loc);
 } // namespace mlir
 
 namespace mlir::triton {

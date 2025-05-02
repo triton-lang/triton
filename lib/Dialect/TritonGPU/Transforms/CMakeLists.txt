@@ -1,5 +1,8 @@
 add_triton_library(TritonGPUTransforms
   AccelerateMatmul.cpp
+  AnalyzeWarpSpecialization.cpp
+  SplitWarpGroupLoops.cpp
+  FMHAMathLoopPipeline.cpp
   Coalesce.cpp
   F32DotTC.cpp
   FuseNestedLoops.cpp
@@ -36,6 +39,7 @@ add_triton_library(TritonGPUTransforms
   WarpSpecialization/OptimizePartitionWarps.cpp
   WarpSpecialization/PartitionLoops.cpp
   WarpSpecialization/RewritePartitionDependencies.cpp
+  WSUtility.cpp
 
   DEPENDS
   TritonGPUTransformsIncGen

@@ -1,4 +1,6 @@
 #include "mlir/Conversion/LLVMCommon/TypeConverter.h"
+#include "mlir/Dialect/LLVMIR/NVVMDialect.h"
+#include "mlir/Interfaces/DataLayoutInterfaces.h"
 #include "mlir/Support/LogicalResult.h"
 #include "triton/Analysis/Utility.h"
 #include "triton/Conversion/TritonGPUToLLVM/TargetInfoBase.h"
@@ -11,7 +13,9 @@
 #include "triton/Dialect/TritonGPU/IR/LinearLayoutConversions.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 
+#include "mlir/Dialect/LLVMIR/NVVMDialect.h"
 #include "triton/Conversion/TritonGPUToLLVM/PatternTritonGPUOpToLLVM.h"
+#include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 
 namespace {
 
@@ -313,9 +317,11 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
                         .second;
     // register idx -> Value
     llvm::MapVector<int, Value> outVals;
+    ModuleOp mod = op->getParentOfType<ModuleOp>();
     for (int i = 0; i < iterations; i++) {
-      if (i != 0)
-        b.barrier();
+      if (i != 0) {
+        insertBarrier(rewriter, loc);
+      }
 
       auto &inRegs = inRegsForIter[i];
       auto &outRegs = outRegsForIter[i];
@@ -339,7 +345,7 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
         }
       }
 
-      b.barrier();
+      insertBarrier(rewriter, loc);
 
       for (int j = 0; j < outSize / iterations; j += scratchConfig.outVec) {
         auto outRegSlice = outRegs[j];

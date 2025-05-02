@@ -60,6 +60,8 @@ public:
     addLegalOp<mlir::UnrealizedConversionCastOp>();
 
     // Warp specialization is lowered later.
+    addLegalOp<triton::nvidia_gpu::WarpGroupOp>();
+    addLegalOp<triton::nvidia_gpu::WarpGroupReturnOp>();
     addLegalOp<triton::gpu::WarpSpecializeOp>();
     addLegalOp<triton::gpu::WarpYieldOp>();
     addLegalOp<triton::gpu::WarpSpecializePartitionsOp>();
@@ -75,6 +77,8 @@ struct ConvertTritonGPUToLLVM
       : ConvertTritonGPUToLLVMBase({computeCapability}) {}
   ConvertTritonGPUToLLVM(int32_t computeCapability, int32_t ptxVersion)
       : ConvertTritonGPUToLLVMBase({computeCapability, ptxVersion}) {}
+  ConvertTritonGPUToLLVM(int32_t computeCapability, int32_t ptxVersion, bool forceMembar)
+      : ConvertTritonGPUToLLVMBase({computeCapability, ptxVersion, forceMembar}) {}
 
   void runOnOperation() override {
     MLIRContext *context = &getContext();
@@ -82,9 +86,15 @@ struct ConvertTritonGPUToLLVM
     TargetInfo targetInfo(computeCapability, ptxVersion);
 
     // Allocate shared memory and set barrier
-    ModuleAllocation allocation(mod);
-    ModuleMembarAnalysis membarPass(&allocation);
-    membarPass.run();
+    bool isTtngWarpGroup = false;
+    mod.walk([&](triton::nvidia_gpu::WarpGroupOp op) {
+      isTtngWarpGroup = true;
+    });
+    if (forceMembar || !isTtngWarpGroup) {
+      ModuleAllocation allocation(mod);
+     ModuleMembarAnalysis membarPass(&allocation);
+     membarPass.run();
+    }
 
     mlir::LowerToLLVMOptions option(context);
     option.overrideIndexBitwidth(32);
@@ -216,14 +226,12 @@ std::unique_ptr<OperationPass<ModuleOp>> createConvertTritonGPUToLLVMPass() {
   return std::make_unique<ConvertTritonGPUToLLVM>();
 }
 std::unique_ptr<OperationPass<ModuleOp>>
-createConvertTritonGPUToLLVMPass(int32_t computeCapability) {
-  return std::make_unique<ConvertTritonGPUToLLVM>(computeCapability);
-}
-std::unique_ptr<OperationPass<ModuleOp>>
 createConvertTritonGPUToLLVMPass(int32_t computeCapability,
-                                 int32_t ptxVersion) {
+                                 int32_t ptxVersion,
+                                 bool forceMembar) {
   return std::make_unique<ConvertTritonGPUToLLVM>(computeCapability,
-                                                  ptxVersion);
+                                                  ptxVersion,
+                                                  forceMembar);
 }
 
 bool NVIDIA::canSkipBarSync(Operation *before, Operation *after) {

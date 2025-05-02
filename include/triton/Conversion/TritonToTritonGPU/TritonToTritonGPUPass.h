@@ -4,6 +4,8 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <tuple>
+#include <vector>
 
 namespace mlir {
 
@@ -16,10 +18,13 @@ namespace triton {
 std::unique_ptr<OperationPass<ModuleOp>> createConvertTritonToTritonGPUPass();
 
 // Create the pass with numWarps set explicitly.
-std::unique_ptr<OperationPass<ModuleOp>>
-createConvertTritonToTritonGPUPass(const std::string &target, int numWarps,
-                                   int threadsPerWarp = 32, int numCTAs = 1,
-                                   bool enableSourceRemat = false);
+std::unique_ptr<OperationPass<ModuleOp>> createConvertTritonToTritonGPUPass(
+    const std::string &target, int numWarps, int threadsPerWarp = 32,
+    int numCTAs = 1, bool enableSourceRemat = false,
+    int numStages = 1,
+    bool warpSpecialized = false, bool useTtgWs = false,
+    bool mathWGPipe = false,
+    const std::vector<std::tuple<std::string, int, int>> &wgSpec = {});
 
 } // namespace triton
 } // namespace mlir

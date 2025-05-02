@@ -26,6 +26,7 @@
 #include "mlir/Conversion/LLVMCommon/Pattern.h"
 #include "mlir/Dialect/GPU/IR/GPUDialect.h"
 #include "mlir/Dialect/LLVMIR/NVVMDialect.h"
+#include "nvidia/include/Dialect/NVWS/IR/Dialect.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 
 #include "Utility.h"
@@ -217,6 +218,38 @@ struct ArriveBarrierOpConversion
     return success();
   }
 };
+
+struct NvwsArriveBarrierOpConversion
+    : public ConvertOpToLLVMPattern<triton::nvws::ArriveBarrierOp> {
+  using ConvertOpToLLVMPattern::ConvertOpToLLVMPattern;
+
+  LogicalResult
+  matchAndRewrite(triton::nvws::ArriveBarrierOp op,
+                  OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto smemObj = LLVM::getSharedMemoryObjectFromStruct(
+        op.getLoc(), adaptor.getAlloc(),
+        typeConverter->convertType(op.getAlloc().getType().getElementType()),
+        rewriter);
+    auto loc = op.getLoc();
+
+    if (op.getCommit()) {
+      ModuleOp m = op->getParentOfType<ModuleOp>();
+      Value pred = LLVM::NVIDIA::createElectPredicateWarp0(loc, rewriter);
+      LLVM::NVIDIA::createTcgen05Commit(rewriter, loc, smemObj.getBase(), pred);
+    } else {
+      ::mlir::triton::PTXBuilder ptxBuilder;
+      const std::string ptx = "mbarrier.arrive.shared.b64 _, [$0];";
+      auto &barSyncOp = *ptxBuilder.create<>(ptx);
+      barSyncOp({ptxBuilder.newOperand(smemObj.getBase(), "r")},
+                /*onlyAttachMLIRArgs=*/true);
+      auto voidTy = void_ty(op->getContext());
+      ptxBuilder.launch(rewriter, op->getLoc(), voidTy);
+    }
+    rewriter.eraseOp(op);
+    return success();
+  }
+};
 } // namespace
 
 void mlir::triton::NVIDIA::populateBarrierOpToLLVMPatterns(
@@ -228,4 +261,5 @@ void mlir::triton::NVIDIA::populateBarrierOpToLLVMPatterns(
   patterns.add<WaitBarrierOpConversion>(typeConverter, benefit);
   patterns.add<BarrierExpectConversion>(typeConverter, benefit);
   patterns.add<ArriveBarrierOpConversion>(typeConverter, benefit);
+  patterns.add<NvwsArriveBarrierOpConversion>(typeConverter, benefit);
 }

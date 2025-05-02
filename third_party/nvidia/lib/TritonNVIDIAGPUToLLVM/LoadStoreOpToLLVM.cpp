@@ -1228,7 +1228,12 @@ struct AsyncTMACopyGlobalToLocalOpConversion
     auto mod = op->getParentOfType<ModuleOp>();
     int numWarps = ttg::lookupNumWarps(op);
     int warpSize = ttg::TritonGPUDialect::getThreadsPerWarp(mod);
+#if 0
+    // auto-ws: attention tests fail with this
     Value warpID = rewriter.create<nvgpu::WarpIdOp>(loc);
+#else
+    Value warpID = LLVM::NVIDIA::getWarpId(rewriter, loc);
+#endif
     Value pred = adaptor.getPred();
     // Select just one thread for the TMA copy. This also helps the compiler to
     // figure out that the op is uniform.

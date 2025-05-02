@@ -157,16 +157,16 @@ void signalArrival(PatternRewriter &rewriter, Location loc, Value mBars,
   rewriter.create<triton::nvidia_gpu::ArriveBarrierOp>(loc, barrier, 1);
 }
 
-class LowerArefCreate : public OpRewritePattern<ArefCreateOp> {
+class LowerArefCreate : public OpRewritePattern<nvws::ArefCreateOp> {
   ArefUseGraph &graph;
 
 public:
   using OpRewritePattern::OpRewritePattern;
 
   LowerArefCreate(mlir::MLIRContext *context, ArefUseGraph &graph)
-      : OpRewritePattern<ArefCreateOp>(context), graph(graph) {}
+      : OpRewritePattern<nvws::ArefCreateOp>(context), graph(graph) {}
 
-  LogicalResult matchAndRewrite(ArefCreateOp op,
+  LogicalResult matchAndRewrite(nvws::ArefCreateOp op,
                                 PatternRewriter &rewriter) const override {
     if (graph.arefs.contains(op.getResult())) {
       // We've already added the barriers for this op
@@ -272,7 +272,7 @@ LogicalResult lowerRegion(T op, PatternRewriter &rewriter,
   // slice aref values
   if (depth > 1) {
     for (auto value :
-         aref.template getDefiningOp<ArefCreateOp>().getOperands()) {
+         aref.template getDefiningOp<nvws::ArefCreateOp>().getOperands()) {
       if (auto mType = dyn_cast<MemDescType>(value.getType())) {
         auto shape = mType.getShape();
         SmallVector<int64_t> tensorShape(shape.begin() + 1, shape.end());
@@ -296,7 +296,7 @@ LogicalResult lowerRegion(T op, PatternRewriter &rewriter,
                    graph.arefs[aref].updatedValues.end());
     } else {
       for (auto value :
-           aref.template getDefiningOp<ArefCreateOp>().getOperands())
+           aref.template getDefiningOp<nvws::ArefCreateOp>().getOperands())
         views.push_back(value);
     }
   }
@@ -337,31 +337,31 @@ Value getNumIterations(PatternRewriter &rewriter, scf::ForOp loop) {
   return rewriter.create<arith::DivSIOp>(u.getLoc(), n, s);
 }
 
-class LowerArefGet : public OpRewritePattern<ArefGetOp> {
+class LowerArefGet : public OpRewritePattern<nvws::ArefGetOp> {
   ArefUseGraph &graph;
 
 public:
   using OpRewritePattern::OpRewritePattern;
 
   LowerArefGet(mlir::MLIRContext *context, ArefUseGraph &graph)
-      : OpRewritePattern<ArefGetOp>(context), graph(graph) {}
+      : OpRewritePattern<nvws::ArefGetOp>(context), graph(graph) {}
 
-  LogicalResult matchAndRewrite(ArefGetOp op,
+  LogicalResult matchAndRewrite(nvws::ArefGetOp op,
                                 PatternRewriter &rewriter) const override {
     return lowerRegion<0>(op, rewriter, graph);
   }
 };
 
-class LowerArefPut : public OpRewritePattern<ArefPutOp> {
+class LowerArefPut : public OpRewritePattern<nvws::ArefPutOp> {
   ArefUseGraph &graph;
 
 public:
   using OpRewritePattern::OpRewritePattern;
 
   LowerArefPut(mlir::MLIRContext *context, ArefUseGraph &graph)
-      : OpRewritePattern<ArefPutOp>(context), graph(graph) {}
+      : OpRewritePattern<nvws::ArefPutOp>(context), graph(graph) {}
 
-  LogicalResult matchAndRewrite(ArefPutOp op,
+  LogicalResult matchAndRewrite(nvws::ArefPutOp op,
                                 PatternRewriter &rewriter) const override {
     return lowerRegion<1>(op, rewriter, graph);
   }
@@ -435,7 +435,7 @@ public:
     if (!isa<LocalStoreOp>(users[0]))
       return failure();
 
-    auto putOp = dyn_cast<ArefPutOp>(op->getBlock()->getParentOp());
+    auto putOp = dyn_cast<nvws::ArefPutOp>(op->getBlock()->getParentOp());
     if (!putOp)
       return failure();
 
@@ -487,7 +487,7 @@ public:
                                 PatternRewriter &rewriter) const override {
     auto ctx = op.getContext();
     auto loc = op.getLoc();
-    auto getOp = dyn_cast<ArefGetOp>(op->getBlock()->getParentOp());
+    auto getOp = dyn_cast<nvws::ArefGetOp>(op->getBlock()->getParentOp());
     if (!getOp)
       return failure();
 
@@ -495,7 +495,7 @@ public:
     if (!kLoop)
       return failure();
 
-    auto putOp = dyn_cast<ArefPutOp>(kLoop->getBlock()->getParentOp());
+    auto putOp = dyn_cast<nvws::ArefPutOp>(kLoop->getBlock()->getParentOp());
     if (!putOp)
       return failure();
 
@@ -532,7 +532,7 @@ public:
     // to that the mma loop is done, but we need to wait on the last mma
     // operation inside the get.
     for (auto user : putArefValue.users) {
-      auto mmaGetOp = dyn_cast<ArefGetOp>(user->op);
+      auto mmaGetOp = dyn_cast<nvws::ArefGetOp>(user->op);
       if (!mmaGetOp)
         continue;
       Value idx;
@@ -574,7 +574,7 @@ public:
                                 PatternRewriter &rewriter) const override {
     auto ctx = op.getContext();
     auto loc = op.getLoc();
-    auto getOp = dyn_cast<ArefGetOp>(op->getBlock()->getParentOp());
+    auto getOp = dyn_cast<nvws::ArefGetOp>(op->getBlock()->getParentOp());
     if (!getOp)
       return failure();
 
@@ -656,15 +656,15 @@ static ArefUseGraph analyzeArefUseDef(ModuleOp m) {
     ArefUseNode node;
     node.parent = parent;
     node.op = op;
-    if (isa<ArefCreateOp>(op)) {
+    if (isa<nvws::ArefCreateOp>(op)) {
       graph.nodes[op] = node;
-    } else if (auto get = dyn_cast<ArefGetOp>(op)) {
+    } else if (auto get = dyn_cast<nvws::ArefGetOp>(op)) {
       graph.nodes[op] = node;
       auto old_parent = parent;
       parent = &node;
       get.getRegion().walk(createGraph);
       parent = old_parent;
-    } else if (auto put = dyn_cast<ArefPutOp>(op)) {
+    } else if (auto put = dyn_cast<nvws::ArefPutOp>(op)) {
       graph.nodes[op] = node;
       auto old_parent = parent;
       parent = &graph.nodes[op];

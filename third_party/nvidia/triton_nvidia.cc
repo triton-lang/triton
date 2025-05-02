@@ -21,9 +21,9 @@ void init_triton_nvidia_passes_ttgpuir(py::module &&m) {
   // TODO: it is weird to pass mlir::triton::NVVM here since the conversion is
   // nvidia-specificontext
   m.def("add_to_llvmir",
-        [](mlir::PassManager &pm, int32_t capability, int32_t ptxVersion) {
+        [](mlir::PassManager &pm, int32_t capability, int32_t ptxVersion, bool forceMembar) {
           pm.addPass(mlir::triton::createConvertTritonGPUToLLVMPass(
-              capability, ptxVersion));
+              capability, ptxVersion, forceMembar));
         });
 }
 
@@ -36,6 +36,12 @@ void init_triton_nvidia_passes_ttnvgpuir(py::module &&m) {
                      mlir::createTritonNvidiaGPUTMALoweringPass);
   ADD_PASS_WRAPPER_0("add_promote_lhs_to_tmem",
                      mlir::createTritonNvidiaGPUPromoteLHSToTMemPass);
+  ADD_PASS_WRAPPER_0("add_aref_lowering",
+                     mlir::createTritonNvidiaGPUArefLoweringPass);
+  ADD_PASS_WRAPPER_0("add_ttng_wg_to_ttg_ws",
+                     mlir::createTritonNvidiaGPUTtngWgToTtgWsPass);
+  ADD_PASS_WRAPPER_0("add_ttng_wg_to_aref_if",
+                     mlir::createTritonNvidiaGPUTtngWgToArefIfPass);
   ADD_PASS_WRAPPER_0("add_nvgpu_to_llvm",
                      mlir::triton::createConvertNVGPUToLLVMPass);
   ADD_PASS_WRAPPER_0("add_warp_specialize_to_llvm",
