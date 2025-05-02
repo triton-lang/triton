@@ -420,7 +420,7 @@ class CompiledKernel:
         self.module, self.function, self.n_regs, self.n_spills = driver.active.utils.load_binary(
             self.name, self.kernel, self.metadata.shared, device)
         if CompiledKernel.init_handle_hook is not None:
-            CompiledKernel.init_handle_hook(self.module, self.function, self.metadata_group)
+            CompiledKernel.init_handle_hook(self.function, self.module, self.metadata_group)
 
     def __getattribute__(self, name):
         if name == 'run':

@@ -128,7 +128,7 @@ class InstrumentationHook(Hook):
 
         self.allocator = CudaAllocator(self)
         self.buffer = None
-        self.metadata_path = ""
+        self.metadata_path: Dict[Any, Optional[str]] = {}
 
     def activate(self):
         if InstrumentationHook.active_count > 0:
@@ -234,7 +234,8 @@ class InstrumentationHook(Hook):
         scope_id_parents = self.function_scope_id_parents.get(function, [])
         libproton.init_function_scope_ids(function, scope_id_names, scope_id_parents)
 
-        self.metadata_path = next((path for key, path in metadata_group.items() if key.endswith(("json"))), None)
+        if function:
+            self.metadata_path[function] = next((path for key, path in metadata_group.items() if key.endswith(("json"))), None)
 
     def _data_ptr(self) -> int:
         return 0 if self.buffer is None else self.buffer.data_ptr()
@@ -252,17 +253,17 @@ class InstrumentationHook(Hook):
         libproton.exit_instrumented_op(func, self._data_ptr(), alloc_size)
 
         if InstrumentationHook.enable_host_buffer:
-            self._populate_host_buffer()
+            self._populate_host_buffer(func)
 
-    def _populate_host_buffer(self) -> None:
-        if self.metadata_path:
+    def _populate_host_buffer(self, function: Any) -> None:
+        if function and self.metadata_path[function]:
             import torch
             import struct
             import json
 
             alloc_size = 0 if self.buffer is None else self.buffer.element_size() * self.buffer.numel()
             data = {}
-            with open(self.metadata_path, 'r') as file:
+            with open(self.metadata_path[function], 'r') as file:
                 data = json.load(file)
             scratch_mem_size = data["profile_scratch_size"]
             total_unit = data["num_warps"]
