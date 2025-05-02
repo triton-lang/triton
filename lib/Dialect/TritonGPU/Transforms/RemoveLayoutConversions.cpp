@@ -1134,30 +1134,33 @@ void LayoutRematerialization::backwardRematerialization(
     return singleUse;
   };
 
-  auto getByteCount = [](Value result) -> int64_t {
-    int64_t byteCount = 128;
+  auto getByteCount = [](Value result, int64_t minimumElementCount = 0, int64_t minimumBitWidth = 0) -> int64_t {
+    int64_t elementCount = 0;
+    int64_t dtypeBitWidth = 0;
     if (auto tensorTy = dyn_cast<RankedTensorType>(result.getType())) {
-      int64_t elementCount = tensorTy.getNumElements();
-      int64_t dtypeBitWidth = 32;
+      elementCount = tensorTy.getNumElements();
       auto elemType = tensorTy.getElementType();
       if (elemType.isIntOrFloat()) {
         dtypeBitWidth = elemType.getIntOrFloatBitWidth();
-      } else if (isa<IndexType>(elemType)) {
-        dtypeBitWidth = 64;
-      }
-      int64_t bitCount = elementCount * dtypeBitWidth;
-      if (bitCount > 1024) {
-        // tensor which spans multiple registers:
-        byteCount = bitCount >> 3;
       }
     }
-    return byteCount;
+    if (elementCount < minimumElementCount) {
+      elementCount = minimumElementCount;
+    }
+    if (dtypeBitWidth < minimumBitWidth) {
+      dtypeBitWidth = minimumBitWidth;
+    }
+    return (elementCount * dtypeBitWidth) >> 3;
   };
 
   // We measure costs in standardised milli-SM-cycles. This gives:
   // smem load/store:    8 * byte count
   // synchronisation:    1024 (assuming 4 warps per block)
-  int64_t convertLayoutCost = 16 * getByteCount(convertOp.getSrc()) + 1024;
+  // As we want to be pessimistic with convertLayoutCost and optimistic
+  // with rematerialisationCost, we assume here that the ConvertLayout
+  // will round-trip through shared memory and the loads/stores cannot
+  // be vectorised so we spend at least a full SM-cycle per 32 elements.
+  int64_t convertLayoutCost = 16 * getByteCount(convertOp.getSrc(), 32, 32) + 1024;
   int64_t rematerialisationCost = 0;
 
   // Evaluate single-use status for every operation in slice
@@ -1175,7 +1178,9 @@ void LayoutRematerialization::backwardRematerialization(
         rematerialisationCost += 8 * getByteCount(result);
       }
     } else if (op->getDialect()->getNamespace() == "arith") {
-      // this is an arithmetic operation
+      // this is an arithmetic operation; optimistically assume that
+      // it's half of a single-cycle instruction (e.g. a multiply or
+      // add that can be fused into an FMA):
       for (Value result : op->getResults()) {
         rematerialisationCost += getByteCount(result);
       }
