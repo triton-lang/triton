@@ -1547,8 +1547,8 @@ LinearLayout chooseScaledMfmaScaleLayout(
 // consecutive elements.
 LinearLayout chooseMfma8Layout(AMDMfmaEncodingAttr mfmaLayout,
                                ArrayRef<int64_t> shape) {
-  assert(mfmaLayout.getMDim() == 32 && mfmaLayout.getNDim() == 32 &&
-         mfmaLayout.getIsTransposed());
+  assert(shape.size() == 2 && mfmaLayout.getMDim() == 32 &&
+         mfmaLayout.getNDim() == 32 && mfmaLayout.getIsTransposed());
 
   MLIRContext *ctx = mfmaLayout.getContext();
   StringAttr kRegister = S("register");

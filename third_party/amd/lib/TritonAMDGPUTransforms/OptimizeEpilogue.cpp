@@ -72,8 +72,9 @@ convertMfmaLayoutForCDNA4(mlir::PatternRewriter &rewriter, Value ptr, Value val,
 
   bool mfma32 = mfmaLayout.getMDim() == 32 && mfmaLayout.getNDim() == 32;
 
-  if (mfmaLayout.getVersionMajor() != 4 || !valType.getElementType().isF16() ||
-      !mfmaLayout.getIsTransposed() || !mfma32) {
+  if (valType.getShape().size() > 2 || !valType.getElementType().isF16() ||
+      mfmaLayout.getVersionMajor() != 4 || !mfmaLayout.getIsTransposed() ||
+      !mfma32) {
     return rewriter.create<triton::StoreOp>(oldStOp.getLoc(), ptr, val, mask,
                                             oldStOp.getCache(),
                                             oldStOp.getEvict());
