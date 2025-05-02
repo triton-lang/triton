@@ -40,6 +40,23 @@ def setenv(key: str, value: Optional[str]) -> None:
         del os.environ[key]
 
 
+def toenv(val: Any) -> Union[None, tuple[Optional[str]]]:
+    if val is None:
+        return (None, )
+
+    t = type(val)
+    if t is bool:
+        return ("1" if val else "0", )
+
+    if t is str:
+        return (val, )
+
+    if t is int:
+        return (str(val), )
+
+    return None
+
+
 # There's an asymmetry here so that e.g. env_nvidia_tool can be specified with a
 # a string but return an NvidiaTool.
 SetType = TypeVar("SetType")
@@ -77,7 +94,8 @@ class env_base(Generic[SetType, GetType]):
             obj.__dict__.pop(self.name, None)
         else:
             obj.__dict__[self.name] = value
-            self.set(value)
+            if env_val := toenv(value):
+                setenv(self.key, env_val[0])
 
     def __delete__(self, obj: object) -> None:
         obj.__dict__.pop(self.name, None)
@@ -87,17 +105,11 @@ class env_base(Generic[SetType, GetType]):
         # if GetType != SetType.
         return cast(GetType, val)
 
-    def set(self, val: SetType) -> None:
-        pass
-
     def from_env(self, val: str) -> SetType:
         raise NotImplementedError()
 
 
 class env_str(env_base[str, str]):
-
-    def set(self, value: Optional[str]) -> None:
-        setenv(self.key, value)
 
     def from_env(self, val: str) -> str:
         return val
@@ -107,9 +119,6 @@ class env_bool(env_base[bool, bool]):
 
     def __init__(self, key: str, default: Union[bool, Callable[[], bool]] = False) -> None:
         super().__init__(key, default)
-
-    def set(self, value: Optional[bool]) -> None:
-        setenv(self.key, value if value is None else ("1" if value else "0"))
 
     def from_env(self, val: str) -> bool:
         return val.lower() in ("1", "true", "yes", "on", "y")

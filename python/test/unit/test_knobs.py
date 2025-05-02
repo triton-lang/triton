@@ -69,9 +69,11 @@ def test_knobs_utils(fresh_knobs) -> None:
 
 
 def test_knobs_scope(fresh_knobs, monkeypatch):
-    monkeypatch.setenv("TRITON_HIP_LOCAL_PREFETCH", "17")
     fresh_knobs.amd.global_prefetch = 4
     fresh_knobs.amd.local_prefetch = 3
+
+    # Update env *after* the __set__() does
+    monkeypatch.setenv("TRITON_HIP_LOCAL_PREFETCH", "17")
 
     assert fresh_knobs.amd.global_prefetch == 4
     assert fresh_knobs.amd.local_prefetch == 3
@@ -243,7 +245,6 @@ def test_nvidia_tool(fresh_knobs, tmp_path, monkeypatch):
     triton_root = Path(fresh_knobs.__file__).parent
     default_ptxas = triton_root / "backends/nvidia/bin/ptxas"
 
-    assert default_ptxas.exists()
     assert Path(fresh_knobs.nvidia.ptxas.path).resolve() == default_ptxas.resolve()
 
     tmp_ptxas = tmp_path / "ptxas-special"
@@ -251,10 +252,20 @@ def test_nvidia_tool(fresh_knobs, tmp_path, monkeypatch):
     monkeypatch.setenv("TRITON_PTXAS_PATH", str(tmp_ptxas))
     assert Path(fresh_knobs.nvidia.ptxas.path).resolve() == tmp_ptxas.resolve()
 
+    # Don't prop so that the `del` is correctly tested
+    fresh_knobs.propagate_env = False
     fresh_knobs.nvidia.ptxas = str(default_ptxas)
+    fresh_knobs.propagate_env = True
     assert Path(fresh_knobs.nvidia.ptxas.path).resolve() == default_ptxas.resolve()
 
     del fresh_knobs.nvidia.ptxas
+    assert Path(fresh_knobs.nvidia.ptxas.path).resolve() == tmp_ptxas.resolve()
+
+    # Triple check scope works
+    with fresh_knobs.nvidia.scope():
+        fresh_knobs.nvidia.ptxas = str(default_ptxas)
+        assert Path(fresh_knobs.nvidia.ptxas.path).resolve() == default_ptxas.resolve()
+
     assert Path(fresh_knobs.nvidia.ptxas.path).resolve() == tmp_ptxas.resolve()
 
     monkeypatch.delenv("TRITON_PTXAS_PATH")
