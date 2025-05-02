@@ -61,8 +61,6 @@ public:
 
   // Create a new partition with a stage.
   Partition *addPartition(unsigned stage);
-  // Give each partition a new index and order. The indices must be unique.
-  void reorderPartitions(ArrayRef<unsigned> order);
   // Update the op to partition mapping.
   void updatePartitions();
 

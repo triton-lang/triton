@@ -60,8 +60,7 @@ struct AllocateWarpGroups
 
       // Require that an estimate has been set and that we have even warpgroups.
       auto regsAttr = op.getRequestedRegisters();
-      if (!regsAttr || op.getTotalPartitionWarps() % 4 != 0 ||
-          triton::tools::getBoolEnv("WARP_SPECIALIZE_ATTENTION_FLAG"))
+      if (!regsAttr || op.getTotalPartitionWarps() % 4 != 0)
         return;
 
       // Group the partitions into warpgroups.

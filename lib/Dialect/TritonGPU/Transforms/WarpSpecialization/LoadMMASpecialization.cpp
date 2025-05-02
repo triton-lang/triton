@@ -212,7 +212,12 @@ static WarpSchedule getInitialSchedule(const PartitionScheme &scheme,
   };
 
   auto scheduleDependencies = [&](Partition *partition, Operation *op) {
-    SmallVector<Value> deps = getNestedOperands(op).takeVector();
+    SmallVector<Value> deps;
+    for (Value value : getNestedOperands(op)) {
+      if (isa<RankedTensorType, MemDescType>(value.getType()))
+        deps.push_back(value);
+    }
+
     while (!deps.empty()) {
       Value dep = deps.pop_back_val();
 
@@ -252,14 +257,16 @@ static WarpSchedule getInitialSchedule(const PartitionScheme &scheme,
     }
   };
 
+  Partition *defaultPartition = schedule.addPartition(0);
+  Partition *mmaPartition = schedule.addPartition(1);
   Partition *loadPartition = schedule.addPartition(0);
+
   for (const PipelinedLoad &load : scheme.loads) {
     scheduleOp(loadPartition, load.loadOp);
     for (Operation *allocOp : load.allocOps)
       scheduleOp(loadPartition, allocOp);
   }
 
-  Partition *mmaPartition = schedule.addPartition(1);
   for (const PipelinedMMA &mma : scheme.mmas) {
     scheduleOp(mmaPartition, mma.mmaOp);
     if (mma.storeOp)
@@ -269,32 +276,27 @@ static WarpSchedule getInitialSchedule(const PartitionScheme &scheme,
   }
 
   // Propagate defs of exp.
-  Partition *userPartition = schedule.addPartition(0);
   for (math::Exp2Op exp : scheme.exps) {
-    scheduleOp(userPartition, exp);
-    scheduleDependencies(userPartition, exp);
+    scheduleOp(defaultPartition, exp);
+    scheduleDependencies(defaultPartition, exp);
   }
 
   // Propagate users of loads and MMAs.
   for (const PipelinedLoad &load : scheme.loads) {
-    scheduleUsers(userPartition, load.loadOp);
+    scheduleUsers(defaultPartition, load.loadOp);
     for (Operation *allocOp : load.allocOps)
-      scheduleUsers(userPartition, allocOp);
+      scheduleUsers(defaultPartition, allocOp);
   }
 
-  SmallVector<Partition *> userPartitions{userPartition};
-  while (userPartitions.size() != scheme.mmas.size()) {
-    if (triton::tools::getBoolEnv("WARP_SPECIALIZE_ATTENTION_NO_CORRECTION")) {
-      userPartitions.push_back(userPartition);
-    } else {
-      userPartitions.push_back(schedule.addPartition(userPartitions.size()));
-    }
+  SmallVector<Partition *> userPartitions{defaultPartition};
+  while (userPartitions.size() < scheme.mmas.size()) {
+    userPartitions.push_back(schedule.addPartition(userPartitions.size()));
   }
   for (auto [mma, userPartition] : llvm::zip(scheme.mmas, userPartitions)) {
     scheduleUsers(userPartition, mma.mmaOp);
   }
   for (const PipelinedMMA &mma : scheme.mmas) {
-    scheduleDependencies(userPartition, mma.mmaOp);
+    scheduleDependencies(defaultPartition, mma.mmaOp);
   }
 
   schedule.updatePartitions();
@@ -468,23 +470,6 @@ static WarpSchedule getInitialSchedule(const PartitionScheme &scheme,
     }
     for (Operation *op : cluster.ops)
       schedule.insert(defPartition, op);
-  }
-
-  // Place the epilogue partition in the default warpgroup. The MMA and load
-  // partitions shouldn't have tensor computations in them, which means they
-  // will get assigned just 1 warp each.
-  if (triton::tools::getBoolEnv("WARP_SPECIALIZE_ATTENTION_FLAG")) {
-    SmallVector<unsigned> order{2, 1, 0};
-    while (order.size() != schedule.getNumPartitions())
-      order.push_back(order.size());
-    schedule.reorderPartitions(order);
-  } else {
-    // Add an extra partition to pad the number of warps to the nearest
-    // warpgroup.
-    if (!userPartition->getOps().empty()) {
-      schedule.addPartition(0);
-      schedule.reorderPartitions({2, 1, 0, 3});
-    }
   }
 
   schedule.updatePartitions();
@@ -896,9 +881,10 @@ LogicalResult PipelinedLoadGroup::lowerLoads(
 static Value getLastInductionValue(PartitionBuilder &b, scf::ForOp loop) {
   OpBuilder::InsertionGuard guard(b);
   b.setInsertionPoint(loop);
-  // (ub - lb) // step * step + lb
+  // (ub - lb -1) // step * step + lb
   Value diff =
       b.create<arith::SubIOp>(loop.getUpperBound(), loop.getLowerBound());
+  diff = b.create<arith::SubIOp>(diff, b.intCst(1));
   Value ceilStep = b.create<arith::MulIOp>(
       b.create<arith::DivSIOp>(diff, loop.getStep()), loop.getStep());
   return b.create<arith::AddIOp>(ceilStep, loop.getLowerBound());
