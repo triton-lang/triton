@@ -42,22 +42,22 @@ bool isConvertTrivial(ConvertLayoutOp op) {
       .succeeded();
 }
 
-// Helper function to get a chain of elementwise operations and local_load operations
-static SmallVector<Operation*> getElementwiseLocalLoadChain(Operation *op) {
-  SmallVector<Operation*> chain;
+// Helper function to get a chain of elementwise operations and local_load
+// operations
+static SmallVector<Operation *> getElementwiseLocalLoadChain(Operation *op) {
+  SmallVector<Operation *> chain;
   Operation *current = op;
-  
+
   while (current) {
     // Check if it's a local_load operation
     if (isa<LocalLoadOp>(current)) {
       chain.push_back(current);
       break;
     }
-    
+
     // Check if it's an elementwise operation
-    if (current->hasTrait<mlir::OpTrait::Elementwise>() && 
-        isMemoryEffectFree(current) &&
-        current->getNumOperands() == 1 && 
+    if (current->hasTrait<mlir::OpTrait::Elementwise>() &&
+        isMemoryEffectFree(current) && current->getNumOperands() == 1 &&
         current->getResult(0).hasOneUse()) {
       chain.push_back(current);
       current = current->getOperand(0).getDefiningOp();
@@ -65,7 +65,7 @@ static SmallVector<Operation*> getElementwiseLocalLoadChain(Operation *op) {
       break;
     }
   }
-  
+
   return chain;
 }
 
@@ -350,36 +350,39 @@ struct CanonicalizeConvertFromConvert
 
     // if the data is from a chain of elementwise ops and local_load, we can
     // fold the convert into the local_load
-    // cvt(elementwise(elementwise(local_load))) -> elementwise(elementwise(local_load))
+    // cvt(elementwise(elementwise(local_load))) ->
+    // elementwise(elementwise(local_load))
     auto chain = getElementwiseLocalLoadChain(arg);
     if (!chain.empty() && isa<LocalLoadOp>(chain.back())) {
       // Get the target encoding from the convert op's result
       auto targetEncoding = op.getType().getEncoding();
       auto targetType = op.getType();
-      
+
       // Start from the local_load op and work backwards
       Value currentValue = nullptr;
       for (auto it = chain.rbegin(); it != chain.rend(); ++it) {
         Operation *currentOp = *it;
-        
+
         if (auto localLoad = dyn_cast<LocalLoadOp>(currentOp)) {
-          // Create new local_load with target encoding but original element type
-          auto originalType = cast<RankedTensorType>(localLoad.getResult().getType());
-          auto newType = RankedTensorType::get(
-              targetType.getShape(),
-              originalType.getElementType(),
-              targetEncoding);
+          // Create new local_load with target encoding but original element
+          // type
+          auto originalType =
+              cast<RankedTensorType>(localLoad.getResult().getType());
+          auto newType = RankedTensorType::get(targetType.getShape(),
+                                               originalType.getElementType(),
+                                               targetEncoding);
           currentValue = rewriter.create<LocalLoadOp>(
-              localLoad.getLoc(), newType,
-              localLoad.getSrc(), localLoad.getToken());
+              localLoad.getLoc(), newType, localLoad.getSrc(),
+              localLoad.getToken());
         } else {
-          // Create new elementwise op with target encoding but original element type
-          auto originalType = cast<RankedTensorType>(currentOp->getResult(0).getType());
-          auto newType = RankedTensorType::get(
-              targetType.getShape(),
-              originalType.getElementType(),
-              targetEncoding);
-          
+          // Create new elementwise op with target encoding but original element
+          // type
+          auto originalType =
+              cast<RankedTensorType>(currentOp->getResult(0).getType());
+          auto newType = RankedTensorType::get(targetType.getShape(),
+                                               originalType.getElementType(),
+                                               targetEncoding);
+
           // Create new operation with the same opcode but new type
           OperationState state(currentOp->getLoc(), currentOp->getName());
           state.addTypes(newType);
@@ -388,7 +391,7 @@ struct CanonicalizeConvertFromConvert
           currentValue = rewriter.create(state)->getResult(0);
         }
       }
-      
+
       // Replace the convert op with the new chain
       rewriter.replaceOp(op, currentValue);
       return success();

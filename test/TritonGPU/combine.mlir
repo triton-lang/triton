@@ -3477,20 +3477,20 @@ module attributes {"ttg.target" = "cuda:90", "ttg.num-ctas" = 1 : i32, "ttg.num-
 #mma = #ttg.nvidia_mma<{versionMajor = 3, versionMinor = 0, warpsPerCTA = [4, 1], instrShape = [16, 256, 16]}>
 #shared = #ttg.nvmma_shared<{swizzlingByteWidth = 64, transposed = false, elementBitWidth = 8}>
 #shared3 = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = true, elementBitWidth = 16}>
-#smem = #ttg.shared_memory     
+#smem = #ttg.shared_memory
 
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:90", "ttg.threads-per-warp" = 32 : i32} {
 tt.func @convert_layout_chain_elementwise_localload(%A_sh: !ttg.memdesc<64x64xi8, #shared, #smem, mutable, 2x64x64>, %B_sh: !ttg.memdesc<64x256xbf16, #shared3, #smem, mutable>, %C_reg: tensor<64x256xf32, #mma>) attributes {noinline = false} {
 // CHECK: tt.func @convert_layout_chain_elementwise_localload
     // CHECK: %[[A_reg:.*]] = ttg.local_load {{.*}} : !ttg.memdesc<64x64xi8, #shared, #smem, mutable, 2x64x64> -> tensor<64x64xi8, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 2}>>
     // CHECK: %[[A_reg2:.*]] = arith.sitofp %[[A_reg]] : tensor<64x64xi8, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 2}>> to tensor<64x64xbf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 2}>>
-    // CHECK-NOT: ttg.convert_layout  
+    // CHECK-NOT: ttg.convert_layout
     // CHECK: {{.*}} = ttng.warp_group_dot %[[A_reg2]]
-    %A_reg = ttg.local_load %A_sh : !ttg.memdesc<64x64xi8, #shared, #smem, mutable, 2x64x64> -> tensor<64x64xi8, #blocked> 
-    %A_reg2 = arith.sitofp %A_reg : tensor<64x64xi8, #blocked> to tensor<64x64xbf16, #blocked> 
-    %A_reg3 = ttg.convert_layout %A_reg2 : tensor<64x64xbf16, #blocked> -> tensor<64x64xbf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 2}>> 
-    %70 = ttng.warp_group_dot %A_reg3, %B_sh, %C_reg {inputPrecision = 0 : i32, isAsync = true} : tensor<64x64xbf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 2}>> * !ttg.memdesc<64x256xbf16, #shared3, #smem, mutable> -> tensor<64x256xf32, #mma> 
-    %71:2 = ttng.warp_group_dot_wait %70, %B_sh {pendings = 0 : i32} : tensor<64x256xf32, #mma>, !ttg.memdesc<64x256xbf16, #shared3, #smem, mutable> 
+    %A_reg = ttg.local_load %A_sh : !ttg.memdesc<64x64xi8, #shared, #smem, mutable, 2x64x64> -> tensor<64x64xi8, #blocked>
+    %A_reg2 = arith.sitofp %A_reg : tensor<64x64xi8, #blocked> to tensor<64x64xbf16, #blocked>
+    %A_reg3 = ttg.convert_layout %A_reg2 : tensor<64x64xbf16, #blocked> -> tensor<64x64xbf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 2}>>
+    %70 = ttng.warp_group_dot %A_reg3, %B_sh, %C_reg {inputPrecision = 0 : i32, isAsync = true} : tensor<64x64xbf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 2}>> * !ttg.memdesc<64x256xbf16, #shared3, #smem, mutable> -> tensor<64x256xf32, #mma>
+    %71:2 = ttng.warp_group_dot_wait %70, %B_sh {pendings = 0 : i32} : tensor<64x256xf32, #mma>, !ttg.memdesc<64x256xbf16, #shared3, #smem, mutable>
     tt.return
   }
 }
