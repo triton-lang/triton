@@ -1,11 +1,10 @@
 import os
-import shutil
-
-from pathlib import Path
-
 import pytest
+import shutil
 import triton
 from triton._internal_testing import is_hip
+
+from pathlib import Path
 
 
 def test_knobs_utils() -> None:
@@ -104,18 +103,8 @@ def test_knobs_scope(fresh_knobs, monkeypatch):
     assert fresh_knobs.amd.use_buffer_ops
 
 
-@pytest.mark.parametrize(
-    "truthy, falsey",
-    [
-        ("1", "0"),
-        ("true", "false"),
-        ("True", "False"),
-        ("TRUE", "FALSE"),
-        ("y", "n"),
-        ("YES", "NO"),
-        ("ON", "OFF"),
-    ],
-)
+@pytest.mark.parametrize("truthy, falsey", [("1", "0"), ("true", "false"), ("True", "False"), ("TRUE", "FALSE"),
+                                            ("y", "n"), ("YES", "NO"), ("ON", "OFF")])
 def test_read_env(truthy, falsey, fresh_knobs, monkeypatch):
     # bool defaulting to False
     assert not fresh_knobs.runtime.debug
