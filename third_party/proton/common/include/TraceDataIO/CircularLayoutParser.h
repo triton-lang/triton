@@ -22,7 +22,7 @@ struct CircularLayoutParserConfig : public ParserConfig {
   // The number of blocks in the grid
   size_t numBlocks = 0;
   // A vector of trace's uids
-  std::vector<uint32_t> uidVec = {0};
+  std::vector<uint32_t> uidVec = {};
 };
 
 struct CircularLayoutParserResult {
@@ -81,6 +81,9 @@ struct ScopeMisMatchException : public ParserException {
 struct ClockOverflowException : public ParserException {
   ClockOverflowException(const std::string &msg);
 };
+
+std::shared_ptr<CircularLayoutParserResult>
+readCircularLayoutTrace(ByteSpan &buffer);
 
 } // namespace proton
 
