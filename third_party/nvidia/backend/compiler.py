@@ -277,8 +277,8 @@ class CUDABackend(BaseBackend):
         passes.common.add_cse(pm)
         passes.common.add_symbol_dce(pm)
         if capability // 10 >= 9:
-            nvidia.passes.ttnvgpuir.add_fence_insertion(pm)
             nvidia.passes.ttnvgpuir.add_tma_lowering(pm)
+            nvidia.passes.ttnvgpuir.add_fence_insertion(pm)
         passes.common.add_canonicalizer(pm)
         pm.run(mod)
         metadata["cluster_dims"] = (cluster_info.clusterDimX, cluster_info.clusterDimY, cluster_info.clusterDimZ)
