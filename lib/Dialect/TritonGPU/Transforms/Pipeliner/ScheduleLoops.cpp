@@ -28,13 +28,6 @@ bool hasGpuBarriers(scf::ForOp forOp) {
   return result.wasInterrupted();
 }
 
-bool mmav5DominatesTmemLoads(scf::ForOp forOp,
-                             const DenseMap<Operation *, int> &opLatency) {
-  return ttng::mmav5DominatesTmemLoads(forOp, [&](ttng::MMAv5OpInterface mma) {
-    return opLatency.lookup(mma) >= 1;
-  });
-}
-
 // Return true if the preconditions for pipelining the loop are met.
 bool isSafeToPipeline(scf::ForOp forOp,
                       const DenseMap<Operation *, int> &opLatency) {

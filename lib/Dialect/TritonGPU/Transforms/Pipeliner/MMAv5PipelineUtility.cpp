@@ -203,23 +203,21 @@ bool ttng::isAccMultibufferingPossible(ttng::MMAv5OpInterface mma,
   return accUseFlagSetToFalse(mma, forOp) || accOverwrittenInLoop(mma, forOp);
 }
 
-bool ttng::mmav5DominatesTmemLoads(
-    scf::ForOp forOp, function_ref<bool(MMAv5OpInterface)> isMmaPipelineable) {
-  DominanceInfo domInfo(forOp);
-  WalkResult result = forOp.walk([&](ttng::MMAv5OpInterface mma) {
-    auto tmemAlloc = mma.getAccumulator().getDefiningOp<ttng::TMEMAllocOp>();
-    if (!tmemAlloc || !forOp.isDefinedOutsideOfLoop(tmemAlloc)) {
-      return WalkResult::advance();
+bool ttng::requiresAccMultiBuffering(ttng::MMAv5OpInterface mma,
+                                     scf::ForOp forOp) {
+  auto tmemAlloc = mma.getAccumulator().getDefiningOp<ttng::TMEMAllocOp>();
+  if (!tmemAlloc || !forOp.isDefinedOutsideOfLoop(tmemAlloc)) {
+    return true; // Pessimistically assume the accumulator requires
+                 // multi-buffering.
+  }
+  // If the accumulator is being read in the loop, we will need to multibuffer
+  // when pipelining.
+  for (auto user : tmemAlloc->getUsers()) {
+    if (isa<ttng::TMEMLoadOp>(user) && forOp->isAncestor(user->getParentOp())) {
+      return true;
     }
-    for (auto user : tmemAlloc->getUsers()) {
-      if (isa<ttng::TMEMLoadOp>(user) && forOp->isAncestor(user) &&
-          !domInfo.properlyDominates(mma, user) && isMmaPipelineable(mma)) {
-        return WalkResult::interrupt();
-      }
-    }
-    return WalkResult::advance();
-  });
-  return !result.wasInterrupted();
+  }
+  return false;
 }
 
 //===----------------------------------------------------------------------===//

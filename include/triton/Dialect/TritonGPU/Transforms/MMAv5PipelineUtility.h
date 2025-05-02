@@ -20,11 +20,10 @@ namespace triton::nvidia_gpu {
 // Given an MMAv5 operation in a loop, determine if its accumulator can be
 // multibuffered.
 bool isAccMultibufferingPossible(MMAv5OpInterface mma, scf::ForOp forOp);
-// Only pipeline the loops where the MMA happens before the tmem_load, or is in
-// the same stage as the tmem_load. Lowering does not support the case where the
-// MMA is in a different stage as the tmem_load and happens after it.
-bool mmav5DominatesTmemLoads(
-    scf::ForOp forOp, function_ref<bool(MMAv5OpInterface)> isMmaPipelineable);
+
+// Returns true if the MMA operation requires acc multi-buffering when
+// pipelined.
+bool requiresAccMultiBuffering(MMAv5OpInterface mma, scf::ForOp forOp);
 
 // Helper class to determine if the operands of an MMA operation are
 // pipelineable.
