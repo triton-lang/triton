@@ -258,7 +258,7 @@ class base_knobs:
         return res
 
     def reset(self: knobs_type) -> knobs_type:
-        for knob in self.knobs.keys():
+        for knob in self.knob_descriptors.keys():
             delattr(self, knob)
         return self
 
