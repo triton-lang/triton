@@ -1101,16 +1101,19 @@ void LayoutRematerialization::backwardRematerialization(
   DenseMap<Operation *, bool> isSingleUse;
   std::function<bool(Operation *)> isOpSingleUse;
   isOpSingleUse = [&](Operation *op) -> bool {
-
     // lookup in memoization array:
     auto it = isSingleUse.find(op);
-    if (it != isSingleUse.end()) { return it->second; }
+    if (it != isSingleUse.end()) {
+      return it->second;
+    }
 
     bool singleUse = true;
 
     for (Value result : op->getResults()) {
       for (Operation *user : result.getUsers()) {
-        if (user == convertOp) { continue; }
+        if (user == convertOp) {
+          continue;
+        }
         if (sliceOps.contains(user)) {
           if (!isOpSingleUse(user)) {
             singleUse = false;
@@ -1121,7 +1124,9 @@ void LayoutRematerialization::backwardRematerialization(
           break;
         }
       }
-      if (!singleUse) { break; }
+      if (!singleUse) {
+        break;
+      }
     }
 
     // insert into memoization array:
@@ -1129,17 +1134,31 @@ void LayoutRematerialization::backwardRematerialization(
     return singleUse;
   };
 
-  int64_t convertLayoutCost = 0;
-  int64_t rematerialisationCost = 0;
-
-  {
-    Value result = convertOp.getSrc();
-    int64_t elementCount = 1;
+  auto getByteCount = [](Value result) -> int64_t {
+    int64_t byteCount = 128;
     if (auto tensorTy = dyn_cast<RankedTensorType>(result.getType())) {
-      elementCount = tensorTy.getNumElements();
+      int64_t elementCount = tensorTy.getNumElements();
+      int64_t dtypeBitWidth = 32;
+      auto elemType = tensorTy.getElementType();
+      if (elemType.isIntOrFloat()) {
+        dtypeBitWidth = elemType.getIntOrFloatBitWidth();
+      } else if (isa<IndexType>(elemType)) {
+        dtypeBitWidth = 64;
+      }
+      int64_t bitCount = elementCount * dtypeBitWidth;
+      if (bitCount > 1024) {
+        // tensor which spans multiple registers:
+        byteCount = bitCount >> 3;
+      }
     }
-    convertLayoutCost += elementCount * 16;
-  }
+    return byteCount;
+  };
+
+  // We measure costs in standardised milli-SM-cycles. This gives:
+  // smem load/store:    8 * byte count
+  // synchronisation:    1024 (assuming 4 warps per block)
+  int64_t convertLayoutCost = 16 * getByteCount(convertOp.getSrc()) + 1024;
+  int64_t rematerialisationCost = 0;
 
   // Evaluate single-use status for every operation in slice
   for (Operation *op : sliceOps) {
@@ -1147,15 +1166,18 @@ void LayoutRematerialization::backwardRematerialization(
       // when we rematerialise, this operation does not get duplicated
       // so it does not contribute to our cost model:
       continue;
-    }
-    if (op->getDialect()->getNamespace() == "arith") {
+    } else if (isa<arith::ConstantOp>(op)) {
+      // special-case: arith.constant has zero cost
+      continue;
+    } else if (isa<LoadOp>(op)) {
+      // optimistically assume L1-cached:
+      for (Value result : op->getResults()) {
+        rematerialisationCost += 8 * getByteCount(result);
+      }
+    } else if (op->getDialect()->getNamespace() == "arith") {
       // this is an arithmetic operation
       for (Value result : op->getResults()) {
-        int64_t elementCount = 1;
-        if (auto tensorTy = dyn_cast<RankedTensorType>(result.getType())) {
-          elementCount = tensorTy.getNumElements();
-        }
-        rematerialisationCost += elementCount;
+        rematerialisationCost += getByteCount(result);
       }
     }
   }
