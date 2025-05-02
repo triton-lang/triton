@@ -1060,14 +1060,13 @@ static bool isExpensiveMathOp(Operation *op) {
   // These operations are either multiple instructions or have throughput
   // lower than 16 according to the arithmetic instructions table in:
   // https://docs.nvidia.com/cuda/cuda-c-programming-guide/index.html#arithmetic-instructions
-  static const llvm::DenseSet<llvm::StringRef> expensiveOps = {
-      "arith.divf", "math.erfc",  "math.sinh",  "math.cosh",  "math.tanh",
-      "math.asinh", "math.acosh", "math.atanh", "math.ctlz",  "math.cttz",
-      "math.exp",   "math.exp2",  "math.expm1", "math.log",   "math.log2",
-      "math.log10", "math.log1p", "math.sin",   "math.cos",   "math.tan",
-      "math.asin",  "math.acos",  "math.atan",  "math.atan2", "math.powf",
-      "math.sqrt",  "math.rsqrt", "math.erf",   "math.tanh",  "math.cbrt"};
-  return expensiveOps.contains(op->getName().getStringRef());
+  return isa<arith::DivFOp, math::ErfcOp, math::SinhOp, math::CoshOp, math::TanhOp,
+             math::AsinhOp, math::AcoshOp, math::AtanhOp, math::CtPopOp,
+             math::CountLeadingZerosOp, math::CountTrailingZerosOp,
+             math::ExpOp, math::Exp2Op, math::ExpM1Op, math::LogOp, math::Log2Op,
+             math::Log10Op, math::Log1pOp, math::SinOp, math::CosOp, math::TanOp,
+             math::AsinOp, math::AcosOp, math::AtanOp, math::Atan2Op, math::PowFOp,
+             math::SqrtOp, math::RsqrtOp, math::ErfOp, math::CbrtOp>(op);
 }
 
 static int64_t getByteCount(Value result, int64_t minElementCount = 0,
@@ -1184,7 +1183,7 @@ void LayoutRematerialization::backwardRematerialization(
 
   // Evaluate single-use status for every operation in slice
   for (Operation *op : sliceOps) {
-    auto dialect = op->getDialect()->getNamespace();
+    auto dialect = op->getDialect();
     if (isOpSingleUse(op)) {
       // when we rematerialise, this operation does not get duplicated
       // so it does not contribute to our cost model:
@@ -1197,7 +1196,7 @@ void LayoutRematerialization::backwardRematerialization(
       for (Value result : op->getResults()) {
         rematerialisationCost += 8 * getByteCount(result);
       }
-    } else if ((dialect == "arith") || (dialect == "math")) {
+    } else if (isa<arith::ArithDialect, math::MathDialect>(dialect)) {
       // this is an arithmetic operation; we distinguish between cheap
       // operations (such as floating point add/mul which can be fused
       // as halves of a single-cycle FMA instruction) and expensive
