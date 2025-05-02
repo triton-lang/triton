@@ -394,30 +394,14 @@ TMemMessageTraits selectTMemMessage(const TMemRuntimeInfo &info, int maxnreg) {
 
 // Get the maximum number of registers per thread based on the context. This is
 // by default 256, but it can be overridden by `ttg.maxnreg` set on the module.
-// Alternatively, warp groups within warp specialized regions can have a
-// different number of registers allocated.
 static int getContextualMaxNReg(Operation *op) {
-  if (auto mod = dyn_cast<ModuleOp>(op)) {
-    // Check for a maxnreg attribute.
-    if (auto attr = op->getAttrOfType<IntegerAttr>(AttrMaxRegistersName))
-      return std::min<int>(maxRegisters, attr.getInt());
-
-  } else if (auto partitions =
-                 dyn_cast<WarpSpecializePartitionsOp>(op->getParentOp())) {
-    // Check if the partition has reduced registers.
-    unsigned idx = op->getParentRegion()->getRegionNumber();
-    if (auto actRegisters = partitions.getParentOp().getActualRegisters())
-      return std::min<int>(maxRegisters, (*actRegisters)[1 + idx]);
-    return getContextualMaxNReg(partitions.getParentOp());
-
-  } else if (auto wsOp = dyn_cast<WarpSpecializeOp>(op->getParentOp())) {
-    // Check the register usage of the default warpgroup.
-    if (auto actRegisters = wsOp.getActualRegisters())
-      return std::min<int>(maxRegisters, actRegisters->front());
-  }
-
-  if (Operation *parent = op->getParentOp())
-    return getContextualMaxNReg(parent);
+  // PTXAS validates the allocation of `tcgen05.ld` and `tcgen05.st`
+  // instructions based on the static number of registers, not the dynamic
+  // allocation. So query the module for a limit.
+  auto mod = op->getParentOfType<ModuleOp>();
+  if (auto maxnreg =
+          mod->getAttrOfType<IntegerAttr>(triton::gpu::AttrMaxRegistersName))
+    return std::min<int>(maxRegisters, maxnreg.getInt());
   return maxRegisters;
 }
 

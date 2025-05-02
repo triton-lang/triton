@@ -182,8 +182,6 @@ static void createRegRealloc(TritonLLVMIRRewriter &b, int curRegs,
                              int adjRegs) {
   curRegs = std::min(256, curRegs);
   adjRegs = std::min(256, adjRegs);
-  if (adjRegs == curRegs)
-    return;
   auto action = adjRegs < curRegs ? NVVM::SetMaxRegisterAction::decrease
                                   : NVVM::SetMaxRegisterAction::increase;
   b.create<NVVM::SetMaxRegisterOp>(adjRegs, action);
