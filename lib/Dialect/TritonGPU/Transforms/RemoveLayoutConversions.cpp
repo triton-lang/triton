@@ -1060,12 +1060,13 @@ static bool isExpensiveMathOp(Operation *op) {
   // These operations are either multiple instructions or have throughput
   // lower than 16 according to the arithmetic instructions table in:
   // https://docs.nvidia.com/cuda/cuda-c-programming-guide/index.html#arithmetic-instructions
-  return isa<arith::DivFOp, math::ErfcOp, math::SinhOp, math::CoshOp, math::TanhOp,
-             math::AsinhOp, math::AcoshOp, math::AtanhOp, math::CtPopOp,
-             math::CountLeadingZerosOp, math::CountTrailingZerosOp,
-             math::ExpOp, math::Exp2Op, math::ExpM1Op, math::LogOp, math::Log2Op,
-             math::Log10Op, math::Log1pOp, math::SinOp, math::CosOp, math::TanOp,
-             math::AsinOp, math::AcosOp, math::AtanOp, math::Atan2Op, math::PowFOp,
+  return isa<arith::DivFOp, math::ErfcOp, math::SinhOp, math::CoshOp,
+             math::TanhOp, math::AsinhOp, math::AcoshOp, math::AtanhOp,
+             math::CtPopOp, math::CountLeadingZerosOp,
+             math::CountTrailingZerosOp, math::ExpOp, math::Exp2Op,
+             math::ExpM1Op, math::LogOp, math::Log2Op, math::Log10Op,
+             math::Log1pOp, math::SinOp, math::CosOp, math::TanOp, math::AsinOp,
+             math::AcosOp, math::AtanOp, math::Atan2Op, math::PowFOp,
              math::SqrtOp, math::RsqrtOp, math::ErfOp, math::CbrtOp>(op);
 }
 
