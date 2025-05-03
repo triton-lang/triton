@@ -408,6 +408,22 @@ bool mlir::triton::isTMALoad(Operation *op) {
   return isa<tt::DescriptorLoadOp, tt::DescriptorGatherOp>(op);
 }
 
+bool mlir::triton::canBeAsyncLoad(Operation *op) {
+  if (mlir::triton::isTMALoad(op)) {
+    return true;
+  }
+  assert(isa<tt::LoadOp>(op));
+  ttg::SharedEncodingTrait sharedEncoding = mlir::triton::getSharedEncoding(op);
+  // Do not create async loads for small loads (cp.async requires at least 4
+  // bytes)
+  int copyVecBytes = mlir::triton::getCopyVecBytes(
+      cast<RankedTensorType>(op->getResultTypes()[0]), sharedEncoding);
+  if (copyVecBytes >= 4) {
+    return true;
+  }
+  return false;
+}
+
 void mlir::triton::combineRedundantWaitOps(
     llvm::SmallSetVector<ttg::AsyncWaitOp, 8> &waitOps) {
   llvm::MapVector<ttg::AsyncWaitOp, ttg::AsyncWaitOp> toDelete;

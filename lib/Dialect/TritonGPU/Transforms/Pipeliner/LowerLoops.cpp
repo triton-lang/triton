@@ -870,9 +870,7 @@ void createBarrierAndWaitOps(scf::ForOp forOp, CoarseSchedule &schedule,
                              ttng::MMAv5OpInterface mma,
                              ttng::TMEMAllocOp alloc, int phaseArgIdx,
                              int barrierIdxArgIdx) {
-  auto isLoadPipelineable = [&](Operation *op) {
-    // TODO: this neglects cases where the load is pipelined, but the operand is
-    // not multibuffered
+  auto isLoadToBePipelined = [&](Operation *op) {
     return schedule[mma].first > schedule[op].first;
   };
 
@@ -889,7 +887,7 @@ void createBarrierAndWaitOps(scf::ForOp forOp, CoarseSchedule &schedule,
   }
 
   ttng::MMAv5PipelineableOperandsHelper mmaPipeHelper(mma, forOp,
-                                                      isLoadPipelineable);
+                                                      isLoadToBePipelined);
   if (!mmaPipeHelper.isPipelineable &&
       mmaPipeHelper.isOperandsStateDetermined) {
     // If the operands are not pipelineable, we need to insert a sync point
@@ -1112,11 +1110,15 @@ void multibufferTensorMemory(scf::ForOp forOp, CoarseSchedule &schedule,
 
 scf::ForOp lowerMMA(ttng::MMAv5OpInterface mma, scf::ForOp forOp,
                     CoarseSchedule &schedule) {
-  auto isLoadPipelineable = [&](Operation *op) {
+  auto isLoadToBePipelined = [&](Operation *op) {
     return schedule[mma].first > schedule[op].first;
   };
   auto alloc = mma.getAccumulator().getDefiningOp<ttng::TMEMAllocOp>();
   if (!alloc) {
+    return forOp;
+  }
+
+  if (getLatencyFromAttr(mma) == 0) {
     return forOp;
   }
 
