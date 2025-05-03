@@ -256,8 +256,10 @@ LogicalResult WarpSchedule::verify(scf::ForOp loop) const {
 }
 
 void WarpSchedule::eraseFrom(scf::ForOp loop) {
-  for (Operation &op : loop.getBody()->without_terminator())
-    op.removeAttr(kPartitionAttrName);
+  loop.walk([&](Operation *op) {
+    op->removeAttr(kPartitionAttrName);
+    op->removeAttr(kAssignedStageAttrName);
+  });
   loop->removeAttr(kPartitionStagesAttrName);
 }
 
