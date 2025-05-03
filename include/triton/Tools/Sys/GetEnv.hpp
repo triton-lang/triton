@@ -44,7 +44,7 @@ inline const std::set<std::string> CACHE_INVALIDATING_ENV_VARS = {
     "STORE_TMEM_TO_GLOBAL_BYPASS_SMEM",
     "ALLOW_LHS_TMEM_LAYOUT_CONVERSION",
     "TRITON_F32_DEFAULT",
-    "ENABLE_MMA_V5_ATT_PIPELINE",
+    "ENABLE_MMA_V5_ATT_PIPELINE"
     // clang-format on
 };
 

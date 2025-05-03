@@ -270,7 +270,7 @@ def _tma_pre_hook(nargs):
 configs_tma = [
     triton.Config({'BLOCK_M': BM, 'BLOCK_N': BN}, num_stages=s, num_warps=w, pre_hook=_tma_pre_hook) \
     for BM in [64, 128, 256]\
-    for BN in [64]\
+    for BN in [64, 128]\
     for s in [3, 4, 5]\
     for w in [4, 8]\
 ]
@@ -284,7 +284,7 @@ def keep_tma(conf):
     return True
 
 
-#@triton.autotune(configs=list(filter(keep_tma, configs_tma)), key=["N_CTX", "HEAD_DIM", "FP8_OUTPUT", "warp_specialize"])
+@triton.autotune(configs=list(filter(keep_tma, configs_tma)), key=["N_CTX", "HEAD_DIM", "FP8_OUTPUT", "warp_specialize"])
 @triton.jit
 def _attn_fwd_tma(sm_scale, M,  #
                   Z, H, desc_q, desc_k, desc_v, desc_o, N_CTX,  #
@@ -616,19 +616,11 @@ class _attention(torch.autograd.Function):
             # Note that on Hopper we cannot perform a FP8 dot with a non-transposed second tensor
             y_dim = q.shape[0] * q.shape[1] * q.shape[2]
 
-            #dummy_block = [1, 1]
-            #desc_q = TensorDescriptor(q, shape=[y_dim, HEAD_DIM_K], strides=[HEAD_DIM, 1], block_shape=dummy_block)
-            #desc_v = TensorDescriptor(v, shape=[y_dim, HEAD_DIM_K], strides=[HEAD_DIM, 1], block_shape=dummy_block)
-            #desc_k = TensorDescriptor(k, shape=[y_dim, HEAD_DIM_K], strides=[HEAD_DIM, 1], block_shape=dummy_block)
-            #desc_o = TensorDescriptor(o, shape=[y_dim, HEAD_DIM_K], strides=[HEAD_DIM, 1], block_shape=dummy_block)
-
-            BLOCK_M = 128
-            HEAD_DIM = HEAD_DIM_K
-            BLOCK_N = min(64, HEAD_DIM)
-            desc_q = TensorDescriptor(q, shape=[y_dim, HEAD_DIM_K], strides=[HEAD_DIM, 1], block_shape=[BLOCK_M, HEAD_DIM])
-            desc_v = TensorDescriptor(v, shape=[y_dim, HEAD_DIM_K], strides=[HEAD_DIM, 1], block_shape=[BLOCK_N, HEAD_DIM])
-            desc_k = TensorDescriptor(k, shape=[y_dim, HEAD_DIM_K], strides=[HEAD_DIM, 1], block_shape=[BLOCK_N, HEAD_DIM])
-            desc_o = TensorDescriptor(o, shape=[y_dim, HEAD_DIM_K], strides=[HEAD_DIM, 1], block_shape=[BLOCK_M, HEAD_DIM])
+            dummy_block = [1, 1]
+            desc_q = TensorDescriptor(q, shape=[y_dim, HEAD_DIM_K], strides=[HEAD_DIM, 1], block_shape=dummy_block)
+            desc_v = TensorDescriptor(v, shape=[y_dim, HEAD_DIM_K], strides=[HEAD_DIM, 1], block_shape=dummy_block)
+            desc_k = TensorDescriptor(k, shape=[y_dim, HEAD_DIM_K], strides=[HEAD_DIM, 1], block_shape=dummy_block)
+            desc_o = TensorDescriptor(o, shape=[y_dim, HEAD_DIM_K], strides=[HEAD_DIM, 1], block_shape=dummy_block)
 
             def grid(META):
                 return (triton.cdiv(q.shape[2], META["BLOCK_M"]), q.shape[0] * q.shape[1], 1)
@@ -643,14 +635,6 @@ class _attention(torch.autograd.Function):
                 FP8_OUTPUT=q.dtype == torch.float8_e5m2,  #
                 STAGE=stage,  #
                 warp_specialize=warp_specialize,  #
-
-                BLOCK_M=BLOCK_M,
-                BLOCK_N=BLOCK_N,
-                num_warps=4,
-                maxnreg=80,
-                num_stages=2,
-                num_ctas=1,
-
                 **extra_kern_args)
         else:
             grid = lambda args: (triton.cdiv(q.shape[2], args["BLOCK_M"]), q.shape[0] * q.shape[1], 1)
@@ -765,20 +749,19 @@ try:
 except BaseException:
     HAS_FLASH = False
 
-#TORCH_HAS_FP8 = hasattr(torch, 'float8_e5m2')
-TORCH_HAS_FP8 = False
+TORCH_HAS_FP8 = hasattr(torch, 'float8_e5m2')
 BATCH, N_HEADS, HEAD_DIM = 4, 32, 64
 # vary seq length for fixed head and batch=4
 configs = []
-for mode in ["fwd"]:
-    for causal in [True]:
-        for warp_specialize in [True]:
+for mode in ["fwd", "bwd"]:
+    for causal in [True, False]:
+        for warp_specialize in [True, False]:
             if mode == "bwd" and not causal:
                 continue
             configs.append(
                 triton.testing.Benchmark(
                     x_names=["N_CTX"],
-                    x_vals=[2**i for i in range(14, 15)],
+                    x_vals=[2**i for i in range(10, 15)],
                     line_arg="provider",
                     line_vals=["triton-fp16"] + (["triton-fp8"] if TORCH_HAS_FP8 else []) +
                     (["flash"] if HAS_FLASH else []),
@@ -796,8 +779,6 @@ for mode in ["fwd"]:
                         "warp_specialize": warp_specialize,
                     },
                 ))
-
-# SWP: 574-580
 
 
 @triton.testing.perf_report(configs)
@@ -821,7 +802,6 @@ def bench_flash_attention(BATCH, H, N_CTX, HEAD_DIM, causal, warp_specialize, mo
             do = torch.randn_like(o)
             fn = lambda: o.backward(do, retain_graph=True)
         ms = triton.testing.do_bench(fn)
-        #ms, _ = (1, fn())
 
     if provider == "flash":
         qkv = torch.randn((BATCH, N_CTX, 3, H, HEAD_DIM), dtype=dtype, device=device, requires_grad=True)

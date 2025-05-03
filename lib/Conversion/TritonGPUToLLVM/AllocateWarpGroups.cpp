@@ -1,7 +1,6 @@
 #include "mlir/IR/BuiltinOps.h"
 #include "triton/Conversion/TritonGPUToLLVM/Passes.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
-#include "triton/Tools/Sys/GetEnv.hpp"
 
 namespace mlir::triton::gpu {
 #define GEN_PASS_DEF_TRITONGPUALLOCATEWARPGROUPS
