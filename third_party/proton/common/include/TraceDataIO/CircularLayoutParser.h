@@ -13,6 +13,8 @@ constexpr uint32_t kWordsPerEntry = 2;
 
 enum class ParseState { START, END, INIT };
 
+enum class MachineType { NVIDIA, AMD, UNKNOWN };
+
 struct CircularLayoutParserConfig : public ParserConfig {
   // The total number of unit (e.g., num of warps) in CTA
   size_t totalUnits = 0;
@@ -23,6 +25,8 @@ struct CircularLayoutParserConfig : public ParserConfig {
   size_t numBlocks = 0;
   // A vector of trace's uids
   std::vector<uint32_t> uidVec = {};
+  // Machine type that generated the trace
+  MachineType machine = MachineType::NVIDIA;
 };
 
 struct CircularLayoutParserResult {
@@ -83,7 +87,10 @@ struct ClockOverflowException : public ParserException {
 };
 
 std::shared_ptr<CircularLayoutParserResult>
-readCircularLayoutTrace(ByteSpan &buffer);
+readCircularLayoutTrace(ByteSpan &buffer, bool applyTimeShift = true);
+
+void timeShift(const CircularLayoutParserConfig &config,
+               std::shared_ptr<CircularLayoutParserResult> result);
 
 } // namespace proton
 
