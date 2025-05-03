@@ -213,10 +213,8 @@ static WarpSchedule getInitialSchedule(const PartitionScheme &scheme) {
       userPartition->insert(userOp);
     // Place the epilogue partition in the default warpgroup. The MMA and load
     // partitions shouldn't have tensor computations in them, which means they
-    // will get assigned just 1 warp each. Add an extra partition to pad the
-    // number of warps to the nearest warpgroup.
-    schedule.addPartition(0);
-    schedule.reorderPartitions({2, 1, 0, 3});
+    // will get assigned just 1 warp each.
+    schedule.reorderPartitions({2, 1, 0});
   }
 
   schedule.updatePartitions();

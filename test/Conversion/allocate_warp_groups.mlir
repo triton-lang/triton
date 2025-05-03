@@ -6,11 +6,11 @@ module attributes {"ttg.num-warps" = 4 : i32} {
 
 // -----
 
-// CHECK: module attributes {"ttg.num-warps" = 4 : i32, "ttg.total-num-warps" = 17 : i32}
+// CHECK: module attributes {"ttg.num-warps" = 4 : i32, "ttg.total-num-warps" = 20 : i32}
 module attributes {"ttg.num-warps" = 4 : i32} {
 
 tt.func @kernel() {
-  // CHECK: ttg.warp_specialize() attributes {warpGroupStartIds = array<i32: 16, 4, 12>}
+  // CHECK: ttg.warp_specialize() attributes {warpGroupStartIds = array<i32: 18, 4, 12, 16, 19>}
   ttg.warp_specialize()
   default {
     ttg.warp_yield
@@ -24,6 +24,8 @@ tt.func @kernel() {
   partition2() num_warps(4) {
     ttg.warp_return
   } : () -> ()
+  // CHECK: partition3() num_warps(2)
+  // CHECK: partition4() num_warps(1)
   tt.return
 }
 
@@ -31,11 +33,11 @@ tt.func @kernel() {
 
 // -----
 
-// CHECK: module attributes {"ttg.num-warps" = 2 : i32, "ttg.total-num-warps" = 11 : i32}
-module attributes {"ttg.num-warps" = 2 : i32} {
+// CHECK: module attributes {"ttg.num-warps" = 4 : i32, "ttg.total-num-warps" = 16 : i32}
+module attributes {"ttg.num-warps" = 4 : i32} {
 
 tt.func @two_warp_specialize() {
-  // CHECK: ttg.warp_specialize() attributes {warpGroupStartIds = array<i32: 2, 4>}
+  // CHECK: ttg.warp_specialize() attributes {warpGroupStartIds = array<i32: 12, 14, 4, 15>}
   ttg.warp_specialize()
   default {
     ttg.warp_yield
@@ -46,8 +48,10 @@ tt.func @two_warp_specialize() {
   partition1() num_warps(1) {
     ttg.warp_return
   } : () -> ()
+  // CHECK: partition2() num_warps(8)
+  // CHECK: partition3() num_warps(1)
 
-  // CHECK: ttg.warp_specialize() attributes {warpGroupStartIds = array<i32: 10, 2>}
+  // CHECK: ttg.warp_specialize() attributes {warpGroupStartIds = array<i32: 14, 4, 12, 15>}
   ttg.warp_specialize()
   default {
     ttg.warp_yield
