@@ -59,7 +59,7 @@ bool hasLatenciesAssigned(scf::ForOp forOp,
   for (auto &op : forOp.getBody()->without_terminator()) {
     if (opLatency.count(&op))
       return true;
-    if (op.getAttr("ttg.assigned_stage"))
+    if (op.getAttr(kAssignedStageAttrName))
       return true;
   }
   return false;
@@ -76,7 +76,7 @@ CoarseSchedule scheduleKeyOps(scf::ForOp forOp,
   for (auto &op : forOp.getBody()->without_terminator()) {
     if (opLatency.count(&op))
       latOps.push_back(&op);
-    if (op.getAttr("ttg.assigned_stage"))
+    if (op.getAttr(kAssignedStageAttrName))
       stagedOps.push_back(&op);
   }
   // If no latency ops, nothing to schedule
@@ -129,7 +129,7 @@ CoarseSchedule scheduleKeyOps(scf::ForOp forOp,
   }
 
   for (Operation *op : stagedOps) {
-    auto stageAttr = op->getAttrOfType<IntegerAttr>("ttg.assigned_stage");
+    auto stageAttr = op->getAttrOfType<IntegerAttr>(kAssignedStageAttrName);
     opToStage[op] = stageAttr.getInt();
   }
 
