@@ -227,6 +227,65 @@ sharedToLinearLayoutAMDRotating(ArrayRef<int64_t> shape,
   return combineCtaCgaWithShape(ctaLayout, shared.getCTALayout(), shape);
 }
 
+// Returns the layout of a single core matrix which tiles the nvmma layout
+LinearLayout getCoreMatrixLinearLayout(NVMMASharedEncodingAttr shared,
+                                       bool disableSwizzle) {
+  auto *ctx = shared.getContext();
+
+  int elemBitWidth = shared.getElementBitWidth();
+  int tileWidthBytes = shared.getSwizzlingByteWidth();
+  int vec = 128 / elemBitWidth;
+  int perPhase = 0;
+  int maxPhase = 0;
+  if (tileWidthBytes == 32) {
+    perPhase = 4;
+    maxPhase = 2;
+  } else if (tileWidthBytes == 64) {
+    perPhase = 2;
+    maxPhase = 4;
+  } else if (tileWidthBytes == 128) {
+    perPhase = 1;
+    maxPhase = 8;
+  }
+
+  int tileRows = 8;
+  int tileCols = 8 * tileWidthBytes / elemBitWidth;
+  bool isFp4Padded = shared.getFp4Padded();
+  int packingFactor = isFp4Padded ? 2 : 1;
+
+  std::vector<std::vector<int>> bases2D;
+  for (int col = 1; col < tileCols; col *= 2) {
+    if (isFp4Padded) {
+      // Each group of 16 offsets consists of 8 "real" and 8 "padded" offsets.
+      // We represent the padded layout by mapping 8 padded offsets to the same
+      // coordinates as the real ones. When computing the inverse of this LL,
+      // the offsets correspoding to the real ones are picked in the image by
+      // invertAndCompose.
+      int colPacked = col / 16 * 8 + col % 8;
+      bases2D.push_back({0, colPacked});
+    } else {
+      bases2D.push_back({0, col});
+    }
+  }
+  for (int row = 1; row < tileRows; row *= 2) {
+    if (disableSwizzle) {
+      bases2D.push_back({row, 0});
+    } else if (isFp4Padded) {
+      int colPadded = vec * ((row / perPhase) % maxPhase);
+      int colPacked = colPadded / 16 * 8 + colPadded % 8;
+      bases2D.push_back({row, colPacked});
+    } else {
+      bases2D.push_back({row, vec * ((row / perPhase) % maxPhase)});
+    }
+  }
+  auto outDimNames = standardOutDimNames(ctx, 2);
+  auto kRow = outDimNames[1];
+  auto kCol = outDimNames[0];
+  LinearLayout tileLayout =
+      LinearLayout({{S("offset"), bases2D}}, {kRow, kCol});
+  return tileLayout;
+}
+
 } // namespace
 
 LinearLayout nvmmaSharedToLinearLayout(ArrayRef<int64_t> shape,
@@ -247,91 +306,39 @@ LinearLayout nvmmaSharedToLinearLayout(ArrayRef<int64_t> shape,
 
   // Collapse all the outer dim into one. We will then create a layout for this
   // shape and reshape it to the original shape.
-  std::array<int64_t, 2> collapsedShapePerCTA = {shapePerCTA[batchDims],
-                                                 shapePerCTA[batchDims + 1]};
+  std::array<int64_t, 2> collapsedShapePerCTA{shapePerCTA[batchDims],
+                                              shapePerCTA[batchDims + 1]};
   for (int i = 0; i < batchDims; i++)
     collapsedShapePerCTA[0] *= shapePerCTA[i];
   if (shared.getTransposed()) {
     std::swap(collapsedShapePerCTA[0], collapsedShapePerCTA[1]);
   }
-  int elemBitWidth = shared.getElementBitWidth();
-  int tileWidthBytes = shared.getSwizzlingByteWidth();
-  int vec = 128 / elemBitWidth;
-  int perPhase = 0;
-  int maxPhase = 0;
-  if (tileWidthBytes == 32) {
-    perPhase = 4;
-    maxPhase = 2;
-  } else if (tileWidthBytes == 64) {
-    perPhase = 2;
-    maxPhase = 4;
-  } else if (tileWidthBytes == 128) {
-    perPhase = 1;
-    maxPhase = 8;
-  }
 
-  int tileRows = 8;
-  int tileCols = 8 * tileWidthBytes / elemBitWidth;
-  bool isFp4Padded = false;
-  if (auto sharedMMALayout =
-          dyn_cast<triton::gpu::NVMMASharedEncodingAttr>(shared)) {
-    if (sharedMMALayout.getFp4Padded()) {
-      isFp4Padded = true;
-    }
-  }
-  int packingFactor = isFp4Padded ? 2 : 1;
+  auto tileLayout = getCoreMatrixLinearLayout(shared, disableSwizzle);
+  auto outDimNames = standardOutDimNames(ctx, 2);
+  auto kRow = outDimNames[1];
+  auto kCol = outDimNames[0];
+  auto tileRows = tileLayout.getOutDimSize(kRow);
+  auto tileCols = tileLayout.getOutDimSize(kCol);
 
+  int packingFactor = shared.getFp4Padded() ? 2 : 1;
   if (collapsedShapePerCTA[1] * packingFactor < tileCols ||
       collapsedShapePerCTA[0] < tileRows) {
     llvm::errs() << "Illegal shared layout; expected collapsed shapePerCTA to "
                     "be at least ["
-                 << tileRows << ", " << tileCols << "], collapsedShapePerCTA: ["
-                 << collapsedShapePerCTA[0] << ", " << collapsedShapePerCTA[1]
-                 << "]\n";
+                 << tileRows << ", " << (tileCols / packingFactor)
+                 << "], collapsedShapePerCTA: [" << collapsedShapePerCTA[0]
+                 << ", " << collapsedShapePerCTA[1] << "]\n";
     llvm::report_fatal_error("Illegal shared layout");
   }
 
-  std::vector<std::vector<int>> bases2D;
-  for (int col = 1; col < tileCols; col *= 2) {
-    if (isFp4Padded) {
-      // Each group of 16 offsets consists of 8 "real" and 8 "padded" offsets.
-      // We represent the padded layout by mapping 8 padded offsets to the same
-      // coordinates as the real ones. When computing the inverse of this LL,
-      // the offsets correspoding to the real ones are picked in the image by
-      // invertAndCompose.
-      int colPacked = col / 16 * 8 + col % 8;
-      bases2D.push_back({0, colPacked});
-    } else {
-      bases2D.push_back({0, col});
-    }
-  }
-  for (int row = 1; row < tileRows; row *= 2) {
-    if (disableSwizzle) {
-      bases2D.push_back({row, 0});
-      continue;
-    }
-    if (isFp4Padded) {
-      int colPadded = vec * ((row / perPhase) % maxPhase);
-      int colPacked = colPadded / 16 * 8 + colPadded % 8;
-      bases2D.push_back({row, colPacked});
-    } else {
-      bases2D.push_back({row, vec * ((row / perPhase) % maxPhase)});
-    }
-  }
-
-  // Then distribute the remaining rows.
-  for (int row = tileRows; row < collapsedShapePerCTA[0]; row *= 2) {
-    bases2D.push_back({row, 0});
-  }
-
-  auto outDimNames = standardOutDimNames(ctx, 2);
-  std::reverse(outDimNames.begin(), outDimNames.end());
-  LinearLayout tileLayout = LinearLayout({{S("offset"), bases2D}}, outDimNames);
-  // Expand the layout to convert the whole shape per CTA.
-  llvm::SmallDenseMap<StringAttr, int64_t> namedShape;
-  namedShape[outDimNames[0]] = collapsedShapePerCTA[0];
-  namedShape[outDimNames[1]] = collapsedShapePerCTA[1];
-  tileLayout = ensureLayoutNotSmallerThan(tileLayout, namedShape);
+  // Distribute the remaining rows and cols.
+  auto kOffset = S("offset");
+  auto layout = tileLayout;
+  layout *= LinearLayout::identity1D(collapsedShapePerCTA[0] / tileRows,
+                                     kOffset, kRow);
+  layout *= LinearLayout::identity1D(collapsedShapePerCTA[1] / tileCols,
+                                     kOffset, kCol);
 
   // Reshape the layout to the N-D pre-transposed shape per CTA.
   SmallVector<int64_t> maybeTransposedShapePerCTA = shapePerCTA;
@@ -343,8 +350,7 @@ LinearLayout nvmmaSharedToLinearLayout(ArrayRef<int64_t> shape,
                 maybeTransposedShapePerCTA.begin() + 1,
                 maybeTransposedShapePerCTA.end());
   }
-  auto reshapedLayout =
-      reshapeLayout(ctx, tileLayout, maybeTransposedShapePerCTA);
+  auto reshapedLayout = reshapeLayout(ctx, layout, maybeTransposedShapePerCTA);
 
   if (shared.getTransposed()) {
     SmallVector<int> order = {rank - 1};

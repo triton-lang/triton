@@ -134,14 +134,19 @@ TMemMessageTraits getTMemMessageFromAtom(const TMemAccessAtom &atom,
   return m;
 }
 
-// Only allows half of the thread registers to be used for tensor memory access
-// to avoid register pressure. This ensures the largest tmem message width is
-// used for the workload without inducing spills.
-int getTMemMessageNarrowingFactor(const TMemAccessAtom &atom, int maxnreg) {
+// Narrow the TMEM message by reducing the number of registers per TMEM
+// instruction such that:
+// - No instruction uses more than half the available registers at a time.
+// - If the total number of registers required by the workload is more than half
+//   of the available registers, don't use the largest TMEM message.
+int getTMemMessageNarrowingFactor(const TMemAccessAtom &atom,
+                                  int workloadThreadRegs, int maxnreg) {
   const int allowedRegUsage = maxnreg / 2;
   int narrowingFactor = 1;
   while (getTMemMessageFromAtom(atom, narrowingFactor).numRegs >
-         allowedRegUsage) {
+             allowedRegUsage ||
+         workloadThreadRegs > allowedRegUsage) {
+    workloadThreadRegs /= 2;
     narrowingFactor *= 2;
   }
   return narrowingFactor;
@@ -381,7 +386,11 @@ void createWaitOpSt(Location loc, ConversionPatternRewriter &rewriter) {
 TMemMessageTraits selectTMemMessage(const TMemRuntimeInfo &info, int maxnreg) {
   auto atom = info.useStridedMessage ? TMemAccess16x32bx2 : TMemAccess32x32b;
 
-  int narrowingFactor = getTMemMessageNarrowingFactor(atom, maxnreg);
+  int totalRegsNeeded =
+      getEffectiveRegs(info.unpackedb16, info.useStridedMessage,
+                       info.numCols / info.numWarpGroups);
+  int narrowingFactor =
+      getTMemMessageNarrowingFactor(atom, totalRegsNeeded, maxnreg);
   auto narrowedMessage = getTMemMessageFromAtom(atom, narrowingFactor);
   narrowedMessage = constrainMessageFromWorkload(narrowedMessage, info,
                                                  narrowedMessage.numRegs);
