@@ -113,6 +113,18 @@ void WarpSchedule::insert(Partition *partition, Operation *op) {
   opToPartition[op] = partition;
 }
 
+bool WarpSchedule::isScheduled(Operation *op) const {
+  const Partition *partition = getPartition(op);
+  return partition && partition != getRootPartition();
+}
+
+bool WarpSchedule::trySchedule(Partition *partition, Operation *op) {
+  if (isScheduled(op))
+    return false;
+  insert(partition, op);
+  return true;
+}
+
 FailureOr<WarpSchedule> WarpSchedule::deserialize(scf::ForOp loop) {
   auto stages = loop->getAttrOfType<ArrayAttr>(kPartitionStagesAttrName);
   if (!stages) {

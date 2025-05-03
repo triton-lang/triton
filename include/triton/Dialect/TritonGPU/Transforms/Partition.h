@@ -85,6 +85,12 @@ public:
   // Get the root partition.
   const Partition *getRootPartition() const { return rootPartition.get(); }
 
+  // Return true if an operation is assigned to a partition.
+  bool isScheduled(Operation *op) const;
+  // Schedule an operation to a partition if it is not already scheduled. Return
+  // true if the operation was scheduled.
+  bool trySchedule(Partition *partition, Operation *op);
+
   // Deserialize a warp schedule from an `scf.for` op using the attributes
   // tagged on operations in its body.
   static FailureOr<WarpSchedule> deserialize(scf::ForOp loop);

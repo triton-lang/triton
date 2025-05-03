@@ -208,96 +208,96 @@ static bool hasDefPartition(scf::ForOp loop, Operation *op,
   return false;
 }
 
+// Recursively schedule the dependencies of an operation, stopping when
+// encountering an operation that is already assigned.
+static void scheduleDependencies(scf::ForOp loop, WarpSchedule &schedule,
+                                 Partition *partition, Operation *op) {
+  SmallVector<Value> deps;
+  for (Value value : getNestedOperands(op)) {
+    if (isa<RankedTensorType, MemDescType>(value.getType()))
+      deps.push_back(value);
+  }
+
+  while (!deps.empty()) {
+    Value dep = deps.pop_back_val();
+
+    if (auto arg = dyn_cast<BlockArgument>(dep)) {
+      if (arg.getOwner() == loop.getBody() && arg != loop.getInductionVar())
+        deps.push_back(loop.getYieldedValues()[arg.getArgNumber() - 1]);
+      continue;
+    }
+
+    Operation *defOp =
+        loop.getBody()->findAncestorOpInBlock(*dep.getDefiningOp());
+    if (!defOp || !schedule.trySchedule(partition, defOp))
+      continue;
+    llvm::append_range(deps, getNestedOperands(defOp));
+  }
+}
+
+// Recursively schedule the users of an operation, stopping when
+// encountering an operation that is already assigned.
+static void scheduleUsers(scf::ForOp loop, WarpSchedule &schedule,
+                          Partition *partition, Operation *op) {
+  SmallVector<OpOperand *> uses;
+  for (OpOperand &use : op->getUses())
+    uses.push_back(&use);
+  while (!uses.empty()) {
+    OpOperand *use = uses.pop_back_val();
+    Operation *user = loop.getBody()->findAncestorOpInBlock(*use->getOwner());
+
+    if (user == loop.getBody()->getTerminator()) {
+      for (OpOperand &use :
+           loop.getRegionIterArg(use->getOperandNumber()).getUses())
+        uses.push_back(&use);
+      continue;
+    }
+
+    if (!schedule.trySchedule(partition, user))
+      continue;
+    for (OpOperand &use : user->getUses())
+      uses.push_back(&use);
+  }
+}
+
 // Given a partitioning scheme, determine an initial schedule by performing a
 // first-order partition assignment to the operations in the scheme and its
 // users and/or dependencies. This sets up the initial partitioning of the ops.
 static WarpSchedule getInitialSchedule(const PartitionScheme &scheme,
                                        scf::ForOp loop) {
   WarpSchedule schedule;
-  DenseSet<Operation *> scheduled;
-  auto scheduleOp = [&](Partition *partition, Operation *op) {
-    if (scheduled.insert(op).second) {
-      schedule.insert(partition, op);
-      return true;
-    }
-    return false;
-  };
 
-  auto scheduleDependencies = [&](Partition *partition, Operation *op) {
-    SmallVector<Value> deps;
-    for (Value value : getNestedOperands(op)) {
-      if (isa<RankedTensorType, MemDescType>(value.getType()))
-        deps.push_back(value);
-    }
-
-    while (!deps.empty()) {
-      Value dep = deps.pop_back_val();
-
-      if (auto arg = dyn_cast<BlockArgument>(dep)) {
-        if (arg.getOwner() == loop.getBody() && arg != loop.getInductionVar())
-          deps.push_back(loop.getYieldedValues()[arg.getArgNumber() - 1]);
-        continue;
-      }
-
-      Operation *defOp =
-          loop.getBody()->findAncestorOpInBlock(*dep.getDefiningOp());
-      if (!defOp || !scheduleOp(partition, defOp))
-        continue;
-      llvm::append_range(deps, getNestedOperands(defOp));
-    }
-  };
-
-  auto scheduleUsers = [&](Partition *partition, Operation *op) {
-    SmallVector<OpOperand *> uses;
-    for (OpOperand &use : op->getUses())
-      uses.push_back(&use);
-    while (!uses.empty()) {
-      OpOperand *use = uses.pop_back_val();
-      Operation *user = loop.getBody()->findAncestorOpInBlock(*use->getOwner());
-
-      if (user == loop.getBody()->getTerminator()) {
-        for (OpOperand &use :
-             loop.getRegionIterArg(use->getOperandNumber()).getUses())
-          uses.push_back(&use);
-        continue;
-      }
-
-      if (!scheduleOp(partition, user))
-        continue;
-      for (OpOperand &use : user->getUses())
-        uses.push_back(&use);
-    }
-  };
-
+  // Start by creating the default partition, a partition for for all loads, and
+  // a partition for all MMAs.
   Partition *defaultPartition = schedule.addPartition(0);
   Partition *mmaPartition = schedule.addPartition(1);
   Partition *loadPartition = schedule.addPartition(0);
 
   for (const PipelinedLoad &load : scheme.loads) {
-    scheduleOp(loadPartition, load.loadOp);
+    schedule.trySchedule(loadPartition, load.loadOp);
     for (Operation *allocOp : load.allocOps)
-      scheduleOp(loadPartition, allocOp);
+      schedule.trySchedule(loadPartition, allocOp);
   }
 
   for (const PipelinedMMA &mma : scheme.mmas) {
-    scheduleOp(mmaPartition, mma.mmaOp);
+    schedule.trySchedule(mmaPartition, mma.mmaOp);
     if (mma.storeOp)
-      scheduleOp(mmaPartition, mma.storeOp);
+      schedule.trySchedule(mmaPartition, mma.storeOp);
     for (Operation *viewOp : mma.operandViews)
-      scheduleOp(mmaPartition, viewOp);
+      schedule.trySchedule(mmaPartition, viewOp);
   }
 
   // Propagate defs of exp.
   for (math::Exp2Op exp : scheme.exps) {
-    scheduleOp(defaultPartition, exp);
-    scheduleDependencies(defaultPartition, exp);
+    schedule.trySchedule(defaultPartition, exp);
+    scheduleDependencies(loop, schedule, defaultPartition, exp);
   }
 
   // Propagate users of loads and MMAs.
   for (const PipelinedLoad &load : scheme.loads) {
-    scheduleUsers(defaultPartition, load.loadOp);
+    scheduleUsers(loop, schedule, defaultPartition, load.loadOp);
     for (Operation *allocOp : load.allocOps)
-      scheduleUsers(defaultPartition, allocOp);
+      scheduleUsers(loop, schedule, defaultPartition, allocOp);
   }
 
   SmallVector<Partition *> userPartitions{defaultPartition};
@@ -305,10 +305,10 @@ static WarpSchedule getInitialSchedule(const PartitionScheme &scheme,
     userPartitions.push_back(schedule.addPartition(userPartitions.size()));
   }
   for (auto [mma, userPartition] : llvm::zip(scheme.mmas, userPartitions)) {
-    scheduleUsers(userPartition, mma.mmaOp);
+    scheduleUsers(loop, schedule, userPartition, mma.mmaOp);
   }
   for (const PipelinedMMA &mma : scheme.mmas) {
-    scheduleDependencies(defaultPartition, mma.mmaOp);
+    scheduleDependencies(loop, schedule, defaultPartition, mma.mmaOp);
   }
 
   schedule.updatePartitions();
@@ -325,6 +325,7 @@ struct OpCluster {
 struct OpClusters : public llvm::MapVector<Operation *, OpCluster *> {
   using MapVector::MapVector;
 
+  // Get or create a new cluster for the operation.
   OpCluster *getOrCreate(Operation *op) {
     OpCluster *&cluster = (*this)[op];
     if (!cluster) {
@@ -332,6 +333,17 @@ struct OpClusters : public llvm::MapVector<Operation *, OpCluster *> {
       cluster->ops.insert(op);
     }
     return cluster;
+  }
+  // Merge two clusters.
+  void merge(OpCluster *dst, OpCluster *src) {
+    dst->ops.insert_range(src->ops);
+    dst->defPartitions.insert_range(src->defPartitions);
+    dst->sinkPartitions.insert_range(src->sinkPartitions);
+    for (Operation *op : src->ops)
+      (*this)[op] = dst;
+    src->ops.clear();
+    src->defPartitions.clear();
+    src->sinkPartitions.clear();
   }
 
   SmallVector<std::unique_ptr<OpCluster>> clusters;
@@ -345,8 +357,7 @@ void propagatePartitions(scf::ForOp loop, WarpSchedule &schedule) {
   for (Partition &partition : schedule.getPartitions()) {
     auto defCallback = [&](OpResult result, unsigned distance) {
       Operation *defOp = result.getDefiningOp();
-      Partition *defPartition = schedule.getPartition(defOp);
-      if ((!defPartition || defPartition == schedule.getRootPartition()) &&
+      if (!schedule.isScheduled(defOp) &&
           hasDefPartition(loop, defOp, schedule)) {
         // Add the current partition as a sink to the cluster.
         opClusters.getOrCreate(defOp)->sinkPartitions.insert(&partition);
@@ -355,11 +366,10 @@ void propagatePartitions(scf::ForOp loop, WarpSchedule &schedule) {
     schedule.iterateDefs(loop, &partition, defCallback);
 
     auto useCallback = [&](OpResult result, OpOperand &use, unsigned distance) {
-      Partition *usePartition = schedule.getPartition(use.getOwner());
-      if (!usePartition || usePartition == schedule.getRootPartition()) {
+      Operation *user = use.getOwner();
+      if (!schedule.isScheduled(user)) {
         // Add the current partition as a def to the cluster.
-        opClusters.getOrCreate(use.getOwner())
-            ->defPartitions.insert(&partition);
+        opClusters.getOrCreate(user)->defPartitions.insert(&partition);
       }
     };
     schedule.iterateUses(loop, &partition, useCallback);
@@ -373,10 +383,9 @@ void propagatePartitions(scf::ForOp loop, WarpSchedule &schedule) {
     OpCluster *cluster = opClusters.find(op)->second;
     iterateDefs(loop, op, [&](OpResult def) {
       Operation *defOp = def.getDefiningOp();
-      Partition *defPartition = schedule.getPartition(defOp);
-      if (defPartition && defPartition != schedule.getRootPartition()) {
+      if (schedule.isScheduled(defOp)) {
         // Found an input edge from a scheduled partition. Add this as a def.
-        cluster->defPartitions.insert(defPartition);
+        cluster->defPartitions.insert(schedule.getPartition(defOp));
       } else {
         if (!hasDefPartition(loop, defOp, schedule))
           return;
@@ -389,20 +398,12 @@ void propagatePartitions(scf::ForOp loop, WarpSchedule &schedule) {
           worklist.push_back(defOp);
         } else if (defCluster != cluster) {
           // Merge clusters. Merge the def cluster into the current one.
-          cluster->ops.insert_range(defCluster->ops);
-          cluster->defPartitions.insert_range(defCluster->defPartitions);
-          cluster->sinkPartitions.insert_range(defCluster->sinkPartitions);
-          OpCluster *oldCluster = defCluster;
-          for (Operation *op : oldCluster->ops)
-            opClusters[op] = cluster;
-          oldCluster->ops.clear();
-          oldCluster->defPartitions.clear();
-          oldCluster->sinkPartitions.clear();
+          opClusters.merge(cluster, defCluster);
         }
       }
       iterateUsers(loop, op, [&](Operation *user) {
-        Partition *userPartition = schedule.getPartition(user);
-        if (userPartition && userPartition != schedule.getRootPartition()) {
+        if (schedule.isScheduled(user)) {
+          Partition *userPartition = schedule.getPartition(user);
           cluster->sinkPartitions.insert(userPartition);
           return;
         }
@@ -426,12 +427,8 @@ void propagatePartitions(scf::ForOp loop, WarpSchedule &schedule) {
     if (cluster.ops.empty())
       continue;
     assert(!cluster.defPartitions.empty());
-#ifndef NDEBUG
-    for (Operation *op : cluster.ops) {
-      Partition *partition = schedule.getPartition(op);
-      assert(!partition || partition == schedule.getRootPartition());
-    }
-#endif
+    assert(llvm::all_of(
+        cluster.ops, [&](Operation *op) { return !schedule.isScheduled(op); }));
 
     // If there are multiple def or sink partitions, don't know what to do.
     // Assign the whole cluster to its own partition.
