@@ -36,10 +36,7 @@ tt.func @matmul_change_desc_in_prologue(
   // BASE-COUNT-2: tt.make_tensor_descriptor
   // PIPELINE-COUNT-2: ttg.global_scratch_alloc {alignment = 128 : i32, nbytes = 512 : i32}
   // PIPELINE-COUNT-2: tt.experimental_tensormap_create
-  // CHECK-LABEL: partition2
-  // CHECK-SAME: num_warps(1)
-  // BASE-NOT: tt.make_tensor_descriptor
-  // PIPELINE-NOT: tt.experimental_tensormap_create
+  // CHECK-NOT: partition2
   scf.for %k = %c0_i32 to %k_tiles step %c1_i32 iter_args(%acc = %zero, %flag = %true, %a_desc = %a_desc_undef, %b_desc = %b_desc_undef) -> (tensor<128x128xf32, #acc_layout>, i1, !tt.tensordesc<tensor<128x64xf16, #shared>>, !tt.tensordesc<tensor<64x128xf16, #shared>>) : i32 {
     %do_prologue = "prologue_cond"(%k) : (i32) -> i1
     %cur_a_desc, %cur_b_desc = scf.if %do_prologue -> (!tt.tensordesc<tensor<128x64xf16, #shared>>, !tt.tensordesc<tensor<64x128xf16, #shared>>) {
@@ -90,8 +87,7 @@ tt.func @matmul_tma_acc_with_conditional_def_and_use(
   // CHECK-SAME: num_warps(2)
   // CHECK: [[INDICES:%.*]] = tt.splat %{{.*}} : i32 -> tensor<128xi32,
   // CHECK: ttng.async_tma_gather %{{.*}}[[[INDICES]],
-  // CHECK-LABEL: partition2
-  // CHECK-SAME: num_warps(1)
+  // CHECK-NOT: partition2
   scf.for %k = %c0_i32 to %k_tiles step %c1_i32 iter_args(%acc = %zero, %flag = %true) -> (tensor<128x128xf32, #acc_layout>, i1) : i32 {
     %off_m, %off_n, %off_k = "get_offsets"(%k) : (i32) -> (i32, i32, i32)
     %indices = tt.splat %off_m : i32 -> tensor<128xi32, #indices_layout>

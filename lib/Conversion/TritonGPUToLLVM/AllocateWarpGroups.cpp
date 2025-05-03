@@ -21,6 +21,7 @@ static void padToMaxWarpGroups(WarpSpecializeOp op, int numExtraWarpGroups) {
   int warpsToAdd = numExtraWarpGroups * 4 - numExtraWarps;
   assert(warpsToAdd >= 0);
 
+  // Fill it with powers of 2.
   SmallVector<int> paddingPartitionSizes;
   while (warpsToAdd > 0) {
     int paddingSize = llvm::NextPowerOf2(warpsToAdd) / 2;
@@ -47,6 +48,8 @@ static void padToMaxWarpGroups(WarpSpecializeOp op, int numExtraWarpGroups) {
   }
   op.setPartitionNumWarps(partitionNumWarps);
 
+  // Set the requested registers to low for the padded partitions that do
+  // nothing.
   if (auto reqRegs = op.getRequestedRegisters()) {
     SmallVector<int32_t> newReqRegs(*reqRegs);
     newReqRegs.append(paddingPartitionSizes.size(), 16);
@@ -87,6 +90,7 @@ struct AllocateWarpGroups
             mod->getAttrOfType<IntegerAttr>(AttrMaxRegistersName)) {
       maxnreg = maxnregAttr.getInt();
     } else {
+      // Assume the user wants to use all 64K registers.
       maxnreg = (64 * 1024) / (baseNumWarps + numExtraWarpGroups * 4) /
                 threadsPerWarp;
       maxnreg = maxnreg / 8 * 8;
