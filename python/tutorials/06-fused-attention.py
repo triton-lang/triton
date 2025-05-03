@@ -284,7 +284,8 @@ def keep_tma(conf):
     return True
 
 
-@triton.autotune(configs=list(filter(keep_tma, configs_tma)), key=["N_CTX", "HEAD_DIM", "FP8_OUTPUT", "warp_specialize"])
+@triton.autotune(configs=list(filter(keep_tma, configs_tma)),
+                 key=["N_CTX", "HEAD_DIM", "FP8_OUTPUT", "warp_specialize"])
 @triton.jit
 def _attn_fwd_tma(sm_scale, M,  #
                   Z, H, desc_q, desc_k, desc_v, desc_o, N_CTX,  #
@@ -769,7 +770,8 @@ for mode in ["fwd", "bwd"]:
                     (["Flash-2"] if HAS_FLASH else []),
                     styles=[("red", "-"), ("blue", "-"), ("green", "-")],
                     ylabel="TFLOPS",
-                    plot_name=f"fused-attention-batch{BATCH}-head{N_HEADS}-d{HEAD_DIM}-{mode}-causal={causal}-warp_specialize={warp_specialize}",
+                    plot_name=
+                    f"fused-attention-batch{BATCH}-head{N_HEADS}-d{HEAD_DIM}-{mode}-causal={causal}-warp_specialize={warp_specialize}",
                     args={
                         "H": N_HEADS,
                         "BATCH": BATCH,
