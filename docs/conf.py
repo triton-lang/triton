@@ -156,7 +156,7 @@ smv_prefer_remote_refs = False
 extensions += ['sphinx_gallery.gen_gallery']
 
 sphinx_gallery_conf = {
-    'examples_dirs': '../tutorials/',
+    'examples_dirs': '../python/tutorials/',
     'gallery_dirs': 'getting-started/tutorials',
     'filename_pattern': '',
     'ignore_pattern': r'(__init__\.py|11.*.py)',
