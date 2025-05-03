@@ -55,9 +55,6 @@ void hoistOpsBefore(Block *block, Block::iterator it,
 bool loopHasDistGreaterThanOne(scf::ForOp forOp);
 bool isOuterLoop(scf::ForOp forOp);
 
-Value getPredMask(RewriterBase &rewriter, Type typeLike, Value currentMask,
-                  Value pred);
-
 /// Function to mask operations during scheduling.
 Operation *predicateOp(RewriterBase &rewriter, Operation *op, Value pred);
 
