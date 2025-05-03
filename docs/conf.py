@@ -43,7 +43,7 @@ def get_cmake_dir():
     plat_name = sysconfig.get_platform()
     python_version = sysconfig.get_python_version()
     dir_name = f"cmake.{plat_name}-{sys.implementation.name}-{python_version}"
-    cmake_dir = Path("../") / dir_name
+    cmake_dir = Path("../build") / dir_name
     return cmake_dir
 
 
