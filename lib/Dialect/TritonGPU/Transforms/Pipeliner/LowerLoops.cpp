@@ -202,9 +202,6 @@ int getDefUseStageDiff(Operation *op, scf::ForOp forOp,
   // the load. The stage diff needs to account for the furthest wait.
   for (Operation *topLevelUser : topLevelWaitUsers) {
     int _useStage = schedule[topLevelUser].first;
-    // If the wait will be scheduled before the def, we can treat it as it is
-    // in previous stage.
-    // if (schedule.isOpInEarlierCluster(topLevelUser, op)) --_useStage;
     useStage = std::max(_useStage, useStage.value_or(_useStage));
   }
   if (!useStage)

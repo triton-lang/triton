@@ -280,7 +280,7 @@ public:
       if (auto mma = dyn_cast<ttng::MMAv5OpInterface>(&op)) {
         // Try to push out the wait by one stage even if the operands are not
         // pipelineable, but we know where the loads are scheduled, so we can
-        // place the wait right before the load.
+        // place the wait right before the loads.
         auto pipeHelper = ttng::MMAv5PipelineableOperandsHelper(
             mma, forOp, isLoadToBePipelined);
         bool pipelineable = pipeHelper.isPipelineable ||
