@@ -1057,6 +1057,40 @@ void LayoutRematerialization::hoistConvertIntoConditionals() {
   }
 }
 
+static bool isExpensiveMathOp(Operation *op) {
+  // These operations are either multiple instructions or have throughput
+  // lower than 16 according to the arithmetic instructions table in:
+  // https://docs.nvidia.com/cuda/cuda-c-programming-guide/index.html#arithmetic-instructions
+  return isa<arith::DivFOp, math::ErfcOp, math::SinhOp, math::CoshOp,
+             math::TanhOp, math::AsinhOp, math::AcoshOp, math::AtanhOp,
+             math::CtPopOp, math::CountLeadingZerosOp,
+             math::CountTrailingZerosOp, math::ExpOp, math::Exp2Op,
+             math::ExpM1Op, math::LogOp, math::Log2Op, math::Log10Op,
+             math::Log1pOp, math::SinOp, math::CosOp, math::TanOp, math::AsinOp,
+             math::AcosOp, math::AtanOp, math::Atan2Op, math::PowFOp,
+             math::SqrtOp, math::RsqrtOp, math::ErfOp, math::CbrtOp>(op);
+}
+
+static int64_t getByteCount(Value result, int64_t minElementCount = 0,
+                            int64_t minBitWidth = 0) {
+  int64_t elementCount = 0;
+  int64_t dtypeBitWidth = 0;
+  if (auto tensorTy = dyn_cast<RankedTensorType>(result.getType())) {
+    elementCount = tensorTy.getNumElements();
+    auto elemType = tensorTy.getElementType();
+    if (elemType.isIntOrFloat()) {
+      dtypeBitWidth = elemType.getIntOrFloatBitWidth();
+    }
+  }
+  if (elementCount < minElementCount) {
+    elementCount = minElementCount;
+  }
+  if (dtypeBitWidth < minBitWidth) {
+    dtypeBitWidth = minBitWidth;
+  }
+  return (elementCount * dtypeBitWidth) >> 3;
+}
+
 void LayoutRematerialization::backwardRematerialization(
     ConvertLayoutOp convertOp) {
   // DotOperand is hoisted by hoistDotOperand
@@ -1088,12 +1122,112 @@ void LayoutRematerialization::backwardRematerialization(
     return;
   }
 
+  // 2. Determine whether rematerialisation is beneficial.
+
+  // Identify all operations in the slice
+  SetVector<Operation *> sliceOps;
+  for (Value v : slice) {
+    if (Operation *op = v.getDefiningOp()) {
+      sliceOps.insert(op);
+    }
+  }
+
+  // Compute single-use operations
+  DenseMap<Operation *, bool> isSingleUse;
+  std::function<bool(Operation *)> isOpSingleUse;
+  isOpSingleUse = [&](Operation *op) -> bool {
+    // lookup in memoization array:
+    auto it = isSingleUse.find(op);
+    if (it != isSingleUse.end()) {
+      return it->second;
+    }
+
+    bool singleUse = true;
+
+    for (Value result : op->getResults()) {
+      for (Operation *user : result.getUsers()) {
+        if (user == convertOp) {
+          continue;
+        }
+        if (sliceOps.contains(user)) {
+          if (!isOpSingleUse(user)) {
+            singleUse = false;
+            break;
+          }
+        } else {
+          singleUse = false;
+          break;
+        }
+      }
+      if (!singleUse) {
+        break;
+      }
+    }
+
+    // insert into memoization array:
+    isSingleUse[op] = singleUse;
+    return singleUse;
+  };
+
+  // Measure the number of bytes that we're manipulating with the
+  // ConvertLayoutOp. We pessimistically assume that we round-trip
+  // through shared memory and that we cannot vectorise sub-register
+  // loads/stores, so we set a minimum element count of 32 (the warp
+  // size and number of shared memory banks) and minimum bitwidth of
+  // 32 (the width per bank of the shared memory load/store unit).
+  int64_t convertLayoutBytes = getByteCount(convertOp.getSrc(), 32, 32);
+
+  // We measure costs in standardised milli-SM-cycles. This gives:
+  // smem load/store:    8 * byte count
+  // synchronisation:    1024 (assuming 4 warps per block)
+  int64_t convertLayoutCost = 16 * convertLayoutBytes + 1024;
+  int64_t rematerialisationCost = 0;
+
+  // Evaluate single-use status for every operation in slice
+  for (Operation *op : sliceOps) {
+    auto dialect = op->getDialect();
+    if (isOpSingleUse(op)) {
+      // when we rematerialise, this operation does not get duplicated
+      // so it does not contribute to our cost model:
+      continue;
+    } else if (isa<arith::ConstantOp>(op)) {
+      // special-case: arith.constant has zero cost
+      continue;
+    } else if (isa<LoadOp>(op)) {
+      // optimistically assume L1-cached:
+      for (Value result : op->getResults()) {
+        rematerialisationCost += 8 * getByteCount(result);
+      }
+    } else if (isa<arith::ArithDialect, math::MathDialect>(dialect)) {
+      // this is an arithmetic operation; we distinguish between cheap
+      // operations (such as floating point add/mul which can be fused
+      // as halves of a single-cycle FMA instruction) and expensive
+      // operations which use the special function unit and/or involve
+      // multiple instructions.
+      int64_t multiplier = isExpensiveMathOp(op) ? 8 : 1;
+      for (Value result : op->getResults()) {
+        rematerialisationCost += multiplier * getByteCount(result);
+      }
+    }
+  }
+
+  LLVM_DEBUG({
+    DBGS() << "  convert layout cost: " << convertLayoutCost << "\n";
+    DBGS() << "  rematerialisation cost: " << rematerialisationCost << "\n";
+  });
+
+  if (rematerialisationCost > convertLayoutCost) {
+    LDBG("  skipped rematerialization due to higher cost");
+    return;
+  }
+
   LLVM_DEBUG({
     DBGS() << "  remat convert op " << convertOp << '\n';
     for (Value v : slice)
       DBGS() << "    " << v << '\n';
   });
-  // 2. Rewrite the slice.
+
+  // 3. Rewrite the slice.
   rewriteSlice(slice, layout, convertOp);
 }
 
