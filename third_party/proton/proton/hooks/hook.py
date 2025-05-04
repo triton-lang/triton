@@ -1,14 +1,15 @@
 from triton.compiler import LazyDict
 from abc import abstractmethod
-from typing import Dict, Any, Optional, Set
+from typing import Dict, Any, Optional
 from collections import defaultdict
 from triton.compiler.compiler import CompiledKernel
 
 
 class Hook:
+    priority: int = 0
 
     @abstractmethod
-    def init_handle(self, function: Any, module: Any, metadata_group: Dict[str, str]) -> None:
+    def init_handle(self, module: Any, function: Any, name: str, metadata_group: Dict[str, str]) -> None:
         raise NotImplementedError
 
     @abstractmethod
@@ -30,14 +31,14 @@ class Hook:
 
 class HookManager:
     # active hooks
-    active_hooks: Set[Hook] = set()
+    active_hooks: list[Hook] = []
     # session_id -> (hook_type -> active)
     session_hooks: Dict[int, Dict[Hook, bool]] = defaultdict(lambda: defaultdict(bool))
 
     @staticmethod
-    def init_handle(function: Any, module: Any, metadata_group: Dict[str, str]) -> None:
+    def init_handle(module: Any, function: Any, name: str, metadata_group: Dict[str, str]) -> None:
         for hook in HookManager.active_hooks:
-            hook.init_handle(function, module, metadata_group)
+            hook.init_handle(module, function, name, metadata_group)
 
     @staticmethod
     def enter(lazy_dict: LazyDict) -> None:
@@ -54,7 +55,9 @@ class HookManager:
         for hook in HookManager.session_hooks[session]:
             if hook not in HookManager.active_hooks:
                 hook.activate()
-                HookManager.active_hooks.add(hook)
+                HookManager.active_hooks.append(hook)
+            # Sort active_hooks by priority
+            HookManager.active_hooks.sort(key=lambda x: x.priority, reverse=True)
             HookManager.session_hooks[session][hook] = True
 
     @staticmethod
@@ -71,7 +74,10 @@ class HookManager:
         HookManager.session_hooks[session][hook] = True
         if hook not in HookManager.active_hooks:
             hook.activate()
-            HookManager.active_hooks.add(hook)
+            HookManager.active_hooks.append(hook)
+        # Sort active_hooks by priority
+        HookManager.active_hooks.sort(key=lambda x: x.priority, reverse=True)
+        # Register the heads
         if CompiledKernel.launch_enter_hook is None:
             CompiledKernel.launch_enter_hook = HookManager.enter
             CompiledKernel.launch_exit_hook = HookManager.exit
@@ -96,6 +102,7 @@ class HookManager:
                 if not any(session_hooks[hook] for session_hooks in HookManager.session_hooks.values()):
                     hook.deactivate()
                     HookManager.active_hooks.remove(hook)
+        # Unregister the heads
         if not HookManager.active_hooks:
             CompiledKernel.launch_enter_hook = None
             CompiledKernel.launch_exit_hook = None

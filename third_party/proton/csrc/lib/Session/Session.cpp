@@ -221,34 +221,38 @@ void SessionManager::exitOp(const Scope &scope) {
                    [&](auto *opInterface) { opInterface->exitOp(scope); });
 }
 
-void SessionManager::initFunctionScopeIds(
-    uint64_t functionId,
+void SessionManager::initFunctionMetadata(
+    uint64_t functionId, const std::string &functionName,
     const std::vector<std::pair<size_t, std::string>> &scopeIdNames,
-    const std::vector<std::pair<size_t, size_t>> &scopeIdParents) {
+    const std::vector<std::pair<size_t, size_t>> &scopeIdParents,
+    const std::string &metadataPath) {
   std::lock_guard<std::mutex> lock(mutex);
   executeInterface(instrumentationInterfaceCounts,
                    [&](auto *instrumentationInterface) {
-                     instrumentationInterface->initFunctionScopeIds(
-                         functionId, scopeIdNames, scopeIdParents);
+                     instrumentationInterface->initFunctionMetadata(
+                         functionId, functionName, scopeIdNames, scopeIdParents,
+                         metadataPath);
                    });
 }
 
-void SessionManager::enterInstrumentedOp(uint64_t functionId, uint8_t *buffer,
-                                         size_t size) {
+void SessionManager::enterInstrumentedOp(uint64_t streamId, uint64_t functionId,
+                                         uint8_t *buffer, size_t size) {
   std::lock_guard<std::mutex> lock(mutex);
-  executeInterface(
-      instrumentationInterfaceCounts, [&](auto *instrumentationInterface) {
-        instrumentationInterface->enterInstrumentedOp(functionId, buffer, size);
-      });
+  executeInterface(instrumentationInterfaceCounts,
+                   [&](auto *instrumentationInterface) {
+                     instrumentationInterface->enterInstrumentedOp(
+                         streamId, functionId, buffer, size);
+                   });
 }
 
-void SessionManager::exitInstrumentedOp(uint64_t functionId, uint8_t *buffer,
-                                        size_t size) {
+void SessionManager::exitInstrumentedOp(uint64_t streamId, uint64_t functionId,
+                                        uint8_t *buffer, size_t size) {
   std::lock_guard<std::mutex> lock(mutex);
-  executeInterface(
-      instrumentationInterfaceCounts, [&](auto *instrumentationInterface) {
-        instrumentationInterface->exitInstrumentedOp(functionId, buffer, size);
-      });
+  executeInterface(instrumentationInterfaceCounts,
+                   [&](auto *instrumentationInterface) {
+                     instrumentationInterface->exitInstrumentedOp(
+                         streamId, functionId, buffer, size);
+                   });
 }
 
 void SessionManager::addMetrics(
