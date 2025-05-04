@@ -39,6 +39,6 @@ def test_op(M, N, limit, device, alpha=0.5):
     # initialize data
     x = alloc_rand([n_tokens, N], device=device, dtype=torch.bfloat16)
     precision_config = PrecisionConfig(limit=limit)
-    tri_y = swiglu(x, alpha, precision_config, expt_data, n_expts_tot)
+    tri_y = swiglu(x, alpha, precision_config, routing_data, n_expts_tot)
     ref_y = swiglu_torch(x, alpha, precision_config)
     assert_close(tri_y, ref_y)
