@@ -8,6 +8,7 @@ files = [
     "python/triton/knobs.py",
     "python/triton/_utils.py",
     "python/test/unit/test_knobs.py",
+    "python/test/unit/runtime/test_compilation_listener.py",
 ]
 exclude = ["/build/"]
 follow_imports = "silent"
