@@ -1,5 +1,5 @@
 import functools
-from typing import Dict, List, Optional, Tuple, Union, Any
+from typing import Dict, Optional, Union, Any
 
 import triton
 from triton._C.libtriton import ir
@@ -24,13 +24,15 @@ class CudaAllocator:
         self.instrumentation_hook = instrumentation_hook
 
     def __call__(self, size: int, alignment: int, stream: Optional[int]):
-        # Ensure proper alignment and minimum size
-        # `alignment` and `size` are specified by the instrumentation engine to specify the minimum required
-        # alignment and size of the buffer.
-        # Then, we make it match the default profile buffer alignment and size here, taking the maximum of the two.
-        alignment = max(alignment, self.instrumentation_hook.profile_buffer_alignment)
+        if alignment != self.instrumentation_hook.profile_buffer_alignment:
+            raise RuntimeError(
+                f"Alignment mismatch: {alignment} != {self.instrumentation_hook.profile_buffer_alignment}")
         aligned_size = (size + alignment - 1) // alignment * alignment
-        aligned_size = max(aligned_size, self.instrumentation_hook.profile_buffer_size)
+        # Note: profile_buffer_size may be smaller than the aligned size if the kernel launches many blocks
+        # and the host CPU cannot store all profiling data in memory. This streaming mode is not yet implemented.
+        # In the future, we should support copying data incrementally from device to host to enable
+        # more efficient profiling data processing, rather than relying solely on post-processing.
+        aligned_size = min(aligned_size, self.instrumentation_hook.profile_buffer_size)
 
         # Create the buffer
         import torch
@@ -113,6 +115,7 @@ def _interpret_mode(mode_obj: Union[str, mode.InstrumentationMode]) -> mode.Inst
 
 
 class InstrumentationHook(Hook):
+    priority: int = 0
     # It's important to note that only one instance of the instrumentation hook can be active at a time.
     active_count: int = 0
     enable_host_buffer: bool = False
@@ -122,8 +125,6 @@ class InstrumentationHook(Hook):
 
     def __init__(self, mode_obj: Union[None, str, mode.InstrumentationMode]):
         # Mapping of function objects to their scope ID pairs
-        self.function_scope_id_names: Dict[Any, List[Tuple[int, str]]] = {}
-        self.function_scope_id_parents: Dict[Any, List[Tuple[int, int]]] = {}
         self.mode: mode.InstrumentationMode = _interpret_mode(mode_obj)
 
         self.allocator = CudaAllocator(self)
@@ -216,42 +217,42 @@ class InstrumentationHook(Hook):
         # Reset the buffer reference
         self.buffer = None
 
-    def init_handle(self, function: Any, module: Any, metadata_group: Dict[str, str]) -> None:
-        if function and function not in self.function_scope_id_names:
-            # Find the IR path in metadata
-            ir_path = next((path for key, path in metadata_group.items() if key.endswith(("ttgir", "ttir"))), None)
+    def init_handle(self, module: Any, function: Any, name: str, metadata_group: Dict[str, str]) -> None:
+        if not function:
+            return
 
-            if ir_path:
-                context = ir.context()
-                ir.load_dialects(context)
-                triton_proton.load_dialects(context)
-                module = ir.parse_mlir_module(ir_path, context)
-                module.context = context
-                self.function_scope_id_names[function] = triton_proton.get_scope_id_names(module)
-                self.function_scope_id_parents[function] = triton_proton.get_scope_id_parents(module)
+        # Find the IR path in metadata
+        ir_path = next((path for key, path in metadata_group.items() if key.endswith(("ttgir", "ttir"))), None)
+        metadata_path = next((path for key, path in metadata_group.items() if key.endswith(("json"))), None)
+        self.metadata_path[function] = metadata_path
 
-        scope_id_names = self.function_scope_id_names.get(function, [])
-        scope_id_parents = self.function_scope_id_parents.get(function, [])
-        libproton.init_function_scope_ids(function, scope_id_names, scope_id_parents)
+        if ir_path:
+            context = ir.context()
+            ir.load_dialects(context)
+            triton_proton.load_dialects(context)
+            module = ir.parse_mlir_module(ir_path, context)
+            module.context = context
 
-        if function:
-            self.metadata_path[function] = next(
-                (path for key, path in metadata_group.items() if key.endswith(("json"))), None)
+            scope_id_names = triton_proton.get_scope_id_names(module)
+            scope_id_parents = triton_proton.get_scope_id_parents(module)
+            libproton.init_function_metadata(function, name, scope_id_names, scope_id_parents, metadata_path)
 
     def _data_ptr(self) -> int:
         return 0 if self.buffer is None else self.buffer.data_ptr()
 
     def enter(self, lazy_dict: LazyDict) -> None:
         func = lazy_dict.data.get("function")
+        stream = lazy_dict.data.get("stream")
         alloc_size = 0 if self.buffer is None else self.buffer.element_size() * self.buffer.numel()
-        libproton.enter_instrumented_op(func, self._data_ptr(), alloc_size)
+        libproton.enter_instrumented_op(stream, func, self._data_ptr(), alloc_size)
         if InstrumentationHook.enable_host_buffer:
             InstrumentationHook.host_buffer = None
 
     def exit(self, lazy_dict: LazyDict) -> None:
         func = lazy_dict.data.get("function")
+        stream = lazy_dict.data.get("stream")
         alloc_size = 0 if self.buffer is None else self.buffer.element_size() * self.buffer.numel()
-        libproton.exit_instrumented_op(func, self._data_ptr(), alloc_size)
+        libproton.exit_instrumented_op(stream, func, self._data_ptr(), alloc_size)
 
         if InstrumentationHook.enable_host_buffer:
             self._populate_host_buffer(func)

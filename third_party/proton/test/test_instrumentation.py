@@ -1,6 +1,7 @@
 import torch
 import pathlib
 import pytest
+import json
 
 import triton
 import triton.language as tl
@@ -30,6 +31,27 @@ def test_mode_obj(mode, tmp_path: pathlib.Path):
     temp_file = tmp_path / "test_mode_simple.hatchet"
     proton.start(str(temp_file.with_suffix("")), backend="instrumentation", mode=mode)
     proton.finalize()
+
+
+def test_jit(tmp_path):
+    if is_hip():
+        pytest.skip("HIP backend does not support record")
+
+    @triton.jit
+    def foo(x, size: tl.constexpr, y):
+        offs = tl.arange(0, size)
+        tl.store(y + offs, tl.load(x + offs))
+
+    x = torch.tensor([2], device="cuda", dtype=torch.float32)
+    y = torch.zeros_like(x)
+    temp_file = tmp_path / "test_hook_instrumentation.hatchet"
+    proton.start(str(temp_file.with_suffix("")), backend="instrumentation")
+    foo[(1, )](x, 1, y, num_warps=4)
+    device = triton.runtime.driver.active.get_current_device()
+    assert len(foo.device_caches[device][0]) == 1, "Kernel should be cached"
+    proton.finalize()
+    foo[(1, )](x, 1, y, num_warps=4)
+    assert len(foo.device_caches[device][0]) == 2, "Instrumented and uninstrumented kernels both should be cached"
 
 
 @pytest.mark.parametrize("method", ["operator", "context_manager"])
@@ -77,7 +99,7 @@ def test_record(method, tmp_path: pathlib.Path):
     size = 256
     x = torch.rand(size, device='cuda')
     y = torch.rand(size, device='cuda')
-    temp_file = tmp_path / "test_hook_instrumentation.hatchet"
+    temp_file = tmp_path / "test_record.hatchet"
     output = torch.empty_like(x)
     n_elements = output.numel()
     grid = (1, 1, 1)
@@ -106,22 +128,60 @@ def test_record(method, tmp_path: pathlib.Path):
     assert "proton.record end" in ttir
 
 
-def test_jit(tmp_path):
+def test_tree(tmp_path: pathlib.Path):
     if is_hip():
         pytest.skip("HIP backend does not support record")
 
-    @triton.jit
-    def foo(x, size: tl.constexpr, y):
-        offs = tl.arange(0, size)
-        tl.store(y + offs, tl.load(x + offs))
+    from contextlib import contextmanager
 
-    x = torch.tensor([2], device="cuda", dtype=torch.float32)
-    y = torch.zeros_like(x)
-    temp_file = tmp_path / "test_hook_instrumentation.hatchet"
+    @contextmanager
+    def instrumentation(file_path):
+        try:
+            yield
+        finally:
+            proton.finalize()
+
+    @triton.jit
+    def add_kernel(
+        x_ptr,
+        y_ptr,
+        output_ptr,
+        n_elements,
+        BLOCK_SIZE: tl.constexpr,
+    ):
+        with pl.scope("kernel"):
+            pid = tl.program_id(axis=0)
+            block_start = pid * BLOCK_SIZE
+            offsets = block_start + tl.arange(0, BLOCK_SIZE)
+            mask = offsets < n_elements
+            with pl.scope("load_ops"):
+                with pl.scope("load_x"):
+                    x = tl.load(x_ptr + offsets, mask=mask)
+                with pl.scope("load_y"):
+                    y = tl.load(y_ptr + offsets, mask=mask)
+            output = x + y
+            tl.store(output_ptr + offsets, output, mask=mask)
+
+    torch.manual_seed(0)
+    size = 256
+    x = torch.rand(size, device='cuda')
+    y = torch.rand(size, device='cuda')
+    temp_file = tmp_path / "test_tree.hatchet"
+    output = torch.empty_like(x)
+    n_elements = output.numel()
+    grid = (1, 1, 1)
     proton.start(str(temp_file.with_suffix("")), backend="instrumentation")
-    foo[(1, )](x, 1, y, num_warps=4)
-    device = triton.runtime.driver.active.get_current_device()
-    assert len(foo.device_caches[device][0]) == 1, "Kernel should be cached"
+    add_kernel[grid](x, y, output, n_elements, BLOCK_SIZE=1024)
     proton.finalize()
-    foo[(1, )](x, 1, y, num_warps=4)
-    assert len(foo.device_caches[device][0]) == 2, "Instrumented and uninstrumented kernels both should be cached"
+
+    with open(temp_file, "rb") as f:
+        data = json.load(f)
+        kernel_frame = data[0]["children"][0]["children"][0]
+        load_ops = kernel_frame["children"][0]
+        assert "load_ops" in load_ops["frame"]["name"]
+        assert ("load_x" in load_ops["children"][0]["frame"]["name"]
+                or "load_x" in load_ops["children"][1]["frame"]["name"])
+        assert ("load_y" in load_ops["children"][0]["frame"]["name"]
+                or "load_y" in load_ops["children"][1]["frame"]["name"])
+        assert load_ops["children"][0]["metrics"]["cycles"] > 0
+        assert load_ops["children"][1]["metrics"]["cycles"] > 0
