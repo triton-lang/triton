@@ -58,8 +58,6 @@ def _make_tensor_desc(ptr, shape, strides, block_shape, transpose: tl.constexpr 
     tl.static_assert(len(shape) == len(strides))
     tl.static_assert(len(strides) == len(block_shape))
     if transpose:
-        # Pass constexpr(1) to workaround torchflow tracer changing values of 1 to 2 during compile.
-        # We check that the stride is actually 1 before launching the kernel.
         return tl.make_tensor_descriptor(
             ptr,
             shape=shape[:-2] + [shape[-1], shape[-2]],
@@ -67,8 +65,6 @@ def _make_tensor_desc(ptr, shape, strides, block_shape, transpose: tl.constexpr 
             block_shape=block_shape[:-2] + [block_shape[-1], block_shape[-2]],
         )
     else:
-        # Pass constexpr(1) to workaround torchflow tracer changing values of 1 to 2 during compile.
-        # We check that the stride is actually 1 before launching the kernel.
         return tl.make_tensor_descriptor(
             ptr,
             shape=shape,

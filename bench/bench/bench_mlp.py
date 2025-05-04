@@ -126,7 +126,7 @@ def bench_mlp(batch, dim1, dim2, n_expts_tot, n_expts_act, x_dtype, w_dtype, TP,
     pc1 = PrecisionConfig(mx_ctx=w1_mx, flex_ctx=FlexCtx(rhs_data=w1_flex))
     pc2 = PrecisionConfig(mx_ctx=w2_mx, flex_ctx=FlexCtx(rhs_data=w2_flex))
 
-    # -- benchmark --a
+    # -- benchmark --
     fpath = Path(f"logs/{name}/{x_dtype}-{w_dtype}-TP{TP}-EP{EP}/profiles/batch-{batch}.hatchet")
     fpath.parent.mkdir(parents=True, exist_ok=True)
     x_dtype = {"fp16": torch.float16, "bf16": torch.bfloat16, "fp8": torch.float8_e4m3fn}[x_dtype]
@@ -139,7 +139,7 @@ def bench_mlp(batch, dim1, dim2, n_expts_tot, n_expts_act, x_dtype, w_dtype, TP,
     x = x.to(x_dtype)
     # run layer
     proton.start(str(fpath.with_suffix('')), hook="triton")
-    for i in range(10):
+    for i in range(100):
         if n_expts_tot > 1:
             logits = matmul_ogs(xg, wg, bg, precision_config=pcg)
             rdata, gather_indx, scatter_indx = routing(logits, n_expts_act, simulated_ep=EP)
