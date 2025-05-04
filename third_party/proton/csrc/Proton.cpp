@@ -70,25 +70,27 @@ static void initProton(pybind11::module &&m) {
     SessionManager::instance().exitOp(Scope(scopeId, name));
   });
 
-  m.def("init_function_scope_ids",
-        [](uint64_t functionId,
+  m.def("init_function_metadata",
+        [](uint64_t functionId, const std::string &functionName,
            const std::vector<std::pair<size_t, std::string>> &scopeIdNames,
-           const std::vector<std::pair<size_t, size_t>> &scopeIdParents) {
-          SessionManager::instance().initFunctionScopeIds(
-              functionId, scopeIdNames, scopeIdParents);
+           const std::vector<std::pair<size_t, size_t>> &scopeIdParents,
+           const std::string &metadataPath) {
+          SessionManager::instance().initFunctionMetadata(
+              functionId, functionName, scopeIdNames, scopeIdParents,
+              metadataPath);
         });
 
-  m.def("enter_instrumented_op",
-        [](uint64_t functionId, uint64_t buffer, size_t size) {
-          SessionManager::instance().enterInstrumentedOp(
-              functionId, reinterpret_cast<uint8_t *>(buffer), size);
-        });
+  m.def("enter_instrumented_op", [](uint64_t streamId, uint64_t functionId,
+                                    uint64_t buffer, size_t size) {
+    SessionManager::instance().enterInstrumentedOp(
+        streamId, functionId, reinterpret_cast<uint8_t *>(buffer), size);
+  });
 
-  m.def("exit_instrumented_op",
-        [](uint64_t functionId, uint64_t buffer, size_t size) {
-          SessionManager::instance().exitInstrumentedOp(
-              functionId, reinterpret_cast<uint8_t *>(buffer), size);
-        });
+  m.def("exit_instrumented_op", [](uint64_t streamId, uint64_t functionId,
+                                   uint64_t buffer, size_t size) {
+    SessionManager::instance().exitInstrumentedOp(
+        streamId, functionId, reinterpret_cast<uint8_t *>(buffer), size);
+  });
 
   m.def("enter_state", [](const std::string &state) {
     SessionManager::instance().setState(state);

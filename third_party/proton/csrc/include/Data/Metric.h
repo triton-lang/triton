@@ -8,7 +8,7 @@
 
 namespace proton {
 
-enum class MetricKind { Flexible, Kernel, PCSampling, Count };
+enum class MetricKind { Flexible, Kernel, PCSampling, Cycle, Count };
 
 using MetricValueType = std::variant<uint64_t, int64_t, double, std::string>;
 
@@ -239,6 +239,54 @@ private:
       "stalled_dispatch_stall",
       "stalled_sleeping",
       "stalled_selected",
+  };
+};
+
+class CycleMetric : public Metric {
+public:
+  enum CycleMetricKind : int {
+    StartCycle,
+    EndCycle,
+    Duration,
+    BlockId,
+    ProcessorId,
+    DeviceId,
+    DeviceType,
+    Count,
+  };
+
+  CycleMetric() : Metric(MetricKind::Cycle, CycleMetricKind::Count) {}
+
+  CycleMetric(uint64_t startCycle, uint64_t endCycle, uint64_t blockId,
+              uint64_t processorId, uint64_t deviceId, uint64_t deviceType)
+      : CycleMetric() {
+    this->values[StartCycle] = startCycle;
+    this->values[EndCycle] = endCycle;
+    this->values[Duration] = endCycle - startCycle;
+    this->values[BlockId] = blockId;
+    this->values[ProcessorId] = processorId;
+    this->values[DeviceId] = deviceId;
+    this->values[DeviceType] = deviceType;
+  }
+
+  virtual const std::string getName() const { return "CycleMetric"; }
+
+  virtual const std::string getValueName(int valueId) const {
+    return VALUE_NAMES[valueId];
+  }
+
+  virtual bool isProperty(int valueId) const { return PROPERTY[valueId]; }
+
+  virtual bool isExclusive(int valueId) const { return EXCLUSIVE[valueId]; }
+
+private:
+  const static inline bool PROPERTY[CycleMetricKind::Count] = {
+      false, false, false, true, true, true, true};
+  const static inline bool EXCLUSIVE[CycleMetricKind::Count] = {
+      false, false, true, true, true, true, true};
+  const static inline std::string VALUE_NAMES[CycleMetricKind::Count] = {
+      "start_cycle",  "end_cycle", "cycles",      "block_id",
+      "processor_id", "device_id", "device_type",
   };
 };
 
