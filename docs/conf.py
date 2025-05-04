@@ -131,7 +131,7 @@ def setup(app):
 
 # Auto Doc
 
-sys.path.insert(0, os.path.abspath('../python'))
+sys.path.insert(0, os.path.abspath('../python/'))
 extensions = [
     'sphinx.ext.autodoc',
     'sphinx.ext.intersphinx',
