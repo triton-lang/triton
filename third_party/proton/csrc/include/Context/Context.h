@@ -137,14 +137,15 @@ public:
   InstrumentationInterface() = default;
   virtual ~InstrumentationInterface() = default;
 
-  virtual void initFunctionScopeIds(
-      uint64_t functionId,
+  virtual void initFunctionMetadata(
+      uint64_t functionId, const std::string &functionName,
       const std::vector<std::pair<size_t, std::string>> &scopeIdNames,
-      const std::vector<std::pair<size_t, size_t>> &scopeIdParents) = 0;
-  virtual void enterInstrumentedOp(uint64_t functionId, uint8_t *buffer,
-                                   size_t size) = 0;
-  virtual void exitInstrumentedOp(uint64_t functionId, uint8_t *buffer,
-                                  size_t size) = 0;
+      const std::vector<std::pair<size_t, size_t>> &scopeIdParents,
+      const std::string &metadataPath) = 0;
+  virtual void enterInstrumentedOp(uint64_t streamId, uint64_t functionId,
+                                   uint8_t *buffer, size_t size) = 0;
+  virtual void exitInstrumentedOp(uint64_t streamId, uint64_t functionId,
+                                  uint8_t *buffer, size_t size) = 0;
 };
 
 } // namespace proton
