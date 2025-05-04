@@ -22,7 +22,7 @@ void InstrumentationMetadata::parse() {
 
   // FIXME: this is wrong
   if (metadataJson.contains("num_warps")) {
-    totalUnits = metadataJson["num_warps"].get<size_t>();
+    numWarps = metadataJson["num_warps"].get<size_t>();
   }
 }
 
