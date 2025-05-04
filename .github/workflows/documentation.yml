@@ -33,8 +33,6 @@ jobs:
 
       - name: Build docs
         run: |
-          rm -rf build
-          rm -rf python/build
           cd docs
           export PATH=$(python3 -c "import cmake; print(cmake.CMAKE_BIN_DIR)"):$PATH
           # Limit the number of threads to reduce CPU memory usage
