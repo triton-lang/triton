@@ -495,7 +495,7 @@ def matmul_ogs(x, w, bias,
             f"invalid expt_data, {expt_data.buffer.shape}, {n_expts_tot=}, {grid_m=}"
     # matrix multiplication
     n_cta = batch_size * grid_m * grid_n * opt_flags.split_k
-    n_cta = min(target_info.num_sms(), n_cta - 16) if opt_flags.is_persistent else n_cta
+    n_cta = min(target_info.num_sms(), n_cta) if opt_flags.is_persistent else n_cta
     flex = precision_config.flex_ctx
     bias_stride = None if bias is None else bias.stride(0)
     num_indx = None if scatter_indx is None else scatter_indx.src_indx.shape[0]
