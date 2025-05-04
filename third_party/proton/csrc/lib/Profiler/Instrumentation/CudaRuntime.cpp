@@ -5,21 +5,11 @@
 namespace proton {
 
 void CudaRuntime::allocateHostBuffer(uint8_t **buffer, size_t size) {
-  if (deviceType == DeviceType::CUDA) {
-    cuda::memAllocHost<true>(reinterpret_cast<void **>(buffer), size);
-  } else {
-    throw std::runtime_error(
-        "Unsupported device type for host buffer allocation");
-  }
+  cuda::memAllocHost<true>(reinterpret_cast<void **>(buffer), size);
 }
 
 void CudaRuntime::freeHostBuffer(uint8_t *buffer) {
-  if (deviceType == DeviceType::CUDA) {
-    cuda::memFreeHost<true>(buffer);
-  } else {
-    throw std::runtime_error(
-        "Unsupported device type for host buffer deallocation");
-  }
+  cuda::memFreeHost<true>(buffer);
 }
 
 uint64_t CudaRuntime::getDevice() {
@@ -39,12 +29,7 @@ void *CudaRuntime::getPriorityStream() {
 }
 
 void CudaRuntime::synchronizeStream(void *stream) {
-  if (deviceType == DeviceType::CUDA) {
-    cuda::streamSynchronize<true>(reinterpret_cast<CUstream>(stream));
-  } else {
-    throw std::runtime_error(
-        "Unsupported device type for stream synchronization");
-  }
+  cuda::streamSynchronize<true>(reinterpret_cast<CUstream>(stream));
 }
 
 void CudaRuntime::processHostBuffer(
