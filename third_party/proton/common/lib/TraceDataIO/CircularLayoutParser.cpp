@@ -21,10 +21,10 @@ void CircularLayoutParser::parse() {
   assert(uidVec.size());
   assert(std::is_sorted(uidVec.begin(), uidVec.end()));
 
-  int numBlock = getConfig().numBlocks;
+  int numBlocks = getConfig().numBlocks;
   const int scratchMemSize = getConfig().scratchMemSize;
   uint32_t pos = buffer.position();
-  for (int i = 0; i < numBlock; i++) {
+  for (int i = 0; i < numBlocks; i++) {
     buffer.seek(pos);
     parseBlock();
     pos += scratchMemSize;
