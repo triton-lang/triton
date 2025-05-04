@@ -420,9 +420,9 @@ Syntax:
 operation ::= `tt.cat` $lhs `,` $rhs attr-dict `:` type($lhs) `->` type($result)
 ```
 
-Traits: `AlwaysSpeculatableImplTrait`, `SameOperandsAndResultElementType`, `SameTypeOperands`, `TensorSizeTrait`, `VerifyTensorLayoutsTrait`
+Traits: `SameOperandsAndResultElementType`, `SameTypeOperands`, `TensorSizeTrait`, `VerifyTensorLayoutsTrait`
 
-Interfaces: `ConditionallySpeculatable`, `NoMemoryEffect (MemoryEffectOpInterface)`
+Interfaces: `NoMemoryEffect (MemoryEffectOpInterface)`
 
 Effects: `MemoryEffects::Effect{}`
 
@@ -502,6 +502,8 @@ Accordingly, the result is a 2D tensor multiple rows.
 
 Traits: `TensorSizeTrait`, `VerifyTensorLayoutsTrait`
 
+Interfaces: `TT_DescriptorOpInterface`
+
 #### Operands:
 
 | Operand | Description |
@@ -538,6 +540,8 @@ The destination tensor type and shape must match the descriptor otherwise the re
 
 Traits: `TensorSizeTrait`, `VerifyTensorLayoutsTrait`
 
+Interfaces: `TT_DescriptorOpInterface`
+
 #### Attributes:
 
 <table>
@@ -560,6 +564,41 @@ Traits: `TensorSizeTrait`, `VerifyTensorLayoutsTrait`
 | `result` | ranked tensor of floating-point or integer or ptr values |
 
 
+### `tt.descriptor_reduce` (triton::DescriptorReduceOp)
+
+_Performs a reducing store operation based on a descriptor_
+
+Syntax:
+
+```
+operation ::= `tt.descriptor_reduce` $kind `,` $desc `[` $indices `]` `,` $src
+              attr-dict `:` qualified(type($desc)) `,` type($src)
+```
+
+This operation will be lowered to Nvidia TMA store operation on targets supporting it.
+`desc` is a tensor descriptor object.
+The shape and types of `src` must match the descriptor otherwise the result is undefined.
+
+Traits: `TensorSizeTrait`, `VerifyTensorLayoutsTrait`
+
+Interfaces: `TT_DescriptorOpInterface`, `TT_DescriptorStoreLikeOpInterface`
+
+#### Attributes:
+
+<table>
+<tr><th>Attribute</th><th>MLIR Type</th><th>Description</th></tr>
+<tr><td><code>kind</code></td><td>::mlir::triton::DescriptorReduceKindAttr</td><td>allowed 32-bit signless integer cases: 1, 2, 3, 4, 5, 6, 7, 8</td></tr>
+</table>
+
+#### Operands:
+
+| Operand | Description |
+| :-----: | ----------- |
+| `desc` | Tensor descriptor type (`::mlir::triton::TensorDescType`) in Triton IR type system |
+| `src` | ranked tensor of floating-point or integer or ptr values |
+| `indices` | variadic of 32-bit signless integer |
+
+
 ### `tt.descriptor_scatter` (triton::DescriptorScatterOp)
 
 _Scatter multiple rows to a descriptor from a single tensor_
@@ -579,6 +618,8 @@ The descriptor block must have 1 row and the indices must be a 1D tensor.
 Accordingly, the result is a 2D tensor multiple rows.
 
 Traits: `TensorSizeTrait`, `VerifyTensorLayoutsTrait`
+
+Interfaces: `TT_DescriptorOpInterface`, `TT_DescriptorStoreLikeOpInterface`
 
 #### Operands:
 
@@ -606,6 +647,8 @@ This operation will be lowered to Nvidia TMA store operation on targets supporti
 The shape and types of `src` must match the descriptor otherwise the result is undefined.
 
 Traits: `TensorSizeTrait`, `VerifyTensorLayoutsTrait`
+
+Interfaces: `TT_DescriptorOpInterface`, `TT_DescriptorStoreLikeOpInterface`
 
 #### Operands:
 

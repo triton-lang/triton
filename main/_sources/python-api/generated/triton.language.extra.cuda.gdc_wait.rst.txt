@@ -1,0 +1,6 @@
+﻿triton.language.extra.cuda.gdc\_wait
+====================================
+
+.. currentmodule:: triton.language.extra.cuda
+
+.. autofunction:: gdc_wait

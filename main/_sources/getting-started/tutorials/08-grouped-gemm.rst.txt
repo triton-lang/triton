@@ -53,14 +53,14 @@ of gemms. The scheduling is static and we do it on device.
             N    cuBLAS    Triton
     0   128.0  0.021504  0.013312
     1   256.0  0.023552  0.015360
-    2   512.0  0.033792  0.020480
-    3  1024.0  0.072704  0.077824
+    2   512.0  0.032768  0.020480
+    3  1024.0  0.072704  0.073728
     group-gemm-performance-m-8192-k-8192:
             M    cuBLAS    Triton
-    0   128.0  0.461824  0.545792
-    1   256.0  0.733184  1.085952
-    2   512.0  1.708032  2.153472
-    3  1024.0  2.732544  4.323328
+    0   128.0  0.459776  0.501760
+    1   256.0  0.701440  0.865280
+    2   512.0  1.708032  1.685504
+    3  1024.0  2.857984  3.375104
 
 
 
@@ -459,12 +459,12 @@ of gemms. The scheduling is static and we do it on device.
     tri_out = group_gemm_fn(group_A, group_B)
     ref_out = [torch.matmul(a, b) for a, b in zip(group_A, group_B)]
     for i in range(group_size):
-        assert torch.allclose(ref_out[i], tri_out[i], atol=1e-2, rtol=0)
+        assert torch.allclose(ref_out[i], tri_out[i], atol=1e-2, rtol=1e-2)
 
     if supports_tma():
         tri_tma_out = group_gemm_tma_fn(group_A, group_B_T)
         for i in range(group_size):
-            assert torch.allclose(ref_out[i], tri_tma_out[i], atol=1e-2, rtol=0)
+            assert torch.allclose(ref_out[i], tri_tma_out[i], atol=1e-2, rtol=1e-2)
 
 
     # only launch the kernel, no tensor preparation here to remove all overhead
@@ -634,7 +634,7 @@ of gemms. The scheduling is static and we do it on device.
 
 .. rst-class:: sphx-glr-timing
 
-   **Total running time of the script:** (0 minutes 5.657 seconds)
+   **Total running time of the script:** (0 minutes 5.659 seconds)
 
 
 .. _sphx_glr_download_getting-started_tutorials_08-grouped-gemm.py:

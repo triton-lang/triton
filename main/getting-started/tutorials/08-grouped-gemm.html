@@ -123,14 +123,14 @@ of gemms. The scheduling is static and we do it on device.</p>
         N    cuBLAS    Triton
 0   128.0  0.021504  0.013312
 1   256.0  0.023552  0.015360
-2   512.0  0.033792  0.020480
-3  1024.0  0.072704  0.077824
+2   512.0  0.032768  0.020480
+3  1024.0  0.072704  0.073728
 group-gemm-performance-m-8192-k-8192:
         M    cuBLAS    Triton
-0   128.0  0.461824  0.545792
-1   256.0  0.733184  1.085952
-2   512.0  1.708032  2.153472
-3  1024.0  2.732544  4.323328
+0   128.0  0.459776  0.501760
+1   256.0  0.701440  0.865280
+2   512.0  1.708032  1.685504
+3  1024.0  2.857984  3.375104
 </pre></div>
 </div>
 <div class="line-block">
@@ -523,12 +523,12 @@ group-gemm-performance-m-8192-k-8192:
 <span class="n">tri_out</span> <span class="o">=</span> <span class="n">group_gemm_fn</span><span class="p">(</span><span class="n">group_A</span><span class="p">,</span> <span class="n">group_B</span><span class="p">)</span>
 <span class="n">ref_out</span> <span class="o">=</span> <span class="p">[</span><span class="n">torch</span><span class="o">.</span><span class="n">matmul</span><span class="p">(</span><span class="n">a</span><span class="p">,</span> <span class="n">b</span><span class="p">)</span> <span class="k">for</span> <span class="n">a</span><span class="p">,</span> <span class="n">b</span> <span class="ow">in</span> <span class="nb">zip</span><span class="p">(</span><span class="n">group_A</span><span class="p">,</span> <span class="n">group_B</span><span class="p">)]</span>
 <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="n">group_size</span><span class="p">):</span>
-    <span class="k">assert</span> <span class="n">torch</span><span class="o">.</span><span class="n">allclose</span><span class="p">(</span><span class="n">ref_out</span><span class="p">[</span><span class="n">i</span><span class="p">],</span> <span class="n">tri_out</span><span class="p">[</span><span class="n">i</span><span class="p">],</span> <span class="n">atol</span><span class="o">=</span><span class="mf">1e-2</span><span class="p">,</span> <span class="n">rtol</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>
+    <span class="k">assert</span> <span class="n">torch</span><span class="o">.</span><span class="n">allclose</span><span class="p">(</span><span class="n">ref_out</span><span class="p">[</span><span class="n">i</span><span class="p">],</span> <span class="n">tri_out</span><span class="p">[</span><span class="n">i</span><span class="p">],</span> <span class="n">atol</span><span class="o">=</span><span class="mf">1e-2</span><span class="p">,</span> <span class="n">rtol</span><span class="o">=</span><span class="mf">1e-2</span><span class="p">)</span>
 
 <span class="k">if</span> <span class="n">supports_tma</span><span class="p">():</span>
     <span class="n">tri_tma_out</span> <span class="o">=</span> <span class="n">group_gemm_tma_fn</span><span class="p">(</span><span class="n">group_A</span><span class="p">,</span> <span class="n">group_B_T</span><span class="p">)</span>
     <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="n">group_size</span><span class="p">):</span>
-        <span class="k">assert</span> <span class="n">torch</span><span class="o">.</span><span class="n">allclose</span><span class="p">(</span><span class="n">ref_out</span><span class="p">[</span><span class="n">i</span><span class="p">],</span> <span class="n">tri_tma_out</span><span class="p">[</span><span class="n">i</span><span class="p">],</span> <span class="n">atol</span><span class="o">=</span><span class="mf">1e-2</span><span class="p">,</span> <span class="n">rtol</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>
+        <span class="k">assert</span> <span class="n">torch</span><span class="o">.</span><span class="n">allclose</span><span class="p">(</span><span class="n">ref_out</span><span class="p">[</span><span class="n">i</span><span class="p">],</span> <span class="n">tri_tma_out</span><span class="p">[</span><span class="n">i</span><span class="p">],</span> <span class="n">atol</span><span class="o">=</span><span class="mf">1e-2</span><span class="p">,</span> <span class="n">rtol</span><span class="o">=</span><span class="mf">1e-2</span><span class="p">)</span>
 
 
 <span class="c1"># only launch the kernel, no tensor preparation here to remove all overhead</span>
@@ -696,7 +696,7 @@ group-gemm-performance-m-8192-k-8192:
 <span class="n">benchmark_batches</span><span class="o">.</span><span class="n">run</span><span class="p">(</span><span class="n">show_plots</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">print_data</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
 </pre></div>
 </div>
-<p class="sphx-glr-timing"><strong>Total running time of the script:</strong> (0 minutes 5.657 seconds)</p>
+<p class="sphx-glr-timing"><strong>Total running time of the script:</strong> (0 minutes 5.659 seconds)</p>
 <div class="sphx-glr-footer sphx-glr-footer-example docutils container" id="sphx-glr-download-getting-started-tutorials-08-grouped-gemm-py">
 <div class="sphx-glr-download sphx-glr-download-jupyter docutils container">
 <p><a class="reference download internal" download="" href="../../_downloads/6360f3425f2c39f9f330971830c25ba7/08-grouped-gemm.ipynb"><code class="xref download docutils literal notranslate"><span class="pre">Download</span> <span class="pre">Jupyter</span> <span class="pre">notebook:</span> <span class="pre">08-grouped-gemm.ipynb</span></code></a></p>

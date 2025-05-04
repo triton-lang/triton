@@ -138,6 +138,44 @@ Traits: `VerifyTensorLayoutsTrait`
 | `pred` | 1-bit signless integer |
 
 
+### `ttng.async_tma_reduce` (triton::nvidia_gpu::AsyncTMAReduceOp)
+
+_Reduce result in gmem based on a TMA descriptor_
+
+Syntax:
+
+```
+operation ::= `ttng.async_tma_reduce` $kind `,` $desc_ptr `[` $coord `]` $src
+              attr-dict `:` qualified(type($desc_ptr)) `,` qualified(type($src))
+```
+
+This operation copies data from local memory to global memory
+asynchronously, and atomically performs the specified reduction kind.
+Atomicity is at the granularity of individual elements, and only relaxed
+semantics are implied.
+
+Traits: `VerifyTensorLayoutsTrait`
+
+Interfaces: `MemoryEffectOpInterface (MemoryEffectOpInterface)`
+
+Effects: `MemoryEffects::Effect{MemoryEffects::Read on ::mlir::triton::GlobalMemory, MemoryEffects::Write on ::mlir::triton::GlobalMemory}`
+
+#### Attributes:
+
+<table>
+<tr><th>Attribute</th><th>MLIR Type</th><th>Description</th></tr>
+<tr><td><code>kind</code></td><td>::mlir::triton::DescriptorReduceKindAttr</td><td>allowed 32-bit signless integer cases: 1, 2, 3, 4, 5, 6, 7, 8</td></tr>
+</table>
+
+#### Operands:
+
+| Operand | Description |
+| :-----: | ----------- |
+| `desc_ptr` | Pointer type (`::mlir::triton::PointerType`) in Triton IR type system |
+| `coord` | variadic of 32-bit signless integer |
+| `src` | memory descriptor type (`::mlir::triton::gpu::MemDescType`) in Triton IR type system |
+
+
 ### `ttng.async_tma_scatter` (triton::nvidia_gpu::AsyncTMAScatterOp)
 
 _Scatter data from local memory into global memory based on a descriptor asynchronously_
@@ -309,8 +347,8 @@ _Block level op mapping to tensorcore gen5 mma_
 Syntax:
 
 ```
-operation ::= `ttng.tc_gen5_mma` $a`,` $b`,` $d`,` $useD`,` $pred
-              `` custom<BarriersAndPreds>($barriers, $barrier_preds)
+operation ::= `ttng.tc_gen5_mma` $a `,` $b `,` $d `` custom<Token>($acc_dep, type($token)) `,` $useD`,`
+              $pred `` custom<BarriersAndPreds>($barriers, $barrier_preds)
               attr-dict `:` qualified(type($a)) `,` qualified(type($b)) `,`
               qualified(type($d)) (`,` qualified(type($barriers))^)?
 ```
@@ -321,7 +359,11 @@ If there is a barrier the result will be safe to read after a barrier wait.
 If $two_ctas is set the op will execute a matmul across two contiguous CTAs, it will read the data distributed across the two CTAs.
 and syncronize both CTAs if the op is synchronous.
 
-Traits: `SameVariadicOperandSize`, `VerifyTensorLayoutsTrait`
+This operation takes and produces an optional token to indicate TMEM read
+and write on its accumulator operand. When the tokens are present, they can
+be used to check aliasing and modref on the accumulator memory.
+
+Traits: `AttrSizedOperandSegments`, `VerifyTensorLayoutsTrait`
 
 Interfaces: `DotOpInterface`, `MMAv5OpInterface`, `MemoryEffectOpInterface`
 
@@ -339,10 +381,17 @@ Interfaces: `DotOpInterface`, `MMAv5OpInterface`, `MemoryEffectOpInterface`
 | `a` | memory descriptor type (`::mlir::triton::gpu::MemDescType`) in Triton IR type system |
 | `b` | memory descriptor type (`::mlir::triton::gpu::MemDescType`) in Triton IR type system |
 | `d` | memory descriptor type (`::mlir::triton::gpu::MemDescType`) in Triton IR type system |
+| `acc_dep` | async token type |
 | `useD` | 1-bit signless integer |
 | `pred` | 1-bit signless integer |
 | `barriers` | variadic of memory descriptor type (`::mlir::triton::gpu::MemDescType`) in Triton IR type system |
 | `barrier_preds` | variadic of 1-bit signless integer |
+
+#### Results:
+
+| Result | Description |
+| :----: | ----------- |
+| `token` | async token type |
 
 
 ### `ttng.tc_gen5_mma_scaled` (triton::nvidia_gpu::TCGen5MMAScaledOp)
@@ -352,8 +401,8 @@ _Block level op mapping to tensorcore gen5 mma_
 Syntax:
 
 ```
-operation ::= `ttng.tc_gen5_mma_scaled` $a `,` $b `,` $d `,` $a_scale `,` $b_scale `,` $useD`,` $pred
-              `lhs` `=` $a_type `rhs` `=` $b_type
+operation ::= `ttng.tc_gen5_mma_scaled` $a `,` $b `,` $d `` custom<Token>($acc_dep, type($token)) `,` $a_scale `,`
+              $b_scale `,` $useD `,` $pred `lhs` `=` $a_type `rhs` `=` $b_type
               `` custom<BarriersAndPreds>($barriers, $barrier_preds)
               attr-dict `:` qualified(type($a)) `,` qualified(type($b)) `,`
               qualified(type($d)) `,` qualified(type($a_scale)) `,`
@@ -364,7 +413,11 @@ $d += matrix_multiply(scale($lhs, $lhs_scale), scale(rlhs, $rhs_scale))
 If no barrier is given the op is assumed to be synchronous otherwise the op will trigger a commit/arrive on the given barrier.
 If there is a barrier the result will be safe to read after a barrier wait.
 
-Traits: `SameVariadicOperandSize`, `VerifyTensorLayoutsTrait`
+This operation takes and produces an optional token to indicate TMEM read
+and write on its accumulator operand. When the tokens are present, they can
+be used to check aliasing and modref on the accumulator memory.
+
+Traits: `AttrSizedOperandSegments`, `VerifyTensorLayoutsTrait`
 
 Interfaces: `DotOpInterface`, `MMAv5OpInterface`, `MemoryEffectOpInterface`
 
@@ -383,12 +436,19 @@ Interfaces: `DotOpInterface`, `MMAv5OpInterface`, `MemoryEffectOpInterface`
 | `a` | memory descriptor type (`::mlir::triton::gpu::MemDescType`) in Triton IR type system |
 | `b` | memory descriptor type (`::mlir::triton::gpu::MemDescType`) in Triton IR type system |
 | `d` | memory descriptor type (`::mlir::triton::gpu::MemDescType`) in Triton IR type system |
+| `acc_dep` | async token type |
 | `a_scale` | memory descriptor type (`::mlir::triton::gpu::MemDescType`) in Triton IR type system |
 | `b_scale` | memory descriptor type (`::mlir::triton::gpu::MemDescType`) in Triton IR type system |
 | `useD` | 1-bit signless integer |
 | `pred` | 1-bit signless integer |
 | `barriers` | variadic of memory descriptor type (`::mlir::triton::gpu::MemDescType`) in Triton IR type system |
 | `barrier_preds` | variadic of 1-bit signless integer |
+
+#### Results:
+
+| Result | Description |
+| :----: | ----------- |
+| `token` | async token type |
 
 
 ### `ttng.async_tma_store_wait` (triton::nvidia_gpu::TMAStoreWaitOp)
@@ -445,6 +505,7 @@ Interfaces: `MemoryEffectOpInterface`
 | Result | Description |
 | :----: | ----------- |
 | `result` | memory descriptor type (`::mlir::triton::gpu::MemDescType`) in Triton IR type system |
+| `token` | async token type |
 
 
 ### `ttng.tmem_copy` (triton::nvidia_gpu::TMEMCopyOp)
@@ -515,11 +576,16 @@ _Load a buffer from tensor memory into a distributed tensor_
 Syntax:
 
 ```
-operation ::= `ttng.tmem_load` $src attr-dict `:` qualified(type($src)) `->` type($result)
+operation ::= `ttng.tmem_load` $src `` custom<Token>($dep, type($token))
+              attr-dict `:` qualified(type($src)) `->` type($result)
 ```
 
 This is similar to ttg.local_load except the result layout is restricted to only few possibility.
 Therefore we cannot combine this op with any convert layout like local_load.
+
+This operation takes and produces an optional token to indicate TMEM read
+on its source operand. When the tokens are present, they can
+be used to check aliasing and modref on the TMEM buffer.
 
 Traits: `VerifyTensorLayoutsTrait`
 
@@ -528,12 +594,14 @@ Traits: `VerifyTensorLayoutsTrait`
 | Operand | Description |
 | :-----: | ----------- |
 | `src` | memory descriptor type (`::mlir::triton::gpu::MemDescType`) in Triton IR type system |
+| `dep` | async token type |
 
 #### Results:
 
 | Result | Description |
 | :----: | ----------- |
 | `result` | ranked tensor of floating-point or integer or ptr values |
+| `token` | async token type |
 
 
 ### `ttng.tmem_store` (triton::nvidia_gpu::TMEMStoreOp)
@@ -543,10 +611,15 @@ _Store a distributed tensor into a buffer in tensor memory_
 Syntax:
 
 ```
-operation ::= `ttng.tmem_store` $src `,` $dst `,` $pred attr-dict `:` type($src) `->` qualified(type($dst))
+operation ::= `ttng.tmem_store` $src `,` $dst `` custom<Token>($dep, type($token)) `,` $pred
+              attr-dict `:` type($src) `->` qualified(type($dst))
 ```
 
-This is similar to ttg.local_local except the source layout is restricted to only few possibility.
+This is similar to ttg.local_store except the source layout is restricted to only few possibility.
+
+This operation takes and produces an optional token to indicate TMEM write
+on its source operand. When the tokens are present, they can
+be used to check aliasing and modref on the TMEM buffer.
 
 Traits: `VerifyTensorLayoutsTrait`
 
@@ -555,8 +628,15 @@ Traits: `VerifyTensorLayoutsTrait`
 | Operand | Description |
 | :-----: | ----------- |
 | `dst` | memory descriptor type (`::mlir::triton::gpu::MemDescType`) in Triton IR type system |
+| `dep` | async token type |
 | `src` | ranked tensor of floating-point or integer or ptr values |
 | `pred` | 1-bit signless integer |
+
+#### Results:
+
+| Result | Description |
+| :----: | ----------- |
+| `token` | async token type |
 
 
 ### `ttng.tmem_subslice` (triton::nvidia_gpu::TMEMSubSliceOp)
