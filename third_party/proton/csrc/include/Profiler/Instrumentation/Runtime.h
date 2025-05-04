@@ -21,11 +21,15 @@ public:
 
   virtual void *getPriorityStream() = 0;
 
+  virtual void synchronizeStream(void *stream) = 0;
+
   virtual void
   processHostBuffer(uint8_t *hostBuffer, size_t hostBufferSize,
                     uint8_t *deviceBuffer, size_t deviceBufferSize,
                     void *stream,
                     std::function<void(uint8_t *, size_t)> callback) = 0;
+
+  DeviceType getDeviceType() const { return deviceType; }
 
 protected:
   DeviceType deviceType;
