@@ -255,7 +255,7 @@ void InstrumentationProfiler::exitInstrumentedOp(uint64_t streamId,
   config.scratchMemSize =
       functionMetadata.at(functionId).getScratchMemorySize();
   if (!(modeOptions.count("granularity") == 0 ||
-        modeOptions.at("granularity") == "warp")) {
+        modeOptions.at("granularity") == "GRANULARITY.WARP")) {
     throw std::runtime_error("Only warp granularity is supported for now");
   }
   config.totalUnits = functionMetadata.at(functionId).getNumWarps();
