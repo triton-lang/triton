@@ -243,10 +243,6 @@ SetVector<Value> getNestedOperands(Operation *op);
 // Erase the given loop carried values from the loop, where `loop` is replaced
 // with a new loop.
 void eraseLoopCarriedValues(scf::ForOp &loop, llvm::BitVector indices);
-
-// Return true if two value sets may refer to the same allocation.
-bool mayAliasAllocations(const DenseSet<Value> &lhs,
-                         const DenseSet<Value> &rhs);
 } // namespace mlir
 
 namespace mlir::triton {
@@ -274,17 +270,18 @@ void replaceUsesWithLocalLoad(
       }
     }
   }
-  for (auto alloc : allocsToErase) {
-    alloc.erase();
-  }
 
   // If there are some uses that were not local_allocs, we need to create a
   // local_load for them.
-  if (!old.getUsers().empty()) {
+  if (std::distance(old.getUsers().begin(), old.getUsers().end()) >
+      allocsToErase.size()) {
     auto loc = old.getOwner()->getLoc();
     auto sharedLoad = builder.template create<ttg::LocalLoadOp>(
         loc, old.getType(), alloc, token);
     old.replaceAllUsesWith(sharedLoad.getResult());
+  }
+  for (auto alloc : allocsToErase) {
+    alloc.erase();
   }
 }
 } // namespace mlir::triton

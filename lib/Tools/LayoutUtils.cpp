@@ -248,4 +248,34 @@ SmallVector<StringAttr> supremum(const SmallVector<StringAttr> &x,
   return to_vector(result);
 }
 
+LinearLayout reshapeLayout(MLIRContext *ctx, LinearLayout layout,
+                           ArrayRef<int64_t> shape) {
+  int rank = shape.size();
+  auto srcOutDims = to_vector(layout.getOutDimNames());
+  std::reverse(srcOutDims.begin(), srcOutDims.end());
+  auto newOutDims = standardOutDimPairs(ctx, shape);
+  std::reverse(newOutDims.begin(), newOutDims.end());
+  return layout.transposeOuts(srcOutDims)
+      .reshapeOuts(newOutDims)
+      .transposeOuts(standardOutDimNames(ctx, rank));
+}
+
+LinearLayout transposeLinearLayout(LinearLayout layout, ArrayRef<int> order) {
+  // Transpose the tile layout.
+  auto namedBases = layout.getBases();
+  // move the most outer dimensions to the inner most position.
+
+  for (auto &bases : llvm::make_second_range(namedBases)) {
+    for (auto &b : bases) {
+      std::vector<int32_t> newB;
+      for (auto i : order) {
+        newB.push_back(b[i]);
+      }
+      b = std::move(newB);
+    }
+  }
+  return LinearLayout(std::move(namedBases),
+                      to_vector(layout.getOutDimNames()));
+}
+
 } // namespace mlir::triton

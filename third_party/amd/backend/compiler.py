@@ -1,11 +1,11 @@
 from triton.backends.compiler import BaseBackend, GPUTarget
 from triton._C.libtriton import ir, passes, llvm, amd
+from triton import knobs
 from dataclasses import dataclass
 from typing import Any, Dict, Tuple
 from types import ModuleType
 import hashlib
 import tempfile
-import os
 import re
 import subprocess
 import functools
@@ -19,13 +19,11 @@ def get_min_dot_size(target: GPUTarget):
 
 
 def is_pingpong_schedule_enabled(arch):
-    default = "1" if arch == "gfx942" else "0"
-    return os.getenv("TRITON_HIP_USE_BLOCK_PINGPONG", default) == "1"
+    return (arch == "gfx942") if knobs.amd.use_block_pingpong is None else knobs.amd.use_block_pingpong
 
 
 def is_in_thread_transpose_enabled(arch):
-    default = "1" if arch == "gfx942" else "0"
-    return os.getenv("TRITON_HIP_USE_IN_THREAD_TRANSPOSE", default) == "1"
+    return (arch == "gfx942") if knobs.amd.use_in_thread_transpose is None else knobs.amd.use_in_thread_transpose
 
 
 @dataclass(frozen=True)
@@ -72,14 +70,6 @@ class HIPOptions:
         gfx_major = int(self.arch[3:-2])  # Drop "gfx" prefix and minor/patch number
         warp_size = 32 if gfx_major >= 10 else 64
         object.__setattr__(self, 'warp_size', warp_size)
-
-        # Error out if max threads per block is exceeded.
-        # This is theoretically architecture specific but in reality they are all 1024.
-        max_threads = 1024
-        assert self.num_warps * warp_size <= max_threads, \
-                f"{self.num_warps} warps * {warp_size} warp size" \
-                f" must not exceed the max threads per block limit ({max_threads})"
-
         assert self.num_warps > 0 and (self.num_warps & (self.num_warps - 1)) == 0, \
                "num_warps must be a power of 2"
 
@@ -109,7 +99,7 @@ class HIPBackend(BaseBackend):
         self.binary_ext = "hsaco"
 
     def parse_options(self, opts) -> Any:
-        args = {'arch': os.getenv("TRITON_OVERRIDE_ARCH", self.target.arch)}
+        args = {'arch': knobs.runtime.override_arch or self.target.arch}
 
         # Enable XF32 (TF32) for CDNA3 GPUs
         if self.target.arch == 'gfx942':
@@ -126,7 +116,7 @@ class HIPBackend(BaseBackend):
             args["supported_fp8_dtypes"] = tuple(sorted(supported_fp8_dtypes))
 
         if "enable_fp_fusion" not in opts:
-            args["enable_fp_fusion"] = os.getenv("TRITON_DEFAULT_FP_FUSION", "1") == "1"
+            args["enable_fp_fusion"] = knobs.language.default_fp_fusion
         args.update({k: opts[k] for k in HIPOptions.__dataclass_fields__.keys() \
                      if k in opts and opts[k] is not None})
         return HIPOptions(**args)
@@ -153,11 +143,6 @@ class HIPBackend(BaseBackend):
         amd.load_dialects(ctx)
 
     @staticmethod
-    @functools.lru_cache()
-    def use_buffer_ops():
-        return os.environ.get("AMDGCN_USE_BUFFER_OPS", "1") == "1"
-
-    @staticmethod
     def is_within_2gb(arg):
         import torch
 
@@ -180,14 +165,14 @@ class HIPBackend(BaseBackend):
         ret = BaseBackend.get_arg_specialization(arg, ty, **kwargs)
         # Only attempt to do buffer ops specialization if buffer ops are enabled.
         # Otherwise the is_within_2gb check is unnecessary overhead.
-        if HIPBackend.use_buffer_ops() and ty == "tensor" and HIPBackend.is_within_2gb(arg):
+        if knobs.amd.use_buffer_ops and ty == "tensor" and HIPBackend.is_within_2gb(arg):
             ret += "S"
         return ret
 
     @staticmethod
     def path_to_rocm_lld():
         # Check env path for ld.lld
-        lld_env_path = os.getenv("TRITON_HIP_LLD_PATH")
+        lld_env_path = knobs.amd.lld_path
         if lld_env_path is not None:
             lld = Path(lld_env_path)
             if lld.is_file():
@@ -243,9 +228,9 @@ class HIPBackend(BaseBackend):
         passes.ttir.add_triton_licm(pm)
         passes.common.add_canonicalizer(pm)
 
-        global_prefetch = int(os.getenv("TRITON_HIP_GLOBAL_PREFETCH", "0"))
-        local_prefetch = int(os.getenv("TRITON_HIP_LOCAL_PREFETCH", "0"))
-        use_async_copy = int(os.getenv("TRITON_HIP_USE_ASYNC_COPY", "0")) == 1
+        global_prefetch = knobs.amd.global_prefetch
+        local_prefetch = knobs.amd.local_prefetch
+        use_async_copy = knobs.amd.use_async_copy
 
         # The `local-prefetch` scheduling variant requires turning on buffer ops.
         if options.schedule_hint == "local-prefetch":
@@ -268,7 +253,7 @@ class HIPBackend(BaseBackend):
         if use_block_pingpong and options.num_stages == 2:
             amd.passes.ttgpuir.add_block_pingpong(pm, options.num_stages)
 
-        if HIPBackend.use_buffer_ops():
+        if knobs.amd.use_buffer_ops:
             amd.passes.ttgpuir.add_canonicalize_pointers(pm)
             passes.common.add_canonicalizer(pm)
             amd.passes.ttgpuir.add_convert_to_buffer_ops(pm, options.arch)
@@ -318,7 +303,7 @@ class HIPBackend(BaseBackend):
         passes.common.add_symbol_dce(pm)
         if options.schedule_hint.lower() != "none":
             amd.passes.ttgpuir.lower_instruction_sched_hints(pm, options.arch, options.num_stages)
-        if os.environ.get("TRITON_DISABLE_LINE_INFO", "0") == "0":
+        if not knobs.compilation.disable_line_info:
             passes.llvmir.add_di_scope(pm)
         amd.passes.ttgpuir.add_builtin_func_to_llvmir(pm, __HIP_FTZ)
         pm.run(mod)
@@ -329,7 +314,7 @@ class HIPBackend(BaseBackend):
         llvm_mod = llvm.to_module(mod, context)
         amd.attach_target_triple(llvm_mod)
         target_features = ''
-        if os.environ.get("TRITON_ENABLE_ASAN", "0") == "1":
+        if knobs.compilation.enable_asan:
             target_features = '+xnack'
         llvm.attach_datalayout(llvm_mod, amd.TARGET_TRIPLE, options.arch, target_features)
 
@@ -357,7 +342,7 @@ class HIPBackend(BaseBackend):
         fns[0].add_fn_attr("amdgpu-waves-per-eu", f"{options.waves_per_eu}")
         denormal_mode = "preserve-sign" if options.allow_flush_denorm else "ieee"
         fns[0].add_fn_attr("denormal-fp-math-f32", denormal_mode)
-        if os.environ.get("TRITON_ENABLE_ASAN", "0") == "1":
+        if knobs.compilation.enable_asan:
             fns[0].add_fn_target_feature("+xnack")
             fns[0].add_fn_asan_attr()
 
@@ -366,7 +351,7 @@ class HIPBackend(BaseBackend):
         # from memory.
         amd.set_all_fn_arg_inreg(fns[0])
 
-        if os.environ.get("TRITON_ENABLE_ASAN", "0") == "1":
+        if knobs.compilation.enable_asan:
             default_libdir = Path(__file__).parent / 'lib'
             paths = [
                 str(default_libdir / 'asanrtl.bc'),
@@ -406,7 +391,7 @@ class HIPBackend(BaseBackend):
         if options.schedule_hint == 'attention':
             flags.append('sink-insts-to-avoid-spills')
         amdgcn = llvm.translate_to_asm(src, amd.TARGET_TRIPLE, options.arch, '', flags, options.enable_fp_fusion, False)
-        if os.environ.get("AMDGCN_ENABLE_DUMP", "0") == "1":
+        if knobs.amd.dump_amdgcn:
             print("// -----// AMDGCN Dump //----- //")
             print(amdgcn)
         return amdgcn
@@ -414,7 +399,7 @@ class HIPBackend(BaseBackend):
     @staticmethod
     def make_hsaco(src, metadata, options):
         target_features = ''
-        if os.environ.get("TRITON_ENABLE_ASAN", "0") == "1":
+        if knobs.compilation.enable_asan:
             target_features = '+xnack'
         hsaco = amd.assemble_amdgcn(src, options.arch, target_features)
 

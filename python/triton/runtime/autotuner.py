@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import builtins
-import os
 import time
 import inspect
 import hashlib
@@ -9,6 +8,7 @@ import json
 from functools import cached_property
 from typing import Dict, Tuple, List, Optional
 
+from .. import knobs
 from .jit import KernelInterface
 from .errors import OutOfResources, PTXASError
 from .driver import driver
@@ -32,7 +32,7 @@ class Autotuner(KernelInterface):
         self.keys = key
         self.cache: Dict[Tuple, Config] = {}
         self.arg_names = arg_names
-        self.cache_results = cache_results or os.getenv("TRITON_CACHE_AUTOTUNING", None) == "1"
+        self.cache_results = cache_results or knobs.autotuning.cache
 
         # Reset to zero or restore values
         self.reset_to_zero = []
@@ -124,7 +124,7 @@ class Autotuner(KernelInterface):
     def _bench(self, *args, config, **meta):
         from ..compiler.errors import CompileTimeAssertionFailure
 
-        verbose = os.environ.get("TRITON_PRINT_AUTOTUNING", None) == "1"
+        verbose = knobs.autotuning.print
         if verbose:
             print(f"Autotuning kernel {self.base_fn.__name__} with config {config}")
 
@@ -241,7 +241,7 @@ class Autotuner(KernelInterface):
         else:
             config = self.configs[0]
         self.best_config = config
-        if os.getenv("TRITON_PRINT_AUTOTUNING", None) == "1" and not used_cached_result:
+        if knobs.autotuning.print and not used_cached_result:
             print(f"Triton autotuning for function {self.base_fn.__name__} finished after "
                   f"{self.bench_time:.2f}s; best config selected: {self.best_config};")
         if config.pre_hook is not None:
@@ -282,11 +282,11 @@ class Autotuner(KernelInterface):
     def warmup(self, *args, **kwargs):
         self.nargs = dict(zip(self.arg_names, args))
         ret = []
-        for config in self.prune_configs(kwargs):
+        for autotune_config in self.prune_configs(kwargs):
             ret.append(self.fn.warmup(
                 *args,
                 **kwargs,
-                **config.all_kwargs(),
+                **autotune_config.all_kwargs(),
             ))
         self.nargs = None
         return ret

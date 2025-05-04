@@ -97,7 +97,8 @@ private:
                          bool loadToReg, Attribute dotEncoding,
                          OpBuilder &builder, int64_t kWidth,
                          std::optional<int64_t> offsetK = std::nullopt,
-                         std::optional<int64_t> shapeK = std::nullopt);
+                         std::optional<int64_t> shapeK = std::nullopt,
+                         std::optional<Value> asyn_token = std::nullopt);
 
   /// Clone elementwise operations for prefetched values
   void cloneElementwiseOps(Value &bRem, const SmallVector<Value> &vals,
@@ -134,7 +135,8 @@ Value WGMMAPrefetcher::generatePrefetch(Value v, unsigned opIdx,
                                         Attribute dotEncoding,
                                         OpBuilder &builder, int64_t kWidth,
                                         std::optional<int64_t> offsetK,
-                                        std::optional<int64_t> shapeK) {
+                                        std::optional<int64_t> shapeK,
+                                        std::optional<Value> asyn_token) {
   // opIdx: 0 => a, 1 => b
   auto type = cast<triton::gpu::MemDescType>(v.getType());
   SmallVector<int64_t> shape{type.getShape().begin(), type.getShape().end()};
@@ -168,7 +170,7 @@ Value WGMMAPrefetcher::generatePrefetch(Value v, unsigned opIdx,
         builder.getContext(), opIdx, dotEncoding, kWidth);
     Value prefetchSlice = builder.create<triton::gpu::LocalLoadOp>(
         v.getLoc(), RankedTensorType::get(shape, elementType, dotOperandEnc),
-        newSmem);
+        newSmem, asyn_token.value_or(Value()));
     return prefetchSlice;
   }
 
@@ -219,7 +221,8 @@ LogicalResult WGMMAPrefetcher::initialize() {
       return rets;
     LDBG("Prefetch src: " << *op);
     while (op) {
-      if (op->getNumOperands() != 1)
+      if ((!dyn_cast<triton::gpu::LocalLoadOp>(op)) &&
+          op->getNumOperands() != 1)
         break;
       if (!op->getResult(0).hasOneUse())
         break;
@@ -243,14 +246,6 @@ LogicalResult WGMMAPrefetcher::initialize() {
   };
 
   for (ttng::WarpGroupDotOp dotOp : dotsInFor) {
-    // If getMaxNumImpreciseAcc > 0, WGMMA.cpp will have
-    // extra treatment for dotOp (e.g., add accumulator).
-    // Therefore, we disable the optimization here
-    // when getMaxNumImpreciseAcc > 0;
-    if (dotOp.getMaxNumImpreciseAcc() > 0) {
-      return failure();
-    }
-
     auto aType = dotOp.getA().getType();
     auto bType = dotOp.getB().getType();
 
@@ -312,6 +307,8 @@ LogicalResult WGMMAPrefetcher::initialize() {
       dot2aSrcMemDesc[dotOp] = aSmem;
       dot2bSrcMemDesc[dotOp] = bSmem;
       dot2Wait[dotOp] = dotWait;
+    } else {
+      return failure();
     }
   }
 
@@ -376,12 +373,20 @@ scf::ForOp WGMMAPrefetcher::createNewForOp() {
       int64_t subTileCnt = ceil<int64_t>(kShape, prefetchWidth);
 
       SmallVector<Value> PrefetchedA;
+      auto aLocalLoadOp = dyn_cast<LocalLoadOp>(
+          mapping.lookup(dot2aValsLocalLoad[dot].back()).getDefiningOp());
+      auto asyn_token = aLocalLoadOp.getToken();
 
       // Prefetching
       for (int i = 0; i < subTileCnt; i++) {
+        std::optional<Value> token = std::nullopt;
+        // Let the first subtile wait for the async token
+        if ((i == 0) && asyn_token) {
+          token = asyn_token;
+        }
         Value aRem = generatePrefetch(mapping.lookup(dot2aSrcMemDesc[dot]), 0,
                                       false, true, dotEncoding, builder, kWidth,
-                                      prefetchWidth * i, prefetchWidth);
+                                      prefetchWidth * i, prefetchWidth, token);
         PrefetchedA.push_back(aRem);
       }
 
@@ -392,6 +397,7 @@ scf::ForOp WGMMAPrefetcher::createNewForOp() {
         UseC = mapping.lookup(dot.getUseC());
       }
       Value OpC = mapping.lookup(dot.getC());
+      uint32_t RemainNumImpreciseAcc = dot.getMaxNumImpreciseAcc();
 
       for (int i = 0; i < subTileCnt; i++) {
         cloneElementwiseOps(PrefetchedA[i], dot2aValsElementWise[dot],
@@ -406,10 +412,19 @@ scf::ForOp WGMMAPrefetcher::createNewForOp() {
           UseC =
               builder.create<mlir::arith::ConstantIntOp>(newOp->getLoc(), 1, 1);
         }
+        //  2**30 is to prevent the subtile from adding
+        // extra imprecise accumulator, See WGMMA.cpp
+        uint32_t NumImpreciseAcc = (RemainNumImpreciseAcc > prefetchWidth)
+                                       ? 1073741824 // 2**30
+                                       : RemainNumImpreciseAcc;
+        // Deduct the actual consumed imprecise acc
+        RemainNumImpreciseAcc -= (RemainNumImpreciseAcc > prefetchWidth)
+                                     ? prefetchWidth
+                                     : RemainNumImpreciseAcc;
+
         auto newDotOp = builder.create<nvidia_gpu::WarpGroupDotOp>(
             newOp->getLoc(), dot.getType(), PrefetchedA[i], bSubtile, OpC, UseC,
-            dot.getInputPrecision(), dot.getMaxNumImpreciseAcc(),
-            dot.getIsAsync());
+            dot.getInputPrecision(), NumImpreciseAcc, dot.getIsAsync());
         prevDot = newDotOp;
       }
       newOp = (Operation *)prevDot;

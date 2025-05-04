@@ -803,7 +803,25 @@ def test_slice(device):
         t = data[None, :]
         tl.static_assert(t.shape == [1, XBLOCK])
 
+        t = data[None, None:]
+        tl.static_assert(t.shape == [1, XBLOCK])
+
+        t = data[None, :None]
+        tl.static_assert(t.shape == [1, XBLOCK])
+
         t = data[None, :, None]
+        tl.static_assert(t.shape == [1, XBLOCK, 1])
+
+        t = data[None, None:None, None]
+        tl.static_assert(t.shape == [1, XBLOCK, 1])
+
+        t = data[None, None:None:None, None]
+        tl.static_assert(t.shape == [1, XBLOCK, 1])
+
+        t = data[None, ::None, None]
+        tl.static_assert(t.shape == [1, XBLOCK, 1])
+
+        t = data[None, None::None, None]
         tl.static_assert(t.shape == [1, XBLOCK, 1])
 
         scalar = tl.full([], 1, tl.int32)
@@ -3530,7 +3548,7 @@ def get_test_dot_softmax():
 
 # M, N, K, num_warps, col_a, col_b, epilogue, input_precision, in_dtype, out_dtype, kpack, mma_nonk_size
 def get_test_dot_mixed_sizes_cases():
-    available_kpack = [1, 2 if is_hip() else 1]
+    available_kpack = [1, 2 if (is_hip() and not is_hip_cdna4()) else 1]
     available_precision = ["tf32" if is_cuda() else "ieee"]
     return [
         (*shape_nw, col_a, col_b, 'none', input_precision, in_dtype, out_dtype, kpack, None)
@@ -3880,7 +3898,7 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, input_precision, in_dty
                           for mxfp_type in ["e2m1", "e4m3", "e5m2"]
                           for normal_type in ["e4m3", "e5m2", "bf16", "fp16"]
                           for mma in (mma_nonk_sizes if is_hip() else [16])
-                          for kpack in ([1, 2] if is_hip() else [1])])
+                          for kpack in ([1, 2] if (is_hip() and not is_hip_cdna4()) else [1])])
 def test_scaled_dot(M, N, K, col_a, col_b, rhs_scale, mxfp_type, normal_type, num_warps, mma, kpack, device):
     if is_cuda():
         cc = torch.cuda.get_device_capability()
@@ -6604,6 +6622,7 @@ def test_enable_fp_fusion(enable_fp_fusion, default_override, device):
     data = torch.randn((128, ), device=device, dtype=torch.float32)
     if default_override:
         os.environ["TRITON_DEFAULT_FP_FUSION"] = "1" if enable_fp_fusion else "0"
+        assert triton.knobs.language.default_fp_fusion == enable_fp_fusion
         h = mul_add[(1, )](data)
     else:
         h = mul_add[(1, )](data, enable_fp_fusion=enable_fp_fusion)

@@ -3,16 +3,17 @@ import ast
 import hashlib
 import inspect
 import itertools
-import os
 import re
 import textwrap
 from collections import defaultdict
+from dataclasses import dataclass
 from functools import cached_property
 from typing import Callable, Generic, Iterable, Optional, TypeVar, Union, overload, Dict, Any, Tuple
 
 from triton.tools.tensor_descriptor import TensorDescriptor
-from ..runtime.driver import driver
 from types import ModuleType
+from .. import knobs
+from ..runtime.driver import driver
 from .._utils import find_paths_if, get_iterable_path
 
 TRITON_MODULE = __name__[:-len(".runtime.jit")]
@@ -263,13 +264,13 @@ class KernelParam:
         return self._param.name
 
     @cached_property
-    def annotation(self):
+    def annotation(self) -> str:
         if not self._param.annotation or self._param.annotation == inspect.Parameter.empty:
             return ""
         return _normalize_ty(self._param.annotation)
 
     @cached_property
-    def annotation_type(self):
+    def annotation_type(self) -> str:
         a = self.annotation
         if a.startswith("*k"):
             a = a[2:]
@@ -307,7 +308,6 @@ def create_specialize_impl(specialize_extra):
     from ..language import constexpr
 
     def specialize_impl(arg, is_const=False, specialize_value=True, align=True):
-
         if arg is None:
             return ("constexpr", None)
         elif isinstance(arg, bool):
@@ -485,15 +485,18 @@ for v in list(type_canonicalisation_dict.values()):
     type_canonicalisation_dict[v] = v
 
 
+@dataclass
+class JitFunctionInfo:
+    module: ModuleType
+    name: str
+    jit_function: JITFunction
+
+
 class JITFunction(KernelInterface[T]):
-    # Hook for inspecting compiled functions and modules
-    cache_hook = None
-    # Hook to signal that a kernel is done compiling and inspect compiled function.
-    # cache_hook will always be called before compilation and compiled_hook after.
-    compiled_hook = None
 
     def _call_hook(
         self,
+        hook,
         key,
         signature,
         device,
@@ -501,24 +504,14 @@ class JITFunction(KernelInterface[T]):
         options,
         configs,
         is_warmup,
-        before,
-    ):
-        hook = JITFunction.cache_hook if before else JITFunction.compiled_hook
-        if hook is None:
-            return False
+    ) -> bool | None:
+        if not hook:
+            return None
 
         name = self.fn.__name__
         module = self.fn.__module__
         arg_reprs = ", ".join([f"{param.name}: {ty}" for param, ty in zip(self.params, key[1])])
         repr = f"{name}[num_warps={options.num_warps}, num_ctas={options.num_ctas}, num_stages={options.num_stages}, enable_fp_fusion={options.enable_fp_fusion}, launch_cooperative_grid={options.launch_cooperative_grid}]({arg_reprs})"
-
-        class JitFunctionInfo:
-
-            def __init__(self, module, name, jit_function):
-                self.module = module
-                self.name = name
-                self.jit_function = jit_function
-                pass
 
         specialization_data = serialize_specialization_data(name, signature, constants, configs[0], options, key)
 
@@ -568,7 +561,7 @@ class JITFunction(KernelInterface[T]):
         return {}, target, backend, binder
 
     def run(self, *args, grid, warmup, **kwargs):
-        kwargs["debug"] = kwargs.get("debug", self.debug) or os.environ.get("TRITON_DEBUG", "0") == "1"
+        kwargs["debug"] = kwargs.get("debug", self.debug) or knobs.runtime.debug
 
         # parse options
         device = driver.active.get_current_device()
@@ -579,6 +572,8 @@ class JITFunction(KernelInterface[T]):
             hook(*args, **kwargs)
 
         kernel_cache, target, backend, binder = self.device_caches[device]
+        # specialization is list[tuple[str, Any]], where first element of tuple is
+        # the type and the second parameter is the 'specialization' value.
         bound_args, specialization, options = binder(*args, **kwargs)
 
         # compute cache key
@@ -607,13 +602,15 @@ class JITFunction(KernelInterface[T]):
             attrvals = [x[1] for x in specialization]
             attrs = find_paths_if(attrvals, lambda _, x: isinstance(x, str))
             attrs = {k: backend.parse_attr(get_iterable_path(attrvals, k)) for k in attrs}
-            if self._call_hook(key, signature, device, constexprs, options, [attrs], warmup, before=True):
+            if self._call_hook(knobs.runtime.jit_cache_hook, key, signature, device, constexprs, options, [attrs],
+                               warmup):
                 return None
             # compile the kernel
             src = self.ASTSource(self, signature, constexprs, attrs)
             kernel = self.compile(src, target=target, options=options.__dict__)
             kernel_cache[key] = kernel
-            self._call_hook(key, signature, device, constexprs, options, [attrs], warmup, before=False)
+            self._call_hook(knobs.runtime.jit_post_compile_hook, key, signature, device, constexprs, options, [attrs],
+                            warmup)
 
         # Check that used global values have not changed.
         not_present = object()
@@ -633,9 +630,8 @@ class JITFunction(KernelInterface[T]):
             grid_2 = grid[2] if grid_size > 2 else 1
             # launch kernel
             launch_metadata = kernel.launch_metadata(grid, stream, *bound_args.values())
-            kernel.run(grid_0, grid_1, grid_2, stream, kernel.function, kernel.packed_metadata,
-                       launch_metadata, self.CompiledKernel.launch_enter_hook, self.CompiledKernel.launch_exit_hook,
-                       *bound_args.values())
+            kernel.run(grid_0, grid_1, grid_2, stream, kernel.function, kernel.packed_metadata, launch_metadata,
+                       knobs.runtime.launch_enter_hook, knobs.runtime.launch_exit_hook, *bound_args.values())
         return kernel
 
     def repr(self, _):
@@ -832,7 +828,7 @@ def jit(
 
     def decorator(fn: T) -> JITFunction[T]:
         assert callable(fn)
-        if os.getenv("TRITON_INTERPRET", "0") == "1":
+        if knobs.runtime.interpret:
             from .interpreter import InterpretedFunction
             return InterpretedFunction(fn, version=version, do_not_specialize=do_not_specialize,
                                        do_not_specialize_on_alignment=do_not_specialize_on_alignment, debug=debug,

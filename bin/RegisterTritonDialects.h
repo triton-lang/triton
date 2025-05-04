@@ -17,6 +17,7 @@
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h"
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/Passes.h"
 
+#include "nvidia/hopper/include/Transforms/Passes.h"
 #include "nvidia/include/Dialect/NVWS/Transforms/Passes.h"
 #include "nvidia/include/NVGPUToLLVM/Passes.h"
 #include "nvidia/include/TritonNVIDIAGPUToLLVM/Passes.h"
@@ -34,6 +35,7 @@ void registerTestAliasPass();
 void registerTestAlignmentPass();
 void registerTestAllocationPass();
 void registerTestMembarPass();
+void registerTestAMDGPUMembarPass();
 void registerTestTritonAMDGPURangeAnalysis();
 } // namespace test
 } // namespace mlir
@@ -47,6 +49,7 @@ inline void registerTritonDialects(mlir::DialectRegistry &registry) {
   mlir::test::registerTestAlignmentPass();
   mlir::test::registerTestAllocationPass();
   mlir::test::registerTestMembarPass();
+  mlir::test::registerTestAMDGPUMembarPass();
   mlir::test::registerTestTritonAMDGPURangeAnalysis();
   mlir::triton::registerConvertTritonToTritonGPUPass();
   mlir::triton::gpu::registerAllocateSharedMemoryPass();
@@ -80,6 +83,9 @@ inline void registerTritonDialects(mlir::DialectRegistry &registry) {
 
   // NVWS passes
   mlir::registerNVWSTransformsPasses();
+
+  // NVGPU transform passes
+  mlir::registerNVHopperTransformsPasses();
 
   registry.insert<
       mlir::triton::TritonDialect, mlir::cf::ControlFlowDialect,

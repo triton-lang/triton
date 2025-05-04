@@ -1051,45 +1051,6 @@ StringRef getAMDArch(Operation *module) {
   return ref.drop_front(4); // drop the "hip:"
 }
 
-inline ttg::SwizzledSharedEncodingAttr
-swizzleDotOperandLike(RankedTensorType type, ttg::CTALayoutAttr ctaLayout) {
-  // We want to see if the linear layout has the same order as an mma microtile
-  // of shape (8, 4*kWidth) or (4*kWidth, 8). If so, we return a
-  // DotOperandEncodingAttr with a tile of this shape This works because
-  // SwizzledSharedEncodingAttr::get just looks at the microtile to determine
-  // the swizzling
-
-  auto *ctx = type.getContext();
-  auto layout = ttg::toLinearEncoding(type);
-  auto order = layout.getThreadOrder();
-  auto rank = order.size();
-  if (rank < 2) {
-    return {};
-  }
-  int opIdx;
-  if (ttg::getOrderForDotOperand(0, rank, /*kContig=*/true) == order) {
-    opIdx = 0;
-  } else if (ttg::getOrderForDotOperand(1, rank, /*kContig=*/true) == order) {
-    opIdx = 1;
-  } else {
-    return {};
-  }
-  auto kWidth = layout.getContigPerThread()[order[0]];
-  SmallVector<unsigned> microtileShape(rank, 1);
-  microtileShape[order[0]] = 4 * kWidth;
-  microtileShape[order[1]] = 8;
-  // All the LinearLayouts contained within LinearEncoidngAttr have order [0, 1,
-  // 2, ...]
-  auto repOrder = to_vector(llvm::seq<unsigned>(rank));
-  auto tile = ttg::nvidiaMmaTile(ctx, microtileShape, kWidth, order, repOrder);
-  if (!divideLeft(layout.getLinearLayout(), tile).has_value()) {
-    return {};
-  }
-  return ttg::SwizzledSharedEncodingAttr::get(
-      ctx, opIdx, kWidth, type.getShape(), order, ctaLayout,
-      type.getElementTypeBitWidth(), false);
-}
-
 // If all the transitive uses of the given value have are used by a convert to
 // the same dot operand encoding, return the shared encoding that needs to be
 // used to be compatible with users' layouts. If there are incompatible shared
@@ -1116,28 +1077,18 @@ getSharedEncIfAllUsersAreDotEnc(Value val, bool &incompatible) {
     } else {
       if (!isa<ttg::LocalLoadOp, ttg::ConvertLayoutOp>(user))
         return std::nullopt;
-      auto srcTy = cast<triton::gpu::TensorOrMemDesc>(val.getType());
-      auto dstTy = cast<RankedTensorType>(user->getResult(0).getType());
-
-      // FIXME This may not be correct for multiple CTA, but getCTALayout is NYI
-      // for LinearEncodingAttr
-      auto CTALayout = isa<ttg::LinearEncodingAttr>(dstTy.getEncoding())
-                           ? ttg::getCTALayout(srcTy.getEncoding())
-                           : ttg::getCTALayout(dstTy.getEncoding());
-
-      if (auto dot =
-              dyn_cast<ttg::DotOperandEncodingAttr>(dstTy.getEncoding())) {
-        auto order = getOrderForMemory(srcTy);
-        unsigned bitWidth = srcTy.getElementTypeBitWidth();
-        tempAttr = ttg::SwizzledSharedEncodingAttr::get(
-            val.getContext(), dot, srcTy.getShape(), order, CTALayout, bitWidth,
-            /*needTrans=*/false);
-      } else {
-        // Try to see if the layout is like an mma microtile
-        tempAttr = swizzleDotOperandLike(dstTy, CTALayout);
-      }
-      if (!tempAttr)
+      auto dotOpEnc = dyn_cast<ttg::DotOperandEncodingAttr>(
+          cast<triton::gpu::TensorOrMemDesc>(user->getResult(0).getType())
+              .getEncoding());
+      if (!dotOpEnc)
         return std::nullopt;
+      auto srcTy = cast<triton::gpu::TensorOrMemDesc>(val.getType());
+      auto CTALayout = ttg::getCTALayout(srcTy.getEncoding());
+      auto order = getOrderForMemory(srcTy);
+      unsigned bitWidth = srcTy.getElementType().getIntOrFloatBitWidth();
+      tempAttr = ttg::SwizzledSharedEncodingAttr::get(
+          val.getContext(), dotOpEnc, srcTy.getShape(), order, CTALayout,
+          bitWidth, /*needTrans=*/false);
     }
     // Check that the shared encodings needed by the users are compatible.
     if (attr != nullptr && attr != tempAttr) {
@@ -1439,109 +1390,6 @@ void eraseLoopCarriedValues(scf::ForOp &loop, llvm::BitVector indices) {
 
   loop.erase();
   loop = newLoop;
-}
-
-// Find all underlying shared, tensory memory, or global scratch allocations of
-// `value`, returning failure if the function lost track of the allocation.
-LogicalResult findUnderlyingAllocations(Value value, DenseSet<Value> &allocs,
-                                        DenseSet<Value> &seen) {
-  // Don't get stuck in an infinite loop.
-  if (!seen.insert(value).second)
-    return success();
-
-  // We found an allocation.
-  if (isa_and_nonnull<ttg::LocalAllocOp, ttg::GlobalScratchAllocOp,
-                      ttng::TMEMAllocOp>(value.getDefiningOp())) {
-    allocs.insert(value);
-    return success();
-  }
-
-  // Assume poison aliases nothing.
-  if (value.getDefiningOp<ub::PoisonOp>())
-    return success();
-
-  // Look through subviews.
-  if (auto view = value.getDefiningOp<ttg::MemDescSubviewOp>()) {
-    return findUnderlyingAllocations(view.getSrc(), allocs, seen);
-  }
-
-  // Look through conditionals.
-  if (auto select = value.getDefiningOp<arith::SelectOp>()) {
-    if (failed(
-            findUnderlyingAllocations(select.getTrueValue(), allocs, seen)) ||
-        failed(
-            findUnderlyingAllocations(select.getFalseValue(), allocs, seen))) {
-      return failure();
-    }
-    return success();
-  }
-  if (auto ifOp = value.getDefiningOp<scf::IfOp>()) {
-    unsigned idx = cast<OpResult>(value).getResultNumber();
-    if (failed(findUnderlyingAllocations(ifOp.thenYield().getOperand(idx),
-                                         allocs, seen)) ||
-        failed(findUnderlyingAllocations(ifOp.elseYield().getOperand(idx),
-                                         allocs, seen))) {
-      return failure();
-    }
-    return success();
-  }
-
-  // Look through loops.
-  if (auto forOp = value.getDefiningOp<scf::ForOp>()) {
-    unsigned idx = cast<OpResult>(value).getResultNumber();
-    if (failed(findUnderlyingAllocations(forOp.getYieldedValues()[idx], allocs,
-                                         seen)) ||
-        failed(
-            findUnderlyingAllocations(forOp.getInitArgs()[idx], allocs, seen)))
-      return failure();
-    return success();
-  }
-
-  // Handle block arguments.
-  if (auto arg = dyn_cast<BlockArgument>(value)) {
-
-    // Loop through loops.
-    if (auto forOp = dyn_cast<scf::ForOp>(arg.getOwner()->getParentOp())) {
-      unsigned idx = arg.getArgNumber() - 1;
-      if (failed(findUnderlyingAllocations(forOp.getYieldedValues()[idx],
-                                           allocs, seen)) ||
-          failed(findUnderlyingAllocations(forOp.getInitArgs()[idx], allocs,
-                                           seen)))
-        return failure();
-      return success();
-    }
-
-    // Look through warp specialization.
-    if (auto wsOp = dyn_cast<ttg::WarpSpecializePartitionsOp>(
-            arg.getOwner()->getParentOp())) {
-      return findUnderlyingAllocations(
-          wsOp.getParentOp().getOperand(arg.getArgNumber()), allocs, seen);
-    }
-
-    // Unhandled block argument type.
-    return failure();
-  }
-
-  return failure();
-}
-
-bool mayAliasAllocations(const DenseSet<Value> &lhs,
-                         const DenseSet<Value> &rhs) {
-  DenseSet<Value> lhsAllocs, rhsAllocs;
-  DenseSet<Value> lhsSeen, rhsSeen;
-
-  // If we failed to find the underlying allocations, we assume they may alias.
-  for (Value lhsValue : lhs) {
-    if (failed(findUnderlyingAllocations(lhsValue, lhsAllocs, lhsSeen)))
-      return true;
-  }
-  for (Value rhsValue : rhs) {
-    if (failed(findUnderlyingAllocations(rhsValue, rhsAllocs, rhsSeen)))
-      return true;
-  }
-
-  // The allocations alias if they may share the same underlying allocations.
-  return !llvm::set_intersection(lhsAllocs, rhsAllocs).empty();
 }
 
 } // namespace mlir

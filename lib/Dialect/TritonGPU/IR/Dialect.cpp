@@ -152,8 +152,10 @@ SmallVector<unsigned> getOrderForDotOperand(unsigned opIdx, unsigned rank,
                                             bool kContig) {
   // kContig: if true, the matrix is fastest-running on k,
   //         otherwise it is on m (resp. n)
-  // opIdx=0: [*batch, m, k]
-  // opIdx=1: [*batch, k, n]
+  // opIdx=0: [batch, m, k] if rank == 3 else [m, k]
+  // opIdx=1: [batch, k, n] if rank == 3 else [k, n]
+  // batch (if rank == 3) is always the slowest running dimension
+  assert(rank == 2 || rank == 3);
   assert(opIdx == 0 || opIdx == 1);
   auto rowMajor = bool(opIdx) != kContig;
   return getMatrixOrder(rank, rowMajor);
@@ -426,17 +428,36 @@ LogicalResult tryJoinOnAxis(MLIRContext *ctx, const LinearLayout &inLl,
                             std::optional<Location> loc) {
   auto kRegister = StringAttr::get(ctx, "register");
   auto outDims = llvm::to_vector(inLl.getOutDimNames());
-  auto split = LinearLayout::identity1D(2, kRegister, outDims[axis]);
   if (fwdInference) {
+    auto split = LinearLayout::identity1D(2, kRegister, outDims[axis]);
     outLl = split * inLl;
   } else {
-    if (auto div = divideLeft(inLl, split)) {
-      outLl = *div;
-    } else {
+    // Assert that there is a dimension with size 2 in the axis
+    // that has contiguous elements
+    // Note that this is more general than the fwdInference case in that
+    // - It allows the dimension not to be the fastest running
+    // - It allows broadcasting
+    // In general, this allows us to split along any axis as long as
+    // the basis (0, 0, ..., 0, 1, 0, ..., 0) is in the registers.
+    bool found = false;
+    LinearLayout::BasesT newBases;
+    for (const auto &basesDim : inLl.getBases()) {
+      std::vector<std::vector<int32_t>> newBasesDim;
+      for (auto base : basesDim.second) {
+        if (base[axis] == 1 && basesDim.first == kRegister) {
+          found = true;
+          continue;
+        }
+        base[axis] /= 2;
+        newBasesDim.push_back(std::move(base));
+      }
+      newBases.insert({basesDim.first, std::move(newBasesDim)});
+    }
+    if (!found)
       return emitOptionalError(loc,
                                "Fp4ToFpOp/SplitOp requires at least 2 elements "
                                "per thread in the axis/last dimension");
-    }
+    outLl = LinearLayout(std::move(newBases), std::move(outDims));
   }
   return success();
 }
@@ -2066,19 +2087,8 @@ struct TritonGPUInferLayoutInterface
       return success();
     }
     auto ll = toLinearLayout(shape, operandEncoding);
-    auto namedBases = ll.getBases();
-    for (auto &bases : llvm::make_second_range(namedBases)) {
-      for (auto &b : bases) {
-        std::vector<int32_t> newB;
-        for (auto i : order) {
-          newB.push_back(b[i]);
-        }
-        b = std::move(newB);
-      }
-    }
-    auto retLl = LinearLayout(std::move(namedBases),
-                              llvm::to_vector(ll.getOutDimNames()));
-    resultEncoding = LinearEncodingAttr::get(ctx, std::move(retLl));
+    auto transposedLl = transposeLinearLayout(ll, order);
+    resultEncoding = LinearEncodingAttr::get(ctx, std::move(transposedLl));
     return success();
   }
 
@@ -2417,36 +2427,21 @@ struct TritonGPUInferLayoutInterface
   inferReshapeOpEncoding(ArrayRef<int64_t> srcShape, Attribute srcEnc,
                          ArrayRef<int64_t> dstShape, Attribute &dstEnc,
                          std::optional<Location> loc) const override {
+    if (product(srcShape) != product(dstShape)) {
+      return emitOptionalError(loc, "numel of dst shape does not match "
+                                    "numel of src shape");
+    }
     auto result =
         inferReshapeOpLegacyEncoding(srcShape, srcEnc, dstShape, dstEnc);
     if (succeeded(result)) {
       return result;
     }
-
     // If the legacy encoding failed use LinearLayouts.
     // Once LinearLayouts are more widely used, we can remove
     // inferReshapeOpLegacyEncoding and simply use LLs.
-    auto *ctx = getContext();
-    auto src = toLinearLayout(srcShape, srcEnc);
+    LinearLayout ll = inferReshapeLinearLayout(srcShape, srcEnc, dstShape);
 
-    if (product(srcShape) != product(dstShape)) {
-      return emitOptionalError(loc, "numel of dst shape does not match "
-                                    "numel of src shape");
-    }
-
-    auto newRank = dstShape.size();
-
-    auto newOutDims = standardOutDimPairs(ctx, dstShape);
-
-    // reshapeOp assumes minor-to-major, so we need to transpose the out dims
-    // before the reshape
-    auto srcOutDims = to_vector(src.getOutDimNames());
-    std::reverse(srcOutDims.begin(), srcOutDims.end());
-    std::reverse(newOutDims.begin(), newOutDims.end());
-    auto dst = src.transposeOuts(srcOutDims)
-                   .reshapeOuts(newOutDims)
-                   .transposeOuts(standardOutDimNames(ctx, newRank));
-    dstEnc = LinearEncodingAttr::get(ctx, dst);
+    dstEnc = LinearEncodingAttr::get(srcEnc.getContext(), ll);
     return success();
   }
 
@@ -2456,14 +2451,15 @@ struct TritonGPUInferLayoutInterface
                              std::optional<Location> loc) const override {
     if (auto enc = mlir::dyn_cast<BlockedEncodingAttr>(srcEnc)) {
       // JoinOp takes two tensors of shape AxBxC and generates a tensor of shape
-      // AxBxCx2.  The encoding is the same as the input, but with 2 elems per
-      // thread in the new dimension.  The new dimension is most-minor.
+      // AxBxCx2. The encoding is the same as the input, but with 2 elems per
+      // thread in the new dimension. The new dimension is the fastest running
+      // dimension.
       auto append = [](ArrayRef<unsigned> vals, int val) {
         SmallVector<unsigned> ret(vals);
         ret.push_back(val);
         return ret;
       };
-      auto appendMinorDim = [](ArrayRef<unsigned> order) {
+      auto appendMajorDim = [](ArrayRef<unsigned> order) {
         SmallVector<unsigned> ret(order);
         ret.insert(ret.begin(), ret.size());
         return ret;
@@ -2471,10 +2467,10 @@ struct TritonGPUInferLayoutInterface
       dstEnc = BlockedEncodingAttr::get(
           enc.getContext(), append(enc.getSizePerThread(), 2),
           append(enc.getThreadsPerWarp(), 1), append(enc.getWarpsPerCTA(), 1),
-          appendMinorDim(enc.getOrder()),
+          appendMajorDim(enc.getOrder()),
           CTALayoutAttr::get(enc.getContext(), append(enc.getCTAsPerCGA(), 1),
                              append(enc.getCTASplitNum(), 1),
-                             appendMinorDim(enc.getCTAOrder())));
+                             appendMajorDim(enc.getCTAOrder())));
       return success();
     }
 
@@ -2505,8 +2501,8 @@ struct TritonGPUInferLayoutInterface
     if (enc) {
       // SplitOp takes a tensor of shape AxBxCx2 and generates two tensors of
       // shape AxBxC.  The input must have 2 elements per thread in the last
-      // dimension, which must be most-minor.  The result encoding is the same
-      // as the input, but with the last dimension removed.
+      // dimension, which must be the fastest running dimension. The result
+      // encoding is the same as the input, but with the last dimension removed.
       if (enc.getSizePerThread().back() != 2) {
         return emitOptionalError(
             loc, "SplitOp requires 2 elements per thread in the "
@@ -3166,4 +3162,14 @@ bool triton::gpu::isInnermostContiguous(MemDescType type, unsigned numElems) {
   actual = actual.transposeOuts(revOut).flattenOuts();
 
   return actual.getNumConsecutiveInOut() >= numElems;
+}
+
+LinearLayout triton::gpu::inferReshapeLinearLayout(ArrayRef<int64_t> srcShape,
+                                                   Attribute srcEnc,
+                                                   ArrayRef<int64_t> dstShape) {
+  auto *ctx = srcEnc.getContext();
+  auto src = toLinearLayout(srcShape, srcEnc);
+  assert(product(srcShape) == product(dstShape));
+  auto dst = reshapeLayout(ctx, src, dstShape);
+  return dst;
 }

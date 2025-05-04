@@ -92,6 +92,51 @@ void triton::hoistOpsBefore(Block *block, Block::iterator it,
 }
 
 //===----------------------------------------------------------------------===//
+// Sinking Utilities
+//===----------------------------------------------------------------------===//
+
+Value triton::sinkValueRedefinition(RewriterBase &rewriter, Value in, Value out,
+                                    Block *block) {
+  OpBuilder::InsertionGuard guard(rewriter);
+  for (; block != in.getParentBlock();
+       block = block->getParentOp()->getBlock()) {
+    Operation *op = block->getParentOp();
+    rewriter.setInsertionPoint(op);
+
+    // `in` is live into the loop body. `out` becomes the live-out if the
+    // loop executes at least once.
+    if (auto forOp = dyn_cast<scf::ForOp>(op)) {
+      (void)addIterArgsToLoop(rewriter, forOp, in);
+      appendToForOpYield(forOp, out);
+      out = forOp.getResults().back();
+      continue;
+    }
+
+    // `in` is live into both branches. `out` becomes the live-out if the
+    // particular branch is taken.
+    if (auto ifOp = dyn_cast<scf::IfOp>(op)) {
+      scf::IfOp newIfOp =
+          replaceIfOpWithNewSignature(rewriter, ifOp, out.getType());
+      scf::YieldOp taken = newIfOp.thenYield();
+      scf::YieldOp other = newIfOp.elseYield();
+      if (block == newIfOp.elseBlock())
+        std::swap(taken, other);
+      taken->insertOperands(taken.getNumOperands(), out);
+      other->insertOperands(other.getNumOperands(), in);
+      out = newIfOp.getResults().back();
+      rewriter.eraseOp(ifOp);
+      continue;
+    }
+
+    // TODO: Handle `scf.while`, etc.
+    llvm::report_fatal_error("FIXME: sinking into unhandled control flow op: " +
+                             op->getName().getStringRef());
+  }
+
+  return out;
+}
+
+//===----------------------------------------------------------------------===//
 // Loop Pipelining Utilities
 //===----------------------------------------------------------------------===//
 
@@ -243,6 +288,7 @@ bool mlir::triton::getDisallowAccMultiBuffer(scf::ForOp forOp) {
 std::pair<OpResult, int64_t>
 mlir::triton::getDefinitionAndDistance(scf::ForOp forOp, Value value) {
   int64_t distance = 0;
+  DenseSet<Value> seen;
   while (auto arg = dyn_cast<BlockArgument>(value)) {
     // Ignore implicit captures.
     if (arg.getOwner() != forOp.getBody())
@@ -252,6 +298,8 @@ mlir::triton::getDefinitionAndDistance(scf::ForOp forOp, Value value) {
       return {nullptr, 0};
     ++distance;
     value = forOp.getYieldedValues()[arg.getArgNumber() - 1];
+    if (!seen.insert(value).second)
+      return {nullptr, 0};
   }
   return {cast<OpResult>(value), distance};
 }
@@ -313,14 +361,15 @@ Value mlir::triton::createScalarAlloc(ImplicitLocOpBuilder &rewriter, Type type,
 }
 
 // Create an allocation and init the mbarriers.
-Value mlir::triton::createBarrierAlloc(scf::ForOp forOp, int numBarriers) {
+Value mlir::triton::createBarrierAlloc(scf::ForOp forOp, int numBarriers,
+                                       int arriveCount) {
   ImplicitLocOpBuilder rewriter(forOp.getLoc(), forOp);
 
   Value barrierAlloc =
       createScalarAlloc(rewriter, rewriter.getI64Type(), numBarriers);
   for (unsigned i = 0; i < numBarriers; i++) {
     Value barrierView = createSingleBufferView(rewriter, barrierAlloc, i);
-    rewriter.create<ttng::InitBarrierOp>(barrierView, 1);
+    rewriter.create<ttng::InitBarrierOp>(barrierView, arriveCount);
   }
   // Invalidate and deallocate the barriers.
   rewriter.setInsertionPointAfter(forOp);

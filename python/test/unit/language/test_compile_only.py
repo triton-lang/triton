@@ -46,7 +46,7 @@ def test_compile_only_dot() -> None:
                r"(.|\n)*?"
                r"%(?P<B_SHMEM>\d+) = ttg\.local_alloc %(?P=B)"
                r"(.|\n)*?"
-               r"%(?P<TMEM_BASE>\d+) = ttng\.tmem_alloc"
+               r"%(?P<TMEM_BASE>\w+) = ttng\.tmem_alloc"
                r"(.|\n)*?"
                r"ttng\.tc_gen5_mma %(?P=A_SHMEM), %(?P=B_SHMEM), %(?P=TMEM_BASE)"
                r"(.|\n)*?"

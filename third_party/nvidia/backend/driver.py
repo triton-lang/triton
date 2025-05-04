@@ -7,6 +7,7 @@ import subprocess
 import tempfile
 import triton
 from pathlib import Path
+from triton import knobs
 from triton.runtime.build import _build
 from triton.runtime.cache import get_cache_manager
 from triton.runtime import _allocation
@@ -23,8 +24,7 @@ libraries = ['cuda']
 
 @functools.lru_cache()
 def libcuda_dirs():
-    env_libcuda_path = os.getenv("TRITON_LIBCUDA_PATH")
-    if env_libcuda_path:
+    if env_libcuda_path := knobs.nvidia.libcuda_path:
         return [env_libcuda_path]
 
     libs = subprocess.check_output(["/sbin/ldconfig", "-p"]).decode()
@@ -122,6 +122,9 @@ def ty_to_cpp(ty):
     }[ty]
 
 
+_BASE_ARGS_FORMAT = "iiiKKppOOOOO"
+
+
 def make_launcher(constants, signature):
 
     def _expand_signature(sig, output):
@@ -184,7 +187,7 @@ def make_launcher(constants, signature):
     signature = {i: s for i, s in enumerate(expand_signature)}
 
     args_format = ''.join([format_of(ty) for ty in signature.values()])
-    format = "iiiKKpOOOOO" + args_format
+    format = _BASE_ARGS_FORMAT + args_format
 
     flat_signature = []
     for sig in signature.values():
@@ -264,67 +267,65 @@ static cuLaunchKernelEx_t getLaunchKernelExHandle() {{
   return cuLaunchKernelExHandle;
 }}
 
-static void _launch(int gridX, int gridY, int gridZ, int num_warps, int num_ctas, int launch_cooperative_grid, int clusterDimX, int clusterDimY, int clusterDimZ, int shared_memory, CUstream stream, CUfunction function, CUdeviceptr global_scratch{', ' + arg_decls if len(arg_decls) > 0 else ''}) {{
+static void _launch(int gridX, int gridY, int gridZ, int num_warps, int num_ctas, int launch_cooperative_grid, int launch_pdl, int clusterDimX, int clusterDimY, int clusterDimZ, int shared_memory, CUstream stream, CUfunction function, CUdeviceptr global_scratch{', ' + arg_decls if len(arg_decls) > 0 else ''}) {{
   void *params[] = {{ {', '.join(params)} }};
   if (gridX*gridY*gridZ > 0) {{
-    if ((num_ctas == 1) && (0 == launch_cooperative_grid)) {{
-      CUDA_CHECK(cuLaunchKernel(function, gridX, gridY, gridZ, 32*num_warps, 1, 1, shared_memory, stream, params, 0));
-    }} else if ((num_ctas == 1) && (0 != launch_cooperative_grid)) {{
-      CUlaunchAttribute launchAttr[1];
-      CUlaunchAttribute coopAttr = {{ .id = CU_LAUNCH_ATTRIBUTE_COOPERATIVE, .value = 1}};
-      launchAttr[0] = coopAttr;
-
-      CUlaunchConfig config;
-      config.gridDimX = gridX;
-      config.gridDimY = gridY;
-      config.gridDimZ = gridZ;
-      config.blockDimX = 32 * num_warps;
-      config.blockDimY = 1;
-      config.blockDimZ = 1;
-      config.sharedMemBytes = shared_memory;
-      config.hStream = stream;
-      config.attrs = launchAttr;
-      config.numAttrs = 1;
-
-      static cuLaunchKernelEx_t cuLaunchKernelExHandle = NULL;
-      if (cuLaunchKernelExHandle == NULL) {{
-        cuLaunchKernelExHandle = getLaunchKernelExHandle();
-      }}
-      CUDA_CHECK(cuLaunchKernelExHandle(&config, function, params, 0));
-
-    }} else {{
-      CUlaunchAttribute launchAttr[3];
-      launchAttr[0].id = CU_LAUNCH_ATTRIBUTE_CLUSTER_DIMENSION;
-      launchAttr[0].value.clusterDim.x = clusterDimX;
-      launchAttr[0].value.clusterDim.y = clusterDimY;
-      launchAttr[0].value.clusterDim.z = clusterDimZ;
-      launchAttr[1].id = CU_LAUNCH_ATTRIBUTE_CLUSTER_SCHEDULING_POLICY_PREFERENCE;
-      launchAttr[1].value.clusterSchedulingPolicyPreference = CU_CLUSTER_SCHEDULING_POLICY_SPREAD;
-
-      unsigned numAttrs = 2;
-      if (0 != launch_cooperative_grid) {{
-        CUlaunchAttribute coopAttr = {{ .id = CU_LAUNCH_ATTRIBUTE_COOPERATIVE, .value = 1}};
-        launchAttr[2] = coopAttr;
-        numAttrs = 3;
-      }}
-
-      CUlaunchConfig config;
-      config.gridDimX = gridX * clusterDimX;
-      config.gridDimY = gridY * clusterDimY;
-      config.gridDimZ = gridZ * clusterDimZ;
-      config.blockDimX = 32 * num_warps;
-      config.blockDimY = 1;
-      config.blockDimZ = 1;
-      config.sharedMemBytes = shared_memory;
-      config.hStream = stream;
-      config.attrs = launchAttr;
-      config.numAttrs = numAttrs;
-      static cuLaunchKernelEx_t cuLaunchKernelExHandle = NULL;
-      if (cuLaunchKernelExHandle == NULL) {{
-        cuLaunchKernelExHandle = getLaunchKernelExHandle();
-      }}
-      CUDA_CHECK(cuLaunchKernelExHandle(&config, function, params, 0));
+    // 4 attributes that we can currently pass maxmimum
+    CUlaunchAttribute launchAttr[4];
+    static cuLaunchKernelEx_t cuLaunchKernelExHandle = NULL;
+    if (cuLaunchKernelExHandle == NULL) {{
+      cuLaunchKernelExHandle = getLaunchKernelExHandle();
     }}
+    CUlaunchConfig config;
+    config.gridDimX = gridX;
+    config.gridDimY = gridY;
+    config.gridDimZ = gridZ;
+
+    if (num_ctas != 1) {{
+      config.gridDimX *= clusterDimX;
+      config.gridDimY *= clusterDimY;
+      config.gridDimZ *= clusterDimZ;
+    }}
+
+    config.blockDimX = 32 * num_warps;
+    config.blockDimY = 1;
+    config.blockDimZ = 1;
+    config.sharedMemBytes = shared_memory;
+    config.hStream = stream;
+    config.attrs = launchAttr;
+    int num_attrs = 0;
+
+    if (launch_pdl != 0) {{
+      CUlaunchAttribute pdlAttr = {{ .id = CU_LAUNCH_ATTRIBUTE_PROGRAMMATIC_STREAM_SERIALIZATION, .value = 1}};
+      launchAttr[num_attrs] = pdlAttr;
+      ++num_attrs;
+    }}
+
+    if (launch_cooperative_grid != 0) {{
+      CUlaunchAttribute coopAttr = {{ .id = CU_LAUNCH_ATTRIBUTE_COOPERATIVE, .value = 1}};
+      launchAttr[num_attrs] = coopAttr;
+      ++num_attrs;
+    }}
+
+    if (num_ctas != 1) {{
+      CUlaunchAttribute clusterAttr = {{}};
+      clusterAttr.id = CU_LAUNCH_ATTRIBUTE_CLUSTER_DIMENSION;
+      clusterAttr.value.clusterDim.x = clusterDimX;
+      clusterAttr.value.clusterDim.y = clusterDimY;
+      clusterAttr.value.clusterDim.z = clusterDimZ;
+      launchAttr[num_attrs] = clusterAttr;
+      ++num_attrs;
+
+      CUlaunchAttribute clusterSchedulingAttr = {{}};
+      clusterSchedulingAttr.id = CU_LAUNCH_ATTRIBUTE_CLUSTER_SCHEDULING_POLICY_PREFERENCE;
+      clusterSchedulingAttr.value.clusterSchedulingPolicyPreference = CU_CLUSTER_SCHEDULING_POLICY_SPREAD;
+      launchAttr[num_attrs] = clusterSchedulingAttr;
+      ++num_attrs;
+    }}
+
+    config.numAttrs = num_attrs;
+
+    CUDA_CHECK(cuLaunchKernelExHandle(&config, function, params, 0));
   }}
 }}
 
@@ -444,6 +445,7 @@ static PyObject* launch(PyObject* self, PyObject* args) {{
   uint64_t _stream;
   uint64_t _function;
   int launch_cooperative_grid;
+  int launch_pdl;
   PyObject *launch_enter_hook = NULL;
   PyObject *launch_exit_hook = NULL;
   PyObject *kernel_metadata = NULL;
@@ -451,7 +453,7 @@ static PyObject* launch(PyObject* self, PyObject* args) {{
   PyObject *global_scratch_obj = NULL;
   {newline.join([f"{_extracted_type(ty)} _arg{i};" for i, ty in signature.items()])}
   if(!PyArg_ParseTuple(args, \"{format}\", &gridX, &gridY, &gridZ,
-                                           &_stream, &_function, &launch_cooperative_grid, &global_scratch_obj,
+                                           &_stream, &_function, &launch_cooperative_grid, &launch_pdl, &global_scratch_obj,
                                            &kernel_metadata, &launch_metadata,
                                            &launch_enter_hook, &launch_exit_hook{args_list})) {{
     return NULL;
@@ -485,7 +487,7 @@ static PyObject* launch(PyObject* self, PyObject* args) {{
   {newline.join(ptr_decls)}
   {newline.join(tma_decls)}
   Py_BEGIN_ALLOW_THREADS;
-  _launch(gridX, gridY, gridZ, num_warps, num_ctas, launch_cooperative_grid, clusterDimX, clusterDimY, clusterDimZ, shared_memory, (CUstream)_stream, (CUfunction)_function, global_scratch{', ' + ', '.join(internal_args_list) if len(internal_args_list) > 0 else ''});
+  _launch(gridX, gridY, gridZ, num_warps, num_ctas, launch_cooperative_grid, launch_pdl, clusterDimX, clusterDimY, clusterDimZ, shared_memory, (CUstream)_stream, (CUfunction)_function, global_scratch{', ' + ', '.join(internal_args_list) if len(internal_args_list) > 0 else ''});
   Py_END_ALLOW_THREADS;
   if (PyErr_Occurred()) {{
     return NULL;
@@ -584,8 +586,8 @@ def wrap_handle_tensordesc(launcher, tensordesc_meta):
         return launcher
 
     def inner(*args):
-        meta_args = args[:11]
-        raw_kernel_args = args[11:]
+        meta_args = args[:len(_BASE_ARGS_FORMAT)]
+        raw_kernel_args = args[len(_BASE_ARGS_FORMAT):]
         tensordesc_idx = 0
         final_args = []
         for i, arg in enumerate(raw_kernel_args):
@@ -619,6 +621,7 @@ class CudaLauncher(object):
         self.global_scratch_size = metadata.global_scratch_size
         self.global_scratch_align = metadata.global_scratch_align
         self.launch_cooperative_grid = metadata.launch_cooperative_grid
+        self.launch_pdl = metadata.launch_pdl
 
     def __call__(self, gridX, gridY, gridZ, stream, function, *args):
         if self.global_scratch_size > 0:
@@ -627,7 +630,8 @@ class CudaLauncher(object):
             global_scratch = _allocation._allocator(alloc_size, self.global_scratch_align, stream)
         else:
             global_scratch = None
-        self.launch(gridX, gridY, gridZ, stream, function, self.launch_cooperative_grid, global_scratch, *args)
+        self.launch(gridX, gridY, gridZ, stream, function, self.launch_cooperative_grid, self.launch_pdl,
+                    global_scratch, *args)
 
 
 class CudaDriver(GPUDriver):

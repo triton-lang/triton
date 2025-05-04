@@ -7,6 +7,7 @@ from functools import partial, wraps
 import typing
 from typing import Union, Callable, List, Sequence, TypeVar, Optional, Tuple
 import builtins
+from .. import knobs
 from ..runtime.jit import jit
 import inspect
 import os
@@ -1067,10 +1068,11 @@ class tensor(base_value):
             slices = slices.values
         ret = self
         for dim, sl in enumerate(slices):
-            if sl is None or isinstance(sl, constexpr) and sl.value is None:
+            if _unwrap_if_constexpr(sl) is None:
                 ret = semantic.expand_dims(ret, dim, _builder)
-            elif isinstance(sl, (builtins.slice, slice)) and sl.start is None and sl.stop is None and sl.step is None:
-                pass
+            elif isinstance(sl, (builtins.slice, slice)) and all(
+                    _unwrap_if_constexpr(arg) is None for arg in (sl.start, sl.stop, sl.step)):
+                pass  # an unsqueeze
             else:
                 raise ValueError(f"unsupported tensor index: {sl}")
         return ret
@@ -1883,8 +1885,8 @@ def dot(input, other, acc=None, input_precision=None, allow_tf32=None, max_num_i
     assert input_precision is None or allow_tf32 is None, "Only one of input_precision and allow_tf32 can be specified"
     if input_precision is None:
         supports_tf32 = _builder and "tf32" in _builder.options.allowed_dot_input_precisions
-        default_precision = "tf32" if (supports_tf32 and (allow_tf32 or allow_tf32 is None)) else "ieee"
-        input_precision = os.getenv("TRITON_F32_DEFAULT", default_precision)
+        input_precision = knobs.language.fp32_default or ("tf32" if (supports_tf32 and
+                                                                     (allow_tf32 or allow_tf32 is None)) else "ieee")
 
     input_precision = _constexpr_to_value(input_precision)
     out_dtype = _constexpr_to_value(out_dtype)

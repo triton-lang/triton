@@ -73,7 +73,11 @@ public:
         trans.getSrc());
     auto newTrans = rewriter.create<MemDescTransOp>(trans.getLoc(), alloc,
                                                     ArrayRef<int32_t>({1, 0}));
-    rewriter.replaceOpWithNewOp<LocalLoadOp>(trans, sharedLoadTy, newTrans);
+    auto localLoadOp =
+        rewriter.create<LocalLoadOp>(trans.getLoc(), sharedLoadTy, newTrans);
+    rewriter.modifyOpInPlace(cvtOp, [&]() {
+      cvtOp.getSrcMutable().assign(localLoadOp.getResult());
+    });
     return success();
   }
 };
@@ -136,6 +140,75 @@ public:
                                                   trans.getSrc());
     rewriter.replaceOpWithNewOp<MemDescTransOp>(allocOp, newAlloc,
                                                 ArrayRef<int32_t>({1, 0}));
+    return success();
+  }
+};
+
+static Attribute inferSrcEncodingMemDescReshape(Attribute dstEncoding,
+                                                ArrayRef<int64_t> srcShape,
+                                                ArrayRef<int64_t> dstShape) {
+  auto mmaEncoding = dyn_cast<NVMMASharedEncodingAttr>(dstEncoding);
+  if (!mmaEncoding)
+    return Attribute();
+  // TODO: supporting reshape of CTA layouts is non-trivial.
+  if (getNumCTAs(mmaEncoding) > 1)
+    return Attribute();
+  int innerDimDst =
+      mmaEncoding.getTransposed() ? dstShape.front() : dstShape.back();
+  int innerDimSrc =
+      mmaEncoding.getTransposed() ? srcShape.front() : srcShape.back();
+  // For now disallow reshape of the inner dimension.
+  if (innerDimDst != innerDimSrc)
+    return Attribute();
+
+  // CTALayout can be all 1's because we bailed on multi-CTA layouts above.
+  auto CTALayout = CTALayoutAttr::get(
+      dstEncoding.getContext(),
+      /*CTAsPerCGA=*/SmallVector<unsigned>(srcShape.size(), 1),
+      /*CTASplitNum=*/SmallVector<unsigned>(srcShape.size(), 1),
+      /*CTAOrder=*/llvm::to_vector(llvm::seq<unsigned>(srcShape.size())));
+  // Check that the second dim is big enough to contain a full swizzle.
+  return NVMMASharedEncodingAttr::get(
+      dstEncoding.getContext(), mmaEncoding.getSwizzlingByteWidth(),
+      mmaEncoding.getTransposed(), mmaEncoding.getElementBitWidth(),
+      mmaEncoding.getFp4Padded(), CTALayout);
+}
+
+// Rewrite
+//
+//   alloc(reshape(), #shared1) ->
+//   memdesc_reshape(alloc() #shared2))
+//
+// if dot is an MMAv3/v5 (because MMAv3/v5 allows us to fold transposes).
+class ReshapeMemDesc : public OpRewritePattern<LocalAllocOp> {
+public:
+  using OpRewritePattern::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(LocalAllocOp allocOp,
+                                PatternRewriter &rewriter) const override {
+    if (!allocOp.getSrc())
+      return failure();
+
+    auto reshapeOp = allocOp.getSrc().getDefiningOp<ReshapeOp>();
+    if (!reshapeOp)
+      return failure();
+
+    MemDescType allocType = allocOp.getType();
+    auto allocEncoding = allocType.getEncoding();
+
+    RankedTensorType srcTy = reshapeOp.getSrc().getType();
+    auto newAllocEncoding = inferSrcEncodingMemDescReshape(
+        allocEncoding, srcTy.getShape(), allocType.getShape());
+    if (!newAllocEncoding)
+      return failure();
+
+    MemDescType innerTy =
+        MemDescType::get(srcTy.getShape(), srcTy.getElementType(),
+                         newAllocEncoding, allocType.getMemorySpace());
+    auto newAlloc = rewriter.create<LocalAllocOp>(allocOp.getLoc(), innerTy,
+                                                  reshapeOp.getSrc());
+    rewriter.replaceOpWithNewOp<MemDescReshapeOp>(allocOp, allocOp.getType(),
+                                                  newAlloc);
     return success();
   }
 };
@@ -293,7 +366,7 @@ public:
 
     mlir::RewritePatternSet patterns(context);
     patterns.add<SwizzleShmemConvert>(context);
-    patterns.add<FuseTransMMAV3Plus>(context);
+    patterns.add<FuseTransMMAV3Plus, ReshapeMemDesc>(context);
     patterns.add<UseShmemForScales>(context);
     ConvertLayoutOp::getCanonicalizationPatterns(patterns, context);
     if (failed(applyPatternsGreedily(m, std::move(patterns))))

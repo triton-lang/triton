@@ -1,3 +1,4 @@
+#include "mlir/Dialect/UB/IR/UBOps.h"
 #include "mlir/IR/Dominance.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 #include "triton/Analysis/Utility.h"
@@ -86,7 +87,7 @@ getTopLevelUsersInLoop(Operation *op, scf::ForOp forOp,
     }
     // Don't count view operations as uses. Follow them through to their
     // users.
-    if (isa<ttg::MemDescTransOp, ttg::MemDescSubviewOp>(use->getOwner())) {
+    if (use->getOwner()->hasTrait<OpTrait::MemDescViewTrait>()) {
       for (auto &use : use->getOwner()->getUses())
         q.push_back(&use);
       continue;
@@ -462,7 +463,7 @@ void createTMABarrierAndWait(
 // Check if load requires additional buffer for a mma pipelining
 bool loadRequiresAdditionalBuffer(Operation *loadOp) {
   auto skipViewOps = [](Operation *op) -> Operation * {
-    while (op->hasOneUse() && isa<ttg::MemDescTransOp>(op)) {
+    while (op->hasOneUse() && op->hasTrait<OpTrait::MemDescViewTrait>()) {
       op = *op->getUsers().begin();
     }
     return op;
@@ -504,8 +505,9 @@ scf::ForOp lowerLoads(scf::ForOp forOp, CoarseSchedule &schedule) {
           // Allocate additional buffer required by the wgmma pipelining.
           stageDiff += 1;
         }
-        asyncLoads[&op] = {.stageDiff = stageDiff,
-                           .sharedEncoding = sharedEncoding};
+        auto &asyncLoad = asyncLoads[&op];
+        asyncLoad.stageDiff = stageDiff;
+        asyncLoad.sharedEncoding = sharedEncoding;
       } else if (stageDiff > 1) {
         // Distance-1 loads can in most cases be pipelined in registers without
         // any performance degradation, as the schedule will usually reorder the
@@ -598,11 +600,13 @@ scf::ForOp lowerLoads(scf::ForOp forOp, CoarseSchedule &schedule) {
 
   createTMABarrierAndWait(forOp, asyncLoads, loadGroups, schedule);
 
+  bool hasAsyncLoads = false;
   for (auto [op, asyncLoad] : asyncLoads) {
     auto [insertIdx, extractIdx, phase, _] = loadGroups[asyncLoad.stageDiff];
     if (auto loadOp = dyn_cast<tt::LoadOp>(op)) {
       createAsyncCopy(forOp, loadOp, asyncLoad.alloc, insertIdx, extractIdx,
                       schedule);
+      hasAsyncLoads = true;
     } else if (auto loadOp = dyn_cast<tt::DescriptorLoadOp>(op)) {
       createTMAAsyncLoad(forOp, loadOp, asyncLoad.alloc, insertIdx, extractIdx,
                          asyncLoad.barrier, asyncLoad.waitOp, schedule);
@@ -626,10 +630,12 @@ scf::ForOp lowerLoads(scf::ForOp forOp, CoarseSchedule &schedule) {
   // correct stages.
   scheduleDependencies(forOp, schedule);
 
-  // Insert sync point for any possibly outstanding loads after the loop. This
-  // can happen as we speculatively execute loads in the loop.
-  builder.setInsertionPointAfter(forOp);
-  builder.create<ttg::AsyncWaitOp>(loc, ValueRange({}), 0);
+  if (hasAsyncLoads) {
+    // Insert sync point for any possibly outstanding loads after the loop. This
+    // can happen as we speculatively execute loads in the loop.
+    builder.setInsertionPointAfter(forOp);
+    builder.create<ttg::AsyncWaitOp>(loc, ValueRange({}), 0);
+  }
 
   // Make sure all ops have attributes.
   for (Operation &op : forOp.getBody()->without_terminator()) {
@@ -1033,10 +1039,15 @@ void multibufferTensorMemory(scf::ForOp forOp, CoarseSchedule &schedule,
 
   bool multibufferingIsValid = false;
 
-  SmallVector<Operation *> allocUsers = llvm::to_vector(alloc->getUsers());
+  SmallVector<Operation *> allocUsers =
+      llvm::to_vector(alloc.getResult().getUsers());
+  Value replTok = OpBuilder(forOp).create<ub::PoisonOp>(
+      forOp.getLoc(), builder.getType<AsyncTokenType>());
   for (auto user : allocUsers) {
     if (auto store = dyn_cast<ttng::TMEMStoreOp>(user)) {
       if (forOp->isAncestor(store)) {
+        store.getDepMutable().clear();
+        store.getToken().replaceAllUsesWith(replTok);
         // We can multibuffer, since the store is a point where we can
         // change the buffer index
         multibufferingIsValid = true;
@@ -1065,6 +1076,8 @@ void multibufferTensorMemory(scf::ForOp forOp, CoarseSchedule &schedule,
       }
     } else if (auto load = dyn_cast<ttng::TMEMLoadOp>(user)) {
       if (forOp->isAncestor(load)) {
+        load.getDepMutable().clear();
+        load.getToken().replaceAllUsesWith(replTok);
         builder.setStageCluster(schedule[load]);
         builder.setInsertionPoint(load);
         Value curBufIdx = getCurrBufIdx(load);
@@ -1080,6 +1093,8 @@ void multibufferTensorMemory(scf::ForOp forOp, CoarseSchedule &schedule,
         load.getSrcMutable().assign(tmemSlice);
       }
     } else if (auto mma = dyn_cast<ttng::MMAv5OpInterface>(user)) {
+      mma.getAccDepMutable().clear();
+      mma.getToken().replaceAllUsesWith(replTok);
       builder.setStageCluster(schedule[mma]);
       builder.setInsertionPoint(mma);
       // We can legally switch to next buffer index if the mma does not use the
@@ -1115,7 +1130,9 @@ void multibufferTensorMemory(scf::ForOp forOp, CoarseSchedule &schedule,
         "Trying to multibuffer TMEM while there is no store to the "
         "accumulator, and the mma uses the accumulator all the time.");
   }
+  alloc.getToken().replaceAllUsesWith(newAlloc.getToken());
   alloc->erase();
+
   Value newBufIdx = bufIdxDefs.back().second;
   replaceAllUsesDominatedBy(newBufIdx.getDefiningOp(), newBufIdx, bufIdx,
                             domInfo);
@@ -1192,7 +1209,7 @@ scf::ForOp lowerMMAs(scf::ForOp forOp, CoarseSchedule &schedule) {
   SmallVector<ttng::MMAv5OpInterface> mmas;
   forOp.walk([&](ttng::MMAv5OpInterface mma) { mmas.push_back(mma); });
   if (!triton::tools::getBoolEnv("ENABLE_MMA_V5_ATT_PIPELINE")) {
-    if (mmas.size() > 2) {
+    if (mmas.size() > 1) {
       return forOp;
     }
   }
