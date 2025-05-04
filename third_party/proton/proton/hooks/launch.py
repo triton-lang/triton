@@ -7,6 +7,8 @@ COMPUTE_METADATA_SCOPE_NAME = "__proton_launch_metadata"
 
 
 class LaunchHook(Hook):
+    # Highest priority
+    priority = 100
     # This is a singleton class
     _instance = None
     flops_width = [8, 16, 32, 64]
@@ -21,7 +23,7 @@ class LaunchHook(Hook):
             cls._instance = super(LaunchHook, cls).__new__(cls)
         return cls._instance
 
-    def init_handle(self, function, module, metadata_group):
+    def init_handle(self, module, function, name: str, metadata_group: dict) -> None:
         pass
 
     def activate(self):

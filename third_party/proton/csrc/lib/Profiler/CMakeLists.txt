@@ -5,4 +5,5 @@ add_proton_library(ProtonProfiler
 	Instrumentation/InstrumentationProfiler.cpp
 	Instrumentation/CudaRuntime.cpp
 	Instrumentation/HipRuntime.cpp
+	Instrumentation/Metadata.cpp
 )
