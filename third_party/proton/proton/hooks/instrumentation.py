@@ -24,7 +24,9 @@ class CudaAllocator:
         self.instrumentation_hook = instrumentation_hook
 
     def __call__(self, size: int, alignment: int, stream: Optional[int]):
-        assert alignment == self.instrumentation_hook.profile_buffer_alignment, "Alignment mismatch"
+        if alignment != self.instrumentation_hook.profile_buffer_alignment:
+            raise RuntimeError(
+                f"Alignment mismatch: {alignment} != {self.instrumentation_hook.profile_buffer_alignment}")
         aligned_size = (size + alignment - 1) // alignment * alignment
         # Note: profile_buffer_size may be smaller than the aligned size if the kernel launches many blocks
         # and the host CPU cannot store all profiling data in memory. This streaming mode is not yet implemented.

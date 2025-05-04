@@ -15,14 +15,14 @@ public:
 
   size_t getScratchMemorySize() const { return scratchMemorySize; }
 
-  size_t getTotalUnits() const { return totalUnits; }
+  size_t getNumWarps() const { return numWarps; }
 
 private:
   void parse();
 
   const std::string metadataPath;
   size_t scratchMemorySize{};
-  size_t totalUnits{};
+  size_t numWarps{};
 };
 
 } // namespace proton

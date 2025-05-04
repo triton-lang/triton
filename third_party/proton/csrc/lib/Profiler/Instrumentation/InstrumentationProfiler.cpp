@@ -6,6 +6,7 @@
 #include "Profiler/Instrumentation/HipRuntime.h"
 #include "Utility/String.h"
 #include <algorithm>
+#include <cassert>
 #include <limits>
 #include <map>
 #include <numeric>
@@ -254,7 +255,9 @@ void InstrumentationProfiler::exitInstrumentedOp(uint64_t streamId,
   CircularLayoutParserConfig config;
   config.scratchMemSize =
       functionMetadata.at(functionId).getScratchMemorySize();
-  config.totalUnits = functionMetadata.at(functionId).getTotalUnits();
+  assert(modeOptions.count("granularity") == 0 ||
+         modeOptions.at("granularity") == "warp");
+  config.totalUnits = functionMetadata.at(functionId).getNumWarps();
   config.numBlocks = size / config.scratchMemSize;
   config.uidVec = getUnitIdVector(modeOptions, config.totalUnits);
 
