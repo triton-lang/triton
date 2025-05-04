@@ -1,4 +1,4 @@
-#include "triton/Dialect/Triton/Transforms/Utility.h"
+#include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 
 using namespace mlir;
