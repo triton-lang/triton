@@ -32,11 +32,8 @@
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
-#include "triton/Tools/LayoutUtils.h"
 
 using namespace mlir;
-using namespace mlir::triton;
-using namespace mlir::triton::gpu;
 
 namespace {
 
@@ -62,17 +59,21 @@ bool isOneOperandElementwiseOp(Operation *op) {
   return false;
 }
 
-static triton::StoreOp
-convertMfmaLayoutForCDNA4(mlir::PatternRewriter &rewriter, Value ptr, Value val,
-                          Value mask, triton::StoreOp oldStOp) {
+static triton::StoreOp convertMfmaLayoutForCDNA4(PatternRewriter &rewriter,
+                                                 Value ptr, Value val,
+                                                 Value mask,
+                                                 triton::StoreOp oldStOp) {
   auto ptrType = cast<RankedTensorType>(ptr.getType());
   auto valType = cast<RankedTensorType>(val.getType());
 
-  auto mfmaLayout = cast<AMDMfmaEncodingAttr>(valType.getEncoding());
+  auto mfmaLayout =
+      cast<triton::gpu::AMDMfmaEncodingAttr>(valType.getEncoding());
 
   bool mfma32 = mfmaLayout.getMDim() == 32 && mfmaLayout.getNDim() == 32;
 
-  if (valType.getShape().size() > 2 || !valType.getElementType().isF16() ||
+  if (valType.getRank() != 2 ||
+      (!valType.getElementType().isF16() &&
+       !valType.getElementType().isBF16()) ||
       mfmaLayout.getVersionMajor() != 4 || !mfmaLayout.getIsTransposed() ||
       !mfma32) {
     return rewriter.create<triton::StoreOp>(oldStOp.getLoc(), ptr, val, mask,
@@ -80,11 +81,13 @@ convertMfmaLayoutForCDNA4(mlir::PatternRewriter &rewriter, Value ptr, Value val,
                                             oldStOp.getEvict());
   }
 
-  // Create a new layout where each thread holds 8 consecutive elements.
-  LinearLayout mfma8Layout = chooseMfma8Layout(mfmaLayout, valType.getShape());
+  // Create a new layout where each thread holds 8 consecutive elements, in
+  // order to enable wide 128-bit global stores.
+  triton::LinearLayout mfma8Layout =
+      chooseMfmaLikeStoreLayout(mfmaLayout, valType.getShape());
 
-  Attribute newEncoding =
-      LinearEncodingAttr::get(mfmaLayout.getContext(), mfma8Layout);
+  Attribute newEncoding = triton::gpu::LinearEncodingAttr::get(
+      mfmaLayout.getContext(), mfma8Layout);
   auto newPtrType = RankedTensorType::get(
       ptrType.getShape(), ptrType.getElementType(), newEncoding);
   Value newPtr = rewriter.create<triton::gpu::ConvertLayoutOp>(ptr.getLoc(),
@@ -204,7 +207,8 @@ public:
           mask.getLoc(), newMaskType, mask);
     }
     triton::StoreOp newStoreOp;
-    if (auto mfmaLayout = dyn_cast<AMDMfmaEncodingAttr>(newEncoding)) {
+    if (auto mfmaLayout =
+            dyn_cast<triton::gpu::AMDMfmaEncodingAttr>(newEncoding)) {
       newStoreOp =
           convertMfmaLayoutForCDNA4(rewriter, newPtr, newVal, newMask, stOp);
     } else {

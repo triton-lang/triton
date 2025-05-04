@@ -446,12 +446,11 @@ AMDMfmaEncodingAttr::toLinearLayout(ArrayRef<int64_t> shape) const {
         {outDimNames[order[0]], outDimNames[order[1]]});
     // For mfma.transposed layout, the element ownership among threads are
     // "transposed" within each warp.
-    if (getIsTransposed()) {
+    if (getIsTransposed())
       tileLayout = LinearLayout(
           {{kRegister, {{1, 0}, {2, 0}, {8, 0}, /*gap*/ {16, 0}}},
            {kLane, {{0, 1}, {0, 2}, {0, 4}, {0, 8}, {0, 16}, /*gap*/ {4, 0}}}},
           {outDimNames[order[0]], outDimNames[order[1]]});
-    }
   } else {
     assert(getMDim() == 16);
     // For mfma with 16x16 output, each of the 64 threads holds 4 elements.
@@ -1543,10 +1542,8 @@ LinearLayout chooseScaledMfmaScaleLayout(
   return newLL;
 }
 
-// Create a LinearLayout similar to mfmaLayout where each thread holds 8
-// consecutive elements.
-LinearLayout chooseMfma8Layout(AMDMfmaEncodingAttr mfmaLayout,
-                               ArrayRef<int64_t> shape) {
+LinearLayout chooseMfmaLikeStoreLayout(AMDMfmaEncodingAttr mfmaLayout,
+                                       ArrayRef<int64_t> shape) {
   assert(shape.size() == 2 && mfmaLayout.getMDim() == 32 &&
          mfmaLayout.getNDim() == 32 && mfmaLayout.getIsTransposed());
 
@@ -1558,6 +1555,9 @@ LinearLayout chooseMfma8Layout(AMDMfmaEncodingAttr mfmaLayout,
 
   SmallVector<unsigned> order = {1, 0};
   auto standardOutDims = standardOutDimNames(ctx, 2);
+  // We make each thread handle 8 consecutive elements to enable 128-bit
+  // global stores for [b]f16 types and keep the thread pattern in each lane
+  // similar to the canonical mfmaLayout.
   LinearLayout mfma8Layout = LinearLayout::empty();
   mfma8Layout =
       LinearLayout({{kRegister, {{1, 0}, {2, 0}, {4, 0}}},

@@ -283,10 +283,12 @@ LinearLayout chooseScaledMfmaScaleLayout(
     const std::vector<std::vector<int32_t>> &dotOperandWarpBasis,
     ArrayRef<int64_t> dotOperandShape, unsigned mfmaMDim);
 
-// Create a LinearLayuot similar to mfmaLayout where each thread holds 8
-// consecutive elements. The goal is to store dwordx4 in the epilogue.
-LinearLayout chooseMfma8Layout(AMDMfmaEncodingAttr mfmaLayout,
-                               ArrayRef<int64_t> shape);
+// Creates a linearLayout similar to mfmaLayout, where each thread holds 8
+// elements. This layout is useful for emitting the widest 128-bit global store
+// instructions. Since it closely resembles mfmaLayout, conversion between the
+// two can be done using transferWithinWarp, without involving LDS
+LinearLayout chooseMfmaLikeStoreLayout(AMDMfmaEncodingAttr mfmaLayout,
+                                       ArrayRef<int64_t> shape);
 
 } // namespace mlir::triton::gpu
 #endif // TRITON_DIALECT_TRITONGPU_IR_LINEARLAYOUTCONVERSIONS_H
