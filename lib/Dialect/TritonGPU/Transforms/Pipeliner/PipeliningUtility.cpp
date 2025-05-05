@@ -7,6 +7,7 @@
 #include "mlir/IR/TypeUtilities.h"
 #include "mlir/Interfaces/SideEffectInterfaces.h"
 #include "mlir/Support/LLVM.h"
+#include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
@@ -152,21 +153,6 @@ bool mlir::triton::isOuterLoop(scf::ForOp forOp) {
   return llvm::any_of(forOp.getBody()->getOperations(), [](Operation &op) {
     return isa<scf::ForOp, scf::WhileOp>(op);
   });
-}
-
-// Combine the current mask with the given predicate.
-Value mlir::triton::getPredMask(RewriterBase &rewriter, Type typeLike,
-                                Value currentMask, Value pred) {
-  Type maskType = tt::getI1SameShape(typeLike);
-  Location loc = pred.getLoc();
-  Value mask = pred;
-  if (isa<RankedTensorType>(maskType)) {
-    mask = rewriter.create<tt::SplatOp>(loc, maskType, pred);
-  }
-  if (currentMask) {
-    mask = rewriter.create<arith::AndIOp>(loc, mask, currentMask);
-  }
-  return mask;
 }
 
 // Function to mask operations during scheduling.
