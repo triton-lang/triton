@@ -46,8 +46,10 @@ bool maybeReplaceVectorFOpWithScalarFOps(Instruction *inst,
       res = builder.CreateFMul(newLhs, newRhs);
     else if (inst->getOpcode() == Instruction::FAdd)
       res = builder.CreateFAdd(newLhs, newRhs);
+    else if (inst->getOpcode() == Instruction::FSub)
+      res = builder.CreateFSub(newLhs, newRhs);
     else
-      llvm::report_fatal_error("only fadd and fmul supported");
+      llvm::report_fatal_error("only fadd, fmul, fsub supported");
     newVec = builder.CreateInsertElement(newVec, res, i);
   }
   LLVM_DEBUG(dbgs() << "ScalarizePackedFOps: Replacing: " << inst << '\n');
@@ -85,7 +87,8 @@ struct ScalarizePackedFOps : FunctionPass {
         continue;
       for (Instruction &inst : BB) {
         if (inst.getOpcode() != Instruction::FMul &&
-            inst.getOpcode() != Instruction::FAdd)
+            inst.getOpcode() != Instruction::FAdd &&
+            inst.getOpcode() != Instruction::FSub)
           continue;
         if (maybeReplaceVectorFOpWithScalarFOps(&inst, builder)) {
           instsToErase.push_back(&inst);
