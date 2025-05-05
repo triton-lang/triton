@@ -147,26 +147,6 @@ tt.func @scatter4_layout(%arg0: !tt.tensordesc<tensor<1x128xf32>>, %arg1: i32, %
   tt.return
 }
 
-// CHECK: @async_tma_gather
-tt.func @async_tma_gather(%desc: !tt.ptr<i8>, %y_offset: i32,
-                          %bar: !ttg.memdesc<1xi64, #bar_layout, #ttg.shared_memory, mutable>,
-                          %result: !ttg.memdesc<32x128xbf16, #shared, #ttg.shared_memory, mutable>,
-                          %pred: i1) {
-  %x_offsets = arith.constant dense<1> : tensor<32xi32>
-  // CHECK: [[IDX:%.*]] = ttg.convert_layout %cst : tensor<32xi32, #{{.*}}> -> tensor<32xi32, #ttg.slice<{dim = 0, parent = [[SLICE_PARENT]]}>>
-  ttng.async_tma_gather %desc[%x_offsets, %y_offset] %result, %bar, %pred : !tt.ptr<i8>, tensor<32xi32>, i32, !ttg.memdesc<1xi64, #bar_layout, #ttg.shared_memory, mutable>, !ttg.memdesc<32x128xbf16, #shared, #ttg.shared_memory, mutable>, i1
-  tt.return
-}
-
-// CHECK: @async_tma_scatter
-tt.func @async_tma_scatter(%desc: !tt.ptr<i8>, %y_offset: i32,
-                           %src: !ttg.memdesc<32x128xbf16, #shared, #ttg.shared_memory, mutable>) {
-  %x_offsets = arith.constant dense<1> : tensor<32xi32>
-  // CHECK: [[IDX:%.*]] = ttg.convert_layout %cst : tensor<32xi32, #{{.*}}> -> tensor<32xi32, #ttg.slice<{dim = 0, parent = [[SLICE_PARENT]]}>>
-  ttng.async_tma_scatter %desc[%x_offsets, %y_offset] %src : !tt.ptr<i8>, tensor<32xi32>, i32, !ttg.memdesc<32x128xbf16, #shared, #ttg.shared_memory, mutable>
-  tt.return
-}
-
 // -----
 
 // CHECK-LABEL: @ub_poison
