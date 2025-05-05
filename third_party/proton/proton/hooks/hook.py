@@ -2,7 +2,7 @@ from triton.compiler import LazyDict
 from abc import abstractmethod
 from typing import Dict, Any, Optional
 from collections import defaultdict
-from triton.compiler.compiler import CompiledKernel
+import triton.knobs as knobs
 
 
 class Hook:
@@ -78,10 +78,10 @@ class HookManager:
         # Sort active_hooks by priority
         HookManager.active_hooks.sort(key=lambda x: x.priority, reverse=True)
         # Register the heads
-        if CompiledKernel.launch_enter_hook is None:
-            CompiledKernel.launch_enter_hook = HookManager.enter
-            CompiledKernel.launch_exit_hook = HookManager.exit
-            CompiledKernel.init_handle_hook = HookManager.init_handle
+        if knobs.runtime.launch_enter_hook is None:
+            knobs.runtime.launch_enter_hook = HookManager.enter
+            knobs.runtime.launch_exit_hook = HookManager.exit
+            knobs.runtime.init_handle_hook = HookManager.init_handle
 
     @staticmethod
     def unregister(session: Optional[int] = None) -> None:
@@ -104,6 +104,6 @@ class HookManager:
                     HookManager.active_hooks.remove(hook)
         # Unregister the heads
         if not HookManager.active_hooks:
-            CompiledKernel.launch_enter_hook = None
-            CompiledKernel.launch_exit_hook = None
-            CompiledKernel.init_handle_hook = None
+            knobs.runtime.launch_enter_hook = None
+            knobs.runtime.launch_exit_hook = None
+            knobs.runtime.init_handle_hook = None
