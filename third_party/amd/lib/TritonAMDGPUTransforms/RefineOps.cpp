@@ -902,9 +902,10 @@ struct ElementWiseOpPattern : public RefineRewritePattern<OpTy> {
     SmallVector<int64_t> numReps;
     for (int i = 0; i < rank; ++i) {
       // src and res can have different refineable shapes if different layouts.
-      refinedShape.push_back(
-          std::max(srcShapePerCtaTile[i], resShapePerCtaTile[i]));
-      numReps.push_back(srcShape[i] / srcShapePerCtaTile[i]);
+      const auto refinedDim =
+          std::max(srcShapePerCtaTile[i], resShapePerCtaTile[i]);
+      refinedShape.push_back(refinedDim);
+      numReps.push_back(srcShape[i] / refinedDim);
     }
 
     if (product<int64_t>(numReps) == 1)
