@@ -29,10 +29,6 @@ def min_dot_size(target: GPUTarget):
     return check_dot_compatibility
 
 
-def get_ptxas() -> knobs.NvidiaTool:
-    return knobs.nvidia.ptxas
-
-
 def min_sparse_dot_size(target: GPUTarget):
     # TODO: check sparse dot compatibility when we enable sparse dot on NVIDIA
     def check_dot_compatibility(lhs_type, rhs_type) -> Tuple[int, int, int]:  # [m, n, k]
@@ -53,28 +49,8 @@ def get_supported_sparse_dot_dtypes(target: GPUTarget):
     return lambda input_dtype: False
 
 
-@functools.lru_cache()
-def _path_to_binary(binary: str):
-    binary += sysconfig.get_config_var("EXE")
-    paths = [
-        os.environ.get(f"TRITON_{binary.upper()}_PATH", ""),
-        os.path.join(os.path.dirname(__file__), "bin", binary),
-    ]
-
-    for path in paths:
-        if os.path.exists(path) and os.path.isfile(path):
-            result = subprocess.check_output([path, "--version"], stderr=subprocess.STDOUT)
-            if result is not None:
-                version = re.search(r".*release (\d+\.\d+).*", result.decode("utf-8"), flags=re.MULTILINE)
-                if version is not None:
-                    return path, version.group(1)
-    raise RuntimeError(f"Cannot find {binary}")
-
-
-@functools.lru_cache()
-def get_ptxas():
-    name = "ptxas"
-    return _path_to_binary(name)
+def get_ptxas() -> knobs.NvidiaTool:
+    return knobs.nvidia.ptxas
 
 
 @functools.lru_cache()
