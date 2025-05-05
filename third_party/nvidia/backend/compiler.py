@@ -270,7 +270,7 @@ class CUDABackend(BaseBackend):
         passes.ttgpuir.add_WGMMAPrefetch(pm)
         passes.ttgpuir.add_optimize_dot_operands(pm, capability >= 80)
         passes.ttgpuir.add_coalesce_async_copy(pm)
-        nvidia.passes.ttnvgpuir.add_optimize_tmem_subtiling(pm)
+        nvidia.passes.ttnvgpuir.add_optimize_tmem_layouts(pm)
         passes.ttgpuir.add_remove_layout_conversions(pm)
         passes.ttgpuir.add_reduce_data_duplication(pm)
         passes.ttgpuir.add_reorder_instructions(pm)
