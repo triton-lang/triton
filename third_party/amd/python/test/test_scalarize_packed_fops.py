@@ -23,10 +23,8 @@ def get_func_body_asm(amdgcn):
 
 # check there are actually instances of colliding/adjacent fops and mfma without scalarization
 def test_check_not_scalarize():
-    kernel = triton.compile(
-        str(Path(__file__).parent / "attn_fwd.ttir"),
-        target=current_target,
-    )
+    triton.knobs.amd.scalarize_packed_fops = False
+    kernel = triton.compile(str(Path(__file__).parent / "attn_fwd.ttir"), target=current_target)
     # check for specific patterns that we'll be rewriting in the pass
     llir = kernel.asm["llir"]
     split_func_body = get_func_body(llir).splitlines()
@@ -57,11 +55,8 @@ def test_check_not_scalarize():
 
 # check scalarization "fixes"
 def test_check_scalarized():
-    kernel = triton.compile(
-        str(Path(__file__).parent / "attn_fwd.ttir"),
-        target=current_target,
-        options={"scalarize_vector_fops": True},
-    )
+    triton.knobs.amd.scalarize_packed_fops = True
+    kernel = triton.compile(str(Path(__file__).parent / "attn_fwd.ttir"), target=current_target)
 
     # check the specific IR pattern was rewritten
     llir = kernel.asm["llir"]

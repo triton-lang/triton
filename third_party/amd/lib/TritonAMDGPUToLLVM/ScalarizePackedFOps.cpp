@@ -4,7 +4,7 @@
 #include "llvm/IR/Verifier.h"
 #include "llvm/Passes/PassBuilder.h"
 
-#define DEBUG_TYPE "tritonamdgpu-scalarize-vector-fops"
+#define DEBUG_TYPE "tritonamdgpu-scalarize-packed-fops"
 
 using namespace llvm;
 using namespace llvm::PatternMatch;
@@ -50,20 +50,20 @@ bool maybeReplaceVectorFOpWithScalarFOps(Instruction *inst,
       llvm::report_fatal_error("only fadd and fmul supported");
     newVec = builder.CreateInsertElement(newVec, res, i);
   }
-  LLVM_DEBUG(dbgs() << "ScalarizeVectorFOps: Replacing: " << inst << '\n');
+  LLVM_DEBUG(dbgs() << "ScalarizePackedFOps: Replacing: " << inst << '\n');
   LLVM_DEBUG(dbgs() << "                     With: " << newVec << '\n');
   inst->replaceAllUsesWith(newVec);
   return true;
 }
 
-//  This Pass scalarizes vector `fmul`s and `fadd`s in
-//  basic blocks that contain MFMAs. The point/purpose/value of doing is that
-//  these get codegened to "packed" ops (`v_pk_mul_f32`/`v_pk_add_f32`) and
-//  while packed ops use separate VALUs from MFMA tensor cores (no problem
-//  there), the instructions themselves cannot be *issued* in parallel, thus
-//  there is a performance cost to having such packed ops "near" MFMAs.
-//  Concretely/specifically this eliminates `v_pk_mul_f32`/`v_pk_add_f32`
-//  operations in the final asm in bbs with MFMAs.
+//  This Pass scalarizes vector `fmul`s and `fadd`s in basic blocks that contain
+//  MFMAs. The point/purpose/value of doing is that these get codegened to
+//  "packed" ops (`v_pk_mul_f32`/`v_pk_add_f32`) and while packed ops use
+//  separate VALUs from MFMA tensor cores (no problem there), the instructions
+//  themselves cannot be *issued* in parallel, thus there is a performance cost
+//  to having such packed ops "near" MFMAs. Concretely/specifically this
+//  eliminates `v_pk_mul_f32`/`v_pk_add_f32` operations in the final asm in bbs
+//  with MFMAs.
 //
 //  Note, these "scalar" floating point ops will still get lowered to vector
 //  instructions like `v_mul_f32_e32 v1, v163, v114` and
@@ -73,13 +73,13 @@ bool maybeReplaceVectorFOpWithScalarFOps(Instruction *inst,
 //  they are introduced/inserted by the VectorCombine::foldPermuteOfBinops
 //  pattern during the `optimize_module` pipeline (hence why this LLVM pass
 //  needs to follow that pipeline).
-struct ScalarizeVectorFOps : FunctionPass {
-  ScalarizeVectorFOps() : FunctionPass(ID) {}
+struct ScalarizePackedFOps : FunctionPass {
+  ScalarizePackedFOps() : FunctionPass(ID) {}
 
   bool runOnFunction(Function &F) override {
     IRBuilder builder(F.getContext());
     bool changed = false;
-    SmallVector<Instruction *> instsToErase(F.size());
+    SmallVector<Instruction *> instsToErase;
     for (BasicBlock &BB : F) {
       if (!llvm::any_of(BB, isMFMAorWMMA))
         continue;
@@ -111,11 +111,11 @@ struct ScalarizeVectorFOps : FunctionPass {
 
 } // end anonymous namespace
 
-char ScalarizeVectorFOps::ID = 0;
+char ScalarizePackedFOps::ID = 0;
 
 namespace mlir::triton::AMD {
-void runScalarizeVectorFOpsPassOnFunction(Function &F) {
-  ScalarizeVectorFOps pass;
+void runScalarizePackedFOpsPass(Function &F) {
+  ScalarizePackedFOps pass;
   pass.runOnFunction(F);
   // If there are no errors, the function returns false.
   assert(!llvm::verifyFunction(F) &&

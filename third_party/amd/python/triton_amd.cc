@@ -292,7 +292,7 @@ void init_triton_amd(py::module &&m) {
     }
   });
 
-  m.def("add_scalarize_vector_fops_llvm_pass", [](llvm::Function *fn) {
-    mlir::triton::AMD::runScalarizeVectorFOpsPassOnFunction(*fn);
+  m.def("add_scalarize_packed_fops_llvm_pass", [](llvm::Function *fn) {
+    mlir::triton::AMD::runScalarizePackedFOpsPass(*fn);
   });
 }

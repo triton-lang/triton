@@ -31,7 +31,7 @@ namespace mlir::triton::AMD {
 std::unique_ptr<OperationPass<ModuleOp>>
 createOptimizeLDSUsagePass(StringRef arch, int32_t customLDSLimit = 0);
 
-void runScalarizeVectorFOpsPassOnFunction(llvm::Function &F);
+void runScalarizePackedFOpsPass(llvm::Function &F);
 
 } // namespace mlir::triton::AMD
 

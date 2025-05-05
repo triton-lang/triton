@@ -48,7 +48,6 @@ class HIPOptions:
     allow_flush_denorm: bool = False
     max_num_imprecise_acc_default: int = 0
     backend_name: str = 'hip'
-    scalarize_vector_fops: bool = False
 
     # The following option provides hints to the AMDGPU backend regarding instruction scheduling
     # for all `tt.dot` operations in a kernel. The "none" variant preserves the default
@@ -366,8 +365,8 @@ class HIPBackend(BaseBackend):
 
         llvm.optimize_module(llvm_mod, llvm.OPTIMIZE_O3, options.arch, '', [], options.enable_fp_fusion)
 
-        if options.scalarize_vector_fops or knobs.amd.scalarize_vector_fops:
-            amd.add_scalarize_vector_fops_llvm_pass(fns[0])
+        if knobs.amd.scalarize_packed_fops:
+            amd.add_scalarize_packed_fops_llvm_pass(fns[0])
 
         # Get some metadata
         metadata["shared"] = src.get_int_attr("ttg.shared")
