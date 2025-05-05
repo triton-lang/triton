@@ -1553,7 +1553,7 @@ LinearLayout chooseMfmaLikeStoreLayout(AMDMfmaEncodingAttr mfmaLayout,
   StringAttr kWarp = S("warp");
   StringAttr kBlock = S("block");
 
-  SmallVector<unsigned> order = {1, 0};
+  SmallVector<unsigned> order = getDefaultMmaOrder(mfmaLayout);
   auto standardOutDims = standardOutDimNames(ctx, 2);
   // We make each thread handle 8 consecutive elements to enable 128-bit
   // global stores for [b]f16 types and keep the thread pattern in each lane
