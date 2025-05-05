@@ -319,6 +319,10 @@ class compilation_knobs(base_knobs):
     front_end_debugging: env_bool = env_bool("TRITON_FRONT_END_DEBUGGING")
     allow_non_constexpr_globals: env_bool = env_bool("TRITON_ALLOW_NON_CONSTEXPR_GLOBALS")
     listener: Optional[CompilationListener] = None
+
+    # WARNING: Use this hook at your own risk. Overriding this with a callback
+    # that does not correctly invalidate caches may cause over compilation, or
+    # worse mis-compilation.
     triton_key: Optional[Callable[[], str]] = None
 
 
