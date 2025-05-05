@@ -282,6 +282,7 @@ def _matmul_ogs(
 @triton.jit
 def _compute_scatter_indx(
     WriteBackIndx,
+    FinalizeScatterIdxs,
     ScatterDstIndx, ScatterSrcIndx,
     n_final_rows, n_scratchpad_rows,
     BLOCK_M: tl.constexpr,
@@ -305,3 +306,37 @@ def _compute_scatter_indx(
     wb_idx = tl.where(has_one_active, dst_idxs // N_EXPTS_ACT, n_final_rows + offs_m)
     wb_idx = tl.where(mask, wb_idx, -1)
     tl.store(WriteBackIndx + offs_m, wb_idx, mask=mask_m)
+
+    if pid_m >= ((n_final_rows + BLOCK_M - 1) // BLOCK_M):
+        return
+
+    mask_m = offs_m < n_final_rows
+    src_offs = offs_m[:, None] * N_EXPTS_ACT + tl.arange(0, N_EXPTS_ACT)[None, :]
+    src_idxs = tl.load(ScatterSrcIndx + src_offs, mask=mask_m[:, None], other=-1)
+    is_src_active = (src_idxs != -1).to(tl.int32)
+    has_one_active = tl.sum(is_src_active, axis=1) == 1
+
+    need_finalize_scatter = mask_m and not has_one_active
+    finalize_scatter_count = tl.sum(need_finalize_scatter.to(tl.int32))
+    if finalize_scatter_count == 0:
+        return
+    pp_off = tl.atomic_add(FinalizeScatterIdxs + n_final_rows + n_scratchpad_rows, finalize_scatter_count)
+
+    # need_finalize_scatter = [1, 0, 0, 1, 1, 0, 1, 0, 1]
+    # arange = [0, 1, 2, 3, 4, 5, 6, 7, 8]
+    arange = tl.arange(0, BLOCK_M)
+    # idxs = [0, _, _, 3, 4, _, 6, _, 8]
+    last = BLOCK_M - 1
+    idxs = tl.where(need_finalize_scatter, arange, last)
+    # idxs = [0, 3, 4, 6, 8, _, _, _, _]
+    idxs = tl.sort(idxs)
+    # r = offs_m
+    # d = [r[0], r[3], r[4], r[6], r[8], r[-1], r[-1], r[-1], r[-1]]
+    d = tl.gather(offs_m, idxs, axis=0)
+    s = tl.gather(src_idxs, idxs.expand_dims(1).broadcast_to(src_idxs.shape), axis=0)
+    # store destination indices
+    Ptr = FinalizeScatterIdxs + pp_off
+    tl.store(Ptr + arange, d, mask=arange < finalize_scatter_count)
+    # store src indices
+    Ptr = FinalizeScatterIdxs + n_final_rows + pp_off * N_EXPTS_ACT
+    tl.store(Ptr + N_EXPTS_ACT * arange[:, None] + tl.arange(0, N_EXPTS_ACT)[None, :], s, mask=(arange < finalize_scatter_count)[:, None])
