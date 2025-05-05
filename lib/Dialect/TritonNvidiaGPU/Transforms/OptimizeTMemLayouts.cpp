@@ -244,12 +244,12 @@ public:
   }
 };
 
-class TritonNvidiaGPUOptimizeTMemSubtilingPass
-    : public TritonNvidiaGPUOptimizeTMemSubtilingPassBase<
-          TritonNvidiaGPUOptimizeTMemSubtilingPass> {
+class TritonNvidiaGPUOptimizeTMemLayoutsPass
+    : public TritonNvidiaGPUOptimizeTMemLayoutsPassBase<
+          TritonNvidiaGPUOptimizeTMemLayoutsPass> {
 public:
-  using BaseT = TritonNvidiaGPUOptimizeTMemSubtilingPassBase<
-      TritonNvidiaGPUOptimizeTMemSubtilingPass>;
+  using BaseT = TritonNvidiaGPUOptimizeTMemLayoutsPassBase<
+      TritonNvidiaGPUOptimizeTMemLayoutsPass>;
   using BaseT::BaseT;
 
   void runOnOperation() override {
@@ -265,6 +265,6 @@ public:
 
 } // namespace
 
-std::unique_ptr<Pass> mlir::createTritonNvidiaGPUOptimizeTMemSubtilingPass() {
-  return std::make_unique<TritonNvidiaGPUOptimizeTMemSubtilingPass>();
+std::unique_ptr<Pass> mlir::createTritonNvidiaGPUOptimizeTMemLayoutsPass() {
+  return std::make_unique<TritonNvidiaGPUOptimizeTMemLayoutsPass>();
 }
