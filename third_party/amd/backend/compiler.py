@@ -24,7 +24,10 @@ def get_min_sparse_dot_size(target: GPUTarget):
         lhs_bitwidth = lhs_type.scalar.primitive_bitwidth
         rhs_bitwidth = rhs_type.scalar.primitive_bitwidth
         assert lhs_bitwidth == rhs_bitwidth, "lhs and rhs bitwidth must be the same"
-        return (16, 16, 16)
+        if lhs_bitwidth == 8:
+            return (16, 16, 64)
+        else:
+            return (16, 16, 16)
 
     return check_dot_compatibility
 

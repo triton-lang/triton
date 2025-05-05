@@ -10,9 +10,9 @@ random.seed(42)
 
 def get_autotune_config():
     configs = []
-    for BLOCK_M in [16, 32, 64, 128]:
-        for BLOCK_N in [16, 32, 64, 128]:
-            for BLOCK_K in [16, 32, 64, 128]:
+    for BLOCK_M in [64, 128]:
+        for BLOCK_N in [64, 128]:
+            for BLOCK_K in [64, 128]:
                 for num_warps in [1, 2, 4, 8]:
                     for num_stages in [1]:
                         for GROUP_SIZE_M in [4]:
@@ -328,7 +328,7 @@ def test_sparse_matrix(dtype):
 
 
 # On MI300x, torch.float8_e4m3fnuz is used instead of torch.float8_e4m3fn
-dtypes = [torch.float16, torch.bfloat16, torch.float8_e4m3fnuz]
+dtypes = [torch.bfloat16, torch.float16, torch.float8_e4m3fnuz]
 
 for dtype in dtypes:
     print(f"Running dot_sparse with dtype={dtype}")

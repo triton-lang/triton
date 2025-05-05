@@ -1559,7 +1559,8 @@ def dot_sparse(lhs: tl.tensor, rhs: tl.tensor, lhs_meta: tl.tensor, acc: tl.tens
     assert builder.codegen_fns.get(
         "min_sparse_dot_size") is not None, "target doesn't provide lower shape bounds for sparse dot."
     min_dot_size = builder.codegen_fns["min_sparse_dot_size"](lhs.type, rhs.type)
-    assert lhs.shape[-2].value >= min_dot_size[0] and lhs.shape[-1].value >= min_dot_size[2] \
+    # lhs.shape[-1].value (K-Dim) is 2:4 sparse
+    assert lhs.shape[-2].value >= min_dot_size[0] and lhs.shape[-1].value * 2 >= min_dot_size[2] \
         and rhs.shape[-1].value >= min_dot_size[1], \
             f"Input shapes should have M >= {min_dot_size[0]}, N >= {min_dot_size[1]} and K >= {min_dot_size[2]}"
 
