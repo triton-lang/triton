@@ -141,6 +141,7 @@ class Case:
     n_expt_shards: int = 1
     split_k: int = 1
     swizzle_mx_scale: bool = False
+    epilogue_subtile: bool | None = None
 
 
 @pytest.mark.parametrize(
@@ -163,6 +164,8 @@ class Case:
             Case(300, 400, 400, "ragged", "float16", "float16"),
             Case(300, 400, 400, "ragged", "float8_e5m2", "float8_e5m2"),
             Case(1000, 400, 400, "ragged", "float8_e5m2", "float8_e5m2", 3, 1),
+            Case(600, 400, 400, "ragged", "float8_e5m2", "float8_e5m2", 4, 2, epilogue_subtile=False),
+            Case(600, 400, 400, "ragged", "float8_e5m2", "float8_e5m2", 4, 2, epilogue_subtile=True),
             Case(600, 400, 400, "ragged", "float8_e5m2", "float8_e5m2", 4, 2),
             Case(600, 400, 400, "ragged", "float8_e5m2", "float8_e5m2", 4, 2, n_expt_shards=2),
             Case(600, 400, 400, "ragged", "float8_e5m2", "float8_e5m2", 4, 1, n_expt_shards=2),
@@ -212,7 +215,8 @@ class Case:
 @pytest.mark.parametrize("has_y_gammas", [False, True])
 @pytest.mark.parametrize("is_persistent", [False, True])
 def test_op(m, n, k, split_k, do_gather, do_scatter, fused_scatter, has_y_gammas, is_persistent, n_expts_tot,
-            n_expts_act, n_expt_shards, mode, act_dtype_str, weight_dtype_str, block_m, swizzle_mx_scale, device):
+            n_expts_act, n_expt_shards, mode, act_dtype_str, weight_dtype_str, block_m, swizzle_mx_scale,
+            epilogue_subtile, device):
     # TODO: remove when Triton FP8 supports proper RTNE
     if "float8" in weight_dtype_str and torch.cuda.get_device_capability()[0] < 9:
         pytest.skip("Float8 not tested on A100")
@@ -242,6 +246,7 @@ def test_op(m, n, k, split_k, do_gather, do_scatter, fused_scatter, has_y_gammas
         "split_k": split_k,
         "fused_scatter": fused_scatter,
         "is_persistent": is_persistent,
+        "epilogue_subtile": epilogue_subtile,
     }
     opt_flags.update_opt_flags_constraints(constraints)
 
