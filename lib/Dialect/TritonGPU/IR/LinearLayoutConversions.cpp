@@ -1542,6 +1542,39 @@ LinearLayout chooseScaledMfmaScaleLayout(
   return newLL;
 }
 
+LinearLayout chooseMfmaLikeStoreLayout(AMDMfmaEncodingAttr mfmaLayout,
+                                       ArrayRef<int64_t> shape) {
+  assert(shape.size() == 2 && mfmaLayout.getMDim() == 32 &&
+         mfmaLayout.getNDim() == 32 && mfmaLayout.getIsTransposed());
+
+  MLIRContext *ctx = mfmaLayout.getContext();
+  StringAttr kRegister = S("register");
+  StringAttr kLane = S("lane");
+  StringAttr kWarp = S("warp");
+  StringAttr kBlock = S("block");
+
+  SmallVector<unsigned> order = getDefaultMmaOrder(mfmaLayout);
+  auto standardOutDims = standardOutDimNames(ctx, 2);
+  // We make each thread handle 8 consecutive elements to enable 128-bit
+  // global stores for [b]f16 types and keep the thread pattern in each lane
+  // similar to the canonical mfmaLayout.
+  LinearLayout mfma8Layout = LinearLayout::empty();
+  mfma8Layout =
+      LinearLayout({{kRegister, {{1, 0}, {2, 0}, {4, 0}}},
+                    {kLane, {{0, 1}, {0, 2}, {0, 4}, {0, 8}, {0, 16}, {8, 0}}},
+                    {kWarp, {}},
+                    {kBlock, {}}},
+                   {standardOutDims[order[0]], standardOutDims[order[1]]});
+
+  LinearLayout warpLayout =
+      identityStandardND(kWarp, mfmaLayout.getWarpsPerCTA(), order);
+  LinearLayout ctaLayout = mfma8Layout.transposeOuts(standardOutDims) *
+                           warpLayout.transposeOuts(standardOutDims);
+  mfma8Layout =
+      combineCtaCgaWithShape(ctaLayout, mfmaLayout.getCTALayout(), shape);
+  return mfma8Layout;
+}
+
 LinearLayout getScaleTMEMStoreLinearLayout(RankedTensorType scaleType,
                                            int numWarps) {
   assert(numWarps == 4 || numWarps == 8);
