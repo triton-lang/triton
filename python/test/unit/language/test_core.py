@@ -1889,6 +1889,20 @@ def test_atomic_min_max_neg_zero(device):
     torch.testing.assert_close(out_max, inp, atol=0, rtol=0)
 
 
+@pytest.mark.parametrize("dtype_str", ["float8_e4m3fn", "bfloat16", "int8", "int16", "uint8", "uint16"])
+def test_atomic_unsupported_type(dtype_str, device):
+
+    @triton.jit
+    def kernel(I, O):
+        x = tl.load(I)
+        tl.atomic_add(O, x)
+
+    I = torch.zeros((1, ), device=device, dtype=getattr(torch, dtype_str))
+    O = torch.zeros((1, ), device=device, dtype=getattr(torch, dtype_str))
+    with pytest.raises(triton.TritonError):
+        kernel[(1, )](I, O)
+
+
 # ---------------
 # test cast
 # ---------------
