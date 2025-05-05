@@ -43,7 +43,7 @@ def get_cmake_dir():
     plat_name = sysconfig.get_platform()
     python_version = sysconfig.get_python_version()
     dir_name = f"cmake.{plat_name}-{sys.implementation.name}-{python_version}"
-    cmake_dir = Path("../python") / "build" / dir_name
+    cmake_dir = Path("../build") / dir_name
     return cmake_dir
 
 
@@ -100,7 +100,7 @@ def setup(app):
     app.connect("autodoc-process-signature", process_sig)
     max_jobs = os.getenv("MAX_JOBS", str(2 * os.cpu_count()))
     print(f"Installing Triton Python package using {max_jobs} threads")
-    subprocess.run("pip install -e ../python", shell=True, env=os.environ.copy())
+    subprocess.run("pip install -e ../", shell=True, env=os.environ.copy())
 
     setup_generated_mlir_docs()
 

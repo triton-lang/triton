@@ -59,7 +59,6 @@ def make_default_opt_flags_amd(
         block_m = 128
     elif tokens_per_expt >= 512 and n >= 2048:
         block_m = 128
-
     else:
         block_m = max(32, min(triton.next_power_of_2(tokens_per_expt), 64))
     if routing_data is not None:
@@ -139,7 +138,7 @@ def make_default_opt_flags_nvidia(
     elif enforce_bitwise_invariance:
         block_m = 128
     else:
-        block_m = max(16, min(triton.next_power_of_2(tokens_per_expt), 128))
+        block_m = max(64, min(triton.next_power_of_2(tokens_per_expt), 128))
     # TODO: remove when triton is more optimized for H100 MXFP4
     arch = None
     if (

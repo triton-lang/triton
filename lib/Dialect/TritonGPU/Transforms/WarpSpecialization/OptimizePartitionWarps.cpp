@@ -127,6 +127,7 @@ static LogicalResult relayoutWarps(ModuleAxisInfoAnalysis &axisInfo,
   pm.addPass(createTritonGPUCoalesce());
   pm.addPass(createTritonGPURemoveLayoutConversions());
   pm.addPass(createTritonGPUOptimizeThreadLocality());
+  pm.addPass(createTritonGPUAccelerateMatmul());
   pm.addPass(createTritonGPURemoveLayoutConversions());
   if (failed(runPipeline(pm, *container)))
     return failure();
