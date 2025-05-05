@@ -20,6 +20,7 @@ module attributes {"ttg.num-warps" = 4 : i32, ttg.target = "cuda:100"} {
 
 // AWS: ttg.warp_specialize
 // AWS: num_warps(1)
+// AWS-NOT: num_warps(
 
 // CHECK: @warp_specialize_tma_matmul
 // CHECK-SAME: [[K_TILES:%arg[0-9]+]]
@@ -276,7 +277,7 @@ tt.func @invalid_acc_reset(
 // AWS: ttg.warp_specialize
 // AWS: num_warps(4)
 // AWS: num_warps(4)
-// AWS: num_warps(4)
+// AWS-NOT: num_warps(
 
 // CHECK-LABEL: @matmul_tma_acc_with_unconditional_user
 // CHECK-SAME: [[A_DESC:%arg[0-9]+]]
@@ -369,7 +370,7 @@ tt.func @matmul_tma_acc_with_unconditional_user(
 
     // CHECK: scf.yield %{{[0-9]+}}, %{{[0-9]+}}, [[ACC_NEXT_INDEX]], [[ACC_NEXT_PHASE]]
     scf.yield %acc_reset : tensor<128x128xf32, #acc_layout>
-  // CHECK-NEXT: ttg.partition.stages = [2 : i32, 1 : i32, 0 : i32, 0 : i32]
+  // CHECK-NEXT: ttg.partition.stages = [2 : i32, 1 : i32, 0 : i32]
   } {tt.warp_specialize, tt.num_stages = 2 : i32}
 
   tt.return
@@ -383,7 +384,7 @@ tt.func @matmul_tma_acc_with_unconditional_user(
 // AWS: ttg.warp_specialize
 // AWS: num_warps(4)
 // AWS: num_warps(4)
-// AWS: num_warps(4)
+// AWS-NOT: num_warps(
 
 // CHECK-LABEL: @matmul_tma_acc_with_conditional_user
 // CHECK-SAME: [[A_DESC:%arg[0-9]+]]
@@ -464,7 +465,7 @@ tt.func @matmul_tma_acc_with_conditional_user(
 
     // CHECK: scf.yield %{{[0-9]+}}, %{{[0-9]+}}, [[EPILOGUE_ACC_NEXT_INDEX]], [[EPILOGUE_ACC_NEXT_PHASE]]
     scf.yield %acc_reset : tensor<128x128xf32, #acc_layout>
-  // CHECK-NEXT: ttg.partition.stages = [2 : i32, 1 : i32, 0 : i32, 0 : i32]
+  // CHECK-NEXT: ttg.partition.stages = [2 : i32, 1 : i32, 0 : i32]
   } {tt.warp_specialize, tt.num_stages = 2 : i32}
 
   tt.return
@@ -478,7 +479,7 @@ tt.func @matmul_tma_acc_with_conditional_user(
 // AWS: ttg.warp_specialize
 // AWS: num_warps(4)
 // AWS: num_warps(2)
-// AWS: num_warps(1)
+// AWS-NOT: num_warps(
 
 // CHECK-LABEL: @matmul_tma_acc_with_conditional_def
 // CHECK-SAME: [[A_DESC:%arg[0-9]+]]
@@ -556,7 +557,7 @@ tt.func @matmul_tma_acc_with_conditional_def(
 
     // CHECK: scf.yield {{.*}} [[ACC_NEXT_INDEX]], [[ACC_NEXT_PHASE]]
     scf.yield %acc_reset : tensor<128x128xf32, #acc_layout>
-  // CHECK-NEXT: ttg.partition.stages = [2 : i32, 1 : i32, 0 : i32, 0 : i32]
+  // CHECK-NEXT: ttg.partition.stages = [2 : i32, 1 : i32, 0 : i32]
   } {tt.warp_specialize, tt.num_stages = 2 : i32}
 
   tt.return
@@ -570,7 +571,7 @@ tt.func @matmul_tma_acc_with_conditional_def(
 // AWS: ttg.warp_specialize
 // AWS: num_warps(4)
 // AWS: num_warps(2)
-// AWS: num_warps(1)
+// AWS-NOT: num_warps(
 
 // CHECK-LABEL: @matmul_tma_acc_with_conditional_def_and_use
 // CHECK-SAME: [[A_DESC:%arg[0-9]+]]
@@ -652,7 +653,7 @@ tt.func @matmul_tma_acc_with_conditional_def_and_use(
 
     // CHECK: scf.yield {{.*}} [[EPILOGUE_ACC_NEXT_INDEX]], [[EPILOGUE_ACC_NEXT_PHASE]]
     scf.yield %acc_reset : tensor<128x128xf32, #acc_layout>
-  // CHECK-NEXT: ttg.partition.stages = [2 : i32, 1 : i32, 0 : i32, 0 : i32]
+  // CHECK-NEXT: ttg.partition.stages = [2 : i32, 1 : i32, 0 : i32]
   } {tt.warp_specialize, tt.num_stages = 2 : i32}
 
   tt.return
@@ -666,7 +667,7 @@ tt.func @matmul_tma_acc_with_conditional_def_and_use(
 // AWS: ttg.warp_specialize
 // AWS: num_warps(1)
 // AWS: num_warps(2)
-// AWS: num_warps(1)
+// AWS-NOT: num_warps(
 
 // CHECK-LABEL: @matmul_tma_acc_with_conditional_def_and_use_no_multibuf_flag
 // CHECK-SAME: [[A_DESC:%arg[0-9]+]]
@@ -751,12 +752,13 @@ tt.func @matmul_tma_acc_with_conditional_def_and_use_no_multibuf_flag(
     // CHECK: scf.yield [[NEXT_FLAG]], %{{[0-9]+}}, %{{[0-9]+}}, [[EPILOGUE_ACC_NEXT_PHASE]]
     scf.yield %c, %use_acc : tensor<128x128xf32, #acc_layout>, i1
   // CHECK-NEXT: tt.scheduled_max_stage = 2 : i32
-  // CHECK-SAME: ttg.partition.stages = [2 : i32, 1 : i32, 0 : i32, 0 : i32]
+  // CHECK-SAME: ttg.partition.stages = [2 : i32, 1 : i32, 0 : i32]
   } {tt.warp_specialize, tt.disallow_acc_multi_buffer, tt.num_stages = 2 : i32}
 
   tt.return
 }
 
+// FUNC-LABEL: @matmul_scaled_rhs_scales_tma
 // CHECK-LABEL: @matmul_scaled_rhs_scales_tma
 tt.func @matmul_scaled_rhs_scales_tma(
   %k_tiles: i32,
@@ -1007,7 +1009,7 @@ tt.func @matmul_tma_acc_with_conditional_def_and_use_flag(
     // CHECK: scf.yield [[NEXT_FLAG]], %{{[0-9]+}}, %{{[0-9]+}}, [[EPILOGUE_ACC_NEXT_INDEX]], [[EPILOGUE_ACC_NEXT_PHASE]]
     scf.yield %c, %use_acc : tensor<128x128xf32, #acc_layout>, i1
   // CHECK-NEXT: tt.scheduled_max_stage = 4 : i32
-  // CHECK-SAME: ttg.partition.stages = [2 : i32, 1 : i32, 0 : i32, 0 : i32]
+  // CHECK-SAME: ttg.partition.stages = [2 : i32, 1 : i32, 0 : i32]
   } {tt.warp_specialize, tt.num_stages = 4 : i32}
 
   tt.return
