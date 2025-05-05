@@ -26,10 +26,8 @@ def alloc_rand(shape, device, dtype, requires_grad=True):
 
 @pytest.mark.parametrize("M, N", [(1311, 4352)])
 @pytest.mark.parametrize("limit", [1e-2, 10])
-def test_op(M, N, limit, alpha=0.5):
+def test_op(M, N, limit, device, alpha=0.5):
     torch.manual_seed(2)
-    dev = "cuda"
-    dtype = torch.bfloat16
     # initialize expert data
     n_expts_tot = 6
     n_expts_act = 2
@@ -39,8 +37,8 @@ def test_op(M, N, limit, alpha=0.5):
     n_tokens = expt_data[2 * n_expts_tot].sum()
 
     # initialize data
-    x = alloc_rand([n_tokens, N], device=dev, dtype=dtype)
+    x = alloc_rand([n_tokens, N], device=device, dtype=torch.bfloat16)
     precision_config = PrecisionConfig(limit=limit)
-    tri_y = swiglu(x, alpha, precision_config, expt_data, n_expts_tot)
+    tri_y = swiglu(x, alpha, precision_config, routing_data, n_expts_tot)
     ref_y = swiglu_torch(x, alpha, precision_config)
     assert_close(tri_y, ref_y)
