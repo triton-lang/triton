@@ -1,4 +1,3 @@
-import os
 import pytest
 import tempfile
 from typing import Optional, Set
@@ -20,11 +19,10 @@ def device(request):
 @pytest.fixture
 def fresh_triton_cache():
     with tempfile.TemporaryDirectory() as tmpdir:
-        try:
-            os.environ["TRITON_CACHE_DIR"] = tmpdir
+        from triton import knobs
+        with knobs.cache.scope():
+            knobs.cache.dir = tmpdir
             yield tmpdir
-        finally:
-            os.environ.pop("TRITON_CACHE_DIR", None)
 
 
 def _fresh_knobs_impl(monkeypatch, skipped_attr: Optional[Set[str]] = None):

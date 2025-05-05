@@ -1088,7 +1088,13 @@ LinearLayout LinearLayout::removeZeroBasesAlongDim(StringAttr stripDim) const {
       }
     }
   }
-  return LinearLayout(std::move(result), llvm::to_vector(getOutDimNames()));
+  SmallVector<std::pair<StringAttr, int32_t>> newOutDimSizes;
+  for (auto outDim : getOutDimNames()) {
+    newOutDimSizes.push_back({outDim, getOutDimSize(outDim)});
+  }
+  auto newLayout = LinearLayout(std::move(result), ArrayRef(newOutDimSizes),
+                                this->isSurjective());
+  return newLayout;
 }
 
 size_t hash_value(const LinearLayout &layout) {

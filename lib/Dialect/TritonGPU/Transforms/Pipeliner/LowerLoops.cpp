@@ -600,11 +600,13 @@ scf::ForOp lowerLoads(scf::ForOp forOp, CoarseSchedule &schedule) {
 
   createTMABarrierAndWait(forOp, asyncLoads, loadGroups, schedule);
 
+  bool hasAsyncLoads = false;
   for (auto [op, asyncLoad] : asyncLoads) {
     auto [insertIdx, extractIdx, phase, _] = loadGroups[asyncLoad.stageDiff];
     if (auto loadOp = dyn_cast<tt::LoadOp>(op)) {
       createAsyncCopy(forOp, loadOp, asyncLoad.alloc, insertIdx, extractIdx,
                       schedule);
+      hasAsyncLoads = true;
     } else if (auto loadOp = dyn_cast<tt::DescriptorLoadOp>(op)) {
       createTMAAsyncLoad(forOp, loadOp, asyncLoad.alloc, insertIdx, extractIdx,
                          asyncLoad.barrier, asyncLoad.waitOp, schedule);
@@ -628,10 +630,12 @@ scf::ForOp lowerLoads(scf::ForOp forOp, CoarseSchedule &schedule) {
   // correct stages.
   scheduleDependencies(forOp, schedule);
 
-  // Insert sync point for any possibly outstanding loads after the loop. This
-  // can happen as we speculatively execute loads in the loop.
-  builder.setInsertionPointAfter(forOp);
-  builder.create<ttg::AsyncWaitOp>(loc, ValueRange({}), 0);
+  if (hasAsyncLoads) {
+    // Insert sync point for any possibly outstanding loads after the loop. This
+    // can happen as we speculatively execute loads in the loop.
+    builder.setInsertionPointAfter(forOp);
+    builder.create<ttg::AsyncWaitOp>(loc, ValueRange({}), 0);
+  }
 
   // Make sure all ops have attributes.
   for (Operation &op : forOp.getBody()->without_terminator()) {
