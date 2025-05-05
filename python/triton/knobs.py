@@ -272,12 +272,21 @@ class base_knobs:
             self.__dict__.update(orig)
 
 
+class BuildImpl(Protocol):
+
+    def __call__(self, name: str, src: str, srcdir: str, library_dirs: list[str], include_dirs: list[str],
+                 libraries: list[str], /) -> str:
+        ...
+
+
 class build_knobs(base_knobs):
     """Configuration controlling how the native compiler is invoked"""
     cc: env_opt_str = env_opt_str("CC")
 
     cudacrt_path: env_opt_str = env_opt_str("TRITON_CUDACRT_PATH")
     cudart_path: env_opt_str = env_opt_str("TRITON_CUDART_PATH")
+
+    impl: Optional[BuildImpl] = None
 
     @property
     def backend_dirs(self) -> set[str]:

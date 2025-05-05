@@ -1,4 +1,5 @@
 from pathlib import Path
+import matplotlib.pyplot as plt
 import json
 import triton.profiler as proton
 import torch
@@ -8,6 +9,7 @@ from triton_bench.matmul_ogs import MicroscalingCtx, matmul_ogs, PrecisionConfig
 from triton_bench.numerics import InFlexData
 from triton_bench.routing import routing
 from triton_bench.target_info import is_hip, get_cdna_version
+from dataclasses import dataclass
 
 if torch.cuda.is_available() and not is_hip():
     from triton._C.libtriton import nvidia
@@ -66,9 +68,38 @@ def quantize(w, dtype, dev, **opt):
                                                 actual_weight_scale_shape=weight_scale_shape)
 
 
-def bench_mlp(batch, dim1, dim2, n_expts_tot, n_expts_act, x_dtype, w_dtype,
-              # tensor / expert parallelism
-              TP=1, EP=1, name=""):
+@dataclass
+class PerfData:
+    time: float
+    flops: float
+    bytes: float
+
+    @property
+    def tflops(self):
+        return self.flops / self.time * 1e-3
+
+    @property
+    def tbps(self):
+        return self.bytes / self.time * 1e-3
+
+    @property
+    def opint(self):
+        # operational intensity
+        assert self.bytes > 0
+        return self.flops / self.bytes
+
+    @property
+    def util(self) -> float:
+        if SPECS is None:
+            return 0.0
+
+        peak_flops = max(SPECS["MAX_TFLOPS8"], SPECS.get("MAX_TFLOPS16", 0))
+        min_t_flop = self.flops / peak_flops * 1e-3  # ns → µs
+        min_t_bw = self.bytes / SPECS["MAX_TBPS"] * 1e-3
+        return max(min_t_flop, min_t_bw) / self.time
+
+
+def bench_mlp(batch, dim1, dim2, n_expts_tot, n_expts_act, x_dtype, w_dtype, TP, EP, name):
     assert n_expts_tot % EP == 0
     assert dim2 % TP == 0
     dev = "cuda"
@@ -96,7 +127,7 @@ def bench_mlp(batch, dim1, dim2, n_expts_tot, n_expts_act, x_dtype, w_dtype,
     pc2 = PrecisionConfig(mx_ctx=w2_mx, flex_ctx=FlexCtx(rhs_data=w2_flex))
 
     # -- benchmark --
-    fpath = Path(f"logs/{name}/{batch}-{dim1}-{dim2}-{n_expts_tot}-{n_expts_act}-{x_dtype}-{w_dtype}.hatchet")
+    fpath = Path(f"logs/{name}/{x_dtype}-{w_dtype}-TP{TP}-EP{EP}/profiles/batch-{batch}.hatchet")
     fpath.parent.mkdir(parents=True, exist_ok=True)
     x_dtype = {"fp16": torch.float16, "bf16": torch.bfloat16, "fp8": torch.float8_e4m3fn}[x_dtype]
     # special treatment of fp8_e4m3 on AMD CDNA3 because it uses fp8_e4m3fnuz
@@ -115,7 +146,7 @@ def bench_mlp(batch, dim1, dim2, n_expts_tot, n_expts_act, x_dtype, w_dtype,
         else:
             rdata, gather_indx, scatter_indx = None, None, None
         x = matmul_ogs(x, w1, b1, rdata, gather_indx=gather_indx, precision_config=pc1)
-        x = triton_bench.swiglu.swiglu(x, 1.0, pcs)
+        x = triton_bench.swiglu.swiglu(x, 1.0, pcs, routing_data=rdata)
         x = matmul_ogs(x, w2, b2, rdata, scatter_indx=scatter_indx, precision_config=pc2)
     proton.finalize()
 
@@ -127,42 +158,70 @@ def bench_mlp(batch, dim1, dim2, n_expts_tot, n_expts_act, x_dtype, w_dtype,
         matmuls = [
             x for x in data[0]["children"] if "_matmul" in x["frame"]["name"] and "metadata" not in x["frame"]["name"]
         ]
-        tot_bytes = sum([x["metrics"]["bytes"] for x in matmuls])
-        tot_flops = {w: sum([x["metrics"].get(f"flops{w}", 0) for x in matmuls]) for w in [8, 16]}
+        bytes = sum([x["metrics"]["bytes"] for x in matmuls])
+        flops = {w: sum([x["metrics"].get(f"flops{w}", 0) for x in matmuls]) for w in [8, 16]}
+        flops = sum([flops[w] for w in [8, 16]])
         # compute total time (incl. "not useful" work)
         # TODO: proton should really be recording that in the json instead of
         # relying on the user to aggregate
-        tot_time = sum(x["metrics"].get("time (ns)", 0) for x in data[0]["children"])
-        min_time_flops = min_time_bytes = 0
-        if SPECS is not None:
-            min_time_flops = sum([tot_flops[w] / SPECS[f"MAX_TFLOPS{w}"] for w in [8, 16]]) * 1e-3
-            min_time_bytes = tot_bytes / SPECS["MAX_TBPS"] * 1e-3
-            min_time = max(min_time_flops, min_time_bytes)
-            util = min_time / tot_time
-        else:
-            util = 0.0
-        tflops = sum([tot_flops[w] for w in [8, 16]]) / tot_time * 1e-3
-        tbps = tot_bytes / tot_time * 1e-3
-        print(f"Utilization: {util:.0%}; {tflops:>6.1f} TFLOPs, {tbps:.1f} TB/s")
+        time = sum(x["metrics"].get("time (ns)", 0) for x in data[0]["children"])
+    return PerfData(time, flops, bytes)
 
-    return util, tflops, tbps
+
+def roofline_mlp(batch_ranges, dim1, dim2, n_expts_tot, n_expts_act, x_dtype, w_dtype, TP=1, EP=1, name="",
+                 verbose=True):
+    import numpy as np
+    from itertools import chain
+    from bisect import bisect_left
+    batches = list(chain(*[range(*r) for r in batch_ranges]))
+    # collect performance data
+    perfs = []
+    print(f"Benchmarking {name} ({x_dtype}x{w_dtype}, TP={TP}, EP={EP})...")
+    print("===============================================================")
+    for batch in batches:
+        perfs += [bench_mlp(batch, dim1, dim2, n_expts_tot, n_expts_act, x_dtype, w_dtype, TP, EP, name)]
+        if verbose:
+            print(f"Batch: {batch}; Util: {perfs[-1].util}; TFLOPS: {perfs[-1].tflops}; TBPS: {perfs[-1].tbps}")
+    print("===============================================================")
+    # machine limits
+    fig, ax = plt.subplots(figsize=(7, 5), dpi=120)
+    ax.set_xlabel("batch size (toks/expt)")
+    ax.set_ylabel("performance  [TFLOP/s]")
+    ax.set_title("roofline")
+    # add a tiny margin so points are not flush with the frame
+    xs = [batch * n_expts_act / n_expts_tot for batch in batches]
+    perf = [p.tflops for p in perfs]
+    xmin, xmax = min(xs), max(xs)
+    dx = 0.05 * (xmax - xmin) if xmax > xmin else 1.0
+    ax.set_xlim(xmin - dx, xmax + dx)
+    ax.set_ylim(100, SPECS["MAX_TFLOPS8"] + 500)
+    # plot roofline
+    max_tbps = SPECS["MAX_TBPS"]
+    max_tflops = SPECS["MAX_TFLOPS8"]
+    opints = [p.opint for p in perfs]
+    knee = bisect_left(opints, max_tflops / max_tbps) - 1
+    x_bw, x_comp = xs[:knee], xs[knee:]
+    y_bw = [op * max_tbps for op in opints[:knee]]
+    y_comp = [max_tflops] * len(x_comp)
+    ax.plot(x_bw, y_bw, "--", label=f"BW-bound  ({max_tbps:.0f} TB/s)")
+    ax.plot(x_comp, y_comp, "--", label=f"Compute-bound  ({max_tflops:.0f} TFLOP/s)")
+    # plot data
+    ax.scatter(xs, perf, marker="+")
+    ax.legend(frameon=False, loc="lower right")
+    ax.grid(True, which="both", ls=":", lw=0.5)
+    fig.tight_layout()
+    fpath = Path(f"logs/{name}/{x_dtype}-{w_dtype}-TP{TP}-EP{EP}/roofline.png")
+    plt.savefig(fpath)
 
 
 if __name__ == "__main__":
     has_native_mx4 = torch.cuda.get_device_capability(0)[0] >= 10 or get_cdna_version() == 4
     if SPECS is None:
         print("Current GPU has no specs provided, utilization is N/A")
-    if has_native_mx4:
-        bench_mlp(8192, 8192, 8192, 1, 1, "fp8", "fp8", TP=1, EP=1, name="dense")
-        bench_mlp(8192, 8192, 8192, 1, 1, "fp8", "mx4", TP=1, EP=1, name="dense")
-        bench_mlp(2048, 5120, 8192, 128, 4, "fp8", "fp8", TP=4, EP=1, name="llama4")
-        bench_mlp(2048, 5120, 8192, 128, 4, "fp8", "mx4", TP=4, EP=1, name="llama4")
-    else:
-        # bf16/fp16 x fp8 is skipped because matmul_ogs requires x and w has the
-        # same type when not doing mxfp operation
-        bench_mlp(8192, 8192, 8192, 1, 1, "fp8", "fp8", TP=1, EP=1, name="dense")
-        bench_mlp(8192, 8192, 8192, 1, 1, "fp16", "mx4", TP=1, EP=1, name="dense")
-        bench_mlp(8192, 8192, 8192, 1, 1, "bf16", "mx4", TP=1, EP=1, name="dense")
-        bench_mlp(2048, 5120, 8192, 128, 4, "fp8", "fp8", TP=4, EP=1, name="llama4")
-        bench_mlp(2048, 5120, 8192, 128, 4, "bf16", "mx4", TP=4, EP=1, name="llama4")
-        bench_mlp(2048, 5120, 8192, 128, 4, "fp16", "mx4", TP=4, EP=1, name="llama4")
+    batch_ranges = [(1024, 32768, 1024)]
+    dense_dtypes = ["fp8", "fp8"]
+    quantized_dtypes = ["fp8", "mx4"] if has_native_mx4 else ["bf16", "mx4"]
+    roofline_mlp(batch_ranges, 8192, 8192, 1, 1, *dense_dtypes, TP=1, EP=1, name="dense")
+    roofline_mlp(batch_ranges, 8192, 8192, 1, 1, *quantized_dtypes, TP=1, EP=1, name="dense")
+    roofline_mlp(batch_ranges, 5120, 8192, 128, 4, *dense_dtypes, TP=1, EP=1, name="llama4-maverick")
+    roofline_mlp(batch_ranges, 5120, 8192, 128, 4, *quantized_dtypes, TP=1, EP=1, name="llama4-maverick")
