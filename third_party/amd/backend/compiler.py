@@ -170,7 +170,7 @@ class HIPBackend(BaseBackend):
         # See: Section 7.4 of the MI300 ISA docs.
         return {
             "min_dot_size": get_min_dot_size(self.target),
-            "min_sparse_dot_size": get_min_dot_size(self.target),
+            "min_sparse_dot_size": get_min_sparse_dot_size(self.target),
             "supported_sparse_dot_dtypes": get_supported_sparse_dot_dtypes(self.target),
             "sparse_dot_acc_emulation": True,
         }

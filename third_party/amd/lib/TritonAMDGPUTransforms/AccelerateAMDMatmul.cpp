@@ -190,7 +190,7 @@ FailureOr<MfmaIntrinsic> chooseMfmaInstruction(tt::DotOp dot, int mfmaVersion,
   return chooseMfmaInstruction(
       mfmaVersion, dot.getC().getType(), aType.getElementType(),
       dot.getB().getType().getElementType(), aType.getShape().back(), nonKDim,
-      /*withScale=*/false, /*isSparse=*/false, allowXF32);
+      withScale, /*isSparse=*/false, allowXF32);
 }
 
 FailureOr<MfmaIntrinsic> chooseMfmaInstruction(tt::DotScaledOp dot,
