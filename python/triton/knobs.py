@@ -371,6 +371,7 @@ class LaunchHook(Protocol):
     def __call__(self, metadata: LazyDict) -> None:
         ...
 
+
 class InitHandleHook(Protocol):
 
     def __call__(self, function: Optional[Callable], module: Optional[object], metadata_group: dict[str, str]) -> None:
