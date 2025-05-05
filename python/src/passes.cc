@@ -42,9 +42,9 @@ void init_triton_passes_ttir(py::module &&m) {
                      createRewriteTensorPointerPass);
   ADD_PASS_WRAPPER_0("add_loop_unroll", createLoopUnrollPass);
   ADD_PASS_WRAPPER_0("add_triton_licm", createLoopInvariantCodeMotionPass);
-  ADD_PASS_WRAPPER_4("add_convert_to_ttgpuir",
-                     createConvertTritonToTritonGPUPass, const std::string &,
-                     int, int, int);
+  ADD_PASS_OPTION_WRAPPER_4("add_convert_to_ttgpuir",
+                            createConvertTritonToTritonGPU, const std::string &,
+                            int, int, int);
 }
 
 void init_triton_passes_ttgpuir(py::module &&m) {
