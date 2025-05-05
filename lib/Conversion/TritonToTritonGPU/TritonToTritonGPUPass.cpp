@@ -21,7 +21,6 @@ namespace {
 using namespace mlir;
 using namespace mlir::triton;
 using namespace mlir::triton::gpu;
-namespace ttng = triton::nvidia_gpu;
 
 // pass named attrs (e.g., tt.contiguity) from Triton to Triton
 static void addNamedAttrs(Operation *op, DictionaryAttr dictAttrs) {
