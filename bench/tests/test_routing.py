@@ -6,12 +6,11 @@ from triton_bench.matmul_ogs_details.metadata import compute_metadata
 from triton_bench.testing import assert_equal
 
 
-def init_data(n_tokens, n_expts_tot, dtype=torch.float16):
-    dev = "cuda"
+def init_data(n_tokens, n_expts_tot, dtype=torch.float16, device="cuda"):
     # the reference implementation and the triton implementation do not tie-break experts the same way
     randbits = [torch.randperm(n_expts_tot) for _ in range(n_tokens)]
     x = [(-1)**i * ((16384 + ((i * 512) % 4096) + bits).to(torch.int16).view(dtype)) for i, bits in enumerate(randbits)]
-    return torch.stack(x).to(device=dev)
+    return torch.stack(x).to(device=device)
 
 
 def ref_expt_data(routing_data, n_gates, block_m):
@@ -46,9 +45,9 @@ def ref_expt_data(routing_data, n_gates, block_m):
 @pytest.mark.parametrize("n_tokens", [371, 255, 256, 8192, 1023, 1024])
 @pytest.mark.parametrize("n_expts_tot, n_expts_act", [(128, 4), (1500, 8)])
 @pytest.mark.parametrize("block_m", [64, 128])
-def test_op(n_tokens, n_expts_tot, n_expts_act, block_m):
+def test_op(n_tokens, n_expts_tot, n_expts_act, block_m, device):
     torch.manual_seed(2)
-    tri_logits = init_data(n_tokens, n_expts_tot).detach()
+    tri_logits = init_data(n_tokens, n_expts_tot, device=device).detach()
     ref_logits = tri_logits.clone()
     ref_routing_data, ref_gather, ref_scatter = routing_torch(ref_logits, n_expts_act)
     tri_routing_data, tri_gather, tri_scatter = routing(tri_logits, n_expts_act)

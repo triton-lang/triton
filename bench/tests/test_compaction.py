@@ -9,8 +9,7 @@ from triton_bench.compaction import compaction, compaction_torch
     (131, 128, 16, 0.6),
     (496, 128, 16, 0.),
 ])
-def test_compaction(n_tokens, n_cols, k, p):
-    device = "cuda"
+def test_compaction(n_tokens, n_cols, k, p, device):
     yi = torch.rand((n_tokens, n_cols), device=device).argsort(dim=-1)
     yi = yi[:, :k].to(torch.int32)
     yv = torch.randn((n_tokens, k), dtype=torch.bfloat16, device=device)

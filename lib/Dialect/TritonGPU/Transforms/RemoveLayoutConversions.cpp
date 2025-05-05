@@ -1177,10 +1177,10 @@ void LayoutRematerialization::backwardRematerialization(
   // 32 (the width per bank of the shared memory load/store unit).
   int64_t convertLayoutBytes = getByteCount(convertOp.getSrc(), 32, 32);
 
-  // We measure costs in standardised milli-SM-cycles. This gives:
-  // smem load/store:    8 * byte count
-  // synchronisation:    1024 (assuming 4 warps per block)
-  int64_t convertLayoutCost = 16 * convertLayoutBytes + 1024;
+  // We measure costs in standardised milli-SM-cycles. The smem load
+  // and store each cost 8 * convertLayoutBytes, and then we double
+  // it to account for extra cost due to synchronisation.
+  int64_t convertLayoutCost = 32 * convertLayoutBytes;
   int64_t rematerialisationCost = 0;
 
   // Evaluate single-use status for every operation in slice
