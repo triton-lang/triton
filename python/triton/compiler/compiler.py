@@ -460,7 +460,7 @@ class CompiledKernel:
         if self.metadata.num_warps * warp_size > self.n_max_threads:
             raise OutOfResources(self.metadata.num_warps * warp_size, self.n_max_threads, "threads")
         if knobs.runtime.init_handle_hook is not None:
-            knobs.runtime.init_handle_hook(self.module, self.function, self.name, self.metadata_path)
+            knobs.runtime.init_handle_hook(self.module, self.function, self.name, self.metadata_group)
 
     def __getattribute__(self, name):
         if name == 'run':
