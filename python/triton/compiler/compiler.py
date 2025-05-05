@@ -129,6 +129,8 @@ class IRSource:
 
 @functools.lru_cache()
 def triton_key():
+    if triton_key_hook := knobs.compilation.triton_key:
+        return triton_key_hook()
     import pkgutil
     TRITON_PATH = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     contents = []
