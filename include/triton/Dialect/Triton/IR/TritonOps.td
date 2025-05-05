@@ -717,7 +717,7 @@ def TT_DotScaledOp : TT_Op<"dot_scaled", [Pure,
 }
 
 //
-// Dot Op
+// DotSparse Op
 //
 def TT_DotSparseOp : TT_Op<"dot_sparse", [Pure,
                              DeclareOpInterfaceMethods<DotOpInterface>,
