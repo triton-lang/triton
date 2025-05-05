@@ -5,7 +5,6 @@ import torch
 import pytest
 
 from .test_routing import init_data as init_routing_data
-from .test_routing import ref_expt_data
 
 # ---------------
 # initialize data
@@ -33,8 +32,7 @@ def test_op(M, N, limit, device, alpha=0.5):
     n_expts_act = 2
     logits = init_routing_data(M, n_expts_tot).detach()
     routing_data, _, _ = routing_torch(logits, n_expts_act)
-    expt_data = ref_expt_data(routing_data, M * n_expts_act, block_m=128)
-    n_tokens = expt_data[2 * n_expts_tot].sum()
+    n_tokens = routing_data.expt_hist.sum()
 
     # initialize data
     x = alloc_rand([n_tokens, N], device=device, dtype=torch.bfloat16)
