@@ -175,4 +175,38 @@ def NVWS_WarpGroupReturnOp : NVWS_Op<"warp_group.return", [
   let assemblyFormat = "attr-dict";
 }
 
+def NVWS_CreateTokenOp : NVWS_Op<"create_token"> {
+  let results = (outs TensorOf<[NVWS_TokenType]>:$result);
+
+  let arguments = (ins I32Attr:$num, NVWS_TokenLoadTypeAttr:$loadType);
+
+  let builders = [OpBuilder<(ins "uint32_t":$num, "triton::nvws::TokenLoadType":$loadType)>];
+
+  let assemblyFormat = "attr-dict `:` type($result)";
+}
+
+def NVWS_ProducerAcquireOp : NVWS_Op<"producer_acquire"> {
+  let arguments = (ins TensorOf<[NVWS_TokenType]>:$token, I32:$idx, I1:$phase);
+
+  let assemblyFormat = "$token `,` $idx `,` $phase attr-dict `:` type(operands)";
+}
+
+def NVWS_ProducerCommitOp : NVWS_Op<"producer_commit"> {
+  let arguments = (ins TensorOf<[NVWS_TokenType]>:$token, I32:$idx);
+
+  let assemblyFormat = "$token `,` $idx attr-dict `:` type(operands)";
+}
+
+def NVWS_ConsumerWaitOp : NVWS_Op<"consumer_wait"> {
+  let arguments = (ins TensorOf<[NVWS_TokenType]>:$token, I32:$idx, I1: $phase);
+
+  let assemblyFormat = "$token `,` $idx `,` $phase attr-dict `:` type(operands)";
+}
+
+def NVWS_ConsumerReleaseOp : NVWS_Op<"consumer_release"> {
+  let arguments = (ins TensorOf<[NVWS_TokenType]>:$token, I32:$idx);
+
+  let assemblyFormat = "$token `,` $idx attr-dict `:` type(operands)";
+}
+
 #endif
