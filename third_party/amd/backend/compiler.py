@@ -35,7 +35,8 @@ def get_min_sparse_dot_size(target: GPUTarget):
 def get_supported_sparse_dot_dtypes(target: GPUTarget):
     # TODO: for now, only support MI300/CDNA3; enable MI350 when ready
     if target.arch == "gfx942":
-        return lambda input_dtype: input_dtype.name in ("fp16", "bf16", "fp8e5", "fp8e4b8")
+        # TODO: enable fp8e5 later
+        return lambda input_dtype: input_dtype.name in ("fp16", "bf16", "fp8e4b8")
     else:
         return None
 

@@ -2090,25 +2090,18 @@ def dot_sparse(input, other, input_meta, acc=None, _builder=None):
     """
     Returns the matrix product of two blocks and a third metadata block, where the first block is 2:4 structurally sparse and the second block is dense.
     The third metadata block describes which 2 out of 4 consecutive elements in the first input are zero.
+    dot_sparse is currently experimental, and this interface is subject to change.
 
     The three blocks must be two-dimensional or three-dimensional and have compatible inner dimensions.
     For three-dimensional blocks, `tl.dot_sparse` performs the batched matrix product,
     where the first dimension of each block represents the batch dimension.
 
     :param input: The first tensor to be multiplied.
-    :type input: 2D or 3D tensor of scalar-type in {:code:`int8`, :code:`float8_e5m2`, :code:`float16`, :code:`bfloat16`, :code:`float32`}
+    :type input: 2D or 3D tensor of scalar-type in {:code:`float8_e4m3fn`, :code:`float16`, :code:`bfloat16`}. On MI300, float8_e4m3fnuz is used.
     :param other: The second tensor to be multiplied.
-    :type other: 2D or 3D tensor of scalar-type in {:code:`int8`, :code:`float8_e5m2`, :code:`float16`, :code:`bfloat16`, :code:`float32`}
+    :type other: 2D or 3D tensor of scalar-type in {:code:`float8_e4m3fn`, :code:`float16`, :code:`bfloat16`}. On MI300, float8_e4m3fnuz is used.
     :param acc: The accumulator tensor. If not None, the result is added to this tensor.
-    :type acc: 2D or 3D tensor of scalar-type in {:code:`float16`, :code:`float32`, :code:`int32`}
-    :param input_precision: How to exercise the Tensor Cores for f32 x f32. If
-      the device does not have Tensor Cores or the inputs are not of dtype f32,
-      this option is ignored. For devices that do have tensor cores, the
-      default precision is tf32.
-    :type input_precision: string. Available options for nvidia: :code:`"tf32"`, :code:`"tf32x3"`, :code:`"ieee"`. Default: :code:`"tf32"`. Available options for amd: :code:`"ieee"`, (CDNA3 only) :code:`"tf32"`.
-    :param allow_tf32: *Deprecated.* If true, input_precision is set to "tf32".
-      Only one of :code:`input_precision` and :code:`allow_tf32` can be
-      specified (i.e. at least one must be :code:`None`).
+    :type acc: 2D or 3D tensor of scalar-type in {:code:`float32`}
     """
     return semantic.dot_sparse(input, other, input_meta, acc, _builder)
 
