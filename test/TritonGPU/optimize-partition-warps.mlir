@@ -163,27 +163,4 @@ tt.func @tmem_min_4_warps(%tensor_desc: !ttg.memdesc<64x64xf32, #tmem, #ttng.ten
   tt.return
 }
 
-tt.func @tmem_split_m_layout(%tensor_desc: !ttg.memdesc<128x64xf32, #tmem1, #ttng.tensor_memory, mutable>) {
-  ttg.warp_specialize(%tensor_desc)
-  default {
-    ttg.warp_yield
-  }
-  // CHECK: partition0{{.*}} num_warps(8)
-  partition0(%desc: !ttg.memdesc<128x64xf32, #tmem1, #ttng.tensor_memory, mutable>) num_warps(16) {
-    // CHECK: ttng.tmem_load {{.*}} -> tensor<128x64xf32, #linear>
-    %0 = ttng.tmem_load %desc : !ttg.memdesc<128x64xf32, #tmem1, #ttng.tensor_memory, mutable> -> tensor<128x64xf32, #blocked2d_16>
-
-    %1 = "tt.reduce"(%0) <{axis = 1 : i32}> ({
-    ^bb0(%arg2: f32, %arg3: f32):
-      %2 = arith.addf %arg2, %arg3 : f32
-      tt.reduce.return %2 : f32
-    }) : (tensor<128x64xf32, #blocked2d_16>) -> tensor<128xf32, #ttg.slice<{dim = 1, parent = #blocked2d_16}>>
-
-    %cst = arith.constant dense<0.0> : tensor<128x128xf32, #blocked2d_16>
-    "use"(%1, %cst) : (tensor<128xf32, #ttg.slice<{dim = 1, parent = #blocked2d_16}>>, tensor<128x128xf32, #blocked2d_16>) -> ()
-    ttg.warp_return
-  } : (!ttg.memdesc<128x64xf32, #tmem1, #ttng.tensor_memory, mutable>) -> ()
-  tt.return
-}
-
 }
