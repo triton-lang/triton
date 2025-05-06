@@ -9,7 +9,6 @@ from ..runtime.autotuner import OutOfResources
 from ..runtime.cache import get_cache_manager, get_dump_manager, get_override_manager
 from ..runtime.driver import driver
 from ..tools.disasm import get_sass
-from ..tools.structured_logging import maybe_trace_triton
 # TODO: this shouldn't be here
 from .code_generator import ast_to_ttir
 from pathlib import Path
@@ -454,8 +453,6 @@ class CompiledKernel:
         # (e.g., checking amount of shared memory on current device)
         self.module = None
         self.function = None
-        maybe_trace_triton(metadata_path, metadata_group, src)
-
 
     def _init_handles(self):
         if self.module is not None:
