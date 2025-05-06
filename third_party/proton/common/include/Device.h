@@ -1,5 +1,5 @@
-#ifndef PROTON_DRIVER_DEVICE_H_
-#define PROTON_DRIVER_DEVICE_H_
+#ifndef PROTON_COMMON_DEVICE_H_
+#define PROTON_COMMON_DEVICE_H_
 
 #include <cstdint>
 #include <string>
@@ -45,4 +45,4 @@ const std::string getDeviceTypeString(DeviceType type);
 
 }; // namespace proton
 
-#endif // PROTON_DRIVER_DEVICE_H_
+#endif // PROTON_COMMON_DEVICE_H_
