@@ -136,6 +136,7 @@ jobs:
         -DLLVM_INSTALL_UTILS=ON
         -DLLVM_TARGETS_TO_BUILD="host;NVPTX;AMDGPU"
         -DLLVM_ENABLE_TERMINFO=OFF
+        -DLLVM_ENABLE_ZSTD=OFF
         llvm-project/llvm
 
         ninja -C llvm-project/build check-mlir install
@@ -296,7 +297,7 @@ jobs:
           ${{ github.workspace }}/llvm-*-${{ matrix.config.target-os }}-${{ matrix.config.arch }}.tar.gz
 
     - name: Azure Login
-      if: ${{ (github.repository == 'triton-lang/triton') }}
+      if: ${{ (github.repository == 'triton-lang/triton') && github.ref_name == 'llvm-head' }}
       uses: azure/login@v2
       with:
         client-id: ${{ secrets.AZURE_CLIENT_ID }}
@@ -304,7 +305,7 @@ jobs:
         subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
     - name: Upload LLVM Artifacts to Azure
-      if: ${{ (github.repository == 'triton-lang/triton') }}
+      if: ${{ (github.repository == 'triton-lang/triton') && github.ref_name == 'llvm-head' }}
       shell: bash -el {0}
       run: |
         az storage blob upload --account-name oaitriton --auth-mode login --container-name public --file "${{ env.llvm_install_dir }}.tar.gz" --name "llvm-builds/${{ env.llvm_install_dir }}.tar.gz" --overwrite
@@ -313,7 +314,7 @@ jobs:
         echo "Blob URL: ${URL}"
 
     - name: Azure Logout
-      if: ${{ (github.repository == 'triton-lang/triton') }}
+      if: ${{ (github.repository == 'triton-lang/triton') && github.ref_name == 'llvm-head' }}
       run: |
         az logout
         az cache purge
