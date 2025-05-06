@@ -5,7 +5,7 @@
 #include <cstdlib>
 #include <functional>
 
-#include "Driver/Device.h"
+#include "Device.h"
 
 namespace proton {
 class Runtime {
