@@ -15,8 +15,8 @@ else:
     cublas = None
 
 
-@pytest.mark.skipif(not is_cuda() and torch.cuda.get_device_capability()[0] != 10,
-                    reason="warp specialization is only supported on NVIDIA Blackwell")
+@pytest.mark.skipif(is_hip(), reason="warp specialization is not supported on hip devices")
+@pytest.mark.skipif(torch.cuda.get_device_capability()[0] != 10, reason="Requires compute capability == 10")
 def test_warp_specialize_basic_ir(tmp_path: pathlib.Path):
     ir = """
     tt.func @kernel(%arg0: !tt.ptr<i32>) {
@@ -50,8 +50,8 @@ def test_warp_specialize_basic_ir(tmp_path: pathlib.Path):
     assert input[1] == 5555
 
 
-@pytest.mark.skipif(not is_cuda() and torch.cuda.get_device_capability()[0] != 10,
-                    reason="warp specialization is only supported on NVIDIA Blackwell")
+@pytest.mark.skipif(is_hip(), reason="warp specialization is not supported on hip devices")
+@pytest.mark.skipif(torch.cuda.get_device_capability()[0] != 10, reason="Requires compute capability == 10")
 def test_warp_specialize_tmem_ir(tmp_path: pathlib.Path):
     ir = """
     #blocked = #ttg.blocked<{sizePerThread = [1, 64], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [0, 1]}>
