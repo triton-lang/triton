@@ -1338,8 +1338,8 @@ tt.func public @attention_forward(
     // CHECK-NEXT: [[V_BUF:%.*]] = ttg.memdesc_subview [[V_BUFS]][[[V_INDEX]], %c0_i32, %c0_i32]
     // CHECK-NEXT: [[V_DESC_PTR:%.*]] = ttng.tensor_desc_to_tma_ptr [[V_DESC]]
     // CHECK-NEXT: async_tma_copy_global_to_local [[V_DESC_PTR]][[[I]], %c0_i32] [[V_BUF]], [[V_READY_BAR]], %true {ttg.assigned_stage = 2 : i32, ttg.partition = 2 : i32}
-    %62 = tt.descriptor_load %V_desc[%i, %c0_i32] : !tt.tensordesc<tensor<64x64xf16, #shared>> -> tensor<64x64xf16, #load_blocked>
-    %63 = ttg.local_alloc %62 : (tensor<64x64xf16, #load_blocked>) -> !ttg.memdesc<64x64xf16, #shared, #smem>
+    %V = tt.descriptor_load %V_desc[%i, %c0_i32] : !tt.tensordesc<tensor<64x64xf16, #shared>> -> tensor<64x64xf16, #load_blocked>
+    %V_shared = ttg.local_alloc %V : (tensor<64x64xf16, #load_blocked>) -> !ttg.memdesc<64x64xf16, #shared, #smem>
 
     // CHECK-NEXT: [[P:%.*]] = arith.truncf [[SOFTMAX]] {ttg.partition = 0 : i32}
     // CHECK-NEXT: wait_barrier [[P_EMPTY_MBARS]], [[P_PHASE]] {ttg.partition = 0 : i32}
@@ -1356,7 +1356,7 @@ tt.func public @attention_forward(
     %P_tmem = ttng.tmem_alloc %P : (tensor<256x64xf16, #blocked>) -> !ttg.memdesc<256x64xf16, #tmem_lhs, #ttng.tensor_memory>
     %acc_tmem, %acc_tok = ttng.tmem_alloc %acc_corrected : (tensor<256x64xf32, #blocked>) -> (!ttg.memdesc<256x64xf32, #tmem_acc, #ttng.tensor_memory, mutable>, !ttg.async.token)
     // CHECK-NEXT: tc_gen5_mma [[P_BUF]], [[V_BUF]], [[PV_0]][], %true, %true, [[V_EMPTY_BAR]][%true], [[PV_READY_BAR0]][%true], [[P_EMPTY_MBARS]][%true] {ttg.assigned_stage = 2 : i32, ttg.partition = 1 : i32}
-    %PV_mma_tok = ttng.tc_gen5_mma %P_tmem, %63, %acc_tmem[%acc_tok], %true, %true : !ttg.memdesc<256x64xf16, #tmem_lhs, #ttng.tensor_memory>, !ttg.memdesc<64x64xf16, #shared, #smem>, !ttg.memdesc<256x64xf32, #tmem_acc, #ttng.tensor_memory, mutable>
+    %PV_mma_tok = ttng.tc_gen5_mma %P_tmem, %V_shared, %acc_tmem[%acc_tok], %true, %true : !ttg.memdesc<256x64xf16, #tmem_lhs, #ttng.tensor_memory>, !ttg.memdesc<64x64xf16, #shared, #smem>, !ttg.memdesc<256x64xf32, #tmem_acc, #ttng.tensor_memory, mutable>
     %O, %O_tok = ttng.tmem_load %acc_tmem[%PV_mma_tok] : !ttg.memdesc<256x64xf32, #tmem_acc, #ttng.tensor_memory, mutable> -> tensor<256x64xf32, #blocked>
 
     // CHECK-NEXT: [[K_INDEX_INCR:%.*]] = arith.addi [[K_INDEX]], %c1_i32
