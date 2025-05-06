@@ -1,8 +1,11 @@
+#include "mlir/IR/Dominance.h"
 #include "triton/Analysis/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
+#include "triton/Dialect/TritonGPU/Transforms/MMAv5PipelineUtility.h"
 #include "triton/Dialect/TritonGPU/Transforms/PipeliningUtility.h"
 #include "triton/Dialect/TritonGPU/Transforms/Schedule.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
+#include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "llvm/Support/Debug.h"
 
 #define DEBUG_TYPE "triton-loop-pipeline"
@@ -12,7 +15,7 @@
 using namespace mlir;
 namespace tt = mlir::triton;
 namespace ttg = mlir::triton::gpu;
-
+namespace ttng = mlir::triton::nvidia_gpu;
 namespace mlir {
 namespace triton {
 namespace gpu {
@@ -26,7 +29,8 @@ bool hasGpuBarriers(scf::ForOp forOp) {
 }
 
 // Return true if the preconditions for pipelining the loop are met.
-bool isSafeToPipeline(scf::ForOp forOp) {
+bool isSafeToPipeline(scf::ForOp forOp,
+                      const DenseMap<Operation *, int> &opLatency) {
   // Skip loop with distance > 1.
   if (loopHasDistGreaterThanOne(forOp))
     return false;
@@ -63,6 +67,7 @@ CoarseSchedule scheduleKeyOps(scf::ForOp forOp,
   if (latOps.empty())
     return CoarseSchedule(0);
 
+  DominanceInfo domInfo(forOp);
   // Compute the longest path to the yield for each operation reachable
   // from any latency operation.
   DenseMap<Operation *, int> distance;
@@ -151,7 +156,7 @@ void scheduleDistanceOneDependencies(scf::ForOp forOp,
   int numStages = schedule.getNumStages();
 
   // Mapping from the cluster to the cluster before it.
-  DenseMap<CoarseSchedule::Cluster *, CoarseSchedule::Cluster> dist1Cluster;
+  DenseMap<CoarseSchedule::ClusterHash, CoarseSchedule::Cluster> dist1Cluster;
   for (auto &op : forOp.getBody()->without_terminator()) {
     if (schedule.count(&op) == 0)
       continue;
@@ -174,11 +179,16 @@ void scheduleDistanceOneDependencies(scf::ForOp forOp,
                                       /*includeArg=*/true,
                                       /*insertIfEarlier=*/true);
             } else {
-              if (dist1Cluster.count(&cluster) == 0) {
-                dist1Cluster[&cluster] = schedule.clusters.newBefore(cluster);
+              CoarseSchedule::ClusterHash clusterHash =
+                  CoarseSchedule::hashCluster(cluster);
+              if (dist1Cluster.count(clusterHash) == 0) {
+                dist1Cluster[clusterHash] =
+                    schedule.clusters.newBefore(cluster);
               }
-              schedule.insertIfAbsent(defOp, stage + 1, dist1Cluster[&cluster]);
-              schedule.insertDepsOfOp(defOp, stage + 1, dist1Cluster[&cluster],
+              schedule.insertIfAbsent(defOp, stage + 1,
+                                      dist1Cluster[clusterHash]);
+              schedule.insertDepsOfOp(defOp, stage + 1,
+                                      dist1Cluster[clusterHash],
                                       /*includeArg=*/true,
                                       /*includeIfEarlier=*/true);
             }
@@ -280,9 +290,25 @@ void scheduleRemainingToLastStage(scf::ForOp forOp, CoarseSchedule &schedule,
   }
 }
 
+void serializeMMAv5Latencies(scf::ForOp forOp,
+                             const DenseMap<Operation *, int> &opLatency) {
+  auto module = forOp->getParentOfType<ModuleOp>();
+  auto helper = TritonDialect::getLoaded(module)->getLatencyAttrHelper();
+  auto builder = Builder(module);
+  for (auto &op : forOp.getBody()->without_terminator()) {
+    if (auto mmav5Op = dyn_cast<ttng::MMAv5OpInterface>(op)) {
+      if (opLatency.count(mmav5Op)) {
+        helper.setAttr(mmav5Op,
+                       builder.getI32IntegerAttr(opLatency.lookup(mmav5Op)));
+      }
+    }
+  }
+}
+
 void scheduleLoop(scf::ForOp forOp,
                   const DenseMap<Operation *, int> &opLatency) {
-  if (!hasLatenciesAssigned(forOp, opLatency) || !isSafeToPipeline(forOp))
+  if (!hasLatenciesAssigned(forOp, opLatency) ||
+      !isSafeToPipeline(forOp, opLatency))
     return;
   // Based on the latencies, schedule the key ops to the stages.
   CoarseSchedule schedule = scheduleKeyOps(forOp, opLatency);
@@ -317,6 +343,10 @@ void scheduleLoop(scf::ForOp forOp,
 
   // Write the schedule to the IR
   schedule.serialize(forOp);
+
+  // Serialize also original latencies for mmav5 ops, as they might not have
+  // direct uses in the loop (e.g. when they are only used by themself)
+  serializeMMAv5Latencies(forOp, opLatency);
 }
 
 } // namespace

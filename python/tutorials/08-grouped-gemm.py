@@ -271,20 +271,20 @@ def grouped_matmul_tma_kernel(
             b_ptr = tl.load(group_b_ptrs + g).to(tl.pointer_type(dtype))
             c_ptr = tl.load(group_c_ptrs + g).to(tl.pointer_type(dtype))
 
-            a_desc = tl._experimental_make_tensor_descriptor(
+            a_desc = tl.make_tensor_descriptor(
                 a_ptr,
                 shape=[gm, gk],
                 strides=[lda, 1],
                 block_shape=[BLOCK_SIZE_M, BLOCK_SIZE_K],
             )
 
-            b_desc = tl._experimental_make_tensor_descriptor(
+            b_desc = tl.make_tensor_descriptor(
                 b_ptr,
                 shape=[gn, gk],
                 strides=[ldb, 1],
                 block_shape=[BLOCK_SIZE_N, BLOCK_SIZE_K],
             )
-            c_desc = tl._experimental_make_tensor_descriptor(
+            c_desc = tl.make_tensor_descriptor(
                 c_ptr,
                 shape=[gm, gn],
                 strides=[ldc, 1],
@@ -392,12 +392,12 @@ for i in range(group_size):
 tri_out = group_gemm_fn(group_A, group_B)
 ref_out = [torch.matmul(a, b) for a, b in zip(group_A, group_B)]
 for i in range(group_size):
-    assert torch.allclose(ref_out[i], tri_out[i], atol=1e-2, rtol=0)
+    assert torch.allclose(ref_out[i], tri_out[i], atol=1e-2, rtol=1e-2)
 
 if supports_tma():
     tri_tma_out = group_gemm_tma_fn(group_A, group_B_T)
     for i in range(group_size):
-        assert torch.allclose(ref_out[i], tri_tma_out[i], atol=1e-2, rtol=0)
+        assert torch.allclose(ref_out[i], tri_tma_out[i], atol=1e-2, rtol=1e-2)
 
 
 # only launch the kernel, no tensor preparation here to remove all overhead

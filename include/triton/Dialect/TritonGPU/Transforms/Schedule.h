@@ -15,7 +15,7 @@ namespace gpu {
 
 /// Discover operations that should become async and assign latencies to them
 /// based on the numStages value provided by the user.
-void assignLatencies(ModuleOp moduleOp, int numStages, bool assignMMA = false);
+void assignLatencies(ModuleOp moduleOp, int numStages);
 
 /// Schedule the loops based on the latencies assigned to the operations.
 void scheduleLoops(ModuleOp moduleOp);
@@ -25,28 +25,8 @@ void lowerLoops(ModuleOp moduleOp);
 
 }; // namespace gpu
 
-/// This fill out the pipelining options including schedule and annotations
-/// for wait ops. This also does pre-processing by converting some of the
-/// loads into async loads so that the IR is ready to be pipelined.
-bool preProcessLoopAndGetSchedule(scf::ForOp &forOp, int numStages,
-                                  mlir::triton::PipeliningOption &options);
-
-/// Fills out pipelining options for an outer loop pipelining case. This
-/// schedules async copies to overlap with the epilogue of a loop.
-bool getOuterLoopSchedule(scf::ForOp &forOp, int numStages,
-                          mlir::triton::PipeliningOption &options);
-
-/// Pipeline the Tensor Core Gen 05 MMA ops in the module with `numStages`
-/// stages. This will pre-process the loops, lowering the ops related to TG Gen5
-/// MMA, and then pipeline the loops using expander.
-void pipelineTC05MMALoops(ModuleOp module, int numStages,
-                          bool disableExpander = false);
-
 /// Pipeline the TMA stores in the loop.
 bool pipelineTMAStores(scf::ForOp forOp);
-
-/// Simple pipelining for the MMA ops which accumulator is modified in the loop.
-scf::ForOp pipelineMMAWithScaledAcc(scf::ForOp forOp);
 
 /// This does post-processing on the pipelined loop to try to pipeline wgmma
 /// ops.
@@ -92,6 +72,8 @@ public:
     }
 
     bool isBefore(iterator a, iterator b) const {
+      if (a == b)
+        return false;
       for (auto it = begin(); it != end(); ++it) {
         if (it == a)
           return true;
@@ -106,7 +88,8 @@ public:
   CoarseSchedule() = default;
   CoarseSchedule(int numStages) : numStages(numStages) {}
   ClusterList clusters;
-  using Cluster = decltype(clusters)::iterator;
+  using Cluster = ClusterList::iterator;
+  using ClusterHash = size_t;
 
   DenseMap<Operation *, std::pair<int, Cluster>> opToStageAndCluster;
 
@@ -114,7 +97,9 @@ public:
   int getNumStages() { return numStages; }
 
   void insert(Operation *op, int stage, Cluster cluster) {
-    assert(stage < numStages && "Invalid stage");
+    if (stage >= numStages) {
+      numStages = stage + 1;
+    }
     opToStageAndCluster[op] = {stage, cluster};
   }
 
@@ -140,6 +125,20 @@ public:
 
   auto find(Operation *op) const { return opToStageAndCluster.find(op); }
 
+  // Split the cluster containing op into two clusters, one containing all
+  // operations before the op and one containing op and all operations after the
+  // op. Return the cluster containing op and all operations after the op.
+  Cluster splitClusterBefore(Operation *op, scf::ForOp forOp);
+
+  // Check if op a will show up before op b in the final unrolled code.
+  bool isOpBefore(Operation *a, Operation *b);
+
+  // Check if op a is in earlier cluster than op b.
+  bool isOpInEarlierCluster(Operation *a, Operation *b);
+
+  // Check if op a is in the same cluster as op b.
+  bool isOpInSameCluster(Operation *a, Operation *b);
+
   SmallVector<std::tuple<Operation *, int, Cluster>>
   getOpsInOrder(scf::ForOp forOp);
   std::vector<std::pair<Operation *, unsigned>>
@@ -153,6 +152,10 @@ public:
   void serialize(scf::ForOp &forOp);
   // Create a CoarseSchedule based on forOp's <stage, cluster>.
   LogicalResult deSerialize(scf::ForOp &forOp);
+
+  static ClusterHash hashCluster(Cluster cluster) {
+    return reinterpret_cast<ClusterHash>(&*cluster);
+  }
 
   LLVM_DUMP_METHOD void dump();
 

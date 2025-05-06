@@ -1,4 +1,5 @@
 #include <optional>
+#include <pybind11/cast.h>
 #include <pybind11/functional.h>
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
@@ -28,6 +29,7 @@
 #include "triton/Dialect/Triton/IR/Types.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
+#include "triton/Dialect/TritonNvidiaGPU/Transforms/TMAUtilities.h"
 #include "triton/Tools/Sys/GetEnv.hpp"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/SourceMgr.h"
@@ -39,6 +41,9 @@ namespace {
 namespace py = pybind11;
 using namespace mlir;
 using namespace triton;
+namespace tt = triton;
+namespace ttg = triton::gpu;
+namespace ttng = triton::nvidia_gpu;
 
 llvm::raw_fd_ostream &mlir_dumps() {
   std::error_code EC;
@@ -218,10 +223,54 @@ struct ConsoleReproducerStream : public mlir::ReproducerStream {
   raw_ostream &os() override { return llvm::errs(); }
 };
 
-static ReproducerStreamFactory makeConsoleReproducer() {
+ReproducerStreamFactory makeConsoleReproducer() {
   return [](std::string &error) -> std::unique_ptr<ReproducerStream> {
     return std::make_unique<ConsoleReproducerStream>();
   };
+}
+
+OpPrintingFlags getOpPrintingFlags() {
+  auto printingFlags = OpPrintingFlags();
+  printingFlags.enableDebugInfo();
+  return printingFlags;
+}
+
+py::list getTensorDescMetadata(ModuleOp &mod) {
+  py::list result;
+  triton::FuncOp kernelFunc;
+  mod.walk([&](triton::FuncOp func) {
+    if (LLVM::isKernel(func)) {
+      kernelFunc = func;
+      return WalkResult::interrupt();
+    }
+    return WalkResult::skip();
+  });
+  assert(kernelFunc);
+
+  for (auto [i, argTy] : llvm::enumerate(kernelFunc.getArgumentTypes())) {
+    auto descTy = dyn_cast<TensorDescType>(argTy);
+    if (!descTy)
+      continue;
+
+    auto blockType = descTy.getBlockType();
+    auto encoding = blockType.getEncoding();
+    auto mmaEncoding = dyn_cast<triton::gpu::NVMMASharedEncodingAttr>(encoding);
+    auto swizzle = ttng::getTMASwizzleMode(nullptr, descTy);
+    auto elemType = ttng::getTMAElementType(nullptr, descTy);
+    assert(swizzle.has_value());
+    assert(elemType.has_value());
+    auto blockSize = ttg::getShapePerCTA(blockType);
+    blockSize.back() = ttng::getTMAContigDim(blockType);
+    py::dict metadata;
+    metadata["swizzle"] = *swizzle;
+    metadata["elem_size"] = descTy.getBlockType().getElementTypeBitWidth() / 8;
+    metadata["elem_type"] = *elemType;
+    metadata["block_size"] =
+        std::vector<int>(blockSize.begin(), blockSize.end());
+    metadata["fp4_padded"] = mmaEncoding && mmaEncoding.getFp4Padded();
+    result.append(std::move(metadata));
+  }
+  return result;
 }
 
 } // anonymous namespace
@@ -279,6 +328,17 @@ void init_triton_ir(py::module &&m) {
       .value("MIN", RMWOp::MIN)
       .value("UMIN", RMWOp::UMIN)
       .value("UMAX", RMWOp::UMAX);
+
+  py::enum_<DescriptorReduceKind>(m, "DESCRIPTOR_REDUCE_KIND",
+                                  py::module_local())
+      .value("ADD", DescriptorReduceKind::ADD)
+      .value("AND", DescriptorReduceKind::AND)
+      .value("OR", DescriptorReduceKind::OR)
+      .value("XOR", DescriptorReduceKind::XOR)
+      .value("MAX", DescriptorReduceKind::MAX)
+      .value("MIN", DescriptorReduceKind::MIN)
+      .value("INC", DescriptorReduceKind::INC)
+      .value("DEC", DescriptorReduceKind::DEC);
 
   py::enum_<RoundingMode>(m, "ROUNDING_MODE", py::module_local())
       .value("RTZ", RoundingMode::RTZ)
@@ -511,8 +571,7 @@ void init_triton_ir(py::module &&m) {
            [](OpState &self) -> std::string {
              std::string str;
              llvm::raw_string_ostream os(str);
-             auto printingFlags = OpPrintingFlags();
-             printingFlags.enableDebugInfo();
+             auto printingFlags = getOpPrintingFlags();
              self->print(os, printingFlags);
              return str;
            })
@@ -583,8 +642,7 @@ void init_triton_ir(py::module &&m) {
            [](ModuleOp &self) -> std::string {
              std::string str;
              llvm::raw_string_ostream os(str);
-             auto printingFlags = OpPrintingFlags();
-             printingFlags.enableDebugInfo();
+             auto printingFlags = getOpPrintingFlags();
              self.print(os, printingFlags);
              return str;
            })
@@ -656,11 +714,12 @@ void init_triton_ir(py::module &&m) {
                return py::none();
              return py::int_(ret.getInt());
            })
+      .def("get_tensordesc_metadata", getTensorDescMetadata)
       .def("create_location_snapshot",
            [](ModuleOp &self, const std::string &fileName) -> void {
-             generateLocationsFromIR(/*raw_ostream=*/llvm::nulls(),
-                                     /*fileName=*/fileName,
-                                     /*op=*/self, /*flags=*/{});
+             auto printingFlags = getOpPrintingFlags();
+             if (failed(generateLocationsFromIR(fileName, self, printingFlags)))
+               throw std::runtime_error("Failed to create location snapshot");
            })
       .def("walk",
            [](ModuleOp &self, const std::function<void(Operation *)> &fn) {
@@ -1403,59 +1462,40 @@ void init_triton_ir(py::module &&m) {
                                   evictionPolicy);
            })
       .def("create_tensor_descriptor_type",
-           [](TritonOpBuilder &self, Type blockTy) -> Type {
+           [](TritonOpBuilder &self, Type blockTy, bool isSigned) -> Type {
              auto ctx = self.getContext();
              return triton::TensorDescType::get(
-                 ctx, cast<RankedTensorType>(blockTy));
-           })
-      .def("create_reinterpret_tensor_descriptor",
-           [](TritonOpBuilder &self, Value desc_ptr, Type blockTy) -> Value {
-             auto ctx = self.getContext();
-             auto resultTy = triton::TensorDescType::get(
-                 ctx, cast<RankedTensorType>(blockTy));
-             return self.create<ReinterpretTensorDescOp>(resultTy, desc_ptr);
+                 ctx, cast<RankedTensorType>(blockTy), isSigned);
            })
       .def("create_descriptor_load",
            [](TritonOpBuilder &self, Value desc, std::vector<Value> &indices,
               CacheModifier cacheModifier,
               EvictionPolicy evictionPolicy) -> Value {
              auto descTy = cast<triton::TensorDescType>(desc.getType());
-             auto resTy = descTy.getBlockType();
-             return self.create<ExperimentalDescriptorLoadOp>(
+             auto resTy = descTy.getSignlessBlockType();
+             return self.create<DescriptorLoadOp>(
                  resTy, desc, indices, cacheModifier, evictionPolicy);
            })
       .def("create_descriptor_gather",
            [](TritonOpBuilder &self, Value desc, Value x_indices, Value y_index,
               Type type) -> Value {
-             return self.create<ExperimentalDescriptorGatherOp>(
-                 type, desc, x_indices, y_index);
+             return self.create<DescriptorGatherOp>(type, desc, x_indices,
+                                                    y_index);
            })
       .def("create_descriptor_store",
            [](TritonOpBuilder &self, Value desc, Value value,
               std::vector<Value> &indices) -> void {
-             self.create<ExperimentalDescriptorStoreOp>(desc, value, indices);
+             self.create<DescriptorStoreOp>(desc, value, indices);
+           })
+      .def("create_descriptor_reduce",
+           [](TritonOpBuilder &self, DescriptorReduceKind kind, Value desc,
+              Value value, std::vector<Value> &indices) -> void {
+             self.create<DescriptorReduceOp>(kind, desc, value, indices);
            })
       .def("create_descriptor_scatter",
            [](TritonOpBuilder &self, Value desc, Value value, Value x_indices,
               Value y_index) -> void {
-             self.create<ExperimentalDescriptorScatterOp>(desc, x_indices,
-                                                          y_index, value);
-           })
-      .def("create_tensormap_create",
-           [](TritonOpBuilder &self, Value desc_ptr, Value global_address,
-              std::vector<Value> box_dim, std::vector<Value> global_dim,
-              std::vector<Value> global_stride,
-              std::vector<Value> element_stride, int32_t elem_type,
-              int32_t interleave_layout, int32_t swizzle_mode,
-              int32_t fill_mode) {
-             self.create<ExperimentalTensormapCreateOp>(
-                 desc_ptr, global_address, box_dim, global_dim, global_stride,
-                 element_stride, elem_type, interleave_layout, swizzle_mode,
-                 fill_mode);
-           })
-      .def("create_tensormap_fenceproxy_acquire",
-           [](TritonOpBuilder &self, Value desc_ptr) {
-             self.create<ExperimentalTensormapFenceproxyAcquireOp>(desc_ptr);
+             self.create<DescriptorScatterOp>(desc, x_indices, y_index, value);
            })
       .def("create_reshape",
            [](TritonOpBuilder &self, Value &arg, std::vector<int64_t> &shape,
@@ -1594,12 +1634,12 @@ void init_triton_ir(py::module &&m) {
               std::optional<mlir::Value> &lhs_scale,
               ScaleDotElemType lhs_format, mlir::Value &rhs,
               std::optional<mlir::Value> &rhs_scale,
-              ScaleDotElemType rhs_format, bool fast_math,
-              mlir::Value &c) -> mlir::Value {
-             return self.create<DotScaledOp>(c.getType(), lhs, rhs, c,
-                                             lhs_scale.value_or(Value()),
-                                             rhs_scale.value_or(Value()),
-                                             lhs_format, rhs_format, fast_math);
+              ScaleDotElemType rhs_format, bool fast_math, bool lhs_k_pack,
+              bool rhs_k_pack, mlir::Value &c) -> mlir::Value {
+             return self.create<DotScaledOp>(
+                 c.getType(), lhs, rhs, c, lhs_scale.value_or(Value()),
+                 rhs_scale.value_or(Value()), lhs_format, rhs_format, fast_math,
+                 lhs_k_pack, rhs_k_pack);
            })
       .def("create_floor",
            [](TritonOpBuilder &self, Value &val) -> Value {
@@ -1754,10 +1794,10 @@ void init_triton_ir(py::module &&m) {
       // Make a tensor descriptor
       .def("create_make_tensor_descriptor",
            [](TritonOpBuilder &self, Value &base, std::vector<Value> &shape,
-              std::vector<Value> &strides,
-              std::vector<int32_t> &tensorShape) -> Value {
+              std::vector<Value> &strides, std::vector<int32_t> &tensorShape,
+              bool isSignedInteger) -> Value {
              return self.create<MakeTensorDescOp>(base, shape, strides,
-                                                  tensorShape);
+                                                  tensorShape, isSignedInteger);
            })
       // Proton Ops
       .def("create_proton_record",
@@ -1781,9 +1821,7 @@ void init_triton_ir(py::module &&m) {
              }
              if (haveDump) {
                context->disableMultithreading();
-               auto printingFlags = OpPrintingFlags();
-               printingFlags.elideLargeElementsAttrs(16);
-               printingFlags.enableDebugInfo();
+               auto printingFlags = getOpPrintingFlags();
                auto printAlways = [funcToDump](Pass *, Operation *op) -> bool {
                  if (funcToDump.empty())
                    return true;

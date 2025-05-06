@@ -1,4 +1,5 @@
 add_triton_library(TritonAMDGPUToLLVM
+    AtomicRMWOpsEmitter.cpp
     BufferOpsEmitter.cpp
     ConvertLayoutOpToLLVM/SharedToDotOperandHelper.cpp
     ConvertLayoutOpToLLVM/SharedToDotOperandMFMA.cpp
@@ -17,12 +18,12 @@ add_triton_library(TritonAMDGPUToLLVM
     Utility.cpp
     TargetInfo.cpp
     TargetUtils.cpp
-    DecomposeUnsupportedConversions.cpp
     OptimizeLDSUsage.cpp
     OptimizeLDSUtility.cpp
     SPMDOpToLLVM.cpp
     SchedInstructions.cpp
     UpcastMXFPToLLVM.cpp
+    MembarUtility.cpp
 
     DEPENDS
     TritonAMDGPUConversionPassIncGen

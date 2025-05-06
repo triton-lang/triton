@@ -83,5 +83,4 @@ def TTG_MemDescType : TTG_TypeDef<"MemDesc", "memdesc", [ShapedTypeInterface]> {
   let genVerifyDecl = 1;
 }
 
-
 #endif

@@ -89,32 +89,32 @@ namespace tt = triton;
 //
 namespace {
 
-// Extend a 32bit `offset` into 64bit using a arith.extsi operation
-static Value createExtend32bitOffsetTo64Bits(RewriterBase &rewriter,
-                                             Location loc, Value offset) {
+// Extend `offset` into `toType` using a arith.extsi operation
+Value createExtSIOffset(RewriterBase &rewriter, Location loc, Value offset,
+                        Type toType) {
   if (auto tensorType = dyn_cast<RankedTensorType>(offset.getType())) {
     auto shape = tensorType.getShape();
-    auto newTensorType = RankedTensorType::get(shape, rewriter.getI64Type(),
-                                               tensorType.getEncoding());
+    auto newTensorType =
+        RankedTensorType::get(shape, toType, tensorType.getEncoding());
     return rewriter.create<arith::ExtSIOp>(loc, newTensorType, offset);
   }
-  return rewriter.create<arith::ExtSIOp>(loc, rewriter.getI64Type(), offset);
+  return rewriter.create<arith::ExtSIOp>(loc, toType, offset);
 }
 
-// Narrow a 64bit `offset` into 32bit using a arith.trunci operation
-static Value createNarrow64bitOffsetTo32bits(RewriterBase &rewriter,
-                                             Location loc, Value offset) {
+// Narrow `offset` into `toType` using a arith.trunci operation
+Value createTruncIOffset(RewriterBase &rewriter, Location loc, Value offset,
+                         Type toType) {
   Type elementType = getElementTypeOrSelf(offset);
   if (elementType.isInteger(32))
     return offset;
 
   if (auto tensorType = dyn_cast<RankedTensorType>(offset.getType())) {
     auto shape = tensorType.getShape();
-    auto newTensorType = RankedTensorType::get(shape, rewriter.getI32Type(),
-                                               tensorType.getEncoding());
+    auto newTensorType =
+        RankedTensorType::get(shape, toType, tensorType.getEncoding());
     return rewriter.create<arith::TruncIOp>(loc, newTensorType, offset);
   }
-  return rewriter.create<arith::TruncIOp>(loc, rewriter.getI32Type(), offset);
+  return rewriter.create<arith::TruncIOp>(loc, toType, offset);
 }
 
 // Helper function to determine if the given `op` is a constant tensor and in
@@ -394,7 +394,7 @@ Value createTensorPointer(RewriterBase &rewriter, Value basePtr, Value offset,
   auto tensorPtrType = RankedTensorType::get(offsetShape, basePtr.getType(),
                                              tensorType.getEncoding());
   if (fatPtrAttrs.canNarrow)
-    offset = createNarrow64bitOffsetTo32bits(rewriter, loc, offset);
+    offset = createTruncIOffset(rewriter, loc, offset, rewriter.getI32Type());
 
   tt::SplatOp tensorPtr =
       rewriter.create<tt::SplatOp>(loc, tensorPtrType, basePtr);
@@ -605,14 +605,20 @@ public:
     if (!isZeroConst(nonUniformOffset)) {
       Type addPtrOffsetType = getElementTypeOrSelf(nonUniformOffset);
       Type fatPtrOffsetType = getElementTypeOrSelf(fatPtrOffset);
+      assert(addPtrOffsetType.isIntOrIndex() &&
+             fatPtrOffsetType.isIntOrIndex() &&
+             "expected both addPtrOffsetType and fatPtrOffsetType to be int or "
+             "index type");
       canNarrow = canNarrow && canNarrowOffset(fatPtrOffset, nonUniformOffset);
       // Upcast or downcast the offset accordingly
-      if (addPtrOffsetType.isInteger(32) && fatPtrOffsetType.isInteger(64))
-        nonUniformOffset =
-            createExtend32bitOffsetTo64Bits(rewriter, curLoc, nonUniformOffset);
-      else if (addPtrOffsetType.isInteger(64) && fatPtrOffsetType.isInteger(32))
-        nonUniformOffset =
-            createNarrow64bitOffsetTo32bits(rewriter, curLoc, nonUniformOffset);
+      unsigned addPtrOffsetTypeWidth = addPtrOffsetType.getIntOrFloatBitWidth();
+      unsigned fatPtrOffsetTypeWidth = fatPtrOffsetType.getIntOrFloatBitWidth();
+      if (addPtrOffsetTypeWidth < fatPtrOffsetTypeWidth)
+        nonUniformOffset = createExtSIOffset(rewriter, curLoc, nonUniformOffset,
+                                             fatPtrOffsetType);
+      else if (addPtrOffsetTypeWidth > fatPtrOffsetTypeWidth)
+        nonUniformOffset = createTruncIOffset(
+            rewriter, curLoc, nonUniformOffset, fatPtrOffsetType);
 
       newOffset = rewriter.create<arith::AddIOp>(curLoc, nonUniformOffset,
                                                  fatPtrOffset);
@@ -1009,17 +1015,36 @@ public:
       rewriter.inlineBlockBefore(ifOp.elseBlock(), newIfOp.elseBlock(),
                                  newIfOp.elseBlock()->begin());
 
-    rewriter.replaceOpWithMultiple(ifOp, {newIfOp.getResults()});
-
-    for (int64_t idx :
-         llvm::cast<DenseI64ArrayAttr>(newIfOp.thenYield()->getDiscardableAttr(
-                                           kSCFIfOpYieldFatPtrOffsets))
-             .asArrayRef()) {
+    // Note only the `then` yield here is considered because this whole pass is
+    // effectively 1:N type conversion and thus only the types are important
+    // (and for `scf.if` the types along both `then`/`else` branches must be the
+    // same).
+    ArrayRef<int64_t> yieldPtrOffsets =
+        llvm::cast<DenseI64ArrayAttr>(
+            newIfOp.thenYield()->getDiscardableAttr(kSCFIfOpYieldFatPtrOffsets))
+            .asArrayRef();
+    for (int64_t idx : yieldPtrOffsets) {
       Value thenFatPtrBase = newIfOp.thenYield().getOperand(idx);
       Value thenFatPtrOffset = newIfOp.thenYield().getOperand(idx + 1);
       fatPtrs[{newIfOp.getResult(idx), newIfOp.getResult(idx + 1)}] =
           fatPtrs.at({thenFatPtrBase, thenFatPtrOffset});
     }
+
+    ResultRange results = newIfOp.getResults();
+    SmallVector<ValueRange> replacements;
+    SetVector<int64_t> ptrIndices(yieldPtrOffsets.begin(),
+                                  yieldPtrOffsets.end());
+    int64_t idx = 0;
+    for (; idx < newIfOp.getNumResults();) {
+      if (ptrIndices.contains(idx)) {
+        replacements.push_back(results.slice(idx, 2));
+        idx += 2;
+      } else {
+        replacements.push_back(results.slice(idx, 1));
+        idx += 1;
+      }
+    }
+    rewriter.replaceOpWithMultiple(ifOp, replacements);
 
     return success();
   }
@@ -1501,6 +1526,8 @@ void TritonAMDGPUCanonicalizePointersPass::runOnOperation() {
       MaterializeFatPointer<triton::gpu::AsyncCopyGlobalToLocalOp>,
       MaterializeFatPointer<tt::PtrToIntOp>, MaterializeFatPointer<tt::StoreOp>,
       MaterializeFatPointerVariadic<tt::CallOp>,
+      MaterializeFatPointerVariadic<tt::ExternElementwiseOp>,
+      MaterializeFatPointerVariadic<tt::ElementwiseInlineAsmOp>,
       MaterializeFatPointerVariadic<tt::PrintOp>, ConvertSCFForOp,
       ConvertExpandDims, ConvertSCFYieldOp, ConvertSCFIfOp,
       ConvertSCFConditionOp, ConvertSCFWhileOp, ConvertCFCondBranch,

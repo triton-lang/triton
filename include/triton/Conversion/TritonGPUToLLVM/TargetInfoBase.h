@@ -94,10 +94,15 @@ public:
 
   virtual bool supportVectorizedAtomics() const = 0;
 
-  // Helper used by targets to annotate store operations during lowering to
-  // llvm.
-  virtual void storeOpAnnotation(triton::gpu::LocalStoreOp op,
-                                 size_t localStoreOpCount, Type type) const {}
+  // Annotate target specific information to local store operations during
+  // lowering to LLVM.
+  virtual void localStoreOpAnnotation(triton::gpu::LocalStoreOp op,
+                                      size_t localStoreOpCount,
+                                      Type type) const {}
+  // Annotate target specific information to local load operations during
+  // lowering to LLVM. `llLoadOp` is the generated LLVM load op.
+  virtual void localLoadOpAnnotation(triton::gpu::LocalLoadOp localLoadOp,
+                                     Operation *llLoadOp) const {}
 
   virtual ~TargetInfoBase() {}
 };

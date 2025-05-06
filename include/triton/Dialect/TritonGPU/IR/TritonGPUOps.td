@@ -77,13 +77,10 @@ def TTG_AsyncCommitGroupOp : TTG_Op<"async_commit_group"> {
 
 def TTG_AsyncCopyGlobalToLocalOp : TTG_Op<"async_copy_global_to_local", [
   AttrSizedOperandSegments,
-  DeclareOpInterfaceMethods<MemoryEffectsOpInterface>,
-  TypesMatchWith<"infer mask type from src type",
-                 "src", "mask", "getI1SameShape($_self)",
-                 "($_op.getOperands().size() <= 3) || std::equal_to<>()">,
-  TypesMatchWith<"infer other type from src type",
-                 "src", "other", "getPointeeType($_self)",
-                 "($_op.getOperands().size() <= 4) || std::equal_to<>()">
+  OptionalTypesMatchWith<"infer mask type from src type",
+                 "src", "mask", "getI1SameShape($_self)">,
+  OptionalTypesMatchWith<"infer other type from src type",
+                 "src", "other", "getPointeeType($_self)">,
 ]> {
   let summary = "copy data from global memory to local memory asynchronously";
 
@@ -95,9 +92,9 @@ def TTG_AsyncCopyGlobalToLocalOp : TTG_Op<"async_copy_global_to_local", [
     operands are the same as tt.load.
   }];
 
-  let arguments = (
-    ins TT_PtrTensor:$src,
-    TTG_MemDescType:$result,
+  let arguments = (ins
+    Arg<TT_PtrTensor, "", [MemRead<GlobalMemory>]>:$src,
+    Arg<TTG_MemDescType, "", [MemWrite<SharedMemory>]>:$result,
     Optional<I1Tensor>:$mask,
     Optional<TT_Type>:$other,
     DefaultValuedAttr<TT_CacheModifierAttr, "triton::CacheModifier::NONE">:$cache,
@@ -178,7 +175,7 @@ def TTG_LocalAllocOp : TTG_Op<"local_alloc", [DeclareOpInterfaceMethods<MemoryEf
 }
 
 // Deallocate shared memory
-def TTG_LocalDeallocOp : TTG_Op<"local_dealloc", [MemoryEffects<[MemFree<SharedMemory>]>]> {
+def TTG_LocalDeallocOp : TTG_Op<"local_dealloc"> {
   let summary = "dealloc buffer";
 
   let description = [{
@@ -195,13 +192,13 @@ def TTG_LocalDeallocOp : TTG_Op<"local_dealloc", [MemoryEffects<[MemFree<SharedM
     operand.
   }];
 
-  let arguments = (ins TTG_MemDescType:$src);
+  let arguments = (ins Arg<TTG_MemDescType, "", [MemFree<SharedMemory>]>:$src);
 
   // Use qualified() otherwise "!ttg.memdesc<X>" is printed as "<X>".
   let assemblyFormat = [{$src attr-dict `:` qualified(type($src))}];
 }
 
-def TTG_MemDescSubviewOp : TTG_Op<"memdesc_subview", [Pure]> {
+def TTG_MemDescSubviewOp : TTG_Op<"memdesc_subview", [Pure, MemDescViewTrait]> {
   let summary = "take a subview of the descriptor.";
 
   let description = [{
@@ -227,6 +224,7 @@ def TTG_MemDescSubviewOp : TTG_Op<"memdesc_subview", [Pure]> {
 }
 
 def TTG_MemDescTransOp : TTG_Op<"memdesc_trans", [Pure,
+                                                  MemDescViewTrait,
                                                   TransposeOpInterface,
                                                   InferTypeOpWithLayoutEquivalence,
                                                   SameOperandsAndResultElementType]> {
@@ -251,13 +249,39 @@ def TTG_MemDescTransOp : TTG_Op<"memdesc_trans", [Pure,
   let hasFolder = 1;
 }
 
-def TTG_LocalLoadOp : TTG_Op<"local_load", [DeclareOpInterfaceMethods<MemoryEffectsOpInterface>]> {
+def TTG_MemDescReshapeOp : TTG_Op<"memdesc_reshape", [Pure,
+                                                      MemDescViewTrait,
+                                                      SameOperandsAndResultElementType]> {
+  let summary = "creates a descriptor for the new shape";
+
+  let description = [{
+    This operation returns a new descriptor representing a reshaped view of the underlying buffer.
+    This doesn't affect the memory.
+  }];
+
+  let arguments = (ins TTG_MemDescType:$src);
+
+  let arguments = (
+    ins TTG_MemDescType:$src
+  );
+
+  let results = (outs TTG_MemDescType:$result);
+
+  let assemblyFormat = "$src attr-dict `:` qualified(type($src)) `->` qualified(type($result))";
+
+  let hasVerifier = 1;
+}
+
+def TTG_LocalLoadOp : TTG_Op<"local_load"> {
   let summary = "Load a buffer from local memory into a distributed tensor";
 
   let description = [{
     Load a tensor from the local memory descriptor into a distributed tensor.
   }];
-  let arguments = (ins TTG_MemDescType:$src, Optional<TTG_AsyncToken> :$token);
+  let arguments = (ins
+    Arg<TTG_MemDescType, "", [MemRead<SharedMemory>]>:$src,
+    Optional<TTG_AsyncToken>:$token
+  );
 
   let builders = [
       OpBuilder<(ins "Type":$retType, "Value":$src),
@@ -271,13 +295,16 @@ def TTG_LocalLoadOp : TTG_Op<"local_load", [DeclareOpInterfaceMethods<MemoryEffe
   let results = (outs TT_Tensor:$result);
 }
 
-def TTG_LocalStoreOp : TTG_Op<"local_store", [DeclareOpInterfaceMethods<MemoryEffectsOpInterface>]> {
+def TTG_LocalStoreOp : TTG_Op<"local_store"> {
   let summary = "Store a distributed tensor into a buffer in local memory";
 
   let description = [{
     Store a distributed tensor into a buffer in local memory.
   }];
-  let arguments = (ins TT_Tensor:$src, TTG_MemDescType:$dst);
+  let arguments = (ins
+    TT_Tensor:$src,
+    Arg<TTG_MemDescType, "", [MemWrite<SharedMemory>]>:$dst
+  );
 
   let hasVerifier = 1;
   // Use qualified() otherwise "!ttg.memdesc<X>" is printed as "<X>".
@@ -313,7 +340,7 @@ def TTG_Fp4ToFpOp : TTG_Op<"fp4_to_fp", [Pure]> {
 }
 
 // Allocate global memory
-def TTG_GlobalScratchAllocOp : TTG_Op<"global_scratch_alloc", [MemoryEffects<[MemAlloc<GlobalMemory>]>]> {
+def TTG_GlobalScratchAllocOp : TTG_Op<"global_scratch_alloc"> {
   let summary = "allocate a global memory buffer";
   let description = [{
     This operation allocates a buffer in global memory that is private to the current program.
@@ -323,7 +350,7 @@ def TTG_GlobalScratchAllocOp : TTG_Op<"global_scratch_alloc", [MemoryEffects<[Me
     I32Attr:$nbytes,
     I32Attr:$alignment
   );
-  let results = (outs TT_Ptr:$result);
+  let results = (outs Arg<TT_Ptr, "", [MemAlloc<GlobalMemory>]>:$result);
 
   let builders = [
     OpBuilder<(ins "Type":$result, "int32_t":$nbytes, "int32_t":$alignment),
@@ -376,7 +403,9 @@ def TTG_WarpSpecializeOp : TTG_Op<"warp_specialize", [
   let arguments = (ins
     Variadic<AnyType>:$explicitCaptures,
     DenseI32ArrayAttr:$partitionNumWarps,
-    OptionalAttr<DenseI32ArrayAttr>:$warpGroupStartIds
+    OptionalAttr<DenseI32ArrayAttr>:$warpGroupStartIds,
+    OptionalAttr<DenseI32ArrayAttr>:$requestedRegisters,
+    OptionalAttr<DenseI32ArrayAttr>:$actualRegisters
   );
   let results = (outs Variadic<AnyType>:$defaultPassthrough);
 
@@ -394,8 +423,15 @@ def TTG_WarpSpecializeOp : TTG_Op<"warp_specialize", [
     unsigned getTotalPartitionWarps();
   }];
 
+  let builders = [
+    OpBuilder<(ins "TypeRange":$resultTypes,
+                   "ArrayRef<int32_t>":$partitionNumWarps,
+                   "unsigned":$numPartitionRegions)>
+  ];
+
   let hasVerifier = 1;
   let hasCustomAssemblyFormat = 1;
+  let hasCanonicalizeMethod = 1;
 }
 
 def TTG_WarpSpecializePartitionsOp : TTG_Op<"warp_specialize.partitions", [

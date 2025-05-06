@@ -15,6 +15,8 @@
 using namespace mlir;
 namespace tt = mlir::triton;
 namespace ttg = mlir::triton::gpu;
+using ::mlir::LLVM::AMD::isChainDotHead;
+using ::mlir::LLVM::AMD::isChainDotTail;
 using ::mlir::LLVM::AMD::scaleDotElemTypeToMLIRType;
 using mlir::triton::gpu::chooseScaledMfmaScaleLayout;
 
@@ -53,49 +55,6 @@ FailureOr<ScaleDotElemType> mlirTypeToScaledElemType(Type type) {
       .Case<Float6E2M3FNType>([](Type) { return ScaleDotElemType::E2M3; })
       .Case<Float4E2M1FNType>([](Type) { return ScaleDotElemType::E2M1; })
       .Default([](Type) { return failure(); });
-}
-
-// Check if the result of this tl.dot is used as opA of another tl.dot
-// in the same region
-bool isChainDotHead(tt::DotOpInterface dotOp) {
-  auto isInSameRegion = [&dotOp](Operation *op) {
-    return op->getParentRegion() == dotOp->getParentRegion();
-  };
-  ForwardSliceOptions fwdOpt;
-  fwdOpt.filter = isInSameRegion;
-  SetVector<mlir::Operation *> fwdSlices;
-  getForwardSlice(dotOp, &fwdSlices, fwdOpt);
-  for (Operation *op : fwdSlices) {
-    if (auto dOp = dyn_cast<tt::DotOpInterface>(op)) {
-      assert(dOp != dotOp);
-      auto opA = dOp.getA().getDefiningOp();
-      if (opA && fwdSlices.contains(opA)) {
-        return true;
-      }
-    }
-  }
-  return false;
-}
-
-// Check if the opA of this tl.dot is the result of another tl.dot
-// in the same region
-bool isChainDotTail(tt::DotOpInterface dotOp) {
-  auto isInSameRegion = [&dotOp](Operation *op) {
-    return op->getParentRegion() == dotOp->getParentRegion();
-  };
-  BackwardSliceOptions bwdOpt;
-  bwdOpt.omitBlockArguments = true;
-  bwdOpt.filter = isInSameRegion;
-  SetVector<Operation *> bwdSlices;
-  Operation *opA = dotOp.getA().getDefiningOp();
-  if (!opA)
-    return false;
-  getBackwardSlice(opA, &bwdSlices, bwdOpt);
-  if (llvm::find_if(bwdSlices, [](Operation *op) {
-        return isa<tt::DotOpInterface>(op);
-      }) != bwdSlices.end())
-    return true;
-  return false;
 }
 
 SmallVector<unsigned, 3>
@@ -180,7 +139,7 @@ FailureOr<MfmaIntrinsic>
 chooseMfmaInstruction(int mfmaVersion, RankedTensorType cType, Type aElemType,
                       Type bElemType, int inputKSize, int enforcedNonKDim,
                       bool withScale, bool allowXF32) {
-  // number of matrix elements along k dim per one MFMA intruction
+  // number of matrix elements along k dim per one MFMA instruction
   unsigned kDim = 0;
 
   auto resShape = cType.getShape();
@@ -216,7 +175,7 @@ chooseMfmaInstruction(int mfmaVersion, RankedTensorType cType, Type aElemType,
   assert(kDim != 0);
   assert(enforcedNonKDim != 0 || (M % mDim == 0 && N % nDim == 0));
   // if inputKSize % kDim != 0 this layout will introduce data duplication,
-  // consider FMA dot is prefered, except cases MFMA layout is enforced.
+  // consider FMA dot is preferred, except cases MFMA layout is enforced.
   if (enforcedNonKDim == 0 && inputKSize % kDim != 0)
     return failure();
   return maybeMfmaIntrinsic;
@@ -332,11 +291,11 @@ OperandTypesVector getOperandTypesForWmmaOp(PatternRewriter &rewriter,
   SmallVector<OperandTypesVector> applicableTypes = {
       // clang-format off
       {f16, f16, f32, f32},
-      {f16, f16, f16, f16},
       {bf16, bf16, f32, f32},
-      {bf16, bf16, bf16, bf16},
       {i8, i8, i32, i32},
-      // i4, i4, i32, i32 - is supported configuration
+      // {f16, f16, f16, f16},
+      // {bf16, bf16, bf16, bf16},
+      // {i4, i4, i32, i32} - are supported configurations
       // by WMMA instruction, but not supported by triton
       // clang-format on
   };
@@ -554,6 +513,13 @@ public:
     if (!isChainDotTail(dotOp))
       kWidth *= kPack;
 
+    // For FA kernel with f16 elementTy, we limit the 2nd dot to have
+    // kWidth = 4 so that the coversion from #mma (result of 1st dot)
+    // to #dotOp (operand 0 of 2nd dot) is a no-op.
+    // TODO (lixun): relax the condition for 8-bit elementTy.
+    if ((aElemTy.isF16() || aElemTy.isBF16()) && isChainDotTail(dotOp))
+      kWidth = 4;
+
     Value newDot;
     if (withScale) {
       // If a scaled mfma instruction is chosen, we will rewrite the DotOp to a
@@ -613,6 +579,9 @@ public:
 
   LogicalResult matchAndRewrite(triton::DotScaledOp dotOp,
                                 PatternRewriter &rewriter) const override {
+    // TODO: add support for m/n packed formats.
+    if (!dotOp.getLhsKPack() || !dotOp.getRhsKPack())
+      return failure();
     using TensorValue = TypedValue<RankedTensorType>;
 
     RankedTensorType oldRetType = dotOp.getType();
@@ -852,7 +821,6 @@ public:
     auto mfmaEnc = ttg::AMDMfmaEncodingAttr::get(
         ctx, /*versionMajor=*/mfmaVersion, /*versionMinor=*/0, warpsPerTile,
         /*instrShape=*/mDim, nDim, /*isTransposed=*/true, ctaLayout);
-    auto warpOrder = mfmaEnc.getDefaultWarpOrder();
 
     auto newRetType =
         RankedTensorType::get(oldShape, oldRetType.getElementType(), mfmaEnc);
@@ -1131,6 +1099,13 @@ public:
       // Try Fp16 x Fp16 -> Fp32 v_dot
       // if k % 2 != 0: can not use fp V_DOT instruction
       if (dotTypes.a.isF16() && dotTypes.b.isF16() && dotTypes.c.isF32() &&
+          dotTypes.d.isF32() && k % 2 == 0) {
+        return true;
+      }
+
+      // CDNA4 has Bf16 v_dot2
+      if (AMD::deduceISAFamily(arch) == ISAFamily::CDNA4 &&
+          dotTypes.a.isBF16() && dotTypes.b.isBF16() && dotTypes.c.isF32() &&
           dotTypes.d.isF32() && k % 2 == 0) {
         return true;
       }

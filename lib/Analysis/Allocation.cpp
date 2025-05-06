@@ -121,7 +121,7 @@ ScratchConfig getScratchConfigForCvt(RankedTensorType srcTy,
   Attribute dstLayout = dstTy.getEncoding();
 
   assert(cvtNeedsSharedMemory(srcTy, dstTy));
-  auto outOrd = gpu::toLinearEncoding(dstLayout, dstTy.getShape()).getOrder();
+  auto outOrd = gpu::getOrder(dstTy);
   scratchConfig.order = outOrd;
 
   std::tie(scratchConfig.inVec, scratchConfig.outVec) =
@@ -332,7 +332,7 @@ private:
         solver->load<SharedMemoryAliasAnalysis>();
     // Run the analysis rooted at every isolated from above operation, including
     // the top-level function but also any nested regions.
-    operation->walk([&](Operation *op) {
+    operation->walk<mlir::WalkOrder::PreOrder>([&](Operation *op) {
       if (op->hasTrait<OpTrait::IsIsolatedFromAbove>() &&
           failed(solver->initializeAndRun(op))) {
         // TODO: return error instead of bailing out..

@@ -64,8 +64,7 @@ LogicalResult verifyDotOpInterface(Operation *op) {
                               "operand to be equal to the first dimension of "
                               "the result");
   // Check the output shape
-  if (cShape[cShape.size() - 2] != aShape[aShape.size() - 2] ||
-      cShape[cShape.size() - 1] != bShape[aShape.size() - 1])
+  if (!dotOp.verifyOutputDims())
     return dotOp->emitOpError(
         "expected the output shape to be the concatenation of the last "
         "dimension of the first operand and the last dimension of the "

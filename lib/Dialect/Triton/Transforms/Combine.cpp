@@ -217,8 +217,7 @@ public:
   mlir::LogicalResult
   matchAndRewrite(triton::ReshapeOp reshapeOp,
                   mlir::PatternRewriter &rewriter) const override {
-    auto loadDef = reshapeOp.getSrc()
-                       .getDefiningOp<triton::ExperimentalDescriptorLoadOp>();
+    auto loadDef = reshapeOp.getSrc().getDefiningOp<triton::DescriptorLoadOp>();
     if (!loadDef || !loadDef->hasOneUse())
       return failure();
     int loadRank = loadDef.getType().getRank();

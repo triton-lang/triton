@@ -1,4 +1,4 @@
-// RUN: triton-opt %s -split-input-file -triton-reorder-broadcast | FileCheck %s
+// RUN: triton-opt %s -triton-reorder-broadcast | FileCheck %s
 
 // CHECK-LABEL: @test_splat_elementwise_pattern
 tt.func @test_splat_elementwise_pattern(%arg0: f32) -> (tensor<128x128xf32>, tensor<128x128x!tt.ptr<f32>>) {

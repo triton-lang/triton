@@ -1,4 +1,4 @@
-// RUN: triton-opt %s -split-input-file -canonicalize | FileCheck %s
+// RUN: triton-opt %s -split-input-file -canonicalize -allow-unregistered-dialect | FileCheck %s
 
 
 // CHECK-LABEL: @test_canonicalize_convert_view
@@ -102,7 +102,7 @@ tt.func @test_canonicalize_convert_histogram(%arg0: tensor<256xi32, #blocked1>) 
 
 // CHECK-LABEL: @test_canonicalize_convert_local_load
 // CHECK-NOT:   gpu.barrier
-// CHECK: %[[V:.+]] = ttg.local_load
+// CHECK: %[[V:.+]] = ttg.local_load {{.*}} token %arg0
 // CHECK-NEXT:  gpu.barrier
 // CHECK-NEXT: tt.return %[[V]]
 
@@ -111,9 +111,9 @@ tt.func @test_canonicalize_convert_histogram(%arg0: tensor<256xi32, #blocked1>) 
 #shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
 #smem = #ttg.shared_memory
 module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 1 : i32, "ttg.compute-capability" = 80} {
-tt.func @test_canonicalize_convert_local_load() -> tensor<256xi32, #blocked1> {
+tt.func @test_canonicalize_convert_local_load(%arg0: !ttg.async.token) -> tensor<256xi32, #blocked1> {
     %0 = ttg.local_alloc : () -> !ttg.memdesc<256xi32, #shared, #smem, mutable>
-    %1 = ttg.local_load %0 : !ttg.memdesc<256xi32, #shared, #smem, mutable> -> tensor<256xi32, #blocked>
+    %1 = ttg.local_load %0 token %arg0: !ttg.memdesc<256xi32, #shared, #smem, mutable> -> tensor<256xi32, #blocked>
     gpu.barrier
     %2 = ttg.convert_layout %1 : tensor<256xi32, #blocked> -> tensor<256xi32, #blocked1>
     tt.return %2 : tensor<256xi32, #blocked1>
@@ -268,4 +268,72 @@ tt.func @canonicalize_within_warp_specialize(%arg0: i32) -> i32 {
     ttg.warp_return
   } : () -> i32
   tt.return %0 : i32
+}
+
+// CHECK-LABEL: @unused_warp_specialize_results
+tt.func @unused_warp_specialize_results(%arg0: i32, %arg1: i32, %arg2: i32) -> (i32, i32) {
+  // CHECK-NEXT: [[OUTS:%.*]]:2 = ttg.warp_specialize
+  %0:3 = ttg.warp_specialize()
+  // CHECK-NEXT: default
+  default {
+    // CHECK-NEXT: ttg.warp_yield %arg0, %arg2 : i32, i32
+    ttg.warp_yield %arg0, %arg1, %arg2 : i32, i32, i32
+  // CHECK-NEXT: () -> (i32, i32)
+  } : () -> (i32, i32, i32)
+  // CHECK-NEXT: return [[OUTS]]#0, [[OUTS]]#1 : i32, i32
+  tt.return %0#0, %0#2 : i32, i32
+}
+
+
+// CHECK-LABEL: @unused_warp_specialize_captures
+tt.func @unused_warp_specialize_captures(%arg0: i32, %arg1: i32, %arg2: i32) {
+  // CHECK-NEXT: ttg.warp_specialize(%arg0, %arg2)
+  ttg.warp_specialize(%arg0, %arg1, %arg2)
+  default {
+    ttg.warp_yield
+  }
+  // CHECK: partition0(%arg3: i32, %arg4: i32)
+  partition0(%arg3: i32, %arg4: i32, %arg5: i32) num_warps(4) {
+    // CHECK-NEXT: "use"(%arg3, %arg4) : (i32, i32) -> ()
+    "use"(%arg3, %arg5) : (i32, i32) -> ()
+    ttg.warp_return
+  // CHECK: (i32, i32) -> ()
+  } : (i32, i32, i32) -> ()
+  tt.return
+}
+
+// CHECK-LABEL: @unused_warp_specialize_captures_and_results
+tt.func @unused_warp_specialize_captures_and_results(%arg0: i32, %arg1: i32, %arg2: i32) -> (i32, i32) {
+  // CHECK-NEXT: [[OUTS:%.*]]:2 = ttg.warp_specialize
+  %0:3 = ttg.warp_specialize(%arg0, %arg1, %arg2)
+  // CHECK-NEXT: default
+  default {
+    // CHECK-NEXT: ttg.warp_yield %arg0, %arg2 : i32, i32
+    ttg.warp_yield %arg0, %arg1, %arg2 : i32, i32, i32
+  }
+  // CHECK: partition0(%arg3: i32, %arg4: i32)
+  partition0(%arg3: i32, %arg4: i32, %arg5: i32) num_warps(4) {
+    // CHECK-NEXT: "use"(%arg3, %arg4) : (i32, i32) -> ()
+    "use"(%arg3, %arg5) : (i32, i32) -> ()
+    ttg.warp_return
+  // CHECK: (i32, i32) -> (i32, i32)
+  } : (i32, i32, i32) -> (i32, i32, i32)
+  // CHECK-NEXT: return [[OUTS]]#0, [[OUTS]]#1 : i32, i32
+  tt.return %0#0, %0#2 : i32, i32
+}
+
+// CHECK-LABEL: @duplicate_warp_specialize_captures
+tt.func @duplicate_warp_specialize_captures(%arg0: i32, %arg1: i32, %arg2: i32) {
+  // CHECK-NEXT: ttg.warp_specialize(%arg0, %arg1)
+  ttg.warp_specialize(%arg0, %arg1, %arg1, %arg2, %arg0)
+  default {
+    ttg.warp_yield
+  }
+  // CHECK: partition0(%arg3: i32, %arg4: i32)
+  partition0(%arg3: i32, %arg4: i32, %arg5: i32, %arg6: i32, %arg7: i32) num_warps(4) {
+    // CHECK-NEXT: "use"(%arg3, %arg4, %arg4, %arg3)
+    "use"(%arg3, %arg4, %arg5, %arg7) : (i32, i32, i32, i32) -> ()
+    ttg.warp_return
+  } : (i32, i32, i32, i32, i32) -> ()
+  tt.return
 }

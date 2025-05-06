@@ -1,4 +1,4 @@
-// RUN: triton-opt --split-input-file %s | FileCheck %s
+// RUN: triton-opt %s | FileCheck %s
 
 #shared = #ttg.nvmma_shared<{swizzlingByteWidth = 32, transposed = false, elementBitWidth = 8}>
 #shared1 = #ttg.nvmma_shared<{swizzlingByteWidth = 32, transposed = true, elementBitWidth = 8}>
@@ -16,19 +16,18 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
                   %c: !ttg.memdesc<128x256xf8E5M2, #shared1, #ttng.tensor_memory, mutable>,
                   %accUse: i1,
                   %pred: i1,
-                  %barrier: !ttg.memdesc<1xi64, #shared2, #ttg.shared_memory, mutable>) {
-    ttng.tc_gen5_mma %a, %b, %c, %accUse, %pred, %barrier:
-      (!ttg.memdesc<128x128xf8E5M2, #shared, #ttg.shared_memory>,
+                  %barrier: !ttg.memdesc<1xi64, #shared2, #ttg.shared_memory, mutable>,
+                  %barrierPred: i1) {
+    ttng.tc_gen5_mma %a, %b, %c, %accUse, %pred, %barrier[%barrierPred] :
+       !ttg.memdesc<128x128xf8E5M2, #shared, #ttg.shared_memory>,
        !ttg.memdesc<128x256xf8E5M2, #shared1, #ttg.shared_memory>,
        !ttg.memdesc<128x256xf8E5M2, #shared1, #ttng.tensor_memory, mutable>,
-       i1, i1,
-       !ttg.memdesc<1xi64, #shared2, #ttg.shared_memory, mutable>) -> ()
+       !ttg.memdesc<1xi64, #shared2, #ttg.shared_memory, mutable>
 
     ttng.tc_gen5_mma %a, %b, %c, %accUse, %pred:
-      (!ttg.memdesc<128x128xf8E5M2, #shared, #ttg.shared_memory>,
+       !ttg.memdesc<128x128xf8E5M2, #shared, #ttg.shared_memory>,
        !ttg.memdesc<128x256xf8E5M2, #shared1, #ttg.shared_memory>,
-       !ttg.memdesc<128x256xf8E5M2, #shared1, #ttng.tensor_memory, mutable>,
-       i1, i1) -> ()
+       !ttg.memdesc<128x256xf8E5M2, #shared1, #ttng.tensor_memory, mutable>
     tt.return
   }
 

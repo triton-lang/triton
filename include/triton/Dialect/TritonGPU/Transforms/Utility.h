@@ -10,6 +10,8 @@
 #include <numeric>
 
 namespace mlir {
+class DominanceInfo;
+class PostDominanceInfo;
 
 namespace triton {
 class ModuleAxisInfoAnalysis;
@@ -135,6 +137,8 @@ scf::ForOp replaceForOpWithNewSignature(
     SmallVectorImpl<std::tuple<Value, Value>> &replacements);
 scf::ForOp replaceForOpWithNewSignature(OpBuilder &rewriter, scf::ForOp loop,
                                         ValueRange newIterOperands);
+Block::BlockArgListType addIterArgsToLoop(OpBuilder &rewriter, scf::ForOp &loop,
+                                          ValueRange newIterOperands);
 
 // Replace WhileOp with a new WhileOp with extra operands. The YieldOp is not
 // updated and needs to be updated separately for the loop to be correct.
@@ -213,6 +217,73 @@ triton::gpu::LocalAllocOp findShmemAlloc(Value operand);
 SmallVector<Operation *>
 getMMAsWithMultiBufferredOperands(scf::ForOp forOp,
                                   SmallVector<Operation *> &mmaOps);
+
+// Given a list of ops, find the naerest common dominator of all ops or return
+// null if one could not be found. The ops are allowed to be in different
+// regions. The result op is not necessarily one of the ops in the list.
+Operation *findNearestCommonDominator(ArrayRef<Operation *> ops,
+                                      DominanceInfo &domInfo);
+// Given a list of ops, find the naerest common postdominator of all ops or
+// return null if one could not be found. The ops are allowed to be in different
+// regions. The result op is not necessarily one of the ops in the list.
+Operation *findNearestCommonPostDominator(ArrayRef<Operation *> ops,
+                                          PostDominanceInfo &postDomInfo);
+
+/// Visit the operands of `op` and the operands of any nested ops defined
+/// outside of `op`.
+void visitNestedOperands(Operation *op,
+                         function_ref<void(OpOperand &)> visitor);
+/// Visit the operands of `op` and the operands of any nested ops defined
+/// outside of `op`.
+void visitNestedOperands(Operation *op, function_ref<void(Value)> visitor);
+/// Get the operands of `op` and the operands of any nested ops defined outside
+/// of `op`.
+SetVector<Value> getNestedOperands(Operation *op);
+
+// Erase the given loop carried values from the loop, where `loop` is replaced
+// with a new loop.
+void eraseLoopCarriedValues(scf::ForOp &loop, llvm::BitVector indices);
 } // namespace mlir
+
+namespace mlir::triton {
+
+/// Replace all uses of `oldUse` with `val` and propagate the type if needed.
+/// This is useful when we need to change a memory descriptor from immutable to
+/// mutable.
+void replaceUsesAndPropagateType(OpBuilder &builder, Operation *oldUse,
+                                 Value val);
+
+template <typename BuilderT>
+void replaceUsesWithLocalLoad(
+    BuilderT &builder, OpResult old, TypedValue<triton::gpu::MemDescType> alloc,
+    TypedValue<triton::gpu::AsyncTokenType> token = {}) {
+  //  Remove redundant local_load -> local_alloc
+  namespace ttg = triton::gpu;
+  using triton::gpu::LocalAllocOp;
+  auto allocTy = alloc.getType();
+  SmallVector<LocalAllocOp> allocsToErase;
+  for (Operation *user : old.getUsers()) {
+    if (auto userAlloc = dyn_cast<LocalAllocOp>(user)) {
+      if (allocTy.getEncoding() == userAlloc.getType().getEncoding()) {
+        replaceUsesAndPropagateType(builder, userAlloc, alloc);
+        allocsToErase.push_back(userAlloc);
+      }
+    }
+  }
+
+  // If there are some uses that were not local_allocs, we need to create a
+  // local_load for them.
+  if (std::distance(old.getUsers().begin(), old.getUsers().end()) >
+      allocsToErase.size()) {
+    auto loc = old.getOwner()->getLoc();
+    auto sharedLoad = builder.template create<ttg::LocalLoadOp>(
+        loc, old.getType(), alloc, token);
+    old.replaceAllUsesWith(sharedLoad.getResult());
+  }
+  for (auto alloc : allocsToErase) {
+    alloc.erase();
+  }
+}
+} // namespace mlir::triton
 
 #endif // TRITON_DIALECT_TRITONGPU_TRANSFORMS_UTILITY_H_

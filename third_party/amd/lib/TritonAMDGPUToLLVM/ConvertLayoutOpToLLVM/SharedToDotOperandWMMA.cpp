@@ -156,8 +156,11 @@ Value convertLayout(int opIdx, ConversionPatternRewriter &rewriter,
   ArrayRef<int64_t> shape = aTensorTy.getShape();
   auto sharedLayout = cast<SwizzledSharedEncodingAttr>(aTensorTy.getEncoding());
   auto order = sharedLayout.getOrder();
-  assert((rank == 2 || order[2] == 0) &&
-         "expect batch to be the slowest dimension");
+
+  // Rely on the linear layout conversion logic in this case, since only slowest
+  // dimension for batch is supported here
+  if (rank != 2 && order.back() != 0)
+    return Value();
 
   auto elemTy = aTensorTy.getElementType();
   int kWidth = encoding.getKWidth();
@@ -190,9 +193,10 @@ Value convertLayout(int opIdx, ConversionPatternRewriter &rewriter,
   SmallVector<Value> offsets;
   Value smemBase;
   auto smemStrides = smemObj.getStrides(aTensorTy, loc, rewriter);
+  auto warpOrder = triton::gpu::getMatrixOrder(rank, /*rowMajor*/ true);
   Value spatialWarpId = AMD::getWarpIdInBlock(
       rewriter, loc, linearWaveId, warpsPerCTA, elemsPerInstr[0],
-      shape[nonKDimIdx], nonKDimIdx, wmmaLayout.getDefaultOrder());
+      shape[nonKDimIdx], nonKDimIdx, warpOrder);
   if (opIdx == 0) {
     offsets = AMD::computeOffsetsAType(
         rewriter, loc, computeTensorElemMappingInBlock, elemsPerInstr,

@@ -23,12 +23,12 @@ struct LoadStoreMemSpace : public PassInfoMixin<LoadStoreMemSpace> {
 
 } // end anonymous namespace
 
-std::map<int, std::string> AddrSpaceMap = {
+static std::map<int, std::string> AddrSpaceMap = {
     {0, "FLAT"}, {1, "GLOBAL"}, {3, "SHARED"}, {4, "CONSTANT"}, {5, "SCRATCH"}};
 
-std::map<std::string, uint32_t> LocationCounterSourceMap;
+static std::map<std::string, uint32_t> LocationCounterSourceMap;
 
-std::string LoadOrStoreMap(const BasicBlock::iterator &I) {
+static std::string LoadOrStoreMap(const BasicBlock::iterator &I) {
   if (LoadInst *LI = dyn_cast<LoadInst>(I))
     return "LOAD";
   else if (StoreInst *SI = dyn_cast<StoreInst>(I))
@@ -37,8 +37,9 @@ std::string LoadOrStoreMap(const BasicBlock::iterator &I) {
     throw std::runtime_error("Error: unknown operation type");
 }
 template <typename LoadOrStoreInst>
-void InstrumentationFunction(const BasicBlock::iterator &I, const Function &F,
-                             const llvm::Module &M, uint32_t &LocationCounter) {
+static void InstrumentationFunction(const BasicBlock::iterator &I,
+                                    const Function &F, const llvm::Module &M,
+                                    uint32_t &LocationCounter) {
   auto LSI = dyn_cast<LoadOrStoreInst>(I);
   if (not LSI)
     return;
@@ -84,7 +85,7 @@ bool LoadStoreMemSpace::runOnModule(Module &M) {
   return ModifiedCodeGen;
 }
 
-PassPluginLibraryInfo getPassPluginInfo() {
+static PassPluginLibraryInfo getPassPluginInfo() {
   const auto callback = [](PassBuilder &PB) {
     PB.registerOptimizerLastEPCallback([&](ModulePassManager &MPM, auto, auto) {
       MPM.addPass(LoadStoreMemSpace());

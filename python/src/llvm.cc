@@ -59,7 +59,7 @@ createTargetMachine(llvm::Module *module, std::string proc,
   opt.MCOptions.AsmVerbose = true;
   opt.MCOptions.PreserveAsmComments = true;
   std::unique_ptr<llvm::TargetMachine> machine{target->createTargetMachine(
-      module->getTargetTriple().str(), proc, features, opt, llvm::Reloc::PIC_,
+      module->getTargetTriple(), proc, features, opt, llvm::Reloc::PIC_,
       std::nullopt,
       disableLLVMOpt ? llvm::CodeGenOptLevel::None
                      : llvm::CodeGenOptLevel::Aggressive)};
@@ -262,7 +262,12 @@ void init_triton_llvm(py::module &&m) {
   m.def(
       "to_module",
       [](mlir::ModuleOp &mod, llvm::LLVMContext &ctx) {
-        return mlir::translateModuleToLLVMIR(mod, ctx);
+        std::unique_ptr<llvm::Module> llvmMod =
+            mlir::translateModuleToLLVMIR(mod, ctx);
+        if (!llvmMod) {
+          throw std::runtime_error("failed to translate module to LLVM IR");
+        }
+        return llvmMod;
       },
       py::keep_alive<0, 2>());
 
@@ -277,8 +282,8 @@ void init_triton_llvm(py::module &&m) {
     llvm::TargetOptions opt;
     // Target machine is only used to create the data layout.
     std::unique_ptr<llvm::TargetMachine> machine{target->createTargetMachine(
-        triple, proc, features, opt, llvm::Reloc::PIC_, std::nullopt,
-        llvm::CodeGenOptLevel::None)};
+        llvm::Triple(triple), proc, features, opt, llvm::Reloc::PIC_,
+        std::nullopt, llvm::CodeGenOptLevel::None)};
     // set data layout
     mod->setDataLayout(machine->createDataLayout());
   });

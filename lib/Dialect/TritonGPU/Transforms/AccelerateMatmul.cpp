@@ -10,6 +10,7 @@
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Attributes.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
+#include "triton/Dialect/TritonGPU/IR/LinearLayoutConversions.h"
 #include "triton/Dialect/TritonGPU/Transforms/DecomposeScaledBlocked.h"
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
@@ -17,6 +18,7 @@
 #include "triton/Tools/StrUtil.h"
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/SmallVector.h"
+#include "llvm/Support/Casting.h"
 
 namespace mlir {
 namespace triton {
@@ -44,8 +46,21 @@ static int getMMAVersionSafe(int computeCapability, DotOp op) {
   for (int baseVersion : versionsSupported) {
     if (supportMMA(op, baseVersion))
       return baseVersion;
-    if (baseVersion == 3)
-      op.emitRemark() << "Warning: can't use MMA V3 for the dot op";
+    if (baseVersion == 3) {
+      auto remark = op.emitRemark()
+                    << "MMA version 3 acceleration not applied due to "
+                       "unsupported shapes or data types.";
+      remark.attachNote() << "Target compute capability (" << computeCapability
+                          << ") supports MMA v3.";
+    }
+
+    if (baseVersion == 5) {
+      auto remark = op.emitRemark()
+                    << "MMA version 5 acceleration not applied due to "
+                       "unsupported shapes or data types.";
+      remark.attachNote() << "Target compute capability (" << computeCapability
+                          << ") supports MMA v5.";
+    }
   }
   return 0;
 }
@@ -72,7 +87,7 @@ SmallVector<unsigned> warpsPerTileV2(DotOp dotOp, const ArrayRef<int64_t> shape,
       }
       if (auto mmaEncoding =
               dyn_cast<NvidiaMmaEncodingAttr>(resTy.getEncoding())) {
-        return getWarpsPerCTA(mmaEncoding);
+        return to_vector(mmaEncoding.getWarpsPerCTA());
       }
       hasChainedDot = true;
     }
@@ -147,6 +162,7 @@ warpsPerTileV3(DotOp dotOp, const ArrayRef<int64_t> shape, int numWarps,
 static Value
 getSharedMemoryMMAOperand(Value v, mlir::PatternRewriter &rewriter, int opIdx,
                           bool allowTranspose, bool isMMAv5Fp4Padded = false,
+                          bool forceTranspose = false,
                           Operation *op = nullptr /*only for diagnostic*/) {
   OpBuilder::InsertionGuard g(rewriter);
   Value arg = v;
@@ -154,19 +170,22 @@ getSharedMemoryMMAOperand(Value v, mlir::PatternRewriter &rewriter, int opIdx,
     arg = cvtOp.getSrc();
   auto argType = cast<RankedTensorType>(arg.getType());
   assert(argType.getEncoding() && "unexpected tensor type");
-  auto newOrder = getOrder(argType);
+  auto order = getOrderForMemory(argType);
 
   // If the MMA op doesn't support transpose pick the layout expected by the MMA
   // op.
+  llvm::SmallVector<unsigned> newOrder = order;
   if (!allowTranspose) {
     if (opIdx == 1) {
       newOrder = {0, 1};
     } else {
       newOrder = {1, 0};
     }
+    if (forceTranspose)
+      std::swap(newOrder[0], newOrder[1]);
   }
 
-  if (newOrder != getOrder(argType) && op) {
+  if (newOrder != order && op) {
     op->emitWarning("Warning: Forcing a different order [")
         << newOrder[0] << ", " << newOrder[1]
         << "] on SMEM than the register order for the opreand " << opIdx
@@ -192,7 +211,7 @@ getSharedMemoryScale(Value arg, mlir::PatternRewriter &rewriter, Location loc) {
   OpBuilder::InsertionGuard g(rewriter);
   auto argType = cast<RankedTensorType>(arg.getType());
   assert(argType.getEncoding() && "unexpected tensor type");
-  auto newOrder = getOrder(argType);
+  auto newOrder = getOrderForMemory(argType);
 
   Attribute SharedMemorySpace =
       SharedMemorySpaceAttr::get(argType.getContext());
@@ -223,8 +242,8 @@ getWarpsPerTile(DotOp dotOp, const ArrayRef<int64_t> shape, int version,
 static bool bwdFilter(Operation *op) {
   return (op->hasTrait<OpTrait::Elementwise>() && isMemoryEffectFree(op)) ||
          isView(op) ||
-         isa<Fp4ToFpOp, LoadOp, ExperimentalDescriptorLoadOp, BroadcastOp,
-             ConvertLayoutOp>(op);
+         isa<Fp4ToFpOp, LoadOp, DescriptorLoadOp, BroadcastOp, ConvertLayoutOp>(
+             op);
 }
 
 // Finds the bitwidth with which the value x is loaded
@@ -243,7 +262,7 @@ static int computeOrigBitWidth(Value x) {
 
   int origBitWidth = getElementTypeOrSelf(x).getIntOrFloatBitWidth();
   for (auto op : slice) {
-    if (isa<LoadOp, ExperimentalDescriptorLoadOp>(op)) {
+    if (isa<LoadOp, DescriptorLoadOp>(op)) {
       if (auto tensorTy =
               dyn_cast<RankedTensorType>(op->getResultTypes().front())) {
         origBitWidth =
@@ -318,7 +337,7 @@ public:
       // If this is problematic we can totally drop them
       return isa<BlockArgument>(v) ||
              (v.getDefiningOp() &&
-              isa<LoadOp, ExperimentalDescriptorLoadOp>(v.getDefiningOp()));
+              isa<LoadOp, DescriptorLoadOp>(v.getDefiningOp()));
     };
 
     bool aFromLoad = comesFromLoadOrBlockArg(dotOp.getA());
@@ -418,9 +437,8 @@ static bool canUseTwoCTAs(triton::DotOp dotOp) {
   // Skip convert layouts.
   while (auto cvtOp = b.getDefiningOp<ConvertLayoutOp>())
     b = cvtOp.getSrc();
-  if (!b.getDefiningOp<triton::LoadOp>())
-    return false;
-  return true;
+  return llvm::isa_and_nonnull<triton::LoadOp, triton::DescriptorLoadOp,
+                               triton::DescriptorGatherOp>(b.getDefiningOp());
 }
 
 static DistributedEncodingTrait
@@ -430,7 +448,7 @@ replaceCTALayout(DistributedEncodingTrait layout,
     return BlockedEncodingAttr::get(
         layout.getContext(), blockedLayout.getSizePerThread(),
         blockedLayout.getThreadsPerWarp(), blockedLayout.getWarpsPerCTA(),
-        blockedLayout.getDefaultOrder(), newCTALayout);
+        blockedLayout.getOrder(), newCTALayout);
   } else if (auto sliceLayout = mlir::dyn_cast<SliceEncodingAttr>(layout)) {
     return SliceEncodingAttr::get(
         layout.getContext(), sliceLayout.getDim(),
@@ -446,8 +464,10 @@ static Value splitBOperand(Value b, mlir::PatternRewriter &rewriter) {
   MLIRContext *ctx = b.getContext();
   while (auto cvtOp = b.getDefiningOp<ConvertLayoutOp>())
     b = cvtOp.getSrc();
-  auto loadOp = b.getDefiningOp<triton::LoadOp>();
-  assert(loadOp && "expected LoadOp");
+  auto loadOp = b.getDefiningOp();
+  assert((isa<triton::LoadOp, triton::DescriptorLoadOp,
+              triton::DescriptorGatherOp>(loadOp)) &&
+         "expected LoadOp");
   RankedTensorType bType = cast<RankedTensorType>(b.getType());
   auto currentLayout = cast<DistributedEncodingTrait>(bType.getEncoding());
   auto newCTALayout =
@@ -463,15 +483,14 @@ static Value splitBOperand(Value b, mlir::PatternRewriter &rewriter) {
         RankedTensorType::get(tensorType.getShape(),
                               tensorType.getElementType(), newLayout),
         operand.get());
-    loadOp.setOperand(operand.getOperandNumber(), newOperand);
+    loadOp->setOperand(operand.getOperandNumber(), newOperand);
   }
-  loadOp.getResult().setType(RankedTensorType::get(
+  loadOp->getResult(0).setType(RankedTensorType::get(
       bType.getShape(), bType.getElementType(), newLayout));
-  Value newB = loadOp.getResult();
+  Value newB = loadOp->getResult(0);
   rewriter.setInsertionPointAfter(loadOp);
-  auto cvt =
-      rewriter.create<ConvertLayoutOp>(b.getLoc(), bType, loadOp.getResult());
-  rewriter.replaceAllUsesExcept(loadOp.getResult(), cvt.getResult(), cvt);
+  auto cvt = rewriter.create<ConvertLayoutOp>(b.getLoc(), bType, newB);
+  rewriter.replaceAllUsesExcept(newB, cvt.getResult(), cvt);
   return newB;
 }
 
@@ -532,21 +551,23 @@ public:
         tensorMemorySpace,
         /*mutableMemory=*/true);
     Attribute newDistributedEncoding = nvidia_gpu::getTmemCompatibleLayout(
-        instrShape[0], instrShape[1], retShapePerCTA, numWarps, CTALayout);
+        instrShape[0], instrShape[1], oldRetType, numWarps);
     auto newAccType = RankedTensorType::get(oldRetType.getShape(),
                                             oldRetType.getElementType(),
                                             newDistributedEncoding);
     Value cvtAcc =
         rewriter.create<ConvertLayoutOp>(loc, newAccType, dotOp.getOperand(2));
+    auto tokType = rewriter.getType<AsyncTokenType>();
     auto acc = rewriter.create<triton::nvidia_gpu::TMEMAllocOp>(
-        loc, accMemDescType, cvtAcc);
+        loc, accMemDescType, tokType, cvtAcc);
     auto vTrue = rewriter.create<arith::ConstantIntOp>(dotOp.getLoc(), 1, 1);
     auto mma = rewriter.create<triton::nvidia_gpu::TCGen5MMAOp>(
-        loc, a, b, acc, vTrue, vTrue, Value(), UnitAttr());
+        loc, tokType, a, b, acc, acc.getToken(), /*useD=*/vTrue,
+        /*pred=*/vTrue);
     mma.setTwoCtas(useTwoCTAs);
 
-    auto ld =
-        rewriter.create<triton::nvidia_gpu::TMEMLoadOp>(loc, newAccType, acc);
+    auto ld = rewriter.create<triton::nvidia_gpu::TMEMLoadOp>(
+        loc, newAccType, tokType, acc, /*dep=*/mma.getToken());
     rewriter.replaceOpWithNewOp<ConvertLayoutOp>(dotOp, oldRetType, ld);
     return success();
   }
@@ -570,7 +591,7 @@ Value addSmemStageToScaleLoad(Value scale, mlir::PatternRewriter &rewriter) {
   if (!op)
     return scale;
 
-  while (!isa<LoadOp>(op)) {
+  while (!isa<LoadOp, DescriptorLoadOp>(op)) {
     if (auto reshape = dyn_cast<ReshapeOp>(op)) {
       op = reshape.getSrc().getDefiningOp();
       loadConsumer = reshape;
@@ -632,7 +653,7 @@ public:
     auto retShapePerCTA = getShapePerCTA(oldRetType);
     int numWarps = lookupNumWarps(dotOp);
     auto CTALayout = getCTALayout(oldRetType.getEncoding());
-    if (computeCapability < 100)
+    if ((computeCapability) / 10 != 10)
       return failure();
     if (retShapePerCTA[0] < 128 || retShapePerCTA[1] < 8)
       return failure();
@@ -645,56 +666,55 @@ public:
 
     bool IsAMixedPrecFp4 = false;
     bool IsBMixedPrecFp4 = false;
+    bool isAFP4 = dotOp.getAElemType() == ScaleDotElemType::E2M1;
+    bool isBFP4 = dotOp.getBElemType() == ScaleDotElemType::E2M1;
 
     if (dotOp.getAElemType() != dotOp.getBElemType()) {
-      if (dotOp.getAElemType() == ScaleDotElemType::E2M1)
+      if (isAFP4)
         IsAMixedPrecFp4 = true;
-      else if (dotOp.getBElemType() == ScaleDotElemType::E2M1)
+      else if (isBFP4)
         IsBMixedPrecFp4 = true;
     }
-
+    // If we use txgen05.mma.kind.mxf864 we need to padd the fp4 operands:
+    // https://docs.nvidia.com/cuda/parallel-thread-execution/#tcgen05-packing-formats-mxf8f6f4-smem
+    bool isMMAv5Fp4PaddedLhs = IsAMixedPrecFp4 || !dotOp.getLhsKPack();
+    bool isMMAv5Fp4PaddedRhs = IsBMixedPrecFp4 || !dotOp.getRhsKPack();
     // For mixed-precision fp4 operands, set allowTranspose = false, to force
     // the packed axis, K, to be contiguous in SMEM
     a = getSharedMemoryMMAOperand(a, rewriter, 0,
-                                  /*allowTranspose=*/!IsAMixedPrecFp4,
-                                  IsAMixedPrecFp4, dotOp);
+                                  /*allowTranspose=*/!isAFP4,
+                                  /*isMMAv5Fp4Padded=*/isMMAv5Fp4PaddedLhs,
+                                  /*forceTranspose=*/!dotOp.getLhsKPack(),
+                                  dotOp);
     b = getSharedMemoryMMAOperand(b, rewriter, 1,
-                                  /*allowTranspose=*/!IsBMixedPrecFp4,
-                                  IsBMixedPrecFp4, dotOp);
+                                  /*allowTranspose=*/!isBFP4,
+                                  /*isMMAv5Fp4Padded=*/isMMAv5Fp4PaddedRhs,
+                                  /*forceTranspose=*/!dotOp.getRhsKPack(),
+                                  dotOp);
 
     MLIRContext *context = dotOp->getContext();
     unsigned m = 128;
     unsigned n = retShapePerCTA[1] >= 256 ? 256 : retShapePerCTA[1];
-    unsigned k = 32;
-    // If both operands are E2M1, target the FP4 tensor core implicitly.
-    // This may result in a downstream compile-time error if the scaled TC
-    // descriptor requires options that are unavailable to the .kind=mxf4 mma.
-    // This is likely preferable over a silent runtime performance degradation
-    // from running f4xf4 via .kind=mxf8f6f4
-    if (dotOp.getAElemType() == ScaleDotElemType::E2M1 &&
-        dotOp.getBElemType() == ScaleDotElemType::E2M1) {
-      k = 64;
-    }
-    SmallVector<unsigned> instrShape = {m, n, k};
+
     ArrayRef<unsigned> CTASplitNum = CTALayout.getCTASplitNum();
     Attribute accEncoding = triton::nvidia_gpu::TensorMemoryEncodingAttr::get(
-        context, instrShape[0], instrShape[1], /*unpacked=*/true,
-        CTASplitNum[0], CTASplitNum[1]);
+        context, m, n, /*unpacked=*/true, CTASplitNum[0], CTASplitNum[1]);
     Attribute tensorMemorySpace =
         triton::nvidia_gpu::TensorMemorySpaceAttr::get(context);
     Type accMemDescType = triton::gpu::MemDescType::get(
         oldRetType.getShape(), oldRetType.getElementType(), accEncoding,
         tensorMemorySpace,
         /*mutableMemory=*/true);
-    Attribute newDistributedEncoding = nvidia_gpu::getTmemCompatibleLayout(
-        instrShape[0], instrShape[1], retShapePerCTA, numWarps, CTALayout);
+    Attribute newDistributedEncoding =
+        nvidia_gpu::getTmemCompatibleLayout(m, n, oldRetType, numWarps);
     auto newAccType = RankedTensorType::get(oldRetType.getShape(),
                                             oldRetType.getElementType(),
                                             newDistributedEncoding);
     Value cvtAcc =
         rewriter.create<ConvertLayoutOp>(loc, newAccType, dotOp.getOperand(2));
+    auto tokType = rewriter.getType<AsyncTokenType>();
     auto acc = rewriter.create<triton::nvidia_gpu::TMEMAllocOp>(
-        loc, accMemDescType, cvtAcc);
+        loc, accMemDescType, tokType, cvtAcc);
 
     RankedTensorType oldScaleAType = dotOp.getAScale().getType();
     RankedTensorType oldScaleBType = dotOp.getBScale().getType();
@@ -724,17 +744,22 @@ public:
         rewriter.create<ConvertLayoutOp>(loc, newScaleAType, lhsScale);
     Value newScaleB =
         rewriter.create<ConvertLayoutOp>(loc, newScaleBType, rhsScale);
-    Value scaleA = rewriter.create<triton::nvidia_gpu::TMEMAllocOp>(
-        loc, scaleAType, newScaleA);
-    Value scaleB = rewriter.create<triton::nvidia_gpu::TMEMAllocOp>(
-        loc, scaleBType, newScaleB);
-    auto vTrue = rewriter.create<arith::ConstantIntOp>(dotOp.getLoc(), 1, 1);
-    rewriter.create<triton::nvidia_gpu::TCGen5MMAScaledOp>(
-        loc, a, b, acc, scaleA, scaleB, dotOp.getAElemType(),
-        dotOp.getBElemType(), vTrue, vTrue, Value());
 
-    auto ld =
-        rewriter.create<triton::nvidia_gpu::TMEMLoadOp>(loc, newAccType, acc);
+    // We don't need to track memory dependencies for the scale operands since
+    // they are not pipelined.
+    auto scaleA = rewriter.create<triton::nvidia_gpu::TMEMAllocOp>(
+        loc, scaleAType, /*token=*/Type(), newScaleA);
+    auto scaleB = rewriter.create<triton::nvidia_gpu::TMEMAllocOp>(
+        loc, scaleBType, /*token=*/Type(), newScaleB);
+
+    auto vTrue = rewriter.create<arith::ConstantIntOp>(dotOp.getLoc(), 1, 1);
+    auto mmaOp = rewriter.create<triton::nvidia_gpu::TCGen5MMAScaledOp>(
+        loc, tokType, a, b, acc.getResult(), acc.getToken(), scaleA.getResult(),
+        scaleB.getResult(), dotOp.getAElemType(), dotOp.getBElemType(),
+        /*useD=*/vTrue, /*pred=*/vTrue);
+
+    auto ld = rewriter.create<triton::nvidia_gpu::TMEMLoadOp>(
+        loc, newAccType, tokType, acc, mmaOp.getToken());
     rewriter.replaceOpWithNewOp<ConvertLayoutOp>(dotOp, oldRetType, ld);
     return success();
   }

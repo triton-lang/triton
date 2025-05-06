@@ -9,7 +9,7 @@
 
 using namespace proton;
 
-void initProton(pybind11::module &&m) {
+static void initProton(pybind11::module &&m) {
   using ret = pybind11::return_value_policy;
   using namespace pybind11::literals;
 

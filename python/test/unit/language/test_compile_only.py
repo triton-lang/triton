@@ -2,6 +2,7 @@ import triton
 import triton.language as tl
 from triton.backends.compiler import GPUTarget
 import re
+from triton.compiler import ASTSource
 
 
 def test_compile_only_sm100() -> None:
@@ -45,7 +46,7 @@ def test_compile_only_dot() -> None:
                r"(.|\n)*?"
                r"%(?P<B_SHMEM>\d+) = ttg\.local_alloc %(?P=B)"
                r"(.|\n)*?"
-               r"%(?P<TMEM_BASE>\d+) = ttng\.tmem_alloc"
+               r"%(?P<TMEM_BASE>\w+) = ttng\.tmem_alloc"
                r"(.|\n)*?"
                r"ttng\.tc_gen5_mma %(?P=A_SHMEM), %(?P=B_SHMEM), %(?P=TMEM_BASE)"
                r"(.|\n)*?"
@@ -54,7 +55,7 @@ def test_compile_only_dot() -> None:
     assert re.search(pattern, str(ttgir)), "The TTGIR does not match the expected pattern."
 
     ptx = k.asm["ptx"]
-    pattern = (r"mov\.u32 	%r(?P<G>\d+), global_smem;"
+    pattern = (r"mov\.b32 	%r(?P<G>\d+), global_smem;"
                r"(.|\n)*"
                r"tcgen05\.alloc\.cta_group::1\.sync\.aligned\.shared::cta\.b32 \[%r(?P=G)], 64"
                r"(.|\n)*"
@@ -100,7 +101,7 @@ def test_compile_only_k_loop() -> None:
 
     pattern = (r"%(?P<TMEM_BASE>\w+) = arith.constant dense<0.000000e\+00>"
                r"(.|\n)*?"
-               r"%(?P<TMEM>\w+) = ttng\.tmem_alloc %(?P=TMEM_BASE)"
+               r"%(?P<TMEM>\w+) = ttng\.tmem_alloc (%(?P=TMEM_BASE))?"
                r"(.|\n)*?"
                r"scf\.for"
                r"(.|\n)*?"
@@ -156,3 +157,28 @@ def test_compile_only_dot_mxfp() -> None:
     pattern = (r"tcgen05.mma.cta_group::1.kind::mxf8f6f4.block_scale.scale_vec::1X")
     assert re.search(pattern, str(ptx)), "The PTX does not match the expected pattern."
     assert k.asm["cubin"] != b""
+
+
+def test_signature_ordering():
+    """
+    Checks that ASTSource always uses the argument order from
+    fn.arg_names and not the signature.
+    """
+
+    @triton.jit
+    def kernel(a, o, N: tl.constexpr):
+        tl.store(o + N, tl.load(a + N))
+
+    # Add the arguments so the order always differs
+    # from the order in fn.arg_names.
+    signature = {}
+    signature["N"] = "constexpr"
+    signature["a"] = "*fp32"
+    signature["o"] = "*fp32"
+    src = ASTSource(
+        fn=kernel,
+        constexprs={"N": 32},
+        signature=signature,
+    )
+    target = triton.runtime.driver.active.get_current_target()
+    triton.compile(src=src, target=target)

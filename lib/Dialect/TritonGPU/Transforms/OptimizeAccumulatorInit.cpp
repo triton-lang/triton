@@ -1,5 +1,6 @@
 #include "mlir/Transforms/Passes.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
+#include "triton/Dialect/Triton/IR/OpInterfaces.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
@@ -113,6 +114,19 @@ void setUseAccFlag(Operation *op, Value useAcc) {
   }
 }
 
+Value getUseAccFlag(Operation *op) {
+  assert(isa<DotOpInterface>(op) && "Expected a dot-like operation");
+  if (auto wgDotOp = dyn_cast<triton::nvidia_gpu::WarpGroupDotOp>(op)) {
+    return wgDotOp.getUseC();
+  } else if (auto tc05MmaOp =
+                 dyn_cast<triton::nvidia_gpu::MMAv5OpInterface>(op)) {
+    return tc05MmaOp.useAccumulator();
+  } else {
+    assert(false && "Unexpected dot-like operation");
+  }
+  return nullptr;
+}
+
 bool isConstantZeroTensor(Value v) {
   return (matchPattern(v, m_Zero()) || matchPattern(v, m_AnyZeroFloat()));
 }
@@ -153,6 +167,18 @@ findZeroInitOp(Value accUse, scf::ForOp forOp, bool &loopArgIsZero) {
       }
       return std::make_pair(ifOp, resultIndex);
     }
+  }
+  return std::nullopt;
+}
+
+std::optional<bool> getBoolFromConstant(Value cst) {
+  auto constantOp = cst.getDefiningOp<arith::ConstantOp>();
+  if (!constantOp) {
+    return std::nullopt;
+  }
+  assert(constantOp.getValue());
+  if (auto boolAttr = dyn_cast<BoolAttr>(constantOp.getValue())) {
+    return boolAttr.getValue();
   }
   return std::nullopt;
 }
@@ -206,65 +232,81 @@ public:
       bool loopArgIsZero = false;
       std::optional<std::pair<Operation *, int>> zeroInitOp =
           findZeroInitOp(accUse, forOp, loopArgIsZero);
-      if (!zeroInitOp) {
+
+      if (!zeroInitOp && !loopArgIsZero) {
         continue;
       }
 
+      if (auto useAccValue = getUseAccFlag(mmaOp)) {
+        auto useAcc = getBoolFromConstant(useAccValue);
+        if (!useAcc || *useAcc == false) {
+          // Do not run this optimization if there is already a non-constant
+          // flag (this pass has already run), or if this MMA does not use the
+          // accumulator (e.g. the peeled MMA in the prologue, the first dot
+          // in attention)
+          continue;
+        }
+      }
+
       Value loopArgFlagValue = loopArgIsZero ? vFalse : vTrue;
-      scf::ForOp newForOp =
-          replaceForOpWithNewSignature(rewriter, forOp, {loopArgFlagValue});
-      forOp.erase();
-      forOp = newForOp;
+      (void)addIterArgsToLoop(rewriter, forOp, {loopArgFlagValue});
       loopArgFlagValue =
           forOp.getRegionIterArg(forOp.getNumRegionIterArgs() - 1);
 
-      Value condition = nullptr;
-      Value oldValue = nullptr;
-      Value zeroValue = nullptr;
-      bool thenInitsToZero = false;
-      if (auto selOp = dyn_cast<arith::SelectOp>(zeroInitOp->first)) {
-        condition = selOp.getCondition();
-        oldValue = isConstantZeroTensor(selOp.getTrueValue())
-                       ? selOp.getFalseValue()
-                       : selOp.getTrueValue();
-        zeroValue = isConstantZeroTensor(selOp.getTrueValue())
-                        ? selOp.getTrueValue()
-                        : selOp.getFalseValue();
-        thenInitsToZero = isConstantZeroTensor(selOp.getTrueValue());
-      } else {
-        assert(isa<scf::IfOp>(*zeroInitOp->first) && "Expected an if op");
-        auto ifOp = cast<scf::IfOp>(zeroInitOp->first);
-        unsigned resultIndex = zeroInitOp->second;
-        condition = ifOp.getCondition();
-        Value thenVal = ifOp.thenYield()->getOperand(resultIndex);
-        Value elseVal = ifOp.elseYield()->getOperand(resultIndex);
-        oldValue = isConstantZeroTensor(thenVal) ? elseVal : thenVal;
-        zeroValue = isConstantZeroTensor(thenVal) ? thenVal : elseVal;
-        thenInitsToZero = isConstantZeroTensor(thenVal);
-      }
+      if (zeroInitOp) {
+        Value condition = nullptr;
+        Value oldValue = nullptr;
+        Value zeroValue = nullptr;
+        bool thenInitsToZero = false;
+        if (auto selOp = dyn_cast<arith::SelectOp>(zeroInitOp->first)) {
+          condition = selOp.getCondition();
+          oldValue = isConstantZeroTensor(selOp.getTrueValue())
+                         ? selOp.getFalseValue()
+                         : selOp.getTrueValue();
+          zeroValue = isConstantZeroTensor(selOp.getTrueValue())
+                          ? selOp.getTrueValue()
+                          : selOp.getFalseValue();
+          thenInitsToZero = isConstantZeroTensor(selOp.getTrueValue());
+        } else {
+          assert(isa<scf::IfOp>(*zeroInitOp->first) && "Expected an if op");
+          auto ifOp = cast<scf::IfOp>(zeroInitOp->first);
+          unsigned resultIndex = zeroInitOp->second;
+          condition = ifOp.getCondition();
+          Value thenVal = ifOp.thenYield()->getOperand(resultIndex);
+          Value elseVal = ifOp.elseYield()->getOperand(resultIndex);
+          oldValue = isConstantZeroTensor(thenVal) ? elseVal : thenVal;
+          zeroValue = isConstantZeroTensor(thenVal) ? thenVal : elseVal;
+          thenInitsToZero = isConstantZeroTensor(thenVal);
+        }
 
-      // Create a select op that updates the flag
-      rewriter.setInsertionPoint(zeroInitOp->first);
-      bool zeroingBeforeMMA = zeroInitOp->first->isBeforeInBlock(mmaOp);
-      Value prevFlagValue = zeroingBeforeMMA ? loopArgFlagValue : vTrue;
-      auto selectFlagOp = rewriter.create<arith::SelectOp>(
-          loc, condition, thenInitsToZero ? vFalse : prevFlagValue,
-          thenInitsToZero ? prevFlagValue : vFalse);
-      setUseAccFlag(mmaOp, zeroingBeforeMMA ? selectFlagOp : loopArgFlagValue);
-      auto forYield = cast<scf::YieldOp>(forOp.getBody()->getTerminator());
-      forYield->insertOperands(forYield->getNumOperands(),
-                               {zeroingBeforeMMA ? vTrue : selectFlagOp});
+        // Create a select op that updates the flag
+        rewriter.setInsertionPoint(zeroInitOp->first);
+        bool zeroingBeforeMMA = zeroInitOp->first->isBeforeInBlock(mmaOp);
+        Value prevFlagValue = zeroingBeforeMMA ? loopArgFlagValue : vTrue;
+        auto selectFlagOp = rewriter.create<arith::SelectOp>(
+            loc, condition, thenInitsToZero ? vFalse : prevFlagValue,
+            thenInitsToZero ? prevFlagValue : vFalse);
+        setUseAccFlag(mmaOp,
+                      zeroingBeforeMMA ? selectFlagOp : loopArgFlagValue);
+        auto forYield = cast<scf::YieldOp>(forOp.getBody()->getTerminator());
+        forYield->insertOperands(forYield->getNumOperands(),
+                                 {zeroingBeforeMMA ? vTrue : selectFlagOp});
 
-      // Stop clearing out the accumulator with zero
-      if (auto selOp = dyn_cast<arith::SelectOp>(zeroInitOp->first)) {
-        rewriter.setInsertionPoint(selOp);
-        rewriter.replaceOp(selOp, oldValue);
-      } else {
-        auto ifOp = cast<scf::IfOp>(zeroInitOp->first);
-        int resultIndex = zeroInitOp->second;
-        auto zeroingYield =
-            thenInitsToZero ? ifOp.thenYield() : ifOp.elseYield();
-        zeroingYield.setOperand(resultIndex, oldValue);
+        // Stop clearing out the accumulator with zero
+        if (auto selOp = dyn_cast<arith::SelectOp>(zeroInitOp->first)) {
+          rewriter.setInsertionPoint(selOp);
+          rewriter.replaceOp(selOp, oldValue);
+        } else {
+          auto ifOp = cast<scf::IfOp>(zeroInitOp->first);
+          int resultIndex = zeroInitOp->second;
+          auto zeroingYield =
+              thenInitsToZero ? ifOp.thenYield() : ifOp.elseYield();
+          zeroingYield.setOperand(resultIndex, oldValue);
+        }
+      } else if (loopArgIsZero) {
+        setUseAccFlag(mmaOp, loopArgFlagValue);
+        auto forYield = cast<scf::YieldOp>(forOp.getBody()->getTerminator());
+        forYield->insertOperands(forYield->getNumOperands(), vTrue);
       }
     }
 

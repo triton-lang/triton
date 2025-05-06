@@ -8,6 +8,7 @@
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/LinearLayoutConversions.h"
 
+namespace tt = mlir::triton;
 using mlir::triton::ModuleAxisInfoAnalysis;
 using mlir::triton::AMD::DppCtrl;
 using mlir::triton::AMD::ISAFamily;
@@ -48,7 +49,7 @@ std::string mangleFunc(std::string name, Type type) {
 Value createVectorMaskFromPredicate(RewriterBase &rewriter, Location loc,
                                     Value pred, int64_t vecSize) {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
-  auto vecMaskTy = LLVM::getFixedVectorType(rewriter.getI1Type(), vecSize);
+  auto vecMaskTy = LLVM::getVectorType(rewriter.getI1Type(), vecSize);
   Value maskVal = b.undef(vecMaskTy);
   for (size_t s = 0; s < vecSize; ++s) {
     Value indexVal =
@@ -69,7 +70,7 @@ int64_t getNumElements(Type ty) {
 Type castToVectorType(Type ty) {
   if (isa<VectorType>(ty))
     return ty;
-  return LLVM::getFixedVectorType(ty, 1);
+  return LLVM::getVectorType(ty, 1);
 }
 
 } // namespace
@@ -139,11 +140,11 @@ static Value shuffleCommonImpl(Location loc, RewriterBase &rewriter,
       Value offset = b.i32_val(0x401F);
       return rewriter.create<ROCDL::DsSwizzleOp>(loc, valType, val, offset);
     } else {
-      if (!llvm::is_contained(
-              {ISAFamily::CDNA2, ISAFamily::CDNA3, ISAFamily::CDNA4},
-              isaFamily)) {
-        // DPP is only supported for CDNA2/CDNA3/CDNA4 right now, so we fallback
-        // to ds_swizzle for other architectures.
+      if (!llvm::is_contained({ISAFamily::CDNA2, ISAFamily::CDNA3,
+                               ISAFamily::CDNA4, ISAFamily::RDNA3},
+                              isaFamily)) {
+        // DPP is only supported for CDNA2/CDNA3/CDNA4/RDNA3 right now, so we
+        // fallback to ds_swizzle for other architectures.
         //
         // This map facilates the butterfly shuffle pattern for a stride less
         // than 16. The pattern stride is the key of the map.
@@ -315,13 +316,15 @@ Value llLoad(RewriterBase &rewriter, Location loc, Value ptr, Type elemTy,
 }
 
 void llStore(RewriterBase &rewriter, Location loc, Value ptr, Value val,
-             Value pred, triton::CacheModifier cm) {
+             Value pred, triton::CacheModifier cm,
+             bool forceNoAliasAsyncLoads) {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
 
   auto ctx = ptr.getContext();
   Type funcType = getFunctionType(void_ty(ctx), ValueRange({ptr, val, pred}));
   auto parent = ptr.getParentRegion()->getParentOfType<LLVM::LLVMFuncOp>();
-  auto getStoreNameRaw = [](triton::CacheModifier cm) {
+
+  auto getStoreNameWithCacheMod = [](triton::CacheModifier cm) {
     switch (cm) {
     case triton::CacheModifier::WT:
       return predicatedStoreWT;
@@ -335,9 +338,13 @@ void llStore(RewriterBase &rewriter, Location loc, Value ptr, Value val,
       return predicatedStore;
     }
   };
-  auto funcName = mangleFunc(getStoreNameRaw(cm), funcType);
+  std::string funcName = getStoreNameWithCacheMod(cm);
+  if (forceNoAliasAsyncLoads)
+    funcName += noAliasAsyncLoads;
+
+  auto mangledName = mangleFunc(funcName, funcType);
   LLVM::LLVMFuncOp funcOp =
-      appendOrGetExternFuncOp(rewriter, parent, funcName, funcType);
+      appendOrGetExternFuncOp(rewriter, parent, mangledName, funcType);
   LLVM::createLLVMCallOp(rewriter, loc, funcOp, ValueRange({ptr, val, pred}));
 }
 
@@ -495,28 +502,10 @@ int32_t getCtrlBitsForCacheModifierOnTarget(
   }
 }
 
-Value cvtFp32ToFp16(Location loc, RewriterBase &rewriter, const Value &v,
-                    triton::RoundingMode rounding) {
-  if (rounding == triton::RoundingMode::RTNE) {
-    LLVM::RoundingMode rm = LLVM::RoundingMode::NearestTiesToEven;
-    return rewriter.create<LLVM::ConstrainedFPTruncIntr>(
-        loc, f16_ty, v, rm, LLVM::FPExceptionBehavior::Ignore);
-  }
-
-  // TODO: Figure out the test failure with RTZ LLVM::ConstrainedFPTruncIntr and
-  // switch to not use inline assembly too.
-  assert(rounding == triton::RoundingMode::RTZ);
-  GCNBuilder builder;
-
-  auto &cvt = *builder.create("v_cvt_f16_f32");
-  auto res = builder.newOperand("=v");
-  auto operand = builder.newOperand(v, "v");
-  auto &setRTZ = *builder.create("s_setreg_imm32_b32 0x1801, 0xc");
-  setRTZ();
-  cvt(res, operand);
-  auto &resetRTZ = *builder.create("s_setreg_imm32_b32 0x1801, 0x0");
-  resetRTZ();
-  return builder.launch(rewriter, loc, f16_ty, false);
+Value cvtFp32ToFp16RTNE_oneValue(Location loc, RewriterBase &rewriter,
+                                 const Value &v) {
+  LLVM::RoundingMode rm = LLVM::RoundingMode::NearestTiesToEven;
+  return rewriter.create<LLVM::FPTruncOp>(loc, f16_ty, v);
 }
 
 Type getPointerTypeWithShape(Value basePtr, Value offset) {
@@ -604,25 +593,55 @@ Type scaleDotElemTypeToMLIRType(MLIRContext *ctx, triton::ScaleDotElemType t) {
 }
 
 bool canCoalesceWriteIntoSharedMemory(RewriterBase &rewriter,
-                                      RankedTensorType srcTy,
-                                      triton::gpu::MemDescType dstTy,
-                                      unsigned vectorSize) {
-  auto shape = srcTy.getShape();
-  LinearLayout srcLayout =
-      triton::gpu::toLinearLayout(shape, srcTy.getEncoding());
-  LinearLayout sharedLayout =
-      triton::gpu::toLinearLayout(shape, dstTy.getEncoding());
-  LinearLayout srcToSharedLayout = srcLayout.invertAndCompose(sharedLayout);
+                                      const LinearLayout &srcToSharedLayout,
+                                      unsigned threadsPerWarp) {
+  auto contig = srcToSharedLayout.getNumConsecutiveInOut();
 
   StringAttr kLane = rewriter.getStringAttr("lane");
   for (int inLane : llvm::seq(srcToSharedLayout.getInDimSizeLog2(kLane))) {
     auto basis = srcToSharedLayout.getBasis(kLane, inLane)[0];
-    unsigned expected = vectorSize * (1 << inLane);
+    unsigned expected = contig * (1 << inLane);
     if (basis != expected) {
       LDBG("detected uncoalesced layout from blocked to shared in async copy "
            "for lane "
            << 1 + inLane << "; given " << basis << " but expected "
            << expected);
+      return false;
+    }
+  }
+  // Additionally we could swizzle based on the warp dimension so we need to
+  // check that when all bases are divided by contig, none of the first
+  // (log2(warpSize) + 1) bits are set to 1
+  assert(llvm::isPowerOf2_32(threadsPerWarp));
+  assert(llvm::isPowerOf2_32(contig));
+  unsigned mask = (threadsPerWarp * contig) - 1;
+  StringAttr kWarp = rewriter.getStringAttr("warp");
+  for (int inWarp : llvm::seq(srcToSharedLayout.getInDimSizeLog2(kWarp))) {
+    auto basis = srcToSharedLayout.getBasis(kWarp, inWarp)[0];
+    if ((basis & mask) != 0) {
+      LDBG("detected uncoalesced layout from blocked to shared in async copy "
+           "for warp "
+           << inWarp);
+      return false;
+    }
+  }
+
+  return true;
+}
+
+bool doesSwizzleInsideWarp(RewriterBase &rewriter,
+                           const LinearLayout &srcToSharedLayout,
+                           unsigned threadsPerWarp) {
+  auto contig = srcToSharedLayout.getNumConsecutiveInOut();
+  // If all bases in lane dimension are below threadsPerWarp multiplied with the
+  // contiguity we do not swizzle across warp boundaries.
+  assert(llvm::isPowerOf2_32(threadsPerWarp));
+  unsigned upperLimit = threadsPerWarp * contig;
+
+  StringAttr kLane = rewriter.getStringAttr("lane");
+  for (int inLane : llvm::seq(srcToSharedLayout.getInDimSizeLog2(kLane))) {
+    auto basis = srcToSharedLayout.getBasis(kLane, inLane)[0];
+    if (basis >= upperLimit) {
       return false;
     }
   }
@@ -639,6 +658,98 @@ bool isUsedByDotScaledOp(Operation *op) {
         return isa<triton::DotScaledOp, triton::amdgpu::UpcastMXFPOp>(
             operation);
       });
+}
+
+bool isChainDotHead(tt::DotOpInterface dotOp) {
+  auto isInSameRegion = [&dotOp](Operation *op) {
+    return op->getParentRegion() == dotOp->getParentRegion();
+  };
+  ForwardSliceOptions fwdOpt;
+  fwdOpt.filter = isInSameRegion;
+  SetVector<mlir::Operation *> fwdSlices;
+  getForwardSlice(dotOp, &fwdSlices, fwdOpt);
+  for (Operation *op : fwdSlices) {
+    if (auto dOp = dyn_cast<tt::DotOpInterface>(op)) {
+      assert(dOp != dotOp);
+      auto opA = dOp.getA().getDefiningOp();
+      if (opA && fwdSlices.contains(opA)) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+bool isChainDotTail(tt::DotOpInterface dotOp) {
+  auto isInSameRegion = [&dotOp](Operation *op) {
+    return op->getParentRegion() == dotOp->getParentRegion();
+  };
+  BackwardSliceOptions bwdOpt;
+  bwdOpt.omitBlockArguments = true;
+  bwdOpt.filter = isInSameRegion;
+  SetVector<Operation *> bwdSlices;
+  Operation *opA = dotOp.getA().getDefiningOp();
+  if (!opA)
+    return false;
+  getBackwardSlice(opA, &bwdSlices, bwdOpt);
+  if (llvm::find_if(bwdSlices, [](Operation *op) {
+        return isa<tt::DotOpInterface>(op);
+      }) != bwdSlices.end())
+    return true;
+  return false;
+}
+
+namespace {
+AliasScopeDomainAttr getLoadScopeDomain(MLIRContext *ctx) {
+  Builder b(ctx);
+  return b.getAttr<AliasScopeDomainAttr>(
+      b.getStringAttr("amdgpu.AsyncOps"),
+      b.getStringAttr(
+          "Domain to hold alias scopes to specify aliasing information between "
+          "AsyncCopyGlobalToLocal, BufferLoadToLocal and LocalLoad ops"));
+}
+
+AliasScopeAttr getAsyncCopyScope(MLIRContext *ctx) {
+  Builder b(ctx);
+  auto name = b.getStringAttr("amdgpu.AsyncCopies");
+  auto desc = b.getStringAttr(
+      "Scope containing all AsyncCopyGlobalToLocal and BufferLoadToLocal ops");
+  return b.getAttr<LLVM::AliasScopeAttr>(name, getLoadScopeDomain(ctx), desc);
+}
+
+AliasScopeAttr getLoadCopyScope(MLIRContext *ctx) {
+  Builder b(ctx);
+  auto name = b.getStringAttr("amdgpu.LocalLoads");
+  auto desc = b.getStringAttr("Scope containing all LocalLoad ops");
+  return b.getAttr<LLVM::AliasScopeAttr>(name, getLoadScopeDomain(ctx), desc);
+}
+} // namespace
+
+void addAsyncCopyAliasScope(AliasAnalysisOpInterface directToLdsOp) {
+  auto ctx = directToLdsOp->getContext();
+  Builder b(ctx);
+  directToLdsOp.setAliasScopes(b.getArrayAttr(getAsyncCopyScope(ctx)));
+}
+
+void addLocalLoadNoAliasScope(triton::gpu::LocalLoadOp localLoadOp,
+                              AliasAnalysisOpInterface llLoadOp) {
+  auto token = localLoadOp.getToken();
+  if (!token || !token.getDefiningOp<tt::gpu::AsyncWaitOp>())
+    return;
+
+  return addLocalLoadNoAliasScope(llLoadOp);
+}
+
+void addLocalLoadNoAliasScope(AliasAnalysisOpInterface llLoadOp) {
+  auto ctx = llLoadOp->getContext();
+
+  // Do not alias with AsyncCopies
+  auto noAliasScopes = ArrayAttr::get(ctx, getAsyncCopyScope(ctx));
+  llLoadOp.setNoAliasScopes(noAliasScopes);
+
+  // Add to different scope as ops without any scope alias with everything
+  auto aliasScopes = ArrayAttr::get(ctx, getLoadCopyScope(ctx));
+  llLoadOp.setAliasScopes(aliasScopes);
 }
 
 } // namespace mlir::LLVM::AMD

@@ -117,7 +117,7 @@ tt.func public @fused_loop(%arg5: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %ar
     %22 = tt.load %20 : tensor<128x64x!tt.ptr<f16>, #blocked>
     %23 = ttg.local_alloc %22 : (tensor<128x64xf16, #blocked>) -> !ttg.memdesc<128x64xf16, #shared, #smem>
     %24 = arith.muli %13, %c64_i32 : i32
-    %25 = tt.experimental_descriptor_load %14[%24, %15] : !tt.tensordesc<tensor<64x256xf16>> -> tensor<64x256xf16, #blocked1>
+    %25 = tt.descriptor_load %14[%24, %15] : !tt.tensordesc<tensor<64x256xf16>> -> tensor<64x256xf16, #blocked1>
     %26 = ttg.local_alloc %25 : (tensor<64x256xf16, #blocked1>) -> !ttg.memdesc<64x256xf16, #shared, #smem>
     %27 = ttng.warp_group_dot %23, %26, %arg34, %arg38 {inputPrecision = 0 : i32} : !ttg.memdesc<128x64xf16, #shared, #smem> * !ttg.memdesc<64x256xf16, #shared, #smem> -> tensor<128x256xf32, #mma>
     %28 = arith.addi %13, %c1_i32 : i32
@@ -168,7 +168,7 @@ tt.func @prologue_backward_slice(%ub: i32, %cond: i1) {
     // CHECK: op.with_region
     "op.with_region"() ({
       "use"(%1) : (i32) -> ()
-    }) {tt_latency = 2 : i32} : () -> ()
+    }) {tt.latency = 2 : i32} : () -> ()
     // CHECK: loop.cluster = 1 : i32, loop.stage = 0 : i32
 
   } {tt.num_stages = 3 : i32}
@@ -186,7 +186,7 @@ tt.func @epilogue_forward_slice(%ub: i32, %cond: i1) {
   // CHECK: scf.for
   scf.for %i = %c0_i32 to %ub step %c1_i32 : i32 {
     // CHECK: "latency.op"() {loop.cluster = 3 : i32, loop.stage = 0 : i32
-    %0 = "latency.op"() {tt_latency = 2 : i32} : () -> i32
+    %0 = "latency.op"() {tt.latency = 2 : i32} : () -> i32
     // CHECK: scf.if
     %1 = scf.if %cond -> i32 {
       scf.yield %0 : i32
@@ -219,7 +219,7 @@ tt.func @prologue_latency(%ub: i32, %cond: i1) {
       scf.yield %0 : i32
     } else {
       scf.yield %c0_i32 : i32
-    } {tt_latency = 2 : i32}
+    } {tt.latency = 2 : i32}
     // CHECK: loop.cluster = 0 : i32, loop.stage = 0 : i32
 
   } {tt.num_stages = 3 : i32}

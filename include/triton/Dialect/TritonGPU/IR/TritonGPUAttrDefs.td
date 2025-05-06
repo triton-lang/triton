@@ -15,6 +15,9 @@ def TritonGPU_AttrTrait : AttrInterface<"TritonGPU_AttrTrait"> {
   ];
 }
 
+def MemDescViewTrait : NativeOpTrait<"MemDescViewTrait">;
+
+
 class TritonGPU_Attr<string name, string attrMnemonic, list<Trait> traits = [],
                      Dialect dialect = TritonGPU_Dialect,
                      string baseCppClass = "::mlir::Attribute">
@@ -395,6 +398,8 @@ def NVMMASharedEncodingAttr :
     This is meant to represent 2d tiled blocked layout.
     The full layout representation is described here:
     https://docs.nvidia.com/cuda/parallel-thread-execution/#asynchronous-warpgroup-level-matrix-shared-memory-layout
+    When the memdesc has more than 2 dimensions the tiling is applied to 8 rows even if the first outer dimension is smaller than 8.
+    In this case `transposed` means that the contiguous dimension is the most outer dimension of the memdesc.
   }];
 
 
@@ -430,7 +435,7 @@ def NVMMASharedEncodingAttr :
         } else if (contigDimSizeInByte >= 32 && contigDimSizeInByte % 32 == 0) {
           swizzlingByteWidth = 32;
         } else {
-          llvm_unreachable("unsupported shared memory layout for MMAv3");
+          llvm_unreachable("unsupported NVMMA layout (MMAv3 or TMA)");
         }
         bool transposed = order[0] == 0;
         return $_get(context, swizzlingByteWidth, transposed, eleBitWidth, fp4Padded, CTALayout);
@@ -597,30 +602,10 @@ We call each individual tile "rep".
                      /*defaultImplementation=*/[{
                          return toLinearEncoding($_self, shape).getElemsPerThread(shape);
                      }]>,
-    // Interface for the meta information about the multiple thread hierarchy.
-    InterfaceMethod<"Get the shape of the warps per CTA.",
-                    "SmallVector<unsigned>",
-                    "getWarpsPerCTA">,
-
     InterfaceMethod<"Convert to LinearLayout.",
                     "LinearLayout",
                     "toLinearLayout",
                     (ins "ArrayRef<int64_t>":$shape)>,
-
-    // Legacy methods: They do not take into account the shape of the tensor
-    // that is, the fact that we use them to tile the tensor.
-    InterfaceMethod<"Get the default order of the registers per warp. The fastest-changing axis first",
-                    "SmallVector<unsigned>",
-                    "getDefaultOrder">,
-
-    InterfaceMethod<"Get the default order of the threads per warp. The fastest-changing axis first",
-                    "SmallVector<unsigned>",
-                    "getDefaultThreadOrder">,
-
-    InterfaceMethod<"Get the default order of the warps per CTA. The fastest-changing axis first",
-                    "SmallVector<unsigned>",
-                    "getDefaultWarpOrder">
-
   ];
 }
 
@@ -662,19 +647,14 @@ L(T) = [ {0,8} , {1,9} , {2,10}, {3,11}, {0,8} , {1, 9} , {2, 10}, {3, 11},
   }];
 
   code extraDistributedDeclaration  = extraBaseClassDeclaration # [{
+    unsigned getRank() const { return getCTAOrder().size(); }
     // Implemented in subclasses
     SmallVector<unsigned> getRepOrder() const;
     SmallVector<unsigned> getCTAsPerCGA() const;
     SmallVector<unsigned> getCTAOrder() const;
     SmallVector<unsigned> getCTASplitNum() const;
-    SmallVector<unsigned> getWarpsPerCTA() const;
 
     LinearLayout toLinearLayout(ArrayRef<int64_t> shape) const;
-
-    // Legacy methods: They do not take into account the shape of the tensor
-    SmallVector<unsigned> getDefaultWarpOrder() const;
-    SmallVector<unsigned> getDefaultThreadOrder() const;
-    SmallVector<unsigned> getDefaultOrder() const;
   }];
 }
 
@@ -722,6 +702,7 @@ def LinearEncodingAttr : DistributedEncoding<"LinearEncoding", "linear_encoding"
     SmallVector<unsigned> basesPerDim(StringAttr dimName,
                                       bool skipBroadcast = true) const;
     SmallVector<unsigned> getThreadsPerWarp() const;
+    SmallVector<unsigned> getWarpsPerCTA() const;
 
     // [FIXME LL] Supports legacy behaviour. We should remove these functions
     SmallVector<unsigned> getShapePerCTATile() const;
@@ -832,7 +813,7 @@ for
     ins
     ArrayRefParameter<"unsigned">:$sizePerThread,
     ArrayRefParameter<"unsigned">:$threadsPerWarp,
-    ArrayRefParameter<"unsigned">:$warpsPerCTA__,
+    ArrayRefParameter<"unsigned">:$warpsPerCTA,
     ArrayRefParameter<"unsigned">:$order, // the fastest-changing axis first
 
     // CTALayout is optional in the textual IR.  If omitted, we infer it to be a
@@ -1031,7 +1012,7 @@ V [ 0,4,8...60   1,5...61     2,6...62     3,7...63    ]   [ 128,132...188  129,
     ins
     "unsigned": $versionMajor,
     "unsigned": $versionMinor,
-    ArrayRefParameter<"unsigned">:$warpsPerCTA__,
+    ArrayRefParameter<"unsigned">:$warpsPerCTA,
     "unsigned":$MDim,
     "unsigned":$NDim,
     "bool":$isTransposed,
@@ -1151,7 +1132,7 @@ Row |
     ins
     "unsigned": $version,
     "bool":$isTransposed,
-    ArrayRefParameter<"unsigned">:$warpsPerCTA__,
+    ArrayRefParameter<"unsigned">:$warpsPerCTA,
     "CTALayoutAttr":$CTALayout
   );
 
@@ -1256,7 +1237,7 @@ For example, the matrix L corresponding to blockTileSize=[32,16] is:
     ins
     "unsigned":$versionMajor,
     "unsigned":$versionMinor,
-    ArrayRefParameter<"unsigned">:$warpsPerCTA__,
+    ArrayRefParameter<"unsigned">:$warpsPerCTA,
     "CTALayoutAttr":$CTALayout,
     ArrayRefParameter<"unsigned">:$instrShape
   );
@@ -1393,4 +1374,5 @@ def TTG_SharedMemorySpace : AttrDef<TritonGPU_Dialect, "SharedMemorySpace"> {
     Attribute to indicate that the memory descriptor points to shared memory.
   }];
 }
+
 #endif

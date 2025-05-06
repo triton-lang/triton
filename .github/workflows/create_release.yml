@@ -1,0 +1,77 @@
+name: Create Release
+
+on:
+  push:
+    branches:
+      - main
+      - release/*
+    tags:
+      # Final Release tags look like: v1.11.0
+      - v[0-9]+.[0-9]+.[0-9]+
+      # Release candidate tags look like: v1.11.0-rc1
+      - v[0-9]+.[0-9]+.[0-9]+-rc[0-9]+
+  release:
+    types: [published]
+  pull_request:
+    paths: [.github/workflows/create_release.yml]
+
+jobs:
+
+  release:
+    if: ${{ github.repository == 'triton-lang/triton' }}
+    name: Create Release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    outputs:
+      release_name: "${{ steps.release_name.outputs.name }}"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          show-progress: false
+          submodules: 'recursive'
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+      - name: Fake name for PRs
+        if: ${{ github.event_name == 'pull_request' }}
+        run: echo "PT_GITHUB_REF=refs/tags/pr-tag" >> "$GITHUB_ENV"
+      - name: Real name for non-PRs
+        if: ${{ github.event_name != 'pull_request' }}
+        run: echo "PT_GITHUB_REF=$GITHUB_REF" >> "$GITHUB_ENV"
+      - name: Set filenames
+        run: |
+          tag_or_branch="${PT_GITHUB_REF#refs/tags/}"
+          tag_or_branch="${tag_or_branch#refs/heads/}"
+          # replace directory separators with _ in branch name
+          tag_or_branch="${tag_or_branch//\//_}"
+          if [[ ${tag_or_branch} == v* ]]; then
+            # strip trailing v from tag name
+            tag_or_branch="${tag_or_branch#v}"
+            # important: version must be fixed in setup.py
+            sed -i -e "s:^TRITON_VERSION = .*:TRITON_VERSION = '${tag_or_branch}':" setup.py || exit 1
+          fi
+          echo "RELEASE_NAME=triton-$tag_or_branch" >> "$GITHUB_ENV"
+      - name: Create source distribution
+        run: |
+          pip install build || exit 1
+          python -m build -s || exit 1
+          cd dist || exit 1
+          release_file=( *.tar.gz )
+          echo "RELEASE_FILE=${release_file}" >> "$GITHUB_ENV"
+      - name: Upload source distribution for release
+        if: ${{ github.event_name == 'release' }}
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/${{env.RELEASE_FILE}}
+      - name: Upload source distribution to GHA artifacts for release tags
+        if: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') && contains(github.ref, 'rc') }}
+        uses: actions/upload-artifact@v4.4.0
+        with:
+          name: ${{ env.RELEASE_FILE }}
+          path: dist/${{ env.RELEASE_FILE }}
+      - name: Set output
+        id: release_name
+        run: echo "name=release_name::${{ env.RELEASE_NAME }}.tar.gz" >> "${GITHUB_OUTPUT}"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.sha }}-${{ github.event_name }}
+  cancel-in-progress: true

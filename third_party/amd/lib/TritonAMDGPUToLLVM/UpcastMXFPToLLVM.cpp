@@ -199,7 +199,7 @@ Value mxfpScaleFp16(RewriterBase &rewriter, Location loc, Value v, Value scale,
   Value scaleF32 =
       b.bitcast(b.shl(b.zext(i32_ty, scale), b.i32_val(23)), f32_ty);
   Value scaleF16 =
-      LLVM::AMD::cvtFp32ToFp16(loc, rewriter, scaleF32, RoundingMode::RTNE);
+      LLVM::AMD::cvtFp32ToFp16RTNE_oneValue(loc, rewriter, scaleF32);
   Value mulF16 = b.fmul(v, scaleF16);
   if (fastMath)
     return mulF16;

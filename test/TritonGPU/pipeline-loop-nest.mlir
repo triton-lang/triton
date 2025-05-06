@@ -1,4 +1,4 @@
-// RUN: triton-opt %s -pass-pipeline='builtin.module(convert-triton-to-tritongpu{num-warps=4 target=cuda:100},tritongpu-coalesce,tritongpu-accelerate-matmul,tritongpu-remove-layout-conversions,tritongpu-optimize-dot-operands,cse,tritongpu-fuse-nested-loops,canonicalize,tritongpu-optimize-accumulator-init,tritongpu-pipeline,canonicalize)' | FileCheck %s --check-prefix=BLACKWELL
+// RUN: triton-opt %s -pass-pipeline='builtin.module(convert-triton-to-tritongpu{num-warps=4 target=cuda:100},tritongpu-coalesce,tritongpu-accelerate-matmul,tritongpu-remove-layout-conversions,tritongpu-optimize-dot-operands,cse,tritongpu-fuse-nested-loops,canonicalize,tritongpu-optimize-accumulator-init,tritongpu-hoist-tmem-alloc,tritongpu-pipeline,triton-nvidia-gpu-remove-tmem-tokens,canonicalize)' | FileCheck %s --check-prefix=BLACKWELL
 // RUN: triton-opt %s -pass-pipeline='builtin.module(convert-triton-to-tritongpu{num-warps=4 target=cuda:90 },tritongpu-coalesce,tritongpu-accelerate-matmul,tritongpu-remove-layout-conversions,tritongpu-optimize-dot-operands,cse,tritongpu-fuse-nested-loops,canonicalize,tritongpu-optimize-accumulator-init,canonicalize,tritongpu-combine-tensor-select-and-if,tritongpu-pipeline,canonicalize)' | FileCheck %s --check-prefix=HOPPER
 
 #shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16}>
@@ -46,12 +46,12 @@ tt.func public @matmul_kernel_tma_persistent(%arg0: !tt.ptr<i8, 0>, %arg1: !tt.p
     %21 = scf.for %arg8 = %c0_i32 to %6 step %c1_i32 iter_args(%arg9 = %cst) -> (tensor<128x128xf32>)  : i32 {
       %35 = arith.muli %arg8, %c64_i32 : i32
       %36 = tt.reinterpret_tensor_descriptor %arg0 : !tt.ptr<i8, 0> to !tt.tensordesc<tensor<128x64xf16, #shared>>
-      %37 = tt.experimental_descriptor_load %36[%19, %35] : !tt.tensordesc<tensor<128x64xf16, #shared>> -> tensor<128x64xf16>
+      %37 = tt.descriptor_load %36[%19, %35] : !tt.tensordesc<tensor<128x64xf16, #shared>> -> tensor<128x64xf16>
       %38 = tt.reinterpret_tensor_descriptor %arg1 : !tt.ptr<i8, 0> to !tt.tensordesc<tensor<128x64xf16, #shared>>
-      %39 = tt.experimental_descriptor_load %38[%20, %35] : !tt.tensordesc<tensor<128x64xf16, #shared>> -> tensor<128x64xf16>
+      %39 = tt.descriptor_load %38[%20, %35] : !tt.tensordesc<tensor<128x64xf16, #shared>> -> tensor<128x64xf16>
       // BLACKWELL: ttg.memdesc_trans
       // BLACKWELL: [[ACC_BUF:%.*]] = ttg.memdesc_subview [[ACC_BUFS]]
-      // BLACKWELL: ttng.tc_gen5_mma {{%[0-9]+}}, {{%[0-9]+}}, [[ACC_BUF]], %arg
+      // BLACKWELL: ttng.tc_gen5_mma {{%[0-9]+}}, {{%[0-9]+}}, [[ACC_BUF]]
 
       // HOPPER: [[RESULT:%.*]] = ttng.warp_group_dot {{.*}} isAsync = true
       // HOPPER-NEXT: ttng.warp_group_dot_wait [[RESULT]], {{.*}} {pendings = 1 : i32}
@@ -76,7 +76,7 @@ tt.func public @matmul_kernel_tma_persistent(%arg0: !tt.ptr<i8, 0>, %arg1: !tt.p
     %32 = arith.muli %30, %c128_i32 : i32
     %33 = arith.truncf %21 : tensor<128x128xf32> to tensor<128x128xf16>
     %34 = tt.reinterpret_tensor_descriptor %arg2 : !tt.ptr<i8, 0> to !tt.tensordesc<tensor<128x128xf16, #shared>>
-    tt.experimental_descriptor_store %34[%31, %32], %33 : !tt.tensordesc<tensor<128x128xf16, #shared>>, tensor<128x128xf16>
+    tt.descriptor_store %34[%31, %32], %33 : !tt.tensordesc<tensor<128x128xf16, #shared>>, tensor<128x128xf16>
     scf.yield %22 : i32
   } {tt.flatten}
   tt.return

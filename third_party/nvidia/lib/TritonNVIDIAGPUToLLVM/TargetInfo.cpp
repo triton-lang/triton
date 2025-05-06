@@ -5,6 +5,7 @@
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/LLVMIR/LLVMTypes.h"
 #include "mlir/Dialect/LLVMIR/NVVMDialect.h"
+#include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "llvm/Support/MathExtras.h"
 
 using namespace mlir;
@@ -127,16 +128,13 @@ Value TargetInfo::ballot(RewriterBase &rewriter, Location loc, Type type,
                          Value cmp) const {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   Value threadMask = b.int_val(type.getIntOrFloatBitWidth(), -1);
-  return rewriter.create<NVVM::VoteBallotOp>(loc, type, threadMask, cmp);
+  return rewriter.create<NVVM::VoteSyncOp>(loc, type, threadMask, cmp,
+                                           NVVM::VoteSyncKind::ballot);
 }
 
 static Value mapa(RewriterBase &rewriter, Location loc, Value ptr, Value ctaid,
                   Value pred) {
-  Value args[] = {ptr, ctaid};
-  StringRef name = "llvm.nvvm.mapa.shared.cluster";
-  return LLVM::createLLVMIntrinsicCallOp(rewriter, loc, name, ptr.getType(),
-                                         args)
-      .getResult(0);
+  return rewriter.create<NVVM::MapaOp>(loc, ptr.getType(), ptr, ctaid);
 }
 
 static std::string getConstraintForBitwidth(unsigned bitwidth) {
@@ -491,6 +489,12 @@ bool TargetInfo::canUseStMatrix(RankedTensorType tensorTy,
   if (tensorTy.getElementType().getIntOrFloatBitWidth() != 16)
     return false;
   if (order[0] != 1)
+    return false;
+
+  // Each chunk is filled in with a single warp
+  int numColsPerChunk = (8 * swizzleByteSize) / getElementBitWidth(tensorTy);
+  int instrN = mmaLayout.getInstrShape()[1];
+  if (instrN < numColsPerChunk)
     return false;
 
   auto tensorShapePerCTA = getShapePerCTA(mmaLayout, tensorTy.getShape());

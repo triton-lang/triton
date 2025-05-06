@@ -122,13 +122,16 @@ tt.func @gather_op() {
 
 // -----
 
+#shared = #ttg.nvmma_shared<{swizzlingByteWidth = 32, transposed = false, elementBitWidth = 8}>
+#bar_layout = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0], CTAsPerCGA = [1], CTASplitNum = [1], CTAOrder = [0]}>
+
 // CHECK: [[SLICE_PARENT:#.*]] = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [32, 1], warpsPerCTA = [1, 2], order = [1, 0]}>
 
 // CHECK: @gather4_layout
 tt.func @gather4_layout(%arg0: !tt.tensordesc<tensor<1x128xf32>>, %arg1: i32, %arg2: !tt.ptr<f32>) {
   %cst = arith.constant dense<1> : tensor<32xi32>
   // CHECK: [[IDX:%.*]] = ttg.convert_layout %cst : tensor<32xi32, #{{.*}}> -> tensor<32xi32, #ttg.slice<{dim = 0, parent = [[SLICE_PARENT]]}>>
-  %0 = tt.experimental_descriptor_gather %arg0[%cst, %arg1] : (!tt.tensordesc<tensor<1x128xf32>>, tensor<32xi32>, i32) -> tensor<32x128xf32>
+  %0 = tt.descriptor_gather %arg0[%cst, %arg1] : (!tt.tensordesc<tensor<1x128xf32>>, tensor<32xi32>, i32) -> tensor<32x128xf32>
   %1 = tt.splat %arg2 : !tt.ptr<f32> -> tensor<32x128x!tt.ptr<f32>>
   tt.store %1, %0 : tensor<32x128x!tt.ptr<f32>>
   tt.return
@@ -140,7 +143,27 @@ tt.func @scatter4_layout(%arg0: !tt.tensordesc<tensor<1x128xf32>>, %arg1: i32, %
   %0 = tt.splat %arg2 : !tt.ptr<f32> -> tensor<32x128x!tt.ptr<f32>>
   %1 = tt.load %0 : tensor<32x128x!tt.ptr<f32>>
   // CHECK: [[IDX:%.*]] = ttg.convert_layout %cst : tensor<32xi32, #{{.*}}> -> tensor<32xi32, #ttg.slice<{dim = 0, parent = [[SLICE_PARENT]]}>>
-  tt.experimental_descriptor_scatter %arg0[%cst, %arg1], %1 : !tt.tensordesc<tensor<1x128xf32>>, tensor<32xi32>, i32, tensor<32x128xf32>
+  tt.descriptor_scatter %arg0[%cst, %arg1], %1 : !tt.tensordesc<tensor<1x128xf32>>, tensor<32xi32>, i32, tensor<32x128xf32>
+  tt.return
+}
+
+// CHECK: @async_tma_gather
+tt.func @async_tma_gather(%desc: !tt.ptr<i8>, %y_offset: i32,
+                          %bar: !ttg.memdesc<1xi64, #bar_layout, #ttg.shared_memory, mutable>,
+                          %result: !ttg.memdesc<32x128xbf16, #shared, #ttg.shared_memory, mutable>,
+                          %pred: i1) {
+  %x_offsets = arith.constant dense<1> : tensor<32xi32>
+  // CHECK: [[IDX:%.*]] = ttg.convert_layout %cst : tensor<32xi32, #{{.*}}> -> tensor<32xi32, #ttg.slice<{dim = 0, parent = [[SLICE_PARENT]]}>>
+  ttng.async_tma_gather %desc[%x_offsets, %y_offset] %result, %bar, %pred : !tt.ptr<i8>, tensor<32xi32>, i32, !ttg.memdesc<1xi64, #bar_layout, #ttg.shared_memory, mutable>, !ttg.memdesc<32x128xbf16, #shared, #ttg.shared_memory, mutable>, i1
+  tt.return
+}
+
+// CHECK: @async_tma_scatter
+tt.func @async_tma_scatter(%desc: !tt.ptr<i8>, %y_offset: i32,
+                           %src: !ttg.memdesc<32x128xbf16, #shared, #ttg.shared_memory, mutable>) {
+  %x_offsets = arith.constant dense<1> : tensor<32xi32>
+  // CHECK: [[IDX:%.*]] = ttg.convert_layout %cst : tensor<32xi32, #{{.*}}> -> tensor<32xi32, #ttg.slice<{dim = 0, parent = [[SLICE_PARENT]]}>>
+  ttng.async_tma_scatter %desc[%x_offsets, %y_offset] %src : !tt.ptr<i8>, tensor<32xi32>, i32, !ttg.memdesc<32x128xbf16, #shared, #ttg.shared_memory, mutable>
   tt.return
 }
 
@@ -151,26 +174,4 @@ tt.func @ub_poison() {
   // CHECK-NEXT: ub.poison : tensor<128x64xf16, #blocked>
   %0 = ub.poison : tensor<128x64xf16>
   tt.return
-}
-
-// -----
-
-#blocked2 = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [2], order = [0]}>
-
-module attributes {"ttg.num-warps" = 4 : i32} {
-
-// CHECK-LABEL: @partition_axis_info
-tt.func @partition_axis_info(%arg0: !tt.ptr<i32>, %arg1: !tt.ptr<i32>) {
-  ttg.warp_specialize(%arg0)
-  default {
-    ttg.warp_yield
-  }
-  partition0(%arg2: !tt.ptr<i32>) num_warps(2) {
-    %splatted = tt.splat %arg2 : !tt.ptr<i32> -> tensor<256x!tt.ptr<i32>, #blocked2>
-    %input = tt.load %splatted : tensor<256x!tt.ptr<i32>, #blocked2>
-    ttg.warp_return
-  } : (!tt.ptr<i32>) -> ()
-  tt.return
-}
-
 }

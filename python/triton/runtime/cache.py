@@ -1,33 +1,17 @@
-import importlib
 import json
 import os
 import uuid
 from abc import ABC, abstractmethod
-from pathlib import Path
 from typing import Dict, List, Optional
 import base64
 import hashlib
 
-
-def get_home_dir():
-    return os.getenv("TRITON_HOME", Path.home())
-
-
-def default_cache_dir():
-    return os.path.join(get_home_dir(), ".triton", "cache")
-
-
-def default_override_dir():
-    return os.path.join(get_home_dir(), ".triton", "override")
-
-
-def default_dump_dir():
-    return os.path.join(get_home_dir(), ".triton", "dump")
+from .. import knobs
 
 
 class CacheManager(ABC):
 
-    def __init__(self, key):
+    def __init__(self, key, override=False, dump=False):
         pass
 
     @abstractmethod
@@ -53,16 +37,16 @@ class FileCacheManager(CacheManager):
         self.key = key
         self.lock_path = None
         if dump:
-            self.cache_dir = os.getenv("TRITON_DUMP_DIR", "").strip() or default_dump_dir()
+            self.cache_dir = knobs.cache.dump_dir
             self.cache_dir = os.path.join(self.cache_dir, self.key)
             self.lock_path = os.path.join(self.cache_dir, "lock")
             os.makedirs(self.cache_dir, exist_ok=True)
         elif override:
-            self.cache_dir = os.getenv("TRITON_OVERRIDE_DIR", "").strip() or default_override_dir()
+            self.cache_dir = knobs.cache.override_dir
             self.cache_dir = os.path.join(self.cache_dir, self.key)
         else:
             # create cache directory if it doesn't exist
-            self.cache_dir = os.getenv("TRITON_CACHE_DIR", "").strip() or default_cache_dir()
+            self.cache_dir = knobs.cache.dir
             if self.cache_dir:
                 self.cache_dir = os.path.join(self.cache_dir, self.key)
                 self.lock_path = os.path.join(self.cache_dir, "lock")
@@ -158,10 +142,10 @@ class RedisRemoteCacheBackend(RemoteCacheBackend):
     def __init__(self, key):
         import redis
         self._key = key
-        self._key_fmt = os.environ.get("TRITON_REDIS_KEY_FORMAT", "triton:{key}:{filename}")
+        self._key_fmt = knobs.cache.redis.key_format
         self._redis = redis.Redis(
-            host=os.environ.get("TRITON_REDIS_HOST", "localhost"),
-            port=int(os.environ.get("TRITON_REDIS_PORT", 6379)),
+            host=knobs.cache.redis.host,
+            port=knobs.cache.redis.port,
         )
 
     def _get_key(self, filename: str) -> str:
@@ -179,10 +163,10 @@ class RemoteCacheManager(CacheManager):
 
     def __init__(self, key, override=False, dump=False):
         # Setup backend pointed too by `TRITON_REMOTE_CACHE_BACKEND`.
-        remote_cache_manager = os.environ["TRITON_REMOTE_CACHE_BACKEND"]
-        module_path, clz_nme = remote_cache_manager.split(":")
-        module = importlib.import_module(module_path)
-        remote_cache_cls = getattr(module, clz_nme)
+        remote_cache_cls = knobs.cache.remote_manager_class
+        if not remote_cache_cls:
+            raise RuntimeError(
+                "Unable to instantiate RemoteCacheManager, TRITON_REMOTE_CACHE_BACKEND doesn't point to a valid class")
         self._backend = remote_cache_cls(key)
 
         self._override = override
@@ -252,37 +236,24 @@ class RemoteCacheManager(CacheManager):
         return self.put(grp_contents, grp_filename)
 
 
-__cache_cls = FileCacheManager
-__cache_cls_nme = "DEFAULT"
-
-
 def _base32(key):
     # Assume key is a hex string.
     return base64.b32encode(bytes.fromhex(key)).decode("utf-8").rstrip("=")
 
 
 def get_cache_manager(key) -> CacheManager:
-    import os
-
-    user_cache_manager = os.environ.get("TRITON_CACHE_MANAGER", None)
-    global __cache_cls
-    global __cache_cls_nme
-
-    if user_cache_manager is not None and user_cache_manager != __cache_cls_nme:
-        module_path, clz_nme = user_cache_manager.split(":")
-        module = importlib.import_module(module_path)
-        __cache_cls = getattr(module, clz_nme)
-        __cache_cls_nme = user_cache_manager
-
-    return __cache_cls(_base32(key))
+    cls = knobs.cache.manager_class or FileCacheManager
+    return cls(_base32(key))
 
 
 def get_override_manager(key) -> CacheManager:
-    return __cache_cls(_base32(key), override=True)
+    cls = knobs.cache.manager_class or FileCacheManager
+    return cls(_base32(key), override=True)
 
 
 def get_dump_manager(key) -> CacheManager:
-    return __cache_cls(_base32(key), dump=True)
+    cls = knobs.cache.manager_class or FileCacheManager
+    return cls(_base32(key), dump=True)
 
 
 def make_so_cache_key(version_hash, signature, constants, ids, **kwargs):

@@ -1,7 +1,7 @@
 #include "mlir/Transforms/LoopInvariantCodeMotionUtils.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
+#include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/Triton/Transforms/Passes.h"
-#include "triton/Dialect/TritonGPU/Transforms/PipeliningUtility.h"
 #include "llvm/Support/Debug.h"
 
 #define GEN_PASS_CLASSES

@@ -15,6 +15,12 @@ public:
 
   llvm::AMDGPU::GPUKind getGPUKind() const;
 
+  bool isCDNA() const;
+
+  bool isRDNA() const;
+
+  int getWarpSize() const;
+
   int getSharedMemorySize() const;
 
   bool supportMaximumMinimum() const override;
@@ -73,10 +79,14 @@ public:
 
   bool supportVectorizedAtomics() const override;
 
-  void storeOpAnnotation(triton::gpu::LocalStoreOp op, size_t localStoreOpCount,
-                         Type type) const override;
+  void localStoreOpAnnotation(triton::gpu::LocalStoreOp op,
+                              size_t localStoreOpCount,
+                              Type type) const override;
 
   bool supportsDirectToLdsLoadBitWidth(int bitWidth) const;
+
+  void localLoadOpAnnotation(triton::gpu::LocalLoadOp localLoadOp,
+                             Operation *llLoadOp) const override;
 
 private:
   void printfImpl(Value formatStrStart, int formatStrByteCount, ValueRange args,

@@ -1,10 +1,12 @@
 #include "triton/Analysis/AxisInfo.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
+#include "triton/Dialect/TritonGPU/Transforms/MMAv5PipelineUtility.h"
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h"
 #include "triton/Dialect/TritonGPU/Transforms/PipeliningUtility.h"
 #include "triton/Dialect/TritonGPU/Transforms/Schedule.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
+#include "triton/Tools/Sys/GetEnv.hpp"
 #include "llvm/Support/Debug.h"
 
 #define DEBUG_TYPE "triton-loop-pipeline"
@@ -35,8 +37,9 @@ bool preCondition(scf::ForOp forOp) {
 }
 
 bool hasLatenciesAssigned(scf::ForOp forOp) {
+  auto helper = TritonDialect::getLoaded(forOp)->getLatencyAttrHelper();
   for (auto &op : forOp.getBody()->without_terminator()) {
-    if (op.hasAttr("tt_latency"))
+    if (helper.getAttr(&op))
       return true;
   }
   return false;
@@ -44,9 +47,10 @@ bool hasLatenciesAssigned(scf::ForOp forOp) {
 
 void assignUserProvidedLatencies(scf::ForOp forOp,
                                  DenseMap<Operation *, int> &opLatency) {
+  auto helper = TritonDialect::getLoaded(forOp)->getLatencyAttrHelper();
   for (auto &op : forOp.getBody()->without_terminator()) {
-    if (auto latencyAttr = op.getAttr("tt_latency")) {
-      opLatency[&op] = mlir::cast<IntegerAttr>(latencyAttr).getInt();
+    if (auto latencyAttr = helper.getAttr(&op)) {
+      opLatency[&op] = latencyAttr.getInt();
     }
   }
 }
@@ -133,8 +137,7 @@ private:
         return false;
       }
     }
-    if (isa<tt::ExperimentalDescriptorLoadOp,
-            tt::ExperimentalDescriptorGatherOp>(op))
+    if (isa<tt::DescriptorLoadOp, tt::DescriptorGatherOp>(op))
       return true;
     if (!canHaveSharedEncoding(cast<tt::LoadOp>(op))) {
       LDBG("Load " << *op << " cannot have shared encoding");
@@ -189,8 +192,8 @@ private:
         [&](Operation *op, Operation *finalUser, int distance) {
           if (!seen.insert(op).second || excluded.count(op))
             return;
-          if (isa<tt::LoadOp, tt::ExperimentalDescriptorLoadOp,
-                  tt::ExperimentalDescriptorGatherOp>(op)) {
+          if (isa<tt::LoadOp, tt::DescriptorLoadOp, tt::DescriptorGatherOp>(
+                  op)) {
             if (!isPipeliningBeneficial(op, finalUser, axisInfoAnalysis))
               return;
             if (loadOpToIndLevel.count(op)) {
@@ -229,7 +232,9 @@ private:
 
     bool seenDot = false;
     for (Operation &op : forOp.getBody()->without_terminator()) {
-      if (!isa<mlir::triton::DotOpInterface>(op))
+      // Arbitrary heuristic. TMEMStoreOp is included to keep logic consistent
+      // with legacy code when we weren't hoisting tmem allocas.
+      if (!isa<mlir::triton::DotOpInterface, ttng::TMEMStoreOp>(op))
         continue;
       seenDot = true;
       seen.clear();
@@ -240,8 +245,7 @@ private:
     // that are not directly used by dot ops.
     if (pipelineWithoutDot && !seenDot) {
       for (Operation &op : forOp.getBody()->without_terminator()) {
-        if (!isa<tt::LoadOp, tt::ExperimentalDescriptorLoadOp,
-                 tt::ExperimentalDescriptorGatherOp>(op))
+        if (!isa<tt::LoadOp, tt::DescriptorLoadOp, tt::DescriptorGatherOp>(op))
           dfs(&op, &op, 0);
       }
     }
@@ -256,10 +260,39 @@ public:
       : forOp(forOp), opLatency(opLatency) {};
 
   void run() {
+    if (!triton::tools::getBoolEnv("ENABLE_MMA_V5_ATT_PIPELINE")) {
+      int mmav5Count = 0;
+      for (auto &op : forOp.getBody()->without_terminator()) {
+        if (isa<ttng::MMAv5OpInterface>(&op)) {
+          mmav5Count++;
+        }
+      }
+      if (mmav5Count > 1)
+        return;
+    }
+    // Check if the load op (mma operand) is pipelineable.
+    auto isLoadToBePipelined = [&](Operation *op) {
+      return opLatency.count(op) && opLatency[op] > 0;
+    };
     for (auto &op : forOp.getBody()->without_terminator()) {
-      if (isa<ttng::MMAv5OpInterface>(op) &&
-          isPipeliningOfMMAOpPossible(&op, forOp)) {
-        opLatency[&op] = 1;
+      // If the acc can not be multibuffered, do not pipeline the uses of
+      // the MMA to later stages.
+      if (auto mma = dyn_cast<ttng::MMAv5OpInterface>(&op)) {
+        // Try to push out the wait by one stage even if the operands are not
+        // pipelineable, but we know where the loads are scheduled, so we can
+        // place the wait right before the loads.
+        auto pipeHelper = ttng::MMAv5PipelineableOperandsHelper(
+            mma, forOp, isLoadToBePipelined);
+        bool pipelineable = pipeHelper.isPipelineable ||
+                            (pipeHelper.isOperandsStateDetermined &&
+                             !ttng::hasLoadsAfterMMA(mma, forOp));
+        pipelineable =
+            pipelineable && (!ttng::requiresAccMultiBuffering(mma, forOp) ||
+                             (ttng::isAccMultibufferingPossible(mma, forOp) &&
+                              !getDisallowAccMultiBuffer(forOp)));
+        if (pipelineable) {
+          opLatency[&op] = 1;
+        }
       }
     }
   }
@@ -267,49 +300,6 @@ public:
 private:
   scf::ForOp forOp;
   DenseMap<Operation *, int> &opLatency;
-
-  bool isPipeliningOfMMAOpPossible(Operation *op, scf::ForOp forOp) {
-    assert((isa<ttng::MMAv5OpInterface>(op)) && "Only MMA ops are supported");
-    // Operands of the MMA op must come from the load, or from outside the loop.
-    auto comesFromLoadOrOutsideLoop = [&](Value v) {
-      if (forOp.isDefinedOutsideOfLoop(v)) {
-        return true;
-      }
-      // Do not walk through the Block Arguments.
-      if (!v.getDefiningOp()) {
-        return false;
-      }
-      if (auto localAlloc = dyn_cast<ttg::LocalAllocOp>(v.getDefiningOp())) {
-        if (!localAlloc.getSrc()) {
-          return false;
-        }
-        return (localAlloc.getSrc().getDefiningOp() &&
-                isa<tt::LoadOp>(localAlloc.getSrc().getDefiningOp())) ||
-               forOp.isDefinedOutsideOfLoop(localAlloc.getSrc());
-      }
-      return false;
-    };
-    if (auto dotOp = dyn_cast<tt::DotOpInterface>(op)) {
-      if (!comesFromLoadOrOutsideLoop(dotOp.getA()) ||
-          !comesFromLoadOrOutsideLoop(dotOp.getB())) {
-        return false;
-      }
-    }
-
-    // For scaled MMA check if the scales are passed through shared memory, and
-    // also coming from load or outside the loop.
-    if (auto scaledOp = dyn_cast<ttng::TCGen5MMAScaledOp>(op)) {
-      if (!isa<ttg::SharedEncodingTrait>(
-              scaledOp.getAScale().getType().getEncoding()) ||
-          !isa<ttg::SharedEncodingTrait>(
-              scaledOp.getBScale().getType().getEncoding()))
-        return false;
-      if (!comesFromLoadOrOutsideLoop(scaledOp.getAScale()) ||
-          !comesFromLoadOrOutsideLoop(scaledOp.getBScale()))
-        return false;
-    }
-    return true;
-  }
 };
 
 } // namespace
@@ -318,21 +308,12 @@ private:
 // on the requested number of stages assign the latencies in a way that
 // cover all the stages with the sum of latencies in the chain from the first
 // load to the final dot op.
-void assignLatencies(ModuleOp moduleOp, int defaultNumStages, bool assignMMA) {
-  auto getNumStagesOrDefault = [defaultNumStages](scf::ForOp forOp) -> int {
-    // Use the attribute attached to the loop if it exists otherwise use the
-    // global control.
-    if (!forOp->hasAttr(mlir::triton::kNumStagesAttrName))
-      return defaultNumStages;
-    return mlir::cast<IntegerAttr>(
-               forOp->getAttr(mlir::triton::kNumStagesAttrName))
-        .getInt();
-  };
-
+void assignLatencies(ModuleOp moduleOp, int defaultNumStages) {
   SmallVector<scf::ForOp> loops;
   moduleOp->walk([&](scf::ForOp forOp) {
     // Bail out for loops with num_stage <= 1.
-    if (preCondition(forOp) && getNumStagesOrDefault(forOp) > 1)
+    if (preCondition(forOp) &&
+        getNumStagesOrDefault(forOp, defaultNumStages) > 1)
       loops.push_back(forOp);
   });
   if (loops.empty())
@@ -344,11 +325,9 @@ void assignLatencies(ModuleOp moduleOp, int defaultNumStages, bool assignMMA) {
       assignUserProvidedLatencies(forOp, opLatency);
       continue;
     }
-    int numStages = getNumStagesOrDefault(forOp);
+    int numStages = getNumStagesOrDefault(forOp, defaultNumStages);
     AssignLoadLatencies(forOp, numStages, opLatency).run();
-    if (assignMMA) {
-      AssignMMALatencies(forOp, opLatency).run();
-    }
+    AssignMMALatencies(forOp, opLatency).run();
   }
   serializeLatencies(moduleOp, opLatency);
 }

@@ -15,15 +15,15 @@ Extra Credits:
 
 import pytest
 import torch
-import triton.tools.experimental_descriptor
 
 import triton
 import triton.language as tl
 
-# ENABLE_LHS_TO_TMEM is an experimental environment variable for Blackwell.
-# If it is set to 1 it can improve performance of Blackwell attention. However,
-# it defaults to 0 as it is known to cause correctness issues outside of the
-# _attn_fwd_tma kernel below.
+try:
+    from triton.tools.tensor_descriptor import TensorDescriptor
+    HAS_TENSOR_DESC = True
+except ModuleNotFoundError:
+    HAS_TENSOR_DESC = False
 
 DEVICE = triton.runtime.driver.active.get_active_torch_device()
 
@@ -37,77 +37,7 @@ def is_cuda():
 
 
 def supports_tma():
-    return is_cuda() and torch.cuda.get_device_capability()[0] >= 9
-
-
-HAS_TMA_DESC = "nv_tma_desc_type" in dir(tl)
-
-if HAS_TMA_DESC:
-    print("TMA benchmarks will be running with experimental grid constant TMA descriptor.", )
-else:
-    print("TMA benchmarks will be running without grid constant TMA descriptor.", )
-
-
-# TmaAutoTuneHelper used in htyu's PR #5622
-class TmaAutoTuneHelper:
-
-    # duck typing wrapper to implement the same interface as TmaDescKernelParam in Triton PR #4498
-    class KernelParamWrapper:
-
-        def __init__(self, desc):
-            self.desc = desc
-
-        def tma_desc_cpu_ptr(self):
-            return self.desc.data_ptr()
-
-    TMA_SIZE = 128
-
-    def __init__(self):
-        self.fill_1d_tma_descriptor_inner = (triton.runtime.driver.active.utils.fill_1d_tma_descriptor)
-        self.fill_2d_tma_descriptor_inner = (triton.runtime.driver.active.utils.fill_2d_tma_descriptor)
-        if HAS_TMA_DESC:
-            self.descriptors = {}
-        else:
-            self.cuda_descriptors = {}
-
-    # Call this method outside of the lambda function for grid size
-    def init_tma_descriptor(self, name):
-        if HAS_TMA_DESC:
-            self.descriptors[name] = torch.empty(TmaAutoTuneHelper.TMA_SIZE, device="cpu", dtype=torch.int8)
-        else:
-            self.cuda_descriptors[name] = torch.empty(TmaAutoTuneHelper.TMA_SIZE, device="cuda", dtype=torch.int8)
-
-    # Call this method inside the lambda function for grid size
-    def fill_1d_tma_descriptor(self, name, ptr, dim, block_dim, element_size):
-        if HAS_TMA_DESC:
-            desc_x = self.descriptors[name]
-            assert desc_x.data_ptr() % 64 == 0
-            self.fill_1d_tma_descriptor_inner(ptr, dim, block_dim, element_size, desc_x.data_ptr())
-        else:
-            desc_x = self.cuda_descriptors[name]
-            buf_x = torch.empty_like(desc_x, device="cpu", pin_memory=True)
-            self.fill_1d_tma_descriptor_inner(ptr, dim, block_dim, element_size, buf_x.data_ptr())
-            desc_x.copy_(buf_x, non_blocking=True)
-
-    # Call this method inside the lambda function for grid size
-    def fill_2d_tma_descriptor(self, name, ptr, dim1, dim0, block_dim1, block_dim0, element_size):
-        if HAS_TMA_DESC:
-            desc_x = self.descriptors[name]
-            assert desc_x.data_ptr() % 64 == 0
-            self.fill_2d_tma_descriptor_inner(ptr, dim1, dim0, block_dim1, block_dim0, element_size, desc_x.data_ptr())
-        else:
-            desc_x = self.cuda_descriptors[name]
-            buf_x = torch.empty_like(desc_x, device="cpu", pin_memory=True)
-            self.fill_2d_tma_descriptor_inner(ptr, dim1, dim0, block_dim1, block_dim0, element_size, buf_x.data_ptr())
-            desc_x.copy_(buf_x, non_blocking=True)
-
-    def get_tma_descriptor_kernel_param(self, name):
-        if HAS_TMA_DESC:
-            assert self.descriptors[name] is not None
-            return self.KernelParamWrapper(self.descriptors[name])
-        else:
-            assert self.cuda_descriptors[name] is not None
-            return self.cuda_descriptors[name]
+    return HAS_TENSOR_DESC and is_cuda() and torch.cuda.get_device_capability()[0] >= 9
 
 
 @triton.jit
@@ -184,7 +114,7 @@ def _attn_fwd_inner_tma(acc, l_i, m_i, q,  #
     for start_n in range(lo, hi, BLOCK_N):
         start_n = tl.multiple_of(start_n, BLOCK_N)
         # -- compute qk ----
-        k = tl._experimental_descriptor_load(desc_k, [offsetkv_y, 0], [BLOCK_N, HEAD_DIM], dtype).T
+        k = desc_k.load([offsetkv_y, 0]).T
         qk = tl.dot(q, k)
         if STAGE == 2:
             mask = offs_m[:, None] >= (start_n + offs_n[None, :])
@@ -202,7 +132,7 @@ def _attn_fwd_inner_tma(acc, l_i, m_i, q,  #
         # -- update output accumulator --
         acc = acc * alpha[:, None]
         # update acc
-        v = tl._experimental_descriptor_load(desc_v, [offsetkv_y, 0], [BLOCK_N, HEAD_DIM], dtype)
+        v = desc_v.load([offsetkv_y, 0])
         p = p.to(dtype)
         # note that this non transposed v for FP8 is only supported on Blackwell
         acc = tl.dot(p, v, acc)
@@ -324,11 +254,21 @@ def _attn_fwd(Q, K, V, sm_scale, M, Out,  #
     tl.store(O_block_ptr, acc.to(Out.type.element_ty))
 
 
+def _tma_pre_hook(nargs):
+    BLOCK_M = nargs["BLOCK_M"]
+    BLOCK_N = nargs["BLOCK_N"]
+    HEAD_DIM = nargs["HEAD_DIM"]
+    nargs["desc_q"].block_shape = [BLOCK_M, HEAD_DIM]
+    nargs["desc_v"].block_shape = [BLOCK_N, HEAD_DIM]
+    nargs["desc_k"].block_shape = [BLOCK_N, HEAD_DIM]
+    nargs["desc_o"].block_shape = [BLOCK_M, HEAD_DIM]
+
+
 # We don't run auto-tuning every time to keep the tutorial fast. Keeping
 # the code below and commenting out the equivalent parameters is convenient for
 # re-tuning.
 configs_tma = [
-    triton.Config({'BLOCK_M': BM, 'BLOCK_N': BN}, num_stages=s, num_warps=w) \
+    triton.Config({'BLOCK_M': BM, 'BLOCK_N': BN}, num_stages=s, num_warps=w, pre_hook=_tma_pre_hook) \
     for BM in [64, 128]\
     for BN in [32, 64, 128]\
     for s in [2, 3, 4, 6]\
@@ -374,7 +314,7 @@ def _attn_fwd_tma(sm_scale, M,  #
     qk_scale = sm_scale
     qk_scale *= 1.44269504  # 1/log(2)
     # load q: it will stay in SRAM throughout
-    q = tl._experimental_descriptor_load(desc_q, [qo_offset_y, 0], [BLOCK_M, HEAD_DIM], dtype)
+    q = desc_q.load([qo_offset_y, 0])
     # stage 1: off-band
     # For causal = True, STAGE = 3 and _attn_fwd_inner gets 1 as its STAGE
     # For causal = False, STAGE = 1, and _attn_fwd_inner gets 3 as its STAGE
@@ -400,7 +340,7 @@ def _attn_fwd_tma(sm_scale, M,  #
     acc = acc / l_i[:, None]
     m_ptrs = M + off_hz * N_CTX + offs_m
     tl.store(m_ptrs, m_i)
-    tl._experimental_descriptor_store(desc_o, acc.to(dtype), [qo_offset_y, 0])
+    desc_o.store([qo_offset_y, 0], acc.to(dtype))
 
 
 @triton.jit
@@ -675,33 +615,14 @@ class _attention(torch.autograd.Function):
             # Note that on Hopper we cannot perform a FP8 dot with a non-transposed second tensor
             y_dim = q.shape[0] * q.shape[1] * q.shape[2]
 
-            desc_helper = TmaAutoTuneHelper()
-            desc_helper.init_tma_descriptor("q")
-            desc_helper.init_tma_descriptor("v")
-            desc_helper.init_tma_descriptor("k")
-            desc_helper.init_tma_descriptor("o")
+            dummy_block = [1, 1]
+            desc_q = TensorDescriptor(q, shape=[y_dim, HEAD_DIM_K], strides=[HEAD_DIM_K, 1], block_shape=dummy_block)
+            desc_v = TensorDescriptor(v, shape=[y_dim, HEAD_DIM_K], strides=[HEAD_DIM_K, 1], block_shape=dummy_block)
+            desc_k = TensorDescriptor(k, shape=[y_dim, HEAD_DIM_K], strides=[HEAD_DIM_K, 1], block_shape=dummy_block)
+            desc_o = TensorDescriptor(o, shape=[y_dim, HEAD_DIM_K], strides=[HEAD_DIM_K, 1], block_shape=dummy_block)
 
             def grid(META):
-                nonlocal desc_helper
-
-                desc_helper.fill_2d_tma_descriptor("q", q.data_ptr(), y_dim, HEAD_DIM_K, META["BLOCK_M"], HEAD_DIM_K,
-                                                   q.element_size())
-
-                desc_helper.fill_2d_tma_descriptor("v", v.data_ptr(), y_dim, HEAD_DIM_K, META["BLOCK_N"], HEAD_DIM_K,
-                                                   v.element_size())
-
-                desc_helper.fill_2d_tma_descriptor("k", k.data_ptr(), y_dim, HEAD_DIM_K, META["BLOCK_N"], HEAD_DIM_K,
-                                                   k.element_size())
-
-                desc_helper.fill_2d_tma_descriptor("o", o.data_ptr(), y_dim, HEAD_DIM_K, META["BLOCK_M"], HEAD_DIM_K,
-                                                   o.element_size())
-
                 return (triton.cdiv(q.shape[2], META["BLOCK_M"]), q.shape[0] * q.shape[1], 1)
-
-            desc_q = desc_helper.get_tma_descriptor_kernel_param("q")
-            desc_v = desc_helper.get_tma_descriptor_kernel_param("v")
-            desc_k = desc_helper.get_tma_descriptor_kernel_param("k")
-            desc_o = desc_helper.get_tma_descriptor_kernel_param("o")
 
             ctx.grid = grid
             _attn_fwd_tma[grid](

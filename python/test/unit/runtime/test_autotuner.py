@@ -5,7 +5,9 @@ import triton.language as tl
 import pytest
 
 
-def do_bench(kernel_call, quantiles):
+def do_bench(kernel_call, quantiles, use_cuda_graph=False):
+    if use_cuda_graph:
+        return triton.testing.do_bench_cudagraph(kernel_call, quantiles=quantiles)
     return triton.testing.do_bench(kernel_call, quantiles=quantiles, warmup=1, rep=1)
 
 
@@ -20,7 +22,8 @@ def test_kwargs(use_cuda_graph: bool, device: str):
 
     configs = [triton.Config(kwargs={'BLOCK_SIZE_M': 32}), triton.Config(kwargs={'BLOCK_SIZE_M': 128})]
 
-    @triton.autotune(configs=configs, key=['M'], warmup=1, rep=1, use_cuda_graph=use_cuda_graph, do_bench=do_bench)
+    @triton.autotune(configs=configs, key=["M"],
+                     do_bench=lambda kernel, quantiles: do_bench(kernel, quantiles, use_cuda_graph))
     @triton.jit
     def _kernel(dst, src, stride_m: tl.constexpr, M, BLOCK_SIZE_N: tl.constexpr, BLOCK_SIZE_M: tl.constexpr):
         offsets_m = tl.program_id(0) * stride_m + tl.arange(0, BLOCK_SIZE_M)
@@ -33,6 +36,26 @@ def test_kwargs(use_cuda_graph: bool, device: str):
     # the key word args could be in arbitrary order.
     _kernel[grid](dst=dst, src=src, M=M // 2, stride_m=N, BLOCK_SIZE_N=N)
     assert len(_kernel.cache) == 2
+
+
+def test_no_do_bench(device: str):
+    M, N = 1024, 16
+    src = torch.randn(M * N, device=device)
+    dst = torch.empty(M * N, device=device)
+
+    configs = [triton.Config(kwargs={'BLOCK_SIZE_M': 32}), triton.Config(kwargs={'BLOCK_SIZE_M': 128})]
+
+    @triton.autotune(configs=configs, key=["M"])
+    @triton.jit
+    def _kernel(dst, src, stride_m: tl.constexpr, M, BLOCK_SIZE_N: tl.constexpr, BLOCK_SIZE_M: tl.constexpr):
+        offsets_m = tl.program_id(0) * stride_m + tl.arange(0, BLOCK_SIZE_M)
+        offsets_n = tl.arange(0, BLOCK_SIZE_N)
+        x = tl.load(src + offsets_m[:, None] * BLOCK_SIZE_N + offsets_n[None, :])
+        tl.store(dst + offsets_m[:, None] * BLOCK_SIZE_N + offsets_n[None, :], x)
+
+    grid = lambda META: (triton.cdiv(N, META['BLOCK_SIZE_M']), )
+    _kernel[grid](dst, src, N, M, N)
+    assert len(_kernel.cache) == 1
 
 
 @pytest.mark.parametrize('pass_kwargs_to_kernel', [False, True])
@@ -183,3 +206,44 @@ def test_exceed_tmem(device):
     assert exception_out_of_resource is not None and str(
         exception_out_of_resource
     ) == "out of resource: tensor memory, Required: 640, Hardware limit: 512. Reducing block sizes or `num_stages` may help."
+
+
+def test_exceed_threads(device):
+    if not torch.cuda.is_available():
+        pytest.skip("CUDA is not available")
+    x = torch.empty(1024, device=device, dtype=torch.float32)
+    y = torch.empty_like(x)
+    output = torch.empty_like(x)
+
+    configs = [
+        triton.Config({}, num_warps=128),
+        triton.Config({}, num_warps=4),
+    ]
+
+    exception_out_of_resource = None
+
+    def _post_hook(*args, exception):
+        nonlocal exception_out_of_resource
+        if exception is not None:
+            exception_out_of_resource = exception
+
+    @triton.autotune(configs=configs, key=['BLOCK_SIZE'], do_bench=do_bench, post_hook=_post_hook)
+    @triton.jit
+    def add_kernel(x_ptr, y_ptr, output_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
+        pid = tl.program_id(0)
+        block_start = pid * BLOCK_SIZE
+        offsets = block_start + tl.arange(0, BLOCK_SIZE)
+        mask = offsets < n_elements
+        x = tl.load(x_ptr + offsets, mask=mask)
+        y = tl.load(y_ptr + offsets, mask=mask)
+        output = x + y
+        tl.store(output_ptr + offsets, output, mask=mask)
+
+    def grid(meta):
+        return (triton.cdiv(x.numel(), meta['BLOCK_SIZE']), )
+
+    add_kernel[grid](x, y, output, x.numel(), BLOCK_SIZE=128)
+
+    warp_size = triton.runtime.driver.active.get_current_target().warp_size
+    assert exception_out_of_resource is not None and f"out of resource: threads, Required: {128 * warp_size}" in str(
+        exception_out_of_resource)

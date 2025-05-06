@@ -8,6 +8,7 @@
 #include "triton/Dialect/TritonGPU/IR/Attributes.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/TritonGPUInterfaces.h"
+#include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/Passes.h"
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/TMAUtilities.h"
@@ -80,7 +81,7 @@ lowerTMALoad(Operation *op, RankedTensorType tensorType, Value desc,
   MemDescType memDescType =
       MemDescType::get(tensorType.getShape(), tensorType.getElementType(),
                        encoding, sharedMemorySpace, /*mutableMemory=*/true);
-  Value alloc = rewriter.create<LocalAllocOp>(loc, memDescType);
+  auto alloc = rewriter.create<LocalAllocOp>(loc, memDescType).getResult();
   auto barrierCTALayout = CTALayoutAttr::get(
       /*context=*/tensorType.getContext(), /*CTAsPerCGA=*/{1},
       /*CTASplitNum=*/{1}, /*CTAOrder=*/{0});
@@ -91,7 +92,8 @@ lowerTMALoad(Operation *op, RankedTensorType tensorType, Value desc,
                        sharedMemorySpace, /*mutableMemory=*/true);
   Value barrierAlloc = rewriter.create<LocalAllocOp>(loc, barrierMemDescType);
   rewriter.create<InitBarrierOp>(loc, barrierAlloc, 1);
-  int sizeInBytes = product(tensorType.getShape()) *
+  auto shapePerCTA = getShapePerCTA(encoding, tensorType.getShape());
+  int sizeInBytes = product(shapePerCTA) *
                     tensorType.getElementType().getIntOrFloatBitWidth() / 8;
   Value pred = rewriter.create<arith::ConstantIntOp>(loc, 1, 1);
   rewriter.create<triton::nvidia_gpu::BarrierExpectOp>(loc, barrierAlloc,
@@ -102,14 +104,15 @@ lowerTMALoad(Operation *op, RankedTensorType tensorType, Value desc,
   Value phase = rewriter.create<arith::ConstantIntOp>(loc, 0, 32);
   rewriter.create<WaitBarrierOp>(loc, barrierAlloc, phase);
   rewriter.create<InvalBarrierOp>(loc, barrierAlloc);
-  rewriter.replaceOpWithNewOp<LocalLoadOp>(op, tensorType, alloc);
+  replaceUsesWithLocalLoad(rewriter, op->getResult(0), alloc);
+  op->erase();
 }
 
-class TMALoadLowering : public OpRewritePattern<ExperimentalDescriptorLoadOp> {
+class TMALoadLowering : public OpRewritePattern<DescriptorLoadOp> {
 public:
   using OpRewritePattern::OpRewritePattern;
 
-  LogicalResult matchAndRewrite(ExperimentalDescriptorLoadOp op,
+  LogicalResult matchAndRewrite(DescriptorLoadOp op,
                                 PatternRewriter &rewriter) const override {
     auto loc = op.getLoc();
     auto createLoad = [&](Value tmaPtr, Value barrierAlloc, Value alloc,
@@ -125,11 +128,10 @@ public:
   }
 };
 
-struct TMAGatherLowering
-    : public OpRewritePattern<ExperimentalDescriptorGatherOp> {
+struct TMAGatherLowering : public OpRewritePattern<DescriptorGatherOp> {
   using OpRewritePattern::OpRewritePattern;
 
-  LogicalResult matchAndRewrite(ExperimentalDescriptorGatherOp op,
+  LogicalResult matchAndRewrite(DescriptorGatherOp op,
                                 PatternRewriter &rewriter) const override {
     auto createLoad = [&](Value tmaPtr, Value barrierAlloc, Value alloc,
                           Value pred) {
@@ -164,11 +166,10 @@ static void lowerTMAStore(Operation *op, mlir::TypedValue<RankedTensorType> src,
   rewriter.eraseOp(op);
 }
 
-struct TMAStoreLowering
-    : public OpRewritePattern<ExperimentalDescriptorStoreOp> {
+struct TMAStoreLowering : public OpRewritePattern<DescriptorStoreOp> {
   using OpRewritePattern::OpRewritePattern;
 
-  LogicalResult matchAndRewrite(ExperimentalDescriptorStoreOp op,
+  LogicalResult matchAndRewrite(DescriptorStoreOp op,
                                 PatternRewriter &rewriter) const override {
     auto createStore = [&](Value tmaPtr, Value alloc) {
       auto indices = translateTMAIndices(
@@ -182,11 +183,27 @@ struct TMAStoreLowering
   }
 };
 
-struct TMAScatterLowering
-    : public OpRewritePattern<ExperimentalDescriptorScatterOp> {
+struct TMAReduceLowering : public OpRewritePattern<DescriptorReduceOp> {
   using OpRewritePattern::OpRewritePattern;
 
-  LogicalResult matchAndRewrite(ExperimentalDescriptorScatterOp op,
+  LogicalResult matchAndRewrite(DescriptorReduceOp op,
+                                PatternRewriter &rewriter) const override {
+    auto createStore = [&](Value tmaPtr, Value alloc) {
+      auto indices = translateTMAIndices(
+          rewriter, op.getLoc(),
+          op.getDesc().getType().getBlockType().getEncoding(), op.getIndices());
+      rewriter.create<triton::nvidia_gpu::AsyncTMAReduceOp>(
+          op.getLoc(), op.getKind(), tmaPtr, indices, alloc);
+    };
+    lowerTMAStore(op, op.getSrc(), op.getDesc(), createStore, rewriter);
+    return success();
+  }
+};
+
+struct TMAScatterLowering : public OpRewritePattern<DescriptorScatterOp> {
+  using OpRewritePattern::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(DescriptorScatterOp op,
                                 PatternRewriter &rewriter) const override {
     auto createStore = [&](Value tmaPtr, Value alloc) {
       rewriter.create<triton::nvidia_gpu::AsyncTMAScatterOp>(
@@ -229,7 +246,8 @@ public:
 
     mlir::RewritePatternSet patterns(context);
     patterns.add<TMALoadLowering, TMAGatherLowering, TMAStoreLowering,
-                 TMAScatterLowering, TMACreateDescLowering>(context);
+                 TMAScatterLowering, TMAReduceLowering, TMACreateDescLowering>(
+        context);
     if (applyPatternsGreedily(m, std::move(patterns)).failed())
       signalPassFailure();
   }

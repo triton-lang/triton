@@ -1,4 +1,4 @@
-// RUN: triton-opt %s -split-input-file -canonicalize -triton-combine | FileCheck %s
+// RUN: triton-opt %s -canonicalize -triton-combine | FileCheck %s
 
 // We don't combine if the dot result is used by more than one op.
 // CHECK-LABEL: @test_combine_dot_add_invalid_pattern
@@ -384,9 +384,9 @@ tt.func @test_reshape_reduce(%0: tensor<32x4x2xi32>) -> (i32, tensor<16xi32>) {
 // CHECK-LABEL: test_rank_reduce_desc_load
 tt.func @test_rank_reduce_desc_load(%0: !tt.tensordesc<tensor<1x128x64xf16>>) -> (tensor<128x64xf16>) {
   %c0 = arith.constant 0 : i32
-  // CHECK: %[[R:.+]] = tt.experimental_descriptor_load {{.*}} : !tt.tensordesc<tensor<1x128x64xf16>> -> tensor<128x64xf16>
+  // CHECK: %[[R:.+]] = tt.descriptor_load {{.*}} : !tt.tensordesc<tensor<1x128x64xf16>> -> tensor<128x64xf16>
   // CHECK: tt.return %[[R]]
-  %l = tt.experimental_descriptor_load %0[%c0, %c0, %c0] : !tt.tensordesc<tensor<1x128x64xf16>> -> tensor<1x128x64xf16>
+  %l = tt.descriptor_load %0[%c0, %c0, %c0] : !tt.tensordesc<tensor<1x128x64xf16>> -> tensor<1x128x64xf16>
   %r = tt.reshape %l : tensor<1x128x64xf16> -> tensor<128x64xf16>
   tt.return %r :  tensor<128x64xf16>
 }

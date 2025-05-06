@@ -80,16 +80,6 @@ struct PipelinePass : public impl::TritonGPUPipelineBase<PipelinePass> {
 
   using impl::TritonGPUPipelineBase<PipelinePass>::TritonGPUPipelineBase;
 
-  int getNumStagesOrDefault(scf::ForOp forOp) {
-    // Use the attribute attached to the loop if it exists otherwise use the
-    // global control.
-    if (!forOp->hasAttr(mlir::triton::kNumStagesAttrName))
-      return numStages;
-    return mlir::cast<IntegerAttr>(
-               forOp->getAttr(mlir::triton::kNumStagesAttrName))
-        .getInt();
-  }
-
   void runOnOperation() override {
     ModuleOp moduleOp = getOperation();
     // Go over the interesting ops and assign latencies (based on the
@@ -135,11 +125,6 @@ struct PipelinePass : public impl::TritonGPUPipelineBase<PipelinePass> {
 
     pipelineWgmma(moduleOp);
 
-    // There is a hard dependency between load pipelining and the TC05MMA
-    // pipelining. We can pipeline the TC05MMA only after the loads are
-    // pipelined and buffers are allocated.
-    mlir::triton::pipelineTC05MMALoops(moduleOp, 2);
-
     // schedule the waits
     mlir::triton::updateWaits(getOperation());
 
@@ -156,16 +141,12 @@ struct PipelinePass : public impl::TritonGPUPipelineBase<PipelinePass> {
       SmallVector<scf::ForOp> loops;
       getOperation()->walk([&](scf::ForOp forOp) {
         // Bail out for loops with num_stage <= 1.
-        if (getNumStagesOrDefault(forOp) > 1)
+        if (getNumStagesOrDefault(forOp, numStages) > 1)
           loops.push_back(forOp);
       });
 
       for (scf::ForOp forOp : loops) {
         mlir::triton::pipelineTMAStores(forOp);
-      }
-
-      for (scf::ForOp forOp : loops) {
-        mlir::triton::pipelineMMAWithScaledAcc(forOp);
       }
     }
   }

@@ -23,9 +23,6 @@ namespace mlir::triton {
 } // namespace mlir::triton
 
 namespace mlir::triton::AMD {
-std::unique_ptr<OperationPass<ModuleOp>>
-createDecomposeUnsupportedConversionsPass(StringRef targetArch);
-
 /// @brief Creates pass that keep LDS consumption within specified limits.
 /// @param arch target architecture name, for example "gfx940"
 /// @param customLDSLimit defines LDS size available for one thread block

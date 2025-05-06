@@ -225,10 +225,16 @@ Value convertLayout(int opIdx, ConversionPatternRewriter &rewriter,
          (mDim == 64 && nDim == 4) || (mDim == 4 && nDim == 64));
   auto warpsPerCTA = mfmaLayout.getWarpsPerCTA();
 
-  auto sharedLayout = cast<SwizzledSharedEncodingAttr>(aTensorTy.getEncoding());
+  auto sharedLayout =
+      dyn_cast<SwizzledSharedEncodingAttr>(aTensorTy.getEncoding());
+  if (!sharedLayout)
+    return Value();
   auto order = sharedLayout.getOrder();
-  assert((rank == 2 || order[2] == 0) &&
-         "expect batch to be the slowest dimension");
+
+  // Rely on the linear layout conversion logic in this case, since only slowest
+  // dimension for batch is supported here
+  if (rank != 2 && order.back() != 0)
+    return Value();
 
   auto elemTy = aTensorTy.getElementType();
   auto kWidth = encoding.getKWidth();
@@ -269,9 +275,11 @@ Value convertLayout(int opIdx, ConversionPatternRewriter &rewriter,
   Value linearWarpId = tb.udiv(thread, warpSize);
   Value lane = tb.urem(thread, warpSize);
 
+  auto warpOrder = triton::gpu::getMatrixOrder(rank, /*rowMajor*/ true);
+
   Value spatialWarpId = AMD::getWarpIdInBlock(
       rewriter, loc, linearWarpId, warpsPerCTA, mfmaInstrNonK,
-      shape[nonKDimIdx], nonKDimIdx, mfmaLayout.getDefaultOrder());
+      shape[nonKDimIdx], nonKDimIdx, warpOrder);
 
   // number of duplicates of elements in warp
   // In case of 64x4 x 4x4 multiplication, 4x4 B operand is duplicated 16 times
@@ -289,6 +297,7 @@ Value convertLayout(int opIdx, ConversionPatternRewriter &rewriter,
   Value warpIdInBatch = tb.urem(linearWarpId, tb.i32_val(warpsPerBatch));
   elemTy = typeConverter->convertType(elemTy);
 
+  SmallVector<LLVM::LoadOp> llLoads;
   SmallVector<Value> loadedValues;
   SmallVector<Value> offsets;
   Value smemBase;
@@ -369,7 +378,8 @@ Value convertLayout(int opIdx, ConversionPatternRewriter &rewriter,
                                k * loadsPerThread + loadId];
           loadOffset = tb.add(loadOffset, batchOffset);
           Value loadAddress = tb.gep(smemPtrTy, elemTy, smemBase, loadOffset);
-          Value loadedValue = tb.load(loadVecTy, loadAddress);
+          llLoads.push_back(tb.load(loadVecTy, loadAddress));
+          Value loadedValue = llLoads.back();
           for (int elemId = 0; elemId < elemsPerLoad; ++elemId) {
             Value elemVal =
                 tb.extract_element(elemTy, loadedValue, tb.i32_val(elemId));
@@ -385,6 +395,10 @@ Value convertLayout(int opIdx, ConversionPatternRewriter &rewriter,
       const size_t numDsReadsCount =
           repB * numRepNonK * numRepK * loadsPerThread;
       setNumGeneratedDsReads(localLoadOp, numDsReadsCount, loadVecTy);
+
+      for (auto llLoad : llLoads) {
+        LLVM::AMD::addLocalLoadNoAliasScope(localLoadOp, llLoad);
+      }
     }
   }
 

@@ -796,6 +796,7 @@ public:
       signalPassFailure();
 
     lowerTensorMemoryAlloc(mod);
+    makeAllWarpGroupsIsolatedFromAbove(mod);
   }
 };
 

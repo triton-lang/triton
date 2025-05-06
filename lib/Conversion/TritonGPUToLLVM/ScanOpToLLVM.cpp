@@ -393,7 +393,7 @@ ScanOpConversion::getDelinearizedIds(ConversionPatternRewriter &rewriter,
   auto srcEncoding = helper.getEncoding();
 
   auto threadsPerWarp = srcEncoding.getThreadsPerWarp();
-  auto warpsPerCTA = triton::gpu::getWarpsPerCTA(srcEncoding);
+  auto warpsPerCTA = srcEncoding.getWarpsPerCTA();
   auto [multiDimLaneId, isRepresentativeLane] =
       getMultiDimLaneId(rewriter, helper, laneId);
   auto [multiDimWarpId, isRepresentativeWarp] =

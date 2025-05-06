@@ -4,6 +4,8 @@
 
 #include "mlir/Analysis/SliceAnalysis.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
+#include "mlir/Dialect/UB/IR/UBOps.h"
+#include "mlir/IR/Dominance.h"
 #include "mlir/IR/IRMapping.h"
 #include "mlir/Support/LLVM.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
@@ -15,13 +17,16 @@
 #include "triton/Dialect/TritonGPU/IR/LinearLayoutConversions.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
+#include "llvm/ADT/SetOperations.h"
 #include "llvm/Support/Debug.h"
+
 #define DEBUG_TYPE "ttg-utility"
 #define DBGS() (llvm::dbgs() << "[" DEBUG_TYPE "]: ")
 #define LDBG(X) LLVM_DEBUG(DBGS() << X << "\n")
 
 namespace tt = mlir::triton;
 namespace ttg = mlir::triton::gpu;
+namespace ttng = mlir::triton::nvidia_gpu;
 namespace mlir {
 
 using namespace triton;
@@ -662,10 +667,23 @@ scf::ForOp replaceForOpWithNewSignature(OpBuilder &rewriter, scf::ForOp loop,
   SmallVector<std::tuple<Value, Value>> replacements;
   auto newForOp = replaceForOpWithNewSignature(rewriter, loop, newIterOperands,
                                                replacements);
-  for (auto &kv : replacements) {
-    std::get<0>(kv).replaceAllUsesWith(std::get<1>(kv));
+  for (auto [result, value] : replacements) {
+    result.replaceAllUsesWith(value);
   }
   return newForOp;
+}
+
+Block::BlockArgListType addIterArgsToLoop(OpBuilder &rewriter, scf::ForOp &loop,
+                                          ValueRange newIterOperands) {
+  unsigned curArgIdx = loop.getNumRegionIterArgs();
+  scf::ForOp newLoop =
+      replaceForOpWithNewSignature(rewriter, loop, newIterOperands);
+  // Save the caller from insertion point invalidation.
+  if (rewriter.getInsertionPoint() == loop->getIterator())
+    rewriter.setInsertionPoint(newLoop);
+  loop.erase();
+  loop = newLoop;
+  return loop.getRegionIterArgs().slice(curArgIdx);
 }
 
 scf::WhileOp replaceWhileOpWithNewSignature(
@@ -1066,7 +1084,7 @@ getSharedEncIfAllUsersAreDotEnc(Value val, bool &incompatible) {
         return std::nullopt;
       auto srcTy = cast<triton::gpu::TensorOrMemDesc>(val.getType());
       auto CTALayout = ttg::getCTALayout(srcTy.getEncoding());
-      auto order = ttg::getOrder(srcTy);
+      auto order = getOrderForMemory(srcTy);
       unsigned bitWidth = srcTy.getElementType().getIntOrFloatBitWidth();
       tempAttr = ttg::SwizzledSharedEncodingAttr::get(
           val.getContext(), dotOpEnc, srcTy.getShape(), order, CTALayout,
@@ -1238,14 +1256,16 @@ ttg::LocalAllocOp findShmemAlloc(Value operand) {
       transitiveOperand = transitiveOperand.getDefiningOp()->getOperand(0);
     }
   }
-  if (auto subView =
-          dyn_cast<ttg::MemDescSubviewOp>(transitiveOperand.getDefiningOp())) {
+  if (auto subView = dyn_cast_or_null<ttg::MemDescSubviewOp>(
+          transitiveOperand.getDefiningOp())) {
     // Multi-buffered operand
-    return dyn_cast<ttg::LocalAllocOp>(subView.getSrc().getDefiningOp());
+    return dyn_cast_or_null<ttg::LocalAllocOp>(
+        subView.getSrc().getDefiningOp());
   } else {
     // Single bufferred operand that does not require a subview (not loaded in
     // the loop)
-    return dyn_cast<ttg::LocalAllocOp>(transitiveOperand.getDefiningOp());
+    return dyn_cast_or_null<ttg::LocalAllocOp>(
+        transitiveOperand.getDefiningOp());
   }
   return nullptr;
 }
@@ -1267,4 +1287,172 @@ getMMAsWithMultiBufferredOperands(scf::ForOp forOp,
   return eligible;
 }
 
+template <typename DomInfoT>
+static Operation *findNearestCommonDominatorImpl(
+    ArrayRef<Operation *> ops, DomInfoT &domInfo,
+    function_ref<bool(Operation *, Operation *)> isBefore) {
+  if (ops.size() == 0) {
+    return nullptr;
+  }
+  if (ops.size() == 1) {
+    return ops[0];
+  }
+  llvm::SmallPtrSet<Block *, 16> blocks;
+  for (auto op : ops) {
+    blocks.insert(op->getBlock());
+  }
+  Block *domBlock = domInfo.findNearestCommonDominator(blocks);
+  if (domBlock == nullptr) {
+    return nullptr;
+  }
+  SmallVector<Operation *> ancestorOps;
+  for (auto op : ops) {
+    ancestorOps.push_back(domBlock->findAncestorOpInBlock(*op));
+  }
+  Operation *dom = ancestorOps[0];
+  for (unsigned i = 1; i < ops.size(); i++) {
+    if (isBefore(ancestorOps[i], dom)) {
+      dom = ancestorOps[i];
+    }
+  }
+  return dom;
+}
+
+Operation *findNearestCommonDominator(ArrayRef<Operation *> ops,
+                                      DominanceInfo &domInfo) {
+  return findNearestCommonDominatorImpl(
+      ops, domInfo,
+      [](Operation *a, Operation *b) { return a->isBeforeInBlock(b); });
+}
+
+Operation *findNearestCommonPostDominator(ArrayRef<Operation *> ops,
+                                          PostDominanceInfo &domInfo) {
+  return findNearestCommonDominatorImpl(
+      ops, domInfo,
+      [](Operation *a, Operation *b) { return b->isBeforeInBlock(a); });
+}
+
+void visitNestedOperands(Operation *op,
+                         function_ref<void(OpOperand &)> visitor) {
+  op->walk([&](Operation *nestedOp) {
+    for (OpOperand &operand : nestedOp->getOpOperands()) {
+      if (operand.get().getParentBlock()->getParentOp()->isProperAncestor(op))
+        visitor(operand);
+    }
+  });
+}
+
+void visitNestedOperands(Operation *op, function_ref<void(Value)> visitor) {
+  visitNestedOperands(op, [&](OpOperand &operand) { visitor(operand.get()); });
+}
+
+SetVector<Value> getNestedOperands(Operation *op) {
+  SetVector<Value> result;
+  visitNestedOperands(op, [&](Value operand) { result.insert(operand); });
+  return result;
+}
+
+void eraseLoopCarriedValues(scf::ForOp &loop, llvm::BitVector indices) {
+  // Pad the indices in case new arguments were added.
+  while (indices.size() != loop.getInitArgs().size())
+    indices.push_back(false);
+
+  loop.getBody()->getTerminator()->eraseOperands(indices);
+  loop.getBody()->eraseArguments([&](BlockArgument arg) {
+    int idx = arg.getArgNumber();
+    return idx != 0 && indices.test(idx - 1);
+  });
+
+  llvm::BitVector loopOperandIndices(loop->getNumOperands());
+  for (auto [i, operand] : llvm::enumerate(loop.getInitArgsMutable())) {
+    if (indices.test(i))
+      loopOperandIndices.set(operand.getOperandNumber());
+  }
+  loop->eraseOperands(loopOperandIndices);
+
+  // Rewrite the loop to erase results.
+  OperationState state(loop.getLoc(), loop->getName(), loop->getOperands(),
+                       loop.getInitArgs().getTypes(), loop->getAttrs());
+  state.addRegion()->takeBody(loop.getBodyRegion());
+
+  OpBuilder b(loop);
+  auto newLoop = cast<scf::ForOp>(b.create(state));
+
+  // Replace uses of the old loop with the new loop.
+  unsigned newResultIdx = 0;
+  for (auto [i, result] : llvm::enumerate(loop.getResults())) {
+    if (indices.test(i)) {
+      assert(result.use_empty() && "loop carried value still has uses");
+      continue;
+    }
+    result.replaceAllUsesWith(newLoop.getResult(newResultIdx++));
+  }
+
+  loop.erase();
+  loop = newLoop;
+}
+
 } // namespace mlir
+
+namespace mlir::triton {
+void replaceUsesAndPropagateType(OpBuilder &builder, Operation *oldUse,
+                                 Value val) {
+  SmallVector<Operation *> opsToDelete;
+  SmallVector<OpOperand *> operandsToReplace;
+
+  // Save the operand to replace / delete later (avoid iterator invalidation).
+  // TODO: can we use an early_inc iterator?
+  for (OpOperand &use : oldUse->getUses()) {
+    // Non-subview/trans ops will be replaced by `val`.
+    if (!isa<triton::gpu::MemDescTransOp, triton::gpu::MemDescSubviewOp>(
+            use.getOwner())) {
+      operandsToReplace.push_back(&use);
+      continue;
+    }
+    Operation *user = use.getOwner();
+    // `subview(old_op)` is replaced by a new `subview(val)`.
+    OpBuilder::InsertionGuard g(builder);
+    builder.setInsertionPoint(user);
+    Value newVal;
+    if (auto subview = dyn_cast<triton::gpu::MemDescSubviewOp>(user)) {
+      triton::gpu::MemDescType oldType = subview.getType();
+      bool isMutable =
+          cast<triton::gpu::MemDescType>(val.getType()).getMutableMemory();
+      Type newDstType = triton::gpu::MemDescType::get(
+          oldType.getShape(), oldType.getElementType(), oldType.getEncoding(),
+          oldType.getMemorySpace(), isMutable);
+      newVal = builder.create<triton::gpu::MemDescSubviewOp>(
+          subview.getLoc(), newDstType, val, subview.getOffsets());
+      newVal.getDefiningOp()->setAttrs(user->getAttrs());
+    } else if (auto trans = dyn_cast<triton::gpu::MemDescTransOp>(user)) {
+      newVal = builder.create<triton::gpu::MemDescTransOp>(trans.getLoc(), val,
+                                                           trans.getOrder());
+      newVal.getDefiningOp()->setAttrs(user->getAttrs());
+    }
+    assert(newVal);
+    replaceUsesAndPropagateType(builder, user, newVal);
+    opsToDelete.push_back(use.getOwner());
+  }
+
+  // Perform late replacement.
+  for (OpOperand *operand : operandsToReplace) {
+    if (auto wait = dyn_cast<ttng::WarpGroupDotWaitOp>(operand->getOwner())) {
+      // Need to update the return type on the wait op as well
+      builder.setInsertionPointAfter(wait);
+      auto operands = llvm::to_vector(wait.getOperands());
+      operands[operand->getOperandNumber()] = val;
+      auto newWait = builder.create<ttng::WarpGroupDotWaitOp>(
+          wait.getLoc(), operands, wait.getPendings());
+      wait.replaceAllUsesWith(newWait.getResults());
+      wait.erase();
+    } else {
+      Operation *op = operand->getOwner();
+      operand->set(val);
+    }
+  }
+
+  // Perform late op erasure.
+  for (Operation *op : opsToDelete)
+    op->erase();
+}
+} // namespace mlir::triton

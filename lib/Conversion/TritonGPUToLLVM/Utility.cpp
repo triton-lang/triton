@@ -1,6 +1,7 @@
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/IR/Attributes.h"
+#include "mlir/Transforms/RegionUtils.h"
 #include "triton/Conversion/TritonGPUToLLVM/TargetInfoBase.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Attributes.h"
@@ -493,18 +494,21 @@ bool emitTransferBetweenRegistersAndShared(
       target, perVectorCallback);
 }
 
-SmallVector<Value> loadSharedToDistributed(RankedTensorType dstTy,
-                                           triton::gpu::MemDescType srcTy,
+SmallVector<Value> loadSharedToDistributed(triton::gpu::LocalLoadOp localLoadOp,
                                            Type elemLlvmTy,
                                            const SharedMemoryObject &smemObj,
                                            Location loc, RewriterBase &rewriter,
                                            const TargetInfoBase &target) {
+  auto srcTy = localLoadOp.getSrc().getType();
+  auto dstTy = localLoadOp.getResult().getType();
+
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   SmallVector<Value> ret;
   bool success = emitTransferBetweenRegistersAndShared(
       dstTy, srcTy, elemLlvmTy, /*maxVecElems=*/std::nullopt, smemObj, loc,
       rewriter, target, [&](VectorType vecTy, Value vecAddr) {
         auto vecVal = b.load(vecTy, vecAddr);
+        target.localLoadOpAnnotation(localLoadOp, vecVal);
         vecVal.setAlignment(vecTy.getNumElements() *
                             elemLlvmTy.getIntOrFloatBitWidth() / 8);
 
@@ -547,6 +551,86 @@ void storeDistributedToShared(triton::gpu::MemDescType dstTy,
 
   if (!success)
     llvm::report_fatal_error("Failed to emit transfer from register to shared");
+}
+
+SmallVector<Value> unpackLLElements(Location loc, Value llvmStruct,
+                                    RewriterBase &rewriter) {
+  assert(bool(llvmStruct) && "can not unpack null values");
+  if (llvmStruct.getType().isIntOrIndexOrFloat() ||
+      isa<triton::PointerType>(llvmStruct.getType()) ||
+      isa<LLVM::LLVMPointerType>(llvmStruct.getType()))
+    return {llvmStruct};
+  ArrayRef<Type> types =
+      cast<LLVM::LLVMStructType>(llvmStruct.getType()).getBody();
+  SmallVector<Value> results(types.size());
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
+  for (unsigned i = 0; i < types.size(); ++i) {
+    Type type = types[i];
+    results[i] = b.extract_val(type, llvmStruct, i);
+  }
+  return results;
+}
+
+Value packLLElements(Location loc, const LLVMTypeConverter *typeConverter,
+                     ValueRange resultVals, RewriterBase &rewriter, Type type) {
+  auto structType =
+      dyn_cast<LLVM::LLVMStructType>(typeConverter->convertType(type));
+  if (!structType) {
+    assert(resultVals.size() == 1);
+    return *resultVals.begin();
+  }
+
+  auto elementTypes = structType.getBody();
+  if (elementTypes.size() != resultVals.size()) {
+    emitError(loc) << " size mismatch when packing elements for LLVM struct"
+                   << " expected " << elementTypes.size() << " but got "
+                   << resultVals.size();
+    llvm::report_fatal_error(
+        "size mismatch when packing elements for LLVM struct");
+  }
+  Value llvmStruct = rewriter.create<LLVM::UndefOp>(loc, structType);
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
+  for (auto [i, value] : llvm::enumerate(resultVals)) {
+    assert(value && "unexpected null value");
+    if (value.getType() != elementTypes[i]) {
+      LDBG("type " << type << " structType " << structType);
+      LDBG("value " << value);
+      emitError(loc) << "invalid element type in packLLElements. Expected "
+                     << elementTypes[i] << " but got " << value.getType();
+      llvm::report_fatal_error(
+          "element type mismatch when packing elements for LLVM struct");
+    }
+    llvmStruct = b.insert_val(structType, llvmStruct, value, i);
+  }
+  return llvmStruct;
+}
+
+SmallVector<Value> unpackLLVector(Location loc, Value llvmVec,
+                                  RewriterBase &rewriter) {
+  assert(bool(llvmVec) && "cannot unpack null value");
+  if (llvmVec.getType().isIntOrIndexOrFloat() ||
+      isa<triton::PointerType>(llvmVec.getType()) ||
+      isa<LLVM::LLVMPointerType>(llvmVec.getType()))
+    return {llvmVec};
+
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
+  SmallVector<Value> results;
+  for (int i = 0; i < cast<VectorType>(llvmVec.getType()).getNumElements();
+       i++) {
+    results.push_back(b.extract_element(llvmVec, b.i32_val(i)));
+  }
+  return results;
+}
+
+Value packLLVector(Location loc, ValueRange vals, RewriterBase &rewriter) {
+  assert(vals.size() > 0);
+  auto vecType = vec_ty(vals[0].getType(), vals.size());
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
+  Value vec = b.undef(vecType);
+  for (int i = 0; i < vals.size(); i++) {
+    vec = b.insert_element(vec, vals[i], b.i32_val(i));
+  }
+  return vec;
 }
 
 SmallVector<SmallVector<unsigned>> emitOffsetForLayout(Attribute layout,
@@ -664,18 +748,6 @@ createLLVMIntrinsicCallOp(OpBuilder &builder, Location loc, StringRef intrinsic,
   op.getProperties().setOpBundleSizes(builder.getDenseI32ArrayAttr({}));
   op.getProperties().setOperandSegmentSizes({static_cast<int>(args.size()), 0});
   return op;
-}
-
-bool isConstantZero(Value v) {
-  if (auto constantOp = v.getDefiningOp<arith::ConstantOp>()) {
-    if (auto attr = dyn_cast<IntegerAttr>(constantOp.getValue())) {
-      return attr.getValue().isZero();
-    }
-    if (auto attr = dyn_cast<FloatAttr>(constantOp.getValue())) {
-      return attr.getValue().isZero();
-    }
-  }
-  return false;
 }
 
 Value getStructFromSharedMemoryObject(Location loc,
@@ -916,6 +988,27 @@ getExpandedSharedMemoryObject(ConversionPatternRewriter &rewriter, Location loc,
   auto expandedSmemObj =
       SharedMemoryObject(smemObj.getBase(), smemObj.getBaseElemType(), offsets);
   return expandedSmemObj;
+}
+
+// Isolated a single warp specialize op from above.
+static void
+makeWarpGroupsIsolatedFromAbove(triton::gpu::WarpSpecializeOp wsOp) {
+  SetVector<Value> captures;
+  getUsedValuesDefinedAbove(wsOp.getPartitionOpHolder(), captures);
+  for (Value capture : captures) {
+    wsOp->insertOperands(wsOp.getNumOperands(), capture);
+    for (Region *region : wsOp.getPartitionRegions()) {
+      BlockArgument arg =
+          region->addArgument(capture.getType(), capture.getLoc());
+      replaceAllUsesInRegionWith(capture, arg, *region);
+    }
+  }
+}
+
+void makeAllWarpGroupsIsolatedFromAbove(Operation *op) {
+  op->walk([](triton::gpu::WarpSpecializeOp wsOp) {
+    makeWarpGroupsIsolatedFromAbove(wsOp);
+  });
 }
 
 } // namespace mlir

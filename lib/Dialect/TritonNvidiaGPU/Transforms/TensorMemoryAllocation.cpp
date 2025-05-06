@@ -142,7 +142,7 @@ static Interval<int> getLiveIntervals(Value value, Liveness &liveness,
 }
 
 static void updateMap(MemoryBitMap &memoryMap, Interval<int> liveInterval,
-                      std::map<int, TMemChunk> &intervalLiverangeEnd) {
+                      std::multimap<int, TMemChunk> &intervalLiverangeEnd) {
   int start = liveInterval.start();
   // Add any dead liverange to the list of free intervals.
   for (auto it = intervalLiverangeEnd.begin();
@@ -175,12 +175,20 @@ static TMemChunk allocFirstFit(MemoryBitMap &memoryMap,
 }
 
 static Operation *getAlloc(Value value) {
-  Operation *op = value.getDefiningOp();
-  while (isa<triton::gpu::MemDescSubviewOp>(op)) {
-    op = op->getResult(0).getDefiningOp();
+  while (true) {
+    if (auto allocOp = value.getDefiningOp<TMEMAllocOp>())
+      return allocOp;
+    if (auto subviewOp = value.getDefiningOp<triton::gpu::MemDescSubviewOp>()) {
+      value = subviewOp.getSrc();
+      continue;
+    }
+    auto arg = dyn_cast<BlockArgument>(value);
+    if (!arg || !isa<WarpSpecializePartitionsOp>(arg.getOwner()->getParentOp()))
+      llvm::report_fatal_error("expected to find a TMEM alloc op");
+    auto partitions =
+        cast<WarpSpecializePartitionsOp>(arg.getOwner()->getParentOp());
+    value = partitions.getParentOp().getExplicitCaptures()[arg.getArgNumber()];
   }
-  assert(isa<triton::nvidia_gpu::TMEMAllocOp>(op) && "Expected a TMEMAllocOp");
-  return op;
 }
 
 class RowIdConstraints {
@@ -221,23 +229,22 @@ allocateTMem(Operation *parentOp,
     if (auto alloc = dyn_cast<triton::nvidia_gpu::TMEMAllocOp>(op)) {
       allocs.push_back(alloc);
     }
-    if (auto mmaOp = dyn_cast<triton::nvidia_gpu::TCGen5MMAOp>(op)) {
-      if (isa<triton::nvidia_gpu::TensorMemoryEncodingAttr>(
-              mmaOp.getA().getType().getEncoding())) {
+    if (auto mmaOp = dyn_cast<MMAv5OpInterface>(op)) {
+      if (isa<TensorMemoryEncodingAttr>(mmaOp.getA().getType().getEncoding())) {
         TMemAllocation allocSize = getTmemAllocSizes(mmaOp.getA().getType());
         if (allocSize.numRows == 64) {
           // HW restriction, the A alloc and accumulator needs to be in the same
           // rows.
           rowIdConstraints.joinOps(getAlloc(mmaOp.getA()),
-                                   getAlloc(mmaOp.getD()));
+                                   getAlloc(mmaOp.getAccumulator()));
         } else {
           // TODO: we need to handle cases where the format is blockM and we
           // have multiple blocks.
-          assert((cast<triton::nvidia_gpu::TensorMemoryEncodingAttr>(
+          assert((cast<TensorMemoryEncodingAttr>(
                       mmaOp.getA().getType().getEncoding())
                           .getBlockM() != 64 &&
-                  cast<triton::nvidia_gpu::TensorMemoryEncodingAttr>(
-                      mmaOp.getD().getType().getEncoding())
+                  cast<TensorMemoryEncodingAttr>(
+                      mmaOp.getAccumulator().getType().getEncoding())
                           .getBlockM() != 64) &&
                  "interleaved layout with TMEM operand is not supported yet.");
         }
@@ -247,7 +254,7 @@ allocateTMem(Operation *parentOp,
   int totalMemorySize = 0;
   MemoryBitMap memoryMap;
   Liveness liveness(parentOp);
-  std::map<int, TMemChunk> intervalLiverangeEnd;
+  std::multimap<int, TMemChunk> intervalLiverangeEnd;
   DenseMap<TMEMAllocOp, TMemChunk> allocChunks;
   // Implement a linear scan first fit algorithm. We expect that fragmentation
   // won't be a problem, if it is this should be revisited.
@@ -283,7 +290,7 @@ allocateTMem(Operation *parentOp,
     allocChunks.insert({alloc, chunkAllocated});
     // currently naively constraint allocs based on the first one we find.
     rowIdConstraints.addConstraints(alloc, chunkAllocated.startRow);
-    intervalLiverangeEnd[liveInterval.end()] = chunkAllocated;
+    intervalLiverangeEnd.insert({liveInterval.end(), chunkAllocated});
     int colOffset = chunkAllocated.startCol;
     int rowOffset = chunkAllocated.startRow * 16;
 

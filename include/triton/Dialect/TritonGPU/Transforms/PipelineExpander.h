@@ -25,7 +25,7 @@ namespace triton {
 
 /// Options to dictate how loops should be pipelined.
 struct PipeliningOption {
-  /// Lambda returning all the operation in the forOp, with their stage, in the
+  /// Lambda returning all the operations in the forOp, with their stage, in the
   /// order picked for the pipelined loop.
   using GetScheduleFnType = std::function<void(
       scf::ForOp, std::vector<std::pair<Operation *, unsigned>> &)>;
@@ -54,7 +54,7 @@ struct PipeliningOption {
   /// Control whether the transformation checks that the number of iterations is
   /// greater or equal to the number of stages and skip the transformation if
   /// this is not the case. If the loop is dynamic and this is set to true the
-  /// pipeliner will have to predicate operations in the the prologue/epilogue.
+  /// pipeliner will have to predicate operations in the prologue/epilogue.
   bool supportDynamicLoops = false;
 
   // Callback to predicate operations when the prologue or epilogue are not

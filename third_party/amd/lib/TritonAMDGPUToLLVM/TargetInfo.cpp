@@ -65,12 +65,43 @@ llvm::AMDGPU::GPUKind TargetInfo::getGPUKind() const {
   return llvm::AMDGPU::parseArchAMDGCN(arch);
 }
 
+bool TargetInfo::isCDNA() const {
+  switch (getISAFamily()) {
+  case ISAFamily::CDNA1:
+  case ISAFamily::CDNA2:
+  case ISAFamily::CDNA3:
+  case ISAFamily::CDNA4:
+    return true;
+  default:
+    break;
+  }
+
+  return false;
+}
+
+bool TargetInfo::isRDNA() const {
+  switch (getISAFamily()) {
+  case ISAFamily::RDNA1:
+  case ISAFamily::RDNA2:
+  case ISAFamily::RDNA3:
+    return true;
+  default:
+    break;
+  }
+
+  return false;
+}
+
+int TargetInfo::getWarpSize() const { return isCDNA() ? 64 : 32; }
+
 int TargetInfo::getSharedMemorySize() const {
   int kbytes = getISAFamily() == ISAFamily::CDNA4 ? 160 : 64;
   return kbytes * 1024;
 }
 
-bool TargetInfo::supportMaximumMinimum() const { return false; }
+bool TargetInfo::supportMaximumMinimum() const {
+  return getISAFamily() == ISAFamily::CDNA4;
+}
 
 Value TargetInfo::getClusterCTAId(RewriterBase &rewriter, Location loc) const {
   // On AMD hardware we don't have CTA clusters like NVIDIA. So this will always
@@ -81,9 +112,7 @@ Value TargetInfo::getClusterCTAId(RewriterBase &rewriter, Location loc) const {
 
 Value TargetInfo::ballot(RewriterBase &rewriter, Location loc, Type type,
                          Value cmp) const {
-  return LLVM::createLLVMIntrinsicCallOp(rewriter, loc, "llvm.amdgcn.ballot",
-                                         type, cmp)
-      ->getResult(0);
+  return rewriter.create<ROCDL::BallotOp>(loc, type, cmp);
 }
 
 void TargetInfo::storeDShared(RewriterBase &rewriter, Location loc, Value ptr,
@@ -195,19 +224,102 @@ static inline Value truncAndCastFromInt(RewriterBase &rewriter, Location loc,
   return toVal;
 }
 
+// Permute lanes of the input val and apply reduction to permuted values.
+static Value permuteAndReduce(RewriterBase &rewriter, Location loc,
+                              StringRef intrinsic, Value val,
+                              Operation *reduxOp) {
+  Type valType = val.getType();
+  assert(valType.getIntOrFloatBitWidth() <= 32);
+
+  Type actualType = valType;
+  if (!valType.isInteger(32))
+    actualType = castToAndSExtInt(rewriter, loc, val, valType, 32);
+
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
+  Value falseVal = b.false_val();
+  MLIRContext *ctx = rewriter.getContext();
+  Type retType = struct_ty({i32_ty, i32_ty});
+  Value perm =
+      LLVM::createLLVMIntrinsicCallOp(rewriter, loc, intrinsic, retType,
+                                      ValueRange{val, val, falseVal, falseVal})
+          ->getResult(0);
+  Value v0 = b.extract_val(i32_ty, perm, 0);
+  Value v1 = b.extract_val(i32_ty, perm, 1);
+
+  if (!valType.isInteger(32)) {
+    v0 = truncAndCastFromInt(rewriter, loc, v0, valType, 32);
+    v1 = truncAndCastFromInt(rewriter, loc, v1, valType, 32);
+  }
+  IRMapping mapping;
+  mapping.map(reduxOp->getOperand(0), v0);
+  mapping.map(reduxOp->getOperand(1), v1);
+  Value redx = rewriter.clone(*reduxOp, mapping)->getResult(0);
+  return redx;
+}
+
+// Apply warp reduction across lanes using llvm intrinsics in GFX950.
+// The input acc has the partial accumulated values from reduction within
+// threads. The output acc has the final accumulated values.
+//
+// Two special cases are supported:
+// When numLaneToReduce == 2 && interleave == 32:
+//   step 1: use permlane32_swap() to swap the row 2 and 3 of acc and
+//           the row 0 and 1 of the copy of acc
+//   step 2: apply reduction to the result values to get final result
+// When numLaneToReduce == 4 && interleave == 16:
+//   step 1: use permlane32_swap() to swap the row 2 and 3 of acc and
+//           the row 0 and 1 of the copy of acc
+//   step 2: apply reduction to the result values to get the partial result
+//   step 3: use permlane16_swap() to swap the odd and even rows of
+//           the partial results
+//   step 4: apply reduction to get the final results
+static bool warpReduceSwap16or32(RewriterBase &rewriter, Location loc,
+                                 SmallVector<Value> &acc, triton::ReduceOp op,
+                                 unsigned numLaneToReduce,
+                                 unsigned interleave) {
+  Operation *reduxOp = op.getSingleCombiner();
+  if (!reduxOp)
+    return false;
+
+  bool mfma32Case = numLaneToReduce == 2 && interleave == 32;
+  bool mfma16Case = numLaneToReduce == 4 && interleave == 16;
+  if (!(mfma32Case || mfma16Case))
+    return false;
+
+  Value val = acc[0];
+  unsigned bits = val.getType().getIntOrFloatBitWidth();
+  if (bits > 32)
+    return false;
+
+  StringRef intrinsic = "llvm.amdgcn.permlane32.swap";
+  for (auto i = 0; i < acc.size(); i++) {
+    Value redx = permuteAndReduce(rewriter, loc, intrinsic, acc[i], reduxOp);
+
+    if (mfma16Case) {
+      intrinsic = "llvm.amdgcn.permlane16.swap";
+      redx = permuteAndReduce(rewriter, loc, intrinsic, redx, reduxOp);
+    }
+
+    acc[i] = redx;
+  }
+  return true;
+}
+
 bool TargetInfo::warpReduce(RewriterBase &rewriter, Location loc,
                             SmallVector<Value> &acc, triton::ReduceOp op,
                             unsigned numLaneToReduce,
                             unsigned interleave) const {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
-  if (numLaneToReduce != 64)
-    return false;
 
-  if (!llvm::is_contained(
-          {ISAFamily::CDNA2, ISAFamily::CDNA3, ISAFamily::CDNA4},
-          getISAFamily())) {
+  if (isCDNA() && getISAFamily() == ISAFamily::CDNA4 &&
+      warpReduceSwap16or32(rewriter, loc, acc, op, numLaneToReduce, interleave))
+    return true;
+  if (numLaneToReduce != getWarpSize())
     return false;
-  }
+  if (isCDNA() && getISAFamily() == ISAFamily::CDNA1)
+    return false;
+  if (isRDNA() && getISAFamily() != ISAFamily::RDNA3)
+    return false;
 
   Operation *reduxOp = op.getSingleCombiner();
   if (!reduxOp)
@@ -307,24 +419,41 @@ bool TargetInfo::warpReduce(RewriterBase &rewriter, Location loc,
     buf = createDppReduxOpWithBoundCtrl(valType, buf, 1 + dppCtrlRowShr,
                                         allRows, allBanks);
 
-    // row_bcast:15 row_mask:0xa
-    buf = createDppReduxOpWithBoundCtrl(
-        valType, buf, static_cast<uint32_t>(DppCtrl::BCAST15), 0xa, allBanks);
+    if (isCDNA()) {
+      // row_bcast:15 row_mask:0xa
+      buf = createDppReduxOpWithBoundCtrl(
+          valType, buf, static_cast<uint32_t>(DppCtrl::BCAST15), 0xa, allBanks);
 
-    // row_bcast:31
-    buf = createDppReduxOpWithBoundCtrl(valType, buf,
-                                        static_cast<uint32_t>(DppCtrl::BCAST31),
-                                        allRows, allBanks);
+      // row_bcast:31
+      buf = createDppReduxOpWithBoundCtrl(
+          valType, buf, static_cast<uint32_t>(DppCtrl::BCAST31), allRows,
+          allBanks);
+    } else {
+      // RDNA doesn't have broadcast dpp mode
+      Type actualType = castToAndSExtInt(rewriter, loc, buf, valType, 32);
+
+      Value permlaneResult =
+          LLVM::createLLVMIntrinsicCallOp(
+              rewriter, loc, "llvm.amdgcn.permlanex16", actualType,
+              ValueRange{buf, buf, b.i32_val(-1), b.i32_val(-1), b.true_val(),
+                         b.false_val()})
+              ->getResult(0);
+      buf = truncAndCastFromInt(rewriter, loc, buf, valType, 32);
+      permlaneResult =
+          truncAndCastFromInt(rewriter, loc, permlaneResult, valType, 32);
+      IRMapping mapping;
+      mapping.map(reduxOp->getOperand(0), buf);
+      mapping.map(reduxOp->getOperand(1), permlaneResult);
+      buf = rewriter.clone(*reduxOp, mapping)->getResult(0);
+    }
 
     // Similarly, we need to cast data types for readlane instruction.
     Type actualType = castToAndSExtInt(rewriter, loc, buf, valType, 16);
 
-    // Get reduction result from lane 63
-    std::string intrinsic = "llvm.amdgcn.readlane";
+    // Get reduction result from the last lane of the warp
+    Value lastLaneId = b.i32_val(gpu::lookupThreadsPerWarp(rewriter) - 1);
     Value result =
-        LLVM::createLLVMIntrinsicCallOp(rewriter, loc, intrinsic, actualType,
-                                        ValueRange{buf, b.i32_val(63)})
-            ->getResult(0);
+        rewriter.create<ROCDL::ReadlaneOp>(loc, actualType, buf, lastLaneId);
 
     result = truncAndCastFromInt(rewriter, loc, result, valType, 16);
 
@@ -467,8 +596,9 @@ bool TargetInfo::supportVectorizedAtomics() const {
   return true;
 }
 
-void TargetInfo::storeOpAnnotation(triton::gpu::LocalStoreOp op,
-                                   size_t localStoreOpCount, Type type) const {
+void TargetInfo::localStoreOpAnnotation(triton::gpu::LocalStoreOp op,
+                                        size_t localStoreOpCount,
+                                        Type type) const {
   storeOpSchedAnnotations(op, localStoreOpCount, type);
 }
 
@@ -486,6 +616,12 @@ bool TargetInfo::supportsDirectToLdsLoadBitWidth(int bitWidth) const {
   }
 
   return false;
+}
+
+void TargetInfo::localLoadOpAnnotation(triton::gpu::LocalLoadOp localLoadOp,
+                                       Operation *llLoadOp) const {
+  LLVM::AMD::addLocalLoadNoAliasScope(localLoadOp,
+                                      cast<LLVM::LoadOp>(llLoadOp));
 }
 
 } // namespace mlir::triton::AMD

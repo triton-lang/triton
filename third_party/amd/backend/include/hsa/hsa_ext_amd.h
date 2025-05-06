@@ -395,7 +395,7 @@ typedef enum hsa_amd_agent_info_s {
   /**
    * Queries the number of SDMA engines.
    * If HSA_AMD_AGENT_INFO_NUM_SDMA_XGMI_ENG query returns non-zero,
-   * this query returns the the number of SDMA engines optimized for
+   * this query returns the number of SDMA engines optimized for
    * host to device bidirectional traffic.
    * The type of this attribute is uint32_t.
    */

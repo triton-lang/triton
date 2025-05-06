@@ -4,7 +4,6 @@
 #include "PatternTritonGPUOpToLLVM.h"
 #include "TritonNVIDIAGPUToLLVM/PTXAsmFormat.h"
 
-#include "mlir/Dialect/LLVMIR/NVVMDialect.h"
 #include "mlir/IR/Value.h"
 #include "mlir/Transforms/DialectConversion.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
@@ -302,7 +301,9 @@ struct ReinterpretTensorDescOpConversion
   LogicalResult
   matchAndRewrite(triton::ReinterpretTensorDescOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    rewriter.replaceOp(op, adaptor.getRawDesc());
+    Type resultType = getTypeConverter()->convertType(op.getType());
+    rewriter.replaceOpWithNewOp<LLVM::AddrSpaceCastOp>(op, resultType,
+                                                       adaptor.getRawDesc());
     return success();
   }
 };
@@ -318,7 +319,9 @@ struct TensorDescToTMAPtrOpConversion
   matchAndRewrite(triton::nvidia_gpu::TensorDescToTMAPtrOp op,
                   OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    rewriter.replaceOp(op, adaptor.getDesc());
+    Type resultType = getTypeConverter()->convertType(op.getType());
+    rewriter.replaceOpWithNewOp<LLVM::AddrSpaceCastOp>(op, resultType,
+                                                       adaptor.getDesc());
     return success();
   }
 };
