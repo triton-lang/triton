@@ -417,6 +417,8 @@ def attention_inner_loop_kernel(  #
 @pytest.mark.parametrize("disable_acc_multibuf", [False, True])
 @pytest.mark.parametrize("num_warps", [4, 8])
 @pytest.mark.parametrize("use_fp8", [False, True])
+@pytest.mark.skipif(is_hip(), reason="warp specialization is not supported on hip devices")
+@pytest.mark.skipif(torch.cuda.get_device_capability()[0] != 10, reason="Requires compute capability == 10")
 def test_warp_specialize_attention_forward(M, N, BLOCK_M, HEAD_DIM, num_stages, disable_acc_multibuf, num_warps,
                                            use_fp8):
     if BLOCK_M == 128 and HEAD_DIM == 128 and not use_fp8:
