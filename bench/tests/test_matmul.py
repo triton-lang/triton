@@ -1,6 +1,7 @@
 from dataclasses import dataclass, fields
 import pytest
 import torch
+from typing import Union
 # benchmarking utilities
 # routing utilities
 from triton_bench.routing import routing
@@ -141,7 +142,7 @@ class Case:
     n_expt_shards: int = 1
     split_k: int = 1
     swizzle_mx_scale: bool = False
-    epilogue_subtile: bool | None = None
+    epilogue_subtile: Union[bool, None] = None
 
 
 @pytest.mark.parametrize(
