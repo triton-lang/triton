@@ -653,7 +653,7 @@ public:
     auto retShapePerCTA = getShapePerCTA(oldRetType);
     int numWarps = lookupNumWarps(dotOp);
     auto CTALayout = getCTALayout(oldRetType.getEncoding());
-    if (computeCapability < 100)
+    if ((computeCapability) / 10 != 10)
       return failure();
     if (retShapePerCTA[0] < 128 || retShapePerCTA[1] < 8)
       return failure();

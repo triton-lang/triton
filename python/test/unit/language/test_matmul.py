@@ -380,7 +380,7 @@ def test_mxfp(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, NUM_STAGES, nonKDim, NUM_WARPS
     rtol = 0.0001
     torch.testing.assert_close(ref_out, output, atol=atol, rtol=rtol)
 
-    if is_cuda():
+    if is_cuda() and torch.cuda.get_device_capability()[0] == 10:
         # Pipelining of dot_scaled requires tmem_copy to be used, which in turn
         # requires the scales to be in the blocked layout in global memory.
         assert out.asm["ttgir"].count("ttng.tc_gen5_mma") == 1
@@ -468,7 +468,7 @@ def block_scale_mxfp_matmul(  #
                                                        (128, 128, 256), (128, 256, 256)])
 @pytest.mark.parametrize("NUM_STAGES", [1, 2, 4])
 @pytest.mark.parametrize("USE_2D_SCALE_LOAD", [False, True])
-@pytest.mark.skipif(is_hip() or torch.cuda.get_device_capability()[0] < 10, reason="Requires compute capability >= 10")
+@pytest.mark.skipif(is_hip() or torch.cuda.get_device_capability()[0] != 10, reason="Requires compute capability == 10")
 def test_blocked_scale_mxfp(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, NUM_STAGES, USE_2D_SCALE_LOAD, device):
     if BLOCK_N == 256 and BLOCK_K == 256:
         NUM_STAGES = min(NUM_STAGES, 2)
@@ -540,7 +540,7 @@ def test_blocked_scale_mxfp(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, NUM_STAGES, USE_
 @pytest.mark.parametrize("BLOCK_M, BLOCK_N, BLOCK_K", [(128, 128, 64), (128, 64, 128), (64, 128, 32), (128, 256, 32)])
 @pytest.mark.parametrize("a_trans", [False, True])
 @pytest.mark.parametrize("dtype_src_str", ["float32", "float16", "float8e5"])
-@pytest.mark.skipif(is_hip() or torch.cuda.get_device_capability()[0] < 10, reason="Requires compute capability >= 10")
+@pytest.mark.skipif(is_hip() or torch.cuda.get_device_capability()[0] != 10, reason="Requires compute capability == 10")
 def test_lhs_in_tmem(BLOCK_M, BLOCK_N, BLOCK_K, a_trans, dtype_src_str, device, monkeypatch):
     M = 1024
     N = 512
@@ -604,7 +604,7 @@ def lhs_in_tmem_kernel_mxfp(  #
     tl.store(output_ptrs, accumulator)
 
 
-@pytest.mark.skipif(is_hip() or torch.cuda.get_device_capability()[0] < 10, reason="Requires compute capability >= 10")
+@pytest.mark.skipif(is_hip() or torch.cuda.get_device_capability()[0] != 10, reason="Requires compute capability == 10")
 def test_lhs_in_tmem_mxfp(device, monkeypatch):
     _knob_promote_lhs_to_tmem(monkeypatch)
     M, N, K = 128, 64, 32
@@ -713,8 +713,8 @@ def test_block_scale_fp4(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, VEC_SIZE, with_a_sc
     if is_cuda():
         if scale_type == "float8_e4m3fn" and not pack_along_k:
             pytest.skip("Packing along K is required for float8_e4m3fn")
-        if torch.cuda.get_device_capability()[0] < 10:
-            pytest.skip("Requires compute capability >= 10")
+        if torch.cuda.get_device_capability()[0] != 10:
+            pytest.skip("Requires compute capability == 10")
         if not (with_a_scale and with_b_scale):
             pytest.skip("None aScale/bScale is only tested on AMD backend for now")
     elif is_hip():
@@ -867,8 +867,8 @@ def mxfp8_mxfp4_matmul(  #
 def test_mxfp8_mxfp4_matmul(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, NUM_STAGES, B_TRANS, PACK_B_ALONG_K, CONST_SCALE,
                             A_DATA_TYPE, B_DATA_TYPE, WITH_A_SCALE, WITH_B_SCALE, nonKDim, device):
     if is_cuda():
-        if torch.cuda.get_device_capability()[0] < 10:
-            pytest.skip("Requires compute capability >= 10")
+        if torch.cuda.get_device_capability()[0] != 10:
+            pytest.skip("Requires compute capability == 10")
         if not (WITH_A_SCALE and WITH_B_SCALE):
             pytest.skip("None scale has not been tested on NV backend")
         if not (A_DATA_TYPE == "float8e5" and B_DATA_TYPE == "float4"):
