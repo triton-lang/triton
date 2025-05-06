@@ -26,7 +26,7 @@ def test_compile_stats(device: str, fresh_knobs_except_libraries: Any, fresh_tri
         assert captured is None
         captured = (src, metadata, times, cache_hit)
 
-    fresh_knobs_except_libraries.compilation.listener = compile_listener
+    fresh_knobs_except_libraries.compilation.listener.append(compile_listener)
 
     x = torch.randn(4, device=device)
     cumsum_kernel[(1, )](x)

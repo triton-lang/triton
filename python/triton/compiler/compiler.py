@@ -298,13 +298,8 @@ def compile(src, target=None, options=None):
     if not always_compile and metadata_path is not None:
         # cache hit!
         res = CompiledKernel(src, metadata_group, hash)
-        if compilation_listener:
-            compilation_listener(
-                src=src,
-                metadata_group=metadata_group,
-                times=timer.end(),
-                cache_hit=True,
-            )
+        for listener in compilation_listener:
+            listener(src=src, metadata_group=metadata_group, times=timer.end(), cache_hit=True)
         return res
 
     # initialize metadata
@@ -380,8 +375,8 @@ def compile(src, target=None, options=None):
         context.disable_multithreading()
 
     # notify any listener
-    if compilation_listener:
-        compilation_listener(src=src, metadata_group=metadata_group, times=timer.end(), cache_hit=False)
+    for listener in compilation_listener:
+        listener(src=src, metadata_group=metadata_group, times=timer.end(), cache_hit=False)
     # return handle to compiled kernel
     return CompiledKernel(src, metadata_group, hash)
 
