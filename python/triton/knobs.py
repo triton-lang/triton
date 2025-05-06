@@ -228,7 +228,7 @@ class CompileTimes:
 
 class CompilationListener(Protocol):
 
-    def __call__(self, *, src: Union[ASTSource, IRSource], metadata: dict[str, Any], times: CompileTimes,
+    def __call__(self, *, src: Union[ASTSource, IRSource], metadata_group: dict[str, Any], times: CompileTimes,
                  cache_hit: bool) -> None:
         ...
 
