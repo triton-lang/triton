@@ -113,7 +113,7 @@ static LogicalResult relayoutWarps(ModuleAxisInfoAnalysis &axisInfo,
   pm.addPass(
       createConvertTritonToTritonGPU({target.str(), newNumWarps, threadsPerWarp,
                                       numCTAs, /*enableSourceRemat=*/true}));
-  pm.addPass(createConvertTritonGPUToTritonGPU());
+  pm.addPass(createRelayoutTritonGPU());
   if (failed(runPipeline(pm, *container)))
     return failure();
   // Clear source rematerializations by propagating the source layout.
