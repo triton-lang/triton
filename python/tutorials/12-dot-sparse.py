@@ -10,9 +10,9 @@ random.seed(42)
 
 def get_autotune_config():
     configs = []
-    for BLOCK_M in [64, 128]:
-        for BLOCK_N in [64, 128]:
-            for BLOCK_K in [64, 128]:
+    for BLOCK_M in [16, 32, 64, 128]:
+        for BLOCK_N in [16, 32, 64, 128]:
+            for BLOCK_K in [16, 32, 64, 128]:
                 for num_warps in [1, 2, 4, 8]:
                     for num_stages in [1]:
                         for GROUP_SIZE_M in [4]:
@@ -23,7 +23,6 @@ def get_autotune_config():
                                         "BLOCK_SIZE_N": BLOCK_N,
                                         "BLOCK_SIZE_K": BLOCK_K,
                                         "GROUP_SIZE_M": GROUP_SIZE_M,
-                                        "matrix_instr_nonkdim": 32,
                                     },
                                     num_stages=num_stages,
                                     num_warps=num_warps,
@@ -241,7 +240,6 @@ def matmul(aSparse, aMeta, b, config):
     block_n = config.kwargs['BLOCK_SIZE_N']
     block_k = config.kwargs['BLOCK_SIZE_K']
     group_m = config.kwargs['GROUP_SIZE_M']
-    nonk_dim = config.kwargs['matrix_instr_nonkdim']
     matmul_kernel_sparse[grid](
         aSparse,
         b,
@@ -262,7 +260,6 @@ def matmul(aSparse, aMeta, b, config):
         BLOCK_SIZE_N=block_n,
         BLOCK_SIZE_K=block_k,
         GROUP_SIZE_M=group_m,
-        matrix_instr_nonkdim=nonk_dim,
         num_stages=config.num_stages,
         num_warps=config.num_warps,
         USE_BF16=acc_dtype is torch.bfloat16,

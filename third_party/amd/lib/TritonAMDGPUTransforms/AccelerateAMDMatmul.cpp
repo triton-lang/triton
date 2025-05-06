@@ -164,7 +164,6 @@ chooseMfmaInstruction(int mfmaVersion, RankedTensorType cType, Type aElemType,
   }
   if (mDim == 0 || nDim == 0)
     return failure();
-
   FailureOr<MfmaIntrinsic> maybeMfmaIntrinsic =
       MfmaIntrinsic::selectFor(mfmaVersion, mDim, nDim, inputKSize, aElemType,
                                bElemType, withScale, isSparse, allowXF32);
@@ -965,7 +964,12 @@ public:
     ttg::AMDSparseMfmaEncodingAttr sparseMfmaEnc;
     ttg::AMDMfmaEncodingAttr mfmaEnc;
 
-    auto mfmaInstr = chooseMfmaInstruction(dotOp, mfmaVersion, nonKDim);
+    // If nonKDim is not set, default to 32
+    auto sparseNonKDim = nonKDim;
+    if (!sparseNonKDim)
+      sparseNonKDim = 32;
+
+    auto mfmaInstr = chooseMfmaInstruction(dotOp, mfmaVersion, sparseNonKDim);
     if (failed(mfmaInstr))
       return failure();
     auto mDim = mfmaInstr->mDim;

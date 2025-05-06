@@ -3810,18 +3810,6 @@ def get_test_dot_vdot2_cases():
             (4, 32, 32, 4, False, False, 'None', 'ieee', 'bfloat16', 'float32', 1, None)]
 
 
-# M, N, K, num_warps, col_a, col_b, epilogue, input_precision, in_dtype, out_dtype, kpack, mma_nonk_size
-def get_test_dot_sparse_base_cases():
-    return [
-        (*shape, 4, False, False, epilogue, in_dtype, out_dtype, 1, None)
-        for shape in [(64, 64, 64), (32, 32, 32), (16, 16, 32), (128, 16, 128)]
-        for epilogue in ['none', 'trans', 'add-matrix', 'add-rows', 'add-cols', 'softmax', 'chain-dot']
-        # TODO: On MI300 there is an issue with ('float8e4b8', 'float8e4b8') due to an unsupported conversion
-        # float8e4b8 --> FP32 with RTNE
-        for in_dtype, out_dtype in [('float16', 'float16'), ('bfloat16', 'bfloat16'), ('float8e4b8', 'float8e4b8')]
-    ]
-
-
 @pytest.mark.interpreter
 @pytest.mark.parametrize(
     "M, N, K, num_warps, col_a, col_b, epilogue, input_precision, in_dtype, out_dtype, kpack, mma_nonk_size",
@@ -4345,6 +4333,18 @@ def test_scaled_dot(M, N, K, col_a, col_b, rhs_scale, mxfp_type, normal_type, nu
                 or "tcgen05.mma.cta_group::1.kind::f16" in ptx)
 
 
+# M, N, K, num_warps, col_a, col_b, epilogue, input_precision, in_dtype, out_dtype, kpack, mma_nonk_size
+def get_test_dot_sparse_base_cases():
+    return [
+        (*shape, 4, False, False, epilogue, in_dtype, out_dtype, 1, None)
+        for shape in [(64, 64, 64), (32, 32, 32), (16, 16, 16), (128, 16, 128)]
+        for epilogue in ['none', 'trans', 'add-matrix', 'add-rows', 'add-cols', 'softmax', 'chain-dot']
+        # TODO: On MI300 there is an issue with ('float8e4b8', 'float8e4b8') due to an unsupported conversion
+        # float8e4b8 --> FP32 with RTNE
+        for in_dtype, out_dtype in [('float16', 'float16'), ('bfloat16', 'bfloat16'), ('float8e4b8', 'float8e4b8')]
+    ]
+
+
 @pytest.mark.interpreter
 @pytest.mark.parametrize("M, N, K, num_warps, col_a, col_b, epilogue, in_dtype, out_dtype, kpack, mma_nonk_size",
                          get_test_dot_sparse_base_cases())
@@ -4361,7 +4361,7 @@ def test_dot_sparse(M, N, K, num_warps, col_a, col_b, epilogue, in_dtype, out_dt
         if is_hip():
             if (M < 16 or N < 16 or K < 16) and "float16" in in_dtype:
                 pytest.skip("[float16/bfloat16] small sparse dot is not supported")
-            if (M < 16 or N < 16 or K < 64) and "float8" in in_dtype:
+            if (M < 16 or N < 16 or K < 16) and "float8" in in_dtype:
                 pytest.skip("[float8] small sparse dot is not supported")
 
             # TODO: figure out why there is a datatype conversion issue here
