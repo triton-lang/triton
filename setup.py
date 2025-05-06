@@ -606,20 +606,16 @@ def get_package_dirs():
             # Install the contents of each backend's `language` directory into
             # `triton.language.extra`.
             for x in os.listdir(backend.language_dir):
-                ### TRITON-SHARED ###
                 full_path = os.path.join(backend.language_dir, x)
                 if os.path.isdir(full_path):
-                ### TRITON-SHARED ###
                     yield (f"triton.language.extra.{x}", os.path.join(backend.language_dir, x))
 
         if backend.tools_dir:
             # Install the contents of each backend's `tools` directory into
             # `triton.tools.extra`.
             for x in os.listdir(backend.tools_dir):
-                ### TRITON-SHARED ###
                 full_path = os.path.join(backend.tools_dir, x)
                 if os.path.isdir(full_path):
-                ### TRITON-SHARED ###
                     yield (f"triton.tools.extra.{x}", os.path.join(backend.tools_dir, x))
 
     if check_env_flag("TRITON_BUILD_PROTON", "ON"):  # Default ON
@@ -636,20 +632,16 @@ def get_packages():
             # Install the contents of each backend's `language` directory into
             # `triton.language.extra`.
             for x in os.listdir(backend.language_dir):
-                ### TRITON-SHARED ###
                 full_path = os.path.join(backend.language_dir, x)
                 if os.path.isdir(full_path):
-                ### TRITON-SHARED ###
                     yield f"triton.language.extra.{x}"
 
         if backend.tools_dir:
             # Install the contents of each backend's `tools` directory into
             # `triton.tools.extra`.
             for x in os.listdir(backend.tools_dir):
-                ### TRITON-SHARED ###
                 full_path = os.path.join(backend.tools_dir, x)
                 if os.path.isdir(full_path):
-                ### TRITON-SHARED ###
                     yield f"triton.tools.extra.{x}"
 
     if check_env_flag("TRITON_BUILD_PROTON", "ON"):  # Default ON
