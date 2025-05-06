@@ -130,8 +130,20 @@ static PartitionScheme getPartitionScheme(scf::ForOp loop) {
     }
     while (!operandViews.empty()) {
       Operation *op = operandViews.pop_back_val();
-      if (!op->hasOneUse() || !op->hasTrait<OpTrait::MemDescViewTrait>())
+      if (!op->hasTrait<OpTrait::MemDescViewTrait>())
         continue;
+
+      // Duplicate the op if necessary to sure the MMA op is the only user.
+      if (!llvm::all_of(op->getUsers(),
+                        [&](Operation *user) { return user == mmaOp; })) {
+        OpBuilder b(op);
+        Operation *viewOp = b.clone(*op);
+        op->replaceUsesWithIf(viewOp->getResults(), [&](OpOperand &use) {
+          return use.getOwner() == mmaOp;
+        });
+        op = viewOp;
+      }
+
       mma.operandViews.push_back(op);
       if (Operation *defOp = op->getOperand(0).getDefiningOp())
         operandViews.push_back(defOp);
@@ -270,7 +282,7 @@ static WarpSchedule getInitialSchedule(const PartitionScheme &scheme,
 
   // Start by creating the default partition, a partition for for all loads, and
   // a partition for all MMAs.
-  Partition *defaultPartition = schedule.addPartition(0);
+  Partition *defaultPartition = schedule.addPartition(1);
   Partition *mmaPartition = schedule.addPartition(1);
   Partition *loadPartition = schedule.addPartition(0);
 
@@ -290,8 +302,9 @@ static WarpSchedule getInitialSchedule(const PartitionScheme &scheme,
 
   // Propagate defs of exp.
   for (math::Exp2Op exp : scheme.exps) {
-    schedule.trySchedule(defaultPartition, exp);
-    scheduleDependencies(loop, schedule, defaultPartition, exp);
+    Partition *expPartition = schedule.addPartition(0);
+    schedule.trySchedule(expPartition, exp);
+    scheduleDependencies(loop, schedule, expPartition, exp);
   }
 
   // Propagate users of loads and MMAs.
@@ -301,12 +314,8 @@ static WarpSchedule getInitialSchedule(const PartitionScheme &scheme,
       scheduleUsers(loop, schedule, defaultPartition, allocOp);
   }
 
-  SmallVector<Partition *> userPartitions{defaultPartition};
-  while (userPartitions.size() < scheme.mmas.size()) {
-    userPartitions.push_back(schedule.addPartition(userPartitions.size()));
-  }
-  for (auto [mma, userPartition] : llvm::zip(scheme.mmas, userPartitions)) {
-    scheduleUsers(loop, schedule, userPartition, mma.mmaOp);
+  for (const PipelinedMMA &mma : scheme.mmas) {
+    scheduleUsers(loop, schedule, defaultPartition, mma.mmaOp);
   }
   for (const PipelinedMMA &mma : scheme.mmas) {
     scheduleDependencies(loop, schedule, defaultPartition, mma.mmaOp);
