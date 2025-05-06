@@ -1,6 +1,7 @@
 #ifndef PROTON_DATA_CIRCULAR_LAYOUT_PARSER_H_
 #define PROTON_DATA_CIRCULAR_LAYOUT_PARSER_H_
 
+#include "Device.h"
 #include "Parser.h"
 #include <cstdint>
 
@@ -13,8 +14,6 @@ constexpr uint32_t kWordsPerEntry = 2;
 
 enum class ParseState { START, END, INIT };
 
-enum class MachineType { NVIDIA, AMD, UNKNOWN };
-
 struct CircularLayoutParserConfig : public ParserConfig {
   // The total number of unit (e.g., num of warps) in CTA
   size_t totalUnits = 0;
@@ -25,8 +24,8 @@ struct CircularLayoutParserConfig : public ParserConfig {
   size_t numBlocks = 0;
   // A vector of trace's uids
   std::vector<uint32_t> uidVec = {};
-  // Machine type that generated the trace
-  MachineType machine = MachineType::NVIDIA;
+  // Device type that generated the trace
+  Device device;
 };
 
 struct CircularLayoutParserResult {
@@ -87,7 +86,7 @@ struct ClockOverflowException : public ParserException {
 };
 
 std::shared_ptr<CircularLayoutParserResult>
-readCircularLayoutTrace(ByteSpan &buffer, bool applyTimeShift = true);
+readCircularLayoutTrace(ByteSpan &buffer, bool applyTimeShift = false);
 
 void timeShift(const CircularLayoutParserConfig &config,
                std::shared_ptr<CircularLayoutParserResult> result);

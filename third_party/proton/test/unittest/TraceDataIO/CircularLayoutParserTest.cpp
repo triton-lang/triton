@@ -211,7 +211,7 @@ TEST_F(CircularLayoutParserTest, TimeShift) {
   config.totalUnits = 1;
   config.scratchMemSize = testData.size();
   config.uidVec = {0};
-  config.machine = MachineType::NVIDIA;
+  config.device.type = DeviceType::CUDA;
   auto buffer = ByteSpan(testData.data(), testData.size());
   auto parser = CircularLayoutParser(buffer, config);
   parser.parse();

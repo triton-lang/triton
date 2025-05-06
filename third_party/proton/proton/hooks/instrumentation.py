@@ -276,7 +276,7 @@ class InstrumentationHook(Hook):
             with open(self.metadata_path[function], 'r') as file:
                 data = json.load(file)
 
-            machine_type = encode_target(data["target"])
+            device_type = encode_target(data["target"])
             scratch_mem_size = data["profile_scratch_size"]
             total_unit = data["num_warps"]
             block_num = int(alloc_size / scratch_mem_size)
@@ -293,7 +293,7 @@ class InstrumentationHook(Hook):
             # +------------------+
             # |   payload_size   |  4 bytes
             # +------------------+
-            # |   machine_type   |  4 bytes
+            # |   device_type    |  4 bytes
             # +------------------+
             # |    block_num     |  4 bytes
             # +------------------+
@@ -321,7 +321,7 @@ class InstrumentationHook(Hook):
             payload_offset = header_size
             payload_size = alloc_size
             header_values = [
-                VERSION, header_offset, header_size, payload_offset, payload_size, machine_type, block_num, total_unit,
+                VERSION, header_offset, header_size, payload_offset, payload_size, device_type, block_num, total_unit,
                 scratch_mem_size, *uid_vec
             ]
             header_bytes = struct.pack("I" * len(header_values), *header_values)

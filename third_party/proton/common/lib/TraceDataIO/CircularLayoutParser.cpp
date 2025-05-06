@@ -143,28 +143,30 @@ ClockOverflowException::ClockOverflowException(const std::string &msg)
     : ParserException(msg, ExceptionSeverity::WARNING) {}
 
 namespace {
-MachineType decodeMachineType(const uint32_t machineType) {
-  switch (machineType) {
+Device decodeDevice(const uint32_t dev) {
+  Device device;
+  switch (dev) {
   case 1:
-    return MachineType::NVIDIA;
+    device.type = DeviceType::CUDA;
+    device.arch = "";
+    break;
   case 2:
-    return MachineType::AMD;
+    device.type = DeviceType::HIP;
+    device.arch = "";
+    break;
   default:
-    return MachineType::UNKNOWN;
+    break;
   }
+  return device;
 }
 
 uint32_t getCost(const CircularLayoutParserConfig &config) {
-  // TODO(fywkevin): the costs are all based on `share_mem` buffer type. Also
-  // need to consider the `global_mem` buffer type.
-  switch (config.machine) {
-  case MachineType::NVIDIA:
+  if (config.device.type == DeviceType::CUDA)
     return 16;
-  case MachineType::AMD:
+  else if (config.device.type == DeviceType::HIP)
     return 36;
-  default:
-    return 0;
-  }
+
+  return 0;
 }
 
 void shift(CircularLayoutParserResult::Trace &trace, const uint32_t cost,
@@ -187,8 +189,8 @@ proton::readCircularLayoutTrace(ByteSpan &buffer, bool applyTimeShift) {
   buffer.skip(8);
   uint32_t payloadOffset = decoder.decode<I32Entry>()->value;
   uint32_t payloadSize = decoder.decode<I32Entry>()->value;
-  uint32_t machineType = decoder.decode<I32Entry>()->value;
-  config.machine = decodeMachineType(machineType);
+  uint32_t device = decoder.decode<I32Entry>()->value;
+  config.device = decodeDevice(device);
   config.numBlocks = decoder.decode<I32Entry>()->value;
   config.totalUnits = decoder.decode<I32Entry>()->value;
   config.scratchMemSize = decoder.decode<I32Entry>()->value;
