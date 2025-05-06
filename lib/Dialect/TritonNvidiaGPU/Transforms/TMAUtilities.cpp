@@ -109,7 +109,7 @@ int64_t getTMAContigDim(Attribute encoding, ArrayRef<int64_t> shape) {
   // https://docs.nvidia.com/cuda/cuda-driver-api/group__CUDA__TENSOR__MEMORY.html#group__CUDA__TENSOR__MEMORY_1ga7c7d2aaac9e49294304e755e6f341d7
   // We clamp the block size and the codegen will emit multiple copy
   // operations.
-  if (mmaEncoding) {
+  if (mmaEncoding && mmaEncoding.getSwizzlingByteWidth() != 0) {
     auto elemSize = mmaEncoding.getElementBitWidth() / 8;
     return mmaEncoding.getSwizzlingByteWidth() / elemSize;
   }
@@ -143,6 +143,8 @@ std::optional<int> getTMASwizzleMode(Operation *op, TensorDescType ty) {
     swizzleMode = 2;
   } else if (swizzleBytes == 32) {
     swizzleMode = 1;
+  } else {
+    assert(swizzleBytes == 0);
   }
   return swizzleMode;
 }

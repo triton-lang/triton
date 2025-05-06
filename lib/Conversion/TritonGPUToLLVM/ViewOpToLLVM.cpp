@@ -441,13 +441,13 @@ struct MemDescSubviewOpConversion
     for (int i = rankReduced; i < opOffsetVals.size(); i++) {
       offsetVals.push_back(b.add(opOffsetVals[i], smemObj.getOffsets()[i]));
     }
-    Value offset = b.undef(i32_ty);
+    Value offset;
     auto allocShape = srcTy.getAllocShape();
+    auto nvmmaEnc = dyn_cast<NVMMASharedEncodingAttr>(enc);
     bool isSimpleSubview =
-        allocShape.take_back(destRank) == destTy.getShape() ||
-        !isa<NVMMASharedEncodingAttr>(enc);
+        (!nvmmaEnc || allocShape.take_back(destRank) == destTy.getShape() ||
+         nvmmaEnc.getSwizzlingByteWidth() == 0);
     if (!isSimpleSubview) {
-      auto nvmmaEnc = cast<NVMMASharedEncodingAttr>(enc);
       assert(destRank >= 2 &&
              "Shape size should be >= 2 when using NVMMAShared encoding");
       auto swizzleStride = b.i32_val((nvmmaEnc.getSwizzlingByteWidth() * 8) /
