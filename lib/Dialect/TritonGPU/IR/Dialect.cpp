@@ -643,7 +643,20 @@ SmallVector<unsigned> SwizzledSharedEncodingAttr::getCTASplitNum() const {
   return SmallVector<unsigned>(getCTALayout().getCTASplitNum());
 }
 
-int32_t NVMMASharedEncodingAttr::getAlignment() const { return 1024; }
+int32_t NVMMASharedEncodingAttr::getAlignment() const {
+  switch (getSwizzlingByteWidth()) {
+  case 0:
+    return 128;
+  case 32:
+    return 256;
+  case 64:
+    return 512;
+  case 128:
+    return 1024;
+  default:
+    llvm::report_fatal_error("Invalid swizzling byte width");
+  }
+}
 
 SmallVector<unsigned> NVMMASharedEncodingAttr::getCTAsPerCGA() const {
   return SmallVector<unsigned>(getCTALayout().getCTAsPerCGA());
