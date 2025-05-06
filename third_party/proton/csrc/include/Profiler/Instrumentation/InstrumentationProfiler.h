@@ -2,7 +2,7 @@
 #define PROTON_PROFILER_INSTRUMENTATION_PROFILER_H_
 
 #include "Context/Context.h"
-#include "Driver/Device.h"
+#include "Device.h"
 #include "Metadata.h"
 #include "Profiler/Profiler.h"
 #include "Runtime.h"
