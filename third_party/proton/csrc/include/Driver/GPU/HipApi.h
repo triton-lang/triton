@@ -1,7 +1,7 @@
 #ifndef PROTON_DRIVER_GPU_HIP_H_
 #define PROTON_DRIVER_GPU_HIP_H_
 
-#include "Driver/Device.h"
+#include "Device.h"
 #include "hip/hip_runtime_api.h"
 
 namespace proton {

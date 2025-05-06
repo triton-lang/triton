@@ -1,7 +1,7 @@
 #include "Data/TreeData.h"
 #include "Context/Context.h"
 #include "Data/Metric.h"
-#include "Driver/Device.h"
+#include "Device.h"
 #include "nlohmann/json.hpp"
 
 #include <limits>
