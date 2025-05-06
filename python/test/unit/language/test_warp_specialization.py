@@ -118,8 +118,8 @@ def test_warp_specialize_tmem_ir(tmp_path: pathlib.Path):
     torch.testing.assert_close(input, output, atol=0, rtol=0)
 
 
-@pytest.mark.skipif(not is_cuda() and torch.cuda.get_device_capability()[0] != 10,
-                    reason="warp specialization is only supported on NVIDIA Blackwell")
+@pytest.mark.skipif(is_hip(), reason="warp specialization is not supported on hip devices")
+@pytest.mark.skipif(torch.cuda.get_device_capability()[0] != 10, reason="Requires compute capability == 10")
 def test_warpgroup_reduction(tmp_path: pathlib.Path):
 
     def template(i, num_warps, in_ptr, out_ptr):
