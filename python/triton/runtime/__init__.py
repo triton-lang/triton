@@ -3,6 +3,7 @@ from .cache import RedisRemoteCacheBackend, RemoteCacheBackend
 from .driver import driver
 from .jit import JITFunction, KernelInterface, MockTensor, TensorWrapper, reinterpret
 from .errors import OutOfResources, InterpreterError
+from .specialize import specialize
 
 __all__ = [
     "autotune",
@@ -19,5 +20,6 @@ __all__ = [
     "RedisRemoteCacheBackend",
     "reinterpret",
     "RemoteCacheBackend",
+    "specialize",
     "TensorWrapper",
 ]

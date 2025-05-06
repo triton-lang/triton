@@ -18,6 +18,7 @@ from .runtime import (
     MockTensor,
 )
 from .runtime.jit import jit
+from .runtime.specialize import specialize
 from .compiler import compile, CompilationError
 from .errors import TritonError
 from .runtime._allocation import set_allocator
@@ -44,6 +45,7 @@ __all__ = [
     "reinterpret",
     "runtime",
     "set_allocator",
+    "specialize",
     "TensorWrapper",
     "TritonError",
     "testing",
