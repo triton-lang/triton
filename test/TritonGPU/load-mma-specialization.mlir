@@ -11,6 +11,8 @@
 // CHECK-DAG: [[ACC_TMEM:#.*]] = #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, unpacked = true>
 #acc_tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, unpacked = true>
 
+#fp4_padded_shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 8, fp4Padded = true, CTAsPerCGA = [1, 1, 1], CTASplitNum = [1, 1, 1], CTAOrder = [2, 1, 0]}>
+
 module attributes {"ttg.num-warps" = 4 : i32, ttg.target = "cuda:100"} {
 
 // FUNC-LABEL: @warp_specialize_tma_matmul
@@ -1026,6 +1028,20 @@ tt.func @specialize_load_only(%desc: !tt.tensordesc<tensor<128x64xf16, #shared>>
     // CHECK-NEXT: arrive_barrier {{.*}} {ttg.partition = 0 : i32}
     %val = tt.descriptor_load %desc[%i, %i] : !tt.tensordesc<tensor<128x64xf16, #shared>> -> tensor<128x64xf16, #oper_layout>
     "use"(%val) : (tensor<128x64xf16, #oper_layout>) -> ()
+  } {tt.warp_specialize}
+  tt.return
+}
+
+// CHECK-LABEL: @fp4_padded_load
+tt.func @fp4_padded_load(%desc: !tt.tensordesc<tensor<1x256x64xui8, #fp4_padded_shared>>, %ub: i32) {
+  %c0_i32 = arith.constant 0 : i32
+  %c1_i32 = arith.constant 1 : i32
+  // CHECK: scf.for [[I:%arg[0-9]+]]
+  scf.for %i = %c0_i32 to %ub step %c1_i32 : i32 {
+    // CHECK: [[IDX:%.*]] = arith.muli [[I]], %c2_i32 : i32
+    // CHECK: async_tma_copy_global_to_local %{{[0-9]+}}[[[I]], [[IDX]]]
+    %val = tt.descriptor_load %desc[%i, %i] : !tt.tensordesc<tensor<1x256x64xui8, #fp4_padded_shared>> -> tensor<256x64xi8, #oper_layout>
+    "use"(%val) : (tensor<256x64xi8, #oper_layout>) -> ()
   } {tt.warp_specialize}
   tt.return
 }
