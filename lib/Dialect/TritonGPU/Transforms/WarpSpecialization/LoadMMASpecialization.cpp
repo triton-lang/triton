@@ -784,9 +784,11 @@ static void lowerTMACopy(PartitionBuilder &b, Partition &loadPartition,
   if (auto load = dyn_cast<DescriptorLoadOp>(op)) {
     Value tmaPtr = b.createInto<ttng::TensorDescToTMAPtrOp>(
         loadPartition, stage, load.getDesc());
-    b.createInto<ttng::AsyncTMACopyGlobalToLocalOp>(loadPartition, stage,
-                                                    tmaPtr, load.getIndices(),
-                                                    barrier, view, truePred);
+    auto indices = ttng::translateTMAIndices(
+        b, load.getLoc(), load.getDesc().getType().getBlockType().getEncoding(),
+        load.getIndices());
+    b.createInto<ttng::AsyncTMACopyGlobalToLocalOp>(
+        loadPartition, stage, tmaPtr, indices, barrier, view, truePred);
   } else {
     auto gather = cast<DescriptorGatherOp>(op);
     Value tmaPtr = b.createInto<ttng::TensorDescToTMAPtrOp>(

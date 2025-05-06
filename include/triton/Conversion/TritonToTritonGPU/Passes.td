@@ -41,10 +41,10 @@ def ConvertTritonToTritonGPU: Pass<"convert-triton-to-tritongpu", "mlir::ModuleO
    ];
 }
 
-def ConvertTritonGPUToTritonGPU : Pass<"convert-tritongpu-to-tritongpu", "mlir::ModuleOp"> {
+def RelayoutTritonGPU : Pass<"relayout-tritongpu", "mlir::ModuleOp"> {
   let summary = "relayout pass for `ttg` and `ttng` operations";
   let description = [{
-    The `convert-tritongpu-to-tritongpu` pass is used during relayout of TTGIR
+    The `relayout-tritongpu` pass is used during relayout of TTGIR
     during warp specialization. Warp specialization may change the number of
     warps for a partition, which requires reassigning layouts to all the
     operations in the partition. However, those operations may include TritonGPU

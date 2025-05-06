@@ -5,7 +5,7 @@
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 
 namespace mlir::triton {
-#define GEN_PASS_DEF_CONVERTTRITONGPUTOTRITONGPU
+#define GEN_PASS_DEF_RELAYOUTTRITONGPU
 #include "triton/Conversion/TritonToTritonGPU/Passes.h.inc"
 } // namespace mlir::triton
 
@@ -86,11 +86,10 @@ struct TMEMAllocOpPattern : public OpConversionPattern<ttng::TMEMAllocOp> {
   }
 };
 
-class ConvertTritonGPUToTritonGPU
-    : public triton::impl::ConvertTritonGPUToTritonGPUBase<
-          ConvertTritonGPUToTritonGPU> {
+class RelayoutTritonGPU
+    : public triton::impl::RelayoutTritonGPUBase<RelayoutTritonGPU> {
 public:
-  using ConvertTritonGPUToTritonGPUBase::ConvertTritonGPUToTritonGPUBase;
+  using RelayoutTritonGPUBase::RelayoutTritonGPUBase;
 
   void runOnOperation() override {
     MLIRContext *context = &getContext();

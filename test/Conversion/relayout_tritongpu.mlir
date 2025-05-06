@@ -1,4 +1,4 @@
-// RUN: triton-opt %s -split-input-file -convert-triton-to-tritongpu='target=cuda:100 num-warps=4 enable-source-remat=true' -convert-tritongpu-to-tritongpu | FileCheck %s
+// RUN: triton-opt %s -split-input-file -convert-triton-to-tritongpu='target=cuda:100 num-warps=4 enable-source-remat=true' -relayout-tritongpu | FileCheck %s
 
 #tmem0 = #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, unpacked = true>
 #tmem1 = #ttng.tensor_memory_encoding<blockM = 128, blockN = 64, unpacked = true>
