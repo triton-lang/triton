@@ -58,7 +58,10 @@ def make_matmul_repr(base_name, order):
         suffix = "" if not mode else "_o" + (''.join(mode))
         if base_name.startswith("_p"):
             suffix += "_ptma"
-        return f"_matmul{suffix}_{layouts}_{dtypes}_{blocks}"
+        fn_name = f"_matmul{suffix}_{layouts}_{dtypes}_{blocks}"
+        if constants.get('ACTIVATION_FN', None):
+            fn_name += f"{constants['ACTIVATION_FN'].repr(None)}"
+        return fn_name
 
     return matmul_repr
 

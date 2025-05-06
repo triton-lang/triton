@@ -7,9 +7,10 @@ from typing import Union
 from triton_kernels.routing import routing
 # matmul utilities
 import triton_kernels.matmul_ogs_details.opt_flags as opt_flags
-from triton_kernels.matmul_ogs import FlexCtx, PrecisionConfig, MicroscalingCtx
+from triton_kernels.matmul_ogs import FlexCtx, PrecisionConfig, MicroscalingCtx, FusedActivation
 from triton_kernels.matmul_ogs import can_use_persistent_tma
 from triton_kernels.matmul_ogs import matmul_ogs, matmul_ogs_torch
+from triton_kernels.swiglu import swiglu, swiglu_fn, PrecisionConfig as SwiGLUPrecisionConfig
 # numerics utilities
 from triton_kernels.numerics import InFlexData, OutFlexData
 from triton_kernels.numerics_details.mxfp import downcast_to_mxfp, upcast_from_mxfp
@@ -319,3 +320,64 @@ def test_op(m, n, k, split_k, do_gather, do_scatter, fused_scatter, has_y_gammas
         ref_y_scale = compute_actual_scale(ref_y, tri_y.dtype)
         assert (ref_y_scale -
                 tri_y_scale).abs() < 1e-10, f"ref_y_scale: {ref_y_scale}, tri_y_scale: {tri_y_scale.item()}"
+
+
+@pytest.mark.parametrize("m, n, k, mode", [
+    (1200, 704, 608, "ragged"),
+    (800, 800, 400, "batched"),
+])
+@pytest.mark.parametrize("split_k", [1, 2])
+@pytest.mark.parametrize("do_gather, do_scatter, fused_scatter", [
+    (False, False, False),
+    (True, False, False),
+    (False, True, False),
+    (True, True, False),
+    (True, True, True),
+])
+@pytest.mark.parametrize("is_persistent, epilogue_subtile", [
+    (False, False),
+    (True, False),
+    (True, True),
+])
+@pytest.mark.parametrize("swiglu_alpha, swiglu_limit", [
+    (1.1, 1.4),
+    (1.0, 1.2),
+    (0.7, 1.0),
+])
+def test_fused_act(m, n, k, mode, split_k, do_gather, do_scatter, fused_scatter, is_persistent, epilogue_subtile,
+                   swiglu_alpha, swiglu_limit, device):
+    if fused_scatter and split_k > 1:
+        pytest.skip("fused scatter scratchpad not supported with split_k")
+    torch.manual_seed(0)
+    constraints = {
+        "is_persistent": is_persistent,
+        "epilogue_subtile": epilogue_subtile,
+        "fused_scatter": fused_scatter,
+        "split_k": split_k,
+    }
+    n_expts_tot, n_expts_act, n_expt_shards = 1, 1, 1
+    opt_flags.update_opt_flags_constraints(constraints)
+
+    weight_dtype, act_dtype = torch.float16, torch.float16
+    if mode == "ragged":
+        m, rdata, gindx, sindx = init_routing_data(m, n_expts_tot, n_expts_act, n_expt_shards, do_gather, do_scatter,
+                                                   device=device)
+    else:
+        rdata = gindx = sindx = None
+
+    precision_opt = init_precision(act_dtype, False, False, n_expts_tot // n_expt_shards, device=device)
+    x, w, bias, _, _ = init_compute_data(m, n, k, gindx, sindx, n_expts_tot, n_expts_act, n_expt_shards, mode,
+                                         act_dtype, weight_dtype, False, requires_grad=False, device=device)
+
+    if is_persistent and not can_use_persistent_tma(x.view(1, x.shape[-2], x.shape[-1]),
+                                                    w.view(1, w.shape[-2], w.shape[-1]), gindx, precision_opt):
+        pytest.skip("persistent TMAs not supported for this test")
+
+    if mode == "batched":
+        rdata, gindx, sindx = None, None, None
+    a = swiglu(matmul_ogs(x, w, bias, rdata, gindx, sindx, precision_opt), swiglu_alpha,
+               precision_config=SwiGLUPrecisionConfig(swiglu_limit))
+    b = matmul_ogs(
+        x, w, bias, rdata, gindx, sindx, precision_opt,
+        fused_activation=FusedActivation("swiglu", swiglu_fn, ("alpha", "limit"), (swiglu_alpha, swiglu_limit), 2))
+    assert_close(a, b)
