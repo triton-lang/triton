@@ -1,7 +1,7 @@
 #ifndef PROTON_DRIVER_GPU_HSA_H_
 #define PROTON_DRIVER_GPU_HSA_H_
 
-#include "Driver/Device.h"
+#include "Device.h"
 #include "hsa/hsa_ext_amd.h"
 
 namespace proton {

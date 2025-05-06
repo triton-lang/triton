@@ -1,6 +1,7 @@
 #ifndef PROTON_DATA_CIRCULAR_LAYOUT_PARSER_H_
 #define PROTON_DATA_CIRCULAR_LAYOUT_PARSER_H_
 
+#include "Device.h"
 #include "Parser.h"
 #include <cstdint>
 
@@ -23,6 +24,8 @@ struct CircularLayoutParserConfig : public ParserConfig {
   size_t numBlocks = 0;
   // A vector of trace's uids
   std::vector<uint32_t> uidVec = {};
+  // Device type that generated the trace
+  Device device;
 };
 
 struct CircularLayoutParserResult {
@@ -83,7 +86,10 @@ struct ClockOverflowException : public ParserException {
 };
 
 std::shared_ptr<CircularLayoutParserResult>
-readCircularLayoutTrace(ByteSpan &buffer);
+readCircularLayoutTrace(ByteSpan &buffer, bool applyTimeShift = false);
+
+void timeShift(const CircularLayoutParserConfig &config,
+               std::shared_ptr<CircularLayoutParserResult> result);
 
 } // namespace proton
 
