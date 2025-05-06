@@ -142,8 +142,46 @@ ScopeMisMatchException::ScopeMisMatchException(const std::string &msg)
 ClockOverflowException::ClockOverflowException(const std::string &msg)
     : ParserException(msg, ExceptionSeverity::WARNING) {}
 
+namespace {
+Device decodeDevice(const uint32_t dev) {
+  Device device;
+  switch (dev) {
+  case 1:
+    device.type = DeviceType::CUDA;
+    device.arch = "";
+    break;
+  case 2:
+    device.type = DeviceType::HIP;
+    device.arch = "";
+    break;
+  default:
+    break;
+  }
+  return device;
+}
+
+uint32_t getCost(const CircularLayoutParserConfig &config) {
+  if (config.device.type == DeviceType::CUDA)
+    return 16;
+  else if (config.device.type == DeviceType::HIP)
+    return 36;
+
+  return 0;
+}
+
+void shift(CircularLayoutParserResult::Trace &trace, const uint32_t cost,
+           const uint32_t timeBase) {
+  for (auto &event : trace.profileEvents) {
+    if (event.first->cycle >= timeBase)
+      event.first->cycle -= cost;
+    if (event.second->cycle >= timeBase)
+      event.second->cycle -= cost;
+  }
+}
+} // namespace
+
 std::shared_ptr<CircularLayoutParserResult>
-proton::readCircularLayoutTrace(ByteSpan &buffer) {
+proton::readCircularLayoutTrace(ByteSpan &buffer, bool applyTimeShift) {
   CircularLayoutParserConfig config;
   auto decoder = EntryDecoder(buffer);
   uint32_t version = decoder.decode<I32Entry>()->value;
@@ -151,6 +189,8 @@ proton::readCircularLayoutTrace(ByteSpan &buffer) {
   buffer.skip(8);
   uint32_t payloadOffset = decoder.decode<I32Entry>()->value;
   uint32_t payloadSize = decoder.decode<I32Entry>()->value;
+  uint32_t device = decoder.decode<I32Entry>()->value;
+  config.device = decodeDevice(device);
   config.numBlocks = decoder.decode<I32Entry>()->value;
   config.totalUnits = decoder.decode<I32Entry>()->value;
   config.scratchMemSize = decoder.decode<I32Entry>()->value;
@@ -163,5 +203,32 @@ proton::readCircularLayoutTrace(ByteSpan &buffer) {
   buffer.seek(payloadOffset);
   auto parser = std::make_unique<CircularLayoutParser>(buffer, config);
   parser->parse();
-  return parser->getResult();
+  auto result = parser->getResult();
+
+  // Shift the clocks to reduce the constant profiling overhead
+  if (applyTimeShift)
+    timeShift(config, result);
+
+  return result;
+}
+
+void proton::timeShift(const CircularLayoutParserConfig &config,
+                       std::shared_ptr<CircularLayoutParserResult> result) {
+  const uint32_t cost = getCost(config);
+  for (auto &bt : result->blockTraces) {
+    for (auto &trace : bt.traces) {
+      for (auto &event : trace.profileEvents) {
+        const uint32_t startTimeBase = event.first->cycle;
+        shift(trace, cost, startTimeBase);
+
+        const uint32_t endTimeBase = event.second->cycle;
+        shift(trace, cost, endTimeBase);
+
+        // Adjust the cycle for tiny events below the profiling precision
+        if (event.second->cycle < event.first->cycle) {
+          event.second->cycle = event.first->cycle + cost / 2;
+        }
+      }
+    }
+  }
 }

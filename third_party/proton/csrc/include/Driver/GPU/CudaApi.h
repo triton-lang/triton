@@ -1,7 +1,7 @@
 #ifndef PROTON_DRIVER_GPU_CUDA_H_
 #define PROTON_DRIVER_GPU_CUDA_H_
 
-#include "Driver/Device.h"
+#include "Device.h"
 #include "cuda.h"
 
 namespace proton {
