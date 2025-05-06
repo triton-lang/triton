@@ -420,9 +420,6 @@ class amd_knobs(base_knobs):
 class proton_knobs(base_knobs):
     cupti_path: env_opt_str = env_opt_str("TRITON_CUPTI_LIB_PATH")
 
-class structured_logging_knobs(base_knobs):
-    triton_trace: env_opt_str = env_opt_str("TRITON_TRACE")
-
 
 build = build_knobs()
 redis = redis_knobs()
@@ -434,4 +431,3 @@ language = language_knobs()
 nvidia = nvidia_knobs()
 amd = amd_knobs()
 proton = proton_knobs()
-structured_logging = structured_logging_knobs()
