@@ -417,6 +417,11 @@ def attention_inner_loop_kernel(  #
 @pytest.mark.parametrize("use_fp8", [False, True])
 def test_warp_specialize_attention_forward(M, N, BLOCK_M, HEAD_DIM, num_stages, disable_acc_multibuf, num_warps,
                                            use_fp8):
+    if BLOCK_M == 128 and HEAD_DIM == 128 and not use_fp8:
+        # These configurations currently use too much shared memory.
+        if (num_warps, num_stages) in [(4, 4), (8, 4), (8, 3)]:
+            pytest.skip("uses too much shared memory")
+
     dtype = torch.float8_e4m3fn if use_fp8 else torch.float16
 
     torch.manual_seed(42)
