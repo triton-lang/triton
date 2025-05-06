@@ -190,3 +190,43 @@ TEST_F(CLParserLoopTraceTest, Trace) {
   EXPECT_EQ(result->blockTraces[0].traces[0].count, 80);
   EXPECT_EQ(result->blockTraces[0].traces[3].profileEvents.size(), 4);
 }
+
+TEST_F(CircularLayoutParserTest, TimeShift) {
+  // clang-format off
+  testData = {0xef, 0xbe, 0xad, 0xde,
+              0x01, 0x00, 0x00, 0x00,
+              0x03, 0x00, 0x00, 0x00,
+              0x20, 0x00, 0x00, 0x00,
+              0xff, 0x00, 0x00, 0x00,
+              0x00, 0x00, 0x00, 0x00,
+              0x21, 0x00, 0x00, 0x00,
+              0x01, 0x00, 0x00, 0x00,
+              0x36, 0x00, 0x00, 0x00,
+              0x00, 0x00, 0x00, 0x80,
+              0x46, 0x00, 0x00, 0x00,
+              0x01, 0x00, 0x00, 0x80,
+              0x64, 0x00, 0x00, 0x00,};
+  // clang-format on
+  config.numBlocks = 1;
+  config.totalUnits = 1;
+  config.scratchMemSize = testData.size();
+  config.uidVec = {0};
+  config.device.type = DeviceType::CUDA;
+  auto buffer = ByteSpan(testData.data(), testData.size());
+  auto parser = CircularLayoutParser(buffer, config);
+  parser.parse();
+  auto result = parser.getResult();
+  auto &event0 = result->blockTraces[0].traces[0].profileEvents[0];
+  auto &event1 = result->blockTraces[0].traces[0].profileEvents[1];
+  EXPECT_EQ(event0.first->cycle, 33);
+  EXPECT_EQ(event0.second->cycle, 70);
+  EXPECT_EQ(event1.first->cycle, 54);
+  EXPECT_EQ(event1.second->cycle, 100);
+
+  timeShift(config, result);
+
+  EXPECT_EQ(event0.first->cycle, 17);
+  EXPECT_EQ(event1.first->cycle, 22);
+  EXPECT_EQ(event0.second->cycle, 22);
+  EXPECT_EQ(event1.second->cycle, 36);
+}

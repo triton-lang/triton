@@ -263,10 +263,20 @@ class InstrumentationHook(Hook):
             import struct
             import json
 
+            def encode_target(target: Dict[str, Any]) -> int:
+                #TODO(fywkevin): also account for `arch`
+                if target["backend"] == "cuda":
+                    return 1
+                elif target["backend"] == "hip":
+                    return 2
+                return 0
+
             alloc_size = 0 if self.buffer is None else self.buffer.element_size() * self.buffer.numel()
             data = {}
             with open(self.metadata_path[function], 'r') as file:
                 data = json.load(file)
+
+            device_type = encode_target(data["target"])
             scratch_mem_size = data["profile_scratch_size"]
             total_unit = data["num_warps"]
             block_num = int(alloc_size / scratch_mem_size)
@@ -282,6 +292,8 @@ class InstrumentationHook(Hook):
             # |  payload_offset  |  4 bytes
             # +------------------+
             # |   payload_size   |  4 bytes
+            # +------------------+
+            # |   device_type    |  4 bytes
             # +------------------+
             # |    block_num     |  4 bytes
             # +------------------+
@@ -304,12 +316,12 @@ class InstrumentationHook(Hook):
             else:
                 uid_vec = [int(i) for i in self.mode.sampling_options.strip().split(",")]
 
-            header_size = 32 + total_unit * 4
+            header_size = 36 + total_unit * 4
             header_offset = 4
             payload_offset = header_size
             payload_size = alloc_size
             header_values = [
-                VERSION, header_offset, header_size, payload_offset, payload_size, block_num, total_unit,
+                VERSION, header_offset, header_size, payload_offset, payload_size, device_type, block_num, total_unit,
                 scratch_mem_size, *uid_vec
             ]
             header_bytes = struct.pack("I" * len(header_values), *header_values)
