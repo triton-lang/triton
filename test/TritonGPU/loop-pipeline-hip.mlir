@@ -559,16 +559,21 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
 // -----
 
 // Check that we can pipeline small width vectors (like scale factor)
-// CHECK-LABEL: pipeline_small_vec
+// COMMON-LABEL: pipeline_small_vector
 
 // Prologue
-// CHECK-COUNT-4: tt.load
+// COMMON-COUNT-4: tt.load
 
 // Main loop
-//         CHECK: scf.for
-// CHECK-COUNT-4:   tt.load
-//         CHECK:   tt.dot_scaled
-//         CHECK:   scf.yield
+//         COMMON: scf.for
+// COMMON-COUNT-4:   tt.load
+//         COMMON:   tt.dot_scaled
+//         COMMON:   scf.yield
+
+// Epilogue
+//         COMMON: scf.if
+//         COMMON:   tt.dot_scaled
+//         COMMON:   scf.yield
 
 #blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [16, 4], warpsPerCTA = [8, 1], order = [1, 0]}>
 #blocked1 = #ttg.blocked<{sizePerThread = [1, 16], threadsPerWarp = [4, 16], warpsPerCTA = [8, 1], order = [1, 0]}>
@@ -578,7 +583,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
 #blocked5 = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [1, 64], warpsPerCTA = [8, 1], order = [1, 0]}>
 #blocked6 = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 64], warpsPerCTA = [4, 2], order = [1, 0]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.target = "hip:gfx942", "ttg.threads-per-warp" = 64 : i32} {
-  tt.func public @pipeline_small_vec(%arg0: !tt.ptr<f8E5M2> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<f8E5M2> {tt.divisibility = 16 : i32}, %arg2: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg3: !tt.ptr<i8> {tt.divisibility = 16 : i32}, %arg4: !tt.ptr<i8> {tt.divisibility = 16 : i32}, %arg5: i32 {tt.divisibility = 16 : i32}, %arg6: i32 {tt.divisibility = 16 : i32}, %arg7: i32 {tt.divisibility = 16 : i32}, %arg8: i32 {tt.divisibility = 16 : i32}, %arg9: i32 {tt.divisibility = 16 : i32}, %arg10: i32 {tt.divisibility = 16 : i32}) attributes {noinline = false} {
+  tt.func public @pipeline_small_vector(%arg0: !tt.ptr<f8E5M2>, %arg1: !tt.ptr<f8E5M2>, %arg2: !tt.ptr<f32>, %arg3: !tt.ptr<i8>, %arg4: !tt.ptr<i8>, %arg5: i32, %arg6: i32, %arg7: i32, %arg8: i32, %arg9: i32, %arg10: i32) -> tensor<128x256xf32, #blocked3> {
     %c128_i32 = arith.constant 128 : i32
     %c256_i32 = arith.constant 256 : i32
     %cst = arith.constant dense<4> : tensor<128x4xi32, #blocked>
@@ -692,24 +697,6 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
       %114 = tt.addptr %arg16, %cst_3 : tensor<256x4x!tt.ptr<i8>, #blocked4>, tensor<256x4xi32, #blocked4>
       scf.yield %110, %113, %111, %112, %114 : tensor<128x256xf32, #blocked3>, tensor<128x4x!tt.ptr<i8>, #blocked>, tensor<128x128x!tt.ptr<f8E5M2>, #blocked2>, tensor<128x256x!tt.ptr<f8E5M2>, #blocked1>, tensor<256x4x!tt.ptr<i8>, #blocked4>
     } {tt.num_stages = 2 : i32}
-    %76 = tt.expand_dims %16 {axis = 1 : i32} : tensor<128xi32, #ttg.slice<{dim = 1, parent = #blocked5}>> -> tensor<128x1xi32, #blocked5>
-    %77 = tt.splat %arg10 : i32 -> tensor<128x1xi32, #blocked5>
-    %78 = arith.muli %77, %76 : tensor<128x1xi32, #blocked5>
-    %79 = tt.splat %arg2 : !tt.ptr<f32> -> tensor<128x1x!tt.ptr<f32>, #blocked5>
-    %80 = tt.addptr %79, %78 : tensor<128x1x!tt.ptr<f32>, #blocked5>, tensor<128x1xi32, #blocked5>
-    %81 = tt.expand_dims %30 {axis = 0 : i32} : tensor<256xi32, #ttg.slice<{dim = 0, parent = #blocked5}>> -> tensor<1x256xi32, #blocked5>
-    %82 = tt.broadcast %80 : tensor<128x1x!tt.ptr<f32>, #blocked5> -> tensor<128x256x!tt.ptr<f32>, #blocked5>
-    %83 = tt.broadcast %81 : tensor<1x256xi32, #blocked5> -> tensor<128x256xi32, #blocked5>
-    %84 = tt.addptr %82, %83 : tensor<128x256x!tt.ptr<f32>, #blocked5>, tensor<128x256xi32, #blocked5>
-    %85 = tt.splat %arg5 : i32 -> tensor<128x1xi32, #blocked5>
-    %86 = arith.cmpi slt, %76, %85 : tensor<128x1xi32, #blocked5>
-    %87 = tt.splat %arg6 : i32 -> tensor<1x256xi32, #blocked5>
-    %88 = arith.cmpi slt, %81, %87 : tensor<1x256xi32, #blocked5>
-    %89 = tt.broadcast %86 : tensor<128x1xi1, #blocked5> -> tensor<128x256xi1, #blocked5>
-    %90 = tt.broadcast %88 : tensor<1x256xi1, #blocked5> -> tensor<128x256xi1, #blocked5>
-    %91 = arith.andi %89, %90 : tensor<128x256xi1, #blocked5>
-    %92 = ttg.convert_layout %75#0 : tensor<128x256xf32, #blocked3> -> tensor<128x256xf32, #blocked5>
-    tt.store %84, %92, %91 : tensor<128x256x!tt.ptr<f32>, #blocked5>
-    tt.return
+    tt.return %75#0 : tensor<128x256xf32, #blocked3>
   }
 }
