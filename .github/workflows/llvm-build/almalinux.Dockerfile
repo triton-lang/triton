@@ -34,6 +34,7 @@ RUN cmake -GNinja -Bbuild \
   -DLLVM_ENABLE_TERMINFO=OFF \
   -DLLVM_INSTALL_UTILS=ON \
   -DLLVM_TARGETS_TO_BUILD="host;NVPTX;AMDGPU" \
+  -DLLVM_ENABLE_ZSTD=OFF \
   /source/llvm-project/llvm
 
 RUN ninja -C build install
