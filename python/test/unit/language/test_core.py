@@ -4359,10 +4359,8 @@ def test_dot_sparse(M, N, K, num_warps, col_a, col_b, epilogue, in_dtype, out_dt
             pytest.skip("dot_sparse is not supported on NVIDIA yet")
 
         if is_hip():
-            if (M < 16 or N < 16 or K < 16) and "float16" in in_dtype:
-                pytest.skip("[float16/bfloat16] small sparse dot is not supported")
-            if (M < 16 or N < 16 or K < 16) and "float8" in in_dtype:
-                pytest.skip("[float8] small sparse dot is not supported")
+            if (M < 16 or N < 16 or K < 16):
+                pytest.skip("small sparse dot is not supported")
 
             # TODO: figure out why there is a datatype conversion issue here
             if in_dtype in ("float8e4b8") and epilogue == 'chain-dot':
@@ -4588,8 +4586,6 @@ def test_dot_sparse(M, N, K, num_warps, col_a, col_b, epilogue, in_dtype, out_dt
                           for in_dtype_str, out_dtype_str in [('float16', 'float16')]])
 def test_dot_sparse_3d(B, num_warps, M, N, K, BLOCK_M, BLOCK_N, in_dtype_str, out_dtype_str, device):
     if is_hip():
-        # hip does not support tf32 precision, so use ieee for all tests
-        input_precision = "ieee"
         arch = triton.runtime.driver.active.get_current_target().arch
         if "gfx11" in arch or "gfx12" in arch:
             if in_dtype_str == "float32":
@@ -4597,7 +4593,6 @@ def test_dot_sparse_3d(B, num_warps, M, N, K, BLOCK_M, BLOCK_N, in_dtype_str, ou
             if out_dtype_str == "float16":
                 pytest.skip(f"{out_dtype_str} has low precision in WMMA dot")
     else:
-        input_precision = "tf32" if is_cuda() and in_dtype_str == 'float32' else "ieee"
         if not is_interpreter() and (BLOCK_M < 16 or BLOCK_N < 16):
             pytest.skip("small dots are supported only on HIP at the moment")
 
@@ -4631,7 +4626,6 @@ def test_dot_sparse_3d(B, num_warps, M, N, K, BLOCK_M, BLOCK_N, in_dtype_str, ou
         BLOCK_M: tl.constexpr,
         BLOCK_N: tl.constexpr,
         BLOCK_K: tl.constexpr,
-        INPUT_PRECISION: tl.constexpr,
         out_dtype: tl.constexpr = tl.float32,
     ):
         startm = tl.program_id(0) * BLOCK_M
@@ -4684,8 +4678,8 @@ def test_dot_sparse_3d(B, num_warps, M, N, K, BLOCK_M, BLOCK_N, in_dtype_str, ou
     # aSparse is only used on the GPU
     xSparse, xMeta = compress(x)
 
-    x_tri = xSparse  # to_triton(xSparse, device=device)
-    xMeta_tri = xMeta  # to_triton(xMeta, device=device)
+    x_tri = xSparse
+    xMeta_tri = xMeta
     y_tri = to_triton(y, device=device)
     out_tri = to_triton(out, device=device)
 
@@ -4717,7 +4711,6 @@ def test_dot_sparse_3d(B, num_warps, M, N, K, BLOCK_M, BLOCK_N, in_dtype_str, ou
         BLOCK_M=BLOCK_M,
         BLOCK_N=BLOCK_N,
         BLOCK_K=BLOCK_K,
-        INPUT_PRECISION=input_precision,
         out_dtype=out_dtype,
         num_warps=num_warps,
     )
