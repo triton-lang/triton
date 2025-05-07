@@ -31,8 +31,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     %result_5, %token_6 = ttng.tmem_alloc : () -> (!ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>, !ttg.async.token)
     %result_7, %token_8 = ttng.tmem_alloc : () -> (!ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>, !ttg.async.token)
     %9 = ttng.tmem_store %cst_0, %result_7[%token_8], %true : tensor<128x128xf32, #blocked1> -> !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>
-    %10 = ttng.tmem_store %cst_0, %result_5[%token_6], %true : tensor<128x128xf32, #blocked1> -> !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>
-    %11:8 = scf.for %arg25 = %c0_i32 to %arg23 step %c128_i32 iter_args(%arg26 = %cst_2, %arg27 = %cst_1, %arg28 = %cst_2, %arg29 = %cst_1, %arg30 = %token, %arg31 = %token_4, %arg32 = %10, %arg33 = %9) -> (tensor<128xf32, #ttg.slice<{dim = 1, parent = #blocked1}>>, tensor<128xf32, #ttg.slice<{dim = 1, parent = #blocked1}>>, tensor<128xf32, #ttg.slice<{dim = 1, parent = #blocked1}>>, tensor<128xf32, #ttg.slice<{dim = 1, parent = #blocked1}>>, !ttg.async.token, !ttg.async.token, !ttg.async.token, !ttg.async.token)  : i32 {
+    %10 = ttng.tmem_store %cst_0, %result_3[%token_4], %true : tensor<128x128xf32, #blocked1> -> !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>
+    %11:8 = scf.for %arg25 = %c0_i32 to %arg23 step %c128_i32 iter_args(%arg26 = %cst_2, %arg27 = %cst_1, %arg28 = %cst_2, %arg29 = %cst_1, %arg30 = %token, %arg31 = %10, %arg32 = %token_6, %arg33 = %9) -> (tensor<128xf32, #ttg.slice<{dim = 1, parent = #blocked1}>>, tensor<128xf32, #ttg.slice<{dim = 1, parent = #blocked1}>>, tensor<128xf32, #ttg.slice<{dim = 1, parent = #blocked1}>>, tensor<128xf32, #ttg.slice<{dim = 1, parent = #blocked1}>>, !ttg.async.token, !ttg.async.token, !ttg.async.token, !ttg.async.token)  : i32 {
       %33 = tt.descriptor_load %arg5[%arg25, %c0_i32] : !tt.tensordesc<tensor<128x128xf16, #shared>> -> tensor<128x128xf16, #blocked2>
       %34 = ttg.local_alloc %33 : (tensor<128x128xf16, #blocked2>) -> !ttg.memdesc<128x128xf16, #shared, #smem>
       %35 = ttg.memdesc_trans %34 {order = array<i32: 1, 0>} : !ttg.memdesc<128x128xf16, #shared, #smem> -> !ttg.memdesc<128x128xf16, #shared1, #smem>
@@ -61,48 +61,48 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
       }) : (tensor<128x128xf32, #blocked1>) -> tensor<128xf32, #ttg.slice<{dim = 1, parent = #blocked1}>>
       %50 = tt.expand_dims %48 {axis = 1 : i32} : tensor<128xf32, #ttg.slice<{dim = 1, parent = #blocked1}>> -> tensor<128x1xf32, #blocked1>
       %51 = tt.broadcast %50 : tensor<128x1xf32, #blocked1> -> tensor<128x128xf32, #blocked1>
-      %result_15, %token_16 = ttng.tmem_load %result_5[%arg32] : !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable> -> tensor<128x128xf32, #blocked1>
+      %result_15, %token_16 = ttng.tmem_load %result_3[%arg31] : !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable> -> tensor<128x128xf32, #blocked1>
       %52 = arith.mulf %result_15, %51 : tensor<128x128xf32, #blocked1>
-      %53 = ttng.tc_gen5_mma %6, %35, %result_3[%arg31], %false, %true : !ttg.memdesc<128x128xf16, #shared, #smem>, !ttg.memdesc<128x128xf16, #shared1, #smem>, !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>
-      %result_17, %token_18 = ttng.tmem_load %result_3[%53] : !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable> -> tensor<128x128xf32, #blocked1>
-      %54 = "tt.reduce"(%result_17) <{axis = 1 : i32}> ({
+      %53 = arith.truncf %46 : tensor<128x128xf32, #blocked1> to tensor<128x128xf16, #blocked1>
+      %result_17 = ttng.tmem_alloc %53 : (tensor<128x128xf16, #blocked1>) -> !ttg.memdesc<128x128xf16, #tmem1, #ttng.tensor_memory>
+      %54 = ttng.tmem_store %52, %result_3[%token_16], %true : tensor<128x128xf32, #blocked1> -> !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>
+      %55 = ttng.tc_gen5_mma %result_17, %37, %result_3[%54], %true, %true : !ttg.memdesc<128x128xf16, #tmem1, #ttng.tensor_memory>, !ttg.memdesc<128x128xf16, #shared, #smem>, !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>
+      %56 = arith.mulf %arg26, %48 : tensor<128xf32, #ttg.slice<{dim = 1, parent = #blocked1}>>
+      %57 = arith.addf %56, %49 : tensor<128xf32, #ttg.slice<{dim = 1, parent = #blocked1}>>
+      %58 = ttng.tc_gen5_mma %6, %35, %result_5[%arg32], %false, %true : !ttg.memdesc<128x128xf16, #shared, #smem>, !ttg.memdesc<128x128xf16, #shared1, #smem>, !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>
+      %result_18, %token_19 = ttng.tmem_load %result_5[%58] : !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable> -> tensor<128x128xf32, #blocked1>
+      %59 = "tt.reduce"(%result_18) <{axis = 1 : i32}> ({
       ^bb0(%arg34: f32, %arg35: f32):
         %78 = arith.maxnumf %arg34, %arg35 : f32
         tt.reduce.return %78 : f32
       }) : (tensor<128x128xf32, #blocked1>) -> tensor<128xf32, #ttg.slice<{dim = 1, parent = #blocked1}>>
-      %55 = arith.mulf %54, %7 : tensor<128xf32, #ttg.slice<{dim = 1, parent = #blocked1}>>
-      %56 = arith.maxnumf %arg29, %55 : tensor<128xf32, #ttg.slice<{dim = 1, parent = #blocked1}>>
-      %57 = arith.mulf %result_17, %8 : tensor<128x128xf32, #blocked1>
-      %58 = tt.expand_dims %56 {axis = 1 : i32} : tensor<128xf32, #ttg.slice<{dim = 1, parent = #blocked1}>> -> tensor<128x1xf32, #blocked1>
-      %59 = tt.broadcast %58 : tensor<128x1xf32, #blocked1> -> tensor<128x128xf32, #blocked1>
-      %60 = arith.subf %57, %59 : tensor<128x128xf32, #blocked1>
-      %61 = math.exp2 %60 : tensor<128x128xf32, #blocked1>
-      %62 = arith.subf %arg29, %56 : tensor<128xf32, #ttg.slice<{dim = 1, parent = #blocked1}>>
-      %63 = math.exp2 %62 : tensor<128xf32, #ttg.slice<{dim = 1, parent = #blocked1}>>
-      %64 = "tt.reduce"(%61) <{axis = 1 : i32}> ({
+      %60 = arith.mulf %59, %7 : tensor<128xf32, #ttg.slice<{dim = 1, parent = #blocked1}>>
+      %61 = arith.maxnumf %arg29, %60 : tensor<128xf32, #ttg.slice<{dim = 1, parent = #blocked1}>>
+      %62 = arith.mulf %result_18, %8 : tensor<128x128xf32, #blocked1>
+      %63 = tt.expand_dims %61 {axis = 1 : i32} : tensor<128xf32, #ttg.slice<{dim = 1, parent = #blocked1}>> -> tensor<128x1xf32, #blocked1>
+      %64 = tt.broadcast %63 : tensor<128x1xf32, #blocked1> -> tensor<128x128xf32, #blocked1>
+      %65 = arith.subf %62, %64 : tensor<128x128xf32, #blocked1>
+      %66 = math.exp2 %65 : tensor<128x128xf32, #blocked1>
+      %67 = arith.subf %arg29, %61 : tensor<128xf32, #ttg.slice<{dim = 1, parent = #blocked1}>>
+      %68 = math.exp2 %67 : tensor<128xf32, #ttg.slice<{dim = 1, parent = #blocked1}>>
+      %69 = "tt.reduce"(%66) <{axis = 1 : i32}> ({
       ^bb0(%arg34: f32, %arg35: f32):
         %78 = arith.addf %arg34, %arg35 : f32
         tt.reduce.return %78 : f32
       }) : (tensor<128x128xf32, #blocked1>) -> tensor<128xf32, #ttg.slice<{dim = 1, parent = #blocked1}>>
-      %65 = tt.expand_dims %63 {axis = 1 : i32} : tensor<128xf32, #ttg.slice<{dim = 1, parent = #blocked1}>> -> tensor<128x1xf32, #blocked1>
-      %66 = tt.broadcast %65 : tensor<128x1xf32, #blocked1> -> tensor<128x128xf32, #blocked1>
-      %result_19, %token_20 = ttng.tmem_load %result_7[%arg33] : !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable> -> tensor<128x128xf32, #blocked1>
-      %67 = arith.mulf %result_19, %66 : tensor<128x128xf32, #blocked1>
-      %68 = arith.truncf %46 : tensor<128x128xf32, #blocked1> to tensor<128x128xf16, #blocked1>
-      %result_21 = ttng.tmem_alloc %68 : (tensor<128x128xf16, #blocked1>) -> !ttg.memdesc<128x128xf16, #tmem1, #ttng.tensor_memory>
-      %69 = ttng.tmem_store %52, %result_5[%token_16], %true : tensor<128x128xf32, #blocked1> -> !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>
-      %70 = ttng.tc_gen5_mma %result_21, %37, %result_5[%69], %true, %true : !ttg.memdesc<128x128xf16, #tmem1, #ttng.tensor_memory>, !ttg.memdesc<128x128xf16, #shared, #smem>, !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>
-      %71 = arith.mulf %arg26, %48 : tensor<128xf32, #ttg.slice<{dim = 1, parent = #blocked1}>>
-      %72 = arith.addf %71, %49 : tensor<128xf32, #ttg.slice<{dim = 1, parent = #blocked1}>>
-      %73 = arith.truncf %61 : tensor<128x128xf32, #blocked1> to tensor<128x128xf16, #blocked1>
+      %70 = tt.expand_dims %68 {axis = 1 : i32} : tensor<128xf32, #ttg.slice<{dim = 1, parent = #blocked1}>> -> tensor<128x1xf32, #blocked1>
+      %71 = tt.broadcast %70 : tensor<128x1xf32, #blocked1> -> tensor<128x128xf32, #blocked1>
+      %result_20, %token_21 = ttng.tmem_load %result_7[%arg33] : !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable> -> tensor<128x128xf32, #blocked1>
+      %72 = arith.mulf %result_20, %71 : tensor<128x128xf32, #blocked1>
+      %73 = arith.truncf %66 : tensor<128x128xf32, #blocked1> to tensor<128x128xf16, #blocked1>
       %result_22 = ttng.tmem_alloc %73 : (tensor<128x128xf16, #blocked1>) -> !ttg.memdesc<128x128xf16, #tmem1, #ttng.tensor_memory>
-      %74 = ttng.tmem_store %67, %result_7[%token_20], %true : tensor<128x128xf32, #blocked1> -> !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>
+      %74 = ttng.tmem_store %72, %result_7[%token_21], %true : tensor<128x128xf32, #blocked1> -> !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>
       %75 = ttng.tc_gen5_mma %result_22, %37, %result_7[%74], %true, %true : !ttg.memdesc<128x128xf16, #tmem1, #ttng.tensor_memory>, !ttg.memdesc<128x128xf16, #shared, #smem>, !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>
-      %76 = arith.mulf %arg28, %63 : tensor<128xf32, #ttg.slice<{dim = 1, parent = #blocked1}>>
-      %77 = arith.addf %76, %64 : tensor<128xf32, #ttg.slice<{dim = 1, parent = #blocked1}>>
-      scf.yield %72, %41, %77, %56, %token_14, %token_18, %70, %75 : tensor<128xf32, #ttg.slice<{dim = 1, parent = #blocked1}>>, tensor<128xf32, #ttg.slice<{dim = 1, parent = #blocked1}>>, tensor<128xf32, #ttg.slice<{dim = 1, parent = #blocked1}>>, tensor<128xf32, #ttg.slice<{dim = 1, parent = #blocked1}>>, !ttg.async.token, !ttg.async.token, !ttg.async.token, !ttg.async.token
-    } {tt.divisibility_arg1 = dense<128> : tensor<1xi32>, tt.warp_specialize}
-    %result_9, %token_10 = ttng.tmem_load %result_5[%11#6] : !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable> -> tensor<128x128xf32, #blocked1>
+      %76 = arith.mulf %arg28, %68 : tensor<128xf32, #ttg.slice<{dim = 1, parent = #blocked1}>>
+      %77 = arith.addf %76, %69 : tensor<128xf32, #ttg.slice<{dim = 1, parent = #blocked1}>>
+      scf.yield %57, %41, %77, %61, %token_14, %55, %token_19, %75 : tensor<128xf32, #ttg.slice<{dim = 1, parent = #blocked1}>>, tensor<128xf32, #ttg.slice<{dim = 1, parent = #blocked1}>>, tensor<128xf32, #ttg.slice<{dim = 1, parent = #blocked1}>>, tensor<128xf32, #ttg.slice<{dim = 1, parent = #blocked1}>>, !ttg.async.token, !ttg.async.token, !ttg.async.token, !ttg.async.token
+    } {tt.disallow_acc_multi_buffer, tt.divisibility_arg1 = dense<128> : tensor<1xi32>, tt.warp_specialize}
+    %result_9, %token_10 = ttng.tmem_load %result_3[%11#5] : !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable> -> tensor<128x128xf32, #blocked1>
     %result_11, %token_12 = ttng.tmem_load %result_7[%11#7] : !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable> -> tensor<128x128xf32, #blocked1>
     %12 = arith.truncf %result_9 : tensor<128x128xf32, #blocked1> to tensor<128x128xf16, #blocked1>
     %13 = ttg.convert_layout %12 : tensor<128x128xf16, #blocked1> -> tensor<128x128xf16, #blocked2>

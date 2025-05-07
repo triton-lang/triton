@@ -1,100 +1,178 @@
+#loc = loc("/root/code/triton/python/test/unit/language/test_warp_specialization.py":414:0)
+#loc1 = loc(unknown)
+#loc13 = loc("/root/code/triton/python/test/unit/language/test_warp_specialization.py":442:45)
+#loc24 = loc("/root/code/triton/python/test/unit/language/test_warp_specialization.py":446:27)
+#loc33 = loc("/root/code/triton/python/test/unit/language/test_warp_specialization.py":454:45)
+#loc42 = loc("/root/code/triton/python/test/unit/language/test_warp_specialization.py":458:27)
+#loc67 = loc(callsite(#loc1 at #loc13))
+#loc69 = loc(callsite(#loc1 at #loc24))
+#loc71 = loc(callsite(#loc1 at #loc33))
+#loc73 = loc(callsite(#loc1 at #loc42))
 module {
-  tt.func public @attention_inner_loop_kernel_data_part(%arg0: !tt.tensordesc<tensor<128x128xf16>>, %arg1: i32, %arg2: i32, %arg3: i64, %arg4: i64, %arg5: !tt.tensordesc<tensor<128x128xf16>>, %arg6: i32, %arg7: i32, %arg8: i64, %arg9: i64, %arg10: !tt.tensordesc<tensor<128x128xf16>>, %arg11: i32, %arg12: i32, %arg13: i64, %arg14: i64, %arg15: !tt.tensordesc<tensor<128x128xf16>>, %arg16: i32, %arg17: i32, %arg18: i64, %arg19: i64, %arg20: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg21: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg22: i32 {tt.divisibility = 16 : i32}, %arg23: i32 {tt.divisibility = 16 : i32}, %arg24: f32) attributes {noinline = false} {
-    %c256_i32 = arith.constant 256 : i32
-    %cst = arith.constant dense<128> : tensor<128xi32>
-    %cst_0 = arith.constant dense<0.000000e+00> : tensor<128x128xf32>
-    %c0_i32 = arith.constant 0 : i32
-    %c128_i32 = arith.constant 128 : i32
-    %cst_1 = arith.constant dense<0xFF800000> : tensor<128xf32>
-    %cst_2 = arith.constant dense<1.000000e+00> : tensor<128xf32>
-    %0 = tt.get_program_id x : i32
-    %1 = arith.muli %0, %c256_i32 : i32
-    %2 = tt.descriptor_load %arg0[%1, %c0_i32] : !tt.tensordesc<tensor<128x128xf16>> -> tensor<128x128xf16>
-    %3 = arith.addi %1, %c128_i32 : i32
-    %4 = tt.descriptor_load %arg0[%3, %c0_i32] : !tt.tensordesc<tensor<128x128xf16>> -> tensor<128x128xf16>
-    %5:6 = scf.for %arg25 = %c0_i32 to %arg23 step %c128_i32 iter_args(%arg26 = %cst_0, %arg27 = %cst_0, %arg28 = %cst_2, %arg29 = %cst_1, %arg30 = %cst_2, %arg31 = %cst_1) -> (tensor<128x128xf32>, tensor<128x128xf32>, tensor<128xf32>, tensor<128xf32>, tensor<128xf32>, tensor<128xf32>)  : i32 {
-      %21 = tt.descriptor_load %arg5[%arg25, %c0_i32] : !tt.tensordesc<tensor<128x128xf16>> -> tensor<128x128xf16>
-      %22 = tt.trans %21 {order = array<i32: 1, 0>} : tensor<128x128xf16> -> tensor<128x128xf16>
-      %23 = tt.descriptor_load %arg10[%arg25, %c0_i32] : !tt.tensordesc<tensor<128x128xf16>> -> tensor<128x128xf16>
-      %24 = tt.dot %2, %22, %cst_0, inputPrecision = tf32 : tensor<128x128xf16> * tensor<128x128xf16> -> tensor<128x128xf32>
+  tt.func public @attention_inner_loop_kernel_data_part(%arg0: !tt.tensordesc<tensor<128x128xf16>> loc("/root/code/triton/python/test/unit/language/test_warp_specialization.py":414:0), %arg1: i32 loc("/root/code/triton/python/test/unit/language/test_warp_specialization.py":414:0), %arg2: i32 loc("/root/code/triton/python/test/unit/language/test_warp_specialization.py":414:0), %arg3: i64 loc("/root/code/triton/python/test/unit/language/test_warp_specialization.py":414:0), %arg4: i64 loc("/root/code/triton/python/test/unit/language/test_warp_specialization.py":414:0), %arg5: !tt.tensordesc<tensor<128x128xf16>> loc("/root/code/triton/python/test/unit/language/test_warp_specialization.py":414:0), %arg6: i32 loc("/root/code/triton/python/test/unit/language/test_warp_specialization.py":414:0), %arg7: i32 loc("/root/code/triton/python/test/unit/language/test_warp_specialization.py":414:0), %arg8: i64 loc("/root/code/triton/python/test/unit/language/test_warp_specialization.py":414:0), %arg9: i64 loc("/root/code/triton/python/test/unit/language/test_warp_specialization.py":414:0), %arg10: !tt.tensordesc<tensor<128x128xf16>> loc("/root/code/triton/python/test/unit/language/test_warp_specialization.py":414:0), %arg11: i32 loc("/root/code/triton/python/test/unit/language/test_warp_specialization.py":414:0), %arg12: i32 loc("/root/code/triton/python/test/unit/language/test_warp_specialization.py":414:0), %arg13: i64 loc("/root/code/triton/python/test/unit/language/test_warp_specialization.py":414:0), %arg14: i64 loc("/root/code/triton/python/test/unit/language/test_warp_specialization.py":414:0), %arg15: !tt.tensordesc<tensor<128x128xf16>> loc("/root/code/triton/python/test/unit/language/test_warp_specialization.py":414:0), %arg16: i32 loc("/root/code/triton/python/test/unit/language/test_warp_specialization.py":414:0), %arg17: i32 loc("/root/code/triton/python/test/unit/language/test_warp_specialization.py":414:0), %arg18: i64 loc("/root/code/triton/python/test/unit/language/test_warp_specialization.py":414:0), %arg19: i64 loc("/root/code/triton/python/test/unit/language/test_warp_specialization.py":414:0), %arg20: !tt.ptr<f16> {tt.divisibility = 16 : i32} loc("/root/code/triton/python/test/unit/language/test_warp_specialization.py":414:0), %arg21: !tt.ptr<f16> {tt.divisibility = 16 : i32} loc("/root/code/triton/python/test/unit/language/test_warp_specialization.py":414:0), %arg22: i32 {tt.divisibility = 16 : i32} loc("/root/code/triton/python/test/unit/language/test_warp_specialization.py":414:0), %arg23: i32 {tt.divisibility = 16 : i32} loc("/root/code/triton/python/test/unit/language/test_warp_specialization.py":414:0), %arg24: f32 loc("/root/code/triton/python/test/unit/language/test_warp_specialization.py":414:0)) attributes {noinline = false} {
+    %c256_i32 = arith.constant 256 : i32 loc(#loc1)
+    %cst = arith.constant dense<128> : tensor<128xi32> loc(#loc1)
+    %cst_0 = arith.constant dense<0.000000e+00> : tensor<128x128xf32> loc(#loc1)
+    %c0_i32 = arith.constant 0 : i32 loc(#loc1)
+    %c128_i32 = arith.constant 128 : i32 loc(#loc1)
+    %cst_1 = arith.constant dense<0xFF800000> : tensor<128xf32> loc(#loc1)
+    %cst_2 = arith.constant dense<1.000000e+00> : tensor<128xf32> loc(#loc1)
+    %0 = tt.get_program_id x : i32 loc(#loc2)
+    %1 = arith.muli %0, %c256_i32 : i32 loc(#loc3)
+    %2 = tt.descriptor_load %arg0[%1, %c0_i32] : !tt.tensordesc<tensor<128x128xf16>> -> tensor<128x128xf16> loc(#loc4)
+    %3 = arith.addi %1, %c128_i32 : i32 loc(#loc5)
+    %4 = tt.descriptor_load %arg0[%3, %c0_i32] : !tt.tensordesc<tensor<128x128xf16>> -> tensor<128x128xf16> loc(#loc6)
+    %5:6 = scf.for %arg25 = %c0_i32 to %arg23 step %c128_i32 iter_args(%arg26 = %cst_0, %arg27 = %cst_2, %arg28 = %cst_1, %arg29 = %cst_0, %arg30 = %cst_2, %arg31 = %cst_1) -> (tensor<128x128xf32>, tensor<128xf32>, tensor<128xf32>, tensor<128x128xf32>, tensor<128xf32>, tensor<128xf32>)  : i32 {
+      %21 = tt.descriptor_load %arg5[%arg25, %c0_i32] : !tt.tensordesc<tensor<128x128xf16>> -> tensor<128x128xf16> loc(#loc8)
+      %22 = tt.trans %21 {order = array<i32: 1, 0>} : tensor<128x128xf16> -> tensor<128x128xf16> loc(#loc9)
+      %23 = tt.descriptor_load %arg10[%arg25, %c0_i32] : !tt.tensordesc<tensor<128x128xf16>> -> tensor<128x128xf16> loc(#loc10)
+      %24 = tt.dot %2, %22, %cst_0, inputPrecision = tf32 : tensor<128x128xf16> * tensor<128x128xf16> -> tensor<128x128xf32> loc(#loc11)
       %25 = "tt.reduce"(%24) <{axis = 1 : i32}> ({
-      ^bb0(%arg32: f32, %arg33: f32):
-        %64 = arith.maxnumf %arg32, %arg33 : f32
-        tt.reduce.return %64 : f32
-      }) : (tensor<128x128xf32>) -> tensor<128xf32>
-      %26 = tt.splat %arg24 : f32 -> tensor<128xf32>
-      %27 = arith.mulf %25, %26 : tensor<128xf32>
-      %28 = arith.maxnumf %arg29, %27 : tensor<128xf32>
-      %29 = tt.splat %arg24 : f32 -> tensor<128x128xf32>
-      %30 = arith.mulf %24, %29 : tensor<128x128xf32>
-      %31 = tt.expand_dims %28 {axis = 1 : i32} : tensor<128xf32> -> tensor<128x1xf32>
-      %32 = tt.broadcast %31 : tensor<128x1xf32> -> tensor<128x128xf32>
-      %33 = arith.subf %30, %32 : tensor<128x128xf32>
-      %34 = math.exp2 %33 : tensor<128x128xf32>
-      %35 = arith.subf %arg29, %28 : tensor<128xf32>
-      %36 = math.exp2 %35 : tensor<128xf32>
+      ^bb0(%arg32: f32 loc(callsite(#loc1 at #loc13)), %arg33: f32 loc(callsite(#loc1 at #loc13))):
+        %64 = arith.maxnumf %arg32, %arg33 : f32 loc(#loc74)
+        tt.reduce.return %64 : f32 loc(#loc66)
+      }) : (tensor<128x128xf32>) -> tensor<128xf32> loc(#loc66)
+      %26 = tt.splat %arg24 : f32 -> tensor<128xf32> loc(#loc15)
+      %27 = arith.mulf %25, %26 : tensor<128xf32> loc(#loc15)
+      %28 = arith.maxnumf %arg28, %27 : tensor<128xf32> loc(#loc16)
+      %29 = tt.splat %arg24 : f32 -> tensor<128x128xf32> loc(#loc17)
+      %30 = arith.mulf %24, %29 : tensor<128x128xf32> loc(#loc17)
+      %31 = tt.expand_dims %28 {axis = 1 : i32} : tensor<128xf32> -> tensor<128x1xf32> loc(#loc18)
+      %32 = tt.broadcast %31 : tensor<128x1xf32> -> tensor<128x128xf32> loc(#loc19)
+      %33 = arith.subf %30, %32 : tensor<128x128xf32> loc(#loc19)
+      %34 = math.exp2 %33 : tensor<128x128xf32> loc(#loc20)
+      %35 = arith.subf %arg28, %28 : tensor<128xf32> loc(#loc21)
+      %36 = math.exp2 %35 : tensor<128xf32> loc(#loc22)
       %37 = "tt.reduce"(%34) <{axis = 1 : i32}> ({
-      ^bb0(%arg32: f32, %arg33: f32):
-        %64 = arith.addf %arg32, %arg33 : f32
-        tt.reduce.return %64 : f32
-      }) : (tensor<128x128xf32>) -> tensor<128xf32>
-      %38 = tt.expand_dims %36 {axis = 1 : i32} : tensor<128xf32> -> tensor<128x1xf32>
-      %39 = tt.broadcast %38 : tensor<128x1xf32> -> tensor<128x128xf32>
-      %40 = arith.mulf %arg26, %39 : tensor<128x128xf32>
-      %41 = tt.dot %4, %22, %cst_0, inputPrecision = tf32 : tensor<128x128xf16> * tensor<128x128xf16> -> tensor<128x128xf32>
-      %42 = "tt.reduce"(%41) <{axis = 1 : i32}> ({
-      ^bb0(%arg32: f32, %arg33: f32):
-        %64 = arith.maxnumf %arg32, %arg33 : f32
-        tt.reduce.return %64 : f32
-      }) : (tensor<128x128xf32>) -> tensor<128xf32>
-      %43 = arith.mulf %42, %26 : tensor<128xf32>
-      %44 = arith.maxnumf %arg31, %43 : tensor<128xf32>
-      %45 = arith.mulf %41, %29 : tensor<128x128xf32>
-      %46 = tt.expand_dims %44 {axis = 1 : i32} : tensor<128xf32> -> tensor<128x1xf32>
-      %47 = tt.broadcast %46 : tensor<128x1xf32> -> tensor<128x128xf32>
-      %48 = arith.subf %45, %47 : tensor<128x128xf32>
-      %49 = math.exp2 %48 : tensor<128x128xf32>
-      %50 = arith.subf %arg31, %44 : tensor<128xf32>
-      %51 = math.exp2 %50 : tensor<128xf32>
-      %52 = "tt.reduce"(%49) <{axis = 1 : i32}> ({
-      ^bb0(%arg32: f32, %arg33: f32):
-        %64 = arith.addf %arg32, %arg33 : f32
-        tt.reduce.return %64 : f32
-      }) : (tensor<128x128xf32>) -> tensor<128xf32>
-      %53 = tt.expand_dims %51 {axis = 1 : i32} : tensor<128xf32> -> tensor<128x1xf32>
-      %54 = tt.broadcast %53 : tensor<128x1xf32> -> tensor<128x128xf32>
-      %55 = arith.mulf %arg27, %54 : tensor<128x128xf32>
-      %56 = arith.truncf %34 : tensor<128x128xf32> to tensor<128x128xf16>
-      %57 = tt.dot %56, %23, %40, inputPrecision = tf32 : tensor<128x128xf16> * tensor<128x128xf16> -> tensor<128x128xf32>
-      %58 = arith.mulf %arg28, %36 : tensor<128xf32>
-      %59 = arith.addf %58, %37 : tensor<128xf32>
-      %60 = arith.truncf %49 : tensor<128x128xf32> to tensor<128x128xf16>
-      %61 = tt.dot %60, %23, %55, inputPrecision = tf32 : tensor<128x128xf16> * tensor<128x128xf16> -> tensor<128x128xf32>
-      %62 = arith.mulf %arg30, %51 : tensor<128xf32>
-      %63 = arith.addf %62, %52 : tensor<128xf32>
-      scf.yield %57, %61, %59, %28, %63, %44 : tensor<128x128xf32>, tensor<128x128xf32>, tensor<128xf32>, tensor<128xf32>, tensor<128xf32>, tensor<128xf32>
-    } {tt.divisibility_arg1 = dense<128> : tensor<1xi32>, tt.warp_specialize}
-    %6 = arith.truncf %5#0 : tensor<128x128xf32> to tensor<128x128xf16>
-    tt.descriptor_store %arg15[%1, %c0_i32], %6 : !tt.tensordesc<tensor<128x128xf16>>, tensor<128x128xf16>
-    %7 = tt.addptr %arg20, %1 : !tt.ptr<f16>, i32
-    %8 = tt.make_range {end = 128 : i32, start = 0 : i32} : tensor<128xi32>
-    %9 = tt.splat %7 : !tt.ptr<f16> -> tensor<128x!tt.ptr<f16>>
-    %10 = tt.addptr %9, %8 : tensor<128x!tt.ptr<f16>>, tensor<128xi32>
-    %11 = arith.truncf %5#2 : tensor<128xf32> to tensor<128xf16>
-    tt.store %10, %11 : tensor<128x!tt.ptr<f16>>
-    %12 = tt.addptr %arg21, %1 : !tt.ptr<f16>, i32
-    %13 = tt.splat %12 : !tt.ptr<f16> -> tensor<128x!tt.ptr<f16>>
-    %14 = tt.addptr %13, %8 : tensor<128x!tt.ptr<f16>>, tensor<128xi32>
-    %15 = arith.truncf %5#3 : tensor<128xf32> to tensor<128xf16>
-    tt.store %14, %15 : tensor<128x!tt.ptr<f16>>
-    %16 = arith.truncf %5#1 : tensor<128x128xf32> to tensor<128x128xf16>
-    tt.descriptor_store %arg15[%3, %c0_i32], %16 : !tt.tensordesc<tensor<128x128xf16>>, tensor<128x128xf16>
-    %17 = tt.addptr %10, %cst : tensor<128x!tt.ptr<f16>>, tensor<128xi32>
-    %18 = arith.truncf %5#4 : tensor<128xf32> to tensor<128xf16>
-    tt.store %17, %18 : tensor<128x!tt.ptr<f16>>
-    %19 = tt.addptr %14, %cst : tensor<128x!tt.ptr<f16>>, tensor<128xi32>
-    %20 = arith.truncf %5#5 : tensor<128xf32> to tensor<128xf16>
-    tt.store %19, %20 : tensor<128x!tt.ptr<f16>>
-    tt.return
-  }
-}
+      ^bb0(%arg32: f32 loc(callsite(#loc1 at #loc24)), %arg33: f32 loc(callsite(#loc1 at #loc24))):
+        %64 = arith.addf %arg32, %arg33 : f32 loc(#loc75)
+        tt.reduce.return %64 : f32 loc(#loc68)
+      }) : (tensor<128x128xf32>) -> tensor<128xf32> loc(#loc68)
+      %38 = tt.expand_dims %36 {axis = 1 : i32} : tensor<128xf32> -> tensor<128x1xf32> loc(#loc26)
+      %39 = tt.broadcast %38 : tensor<128x1xf32> -> tensor<128x128xf32> loc(#loc27)
+      %40 = arith.mulf %arg26, %39 : tensor<128x128xf32> loc(#loc27)
+      %41 = arith.truncf %34 : tensor<128x128xf32> to tensor<128x128xf16> loc(#loc28)
+      %42 = tt.dot %41, %23, %40, inputPrecision = tf32 : tensor<128x128xf16> * tensor<128x128xf16> -> tensor<128x128xf32> loc(#loc29)
+      %43 = arith.mulf %arg27, %36 : tensor<128xf32> loc(#loc30)
+      %44 = arith.addf %43, %37 : tensor<128xf32> loc(#loc31)
+      %45 = tt.dot %4, %22, %cst_0, inputPrecision = tf32 : tensor<128x128xf16> * tensor<128x128xf16> -> tensor<128x128xf32> loc(#loc32)
+      %46 = "tt.reduce"(%45) <{axis = 1 : i32}> ({
+      ^bb0(%arg32: f32 loc(callsite(#loc1 at #loc33)), %arg33: f32 loc(callsite(#loc1 at #loc33))):
+        %64 = arith.maxnumf %arg32, %arg33 : f32 loc(#loc76)
+        tt.reduce.return %64 : f32 loc(#loc70)
+      }) : (tensor<128x128xf32>) -> tensor<128xf32> loc(#loc70)
+      %47 = arith.mulf %46, %26 : tensor<128xf32> loc(#loc34)
+      %48 = arith.maxnumf %arg31, %47 : tensor<128xf32> loc(#loc35)
+      %49 = arith.mulf %45, %29 : tensor<128x128xf32> loc(#loc36)
+      %50 = tt.expand_dims %48 {axis = 1 : i32} : tensor<128xf32> -> tensor<128x1xf32> loc(#loc37)
+      %51 = tt.broadcast %50 : tensor<128x1xf32> -> tensor<128x128xf32> loc(#loc38)
+      %52 = arith.subf %49, %51 : tensor<128x128xf32> loc(#loc38)
+      %53 = math.exp2 %52 : tensor<128x128xf32> loc(#loc39)
+      %54 = arith.subf %arg31, %48 : tensor<128xf32> loc(#loc40)
+      %55 = math.exp2 %54 : tensor<128xf32> loc(#loc41)
+      %56 = "tt.reduce"(%53) <{axis = 1 : i32}> ({
+      ^bb0(%arg32: f32 loc(callsite(#loc1 at #loc42)), %arg33: f32 loc(callsite(#loc1 at #loc42))):
+        %64 = arith.addf %arg32, %arg33 : f32 loc(#loc77)
+        tt.reduce.return %64 : f32 loc(#loc72)
+      }) : (tensor<128x128xf32>) -> tensor<128xf32> loc(#loc72)
+      %57 = tt.expand_dims %55 {axis = 1 : i32} : tensor<128xf32> -> tensor<128x1xf32> loc(#loc43)
+      %58 = tt.broadcast %57 : tensor<128x1xf32> -> tensor<128x128xf32> loc(#loc44)
+      %59 = arith.mulf %arg29, %58 : tensor<128x128xf32> loc(#loc44)
+      %60 = arith.truncf %53 : tensor<128x128xf32> to tensor<128x128xf16> loc(#loc45)
+      %61 = tt.dot %60, %23, %59, inputPrecision = tf32 : tensor<128x128xf16> * tensor<128x128xf16> -> tensor<128x128xf32> loc(#loc46)
+      %62 = arith.mulf %arg30, %55 : tensor<128xf32> loc(#loc47)
+      %63 = arith.addf %62, %56 : tensor<128xf32> loc(#loc48)
+      scf.yield %42, %44, %28, %61, %63, %48 : tensor<128x128xf32>, tensor<128xf32>, tensor<128xf32>, tensor<128x128xf32>, tensor<128xf32>, tensor<128xf32> loc(#loc49)
+    } {tt.disallow_acc_multi_buffer, tt.divisibility_arg1 = dense<128> : tensor<1xi32>, tt.warp_specialize} loc(#loc7)
+    %6 = arith.truncf %5#0 : tensor<128x128xf32> to tensor<128x128xf16> loc(#loc50)
+    tt.descriptor_store %arg15[%1, %c0_i32], %6 : !tt.tensordesc<tensor<128x128xf16>>, tensor<128x128xf16> loc(#loc51)
+    %7 = tt.addptr %arg20, %1 : !tt.ptr<f16>, i32 loc(#loc52)
+    %8 = tt.make_range {end = 128 : i32, start = 0 : i32} : tensor<128xi32> loc(#loc53)
+    %9 = tt.splat %7 : !tt.ptr<f16> -> tensor<128x!tt.ptr<f16>> loc(#loc54)
+    %10 = tt.addptr %9, %8 : tensor<128x!tt.ptr<f16>>, tensor<128xi32> loc(#loc54)
+    %11 = arith.truncf %5#1 : tensor<128xf32> to tensor<128xf16> loc(#loc55)
+    tt.store %10, %11 : tensor<128x!tt.ptr<f16>> loc(#loc55)
+    %12 = tt.addptr %arg21, %1 : !tt.ptr<f16>, i32 loc(#loc56)
+    %13 = tt.splat %12 : !tt.ptr<f16> -> tensor<128x!tt.ptr<f16>> loc(#loc57)
+    %14 = tt.addptr %13, %8 : tensor<128x!tt.ptr<f16>>, tensor<128xi32> loc(#loc57)
+    %15 = arith.truncf %5#2 : tensor<128xf32> to tensor<128xf16> loc(#loc58)
+    tt.store %14, %15 : tensor<128x!tt.ptr<f16>> loc(#loc58)
+    %16 = arith.truncf %5#3 : tensor<128x128xf32> to tensor<128x128xf16> loc(#loc59)
+    tt.descriptor_store %arg15[%3, %c0_i32], %16 : !tt.tensordesc<tensor<128x128xf16>>, tensor<128x128xf16> loc(#loc60)
+    %17 = tt.addptr %10, %cst : tensor<128x!tt.ptr<f16>>, tensor<128xi32> loc(#loc61)
+    %18 = arith.truncf %5#4 : tensor<128xf32> to tensor<128xf16> loc(#loc62)
+    tt.store %17, %18 : tensor<128x!tt.ptr<f16>> loc(#loc62)
+    %19 = tt.addptr %14, %cst : tensor<128x!tt.ptr<f16>>, tensor<128xi32> loc(#loc63)
+    %20 = arith.truncf %5#5 : tensor<128xf32> to tensor<128xf16> loc(#loc64)
+    tt.store %19, %20 : tensor<128x!tt.ptr<f16>> loc(#loc64)
+    tt.return loc(#loc65)
+  } loc(#loc)
+} loc(#loc)
+#loc2 = loc("/root/code/triton/python/test/unit/language/test_warp_specialization.py":431:26)
+#loc3 = loc("/root/code/triton/python/test/unit/language/test_warp_specialization.py":431:41)
+#loc4 = loc("/root/code/triton/python/test/unit/language/test_warp_specialization.py":432:21)
+#loc5 = loc("/root/code/triton/python/test/unit/language/test_warp_specialization.py":433:30)
+#loc6 = loc("/root/code/triton/python/test/unit/language/test_warp_specialization.py":433:21)
+#loc7 = loc("/root/code/triton/python/test/unit/language/test_warp_specialization.py":435:77)
+#loc8 = loc("/root/code/triton/python/test/unit/language/test_warp_specialization.py":438:24)
+#loc9 = loc("/root/code/triton/python/test/unit/language/test_warp_specialization.py":438:12)
+#loc10 = loc("/root/code/triton/python/test/unit/language/test_warp_specialization.py":439:24)
+#loc11 = loc("/root/code/triton/python/test/unit/language/test_warp_specialization.py":441:25)
+#loc12 = loc("/root/code/triton/python/triton/language/standard.py":188:40)
+#loc14 = loc("/root/code/triton/python/triton/language/standard.py":167:27)
+#loc15 = loc("/root/code/triton/python/test/unit/language/test_warp_specialization.py":442:50)
+#loc16 = loc("/root/code/triton/python/test/unit/language/test_warp_specialization.py":442:33)
+#loc17 = loc("/root/code/triton/python/test/unit/language/test_warp_specialization.py":443:20)
+#loc18 = loc("/root/code/triton/python/test/unit/language/test_warp_specialization.py":443:37)
+#loc19 = loc("/root/code/triton/python/test/unit/language/test_warp_specialization.py":443:31)
+#loc20 = loc("/root/code/triton/python/test/unit/language/test_warp_specialization.py":444:26)
+#loc21 = loc("/root/code/triton/python/test/unit/language/test_warp_specialization.py":445:37)
+#loc22 = loc("/root/code/triton/python/test/unit/language/test_warp_specialization.py":445:30)
+#loc23 = loc("/root/code/triton/python/triton/language/standard.py":290:36)
+#loc25 = loc("/root/code/triton/python/triton/language/standard.py":260:15)
+#loc26 = loc("/root/code/triton/python/test/unit/language/test_warp_specialization.py":447:25)
+#loc27 = loc("/root/code/triton/python/test/unit/language/test_warp_specialization.py":447:18)
+#loc28 = loc("/root/code/triton/python/test/unit/language/test_warp_specialization.py":448:19)
+#loc29 = loc("/root/code/triton/python/test/unit/language/test_warp_specialization.py":449:27)
+#loc30 = loc("/root/code/triton/python/test/unit/language/test_warp_specialization.py":450:22)
+#loc31 = loc("/root/code/triton/python/test/unit/language/test_warp_specialization.py":450:31)
+#loc32 = loc("/root/code/triton/python/test/unit/language/test_warp_specialization.py":453:25)
+#loc34 = loc("/root/code/triton/python/test/unit/language/test_warp_specialization.py":454:50)
+#loc35 = loc("/root/code/triton/python/test/unit/language/test_warp_specialization.py":454:33)
+#loc36 = loc("/root/code/triton/python/test/unit/language/test_warp_specialization.py":455:20)
+#loc37 = loc("/root/code/triton/python/test/unit/language/test_warp_specialization.py":455:37)
+#loc38 = loc("/root/code/triton/python/test/unit/language/test_warp_specialization.py":455:31)
+#loc39 = loc("/root/code/triton/python/test/unit/language/test_warp_specialization.py":456:26)
+#loc40 = loc("/root/code/triton/python/test/unit/language/test_warp_specialization.py":457:37)
+#loc41 = loc("/root/code/triton/python/test/unit/language/test_warp_specialization.py":457:30)
+#loc43 = loc("/root/code/triton/python/test/unit/language/test_warp_specialization.py":459:25)
+#loc44 = loc("/root/code/triton/python/test/unit/language/test_warp_specialization.py":459:18)
+#loc45 = loc("/root/code/triton/python/test/unit/language/test_warp_specialization.py":460:19)
+#loc46 = loc("/root/code/triton/python/test/unit/language/test_warp_specialization.py":461:27)
+#loc47 = loc("/root/code/triton/python/test/unit/language/test_warp_specialization.py":462:22)
+#loc48 = loc("/root/code/triton/python/test/unit/language/test_warp_specialization.py":462:31)
+#loc49 = loc("/root/code/triton/python/test/unit/language/test_warp_specialization.py":463:8)
+#loc50 = loc("/root/code/triton/python/test/unit/language/test_warp_specialization.py":465:49)
+#loc51 = loc("/root/code/triton/python/test/unit/language/test_warp_specialization.py":465:43)
+#loc52 = loc("/root/code/triton/python/test/unit/language/test_warp_specialization.py":466:23)
+#loc53 = loc("/root/code/triton/python/test/unit/language/test_warp_specialization.py":466:44)
+#loc54 = loc("/root/code/triton/python/test/unit/language/test_warp_specialization.py":466:31)
+#loc55 = loc("/root/code/triton/python/test/unit/language/test_warp_specialization.py":466:68)
+#loc56 = loc("/root/code/triton/python/test/unit/language/test_warp_specialization.py":467:23)
+#loc57 = loc("/root/code/triton/python/test/unit/language/test_warp_specialization.py":467:31)
+#loc58 = loc("/root/code/triton/python/test/unit/language/test_warp_specialization.py":467:68)
+#loc59 = loc("/root/code/triton/python/test/unit/language/test_warp_specialization.py":469:49)
+#loc60 = loc("/root/code/triton/python/test/unit/language/test_warp_specialization.py":469:43)
+#loc61 = loc("/root/code/triton/python/test/unit/language/test_warp_specialization.py":470:55)
+#loc62 = loc("/root/code/triton/python/test/unit/language/test_warp_specialization.py":470:68)
+#loc63 = loc("/root/code/triton/python/test/unit/language/test_warp_specialization.py":471:55)
+#loc64 = loc("/root/code/triton/python/test/unit/language/test_warp_specialization.py":471:68)
+#loc65 = loc("/root/code/triton/python/test/unit/language/test_warp_specialization.py":471:4)
+#loc66 = loc(callsite(#loc12 at #loc13))
+#loc68 = loc(callsite(#loc23 at #loc24))
+#loc70 = loc(callsite(#loc12 at #loc33))
+#loc72 = loc(callsite(#loc23 at #loc42))
+#loc74 = loc(callsite(#loc14 at #loc66))
+#loc75 = loc(callsite(#loc25 at #loc68))
+#loc76 = loc(callsite(#loc14 at #loc70))
+#loc77 = loc(callsite(#loc25 at #loc72))
