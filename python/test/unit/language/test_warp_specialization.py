@@ -4,7 +4,7 @@ import pathlib
 import triton
 import triton.language as tl
 
-from triton._internal_testing import is_cuda, is_hip
+from triton._internal_testing import is_hip
 from triton.tools.tensor_descriptor import TensorDescriptor
 
 if torch.cuda.is_available() and torch.cuda.get_device_capability()[0] == 10:
