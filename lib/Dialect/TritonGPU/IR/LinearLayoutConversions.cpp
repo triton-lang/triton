@@ -234,19 +234,9 @@ LinearLayout getCoreMatrixLinearLayout(NVMMASharedEncodingAttr shared,
 
   int elemBitWidth = shared.getElementBitWidth();
   int tileWidthBytes = shared.getSwizzlingByteWidth();
-  int vec = 128 / elemBitWidth;
-  int perPhase = 0;
-  int maxPhase = 0;
-  if (tileWidthBytes == 32) {
-    perPhase = 4;
-    maxPhase = 2;
-  } else if (tileWidthBytes == 64) {
-    perPhase = 2;
-    maxPhase = 4;
-  } else if (tileWidthBytes == 128) {
-    perPhase = 1;
-    maxPhase = 8;
-  }
+  int vec = shared.getVec();
+  int perPhase = shared.getPerPhase();
+  int maxPhase = shared.getMaxPhase();
 
   int tileRows = 8;
   int tileCols = 8 * tileWidthBytes / elemBitWidth;
@@ -294,21 +284,23 @@ LinearLayout nvmmaSharedToLinearLayout(ArrayRef<int64_t> shape,
   MLIRContext *ctx = shared.getContext();
   int rank = shape.size();
   auto shapePerCTA = getShapePerCTA(shared, shape);
-  if (rank == 1) {
-    // TODO: Not sure if this is correct.
-    return combineCtaCgaWithShape(
-        LinearLayout::identity1D(shapePerCTA[0], S("offset"), S("dim0")),
-        shared.getCTALayout(), shape);
+  auto kOffset = S("offset");
+  if (shared.getSwizzlingByteWidth() == 0) {
+    auto outDimNames = standardOutDimNames(ctx, rank);
+    LinearLayout layout = LinearLayout::identity1D(
+        shapePerCTA[rank - 1], kOffset, outDimNames[rank - 1]);
+    for (int i = rank - 2; i >= 0; --i) {
+      layout *=
+          LinearLayout::identity1D(shapePerCTA[i], kOffset, outDimNames[i]);
+    }
+    return combineCtaCgaWithShape(layout, shared.getCTALayout(), shape);
   }
-  // Construct bases for a the layout's 2-dimensional tile.
   assert(rank >= 2);
-  int batchDims = rank - 2;
 
   // Collapse all the outer dim into one. We will then create a layout for this
   // shape and reshape it to the original shape.
-  std::array<int64_t, 2> collapsedShapePerCTA{shapePerCTA[batchDims],
-                                              shapePerCTA[batchDims + 1]};
-  for (int i = 0; i < batchDims; i++)
+  std::array<int64_t, 2> collapsedShapePerCTA{1, shapePerCTA.back()};
+  for (int i = 0; i + 1 < rank; i++)
     collapsedShapePerCTA[0] *= shapePerCTA[i];
   if (shared.getTransposed()) {
     std::swap(collapsedShapePerCTA[0], collapsedShapePerCTA[1]);
@@ -333,7 +325,6 @@ LinearLayout nvmmaSharedToLinearLayout(ArrayRef<int64_t> shape,
   }
 
   // Distribute the remaining rows and cols.
-  auto kOffset = S("offset");
   auto layout = tileLayout;
   layout *= LinearLayout::identity1D(collapsedShapePerCTA[0] / tileRows,
                                      kOffset, kRow);

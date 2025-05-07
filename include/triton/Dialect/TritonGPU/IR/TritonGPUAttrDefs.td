@@ -435,7 +435,10 @@ def NVMMASharedEncodingAttr :
         } else if (contigDimSizeInByte >= 32 && contigDimSizeInByte % 32 == 0) {
           swizzlingByteWidth = 32;
         } else {
-          llvm_unreachable("unsupported NVMMA layout (MMAv3 or TMA)");
+          swizzlingByteWidth = 0;
+        }
+        if (shapePerCTA.size() < 2 || shapePerCTA[order[1]] < 8) {
+          swizzlingByteWidth = 0;
         }
         bool transposed = order[0] == 0;
         return $_get(context, swizzlingByteWidth, transposed, eleBitWidth, fp4Padded, CTALayout);
@@ -447,9 +450,9 @@ def NVMMASharedEncodingAttr :
     SmallVector<unsigned> getCTAsPerCGA() const;
     SmallVector<unsigned> getCTAOrder() const;
     SmallVector<unsigned> getCTASplitNum() const;
-    SmallVector<unsigned> getOrder() const {
-      return getTransposed() ? SmallVector<unsigned>({0, 1}) : SmallVector<unsigned>({1, 0});
-    }
+    int getPerPhase() const;
+    int getMaxPhase() const;
+    int getVec() const;
   }];
   let hasCustomAssemblyFormat = 1;
 }
