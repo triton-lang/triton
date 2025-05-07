@@ -191,7 +191,7 @@ LogicalResult lowerDistributedToSharedStmatrix(
             .second;
     Value offset = b.xor_(regBase, b.i32_val(regIdx));
     auto vecAddr = b.gep(smemPtrTy, llvmElemTy, smemBase, offset);
-    vecAddr.setInbounds(true);
+    vecAddr.setNoWrapFlags(mlir::LLVM::GEPNoWrapFlags::inbounds);
     SmallVector<Value> inValsVec;
     for (int j = 0; j < srcVec; j++)
       inValsVec.push_back(srcVals[i + j]);
