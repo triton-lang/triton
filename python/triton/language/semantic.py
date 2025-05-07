@@ -1580,7 +1580,7 @@ def dot_sparse(lhs: tl.tensor, rhs: tl.tensor, lhs_meta: tl.tensor, acc: tl.tens
         if builder.codegen_fns.get("sparse_dot_acc_emulation") is not None:
             # We only do this for AMD, where 2:4 sparse ops operate implicitly on the accumulator (i.e., they are all "accumulate" ops).
             # See: Section 7.4 in the MI300 ISA docs
-            temp_acc_handle = builder.create_splat(_0, [M, N])
+            temp_acc_handle = builder.create_splat(_0, [B, M, N] if B else [M, N])
             sparse_dot_result = tl.tensor(
                 builder.create_dot_sparse(lhs.handle, rhs.handle, temp_acc_handle, lhs_meta.handle), ret_ty)
             return tl.tensor(builder.create_fadd(sparse_dot_result.handle, acc_handle), ret_ty)

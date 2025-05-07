@@ -4481,7 +4481,6 @@ def test_dot_sparse(M, N, K, num_warps, col_a, col_b, epilogue, in_dtype, out_dt
     x_tri = xSparse
     y_tri = to_triton(y, device=device, dst_type=in_dtype)
     w_tri = to_triton(w, device=device, dst_type=in_dtype)
-    print(w_tri.dtype)
     # triton result
     if out_dtype == 'int8':
         z = 1 + numpy_random((M, N), dtype_str='int32', rs=rs)
