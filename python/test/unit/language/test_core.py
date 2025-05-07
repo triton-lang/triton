@@ -35,6 +35,7 @@ from triton._internal_testing import (
     is_hip_cdna2,
     is_hip_cdna3,
     is_hip_cdna4,
+    is_hip_gfx12,
     is_xpu,
     get_arch,
     torch_float8_dtypes,
@@ -3722,8 +3723,8 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, input_precision, in_dty
                 pytest.skip("float8e4nv not supported on sm <= 80")
 
         if is_hip():
-            if in_dtype in ("float8e5", "float8e4nv") and not is_hip_cdna4():
-                pytest.skip(f"{in_dtype} only supported on CDNA4")
+            if in_dtype in ("float8e5", "float8e4nv") and not (is_hip_cdna4() or is_hip_gfx12()):
+                pytest.skip(f"{in_dtype} only supported on CDNA4 and gfx12")
             if in_dtype in ("float8e5b16", "float8e4b8") and not is_hip_cdna3():
                 pytest.skip(f"{in_dtype} only supported on CDNA3")
             if not ((input_precision == "ieee") or (input_precision == "tf32" and is_hip_cdna3())):
