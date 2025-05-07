@@ -8,6 +8,7 @@
 #include "mlir/Transforms/DialectConversion.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
+#include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/TMAUtilities.h"
 
 #include "Utility.h"
@@ -212,7 +213,7 @@ struct ExperimentalTensormapFenceproxyAcquireOpConversion
     // We run the fence on a single warp, then use a barrier to synchronize the
     // rest. This ends up being faster than running the fence on each warp.
     // TODO: Ideally we only emit one barrier after all fences are issued
-    b.barrier();
+    insertBarrier(rewriter, loc);
 
     rewriter.eraseOp(op);
     return success();

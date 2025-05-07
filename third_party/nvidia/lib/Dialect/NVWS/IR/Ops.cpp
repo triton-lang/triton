@@ -260,4 +260,31 @@ void WarpGroupOp::print(OpAsmPrinter &p) {
   }
 }
 
+static LogicalResult
+verifyBarrierType(Operation *op, mlir::triton::gpu::MemDescType barrierType) {
+  if (!barrierType.getElementType().isInteger(64) ||
+      barrierType.getShape() != ArrayRef<int64_t>({1}))
+    return op->emitOpError(
+        "barrier allocation must be a descriptor of 1xi64 type");
+  return success();
+}
+
+// -- ArriveBarrierOp --
+LogicalResult ArriveBarrierOp::verify() {
+  if (failed(verifyBarrierType(*this, getAlloc().getType())))
+    return failure();
+  return success();
+}
+
+void ArriveBarrierOp::getEffects(
+    SmallVectorImpl<SideEffects::EffectInstance<MemoryEffects::Effect>>
+        &effects) {
+  effects.emplace_back(MemoryEffects::Read::get(), &getAllocMutable(),
+                       mlir::triton::gpu::SharedMemory::get());
+  // Need a side effect to prevent compiler from reordering and removing
+  // the arrive operation.
+  effects.emplace_back(MemoryEffects::Write::get(),
+                       mlir::SideEffects::DefaultResource::get());
+}
+
 } // namespace mlir::triton::nvws

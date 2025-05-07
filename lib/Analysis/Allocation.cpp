@@ -390,14 +390,24 @@ private:
   void resolveScratchBufferLiveness(
       const DenseMap<Operation *, size_t> &operationId) {
     // Analyze liveness of scratch buffers and virtual buffers.
+    auto maxInterval = Interval(size_t(), std::numeric_limits<size_t>::max());
     auto processScratchMemory = [&](const auto &container) {
       for (auto [op, buffer] : container) {
         // Buffers owned by the function are assumed live for the whole
         // function. This memory is used for warp specialization codegen.
         // FIXME: Spooky-action-at-a-distance. Find a better way to model this.
         if (op == operation) {
-          bufferRange.insert(
-              {buffer, Interval(size_t(), std::numeric_limits<size_t>::max())});
+          bufferRange.insert({buffer, maxInterval});
+          continue;
+        }
+
+	// FIXME: WA for ExperimentalTensormapCreateOp with WS - without this,
+	// ExperimentalTensormapCreateOp in TMA and epilogue groups incorrectly
+	// share the smem storage for desc update.
+        auto mod = operation->getParentOfType<ModuleOp>();
+        if (triton::gpu::TritonGPUDialect::isWarpSpecialized(mod) &&
+            isa<ExperimentalTensormapCreateOp>(op)) {
+          bufferRange.insert({buffer, maxInterval});
           continue;
         }
 
@@ -433,17 +443,45 @@ private:
     // %6 should should have an ID greater than its child operations,
     // otherwise %5 liveness range ends before the child operation's liveness
     // range ends.
+
+    // triton::nvidia_gpu::WarpGroup ops do not participate in liveness analysis
+    // as these are warp-group regions to facilitate LLVM lowering later
+    auto isWarpGroupOp = [](Operation *op) {
+      return isa<triton::nvidia_gpu::WarpGroupOp>(op) ||
+             isa<triton::nvidia_gpu::WarpGroupReturnOp>(op);
+    };
+
     DenseMap<Operation *, size_t> operationId;
-    operation->walk<WalkOrder::PostOrder>(
-        [&](Operation *op) { operationId[op] = operationId.size(); });
+    operation->walk<WalkOrder::PostOrder>([&](Operation *op) {
+      if (isWarpGroupOp(op))
+        return;
+      operationId[op] = operationId.size();
+    });
 
     // Analyze liveness of explicit buffers
     Liveness liveness(operation);
     auto getValueLivenessRange = [&](Value value) {
+      if (auto defOp = value.getDefiningOp()) {
+        if (auto localAlloc = dyn_cast<gpu::LocalAllocOp>(defOp)) {
+          if (localAlloc->hasAttr("aref_buffer") ||
+              localAlloc->hasAttr("aref_full_mbarriers") ||
+              localAlloc->hasAttr("aref_empty_mbarriers")) {
+            // WA for WS. Off-the-shelf liveness analysis cannot determine the
+            // correct live range for SMEM buffers used across warp groups.
+            // Without this, the storage of an MMA operand is incorrectly shared
+            // with the source of TMA store in the epilogue group, for example.
+            auto minId = (size_t)0;
+            auto maxId = std::numeric_limits<size_t>::max();
+            return Interval(minId, maxId);
+          }
+        }
+      }
       auto liveOperations = liveness.resolveLiveness(value);
       auto minId = std::numeric_limits<size_t>::max();
       auto maxId = std::numeric_limits<size_t>::min();
       llvm::for_each(liveOperations, [&](Operation *liveOp) {
+        if (isWarpGroupOp(liveOp))
+          return;
         if (operationId[liveOp] < minId) {
           minId = operationId[liveOp];
         }

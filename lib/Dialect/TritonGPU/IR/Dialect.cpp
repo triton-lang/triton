@@ -2667,12 +2667,27 @@ struct TritonGPUVerifyTensorLayoutInterface
                << "Could not determine the number of warps per CTA. Operation "
                   "is not in a context with `ttg.num-warps`.";
       }
-      int64_t layoutWarpsPerCTA = product(blocked.getWarpsPerCTA());
-      if (layoutWarpsPerCTA != *moduleWarpsPerCTA) {
-        return makeErr() << layout << ".\nLayout has a total of "
-                         << layoutWarpsPerCTA
-                         << " warps per CTA, but the context requires "
-                         << *moduleWarpsPerCTA << " warps per CTA.";
+
+      if (!TritonGPUDialect::isWarpSpecialized(
+              op->getParentOfType<ModuleOp>())) {
+        // auto-ws-war: Disable layout check inside ttng.wg regions as they may 
+        // temporarily contain ops with layouts set for a different num_warps. 
+        // Example: with num_warps = 8, a tma_load_group with num_warps = 4:
+        // tma_load_group num_warps(4) {
+        //     %val = tt.experimental_descriptor_load ... // uses layout for 8
+        //     ttg.local_store %val, %smem
+        // }
+        // The aref_lowering pass fixes this by removing layouts in favor of:
+        // tma_load_group num_warps(4) {
+        //     ttng.cp_async_tma_copy_global_to_local %smem
+        // }
+        int64_t layoutWarpsPerCTA = product(blocked.getWarpsPerCTA());
+        if (layoutWarpsPerCTA != *moduleWarpsPerCTA) {
+          return makeErr() << layout << ".\nLayout has a total of "
+                           << layoutWarpsPerCTA
+                           << " warps per CTA, but the context requires "
+                           << *moduleWarpsPerCTA << " warps per CTA.";
+        }
       }
 
       if (blocked.getCTALayout().getCTAsPerCGA().size() > 0) {
@@ -3108,6 +3123,24 @@ int TritonGPUDialect::getThreadsPerWarp(ModuleOp module) {
   return 32;
 }
 
+bool TritonGPUDialect::isWarpSpecialized(ModuleOp module) {
+  if (auto attr = module->getAttrOfType<BoolAttr>(AttrWarpSpecializedName))
+    return attr.getValue();
+  return false;
+}
+
+bool TritonGPUDialect::isMathWGPipe(ModuleOp module) {
+  if (auto attr = module->getAttrOfType<BoolAttr>(AttrMathWGPipeName))
+    return attr.getValue();
+  return false;
+}
+
+int TritonGPUDialect::getNumStages(ModuleOp module) {
+  if (auto attr = module->getAttrOfType<IntegerAttr>(AttrNumStagesName))
+    return attr.getInt();
+  return 1;
+}
+
 std::optional<int> triton::gpu::maybeLookupNumWarps(Operation *op) {
   if (isa<ModuleOp, FuncOp>(op)) {
     if (auto attr = op->getAttrOfType<IntegerAttr>(AttrNumWarpsName))
@@ -3116,6 +3149,9 @@ std::optional<int> triton::gpu::maybeLookupNumWarps(Operation *op) {
                  dyn_cast<WarpSpecializePartitionsOp>(op->getParentOp())) {
     unsigned idx = op->getParentRegion()->getRegionNumber();
     return partitions.getParentOp().getPartitionNumWarps()[idx];
+  } else if (auto wg =
+                 dyn_cast<triton::nvidia_gpu::WarpGroupOp>(op->getParentOp())) {
+    return wg.getNumWarps();
   }
   if (Operation *parent = op->getParentOp())
     return maybeLookupNumWarps(parent);
@@ -3166,4 +3202,35 @@ bool triton::gpu::isInnermostContiguous(MemDescType type, unsigned numElems) {
   actual = actual.transposeOuts(revOut).flattenOuts();
 
   return actual.getNumConsecutiveInOut() >= numElems;
+}
+
+std::optional<int> triton::gpu::maybeLookupTotalNumWarps(Operation *op) {
+  if (isa<ModuleOp, FuncOp>(op)) {
+    if (auto attr = op->getAttrOfType<IntegerAttr>("ttg.total-num-warps"))
+      return attr.getInt();
+    if (auto attr = op->getAttrOfType<IntegerAttr>(AttrNumWarpsName))
+      return attr.getInt();
+  } else if (auto partitions =
+                 dyn_cast<WarpSpecializePartitionsOp>(op->getParentOp())) {
+    unsigned idx = op->getParentRegion()->getRegionNumber();
+    return partitions.getParentOp().getPartitionNumWarps()[idx];
+  } else if (auto wg =
+                 dyn_cast<triton::nvidia_gpu::WarpGroupOp>(op->getParentOp())) {
+    return wg.getNumWarps();
+  }
+  if (Operation *parent = op->getParentOp())
+    return maybeLookupTotalNumWarps(parent);
+  return {};
+}
+
+int triton::gpu::lookupTotalNumWarps(Operation *op) {
+  std::optional<int> numWarps = maybeLookupTotalNumWarps(op);
+  if (!numWarps) {
+    op->emitOpError(
+        "is not contained within a context that specifies the number of warps");
+    llvm::report_fatal_error("failed to lookup the number of warps, the "
+                             "surrounding module should contain a "
+                             "ttg.total-num-warps attribute");
+  }
+  return *numWarps;
 }

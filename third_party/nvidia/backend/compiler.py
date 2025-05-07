@@ -4,16 +4,18 @@ from triton.runtime.errors import PTXASError
 
 from dataclasses import dataclass
 import functools
-from typing import Any, Dict, Tuple, Optional
+from typing import Any, Dict, Tuple, Optional, List
 from types import ModuleType
 import hashlib
 import re
 import tempfile
 import signal
 import os
+import sys
 import subprocess
 from pathlib import Path
 import sysconfig
+from dataclasses import field
 
 
 def min_dot_size(target: GPUTarget):
@@ -121,6 +123,7 @@ class CUDAOptions:
     num_warps: int = 4
     num_ctas: int = 1
     num_stages: int = 3
+    mma_depth: int = 2
     # maxnreg corresponds to the ptx parameter .maxnreg, which controls the
     # maximum number of 32-bit registers used by one thread.
     maxnreg: Optional[int] = None
@@ -128,6 +131,11 @@ class CUDAOptions:
     ptx_version: int = None
     enable_fp_fusion: bool = True
     launch_cooperative_grid: bool = False
+    enable_warp_specialization: bool = False
+    use_ttg_ws: bool = False
+    wg_spec_override: Tuple[Tuple[str, int, int]] = field(default_factory=tuple)
+    math_wg_pipe: bool = False
+    force_membar: bool = False
     supported_fp8_dtypes: Tuple[str] = ("fp8e5", "fp8e4b15")
     deprecated_fp8_dtypes: Tuple[str] = ()
     default_dot_input_precision: str = "tf32"
@@ -145,8 +153,9 @@ class CUDAOptions:
         if not extern_libs.get('libdevice', None):
             extern_libs['libdevice'] = os.getenv("TRITON_LIBDEVICE_PATH", str(default_libdir / 'libdevice.10.bc'))
         object.__setattr__(self, 'extern_libs', tuple(extern_libs.items()))
-        assert self.num_warps > 0 and (self.num_warps & (self.num_warps - 1)) == 0, \
-               "num_warps must be a power of 2"
+        if not self.enable_warp_specialization:
+            assert self.num_warps > 0 and (self.num_warps & (self.num_warps - 1)) == 0, \
+                "num_warps must be a power of 2"
 
     def hash(self):
         hash_dict = dict(self.__dict__)
@@ -249,7 +258,14 @@ class CUDABackend(BaseBackend):
             cluster_info.clusterDimZ = opt.cluster_dims[2]
         pm = ir.pass_manager(mod.context)
         dump_enabled = pm.enable_debug()
-        passes.ttir.add_convert_to_ttgpuir(pm, f"cuda:{capability}", opt.num_warps, 32, opt.num_ctas)
+        passes.ttir.add_convert_to_ttgpuir(pm, f"cuda:{capability}", 
+                                           opt.num_warps, 32, opt.num_ctas,
+                                           False, # enableSourceRemat
+                                           opt.num_stages,
+                                           opt.enable_warp_specialization,
+                                           opt.use_ttg_ws,
+                                           opt.math_wg_pipe,
+                                           opt.wg_spec_override)
         # optimize TTGIR
         passes.ttgpuir.add_coalesce(pm)
         if capability // 10 >= 8:
@@ -263,21 +279,39 @@ class CUDABackend(BaseBackend):
         passes.ttgpuir.add_optimize_dot_operands(pm, capability >= 80)
         nvidia.passes.ttnvgpuir.add_optimize_descriptor_encoding(pm)
         passes.common.add_cse(pm)
+        if capability // 10 >= 8:
+            if opt.enable_warp_specialization:
+                passes.ttgpuir.add_optimize_accumulator_init(pm)
+                passes.ttgpuir.add_hoist_tmem_alloc(pm)
+                passes.common.add_canonicalizer(pm)
+                passes.ttgpuir.add_analyze_warp_specialization(pm)
+                passes.ttgpuir.add_split_warp_group_loops(pm, opt.num_stages, opt.mma_depth)
+                if opt.math_wg_pipe:
+                    # some cleanup after wg parititioning and aref generation
+                    passes.common.add_canonicalizer(pm)
+                    passes.ttgpuir.add_fmha_math_loop_pipeline(pm)
         if capability // 10 in [8, 9]:
             passes.ttgpuir.add_fuse_nested_loops(pm)
             passes.common.add_canonicalizer(pm)
-            passes.ttir.add_triton_licm(pm)
+            # fix ArefLowering for causal attention before enabling LICM
+            if not opt.enable_warp_specialization:
+                passes.common.add_licm(pm)
+            if opt.enable_warp_specialization:
+                passes.ttgpuir.add_optimize_accumulator_init(pm)
             passes.common.add_canonicalizer(pm)
             passes.ttgpuir.add_combine_tensor_select_and_if(pm)
-            passes.ttgpuir.add_pipeline(pm, opt.num_stages, dump_enabled)
+            if not opt.enable_warp_specialization:
+                passes.ttgpuir.add_pipeline(pm, opt.num_stages, dump_enabled)
         elif capability // 10 >= 10:
             passes.ttgpuir.add_fuse_nested_loops(pm)
             passes.common.add_canonicalizer(pm)
-            passes.ttir.add_triton_licm(pm)
-            passes.ttgpuir.add_optimize_accumulator_init(pm)
-            passes.ttgpuir.add_hoist_tmem_alloc(pm)
-            passes.ttgpuir.add_warp_specialize(pm, opt.num_stages)
-            passes.ttgpuir.add_pipeline(pm, opt.num_stages, dump_enabled)
+            # fix ArefLowering for causal attention before enabling LICM
+            if not opt.enable_warp_specialization:
+                passes.ttir.add_triton_licm(pm)
+                passes.ttgpuir.add_optimize_accumulator_init(pm)
+                passes.ttgpuir.add_hoist_tmem_alloc(pm)
+                passes.ttgpuir.add_warp_specialize(pm, opt.num_stages)
+                passes.ttgpuir.add_pipeline(pm, opt.num_stages, dump_enabled)
             passes.ttgpuir.add_combine_tensor_select_and_if(pm)
             nvidia.passes.ttnvgpuir.add_promote_lhs_to_tmem(pm)
             passes.common.add_canonicalizer(pm)
@@ -295,9 +329,20 @@ class CUDABackend(BaseBackend):
         passes.common.add_symbol_dce(pm)
         if capability // 10 >= 9:
             nvidia.passes.ttnvgpuir.add_fence_insertion(pm)
+            if opt.enable_warp_specialization:
+                nvidia.passes.ttnvgpuir.add_aref_lowering(pm)
+                if opt.use_ttg_ws:
+                    nvidia.passes.ttnvgpuir.add_ttng_wg_to_ttg_ws(pm)
+                else:
+                    nvidia.passes.ttnvgpuir.add_ttng_wg_to_aref_if(pm)
+                # should run after aref-lowering/aref-if-to-ttg-ws
+                passes.common.add_cse(pm)
             nvidia.passes.ttnvgpuir.add_tma_lowering(pm)
         passes.common.add_canonicalizer(pm)
         pm.run(mod)
+        if os.environ.get("AREF_DUMP", "0") == "1":
+            print("// -----// TTGIR //----- //")
+            print(mod)
         metadata["cluster_dims"] = (cluster_info.clusterDimX, cluster_info.clusterDimY, cluster_info.clusterDimZ)
         tensordesc_meta = mod.get_tensordesc_metadata()
         metadata["tensordesc_meta"] = tensordesc_meta
@@ -318,7 +363,7 @@ class CUDABackend(BaseBackend):
         passes.ttgpuir.add_allocate_shared_memory(pm)
         nvidia.passes.ttnvgpuir.add_allocate_tensor_memory(pm)
         passes.ttgpuir.add_allocate_global_scratch_memory(pm)
-        nvidia.passes.ttgpuir.add_to_llvmir(pm, capability, ptx_version)
+        nvidia.passes.ttgpuir.add_to_llvmir(pm, capability, ptx_version, options.force_membar)
         passes.common.add_canonicalizer(pm)
         passes.common.add_cse(pm)
         nvidia.passes.ttnvgpuir.add_nvgpu_to_llvm(pm)
@@ -329,6 +374,9 @@ class CUDABackend(BaseBackend):
         if os.environ.get("TRITON_DISABLE_LINE_INFO", "0") == "0":
             passes.llvmir.add_di_scope(pm)
         pm.run(mod)
+        if os.environ.get("AREF_DUMP", "0") == "1":
+            print("// -----// LLVM-IR //----- //")
+            print(mod)
         # LLVM-IR (MLIR) -> LLVM-IR (LLVM)
         llvm.init_targets()
         context = llvm.context()
@@ -382,6 +430,9 @@ class CUDABackend(BaseBackend):
         ret = re.sub(r",\s*debug|debug,\s*", "", ret)
         if os.environ.get("NVPTX_ENABLE_DUMP", "0") == "1":
             print("// -----// NVPTX Dump //----- //")
+            print(ret)
+        if os.environ.get("AREF_DUMP", "0") == "1":
+            print("// -----// NVPTX //----- //")
             print(ret)
         return ret
 

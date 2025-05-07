@@ -1362,4 +1362,6 @@ def TTG_SharedMemorySpace : AttrDef<TritonGPU_Dialect, "SharedMemorySpace"> {
   }];
 }
 
+def TTG_TypeArray : ArrayOfAttr<TritonGPU_Dialect, "TypeArray", "type_array", "Type"> {}
+
 #endif

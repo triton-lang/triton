@@ -39,8 +39,13 @@ def TritonNvidiaGPU_Dialect : Dialect {
     "triton::TritonDialect",
     "triton::gpu::TritonGPUDialect",
     "mlir::gpu::GPUDialect",
+    "tensor::TensorDialect",
   ];
 
+  let extraClassDeclaration = [{
+    void registerTypes();
+  }];
+  let useDefaultTypePrinterParser = 1;
   let useDefaultAttributePrinterParser = 1;
   let usePropertiesForAttributes = 1;
 }

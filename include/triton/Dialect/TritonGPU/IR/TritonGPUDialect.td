@@ -17,6 +17,7 @@ def TritonGPU_Dialect : Dialect {
   let dependentDialects = [
     "triton::TritonDialect",
     "mlir::gpu::GPUDialect",
+    "tensor::TensorDialect",
   ];
 
   let extraClassDeclaration = [{
@@ -26,7 +27,10 @@ def TritonGPU_Dialect : Dialect {
     LinearEncodingAttr toLinearEncoding(ArrayRef<int64_t> shape, Attribute layout);
 
     static int getNumCTAs(ModuleOp mod);
+    static int getNumStages(ModuleOp mod);
     static int getThreadsPerWarp(ModuleOp mod);
+    static bool isWarpSpecialized(ModuleOp mod);
+    static bool isMathWGPipe(ModuleOp mod);
 
     private:
       LinearLayoutCache llCache;

@@ -251,16 +251,7 @@ def initialize_block_scaled(M, N, K, block_scale_type="nvfp4", compute_reference
     b_ref = b_ref.to(torch.float32).T
 
     a_desc = TensorDescriptor.from_tensor(a, [BLOCK_M, BLOCK_K // ELEM_PER_BYTE_A])
-
-    if block_scale_type == "mixed":
-        b_desc = TensorDescriptor(
-            b,
-            shape=[N, K // ELEM_PER_BYTE_B],
-            strides=[K // ELEM_PER_BYTE_B, 1],
-            block_shape=[BLOCK_N, BLOCK_K // ELEM_PER_BYTE_B],
-        )
-    else:
-        b_desc = TensorDescriptor.from_tensor(b, [BLOCK_N, BLOCK_K // ELEM_PER_BYTE_B])
+    b_desc = TensorDescriptor.from_tensor(b, [BLOCK_N, BLOCK_K // ELEM_PER_BYTE_B])
 
     epsilon = 1e-8
     a_scale = torch.rand((M // 128, K // VEC_SIZE // 4, 32, 4, 4), device=device) + epsilon

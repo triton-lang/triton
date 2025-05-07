@@ -31,6 +31,7 @@ include "mlir/Interfaces/InferTypeOpInterface.td"  // SameOperandsAndResultType
 include "mlir/Interfaces/SideEffectInterfaces.td"  // Pure
 include "mlir/Interfaces/ViewLikeInterface.td"
 include "triton/Dialect/Triton/IR/TritonTypes.td"
+include "triton/Dialect/TritonGPU/IR/TritonGPUTypes.td"
 include "NVWSDialect.td"
 include "NVWSTypes.td"
 include "NVWSAttrDefs.td"
@@ -173,6 +174,19 @@ def NVWS_WarpGroupReturnOp : NVWS_Op<"warp_group.return", [
   }];
 
   let assemblyFormat = "attr-dict";
+}
+
+
+def NVWS_ArriveBarrierOp : NVWS_Op<"arrive_barrier", [DeclareOpInterfaceMethods<MemoryEffectsOpInterface>]> {
+    let summary = "mbarrier.arrive or tcgen5.commit";
+
+    let description = [{
+      Lowers to mbarrier.arrive.shared.b64 or tcgen05.commit depending on the value of commit.
+    }];
+
+    let hasVerifier = 1;
+    let arguments = (ins TTG_MemDescType:$alloc, I1Attr:$commit);
+    let assemblyFormat = "$alloc $commit attr-dict `:` type($alloc)";
 }
 
 #endif

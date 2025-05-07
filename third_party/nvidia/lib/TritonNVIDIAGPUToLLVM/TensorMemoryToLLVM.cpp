@@ -4,8 +4,10 @@
 #include "TritonNVIDIAGPUToLLVM/PTXAsmFormat.h"
 #include "Utility.h"
 #include "mlir/Conversion/LLVMCommon/Pattern.h"
+#include "mlir/Dialect/LLVMIR/NVVMDialect.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
+#include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 
 using namespace mlir;
@@ -208,7 +210,16 @@ TMemRuntimeInfo getTMemRuntimeInfo(Operation *op, RankedTensorType tensorType,
       nvidia_gpu::isDistributedLayoutTMemCompatible(op, tensorType, memType) &&
       "unsupported distributed layout for tensor memory");
 
-  info.numWarps = triton::gpu::lookupNumWarps(op);
+  // Note: use ttg.total-num-warps for tmem address calculations
+  // if this op is not contained within a warp group,
+  // i.e. occurs at top-level across all warps
+
+  auto mod = op->getParentOfType<ModuleOp>();
+  if (triton::gpu::TritonGPUDialect::isWarpSpecialized(mod)) {
+    info.numWarps = triton::gpu::lookupTotalNumWarps(op);
+  } else {
+    info.numWarps = triton::gpu::lookupNumWarps(op);
+  }
   assert(info.numWarps % 4 == 0 && "Unexpected number of warps");
   info.numWarpGroups = info.numWarps / 4;
   info.numElementsPer32B = 32 / tensorType.getElementTypeBitWidth();
@@ -453,7 +464,7 @@ static void lowerStoreToTensorMemory(Location loc, Operation *op, Value src,
 
   // Emit a barrier to ensure all threads have finished writing to tensor memory
   // before any use of the tensor memory.
-  b.barrier();
+  insertBarrier(rewriter, loc);
 }
 
 struct TensorMemoryAllocOpConversion

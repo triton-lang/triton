@@ -62,6 +62,12 @@ std::unique_ptr<Pass> createTritonNvidiaGPUOptimizeDescriptorEncodingPass();
 
 std::unique_ptr<Pass> createTritonNvidiaGPUOptimizeTMemSubtilingPass();
 
+std::unique_ptr<Pass> createTritonNvidiaGPUArefLoweringPass();
+
+std::unique_ptr<Pass> createTritonNvidiaGPUTtngWgToArefIfPass();
+
+std::unique_ptr<Pass> createTritonNvidiaGPUTtngWgToTtgWsPass();
+
 /// Generate the code for registering passes.
 #define GEN_PASS_REGISTRATION
 #define GEN_PASS_DECL_TRITONNVIDIAGPULEGALIZETMALAYOUTS

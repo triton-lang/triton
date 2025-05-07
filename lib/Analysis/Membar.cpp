@@ -1,11 +1,13 @@
 #include "triton/Analysis/Membar.h"
 #include "triton/Analysis/Alias.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
+#include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/GPU/IR/GPUDialect.h"
 #include "mlir/Dialect/Tensor/IR/Tensor.h"
 #include "mlir/Interfaces/ControlFlowInterfaces.h"
+#include "mlir/Dialect/LLVMIR/NVVMDialect.h"
 #include <deque>
 
 namespace mlir {
@@ -160,20 +162,28 @@ void MembarAnalysis::visitTerminator(Operation *op,
 
 void MembarAnalysis::insertBarrier(Operation *op, OpBuilder *builder) {
   OpBuilder::InsertionGuard g(*builder);
-  auto barrierOp = builder->create<gpu::BarrierOp>(op->getLoc());
+  auto barrierOp = mlir::insertBarrier(*builder, op->getLoc());
+}
+
+bool MembarAnalysis::isBarrier(Operation *op) {
+  if (isa<gpu::BarrierOp>(op))
+    return true;
+  if (isa<NVVM::BarrierOp>(op))
+    return true;
+  return false;
 }
 
 void MembarAnalysis::update(Operation *op, BlockInfo *blockInfo,
                             FuncBlockInfoMapT *funcBlockInfoMap,
                             OpBuilder *builder) {
-  if (isa<gpu::BarrierOp>(op)) {
+  if (isBarrier(op)) {
     // If the current op is a barrier, we sync previous reads and writes
     blockInfo->sync();
     return;
   }
 
   if (isa<triton::gpu::AsyncWaitOp, triton::nvidia_gpu::TMAStoreWaitOp>(op) &&
-      !isa<gpu::BarrierOp>(op->getNextNode())) {
+      !isBarrier(op->getNextNode())) {
     // If the current op is an async wait and the next op is not a barrier we
     // insert a barrier op and sync
     builder->setInsertionPointAfter(op);

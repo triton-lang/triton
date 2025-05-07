@@ -132,6 +132,31 @@ Value createElectPredicateWarp0(Location loc, RewriterBase &rewriter) {
   return b.and_(warp0, createElectPredicate(loc, rewriter));
 }
 
+void createTcgen05Commit(ConversionPatternRewriter &rewriter, Location loc,
+                         Value barrier, Value pred) {
+  PTXBuilder ptxBuilder;
+  auto *barrierOperand = ptxBuilder.newAddrOperand(barrier, "r");
+  std::string opcode = "tcgen05.commit.cta_group::1.mbarrier::arrive::one.b64";
+  auto &barrierOp = *ptxBuilder.create<PTXInstr>(opcode);
+  barrierOp(barrierOperand).predicate(pred);
+  ptxBuilder.launch(rewriter, loc, void_ty(rewriter.getContext()));
+}
+
+Value getWarpId(OpBuilder &rewriter, Location loc) {
+  auto mod = rewriter.getBlock()->getParent()->getParentOfType<ModuleOp>();
+  if (triton::gpu::TritonGPUDialect::isWarpSpecialized(mod)) {
+    auto [_, warpId] = getLaneAndWarpId(rewriter, loc);
+    return warpId;
+  } else {
+    Value warpId = rewriter.create<nvgpu::WarpIdOp>(loc);
+    // Note: lowering of nvgpu::WarpIdOp should consider warp group start.
+    //       However, compute group starts warp 4, it still fails.
+    //       This path is preserved because it is expected when WS=off
+    //       Separate task to investigate why it fails with WS=on
+    return warpId;
+  }
+}
+
 } // namespace NVIDIA
 } // namespace LLVM
 } // namespace mlir

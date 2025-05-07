@@ -39,9 +39,14 @@ Value llGetPid(Location loc, RewriterBase &rewriter, ModuleOp moduleOp,
 /// Create a predicate with just single active thread.
 Value createElectPredicate(Location loc, RewriterBase &rewriter);
 Value createElectPredicateWarp0(Location loc, RewriterBase &rewriter);
+void createTcgen05Commit(ConversionPatternRewriter &rewriter, Location loc,
+                         Value barrier, Value pred);
 
 // Create bar.warp.sync
 void createSyncWarp(Location loc, OpBuilder &builder);
+
+// Returns warpId relative to ttng.warp_group
+Value getWarpId(OpBuilder &rewriter, Location loc);
 
 } // namespace NVIDIA
 } // namespace LLVM

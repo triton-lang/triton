@@ -1,3 +1,4 @@
+#include "mlir/Dialect/LLVMIR/NVVMDialect.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/PatternMatch.h"
@@ -7,6 +8,7 @@
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Attributes.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
+#include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/TritonGPUInterfaces.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
@@ -74,6 +76,7 @@ static void
 lowerTMALoad(Operation *op, RankedTensorType tensorType, Value desc,
              function_ref<void(Value, Value, Value, Value)> createLoad,
              PatternRewriter &rewriter) {
+  auto mod = op->getParentOfType<ModuleOp>();
   MLIRContext *ctx = op->getContext();
   Attribute sharedMemorySpace = triton::gpu::SharedMemorySpaceAttr::get(ctx);
   auto loc = op->getLoc();
@@ -95,13 +98,22 @@ lowerTMALoad(Operation *op, RankedTensorType tensorType, Value desc,
   auto shapePerCTA = getShapePerCTA(encoding, tensorType.getShape());
   int sizeInBytes = product(shapePerCTA) *
                     tensorType.getElementType().getIntOrFloatBitWidth() / 8;
+  if (triton::gpu::TritonGPUDialect::isWarpSpecialized(mod)) {
+    insertBarrier(rewriter, loc);
+  }
   Value pred = rewriter.create<arith::ConstantIntOp>(loc, 1, 1);
   rewriter.create<triton::nvidia_gpu::BarrierExpectOp>(loc, barrierAlloc,
                                                        sizeInBytes, pred);
   Value tmaPtr =
       rewriter.create<triton::nvidia_gpu::TensorDescToTMAPtrOp>(loc, desc);
+  if (triton::gpu::TritonGPUDialect::isWarpSpecialized(mod)) {
+    insertBarrier(rewriter, loc);
+  }
   createLoad(tmaPtr, barrierAlloc, alloc, pred);
   Value phase = rewriter.create<arith::ConstantIntOp>(loc, 0, 32);
+  if (triton::gpu::TritonGPUDialect::isWarpSpecialized(mod)) {
+    insertBarrier(rewriter, loc);
+  }
   rewriter.create<WaitBarrierOp>(loc, barrierAlloc, phase);
   rewriter.create<InvalBarrierOp>(loc, barrierAlloc);
   replaceUsesWithLocalLoad(rewriter, op->getResult(0), alloc);

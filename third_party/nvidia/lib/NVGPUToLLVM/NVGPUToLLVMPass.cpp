@@ -690,11 +690,20 @@ static void createRelinquishAlloc(IRRewriter &rewriter, Location loc,
 void freeTMAlloc(LLVM::LLVMFuncOp func, Value alloc, size_t size, Value pred,
                  bool twoCTAs) {
   func.walk([&](LLVM::ReturnOp ret) {
-    OpBuilder b(ret);
     auto ctx = ret->getContext();
     auto loc = ret.getLoc();
     auto voidTy = void_ty(ctx);
+    IRRewriter rewriter(ctx);
+    rewriter.setInsertionPoint(ret);
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
     PTXBuilder ptxBuilder;
+
+    auto mod = ret->getParentOfType<ModuleOp>();
+    if (triton::gpu::TritonGPUDialect::isWarpSpecialized(mod)) {
+      // Wait for all threads to complete, so we don't dealloc early
+      rewriter.create<NVVM::Barrier0Op>(loc);
+    }
+
     // Calculate the predicate in the inline asm to avoid creating long
     // liveranges.
     std::string ptxString =
@@ -704,7 +713,7 @@ void freeTMAlloc(LLVM::LLVMFuncOp func, Value alloc, size_t size, Value pred,
     dealloc(
         {ptxBuilder.newOperand(pred, "b"), ptxBuilder.newOperand(alloc, "r")},
         /*onlyAttachMLIRArgs=*/true);
-    ptxBuilder.launch(b, loc, void_ty(ctx));
+    ptxBuilder.launch(rewriter, loc, void_ty(ctx));
   });
 }
 
