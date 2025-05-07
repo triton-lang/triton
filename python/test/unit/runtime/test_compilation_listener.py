@@ -20,8 +20,8 @@ def cumsum_kernel(ptr):
 def test_compile_stats(device: str, fresh_knobs_except_libraries: Any, fresh_triton_cache: str) -> None:
     captured: Union[tuple[Union[ASTSource, IRSource], dict[str, Any], dict[str, Any], CompileTimes, bool], None] = None
 
-    def compile_listener(src: Union[ASTSource, IRSource], metadata: dict[str, Any], metadata_group: dict[str, Any], times: CompileTimes,
-                         cache_hit: bool) -> None:
+    def compile_listener(src: Union[ASTSource, IRSource], metadata: dict[str, Any], metadata_group: dict[str, Any],
+                         times: CompileTimes, cache_hit: bool) -> None:
         nonlocal captured
         assert captured is None
         captured = (src, metadata, metadata_group, times, cache_hit)

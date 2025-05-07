@@ -382,7 +382,8 @@ def compile(src, target=None, options=None):
 
     # notify any listener
     if compilation_listener:
-        compilation_listener(src=src, metadata=metadata, metadata_group=metadata_group, times=timer.end(), cache_hit=False)
+        compilation_listener(src=src, metadata=metadata, metadata_group=metadata_group, times=timer.end(),
+                             cache_hit=False)
     # return handle to compiled kernel
     return CompiledKernel(src, metadata_group, hash)
 
