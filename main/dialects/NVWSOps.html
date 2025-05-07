@@ -80,18 +80,22 @@
 <li class="toctree-l4"><a class="reference internal" href="#results">Results:</a></li>
 </ul>
 </li>
-<li class="toctree-l3"><a class="reference internal" href="#nvws-aref-get-triton-nvws-arefgetop"><code class="docutils literal notranslate"><span class="pre">nvws.aref.get</span></code> (triton::nvws::ArefGetOp)</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="#nvws-aref-get-enter-triton-nvws-arefgetenterop"><code class="docutils literal notranslate"><span class="pre">nvws.aref.get.enter</span></code> (triton::nvws::ArefGetEnterOp)</a><ul>
 <li class="toctree-l4"><a class="reference internal" href="#id1">Operands:</a></li>
 <li class="toctree-l4"><a class="reference internal" href="#id2">Results:</a></li>
 </ul>
 </li>
-<li class="toctree-l3"><a class="reference internal" href="#nvws-aref-put-triton-nvws-arefputop"><code class="docutils literal notranslate"><span class="pre">nvws.aref.put</span></code> (triton::nvws::ArefPutOp)</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="#nvws-aref-get-exit-triton-nvws-arefgetexitop"><code class="docutils literal notranslate"><span class="pre">nvws.aref.get.exit</span></code> (triton::nvws::ArefGetExitOp)</a><ul>
 <li class="toctree-l4"><a class="reference internal" href="#id3">Operands:</a></li>
-<li class="toctree-l4"><a class="reference internal" href="#id4">Results:</a></li>
 </ul>
 </li>
-<li class="toctree-l3"><a class="reference internal" href="#nvws-aref-return-triton-nvws-arefreturnop"><code class="docutils literal notranslate"><span class="pre">nvws.aref.return</span></code> (triton::nvws::ArefReturnOp)</a><ul>
-<li class="toctree-l4"><a class="reference internal" href="#id5">Operands:</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#nvws-aref-put-enter-triton-nvws-arefputenterop"><code class="docutils literal notranslate"><span class="pre">nvws.aref.put.enter</span></code> (triton::nvws::ArefPutEnterOp)</a><ul>
+<li class="toctree-l4"><a class="reference internal" href="#id4">Operands:</a></li>
+<li class="toctree-l4"><a class="reference internal" href="#id5">Results:</a></li>
+</ul>
+</li>
+<li class="toctree-l3"><a class="reference internal" href="#nvws-aref-put-exit-triton-nvws-arefputexitop"><code class="docutils literal notranslate"><span class="pre">nvws.aref.put.exit</span></code> (triton::nvws::ArefPutExitOp)</a><ul>
+<li class="toctree-l4"><a class="reference internal" href="#id6">Operands:</a></li>
 </ul>
 </li>
 <li class="toctree-l3"><a class="reference internal" href="#nvws-warp-group-triton-nvws-warpgroupop"><code class="docutils literal notranslate"><span class="pre">nvws.warp_group</span></code> (triton::nvws::WarpGroupOp)</a><ul>
@@ -147,10 +151,9 @@
 </div>
 <p>Create an asynchronous reference.</p>
 <p>Takes as inputs a variadic number of operands, and returns an ARef.
-The inputs can be of any type, but if the numBatchAxes attribute is
-set on the result type, the inputs are expected to be array-like
-(i.e., Tensor, MemDesc, etc) and have matching values for the first
-numBatchAxes of the shapes.</p>
+The inputs are expected to be array-like (i.e., Tensor, MemDesc, etc)
+and the first axis of the shape should match between all inputs, representing
+multi-buffering of the values.</p>
 <p>Traits: <code class="docutils literal notranslate"><span class="pre">AlwaysSpeculatableImplTrait</span></code></p>
 <p>Interfaces: <code class="docutils literal notranslate"><span class="pre">ConditionallySpeculatable</span></code>, <code class="docutils literal notranslate"><span class="pre">NoMemoryEffect</span> <span class="pre">(MemoryEffectOpInterface)</span></code></p>
 <p>Effects: <code class="docutils literal notranslate"><span class="pre">MemoryEffects::Effect{}</span></code></p>
@@ -185,22 +188,16 @@ numBatchAxes of the shapes.</p>
 </table>
 </section>
 </section>
-<section id="nvws-aref-get-triton-nvws-arefgetop">
-<h2><code class="docutils literal notranslate"><span class="pre">nvws.aref.get</span></code> (triton::nvws::ArefGetOp)<a class="headerlink" href="#nvws-aref-get-triton-nvws-arefgetop" title="Link to this heading">¶</a></h2>
-<p><em>Get value(s) from an asynchronous reference</em></p>
-<p>Get values from the asynchronous reference for reading.</p>
-<p>If indexes is empty, the op will return the entire underlying value(s).
-If the indexes is size 1, the op will ensure that the underlying
-value is Tensor-Like (i.e, has a shape parameter) with rank at least 1,
-and index into the first dimension in a circular fashion, by wrapping the
-index around the boundaries of that dimension.
-Similarly, if indexes is size 2, the op will index into the first 2 dimensions
-etc.</p>
-<p>These values are passed as arguments to the region.
-At the start of the region, the values are guaranteed to be “full”,
-and operations are free to read from them. When the compute in the region
-completes, the buffers have been read from, and the aref is marked as “empty”
-so that a producer group can write to the aref.</p>
+<section id="nvws-aref-get-enter-triton-nvws-arefgetenterop">
+<h2><code class="docutils literal notranslate"><span class="pre">nvws.aref.get.enter</span></code> (triton::nvws::ArefGetEnterOp)<a class="headerlink" href="#nvws-aref-get-enter-triton-nvws-arefgetenterop" title="Link to this heading">¶</a></h2>
+<p><em>Enter ArefGet region where the buffer can be used to read data</em></p>
+<p>Syntax:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span>operation ::= `nvws.aref.get.enter` $aref `[` $index `,` $phase `]` attr-dict
+              `:` type($aref) `-&gt;` type($results)
+</pre></div>
+</div>
+<p>Enter a “region” where you can freely read from the buffer)
+These ArefGet “regions” can span multiple iterations.</p>
 <section id="id1">
 <h3>Operands:<a class="headerlink" href="#id1" title="Link to this heading">¶</a></h3>
 <table class="docutils align-default">
@@ -210,11 +207,14 @@ so that a producer group can write to the aref.</p>
 </tr>
 </thead>
 <tbody>
-<tr class="row-even"><td class="text-center"><p><code class="docutils literal notranslate"><span class="pre">operand</span></code></p></td>
+<tr class="row-even"><td class="text-center"><p><code class="docutils literal notranslate"><span class="pre">aref</span></code></p></td>
 <td><p>Asynchronous Reference</p></td>
 </tr>
-<tr class="row-odd"><td class="text-center"><p><code class="docutils literal notranslate"><span class="pre">indexes</span></code></p></td>
-<td><p>variadic of integer or ranked tensor of integer values</p></td>
+<tr class="row-odd"><td class="text-center"><p><code class="docutils literal notranslate"><span class="pre">index</span></code></p></td>
+<td><p>32-bit signless integer</p></td>
+</tr>
+<tr class="row-even"><td class="text-center"><p><code class="docutils literal notranslate"><span class="pre">phase</span></code></p></td>
+<td><p>32-bit signless integer</p></td>
 </tr>
 </tbody>
 </table>
@@ -235,26 +235,16 @@ so that a producer group can write to the aref.</p>
 </table>
 </section>
 </section>
-<section id="nvws-aref-put-triton-nvws-arefputop">
-<h2><code class="docutils literal notranslate"><span class="pre">nvws.aref.put</span></code> (triton::nvws::ArefPutOp)<a class="headerlink" href="#nvws-aref-put-triton-nvws-arefputop" title="Link to this heading">¶</a></h2>
-<p><em>Put value(s) into an asynchronous reference</em></p>
-<p>Get values from the asynchronous reference for writing.</p>
-<p>If indexes is empty, the op will return the entire underlying value(s).
-If the indexes is size 1, the op will ensure that the underlying
-value is Tensor-Like (i.e, has a shape parameter) with rank at least 1,
-and index into the first dimension in a circular fashion, by wrapping the
-index around the boundaries of that dimension.
-Similarly, if indexes is size 2, the op will index into the first 2 dimensions
-etc.</p>
-<p>These values are passed as arguments to the region.
-At the start of the region, the values are guaranteed to be “empty”,
-and operations are free to write to them. When the compute in the region
-completes, the buffers have been written to, and the aref is marked as “full”
-so that a consumer can read from them.</p>
-<p>If the Aref contains in-register types (i.e., not ttg.MemDesc), the region should
-return the updated values. This represents a semantic copy at the aref level,
-but should be optimized away during lowering.</p>
-<p>Traits: <code class="docutils literal notranslate"><span class="pre">SameVariadicOperandSize</span></code></p>
+<section id="nvws-aref-get-exit-triton-nvws-arefgetexitop">
+<h2><code class="docutils literal notranslate"><span class="pre">nvws.aref.get.exit</span></code> (triton::nvws::ArefGetExitOp)<a class="headerlink" href="#nvws-aref-get-exit-triton-nvws-arefgetexitop" title="Link to this heading">¶</a></h2>
+<p><em>Exit ArefGet region, where the buffer should no longer be used</em></p>
+<p>Syntax:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span>operation ::= `nvws.aref.get.exit` $aref `[` $index `]` attr-dict
+              `:` type($aref)
+</pre></div>
+</div>
+<p>Leave the region where you can freely read from the buffer).
+These ArefGet “regions” can span multiple iterations.</p>
 <section id="id3">
 <h3>Operands:<a class="headerlink" href="#id3" title="Link to this heading">¶</a></h3>
 <table class="docutils align-default">
@@ -264,17 +254,49 @@ but should be optimized away during lowering.</p>
 </tr>
 </thead>
 <tbody>
-<tr class="row-even"><td class="text-center"><p><code class="docutils literal notranslate"><span class="pre">operand</span></code></p></td>
+<tr class="row-even"><td class="text-center"><p><code class="docutils literal notranslate"><span class="pre">aref</span></code></p></td>
 <td><p>Asynchronous Reference</p></td>
 </tr>
-<tr class="row-odd"><td class="text-center"><p><code class="docutils literal notranslate"><span class="pre">indexes</span></code></p></td>
-<td><p>variadic of integer or ranked tensor of integer values</p></td>
+<tr class="row-odd"><td class="text-center"><p><code class="docutils literal notranslate"><span class="pre">index</span></code></p></td>
+<td><p>32-bit signless integer</p></td>
 </tr>
 </tbody>
 </table>
 </section>
+</section>
+<section id="nvws-aref-put-enter-triton-nvws-arefputenterop">
+<h2><code class="docutils literal notranslate"><span class="pre">nvws.aref.put.enter</span></code> (triton::nvws::ArefPutEnterOp)<a class="headerlink" href="#nvws-aref-put-enter-triton-nvws-arefputenterop" title="Link to this heading">¶</a></h2>
+<p><em>Enter ArefPut region where the buffer can be used to read data</em></p>
+<p>Syntax:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span>operation ::= `nvws.aref.put.enter` $aref `[` $index `,` $phase `]` attr-dict
+              `:` type($aref) `-&gt;` type($results)
+</pre></div>
+</div>
+<p>Enter a “region” where you can freely write to the buffer)
+These ArefPut “regions” can span multiple iterations.</p>
 <section id="id4">
-<h3>Results:<a class="headerlink" href="#id4" title="Link to this heading">¶</a></h3>
+<h3>Operands:<a class="headerlink" href="#id4" title="Link to this heading">¶</a></h3>
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd"><th class="head text-center"><p>Operand</p></th>
+<th class="head"><p>Description</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td class="text-center"><p><code class="docutils literal notranslate"><span class="pre">aref</span></code></p></td>
+<td><p>Asynchronous Reference</p></td>
+</tr>
+<tr class="row-odd"><td class="text-center"><p><code class="docutils literal notranslate"><span class="pre">index</span></code></p></td>
+<td><p>32-bit signless integer</p></td>
+</tr>
+<tr class="row-even"><td class="text-center"><p><code class="docutils literal notranslate"><span class="pre">phase</span></code></p></td>
+<td><p>32-bit signless integer</p></td>
+</tr>
+</tbody>
+</table>
+</section>
+<section id="id5">
+<h3>Results:<a class="headerlink" href="#id5" title="Link to this heading">¶</a></h3>
 <table class="docutils align-default">
 <thead>
 <tr class="row-odd"><th class="head text-center"><p>Result</p></th>
@@ -289,18 +311,18 @@ but should be optimized away during lowering.</p>
 </table>
 </section>
 </section>
-<section id="nvws-aref-return-triton-nvws-arefreturnop">
-<h2><code class="docutils literal notranslate"><span class="pre">nvws.aref.return</span></code> (triton::nvws::ArefReturnOp)<a class="headerlink" href="#nvws-aref-return-triton-nvws-arefreturnop" title="Link to this heading">¶</a></h2>
-<p><em>Terminator for aref_put/get operator</em></p>
+<section id="nvws-aref-put-exit-triton-nvws-arefputexitop">
+<h2><code class="docutils literal notranslate"><span class="pre">nvws.aref.put.exit</span></code> (triton::nvws::ArefPutExitOp)<a class="headerlink" href="#nvws-aref-put-exit-triton-nvws-arefputexitop" title="Link to this heading">¶</a></h2>
+<p><em>Exit ArefPut region, where the buffer should no longer be used</em></p>
 <p>Syntax:</p>
-<div class="highlight-default notranslate"><div class="highlight"><pre><span></span>operation ::= `nvws.aref.return` attr-dict ($srcs^ `:` type($srcs))?
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span>operation ::= `nvws.aref.put.exit` $aref `[` $index `]` attr-dict
+              `:` type($aref)
 </pre></div>
 </div>
-<p>Traits: <code class="docutils literal notranslate"><span class="pre">AlwaysSpeculatableImplTrait</span></code>, <code class="docutils literal notranslate"><span class="pre">ReturnLike</span></code>, <code class="docutils literal notranslate"><span class="pre">Terminator</span></code></p>
-<p>Interfaces: <code class="docutils literal notranslate"><span class="pre">ConditionallySpeculatable</span></code>, <code class="docutils literal notranslate"><span class="pre">NoMemoryEffect</span> <span class="pre">(MemoryEffectOpInterface)</span></code>, <code class="docutils literal notranslate"><span class="pre">RegionBranchTerminatorOpInterface</span></code></p>
-<p>Effects: <code class="docutils literal notranslate"><span class="pre">MemoryEffects::Effect{}</span></code></p>
-<section id="id5">
-<h3>Operands:<a class="headerlink" href="#id5" title="Link to this heading">¶</a></h3>
+<p>Leave the region where you can freely write to the buffer).
+These ArefPut “regions” can span multiple iterations.</p>
+<section id="id6">
+<h3>Operands:<a class="headerlink" href="#id6" title="Link to this heading">¶</a></h3>
 <table class="docutils align-default">
 <thead>
 <tr class="row-odd"><th class="head text-center"><p>Operand</p></th>
@@ -308,8 +330,11 @@ but should be optimized away during lowering.</p>
 </tr>
 </thead>
 <tbody>
-<tr class="row-even"><td class="text-center"><p><code class="docutils literal notranslate"><span class="pre">srcs</span></code></p></td>
-<td><p>variadic of any type</p></td>
+<tr class="row-even"><td class="text-center"><p><code class="docutils literal notranslate"><span class="pre">aref</span></code></p></td>
+<td><p>Asynchronous Reference</p></td>
+</tr>
+<tr class="row-odd"><td class="text-center"><p><code class="docutils literal notranslate"><span class="pre">index</span></code></p></td>
+<td><p>32-bit signless integer</p></td>
 </tr>
 </tbody>
 </table>
