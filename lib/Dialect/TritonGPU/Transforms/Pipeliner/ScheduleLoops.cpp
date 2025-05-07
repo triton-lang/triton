@@ -28,13 +28,6 @@ bool hasGpuBarriers(scf::ForOp forOp) {
   return result.wasInterrupted();
 }
 
-bool mmav5DominatesTmemLoads(scf::ForOp forOp,
-                             const DenseMap<Operation *, int> &opLatency) {
-  return ttng::mmav5DominatesTmemLoads(forOp, [&](ttng::MMAv5OpInterface mma) {
-    return opLatency.lookup(mma) >= 1;
-  });
-}
-
 // Return true if the preconditions for pipelining the loop are met.
 bool isSafeToPipeline(scf::ForOp forOp,
                       const DenseMap<Operation *, int> &opLatency) {
@@ -46,10 +39,6 @@ bool isSafeToPipeline(scf::ForOp forOp,
     return false;
   // Skip loops with barriers.
   if (hasGpuBarriers(forOp))
-    return false;
-  // Lowering does not currently support cases where tmem_load happens
-  // before the mma in the loop
-  if (!mmav5DominatesTmemLoads(forOp, opLatency))
     return false;
   return true;
 }
@@ -301,6 +290,21 @@ void scheduleRemainingToLastStage(scf::ForOp forOp, CoarseSchedule &schedule,
   }
 }
 
+void serializeMMAv5Latencies(scf::ForOp forOp,
+                             const DenseMap<Operation *, int> &opLatency) {
+  auto module = forOp->getParentOfType<ModuleOp>();
+  auto helper = TritonDialect::getLoaded(module)->getLatencyAttrHelper();
+  auto builder = Builder(module);
+  for (auto &op : forOp.getBody()->without_terminator()) {
+    if (auto mmav5Op = dyn_cast<ttng::MMAv5OpInterface>(op)) {
+      if (opLatency.count(mmav5Op)) {
+        helper.setAttr(mmav5Op,
+                       builder.getI32IntegerAttr(opLatency.lookup(mmav5Op)));
+      }
+    }
+  }
+}
+
 void scheduleLoop(scf::ForOp forOp,
                   const DenseMap<Operation *, int> &opLatency) {
   if (!hasLatenciesAssigned(forOp, opLatency) ||
@@ -339,6 +343,10 @@ void scheduleLoop(scf::ForOp forOp,
 
   // Write the schedule to the IR
   schedule.serialize(forOp);
+
+  // Serialize also original latencies for mmav5 ops, as they might not have
+  // direct uses in the loop (e.g. when they are only used by themself)
+  serializeMMAv5Latencies(forOp, opLatency);
 }
 
 } // namespace

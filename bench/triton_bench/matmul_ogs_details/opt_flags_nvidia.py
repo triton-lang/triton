@@ -68,6 +68,7 @@ def compute_num_stages(
     out_dtype,
     lhs_dtype,
     rhs_dtype,
+    epilogue_subtile,
 ):
     if precision_config.max_num_imprecise_acc is not None:
         return 3
@@ -87,10 +88,14 @@ def compute_num_stages(
         # Per-stage wait barrier
         stage_size += 8
         acc_size = out_dtype.itemsize
+        if target_info.cuda_capability_geq(10, 0) and epilogue_subtile:
+            acc_block_n = block_n // 2
+        else:
+            acc_block_n = block_n
         # pipelined TMA store local to global, or
         # pipelined layout conversion before store of the accumulator
         # note: layout conversion has some padding
-        smem_capacity -= (block_m + 4) * block_n * acc_size
+        smem_capacity -= (block_m + 4) * acc_block_n * acc_size
         if microscaling_ctx.weight_scale is not None:
             # mx scales
             stage_size += block_n * (block_k // 32)

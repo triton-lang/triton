@@ -59,6 +59,59 @@ bool isOneOperandElementwiseOp(Operation *op) {
   return false;
 }
 
+static triton::StoreOp convertMfmaLayoutForCDNA4(PatternRewriter &rewriter,
+                                                 Value ptr, Value val,
+                                                 Value mask,
+                                                 triton::StoreOp oldStOp) {
+  auto ptrType = cast<RankedTensorType>(ptr.getType());
+  auto valType = cast<RankedTensorType>(val.getType());
+
+  auto mfmaLayout =
+      cast<triton::gpu::AMDMfmaEncodingAttr>(valType.getEncoding());
+
+  bool mfma32 = mfmaLayout.getMDim() == 32 && mfmaLayout.getNDim() == 32;
+
+  if (valType.getRank() != 2 ||
+      (!valType.getElementType().isF16() &&
+       !valType.getElementType().isBF16()) ||
+      mfmaLayout.getVersionMajor() != 4 || !mfmaLayout.getIsTransposed() ||
+      !mfma32) {
+    return rewriter.create<triton::StoreOp>(oldStOp.getLoc(), ptr, val, mask,
+                                            oldStOp.getCache(),
+                                            oldStOp.getEvict());
+  }
+
+  // Create a new layout where each thread holds 8 consecutive elements, in
+  // order to enable wide 128-bit global stores.
+  triton::LinearLayout mfma8Layout =
+      chooseMfmaLikeStoreLayout(mfmaLayout, valType.getShape());
+
+  Attribute newEncoding = triton::gpu::LinearEncodingAttr::get(
+      mfmaLayout.getContext(), mfma8Layout);
+  auto newPtrType = RankedTensorType::get(
+      ptrType.getShape(), ptrType.getElementType(), newEncoding);
+  Value newPtr = rewriter.create<triton::gpu::ConvertLayoutOp>(ptr.getLoc(),
+                                                               newPtrType, ptr);
+
+  auto newValType = RankedTensorType::get(
+      valType.getShape(), valType.getElementType(), newEncoding);
+  Value newVal = rewriter.create<triton::gpu::ConvertLayoutOp>(val.getLoc(),
+                                                               newValType, val);
+
+  Value newMask = mask;
+  if (mask) {
+    auto maskType = dyn_cast<RankedTensorType>(mask.getType());
+    auto newMaskType = RankedTensorType::get(
+        maskType.getShape(), maskType.getElementType(), newEncoding);
+    newMask = rewriter.create<triton::gpu::ConvertLayoutOp>(mask.getLoc(),
+                                                            newMaskType, mask);
+  }
+
+  return rewriter.create<triton::StoreOp>(oldStOp.getLoc(), newPtr, newVal,
+                                          newMask, oldStOp.getCache(),
+                                          oldStOp.getEvict());
+}
+
 // convert(val) : xmma -> blocked
 // elementWiseOp(val) : blocked
 // ...
@@ -126,12 +179,12 @@ public:
     auto newEncoding =
         cast<RankedTensorType>(cvtOp.getSrc().getType()).getEncoding();
 
-    auto newVal = cvtOp.getSrc();
-
     auto newPtrType = RankedTensorType::get(
         ptrType.getShape(), ptrType.getElementType(), newEncoding);
     Value newPtr = rewriter.create<triton::gpu::ConvertLayoutOp>(
         ptr.getLoc(), newPtrType, ptr);
+
+    auto newVal = cvtOp.getSrc();
 
     for (auto chainedOp : llvm::reverse(chainedOps)) {
       auto oldType =
@@ -139,6 +192,7 @@ public:
       chainedOp->setOperand(0, newVal);
       newVal = llvm::cast<mlir::TypedValue<RankedTensorType>>(
           chainedOp->getResult(0));
+
       auto newType = mlir::RankedTensorType::get(
           oldType.getShape(), oldType.getElementType(), newEncoding);
       newVal.setType(newType);
@@ -152,9 +206,18 @@ public:
       newMask = rewriter.create<triton::gpu::ConvertLayoutOp>(
           mask.getLoc(), newMaskType, mask);
     }
+    triton::StoreOp newStoreOp;
+    if (auto mfmaLayout =
+            dyn_cast<triton::gpu::AMDMfmaEncodingAttr>(newEncoding)) {
+      newStoreOp =
+          convertMfmaLayoutForCDNA4(rewriter, newPtr, newVal, newMask, stOp);
+    } else {
+      newStoreOp = rewriter.create<triton::StoreOp>(
+          stOp.getLoc(), newPtr, newVal, newMask, stOp.getCache(),
+          stOp.getEvict());
+    }
 
-    rewriter.replaceOpWithNewOp<triton::StoreOp>(
-        stOp, newPtr, newVal, newMask, stOp.getCache(), stOp.getEvict());
+    rewriter.replaceOp(stOp, newStoreOp);
     return mlir::success();
   }
 };

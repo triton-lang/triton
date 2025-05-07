@@ -213,10 +213,8 @@ static WarpSchedule getInitialSchedule(const PartitionScheme &scheme) {
       userPartition->insert(userOp);
     // Place the epilogue partition in the default warpgroup. The MMA and load
     // partitions shouldn't have tensor computations in them, which means they
-    // will get assigned just 1 warp each. Add an extra partition to pad the
-    // number of warps to the nearest warpgroup.
-    schedule.addPartition(0);
-    schedule.reorderPartitions({2, 1, 0, 3});
+    // will get assigned just 1 warp each.
+    schedule.reorderPartitions({2, 1, 0});
   }
 
   schedule.updatePartitions();
@@ -499,8 +497,11 @@ static void lowerTMACopy(PartitionBuilder &b, Partition &loadPartition,
   if (auto load = dyn_cast<DescriptorLoadOp>(op)) {
     Value tmaPtr = b.createInPartition<ttng::TensorDescToTMAPtrOp>(
         loadPartition, load.getDesc());
+    auto indices = ttng::translateTMAIndices(
+        b, load.getLoc(), load.getDesc().getType().getBlockType().getEncoding(),
+        load.getIndices());
     b.createInPartition<ttng::AsyncTMACopyGlobalToLocalOp>(
-        loadPartition, tmaPtr, load.getIndices(), barrier, view, truePred);
+        loadPartition, tmaPtr, indices, barrier, view, truePred);
   } else {
     auto gather = cast<DescriptorGatherOp>(op);
     Value tmaPtr = b.createInPartition<ttng::TensorDescToTMAPtrOp>(

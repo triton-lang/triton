@@ -1,6 +1,7 @@
 from dataclasses import dataclass, fields
 import pytest
 import torch
+from typing import Union
 # benchmarking utilities
 # routing utilities
 from triton_bench.routing import routing
@@ -39,9 +40,8 @@ def mask_indx(idx, n_expts_act):
     return idx
 
 
-def init_routing_data(m, n_expts_tot, n_expts_act, n_expt_shards, do_gather, do_scatter):
-    dev = "cuda"
-    logits = torch.randn((m, n_expts_tot), dtype=torch.float16, device=dev, requires_grad=True)
+def init_routing_data(m, n_expts_tot, n_expts_act, n_expt_shards, do_gather, do_scatter, device="cuda"):
+    logits = torch.randn((m, n_expts_tot), dtype=torch.float16, device=device, requires_grad=True)
     routing_data, gather_idx, scatter_idx = routing(logits, n_expts_act, simulated_ep=n_expt_shards)
     routing_data.gate_scal = None
     gather_idx = gather_idx if do_gather else None
@@ -50,17 +50,18 @@ def init_routing_data(m, n_expts_tot, n_expts_act, n_expt_shards, do_gather, do_
 
 
 def init_compute_data(m, n, k, gindx, sindx, n_expts_tot, n_expts_act, n_expt_shards, mode, act_dtype, weight_dtype,
-                      has_y_gammas, requires_grad=True, dev="cuda"):
+                      has_y_gammas, requires_grad=True, device="cuda"):
     torch.manual_seed(0)
     assert mode in {'batched', 'ragged'}
     in_m = m * (n_expts_act if gindx is None else 1)
     out_m = m * (n_expts_act if sindx is None else 1)
     shape_x = (n_expts_tot, in_m, k) if mode == 'batched' else (in_m, k)
-    x = alloc_rand(shape_x, device=dev, dtype=act_dtype, requires_grad=requires_grad)
-    w = alloc_rand((n_expts_tot // n_expt_shards, k, n), device=dev, dtype=weight_dtype, requires_grad=requires_grad)
-    bias = alloc_rand((n_expts_tot // n_expt_shards, n), device=dev, dtype=torch.float32, requires_grad=requires_grad)
-    gs0 = 2**torch.randint(-5, 0, (m * n_expts_act, ), device=dev, dtype=torch.float32, requires_grad=requires_grad)
-    gs1 = 2**torch.randint(-5, 0, (m * n_expts_act, ), device=dev, dtype=torch.float32, requires_grad=requires_grad)
+    x = alloc_rand(shape_x, device=device, dtype=act_dtype, requires_grad=requires_grad)
+    w = alloc_rand((n_expts_tot // n_expt_shards, k, n), device=device, dtype=weight_dtype, requires_grad=requires_grad)
+    bias = alloc_rand((n_expts_tot // n_expt_shards, n), device=device, dtype=torch.float32,
+                      requires_grad=requires_grad)
+    gs0 = 2**torch.randint(-5, 0, (m * n_expts_act, ), device=device, dtype=torch.float32, requires_grad=requires_grad)
+    gs1 = 2**torch.randint(-5, 0, (m * n_expts_act, ), device=device, dtype=torch.float32, requires_grad=requires_grad)
     gs0 = gs0.detach().requires_grad_(requires_grad)
     gs1 = gs1.detach().requires_grad_(requires_grad)
     if mode == 'batched' or (not has_y_gammas) or (has_y_gammas and (gindx is not None) and act_dtype.itemsize >= 2):
@@ -75,12 +76,13 @@ def init_compute_data(m, n, k, gindx, sindx, n_expts_tot, n_expts_act, n_expt_sh
 # ---------------
 
 
-def init_precision(out_dtype, act_use_flexpoint, weight_use_flexpoint, n_expts_tot=1, mx_ctx=MicroscalingCtx()):
+def init_precision(out_dtype, act_use_flexpoint, weight_use_flexpoint, n_expts_tot=1, mx_ctx=MicroscalingCtx(),
+                   device="cuda"):
     # flexpoint
     make_tensor = lambda val0, val1: torch.tensor([val0, val1] * (n_expts_tot // 2) +
                                                   ([val0]
-                                                   if n_expts_tot % 2 else []), dtype=torch.float32, device="cuda")
-    make_scalar = lambda val: torch.tensor([val], dtype=torch.float32, device="cuda")
+                                                   if n_expts_tot % 2 else []), dtype=torch.float32, device=device)
+    make_scalar = lambda val: torch.tensor([val], dtype=torch.float32, device=device)
     in_flex_data = lambda scale, use_flex: InFlexData(dtype=torch.float8_e5m2, scale=make_scalar(scale)
                                                       ) if use_flex else InFlexData()
     in_flex_edata = lambda scale0, scale1, use_flex: InFlexData(dtype=torch.float8_e5m2, scale=make_tensor(
@@ -140,6 +142,7 @@ class Case:
     n_expt_shards: int = 1
     split_k: int = 1
     swizzle_mx_scale: bool = False
+    epilogue_subtile: Union[bool, None] = None
 
 
 @pytest.mark.parametrize(
@@ -162,6 +165,8 @@ class Case:
             Case(300, 400, 400, "ragged", "float16", "float16"),
             Case(300, 400, 400, "ragged", "float8_e5m2", "float8_e5m2"),
             Case(1000, 400, 400, "ragged", "float8_e5m2", "float8_e5m2", 3, 1),
+            Case(600, 400, 400, "ragged", "float8_e5m2", "float8_e5m2", 4, 2, epilogue_subtile=False),
+            Case(600, 400, 400, "ragged", "float8_e5m2", "float8_e5m2", 4, 2, epilogue_subtile=True),
             Case(600, 400, 400, "ragged", "float8_e5m2", "float8_e5m2", 4, 2),
             Case(600, 400, 400, "ragged", "float8_e5m2", "float8_e5m2", 4, 2, n_expt_shards=2),
             Case(600, 400, 400, "ragged", "float8_e5m2", "float8_e5m2", 4, 1, n_expt_shards=2),
@@ -211,7 +216,8 @@ class Case:
 @pytest.mark.parametrize("has_y_gammas", [False, True])
 @pytest.mark.parametrize("is_persistent", [False, True])
 def test_op(m, n, k, split_k, do_gather, do_scatter, fused_scatter, has_y_gammas, is_persistent, n_expts_tot,
-            n_expts_act, n_expt_shards, mode, act_dtype_str, weight_dtype_str, block_m, swizzle_mx_scale):
+            n_expts_act, n_expt_shards, mode, act_dtype_str, weight_dtype_str, block_m, swizzle_mx_scale,
+            epilogue_subtile, device):
     # TODO: remove when Triton FP8 supports proper RTNE
     if "float8" in weight_dtype_str and torch.cuda.get_device_capability()[0] < 9:
         pytest.skip("Float8 not tested on A100")
@@ -241,6 +247,7 @@ def test_op(m, n, k, split_k, do_gather, do_scatter, fused_scatter, has_y_gammas
         "split_k": split_k,
         "fused_scatter": fused_scatter,
         "is_persistent": is_persistent,
+        "epilogue_subtile": epilogue_subtile,
     }
     opt_flags.update_opt_flags_constraints(constraints)
 
@@ -254,16 +261,17 @@ def test_op(m, n, k, split_k, do_gather, do_scatter, fused_scatter, has_y_gammas
     act_is_float8 = act_dtype.itemsize == 1
     weight_is_float8 = weight_dtype.itemsize == 1
     precision_opt = init_precision(act_dtype, act_is_float8, weight_is_float8 and not is_mixed_input,
-                                   n_expts_tot // n_expt_shards)
+                                   n_expts_tot // n_expt_shards, device=device)
     # precision_opt.x_pad_trans_requires_flexpoint = False
     if mode == "ragged":
-        m, rdata, gindx, sindx = init_routing_data(m, n_expts_tot, n_expts_act, n_expt_shards, do_gather, do_scatter)
+        m, rdata, gindx, sindx = init_routing_data(m, n_expts_tot, n_expts_act, n_expt_shards, do_gather, do_scatter,
+                                                   device=device)
     else:
         rdata = gindx = sindx = None
     x_tri, w_tri, bias_tri, gs0_tri, gs1_tri = init_compute_data(m, n, k, gindx, sindx, n_expts_tot, n_expts_act,
                                                                  n_expt_shards, mode, act_dtype,  #
                                                                  torch.bfloat16 if is_mixed_input else weight_dtype,
-                                                                 has_y_gammas, requires_grad=test_bwd)
+                                                                 has_y_gammas, requires_grad=test_bwd, device=device)
     x_ref, w_ref, bias_ref, gs0_ref, gs1_ref = apply_precision(x_tri, w_tri, bias_tri, gs0_tri, gs1_tri, precision_opt)
 
     if is_mixed_input:

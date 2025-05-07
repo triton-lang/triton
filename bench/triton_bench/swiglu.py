@@ -2,7 +2,6 @@ from dataclasses import dataclass
 from triton_bench.numerics import InFlexData, OutFlexData
 import torch
 import triton
-from triton.tools.tensor_descriptor import TensorDescriptor
 from .swiglu_details._swiglu import _swiglu
 from triton_bench import target_info
 from .matmul_ogs_details.metadata import compute_metadata
@@ -35,17 +34,6 @@ class SwiGLU(torch.autograd.Function):
         BLOCK_M, BLOCK_N = 32 // a.itemsize, 128
         num_warps = 4
         kwargs = {'maxnreg': 64} if not target_info.is_hip() else {}
-        # TMA descriptors
-        out_desc = None
-        a_desc = None
-        if target_info.cuda_capability_geq(9, 0) and flex_ctx.out_data.actual_scale is not None:
-            # We need TMA to store the outputs otherwise Triton will aggressively removing layout conversions at
-            # the cost of duplicating too much compute. With TMA, the layout conversion gets folded into the TMA store,
-            # and the duplication doesn't occur.
-            assert out.shape[-1] * out.element_size() % 16 == 0
-            out_desc = TensorDescriptor.from_tensor(out, (BLOCK_M, BLOCK_N))
-            assert a.shape[-1] * a.element_size() % 16 == 0
-            a_desc = TensorDescriptor.from_tensor(a, (BLOCK_M, 2 * BLOCK_N))
         # launch semi-persistent kernel
         N_BLOCKS = triton.cdiv(N // 2, BLOCK_N)
         num_sms = target_info.num_sms()
@@ -64,12 +52,10 @@ class SwiGLU(torch.autograd.Function):
         if routing_data is not None:
             expt_data = compute_metadata(routing_data, M, BLOCK_M).buffer
         _swiglu[grid](
-            out_desc,
             flex_ctx.out_data.reinterpret(out),
             flex_ctx.out_data.expected_scale,
             flex_ctx.out_data.actual_scale,
             flex_ctx.out_data.checksum_scale,
-            a_desc,
             flex_ctx.inp_data.reinterpret(a),
             flex_ctx.inp_data.scale,
             alpha,
