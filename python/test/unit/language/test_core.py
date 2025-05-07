@@ -4359,6 +4359,10 @@ def test_dot_sparse(M, N, K, num_warps, col_a, col_b, epilogue, in_dtype, out_dt
             pytest.skip("dot_sparse is not supported on NVIDIA yet")
 
         if is_hip():
+            target_arch = get_arch()
+            if 'gfx942' not in target_arch:
+                pytest.skip("dot_sparse is only supported on GFX942 for now")
+
             if (M < 16 or N < 16 or K < 16):
                 pytest.skip("small sparse dot is not supported")
 
@@ -4585,15 +4589,16 @@ def test_dot_sparse(M, N, K, num_warps, col_a, col_b, epilogue, in_dtype, out_dt
                           for in_dtype_str, out_dtype_str in [('float16', 'float16')]])
 def test_dot_sparse_3d(B, num_warps, M, N, K, BLOCK_M, BLOCK_N, in_dtype_str, out_dtype_str, device):
     if is_hip():
-        arch = triton.runtime.driver.active.get_current_target().arch
-        if "gfx11" in arch or "gfx12" in arch:
-            if in_dtype_str == "float32":
-                pytest.skip(f"{in_dtype_str} is not supported in WMMA dot, FMA does not support dot3d")
-            if out_dtype_str == "float16":
-                pytest.skip(f"{out_dtype_str} has low precision in WMMA dot")
-    else:
-        if not is_interpreter() and (BLOCK_M < 16 or BLOCK_N < 16):
-            pytest.skip("small dots are supported only on HIP at the moment")
+        target_arch = get_arch()
+        if 'gfx942' not in target_arch:
+            pytest.skip("dot_sparse is only supported on GFX942 for now")
+
+    if is_interpreter():
+        pytest.skip("sparse dots are supported only on HIP at the moment")
+
+    if is_cuda():
+        # TODO: enable support for dot_sparse on NVIDIA + enable tests
+        pytest.skip("dot_sparse is not supported on NVIDIA yet")
 
     if B == 8 and M == 64 and in_dtype_str == "float32" and out_dtype_str == "float32":
         if not is_interpreter() and triton.runtime.driver.active.utils.get_device_properties(
