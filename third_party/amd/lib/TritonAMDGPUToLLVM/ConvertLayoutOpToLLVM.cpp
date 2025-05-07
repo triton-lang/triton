@@ -8,6 +8,7 @@ using ::mlir::triton::gpu::AMDMfmaEncodingAttr;
 using ::mlir::triton::gpu::AMDWmmaEncodingAttr;
 using ::mlir::triton::gpu::DotOperandEncodingAttr;
 using ::mlir::triton::gpu::MemDescType;
+using ::triton::gpu::LinearEncodingAttr;
 
 namespace SharedToDotOperandMFMA {
 Value convertLayout(int opIdx, ConversionPatternRewriter &rewriter,
@@ -180,6 +181,105 @@ protected:
   const TargetInfoBase &targetInfo;
 };
 
+struct ConvertLayoutOpMFMAToLinearConversion
+    : public ConvertOpToLLVMPattern<triton::gpu::ConvertLayoutOp> {
+public:
+  explicit ConvertLayoutOpMFMAToLinearConversion(
+      LLVMTypeConverter &typeConverter, const TargetInfoBase &targetInfo,
+      PatternBenefit benefit)
+      : ConvertOpToLLVMPattern<triton::gpu::ConvertLayoutOp>(typeConverter,
+                                                             benefit),
+        targetInfo(targetInfo) {}
+
+  LogicalResult
+  matchAndRewrite(triton::gpu::ConvertLayoutOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto srcType = cast<RankedTensorType>(op.getSrc().getType());
+    auto dstType = cast<RankedTensorType>(op.getType());
+
+    if (!matchMFMAAndLinearLayoutCase(srcType, dstType))
+      return failure();
+
+    auto loc = op.getLoc();
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
+
+    SmallVector<Value> inVals =
+        unpackLLElements(loc, adaptor.getSrc(), rewriter);
+    if (inVals.empty() || inVals.size() % 8 != 0)
+      return failure();
+
+    auto mfmaLayout = dyn_cast<AMDMfmaEncodingAttr>(srcType.getEncoding());
+    assert(mfmaLayout.getMDim() == 32 && "Expected MFMA size 32");
+    assert(triton::gpu::lookupThreadsPerWarp(rewriter) == 64 &&
+           "Expected warp size 64 for MFMA");
+
+    auto elemTy = srcType.getElementType();
+    auto vecTy = vec_ty(elemTy, 2);
+
+    SmallVector<Value> outVals;
+    auto idx0 = b.i32_val(0);
+    auto idx1 = b.i32_val(1);
+    for (size_t idx = 0; idx < inVals.size(); idx += 8) {
+      Value vec0 = b.undef(vecTy);
+      vec0 = b.insert_element(vecTy, vec0, inVals[idx + 0], idx0);
+      vec0 = b.insert_element(vecTy, vec0, inVals[idx + 1], idx1);
+
+      Value vec1 = b.undef(vecTy);
+      vec1 = b.insert_element(vecTy, vec1, inVals[idx + 2], idx0);
+      vec1 = b.insert_element(vecTy, vec1, inVals[idx + 3], idx1);
+
+      Value vec2 = b.undef(vecTy);
+      vec2 = b.insert_element(vecTy, vec2, inVals[idx + 4], idx0);
+      vec2 = b.insert_element(vecTy, vec2, inVals[idx + 5], idx1);
+
+      Value vec3 = b.undef(vecTy);
+      vec3 = b.insert_element(vecTy, vec3, inVals[idx + 6], idx0);
+      vec3 = b.insert_element(vecTy, vec3, inVals[idx + 7], idx1);
+
+      Value resVec0, resVec1, resVec2, resVec3;
+
+      // Swap vec0 and vec2
+      MLIRContext *ctx = rewriter.getContext();
+      Type retType = struct_ty({i32_ty, i32_ty});
+      Value falseVal = b.false_val();
+      Value perm = LLVM::createLLVMIntrinsicCallOp(
+                       rewriter, loc, "llvm.amdgcn.permlane32.swap", retType,
+                       ValueRange{b.bitcast(vec0, i32_ty),
+                                  b.bitcast(vec2, i32_ty), falseVal, falseVal})
+                       ->getResult(0);
+      resVec0 = b.bitcast(b.extract_val(i32_ty, perm, 0), vecTy);
+      ;
+      resVec2 = b.bitcast(b.extract_val(i32_ty, perm, 1), vecTy);
+      ;
+
+      // Swap vec1 and vec3
+      perm = LLVM::createLLVMIntrinsicCallOp(
+                 rewriter, loc, "llvm.amdgcn.permlane32.swap", retType,
+                 ValueRange{b.bitcast(vec1, i32_ty), b.bitcast(vec3, i32_ty),
+                            falseVal, falseVal})
+                 ->getResult(0);
+      resVec1 = b.bitcast(b.extract_val(i32_ty, perm, 0), vecTy);
+      resVec3 = b.bitcast(b.extract_val(i32_ty, perm, 1), vecTy);
+
+      outVals.push_back(b.extract_element(elemTy, resVec0, idx0));
+      outVals.push_back(b.extract_element(elemTy, resVec0, idx1));
+      outVals.push_back(b.extract_element(elemTy, resVec1, idx0));
+      outVals.push_back(b.extract_element(elemTy, resVec1, idx1));
+      outVals.push_back(b.extract_element(elemTy, resVec2, idx0));
+      outVals.push_back(b.extract_element(elemTy, resVec2, idx1));
+      outVals.push_back(b.extract_element(elemTy, resVec3, idx0));
+      outVals.push_back(b.extract_element(elemTy, resVec3, idx1));
+    }
+
+    Value result = packLLElements(loc, getTypeConverter(), outVals, rewriter,
+                                  op.getType());
+    rewriter.replaceOp(op, result);
+    return success();
+  }
+
+protected:
+  const TargetInfoBase &targetInfo;
+};
 } // namespace
 
 void mlir::triton::AMD::populateConvertLayoutOpToLLVMPatterns(
@@ -187,4 +287,6 @@ void mlir::triton::AMD::populateConvertLayoutOpToLLVMPatterns(
     RewritePatternSet &patterns, PatternBenefit benefit) {
   patterns.add<ConvertLayoutOpMFMAToDotOpConversion>(typeConverter, targetInfo,
                                                      benefit);
+  patterns.add<ConvertLayoutOpMFMAToLinearConversion>(typeConverter, targetInfo,
+                                                      benefit);
 }
