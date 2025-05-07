@@ -19,22 +19,12 @@ import torch
 import triton
 import triton.language as tl
 import triton.profiler as proton
-from contextlib import contextmanager
 
 try:
     from triton.tools.tensor_descriptor import TensorDescriptor
     HAS_TENSOR_DESC = True
 except ModuleNotFoundError:
     HAS_TENSOR_DESC = False
-
-
-@contextmanager
-def proton_context():
-    proton.activate(0)
-    try:
-        yield
-    finally:
-        proton.deactivate(0)
 
 
 DEVICE = triton.runtime.driver.active.get_active_torch_device()
@@ -831,7 +821,7 @@ def bench_flash_attention(BATCH, H, N_CTX, HEAD_DIM, causal, mode, provider, dev
             o = fn()
             do = torch.randn_like(o)
             fn = lambda: o.backward(do, retain_graph=True)
-        with proton.scope(f"triton_{provider}_{mode}"):
+        with proton.scope(f"{provider}_{mode}"):
             ms = triton.testing.do_bench(fn)
     if provider == "flash":
         qkv = torch.randn((BATCH, N_CTX, 3, H, HEAD_DIM), dtype=dtype, device=device, requires_grad=True)

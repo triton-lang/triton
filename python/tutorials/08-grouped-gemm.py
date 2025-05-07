@@ -32,7 +32,6 @@ import torch
 import triton
 import triton.language as tl
 import triton.profiler as proton
-from contextlib import contextmanager
 
 DEVICE = triton.runtime.driver.active.get_active_torch_device()
 
@@ -49,15 +48,6 @@ def num_sms():
     if is_cuda():
         return torch.cuda.get_device_properties("cuda").multi_processor_count
     return 148
-
-
-@contextmanager
-def proton_context():
-    proton.activate(0)
-    try:
-        yield
-    finally:
-        proton.deactivate(0)
 
 
 def show_profile(profile_name):
