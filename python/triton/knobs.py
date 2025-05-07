@@ -22,10 +22,39 @@ class Env:
 
 env = Env()
 
+propagate_env: bool = True
+
 
 def getenv(key: str) -> Optional[str]:
     res = os.getenv(key)
     return res.strip() if res is not None else res
+
+
+def setenv(key: str, value: Optional[str]) -> None:
+    if not propagate_env:
+        return
+
+    if value is not None:
+        os.environ[key] = value
+    elif key in os.environ:
+        del os.environ[key]
+
+
+def toenv(val: Any) -> Union[None, tuple[Optional[str]]]:
+    if val is None:
+        return (None, )
+
+    t = type(val)
+    if t is bool:
+        return ("1" if val else "0", )
+
+    if t is str:
+        return (val, )
+
+    if t is int:
+        return (str(val), )
+
+    return None
 
 
 # There's an asymmetry here so that e.g. env_nvidia_tool can be specified with a
@@ -52,8 +81,12 @@ class env_base(Generic[SetType, GetType]):
         else:
             return self.get()
 
+    @property
+    def env_val(self) -> str | None:
+        return getenv(self.key)
+
     def get(self) -> GetType:
-        env = getenv(self.key)
+        env = self.env_val
         return self.transform(self.default() if env is None else self.from_env(env))
 
     def __set__(self, obj: object, value: Union[SetType, Env]) -> None:
@@ -61,7 +94,8 @@ class env_base(Generic[SetType, GetType]):
             obj.__dict__.pop(self.name, None)
         else:
             obj.__dict__[self.name] = value
-            self.set(value)
+            if env_val := toenv(value):
+                setenv(self.key, env_val[0])
 
     def __delete__(self, obj: object) -> None:
         obj.__dict__.pop(self.name, None)
@@ -71,20 +105,11 @@ class env_base(Generic[SetType, GetType]):
         # if GetType != SetType.
         return cast(GetType, val)
 
-    def set(self, val: SetType) -> None:
-        pass
-
     def from_env(self, val: str) -> SetType:
         raise NotImplementedError()
 
 
 class env_str(env_base[str, str]):
-
-    def set(self, value: Optional[str]) -> None:
-        if value is None:
-            os.unsetenv(self.key)
-        else:
-            os.putenv(self.key, value)
 
     def from_env(self, val: str) -> str:
         return val
@@ -253,8 +278,7 @@ class base_knobs:
 
     def copy(self: knobs_type) -> knobs_type:
         res = type(self)()
-        for k, v in self.__dict__.items():
-            res.__dict__[k] = v
+        res.__dict__.update(self.__dict__)
         return res
 
     def reset(self: knobs_type) -> knobs_type:
@@ -265,11 +289,18 @@ class base_knobs:
     @contextmanager
     def scope(self) -> Generator[None, None, None]:
         try:
+            initial_env = {knob.key: knob.env_val for knob in self.knob_descriptors.values()}
             orig = dict(self.__dict__)
             yield
         finally:
             self.__dict__.clear()
             self.__dict__.update(orig)
+
+            for k, v in initial_env.items():
+                if v is not None:
+                    os.environ[k] = v
+                elif k in os.environ:
+                    del os.environ[k]
 
 
 class BuildImpl(Protocol):
