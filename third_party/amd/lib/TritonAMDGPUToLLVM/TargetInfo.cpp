@@ -607,10 +607,11 @@ bool TargetInfo::supportsDirectToLdsLoadBitWidth(int bitWidth) const {
   case ISAFamily::CDNA1:
   case ISAFamily::CDNA2:
   case ISAFamily::CDNA3:
-    return llvm::is_contained({32, 16, 8}, bitWidth);
+    // Disable 8 and 16 bits because they get extended to 32 bit.
+    return llvm::is_contained({32, /*16, 8*/}, bitWidth);
   case ISAFamily::CDNA4:
-    // Disable 96 bits as it uses 128bit strides between threads in a warp
-    return llvm::is_contained({128, /*96, */ 32, 16, 8}, bitWidth);
+    // Disable 8, 16, 96 bits because they get extended to 32/128 bit.
+    return llvm::is_contained({128, /*96, */ 32, /*16, 8*/}, bitWidth);
   default:
     break;
   }
