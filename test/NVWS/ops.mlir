@@ -161,7 +161,7 @@ tt.func @token_producer_consumer() {
   // CHECK: nvws.consumer_wait
   // CHECK: nvws.consumer_release
 
-  %0 = nvws.create_token {loadType = 1 : i32, num = 3 : i32} : tensor<3x!nvws.token>
+  %0 = nvws.create_token {loadType = 1 : i32, numBuffers = 3 : i32} : tensor<3x!nvws.token>
 
   %c0_i32 = arith.constant {async_task_id = dense<0> : vector<1xi32>} 0 : i32
   %false = arith.constant {async_task_id = dense<0> : vector<1xi32>} false
