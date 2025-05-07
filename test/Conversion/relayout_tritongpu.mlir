@@ -1,4 +1,4 @@
-// RUN: triton-opt %s -split-input-file -convert-triton-to-tritongpu='target=cuda:100 num-warps=4' | FileCheck %s
+// RUN: triton-opt %s -split-input-file -convert-triton-to-tritongpu='target=cuda:100 num-warps=4 enable-source-remat=true' -relayout-tritongpu | FileCheck %s
 
 #tmem0 = #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, unpacked = true>
 #tmem1 = #ttng.tensor_memory_encoding<blockM = 128, blockN = 64, unpacked = true>
@@ -38,5 +38,32 @@ tt.func @tmem_scales_layout() {
   %cst = arith.constant dense<0> : tensor<128x128xi8>
   // CHECK: ttng.tmem_alloc {{.*}} (tensor<128x128xi8, [[SCALES]]>) ->
   %result = ttng.tmem_alloc %cst : (tensor<128x128xi8>) -> !ttg.memdesc<128x128xi8, #tmem_scales, #ttng.tensor_memory>
+  tt.return
+}
+
+// -----
+
+#shared = #ttg.nvmma_shared<{swizzlingByteWidth = 32, transposed = false, elementBitWidth = 8}>
+#bar_layout = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0], CTAsPerCGA = [1], CTASplitNum = [1], CTAOrder = [0]}>
+
+// CHECK: [[SLICE_PARENT:#.*]] = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [32, 1], warpsPerCTA = [1, 4], order = [1, 0]}>
+
+// CHECK: @async_tma_gather
+tt.func @async_tma_gather(%desc: !tt.ptr<i8>, %y_offset: i32,
+                          %bar: !ttg.memdesc<1xi64, #bar_layout, #ttg.shared_memory, mutable>,
+                          %result: !ttg.memdesc<32x128xbf16, #shared, #ttg.shared_memory, mutable>,
+                          %pred: i1) {
+  %x_offsets = arith.constant dense<1> : tensor<32xi32>
+  // CHECK: [[IDX:%.*]] = ttg.convert_layout %cst : tensor<32xi32, #{{.*}}> -> tensor<32xi32, #ttg.slice<{dim = 0, parent = [[SLICE_PARENT]]}>>
+  ttng.async_tma_gather %desc[%x_offsets, %y_offset] %result, %bar, %pred : !tt.ptr<i8>, tensor<32xi32>, i32, !ttg.memdesc<1xi64, #bar_layout, #ttg.shared_memory, mutable>, !ttg.memdesc<32x128xbf16, #shared, #ttg.shared_memory, mutable>, i1
+  tt.return
+}
+
+// CHECK: @async_tma_scatter
+tt.func @async_tma_scatter(%desc: !tt.ptr<i8>, %y_offset: i32,
+                           %src: !ttg.memdesc<32x128xbf16, #shared, #ttg.shared_memory, mutable>) {
+  %x_offsets = arith.constant dense<1> : tensor<32xi32>
+  // CHECK: [[IDX:%.*]] = ttg.convert_layout %cst : tensor<32xi32, #{{.*}}> -> tensor<32xi32, #ttg.slice<{dim = 0, parent = [[SLICE_PARENT]]}>>
+  ttng.async_tma_scatter %desc[%x_offsets, %y_offset] %src : !tt.ptr<i8>, tensor<32xi32>, i32, !ttg.memdesc<32x128xbf16, #shared, #ttg.shared_memory, mutable>
   tt.return
 }

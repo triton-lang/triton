@@ -22,8 +22,7 @@ using RunPipelineFn = function_ref<LogicalResult(OpPassManager &, ModuleOp)>;
 // Take the body of a partition into a new `tt.func`. We can use this to run a
 // full compiler pipeline on the partition.
 static OwningOpRef<ModuleOp> takeIntoFunction(ModuleAxisInfoAnalysis &axisInfo,
-                                              Region *partition,
-                                              unsigned numWarps) {
+                                              Region *partition, int numWarps) {
   // Forward the module attributes (target, number of threads per warp, etc.)
   // onto the container module.
   ModuleOp mod = axisInfo.getModuleOp();
@@ -83,9 +82,8 @@ static void extractPartitionBody(OwningOpRef<ModuleOp> container,
 
 // Reset the layouts of operations in a region and re-run layout assignment.
 static LogicalResult relayoutWarps(ModuleAxisInfoAnalysis &axisInfo,
-                                   Region *partition, unsigned prevNumWarps,
-                                   unsigned newNumWarps,
-                                   RunPipelineFn runPipeline) {
+                                   Region *partition, int prevNumWarps,
+                                   int newNumWarps, RunPipelineFn runPipeline) {
   OwningOpRef<ModuleOp> container =
       takeIntoFunction(axisInfo, partition, prevNumWarps);
 
@@ -112,9 +110,10 @@ static LogicalResult relayoutWarps(ModuleAxisInfoAnalysis &axisInfo,
   // Enable `convert-triton-to-tritongpu` to rematerialize source layouts for
   // TTG dialect operations. They will get cleared later.
   OpPassManager pm;
-  pm.addPass(createConvertTritonToTritonGPUPass(target.str(), newNumWarps,
-                                                threadsPerWarp, numCTAs,
-                                                /*enableSourceRemat=*/true));
+  pm.addPass(
+      createConvertTritonToTritonGPU({target.str(), newNumWarps, threadsPerWarp,
+                                      numCTAs, /*enableSourceRemat=*/true}));
+  pm.addPass(createRelayoutTritonGPU());
   if (failed(runPipeline(pm, *container)))
     return failure();
   // Clear source rematerializations by propagating the source layout.
