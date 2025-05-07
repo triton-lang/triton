@@ -1241,10 +1241,10 @@ ttg::LocalAllocOp findShmemAlloc(Value operand) {
   // come from an MemDescSubview op. Only ConvertLayout and Trans ops are
   // allowed in between.
   Value transitiveOperand = operand;
-  while (isa_and_nonnull<ttg::ConvertLayoutOp, tt::TransOp, ttg::MemDescTransOp,
-                         ttg::MemDescReshapeOp>(
-             transitiveOperand.getDefiningOp()) ||
-         isa<BlockArgument>(transitiveOperand)) {
+  while (
+      isa_and_nonnull<ttg::ConvertLayoutOp, tt::TransOp, ttg::MemDescTransOp>(
+          transitiveOperand.getDefiningOp()) ||
+      isa<BlockArgument>(transitiveOperand)) {
     if (auto blockArg = dyn_cast<BlockArgument>(transitiveOperand)) {
       assert(isa<scf::ForOp>(blockArg.getOwner()->getParentOp()) &&
              "Block argument must come from a for loop");
@@ -1403,7 +1403,7 @@ void replaceUsesAndPropagateType(OpBuilder &builder, Operation *oldUse,
   // TODO: can we use an early_inc iterator?
   for (OpOperand &use : oldUse->getUses()) {
     // Non-subview/trans ops will be replaced by `val`.
-    if (!isa<ttg::MemDescTransOp, ttg::MemDescSubviewOp, ttg::MemDescReshapeOp>(
+    if (!isa<triton::gpu::MemDescTransOp, triton::gpu::MemDescSubviewOp>(
             use.getOwner())) {
       operandsToReplace.push_back(&use);
       continue;
@@ -1413,22 +1413,20 @@ void replaceUsesAndPropagateType(OpBuilder &builder, Operation *oldUse,
     OpBuilder::InsertionGuard g(builder);
     builder.setInsertionPoint(user);
     Value newVal;
-    if (auto subview = dyn_cast<ttg::MemDescSubviewOp>(user)) {
-      ttg::MemDescType oldType = subview.getType();
-      bool isMutable = cast<ttg::MemDescType>(val.getType()).getMutableMemory();
-      Type newDstType = ttg::MemDescType::get(
+    if (auto subview = dyn_cast<triton::gpu::MemDescSubviewOp>(user)) {
+      triton::gpu::MemDescType oldType = subview.getType();
+      bool isMutable =
+          cast<triton::gpu::MemDescType>(val.getType()).getMutableMemory();
+      Type newDstType = triton::gpu::MemDescType::get(
           oldType.getShape(), oldType.getElementType(), oldType.getEncoding(),
           oldType.getMemorySpace(), isMutable);
-      newVal = builder.create<ttg::MemDescSubviewOp>(
+      newVal = builder.create<triton::gpu::MemDescSubviewOp>(
           subview.getLoc(), newDstType, val, subview.getOffsets());
       newVal.getDefiningOp()->setAttrs(user->getAttrs());
-    } else if (auto trans = dyn_cast<ttg::MemDescTransOp>(user)) {
-      newVal = builder.create<ttg::MemDescTransOp>(trans.getLoc(), val,
-                                                   trans.getOrder());
+    } else if (auto trans = dyn_cast<triton::gpu::MemDescTransOp>(user)) {
+      newVal = builder.create<triton::gpu::MemDescTransOp>(trans.getLoc(), val,
+                                                           trans.getOrder());
       newVal.getDefiningOp()->setAttrs(user->getAttrs());
-    } else if (auto reshape = dyn_cast<ttg::MemDescReshapeOp>(user)) {
-      newVal = builder.create<ttg::MemDescReshapeOp>(reshape.getLoc(),
-                                                     reshape.getType(), val);
     }
     assert(newVal);
     replaceUsesAndPropagateType(builder, user, newVal);

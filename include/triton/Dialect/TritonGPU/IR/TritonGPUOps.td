@@ -260,6 +260,11 @@ def TTG_MemDescReshapeOp : TTG_Op<"memdesc_reshape", [Pure,
   }];
 
   let arguments = (ins TTG_MemDescType:$src);
+
+  let arguments = (
+    ins TTG_MemDescType:$src
+  );
+
   let results = (outs TTG_MemDescType:$result);
 
   let assemblyFormat = "$src attr-dict `:` qualified(type($src)) `->` qualified(type($result))";
