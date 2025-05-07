@@ -299,14 +299,25 @@ private:
 // on the requested number of stages assign the latencies in a way that
 // cover all the stages with the sum of latencies in the chain from the first
 // load to the final dot op.
-bool assignLatencies(ModuleOp moduleOp, int defaultNumStages,
-                     DenseMap<scf::ForOp, PipelineStatus> &loopPipelineStatus) {
+bool assignLatencies(
+    ModuleOp moduleOp, int defaultNumStages,
+    DenseMap<scf::ForOp, PipelineFailureReason> &loopPipelineFailureReasons) {
   SmallVector<scf::ForOp> loops;
   moduleOp->walk([&](scf::ForOp forOp) {
     // Bail out for loops with num_stage <= 1.
-    if (preCondition(forOp) &&
-        getNumStagesOrDefault(forOp, defaultNumStages) > 1)
-      loops.push_back(forOp);
+    auto pipelineStatus = collectPrecondition(forOp);
+    if (pipelineStatus) {
+      loopPipelineFailureReasons[forOp] = *pipelineStatus;
+      return;
+    }
+
+    auto numStages = getNumStagesOrDefault(forOp, defaultNumStages);
+    if (numStages <= 1) {
+      loopPipelineFailureReasons[forOp] =
+          PipelineFailureReason::NumStagesTooSmall;
+      return;
+    }
+    loops.push_back(forOp);
   });
   if (loops.empty())
     return false;

@@ -418,38 +418,22 @@ PipelineStatus scheduleLoop(scf::ForOp forOp,
 
 } // namespace
 
-PipelineFailureReason findReasonForNoLatencyAssigned(scf::ForOp forOp) {}
-
-void scheduleLoops(ModuleOp moduleOp) {
+bool scheduleLoops(
+    ModuleOp moduleOp,
+    DenseMap<scf::ForOp, PipelineFailureReason> &loopPipelineFailureReasons) {
   DenseMap<Operation *, int> opLatency = deserializeLatencies(moduleOp);
   SmallVector<scf::ForOp> loops;
   moduleOp->walk([&](scf::ForOp forOp) { loops.push_back(forOp); });
   if (loops.empty())
-    return;
-  SmallVector<PipelineStatus, 2> scheduleLoopResult;
-  bool allLoopsUnscheduled = true;
+    return true;
   for (auto forOp : loops) {
     auto result = scheduleLoop(forOp, opLatency);
-    if (!result) {
-      allLoopsUnscheduled = false;
+    if (result) {
+      loopPipelineFailureReasons[forOp] = *result;
     }
-    scheduleLoopResult.push_back(result);
   }
 
-  if (allLoopsUnscheduled) {
-    moduleOp.emitRemark()
-        << "All loops failed to assign a schedule for pipelining.";
-    for (size_t i = 0; i < loops.size(); i++) {
-      auto forOp = loops[i];
-      if (!scheduleLoopResult[i]) {
-        llvm_unreachable("LoopResult should contain a value");
-      }
-      PipelineFailureReason reason = scheduleLoopResult[i].value();
-      forOp.emitRemark() << "Loop failed to be scheduled because "
-                         << getFailureReasonString(reason);
-    }
-    return;
-  }
+  return loopPipelineFailureReasons.size() == loops.size();
 }
 
 } // namespace gpu

@@ -17,11 +17,15 @@ namespace gpu {
 /// Discover operations that should become async and assign latencies to them
 /// based on the numStages value provided by the user. Return false if no loops
 /// are assigned with latencies.
-bool assignLatencies(ModuleOp moduleOp, int numStages,
-                     DenseMap<scf::ForOp, PipelineStatus> &loopPipelineStatus);
+bool assignLatencies(
+    ModuleOp moduleOp, int numStages,
+    DenseMap<scf::ForOp, PipelineFailureReason> &loopPipelineFailureReasons);
 
 /// Schedule the loops based on the latencies assigned to the operations.
-void scheduleLoops(ModuleOp moduleOp);
+/// Returns false if no loops are scheduled.
+bool scheduleLoops(
+    ModuleOp moduleOp,
+    DenseMap<scf::ForOp, PipelineFailureReason> &loopPipelineFailureReasons);
 
 /// Lower the loops to prepare them for pipeline expansion.
 void lowerLoops(ModuleOp moduleOp);
