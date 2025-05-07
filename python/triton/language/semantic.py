@@ -877,6 +877,9 @@ def cast(input: tl.tensor, dst_ty: tl.dtype, builder: ir.builder,
             raise ValueError("fp_downcast_rounding should be set only for truncating fp conversions. "
                              "Source scalar type is " + str(src_sca_ty) + " and destination type is " + str(dst_sca_ty))
 
+    if (src_sca_ty.is_fp8() or dst_sca_ty.is_fp8()) or (src_sca_ty.is_fp64() or dst_sca_ty.is_fp64()):
+        raise ValueError("[fp8, fp64] is unsupported on Ascend for now."
+                         "Source scalar type is " + str(src_sca_ty) + " and destination type is " + str(dst_sca_ty))
     if (src_sca_ty.is_fp8e4b15() or dst_sca_ty.is_fp8e4b15()):
         assert builder.codegen_fns.get(
             "convert_custom_types") is not None, "target doesn't provide conversion for this type."
@@ -1535,15 +1538,17 @@ def dot(lhs: tl.tensor, rhs: tl.tensor, acc: tl.tensor, input_precision: Optiona
         assert acc.type == ret_ty
 
     # max_num_imprecise_acc only applies to fp8 -> fp32 dot on sm_90
-    if max_num_imprecise_acc is None:
-        if lhs.dtype.is_fp8() and rhs.dtype.is_fp8():
-            max_num_imprecise_acc = builder.options.max_num_imprecise_acc_default
-        else:
-            max_num_imprecise_acc = 0
-    else:
-        if lhs.dtype.is_fp8() and rhs.dtype.is_fp8() and max_num_imprecise_acc > K:
-            raise ValueError(f"max_num_imprecise_acc ({max_num_imprecise_acc}) must be <= K ({K})")
-
+    # if max_num_imprecise_acc is None:
+    #     if lhs.dtype.is_fp8() and rhs.dtype.is_fp8():
+    #         max_num_imprecise_acc = builder.options.max_num_imprecise_acc_default
+    #     else:
+    #         max_num_imprecise_acc = 0
+    # else:
+    #     if lhs.dtype.is_fp8() and rhs.dtype.is_fp8() and max_num_imprecise_acc > K:
+    #         raise ValueError(f"max_num_imprecise_acc ({max_num_imprecise_acc}) must be <= K ({K})")
+    if max_num_imprecise_acc is not None:
+        tl.static_print("max_num_imprecise_acc is not supported on Ascend yet. Thus it is ignored.")
+    max_num_imprecise_acc = 0
     return tl.tensor(builder.create_dot(lhs.handle, rhs.handle, acc_handle, input_precision, max_num_imprecise_acc),
                      ret_ty)
 
@@ -1674,6 +1679,30 @@ def associative_scan(inputs: Sequence[tl.tensor], axis: int, region_builder_fn, 
     scan_op.verify()
 
     return tuple(wrap_tensor(scan_op.get_result(i), inputs[i].type.scalar, shape) for i in range(len(inputs)))
+
+
+# ===----------------------------------------------------------------------===
+#                               Gather
+# ===----------------------------------------------------------------------===
+
+
+def gather(src: tl.tensor, index: tl.tensor, axis: int, builder: ir.builder) -> tl.tensor:
+    assert index.dtype.is_int(), "index must be an integer tensor"
+
+    rank = len(src.type.shape)
+    assert len(index.type.shape) == rank, "source and index tensors must have the same rank"
+
+    assert -rank <= axis < rank, f"gather axis {axis} must be < source rank ({rank})"
+    if axis < 0:
+        axis += rank
+
+    for d in range(rank):
+        if d == axis:
+            continue
+        assert index.type.shape[d] == src.type.shape[d], f"index dim {axis} must match the corresponding source dim"
+
+    gather = builder.create_gather(src.handle, index.handle, axis)
+    return wrap_tensor(gather, src.type.scalar, index.type.shape)
 
 
 # ===----------------------------------------------------------------------===

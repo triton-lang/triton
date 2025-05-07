@@ -203,6 +203,7 @@ void init_triton_ir(py::module &&m) {
       .value("TF32", InputPrecision::TF32)
       .value("TF32x3", InputPrecision::TF32x3)
       .value("IEEE", InputPrecision::IEEE)
+      .value("HF32", InputPrecision::HF32)
       .export_values();
 
   py::enum_<F8F6F4Type>(m, "F8F6F4TY", py::module_local())
@@ -1629,6 +1630,9 @@ void init_triton_ir(py::module &&m) {
                      IntegerType::get(operand.getContext(), 32)),
                  operand);
            })
+      .def("create_gather",
+            [](TritonOpBuilder &self, Value src, Value indices, int axis)
+                -> Value { return self.create<GatherOp>(src, indices, axis); })
       // Force GPU barrier
       .def("create_barrier",
            [](TritonOpBuilder &self) { self.create<mlir::gpu::BarrierOp>(); })
