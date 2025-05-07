@@ -39,7 +39,7 @@ def test_index(size, device):
 def _tuple_assign(XPtrs, YPtrs, values):
     # assign from tuple
     X0, X1 = XPtrs
-    x0, x1 = values
+    x0, x1, _ = values
     tl.store(X0, x0)
     tl.store(X1, x1)
     # assign to tuple
@@ -53,7 +53,7 @@ def _tuple_assign(XPtrs, YPtrs, values):
 
 @pytest.mark.interpreter
 def test_assign(device):
-    vals = (2., 3.)
+    vals = (2., 3., None)
     x = tuple([torch.zeros((1, ), dtype=torch.float32, device=device) for _ in range(2)])
     y = tuple([torch.zeros((1, ), dtype=torch.float32, device=device) for _ in range(3)])
     _tuple_assign[(1, )](x, y, vals)
