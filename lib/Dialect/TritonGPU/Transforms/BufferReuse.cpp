@@ -37,7 +37,6 @@ RegionPredecessorAnalysis::RegionPredecessorAnalysis(Operation *op) {
       return WalkResult::advance();
     }
 
-    auto br = dyn_cast<RegionBranchTerminatorOpInterface>(op);
     // FIXME: `ReturnLike` adds `RegionBranchTerminatorOpInterface` for some
     // reason. Check that the parent is actually a `RegionBranchOpInterface`.
     auto br = dyn_cast<RegionBranchTerminatorOpInterface>(op);
@@ -54,6 +53,8 @@ RegionPredecessorAnalysis::RegionPredecessorAnalysis(Operation *op) {
       }
       return WalkResult::advance();
     }
+
+    return WalkResult::advance();
   });
 }
 
@@ -151,14 +152,8 @@ bool BufferLiveRangeAnalysis::join(BufferStates &lhs, const BufferStates &rhs) {
 void BufferLiveRangeAnalysis::initialize(FuncOp func) {
   // First find all the buffers to track.
   func.walk([&](Operation *op) {
-    if (auto alloc = dyn_cast<LocalAllocOp>(op)) {
+    if (isa<ttng::TMEMAllocOp, LocalAllocOp>(op))
       bufferIds.insert({op, bufferIds.size()});
-      return WalkResult::advance();
-    }
-    if (auto alloc = dyn_cast<ttng::TMEMAllocOp>(op)) {
-      bufferIds.insert({op, bufferIds.size()});
-      return WalkResult::advance();
-    }
   });
 }
 
@@ -271,6 +266,18 @@ void BufferLiveRangeAnalysis::run(FuncOp func,
 }
 
 //===----------------------------------------------------------------------===//
+// reuseBuffers
+//===----------------------------------------------------------------------===//
+
+static void reuseBuffers(FuncOp func) {
+  // First determine when buffers are live at every point in the function.
+  RegionPredecessorAnalysis preds(func);
+  BufferLiveRangeAnalysis analysis;
+  analysis.initialize(func);
+  analysis.run(func, preds);
+}
+
+//===----------------------------------------------------------------------===//
 // Pass Definition
 //===----------------------------------------------------------------------===//
 
@@ -284,8 +291,9 @@ struct BufferReuse
     : public triton::gpu::impl::TritonGPUBufferReuseBase<BufferReuse> {
   using TritonGPUBufferReuseBase::TritonGPUBufferReuseBase;
 
-  void runOnOperation() override;
+  void runOnOperation() override {
+    for (auto func : getOperation().getOps<FuncOp>())
+      reuseBuffers(func);
+  }
 };
 } // namespace
-
-void BufferReuse::runOnOperation() {}
