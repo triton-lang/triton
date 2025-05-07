@@ -1,5 +1,4 @@
 #include "CodePartitionUtility.h"
-#include "Utility.h"
 #include "mlir/Analysis/SliceAnalysis.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/BuiltinAttributes.h"
@@ -31,8 +30,6 @@ namespace tt = mlir::triton;
 namespace ttg = mlir::triton::gpu;
 namespace ttng = ::mlir::triton::nvidia_gpu;
 namespace mlir {
-namespace triton {
-namespace gpu {
 
 #define DEBUG_TYPE "tritongpu-warp-spec-lower-mem"
 #define DBGS() (llvm::dbgs() << "[" DEBUG_TYPE "]: ")
@@ -190,6 +187,7 @@ static Value createBufferView(OpBuilderWithAsyncTaskIds &builder, Value alloc,
       alloc.getLoc(), viewDescType, alloc, idxs);
 }
 
+#if 0
 static std::pair<Operation *, Operation *>
 createTMEMCopy(const DenseMap<Channel *, Value> &bufferMap, Channel *channel,
                Value srcBufferIdx, Value dstBufferIdx) {
@@ -253,6 +251,7 @@ createTMEMCopy(const DenseMap<Channel *, Value> &bufferMap, Channel *channel,
   tmemChannel->tmemProducerOp = tmemChannel->getMmaOp();
   return {tmemChannel->getMmaOp(), channel->getDstOp()};
 }
+#endif
 
 static int getTMALoadSize(tt::DescriptorLoadOp &tmaLoad) {
   auto tensorTy = cast<RankedTensorType>(tmaLoad->getResult(0).getType());
@@ -478,8 +477,8 @@ void insertAsyncCopy(
                                             domininatingChannel->getSrcOp(),
                                             asyncTasksPC, bufferIdx, bufferIdx);
     } else if (domininatingChannel->channelKind == DataChannelKind::TMEM) {
-      producerConsumerOps =
-          createTMEMCopy(bufferMap, domininatingChannel, bufferIdx, bufferIdx);
+      // producerConsumerOps =
+      //  createTMEMCopy(bufferMap, domininatingChannel, bufferIdx, bufferIdx);
     } else {
       assert(!isa<ttg::LocalLoadOp>(srcOp) &&
              "LocalLoadOp buffer should be reused");
@@ -493,6 +492,4 @@ void insertAsyncCopy(
   }
 }
 
-} // namespace gpu
-} // namespace triton
 } // namespace mlir

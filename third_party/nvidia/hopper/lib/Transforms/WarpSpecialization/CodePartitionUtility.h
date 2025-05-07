@@ -1,13 +1,15 @@
 #ifndef NV_DIALECT_HOPPER_TRANSFORMS_CODEPARTITIONUTILITY_H_
 #define NV_DIALECT_HOPPER_TRANSFORMS_CODEPARTITIONUTILITY_H_
 
-#include "mlir/IR/Matchers.h"
-#include "mlir/IR/PatternMatch.h"
+// #include "mlir/IR/Matchers.h"
+// #include "mlir/IR/PatternMatch.h"
 
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
+
+#include "Utility.h"
 #include <algorithm>
 #include <numeric>
 
@@ -18,16 +20,7 @@ namespace mlir {
 namespace tt = mlir::triton;
 
 /*
-namespace triton {
-class ModuleAxisInfoAnalysis;
-class LoadOp;
-class StoreOp;
-class FuncOp;
-namespace gpu {
-class SwizzledSharedEncodingAttr;
-}
-} // namespace triton
-*/
+ */
 
 enum class DataChannelKind { SMEM, TMEM };
 
@@ -67,6 +60,8 @@ struct CommChannel {
 };
 
 namespace ttng = ::mlir::triton::nvidia_gpu;
+namespace triton {
+namespace nvidia_gpu {
 struct TmemDataChannel : Channel {
   ttng::TMEMAllocOp tmemAllocOp;
   ttng::TCGen5MMAOp tmemMmaOp;
@@ -88,6 +83,8 @@ struct TmemDataChannel : Channel {
   ttng::TCGen5MMAOp getMmaOp() { return tmemMmaOp; }
   virtual Operation *getSrcOp() { return tmemProducerOp; }
 };
+} // namespace nvidia_gpu
+} // namespace triton
 
 bool enclosing(scf::IfOp ifOp, Operation *op);
 bool enclosing(scf::ForOp forOp, Operation *op);
@@ -156,8 +153,7 @@ Operation *optimizeTMALoads(OpBuilderWithAsyncTaskIds &builder,
                             Value bufferIdx, Value bufferIdxExtract,
                             Value phase, Operation *headProducer,
                             Operation *headConsumer);
-void SpecializeRegion(triton::FuncOp funcOp, int regDecProducer,
-                      int regIncConsumer);
+void SpecializeRegion(triton::FuncOp funcOp);
 
 } // namespace mlir
 
