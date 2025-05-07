@@ -125,17 +125,18 @@ def _attn_fwd_inner_tma(acc, l_i, m_i, q,  #
             m_ij = tl.maximum(m_i, tl.max(qk, 1) * qk_scale)
             qk = qk * qk_scale - m_ij[:, None]
         p = tl.math.exp2(qk)
-        # -- update m_i and l_i
+        # -- compute correction factor
         alpha = tl.math.exp2(m_i - m_ij)
         l_ij = tl.sum(p, 1)
         # -- update output accumulator --
         acc = acc * alpha[:, None]
-        # update acc
+        # prepare p and v for the dot
         v = desc_v.load([offsetkv_y, 0])
         p = p.to(dtype)
         # note that this non transposed v for FP8 is only supported on Blackwell
         acc = tl.dot(p, v, acc)
         # update m_i and l_i
+        # place this at the end of the loop to reduce register pressure
         l_i = l_i * alpha + l_ij
         m_i = m_ij
         offsetkv_y += BLOCK_N
