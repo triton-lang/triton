@@ -47,4 +47,6 @@ def NVWS_ArefType : NVWS_TypeDef<"Aref", "aref"> {
   let assemblyFormat = "`<` $baseType (`,` $numBatchAxes^)? `>`";
 }
 
+def NVWS_TokenType : NVWS_TypeDef<"Token", "token">;
+
 #endif // NVWS_TYPES
