@@ -1,5 +1,4 @@
 #include "CodePartitionUtility.h"
-#include "Utility.h"
 #include "mlir/Analysis/SliceAnalysis.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/BuiltinAttributes.h"
@@ -17,10 +16,11 @@
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 #include "mlir/Transforms/Passes.h"
 #include "mlir/Transforms/RegionUtils.h"
+#include "nvidia/hopper/include/Transforms/Passes.h"
+#include "nvidia/include/Dialect/NVWS/IR/Dialect.h"
 #include "triton/Analysis/Utility.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
-#include "triton/Dialect/TritonGPU/Transforms/Passes.h"
 #include "triton/Dialect/TritonGPU/Transforms/PipeliningUtility.h"
 #include "triton/Dialect/TritonGPU/Transforms/TritonGPUConversion.h"
 #include "triton/Tools/Sys/GetEnv.hpp"
@@ -30,14 +30,13 @@
 namespace tt = mlir::triton;
 namespace ttg = mlir::triton::gpu;
 namespace ttng = ::mlir::triton::nvidia_gpu;
+namespace ttnvws = ::mlir::triton::nvws;
 namespace mlir {
-namespace triton {
-namespace gpu {
 
-#define GEN_PASS_DEF_TRITONGPUWSCODEPARTITION
-#include "triton/Dialect/TritonGPU/Transforms/Passes.h.inc"
+#define GEN_PASS_DEF_NVGPUWSCODEPARTITION
+#include "nvidia/hopper/include/Transforms/Passes.h.inc"
 
-#define DEBUG_TYPE "tritongpu-warp-spec-code-partition"
+#define DEBUG_TYPE "nvgpu-warp-spec-code-partition"
 #define DBGS() (llvm::dbgs() << "[" DEBUG_TYPE "]: ")
 #define LDBG(X) LLVM_DEBUG(DBGS() << X << "\n")
 
@@ -164,7 +163,7 @@ static void createChannel(Operation *producerOp, Operation *op,
       const unsigned NUM_TMEM_BUFFERS = 2;
       // Add a channel from the single producer task to consumerTaskIds.
       if (consumerTaskIds.size() > 0) {
-        if (auto dotOp = dyn_cast<nvidia_gpu::TCGen5MMAOp>(op)) {
+        if (auto dotOp = dyn_cast<ttng::TCGen5MMAOp>(op)) {
           // When traversing Gen5MMA, we create channel for the accumulator.
           if (auto tmemAllocOp = dyn_cast<ttng::TMEMAllocOp>(producerOp)) {
             // Always use two buffers for TMEM channels.
@@ -209,7 +208,7 @@ void collectAsyncChannels(SmallVector<std::unique_ptr<Channel>> &channels,
       }
 
       auto producerOp = op;
-      if (auto dotOp = dyn_cast<nvidia_gpu::TCGen5MMAOp>(op)) {
+      if (auto dotOp = dyn_cast<ttng::TCGen5MMAOp>(op)) {
         auto accumulator = dotOp.getD();
         producerOp = accumulator.getDefiningOp();
         createChannel(producerOp, op, dom, channels, false, producerNumBuffers);
@@ -242,10 +241,10 @@ void collectAsyncChannels(SmallVector<std::unique_ptr<Channel>> &channels,
 // look ahead for the actual consumers, usually dot ops, that can directly
 // use shared memory. The local_alloc will be removed later.
 static SmallVector<Operation *> getActualConsumers(Operation *consumerOp) {
-  if (isa<LocalAllocOp>(consumerOp)) {
+  if (isa<ttg::LocalAllocOp>(consumerOp)) {
     DenseSet<Operation *> users;
     for (auto user : consumerOp->getUsers()) {
-      if (isa<TransOp, MemDescTransOp>(user)) {
+      if (isa<tt::TransOp, ttg::MemDescTransOp>(user)) {
         // TransOp is not a real consumer. It caculates the shared memory
         // address for the real consumer. Continue to find its transitive users
         // recursively.
@@ -255,7 +254,7 @@ static SmallVector<Operation *> getActualConsumers(Operation *consumerOp) {
         while (!transUsers.empty()) {
           auto transUser = transUsers.pop_back_val();
           visited.insert(transUser);
-          if (isa<TransOp, MemDescTransOp>(transUser)) {
+          if (isa<tt::TransOp, ttg::MemDescTransOp>(transUser)) {
             for (auto transitiveUser : transUser->getUsers()) {
               if (!visited.count(transitiveUser))
                 transUsers.push_back(transitiveUser);
@@ -610,7 +609,7 @@ void createToken(
     DenseMap<Channel *, CommChannel> &tokenMap) {
   OpBuilder builder(funcOp);
   builder.setInsertionPointToStart(&(funcOp.getBody().front()));
-  DenseMap<nvidia_gpu::TCGen5MMAOp, Channel *> gen5Barriers;
+  DenseMap<ttng::TCGen5MMAOp, Channel *> gen5Barriers;
   for (auto *key : orderedChannels) {
     auto it = channelsGroupedByConsumers.find(key);
     Channel *channel = it->second.front();
@@ -633,14 +632,14 @@ void createToken(
 
       // For channels associated with acc of gen5, consumerOp is not the gen5,
       // it is usually tmem_load.
-      bool useGen5Barrier = isa<nvidia_gpu::TCGen5MMAOp>(consumerOp) &&
+      bool useGen5Barrier = isa<ttng::TCGen5MMAOp>(consumerOp) &&
                             producerOp->getBlock() == consumerOp->getBlock();
       LLVM_DEBUG({
         LDBG("-- creatToken: useGen5Barrier = " << useGen5Barrier);
         consumerOp->dump();
       });
       if (useGen5Barrier) {
-        auto mmaOp = cast<nvidia_gpu::TCGen5MMAOp>(consumerOp);
+        auto mmaOp = cast<ttng::TCGen5MMAOp>(consumerOp);
         // If the gen5 barrier for this mmaOp is already used for another
         // channel, do not use it for this channel.
         if (gen5Barriers.count(mmaOp) && gen5Barriers[mmaOp] != channel) {
@@ -652,36 +651,36 @@ void createToken(
       // No token is needed for a TMA <-> TCGen5MMAOp channel
       if (!isa<tt::DescriptorLoadOp>(producerOp) ||
           !useGen5Barrier) { // isa<nvidia_gpu::TCGen5MMAOp>(consumerOp)) {
-        ttng::TokenLoadType tokenLoadType;
+        ttnvws::TokenLoadType tokenLoadType;
         auto copyOp = copyOpMap.find(channel)->second.first;
         if (isa<ttg::AsyncCopyGlobalToLocalOp>(copyOp)) {
-          tokenLoadType = ttng::TokenLoadType::AsyncLoadOp;
-        } else if (isa<DescriptorLoadOp>(copyOp)) {
-          tokenLoadType = ttng::TokenLoadType::TMALoadOp;
-        } else if (isa<LocalStoreOp>(copyOp)) {
-          tokenLoadType = ttng::TokenLoadType::LocalStoreOp;
+          tokenLoadType = ttnvws::TokenLoadType::AsyncLoadOp;
+        } else if (isa<tt::DescriptorLoadOp>(copyOp)) {
+          tokenLoadType = ttnvws::TokenLoadType::TMALoadOp;
+        } else if (isa<ttg::LocalStoreOp>(copyOp)) {
+          tokenLoadType = ttnvws::TokenLoadType::LocalStoreOp;
         } else if (isa<ttng::TMEMLoadOp>(consumerOp)) {
-          tokenLoadType = ttng::TokenLoadType::TmemLoadOp;
-        } else if (isa<nvidia_gpu::TCGen5MMAOp>(consumerOp)) {
+          tokenLoadType = ttnvws::TokenLoadType::TmemLoadOp;
+        } else if (isa<ttng::TCGen5MMAOp>(consumerOp)) {
           // For operand A of gen5, we have tmem_store + gen5.
-          tokenLoadType = ttng::TokenLoadType::TmemLoadOp;
+          tokenLoadType = ttnvws::TokenLoadType::TmemLoadOp;
         } else {
           llvm_unreachable("Unexpected load type");
         }
         Value v;
         if (it->second.front()->getSrcOp()->getParentOfType<scf::ForOp>())
-          v = builder.create<ttng::CreateTokenOp>(
+          v = builder.create<ttnvws::CreateTokenOp>(
               funcOp.getLoc(), channel->numBuffers, tokenLoadType);
         else
-          v = builder.create<ttng::CreateTokenOp>(funcOp.getLoc(), 1,
-                                                  tokenLoadType);
+          v = builder.create<ttnvws::CreateTokenOp>(funcOp.getLoc(), 1,
+                                                    tokenLoadType);
         commChannel.tokens[consumerAsyncTaskId] = v;
       }
 
       if (useGen5Barrier) {
         Value v = createBarrierAlloc(funcOp, channel->numBuffers);
         commChannel.consumerBarriers[consumerAsyncTaskId] = v;
-        gen5Barriers[cast<nvidia_gpu::TCGen5MMAOp>(consumerOp)] = channel;
+        gen5Barriers[cast<ttng::TCGen5MMAOp>(consumerOp)] = channel;
       }
     }
 
@@ -830,7 +829,7 @@ DenseMap<Channel *, Value> createBuffer(
 // consumer (TMEM load). Return the WaitBarrierOp inserted before the consumer
 // (TMEM load).
 ttng::WaitBarrierOp desyncTCGen5MMAOp(
-    OpBuilderWithAsyncTaskIds &builder, nvidia_gpu::TCGen5MMAOp mmaOp,
+    OpBuilderWithAsyncTaskIds &builder, ttng::TCGen5MMAOp mmaOp,
     Value barrierAlloc, Value bufferIdx, Value inPhase, unsigned numBuffers,
     Operation *headProducer, DenseSet<Operation *> &opsWithChannels,
     SmallVector<Operation *> &opsWithBufferReuse, mlir::DominanceInfo &dom) {
@@ -992,7 +991,7 @@ void insertAsyncComm(
     return nullptr;
   };
 
-  DenseMap<nvidia_gpu::TCGen5MMAOp, ttng::WaitBarrierOp> tmemWaitBarriers;
+  DenseMap<ttng::TCGen5MMAOp, ttng::WaitBarrierOp> tmemWaitBarriers;
 
   // Postpont TMEM channels until all SMEM channels are processed.
   // TODO: Reorder the channels in channelsGroupedByConsumers in dependency
@@ -1130,7 +1129,7 @@ void insertAsyncComm(
     for (auto &consumerTaskId : masterChannel->relation.second) {
       // Desynchronize TCGen5MMAOp. Set up consumer release and producer
       // acquire.
-      auto mmaOp = dyn_cast<nvidia_gpu::TCGen5MMAOp>(
+      auto mmaOp = dyn_cast<ttng::TCGen5MMAOp>(
           getUniqueActualConsumer(masterChannel->getDstOp(), consumerTaskId));
       // Assume a single task for mmaOp.
       if (mmaOp) {
@@ -1158,7 +1157,7 @@ void insertAsyncComm(
         // Insert ProducerAcquireOp before the producer.
         auto producerAcquirePoint = getSameLevelOp(headConsumer, headProducer);
         builder.setInsertionPoint(producerAcquirePoint);
-        builder.createWithAsyncTaskIds<ttng::ProducerAcquireOp>(
+        builder.createWithAsyncTaskIds<ttnvws::ProducerAcquireOp>(
             headProducer->getLoc(), token.second, bufferIdx, phase);
       }
 
@@ -1176,7 +1175,7 @@ void insertAsyncComm(
           producerCommitPoint = getSameLevelOp(headConsumer, tailProducer);
         }
         builder.setInsertionPointAfter(producerCommitPoint);
-        builder.createWithAsyncTaskIds<ttng::ProducerCommitOp>(
+        builder.createWithAsyncTaskIds<ttnvws::ProducerCommitOp>(
             tailProducer->getLoc(), token.second, bufferIdx);
       }
     }
@@ -1187,7 +1186,7 @@ void insertAsyncComm(
       if (!commChannel.producerBarrier) {
         auto consumerWaitPoint = getSameLevelOp(headProducer, headConsumer);
         builder.setInsertionPoint(consumerWaitPoint);
-        builder.createWithAsyncTaskIds<ttng::ConsumerWaitOp>(
+        builder.createWithAsyncTaskIds<ttnvws::ConsumerWaitOp>(
             headConsumer->getLoc(), token.second, bufferIdx, phase);
       }
 
@@ -1197,7 +1196,7 @@ void insertAsyncComm(
         auto consumerReleasePoint =
             consumerReleaseHeuristic(tailProducer, tailConsumer, token.first);
         builder.setInsertionPointAfter(consumerReleasePoint);
-        builder.createWithAsyncTaskIds<ttng::ConsumerReleaseOp>(
+        builder.createWithAsyncTaskIds<ttnvws::ConsumerReleaseOp>(
             consumerReleasePoint->getLoc(), token.second, bufferIdx);
         LLVM_DEBUG({
           LDBG("create ConsumerRelease ");
@@ -1230,14 +1229,15 @@ void foldLocalLoads(triton::FuncOp funcOp) {
   });
   OpBuilderWithAsyncTaskIds builder(funcOp.getContext());
   for (auto kv : opsToReplace)
-    replaceUsesAndPropagateType(builder, kv.getFirst(), kv.getSecond());
+    mlir::triton::replaceUsesAndPropagateType(builder, kv.getFirst(),
+                                              kv.getSecond());
 }
 
-class TritonGPUWSCodePartitionPass
-    : public impl::TritonGPUWSCodePartitionBase<TritonGPUWSCodePartitionPass> {
+class NVGPUWSCodePartitionPass
+    : public impl::NVGPUWSCodePartitionBase<NVGPUWSCodePartitionPass> {
 public:
-  using impl::TritonGPUWSCodePartitionBase<
-      TritonGPUWSCodePartitionPass>::TritonGPUWSCodePartitionBase;
+  using impl::NVGPUWSCodePartitionBase<
+      NVGPUWSCodePartitionPass>::NVGPUWSCodePartitionBase;
 
   void runOnFuncOp(triton::FuncOp funcOp) {
     // Disable code partitioning when numBuffers is 0.
@@ -1347,7 +1347,7 @@ public:
       funcOp.dump();
     });
 
-    SpecializeRegion(funcOp, regDecProducer, regIncConsumer);
+    SpecializeRegion(funcOp); //, regDecProducer, regIncConsumer);
     LLVM_DEBUG({
       LDBG("\n\nwith SpecializeRegion");
       funcOp.dump();
@@ -1364,6 +1364,4 @@ public:
   }
 };
 
-} // namespace gpu
-} // namespace triton
 } // namespace mlir

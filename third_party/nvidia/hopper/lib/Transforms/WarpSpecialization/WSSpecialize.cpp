@@ -1,11 +1,10 @@
 #include "CodePartitionUtility.h"
-#include "Utility.h"
 #include "mlir/Analysis/SliceAnalysis.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/Dominance.h"
 #include "mlir/IR/IRMapping.h"
-// #include "mlir/IR/ImplicitLocOpBuilder.h"
+#include "mlir/IR/ImplicitLocOpBuilder.h"
 #include "mlir/IR/Matchers.h"
 #include "mlir/IR/PatternMatch.h"
 #include "mlir/IR/Verifier.h"
@@ -330,7 +329,7 @@ Operation *SpecializeOp(Operation *op, IRMapping &mapping,
       return SpecializeIfOp(ifOp, mapping, builder, asyncTaskId);
     } else if (auto forOp = dyn_cast<scf::ForOp>(op)) {
       return SpecializeForOp(forOp, mapping, builder, asyncTaskId);
-    } else if (auto reduceOp = dyn_cast<ReduceOp>(op)) {
+    } else if (auto reduceOp = dyn_cast<triton::ReduceOp>(op)) {
       Operation *newOp = builder.clone(*op, mapping);
       // recursively set async task ids for child ops
       newOp->walk(
@@ -346,8 +345,7 @@ Operation *SpecializeOp(Operation *op, IRMapping &mapping,
   return nullptr;
 }
 
-void SpecializeRegion(triton::FuncOp funcOp, int regDecProducer,
-                      int regIncConsumer) {
+void SpecializeRegion(triton::FuncOp funcOp) {
 
   LLVM_DEBUG({
     LDBG("\n\n");
@@ -391,8 +389,8 @@ void SpecializeRegion(triton::FuncOp funcOp, int regDecProducer,
   ArrayRef<Type> dummyTypes;
   ImplicitLocOpBuilder impB(opList[0]->getLoc(), opList[0]);
   impB.setInsertionPoint(returnOp);
-  auto wsOp = impB.create<WarpSpecializeOp>(dummyTypes, partitionNumWarps,
-                                            nTaskIds.size() - 1);
+  auto wsOp = impB.create<ttg::WarpSpecializeOp>(dummyTypes, partitionNumWarps,
+                                                 nTaskIds.size() - 1);
 
   // Clone all operations into the corresponding if blocks. If the operation
   // has multiple taskIds, it will be cloned for multiple if blocks.
@@ -410,7 +408,7 @@ void SpecializeRegion(triton::FuncOp funcOp, int regDecProducer,
       SpecializeOp(op, mapping, taskBuilder, asyncTaskId);
     }
     SmallVector<Value> opnds;
-    taskBuilder.create<WarpYieldOp>(loc, opnds);
+    taskBuilder.create<ttg::WarpYieldOp>(loc, opnds);
   }
 
   unsigned idx = 1;
@@ -427,7 +425,7 @@ void SpecializeRegion(triton::FuncOp funcOp, int regDecProducer,
     for (Operation *op : opList) {
       SpecializeOp(op, mapping, taskBuilder, asyncTaskId);
     }
-    taskBuilder.create<WarpReturnOp>(loc);
+    taskBuilder.create<ttg::WarpReturnOp>(loc);
   }
   // The capture set is the same for every partition region, so now find the
   // captures and thread them in to the regions.

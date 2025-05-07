@@ -5,7 +5,6 @@
 #include "mlir/IR/IRMapping.h"
 // #include "mlir/IR/ImplicitLocOpBuilder.h"
 #include "CodePartitionUtility.h"
-#include "Utility.h"
 #include "mlir/IR/Matchers.h"
 #include "mlir/IR/PatternMatch.h"
 #include "mlir/IR/Verifier.h"
@@ -31,8 +30,6 @@ namespace tt = mlir::triton;
 namespace ttg = mlir::triton::gpu;
 namespace ttng = ::mlir::triton::nvidia_gpu;
 namespace mlir {
-namespace triton {
-namespace gpu {
 
 #define DEBUG_TYPE "tritongpu-warp-spec-buffer"
 #define DBGS() (llvm::dbgs() << "[" DEBUG_TYPE "]: ")
@@ -1023,6 +1020,4 @@ Value appendBufferIdxArgs(
   return tmpAccumLoopCount;
 }
 
-} // namespace gpu
-} // namespace triton
 } // namespace mlir
