@@ -510,9 +510,13 @@ def test_warp_specialize_attention_forward(M, N, BLOCK_M, HEAD_DIM, num_stages, 
 
     attention_inner_loop_kernel[(M // BLOCK_M, )](desc_q, desc_k, desc_v, desc_acc_ref, l_i_ref, m_i_ref, M, N, 0.5,
                                                   BLOCK_M, HEAD_DIM, False, num_stages=num_stages, num_warps=num_warps)
-    attention_inner_loop_kernel_data_part[(M // (BLOCK_M * 2), )](desc_q, desc_k, desc_v, desc_acc, l_i, m_i, M, N, 0.5,
-                                                                  BLOCK_M, HEAD_DIM, True, num_stages=num_stages,
-                                                                  num_warps=num_warps)
+    kernel = attention_inner_loop_kernel_data_part[(M // (BLOCK_M * 2), )](desc_q, desc_k, desc_v, desc_acc, l_i, m_i,
+                                                                           M, N, 0.5, BLOCK_M, HEAD_DIM, True,
+                                                                           num_stages=num_stages, num_warps=num_warps)
+
+    ttgir = kernel.asm["ttgir"]
+    assert "ttng.tc_gen5_mma" in ttgir
+    assert "ttg.warp_specialize" in ttgir
 
     torch.testing.assert_close(acc.to(torch.float32), acc_ref.to(torch.float32), atol=0, rtol=0)
     torch.testing.assert_close(l_i.to(torch.float32), l_i_ref.to(torch.float32), atol=0, rtol=0)
