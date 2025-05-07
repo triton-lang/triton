@@ -1,5 +1,6 @@
 add_triton_library(TritonGPUTransforms
   AccelerateMatmul.cpp
+  BufferReuse.cpp
   Coalesce.cpp
   F32DotTC.cpp
   FuseNestedLoops.cpp
