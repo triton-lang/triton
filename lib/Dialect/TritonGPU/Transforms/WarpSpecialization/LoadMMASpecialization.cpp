@@ -190,7 +190,7 @@ static void iterateUsers(scf::ForOp loop, Operation *op,
   }
 }
 
-// Check if any of the inputs to `op` originate from a non-null partition.
+// Check if any of the inputs to `op` are reachable from a non-null partition.
 static bool hasDefPartition(scf::ForOp loop, Operation *op,
                             WarpSchedule &schedule) {
   SmallVector<Operation *> worklist{op};
@@ -316,16 +316,34 @@ static WarpSchedule getInitialSchedule(const PartitionScheme &scheme,
 }
 
 namespace {
+// This data structure represents a cluster of operations that have not been
+// assigned to a stage. Operations form a cluster when:
+//
+// - they are adjacent in the SSA use def graph
+// - they are not already assigned to a partition
+// - at least one of their inputs is reachable from a definition partition
+//
 struct OpCluster {
+  // These are the operations in the cluster.
   SetVector<Operation *> ops;
+  // The definition partitions are the partitions from which inputs of the
+  // operation are reachable. When the cluster is fully formed, the defining op
+  // in the loop of any input to any operation in the cluster is either in the
+  // root partition or one of these partitions.
   SetVector<Partition *> defPartitions;
+  // The sink partitions which consume the outputs of operations in this
+  // cluster. When the cluster is fully formed, all uses in the loop of outputs
+  // of any operation in the cluster belong to one of these partitions.
   SetVector<Partition *> sinkPartitions;
 };
 
+// Owning class for a bunch of clusters. This class manages the lifetimes of the
+// clusters and has some helper functions.
 struct OpClusters : public llvm::MapVector<Operation *, OpCluster *> {
   using MapVector::MapVector;
 
-  // Get or create a new cluster for the operation.
+  // Create a new cluster that contains only the given operation, a return a
+  // cluster that already contains the operation.
   OpCluster *getOrCreate(Operation *op) {
     OpCluster *&cluster = (*this)[op];
     if (!cluster) {
@@ -334,7 +352,8 @@ struct OpClusters : public llvm::MapVector<Operation *, OpCluster *> {
     }
     return cluster;
   }
-  // Merge two clusters.
+  // Merge two clusters by merging their sets and clearing the other cluster,
+  // marking it as dead.
   void merge(OpCluster *dst, OpCluster *src) {
     dst->ops.insert_range(src->ops);
     dst->defPartitions.insert_range(src->defPartitions);
@@ -350,11 +369,16 @@ struct OpClusters : public llvm::MapVector<Operation *, OpCluster *> {
 };
 } // namespace
 
+// Operations that require partition assignment are those reachable from an
+// operation in a partition. This function propagates partitions by first
+// forming contiguous clusters from the unassigned operations and then deciding
+// what to do with the operations in that cluster.
 void propagatePartitions(scf::ForOp loop, WarpSchedule &schedule) {
   OpClusters opClusters;
 
-  // Find all def ops with unassigned partitions and spawn clusters for them.
   for (Partition &partition : schedule.getPartitions()) {
+    // For each partition, check if any of their inputs are reachable from
+    // another partition and spawn a single cluster at that operation.
     auto defCallback = [&](OpResult result, unsigned distance) {
       Operation *defOp = result.getDefiningOp();
       if (!schedule.isScheduled(defOp) &&
@@ -365,6 +389,8 @@ void propagatePartitions(scf::ForOp loop, WarpSchedule &schedule) {
     };
     schedule.iterateDefs(loop, &partition, defCallback);
 
+    // For each partition, place users of its outputs in a cluster if it is not
+    // already assigned to a partition.
     auto useCallback = [&](OpResult result, OpOperand &use, unsigned distance) {
       Operation *user = use.getOwner();
       if (!schedule.isScheduled(user)) {
@@ -375,45 +401,59 @@ void propagatePartitions(scf::ForOp loop, WarpSchedule &schedule) {
     schedule.iterateUses(loop, &partition, useCallback);
   }
 
-  // Now grow the clusters and merge them as necessary.
+  // Now we have a pile of single-operation clusters directly adjacent to the
+  // operations in a partition. Grow the clusters by adding adjacent operations
+  // clusters and merging clusters when possible.
   SmallVector<Operation *> worklist =
       llvm::to_vector(llvm::make_first_range(opClusters));
   while (!worklist.empty()) {
+    // Grab an op off the worklist. We know it has a cluster already.
     Operation *op = worklist.pop_back_val();
     OpCluster *cluster = opClusters.find(op)->second;
+    // Look at the definitions directly feeding into this operation.
     iterateDefs(loop, op, [&](OpResult def) {
       Operation *defOp = def.getDefiningOp();
       if (schedule.isScheduled(defOp)) {
-        // Found an input edge from a scheduled partition. Add this as a def.
+        // The input originates from an operation already assigned to a
+        // partition. Add this as a def partition.
         cluster->defPartitions.insert(schedule.getPartition(defOp));
       } else {
+        // If the input is not reachable from a partition, ignore it.
         if (!hasDefPartition(loop, defOp, schedule))
           return;
-        // This op is unassigned.
+        // This operation is not assigned to a partition.
         OpCluster *&defCluster = opClusters[defOp];
         if (!defCluster) {
-          // Add this op to the current cluster and recurse on it.
+          // This operation has not yet been added to a cluster. Add it to the
+          // current cluster and recurse on it.
           defCluster = cluster;
           cluster->ops.insert(defOp);
           worklist.push_back(defOp);
         } else if (defCluster != cluster) {
-          // Merge clusters. Merge the def cluster into the current one.
+          // This operation is part of another cluster. Merge the two clusters
+          // together and continue.
           opClusters.merge(cluster, defCluster);
         }
       }
-      iterateUsers(loop, op, [&](Operation *user) {
-        if (schedule.isScheduled(user)) {
-          Partition *userPartition = schedule.getPartition(user);
-          cluster->sinkPartitions.insert(userPartition);
-          return;
-        }
-        OpCluster *&userCluster = opClusters[user];
-        if (userCluster)
-          return;
-        userCluster = cluster;
-        cluster->ops.insert(user);
-        worklist.push_back(user);
-      });
+    });
+    // Check the users of the operation.
+    iterateUsers(loop, op, [&](Operation *user) {
+      if (schedule.isScheduled(user)) {
+        // If the user is already assigned to a partition, add that partition as
+        // one of the sink partitions.
+        Partition *userPartition = schedule.getPartition(user);
+        cluster->sinkPartitions.insert(userPartition);
+        return;
+      }
+      // If the user does not already have a cluster, add it to the current
+      // cluster. We don't have to handle merging here because when the user
+      // visits the current op, it will trigger the merge.
+      OpCluster *&userCluster = opClusters[user];
+      if (userCluster)
+        return;
+      userCluster = cluster;
+      cluster->ops.insert(user);
+      worklist.push_back(user);
     });
   }
 
