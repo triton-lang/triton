@@ -257,13 +257,12 @@
 // CHECK:           ttng.async_tma_store_wait {pendings = 0 : i32}
 // CHECK:           ttg.local_dealloc %[[VAL_116]] : !ttg.memdesc<128x256xf16, #[[$ATTR_1]], #[[$ATTR_4]], mutable>
 // CHECK:           %[[VAL_213:.*]] = ttng.warp_group_dot_wait %[[VAL_214:.*]]#8 {pendings = 0 : i32} : tensor<128x256xf32, #[[$ATTR_0]]>
-// CHECK:           %[[VAL_215:.*]] = ttg.async_wait  {num = 0 : i32}
-// CHECK:           %[[VAL_216:.*]] = ttg.memdesc_subview %[[VAL_48]]{{\[}}%[[VAL_13]]] : !ttg.memdesc<3xi64, #[[$ATTR_2]], #[[$ATTR_4]], mutable> -> !ttg.memdesc<1xi64, #[[$ATTR_2]], #[[$ATTR_4]], mutable, 3>
+// CHECK:           %[[VAL_215:.*]] = ttg.memdesc_subview %[[VAL_48]]{{\[}}%[[VAL_13]]] : !ttg.memdesc<3xi64, #[[$ATTR_2]], #[[$ATTR_4]], mutable> -> !ttg.memdesc<1xi64, #[[$ATTR_2]], #[[$ATTR_4]], mutable, 3>
+// CHECK:           ttng.inval_barrier %[[VAL_215]] : !ttg.memdesc<1xi64, #[[$ATTR_2]], #[[$ATTR_4]], mutable, 3>
+// CHECK:           %[[VAL_216:.*]] = ttg.memdesc_subview %[[VAL_48]]{{\[}}%[[VAL_10]]] : !ttg.memdesc<3xi64, #[[$ATTR_2]], #[[$ATTR_4]], mutable> -> !ttg.memdesc<1xi64, #[[$ATTR_2]], #[[$ATTR_4]], mutable, 3>
 // CHECK:           ttng.inval_barrier %[[VAL_216]] : !ttg.memdesc<1xi64, #[[$ATTR_2]], #[[$ATTR_4]], mutable, 3>
-// CHECK:           %[[VAL_217:.*]] = ttg.memdesc_subview %[[VAL_48]]{{\[}}%[[VAL_10]]] : !ttg.memdesc<3xi64, #[[$ATTR_2]], #[[$ATTR_4]], mutable> -> !ttg.memdesc<1xi64, #[[$ATTR_2]], #[[$ATTR_4]], mutable, 3>
+// CHECK:           %[[VAL_217:.*]] = ttg.memdesc_subview %[[VAL_48]]{{\[}}%[[VAL_8]]] : !ttg.memdesc<3xi64, #[[$ATTR_2]], #[[$ATTR_4]], mutable> -> !ttg.memdesc<1xi64, #[[$ATTR_2]], #[[$ATTR_4]], mutable, 3>
 // CHECK:           ttng.inval_barrier %[[VAL_217]] : !ttg.memdesc<1xi64, #[[$ATTR_2]], #[[$ATTR_4]], mutable, 3>
-// CHECK:           %[[VAL_218:.*]] = ttg.memdesc_subview %[[VAL_48]]{{\[}}%[[VAL_8]]] : !ttg.memdesc<3xi64, #[[$ATTR_2]], #[[$ATTR_4]], mutable> -> !ttg.memdesc<1xi64, #[[$ATTR_2]], #[[$ATTR_4]], mutable, 3>
-// CHECK:           ttng.inval_barrier %[[VAL_218]] : !ttg.memdesc<1xi64, #[[$ATTR_2]], #[[$ATTR_4]], mutable, 3>
 // CHECK:           ttg.local_dealloc %[[VAL_48]] : !ttg.memdesc<3xi64, #[[$ATTR_2]], #[[$ATTR_4]], mutable>
 // CHECK:           ttg.local_dealloc %[[VAL_47]] : !ttg.memdesc<3x256x64xf16, #[[$ATTR_1]], #[[$ATTR_4]], mutable>
 // CHECK:           ttg.local_dealloc %[[VAL_46]] : !ttg.memdesc<3x128x64xf16, #[[$ATTR_1]], #[[$ATTR_4]], mutable>

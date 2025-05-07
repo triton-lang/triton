@@ -2,6 +2,10 @@
 build/
 build-*/
 
+llvm-project/
+llvm-project-*/
+.llvm-project/
+
 # Triton Python module builds
 python/build/
 python/dist/

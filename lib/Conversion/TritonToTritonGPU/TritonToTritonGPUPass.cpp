@@ -25,6 +25,7 @@ namespace {
 using namespace mlir;
 using namespace mlir::triton;
 using namespace mlir::triton::gpu;
+namespace ttng = triton::nvidia_gpu;
 
 // pass named attrs (e.g., tt.contiguity) from Triton to Triton
 static void addNamedAttrs(Operation *op, DictionaryAttr dictAttrs) {
@@ -466,6 +467,72 @@ struct GatherScatterOpPattern : public OpConversionPattern<OpT> {
   }
 };
 
+// Given a tensor and its representation in tensor memory, determine its
+// distributed layout.
+static RankedTensorType getTMEMTensorLayout(const TypeConverter *tc,
+                                            RankedTensorType type,
+                                            MemDescType memdesc,
+                                            unsigned numWarps) {
+  Attribute encoding;
+  type = cast<RankedTensorType>(tc->convertType(type));
+  if (isa<ttng::TensorMemoryScalesEncodingAttr>(memdesc.getEncoding())) {
+    encoding = LinearEncodingAttr::get(
+        type.getContext(), getScaleTMEMStoreLinearLayout(type, numWarps));
+  } else {
+    auto tmemEnc = cast<ttng::TensorMemoryEncodingAttr>(memdesc.getEncoding());
+    encoding = ttng::getTmemCompatibleLayout(
+        tmemEnc.getBlockM(), tmemEnc.getBlockN(), type, numWarps);
+  }
+  return RankedTensorType::get(type.getShape(), type.getElementType(),
+                               encoding);
+}
+
+struct TMEMLoadOpPattern : public OpConversionPattern<ttng::TMEMLoadOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(ttng::TMEMLoadOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    RankedTensorType type = getTMEMTensorLayout(
+        typeConverter, op.getType(), op.getSrc().getType(), lookupNumWarps(op));
+    rewriter.modifyOpInPlace(op, [&] { op.getResult().setType(type); });
+    return success();
+  }
+};
+
+struct TMEMStoreOpPattern : public OpConversionPattern<ttng::TMEMStoreOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(ttng::TMEMStoreOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    RankedTensorType type =
+        getTMEMTensorLayout(typeConverter, op.getSrc().getType(),
+                            op.getDst().getType(), lookupNumWarps(op));
+    Value src =
+        rewriter.create<ConvertLayoutOp>(op.getLoc(), type, adaptor.getSrc());
+    rewriter.modifyOpInPlace(op, [&] { op.getSrcMutable().assign(src); });
+    return success();
+  }
+};
+
+struct TMEMAllocOpPattern : public OpConversionPattern<ttng::TMEMAllocOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(ttng::TMEMAllocOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    if (!op.getSrc())
+      return success();
+    RankedTensorType type = getTMEMTensorLayout(
+        typeConverter, op.getSrc().getType(), op.getType(), lookupNumWarps(op));
+    Value src =
+        rewriter.create<ConvertLayoutOp>(op.getLoc(), type, adaptor.getSrc());
+    rewriter.modifyOpInPlace(op, [&] { op.getSrcMutable().assign(src); });
+    return success();
+  }
+};
+
 struct TritonTransPattern : public OpConversionPattern<TransOp> {
   using OpConversionPattern::OpConversionPattern;
 
@@ -592,40 +659,61 @@ void populateTritonPatterns(TritonGPUTypeConverter &typeConverter,
   MLIRContext *context = patterns.getContext();
   patterns.insert< // TODO: view should have custom pattern that views the
                    // layout
+      // clang-format off
       GenericOpPattern<triton::AdvanceOp>,
       GenericOpPattern<triton::MakeTensorPtrOp>,
-      GenericOpPattern<triton::ReshapeOp>, GenericOpPattern<triton::BitcastOp>,
-      GenericOpPattern<triton::FpToFpOp>, GenericOpPattern<triton::IntToPtrOp>,
-      GenericOpPattern<triton::PtrToIntOp>, GenericOpPattern<triton::SplatOp>,
-      TritonBroadcastPattern, GenericOpPattern<triton::AddPtrOp>,
-      TritonCatPattern, TritonJoinOpPattern, TritonSplitOpPattern,
+      GenericOpPattern<triton::ReshapeOp>,
+      GenericOpPattern<triton::BitcastOp>,
+      GenericOpPattern<triton::FpToFpOp>,
+      GenericOpPattern<triton::IntToPtrOp>,
+      GenericOpPattern<triton::PtrToIntOp>,
+      GenericOpPattern<triton::SplatOp>,
+      GenericOpPattern<triton::AddPtrOp>,
+      TritonBroadcastPattern,
+      TritonCatPattern,
+      TritonJoinOpPattern,
+      TritonSplitOpPattern,
       GenericOpPattern<triton::ClampFOp>,
       GenericOpPattern<triton::PreciseSqrtOp>,
       GenericOpPattern<triton::PreciseDivFOp>,
       GenericOpPattern<triton::MulhiUIOp>,
-      GenericOpPattern<triton::ElementwiseInlineAsmOp>, TritonReducePattern,
-      GenericOpPattern<triton::ReduceReturnOp>, TritonScanPattern,
+      GenericOpPattern<triton::ElementwiseInlineAsmOp>,
+      TritonReducePattern,
+      GenericOpPattern<triton::ReduceReturnOp>,
+      TritonScanPattern,
       GenericOpPattern<triton::ScanReturnOp>,
-      GenericOpPattern<triton::MakeRangeOp>, TritonExpandDimsPattern,
-      TritonTransPattern, TritonDotPattern,
+      GenericOpPattern<triton::MakeRangeOp>,
+      TritonExpandDimsPattern,
+      TritonTransPattern,
+      TritonDotPattern,
       GatherScatterOpPattern<DescriptorGatherOp>,
       GatherScatterOpPattern<DescriptorScatterOp>,
-      GatherScatterOpPattern<triton::nvidia_gpu::AsyncTMAGatherOp>,
-      GatherScatterOpPattern<triton::nvidia_gpu::AsyncTMAScatterOp>,
-      GenericOpPattern<triton::LoadOp>, GenericOpPattern<triton::StoreOp>,
-      GenericOpPattern<triton::HistogramOp>, GenericOpPattern<triton::GatherOp>,
+      GatherScatterOpPattern<ttng::AsyncTMAGatherOp>,
+      GatherScatterOpPattern<ttng::AsyncTMAScatterOp>,
+      TMEMLoadOpPattern,
+      TMEMStoreOpPattern,
+      TMEMAllocOpPattern,
+      GenericOpPattern<triton::LoadOp>,
+      GenericOpPattern<triton::StoreOp>,
+      GenericOpPattern<triton::HistogramOp>,
+      GenericOpPattern<triton::GatherOp>,
       GenericOpPattern<triton::ExternElementwiseOp>,
-      GenericOpPattern<triton::PrintOp>, GenericOpPattern<triton::AssertOp>,
+      GenericOpPattern<triton::PrintOp>,
+      GenericOpPattern<triton::AssertOp>,
       GenericOpPattern<triton::AtomicCASOp>,
-      GenericOpPattern<triton::AtomicRMWOp>, GenericOpPattern<ReturnOp>,
+      GenericOpPattern<triton::AtomicRMWOp>,
       GenericOpPattern<triton::DescriptorLoadOp>,
       GenericOpPattern<triton::DescriptorStoreOp>,
       GenericOpPattern<triton::DescriptorReduceOp>,
       GenericOpPattern<triton::ExperimentalTensormapCreateOp>,
       GenericOpPattern<triton::ExperimentalTensormapFenceproxyAcquireOp>,
       // this assumes the right layout will be set later for dot scaled.
-      GenericOpPattern<triton::DotScaledOp>, GenericOpPattern<triton::CallOp>,
-      TritonFuncOpPattern>(typeConverter, context);
+      GenericOpPattern<triton::DotScaledOp>,
+      GenericOpPattern<triton::CallOp>,
+      GenericOpPattern<ReturnOp>,
+      TritonFuncOpPattern
+      // clang-format on
+      >(typeConverter, context);
 }
 // Proton patterns
 // NOTE: Because Proton's inputs are scalars and not tensors this conversion

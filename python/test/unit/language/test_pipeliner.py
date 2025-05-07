@@ -302,7 +302,7 @@ def test_pipeline_matmul(scale, device):
             if torch.cuda.get_device_capability()[0] == 10:
                 if scale:
                     # A, B, scale, decomposed A shmem
-                    count = 5
+                    count = 4
                 else:
                     # A, B, MMA barrier
                     count = 3

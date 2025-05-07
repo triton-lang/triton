@@ -316,6 +316,37 @@ struct MemDescTransOpConversion
   }
 };
 
+struct MemDescReshapeOpConversion
+    : public ConvertOpToLLVMPattern<MemDescReshapeOp> {
+  using ConvertOpToLLVMPattern::ConvertOpToLLVMPattern;
+  LogicalResult
+  matchAndRewrite(MemDescReshapeOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    Location loc = op->getLoc();
+    auto resultTy = cast<TensorOrMemDesc>(op.getType());
+    auto llvmElemTy =
+        getTypeConverter()->convertType(resultTy.getElementType());
+    auto srcSmemObj = getSharedMemoryObjectFromStruct(loc, adaptor.getSrc(),
+                                                      llvmElemTy, rewriter);
+    SmallVector<Value> offsets = srcSmemObj.getOffsets();
+    SmallVector<unsigned> srcShape;
+    for (int64_t d : op.getSrc().getType().getShape())
+      srcShape.push_back(d);
+    SmallVector<unsigned> dstShape;
+    for (int64_t d : op.getType().getShape())
+      dstShape.push_back(d);
+    Value linearOffset = LLVM::linearize(rewriter, loc, offsets, srcShape);
+    SmallVector<Value> delinearizedOffset =
+        LLVM::delinearize(rewriter, loc, linearOffset, dstShape);
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
+    auto dstSmemObj = SharedMemoryObject(
+        srcSmemObj.getBase(), srcSmemObj.getBaseElemType(), delinearizedOffset);
+    auto retVal = getStructFromSharedMemoryObject(loc, dstSmemObj, rewriter);
+    rewriter.replaceOp(op, retVal);
+    return success();
+  }
+};
+
 struct TransOpConversion : public ConvertOpToLLVMPattern<TransOp> {
   using ConvertOpToLLVMPattern::ConvertOpToLLVMPattern;
   LogicalResult
@@ -470,7 +501,8 @@ void mlir::triton::populateViewOpToLLVMPatterns(
   patterns.add<CatOpConversion>(typeConverter, benefit);
   patterns.add<JoinOpConversion>(typeConverter, benefit);
   patterns.add<SplitOpConversion>(typeConverter, benefit);
-  patterns.add<MemDescTransOpConversion>(typeConverter, benefit);
+  patterns.add<MemDescTransOpConversion, MemDescReshapeOpConversion>(
+      typeConverter, benefit);
   patterns.add<TransOpConversion>(typeConverter, benefit);
   patterns.add<BroadcastOpConversion>(typeConverter, benefit);
   patterns.add<MemDescSubviewOpConversion>(typeConverter, benefit);

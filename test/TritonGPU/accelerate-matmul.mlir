@@ -511,25 +511,6 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
 
 // -----
 
-#blocked = #ttg.blocked<{sizePerThread = [4, 4], threadsPerWarp = [2, 16], warpsPerCTA = [8, 1], order = [1, 0]}>
-module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
-  // CHECK{LITERALE}: #linear = #ttg.linear<{register = [[0, 1], [0, 2], [0, 4], [0, 8], [0, 16]], lane = [[1, 0], [2, 0], [4, 0], [8, 0], [0, 32]], warp = [[32, 0], [64, 0], [16, 0]], block = []}>
-  // CHECK-LABEL: dot_reduce
-  tt.func public @dot_reduce(%arg0: tensor<128x64xf16, #ttg.dot_op<{opIdx = 0, parent = #blocked}>>, %arg1: tensor<64x64xf16, #ttg.dot_op<{opIdx = 1, parent = #blocked}>>) -> tensor<128xf32, #ttg.slice<{dim = 1, parent = #blocked}>> {
-    %cst = arith.constant dense<0.000000e+00> : tensor<128x64xf32, #blocked>
-    %0 = tt.dot %arg0, %arg1, %cst, inputPrecision = tf32 : tensor<128x64xf16, #ttg.dot_op<{opIdx = 0, parent = #blocked}>> * tensor<64x64xf16, #ttg.dot_op<{opIdx = 1, parent = #blocked}>> -> tensor<128x64xf32, #blocked>
-    // ttng.tmem_load %{{.*}} : !ttg.memdesc<128x64xf32, #tmem, #ttng.tensor_memory, mutable> -> tensor<128x64xf32, #linear>
-    %1 = "tt.reduce"(%0) <{axis = 1 : i32}> ({
-    ^bb0(%arg2: f32, %arg3: f32):
-      %2 = arith.addf %arg2, %arg3 : f32
-      tt.reduce.return %2 : f32
-    }) : (tensor<128x64xf32, #blocked>) -> tensor<128xf32, #ttg.slice<{dim = 1, parent = #blocked}>>
-    tt.return %1 : tensor<128xf32, #ttg.slice<{dim = 1, parent = #blocked}>>
-  }
-}
-
-// -----
-
 // CHECK-DAG: #[[$SHARED_A:.+]] = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 8}>
 // CHECK-DAG: #[[$SHARED_B:.+]] = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 8, fp4Padded = true}>
 #blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0]}>

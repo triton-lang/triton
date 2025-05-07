@@ -1,3 +1,4 @@
+#include "mlir/Analysis/SliceAnalysis.h"
 #include "mlir/IR/TypeUtilities.h"
 #include "mlir/Pass/PassManager.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
@@ -181,12 +182,74 @@ public:
   }
 };
 
-class TritonNvidiaGPUOptimizeTMemSubtilingPass
-    : public TritonNvidiaGPUOptimizeTMemSubtilingPassBase<
-          TritonNvidiaGPUOptimizeTMemSubtilingPass> {
+// Pick an optimized tmem load layout based on its users. When there are
+// multiple warpgroups tmem_load results can be distirbuted along M or N across
+// the warpgroups. By default distribute along N but when there is a reduction
+// along N dimension we want to distribute along M instead to avoid having to
+// reduce across warps.
+class TMemLoadReducePattern : public OpRewritePattern<ttng::TMEMLoadOp> {
 public:
-  using BaseT = TritonNvidiaGPUOptimizeTMemSubtilingPassBase<
-      TritonNvidiaGPUOptimizeTMemSubtilingPass>;
+  using OpRewritePattern::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(ttng::TMEMLoadOp tmemLoadOp,
+                                PatternRewriter &rewriter) const override {
+    int numWarps = ttg::lookupNumWarps(tmemLoadOp);
+    // If there is only 1 warpgroup there is nothing to optimize as the layout
+    // is already reduction friendly.
+    if (numWarps != 8)
+      return failure();
+    auto tmemEnc = dyn_cast<triton::nvidia_gpu::TensorMemoryEncodingAttr>(
+        tmemLoadOp.getSrc().getType().getEncoding());
+    if (!tmemEnc)
+      return failure();
+    int M = tmemEnc.getBlockM();
+    int N = tmemEnc.getBlockN();
+    if (M != 128)
+      return failure();
+    bool foundReductionAlongN = false;
+    auto filter = [&](Operation *op) {
+      if (isa<ttg::ConvertLayoutOp>(op) || op->hasTrait<OpTrait::Elementwise>())
+        return true;
+      if (auto reduce = dyn_cast<triton::ReduceOp>(op)) {
+        foundReductionAlongN = reduce.getAxis() == 1;
+      }
+      return false;
+    };
+    ForwardSliceOptions fwdOpt;
+    fwdOpt.filter = filter;
+    SetVector<mlir::Operation *> fwdSlices;
+    getForwardSlice(tmemLoadOp.getResult(), &fwdSlices, fwdOpt);
+    if (!foundReductionAlongN)
+      return failure();
+    // Try to split along M dimension but follow the restrictions of TMEM:
+    // warp0 get M = 0, warp 1 gets M = 32, warp 2 gets M = 64, warp 3 gets
+    // M = 96 warp 4 gets M = 16, warp 5 gets M = 48, warp 6 gets M = 80,
+    // warp 7 gets M = 112
+    RankedTensorType oldType = tmemLoadOp.getType();
+    Attribute newLayout = ttg::LinearEncodingAttr::get(
+        tmemLoadOp.getContext(),
+        ttg::getTmemLoadLayoutSplitLongM(M, N, oldType, numWarps));
+    if (newLayout == oldType.getEncoding())
+      return failure();
+
+    auto newType = RankedTensorType::get(oldType.getShape(),
+                                         oldType.getElementType(), newLayout);
+    tmemLoadOp.getResult().setType(newType);
+    OpBuilder builder(tmemLoadOp);
+    builder.setInsertionPointAfter(tmemLoadOp);
+    auto cvt = builder.create<ttg::ConvertLayoutOp>(
+        tmemLoadOp.getLoc(), oldType, tmemLoadOp.getResult());
+    tmemLoadOp.getResult().replaceAllUsesExcept(cvt.getResult(), cvt);
+    return success();
+  }
+};
+
+class TritonNvidiaGPUOptimizeTMemLayoutsPass
+    : public TritonNvidiaGPUOptimizeTMemLayoutsPassBase<
+          TritonNvidiaGPUOptimizeTMemLayoutsPass> {
+public:
+  using BaseT = TritonNvidiaGPUOptimizeTMemLayoutsPassBase<
+      TritonNvidiaGPUOptimizeTMemLayoutsPass>;
   using BaseT::BaseT;
 
   void runOnOperation() override {
@@ -194,7 +257,7 @@ public:
     ModuleOp m = getOperation();
 
     mlir::RewritePatternSet patterns(context);
-    patterns.add<TMemSplitLoadPattern>(context);
+    patterns.add<TMemSplitLoadPattern, TMemLoadReducePattern>(context);
     if (failed(applyPatternsGreedily(m, std::move(patterns))))
       signalPassFailure();
   }
@@ -202,6 +265,6 @@ public:
 
 } // namespace
 
-std::unique_ptr<Pass> mlir::createTritonNvidiaGPUOptimizeTMemSubtilingPass() {
-  return std::make_unique<TritonNvidiaGPUOptimizeTMemSubtilingPass>();
+std::unique_ptr<Pass> mlir::createTritonNvidiaGPUOptimizeTMemLayoutsPass() {
+  return std::make_unique<TritonNvidiaGPUOptimizeTMemLayoutsPass>();
 }

@@ -10,6 +10,8 @@
 
 namespace mlir {
 
+void doTaskPartition(triton::FuncOp &funcOp, unsigned numWarpGroups);
+
 #define GEN_PASS_DEF_NVGPUWARPSPECIALIZATION
 #include "nvidia/hopper/include/Transforms/Passes.h.inc"
 
@@ -20,8 +22,11 @@ public:
       NVGPUWarpSpecializationPass>::NVGPUWarpSpecializationBase;
 
   void runOnFuncOp(triton::FuncOp funcOp) {
-    if (numWarpGroups <= 0)
+    if (numWarpGroups <= 1)
       return;
+
+    // Partition key ops into multiple async tasks.
+    doTaskPartition(funcOp, numWarpGroups);
   }
 
   void runOnOperation() override {

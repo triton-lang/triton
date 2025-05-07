@@ -20,6 +20,7 @@ class OptFlags:
     split_k: int
     fused_scatter: bool
     is_persistent: bool
+    epilogue_subtile: bool
     arch: str
     target_kernel_kwargs: dict
 
@@ -59,7 +60,6 @@ def make_default_opt_flags_amd(
         block_m = 128
     elif tokens_per_expt >= 512 and n >= 2048:
         block_m = 128
-
     else:
         block_m = max(32, min(triton.next_power_of_2(tokens_per_expt), 64))
     if routing_data is not None:
@@ -102,6 +102,7 @@ def make_default_opt_flags_amd(
         split_k=split_k,
         fused_scatter=False,
         is_persistent=is_persistent,
+        epilogue_subtile=False,
         arch=None,
         target_kernel_kwargs=target_kernel_kwargs,
     )
@@ -121,7 +122,7 @@ def make_default_opt_flags_nvidia(
     enforce_bitwise_invariance,
     constraints,
 ):
-    constraints_supported = ["block_m", "block_k", "split_k", "fused_scatter", "is_persistent"]
+    constraints_supported = ["block_m", "block_k", "split_k", "fused_scatter", "is_persistent", "epilogue_subtile"]
     assert not any([c not in constraints_supported for c in constraints]), constraints.keys()
     # tokens per expert
     if routing_data is None:
@@ -139,7 +140,7 @@ def make_default_opt_flags_nvidia(
     elif enforce_bitwise_invariance:
         block_m = 128
     else:
-        block_m = max(16, min(triton.next_power_of_2(tokens_per_expt), 128))
+        block_m = max(64, min(triton.next_power_of_2(tokens_per_expt), 128))
     # TODO: remove when triton is more optimized for H100 MXFP4
     arch = None
     if (
@@ -176,8 +177,7 @@ def make_default_opt_flags_nvidia(
     if split_k > 1:
         # With split_k, results are written in f32. Use that for the following computations.
         out_dtype = torch.float32
-    # num_stages
-    num_stages = opt_flags_nvidia.compute_num_stages(
+    compute_num_stages_args = (
         precision_config,
         microscaling_ctx,
         is_persistent,
@@ -188,6 +188,14 @@ def make_default_opt_flags_nvidia(
         lhs_dtype,
         rhs_dtype,
     )
+    if constraints.get("epilogue_subtile", None) is not None:
+        epilogue_subtile = constraints["epilogue_subtile"]
+    else:
+        n1 = opt_flags_nvidia.compute_num_stages(*compute_num_stages_args, False)
+        n2 = opt_flags_nvidia.compute_num_stages(*compute_num_stages_args, True)
+        epilogue_subtile = n2 > n1 # enable epilogue_subtile if it increases the number of stages
+    # num_stages
+    num_stages = opt_flags_nvidia.compute_num_stages(*compute_num_stages_args, epilogue_subtile)
     # fused scatter scratchpad
     if constraints.get("fused_scatter", None) is not None:
         fused_scatter = constraints["fused_scatter"]
@@ -207,6 +215,7 @@ def make_default_opt_flags_nvidia(
         split_k=split_k,
         fused_scatter=fused_scatter,
         is_persistent=is_persistent,
+        epilogue_subtile=epilogue_subtile,
         arch=arch,
         target_kernel_kwargs=dict(),
     )

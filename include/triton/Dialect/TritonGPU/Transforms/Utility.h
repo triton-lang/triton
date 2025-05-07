@@ -270,17 +270,18 @@ void replaceUsesWithLocalLoad(
       }
     }
   }
-  for (auto alloc : allocsToErase) {
-    alloc.erase();
-  }
 
   // If there are some uses that were not local_allocs, we need to create a
   // local_load for them.
-  if (!old.getUsers().empty()) {
+  if (std::distance(old.getUsers().begin(), old.getUsers().end()) >
+      allocsToErase.size()) {
     auto loc = old.getOwner()->getLoc();
     auto sharedLoad = builder.template create<ttg::LocalLoadOp>(
         loc, old.getType(), alloc, token);
     old.replaceAllUsesWith(sharedLoad.getResult());
+  }
+  for (auto alloc : allocsToErase) {
+    alloc.erase();
   }
 }
 } // namespace mlir::triton

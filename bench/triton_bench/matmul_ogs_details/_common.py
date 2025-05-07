@@ -87,9 +87,10 @@ def matmul_launch_metadata(grid, kernel, args):
     fM = M if M is not None else n_tokens
     fK = K if K is not None else n_tokens
     ret[f"flops{nbits}"] = 2.0 * fM * N * fK
-    skipped = 0
+    gindx = args.get("GatherIndx", None)
     sindx = args.get("WriteBackIndx", None)
-    if sindx is not None:
-        skipped = (sindx == -1).sum() / sindx.numel()
-    ret["bytes"] = int((1 - skipped) * Y.numel() * Y.element_size() + X.numel() * X.element_size() + n_w_bytes)
+    sskipped = 0. if sindx is None else (sindx == -1).sum() / sindx.shape[0]
+    gskipped = 0. if gindx is None else (gindx == -1).sum() / gindx.shape[0]
+    ret["bytes"] = int((1 - sskipped) * Y.numel() * Y.element_size() + (1 - gskipped) * X.numel() * X.element_size() +
+                       n_w_bytes)
     return ret

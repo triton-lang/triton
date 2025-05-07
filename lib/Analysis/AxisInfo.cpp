@@ -467,6 +467,13 @@ private:
     if (rhs.getConstantValue().has_value() &&
         rhs.getConstantValue().value() == 1)
       return lhs.getDivisibility(dim);
+    // Case 3: lhs has contiguity of 1 in this dimension and rhs is a power of 2
+    if (rhs.getConstantValue().has_value() &&
+        llvm::isPowerOf2_64(std::abs(rhs.getConstantValue().value())) &&
+        lhs.getContiguity(dim) == 1) {
+      int64_t absRhs = std::abs(rhs.getConstantValue().value());
+      return std::max<int64_t>(1, lhs.getDivisibility(dim) / absRhs);
+    }
     // otherwise: return 1
     return 1;
   }

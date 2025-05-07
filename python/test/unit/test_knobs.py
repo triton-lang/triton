@@ -2,6 +2,7 @@ import os
 import pytest
 import shutil
 import triton
+from triton._internal_testing import is_hip
 
 from pathlib import Path
 
@@ -136,6 +137,7 @@ def test_read_env(truthy, falsey, fresh_knobs, monkeypatch):
     assert fresh_knobs.cache.override_dir == "/tmp/triton_home/.triton/override"
 
     from triton.runtime.cache import FileCacheManager
+
     assert fresh_knobs.cache.manager_class == FileCacheManager
 
     assert fresh_knobs.build.backend_dirs == {"/tmp/cuda/crt", "/tmp/cuda/rt"}
@@ -216,8 +218,12 @@ def test_set_knob_directly(fresh_knobs, monkeypatch):
     assert fresh_knobs.cache.manager_class == FileCacheManager
 
 
+@pytest.mark.skipif(
+    is_hip(),
+    reason="PTXAS is not installed on AMD",
+)
 def test_nvidia_tool(fresh_knobs, tmp_path, monkeypatch):
-    triton_root = Path(__file__).parent.parent.parent / "triton"
+    triton_root = Path(fresh_knobs.__file__).parent
     default_ptxas = triton_root / "backends/nvidia/bin/ptxas"
 
     assert default_ptxas.exists()

@@ -134,11 +134,7 @@ Value TargetInfo::ballot(RewriterBase &rewriter, Location loc, Type type,
 
 static Value mapa(RewriterBase &rewriter, Location loc, Value ptr, Value ctaid,
                   Value pred) {
-  Value args[] = {ptr, ctaid};
-  StringRef name = "llvm.nvvm.mapa.shared.cluster";
-  return LLVM::createLLVMIntrinsicCallOp(rewriter, loc, name, ptr.getType(),
-                                         args)
-      .getResult(0);
+  return rewriter.create<NVVM::MapaOp>(loc, ptr.getType(), ptr, ctaid);
 }
 
 static std::string getConstraintForBitwidth(unsigned bitwidth) {

@@ -78,7 +78,7 @@ def test_gemm_fusion():
         BLOCK_M, BLOCK_N, BLOCK_K,  #
         num_warps=num_warps)
 
-    torch.testing.assert_close(ref_out, E, atol=1e-2, rtol=0)
+    torch.testing.assert_close(ref_out, E, atol=1e-2, rtol=1e-3)
 
 
 @triton.jit
@@ -173,4 +173,4 @@ def test_batched_gemm_fusion():
         Z, NH, N_CTX,  #
         BLOCK_M, BLOCK_DMODEL, BLOCK_N, num_warps=num_warps)
 
-    torch.testing.assert_close(ref_out, E, atol=1e-2, rtol=0)
+    torch.testing.assert_close(ref_out, E, atol=1e-2, rtol=1e-3)

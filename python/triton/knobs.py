@@ -13,7 +13,7 @@ from typing import cast, Any, Callable, Generator, Generic, Optional, Protocol, 
 if TYPE_CHECKING:
     from .runtime.cache import CacheManager, RemoteCacheBackend
     from .runtime.jit import JitFunctionInfo, KernelParam
-    from .compiler.compiler import LazyDict
+    from .compiler.compiler import ASTSource, LazyDict, IRSource
 
 
 class Env:
@@ -45,7 +45,7 @@ class env_base(Generic[SetType, GetType]):
 
     def __get__(self, obj: Optional[object], objclass: Optional[Type[object]]) -> GetType:
         if obj is None:
-            raise AttributeError("Cannot access {type(self)} on non-instance")
+            raise AttributeError(f"Cannot access {type(self)} on non-instance")
 
         if self.name in obj.__dict__:
             return self.transform(obj.__dict__[self.name])
@@ -199,6 +199,40 @@ class env_opt_bool(env_opt_base[bool, bool], env_bool):
     pass
 
 
+@dataclass(frozen=True)
+class CompileTimes:
+    """
+    Model holding timing information for an invocation of the compiler.
+
+    All times in microseconds.
+    """
+
+    # Duration of make_ir
+    ir_initialization: int
+
+    # Ordered mapping from lowering stage to duration spent in that stage.
+    # Keyed by stage extension, e.g. ttir, ttgir
+    lowering_stages: list[tuple[str, int]]
+
+    # Duration of saving artifacts/metadata to cache
+    store_results: int
+
+    @property
+    def total_lowering(self) -> int:
+        return sum((stage[1] for stage in self.lowering_stages))
+
+    @property
+    def total(self) -> int:
+        return self.ir_initialization + self.total_lowering + self.store_results
+
+
+class CompilationListener(Protocol):
+
+    def __call__(self, *, src: Union[ASTSource, IRSource], metadata: dict[str, Any], times: CompileTimes,
+                 cache_hit: bool) -> None:
+        ...
+
+
 knobs_type = TypeVar("knobs_type", bound='base_knobs')
 
 
@@ -224,7 +258,7 @@ class base_knobs:
         return res
 
     def reset(self: knobs_type) -> knobs_type:
-        for knob in self.knobs.keys():
+        for knob in self.knob_descriptors.keys():
             delattr(self, knob)
         return self
 
@@ -238,12 +272,21 @@ class base_knobs:
             self.__dict__.update(orig)
 
 
+class BuildImpl(Protocol):
+
+    def __call__(self, name: str, src: str, srcdir: str, library_dirs: list[str], include_dirs: list[str],
+                 libraries: list[str], /) -> str:
+        ...
+
+
 class build_knobs(base_knobs):
     """Configuration controlling how the native compiler is invoked"""
     cc: env_opt_str = env_opt_str("CC")
 
     cudacrt_path: env_opt_str = env_opt_str("TRITON_CUDACRT_PATH")
     cudart_path: env_opt_str = env_opt_str("TRITON_CUDART_PATH")
+
+    impl: Optional[BuildImpl] = None
 
     @property
     def backend_dirs(self) -> set[str]:
@@ -284,6 +327,7 @@ class compilation_knobs(base_knobs):
     disable_line_info: env_bool = env_bool("TRITON_DISABLE_LINE_INFO")
     front_end_debugging: env_bool = env_bool("TRITON_FRONT_END_DEBUGGING")
     allow_non_constexpr_globals: env_bool = env_bool("TRITON_ALLOW_NON_CONSTEXPR_GLOBALS")
+    listener: Union[CompilationListener, None] = None
 
 
 class autotuning_knobs(base_knobs):

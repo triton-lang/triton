@@ -175,21 +175,20 @@ static TMemChunk allocFirstFit(MemoryBitMap &memoryMap,
 }
 
 static Operation *getAlloc(Value value) {
-  Operation *op = value.getDefiningOp();
-  while (auto subOp = dyn_cast<triton::gpu::MemDescSubviewOp>(op)) {
-    if (subOp.getSrc().getDefiningOp()) {
-      op = subOp.getSrc().getDefiningOp();
-    } else {
-      auto arg = cast<BlockArgument>(subOp.getSrc());
-      auto partitions =
-          cast<WarpSpecializePartitionsOp>(arg.getOwner()->getParentOp());
-      WarpSpecializeOp wsOp = partitions.getParentOp();
-      auto capture = wsOp.getExplicitCaptures()[arg.getArgNumber()];
-      op = capture.getDefiningOp();
+  while (true) {
+    if (auto allocOp = value.getDefiningOp<TMEMAllocOp>())
+      return allocOp;
+    if (auto subviewOp = value.getDefiningOp<triton::gpu::MemDescSubviewOp>()) {
+      value = subviewOp.getSrc();
+      continue;
     }
+    auto arg = dyn_cast<BlockArgument>(value);
+    if (!arg || !isa<WarpSpecializePartitionsOp>(arg.getOwner()->getParentOp()))
+      llvm::report_fatal_error("expected to find a TMEM alloc op");
+    auto partitions =
+        cast<WarpSpecializePartitionsOp>(arg.getOwner()->getParentOp());
+    value = partitions.getParentOp().getExplicitCaptures()[arg.getArgNumber()];
   }
-  assert(isa<triton::nvidia_gpu::TMEMAllocOp>(op) && "Expected a TMEMAllocOp");
-  return op;
 }
 
 class RowIdConstraints {

@@ -2775,6 +2775,75 @@ TEST_F(LinearLayoutConversionsTest, LeadingOffset_8x64_1_8_32b) {
                          /*requireSurjective=*/false));
 }
 
+TEST_F(LinearLayoutConversionsTest, LeadingOffset_128x128_1_8_128b_transposed) {
+  EXPECT_EQ(toLinearLayout({128, 128}, nvmmaShared(128, true, 32, {1, 1},
+                                                   {1, 1}, {1, 0}, {1, 0})),
+            LinearLayout({{S("offset"),
+                           {{1, 0},
+                            {2, 0},
+                            {4, 0},
+                            {8, 0},
+                            {16, 0},
+                            {4, 1},
+                            {8, 2},
+                            {16, 4},
+                            {0, 8},
+                            {0, 16},
+                            {0, 32},
+                            {0, 64},
+                            {32, 0},
+                            {64, 0}}},
+                          {S("block"), {}}},
+                         {{S("dim0"), 128}, {S("dim1"), 128}},
+                         /*requireSurjective=*/true));
+}
+
+TEST_F(LinearLayoutConversionsTest, LeadingOffset_32x4x64_1_8_32b) {
+  EXPECT_EQ(
+      toLinearLayout({32, 4, 64}, nvmmaShared(64, false, 32, {1, 1, 1},
+                                              {1, 1, 1}, {2, 1, 0}, {2, 1, 0})),
+      LinearLayout({{S("offset"),
+                     {{0, 0, 1},
+                      {0, 0, 2},
+                      {0, 0, 4},
+                      {0, 0, 8},
+                      {0, 1, 0},
+                      {0, 2, 4},
+                      {1, 0, 8},
+                      {2, 0, 0},
+                      {4, 0, 0},
+                      {8, 0, 0},
+                      {16, 0, 0},
+                      {0, 0, 16},
+                      {0, 0, 32}}},
+                    {S("block"), {}}},
+                   {{S("dim0"), 32}, {S("dim1"), 4}, {S("dim2"), 64}},
+                   /*requireSurjective=*/true));
+}
+
+TEST_F(LinearLayoutConversionsTest, LeadingOffset_64x4x32_1_8_32b_transposed) {
+  EXPECT_EQ(
+      toLinearLayout({64, 4, 32}, nvmmaShared(64, true, 32, {1, 1, 1},
+                                              {1, 1, 1}, {2, 1, 0}, {2, 1, 0})),
+      LinearLayout({{S("offset"),
+                     {{1, 0, 0},
+                      {2, 0, 0},
+                      {4, 0, 0},
+                      {8, 0, 0},
+                      {0, 0, 4},
+                      {4, 0, 8},
+                      {8, 0, 16},
+                      {0, 1, 0},
+                      {0, 2, 0},
+                      {16, 0, 0},
+                      {32, 0, 0},
+                      {0, 0, 1},
+                      {0, 0, 2}}},
+                    {S("block"), {}}},
+                   {{S("dim0"), 64}, {S("dim1"), 4}, {S("dim2"), 32}},
+                   /*requireSurjective=*/true));
+}
+
 TEST_F(LinearLayoutConversionsTest, Shared1DSwizzle) {
   EXPECT_EQ(
       toLinearLayout({64, 1}, shared(2, 2, 4, {1, 1}, {1, 1}, {1, 0}, {1, 0})),

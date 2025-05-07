@@ -58,8 +58,6 @@ def _make_tensor_desc(ptr, shape, strides, block_shape, transpose: tl.constexpr 
     tl.static_assert(len(shape) == len(strides))
     tl.static_assert(len(strides) == len(block_shape))
     if transpose:
-        # Pass constexpr(1) to workaround torchflow tracer changing values of 1 to 2 during compile.
-        # We check that the stride is actually 1 before launching the kernel.
         return tl.make_tensor_descriptor(
             ptr,
             shape=shape[:-2] + [shape[-1], shape[-2]],
@@ -67,8 +65,6 @@ def _make_tensor_desc(ptr, shape, strides, block_shape, transpose: tl.constexpr 
             block_shape=block_shape[:-2] + [block_shape[-1], block_shape[-2]],
         )
     else:
-        # Pass constexpr(1) to workaround torchflow tracer changing values of 1 to 2 during compile.
-        # We check that the stride is actually 1 before launching the kernel.
         return tl.make_tensor_descriptor(
             ptr,
             shape=shape,
@@ -154,6 +150,7 @@ def _ptma_matmul_ogs(
              # optimization config
              BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr, BLOCK_K: tl.constexpr,
              GROUP_M: tl.constexpr, XCD_SWIZZLE: tl.constexpr, SWIZZLE_MX: tl.constexpr,
+             EPILOGUE_SUBTILE: tl.constexpr,
              EVEN_K: tl.constexpr, SPLIT_K: tl.constexpr,
              W_CACHE_MODIFIER: tl.constexpr,
              NUM_SMS: tl.constexpr,
@@ -265,13 +262,15 @@ def _ptma_matmul_ogs(
                 transpose=MX_TRANSPOSE
             )
 
+    EPILOGUE_BLOCK_N: tl.constexpr = BLOCK_N // 2 if EPILOGUE_SUBTILE else BLOCK_N
+
     if USE_SCATTER_TMA:
         y_desc = tl.make_tensor_descriptor(
             Y,
             # No masking on the M dimension because we manually mask by setting indices to INT_MAX
             shape=[INT_MAX - 1, N],
             strides=[stride_y_m, stride_y_n],
-            block_shape=[1, BLOCK_N],
+            block_shape=[1, EPILOGUE_BLOCK_N],
         )
 
     k_tiles = tl.cdiv(K, BLOCK_K * SPLIT_K)
@@ -456,7 +455,7 @@ def _ptma_matmul_ogs(
                 YBase + pid_k1.to(index_type) * stride_y_k,
                 shape=[M if M is not None else eM1, N],
                 strides=[stride_y_m, stride_y_n],
-                block_shape=[BLOCK_M, BLOCK_N],
+                block_shape=[BLOCK_M, EPILOGUE_BLOCK_N],
             )
 
         # bias + scale
@@ -483,39 +482,53 @@ def _ptma_matmul_ogs(
             w_scale = load_scale(WScale + expt_id1)
         else:
             w_scale = load_scale(WScale)
-        acc *= x_scale * w_scale
-        if SWAP_XW:
-            acc = acc.T
-        acc = acc + bias[None, :] * betas[:, None]
-        acc *= gammas[:, None]
-        if out_alpha is not None:
-            acc *= out_alpha
 
-        if MASK_ACC:
-            acc = tl.where(mask_m[:, None], acc, 0.0)
-
-        # Flexpoint
-        acc_view = tl.reshape(
-            acc, [acc.numel // THREADS_PER_BLOCK, THREADS_PER_BLOCK], can_reorder=True)
-        local_absmax = tl.maximum(local_absmax, nan_propagating_absmax_reduce(acc_view, axis=0))
-        acc = float_to_flex(acc, YExpectedScale,
-                            None, # ActualScale: local absmax is tracked and updated after the loop
-                            YChecksumScale,
-                            None, # mask: acc is manually masked to 0
-                            Y, FLEXPOINT_SATURATE_INF)
-
-
-        if USE_SCATTER_TMA:
-            # Convert -1 offsets to INT_MAX. We do this by clearing the leading bit. Note that
-            # there shouldn't be any other negative values.
-            offs_y_m = (offs_y_m.to(tl.uint32, bitcast=True) & 0x7FFFFFFF).to(tl.int32, bitcast=True)
-            y_desc.scatter(acc.to(Y.dtype.element_ty), offs_y_m, off_n1)
-        elif not HAS_FUSED_SCATTER and Y_USE_TMA:
-            y_desc.store([off_m1, off_n1], acc.to(Y.dtype.element_ty))
+        if EPILOGUE_SUBTILE:
+            accs = tl.split(tl.permute(tl.reshape(acc, (BLOCK_M, 2, EPILOGUE_BLOCK_N)), (0, 2, 1)))
+            biases = tl.split(tl.permute(tl.reshape(bias, (2, EPILOGUE_BLOCK_N)), (1, 0)))
         else:
-            YPtrs = Y + pid_k1.to(index_type) * stride_y_k + start_z1.to(index_type) * stride_y_z + offs_y_m.to(index_type)[:, None] * stride_y_m + offs_y_n[None, :] * stride_y_n
-            mask = mask_m[:, None] & mask_n[None, :]
-            tl.store(YPtrs, acc, mask=mask)
+            accs = (acc,)
+            biases = (bias,)
+
+        for a_i in tl.static_range(len(accs)):
+            acc_tile = accs[a_i]
+            acc_tile *= x_scale * w_scale
+
+            if SWAP_XW:
+                acc_tile = acc_tile.T
+            acc_tile = acc_tile + biases[a_i][None, :] * betas[:, None]
+            acc_tile *= gammas[:, None]
+            if out_alpha is not None:
+                acc_tile *= out_alpha
+
+            if MASK_ACC:
+                acc_tile = tl.where(mask_m[:, None], acc_tile, 0.0)
+
+            # Flexpoint
+            acc_view = tl.reshape(
+                acc_tile, [acc_tile.numel // THREADS_PER_BLOCK, THREADS_PER_BLOCK], can_reorder=True)
+            local_absmax = tl.maximum(local_absmax, nan_propagating_absmax_reduce(acc_view, axis=0))
+            acc_tile = float_to_flex(
+                acc_tile, YExpectedScale,
+                None, # ActualScale: local absmax is tracked and updated after the loop
+                YChecksumScale,
+                None, # mask: acc is manually masked to 0
+                Y, FLEXPOINT_SATURATE_INF)
+
+            if USE_SCATTER_TMA:
+                # Convert -1 offsets to INT_MAX. We do this by clearing the leading bit. Note that
+                # there shouldn't be any other negative values.
+                offs_y_m = (offs_y_m.to(tl.uint32, bitcast=True) & 0x7FFFFFFF).to(tl.int32, bitcast=True)
+                y_desc.scatter(acc_tile.to(Y.dtype.element_ty), offs_y_m, off_n1 + a_i * EPILOGUE_BLOCK_N)
+            elif not HAS_FUSED_SCATTER and Y_USE_TMA:
+                y_desc.store([off_m1, off_n1 + a_i * EPILOGUE_BLOCK_N], acc_tile.to(Y.dtype.element_ty))
+            else:
+                offs_y_n = off_n1 + a_i * EPILOGUE_BLOCK_N + tl.arange(0, EPILOGUE_BLOCK_N)
+                mask_n = offs_y_n < N
+
+                YPtrs = Y + pid_k1.to(index_type) * stride_y_k + start_z1.to(index_type) * stride_y_z + offs_y_m.to(index_type)[:, None] * stride_y_m + offs_y_n[None, :] * stride_y_n
+                mask = mask_m[:, None] & mask_n[None, :]
+                tl.store(YPtrs, acc_tile, mask=mask)
 
 
     # Update the flexpoint scales

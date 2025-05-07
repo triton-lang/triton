@@ -175,25 +175,3 @@ tt.func @ub_poison() {
   %0 = ub.poison : tensor<128x64xf16>
   tt.return
 }
-
-// -----
-
-#blocked2 = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [2], order = [0]}>
-
-module attributes {"ttg.num-warps" = 4 : i32} {
-
-// CHECK-LABEL: @partition_axis_info
-tt.func @partition_axis_info(%arg0: !tt.ptr<i32>, %arg1: !tt.ptr<i32>) {
-  ttg.warp_specialize(%arg0)
-  default {
-    ttg.warp_yield
-  }
-  partition0(%arg2: !tt.ptr<i32>) num_warps(2) {
-    %splatted = tt.splat %arg2 : !tt.ptr<i32> -> tensor<256x!tt.ptr<i32>, #blocked2>
-    %input = tt.load %splatted : tensor<256x!tt.ptr<i32>, #blocked2>
-    ttg.warp_return
-  } : (!tt.ptr<i32>) -> ()
-  tt.return
-}
-
-}

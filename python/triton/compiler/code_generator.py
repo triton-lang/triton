@@ -81,6 +81,7 @@ def _apply_to_tuple_values(value, fn):
         assert False, f"Unsupported type {type(value)}"
 
     vals = [fn(v) for v in value]
+    vals = [constexpr(v) if v is None else v for v in vals]
     types = [v.type for v in vals]
     return language.tuple(vals, language.tuple_type(types, fields))
 

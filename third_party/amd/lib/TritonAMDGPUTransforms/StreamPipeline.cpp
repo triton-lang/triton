@@ -307,6 +307,8 @@ bool StreamPipeliner::createAsyncCopy(tt::LoadOp loadOp, Value alloc,
   assert(useAsyncCopy);
   // If we have a single buffer we would require another barrier after the
   // local_reads so instead we fall back to pipeline with registers
+  // Removing this check will create incorrect IR, see
+  // MembarUtility.h:membarFilter
   if (numBuffers == 1)
     return false;
 
@@ -624,20 +626,16 @@ void StreamPipeliner::assignMemoryLayouts() {
         cast<tt::PointerType>(tensorTy.getElementType()).getPointeeType();
     unsigned width = vec * pointeeTy.getIntOrFloatBitWidth();
 
-    // Limit shared memory sharing to width >= 32 elements.
-    LDBG("Load " << *loadOp << " has width " << width);
-    if (width < 32) {
-      LDBG("Skip width<32 load " << loadOp);
-      continue;
-    }
-
-    LDBG("assign memory layouts for load " << loadOp);
+    LDBG("assign memory layouts (width=" << width << ") for load " << loadOp);
     LoadInfo loadInfo;
     if (isa<tt::DotOpInterface>(use)) {
       // Only use shared memory when feeding into a dot op.
       loadInfo.usedByDot = true;
-      loadInfo.sharedEncoding =
-          getSharedEncIfAllUsersAreDotEnc(loadOp).value_or(nullptr);
+      // If the max continugous bits we can read is < 32, buffer in registers.
+      if (width >= 32) {
+        loadInfo.sharedEncoding =
+            getSharedEncIfAllUsersAreDotEnc(op->getResult(0)).value_or(nullptr);
+      }
     } else if (auto useOp = dyn_cast<tt::LoadOp>(use)) {
       // The use of this loadOp is another loadOp. If the use is not in the
       // loadToInfo already, it means that the use is not valid for pipelining

@@ -3,6 +3,7 @@
 #include "PatternTritonGPUOpToLLVM.h"
 #include "SchedInstructions.h"
 #include "TargetInfo.h"
+#include "TritonAMDGPUToLLVM/MembarUtility.h"
 #include "mlir/Conversion/ArithToLLVM/ArithToLLVM.h"
 #include "mlir/Conversion/ControlFlowToLLVM/ControlFlowToLLVM.h"
 #include "mlir/Conversion/GPUToNVVM/GPUToNVVMPass.h"
@@ -97,7 +98,9 @@ struct ConvertTritonAMDGPUToLLVM
 
     // Allocate shared memory and set barrier
     ModuleAllocation allocation(mod);
-    ModuleMembarAnalysis membarPass(&allocation);
+
+    ModuleMembarAnalysis membarPass(&allocation,
+                                    mlir::triton::AMD::membarFilter);
     membarPass.run();
 
     // Lower functions

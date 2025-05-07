@@ -2610,6 +2610,25 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
 
 // -----
 
+// Test split with a weird layout
+#blocked = #ttg.blocked<{sizePerThread = [1, 2], threadsPerWarp = [32, 1], warpsPerCTA = [1, 1], order = [1, 0]}>
+#blocked1 = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [1], order = [0]}>
+#linear = #ttg.linear<{register = [[1, 0], [4, 0], [0, 0], [0, 0], [8, 0], [0, 1], [2, 0]], lane = [[0, 0], [0, 0], [0, 0], [0, 0], [0, 0]], warp = [], block = []}>
+  module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: @split_propagation_linear
+  // CHECK-SAME: (%[[ARG:.+]]: tensor<16x2xf32
+  //      CHECK: %[[S:.+]], %{{.+}} = tt.split %[[ARG]]
+  //      CHECK: %[[C:.+]] = ttg.convert_layout %[[S]]
+  //      CHECK: tt.return %[[C]]
+    tt.func public @split_propagation_linear(%arg0: tensor<16x2xf32, #linear>) -> tensor<16xf32, #blocked1> {
+    %0 = ttg.convert_layout %arg0 : tensor<16x2xf32, #linear> -> tensor<16x2xf32, #blocked>
+    %outLHS, %outRHS = tt.split %0 : tensor<16x2xf32, #blocked> -> tensor<16xf32, #blocked1>
+      tt.return %outLHS : tensor<16xf32, #blocked1>
+  }
+}
+
+// -----
+
 #blocked = #ttg.blocked<{sizePerThread = [1, 1, 1, 1, 4], threadsPerWarp = [2, 1, 16, 1, 1], warpsPerCTA = [1, 1, 2, 2, 1], order = [4, 0, 1, 2, 3]}>
 #blocked2 = #ttg.blocked<{sizePerThread = [1, 1, 1, 1, 4], threadsPerWarp = [1, 1, 32, 1, 1], warpsPerCTA = [1, 1, 1, 1, 4], order = [4, 3, 2, 1, 0]}>
 #blocked1 = #ttg.blocked<{sizePerThread = [1, 1, 1, 1, 4], threadsPerWarp = [2, 1, 16, 1, 1], warpsPerCTA = [1, 2, 2, 1, 1], order = [4, 0, 3, 2, 1]}>
@@ -3440,6 +3459,26 @@ module attributes {"ttg.target" = "cuda:90", "ttg.num-ctas" = 1 : i32, "ttg.num-
   tt.func @mma_v3_reg_push_elementwise_chained(%pa: tensor<128x64x!tt.ptr<i8>, #blocked>, %dotb: !ttg.memdesc<64x64xf16, #shared, #smem>, %dotc: tensor<128x64xf32, #mma>) -> tensor<128x64xf32, #mma>{
     %cst = arith.constant dense<0.000000e+00> : tensor<128x64xf16, #blocked>
     %a_i8 = tt.load %pa : tensor<128x64x!tt.ptr<i8>, #blocked>
+    %a_f16 = arith.sitofp %a_i8 : tensor<128x64xi8, #blocked> to tensor<128x64xf16, #blocked>
+    %a_scaled = arith.mulf %a_f16, %cst : tensor<128x64xf16, #blocked>
+    %a_negated = arith.negf %a_scaled : tensor<128x64xf16, #blocked>
+    %dota = ttg.convert_layout %a_negated: tensor<128x64xf16, #blocked> -> tensor<128x64xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 2}>>
+    %r = ttng.warp_group_dot %dota, %dotb, %dotc : tensor<128x64xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 2}>> * !ttg.memdesc<64x64xf16, #shared, #smem> -> tensor<128x64xf32, #mma>
+    tt.return %r : tensor<128x64xf32, #mma>
+  }
+
+
+  // CHECK: tt.func @mma_v3_reg_push_elementwise_chained_descritor_load
+  //    CHECK: %[[CST_DOTOP:.*]] = arith.constant dense<0.000000e+00> : tensor<128x64xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 2}>>
+  //    CHECK: %[[A_BLOCK:.*]] = tt.descriptor_load %{{.*}} : !tt.tensordesc<tensor<128x64xsi8>> -> tensor<128x64xi8, #blocked>
+  //    CHECK: %[[A_DOTOP:.*]] = ttg.convert_layout %[[A_BLOCK]] : tensor<128x64xi8, #blocked> -> tensor<128x64xi8, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 2}>>
+  //    CHECK: %[[A_CASTED:.*]] = arith.sitofp %[[A_DOTOP]] : tensor<128x64xi8, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 2}>> to tensor<128x64xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 2}>>
+  //    CHECK: %[[A_SCALED:.*]] = arith.mulf %[[A_CASTED]], %[[CST_DOTOP]] : tensor<128x64xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 2}>>
+  //    CHECK: %[[A_NEGATED:.*]] = arith.negf %[[A_SCALED]] : tensor<128x64xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 2}>>
+  //    CHECK: %[[R:.*]] = ttng.warp_group_dot %[[A_NEGATED]], %{{.*}}, %{{.*}} : tensor<128x64xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 2}>> * !ttg.memdesc<64x64xf16, #shared, #smem> -> tensor<128x64xf32, #mma>
+  tt.func @mma_v3_reg_push_elementwise_chained_descritor_load(%pa: !tt.tensordesc<tensor<128x64xsi8>>, %dotb: !ttg.memdesc<64x64xf16, #shared, #smem>, %dotc: tensor<128x64xf32, #mma>, %A_dim1: i32, %A_dim2: i32) -> tensor<128x64xf32, #mma>{
+    %cst = arith.constant dense<0.000000e+00> : tensor<128x64xf16, #blocked>
+    %a_i8 = tt.descriptor_load %pa[%A_dim1, %A_dim2]: !tt.tensordesc<tensor<128x64xsi8>> -> tensor<128x64xi8, #blocked>
     %a_f16 = arith.sitofp %a_i8 : tensor<128x64xi8, #blocked> to tensor<128x64xf16, #blocked>
     %a_scaled = arith.mulf %a_f16, %cst : tensor<128x64xf16, #blocked>
     %a_negated = arith.negf %a_scaled : tensor<128x64xf16, #blocked>

@@ -384,34 +384,28 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
 
 // -----
 
-#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0]}>
-#blocked1 = #ttg.blocked<{sizePerThread = [1, 256], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [0, 1]}>
+#blocked = #ttg.blocked<{sizePerThread = [1, 256], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [0, 1]}>
 #tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 256, unpacked = true>
 
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shared = 65544 : i32, ttg.target = "cuda:100", ttg.tensor_memory_size = 128 : i32, "ttg.threads-per-warp" = 32 : i32} {
   // CHECK-LABEL: @tensor_memory_ld_128x256
-  // CHECK: tcgen05.st.sync.aligned.32x32b.x64.b32
-  // CHECK: tcgen05.st.sync.aligned.32x32b.x64.b32
-  // CHECK: tcgen05.st.sync.aligned.32x32b.x64.b32
-  // CHECK: tcgen05.st.sync.aligned.32x32b.x64.b32
+  // CHECK-COUNT-4: tcgen05.st.sync.aligned.32x32b.x64.b32
+  // CHECK-NOT: tcgen05.st
   // CHECK: tcgen05.wait::st.sync.aligned
-  // CHECK: tcgen05.ld.sync.aligned.32x32b.x64.b32
-  // CHECK: tcgen05.ld.sync.aligned.32x32b.x64.b32
-  // CHECK: tcgen05.ld.sync.aligned.32x32b.x64.b32
-  // CHECK: tcgen05.ld.sync.aligned.32x32b.x64.b32
+  // CHECK-COUNT-4: tcgen05.ld.sync.aligned.32x32b.x64.b32
+  // CHECK-NOT: tcgen05.ld
   // CHECK: tcgen05.wait::ld.sync.aligned
   tt.func public @tensor_memory_ld_128x256(%arg0: !tt.ptr<f16>, %arg1: !tt.ptr<f16>, %arg2: !tt.ptr<f16>) {
-    %cst_0 = arith.constant dense<0.000000e+00> : tensor<128x256xf32, #blocked1>
-    %0 = ttng.tmem_alloc %cst_0 {tensor_memory_col_offset = 0 : i32, tensor_memory_row_offset = 0 : i32} : (tensor<128x256xf32, #blocked1>) -> !ttg.memdesc<128x256xf32, #tmem, #ttng.tensor_memory, mutable>
-    %20 = ttng.tmem_load %0 : !ttg.memdesc<128x256xf32, #tmem, #ttng.tensor_memory, mutable> -> tensor<128x256xf32, #blocked1>
+    %cst_0 = arith.constant dense<0.000000e+00> : tensor<128x256xf32, #blocked>
+    %0 = ttng.tmem_alloc %cst_0 {tensor_memory_col_offset = 0 : i32, tensor_memory_row_offset = 0 : i32} : (tensor<128x256xf32, #blocked>) -> !ttg.memdesc<128x256xf32, #tmem, #ttng.tensor_memory, mutable>
+    %20 = ttng.tmem_load %0 : !ttg.memdesc<128x256xf32, #tmem, #ttng.tensor_memory, mutable> -> tensor<128x256xf32, #blocked>
     tt.return
   }
 }
 
 // -----
 
-#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [2, 4], order = [1, 0]}>
-#blocked1 = #ttg.blocked<{sizePerThread = [1, 128], threadsPerWarp = [32, 1], warpsPerCTA = [4, 2], order = [0, 1]}>
+#blocked = #ttg.blocked<{sizePerThread = [1, 128], threadsPerWarp = [32, 1], warpsPerCTA = [4, 2], order = [0, 1]}>
 #tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 256, unpacked = true>
 
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.shared = 65544 : i32, ttg.target = "cuda:100", ttg.tensor_memory_size = 128 : i32, "ttg.threads-per-warp" = 32 : i32} {
@@ -421,9 +415,9 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.shar
   // CHECK: tcgen05.ld.sync.aligned.32x32b.x128.b32
   // CHECK: tcgen05.wait::ld.sync.aligned
   tt.func public @tensor_memory_ld_128x256_8_warps(%arg0: !tt.ptr<f16>, %arg1: !tt.ptr<f16>, %arg2: !tt.ptr<f16>) {
-    %cst_0 = arith.constant dense<0.000000e+00> : tensor<128x256xf32, #blocked1>
-    %0 = ttng.tmem_alloc %cst_0 {tensor_memory_col_offset = 0 : i32, tensor_memory_row_offset = 0 : i32} : (tensor<128x256xf32, #blocked1>) -> !ttg.memdesc<128x256xf32, #tmem, #ttng.tensor_memory, mutable>
-    %20 = ttng.tmem_load %0 : !ttg.memdesc<128x256xf32, #tmem, #ttng.tensor_memory, mutable> -> tensor<128x256xf32, #blocked1>
+    %cst_0 = arith.constant dense<0.000000e+00> : tensor<128x256xf32, #blocked>
+    %0 = ttng.tmem_alloc %cst_0 {tensor_memory_col_offset = 0 : i32, tensor_memory_row_offset = 0 : i32} : (tensor<128x256xf32, #blocked>) -> !ttg.memdesc<128x256xf32, #tmem, #ttng.tensor_memory, mutable>
+    %20 = ttng.tmem_load %0 : !ttg.memdesc<128x256xf32, #tmem, #ttng.tensor_memory, mutable> -> tensor<128x256xf32, #blocked>
     tt.return
   }
 }
@@ -486,6 +480,66 @@ module attributes {"ttg.num-warps" = 8 : i32} {
     %result = ttng.tmem_load %tmem : !ttg.memdesc<128x64xf32, #tmem, #ttng.tensor_memory, mutable> -> tensor<128x64xf32, #linear>
     tt.return
   }
+}
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 64], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [0, 1]}>
+#tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 64, unpacked = true>
+
+module attributes {"ttg.num-warps" = 4 : i32, ttg.maxnreg = 80 : i32, ttg.shared = 65544 : i32, ttg.target = "cuda:100", ttg.tensor_memory_size = 128 : i32} {
+
+// CHECK-LABEL: @tmem_message_maxnreg_80
+tt.func public @tmem_message_maxnreg_80(%desc: !ttg.memdesc<128x64xf32, #tmem, #ttng.tensor_memory>) {
+  // CHECK-COUNT-2: tcgen05.ld.sync.aligned.32x32b.x32.b32
+  // CHECK-NOT: tcgen05.ld
+  ttng.tmem_load %desc : !ttg.memdesc<128x64xf32, #tmem, #ttng.tensor_memory> -> tensor<128x64xf32, #blocked>
+  tt.return
+}
+
+tt.func public @module_constraint_supercedes_local(%desc: !ttg.memdesc<128x64xf32, #tmem, #ttng.tensor_memory>) {
+  ttg.warp_specialize(%desc) attributes {actualRegisters = array<i32: 256, 256>}
+  default {
+    // CHECK-COUNT-2: tcgen05.ld.sync.aligned.32x32b.x32.b32
+    // CHECK-NOT: tcgen05.ld
+    // CHECK: ttg.warp_yield
+    ttng.tmem_load %desc : !ttg.memdesc<128x64xf32, #tmem, #ttng.tensor_memory> -> tensor<128x64xf32, #blocked>
+    ttg.warp_yield
+  }
+  partition0(%arg0: !ttg.memdesc<128x64xf32, #tmem, #ttng.tensor_memory>) num_warps(4) {
+    // CHECK-COUNT-2: tcgen05.ld.sync.aligned.32x32b.x32.b32
+    // CHECK-NOT: tcgen05.ld
+    // CHECK: ttg.warp_return
+    ttng.tmem_load %arg0 : !ttg.memdesc<128x64xf32, #tmem, #ttng.tensor_memory> -> tensor<128x64xf32, #blocked>
+    ttg.warp_return
+  } : (!ttg.memdesc<128x64xf32, #tmem, #ttng.tensor_memory>) -> ()
+  tt.return
+}
+
+}
+
+module attributes {"ttg.num-warps" = 4 : i32, ttg.maxnreg = 256 : i32, ttg.shared = 65544 : i32, ttg.target = "cuda:100", ttg.tensor_memory_size = 128 : i32} {
+
+// CHECK-LABEL: @tmem_message_local_constraint
+tt.func public @tmem_message_local_constraint(%desc: !ttg.memdesc<128x64xf32, #tmem, #ttng.tensor_memory>) {
+  ttg.warp_specialize(%desc) attributes {actualRegisters = array<i32: 80, 48>}
+  default {
+    // CHECK-COUNT-2: tcgen05.ld.sync.aligned.32x32b.x32.b32
+    // CHECK-NOT: tcgen05.ld
+    // CHECK: ttg.warp_yield
+    ttng.tmem_load %desc : !ttg.memdesc<128x64xf32, #tmem, #ttng.tensor_memory> -> tensor<128x64xf32, #blocked>
+    ttg.warp_yield
+  }
+  partition0(%arg0: !ttg.memdesc<128x64xf32, #tmem, #ttng.tensor_memory>) num_warps(4) {
+    // CHECK-COUNT-4: tcgen05.ld.sync.aligned.32x32b.x16.b32
+    // CHECK-NOT: tcgen05.ld
+    // CHECK: ttg.warp_return
+    ttng.tmem_load %arg0 : !ttg.memdesc<128x64xf32, #tmem, #ttng.tensor_memory> -> tensor<128x64xf32, #blocked>
+    ttg.warp_return
+  } : (!ttg.memdesc<128x64xf32, #tmem, #ttng.tensor_memory>) -> ()
+  tt.return
+}
+
 }
 
 // -----

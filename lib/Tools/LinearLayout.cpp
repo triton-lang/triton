@@ -318,8 +318,8 @@ LinearLayout::LinearLayout(
 
   assert(llvm::isPowerOf2_32(size));
   std::vector<std::vector<int32_t>> zeros;
-  for (int i = 0; i < llvm::Log2_32(size); i++) {
-    zeros.emplace_back().push_back(0);
+  for (int i = 1; i < size; i *= 2) {
+    zeros.emplace_back(std::vector<int32_t>{0});
   }
   return LinearLayout({{inDimName, zeros}}, {{outDimName, outDimSize}},
                       /*requiresSurjective=*/outDimSize == 1);
@@ -457,7 +457,7 @@ LinearLayout LinearLayout::reshapeIns(
   int i = 0;
   for (const auto &[inDim, inDimSize] : newInDims) {
     auto &newInDimBases = newBases[inDim];
-    for (int j = 0; j < llvm::Log2_32(inDimSize); j++) {
+    for (int j = 1; j < inDimSize; j *= 2) {
       newInDimBases.push_back(flatBases[i++]);
     }
   }
@@ -1088,7 +1088,13 @@ LinearLayout LinearLayout::removeZeroBasesAlongDim(StringAttr stripDim) const {
       }
     }
   }
-  return LinearLayout(std::move(result), llvm::to_vector(getOutDimNames()));
+  SmallVector<std::pair<StringAttr, int32_t>> newOutDimSizes;
+  for (auto outDim : getOutDimNames()) {
+    newOutDimSizes.push_back({outDim, getOutDimSize(outDim)});
+  }
+  auto newLayout = LinearLayout(std::move(result), ArrayRef(newOutDimSizes),
+                                this->isSurjective());
+  return newLayout;
 }
 
 size_t hash_value(const LinearLayout &layout) {

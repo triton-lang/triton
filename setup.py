@@ -761,6 +761,22 @@ def get_git_version_suffix():
 # keep it separate for easy substitution
 TRITON_VERSION = "3.3.0" + get_git_version_suffix() + os.environ.get("TRITON_WHEEL_VERSION_SUFFIX", "")
 
+# Dynamically define supported Python versions and classifiers
+MIN_PYTHON = (3, 9)
+MAX_PYTHON = (3, 13)
+
+PYTHON_REQUIRES = f">={MIN_PYTHON[0]}.{MIN_PYTHON[1]},<{MAX_PYTHON[0]}.{MAX_PYTHON[1] + 1}"
+BASE_CLASSIFIERS = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Topic :: Software Development :: Build Tools",
+    "License :: OSI Approved :: MIT License",
+]
+PYTHON_CLASSIFIERS = [
+    f"Programming Language :: Python :: {MIN_PYTHON[0]}.{m}" for m in range(MIN_PYTHON[1], MAX_PYTHON[1] + 1)
+]
+CLASSIFIERS = BASE_CLASSIFIERS + PYTHON_CLASSIFIERS
+
 setup(
     name=os.environ.get("TRITON_WHEEL_NAME", "triton"),
     version=TRITON_VERSION,
@@ -792,17 +808,8 @@ setup(
     # for PyPI
     keywords=["Compiler", "Deep Learning"],
     url="https://github.com/triton-lang/triton/",
-    classifiers=[
-        "Development Status :: 4 - Beta",
-        "Intended Audience :: Developers",
-        "Topic :: Software Development :: Build Tools",
-        "License :: OSI Approved :: MIT License",
-        "Programming Language :: Python :: 3.9",
-        "Programming Language :: Python :: 3.10",
-        "Programming Language :: Python :: 3.11",
-        "Programming Language :: Python :: 3.12",
-        "Programming Language :: Python :: 3.13",
-    ],
+    python_requires=PYTHON_REQUIRES,
+    classifiers=CLASSIFIERS,
     test_suite="tests",
     extras_require={
         "build": [

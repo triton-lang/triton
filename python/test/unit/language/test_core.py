@@ -1889,6 +1889,20 @@ def test_atomic_min_max_neg_zero(device):
     torch.testing.assert_close(out_max, inp, atol=0, rtol=0)
 
 
+@pytest.mark.parametrize("dtype_str", ["float8_e4m3fn", "bfloat16", "int8", "int16", "uint8", "uint16"])
+def test_atomic_unsupported_type(dtype_str, device):
+
+    @triton.jit
+    def kernel(I, O):
+        x = tl.load(I)
+        tl.atomic_add(O, x)
+
+    I = torch.zeros((1, ), device=device, dtype=getattr(torch, dtype_str))
+    O = torch.zeros((1, ), device=device, dtype=getattr(torch, dtype_str))
+    with pytest.raises(triton.TritonError):
+        kernel[(1, )](I, O)
+
+
 # ---------------
 # test cast
 # ---------------
@@ -3548,7 +3562,7 @@ def get_test_dot_softmax():
 
 # M, N, K, num_warps, col_a, col_b, epilogue, input_precision, in_dtype, out_dtype, kpack, mma_nonk_size
 def get_test_dot_mixed_sizes_cases():
-    available_kpack = [1, 2 if is_hip() else 1]
+    available_kpack = [1, 2 if (is_hip() and not is_hip_cdna4()) else 1]
     available_precision = ["tf32" if is_cuda() else "ieee"]
     return [
         (*shape_nw, col_a, col_b, 'none', input_precision, in_dtype, out_dtype, kpack, None)
@@ -3898,7 +3912,7 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, input_precision, in_dty
                           for mxfp_type in ["e2m1", "e4m3", "e5m2"]
                           for normal_type in ["e4m3", "e5m2", "bf16", "fp16"]
                           for mma in (mma_nonk_sizes if is_hip() else [16])
-                          for kpack in ([1, 2] if is_hip() else [1])])
+                          for kpack in ([1, 2] if (is_hip() and not is_hip_cdna4()) else [1])])
 def test_scaled_dot(M, N, K, col_a, col_b, rhs_scale, mxfp_type, normal_type, num_warps, mma, kpack, device):
     if is_cuda():
         cc = torch.cuda.get_device_capability()

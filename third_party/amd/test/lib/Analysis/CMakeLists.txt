@@ -1,5 +1,6 @@
 add_mlir_library(TritonAMDGPUTestAnalysis
   TestAMDRangeAnalysis.cpp
+  TestAMDGPUMembar.cpp
 
   DEPENDS
   TritonTableGen

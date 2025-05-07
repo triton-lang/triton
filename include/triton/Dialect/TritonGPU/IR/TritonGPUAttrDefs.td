@@ -15,6 +15,9 @@ def TritonGPU_AttrTrait : AttrInterface<"TritonGPU_AttrTrait"> {
   ];
 }
 
+def MemDescViewTrait : NativeOpTrait<"MemDescViewTrait">;
+
+
 class TritonGPU_Attr<string name, string attrMnemonic, list<Trait> traits = [],
                      Dialect dialect = TritonGPU_Dialect,
                      string baseCppClass = "::mlir::Attribute">
@@ -395,6 +398,8 @@ def NVMMASharedEncodingAttr :
     This is meant to represent 2d tiled blocked layout.
     The full layout representation is described here:
     https://docs.nvidia.com/cuda/parallel-thread-execution/#asynchronous-warpgroup-level-matrix-shared-memory-layout
+    When the memdesc has more than 2 dimensions the tiling is applied to 8 rows even if the first outer dimension is smaller than 8.
+    In this case `transposed` means that the contiguous dimension is the most outer dimension of the memdesc.
   }];
 
 

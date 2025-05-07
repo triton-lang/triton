@@ -35,10 +35,9 @@ def swiglu_launch_metadata(grid, kernel, args):
 
 
 @triton.jit(repr=swiglu_repr, launch_metadata=swiglu_launch_metadata)
-def _swiglu(out_desc, Out, OutExpectedScale, OutActualScale, OutChecksumScale, a_desc, A, AScale, alpha, M, N,
-            stride_am, stride_an, stride_outm, stride_outn, limit: tl.constexpr, ExptData, NUM_EXPERTS: tl.constexpr,
-            BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr, EVEN_N: tl.constexpr, M_BLOCKS, N_BLOCKS,
-            flexpoint_saturate_inf: tl.constexpr):
+def _swiglu(Out, OutExpectedScale, OutActualScale, OutChecksumScale, A, AScale, alpha, M, N, stride_am, stride_an,
+            stride_outm, stride_outn, limit: tl.constexpr, ExptData, NUM_EXPERTS: tl.constexpr, BLOCK_M: tl.constexpr,
+            BLOCK_N: tl.constexpr, EVEN_N: tl.constexpr, M_BLOCKS, N_BLOCKS, flexpoint_saturate_inf: tl.constexpr):
     if ExptData is not None:
         M = tl.load(ExptData + 2 * NUM_EXPERTS)
         M_BLOCKS = (M + BLOCK_M - 1) // BLOCK_M
@@ -61,8 +60,6 @@ def _swiglu(out_desc, Out, OutExpectedScale, OutActualScale, OutChecksumScale, a
         # load a
         packed_off_n = pid_n * 2 * BLOCK_N + tl.arange(0, 2 * BLOCK_N)
         packed_offs = off_m[:, None] * stride_am + packed_off_n[None, :] * stride_an
-        if a_desc is not None:
-            a_packed = a_desc.load([pid_m * BLOCK_M, pid_n * 2 * BLOCK_N])
         if EVEN_N:
             a_packed = tl.load(A + packed_offs, mask=mask_m[:, None], other=0.)
         else:
@@ -91,11 +88,7 @@ def _swiglu(out_desc, Out, OutExpectedScale, OutActualScale, OutChecksumScale, a
         out = float_to_flex(out, out_expected_scale,
                             None,  # ActualScale: local absmax is tracked and updated after the loop
                             OutChecksumScale, None, Out, flexpoint_saturate_inf)
-
-        if out_desc is not None:
-            out_desc.store([pid_m * BLOCK_M, pid_n * BLOCK_N], out.to(Out.dtype.element_ty))
-        else:
-            mask = mask_m[:, None] if EVEN_N else mask_m[:, None] and mask_n[None, :]
-            tl.store(Out + off_m[:, None] * stride_outm + off_n[None, :] * stride_outn, out, mask)
+        mask = mask_m[:, None] if EVEN_N else mask_m[:, None] and mask_n[None, :]
+        tl.store(Out + off_m[:, None] * stride_outm + off_n[None, :] * stride_outn, out, mask)
 
     update_scale(local_max, OutActualScale, Out)

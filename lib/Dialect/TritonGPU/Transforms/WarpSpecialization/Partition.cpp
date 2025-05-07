@@ -100,8 +100,15 @@ void WarpSchedule::reorderPartitions(ArrayRef<unsigned> order) {
   partitions = std::move(newPartitions);
 }
 
+void WarpSchedule::updatePartitions() {
+  for (Partition &partition : getPartitions()) {
+    for (Operation *op : partition.getOps())
+      opToPartition[op] = &partition;
+  }
+}
+
 WarpSchedule::Partition *WarpSchedule::getPartition(Operation *op) {
-  return opToPartition.at(op);
+  return opToPartition.lookup(op);
 }
 const WarpSchedule::Partition *WarpSchedule::getPartition(Operation *op) const {
   return opToPartition.at(op);
@@ -154,13 +161,16 @@ FailureOr<WarpSchedule> WarpSchedule::deserialize(scf::ForOp loop) {
 void WarpSchedule::serialize(scf::ForOp loop) const {
   SmallVector<Attribute> stages;
   Builder b(loop.getContext());
-  for (auto [i, partition] :
-       llvm::enumerate(llvm::make_pointee_range(partitions))) {
-    stages.push_back(b.getI32IntegerAttr(partition.getStage()));
-    for (Operation *op : partition.getOps()) {
-      op->setAttr(kPartitionAttrName, b.getI32IntegerAttr(i));
+  for (Operation &op : loop.getBody()->without_terminator()) {
+    if (Partition *partition = opToPartition.lookup(&op)) {
+      if (partition == getRootPartition())
+        continue;
+      op.setAttr(kPartitionAttrName,
+                 b.getI32IntegerAttr(partition->getIndex()));
     }
   }
+  for (Partition &partition : getPartitions())
+    stages.push_back(b.getI32IntegerAttr(partition.getStage()));
   loop->setAttr(kPartitionStagesAttrName, b.getArrayAttr(stages));
 }
 
@@ -322,4 +332,22 @@ void WarpSchedule::iterateUses(
     for (OpOperand &use : arg.getUses())
       uses.emplace_back(output, &use, distance + 1);
   }
+}
+
+void WarpSchedule::dump() const {
+  for (auto [i, partition] :
+       llvm::enumerate(llvm::make_pointee_range(partitions))) {
+    llvm::errs() << "=== PARTITION #" << i << " ===\n";
+    for (Operation *op : partition.getOps()) {
+      op->print(llvm::errs(), OpPrintingFlags().skipRegions());
+      llvm::errs() << "\n";
+    }
+    llvm::errs() << "\n";
+  }
+  llvm::errs() << "=== ROOT PARTITION ===\n";
+  for (Operation *op : getRootPartition()->getOps()) {
+    op->print(llvm::errs(), OpPrintingFlags().skipRegions());
+    llvm::errs() << "\n";
+  }
+  llvm::errs() << "\n";
 }

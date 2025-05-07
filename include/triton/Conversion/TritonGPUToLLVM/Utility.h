@@ -718,89 +718,16 @@ void storeDistributedToShared(
     RewriterBase &rewriter, const TargetInfoBase &target,
     std::pair<size_t, Type> *const llvmOpCount = nullptr);
 
-inline SmallVector<Value> unpackLLElements(Location loc, Value llvmStruct,
-                                           RewriterBase &rewriter) {
-  assert(bool(llvmStruct) && "can not unpack null values");
-  if (llvmStruct.getType().isIntOrIndexOrFloat() ||
-      isa<triton::PointerType>(llvmStruct.getType()) ||
-      isa<LLVM::LLVMPointerType>(llvmStruct.getType()))
-    return {llvmStruct};
-  ArrayRef<Type> types =
-      cast<LLVM::LLVMStructType>(llvmStruct.getType()).getBody();
-  SmallVector<Value> results(types.size());
-  auto b = TritonLLVMOpBuilder(loc, rewriter);
-  for (unsigned i = 0; i < types.size(); ++i) {
-    Type type = types[i];
-    results[i] = b.extract_val(type, llvmStruct, i);
-  }
-  return results;
-}
+SmallVector<Value> unpackLLElements(Location loc, Value llvmStruct,
+                                    RewriterBase &rewriter);
 
-inline Value packLLElements(Location loc,
-                            const LLVMTypeConverter *typeConverter,
-                            ValueRange resultVals, RewriterBase &rewriter,
-                            Type type) {
-  auto structType =
-      dyn_cast<LLVM::LLVMStructType>(typeConverter->convertType(type));
-  if (!structType) {
-    assert(resultVals.size() == 1);
-    return *resultVals.begin();
-  }
+Value packLLElements(Location loc, const LLVMTypeConverter *typeConverter,
+                     ValueRange resultVals, RewriterBase &rewriter, Type type);
 
-  auto elementTypes = structType.getBody();
-  if (elementTypes.size() != resultVals.size()) {
-    emitError(loc) << " size mismatch when packing elements for LLVM struct"
-                   << " expected " << elementTypes.size() << " but got "
-                   << resultVals.size();
-  }
-  Value llvmStruct = rewriter.create<LLVM::UndefOp>(loc, structType);
-  auto b = TritonLLVMOpBuilder(loc, rewriter);
-  for (const auto &v : llvm::enumerate(resultVals)) {
-    if (!v.value()) {
-      emitError(loc)
-          << "cannot insert null values into struct, but tried to insert"
-          << v.value();
-    }
-    if (v.value().getType() != elementTypes[v.index()]) {
-      LDBG("type " << type << " structType " << structType);
-      LDBG("value " << v.value());
-      emitError(loc) << "invalid element type in packLLElements. Expected "
-                     << elementTypes[v.index()] << " but got "
-                     << v.value().getType();
-    }
-    llvmStruct = b.insert_val(structType, llvmStruct, v.value(), v.index());
-  }
-  return llvmStruct;
-}
+SmallVector<Value> unpackLLVector(Location loc, Value llvmVec,
+                                  RewriterBase &rewriter);
 
-inline SmallVector<Value> unpackLLVector(Location loc, Value llvmVec,
-                                         RewriterBase &rewriter) {
-  assert(bool(llvmVec) && "cannot unpack null value");
-  if (llvmVec.getType().isIntOrIndexOrFloat() ||
-      isa<triton::PointerType>(llvmVec.getType()) ||
-      isa<LLVM::LLVMPointerType>(llvmVec.getType()))
-    return {llvmVec};
-
-  auto b = TritonLLVMOpBuilder(loc, rewriter);
-  SmallVector<Value> results;
-  for (int i = 0; i < cast<VectorType>(llvmVec.getType()).getNumElements();
-       i++) {
-    results.push_back(b.extract_element(llvmVec, b.i32_val(i)));
-  }
-  return results;
-}
-
-inline Value packLLVector(Location loc, ValueRange vals,
-                          RewriterBase &rewriter) {
-  assert(vals.size() > 0);
-  auto vecType = vec_ty(vals[0].getType(), vals.size());
-  auto b = TritonLLVMOpBuilder(loc, rewriter);
-  Value vec = b.undef(vecType);
-  for (int i = 0; i < vals.size(); i++) {
-    vec = b.insert_element(vec, vals[i], b.i32_val(i));
-  }
-  return vec;
-}
+Value packLLVector(Location loc, ValueRange vals, RewriterBase &rewriter);
 
 inline bool
 isSimpleSharedMemoryAccess(ArrayRef<int64_t> shape,
