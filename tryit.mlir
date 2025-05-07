@@ -42,6 +42,9 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     %12 = ttng.tmem_store %cst_1, %11[%token_8], %true : tensor<128x128xf32, #blocked> -> !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable, 1x128x128>
     %13 = ttng.tmem_store %cst_1, %10[%token_4], %true : tensor<128x128xf32, #blocked> -> !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable, 1x128x128>
 
+    %result_9 = ttng.tmem_alloc : () -> !ttg.memdesc<128x128xf16, #tmem1, #ttng.tensor_memory, mutable>
+    %result_10 = ttng.tmem_alloc : () -> !ttg.memdesc<128x128xf16, #tmem1, #ttng.tensor_memory, mutable>
+
     %14 = ttg.local_alloc : () -> !ttg.memdesc<3x128x128xf16, #shared, #smem, mutable>
     %15 = ttg.local_alloc : () -> !ttg.memdesc<3xi64, #shared1, #smem, mutable>
     %16 = ttg.memdesc_subview %15[%c0_i32] : !ttg.memdesc<3xi64, #shared1, #smem, mutable> -> !ttg.memdesc<1xi64, #shared1, #smem, mutable, 3>
@@ -93,7 +96,6 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     ttng.init_barrier %39, 1 : !ttg.memdesc<1xi64, #shared1, #smem, mutable>
     ttng.arrive_barrier %39, 1 : !ttg.memdesc<1xi64, #shared1, #smem, mutable>
     ttng.arrive_barrier %37, 1 : !ttg.memdesc<1xi64, #shared1, #smem, mutable>
-    %result_9 = ttng.tmem_alloc : () -> !ttg.memdesc<128x128xf16, #tmem1, #ttng.tensor_memory, mutable>
     %40 = ttg.local_alloc : () -> !ttg.memdesc<1xi64, #shared1, #smem, mutable>
     %41 = ttg.memdesc_subview %40[%c0_i32] : !ttg.memdesc<1xi64, #shared1, #smem, mutable> -> !ttg.memdesc<1xi64, #shared1, #smem, mutable>
     ttng.init_barrier %41, 1 : !ttg.memdesc<1xi64, #shared1, #smem, mutable>
@@ -116,7 +118,6 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     ttng.init_barrier %51, 1 : !ttg.memdesc<1xi64, #shared1, #smem, mutable>
     ttng.arrive_barrier %51, 1 : !ttg.memdesc<1xi64, #shared1, #smem, mutable>
     ttng.arrive_barrier %49, 1 : !ttg.memdesc<1xi64, #shared1, #smem, mutable>
-    %result_10 = ttng.tmem_alloc : () -> !ttg.memdesc<128x128xf16, #tmem1, #ttng.tensor_memory, mutable>
     %52 = ttg.local_alloc : () -> !ttg.memdesc<1xi64, #shared1, #smem, mutable>
     %53 = ttg.memdesc_subview %52[%c0_i32] : !ttg.memdesc<1xi64, #shared1, #smem, mutable> -> !ttg.memdesc<1xi64, #shared1, #smem, mutable>
     ttng.init_barrier %53, 1 : !ttg.memdesc<1xi64, #shared1, #smem, mutable>
@@ -164,6 +165,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     ttng.init_barrier %74, 1 : !ttg.memdesc<1xi64, #shared1, #smem, mutable, 3>
     ttng.init_barrier %75, 2 : !ttg.memdesc<1xi64, #shared1, #smem, mutable, 3>
     ttng.arrive_barrier %75, 2 : !ttg.memdesc<1xi64, #shared1, #smem, mutable, 3>
+
+
     %76:36 = scf.for %arg25 = %c0_i32 to %arg23 step %c128_i32 iter_args(%arg26 = %cst, %arg27 = %cst_0, %arg28 = %cst, %arg29 = %cst_0, %arg30 = %token, %arg31 = %13, %arg32 = %token_6, %arg33 = %12, %arg34 = %c0_i32, %arg35 = %c0_i32, %arg36 = %c0_i32, %arg37 = %c0_i32, %arg38 = %c0_i32, %arg39 = %c0_i32, %arg40 = %c0_i32, %arg41 = %c0_i32, %arg42 = %c0_i32, %arg43 = %c0_i32, %arg44 = %c0_i32, %arg45 = %c0_i32, %arg46 = %c0_i32, %arg47 = %c0_i32, %arg48 = %c0_i32, %arg49 = %c0_i32, %arg50 = %c0_i32, %arg51 = %c0_i32, %arg52 = %c-1_i32, %arg53 = %c0_i32, %arg54 = %c0_i32, %arg55 = %c0_i32, %arg56 = %c0_i32, %arg57 = %c0_i32, %arg58 = %c-1_i32, %arg59 = %c0_i32, %arg60 = %c0_i32, %arg61 = %c0_i32) -> (tensor<128xf32, #ttg.slice<{dim = 1, parent = #blocked}>>, tensor<128xf32, #ttg.slice<{dim = 1, parent = #blocked}>>, tensor<128xf32, #ttg.slice<{dim = 1, parent = #blocked}>>, tensor<128xf32, #ttg.slice<{dim = 1, parent = #blocked}>>, !ttg.async.token, !ttg.async.token, !ttg.async.token, !ttg.async.token, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32)  : i32 {
       %98 = ttg.memdesc_subview %15[%arg34] : !ttg.memdesc<3xi64, #shared1, #smem, mutable> -> !ttg.memdesc<1xi64, #shared1, #smem, mutable, 3>
       ttng.wait_barrier %98, %arg35 {ttg.assigned_stage = 0 : i32, ttg.partition = 2 : i32} : !ttg.memdesc<1xi64, #shared1, #smem, mutable, 3>
