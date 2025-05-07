@@ -295,7 +295,7 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
             offset);
       }
       auto vecAddr = b.gep(sharedPtrTy, elemTy, smemBase, offset);
-      vecAddr.setInbounds(true);
+      vecAddr.setNoWrapFlags(mlir::LLVM::GEPNoWrapFlags::inbounds);
       return vecAddr;
     };
 
