@@ -26,7 +26,6 @@ try:
 except ModuleNotFoundError:
     HAS_TENSOR_DESC = False
 
-
 DEVICE = triton.runtime.driver.active.get_active_torch_device()
 
 
@@ -166,21 +165,9 @@ def keep(conf):
 
 def _attn_launch_metadata(grid, kernel, args):
     ret = {}
-
-    # Get dimensions based on kernel name
-    if "_attn_fwd" in kernel.name:
-        # Forward pass
-        Z, H, N_CTX, HEAD_DIM = args["Z"], args["H"], args["N_CTX"], args["HEAD_DIM"]
-        ret["name"] = f"{kernel.name} [Z={Z}, H={H}, N_CTX={N_CTX}, HEAD_DIM={HEAD_DIM}]"
-    elif "_attn_bwd" in kernel.name:
-        # Backward pass
-        Q = args["Q"]
-        Z, H, N_CTX, HEAD_DIM = Q.shape
-        ret["name"] = f"{kernel.name} [Z={Z}, H={H}, N_CTX={N_CTX}, HEAD_DIM={HEAD_DIM}]"
-    else:
-        # For other operations, use a default name
-        ret["name"] = kernel.name
-
+    # Get dimensions from args
+    Z, H, N_CTX, HEAD_DIM = args["Z"], args["H"], args["N_CTX"], args["HEAD_DIM"]
+    ret["name"] = f"{kernel.name} [Z={Z}, H={H}, N_CTX={N_CTX}, HEAD_DIM={HEAD_DIM}]"
     return ret
 
 
