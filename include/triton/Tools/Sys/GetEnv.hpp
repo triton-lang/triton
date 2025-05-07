@@ -43,8 +43,7 @@ inline const std::set<std::string> CACHE_INVALIDATING_ENV_VARS = {
     "NVPTX_ENABLE_DUMP",
     "STORE_TMEM_TO_GLOBAL_BYPASS_SMEM",
     "ALLOW_LHS_TMEM_LAYOUT_CONVERSION",
-    "TRITON_F32_DEFAULT",
-    "ENABLE_MMA_V5_ATT_PIPELINE"
+    "TRITON_F32_DEFAULT"
     // clang-format on
 };
 
