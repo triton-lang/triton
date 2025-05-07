@@ -179,7 +179,10 @@ SmallVector<unsigned> getOrder(SharedEncodingTrait layout,
     return llvm::to_vector(swizzledLayout.getOrder());
   }
   if (auto sharedLayout = mlir::dyn_cast<NVMMASharedEncodingAttr>(layout)) {
-    return sharedLayout.getOrder();
+    if (shape.size() == 1) {
+      return {0};
+    }
+    return getMatrixOrder(shape.size(), !sharedLayout.getTransposed());
   }
   if (auto sharedLayout =
           mlir::dyn_cast<AMDRotatingSharedEncodingAttr>(layout)) {
@@ -640,18 +643,6 @@ SmallVector<unsigned> SwizzledSharedEncodingAttr::getCTAOrder() const {
   return SmallVector<unsigned>(getCTALayout().getCTAOrder());
 }
 SmallVector<unsigned> SwizzledSharedEncodingAttr::getCTASplitNum() const {
-  return SmallVector<unsigned>(getCTALayout().getCTASplitNum());
-}
-
-int32_t NVMMASharedEncodingAttr::getAlignment() const { return 1024; }
-
-SmallVector<unsigned> NVMMASharedEncodingAttr::getCTAsPerCGA() const {
-  return SmallVector<unsigned>(getCTALayout().getCTAsPerCGA());
-}
-SmallVector<unsigned> NVMMASharedEncodingAttr::getCTAOrder() const {
-  return SmallVector<unsigned>(getCTALayout().getCTAOrder());
-}
-SmallVector<unsigned> NVMMASharedEncodingAttr::getCTASplitNum() const {
   return SmallVector<unsigned>(getCTALayout().getCTASplitNum());
 }
 
@@ -1660,6 +1651,38 @@ void NVMMASharedEncodingAttr::print(AsmPrinter &printer) const {
   maybePrintCTALayout(getContext(), printer, getCTALayout(),
                       /*rank=*/2);
   printer << "}>";
+}
+
+int NVMMASharedEncodingAttr::getVec() const {
+  if (getSwizzlingByteWidth() == 0)
+    return 1;
+  return 128 / getElementBitWidth();
+}
+
+int NVMMASharedEncodingAttr::getPerPhase() const {
+  if (getSwizzlingByteWidth() == 0)
+    return 1;
+  return 128 / getSwizzlingByteWidth();
+}
+
+int NVMMASharedEncodingAttr::getMaxPhase() const {
+  if (getSwizzlingByteWidth() == 0)
+    return 1;
+  return getSwizzlingByteWidth() / 16;
+}
+
+int32_t NVMMASharedEncodingAttr::getAlignment() const {
+  return 128 * getMaxPhase();
+}
+
+SmallVector<unsigned> NVMMASharedEncodingAttr::getCTAsPerCGA() const {
+  return SmallVector<unsigned>(getCTALayout().getCTAsPerCGA());
+}
+SmallVector<unsigned> NVMMASharedEncodingAttr::getCTAOrder() const {
+  return SmallVector<unsigned>(getCTALayout().getCTAOrder());
+}
+SmallVector<unsigned> NVMMASharedEncodingAttr::getCTASplitNum() const {
+  return SmallVector<unsigned>(getCTALayout().getCTASplitNum());
 }
 
 //===----------------------------------------------------------------------===//

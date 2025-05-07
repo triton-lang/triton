@@ -1,5 +1,6 @@
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/Diagnostics.h"
+#include "mlir/IR/TypeRange.h"
 #include "nvidia/include/Dialect/NVWS/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Types.h"
 #include "triton/Dialect/TritonGPU/IR/Attributes.h"
@@ -13,206 +14,73 @@
 namespace mlir::triton::nvws {
 
 LogicalResult ArefCreateOp::verify() {
-  auto rank = getResult().getType().getNumBatchAxes();
-  if (!rank)
-    return success();
-  for (size_t i = 0, e = *rank; i < e; i++) {
-    SmallVector<int> dims;
-    for (auto operand : getOperands()) {
-      SmallVector<Operation *> users(operand.user_begin(), operand.user_end());
-      if (users.size() != 1)
-        return emitError("Aref buffer is used elsewhere, Aref cannot guarantee "
-                         "async safety");
-      auto type = operand.getType();
-      if (auto mType = dyn_cast<gpu::MemDescType>(type)) {
-        dims.push_back(mType.getShape()[i]);
-      } else if (auto rType = dyn_cast<RankedTensorType>(type)) {
-        dims.push_back(rType.getShape()[i]);
-      } else {
-        return emitError("Aref is sliced, but input type isn't supported.");
-      }
-      if (!llvm::all_equal(dims)) {
-        return emitError("Leading dims of sliced aref inputs don't match.");
-      }
+  SmallVector<int> dims;
+  for (auto operand : getOperands()) {
+    SmallVector<Operation *> users(operand.user_begin(), operand.user_end());
+    if (users.size() != 1)
+      return emitError("Aref buffer is used elsewhere, Aref cannot guarantee "
+                       "async safety");
+    auto type = operand.getType();
+    if (auto mType = dyn_cast<gpu::MemDescType>(type)) {
+      dims.push_back(mType.getShape()[0]);
+    } else if (auto rType = dyn_cast<RankedTensorType>(type)) {
+      dims.push_back(rType.getShape()[0]);
+    } else {
+      return emitError("Aref is sliced, but input type isn't supported.");
     }
   }
+  if (!llvm::all_equal(dims))
+    return emitError("Leading dims of sliced aref inputs don't match.");
+
   return success();
 }
 
 template <typename T>
-static std::optional<Twine> verifySlice(T &origType, T &newType, size_t rank) {
+static std::optional<Twine> verifySlice(T &origType, T &newType) {
   if (!origType || !newType)
     return "MLIR Types don't match";
   if (origType.getElementType() != newType.getElementType() ||
-      origType.getRank() - rank != newType.getRank()) {
+      origType.getRank() - 1 != newType.getRank()) {
     return "Ranks don't match";
   }
   for (size_t i = 0, e = newType.getShape().size(); i < e; i++) {
-    if (origType.getShape()[i + rank] != newType.getShape()[i])
+    if (origType.getShape()[i + 1] != newType.getShape()[i])
       return "Dimensions don't match";
   }
   return std::nullopt;
 }
 
-std::optional<Twine> static arefRegionVerify(
-    ArefType aref, ValueTypeRange<MutableArrayRef<BlockArgument>> blockArgTypes,
-    size_t rank) {
-  auto numBatchAxes = aref.getNumBatchAxes();
-  if (numBatchAxes ? *numBatchAxes != rank : rank == 0)
-    return "The Number of Batch axes on the aref type does not match the "
-           "number of indexes";
+std::optional<Twine> static arefEnterVerify(
+    ArefType aref, mlir::ValueTypeRange<ResultRange> resultTypes) {
   auto typeArray = aref.getBaseType();
-  if (typeArray.size() != blockArgTypes.size())
-    return "Aref has different number of arguments than region";
+  if (typeArray.size() != resultTypes.size())
+    return "Aref has different number of arguments than enter";
   // This should probably rely on the memdescSubviewOp verifier?
-  for (auto [orig, arg] : llvm::zip(typeArray, blockArgTypes)) {
-    if (rank == 0) {
-      if (orig != arg)
-        return "MLIR Types don't match";
+  for (auto [orig, arg] : llvm::zip(typeArray, resultTypes)) {
+    if (auto origT = dyn_cast<RankedTensorType>(orig)) {
+      auto argT = dyn_cast<RankedTensorType>(arg);
+      if (auto result = verifySlice(origT, argT))
+        return result;
+    } else if (auto origT = dyn_cast<triton::gpu::MemDescType>(orig)) {
+      auto argT = dyn_cast<triton::gpu::MemDescType>(arg);
+      if (auto result = verifySlice(origT, argT))
+        return result;
     } else {
-      if (auto origT = dyn_cast<RankedTensorType>(orig)) {
-        auto argT = dyn_cast<RankedTensorType>(arg);
-        if (auto result = verifySlice(origT, argT, rank))
-          return result;
-      } else if (auto origT = dyn_cast<triton::gpu::MemDescType>(orig)) {
-        auto argT = dyn_cast<triton::gpu::MemDescType>(arg);
-        if (auto result = verifySlice(origT, argT, rank))
-          return result;
-      } else {
-        return "Slicing not Implemented for this type";
-      }
+      return "Slicing not Implemented for this type";
     }
   }
   return std::nullopt;
 }
 
-LogicalResult ArefPutOp::verify() {
-  if (auto result =
-          arefRegionVerify(getOperand().getType(),
-                           getRegion().getArgumentTypes(), getIndexes().size()))
+LogicalResult ArefPutEnterOp::verify() {
+  if (auto result = arefEnterVerify(getAref().getType(), getResultTypes()))
     return emitError(*result);
   return success();
 }
 
-ParseResult ArefRegionParse(OpAsmParser &p, OperationState &result) {
-  SmallVector<OpAsmParser::UnresolvedOperand> operands;
-  SmallVector<OpAsmParser::Argument> blockArgs;
-  SMLoc operandLoc = p.getCurrentLocation();
-  if (p.parseOperandList(operands, AsmParser::Delimiter::None) ||
-      p.parseOperandList(operands, AsmParser::Delimiter::OptionalSquare) ||
-      p.parseKeyword("as") ||
-      p.parseArgumentList(blockArgs, AsmParser::Delimiter::Paren, true) ||
-      p.parseRegion(*result.addRegion(), blockArgs) ||
-      p.parseOptionalAttrDictWithKeyword(result.attributes))
-    return failure();
-
-  FunctionType types;
-  if (p.parseColon() || p.parseType(types) ||
-      p.resolveOperands(operands, types.getInputs(), operandLoc,
-                        result.operands))
-    return failure();
-
-  result.addTypes(types.getResults());
-
-  return success();
-}
-
-ParseResult ArefPutOp::parse(OpAsmParser &p, OperationState &result) {
-  return ArefRegionParse(p, result);
-}
-
-void ArefPutOp::print(OpAsmPrinter &p) {
-  p << ' ';
-  p.printOperand(getOperand());
-  auto indexes = getIndexes();
-  if (indexes.size() > 0) {
-    p << '[';
-    p.printOperands(getIndexes());
-    p << ']';
-  }
-
-  p << " as ";
-  p << '(';
-  llvm::interleaveComma(getRegion().getArguments(), p,
-                        [&](BlockArgument arg) { p.printRegionArgument(arg); });
-  p << ')';
-  p << ' ';
-  p.printRegion(getRegion(), /*printEntryBlockArgs=*/false);
-
-  p.printOptionalAttrDictWithKeyword(getOperation()->getAttrs());
-  p << " : ";
-  p.printFunctionalType(*this);
-}
-
-LogicalResult ArefGetOp::verify() {
-  if (auto result =
-          arefRegionVerify(getOperand().getType(),
-                           getRegion().getArgumentTypes(), getIndexes().size()))
+LogicalResult ArefGetEnterOp::verify() {
+  if (auto result = arefEnterVerify(getAref().getType(), getResultTypes()))
     return emitError(*result);
-  return success();
-}
-
-ParseResult ArefGetOp::parse(OpAsmParser &p, OperationState &result) {
-  return ArefRegionParse(p, result);
-}
-
-void ArefGetOp::print(OpAsmPrinter &p) {
-  p << ' ';
-  p.printOperand(getOperand());
-  auto indexes = getIndexes();
-  if (indexes.size() > 0) {
-    p << '[';
-    p.printOperands(getIndexes());
-    p << ']';
-  }
-
-  p << " as ";
-  p << '(';
-  llvm::interleaveComma(getRegion().getArguments(), p,
-                        [&](BlockArgument arg) { p.printRegionArgument(arg); });
-  p << ')';
-  p << ' ';
-  p.printRegion(getRegion(), /*printEntryBlockArgs=*/false);
-  p.printOptionalAttrDictWithKeyword(getOperation()->getAttrs());
-
-  p << " : ";
-  p.printFunctionalType(*this);
-}
-
-LogicalResult ArefReturnOp::verify() {
-  Operation *op = getOperation();
-  auto operandTypes = getOperandTypes();
-  if (auto get = dyn_cast<ArefGetOp>(op->getBlock()->getParentOp())) {
-    auto resultTypes = get.getResultTypes();
-    if (operandTypes.size() != resultTypes.size()) {
-      return emitError("Mismatching number of returns");
-    }
-    for (auto [returnType, parentType] : llvm::zip(operandTypes, resultTypes)) {
-      if (returnType != parentType) {
-        return emitError(
-            "Return sources and Parent Op Results have different types");
-      }
-    }
-  }
-  if (isa<ArefPutOp>(op->getBlock()->getParentOp())) {
-    auto argTypes = op->getBlock()->getArgumentTypes();
-    SmallVector<Type> inRegTypes =
-        llvm::filter_to_vector(argTypes, [](const Type &type) {
-          if (isa<triton::gpu::MemDescType>(type))
-            return false;
-          return true;
-        });
-
-    if (operandTypes.size() != inRegTypes.size()) {
-      return emitError("Mismatching number of returns");
-    }
-    for (auto [returnType, parentType] : llvm::zip(operandTypes, inRegTypes)) {
-      if (returnType != parentType) {
-        return emitError(
-            "Return sources and Block Arguments have different types");
-      }
-    }
-  }
   return success();
 }
 

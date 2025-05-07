@@ -104,55 +104,25 @@ Value getBarrierAt(PatternRewriter &rewriter, Location loc, Value mbars,
       loc, memDesc, mbars, SmallVector<Value>{idx});
 }
 
-Value getStageIndex(PatternRewriter &rewriter, Location loc, Value idx,
-                    int depth) {
-  Value stageIdx = rewriter.create<arith::ConstantIntOp>(loc, 0, 32);
-  if (depth > 1) {
-    Value depthVal = rewriter.create<arith::ConstantIntOp>(loc, depth, 32);
-    Value stage = rewriter.create<arith::RemSIOp>(loc, idx, depthVal);
-    stageIdx = rewriter.create<arith::IndexCastOp>(
-        loc, rewriter.getIntegerType(32), stage);
-  }
-  return stageIdx;
-}
-
-Value getPhase(PatternRewriter &rewriter, Location loc, Value k, Value phase,
-               int depth) {
-  // parity = (k % numStage) % 2 == 0 ? parity : parity ^ 1
-  Value D = rewriter.create<arith::ConstantIntOp>(loc, depth, 32);
-  Value one = rewriter.create<arith::ConstantIntOp>(loc, 1, 32);
-  Value two = rewriter.create<arith::ConstantIntOp>(loc, 2, 32);
-  Value kmodD = rewriter.create<arith::RemSIOp>(loc, k, D);
-  Value kmodDmod2 = rewriter.create<arith::RemSIOp>(loc, k, two);
-  Value pred = rewriter.create<arith::CmpIOp>(
-      loc, arith::CmpIPredicate::eq, kmodDmod2,
-      rewriter.create<arith::ConstantIntOp>(loc, 0, 32));
-  Value parityXor = rewriter.create<arith::XOrIOp>(loc, phase, one);
-  return rewriter.create<arith::SelectOp>(loc, pred, phase, parityXor);
-}
-
 Value getBarrier(PatternRewriter &rewriter, Location loc, Value mBars,
-                 Value idx, int depth) {
-  auto stageIdx = getStageIndex(rewriter, loc, idx, depth);
-  return getBarrierAt(rewriter, loc, mBars, stageIdx);
+                 Value idx) {
+  return getBarrierAt(rewriter, loc, mBars, idx);
 }
 
 void waitOnMbar(PatternRewriter &rewriter, Location loc, Value mBars, Value idx,
-                Value phase0, int depth) {
+                Value phase) {
   auto ctx = rewriter.getContext();
-  auto barrier = getBarrier(rewriter, loc, mBars, idx, depth);
-  auto waitPhase = getPhase(rewriter, loc, idx, phase0, depth);
+  auto barrier = getBarrier(rewriter, loc, mBars, idx);
   // wait on empty/full
-  auto waitOp = rewriter.create<triton::nvidia_gpu::WaitBarrierOp>(loc, barrier,
-                                                                   waitPhase);
+  auto waitOp =
+      rewriter.create<triton::nvidia_gpu::WaitBarrierOp>(loc, barrier, phase);
 }
 
 void signalArrival(PatternRewriter &rewriter, Location loc, Value mBars,
-                   Value idx, int depth) {
+                   Value idx) {
   // And a barrier arrive to signal completion of the region if none of the
   // underlying ops are already async.
-  auto stageIdx = getStageIndex(rewriter, loc, idx, depth);
-  auto barrier = getBarrierAt(rewriter, loc, mBars, stageIdx);
+  auto barrier = getBarrierAt(rewriter, loc, mBars, idx);
   // wait on empty. Use a default phase for now, will rewrite later
   rewriter.create<triton::nvidia_gpu::ArriveBarrierOp>(loc, barrier, 1);
 }
@@ -219,7 +189,6 @@ public:
       auto singleBarrier = rewriter.create<triton::gpu::MemDescSubviewOp>(
           loc, memDesc, i == 0 ? emptyMbars.getResult() : fullMbars.getResult(),
           SmallVector<Value>{dLoop.getInductionVar()});
-
       int count = i == 0 ? 0 : 1;
       rewriter.create<InitBarrierOp>(loc, singleBarrier, count);
     }
@@ -234,412 +203,122 @@ public:
 };
 
 template <bool put, typename T>
-LogicalResult lowerRegion(T op, PatternRewriter &rewriter,
-                          ArefUseGraph &graph) {
-  // Lowering rules for Put/Get
-  // 1) they wait on empty/full barriers respectively at start
-  // 2) if full/empty barriers are signaled by enclosed ops, they will
-  // have already been lowered, so we can skip arrives. If not, add an arrive
-  // j3) If a Get op encloses a Put op, the get op's empty barrier depends
-  // on the put op's full barrier
+LogicalResult LowerEnter(T op, PatternRewriter &rewriter, ArefUseGraph &graph) {
   auto ctx = op.getContext();
   auto loc = op.getLoc();
-  auto aref = op.getOperand();
-  if (!graph.arefs.contains(aref)) {
-    // we don't have barriers yet
-    return failure();
-  }
+  auto aref = op.getAref();
   auto emptyMbars = graph.arefs[aref].emptyMbars;
   auto fullMbars = graph.arefs[aref].fullMbars;
-  auto depth = graph.arefs[aref].depth;
-
-  if (put)
-    graph.arefs[aref].updatedValues.clear();
 
   rewriter.setInsertionPoint(op);
 
   auto zero = rewriter.create<arith::ConstantIntOp>(loc, 0, 32);
   auto one = rewriter.create<arith::ConstantIntOp>(loc, 1, 32);
-  Value idx = depth > 1 ? op.getIndexes()[0] : zero;
 
-  auto stageIdx = getStageIndex(rewriter, loc, idx, depth);
-
-  waitOnMbar(rewriter, loc, put ? emptyMbars : fullMbars, idx, put ? one : zero,
-             depth);
+  waitOnMbar(rewriter, loc, put ? emptyMbars : fullMbars, op.getIndex(),
+             op.getPhase());
 
   SmallVector<Value> views;
 
   // slice aref values
-  if (depth > 1) {
-    for (auto value :
-         aref.template getDefiningOp<ArefCreateOp>().getOperands()) {
-      if (auto mType = dyn_cast<MemDescType>(value.getType())) {
-        auto shape = mType.getShape();
-        SmallVector<int64_t> tensorShape(shape.begin() + 1, shape.end());
-        auto memDescTypeNew =
-            MemDescType::get(tensorShape, mType.getElementType(),
-                             mType.getEncoding(), mType.getMemorySpace(), true);
-        SmallVector<Value> offsets(mType.getShape().size(), zero);
-        offsets[0] = stageIdx;
-        Value singleBuffer = rewriter.create<triton::gpu::MemDescSubviewOp>(
-            loc, memDescTypeNew, value, offsets);
-        views.push_back(singleBuffer);
-      } else if (auto rType = dyn_cast<RankedTensorType>(value.getType())) {
-        return op.emitError("FIXME: In-register Tensors not yet supported");
-      } else {
-        return op.emitError("Aref input type not supported for slicing");
-      }
-    }
-  } else {
-    if (graph.arefs[aref].updatedValues.size() > 0) {
-      views.append(graph.arefs[aref].updatedValues.begin(),
-                   graph.arefs[aref].updatedValues.end());
+  for (auto value : aref.template getDefiningOp<ArefCreateOp>().getOperands()) {
+    if (auto mType = dyn_cast<MemDescType>(value.getType())) {
+      auto shape = mType.getShape();
+      SmallVector<int64_t> tensorShape(shape.begin() + 1, shape.end());
+      auto memDescTypeNew =
+          MemDescType::get(tensorShape, mType.getElementType(),
+                           mType.getEncoding(), mType.getMemorySpace(), true);
+      SmallVector<Value> offsets(mType.getShape().size(), zero);
+      offsets[0] = op.getIndex();
+      Value singleBuffer = rewriter.create<triton::gpu::MemDescSubviewOp>(
+          loc, memDescTypeNew, value, offsets);
+      views.push_back(singleBuffer);
+    } else if (auto rType = dyn_cast<RankedTensorType>(value.getType())) {
+      return op.emitError("FIXME: In-register Tensors not yet supported");
     } else {
-      for (auto value :
-           aref.template getDefiningOp<ArefCreateOp>().getOperands())
-        views.push_back(value);
+      return op.emitError("Aref input type not supported for slicing");
     }
   }
 
-  auto opBody = &op->getRegion(0).front();
-  if (opBody->getArguments().size() != views.size())
+  if (op.getResults().size() != views.size())
     return op.emitError("number of views and arguments mismatch.");
-  for (auto [arg, view] : zip(opBody->getArguments(), views))
-    arg.replaceAllUsesWith(view);
-
-  for (auto [ret, val] :
-       llvm::zip(op.getResults(), opBody->back().getOperands())) {
-    ret.replaceAllUsesWith(val);
-  }
-
-  if (put) {
-    for (auto result : opBody->back().getOperands())
-      if (isa<RankedTensorType>(result.getType()))
-        graph.arefs[op.getOperand()].updatedValues.push_back(result);
-  }
-
-  for (auto &bodyOp : llvm::make_early_inc_range(opBody->without_terminator()))
-    bodyOp.moveBefore(op);
-
-  if (!graph.nodes[op].containsAsync) {
-    signalArrival(rewriter, loc, put ? fullMbars : emptyMbars, idx, depth);
-  }
+  for (auto [ret, view] : zip(op.getResults(), views))
+    ret.replaceAllUsesWith(view);
 
   rewriter.eraseOp(op);
   return success();
 }
 
-Value getNumIterations(PatternRewriter &rewriter, scf::ForOp loop) {
-  auto l = loop.getLowerBound();
-  auto u = loop.getUpperBound();
-  auto s = loop.getStep();
-  auto n = rewriter.create<arith::SubIOp>(u.getLoc(), u, l);
-  return rewriter.create<arith::DivSIOp>(u.getLoc(), n, s);
+template <bool put, typename T>
+LogicalResult LowerExit(T op, PatternRewriter &rewriter, ArefUseGraph &graph) {
+  auto ctx = op.getContext();
+  auto loc = op.getLoc();
+  auto aref = op.getAref();
+  auto emptyMbars = graph.arefs[aref].emptyMbars;
+  auto fullMbars = graph.arefs[aref].fullMbars;
+
+  signalArrival(rewriter, loc, put ? fullMbars : emptyMbars, op.getIndex());
+  rewriter.eraseOp(op);
+  return success();
 }
 
-class LowerArefGet : public OpRewritePattern<ArefGetOp> {
+class LowerArefGetEnter : public OpRewritePattern<ArefGetEnterOp> {
   ArefUseGraph &graph;
 
 public:
   using OpRewritePattern::OpRewritePattern;
 
-  LowerArefGet(mlir::MLIRContext *context, ArefUseGraph &graph)
-      : OpRewritePattern<ArefGetOp>(context), graph(graph) {}
+  LowerArefGetEnter(mlir::MLIRContext *context, ArefUseGraph &graph)
+      : OpRewritePattern<ArefGetEnterOp>(context), graph(graph) {}
 
-  LogicalResult matchAndRewrite(ArefGetOp op,
+  LogicalResult matchAndRewrite(ArefGetEnterOp op,
                                 PatternRewriter &rewriter) const override {
-    return lowerRegion<0>(op, rewriter, graph);
+    return LowerEnter<false>(op, rewriter, graph);
   }
 };
 
-class LowerArefPut : public OpRewritePattern<ArefPutOp> {
+class LowerArefGetExit : public OpRewritePattern<ArefGetExitOp> {
   ArefUseGraph &graph;
 
 public:
   using OpRewritePattern::OpRewritePattern;
 
-  LowerArefPut(mlir::MLIRContext *context, ArefUseGraph &graph)
-      : OpRewritePattern<ArefPutOp>(context), graph(graph) {}
+  LowerArefGetExit(mlir::MLIRContext *context, ArefUseGraph &graph)
+      : OpRewritePattern<ArefGetExitOp>(context), graph(graph) {}
 
-  LogicalResult matchAndRewrite(ArefPutOp op,
+  LogicalResult matchAndRewrite(ArefGetExitOp op,
                                 PatternRewriter &rewriter) const override {
-    return lowerRegion<1>(op, rewriter, graph);
+    return LowerExit<false>(op, rewriter, graph);
   }
 };
 
-class TMAStoreLowering : public OpRewritePattern<DescriptorStoreOp> {
-public:
-  using OpRewritePattern::OpRewritePattern;
-
-  LogicalResult matchAndRewrite(DescriptorStoreOp op,
-                                PatternRewriter &rewriter) const override {
-    MLIRContext *ctx = op.getContext();
-    Attribute sharedMemorySpace = triton::gpu::SharedMemorySpaceAttr::get(ctx);
-    auto loc = op.getLoc();
-    auto tensorType = op.getSrc().getType();
-    auto order = getOrder(tensorType);
-    auto ctaLayout = getCTALayout(tensorType.getEncoding());
-    auto m = op->getParentOfType<ModuleOp>();
-    auto numWarps =
-        mlir::cast<mlir::IntegerAttr>(m->getAttr("ttg.num-warps")).getInt();
-    Attribute encoding = SwizzledSharedEncodingAttr::get(
-        tensorType.getContext(), 1, 1, 1, order, ctaLayout);
-    if (tensorType.getRank() > 1) {
-      encoding = NVMMASharedEncodingAttr::get(
-          tensorType.getContext(), tensorType.getShape(), order, ctaLayout,
-          tensorType.getElementType(), false);
-    }
-    MemDescType memDescType =
-        MemDescType::get(tensorType.getShape(), tensorType.getElementType(),
-                         encoding, sharedMemorySpace, /*mutableMemory=*/true);
-    Value alloc = rewriter.create<LocalAllocOp>(loc, memDescType, op.getSrc());
-    rewriter.create<triton::nvidia_gpu::FenceAsyncSharedOp>(loc, false);
-    // use id 2 for named barrier
-    auto barId = rewriter.create<arith::ConstantIntOp>(op.getLoc(), 2, 32);
-    auto numThreads =
-        rewriter.create<arith::ConstantIntOp>(op.getLoc(), numWarps * 32, 32);
-    rewriter.create<NVVM::BarrierOp>(op.getLoc(), barId, numThreads);
-    auto tensorOp =
-        dyn_cast<ReinterpretTensorDescOp>(op.getDesc().getDefiningOp());
-    rewriter.create<triton::nvidia_gpu::AsyncTMACopyLocalToGlobalOp>(
-        loc, tensorOp.getRawDesc(), op.getIndices(), alloc);
-    rewriter.create<triton::nvidia_gpu::TMAStoreWaitOp>(loc, 0);
-    // Ensure all threads arrive at this point to avoid race conditions between
-    // two TMA stores in Blackwell tests with sub-tiling enabled. Without this
-    // barrier, TMAStoreWaitOp might be executed by another warp that is
-    // slightly ahead of the warp issuing AsyncTMACopyLocalToGlobal. The barrier
-    // ensures that all warps proceed simultaneously after the data is copied.
-    rewriter.create<NVVM::BarrierOp>(op.getLoc(), barId, numThreads);
-    rewriter.eraseOp(op);
-    return success();
-  }
-};
-
-class ParallelizeDescriptorLoad : public OpRewritePattern<DescriptorLoadOp> {
+class LowerArefPutEnter : public OpRewritePattern<ArefPutEnterOp> {
   ArefUseGraph &graph;
 
 public:
   using OpRewritePattern::OpRewritePattern;
 
-  ParallelizeDescriptorLoad(mlir::MLIRContext *context, ArefUseGraph &graph)
-      : OpRewritePattern<DescriptorLoadOp>(context), graph(graph) {}
+  LowerArefPutEnter(mlir::MLIRContext *context, ArefUseGraph &graph)
+      : OpRewritePattern<ArefPutEnterOp>(context), graph(graph) {}
 
-  LogicalResult matchAndRewrite(DescriptorLoadOp op,
+  LogicalResult matchAndRewrite(ArefPutEnterOp op,
                                 PatternRewriter &rewriter) const override {
-
-    auto ctx = op.getContext();
-    auto loc = op.getLoc();
-    SmallVector<Operation *> users(op->user_begin(), op->user_end());
-    if (users.size() != 1)
-      return failure();
-    if (!isa<LocalStoreOp>(users[0]))
-      return failure();
-
-    auto putOp = dyn_cast<ArefPutOp>(op->getBlock()->getParentOp());
-    if (!putOp)
-      return failure();
-
-    auto aref = putOp.getOperand();
-    if (!graph.arefs.contains(aref))
-      return failure();
-
-    auto descOp =
-        dyn_cast<ReinterpretTensorDescOp>(op.getDesc().getDefiningOp());
-    if (!descOp)
-      return failure();
-
-    auto fullBarrier =
-        getBarrier(rewriter, loc, graph.arefs[aref].fullMbars,
-                   putOp.getIndexes()[0], graph.arefs[aref].depth);
-
-    auto buf = users[0]->getOperand(1);
-    Value pred = rewriter.create<arith::ConstantIntOp>(loc, 1, 1);
-    rewriter.create<triton::nvidia_gpu::AsyncTMACopyGlobalToLocalOp>(
-        loc, descOp.getRawDesc(), op.getIndices(), fullBarrier, buf, pred);
-    int sizeInBytes = 0;
-    auto memDesc = cast<MemDescType>(buf.getType());
-    auto bufShape = memDesc.getShape();
-    auto elementType = memDesc.getElementType();
-    SmallVector<int64_t> tensorShape(bufShape.begin() + 1, bufShape.end());
-    sizeInBytes +=
-        product(tensorShape) * elementType.getIntOrFloatBitWidth() / 8;
-
-    rewriter.create<triton::nvidia_gpu::BarrierExpectOp>(loc, fullBarrier,
-                                                         sizeInBytes, pred);
-    graph.nodes[putOp].containsAsync = true;
-
-    rewriter.eraseOp(users[0]);
-    rewriter.eraseOp(op);
-    return success();
+    return LowerEnter<true>(op, rewriter, graph);
   }
 };
 
-class ParallelizeTCGen5MMA : public OpRewritePattern<TCGen5MMAOp> {
+class LowerArefPutExit : public OpRewritePattern<ArefPutExitOp> {
   ArefUseGraph &graph;
 
 public:
   using OpRewritePattern::OpRewritePattern;
 
-  ParallelizeTCGen5MMA(mlir::MLIRContext *context, ArefUseGraph &graph)
-      : OpRewritePattern<TCGen5MMAOp>(context), graph(graph) {}
+  LowerArefPutExit(mlir::MLIRContext *context, ArefUseGraph &graph)
+      : OpRewritePattern<ArefPutExitOp>(context), graph(graph) {}
 
-  LogicalResult matchAndRewrite(TCGen5MMAOp op,
+  LogicalResult matchAndRewrite(ArefPutExitOp op,
                                 PatternRewriter &rewriter) const override {
-    auto ctx = op.getContext();
-    auto loc = op.getLoc();
-    auto getOp = dyn_cast<ArefGetOp>(op->getBlock()->getParentOp());
-    if (!getOp)
-      return failure();
-
-    auto kLoop = dyn_cast<scf::ForOp>(getOp->getBlock()->getParentOp());
-    if (!kLoop)
-      return failure();
-
-    auto putOp = dyn_cast<ArefPutOp>(kLoop->getBlock()->getParentOp());
-    if (!putOp)
-      return failure();
-
-    auto putAref = putOp.getOperand();
-    auto getAref = getOp.getOperand();
-    if (!graph.arefs.contains(putAref) || !graph.arefs.contains(getAref))
-      return failure();
-
-    auto getArefValue = graph.arefs[getAref];
-    auto putArefValue = graph.arefs[putAref];
-
-    if (!op.getBarriers().empty())
-      return failure(); // Can't paralleize an already parallel mma
-
-    if (putAref.getType().getBaseType().size() != 1)
-      return failure(
-          "TODO: support putting into more than one tmem_buffer at a time");
-    if (putOp.getRegion().getArguments()[0] != op.getD())
-      return failure("This mma isn't accumulating to the put argument");
-
-    rewriter.setInsertionPoint(op);
-
-    // This assumes inputs to an mma are both from a single aref get. Need to
-    // relax that to allow nested aref gets for attention
-    Value getIdx = getArefValue.depth > 1
-                       ? getOp.getIndexes()[0]
-                       : rewriter.create<arith::ConstantIntOp>(loc, 0, 32);
-    auto getEmptyBarrier = getBarrier(rewriter, loc, getArefValue.emptyMbars,
-                                      getIdx, getArefValue.depth);
-    op.addCompletionBarrier(getEmptyBarrier,
-                            rewriter.create<arith::ConstantIntOp>(loc, 1, 1));
-
-    // Lowering the Put op will tell the get op that reads the mma accumulator
-    // to that the mma loop is done, but we need to wait on the last mma
-    // operation inside the get.
-    for (auto user : putArefValue.users) {
-      auto mmaGetOp = dyn_cast<ArefGetOp>(user->op);
-      if (!mmaGetOp)
-        continue;
-      Value idx;
-      if (putArefValue.depth == 1) {
-        rewriter.setInsertionPointAfter(kLoop);
-        idx = getNumIterations(rewriter, kLoop);
-      } else {
-        // persistent
-        // Get should be inside of a for loop
-        auto forOp = dyn_cast<scf::ForOp>(mmaGetOp->getBlock()->getParentOp());
-        if (!forOp)
-          return failure();
-        rewriter.setInsertionPoint(&mmaGetOp.getRegion().front().front());
-        idx = getNumIterations(rewriter, forOp);
-      }
-      waitOnMbar(rewriter, loc, getArefValue.emptyMbars,
-                 rewriter.create<arith::ConstantIntOp>(loc, 0, 32), idx,
-                 getArefValue.depth);
-    }
-
-    // Since we are signalling the inputs to the mma are done with the mma
-    // barrier, we don't need to add an arrival when lowering the get.
-    graph.nodes[getOp].containsAsync = true;
-
-    return success();
-  }
-};
-
-class ParallelizeWarpGroupDot : public OpRewritePattern<WarpGroupDotOp> {
-  ArefUseGraph &graph;
-
-public:
-  using OpRewritePattern::OpRewritePattern;
-
-  ParallelizeWarpGroupDot(mlir::MLIRContext *context, ArefUseGraph &graph)
-      : OpRewritePattern<WarpGroupDotOp>(context), graph(graph) {}
-
-  LogicalResult matchAndRewrite(WarpGroupDotOp op,
-                                PatternRewriter &rewriter) const override {
-    auto ctx = op.getContext();
-    auto loc = op.getLoc();
-    auto getOp = dyn_cast<ArefGetOp>(op->getBlock()->getParentOp());
-    if (!getOp)
-      return failure();
-
-    auto kLoop = dyn_cast<scf::ForOp>(getOp->getBlock()->getParentOp());
-    if (!kLoop)
-      return failure();
-
-    auto getAref = getOp.getOperand();
-    if (!graph.arefs.contains(getAref))
-      return failure();
-
-    auto getArefValue = graph.arefs[getAref];
-
-    SmallVector<Operation *> users(op->user_begin(), op->user_end());
-    if (users.size() != 1)
-      return failure();
-
-    auto wait = dyn_cast<WarpGroupDotWaitOp>(users[0]);
-    if (!wait)
-      return failure();
-
-    if (wait.getPendings() == (getArefValue.depth - 1))
-      return failure(); // we've already processed this
-
-    wait.setPendings(getArefValue.depth - 1);
-    rewriter.setInsertionPointAfter(wait);
-
-    // This assumes inputs to an mma are both from a single aref get. Need to
-    // relax that to allow nested aref gets for attention
-    Value getIdx = getOp.getIndexes().size() > 0
-                       ? getOp.getIndexes()[0]
-                       : rewriter.create<arith::ConstantIntOp>(loc, 0, 32);
-    auto depthVal =
-        rewriter.create<arith::ConstantIntOp>(loc, getArefValue.depth - 1, 32);
-    Value idx = rewriter.create<arith::SubIOp>(loc, getIdx, depthVal);
-    auto zero = rewriter.create<arith::ConstantIntOp>(loc, 0, 32);
-    Value cond = rewriter.create<arith::CmpIOp>(loc, arith::CmpIPredicate::sge,
-                                                idx, zero);
-    auto ifOp = rewriter.create<scf::IfOp>(loc, SmallVector<Type>(), cond);
-    rewriter.setInsertionPointToStart(&ifOp.getThenRegion().emplaceBlock());
-    signalArrival(rewriter, loc, getArefValue.emptyMbars, idx,
-                  getArefValue.depth);
-    rewriter.create<scf::YieldOp>(loc);
-
-    // Find the return and wait on it after the loop
-    auto &retOp = getOp.getRegion().front().back();
-    auto getRetIdx =
-        llvm::find(retOp.getOperands(), wait.getResult(0)).getIndex();
-
-    auto &yieldOp = kLoop.getRegion().front().back();
-    auto yieldIdx =
-        llvm::find(yieldOp.getOperands(), getOp.getResult(getRetIdx))
-            .getIndex();
-
-    Value acc = kLoop.getResult(yieldIdx);
-
-    rewriter.setInsertionPointAfter(kLoop);
-
-    Value seqAcc =
-        rewriter.create<WarpGroupDotWaitOp>(loc, acc, 0).getResult(0);
-    rewriter.replaceAllUsesExcept(acc, seqAcc, seqAcc.getDefiningOp());
-    // Since we manually signaled the that the barriers are empty,
-    // we don't need to automatically do it
-    graph.nodes[getOp].containsAsync = true;
-    return success();
+    return LowerExit<true>(op, rewriter, graph);
   }
 };
 
@@ -658,23 +337,10 @@ static ArefUseGraph analyzeArefUseDef(ModuleOp m) {
     node.op = op;
     if (isa<ArefCreateOp>(op)) {
       graph.nodes[op] = node;
-    } else if (auto get = dyn_cast<ArefGetOp>(op)) {
-      graph.nodes[op] = node;
-      auto old_parent = parent;
-      parent = &node;
-      get.getRegion().walk(createGraph);
-      parent = old_parent;
-    } else if (auto put = dyn_cast<ArefPutOp>(op)) {
-      graph.nodes[op] = node;
-      auto old_parent = parent;
-      parent = &graph.nodes[op];
-      put.getRegion().walk(createGraph);
-      parent = old_parent;
     } else {
+      // TODO: Fill this out
       return;
     }
-    if (parent)
-      graph.nodes[parent->op].subOps.push_back(&graph.nodes[op]);
     seen.insert(op);
   };
 
@@ -692,8 +358,7 @@ public:
     ArefUseGraph graph = analyzeArefUseDef(m);
 
     mlir::RewritePatternSet patterns(context);
-    patterns.add<LowerArefCreate, ParallelizeDescriptorLoad,
-                 ParallelizeTCGen5MMA, ParallelizeWarpGroupDot>(context, graph);
+    patterns.add<LowerArefCreate>(context, graph);
     GreedyRewriteConfig config;
 
     if (applyPatternsGreedily(m, std::move(patterns), config).failed())
@@ -705,7 +370,8 @@ public:
       return signalPassFailure();
 
     mlir::RewritePatternSet patterns2(context);
-    patterns2.add<LowerArefPut, LowerArefGet>(context, graph);
+    patterns2.add<LowerArefGetEnter, LowerArefGetExit, LowerArefPutEnter,
+                  LowerArefPutExit>(context, graph);
     GreedyRewriteConfig config2;
 
     if (applyPatternsGreedily(m, std::move(patterns2), config2).failed())

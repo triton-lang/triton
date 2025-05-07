@@ -225,8 +225,7 @@ bool supportMMA(Value value, int version);
 // return nullopt). The output will be such that layout.getInDimNames() ==
 // layout.getOutDimNames() and the conversion will not include kBlock (resp.
 // kWarp or kLane) if it can be avoided
-triton::LinearLayout minimalCvtLayout(RankedTensorType srcTy,
-                                      RankedTensorType dstTy);
+triton::LinearLayout minimalCvtLayout(Type srcTy, Type dstTy);
 
 // Conversion from `srcTy` to `dstTy` only involves reordering of registers.
 // There is no need for data exchange across threads, warps, or blocks.
