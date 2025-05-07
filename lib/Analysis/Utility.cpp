@@ -737,27 +737,34 @@ bool matchMFMAAndDotOperandShuffleCase(RankedTensorType srcTy,
 }
 
 // We get the smallest submap of srcTy^{-1} * dstTy that is not the identity
-// under kBlock, kWarp or kLane (in that order). The idea here is that if we
-// have a transformation that's the identity on kBlock, we don't need to use
+// under the common dimensions. The idea here is that if we have a
+// transformation that's the identity on kBlock, we don't need to use
 // distributed shared memory. If it's also the identity on kWarp, we can
 // transfer via warp-shuffles, and if it's the identity on kLane just have to
-// reorder the registers
-LinearLayout minimalCvtLayout(RankedTensorType srcTy, RankedTensorType dstTy) {
-  MLIRContext *ctx = srcTy.getContext();
+// reorder the registers.
+LinearLayout minimalCvtLayout(Type srcTy_, Type dstTy_) {
+  auto srcTy = cast<triton::gpu::TensorOrMemDesc>(srcTy_);
+  auto dstTy = cast<triton::gpu::TensorOrMemDesc>(dstTy_);
   LinearLayout srcLayout =
       toLinearLayout(srcTy.getShape(), srcTy.getEncoding());
   LinearLayout dstLayout =
       toLinearLayout(dstTy.getShape(), dstTy.getEncoding());
-  StringAttr kRegister = StringAttr::get(ctx, "register");
-  StringAttr kLane = StringAttr::get(ctx, "lane");
-  StringAttr kWarp = StringAttr::get(ctx, "warp");
-  StringAttr kBlock = StringAttr::get(ctx, "block");
+  auto sDims = to_vector(srcLayout.getInDimNames());
+  auto dDims = to_vector(dstLayout.getInDimNames());
+  SmallVector<StringAttr> dims;
+  for (int i = 0; i < std::min(sDims.size(), dDims.size()); ++i) {
+    auto srcDim = sDims[sDims.size() - i - 1];
+    auto dstDim = dDims[dDims.size() - i - 1];
+    if (srcDim != dstDim) {
+      break;
+    }
+    dims.push_back(srcDim);
+  }
 
   auto comp = dstLayout.invertAndCompose(srcLayout);
-  // We try to quotient by the largest subspace first
-  auto dims = SmallVector<StringRef>{"block", "warp", "lane", "register"};
+  // We try to quotient by the slowers moving subspace first
   for (auto dim : dims) {
-    auto quotient = comp.quotient(StringAttr::get(ctx, dim));
+    auto quotient = comp.quotient(dim);
     if (!quotient.has_value()) {
       break;
     }
