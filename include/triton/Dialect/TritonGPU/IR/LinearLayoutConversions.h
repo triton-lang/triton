@@ -282,6 +282,13 @@ LinearLayout chooseScaledMfmaScaleLayout(
     MLIRContext *ctx, int dotOperandIdx,
     const std::vector<std::vector<int32_t>> &dotOperandWarpBasis,
     ArrayRef<int64_t> dotOperandShape, unsigned mfmaMDim);
-} // namespace mlir::triton::gpu
 
+// Create a LinearLayout similar to mfmaLayout, but changing each thread to hold
+// 8 elements. This layout is useful for emitting the widest 128-bit global
+// store instructions. Since it closely resembles mfmaLayout, conversion between
+// the two can be done using transferWithinWarp, without involving LDS
+LinearLayout chooseMfmaLikeStoreLayout(AMDMfmaEncodingAttr mfmaLayout,
+                                       ArrayRef<int64_t> shape);
+
+} // namespace mlir::triton::gpu
 #endif // TRITON_DIALECT_TRITONGPU_IR_LINEARLAYOUTCONVERSIONS_H

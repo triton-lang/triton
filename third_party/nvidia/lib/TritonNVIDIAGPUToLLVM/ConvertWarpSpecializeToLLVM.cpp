@@ -178,6 +178,29 @@ static void elideTrivialCaptures(LLVM::LLVMFuncOp func,
 // lowerWarpSpecialize
 //===----------------------------------------------------------------------===//
 
+static void createRegRealloc(TritonLLVMIRRewriter &b, int curRegs,
+                             int adjRegs) {
+  curRegs = std::min(256, curRegs);
+  adjRegs = std::min(256, adjRegs);
+  auto action = adjRegs < curRegs ? NVVM::SetMaxRegisterAction::decrease
+                                  : NVVM::SetMaxRegisterAction::increase;
+  b.create<NVVM::SetMaxRegisterOp>(adjRegs, action);
+}
+
+static void createEntryRegRealloc(TritonLLVMIRRewriter &b, Operation *op,
+                                  int actRegs) {
+  auto maxnreg = op->getParentOfType<ModuleOp>()->getAttrOfType<IntegerAttr>(
+      AttrMaxRegistersName);
+  createRegRealloc(b, maxnreg.getInt(), actRegs);
+}
+
+static void createExitRegRealloc(TritonLLVMIRRewriter &b, Operation *op,
+                                 int actRegs) {
+  auto maxnreg = op->getParentOfType<ModuleOp>()->getAttrOfType<IntegerAttr>(
+      AttrMaxRegistersName);
+  createRegRealloc(b, actRegs, maxnreg.getInt());
+}
+
 // Assign hardware barriers to each warp group and rewrite warp group barriers
 // into `barrier.sync` instructions. There is a maximum number of barriers.
 static LogicalResult rewriteWarpGroupBarriers(LLVM::LLVMFuncOp func,
@@ -216,26 +239,6 @@ static LogicalResult rewriteWarpGroupBarriers(LLVM::LLVMFuncOp func,
         bar.erase();
       });
     }
-
-    if (auto actRegisters = op.getActualRegisters()) {
-      int maxnreg = func->getParentOfType<ModuleOp>()
-                        ->getAttrOfType<IntegerAttr>(AttrMaxRegistersName)
-                        .getInt();
-      auto b = OpBuilder::atBlockBegin(&op.getDefaultRegion().front());
-      b.create<NVVM::SetMaxRegisterOp>(op.getLoc(),
-                                       std::min(256, actRegisters->front()),
-                                       NVVM::SetMaxRegisterAction::increase);
-      for (auto [actRegs, region] :
-           llvm::zip(actRegisters->drop_front(), op.getPartitionRegions())) {
-        if (actRegs == maxnreg)
-          continue;
-        auto action = actRegs < maxnreg ? NVVM::SetMaxRegisterAction::decrease
-                                        : NVVM::SetMaxRegisterAction::increase;
-        b.setInsertionPointToStart(&region->front());
-        b.create<NVVM::SetMaxRegisterOp>(op.getLoc(), std::min(256, actRegs),
-                                         action);
-      }
-    }
   }
 
   return success();
@@ -272,12 +275,20 @@ static void rewritePartitionRegions(WarpSpecializeOp ws, Block *switchLoop,
     // another barrier here.
     createBarrier(b, kSwitchLoopBarrierIdx, /*numThreads=*/std::nullopt,
                   /*aligned=*/false);
+    if (auto actRegs = ws.getActualRegisters()) {
+      createEntryRegRealloc(b, ws,
+                            (*actRegs)[partition->getRegionNumber() + 1]);
+    }
 
     // Rewrite all warp returns.
     partition->walk([&](WarpReturnOp op) {
       TritonLLVMIRRewriter b(op.getLoc(), op);
       createBarrier(b, kSwitchLoopBarrierIdx, /*numThreads=*/std::nullopt,
                     /*aligned=*/false);
+      if (auto actRegs = ws.getActualRegisters()) {
+        createExitRegRealloc(b, ws,
+                             (*actRegs)[partition->getRegionNumber() + 1]);
+      }
       b.replaceOpWithNewOp<LLVM::BrOp>(op, switchLoop);
     });
   }
@@ -453,12 +464,16 @@ static LogicalResult lowerWarpSpecialize(LLVM::LLVMFuncOp func,
                   /*aligned=*/false);
     createBarrier(b, kSwitchLoopBarrierIdx, /*numThreads=*/std::nullopt,
                   /*aligned=*/false);
+    if (auto actRegs = ws.getActualRegisters())
+      createEntryRegRealloc(b, func, actRegs->front());
     b.create<LLVM::BrOp>(&ws.getDefaultRegion().front());
 
-    ws.getDefaultRegion().walk([&](WarpYieldOp op) {
+    ws.getDefaultRegion().walk([&, ws = ws](WarpYieldOp op) mutable {
       b.setInsertionPoint(op);
       createBarrier(b, kSwitchLoopBarrierIdx, /*numThreads=*/std::nullopt,
                     /*aligned=*/false);
+      if (auto actRegs = ws.getActualRegisters())
+        createExitRegRealloc(b, func, actRegs->front());
       b.replaceOpWithNewOp<LLVM::BrOp>(op, op.getOperands(), after);
     });
     after->getParent()->getBlocks().splice(after->getIterator(),

@@ -64,9 +64,6 @@ Value sinkValueRedefinition(RewriterBase &rewriter, Value in, Value out,
 bool loopHasDistGreaterThanOne(scf::ForOp forOp);
 bool isOuterLoop(scf::ForOp forOp);
 
-Value getPredMask(RewriterBase &rewriter, Type typeLike, Value currentMask,
-                  Value pred);
-
 /// Function to mask operations during scheduling.
 Operation *predicateOp(RewriterBase &rewriter, Operation *op, Value pred);
 
@@ -108,6 +105,9 @@ Value createAlloc(scf::ForOp forOp, RankedTensorType ty, Location loc,
 
 // Determine if the operation is a TMA load.
 bool isTMALoad(Operation *op);
+
+// Determine if the operation can be lowered to an async load.
+bool canBeAsyncLoad(Operation *op);
 
 // Look for consecutive wait ops and combine them into a single wait op.
 void combineRedundantWaitOps(
