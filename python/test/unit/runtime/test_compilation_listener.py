@@ -41,10 +41,10 @@ def test_compile_stats(device: str, fresh_knobs_except_libraries: Any, fresh_tri
     assert isinstance(captured[1]["target"], GPUTarget)
 
     # It in fact did take some time to do compilation
-    assert captured[2].ir_initialization > 0
-    assert captured[2].total_lowering > 0
-    assert captured[2].store_results > 0
-    assert captured[2].total > 0
+    assert captured[3].ir_initialization > 0
+    assert captured[3].total_lowering > 0
+    assert captured[3].store_results > 0
+    assert captured[3].total > 0
 
     # Now lets create a new instance of the same kernel to pick up cache_hit=True
     cumsum_kernel.device_caches.clear()
@@ -60,7 +60,7 @@ def test_compile_stats(device: str, fresh_knobs_except_libraries: Any, fresh_tri
     assert isinstance(captured[1]["target"], GPUTarget)
 
     # It in fact did take some time to do compilation
-    assert captured[2].ir_initialization > 0
-    assert captured[2].total_lowering == 0
-    assert captured[2].store_results == 0
-    assert captured[2].total > 0
+    assert captured[3].ir_initialization > 0
+    assert captured[3].total_lowering == 0
+    assert captured[3].store_results == 0
+    assert captured[3].total > 0
