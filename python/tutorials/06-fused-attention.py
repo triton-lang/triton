@@ -165,9 +165,8 @@ def keep(conf):
 
 def _attn_launch_metadata(grid, kernel, args):
     ret = {}
-    # Get dimensions from args
-    Z, H, N_CTX, HEAD_DIM = args["Z"], args["H"], args["N_CTX"], args["HEAD_DIM"]
-    ret["name"] = f"{kernel.name} [Z={Z}, H={H}, N_CTX={N_CTX}, HEAD_DIM={HEAD_DIM}]"
+    # TODO: How to get a descriptive name for the kernel?
+    ret["name"] = kernel.name
     return ret
 
 
