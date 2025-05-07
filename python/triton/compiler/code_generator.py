@@ -81,6 +81,7 @@ def _apply_to_tuple_values(value, fn):
         assert False, f"Unsupported type {type(value)}"
 
     vals = [fn(v) for v in value]
+    vals = [constexpr(v) if v is None else v for v in vals]
     types = [v.type for v in vals]
     return language.tuple(vals, language.tuple_type(types, fields))
 
@@ -571,11 +572,11 @@ class CodeGenerator(ast.NodeVisitor):
             if isinstance(value, language.tuple):
                 return _apply_to_tuple_values(value, _sanitize_value)
             native_nontensor_types = (language.dtype, language.tuple)
-            unwrapped_value = _unwrap_if_constexpr(value)
-            if unwrapped_value is not None and \
-                not _is_triton_value(unwrapped_value) and \
-                not isinstance(unwrapped_value, native_nontensor_types):
-                value = semantic.to_tensor(unwrapped_value, self.builder)
+            value = _unwrap_if_constexpr(value)
+            if value is not None and \
+                not _is_triton_value(value) and \
+                not isinstance(value, native_nontensor_types):
+                value = semantic.to_tensor(value, self.builder)
             return value
 
         values = _sanitize_value(self.visit(node.value))
