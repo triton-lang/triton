@@ -167,21 +167,19 @@ def keep(conf):
 def _attn_launch_metadata(grid, kernel, args):
     ret = {}
 
-    # Get dimensions based on available arguments
-    if "Z" in args and "H" in args and "N_CTX" in args and "HEAD_DIM" in args:
+    # Get dimensions based on kernel name
+    if "_attn_fwd" in kernel.name:
         # Forward pass
         Z, H, N_CTX, HEAD_DIM = args["Z"], args["H"], args["N_CTX"], args["HEAD_DIM"]
         ret["name"] = f"{kernel.name} [Z={Z}, H={H}, N_CTX={N_CTX}, HEAD_DIM={HEAD_DIM}]"
+    elif "_attn_bwd" in kernel.name:
+        # Backward pass
+        Q = args["Q"]
+        Z, H, N_CTX, HEAD_DIM = Q.shape
+        ret["name"] = f"{kernel.name} [Z={Z}, H={H}, N_CTX={N_CTX}, HEAD_DIM={HEAD_DIM}]"
     else:
-        # Backward pass or other operations
-        # For backward pass, we need to get dimensions from the input tensors
-        if "Q" in args:
-            Q = args["Q"]
-            Z, H, N_CTX, HEAD_DIM = Q.shape
-            ret["name"] = f"{kernel.name} [Z={Z}, H={H}, N_CTX={N_CTX}, HEAD_DIM={HEAD_DIM}]"
-        else:
-            # For other operations, use a default name
-            ret["name"] = kernel.name
+        # For other operations, use a default name
+        ret["name"] = kernel.name
 
     return ret
 
