@@ -56,22 +56,22 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
     %a_off = arith.constant dense<4> : tensor<128x64xi32, #AL>
     %b_off = arith.constant dense<4> : tensor<64x256xi32, #BL>
 
-    %a_init = ttg.local_alloc : () -> !ttg.memdesc<128x64xi8, #A_SMEM, #smem, mutable, 1x128x64>
-    %a_ = ttg.async_copy_global_to_local %a_ptr_init, %a_init mask %a_mask other %a_other : tensor<128x64x!tt.ptr<i8>, #AL> -> !ttg.memdesc<128x64xi8, #A_SMEM, #smem, mutable, 1x128x64>
+    %a_init = ttg.local_alloc : () -> !ttg.memdesc<128x64xi8, #A_SMEM, #smem, mutable>
+    %a_ = ttg.async_copy_global_to_local %a_ptr_init, %a_init mask %a_mask other %a_other : tensor<128x64x!tt.ptr<i8>, #AL> -> !ttg.memdesc<128x64xi8, #A_SMEM, #smem, mutable>
     %a_load_commit = ttg.async_commit_group %a_
 
-    %b_init = ttg.local_alloc : () -> !ttg.memdesc<64x256xbf16, #B_SMEM, #smem, mutable, 1x64x256>
-    %b_ = ttg.async_copy_global_to_local %b_ptr_init, %b_init mask %b_mask other %b_other : tensor<64x256x!tt.ptr<bf16>, #BL> -> !ttg.memdesc<64x256xbf16, #B_SMEM, #smem, mutable, 1x64x256>
+    %b_init = ttg.local_alloc : () -> !ttg.memdesc<64x256xbf16, #B_SMEM, #smem, mutable>
+    %b_ = ttg.async_copy_global_to_local %b_ptr_init, %b_init mask %b_mask other %b_other : tensor<64x256x!tt.ptr<bf16>, #BL> -> !ttg.memdesc<64x256xbf16, #B_SMEM, #smem, mutable>
     %b_load_commit = ttg.async_commit_group %b_
 
-    %loop:7 = scf.for %iv = %lb to %ub step %step iter_args(%a_ptr = %a_ptr_init, %b_ptr = %b_ptr_init, %a = %a_init, %b = %b_init, %prev_c = %c_init, %a_token = %a_load_commit, %b_token = %b_load_commit) -> (tensor<128x64x!tt.ptr<i8>, #AL>, tensor<64x256x!tt.ptr<bf16>, #BL>, !ttg.memdesc<128x64xi8, #A_SMEM, #smem, mutable, 1x128x64>, !ttg.memdesc<64x256xbf16, #B_SMEM, #smem, mutable, 1x64x256>, tensor<128x256xf32, #C>, !ttg.async.token, !ttg.async.token) {
-        %a_smem_tile = ttg.memdesc_subview %a[%c0_i32, %c0_i32] : !ttg.memdesc<128x64xi8, #A_SMEM, #smem, mutable, 1x128x64> -> !ttg.memdesc<128x64xi8, #A_SMEM, #smem, mutable, 1x128x64>
-        %b_smem_tile = ttg.memdesc_subview %b[%c0_i32, %c0_i32] : !ttg.memdesc<64x256xbf16, #B_SMEM, #smem, mutable, 1x64x256> -> !ttg.memdesc<64x256xbf16, #B_SMEM, #smem, mutable, 1x64x256>
+    %loop:7 = scf.for %iv = %lb to %ub step %step iter_args(%a_ptr = %a_ptr_init, %b_ptr = %b_ptr_init, %a = %a_init, %b = %b_init, %prev_c = %c_init, %a_token = %a_load_commit, %b_token = %b_load_commit) -> (tensor<128x64x!tt.ptr<i8>, #AL>, tensor<64x256x!tt.ptr<bf16>, #BL>, !ttg.memdesc<128x64xi8, #A_SMEM, #smem, mutable>, !ttg.memdesc<64x256xbf16, #B_SMEM, #smem, mutable>, tensor<128x256xf32, #C>, !ttg.async.token, !ttg.async.token) {
+        %a_smem_tile = ttg.memdesc_subview %a[%c0_i32, %c0_i32] : !ttg.memdesc<128x64xi8, #A_SMEM, #smem, mutable> -> !ttg.memdesc<128x64xi8, #A_SMEM, #smem, mutable>
+        %b_smem_tile = ttg.memdesc_subview %b[%c0_i32, %c0_i32] : !ttg.memdesc<64x256xbf16, #B_SMEM, #smem, mutable> -> !ttg.memdesc<64x256xbf16, #B_SMEM, #smem, mutable>
         %wait_token = ttg.async_wait %a_token, %b_token {num = 0 : i32}
 
-        %a_op_ = ttg.local_load %a_smem_tile token  %wait_token : !ttg.memdesc<128x64xi8, #A_SMEM, #smem, mutable, 1x128x64> -> tensor<128x64xi8, #A_OP>
+        %a_op_ = ttg.local_load %a_smem_tile token  %wait_token : !ttg.memdesc<128x64xi8, #A_SMEM, #smem, mutable> -> tensor<128x64xi8, #A_OP>
         %a_op = arith.sitofp %a_op_ :  tensor<128x64xi8, #A_OP> to tensor<128x64xbf16, #A_OP>
-        %c_ = ttng.warp_group_dot %a_op, %b_smem_tile, %prev_c  {inputPrecision = 0 : i32, isAsync = true} : tensor<128x64xbf16, #A_OP> * !ttg.memdesc<64x256xbf16, #B_SMEM, #smem, mutable, 1x64x256> -> tensor<128x256xf32, #C>
+        %c_ = ttng.warp_group_dot %a_op, %b_smem_tile, %prev_c  {inputPrecision = 0 : i32, isAsync = true} : tensor<128x64xbf16, #A_OP> * !ttg.memdesc<64x256xbf16, #B_SMEM, #smem, mutable> -> tensor<128x256xf32, #C>
 
         %c =  ttng.warp_group_dot_wait %c_ {pendings = 0 : i32}:  tensor<128x256xf32, #C>
 
@@ -80,14 +80,14 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
 
         %c_add_constant = arith.addf %c, %constant_init: tensor<128x256xf32, #C>
 
-        %next_a = ttg.local_alloc : () -> !ttg.memdesc<128x64xi8, #A_SMEM, #smem, mutable, 1x128x64>
-        %next_a_ = ttg.async_copy_global_to_local %next_a_ptr, %next_a mask %a_mask other %a_other : tensor<128x64x!tt.ptr<i8>, #AL> ->  !ttg.memdesc<128x64xi8, #A_SMEM, #smem, mutable, 1x128x64>
+        %next_a = ttg.local_alloc : () -> !ttg.memdesc<128x64xi8, #A_SMEM, #smem, mutable>
+        %next_a_ = ttg.async_copy_global_to_local %next_a_ptr, %next_a mask %a_mask other %a_other : tensor<128x64x!tt.ptr<i8>, #AL> ->  !ttg.memdesc<128x64xi8, #A_SMEM, #smem, mutable>
         %next_a_load_commit = ttg.async_commit_group %next_a_
-        %next_b = ttg.local_alloc : () -> !ttg.memdesc<64x256xbf16, #B_SMEM, #smem, mutable, 1x64x256>
-        %next_b_ = ttg.async_copy_global_to_local %next_b_ptr, %next_b mask %b_mask other %b_other : tensor<64x256x!tt.ptr<bf16>, #BL> -> !ttg.memdesc<64x256xbf16, #B_SMEM, #smem, mutable, 1x64x256>
+        %next_b = ttg.local_alloc : () -> !ttg.memdesc<64x256xbf16, #B_SMEM, #smem, mutable>
+        %next_b_ = ttg.async_copy_global_to_local %next_b_ptr, %next_b mask %b_mask other %b_other : tensor<64x256x!tt.ptr<bf16>, #BL> -> !ttg.memdesc<64x256xbf16, #B_SMEM, #smem, mutable>
         %next_b_load_commit = ttg.async_commit_group %next_b_
 
-        scf.yield %next_a_ptr, %next_b_ptr, %next_a, %next_b, %c_add_constant, %next_a_load_commit, %next_b_load_commit: tensor<128x64x!tt.ptr<i8>, #AL>, tensor<64x256x!tt.ptr<bf16>, #BL>, !ttg.memdesc<128x64xi8, #A_SMEM, #smem, mutable, 1x128x64>, !ttg.memdesc<64x256xbf16, #B_SMEM, #smem, mutable, 1x64x256>, tensor<128x256xf32, #C>, !ttg.async.token, !ttg.async.token
+        scf.yield %next_a_ptr, %next_b_ptr, %next_a, %next_b, %c_add_constant, %next_a_load_commit, %next_b_load_commit: tensor<128x64x!tt.ptr<i8>, #AL>, tensor<64x256x!tt.ptr<bf16>, #BL>, !ttg.memdesc<128x64xi8, #A_SMEM, #smem, mutable>, !ttg.memdesc<64x256xbf16, #B_SMEM, #smem, mutable>, tensor<128x256xf32, #C>, !ttg.async.token, !ttg.async.token
 
     }
     tt.return %loop#4 : tensor<128x256xf32, #C>
@@ -135,16 +135,16 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
     %b_off = arith.constant dense<4> : tensor<16x256xi32, #BL>
 
     %a_ = tt.load %a_ptr_init, %a_mask, %a_other : tensor<128x16x!tt.ptr<i8>, #AL>
-    %a_init = ttg.local_alloc %a_ : (tensor<128x16xi8, #AL>) -> !ttg.memdesc<128x16xi8, #A_SMEM, #smem, 1x128x16>
+    %a_init = ttg.local_alloc %a_ : (tensor<128x16xi8, #AL>) -> !ttg.memdesc<128x16xi8, #A_SMEM, #smem>
     %b_ = tt.load %b_ptr_init, %b_mask, %b_other : tensor<16x256x!tt.ptr<bf16>, #BL>
-    %b_init = ttg.local_alloc %b_ : (tensor<16x256xbf16, #BL>) -> !ttg.memdesc<16x256xbf16, #B_SMEM, #smem, 1x16x256>
+    %b_init = ttg.local_alloc %b_ : (tensor<16x256xbf16, #BL>) -> !ttg.memdesc<16x256xbf16, #B_SMEM, #smem>
 
-    %loop:5 = scf.for %iv = %lb to %ub step %step iter_args(%a_ptr = %a_ptr_init, %b_ptr = %b_ptr_init, %a = %a_init, %b = %b_init, %prev_c = %c_init) -> (tensor<128x16x!tt.ptr<i8>, #AL>, tensor<16x256x!tt.ptr<bf16>, #BL>, !ttg.memdesc<128x16xi8, #A_SMEM, #smem, 1x128x16>, !ttg.memdesc<16x256xbf16, #B_SMEM, #smem, 1x16x256>, tensor<128x256xf32, #C>) {
-        %a_smem_tile = ttg.memdesc_subview %a[%c0_i32, %c0_i32] : !ttg.memdesc<128x16xi8, #A_SMEM, #smem, 1x128x16> -> !ttg.memdesc<128x16xi8, #A_SMEM, #smem, 1x128x16>
-        %b_smem_tile = ttg.memdesc_subview %b[%c0_i32, %c0_i32] : !ttg.memdesc<16x256xbf16, #B_SMEM, #smem, 1x16x256> -> !ttg.memdesc<16x256xbf16, #B_SMEM, #smem, 1x16x256>
-        %a_op_ = ttg.local_load %a_smem_tile : !ttg.memdesc<128x16xi8, #A_SMEM, #smem, 1x128x16> -> tensor<128x16xi8, #A_OP>
+    %loop:5 = scf.for %iv = %lb to %ub step %step iter_args(%a_ptr = %a_ptr_init, %b_ptr = %b_ptr_init, %a = %a_init, %b = %b_init, %prev_c = %c_init) -> (tensor<128x16x!tt.ptr<i8>, #AL>, tensor<16x256x!tt.ptr<bf16>, #BL>, !ttg.memdesc<128x16xi8, #A_SMEM, #smem>, !ttg.memdesc<16x256xbf16, #B_SMEM, #smem>, tensor<128x256xf32, #C>) {
+        %a_smem_tile = ttg.memdesc_subview %a[%c0_i32, %c0_i32] : !ttg.memdesc<128x16xi8, #A_SMEM, #smem> -> !ttg.memdesc<128x16xi8, #A_SMEM, #smem>
+        %b_smem_tile = ttg.memdesc_subview %b[%c0_i32, %c0_i32] : !ttg.memdesc<16x256xbf16, #B_SMEM, #smem> -> !ttg.memdesc<16x256xbf16, #B_SMEM, #smem>
+        %a_op_ = ttg.local_load %a_smem_tile : !ttg.memdesc<128x16xi8, #A_SMEM, #smem> -> tensor<128x16xi8, #A_OP>
         %a_op = arith.sitofp %a_op_ :  tensor<128x16xi8, #A_OP> to tensor<128x16xbf16, #A_OP>
-        %c_ = ttng.warp_group_dot %a_op, %b_smem_tile, %prev_c  {inputPrecision = 0 : i32, isAsync = true} : tensor<128x16xbf16, #A_OP> * !ttg.memdesc<16x256xbf16, #B_SMEM, #smem, 1x16x256> -> tensor<128x256xf32, #C>
+        %c_ = ttng.warp_group_dot %a_op, %b_smem_tile, %prev_c  {inputPrecision = 0 : i32, isAsync = true} : tensor<128x16xbf16, #A_OP> * !ttg.memdesc<16x256xbf16, #B_SMEM, #smem> -> tensor<128x256xf32, #C>
 
         %c =  ttng.warp_group_dot_wait %c_ {pendings = 0 : i32}:  tensor<128x256xf32, #C>
 
@@ -152,11 +152,11 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
         %next_b_ptr = tt.addptr %b_ptr, %b_off: tensor<16x256x!tt.ptr<bf16>, #BL>, tensor<16x256xi32, #BL>
 
         %next_a_ = tt.load %next_a_ptr, %a_mask, %a_other : tensor<128x16x!tt.ptr<i8>, #AL>
-        %next_a = ttg.local_alloc %next_a_ : (tensor<128x16xi8, #AL>) -> !ttg.memdesc<128x16xi8, #A_SMEM, #smem, 1x128x16>
+        %next_a = ttg.local_alloc %next_a_ : (tensor<128x16xi8, #AL>) -> !ttg.memdesc<128x16xi8, #A_SMEM, #smem>
         %next_b_ = tt.load %next_b_ptr, %b_mask, %b_other : tensor<16x256x!tt.ptr<bf16>, #BL>
-        %next_b = ttg.local_alloc %next_b_ : (tensor<16x256xbf16, #BL>) -> !ttg.memdesc<16x256xbf16, #B_SMEM, #smem, 1x16x256>
+        %next_b = ttg.local_alloc %next_b_ : (tensor<16x256xbf16, #BL>) -> !ttg.memdesc<16x256xbf16, #B_SMEM, #smem>
 
-        scf.yield %next_a_ptr, %next_b_ptr, %next_a, %next_b, %c: tensor<128x16x!tt.ptr<i8>, #AL>, tensor<16x256x!tt.ptr<bf16>, #BL>, !ttg.memdesc<128x16xi8, #A_SMEM, #smem, 1x128x16>, !ttg.memdesc<16x256xbf16, #B_SMEM, #smem, 1x16x256>, tensor<128x256xf32, #C>
+        scf.yield %next_a_ptr, %next_b_ptr, %next_a, %next_b, %c: tensor<128x16x!tt.ptr<i8>, #AL>, tensor<16x256x!tt.ptr<bf16>, #BL>, !ttg.memdesc<128x16xi8, #A_SMEM, #smem>, !ttg.memdesc<16x256xbf16, #B_SMEM, #smem>, tensor<128x256xf32, #C>
 
     }
     tt.return %loop#4 : tensor<128x256xf32, #C>
@@ -204,16 +204,16 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
     %b_off = arith.constant dense<4> : tensor<8x16x256xi32, #BL>
 
     %a_ = tt.load %a_ptr_init, %a_mask, %a_other : tensor<8x128x16x!tt.ptr<i8>, #AL>
-    %a_init = ttg.local_alloc %a_ : (tensor<8x128x16xi8, #AL>) -> !ttg.memdesc<8x128x16xi8, #A_SMEM, #smem, 1x8x128x16>
+    %a_init = ttg.local_alloc %a_ : (tensor<8x128x16xi8, #AL>) -> !ttg.memdesc<8x128x16xi8, #A_SMEM, #smem>
     %b_ = tt.load %b_ptr_init, %b_mask, %b_other : tensor<8x16x256x!tt.ptr<bf16>, #BL>
-    %b_init = ttg.local_alloc %b_ : (tensor<8x16x256xbf16, #BL>) -> !ttg.memdesc<8x16x256xbf16, #B_SMEM, #smem, 1x8x16x256>
+    %b_init = ttg.local_alloc %b_ : (tensor<8x16x256xbf16, #BL>) -> !ttg.memdesc<8x16x256xbf16, #B_SMEM, #smem>
 
-    %loop:5 = scf.for %iv = %lb to %ub step %step iter_args(%a_ptr = %a_ptr_init, %b_ptr = %b_ptr_init, %a = %a_init, %b = %b_init, %prev_c = %c_init) -> (tensor<8x128x16x!tt.ptr<i8>, #AL>, tensor<8x16x256x!tt.ptr<bf16>, #BL>, !ttg.memdesc<8x128x16xi8, #A_SMEM, #smem, 1x8x128x16>, !ttg.memdesc<8x16x256xbf16, #B_SMEM, #smem, 1x8x16x256>, tensor<8x128x256xf32, #C>) {
-        %a_smem_tile = ttg.memdesc_subview %a[%c0_i32, %c0_i32, %c0_i32] : !ttg.memdesc<8x128x16xi8, #A_SMEM, #smem, 1x8x128x16> -> !ttg.memdesc<8x128x16xi8, #A_SMEM, #smem, 1x8x128x16>
-        %b_smem_tile = ttg.memdesc_subview %b[%c0_i32, %c0_i32, %c0_i32] : !ttg.memdesc<8x16x256xbf16, #B_SMEM, #smem, 1x8x16x256> -> !ttg.memdesc<8x16x256xbf16, #B_SMEM, #smem, 1x8x16x256>
-        %a_op_ = ttg.local_load %a_smem_tile : !ttg.memdesc<8x128x16xi8, #A_SMEM, #smem, 1x8x128x16> -> tensor<8x128x16xi8, #A_OP>
+    %loop:5 = scf.for %iv = %lb to %ub step %step iter_args(%a_ptr = %a_ptr_init, %b_ptr = %b_ptr_init, %a = %a_init, %b = %b_init, %prev_c = %c_init) -> (tensor<8x128x16x!tt.ptr<i8>, #AL>, tensor<8x16x256x!tt.ptr<bf16>, #BL>, !ttg.memdesc<8x128x16xi8, #A_SMEM, #smem>, !ttg.memdesc<8x16x256xbf16, #B_SMEM, #smem>, tensor<8x128x256xf32, #C>) {
+        %a_smem_tile = ttg.memdesc_subview %a[%c0_i32, %c0_i32, %c0_i32] : !ttg.memdesc<8x128x16xi8, #A_SMEM, #smem> -> !ttg.memdesc<8x128x16xi8, #A_SMEM, #smem>
+        %b_smem_tile = ttg.memdesc_subview %b[%c0_i32, %c0_i32, %c0_i32] : !ttg.memdesc<8x16x256xbf16, #B_SMEM, #smem> -> !ttg.memdesc<8x16x256xbf16, #B_SMEM, #smem>
+        %a_op_ = ttg.local_load %a_smem_tile : !ttg.memdesc<8x128x16xi8, #A_SMEM, #smem> -> tensor<8x128x16xi8, #A_OP>
         %a_op = arith.sitofp %a_op_ :  tensor<8x128x16xi8, #A_OP> to tensor<8x128x16xbf16, #A_OP>
-        %c_ = ttng.warp_group_dot %a_op, %b_smem_tile, %prev_c  {inputPrecision = 0 : i32, isAsync = true} : tensor<8x128x16xbf16, #A_OP> * !ttg.memdesc<8x16x256xbf16, #B_SMEM, #smem, 1x8x16x256> -> tensor<8x128x256xf32, #C>
+        %c_ = ttng.warp_group_dot %a_op, %b_smem_tile, %prev_c  {inputPrecision = 0 : i32, isAsync = true} : tensor<8x128x16xbf16, #A_OP> * !ttg.memdesc<8x16x256xbf16, #B_SMEM, #smem> -> tensor<8x128x256xf32, #C>
 
         %c =  ttng.warp_group_dot_wait %c_ {pendings = 0 : i32}:  tensor<8x128x256xf32, #C>
 
@@ -221,11 +221,11 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
         %next_b_ptr = tt.addptr %b_ptr, %b_off: tensor<8x16x256x!tt.ptr<bf16>, #BL>, tensor<8x16x256xi32, #BL>
 
         %next_a_ = tt.load %next_a_ptr, %a_mask, %a_other : tensor<8x128x16x!tt.ptr<i8>, #AL>
-        %next_a = ttg.local_alloc %next_a_ : (tensor<8x128x16xi8, #AL>) -> !ttg.memdesc<8x128x16xi8, #A_SMEM, #smem, 1x8x128x16>
+        %next_a = ttg.local_alloc %next_a_ : (tensor<8x128x16xi8, #AL>) -> !ttg.memdesc<8x128x16xi8, #A_SMEM, #smem>
         %next_b_ = tt.load %next_b_ptr, %b_mask, %b_other : tensor<8x16x256x!tt.ptr<bf16>, #BL>
-        %next_b = ttg.local_alloc %next_b_ : (tensor<8x16x256xbf16, #BL>) -> !ttg.memdesc<8x16x256xbf16, #B_SMEM, #smem, 1x8x16x256>
+        %next_b = ttg.local_alloc %next_b_ : (tensor<8x16x256xbf16, #BL>) -> !ttg.memdesc<8x16x256xbf16, #B_SMEM, #smem>
 
-        scf.yield %next_a_ptr, %next_b_ptr, %next_a, %next_b, %c: tensor<8x128x16x!tt.ptr<i8>, #AL>, tensor<8x16x256x!tt.ptr<bf16>, #BL>, !ttg.memdesc<8x128x16xi8, #A_SMEM, #smem, 1x8x128x16>, !ttg.memdesc<8x16x256xbf16, #B_SMEM, #smem, 1x8x16x256>, tensor<8x128x256xf32, #C>
+        scf.yield %next_a_ptr, %next_b_ptr, %next_a, %next_b, %c: tensor<8x128x16x!tt.ptr<i8>, #AL>, tensor<8x16x256x!tt.ptr<bf16>, #BL>, !ttg.memdesc<8x128x16xi8, #A_SMEM, #smem>, !ttg.memdesc<8x16x256xbf16, #B_SMEM, #smem>, tensor<8x128x256xf32, #C>
 
     }
     tt.return %loop#4 : tensor<8x128x256xf32, #C>
@@ -288,16 +288,16 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
     %b_off = arith.constant dense<4> : tensor<8x64x256xi32, #BL>
 
     %a_ = tt.load %a_ptr_init, %a_mask, %a_other : tensor<8x128x64x!tt.ptr<i8>, #AL>
-    %a_init = ttg.local_alloc %a_ : (tensor<8x128x64xi8, #AL>) -> !ttg.memdesc<8x128x64xi8, #A_SMEM, #smem, 1x8x128x64>
+    %a_init = ttg.local_alloc %a_ : (tensor<8x128x64xi8, #AL>) -> !ttg.memdesc<8x128x64xi8, #A_SMEM, #smem>
     %b_ = tt.load %b_ptr_init, %b_mask, %b_other : tensor<8x64x256x!tt.ptr<bf16>, #BL>
-    %b_init = ttg.local_alloc %b_ : (tensor<8x64x256xbf16, #BL>) -> !ttg.memdesc<8x64x256xbf16, #B_SMEM, #smem, 1x8x64x256>
+    %b_init = ttg.local_alloc %b_ : (tensor<8x64x256xbf16, #BL>) -> !ttg.memdesc<8x64x256xbf16, #B_SMEM, #smem>
 
-    %loop:5 = scf.for %iv = %lb to %ub step %step iter_args(%a_ptr = %a_ptr_init, %b_ptr = %b_ptr_init, %a = %a_init, %b = %b_init, %prev_c = %c_init) -> (tensor<8x128x64x!tt.ptr<i8>, #AL>, tensor<8x64x256x!tt.ptr<bf16>, #BL>, !ttg.memdesc<8x128x64xi8, #A_SMEM, #smem, 1x8x128x64>, !ttg.memdesc<8x64x256xbf16, #B_SMEM, #smem, 1x8x64x256>, tensor<8x128x256xf32, #C>) {
-        %a_smem_tile = ttg.memdesc_subview %a[%c0_i32, %c0_i32, %c0_i32] : !ttg.memdesc<8x128x64xi8, #A_SMEM, #smem, 1x8x128x64> -> !ttg.memdesc<8x128x64xi8, #A_SMEM, #smem, 1x8x128x64>
-        %b_smem_tile = ttg.memdesc_subview %b[%c0_i32, %c0_i32, %c0_i32] : !ttg.memdesc<8x64x256xbf16, #B_SMEM, #smem, 1x8x64x256> -> !ttg.memdesc<8x64x256xbf16, #B_SMEM, #smem, 1x8x64x256>
-        %a_op_ = ttg.local_load %a_smem_tile : !ttg.memdesc<8x128x64xi8, #A_SMEM, #smem, 1x8x128x64> -> tensor<8x128x64xi8, #A_OP>
+    %loop:5 = scf.for %iv = %lb to %ub step %step iter_args(%a_ptr = %a_ptr_init, %b_ptr = %b_ptr_init, %a = %a_init, %b = %b_init, %prev_c = %c_init) -> (tensor<8x128x64x!tt.ptr<i8>, #AL>, tensor<8x64x256x!tt.ptr<bf16>, #BL>, !ttg.memdesc<8x128x64xi8, #A_SMEM, #smem>, !ttg.memdesc<8x64x256xbf16, #B_SMEM, #smem>, tensor<8x128x256xf32, #C>) {
+        %a_smem_tile = ttg.memdesc_subview %a[%c0_i32, %c0_i32, %c0_i32] : !ttg.memdesc<8x128x64xi8, #A_SMEM, #smem> -> !ttg.memdesc<8x128x64xi8, #A_SMEM, #smem>
+        %b_smem_tile = ttg.memdesc_subview %b[%c0_i32, %c0_i32, %c0_i32] : !ttg.memdesc<8x64x256xbf16, #B_SMEM, #smem> -> !ttg.memdesc<8x64x256xbf16, #B_SMEM, #smem>
+        %a_op_ = ttg.local_load %a_smem_tile : !ttg.memdesc<8x128x64xi8, #A_SMEM, #smem> -> tensor<8x128x64xi8, #A_OP>
         %a_op = arith.sitofp %a_op_ :  tensor<8x128x64xi8, #A_OP> to tensor<8x128x64xbf16, #A_OP>
-        %c_ = ttng.warp_group_dot %a_op, %b_smem_tile, %prev_c  {inputPrecision = 0 : i32, isAsync = true} : tensor<8x128x64xbf16, #A_OP> * !ttg.memdesc<8x64x256xbf16, #B_SMEM, #smem, 1x8x64x256> -> tensor<8x128x256xf32, #C>
+        %c_ = ttng.warp_group_dot %a_op, %b_smem_tile, %prev_c  {inputPrecision = 0 : i32, isAsync = true} : tensor<8x128x64xbf16, #A_OP> * !ttg.memdesc<8x64x256xbf16, #B_SMEM, #smem> -> tensor<8x128x256xf32, #C>
 
         %c =  ttng.warp_group_dot_wait %c_ {pendings = 0 : i32}:  tensor<8x128x256xf32, #C>
 
@@ -305,11 +305,11 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
         %next_b_ptr = tt.addptr %b_ptr, %b_off: tensor<8x64x256x!tt.ptr<bf16>, #BL>, tensor<8x64x256xi32, #BL>
 
         %next_a_ = tt.load %next_a_ptr, %a_mask, %a_other : tensor<8x128x64x!tt.ptr<i8>, #AL>
-        %next_a = ttg.local_alloc %next_a_ : (tensor<8x128x64xi8, #AL>) -> !ttg.memdesc<8x128x64xi8, #A_SMEM, #smem, 1x8x128x64>
+        %next_a = ttg.local_alloc %next_a_ : (tensor<8x128x64xi8, #AL>) -> !ttg.memdesc<8x128x64xi8, #A_SMEM, #smem>
         %next_b_ = tt.load %next_b_ptr, %b_mask, %b_other : tensor<8x64x256x!tt.ptr<bf16>, #BL>
-        %next_b = ttg.local_alloc %next_b_ : (tensor<8x64x256xbf16, #BL>) -> !ttg.memdesc<8x64x256xbf16, #B_SMEM, #smem, 1x8x64x256>
+        %next_b = ttg.local_alloc %next_b_ : (tensor<8x64x256xbf16, #BL>) -> !ttg.memdesc<8x64x256xbf16, #B_SMEM, #smem>
 
-        scf.yield %next_a_ptr, %next_b_ptr, %next_a, %next_b, %c: tensor<8x128x64x!tt.ptr<i8>, #AL>, tensor<8x64x256x!tt.ptr<bf16>, #BL>, !ttg.memdesc<8x128x64xi8, #A_SMEM, #smem, 1x8x128x64>, !ttg.memdesc<8x64x256xbf16, #B_SMEM, #smem, 1x8x64x256>, tensor<8x128x256xf32, #C>
+        scf.yield %next_a_ptr, %next_b_ptr, %next_a, %next_b, %c: tensor<8x128x64x!tt.ptr<i8>, #AL>, tensor<8x64x256x!tt.ptr<bf16>, #BL>, !ttg.memdesc<8x128x64xi8, #A_SMEM, #smem>, !ttg.memdesc<8x64x256xbf16, #B_SMEM, #smem>, tensor<8x128x256xf32, #C>
 
     }
     tt.return %loop#4 : tensor<8x128x256xf32, #C>
@@ -374,16 +374,16 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
     %b_off = arith.constant dense<4> : tensor<128x256xi32, #BL>
 
     %a_ = tt.load %a_ptr_init, %a_mask, %a_other : tensor<128x128x!tt.ptr<i8>, #AL>
-    %a_init = ttg.local_alloc %a_ : (tensor<128x128xi8, #AL>) -> !ttg.memdesc<128x128xi8, #A_SMEM, #smem, 1x128x128>
+    %a_init = ttg.local_alloc %a_ : (tensor<128x128xi8, #AL>) -> !ttg.memdesc<128x128xi8, #A_SMEM, #smem>
     %b_ = tt.load %b_ptr_init, %b_mask, %b_other : tensor<128x256x!tt.ptr<f8E5M2>, #BL>
-    %b_init = ttg.local_alloc %b_ : (tensor<128x256xf8E5M2, #BL>) -> !ttg.memdesc<128x256xf8E5M2, #B_SMEM, #smem, 1x128x256>
+    %b_init = ttg.local_alloc %b_ : (tensor<128x256xf8E5M2, #BL>) -> !ttg.memdesc<128x256xf8E5M2, #B_SMEM, #smem>
 
-    %loop:5 = scf.for %iv = %lb to %ub step %step iter_args(%a_ptr = %a_ptr_init, %b_ptr = %b_ptr_init, %a = %a_init, %b = %b_init, %prev_c = %c_init) -> (tensor<128x128x!tt.ptr<i8>, #AL>, tensor<128x256x!tt.ptr<f8E5M2>, #BL>, !ttg.memdesc<128x128xi8, #A_SMEM, #smem, 1x128x128>, !ttg.memdesc<128x256xf8E5M2, #B_SMEM, #smem, 1x128x256>, tensor<128x256xf32, #C>) {
-        %a_smem_tile = ttg.memdesc_subview %a[%c0_i32, %c0_i32] : !ttg.memdesc<128x128xi8, #A_SMEM, #smem, 1x128x128> -> !ttg.memdesc<128x128xi8, #A_SMEM, #smem, 1x128x128>
-        %b_smem_tile = ttg.memdesc_subview %b[%c0_i32, %c0_i32] : !ttg.memdesc<128x256xf8E5M2, #B_SMEM, #smem, 1x128x256> -> !ttg.memdesc<128x256xf8E5M2, #B_SMEM, #smem, 1x128x256>
-        %a_op_ = ttg.local_load %a_smem_tile : !ttg.memdesc<128x128xi8, #A_SMEM, #smem, 1x128x128> -> tensor<128x128xi8, #A_OP>
+    %loop:5 = scf.for %iv = %lb to %ub step %step iter_args(%a_ptr = %a_ptr_init, %b_ptr = %b_ptr_init, %a = %a_init, %b = %b_init, %prev_c = %c_init) -> (tensor<128x128x!tt.ptr<i8>, #AL>, tensor<128x256x!tt.ptr<f8E5M2>, #BL>, !ttg.memdesc<128x128xi8, #A_SMEM, #smem>, !ttg.memdesc<128x256xf8E5M2, #B_SMEM, #smem>, tensor<128x256xf32, #C>) {
+        %a_smem_tile = ttg.memdesc_subview %a[%c0_i32, %c0_i32] : !ttg.memdesc<128x128xi8, #A_SMEM, #smem> -> !ttg.memdesc<128x128xi8, #A_SMEM, #smem>
+        %b_smem_tile = ttg.memdesc_subview %b[%c0_i32, %c0_i32] : !ttg.memdesc<128x256xf8E5M2, #B_SMEM, #smem> -> !ttg.memdesc<128x256xf8E5M2, #B_SMEM, #smem>
+        %a_op_ = ttg.local_load %a_smem_tile : !ttg.memdesc<128x128xi8, #A_SMEM, #smem> -> tensor<128x128xi8, #A_OP>
         %a_op = arith.sitofp %a_op_ :  tensor<128x128xi8, #A_OP> to tensor<128x128xf8E5M2, #A_OP>
-        %c_ = ttng.warp_group_dot %a_op, %b_smem_tile, %prev_c  {inputPrecision = 0 : i32, maxNumImpreciseAcc = 129 : i32, isAsync = true} : tensor<128x128xf8E5M2, #A_OP> * !ttg.memdesc<128x256xf8E5M2, #B_SMEM, #smem, 1x128x256> -> tensor<128x256xf32, #C>
+        %c_ = ttng.warp_group_dot %a_op, %b_smem_tile, %prev_c  {inputPrecision = 0 : i32, maxNumImpreciseAcc = 129 : i32, isAsync = true} : tensor<128x128xf8E5M2, #A_OP> * !ttg.memdesc<128x256xf8E5M2, #B_SMEM, #smem> -> tensor<128x256xf32, #C>
 
         %c =  ttng.warp_group_dot_wait %c_ {pendings = 0 : i32}:  tensor<128x256xf32, #C>
 
@@ -393,11 +393,11 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
         %c_add_constant = arith.addf %c, %constant_init: tensor<128x256xf32, #C>
 
         %next_a_ = tt.load %next_a_ptr, %a_mask, %a_other : tensor<128x128x!tt.ptr<i8>, #AL>
-        %next_a = ttg.local_alloc %next_a_ : (tensor<128x128xi8, #AL>) -> !ttg.memdesc<128x128xi8, #A_SMEM, #smem, 1x128x128>
+        %next_a = ttg.local_alloc %next_a_ : (tensor<128x128xi8, #AL>) -> !ttg.memdesc<128x128xi8, #A_SMEM, #smem>
         %next_b_ = tt.load %next_b_ptr, %b_mask, %b_other : tensor<128x256x!tt.ptr<f8E5M2>, #BL>
-        %next_b = ttg.local_alloc %next_b_ : (tensor<128x256xf8E5M2, #BL>) -> !ttg.memdesc<128x256xf8E5M2, #B_SMEM, #smem, 1x128x256>
+        %next_b = ttg.local_alloc %next_b_ : (tensor<128x256xf8E5M2, #BL>) -> !ttg.memdesc<128x256xf8E5M2, #B_SMEM, #smem>
 
-        scf.yield %next_a_ptr, %next_b_ptr, %next_a, %next_b, %c_add_constant: tensor<128x128x!tt.ptr<i8>, #AL>, tensor<128x256x!tt.ptr<f8E5M2>, #BL>, !ttg.memdesc<128x128xi8, #A_SMEM, #smem, 1x128x128>, !ttg.memdesc<128x256xf8E5M2, #B_SMEM, #smem, 1x128x256>, tensor<128x256xf32, #C>
+        scf.yield %next_a_ptr, %next_b_ptr, %next_a, %next_b, %c_add_constant: tensor<128x128x!tt.ptr<i8>, #AL>, tensor<128x256x!tt.ptr<f8E5M2>, #BL>, !ttg.memdesc<128x128xi8, #A_SMEM, #smem>, !ttg.memdesc<128x256xf8E5M2, #B_SMEM, #smem>, tensor<128x256xf32, #C>
 
     }
     tt.return %loop#4 : tensor<128x256xf32, #C>
@@ -461,16 +461,16 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
     %b_off = arith.constant dense<4> : tensor<128x256xi32, #BL>
 
     %a_ = tt.load %a_ptr_init, %a_mask, %a_other : tensor<128x128x!tt.ptr<i8>, #AL>
-    %a_init = ttg.local_alloc %a_ : (tensor<128x128xi8, #AL>) -> !ttg.memdesc<128x128xi8, #A_SMEM, #smem, 1x128x128>
+    %a_init = ttg.local_alloc %a_ : (tensor<128x128xi8, #AL>) -> !ttg.memdesc<128x128xi8, #A_SMEM, #smem>
     %b_ = tt.load %b_ptr_init, %b_mask, %b_other : tensor<128x256x!tt.ptr<f8E5M2>, #BL>
-    %b_init = ttg.local_alloc %b_ : (tensor<128x256xf8E5M2, #BL>) -> !ttg.memdesc<128x256xf8E5M2, #B_SMEM, #smem, 1x128x256>
+    %b_init = ttg.local_alloc %b_ : (tensor<128x256xf8E5M2, #BL>) -> !ttg.memdesc<128x256xf8E5M2, #B_SMEM, #smem>
 
-    %loop:5 = scf.for %iv = %lb to %ub step %step iter_args(%a_ptr = %a_ptr_init, %b_ptr = %b_ptr_init, %a = %a_init, %b = %b_init, %prev_c = %c_init) -> (tensor<128x128x!tt.ptr<i8>, #AL>, tensor<128x256x!tt.ptr<f8E5M2>, #BL>, !ttg.memdesc<128x128xi8, #A_SMEM, #smem, 1x128x128>, !ttg.memdesc<128x256xf8E5M2, #B_SMEM, #smem, 1x128x256>, tensor<128x256xf32, #C>) {
-        %a_smem_tile = ttg.memdesc_subview %a[%c0_i32, %c0_i32] : !ttg.memdesc<128x128xi8, #A_SMEM, #smem, 1x128x128> -> !ttg.memdesc<128x128xi8, #A_SMEM, #smem, 1x128x128>
-        %b_smem_tile = ttg.memdesc_subview %b[%c0_i32, %c0_i32] : !ttg.memdesc<128x256xf8E5M2, #B_SMEM, #smem, 1x128x256> -> !ttg.memdesc<128x256xf8E5M2, #B_SMEM, #smem, 1x128x256>
-        %a_op_ = ttg.local_load %a_smem_tile : !ttg.memdesc<128x128xi8, #A_SMEM, #smem, 1x128x128> -> tensor<128x128xi8, #A_OP>
+    %loop:5 = scf.for %iv = %lb to %ub step %step iter_args(%a_ptr = %a_ptr_init, %b_ptr = %b_ptr_init, %a = %a_init, %b = %b_init, %prev_c = %c_init) -> (tensor<128x128x!tt.ptr<i8>, #AL>, tensor<128x256x!tt.ptr<f8E5M2>, #BL>, !ttg.memdesc<128x128xi8, #A_SMEM, #smem>, !ttg.memdesc<128x256xf8E5M2, #B_SMEM, #smem>, tensor<128x256xf32, #C>) {
+        %a_smem_tile = ttg.memdesc_subview %a[%c0_i32, %c0_i32] : !ttg.memdesc<128x128xi8, #A_SMEM, #smem> -> !ttg.memdesc<128x128xi8, #A_SMEM, #smem>
+        %b_smem_tile = ttg.memdesc_subview %b[%c0_i32, %c0_i32] : !ttg.memdesc<128x256xf8E5M2, #B_SMEM, #smem> -> !ttg.memdesc<128x256xf8E5M2, #B_SMEM, #smem>
+        %a_op_ = ttg.local_load %a_smem_tile : !ttg.memdesc<128x128xi8, #A_SMEM, #smem> -> tensor<128x128xi8, #A_OP>
         %a_op = arith.sitofp %a_op_ :  tensor<128x128xi8, #A_OP> to tensor<128x128xf8E5M2, #A_OP>
-        %c_ = ttng.warp_group_dot %a_op, %b_smem_tile, %prev_c  {inputPrecision = 0 : i32, maxNumImpreciseAcc = 128 : i32, isAsync = true} : tensor<128x128xf8E5M2, #A_OP> * !ttg.memdesc<128x256xf8E5M2, #B_SMEM, #smem, 1x128x256> -> tensor<128x256xf32, #C>
+        %c_ = ttng.warp_group_dot %a_op, %b_smem_tile, %prev_c  {inputPrecision = 0 : i32, maxNumImpreciseAcc = 128 : i32, isAsync = true} : tensor<128x128xf8E5M2, #A_OP> * !ttg.memdesc<128x256xf8E5M2, #B_SMEM, #smem> -> tensor<128x256xf32, #C>
 
         %c =  ttng.warp_group_dot_wait %c_ {pendings = 0 : i32}:  tensor<128x256xf32, #C>
 
@@ -480,11 +480,11 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
         %c_add_constant = arith.addf %c, %constant_init: tensor<128x256xf32, #C>
 
         %next_a_ = tt.load %next_a_ptr, %a_mask, %a_other : tensor<128x128x!tt.ptr<i8>, #AL>
-        %next_a = ttg.local_alloc %next_a_ : (tensor<128x128xi8, #AL>) -> !ttg.memdesc<128x128xi8, #A_SMEM, #smem, 1x128x128>
+        %next_a = ttg.local_alloc %next_a_ : (tensor<128x128xi8, #AL>) -> !ttg.memdesc<128x128xi8, #A_SMEM, #smem>
         %next_b_ = tt.load %next_b_ptr, %b_mask, %b_other : tensor<128x256x!tt.ptr<f8E5M2>, #BL>
-        %next_b = ttg.local_alloc %next_b_ : (tensor<128x256xf8E5M2, #BL>) -> !ttg.memdesc<128x256xf8E5M2, #B_SMEM, #smem, 1x128x256>
+        %next_b = ttg.local_alloc %next_b_ : (tensor<128x256xf8E5M2, #BL>) -> !ttg.memdesc<128x256xf8E5M2, #B_SMEM, #smem>
 
-        scf.yield %next_a_ptr, %next_b_ptr, %next_a, %next_b, %c_add_constant: tensor<128x128x!tt.ptr<i8>, #AL>, tensor<128x256x!tt.ptr<f8E5M2>, #BL>, !ttg.memdesc<128x128xi8, #A_SMEM, #smem, 1x128x128>, !ttg.memdesc<128x256xf8E5M2, #B_SMEM, #smem, 1x128x256>, tensor<128x256xf32, #C>
+        scf.yield %next_a_ptr, %next_b_ptr, %next_a, %next_b, %c_add_constant: tensor<128x128x!tt.ptr<i8>, #AL>, tensor<128x256x!tt.ptr<f8E5M2>, #BL>, !ttg.memdesc<128x128xi8, #A_SMEM, #smem>, !ttg.memdesc<128x256xf8E5M2, #B_SMEM, #smem>, tensor<128x256xf32, #C>
 
     }
     tt.return %loop#4 : tensor<128x256xf32, #C>
@@ -549,16 +549,16 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
     %b_off = arith.constant dense<4> : tensor<128x256xi32, #BL>
 
     %a_ = tt.load %a_ptr_init, %a_mask, %a_other : tensor<128x128x!tt.ptr<i8>, #AL>
-    %a_init = ttg.local_alloc %a_ : (tensor<128x128xi8, #AL>) -> !ttg.memdesc<128x128xi8, #A_SMEM, #smem, 1x128x128>
+    %a_init = ttg.local_alloc %a_ : (tensor<128x128xi8, #AL>) -> !ttg.memdesc<128x128xi8, #A_SMEM, #smem>
     %b_ = tt.load %b_ptr_init, %b_mask, %b_other : tensor<128x256x!tt.ptr<f8E5M2>, #BL>
-    %b_init = ttg.local_alloc %b_ : (tensor<128x256xf8E5M2, #BL>) -> !ttg.memdesc<128x256xf8E5M2, #B_SMEM, #smem, 1x128x256>
+    %b_init = ttg.local_alloc %b_ : (tensor<128x256xf8E5M2, #BL>) -> !ttg.memdesc<128x256xf8E5M2, #B_SMEM, #smem>
 
-    %loop:5 = scf.for %iv = %lb to %ub step %step iter_args(%a_ptr = %a_ptr_init, %b_ptr = %b_ptr_init, %a = %a_init, %b = %b_init, %prev_c = %c_init) -> (tensor<128x128x!tt.ptr<i8>, #AL>, tensor<128x256x!tt.ptr<f8E5M2>, #BL>, !ttg.memdesc<128x128xi8, #A_SMEM, #smem, 1x128x128>, !ttg.memdesc<128x256xf8E5M2, #B_SMEM, #smem, 1x128x256>, tensor<128x256xf32, #C>) {
-        %a_smem_tile = ttg.memdesc_subview %a[%c0_i32, %c0_i32] : !ttg.memdesc<128x128xi8, #A_SMEM, #smem, 1x128x128> -> !ttg.memdesc<128x128xi8, #A_SMEM, #smem, 1x128x128>
-        %b_smem_tile = ttg.memdesc_subview %b[%c0_i32, %c0_i32] : !ttg.memdesc<128x256xf8E5M2, #B_SMEM, #smem, 1x128x256> -> !ttg.memdesc<128x256xf8E5M2, #B_SMEM, #smem, 1x128x256>
-        %a_op_ = ttg.local_load %a_smem_tile : !ttg.memdesc<128x128xi8, #A_SMEM, #smem, 1x128x128> -> tensor<128x128xi8, #A_OP>
+    %loop:5 = scf.for %iv = %lb to %ub step %step iter_args(%a_ptr = %a_ptr_init, %b_ptr = %b_ptr_init, %a = %a_init, %b = %b_init, %prev_c = %c_init) -> (tensor<128x128x!tt.ptr<i8>, #AL>, tensor<128x256x!tt.ptr<f8E5M2>, #BL>, !ttg.memdesc<128x128xi8, #A_SMEM, #smem>, !ttg.memdesc<128x256xf8E5M2, #B_SMEM, #smem>, tensor<128x256xf32, #C>) {
+        %a_smem_tile = ttg.memdesc_subview %a[%c0_i32, %c0_i32] : !ttg.memdesc<128x128xi8, #A_SMEM, #smem> -> !ttg.memdesc<128x128xi8, #A_SMEM, #smem>
+        %b_smem_tile = ttg.memdesc_subview %b[%c0_i32, %c0_i32] : !ttg.memdesc<128x256xf8E5M2, #B_SMEM, #smem> -> !ttg.memdesc<128x256xf8E5M2, #B_SMEM, #smem>
+        %a_op_ = ttg.local_load %a_smem_tile : !ttg.memdesc<128x128xi8, #A_SMEM, #smem> -> tensor<128x128xi8, #A_OP>
         %a_op = arith.sitofp %a_op_ :  tensor<128x128xi8, #A_OP> to tensor<128x128xf8E5M2, #A_OP>
-        %c_ = ttng.warp_group_dot %a_op, %b_smem_tile, %prev_c  {inputPrecision = 0 : i32, maxNumImpreciseAcc = 96 : i32, isAsync = true} : tensor<128x128xf8E5M2, #A_OP> * !ttg.memdesc<128x256xf8E5M2, #B_SMEM, #smem, 1x128x256> -> tensor<128x256xf32, #C>
+        %c_ = ttng.warp_group_dot %a_op, %b_smem_tile, %prev_c  {inputPrecision = 0 : i32, maxNumImpreciseAcc = 96 : i32, isAsync = true} : tensor<128x128xf8E5M2, #A_OP> * !ttg.memdesc<128x256xf8E5M2, #B_SMEM, #smem> -> tensor<128x256xf32, #C>
 
         %c =  ttng.warp_group_dot_wait %c_ {pendings = 0 : i32}:  tensor<128x256xf32, #C>
 
@@ -568,11 +568,11 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
         %c_add_constant = arith.addf %c, %constant_init: tensor<128x256xf32, #C>
 
         %next_a_ = tt.load %next_a_ptr, %a_mask, %a_other : tensor<128x128x!tt.ptr<i8>, #AL>
-        %next_a = ttg.local_alloc %next_a_ : (tensor<128x128xi8, #AL>) -> !ttg.memdesc<128x128xi8, #A_SMEM, #smem, 1x128x128>
+        %next_a = ttg.local_alloc %next_a_ : (tensor<128x128xi8, #AL>) -> !ttg.memdesc<128x128xi8, #A_SMEM, #smem>
         %next_b_ = tt.load %next_b_ptr, %b_mask, %b_other : tensor<128x256x!tt.ptr<f8E5M2>, #BL>
-        %next_b = ttg.local_alloc %next_b_ : (tensor<128x256xf8E5M2, #BL>) -> !ttg.memdesc<128x256xf8E5M2, #B_SMEM, #smem, 1x128x256>
+        %next_b = ttg.local_alloc %next_b_ : (tensor<128x256xf8E5M2, #BL>) -> !ttg.memdesc<128x256xf8E5M2, #B_SMEM, #smem>
 
-        scf.yield %next_a_ptr, %next_b_ptr, %next_a, %next_b, %c_add_constant: tensor<128x128x!tt.ptr<i8>, #AL>, tensor<128x256x!tt.ptr<f8E5M2>, #BL>, !ttg.memdesc<128x128xi8, #A_SMEM, #smem, 1x128x128>, !ttg.memdesc<128x256xf8E5M2, #B_SMEM, #smem, 1x128x256>, tensor<128x256xf32, #C>
+        scf.yield %next_a_ptr, %next_b_ptr, %next_a, %next_b, %c_add_constant: tensor<128x128x!tt.ptr<i8>, #AL>, tensor<128x256x!tt.ptr<f8E5M2>, #BL>, !ttg.memdesc<128x128xi8, #A_SMEM, #smem>, !ttg.memdesc<128x256xf8E5M2, #B_SMEM, #smem>, tensor<128x256xf32, #C>
 
     }
     tt.return %loop#4 : tensor<128x256xf32, #C>
