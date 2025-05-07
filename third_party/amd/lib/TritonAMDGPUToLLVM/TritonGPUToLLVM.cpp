@@ -26,6 +26,7 @@
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
+#include "llvm/TargetParser/TargetParser.h"
 
 #include "third_party/proton/dialect/include/TritonProtonToLLVM/PatternTritonProtonOpToLLVM.h"
 
@@ -86,6 +87,15 @@ struct ConvertTritonAMDGPUToLLVM
     AMD::TargetInfo targetInfo(this->arch.getValue());
     if (targetInfo.getISAFamily() == AMD::ISAFamily::Unknown) {
       mod.emitError("unsupported target: '") << this->arch.getValue() << "'";
+      return signalPassFailure();
+    }
+    llvm::StringRef chipset =
+        llvm::AMDGPU::getArchNameAMDGCN(targetInfo.getGPUKind());
+    llvm::FailureOr<mlir::amdgpu::Chipset> maybeChipset =
+        mlir::amdgpu::Chipset::parse(chipset);
+    if (failed(maybeChipset)) {
+      mlir::emitError(mlir::UnknownLoc::get(&getContext()),
+                      "Invalid chipset name: " + chipset);
       return signalPassFailure();
     }
 
