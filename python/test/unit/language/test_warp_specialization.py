@@ -432,7 +432,7 @@ def attention_inner_loop_kernel_data_part(  #
     q0 = desc_q.load([off_m + 0 * BLOCK_M, 0])
     q1 = desc_q.load([off_m + 1 * BLOCK_M, 0])
 
-    for start_n in tl.range(0, N, HEAD_DIM, warp_specialize=warp_specialize):
+    for start_n in tl.range(0, N, HEAD_DIM, warp_specialize=warp_specialize, disallow_acc_multi_buffer=True):
         start_n = tl.multiple_of(start_n, HEAD_DIM)
 
         k = desc_k.load([start_n, 0]).T
@@ -445,6 +445,10 @@ def attention_inner_loop_kernel_data_part(  #
         alpha0 = tl.math.exp2(m_i0 - m_ij0)
         l_ij0 = tl.sum(p0, 1)
         o0 = o0 * alpha0[:, None]
+        p0 = p0.to(v.dtype)
+        o0 = tl.dot(p0, v, o0)
+        l_i0 = l_i0 * alpha0 + l_ij0
+        m_i0 = m_ij0
 
         qk1 = tl.dot(q1, k)
         m_ij1 = tl.maximum(m_i1, tl.max(qk1, 1) * qk_scale)
@@ -453,12 +457,6 @@ def attention_inner_loop_kernel_data_part(  #
         alpha1 = tl.math.exp2(m_i1 - m_ij1)
         l_ij1 = tl.sum(p1, 1)
         o1 = o1 * alpha1[:, None]
-
-        p0 = p0.to(v.dtype)
-        o0 = tl.dot(p0, v, o0)
-        l_i0 = l_i0 * alpha0 + l_ij0
-        m_i0 = m_ij0
-
         p1 = p1.to(v.dtype)
         o1 = tl.dot(p1, v, o1)
         l_i1 = l_i1 * alpha1 + l_ij1

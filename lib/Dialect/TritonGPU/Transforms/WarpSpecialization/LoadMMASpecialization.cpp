@@ -318,7 +318,7 @@ static WarpSchedule getInitialSchedule(const PartitionScheme &scheme,
     scheduleUsers(loop, schedule, defaultPartition, mma.mmaOp);
   }
   for (const PipelinedMMA &mma : scheme.mmas) {
-    scheduleDependencies(loop, schedule, defaultPartition, mma.mmaOp);
+    // scheduleDependencies(loop, schedule, defaultPartition, mma.mmaOp);
   }
 
   schedule.updatePartitions();
@@ -517,10 +517,10 @@ void propagatePartitions(scf::ForOp loop, WarpSchedule &schedule) {
       });
     }
 
-    // If all ops are on the critical path, assign them to the sink partition.
+    // If all ops are on the critical path, assign them to the def partition.
     if (critPath.size() == cluster.ops.size()) {
       for (Operation *op : cluster.ops)
-        schedule.insert(sinkPartition, op);
+        schedule.insert(defPartition, op);
       continue;
     }
 
