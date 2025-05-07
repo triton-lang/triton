@@ -464,6 +464,14 @@ LogicalResult convertDot(const LLVMTypeConverter *typeConverter,
         mmaAcc = rewriter.create<triton::nvgpu::WGMMAOp>(
             loc, accTy, a, b, useC, mmaAcc, M, N, K, eltTypeC, eltTypeA,
             eltTypeB, layoutA, layoutB);
+        if (!sync && !aSharedLayout) {
+          // We add a wgmma_wait(numRepK-1) after the dot to avoid rewritting
+          // the registers too early
+          auto results = to_vector(unpackLLElements(loc, mmaAcc, rewriter));
+          results = emitWait(rewriter, loc, results, numRepK - 1);
+          mmaAcc = packLLElements(loc, typeConverter, results, rewriter, accTy);
+        }
+
         useC = tb.i1_val(1);
         if (needsPartialAccumulator)
           partialAcc = mmaAcc;

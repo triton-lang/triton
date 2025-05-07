@@ -262,17 +262,12 @@ static std::optional<int> dotCanBeProperlyAsync(ttng::WarpGroupDotOp dotOp,
 
   // Rule 1: All shmem operands are multi-buffered.
   auto checkOperand = [&](Value operand) {
-    if (!isa<ttg::SharedEncodingTrait>(
-            cast<ttg::TensorOrMemDesc>(operand.getType()).getEncoding())) {
-      // Rule 1a: Register operands must not be modified within the loop.
-      // First, check for chained WGMMA as an exception.
-      if (auto cvt = dyn_cast<ttg::ConvertLayoutOp>(operand.getDefiningOp())) {
-        return isa<ttg::NvidiaMmaEncodingAttr>(
-            cvt.getSrc().getType().getEncoding());
-      }
-      // And then, do a stricter-than-necessary check for now, that the operand
-      // is defined outside the loop.
-      return forOp.isDefinedOutsideOfLoop(operand);
+    // We can always make RSGEMM async provided we can make the rhs
+    // multibuffered as the lowering will insert a wgmma_wait(kReps-1) after the
+    // dot to avoid
+    // rewriting the registers too early
+    if (isa<RankedTensorType>(operand.getType())) {
+      return true;
     }
 
     // If it's a shmem operand, it must either be defined outside the loop, or
@@ -314,6 +309,13 @@ static std::optional<int> dotCanBeProperlyAsync(ttng::WarpGroupDotOp dotOp,
   while (!queue.empty()) {
     auto [user, argIdx] = queue.pop_back_val();
     if (user->getParentOp() == forOp) {
+      // We support noops in between the dot and the yield
+      if (isNoop(user)) {
+        for (auto &use : user->getResult(0).getUses()) {
+          queue.push_back({use.getOwner(), use.getOperandNumber()});
+        }
+        continue;
+      }
       if (isa<scf::YieldOp>(user)) {
         if (iterArg) {
           // The dot is used by the loop's yield, but we can't have any other
@@ -343,14 +345,22 @@ static std::optional<int> dotCanBeProperlyAsync(ttng::WarpGroupDotOp dotOp,
     }
   }
 
-  // Rule 3a: Are the only users of the dot's result from iteration i-1 other
-  // MMAv3 dots?  If so, we're done, this dot can be properly async.
-  if (llvm::all_of(iterArg.getUses(), [&](OpOperand &use) {
-        return isa<ttng::WarpGroupDotOp>(use.getOwner()) &&
-               use.getOperandNumber() == 2;
-      })) {
+  // Rule 3a: Check that every use of the dot’s result (iterArg) eventually
+  // reaches a WarpGroupDotOp (with use index 2), possibly after passing through
+  // a chain of noops
+  std::function<bool(OpOperand &)> isTransitivelyWarpGroupDot =
+      [&](OpOperand &use) -> bool {
+    Operation *user = use.getOwner();
+    if (isa<ttng::WarpGroupDotOp>(user))
+      return use.getOperandNumber() == 2;
+    if (isNoop(user))
+      return llvm::all_of(user->getResult(0).getUses(),
+                          isTransitivelyWarpGroupDot);
+    return false;
+  };
+
+  if (llvm::all_of(iterArg.getUses(), isTransitivelyWarpGroupDot))
     return iterArgIdx;
-  }
 
   // Rule 3b: Are all users of the dot's result from iteration i-1 after the
   // first `warp_group_dot_wait {pendings=0}` op?  If so, the dot can be
@@ -403,8 +413,13 @@ static std::optional<int> dotCanBeProperlyAsync(ttng::WarpGroupDotOp dotOp,
 static void insertAsyncWarpGroupDotWaitInLoop(
     scf::ForOp forOp,
     const llvm::MapVector<Operation *, int /*iterArgIdx*/> &properlyAsyncDots) {
-  if (properlyAsyncDots.empty())
+  auto isRSWGDot = [](Operation *dot) {
+    return isa<RankedTensorType>(
+        cast<ttng::WarpGroupDotOp>(*dot).getA().getType());
+  };
+  if (llvm::all_of(llvm::make_first_range(properlyAsyncDots), isRSWGDot)) {
     return;
+  }
 
   if (llvm::any_of(forOp.getBody()->getOps<ttng::WarpGroupDotWaitOp>(),
                    [](auto wait) { return wait.getPendings() == 0; })) {
@@ -414,6 +429,9 @@ static void insertAsyncWarpGroupDotWaitInLoop(
   // Insert waits before the users of the properly async dots other than loop
   // yield.
   for (auto [asyncDot, iterArgIdx] : properlyAsyncDots) {
+    // Waits are added during lowering
+    if (isRSWGDot(asyncDot))
+      continue;
     SmallVector<OpOperand *> uses;
     for (auto &use : asyncDot->getUses()) {
       if (auto yieldOp = dyn_cast<scf::YieldOp>(use.getOwner())) {
