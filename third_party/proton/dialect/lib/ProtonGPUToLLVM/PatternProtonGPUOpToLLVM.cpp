@@ -438,7 +438,7 @@ struct GlobalScratchAllocOpConversion
         "ttg.profile_scratch_memory_size");
     assert(allocSizeAttr);
 
-    Value linearId = getLinearId(loc, rewriter);
+    Value linearId = mlir::triton::proton::gpu::getLinearId(loc, rewriter);
 
     auto allocSize = allocSizeAttr.getValue().getZExtValue();
     Value gmemOffset =
@@ -484,7 +484,6 @@ void populateProtonGPUOpPatterns(LLVMTypeConverter &typeConverter,
                                  PatternBenefit benefit) {
   patterns.add<InitBufferIndexOpConversion>(typeConverter, targetInfo, benefit);
   patterns.add<ReadCounterOpConversion>(typeConverter, targetInfo, benefit);
-  patterns.add<FinalizeOpConversion>(typeConverter, targetInfo, benefit);
   patterns.add<SegmentBaseOpConversion>(typeConverter, targetInfo, benefit);
   patterns.add<StackAllocOpConversion>(typeConverter, targetInfo, benefit);
   patterns.add<GlobalScratchAllocOpConversion>(typeConverter, targetInfo,

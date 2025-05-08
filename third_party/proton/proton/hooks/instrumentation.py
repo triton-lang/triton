@@ -1,18 +1,22 @@
 import functools
+<<<<<<< HEAD
 from typing import Dict, Optional, Union, Any
+=======
+from typing import Any, Dict, List, Optional, Tuple, Union
+>>>>>>> bd847ac9 (move finalize op into target specific backends)
 
 import triton
-from triton._C.libtriton import ir
-from triton._C.libtriton import proton as triton_proton
 from triton._C.libproton import proton as libproton
-from triton.compiler import LazyDict
-from triton.runtime.jit import JITFunction
-from triton.runtime._allocation import set_profile_allocator, NullAllocator
+from triton._C.libtriton import ir, proton as triton_proton
 from triton.backends import backends
+from triton.compiler import LazyDict
+from triton.runtime._allocation import NullAllocator, set_profile_allocator
+from triton.runtime.jit import JITFunction
+
+from .. import mode
+from ..flags import set_instrumentation_off, set_instrumentation_on
 
 from .hook import Hook
-from ..flags import set_instrumentation_on, set_instrumentation_off
-from .. import mode
 
 # TODO(fywkevin): add support for major.minor
 VERSION = 1
@@ -36,7 +40,8 @@ class CudaAllocator:
 
         # Create the buffer
         import torch
-        buffer = torch.empty((aligned_size, ), dtype=torch.uint8, device="cuda")
+
+        buffer = torch.empty((aligned_size,), dtype=torch.uint8, device="cuda")
         self.instrumentation_hook.buffer = buffer
         return buffer
 
@@ -64,7 +69,9 @@ class Instrumentation:
         triton_proton.load_dialects(ctx)
 
 
-def _interpret_mode(mode_obj: Union[str, mode.InstrumentationMode]) -> mode.InstrumentationMode:
+def _interpret_mode(
+    mode_obj: Union[str, mode.InstrumentationMode]
+) -> mode.InstrumentationMode:
     if isinstance(mode_obj, mode.InstrumentationMode):
         return mode_obj
     elif not mode_obj:
@@ -101,9 +108,13 @@ def _interpret_mode(mode_obj: Union[str, mode.InstrumentationMode]) -> mode.Inst
     # Look up enum values for each option
     options["metric_type"] = get_option_value("metric_type", mode.metric_types)
     options["buffer_type"] = get_option_value("buffer_type", mode.buffer_types)
-    options["buffer_strategy"] = get_option_value("buffer_strategy", mode.buffer_strategies)
+    options["buffer_strategy"] = get_option_value(
+        "buffer_strategy", mode.buffer_strategies
+    )
     options["granularity"] = get_option_value("granularity", mode.granularities)
-    options["sampling_strategy"] = get_option_value("sampling_strategy", mode.sampling_strategies)
+    options["sampling_strategy"] = get_option_value(
+        "sampling_strategy", mode.sampling_strategies
+    )
 
     # Create the appropriate mode instance
     if mode_name == "default":
@@ -133,7 +144,9 @@ class InstrumentationHook(Hook):
 
     def activate(self):
         if InstrumentationHook.active_count > 0:
-            raise RuntimeError("Only one instance of the instrumentation hook can be active at a time.")
+            raise RuntimeError(
+                "Only one instance of the instrumentation hook can be active at a time."
+            )
 
         InstrumentationHook.active_count += 1
 
@@ -141,36 +154,52 @@ class InstrumentationHook(Hook):
 
         backend = triton.runtime.driver.active.get_current_target().backend
         device = triton.runtime.driver.active.get_current_device()
-        max_shared_mem = triton.runtime.driver.active.utils.get_device_properties(device)["max_shared_mem"]
+        max_shared_mem = triton.runtime.driver.active.utils.get_device_properties(
+            device
+        )["max_shared_mem"]
 
-        def to_llvmir_passes(pm, backend_pass):
+        def to_llvmir_passes(pm, backend_pass, arch=""):
             triton_proton.add_allocate_proton_global_scratch_buffer(pm)
-            backend_pass(pm)
+            backend_pass(pm, arch)
 
         def to_ttgpuir_passes(pm):
-            triton_proton.add_convert_proton_to_protongpu(pm, self.mode.metric_type, self.mode.sampling_strategy,
-                                                          self.mode.sampling_options, self.mode.granularity,
-                                                          self.mode.buffer_strategy, self.mode.buffer_type,
-                                                          self.mode.buffer_size, max_shared_mem,
-                                                          self.profile_buffer_size, self.profile_buffer_alignment)
+            triton_proton.add_convert_proton_to_protongpu(
+                pm,
+                self.mode.metric_type,
+                self.mode.sampling_strategy,
+                self.mode.sampling_options,
+                self.mode.granularity,
+                self.mode.buffer_strategy,
+                self.mode.buffer_type,
+                self.mode.buffer_size,
+                max_shared_mem,
+                self.profile_buffer_size,
+                self.profile_buffer_alignment,
+            )
 
             triton_proton.add_allocate_proton_shared_memory(pm)
 
         if backend == "cuda":
             backend_name = "nvidia"
             ttgpuir_func = lambda pm: to_ttgpuir_passes(pm)
-            llvmir_func = lambda pm: to_llvmir_passes(pm, triton_proton.add_convert_proton_nvidia_gpu_to_llvm)
+            llvmir_func = lambda pm: to_llvmir_passes(
+                pm, triton_proton.add_convert_proton_nvidia_gpu_to_llvm, ""
+            )
         elif backend == "hip":
             backend_name = "amd"
             ttgpuir_func = lambda pm: to_ttgpuir_passes(pm)
-            llvmir_func = lambda pm: to_llvmir_passes(pm, triton_proton.add_convert_proton_amd_gpu_to_llvm)
+            llvmir_func = lambda pm: to_llvmir_passes(
+                pm, triton_proton.add_convert_proton_amd_gpu_to_llvm, "gfx942"
+            )
         else:
             raise RuntimeError(f"Unsupported backend: {backend}")
 
-        backends[backend_name].compiler.instrumentation = Instrumentation({
-            "ttgpuir": ttgpuir_func,
-            "llvmir": llvmir_func,
-        })
+        backends[backend_name].compiler.instrumentation = Instrumentation(
+            {
+                "ttgpuir": ttgpuir_func,
+                "llvmir": llvmir_func,
+            }
+        )
 
         # Set up the profiling allocator
         set_profile_allocator(self.allocator)
@@ -225,8 +254,7 @@ class InstrumentationHook(Hook):
         ir_path = next((path for key, path in metadata_group.items() if key.endswith(("ttgir", "ttir"))), None)
         metadata_path = next((path for key, path in metadata_group.items() if key.endswith(("json"))), None)
         self.metadata_path[function] = metadata_path
-
-        if ir_path:
+       if ir_path:
             context = ir.context()
             ir.load_dialects(context)
             triton_proton.load_dialects(context)
@@ -259,9 +287,8 @@ class InstrumentationHook(Hook):
 
     def _populate_host_buffer(self, function: Any) -> None:
         if function and self.metadata_path[function]:
-            import torch
-            import struct
             import json
+            import struct
 
             def encode_target(target: Dict[str, Any]) -> int:
                 #TODO(fywkevin): also account for `arch`
@@ -273,7 +300,7 @@ class InstrumentationHook(Hook):
 
             alloc_size = 0 if self.buffer is None else self.buffer.element_size() * self.buffer.numel()
             data = {}
-            with open(self.metadata_path[function], 'r') as file:
+            with open(self.metadata_path[function], "r") as file:
                 data = json.load(file)
 
             device_type = encode_target(data["target"])
@@ -310,11 +337,16 @@ class InstrumentationHook(Hook):
             # |                  |
             # +------------------+
 
-            is_all_warps = self.mode.sampling_options == "" and self.mode.granularity == triton_proton.GRANULARITY.WARP
+            is_all_warps = (
+                self.mode.sampling_options == ""
+                and self.mode.granularity == triton_proton.GRANULARITY.WARP
+            )
             if is_all_warps:
                 uid_vec = [i for i in range(total_unit)]
             else:
-                uid_vec = [int(i) for i in self.mode.sampling_options.strip().split(",")]
+                uid_vec = [
+                    int(i) for i in self.mode.sampling_options.strip().split(",")
+                ]
 
             header_size = 36 + total_unit * 4
             header_offset = 4
@@ -326,8 +358,12 @@ class InstrumentationHook(Hook):
             ]
             header_bytes = struct.pack("I" * len(header_values), *header_values)
 
-            InstrumentationHook.host_buffer = torch.empty(header_size + alloc_size, dtype=torch.uint8, device="cpu")
+            InstrumentationHook.host_buffer = torch.empty(
+                header_size + alloc_size, dtype=torch.uint8, device="cpu"
+            )
             config_portion = InstrumentationHook.host_buffer[:header_size]
             config_portion.copy_(torch.tensor(list(header_bytes), dtype=torch.uint8))
-            data_portion = InstrumentationHook.host_buffer[header_size:].view_as(self.buffer)
+            data_portion = InstrumentationHook.host_buffer[header_size:].view_as(
+                self.buffer
+            )
             data_portion.copy_(self.buffer.cpu())

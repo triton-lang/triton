@@ -1,4 +1,4 @@
-include_directories(${PROJECT_SOURCE_DIR}/third_party/amd/include)
+include_directories(${PROJECT_SOURCE_DIR}/third_party/nvidia/include)
 
 add_triton_library(ProtonNVIDIAGPUToLLVM
     TargetInfo.cpp
