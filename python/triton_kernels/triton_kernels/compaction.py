@@ -49,7 +49,7 @@ def compaction_torch(yv: torch.Tensor, yi: torch.Tensor, bitmask: torch.Tensor, 
     reference implementation of `masked_compact`
     """
     B, K = yi.shape
-    device, dtype = yi.device, yi.dtype
+    device = yi.device
     # Expand bitmask to a boolean matrix of active bits  (B, 32)
     w = (1 << torch.arange(32, device=device, dtype=bitmask.dtype))
     bits = (bitmask.unsqueeze(-1) & w) != 0
