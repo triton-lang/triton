@@ -265,6 +265,42 @@ void BufferLiveRangeAnalysis::run(FuncOp func,
 // reuseBuffers
 //===----------------------------------------------------------------------===//
 
+// Determine whether two buffers with independent liveranges can be merged by
+// checking if one trivially fits into the other.
+static bool canMergeBuffers(Value a, Value b) {
+  auto aType = cast<MemDescType>(a.getType());
+  auto bType = cast<MemDescType>(b.getType());
+  // Obviously, both have to be in the same address space.
+  if (aType.getMemorySpace() != bType.getMemorySpace())
+    return false;
+  Attribute memorySpace = aType.getMemorySpace();
+
+  if (isa<ttng::TensorMemorySpaceAttr>(memorySpace)) {
+    // TMEM allocations are in squares, which means one has to fit into the
+    // other in both dimensions.
+    auto fits = [](auto &a, auto &b) {
+      return a.numRows <= b.numRows && a.numCols <= b.numCols;
+    };
+    ttng::TMemAllocation aAllocSize = ttng::getTmemAllocSizes(aType);
+    ttng::TMemAllocation bAllocSize = ttng::getTmemAllocSizes(bType);
+    if (fits(aAllocSize, bAllocSize) || fits(bAllocSize, aAllocSize))
+      return true;
+    // Technically, we could replace both with a new allocation whose dimensions
+    // are the max among the two, but for now just reject the merge.
+    return false;
+  }
+
+  // Shared memory allocations are flat, so one buffer is always at least the
+  // size of the other.
+  assert(isa<SharedMemorySpaceAttr>(memorySpace) && "unknown memory space");
+  return true;
+}
+
+// Given two buffers that can be merged, determine if they should be merged.
+// There are a couple of criteria for being merged:
+// - The buffers would not have been merge
+static bool shouldMergeBuffers(Value a, Value b) {}
+
 static void reuseBuffers(FuncOp func) {
   // First determine when buffers are live at every point in the function.
   RegionPredecessorAnalysis preds(func);
