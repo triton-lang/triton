@@ -8,6 +8,9 @@
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallVectorExtras.h"
 
+#define GET_ATTRDEF_CLASSES
+#include "Dialect/NVWS/IR/NVWSAttrEnums.cpp.inc"
+
 #define GET_OP_CLASSES
 #include "Dialect/NVWS/IR/Ops.cpp.inc"
 
@@ -126,6 +129,14 @@ void WarpGroupOp::print(OpAsmPrinter &p) {
     p << " num_warps(" << numWarps << ") ";
     p.printRegion(region, /*printEntryBlockArgs=*/false);
   }
+}
+
+void CreateTokenOp::build(::mlir::OpBuilder &builder,
+                          ::mlir::OperationState &state, uint32_t num,
+                          TokenLoadType loadType) {
+  auto tokenType = TokenType::get(builder.getContext());
+  auto resultType = RankedTensorType::get({num}, tokenType);
+  build(builder, state, resultType, num, loadType);
 }
 
 } // namespace mlir::triton::nvws
