@@ -1,6 +1,10 @@
+#include "mlir/Analysis/SliceAnalysis.h"
+#include "mlir/IR/Dominance.h"
+#include "mlir/IR/ImplicitLocOpBuilder.h"
 #include "mlir/Pass/Pass.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
+#include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "llvm/ADT/AddressRanges.h"
 
@@ -124,6 +128,7 @@ struct BufferLiveRangeAnalysis {
   void initialize(FuncOp func);
   void run(FuncOp func, RegionPredecessorAnalysis &preds);
 
+  SmallVector<Operation *> buffers;
   llvm::MapVector<Operation *, size_t> bufferIds;
   llvm::MapVector<VirtualBlock, BufferStates> bufferStates;
 };
@@ -151,6 +156,7 @@ void BufferLiveRangeAnalysis::initialize(FuncOp func) {
     if (memdesc.getNumElements() < 16)
       return;
     bufferIds.insert({op, bufferIds.size()});
+    buffers.push_back(op);
   });
 }
 
@@ -302,6 +308,38 @@ static bool shouldMergeBuffers(Value a, Value b) {
   // In this case, the memory allocator(s) could have placed them in the same
   // memory location anyways. Merging them early muddles the IR and could block
   // optimizations among other things.
+
+  // CURRENTLY A HACK:
+  auto usedInAcc = [&](OpOperand &use) {
+    if (auto mmaOp = dyn_cast<ttng::MMAv5OpInterface>(use.getOwner())) {
+      if (use.get() == mmaOp.getAccumulator())
+        return true;
+    }
+    return false;
+  };
+
+  auto hasDirectSSADependency = [](Value a, Value b) {
+    SetVector<Operation *> slice;
+    getForwardSlice(a, &slice);
+    if (llvm::any_of(b.getUsers(),
+                     [&](Operation *op) { return slice.contains(op); }))
+      return true;
+    slice.clear();
+    BackwardSliceOptions opts;
+    opts.omitUsesFromAbove = false;
+    getBackwardSlice(b, &slice, opts);
+    if (llvm::any_of(a.getUsers(),
+                     [&](Operation *op) { return slice.contains(op); }))
+      return true;
+    return false;
+  };
+
+  bool aUsedByMMAAcc = llvm::any_of(a.getUses(), usedInAcc);
+  bool bUsedByMMAAcc = llvm::any_of(b.getUses(), usedInAcc);
+  if (aUsedByMMAAcc == bUsedByMMAAcc)
+    return false;
+
+  return hasDirectSSADependency(a, b) || hasDirectSSADependency(b, a);
 }
 
 static void reuseBuffers(FuncOp func) {
@@ -336,28 +374,125 @@ static void reuseBuffers(FuncOp func) {
   // buffers that could be multi-buffered (e.g. MMAv5 accumulators) or whose
   // users don't have a direct SSA dependency on each other will not be merged.
 
+  struct MergedBuffer {
+    SmallVector<Operation *> ops;
+    SmallVector<size_t> ids;
+  };
+  llvm::SpecificBumpPtrAllocator<MergedBuffer> allocator;
+  SmallVector<MergedBuffer *> mergedBuffers;
+  for (auto [buffer, id] : analysis.bufferIds) {
+    MergedBuffer *mergedBuffer = allocator.Allocate();
+    ::new (mergedBuffer) MergedBuffer{{buffer}, {id}};
+    mergedBuffers.push_back(mergedBuffer);
+  }
+
+  // Two buffer sets can be merged if all of the buffers in one set can be
+  // merged into any buffer in the other.
+  auto canMerge = [](MergedBuffer *a, MergedBuffer *b) {
+    return llvm::all_of(a->ops, [&](Operation *aOp) {
+      return llvm::any_of(b->ops, [&](Operation *bOp) {
+        return canMergeBuffers(aOp->getResult(0), bOp->getResult(0));
+      });
+    });
+  };
+  // Two buffer sets should be merged if all of the buffers in one set should be
+  // merged with all of the buffers in the other.
+  auto shouldMerge = [](MergedBuffer *a, MergedBuffer *b) {
+    return llvm::all_of(a->ops, [&](Operation *aOp) {
+      return llvm::all_of(b->ops, [&](Operation *bOp) {
+        return shouldMergeBuffers(aOp->getResult(0), bOp->getResult(0));
+      });
+    });
+  };
+
   // For a given buffer, find all the buffers that at any point are live at the
   // same time as the given buffer. We can do this by joining all the masks for
   // when the buffer is live.
-  for (auto [buffer, id] : analysis.bufferIds) {
-    BitVector liveMask(analysis.bufferIds.size(), false);
-    for (const BitVector &state : uniqueStates) {
-      if (state.test(id))
-        liveMask |= state;
-    }
-    // Zero bits in `liveMask` now indicate buffers that are never live at the
-    // same time as the given buffer.
-    llvm::errs() << "Buffer " << id << " -> " << *buffer << "\n";
-    for (auto i : llvm::seq(liveMask.size())) {
-      if (liveMask.test(i))
-        continue;
-      llvm::errs() << "   can merge " << i << "\n";
-    }
-    llvm::errs() << "\n";
-  }
+  size_t numBuffers = analysis.buffers.size();
+  bool changed;
+  do {
+    changed = false;
 
-  // There are multiple ways to merge buffers that are never live at the same
-  // time. For now, just go for a greedy algorithm.
+    for (MergedBuffer *mergedBuffer : mergedBuffers) {
+      if (mergedBuffer->ops.empty())
+        continue;
+      BitVector liveMask(numBuffers, false);
+      for (const BitVector &state : uniqueStates) {
+        for (size_t id : mergedBuffer->ids) {
+          if (state.test(id))
+            liveMask |= state;
+        }
+      }
+      // Greedily merge buffers.
+      for (MergedBuffer *otherBuffer : mergedBuffers) {
+        if (mergedBuffer->ops.empty())
+          continue;
+        if (llvm::any_of(otherBuffer->ids,
+                         [&](size_t id) { return liveMask.test(id); }))
+          continue;
+        assert(mergedBuffer != otherBuffer);
+        if (!canMerge(mergedBuffer, otherBuffer) ||
+            !shouldMerge(mergedBuffer, otherBuffer))
+          continue;
+        // Merge the two sets.
+        llvm::append_range(mergedBuffer->ops, otherBuffer->ops);
+        llvm::append_range(mergedBuffer->ids, otherBuffer->ids);
+        otherBuffer->ops.clear();
+        otherBuffer->ids.clear();
+        changed = true;
+        break;
+      }
+      if (changed)
+        break;
+    }
+  } while (changed);
+
+  auto bufferLess = [](Operation *lhs, Operation *rhs) {
+    auto aType = cast<MemDescType>(lhs->getResult(0).getType());
+    auto bType = cast<MemDescType>(rhs->getResult(0).getType());
+    assert(aType.getMemorySpace() == bType.getMemorySpace());
+
+    if (isa<ttng::TensorMemorySpaceAttr>(aType.getMemorySpace())) {
+      ttng::TMemAllocation aAllocSize = ttng::getTmemAllocSizes(aType);
+      ttng::TMemAllocation bAllocSize = ttng::getTmemAllocSizes(bType);
+      return aAllocSize.numRows <= bAllocSize.numRows &&
+             aAllocSize.numCols <= bAllocSize.numCols;
+    }
+
+    size_t abits = product(getAllocationShapePerCTA(aType)) *
+                   aType.getElementTypeBitWidth();
+    size_t bbits = product(getAllocationShapePerCTA(bType)) *
+                   bType.getElementTypeBitWidth();
+    return abits <= bbits;
+  };
+
+  DominanceInfo domInfo(func);
+  for (MergedBuffer *mergedBuffer : mergedBuffers) {
+    if (mergedBuffer->ops.size() < 2)
+      continue;
+    Operation *leader = *llvm::max_element(mergedBuffer->ops, bufferLess);
+    Operation *domOp = findNearestCommonDominator(mergedBuffer->ops, domInfo);
+    if (leader != domOp)
+      leader->moveBefore(domOp);
+    Value leaderBuffer = leader->getResult(0);
+
+    auto leaderType = cast<MemDescType>(leaderBuffer.getType());
+    for (Operation *op : mergedBuffer->ops) {
+      if (op == leader)
+        continue;
+      Value buffer = op->getResult(0);
+      auto type = cast<MemDescType>(buffer.getType());
+
+      ImplicitLocOpBuilder b(op->getLoc(), op);
+      auto reinterpType = MemDescType::get(
+          leaderType.getShape(), type.getElementType(), type.getEncoding(),
+          type.getMemorySpace(), type.getMutableMemory());
+      Value reinterpBuffer =
+          b.create<MemDescReinterpretOp>(reinterpType, leaderBuffer);
+      Value replBuffer = b.create<MemDescReshapeOp>(type, reinterpBuffer);
+      buffer.replaceAllUsesWith(replBuffer);
+    }
+  }
 }
 
 //===----------------------------------------------------------------------===//

@@ -272,6 +272,15 @@ def TTG_MemDescReshapeOp : TTG_Op<"memdesc_reshape", [Pure,
   let hasVerifier = 1;
 }
 
+def TTG_MemDescReinterpretOp : TTG_Op<"memdesc_reinterpret", [Pure, MemDescViewTrait]> {
+  let arguments = (ins TTG_MemDescType:$src);
+  let results = (outs TTG_MemDescType:$result);
+
+  let assemblyFormat = [{
+    $src attr-dict `:` qualified(type($src)) `->` qualified(type($result))
+  }];
+}
+
 def TTG_LocalLoadOp : TTG_Op<"local_load"> {
   let summary = "Load a buffer from local memory into a distributed tensor";
 
