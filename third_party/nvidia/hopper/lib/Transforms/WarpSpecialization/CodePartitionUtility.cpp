@@ -46,12 +46,9 @@ bool immediateEnclosing(scf::IfOp ifOp, Operation *subOp) {
 }
 
 // Return number of AccumCnts for the given ctrlOp. Add a single
-// AccumCnt for all channels under opsWithBufferReuse and it will be the
-// last AccumCnt.
 unsigned getAccumCnts(Operation *ctrlOp,
                       const DenseSet<Operation *> &opsWithChannels) {
   unsigned cnt = 0;
-  // Add a single count for all channels under opsWithBufferReuse.
   LDBG("getAccumCnts: " << ctrlOp);
   for (auto *op : opsWithChannels) {
     LDBG("-- getAccumCnts: " << ctrlOp << " opsWithChannels " << op);
@@ -69,8 +66,7 @@ unsigned getAccumCnts(Operation *ctrlOp,
   return cnt;
 }
 
-// Assume parentForOp has accumCnt for the specified ctrlOp. For channels with
-// reuse, use getReuseAccumCntArg.
+// Assume parentForOp has accumCnt for the specified ctrlOp.
 unsigned getAccumArgIdx(scf::ForOp parentForOp, Operation *ctrlOp,
                         const DenseSet<Operation *> &opsWithChannels) {
   // Walk parentForOp in preorder.
@@ -138,24 +134,16 @@ std::pair<Value, Value> getBufferIdxAndPhase(OpBuilderWithAsyncTaskIds &builder,
 //     ThenYield ForC.arg[accumIfB] + 1
 //     ElseYield ForC.arg[accumIfB]
 //   Channel D --> uses ForA.arg[accumForA]
-// Right now, we only support a limited form of buffer reuse. We only allow
-// reuses among a list of parallel control ops. And we will add a single
-// AccumCnt as the last argument.
 Value getAccumCount(OpBuilderWithAsyncTaskIds &builder, Operation *op,
                     const DenseSet<Operation *> &opsWithChannels) {
   auto parentForOp = op->getParentOfType<scf::ForOp>();
   auto *pOp = op->getParentOp();
   // Get parentForOp.arg[pOp]
-  unsigned accumArgId;
   unsigned tSize = parentForOp.getBody()->getArguments().size();
   unsigned parentTCnts = getAccumCnts(parentForOp, opsWithChannels);
-  Value accumCnt;
-  bool partOfReuse = false;
-  {
-    accumArgId = getAccumArgIdx(parentForOp, pOp, opsWithChannels);
-    accumCnt =
-        parentForOp.getBody()->getArgument(tSize - parentTCnts + accumArgId);
-  }
+  unsigned accumArgId = getAccumArgIdx(parentForOp, pOp, opsWithChannels);
+  Value accumCnt =
+      parentForOp.getBody()->getArgument(tSize - parentTCnts + accumArgId);
 
   LDBG("getAccumCount: parentForOp " << parentForOp.getOperation() << " pOp "
                                      << pOp << " " << tSize << " "

@@ -98,9 +98,8 @@ Value appendBufferIdxArgs(SmallVector<Operation *> &taskTopOps,
                           const SmallVector<Channel *> &channels,
                           DenseSet<Operation *> &opsWithChannels);
 
-void updateAccumRegions(SmallVector<Operation *> &opList,
-                        const SmallVector<Channel *> &channels,
-                        DenseSet<Operation *> &opsWithChannels);
+void collectRegionsWithChannels(const SmallVector<Channel *> &channels,
+                                DenseSet<Operation *> &opsWithChannels);
 void insertAsyncCopy(
     triton::FuncOp funcOp,
     const DenseMap<Channel *, SmallVector<Channel *>>
