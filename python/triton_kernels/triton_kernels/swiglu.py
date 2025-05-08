@@ -2,7 +2,7 @@ from dataclasses import dataclass
 from triton_kernels.numerics import InFlexData, OutFlexData
 import torch
 import triton
-from .swiglu_details._swiglu import _swiglu
+from .swiglu_details._swiglu import _swiglu, _swiglu_fn
 from triton_kernels import target_info
 from .matmul_ogs_details.metadata import compute_metadata
 
@@ -18,6 +18,9 @@ class FlexCtx:
 class PrecisionConfig:
     limit: float
     flex_ctx: FlexCtx = FlexCtx()
+
+
+swiglu_fn = _swiglu_fn
 
 
 class SwiGLU(torch.autograd.Function):
