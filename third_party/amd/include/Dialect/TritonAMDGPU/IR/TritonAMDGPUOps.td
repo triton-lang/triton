@@ -119,6 +119,57 @@ def ExtractSliceOp : TT_AMDGPU_Op<"extract_slice", [Pure]> {
   let hasVerifier = 1;
 }
 
+def ConcatOp : TT_AMDGPU_Op<"concat", [Pure]> {
+  let summary = "concat operation";
+  let description = [{
+    The "concat" operation combines a list of source n-dimensional tensors into a single larger destination tensor.
+    Its semantics is designed to closely resemble Python-level slicing and operate on logical tensors,
+    avoiding the need for complex layout reinterpretation or reshaping.
+    This approach aims to make TTGIR easier to read and maintain compared to using join operation.
+
+    All source tensors must have the same shape, element type, and encoding.
+    They are arranged in minor-to-major order, forming a logical tensor of source tensors with shape
+    (dstDims[0] / srcDims[0], ..., dstDims[n-1] / srcDims[n-1]). When linearized, this matches the order
+    of the source tensors provided as arguments.
+
+    The source and destination must have matching linear layouts at the CTA tile level.
+    This ensures that the concatenation is a no-op, meaning no data rearrangement between threads is required
+    to assemble the destination tensor with the given shape and layout.
+    However, the order of CTA tiles within the layout does not need to match between source and destination layouts.
+    It is the responsibility of the op's lowering logic to handle this correctly.
+
+    * sources: a list of the input tensors.
+
+    Example 1:
+
+    ```mlir
+    #blocked = #ttg.blocked<{sizePerThread = [1, 8],
+        threadsPerWarp = [8, 8], warpsPerCTA = [4, 1], order = [1, 0]}>
+    %0 = amdgpu.concat %arg0, %arg1: tensor<32x64xf32, #blocked>,tensor<32x64xf32, #blocked>,
+      -> tensor<64x64xf32, #blocked>
+    ```
+
+    Example 2:
+    ```mlir
+    #src_layout = #ttg.linear<{register=[[0, 1], [0, 2], [0, 8], [0, 16], [0, 64], [64, 0]], lane=[[1, 0], [2, 0], [4, 0], [8, 0], [16, 0], [0, 4]], warp=[[0, 32], [32, 0]], block=[]}>
+    #dst_layout = #ttg.linear<{register=[[0, 1], [0, 2], [0, 8], [0, 16], [0, 64], [0, 128], [64, 0], [128, 0]], lane=[[1, 0], [2, 0], [4, 0], [8, 0], [16, 0], [0, 4]], warp=[[0, 32], [32, 0]], block=[]}>
+    %0 = amdgpu.concat %arg0, %arg1, %arg2, %arg3 : tensor<128x128xf16, #src_layout>, tensor<128x128xf16, #src_layout>, tensor<128x128xf16, #src_layout>,
+                                                    tensor<128x128xf16, #src_layout> -> tensor<256x256xf16, #dst_layout>
+    ```
+
+    }];
+
+  let arguments = (ins Variadic<TT_Tensor>:$sources);
+  let results = (outs AnyRankedTensor:$result);
+
+  let assemblyFormat = [{
+    $sources attr-dict `:` type($sources) `->` type($result)
+  }];
+
+  let hasVerifier = 1;
+  let hasCanonicalizer = 1;
+}
+
 //===----------------------------------------------------------------------===//
 // InstructionSchedHint
 //===----------------------------------------------------------------------===//
