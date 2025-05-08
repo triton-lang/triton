@@ -427,7 +427,8 @@ def init_allocation(x, w, precision_config, routing_data, gather_indx, scatter_i
         Mc = scatter_indx.src_indx.shape[0] // routing_data.n_expts_act # compressed number of rows
         y_rows = Mc
     y_shape = (x.shape[0], y_rows, N)
-    output = (y_shape, precision_config.out_dtype)
+    out_dtype = precision_config.out_dtype or x.dtype
+    output = (y_shape, out_dtype)
     # ---- scratchpad -----#
     scratchpad = dict()
     # if we need either standalone scatter or split-k, the matmul output will need post-processing
