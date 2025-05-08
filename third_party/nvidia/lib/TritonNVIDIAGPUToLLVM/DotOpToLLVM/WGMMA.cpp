@@ -439,6 +439,16 @@ LogicalResult convertDot(const LLVMTypeConverter *typeConverter,
         if (aSharedLayout) {
           a = aLoader.smemLoad(m, k, rewriter, loc);
         } else {
+          auto createMov = [&](Value a) {
+            PTXBuilder builder;
+            SmallVector<PTXBuilder::Operand *> operands;
+            operands.push_back(builder.newOperand("=r"));
+            operands.push_back(builder.newOperand(a, "r"));
+            auto &ptxOp = *builder.create("mov.b32 $0, $1;");
+            ptxOp(operands, /*onlyAttachMLIRArgs=*/true);
+            return builder.launch(rewriter, loc, a.getType(), true);
+          };
+
           auto aDotOpEnc =
               cast<DotOperandEncodingAttr>(aTensorTy.getEncoding());
           assert(aDotOpEnc.getKWidth() ==
@@ -448,10 +458,16 @@ LogicalResult convertDot(const LLVMTypeConverter *typeConverter,
           llvm::SmallVector<Value> regA =
               loadReg(rewriter, loc, structA, (m * numRepK + k) * regASize,
                       regASize, startSequence);
+          for (auto &reg : regA) {
+            reg = createMov(reg);
+          }
           auto regATy = LLVM::LLVMStructType::getLiteral(
               rewriter.getContext(),
               SmallVector<Type>(regA.size(), regA[0].getType()));
           a = packLLElements(loc, typeConverter, regA, rewriter, regATy);
+
+          // Add fence
+          rewriter.create<triton::nvgpu::WGMMAFenceOp>(loc);
         }
         auto b = bLoader.smemLoad(n, k, rewriter, loc);
         numLowPrecisionAcc += K;
@@ -465,6 +481,8 @@ LogicalResult convertDot(const LLVMTypeConverter *typeConverter,
             loc, accTy, a, b, useC, mmaAcc, M, N, K, eltTypeC, eltTypeA,
             eltTypeB, layoutA, layoutB);
         if (!sync && !aSharedLayout) {
+          // Make each wgmma into its own group
+          rewriter.create<triton::nvgpu::WGMMACommitGroupOp>(loc);
           // We add a wgmma_wait(numRepK-1) after the dot to avoid rewritting
           // the registers too early
           auto results = to_vector(unpackLLElements(loc, mmaAcc, rewriter));
@@ -491,7 +509,9 @@ LogicalResult convertDot(const LLVMTypeConverter *typeConverter,
       }
     }
   }
-  rewriter.create<triton::nvgpu::WGMMACommitGroupOp>(loc);
+  if (!(!sync && !aSharedLayout)) {
+    rewriter.create<triton::nvgpu::WGMMACommitGroupOp>(loc);
+  }
 
   if (sync)
     mmaResults = emitWait(rewriter, loc, mmaResults, 0);
