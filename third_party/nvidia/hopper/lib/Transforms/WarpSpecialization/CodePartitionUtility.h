@@ -81,37 +81,23 @@ struct TmemDataChannel : Channel {
 bool enclosing(scf::IfOp ifOp, Operation *op);
 bool enclosing(scf::ForOp forOp, Operation *op);
 
-bool channelWithReuse(Operation *dstOp,
-                      SmallVector<Operation *> &opsWithBufferReuse);
-void excludeChannelsWithReuse(const DenseSet<Operation *> &opsWithChannels,
-                              SmallVector<Operation *> &opsWithBufferReuse,
-                              DenseSet<Operation *> &excludeReuse);
-
-bool needAccumulatedLoopCntForReuse(
-    scf::IfOp ifOp, SmallVector<Operation *> &opsWithBufferReuse);
-
 // Return number of AccumCnts for the given ctrlOp. Add a single
 // AccumCnt for all channels under opsWithBufferReuse and it will be the
 // last AccumCnt.
 unsigned getAccumCnts(Operation *ctrlOp,
-                      const DenseSet<Operation *> &opsWithChannels,
-                      SmallVector<Operation *> &opsWithBufferReuse);
+                      const DenseSet<Operation *> &opsWithChannels);
 
 unsigned getAccumArgIdx(scf::ForOp parentForOp, Operation *ctrlOp,
-                        const DenseSet<Operation *> &opsWithChannels,
-                        SmallVector<Operation *> &opsWithBufferReuse);
+                        const DenseSet<Operation *> &opsWithChannels);
 
-Value appendBufferIdxArgs(
-    SmallVector<Operation *> &taskTopOps, unsigned numBuffers,
-    const SmallVector<Channel *> &channels,
-    const DenseMap<Channel *, Channel *> &mapToRepresenting,
-    SmallVector<Operation *> &opsWithBufferReuse,
-    DenseSet<Operation *> &opsWithChannels);
+SmallVector<Operation *>
+getTaskTopRegion(triton::FuncOp funcOp, const SmallVector<Channel *> &channels);
 
-void reuseBuffers(SmallVector<Operation *> &taskTopOps,
-                  const SmallVector<Channel *> &channels,
-                  DenseMap<Channel *, Channel *> &mapToRepresenting,
-                  SmallVector<Operation *> &opsWithBufferReuse);
+Value appendBufferIdxArgs(SmallVector<Operation *> &taskTopOps,
+                          unsigned numBuffers,
+                          const SmallVector<Channel *> &channels,
+                          DenseSet<Operation *> &opsWithChannels);
+
 void updateAccumRegions(SmallVector<Operation *> &opList,
                         const SmallVector<Channel *> &channels,
                         DenseSet<Operation *> &opsWithChannels);
@@ -121,20 +107,17 @@ void insertAsyncCopy(
         &channelsGroupedByProducers,
     const DenseMap<Channel *, Value> &bufferMap,
     DenseMap<Channel *, std::pair<Operation *, Operation *>> &copyOpMap,
-    DenseSet<Operation *> &opsWithChannels,
-    SmallVector<Operation *> &opsWithBufferReuse);
+    DenseSet<Operation *> &opsWithChannels);
 
 Value getAccumCount(OpBuilderWithAsyncTaskIds &builder, Operation *op,
-                    const DenseSet<Operation *> &opsWithChannels,
-                    SmallVector<Operation *> &opsWithBufferReuse);
+                    const DenseSet<Operation *> &opsWithChannels);
 std::pair<Value, Value> getBufferIdxAndPhase(OpBuilderWithAsyncTaskIds &builder,
                                              Location loc, Value accumCnt,
                                              unsigned numBuffers);
 void getBufferIdxAndPhase(OpBuilderWithAsyncTaskIds &builder, Operation *op,
                           unsigned numBuffers,
                           const DenseSet<Operation *> &opsWithChannels,
-                          Value &bufferIdx, Value &phase,
-                          SmallVector<Operation *> &opsWithBufferReuse);
+                          Value &bufferIdx, Value &phase);
 
 Value getBarrierForPipelineStage(OpBuilderWithAsyncTaskIds &builder,
                                  Value barrierAlloc, Value bufferIdx);
