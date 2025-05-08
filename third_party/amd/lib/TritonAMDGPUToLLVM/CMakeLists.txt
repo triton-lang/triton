@@ -24,12 +24,17 @@ add_triton_library(TritonAMDGPUToLLVM
     SchedInstructions.cpp
     UpcastMXFPToLLVM.cpp
     MembarUtility.cpp
+    ScalarizePackedFOps.cpp
 
     DEPENDS
     TritonAMDGPUConversionPassIncGen
+    LLVMIRIncGen
 
     LINK_LIBS PUBLIC
     TritonGPUToLLVM
     TritonAMDGPUIR
     TritonProtonToLLVM
+    LLVMCore
+    LLVMPasses
+    LLVMSupport
 )
