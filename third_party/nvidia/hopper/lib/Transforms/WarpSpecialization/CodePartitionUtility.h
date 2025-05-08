@@ -1,9 +1,6 @@
 #ifndef NV_DIALECT_HOPPER_TRANSFORMS_CODEPARTITIONUTILITY_H_
 #define NV_DIALECT_HOPPER_TRANSFORMS_CODEPARTITIONUTILITY_H_
 
-// #include "mlir/IR/Matchers.h"
-// #include "mlir/IR/PatternMatch.h"
-
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
@@ -14,13 +11,8 @@
 #include <numeric>
 
 namespace mlir {
-// class DominanceInfo;
-// class PostDominanceInfo;
 
 namespace tt = mlir::triton;
-
-/*
- */
 
 enum class DataChannelKind { SMEM, TMEM };
 
