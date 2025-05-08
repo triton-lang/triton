@@ -260,16 +260,6 @@ public:
       : forOp(forOp), opLatency(opLatency) {};
 
   void run() {
-    if (!triton::tools::getBoolEnv("ENABLE_MMA_V5_ATT_PIPELINE")) {
-      int mmav5Count = 0;
-      for (auto &op : forOp.getBody()->without_terminator()) {
-        if (isa<ttng::MMAv5OpInterface>(&op)) {
-          mmav5Count++;
-        }
-      }
-      if (mmav5Count > 1)
-        return;
-    }
     DenseMap<Operation *, int> mmaSelfLatency;
     // Check if the load op (mma operand) is pipelineable.
     auto isLoadToBePipelined = [&](Operation *op) {
