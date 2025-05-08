@@ -69,12 +69,14 @@ public:
   }
 };
 
-int getLatencyFromAttr(Operation *op) {
+int getSelfLatencyFromAttr(Operation *op) {
   auto module = op->getParentOfType<ModuleOp>();
-  auto helper = TritonDialect::getLoaded(module)->getLatencyAttrHelper();
+  auto helper = TritonDialect::getLoaded(module)->getSelfLatencyAttrHelper();
   if (!helper.isAttrPresent(op))
     return 0;
-  return helper.getAttr(op).getInt();
+  int val = helper.getAttr(op).getInt();
+  helper.removeAttr(op);
+  return val;
 }
 
 DenseSet<Operation *>
@@ -845,30 +847,8 @@ getTmemUseStageBoundOps(ttng::TMEMAllocOp alloc, scf::ForOp forOp,
   return bounds;
 }
 
-// Create a predicate argument for the dist-1wait
-scf::ForOp prepLoopForDist1Wait(scf::ForOp forOp, CoarseSchedule &schedule,
-                                ttng::MMAv5OpInterface mma) {
-  OpBuilderForStage builder(forOp, schedule);
-  Location loc = mma.getLoc();
-  Value vFalse = builder.create<arith::ConstantIntOp>(loc, 0, 1);
-
-  // Create a predicate for the wait (start with false and change to true on the
-  // first mma execution)
-  scf::ForOp newForOp = replaceForOpWithNewSignature(builder, forOp, {vFalse});
-  forOp.erase();
-  forOp = newForOp;
-
-  builder.setInsertionPointAfter(mma);
-  builder.setStageCluster(schedule[mma]);
-  Value vTrue = builder.create<arith::ConstantIntOp>(loc, 1, 1);
-
-  auto yieldOp = cast<scf::YieldOp>(forOp.getBody()->getTerminator());
-  yieldOp.getResultsMutable().append(vTrue); // predicate
-  return forOp;
-}
-
 void createBarrierAndWaitOps(scf::ForOp forOp, CoarseSchedule &schedule,
-                             ttng::MMAv5OpInterface mma,
+                             ttng::MMAv5OpInterface mma, int mmaSelfLatency,
                              ttng::TMEMAllocOp alloc, int phaseArgIdx,
                              int barrierIdxArgIdx) {
   auto isLoadToBePipelined = [&](Operation *op) {
@@ -900,7 +880,7 @@ void createBarrierAndWaitOps(scf::ForOp forOp, CoarseSchedule &schedule,
     }
   }
 
-  int mainWaitStage = schedule[mma].first + getLatencyFromAttr(mma);
+  int mainWaitStage = schedule[mma].first + mmaSelfLatency;
   CoarseSchedule::Cluster mainWaitCluster = schedule[mma].second;
   if (latestSyncPoint && mmaPipeHelper.isOperandsStateDetermined) {
     if (schedule.isOpBefore(*latestSyncPoint, mma)) {
@@ -1119,7 +1099,8 @@ scf::ForOp lowerMMA(ttng::MMAv5OpInterface mma, scf::ForOp forOp,
     return forOp;
   }
 
-  if (getLatencyFromAttr(mma) == 0) {
+  int mmaSelfLatency = getSelfLatencyFromAttr(mma.getOperation());
+  if (mmaSelfLatency == 0) {
     return forOp;
   }
 
@@ -1172,8 +1153,8 @@ scf::ForOp lowerMMA(ttng::MMAv5OpInterface mma, scf::ForOp forOp,
       .getResultsMutable()
       .append(newYieldOperands);
 
-  createBarrierAndWaitOps(forOp, schedule, mma, alloc, phaseArgIdx,
-                          barrierIdxArgIdx);
+  createBarrierAndWaitOps(forOp, schedule, mma, mmaSelfLatency, alloc,
+                          phaseArgIdx, barrierIdxArgIdx);
 
   if (tmemUseNumStages > 1) {
     multibufferTensorMemory(forOp, schedule, alloc, bufIdxArgIdx,

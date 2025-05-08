@@ -270,6 +270,7 @@ public:
       if (mmav5Count > 1)
         return;
     }
+    DenseMap<Operation *, int> mmaSelfLatency;
     // Check if the load op (mma operand) is pipelineable.
     auto isLoadToBePipelined = [&](Operation *op) {
       return opLatency.count(op) && opLatency[op] > 0;
@@ -283,18 +284,21 @@ public:
         // place the wait right before the loads.
         auto pipeHelper = ttng::MMAv5PipelineableOperandsHelper(
             mma, forOp, isLoadToBePipelined);
-        bool pipelineable = pipeHelper.isPipelineable ||
-                            (pipeHelper.isOperandsStateDetermined &&
-                             !ttng::hasLoadsAfterMMA(mma, forOp));
-        pipelineable =
-            pipelineable && (!ttng::requiresAccMultiBuffering(mma, forOp) ||
-                             (ttng::isAccMultibufferingPossible(mma, forOp) &&
-                              !getDisallowAccMultiBuffer(forOp)));
-        if (pipelineable) {
-          opLatency[&op] = 1;
+        if (pipeHelper.isPipelineable ||
+            (pipeHelper.isOperandsStateDetermined &&
+             !ttng::hasLoadsAfterMMA(mma, forOp))) {
+          // MMA can be overlapped with itself
+          mmaSelfLatency[mma] = 1;
+          if (!ttng::requiresAccMultiBuffering(mma, forOp) ||
+              (ttng::isAccMultibufferingPossible(mma, forOp) &&
+               !getDisallowAccMultiBuffer(forOp))) {
+            // MMA's users can be pushed to the next stage
+            opLatency[&op] = 1;
+          }
         }
       }
     }
+    serializeSelfLatencies(forOp->getParentOfType<ModuleOp>(), mmaSelfLatency);
   }
 
 private:

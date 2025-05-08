@@ -320,13 +320,22 @@ void mlir::triton::serializeLatencies(ModuleOp module,
   }
 }
 
+void mlir::triton::serializeSelfLatencies(
+    ModuleOp module, DenseMap<Operation *, int> &opSelfLatency) {
+  auto helper = TritonDialect::getLoaded(module)->getSelfLatencyAttrHelper();
+  auto builder = Builder(module);
+  for (auto &[op, latency] : opSelfLatency) {
+    helper.setAttr(op, builder.getI32IntegerAttr(latency));
+  }
+}
+
 DenseMap<Operation *, int> mlir::triton::deserializeLatencies(Operation *op) {
-  auto helper = TritonDialect::getLoaded(op)->getLatencyAttrHelper();
   DenseMap<Operation *, int> opLatency;
+  auto latencyHelper = TritonDialect::getLoaded(op)->getLatencyAttrHelper();
   op->walk([&](Operation *op) {
-    if (auto attr = helper.getAttr(op)) {
+    if (auto attr = latencyHelper.getAttr(op)) {
       opLatency[op] = attr.getInt();
-      helper.removeAttr(op);
+      latencyHelper.removeAttr(op);
     }
   });
   return opLatency;

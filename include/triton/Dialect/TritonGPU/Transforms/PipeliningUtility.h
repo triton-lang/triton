@@ -90,6 +90,11 @@ int getCopyVecBytes(RankedTensorType registerTy,
 // attribute.
 void serializeLatencies(ModuleOp module, DenseMap<Operation *, int> &opLatency);
 
+// Serialize the self latencies of the operations in the loops into the
+// self_latency attribute.
+void serializeSelfLatencies(ModuleOp module,
+                            DenseMap<Operation *, int> &opSelfLatency);
+
 // Deserialize the latencies of the operations in the loops from the attribute.
 DenseMap<Operation *, int> deserializeLatencies(Operation *op);
 
