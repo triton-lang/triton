@@ -463,17 +463,13 @@ LogicalResult TMEMLoadOp::verify() {
 
 // -- TMEMAllocOp --
 LogicalResult TMEMAllocOp::verify() {
-  if (!isa<triton::nvidia_gpu::TensorMemorySpaceAttr>(
-          getType().getMemorySpace()))
-    return emitOpError("should create a buffer of tensor memory.");
-  if (!isa<triton::nvidia_gpu::TensorMemoryEncodingAttr,
-           TensorMemoryScalesEncodingAttr>(getType().getEncoding()))
-    return emitOpError("should use tensor memory encoding.");
-  if (!getSrc()) {
-    if (!getType().getMutableMemory())
-      return emitError("uninitialized alloc must have a mutable memdesc type");
-  }
-  return success();
+  if (!isa<TensorMemorySpaceAttr>(getType().getMemorySpace()))
+    return emitOpError("should create a buffer of tensor memory");
+  if (!isa<TensorMemoryEncodingAttr, TensorMemoryScalesEncodingAttr>(
+          getType().getEncoding()))
+    return emitOpError("should use tensor memory encoding");
+
+  return LocalAllocOp::verifyAllocOp(*this, getSrc(), getType());
 }
 
 void TMEMAllocOp::getEffects(

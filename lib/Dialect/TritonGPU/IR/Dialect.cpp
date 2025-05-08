@@ -316,12 +316,7 @@ SmallVector<int64_t> getAllocationShapePerCTA(Attribute layout,
   if (auto sharedMMALayout = mlir::dyn_cast<NVMMASharedEncodingAttr>(layout)) {
     if (sharedMMALayout.getFp4Padded()) {
       auto packedAxis = getOrder(sharedMMALayout, shapeLogical)[0];
-      if (shape.size() == 3) {
-        // Take into account multi buffering
-        shape[1 + packedAxis] *= 2;
-      } else {
-        shape[packedAxis] *= 2;
-      }
+      shape[packedAxis] *= 2;
     }
   }
   return getShapePerCTA(layout, shape);
