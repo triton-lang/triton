@@ -5,7 +5,7 @@ import pytest
 import triton
 
 current_target = triton.runtime.driver.active.get_current_target()
-if current_target.arch not in ("gfx950", "gfx940", "gfx941", "gfx942", "gfx90a", "gfx908"):
+if current_target.arch not in ("gfx950", "gfx942", "gfx90a", "gfx908"):
     pytest.skip(allow_module_level=True)
 
 
@@ -35,7 +35,7 @@ def test_check_not_scalarize():
         found_colliding_packed_fop = False
         packed_fop = re.compile(r"= f(add|sub|mul) <")
         for bb in bbs:
-            if "mfma" in bb or "wmma" in bb and packed_fop.search(bb):
+            if ("mfma" in bb or "wmma" in bb) and packed_fop.search(bb):
                 found_colliding_packed_fop = True
         assert found_colliding_packed_fop, "couldn't find adjacent packed fop and mfma"
 
