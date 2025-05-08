@@ -73,6 +73,7 @@ static void removeAttributes(ModuleOp moduleOp) {
     op->removeAttr(mlir::triton::kLoopStageAttrName);
     op->removeAttr(mlir::triton::kLoopClusterAttrName);
     op->removeAttr(mlir::triton::kScheduledMaxStageAttrName);
+    op->removeAttr(mlir::triton::kAssignedStageAttrName);
   });
 }
 
