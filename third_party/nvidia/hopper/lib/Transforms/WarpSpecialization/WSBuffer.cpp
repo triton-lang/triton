@@ -34,16 +34,6 @@ namespace mlir {
 #define DBGS() (llvm::dbgs() << "[" DEBUG_TYPE "]: ")
 #define LDBG(X) LLVM_DEBUG(DBGS() << X << "\n")
 
-static unsigned getNumBuffersOrDefault(scf::ForOp forOp, unsigned numBuffers) {
-  // Use the attribute attached to the loop if it exists otherwise use the
-  // global control.
-  if (!forOp->hasAttr(mlir::triton::kNumStagesAttrName))
-    return numBuffers;
-  return mlir::cast<IntegerAttr>(
-             forOp->getAttr(mlir::triton::kNumStagesAttrName))
-      .getInt();
-}
-
 static bool enclosingAChannel(Operation *ctrlOp,
                               const DenseSet<Operation *> &opsWithChannels) {
   for (auto *op : opsWithChannels) {
@@ -151,12 +141,11 @@ needAccumulatedLoopCnt(scf::IfOp ifOp,
 
 // op is up-to-date (i.e will be updated when a control op is re-written).
 Value updateAccumLoopCount(SmallVector<Operation *> &opList,
-                           unsigned numBuffers,
                            SmallVector<Operation *> &taskTopOps,
                            DenseSet<Operation *> &opsWithChannels,
                            Value prevAccum);
 
-scf::ForOp createNewLoopWrapper(scf::ForOp origForOp, unsigned numBuffers,
+scf::ForOp createNewLoopWrapper(scf::ForOp origForOp,
                                 SmallVector<Operation *> &taskTopOps,
                                 DenseSet<Operation *> &opsWithChannels,
                                 Value prevAccum);
@@ -164,8 +153,7 @@ scf::ForOp createNewLoopWrapper(scf::ForOp origForOp, unsigned numBuffers,
 // For certain cases, we need to add an additional output for
 // IfOp to track the accumulatedLoopCount, we may need to add
 // a corresponding elseBlock with yieldOp.
-scf::IfOp rewriteIfOp(scf::IfOp ifOp, unsigned numBuffers,
-                      SmallVector<Operation *> &taskTopOps,
+scf::IfOp rewriteIfOp(scf::IfOp ifOp, SmallVector<Operation *> &taskTopOps,
                       DenseSet<Operation *> &opsWithChannels, Value prevAccum) {
   LLVM_DEBUG({
     LDBG("rewrite ifOp for smem sharing ");
@@ -217,8 +205,8 @@ scf::IfOp rewriteIfOp(scf::IfOp ifOp, unsigned numBuffers,
   }
 
   // Add one more operand to then Yield.
-  Value endAccum = updateAccumLoopCount(opList, numBuffers, taskTopOps,
-                                        opsWithChannels, prevAccum);
+  Value endAccum =
+      updateAccumLoopCount(opList, taskTopOps, opsWithChannels, prevAccum);
 
   SmallVector<Value> ifYieldOperands = newIfOp.thenYield().getOperands();
 
@@ -363,8 +351,7 @@ scf::IfOp rewriteIfOp(scf::IfOp ifOp, unsigned numBuffers,
   return newIfOp;
 }
 
-scf::ForOp createNewLoop(scf::ForOp forOp, int numBuffers,
-                         scf::ForOp &parentForOp,
+scf::ForOp createNewLoop(scf::ForOp forOp, scf::ForOp &parentForOp,
                          SmallVector<Value> &initialAccum,
                          Value accumulatedLoopCount) {
   auto loc = forOp.getLoc();
@@ -435,21 +422,20 @@ void collectRegionsWithChannels(const SmallVector<Channel *> &channels,
 
 // Go through a list of operations under one scope.
 Value updateAccumLoopCount(SmallVector<Operation *> &opList,
-                           unsigned numBuffers,
                            SmallVector<Operation *> &taskTopOps,
                            DenseSet<Operation *> &opsWithChannels,
                            Value prevAccum) {
   DenseMap<Operation *, Operation *> oldToNew;
   for (Operation *op : opList) {
     if (auto forOp = dyn_cast<scf::ForOp>(op)) {
-      auto newForOp = createNewLoopWrapper(forOp, numBuffers, taskTopOps,
-                                           opsWithChannels, prevAccum);
+      auto newForOp =
+          createNewLoopWrapper(forOp, taskTopOps, opsWithChannels, prevAccum);
       oldToNew[op] = newForOp.getOperation();
       // Update prevAccum to be after the loop.
     } else if (auto ifOp = dyn_cast<scf::IfOp>(op)) {
       if (needAccumulatedLoopCnt(ifOp, opsWithChannels)) {
-        auto newIfOp = rewriteIfOp(ifOp, numBuffers, taskTopOps,
-                                   opsWithChannels, prevAccum);
+        auto newIfOp =
+            rewriteIfOp(ifOp, taskTopOps, opsWithChannels, prevAccum);
         oldToNew[op] = newIfOp.getOperation();
         // update prevAccum to be result of the new IfOp.
         assert(newIfOp.getNumResults() >= 1);
@@ -465,7 +451,7 @@ Value updateAccumLoopCount(SmallVector<Operation *> &opList,
           }
         });
         for (auto innerFor : innerForOps) {
-          auto newFor = createNewLoopWrapper(innerFor, numBuffers, taskTopOps,
+          auto newFor = createNewLoopWrapper(innerFor, taskTopOps,
                                              opsWithChannels, prevAccum);
           oldToNew[innerFor.getOperation()] = newFor.getOperation();
         }
@@ -480,7 +466,7 @@ Value updateAccumLoopCount(SmallVector<Operation *> &opList,
   return prevAccum;
 }
 
-scf::ForOp createNewLoopWrapper(scf::ForOp origForOp, unsigned numBuffers,
+scf::ForOp createNewLoopWrapper(scf::ForOp origForOp,
                                 SmallVector<Operation *> &taskTopOps,
                                 DenseSet<Operation *> &opsWithChannels,
                                 Value prevAccum) {
@@ -491,8 +477,6 @@ scf::ForOp createNewLoopWrapper(scf::ForOp origForOp, unsigned numBuffers,
 
   scf::ForOp parentForOp = origForOp->getParentOfType<scf::ForOp>();
   scf::ForOp newForOp;
-  // for(...) -> for(..., phase, bufferIdx)
-  unsigned loopNumBuffers = getNumBuffersOrDefault(origForOp, numBuffers);
 
   Value accumulatedLoopCount = prevAccum;
   // ForOp will have a list of accumCnts, starting with
@@ -529,8 +513,8 @@ scf::ForOp createNewLoopWrapper(scf::ForOp origForOp, unsigned numBuffers,
     initialAccum.push_back(startAccum);
   }
 
-  newForOp = createNewLoop(origForOp, loopNumBuffers, parentForOp, initialAccum,
-                           accumulatedLoopCount);
+  newForOp =
+      createNewLoop(origForOp, parentForOp, initialAccum, accumulatedLoopCount);
   LLVM_DEBUG({
     LDBG("after createNewLoop ");
     newForOp.dump();
@@ -561,8 +545,8 @@ scf::ForOp createNewLoopWrapper(scf::ForOp origForOp, unsigned numBuffers,
     if (auto tOp = dyn_cast<scf::IfOp>(&op))
       opList.push_back(&op);
   }
-  Value endAccum = updateAccumLoopCount(opList, numBuffers, taskTopOps,
-                                        opsWithChannels, prevAccum);
+  Value endAccum =
+      updateAccumLoopCount(opList, taskTopOps, opsWithChannels, prevAccum);
   LLVM_DEBUG({
     LDBG("-- before replacing yieldOp ");
     newForOp.dump();
@@ -658,8 +642,8 @@ void addAccumCountForRegion(triton::FuncOp funcOp,
       opList.push_back(op);
   }
   Value tmpAccumLoopCount;
-  updateAccumLoopCount(opList, 0 /*numBuffers*/, taskTopOps,
-                       regionsWithChannels, tmpAccumLoopCount);
+  updateAccumLoopCount(opList, taskTopOps, regionsWithChannels,
+                       tmpAccumLoopCount);
 }
 
 // TODO: Support for mapToRepresenting and opsWithBufferReuse.
@@ -677,8 +661,7 @@ Value appendBufferIdxArgs(SmallVector<Operation *> &taskTopOps,
       opList.push_back(op);
   }
   Value tmpAccumLoopCount;
-  updateAccumLoopCount(opList, numBuffers, taskTopOps, opsWithChannels,
-                       tmpAccumLoopCount);
+  updateAccumLoopCount(opList, taskTopOps, opsWithChannels, tmpAccumLoopCount);
 
   return tmpAccumLoopCount;
 }
