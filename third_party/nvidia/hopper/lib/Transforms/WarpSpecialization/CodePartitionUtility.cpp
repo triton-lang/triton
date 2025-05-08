@@ -37,32 +37,6 @@ bool enclosing(scf::ForOp forOp, Operation *op) {
   return false;
 }
 
-bool channelWithReuse(Operation *dstOp,
-                      SmallVector<Operation *> &opsWithBufferReuse) {
-  for (auto *op : opsWithBufferReuse) {
-    if (dstOp == op) {
-      return true;
-    }
-    if (auto forOp = dyn_cast<scf::ForOp>(op))
-      if (enclosing(forOp, dstOp))
-        return true;
-    if (auto ifOp = dyn_cast<scf::IfOp>(op))
-      if (enclosing(ifOp, dstOp))
-        return true;
-  }
-  return false;
-}
-
-// opsWithChannels: ctrl ops with channels directly under
-void excludeChannelsWithReuse(const DenseSet<Operation *> &opsWithChannels,
-                              SmallVector<Operation *> &opsWithBufferReuse,
-                              DenseSet<Operation *> &excludeReuse) {
-  for (auto *dstOp : opsWithChannels) {
-    if (!channelWithReuse(dstOp, opsWithBufferReuse))
-      excludeReuse.insert(dstOp);
-  }
-}
-
 // Check to see if there is no outer loop that is enclosed under ifOp.
 bool immediateEnclosing(scf::IfOp ifOp, Operation *subOp) {
   auto pOp = subOp->getParentOfType<scf::ForOp>();
@@ -71,47 +45,16 @@ bool immediateEnclosing(scf::IfOp ifOp, Operation *subOp) {
   return !enclosing(ifOp, pOp.getOperation());
 }
 
-// Return true if the IfOp contains a ForOp that is in opsWithBufferReuse.
-// We want to support reuse between channels in a loop and channels in a IfOp.
-bool needAccumulatedLoopCntForReuse(
-    scf::IfOp ifOp, SmallVector<Operation *> &opsWithBufferReuse) {
-  bool needAccum = false;
-  ifOp.walk<WalkOrder::PreOrder>([&](Operation *subOp) {
-    for (auto tOp : opsWithBufferReuse) {
-      if (auto forOp = dyn_cast<scf::ForOp>(subOp)) {
-        // For the case of ifOp contains forOp, which contains subOp, no need to
-        // generate accumLoopCount for ifOp.
-        if (subOp == tOp && immediateEnclosing(ifOp, tOp)) {
-          needAccum = true;
-          break;
-        }
-      } else {
-        if (subOp == tOp) {
-          needAccum = true;
-          break;
-        }
-      }
-    }
-  });
-  return needAccum;
-}
-
 // Return number of AccumCnts for the given ctrlOp. Add a single
 // AccumCnt for all channels under opsWithBufferReuse and it will be the
 // last AccumCnt.
 unsigned getAccumCnts(Operation *ctrlOp,
-                      const DenseSet<Operation *> &opsWithChannels,
-                      SmallVector<Operation *> &opsWithBufferReuse) {
+                      const DenseSet<Operation *> &opsWithChannels) {
   unsigned cnt = 0;
   // Add a single count for all channels under opsWithBufferReuse.
-  DenseSet<Operation *> excludeReuse;
-  excludeChannelsWithReuse(opsWithChannels, opsWithBufferReuse, excludeReuse);
   LDBG("getAccumCnts: " << ctrlOp);
-  for (auto *op : opsWithBufferReuse) {
-    LDBG("-- getAccumCnts: " << ctrlOp << " opsWithBufferReuse " << op);
-  }
-  for (auto *op : excludeReuse) {
-    LDBG("-- getAccumCnts: " << ctrlOp << " excludeReuse " << op);
+  for (auto *op : opsWithChannels) {
+    LDBG("-- getAccumCnts: " << ctrlOp << " opsWithChannels " << op);
     if (ctrlOp == op) {
       ++cnt;
       continue;
@@ -123,22 +66,13 @@ unsigned getAccumCnts(Operation *ctrlOp,
       if (enclosing(ifOp, op))
         ++cnt;
   }
-  if (auto tIf = dyn_cast<scf::IfOp>(ctrlOp))
-    if (needAccumulatedLoopCntForReuse(tIf, opsWithBufferReuse))
-      ++cnt;
-  if (dyn_cast<scf::ForOp>(ctrlOp))
-    if (opsWithBufferReuse.size() > 1)
-      ++cnt;
   return cnt;
 }
 
 // Assume parentForOp has accumCnt for the specified ctrlOp. For channels with
 // reuse, use getReuseAccumCntArg.
 unsigned getAccumArgIdx(scf::ForOp parentForOp, Operation *ctrlOp,
-                        const DenseSet<Operation *> &opsWithChannels,
-                        SmallVector<Operation *> &opsWithBufferReuse) {
-  DenseSet<Operation *> excludeReuse;
-  excludeChannelsWithReuse(opsWithChannels, opsWithBufferReuse, excludeReuse);
+                        const DenseSet<Operation *> &opsWithChannels) {
   // Walk parentForOp in preorder.
   unsigned preOrderId = 0, ctrlId = 0;
   bool found = false;
@@ -148,7 +82,7 @@ unsigned getAccumArgIdx(scf::ForOp parentForOp, Operation *ctrlOp,
       ctrlId = preOrderId;
       found = true;
     }
-    for (auto *op : excludeReuse) {
+    for (auto *op : opsWithChannels) {
       if (op == subOp) {
         LDBG("getAccumArgIdx: saw ctrlOp enclosing channel " << subOp);
         ++preOrderId;
@@ -208,27 +142,17 @@ std::pair<Value, Value> getBufferIdxAndPhase(OpBuilderWithAsyncTaskIds &builder,
 // reuses among a list of parallel control ops. And we will add a single
 // AccumCnt as the last argument.
 Value getAccumCount(OpBuilderWithAsyncTaskIds &builder, Operation *op,
-                    const DenseSet<Operation *> &opsWithChannels,
-                    SmallVector<Operation *> &opsWithBufferReuse) {
+                    const DenseSet<Operation *> &opsWithChannels) {
   auto parentForOp = op->getParentOfType<scf::ForOp>();
   auto *pOp = op->getParentOp();
   // Get parentForOp.arg[pOp]
   unsigned accumArgId;
   unsigned tSize = parentForOp.getBody()->getArguments().size();
-  unsigned parentTCnts =
-      getAccumCnts(parentForOp, opsWithChannels, opsWithBufferReuse);
+  unsigned parentTCnts = getAccumCnts(parentForOp, opsWithChannels);
   Value accumCnt;
   bool partOfReuse = false;
-  if (opsWithBufferReuse.size() > 1) {
-    partOfReuse = channelWithReuse(op, opsWithBufferReuse);
-  }
-  if (opsWithBufferReuse.size() > 1 && partOfReuse) {
-    // Check to see if the op is inside opsWithBufferReuse.
-    accumCnt = parentForOp.getBody()->getArguments().back();
-    accumArgId = parentTCnts - 1;
-  } else {
-    accumArgId =
-        getAccumArgIdx(parentForOp, pOp, opsWithChannels, opsWithBufferReuse);
+  {
+    accumArgId = getAccumArgIdx(parentForOp, pOp, opsWithChannels);
     accumCnt =
         parentForOp.getBody()->getArgument(tSize - parentTCnts + accumArgId);
   }
@@ -242,10 +166,8 @@ Value getAccumCount(OpBuilderWithAsyncTaskIds &builder, Operation *op,
 void getBufferIdxAndPhase(OpBuilderWithAsyncTaskIds &builder, Operation *op,
                           unsigned numBuffers,
                           const DenseSet<Operation *> &opsWithChannels,
-                          Value &bufferIdx, Value &phase,
-                          SmallVector<Operation *> &opsWithBufferReuse) {
-  Value accumCnt =
-      getAccumCount(builder, op, opsWithChannels, opsWithBufferReuse);
+                          Value &bufferIdx, Value &phase) {
+  Value accumCnt = getAccumCount(builder, op, opsWithChannels);
   std::tie(bufferIdx, phase) =
       getBufferIdxAndPhase(builder, op->getLoc(), accumCnt, numBuffers);
 }
