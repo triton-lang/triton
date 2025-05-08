@@ -23,7 +23,7 @@ class FusedActivation:
     name: str
     fn: "triton.runtime.jit.JITFunction"
     fn_arg_names: tuple[str]
-    fn_args: tuple
+    fn_args: tuple[object]
     reduction_n: int
 
 
