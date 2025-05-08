@@ -297,9 +297,12 @@ static bool canMergeBuffers(Value a, Value b) {
 }
 
 // Given two buffers that can be merged, determine if they should be merged.
-// There are a couple of criteria for being merged:
-// - The buffers would not have been merge
-static bool shouldMergeBuffers(Value a, Value b) {}
+static bool shouldMergeBuffers(Value a, Value b) {
+  // The buffers should not be merged if they do not have overlapping extents.
+  // In this case, the memory allocator(s) could have placed them in the same
+  // memory location anyways. Merging them early muddles the IR and could block
+  // optimizations among other things.
+}
 
 static void reuseBuffers(FuncOp func) {
   // First determine when buffers are live at every point in the function.
@@ -313,6 +316,25 @@ static void reuseBuffers(FuncOp func) {
   for (const BufferStates &state :
        llvm::make_second_range(analysis.bufferStates))
     uniqueStates.insert(*state);
+
+  // Idealy, buffer merging runs after warp specialization and pipelining,
+  // because the goal of both of these passes is to overlap execution of code.
+  // Merging buffers too early can block this overlapping by creating a
+  // dependency between what otherwise would have been independent regions of
+  // code. E.g. this pass may determine that buffers A and B are never live at
+  // the same time inside a loop body, but the pipeliner may want to overlap the
+  // code in which they are live.
+  //
+  // But buffer merging cannot run before warp specialization because afterwards
+  // it is difficult to determine which regions of code can actually execute
+  // independently, based on the mbarrier waits and arrives in the code. This
+  // consequently makes it difficult to determine whether two buffers are ever
+  // live at the same time.
+  //
+  // To balance this, the pass runs before warp specialization but is careful to
+  // not merge buffers in a way that blocks it and the pipeliner. This means
+  // buffers that could be multi-buffered (e.g. MMAv5 accumulators) or whose
+  // users don't have a direct SSA dependency on each other will not be merged.
 
   // For a given buffer, find all the buffers that at any point are live at the
   // same time as the given buffer. We can do this by joining all the masks for
