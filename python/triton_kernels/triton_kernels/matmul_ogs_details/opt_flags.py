@@ -1,6 +1,6 @@
 from dataclasses import dataclass
 import triton
-from triton_bench import target_info
+from triton_kernels import target_info
 import torch
 
 from . import opt_flags_amd, opt_flags_nvidia
@@ -43,6 +43,7 @@ def make_default_opt_flags_amd(
     can_use_persistent_tma,
     can_use_fused_scatter,
     enforce_bitwise_invariance,
+    has_expensive_epilogue,
     constraints,
 ):
     assert not constraints, "flags constraints not supported on AMD"
@@ -120,6 +121,7 @@ def make_default_opt_flags_nvidia(
     can_use_persistent_tma,
     can_use_fused_scatter,
     enforce_bitwise_invariance,
+    has_expensive_epilogue,
     constraints,
 ):
     constraints_supported = ["block_m", "block_k", "split_k", "fused_scatter", "is_persistent", "epilogue_subtile"]
@@ -160,7 +162,8 @@ def make_default_opt_flags_nvidia(
     if constraints.get("is_persistent", None) is not None:
         is_persistent = constraints["is_persistent"]
     else:
-        is_persistent = supports_persistent and (tiles_per_sm >= 10.0 or lhs_dtype.itemsize <= 1)
+        has_simple_epilogue = precision_config.max_num_imprecise_acc is None and not has_expensive_epilogue
+        is_persistent = supports_persistent and has_simple_epilogue and (tiles_per_sm >= 2.0 or lhs_dtype.itemsize <= 1) and out_dtype.itemsize < 4
     # block k
     if constraints.get("block_k", None) is not None:
         block_k = constraints["block_k"]
@@ -191,11 +194,11 @@ def make_default_opt_flags_nvidia(
     if constraints.get("epilogue_subtile", None) is not None:
         epilogue_subtile = constraints["epilogue_subtile"]
     else:
-        n1 = opt_flags_nvidia.compute_num_stages(*compute_num_stages_args, False)
-        n2 = opt_flags_nvidia.compute_num_stages(*compute_num_stages_args, True)
+        n1 = opt_flags_nvidia.compute_num_stages(*compute_num_stages_args, False, has_expensive_epilogue)
+        n2 = opt_flags_nvidia.compute_num_stages(*compute_num_stages_args, True, has_expensive_epilogue)
         epilogue_subtile = n2 > n1 # enable epilogue_subtile if it increases the number of stages
     # num_stages
-    num_stages = opt_flags_nvidia.compute_num_stages(*compute_num_stages_args, epilogue_subtile)
+    num_stages = opt_flags_nvidia.compute_num_stages(*compute_num_stages_args, epilogue_subtile, has_expensive_epilogue)
     # fused scatter scratchpad
     if constraints.get("fused_scatter", None) is not None:
         fused_scatter = constraints["fused_scatter"]
@@ -256,6 +259,7 @@ def make_opt_flags(
     routing_data,
     can_use_persistent_tma,
     can_use_fused_scatter,
+    has_expensive_epilogue,
 ):
     microscaling_ctx = precision_config.mx_ctx
     enforce_bitwise_invariance = precision_config.enforce_bitwise_invariance
@@ -264,7 +268,7 @@ def make_opt_flags(
         return _opt_flags
     args = [out_dtype, lhs_dtype, rhs_dtype, precision_config, microscaling_ctx, m, n, k,
             routing_data, can_use_persistent_tma, can_use_fused_scatter,
-            enforce_bitwise_invariance, _opt_flags_constraints]
+            enforce_bitwise_invariance, has_expensive_epilogue, _opt_flags_constraints]
     backend = triton.runtime.driver.active.get_current_target().backend
     if backend == "hip":
         return make_default_opt_flags_amd(*args)

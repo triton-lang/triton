@@ -1,6 +1,6 @@
 import torch
 import triton
-from triton_bench.target_info import get_cdna_version
+from triton_kernels.target_info import get_cdna_version
 
 
 def compute_block_nk(n, block_m, grid_m, num_xcds, lhs_dtype, rhs_dtype, microscaling_ctx):

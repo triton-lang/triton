@@ -1,6 +1,6 @@
 import pytest
 import torch
-from triton_bench.compaction import compaction, compaction_torch
+from triton_kernels.compaction import compaction, compaction_torch
 
 
 @pytest.mark.parametrize("n_tokens, n_cols, k, p", [
