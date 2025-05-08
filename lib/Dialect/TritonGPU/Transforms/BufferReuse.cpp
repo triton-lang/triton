@@ -115,45 +115,42 @@ static BufferRange getBufferAccess(Value value) {
 // BufferLiveRangeAnalysis
 //===----------------------------------------------------------------------===//
 
+using llvm::BitVector;
+using BufferStates = std::optional<BitVector>;
+
 namespace {
-enum class BufferState : unsigned char { Dead, Live };
-
-using BufferStates = SmallVector<BufferState>;
-
 struct BufferLiveRangeAnalysis {
-  static bool join(BufferStates &lhs, const BufferStates &rhs);
+  static bool join(BufferStates &lhs, const BitVector &rhs);
   void initialize(FuncOp func);
   void run(FuncOp func, RegionPredecessorAnalysis &preds);
 
-  DenseMap<Operation *, size_t> bufferIds;
-  DenseMap<VirtualBlock, BufferStates> bufferStates;
+  llvm::MapVector<Operation *, size_t> bufferIds;
+  llvm::MapVector<VirtualBlock, BufferStates> bufferStates;
 };
 } // namespace
 
-bool BufferLiveRangeAnalysis::join(BufferStates &lhs, const BufferStates &rhs) {
-  if (lhs.empty() && rhs.empty())
-    return false;
-  if (lhs.empty()) {
+bool BufferLiveRangeAnalysis::join(BufferStates &lhs, const BitVector &rhs) {
+  if (!lhs) {
     lhs = rhs;
     return true;
   }
-  assert(lhs.size() == rhs.size());
-  bool changed = false;
-  for (auto [lhsState, rhsState] : llvm::zip(lhs, rhs)) {
-    BufferState joined = std::max(lhsState, rhsState);
-    if (joined != lhsState) {
-      lhsState = joined;
-      changed = true;
-    }
-  }
-  return changed;
+  assert(lhs->size() == rhs.size());
+  if (*lhs == rhs)
+    return false;
+  *lhs |= rhs;
+  return true;
 }
 
 void BufferLiveRangeAnalysis::initialize(FuncOp func) {
   // First find all the buffers to track.
   func.walk([&](Operation *op) {
-    if (isa<ttng::TMEMAllocOp, LocalAllocOp>(op))
-      bufferIds.insert({op, bufferIds.size()});
+    if (!isa<ttng::TMEMAllocOp, LocalAllocOp>(op))
+      return;
+    auto memdesc = cast<MemDescType>(op->getResult(0).getType());
+    // Don't bother tracking buffers that are too small, such as mbarriers.
+    if (memdesc.getNumElements() < 16)
+      return;
+    bufferIds.insert({op, bufferIds.size()});
   });
 }
 
@@ -166,14 +163,14 @@ void BufferLiveRangeAnalysis::run(FuncOp func,
     Block *block = root->getBlock();
     worklist.push_back({block, block->end()});
     // All buffers are initially dead.
-    bufferStates[worklist.back()].resize(bufferIds.size(), BufferState::Dead);
+    bufferStates.insert({worklist.back(), BitVector(bufferIds.size(), false)});
   }
 
   // Fixed-point propagation.
   while (!worklist.empty()) {
     auto [block, iter] = worklist.pop_back_val();
     VirtualBlock afterIt(block, iter);
-    const BufferStates &stateAfter = bufferStates[afterIt];
+    BitVector stateAfter = *bufferStates.find(afterIt)->second;
 
     // Check for block entry.
     if (iter == block->begin()) {
@@ -181,11 +178,7 @@ void BufferLiveRangeAnalysis::run(FuncOp func,
       if (block->isEntryBlock()) {
         // Check for function entry.
         if (block->getParentOp() == func) {
-          assert(llvm::all_of(stateAfter,
-                              [](BufferState state) {
-                                return state == BufferState::Dead;
-                              }) &&
-                 "all buffers should be dead on entry");
+          assert(stateAfter.none() && "all buffers should be dead on entry");
           continue;
         }
 
@@ -221,10 +214,10 @@ void BufferLiveRangeAnalysis::run(FuncOp func,
     // HACK: Because `ttng.tmem_alloc` and `ttg.local_alloc` don't indicate an
     // `Allocate` effect before memory allocation, we have to check them
     // separately.
-    BufferStates curState = stateAfter;
+    BitVector curState = stateAfter;
     if (auto it = bufferIds.find(&op); it != bufferIds.end()) {
       // Buffers are definitely dead before they are allocated.
-      curState[it->second] = BufferState::Dead;
+      curState.reset(it->second);
 
     } else if (auto itf = dyn_cast<MemoryEffectOpInterface>(op)) {
       SmallVector<MemoryEffects::EffectInstance> effects;
@@ -240,18 +233,21 @@ void BufferLiveRangeAnalysis::run(FuncOp func,
         BufferRange access = getBufferAccess(mem);
         if (!access.alloc)
           continue;
-        size_t bufferId = bufferIds.at(access.alloc.getDefiningOp());
+        auto it = bufferIds.find(access.alloc.getDefiningOp());
+        if (it == bufferIds.end())
+          continue;
+        size_t bufferId = it->second;
         if (isa<MemoryEffects::Read>(effect.getEffect())) {
           // Read always require the buffer to be live.
-          curState[bufferId] = BufferState::Live;
+          curState.set(bufferId);
         } else if (isa<MemoryEffects::Write>(effect.getEffect())) {
           // Writes mark the buffer as dead only if we know it writes the whole
           // buffer.
           if (access.isFullRange)
-            curState[bufferId] = BufferState::Dead;
+            curState.reset(bufferId);
         } else if (isa<MemoryEffects::Allocate>(effect.getEffect())) {
           // Buffers are definitely dead before they are allocated.
-          curState[bufferId] = BufferState::Dead;
+          curState.reset(bufferId);
         } else {
           assert(isa<MemoryEffects::Free>(effect.getEffect()));
         }
@@ -275,6 +271,35 @@ static void reuseBuffers(FuncOp func) {
   BufferLiveRangeAnalysis analysis;
   analysis.initialize(func);
   analysis.run(func, preds);
+
+  // There are likely a bunch of identical states, so compress them.
+  SetVector<BitVector> uniqueStates;
+  for (const BufferStates &state :
+       llvm::make_second_range(analysis.bufferStates))
+    uniqueStates.insert(*state);
+
+  // For a given buffer, find all the buffers that at any point are live at the
+  // same time as the given buffer. We can do this by joining all the masks for
+  // when the buffer is live.
+  for (auto [buffer, id] : analysis.bufferIds) {
+    BitVector liveMask(analysis.bufferIds.size(), false);
+    for (const BitVector &state : uniqueStates) {
+      if (state.test(id))
+        liveMask |= state;
+    }
+    // Zero bits in `liveMask` now indicate buffers that are never live at the
+    // same time as the given buffer.
+    llvm::errs() << "Buffer " << id << " -> " << *buffer << "\n";
+    for (auto i : llvm::seq(liveMask.size())) {
+      if (liveMask.test(i))
+        continue;
+      llvm::errs() << "   can merge " << i << "\n";
+    }
+    llvm::errs() << "\n";
+  }
+
+  // There are multiple ways to merge buffers that are never live at the same
+  // time. For now, just go for a greedy algorithm.
 }
 
 //===----------------------------------------------------------------------===//
