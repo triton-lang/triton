@@ -294,8 +294,8 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
             b.shl(b.lshr(offset, b.i32_val(rshiftVal)), b.i32_val(lshiftVal)),
             offset);
       }
-      auto vecAddr = b.gep(sharedPtrTy, elemTy, smemBase, offset);
-      vecAddr.setInbounds(true);
+      auto vecAddr = b.gep(sharedPtrTy, elemTy, smemBase, offset,
+                           LLVM::GEPNoWrapFlags::inbounds);
       return vecAddr;
     };
 
