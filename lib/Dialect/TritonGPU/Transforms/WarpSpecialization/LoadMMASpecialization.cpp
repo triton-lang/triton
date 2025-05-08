@@ -1174,7 +1174,7 @@ static LogicalResult pipelineMMA(scf::ForOp &loop, PipelinedMMA &mma,
     // in this synchronization edge.
     decltype(operandDefs) nextOperandDefs;
     for (auto &[defOp, defPartition] : operandDefs) {
-      if (defPartition == partition)
+      if (defPartition == partition && inBody(node.op)->isBeforeInBlock(mmaOp))
         defs.push_back(defOp);
       else
         nextOperandDefs.emplace_back(defOp, defPartition);
