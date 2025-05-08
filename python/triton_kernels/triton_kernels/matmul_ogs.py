@@ -433,7 +433,7 @@ def init_allocation(x, w, precision_config, routing_data, gather_indx, scatter_i
     scratchpad = dict()
     # if we need either standalone scatter or split-k, the matmul output will need post-processing
     if postprocessing_features.finalize and (opt_flags.split_k > 1 or not opt_flags.fused_scatter):
-        dtype = torch.float32 if opt_flags.split_k > 1 else precision_config.out_dtype
+        dtype = torch.float32 if opt_flags.split_k > 1 else out_dtype
         scratchpad["matmul"] = ((opt_flags.split_k, x.shape[0], M, N), dtype)
     return MatmulAllocation(x.device, output, scratchpad)
 
