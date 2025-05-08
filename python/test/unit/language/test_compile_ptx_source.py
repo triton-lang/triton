@@ -93,42 +93,11 @@ $L__func_end0:
     """
 
 
-def get_ttir_src():
-    return """
-module {
-  tt.func public @add_kernel(%arg0: !tt.ptr<bf16>, %arg1: !tt.ptr<bf16>, %arg2: !tt.ptr<bf16>, %arg3: i32) attributes {noinline = false} {
-    %c128_i32 = arith.constant 128 : i32
-    %0 = tt.get_program_id x : i32
-    %1 = arith.muli %0, %c128_i32 : i32
-    %2 = tt.make_range {end = 128 : i32, start = 0 : i32} : tensor<128xi32>
-    %3 = tt.splat %1 : i32 -> tensor<128xi32>
-    %4 = arith.addi %3, %2 : tensor<128xi32>
-    %5 = tt.splat %arg3 : i32 -> tensor<128xi32>
-    %6 = arith.cmpi slt, %4, %5 : tensor<128xi32>
-    %7 = tt.splat %arg0 : !tt.ptr<bf16> -> tensor<128x!tt.ptr<bf16>>
-    %8 = tt.addptr %7, %4 : tensor<128x!tt.ptr<bf16>>, tensor<128xi32>
-    %9 = tt.load %8, %6 : tensor<128x!tt.ptr<bf16>>
-    %10 = tt.splat %arg1 : !tt.ptr<bf16> -> tensor<128x!tt.ptr<bf16>>
-    %11 = tt.addptr %10, %4 : tensor<128x!tt.ptr<bf16>>, tensor<128xi32>
-    %12 = tt.load %11, %6 : tensor<128x!tt.ptr<bf16>>
-    %13 = arith.addf %9, %12 : tensor<128xbf16>
-    %14 = tt.splat %arg2 : !tt.ptr<bf16> -> tensor<128x!tt.ptr<bf16>>
-    %15 = tt.addptr %14, %4 : tensor<128x!tt.ptr<bf16>>, tensor<128xi32>
-    tt.store %15, %13, %6 : tensor<128x!tt.ptr<bf16>>
-    tt.return
-  }
-}
-"""
-
-
 @pytest.mark.skipif(not is_cuda(), reason="PTX is only supported on NVIDIA")
 def test_ptx_add_vec_simple(tmp_path: pathlib.Path):
     src = get_ptx_src()
     temp_file = tmp_path / "test_add_vec_kernel.ptx"
     temp_file.write_text(src)
-    # src = get_ttir_src()
-    # temp_file = tmp_path / "test_add_vec_kernel.ttir"
-    # temp_file.write_text(src)
 
     kernel = triton.compile(
         src=str(temp_file), target=triton.runtime.driver.active.get_current_target()
@@ -145,9 +114,6 @@ def test_ptx_add_vec_simple(tmp_path: pathlib.Path):
         x.data_ptr(),
         y.data_ptr(),
         output.data_ptr(),
-        # x,
-        # y,
-        # output,
         size,
     )
 
