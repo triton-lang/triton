@@ -138,6 +138,127 @@ Leave the region where you can freely write to the buffer).
 | `index` | 32-bit signless integer |
 
 
+### `nvws.consumer_release` (triton::nvws::ConsumerReleaseOp)
+
+_Consumer releases the token_
+
+Syntax:
+
+```
+operation ::= `nvws.consumer_release` $token `,` $idx attr-dict `:` type(operands)
+```
+
+The consumer will release the token and signal the producer
+   that the buffers are ready to be filled.
+
+#### Operands:
+
+| Operand | Description |
+| :-----: | ----------- |
+| `token` | tensor of  values |
+| `idx` | 32-bit signless integer |
+
+
+### `nvws.consumer_wait` (triton::nvws::ConsumerWaitOp)
+
+_Consumer awaits buffer readiness_
+
+Syntax:
+
+```
+operation ::= `nvws.consumer_wait` $token `,` $idx `,` $phase attr-dict `:` type(operands)
+```
+
+The consumer will wait for the buffer to be ready
+   to be consumed. If the buffers are not ready, the consumer will wait to be
+   signalled by the producer which finishes filling the buffers and
+   releases the token.
+
+#### Operands:
+
+| Operand | Description |
+| :-----: | ----------- |
+| `token` | tensor of  values |
+| `idx` | 32-bit signless integer |
+| `phase` | 1-bit signless integer |
+
+
+### `nvws.create_token` (triton::nvws::CreateTokenOp)
+
+_Create a token to be used for synchronizations in communication channels_
+
+Syntax:
+
+```
+operation ::= `nvws.create_token` attr-dict `:` type($result)
+```
+
+A token will be used by the producer and consumer to synchronize.
+   The producer will acquire and hold the token, until it has filled the buffers,
+   and signal the waiting consumer.
+   The consumer will hold the token until it has consumed the buffers,
+   and will signal the waiting producer trying to acquire the token.
+
+#### Attributes:
+
+<table>
+<tr><th>Attribute</th><th>MLIR Type</th><th>Description</th></tr>
+<tr><td><code>numBuffers</code></td><td>::mlir::IntegerAttr</td><td>32-bit signless integer attribute</td></tr>
+<tr><td><code>loadType</code></td><td>::mlir::triton::nvws::TokenLoadTypeAttr</td><td>allowed 32-bit signless integer cases: 0, 1, 2, 3, 4</td></tr>
+</table>
+
+#### Results:
+
+| Result | Description |
+| :----: | ----------- |
+| `result` | tensor of  values |
+
+
+### `nvws.producer_acquire` (triton::nvws::ProducerAcquireOp)
+
+_Producer acquires a token to fill buffers_
+
+Syntax:
+
+```
+operation ::= `nvws.producer_acquire` $token `,` $idx `,` $phase attr-dict `:` type(operands)
+```
+
+The producer will try to acquire the token prior to filling
+   the buffers. If the buffers are not ready to be filled, the producer will wait to be
+   signalled by the consumer which finishes consuming the buffers and
+   releases the token.
+
+#### Operands:
+
+| Operand | Description |
+| :-----: | ----------- |
+| `token` | tensor of  values |
+| `idx` | 32-bit signless integer |
+| `phase` | 1-bit signless integer |
+
+
+### `nvws.producer_commit` (triton::nvws::ProducerCommitOp)
+
+_Producer commits the buffer changes_
+
+Syntax:
+
+```
+operation ::= `nvws.producer_commit` $token `,` $idx attr-dict `:` type(operands)
+```
+
+The producer will release the token and signal the consumer
+   that the buffers are ready to be consumed.
+
+#### Operands:
+
+| Operand | Description |
+| :-----: | ----------- |
+| `token` | tensor of  values |
+| `idx` | 32-bit signless integer |
+
+
 ### `nvws.warp_group` (triton::nvws::WarpGroupOp)
 
 _Container Op for Warp Specialization_

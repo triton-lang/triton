@@ -223,6 +223,10 @@ containing the address and a view of the buffer.
 
 Explicitly deallocating a buffer is optional; see local_dealloc.
 
+The `src` operand is an optional initializer for the allocated buffer. It
+must have the element type as the buffer. If `src` is not specified, the
+returned buffer must be mutable.
+
 Traits: `VerifyTensorLayoutsTrait`
 
 Interfaces: `MemoryEffectOpInterface`

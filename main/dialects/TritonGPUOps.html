@@ -481,6 +481,9 @@ the second fp4 element.</p>
 <p>This operation allocates buffer in shared memory and return a descriptor
 containing the address and a view of the buffer.</p>
 <p>Explicitly deallocating a buffer is optional; see local_dealloc.</p>
+<p>The <code class="docutils literal notranslate"><span class="pre">src</span></code> operand is an optional initializer for the allocated buffer. It
+must have the element type as the buffer. If <code class="docutils literal notranslate"><span class="pre">src</span></code> is not specified, the
+returned buffer must be mutable.</p>
 <p>Traits: <code class="docutils literal notranslate"><span class="pre">VerifyTensorLayoutsTrait</span></code></p>
 <p>Interfaces: <code class="docutils literal notranslate"><span class="pre">MemoryEffectOpInterface</span></code></p>
 <section id="id13">
