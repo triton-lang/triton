@@ -23,7 +23,7 @@ class PrecisionConfig:
 class SwiGLU(torch.autograd.Function):
 
     @staticmethod
-    def forward(ctx, a, alpha, precision_config, routing_data, num_experts):
+    def forward(ctx, a, alpha, precision_config, routing_data):
         N = a.shape[-1]
         M = a.numel() // N
         assert a.stride()[-1] == 1
@@ -48,9 +48,9 @@ class SwiGLU(torch.autograd.Function):
                 grid = (8 * num_sms, )
             else:
                 grid = (min(M_BLOCKS * N_BLOCKS, 4 * num_sms), )
-        expt_data = None
+        n_tokens = None
         if routing_data is not None:
-            expt_data = compute_metadata(routing_data, M, BLOCK_M).buffer
+            n_tokens = compute_metadata(routing_data, M, BLOCK_M).offs[routing_data.n_expts_tot]
         _swiglu[grid](
             flex_ctx.out_data.reinterpret(out),
             flex_ctx.out_data.expected_scale,
@@ -66,8 +66,7 @@ class SwiGLU(torch.autograd.Function):
             out.shape[-1],
             1,
             precision_config.limit,
-            expt_data,
-            num_experts,
+            n_tokens,
             BLOCK_M=BLOCK_M,
             BLOCK_N=BLOCK_N,
             EVEN_N=(N // 2) % 2 == 0,
@@ -81,8 +80,8 @@ class SwiGLU(torch.autograd.Function):
         return out
 
 
-def swiglu(a, alpha, precision_config, routing_data=None, num_experts=0):
-    return SwiGLU.apply(a, alpha, precision_config, routing_data, num_experts)
+def swiglu(a, alpha, precision_config, routing_data=None):
+    return SwiGLU.apply(a, alpha, precision_config, routing_data)
 
 
 def swiglu_torch(a, alpha, precision_config):
