@@ -1,22 +1,25 @@
 from __future__ import annotations
+
+import functools
 import hashlib
 import json
+import os
+import re
+import sysconfig
+import time
+from pathlib import Path
+
+from .. import __version__, knobs
 from .._C.libtriton import get_cache_invalidating_env_vars, ir
 from ..backends import backends
 from ..backends.compiler import BaseBackend, GPUTarget
-from .. import __version__, knobs
 from ..runtime.autotuner import OutOfResources
 from ..runtime.cache import get_cache_manager, get_dump_manager, get_override_manager
 from ..runtime.driver import driver
 from ..tools.disasm import get_sass
+
 # TODO: this shouldn't be here
 from .code_generator import ast_to_ttir
-from pathlib import Path
-import re
-import functools
-import os
-import sysconfig
-import time
 
 # - ^\s*tt\.func\s+ : match the start of the string, any leading whitespace, the keyword func,
 #    and any following whitespace
@@ -40,13 +43,13 @@ arg_type_pattern = {
 def convert_type_repr(x):
     # Currently we only capture the pointer type and assume the pointer is on global memory.
     # TODO: Capture and support shared memory space
-    match = re.search(r'!tt\.ptr<([^,]+)', x)
-    tma = re.search(r'tt.nv_tma_desc = 1', x)
+    match = re.search(r"!tt\.ptr<([^,]+)", x)
+    tma = re.search(r"tt.nv_tma_desc = 1", x)
     if tma is not None:
-        return 'nvTmaDesc'
-    x = re.sub(r' {[^}]+}', '', x)
+        return "nvTmaDesc"
+    x = re.sub(r" {[^}]+}", "", x)
     if match is not None:
-        return '*' + convert_type_repr(match.group(1))
+        return "*" + convert_type_repr(match.group(1))
     return x
 
 
@@ -60,12 +63,14 @@ class ASTSource:
         self.constants = dict()
         if constexprs is not None:
             for k, v in constexprs.items():
-                k = (fn.arg_names.index(k), ) if isinstance(k, str) else k
+                k = (fn.arg_names.index(k),) if isinstance(k, str) else k
                 assert isinstance(k, tuple)
                 self.constants[k] = v
         self.attrs = attrs or dict()
         if isinstance(self.signature, str):
-            self.signature = {k: v.strip() for k, v in enumerate(self.signature.split(","))}
+            self.signature = {
+                k: v.strip() for k, v in enumerate(self.signature.split(","))
+            }
         else:
             for k in self.signature.keys():
                 if not isinstance(k, str):
@@ -73,14 +78,22 @@ class ASTSource:
 
     def hash(self):
         sorted_sig = [v for k, v in sorted(self.signature.items())]
-        get_key = lambda x: x.cache_key if hasattr(x, 'cache_key') else str(x)
-        constants_key = '-'.join([get_key(v) for k, v in sorted(self.constants.items())])
+        get_key = lambda x: x.cache_key if hasattr(x, "cache_key") else str(x)
+        constants_key = "-".join(
+            [get_key(v) for k, v in sorted(self.constants.items())]
+        )
         key = f"{self.fn.cache_key}-{str(self.attrs)}-{sorted_sig}-{constants_key}"
         return hashlib.sha256(key.encode("utf-8")).hexdigest()
 
     def make_ir(self, options, codegen_fns, module_map, context):
-        return ast_to_ttir(self.fn, self, context=context, options=options, codegen_fns=codegen_fns,
-                           module_map=module_map)
+        return ast_to_ttir(
+            self.fn,
+            self,
+            context=context,
+            options=options,
+            codegen_fns=codegen_fns,
+            module_map=module_map,
+        )
 
     def parse_options(self):
         return dict()
@@ -99,6 +112,7 @@ class IRSource:
         # We don't have a easy-to-use PTX parser that we can use, so keep that regex for now.
         # TODO - replace with a proper parser
         if self.ext == "ptx":
+            self.module = parse(self.path, "ptx", context)
             match = re.search(prototype_pattern[self.ext], self.src, re.MULTILINE)
             self.name = match.group(1)
             signature = match.group(2)
@@ -116,20 +130,39 @@ class IRSource:
         return hashlib.sha256(self.src.encode("utf-8")).hexdigest()
 
     def make_ir(self, options, codegen_fns, module_map, context):
-        self.module.context = context
+        if self.ext != "ptx":
+            self.module.context = context
         return self.module
 
     def parse_options(self):
         if self.ext == "ttgir":
             num_warps = self.module.get_int_attr("ttg.num-warps")
             assert num_warps is not None, "Unable to parse ttg.num-warps attribute"
-            return {'num_warps': num_warps}
+            return {"num_warps": num_warps}
+        elif self.ext == "ptx":
+            # User can set smem size in PTX comment (in bytes)
+            smem_size = 0
+            found_smem_size = re.findall(r"user_defined_smem_size (\d+)", self.src)
+            if not found_smem_size:
+                smem_size = max_shared_mem(driver.active.get_current_device())
+            elif len(found_smem_size) == 1:
+                smem_size = int(found_smem_size[0])
+            else:
+                raise RuntimeError("Multiple user_defined_smem_size found in PTX file")
+
+            return {
+                "shared": smem_size,
+                "name": self.name,
+                "global_scratch_align": 1,
+                "global_scratch_size": 0,
+            }
         return dict()
 
 
 @functools.lru_cache()
 def triton_key():
     import pkgutil
+
     TRITON_PATH = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     contents = []
     # frontend
@@ -156,11 +189,11 @@ def triton_key():
             libtriton_hash.update(chunk)
     contents.append(libtriton_hash.hexdigest())
     # language
-    language_path = os.path.join(TRITON_PATH, 'language')
+    language_path = os.path.join(TRITON_PATH, "language")
     for lib in pkgutil.walk_packages([language_path], prefix="triton.language."):
         with open(lib.module_finder.find_spec(lib.name).origin, "rb") as f:
             contents += [hashlib.sha256(f.read()).hexdigest()]
-    return f'{__version__}' + '-'.join(contents)
+    return f"{__version__}" + "-".join(contents)
 
 
 @functools.lru_cache()
@@ -207,7 +240,7 @@ def filter_traceback(e: BaseException):
             frames.append(tb)
         tb = tb.tb_next
 
-    for (cur_frame, next_frame) in zip(frames, frames[1:]):
+    for cur_frame, next_frame in zip(frames, frames[1:]):
         cur_frame.tb_next = next_frame
 
     if not frames:
@@ -334,6 +367,8 @@ def compile(src, target=None, options=None):
     module_map = backend.get_module_map()
     try:
         module = src.make_ir(options, codegen_fns, module_map, context)
+        if src.ext == "ptx":
+            metadata.update(src.parse_options())
     except Exception as e:
         filter_traceback(e)
         raise
@@ -347,7 +382,10 @@ def compile(src, target=None, options=None):
     for ext, compile_ir in list(stages.items())[first_stage:]:
         next_module = compile_ir(module, metadata)
         ir_filename = f"{file_name}.{ext}"
-        if (fn_override_manager is not None and (full_name := fn_override_manager.get_file(ir_filename)) is not None):
+        if (
+            fn_override_manager is not None
+            and (full_name := fn_override_manager.get_file(ir_filename)) is not None
+        ):
             print(f"\nOverriding kernel with file {full_name}")
             next_module = parse(full_name, ext, context)
         # If TRITON_STORE_BINARY_ONLY is 1, only store cubin/hsaco/json
@@ -364,8 +402,9 @@ def compile(src, target=None, options=None):
         if compilation_listener:
             timer.stage_finished(ext)
     # write-back metadata
-    metadata_group[metadata_filename] = fn_cache_manager.put(json.dumps(metadata, default=vars), metadata_filename,
-                                                             binary=False)
+    metadata_group[metadata_filename] = fn_cache_manager.put(
+        json.dumps(metadata, default=vars), metadata_filename, binary=False
+    )
     fn_cache_manager.put_group(metadata_filename, metadata_group)
     # Compilation completed, disabling multithreading in context.
     # This is needed to safely finalize threads pool inside context: if current process forks before
@@ -381,16 +420,21 @@ def compile(src, target=None, options=None):
 
     # notify any listener
     if compilation_listener:
-        compilation_listener(src=src, metadata=metadata, times=timer.end(), cache_hit=False)
+        compilation_listener(
+            src=src, metadata=metadata, times=timer.end(), cache_hit=False
+        )
     # return handle to compiled kernel
     return CompiledKernel(src, metadata_group, hash)
 
 
 def make_backend(target: GPUTarget) -> BaseBackend:
-    actives = [x.compiler for x in backends.values() if x.compiler.supports_target(target)]
+    actives = [
+        x.compiler for x in backends.values() if x.compiler.supports_target(target)
+    ]
     if len(actives) != 1:
         raise RuntimeError(
-            f"{len(actives)} compatible backends for target ({target.backend}) ({actives}). There should only be one.")
+            f"{len(actives)} compatible backends for target ({target.backend}) ({actives}). There should only be one."
+        )
     return actives[0](target)
 
 
@@ -427,13 +471,18 @@ class CompiledKernel:
 
     def __init__(self, src, metadata_group, hash):
         from collections import namedtuple
-        metadata_path = next((Path(p) for c, p in metadata_group.items() if c.endswith(".json")))
+
+        metadata_path = next(
+            (Path(p) for c, p in metadata_group.items() if c.endswith(".json"))
+        )
         metadata = json.loads(metadata_path.read_text())
-        metadata['cluster_dims'] = tuple(metadata['cluster_dims'])
+        metadata["cluster_dims"] = tuple(metadata["cluster_dims"])
         # JSON serialization dumps the target as a dict. Restore it to a GPUTarget.
-        target = metadata['target']
-        metadata['target'] = GPUTarget(target['backend'], target['arch'], target['warp_size'])
-        KernelMetadata = namedtuple('KernelMetadata', sorted(list(metadata.keys())))
+        target = metadata["target"]
+        metadata["target"] = GPUTarget(
+            target["backend"], target["arch"], target["warp_size"]
+        )
+        KernelMetadata = namedtuple("KernelMetadata", sorted(list(metadata.keys())))
         self.metadata = KernelMetadata(**metadata)
         backend = make_backend(self.metadata.target)
         self.packed_metadata = backend.pack_metadata(self.metadata)
@@ -441,12 +490,20 @@ class CompiledKernel:
         self.hash = hash
         self.name = self.metadata.name
         # stores the text of each level of IR that was generated during compilation
-        asm_files = [Path(p) for c, p in metadata_group.items() if not c.endswith(".json")]
+        asm_files = [
+            Path(p) for c, p in metadata_group.items() if not c.endswith(".json")
+        ]
         binary_ext = backend.binary_ext
-        self.asm = AsmDict({
-            file.suffix[1:]: file.read_bytes() if file.suffix[1:] == binary_ext else file.read_text()
-            for file in asm_files
-        })
+        self.asm = AsmDict(
+            {
+                file.suffix[1:]: (
+                    file.read_bytes()
+                    if file.suffix[1:] == binary_ext
+                    else file.read_text()
+                )
+                for file in asm_files
+            }
+        )
         self.kernel = self.asm[binary_ext]
         # binaries are lazily initialized
         # because it involves doing runtime things
@@ -468,16 +525,23 @@ class CompiledKernel:
             # Use blackwell max tmem size for now, this should be moved in device properties
             max_tmem_size = 512  # tmem size in number of columns
             if self.metadata.tmem_size > max_tmem_size:
-                raise OutOfResources(self.metadata.tmem_size, max_tmem_size, "tensor memory")
+                raise OutOfResources(
+                    self.metadata.tmem_size, max_tmem_size, "tensor memory"
+                )
         # TODO: n_regs, n_spills should be metadata generated when calling `ptxas`
-        self.module, self.function, self.n_regs, self.n_spills, self.n_max_threads = driver.active.utils.load_binary(
-            self.name, self.kernel, self.metadata.shared, device)
+        self.module, self.function, self.n_regs, self.n_spills, self.n_max_threads = (
+            driver.active.utils.load_binary(
+                self.name, self.kernel, self.metadata.shared, device
+            )
+        )
         warp_size = driver.active.get_current_target().warp_size
         if self.metadata.num_warps * warp_size > self.n_max_threads:
-            raise OutOfResources(self.metadata.num_warps * warp_size, self.n_max_threads, "threads")
+            raise OutOfResources(
+                self.metadata.num_warps * warp_size, self.n_max_threads, "threads"
+            )
 
     def __getattribute__(self, name):
-        if name == 'run':
+        if name == "run":
             self._init_handles()
         return super().__getattribute__(name)
 
@@ -503,7 +567,17 @@ class CompiledKernel:
                 device = driver.active.get_current_device()
                 stream = driver.active.get_current_stream(device)
             launch_metadata = self.launch_metadata(grid, stream, *args)
-            self.run(grid[0], grid[1], grid[2], stream, self.function, self.packed_metadata, launch_metadata,
-                     knobs.runtime.launch_enter_hook, knobs.runtime.launch_exit_hook, *args)
+            self.run(
+                grid[0],
+                grid[1],
+                grid[2],
+                stream,
+                self.function,
+                self.packed_metadata,
+                launch_metadata,
+                knobs.runtime.launch_enter_hook,
+                knobs.runtime.launch_exit_hook,
+                *args,
+            )
 
         return runner
