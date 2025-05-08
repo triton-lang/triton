@@ -113,7 +113,7 @@ def test_cast_matmul(M, K, N, BLOCK_K, BLOCK_M, BLOCK_N, w_dtype, x_dtype, out_d
     block_m, block_n, block_k = BLOCK_M, BLOCK_N, BLOCK_K
     grid = ((triton.cdiv(M, block_m) * triton.cdiv(N, block_n)), 1)
 
-    matmul_kernel[grid](
+    ker = matmul_kernel[grid](
         a, b, out_triton, M, N, K,  #
         a.stride(0), a.stride(1),  #
         b.stride(0), b.stride(1),  #
@@ -122,5 +122,8 @@ def test_cast_matmul(M, K, N, BLOCK_K, BLOCK_M, BLOCK_N, w_dtype, x_dtype, out_d
         BLOCK_M=block_m,  #
         BLOCK_N=block_n,  #
         BLOCK_K=block_k)
+    print(ker.asm["sass"])
+    diff = (out_torch - out_triton).abs() > 0.3 + 0.01 * out_torch.abs()
+    print(torch.nonzero(diff)[:30])
 
     torch.testing.assert_close(out_torch, out_triton, atol=0.3, rtol=0.01)
