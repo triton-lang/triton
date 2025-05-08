@@ -737,9 +737,8 @@ isSimpleSharedMemoryAccess(ArrayRef<int64_t> shape,
   auto swizzledLayout =
       dyn_cast<triton::gpu::SwizzledSharedEncodingAttr>(sharedEnc);
   auto nvmmaLayout = dyn_cast<triton::gpu::NVMMASharedEncodingAttr>(sharedEnc);
-  bool noSwizzling =
-      (swizzledLayout && swizzledLayout.getMaxPhase() == 1) ||
-      (nvmmaLayout && nvmmaLayout.getSwizzlingByteWidth() == 0) || (rank == 1);
+  bool noSwizzling = (swizzledLayout && swizzledLayout.getMaxPhase() == 1) ||
+                     (nvmmaLayout && nvmmaLayout.getSwizzlingByteWidth() == 0);
   return /*no swizzling*/ noSwizzling ||
          /*swizzling but same shape*/ shape == allocShape ||
          /*swizzling and rank-reduced and rank >= 2*/
