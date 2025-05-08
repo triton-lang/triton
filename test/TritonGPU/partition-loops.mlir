@@ -238,4 +238,18 @@ tt.func @dce_before_warp_allocation(%lb: i32, %ub: i32, %step: i32) {
   tt.return
 }
 
+// CHECK-LABEL: @capture_order
+tt.func public @capture_order(%arg0: i32) {
+  %c0_i32 = arith.constant 0 : i32
+  %c1_i32 = arith.constant 1 : i32
+  %0 = tt.make_range {end = 4 : i32, start = 0 : i32} : tensor<4xi32, #blocked>
+  %1 = arith.extsi %0 : tensor<4xi32, #blocked> to tensor<4xi64, #blocked>
+  // CHECK: ttg.
+  scf.for %arg1 = %c0_i32 to %arg0 step %c1_i32  : i32 {
+    "use"(%0) : (tensor<4xi32, #blocked>) -> ()
+    "use"(%1) : (tensor<4xi64, #blocked>) -> ()
+  } {ttg.partition.stages = [1 : i32, 0 : i32]}
+  tt.return
+}
+
 }
