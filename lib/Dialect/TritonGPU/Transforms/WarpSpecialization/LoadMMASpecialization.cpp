@@ -1035,6 +1035,7 @@ static LogicalResult pipelineMMA(scf::ForOp &loop, PipelinedMMA &mma,
         overwriteOp = mmaOp;
     } else if (auto loadOp = dyn_cast<ttng::TMEMLoadOp>(user)) {
       readOp = loadOp;
+    } else if (isa<MemDescReinterpretOp>(user)) {
     } else {
       llvm::report_fatal_error("FIXME: unhandled MMA accumulator user");
     }
@@ -1132,6 +1133,7 @@ static LogicalResult pipelineMMA(scf::ForOp &loop, PipelinedMMA &mma,
       incrementPt = b.saveInsertionPoint();
     }
   }
+  oldAllocOp.getResult().replaceAllUsesWith(firstView);
   oldAllocOp.getToken().replaceAllUsesWith(allocOp.getToken());
   oldAllocOp.erase();
   cast<scf::YieldOp>(loop.getBody()->getTerminator())
@@ -1169,6 +1171,18 @@ static LogicalResult pipelineMMA(scf::ForOp &loop, PipelinedMMA &mma,
       tmemAllocOp->removeAttr(kPartitionAttrName);
       tmemAllocOp.getSrcMutable().clear();
       tmemAllocOp.getResult().setType(getAsMutable(tmemAllocOp.getType()));
+    } else if (auto reinterpOp =
+                   operand.getDefiningOp<MemDescReinterpretOp>()) {
+      PartitionBuilder b(reinterpOp.getLoc(), reinterpOp);
+      b.setInsertionPointAfter(reinterpOp);
+      auto store = b.createInto<ttng::TMEMStoreOp>(
+          *defPartition, std::nullopt, Type(), reinterpOp.getResult(), Value(),
+          reinterpOp.getInit(), b.boolCst(true));
+      operandDefs.emplace_back(body.findAncestorOpInBlock(*store),
+                               defPartition);
+      reinterpOp->removeAttr(kPartitionAttrName);
+      reinterpOp.getInitMutable().clear();
+      reinterpOp.getResult().setType(getAsMutable(reinterpOp.getType()));
     }
   }
 

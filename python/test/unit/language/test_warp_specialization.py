@@ -508,11 +508,15 @@ def test_warp_specialize_attention_forward(M, N, BLOCK_M, HEAD_DIM, num_stages, 
                                     block_shape=[BLOCK_M, HEAD_DIM])
     desc_acc = TensorDescriptor(acc, shape=[M, HEAD_DIM], strides=[HEAD_DIM, 1], block_shape=[BLOCK_M, HEAD_DIM])
 
+    print("SWP start")
     attention_inner_loop_kernel[(M // BLOCK_M, )](desc_q, desc_k, desc_v, desc_acc_ref, l_i_ref, m_i_ref, M, N, 0.5,
                                                   BLOCK_M, HEAD_DIM, False, num_stages=num_stages, num_warps=num_warps)
+    print("SWP end")
+    print("AWS start")
     kernel = attention_inner_loop_kernel_data_part[(M // (BLOCK_M * 2), )](desc_q, desc_k, desc_v, desc_acc, l_i, m_i,
                                                                            M, N, 0.5, BLOCK_M, HEAD_DIM, True,
                                                                            num_stages=num_stages, num_warps=num_warps)
+    print("AWS end")
 
     ttgir = kernel.asm["ttgir"]
     assert "ttng.tc_gen5_mma" in ttgir
@@ -523,4 +527,4 @@ def test_warp_specialize_attention_forward(M, N, BLOCK_M, HEAD_DIM, num_stages, 
     torch.testing.assert_close(m_i.to(torch.float32), m_i_ref.to(torch.float32), atol=0, rtol=0)
 
 
-test_warp_specialize_attention_forward(8192, 8192, 128, 128, 2, False, 4, False)
+test_warp_specialize_attention_forward(8192, 8192, 128, 64, 2, False, 4, False)
