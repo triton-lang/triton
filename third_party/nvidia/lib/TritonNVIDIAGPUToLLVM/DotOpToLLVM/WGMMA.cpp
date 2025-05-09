@@ -451,7 +451,6 @@ LogicalResult convertDot(const LLVMTypeConverter *typeConverter,
           llvm::SmallVector<Value> regA =
               loadReg(rewriter, loc, structA, (m * numRepK + k) * regASize,
                       regASize, startSequence);
-
           auto regATy = LLVM::LLVMStructType::getLiteral(
               rewriter.getContext(),
               SmallVector<Type>(regA.size(), regA[0].getType()));
