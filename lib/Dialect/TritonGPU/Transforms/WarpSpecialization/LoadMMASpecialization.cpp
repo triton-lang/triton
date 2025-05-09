@@ -959,24 +959,27 @@ static Value getLastInductionValue(PartitionBuilder &b, scf::ForOp loop) {
   return b.create<arith::AddIOp>(ceilStep, loop.getLowerBound());
 }
 
-static LogicalResult pipelineMMA(scf::ForOp &loop, PipelinedMMA &mma,
-                                 WarpSchedule &schedule, DominanceInfo &domInfo,
-                                 PostDominanceInfo &postDomInfo,
-                                 std::optional<unsigned> stage,
-                                 const StageMap &stages) {
-  ttng::MMAv5OpInterface mmaOp = mma.mmaOp;
-  auto fail = [&](StringRef msg) { return emitWarning(mmaOp.getLoc(), msg); };
-  Block &body = *loop.getBody();
-  auto inBody = [&](Operation *op) { return body.findAncestorOpInBlock(*op); };
-
-  // Determine if the MMA accumulator can be multibuffered.
-  bool accIsMultiBuffered =
+// Determine if the MMA accumulator can be multibuffered.
+static bool canBeMultibuffered(scf::ForOp loop, ttng::MMAv5OpInterface mmaOp) {
+  return
       // MMAs in subsequent iterations can be overlapped.
       !ttng::hasAccReadModifyWrite(mmaOp, loop) &&
       // The accumulator is reset at some point, thus allowing multibuffering.
       ttng::isAccMultibufferingPossible(mmaOp, loop) &&
       // The user didn't disable it with a flag.
       !getDisallowAccMultiBuffer(loop);
+}
+
+static LogicalResult pipelineMMA(scf::ForOp &loop, PipelinedMMA &mma,
+                                 WarpSchedule &schedule, DominanceInfo &domInfo,
+                                 PostDominanceInfo &postDomInfo,
+                                 std::optional<unsigned> stage,
+                                 const StageMap &stages,
+                                 bool accIsMultiBuffered) {
+  ttng::MMAv5OpInterface mmaOp = mma.mmaOp;
+  auto fail = [&](StringRef msg) { return emitWarning(mmaOp.getLoc(), msg); };
+  Block &body = *loop.getBody();
+  auto inBody = [&](Operation *op) { return body.findAncestorOpInBlock(*op); };
 
   // Check that the accumulator can be multi-buffered.
   ttng::TMEMAllocOp oldAllocOp =
@@ -1319,15 +1322,16 @@ LogicalResult lowerLoops(scf::ForOp &loop, PartitionScheme &scheme,
   if (loadGroups.size() > 1) {
     unsigned curLoadStage = 0;
     for (const PipelinedLoadGroup &group : loadGroups) {
-      stages.insert({group.loads.front().loadOp, curLoadStage});
+      stages.insert({group.loads.front().loadOp, curLoadStage % 4});
       curLoadStage += 2;
     }
   }
   if (scheme.mmas.size() > 1) {
     unsigned curMMAStage = 0;
     for (const PipelinedMMA &mma : scheme.mmas) {
-      stages.insert({mma.mmaOp, curMMAStage});
-      curMMAStage += 2;
+      stages.insert({mma.mmaOp, curMMAStage % 4});
+      if (canBeMultibuffered(loop, mma.mmaOp))
+        curMMAStage += 2;
     }
   }
 
@@ -1344,8 +1348,10 @@ LogicalResult lowerLoops(scf::ForOp &loop, PartitionScheme &scheme,
 
   // Multi-buffer and lower the MMAs.
   for (PipelinedMMA &mma : scheme.mmas) {
+    bool accIsMultiBuffered = canBeMultibuffered(loop, mma.mmaOp);
     if (failed(pipelineMMA(loop, mma, schedule, domInfo, postDomInfo,
-                           stages.lookup(mma.mmaOp), stages)))
+                           stages.lookup(mma.mmaOp), stages,
+                           accIsMultiBuffered)))
       return failure();
   }
 
