@@ -4,6 +4,7 @@
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/Support/LLVM.h"
 #include "triton/Dialect/TritonGPU/Transforms/PipelineExpander.h"
+#include "triton/Dialect/TritonGPU/Transforms/PipeliningUtility.h"
 #include "llvm/ADT/ArrayRef.h"
 #include <list>
 #include <vector>
@@ -14,11 +15,17 @@ namespace triton {
 namespace gpu {
 
 /// Discover operations that should become async and assign latencies to them
-/// based on the numStages value provided by the user.
-void assignLatencies(ModuleOp moduleOp, int numStages);
+/// based on the numStages value provided by the user. Return false if no loops
+/// are assigned with latencies.
+bool assignLatencies(
+    ModuleOp moduleOp, int numStages,
+    DenseMap<scf::ForOp, PipelineFailureReason> &loopPipelineFailureReasons);
 
 /// Schedule the loops based on the latencies assigned to the operations.
-void scheduleLoops(ModuleOp moduleOp);
+/// Returns false if no loops are scheduled.
+bool scheduleLoops(
+    ModuleOp moduleOp,
+    DenseMap<scf::ForOp, PipelineFailureReason> &loopPipelineFailureReasons);
 
 /// Lower the loops to prepare them for pipeline expansion.
 void lowerLoops(ModuleOp moduleOp);

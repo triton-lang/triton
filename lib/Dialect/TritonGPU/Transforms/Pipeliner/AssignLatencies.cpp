@@ -25,15 +25,15 @@ namespace gpu {
 namespace {
 
 // Return true if the preconditions for pipelining the loop are met.
-bool preCondition(scf::ForOp forOp) {
+PipelineStatus collectPrecondition(scf::ForOp forOp) {
   // Skip loop with distance > 1 for now.
   // TODO: relax the constraint in the expander.
   if (loopHasDistGreaterThanOne(forOp))
-    return false;
+    return std::make_optional(PipelineFailureReason::DistanceGreaterThanOne);
   // Don't pipeline outer loops.
   if (isOuterLoop(forOp))
-    return false;
-  return true;
+    return std::make_optional(PipelineFailureReason::OuterLoop);
+  return std::nullopt;
 }
 
 bool hasLatenciesAssigned(scf::ForOp forOp) {
@@ -59,7 +59,7 @@ class AssignLoadLatencies {
 public:
   AssignLoadLatencies(scf::ForOp forOp, int numStages,
                       DenseMap<Operation *, int> &opLatency)
-      : forOp(forOp), numStages(numStages), opLatency(opLatency) {};
+      : forOp(forOp), numStages(numStages), opLatency(opLatency){};
 
   void run() {
     bool pipelineWithoutDot = forOp->hasAttr(mlir::triton::kNumStagesAttrName);
@@ -257,7 +257,7 @@ private:
 class AssignMMALatencies {
 public:
   AssignMMALatencies(scf::ForOp forOp, DenseMap<Operation *, int> &opLatency)
-      : forOp(forOp), opLatency(opLatency) {};
+      : forOp(forOp), opLatency(opLatency){};
 
   void run() {
     if (!triton::tools::getBoolEnv("ENABLE_MMA_V5_ATT_PIPELINE")) {
@@ -299,16 +299,28 @@ private:
 // on the requested number of stages assign the latencies in a way that
 // cover all the stages with the sum of latencies in the chain from the first
 // load to the final dot op.
-void assignLatencies(ModuleOp moduleOp, int defaultNumStages) {
+bool assignLatencies(
+    ModuleOp moduleOp, int defaultNumStages,
+    DenseMap<scf::ForOp, PipelineFailureReason> &loopPipelineFailureReasons) {
   SmallVector<scf::ForOp> loops;
   moduleOp->walk([&](scf::ForOp forOp) {
     // Bail out for loops with num_stage <= 1.
-    if (preCondition(forOp) &&
-        getNumStagesOrDefault(forOp, defaultNumStages) > 1)
-      loops.push_back(forOp);
+    auto pipelineStatus = collectPrecondition(forOp);
+    if (pipelineStatus) {
+      loopPipelineFailureReasons[forOp] = *pipelineStatus;
+      return;
+    }
+
+    auto numStages = getNumStagesOrDefault(forOp, defaultNumStages);
+    if (numStages <= 1) {
+      loopPipelineFailureReasons[forOp] =
+          PipelineFailureReason::NumStagesTooSmall;
+      return;
+    }
+    loops.push_back(forOp);
   });
   if (loops.empty())
-    return;
+    return false;
 
   DenseMap<Operation *, int> opLatency;
   for (auto forOp : loops) {
@@ -321,6 +333,7 @@ void assignLatencies(ModuleOp moduleOp, int defaultNumStages) {
     AssignMMALatencies(forOp, opLatency).run();
   }
   serializeLatencies(moduleOp, opLatency);
+  return true;
 }
 } // namespace gpu
 } // namespace triton

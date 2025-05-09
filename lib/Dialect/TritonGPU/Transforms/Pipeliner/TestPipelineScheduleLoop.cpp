@@ -21,7 +21,10 @@ struct TestPipelineScheduleLoop
   using impl::TritonGPUTestPipelineScheduleLoopBase<
       TestPipelineScheduleLoop>::TritonGPUTestPipelineScheduleLoopBase;
 
-  void runOnOperation() override { scheduleLoops(getOperation()); }
+  void runOnOperation() override {
+    DenseMap<scf::ForOp, PipelineFailureReason> loopPipelineFailureReasons;
+    scheduleLoops(getOperation(), loopPipelineFailureReasons);
+  }
 };
 
 } // namespace gpu

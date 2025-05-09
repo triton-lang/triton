@@ -1,3 +1,4 @@
+#include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/Dialect/Tensor/IR/Tensor.h"
 #include "mlir/IR/IRMapping.h"
 #include "mlir/IR/TypeUtilities.h"
@@ -81,23 +82,56 @@ struct PipelinePass : public impl::TritonGPUPipelineBase<PipelinePass> {
 
   using impl::TritonGPUPipelineBase<PipelinePass>::TritonGPUPipelineBase;
 
+  void emitFailureRemarks(
+      ModuleOp &moduleOp,
+      DenseMap<scf::ForOp, PipelineFailureReason> &loopPipelineFailureReasons,
+      const char *moduleLevelRemark) {
+    if (loopPipelineFailureReasons.size() > 0) {
+      // when no loops are assigned latency, and the program does have loops,
+      // we should print some remarks and bail out.
+      moduleOp->emitRemark() << moduleLevelRemark;
+      for (const auto &[forOp, status] : loopPipelineFailureReasons) {
+        forOp->emitRemark() << "Loop failed to be pipelined because "
+                            << getFailureReasonString(status);
+      }
+    }
+    // no latency assigned. we can print some remarks and bail out.
+    return;
+  }
+
   void runOnOperation() override {
     ModuleOp moduleOp = getOperation();
+
+    DenseMap<scf::ForOp, PipelineFailureReason> loopPipelineFailureReasons;
     // Go over the interesting ops and assign latencies (based on the
     // numStages) to the them, trying to populate the allowed stages. This
     // step will be at some point extracted to separate pass that will be run
     // only for loops missing the latency information.
-    assignLatencies(moduleOp, numStages);
+    auto assignedLatency =
+        assignLatencies(moduleOp, numStages, loopPipelineFailureReasons);
+
     if (dumpIntermediateSteps) {
       llvm::dbgs() << "// -----// SoftwarePipeliner internal IR Dump After: "
                       "AssignLatencies\n"
                    << moduleOp << "\n\n\n";
     }
+
+    if (!assignedLatency) {
+      return emitFailureRemarks(moduleOp, loopPipelineFailureReasons,
+                                "No latency assigned to any loops.");
+    }
+
     // numStages should not be used below this point. We should know
     // everything based on the assigned stages
 
     // Schedule the loops
-    scheduleLoops(moduleOp);
+    bool hasPipelinedSomeLoops =
+        scheduleLoops(moduleOp, loopPipelineFailureReasons);
+
+    if (!hasPipelinedSomeLoops) {
+      return emitFailureRemarks(moduleOp, loopPipelineFailureReasons,
+                                "No loops were pipelined.");
+    }
     if (dumpIntermediateSteps) {
       llvm::dbgs() << "// -----// SoftwarePipeliner internal IR Dump After: "
                       "ScheduleLoops\n"

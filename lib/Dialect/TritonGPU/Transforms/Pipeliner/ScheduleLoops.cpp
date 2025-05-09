@@ -35,23 +35,23 @@ bool mmav5DominatesTmemLoads(scf::ForOp forOp,
   });
 }
 
-// Return true if the preconditions for pipelining the loop are met.
-bool isSafeToPipeline(scf::ForOp forOp,
-                      const DenseMap<Operation *, int> &opLatency) {
+PipelineStatus
+collectUnsafeToPipelineReason(scf::ForOp forOp,
+                              const DenseMap<Operation *, int> &opLatency) {
   // Skip loop with distance > 1.
   if (loopHasDistGreaterThanOne(forOp))
-    return false;
+    return std::make_optional(PipelineFailureReason::DistanceGreaterThanOne);
   // Don't pipeline outer loops.
   if (isOuterLoop(forOp))
-    return false;
+    return std::make_optional(PipelineFailureReason::OuterLoop);
   // Skip loops with barriers.
   if (hasGpuBarriers(forOp))
-    return false;
+    return std::make_optional(PipelineFailureReason::BarrierOp);
   // Lowering does not currently support cases where tmem_load happens
   // before the mma in the loop
   if (!mmav5DominatesTmemLoads(forOp, opLatency))
-    return false;
-  return true;
+    return std::make_optional(PipelineFailureReason::Mmav5AfterTmemLoad);
+  return std::nullopt;
 }
 
 bool hasLatenciesAssigned(scf::ForOp forOp,
@@ -311,15 +311,19 @@ void scheduleRemainingToLastStage(scf::ForOp forOp, CoarseSchedule &schedule,
   }
 }
 
-void scheduleLoop(scf::ForOp forOp,
-                  const DenseMap<Operation *, int> &opLatency) {
-  if (!hasLatenciesAssigned(forOp, opLatency) ||
-      !isSafeToPipeline(forOp, opLatency))
-    return;
+PipelineStatus scheduleLoop(scf::ForOp forOp,
+                            const DenseMap<Operation *, int> &opLatency) {
+  if (!hasLatenciesAssigned(forOp, opLatency))
+    return std::make_optional(PipelineFailureReason::NoLatencyAssigned);
+  PipelineStatus unsafeReason = collectUnsafeToPipelineReason(forOp, opLatency);
+  if (unsafeReason)
+    return unsafeReason;
   // Based on the latencies, schedule the key ops to the stages.
   CoarseSchedule schedule = scheduleKeyOps(forOp, opLatency);
   if (schedule.empty())
-    return;
+    // According to the implementation of scheduleKeyOps, the schedule is empty
+    // only if there are no latency assigned.
+    return std::make_optional(PipelineFailureReason::NoLatencyAssigned);
   LLVM_DEBUG({
     schedule.serialize(forOp);
     DBGS() << "Initial coarse schedule:\n" << forOp << "\n";
@@ -349,19 +353,27 @@ void scheduleLoop(scf::ForOp forOp,
 
   // Write the schedule to the IR
   schedule.serialize(forOp);
+  return std::nullopt;
 }
 
 } // namespace
 
-void scheduleLoops(ModuleOp moduleOp) {
+bool scheduleLoops(
+    ModuleOp moduleOp,
+    DenseMap<scf::ForOp, PipelineFailureReason> &loopPipelineFailureReasons) {
   DenseMap<Operation *, int> opLatency = deserializeLatencies(moduleOp);
   SmallVector<scf::ForOp> loops;
   moduleOp->walk([&](scf::ForOp forOp) { loops.push_back(forOp); });
   if (loops.empty())
-    return;
+    return true;
   for (auto forOp : loops) {
-    scheduleLoop(forOp, opLatency);
+    auto result = scheduleLoop(forOp, opLatency);
+    if (result) {
+      loopPipelineFailureReasons[forOp] = *result;
+    }
   }
+
+  return loopPipelineFailureReasons.size() == loops.size();
 }
 
 } // namespace gpu

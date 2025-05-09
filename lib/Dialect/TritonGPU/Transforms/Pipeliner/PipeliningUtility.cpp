@@ -21,6 +21,24 @@ namespace tt = mlir::triton;
 namespace ttg = mlir::triton::gpu;
 namespace ttng = mlir::triton::nvidia_gpu;
 
+const char *triton::getFailureReasonString(PipelineFailureReason reason) {
+  switch (reason) {
+  case PipelineFailureReason::NoLatencyAssigned:
+    return "no latency information was assigned to the loop.";
+  case PipelineFailureReason::NumStagesTooSmall:
+    return "NumStages (`num_stages`) is smaller than or equal to 1.";
+  case PipelineFailureReason::DistanceGreaterThanOne:
+    return "the loop has a distance greater than 1.";
+  case PipelineFailureReason::OuterLoop:
+    return "the loop is an outer loop.";
+  case PipelineFailureReason::BarrierOp:
+    return "the loop contains a BarrierOp.";
+  case PipelineFailureReason::Mmav5AfterTmemLoad:
+    return "an MMAv5 operation happens after the tmem_load.";
+  }
+  llvm_unreachable("Unknown failure reason");
+}
+
 //===----------------------------------------------------------------------===//
 // Hoisting Utilities
 //===----------------------------------------------------------------------===//

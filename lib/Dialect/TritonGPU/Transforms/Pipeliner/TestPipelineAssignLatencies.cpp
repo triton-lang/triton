@@ -21,7 +21,10 @@ struct TestPipelineAssignLatencies
   using impl::TritonGPUTestPipelineAssignLatenciesBase<
       TestPipelineAssignLatencies>::TritonGPUTestPipelineAssignLatenciesBase;
 
-  void runOnOperation() override { assignLatencies(getOperation(), numStages); }
+  void runOnOperation() override {
+    DenseMap<scf::ForOp, PipelineFailureReason> loopPipelineFailureReasons;
+    assignLatencies(getOperation(), numStages, loopPipelineFailureReasons);
+  }
 };
 
 } // namespace gpu
