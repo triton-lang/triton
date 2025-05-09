@@ -656,7 +656,7 @@ def kernel_make_tensor_descriptor_loop_carried(a_ptr, M, N, MBLOCK: tl.constexpr
 
 
 @pytest.mark.interpreter
-@pytest.mark.skip(is_hip(), reason="Currently unsupported by HIP devices")
+@pytest.mark.skipif(is_hip(), reason="Currently unsupported by HIP devices")
 def test_make_tensor_descriptor_loop_carried(device):
     M, N = 64, 512
     torch.manual_seed(42)
