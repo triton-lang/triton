@@ -1,19 +1,9 @@
-// RUN: triton-opt %s -allow-unregistered-dialect -tritongpu-partition-loops -verify-diagnostics -canonicalize | FileCheck %s
+// RUN: triton-opt %s -split-input-file -allow-unregistered-dialect -tritongpu-partition-loops -verify-diagnostics -canonicalize | FileCheck %s
 
 #blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
 !ty = tensor<1xi32, #blocked>
 
 module attributes {"ttg.num-warps" = 4 : i32} {
-
-tt.func @still_has_ssa_deps(%lb: i32, %ub: i32, %step: i32) {
-  scf.for %i = %lb to %ub step %step : i32 {
-    // expected-warning @below {{non-root partition #0 has direct SSA consumer}}
-    %0 = "op_a"() {ttg.partition = 0} : () -> !ty
-    // expected-note @below {{use at distance 0 in partition #1 here}}
-    "op_b"(%0) {ttg.partition = 1} : (!ty) -> ()
-  } {ttg.partition.stages = [0, 1]}
-  tt.return
-}
 
 // CHECK-LABEL: @no_partitions
 tt.func @no_partitions(%lb: i32, %ub: i32, %step: i32) {
@@ -255,6 +245,25 @@ tt.func public @capture_order(%arg0: i32) {
     // CHECK-NEXT: "use"([[EXT]])
     "use"(%1) : (tensor<4xi64, #blocked>) -> ()
   } {ttg.partition.stages = [1 : i32, 0 : i32]}
+  tt.return
+}
+
+}
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+!ty = tensor<1xi32, #blocked>
+
+module attributes {"ttg.num-warps" = 4 : i32} {
+
+tt.func @still_has_ssa_deps(%lb: i32, %ub: i32, %step: i32) {
+  scf.for %i = %lb to %ub step %step : i32 {
+    // expected-warning @below {{non-root partition #0 has direct SSA consumer}}
+    %0 = "op_a"() {ttg.partition = 0} : () -> !ty
+    // expected-note @below {{use at distance 0 in partition #1 here}}
+    "op_b"(%0) {ttg.partition = 1} : (!ty) -> ()
+  } {ttg.partition.stages = [0, 1]}
   tt.return
 }
 

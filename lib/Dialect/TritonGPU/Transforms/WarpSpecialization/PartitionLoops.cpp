@@ -269,6 +269,6 @@ void PartitionLoops::runOnOperation() {
 
   for (scf::ForOp loop : loops) {
     if (failed(partitionLoop(loop)))
-      continue;
+      return signalPassFailure();
   }
 }
