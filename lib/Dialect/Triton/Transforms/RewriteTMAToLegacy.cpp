@@ -129,7 +129,6 @@ Value generatePtr(OpBuilder &builder, const Location &loc,
 
 // Note this has been adapted from RewriteTensorPointer.cpp
 Value generateMask(OpBuilder &builder, const Location &loc,
-                   const std::optional<ArrayRef<int32_t>> &boundaryCheck,
                    ArrayRef<std::int64_t> block_shape, ValueRange offsets,
                    ValueRange shape) {
   assert(block_shape.size() == shape.size() &&
@@ -142,7 +141,7 @@ Value generateMask(OpBuilder &builder, const Location &loc,
   // Generate mask per dimension
   auto maskTensorType = RankedTensorType::get(block_shape, builder.getI1Type());
   Value mask;
-  for (auto i : boundaryCheck.value_or(check_all)) {
+  for (std::size_t i = 0; i < block_shape.size(); ++i) {
     auto offsetWithRange =
         getExpandedOffsetWithRange(builder, loc, block_shape, offsets, i);
 
@@ -178,9 +177,8 @@ Value generateMask(OpBuilder &builder, const Location &loc,
 
 // Note this has been adapted from RewriteTensorPointer.cpp. It appears
 // to be getting the values used for the masked out elements
-Value generateOther(OpBuilder &builder, const Location &loc,
-                    const std::optional<triton::PaddingOption> &padding,
-                    Value base, ArrayRef<std::int64_t> block_shape) {
+Value generateOther(OpBuilder &builder, const Location &loc, Value base,
+                    ArrayRef<std::int64_t> block_shape) {
   // Create element attribute
   auto elementType = cast<triton::PointerType>(base.getType()).getPointeeType();
   auto otherTensorType = RankedTensorType::get(block_shape, elementType);
@@ -188,56 +186,9 @@ Value generateOther(OpBuilder &builder, const Location &loc,
   // Set zero padding value (the default)
   TypedAttr attr = builder.getZeroAttr(elementType);
 
-  // Float NaN padding case
-  if (padding == triton::PaddingOption::PAD_NAN) {
-    assert(!elementType.isIntOrIndex());
-    auto apNaN =
-        llvm::APFloat::getNaN(cast<FloatAttr>(attr).getValue().getSemantics());
-    attr = builder.getFloatAttr(elementType, apNaN);
-  }
-
   // Create tensor
   Value constant = builder.create<arith::ConstantOp>(loc, attr);
   return builder.create<triton::SplatOp>(loc, otherTensorType, constant);
-}
-
-// Note the attributes below don't normally appear on the TMA load/store ops.
-// However, if we are lowering block pointers these will be added as addition
-// attributes on the TMA operation for us to retrieve.
-std::optional<ArrayRef<int>> getBoundaryCheck(Operation *op) {
-  std::string_view attr_name = "boundaryCheck";
-  if (auto attr = op->getAttrOfType<DenseI32ArrayAttr>(attr_name)) {
-    return attr.asArrayRef();
-  }
-  return std::nullopt;
-}
-std::optional<triton::PaddingOption> getPadding(Operation *op) {
-  std::string_view attr_name = "padding";
-  if (auto attr = op->getAttrOfType<triton::PaddingOptionAttr>(attr_name)) {
-    return attr.getValue();
-  }
-  return std::nullopt;
-}
-triton::CacheModifier getCache(Operation *op) {
-  std::string_view attr_name = "cache";
-  if (auto attr = op->getAttrOfType<triton::CacheModifierAttr>(attr_name)) {
-    return attr.getValue();
-  }
-  return triton::CacheModifier::NONE;
-}
-triton::EvictionPolicy getEvict(Operation *op) {
-  std::string_view attr_name = "evict";
-  if (auto attr = op->getAttrOfType<triton::EvictionPolicyAttr>(attr_name)) {
-    return attr.getValue();
-  }
-  return triton::EvictionPolicy::NORMAL;
-}
-bool getIsVolatile(Operation *op) {
-  std::string_view attr_name = "isVolatile";
-  if (auto attr = op->getAttrOfType<BoolAttr>(attr_name)) {
-    return attr.getValue();
-  }
-  return false;
 }
 
 SmallVector<mlir::Value> castToI64(OpBuilder &builder,
@@ -289,11 +240,9 @@ struct RewriteLoadPattern : OpConversionPattern<triton::DescriptorLoadOp> {
         op,
         generatePtr(rewriter, op->getLoc(), block_shape, base, strides,
                     offsets),
-        generateMask(rewriter, op->getLoc(), getBoundaryCheck(op), block_shape,
-                     offsets, shape),
-        generateOther(rewriter, op->getLoc(), getPadding(op), base,
-                      block_shape),
-        getCache(op), getEvict(op), getIsVolatile(op));
+        generateMask(rewriter, op->getLoc(), block_shape, offsets, shape),
+        generateOther(rewriter, op->getLoc(), base, block_shape),
+        triton::CacheModifier::NONE, triton::EvictionPolicy::NORMAL, false);
     new_load->setAttrs(filterSegmentSizes(op->getAttrs()));
 
     return llvm::success();
@@ -325,9 +274,8 @@ struct RewriteStorePattern : OpConversionPattern<triton::DescriptorStoreOp> {
         generatePtr(rewriter, op->getLoc(), block_shape, base, strides,
                     offsets),
         op.getSrc(),
-        generateMask(rewriter, op->getLoc(), getBoundaryCheck(op), block_shape,
-                     offsets, shape),
-        getCache(op), getEvict(op));
+        generateMask(rewriter, op->getLoc(), block_shape, offsets, shape),
+        triton::CacheModifier::NONE, triton::EvictionPolicy::NORMAL);
     new_store->setAttrs(filterSegmentSizes(op->getAttrs()));
 
     return llvm::success();
@@ -374,7 +322,6 @@ class TritonRewriteTensorDescriptorToPointerPass
       return !hasATensorDescriptorType(func_op.getFunctionType().getInputs()) &&
              !hasATensorDescriptorType(func_op.getFunctionType().getResults());
     });
-    target.addLegalOp<mlir::UnrealizedConversionCastOp>();
 
     mlir::TypeConverter converter;
 
