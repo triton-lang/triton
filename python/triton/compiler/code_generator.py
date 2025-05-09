@@ -324,7 +324,10 @@ class CodeGenerator(ast.NodeVisitor):
         # special handling.
         self.visiting_arg_default_value = False
 
-    builtin_namespace: Dict[str, Any] = {_.__name__: _ for _ in (len, list, range, float, int, isinstance, getattr, hasattr)}
+    builtin_namespace: Dict[str, Any] = {
+        _.__name__: _
+        for _ in (len, list, range, float, int, isinstance, getattr, hasattr)
+    }
     builtin_namespace.update((
         ('print', language.core.device_print),
         ('min', language.minimum),

@@ -7457,18 +7457,19 @@ def test_short_circuiting(device):
 
     @triton.jit
     def short_circuiting_kernel(x):
-        if (x is not None) and hasattr(x, "dtype") and isinstance(x.dtype, tl.pointer_type) and (x.dtype.element_ty == tl.int32) and (tl.load(x) > 42):
+        if (x is not None) and hasattr(x, "dtype") and isinstance(
+                x.dtype, tl.pointer_type) and (x.dtype.element_ty == tl.int32) and (tl.load(x) > 42):
             tl.store(x, 42)
 
     def f(x):
-        short_circuiting_kernel[(1,)](x, num_warps=1)
+        short_circuiting_kernel[(1, )](x, num_warps=1)
 
-    f(None) # should succeed with NoneType
-    f(1) # should succeed with tl.constexpr type
-    f(2) # should succeed with integer type
+    f(None)  # should succeed with NoneType
+    f(1)  # should succeed with tl.constexpr type
+    f(2)  # should succeed with integer type
 
     def g(y, dtype):
-        x = torch.full((1,), y, device=device, dtype=dtype)
+        x = torch.full((1, ), y, device=device, dtype=dtype)
         f(x)
         return x.item()
 
