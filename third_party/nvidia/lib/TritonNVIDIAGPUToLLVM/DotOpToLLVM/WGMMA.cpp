@@ -442,16 +442,6 @@ LogicalResult convertDot(const LLVMTypeConverter *typeConverter,
         if (aSharedLayout) {
           a = aLoader.smemLoad(m, k, rewriter, loc);
         } else {
-          auto createMov = [&](Value a) {
-            PTXBuilder builder;
-            SmallVector<PTXBuilder::Operand *> operands;
-            operands.push_back(builder.newOperand("=r"));
-            operands.push_back(builder.newOperand(a, "r"));
-            auto &ptxOp = *builder.create("mov.b32 $0, $1;");
-            ptxOp(operands, /*onlyAttachMLIRArgs=*/true);
-            return builder.launch(rewriter, loc, a.getType(), true);
-          };
-
           auto aDotOpEnc =
               cast<DotOperandEncodingAttr>(aTensorTy.getEncoding());
           assert(aDotOpEnc.getKWidth() ==
@@ -461,11 +451,6 @@ LogicalResult convertDot(const LLVMTypeConverter *typeConverter,
           llvm::SmallVector<Value> regA =
               loadReg(rewriter, loc, structA, (m * numRepK + k) * regASize,
                       regASize, startSequence);
-          // if (isAsyncRS) {
-          //   for (auto &reg : regA) {
-          //     reg = createMov(reg);
-          //   }
-          // }
 
           auto regATy = LLVM::LLVMStructType::getLiteral(
               rewriter.getContext(),
