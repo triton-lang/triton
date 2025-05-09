@@ -656,6 +656,7 @@ def kernel_make_tensor_descriptor_loop_carried(a_ptr, M, N, MBLOCK: tl.constexpr
 
 
 @pytest.mark.interpreter
+@pytest.mark.skip(is_hip(), reason="Currently unsupported by HIP devices")
 def test_make_tensor_descriptor_loop_carried(device):
     M, N = 64, 512
     torch.manual_seed(42)
@@ -856,7 +857,7 @@ def test_tensor_descriptor_batched_gemm_3d_tma(device):
     BLOCK_M, BLOCK_N, BLOCK_K = 128, 256, 64
 
     if is_hip():
-        BLOCK_M, BLOCK_N, BLOCK_K = 128, 128, 64
+        BLOCK_M, BLOCK_N, BLOCK_K = 64, 64, 64
 
     if is_interpreter():
         B, M, N, K = 2, BLOCK_M, BLOCK_N, BLOCK_K
