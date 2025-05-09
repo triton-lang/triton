@@ -277,9 +277,6 @@ struct CircularStoreOpConversion
       // for this predicated version, there could be unexpected instruction
       // cache miss. Setting isWriter always true has bank conflicts but it is
       // expected and stable.
-      // targetInfo.getTritonTargetInfo().storeDShared(rewriter, loc, vecPtr,
-      //                                               std::nullopt, valsVec,
-      //                                               /*pred=*/isWriter);
       Block *currentBlock = rewriter.getInsertionBlock();
       Block *afterStore =
           rewriter.splitBlock(currentBlock, rewriter.getInsertionPoint());
