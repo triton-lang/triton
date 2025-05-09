@@ -15,7 +15,7 @@ from typing import Optional
 @pytest.mark.interpreter
 @pytest.mark.parametrize("dtype_str", tma_dtypes)
 @pytest.mark.parametrize("num_ctas", [1, 2])
-@pytest.mark.parametrize("M_BLOCK,N_BLOCK", [(2, 16), (8, 16), (8, 32), (8, 128)])
+@pytest.mark.parametrize("M_BLOCK,N_BLOCK", [(2, 16), (8, 16), (8, 32), (8, 128), (512, 32), (1, 1024)])
 def test_tensor_descriptor_load(dtype_str, num_ctas, M_BLOCK, N_BLOCK):
 
     @triton.jit
@@ -58,7 +58,7 @@ def test_tensor_descriptor_load(dtype_str, num_ctas, M_BLOCK, N_BLOCK):
 @pytest.mark.interpreter
 @pytest.mark.parametrize("dtype_str", tma_dtypes)
 @pytest.mark.parametrize("num_ctas", [1, 2])
-@pytest.mark.parametrize("M_BLOCK,N_BLOCK", [(2, 16), (8, 16), (8, 32), (8, 128)])
+@pytest.mark.parametrize("M_BLOCK,N_BLOCK", [(2, 16), (8, 16), (8, 32), (8, 128), (512, 32), (1, 1024)])
 def test_tensor_descriptor_store(dtype_str, num_ctas, M_BLOCK, N_BLOCK):
 
     @triton.jit
@@ -101,7 +101,11 @@ def test_tensor_descriptor_store(dtype_str, num_ctas, M_BLOCK, N_BLOCK):
 
     triton.set_allocator(alloc_fn)
 
-    kernel[(grid_m, grid_n)](out, inp, M, N, M_BLOCK, N_BLOCK, num_ctas=num_ctas)
+    h = kernel[(grid_m, grid_n)](out, inp, M, N, M_BLOCK, N_BLOCK, num_ctas=num_ctas)
+    print(h.asm["ttgir"])
+    print(h.asm["ptx"])
+    print(unwrap_tensor(out)[0])
+    print(unwrap_tensor(inp)[0])
 
     torch.testing.assert_close(unwrap_tensor(inp), unwrap_tensor(out))
 
@@ -143,7 +147,7 @@ REDUCE_OP = {
 @pytest.mark.parametrize("dtype_str", tma_dtypes)
 @pytest.mark.parametrize("num_ctas", [1, 2])
 @pytest.mark.parametrize("descriptor", ["host", "device"])
-@pytest.mark.parametrize("M_BLOCK,N_BLOCK", [(2, 16), (8, 16), (8, 32), (8, 128)])
+@pytest.mark.parametrize("M_BLOCK,N_BLOCK", [(2, 16), (8, 16), (8, 32), (8, 128), (512, 32), (1, 1024)])
 def test_tensor_descriptor_reduce(kind, descriptor, dtype_str, num_ctas, M_BLOCK, N_BLOCK):
 
     @triton.jit(debug=True)
@@ -665,7 +669,7 @@ def matmul_kernel_make_tensor_descriptor(a_ptr, b_ptr, c_ptr,  #
 @pytest.mark.parametrize("num_ctas", [1, 2])
 @pytest.mark.parametrize("BLOCK_M, BLOCK_N, BLOCK_K, num_stages", [
     (128, 128, 16, 1),
-    (256, 64, 32, 2),
+    (512, 64, 32, 2),
     (64, 512, 32, 2),
     (128, 128, 16, 4),
     (64, 128, 32, 4),
@@ -1023,7 +1027,7 @@ def torch_gather_rows(input, idx, y, block_y):
 
 @pytest.mark.interpreter
 @pytest.mark.parametrize("X, Y", [(128, 128), (64, 256)])
-@pytest.mark.parametrize("BLOCK_X, BLOCK_Y", [(32, 32), (64, 128), (16, 128)])
+@pytest.mark.parametrize("BLOCK_X, BLOCK_Y", [(32, 32), (64, 128), (16, 128), (512, 16)])
 @pytest.mark.parametrize("dtype", [torch.float32, torch.float16, torch.int8])
 @pytest.mark.parametrize("y", [0, 32, 48])
 @pytest.mark.skipif(not is_interpreter() and torch.cuda.get_device_capability()[0] != 10,
@@ -1123,7 +1127,7 @@ def tma_scatter_rows_kernel(out_ptr, in_ptr, idx_ptr, y, X: tl.constexpr, Y: tl.
 
 @pytest.mark.interpreter
 @pytest.mark.parametrize("X, Y", [(128, 128), (64, 256)])
-@pytest.mark.parametrize("BLOCK_X, BLOCK_Y", [(32, 32), (64, 128), (16, 128)])
+@pytest.mark.parametrize("BLOCK_X, BLOCK_Y", [(32, 32), (64, 128), (16, 128), (512, 16)])
 @pytest.mark.parametrize("dtype", [torch.float32, torch.float16, torch.int8])
 @pytest.mark.parametrize("y", [0, 32, 48])
 @pytest.mark.skipif(not is_interpreter() and torch.cuda.get_device_capability()[0] != 10,
@@ -1423,7 +1427,7 @@ def test_mxfp8_mxfp4_matmul_tma(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, NUM_STAGES, 
 @pytest.mark.interpreter()
 @pytest.mark.parametrize("dtype_str", tma_dtypes)
 @pytest.mark.parametrize("num_ctas", [1, 2])
-@pytest.mark.parametrize("M_BLOCK,N_BLOCK", [(2, 16), (8, 16), (8, 32), (8, 128)])
+@pytest.mark.parametrize("M_BLOCK,N_BLOCK", [(2, 16), (8, 16), (8, 32), (8, 128), (512, 32), (1, 1024)])
 def test_host_tensor_descriptor_load(dtype_str, num_ctas, M_BLOCK, N_BLOCK):
 
     @triton.jit(debug=True)
@@ -1476,7 +1480,7 @@ def matmul_kernel_host_tensor_descriptor(a_desc, b_desc, c_desc):
 @pytest.mark.parametrize("num_ctas", [1, 2])
 @pytest.mark.parametrize("BLOCK_M, BLOCK_N, BLOCK_K, num_stages", [
     (128, 128, 16, 1),
-    (256, 64, 32, 2),
+    (512, 64, 32, 2),
     (64, 512, 32, 2),
     (128, 128, 16, 4),
     (64, 128, 32, 4),

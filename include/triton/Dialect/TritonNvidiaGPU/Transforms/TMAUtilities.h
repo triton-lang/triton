@@ -39,14 +39,30 @@ triton::gpu::SharedEncodingTrait
 getEncodingFromDescriptor(Operation *op, RankedTensorType tensorType,
                           Value desc);
 
-int64_t getTMAContigDim(Attribute encoding, ArrayRef<int64_t> shape);
+SmallVector<int64_t> getTMABlockShape(ArrayRef<int64_t> shapePerCTA,
+                                      int elementBitWidth, int swizzleBytes,
+                                      bool fp4Padded, bool transposed,
+                                      bool packedSize);
 
-inline int64_t getTMAContigDim(RankedTensorType tensorType) {
-  return getTMAContigDim(tensorType.getEncoding(), tensorType.getShape());
+inline SmallVector<int64_t> getTMABlockShape(Attribute encoding,
+                                             ArrayRef<int64_t> shapePerCTA,
+                                             bool packedSize) {
+  auto mmaEnc = cast<gpu::NVMMASharedEncodingAttr>(encoding);
+  return getTMABlockShape(shapePerCTA, mmaEnc.getElementBitWidth(),
+                          mmaEnc.getSwizzlingByteWidth(), mmaEnc.getFp4Padded(),
+                          mmaEnc.getTransposed(), packedSize);
 }
 
-inline int64_t getTMAContigDim(gpu::MemDescType memDescType) {
-  return getTMAContigDim(memDescType.getEncoding(), memDescType.getShape());
+inline SmallVector<int64_t> getTMABlockShape(RankedTensorType ty,
+                                             bool packedSize) {
+  auto shapePerCTA = gpu::getShapePerCTA(ty);
+  return getTMABlockShape(ty.getEncoding(), shapePerCTA, packedSize);
+}
+
+inline SmallVector<int64_t> getTMABlockShape(triton::gpu::MemDescType ty,
+                                             bool packedSize) {
+  auto shapePerCTA = gpu::getShapePerCTA(ty);
+  return getTMABlockShape(ty.getEncoding(), shapePerCTA, packedSize);
 }
 
 std::optional<int> getTMASwizzleMode(Operation *op, TensorDescType ty);
@@ -74,16 +90,18 @@ mlir::LogicalResult createTMADesc(mlir::Value tmaPtr,
 
   int paddingScale = fp4Padded ? 2 : 1;
   auto shapePerCTA = gpu::getShapePerCTA(encoding, op.getTensorShape());
-  int32_t contig_dim_size = getTMAContigDim(encoding, op.getTensorShape());
+  auto blockShape =
+      getTMABlockShape(encoding, shapePerCTA, /*packedSize=*/false);
+  auto contigDimSize = blockShape.back();
 
   llvm::SmallVector<Value> boxDim;
-  if (fp4Padded && contig_dim_size != 128) {
+  if (fp4Padded && contigDimSize != 128) {
     return op->emitError(
         "FP4 padded loads require 128 elements or more in the last dim");
   }
-  boxDim.push_back(mkI32Constant(contig_dim_size));
+  boxDim.push_back(mkI32Constant(contigDimSize));
   for (int k = shapePerCTA.size() - 2; k >= 0; --k)
-    boxDim.push_back(mkI32Constant(shapePerCTA[k]));
+    boxDim.push_back(mkI32Constant(blockShape[k]));
 
   unsigned swizzleBytes = mmaEncoding ? mmaEncoding.getSwizzlingByteWidth() : 0;
   if (!mmaEncoding) {
