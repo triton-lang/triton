@@ -507,10 +507,10 @@ LogicalResult TMEMCopyOp::verify() {
 
   auto srcTy = cast<triton::gpu::MemDescType>(getSrc().getType());
   auto sharedEnc =
-      cast<triton::gpu::SwizzledSharedEncodingAttr>(srcTy.getEncoding());
+      cast<triton::gpu::NVMMASharedEncodingAttr>(srcTy.getEncoding());
 
-  if (sharedEnc.getMaxPhase() != 1 || sharedEnc.getPerPhase() != 1 ||
-      sharedEnc.getVec() != 1)
+  if (!sharedEnc || sharedEnc.getTransposed() || sharedEnc.getFp4Padded() ||
+      sharedEnc.getSwizzlingByteWidth() != 0)
     return emitOpError("The source should not have swizzling applied for now");
 
   if (!triton::gpu::isInnermostContiguous(srcTy, 512)) {
