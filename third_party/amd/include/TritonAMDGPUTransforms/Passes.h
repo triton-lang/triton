@@ -45,6 +45,8 @@ std::unique_ptr<Pass>
 createTritonAMDGPUUpdateAsyncWaitCountPass(std::string archGenName = {});
 
 std::unique_ptr<Pass> createTritonAMDGPUFoldTrueCmpIPass();
+std::unique_ptr<Pass>
+createTritonAMDGPUAggregateLoadPass(std::string archGen = std::string());
 
 /// Generate the code for registering passes.
 #define GEN_PASS_REGISTRATION
