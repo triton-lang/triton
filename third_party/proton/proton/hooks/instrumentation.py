@@ -1,9 +1,5 @@
 import functools
-<<<<<<< HEAD
-from typing import Dict, Optional, Union, Any
-=======
-from typing import Any, Dict, List, Optional, Tuple, Union
->>>>>>> bd847ac9 (move finalize op into target specific backends)
+from typing import Any, Dict, Optional, Union
 
 import triton
 from triton._C.libproton import proton as libproton
@@ -30,7 +26,8 @@ class CudaAllocator:
     def __call__(self, size: int, alignment: int, stream: Optional[int]):
         if alignment != self.instrumentation_hook.profile_buffer_alignment:
             raise RuntimeError(
-                f"Alignment mismatch: {alignment} != {self.instrumentation_hook.profile_buffer_alignment}")
+                f"Alignment mismatch: {alignment} != {self.instrumentation_hook.profile_buffer_alignment}"
+            )
         aligned_size = (size + alignment - 1) // alignment * alignment
         # Note: profile_buffer_size may be smaller than the aligned size if the kernel launches many blocks
         # and the host CPU cannot store all profiling data in memory. This streaming mode is not yet implemented.
@@ -157,6 +154,9 @@ class InstrumentationHook(Hook):
         max_shared_mem = triton.runtime.driver.active.utils.get_device_properties(
             device
         )["max_shared_mem"]
+        arch = triton.runtime.driver.active.utils.get_device_properties(device)[
+            "arch"
+        ].split(":")[0]
 
         def to_llvmir_passes(pm, backend_pass, arch=""):
             triton_proton.add_allocate_proton_global_scratch_buffer(pm)
@@ -189,7 +189,7 @@ class InstrumentationHook(Hook):
             backend_name = "amd"
             ttgpuir_func = lambda pm: to_ttgpuir_passes(pm)
             llvmir_func = lambda pm: to_llvmir_passes(
-                pm, triton_proton.add_convert_proton_amd_gpu_to_llvm, "gfx942"
+                pm, triton_proton.add_convert_proton_amd_gpu_to_llvm, arch
             )
         else:
             raise RuntimeError(f"Unsupported backend: {backend}")
@@ -246,15 +246,28 @@ class InstrumentationHook(Hook):
         # Reset the buffer reference
         self.buffer = None
 
-    def init_handle(self, module: Any, function: Any, name: str, metadata_group: Dict[str, str]) -> None:
+    def init_handle(
+        self, module: Any, function: Any, name: str, metadata_group: Dict[str, str]
+    ) -> None:
         if not function:
             return
 
         # Find the IR path in metadata
-        ir_path = next((path for key, path in metadata_group.items() if key.endswith(("ttgir", "ttir"))), None)
-        metadata_path = next((path for key, path in metadata_group.items() if key.endswith(("json"))), None)
+        ir_path = next(
+            (
+                path
+                for key, path in metadata_group.items()
+                if key.endswith(("ttgir", "ttir"))
+            ),
+            None,
+        )
+        metadata_path = next(
+            (path for key, path in metadata_group.items() if key.endswith(("json"))),
+            None,
+        )
         self.metadata_path[function] = metadata_path
-       if ir_path:
+
+        if ir_path:
             context = ir.context()
             ir.load_dialects(context)
             triton_proton.load_dialects(context)
@@ -263,7 +276,9 @@ class InstrumentationHook(Hook):
 
             scope_id_names = triton_proton.get_scope_id_names(module)
             scope_id_parents = triton_proton.get_scope_id_parents(module)
-            libproton.init_function_metadata(function, name, scope_id_names, scope_id_parents, metadata_path)
+            libproton.init_function_metadata(
+                function, name, scope_id_names, scope_id_parents, metadata_path
+            )
 
     def _data_ptr(self) -> int:
         return 0 if self.buffer is None else self.buffer.data_ptr()
@@ -271,7 +286,11 @@ class InstrumentationHook(Hook):
     def enter(self, lazy_dict: LazyDict) -> None:
         func = lazy_dict.data.get("function")
         stream = lazy_dict.data.get("stream")
-        alloc_size = 0 if self.buffer is None else self.buffer.element_size() * self.buffer.numel()
+        alloc_size = (
+            0
+            if self.buffer is None
+            else self.buffer.element_size() * self.buffer.numel()
+        )
         libproton.enter_instrumented_op(stream, func, self._data_ptr(), alloc_size)
         if InstrumentationHook.enable_host_buffer:
             InstrumentationHook.host_buffer = None
@@ -279,7 +298,11 @@ class InstrumentationHook(Hook):
     def exit(self, lazy_dict: LazyDict) -> None:
         func = lazy_dict.data.get("function")
         stream = lazy_dict.data.get("stream")
-        alloc_size = 0 if self.buffer is None else self.buffer.element_size() * self.buffer.numel()
+        alloc_size = (
+            0
+            if self.buffer is None
+            else self.buffer.element_size() * self.buffer.numel()
+        )
         libproton.exit_instrumented_op(stream, func, self._data_ptr(), alloc_size)
 
         if InstrumentationHook.enable_host_buffer:
@@ -290,15 +313,21 @@ class InstrumentationHook(Hook):
             import json
             import struct
 
+            import torch
+
             def encode_target(target: Dict[str, Any]) -> int:
-                #TODO(fywkevin): also account for `arch`
+                # TODO(fywkevin): also account for `arch`
                 if target["backend"] == "cuda":
                     return 1
                 elif target["backend"] == "hip":
                     return 2
                 return 0
 
-            alloc_size = 0 if self.buffer is None else self.buffer.element_size() * self.buffer.numel()
+            alloc_size = (
+                0
+                if self.buffer is None
+                else self.buffer.element_size() * self.buffer.numel()
+            )
             data = {}
             with open(self.metadata_path[function], "r") as file:
                 data = json.load(file)
@@ -353,8 +382,16 @@ class InstrumentationHook(Hook):
             payload_offset = header_size
             payload_size = alloc_size
             header_values = [
-                VERSION, header_offset, header_size, payload_offset, payload_size, device_type, block_num, total_unit,
-                scratch_mem_size, *uid_vec
+                VERSION,
+                header_offset,
+                header_size,
+                payload_offset,
+                payload_size,
+                device_type,
+                block_num,
+                total_unit,
+                scratch_mem_size,
+                *uid_vec,
             ]
             header_bytes = struct.pack("I" * len(header_values), *header_values)
 
