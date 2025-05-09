@@ -561,6 +561,8 @@ def matmul_kernel_make_tensor_descriptor(a_ptr, b_ptr, c_ptr,  #
 def test_make_tensor_descriptor_matmul(num_stages, num_ctas, BLOCK_M, BLOCK_N, BLOCK_K, device):
     if num_ctas == 2 and (not is_cuda() or torch.cuda.get_device_capability(0)[0] not in (9, 10)):
         pytest.skip("CTAs is unsupported for these cards")
+    if is_hip() and (BLOCK_M, BLOCK_N, BLOCK_K, num_stages) == (256, 128, 32, 4):
+        pytest.skip("HIP devices don't have enough memory for this")
 
     if is_interpreter():
         M, N, K = BLOCK_M, BLOCK_N, BLOCK_K
@@ -749,10 +751,12 @@ def batched_gemm_2d_tma_kernel(a_ptr, b_ptr, c_ptr,  #
 @pytest.mark.interpreter
 def test_tensor_descriptor_batched_gemm_2d_tma(device):
     BLOCK_M, BLOCK_N, BLOCK_K = 128, 256, 64
+
+    if is_hip():
+        BLOCK_M, BLOCK_N, BLOCK_K = 128, 128, 64
+
     if is_interpreter():
         B, M, N, K = 2, BLOCK_M, BLOCK_N, BLOCK_K
-    elif is_hip():
-        B, M, N, K = 2, 256, 512, 128
     else:
         B, M, N, K = 2, 1024, 1024, 128
     NUM_SMS = 96
@@ -850,10 +854,12 @@ def batched_gemm_3d_tma_kernel(a_ptr, b_ptr, c_ptr,  #
 @pytest.mark.interpreter
 def test_tensor_descriptor_batched_gemm_3d_tma(device):
     BLOCK_M, BLOCK_N, BLOCK_K = 128, 256, 64
+
+    if is_hip():
+        BLOCK_M, BLOCK_N, BLOCK_K = 128, 128, 64
+
     if is_interpreter():
         B, M, N, K = 2, BLOCK_M, BLOCK_N, BLOCK_K
-    elif is_hip():
-        B, M, N, K = 2, 256, 512, 128
     else:
         B, M, N, K = 2, 1024, 1024, 128
     NUM_SMS = 96
