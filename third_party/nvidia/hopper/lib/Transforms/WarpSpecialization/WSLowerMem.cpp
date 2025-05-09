@@ -186,96 +186,12 @@ static Value createBufferView(OpBuilderWithAsyncTaskIds &builder, Value alloc,
       alloc.getLoc(), viewDescType, alloc, idxs);
 }
 
-#if 0
-static std::pair<Operation *, Operation *>
-createTMEMCopy(const DenseMap<Channel *, Value> &bufferMap, Channel *channel,
-               Value srcBufferIdx, Value dstBufferIdx) {
-  // Replace original tmem alloc with tmem_store.
-  ttng::TmemDataChannel *tmemChannel =
-      static_cast<ttng::TmemDataChannel *>(channel);
-  auto oldTMemAllocOp = tmemChannel->getAllocOp();
-  auto newTMemAllocOp = bufferMap.find(channel)->second;
-  OpBuilderWithAsyncTaskIds builder(oldTMemAllocOp);
-  builder.setInsertionPointAfter(oldTMemAllocOp);
-
-  // A tmemChannel is usually centered around a gen5 dotOp. There are two
-  // cases, one is that the channel is for the accumulator, the other is
-  // the channel is for operand A of the gen5.
-  // Here we replace tmem_alloc with tmem_store when applicable and create a
-  // subView that is used by tmem_store and also all users of tmem_alloc.
-  // Calculate the taskIds for the subView, and tmem_store.
-  // tmemStore's taskId can be the mmaOp's taskId if alloc.getSrc is available
-  // for mmaOp's taskId, otherwise, it should happen in alloc.getsrc.
-  Operation *opForStoreTask = tmemChannel->getMmaOp();
-  if (oldTMemAllocOp.getSrc()) {
-    auto taskIds = getAsyncTaskIds(opForStoreTask);
-    assert(taskIds.size() == 1);
-    // Check to see if alloc.getSrc is available for mmaOp's taskId.
-    auto *srcOp = oldTMemAllocOp.getSrc().getDefiningOp();
-    if (!hasAsyncTaskId(srcOp, taskIds[0]))
-      opForStoreTask = oldTMemAllocOp.getSrc().getDefiningOp();
-  }
-  // TaskIds for subView should be the union of tmem_store and all users of
-  // tmem_alloc.
-  SmallVector<AsyncTaskId> asyncTasksSubView = getAsyncTaskIds(opForStoreTask);
-  for (auto *user : oldTMemAllocOp->getUsers()) {
-    for (auto task : getAsyncTaskIds(user))
-      if (!llvm::is_contained(asyncTasksSubView, task))
-        asyncTasksSubView.push_back(task);
-  }
-  builder.setAsynTaskIdsFromArray(asyncTasksSubView);
-
-  auto srcView = createBufferView(builder, newTMemAllocOp, srcBufferIdx);
-  LLVM_DEBUG({
-    LDBG("createTMEMCopy: srcView ");
-    srcView.dump();
-  });
-
-  if (oldTMemAllocOp.getSrc()) {
-    builder.setAsyncTaskIdsFromOp(opForStoreTask);
-    Value vTrue = builder.createWithAsyncTaskIds<arith::ConstantIntOp>(
-        oldTMemAllocOp.getLoc(), 1, 1);
-    auto tmemStoreOp = builder.createWithAsyncTaskIds<ttng::TMEMStoreOp>(
-        oldTMemAllocOp.getLoc(), srcView, oldTMemAllocOp.getSrc(), vTrue);
-    oldTMemAllocOp->replaceAllUsesWith(srcView.getDefiningOp());
-    oldTMemAllocOp.erase();
-    tmemChannel->tmemProducerOp = tmemStoreOp;
-    return {tmemStoreOp, channel->getDstOp()};
-  }
-  // Handle the case where there is no value for tmem_alloc.
-  oldTMemAllocOp->replaceAllUsesWith(srcView.getDefiningOp());
-  oldTMemAllocOp.erase();
-  // We need a new srcOp now that tmemAlloc is erased, the new SrcOp will be
-  // the mmaOp.
-  tmemChannel->tmemProducerOp = tmemChannel->getMmaOp();
-  return {tmemChannel->getMmaOp(), channel->getDstOp()};
-}
-#endif
-
 static int getTMALoadSize(tt::DescriptorLoadOp &tmaLoad) {
   auto tensorTy = cast<RankedTensorType>(tmaLoad->getResult(0).getType());
   int loadSize = product(tensorTy.getShape());
   return loadSize * tensorTy.getElementType().getIntOrFloatBitWidth() / 8;
 }
 
-#if 0
-Value getBarrierForPipelineStage(OpBuilderWithAsyncTaskIds &builder,
-                                 Value barrierAlloc, Value bufferIdx) {
-  auto context = barrierAlloc.getContext();
-  Attribute sharedMemorySpace =
-      triton::gpu::SharedMemorySpaceAttr::get(context);
-  ttg::MemDescType barrierTy = ttg::MemDescType::get(
-      {1}, builder.getI64Type(),
-      cast<ttg::MemDescType>(barrierAlloc.getType()).getEncoding(),
-      sharedMemorySpace,
-      /*mutableMemory=*/true);
-
-  // Create barrierForTMA from barrierAlloc.
-  return builder.createWithAsyncTaskIds<ttg::MemDescSubviewOp>(
-      barrierAlloc.getLoc(), barrierTy, barrierAlloc,
-      ArrayRef<Value>({bufferIdx}));
-}
-#endif
 Value getBufferForPipelineStage(OpBuilderWithAsyncTaskIds &builder,
                                 Type loadType, Value buffer, Value bufferIdx,
                                 bool mutableMem) {
@@ -474,8 +390,7 @@ void insertAsyncCopy(
                                             domininatingChannel->getSrcOp(),
                                             asyncTasksPC, bufferIdx, bufferIdx);
     } else if (domininatingChannel->channelKind == DataChannelKind::TMEM) {
-      // producerConsumerOps =
-      //  createTMEMCopy(bufferMap, domininatingChannel, bufferIdx, bufferIdx);
+      // TODO: will be added in a separate PR.
     } else {
       assert(!isa<ttg::LocalLoadOp>(srcOp) &&
              "LocalLoadOp buffer should be reused");
