@@ -287,7 +287,7 @@ LinearLayout chooseScaledMfmaScaleLayout(
 // 8 elements. This layout is useful for emitting the widest 128-bit global
 // store instructions. Since it closely resembles mfmaLayout, conversion between
 // the two can be done using transferWithinWarp, without involving LDS
-std::optional<LinearLayout> chooseMfmaLikeStoreLayout( RankedTensorType valType);
+std::optional<LinearLayout> chooseMfmaLikeStoreLayout(RankedTensorType valType);
 
 } // namespace mlir::triton::gpu
 #endif // TRITON_DIALECT_TRITONGPU_IR_LINEARLAYOUTCONVERSIONS_H

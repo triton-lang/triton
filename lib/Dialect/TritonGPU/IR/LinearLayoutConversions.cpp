@@ -1533,7 +1533,8 @@ LinearLayout chooseScaledMfmaScaleLayout(
   return newLL;
 }
 
-std::optional<LinearLayout> chooseMfmaLikeStoreLayout(RankedTensorType valType) {
+std::optional<LinearLayout>
+chooseMfmaLikeStoreLayout(RankedTensorType valType) {
   auto mfmaLayout = dyn_cast<AMDMfmaEncodingAttr>(valType.getEncoding());
   assert(mfmaLayout);
 
@@ -1569,8 +1570,8 @@ std::optional<LinearLayout> chooseMfmaLikeStoreLayout(RankedTensorType valType) 
       identityStandardND(kWarp, mfmaLayout.getWarpsPerCTA(), order);
   LinearLayout ctaLayout = mfma8Layout.transposeOuts(standardOutDims) *
                            warpLayout.transposeOuts(standardOutDims);
-  mfma8Layout =
-      combineCtaCgaWithShape(ctaLayout, mfmaLayout.getCTALayout(), valType.getShape());
+  mfma8Layout = combineCtaCgaWithShape(ctaLayout, mfmaLayout.getCTALayout(),
+                                       valType.getShape());
   return mfma8Layout;
 }
 
