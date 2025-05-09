@@ -85,36 +85,36 @@ bool enclosing(scf::ForOp forOp, Operation *op);
 // AccumCnt for all channels under opsWithBufferReuse and it will be the
 // last AccumCnt.
 unsigned getAccumCnts(Operation *ctrlOp,
-                      const DenseSet<Operation *> &opsWithChannels);
+                      const DenseSet<Operation *> &regionsWithChannels);
 
 unsigned getAccumArgIdx(scf::ForOp parentForOp, Operation *ctrlOp,
-                        const DenseSet<Operation *> &opsWithChannels);
+                        const DenseSet<Operation *> &regionsWithChannels);
 
 SmallVector<Operation *>
 getTaskTopRegion(triton::FuncOp funcOp, const SmallVector<Channel *> &channels);
 
 void appendAccumCntsForOps(SmallVector<Operation *> &taskTopOps,
                            const SmallVector<Channel *> &channels,
-                           DenseSet<Operation *> &opsWithChannels);
+                           DenseSet<Operation *> &regionsWithChannels);
 
 void collectRegionsWithChannels(const SmallVector<Channel *> &channels,
-                                DenseSet<Operation *> &opsWithChannels);
+                                DenseSet<Operation *> &regionsWithChannels);
 void insertAsyncCopy(
     triton::FuncOp funcOp,
     const DenseMap<Channel *, SmallVector<Channel *>>
         &channelsGroupedByProducers,
     const DenseMap<Channel *, Value> &bufferMap,
     DenseMap<Channel *, std::pair<Operation *, Operation *>> &copyOpMap,
-    DenseSet<Operation *> &opsWithChannels);
+    DenseSet<Operation *> &regionsWithChannels);
 
 Value getAccumCount(OpBuilderWithAsyncTaskIds &builder, Operation *op,
-                    const DenseSet<Operation *> &opsWithChannels);
+                    const DenseSet<Operation *> &regionsWithChannels);
 std::pair<Value, Value> getBufferIdxAndPhase(OpBuilderWithAsyncTaskIds &builder,
                                              Location loc, Value accumCnt,
                                              unsigned numBuffers);
 void getBufferIdxAndPhase(OpBuilderWithAsyncTaskIds &builder, Operation *op,
                           unsigned numBuffers,
-                          const DenseSet<Operation *> &opsWithChannels,
+                          const DenseSet<Operation *> &regionsWithChannels,
                           Value &bufferIdx, Value &phase);
 
 Value getBarrierForPipelineStage(OpBuilderWithAsyncTaskIds &builder,

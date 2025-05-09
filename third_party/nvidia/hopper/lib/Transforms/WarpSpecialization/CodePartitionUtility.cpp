@@ -48,11 +48,11 @@ bool immediateEnclosing(scf::IfOp ifOp, Operation *subOp) {
 // Return number of AccumCnts for the given ctrlOp. We need one for each nested
 // region that contains a channel.
 unsigned getAccumCnts(Operation *ctrlOp,
-                      const DenseSet<Operation *> &opsWithChannels) {
+                      const DenseSet<Operation *> &regionsWithChannels) {
   unsigned cnt = 0;
   LDBG("getAccumCnts: " << ctrlOp);
-  for (auto *op : opsWithChannels) {
-    LDBG("-- getAccumCnts: " << ctrlOp << " opsWithChannels " << op);
+  for (auto *op : regionsWithChannels) {
+    LDBG("-- getAccumCnts: " << ctrlOp << " regionsWithChannels " << op);
     if (ctrlOp == op) {
       ++cnt;
       continue;
@@ -69,7 +69,7 @@ unsigned getAccumCnts(Operation *ctrlOp,
 
 // Assume parentForOp has accumCnt for the specified ctrlOp.
 unsigned getAccumArgIdx(scf::ForOp parentForOp, Operation *ctrlOp,
-                        const DenseSet<Operation *> &opsWithChannels) {
+                        const DenseSet<Operation *> &regionsWithChannels) {
   // Walk parentForOp in preorder.
   unsigned preOrderId = 0, ctrlId = 0;
   bool found = false;
@@ -79,7 +79,7 @@ unsigned getAccumArgIdx(scf::ForOp parentForOp, Operation *ctrlOp,
       ctrlId = preOrderId;
       found = true;
     }
-    for (auto *op : opsWithChannels) {
+    for (auto *op : regionsWithChannels) {
       if (op == subOp) {
         LDBG("getAccumArgIdx: saw ctrlOp enclosing channel " << subOp);
         ++preOrderId;
@@ -136,13 +136,13 @@ std::pair<Value, Value> getBufferIdxAndPhase(OpBuilderWithAsyncTaskIds &builder,
 //     ElseYield ForC.arg[accumIfB]
 //   Channel D --> uses ForA.arg[accumForA]
 Value getAccumCount(OpBuilderWithAsyncTaskIds &builder, Operation *op,
-                    const DenseSet<Operation *> &opsWithChannels) {
+                    const DenseSet<Operation *> &regionsWithChannels) {
   auto parentForOp = op->getParentOfType<scf::ForOp>();
   auto *pOp = op->getParentOp();
   // Get parentForOp.arg[pOp]
   unsigned tSize = parentForOp.getBody()->getArguments().size();
-  unsigned parentTCnts = getAccumCnts(parentForOp, opsWithChannels);
-  unsigned accumArgId = getAccumArgIdx(parentForOp, pOp, opsWithChannels);
+  unsigned parentTCnts = getAccumCnts(parentForOp, regionsWithChannels);
+  unsigned accumArgId = getAccumArgIdx(parentForOp, pOp, regionsWithChannels);
   Value accumCnt =
       parentForOp.getBody()->getArgument(tSize - parentTCnts + accumArgId);
 
@@ -154,9 +154,9 @@ Value getAccumCount(OpBuilderWithAsyncTaskIds &builder, Operation *op,
 
 void getBufferIdxAndPhase(OpBuilderWithAsyncTaskIds &builder, Operation *op,
                           unsigned numBuffers,
-                          const DenseSet<Operation *> &opsWithChannels,
+                          const DenseSet<Operation *> &regionsWithChannels,
                           Value &bufferIdx, Value &phase) {
-  Value accumCnt = getAccumCount(builder, op, opsWithChannels);
+  Value accumCnt = getAccumCount(builder, op, regionsWithChannels);
   std::tie(bufferIdx, phase) =
       getBufferIdxAndPhase(builder, op->getLoc(), accumCnt, numBuffers);
 }
