@@ -260,37 +260,56 @@ public:
       : forOp(forOp), opLatency(opLatency) {};
 
   void run() {
-    if (!triton::tools::getBoolEnv("ENABLE_MMA_V5_ATT_PIPELINE")) {
-      int mmav5Count = 0;
-      for (auto &op : forOp.getBody()->without_terminator()) {
-        if (isa<ttng::MMAv5OpInterface>(&op)) {
-          mmav5Count++;
-        }
-      }
-      if (mmav5Count > 1)
-        return;
-    }
+    DenseMap<Operation *, int> mmaSelfLatency;
     // Check if the load op (mma operand) is pipelineable.
-    auto isLoadPipelineable = [&](Operation *op) {
+    auto isLoadToBePipelined = [&](Operation *op) {
       return opLatency.count(op) && opLatency[op] > 0;
     };
     for (auto &op : forOp.getBody()->without_terminator()) {
       // If the acc can not be multibuffered, do not pipeline the uses of
       // the MMA to later stages.
       if (auto mma = dyn_cast<ttng::MMAv5OpInterface>(&op)) {
-        if (ttng::mmaHasPipelineableOperands(mma, forOp, isLoadPipelineable) &&
-            !ttng::hasAccReadModifyWrite(mma, forOp) &&
-            ttng::isAccMultibufferingPossible(mma, forOp) &&
-            !getDisallowAccMultiBuffer(forOp)) {
-          opLatency[&op] = 1;
+        // Try to push out the wait by one stage even if the operands are not
+        // pipelineable, but we know where the loads are scheduled, so we can
+        // place the wait right before the loads.
+
+        if (hasSyncDots(forOp)) {
+          // Skip pipelining MMA in the loops where sync dots are used. This is
+          // dirty heuristic for performance drops in kernels where we would
+          // rather want to have last iteration peeled instead of having a full
+          // iteration of masked operations only to execute single wait.
+          continue;
+        }
+        auto pipeHelper = ttng::MMAv5PipelineableOperandsHelper(
+            mma, forOp, isLoadToBePipelined);
+        if (pipeHelper.isPipelineable ||
+            (pipeHelper.isOperandsStateDetermined &&
+             !ttng::hasLoadsAfterMMA(mma, forOp))) {
+          // MMA can be overlapped with itself
+          mmaSelfLatency[mma] = 1;
+          if (!ttng::requiresAccMultiBuffering(mma, forOp) ||
+              (ttng::isAccMultibufferingPossible(mma, forOp) &&
+               !getDisallowAccMultiBuffer(forOp))) {
+            // MMA's users can be pushed to the next stage
+            opLatency[&op] = 1;
+          }
         }
       }
     }
+    serializeSelfLatencies(forOp->getParentOfType<ModuleOp>(), mmaSelfLatency);
   }
 
 private:
   scf::ForOp forOp;
   DenseMap<Operation *, int> &opLatency;
+
+  bool hasSyncDots(scf::ForOp forOp) {
+    for (auto &op : forOp.getBody()->without_terminator()) {
+      if (isa<mlir::triton::DotOp>(op))
+        return true;
+    }
+    return false;
+  }
 };
 
 } // namespace
