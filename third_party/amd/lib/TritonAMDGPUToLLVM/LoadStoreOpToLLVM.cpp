@@ -28,48 +28,6 @@ using ::mlir::triton::AMD::ISAFamily;
 using ::mlir::triton::gpu::getTotalElemsPerThread;
 namespace {
 
-std::optional<LLVM::AtomicBinOp> matchAtomicOp(RMWOp atomicOp) {
-  switch (atomicOp) {
-  case RMWOp::AND:
-    return LLVM::AtomicBinOp::_and;
-  case RMWOp::OR:
-    return LLVM::AtomicBinOp::_or;
-  case RMWOp::XOR:
-    return LLVM::AtomicBinOp::_xor;
-  case RMWOp::ADD:
-    return LLVM::AtomicBinOp::add;
-  case RMWOp::FADD:
-    return LLVM::AtomicBinOp::fadd;
-  case RMWOp::MAX:
-    return LLVM::AtomicBinOp::max;
-  case RMWOp::MIN:
-    return LLVM::AtomicBinOp::min;
-  case RMWOp::UMAX:
-    return LLVM::AtomicBinOp::umax;
-  case RMWOp::UMIN:
-    return LLVM::AtomicBinOp::umin;
-  case RMWOp::XCHG:
-    return LLVM::AtomicBinOp::xchg;
-  default:
-    return {};
-  }
-}
-
-std::optional<LLVM::AtomicOrdering> getMemoryOrdering(MemSemantic memOrdering) {
-  switch (memOrdering) {
-  case MemSemantic::RELAXED:
-    return LLVM::AtomicOrdering::monotonic;
-  case MemSemantic::ACQUIRE:
-    return LLVM::AtomicOrdering::acquire;
-  case MemSemantic::RELEASE:
-    return LLVM::AtomicOrdering::release;
-  case MemSemantic::ACQUIRE_RELEASE:
-    return LLVM::AtomicOrdering::acq_rel;
-  default:
-    return {};
-  }
-}
-
 std::optional<const char *> getAMDGPUMemScopeStr(MemSyncScope scope) {
   switch (scope) {
   case MemSyncScope::GPU:
