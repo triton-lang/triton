@@ -23,6 +23,14 @@ TRITON_BUILTIN = "__triton_builtin__"
 PropagateNan = ir.PROPAGATE_NAN
 
 
+def must_use_result(x, s=True):
+    """Mark a function as having no side-effects."""
+    if isinstance(x, str):
+        return (lambda fn : must_use_result(fn, x))
+    x._must_use_result = s
+    return x
+
+
 def builtin(fn: T) -> T:
     """Mark a function as a builtin."""
     assert callable(fn)
@@ -2080,6 +2088,7 @@ def make_block_ptr(base: tensor, shape, strides, offsets, block_shape, order, _b
     return semantic.make_block_ptr(base, shape, strides, offsets, block_shape, order, _builder)
 
 
+@must_use_result("Note that tl.advance does not have any side effects. To move the block pointer, you need to assign the result of tl.advance to a variable.")
 @_tensor_member_fn
 @builtin
 def advance(base, offsets, _builder=None):
