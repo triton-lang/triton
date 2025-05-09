@@ -277,9 +277,21 @@ struct CircularStoreOpConversion
       // for this predicated version, there could be unexpected instruction
       // cache miss. Setting isWriter always true has bank conflicts but it is
       // expected and stable.
-      targetInfo.getTritonTargetInfo().storeDShared(rewriter, loc, vecPtr,
-                                                    std::nullopt, valsVec,
-                                                    /*pred=*/isWriter);
+      // targetInfo.getTritonTargetInfo().storeDShared(rewriter, loc, vecPtr,
+      //                                               std::nullopt, valsVec,
+      //                                               /*pred=*/isWriter);
+      Block *currentBlock = rewriter.getInsertionBlock();
+      Block *afterStore =
+          rewriter.splitBlock(currentBlock, rewriter.getInsertionPoint());
+      Block *trueBlock = rewriter.createBlock(afterStore);
+      rewriter.setInsertionPointToEnd(currentBlock);
+      rewriter.create<LLVM::CondBrOp>(loc, isWriter, trueBlock, afterStore);
+      rewriter.setInsertionPointToStart(trueBlock);
+      auto storeOp =
+          rewriter.create<LLVM::StoreOp>(loc, valsVec, vecPtr, /*alignment=*/0,
+                                         /*volatileFlag*/ 0, /*nonTmpFlag*/ 0);
+      rewriter.create<LLVM::BrOp>(loc, afterStore);
+      rewriter.setInsertionPointToStart(afterStore);
     } else {
       llvm::report_fatal_error("unsupported address space in circular store");
     }
