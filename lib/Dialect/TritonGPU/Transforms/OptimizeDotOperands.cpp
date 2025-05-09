@@ -316,14 +316,10 @@ private:
       return false;
 
     auto sharedEnc =
-        cast<triton::gpu::SwizzledSharedEncodingAttr>(scaleType.getEncoding());
-    if (sharedEnc.getMaxPhase() != 1 || sharedEnc.getPerPhase() != 1 ||
-        sharedEnc.getVec() != 1) {
-      // For now, we do not expect swizzling to be applied to the scale SMEM.
-      // This is currently true for non-matmul operand SMEM allocated during
-      // pipelining.
+        dyn_cast<triton::gpu::NVMMASharedEncodingAttr>(scaleType.getEncoding());
+    if (!sharedEnc || sharedEnc.getTransposed() || sharedEnc.getFp4Padded() ||
+        sharedEnc.getSwizzlingByteWidth() != 0)
       return false;
-    }
 
     if (usesTMAload) {
       return true;

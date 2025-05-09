@@ -3,7 +3,9 @@
 #include "mlir/Pass/Pass.h"
 #include "mlir/Pass/PassManager.h"
 #include "mlir/Transforms/Passes.h"
+#include "triton/Dialect/TritonGPU/Transforms/Partition.h"
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h"
+#include "triton/Dialect/TritonGPU/Transforms/PipeliningUtility.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 
 using namespace mlir;
@@ -31,6 +33,14 @@ struct AutomaticWarpSpecialization
 };
 } // namespace
 
+static void clearAttributes(Operation *op) {
+  op->walk([&](Operation *op) {
+    op->removeAttr(kScheduledMaxStageAttrName);
+    op->removeAttr(kPartitionAttrName);
+    op->removeAttr(kPartitionStagesAttrName);
+  });
+}
+
 void AutomaticWarpSpecialization::runOnOperation() {
   OpPassManager pm;
   pm.addPass(createTritonGPULoadMMASpecialization({numStages}));
@@ -57,4 +67,6 @@ void AutomaticWarpSpecialization::runOnOperation() {
   pm.addPass(createTritonGPUOptimizePartitionWarps());
   if (failed(runPipeline(pm, getOperation())))
     return signalPassFailure();
+  // clear attributes
+  clearAttributes(getOperation());
 }
