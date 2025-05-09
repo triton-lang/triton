@@ -6,7 +6,7 @@ cached_capabilities = {}
 
 def is_hip():
     if "is_hip" not in cached_capabilities:
-        cached_capabilities["is_hip"] = torch.cuda.is_available() and torch.version.hip
+        cached_capabilities["is_hip"] = torch.cuda.is_available() and bool(torch.version.hip)
     return cached_capabilities["is_hip"]
 
 

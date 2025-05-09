@@ -10,7 +10,7 @@ from triton_kernels.routing import GatherIndx, RoutingData, ScatterIndx
 # details
 from .matmul_ogs_details._matmul_ogs import _compute_writeback_idx
 from .matmul_ogs_details._matmul_ogs import _matmul_ogs
-from .matmul_ogs_details._ptma_matmul_ogs import _ptma_matmul_ogs, get_per_device_per_stream_alloc_fn
+from .matmul_ogs_details._p_matmul_ogs import _p_matmul_ogs, get_per_device_per_stream_alloc_fn
 from .matmul_ogs_details._finalize_matmul import _finalize_matmul
 from .matmul_ogs_details.opt_flags import make_opt_flags
 from .matmul_ogs_details.metadata import compute_metadata
@@ -46,8 +46,8 @@ def get_kernels(epilogue: Epilogue):
                                          do_not_specialize=do_not_specialize)
     module._matmul_ogs = specialize(_matmul_ogs, module, spec_constants, spec_tuples,
                                     do_not_specialize=do_not_specialize)
-    module._ptma_matmul_ogs = specialize(_ptma_matmul_ogs, module, spec_constants, spec_tuples,
-                                         do_not_specialize=do_not_specialize)
+    module._p_matmul_ogs = specialize(_p_matmul_ogs, module, spec_constants, spec_tuples,
+                                      do_not_specialize=do_not_specialize)
     _kernels[epilogue.name] = module
     return module
 
@@ -552,7 +552,7 @@ def matmul_ogs(x, w, bias,
     bias_stride = None if bias is None else bias.stride(0)
     num_indx = None if scatter_indx is None else scatter_indx.src_indx.shape[0]
     kernels = get_kernels(epilogue)
-    (kernels._ptma_matmul_ogs if opt_flags.is_persistent else kernels._matmul_ogs)[(n_cta,)](
+    (kernels._p_matmul_ogs if opt_flags.is_persistent else kernels._matmul_ogs)[(n_cta,)](
                    flex.out_data.reinterpret(memory["output"]),
                    flex.out_data.reinterpret(out0), *out0.stride(),
                    *out0_flex,
