@@ -4,19 +4,19 @@ import torch
 from typing import Union
 # benchmarking utilities
 # routing utilities
-from triton_bench.routing import routing
+from triton_kernels.routing import routing
 # matmul utilities
-import triton_bench.matmul_ogs_details.opt_flags as opt_flags
-from triton_bench.matmul_ogs import FlexCtx, PrecisionConfig, MicroscalingCtx
-from triton_bench.matmul_ogs import can_use_persistent_tma
-from triton_bench.matmul_ogs import matmul_ogs, matmul_ogs_torch
+import triton_kernels.matmul_ogs_details.opt_flags as opt_flags
+from triton_kernels.matmul_ogs import FlexCtx, PrecisionConfig, MicroscalingCtx
+from triton_kernels.matmul_ogs import can_use_persistent_tma
+from triton_kernels.matmul_ogs import matmul_ogs, matmul_ogs_torch
 # numerics utilities
-from triton_bench.numerics import InFlexData, OutFlexData
-from triton_bench.numerics_details.mxfp import downcast_to_mxfp, upcast_from_mxfp
+from triton_kernels.numerics import InFlexData, OutFlexData
+from triton_kernels.numerics_details.mxfp import downcast_to_mxfp, upcast_from_mxfp
 # testing utilities
-from triton_bench.testing import assert_close, compute_actual_scale
+from triton_kernels.testing import assert_close, compute_actual_scale
 # target-specific utilities
-from triton_bench.target_info import is_hip
+from triton_kernels.target_info import is_hip
 
 # ---------------
 # initialize data
@@ -54,7 +54,6 @@ def init_compute_data(m, n, k, gindx, sindx, n_expts_tot, n_expts_act, n_expt_sh
     torch.manual_seed(0)
     assert mode in {'batched', 'ragged'}
     in_m = m * (n_expts_act if gindx is None else 1)
-    out_m = m * (n_expts_act if sindx is None else 1)
     shape_x = (n_expts_tot, in_m, k) if mode == 'batched' else (in_m, k)
     x = alloc_rand(shape_x, device=device, dtype=act_dtype, requires_grad=requires_grad)
     w = alloc_rand((n_expts_tot // n_expt_shards, k, n), device=device, dtype=weight_dtype, requires_grad=requires_grad)
@@ -67,7 +66,6 @@ def init_compute_data(m, n, k, gindx, sindx, n_expts_tot, n_expts_act, n_expt_sh
     if mode == 'batched' or (not has_y_gammas) or (has_y_gammas and (gindx is not None) and act_dtype.itemsize >= 2):
         gs0 = None
         gs1 = None
-    shape_y = (n_expts_tot, out_m, n) if mode == 'batched' else (out_m, n)
     return x, w, bias, gs0, gs1
 
 

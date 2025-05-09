@@ -1,6 +1,6 @@
-from triton_bench.routing import routing_torch
-from triton_bench.swiglu import swiglu, swiglu_torch, PrecisionConfig
-from triton_bench.testing import assert_close
+from triton_kernels.routing import routing_torch
+from triton_kernels.swiglu import swiglu, swiglu_torch, PrecisionConfig
+from triton_kernels.testing import assert_close
 import torch
 import pytest
 
