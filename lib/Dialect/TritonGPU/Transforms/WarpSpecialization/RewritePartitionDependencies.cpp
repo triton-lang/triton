@@ -568,6 +568,6 @@ void RewritePartitionDependencies::runOnOperation() {
 
   for (scf::ForOp loop : loops) {
     if (failed(rewritePartitionDependencies(loop)))
-      continue;
+      return signalPassFailure();
   }
 }
