@@ -4,7 +4,8 @@ import pathlib
 import triton
 import triton.language as tl
 
-from triton._internal_testing import is_cuda, is_hip
+from triton._internal_testing import is_hip
+from triton.tools.tensor_descriptor import TensorDescriptor
 
 if torch.cuda.is_available() and torch.cuda.get_device_capability()[0] == 10:
     from triton._C.libtriton import nvidia
@@ -14,8 +15,8 @@ else:
     cublas = None
 
 
-@pytest.mark.skipif(not is_cuda() and torch.cuda.get_device_capability()[0] != 10,
-                    reason="warp specialization is only supported on NVIDIA Blackwell")
+@pytest.mark.skipif(is_hip(), reason="warp specialization is not supported on hip devices")
+@pytest.mark.skipif(torch.cuda.get_device_capability()[0] != 10, reason="Requires compute capability == 10")
 def test_warp_specialize_basic_ir(tmp_path: pathlib.Path):
     ir = """
     tt.func @kernel(%arg0: !tt.ptr<i32>) {
@@ -49,8 +50,76 @@ def test_warp_specialize_basic_ir(tmp_path: pathlib.Path):
     assert input[1] == 5555
 
 
-@pytest.mark.skipif(not is_cuda() and torch.cuda.get_device_capability()[0] != 10,
-                    reason="warp specialization is only supported on NVIDIA Blackwell")
+@pytest.mark.skipif(is_hip(), reason="warp specialization is not supported on hip devices")
+@pytest.mark.skipif(torch.cuda.get_device_capability()[0] != 10, reason="Requires compute capability == 10")
+def test_warp_specialize_tmem_ir(tmp_path: pathlib.Path):
+    ir = """
+    #blocked = #ttg.blocked<{sizePerThread = [1, 64], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [0, 1]}>
+    #shared = #ttg.swizzled_shared<{vec=1, perPhase=1, maxPhase=1, order=[1, 0]}>
+    #tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 64, unpacked = true>
+
+    module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
+
+    tt.func @test_tmem_ws(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<f32> {tt.divisibility = 16 : i32}) {
+      %cst = arith.constant dense<64> : tensor<128x64xi32, #blocked>
+      %0 = tt.make_range {end = 128 : i32, start = 0 : i32} : tensor<128xi32, #ttg.slice<{dim = 1, parent = #blocked}>>
+      %1 = tt.expand_dims %0 {axis = 1 : i32} : tensor<128xi32, #ttg.slice<{dim = 1, parent = #blocked}>> -> tensor<128x1xi32, #blocked>
+      %2 = tt.make_range {end = 64 : i32, start = 0 : i32} : tensor<64xi32, #ttg.slice<{dim = 0, parent = #blocked}>>
+      %3 = tt.expand_dims %2 {axis = 0 : i32} : tensor<64xi32, #ttg.slice<{dim = 0, parent = #blocked}>> -> tensor<1x64xi32, #blocked>
+      %4 = tt.broadcast %1 {axis = 1 : i32} : tensor<128x1xi32, #blocked> -> tensor<128x64xi32, #blocked>
+      %5 = tt.broadcast %3 {axis = 0 : i32} : tensor<1x64xi32, #blocked> -> tensor<128x64xi32, #blocked>
+      %6 = arith.muli %4, %cst : tensor<128x64xi32, #blocked>
+      %7 = arith.addi %6, %5 : tensor<128x64xi32, #blocked>
+      %8 = tt.splat %arg0 : !tt.ptr<f32> -> tensor<128x64x!tt.ptr<f32>, #blocked>
+      %9 = tt.splat %arg1 : !tt.ptr<f32> -> tensor<128x64x!tt.ptr<f32>, #blocked>
+
+      %ptrs_in = tt.addptr %8, %7 : tensor<128x64x!tt.ptr<f32>, #blocked>, tensor<128x64xi32, #blocked>
+      %ptrs_out = tt.addptr %9, %7 : tensor<128x64x!tt.ptr<f32>, #blocked>, tensor<128x64xi32, #blocked>
+
+      %v_init = tt.load %ptrs_in : tensor<128x64x!tt.ptr<f32>, #blocked>
+
+      %v_shared = ttg.local_alloc %v_init : (tensor<128x64xf32, #blocked>) -> !ttg.memdesc<128x64xf32, #shared, #ttg.shared_memory>
+      %v = ttg.local_load %v_shared : !ttg.memdesc<128x64xf32, #shared, #ttg.shared_memory> -> tensor<128x64xf32, #blocked>
+
+      %tmem_in = ttng.tmem_alloc %v : (tensor<128x64xf32, #blocked>) -> !ttg.memdesc<128x64xf32, #tmem, #ttng.tensor_memory>
+      %tmem_out = ttng.tmem_alloc : () -> !ttg.memdesc<128x64xf32, #tmem, #ttng.tensor_memory, mutable>
+
+      ttg.warp_specialize(%tmem_in, %tmem_out)
+      default {
+        ttg.warp_yield
+      }
+      partition0(%in: !ttg.memdesc<128x64xf32, #tmem, #ttng.tensor_memory>, %out: !ttg.memdesc<128x64xf32, #tmem, #ttng.tensor_memory, mutable>) num_warps(1) {
+        ttg.warp_return
+      }
+      partition1(%in: !ttg.memdesc<128x64xf32, #tmem, #ttng.tensor_memory>, %out: !ttg.memdesc<128x64xf32, #tmem, #ttng.tensor_memory, mutable>) num_warps(2) {
+        ttg.warp_return
+      }
+      partition2(%in: !ttg.memdesc<128x64xf32, #tmem, #ttng.tensor_memory>, %out: !ttg.memdesc<128x64xf32, #tmem, #ttng.tensor_memory, mutable>) num_warps(4) {
+        %x = ttng.tmem_load %in : !ttg.memdesc<128x64xf32, #tmem, #ttng.tensor_memory> -> tensor<128x64xf32, #blocked>
+        %true = arith.constant true
+        ttng.tmem_store %x, %out, %true : tensor<128x64xf32, #blocked> -> !ttg.memdesc<128x64xf32, #tmem, #ttng.tensor_memory, mutable>
+        ttg.warp_return
+      } : (!ttg.memdesc<128x64xf32, #tmem, #ttng.tensor_memory>, !ttg.memdesc<128x64xf32, #tmem, #ttng.tensor_memory, mutable>) -> ()
+
+      %result = ttng.tmem_load %tmem_out : !ttg.memdesc<128x64xf32, #tmem, #ttng.tensor_memory, mutable> -> tensor<128x64xf32, #blocked>
+      tt.store %ptrs_out, %result : tensor<128x64x!tt.ptr<f32>, #blocked>
+      tt.return
+    }
+
+    }
+    """
+
+    temp_file = tmp_path / "test_warp_specialize_tmem_ir.ttgir"
+    temp_file.write_text(ir)
+    kernel = triton.compile(str(temp_file))
+    input = torch.arange(128 * 64, dtype=torch.float32, device='cuda').reshape(128, 64)
+    output = torch.empty_like(input)
+    kernel[(1, 1, 1)](input, output)
+    torch.testing.assert_close(input, output, atol=0, rtol=0)
+
+
+@pytest.mark.skipif(is_hip(), reason="warp specialization is not supported on hip devices")
+@pytest.mark.skipif(torch.cuda.get_device_capability()[0] != 10, reason="Requires compute capability == 10")
 def test_warpgroup_reduction(tmp_path: pathlib.Path):
 
     def template(i, num_warps, in_ptr, out_ptr):
@@ -298,3 +367,91 @@ def test_warp_specialize_tma_matmul_persistent(M, N, K, BLOCK_SIZE_M, BLOCK_SIZE
     ref_out = torch.empty((M, N), dtype=dtype, device=device)
     cublas.matmul(A, B, ref_out)
     torch.testing.assert_close(ref_out.to(torch.float16), C.to(torch.float16), atol=0.03, rtol=0.03)
+
+
+@triton.jit
+def attention_inner_loop_kernel(  #
+        desc_q, desc_k, desc_v,  #
+        desc_acc, l_i_ptr, m_i_ptr,  #
+        M, N, qk_scale,  #
+        BLOCK_M: tl.constexpr,  #
+        HEAD_DIM: tl.constexpr,  #
+        warp_specialize: tl.constexpr  #
+):
+    m_i = tl.zeros([BLOCK_M], dtype=tl.float32) - float("inf")
+    l_i = tl.zeros([BLOCK_M], dtype=tl.float32) + 1.0
+    acc = tl.zeros([BLOCK_M, HEAD_DIM], dtype=tl.float32)
+
+    off_m = tl.program_id(0) * BLOCK_M
+    q = desc_q.load([off_m, 0])
+
+    for start_n in tl.range(0, N, HEAD_DIM, warp_specialize=warp_specialize):
+        start_n = tl.multiple_of(start_n, HEAD_DIM)
+        k = desc_k.load([start_n, 0]).T
+
+        qk = tl.dot(q, k)
+
+        m_ij = tl.maximum(m_i, tl.max(qk, 1) * qk_scale)
+        qk = qk * qk_scale - m_ij[:, None]
+        p = tl.math.exp2(qk)
+        alpha = tl.math.exp2(m_i - m_ij)
+        l_ij = tl.sum(p, 1)
+        acc = acc * alpha[:, None]
+
+        v = desc_v.load([start_n, 0])
+        p = p.to(v.dtype)
+        acc = tl.dot(p, v, acc)
+
+        l_i = l_i * alpha + l_ij
+        m_i = m_ij
+
+    desc_acc.store([off_m, 0], acc.to(q.dtype))
+    tl.store(l_i_ptr + off_m + tl.arange(0, BLOCK_M), l_i)
+    tl.store(m_i_ptr + off_m + tl.arange(0, BLOCK_M), m_i)
+
+
+@pytest.mark.parametrize("M, N", [(8192, 8192), (1024, 1024)])
+@pytest.mark.parametrize("BLOCK_M", [64, 128])
+@pytest.mark.parametrize("HEAD_DIM", [64, 128])
+@pytest.mark.parametrize("num_stages", [2, 3, 4])
+@pytest.mark.parametrize("disable_acc_multibuf", [False, True])
+@pytest.mark.parametrize("num_warps", [4, 8])
+@pytest.mark.parametrize("use_fp8", [False, True])
+@pytest.mark.skipif(is_hip(), reason="warp specialization is not supported on hip devices")
+@pytest.mark.skipif(torch.cuda.get_device_capability()[0] != 10, reason="Requires compute capability == 10")
+def test_warp_specialize_attention_forward(M, N, BLOCK_M, HEAD_DIM, num_stages, disable_acc_multibuf, num_warps,
+                                           use_fp8):
+    if BLOCK_M == 128 and HEAD_DIM == 128 and not use_fp8:
+        # These configurations currently use too much shared memory.
+        if (num_warps, num_stages) in [(4, 4), (8, 4), (8, 3)]:
+            pytest.skip("uses too much shared memory")
+
+    dtype = torch.float8_e4m3fn if use_fp8 else torch.float16
+
+    torch.manual_seed(42)
+    q = torch.randn((M, HEAD_DIM), device="cuda").to(dtype)
+    k = torch.randn((N, HEAD_DIM), device="cuda").to(dtype)
+    v = torch.randn((N, HEAD_DIM), device="cuda").to(dtype)
+
+    acc_ref = torch.empty((M, HEAD_DIM), dtype=dtype, device="cuda")
+    l_i_ref = torch.empty((M, ), dtype=dtype, device="cuda")
+    m_i_ref = torch.empty((M, ), dtype=dtype, device="cuda")
+    acc = torch.empty((M, HEAD_DIM), dtype=dtype, device="cuda")
+    l_i = torch.empty((M, ), dtype=dtype, device="cuda")
+    m_i = torch.empty((M, ), dtype=dtype, device="cuda")
+
+    desc_q = TensorDescriptor(q, shape=[M, HEAD_DIM], strides=[HEAD_DIM, 1], block_shape=[BLOCK_M, HEAD_DIM])
+    desc_k = TensorDescriptor(k, shape=[N, HEAD_DIM], strides=[HEAD_DIM, 1], block_shape=[BLOCK_M, HEAD_DIM])
+    desc_v = TensorDescriptor(v, shape=[N, HEAD_DIM], strides=[HEAD_DIM, 1], block_shape=[BLOCK_M, HEAD_DIM])
+    desc_acc_ref = TensorDescriptor(acc_ref, shape=[M, HEAD_DIM], strides=[HEAD_DIM, 1],
+                                    block_shape=[BLOCK_M, HEAD_DIM])
+    desc_acc = TensorDescriptor(acc, shape=[M, HEAD_DIM], strides=[HEAD_DIM, 1], block_shape=[BLOCK_M, HEAD_DIM])
+
+    attention_inner_loop_kernel[(M // BLOCK_M, )](desc_q, desc_k, desc_v, desc_acc_ref, l_i_ref, m_i_ref, M, N, 0.5,
+                                                  BLOCK_M, HEAD_DIM, False, num_stages=num_stages, num_warps=num_warps)
+    attention_inner_loop_kernel[(M // BLOCK_M, )](desc_q, desc_k, desc_v, desc_acc, l_i, m_i, M, N, 0.5, BLOCK_M,
+                                                  HEAD_DIM, True, num_stages=num_stages, num_warps=num_warps)
+
+    torch.testing.assert_close(acc.to(torch.float32), acc_ref.to(torch.float32), atol=0, rtol=0)
+    torch.testing.assert_close(l_i.to(torch.float32), l_i_ref.to(torch.float32), atol=0, rtol=0)
+    torch.testing.assert_close(m_i.to(torch.float32), m_i_ref.to(torch.float32), atol=0, rtol=0)

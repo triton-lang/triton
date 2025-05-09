@@ -206,8 +206,8 @@ tt.func @trivial_tensor_captures(%arg0: f16, %lb: i32, %ub: i32, %step: i32) {
   // CHECK: ttg.warp_specialize(%arg1, %arg2, %arg3, %arg0)
   scf.for %i = %lb to %ub step %step : i32 {
     // CHECK: partition0(%arg4: i32, %arg5: i32, %arg6: i32, %arg7: f16) num_warps(4)
-    // CHECK-NEXT: [[SPLAT:%.*]] = tt.splat %arg7 : f16 -> tensor<32xf16>
     // CHECK-NEXT: [[RANGE:%.*]] = tt.make_range {end = 256 : i32, start = 0 : i32} : tensor<256xi32>
+    // CHECK-NEXT: [[SPLAT:%.*]] = tt.splat %arg7 : f16 -> tensor<32xf16>
     // CHECK-NEXT: scf.for
     // CHECK-NEXT: "use"([[RANGE]], [[SPLAT]])
     "use"(%0, %1) {ttg.partition = 1} : (tensor<256xi32>, tensor<32xf16>) -> ()
@@ -235,6 +235,26 @@ tt.func @dce_before_warp_allocation(%lb: i32, %ub: i32, %step: i32) {
     "op_c"(%0) {ttg.partition = 2 : i32} : (tensor<128xi32, #blocked>) -> ()
     scf.yield %0 : tensor<128xi32, #blocked>
   } {ttg.partition.stages = [0, 0, 0]}
+  tt.return
+}
+
+// CHECK-LABEL: @capture_order
+tt.func public @capture_order(%arg0: i32) {
+  %c0_i32 = arith.constant 0 : i32
+  %c1_i32 = arith.constant 1 : i32
+  %0 = tt.make_range {end = 4 : i32, start = 0 : i32} : tensor<4xi32, #blocked>
+  %1 = arith.extsi %0 : tensor<4xi32, #blocked> to tensor<4xi64, #blocked>
+  // CHECK: ttg.warp_specialize
+  // CHECK: partition0
+  // CHECK: [[VALUE:%.*]] = tt.make_range
+  // CHECK-NEXT: [[EXT:%.*]] = arith.extsi [[VALUE]]
+  // CHECK-NEXT: scf.for
+  scf.for %arg1 = %c0_i32 to %arg0 step %c1_i32  : i32 {
+    // CHECK-NEXT: "use"([[VALUE]])
+    "use"(%0) : (tensor<4xi32, #blocked>) -> ()
+    // CHECK-NEXT: "use"([[EXT]])
+    "use"(%1) : (tensor<4xi64, #blocked>) -> ()
+  } {ttg.partition.stages = [1 : i32, 0 : i32]}
   tt.return
 }
 

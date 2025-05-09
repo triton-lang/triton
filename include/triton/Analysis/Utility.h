@@ -411,8 +411,6 @@ protected:
 // Create a basic DataFlowSolver with constant and dead code analysis included.
 std::unique_ptr<DataFlowSolver> createDataFlowSolver();
 
-triton::MakeTensorPtrOp getMakeTensorPtrOp(Value v);
-
 } // namespace mlir
 
 #endif // TRITON_ANALYSIS_UTILITY_H
