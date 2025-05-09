@@ -264,6 +264,13 @@ class constexpr:
     def __call__(self, *args, **kwds):
         return self.value(*args, **kwds)
 
+    @builtin
+    def to(self, dtype: dtype, fp_downcast_rounding: Optional[str] = None, bitcast: bool = False, _builder=None):
+        """
+        Alias for :py:func:`cast`.
+        """
+        return cast(self, dtype, fp_downcast_rounding, bitcast, _builder=_builder)
+
 
 def constexpr_function(f):
     """

@@ -7450,3 +7450,20 @@ def test_float_tuple():
         x, y = float('-inf'), float('inf')  # noqa: F841
 
     _namedtuple_float_tuple_kernel[(1, )]()
+
+
+@pytest.mark.interpreter
+def test_constexpr_to(device):
+
+    @triton.jit
+    def add(output_ptr, a: tl.constexpr, b: tl.constexpr):
+        result = tl.cast(a, tl.int64) + b.to(tl.int64)
+        tl.store(output_ptr, result)
+
+    a = 2**31 - 1
+    b = 2**31 - 1
+    out = [a + b]
+    out_tri = torch.empty(1, device=device, dtype=torch.int64)
+    add[(1, )](out_tri, a, b)
+
+    np.testing.assert_allclose(out, to_numpy(out_tri))
