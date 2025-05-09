@@ -273,12 +273,8 @@ def TTG_MemDescReshapeOp : TTG_Op<"memdesc_reshape", [Pure,
 }
 
 def TTG_MemDescReinterpretOp : TTG_Op<"memdesc_reinterpret", [Pure, MemDescViewTrait]> {
-  let arguments = (ins TTG_MemDescType:$src);
+  let arguments = (ins TTG_MemDescType:$src, Optional<TT_Tensor>:$init);
   let results = (outs TTG_MemDescType:$result);
-
-  let assemblyFormat = [{
-    $src attr-dict `:` qualified(type($src)) `->` qualified(type($result))
-  }];
 }
 
 def TTG_LocalLoadOp : TTG_Op<"local_load"> {

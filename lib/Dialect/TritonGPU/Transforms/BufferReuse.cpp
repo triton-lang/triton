@@ -115,6 +115,50 @@ static BufferRange getBufferAccess(Value value) {
   return {Value(), /*isFullRange=*/false};
 }
 
+// Get tracked buffers accessed by this operation and the memory effect on them.
+static SmallVector<std::pair<BufferRange, MemoryEffects::Effect *>>
+getAccessedBuffersAndEffects(Operation *op) {
+  SmallVector<std::pair<BufferRange, MemoryEffects::Effect *>> result;
+  auto itf = dyn_cast<MemoryEffectOpInterface>(op);
+  if (!itf)
+    return result;
+
+  SmallVector<MemoryEffects::EffectInstance> effects;
+  itf.getEffects(effects);
+  // Consider the effects in reverse order because this is a backwards
+  // analysis. E.g. a read then write should be treated as a write then read
+  // by the analysis.
+  for (const MemoryEffects::EffectInstance &effect : llvm::reverse(effects)) {
+    Value mem = effect.getValue();
+    if (!mem)
+      continue;
+    BufferRange access = getBufferAccess(mem);
+    if (!access.alloc)
+      continue;
+    result.push_back({access, effect.getEffect()});
+  }
+  return result;
+}
+
+// Determine whether all accesses to the buffer can be tracked by the analysis.
+// This function implements the inverse of `getBufferAccess` and
+// `getAccessedBuffersAndEffects`.
+static bool canTrackBufferAccesses(Value value) {
+  for (Operation *user : value.getUsers()) {
+    // Look through views.
+    if (user->hasTrait<OpTrait::MemDescViewTrait>()) {
+      if (!canTrackBufferAccesses(user->getResult(0)))
+        return false;
+      continue;
+    }
+    // Consider any known memory-effecting operation as a sink.
+    if (isa<MemoryEffectOpInterface>(user))
+      continue;
+    return false;
+  }
+  return true;
+}
+
 //===----------------------------------------------------------------------===//
 // BufferLiveRangeAnalysis
 //===----------------------------------------------------------------------===//
@@ -149,7 +193,8 @@ bool BufferLiveRangeAnalysis::join(BufferStates &lhs, const BitVector &rhs) {
 void BufferLiveRangeAnalysis::initialize(FuncOp func) {
   // First find all the buffers to track.
   func.walk([&](Operation *op) {
-    if (!isa<ttng::TMEMAllocOp, LocalAllocOp>(op))
+    if (!isa<ttng::TMEMAllocOp, LocalAllocOp>(op) ||
+        !canTrackBufferAccesses(op->getResult(0)))
       return;
     auto memdesc = cast<MemDescType>(op->getResult(0).getType());
     // Don't bother tracking buffers that are too small, such as mbarriers.
@@ -224,39 +269,27 @@ void BufferLiveRangeAnalysis::run(FuncOp func,
     if (auto it = bufferIds.find(&op); it != bufferIds.end()) {
       // Buffers are definitely dead before they are allocated.
       curState.reset(it->second);
+    }
 
-    } else if (auto itf = dyn_cast<MemoryEffectOpInterface>(op)) {
-      SmallVector<MemoryEffects::EffectInstance> effects;
-      itf.getEffects(effects);
-      // Consider the effects in reverse order because this is a backwards
-      // analysis. E.g. a read then write should be treated as a write then read
-      // by the analysis.
-      for (const MemoryEffects::EffectInstance &effect :
-           llvm::reverse(effects)) {
-        Value mem = effect.getValue();
-        if (!mem)
-          continue;
-        BufferRange access = getBufferAccess(mem);
-        if (!access.alloc)
-          continue;
-        auto it = bufferIds.find(access.alloc.getDefiningOp());
-        if (it == bufferIds.end())
-          continue;
-        size_t bufferId = it->second;
-        if (isa<MemoryEffects::Read>(effect.getEffect())) {
-          // Read always require the buffer to be live.
-          curState.set(bufferId);
-        } else if (isa<MemoryEffects::Write>(effect.getEffect())) {
-          // Writes mark the buffer as dead only if we know it writes the whole
-          // buffer.
-          if (access.isFullRange)
-            curState.reset(bufferId);
-        } else if (isa<MemoryEffects::Allocate>(effect.getEffect())) {
-          // Buffers are definitely dead before they are allocated.
+    // Check the operation for effects on tracked buffers.
+    for (auto [access, effect] : getAccessedBuffersAndEffects(&op)) {
+      auto it = bufferIds.find(access.alloc.getDefiningOp());
+      if (it == bufferIds.end())
+        continue;
+      size_t bufferId = it->second;
+      if (isa<MemoryEffects::Read>(effect)) {
+        // Read always require the buffer to be live.
+        curState.set(bufferId);
+      } else if (isa<MemoryEffects::Write>(effect)) {
+        // Writes mark the buffer as dead only if we know it writes the whole
+        // buffer.
+        if (access.isFullRange)
           curState.reset(bufferId);
-        } else {
-          assert(isa<MemoryEffects::Free>(effect.getEffect()));
-        }
+      } else if (isa<MemoryEffects::Allocate>(effect)) {
+        // Buffers are definitely dead before they are allocated.
+        curState.reset(bufferId);
+      } else {
+        assert(isa<MemoryEffects::Free>(effect));
       }
     }
 
@@ -483,14 +516,16 @@ static void reuseBuffers(FuncOp func) {
       Value buffer = op->getResult(0);
       auto type = cast<MemDescType>(buffer.getType());
 
+      Value src;
+      if (auto alloc = dyn_cast<LocalAllocOp>(op))
+        src = alloc.getSrc();
+      else if (auto tmemAlloc = dyn_cast<ttng::TMEMAllocOp>(op))
+        src = tmemAlloc.getSrc();
       ImplicitLocOpBuilder b(op->getLoc(), op);
-      auto reinterpType = MemDescType::get(
-          leaderType.getShape(), type.getElementType(), type.getEncoding(),
-          type.getMemorySpace(), type.getMutableMemory());
-      Value reinterpBuffer =
-          b.create<MemDescReinterpretOp>(reinterpType, leaderBuffer);
-      Value replBuffer = b.create<MemDescReshapeOp>(type, reinterpBuffer);
+      Value replBuffer =
+          b.create<MemDescReinterpretOp>(type, leaderBuffer, src);
       buffer.replaceAllUsesWith(replBuffer);
+      op->erase();
     }
   }
 }
