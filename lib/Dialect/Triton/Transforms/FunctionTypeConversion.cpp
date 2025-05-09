@@ -1,11 +1,12 @@
-#include "FunctionTypeConversion.h"
+#include "triton/Dialect/Triton/Transforms/FunctionTypeConversion.h"
+
 #include "mlir/IR/Value.h"
 #include "mlir/Support/LLVM.h"
 #include "mlir/Transforms/DialectConversion.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallVector.h"
-#include <cstdint>
+
 #include <cstdlib>
 
 namespace mlir::triton {

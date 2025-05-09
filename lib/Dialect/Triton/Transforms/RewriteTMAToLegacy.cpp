@@ -1,7 +1,5 @@
-#include "ArithTypeConversion.h"
-
-#include "FunctionTypeConversion.h"
-#include "mlir/IR/Operation.h"
+#include "triton/Dialect/Triton/Transforms/ArithTypeConversion.h"
+#include "triton/Dialect/Triton/Transforms/FunctionTypeConversion.h"
 #include "triton/Dialect/Triton/Transforms/Passes.h"
 
 #include "triton/Dialect/Triton/IR/Dialect.h"
@@ -10,6 +8,7 @@
 #include "mlir/Dialect/SCF/Transforms/Patterns.h"
 #include "mlir/IR/Attributes.h"
 #include "mlir/IR/BuiltinAttributes.h"
+#include "mlir/IR/Operation.h"
 #include "mlir/IR/ValueRange.h"
 #include "mlir/Support/LLVM.h"
 #include "llvm/ADT/ArrayRef.h"
