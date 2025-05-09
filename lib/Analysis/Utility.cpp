@@ -736,32 +736,6 @@ bool matchMFMAAndDotOperandShuffleCase(RankedTensorType srcTy,
          mfmaLayout.getWarpsPerCTA()[1] == 1;
 }
 
-// Match MFMA->Linear Layout conversion
-bool matchMFMAAndLinearLayoutCase(RankedTensorType srcTy,
-                                  RankedTensorType dstTy) {
-  auto mfmaLayout = dyn_cast<AMDMfmaEncodingAttr>(srcTy.getEncoding());
-  auto linearLayout = dyn_cast<LinearEncodingAttr>(dstTy.getEncoding());
-  if (!mfmaLayout || !linearLayout)
-    return false;
-
-  MLIRContext *ctx = linearLayout.getContext();
-  StringAttr kLane = StringAttr::get(ctx, "lane");
-  StringAttr kRegister = StringAttr::get(ctx, "register");
-  auto srcLL = chooseMfmaLikeStoreLayout(mfmaLayout, srcTy.getShape());
-  auto srcReg = srcLL.getBases().lookup(kRegister);
-  auto srcLane = srcLL.getBases().lookup(kLane);
-  auto dstBases = linearLayout.getLinearLayout().getBases();
-  auto dstReg = dstBases.lookup(kRegister);
-  auto dstLane = dstBases.lookup(kLane);
-
-  auto elemTy = srcTy.getElementType();
-  // Currently supporting 32x32 [B]F16 MFMA -> MFMA-like linear layout on CDNA4
-  return mfmaLayout.getVersionMajor() == 4 && mfmaLayout.getIsTransposed() &&
-         mfmaLayout.getMDim() == 32 && mfmaLayout.getNDim() == 32 &&
-         (elemTy.isF16() || elemTy.isBF16()) && dstReg == srcReg &&
-         dstLane == srcLane;
-}
-
 // We get the smallest submap of srcTy^{-1} * dstTy that is not the identity
 // under the common dimensions. The idea here is that if we have a
 // transformation that's the identity on kBlock, we don't need to use

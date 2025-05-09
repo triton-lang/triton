@@ -250,9 +250,6 @@ bool matchMmaV3AndDotOperandLayout(RankedTensorType srcTy,
 bool matchMFMAAndDotOperandShuffleCase(RankedTensorType srcTy,
                                        RankedTensorType dstTy);
 
-bool matchMFMAAndLinearLayoutCase(RankedTensorType srcTy,
-                                  RankedTensorType dstTy);
-
 // TODO: Move utility functions that belong to ConvertLayoutOp to class
 // ConvertLayoutOpHelper in the future
 bool shouldUseDistSmem(Attribute srcLayout, Attribute dstLayout);

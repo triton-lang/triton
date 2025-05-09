@@ -181,6 +181,31 @@ protected:
   const TargetInfoBase &targetInfo;
 };
 
+// Match MFMA->Linear Layout conversion
+static bool matchMFMAAndLinearLayoutCase(RankedTensorType srcTy,
+                                         RankedTensorType dstTy) {
+  auto mfmaLayout = dyn_cast<AMDMfmaEncodingAttr>(srcTy.getEncoding());
+  auto linearLayout = dyn_cast<LinearEncodingAttr>(dstTy.getEncoding());
+  if (!mfmaLayout || !linearLayout)
+    return false;
+
+  std::optional<LinearLayout> srcLL =
+      mlir::triton::gpu::chooseMfmaLikeStoreLayout(srcTy);
+  if (!srcLL)
+    return false;
+
+  MLIRContext *ctx = linearLayout.getContext();
+  StringAttr kLane = StringAttr::get(ctx, "lane");
+  StringAttr kRegister = StringAttr::get(ctx, "register");
+  auto srcBase = srcLL.value().getBases();
+  auto srcReg = srcBase.lookup(kRegister);
+  auto srcLane = srcBase.lookup(kLane);
+  auto dstBases = linearLayout.getLinearLayout().getBases();
+  auto dstReg = dstBases.lookup(kRegister);
+  auto dstLane = dstBases.lookup(kLane);
+  return dstReg == srcReg && dstLane == srcLane;
+};
+
 struct ConvertLayoutOpMFMAToLinearConversion
     : public ConvertOpToLLVMPattern<triton::gpu::ConvertLayoutOp> {
 public:
@@ -219,56 +244,44 @@ public:
     SmallVector<Value> outVals;
     auto idx0 = b.i32_val(0);
     auto idx1 = b.i32_val(1);
+    // Convert MFMA layout to a MFMA-like linear layout where each thread
+    // holds 8 consecutive elements
     for (size_t idx = 0; idx < inVals.size(); idx += 8) {
-      Value vec0 = b.undef(vecTy);
-      vec0 = b.insert_element(vecTy, vec0, inVals[idx + 0], idx0);
-      vec0 = b.insert_element(vecTy, vec0, inVals[idx + 1], idx1);
-
-      Value vec1 = b.undef(vecTy);
-      vec1 = b.insert_element(vecTy, vec1, inVals[idx + 2], idx0);
-      vec1 = b.insert_element(vecTy, vec1, inVals[idx + 3], idx1);
-
-      Value vec2 = b.undef(vecTy);
-      vec2 = b.insert_element(vecTy, vec2, inVals[idx + 4], idx0);
-      vec2 = b.insert_element(vecTy, vec2, inVals[idx + 5], idx1);
-
-      Value vec3 = b.undef(vecTy);
-      vec3 = b.insert_element(vecTy, vec3, inVals[idx + 6], idx0);
-      vec3 = b.insert_element(vecTy, vec3, inVals[idx + 7], idx1);
+      SmallVector<Value, 4> inVecs;
+      for (size_t vIdx = 0; vIdx < 4; vIdx++) {
+        Value vec = b.undef(vecTy);
+        vec = b.insert_element(vecTy, vec, inVals[idx + vIdx * 2 + 0], idx0);
+        vec = b.insert_element(vecTy, vec, inVals[idx + vIdx * 2 + 1], idx1);
+        inVecs.push_back(vec);
+      }
 
       Value resVec0, resVec1, resVec2, resVec3;
 
-      // Swap vec0 and vec2
+      // Swap the row 2 and 3 of vec0 and the row 0 and 1 of vec2
       MLIRContext *ctx = rewriter.getContext();
       Type retType = struct_ty({i32_ty, i32_ty});
       Value falseVal = b.false_val();
-      Value perm = LLVM::createLLVMIntrinsicCallOp(
-                       rewriter, loc, "llvm.amdgcn.permlane32.swap", retType,
-                       ValueRange{b.bitcast(vec0, i32_ty),
-                                  b.bitcast(vec2, i32_ty), falseVal, falseVal})
-                       ->getResult(0);
+      Value perm =
+          LLVM::createLLVMIntrinsicCallOp(
+              rewriter, loc, "llvm.amdgcn.permlane32.swap", retType,
+              ValueRange{b.bitcast(inVecs[0], i32_ty),
+                         b.bitcast(inVecs[2], i32_ty), falseVal, falseVal})
+              ->getResult(0);
       resVec0 = b.bitcast(b.extract_val(i32_ty, perm, 0), vecTy);
-      ;
       resVec2 = b.bitcast(b.extract_val(i32_ty, perm, 1), vecTy);
-      ;
 
-      // Swap vec1 and vec3
+      // Swap the row 2 and 3 of vec1 and the row 0 and 1 of vec3
       perm = LLVM::createLLVMIntrinsicCallOp(
                  rewriter, loc, "llvm.amdgcn.permlane32.swap", retType,
-                 ValueRange{b.bitcast(vec1, i32_ty), b.bitcast(vec3, i32_ty),
-                            falseVal, falseVal})
+                 ValueRange{b.bitcast(inVecs[1], i32_ty),
+                            b.bitcast(inVecs[3], i32_ty), falseVal, falseVal})
                  ->getResult(0);
       resVec1 = b.bitcast(b.extract_val(i32_ty, perm, 0), vecTy);
       resVec3 = b.bitcast(b.extract_val(i32_ty, perm, 1), vecTy);
 
-      outVals.push_back(b.extract_element(elemTy, resVec0, idx0));
-      outVals.push_back(b.extract_element(elemTy, resVec0, idx1));
-      outVals.push_back(b.extract_element(elemTy, resVec1, idx0));
-      outVals.push_back(b.extract_element(elemTy, resVec1, idx1));
-      outVals.push_back(b.extract_element(elemTy, resVec2, idx0));
-      outVals.push_back(b.extract_element(elemTy, resVec2, idx1));
-      outVals.push_back(b.extract_element(elemTy, resVec3, idx0));
-      outVals.push_back(b.extract_element(elemTy, resVec3, idx1));
+      for (Value res : {resVec0, resVec1, resVec2, resVec3})
+        for (Value idx : {idx0, idx1})
+          outVals.push_back(b.extract_element(elemTy, res, idx));
     }
 
     Value result = packLLElements(loc, getTypeConverter(), outVals, rewriter,
