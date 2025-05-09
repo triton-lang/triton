@@ -365,6 +365,9 @@ class HIPBackend(BaseBackend):
 
         llvm.optimize_module(llvm_mod, llvm.OPTIMIZE_O3, options.arch, '', [], options.enable_fp_fusion)
 
+        if knobs.amd.scalarize_packed_fops:
+            amd.add_scalarize_packed_fops_llvm_pass(fns[0])
+
         # Get some metadata
         metadata["shared"] = src.get_int_attr("ttg.shared")
 

@@ -271,26 +271,17 @@ public:
         return;
     }
     // Check if the load op (mma operand) is pipelineable.
-    auto isLoadToBePipelined = [&](Operation *op) {
+    auto isLoadPipelineable = [&](Operation *op) {
       return opLatency.count(op) && opLatency[op] > 0;
     };
     for (auto &op : forOp.getBody()->without_terminator()) {
       // If the acc can not be multibuffered, do not pipeline the uses of
       // the MMA to later stages.
       if (auto mma = dyn_cast<ttng::MMAv5OpInterface>(&op)) {
-        // Try to push out the wait by one stage even if the operands are not
-        // pipelineable, but we know where the loads are scheduled, so we can
-        // place the wait right before the loads.
-        auto pipeHelper = ttng::MMAv5PipelineableOperandsHelper(
-            mma, forOp, isLoadToBePipelined);
-        bool pipelineable = pipeHelper.isPipelineable ||
-                            (pipeHelper.isOperandsStateDetermined &&
-                             !ttng::hasLoadsAfterMMA(mma, forOp));
-        pipelineable =
-            pipelineable && (!ttng::requiresAccMultiBuffering(mma, forOp) ||
-                             (ttng::isAccMultibufferingPossible(mma, forOp) &&
-                              !getDisallowAccMultiBuffer(forOp)));
-        if (pipelineable) {
+        if (ttng::mmaHasPipelineableOperands(mma, forOp, isLoadPipelineable) &&
+            !ttng::hasAccReadModifyWrite(mma, forOp) &&
+            ttng::isAccMultibufferingPossible(mma, forOp) &&
+            !getDisallowAccMultiBuffer(forOp)) {
           opLatency[&op] = 1;
         }
       }

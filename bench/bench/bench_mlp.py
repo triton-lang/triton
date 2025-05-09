@@ -111,8 +111,8 @@ def bench_mlp(batch, dim1, dim2, n_expts_tot, n_expts_act, x_dtype, w_dtype, TP,
     w2 = torch.randn((n_expts_tot // EP, dim2 // TP // 2, dim1), device=dev)
     # biases
     bg = torch.randn((n_expts_tot, ), device=dev)
-    b1 = torch.randn((dim2 // TP, ), device=dev)
-    b2 = torch.randn((dim1, ), device=dev)
+    b1 = torch.randn((n_expts_tot // EP, dim2 // TP), device=dev)
+    b2 = torch.randn((n_expts_tot // EP, dim1), device=dev)
 
     # -- numerics --
     optg = dict()

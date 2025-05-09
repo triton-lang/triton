@@ -185,6 +185,81 @@ LinearLayout identityStandardND(StringAttr inDimName, ArrayRef<unsigned> shape,
   return ret;
 }
 
+LinearLayout zerosLike(const LinearLayout &layout) {
+  auto bases = layout.getBases();
+  for (auto &basis : bases) {
+    for (auto &vec : basis.second) {
+      for (auto &val : vec) {
+        val = 0;
+      }
+    }
+  }
+
+  SmallVector<std::pair<StringAttr, int32_t>> outDims;
+  for (auto outDim : layout.getOutDimNames()) {
+    outDims.emplace_back(outDim, layout.getOutDimSize(outDim));
+  }
+  return LinearLayout(std::move(bases), std::move(outDims),
+                      /*requireSurjective=*/false);
+}
+
+std::optional<ColumnAction> regPermForDivideLeft(const LinearLayout &A,
+                                                 const LinearLayout &B) {
+  // We can implement this generically of any dimension, but for now we only do
+  // it for regs to keep the API simpler
+  assert(A.getNumInDims() != 0);
+  auto kReg = *A.getInDimNames().begin();
+  assert(kReg.str() == "register");
+  assert(B.getNumInDims() != 0);
+  assert(kReg == *B.getInDimNames().begin());
+  // Retrieve the register bases from A and B.
+  const auto &ARegBases = A.getBases().lookup(kReg);
+  const auto &BRegBases = B.getBases().lookup(kReg);
+
+  // Compute the permutation order:
+  // For each basis in B (in order), find its index in A (using each index at
+  // most once). We make sure we use each index at most once in case B
+  // broadcasts (weird case, but better safe than sorry).
+  SmallVector<size_t> permOrder;
+  permOrder.reserve(ARegBases.size());
+  SmallVector<bool> used(ARegBases.size(), false);
+  for (const auto &bB : BRegBases) {
+    bool found = false;
+    for (size_t j = 0; j < ARegBases.size(); ++j) {
+      found = !used[j] && (ARegBases[j] == bB);
+      if (found) {
+        permOrder.push_back(j);
+        used[j] = true;
+        break;
+      }
+    }
+    if (!found)
+      return std::nullopt; // A basis from B not found in A.
+  }
+  // Append remaining indices from A (preserving their original order).
+  for (size_t i = 0; i < ARegBases.size(); ++i) {
+    if (!used[i])
+      permOrder.push_back(i);
+  }
+  return ColumnAction(permOrder, kReg, ARegBases.size());
+}
+
+ColumnAction actionRemoveBroadcastedRegs(const LinearLayout &layout) {
+  assert(layout.getNumInDims() != 0);
+  auto kReg = *layout.getInDimNames().begin();
+  assert(kReg.str() == "register");
+
+  // Drop the bases that are zero
+  const auto &bases = layout.getBases().lookup(kReg);
+  SmallVector<size_t> permOrder;
+  for (size_t i = 0; i < bases.size(); ++i) {
+    if (!llvm::all_of(bases[i], [](size_t x) { return x == 0; })) {
+      permOrder.push_back(i);
+    }
+  }
+  return ColumnAction(permOrder, kReg, bases.size());
+}
+
 // Compute the supremum of two lists.
 // If the supremum is not unique, we return the first list first
 // Error out if the supremum does not exist

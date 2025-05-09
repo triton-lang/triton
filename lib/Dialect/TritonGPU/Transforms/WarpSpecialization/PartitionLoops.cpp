@@ -1,3 +1,4 @@
+#include "mlir/Analysis/TopologicalSortUtils.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/ImplicitLocOpBuilder.h"
@@ -188,6 +189,11 @@ LogicalResult triton::gpu::partitionLoop(scf::ForOp loop) {
   // captures and thread them in to the regions.
   SetVector<Value> captures;
   getUsedValuesDefinedAbove(wsOp.getPartitionOpHolder(), captures);
+
+  // Find the subgraph that should be cloned into the partition regions. The
+  // explicit captures are the leaves of the subgraph.
+  SetVector<Operation *> opsToClone;
+  SmallVector<Value> explicitCaptures;
   for (unsigned i = 0; i < captures.size(); ++i) {
     Value capture = captures[i];
 
@@ -198,11 +204,7 @@ LogicalResult triton::gpu::partitionLoop(scf::ForOp loop) {
         (defOp->hasTrait<OpTrait::ConstantLike>() ||
          isa<RankedTensorType>(capture.getType()))) {
       captures.insert(defOp->operand_begin(), defOp->operand_end());
-      for (Region *region : wsOp.getPartitionRegions()) {
-        b.setInsertionPointToStart(&region->front());
-        Value copy = b.clone(*capture.getDefiningOp())->getResult(0);
-        replaceAllUsesInRegionWith(capture, copy, *region);
-      }
+      opsToClone.insert(defOp);
       continue;
     }
 
@@ -211,14 +213,30 @@ LogicalResult triton::gpu::partitionLoop(scf::ForOp loop) {
                                "FIXME: capturing tensor values into warp "
                                "partitions is not supported");
     }
-    wsOp->insertOperands(wsOp.getNumOperands(), capture);
-    for (Region *region : wsOp.getPartitionRegions()) {
+    explicitCaptures.push_back(capture);
+  }
+
+  // Clone the ops into each region in topological order.
+  opsToClone = topologicalSort(opsToClone);
+  for (Region *region : wsOp.getPartitionRegions()) {
+    b.setInsertionPointToStart(&region->front());
+    IRMapping mapping;
+    for (Operation *op : opsToClone) {
+      Value copy = b.clone(*op, mapping)->getResult(0);
+      mapping.map(op->getResult(0), copy);
+      replaceAllUsesInRegionWith(op->getResult(0), copy, *region);
+    }
+  }
+
+  // Replace the leaves with explicit captures.
+  wsOp->insertOperands(wsOp.getNumOperands(), explicitCaptures);
+  for (Region *region : wsOp.getPartitionRegions()) {
+    for (Value capture : explicitCaptures) {
       BlockArgument arg =
           region->addArgument(capture.getType(), capture.getLoc());
       replaceAllUsesInRegionWith(capture, arg, *region);
     }
   }
-
   return success();
 }
 

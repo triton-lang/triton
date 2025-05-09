@@ -10,7 +10,6 @@
 #include "mlir/Support/LLVM.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 #include "triton/Analysis/AxisInfo.h"
-#include "triton/Conversion/TritonToTritonGPU/TritonToTritonGPUPass.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
@@ -1403,30 +1402,35 @@ void replaceUsesAndPropagateType(OpBuilder &builder, Operation *oldUse,
   // Save the operand to replace / delete later (avoid iterator invalidation).
   // TODO: can we use an early_inc iterator?
   for (OpOperand &use : oldUse->getUses()) {
+    // Propagate through `ttg.warp_specialize`.
+    if (auto wsOp = dyn_cast<ttg::WarpSpecializeOp>(use.getOwner())) {
+      for (Region *region : wsOp.getPartitionRegions())
+        region->getArgument(use.getOperandNumber()).setType(val.getType());
+    }
+
     // Non-subview/trans ops will be replaced by `val`.
-    if (!isa<triton::gpu::MemDescTransOp, triton::gpu::MemDescSubviewOp>(
-            use.getOwner())) {
+    if (!isa<ttg::MemDescTransOp, ttg::MemDescSubviewOp>(use.getOwner())) {
       operandsToReplace.push_back(&use);
       continue;
     }
+
     Operation *user = use.getOwner();
     // `subview(old_op)` is replaced by a new `subview(val)`.
     OpBuilder::InsertionGuard g(builder);
     builder.setInsertionPoint(user);
     Value newVal;
-    if (auto subview = dyn_cast<triton::gpu::MemDescSubviewOp>(user)) {
-      triton::gpu::MemDescType oldType = subview.getType();
-      bool isMutable =
-          cast<triton::gpu::MemDescType>(val.getType()).getMutableMemory();
-      Type newDstType = triton::gpu::MemDescType::get(
+    if (auto subview = dyn_cast<ttg::MemDescSubviewOp>(user)) {
+      ttg::MemDescType oldType = subview.getType();
+      bool isMutable = cast<ttg::MemDescType>(val.getType()).getMutableMemory();
+      Type newDstType = ttg::MemDescType::get(
           oldType.getShape(), oldType.getElementType(), oldType.getEncoding(),
           oldType.getMemorySpace(), isMutable);
-      newVal = builder.create<triton::gpu::MemDescSubviewOp>(
+      newVal = builder.create<ttg::MemDescSubviewOp>(
           subview.getLoc(), newDstType, val, subview.getOffsets());
       newVal.getDefiningOp()->setAttrs(user->getAttrs());
-    } else if (auto trans = dyn_cast<triton::gpu::MemDescTransOp>(user)) {
-      newVal = builder.create<triton::gpu::MemDescTransOp>(trans.getLoc(), val,
-                                                           trans.getOrder());
+    } else if (auto trans = dyn_cast<ttg::MemDescTransOp>(user)) {
+      newVal = builder.create<ttg::MemDescTransOp>(trans.getLoc(), val,
+                                                   trans.getOrder());
       newVal.getDefiningOp()->setAttrs(user->getAttrs());
     }
     assert(newVal);

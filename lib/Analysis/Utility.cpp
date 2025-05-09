@@ -737,27 +737,34 @@ bool matchMFMAAndDotOperandShuffleCase(RankedTensorType srcTy,
 }
 
 // We get the smallest submap of srcTy^{-1} * dstTy that is not the identity
-// under kBlock, kWarp or kLane (in that order). The idea here is that if we
-// have a transformation that's the identity on kBlock, we don't need to use
+// under the common dimensions. The idea here is that if we have a
+// transformation that's the identity on kBlock, we don't need to use
 // distributed shared memory. If it's also the identity on kWarp, we can
 // transfer via warp-shuffles, and if it's the identity on kLane just have to
-// reorder the registers
-LinearLayout minimalCvtLayout(RankedTensorType srcTy, RankedTensorType dstTy) {
-  MLIRContext *ctx = srcTy.getContext();
+// reorder the registers.
+LinearLayout minimalCvtLayout(Type srcTy_, Type dstTy_) {
+  auto srcTy = cast<triton::gpu::TensorOrMemDesc>(srcTy_);
+  auto dstTy = cast<triton::gpu::TensorOrMemDesc>(dstTy_);
   LinearLayout srcLayout =
       toLinearLayout(srcTy.getShape(), srcTy.getEncoding());
   LinearLayout dstLayout =
       toLinearLayout(dstTy.getShape(), dstTy.getEncoding());
-  StringAttr kRegister = StringAttr::get(ctx, "register");
-  StringAttr kLane = StringAttr::get(ctx, "lane");
-  StringAttr kWarp = StringAttr::get(ctx, "warp");
-  StringAttr kBlock = StringAttr::get(ctx, "block");
+  auto sDims = to_vector(srcLayout.getInDimNames());
+  auto dDims = to_vector(dstLayout.getInDimNames());
+  SmallVector<StringAttr> dims;
+  for (int i = 0; i < std::min(sDims.size(), dDims.size()); ++i) {
+    auto srcDim = sDims[sDims.size() - i - 1];
+    auto dstDim = dDims[dDims.size() - i - 1];
+    if (srcDim != dstDim) {
+      break;
+    }
+    dims.push_back(srcDim);
+  }
 
   auto comp = dstLayout.invertAndCompose(srcLayout);
-  // We try to quotient by the largest subspace first
-  auto dims = SmallVector<StringRef>{"block", "warp", "lane", "register"};
+  // We try to quotient by the slowers moving subspace first
   for (auto dim : dims) {
-    auto quotient = comp.quotient(StringAttr::get(ctx, dim));
+    auto quotient = comp.quotient(dim);
     if (!quotient.has_value()) {
       break;
     }
@@ -1020,77 +1027,6 @@ std::unique_ptr<DataFlowSolver> createDataFlowSolver() {
   solver->load<dataflow::DeadCodeAnalysis>();
   solver->load<ConstantAnalysis>();
   return solver;
-}
-
-static MakeTensorPtrOp getMakeTensorPtrOpImpl(Operation *op, Value v) {
-
-  if (auto makeTensorPtrOp = dyn_cast<MakeTensorPtrOp>(op)) {
-    return makeTensorPtrOp;
-  }
-
-  if (auto advanceOp = dyn_cast<AdvanceOp>(op)) {
-    return getMakeTensorPtrOp(advanceOp.getPtr());
-  }
-
-  if (auto branch = dyn_cast<RegionBranchOpInterface>(op)) {
-    auto idx = cast<OpResult>(v).getResultNumber();
-    llvm::SmallVector<scf::YieldOp> yieldOps;
-    op->walk([&](Operation *op) {
-      if (auto yieldOp = dyn_cast<scf::YieldOp>(op))
-        yieldOps.push_back(yieldOp);
-    });
-
-    // benzh@ if multi yields, all yields operand should come from same arg.
-    Value newValue = yieldOps[0].getOperands()[idx];
-    return getMakeTensorPtrOp(newValue);
-  }
-
-  llvm_unreachable("Unable to getMakeTensorPtr()");
-}
-
-MakeTensorPtrOp getMakeTensorPtrOp(Value v) {
-  using BranchOps = llvm::SetVector<std::pair<Operation *, int>>;
-  llvm::DenseMap<Block *, BranchOps> blockToCFOps;
-  auto moduleOp =
-      v.getParentBlock()->getParentOp()->getParentOfType<ModuleOp>();
-
-  moduleOp.walk([&](Operation *op) {
-    if (auto br = dyn_cast<cf::BranchOp>(op)) {
-      Block *block = br.getDest();
-      blockToCFOps[block].insert({op, -1});
-    }
-    if (auto condBr = dyn_cast<cf::CondBranchOp>(op)) {
-      Block *blockT = condBr.getTrueDest();
-      Block *blockF = condBr.getFalseDest();
-      blockToCFOps[blockT].insert({condBr, 1});
-      blockToCFOps[blockF].insert({condBr, 0});
-    }
-  });
-
-  if (Operation *definingOp = v.getDefiningOp())
-    return getMakeTensorPtrOpImpl(definingOp, v);
-
-  // If there is no defining op, v must be a BlockArgument.
-  BlockArgument arg = cast<BlockArgument>(v);
-  unsigned argNum = arg.getArgNumber();
-  Operation *argOwner = arg.getOwner()->getParentOp();
-
-  if (auto forOp = dyn_cast<scf::ForOp>(argOwner))
-    return getMakeTensorPtrOp(
-        forOp.getOperand(argNum + forOp.getNumControlOperands() - 1));
-  if (auto funcOp = dyn_cast<FunctionOpInterface>(argOwner)) {
-    Block *block = arg.getOwner();
-    Operation *op;
-    int tOrF;
-    std::tie(op, tOrF) = blockToCFOps[block][0];
-    if (auto br = dyn_cast<cf::BranchOp>(op))
-      return getMakeTensorPtrOp(br.getDestOperands()[argNum]);
-    if (auto condBr = dyn_cast<cf::CondBranchOp>(op))
-      return getMakeTensorPtrOp(tOrF ? condBr.getTrueDestOperands()[argNum]
-                                     : condBr.getFalseDestOperands()[argNum]);
-    return getMakeTensorPtrOp(argOwner->getOperand(argNum));
-  }
-  llvm_unreachable("Unable to getMakeTensorPtr()");
 }
 
 } // namespace mlir

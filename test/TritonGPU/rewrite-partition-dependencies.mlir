@@ -420,4 +420,14 @@ tt.func @conditional_consumer(%lb: i32, %ub: i32, %step: i32) {
   tt.return
 }
 
+// CHECK-LABEL: @no_def_op
+tt.func @no_def_op(%lb: i32, %ub: i32, %step: i32) {
+  %c0_i32 = arith.constant 0 : i32
+  scf.for %i = %lb to %ub step %step iter_args(%k = %c0_i32) -> i32 : i32 {
+    arith.addi %k, %k : i32
+    scf.yield %k : i32
+  }
+  tt.return
+}
+
 }

@@ -1,6 +1,7 @@
 #include "triton/Analysis/Membar.h"
 #include "triton/Analysis/Alias.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
+#include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/GPU/IR/GPUDialect.h"
@@ -215,6 +216,13 @@ void MembarAnalysis::update(Operation *op, BlockInfo *blockInfo,
           }
         }
       }
+    }
+    // If this op is may be signalling other threads asynchronously, make sure
+    // all shared memory transactions are complete beforehand.
+    if (isa<triton::nvidia_gpu::ArriveBarrierOp>(op)) {
+      Interval<size_t> allIntervals(0, std::numeric_limits<size_t>::max());
+      curBlockInfo.syncWriteIntervals[allIntervals].insert(op);
+      curBlockInfo.syncReadIntervals[allIntervals].insert(op);
     }
     scratchBufferId = allocation->getBufferId(op);
   }

@@ -154,4 +154,70 @@ def NVWS_WarpGroupReturnOp : NVWS_Op<"warp_group.return", [
   let assemblyFormat = "attr-dict";
 }
 
+def NVWS_CreateTokenOp : NVWS_Op<"create_token"> {
+  let summary = "Create a token to be used for synchronizations in communication channels";
+  let description = [{ A token will be used by the producer and consumer to synchronize.
+    The producer will acquire and hold the token, until it has filled the buffers,
+    and signal the waiting consumer.
+    The consumer will hold the token until it has consumed the buffers,
+    and will signal the waiting producer trying to acquire the token.
+  }];
+
+  let results = (outs TensorOf<[NVWS_TokenType]>:$result);
+
+  let arguments = (ins I32Attr:$numBuffers, NVWS_TokenLoadTypeAttr:$loadType);
+
+  let builders = [OpBuilder<(ins "uint32_t":$numBuffers, "triton::nvws::TokenLoadType":$loadType)>];
+
+  let assemblyFormat = "attr-dict `:` type($result)";
+}
+
+def NVWS_ProducerAcquireOp : NVWS_Op<"producer_acquire"> {
+  let summary = "Producer acquires a token to fill buffers";
+  let description = [{ The producer will try to acquire the token prior to filling
+    the buffers. If the buffers are not ready to be filled, the producer will wait to be
+    signalled by the consumer which finishes consuming the buffers and
+    releases the token.
+  }];
+
+  let arguments = (ins TensorOf<[NVWS_TokenType]>:$token, I32:$idx, I1:$phase);
+
+  let assemblyFormat = "$token `,` $idx `,` $phase attr-dict `:` type(operands)";
+}
+
+def NVWS_ProducerCommitOp : NVWS_Op<"producer_commit"> {
+  let summary = "Producer commits the buffer changes";
+  let description = [{ The producer will release the token and signal the consumer
+    that the buffers are ready to be consumed.
+  }];
+
+  let arguments = (ins TensorOf<[NVWS_TokenType]>:$token, I32:$idx);
+
+  let assemblyFormat = "$token `,` $idx attr-dict `:` type(operands)";
+}
+
+def NVWS_ConsumerWaitOp : NVWS_Op<"consumer_wait"> {
+  let summary = "Consumer awaits buffer readiness";
+  let description = [{ The consumer will wait for the buffer to be ready
+    to be consumed. If the buffers are not ready, the consumer will wait to be
+    signalled by the producer which finishes filling the buffers and
+    releases the token.
+  }];
+
+  let arguments = (ins TensorOf<[NVWS_TokenType]>:$token, I32:$idx, I1: $phase);
+
+  let assemblyFormat = "$token `,` $idx `,` $phase attr-dict `:` type(operands)";
+}
+
+def NVWS_ConsumerReleaseOp : NVWS_Op<"consumer_release"> {
+  let summary = "Consumer releases the token";
+  let description = [{ The consumer will release the token and signal the producer
+    that the buffers are ready to be filled.
+  }];
+
+  let arguments = (ins TensorOf<[NVWS_TokenType]>:$token, I32:$idx);
+
+  let assemblyFormat = "$token `,` $idx attr-dict `:` type(operands)";
+}
+
 #endif

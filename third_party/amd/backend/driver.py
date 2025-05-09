@@ -530,7 +530,7 @@ class HIPDriver(GPUDriver):
     def get_current_target(self):
         device = self.get_current_device()
         device_properties = self.utils.get_device_properties(device)
-        arch = device_properties['arch']
+        arch = knobs.runtime.override_arch or device_properties['arch']
         warp_size = device_properties['warpSize']
         return GPUTarget("hip", arch.split(':')[0], warp_size)
 
