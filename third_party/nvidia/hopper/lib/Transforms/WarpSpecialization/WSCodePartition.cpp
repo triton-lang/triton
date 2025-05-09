@@ -1251,9 +1251,9 @@ public:
     }
     DenseSet<Operation *> opsWithChannels;
     collectRegionsWithChannels(channels, opsWithChannels);
-    appendBufferIdxArgs(asyncTaskTopOps, numBuffers, channels, opsWithChannels);
+    appendAccumCntsForOps(asyncTaskTopOps, channels, opsWithChannels);
     LLVM_DEBUG({
-      LDBG("\n\nafter appendBufferIdxArgs");
+      LDBG("\n\nafter appendAccumCntsForOps");
       funcOp.dump();
     });
 

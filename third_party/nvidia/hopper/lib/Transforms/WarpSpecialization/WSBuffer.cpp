@@ -73,105 +73,61 @@ static unsigned getNumChannelsInOp(Operation *op,
   return channelsInOp.size();
 }
 
-// Generate code
-//   numSteps = ((upperBound - lowerBound) + forOpStep - 1) / forOpStep
-Value getNumSteps(scf::ForOp forOp, OpBuilderWithAsyncTaskIds &builder) {
-  auto loc = forOp.getLoc();
-  // numSteps = ((upperBound - lowerBound) + forOpStep - 1) / forOpStep
-  Value numSteps = builder.createWithAsyncTaskIds<arith::SubIOp>(
-      loc, forOp.getUpperBound(), forOp.getLowerBound());
-  numSteps = builder.createWithAsyncTaskIds<arith::AddIOp>(loc, numSteps,
-                                                           forOp.getStep());
-  if (forOp.getStep().getType() != builder.getI64Type())
-    numSteps = builder.createWithAsyncTaskIds<arith::ExtSIOp>(
-        loc, builder.getI64Type(), numSteps);
-
-  Value one = builder.createWithAsyncTaskIds<arith::ConstantIntOp>(loc, 1, 64);
-  numSteps = builder.createWithAsyncTaskIds<arith::SubIOp>(loc, numSteps, one);
-  Value innerForStep = forOp.getStep();
-  if (forOp.getStep().getType() != builder.getI64Type())
-    innerForStep = builder.createWithAsyncTaskIds<arith::ExtSIOp>(
-        loc, builder.getI64Type(), forOp.getStep());
-  numSteps = builder.createWithAsyncTaskIds<arith::DivUIOp>(loc, numSteps,
-                                                            innerForStep);
-  return numSteps;
-}
-
-// Update preOrderOps with a list
-// of Ctrl Ops that will need accumCnt as arguments/results of CtrlOp.
+// Update preOrderOps with a list of region Ops nested under ctrlOp that will
+// need accumCnt. The list is in pre-order.
 void getAccumCntsPreOrder(Operation *ctrlOp,
                           const DenseSet<Operation *> &opsWithChannels,
                           SmallVector<Operation *> &preOrderOps) {
-  for (auto *op : opsWithChannels) {
-    LDBG("getAccumCntsPreOrder: " << ctrlOp << " opsWithChannels " << op);
-  }
   ctrlOp->walk<WalkOrder::PreOrder>([&](Operation *subOp) {
-    // This will walk ctrlOp.
+    // This will walk ctrlOp itself.
     if (auto forOp = dyn_cast<scf::ForOp>(subOp)) {
-      LDBG("-- getAccumCntsPreOrder: walk forOp " << subOp);
-      LDBG("-- opsWithChannels: " << opsWithChannels.size() << " "
-                                  << opsWithChannels.count(subOp));
       for (auto *op : opsWithChannels) {
         if (subOp == op) {
-          LDBG("-- opsWithChannels push to result");
           preOrderOps.push_back(subOp);
         }
       }
     }
     if (auto ifOp = dyn_cast<scf::IfOp>(subOp)) {
-      LDBG("-- getAccumCntsPreOrder: walk IfOp " << subOp);
-      LDBG("-- opsWithChannels: " << opsWithChannels.size() << " "
-                                  << opsWithChannels.count(subOp));
       for (auto *op : opsWithChannels) {
         if (subOp == op) {
           preOrderOps.push_back(subOp);
-          LDBG("-- opsWithChannels push to result");
         }
       }
     }
   });
-  LDBG("-- getAccumCntsPreOrder: " << ctrlOp << " size " << preOrderOps.size());
 }
 
-static bool
-needAccumulatedLoopCnt(scf::IfOp ifOp,
-                       const DenseSet<Operation *> &opsWithChannels) {
-  return enclosingAChannel(ifOp.getOperation(), opsWithChannels);
-}
-
-// op is up-to-date (i.e will be updated when a control op is re-written).
+// Go through all the regions in opList and correctly add accumCnt. taskTopOps
+// will be updated if it is replaced in the process.
 Value updateAccumLoopCount(SmallVector<Operation *> &opList,
                            SmallVector<Operation *> &taskTopOps,
                            DenseSet<Operation *> &opsWithChannels,
                            Value prevAccum);
 
+// prevAccum is the accumCnt prior to the forOp. This function goes through
+// the forOp and insert accumCnt when necessary.
 scf::ForOp createNewLoopWrapper(scf::ForOp origForOp,
                                 SmallVector<Operation *> &taskTopOps,
                                 DenseSet<Operation *> &opsWithChannels,
                                 Value prevAccum);
 
-// For certain cases, we need to add an additional output for
-// IfOp to track the accumulatedLoopCount, we may need to add
-// a corresponding elseBlock with yieldOp.
 scf::IfOp rewriteIfOp(scf::IfOp ifOp, SmallVector<Operation *> &taskTopOps,
                       DenseSet<Operation *> &opsWithChannels, Value prevAccum) {
-  LLVM_DEBUG({
-    LDBG("rewrite ifOp for smem sharing ");
-    ifOp.dump();
-  });
-
   OpBuilderWithAsyncTaskIds ifBuilder(ifOp.getContext());
   ifBuilder.setAsynTaskIdsFromArray(getNestedAsyncTaskIds(ifOp));
   ifBuilder.setInsertionPoint(ifOp);
 
+  // Calculate how many accumCnts we will need for this IfOp.
   unsigned numAccumCnts = getAccumCnts(ifOp.getOperation(), opsWithChannels);
-
+  // Add one i64 result value for each needed accumCnt.
   SmallVector<Type> newResultTypes(ifOp->getResultTypes());
   for (unsigned i = 0; i < numAccumCnts; ++i)
     newResultTypes.push_back(ifBuilder.getI64Type());
+
   LDBG("rewrite ifOp: add " << numAccumCnts << " accumCnts");
   assert(numAccumCnts > 0);
-  // Create else block if we need to generate accumulated loop count.
+  // Create else block since we need to generate accumulated count for then and
+  // else.
   auto newIfOp = ifBuilder.createWithAsyncTaskIds<scf::IfOp>(
       ifOp.getLoc(), newResultTypes, ifOp.getCondition(), true, true);
 
@@ -187,7 +143,7 @@ scf::IfOp rewriteIfOp(scf::IfOp ifOp, SmallVector<Operation *> &taskTopOps,
       opList.push_back(&op);
   }
 
-  // Update yields
+  // Create new Yield and erase original Yield.
   auto loc = ifOp.getLoc();
   auto updateYield = [&](scf::YieldOp yield, SmallVector<Value> &operands) {
     ifBuilder.setInsertionPoint(yield);
@@ -195,7 +151,7 @@ scf::IfOp rewriteIfOp(scf::IfOp ifOp, SmallVector<Operation *> &taskTopOps,
     yield.erase();
   };
 
-  // Update opsWithChannels now that newIfOp takes over the body.
+  // Update opsWithChannels withe newIfOp.
   auto tmpIter3 = std::find(opsWithChannels.begin(), opsWithChannels.end(),
                             ifOp.getOperation());
   if (tmpIter3 != opsWithChannels.end()) {
@@ -204,16 +160,17 @@ scf::IfOp rewriteIfOp(scf::IfOp ifOp, SmallVector<Operation *> &taskTopOps,
     *tmpIter3 = newIfOp.getOperation();
   }
 
-  // Add one more operand to then Yield.
+  // Go through region ops in the thenBlock. updateAccumLoopCount takes current
+  // accumCnt value and returns the value at the end of the thenBlock.
   Value endAccum =
       updateAccumLoopCount(opList, taskTopOps, opsWithChannels, prevAccum);
 
   SmallVector<Value> ifYieldOperands = newIfOp.thenYield().getOperands();
 
-  // Handle elseRegion of the IfOp.
   if (ifOp.elseBlock()) {
     ifBuilder.setInsertionPointToEnd(newIfOp.elseBlock());
     newIfOp.getElseRegion().takeBody(ifOp.getElseRegion());
+
     SmallVector<Operation *> opListElse;
     for (Operation &op : newIfOp.elseBlock()->getOperations()) {
       if (auto tOp = dyn_cast<scf::ForOp>(&op))
@@ -221,12 +178,10 @@ scf::IfOp rewriteIfOp(scf::IfOp ifOp, SmallVector<Operation *> &taskTopOps,
       if (auto tOp = dyn_cast<scf::IfOp>(&op))
         opListElse.push_back(&op);
     }
-    {
-      // We need to differentiate channels in then region vs. in else region.
-      // For now, only handle the case where channels are in then region.
-      for (auto *op : opListElse)
-        assert(!enclosingAChannel(op, opsWithChannels));
-    }
+    // We need to differentiate channels in then region vs. in else region.
+    // For now, only handle the case where channels are in then region.
+    for (auto *op : opListElse)
+      assert(!enclosingAChannel(op, opsWithChannels));
   } else {
     // Create an empty yield
     auto yieldOp =
@@ -240,91 +195,94 @@ scf::IfOp rewriteIfOp(scf::IfOp ifOp, SmallVector<Operation *> &taskTopOps,
   ifBuilder.setInsertionPoint(newIfOp.thenYield());
 
   auto parentForOp = newIfOp->getParentOfType<scf::ForOp>();
-  unsigned tSize, parentTCnts = 0;
+  unsigned parentArgSize, parentTCnts = 0;
   SmallVector<Operation *> preOrderOpsOfParent;
   if (parentForOp) {
-    tSize = parentForOp.getBody()->getArguments().size();
+    parentArgSize = parentForOp.getBody()->getArguments().size();
     getAccumCntsPreOrder(parentForOp.getOperation(), opsWithChannels,
                          preOrderOpsOfParent);
     parentTCnts = getAccumCnts(parentForOp.getOperation(), opsWithChannels);
   }
   LDBG("rewrite ifOp: parentFor " << parentTCnts << " accumCnts");
 
-  //  Update both ifYieldOperands and elseYieldOperands.
-  //  See below for an example of how to update yieldOp of IfA and IfB.
-  //  ForA (accumForA, accumIfA, accumForB, accumIfB)
-  //    IfA (accumIfA, accumForB)
-  //      Channel A --> uses ForA.arg[accumIfA] to calculate (bufIdx, phase)
-  //      ForB (accumForB)
-  //        Channel B --> uses ForB.arg[accumForB]
-  //    ThenYield ForA.arg[accumIfA] + 1, ForB.res[accumForB]
-  //    ElseYield ForA.arg[accumIfA], ForA.arg[accumForB]
-  //    ForC (accumForC, accumIfB)
-  //      IfB
-  //        Channel C --> uses ForC.arg[accumIfB]
-  //      ThenYield ForC.arg[accumIfB] + 1
-  //      ElseYield ForC.arg[accumIfB]
-  //    Channel D --> uses ForA.arg[accumForA]
-  //  Check to see if ifOp has a channel directly under. Both IfA and IfB fall
-  //  into this case.
+  // For this IfOp, add accumCnts in preorder, starting with the IfOp itself
+  // if it contains a channel. It then goes through the body of thenBlock, add
+  // accumCnts for each region op of the thenBlock.
+  // Check to see if newIfOp has channels directly in.
+  bool hasDirectChannel = false;
   for (auto *op : opsWithChannels) {
     if (newIfOp.getOperation() == op) {
-      // Find enclosing Forop, use arg + 1; If no enclosing forOp, use 0.
-      // arg is parentForOp.arg[newIfOp]
-      Value endAccum, endAccumElse;
-      if (parentForOp) {
-        // Get corresponding argument of accumCnt: forOp.accumCnt[ifOp].
-        unsigned accumArgId = getAccumArgIdx(parentForOp, op, opsWithChannels);
-        LDBG("rewrite ifOp: ifOp itself parentArg " << tSize << " "
-                                                    << accumArgId);
-        Value arg = parentForOp.getBody()->getArgument(tSize - parentTCnts +
-                                                       accumArgId);
-        Value one =
-            ifBuilder.createWithAsyncTaskIds<arith::ConstantIntOp>(loc, 1, 64);
-        endAccum =
-            ifBuilder.createWithAsyncTaskIds<arith::AddIOp>(loc, arg, one);
-        endAccumElse = arg;
-      } else {
-        endAccum =
-            ifBuilder.createWithAsyncTaskIds<arith::ConstantIntOp>(loc, 0, 64);
-        endAccumElse = elseBuilder.createWithAsyncTaskIds<arith::ConstantIntOp>(
-            loc, 0, 64);
-      }
-      ifYieldOperands.push_back(endAccum);
-      elseYieldOperands.push_back(endAccumElse);
-      LLVM_DEBUG({
-        LDBG("Update yieldOperands ");
-        endAccum.dump();
-        endAccumElse.dump();
-      });
+      hasDirectChannel = true;
       break;
     }
   }
-  // Go through ops in thenBlock, which should be preorder.
+  if (hasDirectChannel) {
+    // Set up value for thenYield and elseYield for accumCnt associated with
+    // "newIfOp".
+    auto *op = newIfOp.getOperation();
+    Value endAccum, endAccumElse;
+    if (parentForOp) {
+      // Get corresponding argument of accumCnt for "op" in parentForOp.
+      unsigned accumArgId = getAccumArgIdx(parentForOp, op, opsWithChannels);
+      LDBG("rewrite ifOp: ifOp itself parentArg " << parentArgSize << " "
+                                                  << accumArgId);
+      // All the accumCnts are at the end of argument list. When accumArgId
+      // is parentTCnts - 1, the corresponding accumCnt will be the last
+      // argument.
+      Value arg = parentForOp.getBody()->getArgument(parentArgSize -
+                                                     parentTCnts + accumArgId);
+      // Either parent[accumCnt] + 1 or parent[accumCnt].
+      Value one =
+          ifBuilder.createWithAsyncTaskIds<arith::ConstantIntOp>(loc, 1, 64);
+      endAccum = ifBuilder.createWithAsyncTaskIds<arith::AddIOp>(loc, arg, one);
+      endAccumElse = arg;
+    } else {
+      endAccum =
+          ifBuilder.createWithAsyncTaskIds<arith::ConstantIntOp>(loc, 1, 64);
+      endAccumElse =
+          elseBuilder.createWithAsyncTaskIds<arith::ConstantIntOp>(loc, 0, 64);
+    }
+    ifYieldOperands.push_back(endAccum);
+    elseYieldOperands.push_back(endAccumElse);
+    LLVM_DEBUG({
+      LDBG("Update yieldOperands ");
+      endAccum.dump();
+      endAccumElse.dump();
+    });
+  }
+
+  // Go through ops in thenBlock.
   for (auto *op : opList) {
     if (!enclosingAChannel(op, opsWithChannels))
       continue;
-    // Push op.accumCnts as ifYield, push parentForOp.accumCnts[...] as
-    // elseYield.
+
     SmallVector<Operation *> preOrderOps;
     getAccumCntsPreOrder(op, opsWithChannels, preOrderOps);
     auto numRes = op->getNumResults();
     unsigned tCnts = preOrderOps.size();
     LDBG("rewrite ifOp: thenBlock " << tCnts << " accumCnts");
+
     unsigned accumArgId;
     if (parentForOp && preOrderOps.size() > 0)
-      // arg is parentForOp.arg[preOrderOps[0]]
+      // Find accumArgId for preOrderOps[0] in parentForOp.
       accumArgId = getAccumArgIdx(parentForOp, preOrderOps[0], opsWithChannels);
+
+    // Set up value for thenYield and elseYield for accumCnts nested under "op".
+    // Each accumCnt nested under "op", it will have a corresponding argument in
+    // this "IfOp". If "op" has tCnts, this "IfOp" will have the same number of
+    // corresponding accumCnts, in the same order.
     for (unsigned i = 0; i < tCnts; ++i) {
+      // Handle each accumCnt for "op".
       Value endAccum = op->getResult(numRes - tCnts + i);
       ifYieldOperands.push_back(endAccum);
+
       // Find the corresponding accumArgId from parentForOp.
       Value elseVal;
       if (parentForOp) {
-        elseVal = parentForOp.getBody()->getArgument(tSize - parentTCnts +
-                                                     accumArgId + i);
-        LDBG("rewrite ifOp: elseYield parentArg " << tSize << " " << accumArgId
-                                                  << " " << i);
+        elseVal = parentForOp.getBody()->getArgument(
+            parentArgSize - parentTCnts + accumArgId + i);
+        LDBG("rewrite ifOp: elseYield parentArg " << parentArgSize << " "
+                                                  << accumArgId << " " << i);
       } else
         elseVal = elseBuilder.createWithAsyncTaskIds<arith::ConstantIntOp>(
             loc, 0, 64);
@@ -336,9 +294,8 @@ scf::IfOp rewriteIfOp(scf::IfOp ifOp, SmallVector<Operation *> &taskTopOps,
       });
     }
   }
-  // Add one more operand to else Yield.
+  // Update Yields.
   updateYield(newIfOp.thenYield(), ifYieldOperands);
-  //}
   updateYield(newIfOp.elseYield(), elseYieldOperands);
 
   int resultIdx = 0;
@@ -346,13 +303,13 @@ scf::IfOp rewriteIfOp(scf::IfOp ifOp, SmallVector<Operation *> &taskTopOps,
   for (auto result : ifOp.getResults()) {
     result.replaceAllUsesWith(newIfOp->getResult(resultIdx++));
   }
-
   ifOp.erase();
   return newIfOp;
 }
 
+// Handle the forOp given initial accumCnts.
 scf::ForOp createNewLoop(scf::ForOp forOp, scf::ForOp &parentForOp,
-                         SmallVector<Value> &initialAccum,
+                         SmallVector<Value> &initialAccums,
                          Value accumulatedLoopCount) {
   auto loc = forOp.getLoc();
   Block *body = forOp.getBody();
@@ -361,42 +318,37 @@ scf::ForOp createNewLoop(scf::ForOp forOp, scf::ForOp &parentForOp,
   builder.setAsynTaskIdsFromArray(getNestedAsyncTaskIds(forOp));
   builder.setInsertionPoint(forOp);
 
-  unsigned numAccumCnts = initialAccum.size();
+  unsigned numAccumCnts = initialAccums.size();
 
   // Step 1: Append accumCnts as forOp arguments.
   for (unsigned i = 0; i < numAccumCnts; i++)
     body->insertArgument(body->getNumArguments(), builder.getI64Type(), loc);
-  Value tmpAccumLoopCount;
+
+  // Step 2: Add accumCnts to yieldOp.
   auto yieldOp = llvm::cast<scf::YieldOp>(body->getTerminator());
   builder.setInsertionPoint(yieldOp);
-  // Step 3: Add accumCnts to yieldOp.
   unsigned tSize = body->getNumArguments();
-  // Will be fixed in the caller.
+  // Pass argument value as yield. This will be fixed in the caller.
   for (unsigned i = 0; i < numAccumCnts; i++)
     yieldOp->insertOperands(yieldOp.getNumOperands(),
                             {body->getArgument(tSize - numAccumCnts + i)});
 
-  // Step 4: Create loop arguments for the new ForOp.
+  // Step 3: Create loop arguments for the new ForOp.
   SmallVector<Value> newLoopArgs;
   for (auto operand : forOp.getInitArgs())
     newLoopArgs.push_back(operand);
-
   builder.setInsertionPoint(forOp);
-  Value initCntIdx;
   for (unsigned i = 0; i < numAccumCnts; i++) {
-    initCntIdx = initialAccum[i];
-    newLoopArgs.append({initCntIdx /*, initPhase, initBufferIdx*/});
+    newLoopArgs.append({initialAccums[i]});
   }
 
-  // Step 5: Create newForOp and take the region of the original forOp.
+  // Step 4: Create newForOp and take the region of the original forOp.
   auto newForOp = builder.createWithAsyncTaskIds<scf::ForOp>(
       loc, forOp.getLowerBound(), forOp.getUpperBound(), forOp.getStep(),
       newLoopArgs);
-  if (forOp->getAttr("tt.loop_schedule"))
-    newForOp->setAttr("tt.loop_schedule", forOp->getAttr("tt.loop_schedule"));
   newForOp.getRegion().takeBody(forOp.getRegion());
 
-  // Step 6: Replace forOp with newForOp.
+  // Step 5: Replace forOp with newForOp.
   for (unsigned i = 0; i < forOp.getNumResults(); ++i)
     forOp.getResult(i).replaceAllUsesWith(newForOp.getResult(i));
   forOp.erase();
@@ -420,7 +372,8 @@ void collectRegionsWithChannels(const SmallVector<Channel *> &channels,
   }
 }
 
-// Go through a list of operations under one scope.
+// Go through a list of operations in opList, recursively call into
+// createNewLoopWrapper or rewriteIfOp.
 Value updateAccumLoopCount(SmallVector<Operation *> &opList,
                            SmallVector<Operation *> &taskTopOps,
                            DenseSet<Operation *> &opsWithChannels,
@@ -431,19 +384,19 @@ Value updateAccumLoopCount(SmallVector<Operation *> &opList,
       auto newForOp =
           createNewLoopWrapper(forOp, taskTopOps, opsWithChannels, prevAccum);
       oldToNew[op] = newForOp.getOperation();
-      // Update prevAccum to be after the loop.
     } else if (auto ifOp = dyn_cast<scf::IfOp>(op)) {
-      if (needAccumulatedLoopCnt(ifOp, opsWithChannels)) {
+      if (enclosingAChannel(ifOp.getOperation(), opsWithChannels)) {
         auto newIfOp =
             rewriteIfOp(ifOp, taskTopOps, opsWithChannels, prevAccum);
         oldToNew[op] = newIfOp.getOperation();
-        // update prevAccum to be result of the new IfOp.
+
+        // Update prevAccum to be result of the new IfOp.
         assert(newIfOp.getNumResults() >= 1);
         auto numRes = newIfOp.getNumResults();
-        LDBG("update prevAccum with result from IfOp");
-        prevAccum = newIfOp.getResult(numRes - 1); // last result
+        prevAccum =
+            newIfOp.getResult(numRes - 1); // accumCnt is the last result.
       } else {
-        // Still need to process ForOps in pre-order.
+        // Still need to process nested ForOps in pre-order.
         SmallVector<scf::ForOp> innerForOps;
         ifOp->walk<WalkOrder::PreOrder>([&](Operation *subOp) {
           if (auto forOp = dyn_cast<scf::ForOp>(subOp)) {
@@ -476,32 +429,31 @@ scf::ForOp createNewLoopWrapper(scf::ForOp origForOp,
   });
 
   scf::ForOp parentForOp = origForOp->getParentOfType<scf::ForOp>();
-  scf::ForOp newForOp;
-
   Value accumulatedLoopCount = prevAccum;
-  // ForOp will have a list of accumCnts, starting with
-  // argument value.
-  // Get initial value of accumCnts prior to the loop.
-  SmallVector<Value> initialAccum;
-  unsigned tSize = 0, tNum = 0, accumArgId = 0;
+
+  unsigned pArgSize = 0, pCnts = 0, accumArgId = 0;
   if (parentForOp) {
-    tSize = parentForOp.getBody()->getArguments().size();
-    tNum = getAccumCnts(parentForOp.getOperation(), opsWithChannels);
-    LDBG("-- has parentForOp");
+    pArgSize = parentForOp.getBody()->getArguments().size();
+    pCnts = getAccumCnts(parentForOp.getOperation(), opsWithChannels);
   }
+
   SmallVector<Operation *> preOrderOps;
   getAccumCntsPreOrder(origForOp.getOperation(), opsWithChannels, preOrderOps);
   unsigned tCnts = preOrderOps.size();
+
   if (preOrderOps.size() > 0 && parentForOp) {
-    // Check for accumArgId in parentForOp for the first preOrderOp of the
-    // ForOp.
+    // Find the accumArgId for preOrderOps[0] in parentForOp.
     accumArgId = getAccumArgIdx(parentForOp, preOrderOps[0], opsWithChannels);
   }
+
+  // Get initial value of accumCnts prior to the loop.
+  SmallVector<Value> initialAccums;
   for (unsigned i = 0; i < tCnts; ++i) {
+    // If there is an outer loop, use the corresponding argument value.
     Value startAccum;
     if (parentForOp)
       startAccum =
-          parentForOp.getBody()->getArgument(tSize - tNum + accumArgId + i);
+          parentForOp.getBody()->getArgument(pArgSize - pCnts + accumArgId + i);
     else {
       OpBuilderWithAsyncTaskIds builder(origForOp->getContext());
       builder.setAsynTaskIdsFromArray(getNestedAsyncTaskIds(origForOp));
@@ -510,30 +462,26 @@ scf::ForOp createNewLoopWrapper(scf::ForOp origForOp,
       startAccum =
           builder.createWithAsyncTaskIds<arith::ConstantIntOp>(loc, 0, 64);
     }
-    initialAccum.push_back(startAccum);
+    initialAccums.push_back(startAccum);
   }
 
-  newForOp =
-      createNewLoop(origForOp, parentForOp, initialAccum, accumulatedLoopCount);
+  scf::ForOp newForOp = createNewLoop(origForOp, parentForOp, initialAccums,
+                                      accumulatedLoopCount);
   LLVM_DEBUG({
     LDBG("after createNewLoop ");
     newForOp.dump();
   });
-  // origForOp is erased in createNewLoop. If origForOp is a top operation
-  // (i.e in taskTopOps), make sure taskTopOps is updated with the newForOp.
+
+  // origForOp is erased in createNewLoop. Make sure taskTopOps is updated with
+  // the newForOp.
   auto asyncTaskLoopForItr =
       std::find(taskTopOps.begin(), taskTopOps.end(), origForOp.getOperation());
   if (asyncTaskLoopForItr != taskTopOps.end()) {
-    // Update taskTopOps.
     *asyncTaskLoopForItr = newForOp.getOperation();
   }
-
-  // opsWithChannels
   auto tmpIter3 = std::find(opsWithChannels.begin(), opsWithChannels.end(),
                             origForOp.getOperation());
   if (tmpIter3 != opsWithChannels.end()) {
-    LDBG("createNewLoopWrapper: update opsWithChannels "
-         << origForOp.getOperation() << " --> " << newForOp.getOperation());
     *tmpIter3 = newForOp.getOperation();
   }
 
@@ -554,30 +502,17 @@ scf::ForOp createNewLoopWrapper(scf::ForOp origForOp,
 
   // Update yieldOp.
   Operation *yieldOp = newForOp.getBody()->getTerminator();
-  // ForA (accumForA, accumIfA, accumForB, accumIfB)
-  //   IfA (accumIfA, accumForB)
-  //     Channel A --> uses ForA.arg[accumIfA] to calculate (bufIdx, phase)
-  //     ForB (accumForB)
-  //       Channel B --> uses ForB.arg[accumForB]
-  //   ThenYield ForA.arg[accumIfA] + 1, ForB.res[accumForB]
-  //   ElseYield ForA.arg[accumIfA], ForA.arg[accumForB]
-  //   ForC (accumForC, accumIfB)
-  //     IfB
-  //       Channel C --> uses ForC.arg[accumIfB]
-  //     ThenYield ForC.arg[accumIfB] + 1
-  //     ElseYield ForC.arg[accumIfB]
-  //   Channel D --> uses ForA.arg[accumForA]
-  // Yield ForA.arg[accumForA]+1, IfA.res[accumIfA], IfA.res[accumForB],
-  // ForC.res[accumIfB]
-  tSize = newForOp.getBody()->getArguments().size();
-  auto numAccumCnts = initialAccum.size();
+  unsigned tSize = newForOp.getBody()->getArguments().size();
+  auto numAccumCnts = initialAccums.size();
   if (numAccumCnts == 0)
     return newForOp;
-  accumArgId = tSize - numAccumCnts; // first accumCnt: ForA.arg[accumForA]
+
+  // Start with the first accumCnt.
+  accumArgId = tSize - numAccumCnts;
   LDBG("-- tSize, numAccumCnts, accumArgId " << tSize << " " << numAccumCnts
                                              << " " << accumArgId);
 
-  // If there is a channel directly in forOp, yield ForA.arg[accumForA]+1.
+  // If there is a channel directly in forOp, it should be the first accumCnt.
   for (auto *op : opsWithChannels) {
     if (newForOp.getOperation() == op) {
       Value arg = newForOp.getBody()->getArgument(accumArgId);
@@ -589,21 +524,31 @@ scf::ForOp createNewLoopWrapper(scf::ForOp origForOp,
           builder.createWithAsyncTaskIds<arith::ConstantIntOp>(loc, 1, 64);
       Value endAccum =
           builder.createWithAsyncTaskIds<arith::AddIOp>(loc, arg, one);
+
+      // Make sure accumCnt = argValue + 1, increment by 1.
+      // In createNewLoop, yieldOp yields the argument value directly, it is
+      // fixed here.
       yieldOp->replaceUsesOfWith(arg, endAccum);
       ++accumArgId;
       break;
     }
   }
   LDBG("-- accumArgId after channels directly under " << accumArgId);
-  // This order should align with the preorder that is used for accumCnts.
+
+  // Handle the loop body. This order should align with the preorder that is
+  // used for accumCnts.
   SmallVector<Operation *> dummy;
   for (auto *op : opList) {
     if (!enclosingAChannel(op, opsWithChannels))
       continue;
+
     auto numRes = op->getNumResults();
     unsigned tCnts = getAccumCnts(op, opsWithChannels);
     LDBG("-- numRes, tCnts, accumArgId " << numRes << " " << tCnts << " "
                                          << accumArgId);
+    // Each accumCnt nested under "op", it will have a corresponding argument in
+    // this "ForOp". If "op" has tCnts, this "ForOp" will have the same number
+    // of corresponding accumCnts, in the same order.
     for (unsigned i = 0; i < tCnts; ++i) {
       Value arg = newForOp.getBody()->getArgument(accumArgId);
       Value endAccum = op->getResult(numRes - tCnts + i);
@@ -611,6 +556,8 @@ scf::ForOp createNewLoopWrapper(scf::ForOp origForOp,
         LDBG("-- replace use of arg with result " << numRes - tCnts + i);
         op->dump();
       });
+      // In createNewLoop, yieldOp yields the argument value directly, it is
+      // fixed here. Now, it will yield the accumCnt from the "op".
       yieldOp->replaceUsesOfWith(arg, endAccum);
       LLVM_DEBUG(yieldOp->dump());
       ++accumArgId;
@@ -620,50 +567,62 @@ scf::ForOp createNewLoopWrapper(scf::ForOp origForOp,
     LDBG("-- after all replacing ");
     newForOp.dump();
   });
-  //}
   return newForOp;
 }
 
+void appendAccumCntsForOps(SmallVector<Operation *> &taskTopOps,
+                           const SmallVector<Channel *> &channels,
+                           DenseSet<Operation *> &opsWithChannels) {
+
+  SmallVector<Operation *> opList;
+  for (auto &op : taskTopOps) {
+    if (auto origIfOp = dyn_cast<scf::IfOp>(op)) {
+      opList.push_back(op);
+    }
+    if (auto origForOp = dyn_cast<scf::ForOp>(op))
+      opList.push_back(op);
+  }
+  Value tmpAccumLoopCount;
+  // Go through all the regions in opList and correctly add accumCnt. taskTopOps
+  // will be updated if it is replaced in the process.
+  // tmpAccumLoopCount is the current accumCnt;
+  updateAccumLoopCount(opList, taskTopOps, opsWithChannels, tmpAccumLoopCount);
+}
+
+// As an example, suppose we have 4 channels with the following control flow.
+// We have 4 regions that immediately enclosing a channel:
+//   ForA for channel D, IfA for channel A, ForB for channel B and
+//   IfB for channel C
+// All 4 regions are nested under ForA, thus we will have 4 accumCnts. And the
+// counts are ordered in pre-order traversal.
+// accumForA is the execution count for ForA, accumIfA is the execution count
+// for IfA, etc. Barriers for channel A will use the corresponding value from
+// the immedate enclosing region which is IfA.
+// ForA (accumForA, accumIfA, accumForB, accumIfB)
+//   IfA (accumIfA, accumForB)
+//     Channel A --> uses ForA.arg[accumIfA] to calculate (bufIdx, phase)
+//     ForB (accumForB)
+//       Channel B --> uses ForB.arg[accumForB]
+//   ThenYield ForA.arg[accumIfA] + 1, ForB.result[accumForB]
+//   ElseYield ForA.arg[accumIfA], ForA.arg[accumForB]
+//   ForC (accumForC, accumIfB)
+//     IfB
+//       Channel C --> uses ForC.arg[accumIfB]
+//     ThenYield ForC.arg[accumIfB] + 1
+//     ElseYield ForC.arg[accumIfB]
+//   Channel D --> uses ForA.arg[accumForA]
 // Design this as a generic module that goes through a function op, together
 // with a list of channels. Separate the buffer-reuse logic.
 void addAccumCountForRegion(triton::FuncOp funcOp,
                             const SmallVector<Channel *> &channels) {
+  // Get top-level region ops that contain channels.
   SmallVector<Operation *> taskTopOps = getTaskTopRegion(funcOp, channels);
 
+  // Get immediately enclosing region ops that contain channels.
   DenseSet<Operation *> regionsWithChannels;
   collectRegionsWithChannels(channels, regionsWithChannels);
 
-  SmallVector<Operation *> opList;
-  for (auto &op : taskTopOps) {
-    if (auto origIfOp = dyn_cast<scf::IfOp>(op)) {
-      opList.push_back(op);
-    }
-    if (auto origForOp = dyn_cast<scf::ForOp>(op))
-      opList.push_back(op);
-  }
-  Value tmpAccumLoopCount;
-  updateAccumLoopCount(opList, taskTopOps, regionsWithChannels,
-                       tmpAccumLoopCount);
-}
-
-// TODO: Support for mapToRepresenting and opsWithBufferReuse.
-Value appendBufferIdxArgs(SmallVector<Operation *> &taskTopOps,
-                          unsigned numBuffers,
-                          const SmallVector<Channel *> &channels,
-                          DenseSet<Operation *> &opsWithChannels) {
-
-  SmallVector<Operation *> opList;
-  for (auto &op : taskTopOps) {
-    if (auto origIfOp = dyn_cast<scf::IfOp>(op)) {
-      opList.push_back(op);
-    }
-    if (auto origForOp = dyn_cast<scf::ForOp>(op))
-      opList.push_back(op);
-  }
-  Value tmpAccumLoopCount;
-  updateAccumLoopCount(opList, taskTopOps, opsWithChannels, tmpAccumLoopCount);
-
-  return tmpAccumLoopCount;
+  appendAccumCntsForOps(taskTopOps, channels, regionsWithChannels);
 }
 
 } // namespace mlir
