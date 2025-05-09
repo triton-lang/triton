@@ -143,7 +143,6 @@ class InstrumentationHook(Hook):
         backend = triton.runtime.driver.active.get_current_target().backend
         device = triton.runtime.driver.active.get_current_device()
         max_shared_mem = triton.runtime.driver.active.utils.get_device_properties(device)["max_shared_mem"]
-        arch = triton.runtime.driver.active.utils.get_device_properties(device)["arch"].split(":")[0]
 
         def to_llvmir_passes(pm, backend_pass, arch=""):
             triton_proton.add_allocate_proton_global_scratch_buffer(pm)
@@ -172,6 +171,7 @@ class InstrumentationHook(Hook):
             llvmir_func = lambda pm: to_llvmir_passes(pm, triton_proton.add_convert_proton_nvidia_gpu_to_llvm, "")
         elif backend == "hip":
             backend_name = "amd"
+            arch = triton.runtime.driver.active.utils.get_device_properties(device)["arch"].split(":")[0]
             ttgpuir_func = lambda pm: to_ttgpuir_passes(pm)
             llvmir_func = lambda pm: to_llvmir_passes(pm, triton_proton.add_convert_proton_amd_gpu_to_llvm, arch)
         else:

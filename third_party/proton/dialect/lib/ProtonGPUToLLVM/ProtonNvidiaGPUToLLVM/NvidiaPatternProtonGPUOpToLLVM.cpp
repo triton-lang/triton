@@ -13,6 +13,9 @@ using namespace mlir::triton;
 
 namespace {
 
+// TODO(crobeck): There is a lot of shared code between the AMD and the Nvidia
+// backends but we need to keep them seperate since predicated load/store is
+// quite different refactor common code into shared utils.
 struct FinalizeOpConversion
     : public ConvertOpToLLVMPattern<mlir::triton::proton::gpu::FinalizeOp> {
   explicit FinalizeOpConversion(LLVMTypeConverter &typeConverter,

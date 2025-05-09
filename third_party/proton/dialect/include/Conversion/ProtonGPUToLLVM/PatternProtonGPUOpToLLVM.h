@@ -25,8 +25,6 @@ void populateTypeConversions(LLVMTypeConverter &typeConverter,
                              const TargetInfoBase &targetInfo);
 
 Value getLinearId(Location loc, ConversionPatternRewriter &rewriter);
-//                  ModuleOp mod, const proton::gpu::TargetInfoBase
-//                  &targetInfo);
 
 } // namespace proton::gpu
 } // namespace mlir::triton
