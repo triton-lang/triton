@@ -93,7 +93,7 @@ def compute_num_stages(
             acc_size = 4 if has_expensive_epilogue else out_dtype.itemsize
         else:
             acc_size = out_dtype.itemsize
-        if target_info.cuda_capability_geq(10, 0) and epilogue_subtile:
+        if target_info.cuda_capability_geq(10, 0) and epilogue_subtile and not has_expensive_epilogue:
             acc_block_n = block_n // 2
         else:
             acc_block_n = block_n

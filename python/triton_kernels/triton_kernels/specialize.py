@@ -41,7 +41,7 @@ def define_kernel(src, module, attrs=None, **extra_globals):
     return f
 
 
-def specialize(fn, module, constants, tuples, name=None):
+def specialize(fn, module, constants, tuples, name=None, do_not_specialize=tuple()):
     assert isinstance(fn, triton.runtime.jit.JITFunction)
     if name is None:
         name = f"{fn.__name__}"
@@ -92,5 +92,7 @@ def specialize(fn, module, constants, tuples, name=None):
     sig = inspect.signature(triton.runtime.jit.JITFunction.__init__)
     params = list(sig.parameters.values())[2:]
     attrs = {param.name: getattr(fn, param.name, param.default) for param in params}
+    if do_not_specialize:
+        attrs["do_not_specialize"] = do_not_specialize
     ret = define_kernel(new_src, module, attrs, **extra_globals)
     return ret

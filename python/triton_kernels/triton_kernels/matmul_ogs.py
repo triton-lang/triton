@@ -24,6 +24,7 @@ class Epilogue:
     fn_arg_names: tuple[str]
     fn_arg_values_matmul: tuple[object]
     fn_arg_values_finalize: tuple[object]
+    fn_arg_do_not_specialize: tuple[str] = tuple()
     is_expensive: bool = False
 
 
@@ -36,13 +37,14 @@ def get_kernels(epilogue: Epilogue):
         return _kernels[epilogue.name]
     spec_constants = {"EPILOGUE_FN": epilogue.fn}
     spec_tuples = {"epilogue_fn_args": epilogue.fn_arg_names}
+    do_not_specialize = epilogue.fn_arg_do_not_specialize
     import types
 
     module = types.ModuleType(f"matmul_ogs_{epilogue.name}")
     sys.modules[module.__name__] = module
-    module._finalize_matmul = specialize(_finalize_matmul, module, spec_constants, spec_tuples)
-    module._matmul_ogs = specialize(_matmul_ogs, module, spec_constants, spec_tuples)
-    module._ptma_matmul_ogs = specialize(_ptma_matmul_ogs, module, spec_constants, spec_tuples)
+    module._finalize_matmul = specialize(_finalize_matmul, module, spec_constants, spec_tuples, do_not_specialize)
+    module._matmul_ogs = specialize(_matmul_ogs, module, spec_constants, spec_tuples, do_not_specialize)
+    module._ptma_matmul_ogs = specialize(_ptma_matmul_ogs, module, spec_constants, spec_tuples, do_not_specialize)
     _kernels[epilogue.name] = module
     return module
 
