@@ -19,6 +19,7 @@ static const char *kWarpSpecializeAttrName = "tt.warp_specialize";
 static const char *kLoopStageAttrName = "loop.stage";
 static const char *kLoopClusterAttrName = "loop.cluster";
 static const char *kScheduledMaxStageAttrName = "tt.scheduled_max_stage";
+static const char *kAssignedStageAttrName = "ttg.assigned_stage";
 
 //===----------------------------------------------------------------------===//
 // Hoisting Utilities
@@ -105,9 +106,6 @@ Value createAlloc(scf::ForOp forOp, RankedTensorType ty, Location loc,
 
 // Determine if the operation is a TMA load.
 bool isTMALoad(Operation *op);
-
-// Determine if the operation can be lowered to an async load.
-bool canBeAsyncLoad(Operation *op);
 
 // Look for consecutive wait ops and combine them into a single wait op.
 void combineRedundantWaitOps(

@@ -1402,11 +1402,18 @@ void replaceUsesAndPropagateType(OpBuilder &builder, Operation *oldUse,
   // Save the operand to replace / delete later (avoid iterator invalidation).
   // TODO: can we use an early_inc iterator?
   for (OpOperand &use : oldUse->getUses()) {
+    // Propagate through `ttg.warp_specialize`.
+    if (auto wsOp = dyn_cast<ttg::WarpSpecializeOp>(use.getOwner())) {
+      for (Region *region : wsOp.getPartitionRegions())
+        region->getArgument(use.getOperandNumber()).setType(val.getType());
+    }
+
     // Non-subview/trans ops will be replaced by `val`.
     if (!use.getOwner()->hasTrait<OpTrait::MemDescViewTrait>()) {
       operandsToReplace.push_back(&use);
       continue;
     }
+
     Operation *user = use.getOwner();
     // `subview(old_op)` is replaced by a new `subview(val)`.
     OpBuilder::InsertionGuard g(builder);
