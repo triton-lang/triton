@@ -8,7 +8,7 @@ module {
     %c128_i32 = arith.constant 128 : i32
     %c256_i32 = arith.constant 256 : i32
     %0 = tt.make_tensor_descriptor %arg0, [%c256_i32, %c256_i32], [%c1_i64, %c256_i64] {order = array<i32: 0>} : <f32>, <tensor<128x128xf32>>
-    %3 = tt.descriptor_load %0[%arg1, %arg2] {boundaryCheck = array<i32: 1>, isVolatile = true, padding = 2 : i32, operandSegmentSizes = array<i32: 1, 0, 0>} : !tt.tensordesc<tensor<128x128xf32>> -> tensor<128x128xf32>
+    %3 = tt.descriptor_load %0[%arg1, %arg2] : !tt.tensordesc<tensor<128x128xf32>> -> tensor<128x128xf32>
     tt.return %3 : tensor<128x128xf32>
   }
 }
@@ -17,9 +17,12 @@ module {
 // CHECK-SAME: %[[ARG0:[^:]*]]
 // CHECK-SAME: %[[ARG1:[^:]*]]
 // CHECK-SAME: %[[ARG2:[^:]*]]
-// CHECK-DAG: %[[CST:.*]] = arith.constant dense<0x7FC00000> : tensor<128x128xf32>
+// CHECK-DAG: %[[CST:.*]] = arith.constant dense<0.000000e+00> : tensor<128x128xf32>
 // CHECK-DAG: %[[CST0:.*]] = arith.constant dense<0> : tensor<1x128xi64>
-// CHECK-DAG: %[[CST1:.*]] = arith.constant dense<256> : tensor<1x128xi64>
+// CHECK-DAG: %[[CST1:.*]] = arith.constant dense<256> : tensor<128x1xi64>
+// CHECK-DAG: %[[CST2:.*]] = arith.constant dense<0> : tensor<128x1xi64>
+// CHECK-DAG: %[[CST3:.*]] = arith.constant dense<256> : tensor<1x128xi64>
+
 // CHECK-DAG: %[[VAL0:.*]] = arith.extsi %[[ARG1]] : i32 to i64
 // CHECK-DAG: %[[VAL1:.*]] = arith.extsi %[[ARG2]] : i32 to i64
 // CHECK-DAG: %[[VAL2:.*]] = tt.splat %[[ARG0]] :
@@ -33,15 +36,22 @@ module {
 // CHECK-DAG: %[[VAL10:.*]] = tt.splat %[[VAL1]] :
 // CHECK-DAG: %[[VAL11:.*]] = arith.addi %[[VAL10]], %[[VAL5]] :
 // CHECK-DAG: %[[VAL12:.*]] = tt.expand_dims %[[VAL11]] {axis = 0 : i32}
-// CHECK-DAG: %[[VAL13:.*]] = arith.muli %[[VAL12]], %[[CST1]] :
+// CHECK-DAG: %[[VAL13:.*]] = arith.muli %[[VAL12]], %[[CST3]] :
 // CHECK-DAG: %[[VAL14:.*]] = tt.broadcast %[[VAL13]] : tensor<1x128xi64> -> tensor<128x128xi64>
 // CHECK-DAG: %[[VAL15:.*]] = tt.addptr %[[VAL9]], %[[VAL14]] :
-// CHECK-DAG: %[[VAL16:.*]] = arith.cmpi sge, %[[VAL12]], %[[CST0]] : tensor<1x128xi64>
-// CHECK-DAG: %[[VAL17:.*]] = arith.cmpi slt, %[[VAL12]], %[[CST1]] : tensor<1x128xi64>
-// CHECK-DAG: %[[VAL18:.*]] = arith.andi %[[VAL16]], %[[VAL17]] : tensor<1x128xi1>
-// CHECK-DAG: %[[VAL19:.*]] = tt.broadcast %[[VAL18]] : tensor<1x128xi1> -> tensor<128x128xi1>
-// CHECK-DAG: %[[VAL20:.*]] = tt.load %[[VAL15]], %[[VAL19]], %[[CST]] {boundaryCheck = array<i32: 1>, isVolatile = true, padding = 2 : i32}
-// CHECK: tt.return %[[VAL20]] :
+
+// CHECK-DAG: %[[VAL16:.*]] = arith.cmpi sge, %[[VAL7]], %[[CST2]]
+// CHECK-DAG: %[[VAL17:.*]] = arith.cmpi slt, %[[VAL7]], %[[CST1]]
+// CHECK-DAG: %[[VAL18:.*]] = arith.andi %[[VAL16]], %[[VAL17]]
+// CHECK-DAG: %[[VAL19:.*]] = tt.broadcast %[[VAL18]] : tensor<128x1xi1> -> tensor<128x128xi1>
+// CHECK-DAG: %[[VAL20:.*]] = arith.cmpi sge, %[[VAL12]], %[[CST0]]
+// CHECK-DAG: %[[VAL21:.*]] = arith.cmpi slt, %[[VAL12]], %[[CST3]]
+// CHECK-DAG: %[[VAL22:.*]] = arith.andi %[[VAL20]], %[[VAL21]]
+// CHECK-DAG: %[[VAL23:.*]] = tt.broadcast %[[VAL22]] : tensor<1x128xi1> -> tensor<128x128xi1>
+// CHECK-DAG: %[[VAL24:.*]] = arith.andi %[[VAL19]], %[[VAL23]]
+
+// CHECK-DAG: %[[VAL25:.*]] = tt.load %[[VAL15]], %[[VAL24]], %[[CST]]
+// CHECK: tt.return %[[VAL25]] :
 
 // -----
 
@@ -53,7 +63,7 @@ module {
     %c128_i32 = arith.constant 128 : i32
     %c256_i32 = arith.constant 256 : i32
     %0 = tt.make_tensor_descriptor %arg0, [%c256_i32, %c256_i32], [%c1_i64, %c256_i64] {order = array<i32: 0>} : <f32>, <tensor<128x128xf32>>
-    tt.descriptor_store %0[%arg1, %arg2], %arg3 {boundaryCheck = array<i32: 1>, operandSegmentSizes = array<i32: 1, 0, 0>} : !tt.tensordesc<tensor<128x128xf32>>, tensor<128x128xf32>
+    tt.descriptor_store %0[%arg1, %arg2], %arg3 : !tt.tensordesc<tensor<128x128xf32>>, tensor<128x128xf32>
     tt.return
   }
 }
@@ -64,7 +74,10 @@ module {
 // CHECK-SAME: %[[ARG2:[^:]*]]
 // CHECK-SAME: %[[ARG3:[^:]*]]
 // CHECK-DAG: %[[CST:.*]] = arith.constant dense<0> : tensor<1x128xi64>
-// CHECK-DAG: %[[CST0:.*]] = arith.constant dense<256> : tensor<1x128xi64>
+// CHECK-DAG: %[[CST0:.*]] = arith.constant dense<256> : tensor<128x1xi64>
+// CHECK-DAG: %[[CST1:.*]] = arith.constant dense<0> : tensor<128x1xi64>
+// CHECK-DAG: %[[CST2:.*]] = arith.constant dense<256> : tensor<1x128xi64>
+
 // CHECK-DAG: %[[VAL0:.*]] = arith.extsi %[[ARG1]] : i32 to i64
 // CHECK-DAG: %[[VAL1:.*]] = arith.extsi %[[ARG2]] : i32 to i64
 // CHECK-DAG: %[[VAL2:.*]] = tt.splat %[[ARG0]] :
@@ -78,14 +91,21 @@ module {
 // CHECK-DAG: %[[VAL10:.*]] = tt.splat %[[VAL1]] :
 // CHECK-DAG: %[[VAL11:.*]] = arith.addi %[[VAL10]], %[[VAL5]] :
 // CHECK-DAG: %[[VAL12:.*]] = tt.expand_dims %[[VAL11]] {axis = 0 : i32}
-// CHECK-DAG: %[[VAL13:.*]] = arith.muli %[[VAL12]], %[[CST0]] :
+// CHECK-DAG: %[[VAL13:.*]] = arith.muli %[[VAL12]], %[[CST2]] :
 // CHECK-DAG: %[[VAL14:.*]] = tt.broadcast %[[VAL13]] : tensor<1x128xi64> -> tensor<128x128xi64>
 // CHECK-DAG: %[[VAL15:.*]] = tt.addptr %[[VAL9]], %[[VAL14]] :
-// CHECK-DAG: %[[VAL16:.*]] = arith.cmpi sge, %[[VAL12]], %[[CST]] : tensor<1x128xi64>
-// CHECK-DAG: %[[VAL17:.*]] = arith.cmpi slt, %[[VAL12]], %[[CST0]] : tensor<1x128xi64>
-// CHECK-DAG: %[[VAL18:.*]] = arith.andi %[[VAL16]], %[[VAL17]] : tensor<1x128xi1>
-// CHECK-DAG: %[[VAL19:.*]] = tt.broadcast %[[VAL18]] : tensor<1x128xi1> -> tensor<128x128xi1>
-// CHECK: tt.store %[[VAL15]], %[[ARG3]], %[[VAL19]] {boundaryCheck = array<i32: 1>}
+
+// CHECK-DAG: %[[VAL16:.*]] = arith.cmpi sge, %[[VAL7]], %[[CST1]]
+// CHECK-DAG: %[[VAL17:.*]] = arith.cmpi slt, %[[VAL7]], %[[CST0]]
+// CHECK-DAG: %[[VAL18:.*]] = arith.andi %[[VAL16]], %[[VAL17]]
+// CHECK-DAG: %[[VAL19:.*]] = tt.broadcast %[[VAL18]] : tensor<128x1xi1> -> tensor<128x128xi1>
+// CHECK-DAG: %[[VAL20:.*]] = arith.cmpi sge, %[[VAL12]], %[[CST]]
+// CHECK-DAG: %[[VAL21:.*]] = arith.cmpi slt, %[[VAL12]], %[[CST2]]
+// CHECK-DAG: %[[VAL22:.*]] = arith.andi %[[VAL20]], %[[VAL21]]
+// CHECK-DAG: %[[VAL23:.*]] = tt.broadcast %[[VAL22]] : tensor<1x128xi1> -> tensor<128x128xi1>
+// CHECK-DAG: %[[VAL24:.*]] = arith.andi %[[VAL19]], %[[VAL23]]
+
+// CHECK: tt.store %[[VAL15]], %[[ARG3]], %[[VAL24]]
 
 // -----
 
