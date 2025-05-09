@@ -680,7 +680,7 @@ def test_make_tensor_descriptor_loop_carried(device):
         NBLOCK,
     )
     torch.testing.assert_close(ref_out, A)
-    if is_cuda() and torch.cuda.get_device_capability(0)[0] >= 9:
+    if is_cuda() and torch.cuda.get_device_capability(0)[0] in (9, 10):
         assert "tensormap.cp_fenceproxy.global.shared::cta.tensormap::generic.release.gpu.sync.aligned" in kernel.asm[
             "ptx"]
 
@@ -891,8 +891,7 @@ def test_tensor_descriptor_batched_gemm_3d_tma(device):
         num_stages=num_stages, num_warps=8)
     torch.cuda.synchronize()
 
-    if is_cuda():
-        capability = torch.cuda.get_device_capability(0)[0]
+    if is_cuda() and (capability := torch.cuda.get_device_capability(0)[0]) in (9, 10):
         dot_op = {9: "warp_group_dot", 10: "tc_gen5_mma"}
         assert dot_op[capability] in h.asm["ttgir"]
 
