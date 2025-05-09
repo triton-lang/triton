@@ -7450,3 +7450,30 @@ def test_float_tuple():
         x, y = float('-inf'), float('inf')  # noqa: F841
 
     _namedtuple_float_tuple_kernel[(1, )]()
+
+
+@pytest.mark.interpreter
+def test_short_circuiting(device):
+
+    @triton.jit
+    def short_circuiting_kernel(x):
+        if (x is not None) and hasattr(x, "dtype") and isinstance(x.dtype, tl.pointer_type) and (x.dtype.element_ty == tl.int32) and (tl.load(x) > 42):
+            tl.store(x, 42)
+
+    def f(x):
+        short_circuiting_kernel[(1,)](x, num_warps=1)
+
+    f(None) # should succeed with NoneType
+    f(1) # should succeed with tl.constexpr type
+    f(2) # should succeed with integer type
+
+    def g(y, dtype):
+        x = torch.full((1,), y, device=device, dtype=dtype)
+        f(x)
+        return x.item()
+
+    assert g(37.5, torch.float32) == 37.5
+    assert g(84.0, torch.float32) == 84.0
+    assert g(-76893, torch.int32) == -76893
+    assert g(100000, torch.int32) == 42
+    assert g(100000, torch.int64) == 100000

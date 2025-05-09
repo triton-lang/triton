@@ -324,7 +324,7 @@ class CodeGenerator(ast.NodeVisitor):
         # special handling.
         self.visiting_arg_default_value = False
 
-    builtin_namespace: Dict[str, Any] = {_.__name__: _ for _ in (len, list, range, float, int, isinstance, getattr)}
+    builtin_namespace: Dict[str, Any] = {_.__name__: _ for _ in (len, list, range, float, int, isinstance, getattr, hasattr)}
     builtin_namespace.update((
         ('print', language.core.device_print),
         ('min', language.minimum),
@@ -876,6 +876,8 @@ class CodeGenerator(ast.NodeVisitor):
         try:
             return getattr(operand, fn)()
         except AttributeError:
+            if fn == "__not__":
+                return constexpr(not operand)
             raise self._unsupported(
                 node, f"AST unary operator '{fn}' is not (currently) implemented on type {type(operand).__name__}")
 
