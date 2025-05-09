@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import functools
 import hashlib
+import importlib.util
+import logging
 import os
 import shutil
 import subprocess
@@ -56,24 +58,35 @@ def platform_key() -> str:
     return ",".join([machine(), system(), *architecture()])
 
 
+def _load_module_from_path(name: str, path: str) -> ModuleType:
+    spec = importlib.util.spec_from_file_location(name, path)
+    if not spec or not spec.loader:
+        raise RuntimeError(f"Failed to load newly compiled {name} from {path}")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
 def compile_module_from_src(src: str, name: str, library_dirs: list[str] | None = None,
                             include_dirs: list[str] | None = None, libraries: list[str] | None = None) -> ModuleType:
     key = hashlib.sha256((src + platform_key()).encode("utf-8")).hexdigest()
     cache = get_cache_manager(key)
     suffix = sysconfig.get_config_var("EXT_SUFFIX")
     cache_path = cache.get_file(f"{name}{suffix}")
-    if cache_path is None:
-        with tempfile.TemporaryDirectory() as tmpdir:
-            src_path = os.path.join(tmpdir, name + ".c")
-            with open(src_path, "w") as f:
-                f.write(src)
-            so = _build(name, src_path, tmpdir, library_dirs or [], include_dirs or [], libraries or [])
-            with open(so, "rb") as f:
-                cache_path = cache.put(f.read(), f"{name}{suffix}", binary=True)
-    import importlib.util
-    spec = importlib.util.spec_from_file_location(name, cache_path)
-    if not spec or not spec.loader:
-        raise RuntimeError(f"Failed to load newly compiled {name}, src:\n{src}")
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-    return mod
+
+    if cache_path is not None:
+        try:
+            return _load_module_from_path(name, cache_path)
+        except (RuntimeError, ImportError):
+            log = logging.getLogger(__name__)
+            log.warning(f"Triton cache error: compiled module {name}.so could not be loaded")
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        src_path = os.path.join(tmpdir, name + ".c")
+        with open(src_path, "w") as f:
+            f.write(src)
+        so = _build(name, src_path, tmpdir, library_dirs or [], include_dirs or [], libraries or [])
+        with open(so, "rb") as f:
+            cache_path = cache.put(f.read(), f"{name}{suffix}", binary=True)
+
+    return _load_module_from_path(name, cache_path)
