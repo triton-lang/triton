@@ -772,19 +772,7 @@ void init_triton_ir(py::module &&m) {
           },
           ret::reference)
       //  .def("has_attr", &::FuncOp::hasAttr)
-      .def("finalize",
-           [](FuncOp &self) -> void {
-             // Check if the result of tl.advance is used
-             self.walk([&](AdvanceOp op) {
-               if (op->getResult(0).use_empty())
-                 outputWarning(op->getLoc(), "The result of tl.advance is not "
-                                             "being used. Note that tl.advance "
-                                             "does not have any side effects. "
-                                             "To move the block pointer, you "
-                                             "need to assign the result of "
-                                             "tl.advance to a variable.");
-             });
-           })
+      .def("finalize", [](FuncOp &self) -> void {})
       .def_property_readonly("type", &FuncOp::getFunctionType)
       .def("reset_type", &FuncOp::setType);
 

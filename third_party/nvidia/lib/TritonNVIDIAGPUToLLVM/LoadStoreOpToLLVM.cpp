@@ -887,6 +887,101 @@ struct AtomicRMWOpConversion
         continue;
       }
 
+      // Let LLVM handle compare+swap loop; branch-based pred should be fine
+      if (valueElemTy.isBF16() && getNVIDIAComputeCapability(moduleOp) < 90) {
+        // Lower atomic bin-op and sem to LLVM
+        auto llvmAtomicBinOp = matchAtomicOp(atomicRmwAttr);
+        auto llvmAtomicMemOrdering = getMemoryOrdering(op.getSem());
+
+        // Generate dominating undef
+        Value undefVal = b.undef(valueElemTy);
+
+        // Create basic block and branch to handle mask
+        auto *curBlock = rewriter.getInsertionBlock();
+        auto *endBlock = curBlock->splitBlock(rewriter.getInsertionPoint());
+        auto *atomicBlock = rewriter.createBlock(
+            curBlock->getParent(), std::next(Region::iterator(curBlock)));
+
+        // Setup the BlockArgument to return the result
+        endBlock->addArgument({valueElemTy}, {loc});
+
+        // Enter into predicate block
+        rewriter.setInsertionPointToEnd(curBlock);
+        bool doesAtomicNeedMEM = atomicNeedsSharedMemory(op.getResult());
+
+        // Setup for SMEM Sync case
+        Value atomPtr = tensorTy || !doesAtomicNeedMEM
+                            ? nullptr
+                            : LLVM::getSharedMemoryBase(
+                                  loc, rewriter, targetInfo, op.getOperation());
+        rewriter.create<LLVM::CondBrOp>(loc, pred, atomicBlock, endBlock,
+                                        undefVal);
+
+        // Codegen the atomic-rmw instruction(s)
+        rewriter.setInsertionPointToEnd(atomicBlock);
+        Value atom = rewriter
+                         .create<LLVM::AtomicRMWOp>(
+                             loc, *llvmAtomicBinOp, rmwPtr, valElements[i],
+                             *llvmAtomicMemOrdering, StringRef("agent"))
+                         .getResult();
+        // Handle the 2 bf16 case
+        if (packed == 2 && valueElemNBits == 16) {
+          Value atom2 = rewriter
+                            .create<LLVM::AtomicRMWOp>(
+                                loc, *llvmAtomicBinOp, ptrElements[i + 1],
+                                valElements[i + 1], *llvmAtomicMemOrdering,
+                                StringRef("agent"))
+                            .getResult();
+          auto vecTy = vec_ty(valueElemTy, vec);
+          auto tmp =
+              b.insert_element(vecTy, b.undef(vecTy), atom, b.i32_val(0));
+          atom = b.insert_element(vecTy, tmp, atom2, b.i32_val(1)).getResult();
+        }
+
+        if (tensorTy) {
+          // Return from predicated block
+          rewriter.create<LLVM::BrOp>(loc, atom, endBlock);
+
+          // Recover values from predicated block
+          rewriter.setInsertionPointToStart(endBlock);
+          Value ret = endBlock->getArgument(0);
+          if (vec > 1) {
+            for (unsigned ii = 0; ii < vec; ++ii) {
+              resultVals[i + ii] = b.extract_val(valueElemTy, ret, ii);
+            }
+          } else if (packed > 1) {
+            for (unsigned ii = 0; ii < packed; ++ii) {
+              resultVals[i + ii] =
+                  b.extract_element(valueElemTy, ret, b.i32_val(ii));
+            }
+          } else {
+            resultVals[i] = ret;
+          }
+        } else {
+          if (!doesAtomicNeedMEM) {
+            rewriter.create<LLVM::BrOp>(loc, atom, endBlock);
+            rewriter.eraseOp(op);
+            // if type isn't a tensor and there is no need to write to SMEM then
+            // we are done here
+            return success();
+          }
+
+          // Commit values from predicated block to SMEM and return from
+          // predicate block
+          // Note: there is no need to use the BlockArgument here because
+          //       the value is recovered from SMEM in the !tensorTy case
+          b.store(atom, atomPtr);
+          rewriter.create<LLVM::BrOp>(loc, atom, endBlock);
+
+          // Recover values from predicated block (from SMEM)
+          rewriter.setInsertionPointToStart(endBlock);
+          b.barrier();
+          Value ret = b.load(valueElemTy, atomPtr);
+          rewriter.replaceOp(op, {ret});
+        }
+        continue;
+      }
+
       std::string sTy;
       PTXBuilder ptxBuilderAtomicRMW;
       // 16-bit -> "h", 32-bit -> "r", 64-bit -> "l"
@@ -944,7 +1039,7 @@ struct AtomicRMWOpConversion
       case RMWOp::FADD:
         rmwOp = "add";
         rmwOp += (valueElemNBits == 16 ? ".noftz" : "");
-        sTy = "f" + sBits;
+        sTy = (valueElemTy.isBF16() ? "bf" : "f") + sBits;
         sTy += (packed == 2 && valueElemNBits == 16) ? "x2" : "";
         break;
       case RMWOp::MAX:

@@ -1140,6 +1140,29 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
 // -----
 
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  tt.func public @test_atomic_rmw_bf16(%arg0: !tt.ptr<bf16> {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32}, %arg1: !tt.ptr<bf16> {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32}) attributes {noinline = false} {
+    %true = arith.constant true
+    %0 = tt.get_program_id x : i32
+    %1 = tt.addptr %arg0, %0 : !tt.ptr<bf16>, i32
+    %2 = tt.load %1 : !tt.ptr<bf16>
+    %3 = tt.atomic_rmw fadd, acq_rel, gpu, %arg1, %2, %true : (!tt.ptr<bf16>, bf16, i1) -> bf16
+    tt.return
+  }
+}
+
+// CHECK-LABEL:   tt.func public @test_atomic_rmw_bf16(
+// CHECK-SAME:  %[[VAL_0:.*]]: !tt.ptr<bf16> {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32}, %[[VAL_1:.*]]: !tt.ptr<bf16> {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32}) attributes {noinline = false} {
+// CHECK:           %[[VAL_2:.*]] = arith.constant true
+// CHECK:           %[[VAL_3:.*]] = tt.get_program_id x : i32
+// CHECK:           %[[VAL_4:.*]] = tt.addptr %[[VAL_0]], %[[VAL_3]] : !tt.ptr<bf16>, i32
+// CHECK:           %[[VAL_5:.*]] = tt.load %[[VAL_4]] : !tt.ptr<bf16>
+// CHECK:           %[[VAL_6:.*]] = tt.atomic_rmw fadd, acq_rel, gpu, %[[VAL_1]], %[[VAL_5]], %[[VAL_2]] : (!tt.ptr<bf16>, bf16, i1) -> bf16
+// CHECK:           tt.return
+// CHECK:         }
+
+// -----
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
   // expected-remark@+1 {{expected at least 1 use of unrealized_cast}}
   tt.func public @empty_kernel(%arg0: !tt.ptr<i8> {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32}) attributes {noinline = false} {
     tt.return

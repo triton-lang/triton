@@ -436,7 +436,7 @@ static LogicalResult lowerWarpSpecialize(LLVM::LLVMFuncOp func,
   for (auto [ws, stateMap] : llvm::zip(wsOps, warpToState)) {
     Block *before = ws->getBlock();
     Block *after = b.splitBlock(before, ws->getIterator());
-    b.setInsertionPointToEnd(before);
+    TritonLLVMIRRewriter b(ws.getLoc(), OpBuilder::atBlockEnd(before));
     Value statePtr = LLVM::getSharedMemoryBase(b.getLoc(), b, targetInfo, func);
     for (auto [i, state] : llvm::enumerate(stateMap)) {
       Value stateVal = b.i8_val(state);
@@ -469,7 +469,7 @@ static LogicalResult lowerWarpSpecialize(LLVM::LLVMFuncOp func,
     b.create<LLVM::BrOp>(&ws.getDefaultRegion().front());
 
     ws.getDefaultRegion().walk([&, ws = ws](WarpYieldOp op) mutable {
-      b.setInsertionPoint(op);
+      TritonLLVMIRRewriter b(op.getLoc(), op);
       createBarrier(b, kSwitchLoopBarrierIdx, /*numThreads=*/std::nullopt,
                     /*aligned=*/false);
       if (auto actRegs = ws.getActualRegisters())

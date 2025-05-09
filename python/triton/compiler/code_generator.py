@@ -1220,6 +1220,13 @@ class CodeGenerator(ast.NodeVisitor):
         if static_implementation is not None:
             return static_implementation(self, node)
 
+        mur = getattr(fn, '_must_use_result', False)
+        if mur and getattr(node, '_is_unused', False):
+            error_message = ["The result of %s is not being used." % ast.unparse(node.func)]
+            if isinstance(mur, str):
+                error_message.append(mur)
+            raise CompilationError(self.jit_fn.src, node, " ".join(error_message))
+
         kws = dict(self.visit(keyword) for keyword in node.keywords)
         args = [self.visit(arg) for arg in node.args]
         args = list(itertools.chain.from_iterable(x if isinstance(x, list) else [x] for x in args))
@@ -1277,6 +1284,7 @@ class CodeGenerator(ast.NodeVisitor):
         return getattr(lhs, node.attr)
 
     def visit_Expr(self, node):
+        node.value._is_unused = True
         ast.NodeVisitor.generic_visit(self, node)
 
     def visit_NoneType(self, node):

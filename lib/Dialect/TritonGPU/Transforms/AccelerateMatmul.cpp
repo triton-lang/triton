@@ -217,8 +217,9 @@ getSharedMemoryScale(Value arg, mlir::PatternRewriter &rewriter, Location loc) {
       SharedMemorySpaceAttr::get(argType.getContext());
   auto CTALayout = getCTALayout(argType.getEncoding());
   // No swizzling for scale for now
-  auto newLayout = SwizzledSharedEncodingAttr::get(argType.getContext(), 1, 1,
-                                                   1, newOrder, CTALayout);
+  auto newLayout = NVMMASharedEncodingAttr::get(
+      argType.getContext(), argType.getShape(), newOrder, CTALayout,
+      argType.getElementType(), false);
   auto newType = MemDescType::get(argType.getShape(), argType.getElementType(),
                                   newLayout, SharedMemorySpace);
   rewriter.setInsertionPointAfterValue(arg);

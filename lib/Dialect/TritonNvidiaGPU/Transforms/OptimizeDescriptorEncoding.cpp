@@ -38,10 +38,6 @@ static bool isTMACompatibleEncoding(Attribute enc) {
   if (auto nvmma = dyn_cast<ttg::NVMMASharedEncodingAttr>(enc)) {
     return !nvmma.getTransposed();
   }
-  if (auto swizzled = dyn_cast<ttg::SwizzledSharedEncodingAttr>(enc)) {
-    return swizzled.getVec() == 1 && swizzled.getPerPhase() == 1 &&
-           swizzled.getMaxPhase() == 1;
-  }
   return false;
 }
 

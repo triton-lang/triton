@@ -69,7 +69,7 @@ class SwiGLU(torch.autograd.Function):
             n_tokens,
             BLOCK_M=BLOCK_M,
             BLOCK_N=BLOCK_N,
-            EVEN_N=(N // 2) % 2 == 0,
+            EVEN_N=(N // 2) % BLOCK_N == 0,
             M_BLOCKS=M_BLOCKS,
             N_BLOCKS=N_BLOCKS,
             flexpoint_saturate_inf=flex_ctx.saturate_inf,

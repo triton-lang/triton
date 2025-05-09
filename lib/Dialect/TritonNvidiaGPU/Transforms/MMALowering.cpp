@@ -66,9 +66,7 @@ struct TCGen5MMAScaleSharedToTmemConversion
     auto oldType = cast<MemDescType>(operand.get().getType());
     auto numElems = product(oldType.getShape());
     Type elType = oldType.getElementType();
-    SwizzledSharedEncodingAttr oldEncoding =
-        cast<SwizzledSharedEncodingAttr>(oldType.getEncoding());
-    CTALayoutAttr CTALayout = getCTALayout(oldEncoding);
+    CTALayoutAttr CTALayout = getCTALayout(oldType.getEncoding());
     ArrayRef<unsigned> CTASplitNum = CTALayout.getCTASplitNum();
     // Distribute the scales across the rows of the MMA operation.
     SmallVector<int64_t> shape = {rows, numElems / rows};
@@ -93,10 +91,10 @@ struct TCGen5MMAScaleSharedToTmemConversion
     int blockM = op.getBlockM();
     int blockN = op.getBlockN();
     bool anyChanged = false;
-    if (isa<SwizzledSharedEncodingAttr>(aScaleType.getEncoding())) {
+    if (isa<SharedMemorySpaceAttr>(aScaleType.getMemorySpace())) {
       anyChanged = lowerScaleToTmem(op.getAScaleMutable(), rewriter, blockM);
     }
-    if (isa<SwizzledSharedEncodingAttr>(bScaleType.getEncoding())) {
+    if (isa<SharedMemorySpaceAttr>(bScaleType.getMemorySpace())) {
       anyChanged = lowerScaleToTmem(op.getBScaleMutable(), rewriter, blockN);
     }
     return LogicalResult::success(anyChanged);
