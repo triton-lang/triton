@@ -1,5 +1,5 @@
-#ifndef PROTON_DATA_BYTE_SPAN_H_
-#define PROTON_DATA_BYTE_SPAN_H_
+#ifndef PROTON_COMMON_BYTE_SPAN_H_
+#define PROTON_COMMON_BYTE_SPAN_H_
 
 #include <cstdint>
 #include <stdexcept>
@@ -48,4 +48,4 @@ private:
 
 } // namespace proton
 
-#endif // PROTON_DATA_BYTE_SPAN_H_
+#endif // PROTON_COMMON_BYTE_SPAN_H_
