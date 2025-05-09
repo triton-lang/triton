@@ -442,7 +442,7 @@ def tensor_descriptor_return_helper(ptr, M, N, M_BLOCK: tl.constexpr, N_BLOCK: t
 
 
 @pytest.mark.interpreter
-@pytest.mark.skipif(is_hip, reason="HIP devices don't correctly handle function calls with pointer arguments")
+@pytest.mark.skipif(is_hip(), reason="HIP devices don't correctly handle function calls with pointer arguments")
 def test_tensor_descriptor_return_value(device):
 
     @triton.jit
@@ -480,7 +480,7 @@ def tensor_descriptor_arg_helper(in_desc, out_desc, M_BLOCK: tl.constexpr, N_BLO
 
 
 @pytest.mark.interpreter
-@pytest.mark.skipif(is_hip, reason="HIP devices don't correctly handle function calls with pointer arguments")
+@pytest.mark.skipif(is_hip(), reason="HIP devices don't correctly handle function calls with pointer arguments")
 def test_tensor_descriptor_argument(device):
 
     @triton.jit
@@ -747,11 +747,12 @@ def batched_gemm_2d_tma_kernel(a_ptr, b_ptr, c_ptr,  #
 
 
 @pytest.mark.interpreter
-@pytest.mark.skipif(is_hip, reason="Out of memory on HIP devices")
 def test_tensor_descriptor_batched_gemm_2d_tma(device):
     BLOCK_M, BLOCK_N, BLOCK_K = 128, 256, 64
     if is_interpreter():
         B, M, N, K = 2, BLOCK_M, BLOCK_N, BLOCK_K
+    elif is_hip():
+        B, M, N, K = 2, 256, 512, 128
     else:
         B, M, N, K = 2, 1024, 1024, 128
     NUM_SMS = 96
@@ -847,11 +848,12 @@ def batched_gemm_3d_tma_kernel(a_ptr, b_ptr, c_ptr,  #
 
 
 @pytest.mark.interpreter
-@pytest.mark.skipif(is_hip, reason="Out of memory on HIP devices")
 def test_tensor_descriptor_batched_gemm_3d_tma(device):
     BLOCK_M, BLOCK_N, BLOCK_K = 128, 256, 64
     if is_interpreter():
         B, M, N, K = 2, BLOCK_M, BLOCK_N, BLOCK_K
+    elif is_hip():
+        B, M, N, K = 2, 256, 512, 128
     else:
         B, M, N, K = 2, 1024, 1024, 128
     NUM_SMS = 96
@@ -1239,7 +1241,7 @@ def mxfp8_mxfp4_matmul_tma(  #
 @pytest.mark.parametrize("BLOCK_M, BLOCK_N, BLOCK_K", [(128, 128, 128), (128, 128, 256), (128, 256, 128),
                                                        (128, 256, 256)])
 @pytest.mark.parametrize("NUM_STAGES", [1, 3])
-@pytest.mark.skipif(is_hip, reason="HIP devices don't have full support for MX formats")
+@pytest.mark.skipif(is_hip(), reason="HIP devices don't have full support for MX formats")
 def test_mxfp8_mxfp4_matmul_tma(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, NUM_STAGES, device):
     if BLOCK_N == 256 and BLOCK_K == 256:
         NUM_STAGES = min(NUM_STAGES, 2)
