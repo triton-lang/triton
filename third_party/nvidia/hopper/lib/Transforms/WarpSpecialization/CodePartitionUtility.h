@@ -93,10 +93,9 @@ unsigned getAccumArgIdx(scf::ForOp parentForOp, Operation *ctrlOp,
 SmallVector<Operation *>
 getTaskTopRegion(triton::FuncOp funcOp, const SmallVector<Channel *> &channels);
 
-Value appendBufferIdxArgs(SmallVector<Operation *> &taskTopOps,
-                          unsigned numBuffers,
-                          const SmallVector<Channel *> &channels,
-                          DenseSet<Operation *> &opsWithChannels);
+void appendAccumCntsForOps(SmallVector<Operation *> &taskTopOps,
+                           const SmallVector<Channel *> &channels,
+                           DenseSet<Operation *> &opsWithChannels);
 
 void collectRegionsWithChannels(const SmallVector<Channel *> &channels,
                                 DenseSet<Operation *> &opsWithChannels);

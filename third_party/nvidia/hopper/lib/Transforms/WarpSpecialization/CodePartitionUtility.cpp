@@ -45,7 +45,8 @@ bool immediateEnclosing(scf::IfOp ifOp, Operation *subOp) {
   return !enclosing(ifOp, pOp.getOperation());
 }
 
-// Return number of AccumCnts for the given ctrlOp. Add a single
+// Return number of AccumCnts for the given ctrlOp. We need one for each nested
+// region that contains a channel.
 unsigned getAccumCnts(Operation *ctrlOp,
                       const DenseSet<Operation *> &opsWithChannels) {
   unsigned cnt = 0;
