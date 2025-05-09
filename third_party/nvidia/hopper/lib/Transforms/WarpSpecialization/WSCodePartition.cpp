@@ -32,10 +32,7 @@ namespace ttng = ::mlir::triton::nvidia_gpu;
 namespace ttnvws = ::mlir::triton::nvws;
 namespace mlir {
 
-#define GEN_PASS_DEF_NVGPUWSCODEPARTITION
-#include "nvidia/hopper/include/Transforms/Passes.h.inc"
-
-#define DEBUG_TYPE "nvgpu-warp-spec-code-partition"
+#define DEBUG_TYPE "nvgpu-ws-code-partition"
 #define DBGS() (llvm::dbgs() << "[" DEBUG_TYPE "]: ")
 #define LDBG(X) LLVM_DEBUG(DBGS() << X << "\n")
 
@@ -599,7 +596,6 @@ void createToken(
     const DenseMap<Channel *, SmallVector<Channel *>>
         &channelsGroupedByConsumers,
     const SmallVector<Channel *> &orderedChannels, triton::FuncOp funcOp,
-    int numConsumerGroups,
     const DenseMap<Channel *, std::pair<Operation *, Operation *>> &copyOpMap,
     DenseMap<Channel *, CommChannel> &tokenMap) {
   OpBuilder builder(funcOp);
@@ -725,8 +721,7 @@ static ttng::TMEMAllocOp createTMemAlloc(OpBuilder &builder,
 // the buffer array will contain numBuffers.
 DenseMap<Channel *, Value> createBuffer(
     DenseMap<Channel *, SmallVector<Channel *>> &channelsGroupedByProducers,
-    const SmallVector<Channel *> &orderedChannels, triton::FuncOp funcOp,
-    int numConsumerGroups) {
+    const SmallVector<Channel *> &orderedChannels, triton::FuncOp funcOp) {
 
   DenseMap<Channel *, Value> bufferMap;
   MLIRContext *context = funcOp.getContext();
@@ -894,7 +889,7 @@ void insertAsyncComm(
     const DenseMap<Channel *, DenseMap<int, Value>> &barrierAllocMap,
     const DenseMap<Channel *, Value> &bufferMap,
     const DenseMap<Channel *, std::pair<Operation *, Operation *>> &copyOpMap,
-    int numConsumerGroups, DenseSet<Operation *> &regionsWithChannels) {
+    DenseSet<Operation *> &regionsWithChannels) {
 
   // Find the operation that is along producer's parent chain, and its parent
   // is the same op as producer's parent. Here p is producer, and c is consumer.
@@ -1200,115 +1195,117 @@ void foldLocalLoads(triton::FuncOp funcOp) {
                                               kv.getSecond());
 }
 
-class NVGPUWSCodePartitionPass
-    : public impl::NVGPUWSCodePartitionBase<NVGPUWSCodePartitionPass> {
+void doCodePartition(triton::FuncOp &funcOp, unsigned numBuffers) {
+  // Step 1: collect all communications between producers and consumers.
+  SmallVector<std::unique_ptr<Channel>> channelsOrigin;
+  collectAsyncChannels(channelsOrigin, funcOp, numBuffers);
+  SmallVector<Channel *> channels;
+  for (const auto &c : channelsOrigin) {
+    channels.push_back(c.get());
+  }
+  if (channels.empty()) {
+    return;
+  }
+
+  // Step 2: group channels
+  // -  each entry of the channelsGroupedByProducers is keyed by the srcOp.
+  // -  each entry of the channelsGroupedByConsumers is keyed by the dstOp.
+  DenseMap<Channel *, SmallVector<Channel *>> channelsGroupedByProducers;
+  DenseMap<Channel *, SmallVector<Channel *>> channelsGroupedByConsumers;
+  SmallVector<Channel *> orderedChannels;
+  groupChannels(channels, channelsGroupedByProducers,
+                channelsGroupedByConsumers, orderedChannels);
+
+  // Step 3: reorder producer ops and the backward slices of the producer ops.
+  reorderProducerOps(channels);
+
+  // Step 4: find top-level ops that contain a channel, also create new ForOps
+  // by adding phase and bufferIdx to the original ForOps, erase the original
+  // ForOps.
+  SmallVector<Operation *> asyncTaskTopOps = getTaskTopRegion(funcOp, channels);
+  SmallVector<Operation *> opList;
+  for (auto &op : asyncTaskTopOps) {
+    if (auto origIfOp = dyn_cast<scf::IfOp>(op)) {
+      opList.push_back(op);
+    }
+    if (auto origForOp = dyn_cast<scf::ForOp>(op))
+      opList.push_back(op);
+  }
+  DenseSet<Operation *> regionsWithChannels;
+  collectRegionsWithChannels(channels, regionsWithChannels);
+  appendAccumCntsForOps(asyncTaskTopOps, channels, regionsWithChannels);
+  LLVM_DEBUG({
+    LDBG("\n\nafter appendAccumCntsForOps");
+    funcOp.dump();
+  });
+
+  // Step 5: Create buffers. An array of buffers for each channel.
+  DenseMap<Channel *, Value> bufferMap =
+      createBuffer(channelsGroupedByProducers, channels, funcOp);
+  LLVM_DEBUG({
+    LDBG("\n\nafter createBuffer");
+    funcOp.dump();
+  });
+
+  // Step 6: Lower the loads. Also add local copy ops for non-load
+  // producers.
+  DenseMap<Channel *, std::pair<Operation *, Operation *>> copyOpMap;
+  insertAsyncCopy(funcOp, channelsGroupedByProducers, bufferMap, copyOpMap,
+                  regionsWithChannels);
+  LLVM_DEBUG({
+    LDBG("\n\nwith async copy");
+    funcOp.dump();
+  });
+
+  // Step 7: Create tokens. A set of tokens for each group of channels for
+  // each channel.
+  DenseMap<Channel *, DenseMap<int, Value>> barrierAllocMap;
+  DenseMap<Channel *, CommChannel> tokenMap;
+  createToken(channelsGroupedByConsumers, orderedChannels, funcOp, copyOpMap,
+              tokenMap);
+  LLVM_DEBUG({
+    LDBG("\n\nafter createToken");
+    funcOp.dump();
+  });
+
+  // Step 8: add async communication ops (ProducerAcquire etc). Also lower
+  // TMA loads.
+  insertAsyncComm(funcOp, channelsGroupedByConsumers, tokenMap, barrierAllocMap,
+                  bufferMap, copyOpMap, regionsWithChannels);
+  LLVM_DEBUG({
+    LDBG("\n\nwith SyncOps");
+    funcOp.dump();
+  });
+
+  // If loadResult has a single use which is LocalAlloc, we can get rid of
+  // sharedLoad and replace all uses of LocalAlloc with viewLoad.
+  foldLocalLoads(funcOp);
+  LLVM_DEBUG({
+    LDBG("\n\nsimplify localLoad + localAlloc");
+    funcOp.dump();
+  });
+
+  SpecializeRegion(funcOp); //, regDecProducer, regIncConsumer);
+  LLVM_DEBUG({
+    LDBG("\n\nwith SpecializeRegion");
+    funcOp.dump();
+  });
+}
+
+#define GEN_PASS_DEF_NVGPUTESTWSCODEPARTITION
+#include "nvidia/hopper/include/Transforms/Passes.h.inc"
+
+class NVGPUTestWSCodePartitionPass
+    : public impl::NVGPUTestWSCodePartitionBase<NVGPUTestWSCodePartitionPass> {
 public:
-  using impl::NVGPUWSCodePartitionBase<
-      NVGPUWSCodePartitionPass>::NVGPUWSCodePartitionBase;
+  using impl::NVGPUTestWSCodePartitionBase<
+      NVGPUTestWSCodePartitionPass>::NVGPUTestWSCodePartitionBase;
 
   void runOnFuncOp(triton::FuncOp funcOp) {
     // Disable code partitioning when numBuffers is 0.
-    if (numBuffers == 0)
-      return;
-
-    // Step 1: collect all communications between producers and consumers.
-    SmallVector<std::unique_ptr<Channel>> channelsOrigin;
-    collectAsyncChannels(channelsOrigin, funcOp, numBuffers);
-    SmallVector<Channel *> channels;
-    for (const auto &c : channelsOrigin) {
-      channels.push_back(c.get());
-    }
-    if (channels.empty()) {
-      return;
-    }
-
-    // Step 2: group channels
-    // -  each entry of the channelsGroupedByProducers is keyed by the srcOp.
-    // -  each entry of the channelsGroupedByConsumers is keyed by the dstOp.
-    DenseMap<Channel *, SmallVector<Channel *>> channelsGroupedByProducers;
-    DenseMap<Channel *, SmallVector<Channel *>> channelsGroupedByConsumers;
-    SmallVector<Channel *> orderedChannels;
-    groupChannels(channels, channelsGroupedByProducers,
-                  channelsGroupedByConsumers, orderedChannels);
-
-    // Step 3: reorder producer ops and the backward slices of the producer ops.
-    reorderProducerOps(channels);
-
-    // Step 4: find top-level ops that contain a channel, also create new ForOps
-    // by adding phase and bufferIdx to the original ForOps, erase the original
-    // ForOps.
-    SmallVector<Operation *> asyncTaskTopOps =
-        getTaskTopRegion(funcOp, channels);
-    SmallVector<Operation *> opList;
-    for (auto &op : asyncTaskTopOps) {
-      if (auto origIfOp = dyn_cast<scf::IfOp>(op)) {
-        opList.push_back(op);
-      }
-      if (auto origForOp = dyn_cast<scf::ForOp>(op))
-        opList.push_back(op);
-    }
-    DenseSet<Operation *> regionsWithChannels;
-    collectRegionsWithChannels(channels, regionsWithChannels);
-    appendAccumCntsForOps(asyncTaskTopOps, channels, regionsWithChannels);
-    LLVM_DEBUG({
-      LDBG("\n\nafter appendAccumCntsForOps");
-      funcOp.dump();
-    });
-
-    // Step 5: Create buffers. An array of buffers for each channel.
-    DenseMap<Channel *, Value> bufferMap = createBuffer(
-        channelsGroupedByProducers, channels, funcOp, numConsumerGroups);
-    LLVM_DEBUG({
-      LDBG("\n\nafter createBuffer");
-      funcOp.dump();
-    });
-
-    // Step 6: Lower the loads. Also add local copy ops for non-load
-    // producers.
-    DenseMap<Channel *, std::pair<Operation *, Operation *>> copyOpMap;
-    insertAsyncCopy(funcOp, channelsGroupedByProducers, bufferMap, copyOpMap,
-                    regionsWithChannels);
-    LLVM_DEBUG({
-      LDBG("\n\nwith async copy");
-      funcOp.dump();
-    });
-
-    // Step 7: Create tokens. A set of tokens for each group of channels for
-    // each channel.
-    DenseMap<Channel *, DenseMap<int, Value>> barrierAllocMap;
-    DenseMap<Channel *, CommChannel> tokenMap;
-    createToken(channelsGroupedByConsumers, orderedChannels, funcOp,
-                numConsumerGroups, copyOpMap, tokenMap);
-    LLVM_DEBUG({
-      LDBG("\n\nafter createToken");
-      funcOp.dump();
-    });
-
-    // Step 8: add async communication ops (ProducerAcquire etc). Also lower
-    // TMA loads.
-    insertAsyncComm(funcOp, channelsGroupedByConsumers, tokenMap,
-                    barrierAllocMap, bufferMap, copyOpMap, numConsumerGroups,
-                    regionsWithChannels);
-    LLVM_DEBUG({
-      LDBG("\n\nwith SyncOps");
-      funcOp.dump();
-    });
-
-    // If loadResult has a single use which is LocalAlloc, we can get rid of
-    // sharedLoad and replace all uses of LocalAlloc with viewLoad.
-    foldLocalLoads(funcOp);
-    LLVM_DEBUG({
-      LDBG("\n\nsimplify localLoad + localAlloc");
-      funcOp.dump();
-    });
-
-    SpecializeRegion(funcOp); //, regDecProducer, regIncConsumer);
-    LLVM_DEBUG({
-      LDBG("\n\nwith SpecializeRegion");
-      funcOp.dump();
-    });
+    if (numBuffers > 0)
+      doCodePartition(funcOp, numBuffers);
   }
-
   void runOnOperation() override {
     getOperation()->walk([&](triton::FuncOp funcOp) { runOnFuncOp(funcOp); });
     LLVM_DEBUG({
