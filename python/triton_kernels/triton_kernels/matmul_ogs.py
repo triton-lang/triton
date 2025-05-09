@@ -42,9 +42,12 @@ def get_kernels(epilogue: Epilogue):
 
     module = types.ModuleType(f"matmul_ogs_{epilogue.name}")
     sys.modules[module.__name__] = module
-    module._finalize_matmul = specialize(_finalize_matmul, module, spec_constants, spec_tuples, do_not_specialize)
-    module._matmul_ogs = specialize(_matmul_ogs, module, spec_constants, spec_tuples, do_not_specialize)
-    module._ptma_matmul_ogs = specialize(_ptma_matmul_ogs, module, spec_constants, spec_tuples, do_not_specialize)
+    module._finalize_matmul = specialize(_finalize_matmul, module, spec_constants, spec_tuples,
+                                         do_not_specialize=do_not_specialize)
+    module._matmul_ogs = specialize(_matmul_ogs, module, spec_constants, spec_tuples,
+                                    do_not_specialize=do_not_specialize)
+    module._ptma_matmul_ogs = specialize(_ptma_matmul_ogs, module, spec_constants, spec_tuples,
+                                         do_not_specialize=do_not_specialize)
     _kernels[epilogue.name] = module
     return module
 
