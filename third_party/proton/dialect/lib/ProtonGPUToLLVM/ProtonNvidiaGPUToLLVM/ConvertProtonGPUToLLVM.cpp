@@ -79,9 +79,8 @@ namespace triton::proton {
 
 namespace gpu {
 
-std::unique_ptr<OperationPass<ModuleOp>>
-createConvertProtonNvidiaGPUToLLVMPass(int32_t computeCapability,
-                                       int32_t ptxVersion) {
+std::unique_ptr<OperationPass<ModuleOp>> createConvertProtonNvidiaGPUToLLVMPass(
+    const std::string &arch, int32_t computeCapability, int32_t ptxVersion) {
   return std::make_unique<ConvertProtonNvidiaGPUToLLVM>(computeCapability,
                                                         ptxVersion);
 }

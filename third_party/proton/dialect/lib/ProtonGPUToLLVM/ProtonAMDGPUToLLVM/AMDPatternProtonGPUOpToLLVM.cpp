@@ -189,7 +189,9 @@ struct FinalizeOpConversion
 protected:
   const proton::gpu::TargetInfoBase &targetInfo;
 };
-
+// TODO(crobeck): There is a lot of shared code between the AMD and the Nvidia
+// backends but we need to keep them seperate since predicated load/store is
+// quite different refactor common code into shared utils.
 struct CircularStoreOpConversion
     : public ConvertOpToLLVMPattern<
           mlir::triton::proton::gpu::CircularStoreOp> {
@@ -271,8 +273,9 @@ struct CircularStoreOpConversion
     if (AddrSpace == 1) {
       llvm::report_fatal_error("unimplemented");
     } else if (AddrSpace == 3) {
-      // TODO(crobeck): this is lowered as a predicated store which is not very
-      // efficient. probably want this swapped out for bufferops
+      // TODO(crobeck): this is lowered as a predicated store very
+      // inefficient since it is implemented using branching.
+      // We almost certainly want to swapped this out for bufferops
       // we also need to compare "this version" vs. isWriter always = true
       // for this predicated version, there could be unexpected instruction
       // cache miss. Setting isWriter always true has bank conflicts but it is
