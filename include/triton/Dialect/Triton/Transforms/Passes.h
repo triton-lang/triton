@@ -2,6 +2,7 @@
 #define TRITON_DIALECT_TRITON_TRANSFORMS_PASSES_H_
 
 #include "mlir/Pass/Pass.h"
+#include <memory>
 
 namespace mlir {
 namespace triton {
@@ -12,6 +13,7 @@ std::unique_ptr<Pass> createLoopInvariantCodeMotionPass();
 std::unique_ptr<Pass> createReorderBroadcastPass();
 std::unique_ptr<Pass> createRewriteTensorPointerPass();
 std::unique_ptr<Pass> createLoopUnrollPass();
+std::unique_ptr<Pass> createTritonRewriteTensorDescriptorToPointerPass();
 
 } // namespace triton
 
