@@ -769,6 +769,11 @@ class CodeGenerator(ast.NodeVisitor):
         cond = self.visit(node.test)
 
         if _is_triton_tensor(cond):
+            if _is_non_scalar_tensor(cond):
+                raise self._unsupported(node, "Boolean value of Tensor with more than one value is ambiguous")
+            if cond.type.is_block():
+                warnings.warn("If conditional called with multidimensional Tensor instead of scalar; please use \"if (%s).reshape([])\" instead" % ast.unparse(node.test))
+                cond = language.core._unsplat(cond, _builder=self.builder, _generator=self)
             cond = cond.to(language.int1, _builder=self.builder)
             contains_return = ContainsReturnChecker(self.gscope).visit(node)
             if contains_return:
@@ -1285,6 +1290,8 @@ class CodeGenerator(ast.NodeVisitor):
                 # otherwise, our constexpr has no effect on the output of the
                 # expression so we do not append it to nontrivial_values.
             else:
+                if value.type.is_block():
+                    warnings.warn("Logical operators 'and' and 'or' are deprecated for non-scalar tensors; please use '&' or '|' instead")
                 # not a constexpr so we must append it:
                 nontrivial_values.append(value)
 

@@ -7478,3 +7478,29 @@ def test_short_circuiting(device):
     assert g(-76893, torch.int32) == -76893
     assert g(100000, torch.int32) == 42
     assert g(100000, torch.int64) == 100000
+
+
+@pytest.mark.interpreter
+def test_unsplat(device):
+
+    @triton.jit
+    def unsplat_kernel(x, explicit : tl.constexpr):
+
+        # this is a single-element tensor:
+        condition = tl.load(x + tl.arange(0, 1)) > 42
+
+        if explicit:
+            condition = condition.reshape([])
+
+        if condition:
+            tl.store(x, 42)
+
+    def g(y, explicit):
+        x = torch.full((1, ), y, device=device, dtype=torch.int32)
+        unsplat_kernel[(1, )](x, explicit, num_warps=1)
+        return x.item()
+
+    assert g(41, False) == 41
+    assert g(43, False) == 42
+    assert g(41, True) == 41
+    assert g(43, True) == 42

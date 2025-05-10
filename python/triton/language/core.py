@@ -1710,6 +1710,22 @@ def _take_first(a, b):
     return a
 
 
+def _unsplat(x, _builder=None, _generator=None):
+    """
+    Convert a single-element tensor to a scalar.
+    """
+    if len(x.shape) == 0:
+        return x
+    numel = 1
+    for d in x.shape:
+        numel *= d
+    assert numel == 1, "can only unsplat single-element tensors"
+    if len(x.shape) >= 2:
+        x = semantic.reshape(x, [1], builder=_builder)
+    x = typing.cast(tensor, reduce(x, 0, _take_first, _builder=_builder, _generator=_generator))
+    return x
+
+
 @_tensor_member_fn
 @builtin
 def split(a, _builder=None, _generator=None) -> tuple[tensor, tensor]:
@@ -1739,8 +1755,8 @@ def split(a, _builder=None, _generator=None) -> tuple[tensor, tensor]:
 
     if was_rank_1:
         # Currently `reduce` is the best way to convert a tensor of shape [1] to a scalar.
-        out_lhs = typing.cast(tensor, reduce(out_lhs, None, _take_first, _builder=_builder, _generator=_generator))
-        out_rhs = typing.cast(tensor, reduce(out_rhs, None, _take_first, _builder=_builder, _generator=_generator))
+        out_lhs = _unsplat(out_lhs, _builder, _generator)
+        out_rhs = _unsplat(out_rhs, _builder, _generator)
 
     return out_lhs, out_rhs
 
@@ -1769,7 +1785,7 @@ def view(input, *shape, _builder=None):
 
 @_tensor_member_fn
 @builtin
-def reshape(input, *shape, can_reorder=False, _builder=None):
+def reshape(input, *shape, can_reorder=False, _builder=None, _generator=None):
     """
     Returns a tensor with the same number of elements as input but with the
     provided shape.
@@ -1785,6 +1801,8 @@ def reshape(input, *shape, can_reorder=False, _builder=None):
         reshape(x, 32, 32)
     """
     shape = _shape_check_impl(_unwrap_iterable(shape))
+    if len(shape) == 0:
+        return _unsplat(input, _builder=_builder, _generator=_generator)
     return semantic.reshape(input, shape, can_reorder, _builder)
 
 
