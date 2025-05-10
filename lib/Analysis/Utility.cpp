@@ -411,6 +411,12 @@ getWarpLayoutConvertDecomposition(RankedTensorType srcTy,
   P2inv = P2inv.sublayout({kLane, kRegister}, kRegister);
   Cp = Cp.sublayout({kLane, kRegister}, kLane);
 
+  // HACK: On AMD, the compression matrix sub layout is not always surjective:
+  // - If the non-K dim is 32
+  // - Input shape of 16x1 (MxK)
+  if (!P1.isSurjective() || !P2inv.isSurjective())
+    return {};
+
   // To minimize the number of selects emitted on the source side, determine the
   // minimum set of registers that could be selected from each thread.
   // InstCombine *might* be able to crush this, but if the sizePerThread is
