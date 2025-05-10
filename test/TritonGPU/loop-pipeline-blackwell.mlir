@@ -401,3 +401,58 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
      tt.return %99#0 : tensor<128x128xf32, #blocked4>
   }
 }
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 64], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [0, 1]}>
+#load_blocked = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [2, 16], warpsPerCTA = [4, 1], order = [1, 0]}>
+
+#shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16}>
+#shared_T = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = true, elementBitWidth = 16}>
+
+#smem = #ttg.shared_memory
+#tmem_acc = #ttng.tensor_memory_encoding<blockM = 128, blockN = 64, unpacked = true>
+#tmem_lhs = #ttng.tensor_memory_encoding<blockM = 128, blockN = 64, unpacked = false>
+module attributes {"ttg.num-warps" = 4 : i32, ttg.target = "cuda:100"} {
+
+// CHECK-LABEL: @load_into_async_mma
+tt.func public @load_into_async_mma(
+  %lhs_ptrs: tensor<128x64x!tt.ptr<f8E4M3FN>, #load_blocked>,
+  %scale_ptrs: tensor<128x8x!tt.ptr<i8>, #load_blocked>,
+  %tmem: !ttg.memdesc<128x64xf32, #tmem_acc, #ttng.tensor_memory, mutable>,
+  %barrier: !ttg.memdesc<1xi64, #shared, #smem, mutable>,
+  %rhs_shared: !ttg.memdesc<64x64xf8E4M3FN, #shared, #smem>,
+  %n_tiles: i32
+) {
+  %true = arith.constant true
+  %c0_i32 = arith.constant 0 : i32
+  %c64_i32 = arith.constant 64 : i32
+
+  %cst = arith.constant dense<0> : tensor<64x8xi8, #load_blocked>
+  %rhs_scales = ttng.tmem_alloc %cst : (tensor<64x8xi8, #load_blocked>) -> !ttg.memdesc<64x8xi8, #ttng.tensor_memory_scales_encoding<>, #ttng.tensor_memory>
+
+  // CHECK-COUNT-6: ttg.async_copy_global_to_local
+  scf.for %i = %c0_i32 to %n_tiles step %c64_i32 : i32 {
+    %lhs_offs = tt.splat %i : i32 -> tensor<128x64xi32, #load_blocked>
+    %lhs_ptrs_i = tt.addptr %lhs_ptrs, %lhs_offs {tt.divisibility = dense<16> : tensor<128x64xi32>, tt.contiguity = dense<32> : tensor<128x64xi32>, tt.constancy = dense<1> : tensor<128x64xi32>} : tensor<128x64x!tt.ptr<f8E4M3FN>, #load_blocked>, tensor<128x64xi32, #load_blocked>
+    %lhs = tt.load %lhs_ptrs_i : tensor<128x64x!tt.ptr<f8E4M3FN>, #load_blocked>
+    %lhs_shared = ttg.local_alloc %lhs : (tensor<128x64xf8E4M3FN, #load_blocked>) -> !ttg.memdesc<128x64xf8E4M3FN, #shared, #smem>
+
+    %scales_offs = tt.splat %i : i32 -> tensor<128x8xi32, #load_blocked>
+    %scales_ptrs_i = tt.addptr %scale_ptrs, %scales_offs {tt.divisibility = dense<16> : tensor<128x8xi32>, tt.contiguity = dense<32> : tensor<128x8xi32>, tt.constancy = dense<1> : tensor<128x8xi32>} : tensor<128x8x!tt.ptr<i8>, #load_blocked>, tensor<128x8xi32, #load_blocked>
+    %scales = tt.load %scales_ptrs_i : tensor<128x8x!tt.ptr<i8>, #load_blocked>
+    %scales_tmem = ttng.tmem_alloc %scales : (tensor<128x8xi8, #load_blocked>) -> !ttg.memdesc<128x8xi8, #ttng.tensor_memory_scales_encoding<>, #ttng.tensor_memory>
+
+    ttng.tc_gen5_mma_scaled %lhs_shared, %rhs_shared, %tmem, %scales_tmem, %rhs_scales, %true, %true lhs = e4m3 rhs = e4m3, %barrier[%true] :
+      !ttg.memdesc<128x64xf8E4M3FN, #shared, #smem>,
+      !ttg.memdesc<64x64xf8E4M3FN, #shared, #smem>,
+      !ttg.memdesc<128x64xf32, #tmem_acc, #ttng.tensor_memory, mutable>,
+      !ttg.memdesc<128x8xi8, #ttng.tensor_memory_scales_encoding<>, #ttng.tensor_memory>,
+      !ttg.memdesc<64x8xi8, #ttng.tensor_memory_scales_encoding<>, #ttng.tensor_memory>,
+      !ttg.memdesc<1xi64, #shared, #smem, mutable>
+  }
+
+  tt.return
+}
+
+}

@@ -372,7 +372,7 @@ def test_warp_specialize_tma_matmul_persistent(M, N, K, BLOCK_SIZE_M, BLOCK_SIZE
 @triton.jit
 def attention_inner_loop_kernel(  #
         desc_q, desc_k, desc_v,  #
-        desc_acc, l_i_ptr, m_i_ptr,  #
+        desc_o, l_i_ptr, m_i_ptr,  #
         M, N, qk_scale,  #
         BLOCK_M: tl.constexpr,  #
         HEAD_DIM: tl.constexpr,  #
@@ -405,9 +405,70 @@ def attention_inner_loop_kernel(  #
         l_i = l_i * alpha + l_ij
         m_i = m_ij
 
-    desc_acc.store([off_m, 0], acc.to(q.dtype))
+    desc_o.store([off_m, 0], acc.to(q.dtype))
     tl.store(l_i_ptr + off_m + tl.arange(0, BLOCK_M), l_i)
     tl.store(m_i_ptr + off_m + tl.arange(0, BLOCK_M), m_i)
+
+
+@triton.jit
+def attention_inner_loop_kernel_data_part(  #
+        desc_q, desc_k, desc_v,  #
+        desc_o, l_i_ptr, m_i_ptr,  #
+        M, N, qk_scale,  #
+        BLOCK_M: tl.constexpr,  #
+        HEAD_DIM: tl.constexpr,  #
+        warp_specialize: tl.constexpr  #
+):
+    m_i0 = tl.zeros([BLOCK_M], dtype=tl.float32) - float("inf")
+    m_i1 = tl.zeros([BLOCK_M], dtype=tl.float32) - float("inf")
+
+    l_i0 = tl.zeros([BLOCK_M], dtype=tl.float32) + 1.0
+    l_i1 = tl.zeros([BLOCK_M], dtype=tl.float32) + 1.0
+
+    o0 = tl.zeros([BLOCK_M, HEAD_DIM], dtype=tl.float32)
+    o1 = tl.zeros([BLOCK_M, HEAD_DIM], dtype=tl.float32)
+
+    off_m = tl.program_id(0) * BLOCK_M * 2
+    q0 = desc_q.load([off_m + 0 * BLOCK_M, 0])
+    q1 = desc_q.load([off_m + 1 * BLOCK_M, 0])
+
+    for start_n in tl.range(0, N, HEAD_DIM, warp_specialize=warp_specialize, disallow_acc_multi_buffer=True):
+        start_n = tl.multiple_of(start_n, HEAD_DIM)
+
+        k = desc_k.load([start_n, 0]).T
+        v = desc_v.load([start_n, 0])
+
+        qk0 = tl.dot(q0, k)
+        m_ij0 = tl.maximum(m_i0, tl.max(qk0, 1) * qk_scale)
+        qk0 = qk0 * qk_scale - m_ij0[:, None]
+        p0 = tl.math.exp2(qk0)
+        alpha0 = tl.math.exp2(m_i0 - m_ij0)
+        l_ij0 = tl.sum(p0, 1)
+        o0 = o0 * alpha0[:, None]
+        p0 = p0.to(v.dtype)
+        o0 = tl.dot(p0, v, o0)
+        l_i0 = l_i0 * alpha0 + l_ij0
+        m_i0 = m_ij0
+
+        qk1 = tl.dot(q1, k)
+        m_ij1 = tl.maximum(m_i1, tl.max(qk1, 1) * qk_scale)
+        qk1 = qk1 * qk_scale - m_ij1[:, None]
+        p1 = tl.math.exp2(qk1)
+        alpha1 = tl.math.exp2(m_i1 - m_ij1)
+        l_ij1 = tl.sum(p1, 1)
+        o1 = o1 * alpha1[:, None]
+        p1 = p1.to(v.dtype)
+        o1 = tl.dot(p1, v, o1)
+        l_i1 = l_i1 * alpha1 + l_ij1
+        m_i1 = m_ij1
+
+    desc_o.store([off_m + 0 * BLOCK_M, 0], o0.to(q0.dtype))
+    tl.store(l_i_ptr + off_m + tl.arange(0, BLOCK_M) + 0 * BLOCK_M, l_i0)
+    tl.store(m_i_ptr + off_m + tl.arange(0, BLOCK_M) + 0 * BLOCK_M, m_i0)
+
+    desc_o.store([off_m + 1 * BLOCK_M, 0], o1.to(q1.dtype))
+    tl.store(l_i_ptr + off_m + tl.arange(0, BLOCK_M) + 1 * BLOCK_M, l_i1)
+    tl.store(m_i_ptr + off_m + tl.arange(0, BLOCK_M) + 1 * BLOCK_M, m_i1)
 
 
 @pytest.mark.parametrize("M, N", [(8192, 8192), (1024, 1024)])
@@ -447,11 +508,23 @@ def test_warp_specialize_attention_forward(M, N, BLOCK_M, HEAD_DIM, num_stages, 
                                     block_shape=[BLOCK_M, HEAD_DIM])
     desc_acc = TensorDescriptor(acc, shape=[M, HEAD_DIM], strides=[HEAD_DIM, 1], block_shape=[BLOCK_M, HEAD_DIM])
 
+    print("SWP start")
     attention_inner_loop_kernel[(M // BLOCK_M, )](desc_q, desc_k, desc_v, desc_acc_ref, l_i_ref, m_i_ref, M, N, 0.5,
                                                   BLOCK_M, HEAD_DIM, False, num_stages=num_stages, num_warps=num_warps)
-    attention_inner_loop_kernel[(M // BLOCK_M, )](desc_q, desc_k, desc_v, desc_acc, l_i, m_i, M, N, 0.5, BLOCK_M,
-                                                  HEAD_DIM, True, num_stages=num_stages, num_warps=num_warps)
+    print("SWP end")
+    print("AWS start")
+    kernel = attention_inner_loop_kernel_data_part[(M // (BLOCK_M * 2), )](desc_q, desc_k, desc_v, desc_acc, l_i, m_i,
+                                                                           M, N, 0.5, BLOCK_M, HEAD_DIM, True,
+                                                                           num_stages=num_stages, num_warps=num_warps)
+    print("AWS end")
+
+    ttgir = kernel.asm["ttgir"]
+    assert "ttng.tc_gen5_mma" in ttgir
+    assert "ttg.warp_specialize" in ttgir
 
     torch.testing.assert_close(acc.to(torch.float32), acc_ref.to(torch.float32), atol=0, rtol=0)
     torch.testing.assert_close(l_i.to(torch.float32), l_i_ref.to(torch.float32), atol=0, rtol=0)
     torch.testing.assert_close(m_i.to(torch.float32), m_i_ref.to(torch.float32), atol=0, rtol=0)
+
+
+test_warp_specialize_attention_forward(8192, 8192, 128, 64, 2, False, 4, False)
