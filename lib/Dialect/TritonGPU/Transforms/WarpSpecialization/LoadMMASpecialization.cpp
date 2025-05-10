@@ -229,7 +229,8 @@ static void scheduleDependencies(scf::ForOp loop, WarpSchedule &schedule,
 
     Operation *defOp =
         loop.getBody()->findAncestorOpInBlock(*dep.getDefiningOp());
-    if (!defOp || !schedule.trySchedule(partition, defOp))
+    if (!defOp || !hasDefPartition(loop, defOp, schedule) ||
+        !schedule.trySchedule(partition, defOp))
       continue;
     llvm::append_range(deps, getNestedOperands(defOp));
   }
@@ -392,7 +393,7 @@ void propagatePartitions(scf::ForOp loop, WarpSchedule &schedule) {
     // For each partition, place users of its outputs in a cluster if it is not
     // already assigned to a partition.
     auto useCallback = [&](OpResult result, OpOperand &use, unsigned distance) {
-      Operation *user = use.getOwner();
+      Operation *user = loop.getBody()->findAncestorOpInBlock(*use.getOwner());
       if (!schedule.isScheduled(user)) {
         // Add the current partition as a def to the cluster.
         opClusters.getOrCreate(user)->defPartitions.insert(&partition);

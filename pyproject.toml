@@ -3,7 +3,16 @@ requires = ["setuptools>=40.8.0", "cmake>=3.18", "ninja>=1.11.1", "pybind11>=2.1
 build-backend = "setuptools.build_meta"
 
 [tool.mypy]
-mypy_path="$MYPY_CONFIG_FILE_DIR/python"
+mypy_path = "$MYPY_CONFIG_FILE_DIR/python"
+files = [
+    "python/triton/knobs.py",
+    "python/triton/runtime/build.py",
+    "python/triton/_utils.py",
+    "python/test/unit/test_knobs.py",
+    "python/test/unit/runtime/test_compilation_listener.py",
+]
+exclude = ["/build/"]
+follow_imports = "silent"
 
 [tool.yapf]
 based_on_style = "pep8"
