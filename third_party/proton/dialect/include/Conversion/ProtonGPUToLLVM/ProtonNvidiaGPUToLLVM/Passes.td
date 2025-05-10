@@ -8,7 +8,7 @@ def ConvertProtonNvidiaGPUToLLVM : Pass<"convert-proton-nvidia-gpu-to-llvm", "ml
     let description = [{
         Convert ProtonGPU to LLVM using Nvidia-specific lowering patterns.
     }];
-    let constructor = "mlir::triton::proton::gpu::createConvertProtonNvidiaGPUToLLVMPass(80, 80)";
+    let constructor = "mlir::triton::proton::gpu::createConvertProtonNvidiaGPUToLLVMPass(\"\", 80, 80)";
 
     let dependentDialects = ["mlir::arith::ArithDialect",
                              "mlir::math::MathDialect",
@@ -22,6 +22,7 @@ def ConvertProtonNvidiaGPUToLLVM : Pass<"convert-proton-nvidia-gpu-to-llvm", "ml
                              "mlir::triton::proton::gpu::ProtonGPUDialect"];
 
     let options = [
+        Option<"arch", "arch", "std::string", /*default*/"\"\"", "device arch">,
         Option<"computeCapability", "compute-capability",
                "int32_t", /*default*/"80",
                "device compute capability">,

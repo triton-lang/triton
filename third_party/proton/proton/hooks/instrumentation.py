@@ -143,9 +143,9 @@ class InstrumentationHook(Hook):
         device = triton.runtime.driver.active.get_current_device()
         max_shared_mem = triton.runtime.driver.active.utils.get_device_properties(device)["max_shared_mem"]
 
-        def to_llvmir_passes(pm, backend_pass):
+        def to_llvmir_passes(pm, backend_pass, arch=""):
             triton_proton.add_allocate_proton_global_scratch_buffer(pm)
-            backend_pass(pm)
+            backend_pass(pm, arch)
 
         def to_ttgpuir_passes(pm):
             triton_proton.add_convert_proton_to_protongpu(pm, self.mode.metric_type, self.mode.sampling_strategy,
@@ -159,11 +159,12 @@ class InstrumentationHook(Hook):
         if backend == "cuda":
             backend_name = "nvidia"
             ttgpuir_func = lambda pm: to_ttgpuir_passes(pm)
-            llvmir_func = lambda pm: to_llvmir_passes(pm, triton_proton.add_convert_proton_nvidia_gpu_to_llvm)
+            llvmir_func = lambda pm: to_llvmir_passes(pm, triton_proton.add_convert_proton_nvidia_gpu_to_llvm, "")
         elif backend == "hip":
             backend_name = "amd"
+            arch = triton.runtime.driver.active.utils.get_device_properties(device)["arch"].split(":")[0]
             ttgpuir_func = lambda pm: to_ttgpuir_passes(pm)
-            llvmir_func = lambda pm: to_llvmir_passes(pm, triton_proton.add_convert_proton_amd_gpu_to_llvm)
+            llvmir_func = lambda pm: to_llvmir_passes(pm, triton_proton.add_convert_proton_amd_gpu_to_llvm, arch)
         else:
             raise RuntimeError(f"Unsupported backend: {backend}")
 

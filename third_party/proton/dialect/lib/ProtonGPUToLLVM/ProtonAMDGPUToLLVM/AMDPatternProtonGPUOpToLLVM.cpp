@@ -92,15 +92,25 @@ struct CircularStoreOpConversion
     if (AddrSpace == 1) {
       llvm::report_fatal_error("unimplemented");
     } else if (AddrSpace == 3) {
-      // TODO(crobeck): this is lowered as a predicated store which is not very
-      // efficient. probably want this swapped out for bufferops
+      // TODO(crobeck): this is lowered as a predicated store very
+      // inefficient since it is implemented using branching.
+      // We almost certainly want to swapped this out for bufferops
       // we also need to compare "this version" vs. isWriter always = true
       // for this predicated version, there could be unexpected instruction
       // cache miss. Setting isWriter always true has bank conflicts but it is
       // expected and stable.
-      targetInfo.getTritonTargetInfo().storeDShared(rewriter, loc, vecPtr,
-                                                    std::nullopt, valsVec,
-                                                    /*pred=*/isWriter);
+      Block *currentBlock = rewriter.getInsertionBlock();
+      Block *afterStore =
+          rewriter.splitBlock(currentBlock, rewriter.getInsertionPoint());
+      Block *trueBlock = rewriter.createBlock(afterStore);
+      rewriter.setInsertionPointToEnd(currentBlock);
+      rewriter.create<LLVM::CondBrOp>(loc, isWriter, trueBlock, afterStore);
+      rewriter.setInsertionPointToStart(trueBlock);
+      auto storeOp =
+          rewriter.create<LLVM::StoreOp>(loc, valsVec, vecPtr, /*alignment=*/0,
+                                         /*volatileFlag*/ 0, /*nonTmpFlag*/ 0);
+      rewriter.create<LLVM::BrOp>(loc, afterStore);
+      rewriter.setInsertionPointToStart(afterStore);
     } else {
       llvm::report_fatal_error("unsupported address space in circular store");
     }
