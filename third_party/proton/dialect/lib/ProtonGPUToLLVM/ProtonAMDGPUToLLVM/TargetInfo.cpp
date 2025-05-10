@@ -132,4 +132,32 @@ int TargetInfo::getAddressSpace(Attribute addressSpace) const {
   return spaceId;
 }
 
+// Predicate load
+Value TargetInfo::loadShared(ConversionPatternRewriter &rewriter, Location loc,
+                             Value ptr, Type elemTy, Value pred) const {
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
+  // Predicated load
+  Block *currentBlock = rewriter.getInsertionBlock();
+  Block *afterLoad =
+      rewriter.splitBlock(currentBlock, rewriter.getInsertionPoint());
+  afterLoad->addArgument({i32_ty}, {loc});
+  Block *trueBlock = rewriter.createBlock(afterLoad);
+  Block *falseBlock =
+      rewriter.splitBlock(trueBlock, rewriter.getInsertionPoint());
+  rewriter.setInsertionPointToEnd(currentBlock);
+  rewriter.create<LLVM::CondBrOp>(loc, b.true_val(), trueBlock, falseBlock);
+  rewriter.setInsertionPointToStart(trueBlock);
+  auto loadOp = rewriter.create<LLVM::LoadOp>(loc, i32_ty, ptr, /*alignment=*/0,
+                                              /*volatileFlag*/ 0, /*nonTmpFlag*/
+                                              0);
+  rewriter.create<LLVM::BrOp>(loc, loadOp->getResult(0), afterLoad);
+  rewriter.setInsertionPointToStart(falseBlock);
+  Value falseVal = rewriter.create<LLVM::ConstantOp>(
+      loc, i32_ty, rewriter.getZeroAttr(i32_ty));
+  rewriter.create<LLVM::BrOp>(loc, falseVal, afterLoad);
+  rewriter.setInsertionPointToStart(afterLoad);
+  Value load = afterLoad->getArgument(0);
+  return load;
+}
+
 } // namespace mlir::triton::proton::gpu::AMD
