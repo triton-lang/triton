@@ -99,6 +99,7 @@ class IRSource:
         # We don't have a easy-to-use PTX parser that we can use, so keep that regex for now.
         # TODO - replace with a proper parser
         if self.ext == "ptx":
+            self.module = parse(self.path, "ptx", context)
             match = re.search(prototype_pattern[self.ext], self.src, re.MULTILINE)
             self.name = match.group(1)
             signature = match.group(2)
@@ -116,7 +117,8 @@ class IRSource:
         return hashlib.sha256(self.src.encode("utf-8")).hexdigest()
 
     def make_ir(self, options, codegen_fns, module_map, context):
-        self.module.context = context
+        if self.ext != "ptx":
+            self.module.context = context
         return self.module
 
     def parse_options(self):
@@ -124,6 +126,23 @@ class IRSource:
             num_warps = self.module.get_int_attr("ttg.num-warps")
             assert num_warps is not None, "Unable to parse ttg.num-warps attribute"
             return {'num_warps': num_warps}
+        elif self.ext == "ptx":
+            # User can set smem size in PTX comment (in bytes)
+            smem_size = 0
+            found_smem_size = re.findall(r"user_defined_smem_size (\d+)", self.src)
+            if not found_smem_size:
+                smem_size = max_shared_mem(driver.active.get_current_device())
+            elif len(found_smem_size) == 1:
+                smem_size = int(found_smem_size[0])
+            else:
+                raise RuntimeError("Multiple user_defined_smem_size found in PTX file")
+
+            return {
+                "shared": smem_size,
+                "name": self.name,
+                "global_scratch_align": 1,
+                "global_scratch_size": 0,
+            }
         return dict()
 
 
@@ -335,6 +354,8 @@ def compile(src, target=None, options=None):
     module_map = backend.get_module_map()
     try:
         module = src.make_ir(options, codegen_fns, module_map, context)
+        if src.ext == "ptx":
+            metadata.update(src.parse_options())
     except Exception as e:
         filter_traceback(e)
         raise
