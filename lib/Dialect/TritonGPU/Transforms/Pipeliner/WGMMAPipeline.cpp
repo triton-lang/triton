@@ -276,10 +276,11 @@ static std::optional<int> dotCanBeProperlyAsync(ttng::WarpGroupDotOp dotOp,
     }
 
     // If it's a shmem operand, it must either be defined outside the loop, or
-    // come from an MemDescSubview op.  Only ConvertLayout and Trans ops are
+    // come from an MemDescSubview op.  Only ConvertLayout and view ops are
     // allowed in between.
     Value transitiveOperand = operand;
-    while (isa_and_nonnull<ttg::ConvertLayoutOp, ttg::MemDescTransOp>(
+    while (isa_and_nonnull<ttg::ConvertLayoutOp, ttg::MemDescTransOp,
+                           ttg::MemDescReshapeOp>(
                transitiveOperand.getDefiningOp()) ||
            isa<BlockArgument>(transitiveOperand)) {
       auto blockArg = dyn_cast<BlockArgument>(transitiveOperand);

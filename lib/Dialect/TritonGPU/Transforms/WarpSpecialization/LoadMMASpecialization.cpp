@@ -130,7 +130,7 @@ static PartitionScheme getPartitionScheme(scf::ForOp loop) {
     }
     while (!operandViews.empty()) {
       Operation *op = operandViews.pop_back_val();
-      if (!op->hasOneUse() || !isa<MemDescSubviewOp, MemDescTransOp>(op))
+      if (!op->hasOneUse() || !op->hasTrait<OpTrait::MemDescViewTrait>())
         continue;
       mma.operandViews.push_back(op);
       if (Operation *defOp = op->getOperand(0).getDefiningOp())
@@ -669,7 +669,7 @@ findSharedMemorySinkOps(Value value, SmallVectorImpl<Operation *> &sinkOps) {
   for (Operation *user : value.getUsers()) {
     if (isa<ttng::MMAv5OpInterface, LocalLoadOp>(user)) {
       sinkOps.push_back(user);
-    } else if (isa<MemDescTransOp, MemDescSubviewOp>(user)) {
+    } else if (user->hasTrait<OpTrait::MemDescViewTrait>()) {
       if (failed(findSharedMemorySinkOps(user->getResult(0), sinkOps)))
         return failure();
     } else {
