@@ -8,7 +8,7 @@ import numpy as np
 
 import triton
 from triton.backends.compiler import GPUTarget
-from triton.backends.nvidia.driver import include_dir, library_dirs
+from triton.backends.nvidia.driver import include_dirs, library_dirs
 
 kernel_utils_src = """
 import triton
@@ -100,7 +100,7 @@ static void read_csv_to_buffer(char *filename, int16_t *buffer, int size) {
 def gen_kernel_library(dir, libname):
     c_files = glob.glob(os.path.join(dir, "*.c"))
     subprocess.run(
-        ["gcc"] + c_files + ["-I", include_dir[0], "-c", "-fPIC"],
+        ["gcc"] + c_files + ["-I", include_dirs[0], "-c", "-fPIC"],
         check=True,
         cwd=dir,
     )
@@ -175,7 +175,7 @@ int main(int argc, char **argv) {{
         file.write(src)
 
     command = ["gcc", "test.c"]
-    for inc_dir in include_dir:
+    for inc_dir in include_dirs:
         command.extend(["-I", inc_dir])
     for lib_dir in library_dirs():
         command.extend(["-L", lib_dir])
