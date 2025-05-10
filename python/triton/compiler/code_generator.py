@@ -324,7 +324,10 @@ class CodeGenerator(ast.NodeVisitor):
         # special handling.
         self.visiting_arg_default_value = False
 
-    builtin_namespace: Dict[str, Any] = {_.__name__: _ for _ in (len, list, range, float, int, isinstance, getattr)}
+    builtin_namespace: Dict[str, Any] = {
+        _.__name__: _
+        for _ in (len, list, range, float, int, isinstance, getattr, hasattr)
+    }
     builtin_namespace.update((
         ('print', language.core.device_print),
         ('min', language.minimum),
@@ -766,6 +769,13 @@ class CodeGenerator(ast.NodeVisitor):
         cond = self.visit(node.test)
 
         if _is_triton_tensor(cond):
+            if _is_non_scalar_tensor(cond):
+                raise self._unsupported(node, "Boolean value of Tensor with more than one value is ambiguous")
+            if cond.type.is_block():
+                warnings.warn(
+                    "If conditional called with multidimensional Tensor instead of scalar; please use \"if (%s).reshape([])\" instead"
+                    % ast.unparse(node.test))
+                cond = language.core._unsplat(cond, _builder=self.builder, _generator=self)
             cond = cond.to(language.int1, _builder=self.builder)
             contains_return = ContainsReturnChecker(self.gscope).visit(node)
             if contains_return:
@@ -876,6 +886,8 @@ class CodeGenerator(ast.NodeVisitor):
         try:
             return getattr(operand, fn)()
         except AttributeError:
+            if fn == "__not__":
+                return constexpr(not operand)
             raise self._unsupported(
                 node, f"AST unary operator '{fn}' is not (currently) implemented on type {type(operand).__name__}")
 
@@ -1264,16 +1276,49 @@ class CodeGenerator(ast.NodeVisitor):
         return constexpr(node.value)
 
     def visit_BoolOp(self, node: ast.BoolOp):
-        if len(node.values) != 2:
-            raise self._unsupported(
-                node, "chained boolean operators (A or B or C) are not supported; use parentheses to split the chain.")
-        lhs = self.visit(node.values[0])
-        rhs = self.visit(node.values[1])
         method_name = self._method_name_for_bool_op.get(type(node.op))
         if method_name is None:
             raise self._unsupported(
                 node, "AST boolean operator '{}' is not (currently) implemented.".format(node.op.__name__))
-        return self._apply_binary_method(method_name, lhs, rhs)
+
+        nontrivial_values = []
+
+        for subnode in node.values:
+            # we visit the values in order, executing their side-effects
+            # and possibly early-exiting:
+            value = self.visit(subnode)
+            if not _is_triton_tensor(value):
+                # this is a constexpr, so we might be able to short-circuit:
+                bv = bool(value)
+                if (bv is False) and (method_name == "logical_and"):
+                    # value is falsey so return that:
+                    return value
+                if (bv is True) and (method_name == "logical_or"):
+                    # value is truthy so return that:
+                    return value
+                # otherwise, our constexpr has no effect on the output of the
+                # expression so we do not append it to nontrivial_values.
+            else:
+                if value.type.is_block():
+                    warnings.warn(
+                        "Logical operators 'and' and 'or' are deprecated for non-scalar tensors; please use '&' or '|' instead"
+                    )
+                # not a constexpr so we must append it:
+                nontrivial_values.append(value)
+
+        if len(nontrivial_values) == 0:
+            # the semantics of a disjunction of falsey values or conjunction
+            # of truthy values is to return the final value:
+            nontrivial_values.append(value)
+
+        while len(nontrivial_values) >= 2:
+            rhs = nontrivial_values.pop()
+            lhs = nontrivial_values.pop()
+            res = self._apply_binary_method(method_name, lhs, rhs)
+            nontrivial_values.append(res)
+
+        assert len(nontrivial_values) == 1
+        return nontrivial_values[0]
 
     _method_name_for_bool_op: Dict[Type[ast.boolop], str] = {ast.And: 'logical_and', ast.Or: 'logical_or'}
 
