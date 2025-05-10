@@ -299,13 +299,15 @@ def compile(src, target=None, options=None):
         # cache hit!
         res = CompiledKernel(src, metadata_group, hash)
         if compilation_listener:
-            compilation_listener(
-                src=src,
-                metadata=res.metadata._asdict(),
-                metadata_group=metadata_group,
-                times=timer.end(),
-                cache_hit=True,
-            )
+            listeners = compilation_listener if isinstance(compilation_listener, list) else [compilation_listener]
+            for listener in listeners:
+                listener(
+                    src=src,
+                    metadata=res.metadata._asdict(),
+                    metadata_group=metadata_group,
+                    times=timer.end(),
+                    cache_hit=True,
+                )
         return res
 
     # initialize metadata
@@ -382,8 +384,9 @@ def compile(src, target=None, options=None):
 
     # notify any listener
     if compilation_listener:
-        compilation_listener(src=src, metadata=metadata, metadata_group=metadata_group, times=timer.end(),
-                             cache_hit=False)
+        listeners = compilation_listener if isinstance(compilation_listener, list) else [compilation_listener]
+        for listener in listeners:
+            listener(src=src, metadata=metadata, metadata_group=metadata_group, times=timer.end(), cache_hit=False)
     # return handle to compiled kernel
     return CompiledKernel(src, metadata_group, hash)
 

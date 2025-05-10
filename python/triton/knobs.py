@@ -8,7 +8,7 @@ import sysconfig
 
 from dataclasses import dataclass
 from contextlib import contextmanager
-from typing import cast, Any, Callable, Generator, Generic, Optional, Protocol, Type, TypeVar, TypedDict, TYPE_CHECKING, Union
+from typing import cast, Any, Callable, Generator, Generic, List, Optional, Protocol, Type, TypeVar, TypedDict, TYPE_CHECKING, Union
 
 if TYPE_CHECKING:
     from .runtime.cache import CacheManager, RemoteCacheBackend
@@ -358,7 +358,7 @@ class compilation_knobs(base_knobs):
     disable_line_info: env_bool = env_bool("TRITON_DISABLE_LINE_INFO")
     front_end_debugging: env_bool = env_bool("TRITON_FRONT_END_DEBUGGING")
     allow_non_constexpr_globals: env_bool = env_bool("TRITON_ALLOW_NON_CONSTEXPR_GLOBALS")
-    listener: Union[CompilationListener, None] = None
+    listener: Union[CompilationListener, List[CompilationListener], None] = None
 
 
 class autotuning_knobs(base_knobs):
