@@ -243,6 +243,13 @@ tt.func @histogram(%0: tensor<512xi32>) {
   tt.return
 }
 
+// CHECK-LABEL: masked_histogram
+tt.func @masked_histogram(%0: tensor<512xi32>, %1: tensor<512xi1>) {
+  // CHECK: tt.histogram %{{.+}}, %{{.+}} : tensor<512xi32> -> tensor<16xi32>
+  %2 = tt.histogram %0, %1 : tensor<512xi32> -> tensor<16xi32>
+  tt.return
+}
+
 // CHECK-LABEL: descriptor_load
 tt.func @descriptor_load(%0: !tt.tensordesc<tensor<128xf32>>) {
   // CHECK: tt.descriptor_load %{{.+}}[%{{.+}}] : !tt.tensordesc<tensor<128xf32>> -> tensor<128xf32>
