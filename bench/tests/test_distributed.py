@@ -173,6 +173,8 @@ def quantize(w, dtype, dev, **opt):
 
 
 def distributed_run(rank, world_size, batch, dim1, dim2, n_expts_tot, n_expts_act, x_dtype, w_dtype, TP, EP):
+    # We compare the distributed and single-GPU versions of the model to verify correctness.
+
     # init
     dist.init_process_group(backend="nccl", rank=rank, world_size=world_size)
     dev = f"cuda:{rank}"
@@ -188,36 +190,28 @@ def distributed_run(rank, world_size, batch, dim1, dim2, n_expts_tot, n_expts_ac
     dist.broadcast(bg, src=0)
 
     b2 = torch.randn((n_expts_tot // EP, dim1), device=dev)
-    dist.broadcast(b2, src=0)
+    b2_list = list(b2.chunk(EP, dim=0))
+    for i in range(EP):
+        group = dist.new_group(list(range(i * TP, (i + 1) * TP)))
+        dist.broadcast(b2_list[i], src=0, group=group)
 
     w1 = torch.randn((n_expts_tot // EP, dim1, dim2 // TP), device=dev)
     w2 = torch.randn((n_expts_tot // EP, dim2 // TP // 2, dim1), device=dev)
     b1 = torch.randn((n_expts_tot // EP, dim2 // TP), device=dev)
 
-    # gather to full replicas
-    w1_list = []
-    if rank == 0:
-        w1_list = [torch.zeros_like(w1) for _ in range(world_size)]
-    dist.gather(w1, w1_list, dst=0)
-    if rank == 0:
-        rows = [torch.cat(w1_list[e * TP:(e + 1) * TP], dim=2) for e in range(EP)]
-        w1_full = torch.cat(rows, dim=0)
+    def gather_full(param, TP, EP, concat_dim_inside, concat_dim_outside):
+        gathered = []
+        if rank == 0:
+            gathered = [torch.zeros_like(param) for _ in range(world_size)]
+        dist.gather(param, gathered, dst=0)
+        if rank == 0:
+            rows = [torch.cat(gathered[e * TP:(e + 1) * TP], dim=concat_dim_inside) for e in range(EP)]
+            return torch.cat(rows, dim=concat_dim_outside)
+        return None
 
-    w2_list = []
-    if rank == 0:
-        w2_list = [torch.zeros_like(w2) for _ in range(world_size)]
-    dist.gather(w2, w2_list, dst=0)
-    if rank == 0:
-        rows = [torch.cat(w2_list[e * TP:(e + 1) * TP], dim=1) for e in range(EP)]
-        w2_full = torch.cat(rows, dim=0)
-
-    b1_list = []
-    if rank == 0:
-        b1_list = [torch.zeros_like(b1) for _ in range(world_size)]
-    dist.gather(b1, b1_list, dst=0)
-    if rank == 0:
-        rows = [torch.cat(b1_list[e * TP:(e + 1) * TP], dim=1) for e in range(EP)]
-        b1_full = torch.cat(rows, dim=0)
+    w1_full = gather_full(w1, TP, EP, concat_dim_inside=2, concat_dim_outside=0)
+    w2_full = gather_full(w2, TP, EP, concat_dim_inside=1, concat_dim_outside=0)
+    b1_full = gather_full(b1, TP, EP, concat_dim_inside=1, concat_dim_outside=0)
 
 
     # quantization
@@ -258,11 +252,11 @@ def distributed_run(rank, world_size, batch, dim1, dim2, n_expts_tot, n_expts_ac
 
     # distributed pass
     def distributed(x):
-        x = triton_dist.all_gather(x, dim=0)
         xg = x.to(wg.dtype if n_expts_tot > 1 else x.dtype)
+        x = triton_dist.all_gather(x, dim=0)
         if n_expts_tot > 1:
             logits = matmul_ogs(xg, wg, bg, precision_config=pcg)
-            rdata, gi, si, tm = *triton_bench.routing.routing(logits, n_expts_act), None
+            rdata, gi, si, tm = triton_dist.routing(logits, n_expts_act)
         else:
             rdata = gi = si = tm = None
         x = matmul_ogs(x, w1, b1, rdata, gather_indx=gi, precision_config=pc1)
@@ -272,7 +266,6 @@ def distributed_run(rank, world_size, batch, dim1, dim2, n_expts_tot, n_expts_ac
         # gather the result from all GPUs, just for verification
         return triton_dist.all_gather(x, dim=0)
 
-    # verify correctness
     distributed_result = distributed(xd)
     if rank == 0:
         single_result = single(x0)

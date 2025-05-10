@@ -80,6 +80,7 @@ def routing(logits, n_expts_act, expt_indx=None, EP=1):
         # We need to use the same topk as triton_bench because torch's topk
         # does not have the same tie-breaking behavior as triton_bench.
         expt_scal, expt_indx, _ = topk(logits, n_expts_act)
+        expt_indx = expt_indx.int()
         expt_scal = torch.softmax(expt_scal, dim=-1)
         # Sort each token's selections by expert
         expt_indx, sort_indices = torch.sort(expt_indx, dim=1, stable=True)
