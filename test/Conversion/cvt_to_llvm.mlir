@@ -48,7 +48,7 @@ tt.func private @convert_layout_blocked_blocked_vec(%arg0: tensor<16x16xi32, #bl
 
   // CHECK-DAG: [[X_MOD_2:%.*]] = and i32 [[TID]], 1
   // CHECK-DAG: [[X_2_4_LOWER:%.*]] = shl {{.*}} i32 [[IS_UPPER_HALF]], 1
-  // CHECK-DAG: [[X_2_4_UPPER0:%.*]] = shl i32 [[TID]], 1
+  // CHECK-DAG: [[X_2_4_UPPER0:%.*]] = shl {{.*}} i32 [[TID]], 1
   // CHECK-DAG: [[X_2_4_UPPER1:%.*]] = and i32 [[X_2_4_UPPER0]], 24
   // CHECK-DAG: [[X_GE_16:%.*]] = and i32 [[TID]], 16
   // CHECK-DAG: [[X_GE_16_2:%.*]] = lshr exact i32 [[X_GE_16]], 3
