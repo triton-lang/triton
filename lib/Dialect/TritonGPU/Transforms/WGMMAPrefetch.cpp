@@ -197,7 +197,10 @@ LogicalResult WGMMAPrefetcher::initialize() {
   }
 
   // Early exit conditions
-  if (dotsInFor.empty() || dotsInFor.size() > 1) {
+  if (dotsInFor.size() != 1) {
+    return failure();
+  }
+  if (dotsInFor.front().getIsAsync()) {
     return failure();
   }
 

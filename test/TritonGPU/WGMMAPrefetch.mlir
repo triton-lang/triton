@@ -71,7 +71,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
 
         %a_op_ = ttg.local_load %a_smem_tile token  %wait_token : !ttg.memdesc<128x64xi8, #A_SMEM, #smem, mutable> -> tensor<128x64xi8, #A_OP>
         %a_op = arith.sitofp %a_op_ :  tensor<128x64xi8, #A_OP> to tensor<128x64xbf16, #A_OP>
-        %c_ = ttng.warp_group_dot %a_op, %b_smem_tile, %prev_c  {inputPrecision = 0 : i32, isAsync = true} : tensor<128x64xbf16, #A_OP> * !ttg.memdesc<64x256xbf16, #B_SMEM, #smem, mutable> -> tensor<128x256xf32, #C>
+        %c_ = ttng.warp_group_dot %a_op, %b_smem_tile, %prev_c  {inputPrecision = 0 : i32} : tensor<128x64xbf16, #A_OP> * !ttg.memdesc<64x256xbf16, #B_SMEM, #smem, mutable> -> tensor<128x256xf32, #C>
 
         %c =  ttng.warp_group_dot_wait %c_ {pendings = 0 : i32}:  tensor<128x256xf32, #C>
 
@@ -144,7 +144,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
         %b_smem_tile = ttg.memdesc_subview %b[%c0_i32, %c0_i32] : !ttg.memdesc<16x256xbf16, #B_SMEM, #smem> -> !ttg.memdesc<16x256xbf16, #B_SMEM, #smem>
         %a_op_ = ttg.local_load %a_smem_tile : !ttg.memdesc<128x16xi8, #A_SMEM, #smem> -> tensor<128x16xi8, #A_OP>
         %a_op = arith.sitofp %a_op_ :  tensor<128x16xi8, #A_OP> to tensor<128x16xbf16, #A_OP>
-        %c_ = ttng.warp_group_dot %a_op, %b_smem_tile, %prev_c  {inputPrecision = 0 : i32, isAsync = true} : tensor<128x16xbf16, #A_OP> * !ttg.memdesc<16x256xbf16, #B_SMEM, #smem> -> tensor<128x256xf32, #C>
+        %c_ = ttng.warp_group_dot %a_op, %b_smem_tile, %prev_c  {inputPrecision = 0 : i32} : tensor<128x16xbf16, #A_OP> * !ttg.memdesc<16x256xbf16, #B_SMEM, #smem> -> tensor<128x256xf32, #C>
 
         %c =  ttng.warp_group_dot_wait %c_ {pendings = 0 : i32}:  tensor<128x256xf32, #C>
 
@@ -213,7 +213,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
         %b_smem_tile = ttg.memdesc_subview %b[%c0_i32, %c0_i32, %c0_i32] : !ttg.memdesc<8x16x256xbf16, #B_SMEM, #smem> -> !ttg.memdesc<8x16x256xbf16, #B_SMEM, #smem>
         %a_op_ = ttg.local_load %a_smem_tile : !ttg.memdesc<8x128x16xi8, #A_SMEM, #smem> -> tensor<8x128x16xi8, #A_OP>
         %a_op = arith.sitofp %a_op_ :  tensor<8x128x16xi8, #A_OP> to tensor<8x128x16xbf16, #A_OP>
-        %c_ = ttng.warp_group_dot %a_op, %b_smem_tile, %prev_c  {inputPrecision = 0 : i32, isAsync = true} : tensor<8x128x16xbf16, #A_OP> * !ttg.memdesc<8x16x256xbf16, #B_SMEM, #smem> -> tensor<8x128x256xf32, #C>
+        %c_ = ttng.warp_group_dot %a_op, %b_smem_tile, %prev_c  {inputPrecision = 0 : i32} : tensor<8x128x16xbf16, #A_OP> * !ttg.memdesc<8x16x256xbf16, #B_SMEM, #smem> -> tensor<8x128x256xf32, #C>
 
         %c =  ttng.warp_group_dot_wait %c_ {pendings = 0 : i32}:  tensor<8x128x256xf32, #C>
 
@@ -297,7 +297,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
         %b_smem_tile = ttg.memdesc_subview %b[%c0_i32, %c0_i32, %c0_i32] : !ttg.memdesc<8x64x256xbf16, #B_SMEM, #smem> -> !ttg.memdesc<8x64x256xbf16, #B_SMEM, #smem>
         %a_op_ = ttg.local_load %a_smem_tile : !ttg.memdesc<8x128x64xi8, #A_SMEM, #smem> -> tensor<8x128x64xi8, #A_OP>
         %a_op = arith.sitofp %a_op_ :  tensor<8x128x64xi8, #A_OP> to tensor<8x128x64xbf16, #A_OP>
-        %c_ = ttng.warp_group_dot %a_op, %b_smem_tile, %prev_c  {inputPrecision = 0 : i32, isAsync = true} : tensor<8x128x64xbf16, #A_OP> * !ttg.memdesc<8x64x256xbf16, #B_SMEM, #smem> -> tensor<8x128x256xf32, #C>
+        %c_ = ttng.warp_group_dot %a_op, %b_smem_tile, %prev_c  {inputPrecision = 0 : i32} : tensor<8x128x64xbf16, #A_OP> * !ttg.memdesc<8x64x256xbf16, #B_SMEM, #smem> -> tensor<8x128x256xf32, #C>
 
         %c =  ttng.warp_group_dot_wait %c_ {pendings = 0 : i32}:  tensor<8x128x256xf32, #C>
 
@@ -345,13 +345,13 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
 // CHECK:       %[[A_SUBTILE_4_SMEM:.*]] = ttg.memdesc_subview %[[A_TILE_SMEM]][%[[C0]], %[[C96]]]
 // CHECK:       %[[A_SUBITLE_4_REG:.*]] = ttg.local_load %[[A_SUBTILE_4_SMEM]]
 // CHECK:       %[[A_SUBITLE_1_REG_CVT:.*]] = arith.sitofp %[[A_SUBITLE_1_REG]]
-// CHECK:       %[[D_1:.*]] = ttng.warp_group_dot %[[A_SUBITLE_1_REG_CVT]], %[[B_SUBTILE_1_SMEM:.*]], %[[D_arg]] {{{.*}}, {{.*}}, maxNumImpreciseAcc = 1073741824 : i32}
+// CHECK:       %[[D_1:.*]] = ttng.warp_group_dot %[[A_SUBITLE_1_REG_CVT]], %[[B_SUBTILE_1_SMEM:.*]], %[[D_arg]] {{{.*}}, maxNumImpreciseAcc = 1073741824 : i32}
 // CHECK:       %[[A_SUBITLE_2_REG_CVT:.*]] = arith.sitofp %[[A_SUBITLE_2_REG]]
-// CHECK:       %[[D_2:.*]] = ttng.warp_group_dot %[[A_SUBITLE_2_REG_CVT]], %[[B_SUBTILE_2_SMEM:.*]], %[[D_1]], %[[TRUE]] {{{.*}}, {{.*}}, maxNumImpreciseAcc = 1073741824 : i32}
+// CHECK:       %[[D_2:.*]] = ttng.warp_group_dot %[[A_SUBITLE_2_REG_CVT]], %[[B_SUBTILE_2_SMEM:.*]], %[[D_1]], %[[TRUE]] {{{.*}}, maxNumImpreciseAcc = 1073741824 : i32}
 // CHECK:       %[[A_SUBITLE_3_REG_CVT:.*]] = arith.sitofp %[[A_SUBITLE_3_REG]]
-// CHECK:       %[[D_3:.*]] = ttng.warp_group_dot %[[A_SUBITLE_3_REG_CVT]], %[[B_SUBTILE_3_SMEM:.*]], %[[D_2]], %[[TRUE]] {{{.*}}, {{.*}}, maxNumImpreciseAcc = 1073741824 : i32}
+// CHECK:       %[[D_3:.*]] = ttng.warp_group_dot %[[A_SUBITLE_3_REG_CVT]], %[[B_SUBTILE_3_SMEM:.*]], %[[D_2]], %[[TRUE]] {{{.*}}, maxNumImpreciseAcc = 1073741824 : i32}
 // CHECK:       %[[A_SUBITLE_4_REG_CVT:.*]] = arith.sitofp %[[A_SUBITLE_4_REG]]
-// CHECK:       %[[D_4:.*]] = ttng.warp_group_dot %[[A_SUBITLE_4_REG_CVT]], %[[B_SUBTILE_4_SMEM:.*]], %[[D_3]], %[[TRUE]] {{{.*}}, {{.*}}, maxNumImpreciseAcc = 1073741824 : i32}
+// CHECK:       %[[D_4:.*]] = ttng.warp_group_dot %[[A_SUBITLE_4_REG_CVT]], %[[B_SUBTILE_4_SMEM:.*]], %[[D_3]], %[[TRUE]] {{{.*}}, maxNumImpreciseAcc = 1073741824 : i32}
 // CHECK-DAG:   %[[D:.*]] = ttng.warp_group_dot_wait %[[D_4]]
 // CHECK-NEXT:  %[[D_ADD_CONSTANT:.*]] = arith.addf %[[D]]
 // CHECK:       scf.yield {{.*}}, {{.*}}, {{.*}}, {{.*}}, %[[D_ADD_CONSTANT]]
@@ -383,7 +383,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
         %b_smem_tile = ttg.memdesc_subview %b[%c0_i32, %c0_i32] : !ttg.memdesc<128x256xf8E5M2, #B_SMEM, #smem> -> !ttg.memdesc<128x256xf8E5M2, #B_SMEM, #smem>
         %a_op_ = ttg.local_load %a_smem_tile : !ttg.memdesc<128x128xi8, #A_SMEM, #smem> -> tensor<128x128xi8, #A_OP>
         %a_op = arith.sitofp %a_op_ :  tensor<128x128xi8, #A_OP> to tensor<128x128xf8E5M2, #A_OP>
-        %c_ = ttng.warp_group_dot %a_op, %b_smem_tile, %prev_c  {inputPrecision = 0 : i32, maxNumImpreciseAcc = 129 : i32, isAsync = true} : tensor<128x128xf8E5M2, #A_OP> * !ttg.memdesc<128x256xf8E5M2, #B_SMEM, #smem> -> tensor<128x256xf32, #C>
+        %c_ = ttng.warp_group_dot %a_op, %b_smem_tile, %prev_c  {inputPrecision = 0 : i32, maxNumImpreciseAcc = 129 : i32} : tensor<128x128xf8E5M2, #A_OP> * !ttg.memdesc<128x256xf8E5M2, #B_SMEM, #smem> -> tensor<128x256xf32, #C>
 
         %c =  ttng.warp_group_dot_wait %c_ {pendings = 0 : i32}:  tensor<128x256xf32, #C>
 
@@ -432,13 +432,13 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
 // CHECK:       %[[A_SUBTILE_4_SMEM:.*]] = ttg.memdesc_subview %[[A_TILE_SMEM]][%[[C0]], %[[C96]]]
 // CHECK:       %[[A_SUBITLE_4_REG:.*]] = ttg.local_load %[[A_SUBTILE_4_SMEM]]
 // CHECK:       %[[A_SUBITLE_1_REG_CVT:.*]] = arith.sitofp %[[A_SUBITLE_1_REG]]
-// CHECK:       %[[D_1:.*]] = ttng.warp_group_dot %[[A_SUBITLE_1_REG_CVT]], %[[B_SUBTILE_1_SMEM:.*]], %[[D_arg]] {{{.*}}, {{.*}}, maxNumImpreciseAcc = 1073741824 : i32}
+// CHECK:       %[[D_1:.*]] = ttng.warp_group_dot %[[A_SUBITLE_1_REG_CVT]], %[[B_SUBTILE_1_SMEM:.*]], %[[D_arg]] {{{.*}}, maxNumImpreciseAcc = 1073741824 : i32}
 // CHECK:       %[[A_SUBITLE_2_REG_CVT:.*]] = arith.sitofp %[[A_SUBITLE_2_REG]]
-// CHECK:       %[[D_2:.*]] = ttng.warp_group_dot %[[A_SUBITLE_2_REG_CVT]], %[[B_SUBTILE_2_SMEM:.*]], %[[D_1]], %[[TRUE]] {{{.*}}, {{.*}}, maxNumImpreciseAcc = 1073741824 : i32}
+// CHECK:       %[[D_2:.*]] = ttng.warp_group_dot %[[A_SUBITLE_2_REG_CVT]], %[[B_SUBTILE_2_SMEM:.*]], %[[D_1]], %[[TRUE]] {{{.*}}, maxNumImpreciseAcc = 1073741824 : i32}
 // CHECK:       %[[A_SUBITLE_3_REG_CVT:.*]] = arith.sitofp %[[A_SUBITLE_3_REG]]
-// CHECK:       %[[D_3:.*]] = ttng.warp_group_dot %[[A_SUBITLE_3_REG_CVT]], %[[B_SUBTILE_3_SMEM:.*]], %[[D_2]], %[[TRUE]] {{{.*}}, {{.*}}, maxNumImpreciseAcc = 1073741824 : i32}
+// CHECK:       %[[D_3:.*]] = ttng.warp_group_dot %[[A_SUBITLE_3_REG_CVT]], %[[B_SUBTILE_3_SMEM:.*]], %[[D_2]], %[[TRUE]] {{{.*}}, maxNumImpreciseAcc = 1073741824 : i32}
 // CHECK:       %[[A_SUBITLE_4_REG_CVT:.*]] = arith.sitofp %[[A_SUBITLE_4_REG]]
-// CHECK:       %[[D_4:.*]] = ttng.warp_group_dot %[[A_SUBITLE_4_REG_CVT]], %[[B_SUBTILE_4_SMEM:.*]], %[[D_3]], %[[TRUE]] {{{.*}}, {{.*}}, maxNumImpreciseAcc = 32 : i32}
+// CHECK:       %[[D_4:.*]] = ttng.warp_group_dot %[[A_SUBITLE_4_REG_CVT]], %[[B_SUBTILE_4_SMEM:.*]], %[[D_3]], %[[TRUE]] {{{.*}}, maxNumImpreciseAcc = 32 : i32}
 // CHECK-DAG:   %[[D:.*]] = ttng.warp_group_dot_wait %[[D_4]]
 // CHECK-NEXT:  %[[D_ADD_CONSTANT:.*]] = arith.addf %[[D]]
 // CHECK:       scf.yield {{.*}}, {{.*}}, {{.*}}, {{.*}}, %[[D_ADD_CONSTANT]]
@@ -470,7 +470,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
         %b_smem_tile = ttg.memdesc_subview %b[%c0_i32, %c0_i32] : !ttg.memdesc<128x256xf8E5M2, #B_SMEM, #smem> -> !ttg.memdesc<128x256xf8E5M2, #B_SMEM, #smem>
         %a_op_ = ttg.local_load %a_smem_tile : !ttg.memdesc<128x128xi8, #A_SMEM, #smem> -> tensor<128x128xi8, #A_OP>
         %a_op = arith.sitofp %a_op_ :  tensor<128x128xi8, #A_OP> to tensor<128x128xf8E5M2, #A_OP>
-        %c_ = ttng.warp_group_dot %a_op, %b_smem_tile, %prev_c  {inputPrecision = 0 : i32, maxNumImpreciseAcc = 128 : i32, isAsync = true} : tensor<128x128xf8E5M2, #A_OP> * !ttg.memdesc<128x256xf8E5M2, #B_SMEM, #smem> -> tensor<128x256xf32, #C>
+        %c_ = ttng.warp_group_dot %a_op, %b_smem_tile, %prev_c  {inputPrecision = 0 : i32, maxNumImpreciseAcc = 128 : i32} : tensor<128x128xf8E5M2, #A_OP> * !ttg.memdesc<128x256xf8E5M2, #B_SMEM, #smem> -> tensor<128x256xf32, #C>
 
         %c =  ttng.warp_group_dot_wait %c_ {pendings = 0 : i32}:  tensor<128x256xf32, #C>
 
@@ -520,11 +520,11 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
 // CHECK:       %[[A_SUBTILE_4_SMEM:.*]] = ttg.memdesc_subview %[[A_TILE_SMEM]][%[[C0]], %[[C96]]]
 // CHECK:       %[[A_SUBITLE_4_REG:.*]] = ttg.local_load %[[A_SUBTILE_4_SMEM]]
 // CHECK:       %[[A_SUBITLE_1_REG_CVT:.*]] = arith.sitofp %[[A_SUBITLE_1_REG]]
-// CHECK:       %[[D_1:.*]] = ttng.warp_group_dot %[[A_SUBITLE_1_REG_CVT]], %[[B_SUBTILE_1_SMEM:.*]], %[[D_arg]] {{{.*}}, {{.*}}, maxNumImpreciseAcc = 1073741824 : i32}
+// CHECK:       %[[D_1:.*]] = ttng.warp_group_dot %[[A_SUBITLE_1_REG_CVT]], %[[B_SUBTILE_1_SMEM:.*]], %[[D_arg]] {{{.*}}, maxNumImpreciseAcc = 1073741824 : i32}
 // CHECK:       %[[A_SUBITLE_2_REG_CVT:.*]] = arith.sitofp %[[A_SUBITLE_2_REG]]
-// CHECK:       %[[D_2:.*]] = ttng.warp_group_dot %[[A_SUBITLE_2_REG_CVT]], %[[B_SUBTILE_2_SMEM:.*]], %[[D_1]], %[[TRUE]] {{{.*}}, {{.*}}, maxNumImpreciseAcc = 1073741824 : i32}
+// CHECK:       %[[D_2:.*]] = ttng.warp_group_dot %[[A_SUBITLE_2_REG_CVT]], %[[B_SUBTILE_2_SMEM:.*]], %[[D_1]], %[[TRUE]] {{{.*}}, maxNumImpreciseAcc = 1073741824 : i32}
 // CHECK:       %[[A_SUBITLE_3_REG_CVT:.*]] = arith.sitofp %[[A_SUBITLE_3_REG]]
-// CHECK:       %[[D_3:.*]] = ttng.warp_group_dot %[[A_SUBITLE_3_REG_CVT]], %[[B_SUBTILE_3_SMEM:.*]], %[[D_2]], %[[TRUE]] {{{.*}}, {{.*}}, maxNumImpreciseAcc = 32 : i32}
+// CHECK:       %[[D_3:.*]] = ttng.warp_group_dot %[[A_SUBITLE_3_REG_CVT]], %[[B_SUBTILE_3_SMEM:.*]], %[[D_2]], %[[TRUE]] {{{.*}}, maxNumImpreciseAcc = 32 : i32}
 // CHECK:       %[[A_SUBITLE_4_REG_CVT:.*]] = arith.sitofp %[[A_SUBITLE_4_REG]]
 // CHECK:       %[[D_4:.*]] = ttng.warp_group_dot %[[A_SUBITLE_4_REG_CVT]], %[[B_SUBTILE_4_SMEM:.*]], %[[D_3]], %[[TRUE]] {{{.*}}, {{.*}}}
 // CHECK-DAG:   %[[D:.*]] = ttng.warp_group_dot_wait %[[D_4]]
@@ -558,7 +558,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
         %b_smem_tile = ttg.memdesc_subview %b[%c0_i32, %c0_i32] : !ttg.memdesc<128x256xf8E5M2, #B_SMEM, #smem> -> !ttg.memdesc<128x256xf8E5M2, #B_SMEM, #smem>
         %a_op_ = ttg.local_load %a_smem_tile : !ttg.memdesc<128x128xi8, #A_SMEM, #smem> -> tensor<128x128xi8, #A_OP>
         %a_op = arith.sitofp %a_op_ :  tensor<128x128xi8, #A_OP> to tensor<128x128xf8E5M2, #A_OP>
-        %c_ = ttng.warp_group_dot %a_op, %b_smem_tile, %prev_c  {inputPrecision = 0 : i32, maxNumImpreciseAcc = 96 : i32, isAsync = true} : tensor<128x128xf8E5M2, #A_OP> * !ttg.memdesc<128x256xf8E5M2, #B_SMEM, #smem> -> tensor<128x256xf32, #C>
+        %c_ = ttng.warp_group_dot %a_op, %b_smem_tile, %prev_c  {inputPrecision = 0 : i32, maxNumImpreciseAcc = 96 : i32} : tensor<128x128xf8E5M2, #A_OP> * !ttg.memdesc<128x256xf8E5M2, #B_SMEM, #smem> -> tensor<128x256xf32, #C>
 
         %c =  ttng.warp_group_dot_wait %c_ {pendings = 0 : i32}:  tensor<128x256xf32, #C>
 
