@@ -7484,7 +7484,7 @@ def test_short_circuiting(device):
 def test_unsplat(device):
 
     @triton.jit
-    def unsplat_kernel(x, explicit : tl.constexpr):
+    def unsplat_kernel(x, explicit: tl.constexpr):
 
         # this is a single-element tensor:
         condition = tl.load(x + tl.arange(0, 1)) > 42
