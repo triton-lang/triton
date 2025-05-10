@@ -73,7 +73,7 @@ def reduce_scatter(x: torch.Tensor, token_mask: torch.Tensor = None, dim=0):
         return x
 
 
-def routing(logits, n_expts_act, expt_indx=None, EP=1):
+def routing(logits, n_expts_act, expt_indx=None, EP=1, TP=1):
     if _is_distributed_launch():
         assert expt_indx is None
         _, n_expts_tot = logits.shape
@@ -88,16 +88,18 @@ def routing(logits, n_expts_act, expt_indx=None, EP=1):
         # Distributed-DP
         expt_scal = all_gather(expt_scal, dim=0)
         expt_indx = all_gather(expt_indx, dim=0)
+        chunk = n_expts_tot // EP
+        ep_indx = dist.get_rank() // TP
         # Distributed-EP
         if EP > 1:
             # keep only the experts assigned to this rank
-            chunk = n_expts_tot // EP
-            local_expt_mask = (expt_indx // chunk) == dist.get_rank() % EP
-            # token_mask with all false
+            local_expt_mask = (expt_indx // chunk) == ep_indx
+            # mask out rows with all false, meaning that this token is not assigned to any expert belonging to this rank
             token_mask = torch.any(local_expt_mask, dim=1)
             expt_scal, expt_indx, local_expt_mask = [t[token_mask] for t in (expt_scal, expt_indx, local_expt_mask)]
+            # mask values associated with invalid expert ids
             expt_scal = expt_scal.masked_fill(~local_expt_mask, 0)
-            expt_indx = expt_indx.masked_fill(~local_expt_mask, n_expts_tot + 1)
+            expt_indx = expt_indx.masked_fill(~local_expt_mask, n_expts_tot)
         else:
             token_mask = None
         # flatten topk data
@@ -109,11 +111,11 @@ def routing(logits, n_expts_act, expt_indx=None, EP=1):
         # topk_indx: [2 (row0), 1 (row1), 3 (row2), 4 (row3), 5 (row4), ...]
         expt_indx, topk_indx = torch.sort(expt_indx, stable=True)
         gate_indx = torch.argsort(topk_indx, stable=True)
-        topk_indx[expt_indx == n_expts_tot + 1] = -1
-        gate_indx[gate_indx >= (expt_indx != n_expts_tot + 1).sum()] = -1
+        topk_indx[expt_indx == n_expts_tot] = -1
+        gate_indx[gate_indx >= (expt_indx != n_expts_tot).sum()] = -1
         gate_scal = expt_scal[topk_indx]
-        hist = torch.histc(expt_indx, bins=n_expts_tot // EP,
-                           max=n_expts_tot // EP - 1)  # histogram of tokens over experts
+        hist = torch.histc(expt_indx[expt_indx != n_expts_tot], bins=chunk, min=ep_indx * chunk,
+                           max=(ep_indx + 1) * chunk - 1)  # histogram of tokens over experts
         # pack the matmul data structure
         gather_indx = GatherIndx(src_indx=topk_indx.int(), dst_indx=gate_indx.int())
         scatter_indx = ScatterIndx(src_indx=gate_indx.int(), dst_indx=topk_indx.int())
