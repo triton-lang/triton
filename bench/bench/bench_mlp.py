@@ -1,7 +1,7 @@
 from pathlib import Path
 import matplotlib.pyplot as plt
-import json
 import triton.profiler as proton
+import triton.profiler.viewer as viewer
 import torch
 import triton_bench.swiglu
 from triton_bench.numerics_details.mxfp import downcast_to_mxfp
@@ -151,26 +151,17 @@ def bench_mlp(batch, dim1, dim2, n_expts_tot, n_expts_act, x_dtype, w_dtype, TP,
     proton.finalize()
 
     # -- analyze --
-    with open(f"{fpath}") as fd:
-        data = json.load(fd)
-        # TODO: this will be broken if kernels use scopes themselves
-        # compute useful (a.k.a. matmul) bytes and flops
-        matmuls = [
-            x for x in data[0]["children"] if "_matmul" in x["frame"]["name"] and "metadata" not in x["frame"]["name"]
-        ]
-        bytes = sum([x["metrics"]["bytes"] for x in matmuls])
-        flops = {w: sum([x["metrics"].get(f"flops{w}", 0) for x in matmuls]) for w in [8, 16]}
-        flops = sum([flops[w] for w in [8, 16]])
-        # compute total time (incl. "not useful" work)
-        # TODO: proton should really be recording that in the json instead of
-        # relying on the user to aggregate
-        time = sum(x["metrics"].get("time (ns)", 0) for x in data[0]["children"])
+    gf, _, _, _ = viewer.read(fpath)
+    # Now the dataframe only contains leave nodes (i.e., kernels) that perform matmuls
+    matmuls = gf.filter("MATCH ('*', c) WHERE c.'name' =~ '.*matmul.*' AND c IS LEAF").dataframe
+    bytes = matmuls["bytes"].sum()
+    flops = sum(matmuls[[c for c in ["flops8", "flops16"] if c in matmuls.columns]].sum())
+    time = matmuls["time (ns)"].sum()
     return PerfData(time, flops, bytes)
 
 
 def roofline_mlp(batch_ranges, dim1, dim2, n_expts_tot, n_expts_act, x_dtype, w_dtype, TP=1, EP=1, name="",
                  verbose=True):
-    import numpy as np
     from itertools import chain
     from bisect import bisect_left
     batches = list(chain(*[range(*r) for r in batch_ranges]))
