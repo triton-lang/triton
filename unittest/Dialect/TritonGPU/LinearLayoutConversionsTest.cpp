@@ -2835,10 +2835,10 @@ TEST_F(LinearLayoutConversionsTest, LeadingOffset_64x4x32_1_8_32b_transposed) {
                       {8, 0, 16},
                       {0, 1, 0},
                       {0, 2, 0},
-                      {16, 0, 0},
-                      {32, 0, 0},
                       {0, 0, 1},
-                      {0, 0, 2}}},
+                      {0, 0, 2},
+                      {16, 0, 0},
+                      {32, 0, 0}}},
                     {S("block"), {}}},
                    {{S("dim0"), 64}, {S("dim1"), 4}, {S("dim2"), 32}},
                    /*requireSurjective=*/true));

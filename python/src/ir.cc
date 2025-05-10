@@ -259,8 +259,7 @@ py::list getTensorDescMetadata(ModuleOp &mod) {
     auto elemType = ttng::getTMAElementType(nullptr, descTy);
     assert(swizzle.has_value());
     assert(elemType.has_value());
-    auto blockSize = ttg::getShapePerCTA(blockType);
-    blockSize.back() = ttng::getTMAContigDim(blockType);
+    auto blockSize = ttng::getTMABlockShape(blockType, /*packedSize=*/false);
     py::dict metadata;
     metadata["swizzle"] = *swizzle;
     metadata["elem_size"] = descTy.getBlockType().getElementTypeBitWidth() / 8;
