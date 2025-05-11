@@ -17,6 +17,8 @@
 #include "llvm/Support/MathExtras.h"
 
 using mlir::triton::ScaleDotElemType;
+#define DEBUG_TYPE "tritongpu-store-layout-conversions"
+#define DBGS() (llvm::dbgs() << "[" DEBUG_TYPE "]: ")
 
 namespace mlir::triton::gpu {
 namespace {
@@ -1544,96 +1546,96 @@ chooseMfmaLikeStoreLayout(RankedTensorType valType) {
         (isMfma32 || isMfma16)))
     return {};
 
-  auto valShape = valType.getShape();
-  LinearLayout mfmaLL = mfmaLayout.toLinearLayout(valShape);
-  auto mfmaOutDims = llvm::to_vector(mfmaLL.getOutDimNames());
-  StringAttr dimM = mfmaOutDims[0];
-  StringAttr dimN = mfmaOutDims[1];
-
-  auto swapLL = LinearLayout::empty();
-  // The rows are kept as is with an identity linear layout.
-  swapLL *= LinearLayout::identity1D(valShape[0], dimM, dimM);
-  /*
-    In transposed mfma32 layout,
-           reg                 -----------------------
-    lane  (0,  0) ... (0,  3)  | (0,  8)  ... (0, 11) | ...
-          ...                  | BLK1                 |
-          (31, 0) ... (31, 3)  | (31, 8)  ... (31, 11)| ...
-        -----------------------------------------------
-        |  (0,  4) ... (0,  7) | (0,  12) ... (0, 15)  ...
-        |  BLK0                |
-        |  (31, 4) ... (31, 7) | (31, 12) ... (31, 15) ...
-        ------------------------
-    each thread holds 4 consecutive values along dim.
-    We want to exchange column 4-7 (owned by thread 32-63, BLK0) and column 8-11
-    (owned by thread 0-31, BLK1) every 16 columns to make each thread holds 8
-    elements. This would mean exchange the 2nd and 3rd basis vector from an
-    identity linear layout.
-        reg                    ------------------------
-    lane  (0,  0) ... (0,  3)  |  (0,  4) ... (0,  7) |  (0, 16) ...  (0, 19)
-    (0, 20)  ... (0, 23)
-          ...                  |                      |
-          (31, 0) ... (31, 3)  | (31, 4) ... (31, 7)  |  (31, 16) ... (31, 19)
-    (31, 20) ... (31, 23)
-        -----------------------------------------------
-        | (0,  8)  ... (0, 11) | (0,  12) ... (0, 15)    (0, 24) ... (0, 27) (0,
-    28) ... (0, 31) |                      | | (31, 8)  ... (31, 11)| (31, 12)
-    ... (31, 15) ..(31, 24) ... (31, 27) (31, 28) ...(31, 31)
-    */
-  std::vector<std::vector<int32_t>> dimNBases(mfmaLL.getOutDimSizeLog2(dimN));
-  std::generate(dimNBases.begin(), dimNBases.end(),
-                [i = 0]() mutable { return std::vector<int32_t>{1 << i++}; });
-  std::swap(dimNBases[2], dimNBases[3]);
   if (isMfma32) {
+    auto valShape = valType.getShape();
+    LinearLayout mfmaLL = mfmaLayout.toLinearLayout(valShape);
+    auto mfmaOutDims = llvm::to_vector(mfmaLL.getOutDimNames());
+    StringAttr dimM = mfmaOutDims[0];
+    StringAttr dimN = mfmaOutDims[1];
+
+    auto swapLL = LinearLayout::empty();
+    // The rows are kept as is with an identity linear layout.
+    swapLL *= LinearLayout::identity1D(valShape[0], dimM, dimM);
+    /*
+      In transposed mfma32 layout,
+      1) register is the N or column dimension and lane is the row dimension;
+      2) the pair, e.g.(0, 0) is for the indices in the tensor;
+            register
+    lane     (0,  0) ... (0,  3) | (0,  8)  ... (0, 11) | ...
+            ...                  | BLK1                 |
+            (31, 0) ... (31, 3)  | (31, 8)  ... (31, 11)| ...
+            .................................................
+          |  (0,  4) ... (0,  7) |  (0,  12) ... (0, 15)  ...
+          |  BLK0                |
+          |  (31, 4) ... (31, 7) |  (31, 12) ... (31, 15) ...
+          ........................
+      each thread holds 4 consecutive values along N dim.
+      We want to exchange column 4-7 (owned by thread 32-63, BLK0) and column
+    8-11 (owned by thread 0-31, BLK1) every 16 columns to make each thread holds
+    8 elements. This would mean exchange the 2nd and 3rd basis vector from an
+      identity linear layout on tensor elements.
+      */
+    std::vector<std::vector<int32_t>> dimNBases(mfmaLL.getOutDimSizeLog2(dimN));
+    std::generate(dimNBases.begin(), dimNBases.end(),
+                  [i = 0]() mutable { return std::vector<int32_t>{1 << i++}; });
+    std::swap(dimNBases[2], dimNBases[3]);
+
     swapLL *= LinearLayout({{dimN, dimNBases}}, {dimN});
     return mfmaLL.compose(swapLL);
   }
 
-  /*
-    Correspondingly, the transposed mfma16 layout,
-           reg
-    lane  (0,  0) ...  (0,  3)
-          ...
-          (15, 0) ...  (15, 3)
-          (0,  4) ...  (0,  7)
-          ...
-          (15, 4) ...  (31, 7)
-          (0,  8) ...  (0, 11)
-          ...
-          (15, 8)  ... (15, 11)
-          (0,  12) ... (0, 15)
-          ...
-          (15, 12) .. (15, 15)
-    and the expected layout would be
-           reg
-    lane  (0,  0) ...  (0,  3) (0,  4) ...  (0,  7)
-          ...
-          (15, 0) ...  (15, 3) (15, 4) ...  (31, 7)
-          (0,  8) ...  (0, 11) (0,  12) ... (0, 15)
-          ...
-          (15, 8)  ... (15, 11) (15, 12) .. (15, 15)
-    TODO: for now, the LL is hard coded and operators on LL will be used
-    compute it, instead of hard code
-  */
-  MLIRContext *ctx = mfmaLayout.getContext();
-  SmallVector<StringAttr> outDimNames =
-      standardOutDimNames(ctx, mfmaLayout.getRank());
+  if (isMfma16) {
+    /*
+      Correspondingly, the transposed mfma16 layout,
+      the output of mfma16x16: transposed
+            N = register
+  M = lane  (0,  0) ...  (0,  3)
+            ...
+            (15, 0) ...  (15, 3)
+            (0,  4) ...  (0,  7)
+            ...
+            (15, 4) ...  (31, 7)
+            (0,  8) ...  (0, 11)
+            ...
+            (15, 8)  ... (15, 11)
+            (0,  12) ... (0, 15)
+            ...
+            (15, 12) .. (15, 15)
+      and the expected layout would be
+            register
+      lane  (0,  0) ...  (0,  3) (0,  4) ...  (0,  7)
+            ...
+            (15, 0) ...  (15, 3) (15, 4) ...  (15, 7)
 
-  StringAttr kRegister = S("register");
-  StringAttr kLane = S("lane");
-  SmallVector<unsigned> order = getDefaultMmaOrder(mfmaLayout);
+            (0,  8) ...  (0, 11) (0,  12) ... (0, 15)
+            ....
+            (15, 8)  ... (15, 11) (15, 12) .. (15, 15)
 
-  auto shape = valType.getShape();
-  auto tileLayout =
-      LinearLayout({{kRegister, {{0, 1}, {0, 2}, {0, 4}}},
-                    {kLane, {{1, 0}, {2, 0}, {4, 0}, {8, 0}, {0, 8}, {0, 16}}}},
-                   {outDimNames[order[0]], outDimNames[order[1]]});
+      TODO: for now, the LL is hard coded and operators on LL will be used
+      compute it, instead of hard code
+    */
+    MLIRContext *ctx = mfmaLayout.getContext();
+    SmallVector<StringAttr> outDimNames =
+        standardOutDimNames(ctx, mfmaLayout.getRank());
 
-  LinearLayout warpLayout =
-      identityStandardND(S("warp"), mfmaLayout.getWarpsPerCTA(), order);
-  LinearLayout ctaLayout = tileLayout * warpLayout;
+    StringAttr kRegister = S("register");
+    StringAttr kLane = S("lane");
+    SmallVector<unsigned> order = getDefaultMmaOrder(mfmaLayout);
 
-  return combineCtaCgaWithShape(ctaLayout, mfmaLayout.getCTALayout(), shape);
+    auto shape = valType.getShape();
+    auto tileLayout = LinearLayout(
+        {{kRegister, {{1, 0}, {2, 0}, {4, 0}}},
+         {kLane, {{0, 1}, {0, 2}, {0, 4}, {0, 8}, {8, 0}, {16, 0}}}},
+        {outDimNames[order[0]], outDimNames[order[1]]});
+
+    LinearLayout warpLayout =
+        identityStandardND(S("warp"), mfmaLayout.getWarpsPerCTA(), order);
+    LinearLayout ctaLayout = tileLayout * warpLayout;
+
+    return combineCtaCgaWithShape(ctaLayout, mfmaLayout.getCTALayout(), shape);
+  }
+
+  return {};
 }
 
 LinearLayout getScaleTMEMStoreLinearLayout(RankedTensorType scaleType,

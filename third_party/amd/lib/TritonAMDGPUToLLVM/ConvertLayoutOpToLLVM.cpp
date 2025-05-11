@@ -224,13 +224,14 @@ public:
 
     auto mfmaLayout = dyn_cast<AMDMfmaEncodingAttr>(srcType.getEncoding());
     auto mDim = mfmaLayout.getMDim();
-    auto nDim = mfmaLayout.getNDim();
     if (mDim != 32) {
       // to enable it once the 2nd step is done
       return failure();
     }
 
-    assert(mDim == 32 && mDim == nDim && "Expected MFMA size 32");
+    auto nDim = mfmaLayout.getNDim();
+    assert((mDim == 32 || mDim == 16) && mDim == nDim &&
+           "Expected MFMA size 32");
     assert(triton::gpu::lookupThreadsPerWarp(rewriter) == 64 &&
            "Expected warp size 64 for MFMA");
 
@@ -242,6 +243,8 @@ public:
     auto idx1 = b.i32_val(1);
     // Convert MFMA layout to a MFMA-like linear layout where each thread
     // holds 8 consecutive elements
+    auto intrinsicName = mDim == 32 ? "llvm.amdgcn.permlane32.swap"
+                                    : "llvm.amdgcn.permlane16.swap";
     for (size_t idx = 0; idx < inVals.size(); idx += 8) {
       SmallVector<Value, 4> inVecs;
       for (size_t vIdx = 0; vIdx < 4; vIdx++) {
@@ -259,7 +262,7 @@ public:
       Value falseVal = b.false_val();
       Value perm =
           LLVM::createLLVMIntrinsicCallOp(
-              rewriter, loc, "llvm.amdgcn.permlane32.swap", retType,
+              rewriter, loc, intrinsicName, retType,
               ValueRange{b.bitcast(inVecs[0], i32_ty),
                          b.bitcast(inVecs[2], i32_ty), falseVal, falseVal})
               ->getResult(0);
@@ -268,7 +271,7 @@ public:
 
       // Swap the row 2 and 3 of vec1 and the row 0 and 1 of vec3
       perm = LLVM::createLLVMIntrinsicCallOp(
-                 rewriter, loc, "llvm.amdgcn.permlane32.swap", retType,
+                 rewriter, loc, intrinsicName, retType,
                  ValueRange{b.bitcast(inVecs[1], i32_ty),
                             b.bitcast(inVecs[3], i32_ty), falseVal, falseVal})
                  ->getResult(0);
