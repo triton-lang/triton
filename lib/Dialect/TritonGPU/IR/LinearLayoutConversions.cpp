@@ -1514,23 +1514,24 @@ chooseMfmaLikeStoreLayout(RankedTensorType valType) {
   // We currently only support transposed [B]F16 MFMA32x32 on CDNA4.
   bool isMfma32 = mfmaLayout.getMDim() == 32 && mfmaLayout.getNDim() == 32;
   bool isMfma16 = mfmaLayout.getMDim() == 16 && mfmaLayout.getNDim() == 16;
+
+  auto valShape = valType.getShape();
+  bool validForMfma16 = isMfma16 && isMfma16 && valShape.back() >= 16 * 2 && mfmaLayout.getWarpsPerCTA().back() == 1;
   Type elemType = valType.getElementType();
   if (!(valType.getRank() == 2 && (elemType.isF16() || elemType.isBF16()) &&
         mfmaLayout.getVersionMajor() == 4 && mfmaLayout.getIsTransposed() &&
-        (isMfma32 || isMfma16)))
+        (isMfma32 || validForMfma16)))
     return {};
 
-  if (isMfma32) {
-    auto valShape = valType.getShape();
-    LinearLayout mfmaLL = mfmaLayout.toLinearLayout(valShape);
-    auto mfmaOutDims = llvm::to_vector(mfmaLL.getOutDimNames());
-    StringAttr dimM = mfmaOutDims[0];
-    StringAttr dimN = mfmaOutDims[1];
+  LinearLayout mfmaLL = mfmaLayout.toLinearLayout(valShape);
+  auto mfmaOutDims = llvm::to_vector(mfmaLL.getOutDimNames());
+  StringAttr dimM = mfmaOutDims[0];
+  StringAttr dimN = mfmaOutDims[1];
+  auto swapLL = LinearLayout::empty();
+  // The rows are kept as is with an identity linear layout.
+  swapLL *= LinearLayout::identity1D(valShape[0], dimM, dimM);
 
-    auto swapLL = LinearLayout::empty();
-    // The rows are kept as is with an identity linear layout.
-    swapLL *= LinearLayout::identity1D(valShape[0], dimM, dimM);
-    /*
+  /*
       In transposed mfma32 layout,
       1) register is the N or column dimension and lane is the row dimension;
       2) the pair, e.g.(0, 0) is for the indices in the tensor;
@@ -1548,66 +1549,57 @@ chooseMfmaLikeStoreLayout(RankedTensorType valType) {
     8-11 (owned by thread 0-31, BLK1) every 16 columns to make each thread holds
     8 elements. This would mean exchange the 2nd and 3rd basis vector from an
       identity linear layout on tensor elements.
-      */
-    std::vector<std::vector<int32_t>> dimNBases(mfmaLL.getOutDimSizeLog2(dimN));
-    std::generate(dimNBases.begin(), dimNBases.end(),
-                  [i = 0]() mutable { return std::vector<int32_t>{1 << i++}; });
-    std::swap(dimNBases[2], dimNBases[3]);
 
-    swapLL *= LinearLayout({{dimN, dimNBases}}, {dimN});
-    return mfmaLL.compose(swapLL);
-  }
-
-  if (isMfma16) {
-    /*
       Correspondingly, the transposed mfma16 layout,
       the output of mfma16x16: transposed
-            register/N
-    lane/M  (0,  0) ...  (0,  3)
-            ...
-            (15, 0) ...  (15, 3)
-            (0,  4) ...  (0,  7)
-            ...
-            (15, 4) ...  (31, 7)
+            register / N
+  lane / M   (0,  0) ...  (0,  3) | (0,  16)  ... (0,  19)|
+             ...                  | BLK0                  |
+             (15, 0) ...  (15, 3) | (15, 16)  ... (15, 19)|
+            |---------------------|-----------------------|
+            |(0,  4) ...  (0,  7) |
+            |BLK1                 |
+            |(15, 4) ...  (31, 7) |
+            -----------------------
             (0,  8) ...  (0, 11)
             ...
             (15, 8)  ... (15, 11)
             (0,  12) ... (0, 15)
             ...
             (15, 12) .. (15, 15)
-      and the expected layout would be
-            register/N
-    lane/M  (0,  0) ...  (0,  3) (0,  4) ...  (0,  7)   (0,  8) ...  (0, 11) (0,
-    12) ... (0, 15)
+
+            To pack 8 fp16 elements we need to put the elements per rou are
+            contiuous, so the expetecd layout is:
+            register / N
+  lane / M  (0,  0) ...  (0,  3)  |(0,  4)  ... (0,  17)  |
+            ...                   |BLK1                   |
+            (15, 0) ...  (15, 3)  |(15, 16)  ... (15, 19) |
+            ----------------------------------------------
+            |(0,  16) ... (0,  19)|
+            |BLK0 ...             |
+            |(15, 4) ...  (31, 7) |
+            -----------------------
+            (0,  8) ...  (0, 11)
             ...
-            (15, 0) ...  (15, 3) (15, 4) ...  (15, 7)   (15, 8)  ... (15, 11)
-    (15, 12) .. (15, 15)
+            (15, 8)  ... (15, 11)
+            (0,  12) ... (0, 15)
+            ...
+            (15, 12) .. (15, 15)
 
-      TODO: for now, the LL is hard coded and operators on LL will be used
-      compute it, instead of hard code
-    */
-    MLIRContext *ctx = mfmaLayout.getContext();
-    SmallVector<StringAttr> outDimNames =
-        standardOutDimNames(ctx, mfmaLayout.getRank());
+            This would mean exchange the 2nd and 4st basis vector from an
+            identity linear layout on tensor elements, for the NDim.
+            and LL for this tile is:
+            ({{kRegister, {{1, 0}, {2, 0}, {4, 0}}},
+            {kLane, {{0, 1}, {0, 2}, {0, 4}, {0, 8}, {16, 0}, {8, 0}}}},
+  */
+  auto destLane = isMfma32 ? 3: 4;
+  std::vector<std::vector<int32_t>> dimNBases(mfmaLL.getOutDimSizeLog2(dimN));
+  std::generate(dimNBases.begin(), dimNBases.end(),
+                [i = 0]() mutable { return std::vector<int32_t>{1 << i++}; });
+  std::swap(dimNBases[2], dimNBases[destLane]);
+  swapLL *= LinearLayout({{dimN, dimNBases}}, {dimN});
 
-    StringAttr kRegister = S("register");
-    StringAttr kLane = S("lane");
-    SmallVector<unsigned> order = getDefaultMmaOrder(mfmaLayout);
-
-    auto shape = valType.getShape();
-    auto tileLayout = LinearLayout(
-        {{kRegister, {{1, 0}, {2, 0}, {4, 0}}},
-         {kLane, {{0, 1}, {0, 2}, {0, 4}, {0, 8}, {16, 0}, {8, 0}}}},
-        {outDimNames[order[0]], outDimNames[order[1]]});
-
-    LinearLayout warpLayout =
-        identityStandardND(S("warp"), mfmaLayout.getWarpsPerCTA(), order);
-    LinearLayout ctaLayout = tileLayout * warpLayout;
-
-    return combineCtaCgaWithShape(ctaLayout, mfmaLayout.getCTALayout(), shape);
-  }
-
-  return {};
+  return mfmaLL.compose(swapLL);
 }
 
 LinearLayout getScaleTMEMStoreLinearLayout(RankedTensorType scaleType,
