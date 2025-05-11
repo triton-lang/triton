@@ -11,6 +11,8 @@
 
 namespace proton {
 
+// TODO(fywkevin): this time gap to offset multiple kernels is not needed after
+// we have the global time.
 const uint32_t kKernelTimeGap = 10000000;
 
 struct KernelMetadata {
@@ -20,6 +22,11 @@ struct KernelMetadata {
 
 using KernelTrace = std::pair<CircularLayoutParserResult *, KernelMetadata *>;
 
+// StreamTraceWriter handles trace dumping for a single cuda stream.
+// If we have multiple stream, simply having a for loop to write to multiple
+// files (one for each stream). Other types of per-stream trace writers could
+// subclass the StreamTraceWriter such as StreamPerfettoTraceWriter that
+// produces a protobuf format trace.
 class StreamTraceWriter {
 public:
   explicit StreamTraceWriter(const std::vector<KernelTrace> &streamTrace,
