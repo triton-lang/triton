@@ -1,5 +1,3 @@
-#include <memory>
-
 #include "mlir/Dialect/SCF/Utils/Utils.h"
 #include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/Matchers.h"
@@ -12,18 +10,16 @@
 #include "triton/Dialect/Triton/Transforms/Passes.h"
 #include "llvm/Support/Debug.h"
 
-#define GEN_PASS_CLASSES
+namespace mlir::triton {
+
+#define GEN_PASS_DEF_TRITONLOOPUNROLL
 #include "triton/Dialect/Triton/Transforms/Passes.h.inc"
 
 #define DEBUG_TYPE "triton-loop-unroll"
 #define DBGS() (llvm::dbgs() << "[" DEBUG_TYPE "]: ")
 #define LDBG(X) LLVM_DEBUG(DBGS() << X << "\n")
 
-namespace mlir::triton {
-
-namespace {
-
-class LoopUnrollPass : public TritonLoopUnrollBase<LoopUnrollPass> {
+class LoopUnrollPass : public impl::TritonLoopUnrollBase<LoopUnrollPass> {
 
   int getUnrollFactorOrDefault(scf::ForOp forOp) {
     // Use the attribute attached to the loop if it exists otherwise set the
@@ -38,8 +34,6 @@ class LoopUnrollPass : public TritonLoopUnrollBase<LoopUnrollPass> {
   const char *pipelineStagesAttrName = "tt.num_stages";
 
 public:
-  LoopUnrollPass() = default;
-  LoopUnrollPass(const LoopUnrollPass &) {}
   void runOnOperation() override {
     LDBG("Loop unroll pass");
     SmallVector<scf::ForOp, 4> loops;
@@ -64,11 +58,5 @@ public:
     }
   }
 };
-
-} // anonymous namespace
-
-std::unique_ptr<mlir::Pass> createLoopUnrollPass() {
-  return std::make_unique<LoopUnrollPass>();
-}
 
 } // namespace mlir::triton

@@ -1,4 +1,3 @@
-#include <memory>
 #include <stack>
 
 #include "mlir/Dialect/ControlFlow/IR/ControlFlow.h"
@@ -10,9 +9,9 @@
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/Triton/Transforms/Passes.h"
 
-using namespace mlir;
+namespace mlir::triton {
 
-#define GEN_PASS_CLASSES
+#define GEN_PASS_DEF_TRITONREWRITETENSORPOINTER
 #include "triton/Dialect/Triton/Transforms/Passes.h.inc"
 
 namespace {
@@ -196,7 +195,7 @@ public:
 // very fragile and to solve we should expose convert Ptr of tensor to a
 // structure containins all values and not only offsets.
 class RewriteTensorPointerPass
-    : public TritonRewriteTensorPointerBase<RewriteTensorPointerPass> {
+    : public impl::TritonRewriteTensorPointerBase<RewriteTensorPointerPass> {
 private:
   DenseMap<Value, RewritedInfo> rewritedInfo;
 
@@ -560,6 +559,4 @@ public:
   }
 };
 
-std::unique_ptr<Pass> triton::createRewriteTensorPointerPass() {
-  return std::make_unique<RewriteTensorPointerPass>();
-}
+} // namespace mlir::triton
