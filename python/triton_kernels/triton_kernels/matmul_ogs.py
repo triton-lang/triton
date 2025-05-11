@@ -14,6 +14,7 @@ from .matmul_ogs_details._p_matmul_ogs import _p_matmul_ogs, get_per_device_per_
 from .matmul_ogs_details._finalize_matmul import _finalize_matmul
 from .matmul_ogs_details.opt_flags import make_opt_flags
 from .matmul_ogs_details.metadata import compute_metadata
+from .matmul_ogs_details.fast_contiguous import fast_contiguous
 from .specialize import specialize
 
 
@@ -256,8 +257,6 @@ def init_preprocessing_features(w, precision_config, opt_flags):
         # But, don't do this if we're going to swap X and W in which case we would transpose W again.
         if w.stride(1) == 1 and w.dtype == torch.uint8 and w.shape[1] % 64 != 0 and not swap_xw:
             w_want_n_major = True
-    if not w_want_k_major and not w_want_n_major:
-        w_want_k_major = True
     return PreprocessingFeatures(w_want_n_major, w_want_k_major, swap_xw)
 
 
@@ -287,9 +286,9 @@ def apply_preprocessing_features(x, w, gather_indx, scatter_indx, routing_data, 
         writeback_idxs, writeback_size, finalize_scatter_idxs = None, None, None
     # some transposition variants aren't supported
     if preprocessing_features.w_want_n_major:
-        w = w.contiguous()
+        w = fast_contiguous(w)
     elif preprocessing_features.w_want_k_major:
-        w = w.transpose(-1, -2).contiguous().transpose(-1, -2)
+        w = fast_contiguous(w.transpose(-1, -2)).transpose(-1, -2)
     # preprocess routing information and ptr lookup table
     M = x.shape[1] if gather_indx is None else gather_indx.src_indx.shape[0]
     expt_data = compute_metadata(routing_data, M, opt_flags.block_m)
