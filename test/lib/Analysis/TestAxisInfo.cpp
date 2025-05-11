@@ -1,7 +1,6 @@
 #include "mlir/IR/Diagnostics.h"
 #include "mlir/Pass/Pass.h"
 #include "triton/Analysis/AxisInfo.h"
-#include "triton/Analysis/Utility.h"
 
 using namespace mlir;
 using namespace mlir::triton;
