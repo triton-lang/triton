@@ -1539,10 +1539,11 @@ chooseMfmaLikeStoreLayout(RankedTensorType valType) {
 
   // Currently support transposed [B]F16 MFMA32x32 on CDNA4
   bool isMfma32 = mfmaLayout.getMDim() == 32 && mfmaLayout.getNDim() == 32;
+  bool isMfma16 = mfmaLayout.getMDim() == 16 && mfmaLayout.getNDim() == 16;
   Type elemType = valType.getElementType();
   if (!(valType.getRank() == 2 && (elemType.isF16() || elemType.isBF16()) &&
         mfmaLayout.getVersionMajor() == 4 && mfmaLayout.getIsTransposed() &&
-        isMfma32))
+        (isMfma32 || isMfma16)))
     return {};
 
   MLIRContext *ctx = mfmaLayout.getContext();
@@ -1556,21 +1557,30 @@ chooseMfmaLikeStoreLayout(RankedTensorType valType) {
   // We make each thread handle 8 consecutive elements to enable 128-bit
   // global stores for [b]f16 types and keep the thread pattern in each lane
   // similar to the canonical mfmaLayout.
-  LinearLayout mfma8Layout = LinearLayout::empty();
-  mfma8Layout =
-      LinearLayout({{kRegister, {{1, 0}, {2, 0}, {4, 0}}},
-                    {kLane, {{0, 1}, {0, 2}, {0, 4}, {0, 8}, {0, 16}, {8, 0}}},
-                    {kWarp, {}},
-                    {kBlock, {}}},
-                   {standardOutDims[order[0]], standardOutDims[order[1]]});
+  LinearLayout storeLayout = LinearLayout::empty();
+  if (isMfma32) {
+    storeLayout = LinearLayout(
+        {{kRegister, {{1, 0}, {2, 0}, {4, 0}}},
+         {kLane, {{0, 1}, {0, 2}, {0, 4}, {0, 8}, {0, 16}, {8, 0}}},
+         {kWarp, {}},
+         {kBlock, {}}},
+        {standardOutDims[order[0]], standardOutDims[order[1]]});
+  } else {
+    storeLayout = LinearLayout(
+        {{kRegister, {{1, 0}, {2, 0}}},
+         {kLane, {{0, 1}, {0, 2}, {0, 4}, {0, 8}, {0, 16}, {4, 0}}},
+         {kWarp, {}},
+         {kBlock, {}}},
+        {standardOutDims[order[0]], standardOutDims[order[1]]});
+  }
 
   LinearLayout warpLayout =
       identityStandardND(kWarp, mfmaLayout.getWarpsPerCTA(), order);
-  LinearLayout ctaLayout = mfma8Layout.transposeOuts(standardOutDims) *
+  LinearLayout ctaLayout = storeLayout.transposeOuts(standardOutDims) *
                            warpLayout.transposeOuts(standardOutDims);
-  mfma8Layout = combineCtaCgaWithShape(ctaLayout, mfmaLayout.getCTALayout(),
+  storeLayout = combineCtaCgaWithShape(ctaLayout, mfmaLayout.getCTALayout(),
                                        valType.getShape());
-  return mfma8Layout;
+  return storeLayout;
 }
 
 LinearLayout getScaleTMEMStoreLinearLayout(RankedTensorType scaleType,
