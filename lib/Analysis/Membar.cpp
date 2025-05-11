@@ -1,11 +1,8 @@
 #include "triton/Analysis/Membar.h"
-#include "triton/Analysis/Alias.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 
-#include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/GPU/IR/GPUDialect.h"
-#include "mlir/Dialect/Tensor/IR/Tensor.h"
 #include "mlir/Interfaces/ControlFlowInterfaces.h"
 #include <deque>
 
