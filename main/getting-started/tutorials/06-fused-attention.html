@@ -124,28 +124,52 @@ to download the full example code.</p>
 <li><img src="../../_images/sphx_glr_06-fused-attention_001.png" srcset="../../_images/sphx_glr_06-fused-attention_001.png" alt="06 fused attention" class = "sphx-glr-multi-img"/></li>
 <li><img src="../../_images/sphx_glr_06-fused-attention_002.png" srcset="../../_images/sphx_glr_06-fused-attention_002.png" alt="06 fused attention" class = "sphx-glr-multi-img"/></li>
 <li><img src="../../_images/sphx_glr_06-fused-attention_003.png" srcset="../../_images/sphx_glr_06-fused-attention_003.png" alt="06 fused attention" class = "sphx-glr-multi-img"/></li>
+<li><img src="../../_images/sphx_glr_06-fused-attention_004.png" srcset="../../_images/sphx_glr_06-fused-attention_004.png" alt="06 fused attention" class = "sphx-glr-multi-img"/></li>
+<li><img src="../../_images/sphx_glr_06-fused-attention_005.png" srcset="../../_images/sphx_glr_06-fused-attention_005.png" alt="06 fused attention" class = "sphx-glr-multi-img"/></li>
+<li><img src="../../_images/sphx_glr_06-fused-attention_006.png" srcset="../../_images/sphx_glr_06-fused-attention_006.png" alt="06 fused attention" class = "sphx-glr-multi-img"/></li>
 </ul>
-<div class="sphx-glr-script-out highlight-none notranslate"><div class="highlight"><pre><span></span>fused-attention-batch4-head32-d64-fwd-causal=True:
+<div class="sphx-glr-script-out highlight-none notranslate"><div class="highlight"><pre><span></span>fused-attention-batch4-head32-d64-fwd-causal=True-warp_specialize=True:
      N_CTX  Triton [FP16]  Triton [FP8]
-0   1024.0     112.352204     84.632841
-1   2048.0     136.976575    102.771394
-2   4096.0     148.785867    114.400109
-3   8192.0     160.796533    122.036919
-4  16384.0     169.290929    124.374646
-fused-attention-batch4-head32-d64-fwd-causal=False:
+0   1024.0     111.487100     84.759975
+1   2048.0     135.608361    102.327170
+2   4096.0     149.470801    114.249046
+3   8192.0     160.806854    120.473238
+4  16384.0     167.334215    123.628202
+fused-attention-batch4-head32-d64-fwd-causal=True-warp_specialize=False:
      N_CTX  Triton [FP16]  Triton [FP8]
-0   1024.0     157.457758    116.975059
-1   2048.0     166.737562    116.808467
-2   4096.0     169.276468    118.881956
-3   8192.0     170.789570    119.231783
-4  16384.0     172.964473    118.602915
-fused-attention-batch4-head32-d64-bwd-causal=True:
+0   1024.0     112.264663     84.038741
+1   2048.0     136.415825    100.687811
+2   4096.0     151.891375    111.665874
+3   8192.0     158.601255    119.491850
+4  16384.0     167.798377    123.660232
+fused-attention-batch4-head32-d64-fwd-causal=False-warp_specialize=True:
      N_CTX  Triton [FP16]  Triton [FP8]
-0   1024.0      36.289981     36.227956
-1   2048.0      44.425794     44.473391
-2   4096.0      49.590099     49.632014
-3   8192.0      52.569463     52.575642
-4  16384.0      54.124416     54.177669
+0   1024.0     158.846913    115.853586
+1   2048.0     166.568741    116.857997
+2   4096.0     165.942109    118.238623
+3   8192.0     170.538411    118.679603
+4  16384.0     160.968713    119.220194
+fused-attention-batch4-head32-d64-fwd-causal=False-warp_specialize=False:
+     N_CTX  Triton [FP16]  Triton [FP8]
+0   1024.0     156.401213    113.118752
+1   2048.0     163.891233    113.338453
+2   4096.0     166.873869    116.022104
+3   8192.0     171.630494    119.345755
+4  16384.0     168.880438    119.188765
+fused-attention-batch4-head32-d64-bwd-causal=True-warp_specialize=True:
+     N_CTX  Triton [FP16]  Triton [FP8]
+0   1024.0      36.249341     36.174228
+1   2048.0      44.313830     44.269494
+2   4096.0      49.545119     49.563415
+3   8192.0      52.422657     52.442114
+4  16384.0      54.000291     54.007082
+fused-attention-batch4-head32-d64-bwd-causal=True-warp_specialize=False:
+     N_CTX  Triton [FP16]  Triton [FP8]
+0   1024.0      36.361327     36.321448
+1   2048.0      44.425794     44.369497
+2   4096.0      49.493442     49.462695
+3   8192.0      52.468768     52.424705
+4  16384.0      54.079437     54.098783
 </pre></div>
 </div>
 <div class="line-block">
@@ -237,7 +261,7 @@ fused-attention-batch4-head32-d64-bwd-causal=True:
                         <span class="n">offset_y</span><span class="p">,</span> <span class="n">dtype</span><span class="p">:</span> <span class="n">tl</span><span class="o">.</span><span class="n">constexpr</span><span class="p">,</span> <span class="n">start_m</span><span class="p">,</span> <span class="n">qk_scale</span><span class="p">,</span>  <span class="c1">#</span>
                         <span class="n">BLOCK_M</span><span class="p">:</span> <span class="n">tl</span><span class="o">.</span><span class="n">constexpr</span><span class="p">,</span> <span class="n">HEAD_DIM</span><span class="p">:</span> <span class="n">tl</span><span class="o">.</span><span class="n">constexpr</span><span class="p">,</span> <span class="n">BLOCK_N</span><span class="p">:</span> <span class="n">tl</span><span class="o">.</span><span class="n">constexpr</span><span class="p">,</span>  <span class="c1">#</span>
                         <span class="n">STAGE</span><span class="p">:</span> <span class="n">tl</span><span class="o">.</span><span class="n">constexpr</span><span class="p">,</span> <span class="n">offs_m</span><span class="p">:</span> <span class="n">tl</span><span class="o">.</span><span class="n">constexpr</span><span class="p">,</span> <span class="n">offs_n</span><span class="p">:</span> <span class="n">tl</span><span class="o">.</span><span class="n">constexpr</span><span class="p">,</span>  <span class="c1">#</span>
-                        <span class="n">N_CTX</span><span class="p">:</span> <span class="n">tl</span><span class="o">.</span><span class="n">constexpr</span><span class="p">):</span>
+                        <span class="n">N_CTX</span><span class="p">:</span> <span class="n">tl</span><span class="o">.</span><span class="n">constexpr</span><span class="p">,</span> <span class="n">warp_specialize</span><span class="p">:</span> <span class="n">tl</span><span class="o">.</span><span class="n">constexpr</span><span class="p">):</span>
     <span class="c1"># range of values handled by this stage</span>
     <span class="k">if</span> <span class="n">STAGE</span> <span class="o">==</span> <span class="mi">1</span><span class="p">:</span>
         <span class="n">lo</span><span class="p">,</span> <span class="n">hi</span> <span class="o">=</span> <span class="mi">0</span><span class="p">,</span> <span class="n">start_m</span> <span class="o">*</span> <span class="n">BLOCK_M</span>
@@ -249,7 +273,7 @@ fused-attention-batch4-head32-d64-bwd-causal=True:
         <span class="n">lo</span><span class="p">,</span> <span class="n">hi</span> <span class="o">=</span> <span class="mi">0</span><span class="p">,</span> <span class="n">N_CTX</span>
     <span class="n">offsetkv_y</span> <span class="o">=</span> <span class="n">offset_y</span> <span class="o">+</span> <span class="n">lo</span>
     <span class="c1"># loop over k, v and update accumulator</span>
-    <span class="k">for</span> <span class="n">start_n</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="n">lo</span><span class="p">,</span> <span class="n">hi</span><span class="p">,</span> <span class="n">BLOCK_N</span><span class="p">):</span>
+    <span class="k">for</span> <span class="n">start_n</span> <span class="ow">in</span> <span class="n">tl</span><span class="o">.</span><span class="n">range</span><span class="p">(</span><span class="n">lo</span><span class="p">,</span> <span class="n">hi</span><span class="p">,</span> <span class="n">BLOCK_N</span><span class="p">,</span> <span class="n">warp_specialize</span><span class="o">=</span><span class="n">warp_specialize</span><span class="p">):</span>
         <span class="n">start_n</span> <span class="o">=</span> <span class="n">tl</span><span class="o">.</span><span class="n">multiple_of</span><span class="p">(</span><span class="n">start_n</span><span class="p">,</span> <span class="n">BLOCK_N</span><span class="p">)</span>
         <span class="c1"># -- compute qk ----</span>
         <span class="n">k</span> <span class="o">=</span> <span class="n">desc_k</span><span class="o">.</span><span class="n">load</span><span class="p">([</span><span class="n">offsetkv_y</span><span class="p">,</span> <span class="mi">0</span><span class="p">])</span><span class="o">.</span><span class="n">T</span>
@@ -263,18 +287,19 @@ fused-attention-batch4-head32-d64-bwd-causal=True:
             <span class="n">m_ij</span> <span class="o">=</span> <span class="n">tl</span><span class="o">.</span><span class="n">maximum</span><span class="p">(</span><span class="n">m_i</span><span class="p">,</span> <span class="n">tl</span><span class="o">.</span><span class="n">max</span><span class="p">(</span><span class="n">qk</span><span class="p">,</span> <span class="mi">1</span><span class="p">)</span> <span class="o">*</span> <span class="n">qk_scale</span><span class="p">)</span>
             <span class="n">qk</span> <span class="o">=</span> <span class="n">qk</span> <span class="o">*</span> <span class="n">qk_scale</span> <span class="o">-</span> <span class="n">m_ij</span><span class="p">[:,</span> <span class="kc">None</span><span class="p">]</span>
         <span class="n">p</span> <span class="o">=</span> <span class="n">tl</span><span class="o">.</span><span class="n">math</span><span class="o">.</span><span class="n">exp2</span><span class="p">(</span><span class="n">qk</span><span class="p">)</span>
-        <span class="n">l_ij</span> <span class="o">=</span> <span class="n">tl</span><span class="o">.</span><span class="n">sum</span><span class="p">(</span><span class="n">p</span><span class="p">,</span> <span class="mi">1</span><span class="p">)</span>
-        <span class="c1"># -- update m_i and l_i</span>
+        <span class="c1"># -- compute correction factor</span>
         <span class="n">alpha</span> <span class="o">=</span> <span class="n">tl</span><span class="o">.</span><span class="n">math</span><span class="o">.</span><span class="n">exp2</span><span class="p">(</span><span class="n">m_i</span> <span class="o">-</span> <span class="n">m_ij</span><span class="p">)</span>
-        <span class="n">l_i</span> <span class="o">=</span> <span class="n">l_i</span> <span class="o">*</span> <span class="n">alpha</span> <span class="o">+</span> <span class="n">l_ij</span>
+        <span class="n">l_ij</span> <span class="o">=</span> <span class="n">tl</span><span class="o">.</span><span class="n">sum</span><span class="p">(</span><span class="n">p</span><span class="p">,</span> <span class="mi">1</span><span class="p">)</span>
         <span class="c1"># -- update output accumulator --</span>
         <span class="n">acc</span> <span class="o">=</span> <span class="n">acc</span> <span class="o">*</span> <span class="n">alpha</span><span class="p">[:,</span> <span class="kc">None</span><span class="p">]</span>
-        <span class="c1"># update acc</span>
+        <span class="c1"># prepare p and v for the dot</span>
         <span class="n">v</span> <span class="o">=</span> <span class="n">desc_v</span><span class="o">.</span><span class="n">load</span><span class="p">([</span><span class="n">offsetkv_y</span><span class="p">,</span> <span class="mi">0</span><span class="p">])</span>
         <span class="n">p</span> <span class="o">=</span> <span class="n">p</span><span class="o">.</span><span class="n">to</span><span class="p">(</span><span class="n">dtype</span><span class="p">)</span>
         <span class="c1"># note that this non transposed v for FP8 is only supported on Blackwell</span>
         <span class="n">acc</span> <span class="o">=</span> <span class="n">tl</span><span class="o">.</span><span class="n">dot</span><span class="p">(</span><span class="n">p</span><span class="p">,</span> <span class="n">v</span><span class="p">,</span> <span class="n">acc</span><span class="p">)</span>
         <span class="c1"># update m_i and l_i</span>
+        <span class="c1"># place this at the end of the loop to reduce register pressure</span>
+        <span class="n">l_i</span> <span class="o">=</span> <span class="n">l_i</span> <span class="o">*</span> <span class="n">alpha</span> <span class="o">+</span> <span class="n">l_ij</span>
         <span class="n">m_i</span> <span class="o">=</span> <span class="n">m_ij</span>
         <span class="n">offsetkv_y</span> <span class="o">+=</span> <span class="n">BLOCK_N</span>
     <span class="k">return</span> <span class="n">acc</span><span class="p">,</span> <span class="n">l_i</span><span class="p">,</span> <span class="n">m_i</span>
@@ -407,9 +432,9 @@ fused-attention-batch4-head32-d64-bwd-causal=True:
 <span class="c1"># re-tuning.</span>
 <span class="n">configs_tma</span> <span class="o">=</span> <span class="p">[</span>
     <span class="n">triton</span><span class="o">.</span><span class="n">Config</span><span class="p">({</span><span class="s1">&#39;BLOCK_M&#39;</span><span class="p">:</span> <span class="n">BM</span><span class="p">,</span> <span class="s1">&#39;BLOCK_N&#39;</span><span class="p">:</span> <span class="n">BN</span><span class="p">},</span> <span class="n">num_stages</span><span class="o">=</span><span class="n">s</span><span class="p">,</span> <span class="n">num_warps</span><span class="o">=</span><span class="n">w</span><span class="p">,</span> <span class="n">pre_hook</span><span class="o">=</span><span class="n">_tma_pre_hook</span><span class="p">)</span> \
-    <span class="k">for</span> <span class="n">BM</span> <span class="ow">in</span> <span class="p">[</span><span class="mi">64</span><span class="p">,</span> <span class="mi">128</span><span class="p">]</span>\
-    <span class="k">for</span> <span class="n">BN</span> <span class="ow">in</span> <span class="p">[</span><span class="mi">32</span><span class="p">,</span> <span class="mi">64</span><span class="p">,</span> <span class="mi">128</span><span class="p">]</span>\
-    <span class="k">for</span> <span class="n">s</span> <span class="ow">in</span> <span class="p">[</span><span class="mi">2</span><span class="p">,</span> <span class="mi">3</span><span class="p">,</span> <span class="mi">4</span><span class="p">,</span> <span class="mi">6</span><span class="p">]</span>\
+    <span class="k">for</span> <span class="n">BM</span> <span class="ow">in</span> <span class="p">[</span><span class="mi">64</span><span class="p">,</span> <span class="mi">128</span><span class="p">,</span> <span class="mi">256</span><span class="p">]</span>\
+    <span class="k">for</span> <span class="n">BN</span> <span class="ow">in</span> <span class="p">[</span><span class="mi">64</span><span class="p">,</span> <span class="mi">128</span><span class="p">]</span>\
+    <span class="k">for</span> <span class="n">s</span> <span class="ow">in</span> <span class="p">[</span><span class="mi">3</span><span class="p">,</span> <span class="mi">4</span><span class="p">,</span> <span class="mi">5</span><span class="p">]</span>\
     <span class="k">for</span> <span class="n">w</span> <span class="ow">in</span> <span class="p">[</span><span class="mi">4</span><span class="p">,</span> <span class="mi">8</span><span class="p">]</span>\
 <span class="p">]</span>
 
@@ -422,7 +447,8 @@ fused-attention-batch4-head32-d64-bwd-causal=True:
     <span class="k">return</span> <span class="kc">True</span>
 
 
-<span class="nd">@triton</span><span class="o">.</span><span class="n">autotune</span><span class="p">(</span><span class="n">configs</span><span class="o">=</span><span class="nb">list</span><span class="p">(</span><span class="nb">filter</span><span class="p">(</span><span class="n">keep_tma</span><span class="p">,</span> <span class="n">configs_tma</span><span class="p">)),</span> <span class="n">key</span><span class="o">=</span><span class="p">[</span><span class="s2">&quot;N_CTX&quot;</span><span class="p">,</span> <span class="s2">&quot;HEAD_DIM&quot;</span><span class="p">,</span> <span class="s2">&quot;FP8_OUTPUT&quot;</span><span class="p">])</span>
+<span class="nd">@triton</span><span class="o">.</span><span class="n">autotune</span><span class="p">(</span><span class="n">configs</span><span class="o">=</span><span class="nb">list</span><span class="p">(</span><span class="nb">filter</span><span class="p">(</span><span class="n">keep_tma</span><span class="p">,</span> <span class="n">configs_tma</span><span class="p">)),</span>
+                 <span class="n">key</span><span class="o">=</span><span class="p">[</span><span class="s2">&quot;N_CTX&quot;</span><span class="p">,</span> <span class="s2">&quot;HEAD_DIM&quot;</span><span class="p">,</span> <span class="s2">&quot;FP8_OUTPUT&quot;</span><span class="p">,</span> <span class="s2">&quot;warp_specialize&quot;</span><span class="p">])</span>
 <span class="nd">@triton</span><span class="o">.</span><span class="n">jit</span>
 <span class="k">def</span><span class="w"> </span><span class="nf">_attn_fwd_tma</span><span class="p">(</span><span class="n">sm_scale</span><span class="p">,</span> <span class="n">M</span><span class="p">,</span>  <span class="c1">#</span>
                   <span class="n">Z</span><span class="p">,</span> <span class="n">H</span><span class="p">,</span> <span class="n">desc_q</span><span class="p">,</span> <span class="n">desc_k</span><span class="p">,</span> <span class="n">desc_v</span><span class="p">,</span> <span class="n">desc_o</span><span class="p">,</span> <span class="n">N_CTX</span><span class="p">,</span>  <span class="c1">#</span>
@@ -430,7 +456,8 @@ fused-attention-batch4-head32-d64-bwd-causal=True:
                   <span class="n">BLOCK_M</span><span class="p">:</span> <span class="n">tl</span><span class="o">.</span><span class="n">constexpr</span><span class="p">,</span>  <span class="c1">#</span>
                   <span class="n">BLOCK_N</span><span class="p">:</span> <span class="n">tl</span><span class="o">.</span><span class="n">constexpr</span><span class="p">,</span>  <span class="c1">#</span>
                   <span class="n">FP8_OUTPUT</span><span class="p">:</span> <span class="n">tl</span><span class="o">.</span><span class="n">constexpr</span><span class="p">,</span>  <span class="c1">#</span>
-                  <span class="n">STAGE</span><span class="p">:</span> <span class="n">tl</span><span class="o">.</span><span class="n">constexpr</span>  <span class="c1">#</span>
+                  <span class="n">STAGE</span><span class="p">:</span> <span class="n">tl</span><span class="o">.</span><span class="n">constexpr</span><span class="p">,</span>  <span class="c1">#</span>
+                  <span class="n">warp_specialize</span><span class="p">:</span> <span class="n">tl</span><span class="o">.</span><span class="n">constexpr</span><span class="p">,</span>  <span class="c1">#</span>
                   <span class="p">):</span>
     <span class="n">dtype</span> <span class="o">=</span> <span class="n">tl</span><span class="o">.</span><span class="n">float8e5</span> <span class="k">if</span> <span class="n">FP8_OUTPUT</span> <span class="k">else</span> <span class="n">tl</span><span class="o">.</span><span class="n">float16</span>
     <span class="n">tl</span><span class="o">.</span><span class="n">static_assert</span><span class="p">(</span><span class="n">BLOCK_N</span> <span class="o">&lt;=</span> <span class="n">HEAD_DIM</span><span class="p">)</span>
@@ -462,7 +489,7 @@ fused-attention-batch4-head32-d64-bwd-causal=True:
                                             <span class="n">offset_y</span><span class="p">,</span> <span class="n">dtype</span><span class="p">,</span> <span class="n">start_m</span><span class="p">,</span> <span class="n">qk_scale</span><span class="p">,</span>  <span class="c1">#</span>
                                             <span class="n">BLOCK_M</span><span class="p">,</span> <span class="n">HEAD_DIM</span><span class="p">,</span> <span class="n">BLOCK_N</span><span class="p">,</span>  <span class="c1">#</span>
                                             <span class="mi">4</span> <span class="o">-</span> <span class="n">STAGE</span><span class="p">,</span> <span class="n">offs_m</span><span class="p">,</span> <span class="n">offs_n</span><span class="p">,</span> <span class="n">N_CTX</span><span class="p">,</span>  <span class="c1">#</span>
-                                            <span class="p">)</span>
+                                            <span class="n">warp_specialize</span><span class="p">)</span>
     <span class="c1"># stage 2: on-band</span>
     <span class="k">if</span> <span class="n">STAGE</span> <span class="o">&amp;</span> <span class="mi">2</span><span class="p">:</span>
         <span class="c1"># barrier makes it easier for compielr to schedule the</span>
@@ -472,7 +499,7 @@ fused-attention-batch4-head32-d64-bwd-causal=True:
                                             <span class="n">offset_y</span><span class="p">,</span> <span class="n">dtype</span><span class="p">,</span> <span class="n">start_m</span><span class="p">,</span> <span class="n">qk_scale</span><span class="p">,</span>  <span class="c1">#</span>
                                             <span class="n">BLOCK_M</span><span class="p">,</span> <span class="n">HEAD_DIM</span><span class="p">,</span> <span class="n">BLOCK_N</span><span class="p">,</span>  <span class="c1">#</span>
                                             <span class="mi">2</span><span class="p">,</span> <span class="n">offs_m</span><span class="p">,</span> <span class="n">offs_n</span><span class="p">,</span> <span class="n">N_CTX</span><span class="p">,</span>  <span class="c1">#</span>
-                                            <span class="p">)</span>
+                                            <span class="n">warp_specialize</span><span class="p">)</span>
     <span class="c1"># epilogue</span>
     <span class="n">m_i</span> <span class="o">+=</span> <span class="n">tl</span><span class="o">.</span><span class="n">math</span><span class="o">.</span><span class="n">log2</span><span class="p">(</span><span class="n">l_i</span><span class="p">)</span>
     <span class="n">acc</span> <span class="o">=</span> <span class="n">acc</span> <span class="o">/</span> <span class="n">l_i</span><span class="p">[:,</span> <span class="kc">None</span><span class="p">]</span>
@@ -732,7 +759,7 @@ fused-attention-batch4-head32-d64-bwd-causal=True:
 <span class="k">class</span><span class="w"> </span><span class="nc">_attention</span><span class="p">(</span><span class="n">torch</span><span class="o">.</span><span class="n">autograd</span><span class="o">.</span><span class="n">Function</span><span class="p">):</span>
 
     <span class="nd">@staticmethod</span>
-    <span class="k">def</span><span class="w"> </span><span class="nf">forward</span><span class="p">(</span><span class="n">ctx</span><span class="p">,</span> <span class="n">q</span><span class="p">,</span> <span class="n">k</span><span class="p">,</span> <span class="n">v</span><span class="p">,</span> <span class="n">causal</span><span class="p">,</span> <span class="n">sm_scale</span><span class="p">,</span> <span class="n">USE_TMA</span><span class="o">=</span><span class="kc">True</span><span class="p">):</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">forward</span><span class="p">(</span><span class="n">ctx</span><span class="p">,</span> <span class="n">q</span><span class="p">,</span> <span class="n">k</span><span class="p">,</span> <span class="n">v</span><span class="p">,</span> <span class="n">causal</span><span class="p">,</span> <span class="n">sm_scale</span><span class="p">,</span> <span class="n">warp_specialize</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">USE_TMA</span><span class="o">=</span><span class="kc">True</span><span class="p">):</span>
         <span class="c1"># shape constraints</span>
         <span class="n">HEAD_DIM_Q</span><span class="p">,</span> <span class="n">HEAD_DIM_K</span> <span class="o">=</span> <span class="n">q</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">],</span> <span class="n">k</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">]</span>
         <span class="c1"># when v is in float8_e5m2 it is transposed.</span>
@@ -754,10 +781,10 @@ fused-attention-batch4-head32-d64-bwd-causal=True:
             <span class="n">y_dim</span> <span class="o">=</span> <span class="n">q</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span> <span class="o">*</span> <span class="n">q</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span> <span class="o">*</span> <span class="n">q</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">2</span><span class="p">]</span>
 
             <span class="n">dummy_block</span> <span class="o">=</span> <span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">1</span><span class="p">]</span>
-            <span class="n">desc_q</span> <span class="o">=</span> <span class="n">TensorDescriptor</span><span class="p">(</span><span class="n">q</span><span class="p">,</span> <span class="n">shape</span><span class="o">=</span><span class="p">[</span><span class="n">y_dim</span><span class="p">,</span> <span class="n">HEAD_DIM_K</span><span class="p">],</span> <span class="n">strides</span><span class="o">=</span><span class="p">[</span><span class="n">HEAD_DIM_K</span><span class="p">,</span> <span class="mi">1</span><span class="p">],</span> <span class="n">block_shape</span><span class="o">=</span><span class="n">dummy_block</span><span class="p">)</span>
-            <span class="n">desc_v</span> <span class="o">=</span> <span class="n">TensorDescriptor</span><span class="p">(</span><span class="n">v</span><span class="p">,</span> <span class="n">shape</span><span class="o">=</span><span class="p">[</span><span class="n">y_dim</span><span class="p">,</span> <span class="n">HEAD_DIM_K</span><span class="p">],</span> <span class="n">strides</span><span class="o">=</span><span class="p">[</span><span class="n">HEAD_DIM_K</span><span class="p">,</span> <span class="mi">1</span><span class="p">],</span> <span class="n">block_shape</span><span class="o">=</span><span class="n">dummy_block</span><span class="p">)</span>
-            <span class="n">desc_k</span> <span class="o">=</span> <span class="n">TensorDescriptor</span><span class="p">(</span><span class="n">k</span><span class="p">,</span> <span class="n">shape</span><span class="o">=</span><span class="p">[</span><span class="n">y_dim</span><span class="p">,</span> <span class="n">HEAD_DIM_K</span><span class="p">],</span> <span class="n">strides</span><span class="o">=</span><span class="p">[</span><span class="n">HEAD_DIM_K</span><span class="p">,</span> <span class="mi">1</span><span class="p">],</span> <span class="n">block_shape</span><span class="o">=</span><span class="n">dummy_block</span><span class="p">)</span>
-            <span class="n">desc_o</span> <span class="o">=</span> <span class="n">TensorDescriptor</span><span class="p">(</span><span class="n">o</span><span class="p">,</span> <span class="n">shape</span><span class="o">=</span><span class="p">[</span><span class="n">y_dim</span><span class="p">,</span> <span class="n">HEAD_DIM_K</span><span class="p">],</span> <span class="n">strides</span><span class="o">=</span><span class="p">[</span><span class="n">HEAD_DIM_K</span><span class="p">,</span> <span class="mi">1</span><span class="p">],</span> <span class="n">block_shape</span><span class="o">=</span><span class="n">dummy_block</span><span class="p">)</span>
+            <span class="n">desc_q</span> <span class="o">=</span> <span class="n">TensorDescriptor</span><span class="p">(</span><span class="n">q</span><span class="p">,</span> <span class="n">shape</span><span class="o">=</span><span class="p">[</span><span class="n">y_dim</span><span class="p">,</span> <span class="n">HEAD_DIM_K</span><span class="p">],</span> <span class="n">strides</span><span class="o">=</span><span class="p">[</span><span class="n">HEAD_DIM</span><span class="p">,</span> <span class="mi">1</span><span class="p">],</span> <span class="n">block_shape</span><span class="o">=</span><span class="n">dummy_block</span><span class="p">)</span>
+            <span class="n">desc_v</span> <span class="o">=</span> <span class="n">TensorDescriptor</span><span class="p">(</span><span class="n">v</span><span class="p">,</span> <span class="n">shape</span><span class="o">=</span><span class="p">[</span><span class="n">y_dim</span><span class="p">,</span> <span class="n">HEAD_DIM_K</span><span class="p">],</span> <span class="n">strides</span><span class="o">=</span><span class="p">[</span><span class="n">HEAD_DIM</span><span class="p">,</span> <span class="mi">1</span><span class="p">],</span> <span class="n">block_shape</span><span class="o">=</span><span class="n">dummy_block</span><span class="p">)</span>
+            <span class="n">desc_k</span> <span class="o">=</span> <span class="n">TensorDescriptor</span><span class="p">(</span><span class="n">k</span><span class="p">,</span> <span class="n">shape</span><span class="o">=</span><span class="p">[</span><span class="n">y_dim</span><span class="p">,</span> <span class="n">HEAD_DIM_K</span><span class="p">],</span> <span class="n">strides</span><span class="o">=</span><span class="p">[</span><span class="n">HEAD_DIM</span><span class="p">,</span> <span class="mi">1</span><span class="p">],</span> <span class="n">block_shape</span><span class="o">=</span><span class="n">dummy_block</span><span class="p">)</span>
+            <span class="n">desc_o</span> <span class="o">=</span> <span class="n">TensorDescriptor</span><span class="p">(</span><span class="n">o</span><span class="p">,</span> <span class="n">shape</span><span class="o">=</span><span class="p">[</span><span class="n">y_dim</span><span class="p">,</span> <span class="n">HEAD_DIM_K</span><span class="p">],</span> <span class="n">strides</span><span class="o">=</span><span class="p">[</span><span class="n">HEAD_DIM</span><span class="p">,</span> <span class="mi">1</span><span class="p">],</span> <span class="n">block_shape</span><span class="o">=</span><span class="n">dummy_block</span><span class="p">)</span>
 
             <span class="k">def</span><span class="w"> </span><span class="nf">grid</span><span class="p">(</span><span class="n">META</span><span class="p">):</span>
                 <span class="k">return</span> <span class="p">(</span><span class="n">triton</span><span class="o">.</span><span class="n">cdiv</span><span class="p">(</span><span class="n">q</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">2</span><span class="p">],</span> <span class="n">META</span><span class="p">[</span><span class="s2">&quot;BLOCK_M&quot;</span><span class="p">]),</span> <span class="n">q</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span> <span class="o">*</span> <span class="n">q</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">1</span><span class="p">],</span> <span class="mi">1</span><span class="p">)</span>
@@ -768,9 +795,10 @@ fused-attention-batch4-head32-d64-bwd-causal=True:
                 <span class="n">q</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">0</span><span class="p">],</span> <span class="n">q</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">1</span><span class="p">],</span>  <span class="c1">#</span>
                 <span class="n">desc_q</span><span class="p">,</span> <span class="n">desc_k</span><span class="p">,</span> <span class="n">desc_v</span><span class="p">,</span> <span class="n">desc_o</span><span class="p">,</span>  <span class="c1">#</span>
                 <span class="n">N_CTX</span><span class="o">=</span><span class="n">q</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">2</span><span class="p">],</span>  <span class="c1">#</span>
-                <span class="n">HEAD_DIM</span><span class="o">=</span><span class="n">HEAD_DIM_K</span><span class="p">,</span>  <span class="c1">#</span>
+                <span class="n">HEAD_DIM</span><span class="o">=</span><span class="n">HEAD_DIM</span><span class="p">,</span>  <span class="c1">#</span>
                 <span class="n">FP8_OUTPUT</span><span class="o">=</span><span class="n">q</span><span class="o">.</span><span class="n">dtype</span> <span class="o">==</span> <span class="n">torch</span><span class="o">.</span><span class="n">float8_e5m2</span><span class="p">,</span>  <span class="c1">#</span>
                 <span class="n">STAGE</span><span class="o">=</span><span class="n">stage</span><span class="p">,</span>  <span class="c1">#</span>
+                <span class="n">warp_specialize</span><span class="o">=</span><span class="n">warp_specialize</span><span class="p">,</span>  <span class="c1">#</span>
                 <span class="o">**</span><span class="n">extra_kern_args</span><span class="p">)</span>
         <span class="k">else</span><span class="p">:</span>
             <span class="n">grid</span> <span class="o">=</span> <span class="k">lambda</span> <span class="n">args</span><span class="p">:</span> <span class="p">(</span><span class="n">triton</span><span class="o">.</span><span class="n">cdiv</span><span class="p">(</span><span class="n">q</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">2</span><span class="p">],</span> <span class="n">args</span><span class="p">[</span><span class="s2">&quot;BLOCK_M&quot;</span><span class="p">]),</span> <span class="n">q</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span> <span class="o">*</span> <span class="n">q</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">1</span><span class="p">],</span> <span class="mi">1</span><span class="p">)</span>
@@ -833,7 +861,7 @@ fused-attention-batch4-head32-d64-bwd-causal=True:
             <span class="n">num_stages</span><span class="o">=</span><span class="n">NUM_STAGES</span>  <span class="c1">#</span>
         <span class="p">)</span>
 
-        <span class="k">return</span> <span class="n">dq</span><span class="p">,</span> <span class="n">dk</span><span class="p">,</span> <span class="n">dv</span><span class="p">,</span> <span class="kc">None</span><span class="p">,</span> <span class="kc">None</span>
+        <span class="k">return</span> <span class="n">dq</span><span class="p">,</span> <span class="n">dk</span><span class="p">,</span> <span class="n">dv</span><span class="p">,</span> <span class="kc">None</span><span class="p">,</span> <span class="kc">None</span><span class="p">,</span> <span class="kc">None</span><span class="p">,</span> <span class="kc">None</span>
 
 
 <span class="n">attention</span> <span class="o">=</span> <span class="n">_attention</span><span class="o">.</span><span class="n">apply</span>
@@ -867,15 +895,15 @@ fused-attention-batch4-head32-d64-bwd-causal=True:
     <span class="n">tri_dk</span><span class="p">,</span> <span class="n">k</span><span class="o">.</span><span class="n">grad</span> <span class="o">=</span> <span class="n">k</span><span class="o">.</span><span class="n">grad</span><span class="o">.</span><span class="n">clone</span><span class="p">(),</span> <span class="kc">None</span>
     <span class="n">tri_dq</span><span class="p">,</span> <span class="n">q</span><span class="o">.</span><span class="n">grad</span> <span class="o">=</span> <span class="n">q</span><span class="o">.</span><span class="n">grad</span><span class="o">.</span><span class="n">clone</span><span class="p">(),</span> <span class="kc">None</span>
     <span class="c1"># compare</span>
-    <span class="k">assert</span> <span class="n">torch</span><span class="o">.</span><span class="n">allclose</span><span class="p">(</span><span class="n">ref_out</span><span class="p">,</span> <span class="n">tri_out</span><span class="p">,</span> <span class="n">atol</span><span class="o">=</span><span class="mf">1e-2</span><span class="p">,</span> <span class="n">rtol</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>
+    <span class="n">torch</span><span class="o">.</span><span class="n">testing</span><span class="o">.</span><span class="n">assert_close</span><span class="p">(</span><span class="n">ref_out</span><span class="p">,</span> <span class="n">tri_out</span><span class="p">,</span> <span class="n">atol</span><span class="o">=</span><span class="mf">1e-2</span><span class="p">,</span> <span class="n">rtol</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>
     <span class="n">rtol</span> <span class="o">=</span> <span class="mf">0.0</span>
     <span class="c1"># Relative tolerance workaround for known hardware limitation of CDNA2 GPU.</span>
     <span class="c1"># For details see https://pytorch.org/docs/stable/notes/numerical_accuracy.html#reduced-precision-fp16-and-bf16-gemms-and-convolutions-on-amd-instinct-mi200-devices</span>
     <span class="k">if</span> <span class="n">torch</span><span class="o">.</span><span class="n">version</span><span class="o">.</span><span class="n">hip</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span> <span class="ow">and</span> <span class="n">triton</span><span class="o">.</span><span class="n">runtime</span><span class="o">.</span><span class="n">driver</span><span class="o">.</span><span class="n">active</span><span class="o">.</span><span class="n">get_current_target</span><span class="p">()</span><span class="o">.</span><span class="n">arch</span> <span class="o">==</span> <span class="s2">&quot;gfx90a&quot;</span><span class="p">:</span>
         <span class="n">rtol</span> <span class="o">=</span> <span class="mf">1e-2</span>
-    <span class="k">assert</span> <span class="n">torch</span><span class="o">.</span><span class="n">allclose</span><span class="p">(</span><span class="n">ref_dv</span><span class="p">,</span> <span class="n">tri_dv</span><span class="p">,</span> <span class="n">atol</span><span class="o">=</span><span class="mf">1e-2</span><span class="p">,</span> <span class="n">rtol</span><span class="o">=</span><span class="n">rtol</span><span class="p">)</span>
-    <span class="k">assert</span> <span class="n">torch</span><span class="o">.</span><span class="n">allclose</span><span class="p">(</span><span class="n">ref_dk</span><span class="p">,</span> <span class="n">tri_dk</span><span class="p">,</span> <span class="n">atol</span><span class="o">=</span><span class="mf">1e-2</span><span class="p">,</span> <span class="n">rtol</span><span class="o">=</span><span class="n">rtol</span><span class="p">)</span>
-    <span class="k">assert</span> <span class="n">torch</span><span class="o">.</span><span class="n">allclose</span><span class="p">(</span><span class="n">ref_dq</span><span class="p">,</span> <span class="n">tri_dq</span><span class="p">,</span> <span class="n">atol</span><span class="o">=</span><span class="mf">1e-2</span><span class="p">,</span> <span class="n">rtol</span><span class="o">=</span><span class="n">rtol</span><span class="p">)</span>
+    <span class="n">torch</span><span class="o">.</span><span class="n">testing</span><span class="o">.</span><span class="n">assert_close</span><span class="p">(</span><span class="n">ref_dv</span><span class="p">,</span> <span class="n">tri_dv</span><span class="p">,</span> <span class="n">atol</span><span class="o">=</span><span class="mf">1e-2</span><span class="p">,</span> <span class="n">rtol</span><span class="o">=</span><span class="n">rtol</span><span class="p">)</span>
+    <span class="n">torch</span><span class="o">.</span><span class="n">testing</span><span class="o">.</span><span class="n">assert_close</span><span class="p">(</span><span class="n">ref_dk</span><span class="p">,</span> <span class="n">tri_dk</span><span class="p">,</span> <span class="n">atol</span><span class="o">=</span><span class="mf">1e-2</span><span class="p">,</span> <span class="n">rtol</span><span class="o">=</span><span class="n">rtol</span><span class="p">)</span>
+    <span class="n">torch</span><span class="o">.</span><span class="n">testing</span><span class="o">.</span><span class="n">assert_close</span><span class="p">(</span><span class="n">ref_dq</span><span class="p">,</span> <span class="n">tri_dq</span><span class="p">,</span> <span class="n">atol</span><span class="o">=</span><span class="mf">1e-2</span><span class="p">,</span> <span class="n">rtol</span><span class="o">=</span><span class="n">rtol</span><span class="p">)</span>
 
 
 <span class="k">try</span><span class="p">:</span>
@@ -891,32 +919,35 @@ fused-attention-batch4-head32-d64-bwd-causal=True:
 <span class="n">configs</span> <span class="o">=</span> <span class="p">[]</span>
 <span class="k">for</span> <span class="n">mode</span> <span class="ow">in</span> <span class="p">[</span><span class="s2">&quot;fwd&quot;</span><span class="p">,</span> <span class="s2">&quot;bwd&quot;</span><span class="p">]:</span>
     <span class="k">for</span> <span class="n">causal</span> <span class="ow">in</span> <span class="p">[</span><span class="kc">True</span><span class="p">,</span> <span class="kc">False</span><span class="p">]:</span>
-        <span class="k">if</span> <span class="n">mode</span> <span class="o">==</span> <span class="s2">&quot;bwd&quot;</span> <span class="ow">and</span> <span class="ow">not</span> <span class="n">causal</span><span class="p">:</span>
-            <span class="k">continue</span>
-        <span class="n">configs</span><span class="o">.</span><span class="n">append</span><span class="p">(</span>
-            <span class="n">triton</span><span class="o">.</span><span class="n">testing</span><span class="o">.</span><span class="n">Benchmark</span><span class="p">(</span>
-                <span class="n">x_names</span><span class="o">=</span><span class="p">[</span><span class="s2">&quot;N_CTX&quot;</span><span class="p">],</span>
-                <span class="n">x_vals</span><span class="o">=</span><span class="p">[</span><span class="mi">2</span><span class="o">**</span><span class="n">i</span> <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="mi">10</span><span class="p">,</span> <span class="mi">15</span><span class="p">)],</span>
-                <span class="n">line_arg</span><span class="o">=</span><span class="s2">&quot;provider&quot;</span><span class="p">,</span>
-                <span class="n">line_vals</span><span class="o">=</span><span class="p">[</span><span class="s2">&quot;triton-fp16&quot;</span><span class="p">]</span> <span class="o">+</span> <span class="p">([</span><span class="s2">&quot;triton-fp8&quot;</span><span class="p">]</span> <span class="k">if</span> <span class="n">TORCH_HAS_FP8</span> <span class="k">else</span> <span class="p">[])</span> <span class="o">+</span>
-                <span class="p">([</span><span class="s2">&quot;flash&quot;</span><span class="p">]</span> <span class="k">if</span> <span class="n">HAS_FLASH</span> <span class="k">else</span> <span class="p">[]),</span>
-                <span class="n">line_names</span><span class="o">=</span><span class="p">[</span><span class="s2">&quot;Triton [FP16]&quot;</span><span class="p">]</span> <span class="o">+</span> <span class="p">([</span><span class="s2">&quot;Triton [FP8]&quot;</span><span class="p">]</span> <span class="k">if</span> <span class="n">TORCH_HAS_FP8</span> <span class="k">else</span> <span class="p">[])</span> <span class="o">+</span>
-                <span class="p">([</span><span class="s2">&quot;Flash-2&quot;</span><span class="p">]</span> <span class="k">if</span> <span class="n">HAS_FLASH</span> <span class="k">else</span> <span class="p">[]),</span>
-                <span class="n">styles</span><span class="o">=</span><span class="p">[(</span><span class="s2">&quot;red&quot;</span><span class="p">,</span> <span class="s2">&quot;-&quot;</span><span class="p">),</span> <span class="p">(</span><span class="s2">&quot;blue&quot;</span><span class="p">,</span> <span class="s2">&quot;-&quot;</span><span class="p">),</span> <span class="p">(</span><span class="s2">&quot;green&quot;</span><span class="p">,</span> <span class="s2">&quot;-&quot;</span><span class="p">)],</span>
-                <span class="n">ylabel</span><span class="o">=</span><span class="s2">&quot;TFLOPS&quot;</span><span class="p">,</span>
-                <span class="n">plot_name</span><span class="o">=</span><span class="sa">f</span><span class="s2">&quot;fused-attention-batch</span><span class="si">{</span><span class="n">BATCH</span><span class="si">}</span><span class="s2">-head</span><span class="si">{</span><span class="n">N_HEADS</span><span class="si">}</span><span class="s2">-d</span><span class="si">{</span><span class="n">HEAD_DIM</span><span class="si">}</span><span class="s2">-</span><span class="si">{</span><span class="n">mode</span><span class="si">}</span><span class="s2">-causal=</span><span class="si">{</span><span class="n">causal</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">,</span>
-                <span class="n">args</span><span class="o">=</span><span class="p">{</span>
-                    <span class="s2">&quot;H&quot;</span><span class="p">:</span> <span class="n">N_HEADS</span><span class="p">,</span>
-                    <span class="s2">&quot;BATCH&quot;</span><span class="p">:</span> <span class="n">BATCH</span><span class="p">,</span>
-                    <span class="s2">&quot;HEAD_DIM&quot;</span><span class="p">:</span> <span class="n">HEAD_DIM</span><span class="p">,</span>
-                    <span class="s2">&quot;mode&quot;</span><span class="p">:</span> <span class="n">mode</span><span class="p">,</span>
-                    <span class="s2">&quot;causal&quot;</span><span class="p">:</span> <span class="n">causal</span><span class="p">,</span>
-                <span class="p">},</span>
-            <span class="p">))</span>
+        <span class="k">for</span> <span class="n">warp_specialize</span> <span class="ow">in</span> <span class="p">[</span><span class="kc">True</span><span class="p">,</span> <span class="kc">False</span><span class="p">]:</span>
+            <span class="k">if</span> <span class="n">mode</span> <span class="o">==</span> <span class="s2">&quot;bwd&quot;</span> <span class="ow">and</span> <span class="ow">not</span> <span class="n">causal</span><span class="p">:</span>
+                <span class="k">continue</span>
+            <span class="n">configs</span><span class="o">.</span><span class="n">append</span><span class="p">(</span>
+                <span class="n">triton</span><span class="o">.</span><span class="n">testing</span><span class="o">.</span><span class="n">Benchmark</span><span class="p">(</span>
+                    <span class="n">x_names</span><span class="o">=</span><span class="p">[</span><span class="s2">&quot;N_CTX&quot;</span><span class="p">],</span>
+                    <span class="n">x_vals</span><span class="o">=</span><span class="p">[</span><span class="mi">2</span><span class="o">**</span><span class="n">i</span> <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="mi">10</span><span class="p">,</span> <span class="mi">15</span><span class="p">)],</span>
+                    <span class="n">line_arg</span><span class="o">=</span><span class="s2">&quot;provider&quot;</span><span class="p">,</span>
+                    <span class="n">line_vals</span><span class="o">=</span><span class="p">[</span><span class="s2">&quot;triton-fp16&quot;</span><span class="p">]</span> <span class="o">+</span> <span class="p">([</span><span class="s2">&quot;triton-fp8&quot;</span><span class="p">]</span> <span class="k">if</span> <span class="n">TORCH_HAS_FP8</span> <span class="k">else</span> <span class="p">[])</span> <span class="o">+</span>
+                    <span class="p">([</span><span class="s2">&quot;flash&quot;</span><span class="p">]</span> <span class="k">if</span> <span class="n">HAS_FLASH</span> <span class="k">else</span> <span class="p">[]),</span>
+                    <span class="n">line_names</span><span class="o">=</span><span class="p">[</span><span class="s2">&quot;Triton [FP16]&quot;</span><span class="p">]</span> <span class="o">+</span> <span class="p">([</span><span class="s2">&quot;Triton [FP8]&quot;</span><span class="p">]</span> <span class="k">if</span> <span class="n">TORCH_HAS_FP8</span> <span class="k">else</span> <span class="p">[])</span> <span class="o">+</span>
+                    <span class="p">([</span><span class="s2">&quot;Flash-2&quot;</span><span class="p">]</span> <span class="k">if</span> <span class="n">HAS_FLASH</span> <span class="k">else</span> <span class="p">[]),</span>
+                    <span class="n">styles</span><span class="o">=</span><span class="p">[(</span><span class="s2">&quot;red&quot;</span><span class="p">,</span> <span class="s2">&quot;-&quot;</span><span class="p">),</span> <span class="p">(</span><span class="s2">&quot;blue&quot;</span><span class="p">,</span> <span class="s2">&quot;-&quot;</span><span class="p">),</span> <span class="p">(</span><span class="s2">&quot;green&quot;</span><span class="p">,</span> <span class="s2">&quot;-&quot;</span><span class="p">)],</span>
+                    <span class="n">ylabel</span><span class="o">=</span><span class="s2">&quot;TFLOPS&quot;</span><span class="p">,</span>
+                    <span class="n">plot_name</span><span class="o">=</span>
+                    <span class="sa">f</span><span class="s2">&quot;fused-attention-batch</span><span class="si">{</span><span class="n">BATCH</span><span class="si">}</span><span class="s2">-head</span><span class="si">{</span><span class="n">N_HEADS</span><span class="si">}</span><span class="s2">-d</span><span class="si">{</span><span class="n">HEAD_DIM</span><span class="si">}</span><span class="s2">-</span><span class="si">{</span><span class="n">mode</span><span class="si">}</span><span class="s2">-causal=</span><span class="si">{</span><span class="n">causal</span><span class="si">}</span><span class="s2">-warp_specialize=</span><span class="si">{</span><span class="n">warp_specialize</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">,</span>
+                    <span class="n">args</span><span class="o">=</span><span class="p">{</span>
+                        <span class="s2">&quot;H&quot;</span><span class="p">:</span> <span class="n">N_HEADS</span><span class="p">,</span>
+                        <span class="s2">&quot;BATCH&quot;</span><span class="p">:</span> <span class="n">BATCH</span><span class="p">,</span>
+                        <span class="s2">&quot;HEAD_DIM&quot;</span><span class="p">:</span> <span class="n">HEAD_DIM</span><span class="p">,</span>
+                        <span class="s2">&quot;mode&quot;</span><span class="p">:</span> <span class="n">mode</span><span class="p">,</span>
+                        <span class="s2">&quot;causal&quot;</span><span class="p">:</span> <span class="n">causal</span><span class="p">,</span>
+                        <span class="s2">&quot;warp_specialize&quot;</span><span class="p">:</span> <span class="n">warp_specialize</span><span class="p">,</span>
+                    <span class="p">},</span>
+                <span class="p">))</span>
 
 
 <span class="nd">@triton</span><span class="o">.</span><span class="n">testing</span><span class="o">.</span><span class="n">perf_report</span><span class="p">(</span><span class="n">configs</span><span class="p">)</span>
-<span class="k">def</span><span class="w"> </span><span class="nf">bench_flash_attention</span><span class="p">(</span><span class="n">BATCH</span><span class="p">,</span> <span class="n">H</span><span class="p">,</span> <span class="n">N_CTX</span><span class="p">,</span> <span class="n">HEAD_DIM</span><span class="p">,</span> <span class="n">causal</span><span class="p">,</span> <span class="n">mode</span><span class="p">,</span> <span class="n">provider</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">DEVICE</span><span class="p">):</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">bench_flash_attention</span><span class="p">(</span><span class="n">BATCH</span><span class="p">,</span> <span class="n">H</span><span class="p">,</span> <span class="n">N_CTX</span><span class="p">,</span> <span class="n">HEAD_DIM</span><span class="p">,</span> <span class="n">causal</span><span class="p">,</span> <span class="n">warp_specialize</span><span class="p">,</span> <span class="n">mode</span><span class="p">,</span> <span class="n">provider</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">DEVICE</span><span class="p">):</span>
     <span class="k">assert</span> <span class="n">mode</span> <span class="ow">in</span> <span class="p">[</span><span class="s2">&quot;fwd&quot;</span><span class="p">,</span> <span class="s2">&quot;bwd&quot;</span><span class="p">]</span>
     <span class="n">dtype</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">float16</span>
     <span class="k">if</span> <span class="s2">&quot;triton&quot;</span> <span class="ow">in</span> <span class="n">provider</span><span class="p">:</span>
@@ -930,12 +961,13 @@ fused-attention-batch4-head32-d64-bwd-causal=True:
             <span class="n">v</span> <span class="o">=</span> <span class="n">v</span><span class="o">.</span><span class="n">permute</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">3</span><span class="p">,</span> <span class="mi">2</span><span class="p">)</span>
             <span class="n">v</span> <span class="o">=</span> <span class="n">v</span><span class="o">.</span><span class="n">to</span><span class="p">(</span><span class="n">torch</span><span class="o">.</span><span class="n">float8_e5m2</span><span class="p">)</span>
         <span class="n">sm_scale</span> <span class="o">=</span> <span class="mf">1.3</span>
-        <span class="n">fn</span> <span class="o">=</span> <span class="k">lambda</span><span class="p">:</span> <span class="n">attention</span><span class="p">(</span><span class="n">q</span><span class="p">,</span> <span class="n">k</span><span class="p">,</span> <span class="n">v</span><span class="p">,</span> <span class="n">causal</span><span class="p">,</span> <span class="n">sm_scale</span><span class="p">)</span>
+        <span class="n">fn</span> <span class="o">=</span> <span class="k">lambda</span><span class="p">:</span> <span class="n">attention</span><span class="p">(</span><span class="n">q</span><span class="p">,</span> <span class="n">k</span><span class="p">,</span> <span class="n">v</span><span class="p">,</span> <span class="n">causal</span><span class="p">,</span> <span class="n">sm_scale</span><span class="p">,</span> <span class="n">warp_specialize</span><span class="p">)</span>
         <span class="k">if</span> <span class="n">mode</span> <span class="o">==</span> <span class="s2">&quot;bwd&quot;</span><span class="p">:</span>
             <span class="n">o</span> <span class="o">=</span> <span class="n">fn</span><span class="p">()</span>
             <span class="n">do</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">randn_like</span><span class="p">(</span><span class="n">o</span><span class="p">)</span>
             <span class="n">fn</span> <span class="o">=</span> <span class="k">lambda</span><span class="p">:</span> <span class="n">o</span><span class="o">.</span><span class="n">backward</span><span class="p">(</span><span class="n">do</span><span class="p">,</span> <span class="n">retain_graph</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
         <span class="n">ms</span> <span class="o">=</span> <span class="n">triton</span><span class="o">.</span><span class="n">testing</span><span class="o">.</span><span class="n">do_bench</span><span class="p">(</span><span class="n">fn</span><span class="p">)</span>
+
     <span class="k">if</span> <span class="n">provider</span> <span class="o">==</span> <span class="s2">&quot;flash&quot;</span><span class="p">:</span>
         <span class="n">qkv</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">randn</span><span class="p">((</span><span class="n">BATCH</span><span class="p">,</span> <span class="n">N_CTX</span><span class="p">,</span> <span class="mi">3</span><span class="p">,</span> <span class="n">H</span><span class="p">,</span> <span class="n">HEAD_DIM</span><span class="p">),</span> <span class="n">dtype</span><span class="o">=</span><span class="n">dtype</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">,</span> <span class="n">requires_grad</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
         <span class="n">fn</span> <span class="o">=</span> <span class="k">lambda</span><span class="p">:</span> <span class="n">flash_attn_func</span><span class="p">(</span><span class="n">qkv</span><span class="p">,</span> <span class="n">causal</span><span class="o">=</span><span class="n">causal</span><span class="p">)</span>
@@ -958,7 +990,7 @@ fused-attention-batch4-head32-d64-bwd-causal=True:
     <span class="n">bench_flash_attention</span><span class="o">.</span><span class="n">run</span><span class="p">(</span><span class="n">save_path</span><span class="o">=</span><span class="s2">&quot;.&quot;</span><span class="p">,</span> <span class="n">print_data</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
 </pre></div>
 </div>
-<p class="sphx-glr-timing"><strong>Total running time of the script:</strong> (0 minutes 53.947 seconds)</p>
+<p class="sphx-glr-timing"><strong>Total running time of the script:</strong> (1 minutes 1.899 seconds)</p>
 <div class="sphx-glr-footer sphx-glr-footer-example docutils container" id="sphx-glr-download-getting-started-tutorials-06-fused-attention-py">
 <div class="sphx-glr-download sphx-glr-download-jupyter docutils container">
 <p><a class="reference download internal" download="" href="../../_downloads/3176accb6c7288b0e45f41d94eebacb9/06-fused-attention.ipynb"><code class="xref download docutils literal notranslate"><span class="pre">Download</span> <span class="pre">Jupyter</span> <span class="pre">notebook:</span> <span class="pre">06-fused-attention.ipynb</span></code></a></p>
