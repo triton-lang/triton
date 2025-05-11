@@ -1,6 +1,6 @@
 import torch
 import triton
-from triton_bench import target_info
+from triton_kernels import target_info
 
 
 def compute_grid_size(routing_data, m, n, block_m, block_n):
@@ -69,6 +69,7 @@ def compute_num_stages(
     lhs_dtype,
     rhs_dtype,
     epilogue_subtile,
+    has_expensive_epilogue,
 ):
     if precision_config.max_num_imprecise_acc is not None:
         return 3
@@ -88,7 +89,11 @@ def compute_num_stages(
         # Per-stage wait barrier
         stage_size += 8
         acc_size = out_dtype.itemsize
-        if target_info.cuda_capability_geq(10, 0) and epilogue_subtile:
+        if target_info.cuda_capability_geq(10, 0):
+            acc_size = 4 if has_expensive_epilogue else out_dtype.itemsize
+        else:
+            acc_size = out_dtype.itemsize
+        if target_info.cuda_capability_geq(10, 0) and epilogue_subtile and not has_expensive_epilogue:
             acc_block_n = block_n // 2
         else:
             acc_block_n = block_n

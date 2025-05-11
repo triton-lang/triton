@@ -3,12 +3,12 @@ import matplotlib.pyplot as plt
 import json
 import triton.profiler as proton
 import torch
-import triton_bench.swiglu
-from triton_bench.numerics_details.mxfp import downcast_to_mxfp
-from triton_bench.matmul_ogs import MicroscalingCtx, matmul_ogs, PrecisionConfig, FlexCtx
-from triton_bench.numerics import InFlexData
-from triton_bench.routing import routing
-from triton_bench.target_info import is_hip, get_cdna_version
+import triton_kernels.swiglu
+from triton_kernels.numerics_details.mxfp import downcast_to_mxfp
+from triton_kernels.matmul_ogs import MicroscalingCtx, matmul_ogs, PrecisionConfig, FlexCtx
+from triton_kernels.numerics import InFlexData
+from triton_kernels.routing import routing
+from triton_kernels.target_info import is_hip, get_cdna_version
 from dataclasses import dataclass
 
 if torch.cuda.is_available() and not is_hip():
@@ -122,7 +122,7 @@ def bench_mlp(batch, dim1, dim2, n_expts_tot, n_expts_act, x_dtype, w_dtype, TP,
     w1, w1_flex, w1_mx = quantize(w1, w_dtype, dev, **opt1)
     w2, w2_flex, w2_mx = quantize(w2, w_dtype, dev, **opt2)
     pcg = PrecisionConfig(mx_ctx=wg_mx, flex_ctx=FlexCtx(rhs_data=wg_flex))
-    pcs = triton_bench.swiglu.PrecisionConfig(limit=1.0)
+    pcs = triton_kernels.swiglu.PrecisionConfig(limit=1.0)
     pc1 = PrecisionConfig(mx_ctx=w1_mx, flex_ctx=FlexCtx(rhs_data=w1_flex))
     pc2 = PrecisionConfig(mx_ctx=w2_mx, flex_ctx=FlexCtx(rhs_data=w2_flex))
 
@@ -146,7 +146,7 @@ def bench_mlp(batch, dim1, dim2, n_expts_tot, n_expts_act, x_dtype, w_dtype, TP,
         else:
             rdata, gather_indx, scatter_indx = None, None, None
         x = matmul_ogs(x, w1, b1, rdata, gather_indx=gather_indx, precision_config=pc1)
-        x = triton_bench.swiglu.swiglu(x, 1.0, pcs, routing_data=rdata)
+        x = triton_kernels.swiglu.swiglu(x, 1.0, pcs, routing_data=rdata)
         x = matmul_ogs(x, w2, b2, rdata, scatter_indx=scatter_indx, precision_config=pc2)
     proton.finalize()
 
@@ -170,7 +170,6 @@ def bench_mlp(batch, dim1, dim2, n_expts_tot, n_expts_act, x_dtype, w_dtype, TP,
 
 def roofline_mlp(batch_ranges, dim1, dim2, n_expts_tot, n_expts_act, x_dtype, w_dtype, TP=1, EP=1, name="",
                  verbose=True):
-    import numpy as np
     from itertools import chain
     from bisect import bisect_left
     batches = list(chain(*[range(*r) for r in batch_ranges]))

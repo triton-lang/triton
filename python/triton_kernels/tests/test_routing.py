@@ -1,9 +1,9 @@
 import pytest
 import torch
-from triton_bench.routing import routing, routing_torch
-from triton_bench.testing import assert_close
-from triton_bench.matmul_ogs_details.metadata import compute_metadata
-from triton_bench.testing import assert_equal
+from triton_kernels.routing import routing, routing_torch
+from triton_kernels.testing import assert_close
+from triton_kernels.matmul_ogs_details.metadata import compute_metadata
+from triton_kernels.testing import assert_equal
 
 
 def init_data(n_tokens, n_expts_tot, dtype=torch.float16, device="cuda"):
@@ -80,12 +80,12 @@ def bench_routing():
     proton.activate()
     for i in range(100):
         tri_routing_data, tri_gather, tri_scatter = routing(tri_logits, n_expts_act)
-        tri_metadata = compute_metadata(tri_routing_data, n_tokens * n_expts_act, block_m)
+        tri_metadata = compute_metadata(tri_routing_data, n_tokens * n_expts_act, block_m)  # noqa: F841
     proton.finalize()
     try:
         import os
         os.system("proton-viewer -m time/ms routing.hatchet")
-    except:
+    except Exception:
         pass
 
 

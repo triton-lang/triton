@@ -1,18 +1,57 @@
 from dataclasses import dataclass
 import itertools
+import sys
 import torch
 import triton
 # utilities
-from triton_bench import target_info
-from triton_bench.numerics import InFlexData, OutFlexData
-from triton_bench.routing import GatherIndx, RoutingData, ScatterIndx
+from triton_kernels import target_info
+from triton_kernels.numerics import InFlexData, OutFlexData
+from triton_kernels.routing import GatherIndx, RoutingData, ScatterIndx
 # details
-from .matmul_ogs_details._matmul_ogs import _compute_scatter_indx, _matmul_ogs
-from .matmul_ogs_details._ptma_matmul_ogs import _ptma_matmul_ogs, get_per_device_per_stream_alloc_fn
-from .matmul_ogs_details._finalize_split_k import _finalize_split_k
-from .matmul_ogs_details._finalize_scatter import _finalize_scatter
+from .matmul_ogs_details._matmul_ogs import _compute_writeback_idx
+from .matmul_ogs_details._matmul_ogs import _matmul_ogs
+from .matmul_ogs_details._p_matmul_ogs import _p_matmul_ogs, get_per_device_per_stream_alloc_fn
+from .matmul_ogs_details._finalize_matmul import _finalize_matmul
 from .matmul_ogs_details.opt_flags import make_opt_flags
 from .matmul_ogs_details.metadata import compute_metadata
+from .matmul_ogs_details.fast_contiguous import fast_contiguous
+from .specialize import specialize
+
+
+@dataclass
+class Epilogue:
+    name: str
+    fn: "triton.runtime.jit.JITFunction"
+    fn_arg_names: tuple[str]
+    fn_arg_values_matmul: tuple[object]
+    fn_arg_values_finalize: tuple[object]
+    fn_arg_do_not_specialize: tuple[str] = tuple()
+    is_expensive: bool = False
+
+
+_kernels = dict()
+
+
+def get_kernels(epilogue: Epilogue):
+    global _kernels
+    if epilogue.name in _kernels:
+        return _kernels[epilogue.name]
+    spec_constants = {"EPILOGUE_FN": epilogue.fn}
+    spec_tuples = {"epilogue_fn_args": epilogue.fn_arg_names}
+    do_not_specialize = epilogue.fn_arg_do_not_specialize
+    import types
+
+    module = types.ModuleType(f"matmul_ogs_{epilogue.name}")
+    sys.modules[module.__name__] = module
+    module._finalize_matmul = specialize(_finalize_matmul, module, spec_constants, spec_tuples,
+                                         do_not_specialize=do_not_specialize)
+    module._matmul_ogs = specialize(_matmul_ogs, module, spec_constants, spec_tuples,
+                                    do_not_specialize=do_not_specialize)
+    module._p_matmul_ogs = specialize(_p_matmul_ogs, module, spec_constants, spec_tuples,
+                                      do_not_specialize=do_not_specialize)
+    _kernels[epilogue.name] = module
+    return module
+
 
 # -----------------------------------------------------------------------------
 #                    Matrix Multiplication + Outer Gather/Scatter
@@ -143,8 +182,7 @@ class PrecisionConfig:
     enforce_bitwise_invariance: bool = False
 
     def __post_init__(self):
-        empty_flex = FlexCtx()
-        assert self.flex_ctx.rhs_data == empty_flex.rhs_data or self.mx_ctx.weight_scale is None, "flex and mx_ctx cannot be used together"
+        assert self.flex_ctx.rhs_data.scale is None or self.mx_ctx.weight_scale is None, "flex and mx_ctx cannot be used together"
 
 def mx_can_use_tma(mx_ctx: MicroscalingCtx):
     mx_scale_stride_e, mx_scale_stride_n, mx_scale_stride_k = mx_ctx.compute_strides()
@@ -219,9 +257,8 @@ def init_preprocessing_features(w, precision_config, opt_flags):
         # But, don't do this if we're going to swap X and W in which case we would transpose W again.
         if w.stride(1) == 1 and w.dtype == torch.uint8 and w.shape[1] % 64 != 0 and not swap_xw:
             w_want_n_major = True
-    if not w_want_k_major and not w_want_n_major:
-        w_want_k_major = True
     return PreprocessingFeatures(w_want_n_major, w_want_k_major, swap_xw)
+
 
 def apply_preprocessing_features(x, w, gather_indx, scatter_indx, routing_data, opt_flags, preprocessing_features):
     has_fused_scatter_scratchpad = opt_flags.fused_scatter and routing_data.n_expts_act > 1
@@ -229,9 +266,11 @@ def apply_preprocessing_features(x, w, gather_indx, scatter_indx, routing_data, 
         M = scatter_indx.src_indx.shape[0]
         writeback_idxs = torch.empty((M,), dtype=torch.int32, device=x.device)
         writeback_size = writeback_idxs.shape[0]
+        finalize_scatter_idxs = torch.zeros((M // routing_data.n_expts_act + M + 1,), dtype=torch.int32, device=x.device)
         BLOCK_M=256
-        _compute_scatter_indx[(triton.cdiv(M, BLOCK_M),)](
+        _compute_writeback_idx[(triton.cdiv(M, BLOCK_M),)](
             writeback_idxs,
+            finalize_scatter_idxs,
             scatter_indx.dst_indx,
             scatter_indx.src_indx,
             M // routing_data.n_expts_act,
@@ -242,104 +281,112 @@ def apply_preprocessing_features(x, w, gather_indx, scatter_indx, routing_data, 
     elif scatter_indx is not None and routing_data.n_expts_act == 1:
         writeback_idxs = scatter_indx.dst_indx
         writeback_size = scatter_indx.dst_indx.shape[0]
+        finalize_scatter_idxs = None
     else:
-        writeback_idxs, writeback_size = None, None
+        writeback_idxs, writeback_size, finalize_scatter_idxs = None, None, None
     # some transposition variants aren't supported
-    # TODO: this is extremely expensive and we should find
-    # a way to surface this to the user
     if preprocessing_features.w_want_n_major:
-        w = w.contiguous()
+        w = fast_contiguous(w)
     elif preprocessing_features.w_want_k_major:
-        w = w.transpose(-1, -2).contiguous().transpose(-1, -2)
+        w = fast_contiguous(w.transpose(-1, -2)).transpose(-1, -2)
     # preprocess routing information and ptr lookup table
     M = x.shape[1] if gather_indx is None else gather_indx.src_indx.shape[0]
-    # compute expt_data
     expt_data = compute_metadata(routing_data, M, opt_flags.block_m)
-    return x, w, preprocessing_features.swap_xw, writeback_idxs, writeback_size, expt_data
+    return x, w, preprocessing_features.swap_xw, writeback_idxs, writeback_size, finalize_scatter_idxs, expt_data
+
 
 # ---------------------
 # Postprocessing
 # ---------------------
 
+
 @dataclass(frozen=True)
 class PostprocessingFeatures:
-    finalize_splitk: bool
-    finalize_scatter: bool
-
-    def __post_init__(self):
-        assert not (self.finalize_splitk and self.finalize_scatter)
+    finalize: bool
 
 def init_postprocessing_features(routing_data, scatter_indx, opt_flags):
-    finalize_scatter = scatter_indx is not None and routing_data.n_expts_act > 1
-    # TODO: there should be an assert somewhere!
-    finalize_splitk = opt_flags.split_k > 1 and not finalize_scatter
-    return PostprocessingFeatures(finalize_splitk=finalize_splitk,
-                                  finalize_scatter=finalize_scatter)
+    finalize = (scatter_indx is not None and routing_data.n_expts_act > 1) or opt_flags.split_k > 1
+    return PostprocessingFeatures(finalize)
 
-def apply_postprocessing_features(scatter_indx, opt_flags, expt_offs, num_indx, precision_config, routing_data,
-                           postprocess_features, memory):
+def apply_postprocessing_features(scatter_indx, finalize_scatter_idxs, opt_flags, expt_offs, num_indx, precision_config, routing_data,
+                                  postprocess_features, memory, epilogue):
     out = memory["output"]
     flex_ctx = precision_config.flex_ctx
-    # finalize split-k
-    if postprocess_features.finalize_splitk:
-        inp = memory["scratchpad"]["matmul"]
-        out_splitk = memory["output"]
-        out_splitk_flex = precision_config.flex_ctx.out_data
-        assert out_splitk.stride(3) == 1
-        flattened_M = inp.shape[1] * inp.shape[2]
-        N = inp.shape[3]
-        grid = (flattened_M, triton.cdiv(N, opt_flags.block_n))
-        _finalize_split_k[grid](
-            inp, inp.stride(0), inp.stride(2),
-            flex_ctx.out_data.reinterpret(out_splitk), out_splitk.stride(2),
-            *out_splitk_flex,
-            flattened_M, N, opt_flags.split_k,
-            None if expt_offs is None else expt_offs[-1],
-            num_indx,
-            1,
-            opt_flags.block_n,
-            precision_config.flexpoint_saturate_inf,
-        )
-        out = out_splitk
-    # finalize scatter
-    # batched mode not supported.
-    if postprocess_features.finalize_scatter:
+    if postprocess_features.finalize:
         has_fused_scatter_scratchpad = opt_flags.fused_scatter and routing_data.n_expts_act > 1
         if has_fused_scatter_scratchpad:
             inp = memory["output"]
         else:
             inp = memory["scratchpad"]["matmul"]
-        n_final_rows = scatter_indx.src_indx.shape[0] // routing_data.n_expts_act
-        inp_flex = OutFlexData() if inp.dtype == torch.float32 else precision_config.flex_ctx.out_data
+        if scatter_indx is not None:
+            assert inp.shape[1] == 1, "batched finalize scatter not supported"
+            n_final_rows = scatter_indx.src_indx.shape[0] // routing_data.n_expts_act
+            scatter_src_indx = scatter_indx.src_indx
+            EXPT_PER_TOK = routing_data.n_expts_act
+            num_rows = None
+        else:
+            n_final_rows = inp.shape[1] * inp.shape[2]
+            scatter_src_indx = None
+            EXPT_PER_TOK = 1
+            num_rows = num_indx or (None if expt_offs is None else expt_offs[-1])
+
+        if inp.dtype == torch.float32:
+            inp_flex = OutFlexData()
+        else:
+            inp_flex = precision_config.flex_ctx.out_data
+
         out_scatter = memory["output"]
         out_scatter_flex = precision_config.flex_ctx.out_data
-        assert inp.shape[1] == 1
-        if target_info.is_hip():
-            num_warps = 2
-            BLOCK_N = 2048
-            warps_per_sm = 32
-        else:
-            num_warps = 16
-            BLOCK_N = 4096
-            warps_per_sm = 128
-        num_pid = target_info.num_sms() * (warps_per_sm // num_warps)
+
         N = inp.shape[3]
         M = n_final_rows
-        # assert M == out_scatter.shape[1], f"{M}, {out_scatter.shape}"
-        N_BLOCKS = triton.cdiv(N, BLOCK_N)
-        M_BLOCKS = min(M, max(1, triton.cdiv(num_pid, N_BLOCKS)))
-        grid = (M_BLOCKS, N_BLOCKS)
-        _finalize_scatter[grid](
+        warps_per_sm = 32 if target_info.is_hip() else 128
+
+        def compute_grid(BLOCK_N, num_warps):
+            num_pid = target_info.num_sms() * (warps_per_sm // num_warps)
+            if M < num_pid or target_info.is_hip():
+                grid_n = triton.cdiv(N, BLOCK_N)
+                grid_m = min(M, max(1, triton.cdiv(num_pid, grid_n)))
+            else:
+                grid_m = min(M, num_pid)
+                grid_n = 1
+            return (grid_m, grid_n)
+
+        if inp.dtype.itemsize == 1:
+            candidates = [(1024, 1)]
+        else:
+            if target_info.is_hip():
+                candidates = [(4096 // inp.dtype.itemsize, 2)]
+            else:
+                if inp.dtype.itemsize == 2:
+                    candidates = [
+                        (4096 // inp.dtype.itemsize, 4),
+                        (1024 // inp.dtype.itemsize, 1),
+                    ]
+                else:
+                    candidates = [
+                        (2048 // inp.dtype.itemsize, 4),
+                        (1024 // inp.dtype.itemsize, 1),
+                    ]
+        if precision_config.enforce_bitwise_invariance:
+            candidates = [candidates[0]]
+
+        # sort by smallest grid_n so we share compute across a row
+        grid, (BLOCK_N, num_warps) = sorted([(compute_grid(*c), c) for c in candidates], key=lambda x: x[0][1])[0]
+        STAGES = 1 if num_warps == 1 else min(triton.cdiv(triton.cdiv(N, BLOCK_N), grid[1]), 5)
+
+        kernels = get_kernels(epilogue)
+        kernels._finalize_matmul[grid](
             flex_ctx.out_data.reinterpret(out_scatter),
             *out_scatter_flex,
             flex_ctx.out_data.reinterpret(inp), inp.stride(0), inp.stride(2),
             inp_flex.expected_scale,
-            scatter_indx.src_indx,
-            inp.shape[0], M, N,
-            None if expt_offs is None else expt_offs[-1],
-            EXPT_PER_TOK=routing_data.n_expts_act,
+            scatter_src_indx, finalize_scatter_idxs,
+            inp.shape[0], M, N, num_rows,
+            *epilogue.fn_arg_values_finalize,
+            EXPT_PER_TOK=EXPT_PER_TOK,
             BLOCK_N=BLOCK_N,
-            M_BLOCKS=M_BLOCKS,
+            STAGES=STAGES,
             num_warps=num_warps,
             flexpoint_saturate_inf=precision_config.flexpoint_saturate_inf,
             HAS_FUSED_SCRATCHPAD=has_fused_scatter_scratchpad,
@@ -363,7 +410,6 @@ class MatmulAllocation:
     device: str
     output: tuple[tuple[int], torch.dtype]
     scratchpads: dict[str, tuple]
-
 
 def init_allocation(x, w, precision_config, routing_data, gather_indx, scatter_indx, opt_flags,
                     preprocessing_features, postprocessing_features):
@@ -390,10 +436,11 @@ def init_allocation(x, w, precision_config, routing_data, gather_indx, scatter_i
     # ---- scratchpad -----#
     scratchpad = dict()
     # if we need either standalone scatter or split-k, the matmul output will need post-processing
-    if postprocessing_features.finalize_splitk or (postprocessing_features.finalize_scatter and not opt_flags.fused_scatter):
+    if postprocessing_features.finalize and (opt_flags.split_k > 1 or not opt_flags.fused_scatter):
         dtype = torch.float32 if opt_flags.split_k > 1 else out_dtype
         scratchpad["matmul"] = ((opt_flags.split_k, x.shape[0], M, N), dtype)
     return MatmulAllocation(x.device, output, scratchpad)
+
 
 def apply_allocation(allocation: MatmulAllocation, output):
     ret = dict()
@@ -421,6 +468,7 @@ def matmul_ogs(x, w, bias,
                gammas: torch.Tensor | None = None,
                out_alpha: float | None = None,
                y: torch.Tensor | None = None,
+               epilogue: Epilogue | None = None,
                ):
     """
     Y[:, :] = 0.
@@ -436,6 +484,8 @@ def matmul_ogs(x, w, bias,
         assert w.ndim == 3 and w.shape[0] == x.shape[0]
     if precision_config is None:
         precision_config = PrecisionConfig()
+    if epilogue is None:
+        epilogue = Epilogue("dflt", None, tuple(), tuple(), tuple(), False)
     if w.ndim == 2:
         w = w.view(1, w.shape[-2], w.shape[-1])
     if x.ndim == 2:
@@ -458,6 +508,7 @@ def matmul_ogs(x, w, bias,
         M, N, K, routing_data,
         can_use_persistent_tma(x, w, gather_indx, precision_config),
         can_use_fused_scatter(scatter_indx),
+        epilogue.is_expensive,
     )
     # compute grid size
     if not is_input_batched:
@@ -480,14 +531,14 @@ def matmul_ogs(x, w, bias,
         triton.set_allocator(get_per_device_per_stream_alloc_fn(x.device))
     # Intermediate tensors and postprocess kernels for each situation
     out0, out0_flex = memory["output"], precision_config.flex_ctx.out_data
-    if postprocessing_features.finalize_scatter or postprocessing_features.finalize_splitk:
+    if postprocessing_features.finalize:
         if opt_flags.fused_scatter:
             out0 = memory["output"]
         else:
             out0 = memory["scratchpad"]["matmul"]
         out0_flex = OutFlexData() if out0.dtype == torch.float32 else precision_config.flex_ctx.out_data
     # pre-processing
-    x, w, swap_xw, writeback_idxs, writeback_size, expt_data  = apply_preprocessing_features(
+    x, w, swap_xw, writeback_idxs, writeback_size, finalize_scatter_idxs, expt_data  = apply_preprocessing_features(
         x, w, gather_indx, scatter_indx, routing_data, opt_flags, preprocessing_features
     )
     if expt_data.buffer is not None:
@@ -499,7 +550,8 @@ def matmul_ogs(x, w, bias,
     flex = precision_config.flex_ctx
     bias_stride = None if bias is None else bias.stride(0)
     num_indx = None if scatter_indx is None else scatter_indx.src_indx.shape[0]
-    (_ptma_matmul_ogs if opt_flags.is_persistent else _matmul_ogs)[(n_cta,)](
+    kernels = get_kernels(epilogue)
+    (kernels._p_matmul_ogs if opt_flags.is_persistent else kernels._matmul_ogs)[(n_cta,)](
                    flex.out_data.reinterpret(memory["output"]),
                    flex.out_data.reinterpret(out0), *out0.stride(),
                    *out0_flex,
@@ -520,6 +572,7 @@ def matmul_ogs(x, w, bias,
                    expt_data.hist, expt_data.offs, expt_data.offs_sum, expt_data.blocks,
                    batch_size, grid_m, grid_n,
                    out_alpha,
+                   *epilogue.fn_arg_values_matmul,
                    routing_data.n_expts_tot, routing_data.n_expts_act,
                    precision_config.max_num_imprecise_acc,
                    precision_config.allow_tf32,
@@ -545,9 +598,9 @@ def matmul_ogs(x, w, bias,
                    NUM_SMS = n_cta,
                    **opt_flags.target_kernel_kwargs)
     # post-processing
-    out = apply_postprocessing_features(scatter_indx, opt_flags, expt_data.offs,
+    out = apply_postprocessing_features(scatter_indx, finalize_scatter_idxs, opt_flags, expt_data.offs,
                                 num_indx, precision_config, routing_data,
-                                postprocessing_features, memory)
+                                postprocessing_features, memory, epilogue)
 
     # remove split-k
     out = out.squeeze(0)

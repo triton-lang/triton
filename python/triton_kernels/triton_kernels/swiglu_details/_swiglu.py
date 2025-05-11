@@ -1,4 +1,4 @@
-from triton_bench.numerics_details.flexpoint import load_scale, float_to_flex, update_scale
+from triton_kernels.numerics_details.flexpoint import load_scale, float_to_flex, update_scale
 import triton
 import triton.language as tl
 
