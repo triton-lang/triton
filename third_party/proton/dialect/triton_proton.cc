@@ -95,9 +95,8 @@ void init_triton_proton(py::module &&m) {
               profileScratchSize, profileScratchAlignment));
         });
 
-  ADD_PASS_WRAPPER_1("add_convert_proton_nvidia_gpu_to_llvm",
-                     proton::gpu::createConvertProtonNvidiaGPUToLLVMPass,
-                     const std::string &);
+  ADD_PASS_WRAPPER_0("add_convert_proton_nvidia_gpu_to_llvm",
+                     proton::gpu::createConvertProtonNvidiaGPUToLLVMPass);
   ADD_PASS_WRAPPER_1("add_convert_proton_amd_gpu_to_llvm",
                      proton::gpu::createConvertProtonAMDGPUToLLVMPass,
                      const std::string &);

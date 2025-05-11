@@ -172,7 +172,8 @@ struct FinalizeOpConversion
       if (mlir::isa<triton::proton::gpu::StackMemorySpaceAttr>(memSpace)) {
         llvm::report_fatal_error("unimplemented");
       } else if (mlir::isa<triton::gpu::SharedMemorySpaceAttr>(memSpace)) {
-        load = targetInfo.loadShared(rewriter, loc, ptr, i32_ty, b.true_val());
+        load = tritonTargetInfo.loadShared(rewriter, loc, ptr, i32_ty,
+                                           b.true_val());
       } else {
         llvm::report_fatal_error(
             "unsupported memory space buffer in finalize copy");

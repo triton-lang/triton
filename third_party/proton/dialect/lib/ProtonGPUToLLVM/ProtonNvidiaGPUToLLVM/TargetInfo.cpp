@@ -46,10 +46,4 @@ int TargetInfo::getAddressSpace(Attribute addressSpace) const {
   return spaceId;
 }
 
-Value TargetInfo::loadShared(ConversionPatternRewriter &rewriter, Location loc,
-                             Value ptr, Type elemTy, Value pred) const {
-  auto &tritonTargetInfo = this->getTritonTargetInfo();
-  return tritonTargetInfo.loadShared(rewriter, loc, ptr, elemTy, pred);
-}
-
 } // namespace mlir::triton::proton::gpu::NVIDIA

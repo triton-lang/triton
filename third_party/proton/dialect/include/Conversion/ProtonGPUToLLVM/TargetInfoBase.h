@@ -24,9 +24,6 @@ public:
 
   virtual int getAddressSpace(Attribute addressSpace) const = 0;
 
-  virtual Value loadShared(ConversionPatternRewriter &rewriter, Location loc,
-                           Value ptr, Type elemTy, Value pred) const = 0;
-
   virtual ~TargetInfoBase() = default;
 
 protected:

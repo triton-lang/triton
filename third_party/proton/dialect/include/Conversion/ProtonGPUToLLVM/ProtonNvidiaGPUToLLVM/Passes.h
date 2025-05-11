@@ -18,8 +18,7 @@ namespace triton::proton::gpu {
 #include "proton/dialect/include/Conversion/ProtonGPUToLLVM/ProtonNvidiaGPUToLLVM/Passes.h.inc"
 
 std::unique_ptr<OperationPass<ModuleOp>>
-createConvertProtonNvidiaGPUToLLVMPass(const std::string &arch = "",
-                                       int32_t computeCapability = 80,
+createConvertProtonNvidiaGPUToLLVMPass(int32_t computeCapability = 80,
                                        int32_t ptxVersion = 80);
 
 #define GEN_PASS_REGISTRATION

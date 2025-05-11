@@ -22,9 +22,6 @@ public:
 
   int getAddressSpace(Attribute addressSpace) const override;
 
-  Value loadShared(ConversionPatternRewriter &rewriter, Location loc, Value ptr,
-                   Type elemTy, Value pred) const override;
-
   ~TargetInfo() {}
 };
 } // namespace mlir::triton::proton::gpu::NVIDIA
