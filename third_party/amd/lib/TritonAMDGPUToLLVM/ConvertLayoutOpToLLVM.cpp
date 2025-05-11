@@ -226,12 +226,12 @@ public:
     auto mDim = mfmaLayout.getMDim();
     if (mDim != 32) {
       // to enable it once the 2nd step is done
-      return failure();
+      // return failure();
     }
 
     auto nDim = mfmaLayout.getNDim();
     assert((mDim == 32 || mDim == 16) && mDim == nDim &&
-           "Expected MFMA size 32");
+           "Expected MFMA size 32 or 16");
     assert(triton::gpu::lookupThreadsPerWarp(rewriter) == 64 &&
            "Expected warp size 64 for MFMA");
 
