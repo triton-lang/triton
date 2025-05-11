@@ -29,6 +29,11 @@ StreamChromeTraceWriter::StreamChromeTraceWriter(
     : StreamTraceWriter(streamTrace, path) {}
 
 void StreamChromeTraceWriter::write(std::ofstream &outfile) {
+  if (streamTrace.empty()) {
+    std::cerr << "Failed to write the trace file: empty trace!" << std::endl;
+    return;
+  }
+
   outfile << "{\n\"traceEvents\": [\n";
 
   std::stringstream ss;
