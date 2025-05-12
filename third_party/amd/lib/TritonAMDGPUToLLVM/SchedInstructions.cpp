@@ -491,8 +491,10 @@ struct TritonAMDGPULowerInstructionSchedHints
     patterns.add<InstructionSchedHintsRewriter>(ctx, this->arch,
                                                 this->numStages);
 
+    ConversionConfig config;
+    config.allowPatternRollback = false;
     if (failed(applyPartialConversion(getOperation(), target,
-                                      std::move(patterns)))) {
+                                      std::move(patterns), config))) {
 
       signalPassFailure();
     }

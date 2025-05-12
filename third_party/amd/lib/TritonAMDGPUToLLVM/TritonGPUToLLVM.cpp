@@ -112,8 +112,10 @@ struct ConvertTritonAMDGPUToLLVM
           typeConverter, funcPatterns, targetInfo, patternBenefitDefault);
       mlir::cf::populateControlFlowToLLVMConversionPatterns(typeConverter,
                                                             funcPatterns);
-      if (failed(
-              applyPartialConversion(mod, funcTarget, std::move(funcPatterns))))
+      ConversionConfig config;
+      config.allowPatternRollback = false;
+      if (failed(applyPartialConversion(mod, funcTarget,
+                                        std::move(funcPatterns), config)))
         return signalPassFailure();
     }
 
@@ -126,8 +128,10 @@ struct ConvertTritonAMDGPUToLLVM
     {
       TritonLLVMFunctionConversionTarget funcTarget(*context);
       RewritePatternSet funcPatterns(context);
-      if (failed(
-              applyPartialConversion(mod, funcTarget, std::move(funcPatterns))))
+      ConversionConfig config;
+      config.allowPatternRollback = false;
+      if (failed(applyPartialConversion(mod, funcTarget,
+                                        std::move(funcPatterns), config)))
         return signalPassFailure();
     }
 
@@ -231,7 +235,10 @@ struct ConvertTritonAMDGPUToLLVM
 
     mlir::ub::populateUBToLLVMConversionPatterns(typeConverter, patterns);
 
-    if (failed(applyPartialConversion(mod, convTarget, std::move(patterns)))) {
+    ConversionConfig config;
+    config.allowPatternRollback = false;
+    if (failed(applyPartialConversion(mod, convTarget, std::move(patterns),
+                                      config))) {
       return signalPassFailure();
     }
   }
