@@ -10,12 +10,7 @@ namespace {
 // if all defining operations are an AsyncWait
 bool comesFromAsyncWait(Value token) {
   if (auto defOp = token.getDefiningOp()) {
-    if (isa<triton::gpu::AsyncWaitOp>(defOp)) {
-      return true;
-    } else {
-      // Token does not come from AsyncWait
-      return false;
-    }
+    return isa<triton::gpu::AsyncWaitOp>(defOp);
   }
 
   auto blockArg = dyn_cast<BlockArgument>(token);
@@ -33,7 +28,7 @@ bool comesFromAsyncWait(Value token) {
   };
 
   // Check all predecessor block's terminator and follow the passed value at
-  // argId
+  // argId to see if they are immediately an AsyncWait.
   for (auto *pred : block->getPredecessors()) {
     auto terminator = pred->getTerminator();
     if (auto br = dyn_cast<cf::BranchOp>(terminator)) {
