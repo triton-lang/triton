@@ -1,4 +1,5 @@
-// RUN: triton-opt %s -split-input-file -convert-proton-amd-gpu-to-llvm="arch=gfx942" --verify-diagnostics | FileCheck %s
+// RUN: triton-opt %s -split-input-file -convert-proton-amd-gpu-to-llvm="arch=gfx942" --verify-diagnostics | FileCheck %s --check-prefix=CHECK
+// RUN: triton-opt %s -split-input-file -convert-proton-amd-gpu-to-llvm="arch=gfx942" --convert-builtin-func-to-llvm --verify-diagnostics | FileCheck -allow-unused-prefixes --check-prefix=CONVERT-BUILTIN %s
 
 #shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
 #smem = #ttg.shared_memory
@@ -78,7 +79,6 @@ module attributes {"ttg.num-warps" = 8 : i32} {
     // CHECK-DAG: %[[P2:.*]] = llvm.icmp "eq" %[[WARPID]], %{{.*}}
     // CHECK-DAG: %[[ADDR2:.*]] = llvm.select %[[P2]], %{{.*}}, %[[ADDR1]]
   	// CHECK-DAG: %[[CYCLE1:.*]] = llvm.call_intrinsic "llvm.amdgcn.s.memtime"()
-    // CHECK-DAG: llvm.call @"__triton_hip_predicated_store_!llvm.void_!llvm.ptr<3>_vector<2xi32>_i1_"(%{{.*}}, %{{.*}}, %4{{.*}}) : (!llvm.ptr<3>, vector<2xi32>, i1) -> ()
     %0 = ttg.local_alloc : () -> !ttg.memdesc<512xi32, #shared, #smem, mutable>
     %2 = proton_gpu.init_buffer_index : <i32, 5>
     %3 = proton_gpu.segment_base %0, {granularity = 1 : i32, selectIds = array<i32: 0, 1>} : !ttg.memdesc<512xi32, #shared, #smem, mutable> -> !proton_gpu.seg
@@ -118,22 +118,30 @@ module attributes {"ttg.num-warps" = 8 : i32, ttg.profile_scratch_memory_alignme
   // CHECK-DAG: llvm.inline_asm asm_dialect = att operand_attrs = [] "s_getreg_b32 $0, hwreg(HW_REG_HW_ID, 8, 4)", "=s"  : () -> i32
   // CHECK-DAG: llvm.inline_asm asm_dialect = att operand_attrs = [] "s_getreg_b32 $0, hwreg(HW_REG_HW_ID, 13, 3)", "=s"  : () -> i32
   // CHECK-DAG: llvm.extractvalue %{{.*}}[0] : !llvm.struct<(ptr<3>, i32)>
-  // CHECK-DAG: llvm.store
-  // CHECK-DAG: llvm.cond_br %{{.*}}, ^bb1, ^bb3
-  // CHECK-DAG: ^bb1:
-  // CHECK-DAG: %[[PREAMBLE:.*]] = llvm.mlir.constant(-559038737 : i32)
-  // CHECK-DAG: llvm.store %[[PREAMBLE]], %{{.*}} : i32, !llvm.ptr<1>
-  // CHECK-DAG: %[[PID:.*]] = llvm.trunc %{{.*}} : i64 to i32
-  // CHECK-DAG: llvm.store
-  // CHECK-DAG: %[[STEP:.*]] = llvm.mlir.constant(2 : i32) : i32
-  // CHECK-DAG: llvm.store
-  // CHECK-DAG: llvm.br ^bb2
-  // CHECK-DAG: ^bb2(%[[I:.*]]: i32):
-  // CHECK-DAG: llvm.store
-  // CHECK-DAG: llvm.store
-  // CHECK-DAG: %[[UPPER:.*]] = llvm.mlir.constant(510 : i32) : i32
-  // CHECK-DAG: %[[P2:.*]] = llvm.icmp "slt" %[[I]], %[[UPPER]] : i32
-  // CHECK-DAG: ^bb3:
+  // CONVERT-BUILTIN: llvm.store %{{.*}}, %{{.*}} : i32, !llvm.ptr<1>
+  // CONVERT-BUILTIN: llvm.cond_br %{{.*}}, ^bb1, ^bb9
+  // CONVERT-BUILTIN: ^bb1:  // pred: ^bb0
+  // CONVERT-BUILTIN: llvm.store %{{.*}}, %{{.*}} : i32, !llvm.ptr<1>
+  // CONVERT-BUILTIN: llvm.br ^bb2(%{{.*}} : i32)
+  // CONVERT-BUILTIN: ^bb2(%{{.*}}: i32):  // 2 preds: ^bb1, ^bb8
+  // CONVERT-BUILTIN: llvm.cond_br %1, ^bb3, ^bb4
+  // CONVERT-BUILTIN: bb3:  // pred: ^bb2
+  // CONVERT-BUILTIN: %{{.*}} = llvm.load %{{.*}} : !llvm.ptr<3> -> i32
+  // CONVERT-BUILTIN: llvm.br ^bb5(%{{.*}} : i32)
+  // CONVERT-BUILTIN: ^bb4:  // pred: ^bb2
+  // CONVERT-BUILTIN: llvm.br ^bb5(%{{.*}} : i32)
+  // CONVERT-BUILTIN: ^bb5(%{{.*}}: i32):  // 2 preds: ^bb3, ^bb4
+  // CONVERT-BUILTIN: llvm.store %{{.*}}, %{{.*}} : i32, !llvm.ptr<1>
+  // CONVERT-BUILTIN: llvm.cond_br %{{.*}}, ^bb6, ^bb7
+  // CONVERT-BUILTIN: ^bb6:  // pred: ^bb5
+  // CONVERT-BUILTIN: %{{.*}} = llvm.load %{{.*}} : !llvm.ptr<3> -> i32
+  // CONVERT-BUILTIN: llvm.br ^bb8(%{{.*}} : i32)
+  // CONVERT-BUILTIN: ^bb7:  // pred: ^bb5
+  // CONVERT-BUILTIN: llvm.br ^bb8(%{{.*}} : i32)
+  // CONVERT-BUILTIN: ^bb8(%{{.*}}: i32):  // 2 preds: ^bb6, ^bb7
+  // CONVERT-BUILTIN: llvm.store %{{.*}}, %{{.*}} : i32, !llvm.ptr<1>
+  // CONVERT-BUILTIN: llvm.cond_br %{{.*}}, ^bb2(%{{.*}} : i32), ^bb9
+  // CONVERT-BUILTIN: ^bb9:  // 2 preds: ^bb0, ^bb8
   // CHECK-DAG: llvm.return
   llvm.func @convert_smem_finalize(%arg: !llvm.ptr<1>) attributes {noinline = false, nvvm.kernel = 1 : ui1} {
     %0 = ttg.local_alloc : () -> !ttg.memdesc<512xi32, #shared, #smem, mutable>

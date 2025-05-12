@@ -303,6 +303,9 @@ class HIPBackend(BaseBackend):
         passes.common.add_canonicalizer(pm)
         passes.common.add_cse(pm)
 
+        if HIPBackend.instrumentation:
+            HIPBackend.instrumentation.patch("llvmir", pm, mod.context)
+
         passes.convert.add_cf_to_llvmir(pm)
         passes.convert.add_arith_to_llvmir(pm)
         passes.common.add_canonicalizer(pm)
@@ -312,9 +315,8 @@ class HIPBackend(BaseBackend):
             amd.passes.ttgpuir.lower_instruction_sched_hints(pm, options.arch, options.num_stages)
         if not knobs.compilation.disable_line_info:
             passes.llvmir.add_di_scope(pm)
+
         amd.passes.ttgpuir.add_builtin_func_to_llvmir(pm, __HIP_FTZ)
-        if HIPBackend.instrumentation:
-            HIPBackend.instrumentation.patch("llvmir", pm, mod.context)
         pm.run(mod)
 
         # LLVM-IR (MLIR) -> LLVM-IR (LLVM)
