@@ -24,21 +24,6 @@ pip install triton
 
 Binary wheels are available for CPython 3.9-3.13.
 
-# Enabling Blackwell Support
-The main branch now features support for NVIDIA Blackwell GPUs using 5th
-generation tensor cores. To enable this, you will need these additional steps:
-
-1. Ensure you have CUDA 12.8 installed.
-2. Install a PyTorch version compatible with CUDA 12.8 and Blackwell GPUs.
-3. Build triton from the latest source.
-
-To install PyTorch with CUDA 12.8 support for Blackwell :
-
-```bash
-pip3 install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu128
-```
-Finally, follow the instructions below to install triton from source.
-
 # Install from source
 
 ```shell
