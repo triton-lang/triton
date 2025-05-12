@@ -1081,6 +1081,24 @@ static LogicalResult pipelineMMA(scf::ForOp &loop, PipelinedMMA &mma,
     }
   }
 
+  // non-persistent MMA:
+  // (mma useD=true)
+  //
+  // persistent MMA with flag:
+  // (mma useD=useDPred(i)), (@userPred(i) user load)
+  //
+  // persistent MMA with store
+  // (mma useD=true), (@userPred(i) user load), (@storePred(i) mma store)
+  //
+  // PV:
+  // (user load), (user store), (mma useD=true)
+  //
+  // QK:
+  // (mma useD=false), (user load)
+  //
+  //
+
+
   Value firstBar;
   for (int i = nodes.size(); i > 0; --i) {
     if ((firstBar = nodes[i % nodes.size()].barPrev))
