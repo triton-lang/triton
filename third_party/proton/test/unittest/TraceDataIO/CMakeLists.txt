@@ -3,7 +3,7 @@ add_compile_definitions(PROTON_TEST_UTIL_PATH="${PROTON_TEST_UTIL_PATH}")
 
 add_triton_ut(
 	NAME TraceDataIO
-	SRCS ByteSpanTest.cpp DecoderTest.cpp CircularLayoutParserTest.cpp
+	SRCS ByteSpanTest.cpp DecoderTest.cpp CircularLayoutParserTest.cpp ChromeTraceWriterTest.cpp
 	LIBS ProtonTraceDataIO
 )
 
