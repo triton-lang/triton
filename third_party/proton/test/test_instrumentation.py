@@ -56,8 +56,6 @@ def test_jit(tmp_path):
 
 @pytest.mark.parametrize("method", ["operator", "context_manager"])
 def test_record(method, tmp_path: pathlib.Path):
-    if is_hip():
-        pytest.skip("HIP backend does not support record")
 
     from contextlib import contextmanager
 
