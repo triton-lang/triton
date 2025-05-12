@@ -90,267 +90,18 @@ $L__tmp1:
 $L__func_end0:
                                         // -- End function
 }
-<<<<<<< HEAD
     """
 
 
-=======
-	.section	.debug_abbrev
-	{
-.b8 1                                   // Abbreviation Code
-.b8 17                                  // DW_TAG_compile_unit
-.b8 0                                   // DW_CHILDREN_no
-.b8 37                                  // DW_AT_producer
-.b8 8                                   // DW_FORM_string
-.b8 19                                  // DW_AT_language
-.b8 5                                   // DW_FORM_data2
-.b8 3                                   // DW_AT_name
-.b8 8                                   // DW_FORM_string
-.b8 16                                  // DW_AT_stmt_list
-.b8 6                                   // DW_FORM_data4
-.b8 27                                  // DW_AT_comp_dir
-.b8 8                                   // DW_FORM_string
-.b8 0                                   // EOM(1)
-.b8 0                                   // EOM(2)
-.b8 0                                   // EOM(3)
-	}
-	.section	.debug_info
-	{
-.b32 189                                // Length of Unit
-.b8 2                                   // DWARF version number
-.b8 0
-.b32 .debug_abbrev                      // Offset Into Abbrev. Section
-.b8 8                                   // Address Size (in bytes)
-.b8 1                                   // Abbrev [1] 0xb:0xb6 DW_TAG_compile_unit
-.b8 116                                 // DW_AT_producer
-.b8 114
-.b8 105
-.b8 116
-.b8 111
-.b8 110
-.b8 0
-.b8 2                                   // DW_AT_language
-.b8 0
-.b8 99                                  // DW_AT_name
-.b8 111
-.b8 109
-.b8 112
-.b8 105
-.b8 108
-.b8 101
-.b8 95
-.b8 97
-.b8 115
-.b8 116
-.b8 46
-.b8 112
-.b8 121
-.b8 0
-.b32 .debug_line                        // DW_AT_stmt_list
-.b8 47                                  // DW_AT_comp_dir
-.b8 100
-.b8 97
-.b8 116
-.b8 97
-.b8 47
-.b8 117
-.b8 115
-.b8 101
-.b8 114
-.b8 115
-.b8 47
-.b8 100
-.b8 97
-.b8 111
-.b8 104
-.b8 97
-.b8 110
-.b8 103
-.b8 47
-.b8 102
-.b8 98
-.b8 115
-.b8 111
-.b8 117
-.b8 114
-.b8 99
-.b8 101
-.b8 47
-.b8 98
-.b8 117
-.b8 99
-.b8 107
-.b8 45
-.b8 111
-.b8 117
-.b8 116
-.b8 47
-.b8 118
-.b8 50
-.b8 47
-.b8 103
-.b8 101
-.b8 110
-.b8 47
-.b8 102
-.b8 98
-.b8 99
-.b8 111
-.b8 100
-.b8 101
-.b8 47
-.b8 48
-.b8 50
-.b8 55
-.b8 99
-.b8 53
-.b8 54
-.b8 54
-.b8 48
-.b8 53
-.b8 54
-.b8 51
-.b8 100
-.b8 48
-.b8 98
-.b8 52
-.b8 99
-.b8 47
-.b8 115
-.b8 99
-.b8 114
-.b8 105
-.b8 112
-.b8 116
-.b8 115
-.b8 47
-.b8 100
-.b8 97
-.b8 111
-.b8 104
-.b8 97
-.b8 110
-.b8 103
-.b8 47
-.b8 116
-.b8 114
-.b8 105
-.b8 116
-.b8 111
-.b8 110
-.b8 47
-.b8 95
-.b8 95
-.b8 99
-.b8 111
-.b8 109
-.b8 112
-.b8 105
-.b8 108
-.b8 101
-.b8 95
-.b8 97
-.b8 115
-.b8 116
-.b8 95
-.b8 95
-.b8 47
-.b8 99
-.b8 111
-.b8 109
-.b8 112
-.b8 105
-.b8 108
-.b8 101
-.b8 95
-.b8 97
-.b8 115
-.b8 116
-.b8 35
-.b8 108
-.b8 105
-.b8 110
-.b8 107
-.b8 45
-.b8 116
-.b8 114
-.b8 101
-.b8 101
-.b8 47
-.b8 115
-.b8 99
-.b8 114
-.b8 105
-.b8 112
-.b8 116
-.b8 115
-.b8 47
-.b8 100
-.b8 97
-.b8 111
-.b8 104
-.b8 97
-.b8 110
-.b8 103
-.b8 47
-.b8 116
-.b8 114
-.b8 105
-.b8 116
-.b8 111
-.b8 110
-.b8 0
-	}
-	.section	.debug_macinfo	{	}
-    """
-
-
-def get_ttir_src():
-    return """
-module {
-  tt.func public @add_kernel(%arg0: !tt.ptr<bf16>, %arg1: !tt.ptr<bf16>, %arg2: !tt.ptr<bf16>, %arg3: i32) attributes {noinline = false} {
-    %c128_i32 = arith.constant 128 : i32
-    %0 = tt.get_program_id x : i32
-    %1 = arith.muli %0, %c128_i32 : i32
-    %2 = tt.make_range {end = 128 : i32, start = 0 : i32} : tensor<128xi32>
-    %3 = tt.splat %1 : i32 -> tensor<128xi32>
-    %4 = arith.addi %3, %2 : tensor<128xi32>
-    %5 = tt.splat %arg3 : i32 -> tensor<128xi32>
-    %6 = arith.cmpi slt, %4, %5 : tensor<128xi32>
-    %7 = tt.splat %arg0 : !tt.ptr<bf16> -> tensor<128x!tt.ptr<bf16>>
-    %8 = tt.addptr %7, %4 : tensor<128x!tt.ptr<bf16>>, tensor<128xi32>
-    %9 = tt.load %8, %6 : tensor<128x!tt.ptr<bf16>>
-    %10 = tt.splat %arg1 : !tt.ptr<bf16> -> tensor<128x!tt.ptr<bf16>>
-    %11 = tt.addptr %10, %4 : tensor<128x!tt.ptr<bf16>>, tensor<128xi32>
-    %12 = tt.load %11, %6 : tensor<128x!tt.ptr<bf16>>
-    %13 = arith.addf %9, %12 : tensor<128xbf16>
-    %14 = tt.splat %arg2 : !tt.ptr<bf16> -> tensor<128x!tt.ptr<bf16>>
-    %15 = tt.addptr %14, %4 : tensor<128x!tt.ptr<bf16>>, tensor<128xi32>
-    tt.store %15, %13, %6 : tensor<128x!tt.ptr<bf16>>
-    tt.return
-  }
-}
-"""
-
-
->>>>>>> 94409878 (Support PTX source by triton.compile)
 @pytest.mark.skipif(not is_cuda(), reason="PTX is only supported on NVIDIA")
 def test_ptx_add_vec_simple(tmp_path: pathlib.Path):
     src = get_ptx_src()
     temp_file = tmp_path / "test_add_vec_kernel.ptx"
     temp_file.write_text(src)
-<<<<<<< HEAD
 
     kernel = triton.compile(
         src=str(temp_file),
     )
-=======
-    # src = get_ttir_src()
-    # temp_file = tmp_path / "test_add_vec_kernel.ttir"
-    # temp_file.write_text(src)
-
-    kernel = triton.compile(src=str(temp_file), target=triton.runtime.driver.active.get_current_target())
->>>>>>> 94409878 (Support PTX source by triton.compile)
 
     torch.manual_seed(0)
     size = 20
@@ -363,7 +114,6 @@ def test_ptx_add_vec_simple(tmp_path: pathlib.Path):
         x.data_ptr(),
         y.data_ptr(),
         output.data_ptr(),
-<<<<<<< HEAD
         size,
     )
 
@@ -373,16 +123,6 @@ def test_ptx_add_vec_simple(tmp_path: pathlib.Path):
             triton.runtime.driver.active.get_current_device()
         )["max_shared_mem"]
     )
-=======
-        # x,
-        # y,
-        # output,
-        size,
-    )
-
-    assert (kernel.metadata.shared == triton.runtime.driver.active.utils.get_device_properties(
-        triton.runtime.driver.active.get_current_device())["max_shared_mem"])
->>>>>>> 94409878 (Support PTX source by triton.compile)
 
     assert torch.allclose(output, x + y, atol=1e-3)
 
@@ -397,13 +137,9 @@ def test_ptx_add_vec_user_defined_smem(tmp_path: pathlib.Path):
     temp_file = tmp_path / "test_add_vec_kernel.ptx"
     temp_file.write_text(src)
 
-<<<<<<< HEAD
     kernel = triton.compile(
         src=str(temp_file),
     )
-=======
-    kernel = triton.compile(src=str(temp_file), target=triton.runtime.driver.active.get_current_target())
->>>>>>> 94409878 (Support PTX source by triton.compile)
 
     torch.manual_seed(0)
     size = 20
@@ -418,13 +154,9 @@ def test_ptx_add_vec_user_defined_smem(tmp_path: pathlib.Path):
         output.data_ptr(),
         size,
     )
-<<<<<<< HEAD
     assert (
         kernel.metadata.shared == 128000
     ), "user defined smem size is not passed to compiler"
-=======
-    assert (kernel.metadata.shared == 128000), "user defined smem size is not passed to compiler"
->>>>>>> 94409878 (Support PTX source by triton.compile)
     assert torch.allclose(output, x + y, atol=1e-3)
 
 
@@ -444,13 +176,9 @@ def test_ptx_mul_vec(tmp_path: pathlib.Path):
     temp_file = tmp_path / "test_mul_vec_kernel.ptx"
     temp_file.write_text(src)
 
-<<<<<<< HEAD
     kernel = triton.compile(
         src=str(temp_file),
     )
-=======
-    kernel = triton.compile(src=str(temp_file), target=triton.runtime.driver.active.get_current_target())
->>>>>>> 94409878 (Support PTX source by triton.compile)
 
     torch.manual_seed(0)
     size = 20
