@@ -107,6 +107,8 @@ class CUDAOptions:
     cluster_dims: tuple = (1, 1, 1)
     ptx_version: int = None
     enable_fp_fusion: bool = True
+    global_scratch_align: bool = True
+    global_scratch_size: int = 0
     launch_cooperative_grid: bool = False
     launch_pdl: bool = False
     supported_fp8_dtypes: Tuple[str] = ("fp8e5", "fp8e4b15")

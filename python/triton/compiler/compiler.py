@@ -36,6 +36,15 @@ arg_type_pattern = {
     "ptx": ptx_arg_type_pattern,
 }
 
+# Define some RE patterns for PTX customization
+ptx_user_defined_smem = r"user_defined smem (\d+)"
+ptx_user_defined_global_scratch_align = r"user_defined global_scratch_align (\d+)"
+ptx_user_defined_global_scratch_size = r"user_defined global_scratch_size (\d+)"
+ptx_user_defined_pattern = {
+    "shared": ptx_user_defined_smem,
+    "global_scratch_align": ptx_user_defined_global_scratch_align,
+    "global_scratch_size": ptx_user_defined_global_scratch_size,
+}
 
 def convert_type_repr(x):
     # Currently we only capture the pointer type and assume the pointer is on global memory.
@@ -99,6 +108,7 @@ class IRSource:
         # We don't have a easy-to-use PTX parser that we can use, so keep that regex for now.
         # TODO - replace with a proper parser
         if self.ext == "ptx":
+            self.module = parse(self.path, "ptx", context)
             match = re.search(prototype_pattern[self.ext], self.src, re.MULTILINE)
             self.name = match.group(1)
             signature = match.group(2)
@@ -116,7 +126,8 @@ class IRSource:
         return hashlib.sha256(self.src.encode("utf-8")).hexdigest()
 
     def make_ir(self, options, codegen_fns, module_map, context):
-        self.module.context = context
+        if self.ext != "ptx":
+            self.module.context = context
         return self.module
 
     def parse_options(self):
@@ -124,6 +135,18 @@ class IRSource:
             num_warps = self.module.get_int_attr("ttg.num-warps")
             assert num_warps is not None, "Unable to parse ttg.num-warps attribute"
             return {'num_warps': num_warps}
+        elif self.ext == "ptx":
+            options = {'name': self.name}
+            for user_defined_option, re_pattern in ptx_user_defined_pattern.items():
+                if found := re.findall(re_pattern, self.src):
+                    if len(found) == 1:
+                        options[user_defined_option] = int(found[0])
+                    else:
+                        raise RuntimeError(f"Duplicated user defined {user_defined_option} is found")
+
+            if "shared" not in options:
+                options["shared"] = max_shared_mem(driver.active.get_current_device())
+            return options
         return dict()
 
 
@@ -335,6 +358,8 @@ def compile(src, target=None, options=None):
     module_map = backend.get_module_map()
     try:
         module = src.make_ir(options, codegen_fns, module_map, context)
+        if src.ext == "ptx":
+            metadata.update(src.parse_options())
     except Exception as e:
         filter_traceback(e)
         raise
