@@ -561,7 +561,6 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
     // CHECK-NEXT: llvm.mlir.constant(512 : i32) : i32
     // CHECK-NEXT: llvm.add
     // CHECK-NEXT: llvm.add
-    // CHECK-NEXT: llvm.mlir.undef
     // CHECK-NEXT: llvm.mlir.constant(0 : i32) : i32
     // CHECK-NEXT: llvm.mul
     // CHECK-NEXT: llvm.add
@@ -587,8 +586,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   // CHECK-LABEL: nvmma_subview
   tt.func @nvmma_subview() {
     // CHECK: llvm.mlir.addressof @global_smem
-    // CHECK: llvm.mlir.undef : i32
-    // CHECK-NEXT: llvm.mlir.constant(32 : i32) : i32
+    // CHECK: llvm.mlir.constant(32 : i32) : i32
     // CHECK-NEXT: llvm.mlir.constant(0 : i32) : i32
     // CHECK-NEXT: llvm.mlir.constant(16 : i32) : i32
     // CHECK-NEXT: llvm.mul
@@ -2406,6 +2404,28 @@ tt.func private @tensor_desc_to_tma_ptr(%arg0: !tt.tensordesc<tensor<128x64xf16,
   // CHECK-NEXT: llvm.addrspacecast %arg0 : !llvm.ptr to !llvm.ptr
   %0 = ttng.tensor_desc_to_tma_ptr %arg0 : !tt.tensordesc<tensor<128x64xf16, #shared>> to !tt.ptr<i8, 0>
   tt.return %0 : !tt.ptr<i8, 0>
+}
+
+}
+
+// -----
+
+#blocked2 = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [2], order = [0]}>
+
+module attributes {"ttg.num-warps" = 4 : i32} {
+
+// CHECK-LABEL: @partition_axis_info
+tt.func @partition_axis_info(%arg0: !tt.ptr<i32>, %arg1: !tt.ptr<i32>) {
+  ttg.warp_specialize(%arg0)
+  default {
+    ttg.warp_yield
+  }
+  partition0(%arg2: !tt.ptr<i32>) num_warps(2) {
+    %splatted = tt.splat %arg2 : !tt.ptr<i32> -> tensor<256x!tt.ptr<i32>, #blocked2>
+    %input = tt.load %splatted : tensor<256x!tt.ptr<i32>, #blocked2>
+    ttg.warp_return
+  } : (!tt.ptr<i32>) -> ()
+  tt.return
 }
 
 }

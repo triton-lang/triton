@@ -7,10 +7,6 @@
 #include "llvm/ADT/SetVector.h"
 #include "llvm/Support/raw_ostream.h"
 
-#include "triton/Dialect/Triton/IR/Dialect.h"
-#include "triton/Dialect/TritonGPU/IR/Dialect.h"
-#include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
-#include <atomic>
 #include <limits>
 
 namespace mlir {

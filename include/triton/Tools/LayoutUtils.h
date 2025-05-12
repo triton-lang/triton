@@ -98,6 +98,22 @@ standardOutDimPairs(MLIRContext *ctx, ArrayRef<int64_t> dstShape);
 LinearLayout identityStandardND(StringAttr inDimName, ArrayRef<unsigned> shape,
                                 ArrayRef<unsigned> order);
 
+// Return a layout with the same in/out dimensions as `layout` but with all
+// bases set to 0.
+LinearLayout zerosLike(const LinearLayout &layout);
+
+// For a layout A with A.hasInDim(kReg), find a permutation of registers action
+// such that action.apply(A) may be divisible by B
+// It's not always true that the action returned by this function will
+// allow us to divideLeft, but it is true that if it if there exists one, it is
+// the one returned by this function.
+std::optional<ColumnAction> regPermForDivideLeft(const LinearLayout &A,
+                                                 const LinearLayout &B);
+
+// For a layout A with A.hasInDim(kReg), find a permutation of registers action
+// such that action.apply(A) has the broadcasted registers removed
+ColumnAction actionRemoveBroadcastedRegs(const LinearLayout &layout);
+
 // Compute the supremum of two lists.
 // Error out if the supremum does not exist (e.g. [a, b] and [b, a]).
 // If the supremum is not unique, we return the first list first

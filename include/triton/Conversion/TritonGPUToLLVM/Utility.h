@@ -729,6 +729,49 @@ SmallVector<Value> unpackLLVector(Location loc, Value llvmVec,
 
 Value packLLVector(Location loc, ValueRange vals, RewriterBase &rewriter);
 
+inline std::optional<LLVM::AtomicBinOp> matchAtomicOp(RMWOp atomicOp) {
+  switch (atomicOp) {
+  case RMWOp::AND:
+    return LLVM::AtomicBinOp::_and;
+  case RMWOp::OR:
+    return LLVM::AtomicBinOp::_or;
+  case RMWOp::XOR:
+    return LLVM::AtomicBinOp::_xor;
+  case RMWOp::ADD:
+    return LLVM::AtomicBinOp::add;
+  case RMWOp::FADD:
+    return LLVM::AtomicBinOp::fadd;
+  case RMWOp::MAX:
+    return LLVM::AtomicBinOp::max;
+  case RMWOp::MIN:
+    return LLVM::AtomicBinOp::min;
+  case RMWOp::UMAX:
+    return LLVM::AtomicBinOp::umax;
+  case RMWOp::UMIN:
+    return LLVM::AtomicBinOp::umin;
+  case RMWOp::XCHG:
+    return LLVM::AtomicBinOp::xchg;
+  default:
+    return {};
+  }
+}
+
+inline std::optional<LLVM::AtomicOrdering>
+getMemoryOrdering(MemSemantic memOrdering) {
+  switch (memOrdering) {
+  case MemSemantic::RELAXED:
+    return LLVM::AtomicOrdering::monotonic;
+  case MemSemantic::ACQUIRE:
+    return LLVM::AtomicOrdering::acquire;
+  case MemSemantic::RELEASE:
+    return LLVM::AtomicOrdering::release;
+  case MemSemantic::ACQUIRE_RELEASE:
+    return LLVM::AtomicOrdering::acq_rel;
+  default:
+    return {};
+  }
+}
+
 inline bool
 isSimpleSharedMemoryAccess(ArrayRef<int64_t> shape,
                            ArrayRef<int64_t> allocShape,
@@ -736,7 +779,9 @@ isSimpleSharedMemoryAccess(ArrayRef<int64_t> shape,
   auto rank = shape.size();
   auto swizzledLayout =
       dyn_cast<triton::gpu::SwizzledSharedEncodingAttr>(sharedEnc);
-  bool noSwizzling = swizzledLayout && swizzledLayout.getMaxPhase() == 1;
+  auto nvmmaLayout = dyn_cast<triton::gpu::NVMMASharedEncodingAttr>(sharedEnc);
+  bool noSwizzling = (swizzledLayout && swizzledLayout.getMaxPhase() == 1) ||
+                     (nvmmaLayout && nvmmaLayout.getSwizzlingByteWidth() == 0);
   return /*no swizzling*/ noSwizzling ||
          /*swizzling but same shape*/ shape == allocShape ||
          /*swizzling and rank-reduced and rank >= 2*/

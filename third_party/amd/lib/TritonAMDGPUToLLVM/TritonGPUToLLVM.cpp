@@ -11,6 +11,7 @@
 #include "mlir/Conversion/MathToLLVM/MathToLLVM.h"
 #include "mlir/Conversion/SCFToControlFlow/SCFToControlFlow.h"
 #include "mlir/Conversion/UBToLLVM/UBToLLVM.h"
+#include "mlir/Dialect/AMDGPU/Utils/Chipset.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/LLVMIR/NVVMDialect.h"
 #include "mlir/Dialect/LLVMIR/ROCDLDialect.h"
@@ -209,9 +210,16 @@ struct ConvertTritonAMDGPUToLLVM
     mlir::arith::populateArithToLLVMConversionPatterns(typeConverter, patterns);
     mlir::populateMathToLLVMConversionPatterns(typeConverter, patterns);
 
+    FailureOr<mlir::amdgpu::Chipset> maybeChipset =
+        mlir::amdgpu::Chipset::parse(this->arch);
+    if (failed(maybeChipset)) {
+      emitError(UnknownLoc::get(&getContext()),
+                "Invalid AMDGPU chipset name: " + this->arch);
+      return signalPassFailure();
+    }
     // Native lowering patterns
-    mlir::populateGpuToROCDLConversionPatterns(typeConverter, patterns,
-                                               mlir::gpu::amd::HIP);
+    mlir::populateGpuToROCDLConversionPatterns(
+        typeConverter, patterns, mlir::gpu::amd::HIP, *maybeChipset);
 
     mlir::cf::populateControlFlowToLLVMConversionPatterns(typeConverter,
                                                           patterns);

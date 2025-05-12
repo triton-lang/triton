@@ -19,6 +19,7 @@ static const char *kWarpSpecializeAttrName = "tt.warp_specialize";
 static const char *kLoopStageAttrName = "loop.stage";
 static const char *kLoopClusterAttrName = "loop.cluster";
 static const char *kScheduledMaxStageAttrName = "tt.scheduled_max_stage";
+static const char *kAssignedStageAttrName = "ttg.assigned_stage";
 
 //===----------------------------------------------------------------------===//
 // Hoisting Utilities
@@ -89,6 +90,11 @@ int getCopyVecBytes(RankedTensorType registerTy,
 // Serialize the latencies of the operations in the loops into the latency
 // attribute.
 void serializeLatencies(ModuleOp module, DenseMap<Operation *, int> &opLatency);
+
+// Serialize the self latencies of the operations in the loops into the
+// self_latency attribute.
+void serializeSelfLatencies(ModuleOp module,
+                            DenseMap<Operation *, int> &opSelfLatency);
 
 // Deserialize the latencies of the operations in the loops from the attribute.
 DenseMap<Operation *, int> deserializeLatencies(Operation *op);
