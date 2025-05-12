@@ -30,7 +30,7 @@
 
 namespace {
 
-#define GEN_PASS_DEF_TRITONREWRITETMATOLEGACY
+#define GEN_PASS_DEF_TRITONREWRITETENSORDESCRIPTORTOPOINTER
 #include "triton/Dialect/Triton/Transforms/Passes.h.inc"
 
 bool hasATensorDescriptorType(mlir::TypeRange types) {
@@ -357,8 +357,9 @@ struct RewriteStorePattern : OpConversionPattern<triton::DescriptorStoreOp> {
  * function argument or is in a conditional statement, we need better tracking
  * of the pointer, shape, and strides.
  */
-class RewriteTritonTmaToLegacyPass
-    : public impl::TritonRewriteTMAToLegacyBase<RewriteTritonTmaToLegacyPass> {
+class TritonRewriteTensorDescriptorToPointerPass
+    : public impl::TritonRewriteTensorDescriptorToPointerBase<
+          TritonRewriteTensorDescriptorToPointerPass> {
   void runOnOperation() override {
     auto op = getOperation();
 
@@ -421,8 +422,8 @@ class RewriteTritonTmaToLegacyPass
 
 namespace mlir::triton {
 
-std::unique_ptr<mlir::Pass> createRewriteTMAToLegacyPass() {
-  return std::make_unique<RewriteTritonTmaToLegacyPass>();
+std::unique_ptr<mlir::Pass> createTritonRewriteTensorDescriptorToPointerPass() {
+  return std::make_unique<TritonRewriteTensorDescriptorToPointerPass>();
 }
 
 } // namespace mlir::triton

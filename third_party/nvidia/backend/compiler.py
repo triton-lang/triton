@@ -210,7 +210,7 @@ class CUDABackend(BaseBackend):
         passes.common.add_inliner(pm)
         passes.ttir.add_rewrite_tensor_pointer(pm)
         if capability // 10 < 9:
-            passes.ttir.add_rewrite_tma_to_legacy(pm)
+            passes.ttir.add_rewrite_tensor_descriptor_to_pointer(pm)
         passes.common.add_canonicalizer(pm)
         passes.ttir.add_combine(pm)
         passes.ttir.add_reorder_broadcast(pm)
