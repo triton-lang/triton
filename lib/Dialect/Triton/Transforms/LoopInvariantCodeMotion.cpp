@@ -4,19 +4,18 @@
 #include "triton/Dialect/Triton/Transforms/Passes.h"
 #include "llvm/Support/Debug.h"
 
-#define GEN_PASS_CLASSES
+namespace mlir::triton {
+
+#define GEN_PASS_DEF_TRITONLOOPINVARIANTCODEMOTION
 #include "triton/Dialect/Triton/Transforms/Passes.h.inc"
 
 #define DEBUG_TYPE "triton-licm"
 #define DBGS() (llvm::dbgs() << "[" DEBUG_TYPE "]: ")
 #define LDBG(X) LLVM_DEBUG(DBGS() << X << "\n")
 
-namespace mlir::triton {
-
-namespace {
-
 class LoopInvariantCodeMotionPass
-    : public TritonLoopInvariantCodeMotionBase<LoopInvariantCodeMotionPass> {
+    : public impl::TritonLoopInvariantCodeMotionBase<
+          LoopInvariantCodeMotionPass> {
 
   DenseMap<LoopLikeOpInterface, bool> isLoopMemoryEffectFreeOrOnlyRead;
 
@@ -80,11 +79,5 @@ class LoopInvariantCodeMotionPass
     });
   }
 };
-
-} // anonymous namespace
-
-std::unique_ptr<mlir::Pass> createLoopInvariantCodeMotionPass() {
-  return std::make_unique<LoopInvariantCodeMotionPass>();
-}
 
 } // namespace mlir::triton

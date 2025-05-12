@@ -463,17 +463,13 @@ LogicalResult TMEMLoadOp::verify() {
 
 // -- TMEMAllocOp --
 LogicalResult TMEMAllocOp::verify() {
-  if (!isa<triton::nvidia_gpu::TensorMemorySpaceAttr>(
-          getType().getMemorySpace()))
-    return emitOpError("should create a buffer of tensor memory.");
-  if (!isa<triton::nvidia_gpu::TensorMemoryEncodingAttr,
-           TensorMemoryScalesEncodingAttr>(getType().getEncoding()))
-    return emitOpError("should use tensor memory encoding.");
-  if (!getSrc()) {
-    if (!getType().getMutableMemory())
-      return emitError("uninitialized alloc must have a mutable memdesc type");
-  }
-  return success();
+  if (!isa<TensorMemorySpaceAttr>(getType().getMemorySpace()))
+    return emitOpError("should create a buffer of tensor memory");
+  if (!isa<TensorMemoryEncodingAttr, TensorMemoryScalesEncodingAttr>(
+          getType().getEncoding()))
+    return emitOpError("should use tensor memory encoding");
+
+  return LocalAllocOp::verifyAllocOp(*this, getSrc(), getType());
 }
 
 void TMEMAllocOp::getEffects(
@@ -511,10 +507,10 @@ LogicalResult TMEMCopyOp::verify() {
 
   auto srcTy = cast<triton::gpu::MemDescType>(getSrc().getType());
   auto sharedEnc =
-      cast<triton::gpu::SwizzledSharedEncodingAttr>(srcTy.getEncoding());
+      cast<triton::gpu::NVMMASharedEncodingAttr>(srcTy.getEncoding());
 
-  if (sharedEnc.getMaxPhase() != 1 || sharedEnc.getPerPhase() != 1 ||
-      sharedEnc.getVec() != 1)
+  if (!sharedEnc || sharedEnc.getTransposed() || sharedEnc.getFp4Padded() ||
+      sharedEnc.getSwizzlingByteWidth() != 0)
     return emitOpError("The source should not have swizzling applied for now");
 
   if (!triton::gpu::isInnermostContiguous(srcTy, 512)) {

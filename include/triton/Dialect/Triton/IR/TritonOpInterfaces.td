@@ -80,6 +80,8 @@ def TT_DescriptorOpInterface : OpInterface<"DescriptorOpInterface"> {
     Common interface to get the descriptor argument from an operation on tensor descriptors.
   }];
 
+  let cppNamespace = "::mlir::triton";
+
   let methods = [
     InterfaceMethod<
       /*desc=*/"Get the descriptor",

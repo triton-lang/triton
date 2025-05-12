@@ -44,6 +44,11 @@ struct TMEMLoadOpPattern : public OpConversionPattern<ttng::TMEMLoadOp> {
     RankedTensorType type = getTMEMTensorLayout(
         typeConverter, op.getType(), op.getSrc().getType(), lookupNumWarps(op));
     rewriter.modifyOpInPlace(op, [&] { op.getResult().setType(type); });
+    Type resultType = getTypeConverter()->convertType(op.getType());
+    rewriter.setInsertionPointAfter(op);
+    auto cvt = rewriter.create<ConvertLayoutOp>(op.getLoc(), resultType,
+                                                op.getResult());
+    rewriter.replaceAllUsesExcept(op.getResult(), cvt, cvt);
     return success();
   }
 };
