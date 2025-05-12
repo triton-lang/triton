@@ -6,18 +6,14 @@
 namespace mlir {
 namespace triton {
 
-std::unique_ptr<Pass> createCombineOpsPass();
-
-std::unique_ptr<Pass> createLoopInvariantCodeMotionPass();
-std::unique_ptr<Pass> createReorderBroadcastPass();
-std::unique_ptr<Pass> createRewriteTensorPointerPass();
-std::unique_ptr<Pass> createLoopUnrollPass();
-
-} // namespace triton
+// Generate the pass class declarations.
+#define GEN_PASS_DECL
+#include "triton/Dialect/Triton/Transforms/Passes.h.inc"
 
 #define GEN_PASS_REGISTRATION
 #include "triton/Dialect/Triton/Transforms/Passes.h.inc"
 
+} // namespace triton
 } // namespace mlir
 
 #endif
