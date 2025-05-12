@@ -46,6 +46,19 @@ def TritonRewriteTensorPointer : Pass</*cli-arg*/"triton-rewrite-tensor-pointer"
   let dependentDialects = ["mlir::triton::TritonDialect"];
 }
 
+def TritonRewriteTMAToLegacy : Pass</*cli-arg*/"triton-rewrite-tma-to-legacy", /*Op*/"mlir::ModuleOp"> {
+  let summary = "Rewrite load/stores of tensor descriptors into legacy load/stores";
+  let description = [{
+    This pass rewrites all load/store semantics initiated by a `tt.make_tensor_descriptor` into legacy semantics. After
+    this pass, `tt.make_tensor_descriptor`  will disappear, and it generates logics to compute the pointer/mask/other
+    for each load/store.
+  }];
+
+  let constructor = "mlir::triton::createRewriteTMAToLegacyPass()";
+
+  let dependentDialects = ["mlir::triton::TritonDialect"];
+}
+
 def TritonLoopUnroll : Pass</*cli-arg*/"triton-loop-unroll", /*Op*/"mlir::ModuleOp"> {
   let summary = "Loop unroller";
   let description = [{
