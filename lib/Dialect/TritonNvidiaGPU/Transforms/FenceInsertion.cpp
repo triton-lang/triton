@@ -117,9 +117,13 @@ private:
       Value v = yieldOp->getOperand(argNum - 1);
       auto entry = std::make_pair<Operation *, unsigned>(std::move(yieldOp),
                                                          std::move(argNum));
-      if (dependOnCopyRegToShared(v, visited))
-        return true;
+      return dependOnCopyRegToShared(v, visited);
     }
+    // handle `ttg.warp_specialize`
+    if (isa<ttg::WarpSpecializePartitionsOp>(argOwner)) {
+      return false;
+    }
+
     // Conservatively return true for other ops
     return true;
   }
