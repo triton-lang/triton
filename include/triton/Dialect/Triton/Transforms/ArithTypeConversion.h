@@ -2,7 +2,7 @@
 #define TRITON_DIALECT_TRITON_TRANSFORMS_ARITH_TYPE_CONVERSION_H_
 #include "mlir/Transforms/DialectConversion.h"
 
-namespace mlir::arith {
+namespace mlir::triton {
 
 /**
  * @brief Provides helper patterns for converting arith operations using a type
@@ -13,6 +13,6 @@ namespace mlir::arith {
 void populateArithTypeConversions(const TypeConverter &converter,
                                   RewritePatternSet &patterns);
 
-} // namespace mlir::arith
+} // namespace mlir::triton
 
 #endif // TRITON_DIALECT_TRITON_TRANSFORMS_ARITH_TYPE_CONVERSION_H_

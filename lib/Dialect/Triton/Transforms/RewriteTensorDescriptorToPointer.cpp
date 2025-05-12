@@ -351,7 +351,7 @@ class TritonRewriteTensorDescriptorToPointerPass
     // ops.
     triton::populateFunctionTypeConversions(converter, patterns);
     mlir::scf::populateSCFStructuralTypeConversions(converter, patterns);
-    mlir::arith::populateArithTypeConversions(converter, patterns);
+    triton::populateArithTypeConversions(converter, patterns);
 
     patterns
         .add<RewriteMakeTensorDesc, RewriteLoadPattern, RewriteStorePattern>(

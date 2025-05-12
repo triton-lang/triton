@@ -40,11 +40,11 @@ struct RewriteArithSelectOp : mlir::OpConversionPattern<mlir::arith::SelectOp> {
 };
 
 } // namespace
-namespace mlir::arith {
+namespace mlir::triton {
 
 void populateArithTypeConversions(const TypeConverter &converter,
                                   RewritePatternSet &patterns) {
   patterns.add<RewriteArithSelectOp>(converter, patterns.getContext());
 }
 
-} // namespace mlir::arith
+} // namespace mlir::triton
