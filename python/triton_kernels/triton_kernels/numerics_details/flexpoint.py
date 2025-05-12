@@ -1,5 +1,5 @@
 from ..numerics import MAX_FINITE_FLOAT8E4B8, MAX_FINITE_FLOAT8E4NV, MAX_FINITE_FLOAT8E5
-from triton_bench import target_info
+from triton_kernels import target_info
 import triton
 import triton.language as tl
 

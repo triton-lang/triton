@@ -45,7 +45,8 @@ def Triton_Dialect : Dialect {
 
   let discardableAttrs = (ins
      "::mlir::IntegerAttr":$num_stages,
-     "::mlir::IntegerAttr":$latency
+     "::mlir::IntegerAttr":$latency,
+     "::mlir::IntegerAttr":$self_latency
   );
 
   let hasConstantMaterializer = 1;

@@ -50,15 +50,15 @@ def make_matmul_repr(base_name, order):
         dtypes = "x".join([convert_dtype(f"{signature[i][1:]}") for i in reorder(["Y", "X", "W"])])
         layouts = "".join([f"{layout(i)}" for i in reorder(["stride_y_n", "stride_x_k", "stride_w_n"])])
         blocks = "x".join([f"{constants[i]}" for i in ["BLOCK_M", "BLOCK_N", "BLOCK_K", "SPLIT_K"]])
-        mode = []
-        if "GatherIndx" not in constants:
-            mode += ['g']
-        if "ScatterSrcIndx" not in constants:
-            mode += ['s']
-        suffix = "" if not mode else "_o" + (''.join(mode))
-        if base_name.startswith("_p"):
-            suffix += "_ptma"
-        return f"_matmul{suffix}_{layouts}_{dtypes}_{blocks}"
+        # mode = []
+        # if "GatherIndx" not in constants:
+        #     mode += ['g']
+        # if "ScatterSrcIndx" not in constants:
+        #     mode += ['s']
+        # suffix = "" if not mode else "_o" + (''.join(mode))
+        # if base_name.startswith("_p"):
+        #     suffix += "_ptma"
+        return f"{base_name}_{layouts}_{dtypes}_{blocks}"
 
     return matmul_repr
 
@@ -83,7 +83,7 @@ def matmul_launch_metadata(grid, kernel, args):
     batch_repr = ""
     if "batch_size" in args and args["batch_size"] > 1:
         batch_repr = repr("B", args["batch_size"]) + ", "
-    ret["name"] = f"{kernel.name}[{batch_repr}{repr('M', M)}, {repr('N', N)}, {repr('K', K)}]"
+    ret["name"] = f"{kernel.name} [{batch_repr}{repr('M', M)}, {repr('N', N)}, {repr('K', K)}]"
     fM = M if M is not None else n_tokens
     fK = K if K is not None else n_tokens
     ret[f"flops{nbits}"] = 2.0 * fM * N * fK

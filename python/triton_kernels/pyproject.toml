@@ -1,5 +1,5 @@
 [project]
-name = "triton_bench"
+name = "triton_kernels"
 version = "1.0.0"
 dependencies = ["torch", "numpy", "pytest"]
 
@@ -8,4 +8,4 @@ requires = ["setuptools>=64.0"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
-include = ["triton_bench*"]
+include = ["triton_kernels*"]

@@ -259,6 +259,10 @@ Operation *mlir::triton::predicateOp(RewriterBase &rewriter, Operation *op,
     atomicRMWOp.getMaskMutable().assign(mask);
     return op;
   }
+  if (!op->isRegistered()) {
+    // Skip ops from unregistered dialects to make writing lit tests easier.
+    return op;
+  }
 
   op->emitError("pipeliner doesn't know how to predicate this op.");
   llvm::report_fatal_error("Fatal pipeliner error");
@@ -316,13 +320,22 @@ void mlir::triton::serializeLatencies(ModuleOp module,
   }
 }
 
+void mlir::triton::serializeSelfLatencies(
+    ModuleOp module, DenseMap<Operation *, int> &opSelfLatency) {
+  auto helper = TritonDialect::getLoaded(module)->getSelfLatencyAttrHelper();
+  auto builder = Builder(module);
+  for (auto &[op, latency] : opSelfLatency) {
+    helper.setAttr(op, builder.getI32IntegerAttr(latency));
+  }
+}
+
 DenseMap<Operation *, int> mlir::triton::deserializeLatencies(Operation *op) {
-  auto helper = TritonDialect::getLoaded(op)->getLatencyAttrHelper();
   DenseMap<Operation *, int> opLatency;
+  auto latencyHelper = TritonDialect::getLoaded(op)->getLatencyAttrHelper();
   op->walk([&](Operation *op) {
-    if (auto attr = helper.getAttr(op)) {
+    if (auto attr = latencyHelper.getAttr(op)) {
       opLatency[op] = attr.getInt();
-      helper.removeAttr(op);
+      latencyHelper.removeAttr(op);
     }
   });
   return opLatency;
@@ -388,6 +401,22 @@ Value mlir::triton::createAlloc(scf::ForOp forOp, RankedTensorType ty,
 
 bool mlir::triton::isTMALoad(Operation *op) {
   return isa<tt::DescriptorLoadOp, tt::DescriptorGatherOp>(op);
+}
+
+bool mlir::triton::canBeAsyncLoad(Operation *op) {
+  if (mlir::triton::isTMALoad(op)) {
+    return true;
+  }
+  assert(isa<tt::LoadOp>(op));
+  ttg::SharedEncodingTrait sharedEncoding = mlir::triton::getSharedEncoding(op);
+  // Do not create async loads for small loads (cp.async requires at least 4
+  // bytes)
+  int copyVecBytes = mlir::triton::getCopyVecBytes(
+      cast<RankedTensorType>(op->getResultTypes()[0]), sharedEncoding);
+  if (copyVecBytes >= 4) {
+    return true;
+  }
+  return false;
 }
 
 void mlir::triton::combineRedundantWaitOps(

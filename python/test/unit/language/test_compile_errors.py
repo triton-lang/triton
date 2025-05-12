@@ -453,3 +453,35 @@ def test_max_num_imprecise_acc_limit():
         assert (str(e.value.__cause__) == "max_num_imprecise_acc (128) must be <= K (64)")
     except AssertionError as assertion_err:
         raise assertion_err from e.value
+
+
+extra_words = "These are extra words in the error message."
+
+
+@triton.must_use_result(extra_words)
+@triton.jit
+def cube(x):
+    return x * x * x
+
+
+def test_unused_result():
+
+    @triton.jit
+    def evil_cube_kernel():
+        a = tl.full((64, 64), 0.0, tl.float32)
+        cube(a)
+
+    @triton.jit
+    def good_cube_kernel():
+        a = tl.full((64, 64), 0.0, tl.float32)
+        a = cube(a)
+
+    triton.compile(triton.compiler.ASTSource(fn=good_cube_kernel, signature={}, constexprs={}))
+
+    with pytest.raises(CompilationError) as e:
+        triton.compile(triton.compiler.ASTSource(fn=evil_cube_kernel, signature={}, constexprs={}))
+
+    expected_err_msg = "The result of cube is not being used. " + extra_words
+    obtained_err_msg = str(e.value).split('\n')[-1]
+
+    assert expected_err_msg == obtained_err_msg

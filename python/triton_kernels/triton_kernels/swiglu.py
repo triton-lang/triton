@@ -1,9 +1,9 @@
 from dataclasses import dataclass
-from triton_bench.numerics import InFlexData, OutFlexData
+from triton_kernels.numerics import InFlexData, OutFlexData
 import torch
 import triton
 from .swiglu_details._swiglu import _swiglu
-from triton_bench import target_info
+from triton_kernels import target_info
 from .matmul_ogs_details.metadata import compute_metadata
 
 
@@ -69,7 +69,7 @@ class SwiGLU(torch.autograd.Function):
             n_tokens,
             BLOCK_M=BLOCK_M,
             BLOCK_N=BLOCK_N,
-            EVEN_N=(N // 2) % 2 == 0,
+            EVEN_N=(N // 2) % BLOCK_N == 0,
             M_BLOCKS=M_BLOCKS,
             N_BLOCKS=N_BLOCKS,
             flexpoint_saturate_inf=flex_ctx.saturate_inf,
