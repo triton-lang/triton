@@ -963,7 +963,7 @@ LinearLayout LinearLayout::invertAndCompose(const LinearLayout &outer) const {
   for (auto dim : outDims) {
     if (A.getOutDimSize(dim) != B.getOutDimSize(dim)) {
       std::stringstream msg;
-      msg << "A.invertAndCompose(B) called with incompatible output shapes in ";
+      msg << "B.invertAndCompose(A) called with incompatible output shapes in ";
       msg << "dim = " << std::string(dim.getValue()) << ": ";
       msg << "A = " << A.getOutDimSize(dim) << ", ";
       msg << "B = " << B.getOutDimSize(dim);

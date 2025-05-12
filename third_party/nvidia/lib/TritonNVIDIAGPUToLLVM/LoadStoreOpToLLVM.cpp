@@ -1270,24 +1270,19 @@ struct AsyncCopyGlobalToLocalOpConversion
   }
 };
 
-static LinearLayout getMsgToOffsetLayout(ttg::MemDescType ty) {
+static LinearLayout getMsgToPackedOffsetLayout(ttg::MemDescType ty) {
   auto ctx = ty.getContext();
   auto kMsg = str_attr("msg");
   auto kBlock = str_attr("block");
-  LinearLayout msgToOffset;
-  bool isFp4Padded =
-      cast<NVMMASharedEncodingAttr>(ty.getEncoding()).getFp4Padded();
-  int packingFactor = isFp4Padded ? 2 : 1;
-
   auto shapePerCTA = ttg::getShapePerCTA(ty);
-  auto blockShape = ttng::getTMABlockShape(ty, /*packedSize=*/true);
   int rank = shapePerCTA.size();
+  auto blockShape = ttng::getTMABlockShape(ty, /*packedSize=*/true);
   auto outDimNames = standardOutDimNames(ctx, rank);
+  LinearLayout msgToOffset;
   for (int dim = 0; dim < rank; ++dim) {
-    int dimPackingFactor = (dim == rank - 1) ? packingFactor : 1;
-    auto dimShape = shapePerCTA[dim] * dimPackingFactor;
-    msgToOffset *= LinearLayout::strided1D(
-        dimShape / blockShape[dim], blockShape[dim], kMsg, outDimNames[dim]);
+    msgToOffset *=
+        LinearLayout::strided1D(shapePerCTA[dim] / blockShape[dim],
+                                blockShape[dim], kMsg, outDimNames[dim]);
   }
   auto ctaLayout = getCTALayout(ty.getEncoding());
   for (int i = 0; i < rank; ++i) {
@@ -1296,6 +1291,23 @@ static LinearLayout getMsgToOffsetLayout(ttg::MemDescType ty) {
                                             kBlock, outDimNames[dim]);
   }
   return msgToOffset;
+}
+
+static LinearLayout
+getMsgToUnpackedOffsetLayout(const LinearLayout &packedLayout,
+                             ttg::MemDescType ty) {
+  auto isFp4Padded =
+      cast<NVMMASharedEncodingAttr>(ty.getEncoding()).getFp4Padded();
+  if (!isFp4Padded) {
+    return packedLayout;
+  }
+  auto ctx = ty.getContext();
+  auto rank = ty.getRank();
+  auto kMsg = str_attr("msg");
+  auto kLastDim = str_attr("dim" + Twine(rank - 1));
+  // Multiply to offset by 2 in the last dimension
+  auto unpackLayout = LinearLayout::zeros1D(1, kMsg, kLastDim, 2);
+  return unpackLayout * packedLayout;
 }
 
 struct AsyncTMACopyGlobalToLocalOpConversion
@@ -1346,10 +1358,10 @@ struct AsyncTMACopyGlobalToLocalOpConversion
     auto shapePerCTA = ttg::getShapePerCTA(smemTy);
     int rank = op.getCoord().size();
 
-    auto msgToOffset = getMsgToOffsetLayout(smemTy);
+    auto msgToPackedOffset = getMsgToPackedOffsetLayout(smemTy);
     auto smemLayout = ttg::toLinearLayout(smemTy.getShape(), encoding);
-    auto msgToShared = msgToOffset.invertAndCompose(smemLayout);
-    llvm::errs() << msgToOffset << "\n";
+    auto msgToShared = msgToPackedOffset.invertAndCompose(smemLayout);
+    auto msgToOffset = getMsgToUnpackedOffsetLayout(msgToPackedOffset, smemTy);
 
     auto ctx = op.getContext();
     auto kMsg = str_attr("msg");
@@ -1439,9 +1451,11 @@ LogicalResult convertTMAStoreLikeOp(Operation *op,
   auto rank = coords.size();
   auto encoding = srcTy.getEncoding();
 
-  auto msgToOffset = getMsgToOffsetLayout(srcTy);
+  auto msgToPackedOffset = getMsgToPackedOffsetLayout(srcTy);
   auto smemLayout = ttg::toLinearLayout(srcTy.getShape(), encoding);
-  auto msgToShared = msgToOffset.invertAndCompose(smemLayout);
+  auto msgToShared = msgToPackedOffset.invertAndCompose(smemLayout);
+  auto msgToOffset = getMsgToUnpackedOffsetLayout(msgToPackedOffset, srcTy);
+
   auto ctx = op->getContext();
   auto kMsg = str_attr("msg");
   auto kBlock = str_attr("block");
