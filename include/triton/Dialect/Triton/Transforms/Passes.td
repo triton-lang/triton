@@ -54,8 +54,6 @@ def TritonRewriteTensorDescriptorToPointer : Pass</*cli-arg*/"triton-rewrite-ten
     for each load/store.
   }];
 
-  let constructor = "mlir::triton::createTritonRewriteTensorDescriptorToPointerPass()";
-
   let dependentDialects = ["mlir::triton::TritonDialect"];
 }
 

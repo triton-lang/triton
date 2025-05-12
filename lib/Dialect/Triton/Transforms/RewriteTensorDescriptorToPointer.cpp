@@ -27,10 +27,12 @@
 #include <iterator>
 #include <memory>
 
-namespace {
+namespace mlir::triton {
 
 #define GEN_PASS_DEF_TRITONREWRITETENSORDESCRIPTORTOPOINTER
 #include "triton/Dialect/Triton/Transforms/Passes.h.inc"
+
+namespace {
 
 bool hasATensorDescriptorType(mlir::TypeRange types) {
   return llvm::any_of(types, [](mlir::Type t) {
@@ -364,12 +366,7 @@ class TritonRewriteTensorDescriptorToPointerPass
     }
   }
 };
+
 } // namespace
-
-namespace mlir::triton {
-
-std::unique_ptr<mlir::Pass> createTritonRewriteTensorDescriptorToPointerPass() {
-  return std::make_unique<TritonRewriteTensorDescriptorToPointerPass>();
-}
 
 } // namespace mlir::triton
