@@ -2,10 +2,8 @@
 
 #include <algorithm>
 #include <limits>
-#include <numeric>
 
 #include "mlir/Analysis/Liveness.h"
-#include "mlir/Dialect/Tensor/IR/Tensor.h"
 #include "mlir/Support/LLVM.h"
 #include "triton/Analysis/Alias.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"

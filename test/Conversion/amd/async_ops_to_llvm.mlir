@@ -6,15 +6,15 @@
 #smem = #ttg.shared_memory
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shared = 8192 : i32, ttg.target = "hip:gfx942", "ttg.threads-per-warp" = 64 : i32} {
   // CHECK-LABEL: async_copy
-  tt.func public @async_copy(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32},
+  tt.func public @async_copy(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32},
                                 %arg1: i32 {tt.divisibility = 16 : i32},
-                                %arg2: !ttg.memdesc<32x64xf16, #shared, #smem, mutable>) {
+                                %arg2: !ttg.memdesc<32x64xf32, #shared, #smem, mutable>) {
     // We need the splat to allow the AxisAnalysis to work during lowering
-    %1 = tt.splat %arg0 : !tt.ptr<f16> -> tensor<32x64x!tt.ptr<f16>, #blocked>
+    %1 = tt.splat %arg0 : !tt.ptr<f32> -> tensor<32x64x!tt.ptr<f32>, #blocked>
     // Each thread needs to load 8 elements and we load 1 (sizePerThread) per global.load.lds
     // CHECK-COUNT-8: rocdl.global.load.lds
     // CHECK-NOT: rocdl.global.load.lds
-    %2 = ttg.async_copy_global_to_local %1, %arg2 : tensor<32x64x!tt.ptr<f16>, #blocked> -> <32x64xf16, #shared, #smem, mutable>
+    %2 = ttg.async_copy_global_to_local %1, %arg2 : tensor<32x64x!tt.ptr<f32>, #blocked> -> <32x64xf32, #shared, #smem, mutable>
     tt.return
   }
 }
@@ -127,16 +127,16 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
 #smem = #ttg.shared_memory
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shared = 8192 : i32, ttg.target = "hip:gfx942", "ttg.threads-per-warp" = 64 : i32} {
   // CHECK-LABEL: async_copy_mask_other
-  tt.func public @async_copy_mask_other(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32},
+  tt.func public @async_copy_mask_other(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32},
                                 %arg1: i32 {tt.divisibility = 16 : i32},
-                                %arg2: !ttg.memdesc<32x32xf16, #shared, #smem, mutable>,
+                                %arg2: !ttg.memdesc<32x32xf32, #shared, #smem, mutable>,
                                 %arg3: i32 {tt.divisibility = 16 : i32}) {
     // We need the splat to allow the AxisAnalysis to work during lowering
-    %cst_0 = arith.constant dense<0.000000e+00> : tensor<32x32xf16, #blocked>
+    %cst_0 = arith.constant dense<0.000000e+00> : tensor<32x32xf32, #blocked>
     %c0_i32 = arith.constant 0 : i32
     %c32_i32 = arith.constant 32 : i32
     %c31_i32 = arith.constant 31 : i32
-    %1 = tt.splat %arg0 : !tt.ptr<f16> -> tensor<32x32x!tt.ptr<f16>, #blocked>
+    %1 = tt.splat %arg0 : !tt.ptr<f32> -> tensor<32x32x!tt.ptr<f32>, #blocked>
     %29 = arith.addi %arg3, %c31_i32 : i32
     %30 = arith.divsi %29, %c32_i32 : i32
     %31 = arith.cmpi sgt, %30, %c0_i32 : i32
@@ -173,7 +173,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
     // CHECK-NEXT: llvm.br
     // CHECK: _predicated_store
 
-    %2 = ttg.async_copy_global_to_local %1, %arg2 mask %67 other %cst_0 : tensor<32x32x!tt.ptr<f16>, #blocked> -> <32x32xf16, #shared, #smem, mutable>
+    %2 = ttg.async_copy_global_to_local %1, %arg2 mask %67 other %cst_0 : tensor<32x32x!tt.ptr<f32>, #blocked> -> <32x32xf32, #shared, #smem, mutable>
     tt.return
   }
 }
@@ -185,16 +185,16 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
 #smem = #ttg.shared_memory
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shared = 8192 : i32, ttg.target = "hip:gfx942", "ttg.threads-per-warp" = 64 : i32} {
   // CHECK-LABEL: async_copy_swizzled_mask_other
-  tt.func public @async_copy_swizzled_mask_other(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32},
+  tt.func public @async_copy_swizzled_mask_other(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32},
                                 %arg1: i32 {tt.divisibility = 16 : i32},
-                                %arg2: !ttg.memdesc<32x32xf16, #shared, #smem, mutable>,
+                                %arg2: !ttg.memdesc<32x32xf32, #shared, #smem, mutable>,
                                 %arg3: i32 {tt.divisibility = 16 : i32}) {
     // We need the splat to allow the AxisAnalysis to work during lowering
-    %cst_0 = arith.constant dense<0.000000e+00> : tensor<32x32xf16, #blocked>
+    %cst_0 = arith.constant dense<0.000000e+00> : tensor<32x32xf32, #blocked>
     %c0_i32 = arith.constant 0 : i32
     %c32_i32 = arith.constant 32 : i32
     %c31_i32 = arith.constant 31 : i32
-    %1 = tt.splat %arg0 : !tt.ptr<f16> -> tensor<32x32x!tt.ptr<f16>, #blocked>
+    %1 = tt.splat %arg0 : !tt.ptr<f32> -> tensor<32x32x!tt.ptr<f32>, #blocked>
     %29 = arith.addi %arg3, %c31_i32 : i32
     %30 = arith.divsi %29, %c32_i32 : i32
     %31 = arith.cmpi sgt, %30, %c0_i32 : i32
@@ -239,7 +239,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
     // CHECK-NEXT: llvm.br
     // CHECK: _predicated_store
 
-    %2 = ttg.async_copy_global_to_local %1, %arg2 mask %67 other %cst_0 : tensor<32x32x!tt.ptr<f16>, #blocked> -> <32x32xf16, #shared, #smem, mutable>
+    %2 = ttg.async_copy_global_to_local %1, %arg2 mask %67 other %cst_0 : tensor<32x32x!tt.ptr<f32>, #blocked> -> <32x32xf32, #shared, #smem, mutable>
     tt.return
   }
 }
@@ -251,25 +251,25 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
 #smem = #ttg.shared_memory
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 16 : i32, ttg.shared = 8192 : i32, ttg.target = "hip:gfx942", "ttg.threads-per-warp" = 64 : i32} {
   // CHECK-LABEL: async_copy_cache_mods
-  tt.func public @async_copy_cache_mods(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32},
+  tt.func public @async_copy_cache_mods(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32},
                                 %arg1: i32 {tt.divisibility = 16 : i32},
-                                %arg2: !ttg.memdesc<32x32xf16, #shared, #smem, mutable>) {
+                                %arg2: !ttg.memdesc<32x32xf32, #shared, #smem, mutable>) {
     // We need the splat to allow the AxisAnalysis to work during lowering
-    %1 = tt.splat %arg0 : !tt.ptr<f16> -> tensor<32x32x!tt.ptr<f16>, #blocked>
+    %1 = tt.splat %arg0 : !tt.ptr<f32> -> tensor<32x32x!tt.ptr<f32>, #blocked>
     // Each thread needs to load 1 element and we load 1 (sizePerThread) per global.load.lds
 
     // CHECK: llvm.getelementptr
     // CHECK: %[[aux_ca:.*]] = llvm.mlir.constant(0 : i32) : i32
     // CHECK: rocdl.global.load.lds {{.*}}, {{.*}}, {{.*}}, {{.*}}, %[[aux_ca]]
-    %2 = ttg.async_copy_global_to_local %1, %arg2 cacheModifier = ca: tensor<32x32x!tt.ptr<f16>, #blocked> -> <32x32xf16, #shared, #smem, mutable>
+    %2 = ttg.async_copy_global_to_local %1, %arg2 cacheModifier = ca: tensor<32x32x!tt.ptr<f32>, #blocked> -> <32x32xf32, #shared, #smem, mutable>
     // CHECK: llvm.getelementptr
     // CHECK: %[[aux_cg:.*]] = llvm.mlir.constant(3 : i32) : i32
     // CHECK: rocdl.global.load.lds {{.*}}, {{.*}}, {{.*}}, {{.*}}, %[[aux_cg]]
-    %3 = ttg.async_copy_global_to_local %1, %arg2 cacheModifier = cg: tensor<32x32x!tt.ptr<f16>, #blocked> -> <32x32xf16, #shared, #smem, mutable>
+    %3 = ttg.async_copy_global_to_local %1, %arg2 cacheModifier = cg: tensor<32x32x!tt.ptr<f32>, #blocked> -> <32x32xf32, #shared, #smem, mutable>
     // CHECK: llvm.getelementptr
     // CHECK: %[[aux_cv:.*]] = llvm.mlir.constant(17 : i32) : i32
     // CHECK: rocdl.global.load.lds {{.*}}, {{.*}}, {{.*}}, {{.*}}, %[[aux_cv]]
-    %4 = ttg.async_copy_global_to_local %1, %arg2 cacheModifier = cv: tensor<32x32x!tt.ptr<f16>, #blocked> -> <32x32xf16, #shared, #smem, mutable>
+    %4 = ttg.async_copy_global_to_local %1, %arg2 cacheModifier = cv: tensor<32x32x!tt.ptr<f32>, #blocked> -> <32x32xf32, #shared, #smem, mutable>
     tt.return
   }
 }

@@ -18,13 +18,13 @@ def cumsum_kernel(ptr):
 
 
 def test_compile_stats(device: str, fresh_knobs_except_libraries: Any, fresh_triton_cache: str) -> None:
-    captured: Union[tuple[Union[ASTSource, IRSource], dict[str, Any], CompileTimes, bool], None] = None
+    captured: Union[tuple[Union[ASTSource, IRSource], dict[str, Any], dict[str, Any], CompileTimes, bool], None] = None
 
-    def compile_listener(src: Union[ASTSource, IRSource], metadata: dict[str, Any], times: CompileTimes,
-                         cache_hit: bool) -> None:
+    def compile_listener(src: Union[ASTSource, IRSource], metadata: dict[str, str], metadata_group: dict[str, Any],
+                         times: CompileTimes, cache_hit: bool) -> None:
         nonlocal captured
         assert captured is None
-        captured = (src, metadata, times, cache_hit)
+        captured = (src, metadata, metadata_group, times, cache_hit)
 
     fresh_knobs_except_libraries.compilation.listener = compile_listener
 
@@ -34,17 +34,17 @@ def test_compile_stats(device: str, fresh_knobs_except_libraries: Any, fresh_tri
     assert captured is not None
 
     # No cache hit at first
-    assert not captured[3]
+    assert not captured[4]
 
     # Expected metadata
     assert len(captured[1]["hash"]) > 0
     assert isinstance(captured[1]["target"], GPUTarget)
 
     # It in fact did take some time to do compilation
-    assert captured[2].ir_initialization > 0
-    assert captured[2].total_lowering > 0
-    assert captured[2].store_results > 0
-    assert captured[2].total > 0
+    assert captured[3].ir_initialization > 0
+    assert captured[3].total_lowering > 0
+    assert captured[3].store_results > 0
+    assert captured[3].total > 0
 
     # Now lets create a new instance of the same kernel to pick up cache_hit=True
     cumsum_kernel.device_caches.clear()
@@ -53,14 +53,14 @@ def test_compile_stats(device: str, fresh_knobs_except_libraries: Any, fresh_tri
 
     assert captured is not None
     # Cache hit!
-    assert captured[3]
+    assert captured[4]
 
     # Expected metadata
     assert len(captured[1]["hash"]) > 0
     assert isinstance(captured[1]["target"], GPUTarget)
 
     # It in fact did take some time to do compilation
-    assert captured[2].ir_initialization > 0
-    assert captured[2].total_lowering == 0
-    assert captured[2].store_results == 0
-    assert captured[2].total > 0
+    assert captured[3].ir_initialization > 0
+    assert captured[3].total_lowering == 0
+    assert captured[3].store_results == 0
+    assert captured[3].total > 0

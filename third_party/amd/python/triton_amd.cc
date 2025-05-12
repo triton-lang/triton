@@ -291,4 +291,8 @@ void init_triton_amd(py::module &&m) {
       arg.addAttr(llvm::Attribute::InReg);
     }
   });
+
+  m.def("add_scalarize_packed_fops_llvm_pass", [](llvm::Function *fn) {
+    mlir::triton::AMD::runScalarizePackedFOpsPass(*fn);
+  });
 }

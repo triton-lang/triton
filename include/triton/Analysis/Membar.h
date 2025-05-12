@@ -2,7 +2,6 @@
 #define TRITON_ANALYSIS_MEMBAR_H
 
 #include "Allocation.h"
-#include "llvm/ADT/SmallPtrSet.h"
 
 #include <set>
 

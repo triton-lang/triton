@@ -696,14 +696,6 @@ struct TensorMemoryCopyOpConversion
     auto b = TritonLLVMOpBuilder(loc, rewriter);
     auto srcTy = cast<MemDescType>(op.getSrc().getType());
     assert(isa<triton::gpu::SharedMemorySpaceAttr>(srcTy.getMemorySpace()));
-    assert(isa<triton::gpu::SwizzledSharedEncodingAttr>(srcTy.getEncoding()));
-
-    auto sharedEnc =
-        cast<triton::gpu::SwizzledSharedEncodingAttr>(srcTy.getEncoding());
-    assert(
-        sharedEnc.getMaxPhase() == 1 && sharedEnc.getPerPhase() == 1 &&
-        sharedEnc.getVec() == 1 &&
-        "The src SMEM of tmem_copy should not have swizzling applied for now");
 
     Value baseSrc =
         LLVM::getSharedMemoryObjectFromStruct(

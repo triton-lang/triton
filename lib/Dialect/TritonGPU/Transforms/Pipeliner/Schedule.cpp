@@ -239,9 +239,13 @@ void tt::CoarseSchedule::serialize(scf::ForOp &forOp) {
   for (auto [op, stage, cluster] : getOpsInOrder(forOp)) {
     setStageCluster(op, stage, *cluster);
   }
+
+  Builder b(forOp.getContext());
+  int maxStages = numStages - 1;
+  if (auto maxStageAttr = tryGetMaxStage(forOp))
+    maxStages = std::max(maxStages, *maxStageAttr);
   forOp->setAttr(mlir::triton::kScheduledMaxStageAttrName,
-                 IntegerAttr::get(IntegerType::get(forOp.getContext(), 32),
-                                  numStages - 1));
+                 b.getI32IntegerAttr(maxStages));
 }
 
 // Create a CoarseSchedule based on forOp's <stage, cluster>.

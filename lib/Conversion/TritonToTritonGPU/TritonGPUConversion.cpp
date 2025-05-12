@@ -9,7 +9,6 @@
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
-#include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 
 using namespace mlir;
 using namespace mlir::triton::gpu;
@@ -52,27 +51,15 @@ TritonGPUTypeConverter::TritonGPUTypeConverter(MLIRContext *context,
                                     ptrType.getAddressSpace());
   });
 
-  //
-  // Materializations
-  //
-  // This will be called when (newArgType != origArgType)
-  // This will create newArg, and map(origArg, newArg)
-  addArgumentMaterialization([](OpBuilder &builder, RankedTensorType tensorType,
-                                ValueRange inputs, Location loc) -> Value {
-    llvm_unreachable("Argument rematerialization should not happen in Triton "
-                     "-> TritonGPU conversion");
-    return {};
-  });
-
   // If the origValue still has live user(s), use this to
   // convert origValue to newValue
-  addSourceMaterialization([=](OpBuilder &builder, RankedTensorType tensorType,
-                               ValueRange inputs, Location loc) -> Value {
-    assert(enableSourceRemat && "Source rematerialization should not happen in "
-                                "Triton -> TritonGPU Conversion");
-    return builder.create<UnrealizedConversionCastOp>(loc, tensorType, inputs)
-        .getResult(0);
-  });
+  if (enableSourceRemat) {
+    addSourceMaterialization([](OpBuilder &builder, RankedTensorType tensorType,
+                                ValueRange inputs, Location loc) -> Value {
+      return builder.create<UnrealizedConversionCastOp>(loc, tensorType, inputs)
+          .getResult(0);
+    });
+  }
 
   // This will be called when (desiredType != newOperandType)
   // where, desiredType = typeConverter->convertType(origType)
@@ -100,18 +87,8 @@ TritonGPUConversionTarget::TritonGPUConversionTarget(
 
   addDynamicallyLegalDialect<arith::ArithDialect, math::MathDialect,
                              triton::TritonDialect, cf::ControlFlowDialect,
-                             scf::SCFDialect, ub::UBDialect,
-                             triton::nvidia_gpu::TritonNvidiaGPUDialect>(
-      [&](Operation *op) {
-        bool hasLegalRegions = true;
-        for (auto &region : op->getRegions()) {
-          hasLegalRegions = hasLegalRegions && typeConverter.isLegal(&region);
-        }
-        if (hasLegalRegions && typeConverter.isLegal(op)) {
-          return true;
-        }
-        return false;
-      });
+                             scf::SCFDialect, ub::UBDialect>(
+      [&](Operation *op) { return isDynamicallyLegal(op, typeConverter); });
 
   // We have requirements for the data layouts
   addDynamicallyLegalOp<triton::DotOp>([](triton::DotOp dotOp) -> bool {
@@ -124,4 +101,75 @@ TritonGPUConversionTarget::TritonGPUConversionTarget(
       return true;
     return false;
   });
+}
+
+bool TritonGPUConversionTarget::isDynamicallyLegal(
+    Operation *op, const TypeConverter &typeConverter) {
+  bool hasLegalRegions = true;
+  for (auto &region : op->getRegions()) {
+    hasLegalRegions = hasLegalRegions && typeConverter.isLegal(&region);
+  }
+  if (hasLegalRegions && typeConverter.isLegal(op)) {
+    return true;
+  }
+  return false;
+}
+
+// This function returns the layout to use for gather/scatter indices. The
+// `gather4` and `scatter4` TMA instructions require 4 consecutive indices.
+// Thus, threads issuing these instructions must have all 4 index elements
+// available.
+static RankedTensorType getNewIndicesType(RankedTensorType type,
+                                          unsigned numThreads,
+                                          unsigned numWarps) {
+  assert(type.getRank() == 1);
+  auto enc = cast<DistributedEncodingTrait>(type.getEncoding());
+
+  // Technically any layout where we have a pack of 4 neighbouring elements plus
+  // broadcasted over the warp dimension is okay but for now we just pick a
+  // layout.
+  std::array<unsigned, 2> sizePerThread{1, 4};
+  std::array<unsigned, 2> threadsPerWarp = {numThreads, 1};
+  std::array<unsigned, 2> order = {1, 0};
+  std::array<unsigned, 2> warpsPerCta = {1, numWarps};
+
+  MLIRContext *ctx = type.getContext();
+  auto ctaLayout = CTALayoutAttr::getDefault(ctx, /*rank=*/2);
+  auto parentEncoding = BlockedEncodingAttr::get(
+      ctx, sizePerThread, threadsPerWarp, warpsPerCta, order, ctaLayout);
+  auto newEncoding = SliceEncodingAttr::get(ctx, /*dim=*/0, parentEncoding);
+  if (enc == newEncoding)
+    return {};
+
+  return RankedTensorType::get(type.getShape(), type.getElementType(),
+                               newEncoding);
+}
+
+// Function for converting any gather or scatter op that requires a specific
+// index layout. This also handles converting result types if there are any.
+static LogicalResult convertGatherScatterIndices(Operation *op,
+                                                 OpOperand &indices,
+                                                 ConversionPatternRewriter &b) {
+  auto type = cast<RankedTensorType>(indices.get().getType());
+  RankedTensorType newType =
+      getNewIndicesType(type, lookupThreadsPerWarp(b), lookupNumWarps(op));
+  if (!newType)
+    return failure();
+  Value index = b.create<ConvertLayoutOp>(op->getLoc(), newType, indices.get());
+  indices.set(index);
+  return success();
+}
+
+LogicalResult impl::convertGatherScatterOp(
+    Operation *op, ValueRange operands, OpOperand &xOffsetsMutable,
+    const TypeConverter &typeConverter, ConversionPatternRewriter &rewriter) {
+  LogicalResult result = success();
+  rewriter.modifyOpInPlace(op, [&] {
+    for (auto [operand, value] : llvm::zip(op->getOpOperands(), operands))
+      operand.set(value);
+    for (OpResult result : op->getOpResults())
+      result.setType(typeConverter.convertType(result.getType()));
+    result = convertGatherScatterIndices(op, xOffsetsMutable, rewriter);
+  });
+  return result;
 }

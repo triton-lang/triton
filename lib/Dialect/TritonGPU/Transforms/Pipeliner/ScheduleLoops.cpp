@@ -48,6 +48,8 @@ bool hasLatenciesAssigned(scf::ForOp forOp,
   for (auto &op : forOp.getBody()->without_terminator()) {
     if (opLatency.count(&op))
       return true;
+    if (op.getAttr(kAssignedStageAttrName))
+      return true;
   }
   return false;
 }
@@ -59,12 +61,15 @@ CoarseSchedule scheduleKeyOps(scf::ForOp forOp,
   auto terminator = cast<scf::YieldOp>(forOp.getBody()->getTerminator());
   // Determine all operations that have a non-zero latency
   SmallVector<Operation *> latOps;
+  SmallVector<Operation *> stagedOps;
   for (auto &op : forOp.getBody()->without_terminator()) {
     if (opLatency.count(&op))
       latOps.push_back(&op);
+    if (op.getAttr(kAssignedStageAttrName))
+      stagedOps.push_back(&op);
   }
   // If no latency ops, nothing to schedule
-  if (latOps.empty())
+  if (latOps.empty() && stagedOps.empty())
     return CoarseSchedule(0);
 
   DominanceInfo domInfo(forOp);
@@ -110,6 +115,11 @@ CoarseSchedule scheduleKeyOps(scf::ForOp forOp,
     // (had a non-negative distance due to a latency op).
     if (dist >= 0)
       opToStage[op] = maxDistance - dist;
+  }
+
+  for (Operation *op : stagedOps) {
+    auto stageAttr = op->getAttrOfType<IntegerAttr>(kAssignedStageAttrName);
+    opToStage[op] = stageAttr.getInt();
   }
 
   auto stages = llvm::make_second_range(opToStage);
@@ -290,21 +300,6 @@ void scheduleRemainingToLastStage(scf::ForOp forOp, CoarseSchedule &schedule,
   }
 }
 
-void serializeMMAv5Latencies(scf::ForOp forOp,
-                             const DenseMap<Operation *, int> &opLatency) {
-  auto module = forOp->getParentOfType<ModuleOp>();
-  auto helper = TritonDialect::getLoaded(module)->getLatencyAttrHelper();
-  auto builder = Builder(module);
-  for (auto &op : forOp.getBody()->without_terminator()) {
-    if (auto mmav5Op = dyn_cast<ttng::MMAv5OpInterface>(op)) {
-      if (opLatency.count(mmav5Op)) {
-        helper.setAttr(mmav5Op,
-                       builder.getI32IntegerAttr(opLatency.lookup(mmav5Op)));
-      }
-    }
-  }
-}
-
 void scheduleLoop(scf::ForOp forOp,
                   const DenseMap<Operation *, int> &opLatency) {
   if (!hasLatenciesAssigned(forOp, opLatency) ||
@@ -343,10 +338,6 @@ void scheduleLoop(scf::ForOp forOp,
 
   // Write the schedule to the IR
   schedule.serialize(forOp);
-
-  // Serialize also original latencies for mmav5 ops, as they might not have
-  // direct uses in the loop (e.g. when they are only used by themself)
-  serializeMMAv5Latencies(forOp, opLatency);
 }
 
 } // namespace

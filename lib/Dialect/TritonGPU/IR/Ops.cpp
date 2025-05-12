@@ -495,19 +495,32 @@ OpFoldResult LocalAllocOp::fold(FoldAdaptor adaptor) {
   return loadSrc;
 }
 
-LogicalResult LocalAllocOp::verify() {
-  if (!getSrc()) {
-    if (!getType().getMutableMemory())
-      return emitError("uninitialized alloc must have a mutable memdesc type");
+LogicalResult LocalAllocOp::verifyAllocOp(Operation *op, Value src,
+                                          MemDescType dstTy) {
+  if (dstTy.getShape() != dstTy.getAllocShape())
+    return op->emitOpError("result shape and its alloc shape must match");
+
+  if (!src) {
+    if (!dstTy.getMutableMemory()) {
+      return op->emitOpError(
+          "uninitialized alloc must have a mutable memdesc type");
+    }
     return success();
   }
-  auto srcTy = getSrc().getType();
-  auto dstTy = getType();
 
-  if (srcTy.getElementType() != dstTy.getElementType()) {
-    return emitError("result element type must match desc element type");
-  }
+  auto srcTy = cast<RankedTensorType>(src.getType());
+  if (srcTy.getElementType() != dstTy.getElementType())
+    return op->emitOpError("result element type must source element type");
+  if (srcTy.getShape() != dstTy.getShape())
+    return op->emitOpError("result shape must match source shape");
   return success();
+}
+
+LogicalResult LocalAllocOp::verify() {
+  if (!isa<SharedMemorySpaceAttr>(getType().getMemorySpace()))
+    return emitOpError("should create a buffer of shared memory");
+
+  return verifyAllocOp(*this, getSrc(), getType());
 }
 
 // LocalStoreOp
