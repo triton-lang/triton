@@ -1,5 +1,5 @@
-#ifndef PROTON_DATA_ENTRY_DECODER_H_
-#define PROTON_DATA_ENTRY_DECODER_H_
+#ifndef PROTON_COMMON_ENTRY_DECODER_H_
+#define PROTON_COMMON_ENTRY_DECODER_H_
 
 #include "ByteSpan.h"
 #include <cstdint>
@@ -64,4 +64,4 @@ template <> void decodeFn<CycleEntry>(ByteSpan &buffer, CycleEntry &entry);
 
 } // namespace proton
 
-#endif // PROTON_DATA_ENTRY_DECODER_H_
+#endif // PROTON_COMMON_ENTRY_DECODER_H_
