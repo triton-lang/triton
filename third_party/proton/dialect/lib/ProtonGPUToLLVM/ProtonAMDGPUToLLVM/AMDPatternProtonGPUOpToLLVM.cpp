@@ -90,17 +90,16 @@ struct CircularStoreOpConversion
     uint32_t AddrSpace =
         cast<LLVM::LLVMPointerType>(bufferPtrTy).getAddressSpace();
     if (AddrSpace == 1) {
+      // TODO(crobeck): see what buffer ops performance looks like here for
+      // stack mem (address space 1) compared to predicated ops to shared memory
       llvm::report_fatal_error("unimplemented");
     } else if (AddrSpace == 3) {
-      // TODO(crobeck): this is lowered as a predicated store which is not very
-      // efficient. probably want this swapped out for bufferops
-      // we also need to compare "this version" vs. isWriter always = true
-      // for this predicated version, there could be unexpected instruction
-      // cache miss. Setting isWriter always true has bank conflicts but it is
-      // expected and stable.
+      // Setting isWriter always true has bank conflicts but it is
+      // expected and stable. Compared to lots of instruction cache misses when
+      // pred==isWriter
       targetInfo.getTritonTargetInfo().storeDShared(rewriter, loc, vecPtr,
                                                     std::nullopt, valsVec,
-                                                    /*pred=*/isWriter);
+                                                    /*pred=*/b.true_val());
     } else {
       llvm::report_fatal_error("unsupported address space in circular store");
     }
