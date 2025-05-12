@@ -120,7 +120,7 @@ tt.func @async_wait_in_previous_loop_iteration(%a_ptr: tensor<16x16x!tt.ptr<f16>
   tt.return
 }
 
-// Check we do not get a barrier for LocalLoad if the initial loop token does not come from AsyncWait
+// Check we do get a barrier for LocalLoad if the initial loop token does not come from AsyncWait
 // CHECK-LABEL: intial_loop_token_is_not_from_async_wait
 tt.func @intial_loop_token_is_not_from_async_wait(%a_ptr: tensor<16x16x!tt.ptr<f16>, #AL>, %loopIterCount: i32) {
   %c0_i32 = arith.constant 0 : i32
