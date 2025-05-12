@@ -379,7 +379,7 @@ static bool getForwardSliceToPartition(Value v,
       getForwardSlice(v, &forwardSlice);
       AtomicRMWOp atomicStore;
       for (auto op : forwardSlice) {
-        if (atomicStore = dyn_cast<AtomicRMWOp>(op)) {
+        if ((atomicStore = dyn_cast<AtomicRMWOp>(op))) {
           break;
         }
       }
