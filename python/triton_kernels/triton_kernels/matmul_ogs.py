@@ -54,7 +54,6 @@ def get_kernels(fused_activation: FusedActivation, epilogue: Epilogue):
         "activation_fn_args": fused_activation.fn_arg_names,
         "epilogue_fn_args": epilogue.fn_arg_names,
     }
-    spec_tuples = {"epilogue_fn_args": epilogue.fn_arg_names}
     do_not_specialize = epilogue.fn_arg_do_not_specialize
     import types
 
