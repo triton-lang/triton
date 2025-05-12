@@ -342,7 +342,7 @@ def test_ptx_add_vec_simple(tmp_path: pathlib.Path):
 <<<<<<< HEAD
 
     kernel = triton.compile(
-        src=str(temp_file), target=triton.runtime.driver.active.get_current_target()
+        src=str(temp_file),
     )
 =======
     # src = get_ttir_src()
@@ -392,14 +392,14 @@ def test_ptx_add_vec_user_defined_smem(tmp_path: pathlib.Path):
 
     src = get_ptx_src()
     # User can set smem size in PTX comment (in bytes)
-    src = "// user_defined_smem_size 128000 \n" + src
+    src = "// user_defined smem 128000 \n" + src
 
     temp_file = tmp_path / "test_add_vec_kernel.ptx"
     temp_file.write_text(src)
 
 <<<<<<< HEAD
     kernel = triton.compile(
-        src=str(temp_file), target=triton.runtime.driver.active.get_current_target()
+        src=str(temp_file),
     )
 =======
     kernel = triton.compile(src=str(temp_file), target=triton.runtime.driver.active.get_current_target())
@@ -446,7 +446,7 @@ def test_ptx_mul_vec(tmp_path: pathlib.Path):
 
 <<<<<<< HEAD
     kernel = triton.compile(
-        src=str(temp_file), target=triton.runtime.driver.active.get_current_target()
+        src=str(temp_file),
     )
 =======
     kernel = triton.compile(src=str(temp_file), target=triton.runtime.driver.active.get_current_target())

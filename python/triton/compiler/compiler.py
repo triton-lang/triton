@@ -39,6 +39,14 @@ arg_type_pattern = {
     "ptx": ptx_arg_type_pattern,
 }
 
+ptx_user_defined_smem = r"user_defined smem (\d+)"
+ptx_user_defined_global_scratch_align = r"user_defined global_scratch_align (\d+)"
+ptx_user_defined_global_scratch_size = r"user_defined global_scratch_size (\d+)"
+ptx_user_defined_pattern = {
+    "shared": ptx_user_defined_smem,
+    "global_scratch_align": ptx_user_defined_global_scratch_align,
+    "global_scratch_size": ptx_user_defined_global_scratch_size,
+}
 
 def convert_type_repr(x):
     # Currently we only capture the pointer type and assume the pointer is on global memory.
@@ -130,28 +138,23 @@ class IRSource:
             self.module.context = context
         return self.module
 
-    def parse_options(self):
+    def parse_options(self, **kwargs):
         if self.ext == "ttgir":
             num_warps = self.module.get_int_attr("ttg.num-warps")
             assert num_warps is not None, "Unable to parse ttg.num-warps attribute"
             return {'num_warps': num_warps}
         elif self.ext == "ptx":
-            # User can set smem size in PTX comment (in bytes)
-            smem_size = 0
-            found_smem_size = re.findall(r"user_defined_smem_size (\d+)", self.src)
-            if not found_smem_size:
-                smem_size = max_shared_mem(driver.active.get_current_device())
-            elif len(found_smem_size) == 1:
-                smem_size = int(found_smem_size[0])
-            else:
-                raise RuntimeError("Multiple user_defined_smem_size found in PTX file")
+            options = {'name': self.name}
+            for user_defined_option, re_pattern in ptx_user_defined_pattern.items():
+                if found := re.findall(re_pattern, self.src):
+                    if len(found) == 1:
+                        options[user_defined_option] = int(found[0])
+                    else:
+                        raise RuntimeError(f"Duplicated user defined {user_defined_option} is found")
 
-            return {
-                "shared": smem_size,
-                "name": self.name,
-                "global_scratch_align": 1,
-                "global_scratch_size": 0,
-            }
+            if "shared" not in options:
+                options["shared"] = max_shared_mem(driver.active.get_current_device())
+            return options
         return dict()
 
 
