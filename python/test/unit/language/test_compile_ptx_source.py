@@ -99,9 +99,7 @@ def test_ptx_add_vec_simple(tmp_path: pathlib.Path):
     temp_file = tmp_path / "test_add_vec_kernel.ptx"
     temp_file.write_text(src)
 
-    kernel = triton.compile(
-        src=str(temp_file),
-    )
+    kernel = triton.compile(src=str(temp_file), )
 
     torch.manual_seed(0)
     size = 20
@@ -117,12 +115,8 @@ def test_ptx_add_vec_simple(tmp_path: pathlib.Path):
         size,
     )
 
-    assert (
-        kernel.metadata.shared
-        == triton.runtime.driver.active.utils.get_device_properties(
-            triton.runtime.driver.active.get_current_device()
-        )["max_shared_mem"]
-    )
+    assert (kernel.metadata.shared == triton.runtime.driver.active.utils.get_device_properties(
+        triton.runtime.driver.active.get_current_device())["max_shared_mem"])
 
     assert torch.allclose(output, x + y, atol=1e-3)
 
@@ -137,9 +131,7 @@ def test_ptx_add_vec_user_defined_smem(tmp_path: pathlib.Path):
     temp_file = tmp_path / "test_add_vec_kernel.ptx"
     temp_file.write_text(src)
 
-    kernel = triton.compile(
-        src=str(temp_file),
-    )
+    kernel = triton.compile(src=str(temp_file), )
 
     torch.manual_seed(0)
     size = 20
@@ -154,9 +146,7 @@ def test_ptx_add_vec_user_defined_smem(tmp_path: pathlib.Path):
         output.data_ptr(),
         size,
     )
-    assert (
-        kernel.metadata.shared == 128000
-    ), "user defined smem size is not passed to compiler"
+    assert (kernel.metadata.shared == 128000), "user defined smem size is not passed to compiler"
     assert torch.allclose(output, x + y, atol=1e-3)
 
 
@@ -176,9 +166,7 @@ def test_ptx_mul_vec(tmp_path: pathlib.Path):
     temp_file = tmp_path / "test_mul_vec_kernel.ptx"
     temp_file.write_text(src)
 
-    kernel = triton.compile(
-        src=str(temp_file),
-    )
+    kernel = triton.compile(src=str(temp_file), )
 
     torch.manual_seed(0)
     size = 20

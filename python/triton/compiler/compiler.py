@@ -46,6 +46,7 @@ ptx_user_defined_pattern = {
     "global_scratch_size": ptx_user_defined_global_scratch_size,
 }
 
+
 def convert_type_repr(x):
     # Currently we only capture the pointer type and assume the pointer is on global memory.
     # TODO: Capture and support shared memory space
