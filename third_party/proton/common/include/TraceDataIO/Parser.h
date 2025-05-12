@@ -1,5 +1,5 @@
-#ifndef PROTON_DATA_PARSER_H_
-#define PROTON_DATA_PARSER_H_
+#ifndef PROTON_COMMON_PARSER_H_
+#define PROTON_COMMON_PARSER_H_
 
 #include "ByteSpan.h"
 #include "EntryDecoder.h"
@@ -49,4 +49,4 @@ protected:
 
 } // namespace proton
 
-#endif // PROTON_DATA_PARSER_H_
+#endif // PROTON_COMMON_PARSER_H_

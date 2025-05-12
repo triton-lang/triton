@@ -1,5 +1,5 @@
-#ifndef PROTON_DATA_CIRCULAR_LAYOUT_PARSER_H_
-#define PROTON_DATA_CIRCULAR_LAYOUT_PARSER_H_
+#ifndef PROTON_COMMON_CIRCULAR_LAYOUT_PARSER_H_
+#define PROTON_COMMON_CIRCULAR_LAYOUT_PARSER_H_
 
 #include "Device.h"
 #include "Parser.h"
@@ -93,4 +93,4 @@ void timeShift(const CircularLayoutParserConfig &config,
 
 } // namespace proton
 
-#endif // PROTON_DATA_CIRCULAR_LAYOUT_PARSER_H_
+#endif // PROTON_COMMON_CIRCULAR_LAYOUT_PARSER_H_
