@@ -257,7 +257,7 @@ static LogicalResult optimizePartitionNumWarps(ModuleAxisInfoAnalysis &axisInfo,
        llvm::zip(wsOp.getPartitionRegions(), partitionNumWarps,
                  wsOp.getPartitionNumWarps(), maxTensorRegs, estRegUsage)) {
     // "Guess" the register usage for each partition.
-    estRegs = tensorRegs ? 72 : 24;
+    estRegs = tensorRegs ? 72 : 48;
     partition->walk([estRegs = &estRegs](math::Exp2Op expOp) {
       auto tensorTy = dyn_cast<RankedTensorType>(expOp.getType());
       if (tensorTy && tensorTy.getNumElements() > 256)

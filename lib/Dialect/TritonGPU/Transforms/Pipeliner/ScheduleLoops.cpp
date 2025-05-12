@@ -129,11 +129,30 @@ CoarseSchedule scheduleKeyOps(scf::ForOp forOp,
   for (int i = 0; i <= maxStage; i++) {
     clusters[i] = schedule.clusters.newAtBack();
   }
+
+  int maxCluster = 0;
+  for (Operation *op : stagedOps) {
+    auto clusterAttr = op->getAttrOfType<IntegerAttr>(kAssignedClusterAttrName);
+    maxCluster = std::max<int>(maxCluster, clusterAttr.getInt());
+  }
+  while (clusters.size() <= maxCluster) {
+    clusters.push_back(schedule.clusters.newAtBack());
+  }
+
   // Assign ops to the clusters in reverse-stage order;
   // ops with higher stage numbers are assigned first. This way we will
   // end up with roughly reverse program order in the clusters.
-  for (auto [op, stage] : opToStage)
+  for (auto [op, dist] : distance) {
+    if (dist < 0)
+      continue;
+    int stage = opToStage[op];
     schedule.insert(op, stage, clusters[maxStage - stage]);
+  }
+  for (Operation *op : stagedOps) {
+    auto clusterAttr = op->getAttrOfType<IntegerAttr>(kAssignedClusterAttrName);
+    int stage = opToStage[op];
+    schedule.insert(op, stage, clusters[clusterAttr.getInt()]);
+  }
 
   // Move `scf.if` ops in the current schedule (forward slice of the latency
   // ops) into a new epilogue cluster at the end of the schedule, pushing them

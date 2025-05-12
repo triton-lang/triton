@@ -550,6 +550,13 @@ void propagatePartitions(scf::ForOp loop, WarpSchedule &schedule) {
 // Utilities
 //===----------------------------------------------------------------------===//
 
+struct StageCluster {
+  unsigned stage;
+  unsigned cluster;
+};
+
+using StageMap = DenseMap<Operation *, std::optional<StageCluster>>;
+
 struct PartitionBuilder : public ImplicitLocOpBuilder {
   using ImplicitLocOpBuilder::ImplicitLocOpBuilder;
 
@@ -558,13 +565,15 @@ struct PartitionBuilder : public ImplicitLocOpBuilder {
   }
   Value boolCst(bool value) { return intCst(value, /*width=*/1); }
 
-  void assignStage(Operation *op, std::optional<unsigned> stage) {
-    if (stage)
-      op->setAttr(kAssignedStageAttrName, getI32IntegerAttr(*stage));
+  void assignStage(Operation *op, std::optional<StageCluster> stage) {
+    if (stage) {
+      op->setAttr(kAssignedStageAttrName, getI32IntegerAttr(stage->stage));
+      op->setAttr(kAssignedClusterAttrName, getI32IntegerAttr(stage->cluster));
+    }
   }
 
   template <typename OpT, typename... Args>
-  auto createInto(Partition &partition, std::optional<unsigned> stage,
+  auto createInto(Partition &partition, std::optional<StageCluster> stage,
                   Args &&...args) {
     auto op = create<OpT>(std::forward<Args>(args)...);
     op->setAttr(kPartitionAttrName, getI32IntegerAttr(partition.getIndex()));
@@ -573,8 +582,6 @@ struct PartitionBuilder : public ImplicitLocOpBuilder {
     return op;
   }
 };
-
-using StageMap = DenseMap<Operation *, std::optional<unsigned>>;
 
 static void replaceAllUsesDominatedBy(Operation *domOp, Value newValue,
                                       Value oldValue, DominanceInfo &domInfo) {
@@ -775,7 +782,7 @@ struct PipelinedLoadGroup {
   void allocateAref(scf::ForOp &loop, int numStages);
   LogicalResult lowerLoads(WarpSchedule &schedule, DominanceInfo &domInfo,
                            PostDominanceInfo &postDomInfo,
-                           std::optional<unsigned> stage,
+                           std::optional<StageCluster> stage,
                            const StageMap &stages);
 
   SmallVector<PipelinedLoad> loads;
@@ -828,7 +835,7 @@ void PipelinedLoadGroup::allocateAref(scf::ForOp &loop, int numStages) {
 }
 
 static void lowerTMACopy(PartitionBuilder &b, Partition &loadPartition,
-                         std::optional<unsigned> stage, Operation *op,
+                         std::optional<StageCluster> stage, Operation *op,
                          Value barrier, Value view) {
   Value truePred = b.create<arith::ConstantIntOp>(true, /*width=*/1);
   if (auto load = dyn_cast<DescriptorLoadOp>(op)) {
@@ -852,7 +859,7 @@ static void lowerTMACopy(PartitionBuilder &b, Partition &loadPartition,
 LogicalResult PipelinedLoadGroup::lowerLoads(WarpSchedule &schedule,
                                              DominanceInfo &domInfo,
                                              PostDominanceInfo &postDomInfo,
-                                             std::optional<unsigned> stage,
+                                             std::optional<StageCluster> stage,
                                              const StageMap &stages) {
   // Insert before the group of loads.
   auto firstLoad = llvm::min_element(loads, [&](auto &lhs, auto &rhs) {
@@ -973,7 +980,7 @@ static bool canBeMultibuffered(scf::ForOp loop, ttng::MMAv5OpInterface mmaOp) {
 static LogicalResult pipelineMMA(scf::ForOp &loop, PipelinedMMA &mma,
                                  WarpSchedule &schedule, DominanceInfo &domInfo,
                                  PostDominanceInfo &postDomInfo,
-                                 std::optional<unsigned> stage,
+                                 std::optional<StageCluster> stage,
                                  const StageMap &stages,
                                  bool accIsMultiBuffered) {
   ttng::MMAv5OpInterface mmaOp = mma.mmaOp;
@@ -1319,17 +1326,24 @@ LogicalResult lowerLoops(scf::ForOp &loop, PartitionScheme &scheme,
 
   // Assign stages to ops when there are multiple ops in the same partition.
   StageMap stages;
-  if (loadGroups.size() > 1) {
+
+  {
+    SmallVector<StageCluster> hack{{0, 2}, {2, 0}};
+    unsigned i = 0;
     unsigned curLoadStage = 0;
     for (const PipelinedLoadGroup &group : loadGroups) {
-      stages.insert({group.loads.front().loadOp, curLoadStage % 4});
+      stages[group.loads.front().loadOp] = hack[i++ % hack.size()];
       curLoadStage += 2;
     }
   }
-  if (scheme.mmas.size() > 1) {
+
+  {
+    SmallVector<StageCluster> hack{{0, 1}, {1, 0}, {0, 3}, {1, 2}};
+    unsigned i = 0;
     unsigned curMMAStage = 0;
     for (const PipelinedMMA &mma : scheme.mmas) {
-      stages.insert({mma.mmaOp, curMMAStage % 4});
+      // stages.insert({mma.mmaOp, curMMAStage % 4});
+      stages[mma.mmaOp] = hack[i++ % hack.size()];
       if (canBeMultibuffered(loop, mma.mmaOp))
         curMMAStage += 2;
     }
@@ -1394,9 +1408,5 @@ void LoadMMASpecialization::runOnOperation() {
     int loopNumStages = getNumStagesOrDefault(loop, numStages);
     if (failed(lowerLoops(loop, scheme, schedule, loopNumStages)))
       continue;
-    // HACK: Set this attribute so that LowerLoops will multi-buffer TMA
-    // descriptors.
-    loop->setAttr(kScheduledMaxStageAttrName,
-                  Builder(&getContext()).getI32IntegerAttr(loopNumStages));
   }
 }

@@ -487,8 +487,8 @@ def _attn_fwd_tma_dp(sm_scale, M,  #
     acc0 = acc0 / l_i0[:, None]
     acc1 = acc1 / l_i1[:, None]
 
-    m_ptrs0 = M + off_hz * N_CTX + start_m * BLOCK_M + offs_m0
-    m_ptrs1 = M + off_hz * N_CTX + start_m * BLOCK_M + offs_m1
+    m_ptrs0 = M + off_hz * N_CTX + offs_m0
+    m_ptrs1 = M + off_hz * N_CTX + offs_m1
 
     tl.store(m_ptrs0, m_i0)
     tl.store(m_ptrs1, m_i1)
@@ -774,12 +774,15 @@ class _attention(torch.autograd.Function):
             #desc_k = TensorDescriptor(k, shape=[y_dim, HEAD_DIM_K], strides=[HEAD_DIM, 1], block_shape=dummy_block)
             #desc_o = TensorDescriptor(o, shape=[y_dim, HEAD_DIM_K], strides=[HEAD_DIM, 1], block_shape=dummy_block)
 
-            BLOCK_M = 128
+            BLOCK_M = 256
             BLOCK_N = 64
             desc_q = TensorDescriptor(q, shape=[y_dim, HEAD_DIM_K], strides=[HEAD_DIM, 1], block_shape=[BLOCK_M//2, HEAD_DIM_K])
             desc_v = TensorDescriptor(v, shape=[y_dim, HEAD_DIM_K], strides=[HEAD_DIM, 1], block_shape=[BLOCK_N, HEAD_DIM_K])
             desc_k = TensorDescriptor(k, shape=[y_dim, HEAD_DIM_K], strides=[HEAD_DIM, 1], block_shape=[BLOCK_N, HEAD_DIM_K])
             desc_o = TensorDescriptor(o, shape=[y_dim, HEAD_DIM_K], strides=[HEAD_DIM, 1], block_shape=[BLOCK_M//2, HEAD_DIM_K])
+
+            # QKA_0       PVA_0 QKA_1             PVA_1 QKA_2             PVA_2
+            #       QKA_0             PVA_0 QKA_1             PVA_1 QKA_2       PVA_2
 
             def grid(META):
                 return (triton.cdiv(q.shape[2], META["BLOCK_M"]), q.shape[0] * q.shape[1], 1)
@@ -797,6 +800,7 @@ class _attention(torch.autograd.Function):
                 BLOCK_N=BLOCK_N, BLOCK_M=BLOCK_M,  #
                 num_warps=4,
                 num_stages=2,
+                maxnreg=64,
                 **extra_kern_args)
         else:
             grid = lambda args: (triton.cdiv(q.shape[2], args["BLOCK_M"]), q.shape[0] * q.shape[1], 1)
@@ -965,6 +969,7 @@ def bench_flash_attention(BATCH, H, N_CTX, HEAD_DIM, causal, warp_specialize, mo
             do = torch.randn_like(o)
             fn = lambda: o.backward(do, retain_graph=True)
         ms = triton.testing.do_bench(fn)
+        # _, ms = fn(), 1
 
     if provider == "flash":
         qkv = torch.randn((BATCH, N_CTX, 3, H, HEAD_DIM), dtype=dtype, device=device, requires_grad=True)
