@@ -106,7 +106,7 @@ Value createScalarAlloc(ImplicitLocOpBuilder &rewriter, Type type,
 Value createBarrierAlloc(scf::ForOp forOp, int numBarriers,
                          int arriveCount = 1);
 // Create an allocation that can hold distance number of tensor shapes.
-Value createAlloc(scf::ForOp forOp, RankedTensorType ty, Location loc,
+Value createAlloc(Operation *scope, RankedTensorType ty, Location loc,
                   gpu::SharedEncodingTrait sharedEnc, unsigned distance);
 
 // Determine if the operation is a TMA load.
