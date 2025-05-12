@@ -44,8 +44,8 @@ bool hasATensorDescriptorType(mlir::TypeRange types) {
  * @brief Convert integer types to signless. Other types are returned as is.
  */
 mlir::Type toSignlessIntegerType(mlir::Type t) {
-  if (auto int_type = llvm::dyn_cast<mlir::IntegerType>(t)) {
-    return mlir::IntegerType::get(int_type.getContext(), int_type.getWidth());
+  if (auto intType = llvm::dyn_cast<mlir::IntegerType>(t)) {
+    return mlir::IntegerType::get(intType.getContext(), intType.getWidth());
   }
   return t;
 }
@@ -60,31 +60,31 @@ mlir::SmallVector<NamedAttribute>
 filterSegmentSizes(mlir::ArrayRef<NamedAttribute> attrs) {
   mlir::SmallVector<NamedAttribute> ret;
   llvm::copy_if(attrs, std::back_inserter(ret), [](const NamedAttribute &attr) {
-    auto attr_name = attr.getName().getValue();
-    return attr_name != "operandSegmentSizes";
+    auto attrName = attr.getName().getValue();
+    return attrName != "operandSegmentSizes";
   });
   return ret;
 }
 
 // Note this has been adapted from RewriteTensorPointer.cpp
 Value getExpandedOffsetWithRange(OpBuilder &builder, const Location &loc,
-                                 ArrayRef<std::int64_t> block_shape,
+                                 ArrayRef<std::int64_t> blockShape,
                                  ValueRange offsets, unsigned i) {
   // Add range
   auto indexI32RowType =
-      RankedTensorType::get({block_shape[i]}, builder.getI32Type());
+      RankedTensorType::get({blockShape[i]}, builder.getI32Type());
   auto indexRowType =
-      RankedTensorType::get({block_shape[i]}, builder.getI64Type());
+      RankedTensorType::get({blockShape[i]}, builder.getI64Type());
   Value splatOffset =
       builder.create<triton::SplatOp>(loc, indexRowType, offsets[i]);
   Value range = builder.create<triton::MakeRangeOp>(loc, indexI32RowType, 0,
-                                                    block_shape[i]);
+                                                    blockShape[i]);
   Value i64Range = builder.create<arith::ExtSIOp>(loc, indexRowType, range);
 
   // Expand dimensions
   Value expandedResult =
       builder.create<arith::AddIOp>(loc, splatOffset, i64Range);
-  for (size_t j = 0; j < block_shape.size(); ++j) {
+  for (size_t j = 0; j < blockShape.size(); ++j) {
     if (j == i) {
       continue;
     }
@@ -97,20 +97,20 @@ Value getExpandedOffsetWithRange(OpBuilder &builder, const Location &loc,
 
 // Note this has been adapted from RewriteTensorPointer.cpp
 Value generatePtr(OpBuilder &builder, const Location &loc,
-                  ArrayRef<std::int64_t> block_shape, Value base,
+                  ArrayRef<std::int64_t> blockShape, Value base,
                   ValueRange strides, ValueRange offsets) {
-  assert(block_shape.size() == offsets.size() &&
-         block_shape.size() == strides.size());
+  assert(blockShape.size() == offsets.size() &&
+         blockShape.size() == strides.size());
   auto indexTensorType =
-      RankedTensorType::get(block_shape, builder.getI64Type());
+      RankedTensorType::get(blockShape, builder.getI64Type());
   auto ptrType = cast<triton::PointerType>(base.getType());
-  auto ptrTensorType = RankedTensorType::get(block_shape, ptrType);
+  auto ptrTensorType = RankedTensorType::get(blockShape, ptrType);
 
   // Generate offsets per dimension
   Value ptr = builder.create<triton::SplatOp>(loc, ptrTensorType, base);
-  for (unsigned i = 0; i < block_shape.size(); ++i) {
+  for (unsigned i = 0; i < blockShape.size(); ++i) {
     auto offsetWithRange =
-        getExpandedOffsetWithRange(builder, loc, block_shape, offsets, i);
+        getExpandedOffsetWithRange(builder, loc, blockShape, offsets, i);
 
     // We must splat strides into the expanded shape not a row for retaining
     // the divisibility information given by strides
@@ -131,21 +131,17 @@ Value generatePtr(OpBuilder &builder, const Location &loc,
 
 // Note this has been adapted from RewriteTensorPointer.cpp
 Value generateMask(OpBuilder &builder, const Location &loc,
-                   ArrayRef<std::int64_t> block_shape, ValueRange offsets,
+                   ArrayRef<std::int64_t> blockShape, ValueRange offsets,
                    ValueRange shape) {
-  assert(block_shape.size() == shape.size() &&
-         block_shape.size() == offsets.size());
-
-  // If the user hasn't manually specified dimensions to check check them all
-  auto check_all =
-      llvm::to_vector(llvm::iota_range<int>(0, block_shape.size(), false));
+  assert(blockShape.size() == shape.size() &&
+         blockShape.size() == offsets.size());
 
   // Generate mask per dimension
-  auto maskTensorType = RankedTensorType::get(block_shape, builder.getI1Type());
+  auto maskTensorType = RankedTensorType::get(blockShape, builder.getI1Type());
   Value mask;
-  for (std::size_t i = 0; i < block_shape.size(); ++i) {
+  for (std::size_t i = 0; i < blockShape.size(); ++i) {
     auto offsetWithRange =
-        getExpandedOffsetWithRange(builder, loc, block_shape, offsets, i);
+        getExpandedOffsetWithRange(builder, loc, blockShape, offsets, i);
 
     // Compare with lower bound
     Value lowerBound = builder.create<mlir::arith::ConstantIntOp>(
@@ -180,10 +176,10 @@ Value generateMask(OpBuilder &builder, const Location &loc,
 // Note this has been adapted from RewriteTensorPointer.cpp. It appears
 // to be getting the values used for the masked out elements
 Value generateOther(OpBuilder &builder, const Location &loc, Value base,
-                    ArrayRef<std::int64_t> block_shape) {
+                    ArrayRef<std::int64_t> blockShape) {
   // Create element attribute
   auto elementType = cast<triton::PointerType>(base.getType()).getPointeeType();
-  auto otherTensorType = RankedTensorType::get(block_shape, elementType);
+  auto otherTensorType = RankedTensorType::get(blockShape, elementType);
 
   // Set zero padding value (the default)
   TypedAttr attr = builder.getZeroAttr(elementType);
@@ -195,9 +191,9 @@ Value generateOther(OpBuilder &builder, const Location &loc, Value base,
 
 SmallVector<mlir::Value> castToI64(OpBuilder &builder,
                                    mlir::ValueRange values) {
-  auto i64_type = builder.getI64Type();
+  auto i64Type = builder.getI64Type();
   return llvm::map_to_vector(values, [&](mlir::Value v) {
-    return builder.createOrFold<arith::ExtSIOp>(v.getLoc(), i64_type, v);
+    return builder.createOrFold<arith::ExtSIOp>(v.getLoc(), i64Type, v);
   });
 }
 
@@ -207,13 +203,13 @@ struct RewriteMakeTensorDesc : OpConversionPattern<triton::MakeTensorDescOp> {
   llvm::LogicalResult
   matchAndRewrite(triton::MakeTensorDescOp op, OneToNOpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    SmallVector<mlir::Value> ptr_shape_strides;
+    SmallVector<mlir::Value> ptrShapeStrides;
     // Note that none of these values come from a tensor descriptor so its safe
     // to get these directly from the op
-    llvm::append_values(ptr_shape_strides, op.getBase());
-    llvm::append_range(ptr_shape_strides, castToI64(rewriter, op.getShape()));
-    llvm::append_range(ptr_shape_strides, op.getStrides());
-    rewriter.replaceOpWithMultiple(op, {ptr_shape_strides});
+    llvm::append_values(ptrShapeStrides, op.getBase());
+    llvm::append_range(ptrShapeStrides, castToI64(rewriter, op.getShape()));
+    llvm::append_range(ptrShapeStrides, op.getStrides());
+    rewriter.replaceOpWithMultiple(op, {ptrShapeStrides});
     return mlir::success();
   }
 };
@@ -224,8 +220,8 @@ struct RewriteLoadPattern : OpConversionPattern<triton::DescriptorLoadOp> {
   llvm::LogicalResult
   matchAndRewrite(triton::DescriptorLoadOp op, OneToNOpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    const auto block_shape = op.getDesc().getType().getBlockType().getShape();
-    const auto rank = block_shape.size();
+    const auto blockShape = op.getDesc().getType().getBlockType().getShape();
+    const auto rank = blockShape.size();
     assert(adaptor.getDesc().size() == 1 + 2 * rank &&
            "Expected tensor descriptors to be "
            "broken down into a ptr and "
@@ -238,14 +234,13 @@ struct RewriteLoadPattern : OpConversionPattern<triton::DescriptorLoadOp> {
     // we can get them directly here
     auto offsets = castToI64(rewriter, op.getIndices());
 
-    auto new_load = rewriter.replaceOpWithNewOp<triton::LoadOp>(
+    auto newLoad = rewriter.replaceOpWithNewOp<triton::LoadOp>(
         op,
-        generatePtr(rewriter, op->getLoc(), block_shape, base, strides,
-                    offsets),
-        generateMask(rewriter, op->getLoc(), block_shape, offsets, shape),
-        generateOther(rewriter, op->getLoc(), base, block_shape),
+        generatePtr(rewriter, op->getLoc(), blockShape, base, strides, offsets),
+        generateMask(rewriter, op->getLoc(), blockShape, offsets, shape),
+        generateOther(rewriter, op->getLoc(), base, blockShape),
         triton::CacheModifier::NONE, triton::EvictionPolicy::NORMAL, false);
-    new_load->setAttrs(filterSegmentSizes(op->getAttrs()));
+    newLoad->setAttrs(filterSegmentSizes(op->getAttrs()));
 
     return llvm::success();
   }
@@ -257,8 +252,8 @@ struct RewriteStorePattern : OpConversionPattern<triton::DescriptorStoreOp> {
   llvm::LogicalResult
   matchAndRewrite(triton::DescriptorStoreOp op, OneToNOpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    const auto block_shape = op.getDesc().getType().getBlockType().getShape();
-    const auto rank = block_shape.size();
+    const auto blockShape = op.getDesc().getType().getBlockType().getShape();
+    const auto rank = blockShape.size();
     assert(adaptor.getDesc().size() == 1 + 2 * rank &&
            "Expected tensor descriptors to be "
            "broken down into a ptr and "
@@ -271,14 +266,13 @@ struct RewriteStorePattern : OpConversionPattern<triton::DescriptorStoreOp> {
     // we can get them directly here
     auto offsets = castToI64(rewriter, op.getIndices());
 
-    auto new_store = rewriter.replaceOpWithNewOp<triton::StoreOp>(
+    auto newStore = rewriter.replaceOpWithNewOp<triton::StoreOp>(
         op,
-        generatePtr(rewriter, op->getLoc(), block_shape, base, strides,
-                    offsets),
+        generatePtr(rewriter, op->getLoc(), blockShape, base, strides, offsets),
         op.getSrc(),
-        generateMask(rewriter, op->getLoc(), block_shape, offsets, shape),
+        generateMask(rewriter, op->getLoc(), blockShape, offsets, shape),
         triton::CacheModifier::NONE, triton::EvictionPolicy::NORMAL);
-    new_store->setAttrs(filterSegmentSizes(op->getAttrs()));
+    newStore->setAttrs(filterSegmentSizes(op->getAttrs()));
 
     return llvm::success();
   }
@@ -320,9 +314,9 @@ class TritonRewriteTensorDescriptorToPointerPass
           return !hasATensorDescriptorType(op->getOperandTypes()) &&
                  !hasATensorDescriptorType(op->getResultTypes());
         });
-    target.addDynamicallyLegalOp<triton::FuncOp>([](triton::FuncOp func_op) {
-      return !hasATensorDescriptorType(func_op.getFunctionType().getInputs()) &&
-             !hasATensorDescriptorType(func_op.getFunctionType().getResults());
+    target.addDynamicallyLegalOp<triton::FuncOp>([](triton::FuncOp funcOp) {
+      return !hasATensorDescriptorType(funcOp.getFunctionType().getInputs()) &&
+             !hasATensorDescriptorType(funcOp.getFunctionType().getResults());
     });
 
     mlir::TypeConverter converter;
@@ -337,10 +331,10 @@ class TritonRewriteTensorDescriptorToPointerPass
       // for each dimension, i.e., we create 1+2*rank values. Note that tensor
       // descriptors may be signed/unsigned integers whereas pointers should
       // always be signless.
-      auto tensor_type = t.getBlockType();
+      auto tensorType = t.getBlockType();
       out.push_back(triton::getPointerType(
-          toSignlessIntegerType(tensor_type.getElementType())));
-      out.insert(out.end(), 2 * tensor_type.getRank(),
+          toSignlessIntegerType(tensorType.getElementType())));
+      out.insert(out.end(), 2 * tensorType.getRank(),
                  mlir::IntegerType::get(t.getContext(), 64));
       return mlir::success();
     });

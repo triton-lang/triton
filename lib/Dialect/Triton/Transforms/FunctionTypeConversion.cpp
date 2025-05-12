@@ -25,35 +25,34 @@ struct CallOpConversion : public OpConversionPattern<CallOp> {
   using OpConversionPattern<CallOp>::OpConversionPattern;
 
   LogicalResult
-  matchAndRewrite(CallOp call_op, OneToNOpAdaptor adaptor,
+  matchAndRewrite(CallOp callOp, OneToNOpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    llvm::SmallVector<std::size_t> result_replacement_grouping;
-    llvm::SmallVector<Type> converted_results;
+    llvm::SmallVector<std::size_t> resultReplacementGrouping;
+    llvm::SmallVector<Type> convertedResults;
 
-    for (auto type : call_op->getResultTypes()) {
-      const auto old_num_flattened_results = converted_results.size();
-      if (failed(getTypeConverter()->convertTypes(type, converted_results))) {
+    for (auto type : callOp->getResultTypes()) {
+      const auto oldNumFlattenedResults = convertedResults.size();
+      if (failed(getTypeConverter()->convertTypes(type, convertedResults))) {
         return failure();
       }
-      result_replacement_grouping.push_back(converted_results.size() -
-                                            old_num_flattened_results);
+      resultReplacementGrouping.push_back(convertedResults.size() -
+                                          oldNumFlattenedResults);
     }
 
-    auto new_call_op = rewriter.create<CallOp>(
-        call_op->getLoc(), call_op.getCallee(), converted_results,
+    auto newCallOp = rewriter.create<CallOp>(
+        callOp->getLoc(), callOp.getCallee(), convertedResults,
         flattenValues(adaptor.getOperands()));
     // Preserve any additional attributes that may have been set on the op
-    new_call_op->setAttrs(call_op->getAttrs());
+    newCallOp->setAttrs(callOp->getAttrs());
 
     SmallVector<ValueRange> replacements;
     std::size_t offset = 0;
-    for (auto group_size : result_replacement_grouping) {
-      replacements.push_back(
-          new_call_op->getResults().slice(offset, group_size));
-      offset += group_size;
+    for (auto groupSize : resultReplacementGrouping) {
+      replacements.push_back(newCallOp->getResults().slice(offset, groupSize));
+      offset += groupSize;
     }
 
-    rewriter.replaceOpWithMultiple(call_op, replacements);
+    rewriter.replaceOpWithMultiple(callOp, replacements);
     return success();
   }
 };
@@ -62,14 +61,14 @@ struct ReturnOpConversion : public OpConversionPattern<ReturnOp> {
   using OpConversionPattern<ReturnOp>::OpConversionPattern;
 
   LogicalResult
-  matchAndRewrite(ReturnOp return_op, OneToNOpAdaptor adaptor,
+  matchAndRewrite(ReturnOp returnOp, OneToNOpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    auto new_return_op = rewriter.create<ReturnOp>(
-        return_op->getLoc(), flattenValues(adaptor.getOperands()));
+    auto newReturnOp = rewriter.create<ReturnOp>(
+        returnOp->getLoc(), flattenValues(adaptor.getOperands()));
     // Preserve any additional attributes that may have been set on the op
-    new_return_op->setAttrs(return_op->getAttrs());
+    newReturnOp->setAttrs(returnOp->getAttrs());
 
-    rewriter.replaceOp(return_op, new_return_op);
+    rewriter.replaceOp(returnOp, newReturnOp);
     return success();
   }
 };
