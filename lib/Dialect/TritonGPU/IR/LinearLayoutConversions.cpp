@@ -1535,16 +1535,14 @@ LinearLayout chooseScaledMfmaScaleLayout(
 
 std::optional<LinearLayout>
 chooseMfmaLikeStoreLayout(RankedTensorType valType) {
-  auto mfmaLayout = dyn_cast<AMDMfmaEncodingAttr>(valType.getEncoding());
-  assert(mfmaLayout);
+  auto mfmaLayout = cast<AMDMfmaEncodingAttr>(valType.getEncoding());
 
   // Currently support transposed [B]F16 MFMA32x32 on CDNA4
-  bool mfma32 = mfmaLayout.getMDim() == 32 && mfmaLayout.getNDim() == 32;
-  if (valType.getRank() != 2 ||
-      (!valType.getElementType().isF16() &&
-       !valType.getElementType().isBF16()) ||
-      mfmaLayout.getVersionMajor() != 4 || !mfmaLayout.getIsTransposed() ||
-      !mfma32)
+  bool isMfma32 = mfmaLayout.getMDim() == 32 && mfmaLayout.getNDim() == 32;
+  Type elemType = valType.getElementType();
+  if (!(valType.getRank() == 2 && (elemType.isF16() || elemType.isBF16()) &&
+        mfmaLayout.getVersionMajor() == 4 && mfmaLayout.getIsTransposed() &&
+        isMfma32))
     return {};
 
   MLIRContext *ctx = mfmaLayout.getContext();
