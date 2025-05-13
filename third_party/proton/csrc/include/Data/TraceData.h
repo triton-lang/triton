@@ -2,6 +2,8 @@
 #define PROTON_DATA_TRACE_DATA_H_
 
 #include "Data.h"
+#include <unordered_map>
+#include <memory>
 
 namespace proton {
 
@@ -28,6 +30,12 @@ protected:
 
 private:
   void doDump(std::ostream &os, OutputFormat outputFormat) const override;
+  void dumpChromeTrace(std::ostream &os) const;
+  
+  class Trace;
+  std::unique_ptr<Trace> trace;
+  // ScopeId -> ContextId
+  std::unordered_map<size_t, size_t> scopeIdToContextId;
 };
 
 } // namespace proton
