@@ -10,7 +10,7 @@ namespace proton {
 class TraceData : public Data {
 public:
   TraceData(const std::string &path, ContextSource *contextSource = nullptr);
-  virtual ~TraceData() = default;
+  virtual ~TraceData();
 
   size_t addOp(size_t scopeId, const std::string &name) override;
 
