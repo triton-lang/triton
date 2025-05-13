@@ -71,7 +71,7 @@ struct WarpGroupDotOpConversion
     auto loc = op.getLoc();
     // D = A * B + C
     Value A = op.getA();
-    Value D = op.getResult();
+    TypedValue<RankedTensorType> D = op.getResult();
 
     // Here we assume the DotOp's operands always comes from shared memory.
     auto AShapePerCTA = getShapePerCTA(A.getType());
@@ -79,20 +79,13 @@ struct WarpGroupDotOpConversion
     unsigned K = AShapePerCTA[reduceAxis];
     bool isOuter = K == 1;
 
-    NvidiaMmaEncodingAttr mmaLayout = dyn_cast<NvidiaMmaEncodingAttr>(
-        cast<RankedTensorType>(D.getType()).getEncoding());
-    if (!isOuter && mmaLayout &&
-        supportMMA(op.getOperand(0), mmaLayout.getVersionMajor())) {
-      if (mmaLayout.isHopper()) {
-        return convertWGMMA(op, adaptor, getTypeConverter(), rewriter,
-                            getThreadId(rewriter, loc));
-      }
-
-      llvm::report_fatal_error(
-          "Unsupported MMA kind found when converting WarpGroupDotOp to LLVM.");
+    auto mmaLayout = cast<NvidiaMmaEncodingAttr>(D.getType().getEncoding());
+    if (!isOuter && supportMMA(op.getOperand(0), mmaLayout.getVersionMajor())) {
+      return convertWGMMA(op, adaptor, getTypeConverter(), rewriter,
+                          getThreadId(rewriter, loc));
     }
 
-    llvm::report_fatal_error(
+    return op.emitError(
         "Unsupported WarpGroupDotOp found when converting TritonGPU to LLVM.");
   }
 };

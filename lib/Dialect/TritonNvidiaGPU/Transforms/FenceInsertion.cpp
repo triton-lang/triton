@@ -39,25 +39,17 @@ public:
     if (computeCapability < 90)
       return;
     ModuleOp mod = getOperation();
-    mod.walk([&](Operation *op) {
-      bool isMMAv3 = isa<ttng::WarpGroupDotOp>(op);
-      if (!isMMAv3 && !isa<ttng::MMAv5OpInterface>(op))
-        return WalkResult::advance();
-      OpBuilder builder(op);
-      auto a = op->getOperand(0);
-      auto b = op->getOperand(1);
-      if (isMMAv3) {
-        auto mmaEncoding = dyn_cast<ttg::NvidiaMmaEncodingAttr>(
-            cast<RankedTensorType>(op->getResult(0).getType()).getEncoding());
-        if (!mmaEncoding || !mmaEncoding.isHopper())
-          return WalkResult::advance();
-      }
+    mod.walk([&](tt::DotOpInterface dotOp) {
+      Value a = dotOp.getA();
+      Value b = dotOp.getB();
       bool aDependsOnShared = dependOnCopyRegToShared(a);
       bool bDependsOnShared = dependOnCopyRegToShared(b);
       if (!aDependsOnShared && !bDependsOnShared)
         return WalkResult::advance();
+
+      OpBuilder builder(dotOp);
       Operation *fence = builder.create<ttng::FenceAsyncSharedOp>(
-          op->getLoc(), /*bCluster=*/false);
+          dotOp.getLoc(), /*bCluster=*/false);
       // If there is all the dependencies are outside of the loop try to hoist
       // the fence.
       while (auto loopOp = fence->getParentOfType<LoopLikeOpInterface>()) {
