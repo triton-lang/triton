@@ -217,22 +217,16 @@ bool sinkLoad(ttng::TMEMLoadOp load, ArrayRef<Operation *> useChain) {
   return false;
 }
 
-struct SinkLoadPattern : public OpRewritePattern<ttng::TMEMLoadOp> {
-  using OpRewritePattern::OpRewritePattern;
-
-  LogicalResult matchAndRewrite(ttng::TMEMLoadOp load,
-                                PatternRewriter &rewriter) const override {
-    SmallVector<Operation *> useChain{load};
-    while (useChain.back()->hasOneUse() &&
-           isPure(*useChain.back()->user_begin()) &&
-           useChain.back()->getNextNode() == *useChain.back()->user_begin()) {
-      useChain.push_back(*useChain.back()->user_begin());
-    }
-    if (sinkLoad(load, useChain))
-      return success();
-    return failure();
+// Try to sink a load and a collection of its users.
+bool trySinkLoad(ttng::TMEMLoadOp load) {
+  SmallVector<Operation *> useChain{load};
+  while (useChain.back()->hasOneUse() &&
+         isPure(*useChain.back()->user_begin()) &&
+         useChain.back()->getNextNode() == *useChain.back()->user_begin()) {
+    useChain.push_back(*useChain.back()->user_begin());
   }
-};
+  return sinkLoad(load, useChain);
+}
 
 struct TritonNvidiaGPUInterleaveTMemPass
     : public TritonNvidiaGPUInterleaveTMemPassBase<
@@ -243,13 +237,13 @@ struct TritonNvidiaGPUInterleaveTMemPass
   void runOnOperation() override {
     MLIRContext *context = &getContext();
     ModuleOp m = getOperation();
-
-    mlir::RewritePatternSet patterns(context);
-    patterns.add<SinkLoadPattern>(context);
-    GreedyRewriteConfig config;
-    config.setMaxIterations(1024);
-    if (failed(applyPatternsGreedily(m, std::move(patterns), config)))
-      llvm::report_fatal_error("InterleaveTMem pass failed to converge");
+    SmallVector<ttng::TMEMLoadOp> loads;
+    m.walk([&](ttng::TMEMLoadOp load) { loads.push_back(load); });
+    for (ttng::TMEMLoadOp load : loads) {
+      while (trySinkLoad(load)) {
+        // Keep trying to sink loads and their users.
+      }
+    }
   }
 };
 
