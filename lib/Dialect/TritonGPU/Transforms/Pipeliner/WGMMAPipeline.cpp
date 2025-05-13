@@ -31,12 +31,28 @@ namespace tt = mlir::triton;
 namespace ttg = mlir::triton::gpu;
 namespace ttng = mlir::triton::nvidia_gpu;
 
-// Returns whether the dot is an RS dot, i.e. takes the LHS through registers
-static bool isRSDot(Operation *dot) {
-  if (auto dotOp = dyn_cast<ttng::WarpGroupDotOp>(dot)) {
-    return isa<RankedTensorType>(dotOp.getA().getType());
+// Returns whether the dot dot such that:
+// 1. The LHS comes from registers and
+// 1.1  The LHS is defined inside the loop
+// 1.2. The LHS does not come from another dot
+// For these dots, we assume that we cannot rewrite their
+// operands until the previous dot has finished
+static bool isRSDotFromSIMD(Operation *dot, scf::ForOp forOp) {
+  auto dotOp = dyn_cast<ttng::WarpGroupDotOp>(dot);
+  if (!dotOp)
+    return false;
+  auto a = dotOp.getA();
+  if (!isa<RankedTensorType>(a.getType())) {
+    return false;
   }
-  return false;
+  if (forOp.isDefinedOutsideOfLoop(a)) {
+    return false;
+  }
+  if (auto cvt = dyn_cast<ttg::ConvertLayoutOp>(a.getDefiningOp())) {
+    return !isa<ttg::NvidiaMmaEncodingAttr>(
+        cvt.getSrc().getType().getEncoding());
+  }
+  return true;
 }
 
 /// Find the minimum number of async_commit_group ops between the wait
@@ -561,7 +577,7 @@ static void insertAsyncWarpGroupDotWaitInLoop(
     // of properly async dots in the loop minus one.
     // This makes sure that the dot will wait until itself from the previous
     // iteration has completed, as to avoid rewriting the registers.
-    if (isRSDot(asyncDot)) {
+    if (isRSDotFromSIMD(asyncDot, forOp)) {
       OpBuilder builder(asyncDot);
       builder.setInsertionPointAfter(asyncDot);
       auto newWait = builder.create<ttng::WarpGroupDotWaitOp>(
@@ -606,7 +622,7 @@ static void insertAsyncWarpGroupDotWaitInLoop(
   auto lastAsyncDot = properlyAsyncDots.back().first;
   // If the last dot is an RS dot, we don't need to insert a wait
   // as we have already inserted a wait(properlyAsyncDots.size() - 1)
-  if (isRSDot(lastAsyncDot)) {
+  if (isRSDotFromSIMD(lastAsyncDot, forOp)) {
     return;
   }
   builder.setInsertionPointAfter(lastAsyncDot);
