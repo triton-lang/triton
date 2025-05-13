@@ -29,6 +29,7 @@ include "triton/Dialect/Triton/IR/TritonTypes.td"
 include "triton/Dialect/Triton/IR/TritonAttrDefs.td"
 include "triton/Dialect/Triton/IR/TritonInterfaces.td"
 include "triton/Dialect/Triton/IR/TritonOpInterfaces.td"
+include "triton/Dialect/TritonGPU/IR/TritonGPUAttrDefs.td"
 include "triton/Dialect/TritonGPU/IR/TritonGPUTypes.td"
 include "triton/Dialect/TritonGPU/IR/TritonGPUTypeInterfaces.td"
 include "mlir/IR/OpBase.td"
@@ -583,6 +584,12 @@ def TTNG_TMEMStoreOp : TTNG_Op<"tmem_store"> {
     I1:$pred
   );
   let results = (outs Optional<TTG_AsyncToken>:$token);
+
+  let builders = [
+    OpBuilder<(ins "Value":$dst, "Value":$src, "Value":$pred), [{
+      build($_builder, $_state, Type(), dst, Value(), src, pred);
+    }]>
+  ];
 
   let assemblyFormat = [{
     $src `,` $dst `` custom<Token>($dep, type($token)) `,` $pred

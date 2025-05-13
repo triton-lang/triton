@@ -4,6 +4,7 @@
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Types.h"
+#include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Attributes.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/TritonGPUInterfaces.h"
@@ -11,6 +12,7 @@
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/Passes.h"
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/TMAUtilities.h"
+#include "llvm/ADT/AddressRanges.h"
 
 namespace {
 
@@ -62,16 +64,131 @@ collectEffects(Operation *op,
   return false;
 }
 
+struct AccessRange {
+  SmallVector<std::optional<llvm::AddressRange>> ranges;
+  unsigned rankOffset = 0;
+};
+
+// Simple local alias analysis that looks for a single underlying allocation and
+// an access subrange.
+static std::pair<Value, AccessRange> findBufferAccess(Value a) {
+  // Handle block arguments.
+  if (auto arg = dyn_cast<BlockArgument>(a)) {
+    Operation *parentOp = arg.getOwner()->getParentOp();
+
+    // Look through `ttg.warp_specialize` explicit captures.
+    if (auto wsOp = dyn_cast<ttg::WarpSpecializePartitionsOp>(parentOp)) {
+      return findBufferAccess(
+          wsOp.getParentOp().getExplicitCaptures()[arg.getArgNumber()]);
+    }
+
+    // Unknown block argument.
+    return {};
+  }
+
+  Operation *defOp = a.getDefiningOp();
+  // Accessing the alloc accesses the whole buffer.
+  if (auto alloc = dyn_cast<ttng::TMEMAllocOp>(defOp)) {
+    AccessRange access;
+    for (uint64_t dim : alloc.getType().getShape())
+      access.ranges.push_back({{0, dim}});
+    return {a, std::move(access)};
+  }
+
+  // Trans and Reshape views don't change the access size.
+  if (isa<ttg::MemDescTransOp, ttg::MemDescReshapeOp>(defOp)) {
+    return findBufferAccess(defOp->getOperand(0));
+  }
+
+  // Subviews can reduce the access sizes.
+  if (auto subview = dyn_cast<ttg::MemDescSubviewOp>(defOp)) {
+    auto [alloc, parentAccess] = findBufferAccess(subview.getSrc());
+    if (!alloc)
+      return {};
+    // Handle subview of a subview. The first `rankOffset` access sizes are
+    // the same as in the parent access.
+    AccessRange childAccess;
+    for (auto i : llvm::seq(parentAccess.rankOffset))
+      childAccess.ranges.push_back(parentAccess.ranges[i]);
+
+    // The subview may have a smaller rank, in which case its access size is
+    // just 1 for the higher dims.
+    childAccess.rankOffset =
+        subview.getSrc().getType().getRank() - subview.getType().getRank();
+    for (auto [i, offset] : llvm::enumerate(subview.getOffsets())) {
+      auto parentRange = parentAccess.ranges[i + parentAccess.rankOffset];
+      if (!parentRange) {
+        childAccess.ranges.push_back({});
+        continue;
+      }
+
+      // If the offset is not known, then the entire dim may be accessed.
+      APInt value;
+      if (!matchPattern(offset, m_ConstantInt(&value))) {
+        childAccess.ranges.push_back({});
+        continue;
+      }
+
+      uint64_t accessStart = parentRange->start() + value.getSExtValue();
+      uint64_t accessSize = 1;
+      if (i >= childAccess.rankOffset)
+        accessSize = subview.getType().getShape()[i - childAccess.rankOffset];
+      childAccess.ranges.push_back({{accessStart, accessStart + accessSize}});
+    }
+    return {alloc, std::move(childAccess)};
+  }
+
+  // Subslice is a subview only on the N dimension.
+  if (auto subslice = dyn_cast<ttng::TMEMSubSliceOp>(defOp)) {
+    auto [alloc, parentAccess] = findBufferAccess(subslice.getSrc());
+    if (!alloc)
+      return {};
+    if (!parentAccess.ranges[1])
+      return {alloc, parentAccess};
+    uint64_t mStart = parentAccess.ranges[1]->start() + subslice.getN();
+    uint64_t mSize = subslice.getType().getShape()[1];
+    AccessRange childAccess = parentAccess;
+    childAccess.ranges[1] = {{mStart, mStart + mSize}};
+    return {alloc, std::move(childAccess)};
+  }
+
+  // Unknown defining op.
+  return {};
+}
+
+static bool tmemMayAlias(Value a, Value b) {
+  auto [aAlloc, aRanges] = findBufferAccess(a);
+  auto [bAlloc, bRanges] = findBufferAccess(b);
+  // If the underlying buffer was not identified, assume mayalias.
+  if (!aAlloc || !bAlloc)
+    return true;
+  // If the buffers are different, they don't alias.
+  if (aAlloc != bAlloc)
+    return false;
+  // If the access ranges along any dimension are known to not overlap, then the
+  // accesses don't alias.
+  for (auto [aRange, bRange] : llvm::zip(aRanges.ranges, bRanges.ranges)) {
+    // If either access range at this dim is unknown, we can't determine if they
+    // don't overlap.
+    if (!aRange || !bRange)
+      continue;
+    // The access ranges are known and don't overlap.
+    if (!aRange->intersects(*bRange))
+      return false;
+  }
+  return true;
+}
+
 // Sink tmem_loads as close to their use as possible to reduce register
 // pressure.
-static void sinkLoad(ttng::TMEMLoadOp load, Operation *cvt) {
+static void sinkLoad(ttng::TMEMLoadOp load, ttg::ConvertLayoutOp cvt) {
   Operation *insertBefore = nullptr;
   Operation *next = cvt->getNextNode();
   while (next && !next->hasTrait<OpTrait::IsTerminator>()) {
     insertBefore = next;
     bool dep = false;
     for (auto operand : getNestedOperands(next)) {
-      if (operand == cvt->getResult(0)) {
+      if (operand == cvt.getResult()) {
         dep = true;
         break;
       }
@@ -80,17 +197,18 @@ static void sinkLoad(ttng::TMEMLoadOp load, Operation *cvt) {
       SmallVector<MemoryEffects::EffectInstance> effects;
       collectEffects(next, effects);
       for (auto effect : effects) {
-        if (effect.getEffect() ==
-                MemoryEffects::Effect::get<MemoryEffects::Write>() ||
-            effect.getEffect() ==
-                MemoryEffects::Effect::get<MemoryEffects::Allocate>()) {
-          if (effect.getResource() ==
-                  mlir::SideEffects::DefaultResource::get() ||
-              effect.getResource() ==
-                  mlir::triton::nvidia_gpu::TensorMemory::get()) {
-            dep = true;
-            break;
-          }
+        // Look for potentially aliasing write or free effects.
+        if (!isa<MemoryEffects::Write, MemoryEffects::Free>(effect.getEffect()))
+          continue;
+        if (isa<SideEffects::DefaultResource>(effect.getResource())) {
+          dep = true;
+          break;
+        }
+        if (isa<ttng::TensorMemory>(effect.getResource()) &&
+            (!effect.getValue() ||
+             tmemMayAlias(effect.getValue(), load.getSrc()))) {
+          dep = true;
+          break;
         }
       }
     }
@@ -101,6 +219,50 @@ static void sinkLoad(ttng::TMEMLoadOp load, Operation *cvt) {
   if (insertBefore) {
     load->moveBefore(insertBefore);
     cvt->moveBefore(insertBefore);
+  }
+}
+
+static void hoistStore(ttng::TMEMStoreOp store, ttg::ConvertLayoutOp cvt,
+                       ttng::TMEMSubSliceOp subSlice) {
+  Operation *insertAfter = nullptr;
+  Operation *prev = subSlice->getPrevNode();
+  while (prev) {
+    insertAfter = prev;
+    bool dep = false;
+    for (Value result : prev->getResults()) {
+      if (result == cvt.getSrc() || result == subSlice.getSrc()) {
+        dep = true;
+        break;
+      }
+    }
+    if (!isMemoryEffectFree(prev)) {
+      SmallVector<MemoryEffects::EffectInstance> effects;
+      collectEffects(prev, effects);
+      for (auto effect : effects) {
+        // Look for potentially aliasing read or alloc effects.
+        if (!isa<MemoryEffects::Read, MemoryEffects::Allocate>(
+                effect.getEffect()))
+          continue;
+        if (isa<SideEffects::DefaultResource>(effect.getResource())) {
+          dep = true;
+          break;
+        }
+        if (isa<ttng::TensorMemory>(effect.getResource()) &&
+            (!effect.getValue() ||
+             tmemMayAlias(effect.getValue(), store.getDst()))) {
+          dep = true;
+          break;
+        }
+      }
+    }
+    if (dep)
+      break;
+    prev = prev->getPrevNode();
+  }
+  if (insertAfter) {
+    store->moveAfter(insertAfter);
+    cvt->moveAfter(insertAfter);
+    subSlice->moveAfter(insertAfter);
   }
 }
 
@@ -182,6 +344,74 @@ public:
   }
 };
 
+class TMemStoreJoinPattern : public OpRewritePattern<ttng::TMEMStoreOp> {
+public:
+  using OpRewritePattern::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(ttng::TMEMStoreOp storeOp,
+                                PatternRewriter &b) const override {
+    // Look through layout conversions.
+    Value src = storeOp.getSrc();
+    while (auto cvt = src.getDefiningOp<ttg::ConvertLayoutOp>()) {
+      src = cvt.getSrc();
+    }
+
+    // Only support joinin N dimension on the outer most.
+    auto reshapeOp = src.getDefiningOp<tt::ReshapeOp>();
+    if (!reshapeOp)
+      return failure();
+    auto shape = reshapeOp.getSrc().getType().getShape();
+    if (reshapeOp.getType().getShape().front() != shape[0])
+      return failure();
+    auto transOp = reshapeOp.getSrc().getDefiningOp<tt::TransOp>();
+    if (!transOp || transOp.getOrder() != ArrayRef<int>({0, 2, 1}))
+      return failure();
+    auto joinOp = transOp.getSrc().getDefiningOp<tt::JoinOp>();
+    if (!joinOp)
+      return failure();
+
+    // We found a tmem_store that is joined on the N dimension. We can split it
+    // into multiple tmem_stores.
+    int mDim = getShapePerCTA(storeOp.getDst().getType())[0];
+    // TODO: enable other M cases. (the layout is a bit more complex).
+    if (mDim != 128)
+      return failure();
+    int splitNSize = shape[2];
+    if (splitNSize < 8)
+      return failure();
+
+    Location loc = storeOp.getLoc();
+    Value tmem = storeOp.getDst();
+    int numWarps = ttg::lookupNumWarps(storeOp);
+    Value truePred = b.create<arith::ConstantOp>(loc, b.getBoolAttr(true));
+
+    Attribute distLayout = ttng::getTmemCompatibleLayout(
+        mDim, splitNSize, joinOp.getLhs().getType(), numWarps);
+    auto newStoreType = RankedTensorType::get(
+        joinOp.getLhs().getType().getShape(),
+        joinOp.getLhs().getType().getElementType(), distLayout);
+
+    // First slice.
+    auto subSlice0 = b.create<ttng::TMEMSubSliceOp>(loc, tmem, 0, splitNSize);
+    auto cvt0 =
+        b.create<ttg::ConvertLayoutOp>(loc, newStoreType, joinOp.getLhs());
+    auto store0 =
+        b.create<ttng::TMEMStoreOp>(loc, subSlice0, cvt0.getResult(), truePred);
+    // Second slice.
+    auto subSlice1 =
+        b.create<ttng::TMEMSubSliceOp>(loc, tmem, splitNSize, splitNSize);
+    auto cvt1 =
+        b.create<ttg::ConvertLayoutOp>(loc, newStoreType, joinOp.getRhs());
+    auto store1 =
+        b.create<ttng::TMEMStoreOp>(loc, subSlice1, cvt1.getResult(), truePred);
+
+    hoistStore(store0, cvt0, subSlice0);
+    hoistStore(store1, cvt1, subSlice1);
+    b.eraseOp(storeOp);
+    return success();
+  }
+};
+
 // Pick an optimized tmem load layout based on its users. When there are
 // multiple warpgroups tmem_load results can be distirbuted along M or N across
 // the warpgroups. By default distribute along N but when there is a reduction
@@ -257,7 +487,9 @@ public:
     ModuleOp m = getOperation();
 
     mlir::RewritePatternSet patterns(context);
-    patterns.add<TMemSplitLoadPattern, TMemLoadReducePattern>(context);
+    patterns
+        .add<TMemSplitLoadPattern, TMemStoreJoinPattern, TMemLoadReducePattern>(
+            context);
     if (failed(applyPatternsGreedily(m, std::move(patterns))))
       signalPassFailure();
   }
