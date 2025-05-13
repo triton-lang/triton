@@ -175,12 +175,111 @@ def test_prune_configs(with_perf_model: bool, device: str):
 
 @pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 9,
                     reason="Requires compute capability >= 9 for NV")
-def test_ptx_override(device):
+def test_override_ttir(device):
     N = 1024
     src = torch.randn(N, device=device)
     dst = torch.empty(N, device=device)
 
-    ptx_src = r"""
+    ir_src = r"""
+module {
+  tt.func public @_kernel(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg2: i32 {tt.divisibility = 16 : i32}) attributes {noinline = false} {
+    %cst = arith.constant dense<1.000000e+01> : tensor<32xf32>
+    %c32_i32 = arith.constant 32 : i32
+    %0 = tt.get_program_id x : i32
+    %1 = arith.muli %0, %c32_i32 : i32
+    %2 = tt.make_range {end = 32 : i32, start = 0 : i32} : tensor<32xi32>
+    %3 = tt.splat %1 : i32 -> tensor<32xi32>
+    %4 = arith.addi %3, %2 : tensor<32xi32>
+    %5 = tt.splat %arg2 : i32 -> tensor<32xi32>
+    %6 = arith.cmpi slt, %4, %5 : tensor<32xi32>
+    %7 = tt.splat %arg1 : !tt.ptr<f32> -> tensor<32x!tt.ptr<f32>>
+    %8 = tt.addptr %7, %4 : tensor<32x!tt.ptr<f32>>, tensor<32xi32>
+    %9 = tt.load %8, %6 : tensor<32x!tt.ptr<f32>>
+    %10 = arith.mulf %9, %cst : tensor<32xf32>
+    %11 = tt.splat %arg0 : !tt.ptr<f32> -> tensor<32x!tt.ptr<f32>>
+    %12 = tt.addptr %11, %4 : tensor<32x!tt.ptr<f32>>, tensor<32xi32>
+    tt.store %12, %10, %6 : tensor<32x!tt.ptr<f32>>
+    tt.return
+  }
+}
+    """
+    temp_file = pathlib.Path(f"/tmp/test_override_{str(uuid.uuid4())}.ttir")
+    temp_file.write_text(ir_src)
+
+    configs = [triton.Config(kwargs={'BLOCK_SIZE': 32, 'ir_override': str(temp_file)})]
+
+    @triton.autotune(configs=configs, key=['N'], do_bench=do_bench)
+    @triton.jit
+    def _kernel(dst, src, N, BLOCK_SIZE: tl.constexpr):
+        offsets = tl.program_id(0) * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
+        x = tl.load(src + offsets, mask=offsets < N)
+        tl.store(dst + offsets, x, mask=offsets < N)
+
+    grid = lambda META: (triton.cdiv(N, META['BLOCK_SIZE']), )
+    _kernel[grid](dst, src, N=N)
+
+    # Change the behavior of kernel by overriding PTX
+    torch.testing.assert_close(src * 10, dst)
+
+
+@pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 9,
+                    reason="Requires compute capability >= 9 for NV")
+def test_override_ttgir(device):
+    N = 1024
+    src = torch.randn(N, device=device)
+    dst = torch.empty(N, device=device)
+
+    ir_src = r"""
+#blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:90", "ttg.threads-per-warp" = 32 : i32} {
+  tt.func public @_kernel(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32} loc("/data/users/daohang/triton/python/test/unit/runtime/test_autotuner.py":262:0), %arg1: !tt.ptr<f32> {tt.divisibility = 16 : i32} loc("/data/users/daohang/triton/python/test/unit/runtime/test_autotuner.py":262:0), %arg2: i32 {tt.divisibility = 16 : i32} loc("/data/users/daohang/triton/python/test/unit/runtime/test_autotuner.py":262:0)) attributes {noinline = false} {
+    %cst = arith.constant dense<1.000000e+01> : tensor<32xf32, #blocked>
+    %c32_i32 = arith.constant 32 : i32
+    %0 = tt.get_program_id x : i32
+    %1 = arith.muli %0, %c32_i32 : i32
+    %2 = tt.make_range {end = 32 : i32, start = 0 : i32} : tensor<32xi32, #blocked>
+    %3 = tt.splat %1 : i32 -> tensor<32xi32, #blocked>
+    %4 = arith.addi %3, %2 : tensor<32xi32, #blocked>
+    %5 = tt.splat %arg2 : i32 -> tensor<32xi32, #blocked>
+    %6 = arith.cmpi slt, %4, %5 : tensor<32xi32, #blocked>
+    %7 = tt.splat %arg1 : !tt.ptr<f32> -> tensor<32x!tt.ptr<f32>, #blocked>
+    %8 = tt.addptr %7, %4 : tensor<32x!tt.ptr<f32>, #blocked>, tensor<32xi32, #blocked>
+    %9 = tt.load %8, %6 : tensor<32x!tt.ptr<f32>, #blocked>
+    %10 = arith.mulf %9, %cst : tensor<32xf32, #blocked>
+    %11 = tt.splat %arg0 : !tt.ptr<f32> -> tensor<32x!tt.ptr<f32>, #blocked>
+    %12 = tt.addptr %11, %4 : tensor<32x!tt.ptr<f32>, #blocked>, tensor<32xi32, #blocked>
+    tt.store %12, %10, %6 : tensor<32x!tt.ptr<f32>, #blocked>
+    tt.return
+  }
+}
+    """
+    temp_file = pathlib.Path(f"/tmp/test_override_{str(uuid.uuid4())}.ttgir")
+    temp_file.write_text(ir_src)
+
+    configs = [triton.Config(kwargs={'BLOCK_SIZE': 32, 'ir_override': str(temp_file)})]
+
+    @triton.autotune(configs=configs, key=['N'], do_bench=do_bench)
+    @triton.jit
+    def _kernel(dst, src, N, BLOCK_SIZE: tl.constexpr):
+        offsets = tl.program_id(0) * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
+        x = tl.load(src + offsets, mask=offsets < N)
+        tl.store(dst + offsets, x, mask=offsets < N)
+
+    grid = lambda META: (triton.cdiv(N, META['BLOCK_SIZE']), )
+    _kernel[grid](dst, src, N=N)
+
+    # Change the behavior of kernel by overriding PTX
+    torch.testing.assert_close(src * 10, dst)
+
+
+@pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 9,
+                    reason="Requires compute capability >= 9 for NV")
+def test_override_ptx(device):
+    N = 1024
+    src = torch.randn(N, device=device)
+    dst = torch.empty(N, device=device)
+
+    ir_src = r"""
 //
 // Generated by LLVM NVPTX Back-End
 //
@@ -251,16 +350,17 @@ $L__func_end0:
                                         // -- End function
 }
     """
-    temp_file = pathlib.Path(f"/tmp/test_ptx_override_{str(uuid.uuid4())}.ptx")
-    temp_file.write_text(ptx_src)
+    temp_file = pathlib.Path(f"/tmp/test_override_{str(uuid.uuid4())}.ptx")
+    temp_file.write_text(ir_src)
 
-    configs = [triton.Config(kwargs={'BLOCK_SIZE': 32, 'ptx_override': str(temp_file)})]
+    configs = [triton.Config(kwargs={'BLOCK_SIZE': 32, 'ir_override': str(temp_file)})]
 
     @triton.autotune(configs=configs, key=['N'], do_bench=do_bench)
     @triton.jit
     def _kernel(dst, src, N, BLOCK_SIZE: tl.constexpr):
         offsets = tl.program_id(0) * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
         x = tl.load(src + offsets, mask=offsets < N)
+        x = x * 10
         tl.store(dst + offsets, x, mask=offsets < N)
 
     grid = lambda META: (triton.cdiv(N, META['BLOCK_SIZE']), )

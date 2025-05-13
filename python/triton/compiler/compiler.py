@@ -345,6 +345,7 @@ def compile(src, target=None, options=None):
 
     if compilation_listener:
         timer.finished_ir_initialization()
+
     for ext, compile_ir in list(stages.items())[first_stage:]:
         next_module = compile_ir(module, metadata)
         ir_filename = f"{file_name}.{ext}"
@@ -352,11 +353,11 @@ def compile(src, target=None, options=None):
             print(f"\nOverriding kernel with file {full_name}")
             next_module = parse(full_name, ext, context)
 
-        # check if ptx_override is set from Triton config
-        if ext == "ptx":
-            if ptx_override := metadata.get("ptx_override", None):
-                print(f"\nOverriding PTX with file path passed from triton config {src.constants}: {ptx_override}")
-                next_module = parse(ptx_override, ext, context)
+        # Override IR if set by Triton config
+        if ir_override := metadata.get("ir_override", None):
+            if ir_override.endswith(f".{ext}"):
+                print(f"\nOverriding IR with filename set in triton config {src.constants}: {ir_override}")
+                next_module = parse(ir_override, ext, context)
 
         # If TRITON_STORE_BINARY_ONLY is 1, only store cubin/hsaco/json
         if (not store_only_binary) or (ext in ("cubin", "hsaco", "json")):
