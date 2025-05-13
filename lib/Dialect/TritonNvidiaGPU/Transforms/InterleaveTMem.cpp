@@ -241,6 +241,7 @@ struct TritonNvidiaGPUInterleaveTMemPass
     m.walk([&](ttng::TMEMLoadOp load) { loads.push_back(load); });
     for (ttng::TMEMLoadOp load : loads) {
       while (trySinkLoad(load)) {
+        // Keep trying to sink loads and their users.
       }
     }
   }
