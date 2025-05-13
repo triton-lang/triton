@@ -217,54 +217,6 @@ bool sinkLoad(ttng::TMEMLoadOp load, ArrayRef<Operation *> useChain) {
   return false;
 }
 
-bool hoistStore(ttng::TMEMStoreOp store, ArrayRef<Operation *> defChain) {
-  Operation *insertAfter = nullptr;
-  Operation *prev = defChain.back()->getPrevNode();
-  while (prev) {
-    insertAfter = prev;
-    bool dep = false;
-    for (Value result : prev->getResults()) {
-      if (llvm::any_of(defChain, [&](Operation *op) {
-            return llvm::is_contained(op->getOperands(), result);
-          })) {
-        dep = true;
-        break;
-      }
-    }
-    if (isa<ttng::WaitBarrierOp>(prev))
-      break;
-    if (!isMemoryEffectFree(prev)) {
-      SmallVector<MemoryEffects::EffectInstance> effects;
-      collectEffects(prev, effects);
-      for (auto effect : effects) {
-        // Look for potentially aliasing read or alloc effects.
-        if (!isa<MemoryEffects::Read, MemoryEffects::Allocate>(
-                effect.getEffect()))
-          continue;
-        if (isa<SideEffects::DefaultResource>(effect.getResource())) {
-          dep = true;
-          break;
-        }
-        if (isa<ttng::TensorMemory>(effect.getResource()) &&
-            (!effect.getValue() ||
-             tmemMayAlias(effect.getValue(), store.getDst()))) {
-          dep = true;
-          break;
-        }
-      }
-    }
-    if (dep)
-      break;
-    prev = prev->getPrevNode();
-  }
-  if (insertAfter && insertAfter != defChain.back()->getPrevNode()) {
-    for (Operation *op : defChain)
-      op->moveAfter(insertAfter);
-    return true;
-  }
-  return false;
-}
-
 struct SinkLoadPattern : public OpRewritePattern<ttng::TMEMLoadOp> {
   using OpRewritePattern::OpRewritePattern;
 
@@ -272,33 +224,11 @@ struct SinkLoadPattern : public OpRewritePattern<ttng::TMEMLoadOp> {
                                 PatternRewriter &rewriter) const override {
     SmallVector<Operation *> useChain{load};
     while (useChain.back()->hasOneUse() &&
-           isPure(*useChain.back()->user_begin())) {
+           isPure(*useChain.back()->user_begin()) &&
+           useChain.back()->getNextNode() == *useChain.back()->user_begin()) {
       useChain.push_back(*useChain.back()->user_begin());
     }
     if (sinkLoad(load, useChain))
-      return success();
-    return failure();
-  }
-};
-
-struct HoistStorePattern : public OpRewritePattern<ttng::TMEMStoreOp> {
-  using OpRewritePattern::OpRewritePattern;
-
-  LogicalResult matchAndRewrite(ttng::TMEMStoreOp store,
-                                PatternRewriter &rewriter) const override {
-    SmallVector<Operation *> defChain{store};
-    Value src = store.getSrc();
-    while (src.getDefiningOp<ttg::ConvertLayoutOp>() &&
-           src.getDefiningOp()->hasOneUse()) {
-      defChain.push_back(src.getDefiningOp());
-      src = cast<ttg::ConvertLayoutOp>(src.getDefiningOp()).getSrc();
-    }
-    Value dst = store.getDst();
-    while (dst.getDefiningOp<ttng::TMEMSubSliceOp>()) {
-      defChain.push_back(dst.getDefiningOp());
-      dst = cast<ttng::TMEMSubSliceOp>(dst.getDefiningOp()).getSrc();
-    }
-    if (hoistStore(store, defChain))
       return success();
     return failure();
   }
@@ -315,11 +245,11 @@ struct TritonNvidiaGPUInterleaveTMemPass
     ModuleOp m = getOperation();
 
     mlir::RewritePatternSet patterns(context);
-    patterns.add<SinkLoadPattern /*, HoistStorePattern*/>(context);
-    if (failed(applyPatternsGreedily(m, std::move(patterns)))) {
-      mlir::emitError(m.getLoc(), "InterleaveTMem pass failed to converge");
-      // signalPassFailure();
-    }
+    patterns.add<SinkLoadPattern>(context);
+    GreedyRewriteConfig config;
+    config.setMaxIterations(1024);
+    if (failed(applyPatternsGreedily(m, std::move(patterns), config)))
+      llvm::report_fatal_error("InterleaveTMem pass failed to converge");
   }
 };
 
