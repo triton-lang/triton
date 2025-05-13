@@ -178,4 +178,11 @@ void TraceData::doDump(std::ostream &os, OutputFormat outputFormat) const {
   }
 }
 
+TraceData::TraceData(const std::string &path, ContextSource *contextSource)
+    : Data(path, contextSource) {
+  trace = std::make_unique<Trace>();
+}
+
+TraceData::~TraceData() {}
+
 } // namespace proton

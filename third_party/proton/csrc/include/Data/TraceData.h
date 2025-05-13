@@ -2,14 +2,14 @@
 #define PROTON_DATA_TRACE_DATA_H_
 
 #include "Data.h"
-#include <unordered_map>
 #include <memory>
+#include <unordered_map>
 
 namespace proton {
 
 class TraceData : public Data {
 public:
-  using Data::Data;
+  TraceData(const std::string &path, ContextSource *contextSource = nullptr);
   virtual ~TraceData() = default;
 
   size_t addOp(size_t scopeId, const std::string &name) override;
@@ -31,7 +31,7 @@ protected:
 private:
   void doDump(std::ostream &os, OutputFormat outputFormat) const override;
   void dumpChromeTrace(std::ostream &os) const;
-  
+
   class Trace;
   std::unique_ptr<Trace> trace;
   // ScopeId -> ContextId
