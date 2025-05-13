@@ -1,9 +1,9 @@
 #include "Data/TraceData.h"
 #include "Utility/Errors.h"
 
-#include <stdexcept>
 #include <algorithm>
 #include <iostream>
+#include <stdexcept>
 
 namespace proton {
 

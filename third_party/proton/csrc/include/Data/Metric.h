@@ -167,9 +167,8 @@ private:
   const static inline bool EXCLUSIVE[kernelMetricKind::Count] = {
       false, false, false, false, true, true, true};
   const static inline std::string VALUE_NAMES[kernelMetricKind::Count] = {
-      "start_time (ns)", "end_time (ns)", "count",
-      "time (ns)",       "device_id",     "device_type",
-      "stream_id",
+      "start_time (ns)", "end_time (ns)", "count",     "time (ns)",
+      "device_id",       "device_type",   "stream_id",
   };
 };
 
