@@ -189,6 +189,12 @@ static bool matchMFMAAndLinearLayoutCase(RankedTensorType srcTy,
   if (!mfmaLayout || !linearLayout)
     return false;
 
+  // for now, only laytout with fp16 is supported.
+  if (!mlir::isa<Float16Type>(dstTy.getElementType()) ||
+      !mlir::isa<Float16Type>(srcTy.getElementType())) {
+    return false;
+  }
+
   std::optional<LinearLayout> srcLL =
       mlir::triton::gpu::chooseMfmaLikeStoreLayout(srcTy);
   if (!srcLL)
