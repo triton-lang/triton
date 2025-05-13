@@ -473,6 +473,13 @@ static std::optional<int> dotCanBeProperlyAsync(ttng::WarpGroupDotOp dotOp,
   while (!queue.empty()) {
     auto [user, argIdx] = queue.pop_back_val();
     if (user->getParentOp() == forOp) {
+      // We support noops in between the dot and the yield
+      if (isNoop(user)) {
+        for (auto &use : user->getResult(0).getUses()) {
+          queue.push_back({use.getOwner(), use.getOperandNumber()});
+        }
+        continue;
+      }
       if (isa<scf::YieldOp>(user)) {
         if (iterArg) {
           // The dot is used by the loop's yield, but we can't have any other
@@ -501,15 +508,28 @@ static std::optional<int> dotCanBeProperlyAsync(ttng::WarpGroupDotOp dotOp,
       return std::nullopt;
     }
   }
-
-  // Rule 3a: Are the only users of the dot's result from iteration i-1 other
-  // MMAv3 dots?  If so, we're done, this dot can be properly async.
-  if (llvm::all_of(iterArg.getUses(), [&](OpOperand &use) {
-        return isa<ttng::WarpGroupDotOp>(use.getOwner()) &&
-               use.getOperandNumber() == 2;
-      })) {
-    return iterArgIdx;
+  // Rule 2.1: We don't make the dot async if the accumulator is not fp32.
+  if (!dotOp.getC().getType().getElementType().isF32()) {
+    LDBG("Can't make dot async because the accumulator is not fp32");
+    return std::nullopt;
   }
+
+  // Rule 3a: Check that every use of the dot’s result (iterArg) eventually
+  // reaches a WarpGroupDotOp (with use index 2), possibly after passing through
+  // a chain of noops
+  std::function<bool(OpOperand &)> isTransitivelyWarpGroupDot =
+      [&](OpOperand &use) -> bool {
+    Operation *user = use.getOwner();
+    if (isa<ttng::WarpGroupDotOp>(user))
+      return use.getOperandNumber() == 2;
+    if (isNoop(user))
+      return llvm::all_of(user->getResult(0).getUses(),
+                          isTransitivelyWarpGroupDot);
+    return false;
+  };
+
+  if (llvm::all_of(iterArg.getUses(), isTransitivelyWarpGroupDot))
+    return iterArgIdx;
 
   // Rule 3b: Are all users of the dot's result from iteration i-1 after the
   // first `warp_group_dot_wait {pendings=0}` op?  If so, the dot can be
