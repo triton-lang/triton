@@ -91,3 +91,51 @@ module attributes {"ttg.target" = "cuda:90", "ttg.num-ctas" = 1 : i32, "ttg.num-
     tt.return
   }
 }
+
+// -----
+
+#shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16}>
+#smem = #ttg.shared_memory
+#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [0, 1]}>
+#tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 64, unpacked = true>
+
+module attributes {ttg.target = "cuda:100", "ttg.num-warps" = 4 : i32} {
+
+// CHECK-LABEL: @mma_inside_warp_specialize
+tt.func @mma_inside_warp_specialize(%src: tensor<64x64xf16, #blocked>) {
+  %A = ttg.local_alloc %src : (tensor<64x64xf16, #blocked>) -> !ttg.memdesc<64x64xf16, #shared, #smem>
+  %B = ttg.local_alloc : () -> !ttg.memdesc<64x64xf16, #shared, #smem, mutable>
+  %D = ttng.tmem_alloc : () -> !ttg.memdesc<64x64xf32, #tmem, #ttng.tensor_memory, mutable>
+
+  ttg.warp_specialize(%A, %B, %D)
+  default {
+    ttg.warp_yield
+  }
+  // CHECK: partition0
+  partition0(%lhs: !ttg.memdesc<64x64xf16, #shared, #smem>, %rhs: !ttg.memdesc<64x64xf16, #shared, #smem, mutable>, %acc: !ttg.memdesc<64x64xf32, #tmem, #ttng.tensor_memory, mutable>) num_warps(4) {
+    %true = arith.constant true
+    %c0_i32 = arith.constant 0 : i32
+    %c1_i32 = arith.constant 1 : i32
+    %c32_i32 = arith.constant 32 : i32
+    // CHECK: ttng.fence_async_shared
+    // CHECK-NEXT: scf.for
+    scf.for %i = %c0_i32 to %c32_i32 step %c1_i32 : i32 {
+      // CHECK-NEXT: ttng.tc_gen5_mma
+      ttng.tc_gen5_mma %lhs, %rhs, %acc, %true, %true : !ttg.memdesc<64x64xf16, #shared, #smem>, !ttg.memdesc<64x64xf16, #shared, #smem, mutable>, !ttg.memdesc<64x64xf32, #tmem, #ttng.tensor_memory, mutable>
+      // CHECK-NEXT: ttng.tc_gen5_mma
+      ttng.tc_gen5_mma %lhs, %rhs, %acc, %true, %true : !ttg.memdesc<64x64xf16, #shared, #smem>, !ttg.memdesc<64x64xf16, #shared, #smem, mutable>, !ttg.memdesc<64x64xf32, #tmem, #ttng.tensor_memory, mutable>
+    }
+    ttg.warp_return
+  }
+  // CHECK: partition1
+  partition1(%lhs: !ttg.memdesc<64x64xf16, #shared, #smem>, %rhs: !ttg.memdesc<64x64xf16, #shared, #smem, mutable>, %acc: !ttg.memdesc<64x64xf32, #tmem, #ttng.tensor_memory, mutable>) num_warps(4) {
+    // CHECK-NOT: ttng.fence_async_shared
+    %true = arith.constant true
+    // CHECK: ttng.tc_gen5_mma
+    ttng.tc_gen5_mma %rhs, %rhs, %acc, %true, %true : !ttg.memdesc<64x64xf16, #shared, #smem, mutable>, !ttg.memdesc<64x64xf16, #shared, #smem, mutable>, !ttg.memdesc<64x64xf32, #tmem, #ttng.tensor_memory, mutable>
+    ttg.warp_return
+  } : (!ttg.memdesc<64x64xf16, #shared, #smem>, !ttg.memdesc<64x64xf16, #shared, #smem, mutable>, !ttg.memdesc<64x64xf32, #tmem, #ttng.tensor_memory, mutable>) -> ()
+  tt.return
+}
+
+}
