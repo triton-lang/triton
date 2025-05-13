@@ -281,7 +281,8 @@ SmallVector<Value> splitRhs(OpBuilder &builder,
     offsetsVal.push_back(builder.create<arith::ConstantIntOp>(loc, 0, 32));
   }
   auto newType = ttg::MemDescType::get(
-      shape, type.getElementType(), type.getEncoding(), type.getMemorySpace());
+      shape, type.getElementType(), type.getEncoding(), type.getMemorySpace(),
+      /*isMutable=*/false, type.getAllocShape());
   SmallVector<Value> ret;
   for (int i = 0; i < nSplits; i++) {
     offsetsVal[kDim] = builder.create<arith::ConstantIntOp>(loc, i * newK, 32);
