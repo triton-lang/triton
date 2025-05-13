@@ -20,6 +20,7 @@ static const char *kLoopStageAttrName = "loop.stage";
 static const char *kLoopClusterAttrName = "loop.cluster";
 static const char *kScheduledMaxStageAttrName = "tt.scheduled_max_stage";
 static const char *kAssignedStageAttrName = "ttg.assigned_stage";
+static const char *kAssignedClusterAttrName = "ttg.assigned_cluster";
 
 //===----------------------------------------------------------------------===//
 // Hoisting Utilities
@@ -106,7 +107,7 @@ Value createScalarAlloc(ImplicitLocOpBuilder &rewriter, Type type,
 Value createBarrierAlloc(scf::ForOp forOp, int numBarriers,
                          int arriveCount = 1);
 // Create an allocation that can hold distance number of tensor shapes.
-Value createAlloc(scf::ForOp forOp, RankedTensorType ty, Location loc,
+Value createAlloc(Operation *insertBefore, RankedTensorType ty, Location loc,
                   gpu::SharedEncodingTrait sharedEnc, unsigned distance);
 
 // Determine if the operation is a TMA load.

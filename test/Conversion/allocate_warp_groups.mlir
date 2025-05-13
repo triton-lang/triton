@@ -92,3 +92,22 @@ tt.func @setmaxnreg() {
 }
 
 }
+
+// -----
+
+// CHECK: module attributes {ttg.maxnreg = 128 : i32
+module attributes {"ttg.num-warps" = 8 : i32} {
+
+tt.func @steal_from_default() {
+  // CHECK: actualRegisters = array<i32: 64, 192>
+  ttg.warp_specialize() attributes {requestedRegisters = array<i32: 192>}
+  default {
+    ttg.warp_yield
+  }
+  partition0() num_warps(8) {
+    ttg.warp_return
+  } : () -> ()
+  tt.return
+}
+
+}

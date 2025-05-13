@@ -69,25 +69,17 @@ static triton::StoreOp convertMfmaLayoutForCDNA4(PatternRewriter &rewriter,
   auto mfmaLayout =
       cast<triton::gpu::AMDMfmaEncodingAttr>(valType.getEncoding());
 
-  bool mfma32 = mfmaLayout.getMDim() == 32 && mfmaLayout.getNDim() == 32;
+  // Create a new layout where each thread holds 8 consecutive elements, in
+  // order to enable wide 128-bit global stores.
+  std::optional<triton::LinearLayout> mfma8Layout =
+      triton::gpu::chooseMfmaLikeStoreLayout(valType);
 
-  if (valType.getRank() != 2 ||
-      (!valType.getElementType().isF16() &&
-       !valType.getElementType().isBF16()) ||
-      mfmaLayout.getVersionMajor() != 4 || !mfmaLayout.getIsTransposed() ||
-      !mfma32) {
+  if (!mfma8Layout)
     return rewriter.create<triton::StoreOp>(oldStOp.getLoc(), ptr, val, mask,
                                             oldStOp.getCache(),
                                             oldStOp.getEvict());
-  }
-
-  // Create a new layout where each thread holds 8 consecutive elements, in
-  // order to enable wide 128-bit global stores.
-  triton::LinearLayout mfma8Layout =
-      chooseMfmaLikeStoreLayout(mfmaLayout, valType.getShape());
-
   Attribute newEncoding = triton::gpu::LinearEncodingAttr::get(
-      mfmaLayout.getContext(), mfma8Layout);
+      mfmaLayout.getContext(), mfma8Layout.value());
   auto newPtrType = RankedTensorType::get(
       ptrType.getShape(), ptrType.getElementType(), newEncoding);
   Value newPtr = rewriter.create<triton::gpu::ConvertLayoutOp>(ptr.getLoc(),
@@ -128,18 +120,15 @@ static triton::StoreOp convertMfmaLayoutForCDNA4(PatternRewriter &rewriter,
 // Store with xmma layout directly
 //
 // xmma layout is either MFMA or WMMA
-class BypassEpilogueSMEM : public mlir::RewritePattern {
+class BypassEpilogueSMEM : public mlir::OpRewritePattern<triton::StoreOp> {
 
 public:
-  explicit BypassEpilogueSMEM(mlir::MLIRContext *context)
-      : mlir::RewritePattern(triton::StoreOp::getOperationName(), 1, context) {}
+  using OpRewritePattern::OpRewritePattern;
+
   mlir::LogicalResult
-  matchAndRewrite(mlir::Operation *op,
+  matchAndRewrite(triton::StoreOp stOp,
                   mlir::PatternRewriter &rewriter) const override {
 
-    auto stOp = dyn_cast<triton::StoreOp>(op);
-    if (!stOp)
-      return mlir::failure();
     Value ptr = stOp.getPtr();
     Value val = stOp.getValue();
     Value mask = stOp.getMask();
@@ -232,8 +221,6 @@ class TritonAMDGPUOptimizeEpiloguePass
           TritonAMDGPUOptimizeEpiloguePass> {
 
 public:
-  TritonAMDGPUOptimizeEpiloguePass() = default;
-
   void runOnOperation() override {
     MLIRContext *context = &getContext();
     ModuleOp m = getOperation();
