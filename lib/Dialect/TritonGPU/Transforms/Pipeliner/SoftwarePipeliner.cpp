@@ -42,6 +42,35 @@ static void pipelineWgmma(ModuleOp moduleOp) {
   }
 }
 
+static Operation *wrapInMaskOp(RewriterBase &rewriter, Operation *op,
+                               Value pred) {
+  auto mask = rewriter.create<MaskOp>(op->getLoc(), op->getResultTypes(), pred);
+  rewriter.createBlock(&mask->getRegion(0));
+  rewriter.setInsertionPointToStart(&mask->getRegion(0).front());
+  auto newOp = rewriter.clone(*op);
+  newOp->replaceAllUsesWith(mask->getResults());
+  rewriter.create<MaskReturnOp>(op->getLoc(), newOp->getResults());
+  return mask;
+}
+
+static void resolveMaskOp(ModuleOp moduleOp) {
+  IRRewriter rewriter(moduleOp);
+  SmallVector<MaskOp> opsToErase;
+  moduleOp->walk([&](MaskOp maskOp) {
+    rewriter.setInsertionPoint(maskOp);
+    assert(maskOp.getBody()->getOperations().size() == 2 &&
+           "MaskOp should have exactly one operation and a return statement");
+    Operation *op = &maskOp.getBody()->getOperations().front();
+    auto newOp = rewriter.clone(*op);
+    newOp = triton::predicateOp(rewriter, newOp, maskOp.getPred());
+    maskOp->replaceAllUsesWith(newOp);
+    opsToErase.push_back(maskOp);
+  });
+  for (MaskOp op : opsToErase) {
+    rewriter.eraseOp(op);
+  }
+}
+
 static void expandLoops(ModuleOp moduleOp) {
   SmallVector<scf::ForOp> loops;
   moduleOp->walk([&](scf::ForOp forOp) { loops.push_back(forOp); });
@@ -56,7 +85,7 @@ static void expandLoops(ModuleOp moduleOp) {
     triton::PipeliningOption options;
     options.supportDynamicLoops = true;
     options.peelEpilogue = false;
-    options.predicateFn = triton::predicateOp;
+    options.predicateFn = wrapInMaskOp;
     options.getScheduleFn =
         [&](scf::ForOp forOp,
             std::vector<std::pair<Operation *, unsigned>> &schedule) {
@@ -87,6 +116,63 @@ static void removeAttributes(ModuleOp moduleOp) {
   });
 }
 
+// This function peels the last 'numIterations' iterations from the given
+// scf::ForOp
+static void peelLastIterations(scf::ForOp forOp, unsigned numIterations) {
+  IRRewriter rewriter(forOp);
+  auto loc = forOp.getLoc();
+
+  // Fetch loop bounds and step
+  Value lowerBound = forOp.getLowerBound();
+  Value upperBound = forOp.getUpperBound();
+  Value step = forOp.getStep();
+
+  // Compute new upper bound for the main loop: newUpperBound = upperBound -
+  // (numIterations * step)
+  auto numConst = rewriter.create<arith::ConstantIndexOp>(loc, numIterations);
+  Value peelOffset = rewriter.create<arith::MulIOp>(loc, numConst, step);
+  Value newUpperBound =
+      rewriter.create<arith::SubIOp>(loc, upperBound, peelOffset);
+
+  forOp.getUpperBoundMutable().assign(newUpperBound);
+
+  // Create the main loop running from lowerBound to newUpperBound
+  auto mainFor = rewriter.create<scf::ForOp>(loc, lowerBound, newUpperBound,
+                                             step, forOp.getIterOperands());
+
+  // Remap the original loop body into the main loop
+  Block &origBlock = forOp.getBody()->front();
+  Block &mainBlock = mainFor.getBody()->front();
+  llvm::DenseMap<Value, Value> mapping;
+  for (unsigned i = 0, e = origBlock.getNumArguments(); i < e; ++i) {
+    mapping[origBlock.getArgument(i)] = mainBlock.getArgument(i);
+  }
+  for (Operation &op : origBlock.getOperations()) {
+    if (isa<scf::YieldOp>(op))
+      continue;
+    rewriter.clone(op, mapping);
+  }
+
+  // Create the peeled loop for the last iterations: from newUpperBound to
+  // original upperBound
+  auto peeledFor = rewriter.create<scf::ForOp>(loc, newUpperBound, upperBound,
+                                               step, forOp.getIterOperands());
+  Block &peeledBlock = peeledFor.getBody()->front();
+  mapping.clear();
+  for (unsigned i = 0, e = origBlock.getNumArguments(); i < e; ++i) {
+    mapping[origBlock.getArgument(i)] = peeledBlock.getArgument(i);
+  }
+  for (Operation &op : origBlock.getOperations()) {
+    if (isa<scf::YieldOp>(op))
+      continue;
+    rewriter.clone(op, mapping);
+  }
+
+  // Replace the original loop with the peeled loop's results (adjust as needed
+  // if loop results must be merged)
+  rewriter.replaceOp(forOp, peeledFor.getResults());
+}
+
 struct PipelinePass : public impl::TritonGPUPipelineBase<PipelinePass> {
 
   using impl::TritonGPUPipelineBase<PipelinePass>::TritonGPUPipelineBase;
@@ -110,6 +196,8 @@ struct PipelinePass : public impl::TritonGPUPipelineBase<PipelinePass> {
                       "ExpandLoops\n"
                    << moduleOp << "\n\n\n";
     }
+
+    resolveMaskOp(moduleOp);
 
     // Cleanup the IR from the pipeline attributes.
     removeAttributes(moduleOp);
