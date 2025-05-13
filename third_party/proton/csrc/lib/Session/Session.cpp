@@ -2,6 +2,7 @@
 #include "Context/Python.h"
 #include "Context/Shadow.h"
 #include "Data/TreeData.h"
+#include "Data/TraceData.h"
 #include "Profiler/Cupti/CuptiProfiler.h"
 #include "Profiler/Instrumentation/InstrumentationProfiler.h"
 #include "Profiler/Roctracer/RoctracerProfiler.h"
@@ -35,6 +36,8 @@ std::unique_ptr<Data> makeData(const std::string &dataName,
                                ContextSource *contextSource) {
   if (toLower(dataName) == "tree") {
     return std::make_unique<TreeData>(path, contextSource);
+  } else if (toLower(dataName) == "trace") {
+    return std::make_unique<TraceData>(path, contextSource);
   }
   throw std::runtime_error("Unknown data: " + dataName);
 }

@@ -79,7 +79,7 @@ def start(
                                  Available options are ["shadow", "python"].
                                  Defaults to "shadow".
         data (str, optional): The data structure to use for profiling.
-                              Available options are ["tree"].
+                              Available options are ["tree", "trace"].
                               Defaults to "tree".
         backend (str, optional): The backend to use for profiling.
                                  Available options are [None, "cupti", "roctracer", "instrumentation"].
