@@ -143,6 +143,16 @@ def TritonNvidiaGPUOptimizeTMemLayoutsPass : Pass<"triton-nvidia-optimize-tmem-l
                            "mlir::triton::TritonDialect"];
 }
 
+def TritonNvidiaGPUInterleaveTMemPass : Pass<"triton-nvidia-interleave-tmem", "mlir::ModuleOp"> {
+  let summary = "Interleave TMEM loads/stores.";
+
+  let description = [{
+    The `triton-nvidia-interleave-tmem` pass attempts to sink TMEM loads and
+    hoist TMEM stores, and potentially interleave them, to reduce register
+    pressure.
+  }];
+}
+
 def TritonNvidiaGPURemoveTMEMTokensPass : Pass<"triton-nvidia-gpu-remove-tmem-tokens", "mlir::ModuleOp"> {
   let summary = "remove TMEM tokens";
 

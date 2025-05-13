@@ -64,6 +64,8 @@ std::unique_ptr<Pass> createTritonNvidiaGPUOptimizeDescriptorEncodingPass();
 
 std::unique_ptr<Pass> createTritonNvidiaGPUOptimizeTMemLayoutsPass();
 
+std::unique_ptr<Pass> createTritonNvidiaGPUInterleaveTMemPass();
+
 /// Generate the code for registering passes.
 #define GEN_PASS_REGISTRATION
 #define GEN_PASS_DECL_TRITONNVIDIAGPULEGALIZETMALAYOUTS
