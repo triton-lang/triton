@@ -307,8 +307,8 @@ LogicalResult ConcatOp::verify() {
   auto sources = getSources();
   auto result = getResult();
 
-  auto srcType = dyn_cast<RankedTensorType>(sources.front().getType());
-  auto dstType = dyn_cast<RankedTensorType>(result.getType());
+  auto srcType = cast<RankedTensorType>(sources.front().getType());
+  auto dstType = cast<RankedTensorType>(result.getType());
 
   auto srcShape = srcType.getShape();
   auto dstShape = dstType.getShape();
