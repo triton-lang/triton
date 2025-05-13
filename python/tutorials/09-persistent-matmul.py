@@ -19,8 +19,8 @@ Users can pass command-line arguments to specify matrix dimensions and iteration
 Note that currently this tutorial will fail on devices with a small shared memory size, such as RTX-4090.
 """
 
-import argparse
 import itertools
+import inspect
 
 import torch
 import triton
@@ -67,7 +67,7 @@ def _matmul_launch_metadata(grid, kernel, args):
 
 HAS_TENSOR_DESC = supports_tma() and hasattr(tl, "make_tensor_descriptor")
 HAS_HOST_TENSOR_DESC = supports_tma() and hasattr(triton.tools.tensor_descriptor, "TensorDescriptor")
-HAS_WARP_SPECIALIZE = supports_ws() and HAS_TENSOR_DESC
+HAS_WARP_SPECIALIZE = False
 
 
 def matmul_get_configs(pre_hook=None):
@@ -152,13 +152,17 @@ def matmul(a, b):
     c = torch.empty((M, N), device=a.device, dtype=dtype)
     # 1D launch kernel where each block gets its own program.
     grid = lambda META: (triton.cdiv(M, META["BLOCK_SIZE_M"]) * triton.cdiv(N, META["BLOCK_SIZE_N"]), )
-    matmul_kernel[grid](
+    k = matmul_kernel[grid](
         a, b, c,  #
         M, N, K,  #
         a.stride(0), a.stride(1),  #
         b.stride(0), b.stride(1),  #
         c.stride(0), c.stride(1),  #
     )
+    print("\n\n----- Naive matmul implementation: -----")
+    print("Triton: \n", inspect.getsource(matmul_kernel.base_fn))
+    print("\n\nTTGIR: \n", k.asm["ttgir"])
+    print("\n\nptx: \n", k.asm["ptx"])
     return c
 
 
@@ -243,12 +247,16 @@ def matmul_tma(a, b, warp_specialize: bool):
         BLOCK_N = META["BLOCK_SIZE_N"]
         return (triton.cdiv(M, BLOCK_M) * triton.cdiv(N, BLOCK_N), )
 
-    matmul_kernel_tma[grid](
+    k = matmul_kernel_tma[grid](
         a_desc, b_desc, c_desc,  #
         M, N, K,  #
         FP8_OUTPUT=dtype == torch.float8_e4m3fn,  #
         WARP_SPECIALIZE=warp_specialize,  #
     )
+    print("\n\n----- TMA matmul implementation: -----")
+    print("Triton: \n", inspect.getsource(matmul_kernel_tma.base_fn))
+    print("\n\nTTGIR: \n", k.asm["ttgir"])
+    print("\n\nptx: \n", k.asm["ptx"])
     return c
 
 
@@ -337,7 +345,7 @@ def matmul_persistent(a, b):
     c = torch.empty((M, N), device=a.device, dtype=dtype)
     # 1D launch kernel where each block gets its own program.
     grid = lambda META: (min(NUM_SMS, triton.cdiv(M, META["BLOCK_SIZE_M"]) * triton.cdiv(N, META["BLOCK_SIZE_N"])), )
-    matmul_kernel_persistent[grid](
+    k = matmul_kernel_persistent[grid](
         a, b, c,  #
         M, N, K,  #
         a.stride(0), a.stride(1),  #
@@ -345,6 +353,10 @@ def matmul_persistent(a, b):
         c.stride(0), c.stride(1),  #
         NUM_SMS=NUM_SMS,  #
     )
+    print("----- Persistent matmul implementation: -----")
+    print("Triton: \n", inspect.getsource(matmul_kernel_persistent.base_fn))
+    print("\n\nTTGIR: \n", k.asm["ttgir"])
+    print("\n\nptx: \n", k.asm["ptx"])
     return c
 
 
@@ -455,13 +467,17 @@ def matmul_tma_persistent(a, b, warp_specialize: bool):
             triton.cdiv(M, BLOCK_M) * triton.cdiv(N, BLOCK_N),
         ), )
 
-    matmul_kernel_tma_persistent[grid](
+    k = matmul_kernel_tma_persistent[grid](
         a_desc, b_desc, c_desc,  #
         M, N, K,  #
         FP8_OUTPUT=dtype == torch.float8_e4m3fn,  #
         NUM_SMS=NUM_SMS,  #
         WARP_SPECIALIZE=warp_specialize,  #
     )
+    print("\n\n----- TMA persistent matmul implementation: -----")
+    print("Triton: \n", inspect.getsource(matmul_kernel_tma_persistent.base_fn))
+    print("\n\nTTGIR: \n", k.asm["ttgir"])
+    print("\n\nptx: \n", k.asm["ptx"])
     return c
 
 
@@ -561,12 +577,16 @@ def matmul_descriptor_persistent(a, b, warp_specialize: bool):
     triton.set_allocator(alloc_fn)
 
     grid = lambda META: (min(NUM_SMS, triton.cdiv(M, META["BLOCK_SIZE_M"]) * triton.cdiv(N, META["BLOCK_SIZE_N"])), )
-    matmul_kernel_descriptor_persistent[grid](
+    k = matmul_kernel_descriptor_persistent[grid](
         a, b, c,  #
         M, N, K,  #
         NUM_SMS=NUM_SMS,  #
         WARP_SPECIALIZE=warp_specialize,  #
     )
+    print("\n\n----- Tensor descriptor persistent matmul implementation: -----")
+    print("Triton: \n", inspect.getsource(matmul_kernel_descriptor_persistent.base_fn))
+    print("\n\nTTGIR: \n", k.asm["ttgir"])
+    print("\n\nptx: \n", k.asm["ptx"])
     return c
 
 
@@ -689,30 +709,31 @@ def show_profile(precision, profile_name):
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser()
-    parser.add_argument("-K", type=int, required=False, default=512)
-    parser.add_argument("--K_range", type=int, nargs=2)
-    parser.add_argument("--K_step", type=int, default=512)
-    parser.add_argument("--prec", type=str, choices=["fp8", "fp16"], default="fp16")
-    args = parser.parse_args()
+    validate(8192, 8192, 2048, torch.float16)
+    # parser = argparse.ArgumentParser()
+    # parser.add_argument("-K", type=int, required=False, default=512)
+    # parser.add_argument("--K_range", type=int, nargs=2)
+    # parser.add_argument("--K_step", type=int, default=512)
+    # parser.add_argument("--prec", type=str, choices=["fp8", "fp16"], default="fp16")
+    # args = parser.parse_args()
 
-    if args.prec == 'fp8' and (not hasattr(torch, "float8_e4m3fn") or not is_cuda()):
-        print("This example requires CUDA with fp8 support.")
-    else:
-        dtype = torch.float8_e4m3fn if args.prec == 'fp8' else torch.float16
+    # if args.prec == 'fp8' and (not hasattr(torch, "float8_e4m3fn") or not is_cuda()):
+    #     print("This example requires CUDA with fp8 support.")
+    # else:
+    #     dtype = torch.float8_e4m3fn if args.prec == 'fp8' else torch.float16
 
-        if args.K and args.K_range is None:
-            args.K_range = [args.K, args.K]
-            args.K_step = 1  # doesn't matter as long as it's not 0
+    #     if args.K and args.K_range is None:
+    #         args.K_range = [args.K, args.K]
+    #         args.K_step = 1  # doesn't matter as long as it's not 0
 
-        torch.manual_seed(0)
+    #     torch.manual_seed(0)
 
-        validate(32, 32, 32, dtype)
-        validate(8192, 8192, args.K_range[0], dtype)
+    #     validate(32, 32, 32, dtype)
+    #     validate(8192, 8192, args.K_range[0], dtype)
 
-        proton.start("matmul", hook="triton")
-        proton.deactivate()
-        for K in range(args.K_range[0], args.K_range[1] + 1, args.K_step):
-            bench(K, dtype)
-        proton.finalize()
-        show_profile(args.prec, "matmul")
+    #     proton.start("matmul", hook="triton")
+    #     proton.deactivate()
+    #     for K in range(args.K_range[0], args.K_range[1] + 1, args.K_step):
+    #         bench(K, dtype)
+    #     proton.finalize()
+    #     show_profile(args.prec, "matmul")
