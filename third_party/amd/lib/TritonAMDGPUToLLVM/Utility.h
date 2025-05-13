@@ -138,12 +138,13 @@ void addLocalLoadNoAliasScope(AliasAnalysisOpInterface llLoadOp);
 void addAsyncCopyAliasScope(AliasAnalysisOpInterface llLoadDirectToLdsOp);
 
 // Determine the order in which CTA tiles are laid out across the tensor.
+// That is, create vector of dimensions from fastest to slowest varying.
 SmallVector<unsigned> getCTATileOrder(MLIRContext *ctx,
                                       const LinearLayout &layout);
 
 template <typename T, typename U, typename BinaryOp>
-std::vector<unsigned> multiDimElementwise(const ArrayRef<T> &lhs,
-                                          const ArrayRef<U> &rhs, BinaryOp op) {
+std::vector<unsigned> multiDimElementwise(ArrayRef<T> lhs, ArrayRef<U> rhs,
+                                          BinaryOp op) {
   assert(lhs.size() == rhs.size() && "Input dimensions must match");
   std::vector<unsigned> result;
   result.reserve(lhs.size());

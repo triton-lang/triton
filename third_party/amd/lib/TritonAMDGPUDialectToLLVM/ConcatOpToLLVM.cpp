@@ -54,7 +54,7 @@ struct ConcatOpConversion : public ConvertOpToLLVMPattern<amdgpu::ConcatOp> {
     unsigned elemsPerTile = ::getNumElements<unsigned>(shapePerCTATile);
     unsigned numCTATiles = totalElems / elemsPerTile;
 
-    // Default order is major-to-minor.
+    // Default order is fastest to slowest varying dimension.
     std::vector<unsigned> defaultOrder(rank);
     std::iota(defaultOrder.rbegin(), defaultOrder.rend(), 0);
 
@@ -70,8 +70,6 @@ struct ConcatOpConversion : public ConvertOpToLLVMPattern<amdgpu::ConcatOp> {
         ::getNumElements<unsigned>(srcCTAShape);
 
     llvm::SmallVector<Value> resultVals;
-    resultVals.reserve(totalElems);
-
     llvm::SmallVector<SmallVector<Value>> unpackedSources;
     unpackedSources.reserve(sources.size());
 
@@ -90,13 +88,13 @@ struct ConcatOpConversion : public ConvertOpToLLVMPattern<amdgpu::ConcatOp> {
           currTileIdx, srcCTAShape, std::divides<unsigned>());
       // Compute linear index of the current source tensor.
       // Concat operands are laid out in the destination tensor
-      // in major‑to‑minor order.
+      // in fastest slowest varying dimension order.
       auto linearSrcIdx =
           mlir::LLVM::linearize(multiDimSrcIdx, srcToDstShape, defaultOrder);
 
       // After determining which source tensor the current CTA tile belongs to,
       // compute the index of this CTA tile within that source tensor,
-      // considering the source tensor includes multiple CTA tiles.
+      // considering the source tensors may include CTA tiles.
       auto multiDimSrcCTAIdx =
           LLVM::AMD::multiDimElementwise<unsigned, unsigned>(
               currTileIdx, srcCTAShape, std::modulus<unsigned>());
@@ -104,9 +102,10 @@ struct ConcatOpConversion : public ConvertOpToLLVMPattern<amdgpu::ConcatOp> {
           mlir::LLVM::linearize(multiDimSrcCTAIdx, srcCTAShape, srcCTAOrder);
       auto unpackedElements = unpackedSources[linearSrcIdx];
 
-      for (int j = 0; j < elemsPerThreadPerCTA; ++j)
-        resultVals.push_back(
-            unpackedElements[linearSrcCTAIdx * elemsPerThreadPerCTA + j]);
+      auto startIt =
+          unpackedElements.begin() + linearSrcCTAIdx * elemsPerThreadPerCTA;
+      auto endIt = startIt + elemsPerThreadPerCTA;
+      llvm::append_range(resultVals, llvm::make_range(startIt, endIt));
     }
 
     Value packedResult = packLLElements(loc, this->getTypeConverter(),

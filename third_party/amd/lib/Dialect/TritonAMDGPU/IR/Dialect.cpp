@@ -307,27 +307,18 @@ LogicalResult ConcatOp::verify() {
   auto sources = getSources();
   auto result = getResult();
 
-  // 1) Basic type and rank checks.
-  if (sources.empty())
-    return emitError() << "At least one source tensor is required.";
-
   auto srcType = dyn_cast<RankedTensorType>(sources.front().getType());
-  if (!srcType)
-    return emitError() << "Expected source type is RankedTensorType.";
-
   auto dstType = dyn_cast<RankedTensorType>(result.getType());
-  if (!dstType)
-    return emitError() << "Expected destination type is RankedTensorType.";
 
   auto srcShape = srcType.getShape();
   auto dstShape = dstType.getShape();
   unsigned rank = srcShape.size();
 
+  // 1) Shape related checks.
   if (rank != dstShape.size())
     return emitError()
            << "Source and destination tensors must have the same rank.";
 
-  // 2) Compute CTA tile counts and validate shapes.
   unsigned numTiles = 1;
   for (int i = 0; i < rank; ++i) {
     if (dstShape[i] % srcShape[i] != 0)
@@ -340,7 +331,7 @@ LogicalResult ConcatOp::verify() {
                        << ") doesn't match required count (" << numTiles
                        << ").";
 
-  // 3) Check that all sources have same type and element type match.
+  // 2) Check that all sources have same type and element type match.
   for (auto src : sources) {
     auto curr = dyn_cast<RankedTensorType>(src.getType());
     if (curr != srcType)
@@ -351,7 +342,7 @@ LogicalResult ConcatOp::verify() {
     return emitError()
            << "Element types of sources and destination must match.";
 
-  // 4) Verify that source and destination layout match on a CTA tile.
+  // 3) Verify that source and destination layout match on a CTA tile.
   auto srcLL = triton::gpu::toLinearLayout(srcShape, srcType.getEncoding());
   auto dstLL = triton::gpu::toLinearLayout(dstShape, dstType.getEncoding());
 
@@ -391,71 +382,17 @@ LogicalResult ConcatOp::verify() {
     return true;
   };
 
+  if (laneSrc != laneDst || warpSrc != warpDst) {
+    return emitError() << "Lane and warp dim basis must match between source "
+                          "and destination layout.";
+  }
+
   if (!compareBasis(regSrc, regDst,
                     "Register basis must match on a CTA tile between source "
                     "and destination.",
-                    regCompareLen) ||
-      !compareBasis(
-          laneSrc, laneDst,
-          "Lane basis must match between source and destination layout.") ||
-      !compareBasis(
-          warpSrc, warpDst,
-          "Warp basis must match between source and destination layout."))
+                    regCompareLen))
     return failure();
 
   return success();
-}
-
-struct CanonicalizeConcatOpFromExtractSlice
-    : public mlir::OpRewritePattern<amdgpu::ExtractSliceOp> {
-  using OpRewritePattern::OpRewritePattern;
-
-  mlir::LogicalResult
-  matchAndRewrite(amdgpu::ExtractSliceOp op,
-                  PatternRewriter &rewriter) const override {
-    auto concatOp = op.getSource().getDefiningOp<amdgpu::ConcatOp>();
-    if (!concatOp)
-      return failure();
-
-    auto offset = op.getStaticOffsets();
-
-    auto sliceResult = op.getResult();
-    auto sliceResultType = sliceResult.getType();
-    RankedTensorType dstType =
-        cast<RankedTensorType>(concatOp.getResult().getType());
-    auto dstShape = dstType.getShape();
-
-    auto concatItem = concatOp.getSources().front();
-    auto concatItemType = dyn_cast<RankedTensorType>(concatItem.getType());
-    if (!concatItemType)
-      return failure();
-
-    if (sliceResultType != concatItemType)
-      return failure();
-
-    auto srcShape = concatItemType.getShape();
-    auto rank = srcShape.size();
-    std::vector<unsigned> defaultOrder(rank);
-    std::iota(defaultOrder.rbegin(), defaultOrder.rend(), 0);
-
-    auto multiDimSrcIdx = LLVM::AMD::multiDimElementwise<int64_t, int64_t>(
-        offset, srcShape, std::divides<unsigned>());
-    auto srcToDstShape = LLVM::AMD::multiDimElementwise<int64_t, int64_t>(
-        dstShape, srcShape, std::divides<unsigned>());
-    auto linearSrcIdx =
-        mlir::LLVM::linearize(multiDimSrcIdx, srcToDstShape, defaultOrder);
-
-    assert(linearSrcIdx < concatOp->getNumOperands() &&
-           "concat index must be in bounds");
-    Value concreteConcatItem = concatOp->getOperand(linearSrcIdx);
-    rewriter.replaceOp(op, concreteConcatItem);
-
-    return success();
-  }
-};
-
-void ConcatOp::getCanonicalizationPatterns(mlir::RewritePatternSet &patterns,
-                                           mlir::MLIRContext *context) {
-  patterns.add<CanonicalizeConcatOpFromExtractSlice>(context);
 }
 } // namespace mlir::triton::amdgpu

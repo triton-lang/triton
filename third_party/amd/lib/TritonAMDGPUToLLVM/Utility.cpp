@@ -769,18 +769,19 @@ SmallVector<unsigned> getCTATileOrder(MLIRContext *ctx,
 
   // To determine the CTA tile order, start by identifying the register basis
   // vector that corresponds to the first element of the second CTA tile. The
-  // nonzero index in the logical tensor it maps to indicates the most minor
-  // dimension. Then, for each subsequent basis register (first element of
-  // some CTA tile), extract the next nonzero index to build the full dimension
-  // order.
-  unsigned totalPerThread =
+  // nonzero index in the logical tensor it maps to indicates the fastest
+  // varying dimension. Then, for each subsequent basis register (first element
+  // of some CTA tile), extract the next nonzero index to build the full
+  // dimension order.
+  unsigned registersPerThreadPerCTA =
       product(llEnc.basesPerDim(regDim, /*skipBroadcast=*/false)) / numCTAs;
-  unsigned startIndex = static_cast<unsigned>(std::log2(totalPerThread));
+  unsigned startIndex =
+      static_cast<unsigned>(std::log2(registersPerThreadPerCTA));
 
   llvm::SmallSetVector<unsigned, 8> order;
   for (unsigned i = startIndex; i < bases.size(); ++i) {
-    auto it = std::find_if(bases[i].begin(), bases[i].end(),
-                           [](unsigned v) { return v != 0; });
+    auto range = llvm::make_range(bases[i].begin(), bases[i].end());
+    auto it = llvm::find_if(range, [](unsigned v) { return v != 0; });
     if (it != bases[i].end())
       order.insert(std::distance(bases[i].begin(), it));
   }
@@ -789,7 +790,7 @@ SmallVector<unsigned> getCTATileOrder(MLIRContext *ctx,
   for (unsigned dim : llEnc.getOrder())
     order.insert(dim);
 
-  return SmallVector<unsigned>(order.begin(), order.end());
+  return order.takeVector();
 }
 
 } // namespace mlir::LLVM::AMD
