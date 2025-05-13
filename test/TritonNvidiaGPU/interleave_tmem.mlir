@@ -97,4 +97,22 @@ tt.func @interleave_load_store_ws() {
   tt.return
 }
 
+// CHECK-LABEL: @arrive_barrier
+tt.func @arrive_barrier(%arg0: !ttg.memdesc<1xi64, #shared, #smem, mutable>) {
+  %true = arith.constant true
+  %cst = arith.constant dense<0.0> : tensor<128x128xf32, #blocked1>
+
+  // CHECK-COUNT-2: ttng.tmem_alloc
+  %alloc = ttng.tmem_alloc : () -> !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>
+  %noalias_alloc = ttng.tmem_alloc : () -> !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>
+  // CHECK-NEXT: tmem_store
+  // CHECK-NEXT: tmem_load
+  %0 = ttng.tmem_load %alloc : !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable> -> tensor<128x128xf32, #blocked>
+  ttng.tmem_store %cst, %noalias_alloc, %true : tensor<128x128xf32, #blocked1> -> !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>
+  // CHECK-NEXT: arrive_barrier
+  ttng.arrive_barrier %arg0, 1 : !ttg.memdesc<1xi64, #shared, #smem, mutable>
+  "user"(%0) : (tensor<128x128xf32, #blocked>) -> ()
+  tt.return
+}
+
 }
