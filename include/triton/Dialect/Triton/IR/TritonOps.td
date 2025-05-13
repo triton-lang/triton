@@ -541,6 +541,9 @@ def TT_SplitOp : TT_Op<"split", [
         shape 4x8xf32.
     }];
 
+    let builders = [
+      OpBuilder<(ins "TypedValue<RankedTensorType>":$src)>
+    ];
     let arguments = (ins TT_Tensor:$src);
     let results = (outs TT_Tensor:$outLHS, TT_Tensor:$outRHS);
     let assemblyFormat = "$src attr-dict `:` type($src) `->` type($outLHS)";

@@ -149,6 +149,17 @@ bool isView(Operation *op) {
   return isa<ExpandDimsOp, ReshapeOp, TransOp, JoinOp, SplitOp>(op);
 }
 
+bool isNoop(Operation *op) {
+  if (isa<ReshapeOp, TransOp>(op))
+    return true;
+  if (auto cvt = dyn_cast<ttg::ConvertLayoutOp>(op)) {
+    // The conversion op is a noop if the conversion layout is trivial
+    return minimalCvtLayout(cvt.getSrc().getType(),
+                            cvt.getResult().getType()) == LinearLayout::empty();
+  }
+  return false;
+}
+
 //===----------------------------------------------------------------------===//
 // GraphDumper
 //===----------------------------------------------------------------------===//

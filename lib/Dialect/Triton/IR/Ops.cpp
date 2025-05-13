@@ -186,6 +186,23 @@ void StoreOp::getCanonicalizationPatterns(RewritePatternSet &results,
   results.add<CanonicalizeMaskedStorePattern>(context);
 }
 
+//-- SplitOp --
+void SplitOp::build(OpBuilder &builder, OperationState &state,
+                    TypedValue<RankedTensorType> src) {
+  auto srcTy = src.getType();
+  auto shape = srcTy.getShape();
+  auto srcEnc = srcTy.getEncoding();
+  Attribute dstEnc;
+  if (srcEnc) {
+    auto result =
+        cast<DialectInferLayoutInterface>(&srcEnc.getDialect())
+            ->inferSplitOpEncoding(srcEnc, dstEnc, shape, state.location);
+    assert(succeeded(result));
+  }
+  auto dstTy = RankedTensorType::get(shape, srcTy.getElementType(), dstEnc);
+  build(builder, state, dstTy, src);
+}
+
 //-- TransOp --
 OpFoldResult TransOp::fold(FoldAdaptor adaptor) {
   // transpose(x, order=[0, 1, ...]) -> x
