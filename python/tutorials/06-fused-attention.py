@@ -158,8 +158,16 @@ def _attn_fwd_subtile(q, k, offs_m, start_n, offs_n, qk_scale, l_i, m_i, acc, v,
     # -- compute correction factor
     alpha = tl.math.exp2(m_i - m_ij)
     l_ij = tl.sum(p, 1)
+
     # -- update output accumulator --
-    acc = acc * alpha[:, None]
+    BM: tl.constexpr = acc.shape[0]
+    BN: tl.constexpr = acc.shape[1]
+
+    acc0, acc1 = acc.reshape([BM, 2, BN//2]).permute(0, 2, 1).split()
+    acc0 = acc0 * alpha[:, None]
+    acc1 = acc1 * alpha[:, None]
+    acc = tl.join(acc0, acc1).permute(0, 2, 1).reshape([BM, BN])
+
     # prepare p and v for the dot
     p = p.to(dtype)
     # note that this non transposed v for FP8 is only supported on Blackwell
@@ -483,16 +491,15 @@ def _attn_fwd_tma_dp(sm_scale, M,  #
                                             warp_specialize)
 
     m_i0 += tl.math.log2(l_i0)
-    m_i1 += tl.math.log2(l_i1)
     acc0 = acc0 / l_i0[:, None]
-    acc1 = acc1 / l_i1[:, None]
-
     m_ptrs0 = M + off_hz * N_CTX + offs_m0
-    m_ptrs1 = M + off_hz * N_CTX + offs_m1
-
     tl.store(m_ptrs0, m_i0)
-    tl.store(m_ptrs1, m_i1)
     desc_o.store([qo_offset_y, 0], acc0.to(dtype))
+
+    m_i1 += tl.math.log2(l_i1)
+    acc1 = acc1 / l_i1[:, None]
+    m_ptrs1 = M + off_hz * N_CTX + offs_m1
+    tl.store(m_ptrs1, m_i1)
     desc_o.store([qo_offset_y+BLOCK_M//2, 0], acc1.to(dtype))
 
 
@@ -775,7 +782,7 @@ class _attention(torch.autograd.Function):
             #desc_o = TensorDescriptor(o, shape=[y_dim, HEAD_DIM_K], strides=[HEAD_DIM, 1], block_shape=dummy_block)
 
             BLOCK_M = 256
-            BLOCK_N = 64
+            BLOCK_N = 128
             desc_q = TensorDescriptor(q, shape=[y_dim, HEAD_DIM_K], strides=[HEAD_DIM, 1], block_shape=[BLOCK_M//2, HEAD_DIM_K])
             desc_v = TensorDescriptor(v, shape=[y_dim, HEAD_DIM_K], strides=[HEAD_DIM, 1], block_shape=[BLOCK_N, HEAD_DIM_K])
             desc_k = TensorDescriptor(k, shape=[y_dim, HEAD_DIM_K], strides=[HEAD_DIM, 1], block_shape=[BLOCK_N, HEAD_DIM_K])
@@ -800,7 +807,7 @@ class _attention(torch.autograd.Function):
                 BLOCK_N=BLOCK_N, BLOCK_M=BLOCK_M,  #
                 num_warps=4,
                 num_stages=2,
-                maxnreg=64,
+                #maxnreg=64,
                 **extra_kern_args)
         else:
             grid = lambda args: (triton.cdiv(q.shape[2], args["BLOCK_M"]), q.shape[0] * q.shape[1], 1)
@@ -869,7 +876,7 @@ class _attention(torch.autograd.Function):
 attention = _attention.apply
 
 
-@pytest.mark.parametrize("Z, H, N_CTX, HEAD_DIM", [(1, 2, 1024, 64)])
+@pytest.mark.parametrize("Z, H, N_CTX, HEAD_DIM", [(1, 2, 1024, 128)])
 @pytest.mark.parametrize("causal", [True])
 def test_op(Z, H, N_CTX, HEAD_DIM, causal, dtype=torch.float16):
     torch.manual_seed(20)
@@ -916,7 +923,7 @@ except BaseException:
     HAS_FLASH = False
 
 TORCH_HAS_FP8 = False
-BATCH, N_HEADS, HEAD_DIM = 4, 32, 64
+BATCH, N_HEADS, HEAD_DIM = 4, 32, 128
 # vary seq length for fixed head and batch=4
 configs = []
 for mode in ["fwd"]:

@@ -367,9 +367,19 @@ static bool shouldMergeBuffers(Value a, Value b) {
     return false;
   };
 
+  auto getUserLoopParent = [](Value a) -> scf::ForOp {
+    for (Operation *user : a.getUsers()) {
+      if (auto loop = user->getParentOfType<scf::ForOp>())
+        return loop;
+    }
+    return nullptr;
+  };
+
   bool aUsedByMMAAcc = llvm::any_of(a.getUses(), usedInAcc);
   bool bUsedByMMAAcc = llvm::any_of(b.getUses(), usedInAcc);
   if (aUsedByMMAAcc == bUsedByMMAAcc)
+    return false;
+  if (getUserLoopParent(a) != getUserLoopParent(b))
     return false;
 
   return hasDirectSSADependency(a, b) || hasDirectSSADependency(b, a);

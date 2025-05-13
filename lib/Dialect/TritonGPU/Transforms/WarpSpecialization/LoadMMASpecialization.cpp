@@ -130,10 +130,10 @@ static PartitionScheme getPartitionScheme(scf::ForOp loop) {
     }
     while (!operandViews.empty()) {
       Operation *op = operandViews.pop_back_val();
-      if (!op->hasTrait<OpTrait::MemDescViewTrait>())
+      if (!isa<MemDescSubviewOp, MemDescTransOp, MemDescReshapeOp>(op))
         continue;
 
-      // Duplicate the op if necessary to sure the MMA op is the only user.
+      // Duplicate the op if necessary to ensure the MMA op is the only user.
       if (!llvm::all_of(op->getUsers(),
                         [&](Operation *user) { return user == mmaOp; })) {
         OpBuilder b(op);
@@ -1098,7 +1098,6 @@ static LogicalResult pipelineMMA(scf::ForOp &loop, PipelinedMMA &mma,
   //
   //
 
-
   Value firstBar;
   for (int i = nodes.size(); i > 0; --i) {
     if ((firstBar = nodes[i % nodes.size()].barPrev))
@@ -1192,7 +1191,7 @@ static LogicalResult pipelineMMA(scf::ForOp &loop, PipelinedMMA &mma,
     } else if (auto tmemAllocOp = operand.getDefiningOp<ttng::TMEMAllocOp>()) {
       PartitionBuilder b(tmemAllocOp.getLoc(), tmemAllocOp);
       auto store = b.createInto<ttng::TMEMStoreOp>(
-          *defPartition, std::nullopt, Type(), tmemAllocOp.getResult(), Value(),
+          *defPartition, std::nullopt, tmemAllocOp.getResult(),
           tmemAllocOp.getSrc(), b.boolCst(true));
       operandDefs.emplace_back(body.findAncestorOpInBlock(*store),
                                defPartition);
@@ -1205,7 +1204,7 @@ static LogicalResult pipelineMMA(scf::ForOp &loop, PipelinedMMA &mma,
       PartitionBuilder b(reinterpOp.getLoc(), reinterpOp);
       b.setInsertionPointAfter(reinterpOp);
       auto store = b.createInto<ttng::TMEMStoreOp>(
-          *defPartition, std::nullopt, Type(), reinterpOp.getResult(), Value(),
+          *defPartition, std::nullopt, reinterpOp.getResult(),
           reinterpOp.getInit(), b.boolCst(true));
       operandDefs.emplace_back(body.findAncestorOpInBlock(*store),
                                defPartition);
@@ -1238,13 +1237,13 @@ static LogicalResult pipelineMMA(scf::ForOp &loop, PipelinedMMA &mma,
 
     if (node.barPrev) {
       if (!isa<ttng::TMEMLoadOp>(node.op)) {
-        if (incrementPt && domOp->isBeforeInBlock(&*incrementPt->getPoint()))
-          b.restoreInsertionPoint(*incrementPt);
-        else
-          b.setInsertionPoint(domOp);
-        Value bar = createSingleBufferView(b, node.barPrev, curIndex);
+        // if (incrementPt && domOp->isBeforeInBlock(&*incrementPt->getPoint()))
+        //   b.restoreInsertionPoint(*incrementPt);
+        // else
+        b.setInsertionPoint(domOp);
+        Value bar = createSingleBufferView(b, node.barPrev, node.index);
         b.createInto<ttng::WaitBarrierOp>(*partition, stages.lookup(node.op),
-                                          bar, curPhase, userPred);
+                                          bar, node.phase, userPred);
       } else {
         b.setInsertionPoint(domOp);
         if (isa<scf::IfOp>(domOp->getParentOp()))

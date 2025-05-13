@@ -1596,7 +1596,7 @@ def dot(lhs: tl.tensor, rhs: tl.tensor, acc: tl.tensor, input_precision: Optiona
         acc_handle = builder.create_splat(_0, [B, M, N] if B else [M, N])
     else:
         acc_handle = acc.handle
-        assert acc.type == ret_ty
+        assert acc.type == ret_ty, f"acc type {acc.type} must be same as ret_ty {ret_ty}"
 
     # max_num_imprecise_acc only applies to fp8 -> fp32 dot on sm_90
     if max_num_imprecise_acc is None:

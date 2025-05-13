@@ -259,7 +259,7 @@ class CUDABackend(BaseBackend):
             passes.ttgpuir.add_optimize_accumulator_init(pm)
             passes.ttgpuir.add_hoist_tmem_alloc(pm)
             nvidia.passes.ttnvgpuir.add_promote_lhs_to_tmem(pm)
-            # passes.ttgpuir.add_buffer_reuse(pm)
+            passes.ttgpuir.add_buffer_reuse(pm)
             passes.ttgpuir.add_warp_specialize(pm, opt.num_stages)
             passes.ttgpuir.add_pipeline(pm, opt.num_stages, dump_enabled)
             passes.ttgpuir.add_combine_tensor_select_and_if(pm)
