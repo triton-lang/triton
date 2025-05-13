@@ -2,6 +2,8 @@
 #include "Utility/Errors.h"
 
 #include <stdexcept>
+#include <algorithm>
+#include <iostream>
 
 namespace proton {
 
@@ -72,6 +74,22 @@ public:
     return parentId;
   }
 
+  std::vector<Context> getContexts(size_t contextId) {
+    std::vector<Context> contexts;
+    auto it = traceContextMap.find(contextId);
+    if (it == traceContextMap.end()) {
+      throw std::runtime_error("Context not found");
+    }
+    auto &context = it->second;
+    contexts.push_back(context);
+    while (context.parentId != TraceContext::DummyId) {
+      context = traceContextMap[context.parentId];
+      contexts.push_back(context);
+    }
+    std::reverse(contexts.begin(), contexts.end());
+    return contexts;
+  }
+
   void addEvent(size_t scopeId, size_t contextId) {
     if (scopeIdEventIdMap.count(scopeId))
       return;
@@ -87,6 +105,8 @@ public:
     }
     return traceEvents[it->second];
   }
+
+  std::vector<TraceEvent> &getEvents() { return traceEvents; }
 
 private:
   size_t nextContextId = TraceContext::RootId + 1;
@@ -168,6 +188,42 @@ void TraceData::addMetrics(
 void TraceData::clear() {
   std::unique_lock<std::shared_mutex> lock(mutex);
   scopeIdToContextId.clear();
+}
+
+void TraceData::dumpChromeTrace(std::ostream &os) const {
+  auto events = trace->getEvents();
+  // stream id -> trace event
+  std::map<size_t, std::vector<Trace::TraceEvent>> streamTraceEvents;
+  // FIXME: This is just for debugging
+  for (auto &event : events) {
+    if (event.metrics.count(MetricKind::Kernel)) {
+      std::shared_ptr<KernelMetric> kernelMetric =
+          std::dynamic_pointer_cast<KernelMetric>(
+              event.metrics.at(MetricKind::Kernel));
+      auto streamId =
+          std::get<uint64_t>(kernelMetric->getValue(KernelMetric::StreamId));
+      streamTraceEvents[streamId].push_back(event);
+    }
+  }
+  for (auto &[streamId, events] : streamTraceEvents) {
+    for (auto &event : events) {
+      auto contextId = event.contextId;
+      auto contexts = trace->getContexts(contextId);
+      std::cout << "context: " << std::endl;
+      for (const auto &context : contexts) {
+        std::cout << "  " << context.name << std::endl;
+      }
+      std::cout << "-------------------------" << std::endl;
+      std::shared_ptr<KernelMetric> kernelMetric =
+          std::dynamic_pointer_cast<KernelMetric>(
+              event.metrics.at(MetricKind::Kernel));
+      auto startTime =
+          std::get<uint64_t>(kernelMetric->getValue(KernelMetric::StartTime));
+      auto endTime =
+          std::get<uint64_t>(kernelMetric->getValue(KernelMetric::EndTime));
+      std::cout << "start: " << startTime << ", end: " << endTime << std::endl;
+    }
+  }
 }
 
 void TraceData::doDump(std::ostream &os, OutputFormat outputFormat) const {
