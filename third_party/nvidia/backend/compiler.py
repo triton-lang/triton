@@ -106,6 +106,7 @@ class CUDAOptions:
     maxnreg: Optional[int] = None
     cluster_dims: tuple = (1, 1, 1)
     ptx_version: int = None
+    ptx_override: Optional[str] = None  # Path to a custom ptx file
     enable_fp_fusion: bool = True
     launch_cooperative_grid: bool = False
     launch_pdl: bool = False

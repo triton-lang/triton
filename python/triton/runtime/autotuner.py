@@ -312,15 +312,17 @@ class Config:
                        to ptx .maxnreg directive.  Not supported on all platforms.
     :ivar pre_hook: a function that will be called before the kernel is called. Parameters of this
                     function are args.
+    :ivar ptx_override: file path to a user-defined ptx file.
     """
 
-    def __init__(self, kwargs, num_warps=4, num_stages=3, num_ctas=1, maxnreg=None, pre_hook=None):
+    def __init__(self, kwargs, num_warps=4, num_stages=3, num_ctas=1, maxnreg=None, pre_hook=None, ptx_override=None):
         self.kwargs = kwargs
         self.num_warps = num_warps
         self.num_ctas = num_ctas
         self.num_stages = num_stages
         self.maxnreg = maxnreg
         self.pre_hook = pre_hook
+        self.ptx_override = ptx_override
 
     def __setstate__(self, state):
         self.kwargs = state.get("kwargs", {})
@@ -329,6 +331,7 @@ class Config:
         self.num_ctas = state.get("num_ctas", 1)
         self.maxnreg = state.get("maxnreg", None)
         self.pre_hook = state.get("pre_hook", None)
+        self.ptx_override = state.get("ptx_override", None)
 
     def all_kwargs(self):
         return {
@@ -339,6 +342,7 @@ class Config:
                     ("num_ctas", self.num_ctas),
                     ("num_stages", self.num_stages),
                     ("maxnreg", self.maxnreg),
+                    ("ptx_override", self.ptx_override),
                 ) if v is not None
             }
         }

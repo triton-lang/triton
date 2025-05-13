@@ -351,6 +351,13 @@ def compile(src, target=None, options=None):
         if (fn_override_manager is not None and (full_name := fn_override_manager.get_file(ir_filename)) is not None):
             print(f"\nOverriding kernel with file {full_name}")
             next_module = parse(full_name, ext, context)
+
+        # check if ptx_override is set from Triton config
+        if ext == "ptx":
+            if ptx_override := metadata.get("ptx_override", None):
+                print(f"\nOverriding PTX with file path passed from triton config {src.constants}: {ptx_override}")
+                next_module = parse(ptx_override, ext, context)
+
         # If TRITON_STORE_BINARY_ONLY is 1, only store cubin/hsaco/json
         if (not store_only_binary) or (ext in ("cubin", "hsaco", "json")):
             metadata_group[ir_filename] = fn_cache_manager.put(next_module, ir_filename)
