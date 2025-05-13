@@ -48,8 +48,8 @@ public:
         return WalkResult::advance();
 
       OpBuilder builder(dotOp);
-      Operation *fence = builder.create<ttng::FenceAsyncSharedOp>(
-          dotOp.getLoc(), /*bCluster=*/false);
+      auto fence = builder.create<ttng::FenceAsyncSharedOp>(dotOp.getLoc(),
+                                                            /*bCluster=*/false);
       // If there is all the dependencies are outside of the loop try to hoist
       // the fence.
       while (auto loopOp = fence->getParentOfType<LoopLikeOpInterface>()) {
@@ -61,6 +61,14 @@ public:
           break;
         loopOp.moveOutOfLoop(fence);
       }
+
+      // If the previous op is already a fence, this one isn't needed.
+      if (auto lastFence = dyn_cast_or_null<ttng::FenceAsyncSharedOp>(
+              fence->getPrevNode())) {
+        if (lastFence.getBCluster() == fence.getBCluster())
+          fence.erase();
+      }
+
       return WalkResult::advance();
     });
   }
@@ -80,6 +88,7 @@ private:
     visited.insert(operand);
     if (!isa<triton::gpu::MemDescType>(operand.getType()))
       return false;
+
     auto op = operand.getDefiningOp();
     if (op) {
       // reach an alloc copying from register, we need a fence.
@@ -92,26 +101,30 @@ private:
       }
       return false;
     }
+
     // reach BlockArgument
     BlockArgument arg = cast<BlockArgument>(operand);
     unsigned argNum = arg.getArgNumber();
     Operation *argOwner = arg.getOwner()->getParentOp();
-    // support ForOp only
+    // look through ForOp iter argument
     if (auto forOp = dyn_cast<scf::ForOp>(argOwner)) {
+      assert(argNum != 0 && "induction var cannot be memdesc type");
+      --argNum;
       // prologue
-      auto iterOperands = forOp.getInitArgs();
-      if (argNum == 0)
-        return false;
-      if (dependOnCopyRegToShared(iterOperands[argNum - 1], visited))
+      if (dependOnCopyRegToShared(forOp.getInitArgs()[argNum], visited))
         return true;
       // yield
       auto yieldOp = forOp.getBody()->getTerminator();
-      Value v = yieldOp->getOperand(argNum - 1);
-      auto entry = std::make_pair<Operation *, unsigned>(std::move(yieldOp),
-                                                         std::move(argNum));
-      if (dependOnCopyRegToShared(v, visited))
-        return true;
+      Value v = yieldOp->getOperand(argNum);
+      return dependOnCopyRegToShared(v, visited);
     }
+
+    // look through `ttg.warp_specialize`.
+    if (auto wsOp = dyn_cast<ttg::WarpSpecializePartitionsOp>(argOwner)) {
+      return dependOnCopyRegToShared(
+          wsOp.getParentOp().getExplicitCaptures()[argNum]);
+    }
+
     // Conservatively return true for other ops
     return true;
   }
