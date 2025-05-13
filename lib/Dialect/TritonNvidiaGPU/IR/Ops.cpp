@@ -34,7 +34,7 @@ namespace triton {
 namespace nvidia_gpu {
 
 // -- WarpGroupDotOp --
-mlir::LogicalResult WarpGroupDotOp::inferReturnTypes(
+LogicalResult WarpGroupDotOp::inferReturnTypes(
     MLIRContext *context, std::optional<Location> location, ValueRange operands,
     DictionaryAttr attributes, OpaqueProperties properties, RegionRange regions,
     SmallVectorImpl<Type> &inferredReturnTypes) {
@@ -43,21 +43,27 @@ mlir::LogicalResult WarpGroupDotOp::inferReturnTypes(
   inferredReturnTypes.push_back(accTy);
 
   // verify encodings
-  auto aEnc =
-      cast<triton::gpu::TensorOrMemDesc>(operands[0].getType()).getEncoding();
-  auto bEnc =
-      cast<triton::gpu::TensorOrMemDesc>(operands[1].getType()).getEncoding();
+  auto aEnc = cast<TensorOrMemDesc>(operands[0].getType()).getEncoding();
+  auto bEnc = cast<TensorOrMemDesc>(operands[1].getType()).getEncoding();
   auto retEnc = accTy.getEncoding();
   if (aEnc) {
     assert(bEnc);
     Dialect &dialect = aEnc.getDialect();
     auto interface = cast<DialectInferLayoutInterface>(&dialect);
     if (interface->inferDotOpEncoding(aEnc, 0, retEnc, location).failed())
-      return mlir::failure();
+      return failure();
     if (interface->inferDotOpEncoding(bEnc, 1, retEnc, location).failed())
-      return mlir::failure();
+      return failure();
   }
-  return mlir::success();
+  return success();
+}
+
+LogicalResult WarpGroupDotOp::verify() {
+  auto nvmmaEnc =
+      dyn_cast<NvidiaMmaEncodingAttr>(getD().getType().getEncoding());
+  if (!nvmmaEnc || !nvmmaEnc.isHopper())
+    return emitOpError("WGMMA result layout must be Hopper NVMMA");
+  return success();
 }
 
 void WarpGroupDotOp::getEffects(
