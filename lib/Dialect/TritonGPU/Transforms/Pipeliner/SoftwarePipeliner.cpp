@@ -1,8 +1,10 @@
 #include "mlir/Dialect/Tensor/IR/Tensor.h"
+#include "mlir/IR/Dominance.h"
 #include "mlir/IR/IRMapping.h"
 #include "mlir/IR/TypeUtilities.h"
 #include "mlir/Interfaces/SideEffectInterfaces.h"
 #include "mlir/Support/LLVM.h"
+#include "mlir/Transforms/CSE.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 #include "triton/Analysis/AxisInfo.h"
 #include "triton/Analysis/Utility.h"
@@ -50,20 +52,126 @@ static Operation *wrapInMaskOp(RewriterBase &rewriter, Operation *op,
   auto newOp = rewriter.clone(*op);
   newOp->replaceAllUsesWith(mask->getResults());
   rewriter.create<MaskReturnOp>(op->getLoc(), newOp->getResults());
+  rewriter.eraseOp(op);
   return mask;
 }
 
+struct LICMScalarsPattern : public RewritePattern {
+  LICMScalarsPattern(MLIRContext *ctx)
+      // MatchAnyOpTypeTag tells the pattern-matcher to try this pattern on
+      // every operation it encounters.
+      : RewritePattern(MatchAnyOpTypeTag(), /*benefit=*/1, ctx) {}
+
+  LogicalResult matchAndRewrite(Operation *op,
+                                PatternRewriter &rewriter) const override {
+    // Keep only operations that belong to the arith dialect.
+    if (op->getDialect()->getNamespace() !=
+        arith::ArithDialect::getDialectNamespace())
+      return failure();
+
+    for (auto resultType : op->getResultTypes()) {
+      if (isa<RankedTensorType>(resultType)) {
+        return failure();
+      }
+    }
+
+    scf::ForOp forOp = op->getParentOfType<scf::ForOp>();
+    if (!forOp) {
+      return failure();
+    }
+
+    for (auto operand : op->getOperands()) {
+      if (!forOp.isDefinedOutsideOfLoop(operand)) {
+        return failure();
+      }
+    }
+
+    rewriter.moveOpBefore(op, forOp);
+    return success();
+  }
+};
+
+class InductionVarLTUBPattern : public OpRewritePattern<arith::CmpIOp> {
+  using OpRewritePattern::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(arith::CmpIOp cmpOp,
+                                PatternRewriter &rewriter) const override {
+    if (cmpOp.getPredicate() != arith::CmpIPredicate::slt &&
+        cmpOp.getPredicate() != arith::CmpIPredicate::sle) {
+      return failure();
+    }
+    scf::ForOp forOp = cmpOp->getParentOfType<scf::ForOp>();
+    if (!forOp) {
+      return failure();
+    }
+    Value inductionVar = cmpOp.getLhs();
+    Value upperBound = cmpOp.getRhs();
+    if (inductionVar != forOp.getInductionVar()) {
+      return failure();
+    }
+    if (upperBound != forOp.getUpperBound()) {
+      return failure();
+    }
+    // Induction var is always less than upper bound
+    rewriter.replaceOpWithNewOp<arith::ConstantIntOp>(cmpOp, 1, 1);
+    return success();
+  }
+};
+
+class IntLTItselfMinusXPattern : public OpRewritePattern<arith::CmpIOp> {
+  using OpRewritePattern::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(arith::CmpIOp cmpOp,
+                                PatternRewriter &rewriter) const override {
+    if (cmpOp.getPredicate() != arith::CmpIPredicate::slt) {
+      return failure();
+    }
+    Value lhs = cmpOp.getLhs();
+    Value rhs = cmpOp.getRhs();
+    auto subOp = rhs.getDefiningOp<arith::SubIOp>();
+    if (!subOp) {
+      return failure();
+    }
+    Value subLhs = subOp.getLhs();
+    Value subRhs = subOp.getRhs();
+    if (subLhs != lhs) {
+      return failure();
+    }
+    std::optional<int64_t> subRhsValue = getConstantIntValue(subRhs);
+    if (!subRhsValue) {
+      return failure();
+    }
+    // a < a - x is true if x < 0
+    int result = (*subRhsValue < 0) ? 1 : 0;
+    rewriter.replaceOpWithNewOp<arith::ConstantIntOp>(cmpOp, result, 1);
+    return success();
+  }
+};
+
 static void resolveMaskOp(ModuleOp moduleOp) {
+  DominanceInfo domInfo(moduleOp);
   IRRewriter rewriter(moduleOp);
+  eliminateCommonSubExpressions(rewriter, domInfo, moduleOp);
+
+  auto arithDialect =
+      moduleOp.getContext()->getLoadedDialect<arith::ArithDialect>();
+  RewritePatternSet patterns(moduleOp.getContext());
+  arithDialect->getCanonicalizationPatterns(patterns);
+  patterns.add<InductionVarLTUBPattern>(moduleOp.getContext());
+  patterns.add<IntLTItselfMinusXPattern>(moduleOp.getContext());
+  if (applyPatternsGreedily(moduleOp, std::move(patterns)).failed())
+    return llvm::report_fatal_error("Failed to canonicalize the IR");
+
   SmallVector<MaskOp> opsToErase;
   moduleOp->walk([&](MaskOp maskOp) {
     rewriter.setInsertionPoint(maskOp);
-    assert(maskOp.getBody()->getOperations().size() == 2 &&
-           "MaskOp should have exactly one operation and a return statement");
-    Operation *op = &maskOp.getBody()->getOperations().front();
-    auto newOp = rewriter.clone(*op);
-    newOp = triton::predicateOp(rewriter, newOp, maskOp.getPred());
-    maskOp->replaceAllUsesWith(newOp);
+    while (&maskOp.getBody()->front() != maskOp.getBody()->getTerminator()) {
+      Operation *op = &maskOp.getBody()->front();
+      rewriter.moveOpAfter(op, maskOp);
+      triton::predicateOp(rewriter, op, maskOp.getPred());
+    }
+    maskOp->replaceAllUsesWith(
+        maskOp.getBody()->getTerminator()->getOperands());
     opsToErase.push_back(maskOp);
   });
   for (MaskOp op : opsToErase) {
@@ -116,9 +224,29 @@ static void removeAttributes(ModuleOp moduleOp) {
   });
 }
 
+/// Clone `op` and call `callback` on the cloned op's operands as well as any
+/// operands of nested ops that:
+/// 1) aren't defined within the new op or
+/// 2) are block arguments.
+static Operation *
+cloneAndUpdateOperands(RewriterBase &rewriter, Operation *op,
+                       function_ref<void(OpOperand *newOperand)> callback) {
+  Operation *clone = rewriter.clone(*op);
+  clone->walk<WalkOrder::PreOrder>([&](Operation *nested) {
+    // 'clone' itself will be visited first.
+    for (OpOperand &operand : nested->getOpOperands()) {
+      Operation *def = operand.get().getDefiningOp();
+      if ((def && !clone->isAncestor(def)) || isa<BlockArgument>(operand.get()))
+        callback(&operand);
+    }
+  });
+  return clone;
+}
+
 // This function peels the last 'numIterations' iterations from the given
 // scf::ForOp
 static void peelLastIterations(scf::ForOp forOp, unsigned numIterations) {
+  assert(numIterations == 1); // for now
   IRRewriter rewriter(forOp);
   auto loc = forOp.getLoc();
 
@@ -129,48 +257,68 @@ static void peelLastIterations(scf::ForOp forOp, unsigned numIterations) {
 
   // Compute new upper bound for the main loop: newUpperBound = upperBound -
   // (numIterations * step)
-  auto numConst = rewriter.create<arith::ConstantIndexOp>(loc, numIterations);
+  auto numConst = rewriter.create<arith::ConstantIntOp>(loc, numIterations,
+                                                        rewriter.getI32Type());
   Value peelOffset = rewriter.create<arith::MulIOp>(loc, numConst, step);
   Value newUpperBound =
       rewriter.create<arith::SubIOp>(loc, upperBound, peelOffset);
 
   forOp.getUpperBoundMutable().assign(newUpperBound);
+  rewriter.setInsertionPointAfter(forOp);
+  // If the original lower bound is less than the original upper bound, we will
+  // execute the loop body once (which we are going to peel)
+  auto lastIterPred = rewriter.create<arith::CmpIOp>(
+      loc, arith::CmpIPredicate::slt, lowerBound, upperBound);
 
-  // Create the main loop running from lowerBound to newUpperBound
-  auto mainFor = rewriter.create<scf::ForOp>(loc, lowerBound, newUpperBound,
-                                             step, forOp.getIterOperands());
+  // Last iter induction variable value
+  // translatedUB = UB - LB
+  // IV = (step - (translatedUB % step)) + UB
+  Value translatedUB =
+      rewriter.create<arith::SubIOp>(loc, newUpperBound, lowerBound);
+  Value _ugh = rewriter.create<arith::RemUIOp>(loc, translatedUB, step);
+  Value _ugh1 = rewriter.create<arith::SubIOp>(loc, step, _ugh);
+  Value lastIterInductionVar =
+      rewriter.create<arith::AddIOp>(loc, _ugh1, newUpperBound);
 
-  // Remap the original loop body into the main loop
-  Block &origBlock = forOp.getBody()->front();
-  Block &mainBlock = mainFor.getBody()->front();
   llvm::DenseMap<Value, Value> mapping;
-  for (unsigned i = 0, e = origBlock.getNumArguments(); i < e; ++i) {
-    mapping[origBlock.getArgument(i)] = mainBlock.getArgument(i);
-  }
-  for (Operation &op : origBlock.getOperations()) {
-    if (isa<scf::YieldOp>(op))
-      continue;
-    rewriter.clone(op, mapping);
+  for (auto [arg, operand] :
+       llvm::zip(forOp.getRegionIterArgs(), forOp.getResults())) {
+    mapping[arg] = operand;
   }
 
-  // Create the peeled loop for the last iterations: from newUpperBound to
-  // original upperBound
-  auto peeledFor = rewriter.create<scf::ForOp>(loc, newUpperBound, upperBound,
-                                               step, forOp.getIterOperands());
-  Block &peeledBlock = peeledFor.getBody()->front();
-  mapping.clear();
-  for (unsigned i = 0, e = origBlock.getNumArguments(); i < e; ++i) {
-    mapping[origBlock.getArgument(i)] = peeledBlock.getArgument(i);
-  }
-  for (Operation &op : origBlock.getOperations()) {
-    if (isa<scf::YieldOp>(op))
-      continue;
-    rewriter.clone(op, mapping);
+  mapping[forOp.getInductionVar()] = lastIterInductionVar;
+
+  SmallVector<Value> peeledResults = forOp.getResults();
+  Operation *lastOp = nullptr;
+  for (Operation &op : forOp.getBody()->without_terminator()) {
+    Operation *newOp =
+        cloneAndUpdateOperands(rewriter, &op, [&](OpOperand *newOperand) {
+          if (mapping.count(newOperand->get())) {
+            newOperand->set(mapping[newOperand->get()]);
+          }
+        });
+    newOp = predicateOp(rewriter, newOp, lastIterPred);
+    assert(newOp && "Failed to create masked operation");
+    lastOp = newOp;
+    for (auto [result, oldResult] :
+         llvm::zip(newOp->getResults(), op.getResults())) {
+      mapping[oldResult] = result;
+
+      for (OpOperand &yieldOperand :
+           forOp.getBody()->getTerminator()->getOpOperands()) {
+        if (yieldOperand.get() != oldResult) {
+          continue;
+        }
+        peeledResults[yieldOperand.getOperandNumber()] = result;
+      }
+    }
   }
 
-  // Replace the original loop with the peeled loop's results (adjust as needed
-  // if loop results must be merged)
-  rewriter.replaceOp(forOp, peeledFor.getResults());
+  DominanceInfo domInfo(forOp->getParentOfType<ModuleOp>());
+
+  forOp->replaceUsesWithIf(peeledResults, [&](OpOperand &operand) {
+    return domInfo.properlyDominates(lastOp, operand.getOwner());
+  });
 }
 
 struct PipelinePass : public impl::TritonGPUPipelineBase<PipelinePass> {
@@ -195,6 +343,12 @@ struct PipelinePass : public impl::TritonGPUPipelineBase<PipelinePass> {
       llvm::dbgs() << "// -----// SoftwarePipeliner internal IR Dump After: "
                       "ExpandLoops\n"
                    << moduleOp << "\n\n\n";
+    }
+
+    SmallVector<scf::ForOp> loops;
+    moduleOp->walk([&](scf::ForOp forOp) { loops.push_back(forOp); });
+    for (scf::ForOp forOp : loops) {
+      peelLastIterations(forOp, 1);
     }
 
     resolveMaskOp(moduleOp);

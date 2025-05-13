@@ -338,8 +338,7 @@ def TTG_PredicateStageOp: TTG_Op<"predicate_stage",
 }
 
 def TT_MaskOp: TTG_Op<"mask",
-                       [Pure,
-                        SingleBlock]> {
+                       [SingleBlock]> {
     let summary = "mask op for pipelining";
     let arguments = (ins I1:$pred);
     let results = (outs Variadic<AnyType>:$result);

@@ -1,8 +1,8 @@
 #include "triton/Dialect/TritonGPU/Transforms/PipeliningUtility.h"
-
 #include "mlir/Analysis/TopologicalSortUtils.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/Tensor/IR/Tensor.h"
+#include "mlir/Dialect/UB/IR/UBOps.h"
 #include "mlir/IR/ImplicitLocOpBuilder.h"
 #include "mlir/IR/TypeUtilities.h"
 #include "mlir/Interfaces/SideEffectInterfaces.h"
@@ -161,6 +161,22 @@ Operation *mlir::triton::predicateOp(RewriterBase &rewriter, Operation *op,
   OpBuilder::InsertionGuard guard(rewriter);
   if (mlir::isMemoryEffectFree(op))
     return op;
+  if (isConstantIntValue(pred, 1))
+    return op;
+  if (isConstantIntValue(pred, 0)) {
+    if (op->getNumResults() == 0) {
+      return nullptr;
+    }
+    SmallVector<Value> poisonOps;
+    for (auto result : op->getResults()) {
+      auto poisonOp =
+          rewriter.create<ub::PoisonOp>(op->getLoc(), result.getType());
+      result.replaceAllUsesWith(poisonOp);
+      poisonOps.push_back(poisonOp);
+    }
+    op->erase();
+    return nullptr; // TODO: bad programmer
+  }
   if (isa<LLVM::AssumeOp, ttng::FenceAsyncSharedOp>(op))
     return op;
   if (isa<ttg::AsyncCommitGroupOp, ttg::AsyncWaitOp>(op))
@@ -257,6 +273,13 @@ Operation *mlir::triton::predicateOp(RewriterBase &rewriter, Operation *op,
     Value mask = getPredMask(rewriter, atomicRMWOp.getPtr().getType(),
                              atomicRMWOp.getMask(), pred);
     atomicRMWOp.getMaskMutable().assign(mask);
+    return op;
+  }
+  if (auto maskOp = dyn_cast<ttg::MaskOp>(op)) {
+    rewriter.setInsertionPoint(maskOp);
+    Value mask = getPredMask(rewriter, maskOp.getPred().getType(),
+                             maskOp.getPred(), pred);
+    maskOp.getPredMutable().assign(mask);
     return op;
   }
   if (!op->isRegistered()) {
