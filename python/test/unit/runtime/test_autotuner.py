@@ -232,7 +232,7 @@ def test_override_ttgir(device):
     ir_src = r"""
 #blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:90", "ttg.threads-per-warp" = 32 : i32} {
-  tt.func public @_kernel(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32} loc("/data/users/daohang/triton/python/test/unit/runtime/test_autotuner.py":262:0), %arg1: !tt.ptr<f32> {tt.divisibility = 16 : i32} loc("/data/users/daohang/triton/python/test/unit/runtime/test_autotuner.py":262:0), %arg2: i32 {tt.divisibility = 16 : i32} loc("/data/users/daohang/triton/python/test/unit/runtime/test_autotuner.py":262:0)) attributes {noinline = false} {
+  tt.func public @_kernel(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg2: i32 {tt.divisibility = 16 : i32}) attributes {noinline = false} {
     %cst = arith.constant dense<1.000000e+01> : tensor<32xf32, #blocked>
     %c32_i32 = arith.constant 32 : i32
     %0 = tt.get_program_id x : i32
