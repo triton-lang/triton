@@ -205,6 +205,22 @@ tt.func @trivial_tensor_captures(%arg0: f16, %lb: i32, %ub: i32, %step: i32) {
   tt.return
 }
 
+// CHECK-LABEL: @tensor_captures_over_smem
+tt.func @tensor_captures_over_smem(%lb: i32, %ub: i32, %step: i32) {
+  // CHECK: [[VALUE:%.*]] = "value"()
+  %0 = "value"() : () -> tensor<32xf16, #blocked>
+  // CHECK: [[ALLOC:%.*]] = ttg.local_alloc [[VALUE]]
+  // CHECK: ttg.warp_specialize([[ALLOC]], %arg0, %arg1, %arg2)
+  scf.for %i = %lb to %ub step %step : i32 {
+    // CHECK: partition0(%arg3: !ttg.memdesc<{{.*}}>
+    // CHECK-NEXT: [[VALUE:%.*]] = ttg.local_load %arg3
+    // CHECK-NEXT: scf.for
+    // CHECK-NEXT: "use"([[VALUE]])
+    "use"(%0) {ttg.partition = 1} : (tensor<32xf16, #blocked>) -> ()
+  } {ttg.partition.stages = [0, 0]}
+  tt.return
+}
+
 // CHECK-LABEL: @dce_before_warp_allocation
 tt.func @dce_before_warp_allocation(%lb: i32, %ub: i32, %step: i32) {
   %cst = arith.constant dense<0> : tensor<128xi32, #blocked>
