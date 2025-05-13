@@ -380,13 +380,13 @@ Value mlir::triton::createBarrierAlloc(scf::ForOp forOp, int numBarriers,
   return barrierAlloc;
 }
 
-Value mlir::triton::createAlloc(Operation *scope, RankedTensorType ty,
+Value mlir::triton::createAlloc(Operation *insertBefore, RankedTensorType ty,
                                 Location loc,
                                 gpu::SharedEncodingTrait sharedEnc,
                                 unsigned distance) {
-  OpBuilder builder(scope);
+  OpBuilder builder(insertBefore);
   Attribute sharedMemorySpace =
-      ttg::SharedMemorySpaceAttr::get(scope->getContext());
+      ttg::SharedMemorySpaceAttr::get(insertBefore->getContext());
   SmallVector<int64_t> bufferShape(ty.getShape().begin(), ty.getShape().end());
   bufferShape.insert(bufferShape.begin(), distance);
   Type memdescType = ttg::MemDescType::get(bufferShape, ty.getElementType(),
@@ -394,8 +394,8 @@ Value mlir::triton::createAlloc(Operation *scope, RankedTensorType ty,
                                            /*mutableMemory=*/true);
   Value alloc = builder.create<ttg::LocalAllocOp>(loc, memdescType);
 
-  builder.setInsertionPointAfter(scope);
-  builder.create<ttg::LocalDeallocOp>(scope->getLoc(), alloc);
+  builder.setInsertionPointAfter(insertBefore);
+  builder.create<ttg::LocalDeallocOp>(insertBefore->getLoc(), alloc);
   return alloc;
 }
 
