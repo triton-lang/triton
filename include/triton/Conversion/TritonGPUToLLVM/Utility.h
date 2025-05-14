@@ -1,27 +1,18 @@
 #ifndef TRITON_CONVERSION_TRITONGPU_TO_LLVM_UTILITY_H
 #define TRITON_CONVERSION_TRITONGPU_TO_LLVM_UTILITY_H
 
-#include <set>
-
 #include "mlir/Conversion/LLVMCommon/Pattern.h"
-#include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
-#include "mlir/IR/ImplicitLocOpBuilder.h"
 #include "mlir/Interfaces/FunctionInterfaces.h"
-#include "triton/Analysis/Utility.h"
-#include "triton/Conversion/MLIRTypes.h"
 #include "triton/Conversion/TritonGPUToLLVM/TargetInfoBase.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/LinearLayoutConversions.h"
 #include "triton/Dialect/TritonGPU/IR/Types.h"
-#include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "triton/Tools/LinearLayout.h"
 #include "triton/Tools/StrUtil.h"
-#include "triton/Tools/Sys/GetEnv.hpp"
 #include "llvm/ADT/STLExtras.h"
-#include "llvm/Support/ErrorHandling.h"
 
 #define DEBUG_TYPE "ttgpu_to_llvm"
 #define DBGS() (llvm::dbgs() << "[" DEBUG_TYPE "]: ")
