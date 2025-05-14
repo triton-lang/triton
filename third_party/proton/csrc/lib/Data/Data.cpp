@@ -14,7 +14,7 @@ void Data::dump(const std::string &outputFormat) {
 
   OutputFormat outputFormatEnum = outputFormat.empty()
                                       ? getDefaultOutputFormat()
-                                        : parseOutputFormat(outputFormat);
+                                      : parseOutputFormat(outputFormat);
 
   std::unique_ptr<std::ostream> out;
   if (path.empty() || path == "-") {

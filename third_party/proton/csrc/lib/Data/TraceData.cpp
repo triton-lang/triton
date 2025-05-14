@@ -4,8 +4,8 @@
 
 #include <algorithm>
 #include <iostream>
-#include <stdexcept>
 #include <limits>
+#include <stdexcept>
 
 using json = nlohmann::json;
 
@@ -147,8 +147,8 @@ size_t TraceData::addOp(size_t scopeId, const std::string &name) {
     std::vector<Context> contexts;
     if (contextSource != nullptr)
       contexts = contextSource->getContexts();
-    // If name is empty, this is a placeholder event. Add an op under the current
-    // context
+    // If name is empty, this is a placeholder event. Add an op under the
+    // current context
     if (!name.empty())
       contexts.emplace_back(name);
     scopeIdToContextId[scopeId] = trace->addContext(contexts);
@@ -217,27 +217,24 @@ void TraceData::dumpChromeTrace(std::ostream &os) const {
           std::get<uint64_t>(kernelMetric->getValue(KernelMetric::StreamId));
       streamTraceEvents[streamId].push_back(event);
 
-      uint64_t startTime = std::get<uint64_t>(
-          kernelMetric->getValue(KernelMetric::StartTime));
+      uint64_t startTime =
+          std::get<uint64_t>(kernelMetric->getValue(KernelMetric::StartTime));
       minTimeStamp = std::min(minTimeStamp, startTime);
     }
   }
 
   // 3) for each streamId in ascending order, emit one JSON line
-  for (auto const& [streamId, events] : streamTraceEvents) {
-    json object = {
-      { "displayTimeUnit", "us" },
-      { "traceEvents", json::array() }
-    };
+  for (auto const &[streamId, events] : streamTraceEvents) {
+    json object = {{"displayTimeUnit", "us"}, {"traceEvents", json::array()}};
 
-    for (auto const& event : events) {
+    for (auto const &event : events) {
       auto kernelMetrics = std::dynamic_pointer_cast<KernelMetric>(
           event.metrics.at(MetricKind::Kernel));
       uint64_t startTimeNs =
           std::get<uint64_t>(kernelMetrics->getValue(KernelMetric::StartTime));
       uint64_t endTimeNs =
           std::get<uint64_t>(kernelMetrics->getValue(KernelMetric::EndTime));
-      uint64_t ts  = startTimeNs - minTimeStamp;
+      uint64_t ts = startTimeNs - minTimeStamp;
       uint64_t dur = endTimeNs - startTimeNs;
 
       auto contextId = event.contextId;
@@ -245,11 +242,11 @@ void TraceData::dumpChromeTrace(std::ostream &os) const {
 
       json element;
       element["name"] = contexts.back().name;
-      element["cat"]  = "kernel";
-      element["ph"]   = "X";
-      element["ts"]   = ts;
-      element["dur"]  = dur;
-      element["tid"]  = streamId;       // thread id = stream
+      element["cat"] = "kernel";
+      element["ph"] = "X";
+      element["ts"] = ts;
+      element["dur"] = dur;
+      element["tid"] = streamId; // thread id = stream
       json callStack = json::array();
       for (auto const &ctx : contexts) {
         callStack.push_back(ctx.name);
