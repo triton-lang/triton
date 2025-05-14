@@ -342,11 +342,10 @@ std::vector<ttng::WarpGroupDotOp> splitRSDot(ttng::WarpGroupDotOp dotOp) {
   for (int i = 0; i < numSplits; i++) {
     //  2**30 is to prevent the subtile from adding
     // extra imprecise accumulator, See WGMMA.cpp
-    uint32_t numImpreciseAcc = (numImpreciseAccLeft > newK)
-                                   ? 1073741824 // 2**30
-                                   : numImpreciseAccLeft;
-    // Deduct the actual consumed imprecise acc
-    numImpreciseAccLeft -= std::min(numImpreciseAccLeft, newK);
+    auto take = std::min(numImpreciseAccLeft, newK);
+    uint32_t numImpreciseAcc = (take == newK) ? (1u << 30) : take;
+    numImpreciseAccLeft -= take;
+
     auto dot = builder.create<ttng::WarpGroupDotOp>(
         loc, dotOp.getType(), lhss[i], rhss[i], C, useC,
         dotOp.getInputPrecision(), numImpreciseAcc, dotOp.getIsAsync());
