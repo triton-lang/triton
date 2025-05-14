@@ -45,4 +45,3 @@ tt.func @loop_buffer_phase_args(%arg0: i32) {
   }
   tt.return
 }
-
