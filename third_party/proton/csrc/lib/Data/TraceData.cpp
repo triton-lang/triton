@@ -102,20 +102,15 @@ public:
     nextEventId++;
   }
 
-  void updateEvent(size_t scopeId, size_t contextId) {
-    auto it = scopeIdEventIdMap.find(scopeId);
-    if (it == scopeIdEventIdMap.end()) {
-      throw std::runtime_error("Event not found");
-    }
-    traceEvents[it->second].contextId = contextId;
+  bool hasEvent(size_t scopeId) {
+    return scopeIdEventIdMap.find(scopeId) != scopeIdEventIdMap.end();
   }
 
   TraceEvent &getEvent(size_t scopeId) {
-    auto it = scopeIdEventIdMap.find(scopeId);
-    if (it == scopeIdEventIdMap.end()) {
+    if (!hasEvent(scopeId)) {
       throw std::runtime_error("Event not found");
     }
-    return traceEvents[it->second];
+    return traceEvents[scopeIdEventIdMap[scopeId]];
   }
 
   std::vector<TraceEvent> &getEvents() { return traceEvents; }
