@@ -1159,7 +1159,8 @@ https://docs.nvidia.com/cuda/parallel-thread-execution/index.html#data-movement-
 <h2><code class="docutils literal notranslate"><span class="pre">ttng.warp_group_dot</span></code> (triton::nvidia_gpu::WarpGroupDotOp)<a class="headerlink" href="#ttng-warp-group-dot-triton-nvidia-gpu-warpgroupdotop" title="Link to this heading">¶</a></h2>
 <p><em>Warp group dot</em></p>
 <p>Syntax:</p>
-<div class="highlight-default notranslate"><div class="highlight"><pre><span></span>operation ::= `ttng.warp_group_dot` $a`,` $b`,` $c (`,` $useC^)? attr-dict `:` type($a) `*` type($b) `-&gt;` type($d)
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span>operation ::= `ttng.warp_group_dot` $a`,` $b`,` $c (`,` $useC^)? attr-dict
+              `:` type($a) `*` type($b) `-&gt;` type($d)
 </pre></div>
 </div>
 <p>$d = matrix_multiply($a, $b) + $c. For docs on InputPrecisionAttr, see TT_DotOp</p>

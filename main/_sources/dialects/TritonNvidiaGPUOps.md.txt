@@ -751,7 +751,8 @@ _Warp group dot_
 Syntax:
 
 ```
-operation ::= `ttng.warp_group_dot` $a`,` $b`,` $c (`,` $useC^)? attr-dict `:` type($a) `*` type($b) `->` type($d)
+operation ::= `ttng.warp_group_dot` $a`,` $b`,` $c (`,` $useC^)? attr-dict
+              `:` type($a) `*` type($b) `->` type($d)
 ```
 
 $d = matrix_multiply($a, $b) + $c. For docs on InputPrecisionAttr, see TT_DotOp
