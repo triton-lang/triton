@@ -316,3 +316,29 @@ def test_multiple_sessions(tmp_path: pathlib.Path):
     scope0_count = int(data[0]["children"][0]["children"][0]["metrics"]["count"])
     scope1_count = int(data[0]["children"][1]["children"][0]["metrics"]["count"])
     assert scope0_count + scope1_count == 3
+
+
+def test_trace(tmp_path: pathlib.Path):
+    temp_file = tmp_path / "test_trace.chrome_trace"
+    proton.start(str(temp_file.with_suffix("")), data="trace")
+
+    @triton.jit
+    def foo(x, y, size: tl.constexpr):
+        offs = tl.arange(0, size)
+        tl.store(y + offs, tl.load(x + offs))
+
+    with proton.scope("init"):
+        x = torch.ones((1024, ), device="cuda", dtype=torch.float32)
+        y = torch.zeros_like(x)
+
+    with proton.scope("test"):
+        foo[(1, )](x, y, x.size()[0], num_warps=4)
+
+    proton.finalize()
+
+    with temp_file.open() as f:
+        data = json.load(f)
+        trace_events = data["traceEvents"]
+        assert len(trace_events) == 3
+        assert trace_events[-1]["name"] == "foo"
+        assert trace_events[-1]["args"]["call_stack"] == ["ROOT", "test", "foo"]
