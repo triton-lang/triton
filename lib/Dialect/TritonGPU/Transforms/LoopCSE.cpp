@@ -2,13 +2,10 @@
 #include "mlir/Pass/Pass.h"
 #include "mlir/Pass/PassManager.h"
 #include "mlir/Transforms/Passes.h"
-#include "triton/Dialect/TritonGPU/Transforms/PipeliningUtility.h"
 #include "llvm/ADT/EquivalenceClasses.h"
 #include "llvm/ADT/SetOperations.h"
 
 using namespace mlir;
-using namespace triton;
-using namespace triton::gpu;
 
 namespace mlir::triton::gpu {
 #define GEN_PASS_DEF_TRITONGPULOOPCSE
