@@ -1,9 +1,12 @@
 #include "Data/TraceData.h"
 #include "Utility/Errors.h"
+#include "nlohmann/json.hpp"
 
 #include <algorithm>
 #include <iostream>
 #include <stdexcept>
+
+using json = nlohmann::json;
 
 namespace proton {
 
@@ -194,7 +197,6 @@ void TraceData::dumpChromeTrace(std::ostream &os) const {
   auto events = trace->getEvents();
   // stream id -> trace event
   std::map<size_t, std::vector<Trace::TraceEvent>> streamTraceEvents;
-  // FIXME: This is just for debugging
   for (auto &event : events) {
     if (event.metrics.count(MetricKind::Kernel)) {
       std::shared_ptr<KernelMetric> kernelMetric =
@@ -205,25 +207,66 @@ void TraceData::dumpChromeTrace(std::ostream &os) const {
       streamTraceEvents[streamId].push_back(event);
     }
   }
-  for (auto &[streamId, events] : streamTraceEvents) {
-    std::cout << "streamId: " << streamId << std::endl;
-    for (auto &event : events) {
+  // FIXME: This is just for debugging
+  //for (auto &[streamId, events] : streamTraceEvents) {
+  //  std::cout << "streamId: " << streamId << std::endl;
+  //  for (auto &event : events) {
+  //    auto contextId = event.contextId;
+  //    auto contexts = trace->getContexts(contextId);
+  //    std::cout << "context: " << std::endl;
+  //    for (const auto &context : contexts) {
+  //      std::cout << "  " << context.name << std::endl;
+  //    }
+  //    std::cout << "-------------------------" << std::endl;
+  //    std::shared_ptr<KernelMetric> kernelMetric =
+  //        std::dynamic_pointer_cast<KernelMetric>(
+  //            event.metrics.at(MetricKind::Kernel));
+  //    auto startTime =
+  //        std::get<uint64_t>(kernelMetric->getValue(KernelMetric::StartTime));
+  //    auto endTime =
+  //        std::get<uint64_t>(kernelMetric->getValue(KernelMetric::EndTime));
+  //    std::cout << "start: " << startTime << ", end: " << endTime << std::endl;
+  //  }
+  //}
+
+  // 3) for each streamId in ascending order, emit one JSON line
+  for (auto const& [streamId, events] : streamTraceEvents) {
+    json object = {
+      { "displayTimeUnit", "ns" },
+      { "traceEvents", json::array() }
+    };
+
+    for (auto const& event : events) {
+      auto kernelMetrics = std::dynamic_pointer_cast<KernelMetric>(
+          event.metrics.at(MetricKind::Kernel));
+      uint64_t ts =
+          std::get<uint64_t>(kernelMetrics->getValue(KernelMetric::StartTime));
+      uint64_t te =
+          std::get<uint64_t>(kernelMetrics->getValue(KernelMetric::EndTime));
+      uint64_t dur = te - ts;
+
       auto contextId = event.contextId;
       auto contexts = trace->getContexts(contextId);
-      std::cout << "context: " << std::endl;
-      for (const auto &context : contexts) {
-        std::cout << "  " << context.name << std::endl;
+
+      json element;
+      element["name"] = contexts.back().name;
+      element["cat"]  = "kernel";
+      element["ph"]   = "X";
+      element["ts"]   = ts;
+      element["dur"]  = dur;
+      element["pid"]  = contextId;   // use contextId as process id
+      element["tid"]  = streamId;       // thread id = stream
+      json callStack = json::array();
+      for (auto const &ctx : contexts) {
+        callStack.push_back(ctx.name);
       }
-      std::cout << "-------------------------" << std::endl;
-      std::shared_ptr<KernelMetric> kernelMetric =
-          std::dynamic_pointer_cast<KernelMetric>(
-              event.metrics.at(MetricKind::Kernel));
-      auto startTime =
-          std::get<uint64_t>(kernelMetric->getValue(KernelMetric::StartTime));
-      auto endTime =
-          std::get<uint64_t>(kernelMetric->getValue(KernelMetric::EndTime));
-      std::cout << "start: " << startTime << ", end: " << endTime << std::endl;
+      element["args"]["call_stack"] = std::move(callStack);
+
+      object["traceEvents"].push_back(element);
     }
+
+    // one JSON object per line
+    os << object.dump() << "\n";
   }
 }
 
