@@ -99,6 +99,14 @@ bool LoopCSEDriver::areEqualInLoop(Value a, Value b) {
 
   Operation *aDef = a.getDefiningOp();
   Operation *bDef = b.getDefiningOp();
+  // For it to be known that the operation results have the same value, they
+  // must be side effect free.
+  if (!isMemoryEffectFree(aDef) || !isMemoryEffectFree(bDef))
+    return false;
+  // Don't bother with operations with regions.
+  if (aDef->getNumRegions() || bDef->getNumRegions())
+    return false;
+
   bool result = OperationEquivalence::isEquivalentTo(
       aDef, bDef,
       [&](Value a, Value b) { return success(areEqualInLoop(a, b)); },
