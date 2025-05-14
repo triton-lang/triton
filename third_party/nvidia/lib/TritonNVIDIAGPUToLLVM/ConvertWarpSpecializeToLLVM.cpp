@@ -252,6 +252,13 @@ static void rewritePartitionRegions(WarpSpecializeOp ws, Block *switchLoop,
     // Load the explicit captures from shared memory and replace the block args
     // if there are any.
     b.setInsertionPointToStart(&partition->front());
+
+    if (auto actRegs = ws.getActualRegisters()) {
+      createRegRealloc(b, 24, (*actRegs)[partition->getRegionNumber() + 1]);
+      // createEntryRegRealloc(b, ws,
+      //                       (*actRegs)[partition->getRegionNumber() + 1]);
+    }
+
     if (partition->getNumArguments()) {
       auto captureType = LLVM::LLVMStructType::getLiteral(
           b.getContext(), llvm::to_vector(partition->getArgumentTypes()),
@@ -275,11 +282,6 @@ static void rewritePartitionRegions(WarpSpecializeOp ws, Block *switchLoop,
     // another barrier here.
     createBarrier(b, kSwitchLoopBarrierIdx, /*numThreads=*/std::nullopt,
                   /*aligned=*/false);
-    if (auto actRegs = ws.getActualRegisters()) {
-      createRegRealloc(b, 24, (*actRegs)[partition->getRegionNumber() + 1]);
-      // createEntryRegRealloc(b, ws,
-      //                       (*actRegs)[partition->getRegionNumber() + 1]);
-    }
 
     // Rewrite all warp returns.
     partition->walk([&](WarpReturnOp op) {
@@ -313,7 +315,7 @@ static LogicalResult lowerWarpSpecialize(LLVM::LLVMFuncOp func,
 
   // Attempt to elide captures of trivial computations by hoisting them into the
   // header or rematerializing them into each partition.
-  //elideTrivialCaptures(func, wsOps);
+  // elideTrivialCaptures(func, wsOps);
 
   MLIRContext *ctx = func.getContext();
   TritonLLVMIRRewriter b(func.getLoc(), ctx);
@@ -465,10 +467,10 @@ static LogicalResult lowerWarpSpecialize(LLVM::LLVMFuncOp func,
     // they have read the captures before the memory is released upon entry.
     createBarrier(b, kSwitchLoopBarrierIdx, /*numThreads=*/std::nullopt,
                   /*aligned=*/false);
-    createBarrier(b, kSwitchLoopBarrierIdx, /*numThreads=*/std::nullopt,
-                  /*aligned=*/false);
     if (auto actRegs = ws.getActualRegisters())
       createRegRealloc(b, 256, actRegs->front());
+    createBarrier(b, kSwitchLoopBarrierIdx, /*numThreads=*/std::nullopt,
+                  /*aligned=*/false);
     b.create<LLVM::BrOp>(&ws.getDefaultRegion().front());
 
     ws.getDefaultRegion().walk([&, ws = ws](WarpYieldOp op) mutable {
