@@ -84,7 +84,7 @@ public:
     if (it == traceContextMap.end()) {
       throw std::runtime_error("Context not found");
     }
-    auto &context = it->second;
+    auto context = it->second;
     contexts.push_back(context);
     while (context.parentId != TraceContext::DummyId) {
       context = traceContextMap[context.parentId];
