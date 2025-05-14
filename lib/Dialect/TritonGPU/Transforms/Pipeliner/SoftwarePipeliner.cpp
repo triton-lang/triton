@@ -148,6 +148,18 @@ class IntLTItselfMinusXPattern : public OpRewritePattern<arith::CmpIOp> {
   }
 };
 
+struct HackRemoveMaskOutsideOfLoopPattern : public OpRewritePattern<MaskOp> {
+  using OpRewritePattern::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(MaskOp maskOp,
+                                PatternRewriter &rewriter) const override {
+    if (maskOp->getParentOfType<scf::ForOp>()) {
+      return failure();
+    }
+    rewriter.eraseOp(maskOp);
+    return success();
+  }
+};
 static void resolveMaskOp(ModuleOp moduleOp) {
   DominanceInfo domInfo(moduleOp);
   IRRewriter rewriter(moduleOp);
@@ -291,6 +303,10 @@ static void peelLastIterations(scf::ForOp forOp, unsigned numIterations) {
   SmallVector<Value> peeledResults = forOp.getResults();
   Operation *lastOp = nullptr;
   for (Operation &op : forOp.getBody()->without_terminator()) {
+    // TODO HACK: skip masked operations
+    if (isa<MaskOp>(op)) {
+      continue;
+    }
     Operation *newOp =
         cloneAndUpdateOperands(rewriter, &op, [&](OpOperand *newOperand) {
           if (mapping.count(newOperand->get())) {
@@ -321,6 +337,17 @@ static void peelLastIterations(scf::ForOp forOp, unsigned numIterations) {
   });
 }
 
+static bool onlyWaitsAreUnmasked(scf::ForOp forOp) {
+  for (auto &op : forOp.getBody()->without_terminator()) {
+    if (isa<triton::nvidia_gpu::AsyncTMACopyGlobalToLocalOp,
+            triton::nvidia_gpu::AsyncTMAGatherOp,
+            triton::gpu::AsyncCopyGlobalToLocalOp>(op)) {
+      return false;
+    }
+  }
+  return true;
+}
+
 struct PipelinePass : public impl::TritonGPUPipelineBase<PipelinePass> {
 
   using impl::TritonGPUPipelineBase<PipelinePass>::TritonGPUPipelineBase;
@@ -348,7 +375,11 @@ struct PipelinePass : public impl::TritonGPUPipelineBase<PipelinePass> {
     SmallVector<scf::ForOp> loops;
     moduleOp->walk([&](scf::ForOp forOp) { loops.push_back(forOp); });
     for (scf::ForOp forOp : loops) {
-      peelLastIterations(forOp, 1);
+      auto funcName =
+          forOp.getOperation()->getParentOfType<triton::FuncOp>().getName();
+      if (funcName.starts_with("_attention_backward")) {
+        peelLastIterations(forOp, 1);
+      }
     }
 
     resolveMaskOp(moduleOp);
