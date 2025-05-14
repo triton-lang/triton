@@ -43,12 +43,10 @@ MemDescOperand mlir::triton::NVIDIA::DotOpMmaV5TmemLoader::tmemLoad(
   int offset;
   if (!interleaved) {
     offset = numColPerBlock * blockId;
-    // address = tb.add(address, tb.i32_val(numColPerBlock * blockId));
   } else {
     int blockIdIsOdd = blockId & 1;
     int blockIdPrevEven = blockId - blockIdIsOdd;
     offset = numColPerBlock * blockIdPrevEven + ((16 * blockIdIsOdd) << 16);
-    // address = tb.add(address, offset);
   }
 
   auto tb = TritonLLVMOpBuilder(loc, rewriter);
