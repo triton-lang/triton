@@ -703,7 +703,12 @@ void triton::asyncLaunchDots(scf::ForOp forOp) {
   // Split RS dots into dots with K = 16 (the instruction size of MMAv3)
   // If we split them in nSplit dots, we will be able to keep nSplit-1 dots
   // in flight at a time.
-  properlyAsyncDots = splitRSDots(properlyAsyncDots);
+  // We just do it if there is no wait 0 in the loop, as otherwise the split
+  // just creates unnecessary commits and arrives.
+  if (llvm::all_of(forOp.getBody()->getOps<ttng::WarpGroupDotWaitOp>(),
+                   [](auto wait) { return wait.getPendings() != 0; })) {
+    properlyAsyncDots = splitRSDots(properlyAsyncDots);
+  }
 
   // Next, insert a wait inside the loop.  We pipeline to depth 2, so the third
   // iteration's set of asynchronous dots (and their corresponding async copies
