@@ -278,6 +278,7 @@ private:
   auto createInPartition(Partition &partition, Args &&...args) {
     auto op = b.create<OpT>(std::forward<Args>(args)...);
     partition.insert(op);
+    op->setAttr(kPartitionAttrName, b.getI32IntegerAttr(partition.getIndex()));
     return op;
   }
 
@@ -567,6 +568,6 @@ void RewritePartitionDependencies::runOnOperation() {
 
   for (scf::ForOp loop : loops) {
     if (failed(rewritePartitionDependencies(loop)))
-      continue;
+      return signalPassFailure();
   }
 }

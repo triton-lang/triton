@@ -45,6 +45,7 @@ public:
     ArrayRef<Operation *> getOps() const { return ops; }
 
     void insert(Operation *op) { ops.push_back(op); }
+    void remove(Operation *op) { ops.erase(llvm::find(ops, op)); }
 
   private:
     void setIndex(int idx) { this->idx = idx; }
@@ -60,8 +61,8 @@ public:
 
   // Create a new partition with a stage.
   Partition *addPartition(unsigned stage);
-  // Give each partition a new index and order. The indices must be unique.
-  void reorderPartitions(ArrayRef<unsigned> order);
+  // Update the op to partition mapping.
+  void updatePartitions();
 
   // Get the partition the op belongs to.
   Partition *getPartition(Operation *op);
@@ -71,14 +72,24 @@ public:
   Partition *getPartition(unsigned idx);
   // Get the partition at the index.
   const Partition *getPartition(unsigned idx) const;
+  // Insert an operation into a partition.
+  void insert(Partition *partition, Operation *op);
   // Return an iterator range over the partitions.
   auto getPartitions() { return llvm::make_pointee_range(partitions); }
   // Return an iterator range over the partitions.
   auto getPartitions() const { return llvm::make_pointee_range(partitions); }
+  // Get the number of partitions.
+  unsigned getNumPartitions() const { return partitions.size(); }
   // Get the root partition.
   Partition *getRootPartition() { return rootPartition.get(); }
   // Get the root partition.
   const Partition *getRootPartition() const { return rootPartition.get(); }
+
+  // Return true if an operation is assigned to a partition.
+  bool isScheduled(Operation *op) const;
+  // Schedule an operation to a partition if it is not already scheduled. Return
+  // true if the operation was scheduled.
+  bool trySchedule(Partition *partition, Operation *op);
 
   // Deserialize a warp schedule from an `scf.for` op using the attributes
   // tagged on operations in its body.
@@ -114,6 +125,9 @@ public:
   void iterateUses(
       scf::ForOp loop, const Partition *partition,
       function_ref<void(OpResult, OpOperand &, unsigned)> callback) const;
+
+  // Debug dump the schedule.
+  LLVM_DUMP_METHOD void dump() const;
 
 private:
   // Partitions are numbered [0, N).

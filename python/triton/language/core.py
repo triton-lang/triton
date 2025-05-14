@@ -7,6 +7,7 @@ from functools import partial, wraps
 import typing
 from typing import Union, Callable, List, Sequence, TypeVar, Optional, Tuple
 import builtins
+from .. import knobs
 from ..runtime.jit import jit
 import inspect
 import os
@@ -20,6 +21,14 @@ T = TypeVar('T')
 TRITON_BUILTIN = "__triton_builtin__"
 
 PropagateNan = ir.PROPAGATE_NAN
+
+
+def must_use_result(x, s=True):
+    """If the result of this function is unused, throw an error."""
+    if isinstance(x, str):
+        return (lambda fn: must_use_result(fn, x))
+    x._must_use_result = s
+    return x
 
 
 def builtin(fn: T) -> T:
@@ -1067,10 +1076,11 @@ class tensor(base_value):
             slices = slices.values
         ret = self
         for dim, sl in enumerate(slices):
-            if sl is None or isinstance(sl, constexpr) and sl.value is None:
+            if _unwrap_if_constexpr(sl) is None:
                 ret = semantic.expand_dims(ret, dim, _builder)
-            elif isinstance(sl, (builtins.slice, slice)) and sl.start is None and sl.stop is None and sl.step is None:
-                pass
+            elif isinstance(sl, (builtins.slice, slice)) and all(
+                    _unwrap_if_constexpr(arg) is None for arg in (sl.start, sl.stop, sl.step)):
+                pass  # an unsqueeze
             else:
                 raise ValueError(f"unsupported tensor index: {sl}")
         return ret
@@ -1708,6 +1718,22 @@ def _take_first(a, b):
     return a
 
 
+def _unsplat(x, _builder=None, _generator=None):
+    """
+    Convert a single-element tensor to a scalar.
+    """
+    if len(x.shape) == 0:
+        return x
+    numel = 1
+    for d in x.shape:
+        numel *= d
+    assert numel == 1, "can only unsplat single-element tensors"
+    if len(x.shape) >= 2:
+        x = semantic.reshape(x, [1], builder=_builder)
+    x = typing.cast(tensor, reduce(x, 0, _take_first, _builder=_builder, _generator=_generator))
+    return x
+
+
 @_tensor_member_fn
 @builtin
 def split(a, _builder=None, _generator=None) -> tuple[tensor, tensor]:
@@ -1737,8 +1763,8 @@ def split(a, _builder=None, _generator=None) -> tuple[tensor, tensor]:
 
     if was_rank_1:
         # Currently `reduce` is the best way to convert a tensor of shape [1] to a scalar.
-        out_lhs = typing.cast(tensor, reduce(out_lhs, None, _take_first, _builder=_builder, _generator=_generator))
-        out_rhs = typing.cast(tensor, reduce(out_rhs, None, _take_first, _builder=_builder, _generator=_generator))
+        out_lhs = _unsplat(out_lhs, _builder, _generator)
+        out_rhs = _unsplat(out_rhs, _builder, _generator)
 
     return out_lhs, out_rhs
 
@@ -1767,7 +1793,7 @@ def view(input, *shape, _builder=None):
 
 @_tensor_member_fn
 @builtin
-def reshape(input, *shape, can_reorder=False, _builder=None):
+def reshape(input, *shape, can_reorder=False, _builder=None, _generator=None):
     """
     Returns a tensor with the same number of elements as input but with the
     provided shape.
@@ -1783,6 +1809,8 @@ def reshape(input, *shape, can_reorder=False, _builder=None):
         reshape(x, 32, 32)
     """
     shape = _shape_check_impl(_unwrap_iterable(shape))
+    if len(shape) == 0:
+        return _unsplat(input, _builder=_builder, _generator=_generator)
     return semantic.reshape(input, shape, can_reorder, _builder)
 
 
@@ -1883,8 +1911,8 @@ def dot(input, other, acc=None, input_precision=None, allow_tf32=None, max_num_i
     assert input_precision is None or allow_tf32 is None, "Only one of input_precision and allow_tf32 can be specified"
     if input_precision is None:
         supports_tf32 = _builder and "tf32" in _builder.options.allowed_dot_input_precisions
-        default_precision = "tf32" if (supports_tf32 and (allow_tf32 or allow_tf32 is None)) else "ieee"
-        input_precision = os.getenv("TRITON_F32_DEFAULT", default_precision)
+        input_precision = knobs.language.fp32_default or ("tf32" if (supports_tf32 and
+                                                                     (allow_tf32 or allow_tf32 is None)) else "ieee")
 
     input_precision = _constexpr_to_value(input_precision)
     out_dtype = _constexpr_to_value(out_dtype)
@@ -2078,6 +2106,9 @@ def make_block_ptr(base: tensor, shape, strides, offsets, block_shape, order, _b
     return semantic.make_block_ptr(base, shape, strides, offsets, block_shape, order, _builder)
 
 
+@must_use_result(
+    "Note that tl.advance does not have any side effects. To move the block pointer, you need to assign the result of tl.advance to a variable."
+)
 @_tensor_member_fn
 @builtin
 def advance(base, offsets, _builder=None):

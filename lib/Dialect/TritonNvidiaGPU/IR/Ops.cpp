@@ -34,7 +34,7 @@ namespace triton {
 namespace nvidia_gpu {
 
 // -- WarpGroupDotOp --
-mlir::LogicalResult WarpGroupDotOp::inferReturnTypes(
+LogicalResult WarpGroupDotOp::inferReturnTypes(
     MLIRContext *context, std::optional<Location> location, ValueRange operands,
     DictionaryAttr attributes, OpaqueProperties properties, RegionRange regions,
     SmallVectorImpl<Type> &inferredReturnTypes) {
@@ -43,21 +43,27 @@ mlir::LogicalResult WarpGroupDotOp::inferReturnTypes(
   inferredReturnTypes.push_back(accTy);
 
   // verify encodings
-  auto aEnc =
-      cast<triton::gpu::TensorOrMemDesc>(operands[0].getType()).getEncoding();
-  auto bEnc =
-      cast<triton::gpu::TensorOrMemDesc>(operands[1].getType()).getEncoding();
+  auto aEnc = cast<TensorOrMemDesc>(operands[0].getType()).getEncoding();
+  auto bEnc = cast<TensorOrMemDesc>(operands[1].getType()).getEncoding();
   auto retEnc = accTy.getEncoding();
   if (aEnc) {
     assert(bEnc);
     Dialect &dialect = aEnc.getDialect();
     auto interface = cast<DialectInferLayoutInterface>(&dialect);
     if (interface->inferDotOpEncoding(aEnc, 0, retEnc, location).failed())
-      return mlir::failure();
+      return failure();
     if (interface->inferDotOpEncoding(bEnc, 1, retEnc, location).failed())
-      return mlir::failure();
+      return failure();
   }
-  return mlir::success();
+  return success();
+}
+
+LogicalResult WarpGroupDotOp::verify() {
+  auto nvmmaEnc =
+      dyn_cast<NvidiaMmaEncodingAttr>(getD().getType().getEncoding());
+  if (!nvmmaEnc || !nvmmaEnc.isHopper())
+    return emitOpError("WGMMA result layout must be Hopper NVMMA");
+  return success();
 }
 
 void WarpGroupDotOp::getEffects(
@@ -212,6 +218,29 @@ static void printBarriersAndPreds(OpAsmPrinter &p, Operation *op,
   }
 }
 
+// token := `[` (ssa-value (`,` ssa-value)*)? `]`
+// dep-operand := token?
+static ParseResult
+parseToken(OpAsmParser &p, std::optional<OpAsmParser::UnresolvedOperand> &dep,
+           Type &token) {
+  if (failed(p.parseOptionalLSquare()))
+    return success();
+  token = p.getBuilder().getType<AsyncTokenType>();
+  if (succeeded(p.parseOptionalRSquare()))
+    return success();
+  if (p.parseOperand(dep.emplace()) || p.parseRSquare())
+    return failure();
+  return success();
+}
+static void printToken(OpAsmPrinter &p, Operation *op, Value dep, Type token) {
+  if (!token)
+    return;
+  p << '[';
+  if (dep)
+    p << dep;
+  p << ']';
+}
+
 void TCGen5MMAOp::getEffects(
     SmallVectorImpl<SideEffects::EffectInstance<MemoryEffects::Effect>>
         &effects) {
@@ -255,12 +284,12 @@ Value TCGen5MMAOp::getPredicate() { return getPred(); }
 
 void TCGen5MMAOp::setPredicate(Value pred) { getPredMutable().assign(pred); }
 
-void TCGen5MMAOp::build(OpBuilder &builder, OperationState &state, Value a,
-                        Value b, Value d, Value useD, Value pred,
-                        bool useTwoCTAs, ValueRange barriers,
+void TCGen5MMAOp::build(OpBuilder &builder, OperationState &state, Type token,
+                        Value a, Value b, Value d, Value accDep, Value useD,
+                        Value pred, bool useTwoCTAs, ValueRange barriers,
                         ValueRange barrierPreds) {
-  build(builder, state, a, b, d, useD, pred, barriers, barrierPreds,
-        useTwoCTAs ? builder.getUnitAttr() : UnitAttr());
+  build(builder, state, token, a, b, d, accDep, useD, pred, barriers,
+        barrierPreds, useTwoCTAs ? builder.getUnitAttr() : UnitAttr());
 }
 
 // -- TCGen5MMAScaledOp --
@@ -279,6 +308,10 @@ void TCGen5MMAScaledOp::getEffects(
   }
   effects.emplace_back(MemoryEffects::Read::get(), &getBMutable(),
                        SharedMemory::get());
+  effects.emplace_back(MemoryEffects::Read::get(), &getAScaleMutable(),
+                       TensorMemory::get());
+  effects.emplace_back(MemoryEffects::Read::get(), &getBScaleMutable(),
+                       TensorMemory::get());
 }
 
 bool TCGen5MMAScaledOp::verifyDims() {
@@ -397,12 +430,13 @@ int64_t TCGen5MMAScaledOp::getBlockK() {
 }
 
 void TCGen5MMAScaledOp::build(OpBuilder &builder, OperationState &state,
-                              Value a, Value b, Value d, Value aScale,
-                              Value bScale, ScaleDotElemType aType,
-                              ScaleDotElemType bType, Value useD, Value pred,
-                              ValueRange barriers, ValueRange barrierPreds) {
+                              Type token, Value a, Value b, Value d,
+                              Value accDep, Value aScale, Value bScale,
+                              ScaleDotElemType aType, ScaleDotElemType bType,
+                              Value useD, Value pred, ValueRange barriers,
+                              ValueRange barrierPreds) {
   MLIRContext *ctx = builder.getContext();
-  build(builder, state, a, b, d, aScale, bScale,
+  build(builder, state, token, a, b, d, accDep, aScale, bScale,
         ScaleDotElemTypeAttr::get(ctx, aType),
         ScaleDotElemTypeAttr::get(ctx, bType), useD, pred, barriers,
         barrierPreds);
@@ -435,17 +469,13 @@ LogicalResult TMEMLoadOp::verify() {
 
 // -- TMEMAllocOp --
 LogicalResult TMEMAllocOp::verify() {
-  if (!isa<triton::nvidia_gpu::TensorMemorySpaceAttr>(
-          getType().getMemorySpace()))
-    return emitOpError("should create a buffer of tensor memory.");
-  if (!isa<triton::nvidia_gpu::TensorMemoryEncodingAttr,
-           TensorMemoryScalesEncodingAttr>(getType().getEncoding()))
-    return emitOpError("should use tensor memory encoding.");
-  if (!getSrc()) {
-    if (!getType().getMutableMemory())
-      return emitError("uninitialized alloc must have a mutable memdesc type");
-  }
-  return success();
+  if (!isa<TensorMemorySpaceAttr>(getType().getMemorySpace()))
+    return emitOpError("should create a buffer of tensor memory");
+  if (!isa<TensorMemoryEncodingAttr, TensorMemoryScalesEncodingAttr>(
+          getType().getEncoding()))
+    return emitOpError("should use tensor memory encoding");
+
+  return LocalAllocOp::verifyAllocOp(*this, getSrc(), getType());
 }
 
 void TMEMAllocOp::getEffects(
@@ -483,10 +513,10 @@ LogicalResult TMEMCopyOp::verify() {
 
   auto srcTy = cast<triton::gpu::MemDescType>(getSrc().getType());
   auto sharedEnc =
-      cast<triton::gpu::SwizzledSharedEncodingAttr>(srcTy.getEncoding());
+      cast<triton::gpu::NVMMASharedEncodingAttr>(srcTy.getEncoding());
 
-  if (sharedEnc.getMaxPhase() != 1 || sharedEnc.getPerPhase() != 1 ||
-      sharedEnc.getVec() != 1)
+  if (!sharedEnc || sharedEnc.getTransposed() || sharedEnc.getFp4Padded() ||
+      sharedEnc.getSwizzlingByteWidth() != 0)
     return emitOpError("The source should not have swizzling applied for now");
 
   if (!triton::gpu::isInnermostContiguous(srcTy, 512)) {

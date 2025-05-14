@@ -7,6 +7,7 @@
 #include "mlir/IR/TypeUtilities.h"
 #include "mlir/Interfaces/SideEffectInterfaces.h"
 #include "mlir/Support/LLVM.h"
+#include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
@@ -92,6 +93,51 @@ void triton::hoistOpsBefore(Block *block, Block::iterator it,
 }
 
 //===----------------------------------------------------------------------===//
+// Sinking Utilities
+//===----------------------------------------------------------------------===//
+
+Value triton::sinkValueRedefinition(RewriterBase &rewriter, Value in, Value out,
+                                    Block *block) {
+  OpBuilder::InsertionGuard guard(rewriter);
+  for (; block != in.getParentBlock();
+       block = block->getParentOp()->getBlock()) {
+    Operation *op = block->getParentOp();
+    rewriter.setInsertionPoint(op);
+
+    // `in` is live into the loop body. `out` becomes the live-out if the
+    // loop executes at least once.
+    if (auto forOp = dyn_cast<scf::ForOp>(op)) {
+      (void)addIterArgsToLoop(rewriter, forOp, in);
+      appendToForOpYield(forOp, out);
+      out = forOp.getResults().back();
+      continue;
+    }
+
+    // `in` is live into both branches. `out` becomes the live-out if the
+    // particular branch is taken.
+    if (auto ifOp = dyn_cast<scf::IfOp>(op)) {
+      scf::IfOp newIfOp =
+          replaceIfOpWithNewSignature(rewriter, ifOp, out.getType());
+      scf::YieldOp taken = newIfOp.thenYield();
+      scf::YieldOp other = newIfOp.elseYield();
+      if (block == newIfOp.elseBlock())
+        std::swap(taken, other);
+      taken->insertOperands(taken.getNumOperands(), out);
+      other->insertOperands(other.getNumOperands(), in);
+      out = newIfOp.getResults().back();
+      rewriter.eraseOp(ifOp);
+      continue;
+    }
+
+    // TODO: Handle `scf.while`, etc.
+    llvm::report_fatal_error("FIXME: sinking into unhandled control flow op: " +
+                             op->getName().getStringRef());
+  }
+
+  return out;
+}
+
+//===----------------------------------------------------------------------===//
 // Loop Pipelining Utilities
 //===----------------------------------------------------------------------===//
 
@@ -107,21 +153,6 @@ bool mlir::triton::isOuterLoop(scf::ForOp forOp) {
   return llvm::any_of(forOp.getBody()->getOperations(), [](Operation &op) {
     return isa<scf::ForOp, scf::WhileOp>(op);
   });
-}
-
-// Combine the current mask with the given predicate.
-Value mlir::triton::getPredMask(RewriterBase &rewriter, Type typeLike,
-                                Value currentMask, Value pred) {
-  Type maskType = tt::getI1SameShape(typeLike);
-  Location loc = pred.getLoc();
-  Value mask = pred;
-  if (isa<RankedTensorType>(maskType)) {
-    mask = rewriter.create<tt::SplatOp>(loc, maskType, pred);
-  }
-  if (currentMask) {
-    mask = rewriter.create<arith::AndIOp>(loc, mask, currentMask);
-  }
-  return mask;
 }
 
 // Function to mask operations during scheduling.
@@ -228,6 +259,10 @@ Operation *mlir::triton::predicateOp(RewriterBase &rewriter, Operation *op,
     atomicRMWOp.getMaskMutable().assign(mask);
     return op;
   }
+  if (!op->isRegistered()) {
+    // Skip ops from unregistered dialects to make writing lit tests easier.
+    return op;
+  }
 
   op->emitError("pipeliner doesn't know how to predicate this op.");
   llvm::report_fatal_error("Fatal pipeliner error");
@@ -243,6 +278,7 @@ bool mlir::triton::getDisallowAccMultiBuffer(scf::ForOp forOp) {
 std::pair<OpResult, int64_t>
 mlir::triton::getDefinitionAndDistance(scf::ForOp forOp, Value value) {
   int64_t distance = 0;
+  DenseSet<Value> seen;
   while (auto arg = dyn_cast<BlockArgument>(value)) {
     // Ignore implicit captures.
     if (arg.getOwner() != forOp.getBody())
@@ -252,6 +288,8 @@ mlir::triton::getDefinitionAndDistance(scf::ForOp forOp, Value value) {
       return {nullptr, 0};
     ++distance;
     value = forOp.getYieldedValues()[arg.getArgNumber() - 1];
+    if (!seen.insert(value).second)
+      return {nullptr, 0};
   }
   return {cast<OpResult>(value), distance};
 }
@@ -282,13 +320,22 @@ void mlir::triton::serializeLatencies(ModuleOp module,
   }
 }
 
+void mlir::triton::serializeSelfLatencies(
+    ModuleOp module, DenseMap<Operation *, int> &opSelfLatency) {
+  auto helper = TritonDialect::getLoaded(module)->getSelfLatencyAttrHelper();
+  auto builder = Builder(module);
+  for (auto &[op, latency] : opSelfLatency) {
+    helper.setAttr(op, builder.getI32IntegerAttr(latency));
+  }
+}
+
 DenseMap<Operation *, int> mlir::triton::deserializeLatencies(Operation *op) {
-  auto helper = TritonDialect::getLoaded(op)->getLatencyAttrHelper();
   DenseMap<Operation *, int> opLatency;
+  auto latencyHelper = TritonDialect::getLoaded(op)->getLatencyAttrHelper();
   op->walk([&](Operation *op) {
-    if (auto attr = helper.getAttr(op)) {
+    if (auto attr = latencyHelper.getAttr(op)) {
       opLatency[op] = attr.getInt();
-      helper.removeAttr(op);
+      latencyHelper.removeAttr(op);
     }
   });
   return opLatency;
@@ -313,14 +360,15 @@ Value mlir::triton::createScalarAlloc(ImplicitLocOpBuilder &rewriter, Type type,
 }
 
 // Create an allocation and init the mbarriers.
-Value mlir::triton::createBarrierAlloc(scf::ForOp forOp, int numBarriers) {
+Value mlir::triton::createBarrierAlloc(scf::ForOp forOp, int numBarriers,
+                                       int arriveCount) {
   ImplicitLocOpBuilder rewriter(forOp.getLoc(), forOp);
 
   Value barrierAlloc =
       createScalarAlloc(rewriter, rewriter.getI64Type(), numBarriers);
   for (unsigned i = 0; i < numBarriers; i++) {
     Value barrierView = createSingleBufferView(rewriter, barrierAlloc, i);
-    rewriter.create<ttng::InitBarrierOp>(barrierView, 1);
+    rewriter.create<ttng::InitBarrierOp>(barrierView, arriveCount);
   }
   // Invalidate and deallocate the barriers.
   rewriter.setInsertionPointAfter(forOp);
@@ -332,13 +380,13 @@ Value mlir::triton::createBarrierAlloc(scf::ForOp forOp, int numBarriers) {
   return barrierAlloc;
 }
 
-Value mlir::triton::createAlloc(scf::ForOp forOp, RankedTensorType ty,
+Value mlir::triton::createAlloc(Operation *insertBefore, RankedTensorType ty,
                                 Location loc,
                                 gpu::SharedEncodingTrait sharedEnc,
                                 unsigned distance) {
-  OpBuilder builder(forOp);
+  OpBuilder builder(insertBefore);
   Attribute sharedMemorySpace =
-      ttg::SharedMemorySpaceAttr::get(forOp.getContext());
+      ttg::SharedMemorySpaceAttr::get(insertBefore->getContext());
   SmallVector<int64_t> bufferShape(ty.getShape().begin(), ty.getShape().end());
   bufferShape.insert(bufferShape.begin(), distance);
   Type memdescType = ttg::MemDescType::get(bufferShape, ty.getElementType(),
@@ -346,13 +394,29 @@ Value mlir::triton::createAlloc(scf::ForOp forOp, RankedTensorType ty,
                                            /*mutableMemory=*/true);
   Value alloc = builder.create<ttg::LocalAllocOp>(loc, memdescType);
 
-  builder.setInsertionPointAfter(forOp);
-  builder.create<ttg::LocalDeallocOp>(forOp.getLoc(), alloc);
+  builder.setInsertionPointAfter(insertBefore);
+  builder.create<ttg::LocalDeallocOp>(insertBefore->getLoc(), alloc);
   return alloc;
 }
 
 bool mlir::triton::isTMALoad(Operation *op) {
   return isa<tt::DescriptorLoadOp, tt::DescriptorGatherOp>(op);
+}
+
+bool mlir::triton::canBeAsyncLoad(Operation *op) {
+  if (mlir::triton::isTMALoad(op)) {
+    return true;
+  }
+  assert(isa<tt::LoadOp>(op));
+  ttg::SharedEncodingTrait sharedEncoding = mlir::triton::getSharedEncoding(op);
+  // Do not create async loads for small loads (cp.async requires at least 4
+  // bytes)
+  int copyVecBytes = mlir::triton::getCopyVecBytes(
+      cast<RankedTensorType>(op->getResultTypes()[0]), sharedEncoding);
+  if (copyVecBytes >= 4) {
+    return true;
+  }
+  return false;
 }
 
 void mlir::triton::combineRedundantWaitOps(

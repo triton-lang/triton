@@ -1,5 +1,3 @@
-ninja
-cmake
 setuptools>=40.8.0
 wheel
 cmake>=3.18,<4.0

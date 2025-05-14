@@ -130,16 +130,26 @@ def TritonNvidiaGPUOptimizeDescriptorEncodingPass : Pass<"triton-nvidia-optimize
                            "mlir::triton::TritonDialect"];
 }
 
-def TritonNvidiaGPUOptimizeTMemSubtilingPass : Pass<"triton-nvidia-optimize-tmem-subtiling", "mlir::ModuleOp"> {
-  let summary = "Optimize subtiling.";
+def TritonNvidiaGPUOptimizeTMemLayoutsPass : Pass<"triton-nvidia-optimize-tmem-layouts", "mlir::ModuleOp"> {
+  let summary = "Optimize TMEM layouts.";
 
   let description = [{
-    Optimize subtiling by trying to split tmem_load when user splits a tensor.
+    Optimize TMEM layouts by selecting a layouts to enable better subtiling,
+    reduction performance, etc.
   }];
 
   let dependentDialects = ["mlir::triton::gpu::TritonGPUDialect",
                            "mlir::triton::nvidia_gpu::TritonNvidiaGPUDialect",
                            "mlir::triton::TritonDialect"];
+}
+
+def TritonNvidiaGPURemoveTMEMTokensPass : Pass<"triton-nvidia-gpu-remove-tmem-tokens", "mlir::ModuleOp"> {
+  let summary = "remove TMEM tokens";
+
+  let description = [{
+    The `triton-nvidia-gpu-remove-tmem-tokens` pass removes TMEM memory
+    dependency tokens from the IR, after they are no longer needed.
+  }];
 }
 
 #endif

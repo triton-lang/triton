@@ -81,8 +81,7 @@ def get_disassembler_command_and_debug_line_format():
     backend = triton.runtime.driver.active.get_current_target().backend
 
     if backend == "cuda":
-        from triton.backends.nvidia.compiler import _path_to_binary
-        nvdisasm, _ = _path_to_binary("nvdisasm")
+        nvdisasm = triton.knobs.nvidia.nvdisasm.path
         return ("cubin", [nvdisasm, "-g"], "## File", ",")
 
     if backend == "hip":

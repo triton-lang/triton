@@ -318,8 +318,8 @@ LinearLayout::LinearLayout(
 
   assert(llvm::isPowerOf2_32(size));
   std::vector<std::vector<int32_t>> zeros;
-  for (int i = 0; i < llvm::Log2_32(size); i++) {
-    zeros.emplace_back().push_back(0);
+  for (int i = 1; i < size; i *= 2) {
+    zeros.emplace_back(std::vector<int32_t>{0});
   }
   return LinearLayout({{inDimName, zeros}}, {{outDimName, outDimSize}},
                       /*requiresSurjective=*/outDimSize == 1);
@@ -457,7 +457,7 @@ LinearLayout LinearLayout::reshapeIns(
   int i = 0;
   for (const auto &[inDim, inDimSize] : newInDims) {
     auto &newInDimBases = newBases[inDim];
-    for (int j = 0; j < llvm::Log2_32(inDimSize); j++) {
+    for (int j = 1; j < inDimSize; j *= 2) {
       newInDimBases.push_back(flatBases[i++]);
     }
   }
@@ -1088,7 +1088,13 @@ LinearLayout LinearLayout::removeZeroBasesAlongDim(StringAttr stripDim) const {
       }
     }
   }
-  return LinearLayout(std::move(result), llvm::to_vector(getOutDimNames()));
+  SmallVector<std::pair<StringAttr, int32_t>> newOutDimSizes;
+  for (auto outDim : getOutDimNames()) {
+    newOutDimSizes.push_back({outDim, getOutDimSize(outDim)});
+  }
+  auto newLayout = LinearLayout(std::move(result), ArrayRef(newOutDimSizes),
+                                this->isSurjective());
+  return newLayout;
 }
 
 size_t hash_value(const LinearLayout &layout) {
@@ -1180,6 +1186,56 @@ std::string LinearLayout::toString() const {
            "\n";
   }
   ret += "where out dims are: " + outDimsStr;
+  return ret;
+}
+
+LinearLayout ColumnAction::apply(const LinearLayout &layout) const {
+  assert(layout.hasInDim(inDim));
+  assert(layout.getInDimSizeLog2(inDim) == inSizeLog2 &&
+         "Layout has a different size than the ColumnAction");
+  if (isIdentity) {
+    return layout;
+  }
+
+  auto bases = layout.getBases();
+  const auto &basesInDim = bases[inDim];
+  std::vector<std::vector<int32_t>> newBases;
+  newBases.reserve(action.size());
+  for (size_t a : action) {
+    newBases.push_back(basesInDim[a]);
+  }
+  bases[inDim] = std::move(newBases);
+
+  SmallVector<std::pair<StringAttr, int32_t>> outDims;
+  for (auto outDim : layout.getOutDimNames()) {
+    outDims.emplace_back(outDim, layout.getOutDimSize(outDim));
+  }
+  return LinearLayout(std::move(bases), std::move(outDims),
+                      /*requireSurjective=*/false);
+}
+
+SmallVector<Value> ColumnAction::apply(ValueRange values) const {
+  assert(values.size() == (1 << inSizeLog2) &&
+         "Values have a different size than the ColumnAction");
+  assert(inDim.str() == "register" && "Values are in registers, so we can only "
+                                      "apply ColumnAction to registers");
+  if (isIdentity) {
+    return values;
+  }
+  auto permLL = apply(LinearLayout::identity1D(values.size(), inDim, inDim));
+  SmallVector<Value> ret;
+  ret.reserve(permLL.getInDimSize(inDim));
+  for (int i = 0; i < permLL.getInDimSize(inDim); i++) {
+    int32_t srcIdx = permLL.apply({{inDim, i}}).begin()->second;
+    ret.push_back(values[srcIdx]);
+  }
+  return ret;
+}
+
+std::string ColumnAction::toString() const {
+  std::string ret = "ColumnAction([";
+  ret += join(action, ", ");
+  ret += "], " + inDim.str() + ", " + std::to_string(inSizeLog2) + ")";
   return ret;
 }
 

@@ -718,88 +718,58 @@ void storeDistributedToShared(
     RewriterBase &rewriter, const TargetInfoBase &target,
     std::pair<size_t, Type> *const llvmOpCount = nullptr);
 
-inline SmallVector<Value> unpackLLElements(Location loc, Value llvmStruct,
-                                           RewriterBase &rewriter) {
-  assert(bool(llvmStruct) && "can not unpack null values");
-  if (llvmStruct.getType().isIntOrIndexOrFloat() ||
-      isa<triton::PointerType>(llvmStruct.getType()) ||
-      isa<LLVM::LLVMPointerType>(llvmStruct.getType()))
-    return {llvmStruct};
-  ArrayRef<Type> types =
-      cast<LLVM::LLVMStructType>(llvmStruct.getType()).getBody();
-  SmallVector<Value> results(types.size());
-  auto b = TritonLLVMOpBuilder(loc, rewriter);
-  for (unsigned i = 0; i < types.size(); ++i) {
-    Type type = types[i];
-    results[i] = b.extract_val(type, llvmStruct, i);
+SmallVector<Value> unpackLLElements(Location loc, Value llvmStruct,
+                                    RewriterBase &rewriter);
+
+Value packLLElements(Location loc, const LLVMTypeConverter *typeConverter,
+                     ValueRange resultVals, RewriterBase &rewriter, Type type);
+
+SmallVector<Value> unpackLLVector(Location loc, Value llvmVec,
+                                  RewriterBase &rewriter);
+
+Value packLLVector(Location loc, ValueRange vals, RewriterBase &rewriter);
+
+inline std::optional<LLVM::AtomicBinOp> matchAtomicOp(RMWOp atomicOp) {
+  switch (atomicOp) {
+  case RMWOp::AND:
+    return LLVM::AtomicBinOp::_and;
+  case RMWOp::OR:
+    return LLVM::AtomicBinOp::_or;
+  case RMWOp::XOR:
+    return LLVM::AtomicBinOp::_xor;
+  case RMWOp::ADD:
+    return LLVM::AtomicBinOp::add;
+  case RMWOp::FADD:
+    return LLVM::AtomicBinOp::fadd;
+  case RMWOp::MAX:
+    return LLVM::AtomicBinOp::max;
+  case RMWOp::MIN:
+    return LLVM::AtomicBinOp::min;
+  case RMWOp::UMAX:
+    return LLVM::AtomicBinOp::umax;
+  case RMWOp::UMIN:
+    return LLVM::AtomicBinOp::umin;
+  case RMWOp::XCHG:
+    return LLVM::AtomicBinOp::xchg;
+  default:
+    return {};
   }
-  return results;
 }
 
-inline Value packLLElements(Location loc,
-                            const LLVMTypeConverter *typeConverter,
-                            ValueRange resultVals, RewriterBase &rewriter,
-                            Type type) {
-  auto structType =
-      dyn_cast<LLVM::LLVMStructType>(typeConverter->convertType(type));
-  if (!structType) {
-    assert(resultVals.size() == 1);
-    return *resultVals.begin();
+inline std::optional<LLVM::AtomicOrdering>
+getMemoryOrdering(MemSemantic memOrdering) {
+  switch (memOrdering) {
+  case MemSemantic::RELAXED:
+    return LLVM::AtomicOrdering::monotonic;
+  case MemSemantic::ACQUIRE:
+    return LLVM::AtomicOrdering::acquire;
+  case MemSemantic::RELEASE:
+    return LLVM::AtomicOrdering::release;
+  case MemSemantic::ACQUIRE_RELEASE:
+    return LLVM::AtomicOrdering::acq_rel;
+  default:
+    return {};
   }
-
-  auto elementTypes = structType.getBody();
-  if (elementTypes.size() != resultVals.size()) {
-    emitError(loc) << " size mismatch when packing elements for LLVM struct"
-                   << " expected " << elementTypes.size() << " but got "
-                   << resultVals.size();
-  }
-  Value llvmStruct = rewriter.create<LLVM::UndefOp>(loc, structType);
-  auto b = TritonLLVMOpBuilder(loc, rewriter);
-  for (const auto &v : llvm::enumerate(resultVals)) {
-    if (!v.value()) {
-      emitError(loc)
-          << "cannot insert null values into struct, but tried to insert"
-          << v.value();
-    }
-    if (v.value().getType() != elementTypes[v.index()]) {
-      LDBG("type " << type << " structType " << structType);
-      LDBG("value " << v.value());
-      emitError(loc) << "invalid element type in packLLElements. Expected "
-                     << elementTypes[v.index()] << " but got "
-                     << v.value().getType();
-    }
-    llvmStruct = b.insert_val(structType, llvmStruct, v.value(), v.index());
-  }
-  return llvmStruct;
-}
-
-inline SmallVector<Value> unpackLLVector(Location loc, Value llvmVec,
-                                         RewriterBase &rewriter) {
-  assert(bool(llvmVec) && "cannot unpack null value");
-  if (llvmVec.getType().isIntOrIndexOrFloat() ||
-      isa<triton::PointerType>(llvmVec.getType()) ||
-      isa<LLVM::LLVMPointerType>(llvmVec.getType()))
-    return {llvmVec};
-
-  auto b = TritonLLVMOpBuilder(loc, rewriter);
-  SmallVector<Value> results;
-  for (int i = 0; i < cast<VectorType>(llvmVec.getType()).getNumElements();
-       i++) {
-    results.push_back(b.extract_element(llvmVec, b.i32_val(i)));
-  }
-  return results;
-}
-
-inline Value packLLVector(Location loc, ValueRange vals,
-                          RewriterBase &rewriter) {
-  assert(vals.size() > 0);
-  auto vecType = vec_ty(vals[0].getType(), vals.size());
-  auto b = TritonLLVMOpBuilder(loc, rewriter);
-  Value vec = b.undef(vecType);
-  for (int i = 0; i < vals.size(); i++) {
-    vec = b.insert_element(vec, vals[i], b.i32_val(i));
-  }
-  return vec;
 }
 
 inline bool
@@ -809,7 +779,9 @@ isSimpleSharedMemoryAccess(ArrayRef<int64_t> shape,
   auto rank = shape.size();
   auto swizzledLayout =
       dyn_cast<triton::gpu::SwizzledSharedEncodingAttr>(sharedEnc);
-  bool noSwizzling = swizzledLayout && swizzledLayout.getMaxPhase() == 1;
+  auto nvmmaLayout = dyn_cast<triton::gpu::NVMMASharedEncodingAttr>(sharedEnc);
+  bool noSwizzling = (swizzledLayout && swizzledLayout.getMaxPhase() == 1) ||
+                     (nvmmaLayout && nvmmaLayout.getSwizzlingByteWidth() == 0);
   return /*no swizzling*/ noSwizzling ||
          /*swizzling but same shape*/ shape == allocShape ||
          /*swizzling and rank-reduced and rank >= 2*/

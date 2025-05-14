@@ -9,10 +9,6 @@ function(add_triton_ut)
   set(multiValueArgs SRCS LIBS DEFS)
   cmake_parse_arguments(_ "${options}" "${oneValueArgs}" "${multiValueArgs}" ${ARGN})
 
-  get_property(dialect_libs GLOBAL PROPERTY MLIR_DIALECT_LIBS)
-  get_property(conversion_libs GLOBAL PROPERTY MLIR_CONVERSION_LIBS)
-  get_property(triton_libs GLOBAL PROPERTY TRITON_LIBS)
-
   add_test(NAME ${__NAME}
           COMMAND ${__NAME})
   add_executable(
@@ -22,9 +18,6 @@ function(add_triton_ut)
           ${__NAME}
           PRIVATE
           GTest::gtest_main
-          ${triton_libs}
-          ${dialect_libs}
-          ${conversion_libs}
           gmock
           ${__LIBS})
 

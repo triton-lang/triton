@@ -28,13 +28,6 @@ bool hasGpuBarriers(scf::ForOp forOp) {
   return result.wasInterrupted();
 }
 
-bool mmav5DominatesTmemLoads(scf::ForOp forOp,
-                             const DenseMap<Operation *, int> &opLatency) {
-  return ttng::mmav5DominatesTmemLoads(forOp, [&](ttng::MMAv5OpInterface mma) {
-    return opLatency.lookup(mma) >= 1;
-  });
-}
-
 // Return true if the preconditions for pipelining the loop are met.
 bool isSafeToPipeline(scf::ForOp forOp,
                       const DenseMap<Operation *, int> &opLatency) {
@@ -47,10 +40,6 @@ bool isSafeToPipeline(scf::ForOp forOp,
   // Skip loops with barriers.
   if (hasGpuBarriers(forOp))
     return false;
-  // Lowering does not currently support cases where tmem_load happens
-  // before the mma in the loop
-  if (!mmav5DominatesTmemLoads(forOp, opLatency))
-    return false;
   return true;
 }
 
@@ -59,52 +48,10 @@ bool hasLatenciesAssigned(scf::ForOp forOp,
   for (auto &op : forOp.getBody()->without_terminator()) {
     if (opLatency.count(&op))
       return true;
+    if (op.getAttr(kAssignedStageAttrName))
+      return true;
   }
   return false;
-}
-
-Value getTmemOperand(Operation *op) {
-  if (auto mmav5Op = dyn_cast<ttng::MMAv5OpInterface>(op)) {
-    return mmav5Op.getAccumulator();
-  }
-  if (auto tmemStoreOp = dyn_cast<ttng::TMEMStoreOp>(op)) {
-    return tmemStoreOp.getDst();
-  }
-  if (auto tmemLoadOp = dyn_cast<ttng::TMEMLoadOp>(op)) {
-    return tmemLoadOp.getSrc();
-  }
-  return {};
-}
-
-SmallVector<Operation *> getDependentOps(Operation *op,
-                                         DominanceInfo &domInfo) {
-  if (isa<ttng::MMAv5OpInterface, ttng::TMEMStoreOp>(op)) {
-    SmallVector<Operation *> dependentOps;
-    Value acc = getTmemOperand(op);
-    for (Operation *user : acc.getUsers()) {
-      if (domInfo.properlyDominates(op, user)) {
-        dependentOps.push_back(user);
-      }
-    }
-    return dependentOps;
-  } else {
-    return {op->getUsers().begin(), op->getUsers().end()};
-  }
-}
-
-SmallVector<Operation *>
-getTmemBackwardDependentOps(Operation *op, PostDominanceInfo &domInfo) {
-  if (isa<ttng::MMAv5OpInterface, ttng::TMEMLoadOp>(op)) {
-    SmallVector<Operation *> dependentOps;
-    Value acc = getTmemOperand(op);
-    for (Operation *user : acc.getUsers()) {
-      if (domInfo.properlyPostDominates(op, user)) {
-        dependentOps.push_back(user);
-      }
-    }
-    return dependentOps;
-  }
-  return {};
 }
 
 CoarseSchedule scheduleKeyOps(scf::ForOp forOp,
@@ -114,12 +61,15 @@ CoarseSchedule scheduleKeyOps(scf::ForOp forOp,
   auto terminator = cast<scf::YieldOp>(forOp.getBody()->getTerminator());
   // Determine all operations that have a non-zero latency
   SmallVector<Operation *> latOps;
+  SmallVector<Operation *> stagedOps;
   for (auto &op : forOp.getBody()->without_terminator()) {
     if (opLatency.count(&op))
       latOps.push_back(&op);
+    if (op.getAttr(kAssignedStageAttrName))
+      stagedOps.push_back(&op);
   }
   // If no latency ops, nothing to schedule
-  if (latOps.empty())
+  if (latOps.empty() && stagedOps.empty())
     return CoarseSchedule(0);
 
   DominanceInfo domInfo(forOp);
@@ -132,7 +82,7 @@ CoarseSchedule scheduleKeyOps(scf::ForOp forOp,
       return it->second;
     // Compute max distance among all users that are inside the loop body
     int maxDist = -1;
-    for (Operation *user : getDependentOps(op, domInfo)) {
+    for (Operation *user : op->getUsers()) {
       // Only consider users inside the same block and not the terminator
       Operation *inBlockUser = forOp.getBody()->findAncestorOpInBlock(*user);
       if (!inBlockUser || inBlockUser == terminator)
@@ -165,6 +115,11 @@ CoarseSchedule scheduleKeyOps(scf::ForOp forOp,
     // (had a non-negative distance due to a latency op).
     if (dist >= 0)
       opToStage[op] = maxDistance - dist;
+  }
+
+  for (Operation *op : stagedOps) {
+    auto stageAttr = op->getAttrOfType<IntegerAttr>(kAssignedStageAttrName);
+    opToStage[op] = stageAttr.getInt();
   }
 
   auto stages = llvm::make_second_range(opToStage);
@@ -248,31 +203,6 @@ void scheduleDistanceOneDependencies(scf::ForOp forOp,
                                       /*includeIfEarlier=*/true);
             }
           }
-        }
-      }
-    }
-  }
-}
-
-void scheduleTmemDependencies(scf::ForOp forOp, CoarseSchedule &schedule) {
-  PostDominanceInfo postDomInfo(forOp);
-  int numStages = schedule.getNumStages();
-  SmallVector<std::tuple<Operation *, int, tt::CoarseSchedule::Cluster>>
-      opsInOrder = schedule.getOpsInOrder(forOp);
-  // Schedule dependencies stage by stage.
-  for (int stage = 0; stage < numStages; stage++) {
-    for (auto [op, stage_, cluster] : opsInOrder) {
-      if (stage_ != stage)
-        continue;
-      SmallVector<Operation *> tmemBackwardDependentOps =
-          getTmemBackwardDependentOps(op, postDomInfo);
-      for (Operation *tmemBackwardDependentOp : tmemBackwardDependentOps) {
-        bool inserted =
-            schedule.insertIfAbsent(tmemBackwardDependentOp, stage, cluster);
-        if (inserted) {
-          schedule.insertDepsOfOp(tmemBackwardDependentOp, stage, cluster,
-                                  /*includeArg=*/true,
-                                  /*insertIfEarlier=*/true);
         }
       }
     }
@@ -391,7 +321,6 @@ void scheduleLoop(scf::ForOp forOp,
     DBGS() << "Coarse schedule with prologue and epilogue:\n" << forOp << "\n";
   });
   scheduleDependencies(forOp, schedule);
-  scheduleTmemDependencies(forOp, schedule);
   LLVM_DEBUG({
     schedule.serialize(forOp);
     DBGS() << "Coarse schedule with dependencies:\n" << forOp << "\n";

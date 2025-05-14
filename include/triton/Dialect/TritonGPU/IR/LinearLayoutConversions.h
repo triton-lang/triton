@@ -54,9 +54,9 @@ LinearLayout toLinearLayout(ArrayRef<int64_t> shape, Attribute layout);
 //
 // If `disableSwizzle` is set, then the resulting layout does not include
 // swizzling.
-LinearLayout sharedToLinearLayoutLeadingOffset(ArrayRef<int64_t> shape,
-                                               NVMMASharedEncodingAttr shared,
-                                               bool disableSwizzle = false);
+LinearLayout nvmmaSharedToLinearLayout(ArrayRef<int64_t> shape,
+                                       NVMMASharedEncodingAttr shared,
+                                       bool disableSwizzle = false);
 
 // Given a linear layout where the input dimensions contain a "block" dimension,
 // this method sets the "block" dimension to 0 and removes the corresponding
@@ -283,10 +283,11 @@ LinearLayout chooseScaledMfmaScaleLayout(
     const std::vector<std::vector<int32_t>> &dotOperandWarpBasis,
     ArrayRef<int64_t> dotOperandShape, unsigned mfmaMDim);
 
-// Create LinearLayout for nvidia mma tile.
-LinearLayout nvidiaMmaTile(MLIRContext *ctx, ArrayRef<unsigned> tileShape,
-                           unsigned kWidth, ArrayRef<unsigned> order,
-                           ArrayRef<unsigned> repOrder);
-} // namespace mlir::triton::gpu
+// Create a LinearLayout similar to mfmaLayout, but changing each thread to hold
+// 8 elements. This layout is useful for emitting the widest 128-bit global
+// store instructions. Since it closely resembles mfmaLayout, conversion between
+// the two can be done using transferWithinWarp, without involving LDS
+std::optional<LinearLayout> chooseMfmaLikeStoreLayout(RankedTensorType valType);
 
+} // namespace mlir::triton::gpu
 #endif // TRITON_DIALECT_TRITONGPU_IR_LINEARLAYOUTCONVERSIONS_H

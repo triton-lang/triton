@@ -36,6 +36,8 @@ void init_triton_nvidia_passes_ttnvgpuir(py::module &&m) {
                      mlir::createTritonNvidiaGPUTMALoweringPass);
   ADD_PASS_WRAPPER_0("add_promote_lhs_to_tmem",
                      mlir::createTritonNvidiaGPUPromoteLHSToTMemPass);
+  ADD_PASS_WRAPPER_0("add_remove_tmem_tokens",
+                     mlir::createTritonNvidiaGPURemoveTMEMTokensPass);
   ADD_PASS_WRAPPER_0("add_nvgpu_to_llvm",
                      mlir::triton::createConvertNVGPUToLLVMPass);
   ADD_PASS_WRAPPER_0("add_warp_specialize_to_llvm",
@@ -46,8 +48,8 @@ void init_triton_nvidia_passes_ttnvgpuir(py::module &&m) {
                      mlir::createTritonNvidiaGPUMMALoweringPass);
   ADD_PASS_WRAPPER_0("add_optimize_descriptor_encoding",
                      mlir::createTritonNvidiaGPUOptimizeDescriptorEncodingPass);
-  ADD_PASS_WRAPPER_0("add_optimize_tmem_subtiling",
-                     mlir::createTritonNvidiaGPUOptimizeTMemSubtilingPass);
+  ADD_PASS_WRAPPER_0("add_optimize_tmem_layouts",
+                     mlir::createTritonNvidiaGPUOptimizeTMemLayoutsPass);
 }
 
 void init_triton_nvidia_passes_nvws(py::module &&m) {

@@ -87,24 +87,18 @@ WarpSchedule::Partition *WarpSchedule::addPartition(unsigned stage) {
   return partitions.back().get();
 }
 
-void WarpSchedule::reorderPartitions(ArrayRef<unsigned> order) {
-  assert(order.size() == partitions.size());
-  assert(DenseSet<unsigned>(order.begin(), order.end()).size() == order.size());
-
-  SmallVector<std::unique_ptr<Partition>> newPartitions(partitions.size());
-  for (auto [i, order] : llvm::enumerate(order)) {
-    assert(order < partitions.size());
-    newPartitions[order] = std::move(partitions[i]);
-    newPartitions[order]->setIndex(order);
+void WarpSchedule::updatePartitions() {
+  for (Partition &partition : getPartitions()) {
+    for (Operation *op : partition.getOps())
+      opToPartition[op] = &partition;
   }
-  partitions = std::move(newPartitions);
 }
 
 WarpSchedule::Partition *WarpSchedule::getPartition(Operation *op) {
-  return opToPartition.at(op);
+  return opToPartition.lookup(op);
 }
 const WarpSchedule::Partition *WarpSchedule::getPartition(Operation *op) const {
-  return opToPartition.at(op);
+  return opToPartition.lookup(op);
 }
 
 WarpSchedule::Partition *WarpSchedule::getPartition(unsigned idx) {
@@ -112,6 +106,23 @@ WarpSchedule::Partition *WarpSchedule::getPartition(unsigned idx) {
 }
 const WarpSchedule::Partition *WarpSchedule::getPartition(unsigned idx) const {
   return partitions[idx].get();
+}
+
+void WarpSchedule::insert(Partition *partition, Operation *op) {
+  partition->insert(op);
+  opToPartition[op] = partition;
+}
+
+bool WarpSchedule::isScheduled(Operation *op) const {
+  const Partition *partition = getPartition(op);
+  return partition && partition != getRootPartition();
+}
+
+bool WarpSchedule::trySchedule(Partition *partition, Operation *op) {
+  if (isScheduled(op))
+    return false;
+  insert(partition, op);
+  return true;
 }
 
 FailureOr<WarpSchedule> WarpSchedule::deserialize(scf::ForOp loop) {
@@ -154,13 +165,16 @@ FailureOr<WarpSchedule> WarpSchedule::deserialize(scf::ForOp loop) {
 void WarpSchedule::serialize(scf::ForOp loop) const {
   SmallVector<Attribute> stages;
   Builder b(loop.getContext());
-  for (auto [i, partition] :
-       llvm::enumerate(llvm::make_pointee_range(partitions))) {
-    stages.push_back(b.getI32IntegerAttr(partition.getStage()));
-    for (Operation *op : partition.getOps()) {
-      op->setAttr(kPartitionAttrName, b.getI32IntegerAttr(i));
+  for (Operation &op : loop.getBody()->without_terminator()) {
+    if (Partition *partition = opToPartition.lookup(&op)) {
+      if (partition == getRootPartition())
+        continue;
+      op.setAttr(kPartitionAttrName,
+                 b.getI32IntegerAttr(partition->getIndex()));
     }
   }
+  for (Partition &partition : getPartitions())
+    stages.push_back(b.getI32IntegerAttr(partition.getStage()));
   loop->setAttr(kPartitionStagesAttrName, b.getArrayAttr(stages));
 }
 
@@ -242,8 +256,7 @@ LogicalResult WarpSchedule::verify(scf::ForOp loop) const {
 }
 
 void WarpSchedule::eraseFrom(scf::ForOp loop) {
-  for (Operation &op : loop.getBody()->without_terminator())
-    op.removeAttr(kPartitionAttrName);
+  loop.walk([&](Operation *op) { op->removeAttr(kPartitionAttrName); });
   loop->removeAttr(kPartitionStagesAttrName);
 }
 
@@ -264,7 +277,7 @@ void WarpSchedule::iterateInputs(
         // This value originates from a previous iteration.
         assert(llvm::is_contained(loop.getRegionIterArgs(), arg));
         callback(operand);
-      } else if (opToPartition.at(value.getDefiningOp()) != partition) {
+      } else if (getPartition(value.getDefiningOp()) != partition) {
         // This value originates from a different partition in the same
         // iteration.
         assert(value.getDefiningOp()->getParentOp() == loop);
@@ -278,17 +291,14 @@ void WarpSchedule::iterateOutputs(
     scf::ForOp loop, const Partition *partition,
     function_ref<void(Operation *, OpOperand &)> callback) const {
   for (Operation *op : partition->getOps()) {
-    for (OpResult result : op->getOpResults()) {
-      for (OpOperand &use : result.getUses()) {
-        Operation *owner =
-            loop.getBody()->findAncestorOpInBlock(*use.getOwner());
-        if (isa<scf::YieldOp>(owner)) {
-          // This value is used in a subsequent iteration.
-          callback(owner, use);
-        } else if (opToPartition.at(owner) != partition) {
-          // This value is used in a different partition in the same iteration.
-          callback(owner, use);
-        }
+    for (OpOperand &use : op->getUses()) {
+      Operation *owner = loop.getBody()->findAncestorOpInBlock(*use.getOwner());
+      if (isa<scf::YieldOp>(owner)) {
+        // This value is used in a subsequent iteration.
+        callback(owner, use);
+      } else if (getPartition(owner) != partition) {
+        // This value is used in a different partition in the same iteration.
+        callback(owner, use);
       }
     }
   }
@@ -322,4 +332,22 @@ void WarpSchedule::iterateUses(
     for (OpOperand &use : arg.getUses())
       uses.emplace_back(output, &use, distance + 1);
   }
+}
+
+void WarpSchedule::dump() const {
+  for (auto [i, partition] :
+       llvm::enumerate(llvm::make_pointee_range(partitions))) {
+    llvm::errs() << "=== PARTITION #" << i << " ===\n";
+    for (Operation *op : partition.getOps()) {
+      op->print(llvm::errs(), OpPrintingFlags().skipRegions());
+      llvm::errs() << "\n";
+    }
+    llvm::errs() << "\n";
+  }
+  llvm::errs() << "=== ROOT PARTITION ===\n";
+  for (Operation *op : getRootPartition()->getOps()) {
+    op->print(llvm::errs(), OpPrintingFlags().skipRegions());
+    llvm::errs() << "\n";
+  }
+  llvm::errs() << "\n";
 }

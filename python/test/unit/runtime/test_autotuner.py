@@ -206,3 +206,44 @@ def test_exceed_tmem(device):
     assert exception_out_of_resource is not None and str(
         exception_out_of_resource
     ) == "out of resource: tensor memory, Required: 640, Hardware limit: 512. Reducing block sizes or `num_stages` may help."
+
+
+def test_exceed_threads(device):
+    if not torch.cuda.is_available():
+        pytest.skip("CUDA is not available")
+    x = torch.empty(1024, device=device, dtype=torch.float32)
+    y = torch.empty_like(x)
+    output = torch.empty_like(x)
+
+    configs = [
+        triton.Config({}, num_warps=128),
+        triton.Config({}, num_warps=4),
+    ]
+
+    exception_out_of_resource = None
+
+    def _post_hook(*args, exception):
+        nonlocal exception_out_of_resource
+        if exception is not None:
+            exception_out_of_resource = exception
+
+    @triton.autotune(configs=configs, key=['BLOCK_SIZE'], do_bench=do_bench, post_hook=_post_hook)
+    @triton.jit
+    def add_kernel(x_ptr, y_ptr, output_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
+        pid = tl.program_id(0)
+        block_start = pid * BLOCK_SIZE
+        offsets = block_start + tl.arange(0, BLOCK_SIZE)
+        mask = offsets < n_elements
+        x = tl.load(x_ptr + offsets, mask=mask)
+        y = tl.load(y_ptr + offsets, mask=mask)
+        output = x + y
+        tl.store(output_ptr + offsets, output, mask=mask)
+
+    def grid(meta):
+        return (triton.cdiv(x.numel(), meta['BLOCK_SIZE']), )
+
+    add_kernel[grid](x, y, output, x.numel(), BLOCK_SIZE=128)
+
+    warp_size = triton.runtime.driver.active.get_current_target().warp_size
+    assert exception_out_of_resource is not None and f"out of resource: threads, Required: {128 * warp_size}" in str(
+        exception_out_of_resource)

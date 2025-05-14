@@ -6,6 +6,7 @@ import sysconfig
 import tempfile
 from pathlib import Path
 from triton.runtime.build import _build
+from triton import knobs
 from triton.runtime.cache import get_cache_manager
 from triton.backends.compiler import GPUTarget
 from triton.backends.driver import GPUDriver, platform_key
@@ -67,8 +68,7 @@ def _get_path_to_hip_runtime_dylib():
     lib_name = "libamdhip64.so"
 
     # If we are told explicitly what HIP runtime dynamic library to use, obey that.
-    env_libhip_path = os.getenv("TRITON_LIBHIP_PATH")
-    if env_libhip_path:
+    if env_libhip_path := knobs.amd.libhip_path:
         if env_libhip_path.endswith(lib_name) and os.path.exists(env_libhip_path):
             return env_libhip_path
         raise RuntimeError(f"TRITON_LIBHIP_PATH '{env_libhip_path}' does not point to a valid {lib_name}")
@@ -441,6 +441,7 @@ static PyObject* launch(PyObject* self, PyObject* args) {{
     Py_DECREF(args);
     if (!ret)
       return NULL;
+    Py_DECREF(ret);
   }}
 
 
@@ -454,6 +455,7 @@ static PyObject* launch(PyObject* self, PyObject* args) {{
     Py_DECREF(args);
     if (!ret)
       return NULL;
+    Py_DECREF(ret);
   }}
 
   if(PyErr_Occurred()) {{
@@ -530,7 +532,7 @@ class HIPDriver(GPUDriver):
     def get_current_target(self):
         device = self.get_current_device()
         device_properties = self.utils.get_device_properties(device)
-        arch = device_properties['arch']
+        arch = knobs.runtime.override_arch or device_properties['arch']
         warp_size = device_properties['warpSize']
         return GPUTarget("hip", arch.split(':')[0], warp_size)
 

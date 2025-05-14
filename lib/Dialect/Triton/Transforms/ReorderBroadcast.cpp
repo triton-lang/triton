@@ -10,12 +10,11 @@
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/Triton/Transforms/Passes.h"
 
-// TODO(jlebar): Move this and all other generatede code into namespace
-// mlir::triton.
+namespace mlir::triton {
+
 #define GEN_PASS_DEF_TRITONREORDERBROADCAST
 #include "triton/Dialect/Triton/Transforms/Passes.h.inc"
 
-namespace mlir::triton {
 namespace {
 
 Operation *cloneWithNewArgsAndResultTypes(PatternRewriter &rewriter,
@@ -208,8 +207,10 @@ struct MoveBroadcastAfterElementwisePattern
   }
 };
 
+} // namespace
+
 class ReorderBroadcastPass
-    : public ::impl::TritonReorderBroadcastBase<ReorderBroadcastPass> {
+    : public impl::TritonReorderBroadcastBase<ReorderBroadcastPass> {
 public:
   void runOnOperation() override {
     MLIRContext *context = &getContext();
@@ -227,11 +228,5 @@ public:
       signalPassFailure();
   }
 };
-
-} // namespace
-
-std::unique_ptr<mlir::Pass> createReorderBroadcastPass() {
-  return std::make_unique<ReorderBroadcastPass>();
-}
 
 } // namespace mlir::triton

@@ -134,11 +134,7 @@ Value TargetInfo::ballot(RewriterBase &rewriter, Location loc, Type type,
 
 static Value mapa(RewriterBase &rewriter, Location loc, Value ptr, Value ctaid,
                   Value pred) {
-  Value args[] = {ptr, ctaid};
-  StringRef name = "llvm.nvvm.mapa.shared.cluster";
-  return LLVM::createLLVMIntrinsicCallOp(rewriter, loc, name, ptr.getType(),
-                                         args)
-      .getResult(0);
+  return rewriter.create<NVVM::MapaOp>(loc, ptr.getType(), ptr, ctaid);
 }
 
 static std::string getConstraintForBitwidth(unsigned bitwidth) {
@@ -234,7 +230,7 @@ void TargetInfo::storeDShared(RewriterBase &rewriter, Location loc, Value ptr,
     SmallVector<Value> vals = unpackLLVector(loc, val, rewriter);
     for (int i = 0; i < vec / maxVec; i++) {
       auto newPtr = b.gep(ptr.getType(), elemTy, ptr, b.i32_val(i * maxVec),
-                          /*inbounds=*/true);
+                          LLVM::GEPNoWrapFlags::inbounds);
       storeDShared(
           rewriter, loc, newPtr, ctaId,
           packLLVector(loc, ArrayRef(vals).slice(i * maxVec, maxVec), rewriter),
@@ -347,7 +343,7 @@ Value TargetInfo::loadDShared(RewriterBase &rewriter, Location loc, Value ptr,
     SmallVector<Value> vals;
     for (int i = 0; i < vec / maxVec; i++) {
       auto newPtr = b.gep(ptr.getType(), elemTy, ptr, b.i32_val(i * maxVec),
-                          /*inbounds=*/true);
+                          LLVM::GEPNoWrapFlags::inbounds);
       auto newVal = loadDShared(rewriter, loc, newPtr, ctaId,
                                 vec_ty(elemTy, maxVec), pred);
       for (Value v : unpackLLVector(loc, newVal, rewriter)) {

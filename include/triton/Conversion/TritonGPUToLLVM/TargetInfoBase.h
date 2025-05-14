@@ -94,6 +94,8 @@ public:
 
   virtual bool supportVectorizedAtomics() const = 0;
 
+  virtual bool supportLdStMatrix() const = 0;
+
   // Annotate target specific information to local store operations during
   // lowering to LLVM.
   virtual void localStoreOpAnnotation(triton::gpu::LocalStoreOp op,

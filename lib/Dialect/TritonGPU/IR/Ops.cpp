@@ -5,6 +5,7 @@
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Attributes.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
+#include "triton/Dialect/TritonGPU/IR/LinearLayoutConversions.h"
 #include "triton/Dialect/TritonGPU/IR/Types.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
@@ -441,6 +442,25 @@ MemDescTransOp::inferReturnTypes(MLIRContext *context,
   return success();
 }
 
+// MemDescReshapeOp
+
+LogicalResult MemDescReshapeOp::verify() {
+  // Infer the dst layout from the source and verify that it is equivalent.
+  MemDescType dstType = getResult().getType();
+  MemDescType srcType = getSrc().getType();
+  auto srcEncoding = srcType.getEncoding();
+  Attribute inferedDstEncoding;
+
+  LinearLayout ll = inferReshapeLinearLayout(
+      srcType.getShape(), srcType.getEncoding(), dstType.getShape());
+  LinearLayout llDst =
+      triton::gpu::toLinearLayout(dstType.getShape(), dstType.getEncoding());
+  if (ll != llDst) {
+    return emitError("source and destination layout are incompatible.");
+  }
+  return success();
+}
+
 // LocalAllocOp
 void LocalAllocOp::getEffects(
     SmallVectorImpl<SideEffects::EffectInstance<MemoryEffects::Effect>>
@@ -475,19 +495,32 @@ OpFoldResult LocalAllocOp::fold(FoldAdaptor adaptor) {
   return loadSrc;
 }
 
-LogicalResult LocalAllocOp::verify() {
-  if (!getSrc()) {
-    if (!getType().getMutableMemory())
-      return emitError("uninitialized alloc must have a mutable memdesc type");
+LogicalResult LocalAllocOp::verifyAllocOp(Operation *op, Value src,
+                                          MemDescType dstTy) {
+  if (dstTy.getShape() != dstTy.getAllocShape())
+    return op->emitOpError("result shape and its alloc shape must match");
+
+  if (!src) {
+    if (!dstTy.getMutableMemory()) {
+      return op->emitOpError(
+          "uninitialized alloc must have a mutable memdesc type");
+    }
     return success();
   }
-  auto srcTy = getSrc().getType();
-  auto dstTy = getType();
 
-  if (srcTy.getElementType() != dstTy.getElementType()) {
-    return emitError("result element type must match desc element type");
-  }
+  auto srcTy = cast<RankedTensorType>(src.getType());
+  if (srcTy.getElementType() != dstTy.getElementType())
+    return op->emitOpError("result element type must source element type");
+  if (srcTy.getShape() != dstTy.getShape())
+    return op->emitOpError("result shape must match source shape");
   return success();
+}
+
+LogicalResult LocalAllocOp::verify() {
+  if (!isa<SharedMemorySpaceAttr>(getType().getMemorySpace()))
+    return emitOpError("should create a buffer of shared memory");
+
+  return verifyAllocOp(*this, getSrc(), getType());
 }
 
 // LocalStoreOp

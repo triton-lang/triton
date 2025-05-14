@@ -1,10 +1,7 @@
 #include "triton/Analysis/Alias.h"
 
-#include "mlir/Dialect/Tensor/IR/Tensor.h"
 #include "mlir/Support/LLVM.h"
-#include "triton/Analysis/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
-#include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 
 namespace mlir {
 
@@ -38,8 +35,7 @@ LogicalResult SharedMemoryAliasAnalysis::visitOperation(
   if (isa<triton::gpu::LocalAllocOp>(op)) {
     aliasInfo.insert(result);
     pessimistic = false;
-  } else if (isa<triton::gpu::MemDescSubviewOp, triton::gpu::MemDescTransOp>(
-                 op)) {
+  } else if (op->hasTrait<OpTrait::MemDescViewTrait>()) {
     aliasInfo = AliasInfo(operands[0]->getValue());
     pessimistic = false;
   } else {

@@ -58,9 +58,11 @@ std::unique_ptr<Pass> createTritonNvidiaGPUMMALoweringPass();
 
 std::unique_ptr<Pass> createTritonNvidiaGPUPromoteLHSToTMemPass();
 
+std::unique_ptr<Pass> createTritonNvidiaGPURemoveTMEMTokensPass();
+
 std::unique_ptr<Pass> createTritonNvidiaGPUOptimizeDescriptorEncodingPass();
 
-std::unique_ptr<Pass> createTritonNvidiaGPUOptimizeTMemSubtilingPass();
+std::unique_ptr<Pass> createTritonNvidiaGPUOptimizeTMemLayoutsPass();
 
 /// Generate the code for registering passes.
 #define GEN_PASS_REGISTRATION

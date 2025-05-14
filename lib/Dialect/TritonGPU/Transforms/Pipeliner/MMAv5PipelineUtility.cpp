@@ -14,67 +14,69 @@ namespace ttng = mlir::triton::nvidia_gpu;
 // MMA Pipeline Analysis
 //===----------------------------------------------------------------------===//
 
-std::optional<std::pair<ttng::TMEMAllocOp, ttng::TMEMLoadOp>>
-ttng::getTMemAllocAndLoad(ttng::MMAv5OpInterface mmaOp) {
-  auto acc = mmaOp.getAccumulator().getDefiningOp<ttng::TMEMAllocOp>();
-  if (!acc || acc->getParentRegion() != mmaOp->getParentRegion()) {
-    return std::nullopt;
+bool ttng::MMAv5PipelineableOperandsHelper::comesFromLoadOrOutsideLoop(
+    Value v, Operation *&foundLoad) {
+  if (forOp.isDefinedOutsideOfLoop(v)) {
+    return true;
   }
-  for (auto user : acc->getUsers()) {
-    if (auto load = dyn_cast<ttng::TMEMLoadOp>(user)) {
-      if (load->getParentRegion() == mmaOp->getParentRegion()) {
-        return std::make_pair(acc, load);
-      }
-    }
+  if (!v.getDefiningOp()) {
+    return false;
   }
-  return std::nullopt;
+  while (isa<ttg::MemDescTransOp, ttg::MemDescReshapeOp>(v.getDefiningOp())) {
+    v = v.getDefiningOp()->getOperand(0);
+  }
+  auto localAlloc = dyn_cast<ttg::LocalAllocOp>(v.getDefiningOp());
+  if (!localAlloc) {
+    return false;
+  }
+  if (!localAlloc.getSrc()) {
+    return false;
+  }
+  if (forOp.isDefinedOutsideOfLoop(localAlloc.getSrc())) {
+    return true;
+  }
+  auto localAllocSrc = localAlloc.getSrc().getDefiningOp();
+  if (!isa<tt::LoadOp, tt::DescriptorLoadOp, tt::DescriptorGatherOp>(
+          localAllocSrc)) {
+    return false;
+  }
+  foundLoad = localAllocSrc;
+  if (!isLoadToBePipelined(foundLoad)) {
+    return false;
+  }
+  if (canBeAsyncLoad(foundLoad)) {
+    return true;
+  }
+  return false;
 }
 
-bool ttng::mmaHasPipelineableOperands(
-    ttng::MMAv5OpInterface mmaOp, scf::ForOp forOp,
-    std::function<bool(Operation *)> isLoadPipelineable) {
+void ttng::MMAv5PipelineableOperandsHelper::run() {
+  isOperandsStateDetermined = true;
   // Accumulator alloc must be outside the loop.
   auto tmemAlloc = mmaOp.getAccumulator().getDefiningOp<ttng::TMEMAllocOp>();
   if (!tmemAlloc) {
-    return false;
+    return;
   }
   if (!forOp.isDefinedOutsideOfLoop(tmemAlloc)) {
-    return false;
+    return;
   }
-  // Operands of the MMA op must come from the (to be pipelined) load, or
-  // from outside the loop.
-  auto comesFromLoadOrOutsideLoop = [&](Value v) {
-    if (forOp.isDefinedOutsideOfLoop(v)) {
-      return true;
-    }
-    // Do not walk through the Block Arguments.
-    if (!v.getDefiningOp()) {
-      return false;
-    }
-    while (isa<ttg::MemDescTransOp>(v.getDefiningOp())) {
-      v = v.getDefiningOp()->getOperand(0);
-    }
-    if (auto localAlloc = dyn_cast<ttg::LocalAllocOp>(v.getDefiningOp())) {
-      if (!localAlloc.getSrc()) {
-        return false;
-      }
-      if (forOp.isDefinedOutsideOfLoop(localAlloc.getSrc())) {
-        return true;
-      }
-      if (isa<tt::LoadOp, tt::DescriptorLoadOp, tt::DescriptorGatherOp>(
-              localAlloc.getSrc().getDefiningOp())) {
-        return isLoadPipelineable(localAlloc.getSrc().getDefiningOp());
-      }
-    }
-    return false;
-  };
   if (auto dotOp = dyn_cast<tt::DotOpInterface>(mmaOp.getOperation())) {
-    if (!comesFromLoadOrOutsideLoop(dotOp.getA()) ||
-        !comesFromLoadOrOutsideLoop(dotOp.getB())) {
-      return false;
+    Operation *foundLoad = nullptr;
+    if (!comesFromLoadOrOutsideLoop(dotOp.getA(), foundLoad)) {
+      if (foundLoad) {
+        unpipelineableOperandLoads.push_back(foundLoad);
+      } else {
+        isOperandsStateDetermined = false;
+      }
+    }
+    if (!comesFromLoadOrOutsideLoop(dotOp.getB(), foundLoad)) {
+      if (foundLoad) {
+        unpipelineableOperandLoads.push_back(foundLoad);
+      } else {
+        isOperandsStateDetermined = false;
+      }
     }
   }
-
   // For scaled MMA check if the scales are passed through shared memory, and
   // also coming from load or outside the loop.
   if (auto scaledOp = dyn_cast<ttng::TCGen5MMAScaledOp>(mmaOp.getOperation())) {
@@ -83,13 +85,30 @@ bool ttng::mmaHasPipelineableOperands(
             !forOp.isDefinedOutsideOfLoop(scaledOp.getAScale()) ||
         !isa<ttg::SharedEncodingTrait>(
             scaledOp.getBScale().getType().getEncoding()) &&
-            !forOp.isDefinedOutsideOfLoop(scaledOp.getBScale()))
-      return false;
-    if (!comesFromLoadOrOutsideLoop(scaledOp.getAScale()) ||
-        !comesFromLoadOrOutsideLoop(scaledOp.getBScale()))
-      return false;
+            !forOp.isDefinedOutsideOfLoop(scaledOp.getBScale())) {
+      // Undecidable, we could follow the tmem use-def chain to find the first
+      // tmem_load.
+      isOperandsStateDetermined = false;
+      return;
+    }
+    Operation *foundLoad = nullptr;
+    if (!comesFromLoadOrOutsideLoop(scaledOp.getAScale(), foundLoad)) {
+      if (foundLoad) {
+        unpipelineableOperandLoads.push_back(foundLoad);
+      } else {
+        isOperandsStateDetermined = false;
+      }
+    }
+    if (!comesFromLoadOrOutsideLoop(scaledOp.getBScale(), foundLoad)) {
+      if (foundLoad) {
+        unpipelineableOperandLoads.push_back(foundLoad);
+      } else {
+        isOperandsStateDetermined = false;
+      }
+    }
   }
-  return true;
+  isPipelineable =
+      isOperandsStateDetermined && unpipelineableOperandLoads.empty();
 }
 
 bool ttng::hasAccReadModifyWrite(ttng::MMAv5OpInterface mma, scf::ForOp forOp) {
@@ -203,23 +222,37 @@ bool ttng::isAccMultibufferingPossible(ttng::MMAv5OpInterface mma,
   return accUseFlagSetToFalse(mma, forOp) || accOverwrittenInLoop(mma, forOp);
 }
 
-bool ttng::mmav5DominatesTmemLoads(
-    scf::ForOp forOp, function_ref<bool(MMAv5OpInterface)> isMmaPipelineable) {
-  DominanceInfo domInfo(forOp);
-  WalkResult result = forOp.walk([&](ttng::MMAv5OpInterface mma) {
-    auto tmemAlloc = mma.getAccumulator().getDefiningOp<ttng::TMEMAllocOp>();
-    if (!tmemAlloc || !forOp.isDefinedOutsideOfLoop(tmemAlloc)) {
-      return WalkResult::advance();
+bool ttng::requiresAccMultiBuffering(ttng::MMAv5OpInterface mma,
+                                     scf::ForOp forOp) {
+  auto tmemAlloc = mma.getAccumulator().getDefiningOp<ttng::TMEMAllocOp>();
+  if (!tmemAlloc || !forOp.isDefinedOutsideOfLoop(tmemAlloc)) {
+    return true; // Pessimistically assume the accumulator requires
+                 // multi-buffering.
+  }
+  // If the accumulator is being read in the loop, we will need to multibuffer
+  // when pipelining.
+  for (auto user : tmemAlloc->getUsers()) {
+    if (isa<ttng::TMEMLoadOp>(user) && forOp->isAncestor(user->getParentOp())) {
+      return true;
     }
-    for (auto user : tmemAlloc->getUsers()) {
-      if (isa<ttng::TMEMLoadOp>(user) && forOp->isAncestor(user) &&
-          !domInfo.properlyDominates(mma, user) && isMmaPipelineable(mma)) {
-        return WalkResult::interrupt();
+  }
+  return false;
+}
+
+bool ttng::hasLoadsAfterMMA(ttng::MMAv5OpInterface mma, scf::ForOp forOp) {
+  auto tmemAlloc = mma.getAccumulator().getDefiningOp<ttng::TMEMAllocOp>();
+  if (!tmemAlloc || !forOp.isDefinedOutsideOfLoop(tmemAlloc)) {
+    return false;
+  }
+  for (auto user : tmemAlloc->getUsers()) {
+    if (isa<ttng::TMEMLoadOp>(user)) {
+      auto ancestorOp = forOp.getBody()->findAncestorOpInBlock(*user);
+      if (ancestorOp && mma->isBeforeInBlock(ancestorOp)) {
+        return true;
       }
     }
-    return WalkResult::advance();
-  });
-  return !result.wasInterrupted();
+  }
+  return false;
 }
 
 //===----------------------------------------------------------------------===//
@@ -239,6 +272,7 @@ ttng::TMEMAllocOp ttng::createTMemAlloc(OpBuilder &builder,
   Type accMemDescType = triton::gpu::MemDescType::get(
       shape, oldRetType.getElementType(), oldRetType.getEncoding(),
       oldRetType.getMemorySpace(), /*mutableMemory=*/true);
-  return builder.create<ttng::TMEMAllocOp>(oldTMemAllocOp.getLoc(),
-                                           accMemDescType, nullptr);
+  return builder.create<ttng::TMEMAllocOp>(
+      oldTMemAllocOp.getLoc(), accMemDescType,
+      builder.getType<gpu::AsyncTokenType>(), /*src=*/Value());
 }

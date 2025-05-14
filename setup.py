@@ -20,9 +20,18 @@ from setuptools import Extension, find_packages, setup
 from setuptools.command.build_ext import build_ext
 from setuptools.command.build_py import build_py
 from setuptools.command.develop import develop
+from setuptools.command.egg_info import egg_info
+from setuptools.command.install import install
+from setuptools.command.sdist import sdist
+
 from dataclasses import dataclass
 
 import pybind11
+
+try:
+    from setuptools.command.bdist_wheel import bdist_wheel
+except ImportError:
+    from wheel.bdist_wheel import bdist_wheel
 
 try:
     from setuptools.command.editable_wheel import editable_wheel
@@ -587,6 +596,10 @@ def get_package_dirs():
     yield ("", "python")
 
     for backend in backends:
+        # we use symlinks for external plugins
+        if backend.is_external:
+            continue
+
         yield (f"triton.backends.{backend.name}", backend.backend_dir)
 
         if backend.language_dir:
@@ -605,8 +618,33 @@ def get_package_dirs():
         yield ("triton.profiler", "third_party/proton/proton")
 
 
-def add_link_to_backends():
+def get_packages():
+    yield from find_packages(where="python")
+
     for backend in backends:
+        yield f"triton.backends.{backend.name}"
+
+        if backend.language_dir:
+            # Install the contents of each backend's `language` directory into
+            # `triton.language.extra`.
+            for x in os.listdir(backend.language_dir):
+                yield f"triton.language.extra.{x}"
+
+        if backend.tools_dir:
+            # Install the contents of each backend's `tools` directory into
+            # `triton.tools.extra`.
+            for x in os.listdir(backend.tools_dir):
+                yield f"triton.tools.extra.{x}"
+
+    if check_env_flag("TRITON_BUILD_PROTON", "ON"):  # Default ON
+        yield "triton.profiler"
+
+
+def add_link_to_backends(external_only):
+    for backend in backends:
+        if external_only and not backend.is_external:
+            continue
+
         update_symlink(backend.install_dir, backend.backend_dir)
 
         if backend.language_dir:
@@ -635,23 +673,53 @@ def add_link_to_proton():
     update_symlink(proton_install_dir, proton_dir)
 
 
-def add_links():
-    add_link_to_backends()
-    if check_env_flag("TRITON_BUILD_PROTON", "ON"):  # Default ON
+def add_links(external_only):
+    add_link_to_backends(external_only=external_only)
+    if not external_only and check_env_flag("TRITON_BUILD_PROTON", "ON"):  # Default ON
         add_link_to_proton()
+
+
+class plugin_bdist_wheel(bdist_wheel):
+
+    def run(self):
+        add_links(external_only=True)
+        super().run()
 
 
 class plugin_develop(develop):
 
     def run(self):
-        add_links()
+        add_links(external_only=False)
         super().run()
 
 
 class plugin_editable_wheel(editable_wheel):
 
     def run(self):
-        add_links()
+        add_links(external_only=False)
+        super().run()
+
+
+class plugin_egg_info(egg_info):
+
+    def run(self):
+        add_links(external_only=True)
+        super().run()
+
+
+class plugin_install(install):
+
+    def run(self):
+        add_links(external_only=True)
+        super().run()
+
+
+class plugin_sdist(sdist):
+
+    def run(self):
+        for backend in backends:
+            if backend.is_external:
+                raise RuntimeError("sdist cannot be used with TRITON_PLUGIN_DIRS")
         super().run()
 
 
@@ -693,8 +761,21 @@ def get_git_version_suffix():
 # keep it separate for easy substitution
 TRITON_VERSION = "3.3.0" + get_git_version_suffix() + os.environ.get("TRITON_WHEEL_VERSION_SUFFIX", "")
 
-package_dirs = dict(get_package_dirs())
-extra_packages = [x for x in package_dirs if x != ""]
+# Dynamically define supported Python versions and classifiers
+MIN_PYTHON = (3, 9)
+MAX_PYTHON = (3, 13)
+
+PYTHON_REQUIRES = f">={MIN_PYTHON[0]}.{MIN_PYTHON[1]},<{MAX_PYTHON[0]}.{MAX_PYTHON[1] + 1}"
+BASE_CLASSIFIERS = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Topic :: Software Development :: Build Tools",
+    "License :: OSI Approved :: MIT License",
+]
+PYTHON_CLASSIFIERS = [
+    f"Programming Language :: Python :: {MIN_PYTHON[0]}.{m}" for m in range(MIN_PYTHON[1], MAX_PYTHON[1] + 1)
+]
+CLASSIFIERS = BASE_CLASSIFIERS + PYTHON_CLASSIFIERS
 
 setup(
     name=os.environ.get("TRITON_WHEEL_NAME", "triton"),
@@ -707,33 +788,28 @@ setup(
         "setuptools>=40.8.0",
         "importlib-metadata; python_version < '3.10'",
     ],
-    packages=find_packages(where="python") + extra_packages,
-    package_dir=package_dirs,
+    packages=list(get_packages()),
+    package_dir=dict(get_package_dirs()),
     entry_points=get_entry_points(),
     include_package_data=True,
     ext_modules=[CMakeExtension("triton", "triton/_C/")],
     cmdclass={
+        "bdist_wheel": plugin_bdist_wheel,
         "build_ext": CMakeBuild,
         "build_py": CMakeBuildPy,
         "clean": CMakeClean,
         "develop": plugin_develop,
         "editable_wheel": plugin_editable_wheel,
+        "egg_info": plugin_egg_info,
+        "install": plugin_install,
+        "sdist": plugin_sdist,
     },
     zip_safe=False,
     # for PyPI
     keywords=["Compiler", "Deep Learning"],
     url="https://github.com/triton-lang/triton/",
-    classifiers=[
-        "Development Status :: 4 - Beta",
-        "Intended Audience :: Developers",
-        "Topic :: Software Development :: Build Tools",
-        "License :: OSI Approved :: MIT License",
-        "Programming Language :: Python :: 3.9",
-        "Programming Language :: Python :: 3.10",
-        "Programming Language :: Python :: 3.11",
-        "Programming Language :: Python :: 3.12",
-        "Programming Language :: Python :: 3.13",
-    ],
+    python_requires=PYTHON_REQUIRES,
+    classifiers=CLASSIFIERS,
     test_suite="tests",
     extras_require={
         "build": [

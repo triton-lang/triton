@@ -493,7 +493,8 @@ def TT_BroadcastOp : TT_Op<"broadcast", [Pure,
     let hasVerifier = 1;
 }
 
-def TT_CatOp : TT_Op<"cat", [Pure,
+// Cat is not pure because it may reorder elements.
+def TT_CatOp : TT_Op<"cat", [NoMemoryEffect,
                              SameTypeOperands,
                              SameOperandsAndResultElementType]> {
     let summary = "concatenate 2 tensors";

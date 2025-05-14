@@ -714,3 +714,67 @@ llvm.func @remat_subgraph(%arg0: i32, %arg1: i32) attributes {allocation.offset 
 }
 
 }
+
+// -----
+
+module attributes {ttg.maxnreg = 80 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100", "ttg.total-num-warps" = 16 : i32} {
+
+llvm.mlir.global external @global_smem() {addr_space = 3 : i32, alignment = 16 : i64} : !llvm.array<0 x i8>
+
+// CHECK-LABEL: @dynamic_register_reallocation
+llvm.func @dynamic_register_reallocation() attributes {allocation.offset = 0 : i32} {
+  // CHECK: llvm.switch
+  // CHECK-NEXT: 0: [[PARTITION0:\^.*]],
+  // CHECK-NEXT: 1: [[PARTITION1:\^.*]],
+  // CHECK-NEXT: 2: [[PARTITION2:\^.*]],
+  // CHECK-NEXT: 3: [[EXIT:\^.*]]
+
+  // CHECK: [[PARTITION0]]:
+  // CHECK-NEXT: barrier.sync 1 ;
+  // CHECK-NEXT: nvvm.setmaxregister increase 80
+  // CHECK-NEXT: "partition0"()
+  // CHECK-NEXT: barrier.sync 1 ;
+  // CHECK-NEXT: nvvm.setmaxregister increase 80
+
+  // CHECK: [[PARTITION1]]:
+  // CHECK-NEXT: barrier.sync 1 ;
+  // CHECK-NEXT: nvvm.setmaxregister decrease 48
+  // CHECK-NEXT: "partition1"()
+  // CHECK-NEXT: barrier.sync 1 ;
+  // CHECK-NEXT: nvvm.setmaxregister increase 80
+
+  // CHECK: [[PARTITION2]]:
+  // CHECK-NEXT: barrier.sync 1 ;
+  // CHECK-NEXT: nvvm.setmaxregister increase 128
+  // CHECK-NEXT: "partition2"()
+  // CHECK-NEXT: barrier.sync 1 ;
+  // CHECK-NEXT: nvvm.setmaxregister decrease 80
+
+  // CHECK: barrier.sync 1 ;
+  // CHECK-NEXT: barrier.sync 1 ;
+  // CHECK: setmaxregister increase 152
+  // CHECK: "default"
+  // CHECK: barrier.sync 1 ;
+  // CHECK-NEXT: setmaxregister decrease 80
+
+  ttg.warp_specialize() attributes {allocation.offset = 0 : i32, warpGroupStartIds = array<i32: 4, 8, 12>, actualRegisters = array<i32: 152, 80, 48, 128>}
+  default {
+    "default"() : () -> ()
+    ttg.warp_yield
+  }
+  partition0() num_warps(4) {
+    "partition0"() : () -> ()
+    ttg.warp_return
+  }
+  partition1() num_warps(4) {
+    "partition1"() : () -> ()
+    ttg.warp_return
+  }
+  partition2() num_warps(4) {
+    "partition2"() : () -> ()
+    ttg.warp_return
+  } : () -> ()
+  llvm.return
+}
+
+}
