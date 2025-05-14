@@ -249,8 +249,8 @@ void TraceData::dumpChromeTrace(std::ostream &os) const {
           std::get<uint64_t>(kernelMetrics->getValue(KernelMetric::StartTime));
       uint64_t endTimeNs =
           std::get<uint64_t>(kernelMetrics->getValue(KernelMetric::EndTime));
-      uint64_t ts  = (startTimeNs - minTimeStamp) / 1000; // relative microseconds
-      uint64_t dur = (endTimeNs - startTimeNs) / 1000;  // duration in microseconds
+      uint64_t ts  = startTimeNs - minTimeStamp;
+      uint64_t dur = endTimeNs - startTimeNs;
 
       auto contextId = event.contextId;
       auto contexts = trace->getContexts(contextId);
