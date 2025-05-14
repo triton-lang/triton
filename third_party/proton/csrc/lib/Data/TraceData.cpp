@@ -102,6 +102,14 @@ public:
     nextEventId++;
   }
 
+  void updateEvent(size_t scopeId, size_t contextId) {
+    auto it = scopeIdEventIdMap.find(scopeId);
+    if (it == scopeIdEventIdMap.end()) {
+      throw std::runtime_error("Event not found");
+    }
+    traceEvents[it->second].contextId = contextId;
+  }
+
   TraceEvent &getEvent(size_t scopeId) {
     auto it = scopeIdEventIdMap.find(scopeId);
     if (it == scopeIdEventIdMap.end()) {
@@ -144,7 +152,8 @@ size_t TraceData::addOp(size_t scopeId, const std::string &name) {
     std::vector<Context> contexts;
     if (contextSource != nullptr)
       contexts = contextSource->getContexts();
-    // Add an op under the current context
+    // If name is empty, this is a placeholder event. Add an op under the current
+    // context
     if (!name.empty())
       contexts.emplace_back(name);
     scopeIdToContextId[scopeId] = trace->addContext(contexts);
@@ -154,7 +163,8 @@ size_t TraceData::addOp(size_t scopeId, const std::string &name) {
     scopeIdToContextId[scopeId] =
         trace->addContext(Context(name), scopeIdIt->second);
   }
-  trace->addEvent(scopeId, scopeIdToContextId[scopeId]);
+  if (!name.empty()) // not a placeholder event
+    trace->addEvent(scopeId, scopeIdToContextId[scopeId]);
   return scopeId;
 }
 
