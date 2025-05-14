@@ -14,7 +14,7 @@ void Data::dump(const std::string &outputFormat) {
 
   OutputFormat outputFormatEnum = outputFormat.empty()
                                       ? getDefaultOutputFormat()
-                                      : parseOutputFormat(outputFormat);
+                                        : parseOutputFormat(outputFormat);
 
   std::unique_ptr<std::ostream> out;
   if (path.empty() || path == "-") {
@@ -42,7 +42,7 @@ const std::string outputFormatToString(OutputFormat outputFormat) {
   if (outputFormat == OutputFormat::Hatchet) {
     return "hatchet";
   } else if (outputFormat == OutputFormat::ChromeTrace) {
-    return "chrometrace";
+    return "chrome_trace";
   }
   throw std::runtime_error("Unknown output format: " +
                            std::to_string(static_cast<int>(outputFormat)));
