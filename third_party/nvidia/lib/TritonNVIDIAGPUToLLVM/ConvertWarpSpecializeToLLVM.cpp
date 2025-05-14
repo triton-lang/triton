@@ -315,7 +315,7 @@ static LogicalResult lowerWarpSpecialize(LLVM::LLVMFuncOp func,
 
   // Attempt to elide captures of trivial computations by hoisting them into the
   // header or rematerializing them into each partition.
-  elideTrivialCaptures(func, wsOps);
+  // elideTrivialCaptures(func, wsOps);
 
   MLIRContext *ctx = func.getContext();
   TritonLLVMIRRewriter b(func.getLoc(), ctx);
