@@ -137,7 +137,7 @@ void TraceData::enterScope(const Scope &scope) {
   scopeIdToContextId[scope.scopeId] = contextId;
 }
 
-void TraceData::exitScope(const Scope &scope) { throw NotImplemented(); }
+void TraceData::exitScope(const Scope &scope) {}
 
 size_t TraceData::addOp(size_t scopeId, const std::string &name) {
   std::unique_lock<std::shared_mutex> lock(mutex);
