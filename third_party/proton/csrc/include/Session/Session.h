@@ -17,7 +17,6 @@ namespace proton {
 
 class Profiler;
 class Data;
-enum class OutputFormat;
 
 /// A session is a collection of profiler, context source, and data objects.
 /// There could be multiple sessions in the system, each can correspond to a
@@ -30,7 +29,7 @@ public:
 
   void deactivate();
 
-  void finalize(OutputFormat outputFormat);
+  void finalize(const std::string &outputFormat);
 
   size_t getContextDepth();
 
@@ -79,9 +78,9 @@ public:
                     const std::string &contextSourceName,
                     const std::string &dataName, const std::string &mode);
 
-  void finalizeSession(size_t sessionId, OutputFormat outputFormat);
+  void finalizeSession(size_t sessionId, const std::string &outputFormat);
 
-  void finalizeAllSessions(OutputFormat outputFormat);
+  void finalizeAllSessions(const std::string &outputFormat);
 
   void activateSession(size_t sessionId);
 
