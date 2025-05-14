@@ -296,6 +296,16 @@ static void rewritePartitionRegions(WarpSpecializeOp ws, Block *switchLoop,
   }
 }
 
+static void disableLICM(LLVM::BrOp latchBr) {
+  Builder b(latchBr.getContext());
+  MLIRContext *ctx = b.getContext();
+  auto licmMD = LLVM::LoopLICMAttr::get(ctx, b.getBoolAttr(true), {});
+  auto loopMD =
+      LLVM::LoopAnnotationAttr::get(b.getContext(), {}, {}, {}, {}, {}, licmMD,
+                                    {}, {}, {}, {}, {}, {}, {}, {}, {});
+  latchBr.setLoopAnnotationAttr(loopMD);
+}
+
 static LogicalResult lowerWarpSpecialize(LLVM::LLVMFuncOp func,
                                          const NVIDIA::TargetInfo &targetInfo) {
   SmallVector<WarpSpecializeOp> wsOps;
@@ -420,7 +430,8 @@ static LogicalResult lowerWarpSpecialize(LLVM::LLVMFuncOp func,
                 /*aligned=*/false);
   createBarrier(b, kSwitchLoopBarrierIdx, /*numThreads=*/std::nullopt,
                 /*aligned=*/false);
-  b.create<LLVM::BrOp>(switchLoop);
+  auto latchBr = b.create<LLVM::BrOp>(switchLoop);
+  disableLICM(latchBr);
 
   // Exit state.
   Block *switchExit = new Block;
