@@ -99,14 +99,14 @@ private:
   std::map<size_t, TreeNode> treeNodeMap;
 };
 
-void TreeData::init() { tree = std::make_unique<Tree>(); }
-
 void TreeData::enterScope(const Scope &scope) {
   // enterOp and addMetric maybe called from different threads
   std::unique_lock<std::shared_mutex> lock(mutex);
   std::vector<Context> contexts;
   if (contextSource != nullptr)
     contexts = contextSource->getContexts();
+  else
+    contexts.push_back(scope.name);
   auto contextId = tree->addNode(contexts);
   scopeIdToContextId[scope.scopeId] = contextId;
 }
@@ -303,13 +303,13 @@ void TreeData::doDump(std::ostream &os, OutputFormat outputFormat) const {
   if (outputFormat == OutputFormat::Hatchet) {
     dumpHatchet(os);
   } else {
-    std::logic_error("OutputFormat not supported");
+    std::logic_error("Output format not supported");
   }
 }
 
 TreeData::TreeData(const std::string &path, ContextSource *contextSource)
     : Data(path, contextSource) {
-  init();
+  tree = std::make_unique<Tree>();
 }
 
 TreeData::~TreeData() {}

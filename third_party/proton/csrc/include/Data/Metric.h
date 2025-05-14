@@ -133,13 +133,14 @@ public:
     Duration,
     DeviceId,
     DeviceType,
+    StreamId,
     Count,
   };
 
   KernelMetric() : Metric(MetricKind::Kernel, kernelMetricKind::Count) {}
 
   KernelMetric(uint64_t startTime, uint64_t endTime, uint64_t invocations,
-               uint64_t deviceId, uint64_t deviceType)
+               uint64_t deviceId, uint64_t deviceType, uint64_t streamId)
       : KernelMetric() {
     this->values[StartTime] = startTime;
     this->values[EndTime] = endTime;
@@ -147,6 +148,7 @@ public:
     this->values[Duration] = endTime - startTime;
     this->values[DeviceId] = deviceId;
     this->values[DeviceType] = deviceType;
+    this->values[StreamId] = streamId;
   }
 
   virtual const std::string getName() const { return "KernelMetric"; }
@@ -161,12 +163,12 @@ public:
 
 private:
   const static inline bool PROPERTY[kernelMetricKind::Count] = {
-      true, true, false, false, true, true};
+      true, true, false, false, true, true, true};
   const static inline bool EXCLUSIVE[kernelMetricKind::Count] = {
-      false, false, false, false, true, true};
+      false, false, false, false, true, true, true};
   const static inline std::string VALUE_NAMES[kernelMetricKind::Count] = {
-      "start_time (ns)", "end_time (ns)", "count",
-      "time (ns)",       "device_id",     "device_type",
+      "start_time (ns)", "end_time (ns)", "count",     "time (ns)",
+      "device_id",       "device_type",   "stream_id",
   };
 };
 
