@@ -1380,7 +1380,8 @@ def test_tma_gather_dot_pipeline(BLOCK_M, BLOCK_N, BLOCK_K, K, device):
     c = a @ b
 
     output = torch.zeros((BLOCK_M, BLOCK_N), dtype=torch.float32, device=device)
-    if not is_interpreter():
+    is_native_gather = is_cuda() and torch.cuda.get_device_capability()[0] >= 10
+    if is_native_gather:
         kernel = tma_gather_dot_pipeline.warmup(a, b, output, a.stride(0), a.stride(1), b.stride(0), b.stride(1),
                                                 output.stride(0), output.stride(1), K, BLOCK_M, BLOCK_N, BLOCK_K,
                                                 grid=(1, ))

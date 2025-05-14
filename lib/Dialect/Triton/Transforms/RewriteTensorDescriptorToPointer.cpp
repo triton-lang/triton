@@ -326,8 +326,9 @@ struct RewriteGatherPattern : OpConversionPattern<triton::DescriptorGatherOp> {
     auto desc = unpackDescriptor(descTy, adaptor.getDesc());
     auto [ptr, mask] = generateGatherScatterPtrMask(
         rewriter, loc, blockShape, desc, op.getXOffsets(), op.getYOffset());
-    auto other = generateOther(
-        rewriter, loc, descTy.getBlockType().getElementType(), blockShape);
+    auto other = generateOther(rewriter, loc,
+                               descTy.getSignlessBlockType().getElementType(),
+                               blockShape);
     auto newLoad = rewriter.replaceOpWithNewOp<triton::LoadOp>(
         op, ptr, mask, other, triton::CacheModifier::NONE,
         triton::EvictionPolicy::NORMAL, false);
