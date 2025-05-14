@@ -376,4 +376,8 @@ def TritonGPUCoalesceAsyncCopy: Pass<"tritongpu-coalesce-async-copy", "mlir::Mod
                            "mlir::triton::TritonDialect"];
 }
 
+
+def TritonGPULoopCSE : Pass<"tritongpu-loop-cse", "mlir::ModuleOp"> {
+}
+
 #endif
