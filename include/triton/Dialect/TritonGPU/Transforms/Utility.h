@@ -54,6 +54,10 @@ getNumElementsPerThread(Operation *op, SmallVector<unsigned> order,
 // Returns whether the op is a "view op", i.e. doesn't move any data
 bool isView(Operation *op);
 
+// Returns whether the op is a "noop op", i.e. has one input and one output
+// and lowers to llvm as the identity function (returns the input)
+bool isNoop(Operation *op);
+
 /* Dump Triton IR in graphviz dot format.
  *
  * You can override `onValue` and `onOperation` in a subclass to mark
