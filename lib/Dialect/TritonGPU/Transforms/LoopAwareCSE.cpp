@@ -1,9 +1,8 @@
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/Pass/Pass.h"
-#include "mlir/Pass/PassManager.h"
-#include "mlir/Transforms/Passes.h"
+#include "mlir/Transforms/CSE.h"
+#include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 #include "llvm/ADT/EquivalenceClasses.h"
-#include "llvm/ADT/SetOperations.h"
 
 using namespace mlir;
 
@@ -159,18 +158,16 @@ struct LoopAwareCSE
     // LoopAwareCSE doesn't recursively CSE ops outside of loops, so run CSE
     // first to make sure values from outside loops that are equivalent are made
     // pointer equal.
-    OpPassManager pm;
-    pm.addPass(createCSEPass());
-    if (failed(runPipeline(pm, getOperation())))
-      return signalPassFailure();
+    IRRewriter rewriter(&getContext());
+    auto &domInfo = getAnalysis<DominanceInfo>();
+    eliminateCommonSubExpressions(rewriter, domInfo, getOperation());
 
     // CSE region iter args within loop bodies.
     getOperation().walk(loopCSE);
 
     // Now that equivalent iter args have been made pointer equal, run CSE again
     // to clean up the loop body.
-    if (failed(runPipeline(pm, getOperation())))
-      return signalPassFailure();
+    eliminateCommonSubExpressions(rewriter, domInfo, getOperation());
 
     // Run the `scf.for` canonicalizer to clean up the loops (short-circuited
     // values, unused results, etc.).
