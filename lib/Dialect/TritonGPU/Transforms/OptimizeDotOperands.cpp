@@ -323,12 +323,6 @@ private:
     if (!isInnermostContiguous(scaleType, 512))
       return false;
 
-    auto sharedEnc =
-        dyn_cast<triton::gpu::NVMMASharedEncodingAttr>(scaleType.getEncoding());
-    if (!sharedEnc || sharedEnc.getTransposed() || sharedEnc.getFp4Padded() ||
-        sharedEnc.getSwizzlingByteWidth() != 0)
-      return false;
-
     if (usesTMAload) {
       return true;
     }
