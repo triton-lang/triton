@@ -206,6 +206,7 @@ void TraceData::dumpChromeTrace(std::ostream &os) const {
     }
   }
   for (auto &[streamId, events] : streamTraceEvents) {
+    std::cout << "streamId: " << streamId << std::endl;
     for (auto &event : events) {
       auto contextId = event.contextId;
       auto contexts = trace->getContexts(contextId);
