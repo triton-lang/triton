@@ -168,6 +168,8 @@ void TraceData::addMetric(size_t scopeId, std::shared_ptr<Metric> metric) {
   auto scopeIdIt = scopeIdToContextId.find(scopeId);
   if (scopeIdIt == scopeIdToContextId.end())
     return;
+  if (!trace->hasEvent(scopeId)) // TODO: custom metrics not supported yet
+    return;
   auto &event = trace->getEvent(scopeId);
   if (event.metrics.find(metric->getKind()) == event.metrics.end())
     event.metrics.emplace(metric->getKind(), metric);
