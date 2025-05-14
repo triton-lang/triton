@@ -170,7 +170,7 @@ bool tmemMayAlias(Value a, Value b) {
 
 // Sink tmem_loads as close to their use as possible to reduce register
 // pressure.
-bool sinkLoad(ttng::TMEMLoadOp load, ArrayRef<Operation *> useChain) {
+bool sinkOps(Value buffer, ArrayRef<Operation *> useChain) {
   Operation *insertBefore = nullptr;
   Operation *next = useChain.back()->getNextNode();
   while (next && !next->hasTrait<OpTrait::IsTerminator>()) {
@@ -184,6 +184,8 @@ bool sinkLoad(ttng::TMEMLoadOp load, ArrayRef<Operation *> useChain) {
         break;
       }
     }
+    // Don't sink past barrier signals, since they may guard the liverange
+    // of the buffer.
     if (isa<ttng::ArriveBarrierOp>(next))
       break;
     if (!isMemoryEffectFree(next)) {
@@ -198,8 +200,7 @@ bool sinkLoad(ttng::TMEMLoadOp load, ArrayRef<Operation *> useChain) {
           break;
         }
         if (isa<ttng::TensorMemory>(effect.getResource()) &&
-            (!effect.getValue() ||
-             tmemMayAlias(effect.getValue(), load.getSrc()))) {
+            (!effect.getValue() || tmemMayAlias(effect.getValue(), buffer))) {
           dep = true;
           break;
         }
@@ -218,14 +219,14 @@ bool sinkLoad(ttng::TMEMLoadOp load, ArrayRef<Operation *> useChain) {
 }
 
 // Try to sink a load and a collection of its users.
-bool trySinkLoad(ttng::TMEMLoadOp load) {
-  SmallVector<Operation *> useChain{load};
+bool trySinkOp(Operation *op, Value buffer) {
+  SmallVector<Operation *> useChain{op};
   while (useChain.back()->hasOneUse() &&
          isPure(*useChain.back()->user_begin()) &&
          useChain.back()->getNextNode() == *useChain.back()->user_begin()) {
     useChain.push_back(*useChain.back()->user_begin());
   }
-  return sinkLoad(load, useChain);
+  return sinkOps(buffer, useChain);
 }
 
 struct TritonNvidiaGPUInterleaveTMemPass
@@ -237,10 +238,15 @@ struct TritonNvidiaGPUInterleaveTMemPass
   void runOnOperation() override {
     MLIRContext *context = &getContext();
     ModuleOp m = getOperation();
-    SmallVector<ttng::TMEMLoadOp> loads;
-    m.walk([&](ttng::TMEMLoadOp load) { loads.push_back(load); });
-    for (ttng::TMEMLoadOp load : loads) {
-      while (trySinkLoad(load)) {
+    SmallVector<std::pair<Operation *, Value>> opsToSink;
+    m.walk([&](Operation *op) {
+      if (auto load = dyn_cast<ttng::TMEMLoadOp>(op))
+        opsToSink.emplace_back(load, load.getSrc());
+      else if (auto alloc = dyn_cast<ttng::TMEMAllocOp>(op))
+        opsToSink.emplace_back(alloc, alloc.getResult());
+    });
+    for (auto [op, buffer] : opsToSink) {
+      while (trySinkOp(op, buffer)) {
         // Keep trying to sink loads and their users.
       }
     }
