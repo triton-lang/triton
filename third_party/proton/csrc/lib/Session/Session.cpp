@@ -1,6 +1,7 @@
 #include "Session/Session.h"
 #include "Context/Python.h"
 #include "Context/Shadow.h"
+#include "Data/TraceData.h"
 #include "Data/TreeData.h"
 #include "Profiler/Cupti/CuptiProfiler.h"
 #include "Profiler/Instrumentation/InstrumentationProfiler.h"
@@ -35,6 +36,8 @@ std::unique_ptr<Data> makeData(const std::string &dataName,
                                ContextSource *contextSource) {
   if (toLower(dataName) == "tree") {
     return std::make_unique<TreeData>(path, contextSource);
+  } else if (toLower(dataName) == "trace") {
+    return std::make_unique<TraceData>(path, contextSource);
   }
   throw std::runtime_error("Unknown data: " + dataName);
 }
@@ -72,7 +75,7 @@ void Session::deactivate() {
   data->clear();
 }
 
-void Session::finalize(OutputFormat outputFormat) {
+void Session::finalize(const std::string &outputFormat) {
   profiler->stop();
   data->dump(outputFormat);
 }
@@ -172,7 +175,7 @@ size_t SessionManager::addSession(const std::string &path,
 }
 
 void SessionManager::finalizeSession(size_t sessionId,
-                                     OutputFormat outputFormat) {
+                                     const std::string &outputFormat) {
   std::lock_guard<std::mutex> lock(mutex);
   if (!hasSession(sessionId)) {
     return;
@@ -182,7 +185,7 @@ void SessionManager::finalizeSession(size_t sessionId,
   removeSession(sessionId);
 }
 
-void SessionManager::finalizeAllSessions(OutputFormat outputFormat) {
+void SessionManager::finalizeAllSessions(const std::string &outputFormat) {
   std::lock_guard<std::mutex> lock(mutex);
   auto sessionIds = std::vector<size_t>{};
   for (auto &[sessionId, session] : sessions) {
