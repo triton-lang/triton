@@ -110,6 +110,7 @@ bool LoopCSEDriver::areEqualInLoop(Value a, Value b) {
 
 static void loopCSE(scf::ForOp loop) {
   int numIterArgs = loop.getNumRegionIterArgs();
+  // Group equivalent iter args together.
   llvm::EquivalenceClasses<int> equivalentArgs;
   LoopCSEDriver driver(loop);
   for (int i = 0; i != numIterArgs; ++i) {
@@ -119,6 +120,7 @@ static void loopCSE(scf::ForOp loop) {
     }
   }
 
+  // For each equivalence class, replace all other args in the class with one.
   for (auto it = equivalentArgs.begin(), end = equivalentArgs.end(); it != end;
        ++it) {
     if (!(*it)->isLeader())
@@ -128,6 +130,7 @@ static void loopCSE(scf::ForOp loop) {
          mIt != equivalentArgs.member_end(); ++mIt)
       eqArgs.push_back(*mIt);
     assert(eqArgs.size() > 1);
+    // Sort the indices so the pass is deterministic.
     llvm::sort(eqArgs);
     BlockArgument unique = loop.getRegionIterArg(eqArgs.front());
     Value uniqueResult = loop.getResult(eqArgs.front());
