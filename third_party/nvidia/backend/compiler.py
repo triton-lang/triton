@@ -244,7 +244,7 @@ class CUDABackend(BaseBackend):
         passes.ttgpuir.add_remove_layout_conversions(pm)
         passes.ttgpuir.add_optimize_dot_operands(pm, capability >= 80)
         nvidia.passes.ttnvgpuir.add_optimize_descriptor_encoding(pm)
-        passes.common.add_cse(pm)
+        passes.ttir.add_loop_aware_cse(pm)
         if capability // 10 in [8, 9]:
             passes.ttgpuir.add_fuse_nested_loops(pm)
             passes.common.add_canonicalizer(pm)
@@ -264,10 +264,10 @@ class CUDABackend(BaseBackend):
             passes.ttgpuir.add_pipeline(pm, opt.num_stages, dump_enabled)
             passes.ttgpuir.add_combine_tensor_select_and_if(pm)
             nvidia.passes.ttnvgpuir.add_remove_tmem_tokens(pm)
-            passes.common.add_canonicalizer(pm)
-            passes.ttgpuir.add_loop_cse(pm)
         else:
             passes.ttir.add_triton_licm(pm)
+        passes.common.add_canonicalizer(pm)
+        passes.ttir.add_loop_aware_cse(pm)
         passes.ttgpuir.add_prefetch(pm)
         passes.ttgpuir.add_WGMMAPrefetch(pm)
         passes.ttgpuir.add_optimize_dot_operands(pm, capability >= 80)
@@ -277,7 +277,7 @@ class CUDABackend(BaseBackend):
         nvidia.passes.ttnvgpuir.add_interleave_tmem(pm)
         passes.ttgpuir.add_reduce_data_duplication(pm)
         passes.ttgpuir.add_reorder_instructions(pm)
-        passes.common.add_cse(pm)
+        passes.ttir.add_loop_aware_cse(pm)
         passes.common.add_symbol_dce(pm)
         if capability // 10 >= 9:
             nvidia.passes.ttnvgpuir.add_tma_lowering(pm)
