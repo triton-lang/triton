@@ -333,7 +333,7 @@ def test_trace(tmp_path: pathlib.Path):
 
     with proton.scope("test"):
         foo[(1, )](x, y, x.size()[0], num_warps=4)
-        
+
     proton.finalize()
 
     with temp_file.open() as f:
