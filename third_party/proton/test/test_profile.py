@@ -341,4 +341,4 @@ def test_trace(tmp_path: pathlib.Path):
         trace_events = data["traceEvents"]
         assert len(trace_events) == 3
         assert trace_events[-1]["name"] == "foo"
-        assert trace_events[-1]["args"]["call_stack"] == ["ROOT", "init", "foo"]
+        assert trace_events[-1]["args"]["call_stack"] == ["ROOT", "test", "foo"]
