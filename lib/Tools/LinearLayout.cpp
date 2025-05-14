@@ -13,6 +13,7 @@
 #include "llvm/ADT/SetOperations.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/Support/Debug.h"
+#include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/MathExtras.h"
 
 #define DEBUG_TYPE "linear_layout"
@@ -295,18 +296,20 @@ LinearLayout::LinearLayout(
     ArrayRef<std::pair<StringAttr, int32_t>> outDims, bool requireSurjective)
     : LinearLayout(makeBasesMap(bases), outDims, requireSurjective) {}
 
-/*static*/ LinearLayout LinearLayout::identity1D(int32_t size,
-                                                 StringAttr inDimName,
-                                                 StringAttr outDimName) {
+/*static*/ LinearLayout LinearLayout::strided1D(int32_t size, int32_t stride,
+                                                StringAttr inDimName,
+                                                StringAttr outDimName) {
   if (size == 0)
     return LinearLayout::empty();
 
   assert(llvm::isPowerOf2_32(size));
-  std::vector<std::vector<int32_t>> powersOf2;
+  std::vector<std::vector<int32_t>> bases;
   for (int32_t i = 1; i < size; i *= 2) {
-    powersOf2.emplace_back().push_back(i);
+    bases.emplace_back(std::vector<int32_t>{i * stride});
   }
-  return LinearLayout({{inDimName, std::move(powersOf2)}}, {outDimName});
+  bool requiresSurjective = (stride == 1);
+  return LinearLayout({{inDimName, std::move(bases)}},
+                      {{outDimName, stride * size}}, requiresSurjective);
 }
 
 /*static*/ LinearLayout LinearLayout::zeros1D(int32_t size,
@@ -958,8 +961,14 @@ LinearLayout LinearLayout::invertAndCompose(const LinearLayout &outer) const {
   const auto &B = *this;
   const auto A = outer.transposeOuts(outDims);
   for (auto dim : outDims) {
-    assert(A.getOutDimSize(dim) == B.getOutDimSize(dim) &&
-           "Convert layout does not change the shape of a tensor");
+    if (A.getOutDimSize(dim) != B.getOutDimSize(dim)) {
+      std::stringstream msg;
+      msg << "B.invertAndCompose(A) called with incompatible output shapes in ";
+      msg << "dim = " << std::string(dim.getValue()) << ": ";
+      msg << "A = " << A.getOutDimSize(dim) << ", ";
+      msg << "B = " << B.getOutDimSize(dim);
+      llvm::report_fatal_error(msg.str().c_str());
+    }
   }
 
   // We'll write A^{-1} to mean the inverse or the pseudo-inverse of A
