@@ -43,13 +43,11 @@ static void initProton(pybind11::module &&m) {
         []() { SessionManager::instance().deactivateAllSessions(); });
 
   m.def("finalize", [](size_t sessionId, const std::string &outputFormat) {
-    auto outputFormatEnum = parseOutputFormat(outputFormat);
-    SessionManager::instance().finalizeSession(sessionId, outputFormatEnum);
+    SessionManager::instance().finalizeSession(sessionId, outputFormat);
   });
 
   m.def("finalize_all", [](const std::string &outputFormat) {
-    auto outputFormatEnum = parseOutputFormat(outputFormat);
-    SessionManager::instance().finalizeAllSessions(outputFormatEnum);
+    SessionManager::instance().finalizeAllSessions(outputFormat);
   });
 
   m.def("record_scope", []() { return Scope::getNewScopeId(); });

@@ -82,7 +82,8 @@ convertActivityToMetric(const roctracer_record_t *activity) {
           static_cast<uint64_t>(activity->end_ns), 1,
           static_cast<uint64_t>(
               DeviceInfo::instance().mapDeviceId(activity->device_id)),
-          static_cast<uint64_t>(DeviceType::HIP));
+          static_cast<uint64_t>(DeviceType::HIP),
+          static_cast<uint64_t>(activity->queue_id));
     }
     break;
   }
