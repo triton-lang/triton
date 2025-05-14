@@ -1858,13 +1858,6 @@ class TritonSemantic(Generic[TensorTy]):
             raise ValueError(f"Expected {ndim} strides but got {len(strides)}")
         if len(block_shape) != ndim:
             raise ValueError(f"Expected block_shape to have {ndim} dimensions but got {len(strides)}")
-        assert isinstance(base.dtype, tl.pointer_type)
-        elem_size = base.dtype.element_ty.primitive_bitwidth // 8
-        contig_dim_size = tl._unwrap_if_constexpr(block_shape[-1])
-        if contig_dim_size * elem_size < 16:
-            raise ValueError(
-                f"Descriptor block shape must have at least 16 bytes in the last dimension, but got {contig_dim_size} * {elem_size} = {contig_dim_size * elem_size} bytes"
-            )
 
         strides[-1] = tl._unwrap_if_constexpr(strides[-1])
         if strides[-1] != 1:

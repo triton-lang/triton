@@ -253,6 +253,13 @@ LogicalResult createTMADesc(Value tmaPtr, MakeTensorDescOp op,
       getTMABlockShape(encoding, shapePerCTA, /*packedSize=*/false);
   auto contigDimSize = blockShape.back();
 
+  if (contigDimSize * elemSize < 16) {
+    return op->emitError("Descriptor block shape must have at least 16 bytes "
+                         "in the last dimension, but got ")
+           << contigDimSize << " * " << elemSize << " = "
+           << (contigDimSize * elemSize) << " bytes";
+  }
+
   llvm::SmallVector<Value> boxDim;
   if (fp4Padded && contigDimSize != 128) {
     return op->emitError(

@@ -46,7 +46,6 @@ from triton._internal_testing import (
     torch_dtype_name,
     to_numpy,
 )
-from triton.runtime.errors import InterpreterError
 
 
 @contextlib.contextmanager
@@ -5184,35 +5183,20 @@ def test_reshape_err(device):
 
 
 @pytest.mark.interpreter
-def test_tma_load_block_shape_err(device):
+def test_tma_block_shape_err(capfd, device):
 
     @triton.jit
     def kernel(ptr):
         desc = tl.make_tensor_descriptor(ptr, [128, 128], [128, 1], [1, 2])
-        desc.load([0, 0])
+        x = desc.load([0, 0])
+        x = x + x
+        desc.store([0, 0], x)
 
     input = torch.empty((128, 128), dtype=torch.int32, device=device)
-    errc = triton.CompilationError if not is_interpreter() else InterpreterError
-    with pytest.raises(errc) as e:
+    with pytest.raises(RuntimeError) as e:
         kernel[(1, )](input)
-
-    assert "Descriptor block shape must have at least 16 bytes" in str(e.value.__cause__)
-
-
-@pytest.mark.interpreter
-def test_tma_store_block_shape_err(device):
-
-    @triton.jit
-    def kernel(ptr):
-        desc = tl.make_tensor_descriptor(ptr, [128, 128], [128, 1], [8, 4])
-        desc.store([0, 0], tl.zeros([8, 4], dtype=tl.int16))
-
-    input = torch.empty((128, 128), dtype=torch.int16, device=device)
-    errc = triton.CompilationError if not is_interpreter() else InterpreterError
-    with pytest.raises(errc) as e:
-        kernel[(1, )](input)
-
-    assert "Descriptor block shape must have at least 16 bytes" in str(e.value.__cause__)
+    _, stderr = capfd.readouterr()
+    assert "Descriptor block shape must have at least 16 bytes" in stderr
 
 
 def test_trans_reshape(device, with_allocator):
