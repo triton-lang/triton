@@ -40,7 +40,6 @@ public:
 
 protected:
   /// The actual implementation of the dump operation.
-  /// Return the standard output format enum
   virtual void doDump(std::ostream &os, OutputFormat outputFormat) const = 0;
 
   virtual OutputFormat getDefaultOutputFormat() const = 0;
