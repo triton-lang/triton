@@ -74,12 +74,13 @@ def start(
 
     Args:
         name (str, optional): The name (with path) of the profiling session.
-                              If not provided, the default name is "~/proton.hatchet".
+                              If not provided, the default name is "~/proton.<suffix>", where suffix is the default
+                              format according to the data type. For example, if data is "tree", the default name is "~/proton.hatchet".
         context (str, optional): The context to use for profiling.
                                  Available options are ["shadow", "python"].
                                  Defaults to "shadow".
         data (str, optional): The data structure to use for profiling.
-                              Available options are ["tree"].
+                              Available options are ["tree", "trace"].
                               Defaults to "tree".
         backend (str, optional): The backend to use for profiling.
                                  Available options are [None, "cupti", "roctracer", "instrumentation"].
@@ -166,7 +167,7 @@ def deactivate(session: Optional[int] = None) -> None:
         libproton.deactivate(session)
 
 
-def finalize(session: Optional[int] = None, output_format: str = "hatchet") -> None:
+def finalize(session: Optional[int] = None, output_format: Optional[str] = "") -> None:
     """
     Finalizes a profiling session.
     Flush and write the profiling data to the file specified by the session name.
@@ -174,7 +175,7 @@ def finalize(session: Optional[int] = None, output_format: str = "hatchet") -> N
     Args:
         session (int, optional): The session ID to finalize. If None, all sessions are finalized. Defaults to None.
         output_format (str, optional): The output format for the profiling results.
-                                       Available options are ["hatchet"].
+                                       Available options are ["hatchet", "chrome_trace"].
 
     Returns:
         None

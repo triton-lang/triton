@@ -10,7 +10,7 @@
 
 namespace proton {
 
-enum class OutputFormat { Hatchet, Count };
+enum class OutputFormat { Hatchet, ChromeTrace, Count };
 
 class Data : public ScopeInterface {
 public:
@@ -36,11 +36,13 @@ public:
   virtual void clear() = 0;
 
   /// Dump the data to the given output format.
-  void dump(OutputFormat outputFormat);
+  void dump(const std::string &outputFormat);
 
 protected:
   /// The actual implementation of the dump operation.
   virtual void doDump(std::ostream &os, OutputFormat outputFormat) const = 0;
+
+  virtual OutputFormat getDefaultOutputFormat() const = 0;
 
   mutable std::shared_mutex mutex;
   const std::string path{};
