@@ -264,7 +264,7 @@ class CUDABackend(BaseBackend):
             passes.ttgpuir.add_combine_tensor_select_and_if(pm)
             nvidia.passes.ttnvgpuir.add_remove_tmem_tokens(pm)
             passes.common.add_canonicalizer(pm)
-            passes.ttgpuir.add_loop_cse(pm)
+            passes.ttgpuir.add_loop_aware_cse(pm)
         else:
             passes.ttir.add_triton_licm(pm)
         passes.ttgpuir.add_prefetch(pm)

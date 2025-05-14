@@ -8,7 +8,7 @@
 using namespace mlir;
 
 namespace mlir::triton::gpu {
-#define GEN_PASS_DEF_TRITONGPULOOPCSE
+#define GEN_PASS_DEF_TRITONGPULOOPAWARECSE
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h.inc"
 } // namespace mlir::triton::gpu
 
@@ -151,13 +151,14 @@ static void loopCSE(scf::ForOp loop) {
 }
 
 namespace {
-struct LoopCSE : public triton::gpu::impl::TritonGPULoopCSEBase<LoopCSE> {
-  using TritonGPULoopCSEBase::TritonGPULoopCSEBase;
+struct LoopAwareCSE
+    : public triton::gpu::impl::TritonGPULoopAwareCSEBase<LoopAwareCSE> {
+  using TritonGPULoopAwareCSEBase::TritonGPULoopAwareCSEBase;
 
   void runOnOperation() override {
-    // LoopCSE doesn't recursively CSE ops outside of loops, so run CSE first to
-    // make sure values from outside loops that are equivalent are made pointer
-    // equal.
+    // LoopAwareCSE doesn't recursively CSE ops outside of loops, so run CSE
+    // first to make sure values from outside loops that are equivalent are made
+    // pointer equal.
     OpPassManager pm;
     pm.addPass(createCSEPass());
     if (failed(runPipeline(pm, getOperation())))
