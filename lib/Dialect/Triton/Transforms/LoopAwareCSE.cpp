@@ -1,4 +1,5 @@
 #include "mlir/Dialect/SCF/IR/SCF.h"
+#include "mlir/IR/Dominance.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Transforms/CSE.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
@@ -6,10 +7,10 @@
 
 using namespace mlir;
 
-namespace mlir::triton::gpu {
-#define GEN_PASS_DEF_TRITONGPULOOPAWARECSE
-#include "triton/Dialect/TritonGPU/Transforms/Passes.h.inc"
-} // namespace mlir::triton::gpu
+namespace mlir::triton {
+#define GEN_PASS_DEF_TRITONLOOPAWARECSE
+#include "triton/Dialect/Triton/Transforms/Passes.h.inc"
+} // namespace mlir::triton
 
 namespace {
 class ValueEquivalence {
@@ -151,8 +152,8 @@ static void loopCSE(scf::ForOp loop) {
 
 namespace {
 struct LoopAwareCSE
-    : public triton::gpu::impl::TritonGPULoopAwareCSEBase<LoopAwareCSE> {
-  using TritonGPULoopAwareCSEBase::TritonGPULoopAwareCSEBase;
+    : public triton::impl::TritonLoopAwareCSEBase<LoopAwareCSE> {
+  using TritonLoopAwareCSEBase::TritonLoopAwareCSEBase;
 
   void runOnOperation() override {
     // LoopAwareCSE doesn't recursively CSE ops outside of loops, so run CSE

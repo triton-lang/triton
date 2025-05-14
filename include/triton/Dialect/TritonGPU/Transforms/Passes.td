@@ -376,15 +376,4 @@ def TritonGPUCoalesceAsyncCopy: Pass<"tritongpu-coalesce-async-copy", "mlir::Mod
                            "mlir::triton::TritonDialect"];
 }
 
-def TritonGPULoopAwareCSE : Pass<"tritongpu-loop-aware-cse", "mlir::ModuleOp"> {
-  let summary = "CSE within loop bodies";
-
-  let description = [{
-    The `tritongpu-loop-aware-cse` pass performs recursive common subexpression
-    elimination within loop bodies. Unlike regular CSE, which is a single-pass
-    greedy algorithm, this pass can recursively eliminate loop iteration
-    arguments and subcomputations that always have the same value.
-  }];
-}
-
 #endif
