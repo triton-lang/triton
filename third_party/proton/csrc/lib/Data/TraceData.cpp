@@ -185,6 +185,8 @@ void TraceData::addMetrics(
   if (scopeIdIt == scopeIdToContextId.end())
     return;
   auto contextId = scopeIdIt->second;
+  if (!trace->hasEvent(scopeId)) // TODO: custom metrics not supported yet
+    return;
   auto &event = trace->getEvent(scopeId);
   for (auto [metricName, metricValue] : metrics) {
     if (event.flexibleMetrics.find(metricName) == event.flexibleMetrics.end()) {
