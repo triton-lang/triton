@@ -93,6 +93,7 @@ jobs:
         run: |
           if [ "${{ matrix.runner[0] }}" == "nvidia-gb200" ]; then
             source /venv/bin/activate
+            export MAX_JOBS=16
           fi
           nproc
           nvidia-smi
