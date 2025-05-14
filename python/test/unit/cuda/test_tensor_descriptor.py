@@ -46,7 +46,7 @@ REDUCE_OP = {
 @pytest.mark.parametrize("dtype_str", tma_dtypes)
 @pytest.mark.parametrize("num_ctas", [1, 2])
 @pytest.mark.parametrize("descriptor", ["host", "device"])
-@pytest.mark.parametrize("M_BLOCK,N_BLOCK", [(2, 16), (8, 16), (8, 32), (8, 128)])
+@pytest.mark.parametrize("M_BLOCK,N_BLOCK", [(2, 16), (8, 16), (8, 32), (8, 128), (512, 32), (1, 1024)])
 def test_tensor_descriptor_reduce(kind, descriptor, dtype_str, num_ctas, M_BLOCK, N_BLOCK):
 
     @triton.jit(debug=True)
@@ -89,7 +89,7 @@ def test_tensor_descriptor_reduce(kind, descriptor, dtype_str, num_ctas, M_BLOCK
             tl.static_assert(kind == "xor")
             desc.atomic_xor([moffset, noffset], val)
 
-    M, N = 32, 128
+    M, N = M_BLOCK * 2, N_BLOCK * 2
     rs = np.random.RandomState(seed=17)
     inp = to_triton(numpy_random((M, N), dtype_str, rs), device="cuda", dst_type=dtype_str)
     out = to_triton(numpy_random((M, N), dtype_str, rs), device="cuda", dst_type=dtype_str)
@@ -140,7 +140,7 @@ def torch_gather_rows(input, idx, y, block_y):
 
 @pytest.mark.interpreter
 @pytest.mark.parametrize("X, Y", [(128, 128), (64, 256)])
-@pytest.mark.parametrize("BLOCK_X, BLOCK_Y", [(32, 32), (64, 128), (16, 128)])
+@pytest.mark.parametrize("BLOCK_X, BLOCK_Y", [(32, 32), (64, 128), (16, 128), (512, 16)])
 @pytest.mark.parametrize("dtype", [torch.float32, torch.float16, torch.int8])
 @pytest.mark.parametrize("y", [0, 32, 48])
 @pytest.mark.skipif(not is_interpreter() and torch.cuda.get_device_capability()[0] != 10,
@@ -240,7 +240,7 @@ def tma_scatter_rows_kernel(out_ptr, in_ptr, idx_ptr, y, X: tl.constexpr, Y: tl.
 
 @pytest.mark.interpreter
 @pytest.mark.parametrize("X, Y", [(128, 128), (64, 256)])
-@pytest.mark.parametrize("BLOCK_X, BLOCK_Y", [(32, 32), (64, 128), (16, 128)])
+@pytest.mark.parametrize("BLOCK_X, BLOCK_Y", [(32, 32), (64, 128), (16, 128), (512, 16)])
 @pytest.mark.parametrize("dtype", [torch.float32, torch.float16, torch.int8])
 @pytest.mark.parametrize("y", [0, 32, 48])
 @pytest.mark.skipif(not is_interpreter() and torch.cuda.get_device_capability()[0] != 10,
@@ -270,7 +270,7 @@ def test_tma_scatter(X, Y, BLOCK_X, BLOCK_Y, dtype, y):
 @pytest.mark.interpreter()
 @pytest.mark.parametrize("dtype_str", tma_dtypes)
 @pytest.mark.parametrize("num_ctas", [1, 2])
-@pytest.mark.parametrize("M_BLOCK,N_BLOCK", [(2, 16), (8, 16), (8, 32), (8, 128)])
+@pytest.mark.parametrize("M_BLOCK,N_BLOCK", [(2, 16), (8, 16), (8, 32), (8, 128), (512, 32), (1, 1024)])
 def test_host_tensor_descriptor_load(dtype_str, num_ctas, M_BLOCK, N_BLOCK):
 
     @triton.jit(debug=True)
@@ -323,7 +323,7 @@ def matmul_kernel_host_tensor_descriptor(a_desc, b_desc, c_desc):
 @pytest.mark.parametrize("num_ctas", [1, 2])
 @pytest.mark.parametrize("BLOCK_M, BLOCK_N, BLOCK_K, num_stages", [
     (128, 128, 16, 1),
-    (256, 64, 32, 2),
+    (512, 64, 32, 2),
     (64, 512, 32, 2),
     (128, 128, 16, 4),
     (64, 128, 32, 4),

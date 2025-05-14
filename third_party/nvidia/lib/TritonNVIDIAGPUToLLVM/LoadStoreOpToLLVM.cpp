@@ -19,12 +19,15 @@
 #include "triton/Dialect/TritonGPU/IR/LinearLayoutConversions.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/TMAUtilities.h"
+#include "triton/Tools/LayoutUtils.h"
 
 #include <cassert>
 
 using namespace mlir;
 using namespace mlir::triton;
+namespace tt = mlir::triton;
 namespace ttg = mlir::triton::gpu;
+namespace ttng = mlir::triton::nvidia_gpu;
 
 using ::mlir::LLVM::delinearize;
 using ::mlir::LLVM::getSharedMemoryObjectFromStruct;
@@ -32,8 +35,6 @@ using ::mlir::LLVM::linearize;
 using ::mlir::triton::gpu::getCTALayout;
 using ::mlir::triton::gpu::getTotalElemsPerThread;
 using ::mlir::triton::gpu::NVMMASharedEncodingAttr;
-
-namespace ttg = mlir::triton::gpu;
 
 // Toggle this to work around Cooperative Grid Launch ld.acquire optimized path
 static constexpr bool disableLDAcquireLowering = false;
@@ -1269,26 +1270,44 @@ struct AsyncCopyGlobalToLocalOpConversion
   }
 };
 
-static SmallVector<Value> getCtaOffset(RewriterBase &rewriter, Location loc,
-                                       Attribute encoding,
-                                       ArrayRef<int64_t> shapePerCTA) {
-  auto b = TritonLLVMOpBuilder(loc, rewriter);
-  auto rank = shapePerCTA.size();
-  auto ctaId = rewriter.create<nvgpu::ClusterCTAIdOp>(loc);
-  auto ctaLayout = getCTALayout(encoding);
-  SmallVector<Value> ctaOffset(rank, Value());
-  Value curVal = ctaId;
-  for (int i = 0; i < rank; i++) {
-    auto dim = ctaLayout.getCTAOrder()[i];
-    auto splits = ctaLayout.getCTASplitNum()[dim];
-    if (splits == 1)
-      continue;
-    auto splitsVal = b.i32_val(splits);
-    auto idx = b.urem(curVal, splitsVal);
-    curVal = b.udiv(curVal, splitsVal);
-    ctaOffset[dim] = b.mul(idx, b.i32_val(shapePerCTA[dim]));
+static LinearLayout getMsgToPackedOffsetLayout(ttg::MemDescType ty) {
+  auto ctx = ty.getContext();
+  auto kMsg = str_attr("msg");
+  auto kBlock = str_attr("block");
+  auto shapePerCTA = ttg::getShapePerCTA(ty);
+  int rank = shapePerCTA.size();
+  auto blockShape = ttng::getTMABlockShape(ty, /*packedSize=*/true);
+  auto outDimNames = standardOutDimNames(ctx, rank);
+  LinearLayout msgToOffset;
+  for (int dim = 0; dim < rank; ++dim) {
+    msgToOffset *=
+        LinearLayout::strided1D(shapePerCTA[dim] / blockShape[dim],
+                                blockShape[dim], kMsg, outDimNames[dim]);
   }
-  return ctaOffset;
+  auto ctaLayout = getCTALayout(ty.getEncoding());
+  for (int i = 0; i < rank; ++i) {
+    auto dim = ctaLayout.getCTAOrder()[i];
+    msgToOffset *= LinearLayout::identity1D(ctaLayout.getCTASplitNum()[dim],
+                                            kBlock, outDimNames[dim]);
+  }
+  return msgToOffset;
+}
+
+static LinearLayout
+getMsgToUnpackedOffsetLayout(const LinearLayout &packedLayout,
+                             ttg::MemDescType ty) {
+  auto isFp4Padded =
+      cast<NVMMASharedEncodingAttr>(ty.getEncoding()).getFp4Padded();
+  if (!isFp4Padded) {
+    return packedLayout;
+  }
+  auto ctx = ty.getContext();
+  auto rank = ty.getRank();
+  auto kMsg = str_attr("msg");
+  auto kLastDim = str_attr("dim" + Twine(rank - 1));
+  // Multiply to offset by 2 in the last dimension
+  auto unpackLayout = LinearLayout::zeros1D(1, kMsg, kLastDim, 2);
+  return unpackLayout * packedLayout;
 }
 
 struct AsyncTMACopyGlobalToLocalOpConversion
@@ -1329,19 +1348,27 @@ struct AsyncTMACopyGlobalToLocalOpConversion
     // figure out that the op is uniform.
     pred = b.and_(pred, LLVM::NVIDIA::createElectPredicate(loc, rewriter));
 
-    Attribute encoding = op.getResult().getType().getEncoding();
+    auto smemTy = op.getResult().getType();
+    Attribute encoding = smemTy.getEncoding();
     auto mmaEncoding = dyn_cast_or_null<NVMMASharedEncodingAttr>(encoding);
     int elementSizeInBytes =
         op.getResult().getType().getElementType().getIntOrFloatBitWidth() / 8;
     int packingFactor = (mmaEncoding && mmaEncoding.getFp4Padded()) ? 2 : 1;
 
-    auto shapePerCTA = ttg::getShapePerCTA(op.getResult().getType());
-    auto contigDimSize = nvidia_gpu::getTMAContigDim(op.getResult().getType());
-    int numCopies =
-        ceil<int>(shapePerCTA.back() * packingFactor, contigDimSize);
+    auto shapePerCTA = ttg::getShapePerCTA(smemTy);
     int rank = op.getCoord().size();
-    auto ctaOffset = getCtaOffset(rewriter, loc, encoding, shapePerCTA);
-    int elementsPerCTA = product(shapePerCTA) * packingFactor;
+
+    auto msgToPackedOffset = getMsgToPackedOffsetLayout(smemTy);
+    auto smemLayout = ttg::toLinearLayout(smemTy.getShape(), encoding);
+    auto msgToShared = msgToPackedOffset.invertAndCompose(smemLayout);
+    auto msgToOffset = getMsgToUnpackedOffsetLayout(msgToPackedOffset, smemTy);
+
+    auto ctx = op.getContext();
+    auto kMsg = str_attr("msg");
+    auto kBlock = str_attr("block");
+    const auto numCopies = msgToOffset.getInDimSize(kMsg);
+    auto zero = b.i32_val(0);
+    auto ctaId = rewriter.create<nvgpu::ClusterCTAIdOp>(loc);
 
     // The bounding box inner dimension must be less than or equal to the
     // swizzle size.
@@ -1358,7 +1385,9 @@ struct AsyncTMACopyGlobalToLocalOpConversion
       Type elemPtrTy = ptr_ty(rewriter.getContext(), 3);
       Value copyIdxVal = b.add(warpID, b.i32_val(copyIdx));
       Value shMemOffset =
-          b.mul(copyIdxVal, b.i32_val(elementsPerCTA / numCopies));
+          applyLinearLayout(loc, rewriter, msgToShared,
+                            {{kMsg, copyIdxVal}, {kBlock, zero}})[0]
+              .second;
       Value shMemPtr =
           b.gep(elemPtrTy, llvmElemTy, dstMemObj.getBase(), shMemOffset);
       SmallVector<PTXBuilder::Operand *> operands = {
@@ -1368,15 +1397,14 @@ struct AsyncTMACopyGlobalToLocalOpConversion
       std::string tmaInst =
           "@$0 cp.async.bulk.tensor." + std::to_string(rank) +
           "d.shared::cluster.global.mbarrier::complete_tx::bytes [$1], [$2, {";
+
+      auto offsets = applyLinearLayout(loc, rewriter, msgToOffset,
+                                       {{kMsg, copyIdxVal}, {kBlock, ctaId}});
       int operandIdx = 3;
       for (int i = 0; i < rank; i++) {
         Value coord = adaptor.getCoord()[rank - i - 1];
-        if (i < ctaOffset.size() && ctaOffset[ctaOffset.size() - i - 1])
-          coord = b.add(coord, ctaOffset[ctaOffset.size() - i - 1]);
-        if (i == 0) {
-          Value offset = b.mul(copyIdxVal, b.i32_val(contigDimSize));
-          coord = b.add(coord, offset);
-        }
+        if (i < offsets.size())
+          coord = b.add(coord, offsets[offsets.size() - i - 1].second);
         operands.push_back(ptxBuilderTMA.newOperand(coord, "r"));
         tmaInst += "$" + std::to_string(operandIdx++);
         if (i != rank - 1)
@@ -1420,11 +1448,20 @@ LogicalResult convertTMAStoreLikeOp(Operation *op,
   auto shapePerCTA = ttg::getShapePerCTA(srcTy);
   int elementsPerCTA = product(shapePerCTA);
 
-  auto contigDimSize = nvidia_gpu::getTMAContigDim(srcTy);
-  int numCopies = shapePerCTA.back() / contigDimSize;
   auto rank = coords.size();
   auto encoding = srcTy.getEncoding();
-  auto ctaOffset = getCtaOffset(rewriter, loc, encoding, shapePerCTA);
+
+  auto msgToPackedOffset = getMsgToPackedOffsetLayout(srcTy);
+  auto smemLayout = ttg::toLinearLayout(srcTy.getShape(), encoding);
+  auto msgToShared = msgToPackedOffset.invertAndCompose(smemLayout);
+  auto msgToOffset = getMsgToUnpackedOffsetLayout(msgToPackedOffset, srcTy);
+
+  auto ctx = op->getContext();
+  auto kMsg = str_attr("msg");
+  auto kBlock = str_attr("block");
+  auto numCopies = msgToOffset.getInDimSize(kMsg);
+  auto zero = b.i32_val(0);
+  auto ctaId = rewriter.create<nvgpu::ClusterCTAIdOp>(loc);
 
   for (int copyIdx = 0; copyIdx < numCopies; copyIdx += numWarps) {
     int numWarpsToCopy = std::min(numCopies - copyIdx, numWarps);
@@ -1436,21 +1473,22 @@ LogicalResult convertTMAStoreLikeOp(Operation *op,
     Type elemPtrTy = ptr_ty(rewriter.getContext(), 3);
     Value copyIdxVal = b.add(warpID, b.i32_val(copyIdx));
     Value shMemOffset =
-        b.mul(copyIdxVal, b.i32_val(elementsPerCTA / numCopies));
+        applyLinearLayout(loc, rewriter, msgToShared,
+                          {{kMsg, copyIdxVal}, {kBlock, zero}})[0]
+            .second;
     Value shMemPtr =
         b.gep(elemPtrTy, llvmElemTy, dstMemObj.getBase(), shMemOffset);
     SmallVector<PTXBuilder::Operand *> operands = {
         ptxBuilderTMA.newOperand(boxPred, "b"),
         ptxBuilderTMA.newOperand(tmaPtr, "l")};
+
+    auto offsets = applyLinearLayout(loc, rewriter, msgToOffset,
+                                     {{kMsg, copyIdxVal}, {kBlock, ctaId}});
     int operandIdx = 2;
     for (int i = 0; i < rank; i++) {
       Value coord = coords[rank - i - 1];
-      if (i < ctaOffset.size() && ctaOffset[ctaOffset.size() - i - 1])
-        coord = b.add(coord, ctaOffset[ctaOffset.size() - i - 1]);
-      if (i == 0) {
-        Value offset = b.mul(copyIdxVal, b.i32_val(contigDimSize));
-        coord = b.add(coord, offset);
-      }
+      if (i < offsets.size())
+        coord = b.add(coord, offsets[offsets.size() - i - 1].second);
       operands.push_back(ptxBuilderTMA.newOperand(coord, "r"));
     }
     operands.push_back(ptxBuilderTMA.newOperand(shMemPtr, "r"));
@@ -1589,10 +1627,11 @@ static LogicalResult iterateGatherScatterIndices(
   unsigned threadsPerWarp = xCoordsLayout.getInDimSize(kLane);
   unsigned numWarps = xCoordsLayout.getInDimSize(kWarp);
 
-  // Each gather4 instructions reads 128 bytes for 4 rows at a time.
+  // Each gather4 instructions reads contigDimSize columns, 4 rows at a time.
   auto shapePerCTA = ttg::getShapePerCTA(smemType);
+  auto tmaBlockShape = ttng::getTMABlockShape(smemType, /*packedSize=*/true);
   unsigned innerBlockSize = shapePerCTA.back();
-  unsigned contigDimSize = nvidia_gpu::getTMAContigDim(smemType);
+  unsigned contigDimSize = tmaBlockShape.back();
   unsigned numMessagesPerRow = ceil<unsigned>(innerBlockSize, contigDimSize);
 
   // `xCoordsLayout` maps the register ID into dim0. Tile dim1 by adding a new
@@ -1600,15 +1639,11 @@ static LogicalResult iterateGatherScatterIndices(
   assert(innerBlockSize % numMessagesPerRow == 0);
   assert(llvm::isPowerOf2_32(numMessagesPerRow));
   unsigned msgSize = innerBlockSize / numMessagesPerRow;
-  std::vector<std::vector<int>> msgBases;
-  for (unsigned msgId = 1; msgId < numMessagesPerRow; msgId *= 2)
-    msgBases.push_back({int32_t(msgId * msgSize)});
-  LinearLayout msgToCol({{{kMsg, std::move(msgBases)}}},
-                        {{kDim1, innerBlockSize}},
-                        /*requiresSurjective=*/false);
+  LinearLayout msgToCol =
+      LinearLayout::strided1D(numMessagesPerRow, msgSize, kMsg, kDim1);
   LinearLayout msgLayout = xCoordsLayout * msgToCol;
 
-  // `gather4` will put the 128-byte segments of the 4 rows consecutively in
+  // `gather4` will put the segments of the 4 rows consecutively in
   // shared memory. However, if the 4 rows are smaller than the shared memory
   // swizzle tile size, e.g. [4, 32] vs. [8, 32], then, for example, the address
   // of the 0th element of row 4 will not be at the start of the segment.

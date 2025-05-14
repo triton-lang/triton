@@ -99,23 +99,30 @@ ttg::SharedEncodingTrait getEncodingFromDescriptor(Operation *op,
   return updateEncodingForShape(op, sharedEnc, tensorType);
 }
 
-int64_t getTMAContigDim(Attribute encoding, ArrayRef<int64_t> shape) {
-  assert(encoding);
-  auto mmaEncoding =
-      llvm::dyn_cast_or_null<ttg::NVMMASharedEncodingAttr>(encoding);
-
-  // The bounding box inner dimension must be less than or equal to the
-  // swizzle size.
-  // https://docs.nvidia.com/cuda/cuda-driver-api/group__CUDA__TENSOR__MEMORY.html#group__CUDA__TENSOR__MEMORY_1ga7c7d2aaac9e49294304e755e6f341d7
-  // We clamp the block size and the codegen will emit multiple copy
-  // operations.
-  if (mmaEncoding && mmaEncoding.getSwizzlingByteWidth() != 0) {
-    auto elemSize = mmaEncoding.getElementBitWidth() / 8;
-    return mmaEncoding.getSwizzlingByteWidth() / elemSize;
+SmallVector<int64_t> getTMABlockShape(ArrayRef<int64_t> shapePerCTA,
+                                      int elementBitWidth, int swizzleBytes,
+                                      bool fp4Padded, bool isTransposed,
+                                      bool packedSize) {
+  SmallVector<int64_t> blockShape(shapePerCTA);
+  int contigDim = isTransposed ? 0 : blockShape.size() - 1;
+  if (fp4Padded) {
+    blockShape[contigDim] *= 2;
   }
-
-  auto shapePerCTA = ttg::getShapePerCTA(encoding, shape);
-  return shapePerCTA.back();
+  // All dimensions must be at most 256
+  constexpr int64_t dimMax = 256;
+  for (auto &size : blockShape) {
+    size = std::min(size, dimMax);
+  }
+  // Last dim must equal the swizzle byte size
+  if (swizzleBytes != 0) {
+    auto contigDimSize = (8 * swizzleBytes) / elementBitWidth;
+    assert(blockShape[contigDim] >= contigDimSize);
+    blockShape[contigDim] = contigDimSize;
+  }
+  if (fp4Padded && packedSize) {
+    blockShape[contigDim] /= 2;
+  }
+  return blockShape;
 }
 
 std::optional<int> getTMASwizzleMode(Operation *op, TensorDescType ty) {
