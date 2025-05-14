@@ -75,7 +75,7 @@ void Session::deactivate() {
   data->clear();
 }
 
-void Session::finalize(OutputFormat outputFormat) {
+void Session::finalize(const std::string &outputFormat) {
   profiler->stop();
   data->dump(outputFormat);
 }
@@ -175,7 +175,7 @@ size_t SessionManager::addSession(const std::string &path,
 }
 
 void SessionManager::finalizeSession(size_t sessionId,
-                                     OutputFormat outputFormat) {
+                                     const std::string &outputFormat) {
   std::lock_guard<std::mutex> lock(mutex);
   if (!hasSession(sessionId)) {
     return;
@@ -185,7 +185,7 @@ void SessionManager::finalizeSession(size_t sessionId,
   removeSession(sessionId);
 }
 
-void SessionManager::finalizeAllSessions(OutputFormat outputFormat) {
+void SessionManager::finalizeAllSessions(const std::string &outputFormat) {
   std::lock_guard<std::mutex> lock(mutex);
   auto sessionIds = std::vector<size_t>{};
   for (auto &[sessionId, session] : sessions) {

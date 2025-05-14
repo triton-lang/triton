@@ -32,6 +32,10 @@ private:
   void doDump(std::ostream &os, OutputFormat outputFormat) const override;
   void dumpChromeTrace(std::ostream &os) const;
 
+  OutputFormat getDefaultOutputFormat() const override {
+    return OutputFormat::ChromeTrace;
+  }
+
   class Trace;
   std::unique_ptr<Trace> trace;
   // ScopeId -> ContextId

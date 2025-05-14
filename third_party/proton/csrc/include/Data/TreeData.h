@@ -33,7 +33,12 @@ protected:
 
 private:
   void dumpHatchet(std::ostream &os) const;
+
   void doDump(std::ostream &os, OutputFormat outputFormat) const override;
+
+  OutputFormat getDefaultOutputFormat() const override {
+    return OutputFormat::Hatchet;
+  }
 
   // `tree` and `scopeIdToContextId` can be accessed by both the user thread and
   // the background threads concurrently, so methods that access them should be
