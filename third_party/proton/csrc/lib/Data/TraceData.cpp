@@ -84,11 +84,11 @@ public:
     if (it == traceContextMap.end()) {
       throw std::runtime_error("Context not found");
     }
-    auto context = it->second;
-    contexts.push_back(context);
-    while (context.parentId != TraceContext::DummyId) {
-      context = traceContextMap[context.parentId];
-      contexts.push_back(context);
+    std::reference_wrapper<TraceContext> context = it->second;
+    contexts.push_back(context.get());
+    while (context.get().parentId != TraceContext::DummyId) {
+      context = traceContextMap[context.get().parentId];
+      contexts.push_back(context.get());
     }
     std::reverse(contexts.begin(), contexts.end());
     return contexts;
@@ -223,27 +223,6 @@ void TraceData::dumpChromeTrace(std::ostream &os) const {
       minTimeStamp = std::min(minTimeStamp, startTime);
     }
   }
-  // FIXME: This is just for debugging
-  //for (auto &[streamId, events] : streamTraceEvents) {
-  //  std::cout << "streamId: " << streamId << std::endl;
-  //  for (auto &event : events) {
-  //    auto contextId = event.contextId;
-  //    auto contexts = trace->getContexts(contextId);
-  //    std::cout << "context: " << std::endl;
-  //    for (const auto &context : contexts) {
-  //      std::cout << "  " << context.name << std::endl;
-  //    }
-  //    std::cout << "-------------------------" << std::endl;
-  //    std::shared_ptr<KernelMetric> kernelMetric =
-  //        std::dynamic_pointer_cast<KernelMetric>(
-  //            event.metrics.at(MetricKind::Kernel));
-  //    auto startTime =
-  //        std::get<uint64_t>(kernelMetric->getValue(KernelMetric::StartTime));
-  //    auto endTime =
-  //        std::get<uint64_t>(kernelMetric->getValue(KernelMetric::EndTime));
-  //    std::cout << "start: " << startTime << ", end: " << endTime << std::endl;
-  //  }
-  //}
 
   // 3) for each streamId in ascending order, emit one JSON line
   for (auto const& [streamId, events] : streamTraceEvents) {
