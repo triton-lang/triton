@@ -251,43 +251,46 @@ private:
 
     unsigned numAccs = accs.size(); // also == writePtrs.size()
 
-    // Step 1: compute writePtrs (same across threads)
-    SmallVector<Value> writePtrs;
-    for (auto it : accs) {
-      const SmallVector<unsigned> &key = it.first;
-      SmallVector<Value> writeIdx = indices[key];
+    for (unsigned operand = 0; operand < op.getNumOperands(); operand++) {
+      // Step 1: compute writePtrs (same across threads)
+      SmallVector<Value> writePtrs;
+      for (auto it : accs) {
+        const SmallVector<unsigned> &key = it.first;
+        SmallVector<Value> writeIdx = indices[key];
 
-      // Replace reduction axis index with warpIdAxis for all threads
-      writeIdx[axis] = warpIdAxis;
+        // Replace reduction axis index with warpIdAxis for all threads
+        writeIdx[axis] = warpIdAxis;
 
-      Value offset = linearize(rewriter, loc, writeIdx, smemShape, smemOrder);
-      auto elemTy = getElementType(op, 0); // assuming single operand
-      Value ptr = b.gep(smemBases[0].getType(), elemTy, smemBases[0], offset);
-      writePtrs.push_back(ptr);
-    }
-
-    // Step 2: get lane offset = which phase of the permutation this thread is
-    // in
-    Value laneOffset = multiDimLaneId[1 - axis];
-
-    // Step 3: each thread writes one value per round
-    unsigned int i = 0;
-    for (auto it : accs) {
-      const SmallVector<unsigned> &key = it.first;
-      SmallVector<Value> &acc = it.second;
-      Value iVal = b.i32_val(i);
-      Value targetIdx = b.urem(b.add(iVal, laneOffset), b.i32_val(numAccs));
-
-      // Step 3a: dynamically select writePtrs[targetIdx]
-      Value selectedPtr = writePtrs[0];
-      for (unsigned j = 1; j < numAccs; ++j) {
-        Value match = b.icmp_eq(targetIdx, b.i32_val(j));
-        selectedPtr = b.select(match, writePtrs[j], selectedPtr);
+        Value offset = linearize(rewriter, loc, writeIdx, smemShape, smemOrder);
+        auto elemTy = getElementType(op, operand);
+        Value ptr = b.gep(smemBases[operand].getType(), elemTy,
+                          smemBases[operand], offset);
+        writePtrs.push_back(ptr);
       }
 
-      // Step 3b: write acc[i] to selectedPtr if `write` predicate is true
-      targetInfo.storeShared(rewriter, loc, selectedPtr, acc[0], write);
-      i++;
+      // Step 2: get lane offset = which phase of the permutation this thread is
+      // in
+      Value laneOffset = multiDimLaneId[1 - axis];
+
+      // Step 3: each thread writes one value per round
+      unsigned int i = 0;
+      for (auto it : accs) {
+        const SmallVector<unsigned> &key = it.first;
+        SmallVector<Value> &acc = it.second;
+        Value iVal = b.i32_val(i);
+        Value targetIdx = b.urem(b.add(iVal, laneOffset), b.i32_val(numAccs));
+
+        // Step 3a: dynamically select writePtrs[targetIdx]
+        Value selectedPtr = writePtrs[0];
+        for (unsigned j = 1; j < numAccs; ++j) {
+          Value match = b.icmp_eq(targetIdx, b.i32_val(j));
+          selectedPtr = b.select(match, writePtrs[j], selectedPtr);
+        }
+
+        // Step 3b: write acc[i] to selectedPtr if `write` predicate is true
+        targetInfo.storeShared(rewriter, loc, selectedPtr, acc[operand], write);
+        i++;
+      }
     }
   }
 
