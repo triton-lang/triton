@@ -57,13 +57,6 @@ Attribute findLoadEncodingFromUsers(Operation *op) {
   return {};
 }
 
-ttg::CTALayoutAttr getCtaLayoutFromEncoding(Attribute encoding) {
-  auto layout = cast<ttg::LayoutEncodingTrait>(encoding);
-  auto ctx = encoding.getContext();
-  return ttg::CTALayoutAttr::get(ctx, layout.getCTAsPerCGA(),
-                                 layout.getCTASplitNum(), layout.getCTAOrder());
-}
-
 SmallVector<int64_t> expandToRank(ArrayRef<int64_t> shape, int rank) {
   SmallVector<int64_t> result(rank, 1);
   assert(shape.size() <= rank);

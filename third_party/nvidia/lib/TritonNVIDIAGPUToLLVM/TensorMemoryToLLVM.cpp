@@ -7,6 +7,7 @@
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
+#include "triton/Tools/LayoutUtils.h"
 
 using namespace mlir;
 using namespace mlir::triton;
@@ -704,10 +705,22 @@ struct TensorMemoryCopyOpConversion
             .getBase();
 
     Value baseDst = adaptor.getDst();
+    auto elemPtrTy = ptr_ty(rewriter.getContext(), 3);
+    auto llvmElementTy = typeConverter->convertType(srcTy.getElementType());
 
     // The following codegen assumes that we use tcgen05.cp only with
     // the warpx4.32x128b mode, to load blocked scales from MXFP.
     // We will expand the support as we find more use cases for the instruction.
+
+    auto ll = toLinearLayout(srcTy.getShape(), srcTy.getEncoding());
+    // flattenOuts flattens into fortran order, so need to transpose first to
+    // get C-order
+    auto ctx = op.getContext();
+    auto outDimNames = standardOutDimNames(ctx, srcTy.getRank());
+    std::reverse(outDimNames.begin(), outDimNames.end());
+    ll = ll.transposeOuts(outDimNames).flattenOuts();
+    auto invLayout = ll.flattenOuts().invert();
+    auto kDim = *ll.getOutDimNames().begin();
 
     Value smemDesc = createBlockedScalesSMEMDescriptor(rewriter, loc, baseSrc);
     Value pred = LLVM::NVIDIA::createElectPredicateWarp0(loc, rewriter);
@@ -719,9 +732,14 @@ struct TensorMemoryCopyOpConversion
           // K
           auto colOffset = b.int_val(32, (j * repMorN + i) * 4);
           auto tmemAddr = b.add(b.ptrtoint(i32_ty, baseDst), colOffset);
+          auto blockSize = (32 * 128) / llvmElementTy.getIntOrFloatBitWidth();
+          auto linearIdx = (i * repK + j) * blockSize;
+          auto smemOffset = applyLinearLayout(loc, rewriter, invLayout,
+                                              {{kDim, b.i32_val(linearIdx)}})[0]
+                                .second;
+          auto smemAddr = b.gep(elemPtrTy, llvmElementTy, baseSrc, smemOffset);
+          smemDesc = createBlockedScalesSMEMDescriptor(rewriter, loc, smemAddr);
           createTcgen05Cp(rewriter, loc, tmemAddr, smemDesc, pred);
-          smemDesc =
-              b.add(smemDesc, b.int_val(64, 512 >> 4)); // one chunk = 32x16B
         }
       }
     };
