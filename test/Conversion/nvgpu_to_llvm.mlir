@@ -211,3 +211,40 @@ llvm.func @warpid_warp_specialize() {
 }
 
 }
+
+// -----
+
+module attributes {"ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 32 : i32} {
+
+// CHECK-LABEL: @one_warp
+tt.func @one_warp() -> i32 {
+  // CHECK-NEXT: [[C0:%.*]] = llvm.mlir.constant(0 : i32)
+  %0 = nvgpu.warp_id
+  // CHECK-NEXT: return [[C0]]
+  tt.return %0 : i32
+}
+
+}
+
+// -----
+
+module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
+
+// CHECK-LABEL: @one_contextual_warp
+tt.func @one_contextual_warp() {
+  ttg.warp_specialize()
+  default {
+    ttg.warp_yield
+  }
+  // CHECK: partition0
+  partition0() num_warps(1) {
+    // CHECK-NEXT: [[C0:%.*]] = llvm.mlir.constant(0 : i32)
+    %0 = nvgpu.warp_id
+    // CHECK-NEXT: "use"([[C0]])
+    "use"(%0) : (i32) -> ()
+    ttg.warp_return
+  } : () -> ()
+  tt.return
+}
+
+}
