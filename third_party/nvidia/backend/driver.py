@@ -6,6 +6,7 @@ import hashlib
 import subprocess
 import tempfile
 import triton
+import re
 from pathlib import Path
 from triton import knobs
 from triton.runtime.build import _build
@@ -125,19 +126,37 @@ def ty_to_cpp(ty):
 _BASE_ARGS_FORMAT = "iiiKKppOOOOO"
 
 
-def make_launcher(constants, signature):
+def make_launcher(constants, signature, tensordesc_meta):
 
-    def _expand_signature(sig, output):
-        # Expand tensordesc arguments
-        if isinstance(sig, str) and sig.startswith("tensordesc"):
-            output.append("nvTmaDesc")
-            ndim = sig.count(",") + 1
-            for _ in range(ndim):
-                output.append("i32")
-            for _ in range(ndim):
-                output.append("i64")
-        else:
-            output.append(sig)
+    def _expand_signature(signature):
+        output = []
+        tensordesc_idx = 0
+        # Expand tensor descriptor arguments into either nvTmaDesc, shape and
+        # strides, or base pointer, shape and strides depending on whether the
+        # kernel was lowered to use the nvTmaDesc or not.
+        for sig in signature:
+            if isinstance(sig, str) and sig.startswith("tensordesc"):
+                meta = tensordesc_meta[tensordesc_idx] if tensordesc_meta else None
+                tensordesc_idx += 1
+
+                ndim = sig.count(",") + 1
+                dtype = re.match("tensordesc<([^[>]*)", sig).group()
+
+                if meta is None:
+                    output.append("*" + dtype)
+                    for _ in range(2 * ndim):
+                        output.append("i64")
+                else:
+                    output.append("nvTmaDesc")
+                    for _ in range(ndim):
+                        output.append("i32")
+                    for _ in range(ndim):
+                        output.append("i64")
+            else:
+                output.append(sig)
+
+        assert not tensordesc_meta or tensordesc_idx == len(tensordesc_meta)
+        return output
 
     def _flatten_signature(sig, output):
         # Flatten tuples
@@ -181,9 +200,7 @@ def make_launcher(constants, signature):
             "uint64_t": "K",
         }[ty_to_cpp(ty)]
 
-    expand_signature = []
-    for sig in signature.values():
-        _expand_signature(sig, expand_signature)
+    expand_signature = _expand_signature(signature.values())
     signature = {i: s for i, s in enumerate(expand_signature)}
 
     args_format = ''.join([format_of(ty) for ty in signature.values()])
@@ -552,6 +569,9 @@ TMA_DTYPE_DEVICE_TO_HOST[10] = 9
 
 def make_tensordesc_arg(arg, metadata):
     assert isinstance(arg, TensorDescriptor)
+    if metadata is None:
+        return [arg.base, *arg.shape, *arg.strides]
+
     swizzle = metadata["swizzle"]
     elem_size = metadata["elem_size"]
     elem_type = metadata["elem_type"]
@@ -583,8 +603,6 @@ def make_tensordesc_arg(arg, metadata):
 
 
 def wrap_handle_tensordesc(launcher, tensordesc_meta):
-    if not tensordesc_meta:
-        return launcher
 
     def inner(*args):
         meta_args = args[:len(_BASE_ARGS_FORMAT)]
@@ -593,12 +611,12 @@ def wrap_handle_tensordesc(launcher, tensordesc_meta):
         final_args = []
         for i, arg in enumerate(raw_kernel_args):
             if isinstance(arg, TensorDescriptor):
-                meta = tensordesc_meta[tensordesc_idx]
+                meta = tensordesc_meta[tensordesc_idx] if tensordesc_meta else None
                 tensordesc_idx += 1
                 final_args.extend(make_tensordesc_arg(arg, meta))
             else:
                 final_args.append(arg)
-        assert tensordesc_idx == len(tensordesc_meta)
+        assert not tensordesc_meta or tensordesc_idx == len(tensordesc_meta)
         return launcher(*meta_args, *final_args)
 
     return inner
@@ -611,14 +629,11 @@ class CudaLauncher(object):
         arg_idx = lambda x: (src.fn.arg_names.index(x), ) if isinstance(x, str) else x
         constants = {arg_idx(idx): value for idx, value in constants.items()}
         signature = {idx: value for idx, value in src.signature.items()}
-        src = make_launcher(constants, signature)
+        tensordesc_meta = getattr(metadata, "tensordesc_meta", None)
+        src = make_launcher(constants, signature, tensordesc_meta)
         mod = compile_module_from_src(src, "__triton_launcher")
         self.num_ctas = functools.reduce(operator.mul, metadata.cluster_dims, 1)
-        tensordesc_meta = getattr(metadata, "tensordesc_meta", None)
-        if tensordesc_meta is not None:
-            self.launch = wrap_handle_tensordesc(mod.launch, tensordesc_meta)
-        else:
-            self.launch = mod.launch
+        self.launch = wrap_handle_tensordesc(mod.launch, tensordesc_meta)
         self.global_scratch_size = metadata.global_scratch_size
         self.global_scratch_align = metadata.global_scratch_align
         self.launch_cooperative_grid = metadata.launch_cooperative_grid
