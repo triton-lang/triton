@@ -130,7 +130,7 @@ static PartitionScheme getPartitionScheme(scf::ForOp loop) {
     }
     while (!operandViews.empty()) {
       Operation *op = operandViews.pop_back_val();
-      if (!op->hasOneUse() || !isa<MemDescSubviewOp, MemDescTransOp>(op))
+      if (!op->hasOneUse() || !op->hasTrait<OpTrait::MemDescViewTrait>())
         continue;
       mma.operandViews.push_back(op);
       if (Operation *defOp = op->getOperand(0).getDefiningOp())
@@ -229,7 +229,8 @@ static void scheduleDependencies(scf::ForOp loop, WarpSchedule &schedule,
 
     Operation *defOp =
         loop.getBody()->findAncestorOpInBlock(*dep.getDefiningOp());
-    if (!defOp || !schedule.trySchedule(partition, defOp))
+    if (!defOp || !hasDefPartition(loop, defOp, schedule) ||
+        !schedule.trySchedule(partition, defOp))
       continue;
     llvm::append_range(deps, getNestedOperands(defOp));
   }
@@ -392,7 +393,7 @@ void propagatePartitions(scf::ForOp loop, WarpSchedule &schedule) {
     // For each partition, place users of its outputs in a cluster if it is not
     // already assigned to a partition.
     auto useCallback = [&](OpResult result, OpOperand &use, unsigned distance) {
-      Operation *user = use.getOwner();
+      Operation *user = loop.getBody()->findAncestorOpInBlock(*use.getOwner());
       if (!schedule.isScheduled(user)) {
         // Add the current partition as a def to the cluster.
         opClusters.getOrCreate(user)->defPartitions.insert(&partition);
@@ -668,7 +669,7 @@ findSharedMemorySinkOps(Value value, SmallVectorImpl<Operation *> &sinkOps) {
   for (Operation *user : value.getUsers()) {
     if (isa<ttng::MMAv5OpInterface, LocalLoadOp>(user)) {
       sinkOps.push_back(user);
-    } else if (isa<MemDescTransOp, MemDescSubviewOp>(user)) {
+    } else if (user->hasTrait<OpTrait::MemDescViewTrait>()) {
       if (failed(findSharedMemorySinkOps(user->getResult(0), sinkOps)))
         return failure();
     } else {

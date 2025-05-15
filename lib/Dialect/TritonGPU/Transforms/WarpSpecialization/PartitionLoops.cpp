@@ -208,11 +208,23 @@ LogicalResult triton::gpu::partitionLoop(scf::ForOp loop) {
       continue;
     }
 
-    if (isa<RankedTensorType>(capture.getType())) {
-      return mlir::emitWarning(capture.getLoc(),
-                               "FIXME: capturing tensor values into warp "
-                               "partitions is not supported");
+    // Explicitly pass tensor captures through shared memory.
+    auto tensorTy = dyn_cast<RankedTensorType>(capture.getType());
+    if (tensorTy) {
+      SharedEncodingTrait sharedEnc = getSharedEncoding(tensorTy);
+      ImplicitLocOpBuilder b(capture.getLoc(), wsOp);
+      auto memdescTy = MemDescType::get(
+          tensorTy.getShape(), tensorTy.getElementType(), sharedEnc,
+          SharedMemorySpaceAttr::get(tensorTy.getContext()));
+      auto alloc = b.create<LocalAllocOp>(memdescTy, capture);
+      for (Region *region : wsOp.getPartitionRegions()) {
+        b.setInsertionPointToStart(&region->front());
+        Value value = b.create<LocalLoadOp>(tensorTy, alloc);
+        replaceAllUsesInRegionWith(capture, value, *region);
+      }
+      capture = alloc;
     }
+
     explicitCaptures.push_back(capture);
   }
 
@@ -269,6 +281,6 @@ void PartitionLoops::runOnOperation() {
 
   for (scf::ForOp loop : loops) {
     if (failed(partitionLoop(loop)))
-      continue;
+      return signalPassFailure();
   }
 }

@@ -204,11 +204,13 @@ class CUDABackend(BaseBackend):
         nvidia.load_dialects(ctx)
 
     @staticmethod
-    def make_ttir(mod, metadata, opt):
+    def make_ttir(mod, metadata, opt, capability):
         pm = ir.pass_manager(mod.context)
         pm.enable_debug()
         passes.common.add_inliner(pm)
         passes.ttir.add_rewrite_tensor_pointer(pm)
+        if capability // 10 < 9:
+            passes.ttir.add_rewrite_tensor_descriptor_to_pointer(pm)
         passes.common.add_canonicalizer(pm)
         passes.ttir.add_combine(pm)
         passes.ttir.add_reorder_broadcast(pm)
@@ -272,6 +274,7 @@ class CUDABackend(BaseBackend):
         passes.ttgpuir.add_coalesce_async_copy(pm)
         nvidia.passes.ttnvgpuir.add_optimize_tmem_layouts(pm)
         passes.ttgpuir.add_remove_layout_conversions(pm)
+        nvidia.passes.ttnvgpuir.add_interleave_tmem(pm)
         passes.ttgpuir.add_reduce_data_duplication(pm)
         passes.ttgpuir.add_reorder_instructions(pm)
         passes.common.add_cse(pm)
@@ -412,7 +415,7 @@ class CUDABackend(BaseBackend):
 
     def add_stages(self, stages, options):
         capability = self._parse_arch(options.arch)
-        stages["ttir"] = lambda src, metadata: self.make_ttir(src, metadata, options)
+        stages["ttir"] = lambda src, metadata: self.make_ttir(src, metadata, options, capability)
         stages["ttgir"] = lambda src, metadata: self.make_ttgir(src, metadata, options, capability)
         stages["llir"] = lambda src, metadata: self.make_llir(src, metadata, options, capability)
         stages["ptx"] = lambda src, metadata: self.make_ptx(src, metadata, options, self.target.arch)

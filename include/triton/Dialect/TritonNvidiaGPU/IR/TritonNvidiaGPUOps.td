@@ -29,6 +29,7 @@ include "triton/Dialect/Triton/IR/TritonTypes.td"
 include "triton/Dialect/Triton/IR/TritonAttrDefs.td"
 include "triton/Dialect/Triton/IR/TritonInterfaces.td"
 include "triton/Dialect/Triton/IR/TritonOpInterfaces.td"
+include "triton/Dialect/TritonGPU/IR/TritonGPUAttrDefs.td"
 include "triton/Dialect/TritonGPU/IR/TritonGPUTypes.td"
 include "triton/Dialect/TritonGPU/IR/TritonGPUTypeInterfaces.td"
 include "mlir/IR/OpBase.td"
@@ -72,32 +73,40 @@ def TTNG_ClusterWaitOp : TTNG_Op<"cluster_wait", []> {
 //
 // WarpGroupDot Op
 //
-def TTNG_WarpGroupDotOp : TTNG_Op<"warp_group_dot", [DeclareOpInterfaceMethods<InferTypeOpInterface>,
-                                                     DeclareOpInterfaceMethods<MemoryEffectsOpInterface>,
-                                                     DeclareOpInterfaceMethods<DotOpInterface>,
-                                                     TypesMatchWith<"result's type matches accumulator's type",
-                                                                     "d", "c", "$_self">]> {
-    let summary = "warp group dot";
+def TTNG_WarpGroupDotOp : TTNG_Op<"warp_group_dot", [
+  DeclareOpInterfaceMethods<InferTypeOpInterface>,
+  DeclareOpInterfaceMethods<MemoryEffectsOpInterface>,
+  DeclareOpInterfaceMethods<DotOpInterface>,
+  TypesMatchWith<"result's type matches accumulator's type", "d", "c", "$_self">
+]> {
+  let summary = "warp group dot";
 
-    let description = [{
-        $d = matrix_multiply($a, $b) + $c. For docs on InputPrecisionAttr, see TT_DotOp
-    }];
+  let description = [{
+    $d = matrix_multiply($a, $b) + $c. For docs on InputPrecisionAttr, see TT_DotOp
+  }];
 
-    let arguments = (ins TTG_TensorOrMemDesc:$a,
-                         TTG_TensorOrMemDesc:$b,
-                         TT_FpIntTensor:$c,
-                         Optional<I1>:$useC,
-                         DefaultValuedAttr<TT_InputPrecisionAttr, "::mlir::triton::InputPrecision::IEEE">:$inputPrecision,
-                         DefaultValuedAttr<I32Attr, "0">:$maxNumImpreciseAcc,
-                         DefaultValuedAttr<BoolAttr, "false">:$isAsync);
+  let arguments = (ins
+    TTG_TensorOrMemDesc:$a,
+    TTG_TensorOrMemDesc:$b,
+    TT_FpIntTensor:$c,
+    Optional<I1>:$useC,
+    DefaultValuedAttr<TT_InputPrecisionAttr, "::mlir::triton::InputPrecision::IEEE">:$inputPrecision,
+    DefaultValuedAttr<I32Attr, "0">:$maxNumImpreciseAcc,
+    DefaultValuedAttr<BoolAttr, "false">:$isAsync
+  );
 
-    let results = (outs TT_FpIntTensor:$d);
+  let results = (outs TT_FpIntTensor:$d);
 
-    let assemblyFormat = "$a`,` $b`,` $c (`,` $useC^)? attr-dict `:` type($a) `*` type($b) `->` type($d)";
+  let assemblyFormat = [{
+    $a`,` $b`,` $c (`,` $useC^)? attr-dict
+    `:` type($a) `*` type($b) `->` type($d)
+  }];
 
-    let extraClassDeclaration = [{
-      bool needsPartialAccumulator();
-    }];
+  let extraClassDeclaration = [{
+    bool needsPartialAccumulator();
+  }];
+
+  let hasVerifier = 1;
 }
 
 def TTNG_WarpGroupDotWaitOp : TTNG_Op<"warp_group_dot_wait", [DeclareOpInterfaceMethods<InferTypeOpInterface>,
@@ -575,6 +584,12 @@ def TTNG_TMEMStoreOp : TTNG_Op<"tmem_store"> {
     I1:$pred
   );
   let results = (outs Optional<TTG_AsyncToken>:$token);
+
+  let builders = [
+    OpBuilder<(ins "Value":$dst, "Value":$src, "Value":$pred), [{
+      build($_builder, $_state, Type(), dst, Value(), src, pred);
+    }]>
+  ];
 
   let assemblyFormat = [{
     $src `,` $dst `` custom<Token>($dep, type($token)) `,` $pred

@@ -35,6 +35,7 @@ from triton._internal_testing import (
     is_hip_cdna2,
     is_hip_cdna3,
     is_hip_cdna4,
+    is_hip_gfx12,
     is_xpu,
     get_arch,
     torch_float8_dtypes,
@@ -3722,8 +3723,8 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, input_precision, in_dty
                 pytest.skip("float8e4nv not supported on sm <= 80")
 
         if is_hip():
-            if in_dtype in ("float8e5", "float8e4nv") and not is_hip_cdna4():
-                pytest.skip(f"{in_dtype} only supported on CDNA4")
+            if in_dtype in ("float8e5", "float8e4nv") and not (is_hip_cdna4() or is_hip_gfx12()):
+                pytest.skip(f"{in_dtype} only supported on CDNA4 and gfx12")
             if in_dtype in ("float8e5b16", "float8e4b8") and not is_hip_cdna3():
                 pytest.skip(f"{in_dtype} only supported on CDNA3")
             if not ((input_precision == "ieee") or (input_precision == "tf32" and is_hip_cdna3())):
@@ -7486,3 +7487,79 @@ def test_float_tuple():
         x, y = float('-inf'), float('inf')  # noqa: F841
 
     _namedtuple_float_tuple_kernel[(1, )]()
+
+
+@pytest.mark.interpreter
+def test_short_circuiting(device):
+
+    @triton.jit
+    def short_circuiting_kernel(x):
+        if (x is not None) and hasattr(x, "dtype") and isinstance(
+                x.dtype, tl.pointer_type) and (x.dtype.element_ty == tl.int32) and (tl.load(x) > 42):
+            tl.store(x, 42)
+
+    def f(x):
+        short_circuiting_kernel[(1, )](x, num_warps=1)
+
+    f(None)  # should succeed with NoneType
+    f(1)  # should succeed with tl.constexpr type
+    f(2)  # should succeed with integer type
+
+    def g(y, dtype):
+        x = torch.full((1, ), y, device=device, dtype=dtype)
+        f(x)
+        return x.item()
+
+    assert g(37.5, torch.float32) == 37.5
+    assert g(84.0, torch.float32) == 84.0
+    assert g(-76893, torch.int32) == -76893
+    assert g(100000, torch.int32) == 42
+    assert g(100000, torch.int64) == 100000
+
+
+@pytest.mark.interpreter
+def test_unsplat(device):
+
+    @triton.jit
+    def unsplat_kernel(x, explicit: tl.constexpr):
+
+        # this is a single-element tensor:
+        condition = tl.load(x + tl.arange(0, 1)) > 42
+
+        if explicit:
+            condition = condition.reshape([])
+
+        if condition:
+            tl.store(x, 42)
+
+    def g(y, explicit):
+        x = torch.full((1, ), y, device=device, dtype=torch.int32)
+        unsplat_kernel[(1, )](x, explicit, num_warps=1)
+        return x.item()
+
+    assert g(41, False) == 41
+    assert g(43, False) == 42
+    assert g(41, True) == 41
+    assert g(43, True) == 42
+
+
+@pytest.mark.interpreter
+def test_tuple_logic():
+
+    @triton.jit
+    def tuple_logic_kernel():
+
+        # arity-2 BoolOps:
+        tl.static_assert(((3, 4) or (5, 6)) == (3, 4))
+        tl.static_assert(((3, 4) and (5, 6)) == (5, 6))
+        tl.static_assert(((3, 4) and ()) == ())
+        tl.static_assert((() or (5, 6)) == (5, 6))
+
+        # arity-3 BoolOps:
+        tl.static_assert(((1, 2) and (3, 4) and (5, 6)) == (5, 6))
+        tl.static_assert(((1, 2) or (3, 4) or (5, 6)) == (1, 2))
+
+        # constexpr short-circuiting over dynamic argument:
+        tl.static_assert((() and tl.program_id(0)) == ())
+
+    tuple_logic_kernel[(1, )]()

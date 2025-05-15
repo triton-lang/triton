@@ -454,6 +454,7 @@ static PyObject* launch(PyObject* self, PyObject* args) {{
     Py_DECREF(args);
     if (!ret)
       return NULL;
+    Py_DECREF(ret);
   }}
 
   CUdeviceptr global_scratch = 0;
@@ -481,7 +482,7 @@ static PyObject* launch(PyObject* self, PyObject* args) {{
     Py_DECREF(args);
     if (!ret)
       return NULL;
-
+    Py_DECREF(ret);
   }}
 
   Py_RETURN_NONE;

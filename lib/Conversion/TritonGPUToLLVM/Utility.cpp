@@ -207,9 +207,16 @@ std::pair<Value, Value> getLaneAndWarpId(OpBuilder &rewriter, Location loc) {
   Value tid = getThreadId(rewriter, loc);
   int threadsPerWarp = triton::gpu::lookupThreadsPerWarp(rewriter);
   Value warpSizeVal = b.i32_val(threadsPerWarp);
-
   Value laneId = b.urem(tid, warpSizeVal);
-  Value warpId = b.udiv(tid, warpSizeVal);
+
+  // If there is only one warp, the warp ID is always 0.
+  Operation *lookupPt = &rewriter.getInsertionBlock()->front();
+  Value warpId;
+  if (triton::gpu::lookupNumWarps(lookupPt) == 1)
+    warpId = b.i32_val(0);
+  else
+    warpId = b.udiv(tid, warpSizeVal);
+
   return {laneId, warpId};
 }
 
@@ -398,8 +405,8 @@ Value getSmemVecAddr(const LinearLayout &regLayout,
     smemOffset = b.sub(smemOffset, baseToAllocBaseDist);
   }
   auto ptrTy = smemBase.getType();
-  auto vecAddr = b.gep(ptrTy, elemLlvmTy, smemBase, smemOffset);
-  vecAddr.setInbounds(true);
+  auto vecAddr = b.gep(ptrTy, elemLlvmTy, smemBase, smemOffset,
+                       LLVM::GEPNoWrapFlags::inbounds);
   return vecAddr;
 }
 

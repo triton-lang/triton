@@ -1241,10 +1241,10 @@ ttg::LocalAllocOp findShmemAlloc(Value operand) {
   // come from an MemDescSubview op. Only ConvertLayout and Trans ops are
   // allowed in between.
   Value transitiveOperand = operand;
-  while (
-      isa_and_nonnull<ttg::ConvertLayoutOp, tt::TransOp, ttg::MemDescTransOp>(
-          transitiveOperand.getDefiningOp()) ||
-      isa<BlockArgument>(transitiveOperand)) {
+  while (isa_and_nonnull<ttg::ConvertLayoutOp, tt::TransOp, ttg::MemDescTransOp,
+                         ttg::MemDescReshapeOp>(
+             transitiveOperand.getDefiningOp()) ||
+         isa<BlockArgument>(transitiveOperand)) {
     if (auto blockArg = dyn_cast<BlockArgument>(transitiveOperand)) {
       assert(isa<scf::ForOp>(blockArg.getOwner()->getParentOp()) &&
              "Block argument must come from a for loop");
@@ -1409,7 +1409,7 @@ void replaceUsesAndPropagateType(OpBuilder &builder, Operation *oldUse,
     }
 
     // Non-subview/trans ops will be replaced by `val`.
-    if (!isa<ttg::MemDescTransOp, ttg::MemDescSubviewOp>(use.getOwner())) {
+    if (!use.getOwner()->hasTrait<OpTrait::MemDescViewTrait>()) {
       operandsToReplace.push_back(&use);
       continue;
     }
@@ -1427,13 +1427,15 @@ void replaceUsesAndPropagateType(OpBuilder &builder, Operation *oldUse,
           oldType.getMemorySpace(), isMutable);
       newVal = builder.create<ttg::MemDescSubviewOp>(
           subview.getLoc(), newDstType, val, subview.getOffsets());
-      newVal.getDefiningOp()->setAttrs(user->getAttrs());
     } else if (auto trans = dyn_cast<ttg::MemDescTransOp>(user)) {
       newVal = builder.create<ttg::MemDescTransOp>(trans.getLoc(), val,
                                                    trans.getOrder());
-      newVal.getDefiningOp()->setAttrs(user->getAttrs());
+    } else if (auto reshape = dyn_cast<ttg::MemDescReshapeOp>(user)) {
+      newVal = builder.create<ttg::MemDescReshapeOp>(reshape.getLoc(),
+                                                     reshape.getType(), val);
     }
-    assert(newVal);
+    assert(newVal && "unhandled memdesc view");
+    newVal.getDefiningOp()->setAttrs(user->getAttrs());
     replaceUsesAndPropagateType(builder, user, newVal);
     opsToDelete.push_back(use.getOwner());
   }
