@@ -1,9 +1,9 @@
 import os
 import torch
 import torch.distributed as dist
-import triton_bench.routing
-from triton_bench.routing import RoutingData, GatherIndx, ScatterIndx
-from triton_bench.topk import topk
+import triton_kernels.routing
+from triton_kernels.routing import RoutingData, GatherIndx, ScatterIndx
+from triton_kernels.topk import topk
 from typing import Tuple
 
 
@@ -77,8 +77,8 @@ def routing(logits, n_expts_act, expt_indx=None, EP=1, TP=1):
     if _is_distributed_launch():
         assert expt_indx is None
         _, n_expts_tot = logits.shape
-        # We need to use the same topk as triton_bench because torch's topk
-        # does not have the same tie-breaking behavior as triton_bench.
+        # We need to use the same topk as triton_kernels because torch's topk
+        # does not have the same tie-breaking behavior as triton_kernels.
         expt_scal, expt_indx, _ = topk(logits, n_expts_act)
         expt_indx = expt_indx.int()
         expt_scal = torch.softmax(expt_scal, dim=-1)
@@ -123,4 +123,4 @@ def routing(logits, n_expts_act, expt_indx=None, EP=1, TP=1):
         scatter_indx = ScatterIndx(src_indx=gate_indx.int(), dst_indx=topk_indx.int())
         return RoutingData(gate_scal, hist, n_expts_tot // EP, n_expts_act), gather_indx, scatter_indx, token_mask
     else:
-        return *triton_bench.routing.routing(logits, n_expts_act, expt_indx, EP), None
+        return *triton_kernels.routing.routing(logits, n_expts_act, expt_indx, EP), None
