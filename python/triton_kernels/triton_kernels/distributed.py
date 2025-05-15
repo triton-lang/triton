@@ -32,7 +32,7 @@ def cleanup():
         pass
 
 
-def all_gather(x: torch.Tensor, dim=0):
+def all_gather(x: torch.Tensor, dim=0) -> torch.Tensor:
     if _is_distributed_launch():
         world_size = dist.get_world_size()
         x_list = [torch.empty_like(x) for _ in range(world_size)]
@@ -42,7 +42,7 @@ def all_gather(x: torch.Tensor, dim=0):
         return x
 
 
-def reduce_scatter(x: torch.Tensor, token_mask: torch.Tensor = None, dim=0):
+def reduce_scatter(x: torch.Tensor, token_mask: torch.Tensor = None, dim=0) -> torch.Tensor:
     if _is_distributed_launch():
         world_size = dist.get_world_size()
         if token_mask is not None:
@@ -73,7 +73,8 @@ def reduce_scatter(x: torch.Tensor, token_mask: torch.Tensor = None, dim=0):
         return x
 
 
-def routing(logits, n_expts_act, expt_indx=None, EP=1, TP=1):
+def routing(logits, n_expts_act, expt_indx=None, EP=1,
+            TP=1) -> Tuple[RoutingData, GatherIndx, ScatterIndx, torch.Tensor]:
     if _is_distributed_launch():
         assert expt_indx is None
         _, n_expts_tot = logits.shape
