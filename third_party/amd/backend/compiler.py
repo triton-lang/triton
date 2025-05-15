@@ -195,6 +195,8 @@ class HIPBackend(BaseBackend):
     def make_ttir(mod, metadata, options):
         pm = ir.pass_manager(mod.context)
         pm.enable_debug()
+        if knobs.compilation.strip_debug_info:
+            passes.common.add_strip_debug_info(pm)
         passes.common.add_inliner(pm)
         passes.ttir.add_rewrite_tensor_pointer(pm)
         passes.ttir.add_rewrite_tensor_descriptor_to_pointer(pm)
