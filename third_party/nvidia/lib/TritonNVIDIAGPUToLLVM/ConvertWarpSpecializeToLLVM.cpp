@@ -254,7 +254,7 @@ static void rewritePartitionRegions(WarpSpecializeOp ws, Block *switchLoop,
     b.setInsertionPointToStart(&partition->front());
 
     if (auto actRegs = ws.getActualRegisters()) {
-      createRegRealloc(b, 24, (*actRegs)[partition->getRegionNumber() + 1]);
+      createRegRealloc(b, 80, (*actRegs)[partition->getRegionNumber() + 1]);
       // createEntryRegRealloc(b, ws,
       //                       (*actRegs)[partition->getRegionNumber() + 1]);
     }
@@ -289,7 +289,7 @@ static void rewritePartitionRegions(WarpSpecializeOp ws, Block *switchLoop,
       createBarrier(b, kSwitchLoopBarrierIdx, /*numThreads=*/std::nullopt,
                     /*aligned=*/false);
       if (auto actRegs = ws.getActualRegisters()) {
-        createRegRealloc(b, (*actRegs)[partition->getRegionNumber() + 1], 24);
+        createRegRealloc(b, (*actRegs)[partition->getRegionNumber() + 1], 80);
       }
       b.replaceOpWithNewOp<LLVM::BrOp>(op, switchLoop);
     });
@@ -353,7 +353,7 @@ static LogicalResult lowerWarpSpecialize(LLVM::LLVMFuncOp func,
     oldArg.replaceAllUsesWith(arg);
   entry->eraseArguments([](auto) { return true; });
   b.setInsertionPointToStart(entry);
-  createRegRealloc(b, 24, 256);
+  createRegRealloc(b, 80, 256);
 
   // Generate the switch loop.
   auto totalNumWarpsAttr =
@@ -370,7 +370,7 @@ static LogicalResult lowerWarpSpecialize(LLVM::LLVMFuncOp func,
   //   %rel_tid = sub %tid, <default_warp_group_size>
   //   %rel_wid = udiv %rel_tid, 32
   b.setInsertionPointToStart(switchLoop);
-  createRegRealloc(b, 256, 24);
+  createRegRealloc(b, 256, 80);
   createBarrier(b, kSwitchLoopBarrierIdx, /*numThreads=*/std::nullopt,
                 /*aligned=*/false);
   Value statePtr = LLVM::getSharedMemoryBase(b.getLoc(), b, targetInfo, func);
