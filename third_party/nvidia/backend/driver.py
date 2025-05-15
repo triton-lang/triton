@@ -13,7 +13,7 @@ from triton import knobs
 from triton.runtime import _allocation
 from triton.backends.compiler import GPUTarget
 from triton.backends.driver import GPUDriver
-from ._C import cuda_utils
+from triton._C.libtriton import nvidia
 
 dirname = os.path.dirname(os.path.realpath(__file__))
 include_dirs = [os.path.join(dirname, "include")]
@@ -62,11 +62,11 @@ class CudaUtils(object):
         return cls.instance
 
     def __init__(self):
-        self.load_binary = cuda_utils.load_binary
-        self.get_device_properties = cuda_utils.get_device_properties
-        self.cuOccupancyMaxActiveClusters = cuda_utils.cuOccupancyMaxActiveClusters
-        self.set_printf_fifo_size = cuda_utils.set_printf_fifo_size
-        self.fill_tma_descriptor = cuda_utils.fill_tma_descriptor
+        self.load_binary = nvidia.cuda_utils.load_binary
+        self.get_device_properties = nvidia.cuda_utils.get_device_properties
+        self.cuOccupancyMaxActiveClusters = nvidia.cuda_utils.cuOccupancyMaxActiveClusters
+        self.set_printf_fifo_size = nvidia.cuda_utils.set_printf_fifo_size
+        self.fill_tma_descriptor = nvidia.cuda_utils.fill_tma_descriptor
 
 
 # ------------------------
@@ -195,17 +195,18 @@ def make_launcher(signature_types: Sequence[_ArgTypeWithNesting], tensordesc_met
 
     signature_types = _expand_signature(signature.values())
     non_const_arg_mask = _make_nonconst_arg_mask(signature_types)
-    flattened_signature = _flatten_and_apply_arg_mask(signature_types, non_const_arg_mask)
+    flattened_signature = list(_flatten_and_apply_arg_mask(signature_types, non_const_arg_mask))
 
-    signature_metadata = cuda_utils.build_signature_metadata(flattened_signature)
+    signature_metadata = nvidia.cuda_utils.build_signature_metadata(flattened_signature)
 
     def wrapper(grid_dim_x: int, grid_dim_y: int, grid_dim_z: int, stream: int, kernel: int, global_scratch: any,
                 packed_metadata: tuple[int, int, int, int, int, int], hook_args: any,
                 launch_enter_hook: Callable[..., None], launch_exit_hook: Callable[..., None], *args: any) -> None:
-        non_const_args = _flatten_and_apply_arg_mask(args, non_const_arg_mask)
+        non_const_args = list(_flatten_and_apply_arg_mask(args, non_const_arg_mask))
 
-        cuda_utils.launch(grid_dim_x, grid_dim_y, grid_dim_z, stream, kernel, packed_metadata, hook_args,
-                          launch_enter_hook, launch_exit_hook, signature_metadata, global_scratch, non_const_args)
+        nvidia.cuda_utils.launch(grid_dim_x, grid_dim_y, grid_dim_z, stream, kernel, packed_metadata, hook_args,
+                                 launch_enter_hook, launch_exit_hook, signature_metadata, global_scratch,
+                                 non_const_args)
 
     return wrapper
 
