@@ -1,13 +1,12 @@
 import torch
-import triton_bench.distributed as triton_dist
 
 import torch.distributed as dist
-import triton_bench
 import torch.multiprocessing as mp
-import triton_bench.swiglu
-from triton_bench.numerics_details.mxfp import downcast_to_mxfp
-from triton_bench.matmul_ogs import MicroscalingCtx, matmul_ogs, PrecisionConfig, FlexCtx
-from triton_bench.numerics import InFlexData
+from triton_kernels.numerics_details.mxfp import downcast_to_mxfp
+from triton_kernels.matmul_ogs import MicroscalingCtx, matmul_ogs, PrecisionConfig, FlexCtx
+from triton_kernels.numerics import InFlexData
+import triton_kernels.distributed as triton_dist
+import triton_kernels
 
 import pytest
 
@@ -117,7 +116,7 @@ def test_reduce_scatter_distributed_with_token_mask_dim1(monkeypatch):
 
 def test_routing_non_distributed(monkeypatch):
     monkeypatch.setenv("WORLD_SIZE", "1")
-    monkeypatch.setattr(triton_bench.routing, "routing", lambda logits, n_act, expt_indx=None, EP=1: "dummy_routing")
+    monkeypatch.setattr(triton_kernels.routing, "routing", lambda logits, n_act, expt_indx=None, EP=1: "dummy_routing")
     result, extra = triton_dist.routing(torch.randn(5, 4), 2)
     assert result == "dummy_routing"
     assert extra is None
@@ -205,10 +204,7 @@ def distributed_run(rank, world_size, batch, dim1, dim2, n_expts_tot, n_expts_ac
     wg = torch.randn((dim1, n_expts_tot), device=dev)
     dist.broadcast(wg, src=0)
 
-    if rank == 0:
-        bg = torch.randn((n_expts_tot, ), device=dev)
-    else:
-        bg = torch.empty((n_expts_tot, ), device=dev)
+    bg = torch.randn((n_expts_tot, ), device=dev)
     dist.broadcast(bg, src=0)
 
     b2 = torch.randn((n_expts_tot // EP, dim1), device=dev)
@@ -239,7 +235,7 @@ def distributed_run(rank, world_size, batch, dim1, dim2, n_expts_tot, n_expts_ac
 
     # precision configs
     pcg = PrecisionConfig(mx_ctx=wg_mx, flex_ctx=FlexCtx(rhs_data=wg_flex))
-    pcs = triton_bench.swiglu.PrecisionConfig(limit=1.0)
+    pcs = triton_kernels.swiglu.PrecisionConfig(limit=1.0)
     pc1 = PrecisionConfig(mx_ctx=w1_mx, flex_ctx=FlexCtx(rhs_data=w1_flex))
     pc2 = PrecisionConfig(mx_ctx=w2_mx, flex_ctx=FlexCtx(rhs_data=w2_flex))
     if rank == 0:
@@ -258,11 +254,11 @@ def distributed_run(rank, world_size, batch, dim1, dim2, n_expts_tot, n_expts_ac
         xg = x.to(wg.dtype if n_expts_tot > 1 else x.dtype)
         if n_expts_tot > 1:
             logits = matmul_ogs(xg, wg, bg, precision_config=pcg)
-            rdata, gi, si = triton_bench.routing.routing(logits, n_expts_act)
+            rdata, gi, si = triton_kernels.routing.routing(logits, n_expts_act)
         else:
             rdata = gi = si = None
         x = matmul_ogs(x, w1_full, b1_full, rdata, gather_indx=gi, precision_config=pc1_f)
-        x = triton_bench.swiglu.swiglu(x, 1.0, pcs, routing_data=rdata)
+        x = triton_kernels.swiglu.swiglu(x, 1.0, pcs, routing_data=rdata)
         return matmul_ogs(x, w2_full, b2_full, rdata, scatter_indx=si, precision_config=pc2_f)
 
     # distributed pass
@@ -277,7 +273,7 @@ def distributed_run(rank, world_size, batch, dim1, dim2, n_expts_tot, n_expts_ac
         if tm is not None:
             x = x[tm]
         x = matmul_ogs(x, w1, b1, rdata, gather_indx=gi, precision_config=pc1)
-        x = triton_bench.swiglu.swiglu(x, 1.0, pcs, routing_data=rdata)
+        x = triton_kernels.swiglu.swiglu(x, 1.0, pcs, routing_data=rdata)
         x = matmul_ogs(x, w2, b2 if rank % TP == 0 else None, rdata, scatter_indx=si, precision_config=pc2)
         x = triton_dist.reduce_scatter(x, token_mask=tm, dim=0)
         # gather the result from all GPUs, just for verification

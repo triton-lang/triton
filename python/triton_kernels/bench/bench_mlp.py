@@ -3,14 +3,16 @@ import matplotlib.pyplot as plt
 import json
 import triton.profiler as proton
 import torch
-import triton_bench.swiglu
+import triton_kernels.swiglu
 
-import triton_bench.distributed as triton_dist
+import triton_kernels.distributed as triton_dist
+import torch.distributed as dist
 
-from triton_bench.numerics_details.mxfp import downcast_to_mxfp
-from triton_bench.matmul_ogs import MicroscalingCtx, matmul_ogs, PrecisionConfig, FlexCtx
-from triton_bench.numerics import InFlexData
-from triton_bench.target_info import is_hip, get_cdna_version
+from triton_kernels.numerics_details.mxfp import downcast_to_mxfp
+from triton_kernels.matmul_ogs import MicroscalingCtx, matmul_ogs, PrecisionConfig, FlexCtx
+from triton_kernels.numerics import InFlexData
+from triton_kernels.target_info import is_hip, get_cdna_version
+from dataclasses import dataclass
 
 if torch.cuda.is_available() and not is_hip():
     from triton._C.libtriton import nvidia
@@ -105,22 +107,26 @@ def bench_mlp(batch, dim1, dim2, n_expts_tot, n_expts_act, x_dtype, w_dtype, TP,
     assert dim2 % TP == 0
     local_rank, world_size = triton_dist.setup()
     dev = f"cuda:{local_rank}"
-    EP = world_size // TP
     DP = world_size
 
     assert n_expts_tot % EP == 0, f"{n_expts_tot=}, {EP=}, n_expts_tot must be divisible by EP"
     assert dim2 % TP == 0, f"{dim2=}, {TP=}, dim2 must be divisible by TP"
-    assert EP * TP == world_size, f"{EP=}, {TP=}, {world_size=}, EP * TP must be equal to world size"
 
     # input
     # weights
     wg = torch.randn((dim1, n_expts_tot), device=dev)
+    dist.broadcast(wg, src=0)
     w1 = torch.randn((n_expts_tot // EP, dim1, dim2 // TP), device=dev)
     w2 = torch.randn((n_expts_tot // EP, dim2 // TP // 2, dim1), device=dev)
+
     # biases
     bg = torch.randn((n_expts_tot, ), device=dev)
+    dist.broadcast(bg, src=0)
     b1 = torch.randn((n_expts_tot // EP, dim2 // TP), device=dev)
     b2 = torch.randn((n_expts_tot // EP, dim1), device=dev)
+    ep_indx = rank // TP
+    group = dist.new_group(list(range(ep_indx * TP, (ep_indx + 1) * TP)))
+    dist.broadcast(b2, src=ep_indx * TP, group=group)
 
     # -- numerics --
     optg = dict()
@@ -142,22 +148,23 @@ def bench_mlp(batch, dim1, dim2, n_expts_tot, n_expts_act, x_dtype, w_dtype, TP,
     if x_dtype == torch.float8_e4m3fn and get_cdna_version() == 3:
         x_dtype = torch.float8_e4m3fnuz
 
-    x = torch.randn((batch // DP, dim1), device=dev)
-    x = x.to(x_dtype)
+    input_x = torch.randn((batch // DP, dim1), device=dev)
     # run layer
     proton.start(str(fpath.with_suffix('')), hook="triton")
-    xg = x.to(wg.dtype if n_expts_tot > 1 else x_dtype)
-    x = triton_dist.all_gather(x, dim=0)
+    xg = input_x.to(wg.dtype if n_expts_tot > 1 else input_x.dtype)
     for i in range(100):
+        x = triton_dist.all_gather(input_x, dim=0)
         if n_expts_tot > 1:
             logits = matmul_ogs(xg, wg, bg, precision_config=pcg)
             rdata, gather_indx, scatter_indx, token_mask = triton_dist.routing(logits, n_expts_act, EP=EP)
         else:
             rdata, gather_indx, scatter_indx, token_mask = None, None, None, None
+        if token_mask is not None:
+            x = x[token_mask]
         x = matmul_ogs(x, w1, b1, rdata, gather_indx=gather_indx, precision_config=pc1)
         x = triton_kernels.swiglu.swiglu(x, 1.0, pcs, routing_data=rdata)
-        x = matmul_ogs(x, w2, b2, rdata, scatter_indx=scatter_indx, precision_config=pc2)
-    x = triton_dist.reduce_scatter(x, token_mask=token_mask, dim=0)
+        x = matmul_ogs(x, w2, b2 if rank % TP == 0 else None, rdata, scatter_indx=scatter_indx, precision_config=pc2)
+        x = triton_dist.reduce_scatter(x, token_mask=token_mask, dim=0)
     proton.finalize()
 
     # -- analyze --
@@ -236,3 +243,8 @@ if __name__ == "__main__":
     roofline_mlp(batch_ranges, 8192, 8192, 1, 1, *quantized_dtypes, TP=1, EP=1, name="dense")
     roofline_mlp(batch_ranges, 5120, 8192, 128, 4, *dense_dtypes, TP=1, EP=1, name="llama4-maverick")
     roofline_mlp(batch_ranges, 5120, 8192, 128, 4, *quantized_dtypes, TP=1, EP=1, name="llama4-maverick")
+    if world_size > 1:
+        roofline_mlp(batch_ranges, 8192, 8192, 1, 1, *dense_dtypes, TP=4, EP=1, name="dense")
+        roofline_mlp(batch_ranges, 8192, 8192, 1, 1, *quantized_dtypes, TP=4, EP=1, name="dense")
+        roofline_mlp(batch_ranges, 5120, 8192, 128, 4, *dense_dtypes, TP=2, EP=2, name="llama4-maverick")
+        roofline_mlp(batch_ranges, 5120, 8192, 128, 4, *quantized_dtypes, TP=2, EP=2, name="llama4-maverick")
