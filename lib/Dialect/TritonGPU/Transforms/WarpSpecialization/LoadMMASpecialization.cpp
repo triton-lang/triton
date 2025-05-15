@@ -119,7 +119,8 @@ static PartitionScheme getPartitionScheme(scf::ForOp loop) {
     // the MMA partition.
     auto storeOp = dyn_cast_or_null<ttng::TMEMStoreOp>(
         findDefOpInLoop(loop, mmaOp.getAccDep()));
-    if (!ttng::hasAccReadModifyWrite(mmaOp, loop) && storeOp)
+    if (!ttng::hasAccReadModifyWrite(mmaOp, loop) && storeOp &&
+        loop.isDefinedOutsideOfLoop(storeOp.getSrc()))
       mma.storeOp = storeOp;
 
     // Look for views into the operands.
