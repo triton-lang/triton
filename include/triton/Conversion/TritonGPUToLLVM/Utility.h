@@ -338,46 +338,21 @@ using namespace mlir::triton;
 
 class SharedMemoryObject {
 public:
-  SharedMemoryObject(Value base, Type baseElemType, ArrayRef<Value> offsets)
-      : base(base), baseElemType(baseElemType),
-        offsets(offsets.begin(), offsets.end()) {}
+  SharedMemoryObject(Value base, Type baseElemType, ArrayRef<Value> offsets);
 
   SharedMemoryObject(Value base, Type baseElemType, int64_t rank, Location loc,
-                     RewriterBase &rewriter)
-      : base(base), baseElemType(baseElemType) {
-    auto b = TritonLLVMOpBuilder(loc, rewriter);
-    offsets.append(rank, b.i32_val(0));
-  }
+                     RewriterBase &rewriter);
 
   SmallVector<Value> getOffsets() const { return offsets; }
   Value getBase() const { return base; }
   Type getBaseElemType() const { return baseElemType; }
 
-  SmallVector<Value> getElems() const {
-    SmallVector<Value> elems;
-    elems.push_back(base);
-    elems.append(offsets.begin(), offsets.end());
-    return elems;
-  }
+  SmallVector<Value> getElems() const;
 
-  SmallVector<Type> getTypes() const {
-    SmallVector<Type> types;
-    types.push_back(base.getType());
-    types.append(offsets.size(), IntegerType::get(base.getContext(), 32));
-    return types;
-  }
+  SmallVector<Type> getTypes() const;
 
   SmallVector<Value> getStrides(triton::gpu::MemDescType memDesc, Location loc,
-                                RewriterBase &rewriter) const {
-    auto allocShape = memDesc.getAllocShape();
-    auto allocShapePerCTA = triton::gpu::getAllocationShapePerCTA(
-        memDesc.getEncoding(), allocShape);
-    auto layoutOrder = triton::gpu::getOrder(memDesc);
-    auto allocStrides = SharedMemoryObject::getStridesForShape(
-        allocShapePerCTA, layoutOrder, loc, rewriter);
-    return SmallVector<Value>(allocStrides.end() - offsets.size(),
-                              allocStrides.end());
-  }
+                                RewriterBase &rewriter) const;
 
   // TODO(Keren): deprecate the method once AMD backend has cleaned up
   Value getCSwizzleOffset(int dim) const {
@@ -386,50 +361,16 @@ public:
   }
 
   // TODO(Keren): deprecate the method once AMD backend has cleaned up
-  Value getBaseBeforeSlice(int dim, Location loc,
-                           RewriterBase &rewriter) const {
-    auto b = TritonLLVMOpBuilder(loc, rewriter);
-    Value cSwizzleOffset = getCSwizzleOffset(dim);
-    Value offset = b.sub(b.i32_val(0), cSwizzleOffset);
-    Type type = base.getType();
-    return b.gep(type, baseElemType, base, offset);
-  }
+  Value getBaseBeforeSlice(int dim, Location loc, RewriterBase &rewriter) const;
 
 private:
-  static SmallVector<unsigned>
-  getOrderForShape(ArrayRef<int64_t> shape, ArrayRef<unsigned> layoutOrder) {
-    SmallVector<unsigned> order(shape.size());
-    // Default minor-to-major order
-    std::iota(order.rbegin(), order.rend(), 0);
-    if (layoutOrder.size() > 0) {
-      // If a layout order is provided, we assume it specifies the order in
-      // which the dimensions are first accessed, and unspecified dimensions
-      // retain the minor-to-major order. For example, if order = [2, 1, 0] and
-      // layoutOrder = [0, 1], we need to shift `layoutOrder`
-      // by -1 (move them right). The resulting order will then be [1, 2, 0].
-      int rankDiff = layoutOrder.size() - shape.size();
-      auto minRank = std::min<size_t>(shape.size(), layoutOrder.size());
-      for (size_t i = 0; i < minRank; ++i)
-        order[i] = layoutOrder[i] - rankDiff;
-    }
-    assert(isPermutationOfIota(order) && "Invalid order");
-    return order;
-  }
+  static SmallVector<unsigned> getOrderForShape(ArrayRef<int64_t> shape,
+                                                ArrayRef<unsigned> layoutOrder);
 
   static SmallVector<Value> getStridesForShape(ArrayRef<int64_t> shape,
                                                ArrayRef<unsigned> layoutOrder,
                                                Location loc,
-                                               RewriterBase &rewriter) {
-    SmallVector<Value> strides(shape.size());
-    auto order = SharedMemoryObject::getOrderForShape(shape, layoutOrder);
-    int64_t stride = 1;
-    auto b = TritonLLVMOpBuilder(loc, rewriter);
-    for (auto idx : order) {
-      strides[idx] = b.i32_val(stride);
-      stride *= shape[idx];
-    }
-    return strides;
-  }
+                                               RewriterBase &rewriter);
 
   Value base; // i32 ptr. The start address of the shared memory object.
   Type baseElemType;
