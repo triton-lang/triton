@@ -605,10 +605,13 @@ struct AsyncCopyGlobalToLocalOpConversion
     auto dstTy = op.getResult().getType();
     auto sharedEnc = cast<SwizzledSharedEncodingAttr>(dstTy.getEncoding());
     auto resElemTy = getTypeConverter()->convertType(dstTy.getElementType());
+    unsigned maxVec = getVectorSize(op.getSrc(), axisAnalysisPass);
 
-    Value llSrc = adaptor.getSrc();
-    auto srcElems = unpackLLElements(loc, llSrc, rewriter);
-    Value llDst = adaptor.getResult();
+    bool hasSwizzling = sharedEnc.getMaxPhase() != 1;
+    if (failed(canWriteCoalesced(rewriter, op, srcTy, dstTy, maxVec,
+                                 hasSwizzling))) {
+      return failure();
+    }
 
     // We can load N elements at a time if:
     //  1. Every group of N source pointers are contiguous.  For example, if
@@ -616,15 +619,8 @@ struct AsyncCopyGlobalToLocalOpConversion
     //  2. The mask (if present) has "alignment" N, meaning that each group of N
     //     mask bits are the same.  For example if N=2, the mask must be
     //     [x, x, y, y, ...].
-    unsigned maxVec = getVectorSize(op.getSrc(), axisAnalysisPass);
     auto maskElements = getMaskElemsAndUpdateVeclen(
         rewriter, loc, adaptor.getMask(), op.getMask(), maxVec);
-
-    bool hasSwizzling = sharedEnc.getMaxPhase() != 1;
-    if (failed(canWriteCoalesced(rewriter, op, srcTy, dstTy, maxVec,
-                                 hasSwizzling))) {
-      return failure();
-    }
 
     VectorType vecTy;
     // Will hold the coalesced shared addresses we need to store into
@@ -633,7 +629,8 @@ struct AsyncCopyGlobalToLocalOpConversion
     // addresses to apply the reverse swizzling to the source pointers
     SmallVector<Value> swizzledShmemAddr;
     emitSharedAddresses(rewriter, op, srcTy, dstTy, hasSwizzling, resElemTy,
-                        llDst, coalescedShmemAddr, swizzledShmemAddr, vecTy);
+                        adaptor.getResult(), coalescedShmemAddr,
+                        swizzledShmemAddr, vecTy);
     assert(vecTy.getNumElements() == maxVec);
 
     int vecBytes =
@@ -645,6 +642,7 @@ struct AsyncCopyGlobalToLocalOpConversion
         b.i32_val(mlir::LLVM::AMD::getCtrlBitsForCacheModifierOnTarget(
             op.getCache(), /*isLoad=*/true, targetInfo));
 
+    auto srcElems = unpackLLElements(loc, adaptor.getSrc(), rewriter);
     Value llMask = adaptor.getMask();
     SmallVector<Value> maskElems;
     if (llMask) {
