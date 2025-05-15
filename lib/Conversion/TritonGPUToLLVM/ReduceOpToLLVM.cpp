@@ -248,20 +248,46 @@ private:
     Value warpIdAxis = multiDimWarpId[axis];
 
     auto smemOrder = helper.getOrderWithAxisAtBeginning();
+
+    unsigned numAccs = accs.size(); // also == writePtrs.size()
+
+    // Step 1: compute writePtrs (same across threads)
+    SmallVector<Value> writePtrs;
+    for (auto it : accs) {
+      const SmallVector<unsigned> &key = it.first;
+      SmallVector<Value> writeIdx = indices[key];
+
+      // Replace reduction axis index with warpIdAxis for all threads
+      writeIdx[axis] = warpIdAxis;
+
+      Value offset = linearize(rewriter, loc, writeIdx, smemShape, smemOrder);
+      auto elemTy = getElementType(op, 0); // assuming single operand
+      Value ptr = b.gep(smemBases[0].getType(), elemTy, smemBases[0], offset);
+      writePtrs.push_back(ptr);
+    }
+
+    // Step 2: get lane offset = which phase of the permutation this thread is
+    // in
+    Value laneOffset = multiDimLaneId[1 - axis];
+
+    // Step 3: each thread writes one value per round
+    unsigned int i = 0;
     for (auto it : accs) {
       const SmallVector<unsigned> &key = it.first;
       SmallVector<Value> &acc = it.second;
+      Value iVal = b.i32_val(i);
+      Value targetIdx = b.urem(b.add(iVal, laneOffset), b.i32_val(numAccs));
 
-      SmallVector<Value> writeIdx = indices[key];
-      writeIdx[axis] = warpIdAxis;
-      Value writeOffset =
-          linearize(rewriter, loc, writeIdx, smemShape, smemOrder);
-      for (unsigned i = 0; i < op.getNumOperands(); ++i) {
-        auto elemTy = getElementType(op, i);
-        Value writePtr =
-            b.gep(smemBases[i].getType(), elemTy, smemBases[i], writeOffset);
-        targetInfo.storeShared(rewriter, loc, writePtr, acc[i], write);
+      // Step 3a: dynamically select writePtrs[targetIdx]
+      Value selectedPtr = writePtrs[0];
+      for (unsigned j = 1; j < numAccs; ++j) {
+        Value match = b.icmp_eq(targetIdx, b.i32_val(j));
+        selectedPtr = b.select(match, writePtrs[j], selectedPtr);
       }
+
+      // Step 3b: write acc[i] to selectedPtr if `write` predicate is true
+      targetInfo.storeShared(rewriter, loc, selectedPtr, acc[0], write);
+      i++;
     }
   }
 
@@ -338,6 +364,8 @@ private:
     auto axis = op.getAxis();
     auto smemOrder = helper.getOrderWithAxisAtBeginning();
     SmallVector<Value> results(op.getNumOperands());
+    auto [laneId, warpId] = getLaneAndWarpId(rewriter, loc);
+
     for (unsigned i = 0; i < op.getNumOperands(); ++i) {
       auto elemTy = getElementType(op, i);
       if (auto resultTy =
@@ -350,10 +378,14 @@ private:
         auto resultShape = resultTy.getShape();
         assert(resultIndices.size() == resultElems);
 
+        Value laneOffset = b.urem(laneId, b.i32_val(resultElems));
         SmallVector<Value> resultVals(resultElems);
+
+        SmallVector<Value> readPtrs;
         for (size_t j = 0; j < resultElems; ++j) {
           SmallVector<Value> readIdx = resultIndices[j];
           readIdx.insert(readIdx.begin() + op.getAxis(), b.i32_val(0));
+
           for (size_t resultIdx = 0, resultDim = resultShape.size();
                resultIdx < resultDim; ++resultIdx) {
             auto smemIdx = resultIdx < op.getAxis() ? resultIdx : resultIdx + 1;
@@ -365,11 +397,28 @@ private:
                   b.urem(readIdx[smemIdx], b.i32_val(smemShape[smemIdx]));
             }
           }
+
           Value readOffset =
               linearize(rewriter, loc, readIdx, smemShape, smemOrder);
           Value readPtr =
               b.gep(smemBases[i].getType(), elemTy, smemBases[i], readOffset);
-          resultVals[j] = b.load(elemTy, readPtr);
+          readPtrs.push_back(readPtr);
+        }
+
+        for (size_t j = 0; j < resultElems; ++j) {
+          Value jVal = b.i32_val(j);
+          Value invIdx =
+              b.urem(b.add(jVal, laneOffset), b.i32_val(resultElems));
+
+          Value selectedPtr = readPtrs[0];
+          for (unsigned k = 1; k < resultElems; ++k) {
+            Value match = b.icmp_eq(invIdx, b.i32_val(k));
+            selectedPtr = b.select(match, readPtrs[k], selectedPtr);
+          }
+
+          Value val = targetInfo.loadShared(rewriter, loc, selectedPtr, elemTy,
+                                            b.true_val());
+          resultVals[j] = val;
         }
 
         results[i] = packLLElements(loc, getTypeConverter(), resultVals,
