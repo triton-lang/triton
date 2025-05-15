@@ -32,7 +32,7 @@ def cleanup():
         pass
 
 
-def broadcast(x: torch.Tensor, src: int = 0, group: Optional[dist.Group] = None) -> torch.Tensor:
+def broadcast(x: torch.Tensor, src: int = 0, group: Optional[dist.group] = None) -> torch.Tensor:
     if _is_distributed_launch():
         if x.dtype not in [torch.float16, torch.bfloat16, torch.float32]:
             x = x.to(torch.float16)
