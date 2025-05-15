@@ -11,6 +11,11 @@ import triton_kernels
 import pytest
 
 
+def dummy_all_gather(out, x):
+    out[0].copy_(x)
+    out[1].copy_(x)
+
+
 def test_all_gather_non_distributed(monkeypatch):
     monkeypatch.setenv("WORLD_SIZE", "1")
     x = torch.randn(4, 5)
@@ -23,7 +28,7 @@ def test_all_gather_distributed(monkeypatch, dim):
     monkeypatch.setenv("WORLD_SIZE", "2")
     monkeypatch.setattr(dist, "is_initialized", lambda: True)
     monkeypatch.setattr(dist, "get_world_size", lambda: 2)
-    monkeypatch.setattr(dist, "all_gather", lambda out, x: [x, x])
+    monkeypatch.setattr(dist, "all_gather", dummy_all_gather)
 
     x = torch.randn(4, 4)
     result = triton_dist.all_gather(x, dim=dim)
@@ -51,10 +56,13 @@ def test_reduce_scatter_distributed_no_token_mask(monkeypatch):
     torch.testing.assert_close(result, expected)
 
 
-@pytest.mark.parametrize("dim, x_shape, token_mask", [
-    (0, (4, 4), torch.tensor([True, False, True, False], dtype=torch.bool)),
-    (1, (3, 2), torch.tensor([True, False, False, True], dtype=torch.bool)),
-])
+@pytest.mark.parametrize(
+    "dim, x_shape, token_mask",
+    [
+        (0, (4, 4), torch.tensor([True, False, True, False], dtype=torch.bool)),
+        (1, (3, 2), torch.tensor([True, False, False, True], dtype=torch.bool)),
+    ],
+)
 def test_reduce_scatter_distributed_with_token_mask(monkeypatch, dim, x_shape, token_mask):
     monkeypatch.setenv("WORLD_SIZE", "2")
     monkeypatch.setattr(dist, "is_initialized", lambda: True)
@@ -76,10 +84,6 @@ def test_reduce_scatter_distributed_with_token_mask(monkeypatch, dim, x_shape, t
 
 
 def test_routing_distributed_EP(monkeypatch):
-
-    def dummy_all_gather(out, x):
-        return [x, x]
-
     # Test distributed routing with EP=1 (token_mask should be None)
     monkeypatch.setenv("WORLD_SIZE", "2")
     # Set environment for local rank and distributed group
