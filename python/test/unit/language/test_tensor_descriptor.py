@@ -7,7 +7,7 @@ import triton.language as tl
 from triton._internal_testing import is_interpreter, numpy_random, to_triton, unwrap_tensor, tma_dtypes, to_numpy
 from triton.tools.mxfp import MXFP4Tensor, MXScaleTensor
 from typing import Optional
-from triton._internal_testing import is_cuda, is_hip
+from triton._internal_testing import is_cuda, is_hip, is_hip_cdna3
 from triton.tools.tensor_descriptor import TensorDescriptor
 from triton import CompilationError
 
@@ -1475,6 +1475,12 @@ REDUCE_OP = {
     "xor": lambda a, b: torch.bitwise_xor(unwrap_tensor(a), unwrap_tensor(b)),
 }
 
+REDUCE_SKIP_HIP_CDNA3 = [
+    ("min", "int32", 1, 1024),
+    ("max", "int32", 1, 1024),
+    ("add", "bfloat16", 1, 1024),
+]
+
 
 # TODO: interpreter support
 # @pytest.mark.interpreter
@@ -1490,6 +1496,8 @@ def test_tensor_descriptor_reduce(kind, descriptor, dtype_str, num_ctas, M_BLOCK
             pytest.skip("Multi-CTA not supported")
         if descriptor == "host":
             pytest.skip("NYI: Host side tensor descriptor fallback")
+        if is_hip_cdna3() and (kind, dtype_str, M_BLOCK, N_BLOCK) in REDUCE_SKIP_HIP_CDNA3:
+            pytest.skip("Broken on rocm")
 
     @triton.jit(debug=True)
     def kernel(out_desc, out_ptr, a_ptr, M, N, M_BLOCK: tl.constexpr, N_BLOCK: tl.constexpr, kind: tl.constexpr):
