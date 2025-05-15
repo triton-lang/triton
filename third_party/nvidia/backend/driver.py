@@ -144,6 +144,11 @@ def make_launcher(constants, signature, tensordesc_meta):
 
                 if meta is None:
                     output.append("*" + dtype)
+                    # Currently the host side tensor descriptors get passed in as a
+                    # tensor desc, shape, and strides. We have no way to use these
+                    # shape and strides when processing tensor descriptors which is
+                    # why we provide our own decomposition above. Sadly this means
+                    # we have to pass the shape and strides twice.
                     for _ in range(2 * ndim):
                         output.append("i64")
                 else:
@@ -639,8 +644,11 @@ class CudaLauncher(object):
         tensordesc_meta = getattr(metadata, "tensordesc_meta", None)
         src = make_launcher(constants, signature, tensordesc_meta)
         mod = compile_module_from_src(src, "__triton_launcher")
+        has_tensor_desc_arg = any(
+            isinstance(sig, str) and sig.startswith("tensordesc") for sig in src.signature.values())
+
         self.num_ctas = functools.reduce(operator.mul, metadata.cluster_dims, 1)
-        self.launch = wrap_handle_tensordesc(mod.launch, tensordesc_meta)
+        self.launch = wrap_handle_tensordesc(mod.launch, tensordesc_meta) if has_tensor_desc_arg else mod.launch
         self.global_scratch_size = metadata.global_scratch_size
         self.global_scratch_align = metadata.global_scratch_align
         self.launch_cooperative_grid = metadata.launch_cooperative_grid
