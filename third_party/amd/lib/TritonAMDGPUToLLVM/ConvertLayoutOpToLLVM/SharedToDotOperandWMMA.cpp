@@ -137,9 +137,10 @@ computeTensorElemMappingInBlockWmma2(
 
 Value convertLayout(int opIdx, ConversionPatternRewriter &rewriter,
                     Location loc, Value tensor, DotOperandEncodingAttr encoding,
-                    const SharedMemoryObject &smemObj,
-                    const LLVMTypeConverter *typeConverter, Value thread) {
-  auto tb = TritonLLVMOpBuilder(loc, rewriter);
+                    Value llvmStruct, Type llvmElemTy,
+                    const LLVMTypeConverter *typeConverter) {
+  auto smemObj = LLVM::getSharedMemoryObjectFromStruct(loc, llvmStruct,
+                                                       llvmElemTy, rewriter);
   assert((opIdx == 0 || opIdx == 1) && "unexpected operand idx");
   auto rank = smemObj.getOffsets().size();
   int kDimIdx = opIdx == 0 ? rank - 1 : rank - 2;
@@ -176,7 +177,9 @@ Value convertLayout(int opIdx, ConversionPatternRewriter &rewriter,
 
   unsigned iWaveSize = triton::gpu::lookupThreadsPerWarp(rewriter);
   assert(iWaveSize == 32);
+  auto tb = TritonLLVMOpBuilder(loc, rewriter);
   Value waveSize = tb.i32_val(iWaveSize);
+  Value thread = getThreadId(rewriter, loc);
   Value linearWaveId = tb.udiv(thread, waveSize);
 
   unsigned numElemsPerThreadPerRep = wmmaLayout.getKWidthForOperands();
@@ -211,7 +214,6 @@ Value convertLayout(int opIdx, ConversionPatternRewriter &rewriter,
   }
   smemBase = AMD::computeBasePtr(rewriter, loc, smemObj, smemStrides);
 
-  Type resElemTy = typeConverter->convertType(elemTy);
   Type smemPtrTy = ptr_ty(rewriter.getContext(), 3);
 
   int loadsPerThread = offsets.size() / (numRepNonK * numRepK);
@@ -225,8 +227,6 @@ Value convertLayout(int opIdx, ConversionPatternRewriter &rewriter,
                tb.add(waveIdInBatch, tb.i32_val(b * warpsPerBatch)));
     for (int nonK = 0; nonK < numRepNonK; ++nonK) {
       for (int k = 0; k < numRepK; ++k) {
-        auto vecTy = vec_ty(resElemTy, numElemsPerThreadPerRep);
-        Value valVec = tb.undef(vecTy);
         for (unsigned loadId = 0; loadId < loadsPerThread; ++loadId) {
           Value loadOffset = offsets[nonK * loadsPerThread * numRepK +
                                      k * loadsPerThread + loadId];

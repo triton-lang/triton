@@ -197,8 +197,8 @@ bool isColMajor(::llvm::ArrayRef<unsigned> order) {
 
 Value convertLayout(int opIdx, ConversionPatternRewriter &rewriter,
                     Location loc, Value tensor, DotOperandEncodingAttr encoding,
-                    const SharedMemoryObject &smemObj,
-                    const LLVMTypeConverter *typeConverter, Value thread) {
+                    Value llvmStruct, Type llvmElemTy,
+                    const LLVMTypeConverter *typeConverter) {
   // We observe mismatches going down this path for scaled dot operations.
   // However, these mismatches do not occur when the conversion is performed via
   // LL, which is the preferred anyway.
@@ -210,7 +210,6 @@ Value convertLayout(int opIdx, ConversionPatternRewriter &rewriter,
     }
   }
 
-  auto tb = TritonLLVMOpBuilder(loc, rewriter);
   assert((opIdx == 0 || opIdx == 1) && "unexpected operand idx");
   auto aTensorTy = cast<triton::gpu::MemDescType>(tensor.getType());
   ArrayRef<int64_t> shape = aTensorTy.getShape();
@@ -271,7 +270,10 @@ Value convertLayout(int opIdx, ConversionPatternRewriter &rewriter,
 
   unsigned iWarpSize = triton::gpu::lookupThreadsPerWarp(rewriter);
   assert(iWarpSize == 64);
+
+  auto tb = TritonLLVMOpBuilder(loc, rewriter);
   Value warpSize = tb.i32_val(iWarpSize);
+  Value thread = getThreadId(rewriter, loc);
   Value linearWarpId = tb.udiv(thread, warpSize);
   Value lane = tb.urem(thread, warpSize);
 
@@ -301,6 +303,8 @@ Value convertLayout(int opIdx, ConversionPatternRewriter &rewriter,
   SmallVector<Value> loadedValues;
   SmallVector<Value> offsets;
   Value smemBase;
+  auto smemObj = LLVM::getSharedMemoryObjectFromStruct(loc, llvmStruct,
+                                                       llvmElemTy, rewriter);
   auto smemStrides = smemObj.getStrides(aTensorTy, loc, rewriter);
   bool isFastPath =
       !AMD::isKContig(order, opIdx) && !hasSwizzleEnabled(sharedLayout);
