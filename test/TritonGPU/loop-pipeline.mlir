@@ -1703,7 +1703,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   // CHECK-LABEL: @predicate_stage1
   // CHECK: scf.for %[[IV:.*]] = %[[LB:.*]] to %[[UB:.*]] step %[[STEP:.*]] iter_args
-  // CHECK: ttg.predicate_stage %[[IV]], %[[UB]], %[[STEP]], 0 : i32 -> i1
+  // CHECK: ttg.predicate_stage %[[IV]], %[[UB]], %[[STEP]] maxStage 2 stage 0 : i32 -> i1
   tt.func public @predicate_stage1(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg2: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg3: i32 {tt.divisibility = 16 : i32, tt.max_divisibility = 16 : i32}) attributes {noinline = false} {
     %c1024_i32 = arith.constant 1024 : i32
     %c0_i32 = arith.constant 0 : i32

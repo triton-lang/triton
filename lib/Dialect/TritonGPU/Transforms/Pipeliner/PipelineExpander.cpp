@@ -67,6 +67,8 @@ protected:
   triton::PipeliningOption::AnnotationlFnType annotateFn = nullptr;
   bool peelEpilogue;
   triton::PipeliningOption::PredicateOpFnType predicateFn = nullptr;
+  triton::PipeliningOption::EmitPredicateStageFnType emitPredicateStageFn =
+      nullptr;
 
   // When peeling the kernel we generate several version of each value for
   // different stage of the prologue. This map tracks the mapping between
@@ -112,9 +114,6 @@ public:
   /// operations from stages [i; maxStage], where i is the part index.
   LogicalResult emitEpilogue(RewriterBase &rewriter,
                              llvm::SmallVector<Value> &returnValues);
-
-  /// Resolve the predicate stage ops in the loop body.
-  void resolvePredicateStageOps(RewriterBase &rewriter, scf::ForOp newForOp);
 };
 
 /// Find operands of all the nested operations within `op`.
@@ -162,6 +161,10 @@ bool LoopPipelinerInternal::initializeLoopInfo(
   if ((!peelEpilogue || dynamicLoop) && predicateFn == nullptr) {
     LDBG("--no epilogue or predicate set -> BAIL");
     return false;
+  }
+  emitPredicateStageFn = options.emitPredicateStageFn;
+  if (emitPredicateStageFn == nullptr) {
+    emitPredicateStageFn = mlir::triton::emitPredicateForStage;
   }
   std::vector<std::pair<Operation *, unsigned>> schedule;
   options.getScheduleFn(forOp, schedule);
@@ -495,8 +498,8 @@ LogicalResult LoopPipelinerInternal::createKernel(
     Location loc = newForOp.getLoc();
     for (unsigned i = 0; i < maxStage; i++) {
       // c = ub - (maxStage - i) * step
-      predicates[i] = rewriter.create<triton::gpu::PredicateStageOp>(
-          loc, newForOp.getInductionVar(), ub, step, i);
+      predicates[i] = emitPredicateStageFn(rewriter, newForOp.getInductionVar(),
+                                           ub, step, maxStage, i);
     }
   }
   for (Operation *op : opOrder) {
@@ -778,11 +781,6 @@ LoopPipelinerInternal::emitEpilogue(RewriterBase &rewriter,
   return success();
 }
 
-void LoopPipelinerInternal::resolvePredicateStageOps(RewriterBase &rewriter,
-                                                     scf::ForOp newForOp) {
-  defaultResolvePredicateStageOps(rewriter, newForOp, maxStage);
-}
-
 void LoopPipelinerInternal::setValueMapping(Value key, Value el, int64_t idx) {
   auto it = valueMapping.find(key);
   // If the value is not in the map yet add a vector big enough to store all
@@ -848,51 +846,21 @@ mlir::triton::pipelineForLoop(RewriterBase &rewriter, ForOp forOp,
   else
     rewriter.eraseOp(forOp);
 
-  if (options.resolvePredicateOps) {
-    pipeliner.resolvePredicateStageOps(rewriter, newForOp);
-  }
-
   return newForOp;
 }
 
-void mlir::triton::resolvePredicateStageOps(
-    ArrayRef<Operation *> predOps,
-    std::function<Value(triton::gpu::PredicateStageOp)> callback) {
-  SmallVector<Operation *> opsToErase;
-  for (auto op : predOps) {
-    if (isa<triton::gpu::PredicateStageOp>(op)) {
-      auto predOp = cast<triton::gpu::PredicateStageOp>(op);
-      Value pred = callback(predOp);
-      if (pred) {
-        predOp.getResult().replaceAllUsesWith(pred);
-        opsToErase.push_back(predOp);
-      }
-    }
-  }
-  for (auto op : opsToErase) {
-    op->erase();
-  }
-}
-
-void mlir::triton::defaultResolvePredicateStageOps(RewriterBase &rewriter,
-                                                   scf::ForOp forOp,
-                                                   int64_t maxStage) {
-  SmallVector<Operation *> predOps =
-      llvm::map_to_vector(forOp.getBody()->without_terminator(),
-                          [](Operation &op) -> Operation * { return &op; });
-  resolvePredicateStageOps(
-      predOps, [&](triton::gpu::PredicateStageOp op) -> Value {
-        rewriter.setInsertionPoint(op);
-        auto loc = op.getLoc();
-        auto type = op.getIv().getType();
-        Value c = rewriter.create<arith::SubIOp>(
-            loc, op.getUb(),
-            rewriter.create<arith::MulIOp>(
-                loc, op.getStep(),
-                rewriter.create<arith::ConstantOp>(
-                    loc, rewriter.getIntegerAttr(
-                             type, int64_t(maxStage - op.getStage())))));
-        return rewriter.create<arith::CmpIOp>(loc, arith::CmpIPredicate::slt,
-                                              op.getIv(), c);
-      });
+Value mlir::triton::emitPredicateForStage(RewriterBase &rewriter,
+                                          Value inductionVar, Value upperBound,
+                                          Value step, uint64_t maxStage,
+                                          uint64_t stage) {
+  auto loc = inductionVar.getLoc();
+  auto type = inductionVar.getType();
+  Value c = rewriter.create<arith::SubIOp>(
+      loc, upperBound,
+      rewriter.create<arith::MulIOp>(
+          loc, step,
+          rewriter.create<arith::ConstantOp>(
+              loc, rewriter.getIntegerAttr(type, maxStage - stage))));
+  return rewriter.create<arith::CmpIOp>(loc, arith::CmpIPredicate::slt,
+                                        inductionVar, c);
 }

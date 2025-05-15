@@ -63,7 +63,9 @@ struct PipeliningOption {
 
   /// Control whether the transformation should resolve the predicate stage ops
   /// in the loop body, or leave them as tt.predicate_stage.
-  bool resolvePredicateOps = true;
+  using EmitPredicateStageFnType = std::function<Value(
+      RewriterBase &, Value, Value, Value, uint64_t, uint64_t)>;
+  EmitPredicateStageFnType emitPredicateStageFn = nullptr;
 
   // Callback to predicate operations when the prologue or epilogue are not
   // peeled. This takes the original operation, an i1 predicate value and the
@@ -103,15 +105,9 @@ FailureOr<scf::ForOp> pipelineForLoop(RewriterBase &rewriter, scf::ForOp forOp,
                                       const PipeliningOption &options,
                                       bool *modifiedIR = nullptr);
 
-/// Resolve the predicate stage ops in the loop body using default predicates
-/// based on the loop induction variable and maxStage.
-void defaultResolvePredicateStageOps(RewriterBase &rewriter, scf::ForOp forOp,
-                                     int64_t maxStage);
-
-/// Resolve the predicate stage ops in the loop body using a custom callback.
-void resolvePredicateStageOps(
-    ArrayRef<Operation *> predOps,
-    std::function<Value(triton::gpu::PredicateStageOp)> callback);
+Value emitPredicateForStage(RewriterBase &rewriter, Value inductionVar,
+                            Value upperBound, Value step, uint64_t maxStage,
+                            uint64_t stage);
 
 } // namespace triton
 } // namespace mlir

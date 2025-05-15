@@ -64,8 +64,15 @@ static void expandLoops(ModuleOp moduleOp) {
         };
     // Testing feature: allow for unresolved predicate stage ops
     // in the loop body.
-    options.resolvePredicateOps =
-        !forOp->hasAttr("__test_keep_predicate_stage");
+    if (forOp->hasAttr("__test_keep_predicate_stage")) {
+      options.emitPredicateStageFn =
+          [](RewriterBase &rewriter, Value inductionVar, Value upperBound,
+             Value step, uint64_t maxStage, uint64_t stage) {
+            return rewriter.create<triton::gpu::PredicateStageOp>(
+                inductionVar.getLoc(), inductionVar, upperBound, step, maxStage,
+                stage);
+          };
+    }
     IRRewriter rewriter(forOp);
     FailureOr<scf::ForOp> newForOp =
         triton::pipelineForLoop(rewriter, forOp, options);
