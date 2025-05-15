@@ -1558,7 +1558,7 @@ chooseMfmaLikeStoreLayout(RankedTensorType valType) {
     int size = mfmaLayout.getWarpsPerCTA()[dim];
     for (int i = 1; i < size; i *= 2) {
       std::vector<int32_t> v = {0, 0};
-      v[r] = i * 32;
+      v[r] = i * mfmaLayout.getMDim();
       v[1 - r] = 0;
       warpBase.push_back(v);
     }
