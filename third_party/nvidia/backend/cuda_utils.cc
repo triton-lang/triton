@@ -2,6 +2,9 @@
 #include <Python.h>
 #include <alloca.h>
 #include <dlfcn.h>
+#include <pybind11/pybind11.h>
+#include <pybind11/stl.h>
+#include <pybind11/stl_bind.h>
 
 #include <cstdint>
 #include <cstdlib>
@@ -18,7 +21,7 @@
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringRef.h"
 
-#include "third_party/absl/cleanup/cleanup.h"
+namespace py = pybind11;
 
 namespace {
 
@@ -37,10 +40,8 @@ inline bool gpuAssert(CUresult code, const char *file, int line) {
     return true;
   const char *error = nullptr;
   cuGetErrorString(code, &error);
-  PyGILState_STATE gil_state = PyGILState_Ensure();
-  PyErr_Format(PyExc_RuntimeError, "Triton Error [CUDA]: %s", error);
-  PyGILState_Release(gil_state);
-  return false;
+  py::str error_str = py::str("Triton Error [CUDA]: {0}").format(error);
+  throw pybind11::cast_error(error_str);
 }
 
 // To be used only *outside* a Py_{BEGIN,END}_ALLOW_THREADS block.
@@ -64,6 +65,14 @@ inline bool gpuAssert(CUresult code, const char *file, int line) {
     }                                                                          \
   } while (0)
 
+#define CUDA_CHECK_ALLOW_THREADS(ans)                                          \
+  do {                                                                         \
+    if (ans != CUDA_SUCCESS) {                                                 \
+      PyEval_RestoreThread(_save);                                             \
+    }                                                                          \
+    gpuAssert((ans), __FILE__, __LINE__);                                      \
+  } while (0)
+
 // Used to check if functions exist in old CUDA driver versions.
 #define INITIALIZE_FUNCTION_POINTER_IF_NULL(funcPointer, initializerFunction)  \
   do {                                                                         \
@@ -71,6 +80,17 @@ inline bool gpuAssert(CUresult code, const char *file, int line) {
       (funcPointer) = (initializerFunction)();                                 \
       if ((funcPointer) == NULL) {                                             \
         return NULL;                                                           \
+      }                                                                        \
+    }                                                                          \
+  } while (0)
+
+#define INITIALIZE_FUNCTION_POINTER_OR_RETURN(funcPointer,                     \
+                                              initializerFunction)             \
+  do {                                                                         \
+    if ((funcPointer) == NULL) {                                               \
+      (funcPointer) = (initializerFunction)();                                 \
+      if ((funcPointer) == NULL) {                                             \
+        return;                                                                \
       }                                                                        \
     }                                                                          \
   } while (0)
@@ -171,49 +191,74 @@ PyObject *launchKernel(const TritonLaunchConfig &config) {
 // Interface used by various PyObject extractors to extract obj into a memory
 // location pointed by ptr. Returns true if extraction succeeded, and false
 // otherwise.
-using ExtractorType = bool (*)(PyObject *obj, void *ptr);
+using ExtractorType = bool (*)(py::object obj, void *ptr);
 
 // Enable peer access if dev_ptr is allocated on a different device than the
 // device on which we will execute the kernel.
-// Extract a CUDA device pointer from a pointer-like PyObject obj, and store
+PyObject *enablePeerAccessIfNecessary(CUdeviceptr dev_ptr) {
+  CUmemorytype mem_type = CU_MEMORYTYPE_HOST;
+  CUresult status = cuPointerGetAttribute(
+      &mem_type, CU_POINTER_ATTRIBUTE_MEMORY_TYPE, dev_ptr);
+  if (status != CUDA_SUCCESS || mem_type != CU_MEMORYTYPE_DEVICE) {
+    // Not peer memory
+    Py_RETURN_NONE;
+  }
+  int mem_device_ordinal = 0;
+  CUDA_CHECK_AND_RETURN_NULL(cuPointerGetAttribute(
+      &mem_device_ordinal, CU_POINTER_ATTRIBUTE_DEVICE_ORDINAL, dev_ptr));
+  CUdevice mem_device = 0;
+  CUDA_CHECK_AND_RETURN_NULL(cuDeviceGet(&mem_device, mem_device_ordinal));
+  CUdevice compute_device = 0;
+  CUDA_CHECK_AND_RETURN_NULL(cuCtxGetDevice(&compute_device));
+  if (mem_device != compute_device) {
+    CUcontext mem_ctx = nullptr;
+    CUDA_CHECK_AND_RETURN_NULL(cuDevicePrimaryCtxRetain(&mem_ctx, mem_device));
+    CUresult status = cuCtxEnablePeerAccess(mem_ctx, /*flags=*/0);
+    if (status == CUDA_ERROR_PEER_ACCESS_ALREADY_ENABLED) {
+      status = CUDA_SUCCESS;
+    }
+    CUDA_CHECK_AND_RETURN_NULL(status);
+  }
+  Py_RETURN_NONE;
+}
+
+// Extract a CUDA device pointer from a pointer-like py::object obj, and store
 // it to the memory location pointed by ptr.
-bool extractPointer(PyObject *obj, void *ptr) {
+bool extractPointer(py::object obj, void *ptr) {
   auto dev_ptr = static_cast<CUdeviceptr *>(ptr);
-  if (obj == Py_None) {
+  if (obj.is_none()) {
     *dev_ptr = static_cast<CUdeviceptr>(0); // valid nullptr
     return true;
   }
-  if (PyLong_Check(obj)) {
-    *dev_ptr = PyLong_AsUnsignedLongLong(obj);
+  if (py::isinstance<py::int_>(obj)) {
+    *dev_ptr = obj.cast<uint64_t>();
     return true;
   }
-  UniquePyObjectPtr ret(PyObject_CallMethod(obj, "data_ptr", nullptr));
-  if (!ret.get()) {
-    PyErr_Format(PyExc_TypeError,
-                 "Pointer argument must be either uint64 or have data_ptr "
-                 "method, but got %R",
-                 obj);
-    return false;
+  if (!py::hasattr(obj, "data_ptr")) {
+    py::str error_msg =
+        py::str("Pointer argument must be either uint64 or have "
+                "data_ptr method, but got {0}")
+            .format(obj);
+    throw py::type_error(error_msg);
   }
-  if (!PyLong_Check(ret.get())) {
-    PyErr_SetString(PyExc_TypeError,
-                    "data_ptr method of Pointer object must return 64-bit int");
-    return false;
+
+  py::object ret = obj.attr("data_ptr")();
+  if (!py::isinstance<py::int_>(ret)) {
+    throw py::type_error(
+        "data_ptr method of Pointer object must return 64-bit int");
   }
-  *dev_ptr = PyLong_AsUnsignedLongLong(ret.get());
-  if (PyErr_Occurred()) {
-    return false;
-  }
+  *dev_ptr = ret.cast<uint64_t>();
   if (*dev_ptr == 0) {
     return true; // valid nullptr
+  }
+  if (enablePeerAccessIfNecessary(*dev_ptr) == nullptr) {
+    return false;
   }
   CUresult status = cuPointerGetAttribute(
       dev_ptr, CU_POINTER_ATTRIBUTE_DEVICE_POINTER, *dev_ptr);
   if (status == CUDA_ERROR_INVALID_VALUE) {
-    PyErr_Format(PyExc_ValueError,
-                 "Pointer argument cannot be accessed from Triton "
-                 "(cpu tensor?)");
-    return false;
+    throw py::value_error(
+        "Pointer argument cannot be accessed from Triton (cpu tensor?)");
   } else if (status != CUDA_SUCCESS) {
     CUDA_CHECK(status);
     return false;
@@ -223,45 +268,29 @@ bool extractPointer(PyObject *obj, void *ptr) {
 
 // Extract a CUtensorMap descriptor from a python object, and store it to the
 // memory location pointed by ptr.
-bool extractTmaDesc(PyObject *obj, void *ptr) {
+bool extractTmaDesc(py::object obj, void *ptr) {
   if (sizeof(CUtensorMap *) != 8) {
     PyErr_SetString(PyExc_SystemError,
                     "extractTmaDesc() requires 64-bit compilation");
     return false;
   }
 
-  UniquePyObjectPtr method_ret(
-      PyObject_CallMethod(obj, "tma_desc_cpu_ptr", nullptr));
-  // Checking the error retains context if tma_desc_cpu_ptr raises an exception.
-  if (PyErr_Occurred()) {
-    return false;
+  if (!py::hasattr(obj, "tma_desc_cpu_ptr")) {
+    throw py::type_error(
+        "Type nvTmaDesc must have callable method tma_desc_cpu_ptr");
   }
-
-  if (!method_ret) {
-    PyErr_SetString(PyExc_SystemError, "Call to tma_desc_cpu_ptr() failed");
-    return false;
+  py::object ret = obj.attr("tma_desc_cpu_ptr")();
+  if (!py::isinstance<py::int_>(ret)) {
+    throw py::type_error(
+        "tma_desc_cpu_ptr method of Pointer object must return 64-bit int");
   }
-
-  if (!PyLong_Check(method_ret.get())) {
-    PyErr_SetString(PyExc_TypeError,
-                    "tma_desc_cpu_ptr() must return 64-bit int");
-    return false;
-  }
-
-  uint64_t ptr_as_uint = PyLong_AsUnsignedLongLong(method_ret.get());
-  if (PyErr_Occurred()) {
-    return false;
-  }
+  uint64_t ptr_as_uint = ret.cast<uint64_t>();
 
   if (!ptr_as_uint) {
-    PyErr_SetString(PyExc_ValueError,
-                    "received NULL ptr from tma_desc_cpu_ptr()");
-    return false;
+    throw py::value_error("received NULL ptr from tma_desc_cpu_ptr()");
   }
   if (ptr_as_uint % 64 != 0) {
-    PyErr_SetString(PyExc_ValueError,
-                    "tma_desc_cpu_ptr() must be 64-byte aligned");
-    return false;
+    throw py::value_error("tma_desc_cpu_ptr() must be 64-byte aligned");
   }
 
   *static_cast<CUtensorMap *>(ptr) =
@@ -269,8 +298,8 @@ bool extractTmaDesc(PyObject *obj, void *ptr) {
   return true;
 }
 
-// For a given type T, maps to the Python API with signature `U (*)(PyObject*)`
-// that can extract values of that type from a PyObject. Note that the return
+// For a given type T, maps to the Python API with signature `U (*)(py::object)`
+// that can extract values of that type from a py::object. Note that the return
 // type U is not guaranteed to be the same as T, but it can be explicitly casted
 // to T.
 template <typename T, typename = void> constexpr auto kValueFunction = nullptr;
@@ -293,12 +322,13 @@ constexpr auto
 
 // Extract a value of type T from obj and store it into memory pointed by ptr.
 // Returns true if extraction succeeded, and false otherwise.
-template <typename T> bool extractValue(PyObject *obj, void *ptr) {
-  *static_cast<T *>(ptr) = static_cast<T>(kValueFunction<T>(obj));
-  return PyErr_Occurred() == nullptr;
+template <typename T> bool extractValue(py::object obj, void *ptr) {
+  *static_cast<T *>(ptr) = obj.cast<T>();
+  return true;
 }
 
-// Contains information necessary for extracting a certain type from a PyObject.
+// Contains information necessary for extracting a certain type from a
+// py::object.
 struct ExtractionInfo {
   // Prefixes of types reprs supported by the extractor.
   llvm::SmallVector<llvm::StringRef> supported_type_repr_prefixes;
@@ -324,21 +354,21 @@ struct ExtractionInfo {
 
 // Array of supported extractors
 const ExtractionInfo kExtractionInfos[]{
-    ExtractionInfo::build<std::int8_t>({"'i8'"}),
-    ExtractionInfo::build<std::int16_t>({"'i16'"}),
-    ExtractionInfo::build<std::int32_t>({"'i1'", "'i32'"}),
-    ExtractionInfo::build<std::int64_t>({"'i64'"}),
-    ExtractionInfo::build<std::uint8_t>({"'u8'"}),
-    ExtractionInfo::build<std::uint16_t>({"'u16'"}),
-    ExtractionInfo::build<std::uint32_t>({"'u1'", "'u32'"}),
-    ExtractionInfo::build<std::uint64_t>({"'u64'"}),
-    ExtractionInfo::build<float>({"'fp16'", "'bf16'", "'fp32'", "'f32'"}),
-    ExtractionInfo::build<double>({"'fp64'"}),
+    ExtractionInfo::build<std::int8_t>({"i8"}),
+    ExtractionInfo::build<std::int16_t>({"i16"}),
+    ExtractionInfo::build<std::int32_t>({"i1", "i32"}),
+    ExtractionInfo::build<std::int64_t>({"i64"}),
+    ExtractionInfo::build<std::uint8_t>({"u8"}),
+    ExtractionInfo::build<std::uint16_t>({"u16"}),
+    ExtractionInfo::build<std::uint32_t>({"u1", "u32"}),
+    ExtractionInfo::build<std::uint64_t>({"u64"}),
+    ExtractionInfo::build<float>({"fp16", "bf16", "fp32", "f32"}),
+    ExtractionInfo::build<double>({"fp64"}),
     // Note: types are e.g. '*fp32', so no closing quote is intentional.
-    ExtractionInfo::build<void *>({"'*"}, extractPointer),
+    ExtractionInfo::build<void *>({"*"}, extractPointer),
     ExtractionInfo{
-        {"None", "'none'"}, 0, nullptr}, // Represent constexprs as None
-    ExtractionInfo::build<CUtensorMap>({"'nvTmaDesc'"}, extractTmaDesc),
+        {"None", "none"}, 0, nullptr}, // Represent constexprs as None
+    ExtractionInfo::build<CUtensorMap>({"nvTmaDesc"}, extractTmaDesc),
 };
 
 // Finds an extractor that supports a given type_repr in the extractor list.
@@ -368,60 +398,30 @@ function.
 :return: an opaque metadata object which can then be passed to launch()
 :rtype: bytes
 )");
-PyObject *buildSignatureMetadata(PyObject *self, PyObject *args) {
-  PyObject *signature = nullptr;
-  if (!PyArg_ParseTuple(args, "O", &signature)) {
-    return nullptr;
-  }
-  if (!PyIter_Check(signature)) {
-    PyErr_Format(PyExc_TypeError,
-                 "expected signature to be an iterable, got %R", signature);
-    return nullptr;
-  }
-
-  llvm::SmallVector<char, 16> signature_metadata;
-  while (UniquePyObjectPtr obj_type{PyIter_Next(signature)}) {
-    UniquePyObjectPtr repr(PyObject_Repr(obj_type.get()));
-    if (!repr) {
-      return nullptr;
-    }
-    UniquePyObjectPtr repr_str(
-        PyUnicode_AsEncodedString(repr.get(), "utf-8", "~E~"));
-    if (!repr_str) {
-      return nullptr;
-    }
-    const char *repr_bytes = PyBytes_AsString(repr_str.get());
-    if (!repr_bytes) {
-      return nullptr;
-    }
-    std::optional<std::uint8_t> extractor_idx = findExtractor(repr_bytes);
+std::vector<char> buildSignatureMetadata(std::vector<std::string> signature) {
+  std::vector<char> signature_metadata;
+  for (std::string type : signature) {
+    std::optional<std::uint8_t> extractor_idx = findExtractor(type);
     if (!extractor_idx.has_value()) {
-      PyErr_Format(PyExc_TypeError,
-                   "unexpected type %R in kernel signature, dir: %R",
-                   obj_type.get(), PyObject_Dir(obj_type.get()));
-      return nullptr;
+      std::string error = "unexpected type " + type + " in kernel signature";
+      throw pybind11::type_error(error);
     }
     signature_metadata.push_back(extractor_idx.value());
   }
-  if (PyErr_Occurred()) {
-    return nullptr;
-  }
 
-  return PyBytes_FromStringAndSize(signature_metadata.data(),
-                                   signature_metadata.size());
+  return signature_metadata;
+  // return PyBytes_FromStringAndSize(signature_metadata.data(),
+  //                                  signature_metadata.size());
 }
 
 // Launch a Python callable hook with metadata passed as parameters.
-bool launchHook(PyObject *hook, PyObject *metadata) {
-  if (hook == Py_None) {
+bool launchHook(py::object hook, py::object metadata) {
+  if (hook.is_none()) {
     return true;
   }
-  UniquePyObjectPtr args(Py_BuildValue("(O)", metadata));
-  if (!args) {
-    return false;
-  }
-  UniquePyObjectPtr ret(PyObject_CallObject(hook, args.get()));
-  return static_cast<bool>(ret);
+  py::tuple args = py::make_tuple(metadata);
+  py::object ret = hook(*args);
+  return ret.cast<bool>();
 }
 
 static void ensureCudaContext() {
@@ -471,51 +471,38 @@ Launch a kernel on an Nvidia GPU.
 
 :raises RuntimeError: on kernel launch failure
 )");
-PyObject *launch(PyObject *self, PyObject *args) {
+void launch(int grid_dim_x, int grid_dim_y, int grid_dim_z, int stream,
+            std::int64_t function,
+            std::tuple<int, int, int, int, int, int> packed_metadata,
+            py::object hook_args, py::object launch_enter_hook,
+            py::object launch_exit_hook, std::vector<char> signature_metadata,
+            py::object global_scratch, std::vector<py::object> kernel_args) {
   ensureCudaContext();
-  TritonLaunchConfig config{};
-  auto &grid = config.grid;
+  TritonLaunchConfig config{
+      .grid = {grid_dim_x, grid_dim_y, grid_dim_z},
+      .cluster = {std::get<3>(packed_metadata), std::get<4>(packed_metadata),
+                  std::get<5>(packed_metadata)},
+      .num_warps = std::get<0>(packed_metadata),
+      .shared_memory = std::get<2>(packed_metadata),
+      .stream = reinterpret_cast<CUstream>(stream),
+      .function = reinterpret_cast<CUfunction>(function),
+  };
+  int num_ctas = std::get<1>(packed_metadata);
+
   auto &cluster = config.cluster;
-  // PyObject* kernel_metadata = nullptr;
-  PyObject *hook_args = nullptr;
-  PyObject *launch_enter_hook = nullptr;
-  PyObject *launch_exit_hook = nullptr;
-  PyBytesObject *signature_metadata_bytes = nullptr;
-  PyObject *kernel_args = nullptr;
-  PyObject *global_scratch = nullptr;
-  int num_ctas = 0;
-  if (!PyArg_ParseTuple(args, "iiiKK(iiiiii)OOOSOO", &grid.x, &grid.y, &grid.z,
-                        &config.stream, &config.function, &config.num_warps,
-                        &num_ctas, &config.shared_memory, &cluster.x,
-                        &cluster.y, &cluster.z, &hook_args, &launch_enter_hook,
-                        &launch_exit_hook, &signature_metadata_bytes,
-                        &global_scratch, &kernel_args)) {
-    return nullptr;
-  }
   if (num_ctas != cluster.size()) {
     PyErr_Format(
         PyExc_ValueError,
         "Expected cluster dimensions (%d, %d, %d) to have a total size of %d",
         cluster.x, cluster.y, cluster.z, num_ctas);
-    return nullptr;
+    return;
   }
-  llvm::ArrayRef<char> signature_metadata(
-      PyBytes_AS_STRING(signature_metadata_bytes),
-      PyBytes_GET_SIZE(signature_metadata_bytes));
-  UniquePyObjectPtr fast_kernel_args(PySequence_Fast(
-      kernel_args, "Expected kernel_args to be a sequence or iterable"));
-  if (!fast_kernel_args) {
-    return nullptr;
-  }
-  llvm::ArrayRef<PyObject *> kernel_args_data(
-      PySequence_Fast_ITEMS(fast_kernel_args.get()),
-      PySequence_Fast_GET_SIZE(fast_kernel_args.get()));
 
-  if (signature_metadata.size() != kernel_args_data.size()) {
-    PyErr_Format(PyExc_TypeError,
-                 "Expected kernel to have %d parameters, but got %d",
-                 signature_metadata.size(), kernel_args_data.size());
-    return nullptr;
+  if (signature_metadata.size() != kernel_args.size()) {
+    throw py::type_error(
+        py::str("Expected kernel to have {0} parameters, but got {1}")
+            .format(signature_metadata.size(), kernel_args.size()));
+    return;
   }
 
   // +1 for the global scratch pointer.
@@ -527,10 +514,9 @@ PyObject *launch(PyObject *self, PyObject *args) {
   // using alloca to allocate pointers to it on the stack of the function.
   std::size_t params_idx = 0;
   for (const auto &[converter_idx, arg] :
-       llvm::zip(signature_metadata, kernel_args_data)) {
+       llvm::zip(signature_metadata, kernel_args)) {
     if (converter_idx >= std::size(kExtractionInfos)) {
-      PyErr_SetString(PyExc_ValueError, "corrupted signature metadata");
-      return nullptr;
+      throw py::value_error("corrupted signature metadata");
     }
     const ExtractionInfo &extraction_info = kExtractionInfos[converter_idx];
     if (extraction_info.size == 0) {
@@ -538,36 +524,31 @@ PyObject *launch(PyObject *self, PyObject *args) {
     }
     config.params[params_idx] = alloca(extraction_info.size);
     if (!extraction_info.extractor(arg, config.params[params_idx])) {
-      return nullptr;
+      return;
     }
     ++params_idx;
   }
   config.params[params_idx] = alloca(sizeof(void *));
   if (!extractPointer(global_scratch, config.params[params_idx])) {
-    return nullptr;
+    return;
   }
 
   if (!launchHook(launch_enter_hook, hook_args)) {
-    return nullptr;
+    return;
   }
 
   if (!launchKernel(config)) {
-    return nullptr;
+    return;
   }
 
   if (!launchHook(launch_exit_hook, hook_args)) {
-    return nullptr;
+    return;
   }
-
-  Py_RETURN_NONE;
 }
 
 } // namespace
 
-static PyObject *getDeviceProperties(PyObject *self, PyObject *args) {
-  int device_id;
-  if (!PyArg_ParseTuple(args, "i", &device_id))
-    return NULL;
+static std::map<std::string, int> getDeviceProperties(int device_id) {
   // Get device handle
   CUdevice device;
   cuDeviceGet(&device, device_id);
@@ -580,95 +561,98 @@ static PyObject *getDeviceProperties(PyObject *self, PyObject *args) {
   int sm_clock_rate;
   int mem_clock_rate;
   int mem_bus_width;
-  CUDA_CHECK_AND_RETURN_NULL(cuDeviceGetAttribute(
+  CUDA_CHECK(cuDeviceGetAttribute(
       &max_shared_mem, CU_DEVICE_ATTRIBUTE_MAX_SHARED_MEMORY_PER_BLOCK_OPTIN,
       device));
-  CUDA_CHECK_AND_RETURN_NULL(cuDeviceGetAttribute(
+  CUDA_CHECK(cuDeviceGetAttribute(
       &max_num_regs, CU_DEVICE_ATTRIBUTE_MAX_REGISTERS_PER_BLOCK, device));
-  CUDA_CHECK_AND_RETURN_NULL(cuDeviceGetAttribute(
+  CUDA_CHECK(cuDeviceGetAttribute(
       &multiprocessor_count, CU_DEVICE_ATTRIBUTE_MULTIPROCESSOR_COUNT, device));
-  CUDA_CHECK_AND_RETURN_NULL(
+  CUDA_CHECK(
       cuDeviceGetAttribute(&warp_size, CU_DEVICE_ATTRIBUTE_WARP_SIZE, device));
-  CUDA_CHECK_AND_RETURN_NULL(cuDeviceGetAttribute(
-      &sm_clock_rate, CU_DEVICE_ATTRIBUTE_CLOCK_RATE, device));
-  CUDA_CHECK_AND_RETURN_NULL(cuDeviceGetAttribute(
+  CUDA_CHECK(cuDeviceGetAttribute(&sm_clock_rate,
+                                  CU_DEVICE_ATTRIBUTE_CLOCK_RATE, device));
+  CUDA_CHECK(cuDeviceGetAttribute(
       &mem_clock_rate, CU_DEVICE_ATTRIBUTE_MEMORY_CLOCK_RATE, device));
-  CUDA_CHECK_AND_RETURN_NULL(cuDeviceGetAttribute(
+  CUDA_CHECK(cuDeviceGetAttribute(
       &mem_bus_width, CU_DEVICE_ATTRIBUTE_GLOBAL_MEMORY_BUS_WIDTH, device));
 
-  return Py_BuildValue("{s:i, s:i, s:i, s:i, s:i, s:i, s:i}", "max_shared_mem",
-                       max_shared_mem, "max_num_regs", max_num_regs,
-                       "multiprocessor_count", multiprocessor_count, "warpSize",
-                       warp_size, "sm_clock_rate", sm_clock_rate,
-                       "mem_clock_rate", mem_clock_rate, "mem_bus_width",
-                       mem_bus_width);
+  std::map<std::string, int> properties = {
+      {"max_shared_mem", max_shared_mem},
+      {"max_num_regs", max_num_regs},
+      {"multiprocessor_count", multiprocessor_count},
+      {"warpSize", warp_size},
+      {"sm_clock_rate", sm_clock_rate},
+      {"mem_clock_rate", mem_clock_rate},
+      {"mem_bus_width", mem_bus_width},
+  };
+  return properties;
 }
 
-static PyObject *loadBinary(PyObject *self, PyObject *args) {
-  const char *name;
-  const char *data;
-  Py_ssize_t data_size;
-  int shared;
-  CUdevice device;
-  if (!PyArg_ParseTuple(args, "ss#ii", &name, &data, &data_size, &shared,
-                        &device)) {
-    return NULL;
-  }
+static std::tuple<uint64_t, uint64_t, int32_t, int32_t, int32_t>
+loadBinary(char *name, char *data, int shared, CUdevice device) {
+  // const char *name;
+  // const char *data;
+  // Py_ssize_t data_size;
+  // int shared;
+  // CUdevice device;
+  // if (!PyArg_ParseTuple(args, "ss#ii", &name, &data, &data_size, &shared,
+  //                       &device)) {
+  //   return NULL;
+  // }
   CUfunction fun;
   CUmodule mod;
   int32_t n_regs = 0;
   int32_t n_spills = 0;
+  int32_t n_max_threads = 0;
   // create driver handles
   CUcontext pctx = 0;
 
   Py_BEGIN_ALLOW_THREADS;
-  CUDA_CHECK_AND_RETURN_NULL_ALLOW_THREADS(cuCtxGetCurrent(&pctx));
+  CUDA_CHECK_ALLOW_THREADS(cuCtxGetCurrent(&pctx));
   if (!pctx) {
-    CUDA_CHECK_AND_RETURN_NULL_ALLOW_THREADS(cuDeviceGet(&device, 0));
-    CUDA_CHECK_AND_RETURN_NULL_ALLOW_THREADS(
-        cuDevicePrimaryCtxRetain(&pctx, device));
-    CUDA_CHECK_AND_RETURN_NULL_ALLOW_THREADS(cuCtxSetCurrent(pctx));
+    CUDA_CHECK_ALLOW_THREADS(cuDeviceGet(&device, 0));
+    CUDA_CHECK_ALLOW_THREADS(cuDevicePrimaryCtxRetain(&pctx, device));
+    CUDA_CHECK_ALLOW_THREADS(cuCtxSetCurrent(pctx));
   }
 
-  CUDA_CHECK_AND_RETURN_NULL_ALLOW_THREADS(cuModuleLoadData(&mod, data));
-  CUDA_CHECK_AND_RETURN_NULL_ALLOW_THREADS(
-      cuModuleGetFunction(&fun, mod, name));
+  CUDA_CHECK_ALLOW_THREADS(cuModuleLoadData(&mod, data));
+  CUDA_CHECK_ALLOW_THREADS(cuModuleGetFunction(&fun, mod, name));
   // get allocated registers and spilled registers from the function
-  CUDA_CHECK_AND_RETURN_NULL_ALLOW_THREADS(
+  CUDA_CHECK_ALLOW_THREADS(
       cuFuncGetAttribute(&n_regs, CU_FUNC_ATTRIBUTE_NUM_REGS, fun));
-  CUDA_CHECK_AND_RETURN_NULL_ALLOW_THREADS(
+  CUDA_CHECK_ALLOW_THREADS(
       cuFuncGetAttribute(&n_spills, CU_FUNC_ATTRIBUTE_LOCAL_SIZE_BYTES, fun));
   n_spills /= 4;
+  CUDA_CHECK_ALLOW_THREADS(cuFuncGetAttribute(
+      &n_max_threads, CU_FUNC_ATTRIBUTE_MAX_THREADS_PER_BLOCK, fun));
   // set dynamic shared memory if necessary
   int shared_optin;
-  CUDA_CHECK_AND_RETURN_NULL_ALLOW_THREADS(cuDeviceGetAttribute(
+  CUDA_CHECK_ALLOW_THREADS(cuDeviceGetAttribute(
       &shared_optin, CU_DEVICE_ATTRIBUTE_MAX_SHARED_MEMORY_PER_BLOCK_OPTIN,
       device));
   if (shared > 49152 && shared_optin > 49152) {
-    CUDA_CHECK_AND_RETURN_NULL_ALLOW_THREADS(
+    CUDA_CHECK_ALLOW_THREADS(
         cuFuncSetCacheConfig(fun, CU_FUNC_CACHE_PREFER_SHARED));
     int shared_total, shared_static;
-    CUDA_CHECK_AND_RETURN_NULL_ALLOW_THREADS(cuDeviceGetAttribute(
+    CUDA_CHECK_ALLOW_THREADS(cuDeviceGetAttribute(
         &shared_total, CU_DEVICE_ATTRIBUTE_MAX_SHARED_MEMORY_PER_MULTIPROCESSOR,
         device));
-    CUDA_CHECK_AND_RETURN_NULL_ALLOW_THREADS(cuFuncGetAttribute(
+    CUDA_CHECK_ALLOW_THREADS(cuFuncGetAttribute(
         &shared_static, CU_FUNC_ATTRIBUTE_SHARED_SIZE_BYTES, fun));
-    CUDA_CHECK_AND_RETURN_NULL_ALLOW_THREADS(
+    CUDA_CHECK_ALLOW_THREADS(
         cuFuncSetAttribute(fun, CU_FUNC_ATTRIBUTE_MAX_DYNAMIC_SHARED_SIZE_BYTES,
                            shared_optin - shared_static));
   }
   Py_END_ALLOW_THREADS;
 
-  if (PyErr_Occurred()) {
-    return NULL;
-  }
-  return Py_BuildValue("(KKii)", (uint64_t)mod, (uint64_t)fun, n_regs,
-                       n_spills);
+  return {(uint64_t)mod, (uint64_t)fun, n_regs, n_spills, n_max_threads};
 }
 
 typedef CUresult (*cuOccupancyMaxActiveClusters_t)(
     int *numClusters, CUfunction func, const CUlaunchConfig *config);
 
+#if CUDA_VERSION >= 12000
 typedef CUresult (*cuTensorMapEncodeTiled_t)(
     CUtensorMap *tensorMap, CUtensorMapDataType tensorDataType,
     cuuint32_t tensorRank, void *globalAddress, const cuuint64_t *globalDim,
@@ -676,6 +660,7 @@ typedef CUresult (*cuTensorMapEncodeTiled_t)(
     const cuuint32_t *elementStrides, CUtensorMapInterleave interleave,
     CUtensorMapSwizzle swizzle, CUtensorMapL2promotion l2Promotion,
     CUtensorMapFloatOOBfill oobFill);
+#endif
 
 #define defineGetFunctionHandle(name, symbolName)                              \
   static symbolName##_t name() {                                               \
@@ -702,8 +687,10 @@ typedef CUresult (*cuTensorMapEncodeTiled_t)(
 defineGetFunctionHandle(getCuOccupancyMaxActiveClustersHandle,
                         cuOccupancyMaxActiveClusters);
 
+#if CUDA_VERSION >= 12000
 defineGetFunctionHandle(getCuTensorMapEncodeTiledHandle,
                         cuTensorMapEncodeTiled);
+#endif
 
 static PyObject *occupancyMaxActiveClusters(PyObject *self, PyObject *args) {
   int clusterDimX = -1, clusterDimY = -1, clusterDimZ = -1,
@@ -793,139 +780,58 @@ static PyObject *setPrintfFifoSize(PyObject *self, PyObject *args) {
   return Py_None;
 }
 
-static PyObject *fillTMADescriptor(PyObject *self, PyObject *args) {
-  unsigned long long desc_address;
-  unsigned long long global_address;
-  int swizzle;
-  int elemSize;
-  int elemType;
-  PyObject *blockSize;
-  PyObject *shape;
-  PyObject *strides;
-
-  if (!PyArg_ParseTuple(args, "KKiiiOOO", &desc_address, &global_address,
-                        &swizzle, &elemSize, &elemType, &blockSize, &shape,
-                        &strides)) {
-    return NULL;
-  }
-
-  PyObject *blockSizeFast = NULL;
-  PyObject *shapeFast = NULL;
-  PyObject *stridesFast = NULL;
-  PyObject *result = NULL;
-
-  auto cleanup = absl::MakeCleanup([&] {
-    Py_XDECREF(blockSizeFast);
-    Py_XDECREF(shapeFast);
-    Py_XDECREF(stridesFast);
-  });
-
+static void fillTMADescriptor(uint64_t desc_address, uint64_t global_address,
+                              int swizzle, int elemSize, int elemType,
+                              std::vector<int64_t> blockSize,
+                              std::vector<int32_t> shape,
+                              std::vector<int64_t> strides) {
   uint32_t blockSizeInt[5];
   uint64_t shapeInt[5];
   uint64_t stridesLL[5];
 
-  blockSizeFast = PySequence_Fast(blockSize, "blockSize must be a sequence");
-  if (!blockSizeFast)
-    return result;
-  int rank = PySequence_Fast_GET_SIZE(blockSizeFast);
+  int rank = blockSize.size();
 
   for (int i = 0; i < rank; ++i) {
-    PyObject *item = PySequence_Fast_GET_ITEM(blockSizeFast, i);
-    if (!PyLong_Check(item)) {
-      PyErr_SetString(PyExc_TypeError, "block size must be an int");
-      return result;
-    }
-    blockSizeInt[rank - i - 1] = PyLong_AsLongLong(item);
+    blockSizeInt[rank - i - 1] = blockSize[i];
   }
 
-  shapeFast = PySequence_Fast(shape, "shape must be a sequence");
-  if (!shapeFast)
-    return result;
-
-  if (rank != PySequence_Fast_GET_SIZE(shapeFast)) {
+  if (rank != shape.size()) {
     PyErr_SetString(PyExc_RuntimeError, "Rank mismatch");
-    return result;
+    return;
   }
   for (int i = 0; i < rank; ++i) {
-    PyObject *item = PySequence_Fast_GET_ITEM(shapeFast, i);
-    if (!PyLong_Check(item)) {
-      PyErr_SetString(PyExc_TypeError, "shape must be an int");
-      return result;
-    }
-    shapeInt[rank - i - 1] = PyLong_AsLong(item);
+    shapeInt[rank - i - 1] = shape[i];
   }
 
-  stridesFast = PySequence_Fast(strides, "strides must be a sequence");
-  if (!stridesFast)
-    return result;
-
-  if (rank != PySequence_Fast_GET_SIZE(stridesFast)) {
+  if (rank != strides.size()) {
     PyErr_SetString(PyExc_RuntimeError, "Rank mismatch");
-    return result;
+    return;
   }
   for (int i = 0; i + 1 < rank; ++i) {
-    PyObject *item = PySequence_Fast_GET_ITEM(stridesFast, i);
-    if (!PyLong_Check(item)) {
-      PyErr_SetString(PyExc_TypeError, "shape must be an int");
-      return result;
-    }
-    stridesLL[rank - i - 2] = elemSize * PyLong_AsLongLong(item);
+    stridesLL[rank - i - 2] = elemSize * strides[i];
   }
   stridesLL[rank - 1] =
       shapeInt[rank - 1] * (rank == 1 ? elemSize : stridesLL[rank - 2]);
-  Py_DECREF(blockSizeFast);
-  blockSizeFast = NULL;
-  Py_DECREF(shapeFast);
-  shapeFast = NULL;
-  Py_DECREF(stridesFast);
-  stridesFast = NULL;
 
   uint32_t elementStrides[5] = {1, 1, 1, 1, 1};
   static cuTensorMapEncodeTiled_t cuTensorMapEncodeTiled = NULL;
-  INITIALIZE_FUNCTION_POINTER_IF_NULL(cuTensorMapEncodeTiled,
-                                      getCuTensorMapEncodeTiledHandle);
-  CUDA_CHECK_AND_RETURN_NULL(cuTensorMapEncodeTiled(
+  INITIALIZE_FUNCTION_POINTER_OR_RETURN(cuTensorMapEncodeTiled,
+                                        getCuTensorMapEncodeTiledHandle);
+  CUDA_CHECK(cuTensorMapEncodeTiled(
       (CUtensorMap *)desc_address, (CUtensorMapDataType)elemType, rank,
       (void *)global_address, shapeInt, stridesLL, blockSizeInt, elementStrides,
       CU_TENSOR_MAP_INTERLEAVE_NONE, (CUtensorMapSwizzle)swizzle,
       CU_TENSOR_MAP_L2_PROMOTION_L2_128B, CU_TENSOR_MAP_FLOAT_OOB_FILL_NONE));
-  Py_RETURN_NONE;
 
-  return result;
+  return;
 }
 
-static PyMethodDef ModuleMethods[] = {
-    {"load_binary", loadBinary, METH_VARARGS,
-     "Load provided cubin into CUDA driver"},
-    {"get_device_properties", getDeviceProperties, METH_VARARGS,
-     "Get the properties for a given device"},
-    {"cuOccupancyMaxActiveClusters", occupancyMaxActiveClusters, METH_VARARGS,
-     "Python interface for cuOccupancyMaxActiveClusters function"},
-    {"set_printf_fifo_size", setPrintfFifoSize, METH_VARARGS,
-     "Python interface for cuCtxSetLimit(CU_LIMIT_PRINTF_FIFO_SIZE, x), which "
-     "controls how many bytes can be streamed from kernels before data starts "
-     "being dropped.  This inherits all the limitations of this call; in "
-     "particular it's an error to change this value after launching any kernel "
-     "that calls printf()."},
-    {"fill_tma_descriptor", fillTMADescriptor, METH_VARARGS, "doc"},
-    {"build_signature_metadata", buildSignatureMetadata, METH_VARARGS,
-     buildSignatureMetadata__doc__},
-    {"launch", launch, METH_VARARGS, launch__doc__},
-    {NULL, NULL, 0, NULL} // sentinel
-};
-
-static struct PyModuleDef ModuleDef = {PyModuleDef_HEAD_INIT, "cuda_utils",
-                                       NULL, // documentation
-                                       -1,   // size
-                                       ModuleMethods};
-
-PyMODINIT_FUNC PyInit_cuda_utils(void) {
-  PyObject *m = PyModule_Create(&ModuleDef);
-  if (m == NULL) {
-    return NULL;
-  }
-
-  PyModule_AddFunctions(m, ModuleMethods);
-
-  return m;
+void init_triton_cuda_utils(py::module &&m) {
+  m.def("load_binary", &loadBinary);
+  m.def("get_device_properties", &getDeviceProperties);
+  m.def("cuOccupancyMaxActiveClusters", &occupancyMaxActiveClusters);
+  m.def("set_printf_fifo_size", &setPrintfFifoSize);
+  m.def("fill_tma_descriptor", &fillTMADescriptor);
+  m.def("build_signature_metadata", &buildSignatureMetadata);
+  m.def("launch", &launch);
 }
