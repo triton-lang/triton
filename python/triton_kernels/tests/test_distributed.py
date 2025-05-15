@@ -59,7 +59,7 @@ def test_reduce_scatter_distributed_no_token_mask(monkeypatch):
 @pytest.mark.parametrize(
     "dim, x_shape, token_mask",
     [
-        (0, (4, 4), torch.tensor([True, False, True, False], dtype=torch.bool)),
+        (0, (2, 4), torch.tensor([True, False, True, False], dtype=torch.bool)),
         (1, (3, 2), torch.tensor([True, False, False, True], dtype=torch.bool)),
     ],
 )
@@ -93,7 +93,7 @@ def test_routing_distributed_EP(monkeypatch):
     monkeypatch.setattr(dist, "get_rank", lambda: 0)
     monkeypatch.setattr(dist, "all_gather", dummy_all_gather)
 
-    logits = torch.tensor([[0.1, 0.2, 0.4, 0.3], [0.5, 0.4, 0.3, 0.1]], device="cuda")
+    logits = torch.tensor([[0.1, 0.2, 0.4, 0.3], [0.5, 0.4, 0.3, 0.1]], device="cuda", dtype=torch.float16)
     n_expts_act = 2
     EP = 2
     expt_indx = torch.tensor([[0, 1], [0, 1]], device="cuda").reshape(-1)

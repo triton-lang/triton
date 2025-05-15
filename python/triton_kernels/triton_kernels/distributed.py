@@ -4,7 +4,7 @@ import torch.distributed as dist
 import triton_kernels.routing
 from triton_kernels.routing import RoutingData, GatherIndx, ScatterIndx
 from triton_kernels.topk import topk
-from typing import Tuple
+from typing import Tuple, Optional
 
 
 def _is_distributed_launch() -> bool:
@@ -30,6 +30,16 @@ def cleanup():
         dist.destroy_process_group()
     else:
         pass
+
+
+def broadcast(x: torch.Tensor, src: int = 0, group: Optional[dist.Group] = None) -> torch.Tensor:
+    if _is_distributed_launch():
+        if x.dtype not in [torch.float16, torch.bfloat16, torch.float32]:
+            x = x.to(torch.float16)
+        dist.broadcast(x, src=src, group=group)
+        return x
+    else:
+        return x
 
 
 def all_gather(x: torch.Tensor, dim=0) -> torch.Tensor:

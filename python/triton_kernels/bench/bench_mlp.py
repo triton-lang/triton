@@ -114,19 +114,17 @@ def bench_mlp(batch, dim1, dim2, n_expts_tot, n_expts_act, x_dtype, w_dtype, TP,
 
     # input
     # weights
-    wg = torch.randn((dim1, n_expts_tot), device=dev)
-    dist.broadcast(wg, src=0)
+    wg = triton_dist.broadcast(torch.randn((dim1, n_expts_tot), device=dev))
     w1 = torch.randn((n_expts_tot // EP, dim1, dim2 // TP), device=dev)
     w2 = torch.randn((n_expts_tot // EP, dim2 // TP // 2, dim1), device=dev)
 
     # biases
-    bg = torch.randn((n_expts_tot, ), device=dev)
-    dist.broadcast(bg, src=0)
+    bg = triton_dist.broadcast(torch.randn((n_expts_tot, ), device=dev))
     b1 = torch.randn((n_expts_tot // EP, dim2 // TP), device=dev)
     b2 = torch.randn((n_expts_tot // EP, dim1), device=dev)
     ep_indx = rank // TP
     group = dist.new_group(list(range(ep_indx * TP, (ep_indx + 1) * TP)))
-    dist.broadcast(b2, src=ep_indx * TP, group=group)
+    b2 = triton_dist.broadcast(b2, src=ep_indx * TP, group=group)
 
     # -- numerics --
     optg = dict()
