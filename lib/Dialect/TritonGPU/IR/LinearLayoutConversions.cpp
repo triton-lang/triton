@@ -1551,22 +1551,30 @@ chooseMfmaLikeStoreLayout(RankedTensorType valType) {
 
   SmallVector<unsigned> order = getDefaultMmaOrder(mfmaLayout);
   auto standardOutDims = standardOutDimNames(ctx, 2);
+
+  std::vector<std::vector<int32_t>> warpBase;
+  for (int r = 0; r < 2; r++) {
+    int dim = order[r];
+    int size = mfmaLayout.getWarpsPerCTA()[dim];
+    for (int i = 1; i < size; i *= 2) {
+      std::vector<int32_t> v = {0, 0};
+      v[r] = i * 32;
+      v[1 - r] = 0;
+      warpBase.push_back(v);
+    }
+  }
   // We make each thread handle 8 consecutive elements to enable 128-bit
   // global stores for [b]f16 types and keep the thread pattern in each lane
   // similar to the canonical mfmaLayout.
   LinearLayout mfma8Layout = LinearLayout::empty();
   mfma8Layout =
-      LinearLayout({{kRegister, {{1, 0}, {2, 0}, {4, 0}}},
+      LinearLayout({{kRegister, {{1, 0}, {2, 0}, {4, 0}, {16, 0}}},
                     {kLane, {{0, 1}, {0, 2}, {0, 4}, {0, 8}, {0, 16}, {8, 0}}},
-                    {kWarp, {}},
+                    {kWarp, warpBase},
                     {kBlock, {}}},
                    {standardOutDims[order[0]], standardOutDims[order[1]]});
 
-  LinearLayout warpLayout =
-      identityStandardND(kWarp, mfmaLayout.getWarpsPerCTA(), order);
-  LinearLayout ctaLayout = mfma8Layout.transposeOuts(standardOutDims) *
-                           warpLayout.transposeOuts(standardOutDims);
-  mfma8Layout = combineCtaCgaWithShape(ctaLayout, mfmaLayout.getCTALayout(),
+  mfma8Layout = combineCtaCgaWithShape(mfma8Layout, mfmaLayout.getCTALayout(),
                                        valType.getShape());
   return mfma8Layout;
 }
