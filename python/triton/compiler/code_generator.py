@@ -1299,10 +1299,6 @@ class CodeGenerator(ast.NodeVisitor):
                 # otherwise, our constexpr has no effect on the output of the
                 # expression so we do not append it to nontrivial_values.
             else:
-                if value.type.is_block():
-                    warnings.warn(
-                        "Logical operators 'and' and 'or' are deprecated for non-scalar tensors; please use '&' or '|' instead"
-                    )
                 # not a constexpr so we must append it:
                 nontrivial_values.append(value)
 
