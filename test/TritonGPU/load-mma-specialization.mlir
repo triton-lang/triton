@@ -278,7 +278,7 @@ tt.func @invalid_acc_reset(
 
 // AWS: ttg.warp_specialize
 // AWS: num_warps(4)
-// AWS: num_warps(4)
+// AWS: num_warps(2)
 // AWS-NOT: num_warps(
 
 // CHECK-LABEL: @matmul_tma_acc_with_unconditional_user
@@ -292,7 +292,9 @@ tt.func @matmul_tma_acc_with_unconditional_user(
   %c1_i32 = arith.constant 1 : i32
   %true = arith.constant true
   // CHECK-DAG: [[ZERO:%.*]] = arith.constant dense<0.0
+  // CHECK-DAG: [[ACC_RESET:%.*]] = arith.constant dense<1.0
   %zero = arith.constant dense<0.0> : tensor<128x128xf32, #acc_layout>
+  %acc_reset = arith.constant dense<1.0> : tensor<128x128xf32, #acc_layout>
   // CHECK-DAG: [[K_TILES:%.*]] = arith.constant 32 : i32
   %k_tiles = arith.constant 32 : i32
 
@@ -343,9 +345,6 @@ tt.func @matmul_tma_acc_with_unconditional_user(
     // CHECK-NEXT: [[MMA_TOK:%.*]] = ttng.tc_gen5_mma %{{[0-9]+}}, %{{[0-9]+}}, [[ACC_BUF]][], %true, %true, {{.*}}, [[CUR_ACC_READY_BAR]][%true] {ttg.partition = 1 : i32}
     %mma_tok = ttng.tc_gen5_mma %a_shared, %b_shared, %c_tmem[%c_tok], %true, %true : !ttg.memdesc<128x64xf16, #shared, #smem>, !ttg.memdesc<64x128xf16, #shared, #smem>, !ttg.memdesc<128x128xf32, #acc_tmem, #ttng.tensor_memory, mutable>
 
-    // CHECK-NEXT: [[ACC_RESET:%.*]] = "acc_reset"
-    %acc_reset = "acc_reset"() : () -> tensor<128x128xf32, #acc_layout>
-
     // CHECK-NEXT: ttng.wait_barrier [[CUR_ACC_READY_BAR]], [[ACC_PHASE]] {ttg.partition = 0 : i32}
     // CHECK-NEXT: [[C:%.*]], [[LOAD_TOK:%.*]] = ttng.tmem_load [[ACC_BUF]][] {ttg.partition = 0 : i32}
     %c, %load_tok = ttng.tmem_load %c_tmem[%mma_tok] : !ttg.memdesc<128x128xf32, #acc_tmem, #ttng.tensor_memory, mutable> -> tensor<128x128xf32, #acc_layout>
@@ -385,7 +384,7 @@ tt.func @matmul_tma_acc_with_unconditional_user(
 
 // AWS: ttg.warp_specialize
 // AWS: num_warps(4)
-// AWS: num_warps(4)
+// AWS: num_warps(2)
 // AWS-NOT: num_warps(
 
 // CHECK-LABEL: @matmul_tma_acc_with_conditional_user
@@ -399,6 +398,8 @@ tt.func @matmul_tma_acc_with_conditional_user(
   %c1_i32 = arith.constant 1 : i32
   %true = arith.constant true
   %zero = arith.constant dense<0.0> : tensor<128x128xf32, #acc_layout>
+  // CHECK-DAG: [[ACC_RESET:%.*]] = arith.constant dense<1.0
+  %acc_reset = arith.constant dense<1.0> : tensor<128x128xf32, #acc_layout>
   %k_tiles = arith.constant 32 : i32
 
   // CHECK: [[ACC_BUFS:%.*]], [[ACC_TOK:%.*]] = ttng.tmem_alloc
@@ -434,8 +435,6 @@ tt.func @matmul_tma_acc_with_conditional_user(
     %mma_tok = ttng.tc_gen5_mma %a_shared, %b_shared, %c_tmem[%c_tok], %true, %true : !ttg.memdesc<128x64xf16, #shared, #smem>, !ttg.memdesc<64x128xf16, #shared, #smem>, !ttg.memdesc<128x128xf32, #acc_tmem, #ttng.tensor_memory, mutable>
     %c, %load_tok = ttng.tmem_load %c_tmem[%mma_tok] : !ttg.memdesc<128x128xf32, #acc_tmem, #ttng.tensor_memory, mutable> -> tensor<128x128xf32, #acc_layout>
 
-    // CHECK-NEXT: [[ACC_RESET:%.*]] = "acc_reset"
-    %acc_reset = "acc_reset"() : () -> tensor<128x128xf32, #acc_layout>
     %do_epilogue = arith.cmpi eq, %k, %c0_i32 : i32
 
     // CHECK-NEXT: scf.if [[DO_EPILOGUE]]
@@ -1131,6 +1130,7 @@ tt.func @load_scale_mma_user(
     %scales_tmem = ttng.tmem_alloc %scales_T : (tensor<128x8xi8, #oper_layout_trans>) -> !ttg.memdesc<128x8xi8, #ttng.tensor_memory_scales_encoding<>, #ttng.tensor_memory>
     // CHECK-NEXT: arrive_barrier [[SCALES_READY_BAR:%.*]], 1 {{.*}}partition = 0
 
+    // CHECK: wait_barrier [[USER_DONE:%.*]], %arg{{[0-9]+}}, %true {{.*}}partition = 1
     // CHECK: wait_barrier [[SCALES_READY_BAR]]{{.*}}partition = 1
     %acc_tmem, %acc_tok = ttng.tmem_alloc %acc : (tensor<128x128xf32, #acc_layout>) -> (!ttg.memdesc<128x128xf32, #acc_tmem, #ttng.tensor_memory, mutable>, !ttg.async.token)
     // CHECK-NEXT: tc_gen5_mma_scaled {{.*}} [[SCALES_TMEM]]{{.*}} [[USER_BAR:%.*]][%true], [[SCALES_TMEM_BAR]][%true] {{.*}}partition = 1
@@ -1139,8 +1139,7 @@ tt.func @load_scale_mma_user(
     // CHECK: wait_barrier [[USER_BAR]]{{.*}}partition = 0
     // CHECK-NEXT: tmem_load
     %c, %load_tok = ttng.tmem_load %acc_tmem[%mma_tok] : !ttg.memdesc<128x128xf32, #acc_tmem, #ttng.tensor_memory, mutable> -> tensor<128x128xf32, #acc_layout>
-    // CHECK: arrive_barrier [[USER_DONE:%.*]], 1 {{.*}}partition = 0
-    // CHECK: wait_barrier [[USER_DONE]]{{.*}}partition = 1
+    // CHECK: arrive_barrier [[USER_DONE]]{{.*}}partition = 0
 
     "user"(%c) : (tensor<128x128xf32, #acc_layout>) -> ()
 
@@ -1315,6 +1314,8 @@ tt.func public @attention_forward(
     %K_trans = ttg.memdesc_trans %K_shared {order = array<i32: 1, 0>} : !ttg.memdesc<64x64xf16, #shared, #smem> -> !ttg.memdesc<64x64xf16, #shared_T, #smem>
     // CHECK-NEXT: wait_barrier [[K_READY_BAR]], [[K_PHASE]] {ttg.assigned_stage = 0 : i32, ttg.partition = 1 : i32}
     // CHECK-NEXT: [[QK_BUF:%.*]] = ttg.memdesc_subview [[QK_TMEM]][[[QK_INDEX]], %c0_i32, %c0_i32]
+    // CHECK-NEXT: [[QK_EMPTY_BAR:%.*]] = ttg.memdesc_subview [[QK_EMPTY_MBARS]][[[QK_INDEX]]]
+    // CHECK-NEXT: wait_barrier [[QK_EMPTY_BAR]], [[QK_PHASE]], %true {ttg.assigned_stage = 0 : i32, ttg.partition = 1 : i32}
     // CHECK-NEXT: [[QK_READY_BAR:%.*]] = ttg.memdesc_subview [[QK_READY_MBARS]][[[QK_INDEX]]]
     // CHECK-NEXT: tc_gen5_mma [[Q_SHARED]], [[K_TRANS]], [[QK_BUF]][], %false, %true, [[K_EMPTY_BAR]][%true], [[QK_READY_BAR]][%true] {ttg.assigned_stage = 0 : i32, ttg.partition = 1 : i32}
     %QK_tmem, %QK_tok = ttng.tmem_alloc : () -> (!ttg.memdesc<256x64xf32, #tmem_acc, #ttng.tensor_memory, mutable>, !ttg.async.token)
@@ -1323,7 +1324,6 @@ tt.func public @attention_forward(
     // CHECK-NEXT: wait_barrier [[QK_READY_BAR]], [[QK_PHASE]] {ttg.partition = 0 : i32}
     // CHECK-NEXT: [[QK:%.*]], [[QK_LOAD_TOK:%.*]] = ttng.tmem_load [[QK_BUF]][] {ttg.partition = 0 : i32}
     %QK, %QK_load_tok = ttng.tmem_load %QK_tmem[%QK_mma_tok] : !ttg.memdesc<256x64xf32, #tmem_acc, #ttng.tensor_memory, mutable> -> tensor<256x64xf32, #blocked>
-    // CHECK-NEXT: [[QK_EMPTY_BAR:%.*]] = ttg.memdesc_subview [[QK_EMPTY_MBARS]][[[QK_INDEX]]]
     // CHECK-NEXT: arrive_barrier [[QK_EMPTY_BAR]], 1 {ttg.partition = 0 : i32}
 
     // CHECK-NEXT: [[QK_INDEX_INCR:%.*]] = arith.addi [[QK_INDEX]], %c1_i32
@@ -1331,8 +1331,6 @@ tt.func public @attention_forward(
     // CHECK-NEXT: [[QK_ROLLVER:%.*]] = arith.cmpi eq, [[QK_INDEX_INCR]], %c2_i32
     // CHECK-NEXT: [[QK_NEXT_INDEX:%.*]] = arith.select [[QK_ROLLVER]], %c0_i32, [[QK_INDEX_INCR]]
     // CHECK-NEXT: [[QK_NEXT_PHASE:%.*]] = arith.select [[QK_ROLLVER]], [[QK_PHASE_INCR]], [[QK_PHASE]]
-    // CHECK-NEXT: [[QK_EMPTY_BAR:%.*]] = ttg.memdesc_subview [[QK_EMPTY_MBARS]][[[QK_NEXT_INDEX]]]
-    // CHECK-NEXT: wait_barrier [[QK_EMPTY_BAR]], [[QK_NEXT_PHASE]], %true {ttg.assigned_stage = 0 : i32, ttg.partition = 1 : i32}
 
     // CHECK-NEXT: [[ROW_MAX:%.*]] = "compute_row_max"([[QK]], [[QK_SCALE]]) {ttg.partition = 0 : i32}
     %row_max = "compute_row_max"(%QK, %qk_scale) : (tensor<256x64xf32, #blocked>, f32) -> tensor<256xf32, #ttg.slice<{dim = 1, parent = #blocked}>>

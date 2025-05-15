@@ -952,34 +952,6 @@ static Value getLastInductionValue(PartitionBuilder &b, scf::ForOp loop) {
   return b.create<arith::AddIOp>(ceilStep, loop.getLowerBound());
 }
 
-static void rewriteLoadOutsideLoop(LoadOp load) {
-  ImplicitLocOpBuilder b(load.getLoc(), load);
-
-  SharedEncodingTrait sharedEnc = getSharedEncoding(load);
-  auto tensorTy = cast<RankedTensorType>(load.getType());
-  auto memdescTy = MemDescType::get(
-      tensorTy.getShape(), tensorTy.getElementType(), sharedEnc,
-      SharedMemorySpaceAttr::get(b.getContext()), /*mutable=*/true);
-  TypedValue<MemDescType> alloc = b.create<LocalAllocOp>(memdescTy);
-
-  auto asyncCp = b.create<AsyncCopyGlobalToLocalOp>(
-      load.getPtr(), alloc, load.getMask(), load.getOther(), load.getCache(),
-      load.getEvict(), load.getIsVolatile());
-  auto commit = b.create<AsyncCommitGroupOp>(asyncCp.getToken());
-  auto wait = b.create<AsyncWaitOp>(commit.getAsyncToken(), /*pending=*/0);
-
-  if (!load.getOther() || isZeroConst(load.getOther())) {
-    replaceUsesWithLocalLoad(b, load->getResult(0), alloc, wait.getRetToken());
-  } else {
-    Value value =
-        b.create<LocalLoadOp>(load.getType(), alloc, wait.getRetToken());
-    Value select =
-        b.create<arith::SelectOp>(load.getMask(), value, load.getOther());
-    load.getResult().replaceAllUsesWith(select);
-  }
-  load.erase();
-}
-
 static LogicalResult pipelineMMA(scf::ForOp &loop, PipelinedMMA &mma,
                                  WarpSchedule &schedule, DominanceInfo &domInfo,
                                  PostDominanceInfo &postDomInfo,
@@ -1069,7 +1041,6 @@ static LogicalResult pipelineMMA(scf::ForOp &loop, PipelinedMMA &mma,
 
   struct Node {
     Operation *op;
-    Partition *partition;
     Value barPrev;
     Value barNext;
     Value index;
@@ -1091,19 +1062,16 @@ static LogicalResult pipelineMMA(scf::ForOp &loop, PipelinedMMA &mma,
     }
   }
 
-  Value firstBar;
-  for (int i = nodes.size(); i > 0; --i) {
-    if ((firstBar = nodes[i % nodes.size()].barPrev))
-      break;
-  }
-  if (firstBar) {
+  // If the first node has a barrier, fully initialize it to let it run.
+  if (nodes.front().barPrev) {
     for (auto i : llvm::seq(numMmaStages)) {
       b.setInsertionPoint(loop);
-      Value bar = createSingleBufferView(b, firstBar, i);
+      Value bar = createSingleBufferView(b, nodes.front().barPrev, i);
       b.create<ttng::ArriveBarrierOp>(bar, /*arriveCount=*/1);
     }
   }
-  Value userPred;
+
+  Value userPred = b.boolCst(true);
   if (readOp == mmaOp) {
     PartitionBuilder b(mmaOp.getLoc(), mmaOp);
     Value lastInductionValue = getLastInductionValue(b, loop);
@@ -1117,14 +1085,12 @@ static LogicalResult pipelineMMA(scf::ForOp &loop, PipelinedMMA &mma,
   Value replTok = b.create<ub::PoisonOp>(b.getType<AsyncTokenType>());
   DenseSet<Operation *> seen;
   std::optional<OpBuilder::InsertPoint> incrementPt;
+  Node *firstAfterInc = nullptr;
   for (Node &node : nodes) {
     node.index = curIndex;
     node.phase = curPhase;
-    if (incrementPt && node.barPrev && node.barPrev != firstBar) {
-      b.setInsertionPoint(loop);
-      b.create<ttng::ArriveBarrierOp>(
-          createSingleBufferView(b, node.barPrev, 0), /*arriveCount=*/1);
-    }
+    if (incrementPt && node.barPrev && !firstAfterInc)
+      firstAfterInc = &node;
     if (!seen.insert(node.op).second)
       continue;
     b.setInsertionPoint(node.op);
@@ -1154,6 +1120,19 @@ static LogicalResult pipelineMMA(scf::ForOp &loop, PipelinedMMA &mma,
       incrementPt = b.saveInsertionPoint();
     }
   }
+  if (firstAfterInc) {
+    b.setInsertionPoint(loop);
+    if (firstAfterInc->op == mmaOp) {
+      Value firstBar = createSingleBufferView(b, firstAfterInc->barPrev, 0);
+      b.create<ttng::ArriveBarrierOp>(firstBar, /*arriveCount=*/1);
+    } else {
+      assert(firstAfterInc->op == dyn_cast<ttng::TMEMStoreOp>(overwriteOp));
+      for (auto i : llvm::seq(numMmaStages)) {
+        Value firstBar = createSingleBufferView(b, firstAfterInc->barPrev, i);
+        b.create<ttng::ArriveBarrierOp>(firstBar, /*arriveCount=*/1);
+      }
+    }
+  }
   oldAllocOp.getToken().replaceAllUsesWith(allocOp.getToken());
   oldAllocOp.erase();
   cast<scf::YieldOp>(loop.getBody()->getTerminator())
@@ -1163,25 +1142,22 @@ static LogicalResult pipelineMMA(scf::ForOp &loop, PipelinedMMA &mma,
   // Find operands that need to be pipelined through shmem.
   SmallVector<Value> incomingOperands;
   llvm::append_range(incomingOperands, mmaOp->getOperands());
-  for (Operation *operandView : mma.operandViews)
-    incomingOperands.push_back(operandView->getOperand(0));
-
   SmallVector<std::pair<Operation *, Partition *>> operandDefs;
-  for (Value operand : incomingOperands) {
+  while (!incomingOperands.empty()) {
+    Value operand = incomingOperands.pop_back_val();
+    if (!isa<MemDescType>(operand.getType()))
+      continue;
     Operation *defOp = operand.getDefiningOp();
-    if (!defOp || loop.isDefinedOutsideOfLoop(operand) ||
-        llvm::is_contained(mma.operandViews, defOp))
+    if (!defOp || loop.isDefinedOutsideOfLoop(operand))
       continue;
     defOp = inBody(defOp);
     Partition *defPartition = schedule.getPartition(defOp);
 
     if (!defPartition) {
-      // If the MMA operand is coming from a `tt.load` outside the loop, rewrite
-      // it into async copy and pass the value through shared memory.
+      // If the MMA operand is coming from outside the loop, move the alloc out.
       auto allocOp = dyn_cast<LocalAllocOp>(defOp);
-      if (allocOp && loop.isDefinedOutsideOfLoop(allocOp.getSrc()) &&
-          allocOp.getSrc().getDefiningOp<LoadOp>())
-        rewriteLoadOutsideLoop(allocOp.getSrc().getDefiningOp<LoadOp>());
+      if (allocOp && loop.isDefinedOutsideOfLoop(allocOp.getSrc()))
+        allocOp->moveBefore(loop);
       continue;
     }
 
@@ -1206,6 +1182,8 @@ static LogicalResult pipelineMMA(scf::ForOp &loop, PipelinedMMA &mma,
       tmemAllocOp->removeAttr(kPartitionAttrName);
       tmemAllocOp.getSrcMutable().clear();
       tmemAllocOp.getResult().setType(getAsMutable(tmemAllocOp.getType()));
+    } else if (defOp->hasTrait<OpTrait::MemDescViewTrait>()) {
+      incomingOperands.push_back(defOp->getOperand(0));
     }
   }
 
