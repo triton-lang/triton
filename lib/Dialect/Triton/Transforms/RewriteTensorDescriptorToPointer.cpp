@@ -104,9 +104,9 @@ Value getExpandedOffsetWithRange(OpBuilder &builder, const Location &loc,
   return expandOffsets(builder, loc, blockShape, offsets, dim);
 }
 
-Value generatePtr(OpBuilder &builder, const Location &loc,
-                  ArrayRef<std::int64_t> blockShape, Descriptor &desc,
-                  ValueRange offsets) {
+Value generatePtrFromOffsetRanges(OpBuilder &builder, Location loc,
+                                  ArrayRef<int64_t> blockShape,
+                                  Descriptor &desc, ValueRange offsets) {
   assert(blockShape.size() == desc.shape.size());
   assert(blockShape.size() == offsets.size());
   auto indexTensorType =
@@ -117,15 +117,12 @@ Value generatePtr(OpBuilder &builder, const Location &loc,
   // Generate offsets per dimension
   Value ptr = builder.create<triton::SplatOp>(loc, ptrTensorType, desc.base);
   for (unsigned i = 0; i < blockShape.size(); ++i) {
-    auto offsetWithRange =
-        getExpandedOffsetWithRange(builder, loc, blockShape, offsets[i], i);
-
     // We must splat strides into the expanded shape not a row for retaining
     // the divisibility information given by strides
     Value splatStride = builder.create<triton::SplatOp>(
-        loc, offsetWithRange.getType(), desc.strides[i]);
+        loc, offsets[i].getType(), desc.strides[i]);
     Value offsetWithStride =
-        builder.create<arith::MulIOp>(loc, offsetWithRange, splatStride);
+        builder.create<arith::MulIOp>(loc, offsets[i], splatStride);
     Value broadcasted = builder.create<triton::BroadcastOp>(
         loc, indexTensorType, offsetWithStride);
 
@@ -137,32 +134,47 @@ Value generatePtr(OpBuilder &builder, const Location &loc,
   return ptr;
 }
 
-Value generateMask(OpBuilder &builder, const Location &loc,
-                   ArrayRef<std::int64_t> blockShape, Descriptor &desc,
-                   ValueRange offsets) {
+Value generatePtr(OpBuilder &builder, const Location &loc,
+                  ArrayRef<std::int64_t> blockShape, Descriptor &desc,
+                  ValueRange offsets) {
   assert(blockShape.size() == desc.shape.size());
   assert(blockShape.size() == offsets.size());
+  SmallVector<Value> offsetRanges;
+  for (unsigned i = 0; i < blockShape.size(); ++i) {
+    auto offsetWithRange =
+        getExpandedOffsetWithRange(builder, loc, blockShape, offsets[i], i);
+    offsetRanges.push_back(offsetWithRange);
+  }
+
+  return generatePtrFromOffsetRanges(builder, loc, blockShape, desc,
+                                     offsetRanges);
+}
+
+Value generateMaskFromOffsetRanges(OpBuilder &builder, const Location &loc,
+                                   ArrayRef<std::int64_t> blockShape,
+                                   Descriptor &desc, ValueRange offsetRanges) {
+  assert(blockShape.size() == desc.shape.size());
+  assert(blockShape.size() == offsetRanges.size());
 
   // Generate mask per dimension
   auto maskTensorType = RankedTensorType::get(blockShape, builder.getI1Type());
   Value mask;
   for (std::size_t i = 0; i < blockShape.size(); ++i) {
-    auto offsetWithRange =
-        getExpandedOffsetWithRange(builder, loc, blockShape, offsets[i], i);
+    auto offsetWithRange = offsetRanges[i];
 
     // Compare with lower bound
     Value lowerBound = builder.create<mlir::arith::ConstantIntOp>(
         loc, 0, builder.getI64Type());
     Value splatLowerBound = builder.create<triton::SplatOp>(
-        loc, offsetWithRange.getType(), lowerBound);
+        loc, offsetRanges[i].getType(), lowerBound);
     Value cmpLower = builder.create<arith::CmpIOp>(
-        loc, arith::CmpIPredicate::sge, offsetWithRange, splatLowerBound);
+        loc, arith::CmpIPredicate::sge, offsetRanges[i], splatLowerBound);
 
     // Compare with upper bound
     Value splatUpperBound = builder.create<triton::SplatOp>(
-        loc, offsetWithRange.getType(), desc.shape[i]);
+        loc, offsetRanges[i].getType(), desc.shape[i]);
     Value cmpUpper = builder.create<arith::CmpIOp>(
-        loc, arith::CmpIPredicate::slt, offsetWithRange, splatUpperBound);
+        loc, arith::CmpIPredicate::slt, offsetRanges[i], splatUpperBound);
 
     // And and broadcast
     Value andResult = builder.create<arith::AndIOp>(loc, cmpLower, cmpUpper);
@@ -180,13 +192,33 @@ Value generateMask(OpBuilder &builder, const Location &loc,
   return mask;
 }
 
-Value generateOther(OpBuilder &builder, const Location &loc,
-                    TensorDescType descTy) {
-  auto scalarTy = descTy.getSignlessBlockType().getElementType();
-  auto blockTy =
-      RankedTensorType::get(descTy.getBlockType().getShape(), scalarTy);
+Value generateMask(OpBuilder &builder, const Location &loc,
+                   ArrayRef<std::int64_t> blockShape, Descriptor &desc,
+                   ValueRange offsets) {
+  assert(blockShape.size() == desc.shape.size());
+  assert(blockShape.size() == offsets.size());
+  SmallVector<Value> offsetRanges;
+  for (unsigned i = 0; i < blockShape.size(); ++i) {
+    auto offsetWithRange =
+        getExpandedOffsetWithRange(builder, loc, blockShape, offsets[i], i);
+    offsetRanges.push_back(offsetWithRange);
+  }
+
+  return generateMaskFromOffsetRanges(builder, loc, blockShape, desc,
+                                      offsetRanges);
+}
+
+Value generateOther(OpBuilder &builder, Location loc, Type scalarTy,
+                    ArrayRef<int64_t> blockShape) {
+  auto blockTy = RankedTensorType::get(blockShape, scalarTy);
   auto attr = builder.getZeroAttr(blockTy);
   return builder.create<arith::ConstantOp>(loc, attr);
+}
+
+Value generateOther(OpBuilder &builder, Location loc, TensorDescType descTy) {
+  auto blockTy = descTy.getSignlessBlockType();
+  return generateOther(builder, loc, blockTy.getElementType(),
+                       blockTy.getShape());
 }
 
 SmallVector<mlir::Value> castToI64(OpBuilder &builder,
@@ -261,6 +293,73 @@ struct RewriteStorePattern : OpConversionPattern<triton::DescriptorStoreOp> {
   }
 };
 
+std::pair<Value, Value>
+generateGatherScatterPtrMask(OpBuilder &builder, Location loc,
+                             ArrayRef<int64_t> blockShape, Descriptor &desc,
+                             Value xOffsets, Value yOffset) {
+  Value xOffsetRange =
+      expandOffsets(builder, loc, blockShape, xOffsets, /*dim=*/0);
+  yOffset = castToI64(builder, {yOffset})[0];
+  auto xOffsetI64Ty = RankedTensorType::get(
+      cast<RankedTensorType>(xOffsetRange.getType()).getShape(),
+      yOffset.getType());
+  xOffsetRange =
+      builder.create<arith::ExtSIOp>(loc, xOffsetI64Ty, xOffsetRange);
+  auto yOffsetRange =
+      getExpandedOffsetWithRange(builder, loc, blockShape, yOffset, /*dim=*/1);
+  auto ptr = generatePtrFromOffsetRanges(builder, loc, blockShape, desc,
+                                         {xOffsetRange, yOffsetRange});
+  auto mask = generateMaskFromOffsetRanges(builder, loc, blockShape, desc,
+                                           {xOffsetRange, yOffsetRange});
+  return {ptr, mask};
+}
+
+struct RewriteGatherPattern : OpConversionPattern<triton::DescriptorGatherOp> {
+  using OpConversionPattern<triton::DescriptorGatherOp>::OpConversionPattern;
+
+  llvm::LogicalResult
+  matchAndRewrite(triton::DescriptorGatherOp op, OneToNOpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto loc = op.getLoc();
+    auto descTy = op.getDesc().getType();
+    const auto blockShape = op.getResult().getType().getShape();
+    auto desc = unpackDescriptor(descTy, adaptor.getDesc());
+    auto [ptr, mask] = generateGatherScatterPtrMask(
+        rewriter, loc, blockShape, desc, op.getXOffsets(), op.getYOffset());
+    auto other = generateOther(rewriter, loc,
+                               descTy.getSignlessBlockType().getElementType(),
+                               blockShape);
+    auto newLoad = rewriter.replaceOpWithNewOp<triton::LoadOp>(
+        op, ptr, mask, other, triton::CacheModifier::NONE,
+        triton::EvictionPolicy::NORMAL, false);
+    newLoad->setAttrs(filterSegmentSizes(op->getAttrs()));
+
+    return llvm::success();
+  }
+};
+
+struct RewriteScatterPattern
+    : OpConversionPattern<triton::DescriptorScatterOp> {
+  using OpConversionPattern<triton::DescriptorScatterOp>::OpConversionPattern;
+
+  llvm::LogicalResult
+  matchAndRewrite(triton::DescriptorScatterOp op, OneToNOpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto loc = op.getLoc();
+    auto descTy = op.getDesc().getType();
+    const auto blockShape = op.getSrc().getType().getShape();
+    auto desc = unpackDescriptor(descTy, adaptor.getDesc());
+    auto [ptr, mask] = generateGatherScatterPtrMask(
+        rewriter, loc, blockShape, desc, op.getXOffsets(), op.getYOffset());
+    auto newStore = rewriter.replaceOpWithNewOp<triton::StoreOp>(
+        op, ptr, op.getSrc(), mask, triton::CacheModifier::NONE,
+        triton::EvictionPolicy::NORMAL);
+    newStore->setAttrs(filterSegmentSizes(op->getAttrs()));
+
+    return llvm::success();
+  }
+};
+
 /**
  * @brief This implements the pass for converting triton tensor descriptor
  * loads/stores into indexed loads/stores.
@@ -329,9 +428,9 @@ class TritonRewriteTensorDescriptorToPointerPass
     mlir::scf::populateSCFStructuralTypeConversions(converter, patterns);
     triton::populateArithTypeConversions(converter, patterns);
 
-    patterns
-        .add<RewriteMakeTensorDesc, RewriteLoadPattern, RewriteStorePattern>(
-            converter, &getContext());
+    patterns.add<RewriteMakeTensorDesc, RewriteLoadPattern, RewriteStorePattern,
+                 RewriteGatherPattern, RewriteScatterPattern>(converter,
+                                                              &getContext());
 
     ConversionConfig config;
     config.buildMaterializations = false;
