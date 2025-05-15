@@ -6,7 +6,7 @@ from triton_kernels.numerics_details.mxfp import downcast_to_mxfp
 from triton_kernels.matmul_ogs import MicroscalingCtx, matmul_ogs, PrecisionConfig, FlexCtx
 from triton_kernels.numerics import InFlexData
 import triton_kernels.distributed as triton_dist
-import triton_kernels
+import triton_kernels.swiglu
 
 import pytest
 
