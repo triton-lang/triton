@@ -640,6 +640,89 @@ Value packLLVector(Location loc, ValueRange vals, RewriterBase &rewriter) {
   return vec;
 }
 
+std::optional<LLVM::AtomicBinOp> matchAtomicOp(RMWOp atomicOp) {
+  switch (atomicOp) {
+  case RMWOp::AND:
+    return LLVM::AtomicBinOp::_and;
+  case RMWOp::OR:
+    return LLVM::AtomicBinOp::_or;
+  case RMWOp::XOR:
+    return LLVM::AtomicBinOp::_xor;
+  case RMWOp::ADD:
+    return LLVM::AtomicBinOp::add;
+  case RMWOp::FADD:
+    return LLVM::AtomicBinOp::fadd;
+  case RMWOp::MAX:
+    return LLVM::AtomicBinOp::max;
+  case RMWOp::MIN:
+    return LLVM::AtomicBinOp::min;
+  case RMWOp::UMAX:
+    return LLVM::AtomicBinOp::umax;
+  case RMWOp::UMIN:
+    return LLVM::AtomicBinOp::umin;
+  case RMWOp::XCHG:
+    return LLVM::AtomicBinOp::xchg;
+  default:
+    return {};
+  }
+}
+
+std::optional<LLVM::AtomicOrdering> getMemoryOrdering(MemSemantic memOrdering) {
+  switch (memOrdering) {
+  case MemSemantic::RELAXED:
+    return LLVM::AtomicOrdering::monotonic;
+  case MemSemantic::ACQUIRE:
+    return LLVM::AtomicOrdering::acquire;
+  case MemSemantic::RELEASE:
+    return LLVM::AtomicOrdering::release;
+  case MemSemantic::ACQUIRE_RELEASE:
+    return LLVM::AtomicOrdering::acq_rel;
+  default:
+    return {};
+  }
+}
+
+bool isSimpleSharedMemoryAccess(ArrayRef<int64_t> shape,
+                                ArrayRef<int64_t> allocShape,
+                                triton::gpu::SharedEncodingTrait sharedEnc) {
+  auto rank = shape.size();
+  auto swizzledLayout =
+      dyn_cast<triton::gpu::SwizzledSharedEncodingAttr>(sharedEnc);
+  auto nvmmaLayout = dyn_cast<triton::gpu::NVMMASharedEncodingAttr>(sharedEnc);
+  bool noSwizzling = (swizzledLayout && swizzledLayout.getMaxPhase() == 1) ||
+                     (nvmmaLayout && nvmmaLayout.getSwizzlingByteWidth() == 0);
+  return /*no swizzling*/ noSwizzling ||
+         /*swizzling but same shape*/ shape == allocShape ||
+         /*swizzling and rank-reduced and rank >= 2*/
+         (shape == allocShape.take_back(rank) && rank >= 2);
+}
+
+llvm::MapVector<StringAttr, int32_t> getAllFreeVarMasks(MLIRContext *ctx) {
+  // Mask where all elements are redundant
+  auto kReg = str_attr("reg");
+  auto kLane = str_attr("lane");
+  auto kWarp = str_attr("warp");
+  auto kBlock = str_attr("block");
+
+  int32_t fullMask = -1;
+  llvm::MapVector<StringAttr, int32_t> ret;
+  for (auto dimName : {kReg, kLane, kWarp, kBlock}) {
+    ret[dimName] = fullMask;
+  }
+  return ret;
+}
+
+llvm::MapVector<StringAttr, int32_t> getFreeVariableMasks(Type type) {
+  auto ctx = type.getContext();
+  auto tensorTy = dyn_cast<RankedTensorType>(type);
+  if (!tensorTy) {
+    return getAllFreeVarMasks(ctx);
+  }
+  auto ll =
+      triton::gpu::toLinearLayout(tensorTy.getShape(), tensorTy.getEncoding());
+  return ll.getFreeVariableMasks();
+}
+
 SmallVector<SmallVector<unsigned>> emitOffsetForLayout(Attribute layout,
                                                        RankedTensorType type) {
   MLIRContext *ctx = layout.getContext();
@@ -876,6 +959,96 @@ SharedMemoryObject getSharedMemoryObjectFromStruct(Location loc,
           /*offsets=*/{elems.begin() + 1, elems.end()}};
 }
 
+Value getStackPointer(RewriterBase &rewriter, FunctionOpInterface funcOp) {
+  // See NOTE: [Additional Function Arguments]
+  if (!isKernel(funcOp)) {
+    return funcOp.getArgument(funcOp.getNumArguments() - 2);
+  }
+
+  auto mod = funcOp->getParentOfType<ModuleOp>();
+  auto globalBase = dyn_cast<LLVM::GlobalOp>(mod.lookupSymbol("global_smem"));
+  assert(globalBase);
+  return rewriter.create<LLVM::AddressOfOp>(funcOp.getLoc(), globalBase);
+}
+
+Value getGlobalScratchPtr(Location loc, RewriterBase &rewriter,
+                          const TargetInfoBase &targetInfo,
+                          FunctionOpInterface funcOp, Value allocOffset = {}) {
+  // See NOTE: [Additional Function Arguments]
+  if (!isKernel(funcOp)) {
+    // Base for this function
+    auto gmemBase = funcOp.getArgument(funcOp.getNumArguments() - 1);
+    if (!allocOffset) {
+      return gmemBase;
+    }
+
+    auto ptrTy = mlir::LLVM::LLVMPointerType::get(rewriter.getContext(), 1);
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
+    return b.gep(ptrTy, i8_ty, gmemBase, allocOffset);
+  }
+
+  // Base for entire kernel
+  auto gmemBase = funcOp.getArgument(funcOp.getNumArguments() - 1);
+
+  ModuleOp mod = funcOp.getOperation()->getParentOfType<ModuleOp>();
+  auto allocSizeAttr = mod.getOperation()->getAttrOfType<mlir::IntegerAttr>(
+      "ttg.global_scratch_memory_size");
+  if (!allocSizeAttr) {
+    return gmemBase;
+  }
+
+  Value gridIdx[3];
+  Value gridDim[2];
+  for (int k = 0; k < 3; ++k) {
+    gridIdx[k] = rewriter.create<GetProgramIdOp>(loc, k);
+  }
+  for (int k = 0; k < 2; ++k) {
+    gridDim[k] = rewriter.create<GetNumProgramsOp>(loc, k);
+  }
+
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
+  Value linearId = gridIdx[2];
+  for (int k = 0; k < 2; ++k) {
+    linearId = b.add(gridIdx[1 - k], b.mul(linearId, gridDim[1 - k]));
+  }
+  auto numCTAs = triton::gpu::TritonGPUDialect::getNumCTAs(mod);
+  if (numCTAs > 1) {
+    linearId = b.mul(linearId, b.i32_val(numCTAs));
+    linearId = b.add(linearId, targetInfo.getClusterCTAId(rewriter, loc));
+  }
+
+  auto allocSize = allocSizeAttr.getValue().getZExtValue();
+
+  Value offset = b.mul(linearId, b.i32_val(allocSize));
+  if (allocOffset) {
+    offset = b.add(offset, allocOffset);
+  }
+
+  auto *ctx = rewriter.getContext();
+  auto res =
+      b.gep(mlir::LLVM::LLVMPointerType::get(ctx, 1), i8_ty, gmemBase, offset);
+  return res;
+}
+
+Value getSharedMemoryBase(Location loc, RewriterBase &rewriter,
+                          const TargetInfoBase &target, Operation *op) {
+  auto ptrTy = LLVM::LLVMPointerType::get(rewriter.getContext(),
+                                          target.getSharedAddressSpace());
+  auto func = op->template getParentOfType<FunctionOpInterface>();
+  if (!func)
+    func = cast<FunctionOpInterface>(op);
+
+  assert(op->hasAttr("allocation.offset"));
+  size_t offset = cast<IntegerAttr>(op->getAttr("allocation.offset"))
+                      .getValue()
+                      .getZExtValue();
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
+  Value offVal = b.i32_val(offset);
+  Value base =
+      b.gep(ptrTy, i8_ty, LLVM::getStackPointer(rewriter, func), offVal);
+  return base;
+}
+
 // Extract the bits of `a` that are set in `mask`
 Value pext_i32(RewriterBase &rewriter, Location loc, Value a, uint32_t mask) {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
@@ -1064,6 +1237,17 @@ Value addStringToModule(Location loc, RewriterBase &rewriter, StringRef key,
 }
 
 } // namespace LLVM
+
+Value dot(RewriterBase &rewriter, Location loc, ArrayRef<Value> offsets,
+          ArrayRef<Value> strides) {
+  assert(offsets.size() == strides.size());
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
+  Value ret = b.i32_val(0);
+  for (auto [offset, stride] : llvm::zip(offsets, strides)) {
+    ret = b.add(ret, b.mul(offset, stride));
+  }
+  return ret;
+}
 
 SharedMemoryObject
 getExpandedSharedMemoryObject(ConversionPatternRewriter &rewriter, Location loc,
