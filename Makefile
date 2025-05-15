@@ -34,6 +34,7 @@ test-unit: all
 		--ignore=language/test_line_info.py --ignore=language/test_subprocess.py --ignore=test_debug.py
 	$(PYTEST) -s -n 8 python/test/unit/language/test_subprocess.py
 	$(PYTEST) -s -n 8 python/test/unit/test_debug.py --forked
+	$(PYTEST) -s -n 8 python/triton_kernels/tests/
 	TRITON_DISABLE_LINE_INFO=0 $(PYTEST) -s python/test/unit/language/test_line_info.py
 	# Run cuda/test_flashattention.py separately to avoid out of gpu memory
 	$(PYTEST) -s python/test/unit/cuda/test_flashattention.py
