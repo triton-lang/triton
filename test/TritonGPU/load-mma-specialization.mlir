@@ -1082,14 +1082,15 @@ tt.func @specialize_mma_only(%rhs_desc: !tt.tensordesc<tensor<64x128xf16, #share
     // CHECK-NEXT: arrive_barrier
     // CHECK-NEXT: [[RESULTS:%.*]]:2 = "some_producer"
     %rhs_reg, %next_acc = "some_producer"(%loaded, %acc) : (tensor<64x128xf16, #oper_layout>, tensor<128x128xf32, #acc_layout>) -> (tensor<64x128xf16, #oper_layout>, tensor<128x128xf32, #acc_layout>)
-    // CHECK-NEXT: local_store [[RESULTS]]#0, [[OPERAND]]
-    // CHECK-NEXT: tmem_store [[RESULTS]]#1, [[ACC_TMEM]]
-    // CHECK-NEXT: arrive_barrier [[EMPTY_BAR0]]
+    // CHECK-NEXT: local_store [[RESULTS]]#0, [[OPERAND]]{{.*}}partition = 0
+    // CHECK-NEXT: fence_async_shared {{.*}}partition = 0
+    // CHECK-NEXT: tmem_store [[RESULTS]]#1, [[ACC_TMEM]]{{.*}}partition = 0
+    // CHECK-NEXT: arrive_barrier [[EMPTY_BAR0]]{{.*}}partition = 0
     %rhs = ttg.local_alloc %rhs_reg : (tensor<64x128xf16, #oper_layout>) -> !ttg.memdesc<64x128xf16, #shared, #smem>
 
     %acc_tmem, %acc_tok = ttng.tmem_alloc %next_acc : (tensor<128x128xf32, #acc_layout>) -> (!ttg.memdesc<128x128xf32, #acc_tmem, #ttng.tensor_memory, mutable>, !ttg.async.token)
-    // CHECK: wait_barrier [[EMPTY_BAR0]]
-    // CHECK-NEXT: ttng.tc_gen5_mma {{.*}} [[READY_BAR0]][%true]
+    // CHECK: wait_barrier [[EMPTY_BAR0]]{{.*}}partition = 1
+    // CHECK-NEXT: ttng.tc_gen5_mma %arg1, [[OPERAND]], {{.*}} [[READY_BAR0]][%true] {{.*}}partition = 1
     %mma_tok = ttng.tc_gen5_mma %lhs, %rhs, %acc_tmem[%acc_tok], %true, %true : !ttg.memdesc<128x64xf16, #shared, #smem>, !ttg.memdesc<64x128xf16, #shared, #smem>, !ttg.memdesc<128x128xf32, #acc_tmem, #ttng.tensor_memory, mutable>
     %c, %load_tok = ttng.tmem_load %acc_tmem[%mma_tok] : !ttg.memdesc<128x128xf32, #acc_tmem, #ttng.tensor_memory, mutable> -> tensor<128x128xf32, #acc_layout>
 
