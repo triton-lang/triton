@@ -621,9 +621,8 @@ addIndexAndPhase(PartitionBuilder &b, scf::ForOp &loop, unsigned numStages,
   return {index, phase};
 }
 
-static std::pair<Value, Operation *>
-getUserPrecondition(ImplicitLocOpBuilder &b, scf::ForOp loop, Operation *domOp,
-                    Value initialValue = {}) {
+static Value getUserPrecondition(ImplicitLocOpBuilder &b, scf::ForOp loop,
+                                 Operation *domOp) {
   // If the use is inside a loop besides the actual loop being pipelined, we
   // have to hoist the use up to that loop, otherwise the barriers will be
   // inserted in the loop.
@@ -632,12 +631,13 @@ getUserPrecondition(ImplicitLocOpBuilder &b, scf::ForOp loop, Operation *domOp,
     domOp = userLoop;
   assert(loop->isProperAncestor(domOp));
 
-  Value trueVal = b.create<arith::ConstantOp>(b.getBoolAttr(true));
   OpBuilder::InsertionGuard guard(b);
-  b.setInsertionPoint(loop.getBody()->findAncestorOpInBlock(*domOp));
+  b.setInsertionPoint(loop);
+  Value trueVal = b.create<arith::ConstantOp>(b.getBoolAttr(true));
 
-  Value precondition = initialValue ? initialValue : trueVal;
+  Value userPred = trueVal;
   Operation *parentOp = domOp;
+  b.setInsertionPoint(loop.getBody()->findAncestorOpInBlock(*domOp));
   while (loop != (parentOp = parentOp->getParentOp())) {
     assert(!isa<LoopLikeOpInterface>(parentOp));
     auto ifOp = dyn_cast<scf::IfOp>(parentOp);
@@ -648,10 +648,10 @@ getUserPrecondition(ImplicitLocOpBuilder &b, scf::ForOp loop, Operation *domOp,
     Value cond = ifOp.getCondition();
     if (domOp->getParentRegion() == &ifOp.getElseRegion())
       cond = b.create<arith::XOrIOp>(cond, trueVal);
-    precondition = b.create<arith::AndIOp>(precondition, cond);
+    userPred = b.create<arith::AndIOp>(userPred, cond);
   }
 
-  return {precondition, domOp};
+  return userPred;
 }
 
 static MemDescType getAsMutable(MemDescType type) {
@@ -1103,7 +1103,7 @@ static LogicalResult pipelineMMA(scf::ForOp &loop, PipelinedMMA &mma,
       b.create<ttng::ArriveBarrierOp>(bar, /*arriveCount=*/1);
     }
   }
-  Value userPred = b.boolCst(true);
+  Value userPred;
   if (readOp == mmaOp) {
     PartitionBuilder b(mmaOp.getLoc(), mmaOp);
     Value lastInductionValue = getLastInductionValue(b, loop);
@@ -1145,7 +1145,7 @@ static LogicalResult pipelineMMA(scf::ForOp &loop, PipelinedMMA &mma,
     }
     if (node.op == dyn_cast<ttng::TMEMLoadOp>(readOp)) {
       ImplicitLocOpBuilder b(readOp->getLoc(), loop);
-      userPred = getUserPrecondition(b, loop, node.op).first;
+      userPred = getUserPrecondition(b, loop, node.op);
       b.setInsertionPointAfter(inBody(readOp));
       auto [nextIndex, nextPhase] =
           postIncrementModulo(b, index, phase, numMmaStages);
@@ -1232,13 +1232,20 @@ static LogicalResult pipelineMMA(scf::ForOp &loop, PipelinedMMA &mma,
 
     if (node.barPrev) {
       if (!isa<ttng::TMEMLoadOp>(node.op)) {
-        if (incrementPt && domOp->isBeforeInBlock(&*incrementPt->getPoint()))
+        // If the user precondition is defined after the MMA, we need to peel
+        // the wait for the user.
+        if (incrementPt && domOp->isBeforeInBlock(&*incrementPt->getPoint()) &&
+            domInfo.properlyDominates(mmaOp, userPred.getDefiningOp())) {
           b.restoreInsertionPoint(*incrementPt);
-        else
+          Value bar = createSingleBufferView(b, node.barPrev, curIndex);
+          b.createInto<ttng::WaitBarrierOp>(*partition, stages.lookup(node.op),
+                                            bar, curPhase, userPred);
+        } else {
           b.setInsertionPoint(domOp);
-        Value bar = createSingleBufferView(b, node.barPrev, curIndex);
-        b.createInto<ttng::WaitBarrierOp>(*partition, stages.lookup(node.op),
-                                          bar, curPhase, userPred);
+          Value bar = createSingleBufferView(b, node.barPrev, node.index);
+          b.createInto<ttng::WaitBarrierOp>(*partition, stages.lookup(node.op),
+                                            bar, node.phase, userPred);
+        }
       } else {
         b.setInsertionPoint(domOp);
         if (isa<scf::IfOp>(domOp->getParentOp()))
