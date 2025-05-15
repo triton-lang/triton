@@ -488,29 +488,14 @@ struct BufferLoadToLocalOpConversion
         cast<RankedTensorType>(getPointerTypeWithShape(ptr, offset));
     unsigned numElems = getTotalElemsPerThread(ptrType);
 
-    // We can load N elements at a time if:
-    //  1. Every group of N source pointers are contiguous.  For example, if
-    //     N=2, then the pointers should be [x, x+1, y, y+1, ...].
-    //  2. The mask (if present) has "alignment" N, meaning that each group of N
-    //     mask bits are the same.  For example if N=2, the mask must be
-    //     [x, x, y, y, ...].
-    unsigned vec = getVectorSize(ptr, offset, axisAnalysisPass);
-    SmallVector<Value> maskElems =
-        getMaskElemsAndUpdateVeclen(rewriter, loc, llMask, mask, vec);
-
-    SmallVector<Value> offsetElems = unpackLLElements(loc, llOffset, rewriter);
-    assert(offsetElems.size() == numElems);
-
-    SmallVector<Value> otherElems;
-    if (llOther)
-      otherElems = unpackLLElements(loc, llOther, rewriter);
+    unsigned vecSize = getVectorSize(ptr, offset, axisAnalysisPass);
 
     auto dstTy = op.getDest().getType();
     auto sharedEnc = cast<SwizzledSharedEncodingAttr>(dstTy.getEncoding());
     auto resElemTy = getTypeConverter()->convertType(dstTy.getElementType());
 
     bool hasSwizzling = sharedEnc.getMaxPhase() != 1;
-    if (failed(canWriteCoalesced(rewriter, op, ptrType, dstTy, vec,
+    if (failed(canWriteCoalesced(rewriter, op, ptrType, dstTy, vecSize,
                                  hasSwizzling))) {
       return failure();
     }
@@ -523,7 +508,7 @@ struct BufferLoadToLocalOpConversion
     SmallVector<Value> swizzledShmemAddr;
     emitSharedAddresses(rewriter, op, ptrType, dstTy, hasSwizzling, resElemTy,
                         llDst, coalescedShmemAddr, swizzledShmemAddr, vecTy);
-    assert(vecTy.getNumElements() == vec);
+    assert(vecTy.getNumElements() == vecSize);
 
     int vecBytes =
         (vecTy.getNumElements() * vecTy.getElementTypeBitWidth()) / 8;
@@ -534,8 +519,24 @@ struct BufferLoadToLocalOpConversion
     // based on the collected shared addresses and vector size
     Value rsrcDesc = bufferEmitter.createResourceDescriptor(llPtr, llStride);
 
+    // We can load N elements at a time if:
+    //  1. Every group of N source pointers are contiguous.  For example, if
+    //     N=2, then the pointers should be [x, x+1, y, y+1, ...].
+    //  2. The mask (if present) has "alignment" N, meaning that each group of N
+    //     mask bits are the same.  For example if N=2, the mask must be
+    //     [x, x, y, y, ...].
+    SmallVector<Value> maskElems =
+        getMaskElemsAndUpdateVeclen(rewriter, loc, llMask, mask, vecSize);
+
+    SmallVector<Value> offsetElems = unpackLLElements(loc, llOffset, rewriter);
+    assert(offsetElems.size() == numElems);
+
+    SmallVector<Value> otherElems;
+    if (llOther)
+      otherElems = unpackLLElements(loc, llOther, rewriter);
+
     for (int i = 0; i < coalescedShmemAddr.size(); i++) {
-      auto srcIdx = i * vec;
+      auto srcIdx = i * vecSize;
       auto offsetIn = offsetElems[srcIdx];
       Value pred = mask ? maskElems[srcIdx] : b.true_val();
 
