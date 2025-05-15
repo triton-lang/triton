@@ -4,6 +4,7 @@
 #include "mlir/IR/Dominance.h"
 #include "mlir/IR/ImplicitLocOpBuilder.h"
 #include "mlir/Pass/Pass.h"
+#include "triton/Analysis/Utility.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
@@ -951,6 +952,34 @@ static Value getLastInductionValue(PartitionBuilder &b, scf::ForOp loop) {
   return b.create<arith::AddIOp>(ceilStep, loop.getLowerBound());
 }
 
+static void rewriteLoadOutsideLoop(LoadOp load) {
+  ImplicitLocOpBuilder b(load.getLoc(), load);
+
+  SharedEncodingTrait sharedEnc = getSharedEncoding(load);
+  auto tensorTy = cast<RankedTensorType>(load.getType());
+  auto memdescTy = MemDescType::get(
+      tensorTy.getShape(), tensorTy.getElementType(), sharedEnc,
+      SharedMemorySpaceAttr::get(b.getContext()), /*mutable=*/true);
+  TypedValue<MemDescType> alloc = b.create<LocalAllocOp>(memdescTy);
+
+  auto asyncCp = b.create<AsyncCopyGlobalToLocalOp>(
+      load.getPtr(), alloc, load.getMask(), load.getOther(), load.getCache(),
+      load.getEvict(), load.getIsVolatile());
+  auto commit = b.create<AsyncCommitGroupOp>(asyncCp.getToken());
+  auto wait = b.create<AsyncWaitOp>(commit.getAsyncToken(), /*pending=*/0);
+
+  if (!load.getOther() || isZeroConst(load.getOther())) {
+    replaceUsesWithLocalLoad(b, load->getResult(0), alloc, wait.getRetToken());
+  } else {
+    Value value =
+        b.create<LocalLoadOp>(load.getType(), alloc, wait.getRetToken());
+    Value select =
+        b.create<arith::SelectOp>(load.getMask(), value, load.getOther());
+    load.getResult().replaceAllUsesWith(select);
+  }
+  load.erase();
+}
+
 static LogicalResult pipelineMMA(scf::ForOp &loop, PipelinedMMA &mma,
                                  WarpSchedule &schedule, DominanceInfo &domInfo,
                                  PostDominanceInfo &postDomInfo,
@@ -1132,15 +1161,30 @@ static LogicalResult pipelineMMA(scf::ForOp &loop, PipelinedMMA &mma,
       .append({curIndex, curPhase});
 
   // Find operands that need to be pipelined through shmem.
+  SmallVector<Value> incomingOperands;
+  llvm::append_range(incomingOperands, mmaOp->getOperands());
+  for (Operation *operandView : mma.operandViews)
+    incomingOperands.push_back(operandView->getOperand(0));
+
   SmallVector<std::pair<Operation *, Partition *>> operandDefs;
-  for (Value operand : mma.mmaOp->getOperands()) {
+  for (Value operand : incomingOperands) {
     Operation *defOp = operand.getDefiningOp();
-    if (!defOp || !loop.getBodyRegion().isAncestor(defOp->getParentRegion()))
+    if (!defOp || loop.isDefinedOutsideOfLoop(operand) ||
+        llvm::is_contained(mma.operandViews, defOp))
       continue;
     defOp = inBody(defOp);
     Partition *defPartition = schedule.getPartition(defOp);
-    if (!defPartition)
+
+    if (!defPartition) {
+      // If the MMA operand is coming from a `tt.load` outside the loop, rewrite
+      // it into async copy and pass the value through shared memory.
+      auto allocOp = dyn_cast<LocalAllocOp>(defOp);
+      if (allocOp && loop.isDefinedOutsideOfLoop(allocOp.getSrc()) &&
+          allocOp.getSrc().getDefiningOp<LoadOp>())
+        rewriteLoadOutsideLoop(allocOp.getSrc().getDefiningOp<LoadOp>());
       continue;
+    }
+
     if (auto allocOp = operand.getDefiningOp<LocalAllocOp>()) {
       PartitionBuilder b(allocOp.getLoc(), allocOp);
       auto store = b.createInto<LocalStoreOp>(*defPartition, std::nullopt,
