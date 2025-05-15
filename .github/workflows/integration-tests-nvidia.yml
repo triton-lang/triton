@@ -95,6 +95,7 @@ jobs:
             source /venv/bin/activate
           fi
           nproc
+          lscpu | grep -E '^CPU\(s\):'
           nvidia-smi
           echo "PATH is '$PATH'"
           ccache --zero-stats
