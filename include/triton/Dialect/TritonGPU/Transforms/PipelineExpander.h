@@ -61,8 +61,8 @@ struct PipeliningOption {
   /// pipeliner will have to predicate operations in the prologue/epilogue.
   bool supportDynamicLoops = false;
 
-  /// Control whether the transformation should resolve the predicate stage ops
-  /// in the loop body, or leave them as tt.predicate_stage.
+  /// If set, use this function to emit the predicate stage ops instead of the
+  /// default one.
   using EmitPredicateStageFnType = std::function<Value(
       RewriterBase &, Value, Value, Value, uint64_t, uint64_t)>;
   EmitPredicateStageFnType emitPredicateStageFn = nullptr;
