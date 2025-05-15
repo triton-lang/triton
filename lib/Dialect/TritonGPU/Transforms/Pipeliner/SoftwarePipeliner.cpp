@@ -1,3 +1,6 @@
+#include "mlir/Analysis/DataFlow/DeadCodeAnalysis.h"
+#include "mlir/Analysis/DataFlow/IntegerRangeAnalysis.h"
+#include "mlir/Dialect/Arith/Transforms/Passes.h"
 #include "mlir/Dialect/Tensor/IR/Tensor.h"
 #include "mlir/IR/Dominance.h"
 #include "mlir/IR/IRMapping.h"
@@ -6,6 +9,7 @@
 #include "mlir/Support/LLVM.h"
 #include "mlir/Transforms/CSE.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
+#include "mlir/Transforms/Passes.h"
 #include "triton/Analysis/AxisInfo.h"
 #include "triton/Analysis/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
@@ -148,48 +152,46 @@ class IntLTItselfMinusXPattern : public OpRewritePattern<arith::CmpIOp> {
   }
 };
 
-struct HackRemoveMaskOutsideOfLoopPattern : public OpRewritePattern<MaskOp> {
+class IntPlusXLTItselfPattern : public OpRewritePattern<arith::CmpIOp> {
   using OpRewritePattern::OpRewritePattern;
 
-  LogicalResult matchAndRewrite(MaskOp maskOp,
+public:
+  IntPlusXLTItselfPattern(MLIRContext *ctx, DataFlowSolver &solver)
+      : OpRewritePattern(ctx), solver(solver) {}
+
+  LogicalResult matchAndRewrite(arith::CmpIOp cmpOp,
                                 PatternRewriter &rewriter) const override {
-    if (maskOp->getParentOfType<scf::ForOp>()) {
+    if (cmpOp.getPredicate() != arith::CmpIPredicate::slt) {
       return failure();
     }
-    rewriter.eraseOp(maskOp);
+    Value lhs = cmpOp.getLhs();
+    Value rhs = cmpOp.getRhs();
+    auto addOp = lhs.getDefiningOp<arith::AddIOp>();
+    if (!addOp) {
+      return failure();
+    }
+    if (addOp.getRhs() != rhs && addOp.getLhs() != rhs) {
+      return failure();
+    }
+    Value xValue = addOp.getRhs();
+    if (xValue == rhs) {
+      xValue = addOp.getLhs();
+    }
+    auto xState =
+        solver.lookupState<mlir::dataflow::IntegerValueRangeLattice>(xValue);
+    if (!xState) {
+      return failure();
+    }
+    if (xState->getValue().getValue().smin().getSExtValue() <= 0) {
+      return failure();
+    }
+    rewriter.replaceOpWithNewOp<arith::ConstantIntOp>(cmpOp, 0, 1);
     return success();
   }
+
+private:
+  DataFlowSolver &solver;
 };
-static void resolveMaskOp(ModuleOp moduleOp) {
-  DominanceInfo domInfo(moduleOp);
-  IRRewriter rewriter(moduleOp);
-  eliminateCommonSubExpressions(rewriter, domInfo, moduleOp);
-
-  auto arithDialect =
-      moduleOp.getContext()->getLoadedDialect<arith::ArithDialect>();
-  RewritePatternSet patterns(moduleOp.getContext());
-  arithDialect->getCanonicalizationPatterns(patterns);
-  patterns.add<InductionVarLTUBPattern>(moduleOp.getContext());
-  patterns.add<IntLTItselfMinusXPattern>(moduleOp.getContext());
-  if (applyPatternsGreedily(moduleOp, std::move(patterns)).failed())
-    return llvm::report_fatal_error("Failed to canonicalize the IR");
-
-  SmallVector<MaskOp> opsToErase;
-  moduleOp->walk([&](MaskOp maskOp) {
-    rewriter.setInsertionPoint(maskOp);
-    while (&maskOp.getBody()->front() != maskOp.getBody()->getTerminator()) {
-      Operation *op = &maskOp.getBody()->front();
-      rewriter.moveOpAfter(op, maskOp);
-      triton::predicateOp(rewriter, op, maskOp.getPred());
-    }
-    maskOp->replaceAllUsesWith(
-        maskOp.getBody()->getTerminator()->getOperands());
-    opsToErase.push_back(maskOp);
-  });
-  for (MaskOp op : opsToErase) {
-    rewriter.eraseOp(op);
-  }
-}
 
 static void expandLoops(ModuleOp moduleOp) {
   SmallVector<scf::ForOp> loops;
@@ -225,6 +227,10 @@ static void expandLoops(ModuleOp moduleOp) {
     IRRewriter rewriter(forOp);
     FailureOr<scf::ForOp> newForOp =
         triton::pipelineForLoop(rewriter, forOp, options);
+
+    if (failed(newForOp)) {
+      continue;
+    }
   }
 }
 
@@ -255,10 +261,26 @@ cloneAndUpdateOperands(RewriterBase &rewriter, Operation *op,
   return clone;
 }
 
+static void triviallyResolveStageOps(RewriterBase &rewriter, scf::ForOp forOp,
+                                     unsigned forStage, Value toPred) {
+  SmallVector<triton::gpu::PredicateStageOp> opsToErase;
+  forOp.walk([&](triton::gpu::PredicateStageOp op) {
+    if (op.getStage() == forStage) {
+      rewriter.replaceAllOpUsesWith(op, toPred);
+      opsToErase.push_back(op);
+    }
+  });
+  for (auto op : opsToErase) {
+    rewriter.eraseOp(op);
+  }
+}
+
 // This function peels the last 'numIterations' iterations from the given
 // scf::ForOp
-static void peelLastIterations(scf::ForOp forOp, unsigned numIterations) {
-  assert(numIterations == 1); // for now
+static void peelLastIterations(scf::ForOp forOp, unsigned numIterations,
+                               unsigned maxStage,
+                               SmallVector<Operation *> *peeledOps = nullptr) {
+  assert(numIterations == 1); // TODO: for now
   IRRewriter rewriter(forOp);
   auto loc = forOp.getLoc();
 
@@ -303,16 +325,15 @@ static void peelLastIterations(scf::ForOp forOp, unsigned numIterations) {
   SmallVector<Value> peeledResults = forOp.getResults();
   Operation *lastOp = nullptr;
   for (Operation &op : forOp.getBody()->without_terminator()) {
-    // TODO HACK: skip masked operations
-    if (isa<MaskOp>(op)) {
-      continue;
-    }
     Operation *newOp =
         cloneAndUpdateOperands(rewriter, &op, [&](OpOperand *newOperand) {
           if (mapping.count(newOperand->get())) {
             newOperand->set(mapping[newOperand->get()]);
           }
         });
+    if (peeledOps) {
+      peeledOps->push_back(newOp);
+    }
     newOp = predicateOp(rewriter, newOp, lastIterPred);
     assert(newOp && "Failed to create masked operation");
     lastOp = newOp;
@@ -352,6 +373,78 @@ struct PipelinePass : public impl::TritonGPUPipelineBase<PipelinePass> {
 
   using impl::TritonGPUPipelineBase<PipelinePass>::TritonGPUPipelineBase;
 
+  void resolveMaskOp(ModuleOp moduleOp) {
+    DominanceInfo domInfo(moduleOp);
+    IRRewriter rewriter(moduleOp);
+    eliminateCommonSubExpressions(rewriter, domInfo, moduleOp);
+
+    DataFlowSolver solver;
+    solver.load<mlir::dataflow::IntegerRangeAnalysis>();
+    solver.load<mlir::dataflow::DeadCodeAnalysis>();
+    if (failed(solver.initializeAndRun(moduleOp)))
+      return llvm::report_fatal_error("Failed to run IntegerRangeAnalysis");
+
+    auto arithDialect =
+        moduleOp.getContext()->getLoadedDialect<arith::ArithDialect>();
+    RewritePatternSet patterns(moduleOp.getContext());
+    arithDialect->getCanonicalizationPatterns(patterns);
+    patterns.add<InductionVarLTUBPattern>(moduleOp.getContext());
+    patterns.add<IntLTItselfMinusXPattern>(moduleOp.getContext());
+    patterns.add<IntPlusXLTItselfPattern>(moduleOp.getContext(), solver);
+    if (applyPatternsGreedily(moduleOp, std::move(patterns)).failed())
+      return llvm::report_fatal_error("Failed to canonicalize the IR");
+
+    auto dumpState = [&](Value value) {
+      if (auto state =
+              solver.lookupState<mlir::dataflow::IntegerValueRangeLattice>(
+                  value)) {
+        state->dump();
+      }
+    };
+
+    SmallVector<MaskOp> opsToErase;
+    moduleOp->walk([&](MaskOp maskOp) {
+      // maskOp->dump();
+      // dumpState(maskOp.getPred());
+      // if (auto andOp = maskOp.getPred().getDefiningOp<mlir::arith::AndIOp>())
+      // {
+      //   andOp->dump();
+      //   dumpState(andOp.getLhs());
+      //   dumpState(andOp.getRhs());
+      //   if (auto cmpiOp =
+      //   andOp.getRhs().getDefiningOp<mlir::arith::CmpIOp>()) {
+      //     cmpiOp->dump();
+      //     dumpState(cmpiOp.getLhs());
+      //     dumpState(cmpiOp.getRhs());
+      //     if (auto addiOp =
+      //     cmpiOp.getLhs().getDefiningOp<mlir::arith::AddIOp>()) {
+      //       addiOp->dump();
+      //       dumpState(addiOp.getLhs());
+      //       dumpState(addiOp.getRhs());
+      //       if (auto subiOp =
+      //       addiOp.getRhs().getDefiningOp<mlir::arith::SubIOp>()) {
+      //         subiOp->dump();
+      //         dumpState(subiOp.getLhs());
+      //         dumpState(subiOp.getRhs());
+      //       }
+      //     }
+      //   }
+      // }
+      rewriter.setInsertionPoint(maskOp);
+      while (&maskOp.getBody()->front() != maskOp.getBody()->getTerminator()) {
+        Operation *op = &maskOp.getBody()->front();
+        rewriter.moveOpAfter(op, maskOp);
+        triton::predicateOp(rewriter, op, maskOp.getPred());
+      }
+      maskOp->replaceAllUsesWith(
+          maskOp.getBody()->getTerminator()->getOperands());
+      opsToErase.push_back(maskOp);
+    });
+    for (MaskOp op : opsToErase) {
+      rewriter.eraseOp(op);
+    }
+  }
+
   void runOnOperation() override {
     ModuleOp moduleOp = getOperation();
 
@@ -375,11 +468,35 @@ struct PipelinePass : public impl::TritonGPUPipelineBase<PipelinePass> {
     SmallVector<scf::ForOp> loops;
     moduleOp->walk([&](scf::ForOp forOp) { loops.push_back(forOp); });
     for (scf::ForOp forOp : loops) {
-      auto funcName =
-          forOp.getOperation()->getParentOfType<triton::FuncOp>().getName();
-      if (funcName.starts_with("_attention_backward")) {
-        peelLastIterations(forOp, 1);
+      std::optional<int> maxStageOpt = mlir::triton::tryGetMaxStage(forOp);
+      if (!maxStageOpt) {
+        continue;
       }
+      IRRewriter rewriter(forOp);
+      Value vTrue = rewriter.create<mlir::arith::ConstantIntOp>(
+          forOp.getLoc(), 1, rewriter.getI1Type());
+      Value vFalse = rewriter.create<mlir::arith::ConstantIntOp>(
+          forOp.getLoc(), 0, rewriter.getI1Type());
+      unsigned maxStage = *maxStageOpt;
+      SmallVector<Operation *> peeledOps;
+      peelLastIterations(forOp, 1, maxStage, &peeledOps);
+      SmallVector<Operation *> forOpBody =
+          llvm::map_to_vector(forOp.getBody()->without_terminator(),
+                              [](Operation &op) -> Operation * { return &op; });
+      // Resolve the maxStage-1 predicate in the loop body to true
+      mlir::triton::resolvePredicateStageOps(
+          forOpBody, [&](triton::gpu::PredicateStageOp op) -> Value {
+            if (op.getStage() == maxStage - 1) {
+              return vTrue;
+            }
+            return nullptr;
+          });
+      // Resolve all the peeled predicate stage ops to false
+      mlir::triton::resolvePredicateStageOps(
+          peeledOps,
+          [&](triton::gpu::PredicateStageOp op) -> Value { return vFalse; });
+      // Resolve all the rest normally
+      mlir::triton::defaultResolvePredicateStageOps(rewriter, forOp, maxStage);
     }
 
     resolveMaskOp(moduleOp);

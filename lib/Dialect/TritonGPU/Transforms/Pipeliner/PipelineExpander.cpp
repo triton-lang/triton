@@ -114,6 +114,8 @@ public:
   /// operations from stages [i; maxStage], where i is the part index.
   LogicalResult emitEpilogue(RewriterBase &rewriter,
                              llvm::SmallVector<Value> &returnValues);
+  /// Resolve the predicate stage ops in the loop body.
+  void resolvePredicateStageOps(RewriterBase &rewriter, scf::ForOp newForOp);
 };
 
 /// Find operands of all the nested operations within `op`.
@@ -781,6 +783,11 @@ LoopPipelinerInternal::emitEpilogue(RewriterBase &rewriter,
   return success();
 }
 
+void LoopPipelinerInternal::resolvePredicateStageOps(RewriterBase &rewriter,
+                                                     scf::ForOp newForOp) {
+  defaultResolvePredicateStageOps(rewriter, newForOp, maxStage);
+}
+
 void LoopPipelinerInternal::setValueMapping(Value key, Value el, int64_t idx) {
   auto it = valueMapping.find(key);
   // If the value is not in the map yet add a vector big enough to store all
@@ -845,6 +852,10 @@ mlir::triton::pipelineForLoop(RewriterBase &rewriter, ForOp forOp,
     rewriter.replaceOp(forOp, returnValues);
   else
     rewriter.eraseOp(forOp);
+
+  if (options.resolvePredicateOps) {
+    pipeliner.resolvePredicateStageOps(rewriter, newForOp);
+  }
 
   return newForOp;
 }

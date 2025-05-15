@@ -23,6 +23,10 @@ class ForOp;
 
 namespace triton {
 
+namespace gpu {
+class PredicateStageOp;
+}
+
 /// Options to dictate how loops should be pipelined.
 struct PipeliningOption {
   /// Lambda returning all the operations in the forOp, with their stage, in the

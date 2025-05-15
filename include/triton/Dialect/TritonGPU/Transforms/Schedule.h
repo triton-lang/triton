@@ -31,6 +31,8 @@ void asyncLaunchDots(scf::ForOp forOp);
 /// number of groups in flight.
 void updateWaits(ModuleOp module);
 
+std::optional<int> tryGetMaxStage(scf::ForOp &forOp);
+
 class CoarseSchedule {
 public:
   class ClusterList {

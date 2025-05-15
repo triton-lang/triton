@@ -236,7 +236,7 @@ static std::pair<int, int> getMinMaxCluster(scf::ForOp &forOp) {
   return std::make_pair(minClusterId, maxClusterId);
 }
 
-static std::optional<int> tryGetMaxStage(scf::ForOp &forOp) {
+std::optional<int> mlir::triton::tryGetMaxStage(scf::ForOp &forOp) {
   std::optional<int> maxStage = std::nullopt;
   if (forOp->hasAttr(mlir::triton::kScheduledMaxStageAttrName)) {
     return forOp
