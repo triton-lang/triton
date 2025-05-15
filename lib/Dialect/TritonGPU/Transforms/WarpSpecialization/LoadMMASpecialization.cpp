@@ -1163,10 +1163,12 @@ static LogicalResult pipelineMMA(scf::ForOp &loop, PipelinedMMA &mma,
 
     if (auto allocOp = operand.getDefiningOp<LocalAllocOp>()) {
       PartitionBuilder b(allocOp.getLoc(), allocOp);
-      b.createInto<LocalStoreOp>(*defPartition, std::nullopt, allocOp.getSrc(),
-                                 allocOp);
+      auto store = b.createInto<LocalStoreOp>(*defPartition, std::nullopt,
+                                              allocOp.getSrc(), allocOp);
       auto fence = b.createInto<ttng::FenceAsyncSharedOp>(
           *defPartition, std::nullopt, /*bCluster=*/false);
+      operandDefs.emplace_back(body.findAncestorOpInBlock(*store),
+                               defPartition);
       operandDefs.emplace_back(body.findAncestorOpInBlock(*fence),
                                defPartition);
       allocOp->moveBefore(loop);
