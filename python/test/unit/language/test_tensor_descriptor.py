@@ -1438,10 +1438,18 @@ def test_tma_scatter(X, Y, BLOCK_X, BLOCK_Y, dtype, y):
     torch.testing.assert_close(ref, output, atol=0, rtol=0)
 
 
-SUPPORTED_REDUCE_DTYPES = {
+NATIVE_SUPPORTED_REDUCE_DTYPES = {
     "add": {tl.uint32, tl.int32, tl.uint64, tl.float32, tl.float16, tl.bfloat16},
     "min": {tl.uint32, tl.int32, tl.uint64, tl.int64, tl.float16, tl.bfloat16},
     "max": {tl.uint32, tl.int32, tl.uint64, tl.int64, tl.float16, tl.bfloat16},
+    "and": {tl.uint32, tl.int32, tl.uint64, tl.int64},
+    "or": {tl.uint32, tl.int32, tl.uint64, tl.int64},
+    "xor": {tl.uint32, tl.int32, tl.uint64, tl.int64},
+}
+FALLBACK_SUPPORTED_REDUCE_DTYPES = {
+    "add": {tl.uint32, tl.int32, tl.uint64, tl.float32, tl.float16, tl.bfloat16},
+    "min": {tl.uint32, tl.int32, tl.uint64, tl.int64},
+    "max": {tl.uint32, tl.int32, tl.uint64, tl.int64},
     "and": {tl.uint32, tl.int32, tl.uint64, tl.int64},
     "or": {tl.uint32, tl.int32, tl.uint64, tl.int64},
     "xor": {tl.uint32, tl.int32, tl.uint64, tl.int64},
@@ -1478,12 +1486,10 @@ REDUCE_OP = {
 def test_tensor_descriptor_reduce(kind, descriptor, dtype_str, num_ctas, M_BLOCK, N_BLOCK):
     is_native = is_cuda() and torch.cuda.get_device_capability()[0] >= 9
     if not is_native:
+        if num_ctas != 1:
+            pytest.skip("Multi-CTA not supported")
         if descriptor == "host":
             pytest.skip("NYI: Host side tensor descriptor fallback")
-        if kind in {"min", "max"} and dtype_str in {"float32", "float16", "bfloat16"}:
-            pytest.skip("Unsupported reduction")
-        if dtype_str in {"int8", "int16", "uint8", "uint16"}:
-            pytest.skip("Unsupported reduction")
 
     @triton.jit(debug=True)
     def kernel(out_desc, out_ptr, a_ptr, M, N, M_BLOCK: tl.constexpr, N_BLOCK: tl.constexpr, kind: tl.constexpr):
@@ -1546,9 +1552,13 @@ def test_tensor_descriptor_reduce(kind, descriptor, dtype_str, num_ctas, M_BLOCK
         triton.set_allocator(alloc_fn)
         out_desc = None
 
-    supported = getattr(tl, dtype_str) in SUPPORTED_REDUCE_DTYPES[kind]
+    dtype = getattr(tl, dtype_str)
+    native_supported = dtype in NATIVE_SUPPORTED_REDUCE_DTYPES[kind]
+    fallback_supported = dtype in FALLBACK_SUPPORTED_REDUCE_DTYPES[kind]
+    supported = native_supported if is_native else fallback_supported
     if not supported:
-        with pytest.raises(CompilationError):
+        exc_type = CompilationError if not native_supported else RuntimeError
+        with pytest.raises(exc_type):
             kernel[(grid_m, grid_n)](out_desc, out, inp, M, N, M_BLOCK, N_BLOCK, kind, num_ctas=num_ctas)
         return
 
