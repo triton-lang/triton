@@ -62,6 +62,10 @@ static void expandLoops(ModuleOp moduleOp) {
             std::vector<std::pair<Operation *, unsigned>> &schedule) {
           schedule = finalSchedule;
         };
+    // Testing feature: allow for unresolved predicate stage ops
+    // in the loop body.
+    options.resolvePredicateOps =
+        !forOp->hasAttr("__test_keep_predicate_stage");
     IRRewriter rewriter(forOp);
     FailureOr<scf::ForOp> newForOp =
         triton::pipelineForLoop(rewriter, forOp, options);

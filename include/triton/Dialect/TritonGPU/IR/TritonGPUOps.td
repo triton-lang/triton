@@ -313,6 +313,20 @@ def TTG_LocalStoreOp : TTG_Op<"local_store"> {
   }];
 }
 
+def TTG_PredicateStageOp: TTG_Op<"predicate_stage",
+                                [Pure, AllTypesMatch<["iv", "ub", "step"]>]> {
+  let summary = "pipeliner stage predicate";
+  let arguments = (ins AnySignlessIntegerOrIndex:$iv,
+                       AnySignlessIntegerOrIndex:$ub,
+                       AnySignlessIntegerOrIndex:$step,
+                       I32Attr:$stage);
+  let results = (outs I1:$result);
+  let builders = [
+    OpBuilder<(ins "Value":$iv, "Value":$ub, "Value":$step, "int32_t":$stage)>
+  ];
+  let assemblyFormat = "$iv `,` $ub `,` $step `,` $stage attr-dict `:` type($iv) `->` type($result)";
+}
+
 def TTG_Fp4ToFpOp : TTG_Op<"fp4_to_fp", [Pure]> {
   let summary = "Upcast fp4 (e2m1) to fp";
 

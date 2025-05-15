@@ -23,6 +23,10 @@ class ForOp;
 
 namespace triton {
 
+namespace gpu {
+class PredicateStageOp;
+}
+
 /// Options to dictate how loops should be pipelined.
 struct PipeliningOption {
   /// Lambda returning all the operations in the forOp, with their stage, in the
@@ -56,6 +60,10 @@ struct PipeliningOption {
   /// this is not the case. If the loop is dynamic and this is set to true the
   /// pipeliner will have to predicate operations in the prologue/epilogue.
   bool supportDynamicLoops = false;
+
+  /// Control whether the transformation should resolve the predicate stage ops
+  /// in the loop body, or leave them as tt.predicate_stage.
+  bool resolvePredicateOps = true;
 
   // Callback to predicate operations when the prologue or epilogue are not
   // peeled. This takes the original operation, an i1 predicate value and the
@@ -94,6 +102,16 @@ struct PipeliningOption {
 FailureOr<scf::ForOp> pipelineForLoop(RewriterBase &rewriter, scf::ForOp forOp,
                                       const PipeliningOption &options,
                                       bool *modifiedIR = nullptr);
+
+/// Resolve the predicate stage ops in the loop body using default predicates
+/// based on the loop induction variable and maxStage.
+void defaultResolvePredicateStageOps(RewriterBase &rewriter, scf::ForOp forOp,
+                                     int64_t maxStage);
+
+/// Resolve the predicate stage ops in the loop body using a custom callback.
+void resolvePredicateStageOps(
+    ArrayRef<Operation *> predOps,
+    std::function<Value(triton::gpu::PredicateStageOp)> callback);
 
 } // namespace triton
 } // namespace mlir
