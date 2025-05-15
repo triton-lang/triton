@@ -51,7 +51,7 @@ def test_reduce_scatter_distributed_no_token_mask(monkeypatch):
     torch.testing.assert_close(result, expected)
 
 
-@pytest.mark.parametrize("dim, x_shape, token_mask, assign_dim", [
+@pytest.mark.parametrize("dim, x_shape, token_mask", [
     (0, (4, 4), torch.tensor([True, False, True, False], dtype=torch.bool)),
     (1, (3, 2), torch.tensor([True, False, False, True], dtype=torch.bool)),
 ])
