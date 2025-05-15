@@ -16,6 +16,7 @@
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/SmallVectorExtras.h"
 #include "llvm/Support/LogicalResult.h"
+#include "llvm/Support/raw_ostream.h"
 #include <mlir/Dialect/Arith/IR/Arith.h>
 #include <mlir/Dialect/Func/Transforms/FuncConversions.h>
 #include <mlir/IR/Builders.h>
@@ -253,8 +254,6 @@ struct RewriteLoadPattern : OpConversionPattern<triton::DescriptorLoadOp> {
                   ConversionPatternRewriter &rewriter) const override {
     auto loc = op.getLoc();
     const auto blockShape = op.getDesc().getType().getBlockType().getShape();
-    const auto rank = blockShape.size();
-
     auto descTy = op.getDesc().getType();
     auto desc = unpackDescriptor(descTy, adaptor.getDesc());
     auto offsets = castToI64(rewriter, op.getIndices());
@@ -279,7 +278,6 @@ struct RewriteStorePattern : OpConversionPattern<triton::DescriptorStoreOp> {
     auto loc = op.getLoc();
     auto descTy = op.getDesc().getType();
     const auto blockShape = descTy.getBlockType().getShape();
-    const auto rank = blockShape.size();
     auto desc = unpackDescriptor(descTy, adaptor.getDesc());
     auto offsets = castToI64(rewriter, op.getIndices());
 
@@ -360,6 +358,68 @@ struct RewriteScatterPattern
   }
 };
 
+std::optional<RMWOp> translateReduceKind(DescriptorReduceKind kind,
+                                         TensorDescType ty) {
+  auto scalarTy = ty.getBlockType().getElementType();
+  switch (kind) {
+  case DescriptorReduceKind::ADD:
+    return scalarTy.isInteger() ? RMWOp::ADD : RMWOp::FADD;
+  case DescriptorReduceKind::MIN:
+    if (scalarTy.isUnsignedInteger()) {
+      return RMWOp::UMIN;
+    } else if (scalarTy.isSignedInteger()) {
+      return RMWOp::MIN;
+    }
+    return {};
+  case DescriptorReduceKind::MAX:
+    if (scalarTy.isUnsignedInteger()) {
+      return RMWOp::UMAX;
+    } else if (scalarTy.isSignedInteger()) {
+      return RMWOp::MAX;
+    }
+    return {};
+  case DescriptorReduceKind::AND:
+    return RMWOp::AND;
+  case DescriptorReduceKind::OR:
+    return RMWOp::OR;
+  case DescriptorReduceKind::XOR:
+    return RMWOp::XOR;
+  default:
+    break;
+  }
+  return {};
+}
+
+struct RewriteReducePattern : OpConversionPattern<triton::DescriptorReduceOp> {
+  using OpConversionPattern<triton::DescriptorReduceOp>::OpConversionPattern;
+
+  llvm::LogicalResult
+  matchAndRewrite(triton::DescriptorReduceOp op, OneToNOpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto loc = op.getLoc();
+    auto descTy = op.getDesc().getType();
+    const auto blockShape = descTy.getBlockType().getShape();
+    auto desc = unpackDescriptor(descTy, adaptor.getDesc());
+    auto offsets = castToI64(rewriter, op.getIndices());
+    auto rmwOp = translateReduceKind(op.getKind(), descTy);
+    if (!rmwOp) {
+      std::string msgstring;
+      llvm::raw_string_ostream msg(msgstring);
+      msg << "Cannot fallback on descriptor atomic op, unsupported for type "
+          << descTy.getBlockType().getElementType();
+      return op->emitError(msgstring);
+    }
+
+    auto newStore = rewriter.create<triton::AtomicRMWOp>(
+        loc, descTy.getSignlessBlockType(), *rmwOp,
+        generatePtr(rewriter, loc, blockShape, desc, offsets), op.getSrc(),
+        generateMask(rewriter, loc, blockShape, desc, offsets),
+        MemSemantic::RELEASE, MemSyncScope::GPU);
+    op.erase();
+    return success();
+  }
+};
+
 /**
  * @brief This implements the pass for converting triton tensor descriptor
  * loads/stores into indexed loads/stores.
@@ -428,9 +488,10 @@ class TritonRewriteTensorDescriptorToPointerPass
     mlir::scf::populateSCFStructuralTypeConversions(converter, patterns);
     triton::populateArithTypeConversions(converter, patterns);
 
-    patterns.add<RewriteMakeTensorDesc, RewriteLoadPattern, RewriteStorePattern,
-                 RewriteGatherPattern, RewriteScatterPattern>(converter,
-                                                              &getContext());
+    patterns
+        .add<RewriteMakeTensorDesc, RewriteLoadPattern, RewriteStorePattern,
+             RewriteGatherPattern, RewriteScatterPattern, RewriteReducePattern>(
+            converter, &getContext());
 
     ConversionConfig config;
     config.buildMaterializations = false;
