@@ -148,10 +148,11 @@ def make_launcher(constants, signature, tensordesc_meta):
                         output.append("i64")
                 else:
                     output.append("nvTmaDesc")
-                    for _ in range(ndim):
-                        output.append("i32")
-                    for _ in range(ndim):
-                        output.append("i64")
+
+                for _ in range(ndim):
+                    output.append("i32")
+                for _ in range(ndim):
+                    output.append("i64")
             else:
                 output.append(sig)
 
@@ -570,7 +571,13 @@ TMA_DTYPE_DEVICE_TO_HOST[10] = 9
 def make_tensordesc_arg(arg, metadata):
     assert isinstance(arg, TensorDescriptor)
     if metadata is None:
-        return [arg.base, *arg.shape, *arg.strides]
+        # Currently the host side tensor descriptors get decomposed in
+        # the frontend to tensor desc, shape, and strides. We have no
+        # way to use these shape and strides when processing tensor
+        # descriptors which is why we provide our own decomposition
+        # above. Sadly this means we have to pass the shape and strides
+        # twice.
+        return [arg.base, *arg.shape, *arg.strides, *arg.shape, *arg.strides]
 
     swizzle = metadata["swizzle"]
     elem_size = metadata["elem_size"]

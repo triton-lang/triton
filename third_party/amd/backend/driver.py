@@ -209,6 +209,15 @@ def make_launcher(constants, signature, warp_size):
                 output.append("*" + dtype)
                 for _ in range(2 * ndim):
                     output.append("i64")
+                # Currently the host side tensor descriptors get passed in as a
+                # tensor desc, shape, and strides. We have no way to use these
+                # shape and strides when processing tensor descriptors which is
+                # why we provide our own decomposition above. Sadly this means
+                # we have to pass the shape and strides twice.
+                for _ in range(ndim):
+                    output.append("i32")
+                for _ in range(ndim):
+                    output.append("i64")
             else:
                 output.append(sig)
 
@@ -524,9 +533,15 @@ def wrap_handle_tensor_descriptor(launcher):
         meta_args = args[:11]
         raw_kernel_args = args[11:]
         final_args = []
-        for i, arg in enumerate(raw_kernel_args):
+        for arg in raw_kernel_args:
             if isinstance(arg, TensorDescriptor):
-                final_args.extend([arg.base, *arg.shape, *arg.strides])
+                # Currently the host side tensor descriptors get decomposed in
+                # the frontend to tensor desc, shape, and strides. We have no
+                # way to use these shape and strides when processing tensor
+                # descriptors which is why we provide our own decomposition
+                # above. Sadly this means we have to pass the shape and strides
+                # twice.
+                final_args.extend([arg.base, *arg.shape, *arg.strides, *arg.shape, *arg.strides])
             else:
                 final_args.append(arg)
         return launcher(*meta_args, *final_args)
