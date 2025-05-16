@@ -357,7 +357,6 @@ def compile(src, target=None, options=None):
                     print(f"\nOverriding IR with filename set in triton config {src.constants}: {ir_override}")
                 next_module = parse(ir_override, ext, context)
         elif full_name := fn_override_manager.get_file(ir_filename):
-            # TRITON_KERNEL_OVERRIDE has higher priority because it is a debug feature
             print(f"\nOverriding kernel with file {full_name}")
             next_module = parse(full_name, ext, context)
 
