@@ -1,5 +1,5 @@
 import array
-from collections.abc import Callable, Iterator, MutableSequence, Sequence
+from collections.abc import Callable, Iterator, Sequence
 import functools
 import inspect
 import operator
@@ -8,7 +8,6 @@ import subprocess
 from typing import Any
 import triton
 import re
-from pathlib import Path
 from triton import knobs
 from triton.runtime import _allocation
 from triton.backends.compiler import GPUTarget
@@ -191,9 +190,10 @@ def _expand_signature(signature, tensordesc_meta):
     return output
 
 
-def make_launcher(signature_types: Sequence[_ArgTypeWithNesting], tensordesc_meta: Sequence[Any]) -> Callable[..., None]:
+def make_launcher(signature_types: Sequence[_ArgTypeWithNesting],
+                  tensordesc_meta: Sequence[Any]) -> Callable[..., None]:
 
-    signature_types = _expand_signature(signature.values())
+    signature_types = _expand_signature(signature_types, tensordesc_meta)
     non_const_arg_mask = _make_nonconst_arg_mask(signature_types)
     flattened_signature = list(_flatten_and_apply_arg_mask(signature_types, non_const_arg_mask))
 

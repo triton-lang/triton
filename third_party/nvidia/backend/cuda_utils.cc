@@ -1,16 +1,14 @@
 #include <algorithm>
+#include <alloca.h>
+#include <dlfcn.h>
 #include <map>
+#include <pybind11/pybind11.h>
+#include <pybind11/stl.h>
+#include <pybind11/stl_bind.h>
 #include <string>
 #include <string_view>
 #include <tuple>
 #include <vector>
-#define PY_SSIZE_T_CLEAN
-#include <Python.h>
-#include <alloca.h>
-#include <dlfcn.h>
-#include <pybind11/pybind11.h>
-#include <pybind11/stl.h>
-#include <pybind11/stl_bind.h>
 
 #include <cstdint>
 #include <cstdlib>
@@ -26,9 +24,9 @@ namespace py = pybind11;
 namespace {
 
 // Raise a python exception if the CUDA result code is not CUDA_SUCCESS.
-inline bool gpuAssert(CUresult code, const char *file, int line) {
+inline void gpuAssert(CUresult code, const char *file, int line) {
   if (code == CUDA_SUCCESS)
-    return true;
+    return;
   const char *error = nullptr;
   cuGetErrorString(code, &error);
   py::str error_str = py::str("Triton Error [CUDA]: {0}").format(error);
@@ -607,22 +605,18 @@ defineGetFunctionHandle(getCuOccupancyMaxActiveClustersHandle,
 defineGetFunctionHandle(getCuTensorMapEncodeTiledHandle,
                         cuTensorMapEncodeTiled);
 
-static PyObject *occupancyMaxActiveClusters(PyObject *self, PyObject *args) {
-  int clusterDimX = -1, clusterDimY = -1, clusterDimZ = -1,
-      maxActiveClusters = -1;
-  int shared = 0;
-  CUfunction func;
-
-  if (!PyArg_ParseTuple(args, "Kiiii", &func, &shared, &clusterDimX,
-                        &clusterDimY, &clusterDimZ)) {
-    return NULL;
-  }
+static int32_t occupancyMaxActiveClusters(uint64_t func, int32_t shared,
+                                          int32_t clusterDimX,
+                                          int32_t clusterDimY,
+                                          int32_t clusterDimZ) {
+  int32_t maxActiveClusters = -1;
+  CUfunction cuFunc = (CUfunction)func;
 
   // Let each SM have one block
   int maxActiveBlocks = 1;
   py::gil_scoped_release release;
   CUDA_CHECK(cuFuncSetAttribute(
-      func, CU_FUNC_ATTRIBUTE_MAX_DYNAMIC_SHARED_SIZE_BYTES, shared));
+      cuFunc, CU_FUNC_ATTRIBUTE_MAX_DYNAMIC_SHARED_SIZE_BYTES, shared));
 
   CUlaunchAttribute launchAttr[1];
   launchAttr[0].id = CU_LAUNCH_ATTRIBUTE_CLUSTER_DIMENSION;
@@ -646,19 +640,14 @@ static PyObject *occupancyMaxActiveClusters(PyObject *self, PyObject *args) {
                                       getCuOccupancyMaxActiveClustersHandle);
 
   CUDA_CHECK(cuFuncSetAttribute(
-      func, CU_FUNC_ATTRIBUTE_NON_PORTABLE_CLUSTER_SIZE_ALLOWED, 1));
-  CUDA_CHECK(cuOccupancyMaxActiveClusters(&maxActiveClusters, func, &config));
-  return PyLong_FromLong(maxActiveClusters);
+      cuFunc, CU_FUNC_ATTRIBUTE_NON_PORTABLE_CLUSTER_SIZE_ALLOWED, 1));
+  CUDA_CHECK(cuOccupancyMaxActiveClusters(&maxActiveClusters, cuFunc, &config));
+  return maxActiveClusters;
 }
 
-static PyObject *setPrintfFifoSize(PyObject *self, PyObject *args) {
-  long size;
-  if (!PyArg_ParseTuple(args, "l", &size)) {
-    return NULL;
-  }
+static void setPrintfFifoSize(int32_t size) {
   if (size < 0) {
-    PyErr_SetString(PyExc_ValueError, "fifo size must be non-negative");
-    return NULL;
+    throw py::value_error("fifo size must be non-negative");
   }
 
   py::gil_scoped_release release;
@@ -682,9 +671,6 @@ static PyObject *setPrintfFifoSize(PyObject *self, PyObject *args) {
   if (oldSize != size) {
     CUDA_CHECK(cuCtxSetLimit(CU_LIMIT_PRINTF_FIFO_SIZE, size));
   }
-
-  Py_INCREF(Py_None);
-  return Py_None;
 }
 
 static void fillTMADescriptor(uint64_t desc_address, uint64_t global_address,
