@@ -228,8 +228,6 @@ def TT_LoadOp : TT_Op<"load", [
       Optional<TT_BoolLike>:$mask,
       Optional<TT_Type>:$other,
 
-      DefaultValuedAttr<DenseI32ArrayAttr, "::llvm::ArrayRef<int32_t>{}">:$boundaryCheck,
-      OptionalAttr<TT_PaddingOptionAttr>:$padding,
       DefaultValuedAttr<TT_CacheModifierAttr, "::mlir::triton::CacheModifier::NONE">:$cache,
       DefaultValuedAttr<TT_EvictionPolicyAttr, "::mlir::triton::EvictionPolicy::NORMAL">:$evict,
       DefaultValuedAttr<BoolAttr, "false">:$isVolatile
@@ -238,24 +236,12 @@ def TT_LoadOp : TT_Op<"load", [
     let results = (outs TT_Type:$result);
 
     let builders = [
-        // A tensor of pointers or a pointer to a scalar
+        // Build without masking or other
         OpBuilder<(ins "Value":$ptr, "triton::CacheModifier":$cache,
                        "triton::EvictionPolicy":$evict, "bool":$isVolatile)>,
-        // A tensor pointer with boundary check and padding
-        OpBuilder<(ins "Value":$ptr, "ArrayRef<int32_t>":$boundaryCheck,
-                       "std::optional<triton::PaddingOption>":$padding, "triton::CacheModifier":$cache,
-                       "triton::EvictionPolicy":$evict, "bool":$isVolatile)>,
-        // A tensor of pointers or a pointer to a scalar with mask
+        // Build without masking
         OpBuilder<(ins "Value":$ptr, "Value":$mask, "triton::CacheModifier":$cache,
                        "triton::EvictionPolicy":$evict, "bool":$isVolatile)>,
-        // A tensor of pointers or a pointer to a scalar with mask and other
-        OpBuilder<(ins "Value":$ptr, "Value":$mask, "Value":$other, "triton::CacheModifier":$cache,
-                       "triton::EvictionPolicy":$evict, "bool":$isVolatile)>,
-        // A utility function to build the operation with all attributes
-        OpBuilder<(ins "Value":$ptr, "Value":$mask, "Value":$other,
-                       "ArrayRef<int32_t>":$boundaryCheck,
-                       "std::optional<triton::PaddingOption>":$padding, "triton::CacheModifier":$cache,
-                       "triton::EvictionPolicy":$evict, "bool":$isVolatile)>
     ];
 
     // Specify `cacheModifier` and `evictionPolicy` explicitly in the
@@ -298,20 +284,13 @@ def TT_StoreOp : TT_Op<"store", [
       Arg<AnyTypeOf<[TT_PtrLike]>, "", [MemWrite<GlobalMemory>]>:$ptr,
       TT_Type:$value,
       Optional<TT_BoolLike>:$mask,
-      DefaultValuedAttr<DenseI32ArrayAttr, "::llvm::ArrayRef<int32_t>{}">:$boundaryCheck,
       DefaultValuedAttr<TT_CacheModifierAttr, "triton::CacheModifier::NONE">:$cache,
       DefaultValuedAttr<TT_EvictionPolicyAttr, "triton::EvictionPolicy::NORMAL">:$evict
     );
 
     let builders = [
-        // A tensor of pointers or a pointer to a scalar
+        // Build without mask
         OpBuilder<(ins "Value":$ptr, "Value":$value, "triton::CacheModifier":$cache, "triton::EvictionPolicy":$evict)>,
-        // A tensor of pointers or a pointer to a scalar with mask
-        OpBuilder<(ins "Value":$ptr, "Value":$value, "Value":$mask, "triton::CacheModifier":$cache,
-                       "triton::EvictionPolicy":$evict)>,
-        // A tensor pointer with boundary check
-        OpBuilder<(ins "Value":$ptr, "Value":$value, "ArrayRef<int32_t>":$boundaryCheck, "triton::CacheModifier":$cache,
-                       "triton::EvictionPolicy":$evict)>
     ];
 
     // Specify cacheModifier and evictionPolicy explicitly, instead of leaving
