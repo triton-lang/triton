@@ -199,14 +199,15 @@ def make_launcher(signature_types: Sequence[_ArgTypeWithNesting], tensordesc_met
 
     signature_metadata = nvidia.cuda_utils.build_signature_metadata(flattened_signature)
 
-    def wrapper(grid_dim_x: int, grid_dim_y: int, grid_dim_z: int, stream: int, kernel: int, global_scratch: any,
+    def wrapper(grid_dim_x: int, grid_dim_y: int, grid_dim_z: int, stream: int, kernel: int,
+                launch_cooperative_grid: bool, launch_pdl: bool, global_scratch: any,
                 packed_metadata: tuple[int, int, int, int, int, int], hook_args: any,
                 launch_enter_hook: Callable[..., None], launch_exit_hook: Callable[..., None], *args: any) -> None:
         non_const_args = list(_flatten_and_apply_arg_mask(args, non_const_arg_mask))
 
-        nvidia.cuda_utils.launch(grid_dim_x, grid_dim_y, grid_dim_z, stream, kernel, packed_metadata, hook_args,
-                                 launch_enter_hook, launch_exit_hook, signature_metadata, global_scratch,
-                                 non_const_args)
+        nvidia.cuda_utils.launch(grid_dim_x, grid_dim_y, grid_dim_z, stream, kernel, launch_cooperative_grid,
+                                 launch_pdl, packed_metadata, hook_args, launch_enter_hook, launch_exit_hook,
+                                 signature_metadata, global_scratch, non_const_args)
 
     return wrapper
 
@@ -323,6 +324,7 @@ class CudaLauncher(object):
         self.global_scratch_size = metadata.global_scratch_size
         self.global_scratch_align = metadata.global_scratch_align
         self.launch_cooperative_grid = metadata.launch_cooperative_grid
+        self.launch_pdl = metadata.launch_pdl
 
     def __call__(self, gridX, gridY, gridZ, stream, function, *args):
         if self.global_scratch_size > 0:
@@ -331,7 +333,8 @@ class CudaLauncher(object):
             global_scratch = _allocation._allocator(alloc_size, self.global_scratch_align, stream)
         else:
             global_scratch = None
-        self.launch(gridX, gridY, gridZ, stream, function, global_scratch, *args)
+        self.launch(gridX, gridY, gridZ, stream, function, self.launch_cooperative_grid, self.launch_pdl,
+                    global_scratch, *args)
 
 
 class CudaDriver(GPUDriver):
