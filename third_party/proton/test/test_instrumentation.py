@@ -34,8 +34,6 @@ def test_mode_obj(mode, tmp_path: pathlib.Path):
 
 
 def test_jit(tmp_path):
-    if is_hip():
-        pytest.skip("HIP backend does not support record")
 
     @triton.jit
     def foo(x, size: tl.constexpr, y):
@@ -127,8 +125,6 @@ def test_record(method, tmp_path: pathlib.Path):
 
 
 def test_tree(tmp_path: pathlib.Path):
-    if is_hip():
-        pytest.skip("HIP backend does not support record")
 
     from contextlib import contextmanager
 
