@@ -645,7 +645,7 @@ class CudaLauncher(object):
         src = make_launcher(constants, signature, tensordesc_meta)
         mod = compile_module_from_src(src, "__triton_launcher")
         has_tensor_desc_arg = any(
-            isinstance(sig, str) and sig.startswith("tensordesc") for sig in src.signature.values())
+            isinstance(sig, str) and sig.startswith("tensordesc") for sig in signature.values())
 
         self.num_ctas = functools.reduce(operator.mul, metadata.cluster_dims, 1)
         self.launch = wrap_handle_tensordesc(mod.launch, tensordesc_meta) if has_tensor_desc_arg else mod.launch
