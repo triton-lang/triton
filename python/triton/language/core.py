@@ -1126,10 +1126,7 @@ class tensor(base_value):
     def cast(self, dtype, fp_downcast_rounding=None, bitcast=False) -> tensor:
         ...
 
-    def store(self, value, mask=None, boundary_check=(), cache_modifier="", eviction_policy="") -> tensor:
-        ...
-
-    def advance(self, offsets) -> tensor:
+    def store(self, value, mask=None, *, cache_modifier="", eviction_policy="") -> tensor:
         ...
 
     def atomic_cas(self, cmp, val, sem=None, scope=None) -> tensor:
@@ -1966,8 +1963,7 @@ def dot_scaled(lhs, lhs_scale, lhs_format, rhs, rhs_scale, rhs_format, acc=None,
 
 
 @builtin
-def load(pointer, mask=None, other=None, boundary_check=(), padding_option="", cache_modifier="", eviction_policy="",
-         volatile=False, _builder=None):
+def load(pointer, mask=None, other=None, *, cache_modifier="", eviction_policy="", volatile=False, _builder=None):
     """
     Return a tensor of data whose values are loaded from memory at location defined by `pointer`:
 
@@ -1976,20 +1972,12 @@ def load(pointer, mask=None, other=None, boundary_check=(), padding_option="", c
 
             - `mask` and `other` must also be scalars,
             - `other` is implicitly typecast to `pointer.dtype.element_ty`, and
-            - `boundary_check` and `padding_option` must be empty.
 
         (2) If `pointer` is an N-dimensional tensor of pointers, an
             N-dimensional tensor is loaded.  In this case:
 
             - `mask` and `other` are implicitly broadcast to `pointer.shape`,
             - `other` is implicitly typecast to `pointer.dtype.element_ty`, and
-            - `boundary_check` and `padding_option` must be empty.
-
-        (3) If `pointer` is a block pointer defined by `make_block_ptr`, a
-            tensor is loaded.  In this case:
-
-            - `mask` and `other` must be `None`, and
-            - `boundary_check` and `padding_option` can be specified to control the behavior of out-of-bound access.
 
     :param pointer: Pointer to the data to be loaded
     :type pointer: `triton.PointerType`, or block of `dtype=triton.PointerType`
@@ -1998,9 +1986,6 @@ def load(pointer, mask=None, other=None, boundary_check=(), padding_option="", c
     :type mask: Block of `triton.int1`, optional
     :param other: if `mask[idx]` is false, return `other[idx]`
     :type other: Block, optional
-    :param boundary_check: tuple of integers, indicating the dimensions which should do the boundary check
-    :type boundary_check: tuple of ints, optional
-    :param padding_option: should be one of {"", "zero", "nan"}, the padding value to use while out of bounds. "" means an undefined value.
     :param cache_modifier: changes cache option in NVIDIA PTX
     :type cache_modifier: str, optional, should be one of {"", ".ca", ".cg", ".cv"}, where ".ca" stands for
         cache at all levels, ".cg" stands for cache at global level (cache in L2 and below, not L1),
@@ -2018,12 +2003,10 @@ def load(pointer, mask=None, other=None, boundary_check=(), padding_option="", c
         mask = semantic.to_tensor(mask, _builder)
     if other is not None:
         other = semantic.to_tensor(other, _builder)
-    padding_option = _constexpr_to_value(padding_option)
     cache_modifier = _constexpr_to_value(cache_modifier)
     eviction_policy = _constexpr_to_value(eviction_policy)
     volatile = _constexpr_to_value(volatile)
-    return semantic.load(pointer, mask, other, boundary_check, padding_option, cache_modifier, eviction_policy,
-                         volatile, _builder)
+    return semantic.load(pointer, mask, other, cache_modifier, eviction_policy, volatile, _builder)
 
 
 @builtin
@@ -2042,7 +2025,7 @@ def store_tensor_descriptor(desc: tensor_descriptor_base, offsets: Sequence[cons
 
 @_tensor_member_fn
 @builtin
-def store(pointer, value, mask=None, boundary_check=(), cache_modifier="", eviction_policy="", _builder=None):
+def store(pointer, value, mask=None, *, cache_modifier="", eviction_policy="", _builder=None):
     """
     Store a tensor of data into memory locations defined by `pointer`.
 
@@ -2050,19 +2033,11 @@ def store(pointer, value, mask=None, boundary_check=(), cache_modifier="", evict
             this case:
 
             - `mask` must also be scalar, and
-            - `boundary_check` and `padding_option` must be empty.
 
         (2) If `pointer` is an N-dimensional tensor of pointers, an
             N-dimensional block is stored.  In this case:
 
             - `mask` is implicitly broadcast to `pointer.shape`, and
-            - `boundary_check` must be empty.
-
-        (3) If `pointer` is a block pointer defined by `make_block_ptr`, a block
-            of data is stored.  In this case:
-
-            - `mask` must be None, and
-            - `boundary_check` can be specified to control the behavior of out-of-bound access.
 
     `value` is implicitly broadcast to `pointer.shape` and typecast to `pointer.dtype.element_ty`.
 
@@ -2072,8 +2047,6 @@ def store(pointer, value, mask=None, boundary_check=(), cache_modifier="", evict
     :type value: Block
     :param mask: If `mask[idx]` is false, do not store `value[idx]` at `pointer[idx]`
     :type mask: Block of triton.int1, optional
-    :param boundary_check: tuple of integers, indicating the dimensions which should do the boundary check
-    :type boundary_check: tuple of ints, optional
     :param cache_modifier: changes cache option in NVIDIA PTX
     :type cache_modifier: str, optional, should be one of {"", ".wb", ".cg", ".cs", ".wt"}, where ".wb" stands for
         cache write-back all coherent levels, ".cg" stands for cache global, ".cs" stands for cache streaming, ".wt"
@@ -2088,7 +2061,7 @@ def store(pointer, value, mask=None, boundary_check=(), cache_modifier="", evict
         mask = semantic.to_tensor(mask, _builder)
     cache_modifier = _constexpr_to_value(cache_modifier)
     eviction_policy = _constexpr_to_value(eviction_policy)
-    return semantic.store(pointer, value, mask, boundary_check, cache_modifier, eviction_policy, _builder)
+    return semantic.store(pointer, value, mask, cache_modifier, eviction_policy, _builder)
 
 
 @builtin
@@ -2103,7 +2076,7 @@ def make_block_ptr(base: tensor, shape, strides, offsets, block_shape, order, _b
     :param block_shape: The shape of the block
     :param order: The order of the original data format
     """
-    return semantic.make_block_ptr(base, shape, strides, offsets, block_shape, order, _builder)
+    raise NotImplementedError("Block pointer has now been removed in favor of the tensor descriptor API")
 
 
 @must_use_result(
@@ -2118,7 +2091,7 @@ def advance(base, offsets, _builder=None):
     :param base: the block pointer to advance
     :param offsets: the offsets to advance, a tuple by dimension
     """
-    return semantic.advance(base, offsets, _builder)
+    raise NotImplementedError("Block pointer has now been removed in favor of the tensor descriptor API")
 
 
 @builtin

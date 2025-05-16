@@ -609,8 +609,6 @@ void StreamPipeliner::assignMemoryLayouts() {
       continue;
 
     auto loadOp = cast<tt::LoadOp>(op);
-    assert(!isLoadFromTensorPtr(loadOp) &&
-           "Block ptr should have been lowered before this pass.");
     auto ptr = loadOp.getPtr();
     unsigned vec = axisInfoAnalysis.getContiguity(ptr);
     if (auto mask = loadOp.getMask())

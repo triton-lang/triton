@@ -32,9 +32,6 @@ SmallVector<unsigned, 3> mmaVersionToInstrShape(int version,
                                                 const ArrayRef<int64_t> &shape,
                                                 Type type, int numWarps);
 
-// Return true if the Load uses block pointer.
-bool isLoadFromTensorPtr(triton::LoadOp op);
-
 // Return an array of indices enumerating the elements of 'arr' in descending
 // order (so that result[i] is the index of the i-th largest element of 'arr')
 SmallVector<unsigned, 4> argSort(const SmallVector<int64_t> &arr);
