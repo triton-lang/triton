@@ -195,6 +195,9 @@ def ty_to_cpp(ty):
     }[ty]
 
 
+_BASE_ARGS_FORMAT = "piiiKKOOOO"
+
+
 def make_launcher(constants, signature, warp_size):
 
     def _expand_signature(signature):
@@ -263,7 +266,7 @@ def make_launcher(constants, signature, warp_size):
     signature = {idx: s for idx, s in enumerate(_expand_signature(signature.values()))}
 
     args_format = ''.join([format_of(ty) for ty in signature.values()])
-    format = "piiiKKOOOO" + args_format
+    format = _BASE_ARGS_FORMAT + args_format
     signature = ','.join(map(_serialize_signature, signature.values()))
     signature = list(filter(bool, signature.split(',')))
     signature = {i: s for i, s in enumerate(signature)}
@@ -530,8 +533,8 @@ def wrap_handle_tensor_descriptor(launcher):
     """
 
     def inner(*args):
-        meta_args = args[:11]
-        raw_kernel_args = args[11:]
+        meta_args = args[:len(_BASE_ARGS_FORMAT)]
+        raw_kernel_args = args[len(_BASE_ARGS_FORMAT):]
         final_args = []
         for arg in raw_kernel_args:
             if isinstance(arg, TensorDescriptor):
