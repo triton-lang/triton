@@ -1217,6 +1217,41 @@ tt.func @store_mma_load(
   tt.return
 }
 
+// CHECK-LABEL: @local_alloc_into_mma
+tt.func @local_alloc_into_mma(
+  %ub: i32,
+  %lhs_reg: tensor<128x64xf16, #oper_layout>,
+  %rhs_desc: !tt.tensordesc<tensor<64x128xf16, #shared>>
+) {
+  %c0 = arith.constant 0 : i32
+  %c1 = arith.constant 1 : i32
+  %acc, %acc_tok = ttng.tmem_alloc : () -> (!ttg.memdesc<128x128xf32, #acc_tmem, #ttng.tensor_memory, mutable>, !ttg.async.token)
+  %true = arith.constant true
+  // CHECK: [[LHS_SHARED:%.*]] = ttg.local_alloc %arg1 : (tensor<128x64xf16, {{.*}}>) -> !ttg.memdesc<128x64xf16,
+  // CHECK: scf.for
+  scf.for %i = %c0 to %ub step %c1 iter_args(%tok = %acc_tok) -> !ttg.async.token : i32 {
+    // CHECK: barrier_expect [[LOAD_READY_BAR:%.*]], 16384 {ttg.partition = 2 : i32}
+    %lhs_shared = ttg.local_alloc %lhs_reg : (tensor<128x64xf16, #oper_layout>) -> !ttg.memdesc<128x64xf16, #shared, #smem>
+    %rhs_reg = tt.descriptor_load %rhs_desc[%i, %i] : !tt.tensordesc<tensor<64x128xf16, #shared>> -> tensor<64x128xf16, #oper_layout>
+
+    // CHECK: wait_barrier [[LOAD_READY_BAR]], {{.*}}partition = 0
+    // CHECK-NEXT: [[RHS_REG:%.*]] = ttg.local_load {{.*}}partition = 0
+    // CHECK-NEXT: arrive_barrier
+    // CHECK-NEXT: [[RHS_REG_MOD:%.*]] = arith.addf [[RHS_REG]], [[RHS_REG]] {ttg.partition = 0 : i32}
+    // CHECK-NEXT: wait_barrier [[MMA_OPER_BAR:%.*]], %arg{{.*}}partition = 0
+    // CHECK-NEXT: local_store [[RHS_REG_MOD]], [[RHS_SHARED:%.*]] {ttg.partition = 0 : i32}
+    // CHECK-NEXT: fence_async_shared {bCluster = false, ttg.partition = 0 : i32}
+    // CHECK-NEXT: arrive_barrier [[MMA_READY_BAR:%.*]], 1 {{.*}}partition = 0
+    %rhs_reg_mod = arith.addf %rhs_reg, %rhs_reg : tensor<64x128xf16, #oper_layout>
+    %rhs_shared = ttg.local_alloc %rhs_reg_mod : (tensor<64x128xf16, #oper_layout>) -> !ttg.memdesc<64x128xf16, #shared, #smem>
+    // CHECK: wait_barrier [[MMA_READY_BAR]], {{.*}}partition = 1
+    // CHECK-NEXT: tc_gen5_mma [[LHS_SHARED]], [[RHS_SHARED]], {{.*}} [[MMA_OPER_BAR]][%true] {{.*}}partition = 1
+    %mma_tok = ttng.tc_gen5_mma %lhs_shared, %rhs_shared, %acc[%acc_tok], %true, %true : !ttg.memdesc<128x64xf16, #shared, #smem>, !ttg.memdesc<64x128xf16, #shared, #smem>, !ttg.memdesc<128x128xf32, #acc_tmem, #ttng.tensor_memory, mutable>
+    scf.yield %mma_tok : !ttg.async.token
+  } {tt.warp_specialize, tt.num_stages = 2 : i32}
+  tt.return
+}
+
 }
 
 // -----
