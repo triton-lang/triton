@@ -177,8 +177,6 @@ template <typename T> auto seq(T start, T end, T step) {
 Value getPredMask(RewriterBase &rewriter, Type typeLike, Value currentMask,
                   Value pred);
 
-MakeTensorPtrOp getMakeTensorPtrOp(Value v);
-
 } // namespace triton
 } // namespace mlir
 

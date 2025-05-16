@@ -86,11 +86,8 @@ def TT_PtrLike : AnyTypeOf<[TT_Ptr, TT_PtrTensor]>;
 def TT_FpIntTensor : RankedTensorOf<[TT_Float, TT_Int]>;
 def TT_Tensor : RankedTensorOf<[TT_Float, TT_Int, TT_Ptr]>;
 
-// Pointer Type to Tensor Type: `ptr<tensor<>>`
-def TT_TensorPtr : TT_PtrOf<[TT_Tensor]>;
-
 // Any Type in Triton IR
-def TT_Type : AnyTypeOf<[TT_FloatLike, TT_IntLike, TT_PtrLike, TT_TensorPtr]>;
+def TT_Type : AnyTypeOf<[TT_FloatLike, TT_IntLike, TT_PtrLike]>;
 
 // Result type of ExperimentalMakeTensorDescriptor
 def TT_TensorDescType : TritonTypeDef<"TensorDesc", "tensordesc", []> {

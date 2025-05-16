@@ -122,8 +122,6 @@ private:
   bool processConstant(arith::ConstantOp constant, Attribute layout);
   bool processSplat(triton::SplatOp splat, Attribute layout);
   bool processMakeRange(triton::MakeRangeOp makeRange, Attribute layout);
-  bool processMakeTensorPtr(triton::MakeTensorPtrOp makeTensorPtr,
-                            Attribute layout);
 
   bool processBroadcast(triton::BroadcastOp broadcast, Attribute layout);
   bool processExpandDimsBackward(triton::ExpandDimsOp expandDims,
@@ -463,13 +461,6 @@ bool CTAPlanner::propagateBackward(CastOp cast) {
       processSplat(splat, layout);
     } else if (auto makeRange = llvm::dyn_cast<triton::MakeRangeOp>(op)) {
       processMakeRange(makeRange, layout);
-    } else if (auto makeTensorPtr =
-                   llvm::dyn_cast<triton::MakeTensorPtrOp>(op)) {
-      processMakeTensorPtr(makeTensorPtr, layout);
-    } else if (llvm::isa<triton::AdvanceOp>(op)) {
-      // ptr operand and result have the same layout, while other operands are
-      // scalar values
-      processElementwise(op, layout);
     } else if (auto broadcast = llvm::dyn_cast<triton::BroadcastOp>(op)) {
       processBroadcast(broadcast, layout);
     } else if (auto expandDims = llvm::dyn_cast<triton::ExpandDimsOp>(op)) {
@@ -507,10 +498,6 @@ bool CTAPlanner::propagateForward(CastOp cast) {
     } else if (isLoadStoreOp(op)) {
       processLoadStore(op, layout);
     } else if (isElementwiseOp(op)) {
-      processElementwise(op, layout);
-    } else if (llvm::isa<triton::AdvanceOp>(op)) {
-      // ptr operand and result have the same layout, while other operands are
-      // scalar values
       processElementwise(op, layout);
     } else if (auto convertLayout = llvm::dyn_cast<ttg::ConvertLayoutOp>(op)) {
       return processConvertLayoutForward(convertLayout, cast);
@@ -743,14 +730,6 @@ bool CTAPlanner::processSplat(triton::SplatOp splat, Attribute layout) {
 bool CTAPlanner::processMakeRange(triton::MakeRangeOp makeRange,
                                   Attribute layout) {
   insertCasts(makeRange.getOperation(), {}, {layout});
-  return true;
-}
-
-bool CTAPlanner::processMakeTensorPtr(triton::MakeTensorPtrOp makeTensorPtr,
-                                      Attribute layout) {
-  // All inputs of `makeTensorPtr` are scalar types
-  llvm::SmallVector<Attribute> dummyInAttrs(makeTensorPtr.getNumOperands(), {});
-  insertCasts(makeTensorPtr.getOperation(), dummyInAttrs, {layout});
   return true;
 }
 
