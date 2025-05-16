@@ -6,7 +6,6 @@ import torch
 import triton_kernels.swiglu
 
 import triton_kernels.distributed as triton_dist
-import torch.distributed as dist
 
 from triton_kernels.numerics_details.mxfp import downcast_to_mxfp
 from triton_kernels.matmul_ogs import MicroscalingCtx, matmul_ogs, PrecisionConfig, FlexCtx
@@ -123,8 +122,7 @@ def bench_mlp(batch, dim1, dim2, n_expts_tot, n_expts_act, x_dtype, w_dtype, TP,
     b1 = torch.randn((n_expts_tot // EP, dim2 // TP), device=dev)
     b2 = torch.randn((n_expts_tot // EP, dim1), device=dev)
     ep_indx = rank // TP
-    group = dist.new_group(list(range(ep_indx * TP, (ep_indx + 1) * TP)))
-    b2 = triton_dist.broadcast(b2, src=ep_indx * TP, group=group)
+    b2 = triton_dist.broadcast(b2, src=ep_indx * TP, group=list(range(ep_indx * TP, (ep_indx + 1) * TP)))
 
     # -- numerics --
     optg = dict()
