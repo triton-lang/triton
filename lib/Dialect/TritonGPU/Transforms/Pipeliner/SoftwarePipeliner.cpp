@@ -2,9 +2,11 @@
 #include "mlir/Analysis/DataFlow/IntegerRangeAnalysis.h"
 #include "mlir/Dialect/Arith/Transforms/Passes.h"
 #include "mlir/Dialect/Tensor/IR/Tensor.h"
+#include "mlir/Dialect/UB/IR/UBOps.h"
 #include "mlir/IR/Dominance.h"
 #include "mlir/IR/IRMapping.h"
 #include "mlir/IR/TypeUtilities.h"
+#include "mlir/IR/Verifier.h"
 #include "mlir/Interfaces/SideEffectInterfaces.h"
 #include "mlir/Support/LLVM.h"
 #include "mlir/Transforms/CSE.h"
@@ -21,7 +23,6 @@
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "triton/Tools/Sys/GetEnv.hpp"
 #include "llvm/Support/Debug.h"
-
 //===----------------------------------------------------------------------===//
 // This file will create a schedule that will be handed over to the pipeline
 // expander.
@@ -50,6 +51,9 @@ static void pipelineWgmma(ModuleOp moduleOp) {
 
 static Operation *wrapInMaskOp(RewriterBase &rewriter, Operation *op,
                                Value pred) {
+  if (isa<arith::ConstantOp>(op)) {
+    return op;
+  }
   auto mask = rewriter.create<MaskOp>(op->getLoc(), op->getResultTypes(), pred);
   rewriter.createBlock(&mask->getRegion(0));
   rewriter.setInsertionPointToStart(&mask->getRegion(0).front());
@@ -215,7 +219,9 @@ static void expandLoops(ModuleOp moduleOp) {
         };
     // Testing feature: allow for unresolved predicate stage ops
     // in the loop body.
-    if (forOp->hasAttr("__test_keep_predicate_stage")) {
+    bool keepPredicateStage =
+        true || forOp->hasAttr("__test_keep_predicate_stage");
+    if (keepPredicateStage) {
       options.emitPredicateStageFn =
           [](RewriterBase &rewriter, Value inductionVar, Value upperBound,
              Value step, uint64_t maxStage, uint64_t stage) {
@@ -354,7 +360,8 @@ static void peelLastIterations(scf::ForOp forOp, unsigned numIterations,
   DominanceInfo domInfo(forOp->getParentOfType<ModuleOp>());
 
   forOp->replaceUsesWithIf(peeledResults, [&](OpOperand &operand) {
-    return domInfo.properlyDominates(lastOp, operand.getOwner());
+    return domInfo.properlyDominates(lastOp, operand.getOwner(),
+                                     /*enclosingOpOK=*/false);
   });
 }
 
@@ -367,6 +374,27 @@ static bool onlyWaitsAreUnmasked(scf::ForOp forOp) {
     }
   }
   return true;
+}
+
+void resolvePredicateStageOps(
+    RewriterBase &rewriter,
+    ArrayRef<Operation *> ops, // TODO: rewriter not really needed
+    std::function<Value(triton::gpu::PredicateStageOp)> fn) {
+  SmallVector<triton::gpu::PredicateStageOp> opsToErase;
+  for (auto op : ops) {
+    auto predicateStageOp = dyn_cast<triton::gpu::PredicateStageOp>(op);
+    if (!predicateStageOp) {
+      continue;
+    }
+    Value result = fn(predicateStageOp);
+    if (result) {
+      rewriter.replaceAllOpUsesWith(predicateStageOp, result);
+      opsToErase.push_back(predicateStageOp);
+    }
+  }
+  for (auto op : opsToErase) {
+    rewriter.eraseOp(op);
+  }
 }
 
 struct PipelinePass : public impl::TritonGPUPipelineBase<PipelinePass> {
@@ -402,46 +430,32 @@ struct PipelinePass : public impl::TritonGPUPipelineBase<PipelinePass> {
       }
     };
 
-    SmallVector<MaskOp> opsToErase;
-    moduleOp->walk([&](MaskOp maskOp) {
-      // maskOp->dump();
-      // dumpState(maskOp.getPred());
-      // if (auto andOp = maskOp.getPred().getDefiningOp<mlir::arith::AndIOp>())
-      // {
-      //   andOp->dump();
-      //   dumpState(andOp.getLhs());
-      //   dumpState(andOp.getRhs());
-      //   if (auto cmpiOp =
-      //   andOp.getRhs().getDefiningOp<mlir::arith::CmpIOp>()) {
-      //     cmpiOp->dump();
-      //     dumpState(cmpiOp.getLhs());
-      //     dumpState(cmpiOp.getRhs());
-      //     if (auto addiOp =
-      //     cmpiOp.getLhs().getDefiningOp<mlir::arith::AddIOp>()) {
-      //       addiOp->dump();
-      //       dumpState(addiOp.getLhs());
-      //       dumpState(addiOp.getRhs());
-      //       if (auto subiOp =
-      //       addiOp.getRhs().getDefiningOp<mlir::arith::SubIOp>()) {
-      //         subiOp->dump();
-      //         dumpState(subiOp.getLhs());
-      //         dumpState(subiOp.getRhs());
-      //       }
-      //     }
-      //   }
-      // }
+    SmallVector<MaskOp> maskOps;
+    moduleOp->walk([&](MaskOp maskOp) { maskOps.push_back(maskOp); });
+    for (auto maskOp : maskOps) {
       rewriter.setInsertionPoint(maskOp);
       while (&maskOp.getBody()->front() != maskOp.getBody()->getTerminator()) {
         Operation *op = &maskOp.getBody()->front();
-        rewriter.moveOpAfter(op, maskOp);
-        triton::predicateOp(rewriter, op, maskOp.getPred());
+        // Statically dead
+        if (isConstantIntValue(maskOp.getPred(), 0)) {
+          if (op->getNumResults() > 0) {
+            SmallVector<Value> results;
+            for (auto result : op->getResults()) {
+              auto poisonOp =
+                  rewriter.create<ub::PoisonOp>(op->getLoc(), result.getType());
+              results.push_back(poisonOp);
+            }
+            op->replaceAllUsesWith(results);
+          }
+          op->erase();
+        } else {
+          rewriter.moveOpBefore(op, maskOp);
+          op = triton::predicateOp(rewriter, op, maskOp.getPred());
+        }
       }
       maskOp->replaceAllUsesWith(
           maskOp.getBody()->getTerminator()->getOperands());
-      opsToErase.push_back(maskOp);
-    });
-    for (MaskOp op : opsToErase) {
-      rewriter.eraseOp(op);
+      maskOp->erase();
     }
   }
 
@@ -459,6 +473,10 @@ struct PipelinePass : public impl::TritonGPUPipelineBase<PipelinePass> {
 
     // Apply the pipeline expansion.
     expandLoops(moduleOp);
+    // Validate the IR
+    if (failed(mlir::verify(moduleOp))) {
+      return signalPassFailure();
+    }
     if (dumpIntermediateSteps) {
       llvm::dbgs() << "// -----// SoftwarePipeliner internal IR Dump After: "
                       "ExpandLoops\n"
@@ -484,21 +502,30 @@ struct PipelinePass : public impl::TritonGPUPipelineBase<PipelinePass> {
           llvm::map_to_vector(forOp.getBody()->without_terminator(),
                               [](Operation &op) -> Operation * { return &op; });
       // Resolve the maxStage-1 predicate in the loop body to true
-      mlir::triton::resolvePredicateStageOps(
-          forOpBody, [&](triton::gpu::PredicateStageOp op) -> Value {
-            if (op.getStage() == maxStage - 1) {
-              return vTrue;
-            }
-            return nullptr;
-          });
+      resolvePredicateStageOps(rewriter, forOpBody,
+                               [&](triton::gpu::PredicateStageOp op) -> Value {
+                                 if (op.getStage() == maxStage - 1) {
+                                   return vTrue;
+                                 }
+                                 return nullptr;
+                               });
       // Resolve all the peeled predicate stage ops to false
-      mlir::triton::resolvePredicateStageOps(
-          peeledOps,
+      resolvePredicateStageOps(
+          rewriter, peeledOps,
           [&](triton::gpu::PredicateStageOp op) -> Value { return vFalse; });
       // Resolve all the rest normally
-      mlir::triton::defaultResolvePredicateStageOps(rewriter, forOp, maxStage);
+      forOpBody =
+          llvm::map_to_vector(forOp.getBody()->without_terminator(),
+                              [](Operation &op) -> Operation * { return &op; });
+      resolvePredicateStageOps(
+          rewriter, forOpBody, [&](triton::gpu::PredicateStageOp op) -> Value {
+            OpBuilder::InsertionGuard guard(rewriter);
+            rewriter.setInsertionPoint(op);
+            return mlir::triton::emitPredicateForStage(rewriter, op.getIv(),
+                                                       op.getUb(), op.getStep(),
+                                                       maxStage, op.getStage());
+          });
     }
-
     resolveMaskOp(moduleOp);
 
     // Cleanup the IR from the pipeline attributes.

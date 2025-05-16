@@ -163,20 +163,6 @@ Operation *mlir::triton::predicateOp(RewriterBase &rewriter, Operation *op,
     return op;
   if (isConstantIntValue(pred, 1))
     return op;
-  if (isConstantIntValue(pred, 0)) {
-    if (op->getNumResults() == 0) {
-      return nullptr;
-    }
-    SmallVector<Value> poisonOps;
-    for (auto result : op->getResults()) {
-      auto poisonOp =
-          rewriter.create<ub::PoisonOp>(op->getLoc(), result.getType());
-      result.replaceAllUsesWith(poisonOp);
-      poisonOps.push_back(poisonOp);
-    }
-    op->erase();
-    return nullptr; // TODO: bad programmer
-  }
   if (isa<LLVM::AssumeOp, ttng::FenceAsyncSharedOp>(op))
     return op;
   if (isa<ttg::AsyncCommitGroupOp, ttg::AsyncWaitOp>(op))
