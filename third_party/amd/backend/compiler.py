@@ -303,16 +303,19 @@ class HIPBackend(BaseBackend):
         passes.common.add_canonicalizer(pm)
         passes.common.add_cse(pm)
 
-        if HIPBackend.instrumentation:
-            HIPBackend.instrumentation.patch("llvmir", pm, mod.context)
-
         passes.convert.add_cf_to_llvmir(pm)
         passes.convert.add_arith_to_llvmir(pm)
         passes.common.add_canonicalizer(pm)
         passes.common.add_cse(pm)
         passes.common.add_symbol_dce(pm)
+
         if options.schedule_hint.lower() != "none":
             amd.passes.ttgpuir.lower_instruction_sched_hints(pm, options.arch, options.num_stages)
+
+        # This can not be moved below the di_scope pass
+        if HIPBackend.instrumentation:
+            HIPBackend.instrumentation.patch("llvmir", pm, mod.context)
+
         if not knobs.compilation.disable_line_info:
             passes.llvmir.add_di_scope(pm)
 
