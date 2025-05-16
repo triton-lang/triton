@@ -59,27 +59,23 @@ bool isOneOperandElementwiseOp(Operation *op) {
   return false;
 }
 
-static triton::StoreOp convertMfmaLayoutForCDNA4(PatternRewriter &rewriter,
-                                                 Value ptr, Value val,
-                                                 Value mask,
-                                                 triton::StoreOp oldStOp) {
+// Tries to optimize oldStoreOp with v_permlane*_swap instruction when possible.
+// Returns null store op if not suitable.
+static triton::StoreOp
+usePermlaneSwapToOptimizeStore(PatternRewriter &rewriter, Value ptr, Value val,
+                               Value mask, triton::StoreOp oldStoreOp) {
   auto ptrType = cast<RankedTensorType>(ptr.getType());
   auto valType = cast<RankedTensorType>(val.getType());
 
-  auto mfmaLayout =
-      cast<triton::gpu::AMDMfmaEncodingAttr>(valType.getEncoding());
-
   // Create a new layout where each thread holds 8 consecutive elements, in
   // order to enable wide 128-bit global stores.
-  std::optional<triton::LinearLayout> mfma8Layout =
+  std::optional<triton::LinearLayout> storeLL =
       triton::gpu::chooseMfmaLikeStoreLayout(valType);
+  if (!storeLL)
+    return nullptr;
 
-  if (!mfma8Layout)
-    return rewriter.create<triton::StoreOp>(oldStOp.getLoc(), ptr, val, mask,
-                                            oldStOp.getCache(),
-                                            oldStOp.getEvict());
   Attribute newEncoding = triton::gpu::LinearEncodingAttr::get(
-      mfmaLayout.getContext(), mfma8Layout.value());
+      oldStoreOp.getContext(), storeLL.value());
   auto newPtrType = RankedTensorType::get(
       ptrType.getShape(), ptrType.getElementType(), newEncoding);
   Value newPtr = rewriter.create<triton::gpu::ConvertLayoutOp>(ptr.getLoc(),
@@ -99,9 +95,9 @@ static triton::StoreOp convertMfmaLayoutForCDNA4(PatternRewriter &rewriter,
                                                             newMaskType, mask);
   }
 
-  return rewriter.create<triton::StoreOp>(oldStOp.getLoc(), newPtr, newVal,
-                                          newMask, oldStOp.getCache(),
-                                          oldStOp.getEvict());
+  return rewriter.create<triton::StoreOp>(oldStoreOp.getLoc(), newPtr, newVal,
+                                          newMask, oldStoreOp.getCache(),
+                                          oldStoreOp.getEvict());
 }
 
 // convert(val) : xmma -> blocked
@@ -195,12 +191,9 @@ public:
       newMask = rewriter.create<triton::gpu::ConvertLayoutOp>(
           mask.getLoc(), newMaskType, mask);
     }
-    triton::StoreOp newStoreOp;
-    if (auto mfmaLayout =
-            dyn_cast<triton::gpu::AMDMfmaEncodingAttr>(newEncoding)) {
-      newStoreOp =
-          convertMfmaLayoutForCDNA4(rewriter, newPtr, newVal, newMask, stOp);
-    } else {
+    triton::StoreOp newStoreOp =
+        usePermlaneSwapToOptimizeStore(rewriter, newPtr, newVal, newMask, stOp);
+    if (!newStoreOp) {
       newStoreOp = rewriter.create<triton::StoreOp>(
           stOp.getLoc(), newPtr, newVal, newMask, stOp.getCache(),
           stOp.getEvict());

@@ -66,7 +66,7 @@ def _swiglu(Out, OutExpectedScale, OutActualScale, OutChecksumScale, A, AScale, 
             if pid_n * BLOCK_N + BLOCK_N <= N:
                 a_packed = tl.load(A + packed_offs, mask=mask_m[:, None], other=0.)
             else:
-                packed_mask = mask_m[:, None] and packed_mask_n[None, :]
+                packed_mask = mask_m[:, None] & packed_mask_n[None, :]
                 a_packed = tl.load(A + packed_offs, mask=packed_mask, other=0.)
         a_gelu, a_linear = tl.split(tl.reshape(a_packed, (BLOCK_M, BLOCK_N, 2)))
         # a gelu

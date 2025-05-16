@@ -1130,7 +1130,7 @@ size_t hash_value(const LinearLayout &layout) {
   return seed;
 }
 
-bool operator==(LinearLayout lhs, LinearLayout rhs) {
+bool operator==(const LinearLayout &lhs, const LinearLayout &rhs) {
   if (!lhs.equalIgnoringOutDimSizes(rhs))
     return false;
 
