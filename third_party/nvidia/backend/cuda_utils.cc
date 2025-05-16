@@ -431,15 +431,6 @@ void launch(int grid_dim_x, int grid_dim_y, int grid_dim_z, int64_t stream,
       .stream = reinterpret_cast<CUstream>(stream),
       .function = reinterpret_cast<CUfunction>(function),
   };
-  int num_ctas = std::get<1>(packed_metadata);
-
-  auto &cluster = config.cluster;
-  if (num_ctas != cluster.size()) {
-    throw py::value_error(
-        py::str("Expected cluster dimensions ({0}, {1}, {2}) to have a total "
-                "size of {3}")
-            .format(cluster.x, cluster.y, cluster.z, num_ctas));
-  }
 
   if (signature_metadata.size() != kernel_args.size()) {
     throw py::type_error(
