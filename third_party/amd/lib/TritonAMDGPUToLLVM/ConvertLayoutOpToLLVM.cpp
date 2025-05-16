@@ -189,21 +189,10 @@ static bool matchMFMAAndLinearLayoutCase(RankedTensorType srcTy,
   if (!mfmaLayout || !linearLayout)
     return false;
 
-  std::optional<LinearLayout> srcLL =
+  std::optional<LinearLayout> storeLL =
       mlir::triton::gpu::chooseMfmaLikeStoreLayout(srcTy);
-  if (!srcLL)
-    return false;
-
-  MLIRContext *ctx = linearLayout.getContext();
-  StringAttr kLane = StringAttr::get(ctx, "lane");
-  StringAttr kRegister = StringAttr::get(ctx, "register");
-  auto srcBase = srcLL.value().getBases();
-  auto srcReg = srcBase.lookup(kRegister);
-  auto srcLane = srcBase.lookup(kLane);
-  auto dstBases = linearLayout.getLinearLayout().getBases();
-  auto dstReg = dstBases.lookup(kRegister);
-  auto dstLane = dstBases.lookup(kLane);
-  return dstReg == srcReg && dstLane == srcLane;
+  return linearLayout.getLinearLayout() ==
+         storeLL.value_or(LinearLayout::empty());
 };
 
 struct ConvertLayoutOpMFMAToLinearConversion
