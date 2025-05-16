@@ -24,8 +24,20 @@ struct AllocateProtonGlobalScratchBuffer
     MLIRContext *ctx = &getContext();
     OpBuilder builder(ctx);
 
-    assert(llvm::range_size(mod.getOps<FunctionOpInterface>()) == 1);
-    auto func = *mod.getOps<FunctionOpInterface>().begin();
+    int numFuncOps = 0;
+    FunctionOpInterface func;
+    mod.walk([&](FunctionOpInterface op) {
+      // Ignore any intrinsic functions. On AMD the predicate load/store ops
+      // are currently pseduo instrunctions at this point and will get picked up
+      // here and trigger the FunctionOpInterface range based assert below
+      StringRef funcName(op.getNameAttr());
+      if (!funcName.contains("__")) {
+        numFuncOps += 1;
+        func = op;
+      }
+    });
+
+    assert(numFuncOps == 1);
 
     int32_t cumulativeMemorySize = 0; // bytes
     std::vector<uint32_t> alignments;
