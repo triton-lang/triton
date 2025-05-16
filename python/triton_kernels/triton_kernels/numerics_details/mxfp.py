@@ -155,13 +155,13 @@ def _downcast_to_mxfp(mx_tensor_ptr, stride_mxt_outer, stride_mxt_quant: tl.cons
 
     mask_src_quant = start_src_quant + offs_src_quant < quant_dim
     mask_n = start_out + offs_outer < outer_dim
-    full_mask_src = mask_src_quant and mask_n
+    full_mask_src = mask_src_quant & mask_n
 
     mask_mxt_quant = start_mx_quant + offs_mxt_quant < tl.cdiv(quant_dim, K_DIVISOR)
-    full_mask_mxt = mask_mxt_quant and mask_n
+    full_mask_mxt = mask_mxt_quant & mask_n
 
     scale_mask_k = start_mx_scale_quant + offs_scale_quant < tl.cdiv(quant_dim, 32)
-    full_scale_mask = scale_mask_k and mask_n
+    full_scale_mask = scale_mask_k & mask_n
 
     src_tensor_offsets = offs_src_quant * stride_src_quant + offs_outer * stride_src_outer
     mx_scale_offsets = offs_scale_quant * stride_mx_scale_quant + offs_outer * stride_mx_scale_outer
@@ -219,13 +219,13 @@ def _upcast_from_mxfp(out_ptr, stride_o_outer, stride_o_quant: tl.constexpr,
 
     mask_outer = start_out + offs_outer < outer_dim
     mask_out_quant = start_out_quant + offs_out_quant < quant_dim
-    full_mask_out = mask_out_quant and mask_outer
+    full_mask_out = mask_out_quant & mask_outer
 
     mask_src_quant = start_mxt_quant + offs_src_quant < tl.cdiv(quant_dim, K_DIVISOR)
-    full_mask_src = mask_src_quant and mask_outer
+    full_mask_src = mask_src_quant & mask_outer
 
     mask_scale = start_mx_scale_quant + offs_scale < tl.cdiv(quant_dim, 32)
-    full_scale_mask = mask_scale and mask_outer
+    full_scale_mask = mask_scale & mask_outer
 
     tensor_offsets = offs_src_quant * stride_tensor_quant + offs_outer * stride_tensor_outer
     scale_offsets = offs_scale * stride_scale_quant + offs_outer * stride_scale_outer
