@@ -71,15 +71,16 @@ static triton::StoreOp convertMfmaLayoutForCDNA4(PatternRewriter &rewriter,
 
   // Create a new layout where each thread holds 8 consecutive elements, in
   // order to enable wide 128-bit global stores.
-  std::optional<triton::LinearLayout> mfma8Layout =
+  std::optional<triton::LinearLayout> storeLayout =
       triton::gpu::chooseMfmaLikeStoreLayout(valType);
-
-  if (!mfma8Layout)
+  if (!storeLayout) {
     return rewriter.create<triton::StoreOp>(oldStOp.getLoc(), ptr, val, mask,
                                             oldStOp.getCache(),
                                             oldStOp.getEvict());
+  }
+
   Attribute newEncoding = triton::gpu::LinearEncodingAttr::get(
-      mfmaLayout.getContext(), mfma8Layout.value());
+      mfmaLayout.getContext(), storeLayout.value());
   auto newPtrType = RankedTensorType::get(
       ptrType.getShape(), ptrType.getElementType(), newEncoding);
   Value newPtr = rewriter.create<triton::gpu::ConvertLayoutOp>(ptr.getLoc(),
