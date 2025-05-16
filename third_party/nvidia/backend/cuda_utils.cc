@@ -16,10 +16,7 @@
 #include <type_traits>
 
 #include "cuda.h"
-#include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/STLExtras.h"
-#include "llvm/ADT/SmallVector.h"
-#include "llvm/ADT/StringRef.h"
 
 namespace py = pybind11;
 
@@ -331,7 +328,7 @@ template <typename T> bool extractValue(py::object obj, void *ptr) {
 // py::object.
 struct ExtractionInfo {
   // Prefixes of types reprs supported by the extractor.
-  llvm::SmallVector<llvm::StringRef> supported_type_repr_prefixes;
+  std::vector<std::string_view> supported_type_repr_prefixes;
   std::size_t size;        // Size required by the extracted value.
   ExtractorType extractor; // Function to call to extract the value.
 
@@ -339,16 +336,19 @@ struct ExtractionInfo {
   // are backed by that type.
   template <typename T>
   static ExtractionInfo
-  build(std::initializer_list<llvm::StringRef> supported_type_reprs,
+  build(std::initializer_list<std::string_view> supported_type_reprs,
         ExtractorType extractor = extractValue<T>) {
     return {supported_type_reprs, sizeof(T), extractor};
   }
 
   // Checks if the extractor supports extracting a given type repr.
-  bool supports(llvm::StringRef type_repr) const {
-    return llvm::any_of(
-        supported_type_repr_prefixes,
-        [&](llvm::StringRef prefix) { return type_repr.starts_with(prefix); });
+  bool supports(std::string_view type_repr) const {
+    return std::any_of(supported_type_repr_prefixes.begin(),
+                       supported_type_repr_prefixes.end(),
+                       [&](std::string_view prefix) {
+                         return type_repr.length() >= prefix.length() &&
+                                type_repr.substr(0, prefix.length()) == prefix;
+                       });
   }
 };
 
@@ -373,13 +373,13 @@ const ExtractionInfo kExtractionInfos[]{
 
 // Finds an extractor that supports a given type_repr in the extractor list.
 // Returns nullopt if no such extractor is found.
-std::optional<char> findExtractor(llvm::StringRef type_repr) {
+std::optional<char> findExtractor(std::string_view type_repr) {
   constexpr std::size_t kNumExtractors = std::size(kExtractionInfos);
   static_assert(kNumExtractors < std::numeric_limits<char>::max(),
                 "Not enough bits in a byte to store the extractor index");
-  for (const auto &[idx, info] : llvm::enumerate(kExtractionInfos)) {
-    if (info.supports(type_repr))
-      return idx;
+  for (int i = 0; i < kNumExtractors; ++i) {
+    if (kExtractionInfos[i].supports(type_repr))
+      return i;
   }
   return std::nullopt;
 }
@@ -513,8 +513,8 @@ void launch(int grid_dim_x, int grid_dim_y, int grid_dim_z, int stream,
   // This loop has to stay in the same function that owns params, since we are
   // using alloca to allocate pointers to it on the stack of the function.
   std::size_t params_idx = 0;
-  for (const auto &[converter_idx, arg] :
-       llvm::zip(signature_metadata, kernel_args)) {
+  for (int i = 0; i < kernel_args.size(); ++i) {
+    int converter_idx = signature_metadata[i];
     if (converter_idx >= std::size(kExtractionInfos)) {
       throw py::value_error("corrupted signature metadata");
     }
@@ -523,7 +523,7 @@ void launch(int grid_dim_x, int grid_dim_y, int grid_dim_z, int stream,
       continue; // skip adding constexpr parameters
     }
     config.params[params_idx] = alloca(extraction_info.size);
-    if (!extraction_info.extractor(arg, config.params[params_idx])) {
+    if (!extraction_info.extractor(kernel_args[i], config.params[params_idx])) {
       return;
     }
     ++params_idx;
