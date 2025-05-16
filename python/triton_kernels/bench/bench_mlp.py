@@ -148,6 +148,7 @@ def bench_mlp(batch, dim1, dim2, n_expts_tot, n_expts_act, x_dtype, w_dtype, TP,
     # run layer
     proton.start(str(fpath.with_suffix('')), hook="triton")
     xg = input_x.to(wg.dtype if n_expts_tot > 1 else input_x.dtype)
+    input_x = input_x.to(x_dtype)
     for i in range(100):
         x = triton_dist.all_gather(input_x, dim=0)
         if n_expts_tot > 1:
