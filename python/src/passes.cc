@@ -25,6 +25,7 @@ void init_triton_analysis(py::module &&m) {
 
 void init_triton_passes_common(py::module &&m) {
   using namespace mlir;
+  ADD_PASS_WRAPPER_0("add_strip_debug_info", createStripDebugInfoPass);
   ADD_PASS_WRAPPER_0("add_sccp", createSCCPPass);
   ADD_PASS_WRAPPER_0("add_symbol_dce", createSymbolDCEPass);
   ADD_PASS_WRAPPER_0("add_inliner", createInlinerPass);
@@ -44,6 +45,7 @@ void init_triton_passes_ttir(py::module &&m) {
                      createTritonRewriteTensorDescriptorToPointer);
   ADD_PASS_WRAPPER_0("add_loop_unroll", createTritonLoopUnroll);
   ADD_PASS_WRAPPER_0("add_triton_licm", createTritonLoopInvariantCodeMotion);
+  ADD_PASS_WRAPPER_0("add_loop_aware_cse", createTritonLoopAwareCSE);
   ADD_PASS_OPTION_WRAPPER_4("add_convert_to_ttgpuir",
                             createConvertTritonToTritonGPU, const std::string &,
                             int, int, int);

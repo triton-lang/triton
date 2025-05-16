@@ -747,8 +747,8 @@ public:
 
   std::string toString() const;
 
-  friend bool operator==(LinearLayout lhs, LinearLayout rhs);
-  friend bool operator!=(LinearLayout lhs, LinearLayout rhs) {
+  friend bool operator==(const LinearLayout &lhs, const LinearLayout &rhs);
+  friend bool operator!=(const LinearLayout &lhs, const LinearLayout &rhs) {
     return !(lhs == rhs);
   }
   bool equalIgnoringOutDimSizes(const LinearLayout &other) const;
