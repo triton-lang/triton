@@ -155,7 +155,7 @@ def _attn_fwd(sm_scale, M,  #
     desc_o = _maybe_make_tensor_desc(desc_o, shape=[y_dim, HEAD_DIM], strides=[HEAD_DIM, 1],
                                      block_shape=[BLOCK_M, HEAD_DIM])
 
-    offset_y = off_z + off_h * N_CTX
+    offset_y = off_z * (N_CTX * H) + off_h * N_CTX
     qo_offset_y = offset_y + start_m * BLOCK_M
     # initialize offsets
     offs_m = start_m * BLOCK_M + tl.arange(0, BLOCK_M)
@@ -551,9 +551,18 @@ class _attention(torch.autograd.Function):
 attention = _attention.apply
 
 
-@pytest.mark.parametrize("Z, H, N_CTX, HEAD_DIM", [(1, 2, 1024, 64)])
+@pytest.mark.parametrize('Z, H, N_CTX, HEAD_DIM', [
+    (1, 2, 1024, 64),
+    (4, 48, 128, 64),
+    (4, 48, 256, 64),
+    (4, 48, 512, 64),
+    (4, 48, 1024, 64),
+    (4, 48, 2048, 64),
+    (4, 48, 4096, 64),
+])
 @pytest.mark.parametrize("causal", [True])
-def test_op(Z, H, N_CTX, HEAD_DIM, causal, dtype=torch.float16):
+@pytest.mark.parametrize("warp_specialize", [False])
+def test_op(Z, H, N_CTX, HEAD_DIM, causal, warp_specialize, dtype=torch.float16):
     torch.manual_seed(20)
     q = (torch.empty((Z, H, N_CTX, HEAD_DIM), dtype=dtype, device=DEVICE).normal_(mean=0.0, std=0.5).requires_grad_())
     k = (torch.empty((Z, H, N_CTX, HEAD_DIM), dtype=dtype, device=DEVICE).normal_(mean=0.0, std=0.5).requires_grad_())
@@ -573,7 +582,7 @@ def test_op(Z, H, N_CTX, HEAD_DIM, causal, dtype=torch.float16):
     ref_dk, k.grad = k.grad.clone(), None
     ref_dq, q.grad = q.grad.clone(), None
     # triton implementation
-    tri_out = attention(q, k, v, causal, sm_scale).half()
+    tri_out = attention(q, k, v, causal, sm_scale, warp_specialize).half()
     tri_out.backward(dout)
     tri_dv, v.grad = v.grad.clone(), None
     tri_dk, k.grad = k.grad.clone(), None
