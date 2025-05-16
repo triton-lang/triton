@@ -1,3 +1,9 @@
+#include <algorithm>
+#include <map>
+#include <string>
+#include <string_view>
+#include <tuple>
+#include <vector>
 #define PY_SSIZE_T_CLEAN
 #include <Python.h>
 #include <alloca.h>
@@ -11,27 +17,15 @@
 #include <initializer_list>
 #include <iterator>
 #include <limits>
-#include <memory>
 #include <optional>
-#include <type_traits>
 
 #include "cuda.h"
-#include "llvm/ADT/STLExtras.h"
 
 namespace py = pybind11;
 
 namespace {
 
-struct UniquePyObjectDeleter {
-  void operator()(PyObject *obj) { Py_DECREF(obj); }
-};
-// A unique_ptr for PyObjects that automatically calls Py_DECREF once it goes
-// out of scope.
-using UniquePyObjectPtr = std::unique_ptr<PyObject, UniquePyObjectDeleter>;
-
 // Raise a python exception if the CUDA result code is not CUDA_SUCCESS.
-// Can be called even on threads that do not hold Python's Global Interpreter
-// Lock (GIL), as the function will acquire one if needed.
 inline bool gpuAssert(CUresult code, const char *file, int line) {
   if (code == CUDA_SUCCESS)
     return true;
@@ -41,34 +35,10 @@ inline bool gpuAssert(CUresult code, const char *file, int line) {
   throw pybind11::cast_error(error_str);
 }
 
-// To be used only *outside* a Py_{BEGIN,END}_ALLOW_THREADS block.
 #define CUDA_CHECK(ans)                                                        \
   {{gpuAssert((ans), __FILE__, __LINE__);                                      \
   }                                                                            \
   }
-
-#define CUDA_CHECK_AND_RETURN_NULL(ans)                                        \
-  do {                                                                         \
-    if (!gpuAssert((ans), __FILE__, __LINE__))                                 \
-      return NULL;                                                             \
-  } while (0)
-
-// To be used inside a Py_{BEGIN,END}_ALLOW_THREADS block.
-#define CUDA_CHECK_AND_RETURN_NULL_ALLOW_THREADS(ans)                          \
-  do {                                                                         \
-    if (!gpuAssert((ans), __FILE__, __LINE__)) {                               \
-      PyEval_RestoreThread(_save);                                             \
-      return NULL;                                                             \
-    }                                                                          \
-  } while (0)
-
-#define CUDA_CHECK_ALLOW_THREADS(ans)                                          \
-  do {                                                                         \
-    if (ans != CUDA_SUCCESS) {                                                 \
-      PyEval_RestoreThread(_save);                                             \
-    }                                                                          \
-    gpuAssert((ans), __FILE__, __LINE__);                                      \
-  } while (0)
 
 // Used to check if functions exist in old CUDA driver versions.
 #define INITIALIZE_FUNCTION_POINTER_IF_NULL(funcPointer, initializerFunction)  \
@@ -76,18 +46,7 @@ inline bool gpuAssert(CUresult code, const char *file, int line) {
     if ((funcPointer) == NULL) {                                               \
       (funcPointer) = (initializerFunction)();                                 \
       if ((funcPointer) == NULL) {                                             \
-        return NULL;                                                           \
-      }                                                                        \
-    }                                                                          \
-  } while (0)
-
-#define INITIALIZE_FUNCTION_POINTER_OR_RETURN(funcPointer,                     \
-                                              initializerFunction)             \
-  do {                                                                         \
-    if ((funcPointer) == NULL) {                                               \
-      (funcPointer) = (initializerFunction)();                                 \
-      if ((funcPointer) == NULL) {                                             \
-        return;                                                                \
+        throw py::value_error("Failed to initialize function pointer");        \
       }                                                                        \
     }                                                                          \
   } while (0)
@@ -128,95 +87,101 @@ struct TritonLaunchConfig {
     int z;
     constexpr int size() const { return x * y * z; }
   };
-  Dim grid;            // Number of clusters per grid
-  Dim cluster;         // Number of blocks per cluster
-  int num_warps;       // number of warps per block
-  int shared_memory;   // Size of shared memory in bytes to allocate
-  CUstream stream;     // CUDA Stream on which to launch the kernel
-  CUfunction function; // Pointer to the kernel to launch
-  void **params;       // Parameters to pass to the kernel
+  Dim grid;                    // Number of clusters per grid
+  Dim cluster;                 // Number of blocks per cluster
+  int num_warps;               // number of warps per block
+  int shared_memory;           // Size of shared memory in bytes to allocate
+  int launch_cooperative_grid; // Non-zero to launch coop grid
+  int launch_pdl;              // Non-zero to use programmatic-dependent launch
+  CUstream stream;             // CUDA Stream on which to launch the kernel
+  CUfunction function;         // Pointer to the kernel to launch
+  void **params;               // Parameters to pass to the kernel
 };
 
 // Launch a CUDA kernel with the given parameters. Raises a Python exception
 // if the kernel launch fails.
-PyObject *launchKernel(const TritonLaunchConfig &config) {
+void launchKernel(const TritonLaunchConfig &config) {
   // Launching the kernel might take a while and does not use Python APIs, so
   // we can release the Global Interpreter Lock so other threads can use Python
   // APIs if needed.
-  Py_BEGIN_ALLOW_THREADS;
+  py::gil_scoped_release release;
   const auto &grid = config.grid;
   const auto &cluster = config.cluster;
   if (grid.size() == 0) {
-    PyEval_RestoreThread(_save);
-    Py_RETURN_NONE;
+    return;
   }
-  if (cluster.size() == 1) {
-    CUDA_CHECK_AND_RETURN_NULL_ALLOW_THREADS(cuLaunchKernel(
-        config.function, grid.x, grid.y, grid.z, 32 * config.num_warps, 1, 1,
-        config.shared_memory, config.stream, config.params, 0));
-  } else {
-    CUlaunchAttribute launchAttr[2];
-    launchAttr[0].id = CU_LAUNCH_ATTRIBUTE_CLUSTER_DIMENSION;
-    launchAttr[0].value.clusterDim.x = cluster.x;
-    launchAttr[0].value.clusterDim.y = cluster.y;
-    launchAttr[0].value.clusterDim.z = cluster.z;
-    launchAttr[1].id = CU_LAUNCH_ATTRIBUTE_CLUSTER_SCHEDULING_POLICY_PREFERENCE;
-    launchAttr[1].value.clusterSchedulingPolicyPreference =
+  CUlaunchConfig cu_config;
+  cu_config.gridDimX = grid.x * cluster.x;
+  cu_config.gridDimY = grid.y * cluster.y;
+  cu_config.gridDimZ = grid.z * cluster.z;
+  cu_config.blockDimX = 32 * config.num_warps;
+  cu_config.blockDimY = 1;
+  cu_config.blockDimZ = 1;
+  cu_config.sharedMemBytes = config.shared_memory;
+  cu_config.hStream = config.stream;
+
+  // We support passing up to 4 attributes.
+  CUlaunchAttribute launchAttr[4];
+  cu_config.attrs = launchAttr;
+  cu_config.numAttrs = 0;
+  if (config.launch_pdl != 0) {
+    launchAttr[cu_config.numAttrs++] = CUlaunchAttribute{
+        .id = CU_LAUNCH_ATTRIBUTE_PROGRAMMATIC_STREAM_SERIALIZATION,
+        .value = {.programmaticStreamSerializationAllowed = 1}};
+  }
+  if (config.launch_cooperative_grid != 0) {
+    launchAttr[cu_config.numAttrs++] = CUlaunchAttribute{
+        .id = CU_LAUNCH_ATTRIBUTE_COOPERATIVE, .value = {.cooperative = 1}};
+  }
+  if (config.cluster.size() > 1) {
+    auto &clusterDimAttr = launchAttr[cu_config.numAttrs++];
+    clusterDimAttr.id = CU_LAUNCH_ATTRIBUTE_CLUSTER_DIMENSION;
+    clusterDimAttr.value.clusterDim.x = cluster.x;
+    clusterDimAttr.value.clusterDim.y = cluster.y;
+    clusterDimAttr.value.clusterDim.z = cluster.z;
+    auto &clusterDimSchedulingAttr = launchAttr[cu_config.numAttrs++];
+    clusterDimSchedulingAttr.id =
+        CU_LAUNCH_ATTRIBUTE_CLUSTER_SCHEDULING_POLICY_PREFERENCE;
+    clusterDimSchedulingAttr.value.clusterSchedulingPolicyPreference =
         CU_CLUSTER_SCHEDULING_POLICY_SPREAD;
-    CUlaunchConfig cu_config;
-    cu_config.gridDimX = grid.x * cluster.x;
-    cu_config.gridDimY = grid.y * cluster.y;
-    cu_config.gridDimZ = grid.z * cluster.z;
-    cu_config.blockDimX = 32 * config.num_warps;
-    cu_config.blockDimY = 1;
-    cu_config.blockDimZ = 1;
-    cu_config.sharedMemBytes = config.shared_memory;
-    cu_config.hStream = config.stream;
-    cu_config.attrs = launchAttr;
-    cu_config.numAttrs = 2;
-    // cuLaunchKernelEx was added in CUDA 12, so load it dynamically to be
-    // able to link on CUDA 11 and earlier.
-    static cuLaunchKernelEx_t cuLaunchKernelExHandle =
-        getLaunchKernelExHandle();
-    CUDA_CHECK_AND_RETURN_NULL_ALLOW_THREADS(
-        cuLaunchKernelExHandle(&cu_config, config.function, config.params, 0));
   }
-  Py_END_ALLOW_THREADS;
-  Py_RETURN_NONE;
+  // cuLaunchKernelEx was added in CUDA 12, so load it dynamically to be
+  // able to link on CUDA 11 and earlier.
+  static cuLaunchKernelEx_t cuLaunchKernelExHandle = getLaunchKernelExHandle();
+  CUDA_CHECK(
+      cuLaunchKernelExHandle(&cu_config, config.function, config.params, 0));
 }
 
-// Interface used by various PyObject extractors to extract obj into a memory
+// Interface used by various py::object extractors to extract obj into a memory
 // location pointed by ptr. Returns true if extraction succeeded, and false
 // otherwise.
 using ExtractorType = bool (*)(py::object obj, void *ptr);
 
 // Enable peer access if dev_ptr is allocated on a different device than the
 // device on which we will execute the kernel.
-PyObject *enablePeerAccessIfNecessary(CUdeviceptr dev_ptr) {
+void enablePeerAccessIfNecessary(CUdeviceptr dev_ptr) {
   CUmemorytype mem_type = CU_MEMORYTYPE_HOST;
   CUresult status = cuPointerGetAttribute(
       &mem_type, CU_POINTER_ATTRIBUTE_MEMORY_TYPE, dev_ptr);
   if (status != CUDA_SUCCESS || mem_type != CU_MEMORYTYPE_DEVICE) {
-    // Not peer memory
-    Py_RETURN_NONE;
+    return;
   }
   int mem_device_ordinal = 0;
-  CUDA_CHECK_AND_RETURN_NULL(cuPointerGetAttribute(
+  CUDA_CHECK(cuPointerGetAttribute(
       &mem_device_ordinal, CU_POINTER_ATTRIBUTE_DEVICE_ORDINAL, dev_ptr));
   CUdevice mem_device = 0;
-  CUDA_CHECK_AND_RETURN_NULL(cuDeviceGet(&mem_device, mem_device_ordinal));
+  CUDA_CHECK(cuDeviceGet(&mem_device, mem_device_ordinal));
   CUdevice compute_device = 0;
-  CUDA_CHECK_AND_RETURN_NULL(cuCtxGetDevice(&compute_device));
+  CUDA_CHECK(cuCtxGetDevice(&compute_device));
   if (mem_device != compute_device) {
     CUcontext mem_ctx = nullptr;
-    CUDA_CHECK_AND_RETURN_NULL(cuDevicePrimaryCtxRetain(&mem_ctx, mem_device));
+    CUDA_CHECK(cuDevicePrimaryCtxRetain(&mem_ctx, mem_device));
     CUresult status = cuCtxEnablePeerAccess(mem_ctx, /*flags=*/0);
     if (status == CUDA_ERROR_PEER_ACCESS_ALREADY_ENABLED) {
       status = CUDA_SUCCESS;
     }
-    CUDA_CHECK_AND_RETURN_NULL(status);
+    CUDA_CHECK(status);
   }
-  Py_RETURN_NONE;
 }
 
 // Extract a CUDA device pointer from a pointer-like py::object obj, and store
@@ -248,9 +213,8 @@ bool extractPointer(py::object obj, void *ptr) {
   if (*dev_ptr == 0) {
     return true; // valid nullptr
   }
-  if (enablePeerAccessIfNecessary(*dev_ptr) == nullptr) {
-    return false;
-  }
+  enablePeerAccessIfNecessary(*dev_ptr);
+
   CUresult status = cuPointerGetAttribute(
       dev_ptr, CU_POINTER_ATTRIBUTE_DEVICE_POINTER, *dev_ptr);
   if (status == CUDA_ERROR_INVALID_VALUE) {
@@ -294,28 +258,6 @@ bool extractTmaDesc(py::object obj, void *ptr) {
       *reinterpret_cast<CUtensorMap *>(ptr_as_uint);
   return true;
 }
-
-// For a given type T, maps to the Python API with signature `U (*)(py::object)`
-// that can extract values of that type from a py::object. Note that the return
-// type U is not guaranteed to be the same as T, but it can be explicitly casted
-// to T.
-template <typename T, typename = void> constexpr auto kValueFunction = nullptr;
-template <typename T>
-constexpr auto
-    kValueFunction<T, std::enable_if_t<std::is_integral_v<T> &&
-                                       std::is_signed_v<T> && sizeof(T) <= 4>> =
-        PyLong_AsLong;
-template <> constexpr auto kValueFunction<std::int64_t> = PyLong_AsLongLong;
-template <typename T>
-constexpr auto kValueFunction<
-    T, std::enable_if_t<std::is_integral_v<T> && std::is_unsigned_v<T> &&
-                        sizeof(T) <= 4>> = PyLong_AsUnsignedLong;
-template <>
-constexpr auto kValueFunction<std::uint64_t> = PyLong_AsUnsignedLongLong;
-template <typename T>
-constexpr auto
-    kValueFunction<T, std::enable_if_t<std::is_floating_point_v<T>>> =
-        PyFloat_AsDouble;
 
 // Extract a value of type T from obj and store it into memory pointed by ptr.
 // Returns true if extraction succeeded, and false otherwise.
@@ -364,7 +306,6 @@ const ExtractionInfo kExtractionInfos[]{
     ExtractionInfo::build<std::uint64_t>({"u64"}),
     ExtractionInfo::build<float>({"fp16", "bf16", "fp32", "f32"}),
     ExtractionInfo::build<double>({"fp64"}),
-    // Note: types are e.g. '*fp32', so no closing quote is intentional.
     ExtractionInfo::build<void *>({"*"}, extractPointer),
     ExtractionInfo{
         {"None", "none"}, 0, nullptr}, // Represent constexprs as None
@@ -403,15 +344,12 @@ std::vector<char> buildSignatureMetadata(std::vector<std::string> signature) {
   for (std::string type : signature) {
     std::optional<std::uint8_t> extractor_idx = findExtractor(type);
     if (!extractor_idx.has_value()) {
-      std::string error = "unexpected type " + type + " in kernel signature";
-      throw pybind11::type_error(error);
+      throw pybind11::type_error(
+          py::str("unexpected type {0} in kernel signature").format(type));
     }
     signature_metadata.push_back(extractor_idx.value());
   }
-
   return signature_metadata;
-  // return PyBytes_FromStringAndSize(signature_metadata.data(),
-  //                                  signature_metadata.size());
 }
 
 // Launch a Python callable hook with metadata passed as parameters.
@@ -452,6 +390,10 @@ Launch a kernel on an Nvidia GPU.
 :type stream: unsigned long integer (pointer)
 :param kernel: CUDA kernel to launch
 :type kernel: unsigned long integer (pointer)
+:param launch_cooperative_grid: launch a cooperative grid
+:type launch_cooperative_grid bool
+:param launch_pdl: enable programmatic dependent launch
+:type launch_pdl: bool
 :param packed_metadata: Kernel metadata, including in sequence:
     number of warps, number of CTAs, required bytes of shared memory,
     cluster dimensions x, y, and z
@@ -471,8 +413,8 @@ Launch a kernel on an Nvidia GPU.
 
 :raises RuntimeError: on kernel launch failure
 )");
-void launch(int grid_dim_x, int grid_dim_y, int grid_dim_z, int stream,
-            std::int64_t function,
+void launch(int grid_dim_x, int grid_dim_y, int grid_dim_z, int64_t stream,
+            int64_t function, bool launch_cooperative_grid, bool launch_pdl,
             std::tuple<int, int, int, int, int, int> packed_metadata,
             py::object hook_args, py::object launch_enter_hook,
             py::object launch_exit_hook, std::vector<char> signature_metadata,
@@ -484,6 +426,8 @@ void launch(int grid_dim_x, int grid_dim_y, int grid_dim_z, int stream,
                   std::get<5>(packed_metadata)},
       .num_warps = std::get<0>(packed_metadata),
       .shared_memory = std::get<2>(packed_metadata),
+      .launch_cooperative_grid = launch_cooperative_grid,
+      .launch_pdl = launch_pdl,
       .stream = reinterpret_cast<CUstream>(stream),
       .function = reinterpret_cast<CUfunction>(function),
   };
@@ -491,18 +435,16 @@ void launch(int grid_dim_x, int grid_dim_y, int grid_dim_z, int stream,
 
   auto &cluster = config.cluster;
   if (num_ctas != cluster.size()) {
-    PyErr_Format(
-        PyExc_ValueError,
-        "Expected cluster dimensions (%d, %d, %d) to have a total size of %d",
-        cluster.x, cluster.y, cluster.z, num_ctas);
-    return;
+    throw py::value_error(
+        py::str("Expected cluster dimensions ({0}, {1}, {2}) to have a total "
+                "size of {3}")
+            .format(cluster.x, cluster.y, cluster.z, num_ctas));
   }
 
   if (signature_metadata.size() != kernel_args.size()) {
     throw py::type_error(
         py::str("Expected kernel to have {0} parameters, but got {1}")
             .format(signature_metadata.size(), kernel_args.size()));
-    return;
   }
 
   // +1 for the global scratch pointer.
@@ -537,9 +479,7 @@ void launch(int grid_dim_x, int grid_dim_y, int grid_dim_z, int stream,
     return;
   }
 
-  if (!launchKernel(config)) {
-    return;
-  }
+  launchKernel(config);
 
   if (!launchHook(launch_exit_hook, hook_args)) {
     return;
@@ -591,15 +531,6 @@ static std::map<std::string, int> getDeviceProperties(int device_id) {
 
 static std::tuple<uint64_t, uint64_t, int32_t, int32_t, int32_t>
 loadBinary(char *name, char *data, int shared, CUdevice device) {
-  // const char *name;
-  // const char *data;
-  // Py_ssize_t data_size;
-  // int shared;
-  // CUdevice device;
-  // if (!PyArg_ParseTuple(args, "ss#ii", &name, &data, &data_size, &shared,
-  //                       &device)) {
-  //   return NULL;
-  // }
   CUfunction fun;
   CUmodule mod;
   int32_t n_regs = 0;
@@ -608,43 +539,40 @@ loadBinary(char *name, char *data, int shared, CUdevice device) {
   // create driver handles
   CUcontext pctx = 0;
 
-  Py_BEGIN_ALLOW_THREADS;
-  CUDA_CHECK_ALLOW_THREADS(cuCtxGetCurrent(&pctx));
+  py::gil_scoped_release release;
+  CUDA_CHECK(cuCtxGetCurrent(&pctx));
   if (!pctx) {
-    CUDA_CHECK_ALLOW_THREADS(cuDeviceGet(&device, 0));
-    CUDA_CHECK_ALLOW_THREADS(cuDevicePrimaryCtxRetain(&pctx, device));
-    CUDA_CHECK_ALLOW_THREADS(cuCtxSetCurrent(pctx));
+    CUDA_CHECK(cuDeviceGet(&device, 0));
+    CUDA_CHECK(cuDevicePrimaryCtxRetain(&pctx, device));
+    CUDA_CHECK(cuCtxSetCurrent(pctx));
   }
 
-  CUDA_CHECK_ALLOW_THREADS(cuModuleLoadData(&mod, data));
-  CUDA_CHECK_ALLOW_THREADS(cuModuleGetFunction(&fun, mod, name));
+  CUDA_CHECK(cuModuleLoadData(&mod, data));
+  CUDA_CHECK(cuModuleGetFunction(&fun, mod, name));
   // get allocated registers and spilled registers from the function
-  CUDA_CHECK_ALLOW_THREADS(
-      cuFuncGetAttribute(&n_regs, CU_FUNC_ATTRIBUTE_NUM_REGS, fun));
-  CUDA_CHECK_ALLOW_THREADS(
+  CUDA_CHECK(cuFuncGetAttribute(&n_regs, CU_FUNC_ATTRIBUTE_NUM_REGS, fun));
+  CUDA_CHECK(
       cuFuncGetAttribute(&n_spills, CU_FUNC_ATTRIBUTE_LOCAL_SIZE_BYTES, fun));
   n_spills /= 4;
-  CUDA_CHECK_ALLOW_THREADS(cuFuncGetAttribute(
-      &n_max_threads, CU_FUNC_ATTRIBUTE_MAX_THREADS_PER_BLOCK, fun));
+  CUDA_CHECK(cuFuncGetAttribute(&n_max_threads,
+                                CU_FUNC_ATTRIBUTE_MAX_THREADS_PER_BLOCK, fun));
   // set dynamic shared memory if necessary
   int shared_optin;
-  CUDA_CHECK_ALLOW_THREADS(cuDeviceGetAttribute(
+  CUDA_CHECK(cuDeviceGetAttribute(
       &shared_optin, CU_DEVICE_ATTRIBUTE_MAX_SHARED_MEMORY_PER_BLOCK_OPTIN,
       device));
   if (shared > 49152 && shared_optin > 49152) {
-    CUDA_CHECK_ALLOW_THREADS(
-        cuFuncSetCacheConfig(fun, CU_FUNC_CACHE_PREFER_SHARED));
+    CUDA_CHECK(cuFuncSetCacheConfig(fun, CU_FUNC_CACHE_PREFER_SHARED));
     int shared_total, shared_static;
-    CUDA_CHECK_ALLOW_THREADS(cuDeviceGetAttribute(
+    CUDA_CHECK(cuDeviceGetAttribute(
         &shared_total, CU_DEVICE_ATTRIBUTE_MAX_SHARED_MEMORY_PER_MULTIPROCESSOR,
         device));
-    CUDA_CHECK_ALLOW_THREADS(cuFuncGetAttribute(
-        &shared_static, CU_FUNC_ATTRIBUTE_SHARED_SIZE_BYTES, fun));
-    CUDA_CHECK_ALLOW_THREADS(
+    CUDA_CHECK(cuFuncGetAttribute(&shared_static,
+                                  CU_FUNC_ATTRIBUTE_SHARED_SIZE_BYTES, fun));
+    CUDA_CHECK(
         cuFuncSetAttribute(fun, CU_FUNC_ATTRIBUTE_MAX_DYNAMIC_SHARED_SIZE_BYTES,
                            shared_optin - shared_static));
   }
-  Py_END_ALLOW_THREADS;
 
   return {(uint64_t)mod, (uint64_t)fun, n_regs, n_spills, n_max_threads};
 }
@@ -652,7 +580,6 @@ loadBinary(char *name, char *data, int shared, CUdevice device) {
 typedef CUresult (*cuOccupancyMaxActiveClusters_t)(
     int *numClusters, CUfunction func, const CUlaunchConfig *config);
 
-#if CUDA_VERSION >= 12000
 typedef CUresult (*cuTensorMapEncodeTiled_t)(
     CUtensorMap *tensorMap, CUtensorMapDataType tensorDataType,
     cuuint32_t tensorRank, void *globalAddress, const cuuint64_t *globalDim,
@@ -660,7 +587,6 @@ typedef CUresult (*cuTensorMapEncodeTiled_t)(
     const cuuint32_t *elementStrides, CUtensorMapInterleave interleave,
     CUtensorMapSwizzle swizzle, CUtensorMapL2promotion l2Promotion,
     CUtensorMapFloatOOBfill oobFill);
-#endif
 
 #define defineGetFunctionHandle(name, symbolName)                              \
   static symbolName##_t name() {                                               \
@@ -687,10 +613,8 @@ typedef CUresult (*cuTensorMapEncodeTiled_t)(
 defineGetFunctionHandle(getCuOccupancyMaxActiveClustersHandle,
                         cuOccupancyMaxActiveClusters);
 
-#if CUDA_VERSION >= 12000
 defineGetFunctionHandle(getCuTensorMapEncodeTiledHandle,
                         cuTensorMapEncodeTiled);
-#endif
 
 static PyObject *occupancyMaxActiveClusters(PyObject *self, PyObject *args) {
   int clusterDimX = -1, clusterDimY = -1, clusterDimZ = -1,
@@ -705,10 +629,9 @@ static PyObject *occupancyMaxActiveClusters(PyObject *self, PyObject *args) {
 
   // Let each SM have one block
   int maxActiveBlocks = 1;
-  Py_BEGIN_ALLOW_THREADS;
-  CUDA_CHECK_AND_RETURN_NULL_ALLOW_THREADS(cuFuncSetAttribute(
+  py::gil_scoped_release release;
+  CUDA_CHECK(cuFuncSetAttribute(
       func, CU_FUNC_ATTRIBUTE_MAX_DYNAMIC_SHARED_SIZE_BYTES, shared));
-  Py_END_ALLOW_THREADS;
 
   CUlaunchAttribute launchAttr[1];
   launchAttr[0].id = CU_LAUNCH_ATTRIBUTE_CLUSTER_DIMENSION;
@@ -731,12 +654,9 @@ static PyObject *occupancyMaxActiveClusters(PyObject *self, PyObject *args) {
   INITIALIZE_FUNCTION_POINTER_IF_NULL(cuOccupancyMaxActiveClusters,
                                       getCuOccupancyMaxActiveClustersHandle);
 
-  Py_BEGIN_ALLOW_THREADS;
-  CUDA_CHECK_AND_RETURN_NULL_ALLOW_THREADS(cuFuncSetAttribute(
+  CUDA_CHECK(cuFuncSetAttribute(
       func, CU_FUNC_ATTRIBUTE_NON_PORTABLE_CLUSTER_SIZE_ALLOWED, 1));
-  CUDA_CHECK_AND_RETURN_NULL_ALLOW_THREADS(
-      cuOccupancyMaxActiveClusters(&maxActiveClusters, func, &config));
-  Py_END_ALLOW_THREADS;
+  CUDA_CHECK(cuOccupancyMaxActiveClusters(&maxActiveClusters, func, &config));
   return PyLong_FromLong(maxActiveClusters);
 }
 
@@ -750,15 +670,14 @@ static PyObject *setPrintfFifoSize(PyObject *self, PyObject *args) {
     return NULL;
   }
 
-  Py_BEGIN_ALLOW_THREADS;
+  py::gil_scoped_release release;
 
   // Ensure we have an active context.
   CUcontext ctx = NULL;
-  CUDA_CHECK_AND_RETURN_NULL_ALLOW_THREADS(cuCtxGetCurrent(&ctx));
+  CUDA_CHECK(cuCtxGetCurrent(&ctx));
   if (!ctx) {
-    CUDA_CHECK_AND_RETURN_NULL_ALLOW_THREADS(
-        cuDevicePrimaryCtxRetain(&ctx, /*device=*/0));
-    CUDA_CHECK_AND_RETURN_NULL_ALLOW_THREADS(cuCtxSetCurrent(ctx));
+    CUDA_CHECK(cuDevicePrimaryCtxRetain(&ctx, /*device=*/0));
+    CUDA_CHECK(cuCtxSetCurrent(ctx));
   }
 
   // We can't set the fifo size after running a kernel that calls printf.  This
@@ -768,14 +687,11 @@ static PyObject *setPrintfFifoSize(PyObject *self, PyObject *args) {
   // This is unfriendly, so check if the old size matches the new size, and skip
   // the set() call if so.
   size_t oldSize = 0;
-  CUDA_CHECK_AND_RETURN_NULL_ALLOW_THREADS(
-      cuCtxGetLimit(&oldSize, CU_LIMIT_PRINTF_FIFO_SIZE));
+  CUDA_CHECK(cuCtxGetLimit(&oldSize, CU_LIMIT_PRINTF_FIFO_SIZE));
   if (oldSize != size) {
-    CUDA_CHECK_AND_RETURN_NULL_ALLOW_THREADS(
-        cuCtxSetLimit(CU_LIMIT_PRINTF_FIFO_SIZE, size));
+    CUDA_CHECK(cuCtxSetLimit(CU_LIMIT_PRINTF_FIFO_SIZE, size));
   }
 
-  Py_END_ALLOW_THREADS;
   Py_INCREF(Py_None);
   return Py_None;
 }
@@ -796,16 +712,14 @@ static void fillTMADescriptor(uint64_t desc_address, uint64_t global_address,
   }
 
   if (rank != shape.size()) {
-    PyErr_SetString(PyExc_RuntimeError, "Rank mismatch");
-    return;
+    throw py::value_error("Rank mismatch");
   }
   for (int i = 0; i < rank; ++i) {
     shapeInt[rank - i - 1] = shape[i];
   }
 
   if (rank != strides.size()) {
-    PyErr_SetString(PyExc_RuntimeError, "Rank mismatch");
-    return;
+    throw py::value_error("Rank mismatch");
   }
   for (int i = 0; i + 1 < rank; ++i) {
     stridesLL[rank - i - 2] = elemSize * strides[i];
@@ -815,8 +729,8 @@ static void fillTMADescriptor(uint64_t desc_address, uint64_t global_address,
 
   uint32_t elementStrides[5] = {1, 1, 1, 1, 1};
   static cuTensorMapEncodeTiled_t cuTensorMapEncodeTiled = NULL;
-  INITIALIZE_FUNCTION_POINTER_OR_RETURN(cuTensorMapEncodeTiled,
-                                        getCuTensorMapEncodeTiledHandle);
+  INITIALIZE_FUNCTION_POINTER_IF_NULL(cuTensorMapEncodeTiled,
+                                      getCuTensorMapEncodeTiledHandle);
   CUDA_CHECK(cuTensorMapEncodeTiled(
       (CUtensorMap *)desc_address, (CUtensorMapDataType)elemType, rank,
       (void *)global_address, shapeInt, stridesLL, blockSizeInt, elementStrides,
