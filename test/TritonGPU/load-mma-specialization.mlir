@@ -1150,6 +1150,73 @@ tt.func @load_scale_mma_user(
   tt.return
 }
 
+// CHECK-LABEL: @store_mma_load
+tt.func @store_mma_load(
+  %ub: i32,
+  %lhs_desc: !tt.tensordesc<tensor<128x64xf16, #shared>>,
+  %rhs: !ttg.memdesc<64x128xf16, #shared, #smem>
+) {
+  %c0 = arith.constant 0 : i32
+  %c1 = arith.constant 1 : i32
+  %true = arith.constant true
+
+  // CHECK: [[LHS_EMPTY_BARS:%.*]] = ttg.local_alloc : () -> !ttg.memdesc<2xi64,
+  // CHECK: [[LHS_EMPTY_BAR0:%.*]] = ttg.memdesc_subview [[LHS_EMPTY_BARS]][%c0_i32]
+  // CHECK: [[LHS_EMPTY_BAR1:%.*]] = ttg.memdesc_subview [[LHS_EMPTY_BARS]][%c1_i32]
+  // CHECK: [[LHS_READY_BARS:%.*]] = ttg.local_alloc : () -> !ttg.memdesc<2xi64,
+  // CHECK: arrive_barrier [[LHS_EMPTY_BAR0]]
+  // CHECK: arrive_barrier [[LHS_EMPTY_BAR1]]
+  // CHECK-NOT: arrive_barrier
+
+  // CHECK: [[MMA_ENTRY_BARS:%.*]] = ttg.local_alloc : () -> !ttg.memdesc<1xi64,
+  // CHECK: [[MMA_ENTRY_BAR:%.*]] = ttg.memdesc_subview [[MMA_ENTRY_BARS]][%c0_i32]
+  // CHECK: [[MMA_EXIT_BARS:%.*]] = ttg.local_alloc : () -> !ttg.memdesc<1xi64,
+  // CHECK: [[MMA_EXIT_BAR:%.*]] = ttg.memdesc_subview [[MMA_EXIT_BARS]][%c0_i32]
+  // CHECK-NOT: arrive_barrier
+
+  // CHECK: [[LHS_SHARED:%.*]] = ttg.local_alloc : () -> !ttg.memdesc<128x64xf16,
+
+  // CHECK: scf.for
+  scf.for %i = %c0 to %ub step %c1 : i32 {
+    // CHECK-NEXT: [[LOAD_EMPTY_BAR:%.*]] = ttg.memdesc_subview [[LHS_EMPTY_BARS]]
+    // CHECK-NEXT: wait_barrier [[LOAD_EMPTY_BAR]]{{.*}}partition = 2
+    // CHECK-NEXT: [[LOAD_READY_BAR:%.*]] = ttg.memdesc_subview [[LHS_READY_BARS]]
+    // CHECK-NEXT: barrier_expect [[LOAD_READY_BAR]]{{.*}}partition = 2
+    // CHECK-NEXT: [[LOAD_BUF:%.*]] = ttg.memdesc_subview
+    // CHECK-NEXT: tensor_desc_to_tma_ptr
+    // CHECK-NEXT: async_tma_copy_global_to_local{{.*}}partition = 2
+    %lhs = tt.descriptor_load %lhs_desc[%i, %i] : !tt.tensordesc<tensor<128x64xf16, #shared>> -> tensor<128x64xf16, #oper_layout>
+
+    // CHECK-NEXT: wait_barrier [[LOAD_READY_BAR]], {{.*}}partition = 0
+    // CHECK-NEXT: [[LHS:%.*]] = ttg.local_load [[LOAD_BUF]] {ttg.partition = 0 : i32}
+    // CHECK-NEXT: arrive_barrier [[LOAD_EMPTY_BAR]], {{.*}}partition = 0
+    // CHECK-NEXT: [[LHS_OP:%.*]] = arith.addf [[LHS]], [[LHS]] {ttg.partition = 0 : i32}
+    // CHECK-NEXT: local_store [[LHS_OP]], [[LHS_SHARED]] {ttg.partition = 0 : i32}
+    // CHECK-NEXT: fence_async_shared {bCluster = false, ttg.partition = 0 : i32}
+    %lhs_op = arith.addf %lhs, %lhs : tensor<128x64xf16, #oper_layout>
+    %lhs_shared = ttg.local_alloc %lhs_op : (tensor<128x64xf16, #oper_layout>) -> !ttg.memdesc<128x64xf16, #shared, #smem>
+
+    // CHECK-NEXT: [[ACC:%.*]] = "make_acc"()
+    %acc = "make_acc"() : () -> tensor<128x128xf32, #acc_layout>
+    // CHECK-NEXT: [[ACC_TMEM:%.*]] = ttg.memdesc_subview
+    // CHECK-NEXT: tmem_store [[ACC]], [[ACC_TMEM]][], %true {{.*}}partition = 0
+    // CHECK-NEXT: arrive_barrier [[MMA_ENTRY_BAR]], {{.*}}partition = 0
+    %acc_tmem, %acc_tok = ttng.tmem_alloc %acc : (tensor<128x128xf32, #acc_layout>) -> (!ttg.memdesc<128x128xf32, #acc_tmem, #ttng.tensor_memory, mutable>, !ttg.async.token)
+
+    // CHECK-NEXT: wait_barrier [[MMA_ENTRY_BAR]], {{.*}}partition = 1
+    // CHECK-NEXT: tc_gen5_mma {{.*}} [[MMA_EXIT_BAR]][%true]
+    %mma_tok = ttng.tc_gen5_mma %lhs_shared, %rhs, %acc_tmem[%acc_tok], %true, %true : !ttg.memdesc<128x64xf16, #shared, #smem>, !ttg.memdesc<64x128xf16, #shared, #smem>, !ttg.memdesc<128x128xf32, #acc_tmem, #ttng.tensor_memory, mutable>
+
+    // CHECK-NEXT: wait_barrier [[MMA_EXIT_BAR]], {{.*}}partition = 0
+    // CHECK-NEXT: [[ACC_VALUE:%.*]], [[LOAD_TOK:%.*]] = ttng.tmem_load [[ACC_TMEM]][]
+    %acc_value, %load_tok = ttng.tmem_load %acc_tmem[%mma_tok] : !ttg.memdesc<128x128xf32, #acc_tmem, #ttng.tensor_memory, mutable> -> tensor<128x128xf32, #acc_layout>
+    // CHECK-NEXT: arith.xori
+    // CHECK-NEXT: "use"([[ACC_VALUE]])
+    "use"(%acc_value) : (tensor<128x128xf32, #acc_layout>) -> ()
+  } {tt.warp_specialize, tt.num_stages = 2 : i32, tt.disallow_acc_multi_buffer}
+  tt.return
+}
+
 }
 
 // -----
