@@ -1300,8 +1300,9 @@ class CodeGenerator(ast.NodeVisitor):
                 # expression so we do not append it to nontrivial_values.
             else:
                 if value.type.is_block():
+                    lineno = getattr(node, "lineno", None)
                     warnings.warn(
-                        f"{ast.unparse(node)} ({node.file_name}: {node.lineno}): Logical operators 'and' and 'or' are deprecated for non-scalar tensors; please use '&' or '|' instead"
+                        f"{ast.unparse(node)} ({self.file_name}: {lineno}): Logical operators 'and' and 'or' are deprecated for non-scalar tensors; please use '&' or '|' instead"
                     )
                 # not a constexpr so we must append it:
                 nontrivial_values.append(value)
