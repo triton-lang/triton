@@ -560,7 +560,7 @@ class HIPLauncher(object):
         mod = compile_module_from_src(src, "__triton_launcher")
         has_tensor_desc_arg = any(isinstance(sig, str) and sig.startswith("tensordesc") for sig in signature.values())
 
-        self.launch = wrap_handle_tensor_descriptor(mod.launch) if has_tensor_desc_arg else mod.launcher
+        self.launch = wrap_handle_tensor_descriptor(mod.launch) if has_tensor_desc_arg else mod.launch
         self.launch_cooperative_grid = metadata.launch_cooperative_grid
 
     def __call__(self, *args):
