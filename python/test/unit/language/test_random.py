@@ -125,7 +125,7 @@ def test_randint(size, seed, device, dtype, const_seed):
     size = list(map(int, size.split(',')))
     torch_dtype = getattr(torch, dtype)
     numpy_dtype = getattr(np, f"u{dtype}")
-    config = {'int32': PHILOX_32, 'int64': PHILOX_64}[dtype]
+    config = PHILOX_32
 
     @triton.jit
     def kernel(X, N, seed):
