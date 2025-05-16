@@ -345,7 +345,6 @@ def compile(src, target=None, options=None):
 
     if compilation_listener:
         timer.finished_ir_initialization()
-
     for ext, compile_ir in list(stages.items())[first_stage:]:
         next_module = compile_ir(module, metadata)
         ir_filename = f"{file_name}.{ext}"
