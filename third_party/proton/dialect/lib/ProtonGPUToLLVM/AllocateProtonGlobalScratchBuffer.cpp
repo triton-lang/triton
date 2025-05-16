@@ -24,7 +24,6 @@ struct AllocateProtonGlobalScratchBuffer
     MLIRContext *ctx = &getContext();
     OpBuilder builder(ctx);
 
-    llvm::errs() << "\n";
     int numFuncOps = 0;
     FunctionOpInterface func;
     mod.walk([&](FunctionOpInterface op) {
