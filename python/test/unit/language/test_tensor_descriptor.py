@@ -1496,6 +1496,9 @@ def test_tensor_descriptor_reduce(kind, descriptor, dtype_str, num_ctas, M_BLOCK
             pytest.skip("Multi-CTA not supported")
         if descriptor == "host":
             pytest.skip("NYI: Host side tensor descriptor fallback")
+        if (dtype_str.startswith("float") or dtype_str.startswith("bfloat")) and \
+                kind in ["min", "max", "and", "or", "xor"]:
+            pytest.skip(f"Incompatible reduce {kind=} and {dtype_str=} combination")
         if is_hip_cdna3() and (kind, dtype_str, M_BLOCK, N_BLOCK) in REDUCE_SKIP_HIP_CDNA3:
             pytest.skip("Broken on rocm")
 
