@@ -443,6 +443,45 @@ Effects: `MemoryEffects::Effect{}`
 | `result` | memory descriptor type (`::mlir::triton::gpu::MemDescType`) in Triton IR type system |
 
 
+### `ttg.predicate_stage` (triton::gpu::PredicateStageOp)
+
+_Pipeliner stage predicate_
+
+Syntax:
+
+```
+operation ::= `ttg.predicate_stage` $iv `,` $ub `,` $step `maxStage` $maxStage `stage` $stage attr-dict `:` type($iv) `->` type($result)
+```
+
+Traits: `AlwaysSpeculatableImplTrait`, `VerifyTensorLayoutsTrait`
+
+Interfaces: `ConditionallySpeculatable`, `InferTypeOpInterface`, `NoMemoryEffect (MemoryEffectOpInterface)`
+
+Effects: `MemoryEffects::Effect{}`
+
+#### Attributes:
+
+<table>
+<tr><th>Attribute</th><th>MLIR Type</th><th>Description</th></tr>
+<tr><td><code>maxStage</code></td><td>::mlir::IntegerAttr</td><td>32-bit signless integer attribute</td></tr>
+<tr><td><code>stage</code></td><td>::mlir::IntegerAttr</td><td>32-bit signless integer attribute</td></tr>
+</table>
+
+#### Operands:
+
+| Operand | Description |
+| :-----: | ----------- |
+| `iv` | signless integer or index |
+| `ub` | signless integer or index |
+| `step` | signless integer or index |
+
+#### Results:
+
+| Result | Description |
+| :----: | ----------- |
+| `result` | 1-bit signless integer |
+
+
 ### `ttg.warp_return` (triton::gpu::WarpReturnOp)
 
 _Implicit terminator from partition regions_
