@@ -353,8 +353,6 @@ def compile(src, target=None, options=None):
             # Users can override kernels at scale by setting `ir_override` in autotune config
             # without TRITON_KERNEL_OVERRIDE
             if (ir_override := metadata.get("ir_override", None)) and ir_override.endswith(f".{ext}"):
-                if knobs.autotuning.print:
-                    print(f"\nOverriding IR with filename set in triton config {src.constants}: {ir_override}")
                 next_module = parse(ir_override, ext, context)
         elif full_name := fn_override_manager.get_file(ir_filename):
             print(f"\nOverriding kernel with file {full_name}")
