@@ -376,4 +376,7 @@ def TritonGPUCoalesceAsyncCopy: Pass<"tritongpu-coalesce-async-copy", "mlir::Mod
                            "mlir::triton::TritonDialect"];
 }
 
+def TritonGPUBufferReuse : Pass<"tritongpu-buffer-reuse", "mlir::ModuleOp"> {
+}
+
 #endif

@@ -132,8 +132,20 @@ static PartitionScheme getPartitionScheme(scf::ForOp loop) {
     }
     while (!operandViews.empty()) {
       Operation *op = operandViews.pop_back_val();
-      if (!op->hasOneUse() || !op->hasTrait<OpTrait::MemDescViewTrait>())
+      if (!isa<MemDescSubviewOp, MemDescTransOp, MemDescReshapeOp>(op))
         continue;
+
+      // Duplicate the op if necessary to ensure the MMA op is the only user.
+      if (!llvm::all_of(op->getUsers(),
+                        [&](Operation *user) { return user == mmaOp; })) {
+        OpBuilder b(op);
+        Operation *viewOp = b.clone(*op);
+        op->replaceUsesWithIf(viewOp->getResults(), [&](OpOperand &use) {
+          return use.getOwner() == mmaOp;
+        });
+        op = viewOp;
+      }
+
       mma.operandViews.push_back(op);
       if (Operation *defOp = op->getOperand(0).getDefiningOp())
         operandViews.push_back(defOp);
@@ -272,7 +284,7 @@ static WarpSchedule getInitialSchedule(const PartitionScheme &scheme,
 
   // Start by creating the default partition, a partition for for all loads, and
   // a partition for all MMAs.
-  Partition *defaultPartition = schedule.addPartition(0);
+  Partition *defaultPartition = schedule.addPartition(1);
   Partition *mmaPartition = schedule.addPartition(1);
   Partition *loadPartition = schedule.addPartition(0);
 
@@ -292,8 +304,9 @@ static WarpSchedule getInitialSchedule(const PartitionScheme &scheme,
 
   // Propagate defs of exp.
   for (math::Exp2Op exp : scheme.exps) {
-    schedule.trySchedule(defaultPartition, exp);
-    scheduleDependencies(loop, schedule, defaultPartition, exp);
+    Partition *expPartition = schedule.addPartition(0);
+    schedule.trySchedule(expPartition, exp);
+    scheduleDependencies(loop, schedule, expPartition, exp);
   }
 
   // Propagate users of loads and MMAs.
@@ -303,15 +316,11 @@ static WarpSchedule getInitialSchedule(const PartitionScheme &scheme,
       scheduleUsers(loop, schedule, defaultPartition, allocOp);
   }
 
-  SmallVector<Partition *> userPartitions{defaultPartition};
-  while (userPartitions.size() < scheme.mmas.size()) {
-    userPartitions.push_back(schedule.addPartition(userPartitions.size()));
-  }
-  for (auto [mma, userPartition] : llvm::zip(scheme.mmas, userPartitions)) {
-    scheduleUsers(loop, schedule, userPartition, mma.mmaOp);
+  for (const PipelinedMMA &mma : scheme.mmas) {
+    scheduleUsers(loop, schedule, defaultPartition, mma.mmaOp);
   }
   for (const PipelinedMMA &mma : scheme.mmas) {
-    scheduleDependencies(loop, schedule, defaultPartition, mma.mmaOp);
+    // scheduleDependencies(loop, schedule, defaultPartition, mma.mmaOp);
   }
 
   schedule.updatePartitions();
@@ -510,10 +519,10 @@ void propagatePartitions(scf::ForOp loop, WarpSchedule &schedule) {
       });
     }
 
-    // If all ops are on the critical path, assign them to the sink partition.
+    // If all ops are on the critical path, assign them to the def partition.
     if (critPath.size() == cluster.ops.size()) {
       for (Operation *op : cluster.ops)
-        schedule.insert(sinkPartition, op);
+        schedule.insert(defPartition, op);
       continue;
     }
 
@@ -543,6 +552,13 @@ void propagatePartitions(scf::ForOp loop, WarpSchedule &schedule) {
 // Utilities
 //===----------------------------------------------------------------------===//
 
+struct StageCluster {
+  unsigned stage;
+  unsigned cluster;
+};
+
+using StageMap = DenseMap<Operation *, std::optional<StageCluster>>;
+
 struct PartitionBuilder : public ImplicitLocOpBuilder {
   using ImplicitLocOpBuilder::ImplicitLocOpBuilder;
 
@@ -551,13 +567,15 @@ struct PartitionBuilder : public ImplicitLocOpBuilder {
   }
   Value boolCst(bool value) { return intCst(value, /*width=*/1); }
 
-  void assignStage(Operation *op, std::optional<unsigned> stage) {
-    if (stage)
-      op->setAttr(kAssignedStageAttrName, getI32IntegerAttr(*stage));
+  void assignStage(Operation *op, std::optional<StageCluster> stage) {
+    if (stage) {
+      op->setAttr(kAssignedStageAttrName, getI32IntegerAttr(stage->stage));
+      op->setAttr(kAssignedClusterAttrName, getI32IntegerAttr(stage->cluster));
+    }
   }
 
   template <typename OpT, typename... Args>
-  auto createInto(Partition &partition, std::optional<unsigned> stage,
+  auto createInto(Partition &partition, std::optional<StageCluster> stage,
                   Args &&...args) {
     auto op = create<OpT>(std::forward<Args>(args)...);
     op->setAttr(kPartitionAttrName, getI32IntegerAttr(partition.getIndex()));
@@ -566,8 +584,6 @@ struct PartitionBuilder : public ImplicitLocOpBuilder {
     return op;
   }
 };
-
-using StageMap = DenseMap<Operation *, std::optional<unsigned>>;
 
 static void replaceAllUsesDominatedBy(Operation *domOp, Value newValue,
                                       Value oldValue, DominanceInfo &domInfo) {
@@ -768,7 +784,7 @@ struct PipelinedLoadGroup {
   void allocateAref(scf::ForOp &loop, int numStages);
   LogicalResult lowerLoads(WarpSchedule &schedule, DominanceInfo &domInfo,
                            PostDominanceInfo &postDomInfo,
-                           std::optional<unsigned> stage,
+                           std::optional<StageCluster> stage,
                            const StageMap &stages);
 
   SmallVector<PipelinedLoad> loads;
@@ -821,7 +837,7 @@ void PipelinedLoadGroup::allocateAref(scf::ForOp &loop, int numStages) {
 }
 
 static void lowerTMACopy(PartitionBuilder &b, Partition &loadPartition,
-                         std::optional<unsigned> stage, Operation *op,
+                         std::optional<StageCluster> stage, Operation *op,
                          Value barrier, Value view) {
   Value truePred = b.create<arith::ConstantIntOp>(true, /*width=*/1);
   if (auto load = dyn_cast<DescriptorLoadOp>(op)) {
@@ -845,7 +861,7 @@ static void lowerTMACopy(PartitionBuilder &b, Partition &loadPartition,
 LogicalResult PipelinedLoadGroup::lowerLoads(WarpSchedule &schedule,
                                              DominanceInfo &domInfo,
                                              PostDominanceInfo &postDomInfo,
-                                             std::optional<unsigned> stage,
+                                             std::optional<StageCluster> stage,
                                              const StageMap &stages) {
   // Insert before the group of loads.
   auto firstLoad = llvm::min_element(loads, [&](auto &lhs, auto &rhs) {
@@ -952,24 +968,27 @@ static Value getLastInductionValue(PartitionBuilder &b, scf::ForOp loop) {
   return b.create<arith::AddIOp>(ceilStep, loop.getLowerBound());
 }
 
-static LogicalResult pipelineMMA(scf::ForOp &loop, PipelinedMMA &mma,
-                                 WarpSchedule &schedule, DominanceInfo &domInfo,
-                                 PostDominanceInfo &postDomInfo,
-                                 std::optional<unsigned> stage,
-                                 const StageMap &stages) {
-  ttng::MMAv5OpInterface mmaOp = mma.mmaOp;
-  auto fail = [&](StringRef msg) { return emitWarning(mmaOp.getLoc(), msg); };
-  Block &body = *loop.getBody();
-  auto inBody = [&](Operation *op) { return body.findAncestorOpInBlock(*op); };
-
-  // Determine if the MMA accumulator can be multibuffered.
-  bool accIsMultiBuffered =
+// Determine if the MMA accumulator can be multibuffered.
+static bool canBeMultibuffered(scf::ForOp loop, ttng::MMAv5OpInterface mmaOp) {
+  return
       // MMAs in subsequent iterations can be overlapped.
       !ttng::hasAccReadModifyWrite(mmaOp, loop) &&
       // The accumulator is reset at some point, thus allowing multibuffering.
       ttng::isAccMultibufferingPossible(mmaOp, loop) &&
       // The user didn't disable it with a flag.
       !getDisallowAccMultiBuffer(loop);
+}
+
+static LogicalResult pipelineMMA(scf::ForOp &loop, PipelinedMMA &mma,
+                                 WarpSchedule &schedule, DominanceInfo &domInfo,
+                                 PostDominanceInfo &postDomInfo,
+                                 std::optional<StageCluster> stage,
+                                 const StageMap &stages,
+                                 bool accIsMultiBuffered) {
+  ttng::MMAv5OpInterface mmaOp = mma.mmaOp;
+  auto fail = [&](StringRef msg) { return emitWarning(mmaOp.getLoc(), msg); };
+  Block &body = *loop.getBody();
+  auto inBody = [&](Operation *op) { return body.findAncestorOpInBlock(*op); };
 
   // Check that the accumulator can be multi-buffered.
   ttng::TMEMAllocOp oldAllocOp =
@@ -1029,6 +1048,7 @@ static LogicalResult pipelineMMA(scf::ForOp &loop, PipelinedMMA &mma,
         overwriteOp = mmaOp;
     } else if (auto loadOp = dyn_cast<ttng::TMEMLoadOp>(user)) {
       readOp = loadOp;
+    } else if (isa<MemDescReinterpretOp>(user)) {
     } else {
       llvm::report_fatal_error("FIXME: unhandled MMA accumulator user");
     }
@@ -1133,6 +1153,7 @@ static LogicalResult pipelineMMA(scf::ForOp &loop, PipelinedMMA &mma,
       }
     }
   }
+  oldAllocOp.getResult().replaceAllUsesWith(firstView);
   oldAllocOp.getToken().replaceAllUsesWith(allocOp.getToken());
   oldAllocOp.erase();
   cast<scf::YieldOp>(loop.getBody()->getTerminator())
@@ -1178,7 +1199,7 @@ static LogicalResult pipelineMMA(scf::ForOp &loop, PipelinedMMA &mma,
     } else if (auto tmemAllocOp = operand.getDefiningOp<ttng::TMEMAllocOp>()) {
       PartitionBuilder b(tmemAllocOp.getLoc(), tmemAllocOp);
       auto store = b.createInto<ttng::TMEMStoreOp>(
-          *defPartition, std::nullopt, Type(), tmemAllocOp.getResult(), Value(),
+          *defPartition, std::nullopt, tmemAllocOp.getResult(),
           tmemAllocOp.getSrc(), b.boolCst(true));
       operandDefs.emplace_back(body.findAncestorOpInBlock(*store),
                                defPartition);
@@ -1186,6 +1207,18 @@ static LogicalResult pipelineMMA(scf::ForOp &loop, PipelinedMMA &mma,
       tmemAllocOp->removeAttr(kPartitionAttrName);
       tmemAllocOp.getSrcMutable().clear();
       tmemAllocOp.getResult().setType(getAsMutable(tmemAllocOp.getType()));
+    } else if (auto reinterpOp =
+                   operand.getDefiningOp<MemDescReinterpretOp>()) {
+      PartitionBuilder b(reinterpOp.getLoc(), reinterpOp);
+      b.setInsertionPointAfter(reinterpOp);
+      auto store = b.createInto<ttng::TMEMStoreOp>(
+          *defPartition, std::nullopt, reinterpOp.getResult(),
+          reinterpOp.getInit(), b.boolCst(true));
+      operandDefs.emplace_back(body.findAncestorOpInBlock(*store),
+                               defPartition);
+      reinterpOp->removeAttr(kPartitionAttrName);
+      reinterpOp.getInitMutable().clear();
+      reinterpOp.getResult().setType(getAsMutable(reinterpOp.getType()));
     } else if (defOp->hasTrait<OpTrait::MemDescViewTrait>()) {
       incomingOperands.push_back(defOp->getOperand(0));
     }
@@ -1327,18 +1360,26 @@ LogicalResult lowerLoops(scf::ForOp &loop, PartitionScheme &scheme,
 
   // Assign stages to ops when there are multiple ops in the same partition.
   StageMap stages;
-  if (loadGroups.size() > 1) {
+
+  {
+    SmallVector<StageCluster> hack{{0, 2}, {2, 0}};
+    unsigned i = 0;
     unsigned curLoadStage = 0;
     for (const PipelinedLoadGroup &group : loadGroups) {
-      stages.insert({group.loads.front().loadOp, curLoadStage});
+      stages[group.loads.front().loadOp] = hack[i++ % hack.size()];
       curLoadStage += 2;
     }
   }
-  if (scheme.mmas.size() > 1) {
+
+  {
+    SmallVector<StageCluster> hack{{0, 1}, {1, 0}, {0, 3}, {1, 2}};
+    unsigned i = 0;
     unsigned curMMAStage = 0;
     for (const PipelinedMMA &mma : scheme.mmas) {
-      stages.insert({mma.mmaOp, curMMAStage});
-      curMMAStage += 2;
+      // stages.insert({mma.mmaOp, curMMAStage % 4});
+      stages[mma.mmaOp] = hack[i++ % hack.size()];
+      if (canBeMultibuffered(loop, mma.mmaOp))
+        curMMAStage += 2;
     }
   }
 
@@ -1355,8 +1396,10 @@ LogicalResult lowerLoops(scf::ForOp &loop, PartitionScheme &scheme,
 
   // Multi-buffer and lower the MMAs.
   for (PipelinedMMA &mma : scheme.mmas) {
+    bool accIsMultiBuffered = canBeMultibuffered(loop, mma.mmaOp);
     if (failed(pipelineMMA(loop, mma, schedule, domInfo, postDomInfo,
-                           stages.lookup(mma.mmaOp), stages)))
+                           stages.lookup(mma.mmaOp), stages,
+                           accIsMultiBuffered)))
       return failure();
   }
 
@@ -1399,9 +1442,5 @@ void LoadMMASpecialization::runOnOperation() {
     int loopNumStages = getNumStagesOrDefault(loop, numStages);
     if (failed(lowerLoops(loop, scheme, schedule, loopNumStages)))
       continue;
-    // HACK: Set this attribute so that LowerLoops will multi-buffer TMA
-    // descriptors.
-    loop->setAttr(kScheduledMaxStageAttrName,
-                  Builder(&getContext()).getI32IntegerAttr(loopNumStages));
   }
 }
