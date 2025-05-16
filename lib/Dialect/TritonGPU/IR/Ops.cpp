@@ -602,6 +602,28 @@ LogicalResult MemDescSubviewOp::verify() {
     }
   }
 
+  // If they have the same rank, the bases that the dst subview removes must
+  // not be swizzled
+  if (srcEnc && srcTy.getRank() == dstTy.getRank()) {
+    auto srcLl = triton::gpu::toLinearLayout(srcTy.getShape(), srcEnc);
+    llvm::errs() << "srcLl: " << srcLl << "\n";
+    llvm::errs() << "inverse: " << srcLl.invert() << "\n";
+    llvm::errs() << "srcEnc: " << srcEnc << "\n";
+    llvm::errs() << "dstTy: " << dstTy << "\n";
+    auto dstLl = triton::gpu::toLinearLayout(dstTy.getShape(), dstEnc);
+    auto reps = divideLeft(srcLl, dstLl);
+    auto repsBases = reps->getBases();
+    for (auto bases : llvm::make_second_range(repsBases)) {
+      if (!llvm::all_of(bases, [&](const auto &basis) {
+            auto nonZero = [](auto val) { return val != 0; };
+            return std::count_if(basis.begin(), basis.end(), nonZero) <= 1;
+          })) {
+        return emitError()
+               << "We can just create subviews of the non-swizzled bases";
+      }
+    }
+  }
+
   // TODO(jlebar): Currently we generate illegal encodings, so we can't add a
   // verifier for them.  In particular, we use the same encoding for the src and
   // dst of a subview op, when the subview removes a dimension.  That generates
