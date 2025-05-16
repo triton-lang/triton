@@ -113,6 +113,8 @@ class HIPBackend(BaseBackend):
                 supported_fp8_dtypes.update({'fp8e4nv', 'fp8e4b8', 'fp8e5b16'})
             elif self.target.arch == 'gfx950':
                 supported_fp8_dtypes.update({'fp8e4nv', 'fp8e5'})
+            elif 'gfx12' in self.target.arch:
+                supported_fp8_dtypes.update({'fp8e4nv', 'fp8e5'})
             args["supported_fp8_dtypes"] = tuple(sorted(supported_fp8_dtypes))
 
         if "enable_fp_fusion" not in opts:
@@ -193,6 +195,8 @@ class HIPBackend(BaseBackend):
     def make_ttir(mod, metadata, options):
         pm = ir.pass_manager(mod.context)
         pm.enable_debug()
+        if knobs.compilation.strip_debug_info:
+            passes.common.add_strip_debug_info(pm)
         passes.common.add_inliner(pm)
         passes.ttir.add_rewrite_tensor_pointer(pm)
         passes.ttir.add_rewrite_tensor_descriptor_to_pointer(pm)

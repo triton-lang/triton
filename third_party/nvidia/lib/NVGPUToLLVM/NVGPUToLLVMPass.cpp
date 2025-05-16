@@ -232,6 +232,12 @@ public:
     auto loc = op.getLoc();
     auto b = TritonLLVMOpBuilder(loc, rewriter);
 
+    if (triton::gpu::lookupNumWarps(op) == 1) {
+      // If there is only one warp, the warp ID is always 0.
+      rewriter.replaceOp(op, b.i32_val(0));
+      return success();
+    }
+
     // If this is inside a warp specialize op, compute the relative thread ID
     // within the warp group.
     Value tid = rewriter.create<NVVM::ThreadIdXOp>(loc, i32_ty);

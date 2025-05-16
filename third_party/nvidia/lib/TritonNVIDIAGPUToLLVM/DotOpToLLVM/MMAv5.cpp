@@ -32,27 +32,26 @@ mlir::triton::NVIDIA::DotOpMmaV5TmemLoader::DotOpMmaV5TmemLoader(
   numRepM = ceil<unsigned>(shapePerCTA[0], instrShape[0]);
 }
 
-Value mlir::triton::NVIDIA::DotOpMmaV5TmemLoader::tmemLoad(
+MemDescOperand mlir::triton::NVIDIA::DotOpMmaV5TmemLoader::tmemLoad(
     int a, int b, ConversionPatternRewriter &rewriter, Location loc) const {
-  auto tb = TritonLLVMOpBuilder(loc, rewriter);
   int numRows = 64;
   if (interleaved || instrShape[0] >= 128)
     numRows = 128;
   int numColPerBlock =
       ((instrShape[0] * instrShape[1]) / numRows) / numElementsPer32b;
-  Value address = base;
   int blockId = a + b * numRepM;
-  address = tb.ptrtoint(i32_ty, address);
+  int offset;
   if (!interleaved) {
-    address = tb.add(address, tb.i32_val(numColPerBlock * blockId));
+    offset = numColPerBlock * blockId;
   } else {
     int blockIdIsOdd = blockId & 1;
     int blockIdPrevEven = blockId - blockIdIsOdd;
-    Value offset = tb.i32_val(numColPerBlock * blockIdPrevEven +
-                              ((16 * blockIdIsOdd) << 16));
-    address = tb.add(address, offset);
+    offset = numColPerBlock * blockIdPrevEven + ((16 * blockIdIsOdd) << 16);
   }
-  return address;
+
+  auto tb = TritonLLVMOpBuilder(loc, rewriter);
+  Value address = tb.ptrtoint(i32_ty, base);
+  return {address, offset};
 }
 
 //===----------------------------------------------------------------------===//
@@ -229,9 +228,9 @@ static Value createScaleInstDescriptor(ConversionPatternRewriter &rewriter,
 //===----------------------------------------------------------------------===//
 
 static void createGen5MMA(ConversionPatternRewriter &rewriter, Location loc,
-                          ttng::TCGen5MMAOp op, Value a, Value b, Value d,
-                          Value pred, Value instDescriptor, Value useInitAcc,
-                          bool aInTMem, bool twoCTAs) {
+                          ttng::TCGen5MMAOp op, MemDescOperand a, Value b,
+                          MemDescOperand d, Value pred, Value instDescriptor,
+                          Value useInitAcc, bool aInTMem, bool twoCTAs) {
   PTXBuilder ptxBuilder;
   std::string opcode =
       "tcgen05.mma.cta_group::" + std::to_string(twoCTAs ? 2 : 1) + ".kind::";
@@ -244,9 +243,10 @@ static void createGen5MMA(ConversionPatternRewriter &rewriter, Location loc,
     opcode += "f8f6f4";
   else
     assert(0 && "Unsupported type.");
-  auto *accOp = ptxBuilder.newAddrOperand(d, "r");
-  auto *aOp = aInTMem ? ptxBuilder.newAddrOperand(a, "r")
-                      : ptxBuilder.newOperand(a, "l");
+  auto *accOp = ptxBuilder.newAddrOperand(d.base, "r", *d.offset);
+  assert(a.offset.has_value() == aInTMem);
+  auto *aOp = aInTMem ? ptxBuilder.newAddrOperand(a.base, "r", *a.offset)
+                      : ptxBuilder.newOperand(a.base, "l");
   auto *bOp = ptxBuilder.newOperand(b, "l");
   auto *instDescOp = ptxBuilder.newOperand(instDescriptor, "r");
   auto *useInitAccOp = ptxBuilder.newOperand(useInitAcc, "b");
@@ -257,10 +257,10 @@ static void createGen5MMA(ConversionPatternRewriter &rewriter, Location loc,
 
 static void createScaledGen5MMA(ConversionPatternRewriter &rewriter,
                                 Location loc, ttng::TCGen5MMAScaledOp op,
-                                Value a, Value b, Value d, Value scaleA,
-                                Value scaleB, Value pred, Value instDescriptor,
-                                Value useInitAcc, bool aInTmem,
-                                mxfpKind mxfpInstKind) {
+                                MemDescOperand a, Value b, MemDescOperand d,
+                                Value scaleA, Value scaleB, Value pred,
+                                Value instDescriptor, Value useInitAcc,
+                                bool aInTmem, mxfpKind mxfpInstKind) {
   PTXBuilder ptxBuilder;
   std::string opcode;
   if (mxfpInstKind == mxfpKind::mxf8f6f4) {
@@ -274,9 +274,10 @@ static void createScaledGen5MMA(ConversionPatternRewriter &rewriter,
   } else {
     assert(0 && "Unsupported mxfp kind.");
   }
-  auto *accOp = ptxBuilder.newAddrOperand(d, "r");
-  auto *aOp = aInTmem ? ptxBuilder.newAddrOperand(a, "r")
-                      : ptxBuilder.newOperand(a, "l");
+  auto *accOp = ptxBuilder.newAddrOperand(d.base, "r", *d.offset);
+  assert(aInTmem == a.offset.has_value());
+  auto *aOp = aInTmem ? ptxBuilder.newAddrOperand(a.base, "r", *a.offset)
+                      : ptxBuilder.newOperand(a.base, "l");
   auto *bOp = ptxBuilder.newOperand(b, "l");
   auto *instDescOp = ptxBuilder.newOperand(instDescriptor, "r");
   auto *scaleAOp = ptxBuilder.newAddrOperand(scaleA, "r");
@@ -335,11 +336,11 @@ struct DotConversion {
     bool aInTmem;
   };
 
-  using GetAccAddressFn = std::function<Value(
+  using GetAccAddressFn = std::function<MemDescOperand(
       ConversionPatternRewriter &, Location, int, int, const InstDesc &)>;
-  using CreateMMAInstFn =
-      std::function<void(ConversionPatternRewriter &, Location, Value, Value,
-                         Value, Value, Value, const InstDesc &, int, int, int)>;
+  using CreateMMAInstFn = std::function<void(
+      ConversionPatternRewriter &, Location, MemDescOperand, MemDescOperand,
+      Value, Value, Value, const InstDesc &, int, int, int)>;
 
   struct {
     unsigned M;
@@ -456,9 +457,9 @@ void convertDotImpl(const LLVMTypeConverter &typeConverter,
   for (int m = 0; m < numRepM; m++) {
     for (int n = 0; n < numRepN; n++) {
       Value useInitAcc = useDFlag;
-      Value accAddress = op.getAccAddress(rewriter, loc, m, n, desc);
+      MemDescOperand accAddress = op.getAccAddress(rewriter, loc, m, n, desc);
       for (int k = 0; k < numRepK; k++) {
-        Value a = aLoader->memLoad(m, k, rewriter, loc);
+        MemDescOperand a = aLoader->memLoad(m, k, rewriter, loc);
         Value b = bLoader.smemLoad(n, k, rewriter, loc);
         op.createMMAInst(rewriter, loc, accAddress, a, b, elect, useInitAcc,
                          desc, m, n, k);
@@ -506,9 +507,10 @@ void convertDot(const LLVMTypeConverter &typeConverter,
   };
 
   dot.createMMAInst = [&](ConversionPatternRewriter &rewriter, Location loc,
-                          Value accAddress, Value a, Value b, Value pred,
-                          Value useInitAcc, const DotConversion::InstDesc &desc,
-                          int m, int n, int k) {
+                          MemDescOperand accAddress, MemDescOperand a, Value b,
+                          Value pred, Value useInitAcc,
+                          const DotConversion::InstDesc &desc, int m, int n,
+                          int k) {
     Value instDescriptor = createInstDescriptor(
         rewriter, op, twoCTAs ? desc.mmaSizeM * 2 : desc.mmaSizeM,
         desc.mmaSizeN, desc.transA, desc.transB);
@@ -598,13 +600,14 @@ void convertScaledDot(const LLVMTypeConverter &typeConverter,
                                        dTensorTy.getElementTypeBitWidth(),
                                    numRows * colSizeInBits);
     int blockId = m + n * desc.repShape.numRepM;
-    return tb.add(baseD, tb.i32_val(numColPerBlock * blockId));
+    return MemDescOperand{baseD, numColPerBlock * blockId};
   };
 
   dot.createMMAInst = [&](ConversionPatternRewriter &rewriter, Location loc,
-                          Value accAddress, Value a, Value b, Value pred,
-                          Value useInitAcc, const DotConversion::InstDesc &desc,
-                          int m, int n, int k) {
+                          MemDescOperand accAddress, MemDescOperand a, Value b,
+                          Value pred, Value useInitAcc,
+                          const DotConversion::InstDesc &desc, int m, int n,
+                          int k) {
     auto [numRepM, numRepN, numRepK] = desc.repShape;
     int scaleFactorColsPerSet = getScaleFactorColsPerSet(mxfpInstKind);
     int numColPerScaleBlockA = ceil<int>(
