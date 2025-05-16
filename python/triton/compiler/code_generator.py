@@ -1301,8 +1301,10 @@ class CodeGenerator(ast.NodeVisitor):
             else:
                 if value.type.is_block():
                     lineno = getattr(node, "lineno", None)
+                    if lineno is not None:
+                        lineno += self.begin_line
                     warnings.warn(
-                        f"{ast.unparse(node)} ({self.file_name}: {lineno}): Logical operators 'and' and 'or' are deprecated for non-scalar tensors; please use '&' or '|' instead"
+                        f"{ast.unparse(node)} ({self.file_name}:{lineno}): Logical operators 'and' and 'or' are deprecated for non-scalar tensors; please use '&' or '|' instead"
                     )
                 # not a constexpr so we must append it:
                 nontrivial_values.append(value)
