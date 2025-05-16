@@ -355,7 +355,8 @@ def compile(src, target=None, options=None):
         # Override IR if set by Triton config
         if ir_override := metadata.get("ir_override", None):
             if ir_override.endswith(f".{ext}"):
-                print(f"\nOverriding IR with filename set in triton config {src.constants}: {ir_override}")
+                if knobs.runtime.debug:
+                    print(f"\nOverriding IR with filename set in triton config {src.constants}: {ir_override}")
                 next_module = parse(ir_override, ext, context)
 
         # If TRITON_STORE_BINARY_ONLY is 1, only store cubin/hsaco/json
