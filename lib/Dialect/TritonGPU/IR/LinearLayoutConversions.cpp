@@ -227,40 +227,71 @@ sharedToLinearLayoutAMDRotating(ArrayRef<int64_t> shape,
 
   return combineCtaCgaWithShape(ctaLayout, shared.getCTALayout(), shape);
 }
+} // namespace
 
-// Returns the layout of a single core matrix which tiles the nvmma layout
-LinearLayout getCoreMatrixLinearLayout(NVMMASharedEncodingAttr shared,
+LinearLayout nvmmaSharedToLinearLayout(ArrayRef<int64_t> shape,
+                                       NVMMASharedEncodingAttr shared,
                                        bool disableSwizzle) {
-  auto *ctx = shared.getContext();
+  MLIRContext *ctx = shared.getContext();
 
+  auto shapePerCTA = getShapePerCTA(shared, shape);
+
+  int rank = shape.size();
+  if (rank == 1) {
+    // TODO: Not sure if this is correct.
+    return combineCtaCgaWithShape(
+        LinearLayout::identity1D(shapePerCTA[0], S("offset"), S("dim0")),
+        shared.getCTALayout(), shape);
+  }
   int elemBitWidth = shared.getElementBitWidth();
   int tileWidthBytes = shared.getSwizzlingByteWidth();
-  int vec = shared.getVec();
-  int perPhase = shared.getPerPhase();
-  int maxPhase = shared.getMaxPhase();
+  int vec = 128 / elemBitWidth;
+  int perPhase = 0;
+  int maxPhase = 0;
+  if (tileWidthBytes == 32) {
+    perPhase = 4;
+    maxPhase = 2;
+  } else if (tileWidthBytes == 64) {
+    perPhase = 2;
+    maxPhase = 4;
+  } else if (tileWidthBytes == 128) {
+    perPhase = 1;
+    maxPhase = 8;
+  }
+  auto outDimNames = standardOutDimNames(ctx, rank);
+
+  // Construct bases for a the layout's 2-dimensional tile.
+  assert(rank >= 2);
+  int batchDims = rank - 2;
+  int colDim = batchDims + (shared.getTransposed() ? 0 : 1);
+  int rowDim = batchDims + (shared.getTransposed() ? 1 : 0);
 
   int tileRows = 8;
   int tileCols = 8 * tileWidthBytes / elemBitWidth;
   bool isFp4Padded = shared.getFp4Padded();
 
   std::vector<std::vector<int>> bases2D;
-  for (int col = 1; col < tileCols; col *= 2) {
+  for (int logCol = 0; logCol < llvm::Log2_32(tileCols); logCol++) {
     if (isFp4Padded) {
+      int colPadded = 1 << logCol;
       // Each group of 16 offsets consists of 8 "real" and 8 "padded" offsets.
       // We represent the padded layout by mapping 8 padded offsets to the same
       // coordinates as the real ones. When computing the inverse of this LL,
       // the offsets correspoding to the real ones are picked in the image by
       // invertAndCompose.
-      int colPacked = col / 16 * 8 + col % 8;
+      int colPacked = colPadded / 16 * 8 + colPadded % 8;
       bases2D.push_back({0, colPacked});
     } else {
-      bases2D.push_back({0, col});
+      bases2D.push_back({0, 1 << logCol});
     }
   }
-  for (int row = 1; row < tileRows; row *= 2) {
+  for (int logRow = 0; logRow < llvm::Log2_32(tileRows); logRow++) {
+    int row = 1 << logRow;
     if (disableSwizzle) {
       bases2D.push_back({row, 0});
-    } else if (isFp4Padded) {
+      continue;
+    }
+    if (isFp4Padded) {
       int colPadded = vec * ((row / perPhase) % maxPhase);
       int colPacked = colPadded / 16 * 8 + colPadded % 8;
       bases2D.push_back({row, colPacked});
