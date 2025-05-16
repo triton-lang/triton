@@ -272,8 +272,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     torch.testing.assert_close(src * 10, dst)
 
 
-@pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 9,
-                    reason="Requires compute capability >= 9 for NV")
+@pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] != 9,
+                    reason="PTX file in this unit test is only for SM90")
 def test_override_ptx(device):
     N = 1024
     src = torch.randn(N, device=device)
