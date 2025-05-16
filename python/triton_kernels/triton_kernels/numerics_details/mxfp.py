@@ -219,13 +219,13 @@ def _upcast_from_mxfp(out_ptr, stride_o_outer, stride_o_quant: tl.constexpr,
 
     mask_outer = start_out + offs_outer < outer_dim
     mask_out_quant = start_out_quant + offs_out_quant < quant_dim
-    full_mask_out = mask_out_quant and mask_outer
+    full_mask_out = mask_out_quant & mask_outer
 
     mask_src_quant = start_mxt_quant + offs_src_quant < tl.cdiv(quant_dim, K_DIVISOR)
-    full_mask_src = mask_src_quant and mask_outer
+    full_mask_src = mask_src_quant & mask_outer
 
     mask_scale = start_mx_scale_quant + offs_scale < tl.cdiv(quant_dim, 32)
-    full_scale_mask = mask_scale and mask_outer
+    full_scale_mask = mask_scale & mask_outer
 
     tensor_offsets = offs_src_quant * stride_tensor_quant + offs_outer * stride_tensor_outer
     scale_offsets = offs_scale * stride_scale_quant + offs_outer * stride_scale_outer
