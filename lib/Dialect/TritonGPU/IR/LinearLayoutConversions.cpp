@@ -1553,8 +1553,8 @@ chooseMfmaLikeStoreLayout(RankedTensorType valType) {
   // The rows are kept as is with an identity linear layout.
   swapLL *= LinearLayout::identity1D(valShape[0], dimM, dimM);
   // In transposed mfma32 layout, each thread holds 4 consecutive values along N
-  // dim. We want to exchange column 4-7 (owned by thread 0-31) and column 8-11
-  // (owned by thread 32-63) every 16 columns to make each thread holds 8
+  // dim. We want to exchange column 4-7 (owned by thread 32-63) and column 8-11
+  // (owned by thread 0-31) every 16 columns to make each thread holds 8
   // elements. This would mean exchange the 2nd and 3rd basis vector from an
   // identity linear layout.
   std::vector<std::vector<int32_t>> dimNBases(mfmaLL.getOutDimSizeLog2(dimN));
