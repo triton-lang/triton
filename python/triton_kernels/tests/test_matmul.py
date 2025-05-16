@@ -244,11 +244,6 @@ def test_op(m, n, k, split_k, do_gather, do_scatter, fused_scatter, has_y_gammas
     torch.manual_seed(0)
 
     block_k = None
-    if is_persistent and weight_dtype_str.startswith("mx") and torch.cuda.get_device_capability()[0] < 10:
-        # Override block_k for testing correctness. The default is temporarily 128 for
-        # performance reasons which doesn't work with persistent matmul.
-        # TODO: revisit when Triton is better for H100 + MXFP4
-        block_k = 256
 
     constraints = {
         "block_m": block_m,

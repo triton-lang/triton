@@ -941,44 +941,6 @@ def swizzle_mxfp4_value_hopper(x: torch.Tensor, op_idx: int, mma_version: int):
 
     return x
 
-def bit_twiddling_mxfp4_value_hopper(x: torch.Tensor, op_idx: int):
-    """
-    Pre-swizzle the mxfp4 values as per
-        1000000111000000         (first fp4)
-           1000000111000000      (second fp4)
-              1000000111000000   (third fp4)
-        0110110000000000         (fourth fp4)
-    This is done so that dequantization can be done in 14 SASS instructions
-    """
-    if op_idx == 1:
-        x = x.mT
-
-    assert x.is_contiguous()
-    assert x.shape[-1] % 4 == 0, "Input tensor must have a last dimension divisible by 4"
-    x = x.reshape(x.shape[:-1] + (x.shape[-1] // 4, 4))
-
-    def compress_fp4(x):
-        x = x.to(torch.int32)
-        return ((x & 0x8) << 12) | ((x & 0x7) << 6)
-
-    first = compress_fp4(x[..., 0]) | (compress_fp4(x[..., 0] >> 4) << 16)
-    second = compress_fp4(x[..., 1]) | (compress_fp4(x[..., 1] >> 4) << 16)
-    third = compress_fp4(x[..., 2]) | (compress_fp4(x[..., 2] >> 4) << 16)
-    def compress_fourth(x):
-        x = x.to(torch.int32)
-        return ((x & 0x8) << 11) | ((x & 0x6) << 9) | ((x & 0x1) << 13)
-
-    fourth = compress_fourth(x[..., 3]) | (compress_fourth(x[..., 3] >> 4) << 16)
-
-    x = first | right_shift_unsigned(second, 3) | right_shift_unsigned(third, 6) | fourth
-    assert x.is_contiguous()
-    x = x.view(torch.uint8)
-
-    if op_idx == 1:
-        x = x.mT
-    return x
-
-
 def swizzle_mxfp4_scale_hopper(x: torch.Tensor, num_warps: int):
     """
     Make the 64x2 tile of scales of a 64x64 tile of mxfp4 values contiguous.
