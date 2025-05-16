@@ -1696,3 +1696,38 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
     tt.return
   }
 }
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [4], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
+  // CHECK-LABEL: @predicate_stage1
+  // CHECK: scf.for %[[IV:.*]] = %[[LB:.*]] to %[[UB:.*]] step %[[STEP:.*]] iter_args
+  // CHECK: ttg.predicate_stage %[[IV]], %[[UB]], %[[STEP]] maxStage 2 stage 0 : i32 -> i1
+  tt.func public @predicate_stage1(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg2: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg3: i32 {tt.divisibility = 16 : i32, tt.max_divisibility = 16 : i32}) attributes {noinline = false} {
+    %c1024_i32 = arith.constant 1024 : i32
+    %c0_i32 = arith.constant 0 : i32
+    %c1016800_i32 = arith.constant 1016800 : i32
+    %0 = tt.get_program_id x : i32
+    %1 = arith.muli %0, %c1016800_i32 : i32
+    %2 = tt.make_range {end = 1024 : i32, start = 0 : i32} : tensor<1024xi32, #blocked>
+    %3 = tt.splat %arg3 : i32 -> tensor<1024xi32, #blocked>
+    %4 = tt.splat %arg0 : !tt.ptr<f32> -> tensor<1024x!tt.ptr<f32>, #blocked>
+    %5 = tt.splat %arg1 : !tt.ptr<f32> -> tensor<1024x!tt.ptr<f32>, #blocked>
+    %6 = tt.splat %arg2 : !tt.ptr<f32> -> tensor<1024x!tt.ptr<f32>, #blocked>
+    scf.for %arg4 = %c0_i32 to %c1016800_i32 step %c1024_i32  : i32 {
+      %7 = arith.addi %1, %arg4 : i32
+      %8 = tt.splat %7 : i32 -> tensor<1024xi32, #blocked>
+      %9 = arith.addi %8, %2 : tensor<1024xi32, #blocked>
+      %10 = arith.cmpi slt, %9, %3 : tensor<1024xi32, #blocked>
+      %11 = tt.addptr %4, %9 : tensor<1024x!tt.ptr<f32>, #blocked>, tensor<1024xi32, #blocked>
+      %12 = tt.load %11, %10 : tensor<1024x!tt.ptr<f32>, #blocked>
+      %13 = tt.addptr %5, %9 : tensor<1024x!tt.ptr<f32>, #blocked>, tensor<1024xi32, #blocked>
+      %14 = tt.load %13, %10 : tensor<1024x!tt.ptr<f32>, #blocked>
+      %15 = arith.addf %12, %14 : tensor<1024xf32, #blocked>
+      %16 = tt.addptr %6, %9 : tensor<1024x!tt.ptr<f32>, #blocked>, tensor<1024xi32, #blocked>
+      tt.store %16, %15, %10 : tensor<1024x!tt.ptr<f32>, #blocked>
+    } {tt.num_stages = 3 : i32, __test_keep_predicate_stage}
+    tt.return
+  }
+}
