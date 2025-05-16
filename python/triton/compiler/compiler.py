@@ -349,16 +349,15 @@ def compile(src, target=None, options=None):
         next_module = compile_ir(module, metadata)
         ir_filename = f"{file_name}.{ext}"
 
-        # Users can override kernels at scale by setting `ir_override` in autotune config
-        # without TRITON_KERNEL_OVERRIDE
-        if ir_override := metadata.get("ir_override", None):
-            if ir_override.endswith(f".{ext}"):
+        if fn_override_manager is None:
+            # Users can override kernels at scale by setting `ir_override` in autotune config
+            # without TRITON_KERNEL_OVERRIDE
+            if (ir_override := metadata.get("ir_override", None)) and ir_override.endswith(f".{ext}"):
                 if knobs.autotuning.print:
                     print(f"\nOverriding IR with filename set in triton config {src.constants}: {ir_override}")
                 next_module = parse(ir_override, ext, context)
-
-        # TRITON_KERNEL_OVERRIDE has higher priority because it is a debug feature
-        if (fn_override_manager is not None and (full_name := fn_override_manager.get_file(ir_filename)) is not None):
+        elif full_name := fn_override_manager.get_file(ir_filename):
+            # TRITON_KERNEL_OVERRIDE has higher priority because it is a debug feature
             print(f"\nOverriding kernel with file {full_name}")
             next_module = parse(full_name, ext, context)
 
