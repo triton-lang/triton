@@ -1535,7 +1535,7 @@ std::optional<LinearLayout>
 chooseMfmaLikeStoreLayout(RankedTensorType valType) {
   auto mfmaLayout = cast<AMDMfmaEncodingAttr>(valType.getEncoding());
 
-  // Currently support transposed [B]F16 MFMA32x32 on CDNA4
+  // We currently only support transposed [B]F16 MFMA32x32 on CDNA4.
   bool isMfma32 = mfmaLayout.getMDim() == 32 && mfmaLayout.getNDim() == 32;
   Type elemType = valType.getElementType();
   if (!(valType.getRank() == 2 && (elemType.isF16() || elemType.isBF16()) &&
@@ -1543,32 +1543,27 @@ chooseMfmaLikeStoreLayout(RankedTensorType valType) {
         isMfma32))
     return {};
 
-  MLIRContext *ctx = mfmaLayout.getContext();
-  StringAttr kRegister = S("register");
-  StringAttr kLane = S("lane");
-  StringAttr kWarp = S("warp");
-  StringAttr kBlock = S("block");
+  auto valShape = valType.getShape();
+  LinearLayout mfmaLL = mfmaLayout.toLinearLayout(valShape);
+  auto mfmaOutDims = llvm::to_vector(mfmaLL.getOutDimNames());
+  StringAttr dimM = mfmaOutDims[0];
+  StringAttr dimN = mfmaOutDims[1];
 
-  SmallVector<unsigned> order = getDefaultMmaOrder(mfmaLayout);
-  auto standardOutDims = standardOutDimNames(ctx, 2);
-  // We make each thread handle 8 consecutive elements to enable 128-bit
-  // global stores for [b]f16 types and keep the thread pattern in each lane
-  // similar to the canonical mfmaLayout.
-  LinearLayout mfma8Layout = LinearLayout::empty();
-  mfma8Layout =
-      LinearLayout({{kRegister, {{1, 0}, {2, 0}, {4, 0}}},
-                    {kLane, {{0, 1}, {0, 2}, {0, 4}, {0, 8}, {0, 16}, {8, 0}}},
-                    {kWarp, {}},
-                    {kBlock, {}}},
-                   {standardOutDims[order[0]], standardOutDims[order[1]]});
+  auto swapLL = LinearLayout::empty();
+  // The rows are kept as is with an identity linear layout.
+  swapLL *= LinearLayout::identity1D(valShape[0], dimM, dimM);
+  // In transposed mfma32 layout, each thread holds 4 consecutive values along N
+  // dim. We want to exchange column 4-7 (owned by thread 0-31) and column 8-11
+  // (owned by thread 32-63) every 16 columns to make each thread holds 8
+  // elements. This would mean exchange the 2nd and 3rd basis vector from an
+  // identity linear layout.
+  std::vector<std::vector<int32_t>> dimNBases(mfmaLL.getOutDimSizeLog2(dimN));
+  std::generate(dimNBases.begin(), dimNBases.end(),
+                [i = 0]() mutable { return std::vector<int32_t>{1 << i++}; });
+  std::swap(dimNBases[2], dimNBases[3]);
+  swapLL *= LinearLayout({{dimN, dimNBases}}, {dimN});
 
-  LinearLayout warpLayout =
-      identityStandardND(kWarp, mfmaLayout.getWarpsPerCTA(), order);
-  LinearLayout ctaLayout = mfma8Layout.transposeOuts(standardOutDims) *
-                           warpLayout.transposeOuts(standardOutDims);
-  mfma8Layout = combineCtaCgaWithShape(ctaLayout, mfmaLayout.getCTALayout(),
-                                       valType.getShape());
-  return mfma8Layout;
+  return mfmaLL.compose(swapLL);
 }
 
 LinearLayout getScaleTMEMStoreLinearLayout(RankedTensorType scaleType,
