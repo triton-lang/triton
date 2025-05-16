@@ -6,6 +6,7 @@
 #include "triton/Analysis/Utility.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Types.h"
+#include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Attributes.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/PipelineExpander.h"
@@ -14,6 +15,7 @@
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/TMAUtilities.h"
+#include "triton/Tools/LayoutUtils.h"
 #include "triton/Tools/LinearLayout.h"
 #include "llvm/ADT/MapVector.h"
 #include "llvm/ADT/STLExtras.h"
@@ -285,24 +287,56 @@ SmallVector<Value> splitLhs(OpBuilder &builder,
 SmallVector<Value> splitRhs(OpBuilder &builder,
                             TypedValue<ttg::MemDescType> rhs, int64_t newK) {
   auto loc = rhs.getLoc();
+  auto *ctx = builder.getContext();
   auto type = rhs.getType();
   auto rank = type.getRank();
   auto kDim = rank - 2;
   auto nSplits = type.getShape()[kDim] / newK;
+  // offset -> matrix
+  auto ll = ttg::toLinearLayout(type.getShape(), type.getEncoding());
+
+  // Split into
+  auto kOffset = StringAttr::get(ctx, "offset");
+  assert(ll.getInDimSize(kOffset) == product(type.getShape()));
+  auto dimNames = tt::standardOutDimNames(ctx, rank);
+  SmallVector<std::pair<StringAttr, int32_t>> newInDims;
+  for (auto d : getOrder(type)) {
+    newInDims.push_back({dimNames[d], type.getShape()[d]});
+  }
+  // Split into shmem shape and invert
+  llvm::errs() << "ll: " << ll << "\n";
+  ll = ll.reshapeIns(newInDims);
+  ll = ll.transposeIns(dimNames);
+  llvm::errs() << "ll: " << ll << "\n";
+  auto llInv = ll.invert();
+  llvm::errs() << "llInv: " << llInv << "\n";
+  auto toOffsets =
+      [&](const SmallVector<std::pair<StringAttr, int32_t>> &shape) {
+        return llvm::to_vector(llvm::map_range(shape, [&](const auto &p) {
+          return builder.create<arith::ConstantIntOp>(loc, p.second, 32)
+              .getResult();
+        }));
+      };
+  // New Shape
   auto shape = llvm::to_vector(type.getShape());
   shape[kDim] = newK;
-  SmallVector<Value> offsetsVal;
-  for (int i = 0; i < rank; i++) {
-    offsetsVal.push_back(builder.create<arith::ConstantIntOp>(loc, 0, 32));
-  }
   auto newType = ttg::MemDescType::get(
       shape, type.getElementType(), type.getEncoding(), type.getMemorySpace(),
       /*isMutable=*/false, type.getAllocShape());
   SmallVector<Value> ret;
+  SmallVector<std::pair<StringAttr, int32_t>> logicalOffsets;
+  for (int i = 0; i < rank; i++) {
+    logicalOffsets.push_back({StringAttr::get(ctx, "dim" + Twine(i)), 0});
+  }
   for (int i = 0; i < nSplits; i++) {
-    offsetsVal[kDim] = builder.create<arith::ConstantIntOp>(loc, i * newK, 32);
+    logicalOffsets[kDim].second = i * newK;
+    for (auto p : llInv.apply(logicalOffsets)) {
+      llvm::errs() << "p: " << p.first << " " << p.second << "\n";
+    }
+    auto shmemOffsets = toOffsets(llInv.apply(logicalOffsets));
+
     Value newSmem = builder.create<triton::gpu::MemDescSubviewOp>(
-        loc, newType, rhs, offsetsVal);
+        loc, newType, rhs, shmemOffsets);
     ret.push_back(newSmem);
   }
   return ret;
