@@ -33,4 +33,17 @@ def NVGPUTestWSTaskPartition : Pass<"nvgpu-test-ws-task-partition", "mlir::Modul
   ];
 }
 
+def NVGPUTestWSDataPartition : Pass<"nvgpu-test-ws-data-partition", "mlir::ModuleOp"> {
+  let summary = "test warp specialization data partition";
+
+  let description = "This pass partitions operations into multiple suboperations which operate on smaller data shapes";
+
+  let dependentDialects = ["mlir::triton::gpu::TritonGPUDialect"];
+  let options = [
+    Option<"numWarpGroups", "num-warp-groups",
+           "int32_t", /*default*/"0",
+           "number of warp groups for warp specialization">
+  ];
+}
+
 #endif // NV_TRANSFORMS_PASSES

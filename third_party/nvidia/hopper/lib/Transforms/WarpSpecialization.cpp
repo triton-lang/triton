@@ -11,6 +11,7 @@
 namespace mlir {
 
 void doTaskPartition(triton::FuncOp &funcOp, unsigned numWarpGroups);
+bool doDataPartition(triton::FuncOp &funcOp, unsigned numConsumerGroups);
 
 #define GEN_PASS_DEF_NVGPUWARPSPECIALIZATION
 #include "nvidia/hopper/include/Transforms/Passes.h.inc"
@@ -27,6 +28,10 @@ public:
 
     // Partition key ops into multiple async tasks.
     doTaskPartition(funcOp, numWarpGroups);
+
+    // Partition ops into parallel sub ops.
+    if (!doDataPartition(funcOp, numWarpGroups - 1))
+      signalPassFailure();
   }
 
   void runOnOperation() override {
