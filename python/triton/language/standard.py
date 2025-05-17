@@ -498,7 +498,7 @@ def flip(x, dim=None):
 
     # reshape the swap dimension to (2, 2, ..., 2)
     idtype = core.get_int_dtype(bitwidth=x.dtype.primitive_bitwidth, signed=True)
-    y = core.reshape(x.to(idtype, bitcast=True), x.shape[:_dim] + [2] * steps + x.shape[_dim + 1:])
+    y = core.reshape(x.to(idtype, bitcast=True), x.shape[:_dim] + core.tuple([2] * steps) + x.shape[_dim + 1:])
     for i in core.static_range(steps):
         y = y ^ xor_sum(y, _dim + i, True)
     x = core.reshape(y, x.shape).to(x.dtype, bitcast=True)
