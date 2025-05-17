@@ -306,6 +306,13 @@ def _unwrap_if_constexpr(o):
     return o.value if isinstance(o, constexpr) else o
 
 
+def _normalize_tuple(t):
+    normalized_tuple = _unwrap_if_constexpr(t)
+    if isinstance(normalized_tuple, (list, builtins.tuple)):
+        normalized_tuple = tuple(normalized_tuple)
+    return normalized_tuple
+
+
 def check_bit_width(value, shift_value):
     if isinstance(value, tensor) and isinstance(shift_value, constexpr):
         bitwidth = value.type.scalar.primitive_bitwidth
@@ -1262,16 +1269,8 @@ class tuple(base_value):
     def __getattr__(self, name):
         return self.values[self.type.fields.index(name)]
 
-    # TODO: remove
-    def __setitem__(self, idx: constexpr, value):
-        if isinstance(idx, int):
-            idx = constexpr(idx)
-        assert isinstance(idx, constexpr)
-        self.values[idx] = value
-
     def __add__(self, other):
-        if isinstance(other, list):
-            other = tuple(other)
+        other = _normalize_tuple(other)
         return tuple(self.values + other.values)
         # return tuple(a + b for a, b in zip(self.values, other.values))
 
@@ -1280,9 +1279,7 @@ class tuple(base_value):
         return tuple(self.values * other.value)
 
     def __eq__(self, other):
-        import builtins
-        if isinstance(other, (list, builtins.tuple)):
-            other = tuple(other)
+        other = _normalize_tuple(other)
         return constexpr(self.values == other.values)
 
     def __hash__(self):

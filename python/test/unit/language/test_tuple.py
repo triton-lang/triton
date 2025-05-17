@@ -162,3 +162,22 @@ def test_namedtuple(device):
     ty = Tensor(y, y.shape, y.stride())
     _namedtuple_kernel[(1, )](function, tx, ty, 64, 64)
     assert torch.allclose(y, x[:16, :16] * a)
+
+
+def test_eq():
+    @triton.jit
+    def fn(ret_ptr0, ret_ptr1, ret_ptr2, ret_ptr3):
+        tl.store(ret_ptr0, (1, 2,) == (1, 2, ))
+        tl.store(ret_ptr1, (1, 2,) == [1, 2, ])
+        tl.store(ret_ptr2, tl.tuple(1, 2,) == (1, 2, ))
+        tl.store(ret_ptr3, tl.tuple(1, 2,) == (1, 3,))
+
+    ret0 = torch.tensor([1], dtype=torch.int32, device="cuda")
+    ret1 = torch.tensor([1], dtype=torch.int32, device="cuda")
+    ret2 = torch.tensor([1], dtype=torch.int32, device="cuda")
+    ret3 = torch.tensor([1], dtype=torch.int32, device="cuda")
+    fn[(1, )](ret0, ret1, ret2, ret3)
+    assert ret0.item() == 1
+    assert ret1.item() == 1
+    assert ret2.item() == 1
+    assert ret3.item() == 0
