@@ -4,12 +4,14 @@ import hashlib
 import subprocess
 import sysconfig
 import tempfile
+import re
 from pathlib import Path
 from triton.runtime.build import _build
 from triton import knobs
 from triton.runtime.cache import get_cache_manager
 from triton.backends.compiler import GPUTarget
 from triton.backends.driver import GPUDriver, platform_key
+from triton.tools.tensor_descriptor import TensorDescriptor
 
 dirname = os.path.dirname(os.path.realpath(__file__))
 include_dir = [os.path.join(dirname, "include")]
@@ -193,7 +195,36 @@ def ty_to_cpp(ty):
     }[ty]
 
 
+_BASE_ARGS_FORMAT = "piiiKKOOOO"
+
+
 def make_launcher(constants, signature, warp_size):
+
+    def _expand_signature(signature):
+        output = []
+        # Expand tensor descriptor arguments into base pointer, shape, and
+        # strides
+        for sig in signature:
+            if isinstance(sig, str) and sig.startswith("tensordesc"):
+                ndim = sig.count(",") + 1
+                dtype = re.match("tensordesc<([^[>]*)", sig).group()
+
+                output.append("*" + dtype)
+                for _ in range(2 * ndim):
+                    output.append("i64")
+                # Currently the host side tensor descriptors get passed in as a
+                # tensor desc, shape, and strides. We have no way to use these
+                # shape and strides when processing tensor descriptors which is
+                # why we provide our own decomposition above. Sadly this means
+                # we have to pass the shape and strides twice.
+                for _ in range(ndim):
+                    output.append("i32")
+                for _ in range(ndim):
+                    output.append("i64")
+            else:
+                output.append(sig)
+
+        return output
 
     def _serialize_signature(sig):
         if isinstance(sig, tuple):
@@ -232,8 +263,10 @@ def make_launcher(constants, signature, warp_size):
             "uint64_t": "K",
         }[ty_to_cpp(ty)]
 
+    signature = {idx: s for idx, s in enumerate(_expand_signature(signature.values()))}
+
     args_format = ''.join([format_of(ty) for ty in signature.values()])
-    format = "piiiKKOOOO" + args_format
+    format = _BASE_ARGS_FORMAT + args_format
     signature = ','.join(map(_serialize_signature, signature.values()))
     signature = list(filter(bool, signature.split(',')))
     signature = {i: s for i, s in enumerate(signature)}
@@ -494,6 +527,31 @@ PyMODINIT_FUNC PyInit___triton_launcher(void) {{
     return src
 
 
+def wrap_handle_tensor_descriptor(launcher):
+    """
+    Replace all tensor descriptors with the base ptr, shape, and strides
+    """
+
+    def inner(*args):
+        meta_args = args[:len(_BASE_ARGS_FORMAT)]
+        raw_kernel_args = args[len(_BASE_ARGS_FORMAT):]
+        final_args = []
+        for arg in raw_kernel_args:
+            if isinstance(arg, TensorDescriptor):
+                # Currently the host side tensor descriptors get decomposed in
+                # the frontend to tensor desc, shape, and strides. We have no
+                # way to use these shape and strides when processing tensor
+                # descriptors which is why we provide our own decomposition
+                # above. Sadly this means we have to pass the shape and strides
+                # twice.
+                final_args.extend([arg.base, *arg.shape, *arg.strides, *arg.shape, *arg.strides])
+            else:
+                final_args.append(arg)
+        return launcher(*meta_args, *final_args)
+
+    return inner
+
+
 class HIPLauncher(object):
 
     def __init__(self, src, metadata):
@@ -503,7 +561,9 @@ class HIPLauncher(object):
         signature = {idx: value for idx, value in src.signature.items()}
         src = make_launcher(constants, signature, metadata.warp_size)
         mod = compile_module_from_src(src, "__triton_launcher")
-        self.launch = mod.launch
+        has_tensor_desc_arg = any(isinstance(sig, str) and sig.startswith("tensordesc") for sig in signature.values())
+
+        self.launch = wrap_handle_tensor_descriptor(mod.launch) if has_tensor_desc_arg else mod.launch
         self.launch_cooperative_grid = metadata.launch_cooperative_grid
 
     def __call__(self, *args):
