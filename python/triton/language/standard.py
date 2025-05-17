@@ -316,9 +316,9 @@ def _or_combine(x, y):
 
 @core._tensor_member_fn
 @jit
-@core._add_reduction_docstr("reduce_of")
+@core._add_reduction_docstr("reduce_or")
 def reduce_or(input, axis, keep_dims=False):
-    core.static_assert(input.type.scalar.is_int(), "reduce_of only supported for integers")
+    core.static_assert(input.type.scalar.is_int(), "reduce_or only supported for integers")
     return core.reduce(input, axis, _or_combine, keep_dims=keep_dims)
 
 

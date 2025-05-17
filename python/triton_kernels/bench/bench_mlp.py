@@ -4,10 +4,12 @@ import json
 import triton.profiler as proton
 import torch
 import triton_kernels.swiglu
+
+import triton_kernels.distributed as triton_dist
+
 from triton_kernels.numerics_details.mxfp import downcast_to_mxfp
 from triton_kernels.matmul_ogs import MicroscalingCtx, matmul_ogs, PrecisionConfig, FlexCtx
 from triton_kernels.numerics import InFlexData
-from triton_kernels.routing import routing
 from triton_kernels.target_info import is_hip, get_cdna_version
 from dataclasses import dataclass
 
@@ -102,17 +104,25 @@ class PerfData:
 def bench_mlp(batch, dim1, dim2, n_expts_tot, n_expts_act, x_dtype, w_dtype, TP, EP, name):
     assert n_expts_tot % EP == 0
     assert dim2 % TP == 0
-    dev = "cuda"
+    local_rank, world_size = triton_dist.setup()
+    dev = f"cuda:{local_rank}"
+    DP = world_size
+
+    assert n_expts_tot % EP == 0, f"{n_expts_tot=}, {EP=}, n_expts_tot must be divisible by EP"
+    assert dim2 % TP == 0, f"{dim2=}, {TP=}, dim2 must be divisible by TP"
 
     # input
     # weights
-    wg = torch.randn((dim1, n_expts_tot), device=dev)
+    wg = triton_dist.broadcast(torch.randn((dim1, n_expts_tot), device=dev))
     w1 = torch.randn((n_expts_tot // EP, dim1, dim2 // TP), device=dev)
     w2 = torch.randn((n_expts_tot // EP, dim2 // TP // 2, dim1), device=dev)
+
     # biases
-    bg = torch.randn((n_expts_tot, ), device=dev)
+    bg = triton_dist.broadcast(torch.randn((n_expts_tot, ), device=dev))
     b1 = torch.randn((n_expts_tot // EP, dim2 // TP), device=dev)
     b2 = torch.randn((n_expts_tot // EP, dim1), device=dev)
+    ep_indx = rank // TP
+    b2 = triton_dist.broadcast(b2, src=ep_indx * TP, group=list(range(ep_indx * TP, (ep_indx + 1) * TP)))
 
     # -- numerics --
     optg = dict()
@@ -127,27 +137,31 @@ def bench_mlp(batch, dim1, dim2, n_expts_tot, n_expts_act, x_dtype, w_dtype, TP,
     pc2 = PrecisionConfig(mx_ctx=w2_mx, flex_ctx=FlexCtx(rhs_data=w2_flex))
 
     # -- benchmark --
-    fpath = Path(f"logs/{name}/{x_dtype}-{w_dtype}-TP{TP}-EP{EP}/profiles/batch-{batch}.hatchet")
+    fpath = Path(f"logs/{name}/{rank}/{x_dtype}-{w_dtype}-TP{TP}-EP{EP}/profiles/batch-{batch}.hatchet")
     fpath.parent.mkdir(parents=True, exist_ok=True)
     x_dtype = {"fp16": torch.float16, "bf16": torch.bfloat16, "fp8": torch.float8_e4m3fn}[x_dtype]
     # special treatment of fp8_e4m3 on AMD CDNA3 because it uses fp8_e4m3fnuz
     if x_dtype == torch.float8_e4m3fn and get_cdna_version() == 3:
         x_dtype = torch.float8_e4m3fnuz
 
-    x = torch.randn((batch, dim1), device=dev)
-    xg = x.to(wg.dtype if n_expts_tot > 1 else x_dtype)
-    x = x.to(x_dtype)
+    input_x = torch.randn((batch // DP, dim1), device=dev)
     # run layer
     proton.start(str(fpath.with_suffix('')), hook="triton")
+    xg = input_x.to(wg.dtype if n_expts_tot > 1 else input_x.dtype)
+    input_x = input_x.to(x_dtype)
     for i in range(100):
+        x = triton_dist.all_gather(input_x, dim=0)
         if n_expts_tot > 1:
             logits = matmul_ogs(xg, wg, bg, precision_config=pcg)
-            rdata, gather_indx, scatter_indx = routing(logits, n_expts_act, simulated_ep=EP)
+            rdata, gather_indx, scatter_indx, token_mask = triton_dist.routing(logits, n_expts_act, EP=EP)
         else:
-            rdata, gather_indx, scatter_indx = None, None, None
+            rdata, gather_indx, scatter_indx, token_mask = None, None, None, None
+        if token_mask is not None:
+            x = x[token_mask]
         x = matmul_ogs(x, w1, b1, rdata, gather_indx=gather_indx, precision_config=pc1)
         x = triton_kernels.swiglu.swiglu(x, 1.0, pcs, routing_data=rdata)
-        x = matmul_ogs(x, w2, b2, rdata, scatter_indx=scatter_indx, precision_config=pc2)
+        x = matmul_ogs(x, w2, b2 if rank % TP == 0 else None, rdata, scatter_indx=scatter_indx, precision_config=pc2)
+        x = triton_dist.reduce_scatter(x, token_mask=token_mask, dim=0)
     proton.finalize()
 
     # -- analyze --
@@ -211,12 +225,14 @@ def roofline_mlp(batch_ranges, dim1, dim2, n_expts_tot, n_expts_act, x_dtype, w_
     ax.legend(frameon=False, loc="lower right")
     ax.grid(True, which="both", ls=":", lw=0.5)
     fig.tight_layout()
-    fpath = Path(f"logs/{name}/{x_dtype}-{w_dtype}-TP{TP}-EP{EP}/roofline.png")
+    rank, _ = triton_dist.setup()
+    fpath = Path(f"logs/{name}/{rank}/{x_dtype}-{w_dtype}-TP{TP}-EP{EP}/roofline.png")
     plt.savefig(fpath)
 
 
 if __name__ == "__main__":
     has_native_mx4 = torch.cuda.get_device_capability(0)[0] >= 10 or get_cdna_version() == 4
+    rank, world_size = triton_dist.setup()
     if SPECS is None:
         print("Current GPU has no specs provided, utilization is N/A")
     batch_ranges = [(1024, 32768, 1024)]
@@ -226,3 +242,8 @@ if __name__ == "__main__":
     roofline_mlp(batch_ranges, 8192, 8192, 1, 1, *quantized_dtypes, TP=1, EP=1, name="dense")
     roofline_mlp(batch_ranges, 5120, 8192, 128, 4, *dense_dtypes, TP=1, EP=1, name="llama4-maverick")
     roofline_mlp(batch_ranges, 5120, 8192, 128, 4, *quantized_dtypes, TP=1, EP=1, name="llama4-maverick")
+    if world_size > 1:
+        roofline_mlp(batch_ranges, 8192, 8192, 1, 1, *dense_dtypes, TP=4, EP=1, name="dense")
+        roofline_mlp(batch_ranges, 8192, 8192, 1, 1, *quantized_dtypes, TP=4, EP=1, name="dense")
+        roofline_mlp(batch_ranges, 5120, 8192, 128, 4, *dense_dtypes, TP=2, EP=2, name="llama4-maverick")
+        roofline_mlp(batch_ranges, 5120, 8192, 128, 4, *quantized_dtypes, TP=2, EP=2, name="llama4-maverick")
