@@ -282,11 +282,6 @@ void init_triton_ir(py::module &&m) {
   using ret = py::return_value_policy;
   using namespace pybind11::literals;
 
-  py::enum_<PaddingOption>(m, "PADDING_OPTION", py::module_local())
-      .value("PAD_ZERO", PaddingOption::PAD_ZERO)
-      .value("PAD_NAN", PaddingOption::PAD_NAN)
-      .export_values();
-
   py::enum_<CacheModifier>(m, "CACHE_MODIFIER", py::module_local())
       .value("NONE", CacheModifier::NONE)
       .value("CA", CacheModifier::CA)
@@ -1416,23 +1411,6 @@ void init_triton_ir(py::module &&m) {
               EvictionPolicy evictionPolicy) -> void {
              self.create<StoreOp>(ptrs, value, cacheModifier, evictionPolicy);
            })
-      .def("create_tensor_pointer_load",
-           [](TritonOpBuilder &self, Value &ptr,
-              std::vector<int32_t> &boundaryCheck,
-              std::optional<PaddingOption> paddingOption,
-              CacheModifier cacheModifier, EvictionPolicy evictionPolicy,
-              bool isVolatile) -> Value {
-             return self.create<LoadOp>(ptr, boundaryCheck, paddingOption,
-                                        cacheModifier, evictionPolicy,
-                                        isVolatile);
-           })
-      .def("create_tensor_pointer_store",
-           [](TritonOpBuilder &self, Value &ptr, Value &val,
-              std::vector<int32_t> &boundaryCheck, CacheModifier cacheModifier,
-              EvictionPolicy evictionPolicy) -> void {
-             self.create<StoreOp>(ptr, val, boundaryCheck, cacheModifier,
-                                  evictionPolicy);
-           })
       .def("create_masked_load",
            [](TritonOpBuilder &self, Value &ptrs, Value &mask,
               std::optional<Value> &other, CacheModifier cacheModifier,
@@ -1763,21 +1741,6 @@ void init_triton_ir(py::module &&m) {
       // Force GPU barrier
       .def("create_barrier",
            [](TritonOpBuilder &self) { self.create<mlir::gpu::BarrierOp>(); })
-      // Make a block pointer (tensor pointer in Triton IR)
-      .def("create_make_block_ptr",
-           [](TritonOpBuilder &self, Value &base, std::vector<Value> &shape,
-              std::vector<Value> &strides, std::vector<Value> &offsets,
-              std::vector<int32_t> &tensorShape,
-              std::vector<int32_t> &order) -> Value {
-             return self.create<MakeTensorPtrOp>(base, shape, strides, offsets,
-                                                 tensorShape, order);
-           })
-      // Advance a block pointer
-      .def("create_advance",
-           [](TritonOpBuilder &self, Value &ptr,
-              std::vector<Value> &offsets) -> Value {
-             return self.create<AdvanceOp>(ptr.getType(), ptr, offsets);
-           })
       // Make a tensor descriptor
       .def("create_make_tensor_descriptor",
            [](TritonOpBuilder &self, Value &base, std::vector<Value> &shape,

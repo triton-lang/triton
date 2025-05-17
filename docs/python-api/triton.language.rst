@@ -71,8 +71,6 @@ Memory/Pointer Ops
 
     load
     store
-    make_block_ptr
-    advance
 
 
 Indexing Ops

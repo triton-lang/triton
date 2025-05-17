@@ -8,7 +8,6 @@ add_triton_library(TritonTransforms
   LoopInvariantCodeMotion.cpp
   LoopUnroll.cpp
   ReorderBroadcast.cpp
-  RewriteTensorPointer.cpp
   RewriteTensorDescriptorToPointer.cpp
   ArithTypeConversion.cpp
   FunctionTypeConversion.cpp

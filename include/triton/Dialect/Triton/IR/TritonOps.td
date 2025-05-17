@@ -205,21 +205,6 @@ def TT_AddPtrOp : TT_Op<"addptr",
     let hasFolder = 1;
 }
 
-def TT_AdvanceOp : TT_Op<"advance",
-                         [Pure,
-                          TypesMatchWith<"result type matches ptr type",
-                                         "result", "ptr", "$_self">]> {
-    let summary = "Advance a tensor pointer by offsets";
-
-    let arguments = (ins TT_TensorPtr:$ptr, Variadic<I32>:$offsets);
-
-    let results = (outs TT_TensorPtr:$result);
-
-    let assemblyFormat = "$ptr `,` `[` $offsets `]` attr-dict `:` type($result)";
-
-    let hasFolder = 1;
-}
-
 //
 // Load/Store Ops
 //
@@ -239,7 +224,7 @@ def TT_LoadOp : TT_Op<"load", [
 
     let arguments = (
       ins
-      AnyTypeOf<[TT_PtrLike, TT_TensorPtr]>:$ptr,
+      AnyTypeOf<[TT_PtrLike]>:$ptr,
       Optional<TT_BoolLike>:$mask,
       Optional<TT_Type>:$other,
 
@@ -310,7 +295,7 @@ def TT_StoreOp : TT_Op<"store", [
     let summary = "Store by a tensor of pointers or by a tensor pointer";
 
     let arguments = (ins
-      Arg<AnyTypeOf<[TT_PtrLike, TT_TensorPtr]>, "", [MemWrite<GlobalMemory>]>:$ptr,
+      Arg<AnyTypeOf<[TT_PtrLike]>, "", [MemWrite<GlobalMemory>]>:$ptr,
       TT_Type:$value,
       Optional<TT_BoolLike>:$mask,
       DefaultValuedAttr<DenseI32ArrayAttr, "::llvm::ArrayRef<int32_t>{}">:$boundaryCheck,
@@ -950,49 +935,6 @@ def TT_AssertOp : TT_Op<"assert", [MemoryEffects<[MemWrite<GlobalMemory>]>]> {
   }];
   let arguments = (ins AnyTypeOf<[I1, I1Tensor]>:$condition, StrAttr:$message);
   let assemblyFormat = "$condition `,` $message attr-dict `:` type($condition)";
-}
-
-//
-// Make Tensor Pointer Op
-//
-def TT_MakeTensorPtrOp : TT_Op<"make_tensor_ptr",
-                               [Pure,
-                                SameVariadicOperandSize,
-                                TypesMatchWith<"infer pointer type from the result type",
-                                               "result", "base",
-                                               "getPointerType(getElementTypeOfTensorPointerType($_self), getAddressSpace($_self))">]> {
-  let summary = "Make a tensor pointer type with meta information of the parent tensor and the block specified";
-
-  let description = [{
-      `tt.make_tensor_ptr` takes both meta information of the parent tensor and the block tensor, then it returns a
-      pointer to the block tensor, e.g. returns a type of `tt.ptr<tensor<8x8xf16>>`.
-  }];
-
-  // TODO(Chenggang): unify the integer types. Currently we cannot do that due to hardware constraints.
-  let arguments = (ins
-    TT_Ptr:$base,
-    Variadic<I64>:$shape,
-    Variadic<I64>:$strides,
-    Variadic<I32>:$offsets,
-    DenseI32ArrayAttr:$order
-  );
-
-  let results = (outs TT_TensorPtr:$result);
-
-  // TODO(Keren): define a custom assembly format for this op because the result type cannot be printed correctly
-  // Add additional `[]` to increase readability and split variadic lists
-  let assemblyFormat = "$base `,` `[` $shape `]` `,` `[` $strides `]` `,` `[` $offsets `]` attr-dict `:` type($result)";
-
-  let builders = [
-    OpBuilder<(ins
-        "Value":$base,
-        "ValueRange":$shape,
-        "ValueRange":$strides,
-        "ValueRange":$offsets,
-        "ArrayRef<int32_t>":$tensorShape,
-        "ArrayRef<int32_t>":$order
-    )>
-  ];
 }
 
 //

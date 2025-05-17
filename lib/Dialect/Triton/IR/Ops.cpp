@@ -925,25 +925,6 @@ LogicalResult BroadcastOp::verify() {
   return success();
 }
 
-//-- MakeTensorPtrOp --
-void MakeTensorPtrOp::build(OpBuilder &builder, OperationState &state,
-                            Value base, ValueRange shape, ValueRange strides,
-                            ValueRange offsets, ArrayRef<int32_t> tensorShape,
-                            ArrayRef<int32_t> order) {
-  // Get pointer type from `base`
-  auto pointerType = cast<PointerType>(base.getType());
-  assert(pointerType != nullptr);
-
-  // Build type `tt.ptr<tensor<tensorShape, base.pointeeType>>`
-  auto tensorType = RankedTensorType::get(
-      SmallVector<int64_t>(tensorShape.begin(), tensorShape.end()),
-      pointerType.getPointeeType());
-  auto result = PointerType::get(tensorType, pointerType.getAddressSpace());
-
-  return build(builder, state, result, base, shape, strides, offsets,
-               builder.getDenseI32ArrayAttr(order));
-}
-
 //-- AddPtrOp --
 OpFoldResult AddPtrOp::fold(FoldAdaptor adaptor) {
   // addptr(ptr, 0) -> ptr
@@ -951,19 +932,6 @@ OpFoldResult AddPtrOp::fold(FoldAdaptor adaptor) {
     return getPtr();
   }
   return {};
-}
-
-//-- AdvanceOp --
-OpFoldResult AdvanceOp::fold(FoldAdaptor adaptor) {
-  // advance(ptr, 0, 0) -> ptr
-  SmallVector<OpFoldResult> rawOffsets = getOffsets();
-  auto offsets = getConstantIntValues(rawOffsets);
-  if (!offsets.has_value())
-    return {};
-  for (int64_t offset : offsets.value())
-    if (offset != 0)
-      return {};
-  return getPtr();
 }
 
 //-- MakeTensorDescOp --

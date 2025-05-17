@@ -48,32 +48,6 @@ class TensorHandle:
         self.attr[key] = value
 
 
-class BlockPointerHandle:
-
-    def __init__(self, base, shape, strides, offsets, block_shape, order):
-        self.base = base
-        self.shape = shape
-        self.strides = strides
-        self.offsets = offsets
-        self.block_shape = block_shape
-        self.order = order
-
-    def materialize_pointers(self, boundary_check):
-        dtype_tt = self.base.get_element_ty()
-        n_bytes = dtype_tt.primitive_bitwidth // 8
-        ptrs = np.broadcast_to(self.base.data, self.block_shape)
-        masks = np.ones(self.block_shape, dtype=bool)
-        for dim in range(len(self.block_shape)):
-            bcast_dims = [1] * len(self.block_shape)
-            bcast_dims[dim] = self.block_shape[dim]
-            off = (self.offsets[dim].data + np.arange(self.block_shape[dim])).reshape(bcast_dims)
-            ptrs = ptrs + (n_bytes * off * self.strides[dim].data).astype(np.uint64)
-            if dim in boundary_check:
-                masks = masks & (off < self.shape[dim].data) & (off >= 0)
-        ptrs = TensorHandle(ptrs, self.base.dtype.scalar)
-        return ptrs, masks
-
-
 class TensorDescHandle:
 
     def __init__(self, base: TensorHandle, shape: List[TensorHandle], strides: List[TensorHandle],
@@ -613,25 +587,6 @@ class InterpreterBuilder:
         element_bytewidth = max(1, element_bitwidth // 8)
         return TensorHandle(ptr.data + element_bytewidth * offset.data.astype(np.uint64), ptr.dtype)
 
-    def create_tensor_pointer_load(self, ptr, boundary_check, padding_option, cache_modifier, eviction_policy,
-                                   is_volatile):
-        ptrs, masks = ptr.materialize_pointers(boundary_check)
-        dtype_tt = ptrs.get_element_ty()
-        dtype_np = _get_np_dtype(dtype_tt)
-        if padding_option is None:
-            other = None
-        elif padding_option == _ir.PADDING_OPTION.PAD_ZERO:
-            other = TensorHandle(np.zeros_like(ptrs.data, dtype=dtype_np), dtype_tt)
-        elif padding_option == _ir.PADDING_OPTION.PAD_NAN:
-            other = TensorHandle(np.full_like(ptrs.data, float('nan'), dtype=dtype_np), dtype_tt)
-        else:
-            raise ValueError(f"unsupported padding option {padding_option}")
-        return self.create_masked_load(ptrs, masks, other, cache_modifier, eviction_policy, is_volatile)
-
-    def create_tensor_pointer_store(self, ptr, value, boundary_check, cache_modifier, eviction_policy):
-        ptrs, masks = ptr.materialize_pointers(boundary_check)
-        return self.create_masked_store(ptrs, value, masks, cache_modifier, eviction_policy)
-
     def create_expand_dims(self, arg, axis):
         return TensorHandle(np.expand_dims(arg.data, axis), arg.dtype.scalar)
 
@@ -701,21 +656,6 @@ class InterpreterBuilder:
     def create_barrier(self):
         # Triton's barrier applies to each program in a grid, so it's a no-op in the interpreter
         pass
-
-    def create_make_block_ptr(self, base, shape, strides, offsets, block_shape, order):
-        # Create new offsets to avoid modifying the original
-        new_offsets = [offset.clone() for offset in offsets]
-        return BlockPointerHandle(base, shape, strides, new_offsets, block_shape, order)
-
-    def create_advance(self, ptr, offsets):
-        if len(ptr.offsets) != len(offsets):
-            raise ValueError("len(ptr.offsets) != len(offsets)")
-        # Create new offsets to avoid modifying the original
-        new_offsets = [offset.clone() for offset in ptr.offsets]
-        ret = BlockPointerHandle(ptr.base, ptr.shape, ptr.strides, new_offsets, ptr.block_shape, ptr.order)
-        for i in range(len(offsets)):
-            ret.offsets[i].data += offsets[i].data
-        return ret
 
     def create_make_tensor_descriptor(
         self,
