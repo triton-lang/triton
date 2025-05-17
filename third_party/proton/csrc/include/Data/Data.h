@@ -24,6 +24,8 @@ public:
   /// not empty.
   virtual size_t addOp(size_t scopeId, const std::string &opName = {}) = 0;
 
+  virtual size_t addOp(size_t scopeId, const std::vector<Context> &contexts) = 0;
+
   /// Add a single metric to the data.
   virtual void addMetric(size_t scopeId, std::shared_ptr<Metric> metric) = 0;
 
@@ -31,7 +33,7 @@ public:
   virtual void
   addMetrics(size_t scopeId,
              const std::map<std::string, MetricValueType> &metrics) = 0;
-
+  
   /// Clear all caching data.
   virtual void clear() = 0;
 

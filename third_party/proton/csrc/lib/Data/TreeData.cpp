@@ -49,6 +49,14 @@ public:
     treeNodeMap.try_emplace(TreeNode::RootId, TreeNode::RootId, "ROOT");
   }
 
+  size_t addNode(const std::vector<Context> &contexts, size_t parentId) {
+    size_t lastId = parentId;
+    for (const auto &context : contexts) {
+      lastId = addNode(context, lastId);
+    }
+    return lastId;
+  }
+
   size_t addNode(const Context &context, size_t parentId) {
     if (treeNodeMap[parentId].hasChild(context)) {
       return treeNodeMap[parentId].getChild(context);
@@ -130,6 +138,28 @@ size_t TreeData::addOp(size_t scopeId, const std::string &name) {
     scopeId = Scope::getNewScopeId();
     scopeIdToContextId[scopeId] =
         tree->addNode(Context(name), scopeIdIt->second);
+  }
+  return scopeId;
+}
+
+size_t TreeData::addOp(size_t scopeId, const std::vector<Context> &childContexts) {
+  std::unique_lock<std::shared_mutex> lock(mutex);
+  auto scopeIdIt = scopeIdToContextId.find(scopeId);
+  if (scopeIdIt == scopeIdToContextId.end()) {
+    // Obtain the current context
+    std::vector<Context> contexts;
+    if (contextSource != nullptr)
+      contexts = contextSource->getContexts();
+    // Add an op under the current context
+    if (!contexts.empty())
+      std::merge(contexts.begin(), contexts.end(), childContexts.begin(),
+                 childContexts.end(), contexts.begin());
+    scopeIdToContextId[scopeId] = tree->addNode(contexts);
+  } else {
+    // Add a new context under it and update the context
+    scopeId = Scope::getNewScopeId();
+    scopeIdToContextId[scopeId] =
+        tree->addNode(childContexts, scopeIdIt->second);
   }
   return scopeId;
 }
