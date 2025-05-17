@@ -3,7 +3,7 @@ import torch
 import triton
 import triton.language as tl
 from triton_kernels import target_info
-from triton_kernels.numerics_details.mxfp import _unswizzle_mx_block, get_scaled_dot_format_string
+from triton_kernels.numerics_details.mxfp import unswizzle_mx_scale_bw, get_scaled_dot_format_string
 from triton_kernels.numerics_details.flexpoint import float_to_flex, load_scale, nan_propagating_absmax_reduce, compute_scale
 from ._common import make_matmul_repr, matmul_launch_metadata, swizzle2d, xcd_swizzle
 
@@ -151,7 +151,11 @@ def _p_matmul_ogs(
              PER_BATCH_SCALE: tl.constexpr,
              # optimization config
              BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr, BLOCK_K: tl.constexpr,
-             GROUP_M: tl.constexpr, XCD_SWIZZLE: tl.constexpr, SWIZZLE_MX: tl.constexpr,
+             GROUP_M: tl.constexpr, XCD_SWIZZLE: tl.constexpr,
+             # NYI: Must be None
+             SWIZZLE_MX_VALUE: tl.constexpr,
+             # One of ["BLACKWELL", None]
+             SWIZZLE_MX_SCALE: tl.constexpr,
              EPILOGUE_SUBTILE: tl.constexpr,
              EVEN_K: tl.constexpr, SPLIT_K: tl.constexpr,
              W_CACHE_MODIFIER: tl.constexpr,
@@ -160,6 +164,7 @@ def _p_matmul_ogs(
              UPCAST_INDICES:tl.constexpr=False,
              DISABLE_Y_TMA: tl.constexpr=False,
              SWAP_XW: tl.constexpr = False):
+    tl.static_assert(SWIZZLE_MX_VALUE is None, "NYI. Value swizzling")
     Y = Out  # Y is passed for the purposes of annotation; replace it with Out
 
     is_microscaled_format: tl.constexpr = MxScale is not None
@@ -170,6 +175,7 @@ def _p_matmul_ogs(
                          "mx_weight_ptr must be uint8")
         tl.static_assert(MxScale.dtype.element_ty == tl.uint8, "mx_scale_ptr must be uint8")
         tl.static_assert(BLOCK_K % MX_PACK_DIVISOR == 0, "BLOCK_K must be a multiple of MX_PACK_DIVISOR")
+        tl.static_assert(SWIZZLE_MX_SCALE == "BLACKWELL" or SWIZZLE_MX_SCALE is None, "Only Blackwell swizzling is supported for scales")
 
         # We have pack 2 fp4 values in a byte
         W_PACK_DIVISOR: tl.constexpr = 2 if W.dtype.element_ty == tl.uint8 else 1
@@ -179,6 +185,7 @@ def _p_matmul_ogs(
         W_PACK_DIVISOR: tl.constexpr = 1
         MX_SCALE_BLOCK_K: tl.constexpr = 1
         PACKED_BLOCK_K_W: tl.constexpr = BLOCK_K
+        tl.static_assert(SWIZZLE_MX_SCALE is None)
 
     if ExptOffsSum is not None:
         # Determine how much padding there is on the expert data. This allows us to
@@ -245,7 +252,7 @@ def _p_matmul_ogs(
 
     if is_microscaled_format:
         PackedK = (K + MX_PACK_DIVISOR - 1) // MX_PACK_DIVISOR
-        if SWIZZLE_MX:
+        if SWIZZLE_MX_SCALE == "BLACKWELL":
             mx_desc = tl.make_tensor_descriptor(
                 MxScale,
                 shape=[
@@ -379,9 +386,9 @@ def _p_matmul_ogs(
                 else:
                     x_scales = tl.full((BLOCK_M, BLOCK_K // MX_PACK_DIVISOR), 127, dtype=tl.uint8)
                 if SWAP_XW:
-                    if SWIZZLE_MX:
+                    if SWIZZLE_MX_SCALE == "BLACKWELL":
                         MxPtrs = MxScale + expt_id.to(index_type) * stride_mx_e + offs_mx_outer.to(index_type)[:, None] * stride_mx_n + offs_mx_inner[None, :] + ki * (MX_SCALE_BLOCK_K // 4 * SPLIT_K) * stride_mx_k
-                        w_scales = _unswizzle_mx_block(tl.load(MxPtrs))
+                        w_scales = unswizzle_mx_scale_bw(tl.load(MxPtrs))
                     else:
                         MxPtrs = MxScale + expt_id.to(index_type) * stride_mx_e + offs_mx_k.to(index_type)[None, :] * stride_mx_k + offs_w_n.to(index_type)[:, None] * stride_mx_n + ki * MX_SCALE_BLOCK_K * SPLIT_K * stride_mx_k
                         if EVEN_K:
@@ -393,10 +400,10 @@ def _p_matmul_ogs(
                             mask_k = offs_mx_k < tl.cdiv(K - off_k, MX_PACK_DIVISOR)
                             w_scales = tl.load(MxPtrs, mask=mask_k[None, :], other=0.0)
 
-                elif SWIZZLE_MX:
+                elif SWIZZLE_MX_SCALE == "BLACKWELL":
                     w_scales = mx_desc.load([expt_id, off_n // 128, ki * (MX_SCALE_BLOCK_K // 4 * SPLIT_K), 0, 0])
                     w_scales = w_scales.reshape((w_scales.shape[1], w_scales.shape[2] * 32 * 4 * 4))
-                    w_scales = _unswizzle_mx_block(w_scales)
+                    w_scales = unswizzle_mx_scale_bw(w_scales)
                 else:
                     w_scales = _load_tensor_desc(mx_desc, [expt_id, off_k_mx, off_n], transpose=MX_TRANSPOSE).T
                 if SWAP_XW:
