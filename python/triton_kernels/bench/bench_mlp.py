@@ -200,7 +200,8 @@ def roofline_mlp(batch_ranges, dim1, dim2, n_expts_tot, n_expts_act, x_dtype, w_
     opints = [p.opint for p in perfs]
     knee = bisect_left(opints, max_tflops / max_tbps) - 1
     x_bw, x_comp = xs[:knee], xs[knee:]
-    y_bw = [op * max_tbps for op in opints[:knee]]
+    x_bw = [x_bw[0], x_comp[0]]
+    y_bw = [opints[0] * max_tbps, max_tflops]
     y_comp = [max_tflops] * len(x_comp)
     ax.plot(x_bw, y_bw, "--", label=f"BW-bound  ({max_tbps:.0f} TB/s)")
     ax.plot(x_comp, y_comp, "--", label=f"Compute-bound  ({max_tflops:.0f} TFLOP/s)")
