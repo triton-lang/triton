@@ -142,7 +142,8 @@ size_t TreeData::addOp(size_t scopeId, const std::string &name) {
   return scopeId;
 }
 
-size_t TreeData::addOp(size_t scopeId, const std::vector<Context> &childContexts) {
+size_t TreeData::addOp(size_t scopeId,
+                       const std::vector<Context> &childContexts) {
   std::unique_lock<std::shared_mutex> lock(mutex);
   auto scopeIdIt = scopeIdToContextId.find(scopeId);
   if (scopeIdIt == scopeIdToContextId.end()) {

@@ -60,6 +60,14 @@ public:
                                 "ROOT");
   }
 
+  size_t addContext(const std::vector<Context> &contexts, size_t parentId) {
+    size_t lastId = parentId;
+    for (const auto &context : contexts) {
+      lastId = addContext(context, lastId);
+    }
+    return lastId;
+  }
+
   size_t addContext(const Context &context, size_t parentId) {
     if (traceContextMap[parentId].hasChild(context)) {
       return traceContextMap[parentId].getChild(context);
@@ -159,6 +167,31 @@ size_t TraceData::addOp(size_t scopeId, const std::string &name) {
         trace->addContext(Context(name), scopeIdIt->second);
   }
   if (!name.empty()) // not a placeholder event
+    trace->addEvent(scopeId, scopeIdToContextId[scopeId]);
+  return scopeId;
+}
+
+size_t TraceData::addOp(size_t scopeId,
+                        const std::vector<Context> &childContexts) {
+  std::unique_lock<std::shared_mutex> lock(mutex);
+  auto scopeIdIt = scopeIdToContextId.find(scopeId);
+  if (scopeIdIt == scopeIdToContextId.end()) {
+    // Obtain the current context
+    std::vector<Context> contexts;
+    if (contextSource != nullptr)
+      contexts = contextSource->getContexts();
+    // Add an op under the current context
+    if (!contexts.empty())
+      std::merge(contexts.begin(), contexts.end(), childContexts.begin(),
+                 childContexts.end(), contexts.begin());
+    scopeIdToContextId[scopeId] = trace->addContext(contexts);
+  } else {
+    // Add a new context under it and update the context
+    scopeId = Scope::getNewScopeId();
+    scopeIdToContextId[scopeId] =
+        trace->addContext(childContexts, scopeIdIt->second);
+  }
+  if (!childContexts.empty()) // not a placeholder event
     trace->addEvent(scopeId, scopeIdToContextId[scopeId]);
   return scopeId;
 }
