@@ -175,7 +175,8 @@ def roofline_mlp(batch_ranges, dim1, dim2, n_expts_tot, n_expts_act, x_dtype, w_
     batches = list(chain(*[range(*r) for r in batch_ranges]))
     # collect performance data
     perfs = []
-    print(f"Benchmarking {name} ({x_dtype}x{w_dtype}, TP={TP}, EP={EP})...")
+    bench_case = f"{name} ({x_dtype}x{w_dtype}, TP={TP}, EP={EP})"
+    print(f"Benchmarking {bench_case}...")
     print("===============================================================")
     for batch in batches:
         perfs += [bench_mlp(batch, dim1, dim2, n_expts_tot, n_expts_act, x_dtype, w_dtype, TP, EP, name)]
@@ -186,7 +187,7 @@ def roofline_mlp(batch_ranges, dim1, dim2, n_expts_tot, n_expts_act, x_dtype, w_
     fig, ax = plt.subplots(figsize=(7, 5), dpi=120)
     ax.set_xlabel("batch size (toks/expt)")
     ax.set_ylabel("performance  [TFLOP/s]")
-    ax.set_title("roofline")
+    ax.set_title(f"{bench_case} roofline")
     # add a tiny margin so points are not flush with the frame
     xs = [batch * n_expts_act / n_expts_tot for batch in batches]
     perf = [p.tflops for p in perfs]
