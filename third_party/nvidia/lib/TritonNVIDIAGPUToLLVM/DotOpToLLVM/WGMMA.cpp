@@ -125,8 +125,8 @@ mlir::triton::NVIDIA::DotOpMmaV3SmemLoader::DotOpMmaV3SmemLoader(
   uint32_t widthInByte = allocSwizzleShape[fastMovingDim] * elemBits / 8;
   int64_t swizzling = getSwizzlingFromLayout(sharedLayout, widthInByte);
 
-  descriptor =
-      createDescriptor(rewriter, loc, swizzling, shape[1 - fastMovingDim]);
+  descriptor = createDescriptor(rewriter, loc, swizzling,
+                                allocSwizzleShape[1 - fastMovingDim]);
 }
 
 Value mlir::triton::NVIDIA::DotOpMmaV3SmemLoader::smemLoad(

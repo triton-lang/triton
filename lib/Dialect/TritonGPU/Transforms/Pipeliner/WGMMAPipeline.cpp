@@ -304,12 +304,9 @@ SmallVector<Value> splitRhs(OpBuilder &builder,
     newInDims.push_back({dimNames[d], type.getShape()[d]});
   }
   // Split into shmem shape and invert
-  llvm::errs() << "ll: " << ll << "\n";
   ll = ll.reshapeIns(newInDims);
   ll = ll.transposeIns(dimNames);
-  llvm::errs() << "ll: " << ll << "\n";
   auto llInv = ll.invert();
-  llvm::errs() << "llInv: " << llInv << "\n";
   auto toOffsets =
       [&](const SmallVector<std::pair<StringAttr, int32_t>> &shape) {
         return llvm::to_vector(llvm::map_range(shape, [&](const auto &p) {
@@ -330,9 +327,6 @@ SmallVector<Value> splitRhs(OpBuilder &builder,
   }
   for (int i = 0; i < nSplits; i++) {
     logicalOffsets[kDim].second = i * newK;
-    for (auto p : llInv.apply(logicalOffsets)) {
-      llvm::errs() << "p: " << p.first << " " << p.second << "\n";
-    }
     auto shmemOffsets = toOffsets(llInv.apply(logicalOffsets));
 
     Value newSmem = builder.create<triton::gpu::MemDescSubviewOp>(
