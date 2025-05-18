@@ -294,19 +294,19 @@ SmallVector<Value> splitRhs(OpBuilder &builder,
   auto nSplits = type.getShape()[kDim] / newK;
   // offset -> matrix
   auto ll = ttg::toLinearLayout(type.getShape(), type.getEncoding());
+  auto llInv = ll.invert();
 
   // Split into
   auto kOffset = StringAttr::get(ctx, "offset");
-  assert(ll.getInDimSize(kOffset) == product(type.getShape()));
+  assert(llInv.getOutDimSize(kOffset) == product(type.getShape()));
   auto dimNames = tt::standardOutDimNames(ctx, rank);
-  SmallVector<std::pair<StringAttr, int32_t>> newInDims;
+  SmallVector<std::pair<StringAttr, int32_t>> newOutDims;
   for (auto d : getOrder(type)) {
-    newInDims.push_back({dimNames[d], type.getShape()[d]});
+    newOutDims.push_back({dimNames[d], type.getShape()[d]});
   }
   // Split into shmem shape and invert
-  ll = ll.reshapeIns(newInDims);
-  ll = ll.transposeIns(dimNames);
-  auto llInv = ll.invert();
+  llInv = llInv.reshapeOuts(newOutDims);
+  llInv = llInv.transposeOuts(dimNames);
   auto toOffsets =
       [&](const SmallVector<std::pair<StringAttr, int32_t>> &shape) {
         return llvm::to_vector(llvm::map_range(shape, [&](const auto &p) {
