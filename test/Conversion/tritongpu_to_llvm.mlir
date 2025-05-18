@@ -586,23 +586,14 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   // CHECK-LABEL: nvmma_subview
   tt.func @nvmma_subview() {
     // CHECK: llvm.mlir.addressof @global_smem
-    // CHECK: llvm.mlir.constant(32 : i32) : i32
+    // CHECK: llvm.mlir.constant(1 : i32) : i32
+    // CHECK-NEXT: llvm.mlir.constant(128 : i32) : i32
+    // CHECK-NEXT: llvm.add
+    // CHECK-NEXT: llvm.add
     // CHECK-NEXT: llvm.mlir.constant(0 : i32) : i32
-    // CHECK-NEXT: llvm.mlir.constant(16 : i32) : i32
-    // CHECK-NEXT: llvm.mul
-    // CHECK-NEXT: llvm.mul
-    // CHECK-NEXT: llvm.sub
-    // CHECK-NEXT: llvm.udiv
-    // CHECK-NEXT: llvm.mul
-    // CHECK-NEXT: llvm.sub
-    // CHECK-NEXT: llvm.urem
-    // CHECK-NEXT: llvm.sub
     // CHECK-NEXT: llvm.mul
     // CHECK-NEXT: llvm.add
-    // CHECK-NEXT: llvm.udiv
     // CHECK-NEXT: llvm.mul
-    // CHECK-NEXT: llvm.add
-    // CHECK-NEXT: llvm.urem
     // CHECK-NEXT: llvm.add
     // CHECK-NEXT: llvm.getelementptr
     %index = arith.constant 1 : i32
