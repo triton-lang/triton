@@ -166,12 +166,39 @@ def test_namedtuple(device):
 
 @pytest.mark.interpreter
 def test_eq(device):
+
     @triton.jit
     def fn(ret_ptrs):
-        tl.store(ret_ptrs + 0, (1, 2,) == (1, 2, ))
-        tl.store(ret_ptrs + 1, (1, 2,) == (1, 1, ))
-        tl.store(ret_ptrs + 2, tl.tuple((1, 2,)) == (1, 2, ))
-        tl.store(ret_ptrs + 3, tl.tuple((1, 2,)) == (1, 3,))
+        tl.store(ret_ptrs + 0, (
+            1,
+            2,
+        ) == (
+            1,
+            2,
+        ))
+        tl.store(ret_ptrs + 1, (
+            1,
+            2,
+        ) == (
+            1,
+            1,
+        ))
+        tl.store(ret_ptrs + 2,
+                 tl.tuple((
+                     1,
+                     2,
+                 )) == (
+                     1,
+                     2,
+                 ))
+        tl.store(ret_ptrs + 3,
+                 tl.tuple((
+                     1,
+                     2,
+                 )) == (
+                     1,
+                     3,
+                 ))
 
     rets = torch.zeros((4, ), dtype=torch.int32, device=device)
     fn[(1, )](rets)
@@ -183,15 +210,28 @@ def test_eq(device):
 
 @pytest.mark.interpreter
 def test_add(device):
+
     @triton.jit
     def fn(ret_ptrs):
-        tuple0 = (0, 1,) + (2, 3, )
+        tuple0 = (
+            0,
+            1,
+        ) + (
+            2,
+            3,
+        )
         for i in tl.static_range(4):
             tl.store(ret_ptrs + i, tuple0[i])
-        tuple1 = tl.tuple((4, 5,)) + (6, 7,)
+        tuple1 = tl.tuple((
+            4,
+            5,
+        )) + (
+            6,
+            7,
+        )
         for i in tl.static_range(4):
             tl.store(ret_ptrs + 4 + i, tuple1[i])
 
-    rets = torch.zeros((8,), dtype=torch.int32, device=device)
+    rets = torch.zeros((8, ), dtype=torch.int32, device=device)
     fn[(1, )](rets)
     torch.testing.assert_close(rets.cpu(), torch.arange(8, dtype=torch.int32))
