@@ -85,8 +85,10 @@ def matmul_kernel(A, B, C, M, N, K,  #
                           for x in input_dtypes  #
                           for o in out_dtypes])
 def test_cast_matmul(M, K, N, BLOCK_K, BLOCK_M, BLOCK_N, w_dtype, x_dtype, out_dtype, device):
-    if BLOCK_N == 128 and (is_hip() or (is_cuda() and torch.cuda.get_device_capability(0)[0] >= 10)):
-        pytest.skip("skip for HIP and CUDA 10+ as they run out of shared memory")
+    if (is_cuda() and torch.cuda.get_device_capability(0)[0] >= 10) and (BLOCK_K, BLOCK_M, BLOCK_N) == (64, 64, 128):
+        pytest.skip("skip as they run out of shared memory")
+    if is_hip() and (BLOCK_K, BLOCK_M, BLOCK_N) in ((64, 64, 128), (64, 16, 128)):
+        pytest.skip("skip as they run out of shared memory")
     if x_dtype == w_dtype:
         pytest.skip("skip the same input dtype")
     x_dtype: torch.dtype = getattr(torch, x_dtype)
