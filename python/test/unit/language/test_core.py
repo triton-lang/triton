@@ -7518,6 +7518,7 @@ def test_short_circuiting(device):
 
 
 @pytest.mark.interpreter
+@pytest.mark.filterwarnings("ignore:If conditional called with multidimensional Tensor*")
 def test_unsplat(device):
 
     @triton.jit
@@ -7529,7 +7530,7 @@ def test_unsplat(device):
         if explicit:
             condition = condition.reshape([])
 
-        if condition.reshape([]):
+        if condition:
             tl.store(x, 42)
 
     def g(y, explicit):
