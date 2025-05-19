@@ -3,6 +3,7 @@
 
 #include "triton/Analysis/RegionPredecessor.h"
 #include "llvm/ADT/BitVector.h"
+#include "llvm/ADT/SetVector.h"
 
 namespace mlir::triton {
 class FuncOp;
