@@ -145,21 +145,6 @@ class HIPBackend(BaseBackend):
         amd.load_dialects(ctx)
 
     @staticmethod
-    def parse_attr(desc):
-        ret = BaseBackend.parse_attr(desc)
-        if "S" in desc:
-            ret += [["tt.pointer_range", 32]]
-        return ret
-
-    @staticmethod
-    def get_arg_specialization(arg, ty, **kwargs):
-        ret = BaseBackend.get_arg_specialization(arg, ty, **kwargs)
-        # Only attempt to do buffer ops specialization if buffer ops are enabled.
-        if knobs.amd.use_buffer_ops and ty == "tensor":
-            ret += "S"
-        return ret
-
-    @staticmethod
     def path_to_rocm_lld():
         # Check env path for ld.lld
         lld_env_path = knobs.amd.lld_path
