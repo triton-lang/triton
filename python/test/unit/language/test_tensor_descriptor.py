@@ -1565,8 +1565,7 @@ def test_tensor_descriptor_reduce(kind, descriptor, dtype_str, num_ctas, M_BLOCK
     fallback_supported = dtype in FALLBACK_SUPPORTED_REDUCE_DTYPES[kind]
     supported = native_supported if is_native else fallback_supported
     if not supported:
-        exc_type = CompilationError if not native_supported else RuntimeError
-        with pytest.raises(exc_type):
+        with pytest.raises(CompilationError):
             kernel[(grid_m, grid_n)](out_desc, out, inp, M, N, M_BLOCK, N_BLOCK, kind, num_ctas=num_ctas)
         return
 
