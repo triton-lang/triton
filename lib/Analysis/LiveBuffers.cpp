@@ -220,6 +220,7 @@ void LiveBuffersAnalysis::run(FuncOp func, RegionPredecessorAnalysis &preds) {
         curState.reset(bufferId);
       } else {
         assert(isa<MemoryEffects::Free>(effect));
+        curState.set(bufferId);
       }
     }
 
