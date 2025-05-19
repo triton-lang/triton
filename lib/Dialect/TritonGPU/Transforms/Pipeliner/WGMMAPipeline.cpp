@@ -33,7 +33,7 @@ namespace tt = mlir::triton;
 namespace ttg = mlir::triton::gpu;
 namespace ttng = mlir::triton::nvidia_gpu;
 
-// Returns whether the dot dot such that:
+// Returns whether the dot is such that:
 // 1. The LHS comes from registers and
 // 1.1  The LHS is defined inside the loop
 // 1.2. The LHS does not come from another dot
@@ -233,7 +233,7 @@ static void threadValuesThroughWait(ttng::WarpGroupDotWaitOp wait,
   wait->erase();
 }
 
-// Split the LHS of a RSWGMMADot operation into multiple multiple
+// Split the LHS of a RSWGMMADot operation into multiple
 // tensors of size MxnewK via SplitOps
 SmallVector<Value> splitLhs(OpBuilder &builder,
                             TypedValue<RankedTensorType> lhs, int64_t newK) {
@@ -307,13 +307,13 @@ SmallVector<Value> splitRhs(OpBuilder &builder,
   // Split into shmem shape and invert
   llInv = llInv.reshapeOuts(newOutDims);
   llInv = llInv.transposeOuts(dimNames);
-  auto toOffsets =
-      [&](const SmallVector<std::pair<StringAttr, int32_t>> &shape) {
-        return llvm::to_vector(llvm::map_range(shape, [&](const auto &p) {
-          return builder.create<arith::ConstantIntOp>(loc, p.second, 32)
-              .getResult();
+  auto toOffsets = [&](const SmallVector<std::pair<StringAttr, int32_t>>
+                           &shape) {
+    return llvm::to_vector(
+        llvm::map_range(llvm::make_second_range(shape), [&](int32_t v) {
+          return builder.create<arith::ConstantIntOp>(loc, v, 32).getResult();
         }));
-      };
+  };
   // New Shape
   auto shape = llvm::to_vector(type.getShape());
   shape[kDim] = newK;
