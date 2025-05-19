@@ -2,7 +2,6 @@ from dataclasses import dataclass, field
 from triton._C.libtriton import proton as triton_proton
 from enum import Enum
 
-
 metric_types = {"cycle": triton_proton.METRIC_TYPE.CYCLE}
 
 buffer_strategies = {
