@@ -24,6 +24,9 @@ public:
   // Get the live buffers before the block iterator.
   const BitVector &getLiveBuffersBefore(BlockIter it) const;
 
+  const BitVector &getLiveBufferMask(size_t id) const;
+  BitVector getLiveBufferMask(ArrayRef<size_t> ids) const;
+
 private:
   using BufferStates = std::optional<BitVector>;
 
@@ -40,6 +43,10 @@ private:
   llvm::MapVector<Operation *, size_t> bufferIds;
   // The live buffers at each block iterator.
   llvm::MapVector<BlockIter, BufferStates> bufferStates;
+  // Set of unique live states for the whole function.
+  SetVector<BitVector> uniqueStates;
+  // Live buffer masks for each buffer.
+  SmallVector<BitVector> liveBufferMasks;
 };
 } // namespace mlir::triton
 

@@ -234,6 +234,20 @@ LiveBuffersAnalysis::LiveBuffersAnalysis(FuncOp func,
                                          RegionPredecessorAnalysis &preds) {
   initialize(func);
   run(func, preds);
+
+  // There are likely a bunch of identical states, so compress them.
+  for (const BufferStates &state : llvm::make_second_range(bufferStates))
+    uniqueStates.insert(*state);
+  // For a given buffer, find all the buffers that at any point are live at the
+  // same time as the given buffer. We can do this by joining all the masks for
+  // when the buffer is live.
+  for (auto [bufferId, bufferOp] : llvm::enumerate(buffers)) {
+    BitVector &liveMask = liveBufferMasks.emplace_back(buffers.size(), false);
+    for (const BitVector &state : uniqueStates) {
+      if (state.test(bufferId))
+        liveMask |= state;
+    }
+  }
 }
 
 size_t LiveBuffersAnalysis::getBufferId(Operation *op) const {
@@ -263,4 +277,16 @@ const BitVector &LiveBuffersAnalysis::getLiveBuffersBefore(BlockIter it) const {
   assert(stateIt != bufferStates.end() && stateIt->second &&
          "operation does not have a live buffer state");
   return *stateIt->second;
+}
+
+const BitVector &LiveBuffersAnalysis::getLiveBufferMask(size_t id) const {
+  assert(id < buffers.size() && "buffer ID out of range");
+  return liveBufferMasks[id];
+}
+
+BitVector LiveBuffersAnalysis::getLiveBufferMask(ArrayRef<size_t> ids) const {
+  BitVector result(buffers.size(), false);
+  for (size_t id : ids)
+    result |= getLiveBufferMask(id);
+  return result;
 }
