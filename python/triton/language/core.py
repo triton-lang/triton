@@ -1794,6 +1794,15 @@ def view(input, *shape, _builder=None):
 
 @_tensor_member_fn
 @builtin
+def item(input, _builder=None, _generator=None):
+    """
+    Converts a single-element tensor into a scalar.
+    """
+    return _unsplat(input, _builder=_builder, _generator=_generator)
+
+
+@_tensor_member_fn
+@builtin
 def reshape(input, *shape, can_reorder=False, _builder=None, _generator=None):
     """
     Returns a tensor with the same number of elements as input but with the
