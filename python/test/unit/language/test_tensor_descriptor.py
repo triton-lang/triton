@@ -1583,13 +1583,11 @@ def test_host_tensor_descriptor_load(dtype_str, num_ctas, M_BLOCK, N_BLOCK, devi
 
     @triton.jit(debug=True)
     def kernel(out_ptr, desc, M, N, M_BLOCK: tl.constexpr, N_BLOCK: tl.constexpr):
-        # Accessing these values seems to be incorrect it looks like the capture
-        # is wrong when there are tensor descriptors
-        #assert desc.shape[0] == M
-        #assert desc.shape[1] == N
-        #assert desc.strides[0] == N
-        #assert desc.strides[1] == 1
-        #assert desc.block_shape == [M_BLOCK, N_BLOCK]
+        assert desc.shape[0] == M
+        assert desc.shape[1] == N
+        assert desc.strides[0] == N
+        assert desc.strides[1] == 1
+        assert desc.block_shape == [M_BLOCK, N_BLOCK]
         block = desc.load([M_BLOCK, 2 * N_BLOCK])
         idx = tl.arange(0, M_BLOCK)[:, None] * N_BLOCK + tl.arange(0, N_BLOCK)[None, :]
         tl.store(out_ptr + idx, block)
