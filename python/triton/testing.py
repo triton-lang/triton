@@ -95,7 +95,11 @@ def do_bench_cudagraph(fn, rep=20, grad_to_none=None, quantiles=None, return_mod
         end_event.record()
         torch.cuda.synchronize()
         estimate_ms = start_event.elapsed_time(end_event) / 5
-        n_repeat = max(1, int(rep / estimate_ms))
+        # Rewrite to avoid possible division by 0 issues with fast benchmarks
+        if estimate_ms == 0:
+            n_repeat = 1000
+        else:
+            n_repeat = max(1, int(rep / estimate_ms))
         # step 2 - construct a cuda graph with `n_repeat` unrolled function calls to minimize
         # host overhead
         g = torch.cuda.CUDAGraph()
