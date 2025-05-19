@@ -1544,6 +1544,8 @@ def test_atomic_rmw(op, dtype_x_str, mode, sem, device):
     if is_interpreter():
         if dtype_x_str == 'float16' or dtype_x_str == 'bfloat16':
             pytest.skip("Only test atomic bfloat16/float16 ops on GPU")
+    if "uint" in dtype_x_str and mode in ["min_neg", "all_neg"]:
+        pytest.skip("uint cannot be negative")
 
     n_programs = 5
 
