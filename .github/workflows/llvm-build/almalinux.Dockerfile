@@ -1,4 +1,5 @@
-FROM almalinux:8
+# https://github.com/AlmaLinux/container-images/blob/9f9b3c8c8cf4a57fd42f362570ff47c75788031f/default/amd64/Dockerfile
+FROM almalinux:8.10-20250411⁠
 ARG llvm_dir=llvm-project
 # Add the cache artifacts and the LLVM source tree to the container
 ADD sccache /sccache
