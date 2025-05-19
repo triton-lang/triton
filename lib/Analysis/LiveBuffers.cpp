@@ -106,10 +106,10 @@ static bool canTrackBufferAccesses(Value value) {
 }
 
 //===----------------------------------------------------------------------===//
-// BufferLiveRangeAnalysis
+// LiveBuffersAnalysis
 //===----------------------------------------------------------------------===//
 
-bool BufferLiveRangeAnalysis::join(BufferStates &lhs, const BitVector &rhs) {
+bool LiveBuffersAnalysis::join(BufferStates &lhs, const BitVector &rhs) {
   if (!lhs) {
     lhs = rhs;
     return true;
@@ -121,7 +121,7 @@ bool BufferLiveRangeAnalysis::join(BufferStates &lhs, const BitVector &rhs) {
   return true;
 }
 
-void BufferLiveRangeAnalysis::initialize(FuncOp func) {
+void LiveBuffersAnalysis::initialize(FuncOp func) {
   // First find all the buffers to track.
   func.walk([&](Operation *op) {
     if (!isa<ttng::TMEMAllocOp, LocalAllocOp>(op) ||
@@ -136,8 +136,7 @@ void BufferLiveRangeAnalysis::initialize(FuncOp func) {
   });
 }
 
-void BufferLiveRangeAnalysis::run(FuncOp func,
-                                  RegionPredecessorAnalysis &preds) {
+void LiveBuffersAnalysis::run(FuncOp func, RegionPredecessorAnalysis &preds) {
   SmallVector<BlockIter> worklist;
 
   // Root the analysis at function exits.
@@ -229,4 +228,39 @@ void BufferLiveRangeAnalysis::run(FuncOp func,
     if (join(bufferStates[beforeIt], curState))
       worklist.push_back(beforeIt);
   }
+}
+
+LiveBuffersAnalysis::LiveBuffersAnalysis(FuncOp func,
+                                         RegionPredecessorAnalysis &preds) {
+  initialize(func);
+  run(func, preds);
+}
+
+size_t LiveBuffersAnalysis::getBufferId(Operation *op) const {
+  auto it = bufferIds.find(op);
+  assert(it != bufferIds.end() && "operation is not a tracked buffer");
+  return it->second;
+}
+
+Operation *LiveBuffersAnalysis::getBufferOp(size_t id) const {
+  assert(id < buffers.size() && "buffer ID out of range");
+  return buffers[id];
+}
+
+const BitVector &
+LiveBuffersAnalysis::getLiveBuffersBefore(Operation *op) const {
+  BlockIter it(op->getBlock(), op->getIterator());
+  return getLiveBuffersBefore(it);
+}
+
+const BitVector &LiveBuffersAnalysis::getLiveBuffersAfter(Operation *op) const {
+  BlockIter it(op->getBlock(), std::next(op->getIterator()));
+  return getLiveBuffersBefore(it);
+}
+
+const BitVector &LiveBuffersAnalysis::getLiveBuffersBefore(BlockIter it) const {
+  auto stateIt = bufferStates.find(it);
+  assert(stateIt != bufferStates.end() && stateIt->second &&
+         "operation does not have a live buffer state");
+  return *stateIt->second;
 }
