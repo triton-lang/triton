@@ -9,6 +9,8 @@ on:
   pull_request:
     paths:
       - .github/workflows/llvm-build.yml
+      - .github/workflows/llvm-build/almalinux.Dockerfile
+      - .github/workflows/llvm-build/centos.Dockerfile
   workflow_dispatch:
 
 env:
