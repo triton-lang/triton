@@ -1,7 +1,8 @@
 add_triton_library(NVHopperTransforms
   WarpSpecialization.cpp
-  WarpSpecialization/WSTaskPartition.cpp
   WarpSpecialization/Utility.cpp
+  WarpSpecialization/WSDataPartition.cpp
+  WarpSpecialization/WSTaskPartition.cpp
 
   DEPENDS
   NVHopperTransformsIncGen
