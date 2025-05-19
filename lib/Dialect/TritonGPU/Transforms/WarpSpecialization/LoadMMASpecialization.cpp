@@ -4,6 +4,7 @@
 #include "mlir/IR/Dominance.h"
 #include "mlir/IR/ImplicitLocOpBuilder.h"
 #include "mlir/Pass/Pass.h"
+#include "triton/Analysis/Utility.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
@@ -119,7 +120,8 @@ static PartitionScheme getPartitionScheme(scf::ForOp loop) {
     // the MMA partition.
     auto storeOp = dyn_cast_or_null<ttng::TMEMStoreOp>(
         findDefOpInLoop(loop, mmaOp.getAccDep()));
-    if (!ttng::hasAccReadModifyWrite(mmaOp, loop) && storeOp)
+    if (!ttng::hasAccReadModifyWrite(mmaOp, loop) && storeOp &&
+        loop.isDefinedOutsideOfLoop(storeOp.getSrc()))
       mma.storeOp = storeOp;
 
     // Look for views into the operands.
@@ -619,9 +621,8 @@ addIndexAndPhase(PartitionBuilder &b, scf::ForOp &loop, unsigned numStages,
   return {index, phase};
 }
 
-static std::pair<Value, Operation *>
-getUserPrecondition(ImplicitLocOpBuilder &b, scf::ForOp loop, Operation *domOp,
-                    Value initialValue = {}) {
+static Value getUserPrecondition(ImplicitLocOpBuilder &b, scf::ForOp loop,
+                                 Operation *domOp) {
   // If the use is inside a loop besides the actual loop being pipelined, we
   // have to hoist the use up to that loop, otherwise the barriers will be
   // inserted in the loop.
@@ -630,12 +631,13 @@ getUserPrecondition(ImplicitLocOpBuilder &b, scf::ForOp loop, Operation *domOp,
     domOp = userLoop;
   assert(loop->isProperAncestor(domOp));
 
-  Value trueVal = b.create<arith::ConstantOp>(b.getBoolAttr(true));
   OpBuilder::InsertionGuard guard(b);
-  b.setInsertionPoint(loop.getBody()->findAncestorOpInBlock(*domOp));
+  b.setInsertionPoint(loop);
+  Value trueVal = b.create<arith::ConstantOp>(b.getBoolAttr(true));
 
-  Value precondition = initialValue ? initialValue : trueVal;
+  Value userPred = trueVal;
   Operation *parentOp = domOp;
+  b.setInsertionPoint(loop.getBody()->findAncestorOpInBlock(*domOp));
   while (loop != (parentOp = parentOp->getParentOp())) {
     assert(!isa<LoopLikeOpInterface>(parentOp));
     auto ifOp = dyn_cast<scf::IfOp>(parentOp);
@@ -646,10 +648,10 @@ getUserPrecondition(ImplicitLocOpBuilder &b, scf::ForOp loop, Operation *domOp,
     Value cond = ifOp.getCondition();
     if (domOp->getParentRegion() == &ifOp.getElseRegion())
       cond = b.create<arith::XOrIOp>(cond, trueVal);
-    precondition = b.create<arith::AndIOp>(precondition, cond);
+    userPred = b.create<arith::AndIOp>(userPred, cond);
   }
 
-  return {precondition, domOp};
+  return userPred;
 }
 
 static MemDescType getAsMutable(MemDescType type) {
@@ -1039,7 +1041,6 @@ static LogicalResult pipelineMMA(scf::ForOp &loop, PipelinedMMA &mma,
 
   struct Node {
     Operation *op;
-    Partition *partition;
     Value barPrev;
     Value barNext;
     Value index;
@@ -1061,18 +1062,15 @@ static LogicalResult pipelineMMA(scf::ForOp &loop, PipelinedMMA &mma,
     }
   }
 
-  Value firstBar;
-  for (int i = nodes.size(); i > 0; --i) {
-    if ((firstBar = nodes[i % nodes.size()].barPrev))
-      break;
-  }
-  if (firstBar) {
+  // If the first node has a barrier, fully initialize it to let it run.
+  if (nodes.front().barPrev) {
     for (auto i : llvm::seq(numMmaStages)) {
       b.setInsertionPoint(loop);
-      Value bar = createSingleBufferView(b, firstBar, i);
+      Value bar = createSingleBufferView(b, nodes.front().barPrev, i);
       b.create<ttng::ArriveBarrierOp>(bar, /*arriveCount=*/1);
     }
   }
+
   Value userPred = b.boolCst(true);
   if (readOp == mmaOp) {
     PartitionBuilder b(mmaOp.getLoc(), mmaOp);
@@ -1087,14 +1085,12 @@ static LogicalResult pipelineMMA(scf::ForOp &loop, PipelinedMMA &mma,
   Value replTok = b.create<ub::PoisonOp>(b.getType<AsyncTokenType>());
   DenseSet<Operation *> seen;
   std::optional<OpBuilder::InsertPoint> incrementPt;
+  Node *firstAfterInc = nullptr;
   for (Node &node : nodes) {
     node.index = curIndex;
     node.phase = curPhase;
-    if (incrementPt && node.barPrev && node.barPrev != firstBar) {
-      b.setInsertionPoint(loop);
-      b.create<ttng::ArriveBarrierOp>(
-          createSingleBufferView(b, node.barPrev, 0), /*arriveCount=*/1);
-    }
+    if (incrementPt && node.barPrev && !firstAfterInc)
+      firstAfterInc = &node;
     if (!seen.insert(node.op).second)
       continue;
     b.setInsertionPoint(node.op);
@@ -1115,13 +1111,26 @@ static LogicalResult pipelineMMA(scf::ForOp &loop, PipelinedMMA &mma,
     }
     if (node.op == dyn_cast<ttng::TMEMLoadOp>(readOp)) {
       ImplicitLocOpBuilder b(readOp->getLoc(), loop);
-      userPred = getUserPrecondition(b, loop, node.op).first;
+      userPred = getUserPrecondition(b, loop, node.op);
       b.setInsertionPointAfter(inBody(readOp));
       auto [nextIndex, nextPhase] =
           postIncrementModulo(b, index, phase, numMmaStages);
       curIndex = b.create<arith::SelectOp>(userPred, nextIndex, index);
       curPhase = b.create<arith::SelectOp>(userPred, nextPhase, phase);
       incrementPt = b.saveInsertionPoint();
+    }
+  }
+  if (firstAfterInc) {
+    b.setInsertionPoint(loop);
+    if (firstAfterInc->op == mmaOp) {
+      Value firstBar = createSingleBufferView(b, firstAfterInc->barPrev, 0);
+      b.create<ttng::ArriveBarrierOp>(firstBar, /*arriveCount=*/1);
+    } else {
+      assert(firstAfterInc->op == dyn_cast<ttng::TMEMStoreOp>(overwriteOp));
+      for (auto i : llvm::seq(numMmaStages)) {
+        Value firstBar = createSingleBufferView(b, firstAfterInc->barPrev, i);
+        b.create<ttng::ArriveBarrierOp>(firstBar, /*arriveCount=*/1);
+      }
     }
   }
   oldAllocOp.getToken().replaceAllUsesWith(allocOp.getToken());
@@ -1131,20 +1140,36 @@ static LogicalResult pipelineMMA(scf::ForOp &loop, PipelinedMMA &mma,
       .append({curIndex, curPhase});
 
   // Find operands that need to be pipelined through shmem.
+  SmallVector<Value> incomingOperands;
+  llvm::append_range(incomingOperands, mmaOp->getOperands());
   SmallVector<std::pair<Operation *, Partition *>> operandDefs;
-  for (Value operand : mma.mmaOp->getOperands()) {
+  while (!incomingOperands.empty()) {
+    Value operand = incomingOperands.pop_back_val();
+    if (!isa<MemDescType>(operand.getType()))
+      continue;
     Operation *defOp = operand.getDefiningOp();
-    if (!defOp || !loop.getBodyRegion().isAncestor(defOp->getParentRegion()))
+    if (!defOp || loop.isDefinedOutsideOfLoop(operand))
       continue;
     defOp = inBody(defOp);
     Partition *defPartition = schedule.getPartition(defOp);
-    if (!defPartition)
+
+    if (!defPartition) {
+      // If the MMA operand is coming from outside the loop, move the alloc out.
+      auto allocOp = dyn_cast<LocalAllocOp>(defOp);
+      if (allocOp && loop.isDefinedOutsideOfLoop(allocOp.getSrc()))
+        allocOp->moveBefore(loop);
       continue;
+    }
+
     if (auto allocOp = operand.getDefiningOp<LocalAllocOp>()) {
       PartitionBuilder b(allocOp.getLoc(), allocOp);
       auto store = b.createInto<LocalStoreOp>(*defPartition, std::nullopt,
                                               allocOp.getSrc(), allocOp);
+      auto fence = b.createInto<ttng::FenceAsyncSharedOp>(
+          *defPartition, std::nullopt, /*bCluster=*/false);
       operandDefs.emplace_back(body.findAncestorOpInBlock(*store),
+                               defPartition);
+      operandDefs.emplace_back(body.findAncestorOpInBlock(*fence),
                                defPartition);
       allocOp->moveBefore(loop);
       allocOp->removeAttr(kPartitionAttrName);
@@ -1161,6 +1186,8 @@ static LogicalResult pipelineMMA(scf::ForOp &loop, PipelinedMMA &mma,
       tmemAllocOp->removeAttr(kPartitionAttrName);
       tmemAllocOp.getSrcMutable().clear();
       tmemAllocOp.getResult().setType(getAsMutable(tmemAllocOp.getType()));
+    } else if (defOp->hasTrait<OpTrait::MemDescViewTrait>()) {
+      incomingOperands.push_back(defOp->getOperand(0));
     }
   }
 
@@ -1187,13 +1214,20 @@ static LogicalResult pipelineMMA(scf::ForOp &loop, PipelinedMMA &mma,
 
     if (node.barPrev) {
       if (!isa<ttng::TMEMLoadOp>(node.op)) {
-        if (incrementPt && domOp->isBeforeInBlock(&*incrementPt->getPoint()))
+        // If the user precondition is defined after the MMA, we need to peel
+        // the wait for the user.
+        if (incrementPt && domOp->isBeforeInBlock(&*incrementPt->getPoint()) &&
+            domInfo.properlyDominates(mmaOp, userPred.getDefiningOp())) {
           b.restoreInsertionPoint(*incrementPt);
-        else
+          Value bar = createSingleBufferView(b, node.barPrev, curIndex);
+          b.createInto<ttng::WaitBarrierOp>(*partition, stages.lookup(node.op),
+                                            bar, curPhase, userPred);
+        } else {
           b.setInsertionPoint(domOp);
-        Value bar = createSingleBufferView(b, node.barPrev, curIndex);
-        b.createInto<ttng::WaitBarrierOp>(*partition, stages.lookup(node.op),
-                                          bar, curPhase, userPred);
+          Value bar = createSingleBufferView(b, node.barPrev, node.index);
+          b.createInto<ttng::WaitBarrierOp>(*partition, stages.lookup(node.op),
+                                            bar, node.phase, userPred);
+        }
       } else {
         b.setInsertionPoint(domOp);
         if (isa<scf::IfOp>(domOp->getParentOp()))
