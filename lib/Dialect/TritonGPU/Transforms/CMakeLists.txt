@@ -35,6 +35,7 @@ add_triton_library(TritonGPUTransforms
   WarpSpecialization/Partition.cpp
   WarpSpecialization/OptimizePartitionWarps.cpp
   WarpSpecialization/PartitionLoops.cpp
+  WarpSpecialization/PartitionScheduling.cpp
   WarpSpecialization/RewritePartitionDependencies.cpp
 
   DEPENDS
