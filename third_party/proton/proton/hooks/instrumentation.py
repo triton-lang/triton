@@ -89,6 +89,7 @@ def _interpret_mode(mode_obj: Union[str, mode.InstrumentationMode]) -> mode.Inst
         "granularity": opts.get("granularity", "warp"),
         "sampling_strategy": opts.get("sampling_strategy", "none"),
         "sampling_options": opts.get("sampling_options", ""),
+        "optimization": opts.get("optimization", "none")
     }
 
     # Helper function to validate and map options to their enum values
