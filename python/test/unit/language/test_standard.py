@@ -65,24 +65,26 @@ def test_sort(M, N, k, descending, dtype_str, device):
 
 
 @pytest.mark.interpreter
-@pytest.mark.parametrize("M, N", [[1, 512], [8, 64], [256, 16], [512, 8]])
+@pytest.mark.parametrize("M, N, K", [[1, 16, 64], [8, 2, 256], [32, 1, 2], [128, 8, 1]])
 @pytest.mark.parametrize("dtype_str", ['int32', 'float16', 'float32', 'bfloat16'])
-def test_flip(M, N, dtype_str, device):
+@pytest.mark.parametrize("dim", [0, 1, 2, -2])
+def test_flip(M, N, K, dtype_str, dim, device):
 
     @triton.jit
-    def flip_kernel(X, Z, N: tl.constexpr, M: tl.constexpr):
-        offx = tl.arange(0, M)
-        offy = tl.arange(0, N) * M
-        off2d = offx[None, :] + offy[:, None]
-        x = tl.load(X + off2d)
-        x = tl.flip(x)
-        tl.store(Z + off2d, x)
+    def flip_kernel(X, Z, M: tl.constexpr, N: tl.constexpr, K: tl.constexpr, dim: tl.constexpr):
+        offx = tl.arange(0, M) * N * K
+        offy = tl.arange(0, N) * K
+        offz = tl.arange(0, K)
+        off3d = offx[:, None, None] + offy[None, :, None] + offz[None, None, :]
+        x = tl.load(X + off3d)
+        x = tl.flip(x, dim)
+        tl.store(Z + off3d, x)
 
-    x = numpy_random((N, M), dtype_str=dtype_str)
+    x = numpy_random((M, N, K), dtype_str=dtype_str)
     x = torch.from_numpy(x).to(device)
-    y = torch.flip(x, (1, ))
+    y = torch.flip(x, (dim, ))
     z = torch.empty_like(x, device=device)
-    flip_kernel[(1, )](x, z, N, M, num_warps=8)
+    flip_kernel[(1, )](x, z, M, N, K, dim, num_warps=8)
     assert (y == z).all(), (y, z)
 
 
