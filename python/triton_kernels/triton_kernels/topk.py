@@ -7,7 +7,6 @@ def topk(x, k, dim=1, return_bitmatrix=True):
     cdiv = lambda a, b: (a + b - 1) // b
     BLOCK_M = 8
     BLOCK_N = 128
-    assert x.dtype.itemsize == 2
     assert x.ndim == 2
     assert x.shape[-1] < 32768
     assert dim == 1
