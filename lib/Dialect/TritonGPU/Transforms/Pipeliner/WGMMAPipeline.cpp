@@ -39,7 +39,7 @@ namespace ttng = mlir::triton::nvidia_gpu;
 // 1.2. The LHS does not come from another dot
 // For these dots, we assume that we cannot rewrite their
 // operands until the previous dot has finished
-static bool isRSDotFromSIMD(Operation *dot, scf::ForOp forOp) {
+static bool rsDotNeedsWait(Operation *dot, scf::ForOp forOp) {
   auto dotOp = dyn_cast<ttng::WarpGroupDotOp>(dot);
   if (!dotOp)
     return false;
@@ -623,7 +623,7 @@ static void insertAsyncWarpGroupDotWaitInLoop(
     // of properly async dots in the loop minus one.
     // This makes sure that the dot will wait until itself from the previous
     // iteration has completed, as to avoid rewriting the registers.
-    if (isRSDotFromSIMD(asyncDot, forOp)) {
+    if (rsDotNeedsWait(asyncDot, forOp)) {
       OpBuilder builder(asyncDot);
       builder.setInsertionPointAfter(asyncDot);
       auto newWait = builder.create<ttng::WarpGroupDotWaitOp>(
@@ -668,7 +668,7 @@ static void insertAsyncWarpGroupDotWaitInLoop(
   auto lastAsyncDot = properlyAsyncDots.back().first;
   // If the last dot is an RS dot, we don't need to insert a wait
   // as we have already inserted a wait(properlyAsyncDots.size() - 1)
-  if (isRSDotFromSIMD(lastAsyncDot, forOp)) {
+  if (rsDotNeedsWait(lastAsyncDot, forOp)) {
     return;
   }
   builder.setInsertionPointAfter(lastAsyncDot);
