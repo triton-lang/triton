@@ -322,7 +322,7 @@ When vec=2, elements are swizzled in pairs of 2.  In other words, the element at
 
         // ---- begin Ampere & Hopper ----
         if (mmaEnc.isAmpere() || mmaEnc.isHopper()) {
-          int perPhase = 128 / (shapePerCTA[order[0]] * 4 / dotOpEnc.getKWidth());
+          int perPhase = 128 / (std::max<int>(1, shapePerCTA[order[0]] * 4 / dotOpEnc.getKWidth()));
           perPhase = std::max<int>(perPhase, 1);
           std::vector<size_t> matShape = {8, 8, 4 * dotOpEnc.getKWidth()};
           int vecWidth = 32 / typeWidthInBit;
