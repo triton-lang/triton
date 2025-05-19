@@ -25,49 +25,8 @@ namespace ttng = triton::nvidia_gpu;
 using Partition = WarpSchedule::Partition;
 
 //===----------------------------------------------------------------------===//
-// getPartitionScheme
+// assignPartitions
 //===----------------------------------------------------------------------===//
-
-namespace {
-struct PipelinedLoad {
-  PipelinedLoad(Operation *loadOp)
-      : loadOp(loadOp), type(getResult().getType()),
-        sharedEnc(getSharedEncoding(loadOp)) {}
-
-  TypedValue<RankedTensorType> getResult() const {
-    return cast<TypedValue<RankedTensorType>>(loadOp->getResult(0));
-  }
-  unsigned getLoadSizeInBytes() const {
-    return type.getNumElements() * type.getElementTypeBitWidth() / 8;
-  }
-  LogicalResult determineLiveRange(Block &container, DominanceInfo &domInfo,
-                                   PostDominanceInfo &postDomInfo,
-                                   WarpSchedule &schedule);
-
-  Operation *loadOp;
-  RankedTensorType type;
-  SharedEncodingTrait sharedEnc;
-
-  SmallVector<Operation *, 1> allocOps;
-  SmallVector<Operation *, 1> liveBeforeOps;
-  SmallVector<Operation *, 0> liveUntilOps;
-  SmallVector<Operation *, 1> asyncUsers;
-};
-
-struct PipelinedMMA {
-  PipelinedMMA(ttng::MMAv5OpInterface mmaOp) : mmaOp(mmaOp) {}
-
-  ttng::MMAv5OpInterface mmaOp;
-  ttng::TMEMStoreOp storeOp;
-  SmallVector<Operation *> operandViews;
-};
-
-struct PartitionScheme {
-  SmallVector<PipelinedLoad> loads;
-  SmallVector<PipelinedMMA> mmas;
-  SmallVector<math::Exp2Op> exps;
-};
-} // namespace
 
 // Find the last operation in the loop body that defined this value, with a
 // maximum of distance 1.
@@ -87,73 +46,6 @@ static Operation *findDefOpInLoop(scf::ForOp loop, Value value,
     return {};
   return defOp;
 }
-
-// Analyze the loop to find operations that should be outlined by warp
-// specialization to overlap latencies.
-static PartitionScheme getPartitionScheme(scf::ForOp loop) {
-  // Find loads to pipeline.
-  SmallVector<PipelinedLoad> loads;
-  for (Operation &loadOp : loop.getOps()) {
-    // Only TMA loads are supported at the moment.
-    if (!isa<DescriptorLoadOp, DescriptorGatherOp>(loadOp))
-      continue;
-
-    PipelinedLoad &load = loads.emplace_back(&loadOp);
-    // Local alloc users of the load with matching encoding will cause the
-    // underlying buffer to be pass through. Keep track of them.
-    for (Operation *user : loadOp.getUsers()) {
-      if (auto alloc = dyn_cast<LocalAllocOp>(user)) {
-        if (load.sharedEnc == alloc.getType().getEncoding())
-          load.allocOps.push_back(alloc);
-      } else if (isa<ttng::TMEMAllocOp>(user)) {
-        load.allocOps.push_back(user);
-      }
-    }
-  }
-
-  // Find MMAs to pipeline.
-  SmallVector<PipelinedMMA> mmas;
-  for (auto mmaOp : loop.getOps<ttng::MMAv5OpInterface>()) {
-    PipelinedMMA &mma = mmas.emplace_back(mmaOp);
-
-    // If the store is unrelated to the use of the MMA, then it gets placed in
-    // the MMA partition.
-    auto storeOp = dyn_cast_or_null<ttng::TMEMStoreOp>(
-        findDefOpInLoop(loop, mmaOp.getAccDep()));
-    if (!ttng::hasAccReadModifyWrite(mmaOp, loop) && storeOp &&
-        loop.isDefinedOutsideOfLoop(storeOp.getSrc()))
-      mma.storeOp = storeOp;
-
-    // Look for views into the operands.
-    SmallVector<Operation *> operandViews;
-    for (Value operand : mmaOp->getOperands()) {
-      if (Operation *defOp = operand.getDefiningOp())
-        operandViews.push_back(defOp);
-    }
-    while (!operandViews.empty()) {
-      Operation *op = operandViews.pop_back_val();
-      if (!op->hasOneUse() || !op->hasTrait<OpTrait::MemDescViewTrait>())
-        continue;
-      mma.operandViews.push_back(op);
-      if (Operation *defOp = op->getOperand(0).getDefiningOp())
-        operandViews.push_back(defOp);
-    }
-  }
-
-  // Look for large exp ops that will have significant MFU latency.
-  SmallVector<math::Exp2Op> exps;
-  for (auto expOp : loop.getOps<math::Exp2Op>()) {
-    auto tensorTy = dyn_cast<RankedTensorType>(expOp.getType());
-    if (tensorTy && tensorTy.getNumElements() > 256)
-      exps.push_back(expOp);
-  }
-
-  return PartitionScheme{std::move(loads), std::move(mmas), std::move(exps)};
-}
-
-//===----------------------------------------------------------------------===//
-// assignPartitions
-//===----------------------------------------------------------------------===//
 
 // For `op`, invoke `callback` on all the definitions of its inputs from within
 // `loop`, which might not be in the same iteration.
@@ -266,8 +158,7 @@ static void scheduleUsers(scf::ForOp loop, WarpSchedule &schedule,
 // Given a partitioning scheme, determine an initial schedule by performing a
 // first-order partition assignment to the operations in the scheme and its
 // users and/or dependencies. This sets up the initial partitioning of the ops.
-static WarpSchedule getInitialSchedule(const PartitionScheme &scheme,
-                                       scf::ForOp loop) {
+static WarpSchedule getInitialSchedule(scf::ForOp loop) {
   WarpSchedule schedule;
 
   // Start by creating the default partition, a partition for for all loads, and
@@ -276,42 +167,83 @@ static WarpSchedule getInitialSchedule(const PartitionScheme &scheme,
   Partition *mmaPartition = schedule.addPartition(1);
   Partition *loadPartition = schedule.addPartition(0);
 
-  for (const PipelinedLoad &load : scheme.loads) {
-    schedule.trySchedule(loadPartition, load.loadOp);
-    for (Operation *allocOp : load.allocOps)
-      schedule.trySchedule(loadPartition, allocOp);
+  // Find loads to pipeline.
+  SmallVector<Operation *> loadsAndAllocs;
+  for (Operation &op : loop.getOps()) {
+    // Only TMA loads are supported at the moment.
+    if (!isa<DescriptorLoadOp, DescriptorGatherOp>(op))
+      continue;
+    schedule.trySchedule(loadPartition, &op);
+    loadsAndAllocs.push_back(&op);
+
+    // Local alloc users of the load with matching encoding will cause the
+    // underlying buffer to be pass through. Keep track of them.
+    SharedEncodingTrait sharedEnc = getSharedEncoding(&op);
+    for (Operation *user : op.getUsers()) {
+      if (auto alloc = dyn_cast<LocalAllocOp>(user)) {
+        if (sharedEnc == alloc.getType().getEncoding()) {
+          schedule.trySchedule(loadPartition, alloc);
+          loadsAndAllocs.push_back(alloc);
+        }
+      } else if (isa<ttng::TMEMAllocOp>(user)) {
+        schedule.trySchedule(loadPartition, user);
+        loadsAndAllocs.push_back(user);
+      }
+    }
   }
 
-  for (const PipelinedMMA &mma : scheme.mmas) {
-    schedule.trySchedule(mmaPartition, mma.mmaOp);
-    if (mma.storeOp)
-      schedule.trySchedule(mmaPartition, mma.storeOp);
-    for (Operation *viewOp : mma.operandViews)
-      schedule.trySchedule(mmaPartition, viewOp);
+  // Find MMAs to pipeline.
+  SmallVector<ttng::MMAv5OpInterface> mmas;
+  for (auto mmaOp : loop.getOps<ttng::MMAv5OpInterface>()) {
+    schedule.trySchedule(mmaPartition, mmaOp);
+    mmas.push_back(mmaOp);
+
+    // If the store is unrelated to the use of the MMA, then it gets placed in
+    // the MMA partition.
+    auto storeOp = dyn_cast_or_null<ttng::TMEMStoreOp>(
+        findDefOpInLoop(loop, mmaOp.getAccDep()));
+    if (!ttng::hasAccReadModifyWrite(mmaOp, loop) && storeOp &&
+        loop.isDefinedOutsideOfLoop(storeOp.getSrc()))
+      schedule.trySchedule(mmaPartition, storeOp);
+
+    // Look for views into the operands.
+    SmallVector<Operation *> operandViews;
+    for (Value operand : mmaOp->getOperands()) {
+      if (Operation *defOp = operand.getDefiningOp())
+        operandViews.push_back(defOp);
+    }
+    while (!operandViews.empty()) {
+      Operation *op = operandViews.pop_back_val();
+      if (!op->hasOneUse() || !op->hasTrait<OpTrait::MemDescViewTrait>())
+        continue;
+      schedule.trySchedule(mmaPartition, op);
+      if (Operation *defOp = op->getOperand(0).getDefiningOp())
+        operandViews.push_back(defOp);
+    }
   }
 
   // Propagate defs of exp.
-  for (math::Exp2Op exp : scheme.exps) {
-    schedule.trySchedule(defaultPartition, exp);
-    scheduleDependencies(loop, schedule, defaultPartition, exp);
+  for (auto expOp : loop.getOps<math::Exp2Op>()) {
+    auto tensorTy = dyn_cast<RankedTensorType>(expOp.getType());
+    if (tensorTy && tensorTy.getNumElements() > 256) {
+      schedule.trySchedule(defaultPartition, expOp);
+      scheduleDependencies(loop, schedule, defaultPartition, expOp);
+    }
   }
 
   // Propagate users of loads and MMAs.
-  for (const PipelinedLoad &load : scheme.loads) {
-    scheduleUsers(loop, schedule, defaultPartition, load.loadOp);
-    for (Operation *allocOp : load.allocOps)
-      scheduleUsers(loop, schedule, defaultPartition, allocOp);
-  }
+  for (Operation *loadOrAlloc : loadsAndAllocs)
+    scheduleUsers(loop, schedule, defaultPartition, loadOrAlloc);
 
   SmallVector<Partition *> userPartitions{defaultPartition};
-  while (userPartitions.size() < scheme.mmas.size()) {
+  while (userPartitions.size() < mmas.size()) {
     userPartitions.push_back(schedule.addPartition(userPartitions.size()));
   }
-  for (auto [mma, userPartition] : llvm::zip(scheme.mmas, userPartitions)) {
-    scheduleUsers(loop, schedule, userPartition, mma.mmaOp);
+  for (auto [mmaOp, userPartition] : llvm::zip(mmas, userPartitions)) {
+    scheduleUsers(loop, schedule, userPartition, mmaOp);
   }
-  for (const PipelinedMMA &mma : scheme.mmas) {
-    scheduleDependencies(loop, schedule, defaultPartition, mma.mmaOp);
+  for (ttng::MMAv5OpInterface mmaOp : mmas) {
+    scheduleDependencies(loop, schedule, defaultPartition, mmaOp);
   }
 
   schedule.updatePartitions();
@@ -537,6 +469,66 @@ void propagatePartitions(scf::ForOp loop, WarpSchedule &schedule) {
   }
 
   schedule.updatePartitions();
+}
+
+//===----------------------------------------------------------------------===//
+// getPartitionScheme
+//===----------------------------------------------------------------------===//
+
+namespace {
+struct PipelinedLoad {
+  PipelinedLoad(Operation *loadOp)
+      : loadOp(loadOp), type(getResult().getType()),
+        sharedEnc(getSharedEncoding(loadOp)) {}
+
+  TypedValue<RankedTensorType> getResult() const {
+    return cast<TypedValue<RankedTensorType>>(loadOp->getResult(0));
+  }
+  unsigned getLoadSizeInBytes() const {
+    return type.getNumElements() * type.getElementTypeBitWidth() / 8;
+  }
+  LogicalResult determineLiveRange(Block &container, DominanceInfo &domInfo,
+                                   PostDominanceInfo &postDomInfo,
+                                   WarpSchedule &schedule);
+
+  Operation *loadOp;
+  RankedTensorType type;
+  SharedEncodingTrait sharedEnc;
+
+  SmallVector<Operation *, 1> allocOps;
+  SmallVector<Operation *, 1> liveBeforeOps;
+  SmallVector<Operation *, 0> liveUntilOps;
+  SmallVector<Operation *, 1> asyncUsers;
+};
+
+struct PipelinedMMA {
+  PipelinedMMA(ttng::MMAv5OpInterface mmaOp) : mmaOp(mmaOp) {}
+
+  ttng::MMAv5OpInterface mmaOp;
+};
+} // namespace
+
+static std::pair<SmallVector<PipelinedLoad>, SmallVector<PipelinedMMA>>
+getPartitionScheme(scf::ForOp loop, const WarpSchedule &schedule) {
+  SmallVector<PipelinedLoad> loads;
+  SmallVector<PipelinedMMA> mmas;
+
+  for (Operation &op : loop.getOps()) {
+    if (!isa<DescriptorLoadOp, DescriptorGatherOp>(op))
+      continue;
+    auto &load = loads.emplace_back(&op);
+    for (Operation *user : op.getUsers()) {
+      if (schedule.getPartition(user) == schedule.getPartition(&op) &&
+          isa<LocalAllocOp, ttng::TMEMAllocOp>(user))
+        load.allocOps.push_back(user);
+    }
+  }
+
+  for (auto mmaOp : loop.getOps<ttng::MMAv5OpInterface>()) {
+    mmas.emplace_back(mmaOp);
+  }
+
+  return {std::move(loads), std::move(mmas)};
 }
 
 //===----------------------------------------------------------------------===//
@@ -1306,7 +1298,8 @@ static LogicalResult pipelineMMA(scf::ForOp &loop, PipelinedMMA &mma,
 // lowerLoops
 //===----------------------------------------------------------------------===//
 
-LogicalResult lowerLoops(scf::ForOp &loop, PartitionScheme &scheme,
+LogicalResult lowerLoops(scf::ForOp &loop, MutableArrayRef<PipelinedLoad> loads,
+                         MutableArrayRef<PipelinedMMA> mmas,
                          WarpSchedule &schedule, int numLoadStages) {
   Block &body = *loop.getBody();
   DominanceInfo domInfo(loop);
@@ -1316,7 +1309,7 @@ LogicalResult lowerLoops(scf::ForOp &loop, PartitionScheme &scheme,
   // that multiple loads feeding into the same MMA op are placed together.
   llvm::MapVector<ArrayRef<Operation *>, SmallVector<PipelinedLoad>>
       liveBeforeGroups;
-  for (PipelinedLoad &load : scheme.loads) {
+  for (PipelinedLoad &load : loads) {
     if (failed(load.determineLiveRange(body, domInfo, postDomInfo, schedule)))
       return failure();
     liveBeforeGroups[load.liveBeforeOps].push_back(std::move(load));
@@ -1334,9 +1327,9 @@ LogicalResult lowerLoops(scf::ForOp &loop, PartitionScheme &scheme,
       curLoadStage += 2;
     }
   }
-  if (scheme.mmas.size() > 1) {
+  if (mmas.size() > 1) {
     unsigned curMMAStage = 0;
-    for (const PipelinedMMA &mma : scheme.mmas) {
+    for (const PipelinedMMA &mma : mmas) {
       stages.insert({mma.mmaOp, curMMAStage});
       curMMAStage += 2;
     }
@@ -1354,7 +1347,7 @@ LogicalResult lowerLoops(scf::ForOp &loop, PartitionScheme &scheme,
   }
 
   // Multi-buffer and lower the MMAs.
-  for (PipelinedMMA &mma : scheme.mmas) {
+  for (PipelinedMMA &mma : mmas) {
     if (failed(pipelineMMA(loop, mma, schedule, domInfo, postDomInfo,
                            stages.lookup(mma.mmaOp), stages)))
       return failure();
@@ -1390,14 +1383,15 @@ void LoadMMASpecialization::runOnOperation() {
       loops.push_back(loop);
   });
   for (scf::ForOp loop : loops) {
-    PartitionScheme scheme = getPartitionScheme(loop);
-    if (scheme.loads.empty() && scheme.mmas.empty())
-      continue;
-    WarpSchedule schedule = getInitialSchedule(scheme, loop);
+    WarpSchedule schedule = getInitialSchedule(loop);
     propagatePartitions(loop, schedule);
     schedule.serialize(loop);
+
+    auto [loads, mmas] = getPartitionScheme(loop, schedule);
+    if (loads.empty() && mmas.empty())
+      continue;
     int loopNumStages = getNumStagesOrDefault(loop, numStages);
-    if (failed(lowerLoops(loop, scheme, schedule, loopNumStages)))
+    if (failed(lowerLoops(loop, loads, mmas, schedule, loopNumStages)))
       continue;
     // HACK: Set this attribute so that LowerLoops will multi-buffer TMA
     // descriptors.
