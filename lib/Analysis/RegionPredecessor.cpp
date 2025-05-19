@@ -40,3 +40,11 @@ RegionPredecessorAnalysis::RegionPredecessorAnalysis(Operation *op) {
     return WalkResult::advance();
   });
 }
+
+ArrayRef<BlockIter> RegionPredecessorAnalysis::getPredecessors(Operation *op) {
+  return predecessors.at(op).getArrayRef();
+}
+
+ArrayRef<BlockIter> RegionPredecessorAnalysis::getPredecessors(Region *region) {
+  return predecessors.at(region).getArrayRef();
+}
