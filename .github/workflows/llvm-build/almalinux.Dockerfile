@@ -28,6 +28,7 @@ RUN cmake -GNinja -Bbuild \
   -DCMAKE_LINKER=lld \
   -DCMAKE_INSTALL_PREFIX="/install" \
   -DPython3_EXECUTABLE="/usr/bin/python3.8" \
+  -DPython_EXECUTABLE="/usr/bin/python3.8" \
   -DLLVM_BUILD_UTILS=ON \
   -DLLVM_BUILD_TOOLS=ON \
   -DLLVM_ENABLE_ASSERTIONS=ON \
