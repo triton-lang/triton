@@ -14,7 +14,7 @@ class ExptData:
 
 
 @triton.jit
-def _matmul_metadata_memset(Hist, n_expts_tot, MDHist, MDTokStarts, MDTileStarts, MDTileInfo, BLOCK: tl.constexpr,
+def _matmul_metadata_memset(Hist, n_expts_tot, MDTokStarts, MDTileStarts, MDTileInfo, BLOCK: tl.constexpr,
                             TILE_DIM: tl.constexpr, extra_block: tl.constexpr):
     pid = tl.program_id(0)
 
@@ -25,7 +25,6 @@ def _matmul_metadata_memset(Hist, n_expts_tot, MDHist, MDTokStarts, MDTileStarts
         x_tok = tl.zeros([BLOCK], dtype=MDTokStarts.dtype.element_ty)
         x_tile = tl.zeros([BLOCK], dtype=MDTileStarts.dtype.element_ty)
 
-        Hist_ptrs = MDHist + tl.arange(0, BLOCK)
         Tok_ptrs = MDTokStarts + tl.arange(0, BLOCK)
         Tile_ptrs = MDTileStarts + tl.arange(0, BLOCK)
 
@@ -39,11 +38,9 @@ def _matmul_metadata_memset(Hist, n_expts_tot, MDHist, MDTokStarts, MDTileStarts
             tile_starts = tl.cumsum(hist_tile, 0) + x_tile
             x_tile += tl.sum(hist_tile, 0).to(MDTileStarts.dtype.element_ty)
 
-            tl.store(Hist_ptrs, hist_tok)
             tl.store(Tok_ptrs, tok_starts - hist_tok)
             tl.store(Tile_ptrs, tile_starts - hist_tile)
 
-            Hist_ptrs += BLOCK
             Tok_ptrs += BLOCK
             Tile_ptrs += BLOCK
 
@@ -94,13 +91,13 @@ def compute_metadata(routing_data, n_rows, block_m):
 
     metadata = torch.empty(metadata_size, dtype=torch.int32, device=device)
 
-    md_hist = metadata[:n_expts_tot]
-    md_offs = metadata[n_expts_pad:][:n_expts_tot + 1]
-    md_tile_starts = metadata[n_expts_pad + pad2:][:n_expts_tot + 1]
+    md_hist = routing_data.expt_hist[:n_expts_tot]
+    md_offs = metadata[:n_expts_tot + 1]
+    md_tile_starts = metadata[pad2:][:n_expts_tot + 1]
     md_offs_sum = md_tile_starts[-1]
-    md_tile_infos = metadata[n_expts_pad + 2 * pad2:][:grid_m]
+    md_tile_infos = metadata[2 * pad2:][:grid_m]
     _matmul_metadata_memset[(pids, )](
-        routing_data.expt_hist, n_expts_tot, md_hist, md_offs, md_tile_starts, md_tile_infos,
+        routing_data.expt_hist, n_expts_tot, md_offs, md_tile_starts, md_tile_infos,
         BLOCK=MEMSET_BLOCK,  # optimization parameters
         TILE_DIM=block_m,  # constants
         extra_block=extra_block, num_warps=1)
