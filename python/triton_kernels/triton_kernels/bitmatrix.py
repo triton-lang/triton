@@ -25,7 +25,6 @@ class Bitmatrix:
     S: torch.tensor
 
     def sum(self, partials_block_size):
-        cdiv = triton.cdiv
         n_rows, n_cols = self.shape
         dev = self.data.device
         if self.S is None:
