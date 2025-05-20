@@ -106,6 +106,7 @@ class CUDAOptions:
     maxnreg: Optional[int] = None
     cluster_dims: tuple = (1, 1, 1)
     ptx_version: int = None
+    ir_override: Optional[str] = None  # filename of a user-defined IR (*.{ttir|ttgir|llir|ptx})
     enable_fp_fusion: bool = True
     launch_cooperative_grid: bool = False
     launch_pdl: bool = False
@@ -270,7 +271,6 @@ class CUDABackend(BaseBackend):
         passes.common.add_canonicalizer(pm)
         passes.ttir.add_loop_aware_cse(pm)
         passes.ttgpuir.add_prefetch(pm)
-        passes.ttgpuir.add_WGMMAPrefetch(pm)
         passes.ttgpuir.add_optimize_dot_operands(pm, capability >= 80)
         passes.ttgpuir.add_coalesce_async_copy(pm)
         nvidia.passes.ttnvgpuir.add_optimize_tmem_layouts(pm)

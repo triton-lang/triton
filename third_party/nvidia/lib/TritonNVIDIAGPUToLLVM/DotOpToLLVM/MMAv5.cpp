@@ -368,7 +368,7 @@ void convertDotImpl(const LLVMTypeConverter &typeConverter,
                     Value b, Value loadedA, Value loadedB,
                     MemDescType dTensorTy, Value useDFlag, Value pred,
                     ValueRange barriers, ValueRange barrierPreds, bool twoCTAs,
-                    const DotConversion &op) {
+                    bool opKindIsMXFP4, const DotConversion &op) {
   auto tb = TritonLLVMOpBuilder(loc, rewriter);
 
   // Only run mma on one thread. We currently use elect as ptxas is not able to
@@ -438,17 +438,32 @@ void convertDotImpl(const LLVMTypeConverter &typeConverter,
   SmallVector<int64_t> shapeB = op.shapeB;
   SmallVector<unsigned> aOperandShape = {mmaSizeM, mmaSizeK};
 
+  auto getAllocShape = [&](MemDescType tensorTy, int kDim) {
+    // allocationShape uses the shape, not the `allocShape`?
+    auto fullAllocShape = triton::gpu::getAllocationShapePerCTA(
+        tensorTy.getEncoding(), tensorTy.getAllocShape());
+    auto ret = to_vector(ArrayRef<int64_t>(fullAllocShape).take_back(2));
+
+    if (opKindIsMXFP4) {
+      ret[kDim] *= 2;
+    }
+    return ret;
+  };
+
   std::unique_ptr<DotOpMmaMemLoader> aLoader;
   if (aInTmem) {
     aLoader = std::make_unique<DotOpMmaV5TmemLoader>(a, baseA, aOperandShape,
                                                      interleaved, transA);
   } else {
+    auto allocShapeA = getAllocShape(aTensorTy, 1);
     aLoader = std::make_unique<DotOpMmaV3SmemLoader>(
-        a, baseA, shapeA, shapeA, zero, 1, transA, aOperandShape,
+        a, baseA, shapeA, allocShapeA, zero, 1, transA, aOperandShape,
         op.numBitsPerElementA, rewriter, loc);
   }
+
+  auto allocShapeB = getAllocShape(bTensorTy, 0);
   DotOpMmaV3SmemLoader bLoader = DotOpMmaV3SmemLoader(
-      b, baseB, shapeB, shapeB, zero, 1, transB, {mmaSizeN, mmaSizeK},
+      b, baseB, shapeB, allocShapeB, zero, 1, transB, {mmaSizeN, mmaSizeK},
       op.numBitsPerElementB, rewriter, loc);
 
   DotConversion::InstDesc desc{mmaSizeM, mmaSizeN, {numRepM, numRepN, numRepK},
@@ -521,7 +536,8 @@ void convertDot(const LLVMTypeConverter &typeConverter,
   convertDotImpl(typeConverter, rewriter, loc, op.getA(), op.getB(),
                  adaptor.getA(), adaptor.getB(), dTensorTy, adaptor.getUseD(),
                  adaptor.getPred(), adaptor.getBarriers(),
-                 adaptor.getBarrierPreds(), twoCTAs, dot);
+                 adaptor.getBarrierPreds(), twoCTAs, /*opKindIsMXFP4=*/false,
+                 dot);
 }
 
 int64_t getFormatBitSize(ScaleDotElemType type) {
@@ -635,7 +651,8 @@ void convertScaledDot(const LLVMTypeConverter &typeConverter,
   convertDotImpl(typeConverter, rewriter, loc, op.getA(), op.getB(),
                  adaptor.getA(), adaptor.getB(), dTensorTy, adaptor.getUseD(),
                  adaptor.getPred(), adaptor.getBarriers(),
-                 adaptor.getBarrierPreds(), /*twoCTAs=*/false, dot);
+                 adaptor.getBarrierPreds(), /*twoCTAs=*/false, opKindIsMXFP4,
+                 dot);
 }
 
 //===----------------------------------------------------------------------===//
