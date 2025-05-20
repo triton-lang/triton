@@ -47,7 +47,7 @@ def _keyed_add(x, y):
 
 
 @triton.jit
-def _routing_compute_indx(GatherIndx, ScatterIndx, GateScal, ExptScal, ExptIndx, PartialOffs, stride_pm, n_gates,
+def _routing_compute_indx(GatherIndx, ScatterIndx, GateScal, ExptScal, ExptIndx, PartialOffs, stride_pm, stride_pn, n_gates,
                           BLOCK_M: tl.constexpr, N_EXPTS_ACT: tl.constexpr):
 
     pid_m = tl.program_id(0)
@@ -71,7 +71,7 @@ def _routing_compute_indx(GatherIndx, ScatterIndx, GateScal, ExptScal, ExptIndx,
     expts_and_inclusive_run_lengths = tl.associative_scan(x, 0, _keyed_add)
     exclusive_run_lengths = (expts_and_inclusive_run_lengths - 1) & 0xffff
 
-    gates = tl.load(PartialOffs + pid_m * stride_pm + expert, mask=(expert != 0xffff))
+    gates = tl.load(PartialOffs + pid_m * stride_pm + expert * stride_pn, mask=(expert != 0xffff))
     gates += exclusive_run_lengths
 
     tl.store(ScatterIndx + offs, gates, mask=mask)

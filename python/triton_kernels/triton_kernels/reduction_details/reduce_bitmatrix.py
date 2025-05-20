@@ -85,12 +85,13 @@ def sum_bitmatrix_rows(x, out_ret, partials_block_size=None):
     n_rows, n_cols = x.shape
     assert out_ret.shape == (n_cols, )
 
-    TILE_SIZE = 8
+    TILE_SIZE = 2
     BLOCK_MM = PARTIALS_BLOCK_M * TILE_SIZE
 
     pids_x = cdiv(n_rows, BLOCK_MM)
     pids_y = cdiv(n_cols, 32)
-    out_partials = torch.empty((pids_x * TILE_SIZE, pids_y * 32), device=out_ret.device, dtype=torch.int32)
+    out_partials = torch.empty((pids_y * 32, pids_x * TILE_SIZE), device=out_ret.device, dtype=torch.int32)
+    out_partials = torch.transpose(out_partials, 0, 1)
 
     # output tensors
     _sum_bitmatrix_rows[(pids_x, pids_y)](
@@ -98,6 +99,7 @@ def sum_bitmatrix_rows(x, out_ret, partials_block_size=None):
         out_ret,  # output [final reduction]
         out_partials, out_partials.stride(0), out_partials.stride(1), out_partials.shape[1],  # output [partial reductions]
         BLOCK_M=PARTIALS_BLOCK_M, BLOCK_MM=BLOCK_MM,  # constants
+        num_warps=8
     )
 
     out_partials = out_partials[:cdiv(n_rows, PARTIALS_BLOCK_M), :n_cols]

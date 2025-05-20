@@ -99,7 +99,7 @@ def routing(logits, n_expts_act, expt_indx=None, simulated_ep=1):
 
     _routing_compute_indx[(cdiv(n_tokens, HIST_BLOCK_M), )](
         topk_indx, gate_indx, gate_scal,  # outputs
-        expt_scal, expt_indx, indx_offs, indx_offs.stride(0), n_gates,  # input
+        expt_scal, expt_indx, indx_offs, indx_offs.stride(0), indx_offs.stride(1), n_gates,  # input
         BLOCK_M=HIST_BLOCK_M,  # tunable parameters
         N_EXPTS_ACT=n_expts_act,  # constants
         num_warps=1 if HIST_BLOCK_M * n_expts_act // 32 < 4 else 4)
