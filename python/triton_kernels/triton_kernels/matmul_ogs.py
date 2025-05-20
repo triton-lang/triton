@@ -600,7 +600,7 @@ def matmul_ogs(x, w, bias,
                    UPCAST_INDICES=should_upcast_indices(x, w, out0),
                    DISABLE_Y_TMA=out0.stride(-2) * out0.dtype.itemsize % 16 != 0,
                    SWAP_XW=swap_xw,
-                   NUM_SMS = n_cta,
+                   NUM_SMS = n_cta if opt_flags.is_persistent else 0,
                    **opt_flags.target_kernel_kwargs)
     # post-processing
     out = apply_postprocessing_features(scatter_indx, finalize_scatter_idxs, opt_flags, expt_data.offs,
