@@ -9,6 +9,7 @@
 #include "triton/Dialect/TritonGPU/IR/Types.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
+#include "triton/Tools/LayoutUtils.h"
 #include "llvm/Support/Casting.h"
 #include "llvm/Support/LogicalResult.h"
 
@@ -600,15 +601,107 @@ LogicalResult MemDescSubviewOp::verify() {
             "offsets other than the first one must be constant zeros");
       }
     }
+    return success();
   }
 
-  // TODO(jlebar): Currently we generate illegal encodings, so we can't add a
-  // verifier for them.  In particular, we use the same encoding for the src and
-  // dst of a subview op, when the subview removes a dimension.  That generates
-  // an illegal shared encoding (because the size of `order` doesn't match the
-  // rank of the tensor), but it's not checked anywhere, and we believe the
-  // resulting code ultimately works.
+  assert(isa<SharedEncodingTrait>(srcEnc));
 
+  // corner case: 1D -> 1D into a 1 element tensor (we don't have 0D tensors)
+  if (srcTy.getRank() == 1 && dstTy.getRank() == 1 &&
+      dstTy.getDimSize(0) == 1) {
+    return success();
+  }
+
+  // There are two cases:
+  // 1. The subview is rank-reducing
+  //  - We split along the first dimension. It can be with non-constant offsets
+  if (srcTy.getRank() != dstTy.getRank()) {
+    if (srcTy.getRank() - dstTy.getRank() != 1) {
+      return emitError(
+          "only nD -> (n-1)D rank-reducing subviews are supported");
+    }
+    for (auto offset : getOffsets().take_back(dstTy.getRank())) {
+      if (auto constOp = offset.getDefiningOp<arith::ConstantOp>()) {
+        if (auto offsetInt = dyn_cast<IntegerAttr>(constOp.getValue())) {
+          if (offsetInt.getInt() != 0) {
+            return emitError("only first offset can be non-zero for a "
+                             "rank-reducing subview");
+          }
+        } else {
+          return emitError(
+              "only integer constant values are allowed for the split");
+        }
+      } else {
+        return emitError("only constant values are allowed outside the front "
+                         "dimension in a rank-reducing subview");
+      }
+    }
+    return success();
+  }
+  assert(srcTy.getRank() == dstTy.getRank());
+  // 2. The src is non-rank-reducing
+  //  - We split along at most one dim, but just with constant values
+  //  - The values where the split happens must not be within the swizzling
+  //  pattern
+  // Check which dimension we are splitting along
+  int dim = -1;
+  for (int i = 0; i < srcTy.getRank(); i++) {
+    if (srcTy.getDimSize(i) != dstTy.getDimSize(i)) {
+      if (dim != -1) {
+        return emitError(
+            "We don't allow subviews that split along multiple dimensions");
+      }
+      dim = i;
+    }
+  }
+  SmallVector<int64_t> offsets;
+  for (auto offset : getOffsets()) {
+    if (auto constOp = offset.getDefiningOp<arith::ConstantOp>()) {
+      if (auto offsetInt = dyn_cast<IntegerAttr>(constOp.getValue())) {
+        offsets.push_back(offsetInt.getInt());
+      } else {
+        return emitError(
+            "only integer constant values are allowed for the split");
+      }
+    } else {
+      return emitError("only constant values are allowed for the split");
+    }
+  }
+  // Identity subview
+  if (dim == -1) {
+    return success();
+  }
+
+  for (auto [i, offset] : llvm::enumerate(offsets)) {
+    if (i != dim) {
+      if (offset != 0) {
+        return emitError("A non zero offset found in a dimension that is "
+                         "not being split");
+      }
+    } else {
+      if (offset & (dstTy.getDimSize(dim) - 1)) {
+        return emitError("The split offset may not touch the tile");
+      }
+    }
+  }
+  auto ctx = getContext();
+  // The order gives us the honest-to-goodness layout rank
+  auto srcAllocShape = srcTy.getAllocShape().take_back(getOrder(srcTy).size());
+  auto llInv =
+      triton::gpu::toLinearLayout(srcAllocShape, srcTy.getEncoding()).invert();
+  auto kDim = mlir::StringAttr::get(ctx, "dim" + llvm::Twine(dim));
+  llvm::SmallVector<std::pair<mlir::StringAttr, int32_t>> namedOffsets;
+  for (auto d : standardOutDimNames(ctx, srcTy.getRank())) {
+    namedOffsets.push_back({d, 0});
+  }
+  for (int dimSize = dstTy.getDimSize(dim); dimSize < srcTy.getDimSize(dim);
+       dimSize *= 2) {
+    namedOffsets[dim] = {kDim, dimSize};
+    if (!llvm::isPowerOf2_32(llInv.apply(namedOffsets)[0].second)) {
+      return emitError(
+          "We don't support splitting along the swizzling pattern");
+    }
+  }
   return success();
 }
 
