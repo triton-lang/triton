@@ -48,7 +48,7 @@ bool hasLatenciesAssigned(scf::ForOp forOp,
   for (auto &op : forOp.getBody()->without_terminator()) {
     if (opLatency.count(&op))
       return true;
-    if (op.getAttr(kAssignedStageAttrName))
+    if (op.hasAttr(kAssignedStageAttrName) || op.hasAttr(kLoopStageAttrName))
       return true;
   }
   return false;
@@ -56,6 +56,25 @@ bool hasLatenciesAssigned(scf::ForOp forOp,
 
 CoarseSchedule scheduleKeyOps(scf::ForOp forOp,
                               const DenseMap<Operation *, int> &opLatency) {
+  if (llvm::any_of(forOp.getOps(), [&](Operation &op) {
+        return op.hasAttr(kLoopStageAttrName);
+      })) {
+    CoarseSchedule schedule;
+    (void)schedule.deSerialize(forOp);
+    DenseSet<int> uniqueStages;
+    for (auto [op, stage, cluster] : schedule.getOpsInOrder(forOp))
+      uniqueStages.insert(stage);
+    if (uniqueStages.size() <= 1) {
+      forOp.walk([&](Operation *op) {
+        op->removeAttr(kLoopStageAttrName);
+        op->removeAttr(kLoopClusterAttrName);
+        op->removeAttr(kScheduledMaxStageAttrName);
+      });
+      return CoarseSchedule(0);
+    }
+    return schedule;
+  }
+
   llvm::MapVector<Operation *, int> opToStage;
   // Find terminator for later reference
   auto terminator = cast<scf::YieldOp>(forOp.getBody()->getTerminator());

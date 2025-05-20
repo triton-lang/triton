@@ -260,6 +260,16 @@ struct AsyncRef {
 // DependencyRewriter
 //===----------------------------------------------------------------------===//
 
+using StageCluster = std::optional<std::pair<int, int>>;
+
+static StageCluster getStageCluster(Operation *op) {
+  auto stageAttr = op->getAttrOfType<IntegerAttr>(kLoopStageAttrName);
+  auto clusterAttr = op->getAttrOfType<IntegerAttr>(kLoopClusterAttrName);
+  if (!stageAttr || !clusterAttr)
+    return std::nullopt;
+  return std::make_pair(stageAttr.getInt(), clusterAttr.getInt());
+}
+
 // Helper class for dependency rewriting.
 class DependencyRewriter {
 public:
@@ -275,10 +285,16 @@ private:
     return b.create<arith::ConstantIntOp>(value, width);
   }
   template <typename OpT, typename... Args>
-  auto createInPartition(Partition &partition, Args &&...args) {
+  auto createInto(Partition &partition, StageCluster stageCluster,
+                  Args &&...args) {
     auto op = b.create<OpT>(std::forward<Args>(args)...);
     partition.insert(op);
     op->setAttr(kPartitionAttrName, b.getI32IntegerAttr(partition.getIndex()));
+    if (stageCluster) {
+      op->setAttr(kLoopStageAttrName, b.getI32IntegerAttr(stageCluster->first));
+      op->setAttr(kLoopClusterAttrName,
+                  b.getI32IntegerAttr(stageCluster->second));
+    }
     return op;
   }
 
@@ -495,24 +511,30 @@ LogicalResult DependencyRewriter::run() {
 
         // Wait for the value to be available.
         auto [view, readyView, emptyView] = aref.getView(b, idx);
-        createInPartition<ttng::WaitBarrierOp>(*usePartition, readyView, phase);
+        StageCluster sinkSrcCluster = getStageCluster(earliestUser);
+        createInto<ttng::WaitBarrierOp>(*usePartition, sinkSrcCluster,
+                                        readyView, phase);
         // Load the value at the current index and replace uses in this
         // partition with it.
-        Value value =
-            createInPartition<LocalLoadOp>(*usePartition, tensorType, view);
+        Value value = createInto<LocalLoadOp>(*usePartition, sinkSrcCluster,
+                                              tensorType, view);
         for (OpOperand *use : uses)
           use->set(value);
         // Mark the buffer as ready.
-        createInPartition<ttng::ArriveBarrierOp>(*usePartition, emptyView, 1);
+        createInto<ttng::ArriveBarrierOp>(*usePartition, sinkSrcCluster,
+                                          emptyView, 1);
       }
 
       // Set up production of the value.
       b.setInsertionPointAfter(output.getDefiningOp());
       auto [idx, phase] = createAndGetAsyncIndex(aref);
       auto [view, readyView, emptyView] = aref.getView(b, idx);
-      createInPartition<ttng::WaitBarrierOp>(partition, emptyView, phase);
-      createInPartition<LocalStoreOp>(partition, output, view);
-      createInPartition<ttng::ArriveBarrierOp>(partition, readyView, 1);
+      StageCluster srcStageCluster = getStageCluster(output.getDefiningOp());
+      createInto<ttng::WaitBarrierOp>(partition, srcStageCluster, emptyView,
+                                      phase);
+      createInto<LocalStoreOp>(partition, srcStageCluster, output, view);
+      createInto<ttng::ArriveBarrierOp>(partition, srcStageCluster, readyView,
+                                        1);
     }
   }
 
