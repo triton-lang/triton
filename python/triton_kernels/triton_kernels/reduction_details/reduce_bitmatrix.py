@@ -71,7 +71,7 @@ def clear_sums(n_cols, device, MEMSET_BLOCK=512):
     blocks = cdiv(n_cols, MEMSET_BLOCK)
     out_ret = torch.empty((blocks * MEMSET_BLOCK,), device=device, dtype=torch.int32)
     _sum_bitmatrix_memset[(blocks,)](out_ret, MEMSET_BLOCK)
-    return out_ret[:n_cols]
+    return out_ret
 
 
 def sum_bitmatrix_rows(x, out_ret, out_partials, partials_block_size=None):
@@ -81,6 +81,7 @@ def sum_bitmatrix_rows(x, out_ret, out_partials, partials_block_size=None):
     BLOCK_N = 32
     MEMSET_BLOCK = 512
     n_rows, n_cols = x.shape
+    print((out_ret.shape, n_cols))
     assert out_ret.shape == (n_cols, )
     assert out_partials.shape == (cdiv(n_rows, PARTIALS_BLOCK_M), n_cols)
     # output tensors

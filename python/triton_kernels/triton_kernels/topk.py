@@ -39,4 +39,4 @@ def topk(x, k, dim=1, return_bitmatrix=True):
         BLOCK_M=BLOCK_M, BLOCK_N=BLOCK_N,  # tunable parameter
         N_EXPTS_PAD=n_cols_pad, N_EXPTS_ACT=k,  # constants
     )
-    return y_vals, y_indx, Bitmatrix(bitmatrix, [n_rows, n_cols], S[:n_cols])
+    return y_vals, y_indx, Bitmatrix(bitmatrix, [n_rows, n_cols], S)

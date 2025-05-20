@@ -18,7 +18,7 @@ class Bitmatrix:
         dev = self.data.device
         if self.S is None:
             self.S = clear_sums(n_cols, dev)
-        out_ret = self.S
+        out_ret = self.S[:n_cols]
         self.S = None  # throw error if we try to sum again
         out_partials = torch.empty((cdiv(n_rows, partials_block_size), n_cols), dtype=torch.int32, device=dev)
         return sum_bitmatrix_rows(self, out_ret, out_partials, partials_block_size)
