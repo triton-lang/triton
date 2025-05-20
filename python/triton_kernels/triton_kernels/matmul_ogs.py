@@ -548,8 +548,9 @@ def matmul_ogs(x, w, bias,
         x, w, gather_indx, scatter_indx, routing_data, opt_flags, preprocessing_features
     )
     if expt_data.buffer is not None:
-        assert expt_data.buffer.shape[0] == 3*n_expts_tot + 2 + grid_m, \
-            f"invalid expt_data, {expt_data.buffer.shape}, {n_expts_tot=}, {grid_m=}"
+        assert expt_data.hist.shape[0] == n_expts_tot, "invalid expt_data"
+        assert expt_data.offs.shape[0] == n_expts_tot + 1, "invalid expt_data"
+        assert expt_data.blocks.shape[0] == grid_m, "invalid expt_data"
     # matrix multiplication
     n_cta = batch_size * grid_m * grid_n * opt_flags.split_k
     n_cta = min(target_info.num_sms(), n_cta) if opt_flags.is_persistent else n_cta
