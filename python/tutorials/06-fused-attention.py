@@ -15,6 +15,7 @@ Extra Credits:
 
 import pytest
 import torch
+import sys
 
 import triton
 import triton.language as tl
@@ -111,12 +112,24 @@ configs = [
     for s in NUM_STAGES_OPTIONS \
     for w in [4, 8]\
 ]
+if "pytest" in sys.modules:
+    # Use a single config in testing for reproducibility
+    configs = [
+        triton.Config(dict(BLOCK_M=64, BLOCK_N=64), num_stages=4, num_warps=4, pre_hook=_host_descriptor_pre_hook),
+    ]
 
 
 def keep(conf):
     BLOCK_M = conf.kwargs["BLOCK_M"]
     BLOCK_N = conf.kwargs["BLOCK_N"]
     return not (torch.cuda.get_device_capability()[0] == 9 and BLOCK_M * BLOCK_N < 128 * 128 and conf.num_warps == 8)
+
+
+def prune_invalid_configs(configs, named_args, **kwargs):
+    N_CTX = kwargs["N_CTX"]
+
+    # Filter out configs where BLOCK_M > N_CTX
+    return [conf for conf in configs if conf.kwargs.get("BLOCK_M", 0) <= N_CTX]
 
 
 @triton.jit
@@ -127,7 +140,8 @@ def _maybe_make_tensor_desc(desc_or_ptr, shape, strides, block_shape):
         return tl.make_tensor_descriptor(desc_or_ptr, shape, strides, block_shape)
 
 
-@triton.autotune(configs=list(filter(keep, configs)), key=["N_CTX", "HEAD_DIM", "FP8_OUTPUT", "warp_specialize"])
+@triton.autotune(configs=list(filter(keep, configs)), key=["N_CTX", "HEAD_DIM", "FP8_OUTPUT", "warp_specialize"],
+                 prune_configs_by={'early_config_prune': prune_invalid_configs})
 @triton.jit
 def _attn_fwd(sm_scale, M,  #
               Z, H, desc_q, desc_k, desc_v, desc_o, N_CTX,  #

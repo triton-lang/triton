@@ -1,6 +1,6 @@
 from dataclasses import dataclass
 import triton
-from triton_kernels import target_info
+from triton_kernels.numerics_details.mxfp import SwizzlingType
 import torch
 
 from . import opt_flags_amd, opt_flags_nvidia
@@ -143,16 +143,8 @@ def make_default_opt_flags_nvidia(
         block_m = 128
     else:
         block_m = max(64, min(triton.next_power_of_2(tokens_per_expt), 128))
-    # TODO: remove when triton is more optimized for H100 MXFP4
-    arch = None
-    if (
-        block_m < 128
-        and rhs_dtype == torch.uint8
-        and microscaling_ctx.weight_scale is not None
-        and not target_info.cuda_capability_geq(10, 0)
-    ):
-        arch = "sm80"
     # block n
+    arch = None
     block_n = opt_flags_nvidia.compute_block_n(n, arch, precision_config)
     # is_persistent
     grid_size = opt_flags_nvidia.compute_grid_size(routing_data, m, n, block_m, block_n)
@@ -204,8 +196,9 @@ def make_default_opt_flags_nvidia(
         fused_scatter = constraints["fused_scatter"]
     else:
         fused_scatter = can_use_fused_scatter and split_k == 1
-    # num_warps
-    num_warps = opt_flags_nvidia.compute_num_warps(block_m, block_n)
+    # Handshake with the HBM swizzling
+    hopper_swizzling = microscaling_ctx.swizzle_scale == SwizzlingType.HOPPER
+    num_warps = 8 if hopper_swizzling else opt_flags_nvidia.compute_num_warps(block_m, block_n)
     ret = OptFlags(
         block_m=block_m,
         block_n=block_n,

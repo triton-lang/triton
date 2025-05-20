@@ -208,14 +208,26 @@ def TTG_MemDescSubviewOp : TTG_Op<"memdesc_subview", [Pure, MemDescViewTrait]> {
 
   let description = [{
     This operation returns a new descriptor representing a subview of the buffer.
-    It doesn't affect the underlying memory. The subview can be rank-reduced.
+    It doesn't affect the underlying memory.
 
     For example, suppose that
      - the input shape is 2x4x16xf16,
-     - the output shape is 4x4xf16, and
-     - offsets = [1, 0, 4].
+     - the output shape is 4x16xf16, and
+     - offsets = [1, 0, 0].
 
-    Then in Python syntax, the subview covers input[1][0:4][4:8].
+    Then in Python syntax, the subview covers input[1].
+
+    Just one dimension may be split (at most one non-zero offset).
+
+    When the input shape and the output shape have different rank:
+    Or the output shape is a tensor of 1D tensor of 1 element:
+      - The rank of the output must be 1D smaller than the input.
+      - We assume the input is split along the 0th dimension.
+      - The offset along the 0th dimension may be a runtime value.
+    When the input and the output have the same rank:
+      - The offset must be a compile-time constant
+      - Larger or equal to the tile of the tensor (or zero)
+      - That does not split the input along the swizzling pattern (if any)
   }];
   let arguments = (
     ins TTG_MemDescType:$src, Variadic<I32>:$offsets);
