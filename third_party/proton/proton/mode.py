@@ -1,5 +1,6 @@
 from dataclasses import dataclass, field
 from triton._C.libtriton import proton as triton_proton
+from enum import Enum
 
 metric_types = {"cycle": triton_proton.METRIC_TYPE.CYCLE}
 
@@ -31,6 +32,14 @@ granularities = {
 }
 
 
+class Optimize(Enum):
+    NONE = "none"
+    TIMESHIFT = "time_shift"
+
+    def __str__(self):
+        return self.value
+
+
 @dataclass(frozen=True)
 class BaseMode:
     name: str
@@ -59,6 +68,7 @@ class InstrumentationMode(BaseMode):
     buffer_strategy: triton_proton.BUFFER_STRATEGY = triton_proton.BUFFER_STRATEGY.CIRCULAR
     buffer_type: triton_proton.BUFFER_TYPE = triton_proton.BUFFER_TYPE.SHARED
     buffer_size: int = 0
+    optimization: Optimize = Optimize.NONE
 
     def __post_init__(self):
         # automatically map string inputs to enums using the global lookup dicts
@@ -80,7 +90,7 @@ class InstrumentationMode(BaseMode):
         return (f"{self.name}:metric_type={self.metric_type}:sampling_strategy={self.sampling_strategy}"
                 f":sampling_options={self.sampling_options}:granularity={self.granularity}"
                 f":buffer_strategy={self.buffer_strategy}:buffer_type={self.buffer_type}"
-                f":buffer_size={self.buffer_size}")
+                f":buffer_size={self.buffer_size}:optimization={self.optimization}")
 
 
 @dataclass(frozen=True)

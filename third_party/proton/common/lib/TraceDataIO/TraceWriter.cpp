@@ -6,6 +6,7 @@
 #include <stdexcept>
 
 using namespace proton;
+using json = nlohmann::json;
 
 StreamTraceWriter::StreamTraceWriter(
     const std::vector<KernelTrace> &streamTrace, const std::string &path)
@@ -34,22 +35,13 @@ void StreamChromeTraceWriter::write(std::ofstream &outfile) {
     return;
   }
 
-  outfile << "{\n\"traceEvents\": [\n";
+  json object = {{"displayTimeUnit", "ns"}, {"traceEvents", json::array()}};
 
-  std::stringstream ss;
   int totalKernelNum = streamTrace.size();
   for (int i = 0; i < totalKernelNum; i++) {
-    writeKernel(ss, streamTrace[i], kKernelTimeGap * i);
+    writeKernel(object, streamTrace[i], kKernelTimeGap * i);
   }
-  std::string fullTraceStr = ss.str();
-  // Remove the last comma
-  fullTraceStr.pop_back();
-  fullTraceStr.pop_back();
-
-  outfile << fullTraceStr;
-  outfile << "],\n";
-  outfile << "\"displayTimeUnit\": \"ns\"\n";
-  outfile << "}\n";
+  outfile << object.dump() << "\n";
 }
 
 namespace {
@@ -147,7 +139,7 @@ std::vector<int> assignLineIds(
 
 } // namespace
 
-void StreamChromeTraceWriter::writeKernel(std::stringstream &outstream,
+void StreamChromeTraceWriter::writeKernel(json &object,
                                           const KernelTrace &kernelTrace,
                                           uint32_t kernelTimeStart) {
   auto &result = *kernelTrace.first;
@@ -197,19 +189,20 @@ void StreamChromeTraceWriter::writeKernel(std::stringstream &outstream,
               static_cast<int64_t>(event.first->cycle) + cycleAdjust[ctaId]);
           uint32_t dur = event.second->cycle - event.first->cycle;
 
-          outstream << "{";
-          outstream << "\"cname\": \"" << color << "\",";
-          outstream << "\"name\": \"" << name << "\",";
-          outstream << "\"cat\": \"" << category << "\",";
-          outstream << "\"ph\": \"X\",";
-          outstream << "\"pid\": \"" << pid << "\",";
-          outstream << "\"tid\": \"" << tid << "\",";
-          outstream << "\"ts\": \"" << static_cast<float>(ts) / 1000.0 << "\",";
-          outstream << "\"dur\": \"" << static_cast<float>(dur) / 1000.0
-                    << "\",";
-          outstream << "\"args\": {\"Unit\": \"GPU cycle\", \"Kernel Gap\": \""
-                    << kKernelTimeGap << "cycle(ns)\"}";
-          outstream << "},\n";
+          json element;
+          element["cname"] = color;
+          element["name"] = name;
+          element["cat"] = category;
+          element["ph"] = "X";
+          element["pid"] = pid;
+          element["tid"] = tid;
+          element["ts"] = static_cast<float>(ts) / 1000.0;
+          element["dur"] = static_cast<float>(dur) / 1000.0;
+          json args;
+          args["Unit"] = "GPU cycle";
+          args["Kernel Gap"] = std::to_string(kKernelTimeGap) + "cycle(ns)";
+          element["args"] = args;
+          object["traceEvents"].push_back(element);
 
           eventIdx++;
         }
