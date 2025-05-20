@@ -2,6 +2,7 @@
 #define PROTON_COMMON_TRACE_WRITER_H_
 
 #include "CircularLayoutParser.h"
+#include "nlohmann/json.hpp"
 #include <cstdint>
 #include <fstream>
 #include <map>
@@ -50,7 +51,7 @@ public:
 
 private:
   void write(std::ofstream &outfile) override final;
-  void writeKernel(std::stringstream &outstream, const KernelTrace &kernelTrace,
+  void writeKernel(nlohmann::json &object, const KernelTrace &kernelTrace,
                    uint32_t kernelTimeStart);
 
   const std::vector<std::string> kChromeColor = {"cq_build_passed",
