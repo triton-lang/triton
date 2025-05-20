@@ -1,6 +1,6 @@
 import torch
 from .topk_details._topk import _topk
-from triton_kernels import Bitmatrix
+from .bitmatrix import Bitmatrix
 
 
 def topk(x, k, dim=1, return_bitmatrix=True):

@@ -55,7 +55,6 @@ class RoutingData:
 
 def routing(logits, n_expts_act, expt_indx=None, simulated_ep=1):
     from .topk import topk
-    from .reduction import sum
     from .compaction import compaction
     assert expt_indx is None
     cdiv = triton.cdiv
@@ -80,7 +79,7 @@ def routing(logits, n_expts_act, expt_indx=None, simulated_ep=1):
         n_expts_tot = n_expts_tot // simulated_ep
         bitmatrix.shape[-1] = n_expts_tot
     # perform compaction to update expt_scal / expt_indx
-    hist, partial_hist = sum(bitmatrix, partials_block_size=HIST_BLOCK_M, dim=0)
+    hist, partial_hist = bitmatrix.sum(partials_block_size=HIST_BLOCK_M)
     # scratchpad
     expt_offs = torch.empty(n_expts_tot, dtype=torch.int32, device=device)
     indx_offs = torch.empty((cdiv(n_tokens, HIST_BLOCK_M), n_expts_tot), dtype=torch.int32, device=device)
