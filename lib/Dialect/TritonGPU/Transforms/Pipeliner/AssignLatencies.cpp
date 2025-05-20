@@ -292,7 +292,7 @@ public:
               (ttng::isAccMultibufferingPossible(mma, forOp) &&
                !getDisallowAccMultiBuffer(forOp))) {
             // MMA's users can be pushed to the next stage
-            opLatency[&op] = 1;
+            opLatency[&op] = 1 + forOp->hasAttr(kWarpSpecializeAttrName);
           }
         }
       }

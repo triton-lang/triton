@@ -170,7 +170,8 @@ bool mustLoadToRegisters(Operation *op) {
 
 int getDefUseStageDiff(Operation *op, scf::ForOp forOp,
                        CoarseSchedule &schedule) {
-  assert(schedule.count(op) && "Op not found in the schedule");
+  if (!schedule.count(op))
+    return 0; // load is not pipelined
   int defStage = schedule[op].first;
   std::optional<int> useStage;
   DenseSet<Operation *> topLevelUsers = getTopLevelUsersInLoop(op, forOp);

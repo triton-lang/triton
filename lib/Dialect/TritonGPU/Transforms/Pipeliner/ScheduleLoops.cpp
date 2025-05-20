@@ -50,8 +50,6 @@ bool hasLatenciesAssigned(scf::ForOp forOp,
   for (auto &op : forOp.getBody()->without_terminator()) {
     if (opLatency.count(&op))
       return true;
-    if (op.hasAttr(kAssignedStageAttrName) || op.hasAttr(kLoopStageAttrName))
-      return true;
   }
   return false;
 }
@@ -63,15 +61,12 @@ CoarseSchedule scheduleKeyOps(scf::ForOp forOp,
   auto terminator = cast<scf::YieldOp>(forOp.getBody()->getTerminator());
   // Determine all operations that have a non-zero latency
   SmallVector<Operation *> latOps;
-  SmallVector<Operation *> stagedOps;
   for (auto &op : forOp.getBody()->without_terminator()) {
     if (opLatency.count(&op))
       latOps.push_back(&op);
-    if (op.getAttr(kAssignedStageAttrName))
-      stagedOps.push_back(&op);
   }
   // If no latency ops, nothing to schedule
-  if (latOps.empty() && stagedOps.empty())
+  if (latOps.empty())
     return CoarseSchedule(0);
 
   DominanceInfo domInfo(forOp);
@@ -117,11 +112,6 @@ CoarseSchedule scheduleKeyOps(scf::ForOp forOp,
     // (had a non-negative distance due to a latency op).
     if (dist >= 0)
       opToStage[op] = maxDistance - dist;
-  }
-
-  for (Operation *op : stagedOps) {
-    auto stageAttr = op->getAttrOfType<IntegerAttr>(kAssignedStageAttrName);
-    opToStage[op] = stageAttr.getInt();
   }
 
   auto stages = llvm::make_second_range(opToStage);
@@ -175,8 +165,21 @@ CoarseSchedule getInitialSchedule(scf::ForOp forOp,
 
   // If the loop has an existing schedule, use it as the base schedule.
   CoarseSchedule schedule;
-  if (succeeded(schedule.deSerialize(forOp)))
+  if (succeeded(schedule.deSerialize(forOp))) {
+    schedule.shrinkToFit();
+    // If there is only one stage, then there is no need to pipeline.
+    DenseSet<int> stages;
+    for (auto [op, stage, cluster] : schedule.getOpsInOrder(forOp))
+      stages.insert(stage);
+    if (stages.size() <= 1) {
+      forOp.walk([&](Operation *op) {
+        op->removeAttr(kLoopStageAttrName);
+        op->removeAttr(kLoopClusterAttrName);
+      });
+      return CoarseSchedule(0);
+    }
     return schedule;
+  }
 
   return CoarseSchedule(0);
 }

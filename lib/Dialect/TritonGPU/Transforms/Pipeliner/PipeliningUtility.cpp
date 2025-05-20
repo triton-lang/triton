@@ -161,7 +161,7 @@ Operation *mlir::triton::predicateOp(RewriterBase &rewriter, Operation *op,
   OpBuilder::InsertionGuard guard(rewriter);
   if (mlir::isMemoryEffectFree(op))
     return op;
-  if (isa<LLVM::AssumeOp>(op))
+  if (isa<LLVM::AssumeOp, ttng::FenceAsyncSharedOp>(op))
     return op;
   if (isa<ttg::AsyncCommitGroupOp, ttg::AsyncWaitOp>(op))
     return op;

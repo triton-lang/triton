@@ -898,9 +898,5 @@ void LoadMMASpecialization::runOnOperation() {
     int loopNumStages = getNumStagesOrDefault(loop, numStages);
     if (failed(lowerLoops(loop, loads, mmas, *schedule, loopNumStages)))
       continue;
-    // HACK: Set this attribute so that LowerLoops will multi-buffer TMA
-    // descriptors.
-    loop->setAttr(kScheduledMaxStageAttrName,
-                  Builder(&getContext()).getI32IntegerAttr(loopNumStages));
   }
 }

@@ -108,6 +108,10 @@ public:
   bool insertDepsOfOp(Operation *op, int stage, CoarseSchedule::Cluster cluster,
                       bool includeArg, bool insertIfEarlier = false);
 
+  // Remove empty stages and clusters from the schedule, adjusting the maximum
+  // number of stages as appropriate.
+  void shrinkToFit();
+
   void erase(Operation *op) { opToStageAndCluster.erase(op); }
 
   int count(Operation *op) { return opToStageAndCluster.count(op); }

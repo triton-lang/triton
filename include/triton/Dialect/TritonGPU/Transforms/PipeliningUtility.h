@@ -19,8 +19,6 @@ static const char *kWarpSpecializeAttrName = "tt.warp_specialize";
 static const char *kLoopStageAttrName = "loop.stage";
 static const char *kLoopClusterAttrName = "loop.cluster";
 static const char *kScheduledMaxStageAttrName = "tt.scheduled_max_stage";
-static const char *kAssignedStageAttrName = "ttg.assigned_stage";
-static const char *kAssignedClusterAttrName = "ttg.assigned_cluster";
 
 //===----------------------------------------------------------------------===//
 // Hoisting Utilities

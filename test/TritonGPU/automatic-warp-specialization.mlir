@@ -1,5 +1,5 @@
 // RUN: triton-opt %s -split-input-file -allow-unregistered-dialect -tritongpu-hoist-tmem-alloc -tritongpu-automatic-warp-specialization | FileCheck %s --check-prefix=CHECK --check-prefix=BASE
-// RUN: triton-opt %s -split-input-file -allow-unregistered-dialect -tritongpu-hoist-tmem-alloc -tritongpu-automatic-warp-specialization -tritongpu-assign-latencies -tritongpu-schedule-loops -tritongpu-pipeline | FileCheck %s --check-prefix=CHECK --check-prefix=PIPELINE
+// RUN: triton-opt %s -split-input-file -allow-unregistered-dialect -tritongpu-hoist-tmem-alloc -tritongpu-automatic-warp-specialization -tritongpu-pipeline | FileCheck %s --check-prefix=CHECK --check-prefix=PIPELINE
 
 #indices_layout = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
 #acc_layout = #ttg.blocked<{sizePerThread = [1, 128], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [0, 1]}>
@@ -34,7 +34,7 @@ tt.func @matmul_change_desc_in_prologue(
   // CHECK-LABEL: partition1
   // CHECK-SAME: num_warps(2)
   // BASE-COUNT-2: tt.make_tensor_descriptor
-  // PIPELINE-COUNT-2: ttg.global_scratch_alloc {alignment = 128 : i32, nbytes = 512 : i32}
+  // PIPELINE-COUNT-2: ttg.global_scratch_alloc {alignment = 128 : i32, nbytes = 384 : i32}
   // PIPELINE-COUNT-2: tt.experimental_tensormap_create
   // CHECK-NOT: partition2
   scf.for %k = %c0_i32 to %k_tiles step %c1_i32 iter_args(%acc = %zero, %flag = %true, %a_desc = %a_desc_undef, %b_desc = %b_desc_undef) -> (tensor<128x128xf32, #acc_layout>, i1, !tt.tensordesc<tensor<128x64xf16, #shared>>, !tt.tensordesc<tensor<64x128xf16, #shared>>) : i32 {
@@ -141,9 +141,12 @@ tt.func public @attention_forward(
   %one = arith.constant dense<1.0> : tensor<256xf32, #ttg.slice<{dim = 1, parent = #blocked}>>
 
   // CHECK-LABEL: ttg.warp_specialize
-  // BASE: ttg.assigned_stage
+  // PIPELINE: partition0
   // PIPELINE-COUNT-4: ttng.tc_gen5_mma
+  // PIPELINE-NOT: ttng.tc_gen5_mma
+  // PIPELINE: partition1
   // PIPELINE-COUNT-4: ttng.async_tma_copy_global_to_local
+  // PIPELINE-NOT: ttng.async_tma_copy_global_to_local
   %loop_outs:3 = scf.for %i = %c0_i32 to %n_tiles step %c64_i32 iter_args(
     %l_i = %one,
     %acc = %zero,
