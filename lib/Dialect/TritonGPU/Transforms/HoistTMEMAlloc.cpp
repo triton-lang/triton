@@ -94,18 +94,6 @@ public:
   }
 };
 
-std::optional<bool> getBoolFromConstant(Value cst) {
-  auto constantOp = cst.getDefiningOp<arith::ConstantOp>();
-  if (!constantOp) {
-    return std::nullopt;
-  }
-  assert(constantOp.getValue());
-  if (auto boolAttr = dyn_cast<BoolAttr>(constantOp.getValue())) {
-    return boolAttr.getValue();
-  }
-  return std::nullopt;
-}
-
 class RemoveUnusedTMEMStore : public OpRewritePattern<TMEMTokenStoreOp> {
 public:
   using OpRewritePattern::OpRewritePattern;
@@ -152,17 +140,19 @@ public:
                                                 diff, zero);
     auto tokenType = store.getToken().getType();
     auto loopToken = loop.getResult(loopTok.getArgNumber() - 1);
-    auto ifOp =
-        rewriter.create<scf::IfOp>(store.getLoc(), TypeRange{tokenType}, cond, true, true);
+    auto ifOp = rewriter.create<scf::IfOp>(store.getLoc(), TypeRange{tokenType},
+                                           cond, true, true);
     rewriter.setInsertionPointToStart(ifOp.thenBlock());
     auto newStore = rewriter.create<ttng::TMEMStoreOp>(
-        store.getLoc(), tokenType, store.getDst(),
-        loopToken, store.getSrc(),
+        store.getLoc(), tokenType, store.getDst(), loopToken, store.getSrc(),
         store.getPred());
     auto thenYield = rewriter.create<scf::YieldOp>(loc, newStore.getToken());
     rewriter.setInsertionPointToStart(ifOp.elseBlock());
     auto elseYield = rewriter.create<scf::YieldOp>(loc, loopToken);
-    rewriter.replaceUsesWithIf(loopToken, ifOp.getResult(0), [&](OpOperand &use){ return use.getOwner() != newStore && use.getOwner() != elseYield; });
+    rewriter.replaceUsesWithIf(
+        loopToken, ifOp.getResult(0), [&](OpOperand &use) {
+          return use.getOwner() != newStore && use.getOwner() != elseYield;
+        });
     rewriter.eraseOp(store);
     return success();
   }
