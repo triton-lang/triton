@@ -46,4 +46,23 @@ def NVGPUTestWSDataPartition : Pass<"nvgpu-test-ws-data-partition", "mlir::Modul
   ];
 }
 
+def NVGPUTestWSCodePartition: Pass<"nvgpu-test-ws-code-partition", "mlir::ModuleOp"> {
+  let summary = "test warp specialization code partition";
+
+  let description = "This pass generates warp specialized code baed on task id attributes.";
+
+  let dependentDialects = ["mlir::triton::gpu::TritonGPUDialect",
+                           "mlir::triton::TritonDialect",
+                           "mlir::triton::nvidia_gpu::TritonNvidiaGPUDialect",
+                           "mlir::triton::nvws::NVWSDialect"];
+  let options = [
+    Option<"numBuffers", "num-buffers",
+           "int32_t", /*default*/"0",
+           "number of buffering for producer-consumer">,
+    Option<"numWarpGroups", "num-warp-groups",
+           "int32_t", /*default*/"0",
+           "number of warp groups for warp specialization">
+  ];
+}
+
 #endif // NV_TRANSFORMS_PASSES

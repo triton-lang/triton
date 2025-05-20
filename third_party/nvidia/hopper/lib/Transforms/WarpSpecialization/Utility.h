@@ -1,4 +1,3 @@
-
 #ifndef NV_DIALECT_HOPPER_TRANSFORMS_UTILITY_H_
 
 #include "mlir/IR/Builders.h"
