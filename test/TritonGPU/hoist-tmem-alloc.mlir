@@ -347,9 +347,12 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-stages" = 4 : i32, "ttg.nu
         scf.yield %34, %35, %true : tensor<128x128xf32, #blocked>, i32, i1
       }
       // CHECK: %[[DIFF:.*]] = arith.subi %[[LIMIT]], %[[START]]
-      // CHECK: %[[COND:.*]] = arith.cmpi eq, %[[DIFF]], %[[ZERO]]
-      // CHECK: scf.if %[[COND]] {
-      // CHECK-NEXT:   ttng.tmem_store
+      // CHECK: %[[COND:.*]] = arith.cmpi sle, %[[DIFF]], %[[ZERO]]
+      // CHECK: %[[TOK:.*]] = scf.if %[[COND]]
+      // CHECK-NEXT:   %[[NTOK:.*]] = ttng.tmem_store
+      // CHECK-NEXT:   scf.yield %[[NTOK]]
+      // CHECK-NEXT: } else {
+      // CHECK-NEXT:   scf.yield
       // CHECK-NEXT: }
       %21 = tt.reshape %20#0 : tensor<128x128xf32, #blocked> -> tensor<128x2x64xf32, #blocked2>
       %22 = tt.trans %21 {order = array<i32: 0, 2, 1>} : tensor<128x2x64xf32, #blocked2> -> tensor<128x64x2xf32, #blocked3>

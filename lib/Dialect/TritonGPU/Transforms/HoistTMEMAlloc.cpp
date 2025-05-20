@@ -1,4 +1,5 @@
 #include "mlir/Dialect/Arith/IR/Arith.h"
+#include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/Dominance.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
@@ -147,15 +148,21 @@ public:
           loc, IntegerType::get(rewriter.getContext(), 32), diff);
     }
     Value zero = rewriter.create<arith::ConstantIntOp>(loc, 0, diff.getType());
-    Value cond = rewriter.create<arith::CmpIOp>(loc, arith::CmpIPredicate::eq,
+    Value cond = rewriter.create<arith::CmpIOp>(loc, arith::CmpIPredicate::sle,
                                                 diff, zero);
+    auto tokenType = store.getToken().getType();
+    auto loopToken = loop.getResult(loopTok.getArgNumber() - 1);
     auto ifOp =
-        rewriter.create<scf::IfOp>(store.getLoc(), TypeRange{}, cond, true);
+        rewriter.create<scf::IfOp>(store.getLoc(), TypeRange{tokenType}, cond, true, true);
     rewriter.setInsertionPointToStart(ifOp.thenBlock());
     auto newStore = rewriter.create<ttng::TMEMStoreOp>(
-        store.getLoc(), store.getToken().getType(), store.getDst(),
-        loop.getResult(loopTok.getArgNumber() - 1), store.getSrc(),
+        store.getLoc(), tokenType, store.getDst(),
+        loopToken, store.getSrc(),
         store.getPred());
+    auto thenYield = rewriter.create<scf::YieldOp>(loc, newStore.getToken());
+    rewriter.setInsertionPointToStart(ifOp.elseBlock());
+    auto elseYield = rewriter.create<scf::YieldOp>(loc, loopToken);
+    rewriter.replaceUsesWithIf(loopToken, ifOp.getResult(0), [&](OpOperand &use){ return use.getOwner() != newStore && use.getOwner() != elseYield; });
     rewriter.eraseOp(store);
     return success();
   }
