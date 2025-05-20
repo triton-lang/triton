@@ -191,7 +191,9 @@ getSharedMemoryMMAOperand(Value v, mlir::PatternRewriter &rewriter, int opIdx,
         << "] on SMEM than the register order for the operand " << opIdx
         << ". Registers will be transposed before SMEM store and the pipelined "
            "load for this operand will be disabled, so poor performance is "
-           "expected.";
+           "expected. Recommendation: consider transposing the operand in "
+           "global "
+           "memory to remove the need to transpose the tensor in registers.";
   }
 
   Attribute SharedMemorySpace =
