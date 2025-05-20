@@ -341,6 +341,19 @@ void assignLatencies(ModuleOp moduleOp, int defaultNumStages) {
   }
   serializeLatencies(moduleOp, opLatency);
 }
+
+#define GEN_PASS_DEF_TRITONGPUASSIGNLATENCIES
+#include "triton/Dialect/TritonGPU/Transforms/Passes.h.inc"
+
+struct AssignLatencies
+    : public impl::TritonGPUAssignLatenciesBase<AssignLatencies> {
+  using TritonGPUAssignLatenciesBase::TritonGPUAssignLatenciesBase;
+
+  void runOnOperation() override {
+    assignLatencies(getOperation(), numStages);
+  }
+};
+
 } // namespace gpu
 } // namespace triton
 } // namespace mlir

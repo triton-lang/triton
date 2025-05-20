@@ -26,36 +26,27 @@ def TritonGPUPipeline : Pass<"tritongpu-pipeline", "mlir::ModuleOp"> {
   ];
 }
 
-def TritonGPUTestPipelineAssignLatencies : Pass<"tritongpu-test-pipeline-assign-latencies", "mlir::ModuleOp"> {
-  let summary = "test assigning latencies to interesting ops ahead of pipelining";
+def TritonGPUAssignLatencies : Pass<"tritongpu-assign-latencies", "mlir::ModuleOp"> {
+  let summary = "assign latencies to interesting ops ahead of pipelining";
 
   let description = [{
-    This is a test pass that tests `assignLatencies` method of `TritonGPUPipeline`.
+    The `tritongpu-assign-latencies` pass assigns latencies to latency ops based
+    on the number of stages.
   }];
 
-  let dependentDialects = ["mlir::triton::gpu::TritonGPUDialect",
-                           "mlir::triton::nvidia_gpu::TritonNvidiaGPUDialect",
-                           "mlir::scf::SCFDialect",
-                           "mlir::arith::ArithDialect"];
-
   let options = [
-    Option<"numStages", "num-stages",
-           "int32_t", /*default*/"3",
+    Option<"numStages", "num-stages", "int32_t", /*default*/"3",
            "number of pipeline stages">
   ];
 }
 
-def TritonGPUTestPipelineScheduleLoop : Pass<"tritongpu-test-pipeline-schedule-loop", "mlir::ModuleOp"> {
-  let summary = "test scheduling a loop for software pipelining";
+def TritonGPUScheduleLoops : Pass<"tritongpu-schedule-loops", "mlir::ModuleOp"> {
+  let summary = "software pipeline loop scheduling";
 
   let description = [{
-    This is a test pass that tests `scheduleLoop` method of `TritonGPUPipeline`.
+    The `tritongpu-schedule-loops` pass performs scheduling for loop pipelining
+    for loops with latency ops.
   }];
-
-  let dependentDialects = ["mlir::triton::gpu::TritonGPUDialect",
-                           "mlir::triton::nvidia_gpu::TritonNvidiaGPUDialect",
-                           "mlir::scf::SCFDialect",
-                           "mlir::arith::ArithDialect"];
 }
 
 def TritonGPUHoistTMEMAlloc : Pass<"tritongpu-hoist-tmem-alloc", "mlir::ModuleOp"> {

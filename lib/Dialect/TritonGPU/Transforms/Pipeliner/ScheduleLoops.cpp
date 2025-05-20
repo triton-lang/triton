@@ -2,6 +2,7 @@
 #include "triton/Analysis/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/MMAv5PipelineUtility.h"
+#include "triton/Dialect/TritonGPU/Transforms/Passes.h"
 #include "triton/Dialect/TritonGPU/Transforms/PipeliningUtility.h"
 #include "triton/Dialect/TritonGPU/Transforms/Schedule.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
@@ -60,7 +61,8 @@ CoarseSchedule scheduleKeyOps(scf::ForOp forOp,
         return op.hasAttr(kLoopStageAttrName);
       })) {
     CoarseSchedule schedule;
-    (void)schedule.deSerialize(forOp);
+    if (failed(schedule.deSerialize(forOp)))
+      return CoarseSchedule(0);
     DenseSet<int> uniqueStages;
     for (auto [op, stage, cluster] : schedule.getOpsInOrder(forOp))
       uniqueStages.insert(stage);
@@ -371,6 +373,15 @@ void scheduleLoops(ModuleOp moduleOp) {
     scheduleLoop(forOp, opLatency);
   }
 }
+
+#define GEN_PASS_DEF_TRITONGPUSCHEDULELOOPS
+#include "triton/Dialect/TritonGPU/Transforms/Passes.h.inc"
+
+struct ScheduleLoops : public impl::TritonGPUScheduleLoopsBase<ScheduleLoops> {
+  using TritonGPUScheduleLoopsBase::TritonGPUScheduleLoopsBase;
+
+  void runOnOperation() override { scheduleLoops(getOperation()); }
+};
 
 } // namespace gpu
 } // namespace triton
