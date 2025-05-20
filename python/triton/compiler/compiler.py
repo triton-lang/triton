@@ -78,6 +78,40 @@ class ASTSource:
         key = f"{self.fn.cache_key}-{str(self.attrs)}-{sorted_sig}-{constants_key}"
         return hashlib.sha256(key.encode("utf-8")).hexdigest()
 
+    @staticmethod
+    def _const_path_to_name(fn, path_tuple) -> str:
+        """
+        Turn a path like (0, "shape", 1) into  "arg0.shape[1]".
+        """
+        try:
+            arg_name = fn.arg_names[path_tuple[0]]
+            parts = [arg_name]
+            for p in path_tuple[1:]:
+                if isinstance(p, int):
+                    parts.append(f"[{p}]")
+                elif isinstance(p, str):
+                    parts.append(f".{p}")
+                else:
+                    parts.append(f".<unknown_{p}>")
+            return "".join(parts)
+        except (IndexError, TypeError, AttributeError):
+            return "const_path_" + "_".join(map(str, path_tuple))
+        except Exception:
+            return "const_path_" + "_".join(map(str, path_tuple))
+
+    def jit_constexpr_args(self) -> dict[str, object]:
+        """
+        Return a deterministically ordered dict suitable for JSON dumping.
+        """
+        mapping = {}
+        for path, obj in self.constants.items():
+            key = self._const_path_to_name(self.fn, path)
+            val = getattr(obj, "value", obj)
+            if not isinstance(val, (int, float, bool, str, type(None))):
+                val = str(val)
+            mapping[key] = val
+        return dict(sorted(mapping.items()))
+
     def make_ir(self, options, codegen_fns, module_map, context):
         return ast_to_ttir(self.fn, self, context=context, options=options, codegen_fns=codegen_fns,
                            module_map=module_map)
@@ -315,6 +349,10 @@ def compile(src, target=None, options=None):
         **options.__dict__,
         **env_vars,
     }
+
+    if isinstance(src, ASTSource):
+        metadata["jit_constexpr_args"] = src.jit_constexpr_args()
+
     metadata["triton_version"] = __version__
     # run compilation pipeline  and populate metadata
     stages = dict()
