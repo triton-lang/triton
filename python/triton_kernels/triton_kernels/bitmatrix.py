@@ -8,6 +8,18 @@ from .reduction_details.reduce_bitmatrix import clear_sums, sum_bitmatrix_rows
 
 @dataclass
 class Bitmatrix:
+    """
+    Represents a boolean matrix in a packed format where each element occupies
+    a single bit of memory.
+
+    We use a Bitmatrix to represent the routing information, where each row
+    corresponds to a token and each column corresponds to an expert.
+
+    S is either None or an all-zero array of size >= n_cols; we pass it along
+    with the actual bitmatrix to avoid having to launch a separate memset
+    kernel when we call Bitmatrix::sum().
+    """
+
     data: torch.Tensor
     shape: tuple[int]
     S: torch.tensor
