@@ -47,8 +47,8 @@ def _keyed_add(x, y):
 
 
 @triton.jit
-def _routing_compute_indx(GatherIndx, ScatterIndx, GateScal, ExptScal, ExptIndx, PartialOffs, stride_pm, stride_pn, n_gates,
-                          BLOCK_M: tl.constexpr, N_EXPTS_ACT: tl.constexpr):
+def _routing_compute_indx(GatherIndx, ScatterIndx, GateScal, ExptScal, ExptIndx, PartialOffs, stride_pm, stride_pn,
+                          n_gates, BLOCK_M: tl.constexpr, N_EXPTS_ACT: tl.constexpr):
 
     pid_m = tl.program_id(0)
 

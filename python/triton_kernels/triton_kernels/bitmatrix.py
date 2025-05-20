@@ -1,7 +1,6 @@
 from dataclasses import dataclass
 
 import torch
-import triton
 
 from .reduction_details.reduce_bitmatrix import clear_sums, sum_bitmatrix_rows
 

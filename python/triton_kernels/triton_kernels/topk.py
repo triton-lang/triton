@@ -26,7 +26,7 @@ def topk(x, k, dim=1, return_bitmatrix=True):
     bitmatrix = torch.transpose(bitmatrix, 0, 1)[:n_rows]
     s_blocks = cdiv(n_cols, BLOCK_S)
     s_cols = s_blocks * BLOCK_S
-    S = torch.empty((s_cols,), dtype=torch.int32, device=dev)
+    S = torch.empty((s_cols, ), dtype=torch.int32, device=dev)
 
     pids = max(cdiv(n_rows, BLOCK_M), s_blocks)
 
