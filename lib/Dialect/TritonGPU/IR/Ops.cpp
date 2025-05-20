@@ -445,9 +445,17 @@ MemDescTransOp::inferReturnTypes(MLIRContext *context,
 // MemDescReshapeOp
 
 LogicalResult MemDescReshapeOp::verify() {
-  // Infer the dst layout from the source and verify that it is equivalent.
   MemDescType dstType = getResult().getType();
   MemDescType srcType = getSrc().getType();
+  if (product(dstType.getShape()) != product(srcType.getShape())) {
+    return emitError(
+        "number of src and dst elements of reshape must be the same");
+  }
+  if (dstType.getElementType() != srcType.getElementType()) {
+    return emitError("result element type must match src element type");
+  }
+
+  // Infer the dst layout from the source and verify that it is equivalent.
   auto srcEncoding = srcType.getEncoding();
   Attribute inferedDstEncoding;
 

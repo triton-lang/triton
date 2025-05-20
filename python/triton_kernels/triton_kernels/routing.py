@@ -62,7 +62,6 @@ def routing(logits, n_expts_act, expt_indx=None, simulated_ep=1):
     HIST_BLOCK_M = 64
     INDX_OFFS_BLOCK_M = 512
     MEMSET_BLOCK = 1024
-    assert logits.dtype.itemsize == 2
     n_tokens, n_expts_tot = logits.shape
     n_gates = n_tokens * n_expts_act
     device = logits.device

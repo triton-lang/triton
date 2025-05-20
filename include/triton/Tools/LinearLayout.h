@@ -325,10 +325,12 @@ private:
       bases;
 
   llvm::MapVector<StringAttr, int32_t /*size*/> outDims;
-  bool surjective;
+  bool surjective = true;
 
 public:
   using BasesT = decltype(bases);
+
+  LinearLayout() = default;
 
   // The 0-dimensional layout that maps everything to 0.  This is useful as a
   // starting point when doing something like
@@ -336,12 +338,19 @@ public:
   //   LinearLayout ret = LinearLayout::empty();
   //   for (...) ret *= ...;
   //   return ret;
-  static LinearLayout empty() { return LinearLayout(BasesT{}, {}); }
+  static LinearLayout empty() { return {}; }
+
+  // Creates a 1D -> 1D layout that's the function L(x) = stride * x
+  // for x in [0, size).
+  static LinearLayout strided1D(int32_t size, int32_t stride, StringAttr inDim,
+                                StringAttr outDim);
 
   // Creates a 1D -> 1D layout that's the identity function, i.e. L(x) = x
   // for x in [0, size).
   static LinearLayout identity1D(int32_t size, StringAttr inDim,
-                                 StringAttr outDim);
+                                 StringAttr outDim) {
+    return strided1D(size, /*stride=*/1, inDim, outDim);
+  }
 
   // Creates a 1D -> 1D layout that maps every input value to 0, i.e. L(x) = 0
   // for x in [0, size). By default this creates a surjective layout where
@@ -738,8 +747,8 @@ public:
 
   std::string toString() const;
 
-  friend bool operator==(LinearLayout lhs, LinearLayout rhs);
-  friend bool operator!=(LinearLayout lhs, LinearLayout rhs) {
+  friend bool operator==(const LinearLayout &lhs, const LinearLayout &rhs);
+  friend bool operator!=(const LinearLayout &lhs, const LinearLayout &rhs) {
     return !(lhs == rhs);
   }
   bool equalIgnoringOutDimSizes(const LinearLayout &other) const;

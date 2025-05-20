@@ -321,6 +321,8 @@ void DependencyRewriter::resolveOutputMultiplicity(
 AsyncRef DependencyRewriter::allocateAsyncValue(RankedTensorType tensorType,
                                                 unsigned multiplicitySize,
                                                 unsigned maxDistance) {
+  OpBuilder::InsertionGuard guard(b);
+  b.setInsertionPoint(loop);
   unsigned numBars = multiplicitySize + maxDistance;
   Value alloc = createAlloc(loop, tensorType, b.getLoc(),
                             getSharedEncoding(tensorType), numBars);
@@ -340,6 +342,9 @@ AsyncRef DependencyRewriter::allocateAsyncValue(RankedTensorType tensorType,
 // for the buffer, store it and mark the buffer as ready to be consumed.
 void DependencyRewriter::initializeBarriers(int index, const AsyncRef &aref,
                                             unsigned numConsumers, Value init) {
+  OpBuilder::InsertionGuard guard(b);
+  b.setInsertionPoint(loop);
+
   Value idx = intCst(index);
   if (init) {
     Value view = aref.getValueView(b, idx);

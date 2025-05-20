@@ -62,6 +62,12 @@ def is_hip_cdna4():
     return target is not None and target.backend == 'hip' and target.arch == 'gfx950'
 
 
+def is_hip_gfx12():
+    target = get_current_target()
+    print(target.arch)
+    return target is not None and target.backend == 'hip' and 'gfx12' in target.arch
+
+
 def is_hip_cdna():
     return is_hip_cdna2() or is_hip_cdna3() or is_hip_cdna4()
 
@@ -171,6 +177,10 @@ def tma_skip_msg(byval_only=False):
 
 
 requires_tma = pytest.mark.skipif(not supports_tma(), reason=tma_skip_msg())
+
+
+def default_alloc_fn(size: int, align: int, _):
+    return torch.empty(size, dtype=torch.int8, device="cuda")
 
 
 def unwrap_tensor(t: Union[torch.Tensor, triton.runtime.jit.TensorWrapper]) -> torch.Tensor:

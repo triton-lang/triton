@@ -244,8 +244,15 @@ static void printToken(OpAsmPrinter &p, Operation *op, Value dep, Type token) {
 void TCGen5MMAOp::getEffects(
     SmallVectorImpl<SideEffects::EffectInstance<MemoryEffects::Effect>>
         &effects) {
+  // The op reads the accumulator if `useD` is not known to be false.
+  APInt useD;
+  if (!matchPattern(getUseD(), m_ConstantInt(&useD)) || !useD.isZero()) {
+    effects.emplace_back(MemoryEffects::Read::get(), &getDMutable(),
+                         TensorMemory::get());
+  }
   effects.emplace_back(MemoryEffects::Write::get(), &getDMutable(),
                        TensorMemory::get());
+
   if (isa<SharedMemorySpaceAttr>(getA().getType().getMemorySpace())) {
     effects.emplace_back(MemoryEffects::Read::get(), &getAMutable(),
                          SharedMemory::get());
@@ -296,8 +303,15 @@ void TCGen5MMAOp::build(OpBuilder &builder, OperationState &state, Type token,
 void TCGen5MMAScaledOp::getEffects(
     SmallVectorImpl<SideEffects::EffectInstance<MemoryEffects::Effect>>
         &effects) {
+  // The op reads the accumulator if `useD` is not known to be false.
+  APInt useD;
+  if (!matchPattern(getUseD(), m_ConstantInt(&useD)) || !useD.isZero()) {
+    effects.emplace_back(MemoryEffects::Read::get(), &getDMutable(),
+                         TensorMemory::get());
+  }
   effects.emplace_back(MemoryEffects::Write::get(), &getDMutable(),
                        TensorMemory::get());
+
   if (isa<SharedMemorySpaceAttr>(getA().getType().getMemorySpace())) {
     effects.emplace_back(MemoryEffects::Read::get(), &getAMutable(),
                          SharedMemory::get());
@@ -488,10 +502,12 @@ void TMEMAllocOp::getEffects(
   // op.
   if (!getType().getMutableMemory() && !op->hasAttr("tensor_memory_col_offset"))
     return;
-  effects.emplace_back(MemoryEffects::Allocate::get(), TensorMemory::get());
+  OpResult alloc = getOperation()->getOpResult(0);
+  effects.emplace_back(MemoryEffects::Allocate::get(), alloc,
+                       TensorMemory::get());
   if (getSrc())
-    effects.emplace_back(MemoryEffects::Write::get(),
-                         getOperation()->getOpResult(0), TensorMemory::get());
+    effects.emplace_back(MemoryEffects::Write::get(), alloc,
+                         TensorMemory::get());
 }
 
 // -- TMEMCopyOp --

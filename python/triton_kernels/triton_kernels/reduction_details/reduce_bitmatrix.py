@@ -62,7 +62,7 @@ def _sum_bitmatrix_rows(B, shape_bm, stride_bm,  # input bitmatrix
     bits = tl.load(B + offs_m[None, :] * stride_bm + offs_b[:, None], mask=offs_m[None, :] < shape_bm)
     ret = tl.reshape(vpopc(bits), [BLOCK_N])
     mask = offs_n < shape_pn
-    tl.atomic_add(Ret + offs_n, ret, mask=mask)
+    tl.atomic_add(Ret + offs_n, ret, mask=mask, sem="relaxed")
     tl.store(Partials + pid_m * stride_pm + offs_n, ret, mask=mask)
 
 
