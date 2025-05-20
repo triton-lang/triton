@@ -196,13 +196,16 @@ void InstrumentationProfiler::exitInstrumentedOp(uint64_t streamId,
             for (auto &event : profileEvents) {
               // Process the profile events
               auto &context = scopeIdContexts[event.first->scopeId];
-              auto duration = event.second->cycle - event.first->cycle;
+              // Normalize the duration
+              auto duration = static_cast<double>(event.second->cycle -
+                                                  event.first->cycle) /
+                              (config.totalUnits * config.numBlocks);
               for (auto *data : dataSet) {
                 auto scopeId = data->addOp(dataScopeIdMap[data], context);
                 data->addMetric(
                     scopeId,
                     std::make_shared<CycleMetric>(
-                        event.first->cycle, event.second->cycle,
+                        event.first->cycle, event.second->cycle, duration,
                         blockTrace.blockId, blockTrace.procId, device,
                         static_cast<uint64_t>(runtime->getDeviceType())));
               }
