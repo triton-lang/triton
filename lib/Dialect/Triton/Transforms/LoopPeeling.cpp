@@ -52,9 +52,9 @@ void peelLoopEpilogue(
     function_ref<Operation *(RewriterBase &, Operation *, Value)>
         processPeeledOp,
     function_ref<Operation *(RewriterBase &, Operation *)> processLoopBodyOp) {
-  assert(numIterations == 1); // TODO: for now
+  // TODO: generalize for arbitrary number of peeled iterations
+  assert(numIterations == 1);
 
-  SmallVector<Operation *> peeledOps;
   SmallVector<Operation *> loopBodyOps;
   IRRewriter rewriter(forOp);
   Location loc = forOp.getLoc();
@@ -74,6 +74,7 @@ void peelLoopEpilogue(
 
   forOp.getUpperBoundMutable().assign(newUpperBound);
   rewriter.setInsertionPointAfter(forOp);
+
   // We are going to execute the peeled iteration if the original lower bound is
   // less than the original upper bound
   auto lastIterPred = rewriter.create<arith::CmpIOp>(
@@ -109,7 +110,7 @@ void peelLoopEpilogue(
       newOp = processPeeledOp(rewriter, newOp, lastIterPred);
     }
     if (processLoopBodyOp) {
-      loopBodyOps.push_back(processLoopBodyOp(rewriter, &op));
+      loopBodyOps.push_back(&op);
     }
     lastOp = newOp;
     for (auto [result, oldResult] :
