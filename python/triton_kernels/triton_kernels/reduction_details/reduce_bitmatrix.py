@@ -1,3 +1,4 @@
+import torch
 import triton
 import triton.language as tl
 
@@ -59,11 +60,10 @@ def _sum_bitmatrix_rows(B, shape_bm, stride_bm: tl.constexpr, stride_bn: tl.cons
     offs_m = pid_m * BLOCK_M + tl.arange(0, BLOCK_M)
     offs_n = pid_n * BLOCK_N + tl.arange(0, BLOCK_N)
     offs_b = pid_n * BLOCK_B + tl.arange(0, BLOCK_B)
-    bits = tl.load(B + offs_m[None, :] * stride_bm + offs_b[:, None] * stride_bn, mask=offs_m[None, :] < shape_bm)
+    bits = tl.load(B + offs_m[None, :] * stride_bm + offs_b[:, None] * stride_bn, mask=offs_m[None, :] < shape_bm, other=0)
     ret = tl.reshape(vpopc(bits), [BLOCK_N])
-    mask = offs_n < shape_pn
-    tl.atomic_add(Ret + offs_n, ret, mask=mask, sem="relaxed")
-    tl.store(Partials + pid_m * stride_pm + offs_n, ret, mask=mask)
+    tl.atomic_add(Ret + offs_n, ret, sem="relaxed")
+    tl.store(Partials + pid_m * stride_pm + offs_n, ret)
 
 
 def clear_sums(n_cols, device, MEMSET_BLOCK=512):
@@ -74,21 +74,27 @@ def clear_sums(n_cols, device, MEMSET_BLOCK=512):
     return out_ret
 
 
-def sum_bitmatrix_rows(x, out_ret, out_partials, partials_block_size=None):
+def sum_bitmatrix_rows(x, out_ret, partials_block_size=None):
     assert partials_block_size is not None
     cdiv = triton.cdiv
     PARTIALS_BLOCK_M = partials_block_size
     BLOCK_N = 32
-    MEMSET_BLOCK = 512
     n_rows, n_cols = x.shape
     assert out_ret.shape == (n_cols, )
-    assert out_partials.shape == (cdiv(n_rows, PARTIALS_BLOCK_M), n_cols)
+
+    pids_x = cdiv(n_rows, PARTIALS_BLOCK_M)
+    pids_y = cdiv(n_cols, BLOCK_N)
+    out_partials = torch.empty((pids_x, pids_y * BLOCK_N), device=out_ret.device, dtype=torch.int32)
+
     # output tensors
-    _sum_bitmatrix_rows[(cdiv(n_rows, PARTIALS_BLOCK_M), cdiv(n_cols, BLOCK_N))](
+    _sum_bitmatrix_rows[(pids_x, pids_y)](
         x.data, x.data.shape[0], x.data.stride(0), x.data.stride(1),  # input
         out_ret,  # output [final reduction]
         out_partials, out_partials.stride(0), out_partials.shape[1],  # output [partial reductions]
         BLOCK_N=BLOCK_N,  # tunable parameters
         BLOCK_M=PARTIALS_BLOCK_M,  # constants
     )
+
+    out_partials = out_partials[:, :n_cols]
+
     return out_ret, out_partials
