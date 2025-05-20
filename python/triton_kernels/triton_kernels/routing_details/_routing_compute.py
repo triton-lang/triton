@@ -18,21 +18,19 @@ def _routing_compute_expt_offs(ExpertHist, FinalExpertOffs, hist_size,  # histog
 
 
 @triton.jit
-def _routing_compute_indx_offs(TokensStart, PartialHist, PartialOffs, shape_pm, stride_pm, BLOCK_M: tl.constexpr):
+def _routing_compute_indx_offs(TokensStart, PartialHist, shape_pm, stride_pm, stride_pn, BLOCK_M: tl.constexpr):
     expt_id = tl.program_id(0)
     offs_m = tl.arange(0, BLOCK_M)
     # initialize first row of the output
     start = tl.load(TokensStart + expt_id)
-    tl.store(PartialOffs + expt_id, start)
     # iterate over input data
     curr_sum = start
     for _ in range(0, shape_pm, BLOCK_M):
-        offs = offs_m * stride_pm + expt_id
+        offs = offs_m * stride_pm + expt_id * stride_pn
         curr = tl.load(PartialHist + offs, mask=offs_m < shape_pm)
         out = tl.cumsum(curr, 0) + curr_sum
         curr_sum += tl.sum(curr, 0)
-        offs = (1 + offs_m) * stride_pm + expt_id
-        tl.store(PartialOffs + offs, out, mask=offs_m < shape_pm - 1)
+        tl.store(PartialHist + offs, out - curr, mask=offs_m < shape_pm)
         offs_m += BLOCK_M
 
 
