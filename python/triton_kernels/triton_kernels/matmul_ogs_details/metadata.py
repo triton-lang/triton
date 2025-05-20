@@ -30,8 +30,14 @@ def _matmul_metadata_memset(Hist, n_expts_tot, MDTokStarts, MDTileStarts, MDTile
 
         for i in range(0, n_expts_tot, BLOCK):
             offs_n = tl.arange(0, BLOCK) + i
-            mask = offs_n < n_expts_tot
-            hist_tok = tl.load(Hist + offs_n, mask=mask, other=0)
+            if extra_block:
+                # we need an extra block at the end just to contain the final
+                # sum; this only happens if our total number of experts is an
+                # exact multiple of BLOCK, obviating the need for any masking
+                hist_tok = tl.load(Hist + offs_n)
+            else:
+                mask = offs_n < n_expts_tot
+                hist_tok = tl.load(Hist + offs_n, mask=mask, other=0)
             hist_tile = tl.cdiv(hist_tok, TILE_DIM)
             tok_starts = tl.cumsum(hist_tok, 0) + x_tok
             x_tok += tl.sum(hist_tok, 0).to(MDTokStarts.dtype.element_ty)
