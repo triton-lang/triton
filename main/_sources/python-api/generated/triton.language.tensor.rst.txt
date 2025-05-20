@@ -42,6 +42,7 @@
       ~tensor.floor
       ~tensor.gather
       ~tensor.histogram
+      ~tensor.item
       ~tensor.log
       ~tensor.log2
       ~tensor.logical_and
