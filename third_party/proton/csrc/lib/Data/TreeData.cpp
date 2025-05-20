@@ -49,6 +49,13 @@ public:
     treeNodeMap.try_emplace(TreeNode::RootId, TreeNode::RootId, "ROOT");
   }
 
+  size_t addNode(const std::vector<Context> &contexts, size_t parentId) {
+    for (const auto &context : contexts) {
+      parentId = addNode(context, parentId);
+    }
+    return parentId;
+  }
+
   size_t addNode(const Context &context, size_t parentId) {
     if (treeNodeMap[parentId].hasChild(context)) {
       return treeNodeMap[parentId].getChild(context);
@@ -130,6 +137,27 @@ size_t TreeData::addOp(size_t scopeId, const std::string &name) {
     scopeId = Scope::getNewScopeId();
     scopeIdToContextId[scopeId] =
         tree->addNode(Context(name), scopeIdIt->second);
+  }
+  return scopeId;
+}
+
+size_t TreeData::addOp(size_t scopeId, const std::vector<Context> &contexts) {
+  std::unique_lock<std::shared_mutex> lock(mutex);
+  auto scopeIdIt = scopeIdToContextId.find(scopeId);
+  if (scopeIdIt == scopeIdToContextId.end()) {
+    // Obtain the current context
+    std::vector<Context> currentContexts;
+    if (contextSource != nullptr)
+      currentContexts = contextSource->getContexts();
+    // Add an op under the current context
+    if (!currentContexts.empty())
+      std::merge(currentContexts.begin(), currentContexts.end(),
+                 contexts.begin(), contexts.end(), currentContexts.begin());
+    scopeIdToContextId[scopeId] = tree->addNode(currentContexts);
+  } else {
+    // Add a new context under it and update the context
+    scopeId = Scope::getNewScopeId();
+    scopeIdToContextId[scopeId] = tree->addNode(contexts, scopeIdIt->second);
   }
   return scopeId;
 }
@@ -229,15 +257,14 @@ void TreeData::dumpHatchet(std::ostream &os) const {
         }
       } else if (metricKind == MetricKind::Cycle) {
         auto cycleMetric = std::dynamic_pointer_cast<CycleMetric>(metric);
-        uint64_t duration =
-            std::get<uint64_t>(cycleMetric->getValue(CycleMetric::Duration));
+        uint64_t duration = std::get<uint64_t>(
+            cycleMetric->getValue(CycleMetric::NormalizedDuration));
         uint64_t deviceId =
             std::get<uint64_t>(cycleMetric->getValue(CycleMetric::DeviceId));
         uint64_t deviceType =
             std::get<uint64_t>(cycleMetric->getValue(CycleMetric::DeviceType));
-        (*jsonNode)["metrics"]
-                   [cycleMetric->getValueName(CycleMetric::Duration)] =
-                       duration;
+        (*jsonNode)["metrics"][cycleMetric->getValueName(
+            CycleMetric::NormalizedDuration)] = duration;
         (*jsonNode)["metrics"]
                    [cycleMetric->getValueName(CycleMetric::DeviceId)] =
                        std::to_string(deviceId);

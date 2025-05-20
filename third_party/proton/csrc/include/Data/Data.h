@@ -24,6 +24,14 @@ public:
   /// not empty.
   virtual size_t addOp(size_t scopeId, const std::string &opName = {}) = 0;
 
+  /// Add an op with custom contexts to the data.
+  /// This is often used when context source is not available or when
+  /// the profiler itself needs to supply the contexts, such as
+  /// instruction samples in GPUs whose contexts are
+  /// synthesized from the instruction address (no unwinder).
+  virtual size_t addOp(size_t scopeId,
+                       const std::vector<Context> &contexts) = 0;
+
   /// Add a single metric to the data.
   virtual void addMetric(size_t scopeId, std::shared_ptr<Metric> metric) = 0;
 
