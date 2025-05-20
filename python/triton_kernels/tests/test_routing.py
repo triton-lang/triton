@@ -58,9 +58,9 @@ def test_op(n_tokens, n_expts_tot, n_expts_act, block_m, device):
     assert_equal(ref_routing_data.expt_hist, tri_routing_data.expt_hist)
 
     assert_equal(ref_metadata[:n_expts_tot], tri_metadata.hist)
-    assert_equal(ref_metadata[n_expts_tot:2*n_expts_tot], tri_metadata.offs)
-    assert_equal(ref_metadata[3*n_expts_tot+1], tri_metadata.offs_sum)
-    assert_equal(ref_metadata[3*n_expts_tot+2:], tri_metadata.blocks)
+    assert_equal(ref_metadata[n_expts_tot:2 * n_expts_tot], tri_metadata.offs)
+    assert_equal(ref_metadata[3 * n_expts_tot + 1], tri_metadata.offs_sum)
+    assert_equal(ref_metadata[3 * n_expts_tot + 2:], tri_metadata.blocks)
 
     assert ref_routing_data.n_expts_tot == ref_routing_data.n_expts_tot
     assert ref_routing_data.n_expts_act == ref_routing_data.n_expts_act

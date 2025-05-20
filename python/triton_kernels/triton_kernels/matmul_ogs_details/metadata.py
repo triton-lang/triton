@@ -14,8 +14,8 @@ class ExptData:
 
 
 @triton.jit
-def _matmul_metadata_memset(Hist, n_expts_tot, MDHist, MDTokStarts, MDTileStarts, MDTileSum,
-                            BLOCK: tl.constexpr, TILE_DIM: tl.constexpr):
+def _matmul_metadata_memset(Hist, n_expts_tot, MDHist, MDTokStarts, MDTileStarts, MDTileSum, BLOCK: tl.constexpr,
+                            TILE_DIM: tl.constexpr):
     pid = tl.program_id(0)
 
     TileInfoOut = MDTileSum + pid * BLOCK + tl.arange(0, BLOCK)
@@ -85,15 +85,14 @@ def compute_metadata(routing_data, n_rows, block_m):
 
     md_hist = metadata[:n_expts_tot]
     md_offs = metadata[n_expts_pad:][:n_expts_tot]
-    md_offs_sum = metadata[n_expts_pad*3]
-    md_tile_starts = metadata[n_expts_pad*2:][:n_expts_tot]
-    md_tile_infos = metadata[n_expts_pad*3 + MEMSET_BLOCK:][:grid_m]
+    md_offs_sum = metadata[n_expts_pad * 3]
+    md_tile_starts = metadata[n_expts_pad * 2:][:n_expts_tot]
+    md_tile_infos = metadata[n_expts_pad * 3 + MEMSET_BLOCK:][:grid_m]
     _matmul_metadata_memset[(pids, )](
         routing_data.expt_hist, n_expts_tot, md_hist, md_offs, md_tile_starts, md_offs_sum,
         BLOCK=MEMSET_BLOCK,  # optimization parameters
         TILE_DIM=block_m,  # constants
-        num_warps=1
-    )
+        num_warps=1)
     _matmul_metadata_compute[(n_expts_tot, )](
         routing_data.expt_hist, md_tile_starts, md_tile_infos,  # outputs
         BLOCK=HIST2_BLOCK_M,  # optimization parameters
