@@ -325,6 +325,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-stages" = 4 : i32, "ttg.nu
   tt.func public @matmul_kernel_tma_persistent_nested(%arg0: !tt.tensordesc<tensor<128x32xf8E4M3FN, #shared>>, %arg1: i32, %arg2: i32, %arg3: i64, %arg4: i64, %arg5: !tt.tensordesc<tensor<128x32xf8E4M3FN, #shared>>, %arg6: i32, %arg7: i32, %arg8: i64, %arg9: i64, %arg10: !tt.tensordesc<tensor<128x64xf8E4M3FN, #shared1>>, %arg11: i32, %arg12: i32, %arg13: i64, %arg14: i64, %arg15: i32 {tt.divisibility = 16 : i32}, %arg16: i32 {tt.divisibility = 16 : i32}, %arg17: i32 {tt.divisibility = 16 : i32}) attributes {noinline = false} {
     %false = arith.constant false
     %true = arith.constant true
+    // CHECK: %[[ZERO:.*]] = arith.constant 0 : i32
     %c0_i32 = arith.constant 0 : i32
     %c1_i32 = arith.constant 1 : i32
     %c4_i32 = arith.constant 4 : i32
@@ -332,8 +333,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-stages" = 4 : i32, "ttg.nu
     %cst = arith.constant dense<0.000000e+00> : tensor<128x128xf32, #blocked>
     scf.for %arg18 = %c0_i32 to %c4_i32 step %c1_i32 : i32 {
       // CHECK: ttng.tmem_alloc
-      // CHECK-NOT: ttng.tmem_store
-      %20:3 = scf.for %arg19 = %c0_i32 to %c32_i32 step %c1_i32 iter_args(%arg20 = %cst, %arg21 = %c0_i32, %arg22 = %false) -> (tensor<128x128xf32, #blocked>, i32, i1)  : i32 {
+      // CHECK-NEXT: scf.for %[[ITER:.*]] = %[[START:.*]] to %[[LIMIT:.*]] step
+      %20:3 = scf.for %arg19 = %arg11 to %arg12 step %c1_i32 iter_args(%arg20 = %cst, %arg21 = %c0_i32, %arg22 = %false) -> (tensor<128x128xf32, #blocked>, i32, i1)  : i32 {
         %28 = tt.descriptor_load %arg0[%arg19, %arg21] : !tt.tensordesc<tensor<128x32xf8E4M3FN, #shared>> -> tensor<128x32xf8E4M3FN, #blocked1>
         %29 = ttg.local_alloc %28 : (tensor<128x32xf8E4M3FN, #blocked1>) -> !ttg.memdesc<128x32xf8E4M3FN, #shared, #smem>
         %30 = tt.descriptor_load %arg5[%arg19, %arg21] : !tt.tensordesc<tensor<128x32xf8E4M3FN, #shared>> -> tensor<128x32xf8E4M3FN, #blocked1>
@@ -345,6 +346,11 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-stages" = 4 : i32, "ttg.nu
         %35 = arith.addi %arg21, %c32_i32 : i32
         scf.yield %34, %35, %true : tensor<128x128xf32, #blocked>, i32, i1
       }
+      // CHECK: %[[DIFF:.*]] = arith.subi %[[LIMIT]], %[[START]]
+      // CHECK: %[[COND:.*]] = arith.cmpi eq, %[[DIFF]], %[[ZERO]]
+      // CHECK: scf.if %[[COND]] {
+      // CHECK-NEXT:   ttng.tmem_store
+      // CHECK-NEXT: }
       %21 = tt.reshape %20#0 : tensor<128x128xf32, #blocked> -> tensor<128x2x64xf32, #blocked2>
       %22 = tt.trans %21 {order = array<i32: 0, 2, 1>} : tensor<128x2x64xf32, #blocked2> -> tensor<128x64x2xf32, #blocked3>
       %outLHS, %outRHS = tt.split %22 : tensor<128x64x2xf32, #blocked3> -> tensor<128x64xf32, #blocked4>

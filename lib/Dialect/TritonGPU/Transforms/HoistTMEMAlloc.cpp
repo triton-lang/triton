@@ -1,3 +1,4 @@
+#include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/IR/Dominance.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
@@ -136,7 +137,25 @@ public:
       return failure();
     if (val.value() == true)
       return failure();
+    auto loc = store.getLoc();
     rewriter.replaceAllUsesWith(store.getToken(), store.getDep());
+    rewriter.setInsertionPointAfter(loop);
+    Value diff = rewriter.create<arith::SubIOp>(loc, loop.getUpperBound(),
+                                                loop.getLowerBound());
+    if (diff.getType().isIndex()) {
+      diff = rewriter.create<arith::IndexCastOp>(
+          loc, IntegerType::get(rewriter.getContext(), 32), diff);
+    }
+    Value zero = rewriter.create<arith::ConstantIntOp>(loc, 0, diff.getType());
+    Value cond = rewriter.create<arith::CmpIOp>(loc, arith::CmpIPredicate::eq,
+                                                diff, zero);
+    auto ifOp =
+        rewriter.create<scf::IfOp>(store.getLoc(), TypeRange{}, cond, true);
+    rewriter.setInsertionPointToStart(ifOp.thenBlock());
+    auto newStore = rewriter.create<ttng::TMEMStoreOp>(
+        store.getLoc(), store.getToken().getType(), store.getDst(),
+        loop.getResult(loopTok.getArgNumber() - 1), store.getSrc(),
+        store.getPred());
     rewriter.eraseOp(store);
     return success();
   }
