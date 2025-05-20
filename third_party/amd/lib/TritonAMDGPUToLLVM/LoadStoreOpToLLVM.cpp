@@ -639,10 +639,9 @@ struct AsyncCopyGlobalToLocalOpConversion
         (vecTy.getNumElements() * vecTy.getElementTypeBitWidth()) / 8;
     assert(llvm::isPowerOf2_32(vecBytes));
     Value vecBytesVal = b.i32_val(vecBytes);
-
-    Value cacheModifiers =
-        b.i32_val(mlir::LLVM::AMD::getCtrlBitsForCacheModifierOnTarget(
-            op.getCache(), /*isLoad=*/true, targetInfo));
+    int32_t cacheModifiers =
+        mlir::LLVM::AMD::getCtrlBitsForCacheModifierOnTarget(
+            op.getCache(), /*isLoad=*/true, targetInfo);
 
     Value llMask = adaptor.getMask();
     SmallVector<Value> maskElems;
@@ -680,7 +679,7 @@ struct AsyncCopyGlobalToLocalOpConversion
         auto globalLoadLdsOp = rewriter.create<ROCDL::GlobalLoadLDSOp>(
             loc,
             /*globalPtr=*/srcPtr, /*ldsPtr=*/coalescedShmemAddr[i],
-            /*size=*/vecBytesVal, /*offset=*/b.i32_val(0),
+            /*size=*/vecBytes, /*offset=*/0,
             /*aux=*/cacheModifiers, /*alias_scopes=*/nullptr,
             /*noalias_scopes=*/nullptr, /*tbaa=*/nullptr);
         LLVM::AMD::addAsyncCopyAliasScope(globalLoadLdsOp);
@@ -695,8 +694,8 @@ struct AsyncCopyGlobalToLocalOpConversion
       rewriter.create<LLVM::CondBrOp>(loc, pred, loadBlock, afterLoad);
       rewriter.setInsertionPointToStart(loadBlock);
       auto globalLoadLdsOp = rewriter.create<ROCDL::GlobalLoadLDSOp>(
-          loc, srcPtr, coalescedShmemAddr[i], vecBytesVal,
-          /*offset=*/b.i32_val(0), cacheModifiers, nullptr, nullptr, nullptr);
+          loc, srcPtr, coalescedShmemAddr[i], vecBytes,
+          /*offset=*/0, cacheModifiers, nullptr, nullptr, nullptr);
       LLVM::AMD::addAsyncCopyAliasScope(globalLoadLdsOp);
 
       rewriter.create<LLVM::BrOp>(loc, afterLoad);
