@@ -7528,7 +7528,7 @@ def test_unsplat(device):
         condition = tl.load(x + tl.arange(0, 1)) > 42
 
         if explicit:
-            condition = condition.reshape([])
+            condition = condition.item()
 
         if condition:
             tl.store(x, 42)
