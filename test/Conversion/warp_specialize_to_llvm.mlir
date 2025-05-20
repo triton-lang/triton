@@ -723,6 +723,11 @@ llvm.mlir.global external @global_smem() {addr_space = 3 : i32, alignment = 16 :
 
 // CHECK-LABEL: @dynamic_register_reallocation
 llvm.func @dynamic_register_reallocation() attributes {allocation.offset = 0 : i32} {
+  // CHECK: cond_br %{{.*}}, [[ENTRY:\^.*]], [[SWITCH_LOOP:\^.*]]
+
+  // CHECK: [[SWITCH_LOOP]]:
+  // CHECK-NEXT: nvvm.setmaxregister decrease 24
+  // CHECK-NEXT: barrier.sync 1 ;
   // CHECK: llvm.switch
   // CHECK-NEXT: 0: [[PARTITION0:\^.*]],
   // CHECK-NEXT: 1: [[PARTITION1:\^.*]],
@@ -730,34 +735,109 @@ llvm.func @dynamic_register_reallocation() attributes {allocation.offset = 0 : i
   // CHECK-NEXT: 3: [[EXIT:\^.*]]
 
   // CHECK: [[PARTITION0]]:
-  // CHECK-NEXT: barrier.sync 1 ;
   // CHECK-NEXT: nvvm.setmaxregister increase 80
+  // CHECK-NEXT: barrier.sync 1 ;
+  // CHECK-NEXT: "partition0"()
+  // CHECK-NEXT: barrier.sync 1 ;
+  // CHECK-NEXT: nvvm.setmaxregister decrease 24
+
+  // CHECK: [[PARTITION1]]:
+  // CHECK-NEXT: nvvm.setmaxregister increase 48
+  // CHECK-NEXT: barrier.sync 1 ;
+  // CHECK-NEXT: "partition1"()
+  // CHECK-NEXT: barrier.sync 1 ;
+  // CHECK-NEXT: nvvm.setmaxregister decrease 24
+
+  // CHECK: [[PARTITION2]]:
+  // CHECK-NEXT: nvvm.setmaxregister increase 128
+  // CHECK-NEXT: barrier.sync 1 ;
+  // CHECK-NEXT: "partition2"()
+  // CHECK-NEXT: barrier.sync 1 ;
+  // CHECK-NEXT: nvvm.setmaxregister decrease 24
+
+  // CHECK: [[ENTRY]]:
+  // CHECK-NEXT: nvvm.setmaxregister increase 248
+
+  // CHECK: barrier.sync 1 ;
+  // CHECK-NEXT: setmaxregister decrease 152
+  // CHECK-NEXT: barrier.sync 1 ;
+  // CHECK: "default"
+  // CHECK: barrier.sync 1 ;
+  // CHECK-NEXT: setmaxregister increase 248
+
+  ttg.warp_specialize() attributes {allocation.offset = 0 : i32, warpGroupStartIds = array<i32: 4, 8, 12>, actualRegisters = array<i32: 152, 80, 48, 128>}
+  default {
+    "default"() : () -> ()
+    ttg.warp_yield
+  }
+  partition0() num_warps(4) {
+    "partition0"() : () -> ()
+    ttg.warp_return
+  }
+  partition1() num_warps(4) {
+    "partition1"() : () -> ()
+    ttg.warp_return
+  }
+  partition2() num_warps(4) {
+    "partition2"() : () -> ()
+    ttg.warp_return
+  } : () -> ()
+  llvm.return
+}
+
+}
+
+// -----
+
+module attributes {ttg.maxnreg = 128 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100", "ttg.total-num-warps" = 16 : i32} {
+
+llvm.mlir.global external @global_smem() {addr_space = 3 : i32, alignment = 16 : i64} : !llvm.array<0 x i8>
+
+// CHECK-LABEL: @dynamic_register_reallocation
+llvm.func @dynamic_register_reallocation_overalloc() attributes {allocation.offset = 0 : i32} {
+  // CHECK: cond_br %{{.*}}, [[ENTRY:\^.*]], [[SWITCH_LOOP:\^.*]]
+
+  // CHECK: [[SWITCH_LOOP]]:
+  // CHECK-NEXT: nvvm.setmaxregister decrease 80
+  // CHECK-NEXT: barrier.sync 1 ;
+  // CHECK: llvm.switch
+  // CHECK-NEXT: 0: [[PARTITION0:\^.*]],
+  // CHECK-NEXT: 1: [[PARTITION1:\^.*]],
+  // CHECK-NEXT: 2: [[PARTITION2:\^.*]],
+  // CHECK-NEXT: 3: [[EXIT:\^.*]]
+
+  // CHECK: [[PARTITION0]]:
+  // CHECK-NEXT: nvvm.setmaxregister decrease 24
+  // CHECK-NEXT: barrier.sync 1 ;
   // CHECK-NEXT: "partition0"()
   // CHECK-NEXT: barrier.sync 1 ;
   // CHECK-NEXT: nvvm.setmaxregister increase 80
 
   // CHECK: [[PARTITION1]]:
+  // CHECK-NEXT: nvvm.setmaxregister increase 192
   // CHECK-NEXT: barrier.sync 1 ;
-  // CHECK-NEXT: nvvm.setmaxregister decrease 48
   // CHECK-NEXT: "partition1"()
   // CHECK-NEXT: barrier.sync 1 ;
-  // CHECK-NEXT: nvvm.setmaxregister increase 80
+  // CHECK-NEXT: nvvm.setmaxregister decrease 80
 
   // CHECK: [[PARTITION2]]:
+  // CHECK-NEXT: nvvm.setmaxregister increase 192
   // CHECK-NEXT: barrier.sync 1 ;
-  // CHECK-NEXT: nvvm.setmaxregister increase 128
   // CHECK-NEXT: "partition2"()
   // CHECK-NEXT: barrier.sync 1 ;
   // CHECK-NEXT: nvvm.setmaxregister decrease 80
 
+  // CHECK: [[ENTRY]]:
+  // CHECK-NEXT: nvvm.setmaxregister increase 256
+
   // CHECK: barrier.sync 1 ;
+  // CHECK-NEXT: setmaxregister decrease 104
   // CHECK-NEXT: barrier.sync 1 ;
-  // CHECK: setmaxregister increase 152
   // CHECK: "default"
   // CHECK: barrier.sync 1 ;
-  // CHECK-NEXT: setmaxregister decrease 80
+  // CHECK-NEXT: setmaxregister increase 256
 
-  ttg.warp_specialize() attributes {allocation.offset = 0 : i32, warpGroupStartIds = array<i32: 4, 8, 12>, actualRegisters = array<i32: 152, 80, 48, 128>}
+  ttg.warp_specialize() attributes {allocation.offset = 0 : i32, warpGroupStartIds = array<i32: 4, 8, 12>, actualRegisters = array<i32: 104, 24, 192, 192>}
   default {
     "default"() : () -> ()
     ttg.warp_yield
