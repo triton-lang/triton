@@ -14,6 +14,7 @@
 #include "mlir/Transforms/Passes.h"
 #include "triton/Analysis/AxisInfo.h"
 #include "triton/Analysis/Utility.h"
+#include "triton/Dialect/Triton/Transforms/LoopPeeling.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h"
 #include "triton/Dialect/TritonGPU/Transforms/PipelineExpander.h"
@@ -64,6 +65,46 @@ static Operation *wrapInMaskOp(RewriterBase &rewriter, Operation *op,
   return mask;
 }
 
+static void resolveMaskOp(ModuleOp moduleOp) {
+  IRRewriter rewriter(moduleOp);
+
+  // Canonicalize the IR to simplify the arithmetic ops defining the mask
+  auto arithDialect =
+      moduleOp.getContext()->getLoadedDialect<arith::ArithDialect>();
+  RewritePatternSet patterns(moduleOp.getContext());
+  arithDialect->getCanonicalizationPatterns(patterns);
+  if (applyPatternsGreedily(moduleOp, std::move(patterns)).failed())
+    return llvm::report_fatal_error("Failed to canonicalize the IR");
+
+  SmallVector<MaskOp> maskOps;
+  moduleOp->walk([&](MaskOp maskOp) { maskOps.push_back(maskOp); });
+  for (auto maskOp : maskOps) {
+    rewriter.setInsertionPoint(maskOp);
+    while (&maskOp.getBody()->front() != maskOp.getBody()->getTerminator()) {
+      Operation *op = &maskOp.getBody()->front();
+      // Statically dead
+      if (isConstantIntValue(maskOp.getPred(), 0)) {
+        if (op->getNumResults() > 0) {
+          SmallVector<Value> results;
+          for (auto result : op->getResults()) {
+            auto poisonOp =
+                rewriter.create<ub::PoisonOp>(op->getLoc(), result.getType());
+            results.push_back(poisonOp);
+          }
+          op->replaceAllUsesWith(results);
+        }
+        op->erase();
+      } else {
+        rewriter.moveOpBefore(op, maskOp);
+        op = triton::predicateOp(rewriter, op, maskOp.getPred());
+      }
+    }
+    maskOp->replaceAllUsesWith(
+        maskOp.getBody()->getTerminator()->getOperands());
+    maskOp->erase();
+  }
+}
+
 struct LICMScalarsPattern : public RewritePattern {
   LICMScalarsPattern(MLIRContext *ctx)
       // MatchAnyOpTypeTag tells the pattern-matcher to try this pattern on
@@ -99,103 +140,58 @@ struct LICMScalarsPattern : public RewritePattern {
   }
 };
 
-class InductionVarLTUBPattern : public OpRewritePattern<arith::CmpIOp> {
-  using OpRewritePattern::OpRewritePattern;
-
-  LogicalResult matchAndRewrite(arith::CmpIOp cmpOp,
-                                PatternRewriter &rewriter) const override {
-    if (cmpOp.getPredicate() != arith::CmpIPredicate::slt &&
-        cmpOp.getPredicate() != arith::CmpIPredicate::sle) {
-      return failure();
+void resolvePredicateStageOps(
+    ArrayRef<Operation *> ops, // TODO: rewriter not really needed
+    std::function<Value(triton::gpu::PredicateStageOp)> fn) {
+  SmallVector<triton::gpu::PredicateStageOp> opsToErase;
+  for (auto op : ops) {
+    auto predicateStageOp = dyn_cast<triton::gpu::PredicateStageOp>(op);
+    if (!predicateStageOp) {
+      continue;
     }
-    scf::ForOp forOp = cmpOp->getParentOfType<scf::ForOp>();
-    if (!forOp) {
-      return failure();
+    Value result = fn(predicateStageOp);
+    if (result) {
+      predicateStageOp.getResult().replaceAllUsesWith(result);
+      opsToErase.push_back(predicateStageOp);
     }
-    Value inductionVar = cmpOp.getLhs();
-    Value upperBound = cmpOp.getRhs();
-    if (inductionVar != forOp.getInductionVar()) {
-      return failure();
-    }
-    if (upperBound != forOp.getUpperBound()) {
-      return failure();
-    }
-    // Induction var is always less than upper bound
-    rewriter.replaceOpWithNewOp<arith::ConstantIntOp>(cmpOp, 1, 1);
-    return success();
   }
-};
-
-class IntLTItselfMinusXPattern : public OpRewritePattern<arith::CmpIOp> {
-  using OpRewritePattern::OpRewritePattern;
-
-  LogicalResult matchAndRewrite(arith::CmpIOp cmpOp,
-                                PatternRewriter &rewriter) const override {
-    if (cmpOp.getPredicate() != arith::CmpIPredicate::slt) {
-      return failure();
-    }
-    Value lhs = cmpOp.getLhs();
-    Value rhs = cmpOp.getRhs();
-    auto subOp = rhs.getDefiningOp<arith::SubIOp>();
-    if (!subOp) {
-      return failure();
-    }
-    Value subLhs = subOp.getLhs();
-    Value subRhs = subOp.getRhs();
-    if (subLhs != lhs) {
-      return failure();
-    }
-    std::optional<int64_t> subRhsValue = getConstantIntValue(subRhs);
-    if (!subRhsValue) {
-      return failure();
-    }
-    // a < a - x is true if x < 0
-    int result = (*subRhsValue < 0) ? 1 : 0;
-    rewriter.replaceOpWithNewOp<arith::ConstantIntOp>(cmpOp, result, 1);
-    return success();
+  for (auto op : opsToErase) {
+    op->erase();
   }
-};
+}
 
-class IntPlusXLTItselfPattern : public OpRewritePattern<arith::CmpIOp> {
-  using OpRewritePattern::OpRewritePattern;
+static void peelEpilogue(RewriterBase &rewriter, scf::ForOp forOp,
+                         int maxStage) {
+  mlir::triton::annotateLoopForEpiloguePeeling(rewriter, forOp, 1);
 
-public:
-  IntPlusXLTItselfPattern(MLIRContext *ctx, DataFlowSolver &solver)
-      : OpRewritePattern(ctx), solver(solver) {}
-
-  LogicalResult matchAndRewrite(arith::CmpIOp cmpOp,
-                                PatternRewriter &rewriter) const override {
-    if (cmpOp.getPredicate() != arith::CmpIPredicate::slt) {
-      return failure();
-    }
-    Value lhs = cmpOp.getLhs();
-    Value rhs = cmpOp.getRhs();
-    auto addOp = lhs.getDefiningOp<arith::AddIOp>();
-    if (!addOp) {
-      return failure();
-    }
-    if (addOp.getRhs() != rhs && addOp.getLhs() != rhs) {
-      return failure();
-    }
-    Value xValue = addOp.getRhs();
-    if (xValue == rhs) {
-      xValue = addOp.getLhs();
-    }
-    auto xState =
-        solver.lookupState<mlir::dataflow::IntegerValueRangeLattice>(xValue);
-    if (!xState) {
-      return failure();
-    }
-    if (xState->getValue().getValue().smin().getSExtValue() <= 0) {
-      return failure();
-    }
-    rewriter.replaceOpWithNewOp<arith::ConstantIntOp>(cmpOp, 0, 1);
-    return success();
-  }
-
-private:
-  DataFlowSolver &solver;
-};
+  rewriter.setInsertionPoint(forOp);
+  Value vTrue = rewriter.create<mlir::arith::ConstantIntOp>(
+      forOp.getLoc(), 1, rewriter.getI1Type());
+  Value vFalse = rewriter.create<mlir::arith::ConstantIntOp>(
+      forOp.getLoc(), 0, rewriter.getI1Type());
+  SmallVector<Operation *> peeledOps;
+  mlir::triton::peelLoopEpilogue(forOp, triton::predicateOp, &peeledOps);
+  // Resolve all the peeled predicate stage ops to false
+  resolvePredicateStageOps(
+      peeledOps,
+      [&](triton::gpu::PredicateStageOp op) -> Value { return vFalse; });
+  // Resolve the maxStage-1 predicate in the loop body to true, and the rest
+  // to the normal predicate
+  SmallVector<Operation *> forOpBody =
+      llvm::map_to_vector(forOp.getBody()->without_terminator(),
+                          [](Operation &op) -> Operation * { return &op; });
+  resolvePredicateStageOps(
+      forOpBody, [&](triton::gpu::PredicateStageOp op) -> Value {
+        if (op.getStage() == maxStage - 1) {
+          return vTrue;
+        }
+        OpBuilder::InsertionGuard guard(rewriter);
+        rewriter.setInsertionPoint(op);
+        return mlir::triton::emitPredicateForStage(rewriter, op.getIv(),
+                                                   op.getUb(), op.getStep(),
+                                                   maxStage, op.getStage());
+      });
+}
 
 static void expandLoops(ModuleOp moduleOp) {
   SmallVector<scf::ForOp> loops;
@@ -205,6 +201,15 @@ static void expandLoops(ModuleOp moduleOp) {
     if (failed(schedule.deSerialize(forOp))) {
       continue;
     }
+
+    // Testing feature: allow for unresolved predicate stage ops
+    // in the loop body.
+    bool keepPredicateStage = forOp->hasAttr("__test_keep_predicate_stage");
+    // TODO: Enable epilogue peeling for warp specialized loops
+    bool customEpiloguePeeling =
+        !forOp->getParentOfType<triton::gpu::WarpSpecializeOp>() &&
+        !keepPredicateStage; // do not peel if we are testing the stage
+                             // predication
 
     std::vector<std::pair<Operation *, unsigned>> finalSchedule =
         schedule.createFinalSchedule(forOp);
@@ -217,11 +222,8 @@ static void expandLoops(ModuleOp moduleOp) {
             std::vector<std::pair<Operation *, unsigned>> &schedule) {
           schedule = finalSchedule;
         };
-    // Testing feature: allow for unresolved predicate stage ops
-    // in the loop body.
-    bool keepPredicateStage =
-        true || forOp->hasAttr("__test_keep_predicate_stage");
-    if (keepPredicateStage) {
+
+    if (keepPredicateStage || customEpiloguePeeling) {
       options.emitPredicateStageFn =
           [](RewriterBase &rewriter, Value inductionVar, Value upperBound,
              Value step, uint64_t maxStage, uint64_t stage) {
@@ -237,7 +239,13 @@ static void expandLoops(ModuleOp moduleOp) {
     if (failed(newForOp)) {
       continue;
     }
+    forOp = *newForOp;
+    if (customEpiloguePeeling) {
+      peelEpilogue(rewriter, forOp, schedule.getNumStages() - 1);
+    }
   }
+
+  resolveMaskOp(moduleOp);
 }
 
 static void removeAttributes(ModuleOp moduleOp) {
@@ -248,216 +256,9 @@ static void removeAttributes(ModuleOp moduleOp) {
   });
 }
 
-/// Clone `op` and call `callback` on the cloned op's operands as well as any
-/// operands of nested ops that:
-/// 1) aren't defined within the new op or
-/// 2) are block arguments.
-static Operation *
-cloneAndUpdateOperands(RewriterBase &rewriter, Operation *op,
-                       function_ref<void(OpOperand *newOperand)> callback) {
-  Operation *clone = rewriter.clone(*op);
-  clone->walk<WalkOrder::PreOrder>([&](Operation *nested) {
-    // 'clone' itself will be visited first.
-    for (OpOperand &operand : nested->getOpOperands()) {
-      Operation *def = operand.get().getDefiningOp();
-      if ((def && !clone->isAncestor(def)) || isa<BlockArgument>(operand.get()))
-        callback(&operand);
-    }
-  });
-  return clone;
-}
-
-static void triviallyResolveStageOps(RewriterBase &rewriter, scf::ForOp forOp,
-                                     unsigned forStage, Value toPred) {
-  SmallVector<triton::gpu::PredicateStageOp> opsToErase;
-  forOp.walk([&](triton::gpu::PredicateStageOp op) {
-    if (op.getStage() == forStage) {
-      rewriter.replaceAllOpUsesWith(op, toPred);
-      opsToErase.push_back(op);
-    }
-  });
-  for (auto op : opsToErase) {
-    rewriter.eraseOp(op);
-  }
-}
-
-// This function peels the last 'numIterations' iterations from the given
-// scf::ForOp
-static void peelLastIterations(scf::ForOp forOp, unsigned numIterations,
-                               unsigned maxStage,
-                               SmallVector<Operation *> *peeledOps = nullptr) {
-  assert(numIterations == 1); // TODO: for now
-  IRRewriter rewriter(forOp);
-  auto loc = forOp.getLoc();
-
-  // Fetch loop bounds and step
-  Value lowerBound = forOp.getLowerBound();
-  Value upperBound = forOp.getUpperBound();
-  Value step = forOp.getStep();
-
-  // Compute new upper bound for the main loop: newUpperBound = upperBound -
-  // (numIterations * step)
-  auto numConst = rewriter.create<arith::ConstantIntOp>(loc, numIterations,
-                                                        rewriter.getI32Type());
-  Value peelOffset = rewriter.create<arith::MulIOp>(loc, numConst, step);
-  Value newUpperBound =
-      rewriter.create<arith::SubIOp>(loc, upperBound, peelOffset);
-
-  forOp.getUpperBoundMutable().assign(newUpperBound);
-  rewriter.setInsertionPointAfter(forOp);
-  // If the original lower bound is less than the original upper bound, we will
-  // execute the loop body once (which we are going to peel)
-  auto lastIterPred = rewriter.create<arith::CmpIOp>(
-      loc, arith::CmpIPredicate::slt, lowerBound, upperBound);
-
-  // Last iter induction variable value
-  // translatedUB = UB - LB
-  // IV = (step - (translatedUB % step)) + UB
-  Value translatedUB =
-      rewriter.create<arith::SubIOp>(loc, newUpperBound, lowerBound);
-  Value _ugh = rewriter.create<arith::RemUIOp>(loc, translatedUB, step);
-  Value _ugh1 = rewriter.create<arith::SubIOp>(loc, step, _ugh);
-  Value lastIterInductionVar =
-      rewriter.create<arith::AddIOp>(loc, _ugh1, newUpperBound);
-
-  llvm::DenseMap<Value, Value> mapping;
-  for (auto [arg, operand] :
-       llvm::zip(forOp.getRegionIterArgs(), forOp.getResults())) {
-    mapping[arg] = operand;
-  }
-
-  mapping[forOp.getInductionVar()] = lastIterInductionVar;
-
-  SmallVector<Value> peeledResults = forOp.getResults();
-  Operation *lastOp = nullptr;
-  for (Operation &op : forOp.getBody()->without_terminator()) {
-    Operation *newOp =
-        cloneAndUpdateOperands(rewriter, &op, [&](OpOperand *newOperand) {
-          if (mapping.count(newOperand->get())) {
-            newOperand->set(mapping[newOperand->get()]);
-          }
-        });
-    if (peeledOps) {
-      peeledOps->push_back(newOp);
-    }
-    newOp = predicateOp(rewriter, newOp, lastIterPred);
-    assert(newOp && "Failed to create masked operation");
-    lastOp = newOp;
-    for (auto [result, oldResult] :
-         llvm::zip(newOp->getResults(), op.getResults())) {
-      mapping[oldResult] = result;
-
-      for (OpOperand &yieldOperand :
-           forOp.getBody()->getTerminator()->getOpOperands()) {
-        if (yieldOperand.get() != oldResult) {
-          continue;
-        }
-        peeledResults[yieldOperand.getOperandNumber()] = result;
-      }
-    }
-  }
-
-  DominanceInfo domInfo(forOp->getParentOfType<ModuleOp>());
-
-  forOp->replaceUsesWithIf(peeledResults, [&](OpOperand &operand) {
-    return domInfo.properlyDominates(lastOp, operand.getOwner(),
-                                     /*enclosingOpOK=*/false);
-  });
-}
-
-static bool onlyWaitsAreUnmasked(scf::ForOp forOp) {
-  for (auto &op : forOp.getBody()->without_terminator()) {
-    if (isa<triton::nvidia_gpu::AsyncTMACopyGlobalToLocalOp,
-            triton::nvidia_gpu::AsyncTMAGatherOp,
-            triton::gpu::AsyncCopyGlobalToLocalOp>(op)) {
-      return false;
-    }
-  }
-  return true;
-}
-
-void resolvePredicateStageOps(
-    RewriterBase &rewriter,
-    ArrayRef<Operation *> ops, // TODO: rewriter not really needed
-    std::function<Value(triton::gpu::PredicateStageOp)> fn) {
-  SmallVector<triton::gpu::PredicateStageOp> opsToErase;
-  for (auto op : ops) {
-    auto predicateStageOp = dyn_cast<triton::gpu::PredicateStageOp>(op);
-    if (!predicateStageOp) {
-      continue;
-    }
-    Value result = fn(predicateStageOp);
-    if (result) {
-      rewriter.replaceAllOpUsesWith(predicateStageOp, result);
-      opsToErase.push_back(predicateStageOp);
-    }
-  }
-  for (auto op : opsToErase) {
-    rewriter.eraseOp(op);
-  }
-}
-
 struct PipelinePass : public impl::TritonGPUPipelineBase<PipelinePass> {
 
   using impl::TritonGPUPipelineBase<PipelinePass>::TritonGPUPipelineBase;
-
-  void resolveMaskOp(ModuleOp moduleOp) {
-    DominanceInfo domInfo(moduleOp);
-    IRRewriter rewriter(moduleOp);
-    eliminateCommonSubExpressions(rewriter, domInfo, moduleOp);
-
-    DataFlowSolver solver;
-    solver.load<mlir::dataflow::IntegerRangeAnalysis>();
-    solver.load<mlir::dataflow::DeadCodeAnalysis>();
-    if (failed(solver.initializeAndRun(moduleOp)))
-      return llvm::report_fatal_error("Failed to run IntegerRangeAnalysis");
-
-    auto arithDialect =
-        moduleOp.getContext()->getLoadedDialect<arith::ArithDialect>();
-    RewritePatternSet patterns(moduleOp.getContext());
-    arithDialect->getCanonicalizationPatterns(patterns);
-    patterns.add<InductionVarLTUBPattern>(moduleOp.getContext());
-    patterns.add<IntLTItselfMinusXPattern>(moduleOp.getContext());
-    patterns.add<IntPlusXLTItselfPattern>(moduleOp.getContext(), solver);
-    if (applyPatternsGreedily(moduleOp, std::move(patterns)).failed())
-      return llvm::report_fatal_error("Failed to canonicalize the IR");
-
-    auto dumpState = [&](Value value) {
-      if (auto state =
-              solver.lookupState<mlir::dataflow::IntegerValueRangeLattice>(
-                  value)) {
-        state->dump();
-      }
-    };
-
-    SmallVector<MaskOp> maskOps;
-    moduleOp->walk([&](MaskOp maskOp) { maskOps.push_back(maskOp); });
-    for (auto maskOp : maskOps) {
-      rewriter.setInsertionPoint(maskOp);
-      while (&maskOp.getBody()->front() != maskOp.getBody()->getTerminator()) {
-        Operation *op = &maskOp.getBody()->front();
-        // Statically dead
-        if (isConstantIntValue(maskOp.getPred(), 0)) {
-          if (op->getNumResults() > 0) {
-            SmallVector<Value> results;
-            for (auto result : op->getResults()) {
-              auto poisonOp =
-                  rewriter.create<ub::PoisonOp>(op->getLoc(), result.getType());
-              results.push_back(poisonOp);
-            }
-            op->replaceAllUsesWith(results);
-          }
-          op->erase();
-        } else {
-          rewriter.moveOpBefore(op, maskOp);
-          op = triton::predicateOp(rewriter, op, maskOp.getPred());
-        }
-      }
-      maskOp->replaceAllUsesWith(
-          maskOp.getBody()->getTerminator()->getOperands());
-      maskOp->erase();
-    }
-  }
 
   void runOnOperation() override {
     ModuleOp moduleOp = getOperation();
@@ -473,60 +274,11 @@ struct PipelinePass : public impl::TritonGPUPipelineBase<PipelinePass> {
 
     // Apply the pipeline expansion.
     expandLoops(moduleOp);
-    // Validate the IR
-    if (failed(mlir::verify(moduleOp))) {
-      return signalPassFailure();
-    }
     if (dumpIntermediateSteps) {
       llvm::dbgs() << "// -----// SoftwarePipeliner internal IR Dump After: "
                       "ExpandLoops\n"
                    << moduleOp << "\n\n\n";
     }
-
-    SmallVector<scf::ForOp> loops;
-    moduleOp->walk([&](scf::ForOp forOp) { loops.push_back(forOp); });
-    for (scf::ForOp forOp : loops) {
-      std::optional<int> maxStageOpt = mlir::triton::tryGetMaxStage(forOp);
-      if (!maxStageOpt) {
-        continue;
-      }
-      IRRewriter rewriter(forOp);
-      Value vTrue = rewriter.create<mlir::arith::ConstantIntOp>(
-          forOp.getLoc(), 1, rewriter.getI1Type());
-      Value vFalse = rewriter.create<mlir::arith::ConstantIntOp>(
-          forOp.getLoc(), 0, rewriter.getI1Type());
-      unsigned maxStage = *maxStageOpt;
-      SmallVector<Operation *> peeledOps;
-      peelLastIterations(forOp, 1, maxStage, &peeledOps);
-      SmallVector<Operation *> forOpBody =
-          llvm::map_to_vector(forOp.getBody()->without_terminator(),
-                              [](Operation &op) -> Operation * { return &op; });
-      // Resolve the maxStage-1 predicate in the loop body to true
-      resolvePredicateStageOps(rewriter, forOpBody,
-                               [&](triton::gpu::PredicateStageOp op) -> Value {
-                                 if (op.getStage() == maxStage - 1) {
-                                   return vTrue;
-                                 }
-                                 return nullptr;
-                               });
-      // Resolve all the peeled predicate stage ops to false
-      resolvePredicateStageOps(
-          rewriter, peeledOps,
-          [&](triton::gpu::PredicateStageOp op) -> Value { return vFalse; });
-      // Resolve all the rest normally
-      forOpBody =
-          llvm::map_to_vector(forOp.getBody()->without_terminator(),
-                              [](Operation &op) -> Operation * { return &op; });
-      resolvePredicateStageOps(
-          rewriter, forOpBody, [&](triton::gpu::PredicateStageOp op) -> Value {
-            OpBuilder::InsertionGuard guard(rewriter);
-            rewriter.setInsertionPoint(op);
-            return mlir::triton::emitPredicateForStage(rewriter, op.getIv(),
-                                                       op.getUb(), op.getStep(),
-                                                       maxStage, op.getStage());
-          });
-    }
-    resolveMaskOp(moduleOp);
 
     // Cleanup the IR from the pipeline attributes.
     removeAttributes(moduleOp);

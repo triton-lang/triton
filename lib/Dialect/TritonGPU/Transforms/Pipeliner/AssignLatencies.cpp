@@ -274,13 +274,15 @@ public:
         // pipelineable, but we know where the loads are scheduled, so we can
         // place the wait right before the loads.
 
-        if (hasSyncDots(forOp)) {
-          // Skip pipelining MMA in the loops where sync dots are used. This is
-          // dirty heuristic for performance drops in kernels where we would
-          // rather want to have last iteration peeled instead of having a full
-          // iteration of masked operations only to execute single wait.
-          continue;
-        }
+        // if (hasSyncDots(forOp)) {
+        //   // Skip pipelining MMA in the loops where sync dots are used. This
+        //   is
+        //   // dirty heuristic for performance drops in kernels where we would
+        //   // rather want to have last iteration peeled instead of having a
+        //   full
+        //   // iteration of masked operations only to execute single wait.
+        //   continue;
+        // }
         auto pipeHelper = ttng::MMAv5PipelineableOperandsHelper(
             mma, forOp, isLoadToBePipelined);
         if (pipeHelper.isPipelineable ||

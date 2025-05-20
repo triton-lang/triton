@@ -90,4 +90,12 @@ def TritonLoopAwareCSE : Pass<"triton-loop-aware-cse", "mlir::ModuleOp"> {
   }];
 }
 
+def TritonLoopPeeling : Pass<"triton-loop-peeling", "mlir::ModuleOp"> {
+  let summary = "Peel the trailing number of iterations specified by the attribute";
+  let description = [{
+    The `triton-loop-peeling` pass peels the trailing number of iterations
+    specified by the attribute `tt.peel_epilogue_iterations`.
+  }];
+}
+
 #endif
