@@ -185,20 +185,23 @@ def _matmul_ogs(
             tl.static_assert(MX_SCALE_BLOCK_K % 4 == 0)
             PACKED_MX_BLOCK: tl.constexpr = (MX_SCALE_BLOCK_K // 4) * 32 * 4 * 4
             SCALE_BLOCK_N: tl.constexpr = BLOCK_N // 128
+            stride_scale_k: tl.constexpr = 1
         elif SWIZZLE_MX_SCALE == "HOPPER":
             n_warps: tl.constexpr = tl.extra.cuda.num_warps()
             tl.static_assert(BLOCK_N % (2 * n_warps * 2 * 8) == 0)
             tl.static_assert(MX_SCALE_BLOCK_K % 2 == 0)
             PACKED_MX_BLOCK: tl.constexpr = MX_SCALE_BLOCK_K * 32
             SCALE_BLOCK_N: tl.constexpr = BLOCK_N // 32
+            stride_scale_k = stride_mx_k
         else:
             PACKED_MX_BLOCK: tl.constexpr = MX_SCALE_BLOCK_K
             SCALE_BLOCK_N: tl.constexpr = BLOCK_N
+            stride_scale_k = stride_mx_k
         offs_n_scale = (pid_n * SCALE_BLOCK_N + tl.arange(0, SCALE_BLOCK_N)) % N
         offs_n_scale = tl.max_contiguous(tl.multiple_of(offs_n_scale, SCALE_BLOCK_N), SCALE_BLOCK_N)
         # K dimension must be the last dimension for the scales
         offs_k_scale = PACKED_MX_BLOCK * pid_k + tl.arange(0, PACKED_MX_BLOCK)
-        MxScalePtrs = MxScale + offs_k_scale.to(index_type)[None, :] * stride_mx_k + offs_n_scale.to(index_type)[:, None] * stride_mx_n
+        MxScalePtrs = MxScale + offs_k_scale.to(index_type)[None, :] * stride_scale_k + offs_n_scale.to(index_type)[:, None] * stride_mx_n
     else:
         MxScalePtrs = None
         offs_k_scale = None
