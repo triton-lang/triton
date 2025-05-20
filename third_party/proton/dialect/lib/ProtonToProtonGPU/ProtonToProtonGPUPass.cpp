@@ -14,6 +14,7 @@
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "llvm/Support/MathExtras.h"
+#include <algorithm>
 
 namespace mlir {
 namespace triton {
@@ -21,6 +22,8 @@ namespace proton {
 
 #define GEN_PASS_DEF_CONVERTPROTONTOPROTONGPU
 #include "Conversion/ProtonToProtonGPU/Passes.h.inc"
+
+constexpr float maxSharedMemRatio = 0.04; // 4 percent of max shared mem
 
 namespace {
 
@@ -38,6 +41,32 @@ void parseSelectIds(llvm::StringRef selectIds,
   }
   llvm::sort(selectIdVec);
   selectIdVec.erase(llvm::unique(selectIdVec), selectIdVec.end());
+}
+
+int getAllocSharedMemSize(int maxSharedMemSize, int sharedMemUsed,
+                          int segmentNum) {
+  const int bytesPerEntry = proton::gpu::getBytesPerClockEntry();
+  const int wordsPerEntry = bytesPerEntry / 4; // 1 word = 4 bytes
+  const int circularHeaderSize =
+      proton::gpu::getCircularHeaderSize(); // byte size
+
+  int segmentByteSizeShared =
+      llvm::NextPowerOf2(
+          (maxSharedMemSize - llvm::alignTo(sharedMemUsed, bytesPerEntry)) /
+          segmentNum) /
+      2;
+  int numSharedEntries = segmentByteSizeShared * segmentNum / bytesPerEntry;
+  int allocSharedMemSize = numSharedEntries * bytesPerEntry;
+
+  int estimatedOccupany = maxSharedMemSize / std::max(1, sharedMemUsed);
+  if (estimatedOccupany <= 1)
+    return allocSharedMemSize;
+
+  int maxAllocSharedMemSize = maxSharedMemSize * maxSharedMemRatio;
+  while (allocSharedMemSize > maxAllocSharedMemSize)
+    allocSharedMemSize /= 2;
+
+  return allocSharedMemSize;
 }
 
 class RecordOpCircularRewrite : public OpRewritePattern<proton::RecordOp> {
@@ -125,18 +154,10 @@ public:
       sharedMemUsed =
           mod->getAttrOfType<mlir::IntegerAttr>("ttg.shared").getInt();
 
-    const int bytesPerEntry = proton::gpu::getBytesPerClockEntry();
-    const int wordsPerEntry = bytesPerEntry / 4; // 1 word = 4 bytes
-    const int circularHeaderSize =
-        proton::gpu::getCircularHeaderSize(); // byte size
+    int allocSharedMemSize =
+        getAllocSharedMemSize(maxSharedMemSize, sharedMemUsed, segmentNum);
 
-    int segmentByteSizeShared =
-        llvm::NextPowerOf2(
-            (maxSharedMemSize - llvm::alignTo(sharedMemUsed, bytesPerEntry)) /
-            segmentNum) /
-        2;
-    int numSharedEntries = segmentByteSizeShared * segmentNum / bytesPerEntry;
-    int allocSharedMemSize = numSharedEntries * bytesPerEntry;
+    const int bytesPerEntry = proton::gpu::getBytesPerClockEntry();
 
     if (bufferSize != 0)
       bufferSize = llvm::alignTo(bufferSize, bytesPerEntry);
@@ -151,8 +172,7 @@ public:
     int allocBufferSize;
     if (bufferType == gpu::BufferType::SHARED) {
       if (bufferSize > 0)
-        allocBufferSize =
-            (allocSharedMemSize > bufferSize) ? bufferSize : allocSharedMemSize;
+        allocBufferSize = std::min(allocSharedMemSize, bufferSize.getValue());
       else
         allocBufferSize = allocSharedMemSize;
     } else if (bufferType == gpu::BufferType::GLOBAL) {
@@ -174,6 +194,8 @@ public:
     //  +-----------------------------------------------+
     //  | profiled data (allocBufferSize bytes)         |
     //  +-----------------------------------------------+
+    const int circularHeaderSize =
+        proton::gpu::getCircularHeaderSize(); // byte size
 
     int allocProfileScratchSize =
         llvm::alignTo(allocBufferSize + circularHeaderSize + numWarps * 4,

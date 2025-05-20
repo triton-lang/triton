@@ -96,8 +96,8 @@ TEST_F(ChromeTraceWriterTest, SingleBlock) {
   EXPECT_EQ(data["traceEvents"].size(), 2);
   EXPECT_EQ(data["traceEvents"][0]["name"], "s1");
   EXPECT_EQ(data["traceEvents"][1]["name"], "scope_7");
-  EXPECT_EQ(data["traceEvents"][0]["ts"], "0");
-  EXPECT_EQ(data["traceEvents"][1]["ts"], "0.1");
+  EXPECT_EQ(data["traceEvents"][0]["ts"], 0.0);
+  EXPECT_EQ(data["traceEvents"][1]["ts"], 0.1);
 }
 
 TEST_F(ChromeTraceWriterTest, MultiBlockMultiWarp) {
@@ -203,10 +203,10 @@ TEST_F(ChromeTraceWriterTest, MultiKernel) {
 
   EXPECT_EQ(data.empty(), false);
   EXPECT_EQ(data["traceEvents"][0]["cat"], "kernel1");
-  EXPECT_EQ(data["traceEvents"][0]["ts"], "0");
-  EXPECT_EQ(data["traceEvents"][0]["dur"], "400");
+  EXPECT_EQ(data["traceEvents"][0]["ts"], 0.0);
+  EXPECT_EQ(data["traceEvents"][0]["dur"], 400.0);
   EXPECT_EQ(data["traceEvents"][1]["cat"], "kernel1");
   EXPECT_EQ(data["traceEvents"][2]["cat"], "kernel2");
-  EXPECT_EQ(data["traceEvents"][2]["ts"], "10000");
-  EXPECT_EQ(data["traceEvents"][2]["dur"], "400");
+  EXPECT_EQ(data["traceEvents"][2]["ts"], 10000.0);
+  EXPECT_EQ(data["traceEvents"][2]["dur"], 400.0);
 }
