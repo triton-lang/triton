@@ -103,8 +103,7 @@ def compute_metadata(routing_data, n_rows, block_m):
         routing_data.expt_hist, n_expts_tot, md_hist, md_offs, md_tile_starts, md_tile_infos,
         BLOCK=MEMSET_BLOCK,  # optimization parameters
         TILE_DIM=block_m,  # constants
-        extra_block=extra_block,
-        num_warps=1)
+        extra_block=extra_block, num_warps=1)
     _matmul_metadata_compute[(n_expts_tot, )](
         routing_data.expt_hist, md_tile_starts, md_tile_infos,  # outputs
         BLOCK=HIST2_BLOCK_M,  # optimization parameters
