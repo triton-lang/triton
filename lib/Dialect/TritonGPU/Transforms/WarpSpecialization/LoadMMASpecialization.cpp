@@ -1,7 +1,7 @@
+#include "PartitionBuilder.h"
 #include "mlir/Dialect/UB/IR/UBOps.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/Dominance.h"
-#include "mlir/IR/ImplicitLocOpBuilder.h"
 #include "mlir/Pass/Pass.h"
 #include "triton/Analysis/Utility.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
@@ -20,8 +20,6 @@ using namespace mlir;
 using namespace triton;
 using namespace triton::gpu;
 namespace ttng = triton::nvidia_gpu;
-
-using Partition = WarpSchedule::Partition;
 
 //===----------------------------------------------------------------------===//
 // getPartitionScheme
@@ -86,43 +84,6 @@ getPartitionScheme(scf::ForOp loop, const WarpSchedule &schedule) {
 //===----------------------------------------------------------------------===//
 // Utilities
 //===----------------------------------------------------------------------===//
-
-using StageCluster = std::optional<std::pair<int, int>>;
-
-struct PartitionBuilder : public ImplicitLocOpBuilder {
-  using ImplicitLocOpBuilder::ImplicitLocOpBuilder;
-
-  Value intCst(int value, unsigned width = 32) {
-    return create<arith::ConstantIntOp>(value, width);
-  }
-  Value boolCst(bool value) { return intCst(value, /*width=*/1); }
-
-  void assignStage(Operation *op, StageCluster stageCluster) {
-    if (stageCluster) {
-      op->setAttr(kLoopStageAttrName, getI32IntegerAttr(stageCluster->first));
-      op->setAttr(kLoopClusterAttrName,
-                  getI32IntegerAttr(stageCluster->second));
-    }
-  }
-
-  template <typename OpT, typename... Args>
-  auto createInto(Partition &partition, StageCluster stageCluster,
-                  Args &&...args) {
-    auto op = create<OpT>(std::forward<Args>(args)...);
-    op->setAttr(kPartitionAttrName, getI32IntegerAttr(partition.getIndex()));
-    assignStage(op, stageCluster);
-    partition.insert(op);
-    return op;
-  }
-};
-
-static StageCluster getStageCluster(Operation *op) {
-  auto stageAttr = op->getAttrOfType<IntegerAttr>(kLoopStageAttrName);
-  auto clusterAttr = op->getAttrOfType<IntegerAttr>(kLoopClusterAttrName);
-  if (!stageAttr || !clusterAttr)
-    return std::nullopt;
-  return std::make_pair(stageAttr.getInt(), clusterAttr.getInt());
-}
 
 static void replaceAllUsesDominatedBy(Operation *domOp, Value newValue,
                                       Value oldValue, DominanceInfo &domInfo) {
