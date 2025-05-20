@@ -65,81 +65,7 @@ InstrumentationProfiler::setMode(const std::vector<std::string> &mode) {
 
   return this;
 }
-
 namespace {
-
-// Sort the pairs to ensure they are visited from the root to the leaf
-std::vector<std::pair<size_t, size_t>>
-sortScopeIdParentPairs(uint64_t functionId,
-                       const std::vector<std::pair<size_t, size_t>> &pairs) {
-  std::vector<std::pair<size_t, size_t>> sortedPairs = pairs;
-  if (!sortedPairs.empty()) {
-    std::map<size_t, std::vector<size_t>> adjList;
-    std::map<size_t, int> inDegree;
-    std::set<size_t> nodeSet;
-    for (const auto &pair : sortedPairs) {
-      size_t childId = pair.first;
-      size_t parentId = pair.second;
-      nodeSet.insert(childId);
-      nodeSet.insert(parentId);
-      adjList[parentId].push_back(childId);
-      inDegree[childId]++;
-      inDegree.try_emplace(parentId, 0);
-    }
-    std::queue<size_t> queue;
-    for (size_t nodeId : nodeSet) {
-      if (inDegree[nodeId] == 0) {
-        queue.push(nodeId);
-      }
-    }
-    std::vector<size_t> topoOrder;
-    topoOrder.reserve(nodeSet.size());
-    while (!queue.empty()) {
-      size_t u = queue.front();
-      queue.pop();
-      topoOrder.push_back(u);
-      if (adjList.count(u)) {
-        for (size_t v : adjList[u]) {
-          inDegree[v]--;
-          if (inDegree[v] == 0) {
-            queue.push(v);
-          }
-        }
-      }
-    }
-    if (topoOrder.size() != nodeSet.size()) {
-      throw std::runtime_error(
-          "Cycle detected in scope parent-child relationships for functionId " +
-          std::to_string(functionId));
-    }
-    std::map<size_t, size_t> topoIndex;
-    for (size_t i = 0; i < topoOrder.size(); ++i) {
-      topoIndex[topoOrder[i]] = i;
-    }
-    std::sort(sortedPairs.begin(), sortedPairs.end(),
-              [&topoIndex](const std::pair<size_t, size_t> &a,
-                           const std::pair<size_t, size_t> &b) {
-                size_t indexA = topoIndex.count(a.first)
-                                    ? topoIndex.at(a.first)
-                                    : std::numeric_limits<size_t>::max();
-                size_t indexB = topoIndex.count(b.first)
-                                    ? topoIndex.at(b.first)
-                                    : std::numeric_limits<size_t>::max();
-                if (indexA != indexB) {
-                  return indexA < indexB;
-                }
-                size_t parentIndexA = topoIndex.count(a.second)
-                                          ? topoIndex.at(a.second)
-                                          : std::numeric_limits<size_t>::max();
-                size_t parentIndexB = topoIndex.count(b.second)
-                                          ? topoIndex.at(b.second)
-                                          : std::numeric_limits<size_t>::max();
-                return parentIndexA < parentIndexB;
-              });
-  }
-  return sortedPairs;
-}
-
 std::vector<uint32_t>
 getUnitIdVector(const std::map<std::string, std::string> &modeOptions,
                 size_t totalUnits) {
@@ -185,8 +111,25 @@ void InstrumentationProfiler::initFunctionMetadata(
     }
     functionScopeIdNames[functionId][scopeId] = scopeName;
   }
-  functionScopeIdParentIds[functionId] =
-      sortScopeIdParentPairs(functionId, scopeIdParentPairs);
+  // Synthesize the calling contexts
+  std::map<size_t, size_t> scopeIdParentMap;
+  for (auto &pair : scopeIdParentPairs) {
+    auto scopeId = pair.first;
+    auto parentId = pair.second;
+    scopeIdParentMap[scopeId] = parentId;
+  }
+  for (auto &[scopeId, name] : functionScopeIdNames[functionId]) {
+    std::vector<Context> contexts = {name};
+    auto currentId = scopeId;
+    while (scopeIdParentMap.count(currentId) > 0) {
+      auto parentId = scopeIdParentMap[currentId];
+      auto parentName = functionScopeIdNames[functionId].at(parentId);
+      contexts.emplace_back(parentName);
+      currentId = parentId;
+    }
+    std::reverse(contexts.begin(), contexts.end());
+    functionScopeIdContexts[functionId][scopeId] = contexts;
+  }
   functionMetadata.emplace(functionId, InstrumentationMetadata(metadataPath));
 }
 
@@ -227,27 +170,6 @@ void InstrumentationProfiler::exitInstrumentedOp(uint64_t streamId,
     }
   }
 
-  // Init in-device context
-  // TODO: cache this map
-  std::map<size_t, size_t> deviceScopeIdMap;
-  for (auto *data : dataSet) {
-    auto kernelScopeId = dataScopeIdMap[data];
-    for (auto [deviceScopeId, scopeName] : functionScopeIdNames[functionId]) {
-      if (functionScopeIdParentIds.find(deviceScopeId) ==
-          functionScopeIdParentIds.end()) {
-        auto scopeId = data->addOp(kernelScopeId, scopeName);
-        deviceScopeIdMap[deviceScopeId] = scopeId;
-      }
-    }
-    for (auto [deviceScopeId, deviceParentId] :
-         functionScopeIdParentIds[functionId]) {
-      auto scopeName = functionScopeIdNames[functionId][deviceScopeId];
-      auto parentId = deviceScopeIdMap[deviceParentId];
-      auto scopeId = data->addOp(parentId, scopeName);
-      deviceScopeIdMap[deviceScopeId] = scopeId;
-    }
-  }
-
   // For now, only support the synchronization mode
   runtime->synchronizeStream(reinterpret_cast<void *>(streamId));
 
@@ -262,6 +184,8 @@ void InstrumentationProfiler::exitInstrumentedOp(uint64_t streamId,
   config.numBlocks = size / config.scratchMemSize;
   config.uidVec = getUnitIdVector(modeOptions, config.totalUnits);
 
+  auto &scopeIdContexts = functionScopeIdContexts[functionId];
+
   runtime->processHostBuffer(
       hostBuffer, HOST_BUFFER_SIZE, buffer, size, priorityStream,
       [&](uint8_t *bufferPtr, size_t size) {
@@ -273,13 +197,17 @@ void InstrumentationProfiler::exitInstrumentedOp(uint64_t streamId,
             auto &profileEvents = trace.profileEvents;
             for (auto &event : profileEvents) {
               // Process the profile events
-              auto scopeId = deviceScopeIdMap[event.first->scopeId];
-              auto duration = event.second->cycle - event.first->cycle;
+              auto &contexts = scopeIdContexts[event.first->scopeId];
+              // Normalize the duration
+              auto duration = static_cast<double>(event.second->cycle -
+                                                  event.first->cycle) /
+                              (config.totalUnits * config.numBlocks);
               for (auto *data : dataSet) {
+                auto scopeId = data->addOp(dataScopeIdMap[data], contexts);
                 data->addMetric(
                     scopeId,
                     std::make_shared<CycleMetric>(
-                        event.first->cycle, event.second->cycle,
+                        event.first->cycle, event.second->cycle, duration,
                         blockTrace.blockId, blockTrace.procId, device,
                         static_cast<uint64_t>(runtime->getDeviceType())));
               }

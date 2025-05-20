@@ -55,9 +55,10 @@ private:
   uint8_t *hostBuffer{nullptr};
   // functionId -> scopeId -> scopeName
   std::map<uint64_t, std::map<size_t, std::string>> functionScopeIdNames;
-  // functionId -> scopeId -> parentScopeId
-  std::map<uint64_t, std::vector<std::pair<size_t, size_t>>>
-      functionScopeIdParentIds;
+  // functionId -> scopeId -> contexts
+  std::map<uint64_t, std::map<size_t, std::vector<Context>>>
+      functionScopeIdContexts;
+  ;
   // functionId -> functionName
   std::map<uint64_t, std::string> functionNames;
   // functionId -> metadata
