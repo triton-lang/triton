@@ -42,10 +42,10 @@ def vpopc(x):
 
 
 @triton.jit
-def _sum_bitmatrix_memset(Ret, ret_size, BLOCK: tl.constexpr):
+def _sum_bitmatrix_memset(Ret, BLOCK: tl.constexpr):
     pid = tl.program_id(0)
     offs = pid * BLOCK + tl.arange(0, BLOCK)
-    tl.store(Ret + offs, 0, mask=offs < ret_size)
+    tl.store(Ret + offs, 0)
 
 
 @triton.jit
@@ -66,6 +66,14 @@ def _sum_bitmatrix_rows(B, shape_bm, stride_bm: tl.constexpr, stride_bn: tl.cons
     tl.store(Partials + pid_m * stride_pm + offs_n, ret, mask=mask)
 
 
+def clear_sums(n_cols, device, MEMSET_BLOCK=512):
+    cdiv = triton.cdiv
+    blocks = cdiv(n_cols, MEMSET_BLOCK)
+    out_ret = torch.empty((blocks * MEMSET_BLOCK,), device=device, dtype=torch.int32)
+    _sum_bitmatrix_memset[(blocks,)](out_ret, MEMSET_BLOCK)
+    return out_ret[:n_cols]
+
+
 def sum_bitmatrix_rows(x, out_ret, out_partials, partials_block_size=None):
     assert partials_block_size is not None
     cdiv = triton.cdiv
@@ -76,10 +84,6 @@ def sum_bitmatrix_rows(x, out_ret, out_partials, partials_block_size=None):
     assert out_ret.shape == (n_cols, )
     assert out_partials.shape == (cdiv(n_rows, PARTIALS_BLOCK_M), n_cols)
     # output tensors
-    _sum_bitmatrix_memset[(cdiv(out_ret.shape[0], MEMSET_BLOCK), )](
-        out_ret, out_ret.shape[0],  # outputs
-        BLOCK=512  # tunable parameter
-    )
     _sum_bitmatrix_rows[(cdiv(n_rows, PARTIALS_BLOCK_M), cdiv(n_cols, BLOCK_N))](
         x.data, x.data.shape[0], x.data.stride(0), x.data.stride(1),  # input
         out_ret,  # output [final reduction]
