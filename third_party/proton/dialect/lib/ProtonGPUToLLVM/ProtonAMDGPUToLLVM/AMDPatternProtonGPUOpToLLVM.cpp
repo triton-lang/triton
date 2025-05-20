@@ -65,28 +65,6 @@ struct CircularStoreOpConversion
     Value clock = op.getCounter();
     Value valsVec = packLLVector(loc, {tag, clock}, rewriter);
 
-    Value warpSize =
-        b.i32_val(mlir::triton::gpu::lookupThreadsPerWarp(rewriter));
-    Value curLaneId = b.urem(getThreadId(rewriter, loc), warpSize);
-    // TODO: document this assumption that thread zero is always the first
-    // active lane. We could a ballot op + llvm.cttz to get the "true" active
-    // first lane but that would probably add too much overhead in a perf
-    // critical section.
-    Value isWarpMaster = b.icmp_eq(curLaneId, b.i32_val(0));
-
-    Value isWriter;
-
-    auto granularity = segbaseOp.getGranularity();
-    if (selectedIds.empty()) {
-      if (granularity == proton::gpu::Granularity::WARP) {
-        isWriter = isWarpMaster;
-      } else {
-        llvm::report_fatal_error("unimplemented");
-      }
-    } else {
-      Value isCurWarpEnabled = b.icmp_ne(segmentBase, b.i32_val(-1));
-      isWriter = b.and_(isCurWarpEnabled, isWarpMaster);
-    }
     uint32_t AddrSpace =
         cast<LLVM::LLVMPointerType>(bufferPtrTy).getAddressSpace();
     if (AddrSpace == 1) {
@@ -94,12 +72,11 @@ struct CircularStoreOpConversion
       // stack mem (address space 1) compared to predicated ops to shared memory
       llvm::report_fatal_error("unimplemented");
     } else if (AddrSpace == 3) {
-      // Setting isWriter always true has bank conflicts but it is
-      // expected and stable. Compared to lots of instruction cache misses when
-      // pred==isWriter
+      // Setting predicate always true has bank conflicts but it is
+      // expected and stable.
       targetInfo.getTritonTargetInfo().storeDShared(rewriter, loc, vecPtr,
                                                     std::nullopt, valsVec,
-                                                    /*pred=*/b.true_val());
+                                                    /*predicate=*/b.true_val());
     } else {
       llvm::report_fatal_error("unsupported address space in circular store");
     }
