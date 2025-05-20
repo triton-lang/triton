@@ -17,11 +17,12 @@ using namespace mlir;
 namespace tt = mlir::triton;
 namespace ttg = mlir::triton::gpu;
 namespace ttng = mlir::triton::nvidia_gpu;
-namespace mlir {
-namespace triton {
-namespace gpu {
-
+namespace mlir::triton::gpu {
 namespace {
+
+//===----------------------------------------------------------------------===//
+// scheduleLoops
+//===----------------------------------------------------------------------===//
 
 bool hasGpuBarriers(scf::ForOp forOp) {
   WalkResult result = forOp.walk(
@@ -361,8 +362,7 @@ void scheduleLoop(scf::ForOp forOp,
   schedule.serialize(forOp);
 }
 
-} // namespace
-
+/// Schedule the loops based on the latencies assigned to the operations.
 void scheduleLoops(ModuleOp moduleOp) {
   DenseMap<Operation *, int> opLatency = deserializeLatencies(moduleOp);
   SmallVector<scf::ForOp> loops;
@@ -374,6 +374,12 @@ void scheduleLoops(ModuleOp moduleOp) {
   }
 }
 
+} // namespace
+
+//===----------------------------------------------------------------------===//
+// Pass Definition
+//===----------------------------------------------------------------------===//
+
 #define GEN_PASS_DEF_TRITONGPUSCHEDULELOOPS
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h.inc"
 
@@ -383,6 +389,4 @@ struct ScheduleLoops : public impl::TritonGPUScheduleLoopsBase<ScheduleLoops> {
   void runOnOperation() override { scheduleLoops(getOperation()); }
 };
 
-} // namespace gpu
-} // namespace triton
-} // namespace mlir
+} // namespace mlir::triton::gpu

@@ -18,11 +18,12 @@ namespace tt = mlir::triton;
 namespace ttg = mlir::triton::gpu;
 namespace ttng = mlir::triton::nvidia_gpu;
 
-namespace mlir {
-namespace triton {
-namespace gpu {
-
+namespace mlir::triton::gpu {
 namespace {
+
+//===----------------------------------------------------------------------===//
+// assignLatencies
+//===----------------------------------------------------------------------===//
 
 // Return true if the preconditions for pipelining the loop are met.
 bool preCondition(scf::ForOp forOp) {
@@ -312,12 +313,13 @@ private:
   }
 };
 
-} // namespace
-
-// Look for load ops that directly or indirectly feed into dot ops. Based
-// on the requested number of stages assign the latencies in a way that
-// cover all the stages with the sum of latencies in the chain from the first
-// load to the final dot op.
+// Discover operations that should become async and assign latencies to them
+// based on the numStages value provided by the user.
+//
+// Look for load ops that directly or indirectly feed into dot ops. Based on the
+// requested number of stages assign the latencies in a way that cover all the
+// stages with the sum of latencies in the chain from the first load to the
+// final dot op.
 void assignLatencies(ModuleOp moduleOp, int defaultNumStages) {
   SmallVector<scf::ForOp> loops;
   moduleOp->walk([&](scf::ForOp forOp) {
@@ -342,6 +344,12 @@ void assignLatencies(ModuleOp moduleOp, int defaultNumStages) {
   serializeLatencies(moduleOp, opLatency);
 }
 
+} // namespace
+
+//===----------------------------------------------------------------------===//
+// Pass Definition
+//===----------------------------------------------------------------------===//
+
 #define GEN_PASS_DEF_TRITONGPUASSIGNLATENCIES
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h.inc"
 
@@ -349,11 +357,7 @@ struct AssignLatencies
     : public impl::TritonGPUAssignLatenciesBase<AssignLatencies> {
   using TritonGPUAssignLatenciesBase::TritonGPUAssignLatenciesBase;
 
-  void runOnOperation() override {
-    assignLatencies(getOperation(), numStages);
-  }
+  void runOnOperation() override { assignLatencies(getOperation(), numStages); }
 };
 
-} // namespace gpu
-} // namespace triton
-} // namespace mlir
+} // namespace mlir::triton::gpu
