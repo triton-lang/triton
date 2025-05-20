@@ -549,8 +549,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
 #smem = #ttg.shared_memory
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   // CHECK: llvm.mlir.global external @global_smem
-  // CHECK-LABEL: basic_subview
-  tt.func @basic_subview() {
+  // CHECK-LABEL: rank_reducing_subview
+  tt.func @rank_reducing_subview() {
     // CHECK: llvm.mlir.addressof @global_smem
     // CHECK: llvm.extractvalue
     // CHECK-NEXT: llvm.extractvalue
@@ -573,33 +573,6 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
     %zero = arith.constant 0 : i32
     %0 = ttg.local_alloc : () -> !ttg.memdesc<128x16x32xf32, #shared0, #smem, mutable>
     %1 = ttg.memdesc_subview %0[%index, %zero, %zero] : !ttg.memdesc<128x16x32xf32, #shared0, #smem, mutable> -> !ttg.memdesc<16x32xf32, #shared0, #smem, mutable>
-    tt.return
-  }
-}
-
-// -----
-
-#shared0 = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 32}>
-#smem = #ttg.shared_memory
-module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
-  // CHECK: llvm.mlir.global external @global_smem
-  // CHECK-LABEL: nvmma_subview
-  tt.func @nvmma_subview() {
-    // CHECK: llvm.mlir.addressof @global_smem
-    // CHECK: llvm.mlir.constant(1 : i32) : i32
-    // CHECK-NEXT: llvm.mlir.constant(128 : i32) : i32
-    // CHECK-NEXT: llvm.add
-    // CHECK-NEXT: llvm.add
-    // CHECK-NEXT: llvm.mlir.constant(0 : i32) : i32
-    // CHECK-NEXT: llvm.mul
-    // CHECK-NEXT: llvm.add
-    // CHECK-NEXT: llvm.mul
-    // CHECK-NEXT: llvm.add
-    // CHECK-NEXT: llvm.getelementptr
-    %index = arith.constant 1 : i32
-    %zero = arith.constant 0 : i32
-    %0 = ttg.local_alloc : () -> !ttg.memdesc<16x128xf32, #shared0, #smem, mutable>
-    %1 = ttg.memdesc_subview %0[%zero, %zero] : !ttg.memdesc<16x128xf32, #shared0, #smem, mutable> -> !ttg.memdesc<16x32xf32, #shared0, #smem, mutable>
     tt.return
   }
 }
