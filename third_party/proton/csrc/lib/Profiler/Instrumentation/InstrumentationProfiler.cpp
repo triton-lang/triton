@@ -126,6 +126,7 @@ void InstrumentationProfiler::initFunctionMetadata(
       contexts.emplace_back(parentName);
       currentId = parentId;
     }
+    std::reverse(contexts.begin(), contexts.end());
     functionScopeIdContexts[functionId][scopeId] = contexts;
   }
   functionMetadata.emplace(functionId, InstrumentationMetadata(metadataPath));
@@ -195,13 +196,13 @@ void InstrumentationProfiler::exitInstrumentedOp(uint64_t streamId,
             auto &profileEvents = trace.profileEvents;
             for (auto &event : profileEvents) {
               // Process the profile events
-              auto &context = scopeIdContexts[event.first->scopeId];
+              auto &contexts = scopeIdContexts[event.first->scopeId];
               // Normalize the duration
               auto duration = static_cast<double>(event.second->cycle -
                                                   event.first->cycle) /
                               (config.totalUnits * config.numBlocks);
               for (auto *data : dataSet) {
-                auto scopeId = data->addOp(dataScopeIdMap[data], context);
+                auto scopeId = data->addOp(dataScopeIdMap[data], contexts);
                 data->addMetric(
                     scopeId,
                     std::make_shared<CycleMetric>(
