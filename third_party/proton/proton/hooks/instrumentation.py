@@ -82,13 +82,10 @@ def _interpret_mode(mode_obj: Union[str, mode.InstrumentationMode]) -> mode.Inst
 
     # Get option values or empty strings
     options = {
-        "metric_type": opts.get("metric_type", "cycle"),
-        "buffer_type": opts.get("buffer_type", "shared"),
-        "buffer_strategy": opts.get("buffer_strategy", "circular"),
-        "buffer_size": int(opts.get("buffer_size", "0")),
-        "granularity": opts.get("granularity", "warp"),
-        "sampling_strategy": opts.get("sampling_strategy", "none"),
-        "sampling_options": opts.get("sampling_options", ""),
+        "metric_type": opts.get("metric_type", "cycle"), "buffer_type": opts.get("buffer_type", "shared"),
+        "buffer_strategy": opts.get("buffer_strategy", "circular"), "buffer_size": int(opts.get("buffer_size", "0")),
+        "granularity": opts.get("granularity", "warp"), "sampling_strategy": opts.get("sampling_strategy", "none"),
+        "sampling_options": opts.get("sampling_options", ""), "optimization": opts.get("optimization", "none")
     }
 
     # Helper function to validate and map options to their enum values
