@@ -58,26 +58,6 @@ bool hasLatenciesAssigned(scf::ForOp forOp,
 
 CoarseSchedule scheduleKeyOps(scf::ForOp forOp,
                               const DenseMap<Operation *, int> &opLatency) {
-  if (llvm::any_of(forOp.getOps(), [&](Operation &op) {
-        return op.hasAttr(kLoopStageAttrName);
-      })) {
-    CoarseSchedule schedule;
-    if (failed(schedule.deSerialize(forOp)))
-      return CoarseSchedule(0);
-    DenseSet<int> uniqueStages;
-    for (auto [op, stage, cluster] : schedule.getOpsInOrder(forOp))
-      uniqueStages.insert(stage);
-    if (uniqueStages.size() <= 1) {
-      forOp.walk([&](Operation *op) {
-        op->removeAttr(kLoopStageAttrName);
-        op->removeAttr(kLoopClusterAttrName);
-        op->removeAttr(kScheduledMaxStageAttrName);
-      });
-      return CoarseSchedule(0);
-    }
-    return schedule;
-  }
-
   llvm::MapVector<Operation *, int> opToStage;
   // Find terminator for later reference
   auto terminator = cast<scf::YieldOp>(forOp.getBody()->getTerminator());
@@ -179,6 +159,26 @@ CoarseSchedule scheduleKeyOps(scf::ForOp forOp,
   }
 
   return schedule;
+}
+
+// Get an initial schedule for the loop. This is the base schedule from which
+// the rest of the pass will backward propagate dependencies.
+CoarseSchedule getInitialSchedule(scf::ForOp forOp,
+                                  const DenseMap<Operation *, int> &opLatency) {
+  if (!isSafeToPipeline(forOp, opLatency))
+    return CoarseSchedule(0);
+
+  // If the loop has assigned latencies, use them to determine the initial
+  // schedule.
+  if (hasLatenciesAssigned(forOp, opLatency))
+    return scheduleKeyOps(forOp, opLatency);
+
+  // If the loop has an existing schedule, use it as the base schedule.
+  CoarseSchedule schedule;
+  if (succeeded(schedule.deSerialize(forOp)))
+    return schedule;
+
+  return CoarseSchedule(0);
 }
 
 // Find dependencies with distance of 1. They will go to the next stage,
@@ -324,11 +324,8 @@ void scheduleRemainingToLastStage(scf::ForOp forOp, CoarseSchedule &schedule,
 
 void scheduleLoop(scf::ForOp forOp,
                   const DenseMap<Operation *, int> &opLatency) {
-  if (!hasLatenciesAssigned(forOp, opLatency) ||
-      !isSafeToPipeline(forOp, opLatency))
-    return;
   // Based on the latencies, schedule the key ops to the stages.
-  CoarseSchedule schedule = scheduleKeyOps(forOp, opLatency);
+  CoarseSchedule schedule = getInitialSchedule(forOp, opLatency);
   if (schedule.empty())
     return;
   LLVM_DEBUG({
