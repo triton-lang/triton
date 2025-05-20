@@ -150,7 +150,7 @@ static void scheduleUsers(scf::ForOp loop, WarpSchedule &schedule,
 // Given a partitioning scheme, determine an initial schedule by performing a
 // first-order partition assignment to the operations in the scheme and its
 // users and/or dependencies. This sets up the initial partitioning of the ops.
-static WarpSchedule getInitialSchedule(scf::ForOp loop) {
+static std::optional<WarpSchedule> getInitialSchedule(scf::ForOp loop) {
   WarpSchedule schedule;
 
   // Start by creating the default partition, a partition for for all loads, and
@@ -213,6 +213,10 @@ static WarpSchedule getInitialSchedule(scf::ForOp loop) {
         operandViews.push_back(defOp);
     }
   }
+
+  // If there are no loads or MMAs, don't warp specialize.
+  if (loadsAndAllocs.empty() && mmas.empty())
+    return std::nullopt;
 
   // Propagate defs of exp.
   for (auto expOp : loop.getOps<math::Exp2Op>()) {
@@ -489,8 +493,9 @@ void PartitionScheduling::runOnOperation() {
       loops.push_back(loop);
   });
   for (scf::ForOp loop : loops) {
-    WarpSchedule schedule = getInitialSchedule(loop);
-    propagatePartitions(loop, schedule);
-    schedule.serialize(loop);
+    if (std::optional<WarpSchedule> schedule = getInitialSchedule(loop)) {
+      propagatePartitions(loop, *schedule);
+      schedule->serialize(loop);
+    }
   }
 }
