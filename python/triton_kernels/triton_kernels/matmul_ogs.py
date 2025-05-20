@@ -490,7 +490,8 @@ def matmul_ogs(x, w, bias,
     if precision_config is None:
         precision_config = PrecisionConfig()
     if epilogue is None:
-        epilogue = Epilogue("dflt", None, tuple(), tuple(), tuple(), False)
+        epilogue_specs = EpilogueSpecs("dflt", None, tuple(), tuple())
+        epilogue = Epilogue(epilogue_specs, tuple(), tuple(), False)
     if w.ndim == 2:
         w = w.view(1, w.shape[-2], w.shape[-1])
     if x.ndim == 2:
