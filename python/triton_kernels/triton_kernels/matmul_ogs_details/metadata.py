@@ -14,9 +14,12 @@ class ExptData:
 
 
 @triton.jit
-def _matmul_metadata_memset(Hist, n_expts_tot, MDHist, MDTokStarts, MDTileStarts, MDTileInfo, md_n_tiles,
+def _matmul_metadata_memset(Hist, n_expts_tot, MDHist, MDTokStarts, MDTileStarts, MDTileSum,
                             BLOCK: tl.constexpr, TILE_DIM: tl.constexpr):
     pid = tl.program_id(0)
+
+    TileInfoOut = MDTileSum + pid * BLOCK + tl.arange(0, BLOCK)
+
     # if pid == 0 - initialize cumsums
     if pid == 0:
         x_tok = tl.zeros([BLOCK], dtype=MDTokStarts.dtype.element_ty)
@@ -26,19 +29,22 @@ def _matmul_metadata_memset(Hist, n_expts_tot, MDHist, MDTokStarts, MDTileStarts
         for i in range(0, n_expts_tot, BLOCK):
             offs_n = tl.arange(0, BLOCK) + i
             mask = offs_n < n_expts_tot
-            hist_tok = tl.load(Hist + offs_n, mask=mask)
+            hist_tok = tl.load(Hist + offs_n, mask=mask, other=0)
             hist_tile = tl.cdiv(hist_tok, TILE_DIM)
             tok_starts = tl.cumsum(hist_tok, 0) + x_tok
             x_tok += tl.sum(hist_tok, 0).to(MDTokStarts.dtype.element_ty)
             tile_starts = tl.cumsum(hist_tile, 0) + x_tile
             x_tile += tl.sum(hist_tile, 0).to(MDTileStarts.dtype.element_ty)
-            tl.store(MDHist + offs_n, hist_tok, mask=mask)
-            tl.store(MDTokStarts + 1 + offs_n, tok_starts, mask=mask)
-            tl.store(MDTileStarts + 1 + offs_n, tile_starts, mask=mask)
 
-    # initialize block data
-    offs = pid * BLOCK + tl.arange(0, BLOCK)
-    tl.store(MDTileInfo + offs, 0xffffffff, mask=offs < md_n_tiles)
+            tl.store(MDHist + offs_n, hist_tok)
+            tl.store(MDTokStarts + offs_n, tok_starts - hist_tok)
+            tl.store(MDTileStarts + offs_n, tile_starts - hist_tile)
+
+        tl.store(TileInfoOut, x_tile)
+
+    else:
+
+        tl.store(TileInfoOut, 0xffffffff)
 
 
 @triton.jit
@@ -69,15 +75,21 @@ def compute_metadata(routing_data, n_rows, block_m):
         grid_m = n_rows
     else:
         grid_m = n_expts_tot - 1 - ((n_expts_tot - n_rows - 1) // block_m)
-    metadata_size = 3 * n_expts_tot + 2 + grid_m
+
+    n_expts_pad = cdiv(n_expts_tot, MEMSET_BLOCK) * MEMSET_BLOCK
+    pids = cdiv(grid_m, MEMSET_BLOCK) + 1
+
+    metadata_size = 3 * n_expts_pad + MEMSET_BLOCK * pids
+
     metadata = torch.empty(metadata_size, dtype=torch.int32, device=device)
+
     md_hist = metadata[:n_expts_tot]
-    md_offs = metadata[n_expts_tot:n_expts_tot * 2]
-    md_offs_sum = metadata[3 * n_expts_tot + 2 - 1]
-    md_tile_starts = metadata[n_expts_tot * 2 + 1:n_expts_tot * 3 + 2]
-    md_tile_infos = metadata[n_expts_tot * 3 + 2:]
-    _matmul_metadata_memset[(cdiv(metadata_size, MEMSET_BLOCK), )](
-        routing_data.expt_hist, n_expts_tot, md_hist, md_offs, md_tile_starts, md_tile_infos, md_tile_infos.shape[0],
+    md_offs = metadata[n_expts_pad:][:n_expts_tot]
+    md_offs_sum = metadata[n_expts_pad*3]
+    md_tile_starts = metadata[n_expts_pad*2:][:n_expts_tot]
+    md_tile_infos = metadata[n_expts_pad*3 + MEMSET_BLOCK:][:grid_m]
+    _matmul_metadata_memset[(pids, )](
+        routing_data.expt_hist, n_expts_tot, md_hist, md_offs, md_tile_starts, md_offs_sum,
         BLOCK=MEMSET_BLOCK,  # optimization parameters
         TILE_DIM=block_m,  # constants
         num_warps=1
