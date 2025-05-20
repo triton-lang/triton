@@ -33,8 +33,6 @@ struct AutomaticWarpSpecialization
 
 void AutomaticWarpSpecialization::runOnOperation() {
   OpPassManager pm;
-  pm.addPass(createTritonGPUAssignLatencies());
-  pm.addPass(createTritonGPUScheduleLoops());
   pm.addPass(createTritonGPUPartitionScheduling());
   pm.addPass(createTritonGPULoadMMASpecialization({numStages}));
   pm.addPass(createTritonGPURewritePartitionDependencies());

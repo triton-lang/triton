@@ -165,7 +165,8 @@ CoarseSchedule getInitialSchedule(scf::ForOp forOp,
 
   // If the loop has an existing schedule, use it as the base schedule.
   CoarseSchedule schedule;
-  if (succeeded(schedule.deSerialize(forOp))) {
+  if (forOp->hasAttr(kWarpSpecializeAttrName) &&
+      succeeded(schedule.deSerialize(forOp))) {
     schedule.shrinkToFit();
     // If there is only one stage, then there is no need to pipeline.
     DenseSet<int> stages;
