@@ -60,7 +60,7 @@ def _matmul_metadata_compute(Hist, MDTileStarts, MDTileInfo, BLOCK: tl.constexpr
 def compute_metadata(routing_data, n_rows, block_m):
     if routing_data.expt_hist is None:
         return ExptData(None, None, None, None, None)
-    MEMSET_BLOCK = 512
+    MEMSET_BLOCK = 128
     HIST2_BLOCK_M = 512
     device = routing_data.expt_hist.device
     n_expts_tot = routing_data.n_expts_tot
@@ -72,7 +72,7 @@ def compute_metadata(routing_data, n_rows, block_m):
     metadata_size = 3 * n_expts_tot + 2 + grid_m
     metadata = torch.empty(metadata_size, dtype=torch.int32, device=device)
     md_hist = metadata[:n_expts_tot]
-    md_offs = metadata[n_expts_tot:n_expts_tot * 2 + 1]
+    md_offs = metadata[n_expts_tot:n_expts_tot * 2]
     md_offs_sum = metadata[3 * n_expts_tot + 2 - 1]
     md_tile_starts = metadata[n_expts_tot * 2 + 1:n_expts_tot * 3 + 2]
     md_tile_infos = metadata[n_expts_tot * 3 + 2:]
@@ -80,6 +80,7 @@ def compute_metadata(routing_data, n_rows, block_m):
         routing_data.expt_hist, n_expts_tot, md_hist, md_offs, md_tile_starts, md_tile_infos, md_tile_infos.shape[0],
         BLOCK=MEMSET_BLOCK,  # optimization parameters
         TILE_DIM=block_m,  # constants
+        num_warps=1
     )
     _matmul_metadata_compute[(n_expts_tot, )](
         routing_data.expt_hist, md_tile_starts, md_tile_infos,  # outputs
