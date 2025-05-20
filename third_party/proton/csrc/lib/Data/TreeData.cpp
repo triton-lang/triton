@@ -50,11 +50,10 @@ public:
   }
 
   size_t addNode(const std::vector<Context> &contexts, size_t parentId) {
-    size_t lastId = parentId;
     for (const auto &context : contexts) {
-      lastId = addNode(context, lastId);
+      parentId = addNode(context, parentId);
     }
-    return lastId;
+    return parentId;
   }
 
   size_t addNode(const Context &context, size_t parentId) {
@@ -142,25 +141,23 @@ size_t TreeData::addOp(size_t scopeId, const std::string &name) {
   return scopeId;
 }
 
-size_t TreeData::addOp(size_t scopeId,
-                       const std::vector<Context> &childContexts) {
+size_t TreeData::addOp(size_t scopeId, const std::vector<Context> &contexts) {
   std::unique_lock<std::shared_mutex> lock(mutex);
   auto scopeIdIt = scopeIdToContextId.find(scopeId);
   if (scopeIdIt == scopeIdToContextId.end()) {
     // Obtain the current context
-    std::vector<Context> contexts;
+    std::vector<Context> currentContexts;
     if (contextSource != nullptr)
-      contexts = contextSource->getContexts();
+      currentContexts = contextSource->getContexts();
     // Add an op under the current context
-    if (!contexts.empty())
-      std::merge(contexts.begin(), contexts.end(), childContexts.begin(),
-                 childContexts.end(), contexts.begin());
-    scopeIdToContextId[scopeId] = tree->addNode(contexts);
+    if (!currentContexts.empty())
+      std::merge(currentContexts.begin(), currentContexts.end(),
+                 contexts.begin(), contexts.end(), currentContexts.begin());
+    scopeIdToContextId[scopeId] = tree->addNode(currentContexts);
   } else {
     // Add a new context under it and update the context
     scopeId = Scope::getNewScopeId();
-    scopeIdToContextId[scopeId] =
-        tree->addNode(childContexts, scopeIdIt->second);
+    scopeIdToContextId[scopeId] = tree->addNode(contexts, scopeIdIt->second);
   }
   return scopeId;
 }
@@ -261,14 +258,13 @@ void TreeData::dumpHatchet(std::ostream &os) const {
       } else if (metricKind == MetricKind::Cycle) {
         auto cycleMetric = std::dynamic_pointer_cast<CycleMetric>(metric);
         uint64_t duration =
-            std::get<uint64_t>(cycleMetric->getValue(CycleMetric::Duration));
+            std::get<uint64_t>(cycleMetric->getValue(CycleMetric::NormalizedDuration));
         uint64_t deviceId =
             std::get<uint64_t>(cycleMetric->getValue(CycleMetric::DeviceId));
         uint64_t deviceType =
             std::get<uint64_t>(cycleMetric->getValue(CycleMetric::DeviceType));
-        (*jsonNode)["metrics"]
-                   [cycleMetric->getValueName(CycleMetric::Duration)] =
-                       duration;
+        (*jsonNode)["metrics"][cycleMetric->getValueName(
+            CycleMetric::NormalizedDuration)] = duration;
         (*jsonNode)["metrics"]
                    [cycleMetric->getValueName(CycleMetric::DeviceId)] =
                        std::to_string(deviceId);

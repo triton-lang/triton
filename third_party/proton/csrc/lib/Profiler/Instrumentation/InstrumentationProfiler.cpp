@@ -111,6 +111,7 @@ void InstrumentationProfiler::initFunctionMetadata(
     }
     functionScopeIdNames[functionId][scopeId] = scopeName;
   }
+  // Synthesize the calling contexts
   std::map<size_t, size_t> scopeIdParentMap;
   for (auto &pair : scopeIdParentPairs) {
     auto scopeId = pair.first;
