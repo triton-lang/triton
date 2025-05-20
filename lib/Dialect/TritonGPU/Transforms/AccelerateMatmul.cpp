@@ -14,6 +14,7 @@
 #include "triton/Dialect/TritonGPU/Transforms/DecomposeScaledBlocked.h"
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
+#include "triton/Dialect/TritonGPU/Transforms/WSUtility.h"
 #include "triton/Tools/LayoutUtils.h"
 #include "triton/Tools/StrUtil.h"
 #include "llvm/ADT/ArrayRef.h"
@@ -395,6 +396,7 @@ public:
                                       dotOp.getMaxNumImpreciseAcc());
     }
     // convert dot instruction
+    copyGroups(origDotOp, newDot);
     rewriter.replaceOpWithNewOp<ConvertLayoutOp>(origDotOp, origDotOp.getType(),
                                                  newDot->getResult(0));
     return success();
@@ -553,6 +555,8 @@ public:
 
     auto ld =
         rewriter.create<triton::nvidia_gpu::TMEMLoadOp>(loc, newAccType, acc);
+    copyGroups(dotOp, mma);
+    copyGroups(dotOp, ld);
     rewriter.replaceOpWithNewOp<ConvertLayoutOp>(dotOp, oldRetType, ld);
     return success();
   }
@@ -733,12 +737,14 @@ public:
     Value scaleB = rewriter.create<triton::nvidia_gpu::TMEMAllocOp>(
         loc, scaleBType, newScaleB);
     auto vTrue = rewriter.create<arith::ConstantIntOp>(dotOp.getLoc(), 1, 1);
-    rewriter.create<triton::nvidia_gpu::TCGen5MMAScaledOp>(
+    auto mma = rewriter.create<triton::nvidia_gpu::TCGen5MMAScaledOp>(
         loc, a, b, acc, scaleA, scaleB, dotOp.getAElemType(),
         dotOp.getBElemType(), /*useD=*/vTrue, /*pred=*/vTrue);
 
     auto ld =
         rewriter.create<triton::nvidia_gpu::TMEMLoadOp>(loc, newAccType, acc);
+    copyGroups(dotOp, ld);
+    copyGroups(dotOp, mma);
     rewriter.replaceOpWithNewOp<ConvertLayoutOp>(dotOp, oldRetType, ld);
     return success();
   }

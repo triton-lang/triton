@@ -58,6 +58,12 @@ def compute_num_warps(block_m, block_n):
     return max(block_m * block_n // 4096, 4)
 
 
+def get_shared_memory():
+    device = triton.runtime.driver.active.get_active_torch_device()
+    properties = triton.runtime.driver.active.utils.get_device_properties(device.index)
+    return properties["max_shared_mem"]
+
+
 def compute_num_stages(
     precision_config,
     microscaling_ctx,
@@ -74,7 +80,7 @@ def compute_num_stages(
     weight_size = 0.5 if rhs_dtype == torch.uint8 else rhs_dtype.itemsize
     stage_size = block_m * block_k * lhs_dtype.itemsize + block_k * block_n * weight_size
     device_props = torch.cuda.get_device_properties(0)
-    smem_capacity = device_props.shared_memory_per_block_optin
+    smem_capacity = get_shared_memory()
     has_native_mxfp = target_info.cuda_capability_geq(10, 0)
     if has_native_mxfp and microscaling_ctx is not None:
         if microscaling_ctx.weight_scale is not None:

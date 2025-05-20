@@ -36,6 +36,9 @@ def matmul_kernel_tma_persistent(
     EPILOGUE_SUBTILE: tl.constexpr,  #
     NUM_SMS: tl.constexpr,
 ):  #
+    mma_group = tl.group(name='mma', start=0, size=4)
+    load_group = tl.group(name='tma_load', start=4, size=4)
+
     dtype = tl.float8e4nv if FP8_OUTPUT else tl.float16
     start_pid = tl.program_id(axis=0)
     num_pid_m = tl.cdiv(M, BLOCK_SIZE_M)
@@ -70,9 +73,12 @@ def matmul_kernel_tma_persistent(
 
         offs_k = ki * BLOCK_SIZE_K
 
-        a = a_desc_ptr.load([offs_am, offs_k])
-        b = b_desc_ptr.load([offs_bn, offs_k])
-        accumulator = tl.dot(a, b.T, accumulator)
+        with load_group:
+            a = a_desc_ptr.load([offs_am, offs_k])
+            b = b_desc_ptr.load([offs_bn, offs_k])
+
+        with mma_group:
+            accumulator = tl.dot(a, b.T, accumulator)
 
         if ki == k_tiles - 1:
             tile_id_c, pid_m, pid_n = _compute_tile_and_pid(
@@ -91,14 +97,17 @@ def matmul_kernel_tma_persistent(
                 acc = tl.permute(acc, (0, 2, 1))
                 acc0, acc1 = tl.split(acc)
                 c0 = acc0.to(dtype)
-                c_desc_ptr.store([offs_am_c, offs_bn_c], c0)
+                with mma_group:
+                    c_desc_ptr.store([offs_am_c, offs_bn_c], c0)
                 c1 = acc1.to(dtype)
-                c_desc_ptr.store([offs_am_c, offs_bn_c + BLOCK_SIZE_N // 2], c1)
+                with mma_group:
+                    c_desc_ptr.store([offs_am_c, offs_bn_c + BLOCK_SIZE_N // 2], c1)
             else:
                 # accumulator = accumulator * 0
                 # accumulator = accumulator + 2
                 accumulator = accumulator.to(dtype)
-                c_desc_ptr.store([offs_am_c, offs_bn_c], accumulator)
+                with mma_group:
+                    c_desc_ptr.store([offs_am_c, offs_bn_c], accumulator)
 
             accumulator = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=tl.float32)
 
@@ -179,8 +188,8 @@ def matmul_kernel_tma_persistent_nested(
     ("ENABLE_WARP_SPECIALIZATION", "USE_TTG_WS", "NUM_WARPS"),
     [
         (True, False, 4),
+        (True, False, 8),
         # (False, 4),  FIXME: fails verification with auto-ws disabled for many configs
-        # See https://jirasw.nvidia.com/browse/OT-105
     ],
 )
 @pytest.mark.parametrize("NESTED", [True, False])
@@ -199,6 +208,7 @@ def test_matmul_tma_persistent_blackwell(
     ENABLE_WARP_SPECIALIZATION,
     USE_TTG_WS,
     NESTED,
+    IGNORE_MANUAL_GROUPS=True,
     cmd_args=None,
     bench=False,
 ):
@@ -217,10 +227,6 @@ def test_matmul_tma_persistent_blackwell(
     C = torch.empty((M, N), device=A.device, dtype=dtype)
 
     NUM_SMS = torch.cuda.get_device_properties("cuda").multi_processor_count
-    if not NESTED and triton.cdiv(M, BLOCK_SIZE_M) * triton.cdiv(N, BLOCK_SIZE_N) > NUM_SMS:
-        # https://jirasw.nvidia.com/browse/OT-149  
-        pytest.skip("non-nested hangs when GPU is oversubscribed")
-
 
     store_block_n = BLOCK_SIZE_N
     if EPILOGUE_SUBTILE:
@@ -270,6 +276,7 @@ def test_matmul_tma_persistent_blackwell(
                 EPILOGUE_SUBTILE=EPILOGUE_SUBTILE,
                 enable_warp_specialization=ENABLE_WARP_SPECIALIZATION,
                 use_ttg_ws=USE_TTG_WS,
+                ignore_manual_groups=IGNORE_MANUAL_GROUPS,
             )
             # print(out.asm["ttgir"], flush=True)
 
@@ -295,7 +302,8 @@ def test_matmul_tma_persistent_blackwell(
             smem_buffers.append(num_tmem_buf * 8) # TMEM full
             smem_buffers.append(num_tmem_buf * 8) # TMEM empty
         else:
-            # No epilogue group, just one "completion" barrier.
+            # No epilogue group, but still two "completion" barriers
+            smem_buffers.append(8)
             smem_buffers.append(8)
     else:
         smem_buffers = [
@@ -307,8 +315,7 @@ def test_matmul_tma_persistent_blackwell(
         ]
     shared_memory = utils.compute_shared_memory(smem_buffers)
 
-    if not USE_TTG_WS:
-        utils.init_check_shared_memory_hook(matmul_kernel_tma_persistent, shared_memory)
+    utils.init_check_shared_memory_hook(matmul_kernel_tma_persistent, shared_memory)
 
     try:
         run()
@@ -354,6 +361,7 @@ if __name__ == "__main__":
             args.auto_ws,
             args.ttg_ws,
             args.NESTED,
+            not args.manual_groups,
             args,
             bench,
         )

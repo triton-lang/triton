@@ -69,7 +69,6 @@ def test_experimental_matmul(
 ):
     utils.common_test_setup(ENABLE_WARP_SPECIALIZATION, NUM_WARPS)
 
-    # See https://jirasw.nvidia.com/browse/OT-103
     if BLOCK_K == 128 and NUM_STAGES > 4:
         pytest.skip(
             "FIXME: fails with unspecified launch failure for NUM_STAGES <= 2 when BLOCK_K=128"
@@ -82,7 +81,7 @@ def test_experimental_matmul(
 
     desc_a = TensorDescriptor(A, A.shape, A.stride(), [BLOCK_M, BLOCK_K])
     desc_b = TensorDescriptor(B, B.shape, B.stride(), [BLOCK_N, BLOCK_K])
-    
+
     # calculate shared memory usage of kernel
     if ENABLE_WARP_SPECIALIZATION:
         smem_buffers = [

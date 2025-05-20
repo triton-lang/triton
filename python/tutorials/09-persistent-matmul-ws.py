@@ -47,8 +47,7 @@ def _compute_pid(tile_id, num_pid_in_group, num_pid_m, GROUP_SIZE_M, NUM_SMS):
     return pid_m, pid_n
 
 
-def matmul_tma_persistent_get_configs(with_num_warps_8=True, pre_hook=None):
-    num_warps = [4, 8] if with_num_warps_8 else [4]
+def matmul_tma_persistent_get_configs(pre_hook=None):
     return [
         triton.Config(
             {
@@ -66,7 +65,7 @@ def matmul_tma_persistent_get_configs(with_num_warps_8=True, pre_hook=None):
         for BN in [128, 256]
         for BK in [64, 128]
         for s in ([3, 4])
-        for w in num_warps
+        for w in [4, 8]
         for SUBTILE in [True, False]
     ]
 
@@ -151,7 +150,7 @@ def matmul_kernel_tma_persistent(
 
 
 @triton.autotune(
-    configs=matmul_tma_persistent_get_configs(with_num_warps_8=False, pre_hook=matmul_tma_set_block_size_hook),
+    configs=matmul_tma_persistent_get_configs(pre_hook=matmul_tma_set_block_size_hook),
     key=["M", "N", "K"],
 )
 @triton.jit(launch_metadata=_matmul_launch_metadata)

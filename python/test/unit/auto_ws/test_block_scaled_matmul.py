@@ -101,7 +101,7 @@ def block_scaled_matmul_kernel(
         offs_k += BLOCK_K // ELEM_PER_BYTE
         offs_scale_k += rep_k
 
-        c_desc.store([offs_am, offs_bn], accumulator.to(output_dtype))
+    c_desc.store([offs_am, offs_bn], accumulator.to(output_dtype))
 
 
 def prepare_inputs_and_reference(M, N, K, block_scale_type, use_device_tma_desc, num_stages):

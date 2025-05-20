@@ -2670,8 +2670,8 @@ struct TritonGPUVerifyTensorLayoutInterface
 
       if (!TritonGPUDialect::isWarpSpecialized(
               op->getParentOfType<ModuleOp>())) {
-        // auto-ws-war: Disable layout check inside ttng.wg regions as they may 
-        // temporarily contain ops with layouts set for a different num_warps. 
+        // auto-ws-war: Disable layout check inside ttng.wg regions as they may
+        // temporarily contain ops with layouts set for a different num_warps.
         // Example: with num_warps = 8, a tma_load_group with num_warps = 4:
         // tma_load_group num_warps(4) {
         //     %val = tt.experimental_descriptor_load ... // uses layout for 8
@@ -3202,35 +3202,4 @@ bool triton::gpu::isInnermostContiguous(MemDescType type, unsigned numElems) {
   actual = actual.transposeOuts(revOut).flattenOuts();
 
   return actual.getNumConsecutiveInOut() >= numElems;
-}
-
-std::optional<int> triton::gpu::maybeLookupTotalNumWarps(Operation *op) {
-  if (isa<ModuleOp, FuncOp>(op)) {
-    if (auto attr = op->getAttrOfType<IntegerAttr>("ttg.total-num-warps"))
-      return attr.getInt();
-    if (auto attr = op->getAttrOfType<IntegerAttr>(AttrNumWarpsName))
-      return attr.getInt();
-  } else if (auto partitions =
-                 dyn_cast<WarpSpecializePartitionsOp>(op->getParentOp())) {
-    unsigned idx = op->getParentRegion()->getRegionNumber();
-    return partitions.getParentOp().getPartitionNumWarps()[idx];
-  } else if (auto wg =
-                 dyn_cast<triton::nvidia_gpu::WarpGroupOp>(op->getParentOp())) {
-    return wg.getNumWarps();
-  }
-  if (Operation *parent = op->getParentOp())
-    return maybeLookupTotalNumWarps(parent);
-  return {};
-}
-
-int triton::gpu::lookupTotalNumWarps(Operation *op) {
-  std::optional<int> numWarps = maybeLookupTotalNumWarps(op);
-  if (!numWarps) {
-    op->emitOpError(
-        "is not contained within a context that specifies the number of warps");
-    llvm::report_fatal_error("failed to lookup the number of warps, the "
-                             "surrounding module should contain a "
-                             "ttg.total-num-warps attribute");
-  }
-  return *numWarps;
 }

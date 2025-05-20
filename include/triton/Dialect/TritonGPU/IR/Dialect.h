@@ -60,11 +60,6 @@ std::optional<int> maybeLookupNumWarps(Operation *op);
 // Utility to find the number of threads per warp
 int lookupThreadsPerWarp(OpBuilder &rewriter);
 
-// Same behaviour as lookupNumWarps, except for module/func ops return
-// ttg.total-num-warps attribute rather than ttg.num-warps
-int lookupTotalNumWarps(Operation *op);
-std::optional<int> maybeLookupTotalNumWarps(Operation *op);
-
 template <typename Key, typename Value> class Cache {
 public:
   std::optional<Value> get(const Key &key) {

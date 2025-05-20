@@ -24,6 +24,7 @@
 
 include "mlir/IR/AttrTypeBase.td"
 include "NVWSDialect.td"
+include "mlir/IR/EnumAttr.td"
 
 class NVWS_Attr<string name, list<Trait> traits = [],
                      string baseCppClass = "::mlir::Attribute">
@@ -32,5 +33,23 @@ class NVWS_Attr<string name, list<Trait> traits = [],
 
 def NVWS_TypeArray : ArrayOfAttr<NVWS_Dialect, "TypeArray", "type_array", "Type"> {}
 def NVWS_IntArray : ArrayOfAttr<NVWS_Dialect, "IntArray", "int_array", "int"> {}
+
+def NVWS_TrackedAsyncOpAttr : I32EnumAttr<
+  "TrackedAsyncOp", "",
+  [
+    I32EnumAttrCase<"NONE", 0, "none">,
+    I32EnumAttrCase<"TMALDG", 1, "tmaldg">,
+    I32EnumAttrCase<"UMMA", 2, "umma">,
+    I32EnumAttrCase<"UTCCP", 3, "utccp">,
+    I32EnumAttrCase<"LDGSTS", 4, "ldgsts">,
+  ]> {
+  let cppNamespace = "::mlir::triton::nvws";
+  let genSpecializedAttr = 0;
+}
+
+def NVWS_TrackedAsyncOpEnum : EnumAttr<NVWS_Dialect, NVWS_TrackedAsyncOpAttr, "tracked_async_op"> {
+  let assemblyFormat = "`<` $value `>`";
+}
+
 
 #endif

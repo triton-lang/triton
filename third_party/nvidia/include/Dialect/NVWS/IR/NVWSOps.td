@@ -185,8 +185,9 @@ def NVWS_ArriveBarrierOp : NVWS_Op<"arrive_barrier", [DeclareOpInterfaceMethods<
     }];
 
     let hasVerifier = 1;
-    let arguments = (ins TTG_MemDescType:$alloc, I1Attr:$commit);
-    let assemblyFormat = "$alloc $commit attr-dict `:` type($alloc)";
+    let arguments = (ins TTG_MemDescType:$alloc, NVWS_TrackedAsyncOpEnum:$tracked_op);
+    let assemblyFormat = [{ $alloc `,` `tracked_async_op` `=` $tracked_op attr-dict `:` type($alloc)
+    }];
 }
 
 #endif

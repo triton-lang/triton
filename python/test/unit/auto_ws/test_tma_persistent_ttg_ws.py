@@ -129,7 +129,6 @@ def _test_experimental_matmul(
     utils.common_test_setup(ENABLE_WARP_SPECIALIZATION, NUM_WARPS)
     NUM_SMS = utils.get_num_sms()
 
-    # JIRA: https://jirasw.nvidia.com/browse/OT-98
     if (
         triton.cdiv(M, BLOCK_M) * triton.cdiv(N, BLOCK_N) > NUM_SMS
         and ENABLE_WARP_SPECIALIZATION
@@ -140,7 +139,6 @@ def _test_experimental_matmul(
     if torch.cuda.get_device_capability()[0] >= 10:
         pytest.skip("Blackwell is not functional with ttg.ws")
 
-    # JIRA: https://jirasw.nvidia.com/browse/OT-108
     # also see skipping verification in benchmarking below
     if not bench and not ENABLE_WARP_SPECIALIZATION and (M >= 4096 or N >= 4096):
         pytest.skip("FIXME: test fails verification without autows for large inputs")
@@ -149,7 +147,7 @@ def _test_experimental_matmul(
     A = utils.generate_input((M, K), dtype)
     B = utils.generate_input((N, K), dtype)
     C = torch.empty((M, N), dtype=dtype, device="cuda")
-    
+
     desc_a = TensorDescriptor(A, A.shape, A.stride(), [BLOCK_M, BLOCK_K])
     desc_b = TensorDescriptor(B, B.shape, B.stride(), [BLOCK_N, BLOCK_K])
     desc_c = TensorDescriptor(C, C.shape, C.stride(), [BLOCK_M, BLOCK_N])
@@ -239,7 +237,6 @@ def _test_experimental_matmul(
         pass
     assert shared_memory <= utils.get_shared_memory()
 
-    # See https://jirasw.nvidia.com/browse/OT-104
     if utils.is_sm10x() and (
         BLOCK_M,
         BLOCK_N,

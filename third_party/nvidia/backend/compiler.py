@@ -136,6 +136,7 @@ class CUDAOptions:
     wg_spec_override: Tuple[Tuple[str, int, int]] = field(default_factory=tuple)
     math_wg_pipe: bool = False
     force_membar: bool = False
+    ignore_manual_groups: bool = False
     supported_fp8_dtypes: Tuple[str] = ("fp8e5", "fp8e4b15")
     deprecated_fp8_dtypes: Tuple[str] = ()
     default_dot_input_precision: str = "tf32"
@@ -284,7 +285,8 @@ class CUDABackend(BaseBackend):
                 passes.ttgpuir.add_optimize_accumulator_init(pm)
                 passes.ttgpuir.add_hoist_tmem_alloc(pm)
                 passes.common.add_canonicalizer(pm)
-                passes.ttgpuir.add_analyze_warp_specialization(pm)
+                nvidia.passes.nvws.add_assign_groups(pm)
+                nvidia.passes.nvws.add_propagate_groups(pm)
                 passes.ttgpuir.add_split_warp_group_loops(pm, opt.num_stages, opt.mma_depth)
                 if opt.math_wg_pipe:
                     # some cleanup after wg parititioning and aref generation

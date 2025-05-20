@@ -9,6 +9,7 @@ namespace triton {
 
 namespace gpu {
 
+constexpr char ATTR_WS_MANUAL[] = "ttg.manual-nvws";
 constexpr char ATTR_WS_PREFIX[] = "nvws.";
 constexpr char ATTR_WS_TMALOAD[] = "nvws.tma_load";
 constexpr char ATTR_WS_MMA[] = "nvws.mma";
@@ -23,18 +24,28 @@ struct WSGroup {
   int numWarps;
 };
 
-void setGroups(mlir::Operation *op, std::string attrName,
-               std::set<std::string> groups);
+std::set<std::string> getGroups(Operation *op);
+std::set<std::string> getGroups(OpResult result);
+
+void setGroups(Operation *op, const std::set<std::string> &groups);
+void setGroups(OpResult result, const std::set<std::string> &groups);
+
+void addGroups(Operation *op, const std::set<std::string> &groups);
+void addGroups(OpResult result, const std::set<std::string> &groups);
+
+void copyGroups(Operation *from_op, Operation *to_op);
 
 class OpBuilderWithGroup : public OpBuilder {
 public:
-  explicit OpBuilderWithGroup(Operation *op, std::string wsGroup)
+  explicit OpBuilderWithGroup(Operation *op, std::string wsGroup = {})
       : OpBuilder(op), group(wsGroup) {}
 
   template <typename OpTy, typename... Args>
   OpTy create(Location location, Args &&...args) {
     OpTy op = OpBuilder::create<OpTy>(location, std::forward<Args>(args)...);
-    setGroups(op, ATTR_WSGROUPS, {group});
+    if (!group.empty()) {
+      setGroups(op, {group});
+    }
     return op;
   }
   using OpBuilder::create;
@@ -45,15 +56,18 @@ private:
 
 SmallVector<nvidia_gpu::WarpGroupOp> findWarpGroupOps(ModuleOp m);
 
-void setGroupAttribute(ModuleOp moduleOp, std::string name, WSGroup group);
-SymbolRefAttr mkGroup(ModuleOp moduleOp, std::string name, WSGroup group);
+void setGroupAttribute(ModuleOp moduleOp, const std::string &name,
+                       WSGroup group);
+void setGroupAttribute(ModuleOp moduleOp, const std::string &name,
+                       int startWarp, int numWarps);
+SymbolRefAttr mkGroup(ModuleOp moduleOp, const std::string &name,
+                      WSGroup group);
 
-std::vector<SymbolRefAttr> getGroupsAttr(mlir::Operation *op,
-                                         std::string attrName);
-std::set<std::string> getGroups(mlir::Operation *op, std::string attrName);
+std::string getGroup(nvidia_gpu::WarpGroupOp wgOp);
 WSGroup getGroupFromSymbolRefAttr(ModuleOp mod, SymbolRefAttr refAttr);
 
-bool isOpInGroup(mlir::Operation *op, std::string group);
+bool isOpInGroup(Operation *op, const std::string &group);
+bool isResultInGroup(Value value, const std::string &group);
 Value getLoopNumIter(Value lb, Value ub, Value step, Location loc,
                      OpBuilder &builder);
 Value getLoopNumIter(scf::ForOp forOp, OpBuilder &builder);

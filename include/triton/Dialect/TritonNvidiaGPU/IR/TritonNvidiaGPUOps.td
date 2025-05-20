@@ -23,6 +23,7 @@
 #define TRITONNVIDIAGPU_OPS
 
 include "triton/Dialect/TritonNvidiaGPU/IR/TritonNvidiaGPUDialect.td"
+include "triton/Dialect/TritonNvidiaGPU/IR/TritonNvidiaGPUAttrDefs.td"
 include "triton/Dialect/TritonNvidiaGPU/IR/TritonNvidiaGPUOpInterfaces.td"
 include "triton/Dialect/TritonNvidiaGPU/IR/TritonNvidiaGPUTypes.td"
 include "mlir/Dialect/Arith/IR/ArithBase.td"
@@ -437,8 +438,9 @@ def TTNG_TCGen5MMAOp : TTNG_Op<"tc_gen5_mma", [
     TTG_MemDescType:$d,
     I1:$useD,
     I1:$pred,
-    Variadic<AnyTypeOf<[TTG_MemDescType, TTNG_ArefType]>>:$barriers,
-    Variadic<AnyTypeOf<[I1, I32]>>:$barrier_preds,
+    Variadic<TTG_MemDescType>:$barriers,
+    Variadic<I1>:$barrier_preds,
+    OptionalAttr<UnitAttr>:$is_async,
     OptionalAttr<UnitAttr>:$two_ctas
   );
 
@@ -446,18 +448,15 @@ def TTNG_TCGen5MMAOp : TTNG_Op<"tc_gen5_mma", [
     OpBuilder<(ins
       "Value":$a, "Value":$b, "Value":$d, "Value":$useD, "Value":$pred,
       CArg<"bool", "false">:$two_ctas, CArg<"ValueRange", "{}">:$barriers,
-      CArg<"ValueRange", "{}">:$barrier_preds)>
+      CArg<"ValueRange", "{}">:$barrier_preds, CArg<"bool", "false">:$is_async)>
   ];
 
-  // auto-ws: use custom assembly, so that if barrier_preds is i1 it is not printed
-  //          to conform exisitng lit-tests
-  let hasCustomAssemblyFormat = 1;
-  // let assemblyFormat = [{
-  //   $a`,` $b`,` $d`,` $useD`,` $pred
-  //   `` custom<BarriersAndPreds>($barriers, $barrier_preds)
-  //   attr-dict `:` qualified(type($a)) `,` qualified(type($b)) `,`
-  //   qualified(type($d)) (`,` qualified(type($barriers))^)?
-  // }];
+  let assemblyFormat = [{
+    $a`,` $b`,` $d`,` $useD`,` $pred
+    `` custom<BarriersAndPreds>($barriers, $barrier_preds)
+    attr-dict `:` qualified(type($a)) `,` qualified(type($b)) `,`
+    qualified(type($d)) (`,` qualified(type($barriers))^)?
+  }];
 }
 
 def TTNG_TCGen5MMAScaledOp : TTNG_Op<"tc_gen5_mma_scaled", [
@@ -484,8 +483,9 @@ def TTNG_TCGen5MMAScaledOp : TTNG_Op<"tc_gen5_mma_scaled", [
     TT_ScaleDotElemTypeAttr:$b_type,
     I1:$useD,
     I1:$pred,
-    Variadic<AnyTypeOf<[TTG_MemDescType, TTNG_ArefType]>>:$barriers,
-    Variadic<AnyTypeOf<[I1,I32]>>:$barrier_preds
+    Variadic<TTG_MemDescType>:$barriers,
+    Variadic<I1>:$barrier_preds,
+    OptionalAttr<UnitAttr>:$is_async
   );
   let extraClassDeclaration = [{
     int64_t getBlockM();
@@ -503,20 +503,19 @@ def TTNG_TCGen5MMAScaledOp : TTNG_Op<"tc_gen5_mma_scaled", [
       "::mlir::triton::ScaleDotElemType":$b_type,
       "::mlir::Value":$useD, "::mlir::Value":$pred,
       CArg<"::mlir::ValueRange", "{}">:$barriers,
-      CArg<"::mlir::ValueRange", "{}">:$barrier_preds)>
+      CArg<"::mlir::ValueRange", "{}">:$barrier_preds,
+      CArg<"bool", "false">:$is_async
+      )>
   ];
 
-  // auto-ws: use custom assembly, so that if barrier_preds is i1 it is not printed
-  //          to conform exisitng lit-tests
-  let hasCustomAssemblyFormat = 1;
-  // let assemblyFormat = [{
-  //   $a `,` $b `,` $d `,` $a_scale `,` $b_scale `,` $useD`,` $pred
-  //   `lhs` `=` $a_type `rhs` `=` $b_type
-  //   `` custom<BarriersAndPreds>($barriers, $barrier_preds)
-  //   attr-dict `:` qualified(type($a)) `,` qualified(type($b)) `,`
-  //   qualified(type($d)) `,` qualified(type($a_scale)) `,`
-  //   qualified(type($b_scale)) (`,` qualified(type($barriers))^)?
-  // }];
+  let assemblyFormat = [{
+    $a `,` $b `,` $d `,` $a_scale `,` $b_scale `,` $useD`,` $pred
+    `lhs` `=` $a_type `rhs` `=` $b_type
+    `` custom<BarriersAndPreds>($barriers, $barrier_preds)
+    attr-dict `:` qualified(type($a)) `,` qualified(type($b)) `,`
+    qualified(type($d)) `,` qualified(type($a_scale)) `,`
+    qualified(type($b_scale)) (`,` qualified(type($barriers))^)?
+  }];
 }
 
 def TTNG_TMEMLoadOp : TTNG_Op<"tmem_load"> {
@@ -679,28 +678,20 @@ def TTNG_ArefCreateOp : TTNG_Op<"aref_create", [
   let assemblyFormat = [{$operands attr-dict `:` type($result)}];
 }
 
-def TTNG_ArefPutOp : TTNG_Op<"aref_put"> {
-  let summary = "put data into aref buffer";
-  let arguments = (ins TTNG_ArefType:$aref,
-                        Variadic<TT_IntLike>:$indexes );
-  let regions = (region SizedRegion<1>:$region);
-  let assemblyFormat = [{
-     $aref `[` $indexes `]` attr-dict `:` type($aref) `,` type($indexes) $region
-  }];
-}
-
 def TTNG_ArefGetEnterOp : TTNG_Op<"aref_get.enter"> {
   let summary = "Enter ArefGet region where the buffer can be used to read data";
   let description = [{ You have entered a "region" where you can freely read from the buffer)
                       These ArefGet "regions" can span multiple iterations. }];
 
   let arguments = (ins TTNG_ArefType:$aref,
-                       Variadic<TT_IntLike>:$indexes );
+                       I32:$index,
+                       Optional<I32>:$phase );
   let results = (outs Variadic<TTG_MemDescType>:$results);
   let assemblyFormat = [{
-    $aref `[` $indexes `]` attr-dict `:` type($aref) `,` type($indexes) `->` type($results)
+    $aref `[` $index `]` (`<` $phase^ `>`)?   attr-dict `:` type($aref) `,` type($index) `->` type($results)
   }];
 }
+
 
 def TTNG_ArefGetExitOp : TTNG_Op<"aref_get.exit"> {
   let summary = "Exit ArefGet region, where the buffer should no longer be used";
@@ -708,9 +699,11 @@ def TTNG_ArefGetExitOp : TTNG_Op<"aref_get.exit"> {
                       These ArefGet "regions" can span multiple iterations. }];
 
   let arguments = (ins TTNG_ArefType:$aref,
-                       Variadic<TT_IntLike>:$indexes );
+                   I32:$index,
+                   TTNG_ArefConsumerArrayAttr:$consumers
+                  );
   let assemblyFormat = [{
-    $aref `[` $indexes `]` attr-dict `:` type($aref) `,` type($indexes)
+    $aref `[` $index `]` `,` `consumers` `=` $consumers attr-dict `:` type($aref) `,` type($index)
  }];
 }
 
@@ -720,10 +713,11 @@ def TTNG_ArefPutEnterOp : TTNG_Op<"aref_put.enter"> {
                       These ArefPut "regions" can span multiple iterations. }];
 
   let arguments = (ins TTNG_ArefType:$aref,
-                       Variadic<TT_IntLike>:$indexes );
+                       I32:$index,
+                       Optional<I32>:$phase );
   let results = (outs Variadic<TTG_MemDescType>:$results);
   let assemblyFormat = [{
-    $aref `[` $indexes `]` attr-dict `:` type($aref) `,` type($indexes) `->` type($results)
+    $aref `[` $index `]` (`<` $phase^ `>`)? attr-dict `:` type($aref) `,` type($index) `->` type($results)
   }];
 }
 
@@ -733,17 +727,12 @@ def TTNG_ArefPutExitOp : TTNG_Op<"aref_put.exit"> {
                       These ArefPut "regions" can span multiple iterations. }];
 
   let arguments = (ins TTNG_ArefType:$aref,
-                       Variadic<TT_IntLike>:$indexes );
+                   I32:$index,
+                   TTNG_ArefProducerArrayAttr:$producers
+                   );
   let assemblyFormat = [{
-    $aref `[` $indexes `]` attr-dict `:` type($aref) `,` type($indexes)
+    $aref `[` $index `]` `,` `producers` `=` $producers attr-dict `:` type($aref) `,` type($index)
  }];
-}
-
-def TTNG_ArefReturnOp: TTNG_Op<"aref_return",
-                            [Pure, Terminator, ReturnLike]> {
-  let summary = "terminator for aref_put/get operator";
-  let arguments = (ins Variadic<AnyType>:$srcs);
-  let assemblyFormat = "attr-dict ($srcs^ `:` type($srcs))?";
 }
 
 #endif

@@ -1,3 +1,4 @@
+#include "mlir/IR/BuiltinOps.h"
 #include "mlir/Support/LogicalResult.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 #include "mlir/Transforms/Passes.h"
@@ -26,7 +27,7 @@ public:
   LogicalResult matchAndRewrite(TCGen5MMAOpTy op,
                                 PatternRewriter &rewriter) const override {
     // If the op doesn't have synchronous semantic skip the pattern.
-    if (!op.getBarriers().empty())
+    if (!op.getBarriers().empty() || op.getIsAsync().has_value())
       return failure();
     MLIRContext *ctx = op.getContext();
     Location loc = op.getLoc();

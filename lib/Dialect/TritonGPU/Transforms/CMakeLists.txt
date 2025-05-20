@@ -1,6 +1,5 @@
 add_triton_library(TritonGPUTransforms
   AccelerateMatmul.cpp
-  AnalyzeWarpSpecialization.cpp
   SplitWarpGroupLoops.cpp
   FMHAMathLoopPipeline.cpp
   Coalesce.cpp

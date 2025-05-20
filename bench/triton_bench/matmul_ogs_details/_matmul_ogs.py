@@ -59,7 +59,8 @@ def _matmul_ogs(
              TOKENS_PER_EXPT_FOR_ANNOTATION=None,
              UPCAST_INDICES: tl.constexpr = False,
              DISABLE_Y_TMA: tl.constexpr = True,
-             SWAP_XW: tl.constexpr = False):
+             SWAP_XW: tl.constexpr = False,
+             NVWS: tl.constexpr = False):
 
     Y = Out  # Y is passed for the purposes of annotation; replace it with Out
     is_microscaled_format: tl.constexpr = MxScale is not None

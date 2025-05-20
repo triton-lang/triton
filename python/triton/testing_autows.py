@@ -26,10 +26,9 @@ def common_test_setup(ENABLE_WARP_SPECIALIZATION=None, NUM_WARPS=None):
         is_sm10x()
         and ENABLE_WARP_SPECIALIZATION
         and NUM_WARPS is not None
-        and NUM_WARPS != 4
+        and NUM_WARPS not in [4, 8]
     ):
-        # FIXME: See https://jirasw.nvidia.com/browse/OT-90
-        pytest.skip("AutoWS only supports 4 warps on Blackwell")
+        pytest.skip("AutoWS only supports 4 or 8 warps on Blackwell")
     torch.manual_seed(42)
 
 
@@ -227,6 +226,7 @@ def run_bench(name, args, run):
 def common_bench_options(parser):
     parser.add_argument("--auto-ws", action="store_true")
     parser.add_argument("--ttg-ws", action="store_true")
+    parser.add_argument("--manual-groups", action="store_true")
     parser.add_argument("--prec", type=str, choices=["fp8", "fp16"], default="fp16")
     parser.add_argument("--wg-spec", type=str, choices=["tma_load_first", "mma_first", None], default=None)
     parser.add_argument("--NUM_WARPS", type=int, default=4)

@@ -29,6 +29,7 @@
 #include "triton/Dialect/Triton/IR/Types.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
+#include "triton/Dialect/TritonGPU/Transforms/WSUtility.h"
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/TMAUtilities.h"
 #include "triton/Tools/Sys/GetEnv.hpp"
 #include "llvm/Support/FileSystem.h"
@@ -120,7 +121,11 @@ public:
 
   template <typename OpTy, typename... Args> OpTy create(Args &&...args) {
     auto loc = getLastLoc();
-    return builder->create<OpTy>(loc, std::forward<Args>(args)...);
+    auto op = builder->create<OpTy>(loc, std::forward<Args>(args)...);
+    if (!groups.empty()) {
+      triton::gpu::setGroups(op, groups);
+    }
+    return op;
   }
 
   // Overload to create or fold a single result operation.
@@ -139,10 +144,15 @@ public:
     return builder->createOrFold<OpTy>(loc, std::forward<Args>(args)...);
   }
 
+  void enterGroup(const std::string &name) { groups.emplace(name); }
+
+  void exitGroup(const std::string &name) { groups.erase(name); }
+
 private:
   std::unique_ptr<OpBuilder> builder;
   std::unique_ptr<Location> lastLoc;
   bool lineInfoEnabled = !triton::tools::getBoolEnv("TRITON_DISABLE_LINE_INFO");
+  std::set<std::string> groups;
 };
 
 // Run the pass manager under a source manager diagnostic handler, which
@@ -724,6 +734,12 @@ void init_triton_ir(py::module &&m) {
       .def("walk",
            [](ModuleOp &self, const std::function<void(Operation *)> &fn) {
              self.walk(fn);
+           })
+      .def("create_group",
+           [](ModuleOp &self, const std::string &name, int start, int size) {
+             self->setAttr(triton::gpu::ATTR_WS_MANUAL,
+                           BoolAttr::get(self->getContext(), true));
+             mkGroup(self, name, triton::gpu::WSGroup{start, size});
            });
 
   m.def("make_attr", [](const std::vector<int> &values, MLIRContext &context) {
@@ -825,6 +841,12 @@ void init_triton_ir(py::module &&m) {
            [](TritonOpBuilder &self, OpBuilder::InsertPoint pt) {
              self.restoreInsertionPoint(pt);
            })
+      .def("enter_group",
+           [](TritonOpBuilder &self, const std::string &name) {
+             self.enterGroup(name);
+           })
+      .def("exit_group", [](TritonOpBuilder &self,
+                            const std::string &name) { self.exitGroup(name); })
       // Attr
       .def(
           "get_unit_attr",

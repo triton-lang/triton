@@ -10,6 +10,7 @@
 #include "triton/Dialect/TritonGPU/IR/LayoutUtility.h"
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
+#include "triton/Dialect/TritonGPU/Transforms/WSUtility.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "triton/Tools/LinearLayout.h"
 #include <memory>
@@ -134,8 +135,9 @@ public:
                          allocType.getMemorySpace());
     auto newAlloc = rewriter.create<LocalAllocOp>(allocOp.getLoc(), innerTy,
                                                   trans.getSrc());
-    rewriter.replaceOpWithNewOp<MemDescTransOp>(allocOp, newAlloc,
-                                                ArrayRef<int32_t>({1, 0}));
+    auto newTrans = rewriter.replaceOpWithNewOp<MemDescTransOp>(
+        allocOp, newAlloc, ArrayRef<int32_t>({1, 0}));
+    copyGroups(trans, newTrans);
     return success();
   }
 };

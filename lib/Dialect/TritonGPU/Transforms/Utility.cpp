@@ -2,7 +2,6 @@
 
 #include <fstream>
 
-#include "WSUtility.h"
 #include "mlir/Analysis/SliceAnalysis.h"
 #include "mlir/Dialect/LLVMIR/NVVMDialect.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
@@ -18,6 +17,7 @@
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/LinearLayoutConversions.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
+#include "triton/Dialect/TritonGPU/Transforms/WSUtility.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "llvm/ADT/SetOperations.h"
 #include "llvm/Support/Debug.h"

@@ -1,8 +1,8 @@
-#include "../lib/Dialect/TritonGPU/Transforms/WSUtility.h"
 #include "mlir/Conversion/LLVMCommon/Pattern.h"
 #include "triton/Conversion/TritonGPUToLLVM/PatternTritonGPUOpToLLVM.h"
 #include "triton/Conversion/TritonGPUToLLVM/TargetInfoBase.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
+#include "triton/Dialect/TritonGPU/Transforms/WSUtility.h"
 
 namespace {
 
@@ -29,11 +29,10 @@ struct MakeRangeOpConversion
     std::optional<int> warpGroupStart;
     if (!getWarpGroupStart(rewriter.getInsertionBlock())) {
       // If make_range is not in ttng.warp_group, use WAR to compute the correct
-      // index range (https://jirasw.nvidia.com/browse/OT-112)
-      // make_range needs to be placed in the warp-group where it is being used
-      // to ensure the index range is correct. Currently, this is not always
-      // done, so we assume it is used in the MMA group and use the respective
-      // starting warp.
+      // index range. make_range needs to be placed in the warp-group where it
+      // is being used to ensure the index range is correct. Currently, this is
+      // not always done, so we assume it is used in the MMA group and use the
+      // respective starting warp.
       auto mod = op->getParentOfType<ModuleOp>();
       auto use_ttg_ws_attr =
           mod->getAttrOfType<BoolAttr>(triton::gpu::AttrUseTtgWsName);

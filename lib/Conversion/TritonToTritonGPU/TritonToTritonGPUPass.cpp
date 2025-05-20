@@ -1,6 +1,5 @@
 #include "triton/Conversion/TritonToTritonGPU/TritonToTritonGPUPass.h"
 
-#include "../lib/Dialect/TritonGPU/Transforms/WSUtility.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
 #include "mlir/Dialect/UB/IR/UBOps.h"
@@ -11,6 +10,7 @@
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/TritonGPUConversion.h"
+#include "triton/Dialect/TritonGPU/Transforms/WSUtility.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "llvm/ADT/APSInt.h"
 #include <numeric>

@@ -1,4 +1,3 @@
-#include "WSUtility.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
 #include "mlir/Pass/Pass.h"
@@ -9,6 +8,7 @@
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
+#include "triton/Dialect/TritonGPU/Transforms/WSUtility.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "llvm/Support/raw_ostream.h"
 
@@ -426,8 +426,12 @@ void updateWarpGroupDotWaitOpForFMHA(
   // k is normalized loop index
   {
     assert(arefOps.size() == 2);
-    builder.create<triton::nvidia_gpu::ArefGetExitOp>(forOp.getLoc(),
-                                                      arefOps[0], normMathIdx);
+    builder.create<triton::nvidia_gpu::ArefGetExitOp>(
+        forOp.getLoc(), arefOps[0], normMathIdx,
+        ArrayAttr::get(
+            builder.getContext(),
+            nvidia_gpu::ArefConsumerAttr::get(
+                builder.getContext(), nvidia_gpu::ArefConsumer::WGMMA)));
   }
 
   // move the wait 0 to the end of the loop body so that the second gemm in the
@@ -447,7 +451,11 @@ void updateWarpGroupDotWaitOpForFMHA(
         builder.create<arith::SubIOp>(forOp.getLoc(), normMathIdx, one);
     assert(arefOps.size() == 2);
     builder.create<triton::nvidia_gpu::ArefGetExitOp>(
-        forOp.getLoc(), arefOps[1], minus.getResult());
+        forOp.getLoc(), arefOps[1], minus.getResult(),
+        ArrayAttr::get(
+            builder.getContext(),
+            nvidia_gpu::ArefConsumerAttr::get(
+                builder.getContext(), nvidia_gpu::ArefConsumer::WGMMA)));
   }
 
   // handle the dot op that peeled to before the loop. the normalized index
@@ -460,7 +468,11 @@ void updateWarpGroupDotWaitOpForFMHA(
     auto zero = builder.create<arith::ConstantIntOp>(forOp.getLoc(), 0, 32);
     assert(arefOps.size() == 2);
     builder.create<triton::nvidia_gpu::ArefGetExitOp>(
-        forOp.getLoc(), arefOps[0], zero.getResult());
+        forOp.getLoc(), arefOps[0], zero.getResult(),
+        ArrayAttr::get(
+            builder.getContext(),
+            nvidia_gpu::ArefConsumerAttr::get(
+                builder.getContext(), nvidia_gpu::ArefConsumer::WGMMA)));
   }
 }
 
@@ -554,8 +566,12 @@ Value appendSecondGemm(scf::ForOp forOp, OpBuilderWithGroup &builder,
   auto waitOp = getSingleUserOp(dotOp);
   builder.setInsertionPointAfter(waitOp);
   assert(arefOps.size() == 2);
-  builder.create<triton::nvidia_gpu::ArefGetExitOp>(forOp.getLoc(), arefOps[1],
-                                                    minus.getResult());
+  builder.create<triton::nvidia_gpu::ArefGetExitOp>(
+      forOp.getLoc(), arefOps[1], minus.getResult(),
+      ArrayAttr::get(
+          builder.getContext(),
+          nvidia_gpu::ArefConsumerAttr::get(builder.getContext(),
+                                            nvidia_gpu::ArefConsumer::WGMMA)));
   return postLoopNormIdx;
 }
 

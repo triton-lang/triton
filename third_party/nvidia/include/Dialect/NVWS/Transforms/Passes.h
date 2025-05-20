@@ -28,8 +28,9 @@
 
 namespace mlir {
 
+std::unique_ptr<Pass> createNVWSAssignGroupsPass();
+std::unique_ptr<Pass> createNVWSPropagateGroupsPass();
 std::unique_ptr<Pass> createNVWSLowerWarpGroupPass();
-
 std::unique_ptr<Pass> createNVWSLowerArefPass();
 
 /// Generate the code for registering passes.

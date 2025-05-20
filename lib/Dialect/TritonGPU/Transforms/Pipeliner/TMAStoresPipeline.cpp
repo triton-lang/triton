@@ -1,5 +1,6 @@
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/Schedule.h"
+#include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/TMAUtilities.h"
 
@@ -63,8 +64,27 @@ static void createTMAAsyncCopy(scf::ForOp forOp, const TMAStore &store,
   // Put wait before the local_store make the store truly async. We know
   // that we are the only user of the CopyLocalToGlobal.
   builder.create<ttng::TMAStoreWaitOp>(loc, 0);
+
+  auto isWs = triton::gpu::TritonGPUDialect::isWarpSpecialized(
+      forOp->getParentOfType<ModuleOp>());
+  // Ensure all threads arrive at this point to avoid race conditions between
+  // two TMA stores in Blackwell tests with sub-tiling enabled. Without this
+  // barrier, TMAStoreWaitOp might be executed by another warp that is
+  // slightly ahead of the warp issuing AsyncTMACopyLocalToGlobal. The barrier
+  // ensures that all warps proceed simultaneously after the data is copied.
+  if (isWs)
+    insertBarrier(builder, loc);
+
   builder.create<ttg::LocalStoreOp>(loc, store.src, alloc);
   builder.create<ttng::FenceAsyncSharedOp>(loc, false);
+
+  // Barrier required for test_tma_persistent_blackwell with subtiling.
+  // Manual insertion ensures correctness; membar analysis isn't run with AutoWS
+  // For SWP, syncthread must be added by membar here, because it's between STS
+  // shared fence and TMA issuing.
+  if (isWs)
+    insertBarrier(builder, loc);
+
   Value tmaPtr =
       builder.create<triton::nvidia_gpu::TensorDescToTMAPtrOp>(loc, store.desc);
   if (auto storeOp = dyn_cast<tt::DescriptorStoreOp>(store.op)) {

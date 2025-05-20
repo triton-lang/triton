@@ -35,6 +35,8 @@
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h.inc"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Types.h"
 
+#include "triton/Dialect/TritonNvidiaGPU/IR/OpsEnums.h.inc"
+
 #define GET_ATTRDEF_CLASSES
 #include "triton/Dialect/TritonNvidiaGPU/IR/TritonNvidiaGPUAttrDefs.h.inc"
 

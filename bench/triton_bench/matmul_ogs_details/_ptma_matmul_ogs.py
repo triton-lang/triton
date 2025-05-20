@@ -160,7 +160,8 @@ def _ptma_matmul_ogs(
              TOKENS_PER_EXPT_FOR_ANNOTATION=None,
              UPCAST_INDICES:tl.constexpr=False,
              DISABLE_Y_TMA: tl.constexpr=False,
-             SWAP_XW: tl.constexpr = False):
+             SWAP_XW: tl.constexpr = False,
+             NVWS: tl.constexpr = False):
     Y = Out  # Y is passed for the purposes of annotation; replace it with Out
 
     is_microscaled_format: tl.constexpr = MxScale is not None
@@ -279,7 +280,7 @@ def _ptma_matmul_ogs(
 
     # If true, do not share loop-carried variables between the prologue and the
     # epilogue to enable better pipelining with mmav5
-    INDEPENDENT_EPILOGUE: tl.constexpr = cuda_capability_geq(10, 0)
+    INDEPENDENT_EPILOGUE: tl.constexpr = False if NVWS else cuda_capability_geq(10, 0)
 
     # start negative; will be incremented at the top of the loop
     if INDEPENDENT_EPILOGUE:
@@ -293,9 +294,10 @@ def _ptma_matmul_ogs(
     # Enable warp specialization when all loads are TMA loads. Don't enable it
     # for mixed-precision yet.
     ENABLE_WS: tl.constexpr = True
-    WARP_SPECIALIZE: tl.constexpr = (USE_GATHER_TMA or X_USE_LOAD_TMA) and ENABLE_WS
+    WARP_SPECIALIZE: tl.constexpr = False if NVWS else (USE_GATHER_TMA or X_USE_LOAD_TMA) and ENABLE_WS
+    FLATTEN: tl.constexpr = not NVWS
 
-    for tile_id in tl.range(tl.program_id(0), num_tiles, NUM_SMS, flatten=True, disallow_acc_multi_buffer=DISALLOW_ACC_MULTI_BUFFER, warp_specialize=WARP_SPECIALIZE):
+    for tile_id in tl.range(tl.program_id(0), num_tiles, NUM_SMS, flatten=FLATTEN, disallow_acc_multi_buffer=DISALLOW_ACC_MULTI_BUFFER, warp_specialize=WARP_SPECIALIZE):
         expt_id, start_z, start_m, eM, off_m, off_n, pid_k = _load_tile_attrs(
             tile_id, num_tiles, grid_m, grid_n, padding_m,
             M, ExptData, ExptHist, ExptOffs,
@@ -379,8 +381,9 @@ def _ptma_matmul_ogs(
                     x_scales = tl.full((BLOCK_M, BLOCK_K // MX_PACK_DIVISOR), 127, dtype=tl.uint8)
                 if SWAP_XW:
                     if SWIZZLE_MX:
-                        MxPtrs = MxScale + expt_id.to(index_type) * stride_mx_e + offs_mx_outer.to(index_type)[:, None] * stride_mx_n + offs_mx_inner[None, :] + ki * (MX_SCALE_BLOCK_K // 4 * SPLIT_K) * stride_mx_k
-                        w_scales = _unswizzle_mx_block(tl.load(MxPtrs))
+                        w_scales = mx_desc.load([expt_id, off_n // 128, ki * (MX_SCALE_BLOCK_K // 4 * SPLIT_K), 0, 0])
+                        w_scales = w_scales.reshape((w_scales.shape[1], w_scales.shape[2] * 32 * 4 * 4))
+                        w_scales = _unswizzle_mx_block(w_scales)
                     else:
                         MxPtrs = MxScale + expt_id.to(index_type) * stride_mx_e + offs_mx_k.to(index_type)[None, :] * stride_mx_k + offs_w_n.to(index_type)[:, None] * stride_mx_n + ki * MX_SCALE_BLOCK_K * SPLIT_K * stride_mx_k
                         if EVEN_K:

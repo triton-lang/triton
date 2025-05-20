@@ -1,3 +1,4 @@
+import argparse
 from pathlib import Path
 import json
 import triton.profiler as proton
@@ -66,15 +67,29 @@ def quantize(w, dtype, dev, **opt):
                                                 actual_weight_scale_shape=weight_scale_shape)
 
 
+def run(x, xg, w1, w2, wg, b1, b2, bg, pcg, pcs, n_expts_act, n_expts_tot, EP, pc1, pc2, nvws):
+    if n_expts_tot > 1:
+        logits = matmul_ogs(xg, wg, bg, precision_config=pcg, nvws=nvws)
+        rdata, gather_indx, scatter_indx = routing(logits, n_expts_act, simulated_ep=EP)
+    else:
+        rdata, gather_indx, scatter_indx = None, None, None
+
+    out = matmul_ogs(x, w1, b1, rdata, gather_indx=gather_indx, precision_config=pc1, nvws=nvws)
+    out = triton_bench.swiglu.swiglu(out, 1.0, pcs)
+    return matmul_ogs(out, w2, b2, rdata, scatter_indx=scatter_indx, precision_config=pc2, nvws=nvws)
+
+
 def bench_mlp(batch, dim1, dim2, n_expts_tot, n_expts_act, x_dtype, w_dtype,
               # tensor / expert parallelism
-              TP=1, EP=1, name=""):
+              TP=1, EP=1, name="", nvws=True):
     assert n_expts_tot % EP == 0
     assert dim2 % TP == 0
     dev = "cuda"
 
+    torch.manual_seed(0)
     # input
     # weights
+    x = torch.randn((batch, dim1), device=dev)
     wg = torch.randn((dim1, n_expts_tot), device=dev)
     w1 = torch.randn((n_expts_tot // EP, dim1, dim2 // TP), device=dev)
     w2 = torch.randn((n_expts_tot // EP, dim2 // TP // 2, dim1), device=dev)
@@ -103,20 +118,23 @@ def bench_mlp(batch, dim1, dim2, n_expts_tot, n_expts_act, x_dtype, w_dtype,
     if x_dtype == torch.float8_e4m3fn and get_cdna_version() == 3:
         x_dtype = torch.float8_e4m3fnuz
 
-    x = torch.randn((batch, dim1), device=dev)
     xg = x.to(wg.dtype if n_expts_tot > 1 else x_dtype)
     x = x.to(x_dtype)
+
+    if nvws:
+        out = run(x, xg, w1, w2, wg, b1, b2, bg, pcg, pcs, n_expts_act, n_expts_tot, EP, pc1, pc2, nvws)
+        ref = run(x, xg, w1, w2, wg, b1, b2, bg, pcg, pcs, n_expts_act, n_expts_tot, EP, pc1, pc2, nvws=False)
+
+        torch.testing.assert_close(ref.to(torch.float32),
+                                   out.to(torch.float32),
+                                   atol=1e-2, rtol=1e-2)
+
     # run layer
     proton.start(str(fpath.with_suffix('')), hook="triton")
-    for i in range(100):
-        if n_expts_tot > 1:
-            logits = matmul_ogs(xg, wg, bg, precision_config=pcg)
-            rdata, gather_indx, scatter_indx = routing(logits, n_expts_act, simulated_ep=EP)
-        else:
-            rdata, gather_indx, scatter_indx = None, None, None
-        x = matmul_ogs(x, w1, b1, rdata, gather_indx=gather_indx, precision_config=pc1)
-        x = triton_bench.swiglu.swiglu(x, 1.0, pcs)
-        x = matmul_ogs(x, w2, b2, rdata, scatter_indx=scatter_indx, precision_config=pc2)
+
+    for _ in range(100):
+        run(x, xg, w1, w2, wg, b1, b2, bg, pcg, pcs, n_expts_act, n_expts_tot, EP, pc1, pc2, nvws)
+
     proton.finalize()
 
     # -- analyze --
@@ -150,13 +168,19 @@ def bench_mlp(batch, dim1, dim2, n_expts_tot, n_expts_act, x_dtype, w_dtype,
 
 if __name__ == "__main__":
     has_native_mx4 = torch.cuda.get_device_capability(0)[0] >= 10 or get_cdna_version() == 4
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--nvws", action="store_true")
+    args = parser.parse_args()
+
+    nvws = args.nvws
+
     if SPECS is None:
         print("Current GPU has no specs provided, utilization is N/A")
     if has_native_mx4:
-        bench_mlp(8192, 8192, 8192, 1, 1, "fp8", "fp8", TP=1, EP=1, name="dense")
-        bench_mlp(8192, 8192, 8192, 1, 1, "fp8", "mx4", TP=1, EP=1, name="dense")
-        bench_mlp(2048, 5120, 8192, 128, 4, "fp8", "fp8", TP=4, EP=1, name="llama4")
-        bench_mlp(2048, 5120, 8192, 128, 4, "fp8", "mx4", TP=4, EP=1, name="llama4")
+        bench_mlp(8192, 8192, 8192, 1, 1, "fp8", "fp8", TP=1, EP=1, name="dense", nvws=nvws)
+        bench_mlp(8192, 8192, 8192, 1, 1, "fp8", "mx4", TP=1, EP=1, name="dense", nvws=nvws)
+        bench_mlp(2048, 5120, 8192, 128, 4, "fp8", "fp8", TP=4, EP=1, name="llama4", nvws=nvws)
+        bench_mlp(2048, 5120, 8192, 128, 4, "fp8", "mx4", TP=4, EP=1, name="llama4", nvws=nvws)
     else:
         # bf16/fp16 x fp8 is skipped because matmul_ogs requires x and w has the
         # same type when not doing mxfp operation

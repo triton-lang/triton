@@ -499,8 +499,6 @@ def assert_close_verbose(actual, expected, rtol=2e-3, atol=2e-3, max_mismatches=
 @pytest.mark.parametrize("USE_TTG_WS", [False])
 def test_op(Z, H, N_CTX, HEAD_DIM, WG_SPEC, math_wg_pipe, causal, USE_TTG_WS, dtype=torch.float16):
     if torch.cuda.get_device_capability()[0] >= 10:
-        if causal == True:
-            pytest.skip("causal attention isn't supported on Blackwell yet")
         # math_wg_pipe=True isn't supported on Blackwell yet
         if math_wg_pipe == True:
             pytest.skip("math wg pipelining isn't supported on Blackwell")
@@ -509,9 +507,6 @@ def test_op(Z, H, N_CTX, HEAD_DIM, WG_SPEC, math_wg_pipe, causal, USE_TTG_WS, dt
         NUM_WARPS = 4
         MATH_WG_PIPE = False
     elif torch.cuda.get_device_capability()[0] >= 9:
-        # FIXME: math_wg_pipe=False hangs on Hopper
-        if math_wg_pipe == False:
-            pytest.skip("turning off math wg pipelining hangs on Hopper")
         MATH_WG_PIPE = math_wg_pipe
         NUM_WARPS = 8
     else:

@@ -142,4 +142,12 @@ mlir::LogicalResult createTMADesc(mlir::Value tmaPtr,
   return success();
 }
 
+void createTMALoad(DescriptorLoadOp op, OpBuilder &rewriter, Value barrierAlloc,
+                   Value alloc, Value pred);
+void createTMAGather(DescriptorGatherOp op, OpBuilder &rewriter, Value barrierAlloc,
+		     Value alloc, Value pred);
+void createBarrierExpectOp(Location loc, OpBuilder &rewriter,
+                           SmallVector<Operation *> const &ops,
+                           Value barrierAlloc);
+
 } // namespace mlir::triton::nvidia_gpu

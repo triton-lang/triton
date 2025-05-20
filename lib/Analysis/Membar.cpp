@@ -5,9 +5,9 @@
 
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/GPU/IR/GPUDialect.h"
+#include "mlir/Dialect/LLVMIR/NVVMDialect.h"
 #include "mlir/Dialect/Tensor/IR/Tensor.h"
 #include "mlir/Interfaces/ControlFlowInterfaces.h"
-#include "mlir/Dialect/LLVMIR/NVVMDialect.h"
 #include <deque>
 
 namespace mlir {
@@ -166,11 +166,7 @@ void MembarAnalysis::insertBarrier(Operation *op, OpBuilder *builder) {
 }
 
 bool MembarAnalysis::isBarrier(Operation *op) {
-  if (isa<gpu::BarrierOp>(op))
-    return true;
-  if (isa<NVVM::BarrierOp>(op))
-    return true;
-  return false;
+  return isa<gpu::BarrierOp, NVVM::BarrierOp>(op);
 }
 
 void MembarAnalysis::update(Operation *op, BlockInfo *blockInfo,

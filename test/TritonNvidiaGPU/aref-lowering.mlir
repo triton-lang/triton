@@ -1,336 +1,632 @@
 // RUN: triton-opt %s -split-input-file --triton-nvidia-aref-lowering | FileCheck %s
 
-#blocked = #ttg.blocked<{sizePerThread = [1, 128], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [0, 1]}>
-#blocked1 = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0]}>
-#shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 8}>
-#shared1 = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = true, elementBitWidth = 8}>
+#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [2, 2], order = [1, 0]}>
+#blockedA = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+#blockedB = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0]}>
+#shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16}>
+#mshared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
+#nvmma_128 = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16}>
 #smem = #ttg.shared_memory
-#tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, unpacked = true>
-module attributes {nvws.mma = {num_warps = 4 : i32, start_warp = 0 : i32}, nvws.tma_load = {num_warps = 4 : i32, start_warp = 4 : i32}, "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32, "ttg.warp-specialized" = true} {
-  tt.func public @matmul_kernel_tma_persistent(%arg0: !tt.ptr<f8E4M3FN> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<f8E4M3FN> {tt.divisibility = 16 : i32}, %arg2: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg3: i32 {tt.divisibility = 16 : i32}, %arg4: i32 {tt.divisibility = 16 : i32}, %arg5: i32 {tt.divisibility = 16 : i32}) attributes {noinline = false} {
-    %false = arith.constant false
-    %true = arith.constant true
-    %c148_i32 = arith.constant {groups = [@nvws.mma, @nvws.tma_load]} 148 : i32
-    %c1_i32 = arith.constant {groups = [@nvws.mma, @nvws.tma_load]} 1 : i32
-    %c-1_i32 = arith.constant -1 : i32
-    %c0_i32 = arith.constant {groups = [@nvws.mma, @nvws.tma_load]} 0 : i32
-    %c8_i32 = arith.constant 8 : i32
-    %c128_i32 = arith.constant {groups = [@nvws.mma, @nvws.tma_load]} 128 : i32
-    %c127_i32 = arith.constant {groups = [@nvws.mma, @nvws.tma_load]} 127 : i32
-    %cst = arith.constant {groups = [@nvws.mma]} dense<0.000000e+00> : tensor<128x128xf32, #blocked>
-    %0 = tt.get_program_id x {groups = [@nvws.mma, @nvws.tma_load]} : i32
-    %1 = arith.addi %arg3, %c127_i32 {groups = [@nvws.mma, @nvws.tma_load]} : i32
-    %2 = arith.divsi %1, %c128_i32 {groups = [@nvws.mma, @nvws.tma_load]} : i32
-    %3 = arith.addi %arg4, %c127_i32 {groups = [@nvws.mma, @nvws.tma_load]} : i32
-    %4 = arith.divsi %3, %c128_i32 {groups = [@nvws.mma, @nvws.tma_load]} : i32
-    %5 = arith.addi %arg5, %c127_i32 {groups = [@nvws.mma, @nvws.tma_load]} : i32
-    %6 = arith.divsi %5, %c128_i32 {groups = [@nvws.mma, @nvws.tma_load]} : i32
-    %7 = arith.muli %2, %4 {groups = [@nvws.mma, @nvws.tma_load]} : i32
-    %8 = arith.divsi %7, %c148_i32 {groups = [@nvws.mma, @nvws.tma_load]} : i32
-    %9 = arith.remsi %7, %c148_i32 {groups = [@nvws.mma, @nvws.tma_load]} : i32
-    %10 = arith.cmpi slt, %0, %9 {groups = [@nvws.mma, @nvws.tma_load]} : i32
-    %11 = scf.if %10 -> (i32) {
-      %25 = arith.addi %8, %c1_i32 {groups = [@nvws.mma, @nvws.tma_load]} : i32
-      scf.yield %25 : i32
-    } else {
-      scf.yield %8 : i32
-    } {groups = [@nvws.mma, @nvws.tma_load]}
-    %12 = arith.subi %0, %c148_i32 : i32
-    %13 = arith.muli %4, %c8_i32 : i32
-    %14 = arith.muli %6, %11 {groups = [@nvws.mma, @nvws.tma_load]} : i32
-    // CHECK-DAG: %[[ACC:.*]] = ttng.tmem_alloc
-    %15 = ttng.tmem_alloc %cst {groups = [@nvws.mma]} : (tensor<128x128xf32, #blocked>) -> !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>
-    %16 = ttg.local_alloc  {aref_buffer} : () -> !ttg.memdesc<3x128x128xf8E4M3FN, #shared, #smem, mutable>
-    %17 = ttg.local_alloc  {aref_buffer} : () -> !ttg.memdesc<3x128x128xf8E4M3FN, #shared, #smem, mutable>
-    %18 = ttng.aref_create %16, %17 : <[!ttg.memdesc<3x128x128xf8E4M3FN, #shared, #smem, mutable>, !ttg.memdesc<3x128x128xf8E4M3FN, #shared, #smem, mutable>]>
-    // CHECK: scf.for %
-    // CHECK: ttg.memdesc_subview
-    // CHECK: ttg.memdesc_subview
-    // CHECK: }
-    // CHECK-DAG: %[[FINAL_BARRIER:.*]] = ttg.local_alloc
-    // CHECK: ttng.init_barrier %[[FINAL_BARRIER]], 1
-    %19 = nvvm.read.ptx.sreg.tid.x : i32
-    %20 = arith.divsi %19, %c128_i32 : i32
-    nvvm.barrier0 {init_barrier_sync}
-    %21 = arith.cmpi eq, %20, %c1_i32 {groups = [@nvws.tma_load]} : i32
-    ttng.warp_group start_warp(4) num_warps(4) :  {{
-      // CHECK: scf.for
-      %25:5 = scf.for %arg6 = %c0_i32 to %14 step %c1_i32 iter_args(%arg7 = %c-1_i32, %arg8 = %12, %arg9 = %c0_i32, %arg10 = %c0_i32, %arg11 = %c0_i32) -> (i32, i32, i32, i32, i32)  : i32 {
-        %26 = arith.subi %6, %c1_i32 {groups = [@nvws.mma, @nvws.tma_load]} : i32
-        %27 = arith.cmpi eq, %arg7, %26 {groups = [@nvws.tma_load]} : i32
-        %28 = arith.addi %arg7, %c1_i32 {groups = [@nvws.tma_load]} : i32
-        %29 = arith.select %27, %c0_i32, %28 {groups = [@nvws.tma_load]} : i32
-        %30 = arith.cmpi eq, %29, %c0_i32 {groups = [@nvws.tma_load]} : i32
-        %31:3 = scf.if %30 -> (i32, i32, i32) {
-          %36 = arith.addi %arg8, %c148_i32 {groups = [@nvws.tma_load]} : i32
-          %37 = arith.divsi %36, %13 {groups = [@nvws.tma_load]} : i32
-          %38 = arith.muli %37, %c8_i32 {groups = [@nvws.tma_load]} : i32
-          %39 = arith.subi %2, %38 {groups = [@nvws.tma_load]} : i32
-          %40 = arith.minsi %39, %c8_i32 {groups = [@nvws.tma_load]} : i32
-          %41 = arith.remsi %36, %40 {groups = [@nvws.tma_load]} : i32
-          %42 = arith.addi %38, %41 {groups = [@nvws.tma_load]} : i32
-          %43 = arith.remsi %36, %13 {groups = [@nvws.tma_load]} : i32
-          %44 = arith.divsi %43, %40 {groups = [@nvws.tma_load]} : i32
-          %45 = arith.muli %42, %c128_i32 {groups = [@nvws.tma_load], tt.divisibility = dense<128> : tensor<1xi32>} : i32
-          %46 = arith.muli %44, %c128_i32 {groups = [@nvws.tma_load], tt.divisibility = dense<128> : tensor<1xi32>} : i32
-          scf.yield %36, %45, %46 : i32, i32, i32
-        } else {
-          scf.yield %arg8, %arg9, %arg10 : i32, i32, i32
-        } {groups = [@nvws.tma_load]}
-        %32 = arith.muli %29, %c128_i32 {groups = [@nvws.tma_load]} : i32
-        %c1_i64 = arith.constant {groups = [@nvws.epilogue, @nvws.tma_load]} 1 : i64
-        %00 = arith.extsi %arg5 {groups = [@nvws.tma_load]} : i32 to i64
-        %33 = tt.make_tensor_descriptor %arg0, [%arg3, %arg5], [%00, %c1_i64] {groups = [@nvws.tma_load]} : <f8E4M3FN>, <tensor<128x128xf8E4M3FN, #shared>>
-        %34 = tt.make_tensor_descriptor %arg1, [%arg4, %arg5], [%00, %c1_i64] {groups = [@nvws.tma_load]} : <f8E4M3FN>, <tensor<128x128xf8E4M3FN, #shared>>
-        ttng.aref_put %18[%arg11] {groups = [@nvws.tma_load]} : <[!ttg.memdesc<3x128x128xf8E4M3FN, #shared, #smem, mutable>, !ttg.memdesc<3x128x128xf8E4M3FN, #shared, #smem, mutable>]>, i32 {
-        ^bb0(%arg12: !ttg.memdesc<128x128xf8E4M3FN, #shared, #smem, mutable>, %arg13: !ttg.memdesc<128x128xf8E4M3FN, #shared, #smem, mutable>):
-          %36 = tt.descriptor_load %33[%31#1, %32] {groups = [@nvws.tma_load]} : !tt.tensordesc<tensor<128x128xf8E4M3FN, #shared>> -> tensor<128x128xf8E4M3FN, #blocked>
-          ttg.local_store %36, %arg12 {groups = [@nvws.tma_load]} : tensor<128x128xf8E4M3FN, #blocked> -> !ttg.memdesc<128x128xf8E4M3FN, #shared, #smem, mutable>
-          %37 = tt.descriptor_load %34[%31#2, %32] {groups = [@nvws.tma_load]} : !tt.tensordesc<tensor<128x128xf8E4M3FN, #shared>> -> tensor<128x128xf8E4M3FN, #blocked>
-          ttg.local_store %37, %arg13 {groups = [@nvws.tma_load]} : tensor<128x128xf8E4M3FN, #blocked> -> !ttg.memdesc<128x128xf8E4M3FN, #shared, #smem, mutable>
-          ttng.aref_return
+module attributes {
+    "ttg.num-ctas"  = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32,
+    ttg.target = "cuda:100", "ttg.warp-specialized" = true
+  } {
+  tt.func public @aref_put_tmaldg_get_lds(
+    %desc0: !tt.tensordesc<tensor<128x64xf16, #shared>>,
+    %arg0: !tt.tensordesc<tensor<1x128xf16, #nvmma_128>>,
+    %arg1: tensor<32xi32, #blockedA>,
+    %arg2: i32,
+    %ptr: tensor<128x64x!tt.ptr<f16>, #blocked>,
+    %K : i32
+  ) attributes {noinline = false} {
+    // CHECK-DAG: %[[INIT:.*]] = arith.constant 0
+    // CHECK-DAG: %[[C3:.*]] = arith.constant 3
+    // CHECK-DAG: %[[C1:.*]] = arith.constant 1
+    %c0 = arith.constant 0 : i32
+    %c1 = arith.constant 1 : i32
+    %c4 = arith.constant 4 : i32
+    %c16 = arith.constant 16 : i32
+    %x = tt.get_program_id x : i32
+
+    // CHECK-DAG: %[[AREF_BUF:.*]] = ttg.local_alloc : () ->   !ttg.memdesc<3x128x64xf16, #shared, #smem, mutable>
+    %arefBuf = ttg.local_alloc : () ->   !ttg.memdesc<3x128x64xf16, #shared, #smem, mutable>
+    // CHECK-DAG: %[[EMPTY_MBAR_ALLOC:.*]] = ttg.local_alloc {aref_empty_mbarriers}
+    // CHECK-DAG: %[[FULL_MBAR_ALLOC:.*]] = ttg.local_alloc {aref_full_mbarriers}
+    %aref = ttng.aref_create %arefBuf : <[!ttg.memdesc<3x128x64xf16, #shared, #smem, mutable>]>
+
+
+    ttng.warp_group start_warp(0) num_warps(1) : {{
+
+        // CHECK: %[[RET:.*]]:2 = scf.for %[[LB:.*]] to %[[UB:.*]] step %[[STEP:.*]] iter_args(%[[AREF_IDX:.*]] = {{.*}}, %[[PHASE:.*]] = %[[INIT]])
+        %idx = scf.for %i = %c0 to %K step %c4 iter_args(%arefIdx = %c0) -> i32 : i32 {
+          %y = arith.muli %i, %c16 : i32
+          // CHECK-DAG: %[[AREF_ENTER_MBAR_IDX:.*]] = arith.remsi %[[AREF_IDX]], %[[C3]]
+          // CHECK: %[[EMPTY_MBAR:.*]] = ttg.memdesc_subview %[[EMPTY_MBAR_ALLOC]][%[[AREF_ENTER_MBAR_IDX]]]
+
+          // CHECK-DAG: %[[PHASE_DIV:.*]] = arith.divsi %[[PHASE]], %[[C3]] {put_phase}
+          // CHECK: %[[PHASE_MOD:.*]] = arith.andi %[[PHASE_DIV]], %[[C1]] {put_phase}
+          // CHECK: %[[PUT_PHASE:.*]] = arith.xori %[[PHASE_MOD]], %[[C1]] {put_phase}
+          // CHECK: ttng.wait_barrier %[[EMPTY_MBAR]], %[[PUT_PHASE]]
+
+          // CHECK-DAG: %[[AREF_SUBVIEW_IDX:.*]] = arith.remsi %[[AREF_IDX]], %[[C3]] {put_view}
+          // CHECK: %[[SMEM_VIEW:.*]] = ttg.memdesc_subview %[[AREF_BUF]][%[[AREF_SUBVIEW_IDX]], {{.*}}, {{.*}}]
+
+          %buf = ttng.aref_put.enter %aref[%arefIdx] : <[!ttg.memdesc<3x128x64xf16, #shared, #smem, mutable>]>, i32 -> !ttg.memdesc<128x64xf16, #shared, #smem, mutable>
+
+          // CHECK-DAG: %[[AREF_PUT_MBAR:.*]] = arith.remsi %[[AREF_IDX]], %[[C3]] {full_mbar}
+          // CHECK: %[[FULL_MBAR:.*]] = ttg.memdesc_subview %[[FULL_MBAR_ALLOC]][%[[AREF_PUT_MBAR]]]
+
+          // CHECK: ttng.barrier_expect %[[FULL_MBAR]], 16384
+          // CHECK: ttng.async_tma_copy_global_to_local {{.*}} %[[SMEM_VIEW]], %[[FULL_MBAR]]
+          %a = tt.descriptor_load %desc0[%x, %y] : !tt.tensordesc<tensor<128x64xf16, #shared>> -> tensor<128x64xf16, #blocked>
+          ttg.local_store %a, %buf : tensor<128x64xf16, #blocked> -> !ttg.memdesc<128x64xf16, #shared, #smem, mutable>
+          ttng.aref_put.exit %aref[%arefIdx], producers = [#ttng.aref_producer<tmaldg>] : <[!ttg.memdesc<3x128x64xf16, #shared, #smem, mutable>]>, i32
+
+          %arefIdx1 = arith.addi %arefIdx, %c1 : i32
+          // CHECK-DAG: %[[AREF_PHASE:.*]] = arith.addi %[[PHASE]], %[[C1]] {next_phase}
+          // CHECK: scf.yield {{.*}}, %[[AREF_PHASE]] : i32
+          scf.yield %arefIdx1 : i32
         }
-        %35 = arith.addi %arg11, %c1_i32 {groups = [@nvws.tma_load]} : i32
-        scf.yield {groups = [@nvws.tma_load]} %29, %31#0, %31#1, %31#2, %35 : i32, i32, i32, i32, i32
-      } {groups = [@nvws.tma_load]}
       ttng.warp_group_return
-    } {barId = 1 : i32, groups = [@nvws.tma_load]}}
-    %22 = arith.cmpi sge, %20, %c0_i32 {groups = [@nvws.mma]} : i32
-    %23 = arith.cmpi slt, %20, %c1_i32 {groups = [@nvws.mma]} : i32
-    %24 = arith.andi %22, %23 {groups = [@nvws.mma]} : i1
+    } {barId = 0 : i32}}
+
+
     ttng.warp_group start_warp(4) num_warps(4) : {{
-      // CHECK: scf.for {{.*}} iter_args(%arg{{[1-9]+}} = %{{.*}}, %arg{{[1-9]+}} = %{{.*}}, %arg{{[1-9]+}} = %{{.*}}, %[[TMA_PHASE:.*]] = %c0_i32, %[[MMA_COMPLETION_PHASE:.*]] = %c0_i32)
-      %25:3 = scf.for %arg6 = %c0_i32 to %14 step %c1_i32 iter_args(%arg7 = %c-1_i32, %arg8 = %false, %arg9 = %c0_i32) -> (i32, i1, i32)  : i32 {
-        %26:2 = ttng.aref_get.enter %18[%arg9] {groups = [@nvws.mma]} : <[!ttg.memdesc<3x128x128xf8E4M3FN, #shared, #smem, mutable>, !ttg.memdesc<3x128x128xf8E4M3FN, #shared, #smem, mutable>]>, i32 -> !ttg.memdesc<128x128xf8E4M3FN, #shared, #smem, mutable>, !ttg.memdesc<128x128xf8E4M3FN, #shared, #smem, mutable>
-        %27 = ttg.memdesc_trans %26#1 {groups = [@nvws.mma], order = array<i32: 1, 0>} : !ttg.memdesc<128x128xf8E4M3FN, #shared, #smem, mutable> -> !ttg.memdesc<128x128xf8E4M3FN, #shared1, #smem, mutable>
-        %28 = arith.subi %6, %c1_i32 {groups = [@nvws.mma, @nvws.tma_load]} : i32
-        // CHECK: %[[TMA_BARRIER:.*]] = ttg.memdesc_subview
-        // CHECK: ttng.wait_barrier %[[TMA_BARRIER]], %[[TMA_PHASE]]
-        // CHECK-DAG: %[[A:.*]] = ttg.memdesc_subview
-        // CHECK-DAG: %[[B:.*]] = ttg.memdesc_subview
-        // CHECK-DAG: %[[B_TRANS:.*]] = ttg.memdesc_trans %[[B]]
-        // CHECK-DAG: %[[UPDATED_TMA_PHASE:.*]] = arith.xori %[[TMA_PHASE]], %c1_i32 : i32
-        // CHECK-DAG: %[[NEXT_TMA_PHASE:.*]] = arith.select %{{[1-9]+}}, %[[UPDATED_TMA_PHASE]], %[[TMA_PHASE]] : i32
-        // CHECK-DAG: %[[BARRIER:.*]] = ttg.memdesc_subview
-        // CHECK: tc_gen5_mma %[[A]], %[[B_TRANS]], %[[ACC]], {{.*}}, %true, %[[BARRIER]]
-        ttng.tc_gen5_mma %26#0, %27, %15, %arg8, %true, %18[%arg9] {groups = [@nvws.mma]} : !ttg.memdesc<128x128xf8E4M3FN, #shared, #smem, mutable>, !ttg.memdesc<128x128xf8E4M3FN, #shared1, #smem, mutable>, !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>, !ttng.aref<[!ttg.memdesc<3x128x128xf8E4M3FN, #shared, #smem, mutable>, !ttg.memdesc<3x128x128xf8E4M3FN, #shared, #smem, mutable>]>, i32
-        %29 = arith.cmpi eq, %arg7, %28 {groups = [@nvws.mma]} : i32
-        %30 = arith.addi %arg7, %c1_i32 {groups = [@nvws.mma]} : i32
-        %31 = arith.select %29, %c0_i32, %30 {groups = [@nvws.mma]} : i32
-        %32 = arith.cmpi eq, %31, %28 {groups = [@nvws.mma]} : i32
-        %33 = arith.cmpi ne, %31, %28 {groups = [@nvws.mma]} : i32
-	      // CHECK: %[[NEXT_PHASE:.*]] = scf.if
-        scf.if %32 {
-          %35 = arith.addi %arg6, %c1_i32 : i32
-          %36 = arith.divsi %35, %6 : i32
-          %37 = arith.muli %36, %c148_i32 : i32
-          %38 = arith.addi %12, %37 : i32
-          %39 = arith.divsi %38, %13 : i32
-          %40 = arith.muli %39, %c8_i32 : i32
-          %41 = arith.subi %2, %40 : i32
-          %42 = arith.minsi %41, %c8_i32 : i32
-          %43 = arith.remsi %38, %42 : i32
-          %44 = arith.addi %40, %43 : i32
-          %45 = arith.remsi %38, %13 : i32
-          %46 = arith.divsi %45, %42 : i32
-          %47 = arith.muli %44, %c128_i32 {tt.divisibility = dense<128> : tensor<1xi32>} : i32
-          %48 = arith.muli %46, %c128_i32 {tt.divisibility = dense<128> : tensor<1xi32>} : i32
-          // CHECK: nvws.arrive_barrier %[[FINAL_BARRIER]] true
-          // CHECK: ttng.wait_barrier %[[FINAL_BARRIER]], %[[MMA_COMPLETION_PHASE]]
-          // CHECK-DAG: %[[UPDATED_PHASE:.*]] = arith.xori %[[MMA_COMPLETION_PHASE]]
-          // CHECK: ttng.tmem_load
-          %49 = ttng.tmem_load %15 {groups = [@nvws.mma]} : !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable> -> tensor<128x128xf32, #blocked>
-          %50 = tt.fp_to_fp %49, rounding = rtne : tensor<128x128xf32, #blocked> -> tensor<128x128xf8E4M3FN, #blocked>
-          %51 = ttg.convert_layout %50 : tensor<128x128xf8E4M3FN, #blocked> -> tensor<128x128xf8E4M3FN, #blocked1>
-          %52 = tt.reinterpret_tensor_descriptor %arg2 : !tt.ptr<f32> to !tt.tensordesc<tensor<128x128xf8E4M3FN, #shared>>
-          tt.descriptor_store %52[%47, %48], %51 {groups = [@nvws.mma]} : !tt.tensordesc<tensor<128x128xf8E4M3FN, #shared>>, tensor<128x128xf8E4M3FN, #blocked1>
-  	    // CHECK: scf.yield %[[UPDATED_PHASE]]
-        } {groups = [@nvws.mma]}
-        // CHECK: } else {
-        // CHECK: scf.yield %[[MMA_COMPLETION_PHASE]]
-        // CHECK: }
-        // CHECK: scf.yield %{{[0-9]+}}, %{{[0-9]+}}, %{{[0-9]+}}, %[[NEXT_TMA_PHASE]], %[[NEXT_PHASE]]
-        %34 = arith.addi %arg9, %c1_i32 {groups = [@nvws.mma]} : i32
-        scf.yield {groups = [@nvws.mma]} %31, %33, %34 : i32, i1, i32
-      } {groups = [@nvws.mma]}
+        %bar = ttg.local_alloc : () ->   !ttg.memdesc<1xi64, #mshared, #smem, mutable>
+
+        // CHECK: %[[RET:.*]]:2 = scf.for %[[LB:.*]] to %[[UB:.*]] step %[[STEP:.*]] iter_args(%[[AREF_IDX:.*]] = {{.*}}, %[[PHASE:.*]] = %[[INIT]])
+        %idx = scf.for %i = %c0 to %K step %c4 iter_args(%arefIdx = %c0) -> i32 : i32 {
+          %y = arith.muli %i, %c16 : i32
+
+          // CHECK-DAG: %[[AREF_ENTER_MBAR_IDX:.*]] = arith.remsi %[[AREF_IDX]], %[[C3]]
+          // CHECK: %[[FULL_MBAR:.*]] = ttg.memdesc_subview %[[FULL_MBAR_ALLOC]][%[[AREF_ENTER_MBAR_IDX]]]
+
+          // CHECK: %[[PHASE_DIV:.*]] = arith.divsi %[[PHASE]], %[[C3]] {get_phase}
+          // CHECK: %[[PHASE_MOD:.*]] = arith.andi %[[PHASE_DIV]], %[[C1]] {get_phase}
+          // CHECK: ttng.wait_barrier %[[FULL_MBAR]], %[[PHASE_MOD]]
+
+          // CHECK-DAG: %[[AREF_SUBVIEW_IDX:.*]] = arith.remsi %[[AREF_IDX]], %[[C3]] {get_view}
+          // CHECK: %[[SMEM_VIEW:.*]] = ttg.memdesc_subview %[[AREF_BUF]][%[[AREF_SUBVIEW_IDX]], {{.*}}, {{.*}}]
+          %buf = ttng.aref_get.enter %aref[%arefIdx] : <[!ttg.memdesc<3x128x64xf16, #shared, #smem, mutable>]>, i32 -> !ttg.memdesc<128x64xf16, #shared, #smem, mutable>
+          // CHECK: %[[AREF_PHASE:.*]] = arith.addi %[[PHASE]], %[[C1]] {next_phase}
+
+          // CHECK: {{.*}} = ttg.local_load %[[SMEM_VIEW]]
+          %val = ttg.local_load %buf : !ttg.memdesc<128x64xf16, #shared, #smem, mutable> -> tensor<128x64xf16, #blocked>
+
+
+          // CHECK-DAG: %[[AREF_EXIT_MBAR_IDX:.*]] = arith.remsi %[[AREF_IDX]], %[[C3]] {empty_mbar}
+          // CHECK: %[[EXIT_MBAR:.*]] = ttg.memdesc_subview %[[EMPTY_MBAR_ALLOC]][%[[AREF_EXIT_MBAR_IDX]]]
+          // CHECK: nvws.arrive_barrier %[[EXIT_MBAR]], tracked_async_op = <none>
+          ttng.aref_get.exit %aref[%arefIdx], consumers = [#ttng.aref_consumer<lds>] : <[!ttg.memdesc<3x128x64xf16, #shared, #smem, mutable>]>, i32
+
+          // need store for %val = ttg.local_load %buf not be DCEd
+          tt.store %ptr, %val : tensor<128x64x!tt.ptr<f16>, #blocked>
+
+          %arefIdx1 = arith.addi %arefIdx, %c1 : i32
+          // CHECK: scf.yield {{.*}}, %[[AREF_PHASE]] : i32
+          scf.yield %arefIdx1 : i32
+        }
       ttng.warp_group_return
-    } {barId = 2 : i32, groups = [@nvws.mma]}}
+    } {barId = 1 : i32}}
+
+    ttng.warp_group start_warp(8) num_warps(1) : {{
+      %arefGatherBuf = ttg.local_alloc : () -> !ttg.memdesc<1x32x128xf16, #nvmma_128, #smem, mutable>
+      %arefGather = ttng.aref_create %arefGatherBuf : <[!ttg.memdesc<1x32x128xf16, #nvmma_128, #smem, mutable>]>
+
+      %buf2 = ttng.aref_get.enter %arefGather[%c0] <%c0>: <[!ttg.memdesc<1x32x128xf16, #shared, #smem, mutable>]>, i32 -> !ttg.memdesc<32x128xf16, #shared, #smem, mutable>
+      ttng.aref_get.exit %arefGather[%c0], consumers = [#ttng.aref_consumer<lds>] : <[!ttg.memdesc<1x32x128xf16, #shared, #smem, mutable>]>, i32
+
+      %buf1 = ttng.aref_put.enter %arefGather[%c0] <%c0>: <[!ttg.memdesc<1x32x128xf16, #shared, #smem, mutable>]>, i32 -> !ttg.memdesc<32x128xf16, #shared, #smem, mutable>
+      // CHECK: %[[PTR:.*]] = ttng.tensor_desc_to_tma_ptr {{.*}}
+      // CHECK: ttng.async_tma_gather %[[PTR]][{{.*}}2, {{.*}}]
+      // CHECK-NEXT: ttng.warp_group_return
+      %b = tt.descriptor_gather %arg0[%arg1, %arg2] : (!tt.tensordesc<tensor<1x128xf16, #nvmma_128>>, tensor<32xi32, #blockedA>, i32) -> tensor<32x128xf16, #blockedB>
+      ttg.local_store %b, %buf1 : tensor<32x128xf16, #blockedB> -> !ttg.memdesc<32x128xf16, #shared, #smem, mutable>
+      ttng.aref_put.exit %arefGather[%c0], producers = [#ttng.aref_producer<tmaldg>] : <[!ttg.memdesc<1x32x128xf16, #shared, #smem, mutable>]>, i32
+
+      ttng.warp_group_return
+    } {barId = 2 : i32}}
+
     tt.return
   }
 }
 
 // -----
 
-#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0]}>
-#blocked1 = #ttg.blocked<{sizePerThread = [1, 128], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [0, 1]}>
-#blocked2 = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [2, 16], warpsPerCTA = [4, 1], order = [1, 0]}>
+#shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16}>
+#mshared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
+#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [2, 2], order = [1, 0]}>
+#smem = #ttg.shared_memory
+#tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 256, unpacked = true>
+module attributes {
+    "ttg.num-ctas"  = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32,
+    ttg.target = "cuda:100", "ttg.warp-specialized" = true
+  } {
+  tt.func public @aref_put_tmaldg_sttm_sts_get_lds_ldtm(
+    %desc0: !tt.tensordesc<tensor<128x256xf16, #shared>>,
+    %K : i32
+  ) attributes {noinline = false} {
+    %bar = ttg.local_alloc : () ->   !ttg.memdesc<1xi64, #mshared, #smem, mutable>
+
+    // CHECK-DAG: %[[INIT:.*]] = arith.constant 0
+    // CHECK-DAG: %[[C2:.*]] = arith.constant 2
+    // CHECK-DAG: %[[C3:.*]] = arith.constant 3
+    %true = arith.constant true
+    %c0 = arith.constant 0 : i32
+    %c1 = arith.constant 1 : i32
+    %c4 = arith.constant 4 : i32
+    %c16 = arith.constant 16 : i32
+
+    %x = tt.get_program_id x : i32
+
+    // CHECK-DAG: %[[AREF_SMEM_BUF:.*]] = ttg.local_alloc : () ->   !ttg.memdesc<3x128x256xf16, #shared, #smem, mutable>
+    %arefSmemBuf = ttg.local_alloc : () ->   !ttg.memdesc<3x128x256xf16, #shared, #smem, mutable>
+    // CHECK-DAG: %[[E_SMEM_MBAR_ALLOC:.*]] = ttg.local_alloc {aref_empty_mbarriers} : () -> !ttg.memdesc<3xi64,
+    // CHECK-DAG: %[[F_SMEM_MBAR_ALLOC:.*]] = ttg.local_alloc {aref_full_mbarriers} : () -> !ttg.memdesc<3xi64,
+    %arefSmem = ttng.aref_create %arefSmemBuf : <[!ttg.memdesc<3x128x256xf16, #shared, #smem, mutable>]>
+    // CHECK-DAG: %[[E_SMEM1_MBAR_ALLOC:.*]] = ttg.local_alloc {aref_empty_mbarriers} : () -> !ttg.memdesc<3xi64,
+    // CHECK-DAG: %[[F_SMEM1_MBAR_ALLOC:.*]] = ttg.local_alloc {aref_full_mbarriers} : () -> !ttg.memdesc<3xi64,
+    %arefSmem1 = ttng.aref_create %arefSmemBuf : <[!ttg.memdesc<3x128x256xf16, #shared, #smem, mutable>]>
+
+    // CHECK-DAG: %[[AREF_TMEM_BUF:.*]] = ttng.tmem_alloc : () ->   !ttg.memdesc<2x128x256xf32
+    %arefTmemBuf = ttng.tmem_alloc : () ->    !ttg.memdesc<2x128x256xf32, #tmem, #ttng.tensor_memory, mutable>
+    // CHECK-DAG: %[[E_TMEM_MBAR_ALLOC:.*]] = ttg.local_alloc {aref_empty_mbarriers} : () -> !ttg.memdesc<2xi64,
+    // CHECK-DAG: %[[F_TMEM_MBAR_ALLOC:.*]] = ttg.local_alloc {aref_full_mbarriers} : () -> !ttg.memdesc<2xi64,
+    %arefTmem = ttng.aref_create %arefTmemBuf : <[!ttg.memdesc<2x128x256xf32, #tmem, #ttng.tensor_memory, mutable>]>
+
+    ttng.warp_group start_warp(0) num_warps(4) : {{
+        // CHECK: %[[RET:.*]]:4 = scf.for %[[LB:.*]] to %[[UB:.*]] step %[[STEP:.*]] iter_args(%[[AREF_IDX:.*]] = {{.*}}, %[[SPHASE:.*]] = %[[INIT]], %[[TPHASE:.*]] = %[[INIT]], %[[S1PHASE:.*]] = %[[INIT]])
+        %idx = scf.for %i = %c0 to %K step %c4 iter_args(%arefIdx = %c0) -> i32 : i32 {
+          %y = arith.muli %i, %c16 : i32
+
+          // CHECK: %[[SMEM_PUT_ENTER_IDX:.*]] = arith.remsi %[[AREF_IDX]], %[[C3]] {empty_mbar}
+          // CHECK: %[[E_SMEM_MBAR:.*]] = ttg.memdesc_subview %[[E_SMEM_MBAR_ALLOC]][%[[SMEM_PUT_ENTER_IDX]]]
+          %smemLdg = ttng.aref_put.enter %arefSmem[%arefIdx] : <[!ttg.memdesc<3x128x256xf16, #shared, #smem, mutable>]>, i32 -> !ttg.memdesc<128x256xf16, #shared, #smem, mutable>
+          // CHECK: %[[SPHASE1:.*]] = arith.addi %[[SPHASE]], %[[C1]] {next_phase}
+
+          %a = tt.descriptor_load %desc0[%x, %y] : !tt.tensordesc<tensor<128x256xf16, #shared>> -> tensor<128x256xf16, #blocked>
+          ttg.local_store %a, %smemLdg : tensor<128x256xf16, #blocked> -> !ttg.memdesc<128x256xf16, #shared, #smem, mutable>
+          ttng.aref_put.exit %arefSmem[%arefIdx], producers = [#ttng.aref_producer<tmaldg>] : <[!ttg.memdesc<3x128x256xf16, #shared, #smem, mutable>]>, i32
+
+          // CHECK: %[[TMEM_GET_ENTER_IDX:.*]] = arith.remsi %[[AREF_IDX]], %[[C2]] {full_mbar}
+          // CHECK: %[[F_TMEM_MBAR:.*]] = ttg.memdesc_subview %[[F_TMEM_MBAR_ALLOC]][%[[TMEM_GET_ENTER_IDX]]]
+
+          // CHECK: %[[TPHASE_DIV:.*]] = arith.divsi %[[TPHASE]], %[[C2]] {get_phase}
+          // CHECK: %[[TPHASE_MOD:.*]] = arith.andi %[[TPHASE_DIV]], %[[C1]] {get_phase}
+          // CHECK: ttng.wait_barrier %[[F_TMEM_MBAR]], %[[TPHASE_MOD]]
+
+          // CHECK: %[[TMEM_GET_ENTER_IDX1:.*]] = arith.remsi %[[AREF_IDX]], %[[C2]] {get_view}
+          // CHECK: %[[TMEM_VIEW:.*]] = ttg.memdesc_subview %[[AREF_TMEM_BUF]][%[[TMEM_GET_ENTER_IDX1]], {{.*}}, {{.*}}]
+          %tmemLdttm = ttng.aref_get.enter %arefTmem[%arefIdx] : <[!ttg.memdesc<2x128x256xf32, #tmem, #ttng.tensor_memory, mutable>]>, i32 -> !ttg.memdesc<128x256xf32, #tmem, #ttng.tensor_memory, mutable>
+
+          // CHECK: {{.*}} = ttng.tmem_load %[[TMEM_VIEW]]
+          %val32 = ttng.tmem_load  %tmemLdttm : !ttg.memdesc<128x256xf32, #tmem, #ttng.tensor_memory, mutable> -> tensor<128x256xf32, #blocked>
+
+          // CHECK: %[[TMEM_GET_EXIT_IDX:.*]] = arith.remsi %[[AREF_IDX]], %[[C2]]
+          // CHECK: %[[E_TMEM_MBAR:.*]] = ttg.memdesc_subview %[[E_TMEM_MBAR_ALLOC]][%[[TMEM_GET_EXIT_IDX]]]
+          // CHECK: nvws.arrive_barrier %[[E_TMEM_MBAR]], tracked_async_op = <none>
+          ttng.aref_get.exit %arefTmem[%arefIdx], consumers = [#ttng.aref_consumer<ldtm>] : <[!ttg.memdesc<2x128x256xf32, #tmem, #ttng.tensor_memory, mutable>]>, i32
+
+          %val16  = arith.truncf %val32 : tensor<128x256xf32, #blocked> to tensor<128x256xf16, #blocked>
+
+          // CHECK: %[[SMEM_PUT_ENTER_IDX:.*]] = arith.remsi %[[AREF_IDX]], %[[C3]] {empty_mbar}
+          // CHECK: %[[E_SMEM_MBAR:.*]] = ttg.memdesc_subview %[[E_SMEM1_MBAR_ALLOC]][%[[SMEM_PUT_ENTER_IDX]]]
+
+          // CHECK: %[[SPHASE_DIV:.*]] = arith.divsi %[[S1PHASE]], %[[C3]] {put_phase}
+          // CHECK: %[[SPHASE_MOD:.*]] = arith.andi %[[SPHASE_DIV]], %[[C1]] {put_phase}
+          // CHECK: %[[SPHASE_PUT:.*]] = arith.xori %[[SPHASE_MOD]], %[[C1]] {put_phase}
+          // CHECK: ttng.wait_barrier %[[E_SMEM_MBAR]], %[[SPHASE_PUT]]
+
+          // CHECK: %[[SMEM_GET_ENTER_IDX1:.*]] = arith.remsi %[[AREF_IDX]], %[[C3]]
+          // CHECK: %[[SMEM_VIEW:.*]] = ttg.memdesc_subview %[[AREF_SMEM_BUF]][%[[SMEM_GET_ENTER_IDX1]], {{.*}}, {{.*}}]
+          %smemSts = ttng.aref_put.enter %arefSmem1[%arefIdx] : <[!ttg.memdesc<3x128x256xf16, #shared, #smem, mutable>]>, i32 -> !ttg.memdesc<128x256xf16, #shared, #smem, mutable>
+
+          // CHECK: ttg.local_store %{{.*}}, %[[SMEM_VIEW]]
+          ttg.local_store %val16, %smemSts : tensor<128x256xf16, #blocked> -> !ttg.memdesc<128x256xf16, #shared, #smem, mutable>
+
+          // CHECK: %[[SMEM_PUT_EXIT_IDX:.*]] = arith.remsi %[[AREF_IDX]], %[[C3]] {full_mbar}
+          // CHECK: %[[F_SMEM_MBAR:.*]] = ttg.memdesc_subview %[[F_SMEM1_MBAR_ALLOC]][%[[SMEM_PUT_EXIT_IDX]]]
+          // CHECK: nvws.arrive_barrier %[[F_SMEM_MBAR]], tracked_async_op = <none>
+          ttng.aref_put.exit %arefSmem1[%arefIdx], producers = [#ttng.aref_producer<sts>] : <[!ttg.memdesc<3x128x256xf16, #shared, #smem, mutable>]>, i32
+
+          %smemSts1 = ttng.aref_get.enter %arefSmem1[%arefIdx] <%arefIdx> : <[!ttg.memdesc<3x128x256xf16, #shared, #smem, mutable>]>, i32 -> !ttg.memdesc<128x256xf16, #shared, #smem, mutable>
+          ttng.aref_get.exit %arefSmem1[%arefIdx], consumers = [#ttng.aref_consumer<lds>] : <[!ttg.memdesc<3x128x256xf16, #shared, #smem, mutable>]>, i32
+
+          %arefIdx1 = arith.addi %arefIdx, %c1 : i32
+          scf.yield %arefIdx1 : i32
+        }
+      ttng.warp_group_return
+    } {barId = 0 : i32}}
+
+    ttng.warp_group start_warp(4) num_warps(4) : {{
+        // CHECK: %[[RET:.*]]:3 = scf.for %[[LB:.*]] to %[[UB:.*]] step %[[STEP:.*]] iter_args(%[[AREF_IDX:.*]] = {{.*}}, %[[SPHASE:.*]] = %[[INIT]], %[[TPHASE:.*]] = %[[INIT]])
+        %idx = scf.for %i = %c0 to %K step %c4 iter_args(%arefIdx = %c0) -> i32 : i32 {
+
+          // CHECK: %[[SMEM_GET_ENTER_IDX:.*]] = arith.remsi %[[AREF_IDX]], %[[C3]] {get_view}
+          // CHECK-NEXT: %[[SMEM_VIEW:.*]] = ttg.memdesc_subview %[[AREF_SMEM_BUF]][%[[SMEM_GET_ENTER_IDX]], {{.*}}, {{.*}}]
+          %smemLds = ttng.aref_get.enter %arefSmem[%arefIdx] : <[!ttg.memdesc<3x128x256xf16, #shared, #smem, mutable>]>, i32 -> !ttg.memdesc<128x256xf16, #shared, #smem, mutable>
+          // CHECK: {{.*}} = ttg.local_load %[[SMEM_VIEW]]
+          %val = ttg.local_load %smemLds : !ttg.memdesc<128x256xf16, #shared, #smem, mutable> -> tensor<128x256xf16, #blocked>
+
+          // CHECK: %[[SMEM_GET_EXIT_IDX:.*]] = arith.remsi %[[AREF_IDX]], %[[C3]] {empty_mbar}
+          // CHECK: %[[E_SMEM_MBAR:.*]] = ttg.memdesc_subview %[[E_SMEM_MBAR_ALLOC]][%[[SMEM_GET_EXIT_IDX]]]
+          // CHECK: nvws.arrive_barrier %[[E_SMEM_MBAR]], tracked_async_op = <none>
+          ttng.aref_get.exit %arefSmem[%arefIdx], consumers = [#ttng.aref_consumer<lds>] : <[!ttg.memdesc<3x128x256xf16, #shared, #smem, mutable>]>, i32
+
+          %val32 = arith.extf %val : tensor<128x256xf16, #blocked> to tensor<128x256xf32, #blocked>
+
+          // CHECK: %[[TMEM_PUT_ENTER_IDX:.*]] = arith.remsi %[[AREF_IDX]], %[[C2]] {put_view}
+          // CHECK-NEXT: %[[TMEM_VIEW:.*]] = ttg.memdesc_subview %[[AREF_TMEM_BUF]][%[[TMEM_PUT_ENTER_IDX]], {{.*}}, {{.*}}]
+          %tmemStm = ttng.aref_put.enter %arefTmem[%arefIdx] : <[!ttg.memdesc<2x128x256xf32, #tmem, #ttng.tensor_memory, mutable>]>, i32 -> !ttg.memdesc<128x256xf32, #tmem, #ttng.tensor_memory, mutable>
+          // CHECK: ttng.tmem_store {{.*}}, %[[TMEM_VIEW]]
+          ttng.tmem_store %val32, %tmemStm, %true : tensor<128x256xf32, #blocked> -> !ttg.memdesc<128x256xf32, #tmem, #ttng.tensor_memory, mutable>
+
+          // CHECK: %[[TMEM_PUT_EXIT_IDX:.*]] = arith.remsi %[[AREF_IDX]], %[[C2]] {full_mbar}
+          // CHECK: %[[F_TMEM_MBAR:.*]] = ttg.memdesc_subview %[[F_TMEM_MBAR_ALLOC]][%[[TMEM_PUT_EXIT_IDX]]]
+          // CHECK: nvws.arrive_barrier %[[F_TMEM_MBAR]], tracked_async_op = <none>
+          ttng.aref_put.exit %arefTmem[%arefIdx], producers = [#ttng.aref_producer<sttm>] : <[!ttg.memdesc<2x128x256xf32, #tmem, #ttng.tensor_memory, mutable>]>, i32
+
+
+          %arefIdx1 = arith.addi %arefIdx, %c1 : i32
+          scf.yield %arefIdx1 : i32
+        }
+
+      ttng.warp_group_return
+    } {barId = 1 : i32}}
+
+    tt.return
+  }
+}
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [2, 2], order = [1, 0]}>
+#shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16}>
+#shared1 = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
+#smem = #ttg.shared_memory
+module attributes {
+    "ttg.num-ctas"  = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32,
+    ttg.target = "cuda:100", "ttg.warp-specialized" = true
+  } {
+  tt.func public @aref_phase_propagation(
+    %desc0: !tt.tensordesc<tensor<128x64xf16, #shared>>,
+    %K : i32
+  ) attributes {noinline = false} {
+    %bar = ttg.local_alloc : () ->   !ttg.memdesc<1xi64, #shared1, #smem, mutable>
+
+    %c0 = arith.constant 0 : i32
+    // CHECK-DAG: %[[C1:.*]] = arith.constant 1 : i32
+    %c1 = arith.constant 1 : i32
+    %c2 = arith.constant 2 : i32
+    %c4 = arith.constant 4 : i32
+    %c16 = arith.constant 16 : i32
+    %c128 = arith.constant 16 : i32
+    %x = tt.get_program_id x : i32
+
+    %arefBuf = ttg.local_alloc : () ->   !ttg.memdesc<3x128x64xf16, #shared, #smem, mutable>
+    %aref = ttng.aref_create %arefBuf : <[!ttg.memdesc<3x128x64xf16, #shared, #smem, mutable>]>
+
+    ttng.warp_group start_warp(0) num_warps(1) : {{
+        // CHECK: %[[RET_FOR1:.*]]:2 = scf.for %[[LB:.*]] to %[[UB:.*]] step %[[STEP:.*]] iter_args({{.*}} = {{.*}}, %[[PHASE1:.*]] = {{.*}})
+        %idx = scf.for %i = %c0 to %K step %c4 iter_args(%arefIdx = %c0) -> i32 : i32 {
+          %y = arith.muli %i, %c16 : i32
+          %mod4 = arith.remsi %i, %c4 : i32
+          %cond = arith.cmpi eq, %mod4, %c0 : i32
+          // CHECK: %[[RET_IF1:.*]]:2 = scf.if
+          %idx1 = scf.if %cond -> i32 {
+            // CHECK: %[[RET_FOR2:.*]]:2 = scf.for %[[LB:.*]] to %[[UB:.*]] step %[[STEP:.*]] iter_args({{.*}} = {{.*}}, %[[PHASE2:.*]] = %[[PHASE1]])
+            %idx2 = scf.for %ii = %c0 to %c4 step %c1 iter_args(%arefIdx1 = %arefIdx) -> i32 : i32 {
+              %y1 = arith.muli %ii, %c16 : i32
+
+              %buf = ttng.aref_put.enter %aref[%arefIdx1] : <[!ttg.memdesc<3x128x64xf16, #shared, #smem, mutable>]>, i32 -> !ttg.memdesc<128x64xf16, #shared, #smem, mutable>
+              %a = tt.descriptor_load %desc0[%x, %y1] : !tt.tensordesc<tensor<128x64xf16, #shared>> -> tensor<128x64xf16, #blocked>
+              ttg.local_store %a, %buf : tensor<128x64xf16, #blocked> -> !ttg.memdesc<128x64xf16, #shared, #smem, mutable>
+              ttng.aref_put.exit %aref[%arefIdx1], producers = [#ttng.aref_producer<tmaldg>] : <[!ttg.memdesc<3x128x64xf16, #shared, #smem, mutable>]>, i32
+              // CHECK: %[[PHASE2a:.*]] = arith.addi %[[PHASE2]], %[[C1]] {next_phase}
+
+              %arefIdx2 = arith.addi %arefIdx1, %c1 : i32
+              // CHECK: scf.yield {{.*}}, %[[PHASE2a]]
+              scf.yield %arefIdx2 : i32
+            }
+            // CHECK: scf.yield {{.*}}, %[[RET_FOR2]]#1
+            scf.yield %idx2 : i32
+          } else {
+            // CHECK: scf.yield {{.*}}, %[[PHASE1]]
+            scf.yield %arefIdx : i32
+          }
+
+            // CHECK: scf.yield {{.*}}, %[[RET_IF1]]#1
+          scf.yield %idx1 : i32
+        }
+
+        %buf = ttng.aref_put.enter %aref[%c0] : <[!ttg.memdesc<3x128x64xf16, #shared, #smem, mutable>]>, i32 -> !ttg.memdesc<128x64xf16, #shared, #smem, mutable>
+        // CHECK: %[[PHASE3:.*]] = arith.addi %[[RET_FOR1]]#1, %[[C1]] {next_phase}
+        ttng.aref_put.exit %aref[%c0], producers = [#ttng.aref_producer<tmaldg>] : <[!ttg.memdesc<3x128x64xf16, #shared, #smem, mutable>]>, i32
+
+        %buf1 = ttng.aref_put.enter %aref[%c0] : <[!ttg.memdesc<3x128x64xf16, #shared, #smem, mutable>]>, i32 -> !ttg.memdesc<128x64xf16, #shared, #smem, mutable>
+        ttng.aref_put.exit %aref[%c0], producers = [#ttng.aref_producer<tmaldg>] : <[!ttg.memdesc<3x128x64xf16, #shared, #smem, mutable>]>, i32
+
+      ttng.warp_group_return
+    } {barId = 0 : i32}}
+
+    ttng.warp_group start_warp(1) num_warps(1) : {{
+        // CHECK: %[[RET_FOR1:.*]] = scf.for %[[LB:.*]] to %[[UB:.*]] step %[[STEP:.*]] iter_args(%[[PHASE1:.*]] = {{.*}})
+        scf.for %i = %c0 to %K step %c1 : i32 {
+          %mod4 = arith.remsi %i, %c4 : i32
+          %cond = arith.cmpi eq, %mod4, %c0 : i32
+          // CHECK: %[[RET_IF1:.*]] = scf.if
+          scf.if %cond {
+            // CHECK: %[[RET_FOR2:.*]] = scf.for %[[LB:.*]] to %[[UB:.*]] step %[[STEP:.*]] iter_args(%[[PHASE2:.*]] = %[[PHASE1]])
+            scf.for %ii = %c0 to %c4 step %c1 : i32 {
+              %arefIdx = arith.addi %i, %ii : i32
+              %y = arith.muli %arefIdx, %c16 : i32
+
+              %buf = ttng.aref_get.enter %aref[%arefIdx] : <[!ttg.memdesc<3x128x64xf16, #shared, #smem, mutable>]>, i32 -> !ttg.memdesc<128x64xf16, #shared, #smem, mutable>
+              // CHECK: %[[PHASE2a:.*]] = arith.addi %[[PHASE2]], %[[C1]] {next_phase}
+              %a = ttg.local_load %buf : !ttg.memdesc<128x64xf16, #shared, #smem, mutable> -> tensor<128x64xf16, #blocked>
+              ttng.aref_get.exit %aref[%arefIdx], consumers = [#ttng.aref_consumer<lds>] : <[!ttg.memdesc<3x128x64xf16, #shared, #smem, mutable>]>, i32
+              // CHECK: scf.yield %[[PHASE2a]]
+            }
+            // CHECK: } else {
+            // CHECK-NEXT: scf.yield %[[PHASE1]]
+          }
+        }
+
+        %cond1 = arith.cmpi eq, %K, %c128 : i32
+        // CHECK: %[[RET_IF2:.*]] = scf.if
+        scf.if %cond1 {
+          // CHECK: %[[RET_FOR2:.*]] = scf.for %[[LB:.*]] to %[[UB:.*]] step %[[STEP:.*]] iter_args(%[[PHASE2:.*]] = %[[RET_FOR1]])
+          scf.for %ii = %c0 to %c128 step %c1 : i32 {
+            %mod2 = arith.remsi %ii, %c2 : i32
+            %cond = arith.cmpi eq, %mod2, %c0 : i32
+            scf.if %cond {
+              %arefIdx = arith.divsi %ii, %c2 : i32
+              %y = arith.muli %arefIdx, %c16 : i32
+
+              %buf = ttng.aref_get.enter %aref[%arefIdx] : <[!ttg.memdesc<3x128x64xf16, #shared, #smem, mutable>]>, i32 -> !ttg.memdesc<128x64xf16, #shared, #smem, mutable>
+              // CHECK: %[[PHASE2a:.*]] = arith.addi %[[PHASE2]], %[[C1]] {next_phase}
+              %a = ttg.local_load %buf : !ttg.memdesc<128x64xf16, #shared, #smem, mutable> -> tensor<128x64xf16, #blocked>
+              ttng.aref_get.exit %aref[%arefIdx], consumers = [#ttng.aref_consumer<lds>] : <[!ttg.memdesc<3x128x64xf16, #shared, #smem, mutable>]>, i32
+              // CHECK: scf.yield %[[PHASE2a]]
+            }
+            // CHECK: } else {
+            // CHECK-NEXT: scf.yield %[[PHASE2]]
+          }
+        }
+        // CHECK: } else {
+        // CHECK-NEXT: scf.yield %[[RET_FOR1]]
+
+        %buf = ttng.aref_get.enter %aref[%c0] : <[!ttg.memdesc<3x128x64xf16, #shared, #smem, mutable>]>, i32 -> !ttg.memdesc<128x64xf16, #shared, #smem, mutable>
+        // CHECK: %[[PHASE3:.*]] = arith.addi %[[RET_IF2]], %[[C1]] {next_phase}
+        ttng.aref_get.exit %aref[%c0], consumers = [#ttng.aref_consumer<lds>] : <[!ttg.memdesc<3x128x64xf16, #shared, #smem, mutable>]>, i32
+
+        %buf1 = ttng.aref_get.enter %aref[%c0] : <[!ttg.memdesc<3x128x64xf16, #shared, #smem, mutable>]>, i32 -> !ttg.memdesc<128x64xf16, #shared, #smem, mutable>
+        ttng.aref_get.exit %aref[%c0], consumers = [#ttng.aref_consumer<lds>] : <[!ttg.memdesc<3x128x64xf16, #shared, #smem, mutable>]>, i32
+
+      ttng.warp_group_return
+    } {barId = 1 : i32}}
+
+    tt.return
+  }
+}
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [2, 2], order = [1, 0]}>
+#shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16}>
+#shared1 = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
+#smem = #ttg.shared_memory
+module attributes {
+    "ttg.num-ctas"  = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32,
+    ttg.target = "cuda:100", "ttg.warp-specialized" = true
+  } {
+  tt.func public @aref_manual_phase(
+    %desc0: !tt.tensordesc<tensor<128x64xf16, #shared>>,
+    %K : i32
+  ) attributes {noinline = false} {
+    %bar = ttg.local_alloc : () ->   !ttg.memdesc<1xi64, #shared1, #smem, mutable>
+
+    %c0 = arith.constant 0 : i32
+    %c1 = arith.constant 1 : i32
+    %c2 = arith.constant 2 : i32
+    // CHECK-DAG: %[[C0:.*]] = arith.constant 0 : i32
+    // CHECK-DAG: %[[C1:.*]] = arith.constant 1 : i32
+    // CHECK-DAG: %[[C3:.*]] = arith.constant 3 : i32
+    %c4 = arith.constant 4 : i32
+    %c16 = arith.constant 16 : i32
+    %c128 = arith.constant 128 : i32
+    %x = tt.get_program_id x : i32
+
+    %arefBuf = ttg.local_alloc : () ->   !ttg.memdesc<3x128x64xf16, #shared, #smem, mutable>
+    %aref = ttng.aref_create %arefBuf : <[!ttg.memdesc<3x128x64xf16, #shared, #smem, mutable>]>
+    %aref1 = ttng.aref_create %arefBuf : <[!ttg.memdesc<3x128x64xf16, #shared, #smem, mutable>]>
+
+    ttng.warp_group start_warp(0) num_warps(1) : {{
+        // CHECK: {{.*}} = scf.for %[[I:.*]] = %[[LB:.*]] to %[[UB:.*]] step %[[STEP:.*]] iter_args(%[[AREF_IDX0:.*]] = %[[C0]])
+        %idx = scf.for %i = %c0 to %K step %c4 iter_args(%arefIdx = %c0) -> i32 : i32 {
+          %y = arith.muli %i, %c16 : i32
+          %mod4 = arith.remsi %i, %c4 : i32
+          %cond = arith.cmpi eq, %mod4, %c0 : i32
+          %idx1 = scf.if %cond -> i32 {
+            // CHECK: {{.*}} = scf.for %[[LB:.*]] to %[[UB:.*]] step %[[STEP:.*]] iter_args(%[[AREF_IDX1:.*]] = %[[AREF_IDX0]])
+            %idx2 = scf.for %ii = %c0 to %c4 step %c1 iter_args(%arefIdx1 = %arefIdx) -> i32 : i32 {
+              %y1 = arith.muli %ii, %c16 : i32
+
+              %buf = ttng.aref_put.enter %aref[%arefIdx1] <%arefIdx1>: <[!ttg.memdesc<3x128x64xf16, #shared, #smem, mutable>]>, i32 -> !ttg.memdesc<128x64xf16, #shared, #smem, mutable>
+              // CHECK: %[[PHASE_DIV:.*]] = arith.divsi %[[AREF_IDX1]], %[[C3]] {put_phase}
+              // CHECK: %[[PHASE_AND:.*]] = arith.andi %[[PHASE_DIV]], %[[C1]] {put_phase}
+              // CHECK: %[[PHASE_PUT:.*]] = arith.xori %[[PHASE_AND]], %[[C1]] {put_phase}
+              // CHECK: ttng.wait_barrier {{.*}}, %[[PHASE_PUT]]
+              %a = tt.descriptor_load %desc0[%x, %y1] : !tt.tensordesc<tensor<128x64xf16, #shared>> -> tensor<128x64xf16, #blocked>
+              ttg.local_store %a, %buf : tensor<128x64xf16, #blocked> -> !ttg.memdesc<128x64xf16, #shared, #smem, mutable>
+              ttng.aref_put.exit %aref[%arefIdx1], producers = [#ttng.aref_producer<tmaldg>] : <[!ttg.memdesc<3x128x64xf16, #shared, #smem, mutable>]>, i32
+
+              %arefIdx2 = arith.addi %arefIdx1, %c1 : i32
+              scf.yield %arefIdx2 : i32
+            }
+            scf.yield %idx2 : i32
+          } else {
+            scf.yield %arefIdx : i32
+          }
+          %buf = ttng.aref_get.enter %aref[%i] <%i>: <[!ttg.memdesc<3x128x64xf16, #shared, #smem, mutable>]>, i32 -> !ttg.memdesc<128x64xf16, #shared, #smem, mutable>
+          // CHECK: %[[PHASE_DIV:.*]] = arith.divsi %[[I]], %[[C3]] {get_phase}
+          // CHECK: %[[PHASE_GET:.*]] = arith.andi %[[PHASE_DIV]], %[[C1]] {get_phase}
+          // CHECK: ttng.wait_barrier {{.*}}, %[[PHASE_GET]]
+          ttng.aref_get.exit %aref[%i], consumers=[#ttng.aref_consumer<lds>] : <[!ttg.memdesc<3x128x64xf16, #shared, #smem, mutable>]>, i32
+
+          scf.yield %idx1 : i32
+        }
+      ttng.warp_group_return
+    } {barId = 0 : i32}}
+
+    ttng.warp_group start_warp(1) num_warps(1) : {{
+        // CHECK: scf.for %[[I:.*]] = %[[LB:.*]] to %[[UB:.*]] step %[[STEP:.*]]
+        scf.for %i = %c0 to %K step %c1 : i32 {
+          %mod4 = arith.remsi %i, %c4 : i32
+          %cond = arith.cmpi eq, %mod4, %c0 : i32
+          scf.if %cond {
+            scf.for %ii = %c0 to %c4 step %c1 : i32 {
+              %arefIdx = arith.addi %i, %ii {tag1} : i32
+              // CHECK: %[[AREF_IDX:.*]] = arith.addi {{.*}}, {{.*}} {tag1} : i32
+              %y = arith.muli %arefIdx, %c16 : i32
+
+              %buf = ttng.aref_get.enter %aref[%arefIdx] <%arefIdx>: <[!ttg.memdesc<3x128x64xf16, #shared, #smem, mutable>]>, i32 -> !ttg.memdesc<128x64xf16, #shared, #smem, mutable>
+              // CHECK: %[[PHASE_DIV:.*]] = arith.divsi %[[AREF_IDX]], %[[C3]] {get_phase}
+              // CHECK: %[[PHASE_GET:.*]] = arith.andi %[[PHASE_DIV]], %[[C1]] {get_phase}
+              // CHECK: ttng.wait_barrier {{.*}}, %[[PHASE_GET]]
+              %a = ttg.local_load %buf : !ttg.memdesc<128x64xf16, #shared, #smem, mutable> -> tensor<128x64xf16, #blocked>
+              ttng.aref_get.exit %aref[%arefIdx], consumers = [#ttng.aref_consumer<lds>] : <[!ttg.memdesc<3x128x64xf16, #shared, #smem, mutable>]>, i32
+            }
+          }
+          %buf = ttng.aref_put.enter %aref1[%i] <%i>: <[!ttg.memdesc<3x128x64xf16, #shared, #smem, mutable>]>, i32 -> !ttg.memdesc<128x64xf16, #shared, #smem, mutable>
+          // CHECK: %[[PHASE_DIV:.*]] = arith.divsi %[[I]], %[[C3]] {put_phase}
+          // CHECK: %[[PHASE_AND:.*]] = arith.andi %[[PHASE_DIV]], %[[C1]] {put_phase}
+          // CHECK: %[[PHASE_PUT:.*]] = arith.xori %[[PHASE_AND]], %[[C1]] {put_phase}
+          // CHECK: ttng.wait_barrier {{.*}}, %[[PHASE_PUT]]
+          ttng.aref_put.exit %aref1[%i], producers=[#ttng.aref_producer<sts>]: <[!ttg.memdesc<3x128x64xf16, #shared, #smem, mutable>]>, i32
+
+        }
+
+        %cond1 = arith.cmpi eq, %K, %c128 : i32
+        scf.if %cond1 {
+          scf.for %ii = %c0 to %c128 step %c1 : i32 {
+            %mod2 = arith.remsi %ii, %c2 : i32
+            %cond = arith.cmpi eq, %mod2, %c0 : i32
+            scf.if %cond {
+              %arefIdx = arith.divsi %ii, %c2 {tag2} : i32
+              // CHECK: %[[AREF_IDX:.*]] = arith.divsi {{.*}}, {{.*}} {tag2} : i32
+              %y = arith.muli %arefIdx, %c16 : i32
+
+              %buf = ttng.aref_get.enter %aref[%arefIdx] <%arefIdx>: <[!ttg.memdesc<3x128x64xf16, #shared, #smem, mutable>]>, i32 -> !ttg.memdesc<128x64xf16, #shared, #smem, mutable>
+              // CHECK: %[[PHASE_DIV:.*]] = arith.divsi %[[AREF_IDX]], %[[C3]] {get_phase}
+              // CHECK: %[[PHASE_GET:.*]] = arith.andi %[[PHASE_DIV]], %[[C1]] {get_phase}
+              // CHECK: ttng.wait_barrier {{.*}}, %[[PHASE_GET]]
+              %a = ttg.local_load %buf : !ttg.memdesc<128x64xf16, #shared, #smem, mutable> -> tensor<128x64xf16, #blocked>
+              ttng.aref_get.exit %aref[%arefIdx], consumers = [#ttng.aref_consumer<lds>] : <[!ttg.memdesc<3x128x64xf16, #shared, #smem, mutable>]>, i32
+            }
+          }
+        }
+
+        %buf1 = ttng.aref_get.enter %aref1[%c0] <%c0>: <[!ttg.memdesc<3x128x64xf16, #shared, #smem, mutable>]>, i32 -> !ttg.memdesc<128x64xf16, #shared, #smem, mutable>
+        ttng.aref_get.exit %aref1[%c0], consumers=[#ttng.aref_consumer<lds>]: <[!ttg.memdesc<3x128x64xf16, #shared, #smem, mutable>]>, i32
+
+      ttng.warp_group_return
+    } {barId = 1 : i32}}
+
+    tt.return
+  }
+}
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [2, 2], order = [1, 0]}>
+#blocked1 = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0]}>
+#blocked2 = #ttg.blocked<{sizePerThread = [1, 256], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [0, 1]}>
 #shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16}>
 #smem = #ttg.shared_memory
-#tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, unpacked = true>
-module attributes {nvws.epilogue = {num_warps = 4 : i32, start_warp = 8 : i32}, nvws.mma = {num_warps = 4 : i32, start_warp = 0 : i32}, nvws.tma_load = {num_warps = 4 : i32, start_warp = 4 : i32}, "ttg.num-ctas" = 1 : i32, "ttg.num-stages" = 3 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32, "ttg.warp-specialized" = true} {
-  tt.func public @matmul_persistent_tma_ws_cooperative_kernel(%arg0: !tt.ptr<f16> {tt.nv_tma_desc = 1 : i32}, %arg1: !tt.ptr<f16> {tt.nv_tma_desc = 1 : i32}, %arg2: !tt.ptr<i8, 0> {tt.nv_tma_desc = 1 : i32}, %arg3: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg4: i32 {tt.divisibility = 16 : i32}, %arg5: i32 {tt.divisibility = 16 : i32}, %arg6: i32 {tt.divisibility = 16 : i32}) attributes {noinline = false} {
-    %false = arith.constant false
-    %true = arith.constant {groups = [@nvws.mma]} true
-    %c127_i32 = arith.constant {groups = [@nvws.epilogue, @nvws.mma, @nvws.tma_load]} 127 : i32
-    %c8_i32 = arith.constant {groups = [@nvws.epilogue, @nvws.tma_load]} 8 : i32
-    // CHECK-DAG: %[[C128:.*]] = arith.constant {groups = [@nvws.epilogue, @nvws.mma, @nvws.tma_load]} 128
-    // CHECK-DAG: %[[C1:.*]] = arith.constant {groups = [@nvws.mma, @nvws.tma_load]} 1 : i32
-    // CHECK-DAG: %[[C2:.*]] = arith.constant 2
-    %c128_i32 = arith.constant {groups = [@nvws.epilogue, @nvws.mma, @nvws.tma_load]} 128 : i32
-    %c0_i32 = arith.constant {groups = [@nvws.mma, @nvws.tma_load]} 0 : i32
-    %c1_i32 = arith.constant {groups = [@nvws.mma, @nvws.tma_load]} 1 : i32
-    %0 = arith.addi %arg4, %c127_i32 {groups = [@nvws.epilogue, @nvws.mma, @nvws.tma_load]} : i32
-    %1 = arith.divsi %0, %c128_i32 {groups = [@nvws.epilogue, @nvws.mma, @nvws.tma_load]} : i32
-    %2 = arith.addi %arg5, %c127_i32 {groups = [@nvws.epilogue, @nvws.mma, @nvws.tma_load]} : i32
-    %3 = arith.divsi %2, %c128_i32 {groups = [@nvws.epilogue, @nvws.mma, @nvws.tma_load]} : i32
-    %4 = arith.muli %1, %3 {groups = [@nvws.epilogue, @nvws.mma, @nvws.tma_load]} : i32
-    %5 = tt.get_program_id x {groups = [@nvws.epilogue, @nvws.mma, @nvws.tma_load]} : i32
-    %6 = tt.get_num_programs x {groups = [@nvws.epilogue, @nvws.mma, @nvws.tma_load]} : i32
-    %7 = ttg.local_alloc  {aref_buffer, groups = [@nvws.tma_load]} : () -> !ttg.memdesc<3x128x128xf16, #shared, #smem, mutable>
-    %8 = ttg.local_alloc  {aref_buffer, groups = [@nvws.tma_load]} : () -> !ttg.memdesc<3x128x128xf16, #shared, #smem, mutable>
-    %9 = ttng.aref_create %7, %8 {groups = [@nvws.tma_load]} : <[!ttg.memdesc<3x128x128xf16, #shared, #smem, mutable>, !ttg.memdesc<3x128x128xf16, #shared, #smem, mutable>]>
-    // CHECK: %[[TMEM:.*]] = ttng.tmem_alloc
-    %10 = ttng.tmem_alloc  {aref_buffer, groups = [@nvws.mma]} : () -> !ttg.memdesc<2x128x128xf32, #tmem, #ttng.tensor_memory, mutable>
-    // CHECK: %[[TMEM_EMPTY:.*]] = ttg.local_alloc  {aref_empty_mbarriers} : () -> !ttg.memdesc<2xi64
-    // CHECK: %[[TMEM_FULL:.*]] = ttg.local_alloc  {aref_full_mbarriers} : () -> !ttg.memdesc<2xi64
-    // CHECK: %[[TMEM_EMPTY_SLICE:.*]] = ttg.memdesc_subview %[[TMEM_EMPTY]]
-    // CHECK: init_barrier %[[TMEM_EMPTY_SLICE]], 128
-    // CHECK: %[[TMEM_FULL_SLICE:.*]] = ttg.memdesc_subview %[[TMEM_FULL]]
-    // CHECK: init_barrier %[[TMEM_FULL_SLICE]], 1
-    %11 = ttng.aref_create %10 {groups = [@nvws.mma]} : <[!ttg.memdesc<2x128x128xf32, #tmem, #ttng.tensor_memory, mutable>]>
-    nvvm.barrier0 {init_barrier_sync}
-    // CHECK: ttng.warp_group start_warp(4) num_warps(4)
+#tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 256, unpacked = true>
+#mshared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
+module attributes {
+    "ttg.num-ctas"  = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32,
+    ttg.target = "cuda:100", "ttg.warp-specialized" = true
+  } {
+  tt.func public @aref_put_utcmma_get_utcmma(
+    %desc0: !tt.tensordesc<tensor<128x64xf16, #shared>>,
+    %ptr: tensor<128x256x!tt.ptr<f32>, #blocked>,
+    %tile0 : i32,
+    %tile1 : i32,
+    %K : i32
+  ) attributes {noinline = false} {
+    %bar = ttg.local_alloc : () ->   !ttg.memdesc<1xi64, #mshared, #smem, mutable>
+
+    %true = arith.constant true
+    %c0 = arith.constant 0 : i32
+    %c1 = arith.constant 1 : i32
+    %7 = ttg.local_alloc {aref_buffer, groups = [@nvws.tma_load]} : () -> !ttg.memdesc<3x128x64xf16, #shared, #smem, mutable>
+    %8 = ttg.local_alloc {aref_buffer, groups = [@nvws.tma_load]} : () -> !ttg.memdesc<3x64x256xf16, #shared, #smem, mutable>
+    %arefS = ttng.aref_create %7, %8 {groups = [@nvws.tma_load]} : <[!ttg.memdesc<3x128x64xf16, #shared, #smem, mutable>, !ttg.memdesc<3x64x256xf16, #shared, #smem, mutable>]>
+    %10 = ttng.tmem_alloc {aref_buffer, groups = [@nvws.mma]} : () -> !ttg.memdesc<2x128x256xf32, #tmem, #ttng.tensor_memory, mutable>
+    %arefT = ttng.aref_create %10 {groups = [@nvws.mma]} : <[!ttg.memdesc<2x128x256xf32, #tmem, #ttng.tensor_memory, mutable>]>
+
+    ttng.warp_group start_warp(0) num_warps(1) : {{
+      scf.for %tile = %tile0 to %tile1 step %c1 : i32 {
+        scf.for %k = %c0 to %K step %c1 : i32 {
+          %a = arith.muli %tile, %K : i32
+          %idx = arith.addi %a, %k {tag1} : i32
+          %abuf, %bbuf = ttng.aref_put.enter %arefS[%idx] <%idx> : <[!ttg.memdesc<3x128x64xf16, #shared, #smem, mutable>, !ttg.memdesc<3x64x256xf16, #shared, #smem, mutable>]>, i32 -> !ttg.memdesc<128x64xf16, #shared, #smem, mutable>, !ttg.memdesc<64x256xf16, #shared, #smem, mutable>
+          ttng.aref_put.exit %arefS[%idx], producers=[#ttng.aref_producer<sts>, #ttng.aref_producer<sts>] : <[!ttg.memdesc<3x128x64xf16, #shared, #smem, mutable>, !ttg.memdesc<3x64x256xf16, #shared, #smem, mutable>]>, i32
+        }
+      }
+      ttng.warp_group_return
+    } {barId = 0}}
+
+
+    ttng.warp_group start_warp(1) num_warps(1) : {{
+      // CHECK: scf.for %[[TILE:.*]] =
+      scf.for %tile = %tile0 to %tile1 step %c1 : i32 {
+        // CHECK: %[[PHASE_DIV:.*]] = arith.divsi %[[TILE]], {{.*}} {put_phase}
+        // CHECK: %[[PHASE_AND:.*]] = arith.andi %[[PHASE_DIV]], {{.*}} {put_phase}
+        // CHECK: %[[PHASE_PUT:.*]] = arith.xori %[[PHASE_AND]], {{.*}} {put_phase}
+        // CHECK: ttng.wait_barrier {{.*}}, %[[PHASE_PUT]]
+
+        // CHECK: %[[AREF_IDX:.*]] = arith.remsi %[[TILE]], {{.*}} {put_view} : i32
+        // CHECK: %[[ACC:.*]] = ttg.memdesc_subview {{.*}}[%[[AREF_IDX]], {{.*}}, {{.*}}]
+        %acc = ttng.aref_put.enter %arefT[%tile] <%tile> : <[!ttg.memdesc<2x128x256xf32, #tmem, #ttng.tensor_memory, mutable>]>, i32 -> !ttg.memdesc<128x256xf32, #tmem, #ttng.tensor_memory, mutable>
+        scf.for %k = %c0 to %K step %c1 : i32{
+          %a = arith.muli %tile, %K : i32
+          %idx = arith.addi %a, %k {tag2} : i32
+          // CHECK: %[[AREF_IDX:.*]] = arith.addi {{.*}}, {{.*}} {tag2} : i32
+          // CHECK: %[[PHASE_DIV:.*]] = arith.divsi %[[AREF_IDX]], {{.*}} {get_phase}
+          // CHECK: %[[PHASE_GET:.*]] = arith.andi %[[PHASE_DIV]], {{.*}} {get_phase}
+          // CHECK: ttng.wait_barrier {{.*}}, %[[PHASE_GET]]
+          %abuf, %bbuf = ttng.aref_get.enter %arefS[%idx] <%idx> : <[!ttg.memdesc<3x128x64xf16, #shared, #smem, mutable>, !ttg.memdesc<3x64x256xf16, #shared, #smem, mutable>]>, i32 -> !ttg.memdesc<128x64xf16, #shared, #smem, mutable>, !ttg.memdesc<64x256xf16, #shared, #smem, mutable>
+          // CHECK: ttng.tc_gen5_mma {{.*}}, {{.*}}, %[[ACC]]
+          ttng.tc_gen5_mma %abuf, %bbuf, %acc, %true, %true {is_async} : !ttg.memdesc<128x64xf16, #shared, #smem, mutable>, !ttg.memdesc<64x256xf16, #shared, #smem, mutable>, !ttg.memdesc<128x256xf32, #tmem, #ttng.tensor_memory, mutable>
+          // CHECK: %[[MBAR_IDX:.*]] = arith.remsi %[[AREF_IDX]], {{.*}} {empty_mbar}
+          // CHECK: %[[MBAR_VIEW:.*]] = ttg.memdesc_subview {{.*}}[%[[MBAR_IDX]]]
+          // CHECK: nvws.arrive_barrier %[[MBAR_VIEW]], tracked_async_op = <umma>
+          ttng.aref_get.exit %arefS[%idx], consumers=[#ttng.aref_consumer<umma>, #ttng.aref_consumer<umma>] : <[!ttg.memdesc<3x128x64xf16, #shared, #smem, mutable>, !ttg.memdesc<3x64x256xf16, #shared, #smem, mutable>]>, i32
+
+        }
+        // CHECK: %[[MBAR_IDX:.*]] = arith.remsi %[[TILE]], {{.*}} {full_mbar}
+        // CHECK: %[[MBAR_VIEW:.*]] = ttg.memdesc_subview {{.*}}[%[[MBAR_IDX]]]
+        // CHECK: nvws.arrive_barrier %[[MBAR_VIEW]], tracked_async_op = <umma>
+        ttng.aref_put.exit %arefT[%tile], producers=[#ttng.aref_producer<umma>] : <[!ttg.memdesc<2x128x256xf32, #tmem, #ttng.tensor_memory, mutable>]>, i32
+      }
+      ttng.warp_group_return
+    } {barId = 1}}
+
     ttng.warp_group start_warp(4) num_warps(4) : {{
-    // CHECK: scf.for
-      %12 = scf.for %arg7 = %5 to %4 step %6 iter_args(%arg8 = %c0_i32) -> (i32)  : i32 {
-        %13 = arith.muli %3, %c8_i32 {groups = [@nvws.epilogue, @nvws.tma_load]} : i32
-        %14 = arith.divsi %arg7, %13 {groups = [@nvws.epilogue, @nvws.tma_load]} : i32
-        %15 = arith.muli %14, %c8_i32 {groups = [@nvws.epilogue, @nvws.tma_load]} : i32
-        %16 = arith.subi %1, %15 {groups = [@nvws.epilogue, @nvws.tma_load]} : i32
-        %17 = arith.minsi %16, %c8_i32 {groups = [@nvws.epilogue, @nvws.tma_load]} : i32
-        %18 = arith.remsi %arg7, %13 {groups = [@nvws.epilogue, @nvws.tma_load]} : i32
-        %19 = arith.remsi %18, %17 {groups = [@nvws.epilogue, @nvws.tma_load]} : i32
-        %20 = arith.addi %15, %19 {groups = [@nvws.epilogue, @nvws.tma_load]} : i32
-        %21 = arith.divsi %18, %17 {groups = [@nvws.epilogue, @nvws.tma_load]} : i32
-        %22 = arith.muli %20, %c128_i32 {groups = [@nvws.epilogue, @nvws.tma_load]} : i32
-        %23 = arith.muli %21, %c128_i32 {groups = [@nvws.epilogue, @nvws.tma_load]} : i32
-        %24 = arith.addi %arg6, %c127_i32 {groups = [@nvws.mma, @nvws.tma_load]} : i32
-        %25 = arith.divsi %24, %c128_i32 {groups = [@nvws.mma, @nvws.tma_load]} : i32
-    	// CHECK: scf.for
-	// CHECK: nvvm.barrier id =
-        %26:2 = scf.for %arg9 = %c0_i32 to %25 step %c1_i32 iter_args(%arg10 = %c0_i32, %arg11 = %arg8) -> (i32, i32)  : i32 {
-          %c1_i64 = arith.constant {groups = [@nvws.epilogue, @nvws.tma_load]} 1 : i64
-          %00 = arith.extsi %arg5 {groups = [@nvws.tma_load]} : i32 to i64
-          %27 = tt.make_tensor_descriptor %arg0, [%arg4, %arg5], [%00, %c1_i64] {groups = [@nvws.tma_load]} : <f16>, <tensor<128x128xf16, #shared>>
-          %28 = tt.make_tensor_descriptor %arg1, [%arg4, %arg5], [%00, %c1_i64] {groups = [@nvws.tma_load]} : <f16>, <tensor<128x128xf16, #shared>>
-          ttng.aref_put %9[%arg11] {groups = [@nvws.tma_load]} : <[!ttg.memdesc<3x128x128xf16, #shared, #smem, mutable>, !ttg.memdesc<3x128x128xf16, #shared, #smem, mutable>]>, i32 {
-          ^bb0(%arg12: !ttg.memdesc<128x128xf16, #shared, #smem, mutable>, %arg13: !ttg.memdesc<128x128xf16, #shared, #smem, mutable>):
-            %31 = tt.descriptor_load %27[%22, %arg10] {groups = [@nvws.tma_load]} : !tt.tensordesc<tensor<128x128xf16, #shared>> -> tensor<128x128xf16, #blocked>
-            ttg.local_store %31, %arg12 {groups = [@nvws.tma_load]} : tensor<128x128xf16, #blocked> -> !ttg.memdesc<128x128xf16, #shared, #smem, mutable>
-            %32 = tt.descriptor_load %28[%arg10, %23] {groups = [@nvws.tma_load]} : !tt.tensordesc<tensor<128x128xf16, #shared>> -> tensor<128x128xf16, #blocked>
-            ttg.local_store %32, %arg13 {groups = [@nvws.tma_load]} : tensor<128x128xf16, #blocked> -> !ttg.memdesc<128x128xf16, #shared, #smem, mutable>
-            ttng.aref_return {groups = [@nvws.tma_load]}
-          }
-          %29 = arith.addi %arg10, %c128_i32 {groups = [@nvws.tma_load]} : i32
-          %30 = arith.addi %arg11, %c1_i32 {groups = [@nvws.tma_load]} : i32
-          scf.yield {groups = [@nvws.tma_load]} %29, %30 : i32, i32
-        } {groups = [@nvws.tma_load]}
-        scf.yield {groups = [@nvws.tma_load]} %26#1 : i32
-      } {groups = [@nvws.tma_load]}
+      // CHECK: scf.for %[[TILE:.*]]
+      scf.for %tile = %tile0 to %tile1 step %c1 : i32 {
+        %acc = ttng.aref_get.enter %arefT[%tile] <%tile> : <[!ttg.memdesc<2x128x256xf32, #tmem, #ttng.tensor_memory, mutable>]>, i32 -> !ttg.memdesc<128x256xf32, #tmem, #ttng.tensor_memory, mutable>
+        %val = ttng.tmem_load %acc : !ttg.memdesc<128x256xf32, #tmem, #ttng.tensor_memory, mutable> -> tensor<128x256xf32, #blocked2>
+        ttng.aref_get.exit %arefT[%tile], consumers = [#ttng.aref_consumer<ldtm>] : <[!ttg.memdesc<2x128x256xf32, #tmem, #ttng.tensor_memory, mutable>]>, i32
+      }
       ttng.warp_group_return
-    } {barId = 1 : i32, groups = [@nvws.tma_load]}}
-    // CHECK: ttng.warp_group start_warp(0) num_warps(4)
-    ttng.warp_group start_warp(0) num_warps(4) : {{
-      // CHECK:   scf.for %[[OUTER_IDX:.*]] = %[[LB:.*]] to {{.*}} step %[[STEP:.*]] iter_args(%[[NORM_IDX:.*]] = {{.*}}, %[[TMEM_EMPTY_PHASE:.*]] = %[[C1]]
-      %12 = scf.for %arg7 = %5 to %4 step %6 iter_args(%arg8 = %c0_i32) -> (i32)  : i32 {
-        // CHECK: %[[SUB:.*]] = arith.subi %[[OUTER_IDX]], %[[LB]]
-        // CHECK: %[[OUTER_NORM_IDX:.*]] = arith.divsi %[[SUB]], %[[STEP]]
-	// CHECK: %[[STAGE_IDX:.*]] = arith.remsi %[[OUTER_NORM_IDX]], %[[C2]]
-	// CHECK: %[[TMEM_EMPTY_SLICE:.*]] = ttg.memdesc_subview %[[TMEM_EMPTY]][%[[STAGE_IDX]]]
-	// CHECK: ttng.wait_barrier %[[TMEM_EMPTY_SLICE]], %[[TMEM_EMPTY_PHASE]]
-        %13 = arith.subi %arg7, %5 {groups = [@nvws.mma]} : i32
-        %14 = arith.divsi %13, %6 {groups = [@nvws.mma]} : i32
-        %15 = arith.addi %arg6, %c127_i32 {groups = [@nvws.mma, @nvws.tma_load]} : i32
-        %16 = arith.divsi %15, %c128_i32 {groups = [@nvws.mma, @nvws.tma_load]} : i32
-        %17 = ttng.aref_put.enter %11[%14] {groups = [@nvws.mma]} : <[!ttg.memdesc<2x128x128xf32, #tmem, #ttng.tensor_memory, mutable>]>, i32 -> !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>
-	// CHECK: scf.for
-	// CHECK: nvvm.barrier id =
-        %18:2 = scf.for %arg9 = %c0_i32 to %16 step %c1_i32 iter_args(%arg10 = %false, %arg11 = %arg8) -> (i1, i32)  : i32 {
-          %19:2 = ttng.aref_get.enter %9[%arg11] {groups = [@nvws.mma]} : <[!ttg.memdesc<3x128x128xf16, #shared, #smem, mutable>, !ttg.memdesc<3x128x128xf16, #shared, #smem, mutable>]>, i32 -> !ttg.memdesc<128x128xf16, #shared, #smem, mutable>, !ttg.memdesc<128x128xf16, #shared, #smem, mutable>
-          ttng.tc_gen5_mma %19#0, %19#1, %17, %arg10, %true, %9[%arg11] {groups = [@nvws.mma]} : !ttg.memdesc<128x128xf16, #shared, #smem, mutable>, !ttg.memdesc<128x128xf16, #shared, #smem, mutable>, !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>, !ttng.aref<[!ttg.memdesc<3x128x128xf16, #shared, #smem, mutable>, !ttg.memdesc<3x128x128xf16, #shared, #smem, mutable>]>, i32
-          %20 = arith.addi %arg11, %c1_i32 {groups = [@nvws.mma]} : i32
-          scf.yield {groups = [@nvws.mma]} %true, %20 : i1, i32
-        } {groups = [@nvws.mma]}
-	// CHECK: }
-	// CHECK: %[[STAGE_IDX2:.*]] = arith.remsi %[[OUTER_NORM_IDX]], %[[C2]]
-	// CHECK: %[[TMEM_FULL_SLICE:.*]] = ttg.memdesc_subview %[[TMEM_FULL]][%[[STAGE_IDX2]]]
-	// CHECK: nvws.arrive_barrier %[[TMEM_FULL_SLICE]] true
-        ttng.aref_put.exit %11[%14] {groups = [@nvws.mma]} : <[!ttg.memdesc<2x128x128xf32, #tmem, #ttng.tensor_memory, mutable>]>, i32
-        scf.yield {groups = [@nvws.mma]} %18#1 : i32
-      } {groups = [@nvws.mma]}
-      ttng.warp_group_return
-    } {barId = 2 : i32, groups = [@nvws.mma]}}
-    // CHECK: ttng.warp_group start_warp(8) num_warps(4)
-    // CHECK: for {{.*}} = {{.*}} to {{.*}} step {{.*}} iter_args(%[[OUTER_IDX:.*]] = {{.*}}, %[[PHASE:.*]] = {{.*}})
-    ttng.warp_group start_warp(8) num_warps(4) : {{
-      %12 = scf.for %arg7 = %5 to %4 step %6 iter_args(%arg8 = %c0_i32) -> (i32)  : i32 {
-        %13 = arith.muli %3, %c8_i32 {groups = [@nvws.epilogue, @nvws.tma_load]} : i32
-        %14 = arith.divsi %arg7, %13 {groups = [@nvws.epilogue, @nvws.tma_load]} : i32
-        %15 = arith.muli %14, %c8_i32 {groups = [@nvws.epilogue, @nvws.tma_load]} : i32
-        %16 = arith.subi %1, %15 {groups = [@nvws.epilogue, @nvws.tma_load]} : i32
-        %17 = arith.minsi %16, %c8_i32 {groups = [@nvws.epilogue, @nvws.tma_load]} : i32
-        %18 = arith.remsi %arg7, %13 {groups = [@nvws.epilogue, @nvws.tma_load]} : i32
-        %19 = arith.remsi %18, %17 {groups = [@nvws.epilogue, @nvws.tma_load]} : i32
-        %20 = arith.addi %15, %19 {groups = [@nvws.epilogue, @nvws.tma_load]} : i32
-        %21 = arith.divsi %18, %17 {groups = [@nvws.epilogue, @nvws.tma_load]} : i32
-        %22 = arith.muli %20, %c128_i32 {groups = [@nvws.epilogue, @nvws.tma_load]} : i32
-        %23 = arith.muli %21, %c128_i32 {groups = [@nvws.epilogue, @nvws.tma_load]} : i32
-	// CHECK-DAG: %[[TMEM_BUF_IDX:.*]] = arith.remsi %[[OUTER_IDX]], {{.*}}
-	// CHECK-DAG: %[[TMEM_BUF_IDX2:.*]] = arith.remsi %[[OUTER_IDX]], {{.*}}
-        // CHECK-DAG: %[[TMEM_FULL_SLICE:.*]] = ttg.memdesc_subview %[[TMEM_FULL]][%[[TMEM_BUF_IDX]]]
-	// CHECK-DAG: %[[TMEM_SLICE:.*]] = ttg.memdesc_subview %[[TMEM]][%[[TMEM_BUF_IDX2]],
-	// CHECK-DAG: wait_barrier %[[TMEM_FULL_SLICE]], %[[PHASE]]
-        %24 = ttng.aref_get.enter %11[%arg8] {groups = [@nvws.epilogue]} : <[!ttg.memdesc<2x128x128xf32, #tmem, #ttng.tensor_memory, mutable>]>, i32 -> !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>
+    } {barId = 2}}
 
-        // CHECK: ttng.tmem_load %[[TMEM_SLICE]]
-        %25 = ttng.tmem_load %24 {groups = [@nvws.epilogue]} : !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable> -> tensor<128x128xf32, #blocked1>
 
-	// CHECK: %[[TMEM_BUF_IDX3:.*]] = arith.remsi %[[OUTER_IDX]], {{.*}}
-        // CHECK: %[[TMEM_EMPTY_SLICE:.*]] = ttg.memdesc_subview %[[TMEM_EMPTY]][%[[TMEM_BUF_IDX3]]]
-	// CHECK: nvws.arrive_barrier %[[TMEM_EMPTY_SLICE]] false
-        ttng.aref_get.exit %11[%arg8] {groups = [@nvws.epilogue]} : <[!ttg.memdesc<2x128x128xf32, #tmem, #ttng.tensor_memory, mutable>]>, i32
-        %26 = arith.truncf %25 {groups = [@nvws.epilogue]} : tensor<128x128xf32, #blocked1> to tensor<128x128xf16, #blocked1>
-        %27 = tt.make_range {end = 128 : i32, groups = [@nvws.epilogue], start = 0 : i32} : tensor<128xi32, #ttg.slice<{dim = 1, parent = #blocked2}>>
-        %28 = tt.make_range {end = 128 : i32, groups = [@nvws.epilogue], start = 0 : i32} : tensor<128xi32, #ttg.slice<{dim = 0, parent = #blocked2}>>
-        %29 = tt.splat %22 {groups = [@nvws.epilogue]} : i32 -> tensor<128xi32, #ttg.slice<{dim = 1, parent = #blocked2}>>
-        %30 = arith.addi %29, %27 {groups = [@nvws.epilogue]} : tensor<128xi32, #ttg.slice<{dim = 1, parent = #blocked2}>>
-        %31 = tt.splat %23 {groups = [@nvws.epilogue]} : i32 -> tensor<128xi32, #ttg.slice<{dim = 0, parent = #blocked2}>>
-        %32 = arith.addi %31, %28 {groups = [@nvws.epilogue]} : tensor<128xi32, #ttg.slice<{dim = 0, parent = #blocked2}>>
-        %33 = tt.expand_dims %30 {axis = 1 : i32, groups = [@nvws.epilogue]} : tensor<128xi32, #ttg.slice<{dim = 1, parent = #blocked2}>> -> tensor<128x1xi32, #blocked2>
-        %34 = tt.splat %arg5 {groups = [@nvws.epilogue]} : i32 -> tensor<128x1xi32, #blocked2>
-        %35 = arith.muli %33, %34 {groups = [@nvws.epilogue]} : tensor<128x1xi32, #blocked2>
-        %36 = tt.splat %arg3 {groups = [@nvws.epilogue]} : !tt.ptr<f16> -> tensor<128x1x!tt.ptr<f16>, #blocked2>
-        %37 = tt.addptr %36, %35 {groups = [@nvws.epilogue]} : tensor<128x1x!tt.ptr<f16>, #blocked2>, tensor<128x1xi32, #blocked2>
-        %38 = tt.expand_dims %32 {axis = 0 : i32, groups = [@nvws.epilogue]} : tensor<128xi32, #ttg.slice<{dim = 0, parent = #blocked2}>> -> tensor<1x128xi32, #blocked2>
-        %39 = tt.broadcast %37 {groups = [@nvws.epilogue]} : tensor<128x1x!tt.ptr<f16>, #blocked2> -> tensor<128x128x!tt.ptr<f16>, #blocked2>
-        %40 = tt.broadcast %38 {groups = [@nvws.epilogue]} : tensor<1x128xi32, #blocked2> -> tensor<128x128xi32, #blocked2>
-        %41 = tt.addptr %39, %40 {groups = [@nvws.epilogue]} : tensor<128x128x!tt.ptr<f16>, #blocked2>, tensor<128x128xi32, #blocked2>
-        %42 = tt.splat %arg4 {groups = [@nvws.epilogue]} : i32 -> tensor<128x1xi32, #blocked2>
-        %43 = arith.cmpi slt, %33, %42 {groups = [@nvws.epilogue]} : tensor<128x1xi32, #blocked2>
-        %44 = tt.splat %arg5 {groups = [@nvws.epilogue]} : i32 -> tensor<1x128xi32, #blocked2>
-        %45 = arith.cmpi slt, %38, %44 {groups = [@nvws.epilogue]} : tensor<1x128xi32, #blocked2>
-        %46 = tt.broadcast %43 {groups = [@nvws.epilogue]} : tensor<128x1xi1, #blocked2> -> tensor<128x128xi1, #blocked2>
-        %47 = tt.broadcast %45 {groups = [@nvws.epilogue]} : tensor<1x128xi1, #blocked2> -> tensor<128x128xi1, #blocked2>
-        %48 = arith.andi %46, %47 {groups = [@nvws.epilogue]} : tensor<128x128xi1, #blocked2>
-        %49 = ttg.convert_layout %26 : tensor<128x128xf16, #blocked1> -> tensor<128x128xf16, #blocked2>
-	// CHECK: tt.store
-	// CHECK: nvvm.barrier id = {{.*}} number_of_threads = %[[C128]]
-        tt.store %41, %49, %48 {groups = [@nvws.epilogue]} : tensor<128x128x!tt.ptr<f16>, #blocked2>
-        %50 = arith.addi %arg8, %c1_i32 {groups = [@nvws.epilogue]} : i32
-        scf.yield {groups = [@nvws.epilogue]} %50 : i32
-      } {groups = [@nvws.epilogue]}
-      ttng.warp_group_return
-    } {barId = 3 : i32, groups = [@nvws.epilogue]}}
     tt.return
   }
 }

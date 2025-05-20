@@ -122,8 +122,6 @@ def test_experimental_matmul(
     is_sm10x = utils.is_sm10x()
     if is_sm10x and num_sms_check and triton.cdiv(M,BLOCK_M) * triton.cdiv(N,BLOCK_N) > NUM_SMS and ENABLE_WARP_SPECIALIZATION:
         # run with `compute-sanitizer --tool=memcheck ..` makes hang deterministic`
-        # https://jirasw.nvidia.com/browse/OT-113
-        # https://jirasw.nvidia.com/browse/OT-106
         pytest.skip("auto-ws may result in dead-lock with persistent kernel + regular stores")
 
     dtype = utils.torch_dtype(DTYPE)
@@ -155,7 +153,6 @@ def test_experimental_matmul(
     # FIXME: shared memory allocation done by Triton makes no sense here, ignore check for now
     # and ignore checks below that check the kernel launch
     # utils.init_check_shared_memory_hook(matmul_kernel_tma_persistent, shared_memory)
-    # See https://jirasw.nvidia.com/browse/OT-107
 
     # XXX: Need this otherwise it fails with smem check
     utils.clear_check_shared_memory_hook()

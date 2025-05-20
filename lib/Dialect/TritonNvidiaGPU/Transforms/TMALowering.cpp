@@ -1,4 +1,3 @@
-#include "mlir/Dialect/LLVMIR/NVVMDialect.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/PatternMatch.h"
@@ -8,7 +7,6 @@
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Attributes.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
-#include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/TritonGPUInterfaces.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
@@ -72,11 +70,62 @@ static Attribute getEncoding(Operation *op, RankedTensorType tensorType,
   llvm::report_fatal_error(msg);
 }
 
-static void
-lowerTMALoad(Operation *op, RankedTensorType tensorType, Value desc,
-             function_ref<void(Value, Value, Value, Value)> createLoad,
-             PatternRewriter &rewriter) {
-  auto mod = op->getParentOfType<ModuleOp>();
+} // namespace
+
+namespace mlir::triton::nvidia_gpu {
+
+void createBarrierExpectOp(Location loc, OpBuilder &rewriter,
+                           SmallVector<Operation *> const &ops,
+                           Value barrierAlloc) {
+  auto getTensorTypeAndDesc =
+      [](Operation *op) -> std::pair<RankedTensorType, Value> {
+    if (auto loadOp = dyn_cast<DescriptorLoadOp>(op)) {
+      return {loadOp.getType(), loadOp.getDesc()};
+    } else if (auto gatherOp = dyn_cast<DescriptorGatherOp>(op)) {
+      return {gatherOp.getType(), gatherOp.getDesc()};
+    } else {
+      llvm_unreachable("Unsupported operation type");
+    }
+  };
+  int sizeInBytes = 0;
+  for (auto op : ops) {
+    auto [tensorType, desc] = getTensorTypeAndDesc(op);
+    auto encoding = getEncodingFromDescriptor(op, tensorType, desc);
+    auto shapePerCTA = getShapePerCTA(encoding, tensorType.getShape());
+    sizeInBytes += product(shapePerCTA) *
+                   tensorType.getElementType().getIntOrFloatBitWidth() / 8;
+  }
+  Value pred = rewriter.create<arith::ConstantIntOp>(loc, 1, 1);
+  rewriter.create<triton::nvidia_gpu::BarrierExpectOp>(loc, barrierAlloc,
+                                                       sizeInBytes, pred);
+}
+
+void createTMALoad(DescriptorLoadOp op, OpBuilder &rewriter, Value barrierAlloc,
+                   Value alloc, Value pred) {
+  Value tmaPtr = rewriter.create<triton::nvidia_gpu::TensorDescToTMAPtrOp>(
+      op.getLoc(), op.getDesc());
+  auto indices = translateTMAIndices(
+      rewriter, op.getLoc(),
+      op.getDesc().getType().getBlockType().getEncoding(), op.getIndices());
+  rewriter.create<triton::nvidia_gpu::AsyncTMACopyGlobalToLocalOp>(
+      op.getLoc(), tmaPtr, indices, barrierAlloc, alloc, pred);
+};
+
+void createTMAGather(DescriptorGatherOp op, OpBuilder &rewriter,
+                     Value barrierAlloc, Value alloc, Value pred) {
+  Value tmaPtr = rewriter.create<triton::nvidia_gpu::TensorDescToTMAPtrOp>(
+      op.getLoc(), op.getDesc());
+  rewriter.create<triton::nvidia_gpu::AsyncTMAGatherOp>(
+      op.getLoc(), tmaPtr, op.getXOffsets(), op.getYOffset(), barrierAlloc,
+      alloc, pred);
+}
+
+} // namespace mlir::triton::nvidia_gpu
+
+namespace {
+static void lowerTMALoad(Operation *op, RankedTensorType tensorType, Value desc,
+                         function_ref<void(Value, Value, Value)> createLoad,
+                         PatternRewriter &rewriter) {
   MLIRContext *ctx = op->getContext();
   Attribute sharedMemorySpace = triton::gpu::SharedMemorySpaceAttr::get(ctx);
   auto loc = op->getLoc();
@@ -95,25 +144,14 @@ lowerTMALoad(Operation *op, RankedTensorType tensorType, Value desc,
                        sharedMemorySpace, /*mutableMemory=*/true);
   Value barrierAlloc = rewriter.create<LocalAllocOp>(loc, barrierMemDescType);
   rewriter.create<InitBarrierOp>(loc, barrierAlloc, 1);
-  auto shapePerCTA = getShapePerCTA(encoding, tensorType.getShape());
-  int sizeInBytes = product(shapePerCTA) *
-                    tensorType.getElementType().getIntOrFloatBitWidth() / 8;
+  createBarrierExpectOp(loc, rewriter, {op}, barrierAlloc);
+  auto mod = op->getParentOfType<ModuleOp>();
   if (triton::gpu::TritonGPUDialect::isWarpSpecialized(mod)) {
     insertBarrier(rewriter, loc);
   }
   Value pred = rewriter.create<arith::ConstantIntOp>(loc, 1, 1);
-  rewriter.create<triton::nvidia_gpu::BarrierExpectOp>(loc, barrierAlloc,
-                                                       sizeInBytes, pred);
-  Value tmaPtr =
-      rewriter.create<triton::nvidia_gpu::TensorDescToTMAPtrOp>(loc, desc);
-  if (triton::gpu::TritonGPUDialect::isWarpSpecialized(mod)) {
-    insertBarrier(rewriter, loc);
-  }
-  createLoad(tmaPtr, barrierAlloc, alloc, pred);
+  createLoad(barrierAlloc, alloc, pred);
   Value phase = rewriter.create<arith::ConstantIntOp>(loc, 0, 32);
-  if (triton::gpu::TritonGPUDialect::isWarpSpecialized(mod)) {
-    insertBarrier(rewriter, loc);
-  }
   rewriter.create<WaitBarrierOp>(loc, barrierAlloc, phase);
   rewriter.create<InvalBarrierOp>(loc, barrierAlloc);
   replaceUsesWithLocalLoad(rewriter, op->getResult(0), alloc);
@@ -127,13 +165,8 @@ public:
   LogicalResult matchAndRewrite(DescriptorLoadOp op,
                                 PatternRewriter &rewriter) const override {
     auto loc = op.getLoc();
-    auto createLoad = [&](Value tmaPtr, Value barrierAlloc, Value alloc,
-                          Value pred) {
-      auto indices = translateTMAIndices(
-          rewriter, op.getLoc(),
-          op.getDesc().getType().getBlockType().getEncoding(), op.getIndices());
-      rewriter.create<triton::nvidia_gpu::AsyncTMACopyGlobalToLocalOp>(
-          op.getLoc(), tmaPtr, indices, barrierAlloc, alloc, pred);
+    auto createLoad = [&](Value barrierAlloc, Value alloc, Value pred) {
+      createTMALoad(op, rewriter, barrierAlloc, alloc, pred);
     };
     lowerTMALoad(op, op.getType(), op.getDesc(), createLoad, rewriter);
     return success();
@@ -145,8 +178,9 @@ struct TMAGatherLowering : public OpRewritePattern<DescriptorGatherOp> {
 
   LogicalResult matchAndRewrite(DescriptorGatherOp op,
                                 PatternRewriter &rewriter) const override {
-    auto createLoad = [&](Value tmaPtr, Value barrierAlloc, Value alloc,
-                          Value pred) {
+    auto createLoad = [&](Value barrierAlloc, Value alloc, Value pred) {
+      Value tmaPtr = rewriter.create<triton::nvidia_gpu::TensorDescToTMAPtrOp>(
+          op.getLoc(), op.getDesc());
       rewriter.create<triton::nvidia_gpu::AsyncTMAGatherOp>(
           op.getLoc(), tmaPtr, op.getXOffsets(), op.getYOffset(), barrierAlloc,
           alloc, pred);
@@ -169,12 +203,35 @@ static void lowerTMAStore(Operation *op, mlir::TypedValue<RankedTensorType> src,
   MemDescType memDescType =
       MemDescType::get(tensorType.getShape(), tensorType.getElementType(),
                        encoding, sharedMemorySpace, /*mutableMemory=*/true);
+
+  bool isWs = triton::gpu::TritonGPUDialect::isWarpSpecialized(
+      op->getParentOfType<ModuleOp>());
+
   Value alloc = rewriter.create<LocalAllocOp>(loc, memDescType, src);
   rewriter.create<triton::nvidia_gpu::FenceAsyncSharedOp>(loc, false);
+
+  if (isWs) {
+    // Barrier required for test_tma_persistent_blackwell with subtiling.
+    // Manual insertion ensures correctness; membar analysis isn't run with
+    // AutoWS For SWP, syncthread must be added by membar here, because it's
+    // between STS shared fence and TMA issuing.
+    insertBarrier(rewriter, loc);
+  }
+
   Value tmaPtr =
       rewriter.create<triton::nvidia_gpu::TensorDescToTMAPtrOp>(loc, desc);
   createStore(tmaPtr, alloc);
   rewriter.create<triton::nvidia_gpu::TMAStoreWaitOp>(loc, 0);
+
+  if (isWs) {
+    // Ensure all threads arrive at this point to avoid race conditions between
+    // two TMA stores in Blackwell tests with sub-tiling enabled. Without this
+    // barrier, TMAStoreWaitOp might be executed by another warp that is
+    // slightly ahead of the warp issuing AsyncTMACopyLocalToGlobal. The barrier
+    // ensures that all warps proceed simultaneously after the data is copied.
+    insertBarrier(rewriter, loc);
+  }
+
   rewriter.eraseOp(op);
 }
 

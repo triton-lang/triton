@@ -24,6 +24,40 @@
 
 include "mlir/Pass/PassBase.td"
 
+def NVWSAssignGroups : Pass<"nvws-assign-groups", "mlir::ModuleOp"> {
+  let summary = "Assign initial group information";
+
+  let description = [{
+    Determines the warp group strategy for the program, and produces the initial
+    group assignments for ops.
+  }];
+
+  let constructor = "mlir::createNVWSAssignGroupsPass()";
+
+  let dependentDialects = [
+    "mlir::triton::nvws::NVWSDialect",
+    "mlir::triton::TritonDialect",
+    "mlir::triton::gpu::TritonGPUDialect"
+  ];
+}
+
+def NVWSPropagateGroups : Pass<"nvws-propagate-groups", "mlir::ModuleOp"> {
+  let summary = "Propagates group information";
+
+  let description = [{
+    Propagates group information throughout the program, based on
+    the initial group assignment.
+  }];
+
+  let constructor = "mlir::createNVWSPropagateGroupsPass()";
+
+  let dependentDialects = [
+    "mlir::triton::nvws::NVWSDialect",
+    "mlir::triton::TritonDialect",
+    "mlir::triton::gpu::TritonGPUDialect"
+  ];
+}
+
 def NVWSLowerWarpGroup : Pass<"nvws-lower-warp-group", "mlir::ModuleOp"> {
   let summary = "Convert nvws.warp_group to ttg.warp_specialize.";
 

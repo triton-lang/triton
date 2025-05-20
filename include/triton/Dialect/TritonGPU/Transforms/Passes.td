@@ -374,17 +374,6 @@ def TritonGPUCoalesceAsyncCopy: Pass<"tritongpu-coalesce-async-copy", "mlir::Mod
                            "mlir::triton::TritonDialect"];
 }
 
-def TritonGPUAnalyzeWarpSpecialization : Pass</*cli-arg*/"tritongpu-analyze-warp-specialization", /*Op*/"mlir::ModuleOp"> {
-  let summary = "Analyzes the warp specialization pattern";
-  let description = [{
-    This pass analyzes the warp specialization pattern.
-  }];
-
-  let dependentDialects = ["mlir::triton::gpu::TritonGPUDialect",
-                           "mlir::triton::TritonDialect"];
-}
-
-
 def TritonGPUSplitWarpGroupLoops : Pass</*cli-arg*/"tritongpu-split-warp-group-loops", /*Op*/"mlir::ModuleOp"> {
   let summary = "Split warp group loops for warp specialization";
   let description = [{

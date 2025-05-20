@@ -210,16 +210,7 @@ TMemRuntimeInfo getTMemRuntimeInfo(Operation *op, RankedTensorType tensorType,
       nvidia_gpu::isDistributedLayoutTMemCompatible(op, tensorType, memType) &&
       "unsupported distributed layout for tensor memory");
 
-  // Note: use ttg.total-num-warps for tmem address calculations
-  // if this op is not contained within a warp group,
-  // i.e. occurs at top-level across all warps
-
-  auto mod = op->getParentOfType<ModuleOp>();
-  if (triton::gpu::TritonGPUDialect::isWarpSpecialized(mod)) {
-    info.numWarps = triton::gpu::lookupTotalNumWarps(op);
-  } else {
-    info.numWarps = triton::gpu::lookupNumWarps(op);
-  }
+  info.numWarps = triton::gpu::lookupNumWarps(op);
   assert(info.numWarps % 4 == 0 && "Unexpected number of warps");
   info.numWarpGroups = info.numWarps / 4;
   info.numElementsPer32B = 32 / tensorType.getElementTypeBitWidth();

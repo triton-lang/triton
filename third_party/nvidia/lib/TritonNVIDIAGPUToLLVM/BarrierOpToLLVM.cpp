@@ -30,6 +30,7 @@
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 
 #include "Utility.h"
+#include "llvm/Support/ErrorHandling.h"
 
 using namespace mlir;
 using namespace mlir::triton;
@@ -224,8 +225,7 @@ struct NvwsArriveBarrierOpConversion
   using ConvertOpToLLVMPattern::ConvertOpToLLVMPattern;
 
   LogicalResult
-  matchAndRewrite(triton::nvws::ArriveBarrierOp op,
-                  OpAdaptor adaptor,
+  matchAndRewrite(triton::nvws::ArriveBarrierOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     auto smemObj = LLVM::getSharedMemoryObjectFromStruct(
         op.getLoc(), adaptor.getAlloc(),
@@ -233,11 +233,15 @@ struct NvwsArriveBarrierOpConversion
         rewriter);
     auto loc = op.getLoc();
 
-    if (op.getCommit()) {
+    auto trackedOp = op.getTrackedOp();
+    if (trackedOp == nvws::TrackedAsyncOp::UMMA ||
+        trackedOp == nvws::TrackedAsyncOp::UTCCP) {
       ModuleOp m = op->getParentOfType<ModuleOp>();
       Value pred = LLVM::NVIDIA::createElectPredicateWarp0(loc, rewriter);
       LLVM::NVIDIA::createTcgen05Commit(rewriter, loc, smemObj.getBase(), pred);
-    } else {
+    } else if (trackedOp == nvws::TrackedAsyncOp::LDGSTS) {
+      llvm_unreachable("Need to support cp.async.mbarrier.arrive");
+    } else if (trackedOp == nvws::TrackedAsyncOp::NONE) {
       ::mlir::triton::PTXBuilder ptxBuilder;
       const std::string ptx = "mbarrier.arrive.shared.b64 _, [$0];";
       auto &barSyncOp = *ptxBuilder.create<>(ptx);
@@ -245,6 +249,8 @@ struct NvwsArriveBarrierOpConversion
                 /*onlyAttachMLIRArgs=*/true);
       auto voidTy = void_ty(op->getContext());
       ptxBuilder.launch(rewriter, op->getLoc(), voidTy);
+    } else {
+      llvm_unreachable("unknown tracked op");
     }
     rewriter.eraseOp(op);
     return success();

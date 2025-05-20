@@ -1,21 +1,25 @@
-// RUN: triton-opt %s -split-input-file --tritongpu-analyze-warp-specialization | FileCheck %s
+// RUN: triton-opt -split-input-file --nvws-assign-groups %s | FileCheck %s
 
-// CHECK-LABEL: @matmul_kernel_tma
-// CHECK: %[[#LA:]] = tt.descriptor_load {{.*}} {groups = [@nvws.tma_load]}
-// CHECK: %[[#MA:]] = ttg.local_alloc {{.*}} {groups = [@nvws.mma]}
-// CHECK: %[[#LB:]] = tt.descriptor_load {{.*}} {groups = [@nvws.tma_load]}
-// CHECK: %[[#MB:]] = ttg.local_alloc {{.*}} {groups = [@nvws.mma]}
-// CHECK: %[[#MC:]] = ttg.memdesc_trans %[[#MB]] {groups = [@nvws.mma], order = {{.*}}}
-// CHECK: %[[#MD:]] = ttng.tmem_alloc {{.*}}
-// CHECK: ttng.tc_gen5_mma %[[#MA]], %[[#MC]], %[[#MD]], %true, %true {groups = [@nvws.mma]}
-// CHECK: %[[#ME:]] = ttng.tmem_load %[[#MD]] {{.*}}
-// CHECK: %[[#MF:]] = arith.addi {{.*}}
-// CHECK: scf.yield %[[#ME]], %[[#MF]] {{.*}}
+// CHECK: module attributes {nvws.mma = {num_warps = 8 : i32, start_warp = 0 : i32}, nvws.tma_load = {num_warps = 4 : i32, start_warp = 8 : i32},
+// CHECK-LABEL: matmul_kernel_tma
 
-// test/aref/tma_matmul.py::test_experimental_matmul[True-8-3-2-fp8-64-128-128-128-256-128
+// CHECK-NOT: groups
+// CHECK: tt.descriptor_load {{.*}} {groups = [@nvws.tma_load]}
+// CHECK-NEXT: ttg.local_alloc {{.*}} {groups = [@nvws.tma_load]}
+// CHECK-NEXT: tt.descriptor_load {{.*}} {groups = [@nvws.tma_load]}
+// CHECK-NEXT: ttg.local_alloc {{.*}} {groups = [@nvws.tma_load]}
+// CHECK-NOT: groups
+// CHECK-NEXT: ttg.memdesc_trans {{.*}} {groups = [@nvws.mma],
+// CHECK-NEXT: ttng.tmem_alloc {{.*}} {groups = [@nvws.mma]}
+// CHECK-NEXT: ttng.tc_gen5_mma {{.*}} {groups = [@nvws.mma]}
+// CHECK-NEXT: ttng.tmem_load {{.*}} {groups = [@nvws.mma]}
+// CHECK-NOT: groups
+// CHECK: tt.store {{.*}} {groups = [@nvws.mma]}
+// CHECK-NOT: groups
+
 #shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16}>
 #shared1 = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = true, elementBitWidth = 16}>
-module attributes {nvws.mma = {num_warps = 4 : i32, start_warp = 4 : i32}, nvws.tma_load = {num_warps = 4 : i32, start_warp = 0 : i32}, "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32, "ttg.warp-specialized" = true} {
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32, "ttg.warp-specialized" = true} {
   tt.func public @matmul_kernel_tma(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg2: !tt.ptr<f8E4M3FN> {tt.divisibility = 16 : i32}, %arg3: i32 {tt.divisibility = 16 : i32}, %arg4: i32 {tt.divisibility = 16 : i32}, %arg5: i32 {tt.divisibility = 16 : i32}, %arg6: i32 {tt.divisibility = 16 : i32}, %arg7: i32) attributes {noinline = false} {
     %true = arith.constant true
     %c128_i32 = arith.constant 128 : i32
@@ -37,6 +41,7 @@ module attributes {nvws.mma = {num_warps = 4 : i32, start_warp = 4 : i32}, nvws.
     %9 = tt.reinterpret_tensor_descriptor %arg0 : !tt.ptr<f32> to !tt.tensordesc<tensor<128x64xf8E4M3FN>>
     %10 = tt.reinterpret_tensor_descriptor %arg1 : !tt.ptr<f32> to !tt.tensordesc<tensor<128x64xf8E4M3FN>>
     %11:2 = scf.for %arg8 = %c0_i32 to %8 step %c1_i32 iter_args(%arg9 = %cst, %arg10 = %c0_i32) -> (tensor<128x128xf32, #ttg.blocked<{sizePerThread = [1, 64], threadsPerWarp = [32, 1], warpsPerCTA = [4, 2], order = [0, 1]}>>, i32)  : i32 {
+
       %29 = tt.descriptor_load %9[%5, %arg10] : !tt.tensordesc<tensor<128x64xf8E4M3FN>> -> tensor<128x64xf8E4M3FN, #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [4, 2], order = [1, 0]}>>
       %30 = ttg.local_alloc %29 : (tensor<128x64xf8E4M3FN, #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [4, 2], order = [1, 0]}>>) -> !ttg.memdesc<128x64xf8E4M3FN, #shared, #ttg.shared_memory>
       %31 = tt.descriptor_load %10[%6, %arg10] : !tt.tensordesc<tensor<128x64xf8E4M3FN>> -> tensor<128x64xf8E4M3FN, #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [4, 2], order = [1, 0]}>>
@@ -47,9 +52,7 @@ module attributes {nvws.mma = {num_warps = 4 : i32, start_warp = 4 : i32}, nvws.
       %35 = ttng.tmem_load %34 : !ttg.memdesc<128x128xf32, #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, unpacked = true>, #ttng.tensor_memory, mutable> -> tensor<128x128xf32, #ttg.blocked<{sizePerThread = [1, 64], threadsPerWarp = [32, 1], warpsPerCTA = [4, 2], order = [0, 1]}>>
       %36 = arith.addi %arg10, %c64_i32 : i32
       scf.yield %35, %36 : tensor<128x128xf32, #ttg.blocked<{sizePerThread = [1, 64], threadsPerWarp = [32, 1], warpsPerCTA = [4, 2], order = [0, 1]}>>, i32
-    // CHECK: } {groups = [@nvws.mma, @nvws.tma_load], groups.0 = [@nvws.mma], groups.1 = [@nvws.tma_load]}
     }
-    // CHECK: {groups = [@nvws.mma]}
     %12 = tt.fp_to_fp %11#0, rounding = rtne : tensor<128x128xf32, #ttg.blocked<{sizePerThread = [1, 64], threadsPerWarp = [32, 1], warpsPerCTA = [4, 2], order = [0, 1]}>> -> tensor<128x128xf8E4M3FN, #ttg.blocked<{sizePerThread = [1, 64], threadsPerWarp = [32, 1], warpsPerCTA = [4, 2], order = [0, 1]}>>
     %13 = tt.make_range {end = 128 : i32, start = 0 : i32} : tensor<128xi32, #ttg.slice<{dim = 1, parent = #ttg.blocked<{sizePerThread = [1, 16], threadsPerWarp = [4, 8], warpsPerCTA = [8, 1], order = [1, 0]}>}>>
     %14 = tt.make_range {end = 128 : i32, start = 0 : i32} : tensor<128xi32, #ttg.slice<{dim = 0, parent = #ttg.blocked<{sizePerThread = [1, 16], threadsPerWarp = [4, 8], warpsPerCTA = [8, 1], order = [1, 0]}>}>>
@@ -67,7 +70,6 @@ module attributes {nvws.mma = {num_warps = 4 : i32, start_warp = 4 : i32}, nvws.
     %26 = tt.broadcast %24 : tensor<1x128xi32, #ttg.blocked<{sizePerThread = [1, 16], threadsPerWarp = [4, 8], warpsPerCTA = [8, 1], order = [1, 0]}>> -> tensor<128x128xi32, #ttg.blocked<{sizePerThread = [1, 16], threadsPerWarp = [4, 8], warpsPerCTA = [8, 1], order = [1, 0]}>>
     %27 = tt.addptr %25, %26 : tensor<128x128x!tt.ptr<f8E4M3FN>, #ttg.blocked<{sizePerThread = [1, 16], threadsPerWarp = [4, 8], warpsPerCTA = [8, 1], order = [1, 0]}>>, tensor<128x128xi32, #ttg.blocked<{sizePerThread = [1, 16], threadsPerWarp = [4, 8], warpsPerCTA = [8, 1], order = [1, 0]}>>
     %28 = ttg.convert_layout %12 : tensor<128x128xf8E4M3FN, #ttg.blocked<{sizePerThread = [1, 64], threadsPerWarp = [32, 1], warpsPerCTA = [4, 2], order = [0, 1]}>> -> tensor<128x128xf8E4M3FN, #ttg.blocked<{sizePerThread = [1, 16], threadsPerWarp = [4, 8], warpsPerCTA = [8, 1], order = [1, 0]}>>
-    // CHECK: {groups = [@nvws.mma]}
     tt.store %27, %28 : tensor<128x128x!tt.ptr<f8E4M3FN>, #ttg.blocked<{sizePerThread = [1, 16], threadsPerWarp = [4, 8], warpsPerCTA = [8, 1], order = [1, 0]}>>
     tt.return
   }
@@ -75,11 +77,25 @@ module attributes {nvws.mma = {num_warps = 4 : i32, start_warp = 4 : i32}, nvws.
 
 // -----
 
-// CHECK-LABEL: @matmul_kernel_tma_persistent_blackwell
+// CHECK: module attributes {nvws.mma = {num_warps = 8 : i32, start_warp = 0 : i32}, nvws.tma_load = {num_warps = 4 : i32, start_warp = 8 : i32},
+// CHECK-LABEL: matmul_kernel_tma_persistent_blackwell
+
+// CHECK-NOT: groups
+// CHECK: tt.descriptor_load {{.*}} {groups = [@nvws.tma_load]}
+// CHECK-NEXT: ttg.local_alloc {{.*}} {groups = [@nvws.tma_load]}
+// CHECK-NEXT: tt.descriptor_load {{.*}} {groups = [@nvws.tma_load]}
+// CHECK-NEXT: ttg.local_alloc {{.*}} {groups = [@nvws.tma_load]}
+// CHECK-NEXT: ttg.memdesc_trans {{.*}} {groups = [@nvws.mma],
+// CHECK-NEXT: ttng.tmem_alloc {{.*}} {groups = [@nvws.mma]}
+// CHECK-NEXT: ttng.tc_gen5_mma {{.*}} {groups = [@nvws.mma]}
+// CHECK-NEXT: ttng.tmem_load {{.*}} {groups = [@nvws.mma]}
+// CHECK-NOT: groups
+// CHECK: tt.descriptor_store {{.*}} {groups = [@nvws.mma]}
+// CHECK-NOT: groups
 
 #shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16}>
 #shared1 = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = true, elementBitWidth = 16}>
-module attributes {nvws.mma = {num_warps = 4 : i32, start_warp = 4 : i32}, nvws.tma_load = {num_warps = 4 : i32, start_warp = 0 : i32}, "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32, "ttg.warp-specialized" = true} {
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32, "ttg.warp-specialized" = true} {
   tt.func public @matmul_kernel_tma_persistent_blackwell(%arg0: !tt.ptr<i8, 0> {tt.nv_tma_desc = 1 : i32}, %arg1: !tt.ptr<i8, 0> {tt.nv_tma_desc = 1 : i32}, %arg2: !tt.ptr<i8, 0> {tt.nv_tma_desc = 1 : i32}, %arg3: i32 {tt.divisibility = 16 : i32}, %arg4: i32 {tt.divisibility = 16 : i32}, %arg5: i32 {tt.divisibility = 16 : i32}) attributes {noinline = false} {
     %true = arith.constant true
     %c148_i32 = arith.constant 148 : i32
@@ -140,30 +156,16 @@ module attributes {nvws.mma = {num_warps = 4 : i32, start_warp = 4 : i32}, nvws.
         scf.yield %arg8, %arg9, %arg10 : i32, i32, i32
       }
       %27 = arith.muli %24, %c128_i32 : i32
-      // CHECK: %[[#LA:]] = tt.descriptor_load {{.*}} {groups = [@nvws.tma_load]}
       %28 = tt.descriptor_load %19[%26#1, %27] : !tt.tensordesc<tensor<128x128xf8E4M3FN>> -> tensor<128x128xf8E4M3FN, #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [2, 4], order = [1, 0]}>>
-      // CHECK: %[[#MA:]] = ttg.local_alloc {{.*}} {groups = [@nvws.mma]}
       %29 = ttg.local_alloc %28 : (tensor<128x128xf8E4M3FN, #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [2, 4], order = [1, 0]}>>) -> !ttg.memdesc<128x128xf8E4M3FN, #shared, #ttg.shared_memory>
-      // CHECK: %[[#LB:]] = tt.descriptor_load {{.*}} {groups = [@nvws.tma_load]}
       %30 = tt.descriptor_load %20[%26#2, %27] : !tt.tensordesc<tensor<256x128xf8E4M3FN>> -> tensor<256x128xf8E4M3FN, #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [2, 4], order = [1, 0]}>>
-      // CHECK: %[[#MB:]] = ttg.local_alloc {{.*}} {groups = [@nvws.mma]}
       %31 = ttg.local_alloc %30 : (tensor<256x128xf8E4M3FN, #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [2, 4], order = [1, 0]}>>) -> !ttg.memdesc<256x128xf8E4M3FN, #shared1, #ttg.shared_memory>
-      // CHECK: %[[#MC:]] = ttg.memdesc_trans %[[#MB]] {groups = [@nvws.mma], order = {{.*}}}
       %32 = ttg.memdesc_trans %31 {order = array<i32: 1, 0>} : !ttg.memdesc<256x128xf8E4M3FN, #shared1, #ttg.shared_memory> -> !ttg.memdesc<128x256xf8E4M3FN, #shared, #ttg.shared_memory>
-      // CHECK: %[[#MD:]] = ttng.tmem_alloc {{.*}} {groups = [@nvws.mma]}
       %33 = ttng.tmem_alloc %arg11 : (tensor<128x256xf32, #ttg.blocked<{sizePerThread = [1, 128], threadsPerWarp = [32, 1], warpsPerCTA = [4, 2], order = [0, 1]}>>) -> !ttg.memdesc<128x256xf32, #ttng.tensor_memory_encoding<blockM = 128, blockN = 256, unpacked = true>, #ttng.tensor_memory, mutable>
-      // CHECK: ttng.tc_gen5_mma %[[#MA]], %[[#MC]], %[[#MD]], %true, %true {groups = [@nvws.mma]}
       ttng.tc_gen5_mma %29, %32, %33, %true, %true : !ttg.memdesc<128x128xf8E4M3FN, #shared, #ttg.shared_memory>, !ttg.memdesc<128x256xf8E4M3FN, #shared, #ttg.shared_memory>, !ttg.memdesc<128x256xf32, #ttng.tensor_memory_encoding<blockM = 128, blockN = 256, unpacked = true>, #ttng.tensor_memory, mutable>
-      // CHECK: %[[#ME:]] = ttng.tmem_load %[[#MD]] {groups = [@nvws.mma]}
       %34 = ttng.tmem_load %33 : !ttg.memdesc<128x256xf32, #ttng.tensor_memory_encoding<blockM = 128, blockN = 256, unpacked = true>, #ttng.tensor_memory, mutable> -> tensor<128x256xf32, #ttg.blocked<{sizePerThread = [1, 128], threadsPerWarp = [32, 1], warpsPerCTA = [4, 2], order = [0, 1]}>>
       %35 = arith.cmpi eq, %24, %18 : i32
       %36 = arith.select %35, %cst, %34 : tensor<128x256xf32, #ttg.blocked<{sizePerThread = [1, 128], threadsPerWarp = [32, 1], warpsPerCTA = [4, 2], order = [0, 1]}>>
-      // CHECK scf.if %{{.*}} {
-      // CHECK:   tt.descriptor_store {{.*}} {groups = [@nvws.mma]}
-      // CHECK:   scf.yield
-      // CHECK: } else {
-      // CHECK:   scf.yield
-      // CHECK: } {groups = [@nvws.mma]}
       %37 = scf.if %35 -> (i32) {
         %38 = arith.addi %arg12, %c148_i32 : i32
         %39 = arith.divsi %38, %16 : i32
@@ -185,28 +187,41 @@ module attributes {nvws.mma = {num_warps = 4 : i32, start_warp = 4 : i32}, nvws.
         scf.yield %arg12 : i32
       }
       scf.yield %24, %26#0, %26#1, %26#2, %36, %37 : i32, i32, i32, i32, tensor<128x256xf32, #ttg.blocked<{sizePerThread = [1, 128], threadsPerWarp = [32, 1], warpsPerCTA = [4, 2], order = [0, 1]}>>, i32
-    // CHECK: } {groups = [@nvws.mma, @nvws.tma_load], groups.0 = [@nvws.mma, @nvws.tma_load], groups.1 = [@nvws.tma_load], groups.2 = [@nvws.tma_load], groups.3 = [@nvws.tma_load], groups.4 = [@nvws.mma], groups.5 = [@nvws.mma]}
     }
     tt.return
   }
 }
 
 // -----
+
+// CHECK: module attributes {nvws.mma = {num_warps = 8 : i32, start_warp = 0 : i32}, nvws.tma_load = {num_warps = 4 : i32, start_warp = 8 : i32}
+// CHECK-LABEL: matmul_kernel_tma_persistent_nested
+
+// CHECK-NOT: groups
+// CHECK: tt.descriptor_load {{.*}} {groups = [@nvws.tma_load]}
+// CHECK-NEXT: ttg.local_alloc {{.*}} {groups = [@nvws.tma_load]}
+// CHECK-NEXT: tt.descriptor_load {{.*}} {groups = [@nvws.tma_load]}
+// CHECK-NEXT: ttg.local_alloc {{.*}} {groups = [@nvws.tma_load]}
+// CHECK-NEXT: ttg.memdesc_trans {{.*}} {groups = [@nvws.mma],
+// CHECK-NEXT: ttng.tmem_alloc {{.*}} {groups = [@nvws.mma]}
+// CHECK-NEXT: ttng.tc_gen5_mma {{.*}} {groups = [@nvws.mma]}
+// CHECK-NEXT: ttng.tmem_load {{.*}} {groups = [@nvws.mma]}
+// CHECK-NOT: groups
+// CHECK: tt.descriptor_store {{.*}} {groups = [@nvws.mma]}
+// CHECK-NOT: groups
+
 #shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16}>
 #shared1 = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = true, elementBitWidth = 16}>
-module attributes {nvws.mma = {num_warps = 4 : i32, start_warp = 4 : i32}, nvws.tma_load = {num_warps = 4 : i32, start_warp = 0 : i32}, "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
   tt.func public @matmul_kernel_tma_persistent_nested(%arg0: !tt.ptr<i8, 0> {tt.nv_tma_desc = 1 : i32}, %arg1: !tt.ptr<i8, 0> {tt.nv_tma_desc = 1 : i32}, %arg2: !tt.ptr<i8, 0> {tt.nv_tma_desc = 1 : i32}, %arg3: i32 {tt.divisibility = 16 : i32}, %arg4: i32 {tt.divisibility = 16 : i32}, %arg5: i32 {tt.divisibility = 16 : i32}) attributes {noinline = false} {
-    // CHECK: %true = arith.constant {groups = [@nvws.mma]} true
     %true = arith.constant true
     %c148_i32 = arith.constant 148 : i32
     %c1_i32 = arith.constant 1 : i32
     %c0_i32 = arith.constant 0 : i32
     %c8_i32 = arith.constant 8 : i32
-    // CHECK:  %[[CST_128:.*]] = arith.constant {groups = [@nvws.mma, @nvws.tma_load]} 128 : i32
     %c128_i32 = arith.constant 128 : i32
     %c127_i32 = arith.constant 127 : i32
     %cst = arith.constant dense<0.000000e+00> : tensor<128x128xf32, #ttg.blocked<{sizePerThread = [1, 64], threadsPerWarp = [32, 1], warpsPerCTA = [4, 2], order = [0, 1]}>>
-    // CHECK: tt.get_program_id x {groups = [@nvws.mma, @nvws.tma_load]}
     %0 = tt.get_program_id x : i32
     %1 = arith.addi %arg3, %c127_i32 : i32
     %2 = arith.divsi %1, %c128_i32 : i32
@@ -239,39 +254,49 @@ module attributes {nvws.mma = {num_warps = 4 : i32, start_warp = 4 : i32}, nvws.
       %24 = arith.addi %20, %23 : i32
       %25 = arith.remsi %18, %13 : i32
       %26 = arith.divsi %25, %22 : i32
-      // CHECK: arith.muli {{.*}}, %[[CST_128]] {groups = [@nvws.mma, @nvws.tma_load]}
       %27 = arith.muli %24, %c128_i32 : i32
       %28 = arith.muli %26, %c128_i32 : i32
       %29:2 = scf.for %arg8 = %c0_i32 to %6 step %c1_i32 iter_args(%arg9 = %cst, %arg10 = %c0_i32) -> (tensor<128x128xf32, #ttg.blocked<{sizePerThread = [1, 64], threadsPerWarp = [32, 1], warpsPerCTA = [4, 2], order = [0, 1]}>>, i32)  : i32 {
-       // CHECK: tt.descriptor_load %{{.*}}[%{{.*}}, %{{.*}}] {groups = [@nvws.tma_load]}
         %32 = tt.descriptor_load %14[%27, %arg10] : !tt.tensordesc<tensor<128x128xf8E4M3FN>> -> tensor<128x128xf8E4M3FN, #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [2, 4], order = [1, 0]}>>
         %33 = ttg.local_alloc %32 : (tensor<128x128xf8E4M3FN, #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [2, 4], order = [1, 0]}>>) -> !ttg.memdesc<128x128xf8E4M3FN, #shared, #ttg.shared_memory>
-       // CHECK: tt.descriptor_load %{{.*}}[%{{.*}}, %{{.*}}] {groups = [@nvws.tma_load]}
         %34 = tt.descriptor_load %15[%28, %arg10] : !tt.tensordesc<tensor<128x128xf8E4M3FN>> -> tensor<128x128xf8E4M3FN, #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [2, 4], order = [1, 0]}>>
         %35 = ttg.local_alloc %34 : (tensor<128x128xf8E4M3FN, #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [2, 4], order = [1, 0]}>>) -> !ttg.memdesc<128x128xf8E4M3FN, #shared1, #ttg.shared_memory>
         %36 = ttg.memdesc_trans %35 {order = array<i32: 1, 0>} : !ttg.memdesc<128x128xf8E4M3FN, #shared1, #ttg.shared_memory> -> !ttg.memdesc<128x128xf8E4M3FN, #shared, #ttg.shared_memory>
         %37 = ttng.tmem_alloc %arg9 : (tensor<128x128xf32, #ttg.blocked<{sizePerThread = [1, 64], threadsPerWarp = [32, 1], warpsPerCTA = [4, 2], order = [0, 1]}>>) -> !ttg.memdesc<128x128xf32, #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, unpacked = true>, #ttng.tensor_memory, mutable>
-	// CHECK: ttng.tc_gen5_mma %{{.*}}, %{{.*}}, %{{.*}}, %true, %true {groups = [@nvws.mma]}
         ttng.tc_gen5_mma %33, %36, %37, %true, %true : !ttg.memdesc<128x128xf8E4M3FN, #shared, #ttg.shared_memory>, !ttg.memdesc<128x128xf8E4M3FN, #shared, #ttg.shared_memory>, !ttg.memdesc<128x128xf32, #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, unpacked = true>, #ttng.tensor_memory, mutable>
         %38 = ttng.tmem_load %37 : !ttg.memdesc<128x128xf32, #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, unpacked = true>, #ttng.tensor_memory, mutable> -> tensor<128x128xf32, #ttg.blocked<{sizePerThread = [1, 64], threadsPerWarp = [32, 1], warpsPerCTA = [4, 2], order = [0, 1]}>>
         %39 = arith.addi %arg10, %c128_i32 : i32
         scf.yield %38, %39 : tensor<128x128xf32, #ttg.blocked<{sizePerThread = [1, 64], threadsPerWarp = [32, 1], warpsPerCTA = [4, 2], order = [0, 1]}>>, i32
-      // CHECK: } {groups = [@nvws.mma, @nvws.tma_load], groups.0 = [@nvws.mma], groups.1 = [@nvws.tma_load]}
       }
-      // CHECK: {groups = [@nvws.mma]}
       %30 = tt.fp_to_fp %29#0, rounding = rtne : tensor<128x128xf32, #ttg.blocked<{sizePerThread = [1, 64], threadsPerWarp = [32, 1], warpsPerCTA = [4, 2], order = [0, 1]}>> -> tensor<128x128xf8E4M3FN, #ttg.blocked<{sizePerThread = [1, 64], threadsPerWarp = [32, 1], warpsPerCTA = [4, 2], order = [0, 1]}>>
-      // CHECK: {groups = [@nvws.mma]}
       %31 = ttg.convert_layout %30 : tensor<128x128xf8E4M3FN, #ttg.blocked<{sizePerThread = [1, 64], threadsPerWarp = [32, 1], warpsPerCTA = [4, 2], order = [0, 1]}>> -> tensor<128x128xf8E4M3FN, #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [2, 4], order = [1, 0]}>>
-      // CHECK: tt.descriptor_store %{{.*}}[%{{.*}}, %{{.*}}], %{{.*}} {groups = [@nvws.mma]}
       tt.descriptor_store %16[%27, %28], %31 : !tt.tensordesc<tensor<128x128xf8E4M3FN>>, tensor<128x128xf8E4M3FN, #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [2, 4], order = [1, 0]}>>
       scf.yield %18 : i32
-    // CHECK: } {groups = [@nvws.mma, @nvws.tma_load], groups.0 = [@nvws.mma]}
     }
     tt.return
   }
 }
 
 // -----
+
+// CHECK: module attributes {nvws.epilogue = {num_warps = 4 : i32, start_warp = 0 : i32}, nvws.mma = {num_warps = 4 : i32, start_warp = 4 : i32}, nvws.tma_load = {num_warps = 4 : i32, start_warp = 8 : i32}
+// CHECK-LABEL: matmul_kernel
+
+// CHECK-NOT: groups
+// CHECK: ttng.tmem_alloc {{.*}} {groups = [@nvws.mma]}
+// CHECK-NOT: groups
+// CHECK: tt.descriptor_load {{.*}} {groups = [@nvws.tma_load]}
+// CHECK: ttg.local_alloc {{.*}} {groups = [@nvws.tma_load]}
+// CHECK-NOT: groups
+// CHECK: tt.descriptor_load {{.*}} {groups = [@nvws.tma_load]}
+// CHECK: ttg.local_alloc {{.*}} {groups = [@nvws.tma_load]}
+// CHECK: ttg.memdesc_trans {{.*}} {groups = [@nvws.mma],
+// CHECK: ttng.tc_gen5_mma {{.*}} {groups = [@nvws.mma]}
+// CHECK-NOT: groups
+// CHECK: ttng.tmem_load {{.*}} {groups = [@nvws.epilogue]}
+// CHECK-NOT: groups
+// CHECK: tt.store {{.*}} {groups = [@nvws.epilogue]}
+// CHECK-NOT: groups
 
 #blocked = #ttg.blocked<{sizePerThread = [1, 128], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [0, 1]}>
 #blocked1 = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0]}>
@@ -311,7 +336,6 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-stages" = 3 : i32, "ttg.nu
       %36 = arith.addi %arg8, %c128_i32 : i32
       scf.yield %36, %true : i32, i1
     }
-    // CHECK: tmem_load {{.*}} {groups = [@nvws.epilogue]}
     %11 = ttng.tmem_load %9 : !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable> -> tensor<128x128xf32, #blocked>
     %12 = tt.fp_to_fp %11, rounding = rtne : tensor<128x128xf32, #blocked> -> tensor<128x128xf8E4M3FN, #blocked>
     %13 = tt.make_range {end = 128 : i32, start = 0 : i32} : tensor<128xi32, #ttg.slice<{dim = 1, parent = #blocked2}>>
@@ -330,7 +354,6 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-stages" = 3 : i32, "ttg.nu
     %26 = tt.broadcast %24 : tensor<1x128xi32, #blocked2> -> tensor<128x128xi32, #blocked2>
     %27 = tt.addptr %25, %26 : tensor<128x128x!tt.ptr<f8E4M3FN>, #blocked2>, tensor<128x128xi32, #blocked2>
     %28 = ttg.convert_layout %12 : tensor<128x128xf8E4M3FN, #blocked> -> tensor<128x128xf8E4M3FN, #blocked2>
-    // CHECK: tt.store {{.*}}, {{.*}} {groups = [@nvws.epilogue]}
     tt.store %27, %28 : tensor<128x128x!tt.ptr<f8E4M3FN>, #blocked2>
     tt.return
   }
@@ -338,85 +361,101 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-stages" = 3 : i32, "ttg.nu
 
 // -----
 
+// CHECK: module attributes {nvws.epilogue = {num_warps = 4 : i32, start_warp = 0 : i32}, nvws.mma = {num_warps = 4 : i32, start_warp = 4 : i32}, nvws.tma_load = {num_warps = 4 : i32, start_warp = 8 : i32}
+// CHECK-LABEL: matmul_persistent_tma_ws_cooperative_kernel
+
+// CHECK-NOT: groups
+// CHECK: ttng.tmem_alloc {{.*}} {groups = [@nvws.mma]}
+// CHECK-NOT: groups
+// CHECK: tt.descriptor_load {{.*}} {groups = [@nvws.tma_load]}
+// CHECK: ttg.local_alloc {{.*}} {groups = [@nvws.tma_load]}
+// CHECK-NOT: groups
+// CHECK: tt.descriptor_load {{.*}} {groups = [@nvws.tma_load]}
+// CHECK: ttg.local_alloc {{.*}} {groups = [@nvws.tma_load]}
+// CHECK: ttng.tc_gen5_mma {{.*}} {groups = [@nvws.mma]}
+// CHECK-NOT: groups
+// CHECK: ttng.tmem_load {{.*}} {groups = [@nvws.epilogue]}
+// CHECK-NOT: groups
+// CHECK: tt.store {{.*}} {groups = [@nvws.epilogue]}
+// CHECK-NOT: groups
+
 #blocked = #ttg.blocked<{sizePerThread = [1, 128], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [0, 1]}>
 #blocked1 = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0]}>
 #blocked2 = #ttg.blocked<{sizePerThread = [1, 16], threadsPerWarp = [4, 8], warpsPerCTA = [4, 1], order = [1, 0]}>
 #shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16}>
 #smem = #ttg.shared_memory
 #tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, unpacked = true>
-module attributes {nvws.epilogue = {num_warps = 4 : i32, start_warp = 8 : i32}, nvws.mma = {num_warps = 4 : i32, start_warp = 0 : i32}, nvws.tma_load = {num_warps = 4 : i32, start_warp = 4 : i32}, "ttg.num-ctas" = 1 : i32, "ttg.num-stages" = 3 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32, "ttg.warp-specialized" = true} {
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-stages" = 3 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32, "ttg.warp-specialized" = true} {
   tt.func public @matmul_persistent_tma_ws_cooperative_kernel(%arg0: !tt.ptr<i8, 0> {tt.nv_tma_desc = 1 : i32}, %arg1: !tt.ptr<i8, 0> {tt.nv_tma_desc = 1 : i32}, %arg2: !tt.ptr<i8, 0> {tt.nv_tma_desc = 1 : i32}, %arg3: !tt.ptr<f8E4M3FN> {tt.divisibility = 16 : i32}, %arg4: i32 {tt.divisibility = 16 : i32}, %arg5: i32 {tt.divisibility = 16 : i32}, %arg6: i32 {tt.divisibility = 16 : i32}) attributes {noinline = false} {
     %false = arith.constant false
-    %true = arith.constant {groups = [@nvws.mma]} true
-    %c127_i32 = arith.constant {groups = [@nvws.epilogue, @nvws.mma, @nvws.tma_load]} 127 : i32
-    %c8_i32 = arith.constant {groups = [@nvws.epilogue, @nvws.tma_load]} 8 : i32
-    %c128_i32 = arith.constant {groups = [@nvws.epilogue, @nvws.mma, @nvws.tma_load]} 128 : i32
-    %c0_i32 = arith.constant {groups = [@nvws.mma, @nvws.tma_load]} 0 : i32
-    %c1_i32 = arith.constant {groups = [@nvws.mma, @nvws.tma_load]} 1 : i32
-    %cst = arith.constant {groups = [@nvws.mma]} dense<0.000000e+00> : tensor<128x128xf32, #blocked>
-    %0 = arith.addi %arg4, %c127_i32 {groups = [@nvws.epilogue, @nvws.mma, @nvws.tma_load]} : i32
-    %1 = arith.divsi %0, %c128_i32 {groups = [@nvws.epilogue, @nvws.mma, @nvws.tma_load]} : i32
-    %2 = arith.addi %arg5, %c127_i32 {groups = [@nvws.epilogue, @nvws.mma, @nvws.tma_load]} : i32
-    %3 = arith.divsi %2, %c128_i32 {groups = [@nvws.epilogue, @nvws.mma, @nvws.tma_load]} : i32
-    %4 = arith.muli %1, %3 {groups = [@nvws.epilogue, @nvws.mma, @nvws.tma_load]} : i32
-    %5 = tt.get_program_id x {groups = [@nvws.epilogue, @nvws.mma, @nvws.tma_load]} : i32
-    %6 = tt.get_num_programs x {groups = [@nvws.epilogue, @nvws.mma, @nvws.tma_load]} : i32
+    %true = arith.constant true
+    %c127_i32 = arith.constant 127 : i32
+    %c8_i32 = arith.constant 8 : i32
+    %c128_i32 = arith.constant 128 : i32
+    %c0_i32 = arith.constant 0 : i32
+    %c1_i32 = arith.constant 1 : i32
+    %cst = arith.constant dense<0.000000e+00> : tensor<128x128xf32, #blocked>
+    %0 = arith.addi %arg4, %c127_i32 : i32
+    %1 = arith.divsi %0, %c128_i32 : i32
+    %2 = arith.addi %arg5, %c127_i32 : i32
+    %3 = arith.divsi %2, %c128_i32 : i32
+    %4 = arith.muli %1, %3 : i32
+    %5 = tt.get_program_id x : i32
+    %6 = tt.get_num_programs x : i32
     scf.for %arg7 = %5 to %4 step %6  : i32 {
-      %7 = arith.muli %3, %c8_i32 {groups = [@nvws.epilogue, @nvws.tma_load]} : i32
-      %8 = arith.divsi %arg7, %7 {groups = [@nvws.epilogue, @nvws.tma_load]} : i32
-      %9 = arith.muli %8, %c8_i32 {groups = [@nvws.epilogue, @nvws.tma_load]} : i32
-      %10 = arith.subi %1, %9 {groups = [@nvws.epilogue, @nvws.tma_load]} : i32
-      %11 = arith.minsi %10, %c8_i32 {groups = [@nvws.epilogue, @nvws.tma_load]} : i32
-      %12 = arith.remsi %arg7, %7 {groups = [@nvws.epilogue, @nvws.tma_load]} : i32
-      %13 = arith.remsi %12, %11 {groups = [@nvws.epilogue, @nvws.tma_load]} : i32
-      %14 = arith.addi %9, %13 {groups = [@nvws.epilogue, @nvws.tma_load]} : i32
-      %15 = arith.divsi %12, %11 {groups = [@nvws.epilogue, @nvws.tma_load]} : i32
-      %16 = arith.muli %14, %c128_i32 {groups = [@nvws.epilogue, @nvws.tma_load]} : i32
-      %17 = arith.muli %15, %c128_i32 {groups = [@nvws.epilogue, @nvws.tma_load]} : i32
-      %18 = arith.addi %arg6, %c127_i32 {groups = [@nvws.mma, @nvws.tma_load]} : i32
-      %19 = arith.divsi %18, %c128_i32 {groups = [@nvws.mma, @nvws.tma_load]} : i32
-      %20 = ttng.tmem_alloc %cst {groups = [@nvws.mma]} : (tensor<128x128xf32, #blocked>) -> !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>
+      %7 = arith.muli %3, %c8_i32 : i32
+      %8 = arith.divsi %arg7, %7 : i32
+      %9 = arith.muli %8, %c8_i32 : i32
+      %10 = arith.subi %1, %9 : i32
+      %11 = arith.minsi %10, %c8_i32 : i32
+      %12 = arith.remsi %arg7, %7 : i32
+      %13 = arith.remsi %12, %11 : i32
+      %14 = arith.addi %9, %13 : i32
+      %15 = arith.divsi %12, %11 : i32
+      %16 = arith.muli %14, %c128_i32 : i32
+      %17 = arith.muli %15, %c128_i32 : i32
+      %18 = arith.addi %arg6, %c127_i32 : i32
+      %19 = arith.divsi %18, %c128_i32 : i32
+      %20 = ttng.tmem_alloc %cst : (tensor<128x128xf32, #blocked>) -> !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>
       %21:2 = scf.for %arg8 = %c0_i32 to %19 step %c1_i32 iter_args(%arg9 = %c0_i32, %arg10 = %false) -> (i32, i1)  : i32 {
-        %48 = tt.reinterpret_tensor_descriptor %arg0 {groups = [@nvws.tma_load]} : !tt.ptr<i8, 0> to !tt.tensordesc<tensor<128x128xf16>>
-        %49 = tt.descriptor_load %48[%16, %arg9] {groups = [@nvws.tma_load]} : !tt.tensordesc<tensor<128x128xf16>> -> tensor<128x128xf16, #blocked1>
-        %50 = ttg.local_alloc %49 {groups = [@nvws.mma]} : (tensor<128x128xf16, #blocked1>) -> !ttg.memdesc<128x128xf16, #shared, #smem>
-        %51 = tt.reinterpret_tensor_descriptor %arg1 {groups = [@nvws.tma_load]} : !tt.ptr<i8, 0> to !tt.tensordesc<tensor<128x128xf16>>
-        %52 = tt.descriptor_load %51[%arg9, %17] {groups = [@nvws.tma_load]} : !tt.tensordesc<tensor<128x128xf16>> -> tensor<128x128xf16, #blocked1>
-        %53 = ttg.local_alloc %52 {groups = [@nvws.mma]} : (tensor<128x128xf16, #blocked1>) -> !ttg.memdesc<128x128xf16, #shared, #smem>
-        ttng.tc_gen5_mma %50, %53, %20, %arg10, %true {groups = [@nvws.mma]} : !ttg.memdesc<128x128xf16, #shared, #smem>, !ttg.memdesc<128x128xf16, #shared, #smem>, !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>
-        %54 = arith.addi %arg9, %c128_i32 {groups = [@nvws.tma_load]} : i32
+        %48 = tt.reinterpret_tensor_descriptor %arg0 : !tt.ptr<i8, 0> to !tt.tensordesc<tensor<128x128xf16>>
+        %49 = tt.descriptor_load %48[%16, %arg9] : !tt.tensordesc<tensor<128x128xf16>> -> tensor<128x128xf16, #blocked1>
+        %50 = ttg.local_alloc %49 : (tensor<128x128xf16, #blocked1>) -> !ttg.memdesc<128x128xf16, #shared, #smem>
+        %51 = tt.reinterpret_tensor_descriptor %arg1 : !tt.ptr<i8, 0> to !tt.tensordesc<tensor<128x128xf16>>
+        %52 = tt.descriptor_load %51[%arg9, %17] : !tt.tensordesc<tensor<128x128xf16>> -> tensor<128x128xf16, #blocked1>
+        %53 = ttg.local_alloc %52 : (tensor<128x128xf16, #blocked1>) -> !ttg.memdesc<128x128xf16, #shared, #smem>
+        ttng.tc_gen5_mma %50, %53, %20, %arg10, %true : !ttg.memdesc<128x128xf16, #shared, #smem>, !ttg.memdesc<128x128xf16, #shared, #smem>, !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>
+        %54 = arith.addi %arg9, %c128_i32 : i32
         scf.yield %54, %true : i32, i1
-      } {groups = [@nvws.mma, @nvws.tma_load], groups.0 = [@nvws.tma_load], groups.1 = [@nvws.mma]}
-      // CHECK: tmem_load {{.*}} {groups = [@nvws.epilogue]}
-      %22 = ttng.tmem_load %20 {groups = [@nvws.epilogue]} : !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable> -> tensor<128x128xf32, #blocked>
-      %23 = arith.truncf %22 {groups = [@nvws.epilogue]} : tensor<128x128xf32, #blocked> to tensor<128x128xf16, #blocked>
-      %24 = tt.make_range {end = 128 : i32, groups = [@nvws.epilogue], start = 0 : i32} : tensor<128xi32, #ttg.slice<{dim = 1, parent = #blocked2}>>
-      %25 = tt.make_range {end = 128 : i32, groups = [@nvws.epilogue], start = 0 : i32} : tensor<128xi32, #ttg.slice<{dim = 0, parent = #blocked2}>>
-      %26 = tt.splat %16 {groups = [@nvws.epilogue]} : i32 -> tensor<128xi32, #ttg.slice<{dim = 1, parent = #blocked2}>>
-      %27 = arith.addi %26, %24 {groups = [@nvws.epilogue]} : tensor<128xi32, #ttg.slice<{dim = 1, parent = #blocked2}>>
-      %28 = tt.splat %17 {groups = [@nvws.epilogue]} : i32 -> tensor<128xi32, #ttg.slice<{dim = 0, parent = #blocked2}>>
-      %29 = arith.addi %28, %25 {groups = [@nvws.epilogue]} : tensor<128xi32, #ttg.slice<{dim = 0, parent = #blocked2}>>
-      %30 = tt.expand_dims %27 {axis = 1 : i32, groups = [@nvws.epilogue]} : tensor<128xi32, #ttg.slice<{dim = 1, parent = #blocked2}>> -> tensor<128x1xi32, #blocked2>
-      %31 = tt.splat %arg5 {groups = [@nvws.epilogue]} : i32 -> tensor<128x1xi32, #blocked2>
-      %32 = arith.muli %30, %31 {groups = [@nvws.epilogue]} : tensor<128x1xi32, #blocked2>
-      %33 = tt.splat %arg3 {groups = [@nvws.epilogue]} : !tt.ptr<f8E4M3FN> -> tensor<128x1x!tt.ptr<f8E4M3FN>, #blocked2>
-      %34 = tt.addptr %33, %32 {groups = [@nvws.epilogue]} : tensor<128x1x!tt.ptr<f8E4M3FN>, #blocked2>, tensor<128x1xi32, #blocked2>
-      %35 = tt.expand_dims %29 {axis = 0 : i32, groups = [@nvws.epilogue]} : tensor<128xi32, #ttg.slice<{dim = 0, parent = #blocked2}>> -> tensor<1x128xi32, #blocked2>
-      %36 = tt.broadcast %34 {groups = [@nvws.epilogue]} : tensor<128x1x!tt.ptr<f8E4M3FN>, #blocked2> -> tensor<128x128x!tt.ptr<f8E4M3FN>, #blocked2>
-      %37 = tt.broadcast %35 {groups = [@nvws.epilogue]} : tensor<1x128xi32, #blocked2> -> tensor<128x128xi32, #blocked2>
-      %38 = tt.addptr %36, %37 {groups = [@nvws.epilogue]} : tensor<128x128x!tt.ptr<f8E4M3FN>, #blocked2>, tensor<128x128xi32, #blocked2>
-      %39 = tt.splat %arg4 {groups = [@nvws.epilogue]} : i32 -> tensor<128x1xi32, #blocked2>
-      %40 = arith.cmpi slt, %30, %39 {groups = [@nvws.epilogue]} : tensor<128x1xi32, #blocked2>
-      %41 = tt.splat %arg5 {groups = [@nvws.epilogue]} : i32 -> tensor<1x128xi32, #blocked2>
-      %42 = arith.cmpi slt, %35, %41 {groups = [@nvws.epilogue]} : tensor<1x128xi32, #blocked2>
-      %43 = tt.broadcast %40 {groups = [@nvws.epilogue]} : tensor<128x1xi1, #blocked2> -> tensor<128x128xi1, #blocked2>
-      %44 = tt.broadcast %42 {groups = [@nvws.epilogue]} : tensor<1x128xi1, #blocked2> -> tensor<128x128xi1, #blocked2>
-      %45 = arith.andi %43, %44 {groups = [@nvws.epilogue]} : tensor<128x128xi1, #blocked2>
-      %46 = tt.fp_to_fp %23 {groups = [@nvws.epilogue]}, rounding = rtne : tensor<128x128xf16, #blocked> -> tensor<128x128xf8E4M3FN, #blocked>
-      %47 = ttg.convert_layout %46 {groups = [@nvws.epilogue]} : tensor<128x128xf8E4M3FN, #blocked> -> tensor<128x128xf8E4M3FN, #blocked2>
-      // CHECK: tt.store {{.*}}, {{.*}}, {{.*}} {groups = [@nvws.epilogue]}
-      tt.store %38, %47, %45 {groups = [@nvws.epilogue]} : tensor<128x128x!tt.ptr<f8E4M3FN>, #blocked2>
-    } {groups = [@nvws.epilogue, @nvws.mma, @nvws.tma_load]}
+      }
+      %22 = ttng.tmem_load %20 : !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable> -> tensor<128x128xf32, #blocked>
+      %23 = arith.truncf %22 : tensor<128x128xf32, #blocked> to tensor<128x128xf16, #blocked>
+      %24 = tt.make_range {end = 128 : i32, start = 0 : i32} : tensor<128xi32, #ttg.slice<{dim = 1, parent = #blocked2}>>
+      %25 = tt.make_range {end = 128 : i32, start = 0 : i32} : tensor<128xi32, #ttg.slice<{dim = 0, parent = #blocked2}>>
+      %26 = tt.splat %16 : i32 -> tensor<128xi32, #ttg.slice<{dim = 1, parent = #blocked2}>>
+      %27 = arith.addi %26, %24 : tensor<128xi32, #ttg.slice<{dim = 1, parent = #blocked2}>>
+      %28 = tt.splat %17 : i32 -> tensor<128xi32, #ttg.slice<{dim = 0, parent = #blocked2}>>
+      %29 = arith.addi %28, %25 : tensor<128xi32, #ttg.slice<{dim = 0, parent = #blocked2}>>
+      %30 = tt.expand_dims %27 {axis = 1 : i32} : tensor<128xi32, #ttg.slice<{dim = 1, parent = #blocked2}>> -> tensor<128x1xi32, #blocked2>
+      %31 = tt.splat %arg5 : i32 -> tensor<128x1xi32, #blocked2>
+      %32 = arith.muli %30, %31 : tensor<128x1xi32, #blocked2>
+      %33 = tt.splat %arg3 : !tt.ptr<f8E4M3FN> -> tensor<128x1x!tt.ptr<f8E4M3FN>, #blocked2>
+      %34 = tt.addptr %33, %32 : tensor<128x1x!tt.ptr<f8E4M3FN>, #blocked2>, tensor<128x1xi32, #blocked2>
+      %35 = tt.expand_dims %29 {axis = 0 : i32} : tensor<128xi32, #ttg.slice<{dim = 0, parent = #blocked2}>> -> tensor<1x128xi32, #blocked2>
+      %36 = tt.broadcast %34 : tensor<128x1x!tt.ptr<f8E4M3FN>, #blocked2> -> tensor<128x128x!tt.ptr<f8E4M3FN>, #blocked2>
+      %37 = tt.broadcast %35 : tensor<1x128xi32, #blocked2> -> tensor<128x128xi32, #blocked2>
+      %38 = tt.addptr %36, %37 : tensor<128x128x!tt.ptr<f8E4M3FN>, #blocked2>, tensor<128x128xi32, #blocked2>
+      %39 = tt.splat %arg4 : i32 -> tensor<128x1xi32, #blocked2>
+      %40 = arith.cmpi slt, %30, %39 : tensor<128x1xi32, #blocked2>
+      %41 = tt.splat %arg5 : i32 -> tensor<1x128xi32, #blocked2>
+      %42 = arith.cmpi slt, %35, %41 : tensor<1x128xi32, #blocked2>
+      %43 = tt.broadcast %40 : tensor<128x1xi1, #blocked2> -> tensor<128x128xi1, #blocked2>
+      %44 = tt.broadcast %42 : tensor<1x128xi1, #blocked2> -> tensor<128x128xi1, #blocked2>
+      %45 = arith.andi %43, %44 : tensor<128x128xi1, #blocked2>
+      %46 = tt.fp_to_fp %23, rounding = rtne : tensor<128x128xf16, #blocked> -> tensor<128x128xf8E4M3FN, #blocked>
+      %47 = ttg.convert_layout %46 : tensor<128x128xf8E4M3FN, #blocked> -> tensor<128x128xf8E4M3FN, #blocked2>
+      tt.store %38, %47, %45 : tensor<128x128x!tt.ptr<f8E4M3FN>, #blocked2>
+    }
     tt.return
   }
 }

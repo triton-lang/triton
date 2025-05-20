@@ -4,7 +4,6 @@
 #include <memory>
 #include <stack>
 
-#include "WSUtility.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
 #include "mlir/Dialect/LLVMIR/NVVMDialect.h"
@@ -17,7 +16,9 @@
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
+#include "triton/Dialect/TritonGPU/Transforms/WSUtility.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
+#include "llvm/ADT/SmallVector.h"
 #include "llvm/Support/raw_ostream.h"
 
 namespace mlir {
@@ -210,27 +211,27 @@ void createArefPut(OpBuilderWithGroup &builder, scf::ForOp &forOp,
     builder.setInsertionPointAfter(loadOps[loadOps.size() - 1].getDefiningOp());
     // create single ArefPut
     auto arefOp = arefOps[0];
-    auto aref_put = builder.create<triton::nvidia_gpu::ArefPutOp>(
-        forOp.getLoc(), arefOp, normLoadIdx);
-    auto &region = aref_put.getRegion();
-    auto block = &region.emplaceBlock();
-
-    SmallVector<Value> memDescs, buffers;
+    SmallVector<Attribute> producers(
+        arefOp.getOperands().size(),
+        nvidia_gpu::ArefProducerAttr::get(builder.getContext(),
+                                          nvidia_gpu::ArefProducer::TMALDG));
+    SmallVector<Type> memDescTypes;
     for (auto operand : arefOp.getOperands()) {
       auto memDescType = mlir::cast<MemDescType>(operand.getType());
-      assert(memDescType);
       auto dataMemDescType = getDataMemDescType(memDescType);
-      auto buffer = block->addArgument(dataMemDescType, operand.getLoc());
-      buffers.push_back(buffer);
+      memDescTypes.push_back(dataMemDescType);
     }
-    builder.setInsertionPointToEnd(block);
-    auto ret = builder.create<triton::nvidia_gpu::ArefReturnOp>(
-        forOp.getLoc(), ArrayRef<Type>(), ArrayRef<Value>());
-    builder.setInsertionPoint(ret);
+    auto aref_put_enter = builder.create<triton::nvidia_gpu::ArefPutEnterOp>(
+        forOp.getLoc(), memDescTypes, arefOp, normLoadIdx, Value{});
+    auto aref_put_exit = builder.create<triton::nvidia_gpu::ArefPutExitOp>(
+        forOp.getLoc(), arefOp, normLoadIdx,
+        ArrayAttr::get(builder.getContext(), producers));
 
-    for (auto [loadOp, buffer] : llvm::zip(loadOps, buffers)) {
+    for (auto [loadOp, buffer] :
+         llvm::zip(loadOps, aref_put_enter.getResults())) {
       auto loadOpDef = loadOp.getDefiningOp();
-      loadOpDef->moveBefore(ret);
+      loadOpDef->moveBefore(aref_put_exit);
+      builder.setInsertionPoint(aref_put_exit);
       builder.create<LocalStoreOp>(loadOpDef->getLoc(), loadOpDef->getResult(0),
                                    buffer);
     }
@@ -239,24 +240,26 @@ void createArefPut(OpBuilderWithGroup &builder, scf::ForOp &forOp,
     for (int i = 0; i < loadOps.size(); i++) {
       builder.setInsertionPointAfter(loadOps[i].getDefiningOp());
       auto arefOp = arefOps[i];
-      auto aref_put = builder.create<triton::nvidia_gpu::ArefPutOp>(
-          forOp.getLoc(), arefOp, normLoadIdx);
-      auto &region = aref_put.getRegion();
-      auto block = &region.emplaceBlock();
 
-      assert(arefOp.getOperands().size() == 1);
       auto operand = arefOp.getOperand(0);
       auto memDescType = mlir::cast<MemDescType>(operand.getType());
-      assert(memDescType);
       auto dataMemDescType = getDataMemDescType(memDescType);
-      auto buffer = block->addArgument(dataMemDescType, operand.getLoc());
-      builder.setInsertionPointToEnd(block);
-      auto ret = builder.create<triton::nvidia_gpu::ArefReturnOp>(
-          forOp.getLoc(), ArrayRef<Type>(), ArrayRef<Value>());
-      builder.setInsertionPoint(ret);
+
+      auto aref_put_enter = builder.create<triton::nvidia_gpu::ArefPutEnterOp>(
+          forOp.getLoc(), dataMemDescType, arefOp, normLoadIdx, Value{});
+      auto aref_put_exit = builder.create<triton::nvidia_gpu::ArefPutExitOp>(
+          forOp.getLoc(), arefOp, normLoadIdx,
+          ArrayAttr::get(
+              builder.getContext(),
+              nvidia_gpu::ArefProducerAttr::get(
+                  builder.getContext(), nvidia_gpu::ArefProducer::TMALDG)));
+
+      assert(arefOp.getOperands().size() == 1);
+      auto buffer = aref_put_enter.getResult(0);
 
       auto loadOpDef = loadOps[i].getDefiningOp();
-      loadOpDef->moveBefore(ret);
+      loadOpDef->moveBefore(aref_put_exit);
+      builder.setInsertionPoint(aref_put_exit);
       builder.create<LocalStoreOp>(loadOpDef->getLoc(), loadOpDef->getResult(0),
                                    buffer);
     }
@@ -283,7 +286,7 @@ void createArefGet(OpBuilderWithGroup &builder, Location loc,
     }
 
     auto aref_get = builder.create<triton::nvidia_gpu::ArefGetEnterOp>(
-        loc, memDescTypeBufs, arefOp, normMathIdx);
+        loc, memDescTypeBufs, arefOp, normMathIdx, Value{});
     for (int i = 0; i < loadOps.size(); i++) {
       mapping.map(loadOps[i], aref_get.getResult(i));
     }
@@ -297,7 +300,7 @@ void createArefGet(OpBuilderWithGroup &builder, Location loc,
       assert(memDescType);
       auto dataMemDescType = getDataMemDescType(memDescType);
       auto aref_get = builder.create<triton::nvidia_gpu::ArefGetEnterOp>(
-          loc, dataMemDescType, arefOp, normMathIdx);
+          loc, dataMemDescType, arefOp, normMathIdx, Value{});
       mapping.map(loadOps[i], aref_get.getResult(0));
     }
   }
@@ -413,6 +416,52 @@ scf::ForOp createNewForOp(scf::ForOp forOp, OpBuilderWithGroup &builder,
                                     newUpperBound, newStep, loopArgs);
 }
 
+auto getLoopArgsInGroup(scf::ForOp forOp, const std::string &group) {
+  SmallVector<Value> loopArgs;
+  llvm::SmallSetVector<int, 10> indices;
+  for (const auto &v :
+       llvm::enumerate(forOp.getBody()->getTerminator()->getOperands())) {
+    if (isResultInGroup(forOp.getResult(v.index()), group)) {
+      loopArgs.push_back(forOp.getInitArgs()[v.index()]);
+      indices.insert(v.index());
+    }
+  }
+  return std::make_pair(loopArgs, indices);
+}
+
+SmallVector<Value>
+gatherLoopYields(scf::ForOp forOp, const llvm::SmallSetVector<int, 10> &indices,
+                 const IRMapping &mapping) {
+  SmallVector<Value> yieldValues;
+  for (const auto &v :
+       llvm::enumerate(forOp.getBody()->getTerminator()->getOperands())) {
+    if (indices.count(v.index())) {
+      yieldValues.push_back(mapping.lookupOrDefault(v.value()));
+    }
+  }
+  return yieldValues;
+}
+
+void mapLoopVars(scf::ForOp forOp, scf::ForOp newForOp,
+                 const llvm::SmallSetVector<int, 10> &indices,
+                 IRMapping &mapping) {
+  int newIterArgId = 0;
+  for (const auto &arg : llvm::enumerate(forOp.getRegionIterArgs())) {
+    if (indices.count(arg.index())) {
+      mapping.map(arg.value(), newForOp.getRegionIterArgs()[newIterArgId++]);
+    }
+  }
+  mapping.map(forOp.getInductionVar(), newForOp.getInductionVar());
+}
+
+void createNewYieldOp(OpBuilderWithGroup &builder, scf::ForOp forOp,
+                      const llvm::SmallSetVector<int, 10> &indices,
+                      const IRMapping &mapping, Value nextNormIdx) {
+  auto yieldValues = gatherLoopYields(forOp, indices, mapping);
+  yieldValues.push_back(nextNormIdx);
+  builder.create<scf::YieldOp>(forOp.getLoc(), yieldValues);
+}
+
 scf::ForOp createLoadGroup(
     scf::ForOp forOp, OpBuilderWithGroup &builder, int forOpIdx, int numStages,
     SmallVector<triton::nvidia_gpu::ArefCreateOp> &arefOps, IRMapping &mapping,
@@ -429,22 +478,17 @@ scf::ForOp createLoadGroup(
   }
 
   if (!innerMostLoop) {
-    SmallVector<Value> loopArgs{forOp.getInitArgs()};
+    auto [loopArgs, loopArgIndices] =
+        getLoopArgsInGroup(forOp, ATTR_WS_TMALOAD);
     loopArgs.push_back(normIdxInit);
 
     auto newForOp = createNewForOp(forOp, builder, mapping, loopArgs);
-    auto normLoadIdxVar = newForOp.getRegionIterArgs().back();
-
-    mapping.map(forOp.getInductionVar(), newForOp.getInductionVar());
-    for (unsigned i = 0; i < forOp.getRegionIterArgs().size(); ++i) {
-      auto oldArg = forOp.getRegionIterArgs()[i];
-      auto newArg = newForOp.getRegionIterArgs()[i];
-      mapping.map(oldArg, newArg);
-    }
+    mapLoopVars(forOp, newForOp, loopArgIndices, mapping);
 
     scf::ForOp newInnerFor;
     builder.setInsertionPointToStart(newForOp.getBody());
 
+    auto normLoadIdxVar = newForOp.getRegionIterArgs().back();
     for (auto &op : forOp.getBody()->without_terminator()) {
       if (!isOpInGroup(&op, ATTR_WS_TMALOAD)) {
         continue;
@@ -460,14 +504,8 @@ scf::ForOp createLoadGroup(
     }
     assert(newInnerFor);
     auto nextNormLoadIdx = newInnerFor.getResults().back();
-
-    SmallVector<Value> yieldValues;
-    for (const auto &v : forOp.getBody()->getTerminator()->getOperands()) {
-      yieldValues.push_back(mapping.lookupOrDefault(v));
-    }
-    yieldValues.push_back(nextNormLoadIdx);
     builder.setInsertionPointToEnd(newForOp.getBody());
-    builder.create<scf::YieldOp>(newForOp.getLoc(), yieldValues);
+    createNewYieldOp(builder, forOp, loopArgIndices, mapping, nextNormLoadIdx);
     return newForOp;
   } else {
     // gather memDescTypes and erase localAllocOps
@@ -476,7 +514,7 @@ scf::ForOp createLoadGroup(
     SmallVector<MemDescType> memDescTypes;
     SmallVector<Operation *> ops2erase;
     for (Operation &op : forOp.getBody()->without_terminator()) {
-      if (isa<triton::DescriptorLoadOp, triton::LoadOp>(op)) {
+      if (isa<triton::DescriptorLoadOp, triton::DescriptorGatherOp>(op)) {
         SmallVector<Operation *> users(op.user_begin(), op.user_end());
         assert(users.size() == 1);
         auto localAllocOp = users[0];
@@ -498,53 +536,21 @@ scf::ForOp createLoadGroup(
 
     int AREF_SIZE = numStages;
 
-    std::map<int, int> oldLoopId2New;
-    SmallVector<Value> loopArgs;
-    for (const auto &v :
-         llvm::enumerate(forOp.getBody()->getTerminator()->getOperands())) {
-      auto attrs =
-          getGroupsAttr(forOp.getOperation(), std::string(ATTR_WSGROUPS) + "." +
-                                                  std::to_string(v.index()));
-
-      bool in_partition = false;
-      for (auto attr : attrs) {
-        if (attr.getRootReference().str() == ATTR_WS_TMALOAD) {
-          mlir::ModuleOp mod = forOp->getParentOfType<mlir::ModuleOp>();
-          auto group = getGroupFromSymbolRefAttr(mod, attr);
-          in_partition = true;
-          break;
-        }
-      }
-      if (in_partition) {
-        oldLoopId2New[v.index()] = loopArgs.size();
-        loopArgs.push_back(forOp.getInitArgs()[v.index()]);
-      } else {
-        oldLoopId2New[v.index()] = -1;
-      }
-    }
+    auto [loopArgs, loopArgIndices] =
+        getLoopArgsInGroup(forOp, ATTR_WS_TMALOAD);
     // append normalized loop index to the loop args
     loopArgs.push_back(normIdxInit);
 
     auto newForOp = createNewForOp(forOp, builder, mapping, loopArgs);
-    // within the loop body, the normalized loop index is the corresponding
-    // loop variable
-    auto normLoadIdxVar = newForOp.getRegionIterArgs().back();
-
+    mapLoopVars(forOp, newForOp, loopArgIndices, mapping);
     builder.setInsertionPointToStart(newForOp.getBody());
-    for (const auto &arg : llvm::enumerate(forOp.getRegionIterArgs())) {
-      int id = oldLoopId2New[arg.index()];
-      if (id != -1) {
-        mapping.map(arg.value(), newForOp.getRegionIterArgs()[id]);
-      }
-    }
-    mapping.map(forOp.getInductionVar(), newForOp.getInductionVar());
 
     // get all the load op
     SmallVector<Value> loadOps, origLoadOps;
     for (Operation &op : forOp.getBody()->without_terminator()) {
       if (isOpInGroup(&op, ATTR_WS_TMALOAD)) {
         Operation *newOp = builder.clone(op, mapping);
-        if (isa<triton::DescriptorLoadOp, triton::LoadOp>(newOp)) {
+        if (isa<triton::DescriptorLoadOp, triton::DescriptorGatherOp>(newOp)) {
           loadOps.push_back(newOp->getResult(0));
           origLoadOps.push_back(op.getResult(0));
         }
@@ -566,6 +572,10 @@ scf::ForOp createLoadGroup(
              "Aref objects can't be reused");
     }
 
+    // within the loop body, the normalized loop index is the corresponding
+    // loop variable
+    auto normLoadIdxVar = newForOp.getRegionIterArgs().back();
+
     builder.setInsertionPointToStart(newForOp.getBody());
     createArefPut(builder, forOp, newForOp, origLoadOps, loadOps, arefOps,
                   AREF_SIZE, normLoadIdxVar, isAllUsedInDot);
@@ -574,16 +584,7 @@ scf::ForOp createLoadGroup(
     Value one = builder.create<arith::ConstantIntOp>(forOp.getLoc(), 1, 32);
     auto nextNormLoadIdx =
         builder.create<arith::AddIOp>(forOp.getLoc(), normLoadIdxVar, one);
-    SmallVector<Value> yieldValues;
-    for (const auto &v :
-         llvm::enumerate(forOp.getBody()->getTerminator()->getOperands())) {
-      int id = oldLoopId2New[v.index()];
-      if (id != -1) {
-        yieldValues.push_back(mapping.lookupOrDefault(v.value()));
-      }
-    }
-    yieldValues.push_back(nextNormLoadIdx);
-    builder.create<scf::YieldOp>(forOp.getLoc(), yieldValues);
+    createNewYieldOp(builder, forOp, loopArgIndices, mapping, nextNormLoadIdx);
     return newForOp;
   }
 }
@@ -630,22 +631,16 @@ createMMAGroup(scf::ForOp forOp, OpBuilderWithGroup builder, int forOpIdx,
   }
 
   if (!innerMostLoop) {
-    SmallVector<Value> loopArgs{forOp.getInitArgs()};
+    auto [loopArgs, loopArgIndices] = getLoopArgsInGroup(forOp, ATTR_WS_MMA);
     loopArgs.push_back(normIdxInit);
 
     auto newForOp = createNewForOp(forOp, builder, mapping, loopArgs);
-    auto normMathIdxVar = newForOp.getRegionIterArgs().back();
-
-    mapping.map(forOp.getInductionVar(), newForOp.getInductionVar());
-    for (unsigned i = 0; i < forOp.getRegionIterArgs().size(); ++i) {
-      auto oldArg = forOp.getRegionIterArgs()[i];
-      auto newArg = newForOp.getRegionIterArgs()[i];
-      mapping.map(oldArg, newArg);
-    }
+    mapLoopVars(forOp, newForOp, loopArgIndices, mapping);
 
     scf::ForOp newInnerFor;
     builder.setInsertionPointToStart(newForOp.getBody());
 
+    auto normMathIdxVar = newForOp.getRegionIterArgs().back();
     for (auto &op : forOp.getBody()->without_terminator()) {
       if (!isOpInGroup(&op, ATTR_WS_MMA)) {
         continue;
@@ -669,65 +664,33 @@ createMMAGroup(scf::ForOp forOp, OpBuilderWithGroup builder, int forOpIdx,
     assert(newInnerFor);
     auto nextNormMathIdx =
         builder.create<arith::AddIOp>(forOp.getLoc(), normMathIdxVar, one);
-    SmallVector<Value> yieldValues;
-    for (const auto &v : forOp.getBody()->getTerminator()->getOperands()) {
-      yieldValues.push_back(mapping.lookupOrDefault(v));
-    }
-    yieldValues.push_back(nextNormMathIdx);
     builder.setInsertionPointToEnd(newForOp.getBody());
-    builder.create<scf::YieldOp>(newForOp.getLoc(), yieldValues);
+    createNewYieldOp(builder, forOp, loopArgIndices, mapping, nextNormMathIdx);
     return newForOp;
   } else {
     int AREF_SIZE = numStages;
     int MMA_STAGES = mmaDepth;
     int pendings = MMA_STAGES - 1;
 
-    std::map<int, int> oldLoopId2New;
-    SmallVector<Value> loopArgs;
-    for (const auto &v :
-         llvm::enumerate(forOp.getBody()->getTerminator()->getOperands())) {
-      auto attrs =
-          getGroupsAttr(forOp.getOperation(), std::string(ATTR_WSGROUPS) + "." +
-                                                  std::to_string(v.index()));
-      bool in_partition = false;
-      for (auto attr : attrs) {
-        if (attr.getRootReference().str() == ATTR_WS_MMA) {
-          mlir::ModuleOp mod = forOp->getParentOfType<mlir::ModuleOp>();
-          auto group = getGroupFromSymbolRefAttr(mod, attr);
-          in_partition = true;
-          break;
-        }
-      }
-      if (in_partition) {
-        oldLoopId2New[v.index()] = loopArgs.size();
-        loopArgs.push_back(forOp.getInitArgs()[v.index()]);
-      } else {
-        oldLoopId2New[v.index()] = -1;
-      }
-    }
+    auto [loopArgs, loopArgIndices] = getLoopArgsInGroup(forOp, ATTR_WS_MMA);
     loopArgs.push_back(normIdxInit);
 
     auto newForOp = createNewForOp(forOp, builder, mapping, loopArgs);
-    auto normMathIdxVar = newForOp.getRegionIterArgs().back();
-    // create tma_get operations at the beginning of the loop
-    builder.setInsertionPointToStart(newForOp.getBody());
+    mapLoopVars(forOp, newForOp, loopArgIndices, mapping);
 
     // traverse through all original load op in the forop body
     SmallVector<Value> loadOps;
     for (Operation &op : forOp.getBody()->without_terminator()) {
-      if (isa<triton::DescriptorLoadOp, triton::LoadOp>(op))
+      if (isa<triton::DescriptorLoadOp, triton::DescriptorGatherOp>(op))
         loadOps.push_back(op.getResult(0));
     }
+
+    auto normMathIdxVar = newForOp.getRegionIterArgs().back();
+    // create tma_get operations at the beginning of the loop
+    builder.setInsertionPointToStart(newForOp.getBody());
+
     createArefGet(builder, forOp.getLoc(), newForOp, loadOps, arefSMEMOps,
                   mapping, normMathIdxVar, AREF_SIZE);
-
-    int newIterArgId = 0;
-    for (const auto &arg : llvm::enumerate(forOp.getRegionIterArgs())) {
-      if (oldLoopId2New[arg.index()] != -1) {
-        mapping.map(arg.value(), newForOp.getRegionIterArgs()[newIterArgId++]);
-      }
-    }
-    mapping.map(forOp.getInductionVar(), newForOp.getInductionVar());
 
     for (Operation &op : forOp.getBody()->without_terminator()) {
       if (!isOpInGroup(&op, ATTR_WS_MMA)) {
@@ -739,21 +702,12 @@ createMMAGroup(scf::ForOp forOp, OpBuilderWithGroup builder, int forOpIdx,
     builder.setInsertionPointToEnd(newForOp.getBody());
     auto newNormMathIdx =
         builder.create<arith::AddIOp>(forOp.getLoc(), normMathIdxVar, one);
-    SmallVector<Value> yieldValues;
-    for (const auto &v :
-         llvm::enumerate(forOp.getBody()->getTerminator()->getOperands())) {
-      if (oldLoopId2New[v.index()] != -1) {
-        yieldValues.push_back(mapping.lookupOrDefault(v.value()));
-      }
-    }
-    yieldValues.push_back(newNormMathIdx);
-    builder.create<scf::YieldOp>(forOp.getLoc(), yieldValues);
-
+    createNewYieldOp(builder, forOp, loopArgIndices, mapping, newNormMathIdx);
     // update forOp results
     int idx = 0;
     for (const auto &v :
          llvm::enumerate(forOp.getBody()->getTerminator()->getOperands())) {
-      if (oldLoopId2New[v.index()] != -1) {
+      if (loopArgIndices.count(v.index())) {
         forOp.getResult(v.index()).replaceAllUsesWith(
             newForOp.getResult(idx++));
       }
@@ -820,7 +774,6 @@ createMMAGroup(scf::ForOp forOp, OpBuilderWithGroup builder, int forOpIdx,
                   }
                }
              }
-           }
 
            If the loops are fused, we compare the index tile_idx * num_k_tile
            against pending. The code is still correct.
@@ -834,23 +787,31 @@ createMMAGroup(scf::ForOp forOp, OpBuilderWithGroup builder, int forOpIdx,
                                               /*withElseRegion*/ false);
         builder.setInsertionPointToStart(ifOp.thenBlock());
         auto arefIdx = subI(normMathIdxVar, pendingCst);
+        SmallVector<Attribute> consumers(
+            arefSMEMOps[arefSMEMOps.size() - 1 - cntDotOp].getOperands().size(),
+            nvidia_gpu::ArefConsumerAttr::get(builder.getContext(),
+                                              nvidia_gpu::ArefConsumer::WGMMA));
+
         builder.create<triton::nvidia_gpu::ArefGetExitOp>(
-            forOp.getLoc(), arefSMEMOps[0], arefIdx);
+            forOp.getLoc(), arefSMEMOps[arefSMEMOps.size() - 1 - cntDotOp],
+            arefIdx, ArrayAttr::get(builder.getContext(), consumers));
         if (cntDotOp > arefSMEMOps.size()) {
           break;
         }
         cntDotOp++;
       } else if (auto mmaOp =
                      dyn_cast<triton::nvidia_gpu::MMAv5OpInterface>(op)) {
-        // For MMAv5, we extract the "current" stage aref and assign it to
-        // the "barrier" parameter of the MMA op. Later, the "empty" barrier
-        // associated with the aref is given to tcgen05.commit, which will
-        // do an arrive on the empty barrier after MMA completes.
-        // Thus, there is no need for a seperate ConsmedArefOp or an
-        // ArriveBarrier op.
-        builder.setInsertionPoint(&op);
-        mmaOp.addCompletionBarrier(
-            arefSMEMOps[arefSMEMOps.size() - 1 - cntDotOp], normMathIdxVar);
+        builder.setInsertionPointAfter(&op);
+        mmaOp.setIsAsync(true);
+
+        SmallVector<Attribute> consumers(
+            arefSMEMOps[arefSMEMOps.size() - 1 - cntDotOp].getOperands().size(),
+            nvidia_gpu::ArefConsumerAttr::get(builder.getContext(),
+                                              nvidia_gpu::ArefConsumer::UMMA));
+        builder.create<triton::nvidia_gpu::ArefGetExitOp>(
+            forOp.getLoc(), arefSMEMOps[arefSMEMOps.size() - 1 - cntDotOp],
+            normMathIdxVar, builder.getArrayAttr(consumers));
+
         if (cntDotOp > arefSMEMOps.size()) {
           break;
         }
@@ -892,11 +853,15 @@ createMMAGroup(scf::ForOp forOp, OpBuilderWithGroup builder, int forOpIdx,
           // create ArefPut
           builder.setInsertionPoint(newForOp);
           auto arefPut = builder.create<triton::nvidia_gpu::ArefPutEnterOp>(
-              forOp.getLoc(), memDescType, arefOp, arefTMEMIdx);
+              forOp.getLoc(), memDescType, arefOp, arefTMEMIdx, Value{});
           mmaOp.setAccumulator(arefPut.getResult(0));
           builder.setInsertionPointAfter(newForOp);
-          builder.create<triton::nvidia_gpu::ArefPutExitOp>(
-              forOp.getLoc(), arefOp, arefTMEMIdx);
+          SmallVector<Attribute> producers = {nvidia_gpu::ArefProducerAttr::get(
+              builder.getContext(), nvidia_gpu::ArefProducer::UMMA)};
+          auto producersAttr = ArrayAttr::get(builder.getContext(), producers);
+          auto arefPutExitOp =
+              builder.create<triton::nvidia_gpu::ArefPutExitOp>(
+                  forOp.getLoc(), arefOp, arefTMEMIdx, producersAttr);
         }
       }
     }
@@ -950,8 +915,13 @@ createMMAGroup(scf::ForOp forOp, OpBuilderWithGroup builder, int forOpIdx,
       // lastWarpGroupDotWaitOp is set only for single GEMM case and when we
       // apply wgmma pipelining
       assert(arefSMEMOps.size() == 1);
+      SmallVector<Attribute> consumers(
+          arefSMEMOps[0].getOperands().size(),
+          nvidia_gpu::ArefConsumerAttr::get(builder.getContext(),
+                                            nvidia_gpu::ArefConsumer::WGMMA));
       builder.create<triton::nvidia_gpu::ArefGetExitOp>(
-          forOp.getLoc(), arefSMEMOps[0], oldArefIdx);
+          forOp.getLoc(), arefSMEMOps[0], oldArefIdx,
+          ArrayAttr::get(builder.getContext(), consumers));
     }
 
     return newForOp;
@@ -961,15 +931,23 @@ createMMAGroup(scf::ForOp forOp, OpBuilderWithGroup builder, int forOpIdx,
 void cloneEpilogueOps(SmallVector<Operation *> ops,
                       triton::nvidia_gpu::ArefCreateOp arefOp, Value arefIdx,
                       Location loc, OpBuilderWithGroup &builder,
-                      IRMapping &mapping) {
+                      IRMapping &mapping, scf::ForOp newForOp) {
   for (auto op : ops) {
     if (auto tmemLoad = dyn_cast<nvidia_gpu::TMEMLoadOp>(op)) {
       auto memDescType =
           mlir::cast<MemDescType>(arefOp.getOperands()[0].getType());
       assert(memDescType);
       Type type = getDataMemDescType(memDescType);
+
+      OpBuilder::InsertionGuard g(builder);
+      if (newForOp) {
+        // Acquire TMEM FULL early to reduce register pressure (likely a ptxas
+        // limitation)
+        builder.setInsertionPointToStart(newForOp.getBody());
+      }
+
       auto arefGet = builder.create<triton::nvidia_gpu::ArefGetEnterOp>(
-          loc, SmallVector<Type>{type}, arefOp, arefIdx);
+          loc, SmallVector<Type>{type}, arefOp, arefIdx, Value{});
       tmemLoad.getSrc().replaceAllUsesWith(arefGet.getResult(0));
     }
 
@@ -977,7 +955,12 @@ void cloneEpilogueOps(SmallVector<Operation *> ops,
 
     if (auto tmemLoad = dyn_cast<nvidia_gpu::TMEMLoadOp>(op)) {
       // Release TMEM empty immediately after tmem load
-      builder.create<triton::nvidia_gpu::ArefGetExitOp>(loc, arefOp, arefIdx);
+      builder.create<triton::nvidia_gpu::ArefGetExitOp>(
+          loc, arefOp, arefIdx,
+          ArrayAttr::get(
+              builder.getContext(),
+              nvidia_gpu::ArefConsumerAttr::get(
+                  builder.getContext(), nvidia_gpu::ArefConsumer::LDTM)));
     }
   }
 }
@@ -998,22 +981,17 @@ createEpilogueGroup(scf::ForOp forOp, OpBuilderWithGroup builder,
   }
 
   if (!innerMostLoop) {
-    SmallVector<Value> loopArgs{forOp.getInitArgs()};
+    auto [loopArgs, loopArgIndices] =
+        getLoopArgsInGroup(forOp, ATTR_WS_EPILOGUE);
     loopArgs.push_back(normIdxInit);
 
     auto newForOp = createNewForOp(forOp, builder, mapping, loopArgs);
-    auto normLoadIdxVar = newForOp.getRegionIterArgs().back();
-
-    mapping.map(forOp.getInductionVar(), newForOp.getInductionVar());
-    for (unsigned i = 0; i < forOp.getRegionIterArgs().size(); ++i) {
-      auto oldArg = forOp.getRegionIterArgs()[i];
-      auto newArg = newForOp.getRegionIterArgs()[i];
-      mapping.map(oldArg, newArg);
-    }
+    mapLoopVars(forOp, newForOp, loopArgIndices, mapping);
 
     scf::ForOp newInnerFor;
     builder.setInsertionPointToStart(newForOp.getBody());
 
+    auto normLoadIdxVar = newForOp.getRegionIterArgs().back();
     for (auto &op : forOp.getBody()->without_terminator()) {
       if (!isOpInGroup(&op, ATTR_WS_EPILOGUE)) {
         continue;
@@ -1028,56 +1006,17 @@ createEpilogueGroup(scf::ForOp forOp, OpBuilderWithGroup builder,
     }
     assert(newInnerFor);
     auto nextNormLoadIdx = newInnerFor.getResults().back();
-
-    SmallVector<Value> yieldValues;
-    for (const auto &v : forOp.getBody()->getTerminator()->getOperands()) {
-      yieldValues.push_back(mapping.lookupOrDefault(v));
-    }
-    yieldValues.push_back(nextNormLoadIdx);
     builder.setInsertionPointToEnd(newForOp.getBody());
-    builder.create<scf::YieldOp>(newForOp.getLoc(), yieldValues);
+    createNewYieldOp(builder, forOp, loopArgIndices, mapping, nextNormLoadIdx);
     return newForOp;
   } else {
-    std::map<int, int> oldLoopId2New;
-    SmallVector<Value> loopArgs;
-    for (const auto &v :
-         llvm::enumerate(forOp.getBody()->getTerminator()->getOperands())) {
-      auto attrs =
-          getGroupsAttr(forOp.getOperation(), std::string(ATTR_WSGROUPS) + "." +
-                                                  std::to_string(v.index()));
-
-      bool in_partition = false;
-      for (auto attr : attrs) {
-        if (attr.getRootReference().str() == ATTR_WS_TMALOAD) {
-          mlir::ModuleOp mod = forOp->getParentOfType<mlir::ModuleOp>();
-          auto group = getGroupFromSymbolRefAttr(mod, attr);
-          in_partition = true;
-          break;
-        }
-      }
-      if (in_partition) {
-        oldLoopId2New[v.index()] = loopArgs.size();
-        loopArgs.push_back(forOp.getInitArgs()[v.index()]);
-      } else {
-        oldLoopId2New[v.index()] = -1;
-      }
-    }
+    auto [loopArgs, loopArgIndices] =
+        getLoopArgsInGroup(forOp, ATTR_WS_EPILOGUE);
     // append normalized loop index to the loop args
     loopArgs.push_back(normIdxInit);
 
     auto newForOp = createNewForOp(forOp, builder, mapping, loopArgs);
-    // within the loop body, the normalized loop index is the corresponding
-    // loop variable
-    auto normLoadIdxVar = newForOp.getRegionIterArgs().back();
-
-    builder.setInsertionPointToStart(newForOp.getBody());
-    for (const auto &arg : llvm::enumerate(forOp.getRegionIterArgs())) {
-      int id = oldLoopId2New[arg.index()];
-      if (id != -1) {
-        mapping.map(arg.value(), newForOp.getRegionIterArgs()[id]);
-      }
-    }
-    mapping.map(forOp.getInductionVar(), newForOp.getInductionVar());
+    mapLoopVars(forOp, newForOp, loopArgIndices, mapping);
 
     builder.setInsertionPointToEnd(newForOp.getBody());
 
@@ -1088,22 +1027,16 @@ createEpilogueGroup(scf::ForOp forOp, OpBuilderWithGroup builder,
       epiOps.push_back(&op);
     }
 
+    // within the loop body, the normalized loop index is the corresponding
+    // loop variable
+    auto normLoadIdxVar = newForOp.getRegionIterArgs().back();
     cloneEpilogueOps(epiOps, arefOps[0], normLoadIdxVar, forOp.getLoc(),
-                     builder, mapping);
+                     builder, mapping, newForOp);
 
     Value one = builder.create<arith::ConstantIntOp>(forOp.getLoc(), 1, 32);
     auto nextNormLoadIdx =
         builder.create<arith::AddIOp>(forOp.getLoc(), normLoadIdxVar, one);
-    SmallVector<Value> yieldValues;
-    for (const auto &v :
-         llvm::enumerate(forOp.getBody()->getTerminator()->getOperands())) {
-      int id = oldLoopId2New[v.index()];
-      if (id != -1) {
-        yieldValues.push_back(mapping.lookupOrDefault(v.value()));
-      }
-    }
-    yieldValues.push_back(nextNormLoadIdx);
-    builder.create<scf::YieldOp>(forOp.getLoc(), yieldValues);
+    createNewYieldOp(builder, forOp, loopArgIndices, mapping, nextNormLoadIdx);
     return newForOp;
   }
 }
@@ -1161,12 +1094,10 @@ void moveOpBetweenLoops(scf::ForOp &forOp1, scf::ForOp &forOp2) {
   }
 }
 
-ttng::WarpGroupReturnOp createWgOp(ModuleOp mod, int barId, std::string group,
-                                   Location loc, OpBuilderWithGroup &builder) {
-  auto wsGroup = getGroupFromSymbolRefAttr(
-      mod, mlir::SymbolRefAttr::get(builder.getContext(), group));
-  auto wgOp = builder.create<ttng::WarpGroupOp>(loc, wsGroup.startWarp,
-                                                wsGroup.numWarps, 1);
+ttng::WarpGroupReturnOp createWgOp(ModuleOp mod, int barId, int startWarp,
+                                   int numWarps, Location loc,
+                                   OpBuilderWithGroup &builder) {
+  auto wgOp = builder.create<ttng::WarpGroupOp>(loc, startWarp, numWarps, 1);
 
   // set wgOp barId attribute
   wgOp->setAttr(ATTR_WS_BARID, builder.getI32IntegerAttr(barId));
@@ -1178,11 +1109,288 @@ ttng::WarpGroupReturnOp createWgOp(ModuleOp mod, int barId, std::string group,
   return wgRetOp;
 }
 
-bool shouldReallocRegisters(ModuleOp mod) {
+ttng::WarpGroupReturnOp createWgOp(ModuleOp mod, int barId, std::string group,
+                                   Location loc, OpBuilderWithGroup &builder) {
+  auto wsGroup = getGroupFromSymbolRefAttr(
+      mod, mlir::SymbolRefAttr::get(builder.getContext(), group));
+  return createWgOp(mod, barId, wsGroup.startWarp, wsGroup.numWarps, loc,
+                    builder);
+}
+
+bool isHopper(ModuleOp mod) {
   auto target = mod->getAttrOfType<StringAttr>(AttrTargetName);
-  // TODO: Use setmaxregisterop on Blackwell?
-  // https://jirasw.nvidia.com/browse/OT-116
   return target == "cuda:90";
+}
+
+bool shouldReallocRegisters(ModuleOp mod) {
+  // TODO: Use setmaxregisterop on Blackwell?
+  return isHopper(mod);
+}
+
+void fixUpArriveWaitMMAv5(FuncOp funcOp) {
+  std::function<ttng::TMEMAllocOp(Operation *)> findTMEMAllocOp =
+      [&](Operation *op) -> ttng::TMEMAllocOp {
+    if (isa<ttng::ArefGetEnterOp>(op)) {
+      // stop at aref_get.enter, no need to propagate futher
+      return {};
+    } else if (auto allocOp = dyn_cast<ttng::TMEMAllocOp>(op)) {
+      return allocOp;
+    } else {
+      for (auto user : op->getOperands())
+        if (auto userOp = user.getDefiningOp())
+          if (auto producer = findTMEMAllocOp(userOp))
+            return producer;
+      return {};
+    }
+  };
+
+  std::function<bool(Operation *)> isUsedByMMAv5 = [&](Operation *op) {
+    // transitively check if one of the user of the op is mmav5
+    if (isa<ttng::MMAv5OpInterface>(op)) {
+      return true;
+    } else {
+      for (auto user : op->getUsers())
+        if (isUsedByMMAv5(user))
+          return true;
+      return false;
+    }
+  };
+
+  DenseMap<Value, std::pair<ttng::ArefCreateOp, MemDescType>> alloc2arefMap;
+  funcOp.walk([&](ttng::TMEMLoadOp loadOp) {
+    if (auto allocOp = findTMEMAllocOp(loadOp)) {
+      if (!isUsedByMMAv5(allocOp))
+        return WalkResult::advance();
+
+      // We have quite a few use cases where we don't do much with MMAv5, e.g.
+      //   %a = alloc
+      //   ..
+      //   mma %a  {isAsync}
+      //   ..
+      //   %b = tmem_load %a
+
+      // we need to do some ad-hoc patching to make such mma wait for %a to be
+      // ready before we tmem_load it.
+
+      // Due to lack of data flow analysis, we conservatively assume that
+      // %src in tmem_load is produced by tcgen5.mma, if it originates from
+      // tmem_alloc and not from aref_get.enter, and, transitively, one of the
+      // user of this tmem_alloc is also mma
+
+      // If %src comes from %alloc, we need to patch it:
+      //    %a = alloc : <128x128>
+      //    ...
+      //    mma %a
+      //    ...
+      //    tma_load %a
+      //    ...
+      // becomes:
+      //    %a' = alloc  <1x128x128>
+      //    %aref = aref_create %a' : <1x128x128>
+      // .  %a'' = view %a'[0] : <128x128>
+      //    ...
+      //    mma %a''
+      //    ...
+      //    aref_put.enter %aref                   (try_wait consumed)
+      //    aref_put.exit %aref, producer=[umma]   (tcgen5.commit produced)
+      //    aref_get.enter %aref                   (try_wait produced)
+      //    tma_load %a''
+      //    aref_get.exit %aref, consumer=[ldtm]   (arrive consumed)
+      //    ...
+
+      // arefLower could later optimize away first put.enter and last get.exit
+
+      // Ideally, we want to patch if there is a data-flow edge between
+      // tcgen5.mma and tcgen5.ldtm. Once we have tmem data flow analysis,
+      // we can update this logic, but for now we stay conservative.
+
+      OpBuilder builder(allocOp);
+      builder.setInsertionPointAfter(allocOp);
+
+      auto zero = builder.create<arith::ConstantIntOp>(loadOp.getLoc(), 0, 32);
+      if (!alloc2arefMap.count(allocOp)) {
+        // Multiple tmem_loads may refer to the same alloc. After updating the
+        // alloc with aref_create, map the new alloc to its aref. This ensures
+        // that subsequent tmem_loads referencing the same alloc won't update
+        // alloc again.
+        auto ctx = allocOp.getContext();
+        auto allocTy = allocOp.getType();
+        auto arefBufTy = getArefbufMemDescType(allocOp.getType(), 1);
+        auto arefTy =
+            ttng::ArefType::get(ctx, TypeArrayAttr::get(ctx, arefBufTy));
+        auto arefAlloc = builder.create<ttng::TMEMAllocOp>(allocOp.getLoc(),
+                                                           arefBufTy, Value{});
+        auto arefOp = builder.create<ttng::ArefCreateOp>(
+            allocOp.getLoc(), arefTy, arefAlloc.getResult());
+        alloc2arefMap[arefAlloc] = {arefOp, allocTy};
+
+        SmallVector<Value> offsetsVal{zero};
+        auto memDescType = cast<MemDescType>(arefAlloc.getType());
+        auto shape = memDescType.getShape();
+        auto rank = shape.size() - 1;
+        for (int i = 0; i < rank; ++i) {
+          offsetsVal.push_back(builder.create<arith::ConstantIntOp>(
+              allocOp.getLoc(), 0, builder.getIntegerType(32)));
+        }
+        SmallVector<int64_t> tensorShape(shape.begin() + 1, shape.end());
+        auto memDescTypeNew = MemDescType::get(
+            tensorShape, memDescType.getElementType(),
+            memDescType.getEncoding(), memDescType.getMemorySpace(), true);
+        Value singleBuffer = builder.create<triton::gpu::MemDescSubviewOp>(
+            allocOp.getLoc(), memDescTypeNew, arefAlloc, offsetsVal);
+        allocOp.replaceAllUsesWith(singleBuffer);
+        allocOp.erase();
+        allocOp = arefAlloc;
+      }
+
+      // get aref associated with allocOp
+      auto [arefOp, allocTy] = alloc2arefMap[allocOp];
+
+      builder.setInsertionPoint(loadOp);
+
+      builder.create<triton::nvidia_gpu::ArefPutEnterOp>(
+          loadOp.getLoc(), allocTy, arefOp, zero, Value{});
+      builder.create<triton::nvidia_gpu::ArefPutExitOp>(
+          loadOp.getLoc(), arefOp, zero,
+          ArrayAttr::get(
+              builder.getContext(),
+              nvidia_gpu::ArefProducerAttr::get(
+                  builder.getContext(), nvidia_gpu::ArefProducer::UMMA)));
+      builder.create<triton::nvidia_gpu::ArefGetEnterOp>(
+          loadOp.getLoc(), allocTy, arefOp, zero, Value{});
+
+      builder.setInsertionPointAfter(loadOp);
+
+      builder.create<triton::nvidia_gpu::ArefGetExitOp>(
+          loadOp.getLoc(), arefOp, zero,
+          builder.getArrayAttr(nvidia_gpu::ArefConsumerAttr::get(
+              builder.getContext(), nvidia_gpu::ArefConsumer::LDTM)));
+    }
+    return WalkResult::advance();
+  });
+}
+
+// fold the following pattern:
+//  %b = tmem_alloc
+//  tmem_store %a, %b
+// into
+//  %b = tmem_alloc %a
+void foldTMEMStoreIntoAlloc(triton::FuncOp func) {
+  SmallVector<nvidia_gpu::TMEMAllocOp> tmemAllocOps;
+  OpBuilder builder(func);
+  func.walk([&](nvidia_gpu::TMEMAllocOp op) {
+    if (op->getNumOperands() == 0) {
+      tmemAllocOps.push_back(op);
+    }
+  });
+  for (auto allocOp : tmemAllocOps) {
+    if (auto storeOp = dyn_cast<ttng::TMEMStoreOp>(*allocOp->getNextNode())) {
+      if (storeOp.getDst() == allocOp.getResult()) {
+        auto value = storeOp.getSrc();
+        auto oldRetType = allocOp.getType();
+        SmallVector<int64_t> shape = {oldRetType.getShape().begin(),
+                                      oldRetType.getShape().end()};
+        Type memDescType = triton::gpu::MemDescType::get(
+            shape, oldRetType.getElementType(), oldRetType.getEncoding(),
+            oldRetType.getMemorySpace(), /*mutableMemory=*/true);
+        builder.setInsertionPoint(allocOp);
+        auto newAllocOp = builder.create<nvidia_gpu::TMEMAllocOp>(
+            allocOp->getLoc(), memDescType, value);
+        allocOp.getResult().replaceAllUsesWith(newAllocOp.getResult());
+        storeOp->erase();
+        allocOp->erase();
+      }
+    }
+  }
+}
+
+// if we have this pattern
+//  %a = tmem_load %t1
+//  %t2 = tmem_alloc %a
+// and tmem_alloc is the only use of %a, we can remove the tmem_alloc and make
+// t2 alias with t1. this pattern shows up in causal FMHA
+void aliasTMEMAlloc(triton::FuncOp func) {
+  SmallVector<nvidia_gpu::TMEMAllocOp> tmemAllocOps;
+  func.walk([&](nvidia_gpu::TMEMAllocOp op) {
+    if (op->getNumOperands() == 1) {
+      tmemAllocOps.push_back(op);
+    }
+  });
+  for (auto allocOp : tmemAllocOps) {
+    auto value = allocOp.getSrc();
+    assert(value);
+    if (auto tmemLoadOp =
+            dyn_cast<nvidia_gpu::TMEMLoadOp>(value.getDefiningOp())) {
+      if (value.hasOneUse()) {
+        auto tmemAllocAddr = allocOp.getResult();
+        auto tmemLoadAddr = tmemLoadOp.getSrc();
+        // replace all uses of tmemAllocAddr with tmemLoadAddr
+        tmemAllocAddr.replaceAllUsesWith(tmemLoadAddr);
+        allocOp->erase();
+        tmemLoadOp->erase();
+      }
+    }
+  }
+}
+
+void optimizeNumWarps(SmallVector<nvidia_gpu::WarpGroupOp> &wgOps,
+                      ModuleOp moduleOp) {
+  std::sort(wgOps.begin(), wgOps.end(),
+            [](nvidia_gpu::WarpGroupOp wgOp1, nvidia_gpu::WarpGroupOp wgOp2) {
+              return wgOp1.getStartWarp() < wgOp2.getStartWarp();
+            });
+
+  OpBuilder builder(moduleOp.getContext());
+  int startWarp = 0;
+  for (auto &wgOp : wgOps) {
+    bool hasSIMTOp = false;
+
+    for (auto &block : wgOp.getRegion(0)) {
+      block.walk([&](Operation *op) {
+        if (isa<DescriptorLoadOp, DescriptorGatherOp>(op)) {
+          return WalkResult::advance();
+        }
+        if (auto localStore = dyn_cast<LocalStoreOp>(op)) {
+          auto src = localStore.getSrc().getDefiningOp();
+          if (isa<DescriptorLoadOp, DescriptorGatherOp>(src)) {
+            return WalkResult::advance();
+          }
+        }
+        auto types =
+            llvm::concat<Type>(op->getOperandTypes(), op->getResultTypes());
+        for (Type type : types) {
+          if (isa<RankedTensorType>(type)) {
+            hasSIMTOp = true;
+          }
+        }
+        return WalkResult::advance();
+      });
+    }
+
+    int newNumWarps = wgOp.getNumWarps();
+
+    if (isOpInGroup(wgOp, ATTR_WSGROUPS)) {
+      assert(wgOp.getStartWarp() == 0);
+    }
+
+    if (!hasSIMTOp) {
+      if (!isOpInGroup(wgOp, ATTR_WS_TMALOAD) || wgOp.getStartWarp() != 0) {
+        // If TMA group has startWarp = 0, we cannot reduce its num_warps to 1
+	// Possibly related, when there is an epilogue group and both MMA and TMA
+	// groups get num_warps = 1, the TMA group must come after MMA.
+        // TODO: Investigate why
+        newNumWarps = 1;
+      }
+    }
+
+    auto group = getGroup(wgOp);
+
+    wgOp.setStartWarp(startWarp);
+    wgOp.setNumWarps(newNumWarps);
+    setGroupAttribute(moduleOp, group, startWarp, newNumWarps);
+
+    startWarp += newNumWarps;
+  }
 }
 
 } // namespace
@@ -1207,32 +1415,13 @@ public:
     });
 
     for (auto func : m.getOps<triton::FuncOp>()) {
-      {
-        // after rebase:
-        //   %b = tmem_alloc %a
-        //   ...
-        // was replaced by
-        //   %b = tmem_alloc
-        //   tmem_store %a, %b
-        //   ..
-        // For now, as a work-around we replace first tmem_store as we handled
-        // it differently in this function
-        SmallVector<nvidia_gpu::TMEMAllocOp> tmemAllocOps;
-        func.walk(
-            [&](nvidia_gpu::TMEMAllocOp op) { tmemAllocOps.push_back(op); });
-        SmallVector<ttng::TMEMStoreOp> staleTMEMStoreOps;
-        for (auto allocOp : tmemAllocOps) {
-          if (auto storeOp =
-                  dyn_cast<ttng::TMEMStoreOp>(*allocOp->getNextNode())) {
-            if (storeOp.getDst() == allocOp.getResult()) {
-              staleTMEMStoreOps.push_back(storeOp);
-            }
-          }
-        }
-        for (auto storeOp : staleTMEMStoreOps) {
-          storeOp->erase();
-        }
-      }
+      // this folding pass will make the IR fit the current assumption that the
+      // code in between causal FMHA loops can be moved to before the first loop
+      // (i.e. mostly to compute the loop bound for the second loop)
+      foldTMEMStoreIntoAlloc(func);
+      // manually alias TMEM, otherwise we will see Out of TMEM for causal FMHA
+      aliasTMEMAlloc(func);
+
       SmallVector<scf::ForOp> forOps;
       auto &body = func.getBody().front();
       for (const auto &op : body.getOperations()) {
@@ -1266,6 +1455,7 @@ public:
 
       SmallVector<triton::nvidia_gpu::ArefCreateOp> arefSMEMOps;
       SmallVector<triton::nvidia_gpu::ArefCreateOp> arefTMEMOps;
+      SmallVector<nvidia_gpu::WarpGroupOp> wgOps;
       // TODO: Do not hard code currently supported group IDs
       // However, ATTR_WS_TMALOAD must be processed first since the arefOps
       // is populated during createLoadGroup (by createArefPut).
@@ -1279,6 +1469,7 @@ public:
         OpBuilderWithGroup builder(forOps[0], group);
         builder.setInsertionPointAfter(nextInsertPointAfter);
         auto wgRetOp = createWgOp(m, barId++, group, loc, builder);
+        wgOps.push_back(wgRetOp->getParentOfType<nvidia_gpu::WarpGroupOp>());
         builder.setInsertionPoint(wgRetOp);
 
         Value normIdxInit = builder.create<arith::ConstantIntOp>(loc, 0, 32);
@@ -1350,7 +1541,7 @@ public:
             auto zero = builder.create<arith::ConstantIntOp>(loc, 0, 32);
             builder.setInsertionPoint(wgRetOp);
             cloneEpilogueOps(epiOps, arefTMEMOps[0], zero, loc, builder,
-                             mapping);
+                             mapping, scf::ForOp());
 
             for (int i = epiOps.size() - 1; i >= 0; --i) {
               epiOps[i]->erase();
@@ -1378,6 +1569,13 @@ public:
       });
       for (auto alloc : staleTMEMAlloc) {
         alloc.erase();
+      }
+
+      fixUpArriveWaitMMAv5(func);
+
+      if (!isHopper(m)) {
+        // For backward compatibility, keep num_warps = 4 on Hopper.
+        optimizeNumWarps(wgOps, m);
       }
     }
 

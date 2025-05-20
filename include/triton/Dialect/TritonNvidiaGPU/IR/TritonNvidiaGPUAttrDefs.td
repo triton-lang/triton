@@ -4,6 +4,7 @@
 include "mlir/IR/AttrTypeBase.td"
 include "triton/Dialect/TritonNvidiaGPU/IR/TritonNvidiaGPUDialect.td"
 include "triton/Dialect/Triton/IR/TritonInterfaces.td"
+include "mlir/IR/EnumAttr.td"
 
 def TTG_TensorMemorySpace : AttrDef<TritonNvidiaGPU_Dialect, "TensorMemorySpace"> {
   let mnemonic = "tensor_memory";
@@ -67,5 +68,40 @@ def TTG_TensorMemoryScalesEncodingAttr : AttrDef<TritonNvidiaGPU_Dialect, "Tenso
   );
   let assemblyFormat = "`<` struct(params) `>`";
 }
+
+def TTNG_ArefConsumerAttr : I32EnumAttr<
+  "ArefConsumer", "",
+  [
+    I32EnumAttrCase<"LDS", 0, "lds">,
+    I32EnumAttrCase<"LDTM", 1, "ldtm">,
+    I32EnumAttrCase<"WGMMA", 2, "wgmma">,
+    I32EnumAttrCase<"UMMA", 3, "umma">,
+  ]> {
+  let cppNamespace = "::mlir::triton::nvidia_gpu";
+  let genSpecializedAttr = 0;
+}
+
+def TTNG_ArefProducerAttr : I32EnumAttr<
+  "ArefProducer", "",
+  [
+    I32EnumAttrCase<"TMALDG", 0, "tmaldg">,
+    I32EnumAttrCase<"LDGSTS", 1, "ldgsts">,
+    I32EnumAttrCase<"STS", 2, "sts">,
+    I32EnumAttrCase<"STTM", 3, "sttm">,
+    I32EnumAttrCase<"UMMA", 4, "umma">,
+  ]> {
+  let cppNamespace = "::mlir::triton::nvidia_gpu";
+  let genSpecializedAttr = 0;
+}
+
+def TTNG_ArefProducerEnum : EnumAttr<TritonNvidiaGPU_Dialect, TTNG_ArefProducerAttr, "aref_producer"> {
+  let assemblyFormat = "`<` $value `>`";
+}
+def TTNG_ArefProducerArrayAttr : TypedArrayAttrBase<TTNG_ArefProducerEnum, "array of aref producer attributes">;
+
+def TTNG_ArefConsumerEnum : EnumAttr<TritonNvidiaGPU_Dialect, TTNG_ArefConsumerAttr, "aref_consumer"> {
+  let assemblyFormat = "`<` $value `>`";
+}
+def TTNG_ArefConsumerArrayAttr : TypedArrayAttrBase<TTNG_ArefConsumerEnum, "array of aref consumer attributes">;
 
 #endif

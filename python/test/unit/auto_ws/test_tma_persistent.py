@@ -134,7 +134,6 @@ def test_experimental_matmul(
     utils.common_test_setup(ENABLE_WARP_SPECIALIZATION, NUM_WARPS)
     NUM_SMS = utils.get_num_sms()
 
-    # JIRA: https://jirasw.nvidia.com/browse/OT-98
     if (
         triton.cdiv(M, BLOCK_M) * triton.cdiv(N, BLOCK_N) > NUM_SMS
         and ENABLE_WARP_SPECIALIZATION
@@ -142,7 +141,6 @@ def test_experimental_matmul(
     ):
         pytest.skip("FIXME: test fails when #CTA <= NUM_SMS")
 
-    # JIRA: https://jirasw.nvidia.com/browse/OT-108
     # also see skipping verification in benchmarking below
     if not bench and not ENABLE_WARP_SPECIALIZATION and (M >= 4096 or N >= 4096):
         pytest.skip("FIXME: test fails verification without autows for large inputs")
@@ -151,7 +149,7 @@ def test_experimental_matmul(
     A = utils.generate_input((M, K), dtype)
     B = utils.generate_input((N, K), dtype)
     C = torch.empty((M, N), dtype=dtype, device="cuda")
-    
+
     desc_a = TensorDescriptor(A, A.shape, A.stride(), [BLOCK_M, BLOCK_K])
     desc_b = TensorDescriptor(B, B.shape, B.stride(), [BLOCK_N, BLOCK_K])
     desc_c = TensorDescriptor(C, C.shape, C.stride(), [BLOCK_M, BLOCK_N])
@@ -213,6 +211,7 @@ def test_experimental_matmul(
         ]
         if utils.is_sm10x():
             smem_buffers.append(8)
+            smem_buffers.append(8)
     else:
         smem_buffers = [
             NUM_STAGES * BLOCK_M * BLOCK_K * utils.dtype_size(dtype),
@@ -235,7 +234,6 @@ def test_experimental_matmul(
         utils.clear_check_shared_memory_hook()
     assert shared_memory <= utils.get_shared_memory()
 
-    # See https://jirasw.nvidia.com/browse/OT-104
     if utils.is_sm10x() and (
         BLOCK_M,
         BLOCK_N,

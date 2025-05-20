@@ -892,6 +892,14 @@ class CodeGenerator(ast.NodeVisitor):
             f'but is re-assigned to {loop_val.type} in loop! '\
             f'Please make sure that the type stays consistent.'
 
+    def visit_With(self, node):
+        assert len(node.items) == 1
+        context = node.items[0].context_expr
+
+        context = self.visit(context)
+        with context:
+            self.visit_compound_statement(node.body)
+
     def visit_While(self, node):
         with enter_sub_region(self) as sr:
             liveins, insert_block = sr
@@ -1368,11 +1376,24 @@ class CodeGenerator(ast.NodeVisitor):
 
         return ret
 
+    def group_executor(python_fn):
+
+        def ret(self, node: ast.Call):
+            kws = {
+                name: _unwrap_if_constexpr(value)
+                for name, value in (self.visit(keyword) for keyword in node.keywords)
+            }
+            args = [_unwrap_if_constexpr(self.visit(arg)) for arg in node.args]
+            return constexpr(python_fn(*args, **kws, _module=self.module, _builder=self.builder))
+
+        return ret
+
     statically_implemented_functions: Dict[object, Callable[[ast.Call], Any]] = {
         language.core.static_assert: execute_static_assert,
         language.core.static_print: static_executor(print),
         int: static_executor(int),
         len: static_executor(len),
+        language.auto_ws.group: group_executor(language.auto_ws.group),
     }
 
 

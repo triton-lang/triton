@@ -162,7 +162,12 @@ def NVGPU_LoadAcquireOp : NVGPU_Op<"ld_acquire", [MemoryEffects<[MemRead]>]> {
   let assemblyFormat = "$sem `,` $scope `,` $addr (`,` $mask^)? attr-dict `:` functional-type($addr, $result)";
 }
 
-def NVGPU_WarpIdOp : NVGPU_Op<"warp_id", [Pure]> {
+// nvgpu::WarpIdOp returns different value depending in which ttng.warp_group
+// it is located. If it is made Pure, LLVM may CSE it with other nvgpu::WarpIdOp,
+// because ttng.warp_group is not isolated, resulting in UB. That's why we make
+// it non-Pure here. We can revisit if we decide to use ttg::WarpSpecializeOp
+// which is isolated
+def NVGPU_WarpIdOp : NVGPU_Op<"warp_id", []> {
   let results = (outs I32:$result);
   let assemblyFormat = "attr-dict";
 }

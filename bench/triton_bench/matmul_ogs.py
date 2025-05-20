@@ -421,6 +421,7 @@ def matmul_ogs(x, w, bias,
                gammas: torch.Tensor | None = None,
                out_alpha: float | None = None,
                y: torch.Tensor | None = None,
+               nvws=False,
                ):
     """
     Y[:, :] = 0.
@@ -499,7 +500,8 @@ def matmul_ogs(x, w, bias,
     flex = precision_config.flex_ctx
     bias_stride = None if bias is None else bias.stride(0)
     num_indx = None if scatter_indx is None else scatter_indx.src_indx.shape[0]
-    (_ptma_matmul_ogs if opt_flags.is_persistent else _matmul_ogs)[(n_cta,)](
+    nvws = nvws if opt_flags.is_persistent else False  # Only WS the TMA kernel
+    out = (_ptma_matmul_ogs if opt_flags.is_persistent else _matmul_ogs)[(n_cta,)](
                    flex.out_data.reinterpret(memory["output"]),
                    flex.out_data.reinterpret(out0), *out0.stride(),
                    *out0_flex,
@@ -542,7 +544,13 @@ def matmul_ogs(x, w, bias,
                    DISABLE_Y_TMA=out0.stride(-2) * out0.dtype.itemsize % 16 != 0,
                    SWAP_XW=swap_xw,
                    NUM_SMS = n_cta,
+                   NVWS=nvws,
+                   enable_warp_specialization=nvws,
                    **opt_flags.target_kernel_kwargs)
+
+    # if opt_flags.is_persistent:
+    #     print(out.asm["ttgir"])
+
     # post-processing
     out = apply_postprocessing_features(scatter_indx, opt_flags, expt_data.offs,
                                 num_indx, precision_config, routing_data,

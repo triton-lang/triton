@@ -186,7 +186,7 @@ def triton_attention(Q, K, V):
         num_stages=3,
         # mma_depth=1,
         enable_warp_specialization=True,
-        math_wg_pipe=True,
+        math_wg_pipe=False,
     )
     return output
 

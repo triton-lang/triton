@@ -250,7 +250,7 @@ bool mayAliasAllocations(const DenseSet<Value> &lhs,
                          const DenseSet<Value> &rhs);
 
 // inserts barrier, interface is aligned with getThreadId(rewriter, loc)
-Operation* insertBarrier(OpBuilder &rewriter, Location loc);
+Operation *insertBarrier(OpBuilder &rewriter, Location loc);
 } // namespace mlir
 
 namespace mlir::triton {
@@ -270,6 +270,7 @@ void replaceUsesWithLocalLoad(
   using triton::gpu::LocalAllocOp;
   auto allocTy = alloc.getType();
   SmallVector<LocalAllocOp> allocsToErase;
+  SmallVector<gpu::LocalStoreOp> storesToErase;
   for (Operation *user : old.getUsers()) {
     if (auto userAlloc = dyn_cast<LocalAllocOp>(user)) {
       if (allocTy.getEncoding() == userAlloc.getType().getEncoding()) {
@@ -277,9 +278,20 @@ void replaceUsesWithLocalLoad(
         allocsToErase.push_back(userAlloc);
       }
     }
+    // with AutoWS, the pattern is descriptorLoad + localStore
+    // handle it in same way as localAlloc
+    if (auto userStore = dyn_cast<gpu::LocalStoreOp>(user)) {
+      if (allocTy.getEncoding() == userStore.getDst().getType().getEncoding()) {
+        replaceUsesAndPropagateType(builder, userStore, alloc);
+        storesToErase.push_back(userStore);
+      }
+    }
   }
   for (auto alloc : allocsToErase) {
     alloc.erase();
+  }
+  for (auto store : storesToErase) {
+    store.erase();
   }
 
   // If there are some uses that were not local_allocs, we need to create a

@@ -3,6 +3,7 @@
 
 from . import math
 from . import extra
+from .auto_ws import group
 from .standard import (
     argmax,
     argmin,
@@ -195,6 +196,7 @@ __all__ = [
     "fma",
     "full",
     "gather",
+    "group",
     "histogram",
     "inline_asm_elementwise",
     "interleave",
