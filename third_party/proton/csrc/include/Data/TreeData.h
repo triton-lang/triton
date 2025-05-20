@@ -17,6 +17,8 @@ public:
 
   size_t addOp(size_t scopeId, const std::string &name) override;
 
+  size_t addOp(size_t scopeId, const std::vector<Context> &contexts) override;
+
   void addMetric(size_t scopeId, std::shared_ptr<Metric> metric) override;
 
   void
