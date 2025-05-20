@@ -1,7 +1,7 @@
 // RUN: triton-opt --split-input-file -allocate-shared-memory -convert-proton-to-protongpu="max-shared-mem-size=4096" -allocate-proton-shared-memory %s | FileCheck %s
 
 #A_SHARED = #ttg.swizzled_shared<{vec = 2, perPhase = 2, maxPhase = 4, order = [1, 0]}>
-// CHECK: ttg.shared = 3584 : i32
+// CHECK: ttg.shared = 1664 : i32
 module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 1 : i32} {
   // CHECK-LABEL: allocate_aligned
   tt.func @allocate_aligned(%A : !tt.ptr<f16>) {
@@ -21,7 +21,7 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 1 : i32} {
 // -----
 
 #A_SHARED = #ttg.swizzled_shared<{vec = 2, perPhase = 2, maxPhase = 4, order = [1, 0]}>
-// CHECK: ttg.shared = 2064 : i32
+// CHECK: ttg.shared = 144 : i32
 module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 1 : i32} {
   // CHECK-LABEL: allocate_unaligned
   tt.func @allocate_unaligned(%A : !tt.ptr<f16>) {
