@@ -22,7 +22,6 @@
  */
 
 #include "triton/Dialect/Triton/IR/Dialect.h"
-#include "../../../TritonAMDGPUToLLVM/Utility.h"
 #include "mlir/IR/DialectImplementation.h"
 #include "mlir/IR/OpImplementation.h"
 #include "llvm/ADT/TypeSwitch.h"

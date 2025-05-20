@@ -1,11 +1,5 @@
-#include "../TritonAMDGPUToLLVM/Utility.h"
 #include "Dialect/TritonAMDGPU/IR/Dialect.h"
-#include "TritonAMDGPUToLLVM/GCNAsmFormat.h"
 #include "mlir/Conversion/LLVMCommon/Pattern.h"
-#include "mlir/Dialect/LLVMIR/ROCDLDialect.h"
-#include "triton/Analysis/Utility.h"
-#include "triton/Conversion/MLIRTypes.h"
-#include "triton/Conversion/TritonGPUToLLVM/PatternTritonGPUOpToLLVM.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 
 using namespace mlir;
@@ -13,16 +7,69 @@ using namespace mlir::triton;
 
 namespace {
 
+template <typename T, typename U, typename BinaryOp>
+std::vector<unsigned> multiDimElementwise(ArrayRef<T> lhs, ArrayRef<U> rhs,
+                                          BinaryOp op) {
+  assert(lhs.size() == rhs.size() && "Input dimensions must match");
+  std::vector<unsigned> result;
+  result.reserve(lhs.size());
+  for (size_t i = 0, n = lhs.size(); i < n; ++i) {
+    unsigned a = static_cast<unsigned>(lhs[i]);
+    unsigned b = static_cast<unsigned>(rhs[i]);
+    result.push_back(op(a, b));
+  }
+  return result;
+}
+
 template <typename T> unsigned getNumElements(const ArrayRef<T> shape) {
   return std::accumulate(shape.begin(), shape.end(), 1, std::multiplies<>());
 }
 
-struct ConcatOpConversion : public ConvertOpToLLVMPattern<amdgpu::ConcatOp> {
-  using Base = ConvertOpToLLVMPattern<amdgpu::ConcatOp>;
+// Determine the order in which CTA tiles are laid out across the tensor.
+// That is, create vector of dimensions from fastest to slowest varying.
+SmallVector<unsigned> getCTATileOrder(MLIRContext *ctx,
+                                      const LinearLayout &layout) {
+  auto llEnc = triton::gpu::LinearEncodingAttr::get(ctx, layout);
+  auto regDim = StringAttr::get(ctx, "register");
+  auto &bases = layout.getBases().find(regDim)->second;
 
-  explicit ConcatOpConversion(LLVMTypeConverter &typeConverter,
-                              PatternBenefit benefit = 1)
-      : Base(typeConverter, benefit) {}
+  // Compute number of CTA tiles in a layout.
+  unsigned totalElems = layout.getTotalOutDimSize();
+  auto ctaShape = llEnc.getShapePerCTATile();
+  unsigned elemsPerCTA =
+      std::accumulate(ctaShape.begin(), ctaShape.end(), 1, std::multiplies<>());
+  assert((totalElems % elemsPerCTA) == 0 &&
+         "Total elements must be divisible by elemsPerCTA");
+  unsigned numCTAs = totalElems / elemsPerCTA;
+
+  // To determine the CTA tile order, start by identifying the register basis
+  // vector that corresponds to the first element of the second CTA tile. The
+  // nonzero index in the logical tensor it maps to indicates the fastest
+  // varying dimension. Then, for each subsequent basis register (first element
+  // of some CTA tile), extract the next nonzero index to build the full
+  // dimension order.
+  unsigned registersPerThreadPerCTA =
+      product(llEnc.basesPerDim(regDim, /*skipBroadcast=*/false)) / numCTAs;
+  unsigned startIndex =
+      static_cast<unsigned>(std::log2(registersPerThreadPerCTA));
+
+  llvm::SmallSetVector<unsigned, 8> order;
+  for (unsigned i = startIndex; i < bases.size(); ++i) {
+    auto range = llvm::make_range(bases[i].begin(), bases[i].end());
+    auto it = llvm::find_if(range, [](unsigned v) { return v != 0; });
+    if (it != bases[i].end())
+      order.insert(std::distance(bases[i].begin(), it));
+  }
+
+  // Append any dims missing from our default order.
+  for (unsigned dim : llEnc.getOrder())
+    order.insert(dim);
+
+  return order.takeVector();
+}
+
+struct ConcatOpConversion : public ConvertOpToLLVMPattern<amdgpu::ConcatOp> {
+  using ConvertOpToLLVMPattern::ConvertOpToLLVMPattern;
 
   LogicalResult
   matchAndRewrite(amdgpu::ConcatOp op, OpAdaptor adaptor,
@@ -39,12 +86,11 @@ struct ConcatOpConversion : public ConvertOpToLLVMPattern<amdgpu::ConcatOp> {
     ArrayRef<int64_t> srcShape = srcType.getShape();
     Attribute srcEncoding = srcType.getEncoding();
 
+    MLIRContext *context = resultType.getContext();
     auto linearLayoutSrc = triton::gpu::toLinearLayout(srcShape, srcEncoding);
     auto linearLayoutDst = triton::gpu::toLinearLayout(dstShape, dstEncoding);
-    auto srcCTAOrder =
-        LLVM::AMD::getCTATileOrder(resultType.getContext(), linearLayoutSrc);
-    auto dstCTAOrder =
-        LLVM::AMD::getCTATileOrder(resultType.getContext(), linearLayoutSrc);
+    auto srcCTAOrder = getCTATileOrder(context, linearLayoutSrc);
+    auto dstCTAOrder = getCTATileOrder(context, linearLayoutSrc);
 
     auto rank = srcShape.size();
     auto shapePerCTATile = triton::gpu::getShapePerCTATile(resultType);
@@ -58,11 +104,11 @@ struct ConcatOpConversion : public ConvertOpToLLVMPattern<amdgpu::ConcatOp> {
     std::vector<unsigned> defaultOrder(rank);
     std::iota(defaultOrder.rbegin(), defaultOrder.rend(), 0);
 
-    auto dstCTAShape = LLVM::AMD::multiDimElementwise<int64_t, unsigned>(
+    auto dstCTAShape = multiDimElementwise<int64_t, unsigned>(
         dstShape, shapePerCTATile, std::divides<unsigned>());
-    auto srcCTAShape = LLVM::AMD::multiDimElementwise<int64_t, unsigned>(
+    auto srcCTAShape = multiDimElementwise<int64_t, unsigned>(
         srcShape, shapePerCTATile, std::divides<unsigned>());
-    auto srcToDstShape = LLVM::AMD::multiDimElementwise<int64_t, int64_t>(
+    auto srcToDstShape = multiDimElementwise<int64_t, int64_t>(
         dstShape, srcShape, std::divides<unsigned>());
 
     unsigned elemsPerThreadPerCTA =
@@ -84,7 +130,7 @@ struct ConcatOpConversion : public ConvertOpToLLVMPattern<amdgpu::ConcatOp> {
       // The n-dim destination tensor is built by arranging n-dim source tensors
       // into a destination tensor shape. Determine which source tensor contains
       // the current CTA tile.
-      auto multiDimSrcIdx = LLVM::AMD::multiDimElementwise<unsigned, unsigned>(
+      auto multiDimSrcIdx = multiDimElementwise<unsigned, unsigned>(
           currTileIdx, srcCTAShape, std::divides<unsigned>());
       // Compute linear index of the current source tensor.
       // Concat operands are laid out in the destination tensor
@@ -95,9 +141,8 @@ struct ConcatOpConversion : public ConvertOpToLLVMPattern<amdgpu::ConcatOp> {
       // After determining which source tensor the current CTA tile belongs to,
       // compute the index of this CTA tile within that source tensor,
       // considering the source tensors may include CTA tiles.
-      auto multiDimSrcCTAIdx =
-          LLVM::AMD::multiDimElementwise<unsigned, unsigned>(
-              currTileIdx, srcCTAShape, std::modulus<unsigned>());
+      auto multiDimSrcCTAIdx = multiDimElementwise<unsigned, unsigned>(
+          currTileIdx, srcCTAShape, std::modulus<unsigned>());
       auto linearSrcCTAIdx =
           mlir::LLVM::linearize(multiDimSrcCTAIdx, srcCTAShape, srcCTAOrder);
       auto unpackedElements = unpackedSources[linearSrcIdx];
