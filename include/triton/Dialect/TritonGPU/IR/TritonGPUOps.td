@@ -337,7 +337,7 @@ def TTG_PredicateStageOp: TTG_Op<"predicate_stage",
   let assemblyFormat = "$iv `,` $ub `,` $step `maxStage` $maxStage `stage` $stage attr-dict `:` type($iv) `->` type($result)";
 }
 
-def TT_MaskOp: TTG_Op<"mask",
+def TTG_MaskOp: TTG_Op<"mask",
                        [SingleBlock]> {
     let summary = "mask op for pipelining";
     let arguments = (ins I1:$pred);
@@ -348,7 +348,7 @@ def TT_MaskOp: TTG_Op<"mask",
     ];
 }
 
-def TT_MaskReturnOp: TTG_Op<"mask.return",
+def TTG_MaskReturnOp: TTG_Op<"mask.return",
                              [HasParent<"MaskOp">, Pure, Terminator, ReturnLike]> {
     let summary = "terminator for mask operator";
     let arguments = (ins Variadic<AnyType>:$result);
