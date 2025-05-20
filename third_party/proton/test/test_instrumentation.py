@@ -165,7 +165,9 @@ def test_tree(tmp_path: pathlib.Path):
     n_elements = output.numel()
     grid = (1, 1, 1)
     proton.start(str(temp_file.with_suffix("")), backend="instrumentation")
-    add_kernel[grid](x, y, output, n_elements, BLOCK_SIZE=1024)
+    # cycle values are aggregated from all warps, set num_warps=1 to just
+    # get a single cycle value for each scope
+    add_kernel[grid](x, y, output, n_elements, BLOCK_SIZE=1024, num_warps=1)
     proton.finalize()
 
     with open(temp_file, "rb") as f:
