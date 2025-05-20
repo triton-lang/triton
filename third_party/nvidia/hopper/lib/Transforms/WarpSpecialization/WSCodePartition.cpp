@@ -1285,9 +1285,9 @@ void doCodePartition(triton::FuncOp &funcOp, unsigned numBuffers) {
     funcOp.dump();
   });
 
-  SpecializeRegion(funcOp); //, regDecProducer, regIncConsumer);
+  specializeRegion(funcOp); //, regDecProducer, regIncConsumer);
   LLVM_DEBUG({
-    LDBG("\n\nwith SpecializeRegion");
+    LDBG("\n\nwith specializeRegion");
     funcOp.dump();
   });
 }

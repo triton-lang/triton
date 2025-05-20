@@ -43,6 +43,8 @@ def NVGPUTestWSDataPartition : Pass<"nvgpu-test-ws-data-partition", "mlir::Modul
     Option<"numWarpGroups", "num-warp-groups",
            "int32_t", /*default*/"0",
            "number of warp groups for warp specialization">
+  ];
+}
 
 def NVGPUTestWSCodePartition: Pass<"nvgpu-test-ws-code-partition", "mlir::ModuleOp"> {
   let summary = "test warp specialization code partition";

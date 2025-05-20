@@ -126,7 +126,7 @@ Operation *optimizeTMALoads(OpBuilderWithAsyncTaskIds &builder,
                             Value bufferIdx, Value bufferIdxExtract,
                             Value phase, Operation *headProducer,
                             Operation *headConsumer);
-void SpecializeRegion(triton::FuncOp funcOp);
+void specializeRegion(triton::FuncOp funcOp);
 
 } // namespace mlir
 

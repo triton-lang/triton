@@ -345,7 +345,7 @@ Operation *SpecializeOp(Operation *op, IRMapping &mapping,
   return nullptr;
 }
 
-void SpecializeRegion(triton::FuncOp funcOp) {
+void specializeRegion(triton::FuncOp funcOp) {
 
   LLVM_DEBUG({
     LDBG("\n\n");
