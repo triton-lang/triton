@@ -98,43 +98,8 @@ static void resolveMaskOp(ModuleOp moduleOp) {
   }
 }
 
-struct LICMScalarsPattern : public RewritePattern {
-  LICMScalarsPattern(MLIRContext *ctx)
-      // MatchAnyOpTypeTag tells the pattern-matcher to try this pattern on
-      // every operation it encounters.
-      : RewritePattern(MatchAnyOpTypeTag(), /*benefit=*/1, ctx) {}
-
-  LogicalResult matchAndRewrite(Operation *op,
-                                PatternRewriter &rewriter) const override {
-    // Keep only operations that belong to the arith dialect.
-    if (op->getDialect()->getNamespace() !=
-        arith::ArithDialect::getDialectNamespace())
-      return failure();
-
-    for (auto resultType : op->getResultTypes()) {
-      if (isa<RankedTensorType>(resultType)) {
-        return failure();
-      }
-    }
-
-    scf::ForOp forOp = op->getParentOfType<scf::ForOp>();
-    if (!forOp) {
-      return failure();
-    }
-
-    for (auto operand : op->getOperands()) {
-      if (!forOp.isDefinedOutsideOfLoop(operand)) {
-        return failure();
-      }
-    }
-
-    rewriter.moveOpBefore(op, forOp);
-    return success();
-  }
-};
-
 void resolvePredicateStageOps(
-    ArrayRef<Operation *> ops, // TODO: rewriter not really needed
+    ArrayRef<Operation *> ops,
     std::function<Value(triton::gpu::PredicateStageOp)> fn) {
   SmallVector<triton::gpu::PredicateStageOp> opsToErase;
   for (auto op : ops) {
@@ -153,37 +118,50 @@ void resolvePredicateStageOps(
   }
 }
 
+static Operation *processPeeledEpilogueOp(RewriterBase &rewriter, Operation *op,
+                                          Value predCondition) {
+  if (auto predOp = dyn_cast<triton::gpu::PredicateStageOp>(op)) {
+    // TODO: Handle the case for iterations other than the last one
+    // Return false for the predicate of the peeled iteration
+    return rewriter.create<mlir::arith::ConstantIntOp>(
+        predOp.getLoc(), 0, predOp.getResult().getType());
+  } else {
+    // Predicate operations based on whether the peeled iteration is executed
+    return triton::predicateOp(rewriter, op, predCondition);
+  }
+}
+
+static Operation *processLoopBodyOp(RewriterBase &rewriter, Operation *op) {
+  if (auto predOp = dyn_cast<triton::gpu::PredicateStageOp>(op)) {
+    // TODO: Handle the case for iterations other than the last one
+    if (predOp.getStage() == predOp.getMaxStage() - 1) {
+      return rewriter.create<mlir::arith::ConstantIntOp>(
+          predOp.getLoc(), 1, predOp.getResult().getType());
+    } else {
+      OpBuilder::InsertionGuard guard(rewriter);
+      rewriter.setInsertionPoint(op);
+      return triton::emitPredicateForStage(
+                 rewriter, predOp.getIv(), predOp.getUb(), predOp.getStep(),
+                 predOp.getMaxStage(), predOp.getStage())
+          .getDefiningOp();
+    }
+  }
+  return op;
+}
+
 static void peelEpilogue(RewriterBase &rewriter, scf::ForOp forOp,
                          int maxStage) {
-  mlir::triton::annotateLoopForEpiloguePeeling(rewriter, forOp, 1);
+  mlir::triton::peelLoopEpilogue(forOp, 1, processPeeledEpilogueOp,
+                                 processLoopBodyOp);
+}
 
-  rewriter.setInsertionPoint(forOp);
-  Value vTrue = rewriter.create<mlir::arith::ConstantIntOp>(
-      forOp.getLoc(), 1, rewriter.getI1Type());
-  Value vFalse = rewriter.create<mlir::arith::ConstantIntOp>(
-      forOp.getLoc(), 0, rewriter.getI1Type());
-  SmallVector<Operation *> peeledOps;
-  mlir::triton::peelLoopEpilogue(forOp, triton::predicateOp, &peeledOps);
-  // Resolve all the peeled predicate stage ops to false
-  resolvePredicateStageOps(
-      peeledOps,
-      [&](triton::gpu::PredicateStageOp op) -> Value { return vFalse; });
-  // Resolve the maxStage-1 predicate in the loop body to true, and the rest
-  // to the normal predicate
-  SmallVector<Operation *> forOpBody =
-      llvm::map_to_vector(forOp.getBody()->without_terminator(),
-                          [](Operation &op) -> Operation * { return &op; });
-  resolvePredicateStageOps(
-      forOpBody, [&](triton::gpu::PredicateStageOp op) -> Value {
-        if (op.getStage() == maxStage - 1) {
-          return vTrue;
-        }
-        OpBuilder::InsertionGuard guard(rewriter);
-        rewriter.setInsertionPoint(op);
-        return mlir::triton::emitPredicateForStage(rewriter, op.getIv(),
-                                                   op.getUb(), op.getStep(),
-                                                   maxStage, op.getStage());
-      });
+static bool onlyWaitsAreUnmasked(scf::ForOp forOp) {
+  for (auto &op : forOp.getBody()->without_terminator()) {
+    if (!isa<triton::nvidia_gpu::WaitBarrierOp, triton::gpu::MaskOp>(op)) {
+      return false;
+    }
+  }
+  return true;
 }
 
 static void expandLoops(ModuleOp moduleOp) {
@@ -200,6 +178,7 @@ static void expandLoops(ModuleOp moduleOp) {
     bool keepPredicateStage = forOp->hasAttr("__test_keep_predicate_stage");
     // TODO: Enable epilogue peeling for warp specialized loops
     bool customEpiloguePeeling =
+        // onlyWaitsAreUnmasked(forOp) &&
         !forOp->getParentOfType<triton::gpu::WarpSpecializeOp>() &&
         !keepPredicateStage; // do not peel if we are testing the stage
                              // predication

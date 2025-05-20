@@ -6,24 +6,13 @@
 namespace mlir {
 namespace triton {
 
-constexpr StringRef kPeelEpilogueIterationsAttrName =
-    "tt.peel_epilogue_iterations";
-
-void annotateLoopForEpiloguePeeling(RewriterBase &rewriter, scf::ForOp forOp,
-                                    int numIterations);
-
 // Peel the epilogue of the loop.
 void peelLoopEpilogue(
     scf::ForOp forOp, int numIterations,
-    function_ref<Operation *(RewriterBase &, Operation *, Value)> predicateOp,
-    SmallVector<Operation *> *peeledOps = nullptr);
-
-// Peel the epilogue of the loop based on the `tt.peel_epilogue_iterations`
-// attribute.
-void peelLoopEpilogue(
-    scf::ForOp forOp,
-    function_ref<Operation *(RewriterBase &, Operation *, Value)> predicateOp,
-    SmallVector<Operation *> *peeledOps = nullptr);
+    function_ref<Operation *(RewriterBase &, Operation *, Value)>
+        processPeeledOp = nullptr,
+    function_ref<Operation *(RewriterBase &, Operation *)> processLoopBodyOp =
+        nullptr);
 
 } // namespace triton
 } // namespace mlir

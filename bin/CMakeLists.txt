@@ -12,6 +12,7 @@ target_link_libraries(triton-opt PRIVATE
   ${triton_libs}
   # tests
   TritonTestAnalysis
+  TritonTestDialect
   TritonAMDGPUTestAnalysis
   # MLIR core
   MLIROptLib

@@ -31,35 +31,34 @@ cloneAndUpdateOperands(RewriterBase &rewriter, Operation *op,
   return clone;
 }
 
-std::optional<int> getPeelEpilogueIterations(scf::ForOp forOp) {
-  if (!forOp->hasAttr(triton::kPeelEpilogueIterationsAttrName)) {
-    return std::nullopt;
+Value getConstantInt(RewriterBase &rewriter, Location loc, int64_t value,
+                     Type type) {
+  if (isa<IntegerType>(type)) {
+    return rewriter.create<arith::ConstantIntOp>(loc, value, type);
   }
-  return cast<IntegerAttr>(
-             forOp->getAttr(triton::kPeelEpilogueIterationsAttrName))
-      .getInt();
+  if (isa<IndexType>(type)) {
+    return rewriter.create<arith::ConstantIndexOp>(loc, value);
+  }
+  llvm_unreachable("Unsupported type");
 }
 
 } // namespace
 
 namespace mlir {
 namespace triton {
-#define GEN_PASS_DEF_TRITONLOOPPEELING
-#include "triton/Dialect/Triton/Transforms/Passes.h.inc"
-
-void annotateLoopForEpiloguePeeling(RewriterBase &rewriter, scf::ForOp forOp,
-                                    int numIterations) {
-  forOp->setAttr(kPeelEpilogueIterationsAttrName,
-                 rewriter.getI64IntegerAttr(numIterations));
-}
 
 void peelLoopEpilogue(
     scf::ForOp forOp, int numIterations,
-    function_ref<Operation *(RewriterBase &, Operation *, Value)> predicateOp,
-    SmallVector<Operation *> *peeledOps) {
+    function_ref<Operation *(RewriterBase &, Operation *, Value)>
+        processPeeledOp,
+    function_ref<Operation *(RewriterBase &, Operation *)> processLoopBodyOp) {
   assert(numIterations == 1); // TODO: for now
+
+  SmallVector<Operation *> peeledOps;
+  SmallVector<Operation *> loopBodyOps;
   IRRewriter rewriter(forOp);
-  auto loc = forOp.getLoc();
+  Location loc = forOp.getLoc();
+  Type stepType = forOp.getStep().getType();
 
   // Fetch loop bounds and step
   Value lowerBound = forOp.getLowerBound();
@@ -68,28 +67,26 @@ void peelLoopEpilogue(
 
   // Compute new upper bound for the main loop: newUpperBound = upperBound -
   // (numIterations * step)
-  auto numConst = rewriter.create<arith::ConstantIntOp>(loc, numIterations,
-                                                        rewriter.getI32Type());
+  auto numConst = getConstantInt(rewriter, loc, numIterations, stepType);
   Value peelOffset = rewriter.create<arith::MulIOp>(loc, numConst, step);
   Value newUpperBound =
       rewriter.create<arith::SubIOp>(loc, upperBound, peelOffset);
 
   forOp.getUpperBoundMutable().assign(newUpperBound);
   rewriter.setInsertionPointAfter(forOp);
-  // If the original lower bound is less than the original upper bound, we will
-  // execute only one iteration (which we are going to peel)
+  // We are going to execute the peeled iteration if the original lower bound is
+  // less than the original upper bound
   auto lastIterPred = rewriter.create<arith::CmpIOp>(
       loc, arith::CmpIPredicate::slt, lowerBound, upperBound);
 
   // Last iter induction variable value
-  // translatedUB = UB - LB
-  // IV = (step - (translatedUB % step)) + UB
-  Value translatedUB =
-      rewriter.create<arith::SubIOp>(loc, newUpperBound, lowerBound);
-  Value _ugh = rewriter.create<arith::RemUIOp>(loc, translatedUB, step);
-  Value _ugh1 = rewriter.create<arith::SubIOp>(loc, step, _ugh);
-  Value lastIterInductionVar =
-      rewriter.create<arith::AddIOp>(loc, _ugh1, newUpperBound);
+  // lastIV = lb + floor( (ub – lb – 1) / s ) * s
+  Value range = rewriter.create<arith::SubIOp>(loc, upperBound, lowerBound);
+  Value rangeM1 = rewriter.create<arith::SubIOp>(
+      loc, range, getConstantInt(rewriter, loc, 1, stepType));
+  Value itersM1 = rewriter.create<arith::DivSIOp>(loc, rangeM1, step);
+  Value delta = rewriter.create<arith::MulIOp>(loc, itersM1, step);
+  Value lastIV = rewriter.create<arith::AddIOp>(loc, delta, lowerBound);
 
   llvm::DenseMap<Value, Value> mapping;
   for (auto [arg, operand] :
@@ -97,7 +94,7 @@ void peelLoopEpilogue(
     mapping[arg] = operand;
   }
 
-  mapping[forOp.getInductionVar()] = lastIterInductionVar;
+  mapping[forOp.getInductionVar()] = lastIV;
 
   SmallVector<Value> peeledResults = forOp.getResults();
   Operation *lastOp = nullptr;
@@ -108,11 +105,12 @@ void peelLoopEpilogue(
             newOperand->set(mapping[newOperand->get()]);
           }
         });
-    if (peeledOps) {
-      peeledOps->push_back(newOp);
+    if (processPeeledOp) {
+      newOp = processPeeledOp(rewriter, newOp, lastIterPred);
     }
-    newOp = predicateOp(rewriter, newOp, lastIterPred);
-    assert(newOp && "Failed to create masked operation");
+    if (processLoopBodyOp) {
+      loopBodyOps.push_back(processLoopBodyOp(rewriter, &op));
+    }
     lastOp = newOp;
     for (auto [result, oldResult] :
          llvm::zip(newOp->getResults(), op.getResults())) {
@@ -133,32 +131,15 @@ void peelLoopEpilogue(
     return domInfo.properlyDominates(lastOp, operand.getOwner(),
                                      /*enclosingOpOK=*/false);
   });
-}
 
-void peelLoopEpilogue(
-    scf::ForOp forOp,
-    function_ref<Operation *(RewriterBase &, Operation *, Value)> predicateOp,
-    SmallVector<Operation *> *peeledOps) {
-  std::optional<int64_t> numIterationsOpt = getPeelEpilogueIterations(forOp);
-  if (!numIterationsOpt) {
-    return;
+  for (auto op : loopBodyOps) {
+    Operation *newOp = processLoopBodyOp(rewriter, op);
+    if (newOp && newOp != op) {
+      op->replaceAllUsesWith(newOp);
+      op->erase();
+    }
   }
-  int64_t numIterations = *numIterationsOpt;
-  peelLoopEpilogue(forOp, numIterations, predicateOp, peeledOps);
-
-  // Remove the peel epilogue attribute
-  forOp->removeAttr(triton::kPeelEpilogueIterationsAttrName);
 }
-
-class LoopPeelingPass : public impl::TritonLoopPeelingBase<LoopPeelingPass> {
-  void runOnOperation() override {
-    getOperation().walk([&](scf::ForOp forOp) {
-      if (getPeelEpilogueIterations(forOp)) {
-        peelLoopEpilogue(forOp, /*predicateOp=*/nullptr, /*peeledOps=*/nullptr);
-      }
-    });
-  }
-};
 
 } // namespace triton
 } // namespace mlir
