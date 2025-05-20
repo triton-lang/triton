@@ -18,23 +18,11 @@ namespace mlir {
 
 // Check to see if op is enclosed under ifOp.
 bool enclosing(scf::IfOp ifOp, Operation *op) {
-  auto pOp = op->getParentOfType<scf::IfOp>();
-  while (pOp) {
-    if (pOp == ifOp)
-      return true;
-    pOp = pOp->getParentOfType<scf::IfOp>();
-  }
-  return false;
+  return ifOp->isProperAncestor(op);
 }
 
 bool enclosing(scf::ForOp forOp, Operation *op) {
-  auto pOp = op->getParentOfType<scf::ForOp>();
-  while (pOp) {
-    if (pOp == forOp)
-      return true;
-    pOp = pOp->getParentOfType<scf::ForOp>();
-  }
-  return false;
+  return forOp->isProperAncestor(op);
 }
 
 // Check to see if there is no outer loop that is enclosed under ifOp.
@@ -57,12 +45,17 @@ unsigned getAccumCnts(Operation *ctrlOp,
       ++cnt;
       continue;
     }
-    if (auto forOp = dyn_cast<scf::ForOp>(ctrlOp))
+    if (auto forOp = dyn_cast<scf::ForOp>(ctrlOp)) {
       if (enclosing(forOp, op))
         ++cnt;
-    if (auto ifOp = dyn_cast<scf::IfOp>(ctrlOp))
+      continue;
+    }
+    if (auto ifOp = dyn_cast<scf::IfOp>(ctrlOp)) {
       if (enclosing(ifOp, op))
         ++cnt;
+      continue;
+    }
+    llvm_unreachable("region op other than If/For is not supported");
   }
   return cnt;
 }

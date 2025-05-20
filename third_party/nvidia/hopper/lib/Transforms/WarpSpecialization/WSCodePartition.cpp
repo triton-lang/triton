@@ -10,9 +10,6 @@
 #include "mlir/Interfaces/InferTypeOpInterface.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Pass/PassManager.h"
-#include "mlir/Support/LLVM.h"
-#include "mlir/Support/LogicalResult.h"
-#include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 #include "mlir/Transforms/Passes.h"
 #include "mlir/Transforms/RegionUtils.h"
 #include "nvidia/hopper/include/Transforms/Passes.h"
@@ -22,8 +19,6 @@
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/PipeliningUtility.h"
 #include "triton/Dialect/TritonGPU/Transforms/TritonGPUConversion.h"
-#include "triton/Tools/Sys/GetEnv.hpp"
-#include <list>
 #include <unordered_set>
 
 namespace tt = mlir::triton;
@@ -35,18 +30,6 @@ namespace mlir {
 #define DEBUG_TYPE "nvgpu-ws-code-partition"
 #define DBGS() (llvm::dbgs() << "[" DEBUG_TYPE "]: ")
 #define LDBG(X) LLVM_DEBUG(DBGS() << X << "\n")
-
-std::pair<int, bool> scanRegUsage(Block *block, AsyncTaskId asyncTaskId,
-                                  int regDecProducer, int regIncConsumer) {
-  // TODO: scan ops to estimate register usage
-  if (asyncTaskId == 0) {
-    // deallocate registers
-    return {regDecProducer == 0 ? 40 : regDecProducer, false};
-  } else {
-    // allocate registers
-    return {regIncConsumer == 0 ? 232 : regIncConsumer, true};
-  }
-}
 
 static unsigned getNumBuffersOrDefault(scf::ForOp forOp, unsigned numBuffers) {
   // Use the attribute attached to the loop if it exists otherwise use the

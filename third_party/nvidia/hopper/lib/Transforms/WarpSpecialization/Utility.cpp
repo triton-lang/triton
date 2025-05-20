@@ -11,12 +11,6 @@ SmallVector<AsyncTaskId> getAsyncTaskIds(Operation *op) {
   SmallVector<AsyncTaskId> asyncTaskIds;
   if (auto attr = op->getAttrOfType<DenseI32ArrayAttr>("async_task_id"))
     llvm::append_range(asyncTaskIds, attr.asArrayRef());
-  if (auto attr =
-          op->getAttrOfType<mlir::DenseIntElementsAttr>("async_task_id")) {
-    for (auto val : attr.getValues<int>()) {
-      asyncTaskIds.push_back(val);
-    }
-  }
   return asyncTaskIds;
 }
 
