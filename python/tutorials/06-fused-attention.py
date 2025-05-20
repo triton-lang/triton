@@ -15,6 +15,7 @@ Extra Credits:
 
 import pytest
 import torch
+import sys
 
 import triton
 import triton.language as tl
@@ -111,6 +112,11 @@ configs = [
     for s in NUM_STAGES_OPTIONS \
     for w in [4, 8]\
 ]
+if "pytest" in sys.modules:
+    # Use a single config in testing for reproducibility
+    configs = [
+        triton.Config(dict(BLOCK_M=64, BLOCK_N=64), num_stages=4, num_warps=4, pre_hook=_host_descriptor_pre_hook),
+    ]
 
 
 def keep(conf):
