@@ -249,7 +249,7 @@ public:
   enum CycleMetricKind : int {
     StartCycle,
     EndCycle,
-    Duration,
+    NormalizedDuration,
     BlockId,
     ProcessorId,
     DeviceId,
@@ -259,12 +259,13 @@ public:
 
   CycleMetric() : Metric(MetricKind::Cycle, CycleMetricKind::Count) {}
 
-  CycleMetric(uint64_t startCycle, uint64_t endCycle, uint64_t blockId,
+  CycleMetric(uint64_t startCycle, uint64_t endCycle,
+              uint64_t normalizedDuration, uint64_t blockId,
               uint64_t processorId, uint64_t deviceId, uint64_t deviceType)
       : CycleMetric() {
     this->values[StartCycle] = startCycle;
     this->values[EndCycle] = endCycle;
-    this->values[Duration] = endCycle - startCycle;
+    this->values[NormalizedDuration] = normalizedDuration;
     this->values[BlockId] = blockId;
     this->values[ProcessorId] = processorId;
     this->values[DeviceId] = deviceId;
