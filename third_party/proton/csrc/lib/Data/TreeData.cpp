@@ -257,8 +257,8 @@ void TreeData::dumpHatchet(std::ostream &os) const {
         }
       } else if (metricKind == MetricKind::Cycle) {
         auto cycleMetric = std::dynamic_pointer_cast<CycleMetric>(metric);
-        uint64_t duration =
-            std::get<uint64_t>(cycleMetric->getValue(CycleMetric::NormalizedDuration));
+        uint64_t duration = std::get<uint64_t>(
+            cycleMetric->getValue(CycleMetric::NormalizedDuration));
         uint64_t deviceId =
             std::get<uint64_t>(cycleMetric->getValue(CycleMetric::DeviceId));
         uint64_t deviceType =

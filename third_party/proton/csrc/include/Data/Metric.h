@@ -259,9 +259,9 @@ public:
 
   CycleMetric() : Metric(MetricKind::Cycle, CycleMetricKind::Count) {}
 
-  CycleMetric(uint64_t startCycle, uint64_t endCycle, uint64_t normalizedDuration,
-              uint64_t blockId, uint64_t processorId, uint64_t deviceId,
-              uint64_t deviceType)
+  CycleMetric(uint64_t startCycle, uint64_t endCycle,
+              uint64_t normalizedDuration, uint64_t blockId,
+              uint64_t processorId, uint64_t deviceId, uint64_t deviceType)
       : CycleMetric() {
     this->values[StartCycle] = startCycle;
     this->values[EndCycle] = endCycle;
