@@ -40,7 +40,7 @@ def streaming_topk(X, stride_xm, n_expts_tot, offs_m, mask_m, N_EXPTS_PAD: tl.co
 @triton.jit
 def _topk(X, stride_xm,  # inputs
           Yv, Yi, stride_ym,  # topk values/indices
-          Bits, stride_rm, n_rows,  # bitmatrix
+          Bits, stride_rm: tl.constexpr, stride_rn: tl.constexpr, n_rows,  # bitmatrix
           n_expts_tot, BLOCK_M: tl.constexpr, N_EXPTS_PAD: tl.constexpr, N_EXPTS_ACT: tl.constexpr,
           BLOCK_N: tl.constexpr):
 
@@ -79,5 +79,5 @@ def _topk(X, stride_xm,  # inputs
         offs_r_n = tl.arange(0, BLOCK_N // 32) + i * (BLOCK_N // 32)
         y2 = tl.where(y_div[:, :, None] == offs_r_n[None, None, :], (1 << y_rem)[:, :, None], 0)
         r = tl.reduce_or(y2, axis=1)
-        BitsPtrs = Bits + offs_m[:, None] * stride_rm + offs_r_n[None, :]
+        BitsPtrs = Bits + offs_m[:, None] * stride_rm + offs_r_n[None, :] * stride_rn
         tl.store(BitsPtrs, r, mask=mask_m)

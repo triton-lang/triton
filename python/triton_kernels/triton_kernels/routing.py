@@ -71,6 +71,7 @@ def routing(logits, n_expts_act, expt_indx=None, simulated_ep=1):
         _routing_clear_bitmatrix[(n_tokens, )](
             bitmatrix.data,
             bitmatrix.data.stride(0),
+            bitmatrix.data.stride(1),
             bitmatrix.data.shape[1],
             n_expts_tot // simulated_ep,
             BLOCK_N=512,

@@ -49,7 +49,7 @@ def _sum_bitmatrix_memset(Ret, ret_size, BLOCK: tl.constexpr):
 
 
 @triton.jit
-def _sum_bitmatrix_rows(B, shape_bm, stride_bm,  # input bitmatrix
+def _sum_bitmatrix_rows(B, shape_bm, stride_bm: tl.constexpr, stride_bn: tl.constexpr,  # input bitmatrix
                         Ret, Partials, stride_pm, shape_pn,  # outputs
                         BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr):
     tl.static_assert(BLOCK_N % 32 == 0)
@@ -59,7 +59,7 @@ def _sum_bitmatrix_rows(B, shape_bm, stride_bm,  # input bitmatrix
     offs_m = pid_m * BLOCK_M + tl.arange(0, BLOCK_M)
     offs_n = pid_n * BLOCK_N + tl.arange(0, BLOCK_N)
     offs_b = pid_n * BLOCK_B + tl.arange(0, BLOCK_B)
-    bits = tl.load(B + offs_m[None, :] * stride_bm + offs_b[:, None], mask=offs_m[None, :] < shape_bm)
+    bits = tl.load(B + offs_m[None, :] * stride_bm + offs_b[:, None] * stride_bn, mask=offs_m[None, :] < shape_bm)
     ret = tl.reshape(vpopc(bits), [BLOCK_N])
     mask = offs_n < shape_pn
     tl.atomic_add(Ret + offs_n, ret, mask=mask, sem="relaxed")
@@ -81,7 +81,7 @@ def sum_bitmatrix_rows(x, out_ret, out_partials, partials_block_size=None):
         BLOCK=512  # tunable parameter
     )
     _sum_bitmatrix_rows[(cdiv(n_rows, PARTIALS_BLOCK_M), cdiv(n_cols, BLOCK_N))](
-        x.data, x.data.shape[0], x.data.stride(0),  # input
+        x.data, x.data.shape[0], x.data.stride(0), x.data.stride(1),  # input
         out_ret,  # output [final reduction]
         out_partials, out_partials.stride(0), out_partials.shape[1],  # output [partial reductions]
         BLOCK_N=BLOCK_N,  # tunable parameters
