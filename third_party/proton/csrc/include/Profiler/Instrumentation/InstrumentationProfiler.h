@@ -57,7 +57,8 @@ private:
   std::map<uint64_t, std::map<size_t, std::string>> functionScopeIdNames;
   // functionId -> scopeId -> contexts
   std::map<uint64_t, std::map<size_t, std::vector<Context>>>
-      functionScopeIdContexts;;
+      functionScopeIdContexts;
+  ;
   // functionId -> functionName
   std::map<uint64_t, std::string> functionNames;
   // functionId -> metadata
