@@ -81,7 +81,6 @@ def sum_bitmatrix_rows(x, out_ret, out_partials, partials_block_size=None):
     BLOCK_N = 32
     MEMSET_BLOCK = 512
     n_rows, n_cols = x.shape
-    print((out_ret.shape, n_cols))
     assert out_ret.shape == (n_cols, )
     assert out_partials.shape == (cdiv(n_rows, PARTIALS_BLOCK_M), n_cols)
     # output tensors
