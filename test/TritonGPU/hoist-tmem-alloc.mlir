@@ -307,3 +307,79 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     tt.return %res_f16 : tensor<128x128xf16, #blocked>
   }
 }
+
+// -----
+#blocked = #ttg.blocked<{sizePerThread = [1, 128], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [0, 1]}>
+#blocked1 = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [1, 0]}>
+#blocked2 = #ttg.blocked<{sizePerThread = [1, 2, 64], threadsPerWarp = [32, 1, 1], warpsPerCTA = [4, 1, 1], order = [0, 2, 1]}>
+#blocked3 = #ttg.blocked<{sizePerThread = [1, 64, 2], threadsPerWarp = [32, 1, 1], warpsPerCTA = [4, 1, 1], order = [0, 1, 2]}>
+#blocked4 = #ttg.blocked<{sizePerThread = [1, 64], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [0, 1]}>
+#blocked5 = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [2, 2], order = [1, 0]}>
+#shared = #ttg.nvmma_shared<{swizzlingByteWidth = 32, transposed = false, elementBitWidth = 8}>
+#shared1 = #ttg.nvmma_shared<{swizzlingByteWidth = 64, transposed = false, elementBitWidth = 8}>
+#shared2 = #ttg.nvmma_shared<{swizzlingByteWidth = 32, transposed = true, elementBitWidth = 8}>
+#smem = #ttg.shared_memory
+#tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, unpacked = true>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-stages" = 4 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32, "ttg.warp-specialized" = true} {
+  // CHECK-LABEL: @matmul_kernel_tma_persistent_nested
+  tt.func public @matmul_kernel_tma_persistent_nested(%arg0: !tt.tensordesc<tensor<128x32xf8E4M3FN, #shared>>, %arg1: i32, %arg2: i32, %arg3: i64, %arg4: i64, %arg5: !tt.tensordesc<tensor<128x32xf8E4M3FN, #shared>>, %arg6: i32, %arg7: i32, %arg8: i64, %arg9: i64, %arg10: !tt.tensordesc<tensor<128x64xf8E4M3FN, #shared1>>, %arg11: i32, %arg12: i32, %arg13: i64, %arg14: i64, %arg15: i32 {tt.divisibility = 16 : i32}, %arg16: i32 {tt.divisibility = 16 : i32}, %arg17: i32 {tt.divisibility = 16 : i32}) attributes {noinline = false} {
+    %false = arith.constant false
+    %true = arith.constant true
+    %c8_i32 = arith.constant 8 : i32
+    %c128_i32 = arith.constant 128 : i32
+    %c0_i32 = arith.constant 0 : i32
+    %c32_i32 = arith.constant 32 : i32
+    %c64_i32 = arith.constant 64 : i32
+    %c1_i32 = arith.constant 1 : i32
+    %c127_i32 = arith.constant 127 : i32
+    %c31_i32 = arith.constant 31 : i32
+    %cst = arith.constant dense<0.000000e+00> : tensor<128x128xf32, #blocked>
+    %0 = tt.get_program_id x : i32
+    %1 = arith.addi %arg15, %c127_i32 : i32
+    %2 = arith.divsi %1, %c128_i32 : i32
+    %3 = arith.addi %arg16, %c127_i32 : i32
+    %4 = arith.divsi %3, %c128_i32 : i32
+    %5 = arith.addi %arg17, %c31_i32 : i32
+    %6 = arith.divsi %5, %c32_i32 : i32
+    %7 = arith.muli %2, %4 : i32
+    %8 = arith.muli %4, %c8_i32 : i32
+    %9 = tt.get_num_programs x : i32
+    scf.for %arg18 = %0 to %7 step %9  : i32 {
+      %10 = arith.divsi %arg18, %8 : i32
+      %11 = arith.muli %10, %c8_i32 : i32
+      %12 = arith.subi %2, %11 : i32
+      %13 = arith.minsi %12, %c8_i32 : i32
+      %14 = arith.remsi %arg18, %13 : i32
+      %15 = arith.addi %11, %14 : i32
+      %16 = arith.remsi %arg18, %8 : i32
+      %17 = arith.divsi %16, %13 : i32
+      %18 = arith.muli %15, %c128_i32 : i32
+      %19 = arith.muli %17, %c128_i32 : i32
+      // CHECK: ttng.tmem_alloc
+      // CHECK-NOT: ttng.tmem_store
+      %20:3 = scf.for %arg19 = %c0_i32 to %6 step %c1_i32 iter_args(%arg20 = %cst, %arg21 = %c0_i32, %arg22 = %false) -> (tensor<128x128xf32, #blocked>, i32, i1)  : i32 {
+        %28 = tt.descriptor_load %arg0[%18, %arg21] : !tt.tensordesc<tensor<128x32xf8E4M3FN, #shared>> -> tensor<128x32xf8E4M3FN, #blocked1>
+        %29 = ttg.local_alloc %28 : (tensor<128x32xf8E4M3FN, #blocked1>) -> !ttg.memdesc<128x32xf8E4M3FN, #shared, #smem>
+        %30 = tt.descriptor_load %arg5[%19, %arg21] : !tt.tensordesc<tensor<128x32xf8E4M3FN, #shared>> -> tensor<128x32xf8E4M3FN, #blocked1>
+        %31 = ttg.local_alloc %30 : (tensor<128x32xf8E4M3FN, #blocked1>) -> !ttg.memdesc<128x32xf8E4M3FN, #shared, #smem>
+        %32 = ttg.memdesc_trans %31 {order = array<i32: 1, 0>} : !ttg.memdesc<128x32xf8E4M3FN, #shared, #smem> -> !ttg.memdesc<32x128xf8E4M3FN, #shared2, #smem>
+        %acc, %acc_tok = ttng.tmem_alloc %arg20 : (tensor<128x128xf32, #blocked>) -> (!ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>, !ttg.async.token)
+        %mma_tok = ttng.tc_gen5_mma %29, %32, %acc[%acc_tok], %arg22, %true : !ttg.memdesc<128x32xf8E4M3FN, #shared, #smem>, !ttg.memdesc<32x128xf8E4M3FN, #shared2, #smem>, !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>
+        %34, %load_tok = ttng.tmem_load %acc[%mma_tok] : !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable> -> tensor<128x128xf32, #blocked>
+        %35 = arith.addi %arg21, %c32_i32 : i32
+        scf.yield %34, %35, %true : tensor<128x128xf32, #blocked>, i32, i1
+      }
+      %21 = tt.reshape %20#0 : tensor<128x128xf32, #blocked> -> tensor<128x2x64xf32, #blocked2>
+      %22 = tt.trans %21 {order = array<i32: 0, 2, 1>} : tensor<128x2x64xf32, #blocked2> -> tensor<128x64x2xf32, #blocked3>
+      %outLHS, %outRHS = tt.split %22 : tensor<128x64x2xf32, #blocked3> -> tensor<128x64xf32, #blocked4>
+      %23 = tt.fp_to_fp %outLHS, rounding = rtne : tensor<128x64xf32, #blocked4> -> tensor<128x64xf8E4M3FN, #blocked4>
+      %24 = ttg.convert_layout %23 : tensor<128x64xf8E4M3FN, #blocked4> -> tensor<128x64xf8E4M3FN, #blocked5>
+      tt.descriptor_store %arg10[%18, %19], %24 : !tt.tensordesc<tensor<128x64xf8E4M3FN, #shared1>>, tensor<128x64xf8E4M3FN, #blocked5>
+      %25 = tt.fp_to_fp %outRHS, rounding = rtne : tensor<128x64xf32, #blocked4> -> tensor<128x64xf8E4M3FN, #blocked4>
+      %26 = ttg.convert_layout %25 : tensor<128x64xf8E4M3FN, #blocked4> -> tensor<128x64xf8E4M3FN, #blocked5>
+      %27 = arith.addi %19, %c64_i32 : i32
+      tt.descriptor_store %arg10[%18, %27], %26 : !tt.tensordesc<tensor<128x64xf8E4M3FN, #shared1>>, tensor<128x64xf8E4M3FN, #blocked5>
+    }
+    tt.return
+  }
+}

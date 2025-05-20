@@ -92,6 +92,56 @@ public:
   }
 };
 
+std::optional<bool> getBoolFromConstant(Value cst) {
+  auto constantOp = cst.getDefiningOp<arith::ConstantOp>();
+  if (!constantOp) {
+    return std::nullopt;
+  }
+  assert(constantOp.getValue());
+  if (auto boolAttr = dyn_cast<BoolAttr>(constantOp.getValue())) {
+    return boolAttr.getValue();
+  }
+  return std::nullopt;
+}
+
+class RemoveUnusedTMEMStore : public OpRewritePattern<TMEMTokenStoreOp> {
+public:
+  using OpRewritePattern::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(TMEMTokenStoreOp store,
+                                PatternRewriter &rewriter) const override {
+    auto tok = store.getToken();
+    if (!tok.hasOneUse())
+      return failure();
+    auto loop = dyn_cast<scf::ForOp>(*tok.getUsers().begin());
+    if (!loop)
+      return failure();
+    auto loopTok = loop.getBody()->getArgument(
+        tok.getUses().begin()->getOperandNumber() - 2);
+    if (!loopTok.hasOneUse())
+      return failure();
+    auto mma =
+        dyn_cast<nvidia_gpu::MMAv5OpInterface>(*loopTok.getUsers().begin());
+    if (!mma)
+      return failure();
+    auto useD = dyn_cast<BlockArgument>(mma.useAccumulator());
+    if (!useD)
+      return failure();
+    auto parent = useD.getParentBlock()->getParentOp();
+    if (parent != loop)
+      return failure();
+    auto loopInit = loop.getInitArgs()[useD.getArgNumber() - 1];
+    auto val = getBoolFromConstant(loopInit);
+    if (!val)
+      return failure();
+    if (val.value() == true)
+      return failure();
+    rewriter.replaceAllUsesWith(store.getToken(), store.getDep());
+    rewriter.eraseOp(store);
+    return success();
+  }
+};
+
 // Load-store forwarding pattern.
 class CombineTMEMLoadAndStore : public OpRewritePattern<TMEMTokenStoreOp> {
 public:
@@ -411,7 +461,8 @@ struct HoistTMEMAlloc
     mlir::RewritePatternSet patterns(&getContext());
     patterns.add<RotateTMEMStoreInLoop, RotateTMEMLoadInLoop,
                  CombineTMEMLoadAndStore, CombineTMEMStoreAndSelect,
-                 SinkTMEMLoad, RemoveUnusedTMEMLoad>(&getContext());
+                 SinkTMEMLoad, RemoveUnusedTMEMLoad, RemoveUnusedTMEMStore>(
+        &getContext());
     scf::ForOp::getCanonicalizationPatterns(patterns, &getContext());
     if (failed(applyPatternsGreedily(getOperation(), std::move(patterns)))) {
       llvm_unreachable("Failed to hoist tmem_store");
