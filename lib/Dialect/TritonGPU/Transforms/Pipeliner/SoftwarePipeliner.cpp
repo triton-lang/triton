@@ -155,13 +155,15 @@ static void peelEpilogue(RewriterBase &rewriter, scf::ForOp forOp,
                                  processLoopBodyOp);
 }
 
-static bool onlyWaitsAreUnmasked(scf::ForOp forOp) {
+static bool hasWaitsInLastStage(scf::ForOp forOp, CoarseSchedule &schedule) {
+  int maxStage = schedule.getNumStages() - 1;
   for (auto &op : forOp.getBody()->without_terminator()) {
-    if (!isa<triton::nvidia_gpu::WaitBarrierOp, triton::gpu::MaskOp>(op)) {
-      return false;
+    if (isa<triton::nvidia_gpu::WaitBarrierOp>(op) &&
+        schedule[&op].first == maxStage) {
+      return true;
     }
   }
-  return true;
+  return false;
 }
 
 static void expandLoops(ModuleOp moduleOp) {
@@ -178,7 +180,7 @@ static void expandLoops(ModuleOp moduleOp) {
     bool keepPredicateStage = forOp->hasAttr("__test_keep_predicate_stage");
     // TODO: Enable epilogue peeling for warp specialized loops
     bool customEpiloguePeeling =
-        // onlyWaitsAreUnmasked(forOp) &&
+        hasWaitsInLastStage(forOp, schedule) &&
         !forOp->getParentOfType<triton::gpu::WarpSpecializeOp>() &&
         !keepPredicateStage; // do not peel if we are testing the stage
                              // predication
