@@ -240,7 +240,6 @@ static std::optional<WarpSchedule> getInitialSchedule(scf::ForOp loop) {
     scheduleDependencies(loop, schedule, defaultPartition, mmaOp);
   }
 
-  schedule.updatePartitions();
   return schedule;
 }
 
@@ -461,8 +460,6 @@ void propagatePartitions(scf::ForOp loop, WarpSchedule &schedule) {
     for (Operation *op : cluster.ops)
       schedule.insert(defPartition, op);
   }
-
-  schedule.updatePartitions();
 }
 
 //===----------------------------------------------------------------------===//

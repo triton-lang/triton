@@ -859,7 +859,6 @@ LogicalResult lowerLoops(scf::ForOp &loop, MutableArrayRef<PipelinedLoad> loads,
       return failure();
   }
 
-  schedule.updatePartitions();
   return success();
 }
 

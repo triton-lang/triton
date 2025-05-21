@@ -86,13 +86,6 @@ Partition *WarpSchedule::addPartition(unsigned stage) {
   return partitions.back().get();
 }
 
-void WarpSchedule::updatePartitions() {
-  for (Partition &partition : getPartitions()) {
-    for (Operation *op : partition.getOps())
-      opToPartition[op] = &partition;
-  }
-}
-
 Partition *WarpSchedule::getPartition(Operation *op) {
   return opToPartition.lookup(op);
 }
@@ -108,7 +101,7 @@ const Partition *WarpSchedule::getPartition(unsigned idx) const {
 }
 
 void WarpSchedule::insert(Partition *partition, Operation *op) {
-  partition->insert(op);
+  partition->ops.push_back(op);
   opToPartition[op] = partition;
 }
 
@@ -153,9 +146,7 @@ FailureOr<WarpSchedule> WarpSchedule::deserialize(scf::ForOp loop) {
       }
       partition = result.partitions[idx].get();
     }
-
-    partition->insert(&op);
-    result.opToPartition[&op] = partition;
+    result.insert(partition, &op);
   }
 
   return result;
