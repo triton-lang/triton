@@ -433,17 +433,11 @@ Value getGlobalScratchPtr(Location loc, RewriterBase &rewriter,
                           const TargetInfoBase &targetInfo,
                           FunctionOpInterface funcOp, Value allocOffset);
 
+Value getProfileScratchPtr(Location loc, RewriterBase &rewriter,
+                           FunctionOpInterface funcOp);
+
 Value getSharedMemoryBase(Location loc, RewriterBase &rewriter,
                           const TargetInfoBase &target, Operation *op);
-
-inline Value getProfileScratchPtr(Location loc, RewriterBase &rewriter,
-                                  FunctionOpInterface funcOp) {
-  // See NOTE: [Additional Function Arguments]
-  // FIXME(Keren): This is broken when we have device functions, we
-  // need to implement proper calling convention
-  return funcOp.getArgument(funcOp.getNumArguments() +
-                            kProfileScratchBufferOffset);
-}
 
 // -----------------------------------------------------------------------
 // MXFP utilities
