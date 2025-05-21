@@ -330,7 +330,6 @@ def test_op(m, n, k, split_k, do_gather, do_scatter, fused_scatter, has_y_gammas
             metadata = launch_metadata.get()
             if "matmul_ogs" in metadata["name"]:
                 nbytes = metadata["bytes"]
-           
 
         triton.knobs.runtime.launch_enter_hook = _hook
 
@@ -352,6 +351,7 @@ def test_op(m, n, k, split_k, do_gather, do_scatter, fused_scatter, has_y_gammas
         else:
             n_y_bytes = tri_y.numel() * tri_y.element_size()
         assert nbytes == n_x_bytes + n_y_bytes + n_w_bytes
+        triton.knobs.runtime.launch_enter_hook = None
 
     def round_x(x, idx):
         return x.to(act_dtype).to(torch.float32) if sep_gather else x
