@@ -141,7 +141,7 @@ def test_tree(tmp_path: pathlib.Path):
         BLOCK_SIZE = args["BLOCK_SIZE"]
         return {"name": f"add_{BLOCK_SIZE}"}
 
-    @triton.jit(metadata_fn=metadata_fn)
+    @triton.jit(launch_metadata=metadata_fn)
     def add_kernel(
         x_ptr,
         y_ptr,
