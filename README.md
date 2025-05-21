@@ -102,6 +102,22 @@ arbitrary LLVM version.
   environment variable (to the `pip install -e .` command) to limit the
   number of jobs.
 
+- If you are modifying the Triton C++ source files, e.g., under `python/src/`,
+  and encounter runtime errors or failed assertions, such as when generating
+  MLIR IR dumps, you may need to **fully clean and rebuild** Triton. This ensures
+  Python uses the updated shared object files (the `*.so` artifacts containing
+  your recent changes) rather than stale ones.
+
+  Run the following from the root of your Triton repository to trigger a clean
+  rebuild:
+
+  ```bash
+  python setup.py clean --all
+  rm -rf build
+  find . -iname '*.so' -delete
+  pip install -e .
+  ```
+
 - Pass `--no-build-isolation` to `pip install` to make nop builds faster.
   Without this, every invocation of `pip install` uses a different symlink to
   cmake, and this forces ninja to rebuild most of the `.a` files.
@@ -150,7 +166,10 @@ See [`python/triton/knobs.py`](python/triton/knobs.py) for the full list of conf
 - `MLIR_ENABLE_DUMP=1` dumps the IR before every MLIR pass Triton runs, for all
    kernels. Use `MLIR_ENABLE_DUMP=kernelName` to dump for a specific kernel only.
   - Triton cache can interfere with the dump. In cases where `MLIR_ENABLE_DUMP=1` does not work, try cleaning your triton cache: `rm -r ~/.triton/cache/*`
-- `MLIR_DUMP_PATH` specifies where `MLIR_ENABLE_DUMP` will dump to. If unset will dump to stderr.
+- `MLIR_DUMP_PATH` specifies the destination for MLIR IR dumps created via `MLIR_ENABLE_DUMP`.
+  - If the value is a **filename**, Triton writes a single `.mlir` file.
+  - If the value is a **directory**, Triton will write a timestamped `.mlir` file for each kernel.
+  - If unset, dumps are written to stderr.
 - `LLVM_IR_ENABLE_DUMP=1` dumps the IR before every pass run over the LLVM IR.
 - `TRITON_REPRODUCER_PATH=<reproducer_path>` will generate an MLIR reproducer file
   at `<reproducer_path>` before each MLIR compiler stage. If any of the stages fail,
