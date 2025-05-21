@@ -172,6 +172,10 @@ std::string getTypeStr(Type ty) {
     scalarName = "iu8";
   } else if (ty.isInteger(4)) {
     scalarName = "iu4";
+  } else if (llvm::isa<Float8E4M3FNType>(ty)) {
+    scalarName = "fp8";
+  } else if (llvm::isa<Float8E5M2Type>(ty)) {
+    scalarName = "bf8";
   } else if (auto vecTy = dyn_cast<VectorType>(ty)) {
     auto elemType = vecTy.getElementType();
     auto numElems = vecTy.getNumElements();

@@ -34,7 +34,7 @@ namespace triton {
 namespace nvidia_gpu {
 
 // -- WarpGroupDotOp --
-mlir::LogicalResult WarpGroupDotOp::inferReturnTypes(
+LogicalResult WarpGroupDotOp::inferReturnTypes(
     MLIRContext *context, std::optional<Location> location, ValueRange operands,
     DictionaryAttr attributes, OpaqueProperties properties, RegionRange regions,
     SmallVectorImpl<Type> &inferredReturnTypes) {
@@ -43,21 +43,27 @@ mlir::LogicalResult WarpGroupDotOp::inferReturnTypes(
   inferredReturnTypes.push_back(accTy);
 
   // verify encodings
-  auto aEnc =
-      cast<triton::gpu::TensorOrMemDesc>(operands[0].getType()).getEncoding();
-  auto bEnc =
-      cast<triton::gpu::TensorOrMemDesc>(operands[1].getType()).getEncoding();
+  auto aEnc = cast<TensorOrMemDesc>(operands[0].getType()).getEncoding();
+  auto bEnc = cast<TensorOrMemDesc>(operands[1].getType()).getEncoding();
   auto retEnc = accTy.getEncoding();
   if (aEnc) {
     assert(bEnc);
     Dialect &dialect = aEnc.getDialect();
     auto interface = cast<DialectInferLayoutInterface>(&dialect);
     if (interface->inferDotOpEncoding(aEnc, 0, retEnc, location).failed())
-      return mlir::failure();
+      return failure();
     if (interface->inferDotOpEncoding(bEnc, 1, retEnc, location).failed())
-      return mlir::failure();
+      return failure();
   }
-  return mlir::success();
+  return success();
+}
+
+LogicalResult WarpGroupDotOp::verify() {
+  auto nvmmaEnc =
+      dyn_cast<NvidiaMmaEncodingAttr>(getD().getType().getEncoding());
+  if (!nvmmaEnc || !nvmmaEnc.isHopper())
+    return emitOpError("WGMMA result layout must be Hopper NVMMA");
+  return success();
 }
 
 void WarpGroupDotOp::getEffects(
@@ -238,8 +244,15 @@ static void printToken(OpAsmPrinter &p, Operation *op, Value dep, Type token) {
 void TCGen5MMAOp::getEffects(
     SmallVectorImpl<SideEffects::EffectInstance<MemoryEffects::Effect>>
         &effects) {
+  // The op reads the accumulator if `useD` is not known to be false.
+  APInt useD;
+  if (!matchPattern(getUseD(), m_ConstantInt(&useD)) || !useD.isZero()) {
+    effects.emplace_back(MemoryEffects::Read::get(), &getDMutable(),
+                         TensorMemory::get());
+  }
   effects.emplace_back(MemoryEffects::Write::get(), &getDMutable(),
                        TensorMemory::get());
+
   if (isa<SharedMemorySpaceAttr>(getA().getType().getMemorySpace())) {
     effects.emplace_back(MemoryEffects::Read::get(), &getAMutable(),
                          SharedMemory::get());
@@ -290,8 +303,15 @@ void TCGen5MMAOp::build(OpBuilder &builder, OperationState &state, Type token,
 void TCGen5MMAScaledOp::getEffects(
     SmallVectorImpl<SideEffects::EffectInstance<MemoryEffects::Effect>>
         &effects) {
+  // The op reads the accumulator if `useD` is not known to be false.
+  APInt useD;
+  if (!matchPattern(getUseD(), m_ConstantInt(&useD)) || !useD.isZero()) {
+    effects.emplace_back(MemoryEffects::Read::get(), &getDMutable(),
+                         TensorMemory::get());
+  }
   effects.emplace_back(MemoryEffects::Write::get(), &getDMutable(),
                        TensorMemory::get());
+
   if (isa<SharedMemorySpaceAttr>(getA().getType().getMemorySpace())) {
     effects.emplace_back(MemoryEffects::Read::get(), &getAMutable(),
                          SharedMemory::get());
@@ -482,10 +502,12 @@ void TMEMAllocOp::getEffects(
   // op.
   if (!getType().getMutableMemory() && !op->hasAttr("tensor_memory_col_offset"))
     return;
-  effects.emplace_back(MemoryEffects::Allocate::get(), TensorMemory::get());
+  OpResult alloc = getOperation()->getOpResult(0);
+  effects.emplace_back(MemoryEffects::Allocate::get(), alloc,
+                       TensorMemory::get());
   if (getSrc())
-    effects.emplace_back(MemoryEffects::Write::get(),
-                         getOperation()->getOpResult(0), TensorMemory::get());
+    effects.emplace_back(MemoryEffects::Write::get(), alloc,
+                         TensorMemory::get());
 }
 
 // -- TMEMCopyOp --

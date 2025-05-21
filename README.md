@@ -24,46 +24,6 @@ pip install triton
 
 Binary wheels are available for CPython 3.9-3.13.
 
-# Enabling Blackwell Support
-
-The main branch now features support for NVIDIA Blackwell GPUs using 5th
-generation tensor cores. To enable this, you will need two additional steps:
-
-1. Build a pre-release PyTorch from source with CUDA 12.8
-2. Build triton from the latest source
-
-
-First, to build pytorch you need to have CUDA 12.8 installed locally. If not,
-follow the [instructions for your platform](https://developer.nvidia.com/cuda-downloads)
-```bash
-# Clone and checkout pytorch 2.6 release candidate
-git clone https://github.com/pytorch/pytorch
-cd pytorch
-git checkout v2.6.0-rc9
-git submodule sync
-git submodule update --init --recursive -j 8
-
-# Install build dependencies (assumes you already have a system compiler)
-pip install -r requirements.txt
-pip install mkl-static mkl-include wheel
-
-# Build PyTorch (will take a long time)
-export CUDA_HOME=/usr/local/cuda-12.8
-export CUDA_PATH=$CUDA_HOME
-export TORCH_CUDA_ARCH_LIST=Blackwell
-python setup.py develop
-
-# Optional, package build into a wheel to install on other machines.
-python setup.py bdist_wheel
-ls dist  # Wheel should be output in this directory
-```
-
-Note that if you use the domain libraries (`torchvision`, `torchtext`,
-`torchaudio`, etc.) these will need to be built from source as well, otherwise
-their custom PyTorch extensions will not work.
-
-Finally, follow the instructions below to install triton from source.
-
 # Install from source
 
 ```shell
@@ -252,6 +212,7 @@ See [`python/triton/knobs.py`](python/triton/knobs.py) for the full list of conf
 - `TRITON_OVERRIDE_DIR` specifies the directory from which to load the IR/ptx/amdgcn files when `TRITON_KERNEL_OVERRIDE` is set to 1.
 - `TRITON_F32_DEFAULT` sets the default input precision of `tl.dot` when using 32-bit floats, which can be either `ieee`, `tf32`, or `tf32x3`.
 - `TRITON_FRONT_END_DEBUGGING=1` disables exception wrapping when an error occurs in the compiler frontend, allowing the full stack trace to be seen.
+- `TRITON_DISABLE_LINE_INFO=1` removes all line information from the module
 
 N.B. Some of these environment variables don't have a knob in `knobs.py`-- those are only relevant to the C++ layer(s), hence they don't exist in the python layer.
 

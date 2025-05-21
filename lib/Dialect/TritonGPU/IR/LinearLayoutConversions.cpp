@@ -6,6 +6,7 @@
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/LinearLayoutConversions.h"
 #include "triton/Dialect/TritonGPU/IR/TritonGPUInterfaces.h"
+#include "triton/Dialect/TritonNvidiaGPU/Transforms/TMAUtilities.h"
 #include "triton/Tools/LayoutUtils.h"
 #include "triton/Tools/LinearLayout.h"
 #include "triton/Tools/StrUtil.h"
@@ -241,7 +242,6 @@ LinearLayout getCoreMatrixLinearLayout(NVMMASharedEncodingAttr shared,
   int tileRows = 8;
   int tileCols = 8 * tileWidthBytes / elemBitWidth;
   bool isFp4Padded = shared.getFp4Padded();
-  int packingFactor = isFp4Padded ? 2 : 1;
 
   std::vector<std::vector<int>> bases2D;
   for (int col = 1; col < tileCols; col *= 2) {
@@ -269,11 +269,7 @@ LinearLayout getCoreMatrixLinearLayout(NVMMASharedEncodingAttr shared,
     }
   }
   auto outDimNames = standardOutDimNames(ctx, 2);
-  auto kRow = outDimNames[1];
-  auto kCol = outDimNames[0];
-  LinearLayout tileLayout =
-      LinearLayout({{S("offset"), bases2D}}, {kRow, kCol});
-  return tileLayout;
+  return LinearLayout({{S("offset"), bases2D}}, outDimNames);
 }
 
 } // namespace
@@ -285,63 +281,62 @@ LinearLayout nvmmaSharedToLinearLayout(ArrayRef<int64_t> shape,
   int rank = shape.size();
   auto shapePerCTA = getShapePerCTA(shared, shape);
   auto kOffset = S("offset");
+  auto tmaShape = triton::nvidia_gpu::getTMABlockShape(shared, shapePerCTA,
+                                                       /*packedSize=*/true);
   if (shared.getSwizzlingByteWidth() == 0) {
     auto outDimNames = standardOutDimNames(ctx, rank);
-    LinearLayout layout = LinearLayout::identity1D(
-        shapePerCTA[rank - 1], kOffset, outDimNames[rank - 1]);
+    LinearLayout layout = LinearLayout::identity1D(tmaShape[rank - 1], kOffset,
+                                                   outDimNames[rank - 1]);
     for (int i = rank - 2; i >= 0; --i) {
-      layout *=
-          LinearLayout::identity1D(shapePerCTA[i], kOffset, outDimNames[i]);
+      layout *= LinearLayout::identity1D(tmaShape[i], kOffset, outDimNames[i]);
     }
+    layout = ensureLayoutNotSmallerThan(layout, outDimNames, shapePerCTA);
     return combineCtaCgaWithShape(layout, shared.getCTALayout(), shape);
   }
   assert(rank >= 2);
 
   // Collapse all the outer dim into one. We will then create a layout for this
   // shape and reshape it to the original shape.
-  std::array<int64_t, 2> collapsedShapePerCTA{1, shapePerCTA.back()};
+  std::array<int64_t, 2> collapsedTmaShape{1, tmaShape.back()};
   for (int i = 0; i + 1 < rank; i++)
-    collapsedShapePerCTA[0] *= shapePerCTA[i];
+    collapsedTmaShape[0] *= tmaShape[i];
   if (shared.getTransposed()) {
-    std::swap(collapsedShapePerCTA[0], collapsedShapePerCTA[1]);
+    std::swap(collapsedTmaShape[0], collapsedTmaShape[1]);
   }
 
   auto tileLayout = getCoreMatrixLinearLayout(shared, disableSwizzle);
   auto outDimNames = standardOutDimNames(ctx, 2);
-  auto kRow = outDimNames[1];
-  auto kCol = outDimNames[0];
+  auto kRow = outDimNames[0];
+  auto kCol = outDimNames[1];
   auto tileRows = tileLayout.getOutDimSize(kRow);
   auto tileCols = tileLayout.getOutDimSize(kCol);
 
   int packingFactor = shared.getFp4Padded() ? 2 : 1;
-  if (collapsedShapePerCTA[1] * packingFactor < tileCols ||
-      collapsedShapePerCTA[0] < tileRows) {
+  if (collapsedTmaShape[1] * packingFactor < tileCols ||
+      collapsedTmaShape[0] < tileRows) {
     llvm::errs() << "Illegal shared layout; expected collapsed shapePerCTA to "
                     "be at least ["
                  << tileRows << ", " << (tileCols / packingFactor)
-                 << "], collapsedShapePerCTA: [" << collapsedShapePerCTA[0]
-                 << ", " << collapsedShapePerCTA[1] << "]\n";
+                 << "], collapsedTmaShape: [" << collapsedTmaShape[0] << ", "
+                 << collapsedTmaShape[1] << "]\n";
     llvm::report_fatal_error("Illegal shared layout");
   }
 
   // Distribute the remaining rows and cols.
-  auto layout = tileLayout;
-  layout *= LinearLayout::identity1D(collapsedShapePerCTA[0] / tileRows,
-                                     kOffset, kRow);
-  layout *= LinearLayout::identity1D(collapsedShapePerCTA[1] / tileCols,
-                                     kOffset, kCol);
+  auto layout =
+      ensureLayoutNotSmallerThan(tileLayout, outDimNames, collapsedTmaShape);
 
   // Reshape the layout to the N-D pre-transposed shape per CTA.
-  SmallVector<int64_t> maybeTransposedShapePerCTA = shapePerCTA;
+  SmallVector<int64_t> maybeTransposedTmaShape = tmaShape;
   if (shared.getTransposed()) {
     // Move the outer dim to the inner position.
     // TODO: we should move back to using `order` instead of transposed to make
     // the order more explicit.
-    std::rotate(maybeTransposedShapePerCTA.begin(),
-                maybeTransposedShapePerCTA.begin() + 1,
-                maybeTransposedShapePerCTA.end());
+    std::rotate(maybeTransposedTmaShape.begin(),
+                maybeTransposedTmaShape.begin() + 1,
+                maybeTransposedTmaShape.end());
   }
-  auto reshapedLayout = reshapeLayout(ctx, layout, maybeTransposedShapePerCTA);
+  auto reshapedLayout = reshapeLayout(ctx, layout, maybeTransposedTmaShape);
 
   if (shared.getTransposed()) {
     SmallVector<int> order = {rank - 1};
@@ -351,6 +346,9 @@ LinearLayout nvmmaSharedToLinearLayout(ArrayRef<int64_t> shape,
     reshapedLayout = transposeLinearLayout(reshapedLayout, order);
   }
 
+  reshapedLayout = ensureLayoutNotSmallerThan(
+      reshapedLayout, standardOutDimNames(ctx, shapePerCTA.size()),
+      shapePerCTA);
   return combineCtaCgaWithShape(reshapedLayout, shared.getCTALayout(), shape);
 }
 
@@ -1533,37 +1531,39 @@ LinearLayout chooseScaledMfmaScaleLayout(
   return newLL;
 }
 
-LinearLayout chooseMfmaLikeStoreLayout(AMDMfmaEncodingAttr mfmaLayout,
-                                       ArrayRef<int64_t> shape) {
-  assert(shape.size() == 2 && mfmaLayout.getMDim() == 32 &&
-         mfmaLayout.getNDim() == 32 && mfmaLayout.getIsTransposed());
+std::optional<LinearLayout>
+chooseMfmaLikeStoreLayout(RankedTensorType valType) {
+  auto mfmaLayout = cast<AMDMfmaEncodingAttr>(valType.getEncoding());
 
-  MLIRContext *ctx = mfmaLayout.getContext();
-  StringAttr kRegister = S("register");
-  StringAttr kLane = S("lane");
-  StringAttr kWarp = S("warp");
-  StringAttr kBlock = S("block");
+  // We currently only support transposed [B]F16 MFMA32x32 on CDNA4.
+  bool isMfma32 = mfmaLayout.getMDim() == 32 && mfmaLayout.getNDim() == 32;
+  Type elemType = valType.getElementType();
+  if (!(valType.getRank() == 2 && (elemType.isF16() || elemType.isBF16()) &&
+        mfmaLayout.getVersionMajor() == 4 && mfmaLayout.getIsTransposed() &&
+        isMfma32))
+    return {};
 
-  SmallVector<unsigned> order = getDefaultMmaOrder(mfmaLayout);
-  auto standardOutDims = standardOutDimNames(ctx, 2);
-  // We make each thread handle 8 consecutive elements to enable 128-bit
-  // global stores for [b]f16 types and keep the thread pattern in each lane
-  // similar to the canonical mfmaLayout.
-  LinearLayout mfma8Layout = LinearLayout::empty();
-  mfma8Layout =
-      LinearLayout({{kRegister, {{1, 0}, {2, 0}, {4, 0}}},
-                    {kLane, {{0, 1}, {0, 2}, {0, 4}, {0, 8}, {0, 16}, {8, 0}}},
-                    {kWarp, {}},
-                    {kBlock, {}}},
-                   {standardOutDims[order[0]], standardOutDims[order[1]]});
+  auto valShape = valType.getShape();
+  LinearLayout mfmaLL = mfmaLayout.toLinearLayout(valShape);
+  auto mfmaOutDims = llvm::to_vector(mfmaLL.getOutDimNames());
+  StringAttr dimM = mfmaOutDims[0];
+  StringAttr dimN = mfmaOutDims[1];
 
-  LinearLayout warpLayout =
-      identityStandardND(kWarp, mfmaLayout.getWarpsPerCTA(), order);
-  LinearLayout ctaLayout = mfma8Layout.transposeOuts(standardOutDims) *
-                           warpLayout.transposeOuts(standardOutDims);
-  mfma8Layout =
-      combineCtaCgaWithShape(ctaLayout, mfmaLayout.getCTALayout(), shape);
-  return mfma8Layout;
+  auto swapLL = LinearLayout::empty();
+  // The rows are kept as is with an identity linear layout.
+  swapLL *= LinearLayout::identity1D(valShape[0], dimM, dimM);
+  // In transposed mfma32 layout, each thread holds 4 consecutive values along N
+  // dim. We want to exchange column 4-7 (owned by thread 32-63) and column 8-11
+  // (owned by thread 0-31) every 16 columns to make each thread holds 8
+  // elements. This would mean exchange the 2nd and 3rd basis vector from an
+  // identity linear layout.
+  std::vector<std::vector<int32_t>> dimNBases(mfmaLL.getOutDimSizeLog2(dimN));
+  std::generate(dimNBases.begin(), dimNBases.end(),
+                [i = 0]() mutable { return std::vector<int32_t>{1 << i++}; });
+  std::swap(dimNBases[2], dimNBases[3]);
+  swapLL *= LinearLayout({{dimN, dimNBases}}, {dimN});
+
+  return mfmaLL.compose(swapLL);
 }
 
 LinearLayout getScaleTMEMStoreLinearLayout(RankedTensorType scaleType,

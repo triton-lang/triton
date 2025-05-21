@@ -32,7 +32,7 @@ class Autotuner(KernelInterface):
         self.keys = key
         self.cache: Dict[Tuple, Config] = {}
         self.arg_names = arg_names
-        self.cache_results = cache_results or knobs.autotuning.cache
+        self.cache_results = cache_results or (knobs.autotuning.cache and not knobs.runtime.interpret)
 
         # Reset to zero or restore values
         self.reset_to_zero = []
@@ -167,7 +167,7 @@ class Autotuner(KernelInterface):
         # We can't serialize prehooks, so just give up and run the benchmarks.
         if not tuning_key or any(cfg.pre_hook for cfg in configs):
             bench_fn()
-            return
+            return False
 
         from triton._C.libtriton import get_cache_invalidating_env_vars
         from triton.compiler.compiler import make_backend, triton_key
@@ -196,7 +196,7 @@ class Autotuner(KernelInterface):
                 timings = {Config(**config): timing for config, timing in timings}
                 self.cache[tuning_key] = builtins.min(timings, key=timings.get)
                 self.configs_timings = timings
-            return
+            return True
 
         bench_fn()
         cache.put(
@@ -206,6 +206,7 @@ class Autotuner(KernelInterface):
                 "configs_timings":
                 [(config.__dict__, timings) for config, timings in self.configs_timings.items() if not config.pre_hook],
             }), file_name, binary=False)
+        return False
 
     def run(self, *args, **kwargs):
         self.nargs = dict(zip(self.arg_names, args))
@@ -233,7 +234,7 @@ class Autotuner(KernelInterface):
                     self.configs_timings = timings
 
                 if self.cache_results:
-                    self.check_disk_cache(key, pruned_configs, benchmark)
+                    used_cached_result = self.check_disk_cache(key, pruned_configs, benchmark)
                 else:
                     benchmark()
 
@@ -312,15 +313,17 @@ class Config:
                        to ptx .maxnreg directive.  Not supported on all platforms.
     :ivar pre_hook: a function that will be called before the kernel is called. Parameters of this
                     function are args.
+    :ivar ir_override: filename of a user-defined IR (*.{ttgir|llir|ptx|amdgcn}).
     """
 
-    def __init__(self, kwargs, num_warps=4, num_stages=3, num_ctas=1, maxnreg=None, pre_hook=None):
+    def __init__(self, kwargs, num_warps=4, num_stages=3, num_ctas=1, maxnreg=None, pre_hook=None, ir_override=None):
         self.kwargs = kwargs
         self.num_warps = num_warps
         self.num_ctas = num_ctas
         self.num_stages = num_stages
         self.maxnreg = maxnreg
         self.pre_hook = pre_hook
+        self.ir_override = ir_override
 
     def __setstate__(self, state):
         self.kwargs = state.get("kwargs", {})
@@ -329,6 +332,7 @@ class Config:
         self.num_ctas = state.get("num_ctas", 1)
         self.maxnreg = state.get("maxnreg", None)
         self.pre_hook = state.get("pre_hook", None)
+        self.ir_override = state.get("ir_override", None)
 
     def all_kwargs(self):
         return {
@@ -339,6 +343,7 @@ class Config:
                     ("num_ctas", self.num_ctas),
                     ("num_stages", self.num_stages),
                     ("maxnreg", self.maxnreg),
+                    ("ir_override", self.ir_override),
                 ) if v is not None
             }
         }

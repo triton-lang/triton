@@ -23,12 +23,18 @@ union SMEMDescriptor {
   };
 };
 
+struct MemDescOperand {
+  Value base;
+  std::optional<int> offset;
+};
+
 // Abstract class to calculate the address of a shared or tensor memory slice.
 class DotOpMmaMemLoader {
 public:
   virtual ~DotOpMmaMemLoader() = default;
-  virtual Value memLoad(int a, int b, ConversionPatternRewriter &rewriter,
-                        Location loc) const = 0;
+  virtual MemDescOperand memLoad(int a, int b,
+                                 ConversionPatternRewriter &rewriter,
+                                 Location loc) const = 0;
 };
 
 // Helper class to load shared memory slices following MMAv3 layout.
@@ -46,9 +52,9 @@ public:
   Value smemLoad(int a, int b, ConversionPatternRewriter &rewriter,
                  Location loc) const;
 
-  Value memLoad(int a, int b, ConversionPatternRewriter &rewriter,
-                Location loc) const override {
-    return smemLoad(a, b, rewriter, loc);
+  MemDescOperand memLoad(int a, int b, ConversionPatternRewriter &rewriter,
+                         Location loc) const override {
+    return {smemLoad(a, b, rewriter, loc), std::nullopt};
   }
 
 private:
@@ -73,11 +79,11 @@ public:
   DotOpMmaV5TmemLoader(Value tensor, Value base,
                        SmallVector<unsigned int> instrShape, bool interleaved,
                        bool trans);
-  Value tmemLoad(int a, int b, ConversionPatternRewriter &rewriter,
-                 Location loc) const;
+  MemDescOperand tmemLoad(int a, int b, ConversionPatternRewriter &rewriter,
+                          Location loc) const;
 
-  Value memLoad(int a, int b, ConversionPatternRewriter &rewriter,
-                Location loc) const override {
+  MemDescOperand memLoad(int a, int b, ConversionPatternRewriter &rewriter,
+                         Location loc) const override {
     return tmemLoad(a, b, rewriter, loc);
   }
 
@@ -89,6 +95,7 @@ private:
   SmallVector<unsigned int> instrShape;
   int numElementsPer32b;
   int numRepM;
+  int numSlicePerBlockN;
 };
 
 } // namespace NVIDIA
