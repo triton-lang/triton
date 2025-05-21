@@ -35,7 +35,6 @@ struct AddSchedBarriers
       // are currently pseduo instrunctions at this point and may get picked up
       // here and trigger the FunctionOpInterface range based assert below
       StringRef funcName(op.getNameAttr());
-      llvm::errs() << funcName << "\n";
       if (!funcName.contains("__")) {
         numFuncOps += 1;
         func = op;
@@ -44,22 +43,24 @@ struct AddSchedBarriers
 
     assert(numFuncOps == 1);
 
+    IntegerAttr zeroAttrValue =
+        builder.getI32IntegerAttr(static_cast<int32_t>(0));
+
     func.walk([&](mlir::triton::proton::gpu::ReadCounterOp op) {
       auto loc = op.getLoc();
-      IntegerAttr zeroMaskValue =
-          builder.getI32IntegerAttr(static_cast<int32_t>(0));
-      builder.setInsertionPoint(op);
-      builder.create<ROCDL::SchedBarrier>(loc, zeroMaskValue);
+      if (!isa_and_nonnull<ROCDL::SchedBarrier>(op->getPrevNode())) {
+        builder.setInsertionPoint(op);
+        builder.create<ROCDL::SchedBarrier>(loc, zeroAttrValue);
+      }
     });
 
     func.walk([&](mlir::triton::proton::gpu::CircularStoreOp op) {
       auto loc = op.getLoc();
-      IntegerAttr zeroMaskValue =
-          builder.getI32IntegerAttr(static_cast<int32_t>(0));
-      builder.setInsertionPointAfter(op);
-      builder.create<ROCDL::SchedBarrier>(loc, zeroMaskValue);
+      if (!isa_and_nonnull<ROCDL::SchedBarrier>(op->getNextNode())) {
+        builder.setInsertionPointAfter(op);
+        builder.create<ROCDL::SchedBarrier>(loc, zeroAttrValue);
+      }
     });
-
   }
 };
 
