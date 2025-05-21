@@ -91,10 +91,10 @@ def matmul_launch_metadata(grid, kernel, args):
     ret[f"flops{nbits}"] = 2.0 * fM * N * fK
 
     gindx = args.get("GatherIndx", None)
-    sindx = args.get("WriteBackIndx", None)
+    # sindx = args.get("WriteBackIndx", None)
     n_x_bytes = X.numel() * X.element_size()
     n_y_bytes = Y.numel() * Y.element_size()
-    if gindx is not None or sindx is not None:
+    if hist is not None:
         assert X.shape[0] == Y.shape[0] == 1, "batched mode not supported"
         assert n_tokens is not None
         n_expts_act = args["N_EXPTS_ACT"]
