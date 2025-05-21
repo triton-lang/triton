@@ -6,16 +6,18 @@ import triton
 # utilities
 from triton_kernels import target_info
 from triton_kernels.numerics import InFlexData, OutFlexData
-from triton_kernels.routing import GatherIndx, RoutingData, ScatterIndx
+from triton_kernels.routing import ExptData, GatherIndx, RoutingData, ScatterIndx
 # details
 from .matmul_ogs_details._matmul_ogs import _compute_writeback_idx
 from .matmul_ogs_details._matmul_ogs import _matmul_ogs
 from .matmul_ogs_details._p_matmul_ogs import _p_matmul_ogs, get_per_device_per_stream_alloc_fn
 from .matmul_ogs_details._finalize_matmul import _finalize_matmul
-from .matmul_ogs_details.opt_flags import make_opt_flags
+from .matmul_ogs_details.opt_flags import make_opt_flags, OptFlags
 from .matmul_ogs_details.fast_contiguous import fast_contiguous
 from .numerics_details.mxfp import SwizzlingType
 from .specialize import specialize
+from .descriptor_cache import CacheManager
+from typing import Tuple, Optional
 
 
 @dataclass
@@ -492,11 +494,14 @@ def init_allocation(x, w, precision_config, fused_activation, routing_data, gath
         scratchpad["matmul"] = ((opt_flags.split_k, x.shape[0], M, N), dtype)
     return MatmulAllocation(x.device, output, scratchpad)
 
-
-def apply_allocation(allocation: MatmulAllocation, output):
+def apply_allocation(allocation: MatmulAllocation, output, cache_manager: CacheManager):
     ret = dict()
     if output is None:
-        output = torch.empty(allocation.output[0], device=allocation.device, dtype=allocation.output[1])
+        output = cache_manager.tensor_cache.get_or_create(
+            allocation.output[0],
+            allocation.output[1],
+            allocation.device
+        )
     else:
         assert output.shape == allocation.output[0]
     ret["output"] = output[None, :, :]
@@ -506,9 +511,75 @@ def apply_allocation(allocation: MatmulAllocation, output):
     }
     return ret
 
+
 # -----------------------------------------------------------------------------
 # Triton Implementation
 # -----------------------------------------------------------------------------
+
+def _create_tma_descriptors(
+    x: torch.Tensor,
+    x_tensor: torch.Tensor,
+    w_tensor: torch.Tensor,
+    mx_tensor: Optional[torch.Tensor],
+    routing_data: RoutingData,
+    mx_ctx: MicroscalingCtx,
+    expt_data: ExptData,
+    opt_flags: OptFlags,
+    batch_size: int,
+    K: int,
+    N: int,
+    mx_scale_stride_k: int,
+    mx_scale_stride_n: int,
+    USE_GATHER_TMA: bool,
+    X_USE_LOAD_TMA: bool,
+    w_transpose: bool,
+    mx_transpose: bool,
+    cache_manager: CacheManager,
+) -> Tuple[bool, torch.Tensor, torch.Tensor, Optional[torch.Tensor]]:
+    """Create and cache TMA descriptors for tensors."""
+    use_host_tma_descriptors = opt_flags.is_persistent
+
+    # The dense case currently uses on device descriptor updates
+    # so we bail out on using host descriptors in that case
+    if (use_host_tma_descriptors and
+        expt_data is not None and
+        len(expt_data.block_pid_map) > 0):
+
+        x_tensor = cache_manager.descriptor_cache.get_or_create(
+            x_tensor.data_ptr(),
+            lambda: cache_manager.builder.create_input_descriptor(
+                x_tensor, K, x.stride(1), x.stride(2),
+                opt_flags.block_k, opt_flags.block_m,
+                USE_GATHER_TMA, X_USE_LOAD_TMA
+            )
+        )
+
+        w_tensor = cache_manager.descriptor_cache.get_or_create(
+            w_tensor.data_ptr(),
+            lambda: cache_manager.builder.create_weight_descriptor(
+                w_tensor, opt_flags.block_k, opt_flags.block_n, w_transpose
+            )
+        )
+
+        # Optional MX scale descriptor
+        if mx_tensor is not None:
+            mx_tensor = cache_manager.descriptor_cache.get_or_create(
+                mx_tensor.data_ptr(),
+                lambda: cache_manager.builder.create_block_scale_descriptor(
+                    mx_tensor, opt_flags.block_k, opt_flags.block_n, K, N,
+                    mx_scale_stride_k, mx_scale_stride_n, routing_data.n_expts_tot,
+                    batch_size,
+                    expt_data.block_pid_map, mx_ctx.swizzle_scale, mx_transpose
+                )
+            )
+    else:
+        use_host_tma_descriptors = False
+
+    if opt_flags.is_persistent:
+        opt_flags.target_kernel_kwargs["USE_HOST_TMA_DESCRIPTORS"] = use_host_tma_descriptors
+
+    return use_host_tma_descriptors, x_tensor, w_tensor, mx_tensor
+
 
 def matmul_ogs(x, w, bias,
                routing_data: RoutingData | None = None,
@@ -521,12 +592,16 @@ def matmul_ogs(x, w, bias,
                y: torch.Tensor | None = None,
                fused_activation: FusedActivation | None = None,
                epilogue: Epilogue | None = None,
+               cache_manager: CacheManager | None = None,
                ):
     """
     Y[:, :] = 0.
     for e in num_experts:
         Y[idxs_y_m(e), :] += matmul(X[idxs_x_m(e), :], W[e, :, :])
     """
+
+    if cache_manager is None:
+        cache_manager = CacheManager()
 
     is_input_batched = x.ndim == 3
     if is_input_batched:
@@ -578,7 +653,7 @@ def matmul_ogs(x, w, bias,
     # allocate output/scratchpad memory
     allocation = init_allocation(x, w, precision_config, fused_activation, routing_data, gather_indx, scatter_indx, opt_flags,
                                  preprocessing_features, postprocessing_features)
-    memory = apply_allocation(allocation, y)
+    memory = apply_allocation(allocation, y, cache_manager)
     # TMA descriptors require a global memory allocation
     if opt_flags.is_persistent:
         triton.set_allocator(get_per_device_per_stream_alloc_fn(x.device))
@@ -603,6 +678,7 @@ def matmul_ogs(x, w, bias,
     flex = precision_config.flex_ctx
     bias_stride = None if bias is None else bias.stride(0)
     num_indx = None if scatter_indx is None else scatter_indx.src_indx.shape[0]
+
     kernels = get_kernels(epilogue.specs, fused_activation.specs)
     expt_data = routing_data.expt_data
     block_m = opt_flags.block_m
@@ -610,15 +686,40 @@ def matmul_ogs(x, w, bias,
     expt_hist_sum = None if expt_data is None else expt_data.token_offs_pad[block_m][-1]
     expt_token_offs_raw = None if expt_data is None else expt_data.token_offs_raw
     expt_block_pid_map = None if expt_data is None else expt_data.block_pid_map[block_m]
+
+    HAS_TMA_GS = target_info.cuda_capability_geq(10, 0)
+    USE_GATHER_TMA = HAS_TMA_GS and gather_indx is not None
+    X_USE_LOAD_TMA = gather_indx is None and not USE_GATHER_TMA
+    _, x_tensor, w_tensor, mx_tensor = _create_tma_descriptors(
+        x=x,
+        x_tensor=flex.lhs_data.reinterpret(x),
+        w_tensor=flex.rhs_data.reinterpret(w),
+        mx_tensor=mx_ctx.weight_scale,
+        routing_data=routing_data,
+        mx_ctx=mx_ctx,
+        expt_data=expt_data,
+        opt_flags=opt_flags,
+        batch_size=batch_size,
+        K=K,
+        N=N,
+        mx_scale_stride_k=mx_scale_stride_k,
+        mx_scale_stride_n=mx_scale_stride_n,
+        USE_GATHER_TMA=USE_GATHER_TMA,
+        X_USE_LOAD_TMA=X_USE_LOAD_TMA,
+        w_transpose=w.stride(2) != 1,
+        mx_transpose=mx_scale_stride_n != 1,
+        cache_manager=cache_manager,
+    )
+
     (kernels._p_matmul_ogs if opt_flags.is_persistent else kernels._matmul_ogs)[(n_cta,)](
                    flex.out_data.reinterpret(memory["output"]),
                    flex.out_data.reinterpret(out0), *out0.stride(),
                    *out0_flex,
-                   flex.lhs_data.reinterpret(x), x.stride(0), x.stride(1), x.stride(2),
+                   x_tensor, x.stride(0), x.stride(1), x.stride(2),
                    flex.lhs_data.scale,
-                   flex.rhs_data.reinterpret(w), w.stride(0), w.stride(1), w.stride(2), w.stride(2) != 1,
+                   w_tensor, w.stride(0), w.stride(1), w.stride(2), w.stride(2) != 1,
                    flex.rhs_data.scale,
-                   mx_ctx.weight_scale, mx_scale_stride_e, mx_scale_stride_k, mx_scale_stride_n, mx_scale_stride_n != 1,
+                   mx_tensor, mx_scale_stride_e, mx_scale_stride_k, mx_scale_stride_n, mx_scale_stride_n != 1,
                    bias, bias_stride,
                    x.shape[1],
                    x.shape[1] if routing_data.expt_hist is None else None,
