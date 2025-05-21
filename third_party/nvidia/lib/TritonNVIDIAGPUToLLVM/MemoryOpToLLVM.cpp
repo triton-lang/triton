@@ -193,8 +193,8 @@ LogicalResult lowerDistributedToSharedStmatrix(
   auto reps = zerosLike(tile) * quot;
   assert(reps.getOutDimSize(kOffset) == cvt.getOutDimSize(kOffset));
 
-  // Choose the 4 elements indexed by the next to bases as the vectorisation
-  // factor
+  // Choose up to 4 packs of 32-bit elements indexed by the next to bases
+  // as the vectorisation factor
   auto vec = std::min(2, quot.getInDimSizeLog2(kReg));
 
   // FIXME(Lezcano): Should we bail if any of the other 3 lane bases is zero?
