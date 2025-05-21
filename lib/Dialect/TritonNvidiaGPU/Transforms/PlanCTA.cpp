@@ -1068,6 +1068,11 @@ struct PlanCTAPass : public impl::TritonGPUPlanCTAPassBase<PlanCTAPass> {
   ClusterInfo *clusterInfo;
 };
 
+std::unique_ptr<Pass>
+createTritonNvidiaGPUPlanCTAPass(ClusterInfo *clusterInfo) {
+  return std::make_unique<PlanCTAPass>(clusterInfo);
+}
+
 } // namespace nvidia_gpu
 } // namespace triton
 } // namespace mlir

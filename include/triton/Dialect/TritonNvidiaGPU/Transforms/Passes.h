@@ -38,6 +38,9 @@ struct ClusterInfo {
   int clusterDimZ;
 };
 
+std::unique_ptr<Pass> createTritonNvidiaGPUPlanCTAPass(
+    mlir::triton::nvidia_gpu::ClusterInfo *clusterInfo = nullptr);
+
 #define GEN_PASS_DECL
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/Passes.h.inc"
 
