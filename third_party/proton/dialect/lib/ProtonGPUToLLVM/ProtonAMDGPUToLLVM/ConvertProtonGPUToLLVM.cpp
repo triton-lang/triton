@@ -6,6 +6,7 @@
 #include "mlir/Conversion/ArithToLLVM/ArithToLLVM.h"
 #include "mlir/Conversion/ControlFlowToLLVM/ControlFlowToLLVM.h"
 #include "mlir/Conversion/GPUToROCDL/GPUToROCDLPass.h"
+#include "mlir/Dialect/AMDGPU/Utils/Chipset.h"
 #include "mlir/Dialect/LLVMIR/ROCDLDialect.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
@@ -56,8 +57,16 @@ struct ConvertProtonAMDGPUToLLVM
     mlir::triton::proton::gpu::AMD::populateProtonGPUOpAMDPatterns(
         typeConverter, patterns, protonTargetInfo, 1);
     mlir::arith::populateArithToLLVMConversionPatterns(typeConverter, patterns);
-    mlir::populateGpuToROCDLConversionPatterns(typeConverter, patterns,
-                                               mlir::gpu::amd::HIP);
+
+    FailureOr<mlir::amdgpu::Chipset> maybeChipset =
+        mlir::amdgpu::Chipset::parse(this->arch);
+    if (failed(maybeChipset)) {
+      emitError(UnknownLoc::get(&getContext()),
+                "Invalid AMDGPU chipset name: " + this->arch);
+      return signalPassFailure();
+    }
+    mlir::populateGpuToROCDLConversionPatterns(
+        typeConverter, patterns, mlir::gpu::amd::HIP, *maybeChipset);
     mlir::cf::populateControlFlowToLLVMConversionPatterns(typeConverter,
                                                           patterns);
     auto convTarget = ProtonLLVMConversionTarget(*context);
