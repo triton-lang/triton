@@ -37,32 +37,28 @@ namespace {
 // UTILS
 /////////////////////////////
 
-class OpBuilderForStage : public OpBuilder {
-  std::optional<int> _stage;
-  std::optional<CoarseSchedule::Cluster> _cluster;
-  CoarseSchedule &_schedule;
-
+class OpBuilderForStage : public OpBuilder, public OpBuilder::Listener {
 public:
   explicit OpBuilderForStage(Operation *op, CoarseSchedule &schedule)
-      : OpBuilder(op, nullptr), _schedule(schedule) {
-    if (_schedule.count(op)) {
-      auto sc = _schedule[op];
-      _stage = sc.first;
-      _cluster = sc.second;
-    }
-  }
-  void setStageCluster(std::pair<int, CoarseSchedule::Cluster> stageCluster) {
-    _stage = stageCluster.first;
-    _cluster = stageCluster.second;
+      : OpBuilder(op, this), schedule(schedule) {
+    if (auto it = schedule.find(op); it != schedule.end())
+      std::tie(stage, cluster) = it->second;
   }
 
-  template <typename OpTy, typename... Args> OpTy create(Args &&...args) {
-    OpTy op = OpBuilder::create<OpTy>(std::forward<Args>(args)...);
-    if (_stage && _cluster) {
-      _schedule.insert(op, *_stage, *_cluster);
-    }
-    return op;
+  void setStageCluster(std::pair<int, CoarseSchedule::Cluster> stageCluster) {
+    stage = stageCluster.first;
+    cluster = stageCluster.second;
   }
+
+  void notifyOperationInserted(Operation *op, InsertPoint previous) {
+    if (stage && cluster)
+      schedule.insert(op, *stage, *cluster);
+  }
+
+private:
+  std::optional<int> stage;
+  std::optional<CoarseSchedule::Cluster> cluster;
+  CoarseSchedule &schedule;
 };
 
 int getSelfLatencyFromAttr(Operation *op) {
