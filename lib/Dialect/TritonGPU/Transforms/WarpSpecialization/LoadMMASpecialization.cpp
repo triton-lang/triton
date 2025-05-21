@@ -758,7 +758,6 @@ static LogicalResult pipelineMMA(scf::ForOp &loop, PipelinedMMA &mma,
         b.setInsertionPoint(mmaOp);
         Value bar = createSingleBufferView(b, node.barNext, node.index);
         mmaOp.addCompletionBarrier(bar, userPred);
-        // b.assignStage(mmaOp, stage);
       } else {
         b.setInsertionPointAfter(lastOp);
         if (isa<scf::IfOp>(lastOp->getParentOp()))
