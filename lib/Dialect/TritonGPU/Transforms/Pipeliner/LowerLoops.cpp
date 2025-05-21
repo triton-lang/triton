@@ -43,10 +43,6 @@ class OpBuilderForStage : public OpBuilder {
   CoarseSchedule &_schedule;
 
 public:
-  explicit OpBuilderForStage(Operation *op, CoarseSchedule &schedule, int stage,
-                             CoarseSchedule::Cluster cluster)
-      : OpBuilder(op, nullptr), _schedule(schedule), _stage(stage),
-        _cluster(cluster) {}
   explicit OpBuilderForStage(Operation *op, CoarseSchedule &schedule)
       : OpBuilder(op, nullptr), _schedule(schedule) {
     if (_schedule.count(op)) {
