@@ -100,6 +100,8 @@ public:
 
   LogicalResult matchAndRewrite(TMEMTokenStoreOp store,
                                 PatternRewriter &rewriter) const override {
+    if (!getBoolFromConstant(store.getPred()))
+      return failure(); // we've already processed this
     auto tok = store.getToken();
     if (!tok.hasOneUse())
       return failure();
@@ -461,6 +463,7 @@ struct HoistTMEMAlloc
         &getContext());
     scf::ForOp::getCanonicalizationPatterns(patterns, &getContext());
     if (failed(applyPatternsGreedily(getOperation(), std::move(patterns)))) {
+      llvm::errs() << m << '\n';
       llvm_unreachable("Failed to hoist tmem_store");
     }
   }
