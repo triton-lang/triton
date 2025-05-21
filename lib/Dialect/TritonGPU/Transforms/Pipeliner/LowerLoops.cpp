@@ -204,17 +204,15 @@ int getDefUseStageDiff(Operation *op, scf::ForOp forOp,
   return useStage.value() - defStage;
 }
 
-template <typename BuilderT>
-Value createIncrementModulo(BuilderT &builder, Location loc, Value counter,
+Value createIncrementModulo(OpBuilder &builder, Location loc, Value counter,
                             Value modulus, Value zero, Value one,
                             Value *outWrapCond = nullptr) {
-  Value addOne = builder.template create<arith::AddIOp>(loc, counter, one);
-  Value outOfRangeCond = builder.template create<arith::CmpIOp>(
+  Value addOne = builder.create<arith::AddIOp>(loc, counter, one);
+  Value outOfRangeCond = builder.create<arith::CmpIOp>(
       loc, arith::CmpIPredicate::sge, addOne, modulus);
   if (outWrapCond)
     *outWrapCond = outOfRangeCond;
-  return builder.template create<arith::SelectOp>(loc, outOfRangeCond, zero,
-                                                  addOne);
+  return builder.create<arith::SelectOp>(loc, outOfRangeCond, zero, addOne);
 }
 
 void replaceAllUsesDominatedBy(Operation *domOp, Value newValue, Value oldValue,
@@ -671,14 +669,13 @@ allocTMABuffers(scf::ForOp forOp,
   return success();
 }
 
-template <typename BuilderT>
-Value subviewTMADescriptor(BuilderT &builder, Location loc, Value alloc,
+Value subviewTMADescriptor(OpBuilder &builder, Location loc, Value alloc,
                            Value counter) {
-  Value tmaSizeVal = builder.template create<arith::ConstantIntOp>(
+  Value tmaSizeVal = builder.create<arith::ConstantIntOp>(
       loc, ttng::TMA_SIZE_BYTES, 32);
   Value offset =
-      builder.template create<arith::MulIOp>(loc, tmaSizeVal, counter);
-  return builder.template create<triton::AddPtrOp>(loc, alloc.getType(), alloc,
+      builder.create<arith::MulIOp>(loc, tmaSizeVal, counter);
+  return builder.create<triton::AddPtrOp>(loc, alloc.getType(), alloc,
                                                    offset);
 }
 
