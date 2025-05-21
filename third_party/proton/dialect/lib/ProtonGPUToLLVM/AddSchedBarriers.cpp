@@ -1,9 +1,12 @@
 #include "Conversion/ProtonGPUToLLVM/Passes.h"
 #include "Dialect/ProtonGPU/IR/Dialect.h"
+#include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/LLVMIR/ROCDLDialect.h"
 #include "mlir/Pass/Pass.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
+#include "mlir/Transforms/DialectConversion.h"
+
 
 using namespace mlir;
 using namespace mlir::triton;
@@ -25,9 +28,9 @@ struct AddSchedBarriers
     ModuleOp mod = getOperation();
     MLIRContext *ctx = &getContext();
     OpBuilder builder(ctx);
+
     int numFuncOps = 0;
     FunctionOpInterface func;
-
     mod.walk([&](FunctionOpInterface op) {
       // Ignore any intrinsic functions. On AMD the predicate load/store ops
       // are currently pseduo instrunctions at this point and will get picked up
@@ -49,6 +52,7 @@ struct AddSchedBarriers
       builder.setInsertionPointAfter(op);
       builder.create<ROCDL::SchedBarrier>(loc, maskValue);
     });
+
   }
 };
 
