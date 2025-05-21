@@ -15,24 +15,30 @@ from .matmul_ogs_details._finalize_matmul import _finalize_matmul
 from .matmul_ogs_details.opt_flags import make_opt_flags
 from .matmul_ogs_details.metadata import compute_metadata
 from .matmul_ogs_details.fast_contiguous import fast_contiguous
+from .numerics_details.mxfp import SwizzlingType
 from .specialize import specialize
 
 
 @dataclass
-class Epilogue:
+class EpilogueSpecs:
     name: str
     fn: "triton.runtime.jit.JITFunction"
     fn_arg_names: tuple[str]
+    fn_arg_do_not_specialize: tuple[str] = tuple()
+
+
+@dataclass
+class Epilogue:
+    specs: EpilogueSpecs
     fn_arg_values_matmul: tuple[object]
     fn_arg_values_finalize: tuple[object]
-    fn_arg_do_not_specialize: tuple[str] = tuple()
     is_expensive: bool = False
 
 
 _kernels = dict()
 
 
-def get_kernels(epilogue: Epilogue):
+def get_kernels(epilogue: EpilogueSpecs):
     global _kernels
     if epilogue.name in _kernels:
         return _kernels[epilogue.name]
@@ -84,7 +90,12 @@ class MicroscalingCtx:
     act_scale: torch.Tensor | None = None
     weight_scale: torch.Tensor | None = None
 
-    swizzle_mx: bool = False  # Whether the weight scales are stored in swizzled 5D layout
+    swizzle_value: SwizzlingType | None = (
+        None  # Whether the weight values are stored in swizzled layout
+    )
+    swizzle_scale: SwizzlingType | None = (
+        None  # Whether the weight scales are stored in swizzled layout
+    )
     actual_weight_scale_shape: tuple | None = None  # Actual weight scales shape, without padding
 
     def __post_init__(self):
@@ -106,6 +117,9 @@ class MicroscalingCtx:
             )
 
     def check_inputs(self, weights: torch.Tensor) -> None:
+        if self.swizzle_value and self.swizzle_value != SwizzlingType.HOPPER:
+            raise ValueError(f"Only Hopper swizzling is supported. Got {self.swizzle_value}")
+
         if self.weight_scale is None:
             return
 
@@ -117,17 +131,28 @@ class MicroscalingCtx:
         # Validate weights tensor dimensions
         if weights.ndim != 3:
             raise ValueError(f"Weights must be 3D (experts, in_dim, out_dim). Got {weights.shape}")
+        weights_shape = self.get_packed_tensor_logical_shape(weights)
 
         # Validate shapes
         weight_scale_shape = self.actual_weight_scale_shape
-        if weights.shape[0] != weight_scale_shape[0] or weights.shape[2] != weight_scale_shape[2]:
+        if weights_shape[0] != weight_scale_shape[0] or weights_shape[2] != weight_scale_shape[2]:
             raise ValueError(
                 f"Weights and scale must have the same number of experts and output dimensions. "
-                f"Got weights experts: {weights.shape[0]}, scale experts: {weight_scale_shape[0]}, "
-                f"weights out_dim: {weights.shape[2]}, scale out_dim: {weight_scale_shape[2]}"
+                f"Got weights experts: {weights_shape[0]}, scale experts: {weight_scale_shape[0]}, "
+                f"weights out_dim: {weights_shape[2]}, scale out_dim: {weight_scale_shape[2]}"
             )
+        if self.swizzle_value == SwizzlingType.HOPPER:
+            if weights_shape[1] % 64 != 0 or weights_shape[2] % 16 != 0:
+                raise ValueError(
+                    f"Hopper scale swizzling acts on a 64x16 tile (4x1 mma tiles). Got {weights_shape=}"
+                )
+        if self.swizzle_scale == SwizzlingType.HOPPER:
+            if weights_shape[1] % 64 != 0 or weights_shape[2] % 64 != 0:
+                raise ValueError(
+                    f"Hopper scale swizzling acts on a 64x64 tile (4x4 mma tiles). Got {weights_shape=}"
+                )
 
-        k_dim = self.get_packed_tensor_logical_shape(weights)[1]
+        k_dim = weights_shape[1]
         rounded_k_dim = (k_dim + 31) // 32 * 32
         block_size = rounded_k_dim // weight_scale_shape[1]
         if block_size != 32:
@@ -136,7 +161,7 @@ class MicroscalingCtx:
     def compute_strides(self):
         if self.weight_scale is not None:
             # Check expected properties of the weights.
-            if self.swizzle_mx:
+            if self.swizzle_scale == SwizzlingType.BLACKWELL:
                 mxE, mxK, mxN = self.weight_scale.shape
 
                 # Compute strides of the 5D swizzled tensor.
@@ -156,11 +181,14 @@ class MicroscalingCtx:
 
 
     def get_packed_tensor_logical_shape(self, tensor: torch.Tensor):
-        k_dim = tensor.shape[1]
+        shape = list(tensor.shape)
         if tensor.dtype == torch.uint8:
             # Assume 2 fp4s packed into a byte
-            k_dim *= 2
-        return tensor.shape[0], k_dim, tensor.shape[2]
+            shape[1] *= 2
+        if self.swizzle_value == SwizzlingType.HOPPER:
+            shape[1] //= 4
+            shape[2] *= 4
+        return tuple(shape)
 
 @dataclass(frozen=True)
 class FlexCtx:
@@ -189,15 +217,17 @@ def mx_can_use_tma(mx_ctx: MicroscalingCtx):
     if mx_scale_stride_e * mx_ctx.weight_scale.element_size() % 16 != 0:
         return False
 
-    if mx_ctx.swizzle_mx:
-        # CHeck stride in bytes are multiples of 16.
+    if mx_ctx.swizzle_scale == SwizzlingType.BLACKWELL:
+        # Check stride in bytes are multiples of 16.
         return mx_scale_stride_n * mx_ctx.weight_scale.element_size() % 16 == 0 and mx_scale_stride_k * mx_ctx.weight_scale.element_size() % 16 == 0
-    else:
+    elif mx_ctx.swizzle_scale is None:
         # Check MX is either transposed or non-transposed, and with required stride.
         return (
             (mx_scale_stride_n * mx_ctx.weight_scale.element_size() % 16 == 0 and mx_scale_stride_k == 1) or
             (mx_scale_stride_k * mx_ctx.weight_scale.element_size() % 16 == 0 and mx_scale_stride_n == 1)
         )
+    else:
+        return False
 
 def can_use_persistent_tma(x, w, gather_indx, precision_config):
     mx_ctx = precision_config.mx_ctx
@@ -220,6 +250,8 @@ def can_use_persistent_tma(x, w, gather_indx, precision_config):
         )
         # compiler crash ?
         and (x.dtype.itemsize <= 1 or w.dtype != torch.uint8)
+        # NYI
+        and mx_ctx.swizzle_value is None
     )
 
 def can_use_fused_scatter(scatter_indx):
@@ -375,7 +407,7 @@ def apply_postprocessing_features(scatter_indx, finalize_scatter_idxs, opt_flags
         grid, (BLOCK_N, num_warps) = sorted([(compute_grid(*c), c) for c in candidates], key=lambda x: x[0][1])[0]
         STAGES = 1 if num_warps == 1 else min(triton.cdiv(triton.cdiv(N, BLOCK_N), grid[1]), 5)
 
-        kernels = get_kernels(epilogue)
+        kernels = get_kernels(epilogue.specs)
         kernels._finalize_matmul[grid](
             flex_ctx.out_data.reinterpret(out_scatter),
             *out_scatter_flex,
@@ -485,7 +517,8 @@ def matmul_ogs(x, w, bias,
     if precision_config is None:
         precision_config = PrecisionConfig()
     if epilogue is None:
-        epilogue = Epilogue("dflt", None, tuple(), tuple(), tuple(), False)
+        epilogue_specs = EpilogueSpecs("dflt", None, tuple(), tuple())
+        epilogue = Epilogue(epilogue_specs, tuple(), tuple(), False)
     if w.ndim == 2:
         w = w.view(1, w.shape[-2], w.shape[-1])
     if x.ndim == 2:
@@ -542,15 +575,16 @@ def matmul_ogs(x, w, bias,
         x, w, gather_indx, scatter_indx, routing_data, opt_flags, preprocessing_features
     )
     if expt_data.buffer is not None:
-        assert expt_data.buffer.shape[0] == 3*n_expts_tot + 2 + grid_m, \
-            f"invalid expt_data, {expt_data.buffer.shape}, {n_expts_tot=}, {grid_m=}"
+        assert expt_data.hist.shape[0] == n_expts_tot, "invalid expt_data"
+        assert expt_data.offs.shape[0] == n_expts_tot + 1, "invalid expt_data"
+        assert expt_data.blocks.shape[0] == grid_m, "invalid expt_data"
     # matrix multiplication
     n_cta = batch_size * grid_m * grid_n * opt_flags.split_k
     n_cta = min(target_info.num_sms(), n_cta) if opt_flags.is_persistent else n_cta
     flex = precision_config.flex_ctx
     bias_stride = None if bias is None else bias.stride(0)
     num_indx = None if scatter_indx is None else scatter_indx.src_indx.shape[0]
-    kernels = get_kernels(epilogue)
+    kernels = get_kernels(epilogue.specs)
     (kernels._p_matmul_ogs if opt_flags.is_persistent else kernels._matmul_ogs)[(n_cta,)](
                    flex.out_data.reinterpret(memory["output"]),
                    flex.out_data.reinterpret(out0), *out0.stride(),
@@ -583,7 +617,8 @@ def matmul_ogs(x, w, bias,
                    opt_flags.block_k,
                    opt_flags.group_m,
                    XCD_SWIZZLE=opt_flags.xcd_swizzle,
-                   SWIZZLE_MX=mx_ctx.swizzle_mx,
+                   SWIZZLE_MX_VALUE=mx_ctx.swizzle_value.name if mx_ctx.swizzle_value else None,
+                   SWIZZLE_MX_SCALE=mx_ctx.swizzle_scale.name if mx_ctx.swizzle_scale else None,
                    EPILOGUE_SUBTILE=opt_flags.epilogue_subtile,
                    SPLIT_K=opt_flags.split_k,
                    EVEN_K=K % opt_flags.block_k == 0,
@@ -595,7 +630,7 @@ def matmul_ogs(x, w, bias,
                    UPCAST_INDICES=should_upcast_indices(x, w, out0),
                    DISABLE_Y_TMA=out0.stride(-2) * out0.dtype.itemsize % 16 != 0,
                    SWAP_XW=swap_xw,
-                   NUM_SMS = n_cta,
+                   NUM_SMS = n_cta if opt_flags.is_persistent else 0,
                    **opt_flags.target_kernel_kwargs)
     # post-processing
     out = apply_postprocessing_features(scatter_indx, finalize_scatter_idxs, opt_flags, expt_data.offs,

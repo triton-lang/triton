@@ -45,3 +45,28 @@ tt.func @loop_buffer_phase_args(%arg0: i32) {
   }
   tt.return
 }
+
+// CHECK-LABEL: @invalid_cache_test
+tt.func public @invalid_cache_test(%arg0: i32, %arg1: i32) -> (i32, i32) {
+  %c1_i32 = arith.constant 1 : i32
+  %c3_i32 = arith.constant 3 : i32
+  %c0_i32 = arith.constant 0 : i32
+  // CHECK: %0:4 = scf.for
+  %0:4 = scf.for %arg2 = %c0_i32 to %arg0 step %arg1 iter_args(%arg3 = %c0_i32, %arg4 = %c0_i32, %arg5 = %c0_i32, %arg6 = %c0_i32) -> (i32, i32, i32, i32)  : i32 {
+
+    %1 = arith.addi %arg5, %c1_i32 : i32
+    %2 = arith.xori %arg6, %c1_i32 : i32
+    %3 = arith.cmpi eq, %1, %c3_i32 : i32
+    %4 = arith.select %3, %2, %arg6 : i32
+    %5 = arith.select %3, %c1_i32, %1 : i32
+
+    %6 = arith.addi %arg3, %c1_i32 : i32
+    %7 = arith.xori %arg4, %c1_i32 : i32
+    %8 = arith.cmpi eq, %6, %c3_i32 : i32
+    %9 = arith.select %8, %c0_i32, %6 : i32
+    %10 = arith.select %8, %7, %arg4 : i32
+
+    scf.yield %9, %10, %5, %4 : i32, i32, i32, i32
+  }
+  tt.return %0#1, %0#3 : i32, i32
+}

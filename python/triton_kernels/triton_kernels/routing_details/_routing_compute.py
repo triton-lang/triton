@@ -18,21 +18,19 @@ def _routing_compute_expt_offs(ExpertHist, FinalExpertOffs, hist_size,  # histog
 
 
 @triton.jit
-def _routing_compute_indx_offs(TokensStart, PartialHist, PartialOffs, shape_pm, stride_pm, BLOCK_M: tl.constexpr):
+def _routing_compute_indx_offs(TokensStart, PartialHist, shape_pm, stride_pm, stride_pn, BLOCK_M: tl.constexpr):
     expt_id = tl.program_id(0)
     offs_m = tl.arange(0, BLOCK_M)
     # initialize first row of the output
     start = tl.load(TokensStart + expt_id)
-    tl.store(PartialOffs + expt_id, start)
     # iterate over input data
     curr_sum = start
     for _ in range(0, shape_pm, BLOCK_M):
-        offs = offs_m * stride_pm + expt_id
+        offs = offs_m * stride_pm + expt_id * stride_pn
         curr = tl.load(PartialHist + offs, mask=offs_m < shape_pm)
         out = tl.cumsum(curr, 0) + curr_sum
         curr_sum += tl.sum(curr, 0)
-        offs = (1 + offs_m) * stride_pm + expt_id
-        tl.store(PartialOffs + offs, out, mask=offs_m < shape_pm - 1)
+        tl.store(PartialHist + offs, out - curr, mask=offs_m < shape_pm)
         offs_m += BLOCK_M
 
 
@@ -49,8 +47,8 @@ def _keyed_add(x, y):
 
 
 @triton.jit
-def _routing_compute_indx(GatherIndx, ScatterIndx, GateScal, ExptScal, ExptIndx, PartialOffs, stride_pm, n_gates,
-                          BLOCK_M: tl.constexpr, N_EXPTS_ACT: tl.constexpr):
+def _routing_compute_indx(GatherIndx, ScatterIndx, GateScal, ExptScal, ExptIndx, PartialOffs, stride_pm, stride_pn,
+                          n_gates, BLOCK_M: tl.constexpr, N_EXPTS_ACT: tl.constexpr):
 
     pid_m = tl.program_id(0)
 
@@ -73,7 +71,7 @@ def _routing_compute_indx(GatherIndx, ScatterIndx, GateScal, ExptScal, ExptIndx,
     expts_and_inclusive_run_lengths = tl.associative_scan(x, 0, _keyed_add)
     exclusive_run_lengths = (expts_and_inclusive_run_lengths - 1) & 0xffff
 
-    gates = tl.load(PartialOffs + pid_m * stride_pm + expert, mask=(expert != 0xffff))
+    gates = tl.load(PartialOffs + pid_m * stride_pm + expert * stride_pn, mask=(expert != 0xffff))
     gates += exclusive_run_lengths
 
     tl.store(ScatterIndx + offs, gates, mask=mask)
@@ -82,17 +80,17 @@ def _routing_compute_indx(GatherIndx, ScatterIndx, GateScal, ExptScal, ExptIndx,
 
 
 @triton.jit
-def _routing_clear_bitmatrix(Bitmatrix, stride_bm, shape_bn, cutoff, BLOCK_N: tl.constexpr):
+def _routing_clear_bitmatrix(Bitmatrix, stride_bm, stride_bn, shape_bn, cutoff, BLOCK_N: tl.constexpr):
     pid_m = tl.program_id(0)
     cutoff_word = cutoff // 32
     cutoff_bit = cutoff % 32
     cutoff_mask = (1 << (cutoff_bit)) - 1
     for start_n in range(0, shape_bn, BLOCK_N):
         offs_n = start_n + tl.arange(0, BLOCK_N)
-        values = tl.load(Bitmatrix + pid_m * stride_bm + offs_n, mask=offs_n < shape_bn)
+        values = tl.load(Bitmatrix + pid_m * stride_bm + offs_n * stride_bn, mask=offs_n < shape_bn)
         values = tl.where(offs_n == cutoff_word, values & cutoff_mask, values)
         values = tl.where(offs_n > cutoff_word, 0, values)
-        tl.store(Bitmatrix + pid_m * stride_bm + offs_n, values, mask=offs_n < shape_bn)
+        tl.store(Bitmatrix + pid_m * stride_bm + offs_n * stride_bn, values, mask=offs_n < shape_bn)
 
 
 @triton.jit
