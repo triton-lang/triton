@@ -15,7 +15,7 @@ Extra Credits:
 
 import pytest
 import torch
-import sys
+import os
 
 import triton
 import triton.language as tl
@@ -101,18 +101,18 @@ def _host_descriptor_pre_hook(nargs):
 if is_hip():
     NUM_STAGES_OPTIONS = [1]
 elif supports_host_descriptor():
-    NUM_STAGES_OPTIONS = [2, 3, 4, 5]
+    NUM_STAGES_OPTIONS = [2, 3, 4]
 else:
-    NUM_STAGES_OPTIONS = [2, 3, 4, 7]
+    NUM_STAGES_OPTIONS = [2, 3, 4]
 
 configs = [
     triton.Config({'BLOCK_M': BM, 'BLOCK_N': BN}, num_stages=s, num_warps=w, pre_hook=_host_descriptor_pre_hook) \
-    for BM in [64, 128, 256]\
+    for BM in [64, 128]\
     for BN in [64, 128]\
     for s in NUM_STAGES_OPTIONS \
     for w in [4, 8]\
 ]
-if "pytest" in sys.modules:
+if "PYTEST_VERSION" in os.environ:
     # Use a single config in testing for reproducibility
     configs = [
         triton.Config(dict(BLOCK_M=64, BLOCK_N=64), num_stages=4, num_warps=4, pre_hook=_host_descriptor_pre_hook),
@@ -511,6 +511,7 @@ class _attention(torch.autograd.Function):
             FP8_OUTPUT=q.dtype == torch.float8_e5m2,  #
             STAGE=stage,  #
             warp_specialize=warp_specialize,  #
+            maxnreg=80 if warp_specialize else None,  #
             **extra_kern_args)
 
         ctx.save_for_backward(q, k, v, o, M)
