@@ -170,6 +170,8 @@ Operation *mlir::triton::predicateOp(RewriterBase &rewriter, Operation *op,
     return op;
   if (isa<ttng::TMEMAllocOp, ttng::TMEMLoadOp>(op))
     return op;
+  if (isa<tt::DescriptorLoadOp>(op))
+    return op;
   if (auto ifOp = dyn_cast<scf::IfOp>(op)) {
     rewriter.setInsertionPoint(op);
     Value cnd = getPredMask(rewriter, ifOp.getCondition().getType(),
