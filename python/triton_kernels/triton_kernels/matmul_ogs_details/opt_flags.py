@@ -1,6 +1,4 @@
 from dataclasses import dataclass
-
-import torch
 import triton
 from triton_kernels.numerics_details.mxfp import SwizzlingType
 import torch
@@ -111,7 +109,7 @@ def make_default_opt_flags_amd(
         epilogue_subtile = False
     # AMD-specific
     target_kernel_kwargs = {"waves_per_eu": 0, "matrix_instr_nonkdim": 16, "kpack": 1}
-    return OptFlags(
+    ret = OptFlags(
         block_m=block_m,
         block_n=block_n,
         block_k=block_k,
@@ -127,6 +125,9 @@ def make_default_opt_flags_amd(
         arch=None,
         target_kernel_kwargs=target_kernel_kwargs,
     )
+    # check constraints
+    assert all(getattr(ret, ck) == cv for ck, cv in constraints.items() if cv is not None), f"{ret} != {constraints}"
+    return ret
 
 def make_default_opt_flags_nvidia(
     out_dtype,
