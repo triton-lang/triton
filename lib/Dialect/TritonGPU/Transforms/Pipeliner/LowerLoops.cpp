@@ -648,10 +648,9 @@ scf::ForOp lowerLoads(scf::ForOp forOp, CoarseSchedule &schedule) {
 // LOWER TMA DESCRIPTORS
 /////////////////////////////
 
-LogicalResult
-allocTMABuffers(scf::ForOp forOp,
-                llvm::MapVector<Operation *, Value> &tmaBufferMapping,
-                int maxStage) {
+void allocTMABuffers(scf::ForOp forOp,
+                     llvm::MapVector<Operation *, Value> &tmaBufferMapping,
+                     int maxStage) {
   IRRewriter rewriter(forOp);
 
   // Create a multi-buffered allocation for each MakeTensorDescOp call in the
@@ -666,7 +665,6 @@ allocTMABuffers(scf::ForOp forOp,
         maxStage * ttng::TMA_SIZE_BYTES, ttng::TMA_ALIGN);
     tmaBufferMapping[op.getOperation()] = alloc;
   });
-  return success();
 }
 
 Value subviewTMADescriptor(OpBuilder &builder, Location loc, Value alloc,
@@ -769,9 +767,9 @@ scf::ForOp lowerTMADescriptors(scf::ForOp forOp, CoarseSchedule &schedule) {
       break;
     }
   }
-  if (failed(allocTMABuffers(forOp, tmaBufferMapping, maxStage))) {
-    llvm_unreachable("TMA pipelining failed");
-  }
+  allocTMABuffers(forOp, tmaBufferMapping, maxStage);
+  if (tmaBufferMapping.empty())
+    return forOp;
 
   IRRewriter builder(forOp);
   Location loc = forOp.getLoc();
