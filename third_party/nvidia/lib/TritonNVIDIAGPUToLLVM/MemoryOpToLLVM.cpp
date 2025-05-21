@@ -228,8 +228,9 @@ LogicalResult lowerDistributedToSharedStmatrix(
                      .second;
 
   // Elements per op
-  auto nVecElems = 1 << vec;
-  auto step = nVecElems * (32 / bitwidth);
+  auto nVecs = 1 << vec;
+  auto elemsPerVec = 32 / bitwidth;
+  auto step = nVecs * elemsPerVec;
   for (int i = 0; i < srcVals.size(); i += step) {
     auto regIdx = reps.apply({{kReg, i}, {kLane, 0}, {kWarp, 0}})[0].second;
     Value offset = b.xor_(regBase, b.i32_val(regIdx));
@@ -238,11 +239,11 @@ LogicalResult lowerDistributedToSharedStmatrix(
     // Pack into vector of i32
     SmallVector<Value> inputs;
     Type packedTy = vec_ty(llvmElemTy, 32 / bitwidth);
-    for (int j = 0; j < nVecElems; j++) {
+    for (int j = 0; j < nVecs; j++) {
       Value input = b.undef(packedTy);
-      for (int k = 0; k < 32 / bitwidth; k++) {
-        input = b.insert_element(packedTy, input, srcVals[i + j * vec + k],
-                                 b.i32_val(k));
+      for (int k = 0; k < elemsPerVec; k++) {
+        input = b.insert_element(
+            packedTy, input, srcVals[i + j * elemsPerVec + k], b.i32_val(k));
       }
       inputs.push_back(b.bitcast(input, i32_ty));
     }
