@@ -685,14 +685,26 @@ This doesn’t affect the memory.</p>
 </pre></div>
 </div>
 <p>This operation returns a new descriptor representing a subview of the buffer.
-It doesn’t affect the underlying memory. The subview can be rank-reduced.</p>
+It doesn’t affect the underlying memory.</p>
 <p>For example, suppose that</p>
 <ul class="simple">
 <li><p>the input shape is 2x4x16xf16,</p></li>
-<li><p>the output shape is 4x4xf16, and</p></li>
-<li><p>offsets = [1, 0, 4].</p></li>
+<li><p>the output shape is 4x16xf16, and</p></li>
+<li><p>offsets = [1, 0, 0].</p></li>
 </ul>
-<p>Then in Python syntax, the subview covers input[1][0:4][4:8].</p>
+<p>Then in Python syntax, the subview covers input[1].</p>
+<p>Just one dimension may be split (at most one non-zero offset).</p>
+<p>When the input shape and the output shape have different rank:
+Or the output shape is a tensor of 1D tensor of 1 element:</p>
+<ul class="simple">
+<li><p>The rank of the output must be 1D smaller than the input.</p></li>
+<li><p>We assume the input is split along the 0th dimension.</p></li>
+<li><p>The offset along the 0th dimension may be a runtime value.
+When the input and the output have the same rank:</p></li>
+<li><p>The offset must be a compile-time constant</p></li>
+<li><p>Larger or equal to the tile of the tensor (or zero)</p></li>
+<li><p>That does not split the input along the swizzling pattern (if any)</p></li>
+</ul>
 <p>Traits: <code class="docutils literal notranslate"><span class="pre">AlwaysSpeculatableImplTrait</span></code>, <code class="docutils literal notranslate"><span class="pre">MemDescViewTrait</span></code>, <code class="docutils literal notranslate"><span class="pre">VerifyTensorLayoutsTrait</span></code></p>
 <p>Interfaces: <code class="docutils literal notranslate"><span class="pre">ConditionallySpeculatable</span></code>, <code class="docutils literal notranslate"><span class="pre">NoMemoryEffect</span> <span class="pre">(MemoryEffectOpInterface)</span></code></p>
 <p>Effects: <code class="docutils literal notranslate"><span class="pre">MemoryEffects::Effect{}</span></code></p>

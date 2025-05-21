@@ -92,29 +92,34 @@
 <li class="toctree-l4"><a class="reference internal" href="#id8">Operands:</a></li>
 </ul>
 </li>
-<li class="toctree-l3"><a class="reference internal" href="#amdgpu-cond-barrier-triton-amdgpu-condbarrierop"><code class="docutils literal notranslate"><span class="pre">amdgpu.cond_barrier</span></code> (triton::amdgpu::CondBarrierOp)</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="#amdgpu-concat-triton-amdgpu-concatop"><code class="docutils literal notranslate"><span class="pre">amdgpu.concat</span></code> (triton::amdgpu::ConcatOp)</a><ul>
 <li class="toctree-l4"><a class="reference internal" href="#id9">Operands:</a></li>
+<li class="toctree-l4"><a class="reference internal" href="#id10">Results:</a></li>
+</ul>
+</li>
+<li class="toctree-l3"><a class="reference internal" href="#amdgpu-cond-barrier-triton-amdgpu-condbarrierop"><code class="docutils literal notranslate"><span class="pre">amdgpu.cond_barrier</span></code> (triton::amdgpu::CondBarrierOp)</a><ul>
+<li class="toctree-l4"><a class="reference internal" href="#id11">Operands:</a></li>
 </ul>
 </li>
 <li class="toctree-l3"><a class="reference internal" href="#amdgpu-extract-slice-triton-amdgpu-extractsliceop"><code class="docutils literal notranslate"><span class="pre">amdgpu.extract_slice</span></code> (triton::amdgpu::ExtractSliceOp)</a><ul>
-<li class="toctree-l4"><a class="reference internal" href="#id10">Attributes:</a></li>
-<li class="toctree-l4"><a class="reference internal" href="#id11">Operands:</a></li>
-<li class="toctree-l4"><a class="reference internal" href="#id12">Results:</a></li>
-</ul>
-</li>
-<li class="toctree-l3"><a class="reference internal" href="#amdgpu-in-thread-transpose-triton-amdgpu-inthreadtransposeop"><code class="docutils literal notranslate"><span class="pre">amdgpu.in_thread_transpose</span></code> (triton::amdgpu::InThreadTransposeOp)</a><ul>
+<li class="toctree-l4"><a class="reference internal" href="#id12">Attributes:</a></li>
 <li class="toctree-l4"><a class="reference internal" href="#id13">Operands:</a></li>
 <li class="toctree-l4"><a class="reference internal" href="#id14">Results:</a></li>
 </ul>
 </li>
+<li class="toctree-l3"><a class="reference internal" href="#amdgpu-in-thread-transpose-triton-amdgpu-inthreadtransposeop"><code class="docutils literal notranslate"><span class="pre">amdgpu.in_thread_transpose</span></code> (triton::amdgpu::InThreadTransposeOp)</a><ul>
+<li class="toctree-l4"><a class="reference internal" href="#id15">Operands:</a></li>
+<li class="toctree-l4"><a class="reference internal" href="#id16">Results:</a></li>
+</ul>
+</li>
 <li class="toctree-l3"><a class="reference internal" href="#amdgpu-instruction-sched-hint-triton-amdgpu-instructionschedhint"><code class="docutils literal notranslate"><span class="pre">amdgpu.instruction_sched_hint</span></code> (triton::amdgpu::InstructionSchedHint)</a><ul>
-<li class="toctree-l4"><a class="reference internal" href="#id15">Attributes:</a></li>
+<li class="toctree-l4"><a class="reference internal" href="#id17">Attributes:</a></li>
 </ul>
 </li>
 <li class="toctree-l3"><a class="reference internal" href="#amdgpu-upcast-mxfp-triton-amdgpu-upcastmxfpop"><code class="docutils literal notranslate"><span class="pre">amdgpu.upcast_mxfp</span></code> (triton::amdgpu::UpcastMXFPOp)</a><ul>
-<li class="toctree-l4"><a class="reference internal" href="#id16">Attributes:</a></li>
-<li class="toctree-l4"><a class="reference internal" href="#id17">Operands:</a></li>
-<li class="toctree-l4"><a class="reference internal" href="#id18">Results:</a></li>
+<li class="toctree-l4"><a class="reference internal" href="#id18">Attributes:</a></li>
+<li class="toctree-l4"><a class="reference internal" href="#id19">Operands:</a></li>
+<li class="toctree-l4"><a class="reference internal" href="#id20">Results:</a></li>
 </ul>
 </li>
 </ul>
@@ -427,6 +432,93 @@ the cache memory access.</p>
 </table>
 </section>
 </section>
+<section id="amdgpu-concat-triton-amdgpu-concatop">
+<h2><code class="docutils literal notranslate"><span class="pre">amdgpu.concat</span></code> (triton::amdgpu::ConcatOp)<a class="headerlink" href="#amdgpu-concat-triton-amdgpu-concatop" title="Link to this heading">¶</a></h2>
+<p><em>Concat operation</em></p>
+<p>Syntax:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span>operation ::= `amdgpu.concat` $sources attr-dict `:` type($sources) `-&gt;` type($result)
+</pre></div>
+</div>
+<p>The “concat” operation combines a list of source n-dimensional tensors into a single larger destination tensor.</p>
+<p>All source tensors must have the same shape, element type, and encoding.
+The concatenation dimension is inferred from the source and destination shapes provided by the user.
+For example, two tensors of shape 64x128 can produce a destination shape of 128x128,
+indicating concatenation along dimension 0; or 64x256, indicating concatenation along dimension 1.</p>
+<p>Generally, source tensors passed as op arguments can be arranged into the resulting shape in multiple ways.
+For example, given four tensors of shape 64x64:
+concat s0&lt;64x64&gt;, s1&lt;64x64&gt;, s2&lt;64x64&gt;, s3&lt;64x64&gt; -&gt; &lt;128x128&gt;</p>
+<p>They can be laid out in different configurations within the result tensor:</p>
+<ol class="arabic simple">
+<li><p>s0 s1     2) s0 s2
+s2 s3        s1 s3</p></li>
+</ol>
+<p>From a logical tensor perspective, the source tensors are treated as elements of a tensor of tensors.
+In other words, the 1-D array of input tensors is conceptually reshaped into an n-D grid.
+The semantics of this op assume a row-major order (or its n-D generalization),
+meaning the fastest-varying dimension is filled first, and the slowest-varying dimension is filled last.
+In the example above, this corresponds to layout 1).</p>
+<p>The source and destination tensors must have identical linear layouts at the CTA tile level.
+That is, all base vectors for input dimensions must match, except for the register input dimension.
+The register basis must align on the subset that defines the logical tensor shape of a single CTA tile.</p>
+<p>This ensures that the concatenation is a no-op, meaning no data rearrangement among threads is required
+to assemble the destination tensor with the given shape and layout.
+However, the order of CTA tiles within the layout does not need to match between source and destination layouts.
+It is the responsibility of the op’s lowering logic to handle this correctly.</p>
+<p>This op is designed to work on logical tensors directly, avoiding the need for complex layout reinterpretation or reshaping.
+For example, the <code class="docutils literal notranslate"><span class="pre">tt.join</span></code> operation only supports concatenation along the innermost dimension,
+and requires that the resulting innermost dimension provide 2 elements per thread, distributed across registers.
+In contrast, this <code class="docutils literal notranslate"><span class="pre">concat</span></code> op imposes no constraints on the concatenation dimension or the size of dimensions.</p>
+<ul class="simple">
+<li><p>sources: a list of the input tensors.</p></li>
+</ul>
+<p>Example 1:</p>
+<div class="highlight-mlir notranslate"><div class="highlight"><pre><span></span>#blocked = #ttg.blocked&lt;{sizePerThread = [1, 8],
+    threadsPerWarp = [8, 8], warpsPerCTA = [4, 1], order = [1, 0]}&gt;
+%0 = amdgpu.concat %arg0, %arg1: tensor&lt;32x64xf32, #blocked&gt;,tensor&lt;32x64xf32, #blocked&gt;,
+  -&gt; tensor&lt;64x64xf32, #blocked&gt;
+</pre></div>
+</div>
+<p>Example 2:</p>
+<div class="highlight-mlir notranslate"><div class="highlight"><pre><span></span>#src_layout = #ttg.linear&lt;{register=[[0, 1], [0, 2], [0, 8], [0, 16], [0, 64], [64, 0]], lane=[[1, 0], [2, 0], [4, 0], [8, 0], [16, 0], [0, 4]], warp=[[0, 32], [32, 0]], block=[]}&gt;
+#dst_layout = #ttg.linear&lt;{register=[[0, 1], [0, 2], [0, 8], [0, 16], [0, 64], [0, 128], [64, 0], [128, 0]], lane=[[1, 0], [2, 0], [4, 0], [8, 0], [16, 0], [0, 4]], warp=[[0, 32], [32, 0]], block=[]}&gt;
+%0 = amdgpu.concat %arg0, %arg1, %arg2, %arg3 : tensor&lt;128x128xf16, #src_layout&gt;, tensor&lt;128x128xf16, #src_layout&gt;, tensor&lt;128x128xf16, #src_layout&gt;,
+                                                tensor&lt;128x128xf16, #src_layout&gt; -&gt; tensor&lt;256x256xf16, #dst_layout&gt;
+</pre></div>
+</div>
+<p>Traits: <code class="docutils literal notranslate"><span class="pre">AlwaysSpeculatableImplTrait</span></code></p>
+<p>Interfaces: <code class="docutils literal notranslate"><span class="pre">ConditionallySpeculatable</span></code>, <code class="docutils literal notranslate"><span class="pre">NoMemoryEffect</span> <span class="pre">(MemoryEffectOpInterface)</span></code></p>
+<p>Effects: <code class="docutils literal notranslate"><span class="pre">MemoryEffects::Effect{}</span></code></p>
+<section id="id9">
+<h3>Operands:<a class="headerlink" href="#id9" title="Link to this heading">¶</a></h3>
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd"><th class="head text-center"><p>Operand</p></th>
+<th class="head"><p>Description</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td class="text-center"><p><code class="docutils literal notranslate"><span class="pre">sources</span></code></p></td>
+<td><p>variadic of ranked tensor of floating-point or integer or ptr values</p></td>
+</tr>
+</tbody>
+</table>
+</section>
+<section id="id10">
+<h3>Results:<a class="headerlink" href="#id10" title="Link to this heading">¶</a></h3>
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd"><th class="head text-center"><p>Result</p></th>
+<th class="head"><p>Description</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td class="text-center"><p><code class="docutils literal notranslate"><span class="pre">result</span></code></p></td>
+<td><p>ranked tensor of any type values</p></td>
+</tr>
+</tbody>
+</table>
+</section>
+</section>
 <section id="amdgpu-cond-barrier-triton-amdgpu-condbarrierop">
 <h2><code class="docutils literal notranslate"><span class="pre">amdgpu.cond_barrier</span></code> (triton::amdgpu::CondBarrierOp)<a class="headerlink" href="#amdgpu-cond-barrier-triton-amdgpu-condbarrierop" title="Link to this heading">¶</a></h2>
 <p><em>Conditionally set barriers to synchronize partial threads in a block</em></p>
@@ -441,8 +533,8 @@ converge at the end by calling condBarrierOp(true) with the remaining threads.
 Conceptually, this is similar to having an execution barrier inside an if statement.
 This op allows us to avoid blocking the whole block when suitable to help scheduling.
 NB. This doesn’t set any memory fence.</p>
-<section id="id9">
-<h3>Operands:<a class="headerlink" href="#id9" title="Link to this heading">¶</a></h3>
+<section id="id11">
+<h3>Operands:<a class="headerlink" href="#id11" title="Link to this heading">¶</a></h3>
 <table class="docutils align-default">
 <thead>
 <tr class="row-odd"><th class="head text-center"><p>Operand</p></th>
@@ -497,15 +589,15 @@ size of the slice is determined by the result type.</p>
 <p>Traits: <code class="docutils literal notranslate"><span class="pre">AlwaysSpeculatableImplTrait</span></code></p>
 <p>Interfaces: <code class="docutils literal notranslate"><span class="pre">ConditionallySpeculatable</span></code>, <code class="docutils literal notranslate"><span class="pre">NoMemoryEffect</span> <span class="pre">(MemoryEffectOpInterface)</span></code></p>
 <p>Effects: <code class="docutils literal notranslate"><span class="pre">MemoryEffects::Effect{}</span></code></p>
-<section id="id10">
-<h3>Attributes:<a class="headerlink" href="#id10" title="Link to this heading">¶</a></h3>
+<section id="id12">
+<h3>Attributes:<a class="headerlink" href="#id12" title="Link to this heading">¶</a></h3>
 <table>
 <tr><th>Attribute</th><th>MLIR Type</th><th>Description</th></tr>
 <tr><td><code>static_offsets</code></td><td>::mlir::DenseI64ArrayAttr</td><td>i64 dense array attribute</td></tr>
 </table>
 </section>
-<section id="id11">
-<h3>Operands:<a class="headerlink" href="#id11" title="Link to this heading">¶</a></h3>
+<section id="id13">
+<h3>Operands:<a class="headerlink" href="#id13" title="Link to this heading">¶</a></h3>
 <table class="docutils align-default">
 <thead>
 <tr class="row-odd"><th class="head text-center"><p>Operand</p></th>
@@ -519,8 +611,8 @@ size of the slice is determined by the result type.</p>
 </tbody>
 </table>
 </section>
-<section id="id12">
-<h3>Results:<a class="headerlink" href="#id12" title="Link to this heading">¶</a></h3>
+<section id="id14">
+<h3>Results:<a class="headerlink" href="#id14" title="Link to this heading">¶</a></h3>
 <table class="docutils align-default">
 <thead>
 <tr class="row-odd"><th class="head text-center"><p>Result</p></th>
@@ -558,8 +650,8 @@ to transpose within each thread after loading from HBM and before writing to sha
 <p>Traits: <code class="docutils literal notranslate"><span class="pre">AlwaysSpeculatableImplTrait</span></code></p>
 <p>Interfaces: <code class="docutils literal notranslate"><span class="pre">ConditionallySpeculatable</span></code>, <code class="docutils literal notranslate"><span class="pre">NoMemoryEffect</span> <span class="pre">(MemoryEffectOpInterface)</span></code></p>
 <p>Effects: <code class="docutils literal notranslate"><span class="pre">MemoryEffects::Effect{}</span></code></p>
-<section id="id13">
-<h3>Operands:<a class="headerlink" href="#id13" title="Link to this heading">¶</a></h3>
+<section id="id15">
+<h3>Operands:<a class="headerlink" href="#id15" title="Link to this heading">¶</a></h3>
 <table class="docutils align-default">
 <thead>
 <tr class="row-odd"><th class="head text-center"><p>Operand</p></th>
@@ -573,8 +665,8 @@ to transpose within each thread after loading from HBM and before writing to sha
 </tbody>
 </table>
 </section>
-<section id="id14">
-<h3>Results:<a class="headerlink" href="#id14" title="Link to this heading">¶</a></h3>
+<section id="id16">
+<h3>Results:<a class="headerlink" href="#id16" title="Link to this heading">¶</a></h3>
 <table class="docutils align-default">
 <thead>
 <tr class="row-odd"><th class="head text-center"><p>Result</p></th>
@@ -604,8 +696,8 @@ to mark intended scheduling regions. The hint ops are eventually lowered
 into LLVM AMDGPU instruction scheduling primitives, which are meant to control
 how different kinds of instructions (valu/mfma, global/shared memory, etc.) should
 interleave for better instruction level parallelism.</p>
-<section id="id15">
-<h3>Attributes:<a class="headerlink" href="#id15" title="Link to this heading">¶</a></h3>
+<section id="id17">
+<h3>Attributes:<a class="headerlink" href="#id17" title="Link to this heading">¶</a></h3>
 <table>
 <tr><th>Attribute</th><th>MLIR Type</th><th>Description</th></tr>
 <tr><td><code>variant</code></td><td>::mlir::triton::amdgpu::SchedHintAttr</td><td>Instruction Scheduling Hints for AMD GPUs</td></tr>
@@ -654,16 +746,16 @@ https://www.opencompute.org/documents/ocp-microscaling-formats-mx-v1-0-spec-fina
 <p>Traits: <code class="docutils literal notranslate"><span class="pre">AlwaysSpeculatableImplTrait</span></code></p>
 <p>Interfaces: <code class="docutils literal notranslate"><span class="pre">ConditionallySpeculatable</span></code>, <code class="docutils literal notranslate"><span class="pre">NoMemoryEffect</span> <span class="pre">(MemoryEffectOpInterface)</span></code></p>
 <p>Effects: <code class="docutils literal notranslate"><span class="pre">MemoryEffects::Effect{}</span></code></p>
-<section id="id16">
-<h3>Attributes:<a class="headerlink" href="#id16" title="Link to this heading">¶</a></h3>
+<section id="id18">
+<h3>Attributes:<a class="headerlink" href="#id18" title="Link to this heading">¶</a></h3>
 <table>
 <tr><th>Attribute</th><th>MLIR Type</th><th>Description</th></tr>
 <tr><td><code>fp_type</code></td><td>::mlir::triton::ScaleDotElemTypeAttr</td><td>allowed 32-bit signless integer cases: 0, 1, 2, 3, 4, 5, 6</td></tr>
 <tr><td><code>fastMath</code></td><td>::mlir::BoolAttr</td><td>bool attribute</td></tr>
 </table>
 </section>
-<section id="id17">
-<h3>Operands:<a class="headerlink" href="#id17" title="Link to this heading">¶</a></h3>
+<section id="id19">
+<h3>Operands:<a class="headerlink" href="#id19" title="Link to this heading">¶</a></h3>
 <table class="docutils align-default">
 <thead>
 <tr class="row-odd"><th class="head text-center"><p>Operand</p></th>
@@ -680,8 +772,8 @@ https://www.opencompute.org/documents/ocp-microscaling-formats-mx-v1-0-spec-fina
 </tbody>
 </table>
 </section>
-<section id="id18">
-<h3>Results:<a class="headerlink" href="#id18" title="Link to this heading">¶</a></h3>
+<section id="id20">
+<h3>Results:<a class="headerlink" href="#id20" title="Link to this heading">¶</a></h3>
 <table class="docutils align-default">
 <thead>
 <tr class="row-odd"><th class="head text-center"><p>Result</p></th>
