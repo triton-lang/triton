@@ -93,11 +93,13 @@ def generate_input(shape, dtype):
     return torch.randn(shape, dtype=dtype, device="cuda")
 
 
-def verify_matmul(A, B, C):
+def verify_matmul(A, B, C, bias=None):
     cublas_workspace = torch.empty(32 * 1024 * 1024, dtype=torch.uint8, device="cuda")
     cublas = nvidia.cublas.CublasLt(cublas_workspace)
     C_ref = torch.empty(C.shape, dtype=C.dtype, device="cuda")
     cublas.matmul(A, B, C_ref)
+    if bias is not None:
+        C_ref += bias
     ERROR_TOLERANCE = 1e-3 if C.dtype == torch.float16 else 1e-2
     torch.testing.assert_close(
         C_ref.to(torch.float16),

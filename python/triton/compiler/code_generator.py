@@ -11,6 +11,7 @@ from typing import Any, Callable, Dict, Optional, Tuple, Type, Union, Iterable, 
 from .. import language
 from .._C.libtriton import ir
 from ..language import constexpr, semantic, str_to_ty, tensor
+from ..language.auto_ws import Group
 from ..language.core import _unwrap_if_constexpr, base_value, base_type
 from ..runtime.jit import get_jit_fn_file_line
 # ideally we wouldn't need any runtime component
@@ -49,7 +50,7 @@ def _is_triton_tensor(o: Any) -> bool:
 
 
 def _is_constexpr(o: Any) -> bool:
-    return o is None or isinstance(o, (constexpr, language.core.dtype))
+    return o is None or isinstance(o, (constexpr, language.core.dtype, Group))
 
 
 def _is_non_scalar_tensor(o: Any) -> bool:
@@ -276,9 +277,12 @@ class CodeGenerator(ast.NodeVisitor):
 
     def __init__(self, context, prototype, gscope, function_name, jit_fn: JITFunction, options, codegen_fns, module_map,
                  module=None, is_kernel=False, function_types: Optional[Dict] = None, noinline=False,
-                 file_name: Optional[str] = None, begin_line=0):
+                 file_name: Optional[str] = None, begin_line=0, groups=None):
         self.context = context
         self.builder = ir.builder(context)
+        if groups is not None:
+            for group in groups:
+                self.builder.enter_group(group)
         self.file_name = file_name
         # node.lineno starts from 1, so we need to subtract 1
         self.begin_line = begin_line - 1
@@ -895,10 +899,12 @@ class CodeGenerator(ast.NodeVisitor):
     def visit_With(self, node):
         assert len(node.items) == 1
         context = node.items[0].context_expr
-
         context = self.visit(context)
+        context = _unwrap_if_constexpr(context)
+        context.set_builder(self.builder)
         with context:
             self.visit_compound_statement(node.body)
+        context.clear_builder()
 
     def visit_While(self, node):
         with enter_sub_region(self) as sr:
@@ -1193,7 +1199,7 @@ class CodeGenerator(ast.NodeVisitor):
             file_name, begin_line = get_jit_fn_file_line(fn)
             arg_types = [
                 language.core.constexpr if arg is None or isinstance(arg,
-                                                                     (bool, int, language.core.dtype)) else arg.type
+                                                                     (bool, int, language.core.dtype, Group)) else arg.type
                 for arg in args
             ]
             prototype = ASTFunction([], arg_types, args_cst, dict())
@@ -1201,7 +1207,7 @@ class CodeGenerator(ast.NodeVisitor):
                                       function_name=fn_name, function_types=self.function_ret_types,
                                       noinline=fn.noinline, file_name=file_name, begin_line=begin_line,
                                       options=self.builder.options, codegen_fns=self.builder.codegen_fns,
-                                      module_map=self.builder.module_map)
+                                      module_map=self.builder.module_map, groups=self.builder.get_groups())
             try:
                 generator.visit(fn.parse())
             except Exception as e:

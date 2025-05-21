@@ -33,6 +33,20 @@ std::unique_ptr<Pass> createNVWSPropagateGroupsPass();
 std::unique_ptr<Pass> createNVWSLowerWarpGroupPass();
 std::unique_ptr<Pass> createNVWSLowerArefPass();
 
+std::unique_ptr<Pass> createNVWSArefCanonicalizePass();
+std::unique_ptr<Pass> createNVWSArefInsertionPass();
+std::unique_ptr<Pass> createNVWSArefCodeSplitPass();
+std::unique_ptr<Pass> createNVWSArefCopyEliminationPass();
+std::unique_ptr<Pass> createNVWSArefCopyLoweringPass();
+std::unique_ptr<Pass> createNVWSArefOptimizePass();
+std::unique_ptr<Pass> createNVWSArefAsyncOpsPass();
+std::unique_ptr<Pass> createNVWSArefIndexPass();
+std::unique_ptr<Pass> createNVWSArefDepthPass();
+
+// Generate the pass class declarations.
+#define GEN_PASS_DECL
+#include "nvidia/include/Dialect/NVWS/Transforms/Passes.h.inc"
+
 /// Generate the code for registering passes.
 #define GEN_PASS_REGISTRATION
 #include "nvidia/include/Dialect/NVWS/Transforms/Passes.h.inc"

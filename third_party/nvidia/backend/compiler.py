@@ -284,14 +284,29 @@ class CUDABackend(BaseBackend):
             if opt.enable_warp_specialization:
                 passes.ttgpuir.add_optimize_accumulator_init(pm)
                 passes.ttgpuir.add_hoist_tmem_alloc(pm)
+                nvidia.passes.ttnvgpuir.add_promote_lhs_to_tmem(pm)
                 passes.common.add_canonicalizer(pm)
                 nvidia.passes.nvws.add_assign_groups(pm)
                 nvidia.passes.nvws.add_propagate_groups(pm)
-                passes.ttgpuir.add_split_warp_group_loops(pm, opt.num_stages, opt.mma_depth)
+
+                nvidia.passes.nvws.add_aref_canonicalize(pm)
+                nvidia.passes.nvws.add_aref_insertion(pm)
+                nvidia.passes.nvws.add_aref_code_split(pm)
+                nvidia.passes.nvws.add_aref_copy_elimination(pm)
+                if os.environ.get("DISABLE_AREF_COPY_LOWERING", "0") != "1":
+                    nvidia.passes.nvws.add_aref_copy_lowering(pm)
+                nvidia.passes.nvws.add_aref_async_ops(pm)
+                nvidia.passes.nvws.add_aref_optimize(pm)
+                nvidia.passes.nvws.add_aref_index(pm)
+                nvidia.passes.nvws.add_aref_depth(pm, opt.num_stages, opt.mma_depth)
+
                 if opt.math_wg_pipe:
-                    # some cleanup after wg parititioning and aref generation
-                    passes.common.add_canonicalizer(pm)
-                    passes.ttgpuir.add_fmha_math_loop_pipeline(pm)
+                    if capability // 10 == 9:
+                        # some cleanup after wg parititioning and aref generation
+                        passes.common.add_canonicalizer(pm)
+                        passes.ttgpuir.add_fmha_math_loop_pipeline(pm)
+                    else:
+                        print("WARNING: fmha_math_loop_pipeline is not supported on this architecture")
         if capability // 10 in [8, 9]:
             passes.ttgpuir.add_fuse_nested_loops(pm)
             passes.common.add_canonicalizer(pm)
@@ -315,7 +330,9 @@ class CUDABackend(BaseBackend):
                 passes.ttgpuir.add_warp_specialize(pm, opt.num_stages)
                 passes.ttgpuir.add_pipeline(pm, opt.num_stages, dump_enabled)
             passes.ttgpuir.add_combine_tensor_select_and_if(pm)
-            nvidia.passes.ttnvgpuir.add_promote_lhs_to_tmem(pm)
+            if not opt.enable_warp_specialization:
+                nvidia.passes.ttnvgpuir.add_promote_lhs_to_tmem(pm)
+            nvidia.passes.ttnvgpuir.add_remove_tmem_tokens(pm)
             passes.common.add_canonicalizer(pm)
         else:
             passes.ttir.add_triton_licm(pm)

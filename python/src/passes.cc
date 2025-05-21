@@ -50,8 +50,6 @@ void init_triton_passes_ttir(py::module &&m) {
 
 void init_triton_passes_ttgpuir(py::module &&m) {
   using namespace mlir::triton::gpu;
-  ADD_PASS_OPTION_WRAPPER_2("add_split_warp_group_loops",
-                            createTritonGPUSplitWarpGroupLoops, int, int);
   ADD_PASS_WRAPPER_0("add_fmha_math_loop_pipeline",
                      createTritonGPUFMHAMathLoopPipeline);
   ADD_PASS_WRAPPER_0("add_coalesce", createTritonGPUCoalesce);

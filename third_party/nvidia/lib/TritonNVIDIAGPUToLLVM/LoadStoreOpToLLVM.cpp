@@ -142,6 +142,16 @@ struct LoadStoreConversionBase {
     auto tensorTy = dyn_cast<RankedTensorType>(ptr.getType());
     if (!tensorTy)
       return 1;
+
+    if (auto blockArg = dyn_cast<BlockArgument>(ptr)) {
+      // getContiguity only works when the input has AddPtr done to it
+      for (auto user : blockArg.getUsers()) {
+        if (auto addPtr = dyn_cast<AddPtrOp>(user)) {
+          return axisAnalysisPass.getContiguity(addPtr.getResult());
+        }
+      }
+    }
+
     return axisAnalysisPass.getContiguity(ptr);
   }
 

@@ -1,4 +1,5 @@
 #include "mlir/Dialect/LLVMIR/NVVMDialect.h"
+#include "mlir/Dialect/UB/IR/UBOps.h"
 #include "mlir/IR/AttrTypeSubElements.h"
 #include "mlir/IR/MLIRContext.h"
 #include "mlir/Support/LogicalResult.h"
@@ -144,75 +145,81 @@ Value getEmptyBarrierAt(MLIRContext *ctx, Location loc,
                         PatternRewriter &rewriter, ArefValue aref,
                         Value arefIdx) {
   // stage= arefIdx % depth
-  auto stage = rewriter.create<arith::RemSIOp>(
+  Value stage;
+  auto remsi = rewriter.create<arith::RemSIOp>(
       loc, arefIdx, rewriter.create<arith::ConstantIntOp>(loc, aref.depth, 32));
-  stage->setAttr("empty_mbar", rewriter.getUnitAttr());
+  remsi->setAttr("empty_mbar", rewriter.getUnitAttr());
+  stage = remsi;
+
   return getBarrierAt(ctx, loc, rewriter, aref.emptyMbars, stage);
 }
 
 Value getFullBarrierAt(MLIRContext *ctx, Location loc,
                        PatternRewriter &rewriter, ArefValue aref,
                        Value arefIdx) {
-  auto stage = rewriter.create<arith::RemSIOp>(
+  Value stage;
+  auto remsi = rewriter.create<arith::RemSIOp>(
       loc, arefIdx, rewriter.create<arith::ConstantIntOp>(loc, aref.depth, 32));
-  stage->setAttr("full_mbar", rewriter.getUnitAttr());
+  remsi->setAttr("full_mbar", rewriter.getUnitAttr());
+  stage = remsi;
   return getBarrierAt(ctx, loc, rewriter, aref.fullMbars, stage);
 }
 
 std::pair<int, int> getArrivalCount(ArefCreateOp op) {
-  auto mod = op->getParentOfType<ModuleOp>();
-  auto target = mod->getAttrOfType<StringAttr>(AttrTargetName);
-  bool isMMAv3 = target == "cuda:90";
-  bool isMMAv5 = target == "cuda:100";
-  assert(isMMAv3 || isMMAv5);
-  assert(!isMMAv3 || !isMMAv5);
-
   std::optional<int> producerArrivalCount, consumerArrivalCount;
-  auto setProducerArrivalCount = [&](int count) {
-    if (producerArrivalCount && *producerArrivalCount != count)
-      llvm_unreachable("inconsistent producer arrival count");
-    producerArrivalCount = count;
-  };
-  auto setConsumerArrivalCount = [&](int count) {
-    if (consumerArrivalCount && *consumerArrivalCount != count)
-      llvm_unreachable("inconsistent consumer arrival count");
-    consumerArrivalCount = count;
-  };
+
   for (auto user : op->getUsers()) {
     auto wgOp = user->getParentOfType<WarpGroupOp>();
     auto numWarps = wgOp.getNumWarps();
+
     if (auto putExitOp = dyn_cast<ArefPutExitOp>(user)) {
+      int count = 0;
       for (auto prod : putExitOp.getProducers()) {
         auto kind = dyn_cast<ArefProducerAttr>(prod).getValue();
         switch (kind) {
         case ArefProducer::UMMA:
         case ArefProducer::TMALDG:
-          setProducerArrivalCount(1);
+          count += 1;
           break;
         case ArefProducer::LDGSTS:
         case ArefProducer::STS:
         case ArefProducer::STTM:
-          setProducerArrivalCount(numWarps * 32);
+          count += numWarps * 32;
           break;
         default:
           llvm_unreachable("unknown producer kind");
         }
       }
+
+      if (producerArrivalCount) {
+        assert(*producerArrivalCount == count &&
+               "inconsistent producer arrival count");
+      } else {
+        producerArrivalCount = count;
+      }
     } else if (auto getExitOp = dyn_cast<ArefGetExitOp>(user)) {
+      int count = 0;
       for (auto consumer : getExitOp.getConsumers()) {
-        auto kind = cast<ArefConsumerAttr>(consumer).getValue();
+        auto kind = dyn_cast<ArefConsumerAttr>(consumer).getValue();
         switch (kind) {
         case ArefConsumer::UMMA:
-          setConsumerArrivalCount(1);
+          count += 1;
           break;
         case ArefConsumer::LDS:
         case ArefConsumer::WGMMA:
         case ArefConsumer::LDTM:
-          setConsumerArrivalCount(numWarps * 32);
+          count += numWarps * 32;
           break;
         default:
           llvm_unreachable("unknown consumer kind");
         }
+      }
+
+      if (consumerArrivalCount) {
+        assert(*consumerArrivalCount == count &&
+               "inconsistent consumer arrival count");
+      } else {
+        consumerArrivalCount = count;
       }
     }
   }
@@ -286,439 +293,81 @@ SmallVector<Value> getSubViews(ArefValue arefVal, Value stage, Location loc,
   return views;
 }
 
-struct LastPhaseValue {
-  Value put = {};
-  Value get = {};
-};
-using ArefLastPhaseMap = llvm::MapVector<Value /*aref*/, LastPhaseValue>;
 
-struct ArefFirstUse {
-  ArefPutEnterOp putOp = {};
-  ArefGetEnterOp getOp = {};
-};
-using ArefFirstUseMap = llvm::MapVector<Value /*aref*/, ArefFirstUse>;
-
-ArefFirstUseMap AnalyzeArefUseInBlock(Block *block, ArefFirstUseMap arefUse) {
-  for (auto &op : *block) {
-    if (auto putEnterOp = dyn_cast<ArefPutEnterOp>(op)) {
-      if (!putEnterOp.getPhase()) {
-        auto aref = putEnterOp.getAref();
-        if (!arefUse[aref].putOp)
-          arefUse[aref].putOp = putEnterOp;
-      }
-    } else if (auto getEnterOp = dyn_cast<ArefGetEnterOp>(op)) {
-      auto aref = getEnterOp.getAref();
-      if (!getEnterOp.getPhase()) {
-        if (!arefUse[aref].getOp)
-          arefUse[aref].getOp = getEnterOp;
-      }
-    } else if (auto forOp = dyn_cast<scf::ForOp>(op)) {
-      // recursive visit for-op body to gather nested uses of arefs in put/get
-      auto &region = forOp.getRegion();
-      auto block = &region.getBlocks().front();
-
-      auto arefUseBlock = AnalyzeArefUseInBlock(block, ArefFirstUseMap{});
-      for (auto [aref, useMap] : arefUseBlock) {
-        if (!arefUse[aref].putOp)
-          arefUse[aref].putOp = useMap.putOp;
-        if (!arefUse[aref].getOp)
-          arefUse[aref].getOp = useMap.getOp;
-      }
-    } else if (auto ifOp = dyn_cast<scf::IfOp>(op)) {
-      // recursive visit if-op then/else body to gather nested uses of arefs
-      auto &thenRegion = ifOp.getThenRegion();
-      auto thenBlock = &thenRegion.getBlocks().front();
-      auto thenArefUse = AnalyzeArefUseInBlock(thenBlock, ArefFirstUseMap{});
-      for (auto [aref, useMap] : thenArefUse) {
-        if (!arefUse[aref].putOp)
-          arefUse[aref].putOp = useMap.putOp;
-        if (!arefUse[aref].getOp)
-          arefUse[aref].getOp = useMap.getOp;
-      }
-
-      if (ifOp.elseBlock()) {
-        auto &elseRegion = ifOp.getElseRegion();
-        auto elseBlock = &elseRegion.getBlocks().front();
-        auto elseArefUse = AnalyzeArefUseInBlock(elseBlock, ArefFirstUseMap{});
-        for (auto [aref, useMap] : elseArefUse) {
-          if (!arefUse[aref].putOp)
-            arefUse[aref].putOp = useMap.putOp;
-          if (!arefUse[aref].getOp)
-            arefUse[aref].getOp = useMap.getOp;
-        }
-      }
-    }
-  }
-  return arefUse;
-}
-
-ArefLastPhaseMap arefPhaseAssignmentInBlock(Block *inpBlock,
-                                            ArefLastPhaseMap arefLastPhase,
-                                            OpBuilder &builder) {
-  auto getNextPhase = [&](Operation *op, Value phase) {
-    auto loc = op->getLoc();
-    // Phase calculation assumes arefIdx increments by one with each use of
-    // ArefPutEnterOp or ArefGetEnterOp, currently handled in
-    // SplitWarpGroupLoops. Future ArefDepth pass will compute both arefIdx
-    // and phase  simultaneously, as they are related.
-    auto nextPhase = builder.create<arith::AddIOp>(
-        loc, phase, builder.create<arith::ConstantIntOp>(loc, 1, 32));
-    nextPhase->setAttr("next_phase", builder.getUnitAttr());
-    return nextPhase;
-  };
-
-  SmallVector<Operation *> staleOps;
-  for (auto &op : *inpBlock) {
-    if (auto putEnterOp = dyn_cast<ArefPutEnterOp>(op)) {
-      if (!putEnterOp.getPhase()) {
-        assert(arefLastPhase.contains(putEnterOp.getAref()));
-        auto &phase = arefLastPhase[putEnterOp.getAref()].put;
-        putEnterOp.getPhaseMutable().assign(phase);
-        builder.setInsertionPointAfter(putEnterOp);
-        phase = getNextPhase(putEnterOp, phase);
-      }
-    } else if (auto getEnterOp = dyn_cast<ArefGetEnterOp>(op)) {
-      if (!getEnterOp.getPhase()) {
-        assert(arefLastPhase.contains(getEnterOp.getAref()));
-        auto &phase = arefLastPhase[getEnterOp.getAref()].get;
-        getEnterOp.getPhaseMutable().assign(phase);
-        builder.setInsertionPointAfter(getEnterOp);
-        phase = getNextPhase(getEnterOp, phase);
-      }
-    } else if (auto forOp = dyn_cast<scf::ForOp>(op)) {
-      auto arefUseInBlock = AnalyzeArefUseInBlock(
-          &forOp.getRegion().getBlocks().front(), ArefFirstUseMap{});
-      if (arefUseInBlock.empty())
-        continue;
-
-      // there are arefs used in the loop-body, recrusively assigned phase
-      // there
-
-      SmallVector<Value> initArgs(forOp.getInitArgs().begin(),
-                                  forOp.getInitArgs().end());
-      // add initial phases to the loop
-      SmallVector<Value *> arefLastPhaseArgs;
-      for (auto [aref, useMap] : arefUseInBlock) {
-        if (useMap.putOp) {
-          initArgs.push_back(arefLastPhase[aref].put);
-          arefLastPhaseArgs.push_back(&arefLastPhase[aref].put);
-        }
-        if (useMap.getOp) {
-          initArgs.push_back(arefLastPhase[aref].get);
-          arefLastPhaseArgs.push_back(&arefLastPhase[aref].get);
-        }
-      }
-
-      // create new forOp
-      builder.setInsertionPoint(forOp);
-      scf::ForOp newForOp = builder.create<mlir::scf::ForOp>(
-          forOp.getLoc(), forOp.getLowerBound(), forOp.getUpperBound(),
-          forOp.getStep(), initArgs);
-
-      // update uses
-      for (auto [oldArg, newArg] :
-           llvm::zip(forOp.getResults(), newForOp.getResults())) {
-        oldArg.replaceAllUsesWith(newArg);
-      }
-      // move loop body
-      newForOp.getRegion().takeBody(forOp.getRegion());
-
-      // update the last phase value to use inside the loop body
-      int nOld = forOp.getResults().size();
-      int nNew = newForOp.getResults().size();
-      int n = nNew - nOld;
-      assert(n == arefLastPhaseArgs.size());
-      for (int i = 0; i < n; ++i) {
-        auto val = newForOp.getBody()->addArgument(
-            newForOp.getResult(nOld + i).getType(),
-            newForOp.getResult(nOld + i).getLoc());
-        *arefLastPhaseArgs[i] = val;
-      }
-
-      // assign phases in the loop body
-      auto arefLastPhaseInBlock = arefPhaseAssignmentInBlock(
-          &newForOp.getRegion().getBlocks().front(), arefLastPhase, builder);
-
-      // update yieldOp to return new phases
-      auto yieldOp =
-          mlir::cast<scf::YieldOp>(newForOp.getBody()->getTerminator());
-      SmallVector<Value> newYieldVals(yieldOp.getOperands().begin(),
-                                      yieldOp.getOperands().end());
-      for (auto [aref, useMap] : arefUseInBlock) {
-        if (useMap.putOp)
-          newYieldVals.push_back(arefLastPhaseInBlock[aref].put);
-        if (useMap.getOp)
-          newYieldVals.push_back(arefLastPhaseInBlock[aref].get);
-      }
-      builder.setInsertionPoint(yieldOp);
-      builder.create<scf::YieldOp>(yieldOp.getLoc(), newYieldVals);
-      yieldOp.erase();
-
-      // finaly, update phases with results from newForOp
-      for (int i = 0; i < n; ++i) {
-        *arefLastPhaseArgs[i] = newForOp.getResults()[nOld + i];
-      }
-
-      staleOps.push_back(forOp);
-    } else if (auto ifOp = dyn_cast<scf::IfOp>(op)) {
-      // do the same with if-then/else blocks
-      auto arefUseInThenBlock =
-          AnalyzeArefUseInBlock(ifOp.thenBlock(), ArefFirstUseMap{});
-      if (arefUseInThenBlock.empty())
-        continue;
-
-      bool hasElseBlock = ifOp.elseBlock();
-
-      auto arefUseInElseBlock =
-          ifOp.elseBlock()
-              ? AnalyzeArefUseInBlock(ifOp.elseBlock(), ArefFirstUseMap{})
-              : ArefFirstUseMap{};
-      ArefFirstUseMap arefUseInIfOp = arefUseInThenBlock;
-
-      for (auto [aref, useMap] : arefUseInElseBlock) {
-        if (!arefUseInIfOp[aref].putOp)
-          arefUseInIfOp[aref].putOp = useMap.putOp;
-        if (!arefUseInIfOp[aref].getOp)
-          arefUseInIfOp[aref].getOp = useMap.getOp;
-      }
-
-      SmallVector<Type, 4> newIfResultTypes(ifOp.getResultTypes().begin(),
-                                            ifOp.getResultTypes().end());
-      SmallVector<Value *> arefLastPhaseArgs;
-      for (auto [aref, useMap] : arefUseInIfOp) {
-        if (useMap.putOp) {
-          arefLastPhaseArgs.push_back(&arefLastPhase[aref].put);
-          newIfResultTypes.push_back(arefLastPhase[aref].put.getType());
-        }
-        if (useMap.getOp) {
-          arefLastPhaseArgs.push_back(&arefLastPhase[aref].get);
-          newIfResultTypes.push_back(arefLastPhase[aref].get.getType());
-        }
-      }
-
-      builder.setInsertionPoint(ifOp);
-      auto newIfOp = builder.create<scf::IfOp>(ifOp.getLoc(), newIfResultTypes,
-                                               ifOp.getCondition(),
-                                               /*withElseRegion=*/true);
-
-      int nOld = ifOp.getResults().size();
-      int nNew = newIfOp.getResults().size();
-      int n = nNew - nOld;
-      assert(n == arefLastPhaseArgs.size());
-
-      for (auto [oldArg, newArg] :
-           llvm::zip(ifOp.getResults(), newIfOp.getResults())) {
-        oldArg.replaceAllUsesWith(newArg);
-      }
-      newIfOp.getThenRegion().takeBody(ifOp.getThenRegion());
-      if (ifOp.elseBlock())
-        newIfOp.getElseRegion().takeBody(ifOp.getElseRegion());
-
-      auto arefLastPhaseInThenBlock = arefPhaseAssignmentInBlock(
-          newIfOp.thenBlock(), arefLastPhase, builder);
-      auto arefLastPhaseInElseBlock =
-          ifOp.elseBlock() ? arefPhaseAssignmentInBlock(newIfOp.elseBlock(),
-                                                        arefLastPhase, builder)
-                           : arefLastPhase;
-
-      // update yieldOp to return new phases
-      {
-        auto thenYieldOp =
-            mlir::cast<scf::YieldOp>(newIfOp.thenBlock()->getTerminator());
-        SmallVector<Value> newThenYieldVals(thenYieldOp.getOperands().begin(),
-                                            thenYieldOp.getOperands().end());
-        for (auto [aref, useMap] : arefUseInIfOp) {
-          if (useMap.putOp)
-            newThenYieldVals.push_back(arefLastPhaseInThenBlock[aref].put);
-          if (useMap.getOp)
-            newThenYieldVals.push_back(arefLastPhaseInThenBlock[aref].get);
-        }
-        builder.setInsertionPoint(thenYieldOp);
-        builder.create<scf::YieldOp>(thenYieldOp.getLoc(), newThenYieldVals);
-        thenYieldOp.erase();
-      }
-      if (hasElseBlock) {
-        auto elseYieldOp =
-            mlir::cast<scf::YieldOp>(newIfOp.elseBlock()->getTerminator());
-        SmallVector<Value> newElseYieldVals(elseYieldOp.getOperands().begin(),
-                                            elseYieldOp.getOperands().end());
-        for (auto [aref, useMap] : arefUseInIfOp) {
-          if (useMap.putOp) {
-            newElseYieldVals.push_back(arefLastPhaseInElseBlock[aref].put);
-          }
-          if (useMap.getOp)
-            newElseYieldVals.push_back(arefLastPhaseInElseBlock[aref].get);
-        }
-        builder.setInsertionPoint(elseYieldOp);
-        builder.create<scf::YieldOp>(elseYieldOp.getLoc(), newElseYieldVals);
-        elseYieldOp.erase();
-      } else {
-        // if there is no elseBlock in ifOp, we still need to create one
-        // because we return updated phase values
-        SmallVector<Value> newElseYieldVals;
-        for (auto [aref, useMap] : arefUseInIfOp) {
-          if (useMap.putOp) {
-            newElseYieldVals.push_back(arefLastPhaseInElseBlock[aref].put);
-          }
-          if (useMap.getOp)
-            newElseYieldVals.push_back(arefLastPhaseInElseBlock[aref].get);
-        }
-        // sanity check, if we have nothing to return, we should rewrite ifOp
-        assert(!newElseYieldVals.empty());
-        OpBuilder builder = OpBuilder::atBlockEnd(newIfOp.elseBlock());
-        builder.create<scf::YieldOp>(newIfOp.getLoc(), newElseYieldVals);
-      }
-
-      for (int i = 0; i < n; ++i) {
-        // update arefCounter vlaues with results from newForOp
-        *arefLastPhaseArgs[i] = newIfOp.getResults()[nOld + i];
-      }
-
-      staleOps.push_back(ifOp);
-    }
-  }
-  for (auto op : staleOps)
-    op->erase();
-  return arefLastPhase;
-}
-
-LogicalResult arefPhaseAssignment(ModuleOp mod) {
-  // TODO: Verify that if a put/get already has a phase assigned, then all
-  // put/get operations associated with the same aref must have a phase
-  // assigned. Mixing and matching is not permitted.
-  auto funcOp = getFuncOp(mod);
-  OpBuilder builder(funcOp);
-  SmallVector<WarpGroupOp> wgOps;
-  funcOp.walk([&](WarpGroupOp wgOp) { wgOps.push_back(wgOp); });
-
-  // Verify that if a put/get already has a phase assigned, then all
-  // put/get operations associated with the same aref must have a phase
-  // assigned. Mixing and matching is not permitted.
-  for (auto arefOp : funcOp.getOps<ArefCreateOp>()) {
-    bool putHasPhase = false, getHasPhase = false;
-    for (auto uses : arefOp->getUsers()) {
-      if (auto putEnterOp = dyn_cast<ArefPutEnterOp>(uses))
-        putHasPhase |= (bool)putEnterOp.getPhase();
-      else if (auto getEnterOp = dyn_cast<ArefGetEnterOp>(uses))
-        getHasPhase |= (bool)getEnterOp.getPhase();
-    }
-
-    for (auto uses : arefOp->getUsers()) {
-      if (auto putEnterOp = dyn_cast<ArefPutEnterOp>(uses)) {
-        assert(putHasPhase == (bool)putEnterOp.getPhase());
-      } else if (auto getEnterOp = dyn_cast<ArefGetEnterOp>(uses)) {
-        assert(getHasPhase == (bool)getEnterOp.getPhase());
-      }
-    }
-
-    // If phase needs to be assigned, verify that all puts/get are in the same
-    // warp-group. We do not currently support if some put/get in one
-    // warp-group and others are in some other.
-    WarpGroupOp wgPut, wgGet;
-    for (auto uses : arefOp->getUsers()) {
-      if (auto putEnterOp = dyn_cast<ArefPutEnterOp>(uses)) {
-        if (!putEnterOp.getPhase()) {
-          if (wgPut)
-            assert(wgPut == putEnterOp->getParentOfType<WarpGroupOp>());
-          else
-            wgPut = putEnterOp->getParentOfType<WarpGroupOp>();
-        }
-      } else if (auto getEnterOp = dyn_cast<ArefGetEnterOp>(uses)) {
-        if (!getEnterOp.getPhase()) {
-          if (wgGet)
-            assert(wgGet == getEnterOp->getParentOfType<WarpGroupOp>());
-          else
-            wgGet = getEnterOp->getParentOfType<WarpGroupOp>();
-        }
-      }
-    }
-  }
-
-  // gather all arefUses
-  ArefFirstUseMap arefUse;
-  for (auto wgOp : wgOps) {
-    auto block = &wgOp.getRegions().front()->getBlocks().front();
-    auto arefUseBlock = AnalyzeArefUseInBlock(block, ArefFirstUseMap{});
-    for (auto [aref, useMap] : arefUseBlock) {
-      if (!arefUse[aref].putOp)
-        arefUse[aref].putOp = useMap.putOp;
-      if (!arefUse[aref].getOp)
-        arefUse[aref].getOp = useMap.getOp;
-    }
-  }
-
-  // initialize put/get phases
-  ArefLastPhaseMap arefLastPhase;
-  for (auto [aref, useMap] : arefUse) {
-    builder.setInsertionPointAfter(aref.getDefiningOp());
-    arefLastPhase[aref].put =
-        builder.create<arith::ConstantIntOp>(aref.getLoc(), 0, 32);
-    arefLastPhase[aref].get =
-        builder.create<arith::ConstantIntOp>(aref.getLoc(), 0, 32);
-  }
-
-  for (auto wgOp : wgOps) {
-    auto block = &wgOp.getRegions().front()->getBlocks().front();
-    arefPhaseAssignmentInBlock(block, arefLastPhase, builder);
-  }
-  return success();
-}
-
-void lowerTMAloads(ArefPutEnterOp op, PatternRewriter &rewriter,
-                   ArefValue arefVal) {
+void lowerAsyncLoads(ArefPutEnterOp op, PatternRewriter &rewriter,
+                     ArefValue arefVal) {
   auto loc = op.getLoc();
   // for now handle TMA loads in PutEnterOp
-  SmallVector<Operation *> descLoads;
+  SmallVector<Operation *> loadOps;
   SmallVector<LocalStoreOp> storeOps;
   for (auto result : op.getResults())
     for (auto user : result.getUsers()) {
       // idenfity users of buffer a LoadDescriptorOp + LocalStoreOp
       if (auto localStore = dyn_cast<triton::gpu::LocalStoreOp>(user)) {
         auto maybeLoad = localStore.getSrc().getDefiningOp();
-        if (isa<DescriptorLoadOp, DescriptorGatherOp>(maybeLoad)) {
-          descLoads.push_back(maybeLoad);
+        if (isa<DescriptorLoadOp, DescriptorGatherOp, LoadOp>(maybeLoad)) {
+          loadOps.push_back(maybeLoad);
           storeOps.push_back(localStore);
         }
       }
     }
-  assert(descLoads.size() <= op.getResults().size());
-  if (descLoads.empty())
+  assert(loadOps.size() <= op.getResults().size());
+  if (loadOps.empty())
     return;
 
-  // matching ArefPutExitOp is assumed to textually follow ArefPutEnterOp
-  //   %bufs:n = aref_put.enter %aref[%enter_idx]
+  // matching ArefPutExitOp is with ArefPutEnterOp
+  // we use aref_tag to match the two
+  //   %bufs:n = aref_put.enter %aref[%enter_idx] {aref_tag = tag}
   //   tma_load %bufs[0]
   //   ..
   //   tma_load %bufs[n-1]
-  //   aref_put.exit %aref[%exit_idx]
+  //   aref_put.exit %aref[%exit_idx] {aref_tag = tag}
 
-  // locate the following aref_put.exit, to get full barrier
-  auto nextOp = descLoads.back()->getNextNode();
-  while (nextOp) {
-    if (isa<ArefPutExitOp>(nextOp))
-      break;
-    nextOp = nextOp->getNextNode();
+  // locate the matching aref_put.exit with the same tag, to get full barrier
+  ArefPutExitOp arefPutExitOp;
+  auto arefTag = op->getAttrOfType<StringAttr>("aref_tag").str();
+  for (auto user : op.getAref().getUsers()) {
+    if (auto exitOp = dyn_cast<ArefPutExitOp>(user)) {
+      if (exitOp->getAttrOfType<StringAttr>("aref_tag").str() == arefTag) {
+        arefPutExitOp = exitOp;
+        break;
+      }
+    }
   }
-  assert(nextOp && "Expecting ArefPutExitOp");
-  auto arefPutExitOp = cast<ArefPutExitOp>(nextOp);
+  assert(arefPutExitOp);
   assert(arefPutExitOp.getAref() == op.getAref() &&
          "Expecting matching Aref on the ArefPutExitOp");
 
   Value fullBarrier = getFullBarrierAt(op.getContext(), loc, rewriter, arefVal,
                                        arefPutExitOp.getIndex());
-  nvidia_gpu::createBarrierExpectOp(loc, rewriter, descLoads, fullBarrier);
+  nvidia_gpu::createBarrierExpectOp(loc, rewriter, loadOps, fullBarrier);
 
-  for (auto [op, storeOp] : llvm::zip(descLoads, storeOps)) {
+  // Note: it is essential to set the insertion point right before putExitOp
+  // otherwise one of the MOE kernel fails to compile, and if it is set
+  // somewhere else it would result in  perf regression from:
+  //
+  // $ python python/tutorials/10-block-scaled-matmul-persistent.py --bench
+  //   --ws --K_range 512 8192
+  //
+  OpBuilder::InsertionGuard g(rewriter);
+  rewriter.setInsertionPoint(arefPutExitOp);
+  for (auto [loadOp, storeOp] : llvm::zip(loadOps, storeOps)) {
     Value pred = rewriter.create<arith::ConstantIntOp>(loc, 1, 1);
     auto alloc = cast<TypedValue<MemDescType>>(storeOp.getDst());
-    if (auto descLoad = dyn_cast<DescriptorLoadOp>(op)) {
+    if (auto descLoad = dyn_cast<DescriptorLoadOp>(loadOp)) {
       nvidia_gpu::createTMALoad(descLoad, rewriter, fullBarrier, alloc, pred);
+    } else if (auto descGather = dyn_cast<DescriptorGatherOp>(loadOp)) {
+      nvidia_gpu::createTMAGather(descGather, rewriter, fullBarrier, alloc,
+                                  pred);
+    } else if (auto load = dyn_cast<LoadOp>(loadOp)) {
+      rewriter.create<AsyncCopyGlobalToLocalOp>(
+          loc, load.getPtr(), alloc, load.getMask(), load.getOther(),
+          load.getCache(), load.getEvict(), load.getIsVolatile());
     } else {
-      nvidia_gpu::createTMAGather(cast<DescriptorGatherOp>(op), rewriter,
-                                  fullBarrier, alloc, pred);
+      llvm_unreachable("Unknown load op");
     }
-    replaceUsesWithLocalLoad(rewriter, op->getResult(0), alloc);
-    op->erase();
+    replaceUsesWithLocalLoad(rewriter, loadOp->getResult(0), alloc);
+    loadOp->erase();
   }
 }
 
@@ -734,7 +383,7 @@ LogicalResult rewritePutEnterOp(ArefCreateOp arefOp, ArefPutEnterOp op,
   // get barrier phase, and issue barrier wait
   // put_phase = ((phase / depth) & 1) ^ 1
   Operation *phase = rewriter.create<arith::DivSIOp>(
-      loc, op.getPhase(),
+      loc, op.getIndex(),
       rewriter.create<arith::ConstantIntOp>(loc, arefVal.depth, 32));
   phase->setAttr("put_phase", rewriter.getUnitAttr());
   phase = rewriter.create<arith::AndIOp>(
@@ -749,16 +398,19 @@ LogicalResult rewritePutEnterOp(ArefCreateOp arefOp, ArefPutEnterOp op,
                                                      phase->getResult(0));
 
   // generate views
-  auto stage = rewriter.create<arith::RemSIOp>(
-      loc, op.getIndex(),
+  Value stage;
+  auto arefIdx = op.getIndex();
+  auto remsi = rewriter.create<arith::RemSIOp>(
+      loc, arefIdx,
       rewriter.create<arith::ConstantIntOp>(loc, arefVal.depth, 32));
-  stage->setAttr("put_view", rewriter.getUnitAttr());
+  remsi->setAttr("put_view", rewriter.getUnitAttr());
+  stage = remsi;
   auto views = getSubViews(arefVal, stage, loc, rewriter);
   assert(views.size() == op.getResults().size());
 
-  // TMA load need special handling as it requires fullMbarrier that we need
-  // to get from matching ArefPutExitOp
-  lowerTMAloads(op, rewriter, arefVal);
+  // TMA and cpasync load need special handling as it requires fullMbarrier that
+  // we need to get from matching ArefPutExitOp
+  lowerAsyncLoads(op, rewriter, arefVal);
 
   // replaces uses with views
   for (int i = 0; i < arefVal.buffers.size(); ++i)
@@ -779,7 +431,7 @@ LogicalResult rewriteGetEnterOp(ArefCreateOp arefOp, ArefGetEnterOp op,
   // get barrier phase, and issue barrier wait
   // get_phase = (phase / depth) & 1
   Operation *phase = rewriter.create<arith::DivSIOp>(
-      loc, op.getPhase(),
+      loc, op.getIndex(),
       rewriter.create<arith::ConstantIntOp>(loc, arefVal.depth, 32));
   phase->setAttr("get_phase", rewriter.getUnitAttr());
   phase = rewriter.create<arith::AndIOp>(
@@ -790,10 +442,13 @@ LogicalResult rewriteGetEnterOp(ArefCreateOp arefOp, ArefGetEnterOp op,
                                                      phase->getResult(0));
 
   // update uses of views
-  auto stage = rewriter.create<arith::RemSIOp>(
-      loc, op.getIndex(),
+  Value stage;
+  auto arefIdx = op.getIndex();
+  auto remsi = rewriter.create<arith::RemSIOp>(
+      loc, arefIdx,
       rewriter.create<arith::ConstantIntOp>(loc, arefVal.depth, 32));
-  stage->setAttr("get_view", rewriter.getUnitAttr());
+  remsi->setAttr("get_view", rewriter.getUnitAttr());
+  stage = remsi;
   auto views = getSubViews(arefVal, stage, loc, rewriter);
   assert(views.size() == op.getResults().size());
 
@@ -811,14 +466,15 @@ nvws::TrackedAsyncOp translateArefProducerKind(ArefProducer producer) {
     return nvws::TrackedAsyncOp::TMALDG;
   else if (producer == ArefProducer::LDGSTS)
     return nvws::TrackedAsyncOp::LDGSTS;
-  else if (producer == ArefProducer::STS || producer == ArefProducer::STTM)
+  else if (producer == ArefProducer::STS || producer == ArefProducer::STTM ||
+           producer == ArefProducer::NONE)
     return nvws::TrackedAsyncOp::NONE;
   else
     llvm_unreachable("unexpected producer kind");
 }
 
 SmallVector<nvws::TrackedAsyncOp>
-translateArefProducerKind(const SmallVector<Attribute> &producers) {
+translateArefProducerKind(ArrayAttr producers) {
   SmallVector<nvws::TrackedAsyncOp> trackedOps;
   for (auto producerAttr : producers) {
     auto kind = dyn_cast<ArefProducerAttr>(producerAttr).getValue();
@@ -829,28 +485,20 @@ translateArefProducerKind(const SmallVector<Attribute> &producers) {
 
 LogicalResult rewritePutExitOp(ArefCreateOp arefOp, ArefPutExitOp op,
                                PatternRewriter &rewriter, ArefValue arefVal) {
-  SmallVector<Attribute> producers(op.getProducers().begin(),
-                                   op.getProducers().end());
   auto loc = op.getLoc();
   rewriter.setInsertionPointAfter(op);
-  assert(producers.size() == arefOp.getOperands().size() &&
-         "must have a producer per buffer");
 
   Value fullBarrier =
       getFullBarrierAt(op.getContext(), loc, rewriter, arefVal, op.getIndex());
 
-  auto trackedOps = translateArefProducerKind(producers);
-  assert(llvm::all_of(trackedOps,
-                      [&](nvws::TrackedAsyncOp trackedOp) {
-                        return trackedOp == trackedOps[0];
-                      }) &&
-         "cannot mix & match different producer kinds");
-
-  if (trackedOps[0] != nvws::TrackedAsyncOp::TMALDG) {
-    // For TMA, the arrive is done by HW
-    rewriter.create<nvws::ArriveBarrierOp>(
-        loc, fullBarrier,
-        nvws::TrackedAsyncOpAttr::get(op.getContext(), trackedOps[0]));
+  auto trackedOps = translateArefProducerKind(op.getProducers());
+  for (auto trackedOp : trackedOps) {
+    if (trackedOp != nvws::TrackedAsyncOp::TMALDG) {
+      // For TMA, the arrive is done by HW
+      rewriter.create<nvws::ArriveBarrierOp>(
+          loc, fullBarrier,
+          nvws::TrackedAsyncOpAttr::get(op.getContext(), trackedOp));
+    }
   }
 
   return success();
@@ -861,7 +509,8 @@ nvws::TrackedAsyncOp translateArefConsumerKind(ArefConsumer consumer) {
   if (consumer == ArefConsumer::UMMA) {
     return nvws::TrackedAsyncOp::UMMA;
   } else if (consumer == ArefConsumer::LDS || consumer == ArefConsumer::LDTM ||
-             consumer == ArefConsumer::WGMMA) {
+             consumer == ArefConsumer::WGMMA ||
+             consumer == ArefConsumer::NONE) {
     return nvws::TrackedAsyncOp::NONE;
   } else {
     llvm_unreachable("unexpected consumer kind");
@@ -869,7 +518,7 @@ nvws::TrackedAsyncOp translateArefConsumerKind(ArefConsumer consumer) {
 }
 
 SmallVector<nvws::TrackedAsyncOp>
-translateArefConsumerKind(const SmallVector<Attribute> &consumers) {
+translateArefConsumerKind(ArrayAttr consumers) {
   SmallVector<nvws::TrackedAsyncOp> trackedOps;
   for (auto consumerAttr : consumers) {
     auto kind = dyn_cast<ArefConsumerAttr>(consumerAttr).getValue();
@@ -880,23 +529,18 @@ translateArefConsumerKind(const SmallVector<Attribute> &consumers) {
 
 LogicalResult rewriteGetExitOp(ArefCreateOp arefOp, ArefGetExitOp op,
                                PatternRewriter &rewriter, ArefValue arefVal) {
-  SmallVector<Attribute> consumers(op.getConsumers().begin(),
-                                   op.getConsumers().end());
   rewriter.setInsertionPointAfter(op);
   auto loc = op.getLoc();
-  assert(consumers.size() == arefOp.getOperands().size() &&
-         "must have a consumer per buffer");
   Value emptyBarrier =
       getEmptyBarrierAt(op.getContext(), loc, rewriter, arefVal, op.getIndex());
 
-  auto trackedOps = translateArefConsumerKind(consumers);
-  assert(llvm::all_of(trackedOps,
-                      [&](nvws::TrackedAsyncOp trackedOp) {
-                        return trackedOp == trackedOps[0];
-                      }) &&
-         "cannot mix & match different consumer kinds");
+  auto trackedOps = translateArefConsumerKind(op.getConsumers());
+  for (auto trackedOp : trackedOps) {
+    rewriter.create<nvws::ArriveBarrierOp>(
+        loc, emptyBarrier,
+        nvws::TrackedAsyncOpAttr::get(op.getContext(), trackedOp));
+  }
 
-  rewriter.create<nvws::ArriveBarrierOp>(loc, emptyBarrier, trackedOps[0]);
   return success();
 }
 
@@ -1052,10 +696,39 @@ public:
     llvm::SmallSet<scf::ForOp, 10> forOps;
     m.walk([&](T op) {
       if (auto forOp = op->template getParentOfType<scf::ForOp>()) {
-	forOps.insert(forOp);
+        forOps.insert(forOp);
       }
     });
     return forOps;
+  }
+
+  void removeTokensFromArefs(triton::FuncOp funcOp) {
+    funcOp.walk([&](ArefEnterOpInterface enterOp) {
+      if (enterOp.getTokens().empty())
+        return;
+      SmallVector<Type> buffers, tokens;
+      for (auto buffer : enterOp.getBuffers())
+        buffers.push_back(buffer.getType());
+      OpBuilder b(enterOp);
+      auto newEnterOp =
+          isa<ArefPutEnterOp>(enterOp)
+              ? b.create<ArefPutEnterOp>(enterOp->getLoc(), buffers, tokens,
+                                         enterOp.getAref(), enterOp.getIndex())
+              : b.create<ArefGetEnterOp>(enterOp->getLoc(), buffers, tokens,
+                                         enterOp.getAref(), enterOp.getIndex());
+      // copy attributes from enterOp to newEnterOp
+      if (enterOp->hasAttr("groups"))
+        newEnterOp->setAttr("groups", enterOp->getAttr("groups"));
+      newEnterOp->setAttr("aref_tag", enterOp->getAttr("aref_tag"));
+
+      SmallVector<Value> replacements = newEnterOp->getResults();
+      Value dummy =
+          b.create<ub::PoisonOp>(funcOp.getLoc(), b.getType<AsyncTokenType>());
+      for (auto _ : newEnterOp->getResults())
+        replacements.push_back(dummy);
+      enterOp->replaceAllUsesWith(replacements);
+      enterOp->erase();
+    });
   }
 
   void runOnOperation() override {
@@ -1068,8 +741,10 @@ public:
       m.dump();
     });
 
-    if (arefPhaseAssignment(m).failed())
-      signalPassFailure();
+    m.walk([&](triton::FuncOp funcOp) { removeTokensFromArefs(funcOp); });
+    LLVM_DEBUG({
+      DBGS() << "after::removeAsyncTokensFromArefs:\n" << m << "\n";
+    });
 
     // aref lowering
     mlir::RewritePatternSet arefPatterns(context);

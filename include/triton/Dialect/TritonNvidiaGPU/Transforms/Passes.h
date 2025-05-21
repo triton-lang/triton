@@ -58,6 +58,8 @@ std::unique_ptr<Pass> createTritonNvidiaGPUMMALoweringPass();
 
 std::unique_ptr<Pass> createTritonNvidiaGPUPromoteLHSToTMemPass();
 
+std::unique_ptr<Pass> createTritonNvidiaGPURemoveTMEMTokensPass();
+
 std::unique_ptr<Pass> createTritonNvidiaGPUOptimizeDescriptorEncodingPass();
 
 std::unique_ptr<Pass> createTritonNvidiaGPUOptimizeTMemSubtilingPass();

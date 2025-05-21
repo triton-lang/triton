@@ -85,7 +85,7 @@ void addValueGroups(const Value &value, const std::set<std::string> &groups) {
 }
 
 bool isControlFlowOp(Operation *op) {
-  return isa<scf::IfOp, scf::ForOp, scf::YieldOp>(op);
+  return isa<scf::IfOp, scf::ForOp, scf::YieldOp, ReduceReturnOp>(op);
 }
 
 SetVector<Operation *> findRoots(ModuleOp module) {
@@ -132,6 +132,14 @@ SetVector<Value> getPredecessors(Value value) {
       preds.insert(forOp.getOperand(idx + forOp.getNumControlOperands()));
       preds.insert(forOp.getBody()->getTerminator()->getOperand(idx));
       return preds;
+    }
+
+    // defined in a ReduceOp
+    // find the returned value from the reducer function
+    if (auto reduceOp = dyn_cast<ReduceOp>(parentOp)) {
+      preds.insert(
+          reduceOp.getCombineOp().back().getTerminator()->getOperand(0));
+      return {};
     }
 
     assert(false && "block arg not supported for this parent op");
@@ -205,6 +213,12 @@ getSuccessors(Value value) {
       } else {
         assert(false && "yield op not supported with this parent op");
       }
+    } else if (auto returnOp = dyn_cast<ReduceReturnOp>(op)) {
+      // return from a reduce
+      // get value returned by reduce
+      auto parentOp = returnOp.getOperation()->getParentOp();
+      assert(isa<ReduceOp>(parentOp));
+      succs.first.push_back(parentOp->getResult(0));
     } else {
       // normal op
       for (auto result : op->getResults()) {
@@ -460,7 +474,7 @@ public:
     // union of groups mentioned in their regions
     SmallVector<Operation *> controlFlowOps;
     m.walk([&](Operation *op) {
-      if (isControlFlowOp(op) && !isa<scf::YieldOp>(op)) {
+      if (isControlFlowOp(op) && !isa<scf::YieldOp, ReduceReturnOp>(op)) {
         controlFlowOps.push_back(op);
       }
     });

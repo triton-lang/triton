@@ -683,8 +683,7 @@ SmallVector<SmallVector<unsigned>> emitOffsetForLayout(Attribute layout,
 // access the corresponding element, starting from the inner dimension.
 SmallVector<SmallVector<Value>>
 emitIndices(Location loc, RewriterBase &rewriter, const TargetInfoBase &target,
-            Attribute layout, RankedTensorType type, bool withCTAOffset,
-            std::optional<int> warpGroupStart = std::nullopt);
+            Attribute layout, RankedTensorType type, bool withCTAOffset);
 
 // Emits IR to load data from shared memory into registers, or to store data
 // from registers into shared memory.

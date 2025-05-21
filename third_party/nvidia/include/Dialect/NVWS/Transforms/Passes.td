@@ -102,4 +102,165 @@ def NVWSLowerAref : Pass<"nvws-lower-aref", "mlir::ModuleOp"> {
   ];
 }
 
+def NVWSArefCanonicalize : Pass<"nvws-aref-canonicalize", "mlir::ModuleOp"> {
+  let summary = "Canonicalize IR for aref insertion";
+
+  let description = [{
+    Lower aref operations in TritonNvidiaGPUDialect.
+  }];
+
+  let constructor = "mlir::createNVWSArefCanonicalizePass()";
+
+  let dependentDialects = [
+    "mlir::triton::nvws::NVWSDialect",
+    "mlir::triton::TritonDialect",
+    "mlir::triton::gpu::TritonGPUDialect",
+    "mlir::triton::nvidia_gpu::TritonNvidiaGPUDialect"
+  ];
+}
+
+def NVWSArefInsertion: Pass<"nvws-aref-insertion", "mlir::ModuleOp"> {
+  let summary = "insert arefs into the code";
+
+  let description = [{
+    Lower aref operations in TritonNvidiaGPUDialect.
+  }];
+
+  let constructor = "mlir::createNVWSArefInsertionPass()";
+
+  let dependentDialects = [
+    "mlir::triton::nvws::NVWSDialect",
+    "mlir::triton::TritonDialect",
+    "mlir::triton::gpu::TritonGPUDialect",
+    "mlir::triton::nvidia_gpu::TritonNvidiaGPUDialect"
+  ];
+}
+
+def NVWSArefCodeSplit : Pass<"nvws-aref-code-split", "mlir::ModuleOp"> {
+  let summary = "split code with arefs into warp-groups";
+
+  let description = [{
+    Lower aref operations in TritonNvidiaGPUDialect.
+  }];
+
+  let constructor = "mlir::createNVWSArefCodeSplitPass()";
+
+  let dependentDialects = [
+    "mlir::triton::nvws::NVWSDialect",
+    "mlir::triton::TritonDialect",
+    "mlir::triton::gpu::TritonGPUDialect",
+    "mlir::triton::nvidia_gpu::TritonNvidiaGPUDialect"
+  ];
+}
+
+def NVWSArefCopyElimination : Pass<"nvws-aref-copy-elimination", "mlir::ModuleOp"> {
+  let summary = "elminate aref_copies";
+
+  let description = [{
+    Lower aref operations in TritonNvidiaGPUDialect.
+  }];
+
+  let constructor = "mlir::createNVWSArefCopyEliminationPass()";
+
+  let dependentDialects = [
+    "mlir::triton::nvws::NVWSDialect",
+    "mlir::triton::TritonDialect",
+    "mlir::triton::gpu::TritonGPUDialect",
+    "mlir::triton::nvidia_gpu::TritonNvidiaGPUDialect"
+  ];
+}
+
+def NVWSArefCopyLowering : Pass<"nvws-aref-copy-lowering", "mlir::ModuleOp"> {
+  let summary = "lower remaining aref copies";
+
+  let description = [{
+    Lower aref operations in TritonNvidiaGPUDialect.
+  }];
+
+  let constructor = "mlir::createNVWSArefCopyLoweringPass()";
+
+  let dependentDialects = [
+    "mlir::triton::nvws::NVWSDialect",
+    "mlir::triton::TritonDialect",
+    "mlir::triton::gpu::TritonGPUDialect",
+    "mlir::triton::nvidia_gpu::TritonNvidiaGPUDialect"
+  ];
+}
+
+def NVWSArefOptimize : Pass<"nvws-aref-optimize", "mlir::ModuleOp"> {
+  let summary = "aref optimization passes";
+
+  let description = [{
+    Lower aref operations in TritonNvidiaGPUDialect.
+  }];
+
+  let constructor = "mlir::createNVWSArefOptimizePass()";
+
+  let dependentDialects = [
+    "mlir::triton::nvws::NVWSDialect",
+    "mlir::triton::TritonDialect",
+    "mlir::triton::gpu::TritonGPUDialect",
+    "mlir::triton::nvidia_gpu::TritonNvidiaGPUDialect"
+  ];
+}
+
+def NVWSArefAsyncOps : Pass<"nvws-aref-async-ops", "mlir::ModuleOp"> {
+  let summary = "aref optimization passes";
+
+  let description = [{
+    Lower aref operations in TritonNvidiaGPUDialect.
+  }];
+
+  let constructor = "mlir::createNVWSArefAsyncOpsPass()";
+
+  let dependentDialects = [
+    "mlir::triton::nvws::NVWSDialect",
+    "mlir::triton::TritonDialect",
+    "mlir::triton::gpu::TritonGPUDialect",
+    "mlir::triton::nvidia_gpu::TritonNvidiaGPUDialect"
+  ];
+}
+
+def NVWSArefIndex : Pass<"nvws-aref-index", "mlir::ModuleOp"> {
+  let summary = "aref optimization passes";
+
+  let description = [{
+    Lower aref operations in TritonNvidiaGPUDialect.
+  }];
+
+  let constructor = "mlir::createNVWSArefIndexPass()";
+
+  let dependentDialects = [
+    "mlir::triton::nvws::NVWSDialect",
+    "mlir::triton::TritonDialect",
+    "mlir::triton::gpu::TritonGPUDialect",
+    "mlir::triton::nvidia_gpu::TritonNvidiaGPUDialect"
+  ];
+}
+
+
+def NVWSArefDepthPass : Pass<"nvws-aref-depth", "mlir::ModuleOp"> {
+  let summary = "add depth to arefs";
+
+  let description = [{
+    Lower aref operations in TritonNvidiaGPUDialect.
+  }];
+
+  let dependentDialects = [
+    "mlir::triton::nvws::NVWSDialect",
+    "mlir::triton::TritonDialect",
+    "mlir::triton::gpu::TritonGPUDialect",
+    "mlir::triton::nvidia_gpu::TritonNvidiaGPUDialect"
+  ];
+
+  let options = [
+    Option<"numStages", "num-stages",
+           "int32_t", /*default*/"3",
+           "number of warp specialization pipeline stages">,
+    Option<"mmaDepth", "mma-depth",
+           "int32_t", /*default*/"2",
+           "number of MMA pipeline stages">
+  ];
+}
+
 #endif // NVWS_PASSES

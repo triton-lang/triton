@@ -326,7 +326,9 @@ std::pair<scf::ForOp, Value> peelFirstGemmAndSoftmax(
             builder.create<arith::SubIOp>(forOp.getLoc(), normMathIdxVar, one);
         newSecondGemmOps.push_back(one);
         newSecondGemmOps.push_back(minus);
-        clonedOp->setOperand(1, minus.getResult());
+        auto clonedGetEnterOp =
+            cast<triton::nvidia_gpu::ArefGetEnterOp>(clonedOp);
+        clonedGetEnterOp.setIndex(minus.getResult());
       }
       newSecondGemmOps.push_back(clonedOp);
     }
@@ -422,12 +424,12 @@ void updateWarpGroupDotWaitOpForFMHA(
       getSingleUserOp(secondDot));
   waitOp1.setPendings(1);
   builder.setInsertionPointAfter(waitOp1);
-  // here we can guarantee the k-th iteration of the first GEMM is done, where
-  // k is normalized loop index
+// here we can guarantee the k-th iteration of the first GEMM is done, where
+// k is normalized loop index
   {
     assert(arefOps.size() == 2);
     builder.create<triton::nvidia_gpu::ArefGetExitOp>(
-        forOp.getLoc(), arefOps[0], normMathIdx,
+        forOp.getLoc(), arefOps[0],  normMathIdx,
         ArrayAttr::get(
             builder.getContext(),
             nvidia_gpu::ArefConsumerAttr::get(
@@ -442,9 +444,9 @@ void updateWarpGroupDotWaitOpForFMHA(
   waitOp2.setPendings(0);
   waitOp2.getOperation()->moveBefore(forOp.getBody()->getTerminator());
   builder.setInsertionPointAfter(waitOp2);
-  // here we can guarantee the (k-1)th iteration of the second GEMM is done
-  // because we want k-1 to start from 0, so we actually don't need to add
-  // offset here
+// here we can guarantee the (k-1)th iteration of the second GEMM is done
+// because we want k-1 to start from 0, so we actually don't need to add
+// offset here
   {
     auto one = builder.create<arith::ConstantIntOp>(forOp.getLoc(), 1, 32);
     auto minus =
@@ -709,6 +711,21 @@ public:
     m.walk([&](triton::nvidia_gpu::ArefCreateOp arefOp) {
       arefOps.push_back(arefOp);
     });
+    assert(arefOps.size() == 3);
+    arefOps.erase(arefOps.end() - 1);
+    std::swap(arefOps[0], arefOps[1]);
+
+    SmallVector<triton::nvidia_gpu::ArefGetExitOp> getExitOps;
+    m.walk([&](triton::nvidia_gpu::ArefGetExitOp getOp) {
+      for (auto arefOp : arefOps) {
+        if (arefOp.getResult() == getOp.getAref()) {
+          getExitOps.push_back(getOp);
+          break;
+        }
+      }
+    });
+    for (auto op : getExitOps)
+      op.erase();
 
     pipelineFMHAMathLoop(fmhaMathForOps[0], builder, arefOps);
   }

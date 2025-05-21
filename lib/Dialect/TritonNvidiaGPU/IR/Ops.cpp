@@ -16,7 +16,7 @@
  * EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
  * MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
  * IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
- * CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,
+ * CLAIM, DAMAGES OR OTHER LIABILITY, WHTHER IN AN ACTION OF CONTRACT,
  * TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
  * SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
  */
@@ -214,6 +214,29 @@ static void printBarriersAndPreds(OpAsmPrinter &p, Operation *op,
   }
 }
 
+// token := `[` (ssa-value (`,` ssa-value)*)? `]`
+// dep-operand := token?
+static ParseResult
+parseToken(OpAsmParser &p, std::optional<OpAsmParser::UnresolvedOperand> &dep,
+           Type &token) {
+  if (failed(p.parseOptionalLSquare()))
+    return success();
+  token = p.getBuilder().getType<AsyncTokenType>();
+  if (succeeded(p.parseOptionalRSquare()))
+    return success();
+  if (p.parseOperand(dep.emplace()) || p.parseRSquare())
+    return failure();
+  return success();
+}
+static void printToken(OpAsmPrinter &p, Operation *op, Value dep, Type token) {
+  if (!token)
+    return;
+  p << '[';
+  if (dep)
+    p << dep;
+  p << ']';
+}
+
 void TCGen5MMAOp::getEffects(
     SmallVectorImpl<SideEffects::EffectInstance<MemoryEffects::Effect>>
         &effects) {
@@ -257,12 +280,12 @@ Value TCGen5MMAOp::getPredicate() { return getPred(); }
 
 void TCGen5MMAOp::setPredicate(Value pred) { getPredMutable().assign(pred); }
 
-void TCGen5MMAOp::build(OpBuilder &builder, OperationState &state, Value a,
-                        Value b, Value d, Value useD, Value pred,
-                        bool useTwoCTAs, ValueRange barriers,
+void TCGen5MMAOp::build(OpBuilder &builder, OperationState &state, Type token,
+                        Value a, Value b, Value d, Value accDep, Value useD,
+                        Value pred, bool useTwoCTAs, ValueRange barriers,
                         ValueRange barrierPreds, bool isAsync) {
-  build(builder, state, a, b, d, useD, pred, barriers, barrierPreds,
-        isAsync ? builder.getUnitAttr() : UnitAttr(),
+  build(builder, state, token, a, b, d, accDep, useD, pred, barriers,
+        barrierPreds, isAsync ? builder.getUnitAttr() : UnitAttr(),
         useTwoCTAs ? builder.getUnitAttr() : UnitAttr());
 }
 
@@ -401,13 +424,13 @@ int64_t TCGen5MMAScaledOp::getBlockK() {
 }
 
 void TCGen5MMAScaledOp::build(OpBuilder &builder, OperationState &state,
-                              Value a, Value b, Value d, Value aScale,
-                              Value bScale, ScaleDotElemType aType,
-                              ScaleDotElemType bType, Value useD, Value pred,
-                              ValueRange barriers, ValueRange barrierPreds,
-                              bool isAsync) {
+                              Type token, Value a, Value b, Value d,
+                              Value accDep, Value aScale, Value bScale,
+                              ScaleDotElemType aType, ScaleDotElemType bType,
+                              Value useD, Value pred, ValueRange barriers,
+                              ValueRange barrierPreds, bool isAsync) {
   MLIRContext *ctx = builder.getContext();
-  build(builder, state, a, b, d, aScale, bScale,
+  build(builder, state, token, a, b, d, accDep, aScale, bScale,
         ScaleDotElemTypeAttr::get(ctx, aType),
         ScaleDotElemTypeAttr::get(ctx, bType), useD, pred, barriers,
         barrierPreds, isAsync ? builder.getUnitAttr() : UnitAttr());
@@ -542,6 +565,26 @@ void TMEMSubSliceOp::build(OpBuilder &builder, OperationState &state,
       shape, allocTy.getElementType(), newEncoding, allocTy.getMemorySpace(),
       allocTy.getMutableMemory());
   build(builder, state, subsliceType, alloc, offset);
+}
+
+// -- ArefPutEnterOp --
+void ArefPutEnterOp::setIndex(Value index) { getIndexMutable().assign(index); }
+
+// -- ArefPutExitOp --
+void ArefPutExitOp::setIndex(Value index) { getIndexMutable().assign(index); }
+ArrayAttr ArefPutExitOp::getAssociatedOpAttrs() { return getProducers(); }
+void ArefPutExitOp::setAssociatedOpAttrs(ArrayAttr attributes) {
+  setProducersAttr(attributes);
+}
+
+// -- ArefGetEnterOp --
+void ArefGetEnterOp::setIndex(Value index) { getIndexMutable().assign(index); }
+
+// -- ArefGetExitOp --
+void ArefGetExitOp::setIndex(Value index) { getIndexMutable().assign(index); }
+ArrayAttr ArefGetExitOp::getAssociatedOpAttrs() { return getConsumers(); }
+void ArefGetExitOp::setAssociatedOpAttrs(ArrayAttr attributes) {
+  setConsumersAttr(attributes);
 }
 
 } // namespace nvidia_gpu

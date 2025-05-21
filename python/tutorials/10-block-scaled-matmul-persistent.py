@@ -67,9 +67,8 @@ def block_scaled_matmul_kernel_persistent(
     rep_m: tl.constexpr,
     rep_n: tl.constexpr,
     rep_k: tl.constexpr,
-    NUM_STAGES: tl.constexpr,
     NUM_SMS: tl.constexpr,
-    WARP_SPECIALIZE: tl.constexpr,
+    EPILOGUE_SUBTILE: tl.constexpr,
 ):
     if output_type == 0:
         output_dtype = tl.float32
@@ -85,11 +84,10 @@ def block_scaled_matmul_kernel_persistent(
     num_tiles = num_pid_m * num_pid_n
     GROUP_SIZE_M: tl.constexpr = 8
     num_pid_in_group = GROUP_SIZE_M * num_pid_n
-    tile_id_c = start_pid - NUM_SMS
 
     MIXED_PREC: tl.constexpr = ELEM_PER_BYTE_A == 1 and ELEM_PER_BYTE_B == 2
 
-    for tile_id in tl.range(start_pid, num_tiles, tl.num_programs(0), flatten=not WARP_SPECIALIZE, disallow_acc_multi_buffer=True):
+    for tile_id in tl.range(start_pid, num_tiles, tl.num_programs(0)):
         pid_m, pid_n = _compute_pid(tile_id, num_pid_in_group, num_pid_m, GROUP_SIZE_M, NUM_SMS)
         offs_am = pid_m * BLOCK_M
         offs_bn = pid_n * BLOCK_N
@@ -101,7 +99,7 @@ def block_scaled_matmul_kernel_persistent(
         offs_scale_k = 0
 
         accumulator = tl.zeros((BLOCK_M, BLOCK_N), dtype=tl.float32)
-        for _ in tl.range(0, k_tiles, num_stages=NUM_STAGES, disallow_acc_multi_buffer=True):
+        for _ in tl.range(0, k_tiles):
             a = a_desc.load([offs_am, offs_k_a])
             b = b_desc.load([offs_bn, offs_k_b])
             scale_a = a_scale_desc.load([offs_scale_m, offs_scale_k, 0, 0])
@@ -121,21 +119,117 @@ def block_scaled_matmul_kernel_persistent(
             offs_k_b += BLOCK_K // ELEM_PER_BYTE_B
             offs_scale_k += rep_k
 
-        if not WARP_SPECIALIZE:
-            tile_id_c += NUM_SMS
-            pid_m, pid_n = _compute_pid(tile_id_c, num_pid_in_group, num_pid_m, GROUP_SIZE_M, NUM_SMS)
-            offs_am_c = pid_m * BLOCK_M
-            offs_bn_c = pid_n * BLOCK_N
+        if EPILOGUE_SUBTILE:
+            acc = tl.reshape(accumulator, (BLOCK_M, 2, BLOCK_N // 2))
+            acc = tl.permute(acc, (0, 2, 1))
+            acc0, acc1 = tl.split(acc)
+            c0 = acc0.to(output_dtype)
+            c_desc.store([offs_am, offs_bn], c0)
+            c1 = acc1.to(output_dtype)
+            c_desc.store([offs_am, offs_bn + BLOCK_N // 2], c1)
         else:
-            tile_id_c = tile_id
-            offs_am_c = offs_am
-            offs_bn_c = offs_bn
-
-        c_desc.store([offs_am_c, offs_bn_c], accumulator.to(output_dtype))
+            c_desc.store([offs_am, offs_bn], accumulator.to(output_dtype))
 
 
-def block_scaled_matmul(a_desc, a_scale, b_desc, b_scale, dtype_dst, M, N, K, rep_m, rep_n, rep_k, configs, ws=False):
+@triton.jit(launch_metadata=_matmul_launch_metadata)
+def block_scaled_matmul_kernel_persistent_scale_cpasync(
+    a_desc,
+    a_scale,
+    b_desc,
+    b_scale,
+    c_desc,
+    M: tl.constexpr,
+    N: tl.constexpr,
+    K: tl.constexpr,
+    stride_sk: tl.constexpr,
+    stride_sb: tl.constexpr,
+    output_type: tl.constexpr,
+    ELEM_PER_BYTE_A: tl.constexpr,  #
+    ELEM_PER_BYTE_B: tl.constexpr,  #
+    VEC_SIZE: tl.constexpr,
+    BLOCK_M: tl.constexpr,
+    BLOCK_N: tl.constexpr,
+    BLOCK_K: tl.constexpr,
+    NUM_SMS: tl.constexpr,
+    EPILOGUE_SUBTILE: tl.constexpr,
+):
+    if output_type == 0:
+        output_dtype = tl.float32
+    elif output_type == 1:
+        output_dtype = tl.float16
+    elif output_type == 2:
+        output_dtype = tl.float8e4nv
+
+    start_pid = tl.program_id(axis=0)
+    num_pid_m = tl.cdiv(M, BLOCK_M)
+    num_pid_n = tl.cdiv(N, BLOCK_N)
+    k_tiles = tl.cdiv(K, BLOCK_K)
+    num_tiles = num_pid_m * num_pid_n
+    GROUP_SIZE_M: tl.constexpr = 8
+    num_pid_in_group = GROUP_SIZE_M * num_pid_n
+
+    MIXED_PREC: tl.constexpr = ELEM_PER_BYTE_A == 1 and ELEM_PER_BYTE_B == 2
+
+    for tile_id in tl.range(start_pid, num_tiles, tl.num_programs(0)):
+        pid_m, pid_n = _compute_pid(tile_id, num_pid_in_group, num_pid_m, GROUP_SIZE_M, NUM_SMS)
+        offs_am = pid_m * BLOCK_M
+        offs_bn = pid_n * BLOCK_N
+        offs_k_a = 0
+        offs_k_b = 0
+        offs_sm = (pid_m * (BLOCK_M // 128) + tl.arange(0, BLOCK_M // 128)) % M
+        offs_sn = (pid_n * (BLOCK_N // 128) + tl.arange(0, BLOCK_N // 128)) % N
+
+        offs_inner = tl.arange(0, (BLOCK_K // VEC_SIZE // 4) * 32 * 4 * 4)
+        a_scale_ptr = a_scale + offs_sm[:, None] * stride_sk + offs_inner[None, :]
+        b_scale_ptr = b_scale + offs_sn[:, None] * stride_sk + offs_inner[None, :]
+
+        accumulator = tl.zeros((BLOCK_M, BLOCK_N), dtype=tl.float32)
+        for _ in tl.range(0, k_tiles):
+            a = a_desc.load([offs_am, offs_k_a])
+            b = b_desc.load([offs_bn, offs_k_b])
+            scale_a = tl.load(a_scale_ptr)
+            scale_b = tl.load(b_scale_ptr)
+            scale_a = scale_a.reshape(BLOCK_M // 128, BLOCK_K // VEC_SIZE // 4, 32, 4, 4).trans(0, 3, 2, 1, 4).reshape(BLOCK_M, BLOCK_K // VEC_SIZE)
+            scale_b = scale_b.reshape(BLOCK_N // 128, BLOCK_K // VEC_SIZE // 4, 32, 4, 4).trans(0, 3, 2, 1, 4).reshape(BLOCK_N, BLOCK_K // VEC_SIZE)
+
+            if MIXED_PREC:
+                accumulator = tl.dot_scaled(a, scale_a, "e4m3", b.T, scale_b, "e2m1", accumulator)
+            elif ELEM_PER_BYTE_A == 2 and ELEM_PER_BYTE_B == 2:
+                accumulator = tl.dot_scaled(a, scale_a, "e2m1", b.T, scale_b, "e2m1", accumulator)
+            else:
+                accumulator = tl.dot_scaled(a, scale_a, "e4m3", b.T, scale_b, "e4m3", accumulator)
+
+            offs_k_a += BLOCK_K // ELEM_PER_BYTE_A
+            offs_k_b += BLOCK_K // ELEM_PER_BYTE_B
+            a_scale_ptr += (BLOCK_K // VEC_SIZE // 4) * stride_sb
+            b_scale_ptr += (BLOCK_K // VEC_SIZE // 4) * stride_sb
+
+        if EPILOGUE_SUBTILE:
+            acc = tl.reshape(accumulator, (BLOCK_M, 2, BLOCK_N // 2))
+            acc = tl.permute(acc, (0, 2, 1))
+            acc0, acc1 = tl.split(acc)
+            c0 = acc0.to(output_dtype)
+            c_desc.store([offs_am, offs_bn], c0)
+            c1 = acc1.to(output_dtype)
+            c_desc.store([offs_am, offs_bn + BLOCK_N // 2], c1)
+        else:
+            c_desc.store([offs_am, offs_bn], accumulator.to(output_dtype))
+
+
+def block_scaled_matmul(
+    a_desc, a_scale, b_desc, b_scale, dtype_dst, M, N, K, rep_m, rep_n, rep_k, configs, scale_cpasync=False, ws=False
+):
     output = torch.empty((M, N), dtype=dtype_dst, device="cuda")
+
+    if dtype_dst == torch.float8_e4m3fn:
+        num_stages = 4
+        epilog_subtile = True
+        store_block_n = configs["BLOCK_SIZE_N"] // 2
+    else:
+        num_stages = configs["num_stages"]
+        epilog_subtile = False
+        store_block_n = configs["BLOCK_SIZE_N"]
+
     if dtype_dst == torch.float32:
         dtype_dst = 0
     elif dtype_dst == torch.float16:
@@ -145,8 +239,7 @@ def block_scaled_matmul(a_desc, a_scale, b_desc, b_scale, dtype_dst, M, N, K, re
     else:
         raise ValueError(f"Unsupported dtype: {dtype_dst}")
 
-    c_desc = TensorDescriptor.from_tensor(
-        output, ([configs["BLOCK_SIZE_M"], configs["BLOCK_SIZE_N"]]))
+    c_desc = TensorDescriptor.from_tensor(output, ([configs["BLOCK_SIZE_M"], store_block_n]))
 
     NUM_SMS = torch.cuda.get_device_properties("cuda").multi_processor_count
     grid = (
@@ -156,35 +249,61 @@ def block_scaled_matmul(a_desc, a_scale, b_desc, b_scale, dtype_dst, M, N, K, re
         ),
     )
 
-    out = block_scaled_matmul_kernel_persistent[grid](
-        a_desc,
-        a_scale,
-        b_desc,
-        b_scale,
-        c_desc,
-        M,
-        N,
-        K,
-        dtype_dst,
-        configs["ELEM_PER_BYTE_A"],
-        configs["ELEM_PER_BYTE_B"],
-        configs["VEC_SIZE"],
-        configs["BLOCK_SIZE_M"],
-        configs["BLOCK_SIZE_N"],
-        configs["BLOCK_SIZE_K"],
-        rep_m,
-        rep_n,
-        rep_k,
-        configs["num_stages"],
-        NUM_SMS,
-        WARP_SPECIALIZE=ws,
-        enable_warp_specialization=ws,
-    )
-#     print(out.asm["ttgir"])
+    if scale_cpasync:
+        out = block_scaled_matmul_kernel_persistent_scale_cpasync[grid](
+            a_desc,
+            a_scale,
+            b_desc,
+            b_scale,
+            c_desc,
+            M,
+            N,
+            K,
+            a_scale.stride(0),
+            a_scale.stride(1),
+            dtype_dst,
+            configs["ELEM_PER_BYTE_A"],
+            configs["ELEM_PER_BYTE_B"],
+            configs["VEC_SIZE"],
+            configs["BLOCK_SIZE_M"],
+            configs["BLOCK_SIZE_N"],
+            configs["BLOCK_SIZE_K"],
+            NUM_SMS,
+            EPILOGUE_SUBTILE=epilog_subtile,
+            num_stages=num_stages,
+            enable_warp_specialization=ws,
+        )
+    else:
+        out = block_scaled_matmul_kernel_persistent[grid](
+            a_desc,
+            a_scale,
+            b_desc,
+            b_scale,
+            c_desc,
+            M,
+            N,
+            K,
+            dtype_dst,
+            configs["ELEM_PER_BYTE_A"],
+            configs["ELEM_PER_BYTE_B"],
+            configs["VEC_SIZE"],
+            configs["BLOCK_SIZE_M"],
+            configs["BLOCK_SIZE_N"],
+            configs["BLOCK_SIZE_K"],
+            rep_m,
+            rep_n,
+            rep_k,
+            NUM_SMS,
+            EPILOGUE_SUBTILE=epilog_subtile,
+            num_stages=num_stages,
+            enable_warp_specialization=ws,
+        )
+
+    print(out.asm["ttgir"])
     return output
 
 
-def initialize_block_scaled(M, N, K, block_scale_type="nvfp4"):
+def initialize_block_scaled(M, N, K, scale_cpasync, block_scale_type="nvfp4"):
     BLOCK_M = 128
     BLOCK_N = 256
     BLOCK_K = 256 if "fp4" in block_scale_type else 128
@@ -260,19 +379,33 @@ def initialize_block_scaled(M, N, K, block_scale_type="nvfp4"):
         "VEC_SIZE": VEC_SIZE,
         "num_stages": 3,
     }
+
+    if scale_cpasync:
+        return (
+            a_desc,
+            a_scale.reshape(*a_scale.shape[:-2], 32, 4, 4),
+            b_desc,
+            b_scale.reshape(*b_scale.shape[:-2], 32, 4, 4),
+            ref_output,
+            rep_m,
+            rep_n,
+            rep_k,
+            configs,
+        )
+
     return a_desc, a_scale_desc, b_desc, b_scale_desc, ref_output, rep_m, rep_n, rep_k, configs
 
 
-def validate_block_scaled(M, N, K, block_scale_type="nvfp4", ws=False):
-    a_desc, a_scale_desc, b_desc_desc, b_scale_desc, reference, rep_m, rep_n, rep_k, configs = initialize_block_scaled(
-        M, N, K, block_scale_type
+def validate_block_scaled(M, N, K, block_scale_type="nvfp4", scale_cpasync=False, output_dtype=torch.float16, ws=False):
+    a_desc, a_scale, b_desc_desc, b_scale, reference, rep_m, rep_n, rep_k, configs = initialize_block_scaled(
+        M, N, K, scale_cpasync, block_scale_type
     )
     output = block_scaled_matmul(
         a_desc,
-        a_scale_desc,
+        a_scale,
         b_desc_desc,
-        b_scale_desc,
-        torch.float16,
+        b_scale,
+        output_dtype,
         M,
         N,
         K,
@@ -280,27 +413,33 @@ def validate_block_scaled(M, N, K, block_scale_type="nvfp4", ws=False):
         rep_n,
         rep_k,
         configs,
+        scale_cpasync,
         ws=ws,
     )
-    torch.testing.assert_close(reference, output.to(torch.float32), atol=1e-3, rtol=1e-3)
-    print(f"✅ (pass {block_scale_type})")
+
+    if output_dtype == torch.float16:
+        torch.testing.assert_close(reference, output.to(torch.float32), atol=1e-3, rtol=1e-3)
+        print(f"✅ (pass {block_scale_type})")
+    else:
+        print(reference)
+        print(output.to(torch.float32))
 
 
-def bench_block_scaled(K, block_scale_type="nvfp4", reps=10, ws=False):
+def bench_block_scaled(K, block_scale_type="nvfp4", output_dtype=torch.float16, scale_cpasync=False, reps=10, ws=False):
     assert K % 128 == 0
     M = 8192
     N = 8192
     print(f"Problem Shape = {M}x{N}x{K}")
 
-    a_desc, a_scale_desc, b_desc_desc, b_scale_desc, _, rep_m, rep_n, rep_k, configs = initialize_block_scaled(
-        M, N, K, block_scale_type
+    a_desc, a_scale, b_desc_desc, b_scale, _, rep_m, rep_n, rep_k, configs = initialize_block_scaled(
+        M, N, K, scale_cpasync, block_scale_type
     )
     _ = block_scaled_matmul(
         a_desc,
-        a_scale_desc,
+        a_scale,
         b_desc_desc,
-        b_scale_desc,
-        torch.float16,
+        b_scale,
+        output_dtype,
         M,
         N,
         K,
@@ -308,6 +447,7 @@ def bench_block_scaled(K, block_scale_type="nvfp4", reps=10, ws=False):
         rep_n,
         rep_k,
         configs,
+        scale_cpasync,
         ws=ws,
     )
 
@@ -315,10 +455,10 @@ def bench_block_scaled(K, block_scale_type="nvfp4", reps=10, ws=False):
     for _ in range(reps):
         _ = block_scaled_matmul(
             a_desc,
-            a_scale_desc,
+            a_scale,
             b_desc_desc,
-            b_scale_desc,
-            torch.float16,
+            b_scale,
+            output_dtype,
             M,
             N,
             K,
@@ -326,6 +466,7 @@ def bench_block_scaled(K, block_scale_type="nvfp4", reps=10, ws=False):
             rep_n,
             rep_k,
             configs,
+            scale_cpasync,
             ws=ws,
         )
     proton.deactivate(0)
@@ -348,6 +489,8 @@ if __name__ == "__main__":
     parser.add_argument("--K_range", type=int, nargs=2)
     parser.add_argument("--K_step", type=int, default=512)
     parser.add_argument("--bench", action="store_true")
+    parser.add_argument("--fp8_output", action="store_true")
+    parser.add_argument("--scale_cpasync", action="store_true")
     parser.add_argument("--format", type=str, choices=["mxfp4", "nvfp4", "mxfp8", "mixed"], default="nvfp4")
     args = parser.parse_args()
 
@@ -356,7 +499,20 @@ if __name__ == "__main__":
     else:
         torch.manual_seed(42)
 
-        validate_block_scaled(8192, 8192, 8192, block_scale_type=args.format, ws=args.ws)
+        if args.fp8_output and args.format != "nvfp4":
+            output_dtype = torch.float8_e4m3fn
+        else:
+            output_dtype = torch.float16
+
+        validate_block_scaled(
+            8192,
+            8192,
+            512,
+            block_scale_type=args.format,
+            scale_cpasync=args.scale_cpasync,
+            output_dtype=output_dtype,
+            ws=args.ws,
+        )
 
         if args.bench:
             if args.ws:
@@ -367,6 +523,13 @@ if __name__ == "__main__":
             proton.start(file_name, hook="triton")
             proton.deactivate()
             for K in range(args.K_range[0], args.K_range[1] + 1, args.K_step):
-                bench_block_scaled(K, reps=10000, block_scale_type=args.format, ws=args.ws)
+                bench_block_scaled(
+                    K,
+                    reps=10000,
+                    block_scale_type=args.format,
+                    output_dtype=output_dtype,
+                    scale_cpasync=args.scale_cpasync,
+                    ws=args.ws,
+                )
             proton.finalize()
             show_profile(file_name)

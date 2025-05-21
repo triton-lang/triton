@@ -217,7 +217,7 @@ def attention_triton(Q, K, V, window_size):
         BLOCK_SIZE_N=BLOCK_SIZE_N,
         D_HEAD=D,
         num_warps=8,
-        num_stages=3,
+        num_stages=2,
         mma_depth=1,
         enable_warp_specialization=True,
         math_wg_pipe=False,
@@ -232,8 +232,8 @@ def attention_triton(Q, K, V, window_size):
 ) 
 @pytest.mark.parametrize("do_bench", [False])
 def test_flex_attn(B, H, M, D, window_size, do_bench):
-    if not torch.cuda.is_available() or torch.cuda.get_device_capability()[0] != 9:
-        pytest.skip("Test requires Hopper target.")
+    if not torch.cuda.is_available() or torch.cuda.get_device_capability()[0] < 9:
+        pytest.skip("Test requires at least Hopper target.")
     torch.manual_seed(0)
     B, H, M, D = 4, 4, 8192, 128
     window_size = 128

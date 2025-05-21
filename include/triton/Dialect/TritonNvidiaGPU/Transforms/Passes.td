@@ -184,4 +184,13 @@ def TritonNvidiaGPUOptimizeTMemSubtilingPass : Pass<"triton-nvidia-optimize-tmem
                            "mlir::triton::TritonDialect"];
 }
 
+def TritonNvidiaGPURemoveTMEMTokensPass : Pass<"triton-nvidia-gpu-remove-tmem-tokens", "mlir::ModuleOp"> {
+  let summary = "remove TMEM tokens";
+
+  let description = [{
+    The `triton-nvidia-gpu-remove-tmem-tokens` pass removes TMEM memory
+    dependency tokens from the IR, after they are no longer needed.
+  }];
+}
+
 #endif

@@ -72,10 +72,11 @@ def TTG_TensorMemoryScalesEncodingAttr : AttrDef<TritonNvidiaGPU_Dialect, "Tenso
 def TTNG_ArefConsumerAttr : I32EnumAttr<
   "ArefConsumer", "",
   [
-    I32EnumAttrCase<"LDS", 0, "lds">,
-    I32EnumAttrCase<"LDTM", 1, "ldtm">,
-    I32EnumAttrCase<"WGMMA", 2, "wgmma">,
-    I32EnumAttrCase<"UMMA", 3, "umma">,
+    I32EnumAttrCase<"NONE", 0, "none">,
+    I32EnumAttrCase<"LDS", 1, "lds">,
+    I32EnumAttrCase<"LDTM", 2, "ldtm">,
+    I32EnumAttrCase<"WGMMA", 3, "wgmma">,
+    I32EnumAttrCase<"UMMA", 4, "umma">,
   ]> {
   let cppNamespace = "::mlir::triton::nvidia_gpu";
   let genSpecializedAttr = 0;
@@ -84,11 +85,12 @@ def TTNG_ArefConsumerAttr : I32EnumAttr<
 def TTNG_ArefProducerAttr : I32EnumAttr<
   "ArefProducer", "",
   [
-    I32EnumAttrCase<"TMALDG", 0, "tmaldg">,
-    I32EnumAttrCase<"LDGSTS", 1, "ldgsts">,
-    I32EnumAttrCase<"STS", 2, "sts">,
-    I32EnumAttrCase<"STTM", 3, "sttm">,
-    I32EnumAttrCase<"UMMA", 4, "umma">,
+    I32EnumAttrCase<"NONE", 0, "none">,
+    I32EnumAttrCase<"TMALDG", 1, "tmaldg">,
+    I32EnumAttrCase<"LDGSTS", 2, "ldgsts">,
+    I32EnumAttrCase<"STS", 3, "sts">,
+    I32EnumAttrCase<"STTM", 4, "sttm">,
+    I32EnumAttrCase<"UMMA", 5, "umma">,
   ]> {
   let cppNamespace = "::mlir::triton::nvidia_gpu";
   let genSpecializedAttr = 0;

@@ -3,6 +3,7 @@
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 #include "mlir/Transforms/Passes.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
+#include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Types.h"
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/Passes.h"
@@ -43,12 +44,17 @@ public:
     Value barrierAlloc =
         rewriter.create<LocalAllocOp>(loc, barrierMemDescType, Value());
     rewriter.create<InitBarrierOp>(loc, barrierAlloc, 1);
+    auto mod = op->template getParentOfType<ModuleOp>();
+    if (triton::gpu::TritonGPUDialect::isWarpSpecialized(mod))
+      insertBarrier(rewriter, loc);
     op.addCompletionBarrier(barrierAlloc,
                             rewriter.create<arith::ConstantIntOp>(loc, 1, 1));
 
     rewriter.setInsertionPointAfter(op);
     Value phase = rewriter.create<arith::ConstantIntOp>(loc, 0, 32);
     rewriter.create<WaitBarrierOp>(loc, barrierAlloc, phase, op.getPred());
+    if (triton::gpu::TritonGPUDialect::isWarpSpecialized(mod))
+      insertBarrier(rewriter, loc);
     rewriter.create<InvalBarrierOp>(loc, barrierAlloc);
     return success();
   }
@@ -58,8 +64,8 @@ struct TCGen5MMAScaleSharedToTmemConversion
     : public OpRewritePattern<TCGen5MMAScaledOp> {
   using OpRewritePattern<TCGen5MMAScaledOp>::OpRewritePattern;
 
-  // Create a tmem_copy of scales from shared memory to tmem. `rows` is the M or
-  // N of the MMA operation (for LHS or RHS respectively).
+  // Create a tmem_copy of scales from shared memory to tmem. `rows` is the M
+  // or N of the MMA operation (for LHS or RHS respectively).
   bool lowerScaleToTmem(OpOperand &operand, PatternRewriter &rewriter,
                         int rows) const {
     Location loc = operand.getOwner()->getLoc();

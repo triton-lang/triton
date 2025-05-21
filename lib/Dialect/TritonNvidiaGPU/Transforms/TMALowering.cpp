@@ -4,6 +4,7 @@
 #include "mlir/Support/LogicalResult.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
+#include "triton/Dialect/Triton/IR/Types.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Attributes.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
@@ -89,15 +90,19 @@ void createBarrierExpectOp(Location loc, OpBuilder &rewriter,
   };
   int sizeInBytes = 0;
   for (auto op : ops) {
-    auto [tensorType, desc] = getTensorTypeAndDesc(op);
-    auto encoding = getEncodingFromDescriptor(op, tensorType, desc);
-    auto shapePerCTA = getShapePerCTA(encoding, tensorType.getShape());
-    sizeInBytes += product(shapePerCTA) *
-                   tensorType.getElementType().getIntOrFloatBitWidth() / 8;
+    if (isa<DescriptorLoadOp, DescriptorGatherOp>(op)) {
+      auto [tensorType, desc] = getTensorTypeAndDesc(op);
+      auto encoding = getEncodingFromDescriptor(op, tensorType, desc);
+      auto shapePerCTA = getShapePerCTA(encoding, tensorType.getShape());
+      sizeInBytes += product(shapePerCTA) *
+                     tensorType.getElementType().getIntOrFloatBitWidth() / 8;
+    }
   }
-  Value pred = rewriter.create<arith::ConstantIntOp>(loc, 1, 1);
-  rewriter.create<triton::nvidia_gpu::BarrierExpectOp>(loc, barrierAlloc,
-                                                       sizeInBytes, pred);
+  if (sizeInBytes > 0) {
+    Value pred = rewriter.create<arith::ConstantIntOp>(loc, 1, 1);
+    rewriter.create<triton::nvidia_gpu::BarrierExpectOp>(loc, barrierAlloc,
+                                                         sizeInBytes, pred);
+  }
 }
 
 void createTMALoad(DescriptorLoadOp op, OpBuilder &rewriter, Value barrierAlloc,

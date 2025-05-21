@@ -28,6 +28,7 @@
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
+#include "triton/Dialect/TritonGPU/Transforms/PipeliningUtility.h"
 #include "triton/Dialect/TritonGPU/Transforms/WSUtility.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "llvm/Support/Debug.h"
@@ -51,6 +52,7 @@ using namespace triton;
 using namespace triton::gpu;
 using namespace triton::nvidia_gpu;
 using namespace triton::nvws;
+namespace ttng = triton::nvidia_gpu;
 
 class InitialAssignment {
 public:
@@ -166,6 +168,49 @@ private:
     }
   }
 
+  bool isMMAOperandLoadOp(Operation *op) {
+    // Check if the given LoadOp can be lowered to cpasync
+    if (!isa<LoadOp>(op))
+      return false;
+
+    LoadOp loadOp = cast<LoadOp>(op);
+    auto resType = loadOp.getResult().getType();
+    if (!isa<RankedTensorType>(resType)) {
+      return false;
+    }
+
+    LocalAllocOp localAlloc;
+
+    std::function<bool(Operation *)> isUsedByDot = [&](Operation *op) {
+      // transitively check if one of the user of the op is a dot op
+      if (isa<MMAv5OpInterface, WarpGroupDotOp>(op)) {
+        return true;
+      } else {
+        if (isa<LocalAllocOp>(op)) {
+          localAlloc = cast<LocalAllocOp>(op);
+        }
+        for (auto user : op->getUsers())
+          if (isUsedByDot(user))
+            return true;
+        return false;
+      }
+    };
+
+    // For now, allow cpasync only for loading dot operands
+    // When we add support for a specialized warp group for loading additional
+    // tensors used in the epilogue, we should relax this condition.
+    if (!isUsedByDot(op))
+      return false;
+
+    auto sharedEnc =
+        mlir::cast<SharedEncodingTrait>(localAlloc.getType().getEncoding());
+    auto copyVecBytes =
+        getCopyVecBytes(localAlloc.getSrc().getType(), sharedEnc);
+
+    // At least 4 bytes needed for cpasync
+    return copyVecBytes >= 4;
+  }
+
   void assignGroups(Operation *op) {
     OpBuilder builder(op);
 
@@ -173,7 +218,8 @@ private:
     // FIXME: TMA can also be used for loading bias etc in the epilouge.
     // Those loads must be in a different group than the load group that
     // feeds MMA.
-    if (isa<triton::DescriptorLoadOp, triton::DescriptorGatherOp>(op)) {
+    if (isa<triton::DescriptorLoadOp, triton::DescriptorGatherOp>(op) ||
+        isMMAOperandLoadOp(op)) {
       doAssignGroups(op, {ATTR_WS_TMALOAD});
       // if followed by a local alloc, place that in the tma load group as well
       auto desc = op->getResult(0);
@@ -238,10 +284,7 @@ public:
     ModuleOp m = getOperation();
 
     // initial group assignment
-    auto manualGroupsAttr = m->getAttr(ATTR_WS_MANUAL);
-    bool manualGroups =
-        manualGroupsAttr && cast<BoolAttr>(manualGroupsAttr).getValue();
-    if (!manualGroups) {
+    if (!isManuallyGrouped(m)) {
       InitialAssignment().runOnOperation(m);
       LLVM_DEBUG({
         DBGS() << "Module after initial group assignment:\n";

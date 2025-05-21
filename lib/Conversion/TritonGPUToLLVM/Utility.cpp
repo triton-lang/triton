@@ -236,8 +236,7 @@ std::pair<Value, Value> getLaneAndWarpId(OpBuilder &rewriter, Location loc) {
 
 SmallVector<SmallVector<Value>>
 emitIndices(Location loc, RewriterBase &rewriter, const TargetInfoBase &target,
-            Attribute layout, RankedTensorType type, bool withCTAOffset,
-            std::optional<int> warpGroupStart) {
+            Attribute layout, RankedTensorType type, bool withCTAOffset) {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   MLIRContext *ctx = rewriter.getContext();
   auto shape = type.getShape();
@@ -252,9 +251,6 @@ emitIndices(Location loc, RewriterBase &rewriter, const TargetInfoBase &target,
   StringAttr kBlock = str_attr("block");
 
   auto [laneId, warpId] = getLaneAndWarpId(rewriter, loc);
-  if (warpGroupStart) {
-    warpId = b.sub(warpId, b.i32_val(*warpGroupStart));
-  }
   Value blockId =
       withCTAOffset ? target.getClusterCTAId(rewriter, loc) : b.i32_val(0);
   unsigned rank = shape.size();

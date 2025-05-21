@@ -224,6 +224,17 @@ struct NvwsArriveBarrierOpConversion
     : public ConvertOpToLLVMPattern<triton::nvws::ArriveBarrierOp> {
   using ConvertOpToLLVMPattern::ConvertOpToLLVMPattern;
 
+  void emitBarrier(std::string instr, LLVM::SharedMemoryObject smemObj,
+                   MLIRContext *ctx, ConversionPatternRewriter &rewriter,
+                   Location loc) const {
+    ::mlir::triton::PTXBuilder ptxBuilder;
+    auto &barSyncOp = *ptxBuilder.create<>(instr);
+    barSyncOp({ptxBuilder.newOperand(smemObj.getBase(), "r")},
+              /*onlyAttachMLIRArgs=*/true);
+    auto voidTy = void_ty(ctx);
+    ptxBuilder.launch(rewriter, loc, voidTy);
+  }
+
   LogicalResult
   matchAndRewrite(triton::nvws::ArriveBarrierOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
@@ -240,15 +251,11 @@ struct NvwsArriveBarrierOpConversion
       Value pred = LLVM::NVIDIA::createElectPredicateWarp0(loc, rewriter);
       LLVM::NVIDIA::createTcgen05Commit(rewriter, loc, smemObj.getBase(), pred);
     } else if (trackedOp == nvws::TrackedAsyncOp::LDGSTS) {
-      llvm_unreachable("Need to support cp.async.mbarrier.arrive");
+      const std::string ptx = "cp.async.mbarrier.arrive.noinc.shared.b64 [$0];";
+      emitBarrier(ptx, smemObj, op->getContext(), rewriter, loc);
     } else if (trackedOp == nvws::TrackedAsyncOp::NONE) {
-      ::mlir::triton::PTXBuilder ptxBuilder;
       const std::string ptx = "mbarrier.arrive.shared.b64 _, [$0];";
-      auto &barSyncOp = *ptxBuilder.create<>(ptx);
-      barSyncOp({ptxBuilder.newOperand(smemObj.getBase(), "r")},
-                /*onlyAttachMLIRArgs=*/true);
-      auto voidTy = void_ty(op->getContext());
-      ptxBuilder.launch(rewriter, op->getLoc(), voidTy);
+      emitBarrier(ptx, smemObj, op->getContext(), rewriter, loc);
     } else {
       llvm_unreachable("unknown tracked op");
     }

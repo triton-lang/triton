@@ -15,6 +15,7 @@ import torch
 
 import triton
 import triton.language as tl
+from triton.tools.tensor_descriptor import TensorDescriptor
 
 
 @triton.jit
@@ -37,7 +38,17 @@ def _attn_fwd_inner(
     N_CTX: tl.constexpr,
     fp8_v: tl.constexpr,
 ):
+
+    softmax_group = tl.group(name="fa_bw_softmax", start=0, size=4)
+    load_group = tl.group(name="tma_load", start=4, size=4)
+    groupA = tl.group(name="groupA", start=8, size=4)
+    groupB = tl.group(name="groupB", start=12, size=4)
+
+    # to support correction, group we need to use warpSize= 1 in load/groupA/groupB
+    # that would contain only mma's
+    # correction_group = tl.group(name="correction", start=16, size=4)
     # range of values handled by this stage
+
     if STAGE == 1:
         lo, hi = 0, start_m * BLOCK_M
     elif STAGE == 2:
@@ -52,42 +63,58 @@ def _attn_fwd_inner(
     for start_n in range(lo, hi, BLOCK_N):
         start_n = tl.multiple_of(start_n, BLOCK_N)
         # -- compute qk ----
-        k = k_desc_ptr.load(
-            [offs_kv, 0],
-        )
-        qk = tl.dot(q, k.T)
-        if STAGE == 2:
-            # tl.device_print("start_n:", start_n)
-            mask = offs_m[:, None] >= (start_n + offs_n[None, :])
-            qk = qk * qk_scale + tl.where(mask, 0, -1.0e6)
-            m_ij = tl.maximum(m_i, tl.max(qk, 1))
-            qk -= m_ij[:, None]
-        else:
-            m_ij = tl.maximum(m_i, tl.max(qk, 1) * qk_scale)
-            qk = qk * qk_scale - m_ij[:, None]
-        p = tl.math.exp2(qk)
-        l_ij = tl.sum(p, 1)
-        # -- update m_i and l_i
-        alpha = tl.math.exp2(m_i - m_ij)
-        l_i = l_i * alpha + l_ij
-        # -- update output accumulator --
-        acc = acc * alpha[:, None]
-        # update acc
-        if fp8_v:
-            v = v_desc_ptr.load(
-                [offs_hz * HEAD_DIM, start_n],
-            )
-            p = p.to(tl.float8e5)
-            acc = tl.dot(p, v.T, acc)
-        else:
-            v = v_desc_ptr.load(
+        with load_group:
+            k = k_desc_ptr.load(
                 [offs_kv, 0],
             )
-            p = p.to(tl.float16)
-            acc = tl.dot(p, v, acc)
+
+        with groupA:
+            qk = tl.dot(q, k.T)
+
+        with softmax_group:
+            if STAGE == 2:
+                # tl.device_print("start_n:", start_n)
+                mask = offs_m[:, None] >= (start_n + offs_n[None, :])
+                qk = qk * qk_scale + tl.where(mask, 0, -1.0e6)
+                m_ij = tl.maximum(m_i, tl.max(qk, 1))
+                qk -= m_ij[:, None]
+            else:
+                m_ij = tl.maximum(m_i, tl.max(qk, 1) * qk_scale)
+                qk = qk * qk_scale - m_ij[:, None]
+            p = tl.math.exp2(qk)
+            p = p.to(tl.float8e5) if fp8_v else p.to(tl.float16)
+            l_ij = tl.sum(p, 1)
+            # -- update m_i and l_i
+            alpha = tl.math.exp2(m_i - m_ij)
+            m_i = m_ij
+            l_i = l_i * alpha + l_ij
+
+        with groupA:
+            # -- update output accumulator --
+            acc = acc * alpha[:, None]
+
+        # update acc
+        # with softmax_group:
+        with load_group:
+            if fp8_v:
+                v = v_desc_ptr.load(
+                    [offs_hz * HEAD_DIM, start_n],
+                )
+            else:
+                v = v_desc_ptr.load(
+                    [offs_kv, 0],
+                )
+
+        # with softmax_group:
+        with groupB:
+            if fp8_v:
+                acc = tl.dot(p, v.T, acc)
+            else:
+                acc = tl.dot(p, v, acc)
+
         # update m_i and l_i
-        m_i = m_ij
         offs_kv += BLOCK_N
+
     return acc, l_i, m_i
 
 
@@ -127,48 +154,7 @@ def _attn_fwd(
     off_z = off_hz // H
     off_h = off_hz % H
     qvk_offset = off_z.to(tl.int64) * stride_qz + off_h.to(tl.int64) * stride_qh
-    # tl.inline_asm_elementwise(
-    #     "fence.proxy.tensormap::generic.acquire.gpu [$1], 128; // $0 dummy reg",
-    #     "=r, l",
-    #     [q_desc_ptr],
-    #     dtype=tl.int32,
-    #     is_pure=False,
-    #     pack=1,
-    # )
-    # tl.inline_asm_elementwise(
-    #     "fence.proxy.tensormap::generic.acquire.gpu [$1], 128; // $0 dummy reg",
-    #     "=r, l",
-    #     [k_desc_ptr],
-    #     dtype=tl.int32,
-    #     is_pure=False,
-    #     pack=1,
-    # )
-    # tl.inline_asm_elementwise(
-    #     "fence.proxy.tensormap::generic.acquire.gpu [$1], 128; // $0 dummy reg",
-    #     "=r, l",
-    #     [v_desc_ptr],
-    #     dtype=tl.int32,
-    #     is_pure=False,
-    #     pack=1,
-    # )
-    # """
-    # tl.inline_asm_elementwise(
-    #     "fence.proxy.tensormap::generic.acquire.gpu [$1], 128; // $0 dummy reg",
-    #     "=r, l",
-    #     [o_desc_ptr],
-    #     dtype=tl.int32,
-    #     is_pure=False,
-    #     pack=1,
-    # )
-    # tl.inline_asm_elementwise(
-    #     "fence.proxy.tensormap::generic.acquire.gpu [$1], 128; // $0 dummy reg",
-    #     "=r, l",
-    #     [m_desc_ptr],
-    #     dtype=tl.int32,
-    #     is_pure=False,
-    #     pack=1,
-    # )
-    # """
+
     O_block_ptr = tl.make_block_ptr(
         base=Out + qvk_offset,
         shape=(N_CTX, HEAD_DIM),
@@ -188,10 +174,15 @@ def _attn_fwd(
     # load scales
     qk_scale = sm_scale
     qk_scale *= 1.44269504  # 1/log(2)
+
     # load q: it will stay in SRAM throughout
     q = q_desc_ptr.load(
         [off_hz * N_CTX + start_m * BLOCK_M, 0],
     )
+
+    # XXX: we can't pass groups yet to other triton function
+    # so unfortunatelly we need to redefine duplicate groupB here and in _attn_fwd_inner
+    groupB = tl.group(name="groupB", start=12, size=4)
 
     # stage 1: off-band
     # For causal = True, STAGE = 3 and _attn_fwd_inner gets 1 as its STAGE
@@ -239,38 +230,17 @@ def _attn_fwd(
             N_CTX,
             V.dtype.element_ty == tl.float8e5,  #
         )
-    # epilogue
-    m_i += tl.math.log2(l_i)
-    acc = acc / l_i[:, None]
-    """
-    tl._experimental_descriptor_store(
-        m_desc_ptr,
-        m_i,
-        [off_hz * N_CTX + start_m * BLOCK_M],
-    )
-    tl._experimental_descriptor_store(
-        o_desc_ptr,
-        acc.to(Out.type.element_ty),
-        [off_hz * N_CTX + start_m * BLOCK_M, 0],
-    )
-    """
-    m_ptrs = M + off_hz * N_CTX + offs_m
-    tl.store(m_ptrs, m_i)
-    tl.store(O_block_ptr, acc.to(Out.type.element_ty))
+
+    with groupB:
+        # epilogue
+        m_i += tl.math.log2(l_i)
+        acc = acc / l_i[:, None]
+        m_ptrs = M + off_hz * N_CTX + offs_m
+        tl.store(m_ptrs, m_i)
+        tl.store(O_block_ptr, acc.to(Out.type.element_ty))
 
 
-def attention(
-    q,
-    k,
-    v,
-    causal,
-    sm_scale,
-    NUM_WARPS,
-    USE_TTG_WS,
-    WG_SPEC,
-    MATH_WG_PIPE,
-    FORCE_MEMBAR,
-):
+def attention(q, k, v, causal, sm_scale, NUM_WARPS):
     return run_attention(
         _attn_fwd,
         q,
@@ -279,79 +249,43 @@ def attention(
         causal,
         sm_scale,
         BLOCK_M=128,
-        BLOCK_N=128,
-        NUM_STAGES=2,
+        BLOCK_N=64,
+        NUM_STAGES=1,
         NUM_WARPS=NUM_WARPS,
-        USE_TTG_WS=USE_TTG_WS,
-        WG_SPEC=WG_SPEC,
-        MATH_WG_PIPE=MATH_WG_PIPE,
-        FORCE_MEMBAR=FORCE_MEMBAR,
+        USE_TTG_WS=False,
+        WG_SPEC=False,
+        MATH_WG_PIPE=False,
+        FORCE_MEMBAR=False,
     )
 
 
 @pytest.mark.parametrize(
-    "Z, H, N_CTX, HEAD_DIM, WG_SPEC",
+    "Z, H, N_CTX, HEAD_DIM, NUM_WARPS",
     [
-        (2, 2, 1024, 128, "tma_load_first"),
-        (2, 2, 2048, 128, "mma_first"),
-        (2, 2, 4096, 128, None),
-        (2, 2, 8192, 128, "mma_first"),
-        (2, 2, 16384, 128, None),
+        (2, 2, 256, 64, 4),
+        (2, 2, 512, 64, 4),
+        (2, 2, 1024, 64, 4),
+        (2, 2, 2048, 64, 4),
+        (2, 2, 4096, 64, 4),
     ],
 )
-@pytest.mark.parametrize("math_wg_pipe", [False, True])
 @pytest.mark.parametrize("causal", [False, True])
-# Disable USE_TTG_WS until proper integration is done
-# @pytest.mark.parametrize("USE_TTG_WS", [False, True])
-@pytest.mark.parametrize("USE_TTG_WS", [False])
-def test_op(
-    Z,
-    H,
-    N_CTX,
-    HEAD_DIM,
-    WG_SPEC,
-    math_wg_pipe,
-    causal,
-    USE_TTG_WS,
-    dtype=torch.float16,
-):
-    if torch.cuda.get_device_capability()[0] >= 10:
-        # math_wg_pipe=True isn't supported on Blackwell yet
-        if math_wg_pipe == True:
-            pytest.skip("math wg pipelining isn't supported on Blackwell")
-        # on blackwell there is a race in 8 warps mode
-        # we will first make 8 warps to work for matmul then look at FMHA
-        NUM_WARPS = 4
-        MATH_WG_PIPE = False
-    elif torch.cuda.get_device_capability()[0] >= 9:
-        MATH_WG_PIPE = math_wg_pipe
-        NUM_WARPS = 8
-    else:
-        pytest.skip("causal attention isn't supported on sm <= 9.0")
+@pytest.mark.parametrize("dtype", [torch.float16])
+def test_op(Z, H, N_CTX, HEAD_DIM, NUM_WARPS, causal, dtype):
+    if torch.cuda.get_device_capability()[0] != 10:
+        pytest.skip("Blackwell attention isn't supported on sm != 10.x")
 
     torch.manual_seed(20)
     sm_scale = 0.5
     q, k, v = init_tensors(Z, H, N_CTX, HEAD_DIM, dtype)
     # triton implementation
-    tri_out = attention(
-        q,
-        k,
-        v,
-        causal,
-        sm_scale,
-        NUM_WARPS,
-        USE_TTG_WS,
-        WG_SPEC,
-        MATH_WG_PIPE,
-        FORCE_MEMBAR=False,
-    )
+    tri_out = attention(q, k, v, causal, sm_scale, NUM_WARPS)
     # official FA implementation (broken for fp8)
     if supports_hopper() and dtype == torch.float16:
         fa2_out = triton_reference(q, k, v, causal, sm_scale)
         assert torch.allclose(tri_out, fa2_out, atol=1e-2, rtol=1.0 - 3)
 
     ref_out = torch_reference(q, k, v, causal, sm_scale, N_CTX, dtype)
-
     # compare
     # assert torch.allclose(ref_out, tri_out, atol=1e-2, rtol=0)
     # print("ref_out :", ref_out)
@@ -363,16 +297,18 @@ def test_op(
         rtol=ERROR_TOLERANCE,
         atol=ERROR_TOLERANCE,
     )
+    # print("PASS")
 
 
-BATCH, N_HEADS, HEAD_DIM = 4, 32, 128
+BATCH, N_HEADS, HEAD_DIM = 4, 32, 64
 HAS_FLASH_BENCH = HAS_FLASH
 HAS_FLASH_BENCH = False
 # vary seq length for fixed head and batch=4
 configs = []
 for mode in ["fwd"]:
     for causal in [False, True]:
-        for provider in ["triton-fp16", "triton-fp8"]:
+        # for provider in ["triton-fp16", "triton-fp8"]:
+        for provider in ["triton-fp16"]:
             if mode == "bwd" and not causal:
                 continue
             configs.append(
@@ -410,11 +346,7 @@ def bench_flash_attention(
     causal,
     mode,
     provider,
-    USE_TTG_WS=False,
-    MATH_WG_PIPE=True,
-    NUM_WARPS=8,
-    WG_SPEC="mma_first",
-    FORCE_MEMBAR=False,
+    NUM_WARPS=4,
     device="cuda",
 ):
     def bench_fn(q, k, v, causal, sm_scale):
@@ -424,11 +356,7 @@ def bench_flash_attention(
             v,
             causal,
             sm_scale,
-            NUM_WARPS,
-            USE_TTG_WS,
-            WG_SPEC,
-            MATH_WG_PIPE,
-            FORCE_MEMBAR,
+            NUM_WARPS=NUM_WARPS,
         )
 
     return bench_flash_attention_with_configs(
@@ -437,45 +365,14 @@ def bench_flash_attention(
 
 
 if __name__ == "__main__":
-    Z, H, N_CTX, HEAD_DIM = (2, 2, 16384, 128)
-    wg_spec = ()
-    wg_spec = "mma_first"
-    # wg_spec = "tma_load_first"
-    use_ttg_ws = False
-    force_membar = False
-    math_wg_pipe = False
-    # math_wg_pipe = False
-    # use_ttg_ws = True
-    # force_membar = True  # when using with ttng.wg perf is closer to ttg.ws=true
-    if 1:
-        test_op(
-            Z,
-            H,
-            N_CTX,
-            HEAD_DIM,
-            USE_TTG_WS=use_ttg_ws,
-            WG_SPEC=wg_spec,
-            math_wg_pipe=math_wg_pipe,
-            causal=True,
-            dtype=torch.float16,
-        )
-    else:
-        test_op(
-            Z,
-            H,
-            N_CTX,
-            HEAD_DIM,
-            USE_TTG_WS=use_ttg_ws,
-            WG_SPEC=wg_spec,
-            math_wg_pipe=math_wg_pipe,
-            causal=False,
-            dtype=torch.float8_e5m2,
-        )
+    Z, H, N_CTX, HEAD_DIM, NUM_WARPS = (2, 2, 4096, 64, 4)
 
-    bench_flash_attention.run(
-        USE_TTG_WS=use_ttg_ws,
-        WG_SPEC=wg_spec,
-        FORCE_MEMBAR=force_membar,
-        save_path=".",
-        print_data=True,
-    )
+    causal = True
+    # causal = False
+
+    dtype = torch.float16
+    # dtype = torch.float8_e5m2
+
+    test_op(Z, H, N_CTX, HEAD_DIM, NUM_WARPS, causal=causal, dtype=dtype)
+
+    bench_flash_attention.run(save_path=".", print_data=True)
