@@ -712,41 +712,9 @@ LogicalResult rewriteTMABufferUpdates(
 
     // If we are in a (potentially nested) if region, propagate the counter
     // up to the main for op body scope
-    Operation *curOp = op;
-    Operation *parent = op->getParentOp();
-    while (parent != forOp.getOperation()) {
-      auto ifOp = dyn_cast<scf::IfOp>(parent);
-      if (!ifOp) {
-        std::string msg;
-        llvm::raw_string_ostream ss(msg);
-        ss << "Cannot pipeline MakeTensorDescOp inside:\n";
-        parent->print(ss);
-        ss << "\nOnly scf.if regions are supported";
-        return makeDescOp->emitOpError(std::move(msg));
-      }
-
-      IRRewriter rewriter(parent);
-      auto newIfOp =
-          replaceIfOpWithNewSignature(rewriter, ifOp, {nextCounter.getType()});
-
-      auto yieldNewBlock = newIfOp.thenBlock();
-      auto yieldOldBlock = newIfOp.elseBlock();
-
-      if (yieldNewBlock != curOp->getBlock()) {
-        std::swap(yieldNewBlock, yieldOldBlock);
-      }
-      cast<scf::YieldOp>(yieldNewBlock->getTerminator())
-          .getResultsMutable()
-          .append(nextCounter);
-      cast<scf::YieldOp>(yieldOldBlock->getTerminator())
-          .getResultsMutable()
-          .append(counter);
-
-      ifOp.erase();
-      nextCounter = newIfOp.getResults().back();
-      curOp = newIfOp;
-      parent = newIfOp->getParentOp();
-    }
+    IRRewriter rewriter(forOp);
+    nextCounter =
+        sinkValueRedefinition(rewriter, counter, nextCounter, op->getBlock());
 
     // Finally, rewrite the loop level yield
     auto forYield = cast<scf::YieldOp>(forOp.getBody()->getTerminator());
