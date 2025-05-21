@@ -163,6 +163,8 @@ class InstrumentationHook(Hook):
                                                           self.profile_buffer_size, self.profile_buffer_alignment)
 
             triton_proton.add_allocate_proton_shared_memory(pm)
+            if backend == "hip":
+                triton_proton.add_sched_barriers(pm)
 
         ttgpuir_func = lambda pm: to_ttgpuir_passes(pm)
         llvmir_func = lambda pm: to_llvmir_passes(pm)

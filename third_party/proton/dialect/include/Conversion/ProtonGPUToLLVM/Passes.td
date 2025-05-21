@@ -17,4 +17,11 @@ def AllocateProtonGlobalScratchBuffer : Pass<"allocate-proton-global-scratch-buf
     let constructor = "mlir::triton::proton::gpu::createAllocateProtonGlobalScratchBufferPass()";
 }
 
+
+def AddSchedBarriers : Pass<"add-sched-barriers", "mlir::ModuleOp"> {
+    let constructor = "mlir::triton::proton::gpu::createAddSchedBarriersPass()";
+    let dependentDialects = ["mlir::LLVM::LLVMDialect",
+                             "mlir::ROCDL::ROCDLDialect"];
+}
+
 #endif // PROTONGPU_TO_LLVM_PASSES
