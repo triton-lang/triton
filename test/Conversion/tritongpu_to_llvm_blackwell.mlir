@@ -120,6 +120,24 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
 
 // -----
 
+#linear = #ttg.linear<{register = [[0, 1], [8, 0], [0, 8], [0, 16], [0, 32], [0, 64], [16, 0]], lane = [[0, 2], [0, 4], [1, 0], [2, 0], [4, 0]], warp = [[32, 0], [64, 0]], block = []}>
+#tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, unpacked = true>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shared = 65544 : i32, ttg.target = "cuda:100", ttg.tensor_memory_size = 128 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: @tensor_memory_ld_16x256
+  // CHECK: tcgen05.st.sync.aligned.16x256b.x16.b32
+  // CHECK: tcgen05.st.sync.aligned.16x256b.x16.b32
+  // CHECK: tcgen05.ld.sync.aligned.16x256b.x16.b32
+  // CHECK: tcgen05.ld.sync.aligned.16x256b.x16.b32
+  tt.func public @tensor_memory_ld_16x256(%arg0: !tt.ptr<f16>, %arg1: !tt.ptr<f16>, %arg2: !tt.ptr<f16>) {
+    %cst_0 = arith.constant dense<0.000000e+00> : tensor<128x128xf32, #linear>
+    %0 = ttng.tmem_alloc %cst_0 {tensor_memory_col_offset = 0 : i32, tensor_memory_row_offset = 0 : i32} : (tensor<128x128xf32, #linear>) -> !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>
+    %20 = ttng.tmem_load %0 : !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable> -> tensor<128x128xf32, #linear>
+    tt.return
+  }
+}
+
+// -----
+
 #tmem = #ttng.tensor_memory_encoding<blockM = 64, blockN = 128, unpacked = true>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shared = 65544 : i32, ttg.target = "cuda:100", ttg.tensor_memory_size = 128 : i32, "ttg.threads-per-warp" = 32 : i32} {
   // CHECK-LABEL: @tensor_memory_allocation
