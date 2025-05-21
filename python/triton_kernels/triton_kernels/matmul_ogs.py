@@ -19,20 +19,25 @@ from .specialize import specialize
 
 
 @dataclass
-class Epilogue:
+class EpilogueSpecs:
     name: str
     fn: "triton.runtime.jit.JITFunction"
     fn_arg_names: tuple[str]
+    fn_arg_do_not_specialize: tuple[str] = tuple()
+
+
+@dataclass
+class Epilogue:
+    specs: EpilogueSpecs
     fn_arg_values_matmul: tuple[object]
     fn_arg_values_finalize: tuple[object]
-    fn_arg_do_not_specialize: tuple[str] = tuple()
     is_expensive: bool = False
 
 
 _kernels = dict()
 
 
-def get_kernels(epilogue: Epilogue):
+def get_kernels(epilogue: EpilogueSpecs):
     global _kernels
     if epilogue.name in _kernels:
         return _kernels[epilogue.name]
@@ -375,7 +380,7 @@ def apply_postprocessing_features(scatter_indx, finalize_scatter_idxs, opt_flags
         grid, (BLOCK_N, num_warps) = sorted([(compute_grid(*c), c) for c in candidates], key=lambda x: x[0][1])[0]
         STAGES = 1 if num_warps == 1 else min(triton.cdiv(triton.cdiv(N, BLOCK_N), grid[1]), 5)
 
-        kernels = get_kernels(epilogue)
+        kernels = get_kernels(epilogue.specs)
         kernels._finalize_matmul[grid](
             flex_ctx.out_data.reinterpret(out_scatter),
             *out_scatter_flex,
@@ -485,7 +490,8 @@ def matmul_ogs(x, w, bias,
     if precision_config is None:
         precision_config = PrecisionConfig()
     if epilogue is None:
-        epilogue = Epilogue("dflt", None, tuple(), tuple(), tuple(), False)
+        epilogue_specs = EpilogueSpecs("dflt", None, tuple(), tuple())
+        epilogue = Epilogue(epilogue_specs, tuple(), tuple(), False)
     if w.ndim == 2:
         w = w.view(1, w.shape[-2], w.shape[-1])
     if x.ndim == 2:
@@ -550,7 +556,7 @@ def matmul_ogs(x, w, bias,
     flex = precision_config.flex_ctx
     bias_stride = None if bias is None else bias.stride(0)
     num_indx = None if scatter_indx is None else scatter_indx.src_indx.shape[0]
-    kernels = get_kernels(epilogue)
+    kernels = get_kernels(epilogue.specs)
     (kernels._p_matmul_ogs if opt_flags.is_persistent else kernels._matmul_ogs)[(n_cta,)](
                    flex.out_data.reinterpret(memory["output"]),
                    flex.out_data.reinterpret(out0), *out0.stride(),
@@ -595,7 +601,7 @@ def matmul_ogs(x, w, bias,
                    UPCAST_INDICES=should_upcast_indices(x, w, out0),
                    DISABLE_Y_TMA=out0.stride(-2) * out0.dtype.itemsize % 16 != 0,
                    SWAP_XW=swap_xw,
-                   NUM_SMS = n_cta,
+                   NUM_SMS = n_cta if opt_flags.is_persistent else 0,
                    **opt_flags.target_kernel_kwargs)
     # post-processing
     out = apply_postprocessing_features(scatter_indx, finalize_scatter_idxs, opt_flags, expt_data.offs,

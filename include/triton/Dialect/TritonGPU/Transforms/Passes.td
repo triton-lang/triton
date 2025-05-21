@@ -165,6 +165,16 @@ def TritonGPUOptimizePartitionWarps : Pass<"tritongpu-optimize-partition-warps",
   }];
 }
 
+def TritonGPUPartitionScheduling : Pass<"tritongpu-partition-scheduling", "mlir::ModuleOp"> {
+  let summary = "warp specialization partitioning pass";
+
+  let description = [{
+    The `tritongpu-partition-scheduling` analyzes the loads, MMAs, and other
+    operations in a loop that is meant to be warp specialized and determines
+    which partitions to assign to each operation.
+  }];
+}
+
 def TritonGPULoadMMASpecialization : Pass<"tritongpu-load-mma-specialization", "mlir::ModuleOp"> {
   let summary = "load MMA specialization";
 
@@ -218,23 +228,6 @@ def TritonGPUPrefetch : Pass<"tritongpu-prefetch", "mlir::ModuleOp"> {
                            "mlir::scf::SCFDialect",
                            "mlir::arith::ArithDialect"];
 }
-
-def TritonGPUWGMMAPrefetch : Pass<"tritongpu-wgmma-prefetch", "mlir::ModuleOp"> {
-   let summary = "prefetch for wgmma mixed precision";
-
-   let description = [{
-       This pass attempts to prefetch from shared memory for mixed-precision
-       wgmma when operand A is in the shared memory and needs to be loaded
-       to the local registers.
-   }];
-
-   let dependentDialects = [ "mlir::triton::gpu::TritonGPUDialect",
-                             "mlir::triton::nvidia_gpu::TritonNvidiaGPUDialect",
-                             "mlir::scf::SCFDialect",
-                             "mlir::arith::ArithDialect"];
-}
-
-
 
 def TritonGPUAccelerateMatmul : Pass<"tritongpu-accelerate-matmul", "mlir::ModuleOp"> {
   let summary = "accelerate matmul";

@@ -306,6 +306,13 @@ def _unwrap_if_constexpr(o):
     return o.value if isinstance(o, constexpr) else o
 
 
+def _normalize_tuple(t):
+    normalized_tuple = _unwrap_if_constexpr(t)
+    if isinstance(normalized_tuple, (list, builtins.tuple)):
+        normalized_tuple = tuple(normalized_tuple)
+    return normalized_tuple
+
+
 def check_bit_width(value, shift_value):
     if isinstance(value, tensor) and isinstance(shift_value, constexpr):
         bitwidth = value.type.scalar.primitive_bitwidth
@@ -1069,7 +1076,6 @@ class tensor(base_value):
 
     @builtin
     def __getitem__(self, slices, _builder=None):
-        import builtins
         if isinstance(slices, (builtins.slice, slice, constexpr)) or slices is None:
             slices = [slices]
         if isinstance(slices, tuple):
@@ -1237,7 +1243,7 @@ class tensor(base_value):
 
 class tuple(base_value):
 
-    def __init__(self, args: list, type: tuple_type = None):
+    def __init__(self, args: Sequence, type: tuple_type = None):
         self.values = [i for i in args]
 
         def get_type(x):
@@ -1255,7 +1261,6 @@ class tuple(base_value):
         if isinstance(idx, constexpr):
             return self.values[idx]
         else:
-            import builtins
             assert isinstance(idx, (slice, builtins.slice))
             return tuple(self.values[idx.start:idx.stop:idx.step])
 
@@ -1270,8 +1275,7 @@ class tuple(base_value):
         self.values[idx] = value
 
     def __add__(self, other):
-        if isinstance(other, list):
-            other = tuple(other)
+        other = _normalize_tuple(other)
         return tuple(self.values + other.values)
         # return tuple(a + b for a, b in zip(self.values, other.values))
 
@@ -1280,13 +1284,10 @@ class tuple(base_value):
         return tuple(self.values * other.value)
 
     def __eq__(self, other):
-        import builtins
-        if isinstance(other, (list, builtins.tuple)):
-            other = tuple(other)
+        other = _normalize_tuple(other)
         return constexpr(self.values == other.values)
 
     def __hash__(self):
-        import builtins
         return hash(builtins.tuple(self.values))
 
     def __str__(self):
@@ -1789,6 +1790,15 @@ def view(input, *shape, _builder=None):
     warn("view is deprecated, please use reshape with can_reorder being true.")
     shape = _shape_check_impl(_unwrap_iterable(shape))
     return semantic.reshape(input, shape, can_reorder=True, builder=_builder)
+
+
+@_tensor_member_fn
+@builtin
+def item(input, _builder=None, _generator=None):
+    """
+    Converts a single-element tensor into a scalar.
+    """
+    return _unsplat(input, _builder=_builder, _generator=_generator)
 
 
 @_tensor_member_fn
