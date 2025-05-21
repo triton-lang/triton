@@ -237,11 +237,12 @@ LogicalResult lowerDistributedToSharedStmatrix(
                          LLVM::GEPNoWrapFlags::inbounds);
     // Pack into vector of i32
     SmallVector<Value> inputs;
-    Type packedTy = vec_ty(llvmElemTy, nVecElems);
+    Type packedTy = vec_ty(llvmElemTy, 32 / bitwidth);
     for (int j = 0; j < nVecElems; j++) {
       Value input = b.undef(packedTy);
       for (int k = 0; k < 32 / bitwidth; k++) {
-        input = b.insert_element(packedTy, input, srcVals[i + j * vec + k]);
+        input = b.insert_element(packedTy, input, srcVals[i + j * vec + k],
+                                 b.i32_val(k));
       }
       inputs.push_back(b.bitcast(input, i32_ty));
     }
