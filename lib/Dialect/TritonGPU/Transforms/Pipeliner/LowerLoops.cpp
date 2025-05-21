@@ -671,12 +671,10 @@ allocTMABuffers(scf::ForOp forOp,
 
 Value subviewTMADescriptor(OpBuilder &builder, Location loc, Value alloc,
                            Value counter) {
-  Value tmaSizeVal = builder.create<arith::ConstantIntOp>(
-      loc, ttng::TMA_SIZE_BYTES, 32);
-  Value offset =
-      builder.create<arith::MulIOp>(loc, tmaSizeVal, counter);
-  return builder.create<triton::AddPtrOp>(loc, alloc.getType(), alloc,
-                                                   offset);
+  Value tmaSizeVal =
+      builder.create<arith::ConstantIntOp>(loc, ttng::TMA_SIZE_BYTES, 32);
+  Value offset = builder.create<arith::MulIOp>(loc, tmaSizeVal, counter);
+  return builder.create<triton::AddPtrOp>(loc, alloc.getType(), alloc, offset);
 }
 
 LogicalResult rewriteTMABufferUpdates(
