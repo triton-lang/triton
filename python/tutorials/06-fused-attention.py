@@ -502,6 +502,8 @@ class _attention(torch.autograd.Function):
             return (triton.cdiv(q.shape[2], META["BLOCK_M"]), q.shape[0] * q.shape[1], 1)
 
         ctx.grid = grid
+        if is_cuda() and warp_specialize:
+            extra_kern_args["maxnreg"] = 80
         _attn_fwd[grid](
             sm_scale, M,  #
             q.shape[0], q.shape[1],  #
@@ -511,7 +513,6 @@ class _attention(torch.autograd.Function):
             FP8_OUTPUT=q.dtype == torch.float8_e5m2,  #
             STAGE=stage,  #
             warp_specialize=warp_specialize,  #
-            maxnreg=80 if warp_specialize else None,  #
             **extra_kern_args)
 
         ctx.save_for_backward(q, k, v, o, M)
