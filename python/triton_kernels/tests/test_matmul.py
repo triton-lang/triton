@@ -330,7 +330,7 @@ def test_op(m, n, k, split_k, do_gather, do_scatter, fused_scatter, has_y_gammas
             metadata = launch_metadata.get()
             if "matmul_ogs" in metadata["name"]:
                 nbytes = metadata["bytes"]
-            pass
+           
 
         triton.knobs.runtime.launch_enter_hook = _hook
 
