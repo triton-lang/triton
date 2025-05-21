@@ -1,9 +1,10 @@
 // RUN: triton-opt %s -split-input-file  -add-sched-barriers --verify-diagnostics | FileCheck %s --check-prefix=CHECK
-// RUN: triton-opt %s -split-input-file  -add-sched-barriers -convert-proton-amd-gpu-to-llvm="arch=gfx942" --verify-diagnostics | FileCheck %s --check-prefix=CHECK
 #shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
 #smem = #ttg.shared_memory
 module attributes {"ttg.num-warps" = 8 : i32} {
-  llvm.func @convert_read_counter() {
+  // CHECK-LABEL: read_counter
+  llvm.func @read_counter() {
+    // CHECK: rocdl.sched.barrier 0
     %1 = proton_gpu.read_counter : i32
     llvm.return
   }
@@ -16,6 +17,37 @@ module attributes {"ttg.num-warps" = 8 : i32} {
 module attributes {"ttg.num-warps" = 8 : i32, ttg.profile_scratch_memory_alignment = 128 : i32, ttg.profile_scratch_memory_size = 384 : i32} {
   // CHECK-LABEL: nested_record
   llvm.func @nested_record(%arg: !llvm.ptr<1>) attributes {noinline = false, nvvm.kernel = 1 : ui1} {
+    //CHECK: rocdl.sched.barrier 0
+    //CHECK: proton_gpu.read_counter
+    //CHECK: proton_gpu.circular_store
+    //CHECK: rocdl.sched.barrier 0
+    //CHECK: scf.for
+    //CHECK:   rocdl.sched.barrier 0
+    //CHECK:   proton_gpu.read_counter
+    //CHECK:   proton_gpu.circular_store
+    //CHECK:   rocdl.sched.barrier 0
+    //CHECK:   scf.for
+    //CHECK:     rocdl.sched.barrier 0
+    //CHECK:     proton_gpu.read_counter
+    //CHECK:     proton_gpu.circular_store
+    //CHECK:     rocdl.sched.barrier 0
+    //CHECK:   }
+    //CHECK:   rocdl.sched.barrier 0
+    //CHECK:   proton_gpu.read_counter
+    //CHECK:   proton_gpu.circular_store
+    //CHECK:   rocdl.sched.barrier 0
+    //CHECK: }
+    //CHECK: rocdl.sched.barrier 0
+    //CHECK: proton_gpu.read_counter
+    //CHECK: proton_gpu.circular_store
+    //CHECK: rocdl.sched.barrier 0
+    //CHECK: rocdl.sched.barrier 0
+    //CHECK: proton_gpu.read_counter
+    //CHECK: proton_gpu.circular_store
+    //CHECK: rocdl.sched.barrier 0
+    //CHECK: gpu.barrier
+    //CHECK: proton_gpu.finalize
+    //CHECK: llvm.return
     %c4 = arith.constant 4 : index
     %c1 = arith.constant 1 : index
     %c0 = arith.constant 0 : index
