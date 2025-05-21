@@ -105,10 +105,12 @@ public:
     TritonGPUConversionTarget target(*context, typeConverter);
     target.addDynamicallyLegalDialect<ttng::TritonNvidiaGPUDialect>(
         [&](Operation *op) {
-          bool isLegal = true;
-          for (auto result : op->getResults())
-            isLegal |= typeConverter.isLegal(result.getType());
-          return isLegal;
+          // bool isLegal = true;
+          // for (auto result : op->getResults())
+          //   isLegal |= typeConverter.isLegal(result.getType());
+          // return isLegal;
+          return TritonGPUConversionTarget::isDynamicallyLegal(op,
+                                                               typeConverter);
         });
 
     // rewrite patterns
@@ -125,7 +127,7 @@ public:
         >(typeConverter, context);
 
     ConversionConfig config;
-    config.allowPatternRollback = false;
+    config.allowPatternRollback = true;
     if (failed(
             applyPartialConversion(mod, target, std::move(patterns), config)))
       return signalPassFailure();
