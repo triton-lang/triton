@@ -813,7 +813,7 @@ setup(
     test_suite="tests",
     extras_require={
         "build": [
-            "cmake>=3.20",
+            "cmake>=3.20,<4.0",
             "lit",
         ],
         "tests": [
