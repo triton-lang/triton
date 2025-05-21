@@ -105,8 +105,10 @@ public:
     TritonGPUConversionTarget target(*context, typeConverter);
     target.addDynamicallyLegalDialect<ttng::TritonNvidiaGPUDialect>(
         [&](Operation *op) {
-          return TritonGPUConversionTarget::isDynamicallyLegal(op,
-                                                               typeConverter);
+          bool isLegal = true;
+          for (auto result : op->getResults())
+            isLegal |= typeConverter.isLegal(result.getType());
+          return isLegal;
         });
 
     // rewrite patterns
