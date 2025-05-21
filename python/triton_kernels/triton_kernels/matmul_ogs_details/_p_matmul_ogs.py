@@ -318,20 +318,6 @@ def _p_matmul_ogs(
         offs_w_n = off_n + tl.arange(0, BLOCK_N)
         offs_w_n = tl.max_contiguous(tl.multiple_of(offs_w_n % N, BLOCK_N), BLOCK_N)
 
-        # If the operands are swapped, the TMA layout of the MX scales are not optimal for the weights anymore.
-        # The scales will be loaded with normal loads instead.
-        if is_microscaled_format and SWAP_XW:
-            offs_mx_k = tl.arange(0, MX_SCALE_BLOCK_K)
-
-            PACKED_MX_BLOCK: tl.constexpr = (MX_SCALE_BLOCK_K // 4) * 32 * 4 * 4
-            offs_mx_inner = tl.arange(0, PACKED_MX_BLOCK)
-            offs_mx_outer = ((off_n // 128) + tl.arange(0, BLOCK_N // 128)) % N
-            offs_mx_outer = tl.max_contiguous(tl.multiple_of(offs_mx_outer, BLOCK_N // 128), BLOCK_N // 128)
-
-            if SPLIT_K > 1:
-                offs_mx_k += MX_SCALE_BLOCK_K * pid_k
-                offs_mx_inner += PACKED_MX_BLOCK * pid_k
-
         if X_USE_LOAD_TMA:
             if ExptData is None:
                 # start_z may change; update the descriptor
