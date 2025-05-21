@@ -127,33 +127,13 @@ public:
     if (val.value() == true)
       return failure();
     auto loc = store.getLoc();
-    rewriter.replaceAllUsesWith(store.getToken(), store.getDep());
-    rewriter.setInsertionPointAfter(loop);
+    rewriter.setInsertionPoint(store);
     Value diff = rewriter.create<arith::SubIOp>(loc, loop.getUpperBound(),
                                                 loop.getLowerBound());
-    if (diff.getType().isIndex()) {
-      diff = rewriter.create<arith::IndexCastOp>(
-          loc, IntegerType::get(rewriter.getContext(), 32), diff);
-    }
     Value zero = rewriter.create<arith::ConstantIntOp>(loc, 0, diff.getType());
     Value cond = rewriter.create<arith::CmpIOp>(loc, arith::CmpIPredicate::sle,
                                                 diff, zero);
-    auto tokenType = store.getToken().getType();
-    auto loopToken = loop.getResult(loopTok.getArgNumber() - 1);
-    auto ifOp = rewriter.create<scf::IfOp>(store.getLoc(), TypeRange{tokenType},
-                                           cond, true, true);
-    rewriter.setInsertionPointToStart(ifOp.thenBlock());
-    auto newStore = rewriter.create<ttng::TMEMStoreOp>(
-        store.getLoc(), tokenType, store.getDst(), loopToken, store.getSrc(),
-        store.getPred());
-    auto thenYield = rewriter.create<scf::YieldOp>(loc, newStore.getToken());
-    rewriter.setInsertionPointToStart(ifOp.elseBlock());
-    auto elseYield = rewriter.create<scf::YieldOp>(loc, loopToken);
-    rewriter.replaceUsesWithIf(
-        loopToken, ifOp.getResult(0), [&](OpOperand &use) {
-          return use.getOwner() != newStore && use.getOwner() != elseYield;
-        });
-    rewriter.eraseOp(store);
+    store.getPredMutable().assign(cond);
     return success();
   }
 };

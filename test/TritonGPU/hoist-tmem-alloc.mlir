@@ -332,8 +332,11 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-stages" = 4 : i32, "ttg.nu
     %c32_i32 = arith.constant 32 : i32
     %cst = arith.constant dense<0.000000e+00> : tensor<128x128xf32, #blocked>
     scf.for %arg18 = %c0_i32 to %c4_i32 step %c1_i32 : i32 {
-      // CHECK: ttng.tmem_alloc
-      // CHECK-NEXT: scf.for %[[ITER:.*]] = %[[START:.*]] to %[[LIMIT:.*]] step
+      // CHECK: %[[ACC:.*]], %[[TOK:.*]] = ttng.tmem_alloc
+      // CHECK: %[[DIFF:.*]] = arith.subi %[[LIMIT:.*]], %[[START:.*]] : i32
+      // CHECK: %[[COND:.*]] = arith.cmpi sle, %[[DIFF]], %[[ZERO]] : i32
+      // CHECK-NEXT: %[[NTOK:.*]] = ttng.tmem_store %[[CST:.*]], %[[ACC]][%[[TOK]]], %[[COND]]
+      // CHECK-NEXT: scf.for %[[ITER:.*]] = %[[START]] to %[[LIMIT]] step
       %20:3 = scf.for %arg19 = %arg11 to %arg12 step %c1_i32 iter_args(%arg20 = %cst, %arg21 = %c0_i32, %arg22 = %false) -> (tensor<128x128xf32, #blocked>, i32, i1)  : i32 {
         %28 = tt.descriptor_load %arg0[%arg19, %arg21] : !tt.tensordesc<tensor<128x32xf8E4M3FN, #shared>> -> tensor<128x32xf8E4M3FN, #blocked1>
         %29 = ttg.local_alloc %28 : (tensor<128x32xf8E4M3FN, #blocked1>) -> !ttg.memdesc<128x32xf8E4M3FN, #shared, #smem>
@@ -346,14 +349,6 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-stages" = 4 : i32, "ttg.nu
         %35 = arith.addi %arg21, %c32_i32 : i32
         scf.yield %34, %35, %true : tensor<128x128xf32, #blocked>, i32, i1
       }
-      // CHECK: %[[DIFF:.*]] = arith.subi %[[LIMIT]], %[[START]]
-      // CHECK: %[[COND:.*]] = arith.cmpi sle, %[[DIFF]], %[[ZERO]]
-      // CHECK: %[[TOK:.*]] = scf.if %[[COND]]
-      // CHECK-NEXT:   %[[NTOK:.*]] = ttng.tmem_store
-      // CHECK-NEXT:   scf.yield %[[NTOK]]
-      // CHECK-NEXT: } else {
-      // CHECK-NEXT:   scf.yield
-      // CHECK-NEXT: }
       %21 = tt.reshape %20#0 : tensor<128x128xf32, #blocked> -> tensor<128x2x64xf32, #blocked2>
       %22 = tt.trans %21 {order = array<i32: 0, 2, 1>} : tensor<128x2x64xf32, #blocked2> -> tensor<128x64x2xf32, #blocked3>
       %outLHS, %outRHS = tt.split %22 : tensor<128x64x2xf32, #blocked3> -> tensor<128x64xf32, #blocked4>
