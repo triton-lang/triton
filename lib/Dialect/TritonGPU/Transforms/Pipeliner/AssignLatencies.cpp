@@ -292,8 +292,17 @@ public:
               (ttng::isAccMultibufferingPossible(mma, forOp) &&
                !getDisallowAccMultiBuffer(forOp))) {
             // MMA's users can be pushed to the next stage
-            opLatency[&op] = 1 + forOp->hasAttr(kWarpSpecializeAttrName);
+            opLatency[&op] = 1;
           }
+          // HACK: A pipelined MMA's latency should equal the number of buffers
+          // for the accumulator, but when the user is in an `scf.if` in SWP,
+          // the `scf.if` is pushed to the end of the loop rather than peeled
+          // before the MMA op, requiring an extra buffer due to liverange
+          // overlap. WS does not have this problem because the MMA is placed in
+          // a different partition than the MMA, so we can correctly set the
+          // latency.
+          if (forOp->hasAttr(kWarpSpecializeAttrName))
+            opLatency[&op] += 1;
         }
       }
     }
