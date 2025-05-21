@@ -43,6 +43,30 @@ static void pipelineWgmma(ModuleOp moduleOp) {
   }
 }
 
+static Operation *wrapInIfOp(RewriterBase &rewriter, Operation *op,
+                             Value pred) {
+  OpBuilder::InsertionGuard guard(rewriter);
+  rewriter.setInsertionPoint(op);
+  Location loc = op->getLoc();
+  bool hasResults = op->getNumResults() > 0;
+  auto ifOp = rewriter.create<scf::IfOp>(loc, op->getResultTypes(), pred,
+                                         /*hasElse=*/hasResults);
+  op->remove();
+  ifOp.getThenRegion().front().push_front(op);
+  if (hasResults) {
+    rewriter.setInsertionPointToEnd(&ifOp.getThenRegion().front());
+    auto thenYieldOp = rewriter.create<scf::YieldOp>(loc, op->getResults());
+    rewriter.setInsertionPointToStart(&ifOp.getElseRegion().front());
+    SmallVector<Value> poisonResults;
+    for (auto result : op->getResults()) {
+      poisonResults.push_back(
+          rewriter.create<ub::PoisonOp>(loc, result.getType()));
+    }
+    rewriter.create<scf::YieldOp>(loc, poisonResults);
+  }
+  return ifOp;
+}
+
 static Operation *wrapInMaskOp(RewriterBase &rewriter, Operation *op,
                                Value pred) {
   if (isa<arith::ConstantOp>(op)) {
@@ -121,19 +145,16 @@ void resolvePredicateStageOps(
 static Operation *processPeeledEpilogueOp(RewriterBase &rewriter, Operation *op,
                                           Value predCondition) {
   if (auto predOp = dyn_cast<triton::gpu::PredicateStageOp>(op)) {
-    // TODO: Handle the case for iterations other than the last one
     // Return false for the predicate of the peeled iteration
     return rewriter.create<mlir::arith::ConstantIntOp>(
         predOp.getLoc(), 0, predOp.getResult().getType());
   } else {
-    // Predicate operations based on whether the peeled iteration is executed
-    return triton::predicateOp(rewriter, op, predCondition);
+    return wrapInIfOp(rewriter, op, predCondition);
   }
 }
 
 static Operation *processLoopBodyOp(RewriterBase &rewriter, Operation *op) {
   if (auto predOp = dyn_cast<triton::gpu::PredicateStageOp>(op)) {
-    // TODO: Handle the case for iterations other than the last one
     if (predOp.getStage() == predOp.getMaxStage() - 1) {
       return rewriter.create<mlir::arith::ConstantIntOp>(
           predOp.getLoc(), 1, predOp.getResult().getType());
@@ -155,15 +176,21 @@ static void peelEpilogue(RewriterBase &rewriter, scf::ForOp forOp,
                                  processLoopBodyOp);
 }
 
-static bool hasWaitsInLastStage(scf::ForOp forOp, CoarseSchedule &schedule) {
+static bool hasMMAv5WaitsInLastStage(scf::ForOp forOp,
+                                     CoarseSchedule &schedule) {
   int maxStage = schedule.getNumStages() - 1;
+  bool hasMMAv5 = false;
+  bool hasWaitInLastStage = false;
   for (auto &op : forOp.getBody()->without_terminator()) {
     if (isa<triton::nvidia_gpu::WaitBarrierOp>(op) &&
         schedule[&op].first == maxStage) {
-      return true;
+      hasWaitInLastStage = true;
+    }
+    if (isa<triton::nvidia_gpu::MMAv5OpInterface>(op)) {
+      hasMMAv5 = true;
     }
   }
-  return false;
+  return hasMMAv5 && hasWaitInLastStage;
 }
 
 static void expandLoops(ModuleOp moduleOp) {
@@ -179,8 +206,10 @@ static void expandLoops(ModuleOp moduleOp) {
     // in the loop body.
     bool keepPredicateStage = forOp->hasAttr("__test_keep_predicate_stage");
     // TODO: Enable epilogue peeling for warp specialized loops
+    // Heuristic: only peel epilogue for MMAv5 loops with waits in the last
+    // stage
     bool customEpiloguePeeling =
-        hasWaitsInLastStage(forOp, schedule) &&
+        hasMMAv5WaitsInLastStage(forOp, schedule) &&
         !forOp->getParentOfType<triton::gpu::WarpSpecializeOp>() &&
         !keepPredicateStage; // do not peel if we are testing the stage
                              // predication
