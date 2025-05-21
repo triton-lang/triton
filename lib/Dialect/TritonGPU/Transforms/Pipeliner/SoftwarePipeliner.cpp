@@ -122,26 +122,6 @@ static void resolveMaskOp(ModuleOp moduleOp) {
   }
 }
 
-void resolvePredicateStageOps(
-    ArrayRef<Operation *> ops,
-    std::function<Value(triton::gpu::PredicateStageOp)> fn) {
-  SmallVector<triton::gpu::PredicateStageOp> opsToErase;
-  for (auto op : ops) {
-    auto predicateStageOp = dyn_cast<triton::gpu::PredicateStageOp>(op);
-    if (!predicateStageOp) {
-      continue;
-    }
-    Value result = fn(predicateStageOp);
-    if (result) {
-      predicateStageOp.getResult().replaceAllUsesWith(result);
-      opsToErase.push_back(predicateStageOp);
-    }
-  }
-  for (auto op : opsToErase) {
-    op->erase();
-  }
-}
-
 static Operation *processPeeledEpilogueOp(RewriterBase &rewriter, Operation *op,
                                           Value predCondition) {
   if (auto predOp = dyn_cast<triton::gpu::PredicateStageOp>(op)) {
@@ -170,12 +150,6 @@ static Operation *processLoopBodyOp(RewriterBase &rewriter, Operation *op) {
   return op;
 }
 
-static void peelEpilogue(RewriterBase &rewriter, scf::ForOp forOp,
-                         int maxStage) {
-  mlir::triton::peelLoopEpilogue(forOp, 1, processPeeledEpilogueOp,
-                                 processLoopBodyOp);
-}
-
 static bool hasMMAv5WaitsInLastStage(scf::ForOp forOp,
                                      CoarseSchedule &schedule) {
   int maxStage = schedule.getNumStages() - 1;
@@ -202,18 +176,6 @@ static void expandLoops(ModuleOp moduleOp) {
       continue;
     }
 
-    // Testing feature: allow for unresolved predicate stage ops
-    // in the loop body.
-    bool keepPredicateStage = forOp->hasAttr("__test_keep_predicate_stage");
-    // TODO: Enable epilogue peeling for warp specialized loops
-    // Heuristic: only peel epilogue for MMAv5 loops with waits in the last
-    // stage
-    bool customEpiloguePeeling =
-        hasMMAv5WaitsInLastStage(forOp, schedule) &&
-        !forOp->getParentOfType<triton::gpu::WarpSpecializeOp>() &&
-        !keepPredicateStage; // do not peel if we are testing the stage
-                             // predication
-
     std::vector<std::pair<Operation *, unsigned>> finalSchedule =
         schedule.createFinalSchedule(forOp);
     triton::PipeliningOption options;
@@ -225,6 +187,18 @@ static void expandLoops(ModuleOp moduleOp) {
             std::vector<std::pair<Operation *, unsigned>> &schedule) {
           schedule = finalSchedule;
         };
+
+    // Testing feature: allow for unresolved predicate stage ops
+    // in the loop body.
+    bool keepPredicateStage = forOp->hasAttr("__test_keep_predicate_stage");
+    // TODO: Enable epilogue peeling for warp specialized loops
+    // Heuristic: only peel epilogue for MMAv5 loops with waits in the last
+    // stage
+    bool customEpiloguePeeling =
+        hasMMAv5WaitsInLastStage(forOp, schedule) &&
+        !forOp->getParentOfType<triton::gpu::WarpSpecializeOp>() &&
+        !keepPredicateStage; // do not peel if we are testing the stage
+                             // predication
 
     if (keepPredicateStage || customEpiloguePeeling) {
       options.emitPredicateStageFn =
@@ -244,7 +218,8 @@ static void expandLoops(ModuleOp moduleOp) {
     }
     forOp = *newForOp;
     if (customEpiloguePeeling) {
-      peelEpilogue(rewriter, forOp, schedule.getNumStages() - 1);
+      mlir::triton::peelLoopEpilogue(forOp, processPeeledEpilogueOp,
+                                     processLoopBodyOp);
     }
   }
 

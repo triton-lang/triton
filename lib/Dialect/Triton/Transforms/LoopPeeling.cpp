@@ -48,17 +48,14 @@ namespace mlir {
 namespace triton {
 
 void peelLoopEpilogue(
-    scf::ForOp forOp, int numIterations,
+    scf::ForOp forOp,
     function_ref<Operation *(RewriterBase &, Operation *, Value)>
         processPeeledOp,
     function_ref<Operation *(RewriterBase &, Operation *)> processLoopBodyOp) {
-  // TODO: generalize for arbitrary number of peeled iterations
-  assert(numIterations == 1);
-
   SmallVector<Operation *> loopBodyOps;
   IRRewriter rewriter(forOp);
   Location loc = forOp.getLoc();
-  Type stepType = forOp.getStep().getType();
+  Type type = forOp.getStep().getType();
 
   // Fetch loop bounds and step
   Value lowerBound = forOp.getLowerBound();
@@ -66,11 +63,8 @@ void peelLoopEpilogue(
   Value step = forOp.getStep();
 
   // Compute new upper bound for the main loop: newUpperBound = upperBound -
-  // (numIterations * step)
-  auto numConst = getConstantInt(rewriter, loc, numIterations, stepType);
-  Value peelOffset = rewriter.create<arith::MulIOp>(loc, numConst, step);
-  Value newUpperBound =
-      rewriter.create<arith::SubIOp>(loc, upperBound, peelOffset);
+  // step
+  Value newUpperBound = rewriter.create<arith::SubIOp>(loc, upperBound, step);
 
   forOp.getUpperBoundMutable().assign(newUpperBound);
   rewriter.setInsertionPointAfter(forOp);
@@ -84,7 +78,7 @@ void peelLoopEpilogue(
   // lastIV = lb + floor( (ub – lb – 1) / s ) * s
   Value range = rewriter.create<arith::SubIOp>(loc, upperBound, lowerBound);
   Value rangeM1 = rewriter.create<arith::SubIOp>(
-      loc, range, getConstantInt(rewriter, loc, 1, stepType));
+      loc, range, getConstantInt(rewriter, loc, 1, type));
   Value itersM1 = rewriter.create<arith::DivSIOp>(loc, rangeM1, step);
   Value delta = rewriter.create<arith::MulIOp>(loc, itersM1, step);
   Value lastIV = rewriter.create<arith::AddIOp>(loc, delta, lowerBound);
@@ -94,7 +88,6 @@ void peelLoopEpilogue(
        llvm::zip(forOp.getRegionIterArgs(), forOp.getResults())) {
     mapping[arg] = operand;
   }
-
   mapping[forOp.getInductionVar()] = lastIV;
 
   SmallVector<Value> peeledResults = forOp.getResults();

@@ -45,7 +45,7 @@ struct TestLoopPeelingPass
     };
     getOperation().walk([&](scf::ForOp forOp) {
       if (getPeelEpilogueIterations(forOp)) {
-        mlir::triton::peelLoopEpilogue(forOp, 1, /*processPeeledOp=*/wrapInIf,
+        mlir::triton::peelLoopEpilogue(forOp, /*processPeeledOp=*/wrapInIf,
                                        /*processLoopBodyOp=*/nullptr);
       }
     });
