@@ -4,16 +4,16 @@
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/Passes.h"
 #include "llvm/ADT/AddressRanges.h"
 
-namespace {
+namespace ttg = mlir::triton::gpu;
 
-using namespace mlir;
+namespace mlir {
+namespace triton {
+namespace nvidia_gpu {
 
-namespace ttng = triton::nvidia_gpu;
-namespace ttg = triton::gpu;
-namespace tt = triton;
-
-#define GEN_PASS_CLASSES
+#define GEN_PASS_DEF_TRITONNVIDIAGPUINTERLEAVETMEMPASS
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/Passes.h.inc"
+
+namespace {
 
 // If we don't know the effects of the op, we add all possible effects.
 void addAllValuelessEffects(
@@ -77,7 +77,7 @@ std::pair<Value, AccessRange> findBufferAccess(Value a) {
 
   Operation *defOp = a.getDefiningOp();
   // Accessing the alloc accesses the whole buffer.
-  if (auto alloc = dyn_cast<ttng::TMEMAllocOp>(defOp)) {
+  if (auto alloc = dyn_cast<TMEMAllocOp>(defOp)) {
     AccessRange access;
     for (uint64_t dim : alloc.getType().getShape())
       access.ranges.push_back({{0, dim}});
@@ -128,7 +128,7 @@ std::pair<Value, AccessRange> findBufferAccess(Value a) {
   }
 
   // Subslice is a subview only on the N dimension.
-  if (auto subslice = dyn_cast<ttng::TMEMSubSliceOp>(defOp)) {
+  if (auto subslice = dyn_cast<TMEMSubSliceOp>(defOp)) {
     auto [alloc, parentAccess] = findBufferAccess(subslice.getSrc());
     if (!alloc)
       return {};
@@ -186,7 +186,7 @@ bool sinkOps(Value buffer, ArrayRef<Operation *> useChain) {
     }
     // Don't sink past barrier signals, since they may guard the liverange
     // of the buffer.
-    if (isa<ttng::ArriveBarrierOp>(next))
+    if (isa<ArriveBarrierOp>(next))
       break;
     if (!isMemoryEffectFree(next)) {
       SmallVector<MemoryEffects::EffectInstance> effects;
@@ -199,7 +199,7 @@ bool sinkOps(Value buffer, ArrayRef<Operation *> useChain) {
           dep = true;
           break;
         }
-        if (isa<ttng::TensorMemory>(effect.getResource()) &&
+        if (isa<TensorMemory>(effect.getResource()) &&
             (!effect.getValue() || tmemMayAlias(effect.getValue(), buffer))) {
           dep = true;
           break;
@@ -229,20 +229,22 @@ bool trySinkOp(Operation *op, Value buffer) {
   return sinkOps(buffer, useChain);
 }
 
+} // anonymous namespace
+
 struct TritonNvidiaGPUInterleaveTMemPass
-    : public TritonNvidiaGPUInterleaveTMemPassBase<
+    : public impl::TritonNvidiaGPUInterleaveTMemPassBase<
           TritonNvidiaGPUInterleaveTMemPass> {
-  using TritonNvidiaGPUInterleaveTMemPassBase::
-      TritonNvidiaGPUInterleaveTMemPassBase;
+  using impl::TritonNvidiaGPUInterleaveTMemPassBase<
+      TritonNvidiaGPUInterleaveTMemPass>::TritonNvidiaGPUInterleaveTMemPassBase;
 
   void runOnOperation() override {
     MLIRContext *context = &getContext();
     ModuleOp m = getOperation();
     SmallVector<std::pair<Operation *, Value>> opsToSink;
     m.walk([&](Operation *op) {
-      if (auto load = dyn_cast<ttng::TMEMLoadOp>(op))
+      if (auto load = dyn_cast<TMEMLoadOp>(op))
         opsToSink.emplace_back(load, load.getSrc());
-      else if (auto alloc = dyn_cast<ttng::TMEMAllocOp>(op))
+      else if (auto alloc = dyn_cast<TMEMAllocOp>(op))
         opsToSink.emplace_back(alloc, alloc.getResult());
     });
     for (auto [op, buffer] : opsToSink) {
@@ -253,8 +255,6 @@ struct TritonNvidiaGPUInterleaveTMemPass
   }
 };
 
-} // namespace
-
-std::unique_ptr<Pass> mlir::createTritonNvidiaGPUInterleaveTMemPass() {
-  return std::make_unique<TritonNvidiaGPUInterleaveTMemPass>();
-}
+} // namespace nvidia_gpu
+} // namespace triton
+} // namespace mlir

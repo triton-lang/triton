@@ -4,15 +4,14 @@
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/Passes.h"
 
-namespace {
+namespace mlir {
+namespace triton {
+namespace nvidia_gpu {
 
-using namespace mlir;
-using namespace triton;
-using namespace triton::gpu;
-using namespace triton::nvidia_gpu;
-
-#define GEN_PASS_CLASSES
+#define GEN_PASS_DEF_TRITONNVIDIAGPUREMOVETMEMTOKENSPASS
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/Passes.h.inc"
+
+namespace {
 
 void eraseResult(Operation *op, unsigned resultIdx, Value replacement) {
   OperationState state(op->getLoc(), op->getName(), op->getOperands(),
@@ -45,8 +44,10 @@ void removeTMEMToken(Operation *op, Value dummy) {
   }
 }
 
+} // anonymous namespace
+
 class TritonNvidiaGPURemoveTMEMTokensPass
-    : public TritonNvidiaGPURemoveTMEMTokensPassBase<
+    : public impl::TritonNvidiaGPURemoveTMEMTokensPassBase<
           TritonNvidiaGPURemoveTMEMTokensPass> {
 public:
   using TritonNvidiaGPURemoveTMEMTokensPassBase::
@@ -56,15 +57,13 @@ public:
     for (auto func : getOperation().getOps<FuncOp>()) {
       auto b = OpBuilder::atBlockBegin(&func.getBody().front());
       // Placeholder value that will get DCE'd by the canonicalizer.
-      Value dummy =
-          b.create<ub::PoisonOp>(func.getLoc(), b.getType<AsyncTokenType>());
+      Value dummy = b.create<ub::PoisonOp>(
+          func.getLoc(), b.getType<triton::gpu::AsyncTokenType>());
       func.walk([&](Operation *op) { removeTMEMToken(op, dummy); });
     }
   }
 };
 
-} // namespace
-
-std::unique_ptr<Pass> mlir::createTritonNvidiaGPURemoveTMEMTokensPass() {
-  return std::make_unique<TritonNvidiaGPURemoveTMEMTokensPass>();
-}
+} // namespace nvidia_gpu
+} // namespace triton
+} // namespace mlir

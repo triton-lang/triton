@@ -95,6 +95,7 @@ private:
   SmallVector<unsigned int> instrShape;
   int numElementsPer32b;
   int numRepM;
+  int numSlicePerBlockN;
 };
 
 } // namespace NVIDIA

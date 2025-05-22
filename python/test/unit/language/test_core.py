@@ -350,7 +350,8 @@ def _test_unary(dtype_x, expr, numpy_expr=None, device='cuda', num_ctas=1):
     kernel = patch_kernel(kernel, {'GENERATE_TEST_HERE': expr})
     # inputs
     x = numpy_random(SIZE, dtype_str=dtype_x)
-    if 'log' in expr:
+    # avoid log/sqrt of negative numbers
+    if 'log' in expr or 'sqrt' in expr:
         x = np.abs(x) + 0.01
     # reference result
     z_ref = eval(expr if numpy_expr is None else numpy_expr)
@@ -1270,7 +1271,7 @@ def test_shapes_as_params(device):
         a = tl.arange(0, 64).reshape(2, 4, 8).trans((2, 1, 0))
         tl.static_assert(a.shape == [tl.constexpr(8), tl.constexpr(4), tl.constexpr(2)])
 
-        a = tl.arange(0, 64).view(2, 4, 8)
+        a = tl.reshape(tl.arange(0, 64), 2, 4, 8, can_reorder=True)
         tl.static_assert(a.shape == [tl.constexpr(2), tl.constexpr(4), tl.constexpr(8)])
 
     kernel[(1, )]()
@@ -1543,6 +1544,8 @@ def test_atomic_rmw(op, dtype_x_str, mode, sem, device):
     if is_interpreter():
         if dtype_x_str == 'float16' or dtype_x_str == 'bfloat16':
             pytest.skip("Only test atomic bfloat16/float16 ops on GPU")
+    if "uint" in dtype_x_str and mode in ["min_neg", "all_neg"]:
+        pytest.skip("uint cannot be negative")
 
     n_programs = 5
 
@@ -1745,7 +1748,7 @@ def test_tensor_atomic_add_access_patterns(shape, idx_order, mask_step, num_ctas
         xoffset = tl.program_id(0) * XBLOCK
         x_idx = xoffset + tl.arange(0, XBLOCK)[:]
         mask = x_idx < shape0 * shape1
-        mask = mask and (x_idx % mask_step != 0)
+        mask = mask & (x_idx % mask_step != 0)
         idx_base = shape1 * (x_idx // shape1)
         idx_offset = tl.load(idx_ptr + x_idx, mask)
         in_elem = tl.load(in_ptr + x_idx, mask)
@@ -2758,7 +2761,7 @@ def test_scan2d(op, dtype_str, shape, axis, reverse, num_warps, device):
 
     elif op == 'cummax':
         # NumPy does not have cummax
-        z = z.astype(np.int64)
+        z = np.empty_like(x, dtype=np.int64)
         z_ref = torch.cummax(torch.from_numpy(x_in.copy()), axis=axis).indices.numpy()
         if reverse:
             z_ref = x_in.shape[axis] - np.flip(z_ref, axis) - 1
@@ -7515,6 +7518,7 @@ def test_short_circuiting(device):
 
 
 @pytest.mark.interpreter
+@pytest.mark.filterwarnings("ignore:If conditional called with multidimensional Tensor*")
 def test_unsplat(device):
 
     @triton.jit
@@ -7524,7 +7528,7 @@ def test_unsplat(device):
         condition = tl.load(x + tl.arange(0, 1)) > 42
 
         if explicit:
-            condition = condition.reshape([])
+            condition = condition.item()
 
         if condition:
             tl.store(x, 42)

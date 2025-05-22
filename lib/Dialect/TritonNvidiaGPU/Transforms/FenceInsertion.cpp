@@ -13,24 +13,21 @@
 //
 //===----------------------------------------------------------------------===//
 
-using namespace mlir;
-namespace tt = ::mlir::triton;
-namespace ttg = ::mlir::triton::gpu;
-namespace ttng = ::mlir::triton::nvidia_gpu;
+namespace ttg = mlir::triton::gpu;
 
-#define GEN_PASS_CLASSES
+namespace mlir {
+namespace triton {
+namespace nvidia_gpu {
+
+#define GEN_PASS_DEF_TRITONGPUFENCEINSERTION
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/Passes.h.inc"
 
-namespace {
-
 struct FenceInsertionPass
-    : public TritonGPUFenceInsertionBase<FenceInsertionPass> {
+    : public impl::TritonGPUFenceInsertionBase<FenceInsertionPass> {
 
 public:
-  FenceInsertionPass() = default;
-  FenceInsertionPass(int computeCapability) {
-    this->computeCapability = computeCapability;
-  }
+  using impl::TritonGPUFenceInsertionBase<
+      FenceInsertionPass>::TritonGPUFenceInsertionBase;
   // TODO: support more general patterns to insert fences. eg. any op(generic)
   // to shared in use-def chain which refers by async proxy. We have generic(
   // convertlayout with sts/stmatix) + fence + async(wgmma) up to now
@@ -39,7 +36,7 @@ public:
     if (computeCapability < 90)
       return;
     ModuleOp mod = getOperation();
-    mod.walk([&](tt::DotOpInterface dotOp) {
+    mod.walk([&](DotOpInterface dotOp) {
       Value a = dotOp.getA();
       Value b = dotOp.getB();
       bool aDependsOnShared = dependOnCopyRegToShared(a);
@@ -48,8 +45,8 @@ public:
         return WalkResult::advance();
 
       OpBuilder builder(dotOp);
-      auto fence = builder.create<ttng::FenceAsyncSharedOp>(dotOp.getLoc(),
-                                                            /*bCluster=*/false);
+      auto fence = builder.create<FenceAsyncSharedOp>(dotOp.getLoc(),
+                                                      /*bCluster=*/false);
       // If there is all the dependencies are outside of the loop try to hoist
       // the fence.
       while (auto loopOp = fence->getParentOfType<LoopLikeOpInterface>()) {
@@ -63,8 +60,8 @@ public:
       }
 
       // If the previous op is already a fence, this one isn't needed.
-      if (auto lastFence = dyn_cast_or_null<ttng::FenceAsyncSharedOp>(
-              fence->getPrevNode())) {
+      if (auto lastFence =
+              dyn_cast_or_null<FenceAsyncSharedOp>(fence->getPrevNode())) {
         if (lastFence.getBCluster() == fence.getBCluster())
           fence.erase();
       }
@@ -129,9 +126,7 @@ private:
     return true;
   }
 };
-} // namespace
 
-std::unique_ptr<Pass>
-mlir::createTritonNvidiaGPUFenceInsertionPass(int computeCapability) {
-  return std::make_unique<FenceInsertionPass>(computeCapability);
-}
+} // namespace nvidia_gpu
+} // namespace triton
+} // namespace mlir

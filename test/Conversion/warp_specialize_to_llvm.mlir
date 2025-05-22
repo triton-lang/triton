@@ -1,4 +1,4 @@
-// RUN: triton-opt %s -split-input-file -allow-unregistered-dialect -convert-warp-specialize-to-llvm | FileCheck %s
+// RUN: triton-opt %s -split-input-file -mlir-print-local-scope -allow-unregistered-dialect -convert-warp-specialize-to-llvm | FileCheck %s
 
 module attributes {"ttg.num-warps" = 4 : i32, "ttg.total-num-warps" = 11 : i32} {
 
@@ -76,7 +76,7 @@ llvm.func @generate_switch_loop() attributes {allocation.offset = 32 : i32} {
   // CHECK: [[DEFAULT]]:
   // CHECK-NEXT: barrier.sync 1 ;
   // CHECK-NEXT: barrier.sync 1 ;
-  // CHECK-NEXT: llvm.br [[SWITCH_LOOP]]
+  // CHECK-NEXT: llvm.br [[SWITCH_LOOP]] {loop_annotation = #llvm.loop_annotation<licm = <disable = true>>}
 
   // CHECK: [[EXIT]]:
   // CHECK-NEXT: llvm.return
