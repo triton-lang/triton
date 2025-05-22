@@ -56,6 +56,9 @@ void init_triton_passes_ttgpuir(py::module &&m) {
   ADD_PASS_WRAPPER_0("add_optimize_thread_locality",
                      createTritonGPUOptimizeThreadLocality);
   ADD_PASS_WRAPPER_0("add_hoist_tmem_alloc", createTritonGPUHoistTMEMAlloc);
+  ADD_PASS_OPTION_WRAPPER_1("add_assign_latencies",
+                            createTritonGPUAssignLatencies, int);
+  ADD_PASS_WRAPPER_0("add_schedule_loops", createTritonGPUScheduleLoops);
   ADD_PASS_OPTION_WRAPPER_2("add_pipeline", createTritonGPUPipeline, int, bool);
   ADD_PASS_OPTION_WRAPPER_1("add_warp_specialize",
                             createTritonGPUAutomaticWarpSpecialization, int);

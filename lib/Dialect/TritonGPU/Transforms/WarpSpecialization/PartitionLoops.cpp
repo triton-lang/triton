@@ -16,8 +16,6 @@ using namespace mlir;
 using namespace triton;
 using namespace triton::gpu;
 
-using Partition = WarpSchedule::Partition;
-
 //===----------------------------------------------------------------------===//
 // slicePartition
 //===----------------------------------------------------------------------===//

@@ -1,5 +1,5 @@
-// RUN: triton-opt %s -split-input-file -allow-unregistered-dialect -tritongpu-hoist-tmem-alloc -tritongpu-automatic-warp-specialization                     | FileCheck %s --check-prefix=CHECK --check-prefix=BASE
-// RUN: triton-opt %s -split-input-file -allow-unregistered-dialect -tritongpu-hoist-tmem-alloc -tritongpu-automatic-warp-specialization -tritongpu-pipeline | FileCheck %s --check-prefix=CHECK --check-prefix=PIPELINE
+// RUN: triton-opt %s -split-input-file -allow-unregistered-dialect -tritongpu-hoist-tmem-alloc -tritongpu-assign-latencies -tritongpu-schedule-loops -tritongpu-automatic-warp-specialization | FileCheck %s --check-prefix=CHECK --check-prefix=BASE
+// RUN: triton-opt %s -split-input-file -allow-unregistered-dialect -tritongpu-hoist-tmem-alloc -tritongpu-assign-latencies -tritongpu-schedule-loops -tritongpu-automatic-warp-specialization -tritongpu-pipeline | FileCheck %s --check-prefix=CHECK --check-prefix=PIPELINE
 
 #indices_layout = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
 #acc_layout = #ttg.blocked<{sizePerThread = [1, 128], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [0, 1]}>
@@ -129,7 +129,8 @@ tt.func public @attention_forward(
   %K_desc: !tt.tensordesc<tensor<64x64xf16, #shared>>,
   %V_desc: !tt.tensordesc<tensor<64x64xf16, #shared>>,
   %qk_scale: f32,
-  %n_tiles: i32
+  %n_tiles: i32,
+  %idx_ptr: !tt.ptr<f32>
 ) {
   %true = arith.constant true
   %false = arith.constant false
@@ -141,9 +142,12 @@ tt.func public @attention_forward(
   %one = arith.constant dense<1.0> : tensor<256xf32, #ttg.slice<{dim = 1, parent = #blocked}>>
 
   // CHECK-LABEL: ttg.warp_specialize
-  // BASE: ttg.assigned_stage
+  // PIPELINE: partition0
   // PIPELINE-COUNT-4: ttng.tc_gen5_mma
+  // PIPELINE-NOT: ttng.tc_gen5_mma
+  // PIPELINE: partition1
   // PIPELINE-COUNT-4: ttng.async_tma_copy_global_to_local
+  // PIPELINE-NOT: ttng.async_tma_copy_global_to_local
   %loop_outs:3 = scf.for %i = %c0_i32 to %n_tiles step %c64_i32 iter_args(
     %l_i = %one,
     %acc = %zero,
@@ -180,7 +184,12 @@ tt.func public @attention_forward(
     %alpha_0 = tt.expand_dims %alpha {axis = 1 : i32} : tensor<256xf32, #ttg.slice<{dim = 1, parent = #blocked}>> -> tensor<256x1xf32, #blocked>
     %alpha_1 = tt.broadcast %alpha_0 : tensor<256x1xf32, #blocked> -> tensor<256x64xf32, #blocked>
 
-    %acc_corrected = arith.mulf %acc, %alpha_1 : tensor<256x64xf32, #blocked>
+    %cur_idx_ptr = tt.addptr %idx_ptr, %i : !tt.ptr<f32>, i32
+    %idx = tt.load %cur_idx_ptr : !tt.ptr<f32>
+    %bias = tt.splat %idx : f32 -> tensor<256x64xf32, #blocked>
+
+    %acc_step = arith.mulf %acc, %alpha_1 : tensor<256x64xf32, #blocked>
+    %acc_corrected = arith.addf %acc_step, %bias : tensor<256x64xf32, #blocked>
 
     %62 = tt.descriptor_load %V_desc[%i, %c0_i32] : !tt.tensordesc<tensor<64x64xf16, #shared>> -> tensor<64x64xf16, #load_blocked>
     %63 = ttg.local_alloc %62 : (tensor<64x64xf16, #load_blocked>) -> !ttg.memdesc<64x64xf16, #shared, #smem>

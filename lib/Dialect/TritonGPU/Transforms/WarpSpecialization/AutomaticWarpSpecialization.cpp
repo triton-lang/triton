@@ -56,6 +56,7 @@ void AutomaticWarpSpecialization::runOnOperation() {
 
   pm.clear();
   pm.addPass(createTritonGPUOptimizePartitionWarps());
+  pm.addPass(createTritonGPUScheduleLoops());
   if (failed(runPipeline(pm, getOperation())))
     return signalPassFailure();
 }

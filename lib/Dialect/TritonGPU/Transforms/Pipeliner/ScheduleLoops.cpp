@@ -2,6 +2,7 @@
 #include "triton/Analysis/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/MMAv5PipelineUtility.h"
+#include "triton/Dialect/TritonGPU/Transforms/Passes.h"
 #include "triton/Dialect/TritonGPU/Transforms/PipeliningUtility.h"
 #include "triton/Dialect/TritonGPU/Transforms/Schedule.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
@@ -16,11 +17,12 @@ using namespace mlir;
 namespace tt = mlir::triton;
 namespace ttg = mlir::triton::gpu;
 namespace ttng = mlir::triton::nvidia_gpu;
-namespace mlir {
-namespace triton {
-namespace gpu {
-
+namespace mlir::triton::gpu {
 namespace {
+
+//===----------------------------------------------------------------------===//
+// scheduleLoops
+//===----------------------------------------------------------------------===//
 
 bool hasGpuBarriers(scf::ForOp forOp) {
   WalkResult result = forOp.walk(
@@ -48,8 +50,6 @@ bool hasLatenciesAssigned(scf::ForOp forOp,
   for (auto &op : forOp.getBody()->without_terminator()) {
     if (opLatency.count(&op))
       return true;
-    if (op.getAttr(kAssignedStageAttrName))
-      return true;
   }
   return false;
 }
@@ -61,15 +61,12 @@ CoarseSchedule scheduleKeyOps(scf::ForOp forOp,
   auto terminator = cast<scf::YieldOp>(forOp.getBody()->getTerminator());
   // Determine all operations that have a non-zero latency
   SmallVector<Operation *> latOps;
-  SmallVector<Operation *> stagedOps;
   for (auto &op : forOp.getBody()->without_terminator()) {
     if (opLatency.count(&op))
       latOps.push_back(&op);
-    if (op.getAttr(kAssignedStageAttrName))
-      stagedOps.push_back(&op);
   }
   // If no latency ops, nothing to schedule
-  if (latOps.empty() && stagedOps.empty())
+  if (latOps.empty())
     return CoarseSchedule(0);
 
   DominanceInfo domInfo(forOp);
@@ -117,11 +114,6 @@ CoarseSchedule scheduleKeyOps(scf::ForOp forOp,
       opToStage[op] = maxDistance - dist;
   }
 
-  for (Operation *op : stagedOps) {
-    auto stageAttr = op->getAttrOfType<IntegerAttr>(kAssignedStageAttrName);
-    opToStage[op] = stageAttr.getInt();
-  }
-
   auto stages = llvm::make_second_range(opToStage);
   int maxStage = *llvm::max_element(stages);
   CoarseSchedule schedule(maxStage + 1);
@@ -157,6 +149,29 @@ CoarseSchedule scheduleKeyOps(scf::ForOp forOp,
   }
 
   return schedule;
+}
+
+// Get an initial schedule for the loop. This is the base schedule from which
+// the rest of the pass will backward propagate dependencies.
+CoarseSchedule getInitialSchedule(scf::ForOp forOp,
+                                  const DenseMap<Operation *, int> &opLatency) {
+  if (!isSafeToPipeline(forOp, opLatency))
+    return CoarseSchedule(0);
+
+  // If the loop has assigned latencies, use them to determine the initial
+  // schedule.
+  if (hasLatenciesAssigned(forOp, opLatency))
+    return scheduleKeyOps(forOp, opLatency);
+
+  // If the loop has an existing schedule, use it as the base schedule.
+  CoarseSchedule schedule;
+  if (forOp->hasAttr(kWarpSpecializeAttrName) &&
+      succeeded(schedule.deSerialize(forOp))) {
+    schedule.shrinkToFit();
+    return schedule;
+  }
+
+  return CoarseSchedule(0);
 }
 
 // Find dependencies with distance of 1. They will go to the next stage,
@@ -302,11 +317,8 @@ void scheduleRemainingToLastStage(scf::ForOp forOp, CoarseSchedule &schedule,
 
 void scheduleLoop(scf::ForOp forOp,
                   const DenseMap<Operation *, int> &opLatency) {
-  if (!hasLatenciesAssigned(forOp, opLatency) ||
-      !isSafeToPipeline(forOp, opLatency))
-    return;
   // Based on the latencies, schedule the key ops to the stages.
-  CoarseSchedule schedule = scheduleKeyOps(forOp, opLatency);
+  CoarseSchedule schedule = getInitialSchedule(forOp, opLatency);
   if (schedule.empty())
     return;
   LLVM_DEBUG({
@@ -340,8 +352,7 @@ void scheduleLoop(scf::ForOp forOp,
   schedule.serialize(forOp);
 }
 
-} // namespace
-
+/// Schedule the loops based on the latencies assigned to the operations.
 void scheduleLoops(ModuleOp moduleOp) {
   DenseMap<Operation *, int> opLatency = deserializeLatencies(moduleOp);
   SmallVector<scf::ForOp> loops;
@@ -353,6 +364,19 @@ void scheduleLoops(ModuleOp moduleOp) {
   }
 }
 
-} // namespace gpu
-} // namespace triton
-} // namespace mlir
+} // namespace
+
+//===----------------------------------------------------------------------===//
+// Pass Definition
+//===----------------------------------------------------------------------===//
+
+#define GEN_PASS_DEF_TRITONGPUSCHEDULELOOPS
+#include "triton/Dialect/TritonGPU/Transforms/Passes.h.inc"
+
+struct ScheduleLoops : public impl::TritonGPUScheduleLoopsBase<ScheduleLoops> {
+  using TritonGPUScheduleLoopsBase::TritonGPUScheduleLoopsBase;
+
+  void runOnOperation() override { scheduleLoops(getOperation()); }
+};
+
+} // namespace mlir::triton::gpu

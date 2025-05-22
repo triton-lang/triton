@@ -16,8 +16,6 @@ add_triton_library(TritonGPUTransforms
   Pipeliner/ScheduleLoops.cpp
   Pipeliner/WGMMAPipeline.cpp
   Pipeliner/PipelineExpander.cpp
-  Pipeliner/TestPipelineAssignLatencies.cpp
-  Pipeliner/TestPipelineScheduleLoop.cpp
   Pipeliner/TestPipelineLowerLoop.cpp
   Pipeliner/SoftwarePipeliner.cpp
   Pipeliner/TMAStoresPipeline.cpp
@@ -33,6 +31,7 @@ add_triton_library(TritonGPUTransforms
   WarpSpecialization/LoadMMASpecialization.cpp
   WarpSpecialization/Partition.cpp
   WarpSpecialization/OptimizePartitionWarps.cpp
+  WarpSpecialization/PartitionBuilder.cpp
   WarpSpecialization/PartitionLoops.cpp
   WarpSpecialization/PartitionScheduling.cpp
   WarpSpecialization/RewritePartitionDependencies.cpp
