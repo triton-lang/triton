@@ -1682,6 +1682,92 @@ LinearLayout getScaleTMEMStoreLinearLayout(RankedTensorType scaleType,
   return combineCtaCgaWithShape(regLanes, CTALayout, scaleType.getShape());
 }
 
+std::optional<LinearLayout>
+getTmemLoadStoreLayout16x256(int M, int N, RankedTensorType oldType,
+                             int numWarps) {
+  // Too small to distribute on two warp groups while using 16x256 message.
+  if (numWarps == 8 && M == 64 && N <= 16 &&
+      oldType.getElementTypeBitWidth() < 32) {
+    return {};
+  }
+  assert(numWarps == 4 || numWarps == 8);
+  auto ctaLayout = getCTALayout(oldType.getEncoding());
+  SmallVector<int64_t> shape = getShapePerCTA(oldType);
+  MLIRContext *ctx = ctaLayout.getContext();
+
+  using basisT = std::vector<std::vector<int32_t>>;
+  StringAttr kRegister = StringAttr::get(ctx, "register");
+  StringAttr kLane = StringAttr::get(ctx, "lane");
+  StringAttr kWarp = StringAttr::get(ctx, "warp");
+  SmallVector<StringAttr> outDimNames = standardOutDimNames(ctx, 2);
+
+  unsigned numElementsPerThread = 256 / oldType.getElementTypeBitWidth();
+  int kWidth = 64 / oldType.getElementTypeBitWidth();
+  // Follow the layout given by a tmem load using this layout for the inner
+  // shape:
+  // https://docs.nvidia.com/cuda/parallel-thread-execution/#tcgen05-matrix-fragments-shape-16256b
+  LinearLayout innerTile =
+      nvidiaMmaTile(ctx, {8, numElementsPerThread}, kWidth, {1, 0}, {0, 1});
+  innerTile =
+      innerTile * LinearLayout::identity1D(2, kRegister, outDimNames[0]);
+  // Then distribute the rest along warpgroups and registers.
+  // Then the last warp distribute along M or N following the same order as
+  // in getTmemLoadStoreLayout32x32b. This allows us to use the same lowering to
+  // tmem for load and store. This part could be generalized by making the
+  // lowering of tmem load and store rely more on linear layout.
+  bool distributeMAlongWarps = false;
+  bool distributeNAlongWarps = false;
+  // Figure out how to distribute acorss warpgroups.
+  if (numWarps == 8) {
+    if (shape[0] > 128) {
+      distributeMAlongWarps = true;
+    } else {
+      distributeNAlongWarps = true;
+    }
+  }
+  int nBase = numElementsPerThread;
+  int maxRegN =
+      std::min(N, distributeNAlongWarps ? (int)shape[1] / 2 : (int)shape[1]);
+  if (maxRegN / nBase > 1) {
+    innerTile = innerTile * LinearLayout::identity1D(maxRegN / nBase, kRegister,
+                                                     outDimNames[1]);
+  }
+  if (M != 64) {
+    innerTile =
+        innerTile * LinearLayout::identity1D(2, kRegister, outDimNames[0]);
+  }
+  // Distribute M along 4 warps to satisfy TMEM requirements.
+  innerTile = innerTile * LinearLayout::identity1D(4, kWarp, outDimNames[0]);
+
+  // Fill out the rest of the shape with M first then N.
+  int numMRegDim = std::min(128, (int)shape[0]) / M;
+  if (numMRegDim > 1) {
+    innerTile = innerTile *
+                LinearLayout::identity1D(numMRegDim, kRegister, outDimNames[0]);
+  }
+  // Dim M=128 should be distributed on the second warp group.
+  int nextDim = 128;
+  if (distributeMAlongWarps) {
+    innerTile = innerTile * LinearLayout::identity1D(2, kWarp, outDimNames[0]);
+    nextDim <<= 1;
+  }
+  numMRegDim = shape[0] / nextDim;
+  if (numMRegDim > 1) {
+    innerTile = innerTile *
+                LinearLayout::identity1D(numMRegDim, kRegister, outDimNames[0]);
+  }
+  int maxN = distributeNAlongWarps ? shape[1] / 2 : shape[1];
+  int numNRegDim = maxN / maxRegN;
+  if (numNRegDim > 1) {
+    innerTile = innerTile *
+                LinearLayout::identity1D(numNRegDim, kRegister, outDimNames[1]);
+  }
+  if (distributeNAlongWarps) {
+    innerTile = innerTile * LinearLayout::identity1D(2, kWarp, outDimNames[1]);
+  }
+  return combineCtaCgaWithShape(innerTile, ctaLayout, oldType.getShape());
+}
+
 LinearLayout getTmemLoadLayoutSplitLongM(int M, int N, RankedTensorType oldType,
                                          int numWarps) {
   assert(numWarps == 8);
