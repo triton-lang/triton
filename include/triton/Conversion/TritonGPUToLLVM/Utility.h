@@ -332,7 +332,6 @@ LLVM::LLVMFuncOp appendOrGetExternFuncOp(RewriterBase &rewriter, Operation *op,
                                          StringRef funcName, Type funcType,
                                          StringRef libname = "",
                                          StringRef libpath = "");
-
 } // namespace gpu
 
 } // namespace triton
