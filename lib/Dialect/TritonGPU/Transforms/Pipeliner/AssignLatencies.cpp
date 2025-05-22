@@ -301,8 +301,12 @@ public:
           // overlap. WS does not have this problem because the MMA is placed in
           // a different partition than the MMA, so we can correctly set the
           // latency.
-          if (forOp->hasAttr(kWarpSpecializeAttrName))
-            opLatency[&op] += 1;
+          if (forOp->hasAttr(kWarpSpecializeAttrName)) {
+            if (ttng::hasAccReadModifyWrite(mma, forOp))
+              opLatency.erase(&op); // can't pipeline the MMA
+            else
+              opLatency[&op] += 1;
+          }
         }
       }
     }

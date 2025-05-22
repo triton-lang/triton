@@ -245,9 +245,6 @@ static std::optional<WarpSchedule> getInitialSchedule(scf::ForOp loop) {
   for (auto [mmaOp, userPartition] : llvm::zip(mmas, userPartitions)) {
     scheduleUsers(loop, schedule, userPartition, mmaOp);
   }
-  for (ttng::MMAv5OpInterface mmaOp : mmas) {
-    scheduleDependencies(loop, schedule, defaultPartition, mmaOp);
-  }
 
   return schedule;
 }
@@ -444,10 +441,10 @@ void propagatePartitions(scf::ForOp loop, WarpSchedule &schedule) {
       });
     }
 
-    // If all ops are on the critical path, assign them to the sink partition.
+    // If all ops are on the critical path, assign them to the def partition.
     if (critPath.size() == cluster.ops.size()) {
       for (Operation *op : cluster.ops)
-        schedule.insert(sinkPartition, op);
+        schedule.insert(defPartition, op);
       continue;
     }
 
