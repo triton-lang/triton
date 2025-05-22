@@ -95,6 +95,7 @@ def specialize(fn, module, constants, tuples, name=None, do_not_specialize=tuple
 
     # make a new repr which appends the repr of the specialized functions.
     base_repr = attrs["repr"]
+
     def new_repr(specialization):
         ret = base_repr(specialization)
         for spec_fn in spec_fns.values():
@@ -104,6 +105,7 @@ def specialize(fn, module, constants, tuples, name=None, do_not_specialize=tuple
             if spec_repr:
                 ret += f"_{spec_repr}"
         return ret
+
     attrs["repr"] = new_repr
 
     if do_not_specialize:
