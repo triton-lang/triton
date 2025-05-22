@@ -2,6 +2,7 @@ from dataclasses import dataclass, fields
 import pytest
 import torch
 from typing import Union
+import triton
 # routing utilities
 from triton_kernels.routing import routing
 # matmul utilities
@@ -243,6 +244,9 @@ def test_op(m, n, k, split_k, do_gather, do_scatter, fused_scatter, has_y_gammas
                 # Automatic padding not implemented for Hopper swizzle
                 pytest.skip("Hopper swizzling acts on a 64x64 tile (4x1 mma tiles).")
 
+    # launch metadata for batched / mx types may not work yet.
+    test_launch_metadata = (mode == "ragged") and ("mx" not in weight_dtype_str)
+
     torch.manual_seed(0)
 
     block_k = None
@@ -314,8 +318,48 @@ def test_op(m, n, k, split_k, do_gather, do_scatter, fused_scatter, has_y_gammas
 
     if w_tri.shape[0] == 1:
         # Test the case when weight has dim 2, i.e., shape (K, N).
-        w_tri = w_tri.squeeze(0).detach().requires_grad_()
-        w_ref = w_ref.squeeze(0).detach().requires_grad_()
+        w_tri = w_tri.squeeze(0).detach().requires_grad_(test_bwd)
+        w_ref = w_ref.squeeze(0).detach().requires_grad_(test_bwd)
+
+    if test_launch_metadata:
+
+        def _clobber(t, used_mask):
+            # Fill the unread part of the tensor with garbage, to be sure that
+            # we don't actually read from the part.
+            if len(used_mask) == 1:
+                return
+            elif t.element_size() == 1:
+                t.view(torch.int8)[~used_mask] = 127
+            else:
+                t[~used_mask] = torch.inf
+
+        if rdata is not None:
+            n_tokens = rdata.expt_hist.sum().item()
+            used_expts = (rdata.expt_hist > 0)
+            _clobber(w_tri, used_expts)
+            n_w_bytes = used_expts.sum().item() * n * k * w_tri.element_size()
+        else:
+            n_tokens = m
+            n_w_bytes = w_tri.numel() * w_tri.element_size()
+
+        if gindx is not None:
+            used_x_rows = (gindx.dst_indx.view(-1, n_expts_act) != -1).any(dim=1)
+            _clobber(x_tri, used_x_rows)
+            n_x_bytes = used_x_rows.sum().item() * k * x_tri.element_size()
+        elif rdata is not None:
+            n_x_bytes = n_tokens * k * x_tri.element_size()
+        else:
+            n_x_bytes = x_tri.numel() * x_tri.element_size()
+
+        nbytes = None
+
+        def _hook(launch_metadata):
+            nonlocal nbytes
+            metadata = launch_metadata.get()
+            if "matmul_ogs" in metadata["name"]:
+                nbytes = metadata["bytes"]
+
+        triton.knobs.runtime.launch_enter_hook = _hook
 
     if mode == "batched":
         rdata, gindx, sindx = None, None, None
@@ -326,6 +370,16 @@ def test_op(m, n, k, split_k, do_gather, do_scatter, fused_scatter, has_y_gammas
     sep_gather = mode == "ragged" and do_gather and n_expts_act > 1 and split_k == 1
     sep_scatter = mode == "ragged" and do_scatter and n_expts_act > 1 and split_k == 1
     y_scale = flex.out_data.expected_scale if act_is_float8 else 1
+
+    if test_launch_metadata:
+        if gindx is not None:
+            n_y_bytes = (gindx.src_indx != -1).sum().item() * n * tri_y.element_size()
+        elif rdata is not None:
+            n_y_bytes = n_tokens * n * tri_y.element_size()
+        else:
+            n_y_bytes = tri_y.numel() * tri_y.element_size()
+        assert nbytes == n_x_bytes + n_y_bytes + n_w_bytes
+        triton.knobs.runtime.launch_enter_hook = None
 
     def round_x(x, idx):
         return x.to(act_dtype).to(torch.float32) if sep_gather else x
