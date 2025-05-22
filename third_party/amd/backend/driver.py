@@ -3,10 +3,10 @@ import os
 import subprocess
 import re
 from pathlib import Path
-from triton.runtime.build import compile_module_from_src
 from triton import knobs
 from triton.backends.compiler import GPUTarget
 from triton.backends.driver import GPUDriver
+from triton.runtime.build import compile_module_from_src
 from triton.tools.tensor_descriptor import TensorDescriptor
 
 dirname = os.path.dirname(os.path.realpath(__file__))
@@ -143,7 +143,7 @@ class HIPUtils(object):
         # This way we don't need to escape-quote C code curly brackets and we can replace
         # exactly once.
         src = src.replace('/*py_libhip_search_path*/', libhip_path, 1)
-        mod = compile_module_from_src(src, "hip_utils", include_dirs=include_dirs)
+        mod = compile_module_from_src(src=src, name="hip_utils", include_dirs=include_dirs)
         self.load_binary = mod.load_binary
         self.get_device_properties = mod.get_device_properties
 
@@ -536,7 +536,7 @@ class HIPLauncher(object):
         constants = {arg_idx(idx): value for idx, value in constants.items()}
         signature = {idx: value for idx, value in src.signature.items()}
         src = make_launcher(constants, signature, metadata.warp_size)
-        mod = compile_module_from_src(src, "__triton_launcher", include_dirs=include_dirs)
+        mod = compile_module_from_src(src=src, name="__triton_launcher", include_dirs=include_dirs)
         has_tensor_desc_arg = any(isinstance(sig, str) and sig.startswith("tensordesc") for sig in signature.values())
 
         self.launch = wrap_handle_tensor_descriptor(mod.launch) if has_tensor_desc_arg else mod.launch
