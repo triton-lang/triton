@@ -539,3 +539,35 @@ int mlir::triton::getNumStagesOrDefault(scf::ForOp forOp,
     return attr.getInt();
   return defaultNumStages;
 }
+
+TypedValue<ttg::MemDescType>
+triton::createSingleBufferView(OpBuilder &builder, Value alloc, Value idx) {
+  assert(isa<ttg::MemDescType>(alloc.getType()) && "Expected MemDescType");
+  auto allocDescType = cast<ttg::MemDescType>(alloc.getType());
+  SmallVector<int64_t> shape;
+  if (allocDescType.getShape().size() > 1) {
+    shape.insert(shape.end(), allocDescType.getShape().begin() + 1,
+                 allocDescType.getShape().end());
+  } else {
+    shape.push_back(1);
+  }
+  auto viewDescType = ttg::MemDescType::get(
+      shape, allocDescType.getElementType(), allocDescType.getEncoding(),
+      allocDescType.getMemorySpace(), allocDescType.getMutableMemory(),
+      /*allocShape=*/allocDescType.getAllocShape());
+  SmallVector<Value> idxs = {idx};
+  if (allocDescType.getShape().size() > 1) {
+    Value zero = builder.create<arith::ConstantIntOp>(alloc.getLoc(), 0, 32);
+    for (unsigned i = 1; i < allocDescType.getShape().size(); i++) {
+      idxs.push_back(zero);
+    }
+  }
+  return builder.create<ttg::MemDescSubviewOp>(alloc.getLoc(), viewDescType,
+                                               alloc, idxs);
+}
+
+TypedValue<ttg::MemDescType>
+triton::createSingleBufferView(OpBuilder &builder, Value alloc, int idx) {
+  Value idxVal = builder.create<arith::ConstantIntOp>(alloc.getLoc(), idx, 32);
+  return createSingleBufferView(builder, alloc, idxVal);
+}

@@ -23,7 +23,6 @@ void PartitionBuilder::assignStage(Operation *op, StageCluster stageCluster) {
 
 void PartitionBuilder::assignPartition(Operation *op, Partition &partition) {
   op->setAttr(kPartitionAttrName, getI32IntegerAttr(partition.getIndex()));
-  partition.insert(op);
 }
 
 StageCluster triton::gpu::getStageCluster(Operation *op) {
