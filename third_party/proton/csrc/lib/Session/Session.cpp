@@ -207,9 +207,10 @@ void SessionManager::enterScope(const Scope &scope) {
 
 void SessionManager::exitScope(const Scope &scope) {
   std::lock_guard<std::mutex> lock(mutex);
-  executeInterface(scopeInterfaceCounts, [&](auto *scopeInterface) {
-    scopeInterface->exitScope(scope);
-  }, /*isReversed=*/true);
+  executeInterface(
+      scopeInterfaceCounts,
+      [&](auto *scopeInterface) { scopeInterface->exitScope(scope); },
+      /*isReversed=*/true);
 }
 
 void SessionManager::enterOp(const Scope &scope) {
@@ -221,8 +222,7 @@ void SessionManager::enterOp(const Scope &scope) {
 void SessionManager::exitOp(const Scope &scope) {
   std::lock_guard<std::mutex> lock(mutex);
   executeInterface(
-      opInterfaceCounts,
-      [&](auto *opInterface) { opInterface->exitOp(scope); },
+      opInterfaceCounts, [&](auto *opInterface) { opInterface->exitOp(scope); },
       /*isReversed=*/true);
 }
 
