@@ -9,7 +9,6 @@ import triton_kernels.swiglu
 from triton_kernels.numerics_details.mxfp import downcast_to_mxfp, SwizzlingType
 from triton_kernels.matmul_ogs import MicroscalingCtx, matmul_ogs, PrecisionConfig, FlexCtx, FnSpecs, FusedActivation
 from triton_kernels.numerics import InFlexData
-from triton_kernels.routing import routing
 from triton_kernels.target_info import is_hip, get_cdna_version
 from dataclasses import dataclass
 

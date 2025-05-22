@@ -208,9 +208,9 @@ def distributed_run(rank, world_size, batch, dim1, dim2, n_expts_tot, n_expts_ac
     dist.broadcast(wg, src=0)
 
     if rank == 0:
-        bg = torch.randn((n_expts_tot,), device=dev)
+        bg = torch.randn((n_expts_tot, ), device=dev)
     else:
-        bg = torch.empty((n_expts_tot,), device=dev)
+        bg = torch.empty((n_expts_tot, ), device=dev)
     dist.broadcast(bg, src=0)
 
     b2 = torch.randn((n_expts_tot // EP, dim1), device=dev)
@@ -226,7 +226,6 @@ def distributed_run(rank, world_size, batch, dim1, dim2, n_expts_tot, n_expts_ac
     w2_full = gather_full(rank, world_size, w2, TP, EP, concat_dim_inside=1, concat_dim_outside=0)
     b1_full = gather_full(rank, world_size, b1, TP, EP, concat_dim_inside=1, concat_dim_outside=0)
     b2_full = gather_ep(rank, world_size, b2, TP, EP)
-
 
     # quantization
     swizzle_opt = {"mx4": {"swizzle_mx_scale": True}}
