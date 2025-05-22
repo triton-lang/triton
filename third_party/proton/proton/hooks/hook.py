@@ -47,7 +47,8 @@ class HookManager:
 
     @staticmethod
     def exit(lazy_dict: LazyDict) -> None:
-        for hook in HookManager.active_hooks:
+        # It's important to reverse the order of hooks so that we keep the first in last out order
+        for hook in reversed(HookManager.active_hooks):
             hook.exit(lazy_dict)
 
     @staticmethod
