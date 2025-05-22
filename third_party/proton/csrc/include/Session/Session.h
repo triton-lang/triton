@@ -175,7 +175,11 @@ private:
   }
 
   template <typename Counter, typename FnT>
-  void executeInterface(Counter &interfaceCounts, FnT &&fn) {
+  void executeInterface(Counter interfaceCounts, FnT &&fn,
+                        bool isReversed = false) {
+    if (isReversed) {
+      std::reverse(interfaceCounts.begin(), interfaceCounts.end());
+    }
     for (auto [interface, count] : interfaceCounts) {
       if (count > 0) {
         fn(interface);
