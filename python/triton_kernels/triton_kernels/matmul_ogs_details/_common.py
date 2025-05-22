@@ -1,3 +1,5 @@
+import torch
+
 import triton
 import triton.language as tl
 
@@ -87,10 +89,27 @@ def matmul_launch_metadata(grid, kernel, args):
     fM = M if M is not None else n_tokens
     fK = K if K is not None else n_tokens
     ret[f"flops{nbits}"] = 2.0 * fM * N * fK
+
     gindx = args.get("GatherIndx", None)
-    sindx = args.get("WriteBackIndx", None)
-    sskipped = 0. if sindx is None else (sindx == -1).sum() / sindx.shape[0]
-    gskipped = 0. if gindx is None else (gindx == -1).sum() / gindx.shape[0]
-    ret["bytes"] = int((1 - sskipped) * Y.numel() * Y.element_size() + (1 - gskipped) * X.numel() * X.element_size() +
-                       n_w_bytes)
+    # sindx = args.get("WriteBackIndx", None)
+    n_x_bytes = X.numel() * X.element_size()
+    n_y_bytes = Y.numel() * Y.element_size()
+    if hist is not None:
+        assert X.shape[0] == Y.shape[0] == 1, "batched mode not supported"
+        assert n_tokens is not None
+        n_expts_act = args["N_EXPTS_ACT"]
+
+        if gindx is not None:
+            # recreate inverse GatherIndx.
+            dst = torch.full_like(gindx, -1)
+            idx = torch.arange(len(gindx), device=gindx.device, dtype=torch.int32)
+            mask = (gindx != -1)
+            dst[gindx[mask]] = idx[mask]
+            n_read_rows = (dst.view((-1, n_expts_act)) != -1).any(dim=1).sum()
+        else:
+            n_read_rows = n_tokens
+        n_x_bytes = n_read_rows * X.shape[-1] * X.element_size()
+        n_y_bytes = n_tokens * Y.shape[-1] * Y.element_size()
+    ret["bytes"] = int(n_x_bytes + n_y_bytes + n_w_bytes)
+
     return ret
