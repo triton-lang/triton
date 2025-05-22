@@ -1569,9 +1569,9 @@ chooseMfmaLikeStoreLayout(RankedTensorType valType) {
           ........................
       each thread holds 4 consecutive values along N dim.
       We want to exchange column 4-7 (owned by thread 32-63, BLK0) and column
-      8-11 (owned by thread 0-31, BLK1) every 16 columns to make each thread
-  holds 8 elements. This would mean exchange the 2nd and 3rd basis vector from
-  an identity linear layout on tensor elements.
+    8-11 (owned by thread 0-31, BLK1) every 16 columns to make each thread holds
+    8 elements. This would mean exchange the 2nd and 3rd basis vector from an
+      identity linear layout on tensor elements.
       */
     std::vector<std::vector<int32_t>> dimNBases(mfmaLL.getOutDimSizeLog2(dimN));
     std::generate(dimNBases.begin(), dimNBases.end(),
