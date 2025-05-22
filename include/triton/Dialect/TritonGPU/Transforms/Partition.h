@@ -35,9 +35,6 @@ public:
   int getStage() const { return stage; }
   ArrayRef<Operation *> getOps() const { return ops; }
 
-  void insert(Operation *op) { ops.push_back(op); }
-  void remove(Operation *op) { ops.erase(llvm::find(ops, op)); }
-
 private:
   void setIndex(int idx) { this->idx = idx; }
   friend class WarpSchedule;
@@ -59,8 +56,6 @@ class WarpSchedule {
 public:
   // Create a new partition with a stage.
   Partition *addPartition(unsigned stage);
-  // Update the op to partition mapping.
-  void updatePartitions();
 
   // Get the partition the op belongs to.
   Partition *getPartition(Operation *op);

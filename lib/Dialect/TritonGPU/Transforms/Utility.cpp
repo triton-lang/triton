@@ -4,10 +4,8 @@
 
 #include "mlir/Analysis/SliceAnalysis.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
-#include "mlir/Dialect/UB/IR/UBOps.h"
 #include "mlir/IR/Dominance.h"
 #include "mlir/IR/IRMapping.h"
-#include "mlir/Support/LLVM.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 #include "triton/Analysis/AxisInfo.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
@@ -1471,5 +1469,34 @@ void replaceUsesAndPropagateType(OpBuilder &builder, Operation *oldUse,
   // Perform late op erasure.
   for (Operation *op : opsToDelete)
     op->erase();
+}
+
+void replaceUsesWithLocalLoad(OpBuilder &builder, OpResult old,
+                              TypedValue<ttg::MemDescType> alloc,
+                              TypedValue<ttg::AsyncTokenType> token) {
+  //  Remove redundant local_load -> local_alloc
+  auto allocTy = alloc.getType();
+  SmallVector<ttg::LocalAllocOp> allocsToErase;
+  for (Operation *user : old.getUsers()) {
+    if (auto userAlloc = dyn_cast<ttg::LocalAllocOp>(user)) {
+      if (allocTy.getEncoding() == userAlloc.getType().getEncoding()) {
+        replaceUsesAndPropagateType(builder, userAlloc, alloc);
+        allocsToErase.push_back(userAlloc);
+      }
+    }
+  }
+
+  // If there are some uses that were not local_allocs, we need to create a
+  // local_load for them.
+  if (std::distance(old.getUsers().begin(), old.getUsers().end()) >
+      allocsToErase.size()) {
+    auto loc = old.getOwner()->getLoc();
+    auto sharedLoad = builder.template create<ttg::LocalLoadOp>(
+        loc, old.getType(), alloc, token);
+    old.replaceAllUsesWith(sharedLoad.getResult());
+  }
+  for (auto alloc : allocsToErase) {
+    alloc.erase();
+  }
 }
 } // namespace mlir::triton

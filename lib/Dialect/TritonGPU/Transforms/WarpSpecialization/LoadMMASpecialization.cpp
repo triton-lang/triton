@@ -337,7 +337,7 @@ void PipelinedLoadGroup::allocateAref(scf::ForOp &loop, int numStages) {
 static void lowerTMACopy(PartitionBuilder &b, Partition &loadPartition,
                          StageCluster stageCluster, Operation *op,
                          Value barrier, Value view) {
-  Value truePred = b.create<arith::ConstantIntOp>(true, /*width=*/1);
+  Value truePred = b.boolCst(true);
   if (auto load = dyn_cast<DescriptorLoadOp>(op)) {
     Value tmaPtr = b.createInto<ttng::TensorDescToTMAPtrOp>(
         loadPartition, stageCluster, load.getDesc());
@@ -758,7 +758,6 @@ static LogicalResult pipelineMMA(scf::ForOp &loop, PipelinedMMA &mma,
         b.setInsertionPoint(mmaOp);
         Value bar = createSingleBufferView(b, node.barNext, node.index);
         mmaOp.addCompletionBarrier(bar, userPred);
-        // b.assignStage(mmaOp, stage);
       } else {
         b.setInsertionPointAfter(lastOp);
         if (isa<scf::IfOp>(lastOp->getParentOp()))
@@ -859,7 +858,6 @@ LogicalResult lowerLoops(scf::ForOp &loop, MutableArrayRef<PipelinedLoad> loads,
       return failure();
   }
 
-  schedule.updatePartitions();
   return success();
 }
 
