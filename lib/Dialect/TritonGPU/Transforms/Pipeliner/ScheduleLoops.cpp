@@ -168,17 +168,6 @@ CoarseSchedule getInitialSchedule(scf::ForOp forOp,
   if (forOp->hasAttr(kWarpSpecializeAttrName) &&
       succeeded(schedule.deSerialize(forOp))) {
     schedule.shrinkToFit();
-    // If there is only one stage, then there is no need to pipeline.
-    DenseSet<int> stages;
-    for (auto [op, stage, cluster] : schedule.getOpsInOrder(forOp))
-      stages.insert(stage);
-    if (stages.size() <= 1) {
-      forOp.walk([&](Operation *op) {
-        op->removeAttr(kLoopStageAttrName);
-        op->removeAttr(kLoopClusterAttrName);
-      });
-      return CoarseSchedule(0);
-    }
     return schedule;
   }
 

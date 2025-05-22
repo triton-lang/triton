@@ -129,7 +129,8 @@ tt.func public @attention_forward(
   %K_desc: !tt.tensordesc<tensor<64x64xf16, #shared>>,
   %V_desc: !tt.tensordesc<tensor<64x64xf16, #shared>>,
   %qk_scale: f32,
-  %n_tiles: i32
+  %n_tiles: i32,
+  %idx_ptr: !tt.ptr<f32>
 ) {
   %true = arith.constant true
   %false = arith.constant false
@@ -183,7 +184,12 @@ tt.func public @attention_forward(
     %alpha_0 = tt.expand_dims %alpha {axis = 1 : i32} : tensor<256xf32, #ttg.slice<{dim = 1, parent = #blocked}>> -> tensor<256x1xf32, #blocked>
     %alpha_1 = tt.broadcast %alpha_0 : tensor<256x1xf32, #blocked> -> tensor<256x64xf32, #blocked>
 
-    %acc_corrected = arith.mulf %acc, %alpha_1 : tensor<256x64xf32, #blocked>
+    %cur_idx_ptr = tt.addptr %idx_ptr, %i : !tt.ptr<f32>, i32
+    %idx = tt.load %cur_idx_ptr : !tt.ptr<f32>
+    %bias = tt.splat %idx : f32 -> tensor<256x64xf32, #blocked>
+
+    %acc_step = arith.mulf %acc, %alpha_1 : tensor<256x64xf32, #blocked>
+    %acc_corrected = arith.addf %acc_step, %bias : tensor<256x64xf32, #blocked>
 
     %62 = tt.descriptor_load %V_desc[%i, %c0_i32] : !tt.tensordesc<tensor<64x64xf16, #shared>> -> tensor<64x64xf16, #load_blocked>
     %63 = ttg.local_alloc %62 : (tensor<64x64xf16, #load_blocked>) -> !ttg.memdesc<64x64xf16, #shared, #smem>
