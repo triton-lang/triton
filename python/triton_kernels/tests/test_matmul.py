@@ -122,6 +122,13 @@ def dtype_str_to_torch(dtype_str: str) -> torch.dtype:
     return torch.uint8 if dtype_str == "float4_e2m1" else getattr(torch, dtype_str)
 
 
+# Scope to ensure that the opt_flags_constraints are reset after the test
+@pytest.fixture
+def opt_flags_scope(request):
+    yield
+    opt_flags.reset_opt_flags_constraints()
+
+
 # ---------------
 # unit tests
 # ---------------
@@ -218,7 +225,7 @@ class Case:
 @pytest.mark.parametrize("is_persistent", [False, True])
 def test_op(m, n, k, split_k, do_gather, do_scatter, fused_scatter, has_y_gammas, is_persistent, n_expts_tot,
             n_expts_act, n_expt_shards, mode, act_dtype_str, weight_dtype_str, block_m, hbm_swizzling, epilogue_subtile,
-            device):
+            device, opt_flags_scope):
     # TODO: remove when Triton FP8 supports proper RTNE
     if "float8" in weight_dtype_str and torch.cuda.get_device_capability()[0] < 9:
         pytest.skip("Float8 not tested on A100")
@@ -373,7 +380,7 @@ def test_op(m, n, k, split_k, do_gather, do_scatter, fused_scatter, has_y_gammas
     (0.7, 1.0),
 ])
 def test_fused_act(m, n, k, mode, split_k, do_gather, do_scatter, fused_scatter, is_persistent, epilogue_subtile,
-                   swiglu_alpha, swiglu_limit, device):
+                   swiglu_alpha, swiglu_limit, device, opt_flags_scope):
     if fused_scatter and split_k > 1:
         pytest.skip("fused scatter scratchpad not supported with split_k")
     torch.manual_seed(0)

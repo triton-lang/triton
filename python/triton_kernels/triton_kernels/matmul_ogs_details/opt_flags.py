@@ -232,7 +232,7 @@ def update_opt_flags_constraints(constraints: dict[str, int]):
 
 def reset_opt_flags_constraints():
     global _opt_flags_constraints
-    _opt_flags_constraints = None
+    _opt_flags_constraints = dict()
 
 def set_opt_flags(opt_flags: OptFlags):
     global _opt_flags
