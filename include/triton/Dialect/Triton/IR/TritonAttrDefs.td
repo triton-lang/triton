@@ -39,16 +39,6 @@ def TT_EvictionPolicyAttr : I32EnumAttr<
     let cppNamespace = "::mlir::triton";
 }
 
-def TT_PaddingOptionAttr : I32EnumAttr<
-    "PaddingOption", "",
-    [
-        I32EnumAttrCase<"PAD_ZERO", 1, "zero">,
-        // We can not set the string value to "NAN" because it is a keyword in C++
-        I32EnumAttrCase<"PAD_NAN", 2, "nan">
-    ]> {
-    let cppNamespace = "::mlir::triton";
-}
-
 // atomic
 def TT_AtomicRMWAttr : I32EnumAttr<
     "RMWOp", "",
