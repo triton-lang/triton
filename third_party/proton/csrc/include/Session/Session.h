@@ -183,7 +183,7 @@ private:
       }
     };
 
-    if constexpr (isReversed) {
+    if (isReversed) {
       for (auto it = interfaceCounts.rbegin(); it != interfaceCounts.rend();
            ++it) {
         process(*it);
