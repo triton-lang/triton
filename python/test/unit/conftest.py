@@ -88,3 +88,16 @@ def fresh_knobs_except_libraries(monkeypatch):
         yield fresh_function()
     finally:
         reset_function()
+
+
+@pytest.fixture
+def with_allocator():
+    import triton
+    from triton.runtime._allocation import NullAllocator
+    from triton._internal_testing import default_alloc_fn
+
+    triton.set_allocator(default_alloc_fn)
+    try:
+        yield
+    finally:
+        triton.set_allocator(NullAllocator())

@@ -199,6 +199,11 @@ def _finalize_matmul(
     M,
     N,
     NumRows,
+    # fused activation function
+    ACTIVATION_FN: tl.constexpr,
+    activation_fn_args,
+    ACTIVATION_REDUCTION_N: tl.constexpr,
+    # epilogue transform
     EPILOGUE_FN: tl.constexpr,
     epilogue_fn_args,
     EXPT_PER_TOK: tl.constexpr,
@@ -213,7 +218,7 @@ def _finalize_matmul(
 
     USE_FUSED_MIXED_PREC_ACC: tl.constexpr = (cuda_capability_geq(10, 0)
                                               and tl.constexpr(A.dtype.element_ty != tl.float32))
-    USE_FUSED_ABSMAX: tl.constexpr = USE_FUSED_MIXED_PREC_ACC and OutActualScale is not None
+    USE_FUSED_ABSMAX: tl.constexpr = (USE_FUSED_MIXED_PREC_ACC and OutActualScale is not None) and ACTIVATION_FN is None
 
     THREADS_PER_BLOCK: tl.constexpr = tl.extra.cuda.num_threads()
     local_max = tl.full([THREADS_PER_BLOCK], 0.0, tl.float32)
@@ -245,6 +250,9 @@ def _finalize_matmul(
     else:
         n_active_experts: tl.constexpr = EXPT_PER_TOK
 
+    OUT_BLOCK_N: tl.constexpr = BLOCK_N // ACTIVATION_REDUCTION_N
+    outN = N // ACTIVATION_REDUCTION_N
+
     for pid_m in tl.range(tl.program_id(0), MBound, tl.num_programs(0)):
         src_offs = pid_m * EXPT_PER_TOK + tl.arange(0, EXPT_PER_TOK)
         if FinalizeScatterIdxs is not None:
@@ -262,10 +270,10 @@ def _finalize_matmul(
                 src_idxs = tl.where(src_idxs < NumRows, src_idxs, -1)
 
         if n_active_experts == 0:
-            for off_n in tl.range(tl.program_id(1) * BLOCK_N, N, tl.num_programs(1) * BLOCK_N):
-                offs_n = off_n + tl.arange(0, BLOCK_N)
-                n_mask = offs_n < N
-                tl.store(Out + row * N + offs_n, tl.zeros([BLOCK_N], dtype=Out.dtype.element_ty), mask=n_mask)
+            for off_n in tl.range(tl.program_id(1) * OUT_BLOCK_N, outN, tl.num_programs(1) * OUT_BLOCK_N):
+                offs_n = off_n + tl.arange(0, OUT_BLOCK_N)
+                n_mask = offs_n < outN
+                tl.store(Out + row * outN + offs_n, tl.zeros([OUT_BLOCK_N], dtype=Out.dtype.element_ty), mask=n_mask)
         else:
             for off_n in tl.range(tl.program_id(1) * BLOCK_N, N, tl.num_programs(1) * BLOCK_N, num_stages=STAGES):
                 offs_n = off_n + tl.arange(0, BLOCK_N)
@@ -297,14 +305,23 @@ def _finalize_matmul(
                         else:
                             acc += tl.sum(a, dtype=tl.float32, axis=0)
                 acc = acc * a_scale
+                if ACTIVATION_FN is not None:
+                    out = ACTIVATION_FN(tl.reshape(acc, (1, BLOCK_N)), *activation_fn_args)
+                    out = tl.reshape(out, (OUT_BLOCK_N, ))
+                else:
+                    tl.static_assert(ACTIVATION_REDUCTION_N == 1,
+                                     "Activation reduction must be 1 if no activation fn is provided")
+                    out = acc
                 if not USE_FUSED_ABSMAX and OutActualScale is not None:
-                    local_max = tl.maximum(local_max, thread_local_absmax(acc))
-                acc = float_to_flex(acc, out_scale if OutExpectedScale is not None else None, None, OutChecksumScale,
+                    local_max = tl.maximum(local_max, thread_local_absmax(out))
+                out = float_to_flex(out, out_scale if OutExpectedScale is not None else None, None, OutChecksumScale,
                                     None, Out, flexpoint_saturate_inf)
                 if EPILOGUE_FN is not None:
-                    acc = EPILOGUE_FN(acc, *epilogue_fn_args, target_dtype=Out.dtype.element_ty,
+                    out = EPILOGUE_FN(out, *epilogue_fn_args, target_dtype=Out.dtype.element_ty,
                                       pid=row * tl.num_programs(1) + tl.program_id(1))
-                tl.store(Out + row * N + offs_n, acc, mask=n_mask)
+                offs_n = off_n // ACTIVATION_REDUCTION_N + tl.arange(0, OUT_BLOCK_N)
+                n_mask = offs_n < outN
+                tl.store(Out + row * outN + offs_n, out, mask=n_mask)
 
     persisent_m = tl.num_programs(0) < MBound
     if not persisent_m and n_active_experts == 0:

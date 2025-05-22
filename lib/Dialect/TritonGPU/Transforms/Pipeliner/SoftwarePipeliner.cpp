@@ -62,6 +62,17 @@ static void expandLoops(ModuleOp moduleOp) {
             std::vector<std::pair<Operation *, unsigned>> &schedule) {
           schedule = finalSchedule;
         };
+    // Testing feature: allow for unresolved predicate stage ops
+    // in the loop body.
+    if (forOp->hasAttr("__test_keep_predicate_stage")) {
+      options.emitPredicateStageFn =
+          [](RewriterBase &rewriter, Value inductionVar, Value upperBound,
+             Value step, uint64_t maxStage, uint64_t stage) {
+            return rewriter.create<triton::gpu::PredicateStageOp>(
+                inductionVar.getLoc(), inductionVar, upperBound, step, maxStage,
+                stage);
+          };
+    }
     IRRewriter rewriter(forOp);
     FailureOr<scf::ForOp> newForOp =
         triton::pipelineForLoop(rewriter, forOp, options);
@@ -73,7 +84,6 @@ static void removeAttributes(ModuleOp moduleOp) {
     op->removeAttr(mlir::triton::kLoopStageAttrName);
     op->removeAttr(mlir::triton::kLoopClusterAttrName);
     op->removeAttr(mlir::triton::kScheduledMaxStageAttrName);
-    op->removeAttr(mlir::triton::kAssignedStageAttrName);
   });
 }
 
@@ -83,26 +93,6 @@ struct PipelinePass : public impl::TritonGPUPipelineBase<PipelinePass> {
 
   void runOnOperation() override {
     ModuleOp moduleOp = getOperation();
-    // Go over the interesting ops and assign latencies (based on the
-    // numStages) to the them, trying to populate the allowed stages. This
-    // step will be at some point extracted to separate pass that will be run
-    // only for loops missing the latency information.
-    assignLatencies(moduleOp, numStages);
-    if (dumpIntermediateSteps) {
-      llvm::dbgs() << "// -----// SoftwarePipeliner internal IR Dump After: "
-                      "AssignLatencies\n"
-                   << moduleOp << "\n\n\n";
-    }
-    // numStages should not be used below this point. We should know
-    // everything based on the assigned stages
-
-    // Schedule the loops
-    scheduleLoops(moduleOp);
-    if (dumpIntermediateSteps) {
-      llvm::dbgs() << "// -----// SoftwarePipeliner internal IR Dump After: "
-                      "ScheduleLoops\n"
-                   << moduleOp << "\n\n\n";
-    }
 
     // Transform the loop by introducing async operations to prepare it for
     // pipeline expansion.

@@ -10,7 +10,7 @@ on:
 jobs:
   integration-tests-nvidia:
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 30
+    timeout-minutes: 60
     strategy:
       matrix:
         runner: ${{ fromJson(inputs.matrix) }}
@@ -94,6 +94,8 @@ jobs:
           if [ "${{ matrix.runner[0] }}" == "nvidia-gb200" ]; then
             source /venv/bin/activate
           fi
+          nproc
+          nvidia-smi
           echo "PATH is '$PATH'"
           ccache --zero-stats
           make dev-install
