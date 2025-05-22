@@ -9,6 +9,11 @@ class TensorDescriptor:
     strides: List[int]
     block_shape: List[int]
 
+    def __post_init__(self):
+        rank = len(self.shape)
+        assert len(self.strides) == rank, f"rank mismatch: {self}"
+        assert len(self.block_shape) == rank, f"rank mismatch: {self}"
+
     @staticmethod
     def from_tensor(tensor: Any, block_shape: List[int]):
         return TensorDescriptor(
