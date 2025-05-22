@@ -363,6 +363,45 @@ module attributes {"ttg.target" = "cuda:90", "ttg.num-ctas" = 1 : i32, "ttg.num-
   }
 }
 
+
+// -----
+
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0, 1]}>
+#linear = #ttg.linear<{register = [[0, 1], [8, 0], [0, 8], [0, 16]], lane = [[0, 2], [0, 4], [1, 0], [2, 0], [4, 0]], warp = [[16, 0], [32, 0]], block = []}>
+#smem = #ttg.shared_memory
+// CHECK-LABEL: linear_to_swizzled_st_matrix_trans_local_store
+module attributes {"ttg.target" = "cuda:90", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  tt.func @linear_to_swizzled_st_matrix_trans_local_store(%a: tensor<64x32xf16, #linear>) {
+    // CHECK-COUNT-2: nvgpu.stmatrix %{{.*}}, %{{.*}}, %{{.*}}, %{{.*}}, %{{.*}} {trans}
+    //          CHECK: llvm.return
+    %b = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !ttg.memdesc<64x32xf16, #shared, #smem, mutable>
+    ttg.local_store %a, %b : tensor<64x32xf16, #linear> -> !ttg.memdesc<64x32xf16, #shared, #smem, mutable>
+    tt.return
+  }
+}
+
+// -----
+
+// Stretching a bit the lowering. Feel free to kill this test if we restrain
+// the lowering a bit later on.
+// These layouts will have plenty of bank conflicts, so it'd make sense not to
+// lower them via stmatrix.
+// It is of course possible to design a shared memory layout that makes the lowering
+// via stmatrix not have any bank conflicts, but yeah.
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0, 1]}>
+#linear = #ttg.linear<{register = [[0, 2], [0, 8], [0, 0], [0, 16], [0, 1]], lane = [[0, 0], [0, 4], [1, 0], [2, 0], [4, 0]], warp = [[0, 0], [8, 0]], block = []}>
+#smem = #ttg.shared_memory
+// CHECK-LABEL: linear_to_swizzled_st_matrix_trans_local_store
+module attributes {"ttg.target" = "cuda:90", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  tt.func @linear_to_swizzled_st_matrix_trans_local_store(%a: tensor<16x32xf16, #linear>) {
+    // CHECK-COUNT-2: nvgpu.stmatrix %{{.*}}, %{{.*}}, %{{.*}}, %{{.*}}, %{{.*}} {trans}
+    //          CHECK: llvm.return
+    %b = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !ttg.memdesc<16x32xf16, #shared, #smem, mutable>
+    ttg.local_store %a, %b : tensor<16x32xf16, #linear> -> !ttg.memdesc<16x32xf16, #shared, #smem, mutable>
+    tt.return
+  }
+}
+
 // -----
 
 #blocked = #ttg.blocked<{sizePerThread = [8], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
