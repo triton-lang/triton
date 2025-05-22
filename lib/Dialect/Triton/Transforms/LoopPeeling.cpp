@@ -49,9 +49,8 @@ namespace triton {
 
 void peelLoopEpilogue(
     scf::ForOp forOp,
-    function_ref<Operation *(RewriterBase &, Operation *, Value)>
-        processPeeledOp,
-    function_ref<Operation *(RewriterBase &, Operation *)> processLoopBodyOp) {
+    function_ref<Operation *(RewriterBase &, Operation *, bool)>
+        processPeeledOp) {
   SmallVector<Operation *> loopBodyOps;
   IRRewriter rewriter(forOp);
   Location loc = forOp.getLoc();
@@ -73,6 +72,14 @@ void peelLoopEpilogue(
   // less than the original upper bound
   auto lastIterPred = rewriter.create<arith::CmpIOp>(
       loc, arith::CmpIPredicate::slt, lowerBound, upperBound);
+
+  // Create an if op to execute the peeled iteration
+  OpBuilder::InsertionGuard guard(rewriter);
+  auto ifOp = rewriter.create<scf::IfOp>(loc, forOp.getResultTypes(),
+                                         lastIterPred, /*hasElse=*/true);
+  rewriter.setInsertionPointToStart(&ifOp.getElseRegion().front());
+  rewriter.create<scf::YieldOp>(loc, forOp.getResults());
+  rewriter.setInsertionPointToStart(&ifOp.getThenRegion().front());
 
   // Last iter induction variable value
   // lastIV = lb + floor( (ub – lb – 1) / s ) * s
@@ -100,11 +107,10 @@ void peelLoopEpilogue(
           }
         });
     if (processPeeledOp) {
-      newOp = processPeeledOp(rewriter, newOp, lastIterPred);
-    }
-    if (processLoopBodyOp) {
+      newOp = processPeeledOp(rewriter, newOp, /*isEpilogue=*/true);
       loopBodyOps.push_back(&op);
     }
+
     lastOp = newOp;
     for (auto [result, oldResult] :
          llvm::zip(newOp->getResults(), op.getResults())) {
@@ -119,15 +125,18 @@ void peelLoopEpilogue(
       }
     }
   }
+
+  rewriter.create<scf::YieldOp>(loc, peeledResults);
+
   DominanceInfo domInfo(forOp->getParentOfType<ModuleOp>());
 
-  forOp->replaceUsesWithIf(peeledResults, [&](OpOperand &operand) {
-    return domInfo.properlyDominates(lastOp, operand.getOwner(),
+  forOp->replaceUsesWithIf(ifOp, [&](OpOperand &operand) {
+    return domInfo.properlyDominates(ifOp, operand.getOwner(),
                                      /*enclosingOpOK=*/false);
   });
 
   for (auto op : loopBodyOps) {
-    Operation *newOp = processLoopBodyOp(rewriter, op);
+    Operation *newOp = processPeeledOp(rewriter, op, /*isEpilogue=*/false);
     if (newOp && newOp != op) {
       op->replaceAllUsesWith(newOp);
       op->erase();

@@ -9,10 +9,8 @@ namespace triton {
 // Peel the single last iteration of the loop.
 void peelLoopEpilogue(
     scf::ForOp forOp,
-    function_ref<Operation *(RewriterBase &, Operation *, Value)>
-        processPeeledOp = nullptr,
-    function_ref<Operation *(RewriterBase &, Operation *)> processLoopBodyOp =
-        nullptr);
+    function_ref<Operation *(RewriterBase &, Operation *, bool)>
+        processPeeledOp = nullptr);
 
 } // namespace triton
 } // namespace mlir

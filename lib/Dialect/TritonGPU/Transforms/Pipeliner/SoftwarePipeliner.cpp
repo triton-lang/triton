@@ -43,35 +43,6 @@ static void pipelineWgmma(ModuleOp moduleOp) {
   }
 }
 
-static Operation *wrapInIfOp(RewriterBase &rewriter, Operation *op,
-                             Value pred) {
-  // Avoid wrapping constant ops, as they may be used in other ops
-  // that rely on the constant op being present.
-  if (isa<arith::ConstantOp>(op)) {
-    return op;
-  }
-  OpBuilder::InsertionGuard guard(rewriter);
-  rewriter.setInsertionPoint(op);
-  Location loc = op->getLoc();
-  bool hasResults = op->getNumResults() > 0;
-  auto ifOp = rewriter.create<scf::IfOp>(loc, op->getResultTypes(), pred,
-                                         /*hasElse=*/hasResults);
-  op->remove();
-  ifOp.getThenRegion().front().push_front(op);
-  if (hasResults) {
-    rewriter.setInsertionPointToEnd(&ifOp.getThenRegion().front());
-    auto thenYieldOp = rewriter.create<scf::YieldOp>(loc, op->getResults());
-    rewriter.setInsertionPointToStart(&ifOp.getElseRegion().front());
-    SmallVector<Value> poisonResults;
-    for (auto result : op->getResults()) {
-      poisonResults.push_back(
-          rewriter.create<ub::PoisonOp>(loc, result.getType()));
-    }
-    rewriter.create<scf::YieldOp>(loc, poisonResults);
-  }
-  return ifOp;
-}
-
 static Operation *wrapInMaskOp(RewriterBase &rewriter, Operation *op,
                                Value pred) {
   if (isa<arith::ConstantOp>(op)) {
@@ -128,28 +99,24 @@ static void resolveMaskOp(ModuleOp moduleOp) {
 }
 
 static Operation *processPeeledEpilogueOp(RewriterBase &rewriter, Operation *op,
-                                          Value predCondition) {
+                                          bool isEpilogue) {
   if (auto predOp = dyn_cast<triton::gpu::PredicateStageOp>(op)) {
-    // Return false for the predicate of the peeled iteration
-    return rewriter.create<mlir::arith::ConstantIntOp>(
-        predOp.getLoc(), 0, predOp.getResult().getType());
-  } else {
-    return wrapInIfOp(rewriter, op, predCondition);
-  }
-}
-
-static Operation *processLoopBodyOp(RewriterBase &rewriter, Operation *op) {
-  if (auto predOp = dyn_cast<triton::gpu::PredicateStageOp>(op)) {
-    if (predOp.getStage() == predOp.getMaxStage() - 1) {
+    if (isEpilogue) {
+      // Return false for the predicate of the peeled iteration
       return rewriter.create<mlir::arith::ConstantIntOp>(
-          predOp.getLoc(), 1, predOp.getResult().getType());
+          predOp.getLoc(), 0, predOp.getResult().getType());
     } else {
-      OpBuilder::InsertionGuard guard(rewriter);
-      rewriter.setInsertionPoint(op);
-      return triton::emitPredicateForStage(
-                 rewriter, predOp.getIv(), predOp.getUb(), predOp.getStep(),
-                 predOp.getMaxStage(), predOp.getStage())
-          .getDefiningOp();
+      if (predOp.getStage() == predOp.getMaxStage() - 1) {
+        return rewriter.create<mlir::arith::ConstantIntOp>(
+            predOp.getLoc(), 1, predOp.getResult().getType());
+      } else {
+        OpBuilder::InsertionGuard guard(rewriter);
+        rewriter.setInsertionPoint(op);
+        return triton::emitPredicateForStage(
+                   rewriter, predOp.getIv(), predOp.getUb(), predOp.getStep(),
+                   predOp.getMaxStage(), predOp.getStage())
+            .getDefiningOp();
+      }
     }
   }
   return op;
@@ -223,8 +190,7 @@ static void expandLoops(ModuleOp moduleOp) {
     }
     forOp = *newForOp;
     if (customEpiloguePeeling) {
-      mlir::triton::peelLoopEpilogue(forOp, processPeeledEpilogueOp,
-                                     processLoopBodyOp);
+      mlir::triton::peelLoopEpilogue(forOp, processPeeledEpilogueOp);
     }
   }
 
