@@ -50,6 +50,8 @@ def _matmul_ogs(
              batch_size, grid_m, grid_n,
              # Out scale
              out_alpha,
+             # fused activation function
+             ACTIVATION_FN: tl.constexpr, activation_fn_args, ACTIVATION_REDUCTION_N: tl.constexpr,
              # epilogue transform
              EPILOGUE_FN: tl.constexpr, epilogue_fn_args,
              # MoE config
@@ -89,6 +91,9 @@ def _matmul_ogs(
         tl.static_assert(SWIZZLE_MX_VALUE is None)
         tl.static_assert(SWIZZLE_MX_SCALE is None)
 
+    OUT_BLOCK_N: tl.constexpr = BLOCK_N // ACTIVATION_REDUCTION_N
+    yN = N // ACTIVATION_REDUCTION_N
+
     pid = tl.program_id(0)
     if ExptOffsSum is not None and XCD_SWIZZLE > 1:
         # Determine how much padding there is on the expert data. This allows us to
@@ -109,7 +114,7 @@ def _matmul_ogs(
 
             # set masked out rows to 0
             if HAS_FUSED_SCATTER and N_EXPTS_ACT == 1:
-                _zero_masked_rows(pid_m, pid_n, Y, stride_y_m, stride_y_n, N, ScatterSrcIndx, num_idxs, BLOCK_M, BLOCK_N)
+                _zero_masked_rows(pid_m, pid_n, Y, stride_y_m, stride_y_n, yN, ScatterSrcIndx, num_idxs, BLOCK_M, OUT_BLOCK_N)
         return
 
     # swizzle program ids
@@ -126,7 +131,7 @@ def _matmul_ogs(
         Y += pid_k.to( index_type) * stride_y_k
     # set masked out rows to 0
     if HAS_FUSED_SCATTER and N_EXPTS_ACT == 1:
-        _zero_masked_rows(pid_m, pid_n, Y, stride_y_m, stride_y_n, N, ScatterSrcIndx, num_idxs, BLOCK_M, BLOCK_N)
+        _zero_masked_rows(pid_m, pid_n, Y, stride_y_m, stride_y_n, yN, ScatterSrcIndx, num_idxs, BLOCK_M, OUT_BLOCK_N)
     # unpack expert data
     if ExptData is None:
         tl.static_assert(M is not None)
@@ -299,6 +304,14 @@ def _matmul_ogs(
     acc *= gammas[:, None]
     if out_alpha is not None:
         acc *= out_alpha
+    if ACTIVATION_FN is not None:
+        out = ACTIVATION_FN(acc, *activation_fn_args)
+        tl.static_assert(out.shape[1] == OUT_BLOCK_N, f"Activation fn out.shape[1] ({out.shape[1]}) doesn't match computed OUT_BLOCK_N ({OUT_BLOCK_N})")
+        offs_y_n = OUT_BLOCK_N * pid_n + tl.arange(0, OUT_BLOCK_N)
+        mask_n = offs_y_n < yN
+    else:
+        tl.static_assert(ACTIVATION_REDUCTION_N == 1, "Activation reduction must be 1 if no activation fn is provided")
+        out = acc
     # write-back
     Y += start_z.to(index_type) * stride_y_z
     if WriteBackIndx is not None:
@@ -312,10 +325,10 @@ def _matmul_ogs(
 
     YPtrs = Y + offs_y_m.to(index_type)[:, None] * stride_y_m + offs_y_n.to(index_type)[None, :] * stride_y_n
     mask = mask_m[:, None] & mask_n[None, :]
-    acc = float_to_flex(acc, YExpectedScale, YActualScale, YChecksumScale, mask, Y, FLEXPOINT_SATURATE_INF)
+    out = float_to_flex(out, YExpectedScale, YActualScale, YChecksumScale, mask, Y, FLEXPOINT_SATURATE_INF)
     if EPILOGUE_FN is not None:
-        acc = EPILOGUE_FN(acc, *epilogue_fn_args, target_dtype=YPtrs.dtype.element_ty)
-    tl.store(YPtrs, acc, mask=mask)
+        out = EPILOGUE_FN(out, *epilogue_fn_args, target_dtype=YPtrs.dtype.element_ty)
+    tl.store(YPtrs, out, mask=mask)
 
 
 # Imagine N_EXPTS_ACT = 4, n_final_rows = 5, and n_scratchpad_rows = 8.

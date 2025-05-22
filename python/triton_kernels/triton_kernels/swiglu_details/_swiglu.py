@@ -34,6 +34,24 @@ def swiglu_launch_metadata(grid, kernel, args):
     return ret
 
 
+@triton.jit
+def compute_swiglu(gelu, linear, scale, alpha, limit):
+    gelu = gelu.to(tl.float32) * scale
+    if limit is not None:
+        gelu = clip(gelu, limit, clip_lower=False)
+    linear = linear.to(tl.float32) * scale
+    if limit is not None:
+        linear = clip(linear, limit, clip_lower=True)
+    s = gelu / (1 + tl.exp(-alpha * gelu))
+    return tl.fma(s, linear, s)  # (s * (linear + 1))
+
+
+@triton.jit(repr=lambda _: "_swiglu")
+def _swiglu_fn(input, alpha, limit):
+    gelu, linear = tl.split(tl.reshape(input, (input.shape[0], input.shape[1] // 2, 2)))
+    return compute_swiglu(gelu, linear, 1.0, alpha, limit)
+
+
 @triton.jit(repr=swiglu_repr, launch_metadata=swiglu_launch_metadata)
 def _swiglu(Out, OutExpectedScale, OutActualScale, OutChecksumScale, A, AScale, alpha, M, N, stride_am, stride_an,
             stride_outm, stride_outn, limit: tl.constexpr, NTokens, BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr,
@@ -69,17 +87,7 @@ def _swiglu(Out, OutExpectedScale, OutActualScale, OutChecksumScale, A, AScale, 
                 packed_mask = mask_m[:, None] & packed_mask_n[None, :]
                 a_packed = tl.load(A + packed_offs, mask=packed_mask, other=0.)
         a_gelu, a_linear = tl.split(tl.reshape(a_packed, (BLOCK_M, BLOCK_N, 2)))
-        # a gelu
-        a_gelu = a_gelu.to(tl.float32) * a_scale
-        if limit is not None:
-            a_gelu = clip(a_gelu, limit, clip_lower=False)
-        # a linear
-        a_linear = a_linear.to(tl.float32) * a_scale
-        if limit is not None:
-            a_linear = clip(a_linear, limit, clip_lower=True)
-        # compute output
-        s = a_gelu / (1 + tl.exp(-alpha * a_gelu))
-        out = tl.fma(s, a_linear, s)  # (s * (a_linear + 1))
+        out = compute_swiglu(a_gelu, a_linear, a_scale, alpha, limit)
         # update flexpoint stats and divide by scale
         # we don't need masking because of the `other` when loading `A`
         if OutActualScale is not None:
@@ -88,7 +96,7 @@ def _swiglu(Out, OutExpectedScale, OutActualScale, OutChecksumScale, A, AScale, 
         out = float_to_flex(out, out_expected_scale,
                             None,  # ActualScale: local absmax is tracked and updated after the loop
                             OutChecksumScale, None, Out, flexpoint_saturate_inf)
-        mask = mask_m[:, None] if EVEN_N else mask_m[:, None] and mask_n[None, :]
+        mask = mask_m[:, None] if EVEN_N else mask_m[:, None] & mask_n[None, :]
         tl.store(Out + off_m[:, None] * stride_outm + off_n[None, :] * stride_outn, out, mask)
 
     update_scale(local_max, OutActualScale, Out)
