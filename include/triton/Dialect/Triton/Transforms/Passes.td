@@ -35,17 +35,6 @@ def TritonReorderBroadcast : Pass</*cli-arg*/"triton-reorder-broadcast", /*Op*/"
   let dependentDialects = ["mlir::triton::TritonDialect"];
 }
 
-def TritonRewriteTensorPointer : Pass</*cli-arg*/"triton-rewrite-tensor-pointer", /*Op*/"mlir::ModuleOp"> {
-  let summary = "Rewrite load/stores with tensor pointers into legacy load/stores";
-  let description = [{
-    This pass rewrites all load/store semantics initiated by a `tt.make_tensor_ptr` and `tt.advance` into legacy
-    semantics. After this pass, `tt.make_tensor_ptr` and `tt.advance` will disappear, and it generates logics to compute
-    the pointer/mask/other for each load/store.
-  }];
-
-  let dependentDialects = ["mlir::triton::TritonDialect"];
-}
-
 def TritonRewriteTensorDescriptorToPointer : Pass</*cli-arg*/"triton-rewrite-tensor-descriptor-to-pointer", /*Op*/"mlir::ModuleOp"> {
   let summary = "Rewrite load/stores of tensor descriptors into pointer load/stores";
   let description = [{

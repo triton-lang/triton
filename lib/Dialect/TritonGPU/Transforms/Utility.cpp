@@ -90,10 +90,6 @@ SmallVector<unsigned, 3> mmaVersionToInstrShape(int version,
   }
 }
 
-bool isLoadFromTensorPtr(triton::LoadOp op) {
-  return mlir::triton::isTensorPointerType(op.getPtr().getType());
-}
-
 SmallVector<unsigned, 4> argSort(const SmallVector<int64_t> &arr) {
   SmallVector<unsigned, 4> ret(arr.size());
   std::iota(ret.begin(), ret.end(), 0);

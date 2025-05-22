@@ -113,9 +113,6 @@ struct CoalescePass : public impl::TritonGPUCoalesceBase<CoalescePass> {
   void coalesceOp(Attribute encoding, Operation *op) {
     OpBuilder builder(op);
     // Convert operands
-    // For load/store with tensor pointers, we don't have to change the
-    // operands' type, we do this by changing the outputs' type of
-    // `make_tensor_ptr`
     SmallVector<Value, 4> newArgs;
     for (auto operand : op->getOperands()) {
       auto tensorType = dyn_cast<RankedTensorType>(operand.getType());
