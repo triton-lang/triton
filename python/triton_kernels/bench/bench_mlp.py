@@ -1,10 +1,12 @@
 from pathlib import Path
+from copy import deepcopy
 import matplotlib.pyplot as plt
 import json
 import triton.profiler as proton
 import torch
+import triton_kernels
 import triton_kernels.swiglu
-from triton_kernels.numerics_details.mxfp import downcast_to_mxfp
+from triton_kernels.numerics_details.mxfp import downcast_to_mxfp, SwizzlingType
 from triton_kernels.matmul_ogs import MicroscalingCtx, matmul_ogs, PrecisionConfig, FlexCtx
 from triton_kernels.numerics import InFlexData
 from triton_kernels.routing import routing
@@ -61,10 +63,14 @@ def quantize(w, dtype, dev, **opt):
     else:
         assert dtype == "mx4", f"{dtype=}"
         swizzle_mx_scale = opt["swizzle_mx_scale"]
+        swizzle_mx_value = opt["swizzle_mx_value"]
         swizzle_axis = 2 if swizzle_mx_scale else None
         w = w.to(torch.bfloat16)
-        w, mx_scales, weight_scale_shape = downcast_to_mxfp(w, torch.uint8, axis=1, swizzle_axis=swizzle_axis)
-        return w, InFlexData(), MicroscalingCtx(weight_scale=mx_scales, swizzle_mx=swizzle_mx_scale,
+        w, mx_scales, weight_scale_shape = downcast_to_mxfp(w, torch.uint8, axis=1, swizzle_axis=swizzle_axis,
+                                                            swizzle_scale=swizzle_mx_scale,
+                                                            swizzle_value=swizzle_mx_value)
+        return w, InFlexData(), MicroscalingCtx(weight_scale=mx_scales, swizzle_scale=swizzle_mx_scale,
+                                                swizzle_value=swizzle_mx_value,
                                                 actual_weight_scale_shape=weight_scale_shape)
 
 
@@ -73,6 +79,7 @@ class PerfData:
     time: float
     flops: float
     bytes: float
+    bitwidth: int
 
     @property
     def tflops(self):
@@ -92,8 +99,9 @@ class PerfData:
     def util(self) -> float:
         if SPECS is None:
             return 0.0
+        assert self.bitwidth in (8, 16)
 
-        peak_flops = max(SPECS["MAX_TFLOPS8"], SPECS.get("MAX_TFLOPS16", 0))
+        peak_flops = SPECS["MAX_TFLOPS8"] if self.bitwidth == 8 else SPECS["MAX_TFLOPS16"]
         min_t_flop = self.flops / peak_flops * 1e-3  # ns → µs
         min_t_bw = self.bytes / SPECS["MAX_TBPS"] * 1e-3
         return max(min_t_flop, min_t_bw) / self.time
@@ -116,8 +124,21 @@ def bench_mlp(batch, dim1, dim2, n_expts_tot, n_expts_act, x_dtype, w_dtype, TP,
 
     # -- numerics --
     optg = dict()
-    opt1 = {"swizzle_mx_scale": True} if w_dtype == "mx4" else dict()
-    opt2 = {"swizzle_mx_scale": True} if w_dtype == "mx4" else dict()
+    opt1 = dict()
+    opt2 = dict()
+    if w_dtype == "mx4" and not is_hip():
+        if torch.cuda.get_device_capability()[0] < 9:
+            # NYI for Ampere
+            swizzle_mx_value = None
+            swizzle_mx_scale = None
+        elif torch.cuda.get_device_capability()[0] < 10:
+            swizzle_mx_value = SwizzlingType.HOPPER
+            swizzle_mx_scale = SwizzlingType.HOPPER
+        else:
+            swizzle_mx_value = None
+            swizzle_mx_scale = SwizzlingType.BLACKWELL
+        opt1 = {"swizzle_mx_value": swizzle_mx_value, "swizzle_mx_scale": swizzle_mx_scale}
+        opt2 = deepcopy(opt1)
     wg, wg_flex, wg_mx = quantize(wg, "bf16", dev, **optg)
     w1, w1_flex, w1_mx = quantize(w1, w_dtype, dev, **opt1)
     w2, w2_flex, w2_mx = quantize(w2, w_dtype, dev, **opt2)
@@ -165,7 +186,7 @@ def bench_mlp(batch, dim1, dim2, n_expts_tot, n_expts_act, x_dtype, w_dtype, TP,
         # TODO: proton should really be recording that in the json instead of
         # relying on the user to aggregate
         time = sum(x["metrics"].get("time (ns)", 0) for x in data[0]["children"])
-    return PerfData(time, flops, bytes)
+    return PerfData(time, flops, bytes, x_dtype.itemsize * 8)
 
 
 def roofline_mlp(batch_ranges, dim1, dim2, n_expts_tot, n_expts_act, x_dtype, w_dtype, TP=1, EP=1, name="",

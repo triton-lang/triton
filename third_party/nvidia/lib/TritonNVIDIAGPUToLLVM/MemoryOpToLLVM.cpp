@@ -159,14 +159,9 @@ LogicalResult lowerDistributedToSharedStmatrix(
   auto kBlock = S("block");
   auto kOffset = S("offset");
   auto smemPtrTy = ptr_ty(ctx, 3);
-
-  // Just stmatrix for now
-  // 1) NYI in the stmatrix lowering
-  //    Pack everything into uint32_t to support bitwidths other than 16
   auto bitwidth = tensorTy.getElementTypeBitWidth();
-  if (bitwidth != 16)
+  if (bitwidth > 32)
     return failure();
-
   // Inter block stmatrix is not supported
   if (cvt.hasInDim(kBlock))
     return failure();
@@ -198,13 +193,9 @@ LogicalResult lowerDistributedToSharedStmatrix(
   auto reps = zerosLike(tile) * quot;
   assert(reps.getOutDimSize(kOffset) == cvt.getOutDimSize(kOffset));
 
-  // Choose the 4 elements indexed by the next to bases as the vectorisation
-  // factor
+  // Choose up to 4 packs of 32-bit elements indexed by the next to bases
+  // as the vectorisation factor
   auto vec = std::min(2, quot.getInDimSizeLog2(kReg));
-  // 2) NYI stmatrix.x1 and stmatrix.x2
-  if (vec != 2) {
-    return failure();
-  }
 
   // FIXME(Lezcano): Should we bail if any of the other 3 lane bases is zero?
 
@@ -237,17 +228,26 @@ LogicalResult lowerDistributedToSharedStmatrix(
                      .second;
 
   // Elements per op
-  auto step = (1 << vec) * (32 / bitwidth);
+  auto nVecs = 1 << vec;
+  auto elemsPerVec = 32 / bitwidth;
+  auto step = nVecs * elemsPerVec;
   for (int i = 0; i < srcVals.size(); i += step) {
     auto regIdx = reps.apply({{kReg, i}, {kLane, 0}, {kWarp, 0}})[0].second;
     Value offset = b.xor_(regBase, b.i32_val(regIdx));
     auto vecAddr = b.gep(smemPtrTy, llvmElemTy, smemBase, offset,
                          LLVM::GEPNoWrapFlags::inbounds);
-    SmallVector<Value> inValsVec;
-    for (int j = 0; j < step; j++)
-      inValsVec.push_back(srcVals[i + j]);
-    Value valsVec = packLLVector(loc, inValsVec, rewriter);
-    targetInfo.storeMatrixShared(rewriter, loc, vecAddr, valsVec);
+    // Pack into vector of i32
+    SmallVector<Value> inputs;
+    Type packedTy = vec_ty(llvmElemTy, 32 / bitwidth);
+    for (int j = 0; j < nVecs; j++) {
+      Value input = b.undef(packedTy);
+      for (int k = 0; k < elemsPerVec; k++) {
+        input = b.insert_element(
+            packedTy, input, srcVals[i + j * elemsPerVec + k], b.i32_val(k));
+      }
+      inputs.push_back(b.bitcast(input, i32_ty));
+    }
+    rewriter.create<triton::nvgpu::StoreMatrixOp>(loc, vecAddr, inputs);
   }
   return success();
 }

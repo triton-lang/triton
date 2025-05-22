@@ -43,7 +43,7 @@ struct LoopCSEDriver {
   bool areEqualInLoop(Value a, Value b);
 
   scf::ForOp loop;
-  ValueEquivalence equalValues;
+  SmallVector<std::pair<int, int>> argStack;
 };
 } // namespace
 
@@ -52,14 +52,15 @@ bool LoopCSEDriver::areIterArgsEqual(int i, int j) {
     return true;
   if (loop.getInitArgs()[i] != loop.getInitArgs()[j])
     return false;
+  if (llvm::is_contained(argStack, std::make_pair(i, j)))
+    return true;
   BlockArgument aArg = loop.getRegionIterArg(i);
   BlockArgument bArg = loop.getRegionIterArg(j);
   // First, assume the arguments are equal. This is how recursion is broken.
-  equalValues.setKnownEquivalence(aArg, bArg, true);
+  argStack.push_back({i, j});
   bool result =
       areEqualInLoop(loop.getYieldedValues()[i], loop.getYieldedValues()[j]);
-  // Now update the equivalence based on the actual result.
-  equalValues.setKnownEquivalence(aArg, bArg, result);
+  argStack.pop_back();
   return result;
 }
 
@@ -83,14 +84,10 @@ bool LoopCSEDriver::areEqualInLoop(Value a, Value b) {
   if (a == loop.getInductionVar() || b == loop.getInductionVar())
     return false;
 
-  if (std::optional<bool> eq = equalValues.getKnownEquivalence(a, b))
-    return *eq;
-
   if (auto aArg = dyn_cast<BlockArgument>(a)) {
     auto bArg = cast<BlockArgument>(b);
     bool result =
         areIterArgsEqual(aArg.getArgNumber() - 1, bArg.getArgNumber() - 1);
-    equalValues.setKnownEquivalence(a, b, result);
     return result;
   }
 
@@ -107,9 +104,7 @@ bool LoopCSEDriver::areEqualInLoop(Value a, Value b) {
   bool result = OperationEquivalence::isEquivalentTo(
       aDef, bDef,
       [&](Value a, Value b) { return success(areEqualInLoop(a, b)); },
-      [&](Value a, Value b) { equalValues.setKnownEquivalence(a, b, true); },
-      OperationEquivalence::IgnoreLocations);
-  equalValues.setKnownEquivalence(a, b, result);
+      /*markEquivalent=*/nullptr, OperationEquivalence::IgnoreLocations);
   return result;
 }
 

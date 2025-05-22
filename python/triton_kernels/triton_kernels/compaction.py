@@ -1,6 +1,6 @@
 import torch
 from .compaction_details._masked_compaction import _masked_compaction
-from triton_kernels import Bitmatrix
+from .bitmatrix import Bitmatrix
 
 
 def compaction(yv, yi, bitmask, sentinel=-1):
@@ -36,7 +36,7 @@ def compaction(yv, yi, bitmask, sentinel=-1):
         bitmask = bitmask.data
 
     _masked_compaction[(n_rows, )](
-        yv, yi, bitmask, bitmask.stride(0),  # inputs
+        yv, yi, bitmask, bitmask.stride(0), bitmask.stride(1),  # inputs
         ret_yv, ret_yi,  # outputs
         sentinel,  # sentinel
         K=n_cols  # constants

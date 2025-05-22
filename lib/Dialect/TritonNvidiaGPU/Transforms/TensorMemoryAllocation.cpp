@@ -9,13 +9,12 @@
 #include "llvm/ADT/EquivalenceClasses.h"
 #include "llvm/ADT/MapVector.h"
 
-#define GEN_PASS_CLASSES
-#include "triton/Dialect/TritonNvidiaGPU/Transforms/Passes.h.inc"
+namespace mlir {
+namespace triton {
+namespace nvidia_gpu {
 
-using namespace mlir;
-using namespace triton;
-using namespace triton::gpu;
-using namespace triton::nvidia_gpu;
+#define GEN_PASS_DEF_TRITONTENSORMEMORYALLOCATIONPASS
+#include "triton/Dialect/TritonNvidiaGPU/Transforms/Passes.h.inc"
 
 namespace {
 
@@ -183,10 +182,11 @@ static Operation *getAlloc(Value value) {
       continue;
     }
     auto arg = dyn_cast<BlockArgument>(value);
-    if (!arg || !isa<WarpSpecializePartitionsOp>(arg.getOwner()->getParentOp()))
+    if (!arg || !isa<triton::gpu::WarpSpecializePartitionsOp>(
+                    arg.getOwner()->getParentOp()))
       llvm::report_fatal_error("expected to find a TMEM alloc op");
-    auto partitions =
-        cast<WarpSpecializePartitionsOp>(arg.getOwner()->getParentOp());
+    auto partitions = cast<triton::gpu::WarpSpecializePartitionsOp>(
+        arg.getOwner()->getParentOp());
     value = partitions.getParentOp().getExplicitCaptures()[arg.getArgNumber()];
   }
 }
@@ -264,10 +264,11 @@ allocateTMem(Operation *parentOp,
     // Find all allocations in code that may execute at the same time. Only look
     // at processed allocations.
     SmallVector<TMemChunk> coexistingChunks;
-    if (auto ws = alloc->getParentOfType<WarpSpecializeOp>()) {
+    if (auto ws = alloc->getParentOfType<triton::gpu::WarpSpecializeOp>()) {
       for (auto prevIt = allocs.begin(); prevIt != it; ++prevIt) {
         TMEMAllocOp prevAlloc = *prevIt;
-        auto prevWs = prevAlloc->getParentOfType<WarpSpecializeOp>();
+        auto prevWs =
+            prevAlloc->getParentOfType<triton::gpu::WarpSpecializeOp>();
         if (prevWs && prevWs == ws &&
             alloc->getParentRegion() != prevAlloc->getParentRegion())
           coexistingChunks.push_back(allocChunks.at(prevAlloc));
@@ -307,9 +308,11 @@ allocateTMem(Operation *parentOp,
   return totalMemorySize;
 }
 
-class TritionTensorMemoryAllocationPass
-    : public TritionTensorMemoryAllocationPassBase<
-          TritionTensorMemoryAllocationPass> {
+} // anonymous namespace
+
+class TritonTensorMemoryAllocationPass
+    : public impl::TritonTensorMemoryAllocationPassBase<
+          TritonTensorMemoryAllocationPass> {
 public:
   void runOnOperation() override {
     ModuleOp mod = getOperation();
@@ -343,8 +346,6 @@ public:
   }
 };
 
-} // namespace
-
-std::unique_ptr<Pass> mlir::createTensorMemoryAllocationPass() {
-  return std::make_unique<TritionTensorMemoryAllocationPass>();
-}
+} // namespace nvidia_gpu
+} // namespace triton
+} // namespace mlir

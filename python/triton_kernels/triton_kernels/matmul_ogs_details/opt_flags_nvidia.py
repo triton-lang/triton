@@ -13,10 +13,10 @@ def compute_grid_size(routing_data, m, n, block_m, block_n):
 
 
 def compute_block_n(n: int, arch, precision_config):
-    capability = torch.cuda.get_device_capability()[0] if arch is None else int(arch[2:-1])
     # block_n:
     block_n = max(16, min(128, triton.next_power_of_2(n)))
-    if capability >= 9 and precision_config.max_num_imprecise_acc is None and n > 128:
+    # On Ampere and Hopper, handshake with swizzle_mxfp4_scale_hopper
+    if precision_config.max_num_imprecise_acc is None and n > 128:
         block_n = 256
     return block_n
 
