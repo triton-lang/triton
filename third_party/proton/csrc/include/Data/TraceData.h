@@ -2,6 +2,7 @@
 #define PROTON_DATA_TRACE_DATA_H_
 
 #include "Data.h"
+#include "TraceDataIO/TraceWriter.h"
 #include <memory>
 #include <unordered_map>
 
@@ -24,6 +25,8 @@ public:
 
   void clear() override;
 
+  class Trace;
+
 protected:
   // ScopeInterface
   void enterScope(const Scope &scope) override final;
@@ -38,7 +41,6 @@ private:
     return OutputFormat::ChromeTrace;
   }
 
-  class Trace;
   std::unique_ptr<Trace> trace;
   // ScopeId -> ContextId
   std::unordered_map<size_t, size_t> scopeIdToContextId;

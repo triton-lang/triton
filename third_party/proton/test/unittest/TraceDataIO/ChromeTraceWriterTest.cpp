@@ -46,18 +46,18 @@ public:
     return data;
   }
 
-  CircularLayoutParserResult createDefaultResult(int numBlocks, int numTraces,
-                                                 int numEvents) {
-    CircularLayoutParserResult result;
-    result.blockTraces.resize(numBlocks);
+  std::shared_ptr<CircularLayoutParserResult>
+  createDefaultResult(int numBlocks, int numTraces, int numEvents) {
+    auto result = std::make_shared<CircularLayoutParserResult>();
+    result->blockTraces.resize(numBlocks);
     for (int i = 0; i < numBlocks; i++) {
-      result.blockTraces[i].traces.resize(numTraces);
+      result->blockTraces[i].traces.resize(numTraces);
       for (int j = 0; j < numTraces; j++) {
-        result.blockTraces[i].traces[j].profileEvents.resize(numEvents);
+        result->blockTraces[i].traces[j].profileEvents.resize(numEvents);
         for (int k = 0; k < numEvents; k++) {
-          result.blockTraces[i].traces[j].profileEvents[k].first =
+          result->blockTraces[i].traces[j].profileEvents[k].first =
               std::make_shared<CycleEntry>();
-          result.blockTraces[i].traces[j].profileEvents[k].second =
+          result->blockTraces[i].traces[j].profileEvents[k].second =
               std::make_shared<CycleEntry>();
         }
       }
@@ -70,23 +70,23 @@ protected:
 };
 
 TEST_F(ChromeTraceWriterTest, SingleBlock) {
-  KernelMetadata metadata;
-  metadata.kernelName = "kernel1";
-  metadata.scopeName = {{1, "s1"}, {2, "s2"}};
+  auto metadata = std::make_shared<KernelMetadata>();
+  metadata->kernelName = "kernel1";
+  metadata->scopeName = {{1, "s1"}, {2, "s2"}};
 
-  auto result = createDefaultResult(1, 1, metadata.scopeName.size());
-  result.blockTraces[0].blockId = 1;
-  result.blockTraces[0].procId = 120;
-  result.blockTraces[0].traces[0].uid = 2;
-  result.blockTraces[0].traces[0].profileEvents[0].first->cycle = 122;
-  result.blockTraces[0].traces[0].profileEvents[0].second->cycle = 162;
-  result.blockTraces[0].traces[0].profileEvents[0].first->scopeId = 1;
-  result.blockTraces[0].traces[0].profileEvents[0].second->scopeId = 1;
-  result.blockTraces[0].traces[0].profileEvents[1].first->cycle = 222;
-  result.blockTraces[0].traces[0].profileEvents[1].second->cycle = 262;
-  result.blockTraces[0].traces[0].profileEvents[1].first->scopeId = 7;
-  result.blockTraces[0].traces[0].profileEvents[1].second->scopeId = 7;
-  std::vector<KernelTrace> kerneltrace = {std::make_pair(&result, &metadata)};
+  auto result = createDefaultResult(1, 1, metadata->scopeName.size());
+  result->blockTraces[0].blockId = 1;
+  result->blockTraces[0].procId = 120;
+  result->blockTraces[0].traces[0].uid = 2;
+  result->blockTraces[0].traces[0].profileEvents[0].first->cycle = 122;
+  result->blockTraces[0].traces[0].profileEvents[0].second->cycle = 162;
+  result->blockTraces[0].traces[0].profileEvents[0].first->scopeId = 1;
+  result->blockTraces[0].traces[0].profileEvents[0].second->scopeId = 1;
+  result->blockTraces[0].traces[0].profileEvents[1].first->cycle = 222;
+  result->blockTraces[0].traces[0].profileEvents[1].second->cycle = 262;
+  result->blockTraces[0].traces[0].profileEvents[1].first->scopeId = 7;
+  result->blockTraces[0].traces[0].profileEvents[1].second->scopeId = 7;
+  std::vector<KernelTrace> kerneltrace = {std::make_pair(result, metadata)};
   auto writer = StreamChromeTraceWriter(kerneltrace, chromeTracePath);
   writer.dump();
 
@@ -101,36 +101,36 @@ TEST_F(ChromeTraceWriterTest, SingleBlock) {
 }
 
 TEST_F(ChromeTraceWriterTest, MultiBlockMultiWarp) {
-  KernelMetadata metadata;
-  metadata.kernelName = "kernel2";
-  metadata.scopeName = {{1, "s1"}, {2, "s2"}, {3, "s3"}, {4, "s4"}};
+  auto metadata = std::make_shared<KernelMetadata>();
+  metadata->kernelName = "kernel2";
+  metadata->scopeName = {{1, "s1"}, {2, "s2"}, {3, "s3"}, {4, "s4"}};
 
-  auto result = createDefaultResult(2, 3, metadata.scopeName.size());
+  auto result = createDefaultResult(2, 3, metadata->scopeName.size());
 
   for (int i = 0; i < 3; i++) {
     for (int j = 0; j < 2; j++) {
-      result.blockTraces[j].blockId = 1 + j;
-      result.blockTraces[j].procId = 120 + j;
-      result.blockTraces[j].traces[i].uid = i;
-      result.blockTraces[j].traces[i].profileEvents[0].first->cycle = 122;
-      result.blockTraces[j].traces[i].profileEvents[0].second->cycle = 162;
-      result.blockTraces[j].traces[i].profileEvents[0].first->scopeId = 1;
-      result.blockTraces[j].traces[i].profileEvents[0].second->scopeId = 1;
-      result.blockTraces[j].traces[i].profileEvents[1].first->cycle = 142;
-      result.blockTraces[j].traces[i].profileEvents[1].second->cycle = 182;
-      result.blockTraces[j].traces[i].profileEvents[1].first->scopeId = 2;
-      result.blockTraces[j].traces[i].profileEvents[1].second->scopeId = 2;
-      result.blockTraces[j].traces[i].profileEvents[2].first->cycle = 172;
-      result.blockTraces[j].traces[i].profileEvents[2].second->cycle = 200;
-      result.blockTraces[j].traces[i].profileEvents[2].first->scopeId = 3;
-      result.blockTraces[j].traces[i].profileEvents[2].second->scopeId = 3;
-      result.blockTraces[j].traces[i].profileEvents[3].first->cycle = 183;
-      result.blockTraces[j].traces[i].profileEvents[3].second->cycle = 210;
-      result.blockTraces[j].traces[i].profileEvents[3].first->scopeId = 4;
-      result.blockTraces[j].traces[i].profileEvents[3].second->scopeId = 4;
+      result->blockTraces[j].blockId = 1 + j;
+      result->blockTraces[j].procId = 120 + j;
+      result->blockTraces[j].traces[i].uid = i;
+      result->blockTraces[j].traces[i].profileEvents[0].first->cycle = 122;
+      result->blockTraces[j].traces[i].profileEvents[0].second->cycle = 162;
+      result->blockTraces[j].traces[i].profileEvents[0].first->scopeId = 1;
+      result->blockTraces[j].traces[i].profileEvents[0].second->scopeId = 1;
+      result->blockTraces[j].traces[i].profileEvents[1].first->cycle = 142;
+      result->blockTraces[j].traces[i].profileEvents[1].second->cycle = 182;
+      result->blockTraces[j].traces[i].profileEvents[1].first->scopeId = 2;
+      result->blockTraces[j].traces[i].profileEvents[1].second->scopeId = 2;
+      result->blockTraces[j].traces[i].profileEvents[2].first->cycle = 172;
+      result->blockTraces[j].traces[i].profileEvents[2].second->cycle = 200;
+      result->blockTraces[j].traces[i].profileEvents[2].first->scopeId = 3;
+      result->blockTraces[j].traces[i].profileEvents[2].second->scopeId = 3;
+      result->blockTraces[j].traces[i].profileEvents[3].first->cycle = 183;
+      result->blockTraces[j].traces[i].profileEvents[3].second->cycle = 210;
+      result->blockTraces[j].traces[i].profileEvents[3].first->scopeId = 4;
+      result->blockTraces[j].traces[i].profileEvents[3].second->scopeId = 4;
     }
   }
-  std::vector<KernelTrace> kerneltrace = {std::make_pair(&result, &metadata)};
+  std::vector<KernelTrace> kerneltrace = {std::make_pair(result, metadata)};
   auto writer = StreamChromeTraceWriter(kerneltrace, chromeTracePath);
   writer.dump();
 
@@ -159,43 +159,44 @@ TEST_F(ChromeTraceWriterTest, MultiBlockMultiWarp) {
 }
 
 TEST_F(ChromeTraceWriterTest, MultiKernel) {
-  KernelMetadata metadata1;
-  metadata1.kernelName = "kernel1";
-  metadata1.scopeName = {{1, "s1"}};
-  auto result1 = createDefaultResult(1, 2, metadata1.scopeName.size());
+  auto metadata1 = std::make_shared<KernelMetadata>();
+  metadata1->kernelName = "kernel1";
+  metadata1->scopeName = {{1, "s1"}};
+  auto result1 = createDefaultResult(1, 2, metadata1->scopeName.size());
 
   for (int i = 0; i < 2; i++) {
     for (int j = 0; j < 1; j++) {
-      result1.blockTraces[j].blockId = j;
-      result1.blockTraces[j].procId = j;
-      result1.blockTraces[j].traces[i].uid = i;
-      result1.blockTraces[j].traces[i].profileEvents[0].first->cycle = 1220000;
-      result1.blockTraces[j].traces[i].profileEvents[0].second->cycle = 1620000;
-      result1.blockTraces[j].traces[i].profileEvents[0].first->scopeId = 1;
-      result1.blockTraces[j].traces[i].profileEvents[0].second->scopeId = 1;
+      result1->blockTraces[j].blockId = j;
+      result1->blockTraces[j].procId = j;
+      result1->blockTraces[j].traces[i].uid = i;
+      result1->blockTraces[j].traces[i].profileEvents[0].first->cycle = 1220000;
+      result1->blockTraces[j].traces[i].profileEvents[0].second->cycle =
+          1620000;
+      result1->blockTraces[j].traces[i].profileEvents[0].first->scopeId = 1;
+      result1->blockTraces[j].traces[i].profileEvents[0].second->scopeId = 1;
     }
   }
 
-  KernelMetadata metadata2;
-  metadata2.kernelName = "kernel2";
-  metadata2.scopeName = {{1, "s1"}};
-  auto result2 = createDefaultResult(2, 1, metadata2.scopeName.size());
+  auto metadata2 = std::make_shared<KernelMetadata>();
+  metadata2->kernelName = "kernel2";
+  metadata2->scopeName = {{1, "s1"}};
+  auto result2 = createDefaultResult(2, 1, metadata2->scopeName.size());
 
   for (int i = 0; i < 1; i++) {
     for (int j = 0; j < 2; j++) {
-      result2.blockTraces[j].blockId = j;
-      result2.blockTraces[j].procId = j;
-      result2.blockTraces[j].traces[i].uid = i;
-      result2.blockTraces[j].traces[i].profileEvents[0].first->cycle =
+      result2->blockTraces[j].blockId = j;
+      result2->blockTraces[j].procId = j;
+      result2->blockTraces[j].traces[i].uid = i;
+      result2->blockTraces[j].traces[i].profileEvents[0].first->cycle =
           2 * kKernelTimeGap + 1220000;
-      result2.blockTraces[j].traces[i].profileEvents[0].second->cycle =
+      result2->blockTraces[j].traces[i].profileEvents[0].second->cycle =
           2 * kKernelTimeGap + 1620000;
-      result2.blockTraces[j].traces[i].profileEvents[0].first->scopeId = 1;
-      result2.blockTraces[j].traces[i].profileEvents[0].second->scopeId = 1;
+      result2->blockTraces[j].traces[i].profileEvents[0].first->scopeId = 1;
+      result2->blockTraces[j].traces[i].profileEvents[0].second->scopeId = 1;
     }
   }
-  std::vector<KernelTrace> kerneltrace = {std::make_pair(&result1, &metadata1),
-                                          std::make_pair(&result2, &metadata2)};
+  std::vector<KernelTrace> kerneltrace = {std::make_pair(result1, metadata1),
+                                          std::make_pair(result2, metadata2)};
   auto writer = StreamChromeTraceWriter(kerneltrace, chromeTracePath);
   writer.dump();
 
