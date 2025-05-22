@@ -25,6 +25,10 @@ bool ttng::MMAv5PipelineableOperandsHelper::comesFromLoadOrOutsideLoop(
   while (isa<ttg::MemDescTransOp, ttg::MemDescReshapeOp>(v.getDefiningOp())) {
     v = v.getDefiningOp()->getOperand(0);
   }
+  if (auto tmemAlloc = dyn_cast<ttng::TMEMAllocOp>(v.getDefiningOp())) {
+    foundLoad = tmemAlloc;
+    return false;
+  }
   auto localAlloc = dyn_cast<ttg::LocalAllocOp>(v.getDefiningOp());
   if (!localAlloc) {
     return false;
