@@ -207,9 +207,10 @@ void SessionManager::enterScope(const Scope &scope) {
 
 void SessionManager::exitScope(const Scope &scope) {
   std::lock_guard<std::mutex> lock(mutex);
-  executeInterface(scopeInterfaceCounts, [&](auto *scopeInterface) {
-    scopeInterface->exitScope(scope);
-  });
+  executeInterface(
+      scopeInterfaceCounts,
+      [&](auto *scopeInterface) { scopeInterface->exitScope(scope); },
+      /*isReversed=*/true);
 }
 
 void SessionManager::enterOp(const Scope &scope) {
@@ -220,8 +221,9 @@ void SessionManager::enterOp(const Scope &scope) {
 
 void SessionManager::exitOp(const Scope &scope) {
   std::lock_guard<std::mutex> lock(mutex);
-  executeInterface(opInterfaceCounts,
-                   [&](auto *opInterface) { opInterface->exitOp(scope); });
+  executeInterface(
+      opInterfaceCounts, [&](auto *opInterface) { opInterface->exitOp(scope); },
+      /*isReversed=*/true);
 }
 
 void SessionManager::initFunctionMetadata(
@@ -251,11 +253,13 @@ void SessionManager::enterInstrumentedOp(uint64_t streamId, uint64_t functionId,
 void SessionManager::exitInstrumentedOp(uint64_t streamId, uint64_t functionId,
                                         uint8_t *buffer, size_t size) {
   std::lock_guard<std::mutex> lock(mutex);
-  executeInterface(instrumentationInterfaceCounts,
-                   [&](auto *instrumentationInterface) {
-                     instrumentationInterface->exitInstrumentedOp(
-                         streamId, functionId, buffer, size);
-                   });
+  executeInterface(
+      instrumentationInterfaceCounts,
+      [&](auto *instrumentationInterface) {
+        instrumentationInterface->exitInstrumentedOp(streamId, functionId,
+                                                     buffer, size);
+      },
+      /*isReversed=*/true);
 }
 
 void SessionManager::addMetrics(
