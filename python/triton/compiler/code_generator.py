@@ -773,7 +773,7 @@ class CodeGenerator(ast.NodeVisitor):
                 raise self._unsupported(node, "Boolean value of Tensor with more than one value is ambiguous")
             if cond.type.is_block():
                 warnings.warn(
-                    "If conditional called with multidimensional Tensor instead of scalar; please use \"if (%s).reshape([])\" instead"
+                    "If conditional called with multidimensional Tensor instead of scalar; please use \"if (%s).item()\" instead"
                     % ast.unparse(node.test))
                 cond = language.core._unsplat(cond, _builder=self.builder, _generator=self)
             cond = cond.to(language.int1, _builder=self.builder)
@@ -1300,8 +1300,15 @@ class CodeGenerator(ast.NodeVisitor):
                 # expression so we do not append it to nontrivial_values.
             else:
                 if value.type.is_block():
-                    warnings.warn(
-                        "Logical operators 'and' and 'or' are deprecated for non-scalar tensors; please use '&' or '|' instead"
+                    lineno = getattr(node, "lineno", None)
+                    if lineno is not None:
+                        lineno += self.begin_line
+                    warnings.warn_explicit(
+                        "Logical operators 'and' and 'or' are deprecated for non-scalar tensors; please use '&' or '|' instead",
+                        category=UserWarning,
+                        filename=self.file_name,
+                        lineno=lineno,
+                        source=ast.unparse(node),
                     )
                 # not a constexpr so we must append it:
                 nontrivial_values.append(value)

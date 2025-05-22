@@ -1,10 +1,12 @@
 from pathlib import Path
+from copy import deepcopy
 import matplotlib.pyplot as plt
 import json
 import triton.profiler as proton
 import torch
+import triton_kernels
 import triton_kernels.swiglu
-from triton_kernels.numerics_details.mxfp import downcast_to_mxfp
+from triton_kernels.numerics_details.mxfp import downcast_to_mxfp, SwizzlingType
 from triton_kernels.matmul_ogs import MicroscalingCtx, matmul_ogs, PrecisionConfig, FlexCtx
 from triton_kernels.numerics import InFlexData
 from triton_kernels.routing import routing
@@ -38,7 +40,7 @@ def _query_gpu_specs():
 
     gpu_specs = {
         "NVIDIA H100 80GB HBM3": {"MAX_TFLOPS8": 1979, "MAX_TFLOPS16": 989, "MAX_TBPS": 3.35},
-        "HGX GB200": {"MAX_TFLOPS8": 4500, "MAX_TFLOPS16": 2250, "MAX_TBPS": 8.0},
+        "NVIDIA GB200": {"MAX_TFLOPS8": 4500, "MAX_TFLOPS16": 2250, "MAX_TBPS": 8.0},
         "AMD Instinct MI300X": {"MAX_TFLOPS8": 2615, "MAX_TFLOPS16": 1307, "MAX_TBPS": 5.3},
         "AMD Instinct MI325X": {"MAX_TFLOPS8": 2615, "MAX_TFLOPS16": 1307, "MAX_TBPS": 6.0},
     }
@@ -61,10 +63,14 @@ def quantize(w, dtype, dev, **opt):
     else:
         assert dtype == "mx4", f"{dtype=}"
         swizzle_mx_scale = opt["swizzle_mx_scale"]
+        swizzle_mx_value = opt["swizzle_mx_value"]
         swizzle_axis = 2 if swizzle_mx_scale else None
         w = w.to(torch.bfloat16)
-        w, mx_scales, weight_scale_shape = downcast_to_mxfp(w, torch.uint8, axis=1, swizzle_axis=swizzle_axis)
-        return w, InFlexData(), MicroscalingCtx(weight_scale=mx_scales, swizzle_mx=swizzle_mx_scale,
+        w, mx_scales, weight_scale_shape = downcast_to_mxfp(w, torch.uint8, axis=1, swizzle_axis=swizzle_axis,
+                                                            swizzle_scale=swizzle_mx_scale,
+                                                            swizzle_value=swizzle_mx_value)
+        return w, InFlexData(), MicroscalingCtx(weight_scale=mx_scales, swizzle_scale=swizzle_mx_scale,
+                                                swizzle_value=swizzle_mx_value,
                                                 actual_weight_scale_shape=weight_scale_shape)
 
 
@@ -73,6 +79,7 @@ class PerfData:
     time: float
     flops: float
     bytes: float
+    bitwidth: int
 
     @property
     def tflops(self):
@@ -92,8 +99,9 @@ class PerfData:
     def util(self) -> float:
         if SPECS is None:
             return 0.0
+        assert self.bitwidth in (8, 16)
 
-        peak_flops = max(SPECS["MAX_TFLOPS8"], SPECS.get("MAX_TFLOPS16", 0))
+        peak_flops = SPECS["MAX_TFLOPS8"] if self.bitwidth == 8 else SPECS["MAX_TFLOPS16"]
         min_t_flop = self.flops / peak_flops * 1e-3  # ns → µs
         min_t_bw = self.bytes / SPECS["MAX_TBPS"] * 1e-3
         return max(min_t_flop, min_t_bw) / self.time
@@ -116,8 +124,21 @@ def bench_mlp(batch, dim1, dim2, n_expts_tot, n_expts_act, x_dtype, w_dtype, TP,
 
     # -- numerics --
     optg = dict()
-    opt1 = {"swizzle_mx_scale": True} if w_dtype == "mx4" else dict()
-    opt2 = {"swizzle_mx_scale": True} if w_dtype == "mx4" else dict()
+    opt1 = dict()
+    opt2 = dict()
+    if w_dtype == "mx4" and not is_hip():
+        if torch.cuda.get_device_capability()[0] < 9:
+            # NYI for Ampere
+            swizzle_mx_value = None
+            swizzle_mx_scale = None
+        elif torch.cuda.get_device_capability()[0] < 10:
+            swizzle_mx_value = SwizzlingType.HOPPER
+            swizzle_mx_scale = SwizzlingType.HOPPER
+        else:
+            swizzle_mx_value = None
+            swizzle_mx_scale = SwizzlingType.BLACKWELL
+        opt1 = {"swizzle_mx_value": swizzle_mx_value, "swizzle_mx_scale": swizzle_mx_scale}
+        opt2 = deepcopy(opt1)
     wg, wg_flex, wg_mx = quantize(wg, "bf16", dev, **optg)
     w1, w1_flex, w1_mx = quantize(w1, w_dtype, dev, **opt1)
     w2, w2_flex, w2_mx = quantize(w2, w_dtype, dev, **opt2)
@@ -165,7 +186,7 @@ def bench_mlp(batch, dim1, dim2, n_expts_tot, n_expts_act, x_dtype, w_dtype, TP,
         # TODO: proton should really be recording that in the json instead of
         # relying on the user to aggregate
         time = sum(x["metrics"].get("time (ns)", 0) for x in data[0]["children"])
-    return PerfData(time, flops, bytes)
+    return PerfData(time, flops, bytes, x_dtype.itemsize * 8)
 
 
 def roofline_mlp(batch_ranges, dim1, dim2, n_expts_tot, n_expts_act, x_dtype, w_dtype, TP=1, EP=1, name="",
@@ -175,7 +196,8 @@ def roofline_mlp(batch_ranges, dim1, dim2, n_expts_tot, n_expts_act, x_dtype, w_
     batches = list(chain(*[range(*r) for r in batch_ranges]))
     # collect performance data
     perfs = []
-    print(f"Benchmarking {name} ({x_dtype}x{w_dtype}, TP={TP}, EP={EP})...")
+    bench_case = f"{name} ({x_dtype}x{w_dtype}, TP={TP}, EP={EP})"
+    print(f"Benchmarking {bench_case}...")
     print("===============================================================")
     for batch in batches:
         perfs += [bench_mlp(batch, dim1, dim2, n_expts_tot, n_expts_act, x_dtype, w_dtype, TP, EP, name)]
@@ -186,7 +208,7 @@ def roofline_mlp(batch_ranges, dim1, dim2, n_expts_tot, n_expts_act, x_dtype, w_
     fig, ax = plt.subplots(figsize=(7, 5), dpi=120)
     ax.set_xlabel("batch size (toks/expt)")
     ax.set_ylabel("performance  [TFLOP/s]")
-    ax.set_title("roofline")
+    ax.set_title(f"{bench_case} roofline")
     # add a tiny margin so points are not flush with the frame
     xs = [batch * n_expts_act / n_expts_tot for batch in batches]
     perf = [p.tflops for p in perfs]
@@ -200,7 +222,8 @@ def roofline_mlp(batch_ranges, dim1, dim2, n_expts_tot, n_expts_act, x_dtype, w_
     opints = [p.opint for p in perfs]
     knee = bisect_left(opints, max_tflops / max_tbps) - 1
     x_bw, x_comp = xs[:knee], xs[knee:]
-    y_bw = [op * max_tbps for op in opints[:knee]]
+    x_bw = [x_bw[0], x_comp[0]]
+    y_bw = [opints[0] * max_tbps, max_tflops]
     y_comp = [max_tflops] * len(x_comp)
     ax.plot(x_bw, y_bw, "--", label=f"BW-bound  ({max_tbps:.0f} TB/s)")
     ax.plot(x_comp, y_comp, "--", label=f"Compute-bound  ({max_tflops:.0f} TFLOP/s)")
@@ -217,10 +240,11 @@ if __name__ == "__main__":
     has_native_mx4 = torch.cuda.get_device_capability(0)[0] >= 10 or get_cdna_version() == 4
     if SPECS is None:
         print("Current GPU has no specs provided, utilization is N/A")
-    batch_ranges = [(1024, 32768, 1024)]
+    batch_ranges_dense = [(1024, 32768, 1024)]
+    batch_ranges_moe = [(128, 512, 32), (512, 32000, 128)]
     dense_dtypes = ["fp8", "fp8"]
     quantized_dtypes = ["fp8", "mx4"] if has_native_mx4 else ["bf16", "mx4"]
-    roofline_mlp(batch_ranges, 8192, 8192, 1, 1, *dense_dtypes, TP=1, EP=1, name="dense")
-    roofline_mlp(batch_ranges, 8192, 8192, 1, 1, *quantized_dtypes, TP=1, EP=1, name="dense")
-    roofline_mlp(batch_ranges, 5120, 8192, 128, 4, *dense_dtypes, TP=1, EP=1, name="llama4-maverick")
-    roofline_mlp(batch_ranges, 5120, 8192, 128, 4, *quantized_dtypes, TP=1, EP=1, name="llama4-maverick")
+    roofline_mlp(batch_ranges_dense, 8192, 8192, 1, 1, *dense_dtypes, TP=1, EP=1, name="dense")
+    roofline_mlp(batch_ranges_dense, 8192, 8192, 1, 1, *quantized_dtypes, TP=1, EP=1, name="dense")
+    roofline_mlp(batch_ranges_moe, 5120, 8192, 128, 4, *dense_dtypes, TP=1, EP=1, name="llama4-maverick")
+    roofline_mlp(batch_ranges_moe, 5120, 8192, 128, 4, *quantized_dtypes, TP=1, EP=1, name="llama4-maverick")

@@ -15,6 +15,7 @@
 #include <pybind11/stl_bind.h>
 
 namespace py = pybind11;
+namespace ttng = mlir::triton::nvidia_gpu;
 
 void init_triton_nvidia_passes_ttgpuir(py::module &&m) {
   using namespace mlir::triton;
@@ -28,30 +29,30 @@ void init_triton_nvidia_passes_ttgpuir(py::module &&m) {
 }
 
 void init_triton_nvidia_passes_ttnvgpuir(py::module &&m) {
-  ADD_PASS_WRAPPER_1("add_plan_cta", mlir::createTritonNvidiaGPUPlanCTAPass,
+  ADD_PASS_WRAPPER_1("add_plan_cta", ttng::createTritonNvidiaGPUPlanCTAPass,
                      mlir::triton::nvidia_gpu::ClusterInfo *);
   ADD_PASS_WRAPPER_0("add_fence_insertion",
-                     mlir::createTritonNvidiaGPUFenceInsertionPass);
+                     ttng::createTritonGPUFenceInsertion);
   ADD_PASS_WRAPPER_0("add_tma_lowering",
-                     mlir::createTritonNvidiaGPUTMALoweringPass);
+                     ttng::createTritonNvidiaGPUTMALoweringPass);
   ADD_PASS_WRAPPER_0("add_promote_lhs_to_tmem",
-                     mlir::createTritonNvidiaGPUPromoteLHSToTMemPass);
+                     ttng::createTritonNvidiaGPUPromoteLHSToTMemPass);
   ADD_PASS_WRAPPER_0("add_remove_tmem_tokens",
-                     mlir::createTritonNvidiaGPURemoveTMEMTokensPass);
+                     ttng::createTritonNvidiaGPURemoveTMEMTokensPass);
   ADD_PASS_WRAPPER_0("add_nvgpu_to_llvm",
                      mlir::triton::createConvertNVGPUToLLVMPass);
   ADD_PASS_WRAPPER_0("add_warp_specialize_to_llvm",
                      mlir::triton::createConvertWarpSpecializeToLLVM);
   ADD_PASS_WRAPPER_0("add_allocate_tensor_memory",
-                     mlir::createTensorMemoryAllocationPass);
+                     ttng::createTritonTensorMemoryAllocationPass);
   ADD_PASS_WRAPPER_0("add_lower_mma",
-                     mlir::createTritonNvidiaGPUMMALoweringPass);
+                     ttng::createTritonNvidiaGPUMMALoweringPass);
   ADD_PASS_WRAPPER_0("add_optimize_descriptor_encoding",
-                     mlir::createTritonNvidiaGPUOptimizeDescriptorEncodingPass);
+                     ttng::createTritonNvidiaGPUOptimizeDescriptorEncodingPass);
   ADD_PASS_WRAPPER_0("add_optimize_tmem_layouts",
-                     mlir::createTritonNvidiaGPUOptimizeTMemLayoutsPass);
+                     ttng::createTritonNvidiaGPUOptimizeTMemLayoutsPass);
   ADD_PASS_WRAPPER_0("add_interleave_tmem",
-                     mlir::createTritonNvidiaGPUInterleaveTMemPass);
+                     ttng::createTritonNvidiaGPUInterleaveTMemPass);
 }
 
 void init_triton_nvidia_passes_nvws(py::module &&m) {

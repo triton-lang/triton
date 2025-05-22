@@ -109,7 +109,7 @@ jobs:
             echo "Could not find '${INSTRUMENTATION_LIB_DIR}'" ; exit -1
           fi
           pytest --capture=tee-sys -rfs python/tutorials/06-fused-attention.py
-          pytest --capture=tee-sys -rfs third_party/amd/python/test/test_extract_slice.py
+          pytest --capture=tee-sys -rfs third_party/amd/python/test/test_extract_slice_concat_op.py
           TRITON_ALWAYS_COMPILE=1 pytest --capture=tee-sys -rfs third_party/amd/python/test/test_scalarize_packed_fops.py
           cd python/test/unit
           pytest --capture=tee-sys -rfs -n 12 language runtime \

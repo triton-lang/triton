@@ -1,6 +1,12 @@
 import triton
 import triton.language as tl
-from triton_kernels.numerics_details.mxfp import _unswizzle_mx_block, get_scaled_dot_format_string
+from triton_kernels.numerics_details.mxfp import (
+    get_scaled_dot_format_string,
+    unswizzle_mx_scale_bw,
+    unswizzle_mxfp4_scale_hopper,
+    unswizzle_mxfp4_value_hopper,
+)
+
 from triton_kernels.numerics_details.flexpoint import float_to_flex, load_scale
 from ._common import make_matmul_repr, matmul_launch_metadata, swizzle2d, xcd_swizzle
 
@@ -54,7 +60,11 @@ def _matmul_ogs(
              PER_BATCH_SCALE: tl.constexpr,
              # optimization config
              BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr, BLOCK_K: tl.constexpr,
-             GROUP_M: tl.constexpr, XCD_SWIZZLE: tl.constexpr, SWIZZLE_MX: tl.constexpr,
+             GROUP_M: tl.constexpr, XCD_SWIZZLE: tl.constexpr,
+             # One of ["HOPPER", "BLACKWELL", None]
+             SWIZZLE_MX_VALUE: tl.constexpr,
+             # One of ["HOPPER", "BLACKWELL", None]
+             SWIZZLE_MX_SCALE: tl.constexpr,
              EPILOGUE_SUBTILE: tl.constexpr,
              EVEN_K: tl.constexpr, SPLIT_K: tl.constexpr,
              W_CACHE_MODIFIER: tl.constexpr,
@@ -69,10 +79,15 @@ def _matmul_ogs(
     MX_PACK_DIVISOR: tl.constexpr = 32
     if is_microscaled_format:
         w_type: tl.constexpr = W.dtype.element_ty
+        is_mxfp4: tl.constexpr = w_type == tl.uint8
         tl.static_assert(w_type == tl.uint8 or (w_type == tl.float8e4nv or w_type == tl.float8e5),
                          "mx_weight_ptr must be uint8")
         tl.static_assert(MxScale.dtype.element_ty == tl.uint8, "mx_scale_ptr must be uint8")
         tl.static_assert(BLOCK_K % MX_PACK_DIVISOR == 0, "BLOCK_K must be a multiple of MX_PACK_DIVISOR")
+        tl.static_assert(SWIZZLE_MX_VALUE == "HOPPER" or SWIZZLE_MX_VALUE is None, "Only Hopper swizzling is supported for values")
+    else:
+        tl.static_assert(SWIZZLE_MX_VALUE is None)
+        tl.static_assert(SWIZZLE_MX_SCALE is None)
 
     pid = tl.program_id(0)
     if ExptOffsSum is not None and XCD_SWIZZLE > 1:
@@ -141,39 +156,64 @@ def _matmul_ogs(
         offs_x_m = tl.load(GatherIndx + offs_x_m) // N_EXPTS_ACT
     offs_k = BLOCK_K * pid_k + tl.arange(0, BLOCK_K)
     XPtrs = X + offs_x_m.to(index_type)[:, None] * stride_x_m + offs_k.to(index_type)[None, :] * stride_x_k
-    # B pointers
-    offs_w_n = pid_n * BLOCK_N + tl.arange(0, BLOCK_N)
-    offs_w_n = tl.max_contiguous(tl.multiple_of(offs_w_n % N, BLOCK_N), BLOCK_N)
 
     # TODO: refactor if/else when triton front end improves
     if is_microscaled_format:
-        # We have pack 2 fp4 values in a  byte
-        W_PACK_DIVISOR: tl.constexpr = 2 if W.dtype.element_ty == tl.uint8 else 1
-        PACKED_BLOCK_K_W: tl.constexpr = BLOCK_K // W_PACK_DIVISOR
+        if SWIZZLE_MX_VALUE == "HOPPER":
+            x_type: tl.constexpr = X.dtype.element_ty
+            tl.static_assert(x_type == tl.bfloat16 or x_type == tl.float16, "Only bfloat16 or float16 is supported for HOPPER swizzling")
+            tl.static_assert(is_mxfp4, "Only mxfp4 is supported for HOPPER swizzling")
+            # We have pack 2 fp4 values in a byte but we divide the dimension by 2
+            # when swizzling
+            W_K_DIVISOR: tl.constexpr = 1
+            W_K_MULTIPLIER: tl.constexpr = 2
+            W_N_DIVISOR: tl.constexpr = 4
+        else:
+            # We have pack 2 fp4 values in a  byte
+            W_K_DIVISOR: tl.constexpr = 2 if is_mxfp4 else 1
+            W_K_MULTIPLIER: tl.constexpr = 1
+            W_N_DIVISOR: tl.constexpr = 1
+
+        PACKED_BLOCK_K_W: tl.constexpr = (BLOCK_K // W_K_DIVISOR) * W_K_MULTIPLIER
+        PACKED_BLOCK_N_W: tl.constexpr = BLOCK_N // W_N_DIVISOR
         MX_SCALE_BLOCK_K: tl.constexpr = BLOCK_K // MX_PACK_DIVISOR
 
         MxScale += expt_id * stride_mx_e
 
-        if SWIZZLE_MX:
+        if SWIZZLE_MX_SCALE == "BLACKWELL":
             tl.static_assert(BLOCK_N % 128 == 0)
             tl.static_assert(MX_SCALE_BLOCK_K % 4 == 0)
             PACKED_MX_BLOCK: tl.constexpr = (MX_SCALE_BLOCK_K // 4) * 32 * 4 * 4
-            offs_inner = PACKED_MX_BLOCK * pid_k + tl.arange(0, PACKED_MX_BLOCK)
-            offs_n_scale = (pid_n * (BLOCK_N // 128) + tl.arange(0, BLOCK_N // 128)) % N
-            offs_n_scale = tl.max_contiguous(tl.multiple_of(offs_n_scale, BLOCK_N // 128), BLOCK_N // 128)
-
-            MxScalePtrs = MxScale + offs_n_scale.to(index_type)[:, None] * stride_mx_n + offs_inner[None, :]
+            SCALE_BLOCK_N: tl.constexpr = BLOCK_N // 128
+            stride_scale_k: tl.constexpr = 1
+        elif SWIZZLE_MX_SCALE == "HOPPER":
+            n_warps: tl.constexpr = tl.extra.cuda.num_warps()
+            tl.static_assert(BLOCK_N % (2 * n_warps * 2 * 8) == 0)
+            tl.static_assert(MX_SCALE_BLOCK_K % 2 == 0)
+            PACKED_MX_BLOCK: tl.constexpr = MX_SCALE_BLOCK_K * 32
+            SCALE_BLOCK_N: tl.constexpr = BLOCK_N // 32
+            stride_scale_k = stride_mx_k
         else:
-            offs_k_scale = MX_SCALE_BLOCK_K * pid_k + tl.arange(0, MX_SCALE_BLOCK_K)
-            offs_n_scale = offs_w_n
-            # K dimension must be the last dimension for the scales
-            MxScalePtrs = MxScale + offs_k_scale.to(index_type)[None, :] * stride_mx_k + offs_n_scale.to(index_type)[:, None] * stride_mx_n
+            PACKED_MX_BLOCK: tl.constexpr = MX_SCALE_BLOCK_K
+            SCALE_BLOCK_N: tl.constexpr = BLOCK_N
+            stride_scale_k = stride_mx_k
+        offs_n_scale = (pid_n * SCALE_BLOCK_N + tl.arange(0, SCALE_BLOCK_N)) % N
+        offs_n_scale = tl.max_contiguous(tl.multiple_of(offs_n_scale, SCALE_BLOCK_N), SCALE_BLOCK_N)
+        # K dimension must be the last dimension for the scales
+        offs_k_scale = PACKED_MX_BLOCK * pid_k + tl.arange(0, PACKED_MX_BLOCK)
+        MxScalePtrs = MxScale + offs_k_scale.to(index_type)[None, :] * stride_scale_k + offs_n_scale.to(index_type)[:, None] * stride_mx_n
     else:
         MxScalePtrs = None
         offs_k_scale = None
-        W_PACK_DIVISOR: tl.constexpr = 1
-        MX_SCALE_BLOCK_K: tl.constexpr = 1
+        W_K_DIVISOR: tl.constexpr = 1
+        W_K_MULTIPLIER: tl.constexpr = 1
+        W_N_DIVISOR: tl.constexpr = 1
         PACKED_BLOCK_K_W: tl.constexpr = BLOCK_K
+        PACKED_BLOCK_N_W: tl.constexpr = BLOCK_N
+
+    # B pointers
+    offs_w_n = pid_n * PACKED_BLOCK_N_W + tl.arange(0, PACKED_BLOCK_N_W)
+    offs_w_n = tl.max_contiguous(tl.multiple_of(offs_w_n % (N // W_N_DIVISOR), PACKED_BLOCK_N_W), PACKED_BLOCK_N_W)
 
     offs_w_k = PACKED_BLOCK_K_W * pid_k + tl.arange(0, PACKED_BLOCK_K_W)
     W += expt_id * stride_w_e
@@ -184,11 +224,12 @@ def _matmul_ogs(
         if EVEN_K:
             mask_k = tl.full([BLOCK_K], True, dtype=tl.int1)
             mask_k_w = tl.full([PACKED_BLOCK_K_W], True, dtype=tl.int1)
-            mask_k_scale = tl.full([MX_SCALE_BLOCK_K], True, dtype=tl.int1)
+            if is_microscaled_format:
+                mask_k_scale = tl.full([PACKED_MX_BLOCK], True, dtype=tl.int1)
         else:
             mask_k = offs_k < k
-            mask_k_w = offs_w_k < tl.cdiv(k, W_PACK_DIVISOR)
-            if is_microscaled_format and not SWIZZLE_MX:
+            mask_k_w = offs_w_k < (tl.cdiv(k, W_K_DIVISOR) * W_K_MULTIPLIER)
+            if is_microscaled_format and SWIZZLE_MX_SCALE is None:
                 mask_k_scale = offs_k_scale < tl.cdiv(k, MX_PACK_DIVISOR)
 
         x = tl.load(XPtrs, mask=mask_k[None, :], other=0.0)
@@ -201,15 +242,27 @@ def _matmul_ogs(
             else:
                 # Scale of 1 in E8M0 format
                 x_scales = tl.full((BLOCK_M, BLOCK_K // MX_PACK_DIVISOR), 127, dtype=tl.uint8)
-            if SWIZZLE_MX:
-                w_scales = _unswizzle_mx_block(tl.load(MxScalePtrs))
+
+            if SWIZZLE_MX_SCALE == "BLACKWELL":
+                w_scales = unswizzle_mx_scale_bw(tl.load(MxScalePtrs))
+            elif SWIZZLE_MX_SCALE == "HOPPER":
+                # Handshake with the swizzling code
+                tl.static_assert(tl.extra.cuda.num_warps() == 8, "Only 8 warps are supported for Hopper swizzling. Got %d" % tl.extra.cuda.num_warps())
+                w_scales = unswizzle_mxfp4_scale_hopper(tl.load(MxScalePtrs), num_warps=8)
             else:
                 w_scales = tl.load(MxScalePtrs, mask=mask_k_scale[None, :], other=0.0)
+
+            if SWIZZLE_MX_VALUE == "HOPPER":
+                # Handshake with the swizzling code
+                w = unswizzle_mxfp4_value_hopper(w, op_idx=1, mma_version=3)
+                mma_version: tl.constexpr = 3 if w.shape[1] >= 64 else 2
+                tl.static_assert(mma_version == 3, "Only mma_version 3 is supported for Hopper swizzling")
+
             acc = tl.dot_scaled(x, x_scales, x_format, w, w_scales, mx_format, acc=acc, fast_math=True)
-            if SWIZZLE_MX:
+            if SWIZZLE_MX_SCALE == "BLACKWELL":
                 MxScalePtrs += (MX_SCALE_BLOCK_K // 4 * SPLIT_K) * stride_mx_k
             else:
-                MxScalePtrs += (MX_SCALE_BLOCK_K * SPLIT_K) * stride_mx_k
+                MxScalePtrs += (PACKED_MX_BLOCK * SPLIT_K) * stride_mx_k
         else:
             acc = tl.dot(x, w, acc, max_num_imprecise_acc=MAX_NUM_IMPRECISE_ACC, allow_tf32=ALLOW_TF32)
         XPtrs += (BLOCK_K * SPLIT_K) * stride_x_k
@@ -321,7 +374,7 @@ def _compute_writeback_idx(
     is_src_active = (src_idxs != -1).to(tl.int32)
     has_one_active = tl.sum(is_src_active, axis=1) == 1
 
-    need_finalize_scatter = mask_m and not has_one_active
+    need_finalize_scatter = mask_m & (~has_one_active)
     finalize_scatter_count = tl.sum(need_finalize_scatter.to(tl.int32))
     if finalize_scatter_count == 0:
         return

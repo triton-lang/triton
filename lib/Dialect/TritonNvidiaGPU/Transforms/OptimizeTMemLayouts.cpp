@@ -9,16 +9,16 @@
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/Passes.h"
 
-namespace {
+namespace ttg = mlir::triton::gpu;
 
-using namespace mlir;
+namespace mlir {
+namespace triton {
+namespace nvidia_gpu {
 
-namespace ttng = triton::nvidia_gpu;
-namespace ttg = triton::gpu;
-namespace tt = triton;
-
-#define GEN_PASS_CLASSES
+#define GEN_PASS_DEF_TRITONNVIDIAGPUOPTIMIZETMEMLAYOUTSPASS
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/Passes.h.inc"
+
+namespace {
 
 // clang-format off
 // Converts:
@@ -36,11 +36,11 @@ namespace tt = triton;
 // slice across warps. It currently only supports simple cases where tmem can be
 // sliced easily. This could be extended if needed with more powerful slicing
 // support of tmem.
-class TMemSplitLoadPattern : public OpRewritePattern<tt::SplitOp> {
+class TMemSplitLoadPattern : public OpRewritePattern<SplitOp> {
 public:
   using OpRewritePattern::OpRewritePattern;
 
-  LogicalResult matchAndRewrite(tt::SplitOp splitOp,
+  LogicalResult matchAndRewrite(SplitOp splitOp,
                                 PatternRewriter &rewriter) const override {
     auto src = splitOp.getSrc();
     // Skip convert layout ops.
@@ -48,16 +48,16 @@ public:
       src = cvt.getSrc();
     }
     // Only support splitting N dimension on the outer most.
-    auto transOp = src.getDefiningOp<tt::TransOp>();
+    auto transOp = src.getDefiningOp<TransOp>();
     if (!transOp || transOp.getOrder() != ArrayRef<int>({0, 2, 1}))
       return failure();
-    auto reshapeOp = transOp.getSrc().getDefiningOp<tt::ReshapeOp>();
+    auto reshapeOp = transOp.getSrc().getDefiningOp<ReshapeOp>();
     if (!reshapeOp)
       return failure();
     auto shape = reshapeOp.getResult().getType().getShape();
     if (shape[0] != reshapeOp.getSrc().getType().getShape()[0])
       return failure();
-    auto tmemLoad = reshapeOp.getSrc().getDefiningOp<ttng::TMEMLoadOp>();
+    auto tmemLoad = reshapeOp.getSrc().getDefiningOp<TMEMLoadOp>();
     if (!tmemLoad)
       return failure();
     // We found a tmem_load that is split on the N dimension. We can split it
@@ -73,22 +73,22 @@ public:
     int numWarps = ttg::lookupNumWarps(tmemLoad);
     rewriter.setInsertionPoint(tmemLoad);
     // First slice.
-    Value subSlice0 = rewriter.create<ttng::TMEMSubSliceOp>(
-        tmemLoad.getLoc(), tmem, 0, splitNSize);
-    Attribute distLayout = ttng::getTmemCompatibleLayout(
+    Value subSlice0 =
+        rewriter.create<TMEMSubSliceOp>(tmemLoad.getLoc(), tmem, 0, splitNSize);
+    Attribute distLayout = getTmemCompatibleLayout(
         mDim, splitNSize, splitOp.getOutLHS().getType(), numWarps);
     RankedTensorType newLoadType = RankedTensorType::get(
         splitOp.getOutLHS().getType().getShape(),
         splitOp.getOutLHS().getType().getElementType(), distLayout);
-    auto load0 = rewriter.create<ttng::TMEMLoadOp>(tmemLoad.getLoc(),
-                                                   newLoadType, subSlice0);
+    auto load0 =
+        rewriter.create<TMEMLoadOp>(tmemLoad.getLoc(), newLoadType, subSlice0);
     auto cvt0 = rewriter.create<ttg::ConvertLayoutOp>(
         tmemLoad.getLoc(), splitOp.getOutLHS().getType(), load0);
     // Second slice.
-    Value subSlice1 = rewriter.create<ttng::TMEMSubSliceOp>(
-        tmemLoad.getLoc(), tmem, splitNSize, splitNSize);
-    auto load1 = rewriter.create<ttng::TMEMLoadOp>(tmemLoad.getLoc(),
-                                                   newLoadType, subSlice1);
+    Value subSlice1 = rewriter.create<TMEMSubSliceOp>(tmemLoad.getLoc(), tmem,
+                                                      splitNSize, splitNSize);
+    auto load1 =
+        rewriter.create<TMEMLoadOp>(tmemLoad.getLoc(), newLoadType, subSlice1);
     auto cvt1 = rewriter.create<ttg::ConvertLayoutOp>(
         tmemLoad.getLoc(), splitOp.getOutRHS().getType(), load1);
     rewriter.replaceOp(splitOp, {cvt0, cvt1});
@@ -96,11 +96,11 @@ public:
   }
 };
 
-class TMemStoreJoinPattern : public OpRewritePattern<ttng::TMEMStoreOp> {
+class TMemStoreJoinPattern : public OpRewritePattern<TMEMStoreOp> {
 public:
   using OpRewritePattern::OpRewritePattern;
 
-  LogicalResult matchAndRewrite(ttng::TMEMStoreOp storeOp,
+  LogicalResult matchAndRewrite(TMEMStoreOp storeOp,
                                 PatternRewriter &b) const override {
     // Look through layout conversions.
     Value src = storeOp.getSrc();
@@ -109,16 +109,16 @@ public:
     }
 
     // Only support joinin N dimension on the outer most.
-    auto reshapeOp = src.getDefiningOp<tt::ReshapeOp>();
+    auto reshapeOp = src.getDefiningOp<ReshapeOp>();
     if (!reshapeOp)
       return failure();
     auto shape = reshapeOp.getSrc().getType().getShape();
     if (reshapeOp.getType().getShape().front() != shape[0])
       return failure();
-    auto transOp = reshapeOp.getSrc().getDefiningOp<tt::TransOp>();
+    auto transOp = reshapeOp.getSrc().getDefiningOp<TransOp>();
     if (!transOp || transOp.getOrder() != ArrayRef<int>({0, 2, 1}))
       return failure();
-    auto joinOp = transOp.getSrc().getDefiningOp<tt::JoinOp>();
+    auto joinOp = transOp.getSrc().getDefiningOp<JoinOp>();
     if (!joinOp)
       return failure();
 
@@ -137,25 +137,25 @@ public:
     int numWarps = ttg::lookupNumWarps(storeOp);
     Value truePred = b.create<arith::ConstantOp>(loc, b.getBoolAttr(true));
 
-    Attribute distLayout = ttng::getTmemCompatibleLayout(
+    Attribute distLayout = getTmemCompatibleLayout(
         mDim, splitNSize, joinOp.getLhs().getType(), numWarps);
     auto newStoreType = RankedTensorType::get(
         joinOp.getLhs().getType().getShape(),
         joinOp.getLhs().getType().getElementType(), distLayout);
 
     // First slice.
-    auto subSlice0 = b.create<ttng::TMEMSubSliceOp>(loc, tmem, 0, splitNSize);
+    auto subSlice0 = b.create<TMEMSubSliceOp>(loc, tmem, 0, splitNSize);
     auto cvt0 =
         b.create<ttg::ConvertLayoutOp>(loc, newStoreType, joinOp.getLhs());
     auto store0 =
-        b.create<ttng::TMEMStoreOp>(loc, subSlice0, cvt0.getResult(), truePred);
+        b.create<TMEMStoreOp>(loc, subSlice0, cvt0.getResult(), truePred);
     // Second slice.
     auto subSlice1 =
-        b.create<ttng::TMEMSubSliceOp>(loc, tmem, splitNSize, splitNSize);
+        b.create<TMEMSubSliceOp>(loc, tmem, splitNSize, splitNSize);
     auto cvt1 =
         b.create<ttg::ConvertLayoutOp>(loc, newStoreType, joinOp.getRhs());
     auto store1 =
-        b.create<ttng::TMEMStoreOp>(loc, subSlice1, cvt1.getResult(), truePred);
+        b.create<TMEMStoreOp>(loc, subSlice1, cvt1.getResult(), truePred);
     b.eraseOp(storeOp);
     return success();
   }
@@ -166,11 +166,11 @@ public:
 // the warpgroups. By default distribute along N but when there is a reduction
 // along N dimension we want to distribute along M instead to avoid having to
 // reduce across warps.
-class TMemLoadReducePattern : public OpRewritePattern<ttng::TMEMLoadOp> {
+class TMemLoadReducePattern : public OpRewritePattern<TMEMLoadOp> {
 public:
   using OpRewritePattern::OpRewritePattern;
 
-  LogicalResult matchAndRewrite(ttng::TMEMLoadOp tmemLoadOp,
+  LogicalResult matchAndRewrite(TMEMLoadOp tmemLoadOp,
                                 PatternRewriter &rewriter) const override {
     int numWarps = ttg::lookupNumWarps(tmemLoadOp);
     // If there is only 1 warpgroup there is nothing to optimize as the layout
@@ -223,8 +223,10 @@ public:
   }
 };
 
+} // anonymous namespace
+
 class TritonNvidiaGPUOptimizeTMemLayoutsPass
-    : public TritonNvidiaGPUOptimizeTMemLayoutsPassBase<
+    : public impl::TritonNvidiaGPUOptimizeTMemLayoutsPassBase<
           TritonNvidiaGPUOptimizeTMemLayoutsPass> {
 public:
   using BaseT = TritonNvidiaGPUOptimizeTMemLayoutsPassBase<
@@ -244,8 +246,6 @@ public:
   }
 };
 
-} // namespace
-
-std::unique_ptr<Pass> mlir::createTritonNvidiaGPUOptimizeTMemLayoutsPass() {
-  return std::make_unique<TritonNvidiaGPUOptimizeTMemLayoutsPass>();
-}
+} // namespace nvidia_gpu
+} // namespace triton
+} // namespace mlir
