@@ -45,6 +45,11 @@ static void pipelineWgmma(ModuleOp moduleOp) {
 
 static Operation *wrapInIfOp(RewriterBase &rewriter, Operation *op,
                              Value pred) {
+  // Avoid wrapping constant ops, as they may be used in other ops
+  // that rely on the constant op being present.
+  if (isa<arith::ConstantOp>(op)) {
+    return op;
+  }
   OpBuilder::InsertionGuard guard(rewriter);
   rewriter.setInsertionPoint(op);
   Location loc = op->getLoc();
