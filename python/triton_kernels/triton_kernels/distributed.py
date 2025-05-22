@@ -1,9 +1,9 @@
 import os
 import torch
 import torch.distributed as dist
-import triton_bench.routing
-from triton_bench.routing import RoutingData, GatherIndx, ScatterIndx
-from triton_bench.topk import topk
+import triton_kernels.routing
+from triton_kernels.routing import RoutingData, GatherIndx, ScatterIndx
+from triton_kernels.topk import topk
 from typing import Tuple
 
 
@@ -32,7 +32,18 @@ def cleanup():
         pass
 
 
-def all_gather(x: torch.Tensor, dim=0):
+def broadcast(x: torch.Tensor, src: int = 0, group: list = None) -> torch.Tensor:
+    if _is_distributed_launch():
+        if x.dtype not in [torch.float16, torch.bfloat16, torch.float32]:
+            x = x.to(torch.float16)
+        group = dist.new_group(group)
+        dist.broadcast(x, src=src, group=group)
+        return x
+    else:
+        return x
+
+
+def all_gather(x: torch.Tensor, dim=0) -> torch.Tensor:
     if _is_distributed_launch():
         world_size = dist.get_world_size()
         x_list = [torch.empty_like(x) for _ in range(world_size)]
@@ -42,7 +53,7 @@ def all_gather(x: torch.Tensor, dim=0):
         return x
 
 
-def reduce_scatter(x: torch.Tensor, token_mask: torch.Tensor = None, dim=0):
+def reduce_scatter(x: torch.Tensor, token_mask: torch.Tensor = None, dim=0) -> torch.Tensor:
     if _is_distributed_launch():
         world_size = dist.get_world_size()
         if token_mask is not None:
@@ -73,12 +84,13 @@ def reduce_scatter(x: torch.Tensor, token_mask: torch.Tensor = None, dim=0):
         return x
 
 
-def routing(logits, n_expts_act, expt_indx=None, EP=1, TP=1):
+def routing(logits, n_expts_act, expt_indx=None, EP=1,
+            TP=1) -> Tuple[RoutingData, GatherIndx, ScatterIndx, torch.Tensor]:
     if _is_distributed_launch():
         assert expt_indx is None
         _, n_expts_tot = logits.shape
-        # We need to use the same topk as triton_bench because torch's topk
-        # does not have the same tie-breaking behavior as triton_bench.
+        # We need to use the same topk as triton_kernels because torch's topk
+        # does not have the same tie-breaking behavior as triton_kernels.
         expt_scal, expt_indx, _ = topk(logits, n_expts_act)
         expt_indx = expt_indx.int()
         expt_scal = torch.softmax(expt_scal, dim=-1)
@@ -123,4 +135,4 @@ def routing(logits, n_expts_act, expt_indx=None, EP=1, TP=1):
         scatter_indx = ScatterIndx(src_indx=gate_indx.int(), dst_indx=topk_indx.int())
         return RoutingData(gate_scal, hist, n_expts_tot // EP, n_expts_act), gather_indx, scatter_indx, token_mask
     else:
-        return *triton_bench.routing.routing(logits, n_expts_act, expt_indx, EP), None
+        return *triton_kernels.routing.routing(logits, n_expts_act, expt_indx, EP), None
