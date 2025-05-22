@@ -215,16 +215,15 @@ def test_multi_session(tmp_path: pathlib.Path):
     size = 256
     x = torch.rand(size, device='cuda')
     y = torch.rand(size, device='cuda')
-    temp_file = tmp_path / "test_tree.hatchet"
+    temp_file_inst = tmp_path / "test_tree_inst.hatchet"
+    temp_file_cupti = tmp_path / "test_tree_cupti.hatchet"
     output = torch.empty_like(x)
     n_elements = output.numel()
     grid = (1, 1, 1)
-    proton.start(str(temp_file.with_suffix("")), backend="instrumentation")
-    proton.start(str(temp_file.with_suffix("")), backend="cupti")
+    proton.start(str(temp_file_inst.with_suffix("")), backend="instrumentation")
+    proton.start(str(temp_file_cupti.with_suffix("")), backend="cupti")
     # cycle values are aggregated from all warps, set num_warps=1 to just
     # get a single cycle value for each scope
     add_kernel[grid](x, y, output, n_elements, BLOCK_SIZE=1024, num_warps=1)
     proton.finalize()
 
-    with open(temp_file, "rb") as f:
-        data = json.load(f)
