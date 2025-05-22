@@ -201,19 +201,23 @@ LogicalResult lowerDistributedToSharedStmatrix(
   } else {
     // Division does not quite work here. To define this properly, we would need
     // to define a different multiplication that does:
-    // A * B = [[0, A], [B, 0]] and define leftDivision for it
+    // A *' B = [[0, A], [B, 0]] and define leftDivision for it
     // We do it ad-hoc for now, as I beleive there's not much demand for this op
     // outside of this lowering
 
-    // Divisibility in the sense above accounts for having offsets lanes 4, 8,
-    // 16 map to offsets 1, 2, 4...
+    // Divisibility in the sense above is the same as regular divisibility
+    // You need to see that the tile A is a sublayout of the matrix, and that
+    // it has zeros above it and to its right.
+
+    // In particular, offsets lanes 4, 8, 16 map to offsets 1, 2, 4...
     const auto &laneBases = cvt.getBases().find(kLane)->second;
     for (int i = 0; i < 3; ++i) {
       if (laneBases[i + 2][0] != (1 << i))
         return failure();
     }
-    // ... and no other basis should depend on 1, 2, 4 (effectively gives us the
-    // usual alignment condition)
+    // ... and no other basis should depend on 1, 2, 4
+    // Note that this gives us the usual alignment condition, but we have
+    // translated it to checking that the matrix to the left of A is all zeros
     for (auto dim : cvt.getInDimNames()) {
       const auto &bases = cvt.getBases().find(dim)->second;
       for (auto [i, basis] : llvm::enumerate(bases)) {
