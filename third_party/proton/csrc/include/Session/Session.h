@@ -175,10 +175,22 @@ private:
   }
 
   template <typename Counter, typename FnT>
-  void executeInterface(Counter &interfaceCounts, FnT &&fn) {
-    for (auto [interface, count] : interfaceCounts) {
-      if (count > 0) {
-        fn(interface);
+  void executeInterface(Counter &interfaceCounts, FnT &&fn,
+                        bool isReversed = false) {
+    auto process = [&](auto &entry) {
+      if (entry.second > 0) {
+        fn(entry.first);
+      }
+    };
+
+    if (isReversed) {
+      for (auto it = interfaceCounts.rbegin(); it != interfaceCounts.rend();
+           ++it) {
+        process(*it);
+      }
+    } else {
+      for (auto &entry : interfaceCounts) {
+        process(entry);
       }
     }
   }

@@ -8,6 +8,8 @@ import triton.language as tl
 import triton.profiler.language as pl
 import triton.profiler as proton
 
+from typing import NamedTuple
+
 
 def is_hip():
     return triton.runtime.driver.active.get_current_target().backend == "hip"
@@ -135,7 +137,11 @@ def test_tree(tmp_path: pathlib.Path):
         finally:
             proton.finalize()
 
-    @triton.jit
+    def metadata_fn(grid: tuple, metadata: NamedTuple, args: dict):
+        BLOCK_SIZE = args["BLOCK_SIZE"]
+        return {"name": f"add_{BLOCK_SIZE}"}
+
+    @triton.jit(launch_metadata=metadata_fn)
     def add_kernel(
         x_ptr,
         y_ptr,
@@ -164,7 +170,7 @@ def test_tree(tmp_path: pathlib.Path):
     output = torch.empty_like(x)
     n_elements = output.numel()
     grid = (1, 1, 1)
-    proton.start(str(temp_file.with_suffix("")), backend="instrumentation")
+    proton.start(str(temp_file.with_suffix("")), backend="instrumentation", hook="launch")
     # cycle values are aggregated from all warps, set num_warps=1 to just
     # get a single cycle value for each scope
     add_kernel[grid](x, y, output, n_elements, BLOCK_SIZE=1024, num_warps=1)
@@ -172,6 +178,7 @@ def test_tree(tmp_path: pathlib.Path):
 
     with open(temp_file, "rb") as f:
         data = json.load(f)
+        assert "add_1024" == data[0]["children"][0]["frame"]["name"]
         kernel_frame = data[0]["children"][0]["children"][0]
         load_ops = kernel_frame["children"][0]
         assert "load_ops" in load_ops["frame"]["name"]
