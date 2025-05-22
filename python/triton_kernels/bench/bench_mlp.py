@@ -7,7 +7,7 @@ import torch
 import triton_kernels
 import triton_kernels.swiglu
 from triton_kernels.numerics_details.mxfp import downcast_to_mxfp, SwizzlingType
-from triton_kernels.matmul_ogs import MicroscalingCtx, matmul_ogs, PrecisionConfig, FlexCtx, FusedActivation
+from triton_kernels.matmul_ogs import MicroscalingCtx, matmul_ogs, PrecisionConfig, FlexCtx, FnSpecs, FusedActivation
 from triton_kernels.numerics import InFlexData
 from triton_kernels.routing import routing
 from triton_kernels.target_info import is_hip, get_cdna_version
@@ -143,7 +143,7 @@ def bench_mlp(batch, dim1, dim2, n_expts_tot, n_expts_act, x_dtype, w_dtype, TP,
     w1, w1_flex, w1_mx = quantize(w1, w_dtype, dev, **opt1)
     w2, w2_flex, w2_mx = quantize(w2, w_dtype, dev, **opt2)
     pcg = PrecisionConfig(mx_ctx=wg_mx, flex_ctx=FlexCtx(rhs_data=wg_flex))
-    act = FusedActivation("swiglu", triton_kernels.swiglu.swiglu_fn, ("alpha", "limit"), (1.0, 1.0), 2)
+    act = FusedActivation(FnSpecs("swiglu", triton_kernels.swiglu.swiglu_fn, ("alpha", "limit")), (1.0, 1.0), 2)
     pc1 = PrecisionConfig(mx_ctx=w1_mx, flex_ctx=FlexCtx(rhs_data=w1_flex))
     pc2 = PrecisionConfig(mx_ctx=w2_mx, flex_ctx=FlexCtx(rhs_data=w2_flex))
 

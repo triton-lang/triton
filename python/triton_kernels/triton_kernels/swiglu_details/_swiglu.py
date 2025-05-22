@@ -96,7 +96,7 @@ def _swiglu(Out, OutExpectedScale, OutActualScale, OutChecksumScale, A, AScale, 
         out = float_to_flex(out, out_expected_scale,
                             None,  # ActualScale: local absmax is tracked and updated after the loop
                             OutChecksumScale, None, Out, flexpoint_saturate_inf)
-        mask = mask_m[:, None] if EVEN_N else mask_m[:, None] and mask_n[None, :]
+        mask = mask_m[:, None] if EVEN_N else mask_m[:, None] & mask_n[None, :]
         tl.store(Out + off_m[:, None] * stride_outm + off_n[None, :] * stride_outn, out, mask)
 
     update_scale(local_max, OutActualScale, Out)

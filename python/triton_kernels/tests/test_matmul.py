@@ -6,7 +6,7 @@ from typing import Union
 from triton_kernels.routing import routing
 # matmul utilities
 import triton_kernels.matmul_ogs_details.opt_flags as opt_flags
-from triton_kernels.matmul_ogs import FlexCtx, PrecisionConfig, MicroscalingCtx, FusedActivation
+from triton_kernels.matmul_ogs import FlexCtx, PrecisionConfig, MicroscalingCtx, FusedActivation, FnSpecs
 from triton_kernels.matmul_ogs import can_use_persistent_tma
 from triton_kernels.matmul_ogs import matmul_ogs, matmul_ogs_torch
 from triton_kernels.swiglu import swiglu, swiglu_fn, PrecisionConfig as SwiGLUPrecisionConfig
@@ -407,5 +407,6 @@ def test_fused_act(m, n, k, mode, split_k, do_gather, do_scatter, fused_scatter,
                precision_config=SwiGLUPrecisionConfig(swiglu_limit))
     b = matmul_ogs(
         x, w, bias, rdata, gindx, sindx, precision_opt,
-        fused_activation=FusedActivation("swiglu", swiglu_fn, ("alpha", "limit"), (swiglu_alpha, swiglu_limit), 2))
+        fused_activation=FusedActivation(FnSpecs("swiglu", swiglu_fn, ("alpha", "limit")), (swiglu_alpha, swiglu_limit),
+                                         2))
     assert_close(a, b)
