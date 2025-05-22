@@ -458,7 +458,10 @@ def _p_matmul_ogs(
                 MASK_ACC: tl.constexpr = USE_FLEXPOINT_SCALE
 
         # TMA is faster on Blackwell if a SWAP_XW transpose is not needed, or when we need registers to mask out the acc.
-        Y_USE_TMA: tl.constexpr = (MASK_ACC or cuda_capability_geq(10, 0)) and not (DISABLE_Y_TMA or SWAP_XW)
+        # Contrary to the SWAP_XW case, having a fused activation function tends to make TMA faster again.
+        # For the ideal optimization, this would depend on what the activation function is doing.
+        Y_USE_TMA: tl.constexpr = (MASK_ACC or cuda_capability_geq(10, 0)) and not (
+            DISABLE_Y_TMA or (SWAP_XW and ACTIVATION_FN is None))
 
         YBase = Y + start_z1.to(index_type) * stride_y_z + start_m1.to(index_type) * stride_y_m
         if USE_SCATTER_TMA:
