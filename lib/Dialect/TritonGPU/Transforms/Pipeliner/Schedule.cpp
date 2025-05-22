@@ -87,6 +87,19 @@ bool tt::CoarseSchedule::insertDepsOfOp(Operation *op, int stage,
   return inserted;
 }
 
+void tt::CoarseSchedule::shrinkToFit() {
+  int minStage = std::numeric_limits<int>::max();
+  int maxStage = std::numeric_limits<int>::min();
+  for (auto &[op, stageAndCluster] : opToStageAndCluster) {
+    auto [stage, cluster] = stageAndCluster;
+    minStage = std::min(minStage, stage);
+    maxStage = std::max(maxStage, stage);
+  }
+  for (auto &[op, stageAndCluster] : opToStageAndCluster)
+    stageAndCluster.first -= minStage;
+  numStages = maxStage - minStage + 1;
+}
+
 // Split the cluster containing op into two clusters, one containing all
 // operations before the op and one containing op and all operations after the
 // op. Return the cluster containing op and all operations after the op. Do not
@@ -282,7 +295,8 @@ void tt::scheduleDependencies(scf::ForOp forOp, tt::CoarseSchedule &schedule) {
     for (auto [op, stage_, cluster] : opsInOrder) {
       if (stage_ != stage)
         continue;
-      schedule.insertDepsOfOp(op, stage, cluster, false);
+      schedule.insertDepsOfOp(op, stage, cluster, /*includeArg=*/false,
+                              /*insertIfEarlier=*/true);
     }
   }
 }

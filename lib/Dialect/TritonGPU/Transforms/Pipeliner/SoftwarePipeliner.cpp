@@ -84,7 +84,6 @@ static void removeAttributes(ModuleOp moduleOp) {
     op->removeAttr(mlir::triton::kLoopStageAttrName);
     op->removeAttr(mlir::triton::kLoopClusterAttrName);
     op->removeAttr(mlir::triton::kScheduledMaxStageAttrName);
-    op->removeAttr(mlir::triton::kAssignedStageAttrName);
   });
 }
 
@@ -94,26 +93,6 @@ struct PipelinePass : public impl::TritonGPUPipelineBase<PipelinePass> {
 
   void runOnOperation() override {
     ModuleOp moduleOp = getOperation();
-    // Go over the interesting ops and assign latencies (based on the
-    // numStages) to the them, trying to populate the allowed stages. This
-    // step will be at some point extracted to separate pass that will be run
-    // only for loops missing the latency information.
-    assignLatencies(moduleOp, numStages);
-    if (dumpIntermediateSteps) {
-      llvm::dbgs() << "// -----// SoftwarePipeliner internal IR Dump After: "
-                      "AssignLatencies\n"
-                   << moduleOp << "\n\n\n";
-    }
-    // numStages should not be used below this point. We should know
-    // everything based on the assigned stages
-
-    // Schedule the loops
-    scheduleLoops(moduleOp);
-    if (dumpIntermediateSteps) {
-      llvm::dbgs() << "// -----// SoftwarePipeliner internal IR Dump After: "
-                      "ScheduleLoops\n"
-                   << moduleOp << "\n\n\n";
-    }
 
     // Transform the loop by introducing async operations to prepare it for
     // pipeline expansion.
