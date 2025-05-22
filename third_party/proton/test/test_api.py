@@ -101,7 +101,7 @@ def test_scope(tmp_path: pathlib.Path):
 
 def test_hook(tmp_path: pathlib.Path):
     temp_file = tmp_path / "test_hook.hatchet"
-    session_id0 = proton.start(str(temp_file.with_suffix("")), hook="triton")
+    session_id0 = proton.start(str(temp_file.with_suffix("")), hook="launch")
     proton.activate(session_id0)
     proton.deactivate(session_id0)
     proton.finalize(None)
