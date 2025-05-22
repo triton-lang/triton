@@ -226,7 +226,7 @@ public:
     auto mDim = mfmaLayout.getMDim();
     if (mDim != 32) {
       // to enable it once the 2nd step is done
-      // return failure();
+      return failure();
     }
 
     auto nDim = mfmaLayout.getNDim();
