@@ -47,7 +47,7 @@ class HookManager:
 
     @staticmethod
     def exit(lazy_dict: LazyDict) -> None:
-        for hook in HookManager.active_hooks:
+        for hook in reversed(HookManager.active_hooks):
             hook.exit(lazy_dict)
 
     @staticmethod
