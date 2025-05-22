@@ -125,8 +125,8 @@ def test_record(method, tmp_path: pathlib.Path):
     assert "proton.record start" in ttir
     assert "proton.record end" in ttir
 
-
-def test_tree(tmp_path: pathlib.Path):
+@pytest.mark.parametrize("hook", ["launch", None])
+def test_tree(tmp_path: pathlib.Path, hook):
 
     from contextlib import contextmanager
 
@@ -170,7 +170,7 @@ def test_tree(tmp_path: pathlib.Path):
     output = torch.empty_like(x)
     n_elements = output.numel()
     grid = (1, 1, 1)
-    proton.start(str(temp_file.with_suffix("")), backend="instrumentation", hook="launch")
+    proton.start(str(temp_file.with_suffix("")), backend="instrumentation", hook=hook)
     # cycle values are aggregated from all warps, set num_warps=1 to just
     # get a single cycle value for each scope
     add_kernel[grid](x, y, output, n_elements, BLOCK_SIZE=1024, num_warps=1)
@@ -188,3 +188,43 @@ def test_tree(tmp_path: pathlib.Path):
                 or "load_y" in load_ops["children"][1]["frame"]["name"])
         assert load_ops["children"][0]["metrics"]["cycles"] > 0
         assert load_ops["children"][1]["metrics"]["cycles"] > 0
+
+
+def test_multi_session(tmp_path: pathlib.Path):
+
+    @triton.jit
+    def add_kernel(
+        x_ptr,
+        y_ptr,
+        output_ptr,
+        n_elements,
+        BLOCK_SIZE: tl.constexpr,
+    ):
+        pid = tl.program_id(axis=0)
+        block_start = pid * BLOCK_SIZE
+        offsets = block_start + tl.arange(0, BLOCK_SIZE)
+        mask = offsets < n_elements
+        with pl.scope("load_x"):
+            x = tl.load(x_ptr + offsets, mask=mask)
+        with pl.scope("load_y"):
+            y = tl.load(y_ptr + offsets, mask=mask)
+        output = x + y
+        tl.store(output_ptr + offsets, output, mask=mask)
+
+    torch.manual_seed(0)
+    size = 256
+    x = torch.rand(size, device='cuda')
+    y = torch.rand(size, device='cuda')
+    temp_file = tmp_path / "test_tree.hatchet"
+    output = torch.empty_like(x)
+    n_elements = output.numel()
+    grid = (1, 1, 1)
+    proton.start(str(temp_file.with_suffix("")), backend="instrumentation")
+    proton.start(str(temp_file.with_suffix("")), backend="cupti")
+    # cycle values are aggregated from all warps, set num_warps=1 to just
+    # get a single cycle value for each scope
+    add_kernel[grid](x, y, output, n_elements, BLOCK_SIZE=1024, num_warps=1)
+    proton.finalize()
+
+    with open(temp_file, "rb") as f:
+        data = json.load(f)
