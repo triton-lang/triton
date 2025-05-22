@@ -139,7 +139,7 @@ private:
 
 LogicalResult lowerDistributedToSharedStmatrix(
     Location loc, RankedTensorType tensorTy, MemDescType memDescType,
-    Value adaptorSrc, Value smemBase, Type llvmElemTy,
+    bool transpose, Value adaptorSrc, Value smemBase, Type llvmElemTy,
     ConversionPatternRewriter &rewriter, const TargetInfo &targetInfo,
     std::pair<size_t, Type> *const llvmOpCount = nullptr) {
   if (!targetInfo.supportLdStMatrix())
@@ -160,7 +160,11 @@ LogicalResult lowerDistributedToSharedStmatrix(
   auto kOffset = S("offset");
   auto smemPtrTy = ptr_ty(ctx, 3);
   auto bitwidth = tensorTy.getElementTypeBitWidth();
-  if (bitwidth > 32)
+  // In the transpose case, consecutive elements are not stored contiguously
+  // so we cannot split an fp32
+  // We could support bitwidth == 8, but it'd be a rather weird layout
+  // so we don't do that for now
+  if ((!transpose && bitwidth > 32) || (transpose && bitwidth != 16))
     return failure();
   // Inter block stmatrix is not supported
   if (cvt.hasInDim(kBlock))
@@ -173,31 +177,75 @@ LogicalResult lowerDistributedToSharedStmatrix(
   cvt = removeBroadcast.apply(cvt);
   srcVals = removeBroadcast.apply(srcVals);
 
-  auto tile = LinearLayout::identity1D(32 / bitwidth, kReg, kOffset) *
-              LinearLayout::identity1D(4, kLane, kOffset);
-  // Find if there is a register permutation that allows us to divideLeft
-  auto maybeAction = regPermForDivideLeft(cvt, tile);
-  if (!maybeAction.has_value()) {
+  LinearLayout reps;
+  if (!transpose) {
+    auto tile = LinearLayout::identity1D(32 / bitwidth, kReg, kOffset) *
+                LinearLayout::identity1D(4, kLane, kOffset);
+
+    // Find if there is a register permutation that allows us to divideLeft
+    // We need to pass the map from regs to offsets, as is cvt
+    auto maybeAction = regPermForDivideLeft(cvt, tile);
+    if (!maybeAction.has_value()) {
+      return failure();
+    }
+    auto action = maybeAction.value();
+    // Check if the action indeed allows us to divideLeft
+    cvt = action.apply(cvt);
+    srcVals = action.apply(srcVals);
+
+    auto maybeQuot = divideLeft(cvt, tile);
+    if (!maybeQuot.has_value()) {
+      return failure();
+    }
+    reps = zerosLike(tile) * maybeQuot.value();
+  } else {
+    // Division does not quite work here. To define this properly, we would need
+    // to define a different multiplication that does:
+    // A *' B = [[0, A], [B, 0]] and define leftDivision for it
+    // We do it ad-hoc for now, as I beleive there's not much demand for this op
+    // outside of this lowering
+
+    // Divisibility in the sense above is the same as regular divisibility
+    // You need to see that the tile A is a sublayout of the matrix, and that
+    // it has zeros above it and to its right.
+
+    // In particular, offsets lanes 4, 8, 16 map to offsets 1, 2, 4...
+    const auto &laneBases = cvt.getBases().find(kLane)->second;
+    for (int i = 0; i < 3; ++i) {
+      if (laneBases[i + 2][0] != (1 << i))
+        return failure();
+    }
+    // ... and no other basis should depend on 1, 2, 4
+    // Note that this gives us the usual alignment condition, but we have
+    // translated it to checking that the matrix to the left of A is all zeros
+    for (auto dim : cvt.getInDimNames()) {
+      const auto &bases = cvt.getBases().find(dim)->second;
+      for (auto [i, basis] : llvm::enumerate(bases)) {
+        if (dim == kLane && i >= 2)
+          continue;
+        if (basis[0] & 0b111)
+          return failure();
+      }
+    }
+
+    // Hack: We are not going to use in the rest of the function reps[kLane][2:]
+    // so we don't need to zero them out
+    reps = cvt;
+  }
+
+  // We must have at least 2 register elements to use stmatrix.trans
+  if (transpose && reps.getInDimSizeLog2(kReg) < llvm::Log2_32(32 / bitwidth)) {
     return failure();
   }
-  auto action = maybeAction.value();
-  // Check if the action indeed allows us to divideLeft
-  cvt = action.apply(cvt);
-  auto maybeQuot = divideLeft(cvt, tile);
-  if (!maybeQuot.has_value()) {
-    return failure();
-  }
-  auto quot = maybeQuot.value();
-  srcVals = action.apply(srcVals);
+
+  // Choose up to 4 packs of 32-bit elements indexed by the next (at most) two
+  // bases as the vectorisation factor. We don't consider the basis of the tile
+  // for vectorisation so we substract them
+  auto vec = std::min<int32_t>(2, reps.getInDimSizeLog2(kReg) -
+                                      llvm::Log2_32(32 / bitwidth));
+
   // Map from kReg, kLane, kWarp to beginning of each tile
-  auto reps = zerosLike(tile) * quot;
   assert(reps.getOutDimSize(kOffset) == cvt.getOutDimSize(kOffset));
-
-  // Choose up to 4 packs of 32-bit elements indexed by the next to bases
-  // as the vectorisation factor
-  auto vec = std::min(2, quot.getInDimSizeLog2(kReg));
-
-  // FIXME(Lezcano): Should we bail if any of the other 3 lane bases is zero?
 
   auto [laneId, warpId] = getLaneAndWarpId(rewriter, loc);
   // Compute the addresses for the 0th tile
@@ -212,12 +260,24 @@ LogicalResult lowerDistributedToSharedStmatrix(
   // given
   //   by the first `vec` reg bases that are not part of the tile
   std::vector<std::vector<int32_t>> laneBases;
-  assert(tile.getInDimSizeLog2(kLane) == 2);
-  for (int i = 0; i < 3; ++i) {
-    laneBases.push_back(reps.getBasis(kLane, tile.getInDimSizeLog2(kLane) + i));
-  }
-  for (int i = 0; i < vec; ++i) {
-    laneBases.push_back(reps.getBasis(kReg, tile.getInDimSizeLog2(kReg) + i));
+  if (!transpose) {
+    auto tileDimSizeReg = llvm::Log2_32(32 / bitwidth);
+    auto tileDimSizeLane = 2;
+    for (int i = 0; i < 3; ++i) {
+      laneBases.push_back(reps.getBasis(kLane, tileDimSizeLane + i));
+    }
+    for (int i = 0; i < vec; ++i) {
+      laneBases.push_back(reps.getBasis(kReg, tileDimSizeReg + i));
+    }
+  } else {
+    // We choose the first basis of the register. In the future we could choose
+    // a basis that minimises the bank conflicts
+    laneBases.push_back(reps.getBasis(kReg, 0));
+    laneBases.push_back(reps.getBasis(kLane, 0));
+    laneBases.push_back(reps.getBasis(kLane, 1));
+    for (int i = 0; i < vec; ++i) {
+      laneBases.push_back(reps.getBasis(kReg, i + 1));
+    }
   }
 
   LinearLayout addrLayout =
@@ -247,7 +307,8 @@ LogicalResult lowerDistributedToSharedStmatrix(
       }
       inputs.push_back(b.bitcast(input, i32_ty));
     }
-    rewriter.create<triton::nvgpu::StoreMatrixOp>(loc, vecAddr, inputs);
+    rewriter.create<triton::nvgpu::StoreMatrixOp>(loc, vecAddr, inputs,
+                                                  /*needTrans=*/transpose);
   }
   return success();
 }
@@ -271,10 +332,19 @@ struct LocalAllocOpConversion
     Value smemBase =
         LLVM::getSharedMemoryBase(op.getLoc(), rewriter, targetInfo, op);
 
-    if (lowerDistributedToSharedStmatrix(op.getLoc(), srcTy, memDescType,
-                                         adaptor.getSrc(), smemBase, llvmElemTy,
-                                         rewriter, targetInfo)
-            .failed()) {
+    // Try to lower transposed or not
+    bool lowered = false;
+    for (bool transpose : {false, true}) {
+      lowered =
+          lowerDistributedToSharedStmatrix(
+              op.getLoc(), srcTy, memDescType, transpose, adaptor.getSrc(),
+              smemBase, llvmElemTy, rewriter, targetInfo)
+              .succeeded();
+      if (lowered) {
+        break;
+      }
+    }
+    if (!lowered) {
       return failure();
     }
 
@@ -306,11 +376,20 @@ struct LocalStoreOpConversion
         getTypeConverter()->convertType(op.getDst().getType().getElementType());
     SharedMemoryObject smemObj = LLVM::getSharedMemoryObjectFromStruct(
         op.getLoc(), adaptor.getDst(), llvmElemTy, rewriter);
-    if (lowerDistributedToSharedStmatrix(op.getLoc(), op.getSrc().getType(),
-                                         op.getDst().getType(),
-                                         adaptor.getSrc(), smemObj.getBase(),
-                                         llvmElemTy, rewriter, targetInfo)
-            .failed()) {
+
+    // Try to lower transposed or not
+    bool lowered = false;
+    for (bool transpose : {false, true}) {
+      lowered = lowerDistributedToSharedStmatrix(
+                    op.getLoc(), op.getSrc().getType(), op.getDst().getType(),
+                    transpose, adaptor.getSrc(), smemObj.getBase(), llvmElemTy,
+                    rewriter, targetInfo)
+                    .succeeded();
+      if (lowered) {
+        break;
+      }
+    }
+    if (!lowered) {
       return failure();
     }
     rewriter.eraseOp(op);
