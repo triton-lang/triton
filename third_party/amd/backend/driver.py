@@ -1,20 +1,16 @@
 import functools
 import os
-import hashlib
 import subprocess
-import sysconfig
-import tempfile
 import re
 from pathlib import Path
-from triton.runtime.build import _build
 from triton import knobs
-from triton.runtime.cache import get_cache_manager
 from triton.backends.compiler import GPUTarget
-from triton.backends.driver import GPUDriver, platform_key
+from triton.backends.driver import GPUDriver
+from triton.runtime.build import compile_module_from_src
 from triton.tools.tensor_descriptor import TensorDescriptor
 
 dirname = os.path.dirname(os.path.realpath(__file__))
-include_dir = [os.path.join(dirname, "include")]
+include_dirs = [os.path.join(dirname, "include")]
 
 
 def _find_already_mmapped_dylib_on_linux(lib_name):
@@ -133,26 +129,6 @@ def _get_path_to_hip_runtime_dylib():
     raise RuntimeError(f"cannot locate {lib_name} after attempted paths {paths}")
 
 
-def compile_module_from_src(src, name):
-    key = hashlib.sha256((src + platform_key()).encode("utf-8")).hexdigest()
-    cache = get_cache_manager(key)
-    suffix = sysconfig.get_config_var("EXT_SUFFIX")
-    cache_path = cache.get_file(f"{name}{suffix}")
-    if cache_path is None:
-        with tempfile.TemporaryDirectory() as tmpdir:
-            src_path = os.path.join(tmpdir, "main.c")
-            with open(src_path, "w") as f:
-                f.write(src)
-            so = _build(name, src_path, tmpdir, [], include_dir, [])
-            with open(so, "rb") as f:
-                cache_path = cache.put(f.read(), f"{name}{suffix}", binary=True)
-    import importlib.util
-    spec = importlib.util.spec_from_file_location(name, cache_path)
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-    return mod
-
-
 class HIPUtils(object):
 
     def __new__(cls):
@@ -167,7 +143,7 @@ class HIPUtils(object):
         # This way we don't need to escape-quote C code curly brackets and we can replace
         # exactly once.
         src = src.replace('/*py_libhip_search_path*/', libhip_path, 1)
-        mod = compile_module_from_src(src, "hip_utils")
+        mod = compile_module_from_src(src=src, name="hip_utils", include_dirs=include_dirs)
         self.load_binary = mod.load_binary
         self.get_device_properties = mod.get_device_properties
 
@@ -560,7 +536,7 @@ class HIPLauncher(object):
         constants = {arg_idx(idx): value for idx, value in constants.items()}
         signature = {idx: value for idx, value in src.signature.items()}
         src = make_launcher(constants, signature, metadata.warp_size)
-        mod = compile_module_from_src(src, "__triton_launcher")
+        mod = compile_module_from_src(src=src, name="__triton_launcher", include_dirs=include_dirs)
         has_tensor_desc_arg = any(isinstance(sig, str) and sig.startswith("tensordesc") for sig in signature.values())
 
         self.launch = wrap_handle_tensor_descriptor(mod.launch) if has_tensor_desc_arg else mod.launch
