@@ -153,8 +153,8 @@ def distributed_run(rank, world_size, batch, dim1, dim2, n_expts_tot, n_expts_ac
     # We compare the distributed and single-GPU versions of the model to verify correctness.
 
     # init
-    dist.init_process_group(backend="nccl", rank=rank, world_size=world_size)
     dev = f"cuda:{rank}"
+    dist.init_process_group(backend="nccl", rank=rank, world_size=world_size, device_id=torch.device(dev))
 
     # weights & biases
     wg = torch.randn((dim1, n_expts_tot), device=dev)
@@ -163,7 +163,7 @@ def distributed_run(rank, world_size, batch, dim1, dim2, n_expts_tot, n_expts_ac
     bg = torch.randn((n_expts_tot, ), device=dev)
     dist.broadcast(bg, src=0)
 
-    b2 = torch.randn((n_expts_tot, dim1), device=dev)
+    b2 = torch.randn((n_expts_tot // EP, dim1), device=dev)
     ep_indx = rank // TP
     groups = [dist.new_group(list(range(ep * TP, (ep + 1) * TP))) for ep in range(EP)]
     group = groups[ep_indx]
