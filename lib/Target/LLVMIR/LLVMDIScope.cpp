@@ -36,7 +36,7 @@ FileLineColLoc extractFileLoc(Location loc) {
   return mlir::FileLineColLoc::get(unknownFile, 0, 0);
 }
 
-} // end anonymous namespace
+} // anonymous namespace
 
 /// Add a debug info scope to LLVMFuncOp that are missing it.
 struct LLVMDIScopePass : public impl::LLVMDIScopeBase<LLVMDIScopePass> {

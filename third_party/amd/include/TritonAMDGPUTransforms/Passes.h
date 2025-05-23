@@ -4,13 +4,8 @@
 #include "mlir/Dialect/LLVMIR/ROCDLDialect.h"
 #include "mlir/Pass/Pass.h"
 #include "third_party/amd/include/Dialect/TritonAMDGPU/IR/Dialect.h"
-#include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 
 namespace mlir {
-
-std::unique_ptr<Pass> createTritonAMDGPUCanonicalizeLoopsPass();
-
-std::unique_ptr<Pass> createTritonAMDGPUVerifier();
 
 // Generate the pass class declarations.
 #define GEN_PASS_DECL
