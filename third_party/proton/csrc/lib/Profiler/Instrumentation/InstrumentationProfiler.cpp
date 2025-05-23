@@ -187,8 +187,9 @@ void InstrumentationProfiler::exitInstrumentedOp(uint64_t streamId,
   config.device.type = runtime->getDeviceType();
 
   uint32_t timeShiftCost = 0;
-  // if (modeOptions.at("optimization") == "time_shift")
-  //   timeShiftCost = getTimeShiftCost(config);
+  if (modeOptions.count("optimization") &&
+      modeOptions.at("optimization") == "time_shift")
+    timeShiftCost = getTimeShiftCost(config);
 
   auto &scopeIdContexts = functionScopeIdContexts[functionId];
 
