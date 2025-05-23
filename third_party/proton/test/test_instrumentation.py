@@ -129,14 +129,7 @@ def test_record(method, tmp_path: pathlib.Path):
 @pytest.mark.parametrize("hook", ["launch", None])
 def test_tree(tmp_path: pathlib.Path, hook):
 
-    from contextlib import contextmanager
 
-    @contextmanager
-    def instrumentation(file_path):
-        try:
-            yield
-        finally:
-            proton.finalize()
 
     def metadata_fn(grid: tuple, metadata: NamedTuple, args: dict):
         BLOCK_SIZE = args["BLOCK_SIZE"]
@@ -172,8 +165,6 @@ def test_tree(tmp_path: pathlib.Path, hook):
     n_elements = output.numel()
     grid = (1, 1, 1)
     proton.start(str(temp_file.with_suffix("")), backend="instrumentation", hook=hook)
-    # cycle values are aggregated from all warps, set num_warps=1 to just
-    # get a single cycle value for each scope
     add_kernel[grid](x, y, output, n_elements, BLOCK_SIZE=1024, num_warps=1)
     proton.finalize()
 
@@ -224,8 +215,6 @@ def test_multi_session(tmp_path: pathlib.Path):
     grid = (1, 1, 1)
     proton.start(str(temp_file_inst.with_suffix("")), backend="instrumentation")
     proton.start(str(temp_file_cupti.with_suffix("")), backend="cupti")
-    # cycle values are aggregated from all warps, set num_warps=1 to just
-    # get a single cycle value for each scope
     add_kernel[grid](x, y, output, n_elements, BLOCK_SIZE=1024, num_warps=1)
     proton.finalize()
 
