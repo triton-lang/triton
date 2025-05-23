@@ -129,8 +129,6 @@ def test_record(method, tmp_path: pathlib.Path):
 @pytest.mark.parametrize("hook", ["launch", None])
 def test_tree(tmp_path: pathlib.Path, hook):
 
-
-
     def metadata_fn(grid: tuple, metadata: NamedTuple, args: dict):
         BLOCK_SIZE = args["BLOCK_SIZE"]
         return {"name": f"add_{BLOCK_SIZE}"}
