@@ -207,12 +207,12 @@ def test_multi_session(tmp_path: pathlib.Path):
     x = torch.rand(size, device='cuda')
     y = torch.rand(size, device='cuda')
     temp_file_inst = tmp_path / "test_tree_inst.hatchet"
-    temp_file_cupti = tmp_path / "test_tree_cupti.hatchet"
+    temp_file_driver = tmp_path / "test_tree_driver.hatchet"
     output = torch.empty_like(x)
     n_elements = output.numel()
     grid = (1, 1, 1)
     proton.start(str(temp_file_inst.with_suffix("")), backend="instrumentation")
-    proton.start(str(temp_file_cupti.with_suffix("")), backend="cupti")
+    proton.start(str(temp_file_driver.with_suffix("")))
     add_kernel[grid](x, y, output, n_elements, BLOCK_SIZE=1024, num_warps=1)
     proton.finalize()
 
@@ -222,7 +222,7 @@ def test_multi_session(tmp_path: pathlib.Path):
         assert "add_kernel" == kernel_frame["frame"]["name"]
         assert "cycles" in kernel_frame["children"][0]["metrics"]
 
-    with open(temp_file_cupti, "rb") as f:
+    with open(temp_file_driver, "rb") as f:
         data = json.load(f)
         kernel_frame = data[0]["children"][0]
         assert "add_kernel" == kernel_frame["frame"]["name"]
