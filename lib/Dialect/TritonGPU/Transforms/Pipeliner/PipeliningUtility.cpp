@@ -170,8 +170,6 @@ Operation *mlir::triton::predicateOp(RewriterBase &rewriter, Operation *op,
     return op;
   if (isa<ttng::TMEMAllocOp, ttng::TMEMLoadOp>(op))
     return op;
-  if (isa<tt::DescriptorLoadOp>(op))
-    return op;
   if (auto ifOp = dyn_cast<scf::IfOp>(op)) {
     rewriter.setInsertionPoint(op);
     Value cnd = getPredMask(rewriter, ifOp.getCondition().getType(),
@@ -260,13 +258,6 @@ Operation *mlir::triton::predicateOp(RewriterBase &rewriter, Operation *op,
     Value mask = getPredMask(rewriter, atomicRMWOp.getPtr().getType(),
                              atomicRMWOp.getMask(), pred);
     atomicRMWOp.getMaskMutable().assign(mask);
-    return op;
-  }
-  if (auto maskOp = dyn_cast<ttg::MaskOp>(op)) {
-    rewriter.setInsertionPoint(maskOp);
-    Value mask = getPredMask(rewriter, maskOp.getPred().getType(),
-                             maskOp.getPred(), pred);
-    maskOp.getPredMutable().assign(mask);
     return op;
   }
   if (!op->isRegistered()) {

@@ -31,17 +31,6 @@ cloneAndUpdateOperands(RewriterBase &rewriter, Operation *op,
   return clone;
 }
 
-Value getConstantInt(RewriterBase &rewriter, Location loc, int64_t value,
-                     Type type) {
-  if (isa<IntegerType>(type)) {
-    return rewriter.create<arith::ConstantIntOp>(loc, value, type);
-  }
-  if (isa<IndexType>(type)) {
-    return rewriter.create<arith::ConstantIndexOp>(loc, value);
-  }
-  llvm_unreachable("Unsupported type");
-}
-
 } // namespace
 
 namespace mlir {
@@ -85,7 +74,7 @@ void peelLoopEpilogue(
   // lastIV = lb + floor( (ub – lb – 1) / s ) * s
   Value range = rewriter.create<arith::SubIOp>(loc, upperBound, lowerBound);
   Value rangeM1 = rewriter.create<arith::SubIOp>(
-      loc, range, getConstantInt(rewriter, loc, 1, type));
+      loc, range, rewriter.create<arith::ConstantIntOp>(loc, 1, type));
   Value itersM1 = rewriter.create<arith::DivSIOp>(loc, rangeM1, step);
   Value delta = rewriter.create<arith::MulIOp>(loc, itersM1, step);
   Value lastIV = rewriter.create<arith::AddIOp>(loc, delta, lowerBound);
