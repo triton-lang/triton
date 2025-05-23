@@ -32,7 +32,7 @@ class CudaAllocator:
         # and the host CPU cannot store all profiling data in memory. This streaming mode is not yet implemented.
         # In the future, we should support copying data incrementally from device to host to enable
         # more efficient profiling data processing, rather than relying solely on post-processing.
-        aligned_size = min(aligned_size, self.instrumentation_hook.profile_buffer_size)
+        aligned_size = max(aligned_size, self.instrumentation_hook.profile_buffer_size)
 
         # Create the buffer
         import torch
