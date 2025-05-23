@@ -1,5 +1,4 @@
 #include "triton/Dialect/TritonGPU/Transforms/PipeliningUtility.h"
-
 #include "mlir/Analysis/TopologicalSortUtils.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/Tensor/IR/Tensor.h"
@@ -160,6 +159,8 @@ Operation *mlir::triton::predicateOp(RewriterBase &rewriter, Operation *op,
                                      Value pred) {
   OpBuilder::InsertionGuard guard(rewriter);
   if (mlir::isMemoryEffectFree(op))
+    return op;
+  if (isConstantIntValue(pred, 1))
     return op;
   if (isa<LLVM::AssumeOp, ttng::FenceAsyncSharedOp>(op))
     return op;
