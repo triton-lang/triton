@@ -178,7 +178,8 @@ def test_tree(tmp_path: pathlib.Path, hook):
 
     with open(temp_file, "rb") as f:
         data = json.load(f)
-        assert "add_1024" == data[0]["children"][0]["frame"]["name"]
+        if hook:
+            assert "add_1024" == data[0]["children"][0]["frame"]["name"]
         kernel_frame = data[0]["children"][0]["children"][0]
         load_ops = kernel_frame["children"][0]
         assert "load_ops" in load_ops["frame"]["name"]
@@ -227,3 +228,15 @@ def test_multi_session(tmp_path: pathlib.Path):
     add_kernel[grid](x, y, output, n_elements, BLOCK_SIZE=1024, num_warps=1)
     proton.finalize()
 
+    with open(temp_file_inst, "rb") as f:
+        data = json.load(f)
+        kernel_frame = data[0]["children"][0]
+        assert "add_kernel" == kernel_frame["frame"]["name"]
+        assert "time" in kernel_frame["children"][0]["metrics"]
+
+    with open(temp_file_cupti, "rb") as f:
+        data = json.load(f)
+        kernel_frame = data[0]["children"][0]
+        assert "add_kernel" == kernel_frame["frame"]["name"]
+        assert "time (ns)" in kernel_frame["metrics"]
+        
