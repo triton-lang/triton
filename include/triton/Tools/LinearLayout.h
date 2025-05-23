@@ -825,6 +825,9 @@ public:
   //    [x[0], x[4], x[1], x[5], x[2], x[6], x[3], x[7]]
   SmallVector<Value> apply(ValueRange values) const;
 
+  // Inverse of the action
+  ColumnAction inverse() const;
+
   std::string toString() const;
 };
 

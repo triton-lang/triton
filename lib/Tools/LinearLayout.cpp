@@ -1241,6 +1241,14 @@ SmallVector<Value> ColumnAction::apply(ValueRange values) const {
   return ret;
 }
 
+ColumnAction ColumnAction::inverse() const {
+  auto invPerm = SmallVector<size_t>(action.size());
+  for (size_t i = 0; i < action.size(); i++) {
+    invPerm[action[i]] = i;
+  }
+  return ColumnAction(invPerm, inDim, inSizeLog2);
+}
+
 std::string ColumnAction::toString() const {
   std::string ret = "ColumnAction([";
   ret += join(action, ", ");

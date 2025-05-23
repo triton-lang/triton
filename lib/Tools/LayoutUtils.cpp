@@ -260,6 +260,36 @@ ColumnAction actionRemoveBroadcastedRegs(const LinearLayout &layout) {
   return ColumnAction(permOrder, kReg, bases.size());
 }
 
+SmallVector<Value> broadcastAs(const SmallVector<Value> &values,
+                               const LinearLayout &layout) {
+  assert(layout.getNumInDims() != 0);
+  auto kReg = *layout.getInDimNames().begin();
+  assert(kReg.str() == "register");
+  uint32_t broadcastMask = layout.getFreeVariableMasks().lookup(kReg);
+  assert((layout.getInDimSize(kReg) / (1 << llvm::popcount(broadcastMask))) ==
+         values.size());
+
+  std::vector<std::vector<int32_t>> newBases;
+  int i = 0;
+  for (int j = 0; j < layout.getInDimSizeLog2(kReg); j++) {
+    if (broadcastMask & (1 << j)) {
+      newBases.push_back({0});
+    } else {
+      newBases.push_back({1 << i});
+      i++;
+    }
+  }
+  auto newLayout = LinearLayout({{kReg, std::move(newBases)}}, {kReg});
+  SmallVector<Value> ret;
+
+  ret.reserve(newLayout.getInDimSize(kReg));
+  for (int i = 0; i < newLayout.getInDimSize(kReg); i++) {
+    int32_t srcIdx = newLayout.apply({{kReg, i}}).begin()->second;
+    ret.push_back(values[srcIdx]);
+  }
+  return ret;
+}
+
 // Compute the supremum of two lists.
 // If the supremum is not unique, we return the first list first
 // Error out if the supremum does not exist

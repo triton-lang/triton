@@ -16,133 +16,18 @@ using namespace mlir::triton;
 using namespace mlir::triton::gpu;
 using namespace mlir::triton::NVIDIA;
 
-struct LocalLoadOpConversion
-    : public ConvertOpToLLVMPattern<triton::gpu::LocalLoadOp> {
-public:
-  LocalLoadOpConversion(const LLVMTypeConverter &converter,
-                        const NVIDIA::TargetInfo &targetInfo,
-                        PatternBenefit benefit = 1)
-      : ConvertOpToLLVMPattern<triton::gpu::LocalLoadOp>(converter, benefit),
-        targetInfo(targetInfo) {}
-
-  LogicalResult
-  matchAndRewrite(triton::gpu::LocalLoadOp op, OpAdaptor adaptor,
-                  ConversionPatternRewriter &rewriter) const override {
-    MemDescType srcTy = op.getSrc().getType();
-    RankedTensorType dstTy = op.getType();
-    Attribute srcLayout = srcTy.getEncoding();
-    Attribute dstLayout = dstTy.getEncoding();
-    if (isa<DotOperandEncodingAttr>(dstLayout) &&
-        isa<NvidiaMmaEncodingAttr>(
-            cast<DotOperandEncodingAttr>(dstLayout).getParent())) {
-      auto dotEnc = cast<DotOperandEncodingAttr>(dstLayout);
-      auto mmaEnc = cast<NvidiaMmaEncodingAttr>(dotEnc.getParent());
-      auto sharedEnc = dyn_cast<SwizzledSharedEncodingAttr>(srcLayout);
-      if (!sharedEnc)
-        return failure();
-      auto bitwidth = dstTy.getElementTypeBitWidth();
-      auto vecWidth = 32 / bitwidth;
-      auto kWidth = dotEnc.getKWidth();
-      auto rank = dstTy.getRank();
-      auto kOrder = dotEnc.getOpIdx() == 0 ? rank - 1 : rank - 2;
-      auto nonKOrder = dotEnc.getOpIdx() == 0 ? rank - 2 : rank - 1;
-      auto needTrans = kOrder != sharedEnc.getOrder()[0];
-      // Limitation 1 [TODO: remove]: Check LL bases to verify register and
-      // address alignment
-      auto canUseLdmatrix = (kWidth == vecWidth);
-      canUseLdmatrix &= (sharedEnc.getMaxPhase() == 1) ||
-                        (sharedEnc.getVec() * bitwidth >= 8 * 16);
-      auto shape = srcTy.getShape();
-      // Limitation 2 [TODO: remove]: Only support 2d matrices now but we should
-      // be able to support 3D minor changes
-      canUseLdmatrix &= (bitwidth == 16 || !needTrans) && shape.size() <= 2;
-      // Limitation 3: Minimum tile size (8)x(8x16bits)
-      canUseLdmatrix &=
-          shape[kOrder] >= (8 * 16 / bitwidth) && shape[nonKOrder] >= 8;
-      if (canUseLdmatrix) {
-        return lowerSharedToDotOperand(op, adaptor, getTypeConverter(),
-                                       rewriter);
-      }
-    }
-    return failure();
-  }
-
-private:
-  LogicalResult
-  lowerSharedToDotOperand(triton::gpu::LocalLoadOp op,
-                          triton::gpu::LocalLoadOpAdaptor adaptor,
-                          const LLVMTypeConverter *typeConverter,
-                          ConversionPatternRewriter &rewriter) const {
-    auto ctx = rewriter.getContext();
-    auto loc = op.getLoc();
-    auto b = TritonLLVMOpBuilder(loc, rewriter);
-    auto dstTy = cast<RankedTensorType>(op.getType());
-    auto srcTy = cast<MemDescType>(op.getSrc().getType());
-    auto dotEnc = cast<DotOperandEncodingAttr>(dstTy.getEncoding());
-    auto sharedEnc = cast<SwizzledSharedEncodingAttr>(srcTy.getEncoding());
-    auto shape = dstTy.getShape();
-    auto rank = dstTy.getRank();
-    auto kOrder = dotEnc.getOpIdx() == 0 ? rank - 1 : rank - 2;
-    auto nonKOrder = dotEnc.getOpIdx() == 0 ? rank - 2 : rank - 1;
-    auto needTrans = kOrder != sharedEnc.getOrder()[0];
-
-    auto llvmElemTy = typeConverter->convertType(dstTy.getElementType());
-    auto bitwidth = llvmElemTy.getIntOrFloatBitWidth();
-    auto ldmatrixLayout =
-        chooseLdMatrixLayout(dotEnc, shape, needTrans, bitwidth);
-    auto smemObj = LLVM::getSharedMemoryObjectFromStruct(loc, adaptor.getSrc(),
-                                                         llvmElemTy, rewriter);
-    // Emit ldmatrix load operations for values packed in i32s
-    SmallVector<Value> elemsI32;
-    // Typically we load 32x8 to use ldmatrix.x4, but the minimum tile size for
-    // opIdx=1 is 16x8. Therefore, we use ldmatrix.x2 instead of
-    // ldmatrix.x4 in this case.
-    auto shift = dotEnc.getOpIdx() == 1 && shape[kOrder] < (32 * 16 / bitwidth);
-    auto maxVecElems = 8 * 16 / bitwidth;
-    bool valid = emitTransferBetweenRegistersAndShared(
-        ldmatrixLayout, srcTy, llvmElemTy,
-        /*maxVecElems=*/maxVecElems, smemObj, loc, rewriter, targetInfo,
-        [&](VectorType vecTy, Value vecAddr) {
-          auto numElems = vecTy.getNumElements();
-          auto numElemsI32 = (numElems * bitwidth / 32) >> shift;
-          auto matTy = LLVM::LLVMStructType::getLiteral(
-              ctx, SmallVector<Type>(numElemsI32, i32_ty));
-          auto ldMatrixOp = rewriter.create<nvgpu::LoadMatrixOp>(
-              loc, matTy, vecAddr, /*needTrans=*/needTrans);
-          auto res = ldMatrixOp.getResult();
-          for (auto i = 0; i < numElemsI32; ++i) {
-            elemsI32.push_back(b.extract_val(i32_ty, res, i));
-          }
-        });
-    assert(valid && "Failed to emit ldmatrix load operations");
-
-    // Unpack i32 values to the original type
-    SmallVector<Value> elems;
-    auto numElemsPerVec = 32 / bitwidth;
-    auto vecTy = vec_ty(llvmElemTy, numElemsPerVec);
-    for (int v = 0; v < static_cast<int>(elemsI32.size()); ++v) {
-      auto vec = b.bitcast(elemsI32[v], vecTy);
-      for (int i = 0; i < numElemsPerVec; ++i)
-        elems.push_back(b.extract_element(llvmElemTy, vec, b.i32_val(i)));
-    }
-
-    auto structTy = LLVM::LLVMStructType::getLiteral(
-        ctx, SmallVector<Type>(elems.size(), llvmElemTy));
-    auto ret = packLLElements(loc, typeConverter, elems, rewriter, structTy);
-    rewriter.replaceOp(op, ret);
-    return success();
-  }
-
-private:
-  const NVIDIA::TargetInfo &targetInfo;
-};
-
-LogicalResult lowerDistributedToSharedStmatrix(
+LogicalResult lowerLdStMatrix(
     Location loc, RankedTensorType tensorTy, MemDescType memDescType,
-    bool transpose, Value adaptorSrc, Value smemBase, Type llvmElemTy,
-    ConversionPatternRewriter &rewriter, const TargetInfo &targetInfo,
+    bool transpose, Value &src, // Input for stmatrix, output for ldmatrix
+    Value smemBase, Type llvmElemTy, ConversionPatternRewriter &rewriter,
+    const TargetInfo &targetInfo, const LLVMTypeConverter *typeConverter,
     std::pair<size_t, Type> *const llvmOpCount = nullptr) {
-  if (!targetInfo.supportLdStMatrix())
+  // Lower load via ldmatrix, store via stmatrix
+
+  bool isStore = src != Value();
+  if (isStore && !targetInfo.supportStMatrix())
+    return failure();
+  if (!isStore && !targetInfo.supportLdMatrix())
     return failure();
 
   assert(llvmOpCount == nullptr && "NYI");
@@ -170,29 +55,38 @@ LogicalResult lowerDistributedToSharedStmatrix(
   if (cvt.hasInDim(kBlock))
     return failure();
 
-  auto srcVals = unpackLLElements(loc, adaptorSrc, rewriter);
+  auto srcVals =
+      isStore ? unpackLLElements(loc, src, rewriter) : SmallVector<Value>{};
 
   // Remove broadcasting on the register dimension
   auto removeBroadcast = actionRemoveBroadcastedRegs(cvt);
   cvt = removeBroadcast.apply(cvt);
-  srcVals = removeBroadcast.apply(srcVals);
+  if (isStore) {
+    srcVals = removeBroadcast.apply(srcVals);
+  }
 
-  LinearLayout reps;
+  std::optional<ColumnAction> maybePermutation;
+  LinearLayout tile;
   if (!transpose) {
-    auto tile = LinearLayout::identity1D(32 / bitwidth, kReg, kOffset) *
-                LinearLayout::identity1D(4, kLane, kOffset);
+    tile = LinearLayout::identity1D(32 / bitwidth, kReg, kOffset) *
+           LinearLayout::identity1D(4, kLane, kOffset);
 
     // Find if there is a register permutation that allows us to divideLeft
     // We need to pass the map from regs to offsets, as is cvt
-    auto maybeAction = regPermForDivideLeft(cvt, tile);
-    if (!maybeAction.has_value()) {
+    maybePermutation = regPermForDivideLeft(cvt, tile);
+    if (!maybePermutation.has_value()) {
       return failure();
     }
-    auto action = maybeAction.value();
+    auto permutation = maybePermutation.value();
     // Check if the action indeed allows us to divideLeft
-    cvt = action.apply(cvt);
-    srcVals = action.apply(srcVals);
+    cvt = permutation.apply(cvt);
+    if (isStore) {
+      srcVals = permutation.apply(srcVals);
+    }
+  }
 
+  LinearLayout reps;
+  if (!transpose) {
     auto maybeQuot = divideLeft(cvt, tile);
     if (!maybeQuot.has_value()) {
       return failure();
@@ -203,8 +97,9 @@ LogicalResult lowerDistributedToSharedStmatrix(
     // to define a different multiplication that does:
     // A *' B = [[0, A], [B, 0]] and define leftDivision for it
     // We do it ad-hoc for now, as I beleive there's not much demand for this op
-    // outside of this lowering
+    // outside of this lowering.
 
+    // We implement leftDivision as above for B = identity1D(8, kLane, kOffset)
     // Divisibility in the sense above is the same as regular divisibility
     // You need to see that the tile A is a sublayout of the matrix, and that
     // it has zeros above it and to its right.
@@ -291,27 +186,105 @@ LogicalResult lowerDistributedToSharedStmatrix(
   auto nVecs = 1 << vec;
   auto elemsPerVec = 32 / bitwidth;
   auto step = nVecs * elemsPerVec;
-  for (int i = 0; i < srcVals.size(); i += step) {
+  for (int i = 0; i < cvt.getInDimSize(kReg); i += step) {
     auto regIdx = reps.apply({{kReg, i}, {kLane, 0}, {kWarp, 0}})[0].second;
     Value offset = b.xor_(regBase, b.i32_val(regIdx));
     auto vecAddr = b.gep(smemPtrTy, llvmElemTy, smemBase, offset,
                          LLVM::GEPNoWrapFlags::inbounds);
-    // Pack into vector of i32
-    SmallVector<Value> inputs;
     Type packedTy = vec_ty(llvmElemTy, 32 / bitwidth);
-    for (int j = 0; j < nVecs; j++) {
-      Value input = b.undef(packedTy);
-      for (int k = 0; k < elemsPerVec; k++) {
-        input = b.insert_element(
-            packedTy, input, srcVals[i + j * elemsPerVec + k], b.i32_val(k));
+    if (isStore) {
+      // Pack into vector of i32
+      SmallVector<Value> inputs;
+      for (int j = 0; j < nVecs; j++) {
+        Value input = b.undef(packedTy);
+        for (int k = 0; k < elemsPerVec; k++) {
+          input = b.insert_element(
+              packedTy, input, srcVals[i + j * elemsPerVec + k], b.i32_val(k));
+        }
+        inputs.push_back(b.bitcast(input, i32_ty));
       }
-      inputs.push_back(b.bitcast(input, i32_ty));
+      rewriter.create<triton::nvgpu::StoreMatrixOp>(loc, vecAddr, inputs,
+                                                    /*needTrans=*/transpose);
+    } else {
+      Type matTy = nVecs == 1
+                       ? i32_ty
+                       : static_cast<Type>(LLVM::LLVMStructType::getLiteral(
+                             ctx, SmallVector<Type>(nVecs, i32_ty)));
+      auto res =
+          rewriter
+              .create<triton::nvgpu::LoadMatrixOp>(loc, matTy, vecAddr,
+                                                   /*needTrans=*/transpose)
+              .getResult();
+      // Extract result into srcVals
+      for (int j = 0; j < nVecs; j++) {
+        Value output = nVecs == 1 ? res : b.extract_val(i32_ty, res, j);
+        output = b.bitcast(output, vec_ty(llvmElemTy, elemsPerVec));
+        for (int k = 0; k < elemsPerVec; k++) {
+          srcVals.push_back(
+              b.extract_element(llvmElemTy, output, b.i32_val(k)));
+        }
+      }
     }
-    rewriter.create<triton::nvgpu::StoreMatrixOp>(loc, vecAddr, inputs,
-                                                  /*needTrans=*/transpose);
+  }
+
+  if (!isStore) {
+    // Undo the permutation and the removeBroadcast
+    if (maybePermutation.has_value()) {
+      auto invPerm = maybePermutation.value().inverse();
+      srcVals = invPerm.apply(srcVals);
+    }
+    srcVals = broadcastAs(srcVals, regL);
+
+    auto structTy = LLVM::LLVMStructType::getLiteral(
+        ctx, SmallVector<Type>(srcVals.size(), llvmElemTy));
+    src = packLLElements(loc, typeConverter, srcVals, rewriter, structTy);
   }
   return success();
 }
+
+struct LocalLoadOpConversion
+    : public ConvertOpToLLVMPattern<triton::gpu::LocalLoadOp> {
+public:
+  LocalLoadOpConversion(const LLVMTypeConverter &converter,
+                        const NVIDIA::TargetInfo &targetInfo,
+                        PatternBenefit benefit = 1)
+      : ConvertOpToLLVMPattern<triton::gpu::LocalLoadOp>(converter, benefit),
+        targetInfo(targetInfo) {}
+
+  LogicalResult
+  matchAndRewrite(triton::gpu::LocalLoadOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    if (!op.getSrc())
+      return failure();
+    MemDescType memDescType = op.getSrc().getType();
+    RankedTensorType dstTy = op.getType();
+    Type llvmElemTy = typeConverter->convertType(dstTy.getElementType());
+    auto smemObj = LLVM::getSharedMemoryObjectFromStruct(
+        op.getLoc(), adaptor.getSrc(), llvmElemTy, rewriter);
+    Value smemBase = smemObj.getBase();
+
+    // Try to lower transposed or not
+    bool lowered = false;
+    Value values;
+    for (bool transpose : {false, true}) {
+      lowered = lowerLdStMatrix(op.getLoc(), dstTy, memDescType, transpose,
+                                values, smemBase, llvmElemTy, rewriter,
+                                targetInfo, getTypeConverter())
+                    .succeeded();
+      if (lowered) {
+        break;
+      }
+    }
+    if (!lowered) {
+      return failure();
+    }
+    rewriter.replaceOp(op, values);
+    return success();
+  }
+
+private:
+  const NVIDIA::TargetInfo &targetInfo;
+};
 
 struct LocalAllocOpConversion
     : public ConvertOpToLLVMPattern<triton::gpu::LocalAllocOp> {
@@ -334,12 +307,12 @@ struct LocalAllocOpConversion
 
     // Try to lower transposed or not
     bool lowered = false;
+    auto src = adaptor.getSrc();
     for (bool transpose : {false, true}) {
-      lowered =
-          lowerDistributedToSharedStmatrix(
-              op.getLoc(), srcTy, memDescType, transpose, adaptor.getSrc(),
-              smemBase, llvmElemTy, rewriter, targetInfo)
-              .succeeded();
+      lowered = lowerLdStMatrix(op.getLoc(), srcTy, memDescType, transpose, src,
+                                smemBase, llvmElemTy, rewriter, targetInfo,
+                                getTypeConverter())
+                    .succeeded();
       if (lowered) {
         break;
       }
@@ -379,11 +352,12 @@ struct LocalStoreOpConversion
 
     // Try to lower transposed or not
     bool lowered = false;
+    auto src = adaptor.getSrc();
     for (bool transpose : {false, true}) {
-      lowered = lowerDistributedToSharedStmatrix(
-                    op.getLoc(), op.getSrc().getType(), op.getDst().getType(),
-                    transpose, adaptor.getSrc(), smemObj.getBase(), llvmElemTy,
-                    rewriter, targetInfo)
+      lowered = lowerLdStMatrix(op.getLoc(), op.getSrc().getType(),
+                                op.getDst().getType(), transpose, src,
+                                smemObj.getBase(), llvmElemTy, rewriter,
+                                targetInfo, getTypeConverter())
                     .succeeded();
       if (lowered) {
         break;
