@@ -3,7 +3,7 @@ import torch
 import torch.distributed as dist
 import torch.multiprocessing as mp
 from triton_kernels.numerics_details.mxfp import downcast_to_mxfp
-from triton_kernels.matmul_ogs import MicroscalingCtx, matmul_ogs, PrecisionConfig, FlexCtx
+from triton_kernels.matmul_ogs import MicroscalingCtx, matmul_ogs, PrecisionConfig, FlexCtx, FnSpecs, FusedActivation
 from triton_kernels.numerics import InFlexData
 import triton_kernels.distributed as triton_dist
 import triton_kernels.swiglu
@@ -191,7 +191,7 @@ def distributed_run(rank, world_size, batch, dim1, dim2, n_expts_tot, n_expts_ac
 
     # precision configs
     pcg = PrecisionConfig(mx_ctx=wg_mx, flex_ctx=FlexCtx(rhs_data=wg_flex))
-    pcs = triton_kernels.swiglu.PrecisionConfig(limit=1.0)
+    act = FusedActivation(FnSpecs("swiglu", triton_kernels.swiglu.swiglu_fn, ("alpha", "limit")), (1.0, 1.0), 2)
     pc1 = PrecisionConfig(mx_ctx=w1_mx, flex_ctx=FlexCtx(rhs_data=w1_flex))
     pc2 = PrecisionConfig(mx_ctx=w2_mx, flex_ctx=FlexCtx(rhs_data=w2_flex))
     if rank == 0:
@@ -213,8 +213,7 @@ def distributed_run(rank, world_size, batch, dim1, dim2, n_expts_tot, n_expts_ac
             rdata, gi, si = triton_kernels.routing.routing(logits, n_expts_act)
         else:
             rdata = gi = si = None
-        x = matmul_ogs(x, w1_full, b1_full, rdata, gather_indx=gi, precision_config=pc1_f)
-        x = triton_kernels.swiglu.swiglu(x, 1.0, pcs, routing_data=rdata)
+        x = matmul_ogs(x, w1_full, b1_full, rdata, gather_indx=gi, precision_config=pc1_f, fused_activation=act)
         return matmul_ogs(x, w2_full, b2_full, rdata, scatter_indx=si, precision_config=pc2_f)
 
     # distributed pass
@@ -228,8 +227,7 @@ def distributed_run(rank, world_size, batch, dim1, dim2, n_expts_tot, n_expts_ac
             rdata = gi = si = tm = None
         if tm is not None:
             x = x[tm]
-        x = matmul_ogs(x, w1, b1, rdata, gather_indx=gi, precision_config=pc1)
-        x = triton_kernels.swiglu.swiglu(x, 1.0, pcs, routing_data=rdata)
+        x = matmul_ogs(x, w1, b1, rdata, gather_indx=gi, precision_config=pc1, fused_activation=act)
         x = matmul_ogs(x, w2, b2 if rank % TP == 0 else None, rdata, scatter_indx=si, precision_config=pc2)
         x = triton_dist.reduce_scatter(x, token_mask=tm, dim=0)
         # gather the result from all GPUs, just for verification

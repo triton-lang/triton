@@ -180,7 +180,7 @@ def bench_mlp(batch, dim1, dim2, n_expts_tot, n_expts_act, x_dtype, w_dtype, TP,
             x = x[token_mask]
         x = matmul_ogs(x, w1, b1, rdata, gather_indx=gather_indx, precision_config=pc1, fused_activation=act)
         x = matmul_ogs(x, w2, b2, rdata, scatter_indx=scatter_indx, precision_config=pc2)
-    x = triton_dist.reduce_scatter(x, token_mask=token_mask, dim=0)
+        x = triton_dist.reduce_scatter(x, token_mask=token_mask, dim=0)
     proton.finalize()
 
     # -- analyze --
