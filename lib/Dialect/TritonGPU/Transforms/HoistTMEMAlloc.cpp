@@ -1,3 +1,5 @@
+#include "mlir/Dialect/Arith/IR/Arith.h"
+#include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/Dominance.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
@@ -88,6 +90,53 @@ public:
     if (!load.getResult().use_empty())
       return failure();
     rewriter.replaceAllUsesWith(load.getToken(), load.getDep());
+    return success();
+  }
+};
+
+class RemoveUnusedTMEMStore : public OpRewritePattern<TMEMTokenStoreOp> {
+public:
+  using OpRewritePattern::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(TMEMTokenStoreOp store,
+                                PatternRewriter &rewriter) const override {
+    auto pred = getBoolFromConstant(store.getPred());
+    if (!pred || pred.value() == false)
+      return failure(); // we've already processed this
+    auto tok = store.getToken();
+    if (!tok.hasOneUse())
+      return failure();
+    auto loop = dyn_cast<scf::ForOp>(*tok.getUsers().begin());
+    if (!loop)
+      return failure();
+    auto loopTok = loop.getBody()->getArgument(
+        tok.getUses().begin()->getOperandNumber() - 2);
+    if (!loopTok.hasOneUse())
+      return failure();
+    auto mma =
+        dyn_cast<nvidia_gpu::MMAv5OpInterface>(*loopTok.getUsers().begin());
+    if (!mma)
+      return failure();
+    auto useD = dyn_cast<BlockArgument>(mma.useAccumulator());
+    if (!useD)
+      return failure();
+    auto parent = useD.getParentBlock()->getParentOp();
+    if (parent != loop)
+      return failure();
+    auto loopInit = loop.getInitArgs()[useD.getArgNumber() - 1];
+    auto val = getBoolFromConstant(loopInit);
+    if (!val)
+      return failure();
+    if (val.value() == true)
+      return failure();
+    auto loc = store.getLoc();
+    rewriter.setInsertionPoint(store);
+    Value diff = rewriter.create<arith::SubIOp>(loc, loop.getUpperBound(),
+                                                loop.getLowerBound());
+    Value zero = rewriter.create<arith::ConstantIntOp>(loc, 0, diff.getType());
+    Value cond = rewriter.create<arith::CmpIOp>(loc, arith::CmpIPredicate::sle,
+                                                diff, zero);
+    store.getPredMutable().assign(cond);
     return success();
   }
 };
@@ -411,7 +460,8 @@ struct HoistTMEMAlloc
     mlir::RewritePatternSet patterns(&getContext());
     patterns.add<RotateTMEMStoreInLoop, RotateTMEMLoadInLoop,
                  CombineTMEMLoadAndStore, CombineTMEMStoreAndSelect,
-                 SinkTMEMLoad, RemoveUnusedTMEMLoad>(&getContext());
+                 SinkTMEMLoad, RemoveUnusedTMEMLoad, RemoveUnusedTMEMStore>(
+        &getContext());
     scf::ForOp::getCanonicalizationPatterns(patterns, &getContext());
     if (failed(applyPatternsGreedily(getOperation(), std::move(patterns)))) {
       llvm_unreachable("Failed to hoist tmem_store");

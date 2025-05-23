@@ -142,7 +142,7 @@ def NVGPU_LoadMatrixOp : NVGPU_Op<"ldmatrix", [MemoryEffects<[MemRead]>]> {
     ins LLVM_PointerShared:$addr,
     UnitAttr:$trans
   );
-  let results = (outs LLVM_AnyStruct:$result);
+  let results = (outs AnyTypeOf<[LLVM_AnyStruct, I32]>:$result);
   let assemblyFormat = "$addr attr-dict `:` functional-type($addr, $result)";
 }
 
