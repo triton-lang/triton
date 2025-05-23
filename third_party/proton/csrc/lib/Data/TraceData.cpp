@@ -303,6 +303,7 @@ convertToTimelineTrace(TraceData::Trace *trace,
       CircularLayoutParserResult::BlockTrace blockTrace;
       blockTrace.blockId = currentBlockId;
       blockTrace.procId = currentProcId;
+      // Conservative estimation of the number of warps in a CTA.
       blockTrace.traces.reserve(16);
 
       // Process all events for current block-proc
@@ -316,6 +317,7 @@ convertToTimelineTrace(TraceData::Trace *trace,
 
         CircularLayoutParserResult::Trace unitTrace;
         unitTrace.uid = currentUid;
+        // Estimation the number of events in a unit (warp).
         unitTrace.profileEvents.reserve(256);
 
         // Process all events for current uid
@@ -360,6 +362,58 @@ convertToTimelineTrace(TraceData::Trace *trace,
     results.emplace_back(parserResult, metadata);
   }
   return results;
+}
+
+void dumpCycleMetricTrace(TraceData::Trace *trace,
+                          const std::map<std::string, int> &kernelBlockNum,
+                          std::vector<CycleMetricInternal> &cycleEvents,
+                          std::ostream &os) {
+  auto timeline = convertToTimelineTrace(trace, kernelBlockNum, cycleEvents);
+  auto writer = StreamChromeTraceWriter(timeline, "");
+  writer.write(os);
+}
+
+void dumpKernelMetricTrace(
+    TraceData::Trace *trace, uint64_t minTimeStamp,
+    std::map<size_t, std::vector<TraceData::Trace::TraceEvent>>
+        &streamTraceEvents,
+    std::ostream &os) {
+  // for each streamId in ascending order, emit one JSON line
+  for (auto const &[streamId, events] : streamTraceEvents) {
+    json object = {{"displayTimeUnit", "us"}, {"traceEvents", json::array()}};
+
+    for (auto const &event : events) {
+      auto kernelMetrics = std::dynamic_pointer_cast<KernelMetric>(
+          event.metrics.at(MetricKind::Kernel));
+      uint64_t startTimeNs =
+          std::get<uint64_t>(kernelMetrics->getValue(KernelMetric::StartTime));
+      uint64_t endTimeNs =
+          std::get<uint64_t>(kernelMetrics->getValue(KernelMetric::EndTime));
+      uint64_t ts = startTimeNs - minTimeStamp;
+      uint64_t dur = endTimeNs - startTimeNs;
+
+      auto contextId = event.contextId;
+      auto contexts = trace->getContexts(contextId);
+
+      json element;
+      element["name"] = contexts.back().name;
+      element["cat"] = "kernel";
+      element["ph"] = "X";
+      element["ts"] = ts;
+      element["dur"] = dur;
+      element["tid"] = streamId; // thread id = stream
+      json callStack = json::array();
+      for (auto const &ctx : contexts) {
+        callStack.push_back(ctx.name);
+      }
+      element["args"]["call_stack"] = std::move(callStack);
+
+      object["traceEvents"].push_back(element);
+    }
+
+    // one JSON object per line
+    os << object.dump() << "\n";
+  }
 }
 } // namespace
 
@@ -417,61 +471,12 @@ void TraceData::dumpChromeTrace(std::ostream &os) const {
     }
   }
 
-  auto dumpCycleMetricTraceFn = [&](std::ostream &os) {
-    auto timeline =
-        convertToTimelineTrace(trace.get(), kernelBlockNum, cycleEvents);
-    auto writer = StreamChromeTraceWriter(timeline, "");
-    writer.write(os);
-  };
-
-  auto dumpKernelMetricTraceFn =
-      [&](std::map<size_t, std::vector<Trace::TraceEvent>> &streamTraceEvents,
-          std::ostream &os) {
-        // for each streamId in ascending order, emit one JSON line
-        for (auto const &[streamId, events] : streamTraceEvents) {
-          json object = {{"displayTimeUnit", "us"},
-                         {"traceEvents", json::array()}};
-
-          for (auto const &event : events) {
-            auto kernelMetrics = std::dynamic_pointer_cast<KernelMetric>(
-                event.metrics.at(MetricKind::Kernel));
-            uint64_t startTimeNs = std::get<uint64_t>(
-                kernelMetrics->getValue(KernelMetric::StartTime));
-            uint64_t endTimeNs = std::get<uint64_t>(
-                kernelMetrics->getValue(KernelMetric::EndTime));
-            uint64_t ts = startTimeNs - minTimeStamp;
-            uint64_t dur = endTimeNs - startTimeNs;
-
-            auto contextId = event.contextId;
-            auto contexts = trace->getContexts(contextId);
-
-            json element;
-            element["name"] = contexts.back().name;
-            element["cat"] = "kernel";
-            element["ph"] = "X";
-            element["ts"] = ts;
-            element["dur"] = dur;
-            element["tid"] = streamId; // thread id = stream
-            json callStack = json::array();
-            for (auto const &ctx : contexts) {
-              callStack.push_back(ctx.name);
-            }
-            element["args"]["call_stack"] = std::move(callStack);
-
-            object["traceEvents"].push_back(element);
-          }
-
-          // one JSON object per line
-          os << object.dump() << "\n";
-        }
-      };
-
   if (hasCycleMetrics) {
-    dumpCycleMetricTraceFn(os);
+    dumpCycleMetricTrace(trace.get(), kernelBlockNum, cycleEvents, os);
   }
 
   if (hasKernelMetrics) {
-    dumpKernelMetricTraceFn(streamTraceEvents, os);
+    dumpKernelMetricTrace(trace.get(), minTimeStamp, streamTraceEvents, os);
   }
 }
 
