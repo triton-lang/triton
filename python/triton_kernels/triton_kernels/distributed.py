@@ -38,8 +38,7 @@ def broadcast(x: torch.Tensor, src: int = 0, groups: list = None, group_idx: int
             x = x.to(torch.float16)
         group = None
         if groups:
-            for group in groups:
-                dist.new_group(group)
+            groups = [dist.new_group(group) for group in groups]
             dist.barrier()
             group = groups[group_idx]
         dist.broadcast(x, src=src, group=group)
