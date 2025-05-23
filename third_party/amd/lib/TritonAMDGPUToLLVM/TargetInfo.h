@@ -79,8 +79,6 @@ public:
 
   bool supportVectorizedAtomics() const override;
 
-  bool supportLdStMatrix() const override { return false; }
-
   void localStoreOpAnnotation(triton::gpu::LocalStoreOp op,
                               size_t localStoreOpCount,
                               Type type) const override;

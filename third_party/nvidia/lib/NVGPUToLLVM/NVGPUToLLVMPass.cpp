@@ -380,8 +380,11 @@ public:
 
 protected:
   unsigned getVectorSize(ttn::LoadMatrixOp op) const override {
-    auto resultType = cast<LLVM::LLVMStructType>(op.getType());
-    return resultType.getBody().size();
+    auto resultType = op.getType();
+    if (auto structTy = dyn_cast<LLVM::LLVMStructType>(resultType)) {
+      return structTy.getBody().size();
+    }
+    return 1;
   }
 
   std::string getOperands(ttn::LoadMatrixOp op,
