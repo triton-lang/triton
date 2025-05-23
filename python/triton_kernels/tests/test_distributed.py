@@ -127,11 +127,11 @@ def quantize(w, dtype, dev, **opt):
 
 def gather_ep(rank, world_size, param, TP, EP):
     gathered = None
+    group = dist.new_group(list(range(0, world_size, TP)))
     if rank % TP == 0:
         gathered = []
         if rank == 0:
             gathered = [torch.zeros_like(param) for _ in range(EP)]
-        group = dist.new_group(list(range(0, world_size, TP)))
         dist.gather(param, gathered, dst=0, group=group)
         if rank == 0:
             gathered = torch.cat(gathered, dim=0)
@@ -163,11 +163,11 @@ def distributed_run(rank, world_size, batch, dim1, dim2, n_expts_tot, n_expts_ac
     bg = torch.randn((n_expts_tot, ), device=dev)
     dist.broadcast(bg, src=0)
 
-    b2_full = torch.randn((n_expts_tot, dim1), device=dev)
-    dist.broadcast(b2_full, src=0)
-    b2_chunks = b2_full.chunk(world_size, dim=0)
-    ep_index = rank // TP
-    b2 = b2_chunks[ep_index]
+    b2 = torch.randn((n_expts_tot, dim1), device=dev)
+    ep_indx = rank // TP
+    groups = [dist.new_group(list(range(ep * TP, (ep + 1) * TP))) for ep in range(EP)]
+    group = groups[ep_indx]
+    dist.broadcast(b2, src=ep_indx * TP, group=group)
 
     w1 = torch.randn((n_expts_tot // EP, dim1, dim2 // TP), device=dev)
     w2 = torch.randn((n_expts_tot // EP, dim2 // TP // 2, dim1), device=dev)
@@ -176,6 +176,7 @@ def distributed_run(rank, world_size, batch, dim1, dim2, n_expts_tot, n_expts_ac
     w1_full = gather_full(rank, world_size, w1, TP, EP, concat_dim_inside=2, concat_dim_outside=0)
     w2_full = gather_full(rank, world_size, w2, TP, EP, concat_dim_inside=1, concat_dim_outside=0)
     b1_full = gather_full(rank, world_size, b1, TP, EP, concat_dim_inside=1, concat_dim_outside=0)
+    b2_full = gather_ep(rank, world_size, b2, TP, EP)
 
     # quantization
     swizzle_opt = {"mx4": {"swizzle_mx_scale": True}}
