@@ -97,8 +97,10 @@ struct ConvertTritonGPUToLLVM
         typeConverter, funcPatterns, targetInfo, patternBenefitDefault);
     mlir::cf::populateControlFlowToLLVMConversionPatterns(typeConverter,
                                                           funcPatterns);
-    if (failed(
-            applyPartialConversion(mod, funcTarget, std::move(funcPatterns))))
+    ConversionConfig config;
+    config.allowPatternRollback = false;
+    if (failed(applyPartialConversion(mod, funcTarget, std::move(funcPatterns),
+                                      config)))
       return signalPassFailure();
 
     // initSharedMemory is run before the conversion of call and ret ops,
@@ -170,7 +172,8 @@ struct ConvertTritonGPUToLLVM
     mlir::triton::NVIDIA::populateFp4ToFpToLLVMPatterns(typeConverter, patterns,
                                                         benefit);
     TritonLLVMConversionTarget convTarget(*context);
-    if (failed(applyPartialConversion(mod, convTarget, std::move(patterns))))
+    if (failed(applyPartialConversion(mod, convTarget, std::move(patterns),
+                                      config)))
       return signalPassFailure();
 
     // Fold CTAId when there is only 1 CTA.

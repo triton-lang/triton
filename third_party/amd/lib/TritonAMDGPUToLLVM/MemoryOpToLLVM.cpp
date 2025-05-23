@@ -13,17 +13,15 @@ using ::mlir::triton::gpu::MemDescType;
 namespace SharedToDotOperandMFMA {
 Value convertLayout(int opIdx, ConversionPatternRewriter &rewriter,
                     Location loc, Value tensor,
-                    DotOperandEncodingAttr bEncoding,
-                    const SharedMemoryObject &smemObj,
-                    const LLVMTypeConverter *typeConverter, Value thread);
+                    DotOperandEncodingAttr bEncoding, Value llvmStruct,
+                    Type llvmElemTy, const LLVMTypeConverter *typeConverter);
 } // namespace SharedToDotOperandMFMA
 
 namespace SharedToDotOperandWMMA {
 Value convertLayout(int opIdx, ConversionPatternRewriter &rewriter,
                     Location loc, Value tensor,
-                    DotOperandEncodingAttr bEncoding,
-                    const SharedMemoryObject &smemObj,
-                    const LLVMTypeConverter *typeConverter, Value thread);
+                    DotOperandEncodingAttr bEncoding, Value llvmStruct,
+                    Type llvmElemTy, const LLVMTypeConverter *typeConverter);
 } // namespace SharedToDotOperandWMMA
 
 namespace {
@@ -36,9 +34,7 @@ public:
   LogicalResult
   matchAndRewrite(triton::gpu::LocalLoadOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    MemDescType srcTy = op.getSrc().getType();
     RankedTensorType dstTy = op.getType();
-    Attribute srcLayout = srcTy.getEncoding();
     Attribute dstLayout = dstTy.getEncoding();
     if (isa<DotOperandEncodingAttr>(dstLayout) &&
         isa<AMDMfmaEncodingAttr, AMDWmmaEncodingAttr>(
@@ -60,14 +56,12 @@ private:
       ConversionPatternRewriter &rewriter,
       const DotOperandEncodingAttr &dotOperandLayout) const {
     auto loc = op.getLoc();
-    auto b = TritonLLVMOpBuilder(loc, rewriter);
     Value src = op.getSrc();
-    Value dst = op.getResult();
     auto llvmElemTy = typeConverter->convertType(
         cast<MemDescType>(src.getType()).getElementType());
-
-    auto smemObj = LLVM::getSharedMemoryObjectFromStruct(loc, adaptor.getSrc(),
-                                                         llvmElemTy, rewriter);
+    Value llvmStruct = adaptor.getSrc();
+    assert(llvm::isa<LLVM::LLVMStructType>(llvmStruct.getType()) &&
+           "expected adaptor.getSrc() to be of LLVMStructType");
     Value res;
     auto dopOpParent = dotOperandLayout.getParent();
     if (isa<AMDMfmaEncodingAttr, AMDWmmaEncodingAttr>(dopOpParent)) {
@@ -75,8 +69,8 @@ private:
                                     ? SharedToDotOperandMFMA::convertLayout
                                     : SharedToDotOperandWMMA::convertLayout;
       res = sharedToDotConvert(dotOperandLayout.getOpIdx(), rewriter, loc, src,
-                               dotOperandLayout, smemObj, typeConverter,
-                               getThreadId(rewriter, loc));
+                               dotOperandLayout, llvmStruct, llvmElemTy,
+                               typeConverter);
     } else {
       assert(false && "unsupported layout found");
     }
@@ -116,9 +110,6 @@ public:
                   ConversionPatternRewriter &rewriter) const override {
     MemDescType srcTy = op.getSrc().getType();
     RankedTensorType dstTy = op.getType();
-    Attribute srcLayout = srcTy.getEncoding();
-    Attribute dstLayout = dstTy.getEncoding();
-
     if (canUseTransLoad(op, srcTy, dstTy)) {
       return lowerSharedToDotOperandTransLL(op, adaptor, getTypeConverter(),
                                             rewriter);
@@ -319,7 +310,6 @@ private:
     return success();
   }
 
-private:
   const AMD::TargetInfo &targetInfo;
 };
 
