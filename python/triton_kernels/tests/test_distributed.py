@@ -176,7 +176,6 @@ def distributed_run(rank, world_size, batch, dim1, dim2, n_expts_tot, n_expts_ac
     w1_full = gather_full(rank, world_size, w1, TP, EP, concat_dim_inside=2, concat_dim_outside=0)
     w2_full = gather_full(rank, world_size, w2, TP, EP, concat_dim_inside=1, concat_dim_outside=0)
     b1_full = gather_full(rank, world_size, b1, TP, EP, concat_dim_inside=1, concat_dim_outside=0)
-    b2_full = gather_ep(rank, world_size, b2, TP, EP)
 
     # quantization
     swizzle_opt = {"mx4": {"swizzle_mx_scale": True}}
