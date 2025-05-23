@@ -128,7 +128,7 @@ def bench_mlp(batch, dim1, dim2, n_expts_tot, n_expts_act, x_dtype, w_dtype, TP,
     bg = triton_dist.broadcast(torch.randn((n_expts_tot, ), device=dev))
     b1 = torch.randn((n_expts_tot // EP, dim2 // TP), device=dev)
     b2 = torch.randn((n_expts_tot // EP, dim1), device=dev)
-    ep_indx = rank // TP
+    ep_indx = (rank // TP) % EP
     groups = [list(range(ep * TP, (ep + 1) * TP)) for ep in range(EP)]
     b2 = triton_dist.broadcast(b2, src=ep_indx * TP, groups=groups, group_idx=ep_indx)
 
@@ -168,9 +168,9 @@ def bench_mlp(batch, dim1, dim2, n_expts_tot, n_expts_act, x_dtype, w_dtype, TP,
     input_x = torch.randn((batch // DP, dim1), device=dev)
     # run layer
     proton.start(str(fpath.with_suffix('')), hook="triton")
-    xg = input_x.to(wg.dtype if n_expts_tot > 1 else input_x.dtype)
     input_x = input_x.to(x_dtype)
     for i in range(100):
+        xg = input_x.to(wg.dtype if n_expts_tot > 1 else input_x.dtype)
         x = triton_dist.all_gather(input_x, dim=0)
         if n_expts_tot > 1:
             logits = matmul_ogs(xg, wg, bg, precision_config=pcg)
@@ -179,8 +179,9 @@ def bench_mlp(batch, dim1, dim2, n_expts_tot, n_expts_act, x_dtype, w_dtype, TP,
             rdata, gather_indx, scatter_indx, token_mask = None, None, None, None
         if token_mask is not None:
             x = x[token_mask]
-        x = matmul_ogs(x, w1, b1, rdata, gather_indx=gather_indx, precision_config=pc1, fused_activation=act)
-        x = matmul_ogs(x, w2, b2, rdata, scatter_indx=scatter_indx, precision_config=pc2)
+        if x.nelement() > 0:
+            x = matmul_ogs(x, w1, b1, rdata, gather_indx=gather_indx, precision_config=pc1, fused_activation=act)
+            x = matmul_ogs(x, w2, b2, rdata, scatter_indx=scatter_indx, precision_config=pc2)
         x = triton_dist.reduce_scatter(x, token_mask=token_mask, dim=0)
     proton.finalize()
 
