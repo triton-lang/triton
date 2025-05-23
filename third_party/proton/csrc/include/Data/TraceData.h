@@ -2,7 +2,6 @@
 #define PROTON_DATA_TRACE_DATA_H_
 
 #include "Data.h"
-#include "TraceDataIO/TraceWriter.h"
 #include <memory>
 #include <unordered_map>
 

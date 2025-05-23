@@ -1,4 +1,5 @@
 #include "Data/TraceData.h"
+#include "TraceDataIO/TraceWriter.h"
 #include "Utility/Errors.h"
 #include "nlohmann/json.hpp"
 
@@ -278,6 +279,7 @@ convertToTimelineTrace(TraceData::Trace *trace,
 
   // Process in perfectly sorted order
   while (eventIndex < sortedEvents.size()) {
+    // FIXME(fywkevin): change to actual kernel name
     const std::string currentKernel =
         trace->getContexts(sortedEvents[eventIndex].contextId)[1].name;
 
@@ -372,7 +374,7 @@ void TraceData::dumpChromeTrace(std::ostream &os) const {
   std::vector<CycleMetricInternal> cycleEvents;
   cycleEvents.reserve(events.size());
   for (auto &event : events) {
-    if (event.metrics.count(MetricKind::Kernel) && !hasCycleMetrics) {
+    if (event.metrics.count(MetricKind::Kernel)) {
       std::shared_ptr<KernelMetric> kernelMetric =
           std::dynamic_pointer_cast<KernelMetric>(
               event.metrics.at(MetricKind::Kernel));
@@ -385,7 +387,7 @@ void TraceData::dumpChromeTrace(std::ostream &os) const {
       minTimeStamp = std::min(minTimeStamp, startTime);
       hasKernelMetrics = true;
     }
-    if (event.metrics.count(MetricKind::Cycle) && !hasKernelMetrics) {
+    if (event.metrics.count(MetricKind::Cycle)) {
       auto context = trace->getContexts(event.contextId);
       std::shared_ptr<CycleMetric> cycleMetric =
           std::dynamic_pointer_cast<CycleMetric>(
@@ -409,10 +411,11 @@ void TraceData::dumpChromeTrace(std::ostream &os) const {
       cycleEvents.emplace_back(startCycle, endCycle, blockId, uid, procId,
                                event.contextId, timeShiftCost);
     }
-  }
 
-  assert(!(hasKernelMetrics && hasCycleMetrics) &&
-         "only one active metric type is supported");
+    if (hasKernelMetrics && hasCycleMetrics) {
+      throw std::runtime_error("only one active metric type is supported");
+    }
+  }
 
   auto dumpCycleMetricTraceFn = [&](std::ostream &os) {
     auto timeline =

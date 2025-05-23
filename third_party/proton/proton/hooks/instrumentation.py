@@ -117,7 +117,8 @@ class InstrumentationHook(Hook):
     active_count: int = 0
     enable_host_buffer: bool = False
     host_buffer: Optional[Any] = None
-    profile_buffer_size: int = 256 * 1024
+    # FIXME(fywkevin): change to a more reasonable value after we have support for periodic buffer dumping.
+    profile_buffer_size: int = 1
     profile_buffer_alignment: int = 128
 
     def __init__(self, mode_obj: Union[None, str, mode.InstrumentationMode]):
