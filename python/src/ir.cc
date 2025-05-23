@@ -220,7 +220,7 @@ struct ConsoleReproducerStream : public mlir::ReproducerStream {
   StringRef description() override {
     return "std::errs, please share the reproducer above with Triton project.";
   }
-  raw_ostream &os() override { return llvm::errs(); }
+  raw_ostream &os() override { return llvm::outs(); }
 };
 
 ReproducerStreamFactory makeConsoleReproducer() {
