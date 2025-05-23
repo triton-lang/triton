@@ -1,6 +1,7 @@
 #include "triton/Dialect/Triton/Transforms/LoopPeeling.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/Pass/Pass.h"
+#include "triton/Dialect/Triton/IR/Utility.h"
 
 using namespace mlir;
 
@@ -21,18 +22,9 @@ void peelLoopEpilogue(
   Value upperBound = forOp.getUpperBound();
   Value step = forOp.getStep();
   Value newUpperBound = rewriter.create<arith::SubIOp>(loc, upperBound, step);
-  forOp.getUpperBoundMutable().assign(newUpperBound);
 
   rewriter.setInsertionPointAfter(forOp);
-
-  // Last iter induction variable value
-  // lastIV = lb + floor( (ub – lb – 1) / s ) * s
-  Value range = rewriter.create<arith::SubIOp>(loc, upperBound, lowerBound);
-  Value rangeM1 = rewriter.create<arith::SubIOp>(
-      loc, range, rewriter.create<arith::ConstantIntOp>(loc, 1, type));
-  Value itersM1 = rewriter.create<arith::DivSIOp>(loc, rangeM1, step);
-  Value delta = rewriter.create<arith::MulIOp>(loc, itersM1, step);
-  Value lastIV = rewriter.create<arith::AddIOp>(loc, delta, lowerBound);
+  Value lastIV = getLastInductionValue(rewriter, forOp);
 
   auto cond = rewriter.create<arith::CmpIOp>(loc, arith::CmpIPredicate::slt,
                                              lastIV, upperBound);
@@ -51,6 +43,8 @@ void peelLoopEpilogue(
   forOp->replaceUsesWithIf(ifOp, [&](OpOperand &operand) {
     return !ifOp->isAncestor(operand.getOwner());
   });
+
+  forOp.getUpperBoundMutable().assign(newUpperBound);
 
   if (processPeeledOp) {
     for (auto &op :

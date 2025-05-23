@@ -45,9 +45,6 @@ static void pipelineWgmma(ModuleOp moduleOp) {
 
 static Operation *wrapInMaskOp(RewriterBase &rewriter, Operation *op,
                                Value pred) {
-  if (isa<arith::ConstantOp>(op)) {
-    return op;
-  }
   auto mask = rewriter.create<MaskOp>(op->getLoc(), op->getResultTypes(), pred);
   rewriter.createBlock(&mask->getRegion(0));
   rewriter.setInsertionPointToStart(&mask->getRegion(0).front());
