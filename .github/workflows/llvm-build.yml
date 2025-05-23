@@ -8,6 +8,7 @@ on:
       - cmake/llvm-hash.txt
   pull_request:
     paths:
+      - cmake/llvm-hash.txt
       - .github/workflows/llvm-build.yml
       - .github/workflows/llvm-build/almalinux.Dockerfile
       - .github/workflows/llvm-build/centos.Dockerfile
