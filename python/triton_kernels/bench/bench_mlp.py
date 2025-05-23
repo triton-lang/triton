@@ -130,7 +130,7 @@ def bench_mlp(batch, dim1, dim2, n_expts_tot, n_expts_act, x_dtype, w_dtype, TP,
     b2 = torch.randn((n_expts_tot // EP, dim1), device=dev)
     ep_indx = rank // TP
     groups = [list(range(ep * TP, (ep + 1) * TP)) for ep in range(EP)]
-    b2 = triton_dist.broadcast(b2, src=ep_indx * TP, group=groups, group_idx=ep_indx)
+    b2 = triton_dist.broadcast(b2, src=ep_indx * TP, groups=groups, group_idx=ep_indx)
 
     # -- numerics --
     optg = dict()
