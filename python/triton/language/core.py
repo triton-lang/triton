@@ -159,70 +159,70 @@ class constexpr:
 
     # In interpreter mode, constant values are not wrapped in constexpr,
     # and therefore do not have a .value attribute.
-    # As a result, from here and below, we need to call the _constexpr_to_value
+    # As a result, from here and below, we need to call the _unwrap_if_constexpr
     # function to obtain either constexpr.value or the value itself.
     def __add__(self, other):
-        return constexpr(self.value + _constexpr_to_value(other))
+        return constexpr(self.value + _unwrap_if_constexpr(other))
 
     def __radd__(self, other):
-        return constexpr(_constexpr_to_value(other) + self.value)
+        return constexpr(_unwrap_if_constexpr(other) + self.value)
 
     def __sub__(self, other):
-        return constexpr(self.value - _constexpr_to_value(other))
+        return constexpr(self.value - _unwrap_if_constexpr(other))
 
     def __rsub__(self, other):
-        return constexpr(_constexpr_to_value(other) - self.value)
+        return constexpr(_unwrap_if_constexpr(other) - self.value)
 
     def __mul__(self, other):
-        return constexpr(self.value * _constexpr_to_value(other))
+        return constexpr(self.value * _unwrap_if_constexpr(other))
 
     def __mod__(self, other):
-        return constexpr(self.value % _constexpr_to_value(other))
+        return constexpr(self.value % _unwrap_if_constexpr(other))
 
     def __rmul__(self, other):
-        return constexpr(_constexpr_to_value(other) * self.value)
+        return constexpr(_unwrap_if_constexpr(other) * self.value)
 
     def __truediv__(self, other):
-        return constexpr(self.value / _constexpr_to_value(other))
+        return constexpr(self.value / _unwrap_if_constexpr(other))
 
     def __rtruediv__(self, other):
-        return constexpr(_constexpr_to_value(other) / self.value)
+        return constexpr(_unwrap_if_constexpr(other) / self.value)
 
     def __floordiv__(self, other):
-        return constexpr(self.value // _constexpr_to_value(other))
+        return constexpr(self.value // _unwrap_if_constexpr(other))
 
     def __rfloordiv__(self, other):
-        return constexpr(_constexpr_to_value(other) // self.value)
+        return constexpr(_unwrap_if_constexpr(other) // self.value)
 
     def __gt__(self, other):
-        return constexpr(self.value > _constexpr_to_value(other))
+        return constexpr(self.value > _unwrap_if_constexpr(other))
 
     def __rgt__(self, other):
-        return constexpr(_constexpr_to_value(other) > self.value)
+        return constexpr(_unwrap_if_constexpr(other) > self.value)
 
     def __ge__(self, other):
-        return constexpr(self.value >= _constexpr_to_value(other))
+        return constexpr(self.value >= _unwrap_if_constexpr(other))
 
     def __rge__(self, other):
-        return constexpr(_constexpr_to_value(other) >= self.value)
+        return constexpr(_unwrap_if_constexpr(other) >= self.value)
 
     def __lt__(self, other):
-        return constexpr(self.value < _constexpr_to_value(other))
+        return constexpr(self.value < _unwrap_if_constexpr(other))
 
     def __rlt__(self, other):
-        return constexpr(_constexpr_to_value(other) < self.value)
+        return constexpr(_unwrap_if_constexpr(other) < self.value)
 
     def __le__(self, other):
-        return constexpr(self.value <= _constexpr_to_value(other))
+        return constexpr(self.value <= _unwrap_if_constexpr(other))
 
     def __rle__(self, other):
-        return constexpr(_constexpr_to_value(other) <= self.value)
+        return constexpr(_unwrap_if_constexpr(other) <= self.value)
 
     def __eq__(self, other):
-        return constexpr(self.value == _constexpr_to_value(other))
+        return constexpr(self.value == _unwrap_if_constexpr(other))
 
     def __ne__(self, other):
-        return constexpr(self.value != _constexpr_to_value(other))
+        return constexpr(self.value != _unwrap_if_constexpr(other))
 
     def __bool__(self):
         return bool(self.value)
@@ -231,19 +231,19 @@ class constexpr:
         return constexpr(-self.value)
 
     def __and__(self, other):
-        return constexpr(self.value & _constexpr_to_value(other))
+        return constexpr(self.value & _unwrap_if_constexpr(other))
 
     def logical_and(self, other):
-        return constexpr(self.value and _constexpr_to_value(other))
+        return constexpr(self.value and _unwrap_if_constexpr(other))
 
     def __or__(self, other):
-        return constexpr(self.value | _constexpr_to_value(other))
+        return constexpr(self.value | _unwrap_if_constexpr(other))
 
     def __xor__(self, other):
-        return constexpr(self.value ^ _constexpr_to_value(other))
+        return constexpr(self.value ^ _unwrap_if_constexpr(other))
 
     def logical_or(self, other):
-        return constexpr(self.value or _constexpr_to_value(other))
+        return constexpr(self.value or _unwrap_if_constexpr(other))
 
     def __pos__(self):
         return constexpr(+self.value)
@@ -252,16 +252,16 @@ class constexpr:
         return constexpr(~self.value)
 
     def __pow__(self, other):
-        return constexpr(self.value**_constexpr_to_value(other))
+        return constexpr(self.value**_unwrap_if_constexpr(other))
 
     def __rpow__(self, other):
-        return constexpr(_constexpr_to_value(other)**self.value)
+        return constexpr(_unwrap_if_constexpr(other)**self.value)
 
     def __rshift__(self, other):
-        return constexpr(self.value >> _constexpr_to_value(other))
+        return constexpr(self.value >> _unwrap_if_constexpr(other))
 
     def __lshift__(self, other):
-        return constexpr(self.value << _constexpr_to_value(other))
+        return constexpr(self.value << _unwrap_if_constexpr(other))
 
     def __not__(self):
         return constexpr(not self.value)
@@ -1491,10 +1491,6 @@ def get_bool_env_var(var_name):
 # -----------------------
 # SPMD Programming Model
 # -----------------------
-def _constexpr_to_value(v):
-    if isinstance(v, constexpr):
-        return v.value
-    return v
 
 
 @builtin
@@ -1512,7 +1508,7 @@ def program_id(axis, _builder=None):
     #     npg0 = num_programs(0, _builder)
     #     npg1 = num_programs(1, _builder)
     #     return pid0 + pid1*npg0 + pid2*npg0*npg1
-    axis = _constexpr_to_value(axis)
+    axis = _unwrap_if_constexpr(axis)
     return semantic.program_id(axis, _builder)
 
 
@@ -1524,7 +1520,7 @@ def num_programs(axis, _builder=None):
     :param axis: The axis of the 3D launch grid. Must be 0, 1 or 2.
     :type axis: int
     """
-    axis = _constexpr_to_value(axis)
+    axis = _unwrap_if_constexpr(axis)
     return semantic.num_programs(axis, _builder)
 
 
@@ -1535,8 +1531,8 @@ def num_programs(axis, _builder=None):
 
 @builtin
 def arange(start, end, _builder=None):
-    start = _constexpr_to_value(start)
-    end = _constexpr_to_value(end)
+    start = _unwrap_if_constexpr(start)
+    end = _unwrap_if_constexpr(end)
     return semantic.arange(start, end, _builder)
 
 
@@ -1554,8 +1550,8 @@ arange.__doc__ = f"""
 
 
 def _unwrap_shape(shape):
-    shape = _constexpr_to_value(shape)
-    return [_constexpr_to_value(s) for s in shape]
+    shape = _unwrap_if_constexpr(shape)
+    return [_unwrap_if_constexpr(s) for s in shape]
 
 
 def _shape_check_impl(shape):
@@ -1577,8 +1573,8 @@ def full(shape, value, dtype, _builder=None):
     :type dtype: tl.dtype
     """
     shape = _shape_check_impl(shape)
-    value = _constexpr_to_value(value)
-    dtype = _constexpr_to_value(dtype)
+    value = _unwrap_if_constexpr(value)
+    dtype = _unwrap_if_constexpr(dtype)
     return semantic.full(shape, value, dtype, _builder)
 
 
@@ -1847,10 +1843,10 @@ def expand_dims(input, axis, _builder=None):
 
     """
     input = semantic.to_tensor(input, _builder)
-    axis = _constexpr_to_value(axis)
+    axis = _unwrap_if_constexpr(axis)
     axes = list(axis) if isinstance(axis, (Sequence, tuple)) else [axis]
     new_ndim = len(input.shape) + len(axes)
-    axes = [_wrap_axis(_constexpr_to_value(d), new_ndim) for d in axes]
+    axes = [_wrap_axis(_unwrap_if_constexpr(d), new_ndim) for d in axes]
 
     if len(set(axes)) != len(axes):
         raise ValueError(f"expand_dims received duplicate axes, normalized axes = {axes}")
@@ -1880,9 +1876,9 @@ def cast(input, dtype: dtype, fp_downcast_rounding: Optional[str] = None, bitcas
     :type bitcast: bool, optional
     """
     input = semantic.to_tensor(input, _builder)
-    dtype = _constexpr_to_value(dtype)
-    fp_downcast_rounding = _constexpr_to_value(fp_downcast_rounding)
-    bitcast = _constexpr_to_value(bitcast)
+    dtype = _unwrap_if_constexpr(dtype)
+    fp_downcast_rounding = _unwrap_if_constexpr(fp_downcast_rounding)
+    bitcast = _unwrap_if_constexpr(bitcast)
     if bitcast:
         return semantic.bitcast(input, dtype, _builder)
     return semantic.cast(input, dtype, _builder, fp_downcast_rounding)
@@ -1924,9 +1920,9 @@ def dot(input, other, acc=None, input_precision=None, allow_tf32=None, max_num_i
         input_precision = knobs.language.fp32_default or ("tf32" if (supports_tf32 and
                                                                      (allow_tf32 or allow_tf32 is None)) else "ieee")
 
-    input_precision = _constexpr_to_value(input_precision)
-    out_dtype = _constexpr_to_value(out_dtype)
-    max_num_imprecise_acc = _constexpr_to_value(max_num_imprecise_acc)
+    input_precision = _unwrap_if_constexpr(input_precision)
+    out_dtype = _unwrap_if_constexpr(out_dtype)
+    max_num_imprecise_acc = _unwrap_if_constexpr(max_num_imprecise_acc)
     return semantic.dot(input, other, acc, input_precision, max_num_imprecise_acc, out_dtype, _builder)
 
 
@@ -1964,7 +1960,7 @@ def dot_scaled(lhs, lhs_scale, lhs_format, rhs, rhs_scale, rhs_format, acc=None,
     :param rhs_k_pack: If false, the rhs tensor is packed into uint8 along N dimension.
     :type rhs_k_pack: bool, optional
     """
-    out_dtype = _constexpr_to_value(out_dtype)
+    out_dtype = _unwrap_if_constexpr(out_dtype)
     assert out_dtype == float32, "Only float32 is supported for out_dtype at the moment"
     return semantic.dot_scaled(lhs, lhs_scale, lhs_format, rhs, rhs_scale, rhs_format, acc, fast_math, lhs_k_pack,
                                rhs_k_pack, out_dtype, _builder)
@@ -2022,16 +2018,16 @@ def load(pointer, mask=None, other=None, boundary_check=(), padding_option="", c
     :type volatile: bool, optional
     """
     # `mask` and `other` can be constexpr
-    mask = _constexpr_to_value(mask)
-    other = _constexpr_to_value(other)
+    mask = _unwrap_if_constexpr(mask)
+    other = _unwrap_if_constexpr(other)
     if mask is not None:
         mask = semantic.to_tensor(mask, _builder)
     if other is not None:
         other = semantic.to_tensor(other, _builder)
-    padding_option = _constexpr_to_value(padding_option)
-    cache_modifier = _constexpr_to_value(cache_modifier)
-    eviction_policy = _constexpr_to_value(eviction_policy)
-    volatile = _constexpr_to_value(volatile)
+    padding_option = _unwrap_if_constexpr(padding_option)
+    cache_modifier = _unwrap_if_constexpr(cache_modifier)
+    eviction_policy = _unwrap_if_constexpr(eviction_policy)
+    volatile = _unwrap_if_constexpr(volatile)
     return semantic.load(pointer, mask, other, boundary_check, padding_option, cache_modifier, eviction_policy,
                          volatile, _builder)
 
@@ -2093,11 +2089,11 @@ def store(pointer, value, mask=None, boundary_check=(), cache_modifier="", evict
     """
     # `value` can be constexpr
     value = semantic.to_tensor(value, _builder)
-    mask = _constexpr_to_value(mask)
+    mask = _unwrap_if_constexpr(mask)
     if mask is not None:
         mask = semantic.to_tensor(mask, _builder)
-    cache_modifier = _constexpr_to_value(cache_modifier)
-    eviction_policy = _constexpr_to_value(eviction_policy)
+    cache_modifier = _unwrap_if_constexpr(cache_modifier)
+    eviction_policy = _unwrap_if_constexpr(eviction_policy)
     return semantic.store(pointer, value, mask, boundary_check, cache_modifier, eviction_policy, _builder)
 
 
@@ -2231,8 +2227,8 @@ def _add_atomic_docstr(name: str, has_cmp: bool = False) -> Callable[[T], T]:
 def atomic_cas(pointer, cmp, val, sem=None, scope=None, _builder=None):
     cmp = semantic.to_tensor(cmp, _builder)
     val = semantic.to_tensor(val, _builder)
-    sem = _constexpr_to_value(sem)
-    scope = _constexpr_to_value(scope)
+    sem = _unwrap_if_constexpr(sem)
+    scope = _unwrap_if_constexpr(scope)
     return semantic.atomic_cas(pointer, cmp, val, sem, scope, _builder)
 
 
@@ -2241,9 +2237,9 @@ def atomic_cas(pointer, cmp, val, sem=None, scope=None, _builder=None):
 @_add_atomic_docstr("exchange")
 def atomic_xchg(pointer, val, mask=None, sem=None, scope=None, _builder=None):
     val = semantic.to_tensor(val, _builder)
-    sem = _constexpr_to_value(sem)
-    scope = _constexpr_to_value(scope)
-    mask = _constexpr_to_value(mask)
+    sem = _unwrap_if_constexpr(sem)
+    scope = _unwrap_if_constexpr(scope)
+    mask = _unwrap_if_constexpr(mask)
     return semantic.atomic_xchg(pointer, val, mask, sem, scope, _builder)
 
 
@@ -2252,9 +2248,9 @@ def atomic_xchg(pointer, val, mask=None, sem=None, scope=None, _builder=None):
 @_add_atomic_docstr("add")
 def atomic_add(pointer, val, mask=None, sem=None, scope=None, _builder=None):
     val = semantic.to_tensor(val, _builder)
-    sem = _constexpr_to_value(sem)
-    scope = _constexpr_to_value(scope)
-    mask = _constexpr_to_value(mask)
+    sem = _unwrap_if_constexpr(sem)
+    scope = _unwrap_if_constexpr(scope)
+    mask = _unwrap_if_constexpr(mask)
     return semantic.atomic_add(pointer, val, mask, sem, scope, _builder)
 
 
@@ -2263,9 +2259,9 @@ def atomic_add(pointer, val, mask=None, sem=None, scope=None, _builder=None):
 @_add_atomic_docstr("max")
 def atomic_max(pointer, val, mask=None, sem=None, scope=None, _builder=None):
     val = semantic.to_tensor(val, _builder)
-    sem = _constexpr_to_value(sem)
-    scope = _constexpr_to_value(scope)
-    mask = _constexpr_to_value(mask)
+    sem = _unwrap_if_constexpr(sem)
+    scope = _unwrap_if_constexpr(scope)
+    mask = _unwrap_if_constexpr(mask)
     return semantic.atomic_max(pointer, val, mask, sem, scope, _builder)
 
 
@@ -2274,9 +2270,9 @@ def atomic_max(pointer, val, mask=None, sem=None, scope=None, _builder=None):
 @_add_atomic_docstr("min")
 def atomic_min(pointer, val, mask=None, sem=None, scope=None, _builder=None):
     val = semantic.to_tensor(val, _builder)
-    sem = _constexpr_to_value(sem)
-    scope = _constexpr_to_value(scope)
-    mask = _constexpr_to_value(mask)
+    sem = _unwrap_if_constexpr(sem)
+    scope = _unwrap_if_constexpr(scope)
+    mask = _unwrap_if_constexpr(mask)
     return semantic.atomic_min(pointer, val, mask, sem, scope, _builder)
 
 
@@ -2285,9 +2281,9 @@ def atomic_min(pointer, val, mask=None, sem=None, scope=None, _builder=None):
 @_add_atomic_docstr("logical and")
 def atomic_and(pointer, val, mask=None, sem=None, scope=None, _builder=None):
     val = semantic.to_tensor(val, _builder)
-    sem = _constexpr_to_value(sem)
-    scope = _constexpr_to_value(scope)
-    mask = _constexpr_to_value(mask)
+    sem = _unwrap_if_constexpr(sem)
+    scope = _unwrap_if_constexpr(scope)
+    mask = _unwrap_if_constexpr(mask)
     return semantic.atomic_and(pointer, val, mask, sem, scope, _builder)
 
 
@@ -2296,9 +2292,9 @@ def atomic_and(pointer, val, mask=None, sem=None, scope=None, _builder=None):
 @_add_atomic_docstr("logical or")
 def atomic_or(pointer, val, mask=None, sem=None, scope=None, _builder=None):
     val = semantic.to_tensor(val, _builder)
-    sem = _constexpr_to_value(sem)
-    scope = _constexpr_to_value(scope)
-    mask = _constexpr_to_value(mask)
+    sem = _unwrap_if_constexpr(sem)
+    scope = _unwrap_if_constexpr(scope)
+    mask = _unwrap_if_constexpr(mask)
     return semantic.atomic_or(pointer, val, mask, sem, scope, _builder)
 
 
@@ -2307,9 +2303,9 @@ def atomic_or(pointer, val, mask=None, sem=None, scope=None, _builder=None):
 @_add_atomic_docstr("logical xor")
 def atomic_xor(pointer, val, mask=None, sem=None, scope=None, _builder=None):
     val = semantic.to_tensor(val, _builder)
-    sem = _constexpr_to_value(sem)
-    scope = _constexpr_to_value(scope)
-    mask = _constexpr_to_value(mask)
+    sem = _unwrap_if_constexpr(sem)
+    scope = _unwrap_if_constexpr(scope)
+    mask = _unwrap_if_constexpr(mask)
     return semantic.atomic_xor(pointer, val, mask, sem, scope, _builder)
 
 
@@ -2385,7 +2381,7 @@ def minimum(x, y, propagate_nan: constexpr = PropagateNan.NONE, _builder=None):
     y = semantic.to_tensor(y, _builder)
     x = _promote_bfloat16_to_float32(x, _builder=_builder)
     y = _promote_bfloat16_to_float32(y, _builder=_builder)
-    propagate_nan = _constexpr_to_value(propagate_nan)
+    propagate_nan = _unwrap_if_constexpr(propagate_nan)
     return semantic.minimum(x, y, propagate_nan, _builder)
 
 
@@ -2407,7 +2403,7 @@ def maximum(x, y, propagate_nan: constexpr = PropagateNan.NONE, _builder=None):
     y = semantic.to_tensor(y, _builder)
     x = _promote_bfloat16_to_float32(x, _builder=_builder)
     y = _promote_bfloat16_to_float32(y, _builder=_builder)
-    propagate_nan = _constexpr_to_value(propagate_nan)
+    propagate_nan = _unwrap_if_constexpr(propagate_nan)
     return semantic.maximum(x, y, propagate_nan, _builder)
 
 
@@ -2436,7 +2432,7 @@ def clamp(x, min, max, propagate_nan: constexpr = PropagateNan.NONE, _builder=No
     min = _promote_bfloat16_to_float32(min, _builder=_builder)
     max = _promote_bfloat16_to_float32(max, _builder=_builder)
 
-    propagate_nan = _constexpr_to_value(propagate_nan)
+    propagate_nan = _unwrap_if_constexpr(propagate_nan)
 
     return semantic.clamp(x, min, max, propagate_nan, _builder)
 
@@ -2522,8 +2518,8 @@ def reduce(input, axis, combine_fn, keep_dims=False, _builder=None, _generator=N
             t = expand_dims(t, 0, _builder=_builder)
         return t
 
-    axis = _constexpr_to_value(axis)
-    keep_dims = _constexpr_to_value(keep_dims)
+    axis = _unwrap_if_constexpr(axis)
+    keep_dims = _unwrap_if_constexpr(keep_dims)
     if axis is not None:
         axis = _wrap_axis(axis, len(input[0].shape))
     ret = semantic.reduction(input, axis, make_combine_region, _builder)
@@ -2547,7 +2543,7 @@ def _promote_bfloat16_to_float32(t, _builder=None):
 
 @builtin
 def _reduce_with_indices(input, axis, combine_fn, keep_dims=False, _builder=None, _generator=None):
-    axis = _constexpr_to_value(axis)
+    axis = _unwrap_if_constexpr(axis)
     n = input.shape[axis]
     index = arange(0, n, _builder=_builder)
 
@@ -2616,7 +2612,7 @@ def associative_scan(input, axis, combine_fn, reverse=False, _builder=None, _gen
                 handles = [r.handle for r in results]
             _builder.create_scan_ret(*handles)
 
-    axis = _constexpr_to_value(axis)
+    axis = _unwrap_if_constexpr(axis)
     if axis is not None:
         axis = _wrap_axis(axis, len(input[0].shape))
     return semantic.associative_scan(input, axis, make_combine_region, reverse, _builder)
@@ -2633,7 +2629,7 @@ def histogram(input, num_bins, _builder=None, _generator=None):
     :type num_bins: int
 
     """
-    num_bins = _constexpr_to_value(num_bins)
+    num_bins = _unwrap_if_constexpr(num_bins)
     return semantic.histogram(input, num_bins, _builder)
 
 
@@ -2650,7 +2646,7 @@ def gather(src, index, axis, _builder=None):
     :type axis: int
 
     """
-    axis = _constexpr_to_value(axis)
+    axis = _unwrap_if_constexpr(axis)
     return semantic.gather(src, index, axis, _builder)
 
 
@@ -2796,7 +2792,7 @@ def device_print(prefix, *args, hex=False, _builder=None):
     :param hex: print all values as hex instead of decimal
     '''
     import string
-    prefix = _constexpr_to_value(prefix)
+    prefix = _unwrap_if_constexpr(prefix)
     assert isinstance(prefix, str), f"{prefix} is not string"
     b_ascii = True
     for ch in prefix:
@@ -2829,7 +2825,7 @@ def device_assert(cond, msg="", _builder=None):
     :param cond: the condition to assert. This is required to be a boolean tensor.
     :param msg: the message to print if the assertion fails. This is required to be a string literal.
     '''
-    msg = _constexpr_to_value(msg)
+    msg = _unwrap_if_constexpr(msg)
     return semantic.device_assert(semantic.to_tensor(cond, _builder), msg, _builder)
 
 
@@ -2923,10 +2919,10 @@ def inline_asm_elementwise(asm: str, constraints: str, args: Sequence, dtype: Un
         :param _builder: the builder
         :return: one tensor or a tuple of tensors of the given dtypes
     '''
-    asm = _constexpr_to_value(asm)
-    constraints = _constexpr_to_value(constraints)
-    pack = _constexpr_to_value(pack)
-    is_pure = _constexpr_to_value(is_pure)
+    asm = _unwrap_if_constexpr(asm)
+    constraints = _unwrap_if_constexpr(constraints)
+    pack = _unwrap_if_constexpr(pack)
+    is_pure = _unwrap_if_constexpr(is_pure)
 
     # Wrap `dtype` in a tuple if it's not already.
     try:
