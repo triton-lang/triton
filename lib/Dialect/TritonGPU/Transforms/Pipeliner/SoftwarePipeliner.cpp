@@ -193,7 +193,8 @@ static void expandLoops(ModuleOp moduleOp) {
       mlir::triton::peelLoopEpilogue(forOp, processPeeledEpilogueOp);
     }
   }
-
+  assert(moduleOp.getOps<triton::gpu::PredicateStageOp>().empty() &&
+         "PredicateStageOp should be resolved after the pipeline expansion");
   resolveMaskOp(moduleOp);
 }
 

@@ -1,37 +1,8 @@
-#include "mlir/Dialect/SCF/IR/SCF.h"
-#include "mlir/IR/Dominance.h"
-#include "mlir/Pass/Pass.h"
-#include "mlir/Transforms/CSE.h"
-#include "mlir/Transforms/GreedyPatternRewriteDriver.h"
-#include "llvm/ADT/EquivalenceClasses.h"
-
 #include "triton/Dialect/Triton/Transforms/LoopPeeling.h"
+#include "mlir/Dialect/SCF/IR/SCF.h"
+#include "mlir/Pass/Pass.h"
 
 using namespace mlir;
-
-namespace {
-// UTILS
-
-/// Clone `op` and call `callback` on the cloned op's operands as well as any
-/// operands of nested ops that:
-/// 1) aren't defined within the new op or
-/// 2) are block arguments.
-static Operation *
-cloneAndUpdateOperands(RewriterBase &rewriter, Operation *op,
-                       function_ref<void(OpOperand *newOperand)> callback) {
-  Operation *clone = rewriter.clone(*op);
-  clone->walk<WalkOrder::PreOrder>([&](Operation *nested) {
-    // 'clone' itself will be visited first.
-    for (OpOperand &operand : nested->getOpOperands()) {
-      Operation *def = operand.get().getDefiningOp();
-      if ((def && !clone->isAncestor(def)) || isa<BlockArgument>(operand.get()))
-        callback(&operand);
-    }
-  });
-  return clone;
-}
-
-} // namespace
 
 namespace mlir {
 namespace triton {
@@ -49,26 +20,10 @@ void peelLoopEpilogue(
   Value lowerBound = forOp.getLowerBound();
   Value upperBound = forOp.getUpperBound();
   Value step = forOp.getStep();
-
-  // Compute new upper bound for the main loop: newUpperBound = upperBound -
-  // step
   Value newUpperBound = rewriter.create<arith::SubIOp>(loc, upperBound, step);
-
   forOp.getUpperBoundMutable().assign(newUpperBound);
+
   rewriter.setInsertionPointAfter(forOp);
-
-  // We are going to execute the peeled iteration if the original lower bound is
-  // less than the original upper bound
-  auto lastIterPred = rewriter.create<arith::CmpIOp>(
-      loc, arith::CmpIPredicate::slt, lowerBound, upperBound);
-
-  // Create an if op to execute the peeled iteration
-  OpBuilder::InsertionGuard guard(rewriter);
-  auto ifOp = rewriter.create<scf::IfOp>(loc, forOp.getResultTypes(),
-                                         lastIterPred, /*hasElse=*/true);
-  rewriter.setInsertionPointToStart(&ifOp.getElseRegion().front());
-  rewriter.create<scf::YieldOp>(loc, forOp.getResults());
-  rewriter.setInsertionPointToStart(&ifOp.getThenRegion().front());
 
   // Last iter induction variable value
   // lastIV = lb + floor( (ub – lb – 1) / s ) * s
@@ -79,56 +34,38 @@ void peelLoopEpilogue(
   Value delta = rewriter.create<arith::MulIOp>(loc, itersM1, step);
   Value lastIV = rewriter.create<arith::AddIOp>(loc, delta, lowerBound);
 
-  llvm::DenseMap<Value, Value> mapping;
-  for (auto [arg, operand] :
-       llvm::zip(forOp.getRegionIterArgs(), forOp.getResults())) {
-    mapping[arg] = operand;
-  }
-  mapping[forOp.getInductionVar()] = lastIV;
+  auto cond = rewriter.create<arith::CmpIOp>(loc, arith::CmpIPredicate::slt,
+                                             lastIV, upperBound);
 
-  SmallVector<Value> peeledResults = forOp.getResults();
-  Operation *lastOp = nullptr;
-  for (Operation &op : forOp.getBody()->without_terminator()) {
-    Operation *newOp =
-        cloneAndUpdateOperands(rewriter, &op, [&](OpOperand *newOperand) {
-          if (mapping.count(newOperand->get())) {
-            newOperand->set(mapping[newOperand->get()]);
-          }
-        });
-    if (processPeeledOp) {
-      newOp = processPeeledOp(rewriter, newOp, /*isEpilogue=*/true);
-      loopBodyOps.push_back(&op);
-    }
-
-    lastOp = newOp;
-    for (auto [result, oldResult] :
-         llvm::zip(newOp->getResults(), op.getResults())) {
-      mapping[oldResult] = result;
-
-      for (OpOperand &yieldOperand :
-           forOp.getBody()->getTerminator()->getOpOperands()) {
-        if (yieldOperand.get() != oldResult) {
-          continue;
-        }
-        peeledResults[yieldOperand.getOperandNumber()] = result;
-      }
-    }
-  }
-
-  rewriter.create<scf::YieldOp>(loc, peeledResults);
-
-  DominanceInfo domInfo(forOp->getParentOfType<ModuleOp>());
+  // Create an if op to execute the peeled iteration
+  IRMapping map;
+  map.map(forOp.getRegionIterArgs(), forOp.getResults());
+  map.map(forOp.getInductionVar(), lastIV);
+  auto ifOp = rewriter.create<scf::IfOp>(loc, forOp.getResultTypes(), cond,
+                                         /*hasElse=*/true);
+  ifOp.getThenRegion().front().erase();
+  forOp.getBodyRegion().cloneInto(&ifOp.getThenRegion(), map);
+  rewriter.setInsertionPointToStart(&ifOp.getElseRegion().front());
+  rewriter.create<scf::YieldOp>(loc, forOp.getResults());
 
   forOp->replaceUsesWithIf(ifOp, [&](OpOperand &operand) {
-    return domInfo.properlyDominates(ifOp, operand.getOwner(),
-                                     /*enclosingOpOK=*/false);
+    return !ifOp->isAncestor(operand.getOwner());
   });
 
-  for (auto op : loopBodyOps) {
-    Operation *newOp = processPeeledOp(rewriter, op, /*isEpilogue=*/false);
-    if (newOp && newOp != op) {
-      op->replaceAllUsesWith(newOp);
-      op->erase();
+  if (processPeeledOp) {
+    for (auto &op :
+         llvm::make_early_inc_range(forOp.getBody()->without_terminator())) {
+      Operation *newOp = processPeeledOp(rewriter, &op, /*isEpilogue=*/false);
+      if (newOp && newOp != &op) {
+        op.replaceAllUsesWith(newOp);
+      }
+    }
+    for (auto &op : llvm::make_early_inc_range(
+             ifOp.getThenRegion().front().without_terminator())) {
+      Operation *newOp = processPeeledOp(rewriter, &op, /*isEpilogue=*/true);
+      if (newOp && newOp != &op) {
+        op.replaceAllUsesWith(newOp);
+      }
     }
   }
 }
