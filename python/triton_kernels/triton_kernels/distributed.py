@@ -32,11 +32,16 @@ def cleanup():
         pass
 
 
-def broadcast(x: torch.Tensor, src: int = 0, group: list = None) -> torch.Tensor:
+def broadcast(x: torch.Tensor, src: int = 0, groups: list = None, group_idx: int = None) -> torch.Tensor:
     if _is_distributed_launch():
         if x.dtype not in [torch.float16, torch.bfloat16, torch.float32]:
             x = x.to(torch.float16)
-        group = dist.new_group(group)
+        group = None
+        if groups:
+            for group in groups:
+                dist.new_group(group)
+            dist.barrier()
+            group = groups[group_idx]
         dist.broadcast(x, src=src, group=group)
         return x
     else:

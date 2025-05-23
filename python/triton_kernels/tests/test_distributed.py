@@ -128,6 +128,7 @@ def quantize(w, dtype, dev, **opt):
 def gather_ep(rank, world_size, param, TP, EP):
     gathered = None
     group = dist.new_group(list(range(0, world_size, TP)))
+    dist.barrier()
     if rank % TP == 0:
         gathered = []
         if rank == 0:
@@ -166,6 +167,7 @@ def distributed_run(rank, world_size, batch, dim1, dim2, n_expts_tot, n_expts_ac
     b2 = torch.randn((n_expts_tot // EP, dim1), device=dev)
     ep_indx = rank // TP
     groups = [dist.new_group(list(range(ep * TP, (ep + 1) * TP))) for ep in range(EP)]
+    dist.barrier()
     group = groups[ep_indx]
     dist.broadcast(b2, src=ep_indx * TP, group=group)
 
