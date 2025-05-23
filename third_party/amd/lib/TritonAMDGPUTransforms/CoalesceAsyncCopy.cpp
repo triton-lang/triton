@@ -1,19 +1,23 @@
 #include "TritonAMDGPUToLLVM/TargetUtils.h"
+#include "TritonAMDGPUTransforms/Passes.h"
 #include "amd/lib/TritonAMDGPUToLLVM/Utility.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 #include "triton/Analysis/AxisInfo.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
-
-#define GEN_PASS_CLASSES
-#include "TritonAMDGPUTransforms/Passes.h"
 
 #undef DEBUG_TYPE
 #define DEBUG_TYPE "tritonamdgpu-coalesce-async-copy"
 #define DBGS() (llvm::dbgs() << "[" DEBUG_TYPE "]: ")
 #define LDBG(X) LLVM_DEBUG(DBGS() << X << "\n")
 
-using namespace mlir;
 namespace ttg = triton::gpu;
+
+namespace mlir {
+
+#define GEN_PASS_DEF_TRITONAMDGPUCOALESCEASYNCCOPY
+#include "TritonAMDGPUTransforms/Passes.h.inc"
+
+namespace {
 
 // On gfx9 global and buffer loads directly to shared memory need to write
 // coalesced. This pattern converts the layout of the src, mask and other to
@@ -136,13 +140,14 @@ private:
   const DenseMap<ttg::AsyncCopyGlobalToLocalOp, unsigned> &asyncCopyContiguity;
 };
 
+} // anonymous namespace
+
 class TritonAMDGPUCoalesceAsyncCopyPass
-    : public TritonAMDGPUCoalesceAsyncCopyBase<
+    : public impl::TritonAMDGPUCoalesceAsyncCopyBase<
           TritonAMDGPUCoalesceAsyncCopyPass> {
 public:
-  TritonAMDGPUCoalesceAsyncCopyPass(StringRef archGenName) {
-    this->archGenerationName = archGenName.str();
-  }
+  using impl::TritonAMDGPUCoalesceAsyncCopyBase<
+      TritonAMDGPUCoalesceAsyncCopyPass>::TritonAMDGPUCoalesceAsyncCopyBase;
 
   void runOnOperation() override {
     ModuleOp m = getOperation();
@@ -185,8 +190,4 @@ public:
   }
 };
 
-std::unique_ptr<Pass>
-mlir::createTritonAMDGPUCoalesceAsyncCopyPass(std::string archGenName) {
-  return std::make_unique<TritonAMDGPUCoalesceAsyncCopyPass>(
-      std::move(archGenName));
-}
+} // namespace mlir
