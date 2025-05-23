@@ -13,7 +13,7 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 1 : i32} {
 // CHECK: %[[ITERS_M1:.*]] = arith.divsi %[[RANGE_M1]], %[[STEP]]
 // CHECK: %[[DELTA:.*]] = arith.muli %[[ITERS_M1]], %[[STEP]]
 // CHECK: %[[LAST_IV:.*]] = arith.addi %[[DELTA]], %[[LB]]
-// CHECK: %[[COND:.*]] = arith.cmpi slt, %[[LAST_IV]], %[[UB]]
+// CHECK: %[[COND:.*]] = arith.cmpi slt, %[[LB]], %[[UB]]
 // CHECK: %[[IF:.*]] = scf.if %[[COND]]
 // CHECK:   %[[DEF:.*]] = "def"(%[[LAST_IV]]) : (i32) -> f32
 // CHECK:   %[[RES:.*]] = arith.addf %[[FOR]], %[[DEF]] : f32
@@ -48,7 +48,7 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 1 : i32} {
 // CHECK: %[[ITERS_M1:.*]] = arith.divsi %[[RANGE_M1]], %[[STEP]]
 // CHECK: %[[DELTA:.*]] = arith.muli %[[ITERS_M1]], %[[STEP]]
 // CHECK: %[[LAST_IV:.*]] = arith.addi %[[DELTA]], %[[LB]]
-// CHECK: %[[COND:.*]] = arith.cmpi slt, %[[LAST_IV]], %[[UB]]
+// CHECK: %[[COND:.*]] = arith.cmpi slt, %[[LB]], %[[UB]]
 // CHECK: %[[IF:.*]] = scf.if %[[COND]]
 // CHECK:   %[[DEF:.*]] = "def"(%[[LAST_IV]]) : (i32) -> f32
 // CHECK:   %[[RES:.*]] = arith.addf %[[FOR]], %[[DEF]] : f32

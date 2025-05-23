@@ -27,7 +27,7 @@ void peelLoopEpilogue(
   Value lastIV = getLastInductionValue(rewriter, forOp);
 
   auto cond = rewriter.create<arith::CmpIOp>(loc, arith::CmpIPredicate::slt,
-                                             lastIV, upperBound);
+                                             lowerBound, upperBound);
 
   // Create an if op to execute the peeled iteration
   IRMapping map;
