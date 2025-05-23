@@ -259,16 +259,13 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 16 : i32, ttg.sha
     // Each thread needs to load 1 element and we load 1 (sizePerThread) per global.load.lds
 
     // CHECK: llvm.getelementptr
-    // CHECK: %[[aux_ca:.*]] = llvm.mlir.constant(0 : i32) : i32
-    // CHECK: rocdl.global.load.lds {{.*}}, {{.*}}, {{.*}}, {{.*}}, %[[aux_ca]]
+    // CHECK: rocdl.global.load.lds {{.*}}, {{.*}}, 4, 0, 0
     %2 = ttg.async_copy_global_to_local %1, %arg2 cacheModifier = ca: tensor<32x32x!tt.ptr<f32>, #blocked> -> <32x32xf32, #shared, #smem, mutable>
     // CHECK: llvm.getelementptr
-    // CHECK: %[[aux_cg:.*]] = llvm.mlir.constant(3 : i32) : i32
-    // CHECK: rocdl.global.load.lds {{.*}}, {{.*}}, {{.*}}, {{.*}}, %[[aux_cg]]
+    // CHECK: rocdl.global.load.lds {{.*}}, {{.*}}, 4, 0, 3
     %3 = ttg.async_copy_global_to_local %1, %arg2 cacheModifier = cg: tensor<32x32x!tt.ptr<f32>, #blocked> -> <32x32xf32, #shared, #smem, mutable>
     // CHECK: llvm.getelementptr
-    // CHECK: %[[aux_cv:.*]] = llvm.mlir.constant(17 : i32) : i32
-    // CHECK: rocdl.global.load.lds {{.*}}, {{.*}}, {{.*}}, {{.*}}, %[[aux_cv]]
+    // CHECK: rocdl.global.load.lds {{.*}}, {{.*}}, 4, 0, 17
     %4 = ttg.async_copy_global_to_local %1, %arg2 cacheModifier = cv: tensor<32x32x!tt.ptr<f32>, #blocked> -> <32x32xf32, #shared, #smem, mutable>
     tt.return
   }
