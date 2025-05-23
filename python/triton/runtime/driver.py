@@ -51,7 +51,7 @@ class DriverConfig:
 
     def __init__(self) -> None:
         self.default: LazyProxy[DriverBase] = LazyProxy(_create_driver)
-        self.active: Union[LazyProxy[DriverBase] | DriverBase] = self.default
+        self.active: Union[LazyProxy[DriverBase], DriverBase] = self.default
 
     def set_active(self, driver: DriverBase) -> None:
         self.active = driver
