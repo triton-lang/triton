@@ -16,12 +16,13 @@ using namespace mlir::triton;
 using namespace mlir::triton::gpu;
 using namespace mlir::triton::NVIDIA;
 
-LogicalResult lowerDistributedToSharedStmatrix(
+LogicalResult lowerLdStMatrix(
     Location loc, RankedTensorType tensorTy, MemDescType memDescType,
     bool transpose, Value &src, // Input for stmatrix, output for ldmatrix
     Value smemBase, Type llvmElemTy, ConversionPatternRewriter &rewriter,
     const TargetInfo &targetInfo, const LLVMTypeConverter *typeConverter,
     std::pair<size_t, Type> *const llvmOpCount = nullptr) {
+  // Lower load via ldmatrix, store via stmatrix
 
   bool isStore = src != Value();
   if (isStore && !targetInfo.supportStMatrix())
@@ -266,10 +267,9 @@ public:
     bool lowered = false;
     Value values;
     for (bool transpose : {false, true}) {
-      lowered = lowerDistributedToSharedStmatrix(op.getLoc(), dstTy,
-                                                 memDescType, transpose, values,
-                                                 smemBase, llvmElemTy, rewriter,
-                                                 targetInfo, getTypeConverter())
+      lowered = lowerLdStMatrix(op.getLoc(), dstTy, memDescType, transpose,
+                                values, smemBase, llvmElemTy, rewriter,
+                                targetInfo, getTypeConverter())
                     .succeeded();
       if (lowered) {
         break;
@@ -309,9 +309,9 @@ struct LocalAllocOpConversion
     bool lowered = false;
     auto src = adaptor.getSrc();
     for (bool transpose : {false, true}) {
-      lowered = lowerDistributedToSharedStmatrix(
-                    op.getLoc(), srcTy, memDescType, transpose, src, smemBase,
-                    llvmElemTy, rewriter, targetInfo, getTypeConverter())
+      lowered = lowerLdStMatrix(op.getLoc(), srcTy, memDescType, transpose, src,
+                                smemBase, llvmElemTy, rewriter, targetInfo,
+                                getTypeConverter())
                     .succeeded();
       if (lowered) {
         break;
@@ -354,10 +354,10 @@ struct LocalStoreOpConversion
     bool lowered = false;
     auto src = adaptor.getSrc();
     for (bool transpose : {false, true}) {
-      lowered = lowerDistributedToSharedStmatrix(
-                    op.getLoc(), op.getSrc().getType(), op.getDst().getType(),
-                    transpose, src, smemObj.getBase(), llvmElemTy, rewriter,
-                    targetInfo, getTypeConverter())
+      lowered = lowerLdStMatrix(op.getLoc(), op.getSrc().getType(),
+                                op.getDst().getType(), transpose, src,
+                                smemObj.getBase(), llvmElemTy, rewriter,
+                                targetInfo, getTypeConverter())
                     .succeeded();
       if (lowered) {
         break;
