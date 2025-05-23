@@ -52,8 +52,8 @@ static Operation *wrapInMaskOp(RewriterBase &rewriter, Operation *op,
   rewriter.createBlock(&mask->getRegion(0));
   rewriter.setInsertionPointToStart(&mask->getRegion(0).front());
   auto newOp = rewriter.clone(*op);
-  newOp->replaceAllUsesWith(mask->getResults());
   rewriter.create<MaskReturnOp>(op->getLoc(), newOp->getResults());
+  op->replaceAllUsesWith(mask->getResults());
   rewriter.eraseOp(op);
   return mask;
 }
