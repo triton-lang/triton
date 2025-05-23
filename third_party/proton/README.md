@@ -144,6 +144,21 @@ def kernel(...):
 
 Advanced users can instrument either the `ttir` or `ttgir` intermediate representations for even finer-grained measurement. The relevant IR instructions are `proton.record start` and `proton.record end`. This can be combined with the environment variable `TRITON_KERNEL_OVERRIDE=1` for custom kernel overrides. For detailed steps, refer to the Triton [documentation](https://github.com/triton-lang/triton?tab=readme-ov-file#tips-for-hacking) under the **Kernel Override Steps** section.
 
+#### Merging profiles for postmortem analysis
+
+We could use concurrent sessions to profile the same code region using different backends, and then merge the profiles using hatchet for postmortem analysis. In the following example, the `cupti` backend obtains different metrics than the `instrumentation` backend, and thus it makes sense to merge them using `GraphFrame.add` directly. Otherwise, if there are duplicate metrics, we could customize the `merge` logic or manipulate the dataframes.
+
+```python
+
+import triton.profiler as proton
+
+proton.start(name="profile_name0", context="shadow", backend="cupti")
+proton.start(name="profile_name1", context="shadow", backend="instrumentation")
+
+...
+
+proton.finalize()
+```
 
 ### Hook
 
