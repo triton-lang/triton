@@ -76,10 +76,12 @@ LogicalResult ExtractSliceOp::verify() {
   if (srcTy.getRank() != resultTy.getRank()) {
     return emitError("result rank must be equal to source rank");
   }
-  if (srcTy.getRank() != 2) {
-    return emitError("currently only 2D tensors are supported");
+  if (srcTy.getRank() > 2) {
+    // restriction coming from the linear layout - i.e., m,n coordinates
+    return emitError("rank must be equal less or equal to 2");
   }
 
+  const auto rank = srcTy.getRank();
   auto srcShape = srcTy.getShape();
 
   // ExtractSlice only supports slicing where offsets and sizes are multiples of
@@ -87,12 +89,12 @@ LogicalResult ExtractSliceOp::verify() {
   // the original tensor.
 
   auto offsets = getStaticOffsets();
-  if (offsets.size() != 2) {
+  if (offsets.size() != rank) {
     return emitError("invalid offset shape ") << offsets;
   }
 
   SmallVector<int64_t, 2> sizes;
-  for (auto i = 0; i < 2; ++i) {
+  for (auto i = 0; i < rank; ++i) {
     auto resultDimSize = resultTy.getDimSize(i);
     auto srcDimSize = srcTy.getDimSize(i);
     if (resultDimSize == 0) {
@@ -114,22 +116,22 @@ LogicalResult ExtractSliceOp::verify() {
   }
 
   auto shapePerCTATile = mlir::triton::gpu::getShapePerCTATile(srcTy);
-  shapePerCTATile[0] =
-      std::min(static_cast<unsigned>(srcShape[0]), shapePerCTATile[0]);
-  shapePerCTATile[1] =
-      std::min(static_cast<unsigned>(srcShape[1]), shapePerCTATile[1]);
-  if (sizes[0] % shapePerCTATile[0] != 0 ||
-      sizes[1] % shapePerCTATile[1] != 0) {
-    return emitError() << "sizes [" << sizes
-                       << "] must be a multiple of shapePerCTATile ["
-                       << shapePerCTATile << "]";
+  for (size_t i = 0; i < shapePerCTATile.size(); ++i) {
+    shapePerCTATile[i] =
+        std::min(static_cast<unsigned>(srcShape[i]), shapePerCTATile[i]);
   }
 
-  if (offsets[0] % shapePerCTATile[0] != 0 ||
-      offsets[1] % shapePerCTATile[1] != 0) {
-    return emitError() << "offset [" << offsets
-                       << "] must be a multiple of shapePerCTATile ["
-                       << shapePerCTATile << "]";
+  for (size_t dim = 0; dim < rank; ++dim) {
+    if (sizes[dim] % shapePerCTATile[dim] != 0) {
+      return emitError() << "sizes [" << sizes
+                         << "] must be a multiple of shapePerCTATile ["
+                         << shapePerCTATile << "] (see dim=`" << dim << "`)";
+    }
+    if (offsets[dim] % shapePerCTATile[dim] != 0) {
+      return emitError() << "offset [" << offsets
+                         << "] must be a multiple of shapePerCTATile ["
+                         << shapePerCTATile << "] (see dim=`" << dim << "`)";
+    }
   }
 
   return success();
