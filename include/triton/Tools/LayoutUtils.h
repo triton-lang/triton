@@ -125,6 +125,11 @@ std::optional<ColumnAction> regPermForDivideLeft(const LinearLayout &A,
 // such that action.apply(A) has the broadcasted registers removed
 ColumnAction actionRemoveBroadcastedRegs(const LinearLayout &layout);
 
+// For a layout A with A.hasInDim(kReg), repeat the values so that they have
+// the same broadcasting as layout
+SmallVector<Value> broadcastAs(const SmallVector<Value> &values,
+                               const LinearLayout &layout);
+
 // Compute the supremum of two lists.
 // Error out if the supremum does not exist (e.g. [a, b] and [b, a]).
 // If the supremum is not unique, we return the first list first
