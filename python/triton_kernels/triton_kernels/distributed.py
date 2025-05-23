@@ -11,12 +11,12 @@ def _is_distributed_launch() -> bool:
     return int(os.environ.get("WORLD_SIZE", "1")) > 1
 
 
-def setup() -> Tuple[int, int]:
-    if _is_distributed_launch():
-        if not dist.is_initialized():
-            dist.init_process_group(backend="nccl")
-        world_size = dist.get_world_size()
+def setup(world_size: int = 1) -> Tuple[int, int]:
+    if world_size := _is_distributed_launch():
         local_rank = int(os.environ["LOCAL_RANK"])
+        if not dist.is_initialized():
+            dist.init_process_group(backend="nccl", world_size=world_size, device_id=torch.device(local_rank))
+        world_size = dist.get_world_size()
     else:
         world_size = 1
         local_rank = 0

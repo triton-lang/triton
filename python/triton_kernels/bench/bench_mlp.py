@@ -260,12 +260,13 @@ if __name__ == "__main__":
     batch_ranges_moe = [(128, 512, 32), (512, 32000, 128)]
     dense_dtypes = ["fp8", "fp8"]
     quantized_dtypes = ["fp8", "mx4"] if has_native_mx4 else ["bf16", "mx4"]
-    roofline_mlp(batch_ranges_dense, 8192, 8192, 1, 1, *dense_dtypes, TP=1, EP=1, name="dense")
-    roofline_mlp(batch_ranges_dense, 8192, 8192, 1, 1, *quantized_dtypes, TP=1, EP=1, name="dense")
-    roofline_mlp(batch_ranges_moe, 5120, 8192, 128, 4, *dense_dtypes, TP=1, EP=1, name="llama4-maverick")
-    roofline_mlp(batch_ranges_moe, 5120, 8192, 128, 4, *quantized_dtypes, TP=1, EP=1, name="llama4-maverick")
     if world_size > 1:
         roofline_mlp(batch_ranges_dense, 8192, 8192, 1, 1, *dense_dtypes, TP=4, EP=1, name="dense")
         roofline_mlp(batch_ranges_dense, 8192, 8192, 1, 1, *quantized_dtypes, TP=4, EP=1, name="dense")
         roofline_mlp(batch_ranges_moe, 5120, 8192, 128, 4, *dense_dtypes, TP=2, EP=2, name="llama4-maverick")
         roofline_mlp(batch_ranges_moe, 5120, 8192, 128, 4, *quantized_dtypes, TP=2, EP=2, name="llama4-maverick")
+    else:
+        roofline_mlp(batch_ranges_dense, 8192, 8192, 1, 1, *dense_dtypes, TP=1, EP=1, name="dense")
+        roofline_mlp(batch_ranges_dense, 8192, 8192, 1, 1, *quantized_dtypes, TP=1, EP=1, name="dense")
+        roofline_mlp(batch_ranges_moe, 5120, 8192, 128, 4, *dense_dtypes, TP=1, EP=1, name="llama4-maverick")
+        roofline_mlp(batch_ranges_moe, 5120, 8192, 128, 4, *quantized_dtypes, TP=1, EP=1, name="llama4-maverick")
