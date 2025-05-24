@@ -42,7 +42,8 @@ def _topk(X, stride_xm,  # inputs
           Yv, Yi, stride_ym,  # topk values/indices
           Bits, stride_rm: tl.constexpr, stride_rn: tl.constexpr, n_rows,  # bitmatrix
           n_expts_tot, S, BLOCK_S: tl.constexpr, s_blocks,  # thing to memset
-          BLOCK_M: tl.constexpr, N_EXPTS_PAD: tl.constexpr, N_EXPTS_ACT: tl.constexpr, BLOCK_N: tl.constexpr):
+          BLOCK_M: tl.constexpr, N_EXPTS_PAD: tl.constexpr, N_EXPTS_ACT: tl.constexpr, BLOCK_N: tl.constexpr,
+          APPLY_SOFTMAX: tl.constexpr):
 
     pid = tl.program_id(0)
 
@@ -71,7 +72,8 @@ def _topk(X, stride_xm,  # inputs
     y = tl.sort(y, dim=1)
     y_indices = y >> x_nbits
     y_values = (y & ((1 << x_nbits) - 1)).to(x_utype).to(x_dtype, bitcast=True)
-    y_values = tl.softmax(y_values.to(tl.float32), dim=1, keep_dims=True).to(x_dtype)
+    if APPLY_SOFTMAX:
+        y_values = tl.softmax(y_values.to(tl.float32), dim=1, keep_dims=True).to(x_dtype)
 
     # write back
     offs_y_n = tl.arange(0, N_EXPTS_ACT)
