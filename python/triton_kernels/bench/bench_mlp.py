@@ -268,7 +268,7 @@ if __name__ == "__main__":
         batch_ranges_moe = [(128, 512, 32), (512, 32000, 128)]
         argparse = argparse.ArgumentParser()
         argparse.add_argument("tp", type=int, default=1)
-        argparse.add_argument("ep", type=int, default=1) 
+        argparse.add_argument("ep", type=int, default=1)
         argparse.add_argument("name", type=str, choices=["dense", "llama4-maverick"])
         argparse.add_argument("quantized", type=bool, default=False)
         args = argparse.parse_args()
