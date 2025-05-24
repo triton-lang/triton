@@ -1,3 +1,4 @@
+#include "TritonAMDGPUTransforms/Passes.h"
 #include "mlir/Analysis/SliceAnalysis.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/BuiltinAttributes.h"
@@ -10,8 +11,14 @@
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "llvm/ADT/STLExtras.h"
 
-using namespace mlir;
 namespace ttg = mlir::triton::gpu;
+
+namespace mlir {
+
+#define GEN_PASS_DEF_TRITONAMDGPUREORDERINSTRUCTIONS
+#include "TritonAMDGPUTransforms/Passes.h.inc"
+
+namespace {
 
 //===----------------------------------------------------------------------===//
 // Utility functions
@@ -324,16 +331,14 @@ static void sinkSecondLoad(scf::ForOp forOp) {
     ldBOp->moveBefore(dotOp);
 }
 
+} // anonymous namespace
+
 //===----------------------------------------------------------------------===//
 // Pass definition
 //===----------------------------------------------------------------------===//
 
-#define GEN_PASS_CLASSES
-#include "TritonAMDGPUTransforms/Passes.h"
-
-namespace {
 struct TritonAMDGPUReorderInstructionsPass
-    : public TritonAMDGPUReorderInstructionsBase<
+    : public impl::TritonAMDGPUReorderInstructionsBase<
           TritonAMDGPUReorderInstructionsPass> {
   void runOnOperation() override {
     ModuleOp m = getOperation();
@@ -358,8 +363,5 @@ struct TritonAMDGPUReorderInstructionsPass
     }
   }
 };
-} // namespace
 
-std::unique_ptr<Pass> mlir::createTritonAMDGPUReorderInstructionsPass() {
-  return std::make_unique<TritonAMDGPUReorderInstructionsPass>();
-}
+} // namespace mlir

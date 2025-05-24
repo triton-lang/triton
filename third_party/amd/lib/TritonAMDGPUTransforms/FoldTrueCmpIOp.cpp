@@ -1,19 +1,17 @@
-#include "mlir/Dialect/LLVMIR/LLVMDialect.h"
-#include "mlir/Pass/Pass.h"
+#include "TritonAMDGPUTransforms/Passes.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 #include "third_party/amd/include/Analysis/RangeAnalysis.h"
 #include "triton/Analysis/Utility.h"
 
-#define GEN_PASS_CLASSES
-#include "TritonAMDGPUTransforms/Passes.h"
-
-using namespace mlir;
 using namespace mlir::triton;
 
-namespace {
+namespace mlir {
+
+#define GEN_PASS_DEF_TRITONAMDFOLDTRUECMPI
+#include "TritonAMDGPUTransforms/Passes.h.inc"
 
 struct TritonAMDFoldTrueCmpIOpPass
-    : TritonAMDFoldTrueCmpIBase<TritonAMDFoldTrueCmpIOpPass> {
+    : impl::TritonAMDFoldTrueCmpIBase<TritonAMDFoldTrueCmpIOpPass> {
 
   void runOnOperation() override {
     DenseMap<Value, SetVector<Operation *>> assumptions =
@@ -32,8 +30,4 @@ struct TritonAMDFoldTrueCmpIOpPass
   }
 };
 
-} // namespace
-
-std::unique_ptr<Pass> mlir::createTritonAMDGPUFoldTrueCmpIPass() {
-  return std::make_unique<TritonAMDFoldTrueCmpIOpPass>();
-}
+} // namespace mlir

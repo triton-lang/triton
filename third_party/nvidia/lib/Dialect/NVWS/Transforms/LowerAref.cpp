@@ -22,7 +22,6 @@
  */
 
 #include "mlir/Dialect/Arith/IR/Arith.h"
-#include "mlir/Dialect/LLVMIR/NVVMDialect.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/AttrTypeSubElements.h"
 #include "mlir/IR/BuiltinOps.h"
@@ -36,29 +35,25 @@
 #include "mlir/Transforms/Passes.h"
 #include "nvidia/include/Dialect/NVWS/IR/Dialect.h"
 #include "nvidia/include/Dialect/NVWS/Transforms/Passes.h"
-#include "triton/Dialect/Triton/IR/Dialect.h"
-#include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
-#include "llvm/ADT/STLExtras.h"
-#include "llvm/Support/Casting.h"
 
-#include <memory>
-
-#define GEN_PASS_CLASSES
-#include "nvidia/include/Dialect/NVWS/Transforms/Passes.h.inc"
+using namespace mlir::triton;
+using namespace mlir::triton::gpu;
+using namespace mlir::triton::nvidia_gpu;
+using namespace mlir::triton::nvws;
 
 #define DEBUG_TYPE "nvws-lower-aref"
 #define DBGS() (llvm::dbgs() << "[" DEBUG_TYPE "]: ")
 #define LDBG(X) LLVM_DEBUG(DBGS() << X << "\n")
 
-namespace {
+namespace mlir {
+namespace triton {
 
-using namespace mlir;
-using namespace triton;
-using namespace triton::gpu;
-using namespace triton::nvidia_gpu;
-using namespace triton::nvws;
+#define GEN_PASS_DEF_NVWSLOWERAREF
+#include "nvidia/include/Dialect/NVWS/Transforms/Passes.h.inc"
+
+namespace {
 
 struct ArefUseNode {
   ArefUseNode *parent;
@@ -349,7 +344,9 @@ static ArefUseGraph analyzeArefUseDef(ModuleOp m) {
   return graph;
 }
 
-class NVWSLowerAref : public NVWSLowerArefBase<NVWSLowerAref> {
+} // anonymous namespace
+
+class NVWSLowerAref : public impl::NVWSLowerArefBase<NVWSLowerAref> {
 public:
   void runOnOperation() override {
     MLIRContext *context = &getContext();
@@ -379,8 +376,5 @@ public:
   }
 };
 
-} // namespace
-
-std::unique_ptr<Pass> mlir::createNVWSLowerArefPass() {
-  return std::make_unique<NVWSLowerAref>();
-}
+} // namespace triton
+} // namespace mlir

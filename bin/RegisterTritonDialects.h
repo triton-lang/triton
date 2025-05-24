@@ -85,7 +85,7 @@ inline void registerTritonDialects(mlir::DialectRegistry &registry) {
   mlir::registerTritonAMDFoldTrueCmpI();
 
   // NVWS passes
-  mlir::registerNVWSTransformsPasses();
+  mlir::triton::registerNVWSTransformsPasses();
 
   // NVGPU transform passes
   mlir::registerNVHopperTransformsPasses();
