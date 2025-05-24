@@ -4,6 +4,7 @@ import matplotlib.pyplot as plt
 import json
 import triton.profiler as proton
 import torch
+import argparse
 import triton_kernels
 import triton_kernels.swiglu
 from triton_kernels.numerics_details.mxfp import downcast_to_mxfp, SwizzlingType
@@ -185,6 +186,10 @@ def bench_mlp(batch, dim1, dim2, n_expts_tot, n_expts_act, x_dtype, w_dtype, TP,
         x = triton_dist.reduce_scatter(x, token_mask=token_mask, dim=0)
     proton.finalize()
 
+    # -- cleanup --
+    torch.cuda.ipc_collect()
+    torch.cuda.empty_cache()
+
     # -- analyze --
     with open(f"{fpath}") as fd:
         data = json.load(fd)
@@ -256,16 +261,23 @@ if __name__ == "__main__":
     rank, world_size = triton_dist.setup()
     if SPECS is None:
         print("Current GPU has no specs provided, utilization is N/A")
-    batch_ranges_dense = [(1024, 32768, 1024)]
-    batch_ranges_moe = [(128, 512, 32), (512, 32000, 128)]
     dense_dtypes = ["fp8", "fp8"]
     quantized_dtypes = ["fp8", "mx4"] if has_native_mx4 else ["bf16", "mx4"]
     if world_size > 1:
-        roofline_mlp(batch_ranges_dense, 8192, 8192, 1, 1, *dense_dtypes, TP=4, EP=1, name="dense")
-        roofline_mlp(batch_ranges_dense, 8192, 8192, 1, 1, *quantized_dtypes, TP=4, EP=1, name="dense")
-        roofline_mlp(batch_ranges_moe, 5120, 8192, 128, 4, *dense_dtypes, TP=2, EP=2, name="llama4-maverick")
-        roofline_mlp(batch_ranges_moe, 5120, 8192, 128, 4, *quantized_dtypes, TP=2, EP=2, name="llama4-maverick")
+        batch_ranges_dense = [(1024, 32768, 1024)]
+        batch_ranges_moe = [(128, 512, 32), (512, 32000, 128)]
+        argparse = argparse.ArgumentParser()
+        argparse.add_argument("tp", type=int, default=1)
+        argparse.add_argument("ep", type=int, default=1) 
+        argparse.add_argument("name", type=str, choices=["dense", "llama4-maverick"])
+        argparse.add_argument("quantized", type=bool, default=False)
+        args = argparse.parse_args()
+        ranges = batch_ranges_dense if args.name == "dense" else batch_ranges_moe
+        dtypes = dense_dtypes if args.quantized else quantized_dtypes
+        roofline_mlp(ranges, 8192, 8192, 1, 1, *dtypes, TP=args.tp, EP=args.ep, name=args.name)
     else:
+        batch_ranges_dense = [(1024, 32768, 1024)]
+        batch_ranges_moe = [(128, 512, 32), (512, 32000, 128)]
         roofline_mlp(batch_ranges_dense, 8192, 8192, 1, 1, *dense_dtypes, TP=1, EP=1, name="dense")
         roofline_mlp(batch_ranges_dense, 8192, 8192, 1, 1, *quantized_dtypes, TP=1, EP=1, name="dense")
         roofline_mlp(batch_ranges_moe, 5120, 8192, 128, 4, *dense_dtypes, TP=1, EP=1, name="llama4-maverick")
