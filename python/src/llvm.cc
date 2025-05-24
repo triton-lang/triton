@@ -288,11 +288,23 @@ void init_triton_llvm(py::module &&m) {
     mod->setDataLayout(machine->createDataLayout());
   });
 
+  m.def("to_string", [](llvm::Module *mod) {
+    std::string str;
+    llvm::raw_string_ostream os(str);
+    os << *mod;
+    return os.str();
+  });
+
   m.def(
       "optimize_module",
       [](llvm::Module *mod, const llvm::OptimizationLevel &opt,
          std::string arch, std::string features, std::vector<std::string> flags,
          bool enable_fp_fusion) {
+        //mod->dump();
+        for (auto &f : mod->functions()) {
+          if (!f.isDeclaration())
+            llvm::dbgs() << "\n\n ------ LLVM kernel name: " << f.getName() << " ----- \n\n\n\n";
+        }
         if (mlir::triton::tools::getBoolEnv("DISABLE_LLVM_OPT"))
           return;
         // Check to see if we are passing a list of flags to disable

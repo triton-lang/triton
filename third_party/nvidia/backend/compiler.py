@@ -296,12 +296,6 @@ class CUDABackend(BaseBackend):
 
     def make_llir(self, src, metadata, options, capability):
         mod = src
-
-        if os.getenv("TRITON_HACK_PRINT", "0") == "1":
-            pm0 = ir.pass_manager(mod.context)
-            passes.common.print_ir(pm0)
-            pm0.run(mod)
-
         ptx_version = get_ptx_version_from_options(options, self.target.arch)
 
         # TritonGPU -> LLVM-IR (MLIR)
