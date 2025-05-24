@@ -355,6 +355,13 @@ bool DotScaledOp::verifyOutputDims() {
   return true;
 }
 
+//-- DotSparseOp --
+bool DotSparseOp::verifyDims() {
+  auto aShape = this->getA().getType().getShape();
+  auto bShape = this->getB().getType().getShape();
+  return aShape[aShape.size() - 1] * 2 == bShape[aShape.size() - 2];
+}
+
 //-- MakeRangeOp --
 OpFoldResult MakeRangeOp::fold(FoldAdaptor adaptor) {
   // make_range(start, start + 1) -> constant(start)
