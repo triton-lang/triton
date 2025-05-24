@@ -1,6 +1,8 @@
+from __future__ import annotations
+
 from ..backends import backends, DriverBase
 
-from typing import Any, Callable, Generic, TypeVar
+from typing import Any, Callable, Generic, TypeVar, Union
 
 
 def _create_driver() -> DriverBase:
@@ -17,7 +19,7 @@ class LazyProxy(Generic[T]):
 
     def __init__(self, init_fn: Callable[[], T]) -> None:
         self._init_fn = init_fn
-        self._obj: T | None = None
+        self._obj: Union[T, None] = None
 
     def _initialize_obj(self) -> T:
         if self._obj is None:
@@ -49,7 +51,7 @@ class DriverConfig:
 
     def __init__(self) -> None:
         self.default: LazyProxy[DriverBase] = LazyProxy(_create_driver)
-        self.active: LazyProxy[DriverBase] | DriverBase = self.default
+        self.active: Union[LazyProxy[DriverBase], DriverBase] = self.default
 
     def set_active(self, driver: DriverBase) -> None:
         self.active = driver

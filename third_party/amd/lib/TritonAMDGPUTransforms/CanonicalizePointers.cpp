@@ -30,16 +30,16 @@
 #include "llvm/Support/LogicalResult.h"
 #include <utility>
 
-#define GEN_PASS_CLASSES
-#include "TritonAMDGPUTransforms/Passes.h.inc"
-#include "mlir/Transforms/WalkPatternRewriteDriver.h"
-
 #define DEBUG_TYPE "tritonamdgpu-canonicalize-pointers"
 #define DBGS() (llvm::dbgs() << "[" DEBUG_TYPE "]: ")
 #define LDBG(X) LLVM_DEBUG(DBGS() << X << "\n")
 
-using namespace mlir;
-namespace tt = triton;
+namespace tt = mlir::triton;
+
+namespace mlir {
+
+#define GEN_PASS_DEF_TRITONAMDGPUCANONICALIZEPOINTERS
+#include "TritonAMDGPUTransforms/Passes.h.inc"
 
 // -----------------------------------------------------------------------------
 // Pointer canonicalizer utility class
@@ -161,8 +161,6 @@ Value createTensorZero(RewriterBase &rw, Location loc, RankedTensorType type) {
   auto zeroDenseAttr = DenseElementsAttr::get(type, zeroAttr);
   return rw.create<arith::ConstantOp>(loc, zeroDenseAttr);
 }
-
-} // namespace
 
 std::pair<Value, Value> createDecomposeOffsetFromExpr(RewriterBase &rewriter,
                                                       Location loc, Value expr,
@@ -1371,6 +1369,8 @@ public:
   }
 };
 
+} // anonymous namespace
+
 /// The pass structure/action is roughly:
 ///
 /// 1. Perform an approximate sparse dataflow analysis to find all transitive
@@ -1383,11 +1383,9 @@ public:
 /// category of such remaining casts but can be extended to handle all; see
 /// bullet 1 in TODOs).
 class TritonAMDGPUCanonicalizePointersPass
-    : public TritonAMDGPUCanonicalizePointersBase<
+    : public impl::TritonAMDGPUCanonicalizePointersBase<
           TritonAMDGPUCanonicalizePointersPass> {
 public:
-  TritonAMDGPUCanonicalizePointersPass() = default;
-
   void runOnOperation() override;
 };
 
@@ -1553,6 +1551,4 @@ void TritonAMDGPUCanonicalizePointersPass::runOnOperation() {
   });
 }
 
-std::unique_ptr<Pass> mlir::createTritonAMDGPUCanonicalizePointersPass() {
-  return std::make_unique<TritonAMDGPUCanonicalizePointersPass>();
-}
+} // namespace mlir

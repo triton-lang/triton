@@ -10,15 +10,15 @@
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Tools/LayoutUtils.h"
 #include "llvm/ADT/TypeSwitch.h"
-#include <memory>
 
-using namespace mlir;
 namespace tt = mlir::triton;
 namespace ttg = mlir::triton::gpu;
 using ::mlir::LLVM::AMD::isChainDotHead;
 using ::mlir::LLVM::AMD::isChainDotTail;
 using ::mlir::LLVM::AMD::scaleDotElemTypeToMLIRType;
 using mlir::triton::gpu::chooseScaledMfmaScaleLayout;
+
+namespace mlir {
 
 namespace {
 using triton::AMD::ISAFamily;
@@ -1222,20 +1222,16 @@ public:
 
 } // namespace
 
-#define GEN_PASS_CLASSES
+#define GEN_PASS_DEF_TRITONAMDGPUACCELERATEMATMUL
 #include "TritonAMDGPUTransforms/Passes.h.inc"
 
 class TritonAMDGPUAccelerateMatmulPass
-    : public TritonAMDGPUAccelerateMatmulBase<
+    : public impl::TritonAMDGPUAccelerateMatmulBase<
           TritonAMDGPUAccelerateMatmulPass> {
 public:
-  TritonAMDGPUAccelerateMatmulPass() = default;
-  TritonAMDGPUAccelerateMatmulPass(StringRef archGen, int matrixInstructionSize,
-                                   int kPack) {
-    this->archGenerationName = archGen.data();
-    this->matrixInstructionSize = matrixInstructionSize;
-    this->kPack = kPack;
-  }
+  using impl::TritonAMDGPUAccelerateMatmulBase<
+      TritonAMDGPUAccelerateMatmulPass>::TritonAMDGPUAccelerateMatmulBase;
+
   void runOnOperation() override {
 
     MLIRContext *context = &getContext();
@@ -1270,8 +1266,4 @@ public:
   }
 };
 
-std::unique_ptr<Pass> mlir::createTritonAMDGPUAccelerateMatmulPass(
-    std::string archGen, int matrixInstructionSize, int kPack) {
-  return std::make_unique<TritonAMDGPUAccelerateMatmulPass>(
-      archGen, matrixInstructionSize, kPack);
-}
+} // namespace mlir

@@ -1,3 +1,4 @@
+#include "TritonAMDGPUTransforms/Passes.h"
 #include "mlir/Analysis/SliceAnalysis.h"
 #include "mlir/Dialect/GPU/IR/GPUDialect.h"
 #include "mlir/Dialect/LLVMIR/ROCDLDialect.h"
@@ -10,16 +11,17 @@
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 
-#define GEN_PASS_CLASSES
-#include "TritonAMDGPUTransforms/Passes.h"
-
 #define DEBUG_TYPE "tritonamdgpu-block-pingpong"
 #define DBGS() (llvm::dbgs() << "[" DEBUG_TYPE "]: ")
 #define LDBG(X) LLVM_DEBUG(DBGS() << X << "\n")
 
-using namespace mlir;
 namespace ttg = mlir::triton::gpu;
 namespace tt = mlir::triton;
+
+namespace mlir {
+
+#define GEN_PASS_DEF_TRITONAMDGPUBLOCKPINGPONG
+#include "TritonAMDGPUTransforms/Passes.h.inc"
 
 namespace {
 
@@ -868,13 +870,15 @@ void Pingponger::getDotPingponged() {
   }
 }
 
+} // anonymous namespace
+
 class TritonAMDGPUBlockPingpongPass
-    : public TritonAMDGPUBlockPingpongBase<TritonAMDGPUBlockPingpongPass> {
+    : public impl::TritonAMDGPUBlockPingpongBase<
+          TritonAMDGPUBlockPingpongPass> {
 public:
-  TritonAMDGPUBlockPingpongPass() = default;
-  TritonAMDGPUBlockPingpongPass(int32_t numStages) {
-    this->numStages = numStages;
-  }
+  using impl::TritonAMDGPUBlockPingpongBase<
+      TritonAMDGPUBlockPingpongPass>::TritonAMDGPUBlockPingpongBase;
+
   void runOnOperation() override {
     ModuleOp m = getOperation();
     for (auto funcOp : m.getOps<tt::FuncOp>()) {
@@ -885,9 +889,5 @@ public:
     }
   }
 };
-} // namespace
 
-std::unique_ptr<Pass>
-mlir::createTritonAMDGPUBlockPingpongPass(int32_t numStages) {
-  return std::make_unique<TritonAMDGPUBlockPingpongPass>(numStages);
-}
+} // namespace mlir
