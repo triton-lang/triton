@@ -1,4 +1,5 @@
 #include "Data/TraceData.h"
+#include "TraceDataIO/TraceWriter.h"
 #include "Utility/Errors.h"
 #include "nlohmann/json.hpp"
 
@@ -234,27 +235,150 @@ void TraceData::clear() {
   scopeIdToContextId.clear();
 }
 
-void TraceData::dumpChromeTrace(std::ostream &os) const {
-  auto events = trace->getEvents();
-  // stream id -> trace event
-  std::map<size_t, std::vector<Trace::TraceEvent>> streamTraceEvents;
-  uint64_t minTimeStamp = std::numeric_limits<uint64_t>::max();
-  for (auto &event : events) {
-    if (event.metrics.count(MetricKind::Kernel)) {
-      std::shared_ptr<KernelMetric> kernelMetric =
-          std::dynamic_pointer_cast<KernelMetric>(
-              event.metrics.at(MetricKind::Kernel));
-      auto streamId =
-          std::get<uint64_t>(kernelMetric->getValue(KernelMetric::StreamId));
-      streamTraceEvents[streamId].push_back(event);
+namespace {
 
-      uint64_t startTime =
-          std::get<uint64_t>(kernelMetric->getValue(KernelMetric::StartTime));
-      minTimeStamp = std::min(minTimeStamp, startTime);
+struct CycleMetricInternal {
+  CycleMetricInternal(uint32_t start, uint32_t end, uint32_t block,
+                      uint32_t unit, uint32_t proc, int32_t context,
+                      uint32_t timeShift)
+      : startCycle(start), endCycle(end), blockId(block), unitId(unit),
+        procId(proc), contextId(context), timeShiftCost(timeShift) {}
+
+  uint32_t startCycle;
+  uint32_t endCycle;
+  uint32_t blockId;
+  uint32_t unitId;
+  uint32_t procId;
+  uint32_t contextId;
+  uint32_t timeShiftCost;
+};
+
+std::vector<KernelTrace>
+convertToTimelineTrace(TraceData::Trace *trace,
+                       const std::map<std::string, int> &kernelBlockNum,
+                       std::vector<CycleMetricInternal> &cycleEvents) {
+  std::vector<KernelTrace> results;
+  results.reserve(kernelBlockNum.size());
+
+  // Pre-sort all events once
+  auto &sortedEvents = cycleEvents;
+  std::sort(sortedEvents.begin(), sortedEvents.end(),
+            [&](const CycleMetricInternal &a, const CycleMetricInternal &b) {
+              auto aKernelName = trace->getContexts(a.contextId)[1].name;
+              auto bKernelName = trace->getContexts(b.contextId)[1].name;
+              if (aKernelName != bKernelName)
+                return aKernelName < bKernelName;
+              if (a.blockId != b.blockId)
+                return a.blockId < b.blockId;
+              if (a.unitId != b.unitId)
+                return a.unitId < b.unitId;
+              return a.startCycle < b.startCycle;
+            });
+
+  size_t eventIndex = 0;
+
+  // Process in perfectly sorted order
+  while (eventIndex < sortedEvents.size()) {
+    // FIXME(fywkevin): change to actual kernel name
+    const std::string currentKernel =
+        trace->getContexts(sortedEvents[eventIndex].contextId)[1].name;
+
+    auto parserResult = std::make_shared<CircularLayoutParserResult>();
+    auto metadata = std::make_shared<KernelMetadata>();
+    std::map<int, std::string> scopeIdToName;
+    std::map<std::string, int> scopeNameToId;
+    int curScopeId = 0;
+    uint32_t timeShiftCost = sortedEvents[eventIndex].timeShiftCost;
+    parserResult->blockTraces.reserve(kernelBlockNum.at(currentKernel));
+
+    // Process all events for current kernel
+    while (eventIndex < sortedEvents.size() &&
+           trace->getContexts(sortedEvents[eventIndex].contextId)[1].name ==
+               currentKernel) {
+
+      const auto &blockEvent = sortedEvents[eventIndex];
+      uint32_t currentBlockId = blockEvent.blockId;
+      uint32_t currentProcId = blockEvent.procId;
+
+      CircularLayoutParserResult::BlockTrace blockTrace;
+      blockTrace.blockId = currentBlockId;
+      blockTrace.procId = currentProcId;
+      // Conservative estimation of the number of warps in a CTA.
+      blockTrace.traces.reserve(16);
+
+      // Process all events for current block-proc
+      while (eventIndex < sortedEvents.size() &&
+             trace->getContexts(sortedEvents[eventIndex].contextId)[1].name ==
+                 currentKernel &&
+             sortedEvents[eventIndex].blockId == currentBlockId) {
+
+        const auto &traceEvent = sortedEvents[eventIndex];
+        uint32_t currentUid = traceEvent.unitId;
+
+        CircularLayoutParserResult::Trace unitTrace;
+        unitTrace.uid = currentUid;
+        // Estimation the number of events in a unit (warp).
+        unitTrace.profileEvents.reserve(256);
+
+        // Process all events for current uid
+        while (trace->getContexts(sortedEvents[eventIndex].contextId)[1].name ==
+                   currentKernel &&
+               sortedEvents[eventIndex].blockId == currentBlockId &&
+               sortedEvents[eventIndex].unitId == currentUid) {
+
+          const auto &event = sortedEvents[eventIndex];
+          auto scopeName =
+              trace->getContexts(sortedEvents[eventIndex].contextId)
+                  .back()
+                  .name;
+          if (scopeNameToId.count(scopeName) == 0) {
+            scopeIdToName[curScopeId] = scopeName;
+            scopeNameToId[scopeName] = curScopeId;
+            curScopeId++;
+          }
+
+          auto startEntry = std::make_shared<CycleEntry>();
+          startEntry->cycle = event.startCycle;
+          startEntry->isStart = true;
+          startEntry->scopeId = scopeNameToId[scopeName];
+
+          auto endEntry = std::make_shared<CycleEntry>();
+          endEntry->cycle = event.endCycle;
+          endEntry->isStart = false;
+          endEntry->scopeId = scopeNameToId[scopeName];
+
+          unitTrace.profileEvents.emplace_back(startEntry, endEntry);
+
+          eventIndex++;
+        }
+        blockTrace.traces.push_back(std::move(unitTrace));
+      }
+      parserResult->blockTraces.push_back(std::move(blockTrace));
     }
+    metadata->kernelName = currentKernel;
+    metadata->scopeName = scopeIdToName;
+    if (timeShiftCost > 0)
+      timeShift(timeShiftCost, parserResult);
+    results.emplace_back(parserResult, metadata);
   }
+  return results;
+}
 
-  // 3) for each streamId in ascending order, emit one JSON line
+void dumpCycleMetricTrace(TraceData::Trace *trace,
+                          const std::map<std::string, int> &kernelBlockNum,
+                          std::vector<CycleMetricInternal> &cycleEvents,
+                          std::ostream &os) {
+  auto timeline = convertToTimelineTrace(trace, kernelBlockNum, cycleEvents);
+  auto writer = StreamChromeTraceWriter(timeline, "");
+  writer.write(os);
+}
+
+void dumpKernelMetricTrace(
+    TraceData::Trace *trace, uint64_t minTimeStamp,
+    std::map<size_t, std::vector<TraceData::Trace::TraceEvent>>
+        &streamTraceEvents,
+    std::ostream &os) {
+  // for each streamId in ascending order, emit one JSON line
   for (auto const &[streamId, events] : streamTraceEvents) {
     json object = {{"displayTimeUnit", "us"}, {"traceEvents", json::array()}};
 
@@ -289,6 +413,70 @@ void TraceData::dumpChromeTrace(std::ostream &os) const {
 
     // one JSON object per line
     os << object.dump() << "\n";
+  }
+}
+} // namespace
+
+void TraceData::dumpChromeTrace(std::ostream &os) const {
+  auto events = trace->getEvents();
+  // stream id -> trace event
+  std::map<size_t, std::vector<Trace::TraceEvent>> streamTraceEvents;
+  uint64_t minTimeStamp = std::numeric_limits<uint64_t>::max();
+  bool hasKernelMetrics = false, hasCycleMetrics = false;
+  // Data structure for efficient cycle metrics conversion
+  std::map<std::string, int> kernelBlockNum;
+  std::vector<CycleMetricInternal> cycleEvents;
+  cycleEvents.reserve(events.size());
+  for (auto &event : events) {
+    if (event.metrics.count(MetricKind::Kernel)) {
+      std::shared_ptr<KernelMetric> kernelMetric =
+          std::dynamic_pointer_cast<KernelMetric>(
+              event.metrics.at(MetricKind::Kernel));
+      auto streamId =
+          std::get<uint64_t>(kernelMetric->getValue(KernelMetric::StreamId));
+      streamTraceEvents[streamId].push_back(event);
+
+      uint64_t startTime =
+          std::get<uint64_t>(kernelMetric->getValue(KernelMetric::StartTime));
+      minTimeStamp = std::min(minTimeStamp, startTime);
+      hasKernelMetrics = true;
+    }
+    if (event.metrics.count(MetricKind::Cycle)) {
+      auto context = trace->getContexts(event.contextId);
+      std::shared_ptr<CycleMetric> cycleMetric =
+          std::dynamic_pointer_cast<CycleMetric>(
+              event.metrics.at(MetricKind::Cycle));
+      auto uid = std::get<uint64_t>(cycleMetric->getValue(CycleMetric::UnitId));
+      auto startCycle =
+          std::get<uint64_t>(cycleMetric->getValue(CycleMetric::StartCycle));
+      auto endCycle =
+          std::get<uint64_t>(cycleMetric->getValue(CycleMetric::EndCycle));
+      auto blockId =
+          std::get<uint64_t>(cycleMetric->getValue(CycleMetric::BlockId));
+      auto procId =
+          std::get<uint64_t>(cycleMetric->getValue(CycleMetric::ProcessorId));
+      auto timeShiftCost =
+          std::get<uint64_t>(cycleMetric->getValue(CycleMetric::TimeShiftCost));
+
+      hasCycleMetrics = true;
+      // TODO(fywkevin): fix this kernrel name issue
+      const std::string &kernelName = context[1].name;
+      kernelBlockNum[kernelName] += 1;
+      cycleEvents.emplace_back(startCycle, endCycle, blockId, uid, procId,
+                               event.contextId, timeShiftCost);
+    }
+
+    if (hasKernelMetrics && hasCycleMetrics) {
+      throw std::runtime_error("only one active metric type is supported");
+    }
+  }
+
+  if (hasCycleMetrics) {
+    dumpCycleMetricTrace(trace.get(), kernelBlockNum, cycleEvents, os);
+  }
+
+  if (hasKernelMetrics) {
+    dumpKernelMetricTrace(trace.get(), minTimeStamp, streamTraceEvents, os);
   }
 }
 
