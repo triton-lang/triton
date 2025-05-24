@@ -279,12 +279,11 @@ if __name__ == "__main__":
         dtypes = dense_dtypes if args.quantized else quantized_dtypes
         if args.name == "dense":
             assert args.ep == 1, "EP must be 1 for dense"
-            roofline_mlp(batch_ranges_dense, 8192, 8192, 1, 1, *dense_dtypes, TP=args.tp, EP=args.ep,
-                         name="dense")
+            roofline_mlp(batch_ranges_dense, 8192, 8192, 1, 1, *dense_dtypes, TP=args.tp, EP=args.ep, name="dense")
         else:
             roofline_mlp(batch_ranges_moe, 5120, 8192, 128, 4, *dense_dtypes, TP=args.tp, EP=args.ep,
                          name="llama4-maverick")
-        triton_dist.cleanup() 
+        triton_dist.cleanup()
     else:
         batch_ranges_dense = [(1024, 32768, 1024)]
         batch_ranges_moe = [(128, 512, 32), (512, 32000, 128)]
