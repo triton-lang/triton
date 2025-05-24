@@ -1,7 +1,6 @@
 from pathlib import Path
 from copy import deepcopy
 import matplotlib.pyplot as plt
-import json
 import triton.profiler as proton
 from triton.profiler import viewer
 import torch
@@ -20,7 +19,6 @@ if torch.cuda.is_available() and not is_hip():
     cublas = nvidia.cublas.CublasLt(cublas_workspace)
 else:
     cublas = None
-
 
 
 def quantize(w, dtype, dev, **opt):
@@ -53,6 +51,7 @@ class PerfData:
     flops: float
     bytes: float
     bitwidth: int
+    device_type: str
     device_info: dict
 
     @property
@@ -70,13 +69,19 @@ class PerfData:
         return self.flops / self.bytes
 
     @property
+    def max_tbps(self):
+        return proton.specs.max_bps(self.device_info["bus_width"], self.device_info["memory_clock_rate"]) * 1e-12
+
+    @property
+    def max_tflops(self):
+        return proton.specs.max_flops(self.device_type, self.device_info["arch"], self.bitwidth,
+                                      self.device_info["num_sms"], self.device_info["clock_rate"]) * 1e-12
+
+    @property
     def util(self) -> float:
         assert self.bitwidth in (8, 16)
-        max_bytes = proton.specs.max_bytes(self.device_info["bus_width"], self.device_info["memory_clock_rate"])
-        max_flops = proton.specs.max_flops(self.device_info["device_type"], self.device_info["arch"],
-                                           self.bitwidth, self.device_info["num_sms"], self.device_info["clock_rate"])
-        flops_util = self.flops / max_flops
-        bw_util = self.bytes / max_bytes
+        flops_util = self.tflops / self.max_tflops
+        bw_util = self.tbps / self.max_tbps
         return max(flops_util, bw_util) / self.time
 
 
@@ -153,7 +158,8 @@ def bench_mlp(batch, dim1, dim2, n_expts_tot, n_expts_act, x_dtype, w_dtype, TP,
     device_type = matmuls["device_type"].iloc[0]
     device_id = matmuls["device_id"].iloc[0]
     device_info = info[device_type][device_id]
-    return PerfData(time=time, flops=flops, bytes=bytes, bitwidth=x.dtype.itemsize * 8, device_info=device_info)
+    return PerfData(time=time, flops=flops, bytes=bytes, bitwidth=x.dtype.itemsize * 8, device_type=device_type,
+                    device_info=device_info)
 
 
 def roofline_mlp(batch_ranges, dim1, dim2, n_expts_tot, n_expts_act, x_dtype, w_dtype, TP=1, EP=1, name="",
@@ -172,6 +178,8 @@ def roofline_mlp(batch_ranges, dim1, dim2, n_expts_tot, n_expts_act, x_dtype, w_
             print(f"Batch: {batch}; Util: {perfs[-1].util}; TFLOPS: {perfs[-1].tflops}; TBPS: {perfs[-1].tbps}")
     print("===============================================================")
     # machine limits
+    max_tbps = perfs[0].max_tbps
+    max_tflops = perfs[0].max_tflops
     fig, ax = plt.subplots(figsize=(7, 5), dpi=120)
     ax.set_xlabel("batch size (toks/expt)")
     ax.set_ylabel("performance  [TFLOP/s]")
@@ -182,10 +190,8 @@ def roofline_mlp(batch_ranges, dim1, dim2, n_expts_tot, n_expts_act, x_dtype, w_
     xmin, xmax = min(xs), max(xs)
     dx = 0.05 * (xmax - xmin) if xmax > xmin else 1.0
     ax.set_xlim(xmin - dx, xmax + dx)
-    ax.set_ylim(100, SPECS["MAX_TFLOPS8"] + 500)
+    ax.set_ylim(100, max_tflops + 500)
     # plot roofline
-    max_tbps = SPECS["MAX_TBPS"]
-    max_tflops = SPECS["MAX_TFLOPS8"]
     opints = [p.opint for p in perfs]
     knee = bisect_left(opints, max_tflops / max_tbps) - 1
     x_bw, x_comp = xs[:knee], xs[knee:]
@@ -205,8 +211,6 @@ def roofline_mlp(batch_ranges, dim1, dim2, n_expts_tot, n_expts_act, x_dtype, w_
 
 if __name__ == "__main__":
     has_native_mx4 = torch.cuda.get_device_capability(0)[0] >= 10 or get_cdna_version() == 4
-    if SPECS is None:
-        print("Current GPU has no specs provided, utilization is N/A")
     batch_ranges_dense = [(1024, 32768, 1024)]
     batch_ranges_moe = [(128, 512, 32), (512, 32000, 128)]
     dense_dtypes = ["fp8", "fp8"]

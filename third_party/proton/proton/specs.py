@@ -42,7 +42,7 @@ def max_flops(device_type, arch, width, num_sms, clock_rate):
     return flops_func(width, num_sms=num_sms, clock_rate=clock_rate)
 
 
-def max_bytes(bus_width, memory_clock_rate):
+def max_bps(bus_width, memory_clock_rate):
     """
     Calculate the maximum bytes per second for a given bus width and memory clock rate.
 
