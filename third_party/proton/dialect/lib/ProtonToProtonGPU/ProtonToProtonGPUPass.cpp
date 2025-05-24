@@ -13,6 +13,7 @@
 #include "mlir/Transforms/Passes.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
+#include "llvm/Support/Debug.h"
 #include "llvm/Support/MathExtras.h"
 #include <algorithm>
 
@@ -22,6 +23,10 @@ namespace proton {
 
 #define GEN_PASS_DEF_CONVERTPROTONTOPROTONGPU
 #include "Conversion/ProtonToProtonGPU/Passes.h.inc"
+
+#define DEBUG_TYPE "proton-gpu"
+#define DBGS() (llvm::dbgs() << "[" DEBUG_TYPE "]: ")
+#define LDBG(X) LLVM_DEBUG(DBGS() << X << "\n")
 
 constexpr float maxSharedMemRatio = 0.04; // 4 percent of max shared mem
 
@@ -202,11 +207,9 @@ public:
                       profileScratchAlignment);
 
     if (profileScratchSize < allocProfileScratchSize) {
-      mlir::emitError(loc,
-                      "Global scratch memory for proton profiling is not large "
-                      "enough, should be at least " +
-                          llvm::Twine(allocProfileScratchSize) + " bytes.");
-      return failure();
+      LDBG("Global scratch memory for proton profiling is not large "
+           "enough, we allocate the scratch size as " +
+           llvm::Twine(allocProfileScratchSize) + " bytes.");
     }
 
     Value buffer;

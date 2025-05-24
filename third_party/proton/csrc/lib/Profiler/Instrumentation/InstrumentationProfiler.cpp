@@ -183,6 +183,13 @@ void InstrumentationProfiler::exitInstrumentedOp(uint64_t streamId,
   config.totalUnits = functionMetadata.at(functionId).getNumWarps();
   config.numBlocks = size / config.scratchMemSize;
   config.uidVec = getUnitIdVector(modeOptions, config.totalUnits);
+  config.device = Device();
+  config.device.type = runtime->getDeviceType();
+
+  uint32_t timeShiftCost = 0;
+  if (modeOptions.count("optimization") &&
+      modeOptions.at("optimization") == "time_shift")
+    timeShiftCost = getTimeShiftCost(config);
 
   auto &scopeIdContexts = functionScopeIdContexts[functionId];
 
@@ -208,8 +215,9 @@ void InstrumentationProfiler::exitInstrumentedOp(uint64_t streamId,
                     scopeId,
                     std::make_shared<CycleMetric>(
                         event.first->cycle, event.second->cycle, duration,
-                        blockTrace.blockId, blockTrace.procId, device,
-                        static_cast<uint64_t>(runtime->getDeviceType())));
+                        blockTrace.blockId, blockTrace.procId, trace.uid,
+                        device, static_cast<uint64_t>(runtime->getDeviceType()),
+                        timeShiftCost));
               }
             }
           }

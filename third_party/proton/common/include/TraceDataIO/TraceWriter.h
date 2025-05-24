@@ -21,7 +21,8 @@ struct KernelMetadata {
   std::string kernelName;
 };
 
-using KernelTrace = std::pair<CircularLayoutParserResult *, KernelMetadata *>;
+using KernelTrace = std::pair<std::shared_ptr<CircularLayoutParserResult>,
+                              std::shared_ptr<KernelMetadata>>;
 
 // StreamTraceWriter handles trace dumping for a single cuda stream.
 // If we have multiple stream, simply having a for loop to write to multiple
@@ -37,9 +38,9 @@ public:
 
   void dump();
 
-protected:
-  virtual void write(std::ofstream &outfile) = 0;
+  virtual void write(std::ostream &outfile) = 0;
 
+protected:
   const std::string path;
   const std::vector<KernelTrace> &streamTrace;
 };
@@ -49,8 +50,9 @@ public:
   explicit StreamChromeTraceWriter(const std::vector<KernelTrace> &streamTrace,
                                    const std::string &path);
 
+  void write(std::ostream &outfile) override final;
+
 private:
-  void write(std::ofstream &outfile) override final;
   void writeKernel(nlohmann::json &object, const KernelTrace &kernelTrace,
                    uint32_t kernelTimeStart);
 
