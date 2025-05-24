@@ -80,9 +80,9 @@ class PerfData:
     @property
     def util(self) -> float:
         assert self.bitwidth in (8, 16)
-        flops_util = self.tflops / self.max_tflops
-        bw_util = self.tbps / self.max_tbps
-        return max(flops_util, bw_util) / self.time
+        min_t_flop = self.flops / self.max_tflops * 1e-3
+        min_t_bw = self.bytes  / self.max_tbps * 1e-3
+        return max(min_t_flop, min_t_bw) / self.time 
 
 
 def bench_mlp(batch, dim1, dim2, n_expts_tot, n_expts_act, x_dtype, w_dtype, TP, EP, name):
