@@ -7560,3 +7560,32 @@ def test_tuple_logic():
         tl.static_assert((() and tl.program_id(0)) == ())
 
     tuple_logic_kernel[(1, )]()
+
+
+@pytest.mark.interpreter
+def test_cumsum_dtype(device):
+
+    @triton.jit
+    def kernel(Z):
+        x = tl.full((4, ), True, dtype=tl.int1)
+        z = tl.cumsum(x, axis=0)
+        tl.store(Z + tl.arange(0, 4), z)
+
+    @triton.jit
+    def original_repro(indices_splitted_ptr, indices_ptr, TOP_K: tl.constexpr):
+        indices_for_batch = tl.load(indices_ptr + tl.arange(0, TOP_K))
+        rank_addr = (tl.cumsum(indices_for_batch >= 0, axis=0) - 1)
+        write_to_address = indices_splitted_ptr + rank_addr
+        tl.store(write_to_address, indices_for_batch.to(tl.int32))
+
+    z = torch.zeros(4, dtype=torch.int32, device=device)
+    kernel[(1, )](z)
+    expected = torch.tensor([1, 2, 3, 4], dtype=torch.int32, device=device)
+    assert torch.equal(z, expected)
+
+    torch.manual_seed(0)
+    indices = torch.randint(0, 16, size=[4], device=device, dtype=torch.int32)
+    indices_splitted = torch.empty([4], dtype=torch.int32, device=device)
+    indices_splitted.fill_(-1)
+    original_repro[(1, )](indices_splitted, indices, 4)
+    assert torch.equal(indices_splitted, indices)
