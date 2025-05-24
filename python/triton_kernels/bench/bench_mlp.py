@@ -272,9 +272,13 @@ if __name__ == "__main__":
         argparse.add_argument("name", type=str, choices=["dense", "llama4-maverick"])
         argparse.add_argument("quantized", type=bool, default=False)
         args = argparse.parse_args()
-        ranges = batch_ranges_dense if args.name == "dense" else batch_ranges_moe
         dtypes = dense_dtypes if args.quantized else quantized_dtypes
-        roofline_mlp(ranges, 8192, 8192, 1, 1, *dtypes, TP=args.tp, EP=args.ep, name=args.name)
+        if args.name == "dense":
+            roofline_mlp(batch_ranges_dense, 8192, 8192, 1, 1, *dense_dtypes, TP=args.tp, EP=args.ep,
+                         name="dense")
+        else:
+            roofline_mlp(batch_ranges_moe, 5120, 8192, 128, 4, *dense_dtypes, TP=args.tp, EP=args.ep,
+                         name="llama4-maverick")
     else:
         batch_ranges_dense = [(1024, 32768, 1024)]
         batch_ranges_moe = [(128, 512, 32), (512, 32000, 128)]
