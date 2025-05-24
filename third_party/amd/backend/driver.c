@@ -1,10 +1,10 @@
+#define PY_SSIZE_T_CLEAN
 #define __HIP_PLATFORM_AMD__
 // clang-format off
 // hip_depreated.h needs definitions from hip_runtime.h.
 #include <hip/hip_runtime.h>
 #include <hip/hip_deprecated.h>
 // clang-format on
-#define PY_SSIZE_T_CLEAN
 #include <Python.h>
 #include <dlfcn.h>
 #include <stdio.h>

@@ -263,6 +263,7 @@ def make_launcher(constants, signature, warp_size):
     params = [f"&arg{i}" for i, ty in signature.items() if ty != "constexpr"]
     params.append("&global_scratch")
     src = f"""
+#define PY_SSIZE_T_CLEAN
 #define __HIP_PLATFORM_AMD__
 #include <hip/hip_runtime.h>
 #include <Python.h>
