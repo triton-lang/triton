@@ -12,7 +12,6 @@ flops_by_device = {
     },
     "HIP": {
         "gfx90a": lambda width, **kwargs: 383e12 / (width / 8),
-        "gfx941": lambda width, **kwargs: 2614.9e12 / (width / 8),
         "gfx942": lambda width, **kwargs: 2614.9e12 / (width / 8),
     },
 }
