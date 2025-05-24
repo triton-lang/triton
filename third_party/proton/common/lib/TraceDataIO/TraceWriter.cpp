@@ -14,6 +14,12 @@ StreamTraceWriter::StreamTraceWriter(
 
 void StreamTraceWriter::dump() {
   std::ofstream outfile;
+
+  if (path.empty()) {
+    std::cerr << "Trace file path can't be empty!";
+    return;
+  }
+
   outfile.open(path);
   if (!outfile.is_open()) {
     std::cerr << "Failed to open trace file: " << path << std::endl;
@@ -29,7 +35,7 @@ StreamChromeTraceWriter::StreamChromeTraceWriter(
     const std::vector<KernelTrace> &streamTrace, const std::string &path)
     : StreamTraceWriter(streamTrace, path) {}
 
-void StreamChromeTraceWriter::write(std::ofstream &outfile) {
+void StreamChromeTraceWriter::write(std::ostream &outfile) {
   if (streamTrace.empty()) {
     std::cerr << "Failed to write the trace file: empty trace!" << std::endl;
     return;
@@ -48,12 +54,12 @@ namespace {
 using BlockTraceVec =
     std::vector<const CircularLayoutParserResult::BlockTrace *>;
 
-void populateTraceInfo(const CircularLayoutParserResult &result,
+void populateTraceInfo(std::shared_ptr<CircularLayoutParserResult> result,
                        uint32_t kernelTimeStart,
                        std::map<int, int64_t> &cycleAdjust,
                        std::map<int, BlockTraceVec> &procToBlockTraces) {
   uint32_t minStartTime;
-  for (auto &bt : result.blockTraces) {
+  for (auto &bt : result->blockTraces) {
     minStartTime = std::numeric_limits<uint32_t>::max();
     for (auto &trace : bt.traces)
       for (auto &event : trace.profileEvents)
@@ -142,8 +148,8 @@ std::vector<int> assignLineIds(
 void StreamChromeTraceWriter::writeKernel(json &object,
                                           const KernelTrace &kernelTrace,
                                           uint32_t kernelTimeStart) {
-  auto &result = *kernelTrace.first;
-  auto &metadata = *kernelTrace.second;
+  auto result = kernelTrace.first;
+  auto metadata = kernelTrace.second;
 
   int curColorIndex = 0;
   // scope id -> color index in chrome color
@@ -174,16 +180,16 @@ void StreamChromeTraceWriter::writeKernel(json &object,
             curColorIndex = (curColorIndex + 1) % kChromeColor.size();
           }
           const std::string &color = kChromeColor[scopeColor[scopeId]];
-          pid = metadata.kernelName + " Core" + std::to_string(procId) +
+          pid = metadata->kernelName + " Core" + std::to_string(procId) +
                 " CTA" + std::to_string(ctaId) +
                 " [measure in clock cycle (assume 1GHz)]";
           tid = "warp " + std::to_string(warpId) + " (line " +
                 std::to_string(lineId) + ")";
-          category = metadata.kernelName;
-          if (!metadata.scopeName.count(scopeId))
+          category = metadata->kernelName;
+          if (!metadata->scopeName.count(scopeId))
             name = "scope_" + std::to_string(scopeId);
           else
-            name = metadata.scopeName.at(scopeId);
+            name = metadata->scopeName.at(scopeId);
 
           uint32_t ts = static_cast<uint32_t>(
               static_cast<int64_t>(event.first->cycle) + cycleAdjust[ctaId]);
