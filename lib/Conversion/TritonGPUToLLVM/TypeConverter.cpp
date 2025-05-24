@@ -1,9 +1,7 @@
 #include "triton/Conversion/TritonGPUToLLVM/TypeConverter.h"
 
-#include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Support/LLVM.h"
-#include "triton/Conversion/MLIRTypes.h"
-#include "triton/Conversion/TritonGPUToLLVM/Utility.h"
+#include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 
 using namespace mlir;
 using namespace mlir::triton;
@@ -25,7 +23,7 @@ TritonGPUToLLVMTypeConverter::TritonGPUToLLVMTypeConverter(
     return LLVM::LLVMPointerType::get(ctx, type.getAddressSpace());
   });
   addConversion([ctx](TensorDescType type) -> std::optional<Type> {
-    return LLVM::LLVMPointerType::get(ctx, 1);
+    return LLVM::LLVMPointerType::get(ctx, 0);
   });
   addConversion([&](RankedTensorType type) -> std::optional<Type> {
     return convertTritonTensorType(type, targetInfo);

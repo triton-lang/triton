@@ -4,6 +4,8 @@ import warnings
 from typing import List, Optional, Sequence, Tuple, TypeVar
 import numbers
 
+from triton.runtime import driver
+
 from .._C.libtriton import ir
 from . import core as tl
 
@@ -1147,12 +1149,7 @@ def load(ptr: tl.tensor, mask: Optional[tl.tensor], other: Optional[tl.tensor], 
         return _load_legacy(ptr, mask, other, boundary_check, padding, cache, eviction, is_volatile, builder)
 
 
-def reinterpret_tensor_descriptor(desc_ptr: tl.tensor, block_ty: tl.block_type, builder: ir.builder):
-    handle = builder.create_reinterpret_tensor_descriptor(desc_ptr.handle, block_ty.to_ir(builder))
-    return tl.tensor_descriptor_base(handle, block_ty)
-
-
-def descriptor_load(desc: tl._experimental_tensor_descriptor_base, offsets, cache_modifier: str, eviction_policy: str,
+def descriptor_load(desc: tl.tensor_descriptor_base, offsets, cache_modifier: str, eviction_policy: str,
                     builder: ir.builder) -> tl.tensor:
     assert isinstance(desc, tl.tensor_descriptor_base)
     ndim = len(desc.block_shape)
@@ -1164,14 +1161,76 @@ def descriptor_load(desc: tl._experimental_tensor_descriptor_base, offsets, cach
     return tl.tensor(x, desc.block_type)
 
 
-def descriptor_store(desc: tl.tensor_descriptor_base, value: tl.tensor, offsets, builder: ir.builder) -> tl.tensor:
+def validate_store_like(desc: tl.tensor_descriptor_base, value: tl.tensor, offsets) -> None:
     assert isinstance(desc, tl.tensor_descriptor_base)
     ndim = len(desc.block_shape)
     assert len(offsets) == ndim, f"expected {ndim} offsets, but got {len(offsets)}"
     assert value.shape == desc.block_shape
 
+
+def descriptor_store(desc: tl.tensor_descriptor_base, value: tl.tensor, offsets, builder: ir.builder) -> tl.tensor:
+    validate_store_like(desc, value, offsets)
     offsets = _convert_to_ir_values(builder, offsets, require_i64=False)
     return tl.tensor(builder.create_descriptor_store(desc.handle, value.handle, offsets), tl.void)
+
+
+def descriptor_atomic_add(desc: tl.tensor_descriptor_base, value: tl.tensor, offsets, builder: ir.builder) -> tl.tensor:
+    validate_store_like(desc, value, offsets)
+    assert desc.dtype in {tl.uint32, tl.int32, tl.uint64, tl.float32, tl.float16, tl.bfloat16}, "Unsupported dtype"
+    offsets = _convert_to_ir_values(builder, offsets, require_i64=False)
+    kind = ir.DESCRIPTOR_REDUCE_KIND.ADD
+    return tl.tensor(builder.create_descriptor_reduce(kind, desc.handle, value.handle, offsets), tl.void)
+
+
+def _has_native_tma():
+    target = driver.active.get_current_target()
+    return (target.backend == "cuda" and target.arch >= 90)
+
+
+def _descriptor_atomic_min_max_supported(dtype):
+    assert dtype in {tl.uint32, tl.int32, tl.uint64, tl.int64, tl.float16, tl.bfloat16}, "Unsupported dtype"
+    if dtype in {tl.float16, tl.bfloat16}:
+        assert _has_native_tma(), "16-bit float types require native tma support"
+
+
+def descriptor_atomic_min(desc: tl.tensor_descriptor_base, value: tl.tensor, offsets, builder: ir.builder) -> tl.tensor:
+    validate_store_like(desc, value, offsets)
+    _descriptor_atomic_min_max_supported(desc.dtype)
+    offsets = _convert_to_ir_values(builder, offsets, require_i64=False)
+    kind = ir.DESCRIPTOR_REDUCE_KIND.MIN
+    return tl.tensor(builder.create_descriptor_reduce(kind, desc.handle, value.handle, offsets), tl.void)
+
+
+def descriptor_atomic_max(desc: tl.tensor_descriptor_base, value: tl.tensor, offsets, builder: ir.builder) -> tl.tensor:
+    validate_store_like(desc, value, offsets)
+    _descriptor_atomic_min_max_supported(desc.dtype)
+    offsets = _convert_to_ir_values(builder, offsets, require_i64=False)
+    kind = ir.DESCRIPTOR_REDUCE_KIND.MAX
+    return tl.tensor(builder.create_descriptor_reduce(kind, desc.handle, value.handle, offsets), tl.void)
+
+
+def descriptor_atomic_and(desc: tl.tensor_descriptor_base, value: tl.tensor, offsets, builder: ir.builder) -> tl.tensor:
+    validate_store_like(desc, value, offsets)
+    assert desc.dtype in {tl.uint32, tl.int32, tl.uint64, tl.int64}, "Unsupported dtype"
+    offsets = _convert_to_ir_values(builder, offsets, require_i64=False)
+    kind = ir.DESCRIPTOR_REDUCE_KIND.AND
+    return tl.tensor(builder.create_descriptor_reduce(kind, desc.handle, value.handle, offsets), tl.void)
+
+
+def descriptor_atomic_or(desc: tl.tensor_descriptor_base, value: tl.tensor, offsets, builder: ir.builder) -> tl.tensor:
+    validate_store_like(desc, value, offsets)
+    assert desc.dtype in {tl.uint32, tl.int32, tl.uint64, tl.int64}, "Unsupported dtype"
+    offsets = _convert_to_ir_values(builder, offsets, require_i64=False)
+    kind = ir.DESCRIPTOR_REDUCE_KIND.OR
+    return tl.tensor(builder.create_descriptor_reduce(kind, desc.handle, value.handle, offsets), tl.void)
+
+
+def descriptor_atomic_xor(desc: tl.tensor_descriptor_base, value: tl.tensor, offsets, builder: ir.builder) -> tl.tensor:
+    validate_store_like(desc, value, offsets)
+    assert desc.dtype in {tl.uint32, tl.int32, tl.uint64, tl.int64}, "Unsupported dtype"
+    offsets = _convert_to_ir_values(builder, offsets, require_i64=False)
+    kind = ir.DESCRIPTOR_REDUCE_KIND.XOR
+    return tl.tensor(builder.create_descriptor_reduce(kind, desc.handle, value.handle, offsets), tl.void)
 
 
 def descriptor_gather(desc, x_offsets, y_offset, cache_modifier: str, eviction_policy: str,
@@ -1220,41 +1279,6 @@ def descriptor_scatter(desc, value: tl.tensor, x_offsets, y_offset, builder: ir.
     y_offset = _convert_to_ir_values(builder, (y_offset, ), require_i64=False)[0]
     builder.create_descriptor_scatter(desc.handle, value.handle, x_offsets.handle, y_offset)
     return tl.tensor(None, tl.void)
-
-
-def tensormap_create(
-    desc_ptr: tl.tensor,
-    global_address: tl.tensor,
-    box_dim: List[tl.tensor],
-    global_dim: List[tl.tensor],
-    global_stride: List[tl.tensor],
-    element_stride: List[tl.tensor],
-    elem_type: int,
-    interleave_layout: int,
-    swizzle_mode: int,
-    fill_mode: int,
-    builder: ir.builder,
-) -> tl.tensor:
-    assert not global_stride or global_stride[0].dtype == tl.int64
-    return tl.tensor(
-        builder.create_tensormap_create(
-            desc_ptr.handle,
-            global_address.handle,
-            [x.handle for x in box_dim],
-            [x.handle for x in global_dim],
-            [x.handle for x in global_stride],
-            [x.handle for x in element_stride],
-            elem_type,
-            interleave_layout,
-            swizzle_mode,
-            fill_mode,
-        ),
-        tl.void,
-    )
-
-
-def tensormap_fenceproxy_acquire(desc_ptr: tl.tensor, builder: ir.builder) -> tl.tensor:
-    return tl.tensor(builder.create_tensormap_fenceproxy_acquire(desc_ptr.handle), tl.void)
 
 
 def _store_block_pointer(ptr, val, mask, boundary_check, cache, eviction, builder):
@@ -1370,7 +1394,9 @@ def atom_red_typechecking_impl(ptr: tl.tensor, val: tl.tensor, mask: tl.tensor, 
     element_ty = ptr.type.scalar.element_ty
     if element_ty is tl.float16 and op != 'add':
         raise ValueError("atomic_" + op + " does not support fp16")
-    if element_ty in [tl.int1, tl.int8, tl.int16, tl.bfloat16]:
+    if element_ty is tl.bfloat16 and op != 'add':
+        raise ValueError("atomic_" + op + " does not support bf16")
+    if element_ty in [tl.int16, tl.uint16] or element_ty.primitive_bitwidth < 16:
         raise ValueError("atomic_" + op + " does not support " + str(element_ty))
     if ptr.type.is_block():
         if mask is not None:
@@ -1823,7 +1849,7 @@ def device_print(prefix: str, args: List[tl.tensor], hex: bool, builder: ir.buil
         prefix = " " + prefix
 
     new_args = [arg.handle for arg in args]
-    is_signed = [arg.dtype in (tl.int1, tl.int8, tl.int16, tl.int32, tl.int64) for arg in args]
+    is_signed = [arg.dtype.is_int_signed() for arg in args]
     return tl.tensor(builder.create_print(prefix, hex, new_args, is_signed), tl.void)
 
 
@@ -1922,8 +1948,8 @@ def make_tensor_descriptor(
     builder: ir.builder,
 ) -> tl.tensor_descriptor:
     ndim = len(shape)
-    if not (2 <= ndim <= 5):
-        raise ValueError(f"Expected 2 <= ndim <= 5 but got {ndim} dimensions")
+    if not (1 <= ndim <= 5):
+        raise ValueError(f"Expected 1 <= ndim <= 5 but got {ndim} dimensions")
     if len(strides) != ndim:
         raise ValueError(f"Expected {ndim} strides but got {len(strides)}")
     if len(block_shape) != ndim:
@@ -1948,6 +1974,9 @@ def make_tensor_descriptor(
 
     assert isinstance(base.type, tl.pointer_type)
     type = tl.block_type(base.type.element_ty, block_shape)
-    handle = builder.create_make_tensor_descriptor(base.handle, [s.handle for s in shape], [s.handle for s in strides],
-                                                   block_shape)
+    base_handle = base.handle
+    is_signed_int = base.type.element_ty.is_int_signed()
+
+    handle = builder.create_make_tensor_descriptor(base_handle, [s.handle for s in shape], [s.handle for s in strides],
+                                                   block_shape, is_signed_int)
     return tl.tensor_descriptor(handle, shape, strides, type)

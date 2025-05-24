@@ -24,46 +24,6 @@ pip install triton
 
 Binary wheels are available for CPython 3.9-3.13.
 
-# Enabling Blackwell Support
-
-The main branch now features support for NVIDIA Blackwell GPUs using 5th
-generation tensor cores. To enable this, you will need two additional steps:
-
-1. Build a pre-release PyTorch from source with CUDA 12.8
-2. Build triton from the latest source
-
-
-First, to build pytorch you need to have CUDA 12.8 installed locally. If not,
-follow the [instructions for your platform](https://developer.nvidia.com/cuda-downloads)
-```bash
-# Clone and checkout pytorch 2.6 release candidate
-git clone https://github.com/pytorch/pytorch
-cd pytorch
-git checkout v2.6.0-rc9
-git submodule sync
-git submodule update --init --recursive -j 8
-
-# Install build dependencies (assumes you already have a system compiler)
-pip install -r requirements.txt
-pip install mkl-static mkl-include wheel
-
-# Build PyTorch (will take a long time)
-export CUDA_HOME=/usr/local/cuda-12.8
-export CUDA_PATH=$CUDA_HOME
-export TORCH_CUDA_ARCH_LIST=Blackwell
-python setup.py develop
-
-# Optional, package build into a wheel to install on other machines.
-python setup.py bdist_wheel
-ls dist  # Wheel should be output in this directory
-```
-
-Note that if you use the domain libraries (`torchvision`, `torchtext`,
-`torchaudio`, etc.) these will need to be built from source as well, otherwise
-their custom PyTorch extensions will not work.
-
-Finally, follow the instructions below to install triton from source.
-
 # Install from source
 
 ```shell
@@ -71,7 +31,7 @@ git clone https://github.com/triton-lang/triton.git
 cd triton
 
 pip install -r python/requirements.txt # build-time dependencies
-pip install -e python
+pip install -e .
 ```
 
 Or with a virtualenv:
@@ -84,7 +44,7 @@ python -m venv .venv --prompt triton
 source .venv/bin/activate
 
 pip install -r python/requirements.txt # build-time dependencies
-pip install -e python
+pip install -e .
 ```
 
 # Building with a custom LLVM
@@ -124,7 +84,7 @@ arbitrary LLVM version.
        $ LLVM_INCLUDE_DIRS=$LLVM_BUILD_DIR/include \
          LLVM_LIBRARY_DIR=$LLVM_BUILD_DIR/lib \
          LLVM_SYSPATH=$LLVM_BUILD_DIR \
-         pip install -e python
+         pip install -e .
 
 # Tips for building
 
@@ -139,7 +99,7 @@ arbitrary LLVM version.
   can be changed anytime.
 
 - If you're running out of memory when building Triton, specify the `MAX_JOBS`
-  environment variable (to the `pip install -e python` command) to limit the
+  environment variable (to the `pip install -e .` command) to limit the
   number of jobs.
 
 - Pass `--no-build-isolation` to `pip install` to make nop builds faster.
@@ -150,10 +110,10 @@ arbitrary LLVM version.
   (probably because, in our build, users don't invoke cmake directly, but
   instead use setup.py).  Teach vscode how to compile Triton as follows.
 
-    - Do a local build. Run command `pip install -e python`
+    - Do a local build. Run command `pip install -e .`
     - Get the full path to the `compile_commands.json` file produced by the build:
-      `find python/build -name 'compile_commands.json' | xargs readlink -f`.
-      You might get a full path similar to `/Users/{username}/triton/python/build/cmake.macosx-11.1-arm64-cpython-3.12/compile_commands.json`
+      `find ./build -name 'compile_commands.json' | xargs readlink -f`.
+      You might get a full path similar to `/Users/{username}/triton/build/cmake.macosx-11.1-arm64-cpython-3.12/compile_commands.json`
     - In vscode, install the
       [C/C++
       extension](https://marketplace.visualstudio.com/items?itemName=ms-vscode.cpptools),
@@ -183,7 +143,9 @@ $ make test-nogpu
 
 For detailed instructions on how to debug Triton's frontend, please refer to this [tutorial](https://triton-lang.org/main/programming-guide/chapter-3/debugging.html). The following includes additional tips for hacking on Triton's backend.
 
-**Helpful environment variables**
+**Configuration knobs**
+
+See [`python/triton/knobs.py`](python/triton/knobs.py) for the full list of configuration knobs. You can set those knobs directly in python or use environment variables to control them. Below are some of the environment variables you can specify (see `knobs.py` for the full list):
 
 - `MLIR_ENABLE_DUMP=1` dumps the IR before every MLIR pass Triton runs, for all
    kernels. Use `MLIR_ENABLE_DUMP=kernelName` to dump for a specific kernel only.
@@ -250,6 +212,9 @@ For detailed instructions on how to debug Triton's frontend, please refer to thi
 - `TRITON_OVERRIDE_DIR` specifies the directory from which to load the IR/ptx/amdgcn files when `TRITON_KERNEL_OVERRIDE` is set to 1.
 - `TRITON_F32_DEFAULT` sets the default input precision of `tl.dot` when using 32-bit floats, which can be either `ieee`, `tf32`, or `tf32x3`.
 - `TRITON_FRONT_END_DEBUGGING=1` disables exception wrapping when an error occurs in the compiler frontend, allowing the full stack trace to be seen.
+- `TRITON_DISABLE_LINE_INFO=1` removes all line information from the module
+
+N.B. Some of these environment variables don't have a knob in `knobs.py`-- those are only relevant to the C++ layer(s), hence they don't exist in the python layer.
 
 **Kernel Override Steps**
 

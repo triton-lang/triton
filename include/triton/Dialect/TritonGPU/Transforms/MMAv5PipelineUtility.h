@@ -17,19 +17,40 @@ namespace triton::nvidia_gpu {
 // MMA Pipeline Analysis
 //===----------------------------------------------------------------------===//
 
-// Returns the TMEMAllocOp and TMEMLoadOp that are used to allocate and load the
-// accumulator for the given MMA operation. The TMEMAllocOp and TMEMLoadOp must
-// be in the same region as the MMA operation.
-std::optional<std::pair<TMEMAllocOp, TMEMLoadOp>>
-getTMemAllocAndLoad(MMAv5OpInterface mmaOp);
 // Given an MMAv5 operation in a loop, determine if its accumulator can be
 // multibuffered.
 bool isAccMultibufferingPossible(MMAv5OpInterface mma, scf::ForOp forOp);
-// Only pipeline the loops where the MMA happens before the tmem_load, or is in
-// the same stage as the tmem_load. Lowering does not support the case where the
-// MMA is in a different stage as the tmem_load and happens after it.
-bool mmav5DominatesTmemLoads(
-    scf::ForOp forOp, function_ref<bool(MMAv5OpInterface)> isMmaPipelineable);
+
+// Returns true if the MMA operation requires acc multi-buffering when
+// pipelined.
+bool requiresAccMultiBuffering(MMAv5OpInterface mma, scf::ForOp forOp);
+
+// Returns true if there are loads from tmem after the MMA operation.
+bool hasLoadsAfterMMA(MMAv5OpInterface mma, scf::ForOp forOp);
+
+// Helper class to determine if the operands of an MMA operation are
+// pipelineable.
+class MMAv5PipelineableOperandsHelper {
+public:
+  MMAv5PipelineableOperandsHelper(
+      MMAv5OpInterface mmaOp, scf::ForOp forOp,
+      std::function<bool(Operation *)> isLoadToBePipelined)
+      : mmaOp(mmaOp), forOp(forOp), isLoadToBePipelined(isLoadToBePipelined) {
+    run();
+  }
+  bool isPipelineable = false;
+  // If true, the existing operand loads are all been found and their
+  // pipelineability has been determined.
+  bool isOperandsStateDetermined = false;
+  SmallVector<Operation *> unpipelineableOperandLoads;
+
+private:
+  MMAv5OpInterface mmaOp;
+  scf::ForOp forOp;
+  std::function<bool(Operation *)> isLoadToBePipelined;
+  bool comesFromLoadOrOutsideLoop(Value v, Operation *&foundLoad);
+  void run();
+};
 
 //===----------------------------------------------------------------------===//
 // MMA Pipeline Rewriters
@@ -39,12 +60,6 @@ bool mmav5DominatesTmemLoads(
 // optionally multi-buffered based on the number of stages.
 TMEMAllocOp createTMemAlloc(OpBuilder &builder, TMEMAllocOp oldTMemAllocOp,
                             bool multiBufferred, int numStages);
-
-// Return true if operands of the MMA operation are/are going to be pipelined
-// and multibuffered, enabling the MMA operation to be pipelined.
-bool mmaHasPipelineableOperands(
-    MMAv5OpInterface mma, scf::ForOp forOp,
-    std::function<bool(Operation *)> isLoadPipelineable);
 
 // Return true if the accumulator of an mma in subsequent iterations is either
 // independent from the previous iteration (overwritten) or completely reused,

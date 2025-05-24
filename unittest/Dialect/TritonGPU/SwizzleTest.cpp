@@ -5,6 +5,8 @@
 using namespace mlir;
 using mlir::triton::gpu::SwizzledSharedEncodingAttr;
 
+namespace {
+
 struct swizzleParams {
   int vec;
   int perPhase;
@@ -57,6 +59,8 @@ INSTANTIATE_TEST_SUITE_P(TestDotOperands, SwizzleDotOperandTestFixture,
                                            ParamT{{32, 32}, 1, 16, {8, 2, 4}},
                                            ParamT{{16, 16}, 0, 16, {8, 4, 2}},
                                            ParamT{{16, 16}, 1, 16, {8, 4, 2}}));
+
+} // anonymous namespace
 
 int main(int argc, char *argv[]) {
   llvm::sys::PrintStackTraceOnErrorSignal(argv[0]);

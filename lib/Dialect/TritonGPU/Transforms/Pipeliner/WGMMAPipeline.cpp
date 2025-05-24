@@ -6,6 +6,7 @@
 #include "triton/Analysis/Utility.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Types.h"
+#include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Attributes.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/PipelineExpander.h"
@@ -29,6 +30,30 @@ using namespace mlir;
 namespace tt = mlir::triton;
 namespace ttg = mlir::triton::gpu;
 namespace ttng = mlir::triton::nvidia_gpu;
+
+// Returns whether the dot is such that:
+// 1. The LHS comes from registers and
+// 1.1  The LHS is defined inside the loop
+// 1.2. The LHS does not come from another dot
+// For these dots, we assume that we cannot rewrite their
+// operands until the previous dot has finished
+static bool rsDotNeedsWait(Operation *dot, scf::ForOp forOp) {
+  auto dotOp = dyn_cast<ttng::WarpGroupDotOp>(dot);
+  if (!dotOp)
+    return false;
+  auto a = dotOp.getA();
+  if (!isa<RankedTensorType>(a.getType())) {
+    return false;
+  }
+  if (forOp.isDefinedOutsideOfLoop(a)) {
+    return false;
+  }
+  if (auto cvt = dyn_cast<ttg::ConvertLayoutOp>(a.getDefiningOp())) {
+    return !isa<ttg::NvidiaMmaEncodingAttr>(
+        cvt.getSrc().getType().getEncoding());
+  }
+  return true;
+}
 
 /// Find the minimum number of async_commit_group ops between the wait
 /// and the associated async_commit_group. This can be safely used as the wait
@@ -206,6 +231,146 @@ static void threadValuesThroughWait(ttng::WarpGroupDotWaitOp wait,
   wait->erase();
 }
 
+// Split the LHS of a RSWGMMADot operation into multiple
+// tensors of size MxnewK via SplitOps
+SmallVector<Value> splitLhs(OpBuilder &builder,
+                            TypedValue<RankedTensorType> lhs, int64_t newK) {
+  auto loc = lhs.getLoc();
+  auto type = lhs.getType();
+  auto rank = type.getRank();
+  auto shape = to_vector(type.getShape());
+  auto nSplits = shape.back() / newK;
+  assert(nSplits > 1);
+  // Reshape K == 2x..x2xnewK
+  shape.pop_back();
+  for (int i = 1; i < nSplits; i *= 2) {
+    shape.push_back(2);
+  }
+  shape.push_back(newK);
+  lhs = builder.create<tt::ReshapeOp>(loc, shape, lhs);
+  // We want to split first the slowest running dim, then the second slowest,
+  // etc.
+  auto transOrder = to_vector(llvm::seq<int>(rank - 1));
+  transOrder.push_back(shape.size() - 1);
+  llvm::append_range(transOrder, llvm::reverse(llvm::seq(
+                                     rank - 1, (int64_t)shape.size() - 1)));
+  lhs = builder.create<tt::TransOp>(loc, lhs, transOrder);
+  // We split recursively
+  SmallVector<Value> curr;
+  SmallVector<Value> ret = {lhs};
+  for (int i = 1; i < nSplits; i *= 2) {
+    curr = ret;
+    ret.clear();
+    for (auto v : curr) {
+      auto split = builder.create<tt::SplitOp>(loc, v);
+      ret.push_back(split.getResult(0));
+      ret.push_back(split.getResult(1));
+    }
+  }
+
+  auto mmav3Type =
+      type.clone(cast<RankedTensorType>(ret.front().getType()).getShape());
+  // Convert the LHS to mmav3 layout
+  for (auto &v : ret) {
+    v = builder.create<ttg::ConvertLayoutOp>(loc, mmav3Type, v);
+    // These convert_layout ops are noops by construction
+    assert(isNoop(v.getDefiningOp()));
+  }
+  assert(ret.size() == nSplits);
+  return ret;
+}
+
+// Split the RHS of a RSWGMMADot operation into multiple multiple
+// tensors of size newKxN via MemDescSubview
+SmallVector<Value> splitRhs(OpBuilder &builder,
+                            TypedValue<ttg::MemDescType> rhs, int64_t newK) {
+  auto loc = rhs.getLoc();
+  auto type = rhs.getType();
+  auto rank = type.getRank();
+  auto kDim = rank - 2;
+  auto nSplits = type.getShape()[kDim] / newK;
+  auto shape = llvm::to_vector(type.getShape());
+  shape[kDim] = newK;
+  SmallVector<Value> offsetsVal;
+  for (int i = 0; i < rank; i++) {
+    offsetsVal.push_back(builder.create<arith::ConstantIntOp>(loc, 0, 32));
+  }
+  auto newType = ttg::MemDescType::get(
+      shape, type.getElementType(), type.getEncoding(), type.getMemorySpace(),
+      /*isMutable=*/false, type.getAllocShape());
+  SmallVector<Value> ret;
+  for (int i = 0; i < nSplits; i++) {
+    offsetsVal[kDim] = builder.create<arith::ConstantIntOp>(loc, i * newK, 32);
+    Value newSmem = builder.create<triton::gpu::MemDescSubviewOp>(
+        loc, newType, rhs, offsetsVal);
+    ret.push_back(newSmem);
+  }
+  return ret;
+}
+
+std::vector<ttng::WarpGroupDotOp> splitRSDot(ttng::WarpGroupDotOp dotOp) {
+  // Splits a wgmma(tensor, shmem) MxK, KxN -> MxN into
+  // along K into multiple wgmma(tensor, shmem) Mx16, 16xN -> MxN
+  // where 16 is the instruction size
+  if (!isa<RankedTensorType>(dotOp.getA().getType())) {
+    return {dotOp};
+  }
+
+  auto a = cast<TypedValue<RankedTensorType>>(dotOp.getA());
+  auto b = cast<TypedValue<ttg::MemDescType>>(dotOp.getB());
+  auto origK = a.getType().getShape().back();
+  auto newK = cast<ttg::NvidiaMmaEncodingAttr>(dotOp.getType().getEncoding())
+                  .getInstrShape()[2];
+  auto numSplits = origK / newK;
+  // Nothing to split
+  if (numSplits <= 1) {
+    return {dotOp};
+  }
+
+  assert(origK % newK == 0 && "origK must be divisible by newK");
+  auto builder = OpBuilder(dotOp);
+  auto loc = dotOp.getLoc();
+  auto lhss = splitLhs(builder, a, newK);
+  auto rhss = splitRhs(builder, b, newK);
+  assert(lhss.size() == numSplits && "lhs must have the same number of splits");
+  assert(rhss.size() == numSplits && "rhs must have the same number of splits");
+
+  Value useC = dotOp.getUseC();
+  Value C = dotOp.getC();
+  auto numImpreciseAccLeft = dotOp.getMaxNumImpreciseAcc();
+  std::vector<ttng::WarpGroupDotOp> dots;
+  for (int i = 0; i < numSplits; i++) {
+    //  2**30 is to prevent the subtile from adding
+    // extra imprecise accumulator, See WGMMA.cpp
+    auto take = std::min(numImpreciseAccLeft, newK);
+    uint32_t numImpreciseAcc = (take == newK) ? (1u << 30) : take;
+    numImpreciseAccLeft -= take;
+
+    auto dot = builder.create<ttng::WarpGroupDotOp>(
+        loc, dotOp.getType(), lhss[i], rhss[i], C, useC,
+        dotOp.getInputPrecision(), numImpreciseAcc, dotOp.getIsAsync());
+    dots.push_back(dot);
+    C = dot.getResult();
+    useC = builder.create<mlir::arith::ConstantIntOp>(loc, 1, 1);
+  }
+  dotOp.replaceAllUsesWith(dots.back().getResult());
+  dotOp.erase();
+  return dots;
+}
+
+// Apply splitRSDot to all dots in the input list.
+llvm::MapVector<Operation *, int>
+splitRSDots(const llvm::MapVector<Operation *, int> &dots) {
+  llvm::MapVector<Operation *, int> ret;
+  for (auto [dot, iterArgIdx] : dots) {
+    auto newDots = splitRSDot(cast<ttng::WarpGroupDotOp>(dot));
+    for (auto newDot : newDots) {
+      ret.insert({newDot, iterArgIdx});
+    }
+  }
+  return ret;
+}
+
 // Determines whether a given MMAv3 dot op, represented as ttng.warp_group_dot,
 // needs a wait immediately after it.
 //
@@ -260,26 +425,17 @@ static std::optional<int> dotCanBeProperlyAsync(ttng::WarpGroupDotOp dotOp,
                                                 scf::ForOp forOp) {
   LDBG("Considering whether to make MMAv3 dot properly async: " << dotOp);
 
-  // Rule 1: All shmem operands are multi-buffered.
   auto checkOperand = [&](Value operand) {
-    if (!isa<ttg::SharedEncodingTrait>(
-            cast<ttg::TensorOrMemDesc>(operand.getType()).getEncoding())) {
-      // Rule 1a: Register operands must not be modified within the loop.
-      // First, check for chained WGMMA as an exception.
-      if (auto cvt = dyn_cast<ttg::ConvertLayoutOp>(operand.getDefiningOp())) {
-        return isa<ttg::NvidiaMmaEncodingAttr>(
-            cvt.getSrc().getType().getEncoding());
-      }
-      // And then, do a stricter-than-necessary check for now, that the operand
-      // is defined outside the loop.
-      return forOp.isDefinedOutsideOfLoop(operand);
+    // We can always make RSGEMM async s long as the RHS can be multi-buffered
+    if (isa<RankedTensorType>(operand.getType())) {
+      return true;
     }
-
     // If it's a shmem operand, it must either be defined outside the loop, or
-    // come from an MemDescSubview op.  Only ConvertLayout and Trans ops are
+    // come from an MemDescSubview op.  Only ConvertLayout and view ops are
     // allowed in between.
     Value transitiveOperand = operand;
-    while (isa_and_nonnull<ttg::ConvertLayoutOp, ttg::MemDescTransOp>(
+    while (isa_and_nonnull<ttg::ConvertLayoutOp, ttg::MemDescTransOp,
+                           ttg::MemDescReshapeOp>(
                transitiveOperand.getDefiningOp()) ||
            isa<BlockArgument>(transitiveOperand)) {
       auto blockArg = dyn_cast<BlockArgument>(transitiveOperand);
@@ -295,6 +451,7 @@ static std::optional<int> dotCanBeProperlyAsync(ttng::WarpGroupDotOp dotOp,
            transitiveOperand.getDefiningOp<ttg::MemDescSubviewOp>();
   };
 
+  // Rule 1: All shmem operands are multi-buffered.
   // We don't have to call checkOperand on getC() because it's always in
   // registers, never in shmem.
   assert(isa<ttg::NvidiaMmaEncodingAttr>(dotOp.getC().getType().getEncoding()));
@@ -314,6 +471,13 @@ static std::optional<int> dotCanBeProperlyAsync(ttng::WarpGroupDotOp dotOp,
   while (!queue.empty()) {
     auto [user, argIdx] = queue.pop_back_val();
     if (user->getParentOp() == forOp) {
+      // We support noops in between the dot and the yield
+      if (isNoop(user)) {
+        for (auto &use : user->getResult(0).getUses()) {
+          queue.push_back({use.getOwner(), use.getOperandNumber()});
+        }
+        continue;
+      }
       if (isa<scf::YieldOp>(user)) {
         if (iterArg) {
           // The dot is used by the loop's yield, but we can't have any other
@@ -342,15 +506,28 @@ static std::optional<int> dotCanBeProperlyAsync(ttng::WarpGroupDotOp dotOp,
       return std::nullopt;
     }
   }
-
-  // Rule 3a: Are the only users of the dot's result from iteration i-1 other
-  // MMAv3 dots?  If so, we're done, this dot can be properly async.
-  if (llvm::all_of(iterArg.getUses(), [&](OpOperand &use) {
-        return isa<ttng::WarpGroupDotOp>(use.getOwner()) &&
-               use.getOperandNumber() == 2;
-      })) {
-    return iterArgIdx;
+  // Rule 2.1: We don't make the dot async if the accumulator is not fp32.
+  if (!dotOp.getC().getType().getElementType().isF32()) {
+    LDBG("Can't make dot async because the accumulator is not fp32");
+    return std::nullopt;
   }
+
+  // Rule 3a: Check that every use of the dot’s result (iterArg) eventually
+  // reaches a WarpGroupDotOp (with use index 2), possibly after passing through
+  // a chain of noops
+  std::function<bool(OpOperand &)> isTransitivelyWarpGroupDot =
+      [&](OpOperand &use) -> bool {
+    Operation *user = use.getOwner();
+    if (isa<ttng::WarpGroupDotOp>(user))
+      return use.getOperandNumber() == 2;
+    if (isNoop(user))
+      return llvm::all_of(user->getResult(0).getUses(),
+                          isTransitivelyWarpGroupDot);
+    return false;
+  };
+
+  if (llvm::all_of(iterArg.getUses(), isTransitivelyWarpGroupDot))
+    return iterArgIdx;
 
   // Rule 3b: Are all users of the dot's result from iteration i-1 after the
   // first `warp_group_dot_wait {pendings=0}` op?  If so, the dot can be
@@ -413,7 +590,21 @@ static void insertAsyncWarpGroupDotWaitInLoop(
 
   // Insert waits before the users of the properly async dots other than loop
   // yield.
-  for (auto [asyncDot, iterArgIdx] : properlyAsyncDots) {
+  for (auto asyncDot : llvm::make_first_range(properlyAsyncDots)) {
+    // If the dot takes the LHS on registers i, we add a wait for the number
+    // of properly async dots in the loop minus one.
+    // This makes sure that the dot will wait until itself from the previous
+    // iteration has completed, as to avoid rewriting the registers.
+    if (rsDotNeedsWait(asyncDot, forOp)) {
+      OpBuilder builder(asyncDot);
+      builder.setInsertionPointAfter(asyncDot);
+      auto newWait = builder.create<ttng::WarpGroupDotWaitOp>(
+          asyncDot->getLoc(), ArrayRef<Value>{}, properlyAsyncDots.size() - 1);
+      SmallVector<Value> waitOperands = {asyncDot->getResult(0)};
+      threadValuesThroughWait(newWait, waitOperands);
+      continue;
+    }
+
     SmallVector<OpOperand *> uses;
     for (auto &use : asyncDot->getUses()) {
       if (auto yieldOp = dyn_cast<scf::YieldOp>(use.getOwner())) {
@@ -447,6 +638,11 @@ static void insertAsyncWarpGroupDotWaitInLoop(
   // by a dot.)
   IRRewriter builder(forOp.getContext());
   auto lastAsyncDot = properlyAsyncDots.back().first;
+  // If the last dot is an RS dot, we don't need to insert a wait
+  // as we have already inserted a wait(properlyAsyncDots.size() - 1)
+  if (rsDotNeedsWait(lastAsyncDot, forOp)) {
+    return;
+  }
   builder.setInsertionPointAfter(lastAsyncDot);
   auto wait = builder.create<ttng::WarpGroupDotWaitOp>(
       lastAsyncDot->getLoc(),
@@ -501,6 +697,16 @@ void triton::asyncLaunchDots(scf::ForOp forOp) {
   if (properlyAsyncDots.empty()) {
     LDBG("No properly async dots.");
     return;
+  }
+
+  // Split RS dots into dots with K = 16 (the instruction size of MMAv3)
+  // If we split them in nSplit dots, we will be able to keep nSplit-1 dots
+  // in flight at a time.
+  // We just do it if there is no wait 0 in the loop, as otherwise the split
+  // just creates unnecessary commits and arrives.
+  if (llvm::all_of(forOp.getBody()->getOps<ttng::WarpGroupDotWaitOp>(),
+                   [](auto wait) { return wait.getPendings() != 0; })) {
+    properlyAsyncDots = splitRSDots(properlyAsyncDots);
   }
 
   // Next, insert a wait inside the loop.  We pipeline to depth 2, so the third

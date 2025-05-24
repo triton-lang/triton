@@ -6,6 +6,7 @@
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/LinearLayoutConversions.h"
 #include "triton/Dialect/TritonGPU/IR/TritonGPUInterfaces.h"
+#include "triton/Dialect/TritonNvidiaGPU/Transforms/TMAUtilities.h"
 #include "triton/Tools/LayoutUtils.h"
 #include "triton/Tools/LinearLayout.h"
 #include "triton/Tools/StrUtil.h"
@@ -126,14 +127,16 @@ LinearLayout combineCtaCgaWithShape(LinearLayout ctaLayout,
   return ret;
 }
 
-LinearLayout
-sharedToLinearLayoutNoLeadingOffset(ArrayRef<int64_t> shape,
-                                    SwizzledSharedEncodingAttr shared) {
+LinearLayout swizzledSharedToLinearLayout(ArrayRef<int64_t> shape,
+                                          SwizzledSharedEncodingAttr shared) {
   MLIRContext *ctx = shared.getContext();
+
+  auto shapePerCTA = getShapePerCTA(shared, shape);
+
   int rank = shape.size();
   if (rank == 1) {
     return combineCtaCgaWithShape(
-        LinearLayout::identity1D(shape[0], S("offset"), S("dim0")),
+        LinearLayout::identity1D(shapePerCTA[0], S("offset"), S("dim0")),
         shared.getCTALayout(), shape);
   }
 
@@ -142,7 +145,6 @@ sharedToLinearLayoutNoLeadingOffset(ArrayRef<int64_t> shape,
   // Construct bases for the 2 most minor dimensions of the layout.  These are
   // the dims that get swizzled.
   assert(shape.size() >= 2);
-  auto shapePerCTA = getShapePerCTA(shared, shape);
   int colDim = shared.getOrder()[0];
   int rowDim = shared.getOrder()[1];
   int numCols = shapePerCTA[colDim];
@@ -151,11 +153,10 @@ sharedToLinearLayoutNoLeadingOffset(ArrayRef<int64_t> shape,
   StringAttr rowDimName = outDimNames[rowDim];
 
   std::vector<std::vector<int>> bases2D;
-  for (int logCol = 0; logCol < llvm::Log2_32(numCols); logCol++) {
-    bases2D.push_back({0, 1 << logCol});
+  for (int col = 1; col < numCols; col *= 2) {
+    bases2D.push_back({0, col});
   }
-  for (int logRow = 0; logRow < llvm::Log2_32(numRows); logRow++) {
-    int row = 1 << logRow;
+  for (int row = 1; row < numRows; row *= 2) {
     int vec = shared.getVec();
     int perPhase = shared.getPerPhase();
     int maxPhase = shared.getMaxPhase();
@@ -178,10 +179,13 @@ LinearLayout
 sharedToLinearLayoutAMDRotating(ArrayRef<int64_t> shape,
                                 AMDRotatingSharedEncodingAttr shared) {
   MLIRContext *ctx = shared.getContext();
+
+  auto shapePerCTA = getShapePerCTA(shared, shape);
+
   int rank = shape.size();
   if (rank == 1) {
     return combineCtaCgaWithShape(
-        LinearLayout::identity1D(shape[0], S("offset"), S("dim0")),
+        LinearLayout::identity1D(shapePerCTA[0], S("offset"), S("dim0")),
         shared.getCTALayout(), shape);
   }
 
@@ -198,11 +202,10 @@ sharedToLinearLayoutAMDRotating(ArrayRef<int64_t> shape,
   StringAttr rowDimName = outDimNames[rowDim];
 
   std::vector<std::vector<int>> bases2D;
-  for (int logCol = 0; logCol < llvm::Log2_32(numCols); logCol++) {
-    bases2D.push_back({0, 1 << logCol});
+  for (int col = 1; col < numCols; col *= 2) {
+    bases2D.push_back({0, col});
   }
-  for (int logRow = 0; logRow < llvm::Log2_32(numRows); logRow++) {
-    int row = 1 << logRow;
+  for (int row = 1; row < numRows; row *= 2) {
     int vec = shared.getVec();
     int perPhase = shared.getPerPhase();
     int maxPhase = shared.getMaxPhase();
@@ -225,88 +228,39 @@ sharedToLinearLayoutAMDRotating(ArrayRef<int64_t> shape,
   return combineCtaCgaWithShape(ctaLayout, shared.getCTALayout(), shape);
 }
 
-} // namespace
+// Returns the layout of a single core matrix which tiles the nvmma layout
+LinearLayout getCoreMatrixLinearLayout(NVMMASharedEncodingAttr shared,
+                                       bool disableSwizzle) {
+  auto *ctx = shared.getContext();
 
-LinearLayout sharedToLinearLayoutLeadingOffset(ArrayRef<int64_t> shape,
-                                               NVMMASharedEncodingAttr shared,
-                                               bool disableSwizzle) {
-  MLIRContext *ctx = shared.getContext();
-  int rank = shape.size();
-  if (rank == 1) {
-    // TODO: Not sure if this is correct.
-    return combineCtaCgaWithShape(
-        LinearLayout::identity1D(shape[0], S("offset"), S("dim0")),
-        shared.getCTALayout(), shape);
-  }
   int elemBitWidth = shared.getElementBitWidth();
   int tileWidthBytes = shared.getSwizzlingByteWidth();
-  int vec = 128 / elemBitWidth;
-  int perPhase = 0;
-  int maxPhase = 0;
-  if (tileWidthBytes == 32) {
-    perPhase = 4;
-    maxPhase = 2;
-  } else if (tileWidthBytes == 64) {
-    perPhase = 2;
-    maxPhase = 4;
-  } else if (tileWidthBytes == 128) {
-    perPhase = 1;
-    maxPhase = 8;
-  }
-  auto outDimNames = standardOutDimNames(ctx, rank);
-
-  // Construct bases for a the layout's 2-dimensional tile.
-  assert(rank >= 2);
-  int batchDims = rank - 2;
-  int colDim = batchDims + (shared.getTransposed() ? 0 : 1);
-  int rowDim = batchDims + (shared.getTransposed() ? 1 : 0);
+  int vec = shared.getVec();
+  int perPhase = shared.getPerPhase();
+  int maxPhase = shared.getMaxPhase();
 
   int tileRows = 8;
   int tileCols = 8 * tileWidthBytes / elemBitWidth;
-  bool isFp4Padded = false;
-  if (auto sharedMMALayout =
-          dyn_cast<triton::gpu::NVMMASharedEncodingAttr>(shared)) {
-    if (sharedMMALayout.getFp4Padded()) {
-      isFp4Padded = true;
-    }
-  }
-  int packingFactor = isFp4Padded ? 2 : 1;
-  auto shapePerCTA = getShapePerCTA(shared, shape);
-
-  if (shapePerCTA[colDim] * packingFactor < tileCols ||
-      shapePerCTA[rowDim] < tileRows) {
-    llvm::errs()
-        << "Illegal shared layout; expected shapePerCTA to be at least ["
-        << tileRows << ", " << tileCols << "], shapePerCTA: ["
-        << shapePerCTA[rowDim] << ", " << shapePerCTA[colDim] << "]\n";
-    llvm::report_fatal_error("Illegal shared layout");
-  }
-
-  StringAttr colDimName = outDimNames[colDim];
-  StringAttr rowDimName = outDimNames[rowDim];
+  bool isFp4Padded = shared.getFp4Padded();
 
   std::vector<std::vector<int>> bases2D;
-  for (int logCol = 0; logCol < llvm::Log2_32(tileCols); logCol++) {
+  for (int col = 1; col < tileCols; col *= 2) {
     if (isFp4Padded) {
-      int colPadded = 1 << logCol;
       // Each group of 16 offsets consists of 8 "real" and 8 "padded" offsets.
       // We represent the padded layout by mapping 8 padded offsets to the same
       // coordinates as the real ones. When computing the inverse of this LL,
       // the offsets correspoding to the real ones are picked in the image by
       // invertAndCompose.
-      int colPacked = colPadded / 16 * 8 + colPadded % 8;
+      int colPacked = col / 16 * 8 + col % 8;
       bases2D.push_back({0, colPacked});
     } else {
-      bases2D.push_back({0, 1 << logCol});
+      bases2D.push_back({0, col});
     }
   }
-  for (int logRow = 0; logRow < llvm::Log2_32(tileRows); logRow++) {
-    int row = 1 << logRow;
+  for (int row = 1; row < tileRows; row *= 2) {
     if (disableSwizzle) {
       bases2D.push_back({row, 0});
-      continue;
-    }
-    if (isFp4Padded) {
+    } else if (isFp4Padded) {
       int colPadded = vec * ((row / perPhase) % maxPhase);
       int colPacked = colPadded / 16 * 8 + colPadded % 8;
       bases2D.push_back({row, colPacked});
@@ -314,16 +268,88 @@ LinearLayout sharedToLinearLayoutLeadingOffset(ArrayRef<int64_t> shape,
       bases2D.push_back({row, vec * ((row / perPhase) % maxPhase)});
     }
   }
-  LinearLayout tileLayout =
-      LinearLayout({{S("offset"), bases2D}}, {rowDimName, colDimName});
+  auto outDimNames = standardOutDimNames(ctx, 2);
+  return LinearLayout({{S("offset"), bases2D}}, outDimNames);
+}
 
-  // Add the remaining dimensions.
-  for (int dim = batchDims - 1; dim >= 0; --dim) {
-    tileLayout *= LinearLayout::identity1D(shapePerCTA[dim], S("offset"),
-                                           outDimNames[dim]);
+} // namespace
+
+LinearLayout nvmmaSharedToLinearLayout(ArrayRef<int64_t> shape,
+                                       NVMMASharedEncodingAttr shared,
+                                       bool disableSwizzle) {
+  MLIRContext *ctx = shared.getContext();
+  int rank = shape.size();
+  auto shapePerCTA = getShapePerCTA(shared, shape);
+  auto kOffset = S("offset");
+  auto tmaShape = triton::nvidia_gpu::getTMABlockShape(shared, shapePerCTA,
+                                                       /*packedSize=*/true);
+  if (shared.getSwizzlingByteWidth() == 0) {
+    auto outDimNames = standardOutDimNames(ctx, rank);
+    LinearLayout layout = LinearLayout::identity1D(tmaShape[rank - 1], kOffset,
+                                                   outDimNames[rank - 1]);
+    for (int i = rank - 2; i >= 0; --i) {
+      layout *= LinearLayout::identity1D(tmaShape[i], kOffset, outDimNames[i]);
+    }
+    layout = ensureLayoutNotSmallerThan(layout, outDimNames, shapePerCTA);
+    return combineCtaCgaWithShape(layout, shared.getCTALayout(), shape);
+  }
+  assert(rank >= 2);
+
+  // Collapse all the outer dim into one. We will then create a layout for this
+  // shape and reshape it to the original shape.
+  std::array<int64_t, 2> collapsedTmaShape{1, tmaShape.back()};
+  for (int i = 0; i + 1 < rank; i++)
+    collapsedTmaShape[0] *= tmaShape[i];
+  if (shared.getTransposed()) {
+    std::swap(collapsedTmaShape[0], collapsedTmaShape[1]);
   }
 
-  return combineCtaCgaWithShape(tileLayout, shared.getCTALayout(), shape);
+  auto tileLayout = getCoreMatrixLinearLayout(shared, disableSwizzle);
+  auto outDimNames = standardOutDimNames(ctx, 2);
+  auto kRow = outDimNames[0];
+  auto kCol = outDimNames[1];
+  auto tileRows = tileLayout.getOutDimSize(kRow);
+  auto tileCols = tileLayout.getOutDimSize(kCol);
+
+  int packingFactor = shared.getFp4Padded() ? 2 : 1;
+  if (collapsedTmaShape[1] * packingFactor < tileCols ||
+      collapsedTmaShape[0] < tileRows) {
+    llvm::errs() << "Illegal shared layout; expected collapsed shapePerCTA to "
+                    "be at least ["
+                 << tileRows << ", " << (tileCols / packingFactor)
+                 << "], collapsedTmaShape: [" << collapsedTmaShape[0] << ", "
+                 << collapsedTmaShape[1] << "]\n";
+    llvm::report_fatal_error("Illegal shared layout");
+  }
+
+  // Distribute the remaining rows and cols.
+  auto layout =
+      ensureLayoutNotSmallerThan(tileLayout, outDimNames, collapsedTmaShape);
+
+  // Reshape the layout to the N-D pre-transposed shape per CTA.
+  SmallVector<int64_t> maybeTransposedTmaShape = tmaShape;
+  if (shared.getTransposed()) {
+    // Move the outer dim to the inner position.
+    // TODO: we should move back to using `order` instead of transposed to make
+    // the order more explicit.
+    std::rotate(maybeTransposedTmaShape.begin(),
+                maybeTransposedTmaShape.begin() + 1,
+                maybeTransposedTmaShape.end());
+  }
+  auto reshapedLayout = reshapeLayout(ctx, layout, maybeTransposedTmaShape);
+
+  if (shared.getTransposed()) {
+    SmallVector<int> order = {rank - 1};
+    for (int i = 0; i < rank - 1; i++) {
+      order.push_back(i);
+    }
+    reshapedLayout = transposeLinearLayout(reshapedLayout, order);
+  }
+
+  reshapedLayout = ensureLayoutNotSmallerThan(
+      reshapedLayout, standardOutDimNames(ctx, shapePerCTA.size()),
+      shapePerCTA);
+  return combineCtaCgaWithShape(reshapedLayout, shared.getCTALayout(), shape);
 }
 
 /// Function to generate lane and warp layout for dot operands.
@@ -457,7 +483,8 @@ LinearLayout chooseDotDsReadB64TrLayout(DotOperandEncodingAttr dotMfmaLayout,
                                         ArrayRef<int64_t> shape,
                                         int32_t elemBitWidth) {
   auto mfmaLayout = llvm::cast<AMDMfmaEncodingAttr>(dotMfmaLayout.getParent());
-  assert(mfmaLayout.getMDim() == 16 || mfmaLayout.getNDim() == 32);
+  auto mDim = mfmaLayout.getMDim();
+  assert(mDim == 16 || mDim == 32);
   assert(elemBitWidth == 16 || elemBitWidth == 8);
 
   auto rank = shape.size();
@@ -541,8 +568,8 @@ LinearLayout chooseDotDsReadB64TrLayout(DotOperandEncodingAttr dotMfmaLayout,
   }
 
   // Function to extend register base for multiple tiles K dim.
-  auto extendRegisterBaseForKDim = [&](int kTileSize) {
-    const int regsPerTile = kWidthTransRead * 2; // Two subtiles per tile
+  auto extendRegisterBaseForKDim = [&](int kTileSize, int numSubtilesPerTile) {
+    const int regsPerTile = kWidthTransRead * numSubtilesPerTile;
     int totalRegs = (kSize / kTileSize) * regsPerTile;
 
     for (int reg = regsPerTile; reg < totalRegs; reg *= 2) {
@@ -550,19 +577,27 @@ LinearLayout chooseDotDsReadB64TrLayout(DotOperandEncodingAttr dotMfmaLayout,
     }
   };
 
-  const bool isMfma32 = (mfmaLayout.getMDim() == 32);
-  const bool isMfma16 = (mfmaLayout.getMDim() == 16);
-  const int kTileSize = isMfma32 ? 32 / elemByteWidth : 64 / elemByteWidth;
-  const bool largeKSize = kSize >= kTileSize;
+  const bool isMfma32 = (mDim == 32);
+  const bool isMfma16 = (mDim == 16);
+
+  // kDoubleTileSize is the k dimension of a tile when double rated
+  // mfma instructions are used.
+  const int kDoubleTileSize =
+      isMfma32 ? 32 / elemByteWidth : 64 / elemByteWidth;
+  // kTileSize is the actually k dimention of a tile, which is
+  // determined by kWidthDot.
+  const int kTileSize = kWidthDot * 64 / mDim;
+  // We use kDoubleTileSize as a reference to check whether the given
+  // kWidthDot leads to double or single sub-tiles in each tile.
+  const int numSubtilesPerTile = (kTileSize == kDoubleTileSize) ? 2 : 1;
 
   // Extend register base for large K sizes.
-  if (largeKSize) {
+  if (numSubtilesPerTile == 2)
     registerBase.push_back({0, threadsPerSubtileK}); // Second subtile
-    extendRegisterBaseForKDim(kTileSize);
-  }
+
+  extendRegisterBaseForKDim(kTileSize, numSubtilesPerTile);
 
   // Extend lane base based on MFMA size.
-  const int numSubtilesPerTile = largeKSize ? 2 : 1;
   std::vector<std::vector<int32_t>> laneBaseExt;
 
   if (isMfma32) {
@@ -1097,9 +1132,9 @@ LinearLayout TritonGPUDialect::toLinearLayout(ArrayRef<int64_t> shape,
     result = distributed.toLinearLayout(shape);
   } else {
     if (auto shared = dyn_cast<SwizzledSharedEncodingAttr>(layout)) {
-      result = sharedToLinearLayoutNoLeadingOffset(shape, shared);
+      result = swizzledSharedToLinearLayout(shape, shared);
     } else if (auto shared = dyn_cast<NVMMASharedEncodingAttr>(layout)) {
-      result = sharedToLinearLayoutLeadingOffset(shape, shared);
+      result = nvmmaSharedToLinearLayout(shape, shared);
     } else if (auto sbl = dyn_cast<AMDRotatingSharedEncodingAttr>(layout)) {
       result = sharedToLinearLayoutAMDRotating(shape, sbl);
     } else {
@@ -1168,9 +1203,9 @@ LinearLayout chooseShemLayoutForRegToRegConversion(
 }
 
 namespace {
-LinearLayout chooseStMatrixLayoutLeadingOffset(MLIRContext *ctx,
-                                               RankedTensorType tensorTy,
-                                               int swizzleByteSize) {
+LinearLayout chooseStMatrixLayoutNVMMA(MLIRContext *ctx,
+                                       RankedTensorType tensorTy,
+                                       int swizzleByteSize) {
   int perPhase;
   int maxPhase;
   if (swizzleByteSize == 32) {
@@ -1196,8 +1231,7 @@ LinearLayout chooseStMatrixLayoutLeadingOffset(MLIRContext *ctx,
   // Construct a single stmatrix.x4 (16x16) tile
   std::vector<std::vector<int>> basesReg = {{1, 0}, {2, 0}, {4, 0}};
   std::vector<std::vector<int>> basesLane;
-  for (int logRow = 0; logRow < llvm::Log2_32(numRowsPerTile); logRow++) {
-    int row = 1 << logRow;
+  for (int row = 1; row < numRowsPerTile; row *= 2) {
     basesLane.push_back({vecSize * ((row / perPhase) % maxPhase), row});
   }
   basesLane.push_back({8, 0});
@@ -1214,8 +1248,7 @@ LinearLayout chooseStMatrixLayoutLeadingOffset(MLIRContext *ctx,
   // suboptimal. Swizzling should happen within a warp.
   assert(instrN >= numColsPerChunk &&
          "Each chunk is filled in with a single warp");
-  for (int logCol = 0; logCol < llvm::Log2_32(numColsPerChunk / 16); logCol++) {
-    int col = 1 << logCol;
+  for (int col = 1; col < numColsPerChunk / 16; col *= 2) {
     basesReg.push_back({16 * col, 0});
   }
 
@@ -1223,8 +1256,7 @@ LinearLayout chooseStMatrixLayoutLeadingOffset(MLIRContext *ctx,
   std::vector<std::vector<int>> basesWarp;
   auto warpsPerCTA = mma.getWarpsPerCTA();
   auto shapePerCTA = getShapePerCTA(tensorTy);
-  for (int logWarp = 0; logWarp < llvm::Log2_32(warpsPerCTA[0]); logWarp++) {
-    int warp = 1 << logWarp;
+  for (int warp = 1; warp < warpsPerCTA[0]; warp *= 2) {
     basesWarp.push_back({0, warp * instrM});
   }
 
@@ -1233,26 +1265,23 @@ LinearLayout chooseStMatrixLayoutLeadingOffset(MLIRContext *ctx,
   auto numColsPerWarp = std::max<int>(instrN, shapePerCTA[1] / warpsPerCTA[1]);
   assert(warpsPerCTA[1] * instrN >= shapePerCTA[1] &&
          "There must be enough columns to use MMAv3");
-  auto logNumCols = llvm::Log2_32(numColsPerWarp / numColsPerChunk);
-  for (int logCol = 0; logCol < logNumCols; logCol++) {
-    int chunk = 1 << logCol;
-    int basis = chunk * shapePerCTA[0];
+  auto numCols = numColsPerWarp / numColsPerChunk;
+  for (int col = 1; col < numCols; col *= 2) {
+    int basis = col * shapePerCTA[0];
     basesReg.push_back({0, basis});
   }
 
   // Expand the `register` dimension so that the size of rows matches `shape[0]`
   assert(warpsPerCTA[0] * instrM <= shapePerCTA[0] &&
          "There must be enough rows to use MMAv3");
-  auto logNumRows = llvm::Log2_32(shapePerCTA[0] / (warpsPerCTA[0] * instrM));
-  for (int logRow = 0; logRow < logNumRows; logRow++) {
-    int chunk = 1 << logRow;
-    int basis = chunk * warpsPerCTA[0] * instrM;
+  auto numRows = shapePerCTA[0] / (warpsPerCTA[0] * instrM);
+  for (int row = 1; row < numRows; row *= 2) {
+    int basis = row * warpsPerCTA[0] * instrM;
     basesReg.push_back({0, basis});
   }
 
   // Expand the `warp` dimension so that the size of cols matches `shape[1]`
-  for (int logWarp = 0; logWarp < llvm::Log2_32(warpsPerCTA[1]); logWarp++) {
-    int warp = 1 << logWarp;
+  for (int warp = 1; warp < warpsPerCTA[1]; warp *= 2) {
     if (warp * numColsPerWarp >= shapePerCTA[1]) {
       basesWarp.push_back({0, 0});
     } else {
@@ -1270,9 +1299,8 @@ LinearLayout chooseStMatrixLayoutLeadingOffset(MLIRContext *ctx,
       {{S("offset"), layout.getTotalOutDimSize()}, {S("iteration"), 1}});
 }
 
-LinearLayout chooseStMatrixLayoutNoLeadingOffset(MLIRContext *ctx,
-                                                 Attribute encoding,
-                                                 ArrayRef<int64_t> shape) {
+LinearLayout chooseStMatrixLayoutSwizzled(MLIRContext *ctx, Attribute encoding,
+                                          ArrayRef<int64_t> shape) {
   StringAttr kReg = S("register");
   StringAttr kLane = S("lane");
   StringAttr kWarp = S("warp");
@@ -1327,9 +1355,7 @@ LinearLayout chooseDotLdMatrixLayout(DotOperandEncodingAttr dot,
                                  : (needTrans ? S("dim0") : S("dim1"));
 
   std::vector<std::vector<int>> basesReg;
-  for (int logReg = 0; logReg < llvm::Log2_32(8 * 16 / elemBitWidth);
-       logReg++) {
-    auto reg = 1 << logReg;
+  for (int reg = 1; reg < 8 * 16 / elemBitWidth; reg *= 2) {
     basesReg.push_back({0, reg});
   }
   std::vector<std::vector<int>> basesLane = {
@@ -1402,10 +1428,10 @@ LinearLayout chooseDotLdMatrixLayout(DotOperandEncodingAttr dot,
 LinearLayout chooseStMatrixLayout(MLIRContext *ctx, RankedTensorType tensorTy,
                                   int swizzleByteSize) {
   if (swizzleByteSize == 0)
-    return chooseStMatrixLayoutNoLeadingOffset(ctx, tensorTy.getEncoding(),
-                                               tensorTy.getShape());
+    return chooseStMatrixLayoutSwizzled(ctx, tensorTy.getEncoding(),
+                                        tensorTy.getShape());
   else
-    return chooseStMatrixLayoutLeadingOffset(ctx, tensorTy, swizzleByteSize);
+    return chooseStMatrixLayoutNVMMA(ctx, tensorTy, swizzleByteSize);
 }
 
 LinearLayout chooseLdMatrixLayout(Attribute enc, ArrayRef<int64_t> shape,
@@ -1505,6 +1531,41 @@ LinearLayout chooseScaledMfmaScaleLayout(
   return newLL;
 }
 
+std::optional<LinearLayout>
+chooseMfmaLikeStoreLayout(RankedTensorType valType) {
+  auto mfmaLayout = cast<AMDMfmaEncodingAttr>(valType.getEncoding());
+
+  // We currently only support transposed [B]F16 MFMA32x32 on CDNA4.
+  bool isMfma32 = mfmaLayout.getMDim() == 32 && mfmaLayout.getNDim() == 32;
+  Type elemType = valType.getElementType();
+  if (!(valType.getRank() == 2 && (elemType.isF16() || elemType.isBF16()) &&
+        mfmaLayout.getVersionMajor() == 4 && mfmaLayout.getIsTransposed() &&
+        isMfma32))
+    return {};
+
+  auto valShape = valType.getShape();
+  LinearLayout mfmaLL = mfmaLayout.toLinearLayout(valShape);
+  auto mfmaOutDims = llvm::to_vector(mfmaLL.getOutDimNames());
+  StringAttr dimM = mfmaOutDims[0];
+  StringAttr dimN = mfmaOutDims[1];
+
+  auto swapLL = LinearLayout::empty();
+  // The rows are kept as is with an identity linear layout.
+  swapLL *= LinearLayout::identity1D(valShape[0], dimM, dimM);
+  // In transposed mfma32 layout, each thread holds 4 consecutive values along N
+  // dim. We want to exchange column 4-7 (owned by thread 32-63) and column 8-11
+  // (owned by thread 0-31) every 16 columns to make each thread holds 8
+  // elements. This would mean exchange the 2nd and 3rd basis vector from an
+  // identity linear layout.
+  std::vector<std::vector<int32_t>> dimNBases(mfmaLL.getOutDimSizeLog2(dimN));
+  std::generate(dimNBases.begin(), dimNBases.end(),
+                [i = 0]() mutable { return std::vector<int32_t>{1 << i++}; });
+  std::swap(dimNBases[2], dimNBases[3]);
+  swapLL *= LinearLayout({{dimN, dimNBases}}, {dimN});
+
+  return mfmaLL.compose(swapLL);
+}
+
 LinearLayout getScaleTMEMStoreLinearLayout(RankedTensorType scaleType,
                                            int numWarps) {
   assert(numWarps == 4 || numWarps == 8);
@@ -1551,6 +1612,92 @@ LinearLayout getScaleTMEMStoreLinearLayout(RankedTensorType scaleType,
                    {outDimNames[0], outDimNames[1]});
 
   return combineCtaCgaWithShape(regLanes, CTALayout, scaleType.getShape());
+}
+
+std::optional<LinearLayout>
+getTmemLoadStoreLayout16x256(int M, int N, RankedTensorType oldType,
+                             int numWarps) {
+  // Too small to distribute on two warp groups while using 16x256 message.
+  if (numWarps == 8 && M == 64 && N <= 16 &&
+      oldType.getElementTypeBitWidth() < 32) {
+    return {};
+  }
+  assert(numWarps == 4 || numWarps == 8);
+  auto ctaLayout = getCTALayout(oldType.getEncoding());
+  SmallVector<int64_t> shape = getShapePerCTA(oldType);
+  MLIRContext *ctx = ctaLayout.getContext();
+
+  using basisT = std::vector<std::vector<int32_t>>;
+  StringAttr kRegister = StringAttr::get(ctx, "register");
+  StringAttr kLane = StringAttr::get(ctx, "lane");
+  StringAttr kWarp = StringAttr::get(ctx, "warp");
+  SmallVector<StringAttr> outDimNames = standardOutDimNames(ctx, 2);
+
+  unsigned numElementsPerThread = 256 / oldType.getElementTypeBitWidth();
+  int kWidth = 64 / oldType.getElementTypeBitWidth();
+  // Follow the layout given by a tmem load using this layout for the inner
+  // shape:
+  // https://docs.nvidia.com/cuda/parallel-thread-execution/#tcgen05-matrix-fragments-shape-16256b
+  LinearLayout innerTile =
+      nvidiaMmaTile(ctx, {8, numElementsPerThread}, kWidth, {1, 0}, {0, 1});
+  innerTile =
+      innerTile * LinearLayout::identity1D(2, kRegister, outDimNames[0]);
+  // Then distribute the rest along warpgroups and registers.
+  // Then the last warp distribute along M or N following the same order as
+  // in getTmemLoadStoreLayout32x32b. This allows us to use the same lowering to
+  // tmem for load and store. This part could be generalized by making the
+  // lowering of tmem load and store rely more on linear layout.
+  bool distributeMAlongWarps = false;
+  bool distributeNAlongWarps = false;
+  // Figure out how to distribute acorss warpgroups.
+  if (numWarps == 8) {
+    if (shape[0] > 128) {
+      distributeMAlongWarps = true;
+    } else {
+      distributeNAlongWarps = true;
+    }
+  }
+  int nBase = numElementsPerThread;
+  int maxRegN =
+      std::min(N, distributeNAlongWarps ? (int)shape[1] / 2 : (int)shape[1]);
+  if (maxRegN / nBase > 1) {
+    innerTile = innerTile * LinearLayout::identity1D(maxRegN / nBase, kRegister,
+                                                     outDimNames[1]);
+  }
+  if (M != 64) {
+    innerTile =
+        innerTile * LinearLayout::identity1D(2, kRegister, outDimNames[0]);
+  }
+  // Distribute M along 4 warps to satisfy TMEM requirements.
+  innerTile = innerTile * LinearLayout::identity1D(4, kWarp, outDimNames[0]);
+
+  // Fill out the rest of the shape with M first then N.
+  int numMRegDim = std::min(128, (int)shape[0]) / M;
+  if (numMRegDim > 1) {
+    innerTile = innerTile *
+                LinearLayout::identity1D(numMRegDim, kRegister, outDimNames[0]);
+  }
+  // Dim M=128 should be distributed on the second warp group.
+  int nextDim = 128;
+  if (distributeMAlongWarps) {
+    innerTile = innerTile * LinearLayout::identity1D(2, kWarp, outDimNames[0]);
+    nextDim <<= 1;
+  }
+  numMRegDim = shape[0] / nextDim;
+  if (numMRegDim > 1) {
+    innerTile = innerTile *
+                LinearLayout::identity1D(numMRegDim, kRegister, outDimNames[0]);
+  }
+  int maxN = distributeNAlongWarps ? shape[1] / 2 : shape[1];
+  int numNRegDim = maxN / maxRegN;
+  if (numNRegDim > 1) {
+    innerTile = innerTile *
+                LinearLayout::identity1D(numNRegDim, kRegister, outDimNames[1]);
+  }
+  if (distributeNAlongWarps) {
+    innerTile = innerTile * LinearLayout::identity1D(2, kWarp, outDimNames[1]);
+  }
+  return combineCtaCgaWithShape(innerTile, ctaLayout, oldType.getShape());
 }
 
 LinearLayout getTmemLoadLayoutSplitLongM(int M, int N, RankedTensorType oldType,

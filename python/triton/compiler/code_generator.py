@@ -2,21 +2,19 @@ import ast
 import inspect
 import re
 import warnings
-import os
 import textwrap
 import itertools
 from types import ModuleType
 from typing import Any, Callable, Dict, Optional, Tuple, Type, Union, Iterable, List
 
-from .. import language
+from .. import knobs, language
 from .._C.libtriton import ir
 from ..language import constexpr, semantic, str_to_ty, tensor
-from ..language.core import _unwrap_if_constexpr, nv_tma_desc_type, base_value, base_type
+from ..language.core import _unwrap_if_constexpr, base_value, base_type
 from ..runtime.jit import get_jit_fn_file_line
 # ideally we wouldn't need any runtime component
 from ..runtime import JITFunction
 from .._utils import find_paths_if, get_iterable_path, set_iterable_path
-from . import config
 
 from .errors import (CompilationError, CompileTimeAssertionFailure, UnsupportedLanguageConstruct)
 
@@ -83,6 +81,7 @@ def _apply_to_tuple_values(value, fn):
         assert False, f"Unsupported type {type(value)}"
 
     vals = [fn(v) for v in value]
+    vals = [constexpr(v) if v is None else v for v in vals]
     types = [v.type for v in vals]
     return language.tuple(vals, language.tuple_type(types, fields))
 
@@ -253,20 +252,16 @@ class ASTFunction:
         vals = make_template(self.arg_types)
         is_val = lambda path, _: path not in self.constants and _ is not None
         val_paths = list(find_paths_if(self.arg_types, is_val))
-        # > set attributes
-        for attr_path, attr_specs in self.attrs.items():
-            for attr_name, attr_val in attr_specs:
-                if attr_path in val_paths:
-                    fn.set_arg_attr(val_paths.index(attr_path), attr_name, attr_val)
-        for i, path in enumerate(val_paths):
-            ty = get_iterable_path(self.arg_types, path)
-            if isinstance(ty, nv_tma_desc_type):
-                fn.set_arg_attr(i, "tt.nv_tma_desc", 1)
         # > add IR values to the template
         cursor = 0
         handles = [fn.args(i) for i in range(fn.get_num_args())]
         for path in val_paths:
             ty = get_iterable_path(self.arg_types, path)
+            # > set attributes
+            attr_specs = self.attrs.get(path, [])
+            for attr_name, attr_val in attr_specs:
+                fn.set_arg_attr(cursor, attr_name, attr_val)
+            # > build frontend value
             val, cursor = ty._unflatten_ir(handles, cursor)
             set_iterable_path(vals, path, val)
         # > add constexpr values to the template
@@ -329,7 +324,10 @@ class CodeGenerator(ast.NodeVisitor):
         # special handling.
         self.visiting_arg_default_value = False
 
-    builtin_namespace: Dict[str, Any] = {_.__name__: _ for _ in (len, list, range, float, int, isinstance, getattr)}
+    builtin_namespace: Dict[str, Any] = {
+        _.__name__: _
+        for _ in (len, list, range, float, int, isinstance, getattr, hasattr)
+    }
     builtin_namespace.update((
         ('print', language.core.device_print),
         ('min', language.minimum),
@@ -362,7 +360,8 @@ class CodeGenerator(ast.NodeVisitor):
             # But actually a bunch of other things, such as module imports, are
             # technically Python globals. We have to allow these too!
             if any([
-                    val is absent, name in self.builtin_namespace,  #
+                    val is absent,
+                    name in self.builtin_namespace,  #
                     type(val) is ModuleType,  #
                     isinstance(val, JITFunction),  #
                     getattr(val, "__triton_builtin__", False),  #
@@ -374,7 +373,7 @@ class CodeGenerator(ast.NodeVisitor):
                     # because you should be able to do
                     #   @triton.jit def fn(x: tl.constexpr = GLOBAL): ...
                     self.visiting_arg_default_value,  #
-                    os.environ.get("TRITON_ALLOW_NON_CONSTEXPR_GLOBALS", "0") == "1"
+                    knobs.compilation.allow_non_constexpr_globals,
             ]):
                 return val
             raise NameError(
@@ -770,6 +769,13 @@ class CodeGenerator(ast.NodeVisitor):
         cond = self.visit(node.test)
 
         if _is_triton_tensor(cond):
+            if _is_non_scalar_tensor(cond):
+                raise self._unsupported(node, "Boolean value of Tensor with more than one value is ambiguous")
+            if cond.type.is_block():
+                warnings.warn(
+                    "If conditional called with multidimensional Tensor instead of scalar; please use \"if (%s).item()\" instead"
+                    % ast.unparse(node.test))
+                cond = language.core._unsplat(cond, _builder=self.builder, _generator=self)
             cond = cond.to(language.int1, _builder=self.builder)
             contains_return = ContainsReturnChecker(self.gscope).visit(node)
             if contains_return:
@@ -880,6 +886,8 @@ class CodeGenerator(ast.NodeVisitor):
         try:
             return getattr(operand, fn)()
         except AttributeError:
+            if fn == "__not__":
+                return constexpr(not operand)
             raise self._unsupported(
                 node, f"AST unary operator '{fn}' is not (currently) implemented on type {type(operand).__name__}")
 
@@ -1202,7 +1210,7 @@ class CodeGenerator(ast.NodeVisitor):
                 generator.visit(fn.parse())
             except Exception as e:
                 # Wrap the error in the callee with the location of the call.
-                if config.front_end_debugging():
+                if knobs.compilation.front_end_debugging:
                     raise
                 raise CompilationError(self.jit_fn.src, self.cur_node, None) from e
 
@@ -1224,6 +1232,13 @@ class CodeGenerator(ast.NodeVisitor):
         if static_implementation is not None:
             return static_implementation(self, node)
 
+        mur = getattr(fn, '_must_use_result', False)
+        if mur and getattr(node, '_is_unused', False):
+            error_message = ["The result of %s is not being used." % ast.unparse(node.func)]
+            if isinstance(mur, str):
+                error_message.append(mur)
+            raise CompilationError(self.jit_fn.src, node, " ".join(error_message))
+
         kws = dict(self.visit(keyword) for keyword in node.keywords)
         args = [self.visit(arg) for arg in node.args]
         args = list(itertools.chain.from_iterable(x if isinstance(x, list) else [x] for x in args))
@@ -1242,7 +1257,7 @@ class CodeGenerator(ast.NodeVisitor):
                     ret = language.tuple(ret)
                 return ret
             except Exception as e:
-                if config.front_end_debugging():
+                if knobs.compilation.front_end_debugging:
                     raise
                 # Normally when we raise a CompilationError, we raise it as
                 # `from None`, because the original fileline from the exception
@@ -1261,16 +1276,56 @@ class CodeGenerator(ast.NodeVisitor):
         return constexpr(node.value)
 
     def visit_BoolOp(self, node: ast.BoolOp):
-        if len(node.values) != 2:
-            raise self._unsupported(
-                node, "chained boolean operators (A or B or C) are not supported; use parentheses to split the chain.")
-        lhs = self.visit(node.values[0])
-        rhs = self.visit(node.values[1])
         method_name = self._method_name_for_bool_op.get(type(node.op))
         if method_name is None:
             raise self._unsupported(
                 node, "AST boolean operator '{}' is not (currently) implemented.".format(node.op.__name__))
-        return self._apply_binary_method(method_name, lhs, rhs)
+
+        nontrivial_values = []
+
+        for subnode in node.values:
+            # we visit the values in order, executing their side-effects
+            # and possibly early-exiting:
+            value = self.visit(subnode)
+            if not _is_triton_tensor(value):
+                # this is a constexpr, so we might be able to short-circuit:
+                bv = bool(value)
+                if (bv is False) and (method_name == "logical_and"):
+                    # value is falsey so return that:
+                    return value
+                if (bv is True) and (method_name == "logical_or"):
+                    # value is truthy so return that:
+                    return value
+                # otherwise, our constexpr has no effect on the output of the
+                # expression so we do not append it to nontrivial_values.
+            else:
+                if value.type.is_block():
+                    lineno = getattr(node, "lineno", None)
+                    if lineno is not None:
+                        lineno += self.begin_line
+                    warnings.warn_explicit(
+                        "Logical operators 'and' and 'or' are deprecated for non-scalar tensors; please use '&' or '|' instead",
+                        category=UserWarning,
+                        filename=self.file_name,
+                        lineno=lineno,
+                        source=ast.unparse(node),
+                    )
+                # not a constexpr so we must append it:
+                nontrivial_values.append(value)
+
+        if len(nontrivial_values) == 0:
+            # the semantics of a disjunction of falsey values or conjunction
+            # of truthy values is to return the final value:
+            nontrivial_values.append(value)
+
+        while len(nontrivial_values) >= 2:
+            rhs = nontrivial_values.pop()
+            lhs = nontrivial_values.pop()
+            res = self._apply_binary_method(method_name, lhs, rhs)
+            nontrivial_values.append(res)
+
+        assert len(nontrivial_values) == 1
+        return nontrivial_values[0]
 
     _method_name_for_bool_op: Dict[Type[ast.boolop], str] = {ast.And: 'logical_and', ast.Or: 'logical_or'}
 
@@ -1281,6 +1336,7 @@ class CodeGenerator(ast.NodeVisitor):
         return getattr(lhs, node.attr)
 
     def visit_Expr(self, node):
+        node.value._is_unused = True
         ast.NodeVisitor.generic_visit(self, node)
 
     def visit_NoneType(self, node):
@@ -1323,7 +1379,7 @@ class CodeGenerator(ast.NodeVisitor):
             except CompilationError:
                 raise
             except Exception as e:
-                if config.front_end_debugging():
+                if knobs.compilation.front_end_debugging:
                     raise
                 # Wrap the error in a CompilationError which contains the source
                 # of the @jit function.
@@ -1381,7 +1437,10 @@ class CodeGenerator(ast.NodeVisitor):
 
 
 def ast_to_ttir(fn, src, context, options, codegen_fns, module_map):
-    arg_types = list(map(str_to_ty, src.signature.values()))
+    arg_types = [None] * len(fn.arg_names)
+    for k, v in src.signature.items():
+        idx = fn.arg_names.index(k)
+        arg_types[idx] = str_to_ty(v)
     prototype = ASTFunction([], arg_types, src.constants, src.attrs)
     file_name, begin_line = get_jit_fn_file_line(fn)
     # query function representation

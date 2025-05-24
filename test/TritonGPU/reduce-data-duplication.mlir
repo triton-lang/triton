@@ -29,6 +29,21 @@ module attributes {"ttg.target" = "cuda:80", "ttg.num-ctas" = 1 : i32, "ttg.num-
 
 // -----
 
+//       CHECK:   #[[$SHARED:.*]] = #ttg.swizzled_shared<{vec = 32, perPhase = 128, maxPhase = 1, order = [1, 0]}>
+//       CHECK-LABEL:   handles_small_contiguous_dim
+//       CHECK:   %{{.*}} = ttg.local_alloc %{{.*}} : (tensor<32x1xf16, #{{.*}}>) -> !ttg.memdesc<32x1xf16, #[[$SHARED]], #smem>
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [8, 4], warpsPerCTA = [4, 1], order = [1, 0]}>
+#mma = #ttg.nvidia_mma<{versionMajor = 2, versionMinor = 0, warpsPerCTA = [2, 2], instrShape = [16, 8]}>
+module attributes {"ttg.target" = "cuda:80", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  tt.func @handles_small_contiguous_dim(%arg0: tensor<32x1xf16, #blocked>) {
+    %0 = ttg.convert_layout %arg0 : tensor<32x1xf16, #blocked> -> tensor<32x1xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 8}>>
+    tt.return
+  }
+}
+
+// -----
+
 //       CHECK-LABEL:   conversion_shortcut_blocked_dotop_warp64
 //       CHECK-NOT:  ttg.local_alloc
 //       CHECK: ttg.convert_layout

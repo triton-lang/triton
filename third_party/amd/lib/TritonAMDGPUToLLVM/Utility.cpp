@@ -49,7 +49,7 @@ std::string mangleFunc(std::string name, Type type) {
 Value createVectorMaskFromPredicate(RewriterBase &rewriter, Location loc,
                                     Value pred, int64_t vecSize) {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
-  auto vecMaskTy = LLVM::getFixedVectorType(rewriter.getI1Type(), vecSize);
+  auto vecMaskTy = LLVM::getVectorType(rewriter.getI1Type(), vecSize);
   Value maskVal = b.undef(vecMaskTy);
   for (size_t s = 0; s < vecSize; ++s) {
     Value indexVal =
@@ -70,7 +70,7 @@ int64_t getNumElements(Type ty) {
 Type castToVectorType(Type ty) {
   if (isa<VectorType>(ty))
     return ty;
-  return LLVM::getFixedVectorType(ty, 1);
+  return LLVM::getVectorType(ty, 1);
 }
 
 } // namespace
@@ -316,13 +316,15 @@ Value llLoad(RewriterBase &rewriter, Location loc, Value ptr, Type elemTy,
 }
 
 void llStore(RewriterBase &rewriter, Location loc, Value ptr, Value val,
-             Value pred, triton::CacheModifier cm) {
+             Value pred, triton::CacheModifier cm,
+             bool forceNoAliasAsyncLoads) {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
 
   auto ctx = ptr.getContext();
   Type funcType = getFunctionType(void_ty(ctx), ValueRange({ptr, val, pred}));
   auto parent = ptr.getParentRegion()->getParentOfType<LLVM::LLVMFuncOp>();
-  auto getStoreNameRaw = [](triton::CacheModifier cm) {
+
+  auto getStoreNameWithCacheMod = [](triton::CacheModifier cm) {
     switch (cm) {
     case triton::CacheModifier::WT:
       return predicatedStoreWT;
@@ -336,9 +338,13 @@ void llStore(RewriterBase &rewriter, Location loc, Value ptr, Value val,
       return predicatedStore;
     }
   };
-  auto funcName = mangleFunc(getStoreNameRaw(cm), funcType);
+  std::string funcName = getStoreNameWithCacheMod(cm);
+  if (forceNoAliasAsyncLoads)
+    funcName += noAliasAsyncLoads;
+
+  auto mangledName = mangleFunc(funcName, funcType);
   LLVM::LLVMFuncOp funcOp =
-      appendOrGetExternFuncOp(rewriter, parent, funcName, funcType);
+      appendOrGetExternFuncOp(rewriter, parent, mangledName, funcType);
   LLVM::createLLVMCallOp(rewriter, loc, funcOp, ValueRange({ptr, val, pred}));
 }
 
@@ -496,10 +502,10 @@ int32_t getCtrlBitsForCacheModifierOnTarget(
   }
 }
 
-Value cvtFp32ToFp16RTNE(Location loc, RewriterBase &rewriter, const Value &v) {
+Value cvtFp32ToFp16RTNE_oneValue(Location loc, RewriterBase &rewriter,
+                                 const Value &v) {
   LLVM::RoundingMode rm = LLVM::RoundingMode::NearestTiesToEven;
-  return rewriter.create<LLVM::ConstrainedFPTruncIntr>(
-      loc, f16_ty, v, rm, LLVM::FPExceptionBehavior::Ignore);
+  return rewriter.create<LLVM::FPTruncOp>(loc, f16_ty, v);
 }
 
 Type getPointerTypeWithShape(Value basePtr, Value offset) {
@@ -691,6 +697,59 @@ bool isChainDotTail(tt::DotOpInterface dotOp) {
       }) != bwdSlices.end())
     return true;
   return false;
+}
+
+namespace {
+AliasScopeDomainAttr getLoadScopeDomain(MLIRContext *ctx) {
+  Builder b(ctx);
+  return b.getAttr<AliasScopeDomainAttr>(
+      b.getStringAttr("amdgpu.AsyncOps"),
+      b.getStringAttr(
+          "Domain to hold alias scopes to specify aliasing information between "
+          "AsyncCopyGlobalToLocal, BufferLoadToLocal and LocalLoad ops"));
+}
+
+AliasScopeAttr getAsyncCopyScope(MLIRContext *ctx) {
+  Builder b(ctx);
+  auto name = b.getStringAttr("amdgpu.AsyncCopies");
+  auto desc = b.getStringAttr(
+      "Scope containing all AsyncCopyGlobalToLocal and BufferLoadToLocal ops");
+  return b.getAttr<LLVM::AliasScopeAttr>(name, getLoadScopeDomain(ctx), desc);
+}
+
+AliasScopeAttr getLoadCopyScope(MLIRContext *ctx) {
+  Builder b(ctx);
+  auto name = b.getStringAttr("amdgpu.LocalLoads");
+  auto desc = b.getStringAttr("Scope containing all LocalLoad ops");
+  return b.getAttr<LLVM::AliasScopeAttr>(name, getLoadScopeDomain(ctx), desc);
+}
+} // namespace
+
+void addAsyncCopyAliasScope(AliasAnalysisOpInterface directToLdsOp) {
+  auto ctx = directToLdsOp->getContext();
+  Builder b(ctx);
+  directToLdsOp.setAliasScopes(b.getArrayAttr(getAsyncCopyScope(ctx)));
+}
+
+void addLocalLoadNoAliasScope(triton::gpu::LocalLoadOp localLoadOp,
+                              AliasAnalysisOpInterface llLoadOp) {
+  auto token = localLoadOp.getToken();
+  if (!token || !token.getDefiningOp<tt::gpu::AsyncWaitOp>())
+    return;
+
+  return addLocalLoadNoAliasScope(llLoadOp);
+}
+
+void addLocalLoadNoAliasScope(AliasAnalysisOpInterface llLoadOp) {
+  auto ctx = llLoadOp->getContext();
+
+  // Do not alias with AsyncCopies
+  auto noAliasScopes = ArrayAttr::get(ctx, getAsyncCopyScope(ctx));
+  llLoadOp.setNoAliasScopes(noAliasScopes);
+
+  // Add to different scope as ops without any scope alias with everything
+  auto aliasScopes = ArrayAttr::get(ctx, getLoadCopyScope(ctx));
+  llLoadOp.setAliasScopes(aliasScopes);
 }
 
 } // namespace mlir::LLVM::AMD

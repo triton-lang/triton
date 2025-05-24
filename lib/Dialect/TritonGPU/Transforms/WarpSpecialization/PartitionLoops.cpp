@@ -1,3 +1,4 @@
+#include "mlir/Analysis/TopologicalSortUtils.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/ImplicitLocOpBuilder.h"
@@ -14,8 +15,6 @@
 using namespace mlir;
 using namespace triton;
 using namespace triton::gpu;
-
-using Partition = WarpSchedule::Partition;
 
 //===----------------------------------------------------------------------===//
 // slicePartition
@@ -46,8 +45,9 @@ static void eraseOtherPartitions(scf::ForOp &loop, const WarpSchedule &schedule,
         toErase.reset(use.getOperandNumber());
     }
   }
-  for (auto [i, arg] : llvm::enumerate(loop.getRegionIterArgs())) {
-    if (llvm::any_of(arg.getUsers(), inPartition))
+  for (auto [i, arg, result] :
+       llvm::enumerate(loop.getRegionIterArgs(), loop.getResults())) {
+    if (llvm::any_of(arg.getUsers(), inPartition) || !result.use_empty())
       toErase.reset(i);
     else if (toErase.test(i))
       arg.dropAllUses();
@@ -187,6 +187,11 @@ LogicalResult triton::gpu::partitionLoop(scf::ForOp loop) {
   // captures and thread them in to the regions.
   SetVector<Value> captures;
   getUsedValuesDefinedAbove(wsOp.getPartitionOpHolder(), captures);
+
+  // Find the subgraph that should be cloned into the partition regions. The
+  // explicit captures are the leaves of the subgraph.
+  SetVector<Operation *> opsToClone;
+  SmallVector<Value> explicitCaptures;
   for (unsigned i = 0; i < captures.size(); ++i) {
     Value capture = captures[i];
 
@@ -197,27 +202,51 @@ LogicalResult triton::gpu::partitionLoop(scf::ForOp loop) {
         (defOp->hasTrait<OpTrait::ConstantLike>() ||
          isa<RankedTensorType>(capture.getType()))) {
       captures.insert(defOp->operand_begin(), defOp->operand_end());
-      for (Region *region : wsOp.getPartitionRegions()) {
-        b.setInsertionPointToStart(&region->front());
-        Value copy = b.clone(*capture.getDefiningOp())->getResult(0);
-        replaceAllUsesInRegionWith(capture, copy, *region);
-      }
+      opsToClone.insert(defOp);
       continue;
     }
 
-    if (isa<RankedTensorType>(capture.getType())) {
-      return mlir::emitWarning(capture.getLoc(),
-                               "FIXME: capturing tensor values into warp "
-                               "partitions is not supported");
+    // Explicitly pass tensor captures through shared memory.
+    auto tensorTy = dyn_cast<RankedTensorType>(capture.getType());
+    if (tensorTy) {
+      SharedEncodingTrait sharedEnc = getSharedEncoding(tensorTy);
+      ImplicitLocOpBuilder b(capture.getLoc(), wsOp);
+      auto memdescTy = MemDescType::get(
+          tensorTy.getShape(), tensorTy.getElementType(), sharedEnc,
+          SharedMemorySpaceAttr::get(tensorTy.getContext()));
+      auto alloc = b.create<LocalAllocOp>(memdescTy, capture);
+      for (Region *region : wsOp.getPartitionRegions()) {
+        b.setInsertionPointToStart(&region->front());
+        Value value = b.create<LocalLoadOp>(tensorTy, alloc);
+        replaceAllUsesInRegionWith(capture, value, *region);
+      }
+      capture = alloc;
     }
-    wsOp->insertOperands(wsOp.getNumOperands(), capture);
-    for (Region *region : wsOp.getPartitionRegions()) {
+
+    explicitCaptures.push_back(capture);
+  }
+
+  // Clone the ops into each region in topological order.
+  opsToClone = topologicalSort(opsToClone);
+  for (Region *region : wsOp.getPartitionRegions()) {
+    b.setInsertionPointToStart(&region->front());
+    IRMapping mapping;
+    for (Operation *op : opsToClone) {
+      Value copy = b.clone(*op, mapping)->getResult(0);
+      mapping.map(op->getResult(0), copy);
+      replaceAllUsesInRegionWith(op->getResult(0), copy, *region);
+    }
+  }
+
+  // Replace the leaves with explicit captures.
+  wsOp->insertOperands(wsOp.getNumOperands(), explicitCaptures);
+  for (Region *region : wsOp.getPartitionRegions()) {
+    for (Value capture : explicitCaptures) {
       BlockArgument arg =
           region->addArgument(capture.getType(), capture.getLoc());
       replaceAllUsesInRegionWith(capture, arg, *region);
     }
   }
-
   return success();
 }
 
@@ -250,6 +279,6 @@ void PartitionLoops::runOnOperation() {
 
   for (scf::ForOp loop : loops) {
     if (failed(partitionLoop(loop)))
-      continue;
+      return signalPassFailure();
   }
 }

@@ -36,15 +36,18 @@ void init_triton_passes_common(py::module &&m) {
 
 void init_triton_passes_ttir(py::module &&m) {
   using namespace mlir::triton;
-  ADD_PASS_WRAPPER_0("add_combine", createCombineOpsPass);
-  ADD_PASS_WRAPPER_0("add_reorder_broadcast", createReorderBroadcastPass);
+  ADD_PASS_WRAPPER_0("add_combine", createTritonCombineOps);
+  ADD_PASS_WRAPPER_0("add_reorder_broadcast", createTritonReorderBroadcast);
   ADD_PASS_WRAPPER_0("add_rewrite_tensor_pointer",
-                     createRewriteTensorPointerPass);
-  ADD_PASS_WRAPPER_0("add_loop_unroll", createLoopUnrollPass);
-  ADD_PASS_WRAPPER_0("add_triton_licm", createLoopInvariantCodeMotionPass);
-  ADD_PASS_WRAPPER_4("add_convert_to_ttgpuir",
-                     createConvertTritonToTritonGPUPass, const std::string &,
-                     int, int, int);
+                     createTritonRewriteTensorPointer);
+  ADD_PASS_WRAPPER_0("add_rewrite_tensor_descriptor_to_pointer",
+                     createTritonRewriteTensorDescriptorToPointer);
+  ADD_PASS_WRAPPER_0("add_loop_unroll", createTritonLoopUnroll);
+  ADD_PASS_WRAPPER_0("add_triton_licm", createTritonLoopInvariantCodeMotion);
+  ADD_PASS_WRAPPER_0("add_loop_aware_cse", createTritonLoopAwareCSE);
+  ADD_PASS_OPTION_WRAPPER_4("add_convert_to_ttgpuir",
+                            createConvertTritonToTritonGPU, const std::string &,
+                            int, int, int);
 }
 
 void init_triton_passes_ttgpuir(py::module &&m) {
@@ -53,6 +56,9 @@ void init_triton_passes_ttgpuir(py::module &&m) {
   ADD_PASS_WRAPPER_0("add_optimize_thread_locality",
                      createTritonGPUOptimizeThreadLocality);
   ADD_PASS_WRAPPER_0("add_hoist_tmem_alloc", createTritonGPUHoistTMEMAlloc);
+  ADD_PASS_OPTION_WRAPPER_1("add_assign_latencies",
+                            createTritonGPUAssignLatencies, int);
+  ADD_PASS_WRAPPER_0("add_schedule_loops", createTritonGPUScheduleLoops);
   ADD_PASS_OPTION_WRAPPER_2("add_pipeline", createTritonGPUPipeline, int, bool);
   ADD_PASS_OPTION_WRAPPER_1("add_warp_specialize",
                             createTritonGPUAutomaticWarpSpecialization, int);

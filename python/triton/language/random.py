@@ -51,6 +51,7 @@ def philox(seed, c0, c1, c2, c3, n_rounds: tl.constexpr = N_ROUNDS_DEFAULT):
     c1 = tl.to_tensor(c1)
     c2 = tl.to_tensor(c2)
     c3 = tl.to_tensor(c3)
+
     if tl.constexpr(c0.dtype.primitive_bitwidth) == 32:
         int_dtype = tl.uint32
         seed_hi = ((seed >> 32) & 0xffffffff).to(tl.uint32)
@@ -60,6 +61,7 @@ def philox(seed, c0, c1, c2, c3, n_rounds: tl.constexpr = N_ROUNDS_DEFAULT):
         int_dtype = tl.uint64
         seed_hi = tl.full((1, ), 0, dtype=int_dtype)
         seed_lo = seed
+
     c0 = c0.to(int_dtype, bitcast=True)
     c1 = c1.to(int_dtype, bitcast=True)
     c2 = c2.to(int_dtype, bitcast=True)
@@ -96,8 +98,16 @@ def randint4x(seed, offset, n_rounds: tl.constexpr = N_ROUNDS_DEFAULT):
     :param offsets: The offsets to generate random numbers for.
     """
     # _0 = tl.zeros(offset.shape, offset.dtype)
-    _0 = offset * 0
-    return philox(seed, offset, _0, _0, _0, n_rounds)
+
+    offset_lo = offset.to(tl.uint32)
+    _0 = offset_lo * 0
+
+    if tl.constexpr(offset.dtype.primitive_bitwidth) > 32:
+        offset_hi = (offset >> 32).to(tl.uint32)
+    else:
+        offset_hi = _0
+
+    return philox(seed, offset_lo, offset_hi, _0, _0, n_rounds)
 
 
 # -------------------

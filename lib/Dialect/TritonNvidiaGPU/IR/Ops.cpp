@@ -27,15 +27,14 @@
 
 #include "triton/Dialect/TritonNvidiaGPU/IR/TritonNvidiaGPUOpInterfaces.cpp.inc"
 
-#define GET_OP_CLASSES
-#include "triton/Dialect/TritonNvidiaGPU/IR/Ops.cpp.inc"
+using namespace mlir::triton::gpu;
 
 namespace mlir {
 namespace triton {
 namespace nvidia_gpu {
 
 // -- WarpGroupDotOp --
-mlir::LogicalResult WarpGroupDotOp::inferReturnTypes(
+LogicalResult WarpGroupDotOp::inferReturnTypes(
     MLIRContext *context, std::optional<Location> location, ValueRange operands,
     DictionaryAttr attributes, OpaqueProperties properties, RegionRange regions,
     SmallVectorImpl<Type> &inferredReturnTypes) {
@@ -44,21 +43,27 @@ mlir::LogicalResult WarpGroupDotOp::inferReturnTypes(
   inferredReturnTypes.push_back(accTy);
 
   // verify encodings
-  auto aEnc =
-      cast<triton::gpu::TensorOrMemDesc>(operands[0].getType()).getEncoding();
-  auto bEnc =
-      cast<triton::gpu::TensorOrMemDesc>(operands[1].getType()).getEncoding();
+  auto aEnc = cast<TensorOrMemDesc>(operands[0].getType()).getEncoding();
+  auto bEnc = cast<TensorOrMemDesc>(operands[1].getType()).getEncoding();
   auto retEnc = accTy.getEncoding();
   if (aEnc) {
     assert(bEnc);
     Dialect &dialect = aEnc.getDialect();
     auto interface = cast<DialectInferLayoutInterface>(&dialect);
     if (interface->inferDotOpEncoding(aEnc, 0, retEnc, location).failed())
-      return mlir::failure();
+      return failure();
     if (interface->inferDotOpEncoding(bEnc, 1, retEnc, location).failed())
-      return mlir::failure();
+      return failure();
   }
-  return mlir::success();
+  return success();
+}
+
+LogicalResult WarpGroupDotOp::verify() {
+  auto nvmmaEnc =
+      dyn_cast<NvidiaMmaEncodingAttr>(getD().getType().getEncoding());
+  if (!nvmmaEnc || !nvmmaEnc.isHopper())
+    return emitOpError("WGMMA result layout must be Hopper NVMMA");
+  return success();
 }
 
 void WarpGroupDotOp::getEffects(
@@ -66,12 +71,10 @@ void WarpGroupDotOp::getEffects(
         &effects) {
   auto &a = getAMutable();
   auto &b = getBMutable();
-  if (isa<mlir::triton::gpu::MemDescType>(a.get().getType()))
-    effects.emplace_back(MemoryEffects::Read::get(), &a,
-                         mlir::triton::gpu::SharedMemory::get());
-  if (isa<mlir::triton::gpu::MemDescType>(b.get().getType()))
-    effects.emplace_back(MemoryEffects::Read::get(), &b,
-                         mlir::triton::gpu::SharedMemory::get());
+  if (isa<MemDescType>(a.get().getType()))
+    effects.emplace_back(MemoryEffects::Read::get(), &a, SharedMemory::get());
+  if (isa<MemDescType>(b.get().getType()))
+    effects.emplace_back(MemoryEffects::Read::get(), &b, SharedMemory::get());
 }
 
 bool WarpGroupDotOp::needsPartialAccumulator() {
@@ -121,25 +124,11 @@ LogicalResult InitBarrierOp::verify() {
   return success();
 }
 
-void InitBarrierOp::getEffects(
-    SmallVectorImpl<SideEffects::EffectInstance<MemoryEffects::Effect>>
-        &effects) {
-  effects.emplace_back(MemoryEffects::Write::get(), &getAllocMutable(),
-                       mlir::triton::gpu::SharedMemory::get());
-}
-
 // -- InvalBarrierOp --
 LogicalResult InvalBarrierOp::verify() {
   if (failed(verifyBarrierType(*this, getAlloc().getType())))
     return failure();
   return success();
-}
-
-void InvalBarrierOp::getEffects(
-    SmallVectorImpl<SideEffects::EffectInstance<MemoryEffects::Effect>>
-        &effects) {
-  effects.emplace_back(MemoryEffects::Write::get(), &getAllocMutable(),
-                       mlir::triton::gpu::SharedMemory::get());
 }
 
 // -- BarrierExpectOp --
@@ -149,28 +138,11 @@ LogicalResult BarrierExpectOp::verify() {
   return success();
 }
 
-void BarrierExpectOp::getEffects(
-    SmallVectorImpl<SideEffects::EffectInstance<MemoryEffects::Effect>>
-        &effects) {
-  effects.emplace_back(MemoryEffects::Write::get(), &getAllocMutable(),
-                       mlir::triton::gpu::SharedMemory::get());
-}
-
 // -- WaitBarrierOp --
 LogicalResult WaitBarrierOp::verify() {
   if (failed(verifyBarrierType(*this, getAlloc().getType())))
     return failure();
   return success();
-}
-
-void WaitBarrierOp::getEffects(
-    SmallVectorImpl<SideEffects::EffectInstance<MemoryEffects::Effect>>
-        &effects) {
-  // The wait will flip the phase therefore it reads and writes the barrier.
-  effects.emplace_back(MemoryEffects::Read::get(), &getAllocMutable(),
-                       mlir::triton::gpu::SharedMemory::get());
-  effects.emplace_back(MemoryEffects::Write::get(), &getAllocMutable(),
-                       mlir::triton::gpu::SharedMemory::get());
 }
 
 // -- ArriveBarrierOp --
@@ -180,16 +152,6 @@ LogicalResult ArriveBarrierOp::verify() {
   if (getCount() < 1)
     return emitOpError("count must be greater than or equal to 1");
   return success();
-}
-
-void ArriveBarrierOp::getEffects(
-    SmallVectorImpl<SideEffects::EffectInstance<MemoryEffects::Effect>>
-        &effects) {
-  // The arrive will increment the pending arrival count inside the barrier.
-  effects.emplace_back(MemoryEffects::Read::get(), &getAllocMutable(),
-                       mlir::triton::gpu::SharedMemory::get());
-  effects.emplace_back(MemoryEffects::Write::get(), &getAllocMutable(),
-                       mlir::triton::gpu::SharedMemory::get());
 }
 
 // -- TensorDescToTMAPtrOp --
@@ -215,27 +177,6 @@ LogicalResult AsyncTMACopyGlobalToLocalOp::verify() {
   return success();
 }
 
-void AsyncTMACopyGlobalToLocalOp::getEffects(
-    SmallVectorImpl<SideEffects::EffectInstance<MemoryEffects::Effect>>
-        &effects) {
-  effects.emplace_back(MemoryEffects::Read::get(), &getDescPtrMutable(),
-                       mlir::triton::GlobalMemory::get());
-  effects.emplace_back(MemoryEffects::Write::get(), &getBarrierMutable(),
-                       mlir::triton::gpu::SharedMemory::get());
-  effects.emplace_back(MemoryEffects::Write::get(), &getResultMutable(),
-                       mlir::triton::gpu::SharedMemory::get());
-}
-
-// -- AsyncTMACopyLocalToGlobalOp --
-void AsyncTMACopyLocalToGlobalOp::getEffects(
-    SmallVectorImpl<SideEffects::EffectInstance<MemoryEffects::Effect>>
-        &effects) {
-  effects.emplace_back(MemoryEffects::Write::get(), &getDescPtrMutable(),
-                       mlir::triton::GlobalMemory::get());
-  effects.emplace_back(MemoryEffects::Read::get(), &getSrcMutable(),
-                       mlir::triton::gpu::SharedMemory::get());
-}
-
 // -- AsyncTMAGatherOp --
 LogicalResult AsyncTMAGatherOp::verify() {
   if (failed(verifyBarrierType(*this, getBarrier().getType())))
@@ -248,49 +189,80 @@ LogicalResult AsyncTMAGatherOp::verify() {
                                               getXOffsets().getType());
 }
 
-void AsyncTMAGatherOp::getEffects(
-    SmallVectorImpl<SideEffects::EffectInstance<MemoryEffects::Effect>>
-        &effects) {
-  effects.emplace_back(MemoryEffects::Read::get(), &getDescPtrMutable(),
-                       mlir::triton::GlobalMemory::get());
-  effects.emplace_back(MemoryEffects::Write::get(), &getBarrierMutable(),
-                       mlir::triton::gpu::SharedMemory::get());
-  effects.emplace_back(MemoryEffects::Write::get(), &getResultMutable(),
-                       mlir::triton::gpu::SharedMemory::get());
-}
-
 // -- AsyncTMAScatter --
 LogicalResult AsyncTMAScatterOp::verify() {
   return DescriptorGatherOp::verifyResultType(*this, getSrc().getType(),
                                               getXOffsets().getType());
 }
 
-void AsyncTMAScatterOp::getEffects(
-    SmallVectorImpl<SideEffects::EffectInstance<MemoryEffects::Effect>>
-        &effects) {
-  effects.emplace_back(MemoryEffects::Write::get(), &getDescPtrMutable(),
-                       mlir::triton::GlobalMemory::get());
-  effects.emplace_back(MemoryEffects::Read::get(), &getSrcMutable(),
-                       mlir::triton::gpu::SharedMemory::get());
+// -- TCGen5MMAOp --
+
+// barrier-and-pred := `,` ssa-value `[` ssa-value `]`
+// barriers-and-preds := (barrier-and-pred)*
+static ParseResult
+parseBarriersAndPreds(OpAsmParser &p,
+                      SmallVectorImpl<OpAsmParser::UnresolvedOperand> &barriers,
+                      SmallVectorImpl<OpAsmParser::UnresolvedOperand> &preds) {
+  while (succeeded(p.parseOptionalComma())) {
+    if (p.parseOperand(barriers.emplace_back()) || p.parseLSquare() ||
+        p.parseOperand(preds.emplace_back()) || p.parseRSquare())
+      return failure();
+  }
+  return success();
+}
+static void printBarriersAndPreds(OpAsmPrinter &p, Operation *op,
+                                  OperandRange barriers, OperandRange preds) {
+  assert(barriers.size() == preds.size());
+  for (auto [barrier, pred] : llvm::zip(barriers, preds)) {
+    p << ", " << barrier << '[' << pred << ']';
+  }
 }
 
-// -- TCGen5MMAOp --
+// token := `[` (ssa-value (`,` ssa-value)*)? `]`
+// dep-operand := token?
+static ParseResult
+parseToken(OpAsmParser &p, std::optional<OpAsmParser::UnresolvedOperand> &dep,
+           Type &token) {
+  if (failed(p.parseOptionalLSquare()))
+    return success();
+  token = p.getBuilder().getType<AsyncTokenType>();
+  if (succeeded(p.parseOptionalRSquare()))
+    return success();
+  if (p.parseOperand(dep.emplace()) || p.parseRSquare())
+    return failure();
+  return success();
+}
+static void printToken(OpAsmPrinter &p, Operation *op, Value dep, Type token) {
+  if (!token)
+    return;
+  p << '[';
+  if (dep)
+    p << dep;
+  p << ']';
+}
+
 void TCGen5MMAOp::getEffects(
     SmallVectorImpl<SideEffects::EffectInstance<MemoryEffects::Effect>>
         &effects) {
+  // The op reads the accumulator if `useD` is not known to be false.
+  APInt useD;
+  if (!matchPattern(getUseD(), m_ConstantInt(&useD)) || !useD.isZero()) {
+    effects.emplace_back(MemoryEffects::Read::get(), &getDMutable(),
+                         TensorMemory::get());
+  }
   effects.emplace_back(MemoryEffects::Write::get(), &getDMutable(),
-                       mlir::triton::nvidia_gpu::TensorMemory::get());
-  if (isa<triton::gpu::SharedMemorySpaceAttr>(
-          getA().getType().getMemorySpace())) {
+                       TensorMemory::get());
+
+  if (isa<SharedMemorySpaceAttr>(getA().getType().getMemorySpace())) {
     effects.emplace_back(MemoryEffects::Read::get(), &getAMutable(),
-                         mlir::triton::gpu::SharedMemory::get());
+                         SharedMemory::get());
 
   } else {
     effects.emplace_back(MemoryEffects::Read::get(), &getAMutable(),
-                         mlir::triton::nvidia_gpu::TensorMemory::get());
+                         TensorMemory::get());
   }
   effects.emplace_back(MemoryEffects::Read::get(), &getBMutable(),
-                       mlir::triton::gpu::SharedMemory::get());
+                       SharedMemory::get());
 }
 
 bool TCGen5MMAOp::verifyDims() {
@@ -306,11 +278,12 @@ void TCGen5MMAOp::setUseAccumulator(Value flag) {
   getUseDMutable().assign(flag);
 }
 
-void TCGen5MMAOp::setBarrier(Value barrier) {
-  getBarrierMutable().assign(barrier);
+void TCGen5MMAOp::addCompletionBarrier(Value barrier, Value pred) {
+  getBarrierPredsMutable().append(pred);
+  getBarriersMutable().append(barrier);
 }
 
-Value TCGen5MMAOp::getAccumulator() { return getD(); }
+TypedValue<MemDescType> TCGen5MMAOp::getAccumulator() { return getD(); }
 
 void TCGen5MMAOp::setAccumulator(Value accum) { getDMutable().assign(accum); }
 
@@ -318,37 +291,41 @@ Value TCGen5MMAOp::getPredicate() { return getPred(); }
 
 void TCGen5MMAOp::setPredicate(Value pred) { getPredMutable().assign(pred); }
 
-// -- TMEMStoreOp --
-LogicalResult TMEMStoreOp::verify() {
-  if (!isa<triton::nvidia_gpu::TensorMemorySpaceAttr>(
-          getDst().getType().getMemorySpace()))
-    return emitOpError("destination must be a tensor memory buffer.");
-  if (!isa<triton::nvidia_gpu::TensorMemoryEncodingAttr,
-           TensorMemoryScalesEncodingAttr>(getDst().getType().getEncoding()))
-    return emitOpError("should use tensor memory encoding.");
-  if (!getDst().getType().getMutableMemory()) {
-    return emitOpError("Cannot store into an immutable alloc");
-  }
-  return success();
+void TCGen5MMAOp::build(OpBuilder &builder, OperationState &state, Type token,
+                        Value a, Value b, Value d, Value accDep, Value useD,
+                        Value pred, bool useTwoCTAs, ValueRange barriers,
+                        ValueRange barrierPreds) {
+  build(builder, state, token, a, b, d, accDep, useD, pred, barriers,
+        barrierPreds, useTwoCTAs ? builder.getUnitAttr() : UnitAttr());
 }
 
 // -- TCGen5MMAScaledOp --
 void TCGen5MMAScaledOp::getEffects(
     SmallVectorImpl<SideEffects::EffectInstance<MemoryEffects::Effect>>
         &effects) {
+  // The op reads the accumulator if `useD` is not known to be false.
+  APInt useD;
+  if (!matchPattern(getUseD(), m_ConstantInt(&useD)) || !useD.isZero()) {
+    effects.emplace_back(MemoryEffects::Read::get(), &getDMutable(),
+                         TensorMemory::get());
+  }
   effects.emplace_back(MemoryEffects::Write::get(), &getDMutable(),
-                       mlir::triton::nvidia_gpu::TensorMemory::get());
-  if (isa<triton::gpu::SharedMemorySpaceAttr>(
-          getA().getType().getMemorySpace())) {
+                       TensorMemory::get());
+
+  if (isa<SharedMemorySpaceAttr>(getA().getType().getMemorySpace())) {
     effects.emplace_back(MemoryEffects::Read::get(), &getAMutable(),
-                         mlir::triton::gpu::SharedMemory::get());
+                         SharedMemory::get());
 
   } else {
     effects.emplace_back(MemoryEffects::Read::get(), &getAMutable(),
-                         mlir::triton::nvidia_gpu::TensorMemory::get());
+                         TensorMemory::get());
   }
   effects.emplace_back(MemoryEffects::Read::get(), &getBMutable(),
-                       mlir::triton::gpu::SharedMemory::get());
+                       SharedMemory::get());
+  effects.emplace_back(MemoryEffects::Read::get(), &getAScaleMutable(),
+                       TensorMemory::get());
+  effects.emplace_back(MemoryEffects::Read::get(), &getBScaleMutable(),
+                       TensorMemory::get());
 }
 
 bool TCGen5MMAScaledOp::verifyDims() {
@@ -410,11 +387,12 @@ void TCGen5MMAScaledOp::setUseAccumulator(Value flag) {
   getUseDMutable().assign(flag);
 }
 
-void TCGen5MMAScaledOp::setBarrier(Value barrier) {
-  getBarrierMutable().assign(barrier);
+void TCGen5MMAScaledOp::addCompletionBarrier(Value barrier, Value pred) {
+  getBarrierPredsMutable().append(pred);
+  getBarriersMutable().append(barrier);
 }
 
-Value TCGen5MMAScaledOp::getAccumulator() { return getD(); }
+TypedValue<MemDescType> TCGen5MMAScaledOp::getAccumulator() { return getD(); }
 
 void TCGen5MMAScaledOp::setAccumulator(Value accum) {
   getDMutable().assign(accum);
@@ -465,7 +443,33 @@ int64_t TCGen5MMAScaledOp::getBlockK() {
   return blockK;
 }
 
-// -- TMEMLoadOp --
+void TCGen5MMAScaledOp::build(OpBuilder &builder, OperationState &state,
+                              Type token, Value a, Value b, Value d,
+                              Value accDep, Value aScale, Value bScale,
+                              ScaleDotElemType aType, ScaleDotElemType bType,
+                              Value useD, Value pred, ValueRange barriers,
+                              ValueRange barrierPreds) {
+  MLIRContext *ctx = builder.getContext();
+  build(builder, state, token, a, b, d, accDep, aScale, bScale,
+        ScaleDotElemTypeAttr::get(ctx, aType),
+        ScaleDotElemTypeAttr::get(ctx, bType), useD, pred, barriers,
+        barrierPreds);
+}
+
+// -- TMEMStoreOp --
+LogicalResult TMEMStoreOp::verify() {
+  if (!isa<triton::nvidia_gpu::TensorMemorySpaceAttr>(
+          getDst().getType().getMemorySpace()))
+    return emitOpError("destination must be a tensor memory buffer.");
+  if (!isa<triton::nvidia_gpu::TensorMemoryEncodingAttr,
+           TensorMemoryScalesEncodingAttr>(getDst().getType().getEncoding()))
+    return emitOpError("should use tensor memory encoding.");
+  if (!getDst().getType().getMutableMemory()) {
+    return emitOpError("Cannot store into an immutable alloc");
+  }
+  return success();
+}
+
 // -- TMEMLoadOp --
 LogicalResult TMEMLoadOp::verify() {
   if (!isa<triton::nvidia_gpu::TensorMemorySpaceAttr>(
@@ -479,17 +483,13 @@ LogicalResult TMEMLoadOp::verify() {
 
 // -- TMEMAllocOp --
 LogicalResult TMEMAllocOp::verify() {
-  if (!isa<triton::nvidia_gpu::TensorMemorySpaceAttr>(
-          getType().getMemorySpace()))
-    return emitOpError("should create a buffer of tensor memory.");
-  if (!isa<triton::nvidia_gpu::TensorMemoryEncodingAttr,
-           TensorMemoryScalesEncodingAttr>(getType().getEncoding()))
-    return emitOpError("should use tensor memory encoding.");
-  if (!getSrc()) {
-    if (!getType().getMutableMemory())
-      return emitError("uninitialized alloc must have a mutable memdesc type");
-  }
-  return success();
+  if (!isa<TensorMemorySpaceAttr>(getType().getMemorySpace()))
+    return emitOpError("should create a buffer of tensor memory");
+  if (!isa<TensorMemoryEncodingAttr, TensorMemoryScalesEncodingAttr>(
+          getType().getEncoding()))
+    return emitOpError("should use tensor memory encoding");
+
+  return LocalAllocOp::verifyAllocOp(*this, getSrc(), getType());
 }
 
 void TMEMAllocOp::getEffects(
@@ -502,22 +502,12 @@ void TMEMAllocOp::getEffects(
   // op.
   if (!getType().getMutableMemory() && !op->hasAttr("tensor_memory_col_offset"))
     return;
-  effects.emplace_back(MemoryEffects::Allocate::get(),
-                       mlir::triton::nvidia_gpu::TensorMemory::get());
+  OpResult alloc = getOperation()->getOpResult(0);
+  effects.emplace_back(MemoryEffects::Allocate::get(), alloc,
+                       TensorMemory::get());
   if (getSrc())
-    effects.emplace_back(MemoryEffects::Write::get(),
-                         getOperation()->getOpResult(0),
-                         mlir::triton::nvidia_gpu::TensorMemory::get());
-}
-
-static bool isDescendingOrder(triton::gpu::MemDescType type) {
-  auto order = triton::gpu::getOrder(type);
-  auto rank = type.getRank();
-  for (int i = 0; i < rank; ++i) {
-    if (order[i] != rank - 1 - i)
-      return false;
-  }
-  return true;
+    effects.emplace_back(MemoryEffects::Write::get(), alloc,
+                         TensorMemory::get());
 }
 
 // -- TMEMCopyOp --
@@ -539,13 +529,13 @@ LogicalResult TMEMCopyOp::verify() {
 
   auto srcTy = cast<triton::gpu::MemDescType>(getSrc().getType());
   auto sharedEnc =
-      cast<triton::gpu::SwizzledSharedEncodingAttr>(srcTy.getEncoding());
+      cast<triton::gpu::NVMMASharedEncodingAttr>(srcTy.getEncoding());
 
-  if (sharedEnc.getMaxPhase() != 1 || sharedEnc.getPerPhase() != 1 ||
-      sharedEnc.getVec() != 1)
+  if (!sharedEnc || sharedEnc.getTransposed() || sharedEnc.getFp4Padded() ||
+      sharedEnc.getSwizzlingByteWidth() != 0)
     return emitOpError("The source should not have swizzling applied for now");
 
-  if (!isDescendingOrder(srcTy)) {
+  if (!triton::gpu::isInnermostContiguous(srcTy, 512)) {
     return emitOpError("The source must be in a row-major order.");
   }
 
@@ -553,15 +543,6 @@ LogicalResult TMEMCopyOp::verify() {
   // checking we can do here are limited. For simplicity, shape checking is
   // omitted.
   return success();
-}
-
-void TMEMCopyOp::getEffects(
-    SmallVectorImpl<SideEffects::EffectInstance<MemoryEffects::Effect>>
-        &effects) {
-  effects.emplace_back(MemoryEffects::Write::get(),
-                       mlir::triton::nvidia_gpu::TensorMemory::get());
-  effects.emplace_back(MemoryEffects::Read::get(), &getSrcMutable(),
-                       mlir::triton::gpu::SharedMemory::get());
 }
 
 // -- TMEMSubSliceOp --
@@ -607,3 +588,6 @@ void TMEMSubSliceOp::build(OpBuilder &builder, OperationState &state,
 } // namespace nvidia_gpu
 } // namespace triton
 } // namespace mlir
+
+#define GET_OP_CLASSES
+#include "triton/Dialect/TritonNvidiaGPU/IR/Ops.cpp.inc"

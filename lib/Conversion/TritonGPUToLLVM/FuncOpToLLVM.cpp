@@ -67,6 +67,14 @@ struct FuncOpConversion : public ConvertOpToLLVMPattern<triton::FuncOp> {
     auto funcTy = funcOp.getFunctionType();
     auto amendedInputTy = llvm::to_vector<4>(funcTy.getInputs());
     bool isKernel = LLVM::isKernel(funcOp);
+    if (isKernel) {
+      for (auto i : llvm::seq(amendedInputTy.size())) {
+        if (isa<TensorDescType>(amendedInputTy[i])) {
+          funcOp.setArgAttr(i, "tt.nv_tma_desc",
+                            mlir::IntegerAttr::get(i32_ty, 1));
+        }
+      }
+    }
     if (!isKernel) {
       amendedInputTy.push_back(sharedPtrTy);
     }

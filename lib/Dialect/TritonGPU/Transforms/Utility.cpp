@@ -4,13 +4,10 @@
 
 #include "mlir/Analysis/SliceAnalysis.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
-#include "mlir/Dialect/UB/IR/UBOps.h"
 #include "mlir/IR/Dominance.h"
 #include "mlir/IR/IRMapping.h"
-#include "mlir/Support/LLVM.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 #include "triton/Analysis/AxisInfo.h"
-#include "triton/Conversion/TritonToTritonGPU/TritonToTritonGPUPass.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
@@ -148,6 +145,17 @@ unsigned getNumElementsPerThread(Operation *op, SmallVector<unsigned> order,
 
 bool isView(Operation *op) {
   return isa<ExpandDimsOp, ReshapeOp, TransOp, JoinOp, SplitOp>(op);
+}
+
+bool isNoop(Operation *op) {
+  if (isa<ReshapeOp, TransOp>(op))
+    return true;
+  if (auto cvt = dyn_cast<ttg::ConvertLayoutOp>(op)) {
+    // The conversion op is a noop if the conversion layout is trivial
+    return minimalCvtLayout(cvt.getSrc().getType(),
+                            cvt.getResult().getType()) == LinearLayout::empty();
+  }
+  return false;
 }
 
 //===----------------------------------------------------------------------===//
@@ -1242,10 +1250,10 @@ ttg::LocalAllocOp findShmemAlloc(Value operand) {
   // come from an MemDescSubview op. Only ConvertLayout and Trans ops are
   // allowed in between.
   Value transitiveOperand = operand;
-  while (
-      isa_and_nonnull<ttg::ConvertLayoutOp, tt::TransOp, ttg::MemDescTransOp>(
-          transitiveOperand.getDefiningOp()) ||
-      isa<BlockArgument>(transitiveOperand)) {
+  while (isa_and_nonnull<ttg::ConvertLayoutOp, tt::TransOp, ttg::MemDescTransOp,
+                         ttg::MemDescReshapeOp>(
+             transitiveOperand.getDefiningOp()) ||
+         isa<BlockArgument>(transitiveOperand)) {
     if (auto blockArg = dyn_cast<BlockArgument>(transitiveOperand)) {
       assert(isa<scf::ForOp>(blockArg.getOwner()->getParentOp()) &&
              "Block argument must come from a for loop");
@@ -1392,107 +1400,103 @@ void eraseLoopCarriedValues(scf::ForOp &loop, llvm::BitVector indices) {
   loop = newLoop;
 }
 
-// Find all underlying shared, tensory memory, or global scratch allocations of
-// `value`, returning failure if the function lost track of the allocation.
-LogicalResult findUnderlyingAllocations(Value value, DenseSet<Value> &allocs,
-                                        DenseSet<Value> &seen) {
-  // Don't get stuck in an infinite loop.
-  if (!seen.insert(value).second)
-    return success();
-
-  // We found an allocation.
-  if (isa_and_nonnull<ttg::LocalAllocOp, ttg::GlobalScratchAllocOp,
-                      ttng::TMEMAllocOp>(value.getDefiningOp())) {
-    allocs.insert(value);
-    return success();
-  }
-
-  // Assume poison aliases nothing.
-  if (value.getDefiningOp<ub::PoisonOp>())
-    return success();
-
-  // Look through subviews.
-  if (auto view = value.getDefiningOp<ttg::MemDescSubviewOp>()) {
-    return findUnderlyingAllocations(view.getSrc(), allocs, seen);
-  }
-
-  // Look through conditionals.
-  if (auto select = value.getDefiningOp<arith::SelectOp>()) {
-    if (failed(
-            findUnderlyingAllocations(select.getTrueValue(), allocs, seen)) ||
-        failed(
-            findUnderlyingAllocations(select.getFalseValue(), allocs, seen))) {
-      return failure();
-    }
-    return success();
-  }
-  if (auto ifOp = value.getDefiningOp<scf::IfOp>()) {
-    unsigned idx = cast<OpResult>(value).getResultNumber();
-    if (failed(findUnderlyingAllocations(ifOp.thenYield().getOperand(idx),
-                                         allocs, seen)) ||
-        failed(findUnderlyingAllocations(ifOp.elseYield().getOperand(idx),
-                                         allocs, seen))) {
-      return failure();
-    }
-    return success();
-  }
-
-  // Look through loops.
-  if (auto forOp = value.getDefiningOp<scf::ForOp>()) {
-    unsigned idx = cast<OpResult>(value).getResultNumber();
-    if (failed(findUnderlyingAllocations(forOp.getYieldedValues()[idx], allocs,
-                                         seen)) ||
-        failed(
-            findUnderlyingAllocations(forOp.getInitArgs()[idx], allocs, seen)))
-      return failure();
-    return success();
-  }
-
-  // Handle block arguments.
-  if (auto arg = dyn_cast<BlockArgument>(value)) {
-
-    // Loop through loops.
-    if (auto forOp = dyn_cast<scf::ForOp>(arg.getOwner()->getParentOp())) {
-      unsigned idx = arg.getArgNumber() - 1;
-      if (failed(findUnderlyingAllocations(forOp.getYieldedValues()[idx],
-                                           allocs, seen)) ||
-          failed(findUnderlyingAllocations(forOp.getInitArgs()[idx], allocs,
-                                           seen)))
-        return failure();
-      return success();
-    }
-
-    // Look through warp specialization.
-    if (auto wsOp = dyn_cast<ttg::WarpSpecializePartitionsOp>(
-            arg.getOwner()->getParentOp())) {
-      return findUnderlyingAllocations(
-          wsOp.getParentOp().getOperand(arg.getArgNumber()), allocs, seen);
-    }
-
-    // Unhandled block argument type.
-    return failure();
-  }
-
-  return failure();
-}
-
-bool mayAliasAllocations(const DenseSet<Value> &lhs,
-                         const DenseSet<Value> &rhs) {
-  DenseSet<Value> lhsAllocs, rhsAllocs;
-  DenseSet<Value> lhsSeen, rhsSeen;
-
-  // If we failed to find the underlying allocations, we assume they may alias.
-  for (Value lhsValue : lhs) {
-    if (failed(findUnderlyingAllocations(lhsValue, lhsAllocs, lhsSeen)))
-      return true;
-  }
-  for (Value rhsValue : rhs) {
-    if (failed(findUnderlyingAllocations(rhsValue, rhsAllocs, rhsSeen)))
-      return true;
-  }
-
-  // The allocations alias if they may share the same underlying allocations.
-  return !llvm::set_intersection(lhsAllocs, rhsAllocs).empty();
-}
-
 } // namespace mlir
+
+namespace mlir::triton {
+void replaceUsesAndPropagateType(OpBuilder &builder, Operation *oldUse,
+                                 Value val) {
+  SmallVector<Operation *> opsToDelete;
+  SmallVector<OpOperand *> operandsToReplace;
+
+  // Save the operand to replace / delete later (avoid iterator invalidation).
+  // TODO: can we use an early_inc iterator?
+  for (OpOperand &use : oldUse->getUses()) {
+    // Propagate through `ttg.warp_specialize`.
+    if (auto wsOp = dyn_cast<ttg::WarpSpecializeOp>(use.getOwner())) {
+      for (Region *region : wsOp.getPartitionRegions())
+        region->getArgument(use.getOperandNumber()).setType(val.getType());
+    }
+
+    // Non-subview/trans ops will be replaced by `val`.
+    if (!use.getOwner()->hasTrait<OpTrait::MemDescViewTrait>()) {
+      operandsToReplace.push_back(&use);
+      continue;
+    }
+
+    Operation *user = use.getOwner();
+    // `subview(old_op)` is replaced by a new `subview(val)`.
+    OpBuilder::InsertionGuard g(builder);
+    builder.setInsertionPoint(user);
+    Value newVal;
+    if (auto subview = dyn_cast<ttg::MemDescSubviewOp>(user)) {
+      ttg::MemDescType oldType = subview.getType();
+      bool isMutable = cast<ttg::MemDescType>(val.getType()).getMutableMemory();
+      Type newDstType = ttg::MemDescType::get(
+          oldType.getShape(), oldType.getElementType(), oldType.getEncoding(),
+          oldType.getMemorySpace(), isMutable);
+      newVal = builder.create<ttg::MemDescSubviewOp>(
+          subview.getLoc(), newDstType, val, subview.getOffsets());
+    } else if (auto trans = dyn_cast<ttg::MemDescTransOp>(user)) {
+      newVal = builder.create<ttg::MemDescTransOp>(trans.getLoc(), val,
+                                                   trans.getOrder());
+    } else if (auto reshape = dyn_cast<ttg::MemDescReshapeOp>(user)) {
+      newVal = builder.create<ttg::MemDescReshapeOp>(reshape.getLoc(),
+                                                     reshape.getType(), val);
+    }
+    assert(newVal && "unhandled memdesc view");
+    newVal.getDefiningOp()->setAttrs(user->getAttrs());
+    replaceUsesAndPropagateType(builder, user, newVal);
+    opsToDelete.push_back(use.getOwner());
+  }
+
+  // Perform late replacement.
+  for (OpOperand *operand : operandsToReplace) {
+    if (auto wait = dyn_cast<ttng::WarpGroupDotWaitOp>(operand->getOwner())) {
+      // Need to update the return type on the wait op as well
+      builder.setInsertionPointAfter(wait);
+      auto operands = llvm::to_vector(wait.getOperands());
+      operands[operand->getOperandNumber()] = val;
+      auto newWait = builder.create<ttng::WarpGroupDotWaitOp>(
+          wait.getLoc(), operands, wait.getPendings());
+      wait.replaceAllUsesWith(newWait.getResults());
+      wait.erase();
+    } else {
+      Operation *op = operand->getOwner();
+      operand->set(val);
+    }
+  }
+
+  // Perform late op erasure.
+  for (Operation *op : opsToDelete)
+    op->erase();
+}
+
+void replaceUsesWithLocalLoad(OpBuilder &builder, OpResult old,
+                              TypedValue<ttg::MemDescType> alloc,
+                              TypedValue<ttg::AsyncTokenType> token) {
+  //  Remove redundant local_load -> local_alloc
+  auto allocTy = alloc.getType();
+  SmallVector<ttg::LocalAllocOp> allocsToErase;
+  for (Operation *user : old.getUsers()) {
+    if (auto userAlloc = dyn_cast<ttg::LocalAllocOp>(user)) {
+      if (allocTy.getEncoding() == userAlloc.getType().getEncoding()) {
+        replaceUsesAndPropagateType(builder, userAlloc, alloc);
+        allocsToErase.push_back(userAlloc);
+      }
+    }
+  }
+
+  // If there are some uses that were not local_allocs, we need to create a
+  // local_load for them.
+  if (std::distance(old.getUsers().begin(), old.getUsers().end()) >
+      allocsToErase.size()) {
+    auto loc = old.getOwner()->getLoc();
+    auto sharedLoad = builder.template create<ttg::LocalLoadOp>(
+        loc, old.getType(), alloc, token);
+    old.replaceAllUsesWith(sharedLoad.getResult());
+  }
+  for (auto alloc : allocsToErase) {
+    alloc.erase();
+  }
+}
+} // namespace mlir::triton

@@ -1,19 +1,9 @@
-// RUN: triton-opt %s -allow-unregistered-dialect -tritongpu-partition-loops -verify-diagnostics -canonicalize | FileCheck %s
+// RUN: triton-opt %s -split-input-file -allow-unregistered-dialect -tritongpu-partition-loops -verify-diagnostics -canonicalize | FileCheck %s
 
 #blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
 !ty = tensor<1xi32, #blocked>
 
 module attributes {"ttg.num-warps" = 4 : i32} {
-
-tt.func @still_has_ssa_deps(%lb: i32, %ub: i32, %step: i32) {
-  scf.for %i = %lb to %ub step %step : i32 {
-    // expected-warning @below {{non-root partition #0 has direct SSA consumer}}
-    %0 = "op_a"() {ttg.partition = 0} : () -> !ty
-    // expected-note @below {{use at distance 0 in partition #1 here}}
-    "op_b"(%0) {ttg.partition = 1} : (!ty) -> ()
-  } {ttg.partition.stages = [0, 1]}
-  tt.return
-}
 
 // CHECK-LABEL: @no_partitions
 tt.func @no_partitions(%lb: i32, %ub: i32, %step: i32) {
@@ -206,11 +196,27 @@ tt.func @trivial_tensor_captures(%arg0: f16, %lb: i32, %ub: i32, %step: i32) {
   // CHECK: ttg.warp_specialize(%arg1, %arg2, %arg3, %arg0)
   scf.for %i = %lb to %ub step %step : i32 {
     // CHECK: partition0(%arg4: i32, %arg5: i32, %arg6: i32, %arg7: f16) num_warps(4)
-    // CHECK-NEXT: [[SPLAT:%.*]] = tt.splat %arg7 : f16 -> tensor<32xf16>
     // CHECK-NEXT: [[RANGE:%.*]] = tt.make_range {end = 256 : i32, start = 0 : i32} : tensor<256xi32>
+    // CHECK-NEXT: [[SPLAT:%.*]] = tt.splat %arg7 : f16 -> tensor<32xf16>
     // CHECK-NEXT: scf.for
     // CHECK-NEXT: "use"([[RANGE]], [[SPLAT]])
     "use"(%0, %1) {ttg.partition = 1} : (tensor<256xi32>, tensor<32xf16>) -> ()
+  } {ttg.partition.stages = [0, 0]}
+  tt.return
+}
+
+// CHECK-LABEL: @tensor_captures_over_smem
+tt.func @tensor_captures_over_smem(%lb: i32, %ub: i32, %step: i32) {
+  // CHECK: [[VALUE:%.*]] = "value"()
+  %0 = "value"() : () -> tensor<32xf16, #blocked>
+  // CHECK: [[ALLOC:%.*]] = ttg.local_alloc [[VALUE]]
+  // CHECK: ttg.warp_specialize([[ALLOC]], %arg0, %arg1, %arg2)
+  scf.for %i = %lb to %ub step %step : i32 {
+    // CHECK: partition0(%arg3: !ttg.memdesc<{{.*}}>
+    // CHECK-NEXT: [[VALUE:%.*]] = ttg.local_load %arg3
+    // CHECK-NEXT: scf.for
+    // CHECK-NEXT: "use"([[VALUE]])
+    "use"(%0) {ttg.partition = 1} : (tensor<32xf16, #blocked>) -> ()
   } {ttg.partition.stages = [0, 0]}
   tt.return
 }
@@ -235,6 +241,45 @@ tt.func @dce_before_warp_allocation(%lb: i32, %ub: i32, %step: i32) {
     "op_c"(%0) {ttg.partition = 2 : i32} : (tensor<128xi32, #blocked>) -> ()
     scf.yield %0 : tensor<128xi32, #blocked>
   } {ttg.partition.stages = [0, 0, 0]}
+  tt.return
+}
+
+// CHECK-LABEL: @capture_order
+tt.func public @capture_order(%arg0: i32) {
+  %c0_i32 = arith.constant 0 : i32
+  %c1_i32 = arith.constant 1 : i32
+  %0 = tt.make_range {end = 4 : i32, start = 0 : i32} : tensor<4xi32, #blocked>
+  %1 = arith.extsi %0 : tensor<4xi32, #blocked> to tensor<4xi64, #blocked>
+  // CHECK: ttg.warp_specialize
+  // CHECK: partition0
+  // CHECK: [[VALUE:%.*]] = tt.make_range
+  // CHECK-NEXT: [[EXT:%.*]] = arith.extsi [[VALUE]]
+  // CHECK-NEXT: scf.for
+  scf.for %arg1 = %c0_i32 to %arg0 step %c1_i32  : i32 {
+    // CHECK-NEXT: "use"([[VALUE]])
+    "use"(%0) : (tensor<4xi32, #blocked>) -> ()
+    // CHECK-NEXT: "use"([[EXT]])
+    "use"(%1) : (tensor<4xi64, #blocked>) -> ()
+  } {ttg.partition.stages = [1 : i32, 0 : i32]}
+  tt.return
+}
+
+}
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+!ty = tensor<1xi32, #blocked>
+
+module attributes {"ttg.num-warps" = 4 : i32} {
+
+tt.func @still_has_ssa_deps(%lb: i32, %ub: i32, %step: i32) {
+  scf.for %i = %lb to %ub step %step : i32 {
+    // expected-warning @below {{non-root partition #0 has direct SSA consumer}}
+    %0 = "op_a"() {ttg.partition = 0} : () -> !ty
+    // expected-note @below {{use at distance 0 in partition #1 here}}
+    "op_b"(%0) {ttg.partition = 1} : (!ty) -> ()
+  } {ttg.partition.stages = [0, 1]}
   tt.return
 }
 

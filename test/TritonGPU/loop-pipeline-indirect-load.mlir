@@ -1,4 +1,4 @@
-// RUN: triton-opt %s -tritongpu-pipeline=num-stages=2 | FileCheck %s
+// RUN: triton-opt %s -tritongpu-assign-latencies=num-stages=2 -tritongpu-schedule-loops -tritongpu-pipeline=num-stages=2 | FileCheck %s
 // CHECK-LABEL: @indirect_load_two_stages
 // CHECK: scf.for
 // CHECK: tt.dot

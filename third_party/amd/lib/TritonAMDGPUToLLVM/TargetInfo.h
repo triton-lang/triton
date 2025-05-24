@@ -79,10 +79,16 @@ public:
 
   bool supportVectorizedAtomics() const override;
 
-  void storeOpAnnotation(triton::gpu::LocalStoreOp op, size_t localStoreOpCount,
-                         Type type) const override;
+  bool supportLdStMatrix() const override { return false; }
+
+  void localStoreOpAnnotation(triton::gpu::LocalStoreOp op,
+                              size_t localStoreOpCount,
+                              Type type) const override;
 
   bool supportsDirectToLdsLoadBitWidth(int bitWidth) const;
+
+  void localLoadOpAnnotation(triton::gpu::LocalLoadOp localLoadOp,
+                             Operation *llLoadOp) const override;
 
 private:
   void printfImpl(Value formatStrStart, int formatStrByteCount, ValueRange args,
