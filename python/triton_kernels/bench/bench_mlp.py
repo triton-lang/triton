@@ -264,6 +264,10 @@ if __name__ == "__main__":
     dense_dtypes = ["fp8", "fp8"]
     quantized_dtypes = ["fp8", "mx4"] if has_native_mx4 else ["bf16", "mx4"]
     if world_size > 1:
+        # Running all workloads at once may cause OOM on some GPUs such as H100 80GB.
+        # Thus we request users to run each workload separately.
+        # For example, to run the dense workload with 4 TP and 2 EP, use:
+        # e.g., torchrun --nproc-per-node=4 ./bench_mlp.py --tp 2 --ep 2 --name llama4-maverick
         batch_ranges_dense = [(1024, 32768, 1024)]
         batch_ranges_moe = [(128, 512, 32), (512, 32000, 128)]
         argparse = argparse.ArgumentParser()
@@ -274,11 +278,13 @@ if __name__ == "__main__":
         args = argparse.parse_args()
         dtypes = dense_dtypes if args.quantized else quantized_dtypes
         if args.name == "dense":
+            assert args.ep == 1, "EP must be 1 for dense"
             roofline_mlp(batch_ranges_dense, 8192, 8192, 1, 1, *dense_dtypes, TP=args.tp, EP=args.ep,
                          name="dense")
         else:
             roofline_mlp(batch_ranges_moe, 5120, 8192, 128, 4, *dense_dtypes, TP=args.tp, EP=args.ep,
                          name="llama4-maverick")
+        triton_dist.cleanup() 
     else:
         batch_ranges_dense = [(1024, 32768, 1024)]
         batch_ranges_moe = [(128, 512, 32), (512, 32000, 128)]

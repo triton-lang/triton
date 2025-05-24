@@ -27,6 +27,7 @@ def setup() -> Tuple[int, int]:
 
 def cleanup():
     if _is_distributed_launch():
+        dist.barrier()
         dist.destroy_process_group()
     else:
         pass
