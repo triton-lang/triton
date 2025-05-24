@@ -22,18 +22,17 @@
  */
 
 #include "TritonAMDGPUTransforms/Passes.h"
-#include "mlir/IR/Matchers.h"
 #include "mlir/IR/PatternMatch.h"
-#include "mlir/Pass/Pass.h"
 #include "mlir/Pass/PassManager.h"
 #include "mlir/Support/LogicalResult.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
-#include "mlir/Transforms/Passes.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
-#include "triton/Dialect/TritonGPU/Transforms/Passes.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 
-using namespace mlir;
+namespace mlir {
+
+#define GEN_PASS_DEF_TRITONAMDGPUOPTIMIZEEPILOGUE
+#include "TritonAMDGPUTransforms/Passes.h.inc"
 
 namespace {
 
@@ -204,13 +203,10 @@ public:
   }
 };
 
-} // namespace
-
-#define GEN_PASS_CLASSES
-#include "TritonAMDGPUTransforms/Passes.h.inc"
+} // anonymous namespace
 
 class TritonAMDGPUOptimizeEpiloguePass
-    : public TritonAMDGPUOptimizeEpilogueBase<
+    : public impl::TritonAMDGPUOptimizeEpilogueBase<
           TritonAMDGPUOptimizeEpiloguePass> {
 
 public:
@@ -228,6 +224,4 @@ public:
   }
 };
 
-std::unique_ptr<Pass> mlir::createTritonAMDGPUOptimizeEpiloguePass() {
-  return std::make_unique<TritonAMDGPUOptimizeEpiloguePass>();
-}
+} // namespace mlir
