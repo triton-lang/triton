@@ -160,15 +160,6 @@ Device decodeDevice(const uint32_t dev) {
   return device;
 }
 
-uint32_t getCost(const CircularLayoutParserConfig &config) {
-  if (config.device.type == DeviceType::CUDA)
-    return 16;
-  else if (config.device.type == DeviceType::HIP)
-    return 36;
-
-  return 0;
-}
-
 void shift(CircularLayoutParserResult::Trace &trace, const uint32_t cost,
            const uint32_t timeBase) {
   for (auto &event : trace.profileEvents) {
@@ -206,15 +197,16 @@ proton::readCircularLayoutTrace(ByteSpan &buffer, bool applyTimeShift) {
   auto result = parser->getResult();
 
   // Shift the clocks to reduce the constant profiling overhead
-  if (applyTimeShift)
-    timeShift(config, result);
+  if (applyTimeShift) {
+    const uint32_t cost = getTimeShiftCost(config);
+    timeShift(cost, result);
+  }
 
   return result;
 }
 
-void proton::timeShift(const CircularLayoutParserConfig &config,
+void proton::timeShift(const uint32_t cost,
                        std::shared_ptr<CircularLayoutParserResult> result) {
-  const uint32_t cost = getCost(config);
   for (auto &bt : result->blockTraces) {
     for (auto &trace : bt.traces) {
       for (auto &event : trace.profileEvents) {
@@ -231,4 +223,13 @@ void proton::timeShift(const CircularLayoutParserConfig &config,
       }
     }
   }
+}
+
+uint32_t proton::getTimeShiftCost(const CircularLayoutParserConfig &config) {
+  if (config.device.type == DeviceType::CUDA)
+    return 16;
+  else if (config.device.type == DeviceType::HIP)
+    return 36;
+
+  return 0;
 }
