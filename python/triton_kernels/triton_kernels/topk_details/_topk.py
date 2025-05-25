@@ -40,7 +40,7 @@ def streaming_topk(X, stride_xm, n_expts_tot, offs_m, mask_m, N_EXPTS_PAD: tl.co
 @triton.jit
 def _topk(X, stride_xm,  # inputs
           Yv, Yi, stride_ym,  # topk values/indices
-          Bits, stride_rm: tl.constexpr, stride_rn: tl.constexpr, n_rows,  # bitmatrix
+          USE_PROVIDED_INDX: tl.constexpr, Bits, stride_rm: tl.constexpr, stride_rn: tl.constexpr, n_rows,  # bitmatrix
           n_expts_tot, S, BLOCK_S: tl.constexpr, s_blocks,  # thing to memset
           BLOCK_M: tl.constexpr, N_EXPTS_PAD: tl.constexpr, N_EXPTS_ACT: tl.constexpr, BLOCK_N: tl.constexpr):
 
@@ -62,23 +62,31 @@ def _topk(X, stride_xm,  # inputs
 
     # load logits
     offs_m = pid * BLOCK_M + tl.arange(0, BLOCK_M)
+    offs_y_n = tl.arange(0, N_EXPTS_ACT)
     mask_m = offs_m[:, None] < n_rows
-    y = streaming_topk(X, stride_xm, n_expts_tot, offs_m, mask_m, N_EXPTS_PAD, N_EXPTS_ACT, BLOCK_N)
-    y = y.to(x_ultype, bitcast=True)
+    if USE_PROVIDED_INDX:
+        Yi_ptrs = Yi + offs_m[:, None] * stride_ym + offs_y_n[None, :]
+        y_indices = tl.load(Yi_ptrs, mask=mask_m)
+        Xv_ptrs = X + offs_m[:, None] * stride_xm + y_indices
+        y_values = tl.load(Xv_ptrs, mask=mask_m)
+    else:
+        y = streaming_topk(X, stride_xm, n_expts_tot, offs_m, mask_m, N_EXPTS_PAD, N_EXPTS_ACT, BLOCK_N)
+        y = y.to(x_ultype, bitcast=True)
+        # sort result in direction of ascending expert index
+        y = (y << x_nbits) | (y >> x_nbits)
+        y = tl.sort(y, dim=1)
+        y_indices = y >> x_nbits
+        y_values = (y & ((1 << x_nbits) - 1)).to(x_utype).to(x_dtype, bitcast=True)
 
-    # sort result in direction of ascending expert index
-    y = (y << x_nbits) | (y >> x_nbits)
-    y = tl.sort(y, dim=1)
-    y_indices = y >> x_nbits
-    y_values = (y & ((1 << x_nbits) - 1)).to(x_utype).to(x_dtype, bitcast=True)
+    # normalize selected values
     y_values = tl.softmax(y_values.to(tl.float32), dim=1, keep_dims=True).to(x_dtype)
 
     # write back
-    offs_y_n = tl.arange(0, N_EXPTS_ACT)
     Yv_ptrs = Yv + offs_m[:, None] * stride_ym + offs_y_n[None, :]
-    Yi_ptrs = Yi + offs_m[:, None] * stride_ym + offs_y_n[None, :]
     tl.store(Yv_ptrs, y_values, mask=mask_m)
-    tl.store(Yi_ptrs, y_indices, mask=mask_m)
+    if not USE_PROVIDED_INDX:
+        Yi_ptrs = Yi + offs_m[:, None] * stride_ym + offs_y_n[None, :]
+        tl.store(Yi_ptrs, y_indices, mask=mask_m)
 
     # pack into bitmatrix
     y_div = y_indices // 32
