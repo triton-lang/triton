@@ -56,7 +56,6 @@ class RoutingData:
 def routing(logits, n_expts_act, expt_indx=None, simulated_ep=1):
     from .topk import topk
     from .compaction import compaction
-    assert expt_indx is None
     cdiv = triton.cdiv
     HIST_BLOCK_M = 64
     INDX_OFFS_BLOCK_M = 512
@@ -64,7 +63,7 @@ def routing(logits, n_expts_act, expt_indx=None, simulated_ep=1):
     n_tokens, n_expts_tot = logits.shape
     n_gates = n_tokens * n_expts_act
     device = logits.device
-    expt_scal, expt_indx, bitmatrix = topk(logits, n_expts_act)
+    expt_scal, expt_indx, bitmatrix = topk(logits, n_expts_act, y_indx=expt_indx)
     # mutate bitmatrix
     if simulated_ep > 1:
         assert n_expts_tot % simulated_ep == 0
@@ -76,10 +75,11 @@ def routing(logits, n_expts_act, expt_indx=None, simulated_ep=1):
             n_expts_tot // simulated_ep,
             BLOCK_N=512,
         )
+        # perform compaction to update expt_scal / expt_indx
         expt_scal, expt_indx = compaction(expt_scal, expt_indx, bitmatrix)
         n_expts_tot = n_expts_tot // simulated_ep
         bitmatrix.shape[-1] = n_expts_tot
-    # perform compaction to update expt_scal / expt_indx
+    # compute bitmatrix histogram
     hist, partial_hist = bitmatrix.sum(partials_block_size=HIST_BLOCK_M)
     # scratchpad
     expt_offs = torch.empty(n_expts_tot, dtype=torch.int32, device=device)
@@ -96,7 +96,6 @@ def routing(logits, n_expts_act, expt_indx=None, simulated_ep=1):
         BLOCK_M=INDX_OFFS_BLOCK_M,  # tunable parameters
     )
     indx_offs = partial_hist
-
     _routing_compute_indx[(cdiv(n_tokens, HIST_BLOCK_M), )](
         topk_indx, gate_indx, gate_scal,  # outputs
         expt_scal, expt_indx, indx_offs, indx_offs.stride(0), indx_offs.stride(1), n_gates,  # input

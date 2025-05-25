@@ -45,12 +45,20 @@ def ref_expt_data(routing_data, n_gates, block_m):
 @pytest.mark.parametrize("n_tokens", [371, 255, 256, 8192, 1023, 1024])
 @pytest.mark.parametrize("n_expts_tot, n_expts_act", [(128, 4), (1500, 8)])
 @pytest.mark.parametrize("block_m", [64, 128])
-def test_op(n_tokens, n_expts_tot, n_expts_act, block_m, device):
+@pytest.mark.parametrize("use_expt_indx", [False, True])
+def test_op(n_tokens, n_expts_tot, n_expts_act, block_m, use_expt_indx, device):
     torch.manual_seed(2)
     tri_logits = init_data(n_tokens, n_expts_tot, device=device).detach()
     ref_logits = tri_logits.clone()
-    ref_routing_data, ref_gather, ref_scatter = routing_torch(ref_logits, n_expts_act)
-    tri_routing_data, tri_gather, tri_scatter = routing(tri_logits, n_expts_act)
+    if use_expt_indx:
+        rand_idx = lambda: torch.randperm(n_expts_tot, device="cuda", dtype=torch.int64)
+        tri_expt_indx = torch.stack([rand_idx()[:n_expts_act] for _ in range(n_tokens)])
+        tri_expt_indx, _ = torch.sort(tri_expt_indx, dim=1)
+        ref_expt_indx = tri_expt_indx[:n_tokens]
+    else:
+        tri_expt_indx = ref_expt_indx = None
+    ref_routing_data, ref_gather, ref_scatter = routing_torch(ref_logits, n_expts_act, ref_expt_indx)
+    tri_routing_data, tri_gather, tri_scatter = routing(tri_logits, n_expts_act, tri_expt_indx)
     ref_metadata = ref_expt_data(ref_routing_data, n_tokens * n_expts_act, block_m)
     tri_metadata = compute_metadata(tri_routing_data, n_tokens * n_expts_act, block_m)
 
