@@ -387,7 +387,7 @@ def test_fp8_support(fresh_triton_cache, dtype):
         _ = tl.full((256, ), 0.0, dtype)
 
     if dtype in warning_dtypes:
-        ctx = pytest.warns(UserWarning, match=r"fp8e4b15 is deprecated in this architecture")
+        ctx = pytest.warns(UserWarning, match=r"fp8e4b15 is deprecated on Hopper+ architectures")
     elif dtype in supported_dtypes:
         ctx = contextlib.nullcontext()
     else:
