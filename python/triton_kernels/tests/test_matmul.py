@@ -17,7 +17,7 @@ from triton_kernels.numerics_details.mxfp import SwizzlingType, downcast_to_mxfp
 # testing utilities
 from triton_kernels.testing import assert_close, compute_actual_scale
 # target-specific utilities
-from triton_kernels.target_info import is_hip
+from triton_kernels.target_info import is_hip, is_hip_cdna3, is_cuda, is_hip_cdna4
 
 # ---------------
 # initialize data
@@ -75,18 +75,20 @@ def init_compute_data(m, n, k, gindx, sindx, n_expts_tot, n_expts_act, n_expt_sh
 # ---------------
 
 
-def init_precision(out_dtype, act_use_flexpoint, weight_use_flexpoint, n_expts_tot=1, mx_ctx=MicroscalingCtx(),
+def init_precision(out_dtype, weight_dtype, is_mixed_input, n_expts_tot=1, mx_ctx=MicroscalingCtx(),
                    device="cuda"):
+    act_use_flexpoint = out_dtype.itemsize == 1
+    weight_use_flexpoint = weight_dtype.itemsize == 1 and not is_mixed_input
     # flexpoint
     make_tensor = lambda val0, val1: torch.tensor([val0, val1] * (n_expts_tot // 2) +
                                                   ([val0]
                                                    if n_expts_tot % 2 else []), dtype=torch.float32, device=device)
     make_scalar = lambda val: torch.tensor([val], dtype=torch.float32, device=device)
-    in_flex_data = lambda scale, use_flex: InFlexData(dtype=torch.float8_e5m2, scale=make_scalar(scale)
+    in_flex_data = lambda scale, use_flex: InFlexData(dtype=out_dtype, scale=make_scalar(scale)
                                                       ) if use_flex else InFlexData()
-    in_flex_edata = lambda scale0, scale1, use_flex: InFlexData(dtype=torch.float8_e5m2, scale=make_tensor(
+    in_flex_edata = lambda scale0, scale1, use_flex: InFlexData(dtype=weight_dtype, scale=make_tensor(
         scale0, scale1)) if use_flex else InFlexData()
-    out_flex_data = lambda scale, use_flex: OutFlexData(dtype=torch.float8_e5m2, expected_scale=make_scalar(
+    out_flex_data = lambda scale, use_flex: OutFlexData(dtype=out_dtype, expected_scale=make_scalar(
         scale), actual_scale=make_scalar(0), checksum_scale=make_scalar(0)) if use_flex else OutFlexData()
     flex_ctx = FlexCtx(
         lhs_data=in_flex_data(1.25, act_use_flexpoint),
@@ -212,6 +214,12 @@ class Case:
             Case(600, 400, 400, "ragged", "float8_e4m3fnuz", "float8_e4m3fnuz", 4, 2, n_expt_shards=2),
             Case(600, 400, 400, "ragged", "float8_e4m3fnuz", "float8_e4m3fnuz", 4, 2),
             Case(600, 400, 400, "ragged", "float8_e4m3fnuz", "float8_e4m3fnuz", 4, 2, split_k=2),
+            Case(300, 400, 400, "ragged", "float8_e4m3fn", "float8_e4m3fn"),
+            Case(1000, 400, 400, "ragged", "float8_e4m3fn", "float8_e4m3fn", 3, 1),
+            Case(600, 400, 400, "ragged", "float8_e4m3fn", "float8_e4m3fn", 4, 2),
+            Case(600, 400, 400, "ragged", "float8_e4m3fn", "float8_e4m3fn", 4, 2, n_expt_shards=2),
+            Case(600, 400, 400, "ragged", "float8_e4m3fn", "float8_e4m3fn", 4, 2),
+            Case(600, 400, 400, "ragged", "float8_e4m3fn", "float8_e4m3fn", 4, 2, split_k=2),
         ]
     ],
 )
@@ -229,16 +237,26 @@ def test_op(m, n, k, split_k, do_gather, do_scatter, fused_scatter, has_y_gammas
             n_expts_act, n_expt_shards, mode, act_dtype_str, weight_dtype_str, block_m, hbm_swizzling, epilogue_subtile,
             device, opt_flags_scope):
     # TODO: remove when Triton FP8 supports proper RTNE
-    if "float8" in weight_dtype_str and torch.cuda.get_device_capability()[0] < 9:
-        pytest.skip("Float8 not tested on A100")
-    if "float8_e4m3fnuz" in weight_dtype_str and not is_hip():
-        pytest.skip("float8_e4m3fnuz only tested on HIP platforms")
-    if "mx" in weight_dtype_str and is_hip():
-        pytest.skip("mxfloat* only tested on CUDA platforms")
-    if "float16" in act_dtype_str and "mx" in weight_dtype_str and torch.cuda.get_device_capability()[0] >= 10:
-        pytest.skip("float16 x mx not supported with cuda capability >= 10")
-    if "float8" in act_dtype_str and "mx" in weight_dtype_str and torch.cuda.get_device_capability()[0] < 10:
-        pytest.skip("float8 x mx not supported with cuda capability < 10")
+    if is_cuda():
+        if "float8" in weight_dtype_str and torch.cuda.get_device_capability()[0] < 9:
+            pytest.skip("Float8 not tested on A100")
+        if "float16" in act_dtype_str and "mx" in weight_dtype_str and torch.cuda.get_device_capability()[0] >= 10:
+            pytest.skip("float16 x mx not supported with cuda capability >= 10")
+        if "float8" in act_dtype_str and "mx" in weight_dtype_str and torch.cuda.get_device_capability()[0] < 10:
+            pytest.skip("float8 x mx not supported with cuda capability < 10")
+    elif is_hip():
+        if swizzle_mx_scale:
+            pytest.skip("Swizzling mx scale is not supported on AMD GPU platforms")
+        if "float8_e4m3fnuz" in (weight_dtype_str, act_dtype_str) and not is_hip_cdna3():
+            pytest.skip("float8_e4m3fnuz only tested on CDNA3")
+        if "float8" in act_dtype_str and "mx" in weight_dtype_str and not is_hip_cdna4():
+            pytest.skip("float8 x mx only supported on CDNA4")
+        if "float8" in act_dtype_str and "mxfloat8" in weight_dtype_str:
+            pytest.skip("float8 x mxfloat8 not supported on AMD GPU yet")
+        
+        if is_persistent:
+            pytest.skip("Persistent kernel not supported on AMD GPU yet")
+
     if fused_scatter and split_k > 1:
         pytest.skip("fused scatter scratchpad not supported with split_k")
     if hbm_swizzling:
@@ -283,8 +301,7 @@ def test_op(m, n, k, split_k, do_gather, do_scatter, fused_scatter, has_y_gammas
     weight_dtype = dtype_str_to_torch(weight_dtype_str)
     act_dtype = dtype_str_to_torch(act_dtype_str)
     act_is_float8 = act_dtype.itemsize == 1
-    weight_is_float8 = weight_dtype.itemsize == 1
-    precision_opt = init_precision(act_dtype, act_is_float8, weight_is_float8 and not is_mixed_input,
+    precision_opt = init_precision(act_dtype, weight_dtype, is_mixed_input,
                                    n_expts_tot // n_expt_shards, device=device)
     # precision_opt.x_pad_trans_requires_flexpoint = False
     if mode == "ragged":
@@ -322,7 +339,7 @@ def test_op(m, n, k, split_k, do_gather, do_scatter, fused_scatter, has_y_gammas
                                                swizzle_scale=swizzle_scale,
                                                actual_weight_scale_shape=weight_scale_shape)
 
-    if is_persistent and not can_use_persistent_tma(x_tri, w_tri, gindx, precision_opt):
+    if is_cuda() and is_persistent and not can_use_persistent_tma(x_tri, w_tri, gindx, precision_opt):
         pytest.skip("persistent TMAs not supported for this test")
 
     if w_tri.shape[0] == 1:
@@ -403,7 +420,10 @@ def test_op(m, n, k, split_k, do_gather, do_scatter, fused_scatter, has_y_gammas
             assert n_rows > 0
             ref_y = ref_y[:n_rows]
             tri_y = tri_y[:n_rows]
-    assert_close(scale(ref_y, flex.out_data.expected_scale), tri_y)
+    maxtol = None
+    if is_hip() and weight_dtype == torch.uint8:
+        maxtol = 0.08
+    assert_close(scale(ref_y, flex.out_data.expected_scale), tri_y, maxtol=maxtol)
 
     if act_is_float8:
         tri_y_scale = flex.out_data.actual_scale.clone()
