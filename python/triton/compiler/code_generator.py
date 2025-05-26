@@ -617,10 +617,6 @@ class CodeGenerator(ast.NodeVisitor):
             return getattr(lhs, method_name)(rhs, _builder=self.builder)
         if _is_triton_tensor(rhs):
             return getattr(rhs, reverse_method_name)(lhs, _builder=self.builder)
-        # if _is_constexpr(lhs):
-        #     return getattr(lhs, method_name)(rhs)
-        # if _is_constexpr(rhs):
-        #     return getattr(rhs, reverse_method_name)(lhs)
         return getattr(lhs, method_name)(rhs)
 
     def visit_BinOp(self, node):
