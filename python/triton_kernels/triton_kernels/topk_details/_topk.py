@@ -85,6 +85,7 @@ def streaming_topk(X, stride_xm, n_expts_tot, offs_m, mask_m, N_EXPTS_PAD: tl.co
     # first iteration:
     X_ptrs = X + offs_m[:, None] * stride_xm + offs_x_n[None, :]
     x = tl.load(X_ptrs, mask=(mask_m & mask_n), other=float("-inf"))
+
     x = standard_type_to_key(x, 0)
     x = (x.to(x_ultype) << x_nbits) | (N_EXPTS_PAD - offs_x_n[None, :])
     acc = tl.topk(x, N_EXPTS_ACT, dim=1)
@@ -99,6 +100,7 @@ def streaming_topk(X, stride_xm, n_expts_tot, offs_m, mask_m, N_EXPTS_PAD: tl.co
         x = (x.to(x_ultype) << x_nbits) | (N_EXPTS_PAD - offs_x_n[None, :])
         acc = tl.maximum(acc, tl.topk(x, N_EXPTS_ACT, dim=1))
 
+    acc = tl.sort(acc, dim=1, descending=True)
     acc_values = (acc >> x_nbits).to(x_utype)
     acc_values = standard_type_to_key(acc_values, 1)
     acc_indices = N_EXPTS_PAD - (acc & 0x0000FFFF)
