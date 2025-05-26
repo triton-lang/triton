@@ -155,33 +155,6 @@ void launchKernel(const TritonLaunchConfig &config) {
 // otherwise.
 using ExtractorType = bool (*)(py::object obj, void *ptr);
 
-// Enable peer access if dev_ptr is allocated on a different device than the
-// device on which we will execute the kernel.
-void enablePeerAccessIfNecessary(CUdeviceptr dev_ptr) {
-  CUmemorytype mem_type = CU_MEMORYTYPE_HOST;
-  CUresult status = cuPointerGetAttribute(
-      &mem_type, CU_POINTER_ATTRIBUTE_MEMORY_TYPE, dev_ptr);
-  if (status != CUDA_SUCCESS || mem_type != CU_MEMORYTYPE_DEVICE) {
-    return;
-  }
-  int mem_device_ordinal = 0;
-  CUDA_CHECK(cuPointerGetAttribute(
-      &mem_device_ordinal, CU_POINTER_ATTRIBUTE_DEVICE_ORDINAL, dev_ptr));
-  CUdevice mem_device = 0;
-  CUDA_CHECK(cuDeviceGet(&mem_device, mem_device_ordinal));
-  CUdevice compute_device = 0;
-  CUDA_CHECK(cuCtxGetDevice(&compute_device));
-  if (mem_device != compute_device) {
-    CUcontext mem_ctx = nullptr;
-    CUDA_CHECK(cuDevicePrimaryCtxRetain(&mem_ctx, mem_device));
-    CUresult status = cuCtxEnablePeerAccess(mem_ctx, /*flags=*/0);
-    if (status == CUDA_ERROR_PEER_ACCESS_ALREADY_ENABLED) {
-      status = CUDA_SUCCESS;
-    }
-    CUDA_CHECK(status);
-  }
-}
-
 // Extract a CUDA device pointer from a pointer-like py::object obj, and store
 // it to the memory location pointed by ptr.
 bool extractPointer(py::object obj, void *ptr) {
@@ -211,7 +184,6 @@ bool extractPointer(py::object obj, void *ptr) {
   if (*dev_ptr == 0) {
     return true; // valid nullptr
   }
-  enablePeerAccessIfNecessary(*dev_ptr);
 
   CUresult status = cuPointerGetAttribute(
       dev_ptr, CU_POINTER_ATTRIBUTE_DEVICE_POINTER, *dev_ptr);
@@ -323,20 +295,6 @@ std::optional<char> findExtractor(std::string_view type_repr) {
   return std::nullopt;
 }
 
-PyDoc_STRVAR(buildSignatureMetadata__doc__,
-             R"(buildSignatureMetadata(signature_iterator) -> bytes
-
-Build a metadata object describing the signature of a kernel.
-
-This can then be passed as the signature_metadata parameter to the launch()
-function.
-
-:param signature: list of types describing the signature of a kernel,
-    specialized parameters should be represented with None
-:type signature: sequence or iterable
-:return: an opaque metadata object which can then be passed to launch()
-:rtype: bytes
-)");
 std::vector<char> buildSignatureMetadata(std::vector<std::string> signature) {
   std::vector<char> signature_metadata;
   for (std::string type : signature) {
@@ -372,47 +330,11 @@ static void ensureCudaContext() {
   }
 }
 
-PyDoc_STRVAR(
-    launch__doc__,
-    R"(launch(gridDimX, gridDimY, gridDimZ, stream, kernel, packed_metadata, launch_metadata, launch_enter_hook, launch_exit_hook, kernel_arg_types, global_scratch, kernel_args)
-
-Launch a kernel on an Nvidia GPU.
-
-:param gridDimX: X dimension of the grid
-:type gridDimX: signed integer
-:param gridDimY: Y dimension of the grid
-:type gridDimY: signed integer
-:param gridDimZ: Z dimension of the grid
-:type gridDimZ: signed integer
-:param stream: CUDA Stream to launch on
-:type stream: unsigned long integer (pointer)
-:param kernel: CUDA kernel to launch
-:type kernel: unsigned long integer (pointer)
-:param launch_cooperative_grid: launch a cooperative grid
-:type launch_cooperative_grid bool
-:param launch_pdl: enable programmatic dependent launch
-:type launch_pdl: bool
-:param packed_metadata: Kernel metadata, including in sequence:
-    number of warps, number of CTAs, required bytes of shared memory,
-    cluster dimensions x, y, and z
-:type packed_metadata: 6-tuple
-:param hook_args: arguments to pass to the enter and exit hooks
-:type hook_args: object
-:param launch_enter_hook: hook to call just before launching the kernel
-:type launch_enter_hook: callable
-:param launch_exit_hook: hook to call just after launching the kernel
-:type launch_exit_hook: callable
-:param signature_metadata: matadata built from build_signature_metadata
-:type signature_metadata: bytes
-:param global_scratch: pointer to global scratch memory
-:type global_scratch: pointer
-:param kernel_args: kernel parameters
-:type kernel_args: tuple
-
-:raises RuntimeError: on kernel launch failure
-)");
 void launch(int grid_dim_x, int grid_dim_y, int grid_dim_z, int64_t stream,
             int64_t function, bool launch_cooperative_grid, bool launch_pdl,
+            /* packed_metadata: 6-tuple of (number of warps, number of CTAs,
+             * required bytes of shared memory, cluster dimension x, y, and
+             * z) */
             std::tuple<int, int, int, int, int, int> packed_metadata,
             py::object hook_args, py::object launch_enter_hook,
             py::object launch_exit_hook, std::vector<char> signature_metadata,
