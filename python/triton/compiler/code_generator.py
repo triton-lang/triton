@@ -612,10 +612,10 @@ class CodeGenerator(ast.NodeVisitor):
 
     def _apply_binary_method(self, method_name, lhs, rhs):
         # TODO: raise something meaningful if getattr fails below, esp for reverse method
-        reverse_method_name = re.sub(r"__(.*)__", r"__r\1__", method_name)
         if _is_triton_tensor(lhs):
             return getattr(lhs, method_name)(rhs, _builder=self.builder)
         if _is_triton_tensor(rhs):
+            reverse_method_name = re.sub(r"__(.*)__", r"__r\1__", method_name)
             return getattr(rhs, reverse_method_name)(lhs, _builder=self.builder)
         return getattr(lhs, method_name)(rhs)
 
