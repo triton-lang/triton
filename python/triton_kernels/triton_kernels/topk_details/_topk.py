@@ -3,60 +3,19 @@ import triton.language as tl
 
 
 @triton.jit
-def top_and_full_mask(dtype: tl.constexpr):
-
-    pb: tl.constexpr = 16  #dtype.value.primitive_bitwidth
-
-    if pb == 8:
-        itype = tl.uint8
-        topmask: tl.constexpr = 0x80
-        fullmask: tl.constexpr = 0xff
-    elif pb == 16:
-        itype = tl.uint16
-        topmask: tl.constexpr = 0x8000
-        fullmask: tl.constexpr = 0xffff
-    elif pb == 32:
-        itype = tl.uint32
-        topmask: tl.constexpr = 0x80000000
-        fullmask: tl.constexpr = 0xffffffff
-    elif pb == 64:
-        itype = tl.uint64
-        topmask: tl.constexpr = 0x8000000000000000
-        fullmask: tl.constexpr = 0xffffffffffffffff
-    else:
-        tl.static_assert(False, "dtype must have a bitwidth of 8, 16, 32, or 64")
-
-    tm = tl.full([1], topmask, itype)
-    fm = tl.full([1], fullmask, itype)
-
-    return tm, fm
+def fpval_to_key(x):
+    tl.static_assert(x.dtype.is_int_unsigned(), "floating-point value must be passed as bits")
+    tm: tl.constexpr = 1 << (-1 + x.dtype.primitive_bitwidth)
+    fm: tl.constexpr = (1 << x.dtype.primitive_bitwidth) - 1
+    return x ^ tl.where((x & tm) != 0, fm, tm)
 
 
 @triton.jit
-def standard_type_to_key(x, MODE: tl.constexpr):
-    """
-    Radix sort only works on unsigned integers. Fortunately, there
-    is a simple order-preserving bijection from signed integers to
-    their unsigned counterparts (flip the top bit), and an only
-    slightly more complicated order-preserving bijection from floats
-    to unsigned integers of the same bitwidth.
-    """
-
-    is_floating: tl.constexpr = x.dtype.is_floating()
-    is_signed: tl.constexpr = x.dtype.is_int_signed()
-    is_unsigned: tl.constexpr = x.dtype.is_int_unsigned()
-
-    tl.static_assert(is_floating + is_signed + is_unsigned == 1, "x.dtype must be either floating, signed, or unsigned")
-
-    tm, fm = top_and_full_mask(x.dtype)
-    x = x.to(tm.dtype, bitcast=True)
-
-    if MODE == 0:
-        x = x ^ tl.where((x & tm) != 0, fm, tm)
-    else:
-        x = x ^ tl.where((x & tm) == 0, fm, tm)
-
-    return x
+def key_to_fpval(x):
+    tl.static_assert(x.dtype.is_int_unsigned(), "floating-point value must be passed as bits")
+    tm: tl.constexpr = 1 << (-1 + x.dtype.primitive_bitwidth)
+    fm: tl.constexpr = (1 << x.dtype.primitive_bitwidth) - 1
+    return x ^ tl.where((x & tm) == 0, fm, tm)
 
 
 @triton.jit
@@ -85,9 +44,8 @@ def streaming_topk(X, stride_xm, n_expts_tot, offs_m, mask_m, N_EXPTS_PAD: tl.co
     # first iteration:
     X_ptrs = X + offs_m[:, None] * stride_xm + offs_x_n[None, :]
     x = tl.load(X_ptrs, mask=(mask_m & mask_n), other=float("-inf"))
-
-    x = standard_type_to_key(x, 0)
-    x = (x.to(x_ultype) << x_nbits) | (N_EXPTS_PAD - offs_x_n[None, :])
+    x = fpval_to_key(x.to(x_utype, bitcast=True))
+    x = (x.to(x_ultype) << x_nbits) | indx_to_key(offs_x_n, N_EXPTS_PAD)[None, :]
     acc = tl.topk(x, N_EXPTS_ACT, dim=1)
 
     # subsequent iterations:
@@ -96,15 +54,14 @@ def streaming_topk(X, stride_xm, n_expts_tot, offs_m, mask_m, N_EXPTS_PAD: tl.co
         X_ptrs -= BLOCK_N
         offs_x_n -= BLOCK_N
         x = tl.load(X_ptrs, mask=mask_m, other=float("-inf"))
-        x = standard_type_to_key(x, 0)
-        x = (x.to(x_ultype) << x_nbits) | (N_EXPTS_PAD - offs_x_n[None, :])
+        x = fpval_to_key(x.to(x_utype, bitcast=True))
+        x = (x.to(x_ultype) << x_nbits) | indx_to_key(offs_x_n, N_EXPTS_PAD)[None, :]
         acc = tl.maximum(acc, tl.topk(x, N_EXPTS_ACT, dim=1))
 
     acc = tl.sort(acc, dim=1, descending=True)
-    acc_values = (acc >> x_nbits).to(x_utype)
-    acc_values = standard_type_to_key(acc_values, 1)
-    acc_indices = N_EXPTS_PAD - (acc & 0x0000FFFF)
-    acc = acc_indices | (acc_values.to(x_ultype) << x_nbits)
+    acc_values = key_to_fpval((acc >> x_nbits).to(x_utype))
+    acc_indices = key_to_indx(acc & 0x0000FFFF, N_EXPTS_PAD)
+    acc = (acc_values.to(x_ultype) << x_nbits) | acc_indices
     acc = acc.to(x_dbtype, bitcast=True)
 
     return acc
