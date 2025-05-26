@@ -213,6 +213,13 @@ struct PipelinePass : public impl::TritonGPUPipelineBase<PipelinePass> {
     // Transform the loop by introducing async operations to prepare it for
     // pipeline expansion.
     lowerLoops(moduleOp);
+
+    if (dumpIntermediateSteps &&
+        !triton::tools::getBoolEnv("MLIR_ENABLE_DUMP")) {
+      dumpIntermediateSteps =
+          moduleOp.lookupSymbol(triton::tools::getStrEnv("MLIR_ENABLE_DUMP"));
+    }
+
     if (dumpIntermediateSteps) {
       llvm::dbgs()
           << "// -----// SoftwarePipeliner internal IR Dump After: LowerLoops\n"
