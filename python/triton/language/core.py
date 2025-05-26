@@ -571,7 +571,9 @@ class dtype(base_type):
                 raise ValueError(f'type {self} not supported in this architecture. '
                                  f'The supported fp8 dtypes are {builder.options.supported_fp8_dtypes}')
             if self.name in builder.options.deprecated_fp8_dtypes:
-                warn(f"{self.name} is deprecated in this architecture and will be removed in a future triton release")
+                warn(
+                    f"the use of {self.name} is deprecated on Hopper+ architectures and can cause significant slow down. It will be removed in a future triton release"
+                )
 
         if self.name == 'void':
             return builder.get_void_ty()
