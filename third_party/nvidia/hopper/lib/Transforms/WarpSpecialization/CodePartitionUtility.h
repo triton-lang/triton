@@ -28,6 +28,7 @@ public:
   bool operator==(const Channel &c) {
     return relation == c.relation && operandIdx == c.operandIdx && op == c.op;
   }
+  virtual ~Channel() = default;
 
   Operation *getDstOp() { return op; }
   unsigned getDstOperandIdx() { return operandIdx; }
