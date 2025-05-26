@@ -122,15 +122,12 @@ def routing_torch(logits, n_expts_act, expt_indx=None):
     _, n_expts_tot = logits.shape
     expt_scal, expt_indx = topk(logits, n_expts_act, expt_indx)
     expt_scal = torch.softmax(expt_scal, dim=-1)
-    # Sort each token's selections by expert
-    expt_indx, sort_indices = torch.sort(expt_indx, dim=1)
-    expt_scal = torch.gather(expt_scal, 1, sort_indices)
     # flatten topk data
     expt_scal = expt_scal.reshape(-1)
     expt_indx = expt_indx.reshape(-1).to(torch.int32)
     # sort by expert_id so experts are contiguous for the matmul
     topk_indx = torch.argsort(expt_indx, stable=True)
-    gate_indx = torch.argsort(topk_indx)
+    gate_indx = torch.argsort(topk_indx, stable=True)
     gate_scal = expt_scal[topk_indx]
     hist = torch.histc(expt_indx, bins=n_expts_tot, max=n_expts_tot - 1)  # histogram of tokens over experts
     # pack the matmul data structure
