@@ -130,18 +130,6 @@ def routing_torch(logits, n_expts_act, expt_indx=None):
     _, n_expts_tot = logits.shape
     expt_scal, expt_indx = topk(logits, n_expts_act, expt_indx)
     expt_scal = torch.softmax(expt_scal, dim=-1)
-    # print(rows_with_duplicates(expt_scal).nonzero())
-
-    # print(expt_scal[110, :])
-    # print(expt_indx[110, :])
-    # duplicates = [110, 264, 351, 526, 946, 992]
-    # print("torch")
-    # for k in duplicates:
-    #     print(expt_scal[k, :])
-    #     print(expt_indx[k, :])
-    # Sort each token's selections by expert
-    # expt_indx, sort_indices = torch.sort(expt_indx, dim=1, stable=True)
-    # expt_scal = torch.gather(expt_scal, 1, sort_indices)
     # flatten topk data
     expt_scal = expt_scal.reshape(-1)
     expt_indx = expt_indx.reshape(-1).to(torch.int32)

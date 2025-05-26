@@ -60,6 +60,16 @@ def standard_type_to_key(x, MODE: tl.constexpr):
 
 
 @triton.jit
+def indx_to_key(indx, N_EXPTS_PAD: tl.constexpr):
+    return N_EXPTS_PAD - indx
+
+
+@triton.jit
+def key_to_indx(indx, N_EXPTS_PAD: tl.constexpr):
+    return N_EXPTS_PAD - indx
+
+
+@triton.jit
 def streaming_topk(X, stride_xm, n_expts_tot, offs_m, mask_m, N_EXPTS_PAD: tl.constexpr, N_EXPTS_ACT: tl.constexpr,
                    BLOCK_N: tl.constexpr):
     x_nbits: tl.constexpr = X.dtype.element_ty.primitive_bitwidth
@@ -76,21 +86,24 @@ def streaming_topk(X, stride_xm, n_expts_tot, offs_m, mask_m, N_EXPTS_PAD: tl.co
     X_ptrs = X + offs_m[:, None] * stride_xm + offs_x_n[None, :]
     x = tl.load(X_ptrs, mask=(mask_m & mask_n), other=float("-inf"))
     x = standard_type_to_key(x, 0)
-    x = (x.to(x_utype, bitcast=True).to(x_ultype) << x_nbits) | (N_EXPTS_PAD - offs_x_n[None, :])
+    x = (x.to(x_ultype) << x_nbits) | (N_EXPTS_PAD - offs_x_n[None, :])
     acc = tl.topk(x, N_EXPTS_ACT, dim=1)
-    acc_hi = standard_type_to_key((acc >> x_nbits).to(x_utype), 1)
-    acc = (N_EXPTS_PAD - (acc & 0x0000FFFF)) | (acc_hi.to(x_ultype) << x_nbits)
-    acc = acc.to(x_dbtype, bitcast=True)
 
     # subsequent iterations:
-    # for _i in range(loop_iterations):
-    #     acc = tl.bitonic_merge(acc)  # ensure sorted ascending for the merge
-    #     X_ptrs -= BLOCK_N
-    #     offs_x_n -= BLOCK_N
-    #     x = tl.load(X_ptrs, mask=mask_m, other=float("-inf"))
-    #     x = (x.to(x_utype, bitcast=True).to(x_ultype) << x_nbits) | offs_x_n[None, :]
-    #     x = x.to(x_dbtype, bitcast=True)
-    #     acc = tl.maximum(acc, tl.topk(x, N_EXPTS_ACT, dim=1))
+    for _i in range(loop_iterations):
+        acc = tl.bitonic_merge(acc)  # ensure sorted ascending for the merge
+        X_ptrs -= BLOCK_N
+        offs_x_n -= BLOCK_N
+        x = tl.load(X_ptrs, mask=mask_m, other=float("-inf"))
+        x = standard_type_to_key(x, 0)
+        x = (x.to(x_ultype) << x_nbits) | (N_EXPTS_PAD - offs_x_n[None, :])
+        acc = tl.maximum(acc, tl.topk(x, N_EXPTS_ACT, dim=1))
+
+    acc_values = (acc >> x_nbits).to(x_utype)
+    acc_values = standard_type_to_key(acc_values, 1)
+    acc_indices = N_EXPTS_PAD - (acc & 0x0000FFFF)
+    acc = acc_indices | (acc_values.to(x_ultype) << x_nbits)
+    acc = acc.to(x_dbtype, bitcast=True)
 
     return acc
 
@@ -130,16 +143,8 @@ def _topk(X, stride_xm,  # inputs
     else:
         y = streaming_topk(X, stride_xm, n_expts_tot, offs_m, mask_m, N_EXPTS_PAD, N_EXPTS_ACT, BLOCK_N)
         y = y.to(x_ultype, bitcast=True)
-        y_indices = (y & 0x0000FFFF)
+        y_indices = y & 0x0000FFFF
         y_values = (y >> x_nbits).to(x_utype).to(x_dtype, bitcast=True)
-        # y_values = standard_type_to_key(y_values, 0)
-        # y = (y_indices << x_nbits) | y_values
-        # # sort result in direction of ascending expert index
-        # y = tl.sort(y, dim=1)
-        # y_indices = y >> x_nbits
-        # y_values = (y & ((1 << x_nbits) - 1)).to(x_utype)
-        # y_values = standard_type_to_key(y_values, 1)
-        # y_values = y_values.to(x_dtype, bitcast=True)
 
     # normalize selected values
     y_values = tl.softmax(y_values.to(tl.float32), dim=1, keep_dims=True).to(x_dtype)
