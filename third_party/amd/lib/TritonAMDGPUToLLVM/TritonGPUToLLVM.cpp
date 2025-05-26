@@ -88,15 +88,6 @@ struct ConvertTritonAMDGPUToLLVM
       mod.emitError("unsupported target: '") << this->arch.getValue() << "'";
       return signalPassFailure();
     }
-    llvm::StringRef chipset =
-        llvm::AMDGPU::getArchNameAMDGCN(targetInfo.getGPUKind());
-    llvm::FailureOr<mlir::amdgpu::Chipset> maybeChipset =
-        mlir::amdgpu::Chipset::parse(chipset);
-    if (failed(maybeChipset)) {
-      mlir::emitError(mlir::UnknownLoc::get(&getContext()),
-                      "Invalid chipset name: " + chipset);
-      return signalPassFailure();
-    }
 
     mlir::LowerToLLVMOptions option(context);
     option.overrideIndexBitwidth(32);
