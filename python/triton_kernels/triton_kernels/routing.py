@@ -108,14 +108,6 @@ def routing(logits, n_expts_act, expt_indx=None, simulated_ep=1):
     return RoutingData(gate_scal, hist, n_expts_tot, n_expts_act), gather_indx, scatter_indx
 
 
-def rows_with_duplicates(tensor):
-    duplicates_mask = []
-    for row in tensor:
-        unique_elements = torch.unique(row)
-        duplicates_mask.append(len(unique_elements) != len(row))
-    return torch.tensor(duplicates_mask)
-
-
 def routing_torch(logits, n_expts_act, expt_indx=None):
 
     def topk(vals, k, expt_indx):
