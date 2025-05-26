@@ -108,6 +108,14 @@ def routing(logits, n_expts_act, expt_indx=None, simulated_ep=1):
     return RoutingData(gate_scal, hist, n_expts_tot, n_expts_act), gather_indx, scatter_indx
 
 
+def rows_with_duplicates(tensor):
+    duplicates_mask = []
+    for row in tensor:
+        unique_elements = torch.unique(row)
+        duplicates_mask.append(len(unique_elements) != len(row))
+    return torch.tensor(duplicates_mask)
+
+
 def routing_torch(logits, n_expts_act, expt_indx=None):
 
     def topk(vals, k, expt_indx):
@@ -122,15 +130,24 @@ def routing_torch(logits, n_expts_act, expt_indx=None):
     _, n_expts_tot = logits.shape
     expt_scal, expt_indx = topk(logits, n_expts_act, expt_indx)
     expt_scal = torch.softmax(expt_scal, dim=-1)
+    # print(rows_with_duplicates(expt_scal).nonzero())
+
+    # print(expt_scal[110, :])
+    # print(expt_indx[110, :])
+    # duplicates = [110, 264, 351, 526, 946, 992]
+    # print("torch")
+    # for k in duplicates:
+    #     print(expt_scal[k, :])
+    #     print(expt_indx[k, :])
     # Sort each token's selections by expert
-    expt_indx, sort_indices = torch.sort(expt_indx, dim=1)
-    expt_scal = torch.gather(expt_scal, 1, sort_indices)
+    # expt_indx, sort_indices = torch.sort(expt_indx, dim=1, stable=True)
+    # expt_scal = torch.gather(expt_scal, 1, sort_indices)
     # flatten topk data
     expt_scal = expt_scal.reshape(-1)
     expt_indx = expt_indx.reshape(-1).to(torch.int32)
     # sort by expert_id so experts are contiguous for the matmul
     topk_indx = torch.argsort(expt_indx, stable=True)
-    gate_indx = torch.argsort(topk_indx)
+    gate_indx = torch.argsort(topk_indx, stable=True)
     gate_scal = expt_scal[topk_indx]
     hist = torch.histc(expt_indx, bins=n_expts_tot, max=n_expts_tot - 1)  # histogram of tokens over experts
     # pack the matmul data structure

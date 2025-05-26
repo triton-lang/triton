@@ -3,6 +3,63 @@ import triton.language as tl
 
 
 @triton.jit
+def top_and_full_mask(dtype: tl.constexpr):
+
+    pb: tl.constexpr = 16  #dtype.value.primitive_bitwidth
+
+    if pb == 8:
+        itype = tl.uint8
+        topmask: tl.constexpr = 0x80
+        fullmask: tl.constexpr = 0xff
+    elif pb == 16:
+        itype = tl.uint16
+        topmask: tl.constexpr = 0x8000
+        fullmask: tl.constexpr = 0xffff
+    elif pb == 32:
+        itype = tl.uint32
+        topmask: tl.constexpr = 0x80000000
+        fullmask: tl.constexpr = 0xffffffff
+    elif pb == 64:
+        itype = tl.uint64
+        topmask: tl.constexpr = 0x8000000000000000
+        fullmask: tl.constexpr = 0xffffffffffffffff
+    else:
+        tl.static_assert(False, "dtype must have a bitwidth of 8, 16, 32, or 64")
+
+    tm = tl.full([1], topmask, itype)
+    fm = tl.full([1], fullmask, itype)
+
+    return tm, fm
+
+
+@triton.jit
+def standard_type_to_key(x, MODE: tl.constexpr):
+    """
+    Radix sort only works on unsigned integers. Fortunately, there
+    is a simple order-preserving bijection from signed integers to
+    their unsigned counterparts (flip the top bit), and an only
+    slightly more complicated order-preserving bijection from floats
+    to unsigned integers of the same bitwidth.
+    """
+
+    is_floating: tl.constexpr = x.dtype.is_floating()
+    is_signed: tl.constexpr = x.dtype.is_int_signed()
+    is_unsigned: tl.constexpr = x.dtype.is_int_unsigned()
+
+    tl.static_assert(is_floating + is_signed + is_unsigned == 1, "x.dtype must be either floating, signed, or unsigned")
+
+    tm, fm = top_and_full_mask(x.dtype)
+    x = x.to(tm.dtype, bitcast=True)
+
+    if MODE == 0:
+        x = x ^ tl.where((x & tm) != 0, fm, tm)
+    else:
+        x = x ^ tl.where((x & tm) == 0, fm, tm)
+
+    return x
+
+
+@triton.jit
 def streaming_topk(X, stride_xm, n_expts_tot, offs_m, mask_m, N_EXPTS_PAD: tl.constexpr, N_EXPTS_ACT: tl.constexpr,
                    BLOCK_N: tl.constexpr):
     x_nbits: tl.constexpr = X.dtype.element_ty.primitive_bitwidth
@@ -12,27 +69,28 @@ def streaming_topk(X, stride_xm, n_expts_tot, offs_m, mask_m, N_EXPTS_PAD: tl.co
 
     # subtract 1 from loop iterations because we peel the first (masked) iteration:
     loop_iterations: tl.constexpr = N_EXPTS_PAD // BLOCK_N - 1
-
     offs_x_n = loop_iterations * BLOCK_N + tl.arange(0, BLOCK_N)
     mask_n = offs_x_n[None, :] < n_expts_tot
 
     # first iteration:
     X_ptrs = X + offs_m[:, None] * stride_xm + offs_x_n[None, :]
     x = tl.load(X_ptrs, mask=(mask_m & mask_n), other=float("-inf"))
-    x = (x.to(x_utype, bitcast=True).to(x_ultype) << x_nbits) | offs_x_n[None, :]
-    x = x.to(x_dbtype, bitcast=True)
-
+    x = standard_type_to_key(x, 0)
+    x = (x.to(x_utype, bitcast=True).to(x_ultype) << x_nbits) | (N_EXPTS_PAD - offs_x_n[None, :])
     acc = tl.topk(x, N_EXPTS_ACT, dim=1)
+    acc_hi = standard_type_to_key((acc >> x_nbits).to(x_utype), 1)
+    acc = (N_EXPTS_PAD - (acc & 0x0000FFFF)) | (acc_hi.to(x_ultype) << x_nbits)
+    acc = acc.to(x_dbtype, bitcast=True)
 
     # subsequent iterations:
-    for _i in range(loop_iterations):
-        acc = tl.bitonic_merge(acc)  # ensure sorted ascending for the merge
-        X_ptrs -= BLOCK_N
-        offs_x_n -= BLOCK_N
-        x = tl.load(X_ptrs, mask=mask_m, other=float("-inf"))
-        x = (x.to(x_utype, bitcast=True).to(x_ultype) << x_nbits) | offs_x_n[None, :]
-        x = x.to(x_dbtype, bitcast=True)
-        acc = tl.maximum(acc, tl.topk(x, N_EXPTS_ACT, dim=1))
+    # for _i in range(loop_iterations):
+    #     acc = tl.bitonic_merge(acc)  # ensure sorted ascending for the merge
+    #     X_ptrs -= BLOCK_N
+    #     offs_x_n -= BLOCK_N
+    #     x = tl.load(X_ptrs, mask=mask_m, other=float("-inf"))
+    #     x = (x.to(x_utype, bitcast=True).to(x_ultype) << x_nbits) | offs_x_n[None, :]
+    #     x = x.to(x_dbtype, bitcast=True)
+    #     acc = tl.maximum(acc, tl.topk(x, N_EXPTS_ACT, dim=1))
 
     return acc
 
@@ -72,11 +130,16 @@ def _topk(X, stride_xm,  # inputs
     else:
         y = streaming_topk(X, stride_xm, n_expts_tot, offs_m, mask_m, N_EXPTS_PAD, N_EXPTS_ACT, BLOCK_N)
         y = y.to(x_ultype, bitcast=True)
-        # sort result in direction of ascending expert index
-        y = (y << x_nbits) | (y >> x_nbits)
-        y = tl.sort(y, dim=1)
-        y_indices = y >> x_nbits
-        y_values = (y & ((1 << x_nbits) - 1)).to(x_utype).to(x_dtype, bitcast=True)
+        y_indices = (y & 0x0000FFFF)
+        y_values = (y >> x_nbits).to(x_utype).to(x_dtype, bitcast=True)
+        # y_values = standard_type_to_key(y_values, 0)
+        # y = (y_indices << x_nbits) | y_values
+        # # sort result in direction of ascending expert index
+        # y = tl.sort(y, dim=1)
+        # y_indices = y >> x_nbits
+        # y_values = (y & ((1 << x_nbits) - 1)).to(x_utype)
+        # y_values = standard_type_to_key(y_values, 1)
+        # y_values = y_values.to(x_dtype, bitcast=True)
 
     # normalize selected values
     y_values = tl.softmax(y_values.to(tl.float32), dim=1, keep_dims=True).to(x_dtype)
