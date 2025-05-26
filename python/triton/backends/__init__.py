@@ -19,6 +19,7 @@ def _find_concrete_subclasses(module: ModuleType, base_class: Type[T]) -> Type[T
     ret: list[Type[T]] = []
     for attr_name in dir(module):
         attr = getattr(module, attr_name)
+        print(f"module={module}, attr_name={attr_name}, attr={attr}", flush=True)
         if isinstance(attr, type) and issubclass(attr, base_class) and not inspect.isabstract(attr):
             ret.append(attr)
     if len(ret) == 0:
