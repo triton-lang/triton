@@ -2,9 +2,9 @@ add_triton_ut(
   NAME TestSwizzling
   SRCS SwizzleTest.cpp
   LIBS
-    TritonGPUIR
-    TritonGPUTransforms
-    TritonNvidiaGPUTransforms
+    TritonTools
+    LLVMSupport
+    MLIRSupport
 )
 add_triton_ut(
   NAME Dialect
