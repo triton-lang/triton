@@ -1,5 +1,6 @@
 #include "ir.h"
 #include "pybind11/pybind11.h"
+#include <pybind11/stl.h>
 
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/Types.h"
@@ -13,14 +14,15 @@ struct GluonOpBuilder : public TritonOpBuilder {};
 
 void init_gluon_ir(py::module &&m) {
   py::class_<GluonOpBuilder, TritonOpBuilder>(
-      m, "GluonBuilder", py::module_local(), py::dynamic_attr())
+      m, "GluonOpBuilder", py::module_local(), py::dynamic_attr())
+      .def(py::init<MLIRContext *>())
       .def("get_distributed_ty",
-           [](TritonOpBuilder &self, Type &elementType,
+           [](GluonOpBuilder &self, Type &elementType,
               std::vector<int64_t> &shape, Attribute layout) -> Type {
              return RankedTensorType::get(shape, elementType, layout);
            })
       .def("get_blocked_layout",
-           [](TritonOpBuilder &self, std::vector<unsigned> &sizePerThread,
+           [](GluonOpBuilder &self, std::vector<unsigned> &sizePerThread,
               std::vector<unsigned> &threadsPerWarp,
               std::vector<unsigned> &warpsPerCta, std::vector<unsigned> &order,
               std::vector<unsigned> &ctasPerCga,
