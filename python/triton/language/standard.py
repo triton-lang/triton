@@ -328,9 +328,15 @@ def reduce_or(input, axis, keep_dims=False):
 @core._tensor_member_fn
 @jit
 @core._add_scan_docstr("cumsum")
-def cumsum(input, axis=0, reverse=False):
+def cumsum(input, axis=0, reverse=False, dtype: core.constexpr = None):
     # todo rename this to a generic function name
+
     input = core._promote_bfloat16_to_float32(input)
+    out_dtype: core.constexpr = _pick_sum_dtype(input.dtype, dtype)
+
+    if out_dtype is not None:
+        input = input.to(out_dtype)
+
     return core.associative_scan(input, axis, _sum_combine, reverse)
 
 
