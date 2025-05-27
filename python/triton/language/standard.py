@@ -327,7 +327,7 @@ def reduce_or(input, axis, keep_dims=False):
 
 @core._tensor_member_fn
 @jit
-@core._add_scan_docstr("cumsum")
+@core._add_scan_docstr("cumsum", dtype_arg="dtype")
 def cumsum(input, axis=0, reverse=False, dtype: core.constexpr = None):
     # todo rename this to a generic function name
 
