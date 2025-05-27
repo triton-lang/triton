@@ -1,4 +1,7 @@
+#include <cstdlib>
+#include <memory>
 #include <optional>
+
 #include <pybind11/cast.h>
 #include <pybind11/functional.h>
 #include <pybind11/pybind11.h>
@@ -45,14 +48,44 @@ namespace tt = triton;
 namespace ttg = triton::gpu;
 namespace ttng = triton::nvidia_gpu;
 
+// Lazily initialized MLIR dump stream. The stream is initialized only on first
+// call using the MLIR_DUMP_PATH environment variable.
+std::unique_ptr<llvm::raw_fd_ostream> mlir_dump_stream;
+
+// Return a reference to the MLIR dump stream.
 llvm::raw_fd_ostream &mlir_dumps() {
-  std::error_code EC;
-  static llvm::raw_fd_ostream S(::triton::tools::getStrEnv("MLIR_DUMP_PATH"),
-                                EC, llvm::sys::fs::CD_CreateAlways);
-  assert(!EC);
-  return S;
+  if (!mlir_dump_stream) {
+    std::error_code EC;
+    std::string base = ::triton::tools::getStrEnv("MLIR_DUMP_PATH");
+    std::string filename = base;
+
+    // Generate a unique filename within MLIR_DUMP_PATH if it is set to a
+    // directory.
+    if (llvm::sys::fs::is_directory(base)) {
+      std::time_t now = std::time(nullptr);
+      int pid = getpid();
+      filename = base + "/triton_dump_" + std::to_string(pid) + "_" +
+                 std::to_string(now) + ".mlir";
+    }
+
+    // Create the output stream to the resolved path.
+    mlir_dump_stream = std::make_unique<llvm::raw_fd_ostream>(
+        filename, EC, llvm::sys::fs::CD_CreateAlways);
+
+    // Abort the program if the dump file cannot be opened.
+    if (EC) {
+      llvm::errs() << "Failed to open IR dump file: " << filename << "\n";
+      llvm::errs() << "Error: " << EC.message() << "\n";
+      std::abort();
+    }
+  }
+
+  return *mlir_dump_stream;
 }
 
+// Return a reference to either the dump stream or the debug stream, depending
+// on the MLIR_DUMP_PATH environment variable. The environment variable is
+// checked on every call, but the dump stream is initialized only once.
 llvm::raw_ostream &mlir_dumps_or_dbgs() {
   if (!::triton::tools::getStrEnv("MLIR_DUMP_PATH").empty()) {
     return mlir_dumps();
