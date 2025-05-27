@@ -1506,6 +1506,9 @@ LinearLayout chooseScaledMfmaScaleLayout(
 
 std::optional<LinearLayout>
 chooseMfmaLikeStoreLayout(RankedTensorType valType) {
+  // TODO: WMMA Support on RDNA
+  if (!isa<AMDMfmaEncodingAttr>(valType.getEncoding()))
+    return {};
   auto mfmaLayout = cast<AMDMfmaEncodingAttr>(valType.getEncoding());
 
   // We currently only support transposed [B]F16 MFMA32x32 on CDNA4.
