@@ -17,4 +17,25 @@ def AllocateProtonGlobalScratchBuffer : Pass<"allocate-proton-global-scratch-buf
     let constructor = "mlir::triton::proton::gpu::createAllocateProtonGlobalScratchBufferPass()";
 }
 
+
+def AddSchedBarriers : Pass<"add-sched-barriers", "mlir::ModuleOp"> {
+    let summary = "Add sched barrier hints to prevent backend from reordering ops outside the Proton profiling region";
+    let description = [{
+      This pass adds sched barrier intrinsic hints to prevent instruction reordering from moving ops outside
+      the Proton profiling region. Only available on the AMD backend.
+     }];
+
+    let constructor = "mlir::triton::proton::gpu::createAddSchedBarriersPass()";
+    let dependentDialects = ["mlir::arith::ArithDialect",
+                             "mlir::math::MathDialect",
+                             "mlir::gpu::GPUDialect",
+                             "mlir::scf::SCFDialect",
+                             "mlir::LLVM::LLVMDialect",
+                             "mlir::ROCDL::ROCDLDialect",
+                             "mlir::triton::TritonDialect",
+                             "mlir::triton::gpu::TritonGPUDialect",
+                             "mlir::triton::proton::ProtonDialect",
+                             "mlir::triton::proton::gpu::ProtonGPUDialect"];
+}
+
 #endif // PROTONGPU_TO_LLVM_PASSES
