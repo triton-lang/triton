@@ -1481,7 +1481,6 @@ class tensor_descriptor(tensor_descriptor_base):
         handles.extend(s.handle for s in self.strides)
 
 
-
 # -----------------------
 # SPMD Programming Model
 # -----------------------
