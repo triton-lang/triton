@@ -53,7 +53,7 @@ class RoutingData:
 # --------------------------
 
 
-def routing(logits, n_expts_act, expt_indx=None, simulated_ep=1, n_rows=None):
+def routing(logits, n_expts_act, expt_indx=None, simulated_ep=1):
     from .topk import topk
     from .compaction import compaction
     cdiv = triton.cdiv
@@ -62,12 +62,8 @@ def routing(logits, n_expts_act, expt_indx=None, simulated_ep=1, n_rows=None):
     MEMSET_BLOCK = 1024
     n_tokens_pad, n_expts_tot = logits.shape
     n_gates_pad = n_tokens_pad * n_expts_act
-    n_tokens_raw = n_rows
     device = logits.device
-    expt_scal, expt_indx, bitmatrix = topk(logits, n_expts_act, y_indx=expt_indx)  #, n_rows_raw=n_rows)
-    # expt_scal = expt_scal[:n_rows, :]
-    # expt_indx = expt_indx[:n_rows, :]
-    # bitmatrix.data = bitmatrix.data[:n_rows, :]
+    expt_scal, expt_indx, bitmatrix = topk(logits, n_expts_act, y_indx=expt_indx)
     # mutate bitmatrix
     if simulated_ep > 1:
         assert n_expts_tot % simulated_ep == 0
@@ -84,7 +80,7 @@ def routing(logits, n_expts_act, expt_indx=None, simulated_ep=1, n_rows=None):
         n_expts_tot = n_expts_tot // simulated_ep
         bitmatrix.shape[-1] = n_expts_tot
     # compute bitmatrix histogram
-    hist, partial_hist = bitmatrix.sum(partials_block_size=HIST_BLOCK_M, n_rows_raw=n_rows)
+    hist, partial_hist = bitmatrix.sum(partials_block_size=HIST_BLOCK_M, n_rows_raw=logits.shape_raw[0])
     # scratchpad
     expt_offs = torch.empty(n_expts_tot, dtype=torch.int32, device=device)
     combined_indx = torch.empty(n_gates_pad * 2, dtype=torch.int32, device=device)
@@ -104,7 +100,8 @@ def routing(logits, n_expts_act, expt_indx=None, simulated_ep=1, n_rows=None):
     indx_offs = partial_hist
     _routing_compute_indx[(cdiv(n_tokens_pad, HIST_BLOCK_M), )](
         topk_indx, gate_indx, gate_scal,  # outputs
-        expt_scal, expt_indx, indx_offs, indx_offs.stride(0), indx_offs.stride(1), n_tokens_pad, n_tokens_raw,  # input
+        expt_scal, expt_indx, indx_offs, indx_offs.stride(0), indx_offs.stride(1), logits.shape_pad[0],
+        logits.shape_raw[0],  # input
         BLOCK_M=HIST_BLOCK_M,  # tunable parameters
         N_EXPTS_ACT=n_expts_act,  # constants
         num_warps=1 if HIST_BLOCK_M * n_expts_act // 32 < 4 else 4  #
