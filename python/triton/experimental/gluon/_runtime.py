@@ -29,6 +29,9 @@ class GluonJITFunction(JITFunction[T]):
         self.ASTSource = GluonASTSource
         return result
 
+    def is_gluon(self):
+        return True
+
 
 def jit(
     fn: Optional[T] = None,

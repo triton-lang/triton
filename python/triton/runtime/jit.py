@@ -494,6 +494,9 @@ class JitFunctionInfo:
 
 class JITFunction(KernelInterface[T]):
 
+    def is_gluon():
+        return False
+
     def _call_hook(
         self,
         hook,
