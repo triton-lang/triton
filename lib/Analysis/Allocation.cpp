@@ -179,22 +179,14 @@ unsigned defaultAllocationAnalysisScratchSizeFn(Operation *op) {
   if (auto cvtLayout = dyn_cast<gpu::ConvertLayoutOp>(op)) {
     auto srcTy = cvtLayout.getSrc().getType();
     auto dstTy = cvtLayout.getType();
-    auto srcEncoding = srcTy.getEncoding();
-    auto dstEncoding = dstTy.getEncoding();
-    if (mlir::isa<gpu::SharedEncodingTrait>(srcEncoding) ||
-        mlir::isa<gpu::SharedEncodingTrait>(dstEncoding)) {
-      // Conversions from/to shared memory do not need scratch memory.
+    if (!cvtNeedsSharedMemory(srcTy, dstTy))
       return 0;
-    }
-    // ConvertLayoutOp with both input/output non-shared_layout
-    // TODO: Besides of implementing ConvertLayoutOp via shared memory, it's
-    //       also possible to realize it with other approaches in restricted
-    //       conditions, such as warp-shuffle
-    auto scratchConfig = getScratchConfigForCvt(srcTy, dstTy);
-    auto elems = getNumScratchElements(scratchConfig.paddedRepShape);
-    return isa<PointerType>(srcTy.getElementType())
-               ? elems * kPtrBitWidth / 8
-               : elems * std::max<int>(8, srcTy.getElementTypeBitWidth()) / 8;
+    auto elems = product(srcTy.getShape());
+    auto isPtr = isa<PointerType>(srcTy.getElementType());
+    // We pesimistically assume that we upcast i4 to i8
+    auto bitwidth =
+        isPtr ? kPtrBitWidth : std::max(srcTy.getElementTypeBitWidth(), 8u);
+    return elems * bitwidth / 8;
   }
   if (isa<AtomicRMWOp, AtomicCASOp>(op)) {
     auto value = op->getOperand(0);

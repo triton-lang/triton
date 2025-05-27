@@ -453,6 +453,11 @@ public:
   auto getOutDimNames() const { return llvm::make_first_range(outDims); }
   auto getOutDimSizes() const { return llvm::make_second_range(outDims); }
 
+  // Relevant for reshaping
+  SmallVector<std::pair<StringAttr, int32_t>> getOutDims() const {
+    return to_vector(outDims);
+  }
+
   // Gets the position that this outDim occupies in getOutDimNames().  Asserts
   // if the dim is not present.
   int32_t getOutDimIndex(StringAttr outDim) const;
