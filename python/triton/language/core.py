@@ -10,7 +10,6 @@ import builtins
 from .. import knobs
 from ..runtime.jit import jit
 import inspect
-import os
 
 from .._C.libtriton import ir
 from . import semantic
@@ -1479,11 +1478,6 @@ class tensor_descriptor(tensor_descriptor_base):
         handles.append(self.handle)
         handles.extend(s.handle for s in self.shape)
         handles.extend(s.handle for s in self.strides)
-
-
-def get_bool_env_var(var_name):
-    v = os.getenv(var_name, "0")
-    return v == "1" or v == "true" or v == "on"
 
 
 # -----------------------
