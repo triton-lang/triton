@@ -10,7 +10,6 @@ import builtins
 from .. import knobs
 from ..runtime.jit import jit
 import inspect
-import os
 
 from .._C.libtriton import ir
 from . import semantic
