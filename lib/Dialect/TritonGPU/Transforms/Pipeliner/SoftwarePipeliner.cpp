@@ -1,5 +1,4 @@
 #include "mlir/Dialect/Tensor/IR/Tensor.h"
-#include "mlir/Dialect/UB/IR/UBOps.h"
 #include "mlir/IR/IRMapping.h"
 #include "mlir/IR/TypeUtilities.h"
 #include "mlir/Interfaces/SideEffectInterfaces.h"
@@ -72,22 +71,8 @@ static void resolveMaskOp(ModuleOp moduleOp) {
     rewriter.setInsertionPoint(maskOp);
     while (&maskOp.getBody()->front() != maskOp.getBody()->getTerminator()) {
       Operation *op = &maskOp.getBody()->front();
-      // Statically dead
-      if (isConstantIntValue(maskOp.getPred(), 0)) {
-        if (op->getNumResults() > 0) {
-          SmallVector<Value> results;
-          for (auto result : op->getResults()) {
-            auto poisonOp =
-                rewriter.create<ub::PoisonOp>(op->getLoc(), result.getType());
-            results.push_back(poisonOp);
-          }
-          op->replaceAllUsesWith(results);
-        }
-        op->erase();
-      } else {
-        rewriter.moveOpBefore(op, maskOp);
-        op = triton::predicateOp(rewriter, op, maskOp.getPred());
-      }
+      rewriter.moveOpBefore(op, maskOp);
+      op = triton::predicateOp(rewriter, op, maskOp.getPred());
     }
     maskOp->replaceAllUsesWith(
         maskOp.getBody()->getTerminator()->getOperands());
