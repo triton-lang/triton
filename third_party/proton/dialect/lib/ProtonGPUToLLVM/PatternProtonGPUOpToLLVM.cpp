@@ -108,7 +108,7 @@ struct FinalizeOpConversion
 
     Value indexPtr = adaptor.getIndexPtr();
     Value dataStruct = adaptor.getData();
-    Value scratchPtr = adaptor.getPtr();
+    Value scratchPtr = adaptor.getScratchPtr();
 
     auto loc = op.getLoc();
     auto mod = op.getOperation()->getParentOfType<ModuleOp>();
