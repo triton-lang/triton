@@ -53,21 +53,25 @@ class RoutingData:
 # --------------------------
 
 
-def routing(logits, n_expts_act, expt_indx=None, simulated_ep=1):
+def routing(logits, n_expts_act, expt_indx=None, simulated_ep=1, n_rows=None):
     from .topk import topk
     from .compaction import compaction
     cdiv = triton.cdiv
     HIST_BLOCK_M = 64
     INDX_OFFS_BLOCK_M = 512
     MEMSET_BLOCK = 1024
-    n_tokens, n_expts_tot = logits.shape
-    n_gates = n_tokens * n_expts_act
+    n_tokens_pad, n_expts_tot = logits.shape
+    n_gates_pad = n_tokens_pad * n_expts_act
+    n_tokens_raw = n_rows
     device = logits.device
-    expt_scal, expt_indx, bitmatrix = topk(logits, n_expts_act, y_indx=expt_indx)
+    expt_scal, expt_indx, bitmatrix = topk(logits, n_expts_act, y_indx=expt_indx)  #, n_rows_raw=n_rows)
+    # expt_scal = expt_scal[:n_rows, :]
+    # expt_indx = expt_indx[:n_rows, :]
+    # bitmatrix.data = bitmatrix.data[:n_rows, :]
     # mutate bitmatrix
     if simulated_ep > 1:
         assert n_expts_tot % simulated_ep == 0
-        _routing_clear_bitmatrix[(n_tokens, )](
+        _routing_clear_bitmatrix[(n_tokens_pad, )](
             bitmatrix.data,
             bitmatrix.data.stride(0),
             bitmatrix.data.stride(1),
@@ -80,35 +84,40 @@ def routing(logits, n_expts_act, expt_indx=None, simulated_ep=1):
         n_expts_tot = n_expts_tot // simulated_ep
         bitmatrix.shape[-1] = n_expts_tot
     # compute bitmatrix histogram
-    hist, partial_hist = bitmatrix.sum(partials_block_size=HIST_BLOCK_M)
+    hist, partial_hist = bitmatrix.sum(partials_block_size=HIST_BLOCK_M, n_rows_raw=n_rows)
     # scratchpad
     expt_offs = torch.empty(n_expts_tot, dtype=torch.int32, device=device)
-    combined_indx = torch.empty(n_gates * 2, dtype=torch.int32, device=device)
+    combined_indx = torch.empty(n_gates_pad * 2, dtype=torch.int32, device=device)
     # output
-    topk_indx = combined_indx[:n_gates]
-    gate_indx = combined_indx[n_gates:]
-    gate_scal = torch.empty(n_gates, dtype=logits.dtype, device=device)
-    _routing_memset_indx[(cdiv(n_gates * 2, MEMSET_BLOCK) + 1, )](combined_indx, n_gates * 2, -1, MEMSET_BLOCK, hist,
-                                                                  expt_offs, hist.shape[0], BLOCK_N=512)
+    topk_indx = combined_indx[:n_gates_pad]
+    gate_indx = combined_indx[n_gates_pad:]
+    gate_scal = torch.empty(n_gates_pad, dtype=logits.dtype, device=device)
+    _routing_memset_indx[(cdiv(n_gates_pad * 2, MEMSET_BLOCK) + 1, )](
+        combined_indx, n_gates_pad * 2, -1, MEMSET_BLOCK, hist,  #
+        expt_offs, hist.shape[0], BLOCK_N=512  #
+    )
     _routing_compute_indx_offs[(n_expts_tot, )](
         expt_offs, partial_hist,  # inputs
         partial_hist.shape[0], partial_hist.stride(0), partial_hist.stride(1),  # outputs
         BLOCK_M=INDX_OFFS_BLOCK_M,  # tunable parameters
     )
     indx_offs = partial_hist
-    _routing_compute_indx[(cdiv(n_tokens, HIST_BLOCK_M), )](
+    _routing_compute_indx[(cdiv(n_tokens_pad, HIST_BLOCK_M), )](
         topk_indx, gate_indx, gate_scal,  # outputs
-        expt_scal, expt_indx, indx_offs, indx_offs.stride(0), indx_offs.stride(1), n_gates,  # input
+        expt_scal, expt_indx, indx_offs, indx_offs.stride(0), indx_offs.stride(1), n_tokens_pad, n_tokens_raw,  # input
         BLOCK_M=HIST_BLOCK_M,  # tunable parameters
         N_EXPTS_ACT=n_expts_act,  # constants
-        num_warps=1 if HIST_BLOCK_M * n_expts_act // 32 < 4 else 4)
+        num_warps=1 if HIST_BLOCK_M * n_expts_act // 32 < 4 else 4  #
+    )
     # pack the matmul data structure
     gather_indx = GatherIndx(src_indx=topk_indx, dst_indx=gate_indx)
     scatter_indx = ScatterIndx(src_indx=gate_indx, dst_indx=topk_indx)
     return RoutingData(gate_scal, hist, n_expts_tot, n_expts_act), gather_indx, scatter_indx
 
 
-def routing_torch(logits, n_expts_act, expt_indx=None):
+def routing_torch(logits, n_expts_act, expt_indx=None, NTokens=None):
+    if NTokens is not None:
+        logits = logits[:NTokens, :]
 
     def topk(vals, k, expt_indx):
         # topk of experts

@@ -23,11 +23,11 @@ class Bitmatrix:
     shape: tuple[int]
     S: torch.tensor
 
-    def sum(self, partials_block_size):
+    def sum(self, partials_block_size, n_rows_raw):
         n_rows, n_cols = self.shape
         dev = self.data.device
         if self.S is None:
             self.S = clear_sums(n_cols, dev)
         out_ret = self.S[:n_cols]
         self.S = None  # throw error if we try to sum again
-        return sum_bitmatrix_rows(self, out_ret, partials_block_size)
+        return sum_bitmatrix_rows(self, out_ret, partials_block_size, n_rows_raw)
