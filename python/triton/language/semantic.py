@@ -733,7 +733,7 @@ def permute(input: tl.tensor, dims: Tuple[int], builder: ir.builder) -> tl.tenso
 
 def broadcast_impl_shape(input: tl.tensor, shape: Tuple[int], builder: ir.builder) -> tl.tensor:
     if not input.type.is_block():
-        return splat(input, shape)
+        return splat(input, shape, builder)
     src_shape = input.type.get_block_shapes()
     if len(src_shape) != len(shape):
         raise ValueError(f"Cannot broadcast, rank mismatch: {src_shape}, {shape}")
@@ -1402,8 +1402,8 @@ def atom_red_typechecking_impl(ptr: tl.tensor, val: tl.tensor, mask: tl.tensor, 
         mask_ir = builder.get_int1(True)
         mask_ty = tl.int1
         if ptr.type.is_block():
-            mask_ir = builder.create_splat(mask_ir, ptr.type.get_block_shapes())
             mask_ty = ptr.type.with_element_ty(tl.int1)
+            mask_ir = builder.create_splat(mask_ty.to_ir(builder), mask_ir)
         mask = tl.tensor(mask_ir, mask_ty)
     return ptr, val, mask
 
@@ -1604,7 +1604,7 @@ def dot(lhs: tl.tensor, rhs: tl.tensor, acc: tl.tensor, input_precision: Optiona
     B = lhs.type.shape[0] if lhs_rank == 3 else None
     ret_ty = tl.block_type(ret_scalar_ty, [B, M, N] if B else [M, N])
     if acc is None:
-        acc_handle = builder.create_splat(_0, [B, M, N] if B else [M, N])
+        acc_handle = builder.create_splat(ret_ty.to_ir(builder), _0)
     else:
         acc_handle = acc.handle
         assert acc.type == ret_ty
@@ -1686,7 +1686,7 @@ def dot_scaled(lhs: tl.tensor, lhs_scale: tl.tensor, lhs_format: str, rhs: tl.te
     ret_ty = tl.block_type(out_dtype, [B, M, N] if B else [M, N])
     _0 = builder.get_fp32(0)
     if acc is None:
-        acc_handle = builder.create_splat(_0, [B, M, N] if B else [M, N])
+        acc_handle = builder.create_splat(ret_ty.to_ir(builder), _0)
     else:
         acc_handle = acc.handle
         assert acc.type == ret_ty
