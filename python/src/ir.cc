@@ -981,6 +981,25 @@ void init_triton_ir(py::module &&m) {
               std::vector<int64_t> &shape) -> Type {
              return RankedTensorType::get(shape, elementType);
            })
+      .def("get_distributed_ty",
+           [](TritonOpBuilder &self, Type &elementType,
+              std::vector<int64_t> &shape, Attribute layout) -> Type {
+             return RankedTensorType::get(shape, elementType, layout);
+           })
+      .def("get_blocked_layout",
+           [](TritonOpBuilder &self, std::vector<unsigned> &sizePerThread,
+              std::vector<unsigned> &threadsPerWarp,
+              std::vector<unsigned> &warpsPerCta, std::vector<unsigned> &order,
+              std::vector<unsigned> &ctasPerCga,
+              std::vector<unsigned> &ctaSplitNum,
+              std::vector<unsigned> &ctaOrder) -> Attribute {
+             auto ctx = self.getContext();
+             auto ctaLayout = ttg::CTALayoutAttr::get(ctx, ctasPerCga,
+                                                      ctaSplitNum, ctaOrder);
+             return ttg::BlockedEncodingAttr::get(ctx, sizePerThread,
+                                                  threadsPerWarp, warpsPerCta,
+                                                  order, ctaLayout);
+           })
       .def("get_function_ty",
            [](TritonOpBuilder &self, std::vector<Type> inTypes,
               std::vector<Type> outTypes) -> Type {
@@ -1080,10 +1099,8 @@ void init_triton_ir(py::module &&m) {
 
       // miscellaneous
       .def("create_make_range",
-           [](TritonOpBuilder &self, int start, int end) -> Value {
-             auto retType = RankedTensorType::get(
-                 {end - start}, self.getBuilder().getI32Type());
-             return self.create<MakeRangeOp>(retType, start, end);
+           [](TritonOpBuilder &self, Type retTy, int start, int end) -> Value {
+             return self.create<MakeRangeOp>(retTy, start, end);
            })
 
       // Cast instructions
@@ -1544,12 +1561,8 @@ void init_triton_ir(py::module &&m) {
                  "arg is not of RankedTensorType, use create_splat");
            })
       .def("create_splat",
-           [](TritonOpBuilder &self, Value &arg,
-              std::vector<int64_t> &shape) -> Value {
-             auto argType = arg.getType();
-             auto ret = self.createOrFold<SplatOp>(
-                 RankedTensorType::get(shape, argType), arg);
-             return ret;
+           [](TritonOpBuilder &self, Type &retTy, Value &arg) -> Value {
+             return self.createOrFold<SplatOp>(retTy, arg);
            })
       // // atomic
       .def("create_atomic_cas",

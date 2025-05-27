@@ -637,6 +637,10 @@ class dtype(base_type):
             return 'V'
         return super().mangle()
 
+    def with_element_ty(self, element_ty: dtype):
+        assert not self.is_block()
+        return element_ty
+
 
 # Some functions have a param named `dtype`, which shadows the `dtype` class.
 # We can't change the param name because it is part of function's public API.
@@ -714,6 +718,9 @@ class block_type(dtype):
 
     def get_block_shapes(self) -> Tuple[int]:
         return self.shape
+
+    def with_element_ty(self, scalar_ty: dtype) -> block_type:
+        return block_type(scalar_ty, self.shape)
 
     def __eq__(self, other) -> bool:
         if not isinstance(other, block_type):
