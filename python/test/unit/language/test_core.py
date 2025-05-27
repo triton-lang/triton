@@ -7560,3 +7560,18 @@ def test_tuple_logic():
         tl.static_assert((() and tl.program_id(0)) == ())
 
     tuple_logic_kernel[(1, )]()
+
+
+@pytest.mark.interpreter
+def test_cumsum_dtype(device):
+
+    @triton.jit
+    def kernel(Z):
+        x = tl.full((4, ), True, dtype=tl.int1)
+        z = tl.cumsum(x, axis=0)
+        tl.store(Z + tl.arange(0, 4), z)
+
+    z = torch.zeros(4, dtype=torch.int32, device=device)
+    kernel[(1, )](z)
+    expected = torch.tensor([1, 2, 3, 4], dtype=torch.int32, device=device)
+    assert torch.equal(z, expected)
