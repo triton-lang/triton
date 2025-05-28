@@ -237,8 +237,8 @@ public:
         mlir::cast<triton::gpu::MemDescType>(buffer.getType()).getMemorySpace();
     auto segmentType = gpu::SegmentType::get(
         context, allocBufferSize, memorySpace, granularity, selectIdVec);
-    Value segment = builder.create<gpu::SegmentAllocOp>(
-        loc, segmentType, buffer);
+    Value segment =
+        builder.create<gpu::SegmentAllocOp>(loc, segmentType, buffer);
 
     mlir::RewritePatternSet patterns(context);
     ModuleScopeIdAllocation &scopeInfo = getAnalysis<ModuleScopeIdAllocation>();
