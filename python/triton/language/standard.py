@@ -281,12 +281,17 @@ def _pick_sum_dtype(in_dtype: core.constexpr, dtype: core.constexpr):
 @core._tensor_member_fn
 @jit
 @core._add_reduction_docstr("sum", dtype_arg="dtype")
-def sum(input, axis=None, keep_dims=False, dtype: core.constexpr = None):
+def sum(input, axis=None, keep_dims=False, promote_bfloat16_to_float32=False, dtype: core.constexpr = None):
     # Pick a default dtype for the reduction if one was not specified.
     out_dtype: core.constexpr = _pick_sum_dtype(input.dtype, dtype)
 
     if out_dtype is not None:
         input = input.to(out_dtype)
+
+    # Provide an option to keep consistent behavior with torch.sum()
+    # where bf16 are casted to fp32 before reduce
+    if promote_bfloat16_to_float32:
+        input = core._promote_bfloat16_to_float32(input)
     return core.reduce(input, axis, _sum_combine, keep_dims=keep_dims)
 
 
