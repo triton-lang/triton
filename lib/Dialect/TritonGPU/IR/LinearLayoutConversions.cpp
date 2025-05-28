@@ -1602,8 +1602,6 @@ chooseMfmaLikeStoreLayout(RankedTensorType valType) {
                 [i = 0]() mutable { return std::vector<int32_t>{1 << i++}; });
   std::swap(dimNBases[2], dimNBases[destLane]);
   swapLL *= LinearLayout({{dimN, dimNBases}}, {dimN});
-
-  return mfmaLL.compose(swapLL);
 }
 
 LinearLayout getScaleTMEMStoreLinearLayout(RankedTensorType scaleType,
