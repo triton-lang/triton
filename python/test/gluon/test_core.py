@@ -30,3 +30,4 @@ def test_copy_kernel(layout, XBLOCK):
     out = torch.empty_like(inp)
 
     copy_kernel[(4, )](out, inp, inp.numel(), XBLOCK, layout, num_warps=layout.warps_per_cta[0])
+    torch.testing.assert_close(out, inp)
