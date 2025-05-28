@@ -162,4 +162,3 @@ def test_jit_method():
     anchor(a)
     # CHECK: call @anchor{{.*}}([[V]]#1)
     anchor(b)
-
