@@ -16,6 +16,8 @@ from triton.backends.compiler import GPUTarget
 from triton._C.libtriton import ir
 from triton.language.core import base_type, base_value
 
+import pytest
+
 # ===-----------------------------------------------------------------------===#
 # filecheck_test
 # ===-----------------------------------------------------------------------===#
@@ -90,10 +92,8 @@ def test_filecheck_negative():
         # CHECK: %c42_i32
         anchor(scalar)
 
-    try:
+    with pytest.raises(ValueError, match="Couldn't match \"%c42_i32\""):
         run_filecheck_test(test_kernel)
-    except ValueError as e:
-        assert "Couldn't match \"%c42_i32\"" in str(e), "filecheck doesn't fail"
 
 
 def filecheck_test(fn):
