@@ -2,7 +2,6 @@ import sys
 import os
 import io
 import inspect
-from typing import List, Tuple
 
 from filecheck.options import Options
 from filecheck.finput import FInput
@@ -14,7 +13,6 @@ import triton.language as tl
 from triton.compiler import ASTSource, make_backend
 from triton.backends.compiler import GPUTarget
 from triton._C.libtriton import ir
-from triton.language.core import base_type, base_value
 
 import pytest
 
