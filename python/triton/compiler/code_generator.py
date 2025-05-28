@@ -566,6 +566,11 @@ class CodeGenerator(ast.NodeVisitor):
             for i, name in enumerate(target.elts):
                 self.set_value(self.visit(name), value.values[i])
             return
+        if isinstance(target, ast.Attribute):
+            assert target.ctx.__class__.__name__ == "Store"
+            base = self.visit(target.value)
+            setattr(base, target.attr, value)
+            return
         assert isinstance(target, ast.Name)
         self.set_value(self.visit(target), value)
 
