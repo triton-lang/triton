@@ -118,6 +118,15 @@ class HIPBackend(BaseBackend):
                 supported_fp8_dtypes.update({'fp8e4nv', 'fp8e5'})
             args["supported_fp8_dtypes"] = tuple(sorted(supported_fp8_dtypes))
 
+        if "unsupported_fp8_dot_dtypes" not in opts:
+            if self.target.arch == 'gfx942':
+                unsupported_dot_dtypes = ('fp8e4nv')
+            elif self.target.arch == 'gfx950':
+                unsupported_dot_dtypes = ('fp8e4b8')
+            else:
+                unsupported_dot_dtypes = ()
+            args["unsupported_fp8_dot_dtypes"] = tuple(sorted(unsupported_dot_dtypes))
+
         if "enable_fp_fusion" not in opts:
             args["enable_fp_fusion"] = knobs.language.default_fp_fusion
         args.update({k: opts[k] for k in HIPOptions.__dataclass_fields__.keys() \
