@@ -172,8 +172,10 @@ CoarseSchedule getInitialSchedule(scf::ForOp forOp,
     // root at the stages of the latency ops to prune unnecessary stages.
     auto isLatencyOp = [&](Operation &op) {
       return opLatency.count(&op) ||
-             isa<AsyncCopyGlobalToLocalOp, ttng::AsyncTMACopyGlobalToLocalOp,
-                 ttng::AsyncTMAGatherOp, ttng::MMAv5OpInterface>(op);
+             isa<LocalStoreOp, LocalLoadOp, ttng::TMEMLoadOp, ttng::TMEMStoreOp,
+                 AsyncCopyGlobalToLocalOp, ttng::AsyncTMACopyGlobalToLocalOp,
+                 ttng::AsyncTMAGatherOp, ttng::MMAv5OpInterface,
+                 ttng::WaitBarrierOp, ttng::ArriveBarrierOp>(op);
     };
 
     // If there are no latency ops or all latency ops are in the same stage, we
@@ -191,15 +193,6 @@ CoarseSchedule getInitialSchedule(scf::ForOp forOp,
       return normalized;
     }
 
-    // Erase ops that are not latency ops or side-effecting from the schedule.
-    for (Operation &op : ops) {
-      if (isLatencyOp(op))
-        continue;
-      if (isa<LocalStoreOp, LocalLoadOp, ttng::TMEMLoadOp, ttng::TMEMStoreOp,
-              ttng::WaitBarrierOp, ttng::ArriveBarrierOp>(op))
-        continue;
-      schedule.erase(&op);
-    }
     schedule.shrinkToFit();
     return schedule;
   }
