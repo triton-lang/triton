@@ -89,7 +89,6 @@ def PTG_FinalizeOp : PTG_Op<"finalize", [
   let description = [{
     Write back the metadata and profile to global memory.
     `segment` is the segment of the internal profiling buffer that contains the profiling data.
-    `indexPtr` is the address of the internal buffer index, indicating the current position in the internal profiling buffer.
     `scratchPtr` is the address of the profiling scratch buffer.
   }];
 
@@ -101,21 +100,6 @@ def PTG_FinalizeOp : PTG_Op<"finalize", [
   let assemblyFormat = [{
     $segment `,` $scratchPtr attr-dict `:` qualified(type($segment)) `,` type($scratchPtr)
   }];
-}
-
-def PTG_InitBufferIndexOp : PTG_Op<"init_buffer_index", []> {
-  let summary = "Initialize the internal buffer index";
-
-  let description = [{
-    Zero-initialize the internal buffer index.
-    The index is stored at the address of `indexPtr`.
-  }];
-
-  let arguments = (ins);
-
-  let results = (outs TT_Ptr:$indexPtr);
-
-  let assemblyFormat = "attr-dict `:` type($indexPtr)";
 }
 
 def PTG_GlobalScratchAllocOp : PTG_Op<"global_scratch_alloc", [
@@ -150,14 +134,10 @@ def PTG_SegmentAllocOp : PTG_Op<"segment_alloc", [Pure]> {
   let description = [{
     The internal buffer is partitioned into segments for each profiling "unit".
     This operation gets the location of the memory segment in the internal buffer.
-    `granularity` indicates the granularity of the profiling function unit.
-    If `selectIds` is none, then all available function units will collect profiling data.
   }];
 
   let arguments = (ins
-    TTG_MemDescType:$buffer,
-    DefaultValuedAttr<GranularityAttr, "Granularity::WARP">:$granularity,
-    OptionalAttr<DenseI32ArrayAttr>:$selectIds
+    TTG_MemDescType:$buffer
   );
 
   let results = (outs PTG_SegmentType:$segment);

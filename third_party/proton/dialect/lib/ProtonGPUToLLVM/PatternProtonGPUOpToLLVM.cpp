@@ -285,16 +285,10 @@ struct SegmentAllocOpConversion
     auto loc = op.getLoc();
     auto b = TritonLLVMOpBuilder(loc, rewriter);
     int numWarps = mlir::triton::gpu::lookupNumWarps(mod);
-    auto granularity = op.getGranularity();
-    auto selectIdsAttr = op.getSelectIdsAttr();
-
-    llvm::ArrayRef<int> selectedIds;
-    bool isAllIds = false;
-
-    if (selectIdsAttr.asArrayRef().size())
-      selectedIds = selectIdsAttr.asArrayRef();
-    else
-      isAllIds = true;
+    auto segmentType = op.getResult().getType();
+    auto granularity = segmentType.getGranularity();
+    auto selectIds = segmentType.getSelectIds();
+    bool isAllIds = selectIds.empty() ? true : false;
 
     if (granularity != proton::gpu::Granularity::WARP) {
       mlir::emitError(loc, "granularity must be warp for now");
@@ -319,7 +313,7 @@ struct SegmentAllocOpConversion
             "segment address specialization not implemented yet");
     } else {
       segmentBase =
-          defaultSegmentAlloc(b, curWarpId, selectedIds, bufferSizeInBytes);
+          defaultSegmentAlloc(b, curWarpId, selectIds, bufferSizeInBytes);
     }
 
     auto bufferBase = LLVM::getSharedMemoryBase(

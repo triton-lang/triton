@@ -55,9 +55,10 @@ LogicalResult CircularStoreOp::verify() {
 
 // -- SegmentAllocOp --
 LogicalResult SegmentAllocOp::verify() {
-  auto granularity = getGranularity();
-  auto selectIdsAttr = getSelectIdsAttr();
-  if (granularity != Granularity::WARP && selectIdsAttr.asArrayRef().size()) {
+  auto segmentType = getSegment().getType();
+  auto granularity = segmentType.getGranularity();
+  auto selectIds = segmentType.getSelectIds();
+  if (granularity != Granularity::WARP && selectIds.size()) {
     return emitOpError(
         "only warp granularity supports non-empty selectIds for now");
   }

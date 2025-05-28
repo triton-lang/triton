@@ -92,10 +92,8 @@ public:
         op.getLoc(), mlir::IntegerType::get(context, 32), metricType);
 
     int scopeId = scopeInfo.getOpScopeId(op);
-    rewriter.create<gpu::CircularStoreOp>(op.getLoc(), segment, counter,
-                                          op.getIsStart(), scopeId);
-
-    rewriter.eraseOp(op);
+    rewriter.replaceOpWithNewOp<gpu::CircularStoreOp>(op, segment, counter,
+                                                      op.getIsStart(), scopeId);
     return success();
   }
 
@@ -235,19 +233,12 @@ public:
       return failure();
     }
 
-    Value profileMem = builder.create<gpu::GlobalScratchAllocOp>(
-        loc, triton::getPointerType(builder.getI32Type()),
-        allocProfileScratchSize, profileScratchAlignment);
-
-    // Profiler index is private to each thread, address space is 5. In
-    // practice, it doesn't prevent us from register promotion.
-    auto ptrTy =
-        triton::PointerType::get(mlir::IntegerType::get(context, 32), 5);
-    Value index = builder.create<gpu::InitBufferIndexOp>(loc, ptrTy);
-
+    auto memorySpace =
+        mlir::cast<triton::gpu::MemDescType>(buffer.getType()).getMemorySpace();
+    auto segmentType = gpu::SegmentType::get(
+        context, allocBufferSize, memorySpace, granularity, selectIdVec);
     Value segment = builder.create<gpu::SegmentAllocOp>(
-        loc, gpu::SegmentAllocType::get(context), buffer, granularity,
-        builder.getDenseI32ArrayAttr(selectIdVec));
+        loc, segmentType, buffer);
 
     mlir::RewritePatternSet patterns(context);
     ModuleScopeIdAllocation &scopeInfo = getAnalysis<ModuleScopeIdAllocation>();
@@ -256,6 +247,9 @@ public:
     if (applyPatternsGreedily(mod, std::move(patterns)).failed())
       return failure();
 
+    Value profileMem = builder.create<gpu::GlobalScratchAllocOp>(
+        loc, triton::getPointerType(builder.getI32Type()),
+        allocProfileScratchSize, profileScratchAlignment);
     func.walk([&](triton::ReturnOp ret) {
       builder.setInsertionPoint(ret);
       builder.create<mlir::gpu::BarrierOp>(loc);
