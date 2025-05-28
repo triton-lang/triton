@@ -274,8 +274,8 @@ class ASTFunction:
 
 @dataclass(frozen=True)
 class BoundJITMethod:
-    bound_self: base_value
-    method: JITFunction
+    __self__: base_value
+    __func__: JITFunction
 
 
 class CodeGenerator(ast.NodeVisitor):
@@ -1255,8 +1255,8 @@ class CodeGenerator(ast.NodeVisitor):
         args = [self.visit(arg) for arg in node.args]
         args = list(itertools.chain.from_iterable(x if isinstance(x, list) else [x] for x in args))
         if isinstance(fn, BoundJITMethod):
-            args.insert(0, fn.bound_self)
-            fn = fn.method
+            args.insert(0, fn.__self__)
+            fn = fn.__func__
         if isinstance(fn, JITFunction):
             _check_fn_args(node, fn, args)
             return self.call_JitFunction(fn, args, kws)
