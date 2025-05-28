@@ -93,7 +93,7 @@ struct FinalizeOpConversion
         threadId,
         b.i32_val(triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod)));
     Value isFirstThread = b.icmp_eq(threadId, b.i32_val(0));
-    const int bufferSizeInWords = op.getSegment().getType().getSize();
+    const int bufferSizeInWords = op.getSegment().getType().getNBytes() / 4;
     const int circularHeaderWordSize = proton::gpu::getCircularHeaderSize() / 4;
 
     // Header: preamble (1 word), threadblock id (1 word), SM id (1 word),
@@ -299,7 +299,7 @@ struct SegmentAllocOpConversion
     Value threadsPerWarp =
         b.i32_val(triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod));
     Value curWarpId = b.udiv(curThreadId, threadsPerWarp);
-    const int bufferSizeInBytes = op.getSegment().getType().getSize();
+    const int bufferSizeInBytes = op.getSegment().getType().getNBytes();
 
     // Specialize the segment base address calculation might bring a few cycles
     // saving per record measurement overhead.

@@ -48,7 +48,7 @@ struct CircularStoreOpConversion
     auto selectedIds = segmentType.getSelectIds();
     if (!selectedIds.empty())
       selectedWarpNum = selectedIds.size();
-    const int bufferSizeInBytes = segmentType.getSize();
+    const int bufferSizeInBytes = segmentType.getNBytes();
     const int segmentWordSize = bufferSizeInBytes / selectedWarpNum / 4;
     Value tagOffset =
         b.add(segmentBase, b.urem(curIdx, b.i32_val(segmentWordSize)));

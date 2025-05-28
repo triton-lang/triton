@@ -43,7 +43,7 @@ LogicalResult CircularStoreOp::verify() {
   auto segmentType = getSegment().getType();
   auto granularity = segmentType.getGranularity();
   auto selectedIds = segmentType.getSelectIds();
-  auto bufferSizeInBytes = segmentType.getSize();
+  auto bufferSizeInBytes = segmentType.getNbytes();
   auto mod = getOperation()->getParentOfType<ModuleOp>();
   int segmentNum = selectedIds.empty() ? mlir::triton::gpu::lookupNumWarps(mod)
                                        : selectedIds.size();

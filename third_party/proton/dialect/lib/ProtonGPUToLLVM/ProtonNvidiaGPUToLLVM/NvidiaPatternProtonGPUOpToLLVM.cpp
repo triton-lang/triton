@@ -60,7 +60,7 @@ struct CircularStoreOpConversion
     auto selectedIds = segmentType.getSelectIds();
     if (!selectedIds.empty())
       selectedWarpNum = selectedIds.size();
-    const int bufferSizeInBytes = segmentType.getSize();
+    const int bufferSizeInBytes = segmentType.getNBytes();
     const int segmentWordSize = bufferSizeInBytes / selectedWarpNum / 4;
 
     // Compute the actual base offset (with urem as circular buffer).

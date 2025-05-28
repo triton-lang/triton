@@ -30,14 +30,14 @@ def PTG_SegmentType : PTG_TypeDef<"Segment", "segment", []> {
   }];
 
   let parameters = (ins
-    "int32_t":$size,
+    "int32_t":$nBytes,
     "Attribute":$memorySpace,
     EnumParameter<GranularityAttr>:$granularity,
     ArrayRefParameter<"int32_t">:$selectIds
   );
 
   let assemblyFormat = [{
-    `<` $size `,` $memorySpace `,` $granularity `,` `[` $selectIds `]` `>`
+    `<` $nBytes `,` $memorySpace `,` $granularity `,` `[` $selectIds `]` `>`
   }];
 }
 
