@@ -75,8 +75,7 @@ def init_compute_data(m, n, k, gindx, sindx, n_expts_tot, n_expts_act, n_expt_sh
 # ---------------
 
 
-def init_precision(out_dtype, weight_dtype, is_mixed_input, n_expts_tot=1, mx_ctx=MicroscalingCtx(),
-                   device="cuda"):
+def init_precision(out_dtype, weight_dtype, is_mixed_input, n_expts_tot=1, mx_ctx=MicroscalingCtx(), device="cuda"):
     act_use_flexpoint = out_dtype.itemsize == 1
     weight_use_flexpoint = weight_dtype.itemsize == 1 and not is_mixed_input
     # flexpoint
@@ -86,8 +85,8 @@ def init_precision(out_dtype, weight_dtype, is_mixed_input, n_expts_tot=1, mx_ct
     make_scalar = lambda val: torch.tensor([val], dtype=torch.float32, device=device)
     in_flex_data = lambda scale, use_flex: InFlexData(dtype=out_dtype, scale=make_scalar(scale)
                                                       ) if use_flex else InFlexData()
-    in_flex_edata = lambda scale0, scale1, use_flex: InFlexData(dtype=weight_dtype, scale=make_tensor(
-        scale0, scale1)) if use_flex else InFlexData()
+    in_flex_edata = lambda scale0, scale1, use_flex: InFlexData(dtype=weight_dtype, scale=make_tensor(scale0, scale1)
+                                                                ) if use_flex else InFlexData()
     out_flex_data = lambda scale, use_flex: OutFlexData(dtype=out_dtype, expected_scale=make_scalar(
         scale), actual_scale=make_scalar(0), checksum_scale=make_scalar(0)) if use_flex else OutFlexData()
     flex_ctx = FlexCtx(
@@ -245,15 +244,13 @@ def test_op(m, n, k, split_k, do_gather, do_scatter, fused_scatter, has_y_gammas
         if "float8" in act_dtype_str and "mx" in weight_dtype_str and torch.cuda.get_device_capability()[0] < 10:
             pytest.skip("float8 x mx not supported with cuda capability < 10")
     elif is_hip():
-        if swizzle_mx_scale:
-            pytest.skip("Swizzling mx scale is not supported on AMD GPU platforms")
         if "float8_e4m3fnuz" in (weight_dtype_str, act_dtype_str) and not is_hip_cdna3():
             pytest.skip("float8_e4m3fnuz only tested on CDNA3")
         if "float8" in act_dtype_str and "mx" in weight_dtype_str and not is_hip_cdna4():
             pytest.skip("float8 x mx only supported on CDNA4")
         if "float8" in act_dtype_str and "mxfloat8" in weight_dtype_str:
             pytest.skip("float8 x mxfloat8 not supported on AMD GPU yet")
-        
+
         if is_persistent:
             pytest.skip("Persistent kernel not supported on AMD GPU yet")
 
@@ -301,8 +298,7 @@ def test_op(m, n, k, split_k, do_gather, do_scatter, fused_scatter, has_y_gammas
     weight_dtype = dtype_str_to_torch(weight_dtype_str)
     act_dtype = dtype_str_to_torch(act_dtype_str)
     act_is_float8 = act_dtype.itemsize == 1
-    precision_opt = init_precision(act_dtype, weight_dtype, is_mixed_input,
-                                   n_expts_tot // n_expt_shards, device=device)
+    precision_opt = init_precision(act_dtype, weight_dtype, is_mixed_input, n_expts_tot // n_expt_shards, device=device)
     # precision_opt.x_pad_trans_requires_flexpoint = False
     if mode == "ragged":
         m, rdata, gindx, sindx = init_routing_data(m, n_expts_tot, n_expts_act, n_expt_shards, do_gather, do_scatter,
