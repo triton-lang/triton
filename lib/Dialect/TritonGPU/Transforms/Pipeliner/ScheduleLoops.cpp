@@ -167,6 +167,20 @@ CoarseSchedule getInitialSchedule(scf::ForOp forOp,
   CoarseSchedule schedule;
   if (forOp->hasAttr(kWarpSpecializeAttrName) &&
       succeeded(schedule.deSerialize(forOp))) {
+    // Find stages to which the latency ops in the loop belong. If there is only
+    // one such stage, don't pipeline the loop.
+    auto isLatencyOp = [&](Operation &op) {
+      return opLatency.count(&op) ||
+             isa<AsyncCopyGlobalToLocalOp, ttng::AsyncTMACopyGlobalToLocalOp,
+                 ttng::AsyncTMAGatherOp, ttng::MMAv5OpInterface>(op);
+    };
+    DenseSet<int> latencyStages;
+    for (Operation &op : llvm::make_filter_range(
+             forOp.getBody()->without_terminator(), isLatencyOp))
+      latencyStages.insert(schedule[&op].first);
+    if (latencyStages.size() <= 1)
+      return CoarseSchedule(0);
+
     schedule.shrinkToFit();
     return schedule;
   }
