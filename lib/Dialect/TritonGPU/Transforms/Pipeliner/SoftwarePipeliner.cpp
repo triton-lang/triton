@@ -1,11 +1,12 @@
 #include "mlir/Dialect/Tensor/IR/Tensor.h"
-#include "mlir/IR/IRMapping.h"
+#include "mlir/Dialect/UB/IR/UBOps.h"
 #include "mlir/IR/TypeUtilities.h"
 #include "mlir/Interfaces/SideEffectInterfaces.h"
 #include "mlir/Support/LLVM.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 #include "triton/Analysis/AxisInfo.h"
 #include "triton/Analysis/Utility.h"
+#include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/Triton/Transforms/LoopPeeling.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h"
@@ -14,7 +15,6 @@
 #include "triton/Dialect/TritonGPU/Transforms/Schedule.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
-#include "triton/Tools/Sys/GetEnv.hpp"
 #include "llvm/Support/Debug.h"
 //===----------------------------------------------------------------------===//
 // This file will create a schedule that will be handed over to the pipeline
@@ -54,7 +54,7 @@ static Operation *wrapInMaskOp(RewriterBase &rewriter, Operation *op,
   return mask;
 }
 
-static void resolveMaskOp(ModuleOp moduleOp) {
+static void resolveMaskOp(ModuleOp moduleOp, DenseSet<MaskOp> &peeledMaskOps) {
   IRRewriter rewriter(moduleOp);
 
   // Canonicalize the IR to simplify the arithmetic ops defining the mask
@@ -64,6 +64,29 @@ static void resolveMaskOp(ModuleOp moduleOp) {
   arithDialect->getCanonicalizationPatterns(patterns);
   if (applyPatternsGreedily(moduleOp, std::move(patterns)).failed())
     return llvm::report_fatal_error("Failed to canonicalize the IR");
+
+  // Prune all the statically dead mask ops in the epilogue. This is a
+  // hack, ideally we should do it for all the mask ops, but it is incorrect if
+  // we have speculatively executed async cp operations that will store to shmem
+  // even if the mask is false.
+  for (auto maskOp : peeledMaskOps) {
+    rewriter.setInsertionPoint(maskOp);
+    while (&maskOp.getBody()->front() != maskOp.getBody()->getTerminator()) {
+      Operation *op = &maskOp.getBody()->front();
+      if (isConstantIntValue(maskOp.getPred(), 0)) {
+        if (op->getNumResults() > 0) {
+          SmallVector<Value> results;
+          for (auto result : op->getResults()) {
+            auto poisonOp =
+                rewriter.create<ub::PoisonOp>(op->getLoc(), result.getType());
+            results.push_back(poisonOp);
+          }
+          op->replaceAllUsesWith(results);
+        }
+        op->erase();
+      }
+    }
+  }
 
   SmallVector<MaskOp> maskOps;
   moduleOp->walk([&](MaskOp maskOp) { maskOps.push_back(maskOp); });
@@ -78,30 +101,6 @@ static void resolveMaskOp(ModuleOp moduleOp) {
         maskOp.getBody()->getTerminator()->getOperands());
     maskOp->erase();
   }
-}
-
-static Operation *processPeeledEpilogueOp(RewriterBase &rewriter, Operation *op,
-                                          bool isEpilogue) {
-  if (auto predOp = dyn_cast<triton::gpu::PredicateStageOp>(op)) {
-    if (isEpilogue) {
-      // Return false for the predicate of the peeled iteration
-      return rewriter.create<mlir::arith::ConstantIntOp>(
-          predOp.getLoc(), 0, predOp.getResult().getType());
-    } else {
-      if (predOp.getStage() == predOp.getMaxStage() - 1) {
-        return rewriter.create<mlir::arith::ConstantIntOp>(
-            predOp.getLoc(), 1, predOp.getResult().getType());
-      } else {
-        OpBuilder::InsertionGuard guard(rewriter);
-        rewriter.setInsertionPoint(op);
-        return triton::emitPredicateForStage(
-                   rewriter, predOp.getIv(), predOp.getUb(), predOp.getStep(),
-                   predOp.getMaxStage(), predOp.getStage())
-            .getDefiningOp();
-      }
-    }
-  }
-  return op;
 }
 
 static bool hasMMAv5WaitsInLastStage(scf::ForOp forOp,
@@ -122,6 +121,36 @@ static bool hasMMAv5WaitsInLastStage(scf::ForOp forOp,
 }
 
 static void expandLoops(ModuleOp moduleOp) {
+  DenseSet<MaskOp> peeledMaskOps;
+  auto processPeeledEpilogueOp = [&](RewriterBase &rewriter, Operation *op,
+                                     bool isEpilogue) -> Operation * {
+    if (auto predOp = dyn_cast<triton::gpu::PredicateStageOp>(op)) {
+      if (isEpilogue) {
+        // Return false for the predicate of the peeled iteration
+        return rewriter.create<mlir::arith::ConstantIntOp>(
+            predOp.getLoc(), 0, predOp.getResult().getType());
+      } else {
+        if (predOp.getStage() == predOp.getMaxStage() - 1) {
+          return rewriter.create<mlir::arith::ConstantIntOp>(
+              predOp.getLoc(), 1, predOp.getResult().getType());
+        } else {
+          OpBuilder::InsertionGuard guard(rewriter);
+          rewriter.setInsertionPoint(op);
+          return triton::emitPredicateForStage(
+                     rewriter, predOp.getIv(), predOp.getUb(), predOp.getStep(),
+                     predOp.getMaxStage(), predOp.getStage())
+              .getDefiningOp();
+        }
+      }
+    }
+    if (auto maskOp = dyn_cast<triton::gpu::MaskOp>(op)) {
+      if (isEpilogue) {
+        peeledMaskOps.insert(maskOp);
+      }
+    }
+    return op;
+  };
+
   SmallVector<scf::ForOp> loops;
   moduleOp->walk([&](scf::ForOp forOp) { loops.push_back(forOp); });
   for (scf::ForOp forOp : loops) {
@@ -177,7 +206,7 @@ static void expandLoops(ModuleOp moduleOp) {
   }
   assert(moduleOp.getOps<triton::gpu::PredicateStageOp>().empty() &&
          "PredicateStageOp should be resolved after the pipeline expansion");
-  resolveMaskOp(moduleOp);
+  resolveMaskOp(moduleOp, peeledMaskOps);
 }
 
 static void removeAttributes(ModuleOp moduleOp) {
