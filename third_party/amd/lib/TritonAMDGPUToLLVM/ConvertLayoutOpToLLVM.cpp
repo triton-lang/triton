@@ -56,6 +56,10 @@ public:
       return failure();
 
     auto mfmaLayout = dyn_cast<AMDMfmaEncodingAttr>(srcType.getEncoding());
+    if (mfmaLayout.getMDim() != 32) {
+      // TODO: will enable it for mDim==16 in the next step
+      return failure();
+    }
     assert((mfmaLayout.getMDim() == 16 || mfmaLayout.getMDim() == 32) &&
            "Expected MFMA size 16 or 32");
     assert(triton::gpu::lookupThreadsPerWarp(rewriter) == 64 &&
@@ -245,6 +249,8 @@ public:
                                     : "llvm.amdgcn.permlane16.swap";
     // Convert MFMA layout to a MFMA-like linear layout where each thread
     // holds 8 consecutive elements
+    auto intrinsicName = mDim == 32 ? "llvm.amdgcn.permlane32.swap"
+                                    : "llvm.amdgcn.permlane16.swap";
     for (size_t idx = 0; idx < inVals.size(); idx += 8) {
       SmallVector<Value, 4> inVecs;
       for (size_t vIdx = 0; vIdx < 4; vIdx++) {

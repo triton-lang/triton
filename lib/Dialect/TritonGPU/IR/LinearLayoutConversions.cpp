@@ -1532,7 +1532,6 @@ chooseMfmaLikeStoreLayout(RankedTensorType valType) {
   auto mfmaOutDims = llvm::to_vector(mfmaLL.getOutDimNames());
   StringAttr dimM = mfmaOutDims[0];
   StringAttr dimN = mfmaOutDims[1];
-
   auto swapLL = LinearLayout::empty();
   // The rows are kept as is with an identity linear layout.
   swapLL *= LinearLayout::identity1D(valShape[0], dimM, dimM);
@@ -1576,6 +1575,7 @@ chooseMfmaLikeStoreLayout(RankedTensorType valType) {
   BLK3      |...                  | ...                    |
             |(15, 12) ... (15, 15)| (15, 12) ... (15, 15)  |
             ------------------------------------------------
+
             To pack 8 elements with fp16 type we need to put the elements per
   row are contiuous, so the expetecd layout is: N/register M/lane
   ------------------------------------------------
