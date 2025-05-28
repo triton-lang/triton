@@ -50,10 +50,10 @@ void parseSelectIds(llvm::StringRef selectIds,
 
 int getAllocSharedMemSize(int maxSharedMemSize, int sharedMemUsed,
                           int segmentNum) {
-  const int bytesPerEntry = proton::gpu::getBytesPerClockEntry();
+  const int bytesPerEntry = gpu::getBytesPerClockEntry();
   const int wordsPerEntry = bytesPerEntry / 4; // 1 word = 4 bytes
   const int circularHeaderSize =
-      proton::gpu::getCircularHeaderSize(); // byte size
+      gpu::getCircularHeaderSize(); // byte size
 
   int segmentByteSizeShared =
       llvm::NextPowerOf2(
@@ -76,12 +76,11 @@ int getAllocSharedMemSize(int maxSharedMemSize, int sharedMemUsed,
 
 class RecordOpCircularRewrite : public OpRewritePattern<proton::RecordOp> {
 public:
-  RecordOpCircularRewrite(MLIRContext *ctx, Value buffer, Value index,
-                          Value segmentBase, MetricType metricType,
+  RecordOpCircularRewrite(MLIRContext *ctx, Value segment,
+                          MetricType metricType,
                           ModuleScopeIdAllocation &scopeInfo)
-      : OpRewritePattern::OpRewritePattern(ctx), buffer(buffer), index(index),
-        segmentBase(segmentBase), metricType(metricType), scopeInfo(scopeInfo) {
-  }
+      : OpRewritePattern::OpRewritePattern(ctx), segment(segment),
+        metricType(metricType), scopeInfo(scopeInfo) {}
 
   LogicalResult matchAndRewrite(proton::RecordOp op,
                                 PatternRewriter &rewriter) const override {
@@ -90,22 +89,19 @@ public:
 
     rewriter.setInsertionPointAfter(op);
 
-    Value counter = rewriter.create<proton::gpu::ReadCounterOp>(
+    Value counter = rewriter.create<gpu::ReadCounterOp>(
         op.getLoc(), mlir::IntegerType::get(context, 32), metricType);
 
     int scopeId = scopeInfo.getOpScopeId(op);
-    rewriter.create<proton::gpu::CircularStoreOp>(op.getLoc(), buffer, index,
-                                                  counter, segmentBase,
-                                                  op.getIsStart(), scopeId);
+    rewriter.create<gpu::CircularStoreOp>(op.getLoc(), segment, counter,
+                                          op.getIsStart(), scopeId);
 
     rewriter.eraseOp(op);
     return success();
   }
 
 private:
-  Value buffer;
-  Value index;
-  Value segmentBase;
+  Value segment;
   MetricType metricType;
   ModuleScopeIdAllocation &scopeInfo;
 };
@@ -147,7 +143,7 @@ public:
         samplingStrategy == SamplingStrategy::SELECTIVE) {
       parseSelectIds(samplingOptions, selectIdVec);
       segmentNum = selectIdVec.size();
-      if (segmentNum && granularity != proton::gpu::Granularity::WARP) {
+      if (segmentNum && granularity != gpu::Granularity::WARP) {
         mlir::emitError(
             loc, "only warp granularity supports selective ids for now.");
         return failure();
@@ -162,7 +158,7 @@ public:
     int allocSharedMemSize =
         getAllocSharedMemSize(maxSharedMemSize, sharedMemUsed, segmentNum);
 
-    const int bytesPerEntry = proton::gpu::getBytesPerClockEntry();
+    const int bytesPerEntry = gpu::getBytesPerClockEntry();
 
     if (bufferSize != 0)
       bufferSize = llvm::alignTo(bufferSize, bytesPerEntry);
@@ -200,7 +196,7 @@ public:
     //  | profiled data (allocBufferSize bytes)         |
     //  +-----------------------------------------------+
     const int circularHeaderSize =
-        proton::gpu::getCircularHeaderSize(); // byte size
+        gpu::getCircularHeaderSize(); // byte size
 
     int allocProfileScratchSize =
         llvm::alignTo(allocBufferSize + circularHeaderSize + numWarps * 4,
@@ -232,7 +228,7 @@ public:
       auto stackBufferType = triton::gpu::MemDescType::get(
           {allocBufferSize / 4}, builder.getI32Type(), encoding,
           stackMemorySpace, /*mutable_memory=*/true);
-      buffer = builder.create<proton::gpu::StackAllocOp>(loc, stackBufferType);
+      buffer = builder.create<gpu::StackAllocOp>(loc, stackBufferType);
     } else if (bufferType == gpu::BufferType::GLOBAL) {
       mlir::emitError(loc, "not implemented yet");
       return failure();
@@ -241,7 +237,7 @@ public:
       return failure();
     }
 
-    Value profileMem = builder.create<proton::gpu::GlobalScratchAllocOp>(
+    Value profileMem = builder.create<gpu::GlobalScratchAllocOp>(
         loc, triton::getPointerType(builder.getI32Type()),
         allocProfileScratchSize, profileScratchAlignment);
 
@@ -249,23 +245,22 @@ public:
     // practice, it doesn't prevent us from register promotion.
     auto ptrTy =
         triton::PointerType::get(mlir::IntegerType::get(context, 32), 5);
-    Value index = builder.create<proton::gpu::InitBufferIndexOp>(loc, ptrTy);
+    Value index = builder.create<gpu::InitBufferIndexOp>(loc, ptrTy);
 
-    Value segmentBase = builder.create<proton::gpu::SegmentBaseOp>(
-        loc, proton::gpu::SegmentBaseType::get(context), buffer, granularity,
+    Value segment = builder.create<gpu::SegmentAllocOp>(
+        loc, gpu::SegmentAllocType::get(context), buffer, granularity,
         builder.getDenseI32ArrayAttr(selectIdVec));
 
     mlir::RewritePatternSet patterns(context);
     ModuleScopeIdAllocation &scopeInfo = getAnalysis<ModuleScopeIdAllocation>();
-    patterns.add<RecordOpCircularRewrite>(context, buffer, index, segmentBase,
-                                          metricType, scopeInfo);
+    patterns.add<RecordOpCircularRewrite>(context, segment, metricType, scopeInfo);
     if (applyPatternsGreedily(mod, std::move(patterns)).failed())
       return failure();
 
     func.walk([&](triton::ReturnOp ret) {
       builder.setInsertionPoint(ret);
       builder.create<mlir::gpu::BarrierOp>(loc);
-      builder.create<proton::gpu::FinalizeOp>(loc, buffer, index, profileMem);
+      builder.create<gpu::FinalizeOp>(loc, buffer, profileMem);
     });
 
     return success();

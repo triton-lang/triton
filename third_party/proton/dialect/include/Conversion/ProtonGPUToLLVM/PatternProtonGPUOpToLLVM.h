@@ -14,8 +14,6 @@ namespace proton::gpu {
 // https://llvm.org/docs/AMDGPUUsage.html#address-spaces
 constexpr int IndexPtrAddrSpace = 5;
 
-constexpr int kGlobalScratchBufferOffset = -1;
-
 void populateProtonGPUOpPatterns(LLVMTypeConverter &typeConverter,
                                  RewritePatternSet &patterns,
                                  const TargetInfoBase &targetInfo,
@@ -24,8 +22,6 @@ void populateProtonGPUOpPatterns(LLVMTypeConverter &typeConverter,
 void populateTypeConversions(LLVMTypeConverter &typeConverter,
                              const TargetInfoBase &targetInfo);
 
-Value getLinearId(Location loc, ConversionPatternRewriter &rewriter,
-                  ModuleOp mod, const proton::gpu::TargetInfoBase &targetInfo);
 } // namespace proton::gpu
 } // namespace mlir::triton
 

@@ -39,16 +39,14 @@ def PTG_CircularStoreOp : PTG_Op<"circular_store", [
   let summary = "Store the value into a circular buffer";
 
   let description = [{
-    Store a metric `counter` into a circular buffer backed by the internal memory `data`.
+    Store a metric `counter` into a circular buffer backed by the internal memory `segment`.
     The circular buffer indexing is stored at the address of `indexPtr`. The index value is
-    automatically updated. Older metric counters are dropped if the `data` buffer is full.
+    automatically updated. Older metric counters are dropped if the `segment` buffer is full.
   }];
 
   let arguments = (ins
-    TTG_MemDescType:$data,
-    TT_Ptr:$indexPtr,
+    PTG_SegmentType:$segment,
     I32:$counter,
-    PTG_SegmentBase:$seg,
     UnitAttr:$isStart,
     I32Attr:$scopeId
   );
@@ -56,8 +54,8 @@ def PTG_CircularStoreOp : PTG_Op<"circular_store", [
   let hasVerifier = 1;
 
   let assemblyFormat = [{
-    (`start` $isStart^):(`end`)? $data `,` $indexPtr `,` $counter `,` $seg attr-dict `:`
-    qualified(type($data)) `,` type($indexPtr) `,` type($counter) `,` type($seg)
+    (`start` $isStart^):(`end`)? $segment `,` $counter attr-dict `:`
+    qualified(type($segment)) `,` type($counter)
   }];
 }
 
@@ -90,19 +88,18 @@ def PTG_FinalizeOp : PTG_Op<"finalize", [
 
   let description = [{
     Write back the metadata and profile to global memory.
-    `data` is the internal profiling buffer that contains the profiling data.
+    `segment` is the segment of the internal profiling buffer that contains the profiling data.
     `indexPtr` is the address of the internal buffer index, indicating the current position in the internal profiling buffer.
-    `scratchPtr` is the address of the profile scratch buffer.
+    `scratchPtr` is the address of the profiling scratch buffer.
   }];
 
   let arguments = (ins
-    TTG_MemDescType:$data,
-    TT_Ptr:$indexPtr,
+    PTG_SegmentType:$segment,
     TT_Ptr:$scratchPtr
   );
 
   let assemblyFormat = [{
-    $data `,` $indexPtr `,` $scratchPtr attr-dict `:` qualified(type($data)) `,` type($indexPtr) `,` type($scratchPtr)
+    $segment `,` $scratchPtr attr-dict `:` qualified(type($segment)) `,` type($scratchPtr)
   }];
 }
 
@@ -147,7 +144,7 @@ def PTG_GlobalScratchAllocOp : PTG_Op<"global_scratch_alloc", [
   let assemblyFormat = [{attr-dict `:` qualified(type($result))}];
 }
 
-def PTG_SegmentBaseOp : PTG_Op<"segment_base", [Pure]> {
+def PTG_SegmentAllocOp : PTG_Op<"segment_alloc", [Pure]> {
   let summary = "Get the base offset of the segment of the internal buffer";
 
   let description = [{
@@ -158,16 +155,16 @@ def PTG_SegmentBaseOp : PTG_Op<"segment_base", [Pure]> {
   }];
 
   let arguments = (ins
-    TTG_MemDescType:$data,
+    TTG_MemDescType:$buffer,
     DefaultValuedAttr<GranularityAttr, "Granularity::WARP">:$granularity,
     OptionalAttr<DenseI32ArrayAttr>:$selectIds
   );
 
-  let results = (outs PTG_SegmentBase:$segBaseOffset);
+  let results = (outs PTG_SegmentType:$segment);
 
   let hasVerifier = 1;
 
-  let assemblyFormat = "$data `,` attr-dict `:` qualified(type($data)) `->` type($segBaseOffset)";
+  let assemblyFormat = "$buffer `,` attr-dict `:` qualified(type($buffer)) `->` type($segment)";
 }
 
 def PTG_StackAllocOp : PTG_Op<"stack_alloc", [
@@ -183,9 +180,9 @@ def PTG_StackAllocOp : PTG_Op<"stack_alloc", [
 
   let hasVerifier = 1;
 
-  let results = (outs TTG_MemDescType:$data);
+  let results = (outs TTG_MemDescType:$buffer);
 
-  let assemblyFormat = "attr-dict `:` qualified(type($data))";
+  let assemblyFormat = "attr-dict `:` qualified(type($buffer))";
 }
 
 #endif  // PROTONGPU_OPS
