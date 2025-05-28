@@ -12,16 +12,6 @@ class PTG_TypeDef<string name, string _mnemonic, list<Trait> traits = []>
     let mnemonic = _mnemonic;
 }
 
-def PTG_SegmentAlloc : PTG_TypeDef<"SegmentAlloc", "seg", []> {
-  let summary = "location of a segment in the profiling buffer";
-  let description = [{
-    `proton_gpu.segbase` is a type returned by `PTG_SegmentAllocOp`.
-    It is used to represent the location of a segment in the profiling buffer
-    that we store our profiling events into. It is lowered to `i32` type. Here,
-    `-1` means the segment location is invalid.
-  }];
-}
-
 def PTG_SegmentType : PTG_TypeDef<"Segment", "segment", []> {
   let summary = "A segment in the internal buffer";
 
