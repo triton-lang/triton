@@ -471,7 +471,7 @@ def test_fused_act(m, n, k, mode, split_k, do_gather, do_scatter, fused_scatter,
     else:
         rdata = gindx = sindx = None
 
-    precision_opt = init_precision(act_dtype, False, False, n_expts_tot // n_expt_shards, device=device)
+    precision_opt = init_precision(act_dtype, weight_dtype, False, n_expts_tot // n_expt_shards, device=device)
     x, w, bias, _, _ = init_compute_data(m, n, k, gindx, sindx, n_expts_tot, n_expts_act, n_expt_shards, mode,
                                          act_dtype, weight_dtype, False, requires_grad=False, device=device)
 
