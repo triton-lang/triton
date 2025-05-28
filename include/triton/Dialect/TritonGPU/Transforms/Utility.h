@@ -247,9 +247,6 @@ SetVector<Value> getNestedOperands(Operation *op);
 // Erase the given loop carried values from the loop, where `loop` is replaced
 // with a new loop.
 void eraseLoopCarriedValues(scf::ForOp &loop, llvm::BitVector indices);
-
-// Get a boolean if the Value is an arith::ConstantOp
-std::optional<bool> getBoolFromConstant(Value cst);
 } // namespace mlir
 
 namespace mlir::triton {
