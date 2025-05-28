@@ -224,11 +224,6 @@ public:
 
     auto mfmaLayout = dyn_cast<AMDMfmaEncodingAttr>(srcType.getEncoding());
     auto mDim = mfmaLayout.getMDim();
-    if (mDim != 32) {
-      // to enable it once the 2nd step is done
-      return failure();
-    }
-
     auto nDim = mfmaLayout.getNDim();
     assert((mDim == 32 || mDim == 16) && mDim == nDim &&
            "Expected MFMA size 32 or 16");
