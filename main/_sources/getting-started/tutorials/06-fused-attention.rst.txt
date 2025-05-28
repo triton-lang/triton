@@ -30,7 +30,7 @@ Extra Credits:
 * Original flash attention paper (https://arxiv.org/abs/2205.14135)
 * Rabe and Staats (https://arxiv.org/pdf/2112.05682v2.pdf)
 
-.. GENERATED FROM PYTHON SOURCE LINES 15-698
+.. GENERATED FROM PYTHON SOURCE LINES 15-700
 
 
 
@@ -86,46 +86,46 @@ Extra Credits:
 
     fused-attention-batch4-head32-d64-fwd-causal=True-warp_specialize=True:
          N_CTX  Triton [FP16]  Triton [FP8]
-    0   1024.0      45.710467     59.644887
-    1   2048.0      51.756497     68.585852
-    2   4096.0      55.151211     73.196627
-    3   8192.0      56.949137     76.447390
-    4  16384.0      57.782419     77.568491
+    0   1024.0      28.906451     42.824974
+    1   2048.0      33.248545     50.101890
+    2   4096.0      35.516731     53.623307
+    3   8192.0      36.426016     55.795607
+    4  16384.0      36.436936     55.744044
     fused-attention-batch4-head32-d64-fwd-causal=True-warp_specialize=False:
          N_CTX  Triton [FP16]  Triton [FP8]
-    0   1024.0      45.725319     59.608532
-    1   2048.0      51.732677     69.017556
-    2   4096.0      55.244402     73.349434
-    3   8192.0      57.210090     75.932006
-    4  16384.0      58.117062     77.455184
+    0   1024.0      62.384758     66.295853
+    1   2048.0      76.393984     83.082743
+    2   4096.0      84.921981     92.687671
+    3   8192.0      89.086082     97.633974
+    4  16384.0      91.624993     99.881797
     fused-attention-batch4-head32-d64-fwd-causal=False-warp_specialize=True:
          N_CTX  Triton [FP16]  Triton [FP8]
-    0   1024.0      56.295722     77.943482
-    1   2048.0      57.762455     79.039425
-    2   4096.0      58.306101     80.487804
-    3   8192.0      58.902140     80.604189
-    4  16384.0      59.131639     79.894478
+    0   1024.0      33.388681     51.083667
+    1   2048.0      34.863716     54.331829
+    2   4096.0      35.761593     55.935123
+    3   8192.0      36.001402     55.668905
+    4  16384.0      35.853242     54.299658
     fused-attention-batch4-head32-d64-fwd-causal=False-warp_specialize=False:
          N_CTX  Triton [FP16]  Triton [FP8]
-    0   1024.0      56.283889     77.927481
-    1   2048.0      57.744613     79.136931
-    2   4096.0      58.198651     80.129987
-    3   8192.0      59.099903     81.118745
-    4  16384.0      59.160550     79.602767
+    0   1024.0      85.698656     92.227548
+    1   2048.0      93.771476     99.941031
+    2   4096.0      95.737313    102.086122
+    3   8192.0      96.261946    103.371135
+    4  16384.0      94.975175    103.894994
     fused-attention-batch4-head32-d64-bwd-causal=True-warp_specialize=True:
          N_CTX  Triton [FP16]  Triton [FP8]
-    0   1024.0      36.194708     35.982575
-    1   2048.0      43.930435     44.187476
-    2   4096.0      48.914694     48.903491
-    3   8192.0      51.879607     51.838530
-    4  16384.0      53.377237     53.333755
+    0   1024.0      34.678207     34.695979
+    1   2048.0      42.228079     42.050909
+    2   4096.0      46.859368     47.183340
+    3   8192.0      49.891358     49.929406
+    4  16384.0      51.302548     51.263116
     fused-attention-batch4-head32-d64-bwd-causal=True-warp_specialize=False:
          N_CTX  Triton [FP16]  Triton [FP8]
-    0   1024.0      35.979764     36.012772
-    1   2048.0      43.980338     43.942420
-    2   4096.0      49.116711     48.982018
-    3   8192.0      52.099112     51.964973
-    4  16384.0      53.229056     53.253343
+    0   1024.0      34.743658     34.644979
+    1   2048.0      42.148744     42.157494
+    2   4096.0      46.937482     47.131976
+    3   8192.0      49.819134     49.692785
+    4  16384.0      51.216412     51.310395
 
 
 
@@ -139,7 +139,7 @@ Extra Credits:
 
     import pytest
     import torch
-    import sys
+    import os
 
     import triton
     import triton.language as tl
@@ -225,18 +225,18 @@ Extra Credits:
     if is_hip():
         NUM_STAGES_OPTIONS = [1]
     elif supports_host_descriptor():
-        NUM_STAGES_OPTIONS = [2, 3, 4, 5]
+        NUM_STAGES_OPTIONS = [2, 3, 4]
     else:
-        NUM_STAGES_OPTIONS = [2, 3, 4, 7]
+        NUM_STAGES_OPTIONS = [2, 3, 4]
 
     configs = [
         triton.Config({'BLOCK_M': BM, 'BLOCK_N': BN}, num_stages=s, num_warps=w, pre_hook=_host_descriptor_pre_hook) \
-        for BM in [64, 128, 256]\
+        for BM in [64, 128]\
         for BN in [64, 128]\
         for s in NUM_STAGES_OPTIONS \
         for w in [4, 8]\
     ]
-    if "pytest" in sys.modules:
+    if "PYTEST_VERSION" in os.environ:
         # Use a single config in testing for reproducibility
         configs = [
             triton.Config(dict(BLOCK_M=64, BLOCK_N=64), num_stages=4, num_warps=4, pre_hook=_host_descriptor_pre_hook),
@@ -626,6 +626,8 @@ Extra Credits:
                 return (triton.cdiv(q.shape[2], META["BLOCK_M"]), q.shape[0] * q.shape[1], 1)
 
             ctx.grid = grid
+            if is_cuda() and warp_specialize:
+                extra_kern_args["maxnreg"] = 80
             _attn_fwd[grid](
                 sm_scale, M,  #
                 q.shape[0], q.shape[1],  #
@@ -823,7 +825,7 @@ Extra Credits:
 
 .. rst-class:: sphx-glr-timing
 
-   **Total running time of the script:** (0 minutes 30.374 seconds)
+   **Total running time of the script:** (2 minutes 39.590 seconds)
 
 
 .. _sphx_glr_download_getting-started_tutorials_06-fused-attention.py:

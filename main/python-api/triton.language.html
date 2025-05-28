@@ -58,6 +58,7 @@
 <li class="toctree-l1 current"><a class="current reference internal" href="#">triton.language</a><ul>
 <li class="toctree-l2"><a class="reference internal" href="#programming-model">Programming Model</a><ul>
 <li class="toctree-l3"><a class="reference internal" href="generated/triton.language.tensor.html">triton.language.tensor</a></li>
+<li class="toctree-l3"><a class="reference internal" href="generated/triton.language.tensor_descriptor.html">triton.language.tensor_descriptor</a></li>
 <li class="toctree-l3"><a class="reference internal" href="generated/triton.language.program_id.html">triton.language.program_id</a></li>
 <li class="toctree-l3"><a class="reference internal" href="generated/triton.language.num_programs.html">triton.language.num_programs</a></li>
 </ul>
@@ -93,6 +94,9 @@
 <li class="toctree-l2"><a class="reference internal" href="#memory-pointer-ops">Memory/Pointer Ops</a><ul>
 <li class="toctree-l3"><a class="reference internal" href="generated/triton.language.load.html">triton.language.load</a></li>
 <li class="toctree-l3"><a class="reference internal" href="generated/triton.language.store.html">triton.language.store</a></li>
+<li class="toctree-l3"><a class="reference internal" href="generated/triton.language.make_tensor_descriptor.html">triton.language.make_tensor_descriptor</a></li>
+<li class="toctree-l3"><a class="reference internal" href="generated/triton.language.load_tensor_descriptor.html">triton.language.load_tensor_descriptor</a></li>
+<li class="toctree-l3"><a class="reference internal" href="generated/triton.language.store_tensor_descriptor.html">triton.language.store_tensor_descriptor</a></li>
 <li class="toctree-l3"><a class="reference internal" href="generated/triton.language.make_block_ptr.html">triton.language.make_block_ptr</a></li>
 <li class="toctree-l3"><a class="reference internal" href="generated/triton.language.advance.html">triton.language.advance</a></li>
 </ul>
@@ -239,10 +243,13 @@
 <tr class="row-odd"><td><p><a class="reference internal" href="generated/triton.language.tensor.html#triton.language.tensor" title="triton.language.tensor"><code class="xref py py-obj docutils literal notranslate"><span class="pre">tensor</span></code></a></p></td>
 <td><p>Represents an N-dimensional array of values or pointers.</p></td>
 </tr>
-<tr class="row-even"><td><p><a class="reference internal" href="generated/triton.language.program_id.html#triton.language.program_id" title="triton.language.program_id"><code class="xref py py-obj docutils literal notranslate"><span class="pre">program_id</span></code></a></p></td>
+<tr class="row-even"><td><p><a class="reference internal" href="generated/triton.language.tensor_descriptor.html#triton.language.tensor_descriptor" title="triton.language.tensor_descriptor"><code class="xref py py-obj docutils literal notranslate"><span class="pre">tensor_descriptor</span></code></a></p></td>
+<td><p>A descriptor representing a tensor in global memory.</p></td>
+</tr>
+<tr class="row-odd"><td><p><a class="reference internal" href="generated/triton.language.program_id.html#triton.language.program_id" title="triton.language.program_id"><code class="xref py py-obj docutils literal notranslate"><span class="pre">program_id</span></code></a></p></td>
 <td><p>Returns the id of the current program instance along the given <code class="code docutils literal notranslate"><span class="pre">axis</span></code>.</p></td>
 </tr>
-<tr class="row-odd"><td><p><a class="reference internal" href="generated/triton.language.num_programs.html#triton.language.num_programs" title="triton.language.num_programs"><code class="xref py py-obj docutils literal notranslate"><span class="pre">num_programs</span></code></a></p></td>
+<tr class="row-even"><td><p><a class="reference internal" href="generated/triton.language.num_programs.html#triton.language.num_programs" title="triton.language.num_programs"><code class="xref py py-obj docutils literal notranslate"><span class="pre">num_programs</span></code></a></p></td>
 <td><p>Returns the number of program instances launched along the given <code class="code docutils literal notranslate"><span class="pre">axis</span></code>.</p></td>
 </tr>
 </tbody>
@@ -336,10 +343,19 @@
 <tr class="row-even"><td><p><a class="reference internal" href="generated/triton.language.store.html#triton.language.store" title="triton.language.store"><code class="xref py py-obj docutils literal notranslate"><span class="pre">store</span></code></a></p></td>
 <td><p>Store a tensor of data into memory locations defined by <cite>pointer</cite>.</p></td>
 </tr>
-<tr class="row-odd"><td><p><a class="reference internal" href="generated/triton.language.make_block_ptr.html#triton.language.make_block_ptr" title="triton.language.make_block_ptr"><code class="xref py py-obj docutils literal notranslate"><span class="pre">make_block_ptr</span></code></a></p></td>
+<tr class="row-odd"><td><p><a class="reference internal" href="generated/triton.language.make_tensor_descriptor.html#triton.language.make_tensor_descriptor" title="triton.language.make_tensor_descriptor"><code class="xref py py-obj docutils literal notranslate"><span class="pre">make_tensor_descriptor</span></code></a></p></td>
+<td><p>Make a tensor descriptor object</p></td>
+</tr>
+<tr class="row-even"><td><p><a class="reference internal" href="generated/triton.language.load_tensor_descriptor.html#triton.language.load_tensor_descriptor" title="triton.language.load_tensor_descriptor"><code class="xref py py-obj docutils literal notranslate"><span class="pre">load_tensor_descriptor</span></code></a></p></td>
+<td><p>Load a block of data from a tensor descriptor.</p></td>
+</tr>
+<tr class="row-odd"><td><p><a class="reference internal" href="generated/triton.language.store_tensor_descriptor.html#triton.language.store_tensor_descriptor" title="triton.language.store_tensor_descriptor"><code class="xref py py-obj docutils literal notranslate"><span class="pre">store_tensor_descriptor</span></code></a></p></td>
+<td><p>Store a block of data to a tensor descriptor.</p></td>
+</tr>
+<tr class="row-even"><td><p><a class="reference internal" href="generated/triton.language.make_block_ptr.html#triton.language.make_block_ptr" title="triton.language.make_block_ptr"><code class="xref py py-obj docutils literal notranslate"><span class="pre">make_block_ptr</span></code></a></p></td>
 <td><p>Returns a pointer to a block in a parent tensor</p></td>
 </tr>
-<tr class="row-even"><td><p><a class="reference internal" href="generated/triton.language.advance.html#triton.language.advance" title="triton.language.advance"><code class="xref py py-obj docutils literal notranslate"><span class="pre">advance</span></code></a></p></td>
+<tr class="row-odd"><td><p><a class="reference internal" href="generated/triton.language.advance.html#triton.language.advance" title="triton.language.advance"><code class="xref py py-obj docutils literal notranslate"><span class="pre">advance</span></code></a></p></td>
 <td><p>Advance a block pointer</p></td>
 </tr>
 </tbody>

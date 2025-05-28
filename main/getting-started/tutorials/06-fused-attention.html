@@ -130,46 +130,46 @@ to download the full example code.</p>
 </ul>
 <div class="sphx-glr-script-out highlight-none notranslate"><div class="highlight"><pre><span></span>fused-attention-batch4-head32-d64-fwd-causal=True-warp_specialize=True:
      N_CTX  Triton [FP16]  Triton [FP8]
-0   1024.0      45.710467     59.644887
-1   2048.0      51.756497     68.585852
-2   4096.0      55.151211     73.196627
-3   8192.0      56.949137     76.447390
-4  16384.0      57.782419     77.568491
+0   1024.0      28.906451     42.824974
+1   2048.0      33.248545     50.101890
+2   4096.0      35.516731     53.623307
+3   8192.0      36.426016     55.795607
+4  16384.0      36.436936     55.744044
 fused-attention-batch4-head32-d64-fwd-causal=True-warp_specialize=False:
      N_CTX  Triton [FP16]  Triton [FP8]
-0   1024.0      45.725319     59.608532
-1   2048.0      51.732677     69.017556
-2   4096.0      55.244402     73.349434
-3   8192.0      57.210090     75.932006
-4  16384.0      58.117062     77.455184
+0   1024.0      62.384758     66.295853
+1   2048.0      76.393984     83.082743
+2   4096.0      84.921981     92.687671
+3   8192.0      89.086082     97.633974
+4  16384.0      91.624993     99.881797
 fused-attention-batch4-head32-d64-fwd-causal=False-warp_specialize=True:
      N_CTX  Triton [FP16]  Triton [FP8]
-0   1024.0      56.295722     77.943482
-1   2048.0      57.762455     79.039425
-2   4096.0      58.306101     80.487804
-3   8192.0      58.902140     80.604189
-4  16384.0      59.131639     79.894478
+0   1024.0      33.388681     51.083667
+1   2048.0      34.863716     54.331829
+2   4096.0      35.761593     55.935123
+3   8192.0      36.001402     55.668905
+4  16384.0      35.853242     54.299658
 fused-attention-batch4-head32-d64-fwd-causal=False-warp_specialize=False:
      N_CTX  Triton [FP16]  Triton [FP8]
-0   1024.0      56.283889     77.927481
-1   2048.0      57.744613     79.136931
-2   4096.0      58.198651     80.129987
-3   8192.0      59.099903     81.118745
-4  16384.0      59.160550     79.602767
+0   1024.0      85.698656     92.227548
+1   2048.0      93.771476     99.941031
+2   4096.0      95.737313    102.086122
+3   8192.0      96.261946    103.371135
+4  16384.0      94.975175    103.894994
 fused-attention-batch4-head32-d64-bwd-causal=True-warp_specialize=True:
      N_CTX  Triton [FP16]  Triton [FP8]
-0   1024.0      36.194708     35.982575
-1   2048.0      43.930435     44.187476
-2   4096.0      48.914694     48.903491
-3   8192.0      51.879607     51.838530
-4  16384.0      53.377237     53.333755
+0   1024.0      34.678207     34.695979
+1   2048.0      42.228079     42.050909
+2   4096.0      46.859368     47.183340
+3   8192.0      49.891358     49.929406
+4  16384.0      51.302548     51.263116
 fused-attention-batch4-head32-d64-bwd-causal=True-warp_specialize=False:
      N_CTX  Triton [FP16]  Triton [FP8]
-0   1024.0      35.979764     36.012772
-1   2048.0      43.980338     43.942420
-2   4096.0      49.116711     48.982018
-3   8192.0      52.099112     51.964973
-4  16384.0      53.229056     53.253343
+0   1024.0      34.743658     34.644979
+1   2048.0      42.148744     42.157494
+2   4096.0      46.937482     47.131976
+3   8192.0      49.819134     49.692785
+4  16384.0      51.216412     51.310395
 </pre></div>
 </div>
 <div class="line-block">
@@ -177,7 +177,7 @@ fused-attention-batch4-head32-d64-bwd-causal=True-warp_specialize=False:
 </div>
 <div class="highlight-Python notranslate"><div class="highlight"><pre><span></span><span class="kn">import</span><span class="w"> </span><span class="nn">pytest</span>
 <span class="kn">import</span><span class="w"> </span><span class="nn">torch</span>
-<span class="kn">import</span><span class="w"> </span><span class="nn">sys</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">os</span>
 
 <span class="kn">import</span><span class="w"> </span><span class="nn">triton</span>
 <span class="kn">import</span><span class="w"> </span><span class="nn">triton.language</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">tl</span>
@@ -263,18 +263,18 @@ fused-attention-batch4-head32-d64-bwd-causal=True-warp_specialize=False:
 <span class="k">if</span> <span class="n">is_hip</span><span class="p">():</span>
     <span class="n">NUM_STAGES_OPTIONS</span> <span class="o">=</span> <span class="p">[</span><span class="mi">1</span><span class="p">]</span>
 <span class="k">elif</span> <span class="n">supports_host_descriptor</span><span class="p">():</span>
-    <span class="n">NUM_STAGES_OPTIONS</span> <span class="o">=</span> <span class="p">[</span><span class="mi">2</span><span class="p">,</span> <span class="mi">3</span><span class="p">,</span> <span class="mi">4</span><span class="p">,</span> <span class="mi">5</span><span class="p">]</span>
+    <span class="n">NUM_STAGES_OPTIONS</span> <span class="o">=</span> <span class="p">[</span><span class="mi">2</span><span class="p">,</span> <span class="mi">3</span><span class="p">,</span> <span class="mi">4</span><span class="p">]</span>
 <span class="k">else</span><span class="p">:</span>
-    <span class="n">NUM_STAGES_OPTIONS</span> <span class="o">=</span> <span class="p">[</span><span class="mi">2</span><span class="p">,</span> <span class="mi">3</span><span class="p">,</span> <span class="mi">4</span><span class="p">,</span> <span class="mi">7</span><span class="p">]</span>
+    <span class="n">NUM_STAGES_OPTIONS</span> <span class="o">=</span> <span class="p">[</span><span class="mi">2</span><span class="p">,</span> <span class="mi">3</span><span class="p">,</span> <span class="mi">4</span><span class="p">]</span>
 
 <span class="n">configs</span> <span class="o">=</span> <span class="p">[</span>
     <span class="n">triton</span><span class="o">.</span><span class="n">Config</span><span class="p">({</span><span class="s1">&#39;BLOCK_M&#39;</span><span class="p">:</span> <span class="n">BM</span><span class="p">,</span> <span class="s1">&#39;BLOCK_N&#39;</span><span class="p">:</span> <span class="n">BN</span><span class="p">},</span> <span class="n">num_stages</span><span class="o">=</span><span class="n">s</span><span class="p">,</span> <span class="n">num_warps</span><span class="o">=</span><span class="n">w</span><span class="p">,</span> <span class="n">pre_hook</span><span class="o">=</span><span class="n">_host_descriptor_pre_hook</span><span class="p">)</span> \
-    <span class="k">for</span> <span class="n">BM</span> <span class="ow">in</span> <span class="p">[</span><span class="mi">64</span><span class="p">,</span> <span class="mi">128</span><span class="p">,</span> <span class="mi">256</span><span class="p">]</span>\
+    <span class="k">for</span> <span class="n">BM</span> <span class="ow">in</span> <span class="p">[</span><span class="mi">64</span><span class="p">,</span> <span class="mi">128</span><span class="p">]</span>\
     <span class="k">for</span> <span class="n">BN</span> <span class="ow">in</span> <span class="p">[</span><span class="mi">64</span><span class="p">,</span> <span class="mi">128</span><span class="p">]</span>\
     <span class="k">for</span> <span class="n">s</span> <span class="ow">in</span> <span class="n">NUM_STAGES_OPTIONS</span> \
     <span class="k">for</span> <span class="n">w</span> <span class="ow">in</span> <span class="p">[</span><span class="mi">4</span><span class="p">,</span> <span class="mi">8</span><span class="p">]</span>\
 <span class="p">]</span>
-<span class="k">if</span> <span class="s2">&quot;pytest&quot;</span> <span class="ow">in</span> <span class="n">sys</span><span class="o">.</span><span class="n">modules</span><span class="p">:</span>
+<span class="k">if</span> <span class="s2">&quot;PYTEST_VERSION&quot;</span> <span class="ow">in</span> <span class="n">os</span><span class="o">.</span><span class="n">environ</span><span class="p">:</span>
     <span class="c1"># Use a single config in testing for reproducibility</span>
     <span class="n">configs</span> <span class="o">=</span> <span class="p">[</span>
         <span class="n">triton</span><span class="o">.</span><span class="n">Config</span><span class="p">(</span><span class="nb">dict</span><span class="p">(</span><span class="n">BLOCK_M</span><span class="o">=</span><span class="mi">64</span><span class="p">,</span> <span class="n">BLOCK_N</span><span class="o">=</span><span class="mi">64</span><span class="p">),</span> <span class="n">num_stages</span><span class="o">=</span><span class="mi">4</span><span class="p">,</span> <span class="n">num_warps</span><span class="o">=</span><span class="mi">4</span><span class="p">,</span> <span class="n">pre_hook</span><span class="o">=</span><span class="n">_host_descriptor_pre_hook</span><span class="p">),</span>
@@ -664,6 +664,8 @@ fused-attention-batch4-head32-d64-bwd-causal=True-warp_specialize=False:
             <span class="k">return</span> <span class="p">(</span><span class="n">triton</span><span class="o">.</span><span class="n">cdiv</span><span class="p">(</span><span class="n">q</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">2</span><span class="p">],</span> <span class="n">META</span><span class="p">[</span><span class="s2">&quot;BLOCK_M&quot;</span><span class="p">]),</span> <span class="n">q</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span> <span class="o">*</span> <span class="n">q</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">1</span><span class="p">],</span> <span class="mi">1</span><span class="p">)</span>
 
         <span class="n">ctx</span><span class="o">.</span><span class="n">grid</span> <span class="o">=</span> <span class="n">grid</span>
+        <span class="k">if</span> <span class="n">is_cuda</span><span class="p">()</span> <span class="ow">and</span> <span class="n">warp_specialize</span><span class="p">:</span>
+            <span class="n">extra_kern_args</span><span class="p">[</span><span class="s2">&quot;maxnreg&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="mi">80</span>
         <span class="n">_attn_fwd</span><span class="p">[</span><span class="n">grid</span><span class="p">](</span>
             <span class="n">sm_scale</span><span class="p">,</span> <span class="n">M</span><span class="p">,</span>  <span class="c1">#</span>
             <span class="n">q</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">0</span><span class="p">],</span> <span class="n">q</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">1</span><span class="p">],</span>  <span class="c1">#</span>
@@ -859,7 +861,7 @@ fused-attention-batch4-head32-d64-bwd-causal=True-warp_specialize=False:
     <span class="n">bench_flash_attention</span><span class="o">.</span><span class="n">run</span><span class="p">(</span><span class="n">save_path</span><span class="o">=</span><span class="s2">&quot;.&quot;</span><span class="p">,</span> <span class="n">print_data</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
 </pre></div>
 </div>
-<p class="sphx-glr-timing"><strong>Total running time of the script:</strong> (0 minutes 30.374 seconds)</p>
+<p class="sphx-glr-timing"><strong>Total running time of the script:</strong> (2 minutes 39.590 seconds)</p>
 <div class="sphx-glr-footer sphx-glr-footer-example docutils container" id="sphx-glr-download-getting-started-tutorials-06-fused-attention-py">
 <div class="sphx-glr-download sphx-glr-download-jupyter docutils container">
 <p><a class="reference download internal" download="" href="../../_downloads/3176accb6c7288b0e45f41d94eebacb9/06-fused-attention.ipynb"><code class="xref download docutils literal notranslate"><span class="pre">Download</span> <span class="pre">Jupyter</span> <span class="pre">notebook:</span> <span class="pre">06-fused-attention.ipynb</span></code></a></p>

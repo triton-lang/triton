@@ -125,7 +125,7 @@ Effects: `MemoryEffects::Effect{MemoryEffects::Read on ::mlir::SideEffects::Defa
 
 | Result | Description |
 | :----: | ----------- |
-| `result` | LLVM structure type |
+| `result` | LLVM structure type or 32-bit signless integer |
 
 
 ### `nvgpu.stmatrix` (triton::nvgpu::StoreMatrixOp)

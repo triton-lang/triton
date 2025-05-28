@@ -153,6 +153,7 @@ def softmax(x):
         # with matrix VALU instructions, and can also be loaded directly from memory. A wave may have up to 512 total
         # VGPRs, 256 of each type. When a wave has fewer than 512 total VGPRs, the number of each type is flexible - it is
         # not required to be equal numbers of both types.
+        NUM_GPRS = NUM_REGS
         if is_cdna():
             NUM_GPRS = NUM_REGS * 2
 
