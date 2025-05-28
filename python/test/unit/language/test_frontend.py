@@ -39,7 +39,7 @@ def run_filecheck(name, module_str, check_template):
         raise ValueError(matcher.stderr.getvalue())
 
 
-def filecheck_test(kernel_fn):
+def run_filecheck_test(kernel_fn):
     assert isinstance(kernel_fn, triton.runtime.JITFunction)
     check_template = inspect.getsource(kernel_fn.fn)
     if check_template is None:
@@ -78,7 +78,7 @@ def test_filecheck_positive():
         # CHECK-NEXT: call @anchor{{.*}}(%c42_i32) : (i32) -> ()
         anchor(scalar)
 
-    filecheck_test(test_kernel)
+    run_filecheck_test(test_kernel)
 
 
 def test_filecheck_negative():
@@ -91,9 +91,17 @@ def test_filecheck_negative():
         anchor(scalar)
 
     try:
-        filecheck_test(test_kernel)
+        run_filecheck_test(test_kernel)
     except ValueError as e:
         assert "Couldn't match \"%c42_i32\"" in str(e), "filecheck doesn't fail"
+
+
+def filecheck_test(fn):
+
+    def test_fn():
+        run_filecheck_test(fn)
+
+    return test_fn
 
 
 # ===-----------------------------------------------------------------------===#
@@ -140,18 +148,15 @@ def pair_value_ctor(first, second, _builder=None):
     return pair_value(first, second)
 
 
+@filecheck_test
+@triton.jit
 def test_assign_attribute():
-
-    @triton.jit
-    def assign_attribute():
-        # CHECK-LABEL: assign_attribute
-        # CHECK: %c11_i32 = arith.constant 11 : i32
-        # CHECK: [[RANGE:%.*]] = tt.make_range {end = 4 : i32, start = 0 : i32}
-        scalar = 11
-        pair = pair_value_ctor(tl.arange(0, 4), scalar)
-        # CHECK: %c42_i32 = arith.constant 42 : i32
-        # CHECK-NEXT: call @"anchor{{.*}}"([[RANGE]], %c42_i32)
-        pair.second = 42
-        anchor(pair)
-
-    filecheck_test(assign_attribute)
+    # CHECK-LABEL: assign_attribute
+    # CHECK: %c11_i32 = arith.constant 11 : i32
+    # CHECK: [[RANGE:%.*]] = tt.make_range {end = 4 : i32, start = 0 : i32}
+    scalar = 11
+    pair = pair_value_ctor(tl.arange(0, 4), scalar)
+    # CHECK: %c42_i32 = arith.constant 42 : i32
+    # CHECK-NEXT: call @"anchor{{.*}}"([[RANGE]], %c42_i32)
+    pair.second = 42
+    anchor(pair)
