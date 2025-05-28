@@ -87,9 +87,6 @@ SmallVector<int32_t> computeSegment(const SmallVector<int32_t> &bankSrc,
     segment.resize(lenSegment);
     return segment;
   }
-  printBasis(bankSrc, "bankSrc");
-  printBasis(bankDst, "bankDst");
-  printBasis(segment, "segment");
 
   // A and B are the difference sets
   SmallVector<int32_t> A, B;
@@ -213,17 +210,9 @@ LinearLayout optimalSwizzling(const LinearLayout &src, const LinearLayout &dst,
   // Bases to cover all the tensor
   const int32_t lenSbasis = rank - lenBbasis - vbasis.size();
 
-  llvm::errs() << "MaxVect: " << maxVecBases << " == " << vbasis.size() << "\n";
-  printBasis(regSrc, "regSrc");
-  printBasis(regDst, "regDst");
-  printBasis(laneSrc, "laneSrc");
-  printBasis(laneDst, "laneDst");
-  printBasis(vbasis, "vbasis");
-
   auto bankSrc = llvm::to_vector(llvm::concat<int32_t>(vbasis, laneSrc));
   auto bankDst = llvm::to_vector(llvm::concat<int32_t>(vbasis, laneDst));
   auto sbasis = computeSegment(bankSrc, bankDst, rank, lenSbasis);
-  printBasis(sbasis, "sbasis");
 
   // The bank is the complement of the union of the vector and the start of the
   // segments
@@ -231,7 +220,6 @@ LinearLayout optimalSwizzling(const LinearLayout &src, const LinearLayout &dst,
   SmallVector<int32_t> bbasis = complementBasis(unionBasis, rank);
   assert(bbasis.size() == lenBbasis + (lenSbasis - sbasis.size()) &&
          "bbasis size mismatch");
-  printBasis(bbasis, "bbasis");
 
   // Build the 1D result layout
   StringAttr vecAttr = StringAttr::get(ctx, "vector");
