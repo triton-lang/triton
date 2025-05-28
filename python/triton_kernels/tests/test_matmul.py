@@ -244,15 +244,15 @@ def test_op(m, n, k, split_k, do_gather, do_scatter, fused_scatter, has_y_gammas
         if "float8" in act_dtype_str and "mx" in weight_dtype_str and torch.cuda.get_device_capability()[0] < 10:
             pytest.skip("float8 x mx not supported with cuda capability < 10")
     elif is_hip():
-        if "float8_e4m3fnuz" in (weight_dtype_str, act_dtype_str) and not is_hip_cdna3():
-            pytest.skip("float8_e4m3fnuz only tested on CDNA3")
         if "float8" in act_dtype_str and "mx" in weight_dtype_str and not is_hip_cdna4():
             pytest.skip("float8 x mx only supported on CDNA4")
         if "float8" in act_dtype_str and "mxfloat8" in weight_dtype_str:
-            pytest.skip("float8 x mxfloat8 not supported on AMD GPU yet")
-
+            pytest.skip("NYI: float8 x mxfloat8 not tested on AMD GPU")
         if is_persistent:
-            pytest.skip("Persistent kernel not supported on AMD GPU yet")
+            pytest.skip("NYI: Persistent kernel not supported on AMD GPU")
+
+    if "float8_e4m3fnuz" in (weight_dtype_str, act_dtype_str) and not is_hip_cdna3():
+        pytest.skip("float8_e4m3fnuz only tested on AMD CDNA3 Platform")
 
     if fused_scatter and split_k > 1:
         pytest.skip("fused scatter scratchpad not supported with split_k")
