@@ -41,11 +41,7 @@ def run_filecheck(name, module_str, check_template):
         raise ValueError(matcher.stderr.getvalue())
 
 
-def run_filecheck_test(kernel_fn):
-    assert isinstance(kernel_fn, triton.runtime.JITFunction)
-    check_template = inspect.getsource(kernel_fn.fn)
-    if check_template is None:
-        raise ValueError("kernel function must have a docstring with FileCheck template")
+def run_parser(kernel_fn):
     sigkeys = [x.name for x in kernel_fn.params]
     sigvals = [f"arg{i}" for i in range(len(sigkeys))]
     signature = {k: v for (k, v) in zip(sigkeys, sigvals)}
@@ -59,7 +55,15 @@ def run_filecheck_test(kernel_fn):
     options = stub_backend.parse_options(dict(**extra_options))
     codegen_fns = stub_backend.get_codegen_implementation(options)
     module_map = stub_backend.get_module_map()
-    mlir_module = src.make_ir(options, codegen_fns, module_map, context)
+    return src.make_ir(options, codegen_fns, module_map, context)
+
+
+def run_filecheck_test(kernel_fn):
+    assert isinstance(kernel_fn, triton.runtime.JITFunction)
+    check_template = inspect.getsource(kernel_fn.fn)
+    if check_template is None:
+        raise ValueError("kernel function must have a docstring with FileCheck template")
+    mlir_module = run_parser(kernel_fn)
 
     run_filecheck("placeholder", str(mlir_module), check_template)
 
@@ -142,6 +146,17 @@ class pair_value(base_value):
         self.first._flatten_ir(handles)
         self.second._flatten_ir(handles)
 
+    @triton.jit
+    def get_first(self):
+        return self.first
+
+    def get_second(self, _builder=None):
+        return self.second
+
+    @triton.jit
+    def unpack(self):
+        return self.get_first(), self.get_second()
+
 
 @tl.core.builtin
 def pair_value_ctor(first, second, _builder=None):
@@ -160,3 +175,19 @@ def test_assign_attribute():
     # CHECK-NEXT: call @"anchor{{.*}}"([[RANGE]], %c42_i32)
     pair.second = 42
     anchor(pair)
+
+
+@filecheck_test
+@triton.jit
+def test_jit_method():
+    # CHECK-LABEL: test_jit_method
+    # CHECK: %c11_i32 = arith.constant 11 : i32
+    # CHECK: [[RANGE:%.*]] = tt.make_range {end = 4 : i32, start = 0 : i32}
+    scalar = 11
+    # CHECK: [[V:%.*]]:2 = tt.call @"unpack{{.*}}"([[RANGE]], %c11_i32)
+    pair = pair_value_ctor(tl.arange(0, 4), scalar)
+    a, b = pair.unpack()
+    # CHECK: call @anchor{{.*}}([[V]]#0)
+    anchor(a)
+    # CHECK: call @anchor{{.*}}([[V]]#1)
+    anchor(b)
