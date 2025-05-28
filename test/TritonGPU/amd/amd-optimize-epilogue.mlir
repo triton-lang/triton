@@ -111,6 +111,7 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 64 : i32}
 }
 
 // -----
+// To validate if  warpsPerCTA is not expected, no linear layout will be created.
 // CHECK-LABEL: store_dword_16x16
 // CHECK-NOT: #linear
 #blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [64, 1], warpsPerCTA = [4, 1], order = [1, 0]}>
