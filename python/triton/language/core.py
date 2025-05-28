@@ -6,6 +6,7 @@ from enum import Enum
 from functools import partial, wraps
 import typing
 from typing import Union, Callable, List, Sequence, TypeVar, Optional, Tuple
+from dataclasses import dataclass
 import builtins
 from .. import knobs
 from ..runtime.jit import jit
@@ -1485,6 +1486,83 @@ class tensor_descriptor(tensor_descriptor_base):
         handles.append(self.handle)
         handles.extend(s.handle for s in self.shape)
         handles.extend(s.handle for s in self.strides)
+
+
+# -----------------------
+# aggregate
+# -----------------------
+
+
+@dataclass(frozen=True)
+class aggregate_type(base_type):
+    """A generic base type for all Triton aggregate types.
+
+    This class contains a reference to the original user-defined Python class
+    and a list of class fields with their Triton types.
+    """
+
+    base_cls: type
+    fields: List[Tuple[str, base_type]]
+
+    def _unflatten_ir(self, handles: List[ir.value], cursor: int) -> Tuple[ir.value, int]:
+        instance = self.base_cls._get_instance()
+        for name, ty in self.fields:
+            value, cursor = ty._unflatten_ir(handles, cursor)
+            setattr(instance, name, value)
+        return instance, cursor
+
+    def _flatten_ir_types(self, builder: ir.builder, out: List[ir.type]) -> None:
+        for name, ty in self.fields:
+            ty._flatten_ir_types(builder, out)
+
+    def mangle(self) -> str:
+        name = f"{self.base_cls.__module__}.{self.base_cls.__qualname__}"
+        fields = [ty.mangle() for (name, ty) in self.fields]
+        return f"{name}<{', '.join(fields)}>"
+
+
+def aggregate(cls):
+
+    # Define the wrapped Triton value type.
+    class aggregate_value(base_value):
+        __name__ = cls.__name__
+        __module__ = cls.__module__
+        __qualname__ = cls.__qualname__
+
+        @classmethod
+        def _get_instance(this_cls):
+            return super().__new__(this_cls)
+
+        def __new__(this_cls, *args, **kwargs):
+            # Call into the user-defined constructor.
+            instance = aggregate_value._get_instance()
+            cls.__init__(instance, *args, **kwargs)
+
+            # Require that the user-defined constructor initialized all fields.
+            for name in cls.__annotations__.keys():
+                if not hasattr(instance, name):
+                    raise AttributeError(f"constructor for {cls.__name__} did not initialize attribute '{name}'")
+
+            return instance
+
+        # Only allow setting attributes defined in the class annotations.
+        def __setattr__(self, name, value):
+            if name not in cls.__annotations__:
+                raise AttributeError(f"{cls.__name__} has no attribute '{name}'")
+            if not isinstance(value, cls.__annotations__[name]):
+                raise TypeError(f"Expected {cls.__annotations__[name]} for attribute '{name}', got {type(value)}")
+            super().__setattr__(name, value)
+
+        def _flatten_ir(self, handles: List[ir.value]) -> None:
+            for name in cls.__annotations__.keys():
+                getattr(self, name)._flatten_ir(handles)
+
+        @property
+        def type(self):
+            return aggregate_type(aggregate_value,
+                                  [(name, getattr(self, name).type) for name in cls.__annotations__.keys()])
+
+    return aggregate_value
 
 
 # -----------------------
