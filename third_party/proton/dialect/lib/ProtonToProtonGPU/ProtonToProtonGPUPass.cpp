@@ -52,8 +52,7 @@ int getAllocSharedMemSize(int maxSharedMemSize, int sharedMemUsed,
                           int segmentNum) {
   const int bytesPerEntry = gpu::getBytesPerClockEntry();
   const int wordsPerEntry = bytesPerEntry / 4; // 1 word = 4 bytes
-  const int circularHeaderSize =
-      gpu::getCircularHeaderSize(); // byte size
+  const int circularHeaderSize = gpu::getCircularHeaderSize(); // byte size
 
   int segmentByteSizeShared =
       llvm::NextPowerOf2(
@@ -195,8 +194,7 @@ public:
     //  +-----------------------------------------------+
     //  | profiled data (allocBufferSize bytes)         |
     //  +-----------------------------------------------+
-    const int circularHeaderSize =
-        gpu::getCircularHeaderSize(); // byte size
+    const int circularHeaderSize = gpu::getCircularHeaderSize(); // byte size
 
     int allocProfileScratchSize =
         llvm::alignTo(allocBufferSize + circularHeaderSize + numWarps * 4,
@@ -253,7 +251,8 @@ public:
 
     mlir::RewritePatternSet patterns(context);
     ModuleScopeIdAllocation &scopeInfo = getAnalysis<ModuleScopeIdAllocation>();
-    patterns.add<RecordOpCircularRewrite>(context, segment, metricType, scopeInfo);
+    patterns.add<RecordOpCircularRewrite>(context, segment, metricType,
+                                          scopeInfo);
     if (applyPatternsGreedily(mod, std::move(patterns)).failed())
       return failure();
 

@@ -43,7 +43,8 @@ struct CircularStoreOpConversion
     const int bytesPerEntry = proton::gpu::getBytesPerClockEntry();
     const int wordsPerEntry = bytesPerEntry / 4; // 1 word = 4 bytes
 
-    auto segmentObj = LLVM::SegmentObject::fromStruct(loc, adaptor.getSegment(), rewriter);
+    auto segmentObj =
+        LLVM::SegmentObject::fromStruct(loc, adaptor.getSegment(), rewriter);
     Value indexPtr = segmentObj.indexPtr;
     Value bufferBase = segmentObj.base;
     Value segmentBase = segmentObj.segmentBase;

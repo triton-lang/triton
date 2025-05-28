@@ -64,8 +64,6 @@ LogicalResult SegmentAllocOp::verify() {
   return success();
 }
 
-
-
 } // namespace gpu
 } // namespace proton
 } // namespace triton

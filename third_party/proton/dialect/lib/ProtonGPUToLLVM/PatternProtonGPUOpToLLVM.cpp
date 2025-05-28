@@ -43,7 +43,6 @@ Value getLinearId(Location loc, ConversionPatternRewriter &rewriter) {
   return linearId;
 }
 
-
 struct ReadCounterOpConversion
     : public ConvertOpToLLVMPattern<mlir::triton::proton::gpu::ReadCounterOp> {
   explicit ReadCounterOpConversion(
@@ -79,7 +78,8 @@ struct FinalizeOpConversion
   matchAndRewrite(mlir::triton::proton::gpu::FinalizeOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     auto loc = op.getLoc();
-    auto segmentObj = LLVM::SegmentObject::fromStruct(loc, adaptor.getSegment(), rewriter);
+    auto segmentObj =
+        LLVM::SegmentObject::fromStruct(loc, adaptor.getSegment(), rewriter);
     Value scratchPtr = adaptor.getScratchPtr();
 
     auto mod = op.getOperation()->getParentOfType<ModuleOp>();
@@ -128,7 +128,8 @@ struct FinalizeOpConversion
     Block *ifBlock = rewriter.splitBlock(prevBlock, op->getIterator());
     rewriter.setInsertionPointToStart(ifBlock);
 
-    auto bufferBaseType = mlir::cast<LLVM::PointerType>(segmentObj.base.getType());
+    auto bufferBaseType =
+        mlir::cast<LLVM::PointerType>(segmentObj.base.getType());
     auto copyWord = [&](Value bufOffset, Value gmemOffset, Attribute memSpace) {
       // Load the value from buffer
       Value ptr = b.gep(bufferBaseType, i32_ty, segmentObj.base, bufOffset);
@@ -275,7 +276,6 @@ struct SegmentAllocOpConversion
             typeConverter, benefit),
         targetInfo(targetInfo) {}
 
-
   LogicalResult
   matchAndRewrite(mlir::triton::proton::gpu::SegmentAllocOp op,
                   OpAdaptor adaptor,
@@ -312,12 +312,14 @@ struct SegmentAllocOpConversion
     Value segmentBase;
     if (isAllIds) {
       if (granularity == proton::gpu::Granularity::WARP)
-        segmentBase = allWarpSegmentAlloc(b, curWarpId, numWarps, bufferSizeInBytes);
+        segmentBase =
+            allWarpSegmentAlloc(b, curWarpId, numWarps, bufferSizeInBytes);
       else
         llvm::report_fatal_error(
             "segment address specialization not implemented yet");
     } else {
-      segmentBase = defaultSegmentAlloc(b, curWarpId, selectedIds, bufferSizeInBytes);
+      segmentBase =
+          defaultSegmentAlloc(b, curWarpId, selectedIds, bufferSizeInBytes);
     }
 
     auto bufferBase = LLVM::getSharedMemoryBase(
@@ -391,8 +393,8 @@ struct GlobalScratchAllocOpConversion
     // See NOTE: [Additional Function Arguments]
     if (!LLVM::isKernel(funcOp)) {
       // Base for this function
-      auto gmemBase = funcOp.getArgument(
-          funcOp.getNumArguments() + kProfileScratchBufferOffset);
+      auto gmemBase = funcOp.getArgument(funcOp.getNumArguments() +
+                                         kProfileScratchBufferOffset);
 
       Value ptr = b.gep(ptrTy, i8_ty, gmemBase, allocOffset);
       rewriter.replaceOp(op, ptr);
@@ -443,12 +445,11 @@ Type convertProtonGPUMemDescType(triton::gpu::MemDescType type,
 Type convertProtonGPUSegmentType(SegmentType type,
                                  const TargetInfoBase &targetInfo) {
   auto memorySpace = targetInfo.getAddressSpace(type.getMemorySpace());
-  return LLVM::SegmentObject::getStructType(
-      type.getContext(), memorySpace, IndexPtrAddrSpace);
+  return LLVM::SegmentObject::getStructType(type.getContext(), memorySpace,
+                                            IndexPtrAddrSpace);
 }
 
 } // namespace
-
 
 void populateProtonGPUOpPatterns(LLVMTypeConverter &typeConverter,
                                  RewritePatternSet &patterns,

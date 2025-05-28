@@ -1,11 +1,11 @@
 #ifndef PROTONGPU_IR_TYPES_H_
 #define PROTONGPU_IR_TYPES_H_
 
+#include "mlir/IR/Attributes.h"
+#include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/TypeSupport.h"
 #include "mlir/IR/Types.h"
-#include "mlir/IR/Attributes.h"
-#include "mlir/IR/BuiltinAttributes.h"
 
 #include "proton/dialect/include/Dialect/ProtonGPU/IR/OpsEnums.h.inc"
 
