@@ -1536,14 +1536,13 @@ def aggregate(cls):
             # Call into the user-defined constructor.
             instance = this_cls._get_instance()
             if isinstance(cls.__init__, JITFunction):
-                raise ValueError("not implemented")
-            else:
-                extra_kwargs = {}
-                if "_builder" in inspect.signature(cls.__init__).parameters:
-                    extra_kwargs["_builder"] = _builder
-                if "_generator" in inspect.signature(cls.__init__).parameters:
-                    extra_kwargs["_generator"] = _generator
-                cls.__init__(instance, *args, **extra_kwargs, **kwargs)
+                raise ValueError(f"{cls.__name__}.__init__ cannot be a @triton.jit function")
+            extra_kwargs = {}
+            if "_builder" in inspect.signature(cls.__init__).parameters:
+                extra_kwargs["_builder"] = _builder
+            if "_generator" in inspect.signature(cls.__init__).parameters:
+                extra_kwargs["_generator"] = _generator
+            cls.__init__(instance, *args, **extra_kwargs, **kwargs)
 
             # Require that the user-defined constructor initialized all fields.
             for name in cls.__annotations__.keys():
@@ -1559,12 +1558,6 @@ def aggregate(cls):
             if not isinstance(value, cls.__annotations__[name]):
                 raise TypeError(f"Expected {cls.__annotations__[name]} for attribute '{name}', got {type(value)}")
             super().__setattr__(name, value)
-
-        def __getattr__(self, name):
-            try:
-                return super().getattr(self, name)
-            except AttributeError:
-                raise AttributeError(f"{cls.__name__} has no attribute '{name}'")
 
         def _flatten_ir(self, handles: List[ir.value]) -> None:
             for name in cls.__annotations__.keys():
