@@ -1525,19 +1525,25 @@ def aggregate(cls):
 
     # Define the wrapped Triton value type.
     class aggregate_value(base_value):
-        __name__ = cls.__name__
-        __module__ = cls.__module__
-        __qualname__ = cls.__qualname__
+        __triton_builtin__ = True
         __triton_aggregate__ = True
 
         @classmethod
         def _get_instance(this_cls):
             return super().__new__(this_cls)
 
-        def __new__(this_cls, *args, **kwargs):
+        def __new__(this_cls, *args, _builder=None, _generator=None, **kwargs):
             # Call into the user-defined constructor.
-            instance = aggregate_value._get_instance()
-            cls.__init__(instance, *args, **kwargs)
+            instance = this_cls._get_instance()
+            if isinstance(cls.__init__, JITFunction):
+                raise ValueError("not implemented")
+            else:
+                extra_kwargs = {}
+                if "_builder" in inspect.signature(cls.__init__).parameters:
+                    extra_kwargs["_builder"] = _builder
+                if "_generator" in inspect.signature(cls.__init__).parameters:
+                    extra_kwargs["_generator"] = _generator
+                cls.__init__(instance, *args, **extra_kwargs, **kwargs)
 
             # Require that the user-defined constructor initialized all fields.
             for name in cls.__annotations__.keys():
@@ -1571,7 +1577,12 @@ def aggregate(cls):
 
     for (name, member) in inspect.getmembers(cls):
         if inspect.isfunction(member) or inspect.ismethod(member) or isinstance(member, JITFunction):
-            setattr(aggregate_value, name, member)
+            if name != "__init__":
+                setattr(aggregate_value, name, member)
+
+    aggregate_value.__name__ = cls.__name__
+    aggregate_value.__module__ = cls.__module__
+    aggregate_value.__qualname__ = cls.__qualname__
 
     return aggregate_value
 

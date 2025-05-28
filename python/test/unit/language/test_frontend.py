@@ -160,3 +160,29 @@ def test_jit_method():
     anchor(a)
     # CHECK: call @anchor{{.*}}([[V]]#1)
     anchor(b)
+
+
+@tl.aggregate
+class TypeWithBuiltinInitializer:
+    value: tl.tensor
+
+    def __init__(self, _builder=None):
+        self.value = tl.arange(0, 4, _builder=_builder)
+
+
+@tl.aggregate
+class TypeWithJITInitializer:
+    value: tl.tensor
+
+    @triton.jit
+    def __init__(self):
+        self.value = tl.arange(0, 4)
+
+
+@triton.jit
+def test_aggregate_initializers():
+    value = TypeWithBuiltinInitializer()
+    anchor(value)
+
+
+print(run_parser(test_aggregate_initializers))
