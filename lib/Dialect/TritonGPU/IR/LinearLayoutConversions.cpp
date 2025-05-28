@@ -1516,7 +1516,8 @@ chooseMfmaLikeStoreLayout(RankedTensorType valType) {
   bool isMfma16 = mfmaLayout.getMDim() == 16 && mfmaLayout.getNDim() == 16;
 
   auto valShape = valType.getShape();
-  bool validForMfma16 = isMfma16 && valShape.back() >= 16 * 2 && mfmaLayout.getWarpsPerCTA().back() == 1;
+  bool validForMfma16 = isMfma16 && valShape.back() >= 16 * 2 &&
+                        mfmaLayout.getWarpsPerCTA().back() == 1;
   Type elemType = valType.getElementType();
   if (!(valType.getRank() == 2 && (elemType.isF16() || elemType.isBF16()) &&
         mfmaLayout.getVersionMajor() == 4 && mfmaLayout.getIsTransposed() &&
@@ -1572,10 +1573,9 @@ chooseMfmaLikeStoreLayout(RankedTensorType valType) {
             |(15, 12) ... (15, 15)| (15, 12) ... (15, 15)  |
             ------------------------------------------------
 
-            To pack 8 elements with fp16 type we need to put the elements per row are
-            contiuous, so the expetecd layout is:
-                              N/register  
-  M/lane    ------------------------------------------------
+            To pack 8 elements with fp16 type we need to put the elements per
+  row are contiuous, so the expetecd layout is: N/register M/lane
+  ------------------------------------------------
             |(0,  0) ...  (0,  3) | (0,  4)  ...  (0,  7)  |
             | Tile-0: BLK0 and BLK1                        |
             |(15, 0) ...  (15, 3)  (15,  3) ...  (15, 7)   |
@@ -1596,7 +1596,7 @@ chooseMfmaLikeStoreLayout(RankedTensorType valType) {
             This would mean exchange the 2nd and 4st basis vector from an
             identity linear layout on tensor elements, for the NDim.
   */
-  auto destLane = isMfma32 ? 3: 4;
+  auto destLane = isMfma32 ? 3 : 4;
   std::vector<std::vector<int32_t>> dimNBases(mfmaLL.getOutDimSizeLog2(dimN));
   std::generate(dimNBases.begin(), dimNBases.end(),
                 [i = 0]() mutable { return std::vector<int32_t>{1 << i++}; });
