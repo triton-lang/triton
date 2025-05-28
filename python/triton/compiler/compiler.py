@@ -55,6 +55,7 @@ class ASTSource:
     def __init__(self, fn, signature, constexprs=None, attrs=None) -> None:
         self.fn = fn
         self.ext = "ttir"
+        self.run_ext_passes = True
         self.name = fn.__name__
         self.signature = signature
         self.constants = dict()
@@ -92,6 +93,7 @@ class IRSource:
         self.path = path
         path = Path(path)
         self.ext = path.suffix[1:]
+        self.run_ext_passes = False
         self.src = path.read_text()
         ir.load_dialects(context)
         backend.load_dialects(context)
@@ -321,7 +323,7 @@ def compile(src, target=None, options=None):
     backend.add_stages(stages, options)
     first_stage = list(stages.keys()).index(src.ext)
     # when the source is an IR file, don't apply the passes related to this stage. This makes it easier to write IR level tests.
-    if ir_source:
+    if not src.run_ext_passes:
         first_stage += 1
 
     # For IRSource, we have already grabbed the context + called both
