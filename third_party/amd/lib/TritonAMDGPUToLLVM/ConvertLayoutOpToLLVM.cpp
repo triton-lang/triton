@@ -249,8 +249,6 @@ public:
                                     : "llvm.amdgcn.permlane16.swap";
     // Convert MFMA layout to a MFMA-like linear layout where each thread
     // holds 8 consecutive elements
-    auto intrinsicName = mDim == 32 ? "llvm.amdgcn.permlane32.swap"
-                                    : "llvm.amdgcn.permlane16.swap";
     for (size_t idx = 0; idx < inVals.size(); idx += 8) {
       SmallVector<Value, 4> inVecs;
       for (size_t vIdx = 0; vIdx < 4; vIdx++) {
