@@ -1523,9 +1523,8 @@ chooseMfmaLikeStoreLayout(RankedTensorType valType) {
 
   Type elemType = valType.getElementType();
   if (!(valType.getRank() == 2 && (elemType.isF16() || elemType.isBF16()) &&
-            mfmaLayout.getVersionMajor() == 4 && mfmaLayout.getIsTransposed() &&
-            isMfma32 ||
-        validForMfma16))
+        mfmaLayout.getVersionMajor() == 4 && mfmaLayout.getIsTransposed() &&
+        (isMfma32 || validForMfma16)))
     return {};
 
   LinearLayout mfmaLL = mfmaLayout.toLinearLayout(valShape);
@@ -1537,7 +1536,8 @@ chooseMfmaLikeStoreLayout(RankedTensorType valType) {
   swapLL *= LinearLayout::identity1D(valShape[0], dimM, dimM);
   /*
       In transposed mfma32 layout,
-      1) register is the N or column dimension and lane is the row dimension;
+      1) register is the N or column dimension and lane is the M or row
+  dimension;
 
       2) the pair, e.g.(0, 0) is for the indices in the tensor;
             register/N
