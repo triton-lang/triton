@@ -9,7 +9,7 @@ from typing import Union, Callable, List, Sequence, TypeVar, Optional, Tuple
 from dataclasses import dataclass
 import builtins
 from .. import knobs
-from ..runtime.jit import jit
+from ..runtime.jit import jit, JITFunction
 import inspect
 
 from .._C.libtriton import ir
@@ -1528,6 +1528,7 @@ def aggregate(cls):
         __name__ = cls.__name__
         __module__ = cls.__module__
         __qualname__ = cls.__qualname__
+        __triton_aggregate__ = True
 
         @classmethod
         def _get_instance(this_cls):
@@ -1553,6 +1554,12 @@ def aggregate(cls):
                 raise TypeError(f"Expected {cls.__annotations__[name]} for attribute '{name}', got {type(value)}")
             super().__setattr__(name, value)
 
+        def __getattr__(self, name):
+            try:
+                return super().getattr(self, name)
+            except AttributeError:
+                raise AttributeError(f"{cls.__name__} has no attribute '{name}'")
+
         def _flatten_ir(self, handles: List[ir.value]) -> None:
             for name in cls.__annotations__.keys():
                 getattr(self, name)._flatten_ir(handles)
@@ -1561,6 +1568,10 @@ def aggregate(cls):
         def type(self):
             return aggregate_type(aggregate_value,
                                   [(name, getattr(self, name).type) for name in cls.__annotations__.keys()])
+
+    for (name, member) in inspect.getmembers(cls):
+        if inspect.isfunction(member) or inspect.ismethod(member) or isinstance(member, JITFunction):
+            setattr(aggregate_value, name, member)
 
     return aggregate_value
 

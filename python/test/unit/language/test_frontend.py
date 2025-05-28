@@ -113,38 +113,14 @@ def filecheck_test(fn):
 # ===-----------------------------------------------------------------------===#
 
 
-class pair_type(base_type):
-
-    def __init__(self, first_type, second_type):
-        self.first_type = first_type
-        self.second_type = second_type
-
-    def __eq__(self, other) -> bool:
-        return self.first_type == other.first_type and self.second_type == other.second_type
-
-    def _unflatten_ir(self, handles: List[ir.value], cursor: int) -> Tuple[ir.value, int]:
-        first, cursor = self.first_type._unflatten_ir(handles, cursor)
-        second, cursor = self.second_type._unflatten_ir(handles, cursor)
-        return pair_value(first, second), cursor
-
-    def _flatten_ir_types(self, builder: ir.builder, out: List[ir.type]) -> None:
-        self.first_type._flatten_ir_types(builder, out)
-        self.second_type._flatten_ir_types(builder, out)
-
-    def mangle(self) -> str:
-        return f"pair<{self.first_type.mangle()}, {self.second_type.mangle()}>"
-
-
-class pair_value(base_value):
+@tl.aggregate
+class Pair:
+    first: tl.tensor
+    second: tl.tensor
 
     def __init__(self, first, second):
         self.first = first
         self.second = second
-        self.type = pair_type(first.type, second.type)
-
-    def _flatten_ir(self, handles: List[ir.value]) -> None:
-        self.first._flatten_ir(handles)
-        self.second._flatten_ir(handles)
 
     @triton.jit
     def get_first(self):
@@ -158,11 +134,6 @@ class pair_value(base_value):
         return self.get_first(), self.get_second()
 
 
-@tl.core.builtin
-def pair_value_ctor(first, second, _builder=None):
-    return pair_value(first, second)
-
-
 @filecheck_test
 @triton.jit
 def test_assign_attribute():
@@ -170,7 +141,7 @@ def test_assign_attribute():
     # CHECK: %c11_i32 = arith.constant 11 : i32
     # CHECK: [[RANGE:%.*]] = tt.make_range {end = 4 : i32, start = 0 : i32}
     scalar = 11
-    pair = pair_value_ctor(tl.arange(0, 4), scalar)
+    pair = Pair(tl.arange(0, 4), scalar)
     # CHECK: %c42_i32 = arith.constant 42 : i32
     # CHECK-NEXT: call @"anchor{{.*}}"([[RANGE]], %c42_i32)
     pair.second = 42
@@ -185,9 +156,10 @@ def test_jit_method():
     # CHECK: [[RANGE:%.*]] = tt.make_range {end = 4 : i32, start = 0 : i32}
     scalar = 11
     # CHECK: [[V:%.*]]:2 = tt.call @"unpack{{.*}}"([[RANGE]], %c11_i32)
-    pair = pair_value_ctor(tl.arange(0, 4), scalar)
+    pair = Pair(tl.arange(0, 4), scalar)
     a, b = pair.unpack()
     # CHECK: call @anchor{{.*}}([[V]]#0)
     anchor(a)
     # CHECK: call @anchor{{.*}}([[V]]#1)
     anchor(b)
+
