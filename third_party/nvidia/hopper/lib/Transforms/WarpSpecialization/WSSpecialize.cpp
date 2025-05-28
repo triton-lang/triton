@@ -39,6 +39,13 @@ Operation *SpecializeOp(Operation *op, IRMapping &mapping,
                         OpBuilderWithAsyncTaskIds &builder,
                         AsyncTaskId asyncTaskId);
 
+unsigned scanRegUsage(Block *block, AsyncTaskId asyncTaskId,
+                      unsigned requestedRegisters) {
+  assert(asyncTaskId != 0 && "producer group should not request registers");
+  // TODO: scan ops to estimate register usage
+  return requestedRegisters == 0 ? 232 : requestedRegisters;
+}
+
 // Collect argument indices that are used by the specific taskId.
 static SmallVector<unsigned> collectBlockArgsForTask(scf::ForOp forOp,
                                                      int asyncTaskId) {
@@ -345,7 +352,7 @@ Operation *SpecializeOp(Operation *op, IRMapping &mapping,
   return nullptr;
 }
 
-void specializeRegion(triton::FuncOp funcOp) {
+void specializeRegion(triton::FuncOp funcOp, unsigned requestedRegisters) {
 
   LLVM_DEBUG({
     LDBG("\n\n");
@@ -412,6 +419,7 @@ void specializeRegion(triton::FuncOp funcOp) {
   }
 
   unsigned idx = 1;
+  SmallVector<int32_t> estRegUsage;
   for (Region *region : wsOp.getPartitionRegions()) {
     AsyncTaskId asyncTaskId = nTaskIds[idx];
     OpBuilderWithAsyncTaskIds taskBuilder(context);
@@ -426,7 +434,14 @@ void specializeRegion(triton::FuncOp funcOp) {
       SpecializeOp(op, mapping, taskBuilder, asyncTaskId);
     }
     taskBuilder.create<ttg::WarpReturnOp>(loc);
+    auto regAlloc =
+        scanRegUsage(partitionBlock, asyncTaskId, requestedRegisters);
+    estRegUsage.push_back(regAlloc);
   }
+
+  // The default region doesn't request registers.
+  wsOp.setRequestedRegisters(estRegUsage);
+
   // The capture set is the same for every partition region, so now find the
   // captures and thread them in to the regions.
   SetVector<Value> captures;

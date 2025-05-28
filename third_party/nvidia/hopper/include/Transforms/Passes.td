@@ -61,7 +61,10 @@ def NVGPUTestWSCodePartition: Pass<"nvgpu-test-ws-code-partition", "mlir::Module
            "number of buffering for producer-consumer">,
     Option<"numWarpGroups", "num-warp-groups",
            "int32_t", /*default*/"0",
-           "number of warp groups for warp specialization">
+           "number of warp groups for warp specialization">,
+    Option<"requestedRegisters", "requested-registers",
+           "int32_t", /*default*/"232",
+           "number of register requested for computation group">
   ];
 }
 

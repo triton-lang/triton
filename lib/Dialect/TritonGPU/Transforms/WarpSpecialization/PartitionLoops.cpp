@@ -192,6 +192,10 @@ LogicalResult triton::gpu::partitionLoop(scf::ForOp loop) {
   // explicit captures are the leaves of the subgraph.
   SetVector<Operation *> opsToClone;
   SmallVector<Value> explicitCaptures;
+  SmallVector<IRMapping> mappings(wsOp.getPartitionNumWarps().size());
+  SmallVector<OpBuilder> builders;
+  for (Region *region : wsOp.getPartitionRegions())
+    builders.push_back(OpBuilder::atBlockBegin(&region->front()));
   for (unsigned i = 0; i < captures.size(); ++i) {
     Value capture = captures[i];
 
@@ -215,10 +219,11 @@ LogicalResult triton::gpu::partitionLoop(scf::ForOp loop) {
           tensorTy.getShape(), tensorTy.getElementType(), sharedEnc,
           SharedMemorySpaceAttr::get(tensorTy.getContext()));
       auto alloc = b.create<LocalAllocOp>(memdescTy, capture);
-      for (Region *region : wsOp.getPartitionRegions()) {
-        b.setInsertionPointToStart(&region->front());
-        Value value = b.create<LocalLoadOp>(tensorTy, alloc);
+      for (auto [i, region] : llvm::enumerate(wsOp.getPartitionRegions())) {
+        Value value =
+            builders[i].create<LocalLoadOp>(capture.getLoc(), tensorTy, alloc);
         replaceAllUsesInRegionWith(capture, value, *region);
+        mappings[i].map(capture, value);
       }
       capture = alloc;
     }
@@ -228,9 +233,9 @@ LogicalResult triton::gpu::partitionLoop(scf::ForOp loop) {
 
   // Clone the ops into each region in topological order.
   opsToClone = topologicalSort(opsToClone);
-  for (Region *region : wsOp.getPartitionRegions()) {
-    b.setInsertionPointToStart(&region->front());
-    IRMapping mapping;
+  for (auto [i, region] : llvm::enumerate(wsOp.getPartitionRegions())) {
+    OpBuilder &b = builders[i];
+    IRMapping &mapping = mappings[i];
     for (Operation *op : opsToClone) {
       Value copy = b.clone(*op, mapping)->getResult(0);
       mapping.map(op->getResult(0), copy);

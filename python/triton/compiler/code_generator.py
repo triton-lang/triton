@@ -8,7 +8,7 @@ from types import ModuleType
 from typing import Any, Callable, Dict, Optional, Tuple, Type, Union, Iterable, List
 
 from .. import knobs, language
-from .._C.libtriton import ir
+from .._C.libtriton import ir, gluon_ir
 from ..language import constexpr, semantic, str_to_ty, tensor
 from ..language.core import _unwrap_if_constexpr, base_value, base_type
 from ..runtime.jit import get_jit_fn_file_line
@@ -277,7 +277,7 @@ class CodeGenerator(ast.NodeVisitor):
                  module=None, is_kernel=False, function_types: Optional[Dict] = None, noinline=False,
                  file_name: Optional[str] = None, begin_line=0):
         self.context = context
-        self.builder = ir.builder(context)
+        self.builder = ir.builder(context) if not jit_fn.is_gluon() else gluon_ir.GluonOpBuilder(context)
         self.file_name = file_name
         # node.lineno starts from 1, so we need to subtract 1
         self.begin_line = begin_line - 1
@@ -565,6 +565,11 @@ class CodeGenerator(ast.NodeVisitor):
             assert target.ctx.__class__.__name__ == "Store"
             for i, name in enumerate(target.elts):
                 self.set_value(self.visit(name), value.values[i])
+            return
+        if isinstance(target, ast.Attribute):
+            assert target.ctx.__class__.__name__ == "Store"
+            base = self.visit(target.value)
+            setattr(base, target.attr, value)
             return
         assert isinstance(target, ast.Name)
         self.set_value(self.visit(target), value)
