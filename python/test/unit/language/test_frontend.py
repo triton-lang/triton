@@ -169,6 +169,9 @@ class TypeWithBuiltinInitializer:
     def __init__(self, _builder=None):
         self.value = tl.arange(0, 4, _builder=_builder)
 
+    def modify(self, value, _builder=None):
+        self.value = value
+
 
 @filecheck_test
 @triton.jit
@@ -177,4 +180,8 @@ def test_aggregate_initializers():
     value = TypeWithBuiltinInitializer()
     # CHECK: [[RANGE:%.*]] = tt.make_range {end = 4 : i32, start = 0 : i32}
     # CHECK: call @"anchor{{.*}}"([[RANGE]])
+    anchor(value)
+    # CHECK: [[RANGE:%.*]] = tt.make_range {end = 8 : i32, start = 4 : i32}
+    # CHECK: call @"anchor{{.*}}"([[RANGE]])
+    value.modify(tl.arange(4, 8))
     anchor(value)
