@@ -40,98 +40,80 @@ class NVWS_Op<string mnemonic, list<Trait> traits = []> :
 
 def NVWS_ArefCreateOp : NVWS_Op<"aref.create", [
     RangedTypesMatchWith<"input types match Aref output type",
-                        "result", "operands", "::llvm::cast<ArefType>($_self).getBaseType()">]> {
+                        "result", "operands", "::llvm::cast<ArefType>($_self).getBaseType()">, Pure]> {
   let summary = "Create an asynchronous reference.";
   let description = [{
     Create an asynchronous reference.
 
     Takes as inputs a variadic number of operands, and returns an ARef.
-    The inputs can be of any type, but if the numBatchAxes attribute is
-    set on the result type, the inputs are expected to be array-like
-    (i.e., Tensor, MemDesc, etc) and have matching values for the first
-    numBatchAxes of the shapes.
+    The inputs are expected to be array-like (i.e., Tensor, MemDesc, etc)
+    and the first axis of the shape should match between all inputs, representing
+    multi-buffering of the values.
   }];
   let arguments = (ins Variadic<AnyType>:$operands);
 
   let results = (outs NVWS_ArefType:$result);
 
   let assemblyFormat = [{$operands attr-dict `:` type($result)}];
+  let hasVerifier = 1;
 }
 
-def NVWS_ArefGetOp : NVWS_Op<"aref.get", []> {
-  let summary = "Get value(s) from an asynchronous reference";
-  let description = [{
-    Get values from the asynchronous reference for reading.
+def NVWS_ArefGetEnterOp : NVWS_Op<"aref.get.enter"> {
+  let summary = "Enter ArefGet region where the buffer can be used to read data";
+  let description = [{ Enter a "region" where you can freely read from the buffer)
+                      These ArefGet "regions" can span multiple iterations. }];
 
-    If indexes is empty, the op will return the entire underlying value(s).
-    If the indexes is size 1, the op will ensure that the underlying
-    value is Tensor-Like (i.e, has a shape parameter) with rank at least 1,
-    and index into the first dimension.
-    Similarly, if indexes is size 2, the op will index into the first 2 dimensions
-    etc.
-
-    These values are passed as arguments to the region.
-    At the start of the region, the values are guaranteed to be “full”,
-    and operations are free to read from them. When the compute in the region
-    completes, the buffers have been read from, and the aref is marked as “empty”
-    so that a producer group can write to the aref.
-
-  }];
-  let arguments = (
-    ins NVWS_ArefType:$operand,
-    Variadic<TT_IntLike>:$indexes
-  );
-
-  let regions = (region SizedRegion<1>:$region);
-
+  let arguments = (ins NVWS_ArefType:$aref,
+                       I32:$index,
+                       I32:$phase);
   let results = (outs Variadic<AnyType>:$results);
-
-  let hasCustomAssemblyFormat = 1;
-  let hasVerifier = 1;
-}
-
-def NVWS_ArefPutOp : NVWS_Op<"aref.put", [SameVariadicOperandSize]> {
-  let summary = "Put value(s) into an asynchronous reference";
-  let description = [{
-    Get values from the asynchronous reference for writing.
-
-    If indexes is empty, the op will return the entire underlying value(s).
-    If the indexes is size 1, the op will ensure that the underlying
-    value is Tensor-Like (i.e, has a shape parameter) with rank at least 1,
-    and index into the first dimension.
-    Similarly, if indexes is size 2, the op will index into the first 2 dimensions
-    etc.
-
-    These values are passed as arguments to the region.
-    At the start of the region, the values are guaranteed to be “empty”,
-    and operations are free to write to them. When the compute in the region
-    completes, the buffers have been written to, and the aref is marked as “full”
-    so that a consumer can read from them.
-
-    If the Aref contains in-register types (i.e., not ttg.MemDesc), the region should
-    return the updated values. This represents a semantic copy at the aref level,
-    but should be optimized away during lowering.
-
+  let hasVerifier=1;
+  let assemblyFormat = [{
+    $aref `[` $index `,` $phase `]` attr-dict
+    `:` type($aref) `->` type($results)
   }];
-  let arguments = (
-    ins NVWS_ArefType:$operand,
-    Variadic<TT_IntLike>:$indexes
-  );
-
-  let regions = (region SizedRegion<1>:$region);
-
-  let results = (outs Variadic<AnyType>:$results);
-
-  let hasCustomAssemblyFormat = 1;
-  let hasVerifier = 1;
 }
 
-def NVWS_ArefReturnOp: NVWS_Op<"aref.return",
-                            [Pure, ReturnLike, Terminator]> {
-  let summary = "terminator for aref_put/get operator";
-  let arguments = (ins Variadic<AnyType>:$srcs);
-  let assemblyFormat = "attr-dict ($srcs^ `:` type($srcs))?";
-  let hasVerifier = 1;
+def NVWS_ArefGetExitOp : NVWS_Op<"aref.get.exit"> {
+  let summary = "Exit ArefGet region, where the buffer should no longer be used";
+  let description = [{ Leave the region where you can freely read from the buffer).
+                      These ArefGet "regions" can span multiple iterations. }];
+
+  let arguments = (ins NVWS_ArefType:$aref,
+                       I32:$index);
+  let assemblyFormat = [{
+    $aref `[` $index `]` attr-dict
+    `:` type($aref)
+ }];
+}
+
+def NVWS_ArefPutEnterOp : NVWS_Op<"aref.put.enter"> {
+  let summary = "Enter ArefPut region where the buffer can be used to read data";
+  let description = [{ Enter a "region" where you can freely write to the buffer)
+                      These ArefPut "regions" can span multiple iterations. }];
+
+  let arguments = (ins NVWS_ArefType:$aref,
+                       I32:$index,
+                       I32:$phase);
+  let results = (outs Variadic<AnyType>:$results);
+  let hasVerifier=1;
+  let assemblyFormat = [{
+    $aref `[` $index `,` $phase `]` attr-dict
+    `:` type($aref) `->` type($results)
+  }];
+}
+
+def NVWS_ArefPutExitOp : NVWS_Op<"aref.put.exit"> {
+  let summary = "Exit ArefPut region, where the buffer should no longer be used";
+  let description = [{ Leave the region where you can freely write to the buffer).
+                      These ArefPut "regions" can span multiple iterations. }];
+
+  let arguments = (ins NVWS_ArefType:$aref,
+                       I32:$index);
+  let assemblyFormat = [{
+    $aref `[` $index `]` attr-dict
+    `:` type($aref)
+ }];
 }
 
 def NVWS_WarpGroupOp : NVWS_Op<"warp_group", [
@@ -170,6 +152,72 @@ def NVWS_WarpGroupReturnOp : NVWS_Op<"warp_group.return", [
   }];
 
   let assemblyFormat = "attr-dict";
+}
+
+def NVWS_CreateTokenOp : NVWS_Op<"create_token"> {
+  let summary = "Create a token to be used for synchronizations in communication channels";
+  let description = [{ A token will be used by the producer and consumer to synchronize.
+    The producer will acquire and hold the token, until it has filled the buffers,
+    and signal the waiting consumer.
+    The consumer will hold the token until it has consumed the buffers,
+    and will signal the waiting producer trying to acquire the token.
+  }];
+
+  let results = (outs TensorOf<[NVWS_TokenType]>:$result);
+
+  let arguments = (ins I32Attr:$numBuffers, NVWS_TokenLoadTypeAttr:$loadType);
+
+  let builders = [OpBuilder<(ins "uint32_t":$numBuffers, "triton::nvws::TokenLoadType":$loadType)>];
+
+  let assemblyFormat = "attr-dict `:` type($result)";
+}
+
+def NVWS_ProducerAcquireOp : NVWS_Op<"producer_acquire"> {
+  let summary = "Producer acquires a token to fill buffers";
+  let description = [{ The producer will try to acquire the token prior to filling
+    the buffers. If the buffers are not ready to be filled, the producer will wait to be
+    signalled by the consumer which finishes consuming the buffers and
+    releases the token.
+  }];
+
+  let arguments = (ins TensorOf<[NVWS_TokenType]>:$token, I32:$idx, I1:$phase);
+
+  let assemblyFormat = "$token `,` $idx `,` $phase attr-dict `:` type(operands)";
+}
+
+def NVWS_ProducerCommitOp : NVWS_Op<"producer_commit"> {
+  let summary = "Producer commits the buffer changes";
+  let description = [{ The producer will release the token and signal the consumer
+    that the buffers are ready to be consumed.
+  }];
+
+  let arguments = (ins TensorOf<[NVWS_TokenType]>:$token, I32:$idx);
+
+  let assemblyFormat = "$token `,` $idx attr-dict `:` type(operands)";
+}
+
+def NVWS_ConsumerWaitOp : NVWS_Op<"consumer_wait"> {
+  let summary = "Consumer awaits buffer readiness";
+  let description = [{ The consumer will wait for the buffer to be ready
+    to be consumed. If the buffers are not ready, the consumer will wait to be
+    signalled by the producer which finishes filling the buffers and
+    releases the token.
+  }];
+
+  let arguments = (ins TensorOf<[NVWS_TokenType]>:$token, I32:$idx, I1: $phase);
+
+  let assemblyFormat = "$token `,` $idx `,` $phase attr-dict `:` type(operands)";
+}
+
+def NVWS_ConsumerReleaseOp : NVWS_Op<"consumer_release"> {
+  let summary = "Consumer releases the token";
+  let description = [{ The consumer will release the token and signal the producer
+    that the buffers are ready to be filled.
+  }];
+
+  let arguments = (ins TensorOf<[NVWS_TokenType]>:$token, I32:$idx);
+
+  let assemblyFormat = "$token `,` $idx attr-dict `:` type(operands)";
 }
 
 #endif

@@ -125,12 +125,12 @@ mlir::triton::NVIDIA::DotOpMmaV3SmemLoader::DotOpMmaV3SmemLoader(
   uint32_t widthInByte = allocSwizzleShape[fastMovingDim] * elemBits / 8;
   int64_t swizzling = getSwizzlingFromLayout(sharedLayout, widthInByte);
 
-  descriptor =
-      createDescriptor(rewriter, loc, swizzling, shape[1 - fastMovingDim]);
+  descriptor = createDescriptor(rewriter, loc, swizzling,
+                                allocSwizzleShape[1 - fastMovingDim]);
 }
 
 Value mlir::triton::NVIDIA::DotOpMmaV3SmemLoader::smemLoad(
-    int a, int b, ConversionPatternRewriter &rewriter, Location loc) {
+    int a, int b, ConversionPatternRewriter &rewriter, Location loc) const {
   auto tb = TritonLLVMOpBuilder(loc, rewriter);
   Value k = tb.i32_val(b * instrShape[1]);
   Value m = tb.add(tb.i32_val(a * dimWpt * instrShape[0]),

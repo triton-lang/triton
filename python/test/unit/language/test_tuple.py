@@ -39,7 +39,7 @@ def test_index(size, device):
 def _tuple_assign(XPtrs, YPtrs, values):
     # assign from tuple
     X0, X1 = XPtrs
-    x0, x1 = values
+    x0, x1, _ = values
     tl.store(X0, x0)
     tl.store(X1, x1)
     # assign to tuple
@@ -53,7 +53,7 @@ def _tuple_assign(XPtrs, YPtrs, values):
 
 @pytest.mark.interpreter
 def test_assign(device):
-    vals = (2., 3.)
+    vals = (2., 3., None)
     x = tuple([torch.zeros((1, ), dtype=torch.float32, device=device) for _ in range(2)])
     y = tuple([torch.zeros((1, ), dtype=torch.float32, device=device) for _ in range(3)])
     _tuple_assign[(1, )](x, y, vals)
@@ -162,3 +162,38 @@ def test_namedtuple(device):
     ty = Tensor(y, y.shape, y.stride())
     _namedtuple_kernel[(1, )](function, tx, ty, 64, 64)
     assert torch.allclose(y, x[:16, :16] * a)
+
+
+@pytest.mark.interpreter
+def test_eq(device):
+
+    @triton.jit
+    def fn(ret_ptrs):
+        tl.store(ret_ptrs + 0, (1, 2) == (1, 2))
+        tl.store(ret_ptrs + 1, (1, 2) == (1, 1))
+        tl.store(ret_ptrs + 2, tl.tuple((1, 2)) == (1, 2))
+        tl.store(ret_ptrs + 3, tl.tuple((1, 2)) == (1, 3))
+
+    rets = torch.zeros((4, ), dtype=torch.int32, device=device)
+    fn[(1, )](rets)
+    assert rets[0].item() == 1
+    assert rets[1].item() == 0
+    assert rets[2].item() == 1
+    assert rets[3].item() == 0
+
+
+@pytest.mark.interpreter
+def test_add(device):
+
+    @triton.jit
+    def fn(ret_ptrs):
+        tuple0 = ((0, 1)) + (2, 3)
+        for i in tl.static_range(4):
+            tl.store(ret_ptrs + i, tuple0[i])
+        tuple1 = tl.tuple((4, 5)) + (6, 7)
+        for i in tl.static_range(4):
+            tl.store(ret_ptrs + 4 + i, tuple1[i])
+
+    rets = torch.zeros((8, ), dtype=torch.int32, device=device)
+    fn[(1, )](rets)
+    torch.testing.assert_close(rets.cpu(), torch.arange(8, dtype=torch.int32))

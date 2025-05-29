@@ -185,6 +185,111 @@ LinearLayout identityStandardND(StringAttr inDimName, ArrayRef<unsigned> shape,
   return ret;
 }
 
+LinearLayout zerosLike(const LinearLayout &layout) {
+  auto bases = layout.getBases();
+  for (auto &basis : bases) {
+    for (auto &vec : basis.second) {
+      for (auto &val : vec) {
+        val = 0;
+      }
+    }
+  }
+
+  SmallVector<std::pair<StringAttr, int32_t>> outDims;
+  for (auto outDim : layout.getOutDimNames()) {
+    outDims.emplace_back(outDim, layout.getOutDimSize(outDim));
+  }
+  return LinearLayout(std::move(bases), std::move(outDims),
+                      /*requireSurjective=*/false);
+}
+
+std::optional<ColumnAction> regPermForDivideLeft(const LinearLayout &A,
+                                                 const LinearLayout &B) {
+  // We can implement this generically of any dimension, but for now we only do
+  // it for regs to keep the API simpler
+  assert(A.getNumInDims() != 0);
+  auto kReg = *A.getInDimNames().begin();
+  assert(kReg.str() == "register");
+  assert(B.getNumInDims() != 0);
+  assert(kReg == *B.getInDimNames().begin());
+  // Retrieve the register bases from A and B.
+  const auto &ARegBases = A.getBases().lookup(kReg);
+  const auto &BRegBases = B.getBases().lookup(kReg);
+
+  // Compute the permutation order:
+  // For each basis in B (in order), find its index in A (using each index at
+  // most once). We make sure we use each index at most once in case B
+  // broadcasts (weird case, but better safe than sorry).
+  SmallVector<size_t> permOrder;
+  permOrder.reserve(ARegBases.size());
+  SmallVector<bool> used(ARegBases.size(), false);
+  for (const auto &bB : BRegBases) {
+    bool found = false;
+    for (size_t j = 0; j < ARegBases.size(); ++j) {
+      found = !used[j] && (ARegBases[j] == bB);
+      if (found) {
+        permOrder.push_back(j);
+        used[j] = true;
+        break;
+      }
+    }
+    if (!found)
+      return std::nullopt; // A basis from B not found in A.
+  }
+  // Append remaining indices from A (preserving their original order).
+  for (size_t i = 0; i < ARegBases.size(); ++i) {
+    if (!used[i])
+      permOrder.push_back(i);
+  }
+  return ColumnAction(permOrder, kReg, ARegBases.size());
+}
+
+ColumnAction actionRemoveBroadcastedRegs(const LinearLayout &layout) {
+  assert(layout.getNumInDims() != 0);
+  auto kReg = *layout.getInDimNames().begin();
+  assert(kReg.str() == "register");
+
+  // Drop the bases that are zero
+  const auto &bases = layout.getBases().lookup(kReg);
+  SmallVector<size_t> permOrder;
+  for (size_t i = 0; i < bases.size(); ++i) {
+    if (!llvm::all_of(bases[i], [](size_t x) { return x == 0; })) {
+      permOrder.push_back(i);
+    }
+  }
+  return ColumnAction(permOrder, kReg, bases.size());
+}
+
+SmallVector<Value> broadcastAs(const SmallVector<Value> &values,
+                               const LinearLayout &layout) {
+  assert(layout.getNumInDims() != 0);
+  auto kReg = *layout.getInDimNames().begin();
+  assert(kReg.str() == "register");
+  uint32_t broadcastMask = layout.getFreeVariableMasks().lookup(kReg);
+  assert((layout.getInDimSize(kReg) / (1 << llvm::popcount(broadcastMask))) ==
+         values.size());
+
+  std::vector<std::vector<int32_t>> newBases;
+  int i = 0;
+  for (int j = 0; j < layout.getInDimSizeLog2(kReg); j++) {
+    if (broadcastMask & (1 << j)) {
+      newBases.push_back({0});
+    } else {
+      newBases.push_back({1 << i});
+      i++;
+    }
+  }
+  auto newLayout = LinearLayout({{kReg, std::move(newBases)}}, {kReg});
+  SmallVector<Value> ret;
+
+  ret.reserve(newLayout.getInDimSize(kReg));
+  for (int i = 0; i < newLayout.getInDimSize(kReg); i++) {
+    int32_t srcIdx = newLayout.apply({{kReg, i}}).begin()->second;
+    ret.push_back(values[srcIdx]);
+  }
+  return ret;
+}
+
 // Compute the supremum of two lists.
 // If the supremum is not unique, we return the first list first
 // Error out if the supremum does not exist
@@ -246,6 +351,36 @@ SmallVector<StringAttr> supremum(const SmallVector<StringAttr> &x,
     }
   }
   return to_vector(result);
+}
+
+LinearLayout reshapeLayout(MLIRContext *ctx, LinearLayout layout,
+                           ArrayRef<int64_t> shape) {
+  int rank = shape.size();
+  auto srcOutDims = to_vector(layout.getOutDimNames());
+  std::reverse(srcOutDims.begin(), srcOutDims.end());
+  auto newOutDims = standardOutDimPairs(ctx, shape);
+  std::reverse(newOutDims.begin(), newOutDims.end());
+  return layout.transposeOuts(srcOutDims)
+      .reshapeOuts(newOutDims)
+      .transposeOuts(standardOutDimNames(ctx, rank));
+}
+
+LinearLayout transposeLinearLayout(LinearLayout layout, ArrayRef<int> order) {
+  // Transpose the tile layout.
+  auto namedBases = layout.getBases();
+  // move the most outer dimensions to the inner most position.
+
+  for (auto &bases : llvm::make_second_range(namedBases)) {
+    for (auto &b : bases) {
+      std::vector<int32_t> newB;
+      for (auto i : order) {
+        newB.push_back(b[i]);
+      }
+      b = std::move(newB);
+    }
+  }
+  return LinearLayout(std::move(namedBases),
+                      to_vector(layout.getOutDimNames()));
 }
 
 } // namespace mlir::triton

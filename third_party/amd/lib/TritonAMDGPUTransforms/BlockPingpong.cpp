@@ -1,3 +1,4 @@
+#include "TritonAMDGPUTransforms/Passes.h"
 #include "mlir/Analysis/SliceAnalysis.h"
 #include "mlir/Dialect/GPU/IR/GPUDialect.h"
 #include "mlir/Dialect/LLVMIR/ROCDLDialect.h"
@@ -10,16 +11,17 @@
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 
-#define GEN_PASS_CLASSES
-#include "TritonAMDGPUTransforms/Passes.h"
-
 #define DEBUG_TYPE "tritonamdgpu-block-pingpong"
 #define DBGS() (llvm::dbgs() << "[" DEBUG_TYPE "]: ")
 #define LDBG(X) LLVM_DEBUG(DBGS() << X << "\n")
 
-using namespace mlir;
 namespace ttg = mlir::triton::gpu;
 namespace tt = mlir::triton;
+
+namespace mlir {
+
+#define GEN_PASS_DEF_TRITONAMDGPUBLOCKPINGPONG
+#include "TritonAMDGPUTransforms/Passes.h.inc"
 
 namespace {
 
@@ -76,10 +78,18 @@ private:
   void addAsymmetricSyncToLoop(OpBuilder &builder, Location loc);
   void updateOpInsertion(Operation *Op);
   void appendOp(Operation *Op);
+  void prependOp(Operation *Op, bool moveBackwards);
   void moveOpAndPredecessorsUpSameBlock(Operation *Op);
   void appendSlicedLoadAB(int slice);
+  SmallVector<Operation *> genClusterBarrier(OpBuilder &builder, Location loc);
   void appendClusterBarrier(OpBuilder &builder, Location loc);
+  void prependClusterBarrier(OpBuilder &builder, Location loc);
   void appendOpWithPrio(OpBuilder &builder, Operation *Op, Location loc);
+  bool isPersistentGemm(size_t num_dots);
+  template <typename T>
+  size_t countIfMemoryOps(scf::IfOp ifOp, bool assumeNotTaken);
+  template <typename T>
+  size_t estimateNonDotMemoryImpact(T *start, T *end, bool assumeNotTaken);
   void determineDotMemoryOps(tt::DotOp dotOp,
                              DenseSet<tt::LoadOp> &dotGlobalLoads,
                              DenseSet<ttg::LocalLoadOp> &dotLocalLoads,
@@ -93,6 +103,12 @@ void Pingponger::appendOp(Operation *op) {
   assert(lastInsertedOp != nullptr);
   op->moveAfter(lastInsertedOp);
   lastInsertedOp = op;
+}
+void Pingponger::prependOp(Operation *op, bool moveBackwards) {
+  assert(lastInsertedOp != nullptr);
+  op->moveBefore(lastInsertedOp);
+  if (moveBackwards)
+    lastInsertedOp = op;
 }
 
 // Move the given operations and any predecessors upon which it depends
@@ -144,17 +160,75 @@ void Pingponger::appendSlicedLoadAB(int slice) {
 // are at the memory cluster.
 // Also, SchedBarrier with `0` is set here to tell compiler backend not to
 // reorder any instruction across this point.
-void Pingponger::appendClusterBarrier(OpBuilder &builder, Location loc) {
+SmallVector<Operation *> Pingponger::genClusterBarrier(OpBuilder &builder,
+                                                       Location loc) {
   //  MembarAnalysis can recognize gpu::BarrierOp and skip inserting additional
-  //  barrier
-  appendOp(builder.create<gpu::BarrierOp>(loc));
-  appendOp(builder.create<ROCDL::SchedBarrier>(loc, 0));
+  auto barrierOp = builder.create<gpu::BarrierOp>(loc);
+  auto schedBarrierOp = builder.create<ROCDL::SchedBarrier>(loc, 0);
+  return {barrierOp, schedBarrierOp};
+}
+void Pingponger::appendClusterBarrier(OpBuilder &builder, Location loc) {
+  for (auto &&op : genClusterBarrier(builder, loc))
+    appendOp(op);
+}
+void Pingponger::prependClusterBarrier(OpBuilder &builder, Location loc) {
+  for (auto &&op : genClusterBarrier(builder, loc))
+    prependOp(op, false);
 }
 void Pingponger::appendOpWithPrio(OpBuilder &builder, Operation *op,
                                   Location loc) {
   appendOp(builder.create<ROCDL::SetPrioOp>(loc, highPriority));
   appendOp(op);
   appendOp(builder.create<ROCDL::SetPrioOp>(loc, lowPriority));
+}
+
+// Determine if the given loop matches the basic pattern of a persistent GEMM.
+// Here we define a persistent GEMM as containing a single dot product, and two
+// if statements inside the body of the loop. While canonically these should be
+// var == 0 and var == other_var - 1, we approximate this check to just check
+// for a comparison equality. This will miss legal variant like >= var and we
+// can adjust this with example kernels that fail.
+//
+// Note: That while ideally we would check that these are the same variable
+// and that they change per loop iteration, the persistent GEMM cannot depend
+// directly on the loop bounds, we will avoid matching an exact pattern which
+// may be quite flexible in general.
+bool Pingponger::isPersistentGemm(size_t num_dots) {
+  if (num_dots != 1)
+    return false;
+  bool seenIfSection = false;
+  bool seenDot = false;
+  for (auto &op : *forOp.getBody()) {
+    if (auto ifOp = dyn_cast<scf::IfOp>(op)) {
+      if (seenIfSection) {
+        // Violate our two if statement assumption.
+        return false;
+      }
+      auto cond = ifOp.getCondition().getDefiningOp();
+      if (!cond) {
+        return false;
+      }
+      bool matchesPattern = false;
+      if (auto cmpIOp = dyn_cast<arith::CmpIOp>(cond)) {
+        matchesPattern =
+            cmpIOp.getPredicate() == mlir::arith::CmpIPredicate::eq;
+      }
+      if (!matchesPattern) {
+        return false;
+      }
+      seenIfSection = true;
+    } else if (auto dotOp = dyn_cast<tt::DotOp>(op)) {
+      if (seenDot || !seenIfSection) {
+        // Violate structure of the persistent GEMM
+        // assumption.
+        return false;
+      }
+      seenDot = true;
+      // Reset the if section flag.
+      seenIfSection = false;
+    }
+  }
+  return seenIfSection && seenDot;
 }
 
 // Find all of the "closest" operations that are of a given type T
@@ -198,6 +272,52 @@ void Pingponger::findClosestPredOps(Value v, DenseSet<T> &matchingOps) {
     }
   };
   impl(v);
+}
+
+// Determine the number of memory operations of type T that are expected
+// to execute each iteration of the outermost for loop for the ifOp.
+template <typename T>
+size_t Pingponger::countIfMemoryOps(scf::IfOp ifOp, bool assumeNotTaken) {
+  // Don't do a nested traversal as we are only estimating the "same level"
+  auto thenOps = ifOp.thenBlock()->getOps<T>();
+  size_t thenCount = std::distance(thenOps.begin(), thenOps.end());
+  size_t elseCount = 0;
+  if (ifOp.elseBlock()) {
+    auto elseOps = ifOp.elseBlock()->getOps<T>();
+    elseCount = std::distance(elseOps.begin(), elseOps.end());
+  }
+  // Estimate the worst case unless we have assumeNotTaken == true.
+  return assumeNotTaken ? elseCount : std::max(thenCount, elseCount);
+}
+
+// Estimate the expected number of memory operations of type T
+// rounded to an integer. This is used to determine any possible
+// influence on cluster setup.
+template <typename T>
+size_t Pingponger::estimateNonDotMemoryImpact(T *start, T *end,
+                                              bool assumeNotTaken) {
+  DenseSet<Operation *> visitedParents;
+  size_t count = 0;
+  for (auto it = start; it != end; it++) {
+    auto parent = (*it)->getParentOp();
+    if (parent == nullptr)
+      continue;
+    if (parent == forOp)
+      count += 1;
+    else {
+      if (visitedParents.contains(parent))
+        continue;
+      visitedParents.insert(parent);
+      if (auto ifOp = dyn_cast<scf::IfOp>(parent))
+        count += countIfMemoryOps<T>(ifOp, assumeNotTaken);
+      else {
+        // Default to counting every memory access as a
+        // single access.
+        count += 1;
+      }
+    }
+  }
+  return count;
 }
 
 // Populate the dotGlobalLoads, dotLocalLoads, and dotLocalStores set with
@@ -438,7 +558,12 @@ LogicalResult Pingponger::transformFourPPClusters(OpBuilder &builder,
 
   // dot3 (4/4)
   appendOpWithPrio(builder, dotSliceOps[3], loc);
-  appendClusterBarrier(builder, loc);
+
+  // Move the cluster barrier to the end of the main loop.
+  // This helps ensure that with persistent GEMMs the epilogue
+  // and prologue aren't grouped into the same long cluster.
+  updateOpInsertion(lastInsertedOp->getBlock()->getTerminator());
+  prependClusterBarrier(builder, loc);
 
   // Add a remark for user feedback
   dotSliceOps[0]->emitRemark()
@@ -489,7 +614,12 @@ LogicalResult Pingponger::transformTwoPPClusters(OpBuilder &builder,
 
   // dot1 (2/2)
   appendOpWithPrio(builder, dotSliceOps[1], loc);
-  appendClusterBarrier(builder, loc);
+
+  // Move the cluster barrier to the end of the main loop.
+  // This helps ensure that with persistent GEMMs the epilogue
+  // and prologue aren't grouped into the same long cluster.
+  updateOpInsertion(lastInsertedOp->getBlock()->getTerminator());
+  prependClusterBarrier(builder, loc);
 
   // Add a remark for user feedback
   dotSliceOps[0]->emitRemark()
@@ -574,6 +704,10 @@ void Pingponger::getDotPingponged() {
     return;
   }
 
+  // Determine if we have a persistent GEMM. This will decide how we interpret
+  // any memory operations that we find in conditionals.
+  auto assumeNotTaken = isPersistentGemm(dotOps.size());
+
   // The existing code depends on the loads being targeted being safe to move,
   // which will not hold if we do not properly have a GEMM. As a result, we
   // filter the associated load operations to only those that are associated
@@ -584,23 +718,49 @@ void Pingponger::getDotPingponged() {
   determineDotMemoryOps(dotOps[0], dotGlobalLoads, dotLocalLoads,
                         dotLocalStores);
 
-  auto origGlobalLoadCount = gLoadOps.size();
-  auto origLocalLoadCount = lLoadOps.size();
   // Prune Memory operations that may be moved to only those involved in dot
-  // computation.
-  auto gLoadIt = llvm::remove_if(gLoadOps, [&dotGlobalLoads](tt::LoadOp op) {
-    return !dotGlobalLoads.contains(op);
-  });
-  gLoadOps.erase(gLoadIt, gLoadOps.end());
-  auto lLoadIt =
-      llvm::remove_if(lLoadOps, [&dotLocalLoads](ttg::LocalLoadOp op) {
-        return !dotLocalLoads.contains(op);
-      });
-  lLoadOps.erase(lLoadIt, lLoadOps.end());
+  // computation. To understand the "cluster assumptions" we also estimate
+  // the impact of any additional loads/stores.
+  auto gLoadIt = std::stable_partition(
+      gLoadOps.begin(), gLoadOps.end(),
+      [&dotGlobalLoads](tt::LoadOp op) { return dotGlobalLoads.contains(op); });
+  auto lLoadIt = std::stable_partition(lLoadOps.begin(), lLoadOps.end(),
+                                       [&dotLocalLoads](ttg::LocalLoadOp op) {
+                                         return dotLocalLoads.contains(op);
+                                       });
   auto lStoreIt =
-      llvm::remove_if(lStoreOps, [&dotLocalStores](ttg::LocalStoreOp op) {
-        return !dotLocalStores.contains(op);
-      });
+      std::stable_partition(lStoreOps.begin(), lStoreOps.end(),
+                            [&dotLocalStores](ttg::LocalStoreOp op) {
+                              return dotLocalStores.contains(op);
+                            });
+  if (estimateNonDotMemoryImpact<tt::LoadOp>(gLoadIt, gLoadOps.end(),
+                                             assumeNotTaken) != 0) {
+    std::stringstream message;
+    message << "Unable to match ping pong scheduling pattern. Details: "
+            << "Non-dot global loads found in non-persistent GEMM";
+    LDBG(message.str());
+    return;
+  }
+  if (estimateNonDotMemoryImpact<ttg::LocalLoadOp>(lLoadIt, lLoadOps.end(),
+                                                   assumeNotTaken) != 0) {
+    std::stringstream message;
+    message << "Unable to match ping pong scheduling pattern. Details: "
+            << "Non-dot local loads found in non-persistent GEMM";
+    LDBG(message.str());
+    return;
+  }
+  if (estimateNonDotMemoryImpact<ttg::LocalStoreOp>(lStoreIt, lStoreOps.end(),
+                                                    assumeNotTaken) != 0) {
+    std::stringstream message;
+    message << "Unable to match ping pong scheduling pattern. Details: "
+            << "Non-dot local stores found in non-persistent GEMM";
+    LDBG(message.str());
+    return;
+  }
+
+  // Remove non-dot memory operations.
+  gLoadOps.erase(gLoadIt, gLoadOps.end());
+  lLoadOps.erase(lLoadIt, lLoadOps.end());
   lStoreOps.erase(lStoreIt, lStoreOps.end());
   // All PingPong Scheduler assumes there are 2 movable global loads and 2
   // movable local loads.
@@ -672,14 +832,6 @@ void Pingponger::getDotPingponged() {
     // numWarps=4 doesn't need asymmetric sync, return.
     return;
   } else if (numWarps == 8) { // Pingpong between warps from the same block
-    if (origGlobalLoadCount != 2 || origLocalLoadCount != 2) {
-      std::stringstream message;
-      message << "Unable to match ping pong slicing pattern. Details: "
-              << gLoadOps.size() << " global loads, " << lLoadOps.size()
-              << " local loads";
-      LDBG(message.str());
-      return;
-    }
     if (lStoreOps.size() != 2) {
       std::stringstream message;
       message << "Unable to match ping pong slicing pattern. Details: "
@@ -718,13 +870,15 @@ void Pingponger::getDotPingponged() {
   }
 }
 
+} // anonymous namespace
+
 class TritonAMDGPUBlockPingpongPass
-    : public TritonAMDGPUBlockPingpongBase<TritonAMDGPUBlockPingpongPass> {
+    : public impl::TritonAMDGPUBlockPingpongBase<
+          TritonAMDGPUBlockPingpongPass> {
 public:
-  TritonAMDGPUBlockPingpongPass() = default;
-  TritonAMDGPUBlockPingpongPass(int32_t numStages) {
-    this->numStages = numStages;
-  }
+  using impl::TritonAMDGPUBlockPingpongBase<
+      TritonAMDGPUBlockPingpongPass>::TritonAMDGPUBlockPingpongBase;
+
   void runOnOperation() override {
     ModuleOp m = getOperation();
     for (auto funcOp : m.getOps<tt::FuncOp>()) {
@@ -735,9 +889,5 @@ public:
     }
   }
 };
-} // namespace
 
-std::unique_ptr<Pass>
-mlir::createTritonAMDGPUBlockPingpongPass(int32_t numStages) {
-  return std::make_unique<TritonAMDGPUBlockPingpongPass>(numStages);
-}
+} // namespace mlir

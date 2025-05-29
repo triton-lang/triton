@@ -28,48 +28,6 @@ using ::mlir::triton::AMD::ISAFamily;
 using ::mlir::triton::gpu::getTotalElemsPerThread;
 namespace {
 
-std::optional<LLVM::AtomicBinOp> matchAtomicOp(RMWOp atomicOp) {
-  switch (atomicOp) {
-  case RMWOp::AND:
-    return LLVM::AtomicBinOp::_and;
-  case RMWOp::OR:
-    return LLVM::AtomicBinOp::_or;
-  case RMWOp::XOR:
-    return LLVM::AtomicBinOp::_xor;
-  case RMWOp::ADD:
-    return LLVM::AtomicBinOp::add;
-  case RMWOp::FADD:
-    return LLVM::AtomicBinOp::fadd;
-  case RMWOp::MAX:
-    return LLVM::AtomicBinOp::max;
-  case RMWOp::MIN:
-    return LLVM::AtomicBinOp::min;
-  case RMWOp::UMAX:
-    return LLVM::AtomicBinOp::umax;
-  case RMWOp::UMIN:
-    return LLVM::AtomicBinOp::umin;
-  case RMWOp::XCHG:
-    return LLVM::AtomicBinOp::xchg;
-  default:
-    return {};
-  }
-}
-
-std::optional<LLVM::AtomicOrdering> getMemoryOrdering(MemSemantic memOrdering) {
-  switch (memOrdering) {
-  case MemSemantic::RELAXED:
-    return LLVM::AtomicOrdering::monotonic;
-  case MemSemantic::ACQUIRE:
-    return LLVM::AtomicOrdering::acquire;
-  case MemSemantic::RELEASE:
-    return LLVM::AtomicOrdering::release;
-  case MemSemantic::ACQUIRE_RELEASE:
-    return LLVM::AtomicOrdering::acq_rel;
-  default:
-    return {};
-  }
-}
-
 std::optional<const char *> getAMDGPUMemScopeStr(MemSyncScope scope) {
   switch (scope) {
   case MemSyncScope::GPU:
@@ -366,7 +324,7 @@ struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp>,
 
     auto cacheMod = op.getCache();
     SmallVector<Value> loadedVals;
-    Type vecTy = LLVM::getFixedVectorType(valueElemTy, vec);
+    Type vecTy = LLVM::getVectorType(valueElemTy, vec);
     for (size_t vecStart = 0; vecStart < numElems; vecStart += vec) {
       const size_t maxWordWidth = std::max<size_t>(32, valueElemNBits);
       const size_t totalWidth = valueElemNBits * vec;
@@ -466,7 +424,7 @@ struct BufferLoadOpConversion
     // Create the resource descriptor and then emit the buffer_load intrinsic(s)
     Value rsrcDesc = bufferEmitter.createResourceDescriptor(llPtr, llStride);
     SmallVector<Value> loadedVals;
-    Type vecTy = LLVM::getFixedVectorType(valueElemTy, vec);
+    Type vecTy = LLVM::getVectorType(valueElemTy, vec);
     for (size_t vecStart = 0; vecStart < numElems; vecStart += vec) {
       Value pred = mask ? maskElems[vecStart] : b.int_val(1, 1);
       Value falseVal = createZeroVector(rewriter, loc, cast<VectorType>(vecTy));
@@ -594,14 +552,17 @@ struct BufferLoadToLocalOpConversion
         }
       }
 
-      bufferEmitter.emitLoadToLds(vecTy, vecBytesVal, rsrcDesc, offsetIn,
-                                  coalescedShmemAddr[i], pred, op.getCache());
+      auto bufferLoadToLds = bufferEmitter.emitLoadToLds(
+          vecTy, vecBytesVal, rsrcDesc, offsetIn, coalescedShmemAddr[i], pred,
+          op.getCache());
+      LLVM::AMD::addAsyncCopyAliasScope(bufferLoadToLds);
       if (!otherElems.empty()) {
         Value storeVal = packElementRangeIntoVector(
             rewriter, this->getTypeConverter(), loc, vecTy, otherElems, srcIdx);
         llStore(rewriter, loc,
                 hasSwizzling ? swizzledShmemAddr[i] : coalescedShmemAddr[i],
-                storeVal, b.icmp_ne(pred, b.true_val()), op.getCache());
+                storeVal, b.icmp_ne(pred, b.true_val()), op.getCache(),
+                /*forceNoAliasAsyncLoads=*/true);
       }
     }
 
@@ -678,10 +639,9 @@ struct AsyncCopyGlobalToLocalOpConversion
         (vecTy.getNumElements() * vecTy.getElementTypeBitWidth()) / 8;
     assert(llvm::isPowerOf2_32(vecBytes));
     Value vecBytesVal = b.i32_val(vecBytes);
-
-    Value cacheModifiers =
-        b.i32_val(mlir::LLVM::AMD::getCtrlBitsForCacheModifierOnTarget(
-            op.getCache(), /*isLoad=*/true, targetInfo));
+    int32_t cacheModifiers =
+        mlir::LLVM::AMD::getCtrlBitsForCacheModifierOnTarget(
+            op.getCache(), /*isLoad=*/true, targetInfo);
 
     Value llMask = adaptor.getMask();
     SmallVector<Value> maskElems;
@@ -716,12 +676,13 @@ struct AsyncCopyGlobalToLocalOpConversion
       }
 
       if (maskElems.empty()) {
-        rewriter.create<ROCDL::GlobalLoadLDSOp>(
+        auto globalLoadLdsOp = rewriter.create<ROCDL::GlobalLoadLDSOp>(
             loc,
             /*globalPtr=*/srcPtr, /*ldsPtr=*/coalescedShmemAddr[i],
-            /*size=*/vecBytesVal, /*offset=*/b.i32_val(0),
+            /*size=*/vecBytes, /*offset=*/0,
             /*aux=*/cacheModifiers, /*alias_scopes=*/nullptr,
             /*noalias_scopes=*/nullptr, /*tbaa=*/nullptr);
+        LLVM::AMD::addAsyncCopyAliasScope(globalLoadLdsOp);
         continue;
       }
 
@@ -732,9 +693,10 @@ struct AsyncCopyGlobalToLocalOpConversion
       rewriter.setInsertionPointToEnd(currentBlock);
       rewriter.create<LLVM::CondBrOp>(loc, pred, loadBlock, afterLoad);
       rewriter.setInsertionPointToStart(loadBlock);
-      rewriter.create<ROCDL::GlobalLoadLDSOp>(
-          loc, srcPtr, coalescedShmemAddr[i], vecBytesVal,
-          /*offset=*/b.i32_val(0), cacheModifiers, nullptr, nullptr, nullptr);
+      auto globalLoadLdsOp = rewriter.create<ROCDL::GlobalLoadLDSOp>(
+          loc, srcPtr, coalescedShmemAddr[i], vecBytes,
+          /*offset=*/0, cacheModifiers, nullptr, nullptr, nullptr);
+      LLVM::AMD::addAsyncCopyAliasScope(globalLoadLdsOp);
 
       rewriter.create<LLVM::BrOp>(loc, afterLoad);
       rewriter.setInsertionPointToStart(afterLoad);
@@ -744,7 +706,7 @@ struct AsyncCopyGlobalToLocalOpConversion
         llStore(rewriter, loc,
                 hasSwizzling ? swizzledShmemAddr[i] : coalescedShmemAddr[i],
                 storeVal, b.icmp_ne(maskElems[srcIdx], b.true_val()),
-                op.getCache());
+                op.getCache(), /*forceNoAliasAsyncLoads=*/true);
       }
     }
 
@@ -818,7 +780,7 @@ struct StoreOpConversion : public ConvertOpToLLVMPattern<triton::StoreOp>,
       Value pred =
           llMask ? b.and_(threadPred, maskElems[vecStart]) : threadPred;
 
-      auto vecTy = LLVM::getFixedVectorType(valueElemTy, vec);
+      auto vecTy = LLVM::getVectorType(valueElemTy, vec);
 
       const size_t maxWordWidth = std::max<size_t>(32, valueElemNBits);
       const size_t totalWidth = valueElemNBits * vec;
@@ -1038,7 +1000,7 @@ struct BufferAtomicRMWOpConversion
       Value pred =
           llMask ? b.and_(threadPred, maskElems[vecStart]) : threadPred;
 
-      Type vecTy = LLVM::getFixedVectorType(valueElemTy, vec);
+      Type vecTy = LLVM::getVectorType(valueElemTy, vec);
       Value falseVal = createZeroVector(rewriter, loc, cast<VectorType>(vecTy));
       // Create the store val
       Value storeVal = packElementRangeIntoVector(
@@ -1148,7 +1110,7 @@ struct BufferStoreOpConversion
       Value pred =
           llMask ? b.and_(threadPred, maskElems[vecStart]) : threadPred;
 
-      Type vecTy = LLVM::getFixedVectorType(valueElemTy, vec);
+      Type vecTy = LLVM::getVectorType(valueElemTy, vec);
       // Create the store val
       Value storeVal = packElementRangeIntoVector(
           rewriter, this->getTypeConverter(), loc, cast<VectorType>(vecTy),
@@ -1527,10 +1489,8 @@ struct AsyncWaitOpConversion : public ConvertOpToLLVMPattern<AsyncWaitOp> {
     // 15:14. We have to set all other bits in v to 1 to signal we are not
     // interested in those.
 
-    int vmCnt = op.getNum();
-    if (vmCnt >= 64) {
-      return emitError(loc, "AsyncWait does not support values >= 64");
-    }
+    // Clamp vmcnt to 6bits; a lower vmcnt will produce a conservative wait
+    unsigned vmCnt = std::min(63u, op.getNum());
 
     // Extract low and high bits and combine while setting all other bits to 1
     unsigned lowBits = vmCnt & 0xF;

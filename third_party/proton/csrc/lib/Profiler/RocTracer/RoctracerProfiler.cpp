@@ -109,7 +109,7 @@ void processActivityKernel(
     }
   } else {
     // Graph kernels
-    // A single grpah launch can trigger multiple kernels.
+    // A single graph launch can trigger multiple kernels.
     // Our solution is to construct the following maps:
     // --- Application threads ---
     // 1. Graph -> numKernels

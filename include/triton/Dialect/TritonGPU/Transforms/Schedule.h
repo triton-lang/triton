@@ -13,29 +13,13 @@ namespace triton {
 
 namespace gpu {
 
-/// Discover operations that should become async and assign latencies to them
-/// based on the numStages value provided by the user.
-void assignLatencies(ModuleOp moduleOp, int numStages);
-
-/// Schedule the loops based on the latencies assigned to the operations.
-void scheduleLoops(ModuleOp moduleOp);
-
 /// Lower the loops to prepare them for pipeline expansion.
 void lowerLoops(ModuleOp moduleOp);
 
 }; // namespace gpu
 
-/// Pipeline the Tensor Core Gen 05 MMA ops in the module with `numStages`
-/// stages. This will pre-process the loops, lowering the ops related to TG Gen5
-/// MMA, and then pipeline the loops using expander.
-void pipelineTC05MMALoops(ModuleOp module, int numStages,
-                          bool disableExpander = false);
-
 /// Pipeline the TMA stores in the loop.
 bool pipelineTMAStores(scf::ForOp forOp);
-
-/// Simple pipelining for the MMA ops which accumulator is modified in the loop.
-scf::ForOp pipelineMMAWithScaledAcc(scf::ForOp forOp);
 
 /// This does post-processing on the pipelined loop to try to pipeline wgmma
 /// ops.
@@ -81,6 +65,8 @@ public:
     }
 
     bool isBefore(iterator a, iterator b) const {
+      if (a == b)
+        return false;
       for (auto it = begin(); it != end(); ++it) {
         if (it == a)
           return true;
@@ -122,6 +108,10 @@ public:
   bool insertDepsOfOp(Operation *op, int stage, CoarseSchedule::Cluster cluster,
                       bool includeArg, bool insertIfEarlier = false);
 
+  // Remove empty stages and clusters from the schedule, adjusting the maximum
+  // number of stages as appropriate.
+  void shrinkToFit();
+
   void erase(Operation *op) { opToStageAndCluster.erase(op); }
 
   int count(Operation *op) { return opToStageAndCluster.count(op); }
@@ -131,6 +121,20 @@ public:
   }
 
   auto find(Operation *op) const { return opToStageAndCluster.find(op); }
+
+  // Split the cluster containing op into two clusters, one containing all
+  // operations before the op and one containing op and all operations after the
+  // op. Return the cluster containing op and all operations after the op.
+  Cluster splitClusterBefore(Operation *op, scf::ForOp forOp);
+
+  // Check if op a will show up before op b in the final unrolled code.
+  bool isOpBefore(Operation *a, Operation *b);
+
+  // Check if op a is in earlier cluster than op b.
+  bool isOpInEarlierCluster(Operation *a, Operation *b);
+
+  // Check if op a is in the same cluster as op b.
+  bool isOpInSameCluster(Operation *a, Operation *b);
 
   SmallVector<std::tuple<Operation *, int, Cluster>>
   getOpsInOrder(scf::ForOp forOp);

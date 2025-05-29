@@ -32,7 +32,7 @@ def TritonGPUPlanCTAPass : Pass<"triton-nvidia-gpu-plan-cta", "mlir::ModuleOp"> 
     and StoreLikeOps operations.
   }];
 
-  let constructor = "mlir::createTritonNvidiaGPUPlanCTAPass()";
+  let constructor = "mlir::triton::nvidia_gpu::createTritonNvidiaGPUPlanCTAPass()";
 
   let dependentDialects = [
     "mlir::triton::gpu::TritonGPUDialect",
@@ -47,8 +47,6 @@ def TritonGPUFenceInsertion : Pass<"triton-nvidia-gpu-fence-insertion", "mlir::M
     This pass is to insert memory fences to ensure that memory operations are
     properly ordered across generic and async operations.
   }];
-
-  let constructor = "mlir::createTritonNvidiaGPUFenceInsertionPass()";
 
   let dependentDialects = [
     "mlir::triton::gpu::TritonGPUDialect",
@@ -69,21 +67,17 @@ def TritonNvidiaGPUTMALoweringPass : Pass<"triton-nvidia-tma-lowering", "mlir::M
     Lower Triton experimental descriptor load to TMA load/store operations in TritonNvidiaGPUDialect.
   }];
 
-  let constructor = "mlir::createTritonNvidiaGPUTMALoweringPass()";
-
   let dependentDialects = [
     "mlir::triton::nvidia_gpu::TritonNvidiaGPUDialect"
   ];
 }
 
-def TritionTensorMemoryAllocationPass : Pass<"triton-tensor-memory-allocation", "mlir::ModuleOp"> {
+def TritonTensorMemoryAllocationPass : Pass<"triton-tensor-memory-allocation", "mlir::ModuleOp"> {
   let summary = "Assign tensor memory allocation";
 
   let description = [{
     Decide on tensor memory allocation and assign attributes to each allocation.
   }];
-
-  let constructor = "mlir::createTensorMemoryAllocationPass()";
 
   let dependentDialects = [
     "mlir::triton::nvidia_gpu::TritonNvidiaGPUDialect"
@@ -97,27 +91,9 @@ def TritonNvidiaGPUMMALoweringPass : Pass<"triton-nvidia-mma-lowering", "mlir::M
     Lower MMA ops to prepare for conversion to LLVM.
   }];
 
-  let constructor = "mlir::createTritonNvidiaGPUMMALoweringPass()";
-
   let dependentDialects = [
     "mlir::triton::nvidia_gpu::TritonNvidiaGPUDialect"
   ];
-}
-
-def TritonNvidiaGPUKeepAccInTMemPass : Pass<"tritongpu-keep-acc-in-tmem", "mlir::ModuleOp"> {
-  let summary = "Keep accumulator in Tensor Memory";
-
-  let description = [{
-    For Tensor Core Gen 05 Dot operations called in the loop, where the accumulator is reused
-    in the next iteration, we want to keep the accumulator in Tensor Memory, so that we can
-    avoid the cost of loading the accumulator from registers to Tensor Memory.
-  }];
-
-  let constructor = "mlir::createTritonNvidiaGPUKeepAccInTMemPass()";
-
-  let dependentDialects = ["mlir::triton::gpu::TritonGPUDialect",
-                           "mlir::triton::nvidia_gpu::TritonNvidiaGPUDialect",
-                           "mlir::triton::TritonDialect"];
 }
 
 def TritonNvidiaGPUPromoteLHSToTMemPass : Pass<"tritongpu-promote-lhs-to-tmem", "mlir::ModuleOp"> {
@@ -126,8 +102,6 @@ def TritonNvidiaGPUPromoteLHSToTMemPass : Pass<"tritongpu-promote-lhs-to-tmem", 
   let description = [{
     Promote LHS operand of MMAv5 op to Tensor Memory.
   }];
-
-  let constructor = "mlir::createTritonNvidiaGPUPromoteLHSToTMemPass()";
 
   let dependentDialects = ["mlir::triton::gpu::TritonGPUDialect",
                            "mlir::triton::nvidia_gpu::TritonNvidiaGPUDialect",
@@ -144,6 +118,38 @@ def TritonNvidiaGPUOptimizeDescriptorEncodingPass : Pass<"triton-nvidia-optimize
   let dependentDialects = ["mlir::triton::gpu::TritonGPUDialect",
                            "mlir::triton::nvidia_gpu::TritonNvidiaGPUDialect",
                            "mlir::triton::TritonDialect"];
+}
+
+def TritonNvidiaGPUOptimizeTMemLayoutsPass : Pass<"triton-nvidia-optimize-tmem-layouts", "mlir::ModuleOp"> {
+  let summary = "Optimize TMEM layouts.";
+
+  let description = [{
+    Optimize TMEM layouts by selecting a layouts to enable better subtiling,
+    reduction performance, etc.
+  }];
+
+  let dependentDialects = ["mlir::triton::gpu::TritonGPUDialect",
+                           "mlir::triton::nvidia_gpu::TritonNvidiaGPUDialect",
+                           "mlir::triton::TritonDialect"];
+}
+
+def TritonNvidiaGPUInterleaveTMemPass : Pass<"triton-nvidia-interleave-tmem", "mlir::ModuleOp"> {
+  let summary = "Interleave TMEM loads/stores.";
+
+  let description = [{
+    The `triton-nvidia-interleave-tmem` pass attempts to sink TMEM loads and
+    hoist TMEM stores, and potentially interleave them, to reduce register
+    pressure.
+  }];
+}
+
+def TritonNvidiaGPURemoveTMEMTokensPass : Pass<"triton-nvidia-gpu-remove-tmem-tokens", "mlir::ModuleOp"> {
+  let summary = "remove TMEM tokens";
+
+  let description = [{
+    The `triton-nvidia-gpu-remove-tmem-tokens` pass removes TMEM memory
+    dependency tokens from the IR, after they are no longer needed.
+  }];
 }
 
 #endif

@@ -3,6 +3,7 @@
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Attributes.h"
 #include "triton/Dialect/TritonGPU/IR/Types.h"
+#include "triton/Tools/LayoutUtils.h"
 
 using namespace mlir;
 using namespace mlir::triton;
@@ -316,6 +317,37 @@ struct MemDescTransOpConversion
   }
 };
 
+struct MemDescReshapeOpConversion
+    : public ConvertOpToLLVMPattern<MemDescReshapeOp> {
+  using ConvertOpToLLVMPattern::ConvertOpToLLVMPattern;
+  LogicalResult
+  matchAndRewrite(MemDescReshapeOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    Location loc = op->getLoc();
+    auto resultTy = cast<TensorOrMemDesc>(op.getType());
+    auto llvmElemTy =
+        getTypeConverter()->convertType(resultTy.getElementType());
+    auto srcSmemObj = getSharedMemoryObjectFromStruct(loc, adaptor.getSrc(),
+                                                      llvmElemTy, rewriter);
+    SmallVector<Value> offsets = srcSmemObj.getOffsets();
+    SmallVector<unsigned> srcShape;
+    for (int64_t d : op.getSrc().getType().getShape())
+      srcShape.push_back(d);
+    SmallVector<unsigned> dstShape;
+    for (int64_t d : op.getType().getShape())
+      dstShape.push_back(d);
+    Value linearOffset = LLVM::linearize(rewriter, loc, offsets, srcShape);
+    SmallVector<Value> delinearizedOffset =
+        LLVM::delinearize(rewriter, loc, linearOffset, dstShape);
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
+    auto dstSmemObj = SharedMemoryObject(
+        srcSmemObj.getBase(), srcSmemObj.getBaseElemType(), delinearizedOffset);
+    auto retVal = getStructFromSharedMemoryObject(loc, dstSmemObj, rewriter);
+    rewriter.replaceOp(op, retVal);
+    return success();
+  }
+};
+
 struct TransOpConversion : public ConvertOpToLLVMPattern<TransOp> {
   using ConvertOpToLLVMPattern::ConvertOpToLLVMPattern;
   LogicalResult
@@ -390,6 +422,7 @@ struct MemDescSubviewOpConversion
   matchAndRewrite(triton::gpu::MemDescSubviewOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     Location loc = op->getLoc();
+    auto *ctx = op->getContext();
     auto b = TritonLLVMOpBuilder(loc, rewriter);
     auto srcTy = op.getSrc().getType();
     auto destTy = op.getResult().getType();
@@ -402,53 +435,42 @@ struct MemDescSubviewOpConversion
                                                    llvmElemTy, rewriter);
     auto smemStrides = smemObj.getStrides(srcTy, loc, rewriter);
     SmallVector<Value> opOffsetVals = op.getOffsets();
+    // We assume we always create a subview of the last dimensions
     SmallVector<Value> opSmemStrides(smemStrides.end() - opOffsetVals.size(),
                                      smemStrides.end());
+    // Compute total offset
     SmallVector<Value> offsetVals;
     auto destRank = op.getResult().getType().getRank();
     auto rankReduced = srcTy.getRank() - destRank;
     for (int i = rankReduced; i < opOffsetVals.size(); i++) {
       offsetVals.push_back(b.add(opOffsetVals[i], smemObj.getOffsets()[i]));
     }
-    Value offset = b.undef(i32_ty);
-    auto allocShape = srcTy.getAllocShape();
-    bool isSimpleSubview =
-        allocShape.take_back(destRank) == destTy.getShape() ||
-        !isa<NVMMASharedEncodingAttr>(enc);
-    if (!isSimpleSubview) {
-      auto nvmmaEnc = cast<NVMMASharedEncodingAttr>(enc);
-      assert(destRank >= 2 &&
-             "Shape size should be >= 2 when using NVMMAShared encoding");
-      auto swizzleStride = b.i32_val((nvmmaEnc.getSwizzlingByteWidth() * 8) /
-                                     llvmElemTy.getIntOrFloatBitWidth());
-      offset = b.i32_val(0);
-      for (auto i = 0; i < opOffsetVals.size() - 2; ++i) {
-        offset = b.add(offset, b.mul(opOffsetVals[i], opSmemStrides[i]));
-      }
-      // newOffset = offset - (stridedOff * swizzledStride + contigOff /
-      // swizzledStride * tileSize + contigOff % swizzledStride)
-      // + stridedInc * swizzledStride + contigInc / swizzledStride *
-      // tileSize + contigInc % swizzledStride
-      auto stridedDim = destRank - 1 - layoutOrder[0];
-      auto contigDim = destRank - 1 - layoutOrder[1];
-      auto stridedOff = smemObj.getOffsets()[stridedDim];
-      auto contigOff = smemObj.getOffsets()[contigDim];
-      auto stridedInc = offsetVals[stridedDim];
-      auto contigInc = offsetVals[contigDim];
-      int allocStridedDim = allocShape.size() - 1 - layoutOrder[0];
-      auto tileSize =
-          b.mul(b.i32_val(allocShape[allocStridedDim]), swizzleStride);
-      offset = b.sub(offset, b.mul(stridedOff, swizzleStride));
-      offset = b.sub(offset, b.mul(b.udiv(contigOff, swizzleStride), tileSize));
-      offset = b.sub(offset, b.urem(contigOff, swizzleStride));
-      offset = b.add(offset, b.mul(stridedInc, swizzleStride));
-      offset = b.add(offset, b.mul(b.udiv(contigInc, swizzleStride), tileSize));
-      offset = b.add(offset, b.urem(contigInc, swizzleStride));
-    } else {
-      // Compute the offset based on the original strides of the shared memory
-      // object
+
+    Value offset;
+    if (rankReduced || (destTy.getRank() == 1 && destTy.getDimSize(0) == 1)) {
+      // We are splitting the pipelining dimension which may not be a power of 2
+      // so we can't use LinearLayouts
       offset = dot(rewriter, loc, opOffsetVals, opSmemStrides);
+    } else {
+      auto dimNames = standardOutDimNames(ctx, opOffsetVals.size());
+      SmallVector<std::pair<StringAttr, Value>> logicalOffsets;
+      // This assumes the subviews are additive, in the sense that we can
+      // compute the offset of one and an add it to the offset of the previous
+      // one we computed. We check for this in the verifier.
+      for (int i = 0; i < rankReduced; i++) {
+        logicalOffsets.push_back({dimNames[i], b.i32_val(0)});
+      }
+      for (int i = rankReduced; i < opOffsetVals.size(); i++) {
+        logicalOffsets.push_back({dimNames[i], offsetVals[i - rankReduced]});
+      }
+      // The order gives us the honest-to-goodness layout rank
+      auto srcAllocShape =
+          srcTy.getAllocShape().take_back(getOrder(srcTy).size());
+      auto llInv = toLinearLayout(srcAllocShape, srcTy.getEncoding()).invert();
+      offset =
+          applyLinearLayout(loc, rewriter, llInv, logicalOffsets)[0].second;
     }
+
     auto base = smemObj.getBase();
     auto elemPtrTy = base.getType();
     smemObj = SharedMemoryObject(b.gep(elemPtrTy, llvmElemTy, base, offset),
@@ -470,7 +492,8 @@ void mlir::triton::populateViewOpToLLVMPatterns(
   patterns.add<CatOpConversion>(typeConverter, benefit);
   patterns.add<JoinOpConversion>(typeConverter, benefit);
   patterns.add<SplitOpConversion>(typeConverter, benefit);
-  patterns.add<MemDescTransOpConversion>(typeConverter, benefit);
+  patterns.add<MemDescTransOpConversion, MemDescReshapeOpConversion>(
+      typeConverter, benefit);
   patterns.add<TransOpConversion>(typeConverter, benefit);
   patterns.add<BroadcastOpConversion>(typeConverter, benefit);
   patterns.add<MemDescSubviewOpConversion>(typeConverter, benefit);

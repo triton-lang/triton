@@ -7,6 +7,7 @@
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
+#include "triton/Tools/LayoutUtils.h"
 
 using namespace mlir;
 using namespace mlir::triton;
@@ -25,6 +26,7 @@ struct TMemAccessAtom {
   int opBitWidth;
   int colsPerThread;
   int rowsPerThread;
+  int rowStored;
   const char *opShape;
   bool usesSecondHalfOffset;
 };
@@ -32,18 +34,21 @@ struct TMemAccessAtom {
 constexpr TMemAccessAtom TMemAccess32x32b{.opBitWidth = 32,
                                           .colsPerThread = 1,
                                           .rowsPerThread = 1,
+                                          .rowStored = 32,
                                           .opShape = "32x32b",
                                           .usesSecondHalfOffset = false};
 
 constexpr TMemAccessAtom TMemAccess16x32bx2{.opBitWidth = 32,
                                             .colsPerThread = 1,
                                             .rowsPerThread = 1,
+                                            .rowStored = 32,
                                             .opShape = "16x32bx2",
                                             .usesSecondHalfOffset = true};
 
 constexpr TMemAccessAtom TMemAccess16x256b{.opBitWidth = 256,
                                            .colsPerThread = 2,
                                            .rowsPerThread = 2,
+                                           .rowStored = 16,
                                            .opShape = "16x256b",
                                            .usesSecondHalfOffset = false};
 
@@ -60,6 +65,24 @@ struct TMemMessageTraits {
 
   bool operator<(const TMemMessageTraits &other) const {
     return numRegs < other.numRegs;
+  }
+
+  LLVM_DUMP_METHOD void dump() const {
+    llvm::dbgs() << "TMemMessageTraits:\n";
+    llvm::dbgs() << "  atom.opBitWidth: " << atom.opBitWidth << "\n";
+    llvm::dbgs() << "  atom.colsPerThread: " << atom.colsPerThread << "\n";
+    llvm::dbgs() << "  atom.rowsPerThread: " << atom.rowsPerThread << "\n";
+    llvm::dbgs() << "  atom.opShape: " << atom.opShape << "\n";
+    llvm::dbgs() << "  atom.usesSecondHalfOffset: " << atom.usesSecondHalfOffset
+                 << "\n";
+    llvm::dbgs() << "  usesSecondHalfOffset: " << usesSecondHalfOffset << "\n";
+    llvm::dbgs() << "  numThreadsPerWarp: " << numThreadsPerWarp << "\n";
+    llvm::dbgs() << "  maxNumRepeats: " << maxNumRepeats << "\n";
+    llvm::dbgs() << "  maxCols: " << maxCols << "\n";
+    llvm::dbgs() << "  numRows: " << numRows << "\n";
+    llvm::dbgs() << "  numCols: " << numCols << "\n";
+    llvm::dbgs() << "  numRepeats: " << numRepeats << "\n";
+    llvm::dbgs() << "  numRegs: " << numRegs << "\n";
   }
 };
 
@@ -79,6 +102,27 @@ struct TMemRuntimeInfo {
   int numColsPerBlock;
   int colsPerWarpGroup;
   bool splitWarpgroupsAlongM;
+  TMemAccessAtom layoutAtom;
+
+  LLVM_DUMP_METHOD void dump() const {
+    llvm::dbgs() << "TMemRuntimeInfo:\n";
+    llvm::dbgs() << "  numWarps: " << numWarps << "\n";
+    llvm::dbgs() << "  numWarpGroups: " << numWarpGroups << "\n";
+    llvm::dbgs() << "  numElementsPer32B: " << numElementsPer32B << "\n";
+    llvm::dbgs() << "  numElements: " << numElements << "\n";
+    llvm::dbgs() << "  numCols: " << numCols << "\n";
+    llvm::dbgs() << "  blockM: " << blockM << "\n";
+    llvm::dbgs() << "  blockN: " << blockN << "\n";
+    llvm::dbgs() << "  unpackedb16: " << unpackedb16 << "\n";
+    llvm::dbgs() << "  useStridedMessage: " << useStridedMessage << "\n";
+    llvm::dbgs() << "  numBlocks: " << numBlocks << "\n";
+    llvm::dbgs() << "  blocksInterleaved: " << blocksInterleaved << "\n";
+    llvm::dbgs() << "  numColsPerBlock: " << numColsPerBlock << "\n";
+    llvm::dbgs() << "  colsPerWarpGroup: " << colsPerWarpGroup << "\n";
+    llvm::dbgs() << "  splitWarpgroupsAlongM: " << splitWarpgroupsAlongM
+                 << "\n";
+    llvm::dbgs() << "  message shape: " << layoutAtom.opShape << "\n";
+  }
 };
 
 TMemMessageTraits getTMemMessageFromAtom(const TMemAccessAtom &atom,
@@ -97,13 +141,18 @@ TMemMessageTraits getTMemMessageFromAtom(const TMemAccessAtom &atom,
   return m;
 }
 
-// Only allows half of the thread registers to be used for tensor memory access
-// to avoid register pressure. This ensures the largest tmem message width is
-// used for the workload without inducing spills.
-int getTMemMessageNarrowingFactor(int workloadThreadRegs) {
-  const int allowedRegUsage = maxRegisters / 2;
+// Narrow the TMEM message by reducing the number of registers per TMEM
+// instruction such that:
+// - No instruction uses more than half the available registers at a time.
+// - If the total number of registers required by the workload is more than half
+//   of the available registers, don't use the largest TMEM message.
+int getTMemMessageNarrowingFactor(const TMemAccessAtom &atom,
+                                  int workloadThreadRegs, int maxnreg) {
+  const int allowedRegUsage = maxnreg / 2;
   int narrowingFactor = 1;
-  while (workloadThreadRegs > allowedRegUsage) {
+  while (getTMemMessageFromAtom(atom, narrowingFactor).numRegs >
+             allowedRegUsage ||
+         workloadThreadRegs > allowedRegUsage) {
     workloadThreadRegs /= 2;
     narrowingFactor *= 2;
   }
@@ -136,6 +185,7 @@ TMemMessageTraits constrainMessageFromWorkload(TMemMessageTraits m,
   // Half as many registers are needed for 16-bit packed elements,
   // so twice as many columns are accessed per message.
   m.numCols *= info.numElementsPer32B;
+  m.numRepeats = m.numCols / (m.atom.opBitWidth / 32);
   return m;
 }
 
@@ -160,6 +210,20 @@ SmallVector<Value> packToI32(const SmallVector<Value> &values, Location loc,
     }
   }
   return packedValues;
+}
+
+static bool is16x256Layout(RankedTensorType tensorType, Attribute memEncoding,
+                           int numWarps) {
+  auto tmemLayout =
+      dyn_cast<triton::nvidia_gpu::TensorMemoryEncodingAttr>(memEncoding);
+  if (!tmemLayout)
+    return false;
+  int blockM = tmemLayout.getBlockM();
+  int blockN = tmemLayout.getBlockN();
+  std::optional<LinearLayout> ll0 =
+      getTmemLoadStoreLayout16x256(blockM, blockN, tensorType, numWarps);
+  auto ll1 = toLinearLayout(tensorType.getShape(), tensorType.getEncoding());
+  return ll0.has_value() && ll0.value() == ll1;
 }
 
 TMemRuntimeInfo getTMemRuntimeInfo(Operation *op, RankedTensorType tensorType,
@@ -200,15 +264,13 @@ TMemRuntimeInfo getTMemRuntimeInfo(Operation *op, RankedTensorType tensorType,
     info.blockN = 32;
   }
 
-  info.useStridedMessage = (info.blockM == 64);
-
   info.splitWarpgroupsAlongM =
       nvidia_gpu::isDistributedLayoutSplitMTmemLoadStore(tensorType, memType,
                                                          info.numWarps);
-
   info.numBlocks = ceil<int>(info.numElements, info.blockM * info.blockN);
   info.blocksInterleaved = (info.numBlocks > 1 && info.blockM == 64);
   info.numColsPerBlock = info.numCols / info.numBlocks;
+  info.useStridedMessage = false;
   if (info.blocksInterleaved) {
     info.numColsPerBlock *= 2;
   }
@@ -223,6 +285,17 @@ TMemRuntimeInfo getTMemRuntimeInfo(Operation *op, RankedTensorType tensorType,
     // then fewer columns must be processed per message per warp group
     info.numColsPerBlock /= numWarpGroupsPerBlock;
   }
+  if (is16x256Layout(tensorType, memType.getEncoding(), info.numWarps)) {
+    assert(info.useStridedMessage == false);
+    info.layoutAtom = TMemAccess16x256b;
+  } else {
+    info.useStridedMessage |= (info.blockM == 64);
+    if (info.useStridedMessage) {
+      info.layoutAtom = TMemAccess16x32bx2;
+    } else {
+      info.layoutAtom = TMemAccess32x32b;
+    }
+  }
   return info;
 }
 
@@ -236,7 +309,10 @@ void calculateAddressAndEmitTmemMessage(
   Value warpIdInGroup = b.urem(warpId, b.i32_val(4));
   Value warpGroupId = b.udiv(warpId, b.i32_val(4));
 
-  for (int block = 0; block < info.numBlocks; block += info.numWarpGroups) {
+  // When split along M, blockM=128 and num_warps=8, and a strided message is
+  // selected such that all 8 warps read a 16 rows of a block at a time.
+  int blocksPerWarpTile = info.splitWarpgroupsAlongM ? 1 : info.numWarpGroups;
+  for (int block = 0; block < info.numBlocks; block += blocksPerWarpTile) {
     Value address = b.ptrtoint(i32_ty, baseAddress);
     Value blockId = b.i32_val(block);
     Value startColumnId = b.i32_val(0);
@@ -273,11 +349,15 @@ void calculateAddressAndEmitTmemMessage(
     // thus half as many messages are required
     int numColumns = info.useStridedMessage ? info.numColsPerBlock / 2
                                             : info.numColsPerBlock;
-    for (int colStart = 0; colStart < numColumns; colStart += message.numCols) {
-      // For messages that span only 16 rows (e.g. 16x256b), multiple messages
-      // are required to cover the entire set of rows per warp.
-      for (int rowStart = 0; rowStart < TMemRuntimeInfo::numRowsPerWarp;
-           rowStart += message.numRows) {
+    // For messages that span only 16 rows (e.g. 16x256b), multiple messages
+    // are required to cover the entire set of rows per warp.
+    int numRowPerWarp =
+        (info.layoutAtom.rowStored == 16 && info.blockM == 64) ? 16 : 32;
+    for (int rowStart = 0; rowStart < numRowPerWarp;
+         rowStart += message.numRows) {
+      for (int colStart = 0; colStart < numColumns;
+           colStart += message.numCols) {
+
         Value rowOffset = b.add(blockRowId, b.i32_val(rowStart));
         Value warpGroupAddress =
             b.add(address, b.shl(rowOffset, b.i32_val(16)));
@@ -338,21 +418,75 @@ void createWaitOpSt(Location loc, ConversionPatternRewriter &rewriter) {
   ptxBuilder.launch(rewriter, loc, void_ty(rewriter.getContext()));
 }
 
-TMemMessageTraits selectTMemMessage(const TMemRuntimeInfo &info) {
-  auto atom = info.useStridedMessage ? TMemAccess16x32bx2 : TMemAccess32x32b;
+TMemMessageTraits selectTMemMessage(const TMemRuntimeInfo &info, int maxnreg) {
+  auto atom = info.layoutAtom;
 
   int totalRegsNeeded =
       getEffectiveRegs(info.unpackedb16, info.useStridedMessage,
                        info.numCols / info.numWarpGroups);
-  int narrowingFactor = getTMemMessageNarrowingFactor(totalRegsNeeded);
+  int narrowingFactor =
+      getTMemMessageNarrowingFactor(atom, totalRegsNeeded, maxnreg);
   auto narrowedMessage = getTMemMessageFromAtom(atom, narrowingFactor);
   narrowedMessage = constrainMessageFromWorkload(narrowedMessage, info,
                                                  narrowedMessage.numRegs);
 
   auto maxWidthMessage = getTMemMessageFromAtom(atom, /*narrowingFactor=*/1);
-  maxWidthMessage = constrainMessageFromWorkload(maxWidthMessage, info,
-                                                 info.colsPerWarpGroup);
+  int numRegs = (info.layoutAtom.rowStored == 16) ? info.colsPerWarpGroup / 2
+                                                  : info.colsPerWarpGroup;
+  maxWidthMessage =
+      constrainMessageFromWorkload(maxWidthMessage, info, numRegs);
   return std::min(narrowedMessage, maxWidthMessage);
+}
+
+// Get the maximum number of registers per thread based on the context. This is
+// by default 256, but it can be overridden by `ttg.maxnreg` set on the module
+// or a contextual register limit set by the compiler on partitions.
+static int getContextualMaxNReg(Operation *op) {
+  // Check the immediate parent op to see if it places a register constraint.
+  auto getFromParent = [](Operation *op) -> std::optional<int> {
+    Operation *parent = op->getParentOp();
+    if (auto mod = dyn_cast<ModuleOp>(parent)) {
+      if (auto attr = mod->getAttrOfType<IntegerAttr>(AttrMaxRegistersName))
+        return attr.getInt();
+      return {};
+    }
+
+    if (auto partitions = dyn_cast<WarpSpecializePartitionsOp>(parent)) {
+      // Check if the partition has reduced registers.
+      unsigned idx = op->getParentRegion()->getRegionNumber();
+      if (auto actRegisters = partitions.getParentOp().getActualRegisters())
+        return (*actRegisters)[1 + idx];
+      return {};
+    }
+
+    if (auto wsOp = dyn_cast<WarpSpecializeOp>(op->getParentOp())) {
+      // Check the register usage of the default warpgroup.
+      if (auto actRegisters = wsOp.getActualRegisters())
+        return actRegisters->front();
+      return {};
+    }
+
+    return {};
+  };
+
+  // PTXAS validates the register usage of `tcgen05.ld` and `tcgen05.st`
+  // instructions based on the static number of registers set on the module, not
+  // the dynamic allocation. This just means the register limit used for the
+  // purpose of subtiling TMEM messages cannot be higher than the module's.
+  auto mod = op->getParentOfType<ModuleOp>();
+  int maxnreg = maxRegisters;
+
+  for (; op != mod; op = op->getParentOp()) {
+    if (std::optional<int> limit = getFromParent(op)) {
+      maxnreg = std::min(maxnreg, *limit);
+      break;
+    }
+  }
+
+  if (auto maxnregAttr = mod->getAttrOfType<IntegerAttr>(AttrMaxRegistersName))
+    maxnreg = std::min<int>(maxnreg, maxnregAttr.getInt());
+
+  return maxnreg;
 }
 
 static void lowerStoreToTensorMemory(Location loc, Operation *op, Value src,
@@ -365,7 +499,8 @@ static void lowerStoreToTensorMemory(Location loc, Operation *op, Value src,
   auto dstType = cast<MemDescType>(dest.getType());
   auto info = getTMemRuntimeInfo(op, cast<RankedTensorType>(src.getType()),
                                  cast<MemDescType>(dest.getType()));
-  const TMemMessageTraits message = selectTMemMessage(info);
+  const TMemMessageTraits message =
+      selectTMemMessage(info, getContextualMaxNReg(op));
   int regIdx = 0;
   calculateAddressAndEmitTmemMessage(
       loc, tmemBase, info, message, rewriter,
@@ -503,7 +638,8 @@ struct TensorMemoryLoadOpConversion
 
     auto info = getTMemRuntimeInfo(op, cast<RankedTensorType>(op.getType()),
                                    cast<MemDescType>(op.getSrc().getType()));
-    const TMemMessageTraits message = selectTMemMessage(info);
+    const TMemMessageTraits message =
+        selectTMemMessage(info, getContextualMaxNReg(op));
     SmallVector<Value> resultVals;
     calculateAddressAndEmitTmemMessage(
         loc, tmemBase, info, message, rewriter,
@@ -597,14 +733,6 @@ struct TensorMemoryCopyOpConversion
     auto b = TritonLLVMOpBuilder(loc, rewriter);
     auto srcTy = cast<MemDescType>(op.getSrc().getType());
     assert(isa<triton::gpu::SharedMemorySpaceAttr>(srcTy.getMemorySpace()));
-    assert(isa<triton::gpu::SwizzledSharedEncodingAttr>(srcTy.getEncoding()));
-
-    auto sharedEnc =
-        cast<triton::gpu::SwizzledSharedEncodingAttr>(srcTy.getEncoding());
-    assert(
-        sharedEnc.getMaxPhase() == 1 && sharedEnc.getPerPhase() == 1 &&
-        sharedEnc.getVec() == 1 &&
-        "The src SMEM of tmem_copy should not have swizzling applied for now");
 
     Value baseSrc =
         LLVM::getSharedMemoryObjectFromStruct(
@@ -613,10 +741,22 @@ struct TensorMemoryCopyOpConversion
             .getBase();
 
     Value baseDst = adaptor.getDst();
+    auto elemPtrTy = ptr_ty(rewriter.getContext(), 3);
+    auto llvmElementTy = typeConverter->convertType(srcTy.getElementType());
 
     // The following codegen assumes that we use tcgen05.cp only with
     // the warpx4.32x128b mode, to load blocked scales from MXFP.
     // We will expand the support as we find more use cases for the instruction.
+
+    auto ll = toLinearLayout(srcTy.getShape(), srcTy.getEncoding());
+    // flattenOuts flattens into fortran order, so need to transpose first to
+    // get C-order
+    auto ctx = op.getContext();
+    auto outDimNames = standardOutDimNames(ctx, srcTy.getRank());
+    std::reverse(outDimNames.begin(), outDimNames.end());
+    ll = ll.transposeOuts(outDimNames).flattenOuts();
+    auto invLayout = ll.flattenOuts().invert();
+    auto kDim = *ll.getOutDimNames().begin();
 
     Value smemDesc = createBlockedScalesSMEMDescriptor(rewriter, loc, baseSrc);
     Value pred = LLVM::NVIDIA::createElectPredicateWarp0(loc, rewriter);
@@ -628,9 +768,14 @@ struct TensorMemoryCopyOpConversion
           // K
           auto colOffset = b.int_val(32, (j * repMorN + i) * 4);
           auto tmemAddr = b.add(b.ptrtoint(i32_ty, baseDst), colOffset);
+          auto blockSize = (32 * 128) / llvmElementTy.getIntOrFloatBitWidth();
+          auto linearIdx = (i * repK + j) * blockSize;
+          auto smemOffset = applyLinearLayout(loc, rewriter, invLayout,
+                                              {{kDim, b.i32_val(linearIdx)}})[0]
+                                .second;
+          auto smemAddr = b.gep(elemPtrTy, llvmElementTy, baseSrc, smemOffset);
+          smemDesc = createBlockedScalesSMEMDescriptor(rewriter, loc, smemAddr);
           createTcgen05Cp(rewriter, loc, tmemAddr, smemDesc, pred);
-          smemDesc =
-              b.add(smemDesc, b.int_val(64, 512 >> 4)); // one chunk = 32x16B
         }
       }
     };
@@ -727,14 +872,52 @@ struct MemDescSubviewOpConversion
   }
 };
 
+struct TMEMSubSliceOpConversion
+    : public ConvertOpToLLVMPattern<triton::nvidia_gpu::TMEMSubSliceOp> {
+  using ConvertOpToLLVMPattern<
+      triton::nvidia_gpu::TMEMSubSliceOp>::ConvertOpToLLVMPattern;
+
+  LogicalResult
+  matchAndRewrite(triton::nvidia_gpu::TMEMSubSliceOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    Location loc = op->getLoc();
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
+    auto srcTy = op.getSrc().getType();
+    auto dstTy = op.getResult().getType();
+    auto llvmElemTy = getTypeConverter()->convertType(srcTy.getElementType());
+
+    auto encoding = dyn_cast<triton::nvidia_gpu::TensorMemoryEncodingAttr>(
+        srcTy.getEncoding());
+    if (!encoding) {
+      return failure();
+    }
+    auto shapePerCTA = getShapePerCTA(srcTy);
+    int blockN = encoding.getBlockN();
+    int blockM = encoding.getBlockM();
+    int offsetCol = 0;
+    int offsetRow = 0;
+    // TODO: support the more complex layout when M == 64.
+    if (shapePerCTA[0] != 128) {
+      return failure();
+    }
+    offsetCol = op.getN();
+    Value tmemBase = adaptor.getSrc();
+    Value offsetVal = b.i32_val(offsetCol | offsetRow << 16);
+    Value newBase = b.add(b.ptrtoint(i32_ty, tmemBase), offsetVal);
+    auto elemPtrTy = ptr_ty(rewriter.getContext(), 3);
+    rewriter.replaceOp(op, b.inttoptr(elemPtrTy, newBase));
+    return success();
+  }
+};
+
 } // namespace
 
 void mlir::triton::NVIDIA::populateTensorMemoryOpToLLVMPattern(
     LLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
     PatternBenefit benefit) {
   patterns.add<TensorMemoryAllocOpConversion, TensorMemoryLoadOpConversion,
-               TensorMemoryStoreOpConversion, TensorMemoryCopyOpConversion>(
-      typeConverter, benefit);
+               TensorMemoryStoreOpConversion, TensorMemoryCopyOpConversion,
+               TMEMSubSliceOpConversion>(typeConverter, benefit);
   return;
 }
 

@@ -10,6 +10,7 @@
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Attributes.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
+#include "triton/Dialect/TritonGPU/IR/LayoutUtility.h"
 #include "triton/Dialect/TritonGPU/IR/LinearLayoutConversions.h"
 #include "triton/Dialect/TritonGPU/IR/Types.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
@@ -178,7 +179,10 @@ SmallVector<unsigned> getOrder(SharedEncodingTrait layout,
     return llvm::to_vector(swizzledLayout.getOrder());
   }
   if (auto sharedLayout = mlir::dyn_cast<NVMMASharedEncodingAttr>(layout)) {
-    return sharedLayout.getOrder();
+    if (shape.size() == 1) {
+      return {0};
+    }
+    return getMatrixOrder(shape.size(), !sharedLayout.getTransposed());
   }
   if (auto sharedLayout =
           mlir::dyn_cast<AMDRotatingSharedEncodingAttr>(layout)) {
@@ -312,12 +316,7 @@ SmallVector<int64_t> getAllocationShapePerCTA(Attribute layout,
   if (auto sharedMMALayout = mlir::dyn_cast<NVMMASharedEncodingAttr>(layout)) {
     if (sharedMMALayout.getFp4Padded()) {
       auto packedAxis = getOrder(sharedMMALayout, shapeLogical)[0];
-      if (shape.size() == 3) {
-        // Take into account multi buffering
-        shape[1 + packedAxis] *= 2;
-      } else {
-        shape[packedAxis] *= 2;
-      }
+      shape[packedAxis] *= 2;
     }
   }
   return getShapePerCTA(layout, shape);
@@ -431,29 +430,32 @@ LogicalResult tryJoinOnAxis(MLIRContext *ctx, const LinearLayout &inLl,
     auto split = LinearLayout::identity1D(2, kRegister, outDims[axis]);
     outLl = split * inLl;
   } else {
-    // TODO This requires a division algorithm!
-    // Implement manually ll.divideLeft(split)
-    auto contiguousElems =
-        LinearEncodingAttr::get(ctx, inLl).getContigPerThread();
-    if (contiguousElems[axis] > 1) {
-      LinearLayout::BasesT newBases;
-      for (const auto &basesDim : inLl.getBases()) {
-        std::vector<std::vector<int32_t>> newBasesDim;
-        for (auto base : basesDim.second) {
-          if (base[axis] == 1) {
-            continue;
-          }
-          base[axis] /= 2;
-          newBasesDim.push_back(std::move(base));
+    // Assert that there is a dimension with size 2 in the axis
+    // that has contiguous elements
+    // Note that this is more general than the fwdInference case in that
+    // - It allows the dimension not to be the fastest running
+    // - It allows broadcasting
+    // In general, this allows us to split along any axis as long as
+    // the basis (0, 0, ..., 0, 1, 0, ..., 0) is in the registers.
+    bool found = false;
+    LinearLayout::BasesT newBases;
+    for (const auto &basesDim : inLl.getBases()) {
+      std::vector<std::vector<int32_t>> newBasesDim;
+      for (auto base : basesDim.second) {
+        if (base[axis] == 1 && basesDim.first == kRegister) {
+          found = true;
+          continue;
         }
-        newBases.insert({basesDim.first, std::move(newBasesDim)});
+        base[axis] /= 2;
+        newBasesDim.push_back(std::move(base));
       }
-      outLl = LinearLayout(std::move(newBases), std::move(outDims));
-    } else {
+      newBases.insert({basesDim.first, std::move(newBasesDim)});
+    }
+    if (!found)
       return emitOptionalError(loc,
                                "Fp4ToFpOp/SplitOp requires at least 2 elements "
                                "per thread in the axis/last dimension");
-    }
+    outLl = LinearLayout(std::move(newBases), std::move(outDims));
   }
   return success();
 }
@@ -498,7 +500,7 @@ static LogicalResult parseBoolAttrValue(AsmParser &parser, Attribute attr,
                                         bool &value, StringRef desc) {
   auto boolAttr = mlir::dyn_cast<BoolAttr>(attr);
   if (!boolAttr) {
-    parser.emitError(parser.getNameLoc(), "expected an bool type in ") << desc;
+    parser.emitError(parser.getNameLoc(), "expected a bool type in ") << desc;
     return failure();
   }
   value = boolAttr.getValue();
@@ -636,18 +638,6 @@ SmallVector<unsigned> SwizzledSharedEncodingAttr::getCTAOrder() const {
   return SmallVector<unsigned>(getCTALayout().getCTAOrder());
 }
 SmallVector<unsigned> SwizzledSharedEncodingAttr::getCTASplitNum() const {
-  return SmallVector<unsigned>(getCTALayout().getCTASplitNum());
-}
-
-int32_t NVMMASharedEncodingAttr::getAlignment() const { return 1024; }
-
-SmallVector<unsigned> NVMMASharedEncodingAttr::getCTAsPerCGA() const {
-  return SmallVector<unsigned>(getCTALayout().getCTAsPerCGA());
-}
-SmallVector<unsigned> NVMMASharedEncodingAttr::getCTAOrder() const {
-  return SmallVector<unsigned>(getCTALayout().getCTAOrder());
-}
-SmallVector<unsigned> NVMMASharedEncodingAttr::getCTASplitNum() const {
   return SmallVector<unsigned>(getCTALayout().getCTASplitNum());
 }
 
@@ -1658,6 +1648,38 @@ void NVMMASharedEncodingAttr::print(AsmPrinter &printer) const {
   printer << "}>";
 }
 
+int NVMMASharedEncodingAttr::getVec() const {
+  if (getSwizzlingByteWidth() == 0)
+    return 1;
+  return 128 / getElementBitWidth();
+}
+
+int NVMMASharedEncodingAttr::getPerPhase() const {
+  if (getSwizzlingByteWidth() == 0)
+    return 1;
+  return 128 / getSwizzlingByteWidth();
+}
+
+int NVMMASharedEncodingAttr::getMaxPhase() const {
+  if (getSwizzlingByteWidth() == 0)
+    return 1;
+  return getSwizzlingByteWidth() / 16;
+}
+
+int32_t NVMMASharedEncodingAttr::getAlignment() const {
+  return 128 * getMaxPhase();
+}
+
+SmallVector<unsigned> NVMMASharedEncodingAttr::getCTAsPerCGA() const {
+  return SmallVector<unsigned>(getCTALayout().getCTAsPerCGA());
+}
+SmallVector<unsigned> NVMMASharedEncodingAttr::getCTAOrder() const {
+  return SmallVector<unsigned>(getCTALayout().getCTAOrder());
+}
+SmallVector<unsigned> NVMMASharedEncodingAttr::getCTASplitNum() const {
+  return SmallVector<unsigned>(getCTALayout().getCTASplitNum());
+}
+
 //===----------------------------------------------------------------------===//
 // AMDRotatingShared encoding
 //===----------------------------------------------------------------------===//
@@ -2032,27 +2054,13 @@ struct TritonGPUInferLayoutInterface
     auto invOrder = inversePermutation(order);
     SmallVector<unsigned> invOrderUnsigned(invOrder.begin(), invOrder.end());
 
-    auto permuteCTALayout =
-        [&](const CTALayoutAttr &layout) -> FailureOr<CTALayoutAttr> {
-      auto n = order.size();
-      if (layout.getCTAsPerCGA().size() != n ||
-          layout.getCTASplitNum().size() != n ||
-          layout.getCTAOrder().size() != n) {
-        return failure();
-      }
-
-      return CTALayoutAttr::get(
-          ctx, applyPermutation(layout.getCTAsPerCGA(), order),
-          applyPermutation(layout.getCTASplitNum(), order),
-          applyPermutation(invOrderUnsigned, layout.getCTAOrder()));
-    };
-
     if (auto enc =
             mlir::dyn_cast<SwizzledSharedEncodingAttr>(operandEncoding)) {
       if (enc.getOrder().size() != order.size()) {
         return failure();
       }
-      FailureOr<CTALayoutAttr> ctaLayout = permuteCTALayout(enc.getCTALayout());
+      FailureOr<CTALayoutAttr> ctaLayout =
+          permuteCTALayout(ctx, enc.getCTALayout(), order);
       if (failed(ctaLayout)) {
         return failure();
       }
@@ -2066,7 +2074,8 @@ struct TritonGPUInferLayoutInterface
       if (order != ArrayRef<int32_t>({1, 0})) {
         return failure();
       }
-      FailureOr<CTALayoutAttr> ctaLayout = permuteCTALayout(enc.getCTALayout());
+      FailureOr<CTALayoutAttr> ctaLayout =
+          permuteCTALayout(ctx, enc.getCTALayout(), order);
       if (failed(ctaLayout)) {
         return failure();
       }
@@ -2083,7 +2092,8 @@ struct TritonGPUInferLayoutInterface
           enc.getWarpsPerCTA().size() != n || enc.getOrder().size() != n) {
         return failure();
       }
-      FailureOr<CTALayoutAttr> ctaLayout = permuteCTALayout(enc.getCTALayout());
+      FailureOr<CTALayoutAttr> ctaLayout =
+          permuteCTALayout(ctx, enc.getCTALayout(), order);
       if (failed(ctaLayout)) {
         return failure();
       }
@@ -2095,19 +2105,8 @@ struct TritonGPUInferLayoutInterface
       return success();
     }
     auto ll = toLinearLayout(shape, operandEncoding);
-    auto namedBases = ll.getBases();
-    for (auto &bases : llvm::make_second_range(namedBases)) {
-      for (auto &b : bases) {
-        std::vector<int32_t> newB;
-        for (auto i : order) {
-          newB.push_back(b[i]);
-        }
-        b = std::move(newB);
-      }
-    }
-    auto retLl = LinearLayout(std::move(namedBases),
-                              llvm::to_vector(ll.getOutDimNames()));
-    resultEncoding = LinearEncodingAttr::get(ctx, std::move(retLl));
+    auto transposedLl = transposeLinearLayout(ll, order);
+    resultEncoding = LinearEncodingAttr::get(ctx, std::move(transposedLl));
     return success();
   }
 
@@ -2446,36 +2445,21 @@ struct TritonGPUInferLayoutInterface
   inferReshapeOpEncoding(ArrayRef<int64_t> srcShape, Attribute srcEnc,
                          ArrayRef<int64_t> dstShape, Attribute &dstEnc,
                          std::optional<Location> loc) const override {
+    if (product(srcShape) != product(dstShape)) {
+      return emitOptionalError(loc, "numel of dst shape does not match "
+                                    "numel of src shape");
+    }
     auto result =
         inferReshapeOpLegacyEncoding(srcShape, srcEnc, dstShape, dstEnc);
     if (succeeded(result)) {
       return result;
     }
-
     // If the legacy encoding failed use LinearLayouts.
     // Once LinearLayouts are more widely used, we can remove
     // inferReshapeOpLegacyEncoding and simply use LLs.
-    auto *ctx = getContext();
-    auto src = toLinearLayout(srcShape, srcEnc);
+    LinearLayout ll = inferReshapeLinearLayout(srcShape, srcEnc, dstShape);
 
-    if (product(srcShape) != product(dstShape)) {
-      return emitOptionalError(loc, "numel of dst shape does not match "
-                                    "numel of src shape");
-    }
-
-    auto newRank = dstShape.size();
-
-    auto newOutDims = standardOutDimPairs(ctx, dstShape);
-
-    // reshapeOp assumes minor-to-major, so we need to transpose the out dims
-    // before the reshape
-    auto srcOutDims = to_vector(src.getOutDimNames());
-    std::reverse(srcOutDims.begin(), srcOutDims.end());
-    std::reverse(newOutDims.begin(), newOutDims.end());
-    auto dst = src.transposeOuts(srcOutDims)
-                   .reshapeOuts(newOutDims)
-                   .transposeOuts(standardOutDimNames(ctx, newRank));
-    dstEnc = LinearEncodingAttr::get(ctx, dst);
+    dstEnc = LinearEncodingAttr::get(srcEnc.getContext(), ll);
     return success();
   }
 
@@ -2485,14 +2469,15 @@ struct TritonGPUInferLayoutInterface
                              std::optional<Location> loc) const override {
     if (auto enc = mlir::dyn_cast<BlockedEncodingAttr>(srcEnc)) {
       // JoinOp takes two tensors of shape AxBxC and generates a tensor of shape
-      // AxBxCx2.  The encoding is the same as the input, but with 2 elems per
-      // thread in the new dimension.  The new dimension is most-minor.
+      // AxBxCx2. The encoding is the same as the input, but with 2 elems per
+      // thread in the new dimension. The new dimension is the fastest running
+      // dimension.
       auto append = [](ArrayRef<unsigned> vals, int val) {
         SmallVector<unsigned> ret(vals);
         ret.push_back(val);
         return ret;
       };
-      auto appendMinorDim = [](ArrayRef<unsigned> order) {
+      auto appendMajorDim = [](ArrayRef<unsigned> order) {
         SmallVector<unsigned> ret(order);
         ret.insert(ret.begin(), ret.size());
         return ret;
@@ -2500,10 +2485,10 @@ struct TritonGPUInferLayoutInterface
       dstEnc = BlockedEncodingAttr::get(
           enc.getContext(), append(enc.getSizePerThread(), 2),
           append(enc.getThreadsPerWarp(), 1), append(enc.getWarpsPerCTA(), 1),
-          appendMinorDim(enc.getOrder()),
+          appendMajorDim(enc.getOrder()),
           CTALayoutAttr::get(enc.getContext(), append(enc.getCTAsPerCGA(), 1),
                              append(enc.getCTASplitNum(), 1),
-                             appendMinorDim(enc.getCTAOrder())));
+                             appendMajorDim(enc.getCTAOrder())));
       return success();
     }
 
@@ -2534,8 +2519,8 @@ struct TritonGPUInferLayoutInterface
     if (enc) {
       // SplitOp takes a tensor of shape AxBxCx2 and generates two tensors of
       // shape AxBxC.  The input must have 2 elements per thread in the last
-      // dimension, which must be most-minor.  The result encoding is the same
-      // as the input, but with the last dimension removed.
+      // dimension, which must be the fastest running dimension. The result
+      // encoding is the same as the input, but with the last dimension removed.
       if (enc.getSizePerThread().back() != 2) {
         return emitOptionalError(
             loc, "SplitOp requires 2 elements per thread in the "
@@ -2773,7 +2758,7 @@ std::string getSharedLayoutStr(RankedTensorType tensorType,
   // Shared layouts are a mapping of (block, offset) --> (...)
 
   // We can just use a single int to index into elementMapping because
-  // the 'swizzle' operation rearranges the indicies---and we want to keep it
+  // the 'swizzle' operation rearranges the indices---and we want to keep it
   // that way
   int32_t idx = 0;
   // Enumerate all the offsets for each block
@@ -3177,4 +3162,32 @@ bool triton::gpu::areLayoutsEquivalent(ArrayRef<int64_t> shape, Attribute lhs,
   auto lhsLL = triton::gpu::toLinearLayout(shape, lhs);
   auto rhsLL = triton::gpu::toLinearLayout(shape, rhs);
   return lhsLL == rhsLL;
+}
+
+bool triton::gpu::isInnermostContiguous(MemDescType type, unsigned numElems) {
+  ArrayRef<int64_t> shape = type.getShape();
+  Attribute enc = type.getEncoding();
+  MLIRContext *ctx = enc.getContext();
+
+  LinearLayout actual = toLinearLayout(shape, enc);
+  StringAttr fastestIn = *actual.getInDimNames().begin();
+
+  // Flatten actual outs in reverse order to produce a row-major flattening
+  // of the layout
+  auto outNames = actual.getOutDimNames();
+  SmallVector<StringAttr> revOut(outNames.begin(), outNames.end());
+  std::reverse(revOut.begin(), revOut.end());
+  actual = actual.transposeOuts(revOut).flattenOuts();
+
+  return actual.getNumConsecutiveInOut() >= numElems;
+}
+
+LinearLayout triton::gpu::inferReshapeLinearLayout(ArrayRef<int64_t> srcShape,
+                                                   Attribute srcEnc,
+                                                   ArrayRef<int64_t> dstShape) {
+  auto *ctx = srcEnc.getContext();
+  auto src = toLinearLayout(srcShape, srcEnc);
+  assert(product(srcShape) == product(dstShape));
+  auto dst = reshapeLayout(ctx, src, dstShape);
+  return dst;
 }

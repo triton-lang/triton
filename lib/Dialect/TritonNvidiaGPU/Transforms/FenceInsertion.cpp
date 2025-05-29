@@ -13,24 +13,21 @@
 //
 //===----------------------------------------------------------------------===//
 
-using namespace mlir;
-namespace tt = ::mlir::triton;
-namespace ttg = ::mlir::triton::gpu;
-namespace ttng = ::mlir::triton::nvidia_gpu;
+namespace ttg = mlir::triton::gpu;
 
-#define GEN_PASS_CLASSES
+namespace mlir {
+namespace triton {
+namespace nvidia_gpu {
+
+#define GEN_PASS_DEF_TRITONGPUFENCEINSERTION
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/Passes.h.inc"
 
-namespace {
-
 struct FenceInsertionPass
-    : public TritonGPUFenceInsertionBase<FenceInsertionPass> {
+    : public impl::TritonGPUFenceInsertionBase<FenceInsertionPass> {
 
 public:
-  FenceInsertionPass() = default;
-  FenceInsertionPass(int computeCapability) {
-    this->computeCapability = computeCapability;
-  }
+  using impl::TritonGPUFenceInsertionBase<
+      FenceInsertionPass>::TritonGPUFenceInsertionBase;
   // TODO: support more general patterns to insert fences. eg. any op(generic)
   // to shared in use-def chain which refers by async proxy. We have generic(
   // convertlayout with sts/stmatix) + fence + async(wgmma) up to now
@@ -38,25 +35,18 @@ public:
     // Only insert fences for compute capability 9.0
     if (computeCapability < 90)
       return;
-    if (::triton::tools::getBoolEnv("DISABLE_MMA_V3"))
-      return;
     ModuleOp mod = getOperation();
-    mod.walk([&](Operation *op) {
-      if (!isa<ttng::WarpGroupDotOp>(op))
-        return WalkResult::advance();
-      OpBuilder builder(op);
-      auto a = op->getOperand(0);
-      auto b = op->getOperand(1);
-      auto mmaEncoding = dyn_cast<ttg::NvidiaMmaEncodingAttr>(
-          cast<RankedTensorType>(op->getResult(0).getType()).getEncoding());
-      if (!mmaEncoding || !mmaEncoding.isHopper())
-        return WalkResult::advance();
-      bool aDependsOnShared = dependOnSharedEncOperand(a);
-      bool bDependsOnShared = dependOnSharedEncOperand(b);
+    mod.walk([&](DotOpInterface dotOp) {
+      Value a = dotOp.getA();
+      Value b = dotOp.getB();
+      bool aDependsOnShared = dependOnCopyRegToShared(a);
+      bool bDependsOnShared = dependOnCopyRegToShared(b);
       if (!aDependsOnShared && !bDependsOnShared)
         return WalkResult::advance();
-      Operation *fence = builder.create<ttng::FenceAsyncSharedOp>(
-          op->getLoc(), /*bCluster=*/false);
+
+      OpBuilder builder(dotOp);
+      auto fence = builder.create<FenceAsyncSharedOp>(dotOp.getLoc(),
+                                                      /*bCluster=*/false);
       // If there is all the dependencies are outside of the loop try to hoist
       // the fence.
       while (auto loopOp = fence->getParentOfType<LoopLikeOpInterface>()) {
@@ -68,69 +58,75 @@ public:
           break;
         loopOp.moveOutOfLoop(fence);
       }
+
+      // If the previous op is already a fence, this one isn't needed.
+      if (auto lastFence =
+              dyn_cast_or_null<FenceAsyncSharedOp>(fence->getPrevNode())) {
+        if (lastFence.getBCluster() == fence.getBCluster())
+          fence.erase();
+      }
+
       return WalkResult::advance();
     });
   }
 
 private:
-  bool dependOnSharedEncOperand(Value operand) {
-    static DenseSet<std::pair<Operation *, unsigned>> trace;
-    auto op = operand.getDefiningOp();
-    // avoid redundant insertion
-    if (op && isa<mlir::triton::DotOpInterface>(op))
-      return false;
-    // reach convertlayout
-    if (op && isa<ttg::LocalAllocOp>(op) &&
-        cast<ttg::LocalAllocOp>(op).getSrc())
-      return true;
-    // root and not BlockArgument
-    if (!op && !isa<BlockArgument>(operand))
-      return false;
-    // op and not BlockArgument
-    if (op && !isa<BlockArgument>(operand)) {
-      for (auto v : op->getOperands()) {
-        if (dependOnSharedEncOperand(v))
-          return true;
-      }
-    }
-    // reach BlockArgument
-    // TODO: support other scf ops, IfOp, WhileOp, etc.
-    if (BlockArgument arg = dyn_cast<BlockArgument>(operand)) {
-      unsigned argNum = arg.getArgNumber();
-      Operation *argOwner = arg.getOwner()->getParentOp();
-      // support ForOp only
-      if (auto forOp = dyn_cast<scf::ForOp>(argOwner)) {
-        // prologue
-        auto iterOperands = forOp.getInitArgs();
-        if (argNum == 0)
-          return false;
-        if (dependOnSharedEncOperand(iterOperands[argNum - 1]))
-          return true;
-        // yield
-        auto yieldOp = forOp.getBody()->getTerminator();
-        Value v = yieldOp->getOperand(argNum - 1);
-        auto entry = std::make_pair<Operation *, unsigned>(std::move(yieldOp),
-                                                           std::move(argNum));
-        // avoid cyclic
-        if (trace.contains(entry))
-          return false;
-        else
-          trace.insert(entry);
+  // Return true if the operand depends on a copy from register to shared.
+  bool dependOnCopyRegToShared(Value operand) {
+    DenseSet<Value> visited;
+    return dependOnCopyRegToShared(operand, visited);
+  }
 
-        if (dependOnSharedEncOperand(v))
+  bool dependOnCopyRegToShared(Value operand, DenseSet<Value> &visited) {
+    // If the value has already been visited we can safely return false as we
+    // would early return when true.
+    if (visited.count(operand))
+      return false;
+    visited.insert(operand);
+    if (!isa<triton::gpu::MemDescType>(operand.getType()))
+      return false;
+
+    auto op = operand.getDefiningOp();
+    if (op) {
+      // reach an alloc copying from register, we need a fence.
+      if (isa<ttg::LocalAllocOp>(op) && cast<ttg::LocalAllocOp>(op).getSrc())
+        return true;
+      // if it is not an alloc, iterate over the operands.
+      for (auto v : op->getOperands()) {
+        if (dependOnCopyRegToShared(v))
           return true;
-      } else if (auto whileOp = dyn_cast<scf::WhileOp>(argOwner)) {
-        assert(false && "FenceInsertionPass does not supported WhileOp");
-      } else if (auto ifOp = dyn_cast<scf::IfOp>(argOwner)) {
-        assert(false && "FenceInsertionPass does not supported IfOp");
       }
+      return false;
     }
-    return false;
+
+    // reach BlockArgument
+    BlockArgument arg = cast<BlockArgument>(operand);
+    unsigned argNum = arg.getArgNumber();
+    Operation *argOwner = arg.getOwner()->getParentOp();
+    // look through ForOp iter argument
+    if (auto forOp = dyn_cast<scf::ForOp>(argOwner)) {
+      assert(argNum != 0 && "induction var cannot be memdesc type");
+      --argNum;
+      // prologue
+      if (dependOnCopyRegToShared(forOp.getInitArgs()[argNum], visited))
+        return true;
+      // yield
+      auto yieldOp = forOp.getBody()->getTerminator();
+      Value v = yieldOp->getOperand(argNum);
+      return dependOnCopyRegToShared(v, visited);
+    }
+
+    // look through `ttg.warp_specialize`.
+    if (auto wsOp = dyn_cast<ttg::WarpSpecializePartitionsOp>(argOwner)) {
+      return dependOnCopyRegToShared(
+          wsOp.getParentOp().getExplicitCaptures()[argNum]);
+    }
+
+    // Conservatively return true for other ops
+    return true;
   }
 };
-} // namespace
 
-std::unique_ptr<Pass>
-mlir::createTritonNvidiaGPUFenceInsertionPass(int computeCapability) {
-  return std::make_unique<FenceInsertionPass>(computeCapability);
-}
+} // namespace nvidia_gpu
+} // namespace triton
+} // namespace mlir

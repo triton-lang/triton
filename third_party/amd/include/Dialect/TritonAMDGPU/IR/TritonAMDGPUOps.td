@@ -119,6 +119,75 @@ def ExtractSliceOp : TT_AMDGPU_Op<"extract_slice", [Pure]> {
   let hasVerifier = 1;
 }
 
+def ConcatOp : TT_AMDGPU_Op<"concat", [Pure]> {
+  let summary = "concat operation";
+  let description = [{
+    The "concat" operation combines a list of source n-dimensional tensors into a single larger destination tensor.
+
+    All source tensors must have the same shape, element type, and encoding.
+    The concatenation dimension is inferred from the source and destination shapes provided by the user.
+    For example, two tensors of shape 64x128 can produce a destination shape of 128x128,
+    indicating concatenation along dimension 0; or 64x256, indicating concatenation along dimension 1.
+
+    Generally, source tensors passed as op arguments can be arranged into the resulting shape in multiple ways.
+    For example, given four tensors of shape 64x64:
+      concat s0<64x64>, s1<64x64>, s2<64x64>, s3<64x64> -> <128x128>
+
+    They can be laid out in different configurations within the result tensor:
+      1) s0 s1     2) s0 s2
+         s2 s3        s1 s3
+
+    From a logical tensor perspective, the source tensors are treated as elements of a tensor of tensors.
+    In other words, the 1-D array of input tensors is conceptually reshaped into an n-D grid.
+    The semantics of this op assume a row-major order (or its n-D generalization),
+    meaning the fastest-varying dimension is filled first, and the slowest-varying dimension is filled last.
+    In the example above, this corresponds to layout 1).
+
+    The source and destination tensors must have identical linear layouts at the CTA tile level.
+    That is, all base vectors for input dimensions must match, except for the register input dimension.
+    The register basis must align on the subset that defines the logical tensor shape of a single CTA tile.
+
+    This ensures that the concatenation is a no-op, meaning no data rearrangement among threads is required
+    to assemble the destination tensor with the given shape and layout.
+    However, the order of CTA tiles within the layout does not need to match between source and destination layouts.
+    It is the responsibility of the op's lowering logic to handle this correctly.
+
+    This op is designed to work on logical tensors directly, avoiding the need for complex layout reinterpretation or reshaping.
+    For example, the `tt.join` operation only supports concatenation along the innermost dimension,
+    and requires that the resulting innermost dimension provide 2 elements per thread, distributed across registers.
+    In contrast, this `concat` op imposes no constraints on the concatenation dimension or the size of dimensions.
+
+    * sources: a list of the input tensors.
+
+    Example 1:
+
+    ```mlir
+    #blocked = #ttg.blocked<{sizePerThread = [1, 8],
+        threadsPerWarp = [8, 8], warpsPerCTA = [4, 1], order = [1, 0]}>
+    %0 = amdgpu.concat %arg0, %arg1: tensor<32x64xf32, #blocked>,tensor<32x64xf32, #blocked>,
+      -> tensor<64x64xf32, #blocked>
+    ```
+
+    Example 2:
+    ```mlir
+    #src_layout = #ttg.linear<{register=[[0, 1], [0, 2], [0, 8], [0, 16], [0, 64], [64, 0]], lane=[[1, 0], [2, 0], [4, 0], [8, 0], [16, 0], [0, 4]], warp=[[0, 32], [32, 0]], block=[]}>
+    #dst_layout = #ttg.linear<{register=[[0, 1], [0, 2], [0, 8], [0, 16], [0, 64], [0, 128], [64, 0], [128, 0]], lane=[[1, 0], [2, 0], [4, 0], [8, 0], [16, 0], [0, 4]], warp=[[0, 32], [32, 0]], block=[]}>
+    %0 = amdgpu.concat %arg0, %arg1, %arg2, %arg3 : tensor<128x128xf16, #src_layout>, tensor<128x128xf16, #src_layout>, tensor<128x128xf16, #src_layout>,
+                                                    tensor<128x128xf16, #src_layout> -> tensor<256x256xf16, #dst_layout>
+    ```
+
+    }];
+
+  let arguments = (ins Variadic<TT_Tensor>:$sources);
+  let results = (outs AnyRankedTensor:$result);
+
+  let assemblyFormat = [{
+    $sources attr-dict `:` type($sources) `->` type($result)
+  }];
+
+  let hasVerifier = 1;
+}
+
 //===----------------------------------------------------------------------===//
 // InstructionSchedHint
 //===----------------------------------------------------------------------===//
@@ -191,7 +260,6 @@ def CondBarrierOp : TT_AMDGPU_Op<"cond_barrier"> {
 def BufferLoadOp : TT_AMDGPU_Op<"buffer_load", [
   SameLoadStoreOperandsAndResultEncoding,
   AttrSizedOperandSegments,
-  MemoryEffects<[MemRead<GlobalMemory>]>,
   TypesMatchWith<"result element type matches the pointed type of ptr", "result", "ptr", "getPointerTypeToElement($_self)">,
   TypesMatchWith<"result and offsets have the same shape", "result", "offsets", "getI32SameShape($_self)">,
   TypesMatchWith<"result and mask have the same shape", "result", "mask", "getI1SameShape($_self)",
@@ -214,7 +282,7 @@ def BufferLoadOp : TT_AMDGPU_Op<"buffer_load", [
       the cache memory access.
     }];
     let arguments = (ins
-      TT_Ptr:$ptr,
+      Arg<TT_Ptr, "Global memory scalar base pointer to load from", [MemRead<GlobalMemory>]>:$ptr,
       I32Tensor:$offsets,
       Optional<I32>:$stride,
       DefaultValuedAttr<TT_CacheModifierAttr, "::mlir::triton::CacheModifier::NONE">:$cache,
@@ -237,8 +305,6 @@ def BufferLoadOp : TT_AMDGPU_Op<"buffer_load", [
 
 def BufferLoadToLocalOp : TT_AMDGPU_Op<"buffer_load_to_local", [
   AttrSizedOperandSegments,
-  MemoryEffects<[MemRead<GlobalMemory>]>,
-  MemoryEffects<[MemWrite<SharedMemory>]>,
   TypesMatchWith<"dest element type matches pointee type of ptr", "dest", "ptr", "getPointerTypeToElement($_self)">,
   TypesMatchWith<"infer mask shape from offsets",
                  "offsets", "mask", "getI1SameShape($_self)",
@@ -251,8 +317,8 @@ def BufferLoadToLocalOp : TT_AMDGPU_Op<"buffer_load_to_local", [
     let description = [{
       AMD Buffer load operation. Similar to amdgpu.buffer_load op but directly wirtes to shared memory instead of into registers. }];
     let arguments = (ins
-      TTG_MemDescType:$dest,
-      TT_Ptr:$ptr,
+      Arg<TTG_MemDescType, "Shared memory slice to write to", [MemWrite<SharedMemory>]>:$dest,
+      Arg<TT_Ptr, "Global memory scalar base pointer to load from", [MemRead<GlobalMemory>]>:$ptr,
       I32Tensor:$offsets,
       Optional<TT_BoolTensor>:$mask,
       Optional<TT_Tensor>:$other,
@@ -275,8 +341,6 @@ def BufferLoadToLocalOp : TT_AMDGPU_Op<"buffer_load_to_local", [
 def BufferAtomicRMWOp : TT_AMDGPU_Op<"buffer_atomic_rmw", [
   AttrSizedOperandSegments,
   SameLoadStoreOperandsAndResultEncoding,
-  MemoryEffects<[MemRead<GlobalMemory>]>,
-  MemoryEffects<[MemWrite<GlobalMemory>]>,
   TypesMatchWith<"result element type matches the value type", "result", "value", "$_self">,
   TypesMatchWith<"result element type matches the pointed type of ptr", "result", "ptr", "getPointerTypeToElement($_self)">,
   TypesMatchWith<"result and offsets have the same shape", "result", "offsets", "getI32SameShape($_self)">,
@@ -301,7 +365,7 @@ def BufferAtomicRMWOp : TT_AMDGPU_Op<"buffer_atomic_rmw", [
     }];
     let arguments = (ins
       TT_AtomicRMWAttr:$atomic_rmw_op,
-      TT_Ptr:$ptr,
+      Arg<TT_Ptr, "Global memory pointer", [MemRead<GlobalMemory>, MemWrite<GlobalMemory>]>:$ptr,
       I32Tensor:$offsets,
       TT_Tensor:$value,
       Optional<I32>:$stride,
@@ -325,7 +389,6 @@ def BufferAtomicRMWOp : TT_AMDGPU_Op<"buffer_atomic_rmw", [
 def BufferStoreOp : TT_AMDGPU_Op<"buffer_store", [
   AttrSizedOperandSegments,
   SameLoadStoreOperandsEncoding,
-  MemoryEffects<[MemWrite<GlobalMemory>]>,
   TypesMatchWith<"value element type matches the pointed type of ptr", "value", "ptr", "getPointerTypeToElement($_self)">,
   TypesMatchWith<"value and offsets have the same shape", "value", "offsets", "getI32SameShape($_self)">,
   TypesMatchWith<"value and mask have the same shape", "value", "mask", "getI1SameShape($_self)",
@@ -347,7 +410,7 @@ def BufferStoreOp : TT_AMDGPU_Op<"buffer_store", [
     }];
     let arguments = (ins
       TT_Tensor:$value,
-      TT_Ptr:$ptr,
+      Arg<TT_Ptr, "Global memory scalar base pointer to write to", [MemWrite<GlobalMemory>]>:$ptr,
       I32Tensor:$offsets,
       Optional<I32>:$stride,
       DefaultValuedAttr<TT_CacheModifierAttr, "mlir::triton::CacheModifier::NONE">:$cache,

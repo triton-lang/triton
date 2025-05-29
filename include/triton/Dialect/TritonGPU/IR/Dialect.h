@@ -9,6 +9,7 @@
 // TritonGPU depends on Triton
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Attributes.h"
+#include "triton/Dialect/TritonGPU/IR/Traits.h"
 #include "triton/Dialect/TritonGPU/IR/Types.h"
 
 #include <unordered_map>
@@ -39,6 +40,7 @@ template <> struct hash<CacheKey> {
 
 namespace mlir::triton::gpu {
 
+constexpr static char AttrMaxRegistersName[] = "ttg.maxnreg";
 constexpr static char AttrNumWarpsName[] = "ttg.num-warps";
 constexpr static char AttrNumCTAsName[] = "ttg.num-ctas";
 constexpr static char AttrTargetName[] = "ttg.target";
@@ -274,6 +276,13 @@ expandMatrixOrderWithBatch(llvm::ArrayRef<unsigned> o);
 // Return true if the two layouts represent the exact same mapping.
 bool areLayoutsEquivalent(ArrayRef<int64_t> shape, Attribute lhs,
                           Attribute rhs);
+
+// Return true if the innermost numElems are contiguous.
+bool isInnermostContiguous(MemDescType type, unsigned numElems);
+
+LinearLayout inferReshapeLinearLayout(ArrayRef<int64_t> srcShape,
+                                      Attribute srcEnc,
+                                      ArrayRef<int64_t> dstShape);
 } // namespace mlir::triton::gpu
 
 #endif // TRITON_DIALECT_TRITONGPU_IR_DIALECT_H_

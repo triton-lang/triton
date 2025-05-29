@@ -19,8 +19,6 @@
 // -Fix bug when a value yield is used outside the loop and the value def is not
 // in the last stage. If we are not peeling the epilgue we need to remap the
 // output correctly.
-// -Allow for distance of 2 or more between producer and consumer for the cases
-// where the producer is in the same stage as the consumer.
 
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
@@ -30,7 +28,6 @@
 #include "mlir/IR/PatternMatch.h"
 #include "mlir/Transforms/RegionUtils.h"
 #include "llvm/ADT/MapVector.h"
-#include "llvm/ADT/SmallSet.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/MathExtras.h"
 
@@ -70,6 +67,8 @@ protected:
   triton::PipeliningOption::AnnotationlFnType annotateFn = nullptr;
   bool peelEpilogue;
   triton::PipeliningOption::PredicateOpFnType predicateFn = nullptr;
+  triton::PipeliningOption::EmitPredicateStageFnType emitPredicateStageFn =
+      nullptr;
 
   // When peeling the kernel we generate several version of each value for
   // different stage of the prologue. This map tracks the mapping between
@@ -163,6 +162,10 @@ bool LoopPipelinerInternal::initializeLoopInfo(
     LDBG("--no epilogue or predicate set -> BAIL");
     return false;
   }
+  emitPredicateStageFn = options.emitPredicateStageFn;
+  if (emitPredicateStageFn == nullptr) {
+    emitPredicateStageFn = mlir::triton::emitPredicateForStage;
+  }
   std::vector<std::pair<Operation *, unsigned>> schedule;
   options.getScheduleFn(forOp, schedule);
   if (schedule.empty()) {
@@ -220,9 +223,7 @@ bool LoopPipelinerInternal::initializeLoopInfo(
       auto [def, distance] = getDefiningOpAndDistance(operand);
       if (!def)
         continue;
-      if (distance > 1 && (stages[def] != stages[&op])) {
-        // Allow the case of loop carried dependency between the ops in the same
-        // stage.
+      if (distance > 1) {
         LDBG("--only support loop carried dependency with a distance of 1 or "
              "defined outside of the loop -> BAIL");
         return false;
@@ -495,20 +496,10 @@ LogicalResult LoopPipelinerInternal::createKernel(
   if (!peelEpilogue) {
     // Create a predicate for each stage except the last stage.
     Location loc = newForOp.getLoc();
-    Type t = ub.getType();
     for (unsigned i = 0; i < maxStage; i++) {
       // c = ub - (maxStage - i) * step
-      Value c = rewriter.create<arith::SubIOp>(
-          loc, ub,
-          rewriter.create<arith::MulIOp>(
-              loc, step,
-              rewriter.create<arith::ConstantOp>(
-                  loc, rewriter.getIntegerAttr(t, int64_t(maxStage - i)))));
-
-      Value pred = rewriter.create<arith::CmpIOp>(
-          newForOp.getLoc(), arith::CmpIPredicate::slt,
-          newForOp.getInductionVar(), c);
-      predicates[i] = pred;
+      predicates[i] = emitPredicateStageFn(rewriter, newForOp.getInductionVar(),
+                                           ub, step, maxStage, i);
     }
   }
   for (Operation *op : opOrder) {
@@ -546,6 +537,14 @@ LogicalResult LoopPipelinerInternal::createKernel(
       if (arg && arg.getOwner() == forOp.getBody()) {
         Value ret = forOp.getBody()->getTerminator()->getOperand(
             arg.getArgNumber() - 1);
+        if (forOp.isDefinedOutsideOfLoop(ret)) {
+          // Special case for values defined outside the loop accessed with
+          // distance 1.
+          if (useStage != maxStage) {
+            nestedNewOp->setOperand(operand->getOperandNumber(), ret);
+          }
+          continue;
+        }
         Operation *dep = ret.getDefiningOp();
         if (!dep)
           continue;
@@ -848,4 +847,20 @@ mlir::triton::pipelineForLoop(RewriterBase &rewriter, ForOp forOp,
     rewriter.eraseOp(forOp);
 
   return newForOp;
+}
+
+Value mlir::triton::emitPredicateForStage(RewriterBase &rewriter,
+                                          Value inductionVar, Value upperBound,
+                                          Value step, uint64_t maxStage,
+                                          uint64_t stage) {
+  auto loc = inductionVar.getLoc();
+  auto type = inductionVar.getType();
+  Value c = rewriter.create<arith::SubIOp>(
+      loc, upperBound,
+      rewriter.create<arith::MulIOp>(
+          loc, step,
+          rewriter.create<arith::ConstantOp>(
+              loc, rewriter.getIntegerAttr(type, maxStage - stage))));
+  return rewriter.create<arith::CmpIOp>(loc, arith::CmpIPredicate::slt,
+                                        inductionVar, c);
 }

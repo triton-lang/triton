@@ -1,24 +1,20 @@
-#include "triton/Conversion/TritonToTritonGPU/TritonToTritonGPUPass.h"
-
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
 #include "mlir/Dialect/UB/IR/UBOps.h"
-#include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Transforms/DialectConversion.h"
+#include "third_party/proton/dialect/include/Dialect/Proton/IR/Dialect.h"
+#include "triton/Conversion/TritonToTritonGPU/Passes.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/TritonGPUConversion.h"
-#include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
-#include "llvm/ADT/APSInt.h"
-#include <numeric>
-
-#define GEN_PASS_CLASSES
-#include "triton/Conversion/TritonToTritonGPU/Passes.h.inc"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 
-#include "third_party/proton/dialect/include/Dialect/Proton/IR/Dialect.h"
+namespace mlir::triton {
+#define GEN_PASS_DEF_CONVERTTRITONTOTRITONGPU
+#include "triton/Conversion/TritonToTritonGPU/Passes.h.inc"
+} // namespace mlir::triton
 
 namespace {
 
@@ -402,70 +398,6 @@ struct TritonSplitOpPattern : public OpConversionPattern<triton::SplitOp> {
   }
 };
 
-// This function returns the layout to use for gather/scatter indices. The
-// `gather4` and `scatter4` TMA instructions require 4 consecutive indices.
-// Thus, threads issuing these instructions must have all 4 index elements
-// available.
-static RankedTensorType getNewIndicesType(RankedTensorType type,
-                                          unsigned numThreads,
-                                          unsigned numWarps) {
-  assert(type.getRank() == 1);
-  auto enc = cast<DistributedEncodingTrait>(type.getEncoding());
-
-  // Technically any layout where we have a pack of 4 neighbouring elements plus
-  // broadcasted over the warp dimension is okay but for now we just pick a
-  // layout.
-  std::array<unsigned, 2> sizePerThread{1, 4};
-  std::array<unsigned, 2> threadsPerWarp = {numThreads, 1};
-  std::array<unsigned, 2> order = {1, 0};
-  std::array<unsigned, 2> warpsPerCta = {1, numWarps};
-
-  MLIRContext *ctx = type.getContext();
-  auto ctaLayout = CTALayoutAttr::getDefault(ctx, /*rank=*/2);
-  auto parentEncoding = BlockedEncodingAttr::get(
-      ctx, sizePerThread, threadsPerWarp, warpsPerCta, order, ctaLayout);
-  auto newEncoding = SliceEncodingAttr::get(ctx, /*dim=*/0, parentEncoding);
-  if (enc == newEncoding)
-    return {};
-
-  return RankedTensorType::get(type.getShape(), type.getElementType(),
-                               newEncoding);
-}
-
-// Function for converting any gather or scatter op that requires a specific
-// index layout. This also handles converting result types if there are any.
-static LogicalResult convertGatherScatterOp(Operation *op, OpOperand &indices,
-                                            ConversionPatternRewriter &b) {
-  auto type = cast<RankedTensorType>(indices.get().getType());
-  RankedTensorType newType =
-      getNewIndicesType(type, lookupThreadsPerWarp(b), lookupNumWarps(op));
-  if (!newType)
-    return failure();
-  Value index = b.create<ConvertLayoutOp>(op->getLoc(), newType, indices.get());
-  indices.set(index);
-  return success();
-}
-
-template <typename OpT>
-struct GatherScatterOpPattern : public OpConversionPattern<OpT> {
-  using OpConversionPattern<OpT>::OpConversionPattern;
-
-  LogicalResult
-  matchAndRewrite(OpT op, typename OpT::Adaptor adaptor,
-                  ConversionPatternRewriter &rewriter) const override {
-    LogicalResult result = success();
-    rewriter.modifyOpInPlace(op, [&] {
-      for (auto [operand, value] :
-           llvm::zip(op->getOpOperands(), adaptor.getOperands()))
-        operand.set(value);
-      for (OpResult result : op->getOpResults())
-        result.setType(this->typeConverter->convertType(result.getType()));
-      result = convertGatherScatterOp(op, op.getXOffsetsMutable(), rewriter);
-    });
-    return result;
-  }
-};
-
 struct TritonTransPattern : public OpConversionPattern<TransOp> {
   using OpConversionPattern::OpConversionPattern;
 
@@ -549,14 +481,17 @@ public:
   matchAndRewrite(triton::FuncOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     auto converter = getTypeConverter();
+    TypeConverter::SignatureConversion result(op.getNumArguments());
     auto newOp = rewriter.replaceOpWithNewOp<triton::FuncOp>(
         op, op.getName(), op.getFunctionType());
     addNamedAttrs(newOp, adaptor.getAttributes());
     rewriter.inlineRegionBefore(op.getBody(), newOp.getBody(),
                                 newOp.getBody().end());
-    if (failed(rewriter.convertRegionTypes(&newOp.getBody(), *converter)))
-      return failure();
-
+    // Convert just the entry block. The remaining unstructured control flow is
+    // converted by br patterns.
+    if (!newOp.getBody().empty())
+      rewriter.applySignatureConversion(&newOp.getBody().front(), result,
+                                        converter);
     return success();
   }
 };
@@ -592,43 +527,60 @@ void populateTritonPatterns(TritonGPUTypeConverter &typeConverter,
   MLIRContext *context = patterns.getContext();
   patterns.insert< // TODO: view should have custom pattern that views the
                    // layout
+      // clang-format off
       GenericOpPattern<triton::AdvanceOp>,
       GenericOpPattern<triton::MakeTensorPtrOp>,
-      GenericOpPattern<triton::ReshapeOp>, GenericOpPattern<triton::BitcastOp>,
-      GenericOpPattern<triton::FpToFpOp>, GenericOpPattern<triton::IntToPtrOp>,
-      GenericOpPattern<triton::PtrToIntOp>, GenericOpPattern<triton::SplatOp>,
-      TritonBroadcastPattern, GenericOpPattern<triton::AddPtrOp>,
-      TritonCatPattern, TritonJoinOpPattern, TritonSplitOpPattern,
+      GenericOpPattern<triton::ReshapeOp>,
+      GenericOpPattern<triton::BitcastOp>,
+      GenericOpPattern<triton::FpToFpOp>,
+      GenericOpPattern<triton::IntToPtrOp>,
+      GenericOpPattern<triton::PtrToIntOp>,
+      GenericOpPattern<triton::SplatOp>,
+      GenericOpPattern<triton::AddPtrOp>,
+      TritonBroadcastPattern,
+      TritonCatPattern,
+      TritonJoinOpPattern,
+      TritonSplitOpPattern,
       GenericOpPattern<triton::ClampFOp>,
       GenericOpPattern<triton::PreciseSqrtOp>,
       GenericOpPattern<triton::PreciseDivFOp>,
       GenericOpPattern<triton::MulhiUIOp>,
-      GenericOpPattern<triton::ElementwiseInlineAsmOp>, TritonReducePattern,
-      GenericOpPattern<triton::ReduceReturnOp>, TritonScanPattern,
+      GenericOpPattern<triton::ElementwiseInlineAsmOp>,
+      TritonReducePattern,
+      GenericOpPattern<triton::ReduceReturnOp>,
+      TritonScanPattern,
       GenericOpPattern<triton::ScanReturnOp>,
-      GenericOpPattern<triton::MakeRangeOp>, TritonExpandDimsPattern,
-      TritonTransPattern, TritonDotPattern,
+      GenericOpPattern<triton::MakeRangeOp>,
+      TritonExpandDimsPattern,
+      TritonTransPattern,
+      TritonDotPattern,
       GatherScatterOpPattern<DescriptorGatherOp>,
       GatherScatterOpPattern<DescriptorScatterOp>,
-      GatherScatterOpPattern<triton::nvidia_gpu::AsyncTMAGatherOp>,
-      GatherScatterOpPattern<triton::nvidia_gpu::AsyncTMAScatterOp>,
-      GenericOpPattern<triton::LoadOp>, GenericOpPattern<triton::StoreOp>,
-      GenericOpPattern<triton::HistogramOp>, GenericOpPattern<triton::GatherOp>,
+      GenericOpPattern<triton::LoadOp>,
+      GenericOpPattern<triton::StoreOp>,
+      GenericOpPattern<triton::HistogramOp>,
+      GenericOpPattern<triton::GatherOp>,
       GenericOpPattern<triton::ExternElementwiseOp>,
-      GenericOpPattern<triton::PrintOp>, GenericOpPattern<triton::AssertOp>,
+      GenericOpPattern<triton::PrintOp>,
+      GenericOpPattern<triton::AssertOp>,
       GenericOpPattern<triton::AtomicCASOp>,
-      GenericOpPattern<triton::AtomicRMWOp>, GenericOpPattern<ReturnOp>,
+      GenericOpPattern<triton::AtomicRMWOp>,
       GenericOpPattern<triton::DescriptorLoadOp>,
       GenericOpPattern<triton::DescriptorStoreOp>,
+      GenericOpPattern<triton::DescriptorReduceOp>,
       GenericOpPattern<triton::ExperimentalTensormapCreateOp>,
       GenericOpPattern<triton::ExperimentalTensormapFenceproxyAcquireOp>,
       // this assumes the right layout will be set later for dot scaled.
-      GenericOpPattern<triton::DotScaledOp>, GenericOpPattern<triton::CallOp>,
-      TritonFuncOpPattern>(typeConverter, context);
+      GenericOpPattern<triton::DotScaledOp>,
+      GenericOpPattern<triton::CallOp>,
+      GenericOpPattern<ReturnOp>,
+      TritonFuncOpPattern
+      // clang-format on
+      >(typeConverter, context);
 }
 // Proton patterns
 // NOTE: Because Proton's inputs are scalars and not tensors this conversion
-// isn't strictly nessessary however you could envision a case where we pass in
+// isn't strictly necessary however you could envision a case where we pass in
 // tensors in for Triton object specific tracing operations in which case we
 // would need to fill in the OpConversionPattern
 void populateProtonPatterns(TritonGPUTypeConverter &typeConverter,
@@ -823,22 +775,12 @@ void populateCFPatterns(TritonGPUTypeConverter &typeConverter,
   MLIRContext *context = patterns.getContext();
   patterns.add<CFCondBranchPattern, CFBranchPattern>(typeConverter, context);
 }
-//
 
 class ConvertTritonToTritonGPU
-    : public ConvertTritonToTritonGPUBase<ConvertTritonToTritonGPU> {
+    : public triton::impl::ConvertTritonToTritonGPUBase<
+          ConvertTritonToTritonGPU> {
 public:
-  ConvertTritonToTritonGPU() = default;
-  // constructor with some parameters set explicitly.
-  ConvertTritonToTritonGPU(const std::string &target, int numWarps,
-                           int threadsPerWarp, int numCTAs,
-                           bool enableSourceRemat) {
-    this->numWarps = numWarps;
-    this->threadsPerWarp = threadsPerWarp;
-    this->numCTAs = numCTAs;
-    this->target = target;
-    this->enableSourceRemat = enableSourceRemat;
-  }
+  using ConvertTritonToTritonGPUBase::ConvertTritonToTritonGPUBase;
 
   void runOnOperation() override {
     if (target.getValue().empty()) {
@@ -867,8 +809,6 @@ public:
     populateCFPatterns(typeConverter, patterns);
     patterns.insert<GenericOpPattern<ub::PoisonOp>>(typeConverter, context);
 
-    auto inti = llvm::APSInt(32, false);
-
     Builder b(&getContext());
     mod->setAttr(AttrNumWarpsName, b.getI32IntegerAttr(numWarps));
     mod->setAttr(AttrNumThreadsPerWarp, b.getI32IntegerAttr(threadsPerWarp));
@@ -877,27 +817,7 @@ public:
 
     if (failed(applyPartialConversion(mod, target, std::move(patterns))))
       return signalPassFailure();
-
-    // update layouts
-    //  broadcast src => multicast, dst => broadcasted
-    // if (failed(target.refineLayouts(mod, numWarps)))
-    //   return signalPassFailure();
   }
 };
 
 } // namespace
-
-std::unique_ptr<OperationPass<ModuleOp>>
-mlir::triton::createConvertTritonToTritonGPUPass(const std::string &target,
-                                                 int numWarps,
-                                                 int threadsPerWarp,
-                                                 int numCTAs,
-                                                 bool enableSourceRemat) {
-  return std::make_unique<::ConvertTritonToTritonGPU>(
-      target, numWarps, threadsPerWarp, numCTAs, enableSourceRemat);
-}
-
-std::unique_ptr<OperationPass<ModuleOp>>
-mlir::triton::createConvertTritonToTritonGPUPass() {
-  return std::make_unique<::ConvertTritonToTritonGPU>();
-}

@@ -36,7 +36,26 @@ def NVWSLowerWarpGroup : Pass<"nvws-lower-warp-group", "mlir::ModuleOp"> {
     warp groups will become isolated regions.
   }];
 
-  let constructor = "mlir::createNVWSLowerWarpGroupPass()";
+  let dependentDialects = [
+    "mlir::triton::nvws::NVWSDialect",
+    "mlir::triton::TritonDialect",
+    "mlir::triton::gpu::TritonGPUDialect"
+  ];
+}
+
+def NVWSLowerAref : Pass<"nvws-lower-aref", "mlir::ModuleOp"> {
+  let summary = "Convert nvws.aref.* to ttng.*barrier* ops.";
+
+  let description = [{
+    Convert nvws.aref.* to ttng.*barrier* ops.
+
+    The pass will convert each aref to a matched value and barrier set,
+    and will determined appropriate waits/signalling for values being
+    "empty" or "full" from the use/def chain of aref get/put.
+
+    This lowering may yield non-ideal parallelism in certain cases,
+    which will be optimized by follow up peephole passes.
+  }];
 
   let dependentDialects = [
     "mlir::triton::nvws::NVWSDialect",

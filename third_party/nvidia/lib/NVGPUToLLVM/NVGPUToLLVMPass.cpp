@@ -1,25 +1,25 @@
 #include "NVGPUToLLVM/NVGPUToLLVMPass.h"
+#include "NVGPUToLLVM/Passes.h"
 
 #include "Dialect/NVGPU/IR/Dialect.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/LLVMIR/NVVMDialect.h"
 #include "mlir/IR/PatternMatch.h"
-#include "mlir/Pass/Pass.h"
 #include "mlir/Support/LogicalResult.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 
 #include "nvidia/lib/TritonNVIDIAGPUToLLVM/Utility.h"
 #include "llvm/Support/ErrorHandling.h"
 
-using namespace mlir;
-using namespace mlir::triton;
-
-#define GEN_PASS_CLASSES
-#include "NVGPUToLLVM/Passes.h.inc"
-
 namespace ttn = mlir::triton::nvgpu;
 using ttn::Constraints;
 using ttn::OperandsAndConstraints;
+
+namespace mlir {
+namespace triton {
+
+#define GEN_PASS_DEF_CONVERTNVGPUTOLLVM
+#include "NVGPUToLLVM/Passes.h.inc"
 
 namespace {
 
@@ -232,6 +232,12 @@ public:
     auto loc = op.getLoc();
     auto b = TritonLLVMOpBuilder(loc, rewriter);
 
+    if (triton::gpu::lookupNumWarps(op) == 1) {
+      // If there is only one warp, the warp ID is always 0.
+      rewriter.replaceOp(op, b.i32_val(0));
+      return success();
+    }
+
     // If this is inside a warp specialize op, compute the relative thread ID
     // within the warp group.
     Value tid = rewriter.create<NVVM::ThreadIdXOp>(loc, i32_ty);
@@ -374,8 +380,11 @@ public:
 
 protected:
   unsigned getVectorSize(ttn::LoadMatrixOp op) const override {
-    auto resultType = cast<LLVM::LLVMStructType>(op.getType());
-    return resultType.getBody().size();
+    auto resultType = op.getType();
+    if (auto structTy = dyn_cast<LLVM::LLVMStructType>(resultType)) {
+      return structTy.getBody().size();
+    }
+    return 1;
   }
 
   std::string getOperands(ttn::LoadMatrixOp op,
@@ -766,10 +775,13 @@ static void lowerTensorMemoryAlloc(ModuleOp mod) {
   }
 }
 
-class ConvertNVGPUToLLVM : public ConvertNVGPUToLLVMBase<ConvertNVGPUToLLVM> {
+} // anonymous namespace
 
+class ConvertNVGPUToLLVM
+    : public impl::ConvertNVGPUToLLVMBase<ConvertNVGPUToLLVM> {
 public:
-  explicit ConvertNVGPUToLLVM() {}
+  using impl::ConvertNVGPUToLLVMBase<
+      ConvertNVGPUToLLVM>::ConvertNVGPUToLLVMBase;
 
   void runOnOperation() override {
     MLIRContext *context = &getContext();
@@ -800,11 +812,6 @@ public:
   }
 };
 
-} // anonymous namespace
-
-namespace mlir {
-namespace triton {
-
 LogicalResult
 nvgpu::rewriteAsPtxAsm(Operation *op, PatternRewriter &rewriter,
                        std::string ptxAsm,
@@ -834,10 +841,6 @@ nvgpu::rewriteAsPtxAsm(Operation *op, PatternRewriter &rewriter,
   }
 
   return success();
-}
-
-std::unique_ptr<OperationPass<ModuleOp>> createConvertNVGPUToLLVMPass() {
-  return std::make_unique<::ConvertNVGPUToLLVM>();
 }
 
 } // namespace triton

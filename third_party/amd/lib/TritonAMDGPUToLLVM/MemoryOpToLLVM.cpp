@@ -53,7 +53,7 @@ private:
   /// MFMA or WMMA.
   ///
   /// \returns value with packed loaded values or empty value if this local_load
-  /// is not supproted.
+  /// is not supported.
   Value lowerSharedToDotOperandMMA(
       triton::gpu::LocalLoadOp op, triton::gpu::LocalLoadOpAdaptor adaptor,
       const LLVMTypeConverter *typeConverter,
@@ -120,7 +120,6 @@ public:
     Attribute dstLayout = dstTy.getEncoding();
 
     if (canUseTransLoad(op, srcTy, dstTy)) {
-      assert(checkPerformanceProperties(srcTy, dstTy));
       return lowerSharedToDotOperandTransLL(op, adaptor, getTypeConverter(),
                                             rewriter);
     }
@@ -152,8 +151,7 @@ private:
     return kDim != sharedEnc.getOrder()[0];
   }
 
-  bool checkPerformanceProperties(MemDescType srcTy,
-                                  RankedTensorType dstTy) const {
+  bool checkKWidth(MemDescType srcTy, RankedTensorType dstTy) const {
     // Single rate MFMA insts:
     // fp16, bf16: mfma32x32x8, mfma16x16x16
     // fp8, bf8: mfma32x32x16, mfma16x16x32
@@ -162,11 +160,10 @@ private:
     // Double rate MFMA insts:
     // fp16, bf16: mfma32x32x16, mfma16x16x32
     // fp8, bf8: mfma32x32x64, mfma16x16x128
-    // i8: mfma32x32x32, mfma16x16x64
+    // int8: mfma32x32x32, mfma16x16x64
     //
-    // Check that double-rate MFMA instructions are used whenever possible.
-    // Single rate instructions should only be used if the K block size is not
-    // large enough.
+    // Check that kWidth of the dst dotOp layout is large enough to
+    // work with the transposed lds load instructions.
     auto dotEnc = llvm::cast<DotOperandEncodingAttr>(dstTy.getEncoding());
     auto mfmaEnc = llvm::cast<AMDMfmaEncodingAttr>(dotEnc.getParent());
 
@@ -178,10 +175,10 @@ private:
     assert((mDim == 32 || mDim == 16) && "Invalid MFMA instruction dimension");
 
     const int kFactor = 16 / bitwidth;
-    const int kSizeSingleRateMfma32 = 8 * kFactor;
-    const int kSizeSingleRateMfma16 = 16 * kFactor;
+    const int kSizeDoubleRateMfma32 = 16 * kFactor;
+    const int kSizeDoubleRateMfma16 = 32 * kFactor;
     int largeTileThreshold =
-        (mDim == 32) ? kSizeSingleRateMfma32 : kSizeSingleRateMfma16;
+        (mDim == 32) ? kSizeDoubleRateMfma32 : kSizeDoubleRateMfma16;
 
     // For FP8, wider MFMA instructions (scaled MFMA) have a k-dimension
     // that is four times of regular MFMA instructions.
@@ -191,10 +188,17 @@ private:
 
     const auto shape = dstTy.getShape();
     const int kDim = dotEnc.getOpIdx() == 0 ? rank - 1 : rank - 2;
+    const bool isLargeTile = shape[kDim] >= largeTileThreshold;
 
-    const bool isLargeTile = shape[kDim] > largeTileThreshold;
-    const int expectedKWidth = (isLargeTile ? 8 : 4) * kFactor;
-    return kWidth == expectedKWidth;
+    const int kWidthLargeTile = 8 * kFactor;
+    const int kWidthSmallTile = 4 * kFactor;
+    // For largeTile, i.e. double rated mfma is an option, it's accepted to
+    // have kWidth set for both double and single rated mfma
+    // For smallTile, it's only accepted to have kWidth set to single rate
+    // mfma. Smaller kWidth is not allowed to use transposed lds load.
+    return (isLargeTile &&
+            llvm::is_contained({kWidthLargeTile, kWidthSmallTile}, kWidth)) ||
+           (kWidth == kWidthSmallTile);
   }
 
   bool checkCurrentLimitation(Operation *localLoad,
@@ -237,6 +241,11 @@ private:
       return false;
     }
 
+    // 4. Check kWidth
+    if (!checkKWidth(srcTy, dstTy)) {
+      return false;
+    }
+
     return true;
   }
 
@@ -268,6 +277,7 @@ private:
           if (bitwidth == 16) {
             auto dsReadOp =
                 rewriter.create<ROCDL::ds_read_tr16_b64>(loc, vecTy, vecAddr);
+            LLVM::AMD::addLocalLoadNoAliasScope(op, dsReadOp);
             Value vecVal = dsReadOp.getResult();
             for (int v = 0; v < vecTy.getNumElements(); v++) {
               outVals.push_back(
@@ -281,6 +291,7 @@ private:
 
             auto dsReadOp =
                 rewriter.create<ROCDL::ds_read_tr8_b64>(loc, i32VecTy, vecAddr);
+            LLVM::AMD::addLocalLoadNoAliasScope(op, dsReadOp);
             Value vecVal = dsReadOp.getResult();
             for (auto i = 0; i < numElemsI32; ++i) {
               elemsI32.push_back(

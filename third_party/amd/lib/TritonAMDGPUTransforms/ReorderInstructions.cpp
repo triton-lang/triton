@@ -1,3 +1,4 @@
+#include "TritonAMDGPUTransforms/Passes.h"
 #include "mlir/Analysis/SliceAnalysis.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/BuiltinAttributes.h"
@@ -10,8 +11,14 @@
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "llvm/ADT/STLExtras.h"
 
-using namespace mlir;
 namespace ttg = mlir::triton::gpu;
+
+namespace mlir {
+
+#define GEN_PASS_DEF_TRITONAMDGPUREORDERINSTRUCTIONS
+#include "TritonAMDGPUTransforms/Passes.h.inc"
+
+namespace {
 
 //===----------------------------------------------------------------------===//
 // Utility functions
@@ -173,7 +180,7 @@ static void moveUpGlobalLoadInPrologue(triton::FuncOp funcOp) {
     BackwardSliceOptions options;
     options.omitBlockArguments = true;
     options.inclusive = false;
-    // Slice should inlcude values flowing into op regions
+    // Slice should include values flowing into op regions
     options.omitUsesFromAbove = false;
     options.filter = [&](Operation *defOp) -> bool {
       Block *defBlock = defOp->getBlock();
@@ -240,7 +247,7 @@ static void moveUpGlobalLoadInPrologue(triton::FuncOp funcOp) {
 //   local_store tileB, bufferB
 // }
 // ```
-// For now, we don't have a perfect hueristic about when should this
+// For now, we don't have a perfect heuristic about when should this
 // optimization be applied. Therefore, we implement a simple hueristic that
 // this is applied when the tile size of A and B are large enough, i.e.
 // nonKDim >= 128  and kDim >= 64. And also this is only applied for typical
@@ -288,16 +295,14 @@ static void sinkSecondLoad(scf::ForOp forOp) {
     ldBOp->moveBefore(dotOp);
 }
 
+} // anonymous namespace
+
 //===----------------------------------------------------------------------===//
 // Pass definition
 //===----------------------------------------------------------------------===//
 
-#define GEN_PASS_CLASSES
-#include "TritonAMDGPUTransforms/Passes.h"
-
-namespace {
 struct TritonAMDGPUReorderInstructionsPass
-    : public TritonAMDGPUReorderInstructionsBase<
+    : public impl::TritonAMDGPUReorderInstructionsBase<
           TritonAMDGPUReorderInstructionsPass> {
   void runOnOperation() override {
     ModuleOp m = getOperation();
@@ -321,8 +326,5 @@ struct TritonAMDGPUReorderInstructionsPass
     }
   }
 };
-} // namespace
 
-std::unique_ptr<Pass> mlir::createTritonAMDGPUReorderInstructionsPass() {
-  return std::make_unique<TritonAMDGPUReorderInstructionsPass>();
-}
+} // namespace mlir

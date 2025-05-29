@@ -16,6 +16,12 @@
 #C = #ttg.nvidia_mma<{versionMajor = 2, warpsPerCTA = [4, 1], instrShape = [16, 8]}>
 #A_DOT = #ttg.dot_op<{opIdx = 0, parent = #C, kWidth = 2}>
 #B_DOT = #ttg.dot_op<{opIdx = 1, parent = #C, kWidth = 2}>
+#NVMMA_SHARED_0 = #ttg.nvmma_shared<{swizzlingByteWidth = 0, transposed = false, elementBitWidth = 16}>
+#NVMMA_SHARED_32 = #ttg.nvmma_shared<{swizzlingByteWidth = 32, transposed = false, elementBitWidth = 16}>
+#NVMMA_SHARED_64 = #ttg.nvmma_shared<{swizzlingByteWidth = 64, transposed = false, elementBitWidth = 16}>
+#NVMMA_SHARED_128 = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16}>
+#NVMMA_SHARED_FP4PADDED = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 8, fp4Padded = true}>
+
 #smem = #ttg.shared_memory
 
 module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 1 : i32} {
@@ -434,8 +440,9 @@ tt.func @for_if_slice(%lb : index, %ub : index, %step : index, %A : !tt.ptr<f16>
   %c_shared_init = ttg.local_alloc : () -> !ttg.memdesc<128x32xf16, #A_SHARED, #ttg.shared_memory, mutable>
   %a_shared, %b_shared, %c_shared = scf.for %iv = %lb to %ub step %step iter_args(%a_shared = %a_shared_init, %b_shared = %b_shared_init, %c_shared = %c_shared_init) -> (!ttg.memdesc<128x32xf16, #A_SHARED, #ttg.shared_memory, mutable>, !ttg.memdesc<128x32xf16, #A_SHARED, #ttg.shared_memory, mutable>, !ttg.memdesc<128x32xf16, #A_SHARED, #ttg.shared_memory, mutable>) {
     scf.if %i1 {
+      %zero = arith.constant 0 : i32
       %index = arith.constant 8 : i32
-      %cst0 = ttg.memdesc_subview %a_shared[%index, %index] : !ttg.memdesc<128x32xf16, #A_SHARED, #ttg.shared_memory, mutable> -> !ttg.memdesc<32xf16, #A_SHARED, #ttg.shared_memory, mutable>
+      %cst0 = ttg.memdesc_subview %a_shared[%index, %zero] : !ttg.memdesc<128x32xf16, #A_SHARED, #ttg.shared_memory, mutable> -> !ttg.memdesc<32xf16, #A_SHARED, #ttg.shared_memory, mutable>
       scf.yield
     }
     scf.yield %b_shared, %a_shared, %a_shared : !ttg.memdesc<128x32xf16, #A_SHARED, #ttg.shared_memory, mutable>, !ttg.memdesc<128x32xf16, #A_SHARED, #ttg.shared_memory, mutable>, !ttg.memdesc<128x32xf16, #A_SHARED, #ttg.shared_memory, mutable>
@@ -908,6 +915,25 @@ tt.func @tightly_packed_captures(%arg0: i8, %arg1: i64) {
   default {
     ttg.warp_yield
   } : (i8, i64) -> ()
+  tt.return
+}
+// expected-remark @below {{nvmma_alignment}}
+// expected-remark @below {{size = 1088}}
+tt.func @nvmma_alignment(%lb : index, %ub : index, %step : index, %A : !tt.ptr<f16>, %B : !tt.ptr<f16>) {
+  // expected-remark @below {{offset = 0, size = 128}}
+  %fp4 = ttg.local_alloc : () -> !ttg.memdesc<8x8xi8, #NVMMA_SHARED_FP4PADDED, #ttg.shared_memory, mutable>
+  // expected-remark @below {{offset = 0, size = 64}}
+  %a = ttg.local_alloc : () -> !ttg.memdesc<32xf16, #A_SHARED, #ttg.shared_memory, mutable>
+  // expected-remark @below {{offset = 128, size = 64}}
+  %b = ttg.local_alloc : () -> !ttg.memdesc<8x8xi8, #NVMMA_SHARED_0, #ttg.shared_memory, mutable>
+  // expected-remark @below {{offset = 256, size = 64}}
+  %c = ttg.local_alloc : () -> !ttg.memdesc<8x8xi8, #NVMMA_SHARED_32, #ttg.shared_memory, mutable>
+  // expected-remark @below {{offset = 512, size = 64}}
+  %d = ttg.local_alloc : () -> !ttg.memdesc<8x8xi8, #NVMMA_SHARED_64, #ttg.shared_memory, mutable>
+  // expected-remark @below {{offset = 1024, size = 64}}
+  %e = ttg.local_alloc : () -> !ttg.memdesc<8x8xi8, #NVMMA_SHARED_128, #ttg.shared_memory, mutable>
+
+  ttg.local_dealloc %a : !ttg.memdesc<32xf16, #A_SHARED, #ttg.shared_memory, mutable>
   tt.return
 }
 

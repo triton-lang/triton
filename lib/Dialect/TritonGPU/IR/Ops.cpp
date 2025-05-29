@@ -5,9 +5,11 @@
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Attributes.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
+#include "triton/Dialect/TritonGPU/IR/LinearLayoutConversions.h"
 #include "triton/Dialect/TritonGPU/IR/Types.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
+#include "triton/Tools/LayoutUtils.h"
 #include "llvm/Support/Casting.h"
 #include "llvm/Support/LogicalResult.h"
 
@@ -441,6 +443,33 @@ MemDescTransOp::inferReturnTypes(MLIRContext *context,
   return success();
 }
 
+// MemDescReshapeOp
+
+LogicalResult MemDescReshapeOp::verify() {
+  MemDescType dstType = getResult().getType();
+  MemDescType srcType = getSrc().getType();
+  if (product(dstType.getShape()) != product(srcType.getShape())) {
+    return emitError(
+        "number of src and dst elements of reshape must be the same");
+  }
+  if (dstType.getElementType() != srcType.getElementType()) {
+    return emitError("result element type must match src element type");
+  }
+
+  // Infer the dst layout from the source and verify that it is equivalent.
+  auto srcEncoding = srcType.getEncoding();
+  Attribute inferedDstEncoding;
+
+  LinearLayout ll = inferReshapeLinearLayout(
+      srcType.getShape(), srcType.getEncoding(), dstType.getShape());
+  LinearLayout llDst =
+      triton::gpu::toLinearLayout(dstType.getShape(), dstType.getEncoding());
+  if (ll != llDst) {
+    return emitError("source and destination layout are incompatible.");
+  }
+  return success();
+}
+
 // LocalAllocOp
 void LocalAllocOp::getEffects(
     SmallVectorImpl<SideEffects::EffectInstance<MemoryEffects::Effect>>
@@ -452,12 +481,12 @@ void LocalAllocOp::getEffects(
   // op.
   if (!getType().getMutableMemory() && !op->hasAttr("allocation.offset"))
     return;
-  effects.emplace_back(MemoryEffects::Allocate::get(),
-                       mlir::triton::gpu::SharedMemory::get());
+  OpResult alloc = getOperation()->getOpResult(0);
+  effects.emplace_back(MemoryEffects::Allocate::get(), alloc,
+                       SharedMemory::get());
   if (getSrc())
-    effects.emplace_back(MemoryEffects::Write::get(),
-                         getOperation()->getOpResult(0),
-                         mlir::triton::gpu::SharedMemory::get());
+    effects.emplace_back(MemoryEffects::Write::get(), alloc,
+                         SharedMemory::get());
 }
 
 OpFoldResult LocalAllocOp::fold(FoldAdaptor adaptor) {
@@ -475,27 +504,32 @@ OpFoldResult LocalAllocOp::fold(FoldAdaptor adaptor) {
   return loadSrc;
 }
 
-LogicalResult LocalAllocOp::verify() {
-  if (!getSrc()) {
-    if (!getType().getMutableMemory())
-      return emitError("uninitialized alloc must have a mutable memdesc type");
+LogicalResult LocalAllocOp::verifyAllocOp(Operation *op, Value src,
+                                          MemDescType dstTy) {
+  if (dstTy.getShape() != dstTy.getAllocShape())
+    return op->emitOpError("result shape and its alloc shape must match");
+
+  if (!src) {
+    if (!dstTy.getMutableMemory()) {
+      return op->emitOpError(
+          "uninitialized alloc must have a mutable memdesc type");
+    }
     return success();
   }
-  auto srcTy = getSrc().getType();
-  auto dstTy = getType();
 
-  if (srcTy.getElementType() != dstTy.getElementType()) {
-    return emitError("result element type must match desc element type");
-  }
+  auto srcTy = cast<RankedTensorType>(src.getType());
+  if (srcTy.getElementType() != dstTy.getElementType())
+    return op->emitOpError("result element type must source element type");
+  if (srcTy.getShape() != dstTy.getShape())
+    return op->emitOpError("result shape must match source shape");
   return success();
 }
 
-// LocalLoadOp
-void LocalLoadOp::getEffects(
-    SmallVectorImpl<SideEffects::EffectInstance<MemoryEffects::Effect>>
-        &effects) {
-  effects.emplace_back(MemoryEffects::Read::get(), &getSrcMutable(),
-                       mlir::triton::gpu::SharedMemory::get());
+LogicalResult LocalAllocOp::verify() {
+  if (!isa<SharedMemorySpaceAttr>(getType().getMemorySpace()))
+    return emitOpError("should create a buffer of shared memory");
+
+  return verifyAllocOp(*this, getSrc(), getType());
 }
 
 // LocalStoreOp
@@ -505,27 +539,11 @@ LogicalResult LocalStoreOp::verify() {
   return success();
 }
 
-void LocalStoreOp::getEffects(
-    SmallVectorImpl<SideEffects::EffectInstance<MemoryEffects::Effect>>
-        &effects) {
-  effects.emplace_back(MemoryEffects::Write::get(), &getDstMutable(),
-                       mlir::triton::gpu::SharedMemory::get());
-}
-
 // AsyncCopyGlobalToLocalOp
 LogicalResult AsyncCopyGlobalToLocalOp::verify() {
   if (!getResult().getType().getMutableMemory())
     return emitOpError("Cannot store into immutable memory");
   return success();
-}
-
-void AsyncCopyGlobalToLocalOp::getEffects(
-    SmallVectorImpl<SideEffects::EffectInstance<MemoryEffects::Effect>>
-        &effects) {
-  effects.emplace_back(MemoryEffects::Read::get(), &getSrcMutable(),
-                       mlir::triton::GlobalMemory::get());
-  effects.emplace_back(MemoryEffects::Write::get(), &getResultMutable(),
-                       mlir::triton::gpu::SharedMemory::get());
 }
 
 LogicalResult MemDescSubviewOp::verify() {
@@ -583,15 +601,107 @@ LogicalResult MemDescSubviewOp::verify() {
             "offsets other than the first one must be constant zeros");
       }
     }
+    return success();
   }
 
-  // TODO(jlebar): Currently we generate illegal encodings, so we can't add a
-  // verifier for them.  In particular, we use the same encoding for the src and
-  // dst of a subview op, when the subview removes a dimension.  That generates
-  // an illegal shared encoding (because the size of `order` doesn't match the
-  // rank of the tensor), but it's not checked anywhere, and we believe the
-  // resulting code ultimately works.
+  assert(isa<SharedEncodingTrait>(srcEnc));
 
+  // corner case: 1D -> 1D into a 1 element tensor (we don't have 0D tensors)
+  if (srcTy.getRank() == 1 && dstTy.getRank() == 1 &&
+      dstTy.getDimSize(0) == 1) {
+    return success();
+  }
+
+  // There are two cases:
+  // 1. The subview is rank-reducing
+  //  - We split along the first dimension. It can be with non-constant offsets
+  if (srcTy.getRank() != dstTy.getRank()) {
+    if (srcTy.getRank() - dstTy.getRank() != 1) {
+      return emitError(
+          "only nD -> (n-1)D rank-reducing subviews are supported");
+    }
+    for (auto offset : getOffsets().take_back(dstTy.getRank())) {
+      if (auto constOp = offset.getDefiningOp<arith::ConstantOp>()) {
+        if (auto offsetInt = dyn_cast<IntegerAttr>(constOp.getValue())) {
+          if (offsetInt.getInt() != 0) {
+            return emitError("only first offset can be non-zero for a "
+                             "rank-reducing subview");
+          }
+        } else {
+          return emitError(
+              "only integer constant values are allowed for the split");
+        }
+      } else {
+        return emitError("only constant values are allowed outside the front "
+                         "dimension in a rank-reducing subview");
+      }
+    }
+    return success();
+  }
+  assert(srcTy.getRank() == dstTy.getRank());
+  // 2. The src is non-rank-reducing
+  //  - We split along at most one dim, but just with constant values
+  //  - The values where the split happens must not be within the swizzling
+  //  pattern
+  // Check which dimension we are splitting along
+  int dim = -1;
+  for (int i = 0; i < srcTy.getRank(); i++) {
+    if (srcTy.getDimSize(i) != dstTy.getDimSize(i)) {
+      if (dim != -1) {
+        return emitError(
+            "We don't allow subviews that split along multiple dimensions");
+      }
+      dim = i;
+    }
+  }
+  SmallVector<int64_t> offsets;
+  for (auto offset : getOffsets()) {
+    if (auto constOp = offset.getDefiningOp<arith::ConstantOp>()) {
+      if (auto offsetInt = dyn_cast<IntegerAttr>(constOp.getValue())) {
+        offsets.push_back(offsetInt.getInt());
+      } else {
+        return emitError(
+            "only integer constant values are allowed for the split");
+      }
+    } else {
+      return emitError("only constant values are allowed for the split");
+    }
+  }
+  // Identity subview
+  if (dim == -1) {
+    return success();
+  }
+
+  for (auto [i, offset] : llvm::enumerate(offsets)) {
+    if (i != dim) {
+      if (offset != 0) {
+        return emitError("A non zero offset found in a dimension that is "
+                         "not being split");
+      }
+    } else {
+      if (offset & (dstTy.getDimSize(dim) - 1)) {
+        return emitError("The split offset may not touch the tile");
+      }
+    }
+  }
+  auto ctx = getContext();
+  // The order gives us the honest-to-goodness layout rank
+  auto srcAllocShape = srcTy.getAllocShape().take_back(getOrder(srcTy).size());
+  auto llInv =
+      triton::gpu::toLinearLayout(srcAllocShape, srcTy.getEncoding()).invert();
+  auto kDim = mlir::StringAttr::get(ctx, "dim" + llvm::Twine(dim));
+  llvm::SmallVector<std::pair<mlir::StringAttr, int32_t>> namedOffsets;
+  for (auto d : standardOutDimNames(ctx, srcTy.getRank())) {
+    namedOffsets.push_back({d, 0});
+  }
+  for (int dimSize = dstTy.getDimSize(dim); dimSize < srcTy.getDimSize(dim);
+       dimSize *= 2) {
+    namedOffsets[dim] = {kDim, dimSize};
+    if (!llvm::isPowerOf2_32(llInv.apply(namedOffsets)[0].second)) {
+      return emitError(
+          "We don't support splitting along the swizzling pattern");
+    }
+  }
   return success();
 }
 
@@ -769,7 +879,7 @@ void WarpSpecializeOp::build(OpBuilder &builder, OperationState &state,
                              ArrayRef<int32_t> partitionNumWarps,
                              unsigned partitionNumRegions) {
   build(builder, state, resultTypes, /*explicitCaptures=*/ValueRange(),
-        partitionNumWarps, /*warpGroupStartIds=*/{});
+        partitionNumWarps, {}, {}, {});
   OpBuilder::InsertionGuard guard(builder);
   Block *container = builder.createBlock(state.regions.back().get());
   builder.create<WarpSpecializePartitionsOp>(state.location,

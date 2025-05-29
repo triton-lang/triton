@@ -66,7 +66,7 @@ class OptimizeAMDLDSUsage
   // minimal mfma tile is: [1*32, 4*32] = [32, 128]
   // minimal blocked tile is: [1*32*4, 4*2*1] = [128, 8]
   //
-  // Roughtly scratch buffer shape for conversion is:
+  // Roughly scratch buffer shape for conversion is:
   // [max(32, 128), max(128, 16)] = [128, 128].
   //
   // This shape could be reduces by introducing intermediate

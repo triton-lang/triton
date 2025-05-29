@@ -6,6 +6,7 @@ PYTHON ?= python
 BUILD_DIR := $(shell cd python; $(PYTHON) -c 'from build_helpers import get_cmake_dir; print(get_cmake_dir())')
 TRITON_OPT := $(BUILD_DIR)/bin/triton-opt
 PYTEST := $(PYTHON) -m pytest
+LLVM_BUILD_PATH ?= ".llvm-project/build"
 
 # Incremental builds
 
@@ -27,17 +28,23 @@ test-lit:
 test-cpp:
 	ninja -C $(BUILD_DIR) check-triton-unit-tests
 
-.PHONY: test-python
+.PHONY: test-unit
 test-unit: all
-	cd python/test/unit && $(PYTEST) -s -n 8 --ignore=cuda/test_flashattention.py \
-		--ignore=language/test_line_info.py --ignore=language/test_subprocess.py --ignore=test_debug.py
+	cd python/test/unit && $(PYTEST) -s -n 8 --ignore=language/test_line_info.py \
+		--ignore=language/test_subprocess.py --ignore=test_debug.py
 	$(PYTEST) -s -n 8 python/test/unit/language/test_subprocess.py
 	$(PYTEST) -s -n 8 python/test/unit/test_debug.py --forked
+	$(PYTEST) -s -n 8 python/triton_kernels/tests/
 	TRITON_DISABLE_LINE_INFO=0 $(PYTEST) -s python/test/unit/language/test_line_info.py
-	# Run cuda/test_flashattention.py separately to avoid out of gpu memory
-	$(PYTEST) -s python/test/unit/cuda/test_flashattention.py
+	# Run attention separately to avoid out of gpu memory
+	$(PYTEST) -vs python/tutorials/06-fused-attention.py
 	TRITON_ALWAYS_COMPILE=1 TRITON_DISABLE_LINE_INFO=0 LLVM_PASS_PLUGIN_PATH=python/triton/instrumentation/libGPUInstrumentationTestLib.so \
 		$(PYTEST) --capture=tee-sys -rfs -vvv python/test/unit/instrumentation/test_gpuhello.py
+	$(PYTEST) -s -n 8 python/test/gluon
+
+.PHONY: test-gluon
+test-gluon: all
+	$(PYTEST) -s -n 8 python/test/gluon
 
 .PHONY: test-regression
 test-regression: all
@@ -79,11 +86,21 @@ dev-install-torch:
 
 .PHONY: dev-install-triton
 dev-install-triton:
-	$(PYTHON) -m pip install -e python --no-build-isolation -v
+	$(PYTHON) -m pip install -e . --no-build-isolation -v
 
 .PHONY: dev-install
 .NOPARALLEL: dev-install
 dev-install: dev-install-requires dev-install-triton
+
+.PHONY: dev-install-llvm
+.NOPARALLEL: dev-install-llvm
+dev-install-llvm:
+	LLVM_BUILD_PATH=$(LLVM_BUILD_PATH) scripts/build-llvm-project.sh
+	TRITON_BUILD_WITH_CLANG_LLD=1 TRITON_BUILD_WITH_CCACHE=0 \
+		LLVM_INCLUDE_DIRS=$(LLVM_BUILD_PATH)/include \
+		LLVM_LIBRARY_DIR=$(LLVM_BUILD_PATH)/lib \
+		LLVM_SYSPATH=$(LLVM_BUILD_PATH) \
+	$(MAKE) dev-install
 
 # Updating lit tests
 

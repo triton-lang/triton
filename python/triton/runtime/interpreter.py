@@ -1,32 +1,36 @@
+from __future__ import annotations
 import ast
 import textwrap
 import inspect
-from typing import Tuple, List
+from typing import Tuple, List, Dict
 
 import math
 import numpy as np
 
 import triton
 import triton.language as tl
+import dataclasses
 from dataclasses import dataclass
+
+from triton.language import semantic
+from triton.tools.tensor_descriptor import TensorDescriptor
 from .errors import InterpreterError
 from functools import partial
 from .._C.libtriton import interpreter as _interpreter
 from .._C.libtriton import ir as _ir
 
 
+@dataclass
 class TensorHandle:
-
-    def __init__(self, data, dtype):
-        '''
-            data: numpy array
-            dtype: triton type, either pointer_type or scalar_type.
-            we don't store block_type here because the shape information is already available in the data field
-            attr: a dictionary of attributes
-        '''
-        self.data = data
-        self.dtype = dtype
-        self.attr = {}
+    '''
+        data: numpy array
+        dtype: triton type, either pointer_type or scalar_type.
+        we don't store block_type here because the shape information is already available in the data field
+        attr: a dictionary of attributes
+    '''
+    data: np.array
+    dtype: tl.dtype
+    attr: Dict = dataclasses.field(default_factory=dict)
 
     def __bool__(self):
         return bool(self.data.all())
@@ -103,6 +107,7 @@ class TensorDescHandle:
             off = (offsets[dim].data + np.arange(self.block_shape[dim])).reshape(bcast_dims)
             ptrs = ptrs + (itemsize * off * self.strides[dim].data).astype(np.uint64)
             masks = masks & (0 <= off) & (off < self.shape[dim].data)
+        assert ptrs.dtype == np.uint64
         ptrs = TensorHandle(ptrs, self.base.dtype.scalar)
         return ptrs, masks
 
@@ -114,7 +119,7 @@ class InterpreterOptions:
     sanitize_overflow: bool = True
     arch: str = None
     supported_fp8_dtypes: Tuple[str] = ("fp8e5", "fp8e5b16", "fp8e4nv", "fp8e4b8", "fp8e4b15")
-    deprecated_fp8_dtypes: Tuple[str] = ()
+    deprecated_fp8_dot_operand_dtypes: Tuple[str] = ()
     default_dot_input_precision: str = "tf32"
     allowed_dot_input_precisions: Tuple[str] = ("tf32", "tf32x3", "ieee")
     max_num_imprecise_acc_default: int = 0
@@ -590,7 +595,7 @@ class InterpreterBuilder:
             b_data = _convert_float(b_data, b.dtype, tl.float16, None).view(np.float16)
         return TensorHandle(np.matmul(a_data, b_data, dtype=d.data.dtype) + d.data, d.dtype.scalar)
 
-    def create_make_range(self, start, stop):
+    def create_make_range(self, ret_ty, start, stop):
         return TensorHandle(np.arange(start, stop, dtype=np.int32), tl.int32)
 
     def create_histogram(self, data, bins):
@@ -644,7 +649,8 @@ class InterpreterBuilder:
         # Triton only supports splitting the original tensor into two along the last axis
         return (TensorHandle(val.data[..., 0], val.dtype.scalar), TensorHandle(val.data[..., 1], val.dtype.scalar))
 
-    def create_splat(self, arg, shape):
+    def create_splat(self, ret_ty, arg):
+        shape = ret_ty.shape
         if isinstance(arg.dtype, tl.block_type):
             return TensorHandle(np.full(shape, arg.data[0], dtype=_get_np_dtype(arg.dtype)), arg.dtype.scalar)
         else:  # scalar
@@ -718,6 +724,7 @@ class InterpreterBuilder:
         shape: List[TensorHandle],
         strides: List[TensorHandle],
         tensor_shape: List[int],
+        is_signed: bool,
     ):
         desc = TensorDescHandle(base, shape, strides, tensor_shape)
         desc.validate()
@@ -756,6 +763,8 @@ class InterpreterBuilder:
         np_type = _get_np_dtype(type)
         if "int" in np_type.name:
             return TensorHandle(np.full(1, -1, dtype=np_type), type.scalar)
+        elif np_type == np.bool_:
+            return TensorHandle(np.full(1, True, dtype=np_type), type.scalar)
         else:
             raise TypeError(f"unsupported type {type}")
 
@@ -825,12 +834,10 @@ class ReduceScanOpInterface:
 
     def apply(self, input):
         if not isinstance(input, tuple):
-            input = (input, )
+            return self.apply((input, ))[0]
         self.check_tensor(input)
-        return self.apply_impl(input)
-
-    def apply_impl(self, input):
-        raise NotImplementedError("apply_impl not implemented")
+        ret = self.apply_impl(input)
+        return tuple(ret) if isinstance(ret, (list, tuple)) else (ret, )
 
 
 class ReduceOps(ReduceScanOpInterface):
@@ -890,7 +897,7 @@ class ReduceOps(ReduceScanOpInterface):
                 # Take a scalar
                 data = data.item()
             ret.append(self.to_tensor(data, input[i].dtype))
-        return ret[0] if len(ret) == 1 else tuple(ret)
+        return ret
 
     def min_max(self, input, val_reduce_op, idx_reduce_op=None):
         # If input is a tuple, it must be (val, index), and we only take val
@@ -988,7 +995,7 @@ class ScanOps(ReduceScanOpInterface):
         if self.reverse:
             for arg in ret:
                 arg.handle.data = np.flip(arg.handle.data, axis=self.axis)
-        return len(ret) == 1 and ret[0] or tuple(ret)
+        return ret
 
 
 def _patch_reduce_scan():
@@ -1130,6 +1137,17 @@ def _implicit_cvt(arg):
         return tl.tensor(handle, ty)
     elif isinstance(arg, tuple):
         return _tuple_create(arg, map(_implicit_cvt, arg))
+    elif isinstance(arg, TensorDescriptor):
+        strides = [_implicit_cvt(s) for s in arg.strides]
+        assert arg.strides[-1] == 1
+        strides[-1] = tl.constexpr(1)
+        return semantic.make_tensor_descriptor(
+            base=_implicit_cvt(arg.base),
+            shape=[_implicit_cvt(s) for s in arg.shape],
+            strides=strides,
+            block_shape=[tl.constexpr(b) for b in arg.block_shape],
+            builder=InterpreterBuilder(),
+        )
     return arg
 
 
@@ -1165,6 +1183,13 @@ class GridExecutor:
         def _to_cpu(arg):
             if isinstance(arg, tuple):
                 return _tuple_create(arg, map(_to_cpu, arg))
+            elif isinstance(arg, TensorDescriptor):
+                return TensorDescriptor(
+                    _to_cpu(arg.base),
+                    arg.shape,
+                    arg.strides,
+                    arg.block_shape,
+                )
             elif not hasattr(arg, "data_ptr"):
                 return arg
 
@@ -1198,6 +1223,8 @@ class GridExecutor:
             elif isinstance(arg_dev, tuple):
                 for (arg_dev, arg_hst) in zip(arg_dev, arg_hst):
                     _from_cpu(arg_dev, arg_hst)
+            elif isinstance(arg_dev, TensorDescriptor):
+                _from_cpu(arg_dev.base, arg_hst.base)
 
         for arg_dev, arg_hst in zip(args_dev, args_hst):
             _from_cpu(arg_dev, arg_hst)

@@ -33,11 +33,12 @@ struct AutomaticWarpSpecialization
 
 void AutomaticWarpSpecialization::runOnOperation() {
   OpPassManager pm;
+  pm.addPass(createTritonGPUPartitionScheduling());
   pm.addPass(createTritonGPULoadMMASpecialization({numStages}));
   pm.addPass(createTritonGPURewritePartitionDependencies());
-  // `int-range-optimizations` is good at cleaning up loop arithmetic involving
-  // circular buffers.
-  pm.addPass(arith::createIntRangeOptimizationsPass());
+  // `int-range-optimizations` and SCCP are good at cleaning up loop arithmetic.
+  // FIXME: Re-enable integer range analysis once it is fixed.
+  // pm.addPass(arith::createIntRangeOptimizationsPass());
   pm.addPass(createSCCPPass());
   pm.addPass(createCSEPass());
   pm.addPass(createTritonGPUPartitionLoops());
@@ -55,6 +56,7 @@ void AutomaticWarpSpecialization::runOnOperation() {
 
   pm.clear();
   pm.addPass(createTritonGPUOptimizePartitionWarps());
+  pm.addPass(createTritonGPUScheduleLoops());
   if (failed(runPipeline(pm, getOperation())))
     return signalPassFailure();
 }

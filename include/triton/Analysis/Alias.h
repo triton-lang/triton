@@ -89,6 +89,11 @@ public:
   visitOperation(Operation *op,
                  ArrayRef<const dataflow::Lattice<AliasInfo> *> operands,
                  ArrayRef<dataflow::Lattice<AliasInfo> *> results) override;
+
+  void visitNonControlFlowArguments(
+      Operation *op, const RegionSuccessor &successor,
+      ArrayRef<dataflow::Lattice<AliasInfo> *> argLattices,
+      unsigned firstIndex) override;
 };
 
 } // namespace mlir

@@ -4,7 +4,6 @@ import pytest
 import torch
 import triton
 import triton.language as tl
-import triton.tools.experimental_descriptor
 
 from triton._internal_testing import is_cuda, is_hopper, is_hip_cdna, is_hip_cdna2, is_hip
 
@@ -90,12 +89,12 @@ def matmul_kernel_tma(  #
     offs_k = 0
     accumulator = tl.zeros((BLOCK_M, BLOCK_N), dtype=tl.float32)
     for _ in tl.range(0, tl.cdiv(K, BLOCK_K), num_stages=NUM_STAGES):
-        a = tl._experimental_descriptor_load(a_ptr, [offs_am, offs_k], [BLOCK_M, BLOCK_K], tl.float16)
-        b = tl._experimental_descriptor_load(b_ptr, [offs_k, offs_bn], [BLOCK_K, BLOCK_N], tl.float16)
+        a = a_ptr.load([offs_am, offs_k])
+        b = b_ptr.load([offs_k, offs_bn])
         accumulator = tl.dot(a, b, acc=accumulator)
         offs_k += BLOCK_K
     accumulator = accumulator.to(tl.float16)
-    tl._experimental_descriptor_store(output_ptr, accumulator, [offs_am, offs_bn])
+    output_ptr.store([offs_am, offs_bn], accumulator)
 
 
 @triton.jit
@@ -254,12 +253,10 @@ def test_pipeline_matmul(scale, device):
     use_tma = not scale and is_hopper()
 
     if use_tma:
-        a_tma = triton.tools.experimental_descriptor.create_2d_tma_descriptor(a.data_ptr(), M, K, BLOCK_M, BLOCK_K,
-                                                                              a.element_size())
-        b_tma = triton.tools.experimental_descriptor.create_2d_tma_descriptor(b.data_ptr(), K, N, BLOCK_K, BLOCK_N,
-                                                                              b.element_size())
-        output_tma = triton.tools.experimental_descriptor.create_2d_tma_descriptor(output.data_ptr(), M, N, BLOCK_M,
-                                                                                   BLOCK_N, output.element_size())
+        from triton.tools.tensor_descriptor import TensorDescriptor
+        a_tma = TensorDescriptor.from_tensor(a, block_shape=[BLOCK_M, BLOCK_K])
+        b_tma = TensorDescriptor.from_tensor(b, block_shape=[BLOCK_K, BLOCK_N])
+        output_tma = TensorDescriptor.from_tensor(output, block_shape=[BLOCK_M, BLOCK_N])
         handler = matmul_kernel_tma[grid](a_tma, b_tma, output_tma, M, N, K, BLOCK_M, BLOCK_N, BLOCK_K,
                                           NUM_STAGES=NUM_STAGES)
     else:
@@ -305,7 +302,6 @@ def test_pipeline_matmul(scale, device):
             if torch.cuda.get_device_capability()[0] == 10:
                 if scale:
                     # A, B, scale, decomposed A shmem
-                    # MMA pipelining fails to identify the MMA pattern in this case, so the barrier is not inserted.
                     count = 4
                 else:
                     # A, B, MMA barrier
@@ -428,7 +424,7 @@ def indirect_matmul_kernel(
 @pytest.mark.parametrize("BLOCK_M, BLOCK_N, BLOCK_K", [(128, 128, 128), (128, 128, 64), (128, 64, 128)])
 @pytest.mark.parametrize("num_stages", [1, 3, 5])
 def test_indirect_matmul(BLOCK_M, BLOCK_N, BLOCK_K, num_stages, device):
-    if num_stages > 3 and is_hip():
+    if (num_stages > 3 or (num_stages >= 3 and (BLOCK_M, BLOCK_N, BLOCK_K) == (128, 128, 128))) and is_hip():
         pytest.skip("Not enough shared memory on HIP.")
     M = BLOCK_M
     N = BLOCK_N

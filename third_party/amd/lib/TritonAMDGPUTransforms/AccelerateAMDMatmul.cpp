@@ -10,15 +10,15 @@
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Tools/LayoutUtils.h"
 #include "llvm/ADT/TypeSwitch.h"
-#include <memory>
 
-using namespace mlir;
 namespace tt = mlir::triton;
 namespace ttg = mlir::triton::gpu;
 using ::mlir::LLVM::AMD::isChainDotHead;
 using ::mlir::LLVM::AMD::isChainDotTail;
 using ::mlir::LLVM::AMD::scaleDotElemTypeToMLIRType;
 using mlir::triton::gpu::chooseScaledMfmaScaleLayout;
+
+namespace mlir {
 
 namespace {
 using triton::AMD::ISAFamily;
@@ -139,7 +139,7 @@ FailureOr<MfmaIntrinsic>
 chooseMfmaInstruction(int mfmaVersion, RankedTensorType cType, Type aElemType,
                       Type bElemType, int inputKSize, int enforcedNonKDim,
                       bool withScale, bool allowXF32) {
-  // number of matrix elements along k dim per one MFMA intruction
+  // number of matrix elements along k dim per one MFMA instruction
   unsigned kDim = 0;
 
   auto resShape = cType.getShape();
@@ -175,7 +175,7 @@ chooseMfmaInstruction(int mfmaVersion, RankedTensorType cType, Type aElemType,
   assert(kDim != 0);
   assert(enforcedNonKDim != 0 || (M % mDim == 0 && N % nDim == 0));
   // if inputKSize % kDim != 0 this layout will introduce data duplication,
-  // consider FMA dot is prefered, except cases MFMA layout is enforced.
+  // consider FMA dot is preferred, except cases MFMA layout is enforced.
   if (enforcedNonKDim == 0 && inputKSize % kDim != 0)
     return failure();
   return maybeMfmaIntrinsic;
@@ -291,28 +291,26 @@ OperandTypesVector getOperandTypesForWmmaOp(PatternRewriter &rewriter,
   SmallVector<OperandTypesVector> applicableTypes = {
       // clang-format off
       {f16, f16, f32, f32},
-      {f16, f16, f16, f16},
       {bf16, bf16, f32, f32},
-      {bf16, bf16, bf16, bf16},
       {i8, i8, i32, i32},
-      // i4, i4, i32, i32 - is supported configuration
+      // {f16, f16, f16, f16},
+      // {bf16, bf16, bf16, bf16},
+      // {i4, i4, i32, i32} - are supported configurations
       // by WMMA instruction, but not supported by triton
       // clang-format on
   };
-  // TODO: support fp8 configurations for WMMAv2. The code should be as
-  // following:
-  // if (version == 2) {
-  //   Type fp8 = rewriter.getFp8Type();
-  //   Type bf8 = rewriter.getBF8Type();
-  //   applicableTypes.append({
-  //       // clang-format off
-  //       {fp8, fp8, f32, f32},
-  //       {fp8, bf8, f32, f32},
-  //       {bf8, fp8, f32, f32},
-  //       {bf8, bf8, f32, f32},
-  //       // clang-format on
-  //   });
-  // }
+  if (version == 2) {
+    Type fp8e4nv = rewriter.getType<Float8E4M3FNType>();
+    Type fp8e5 = rewriter.getType<Float8E5M2Type>();
+    applicableTypes.append({
+        // clang-format off
+        {fp8e4nv, fp8e4nv, f32, f32},
+        {fp8e4nv, fp8e5, f32, f32},
+        {fp8e5, fp8e4nv, f32, f32},
+        {fp8e5, fp8e5, f32, f32},
+        // clang-format on
+    });
+  }
   return selectMatrixCoreOperandTypes(dot, applicableTypes);
 }
 
@@ -513,6 +511,13 @@ public:
     if (!isChainDotTail(dotOp))
       kWidth *= kPack;
 
+    // For FA kernel with f16 elementTy, we limit the 2nd dot to have
+    // kWidth = 4 so that the coversion from #mma (result of 1st dot)
+    // to #dotOp (operand 0 of 2nd dot) is a no-op.
+    // TODO (lixun): relax the condition for 8-bit elementTy.
+    if ((aElemTy.isF16() || aElemTy.isBF16()) && isChainDotTail(dotOp))
+      kWidth = 4;
+
     Value newDot;
     if (withScale) {
       // If a scaled mfma instruction is chosen, we will rewrite the DotOp to a
@@ -572,6 +577,9 @@ public:
 
   LogicalResult matchAndRewrite(triton::DotScaledOp dotOp,
                                 PatternRewriter &rewriter) const override {
+    // TODO: add support for m/n packed formats.
+    if (!dotOp.getLhsKPack() || !dotOp.getRhsKPack())
+      return failure();
     using TensorValue = TypedValue<RankedTensorType>;
 
     RankedTensorType oldRetType = dotOp.getType();
@@ -992,11 +1000,6 @@ public:
         aShape[rank - 1] % mnkDim[2] != 0)   // k
       return failure();
 
-    if (wmmaVersion == 2 && llvm::isa<FloatType>(oldAType) &&
-        oldAType.getIntOrFloatBitWidth() == 8) {
-      return rewriter.notifyMatchFailure(dotOp, "not supported yet");
-    }
-
     // get operand types
     auto operandTypes = getOperandTypesForWmmaOp(rewriter, dotOp, wmmaVersion);
     if (operandTypes.empty())
@@ -1089,6 +1092,13 @@ public:
       // Try Fp16 x Fp16 -> Fp32 v_dot
       // if k % 2 != 0: can not use fp V_DOT instruction
       if (dotTypes.a.isF16() && dotTypes.b.isF16() && dotTypes.c.isF32() &&
+          dotTypes.d.isF32() && k % 2 == 0) {
+        return true;
+      }
+
+      // CDNA4 has Bf16 v_dot2
+      if (AMD::deduceISAFamily(arch) == ISAFamily::CDNA4 &&
+          dotTypes.a.isBF16() && dotTypes.b.isBF16() && dotTypes.c.isF32() &&
           dotTypes.d.isF32() && k % 2 == 0) {
         return true;
       }
@@ -1212,20 +1222,16 @@ public:
 
 } // namespace
 
-#define GEN_PASS_CLASSES
+#define GEN_PASS_DEF_TRITONAMDGPUACCELERATEMATMUL
 #include "TritonAMDGPUTransforms/Passes.h.inc"
 
 class TritonAMDGPUAccelerateMatmulPass
-    : public TritonAMDGPUAccelerateMatmulBase<
+    : public impl::TritonAMDGPUAccelerateMatmulBase<
           TritonAMDGPUAccelerateMatmulPass> {
 public:
-  TritonAMDGPUAccelerateMatmulPass() = default;
-  TritonAMDGPUAccelerateMatmulPass(StringRef archGen, int matrixInstructionSize,
-                                   int kPack) {
-    this->archGenerationName = archGen.data();
-    this->matrixInstructionSize = matrixInstructionSize;
-    this->kPack = kPack;
-  }
+  using impl::TritonAMDGPUAccelerateMatmulBase<
+      TritonAMDGPUAccelerateMatmulPass>::TritonAMDGPUAccelerateMatmulBase;
+
   void runOnOperation() override {
 
     MLIRContext *context = &getContext();
@@ -1260,8 +1266,4 @@ public:
   }
 };
 
-std::unique_ptr<Pass> mlir::createTritonAMDGPUAccelerateMatmulPass(
-    std::string archGen, int matrixInstructionSize, int kPack) {
-  return std::make_unique<TritonAMDGPUAccelerateMatmulPass>(
-      archGen, matrixInstructionSize, kPack);
-}
+} // namespace mlir

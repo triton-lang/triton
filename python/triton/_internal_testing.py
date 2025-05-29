@@ -4,7 +4,7 @@ import numpy as np
 import torch
 import triton
 import triton.language as tl
-from triton.backends.nvidia.compiler import _path_to_binary
+from triton import knobs
 import pytest
 
 from numpy.random import RandomState
@@ -49,23 +49,23 @@ def is_hip():
 
 def is_hip_cdna2():
     target = get_current_target()
-    if target is None or target.backend != 'hip':
-        return False
-    return target.arch == 'gfx90a'
+    return target is not None and target.backend == 'hip' and target.arch == 'gfx90a'
 
 
 def is_hip_cdna3():
     target = get_current_target()
-    if target is None or target.backend != 'hip':
-        return False
-    return target.arch in ('gfx940', 'gfx941', 'gfx942')
+    return target is not None and target.backend == 'hip' and target.arch == 'gfx942'
 
 
 def is_hip_cdna4():
     target = get_current_target()
-    if target is None or target.backend != 'hip':
-        return False
-    return target.arch in ('gfx950')
+    return target is not None and target.backend == 'hip' and target.arch == 'gfx950'
+
+
+def is_hip_gfx12():
+    target = get_current_target()
+    print(target.arch)
+    return target is not None and target.backend == 'hip' and 'gfx12' in target.arch
 
 
 def is_hip_cdna():
@@ -162,7 +162,7 @@ def supports_tma(byval_only=False):
         return True
     if not is_cuda():
         return False
-    _, cuda_version = _path_to_binary("ptxas")
+    cuda_version = knobs.nvidia.ptxas.version
     min_cuda_version = (12, 0) if byval_only else (12, 3)
     cuda_version_tuple = tuple(map(int, cuda_version.split(".")))
     assert len(cuda_version_tuple) == 2, cuda_version_tuple
@@ -177,6 +177,10 @@ def tma_skip_msg(byval_only=False):
 
 
 requires_tma = pytest.mark.skipif(not supports_tma(), reason=tma_skip_msg())
+
+
+def default_alloc_fn(size: int, align: int, _):
+    return torch.empty(size, dtype=torch.int8, device="cuda")
 
 
 def unwrap_tensor(t: Union[torch.Tensor, triton.runtime.jit.TensorWrapper]) -> torch.Tensor:

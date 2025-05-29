@@ -1,6 +1,9 @@
 #ifndef TRITON_CUBLAS_TYPES_H
 #define TRITON_CUBLAS_TYPES_H
 
+#include <cstddef>
+#include <cstdint>
+
 // Forward declarations of cuBLAS types and functions.
 
 /* CUBLAS status type returns */

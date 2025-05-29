@@ -24,10 +24,14 @@ public:
                     std::optional<Value> ctaId, Type elemTy,
                     Value pred) const override;
 
+  // FIXME: Need to kill this function
   bool canUseStMatrix(RankedTensorType tensorTy, ArrayRef<unsigned> repShape,
                       ArrayRef<unsigned> paddedRepShape,
                       ArrayRef<unsigned> order,
                       int swizzleByteSize) const override;
+
+  bool supportLdMatrix() const override { return computeCapability >= 75; }
+  bool supportStMatrix() const override { return computeCapability >= 90; }
 
   void storeMatrixShared(RewriterBase &rewriter, Location loc, Value ptr,
                          Value val) const override;

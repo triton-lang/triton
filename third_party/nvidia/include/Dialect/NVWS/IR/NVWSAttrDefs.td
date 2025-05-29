@@ -23,6 +23,7 @@
 #define NVWS_ATTRDEFS
 
 include "mlir/IR/AttrTypeBase.td"
+include "mlir/IR/EnumAttr.td"
 include "NVWSDialect.td"
 
 class NVWS_Attr<string name, list<Trait> traits = [],
@@ -32,5 +33,18 @@ class NVWS_Attr<string name, list<Trait> traits = [],
 
 def NVWS_TypeArray : ArrayOfAttr<NVWS_Dialect, "TypeArray", "type_array", "Type"> {}
 def NVWS_IntArray : ArrayOfAttr<NVWS_Dialect, "IntArray", "int_array", "int"> {}
+
+// Type for synchronization tokens.
+def NVWS_TokenLoadTypeAttr : I32EnumAttr<
+    "TokenLoadType", "",
+    [
+      I32EnumAttrCase<"None", 0, "none">,
+      I32EnumAttrCase<"AsyncLoadOp", 1, "asyncLoadOp">,
+      I32EnumAttrCase<"TMALoadOp", 2, "tmaLoadOp">,
+      I32EnumAttrCase<"LocalStoreOp", 3, "localStoreOp">,
+      I32EnumAttrCase<"TmemLoadOp", 4, "TmemLoadOp">,
+    ]>{
+  let cppNamespace = "::mlir::triton::nvws";
+}
 
 #endif
