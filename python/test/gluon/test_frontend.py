@@ -3,6 +3,8 @@ import expecttest
 from triton import knobs
 from triton.experimental import gluon
 from triton.experimental.gluon import language as ttgl
+from triton._filecheck import filecheck_test
+import triton.language as tl
 
 
 @gluon.jit
@@ -68,3 +70,62 @@ module attributes {"ttg.num-warps" = 4 : i32} {
 } loc(#loc)
 #loc = loc(unknown)
 """)
+
+
+@gluon.jit
+def warp_specialize_default(a, b):
+    return b, a
+
+
+@gluon.jit
+def warp_specialize_worker0(a, b):
+    pass
+
+
+@gluon.jit
+def warp_specialize_worker1(a, b):
+    pass
+
+
+@tl.core._aggregate
+class Pair:
+    first: tl.tensor
+    second: tl.tensor
+
+    def __init__(self, first, second):
+        self.first = first
+        self.second = second
+
+
+@gluon.jit
+def anchor(x):
+    pass
+
+
+@filecheck_test
+@gluon.jit
+def test_warp_specialize():
+    # CHECK-LABEL: tt.func public @test_warp_specialize
+    # CHECK-NEXT:    [[A:%.*]] = tt.make_range {end = 1 : i32, start = 0 : i32}
+    # CHECK-NEXT:    [[B:%.*]] = tt.make_range {end = 2 : i32, start = 0 : i32}
+    # CHECK-NEXT:    [[C:%.*]] = tt.make_range {end = 4 : i32, start = 0 : i32}
+    # CHECK-NEXT:    [[OUTS:%.*]]:3 = ttg.warp_specialize([[A]], [[B]], [[C]]) {{.*}}requestedRegisters = array<i32: 24, 48>
+    # CHECK-NEXT:    default {
+    # CHECK-NEXT:      [[RESULTS:%.*]]:3 = tt.call @"warp_specialize_default{{.*}}"([[A]], [[B]], [[C]])
+    # CHECK-NEXT:      warp_yield [[RESULTS]]#0, [[RESULTS]]#1, [[RESULTS]]#2
+    # CHECK-NEXT:    }
+    # CHECK-NEXT:    partition0(%arg0: tensor<1xi32>, %arg1: tensor<2xi32>, %arg2: tensor<4xi32>) num_warps(4) {
+    # CHECK-NEXT:      call @"warp_specialize_worker0{{.*}}"(%arg0, %arg1, %arg2)
+    # CHECK-NEXT:      warp_return
+    # CHECK-NEXT:    }
+    # CHECK-NEXT:    partition1(%arg0: tensor<1xi32>, %arg1: tensor<2xi32>, %arg2: tensor<4xi32>) num_warps(4) {
+    # CHECK-NEXT:      call @"warp_specialize_worker1{{.*}}"(%arg0, %arg1, %arg2)
+    # CHECK-NEXT:      warp_return
+    # CHECK-NEXT:    }
+    # CHECK-NEXT:    call @anchor{{.*}}([[OUTS]]#0)
+    # CHECK-NEXT:    call @"anchor{{.*}}"([[OUTS]]#1, [[OUTS]]#2)
+    pair = Pair(tl.arange(0, 1), tl.arange(0, 2))
+    a, b = ttgl.warp_specialize((pair, tl.arange(0, 4)), warp_specialize_default,
+                                [warp_specialize_worker0, warp_specialize_worker1], [4, 4], [24, 48])
+    anchor(a)
+    anchor(b)
