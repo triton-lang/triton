@@ -15,6 +15,8 @@ namespace ttg = triton::gpu;
 struct GluonOpBuilder : public TritonOpBuilder {};
 
 void init_gluon_ir(py::module &&m) {
+  using ret = py::return_value_policy;
+
   py::class_<GluonOpBuilder, TritonOpBuilder>(
       m, "GluonOpBuilder", py::module_local(), py::dynamic_attr())
       .def(py::init<MLIRContext *>())
@@ -82,5 +84,36 @@ void init_gluon_ir(py::module &&m) {
       .def("create_local_load",
            [](GluonOpBuilder &self, Type resultTy, Value memDesc) -> Value {
              return self.create<ttg::LocalLoadOp>(resultTy, memDesc);
-           });
+           })
+
+      .def("create_warp_return",
+           [](GluonOpBuilder &self) -> Operation * {
+             return self.create<ttg::WarpReturnOp>();
+           })
+      .def("create_warp_yield",
+           [](GluonOpBuilder &self, std::vector<Value> &values) -> Operation * {
+             return self.create<ttg::WarpYieldOp>(values);
+           })
+      .def("create_warp_specialize_partitions",
+           [](GluonOpBuilder &self, int numPartitions) -> Operation * {
+             return self.create<ttg::WarpSpecializePartitionsOp>(numPartitions);
+           })
+      .def("create_warp_specialize", [](GluonOpBuilder &self,
+                                        std::vector<Type> &resultTypes,
+                                        std::vector<Value> &explicitCaptures,
+                                        std::vector<int> &partitionNumWarps) {
+        return self.create<ttg::WarpSpecializeOp>(resultTypes, explicitCaptures,
+                                                  partitionNumWarps);
+      });
+
+  py::class_<ttg::WarpSpecializeOp, OpState>(m, "WarpSpecializeOp",
+                                             py::module_local())
+      .def("get_default_region", &ttg::WarpSpecializeOp::getDefaultRegion,
+           ret::reference)
+      .def("get_partition_op_holder",
+           &ttg::WarpSpecializeOp::getPartitionOpHolder, ret::reference)
+      .def("set_requested_registers", [](ttg::WarpSpecializeOp &self,
+                                         std::vector<int> &requestedRegisters) {
+        self.setRequestedRegisters(requestedRegisters);
+      });
 }
