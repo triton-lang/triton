@@ -64,9 +64,8 @@ struct CircularStoreOpConversion
     const int segmentWordSize = bufferSizeInBytes / selectedWarpNum / 4;
 
     // Compute the actual base offset (with urem as circular buffer).
-    Value segment = adaptor.getSegment();
     Value tagOffset =
-        b.add(segment, b.urem(curIdx, b.i32_val(segmentWordSize)));
+        b.add(segmentBase, b.urem(curIdx, b.i32_val(segmentWordSize)));
 
     // Store the counter into buffer.
     auto bufferBaseType = bufferBase.getType();
