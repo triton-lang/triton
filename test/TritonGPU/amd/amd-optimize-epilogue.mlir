@@ -1,4 +1,4 @@
-// RUN: triton-opt %s -split-input-file -tritonamdgpu-optimize-epilogue | FileCheck %s
+// RUN: triton-opt %s -split-input-file -tritonamdgpu-optimize-epilogue="arch-generation-name=gfx950" | FileCheck %s
 
 // CHECK-LABEL: one_op_in_chain
 // CHECK-NOT: ttg.convert_layout %{{.*}} : tensor<32x32xf32, #mma> -> tensor<32x32xf32, #blocked>

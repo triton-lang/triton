@@ -21,6 +21,7 @@
  * SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
  */
 
+#include "TritonAMDGPUToLLVM/TargetUtils.h"
 #include "TritonAMDGPUTransforms/Passes.h"
 #include "mlir/IR/PatternMatch.h"
 #include "mlir/Pass/PassManager.h"
@@ -210,7 +211,18 @@ class TritonAMDGPUOptimizeEpiloguePass
           TritonAMDGPUOptimizeEpiloguePass> {
 
 public:
+  using impl::TritonAMDGPUOptimizeEpilogueBase<
+      TritonAMDGPUOptimizeEpiloguePass>::TritonAMDGPUOptimizeEpilogueBase;
+
   void runOnOperation() override {
+
+    // This pass will use v_permlane to speed in-wave swap and these
+    // instructions are shipped only with CDNA4
+    if (triton::AMD::deduceISAFamily(archGenerationName) !=
+        triton::AMD::ISAFamily::CDNA4) {
+      return;
+    }
+
     MLIRContext *context = &getContext();
     ModuleOp m = getOperation();
 

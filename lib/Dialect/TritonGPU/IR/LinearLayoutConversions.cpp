@@ -1515,8 +1515,7 @@ chooseMfmaLikeStoreLayout(RankedTensorType valType) {
   bool isMfma32 = mfmaLayout.getMDim() == 32 && mfmaLayout.getNDim() == 32;
   Type elemType = valType.getElementType();
   if (!(valType.getRank() == 2 && (elemType.isF16() || elemType.isBF16()) &&
-        mfmaLayout.getVersionMajor() == 4 && mfmaLayout.getIsTransposed() &&
-        isMfma32))
+        mfmaLayout.getIsTransposed() && isMfma32))
     return {};
 
   auto valShape = valType.getShape();
