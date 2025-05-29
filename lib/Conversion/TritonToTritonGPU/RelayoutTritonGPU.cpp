@@ -105,6 +105,10 @@ public:
     TritonGPUConversionTarget target(*context, typeConverter);
     target.addDynamicallyLegalDialect<ttng::TritonNvidiaGPUDialect>(
         [&](Operation *op) {
+          // bool isLegal = true;
+          // for (auto result : op->getResults())
+          //   isLegal |= typeConverter.isLegal(result.getType());
+          // return isLegal;
           return TritonGPUConversionTarget::isDynamicallyLegal(op,
                                                                typeConverter);
         });
@@ -122,7 +126,10 @@ public:
         // clang-format on
         >(typeConverter, context);
 
-    if (failed(applyPartialConversion(mod, target, std::move(patterns))))
+    ConversionConfig config;
+    config.allowPatternRollback = true;
+    if (failed(
+            applyPartialConversion(mod, target, std::move(patterns), config)))
       return signalPassFailure();
   }
 };

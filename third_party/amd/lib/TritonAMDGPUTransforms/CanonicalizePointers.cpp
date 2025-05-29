@@ -1482,8 +1482,6 @@ void TritonAMDGPUCanonicalizePointersPass::runOnOperation() {
     }
   }
 
-  ConversionConfig config;
-  config.buildMaterializations = false;
   ConversionTarget target(getContext());
   auto isLegal = [&opsToRewrite](Operation *op) {
     if (auto ifOp = llvm::dyn_cast<scf::IfOp>(op)) {
@@ -1531,6 +1529,9 @@ void TritonAMDGPUCanonicalizePointersPass::runOnOperation() {
       ConvertSCFConditionOp, ConvertSCFWhileOp, ConvertCFCondBranch,
       ConvertCFBranch, ConvertArithSelectOp, ConvertReturnOp>(
       patterns.getContext(), opsToRewrite, fatPrs);
+  ConversionConfig config;
+  config.buildMaterializations = false;
+  config.allowPatternRollback = false;
   if (failed(applyPartialConversion(func, target, std::move(patterns), config)))
     return signalPassFailure();
 

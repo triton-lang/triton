@@ -299,6 +299,8 @@ struct LocalAllocOpConversion
                   ConversionPatternRewriter &rewriter) const override {
     if (!op.getSrc())
       return failure();
+    if (!targetInfo.supportLdStMatrix())
+      return failure();
     MemDescType memDescType = op.getType();
     RankedTensorType srcTy = op.getSrc().getType();
     Type llvmElemTy = typeConverter->convertType(srcTy.getElementType());
@@ -345,6 +347,8 @@ struct LocalStoreOpConversion
   LogicalResult
   matchAndRewrite(triton::gpu::LocalStoreOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
+    if (!targetInfo.supportLdStMatrix())
+      return failure();
     Type llvmElemTy =
         getTypeConverter()->convertType(op.getDst().getType().getElementType());
     SharedMemoryObject smemObj = LLVM::getSharedMemoryObjectFromStruct(

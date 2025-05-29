@@ -164,9 +164,14 @@ public:
 
     return dedupResultVals;
   }
+
+  std::function<bool(SourceOp)> matchesFunction = nullptr;
+
   LogicalResult
   matchAndRewrite(SourceOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
+    if (matchesFunction && !matchesFunction(op))
+      return failure();
     auto resultTy = op.getType();
     Location loc = op->getLoc();
     // element type
