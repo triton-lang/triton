@@ -116,8 +116,8 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
   // We might want to merge them at some point, but having to support
   // ldmatrix.trans makes the code in lowerLdStMatrix a bit specific
   void
-  lowerLdStShared(Location loc, MLIRContext *ctx, LinearLayout regLl,
-                  LinearLayout smemLl,
+  lowerLdStShared(Location loc, MLIRContext *ctx, LinearLayout cvt,
+                  int elemsPerVec,
                   SmallVector<Value> &vals_, // Input for store, output for load
                   Type llvmElemTy, Value smemBase,
                   ConversionPatternRewriter &rewriter) const {
@@ -131,15 +131,11 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
     auto kWarp = str_attr("warp");
     auto kOffset = str_attr("offset");
 
-    // Form the map from offset to value
-    auto flatSmem = smemLl.reshapeIns({{kOffset, smemLl.getTotalInDimSize()}});
-    auto cvt = regLl.invertAndCompose(flatSmem);
-
-    auto tile = LinearLayout::identity1D(
-        smemLl.getInDimSize(str_attr("vector")), kReg, kOffset);
+    // Form the map from value to offset
+    auto tile = LinearLayout::identity1D(elemsPerVec, kReg, kOffset);
     // By construction, there is a register permutation that allows us to
     // divideLeft
-    auto permutation = *regPermForDivideLeft(cvt, tile);
+    auto permutation = *regPermForDivide(cvt, tile, /*left=*/true);
     cvt = permutation.apply(cvt);
     if (isStore) {
       vals = permutation.apply(vals);
@@ -241,21 +237,38 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
       smem = optimalSwizzling(srcLayout, dstLayout, 8);
     }
 
-    auto moveRepsToBackSrc = actionMoveRepsToBack(srcLayout, smem);
-    srcLayout = moveRepsToBackSrc.apply(srcLayout);
-    inVals = moveRepsToBackSrc.apply(inVals);
-    auto moveRepsToBackDst = actionMoveRepsToBack(dstLayout, smem);
-    dstLayout = moveRepsToBackDst.apply(dstLayout);
+    // Extract reps from smem
+    auto kReg = str_attr("register");
+    auto kReps = StringAttr::get(ctx, "reps");
+    auto nReps = smem.getInDimSize(kReps);
+    auto reps = LinearLayout::identity1D(nReps, kReg, kReps);
+
+    auto totalReadCvt = srcLayout.invertAndCompose(smem);
+    auto totalWriteCvt = dstLayout.invertAndCompose(smem);
+
+    // The permutation exists by construction of the reps dimension in
+    // optimalSwizzling
+    auto permRead = *regPermForDivide(totalReadCvt, reps, /*left=*/false);
+    totalReadCvt = permRead.apply(totalReadCvt);
+    inVals = permRead.apply(inVals);
+    auto permWrite = *regPermForDivide(totalWriteCvt, reps, /*left=*/false);
+    totalWriteCvt = permWrite.apply(totalWriteCvt);
+
+    // Remove the reps and flatten into offset
+    auto readCvt = *divideRight(totalReadCvt, reps);
+    auto writeCvt = *divideRight(totalWriteCvt, reps);
+    auto kOffset = str_attr("offset");
+    readCvt = readCvt.reshapeOuts({{kOffset, readCvt.getTotalOutDimSize()}});
+    writeCvt = writeCvt.reshapeOuts({{kOffset, writeCvt.getTotalOutDimSize()}});
 
     Value smemBase =
         LLVM::getSharedMemoryBase(loc, rewriter, targetInfo, op.getOperation());
 
-    auto kReg = str_attr("register");
-    auto kReps = StringAttr::get(ctx, "reps");
-    auto nReps = smem.getInDimSize(kReps);
-    auto tileSize = srcLayout.getInDimSize(kReg) / nReps;
+    auto tileSize = readCvt.getInDimSize(kReg);
 
+    assert(inVals.size() == tileSize * nReps);
     SmallVector<Value> outVals;
+    auto elemsPerVec = smem.getInDimSize(str_attr("vector"));
     for (int i = 0; i < nReps; ++i) {
       if (i > 0)
         b.barrier();
@@ -263,18 +276,18 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
       auto tileInVals = SmallVector<Value>(inVals.begin() + i * tileSize,
                                            inVals.begin() + (i + 1) * tileSize);
       // Store
-      lowerLdStShared(loc, ctx, srcLayout, smem, tileInVals, llvmElemTy,
+      lowerLdStShared(loc, ctx, readCvt, elemsPerVec, tileInVals, llvmElemTy,
                       smemBase, rewriter);
       b.barrier();
       // Load
       SmallVector<Value> tileOutVals;
-      lowerLdStShared(loc, ctx, dstLayout, smem, tileOutVals, llvmElemTy,
+      lowerLdStShared(loc, ctx, writeCvt, elemsPerVec, tileOutVals, llvmElemTy,
                       smemBase, rewriter);
       llvm::append_range(outVals, tileOutVals);
     }
 
-    // Undo the moveRepsToBackDst
-    outVals = moveRepsToBackDst.inverse().apply(outVals);
+    // Undo the permWrite used to divideRight
+    outVals = permWrite.inverse().apply(outVals);
 
     // Unwrap sub-byte elements if necessary
     if (isSubByte) {

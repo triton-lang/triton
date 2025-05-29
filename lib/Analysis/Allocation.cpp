@@ -48,8 +48,8 @@ static unsigned getNumScratchElemsSwizzledCvt(RankedTensorType srcTy,
   dstLayout = actionRemoveBroadcastedRegs(dstLayout).apply(dstLayout);
   auto bitwidth = getBitwidth(srcTy);
   auto smem = gpu::optimalSwizzling(srcLayout, dstLayout, bitwidth);
-  auto reps = smem.getOutDimSize(StringAttr::get(ctx, "reps"));
-  return smem.getTotalOutDimSize() / reps;
+  auto reps = smem.getInDimSize(StringAttr::get(ctx, "reps"));
+  return smem.getTotalInDimSize() / reps;
 }
 
 static unsigned getNumScratchElemsPaddedCvt(RankedTensorType srcTy,
