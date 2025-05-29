@@ -1,5 +1,6 @@
 add_triton_library(TritonNvidiaGPUTransforms
   FenceInsertion.cpp
+  InsertRandomDelays.cpp
   InterleaveTMem.cpp
   MMALowering.cpp
   OptimizeDescriptorEncoding.cpp

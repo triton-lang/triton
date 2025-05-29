@@ -680,6 +680,7 @@ def TTNG_TMEMCopyOp : TTNG_Op<"tmem_copy"> {
   let hasVerifier = 1;
 }
 
+<<<<<<< HEAD
 def TTNG_ReinterpretTensorDescOp : TTNG_Op<"reinterpret_tensor_descriptor", [Pure]> {
   let summary = "Reinterpret a pointer as a tensor descriptor";
 
@@ -743,6 +744,16 @@ def TTNG_TensormapFenceproxyAcquireOp: TTNG_Op<
   let assemblyFormat = [{
     $desc_ptr attr-dict `:` qualified(type($desc_ptr))
   }];
+}
+
+def TTNG_RandomDelayOp : TTNG_Op<"random_delay"> {
+  let summary = "random delay";
+  let description = [{
+    Adds a random delay via __nanosleep based on a murmurhash3 calculated from the threadIdx, blockIdx, clock, and
+    global_timer values. This is either placed before or after asynchronous operations to expose race conditions.
+  }];
+
+  let assemblyFormat = "attr-dict";
 }
 
 #endif
