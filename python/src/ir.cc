@@ -496,6 +496,13 @@ void init_triton_ir(py::module &&m) {
              self->print(os, printingFlags);
              return str;
            })
+      .def("str_nodebug",
+           [](OpState &self) -> std::string {
+             std::string str;
+             llvm::raw_string_ostream os(str);
+             self->print(os);
+             return str;
+           })
       .def("append_operand",
            [](OpState &self, Value &val) {
              self->insertOperands(self->getNumOperands(), val);

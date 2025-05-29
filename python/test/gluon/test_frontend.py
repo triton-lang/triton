@@ -121,8 +121,8 @@ def test_warp_specialize():
     # CHECK-NEXT:   call @"warp_specialize_worker0{{.*}}"(%arg0, %arg1, %arg2)
     # CHECK: partition1(%arg0: tensor<1xi32>, %arg1: tensor<2xi32>, %arg2: tensor<4xi32>) num_warps(4)
     # CHECK-NEXT:   call @"warp_specialize_worker1{{.*}}"(%arg0, %arg1, %arg2)
-    # CHECK: call @"anchor{{.*}}"([[A]], [[B]])
-    # CHECK: call @anchor{{.*}}([[C]])
+    # CHECK: call @"anchor{{.*}}"([[OUTS]]#0, [[OUTS]]#1)
+    # CHECK: call @anchor{{.*}}([[OUTS]]#2)
     pair = Pair(tl.arange(0, 1), tl.arange(0, 2))
     a, b = ttgl.warp_specialize((pair, tl.arange(0, 4)), warp_specialize_default,
                                 [warp_specialize_worker0, warp_specialize_worker1], [4, 4], [24, 48])

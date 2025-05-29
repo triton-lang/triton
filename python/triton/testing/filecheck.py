@@ -60,7 +60,7 @@ def run_filecheck_test(kernel_fn):
         raise ValueError("kernel function must have a docstring with FileCheck template")
     mlir_module = run_parser(kernel_fn)
 
-    run_filecheck("placeholder", str(mlir_module), check_template)
+    run_filecheck("placeholder", mlir_module.str_nodebug(), check_template)
 
 
 def filecheck_test(fn):
