@@ -372,6 +372,7 @@ class CodeGenerator(ast.NodeVisitor):
                     type(val) is ModuleType,  #
                     isinstance(val, JITFunction),  #
                     getattr(val, "__triton_builtin__", False),  #
+                    getattr(val, "__triton_aggregate__", False),  #
                     getattr(val, "__module__", "").startswith("triton.language"),  #
                     isinstance(val, language.dtype),  #
                     _is_namedtuple(val),
