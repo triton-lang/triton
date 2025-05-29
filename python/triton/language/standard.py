@@ -275,8 +275,8 @@ def _pick_sum_dtype(in_dtype: core.constexpr, dtype: core.constexpr):
         out_dtype = core.int32 if in_dtype.int_bitwidth < 32 else None
     elif in_dtype.is_int_unsigned():
         out_dtype = core.uint32 if in_dtype.int_bitwidth < 32 else None
-    elif in_dtype.is_floating() and in_dtype.primitive_bitwidth < 32:
-        out_dtype = core.float32
+    elif in_dtype.is_floating():
+        out_dtype = core.float32 if in_dtype.primitive_bitwidth < 32 else None
     return out_dtype
 
 
