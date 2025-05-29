@@ -468,6 +468,11 @@ void populateTypeConversions(LLVMTypeConverter &typeConverter,
       [&](proton::gpu::SegmentType type) -> std::optional<Type> {
         return convertProtonGPUSegmentType(type, targetInfo);
       });
+  typeConverter.addConversion(
+      [&](triton::PointerType type) -> std::optional<Type> {
+        auto ctx = type.getContext();
+        return LLVM::LLVMPointerType::get(ctx, type.getAddressSpace());
+      });
 }
 
 } // namespace proton::gpu
