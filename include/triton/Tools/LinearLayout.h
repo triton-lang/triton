@@ -625,6 +625,7 @@ public:
 
   // Compute a C such that A = B * C if it exists.
   // In other words, C = B^{-1} * A.
+  // For divideRight, we compute A = C * B, that is, C = A * B^{-1}.
   // Note that such a C exists iff (every pair of input/output dim of) A is
   // of the form
   // [[B, 0],
@@ -638,6 +639,8 @@ public:
   // same dimensions as A ensures that C is well-defined.
   friend std::optional<LinearLayout> divideLeft(const LinearLayout &A,
                                                 const LinearLayout &B);
+  friend std::optional<LinearLayout> divideRight(const LinearLayout &A,
+                                                 const LinearLayout &B);
 
   // Returns true if this layout acts trivially (as the identity) on the given
   // dimensions. This means that it's the identity on those dimensions, and it
