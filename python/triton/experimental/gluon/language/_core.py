@@ -79,6 +79,7 @@ __all__ = [
     "convert_layout",
     "allocate_shared",
     "shared_memory_descriptor",
+    "warp_specialize",
 ]
 
 T = TypeVar("T")
@@ -236,9 +237,10 @@ def allocate_shared(element_ty, shape, layout, value=None, _builder=None):
 
 
 @builtin
-def warp_specialize(default_partition, worker_partitions, worker_num_warps, worker_num_regs,  #
+def warp_specialize(args, default_partition, worker_partitions, worker_num_warps, worker_num_regs,  #
                     _builder=None, _generator=None):
     worker_num_warps = _unwrap_if_constexpr(worker_num_warps)
     worker_num_regs = _unwrap_if_constexpr(worker_num_regs)
-    return semantic.warp_specialize(default_partition, worker_partitions, worker_num_warps,  #
+    args = [_unwrap_if_constexpr(arg) for arg in args]
+    return semantic.warp_specialize(args, default_partition, worker_partitions, worker_num_warps,  #
                                     worker_num_regs, _builder, _generator)

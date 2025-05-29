@@ -45,9 +45,32 @@ def shared_store(mem_desc, value, builder: GluonOpBuilder):
     builder.create_local_store(mem_desc.handle, value.handle)
 
 
-def warp_specialize(default_partition, worker_partitions, worker_num_warps: Sequence[int],
+def warp_specialize(args, default_partition, worker_partitions, worker_num_warps: Sequence[int],
                     worker_num_regs: Sequence[int], builder: GluonOpBuilder, generator):
     num_partitions = len(worker_partitions)
-    assert num_partitions == len(worker_num_warps), f"warp specialize got {num_partitions} partitions but {len(worker_num_warps)} warp counts"
-    assert num_partitions == len(worker_num_regs), f"warp specialize got {num_partitions} partitions but {len(worker_num_regs)} register counts"
+    assert num_partitions == len(
+        worker_num_warps), f"warp specialize got {num_partitions} partitions but {len(worker_num_warps)} warp counts"
+    assert num_partitions == len(
+        worker_num_regs), f"warp specialize got {num_partitions} partitions but {len(worker_num_regs)} register counts"
 
+    insert_pt = builder.get_insertion_point()
+
+    # Emit the default partition to get the result types.
+    default_block = builder.create_block()
+    default_results = generator.call_JitFunction(default_partition, args, kwargs={})
+    print([r.handle for r in default_results])
+    builder.create_warp_yield([r.handle for r in default_results])
+    result_types = [r.type.to_ir(builder) for r in default_results]
+
+    # Create the warp specialize op.
+    builder.restore_insertion_point(insert_pt)
+    ws_op = builder.create_warp_specialize(result_types, args, worker_num_warps)
+    ws_op.get_default_region().push_back(default_block)
+
+    # Emit the partition regions.
+    builder.create_block_with_parent(ws_op.get_partition_op_holder(), [])
+    partitions_op = builder.create_warp_specialize_partitions(num_partitions)
+    arg_types = [arg.type.to_ir(builder) for arg in args]
+    for i in range(num_partitions):
+        builder.create_block_with_parent(partitions_op.get_region(i), arg_types)
+        builder.create_warp_yield()
