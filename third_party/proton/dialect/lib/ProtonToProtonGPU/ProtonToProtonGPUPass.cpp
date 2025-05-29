@@ -233,6 +233,9 @@ public:
       return failure();
     }
 
+    Value profileMem = builder.create<gpu::GlobalScratchAllocOp>(
+        loc, triton::getPointerType(builder.getI32Type()),
+        allocProfileScratchSize, profileScratchAlignment);
     auto memorySpace =
         mlir::cast<triton::gpu::MemDescType>(buffer.getType()).getMemorySpace();
     auto segmentType = gpu::SegmentType::get(
@@ -247,9 +250,6 @@ public:
     if (applyPatternsGreedily(mod, std::move(patterns)).failed())
       return failure();
 
-    Value profileMem = builder.create<gpu::GlobalScratchAllocOp>(
-        loc, triton::getPointerType(builder.getI32Type()),
-        allocProfileScratchSize, profileScratchAlignment);
     func.walk([&](triton::ReturnOp ret) {
       builder.setInsertionPoint(ret);
       builder.create<mlir::gpu::BarrierOp>(loc);
