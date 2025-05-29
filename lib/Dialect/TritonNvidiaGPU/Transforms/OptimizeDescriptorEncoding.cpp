@@ -84,6 +84,15 @@ std::optional<UseInfo> getUseInfo(Operation *op) {
   }
   if (auto store = dyn_cast<DescriptorStoreLikeOpInterface>(op)) {
     info.descriptor = store.getDesc();
+    auto ty = store.getSrc().getType();
+    auto order = triton::gpu::getOrderForMemory(ty);
+    auto ctaLayout = ttg::getCTALayout(ty.getEncoding());
+    // For store the input will always come from distributed tensor. Pick the
+    // swizzling size based on shape to make it more likely to avoid bank
+    // conflicts.
+    info.desiredSharedEncoding = ttg::NVMMASharedEncodingAttr::get(
+        ty.getContext(), ty.getShape(), order, ctaLayout, ty.getElementType(),
+        /*fp4Padded*/ false);
     auto encoding = store.getSrc().getType().getEncoding();
     info.ctaLayout = ttg::getCTALayout(encoding);
     auto shape = store.getSrc().getType().getShape();
