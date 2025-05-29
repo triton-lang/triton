@@ -4,7 +4,7 @@ from triton_kernels.routing import routing, routing_torch
 from triton_kernels.testing import assert_close
 from triton_kernels.matmul_ogs_details.metadata import compute_metadata
 from triton_kernels.testing import assert_equal
-from triton_kernels.datastruct import PaddedTensor
+from triton_kernels.datastruct import Tensor
 
 
 def init_data(n_tokens, n_expts_tot, dtype=torch.float16, device="cuda"):
@@ -70,7 +70,7 @@ def test_op(n_tokens_pad, n_tokens_raw, n_expts_tot, n_expts_act, block_m, use_e
     else:
         tri_expt_indx = ref_expt_indx = None
     ref_routing_data, ref_gather, ref_scatter = routing_torch(ref_logits, n_expts_act, ref_expt_indx)
-    tri_logits = PaddedTensor(tri_logits, tri_logits.shape, [n_routing_rows, None])
+    tri_logits = Tensor(tri_logits, [n_routing_rows, None])
     tri_routing_data, tri_gather, tri_scatter = routing(tri_logits, n_expts_act, tri_expt_indx)
     ref_metadata = ref_expt_data(ref_routing_data, n_gates_raw, block_m)
     tri_metadata = compute_metadata(tri_routing_data, n_gates_raw, block_m)

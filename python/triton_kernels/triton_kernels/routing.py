@@ -60,7 +60,7 @@ def routing(logits, n_expts_act, expt_indx=None, simulated_ep=1):
     HIST_BLOCK_M = 64
     INDX_OFFS_BLOCK_M = 512
     MEMSET_BLOCK = 1024
-    n_tokens_pad, n_expts_tot = logits.shape
+    n_tokens_pad, n_expts_tot = logits.shape_pad
     n_gates_pad = n_tokens_pad * n_expts_act
     device = logits.device
     expt_scal, expt_indx, bitmatrix = topk(logits, n_expts_act, y_indx=expt_indx)
@@ -68,10 +68,10 @@ def routing(logits, n_expts_act, expt_indx=None, simulated_ep=1):
     if simulated_ep > 1:
         assert n_expts_tot % simulated_ep == 0
         _routing_clear_bitmatrix[(n_tokens_pad, )](
-            bitmatrix.data,
-            bitmatrix.data.stride(0),
-            bitmatrix.data.stride(1),
-            bitmatrix.data.shape[1],
+            bitmatrix.handle,
+            bitmatrix.handle.stride(0),
+            bitmatrix.handle.stride(1),
+            bitmatrix.handle.shape[1],
             n_expts_tot // simulated_ep,
             BLOCK_N=512,
         )
@@ -80,7 +80,7 @@ def routing(logits, n_expts_act, expt_indx=None, simulated_ep=1):
         n_expts_tot = n_expts_tot // simulated_ep
         bitmatrix.shape[-1] = n_expts_tot
     # compute bitmatrix histogram
-    hist, partial_hist = bitmatrix.sum(partials_block_size=HIST_BLOCK_M, n_rows_raw=logits.shape_raw[0])
+    hist, partial_hist = bitmatrix.sum(partials_block_size=HIST_BLOCK_M)
     # scratchpad
     expt_offs = torch.empty(n_expts_tot, dtype=torch.int32, device=device)
     combined_indx = torch.empty(n_gates_pad * 2, dtype=torch.int32, device=device)
