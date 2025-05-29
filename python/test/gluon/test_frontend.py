@@ -73,27 +73,18 @@ module attributes {"ttg.num-warps" = 4 : i32} {
 
 
 @gluon.jit
-def anchor(x):
-    pass
-
-
-@gluon.jit
 def warp_specialize_default(a, b):
-    anchor(a)
-    anchor(b)
     return a, b
 
 
 @gluon.jit
 def warp_specialize_worker0(a, b):
-    anchor(a)
-    anchor(b)
+    pass
 
 
 @gluon.jit
 def warp_specialize_worker1(a, b):
-    anchor(a)
-    anchor(b)
+    pass
 
 
 @tl.core._aggregate
@@ -104,6 +95,11 @@ class Pair:
     def __init__(self, first, second):
         self.first = first
         self.second = second
+
+
+@gluon.jit
+def anchor(x):
+    pass
 
 
 @filecheck_test
