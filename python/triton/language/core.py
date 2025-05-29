@@ -1576,6 +1576,7 @@ def _aggregate(cls):
     aggregate_value.__name__ = cls.__name__
     aggregate_value.__module__ = cls.__module__
     aggregate_value.__qualname__ = cls.__qualname__
+    aggregate_value.__doc__ = cls.__doc__
 
     return aggregate_value
 

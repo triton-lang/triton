@@ -711,6 +711,11 @@ class JITFunction(KernelInterface[T]):
             self.used_global_vals = dict(sorted(dependencies_finder.used_global_vals.items()))
         return self.hash
 
+    @property
+    def type(self):
+        from triton.language.core import constexpr
+        return constexpr
+
     def warmup(self, *args, grid, **kwargs):
         return self.run(grid=grid, warmup=True, *map(MockTensor.wrap_dtype, args), **kwargs)
 
