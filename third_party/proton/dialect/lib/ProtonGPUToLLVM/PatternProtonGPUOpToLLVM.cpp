@@ -128,8 +128,7 @@ struct FinalizeOpConversion
     Block *ifBlock = rewriter.splitBlock(prevBlock, op->getIterator());
     rewriter.setInsertionPointToStart(ifBlock);
 
-    auto bufferBaseType =
-        mlir::cast<LLVM::PointerType>(segmentObj.base.getType());
+    auto bufferBaseType = segmentObj.base.getType();
     auto copyWord = [&](Value bufOffset, Value gmemOffset, Attribute memSpace) {
       // Load the value from buffer
       Value ptr = b.gep(bufferBaseType, i32_ty, segmentObj.base, bufOffset);
