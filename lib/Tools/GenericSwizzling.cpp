@@ -118,11 +118,12 @@ LinearLayout buildReps(MLIRContext *ctx, const LinearLayout &src,
   }
   // Split segment into segment and reps
   SetVector<int32_t> segment;
-  for (int32_t b : smemVecs) {
+  for (int32_t b : flatten(smem, kSegment)) {
     if (!reps.contains(b)) {
       segment.insert(b);
     }
   }
+
   auto smemReps = LinearLayout({{kVec, smem.getBases().lookup(kVec)},
                                 {kBank, smem.getBases().lookup(kBank)},
                                 {kSegment, unflatten(to_vector(segment))},

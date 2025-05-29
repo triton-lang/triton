@@ -118,8 +118,8 @@ LinearLayout zerosLike(const LinearLayout &layout);
 // It's not always true that the action returned by this function will
 // allow us to divideLeft, but it is true that if it if there exists one, it is
 // the one returned by this function.
-std::optional<ColumnAction> regPermForDivideLeft(const LinearLayout &A,
-                                                 const LinearLayout &B);
+std::optional<ColumnAction> regPermForDivide(const LinearLayout &A,
+                                             const LinearLayout &B, bool left);
 
 // For a layout A with A.hasInDim(kReg), find a permutation of registers action
 // such that action.apply(A) has the broadcasted registers removed
@@ -129,11 +129,6 @@ ColumnAction actionRemoveBroadcastedRegs(const LinearLayout &layout);
 // the same broadcasting as layout
 SmallVector<Value> broadcastAs(const SmallVector<Value> &values,
                                const LinearLayout &layout);
-
-// Given a smem layout returned by `optimalSwizzling`, move the registers
-// associated with smem[kReps] to the back of the layout[kReg] bases
-ColumnAction actionMoveRepsToBack(const LinearLayout &layout,
-                                  const LinearLayout &smem);
 
 // Compute the supremum of two lists.
 // Error out if the supremum does not exist (e.g. [a, b] and [b, a]).

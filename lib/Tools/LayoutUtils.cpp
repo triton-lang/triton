@@ -204,32 +204,59 @@ LinearLayout zerosLike(const LinearLayout &layout) {
                       /*requireSurjective=*/false);
 }
 
-std::optional<ColumnAction> regPermForDivideLeft(const LinearLayout &A,
-                                                 const LinearLayout &B) {
-  // We can implement this generically of any dimension, but for now we only do
+std::optional<ColumnAction> regPermForDivide(const LinearLayout &A,
+                                             const LinearLayout &B, bool left) {
+  // We can implement this generically for any dimension, but for now we only do
   // it for regs to keep the API simpler
   assert(A.getNumInDims() != 0);
   auto kReg = *A.getInDimNames().begin();
   assert(kReg.str() == "register");
   assert(B.getNumInDims() != 0);
   assert(kReg == *B.getInDimNames().begin());
+
+  // We broadcast B to have the same number of out dims as A.
+  LinearLayout broadcast;
+  for (StringAttr out : A.getOutDimNames()) {
+    broadcast *= LinearLayout::identity1D(1, kReg, out);
+  }
+  auto BBroadcast = broadcast * B;
+
   // Retrieve the register bases from A and B.
   const auto &ARegBases = A.getBases().lookup(kReg);
-  const auto &BRegBases = B.getBases().lookup(kReg);
+  const auto &BRegBases = BBroadcast.getBases().lookup(kReg);
+
+  llvm::DenseMap<StringAttr, unsigned> log2QuotSize;
+  for (StringAttr out : A.getOutDimNames()) {
+    log2QuotSize[out] =
+        A.getOutDimSizeLog2(out) - BBroadcast.getOutDimSizeLog2(out);
+  }
+
+  auto multiplyByTileSize =
+      [&](ArrayRef<int32_t> bBasis) -> std::vector<int32_t> {
+    std::vector<int32_t> result;
+    size_t idx = 0;
+    assert(bBasis.size() == A.getNumOutDims());
+    for (auto [dim, b] : llvm::zip(A.getOutDimNames(), bBasis)) {
+      result.push_back(b << log2QuotSize.lookup(dim));
+    }
+    return result;
+  };
 
   // Compute the permutation order:
   // For each basis in B (in order), find its index in A (using each index at
   // most once). We make sure we use each index at most once in case B
   // broadcasts (weird case, but better safe than sorry).
-  SmallVector<size_t> permOrder;
-  permOrder.reserve(ARegBases.size());
+  SmallVector<size_t> bIndices;
   SmallVector<bool> used(ARegBases.size(), false);
-  for (const auto &bB : BRegBases) {
+  for (auto bB : BRegBases) {
     bool found = false;
+    if (!left)
+      bB = multiplyByTileSize(bB);
+
     for (size_t j = 0; j < ARegBases.size(); ++j) {
       found = !used[j] && (ARegBases[j] == bB);
       if (found) {
-        permOrder.push_back(j);
+        bIndices.push_back(j);
         used[j] = true;
         break;
       }
@@ -238,10 +265,13 @@ std::optional<ColumnAction> regPermForDivideLeft(const LinearLayout &A,
       return std::nullopt; // A basis from B not found in A.
   }
   // Append remaining indices from A (preserving their original order).
+  SmallVector<size_t> remainingIndices;
   for (size_t i = 0; i < ARegBases.size(); ++i) {
     if (!used[i])
-      permOrder.push_back(i);
+      remainingIndices.push_back(i);
   }
+  SmallVector<size_t> permOrder = to_vector(llvm::concat<size_t>(
+      left ? bIndices : remainingIndices, left ? remainingIndices : bIndices));
   return ColumnAction(permOrder, kReg, ARegBases.size());
 }
 
@@ -259,27 +289,6 @@ ColumnAction actionRemoveBroadcastedRegs(const LinearLayout &layout) {
     }
   }
   return ColumnAction(permOrder, kReg, bases.size());
-}
-
-ColumnAction actionMoveRepsToBack(const LinearLayout &layout,
-                                  const LinearLayout &smem) {
-  assert(layout.getNumInDims() != 0);
-  auto kReg = *layout.getInDimNames().begin();
-  assert(kReg.str() == "register");
-  auto *ctx = kReg.getContext();
-  auto kReps = StringAttr::get(ctx, "reps");
-  // The third dimension is reps
-  auto cvt = layout.invertAndCompose(smem);
-  SmallVector<size_t> front, back;
-  for (size_t i = 0; i < cvt.getInDimSize(kReg); ++i) {
-    if (cvt.getBasis(kReg, i, kReps) == 0) {
-      front.push_back(i);
-    } else {
-      back.push_back(i);
-    }
-  }
-  auto perm = to_vector(llvm::concat<size_t>(front, back));
-  return ColumnAction(perm, kReg, layout.getInDimSize(kReg));
 }
 
 SmallVector<Value> broadcastAs(const SmallVector<Value> &values,
