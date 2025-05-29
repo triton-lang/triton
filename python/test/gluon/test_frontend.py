@@ -3,6 +3,7 @@ import expecttest
 from triton import knobs
 from triton.experimental import gluon
 from triton.experimental.gluon import language as ttgl
+from triton.testing import filecheck_test
 import triton.language as tl
 
 
@@ -77,20 +78,20 @@ def anchor(x):
 
 
 @gluon.jit
-def default_partition(a, b):
+def warp_specialize_default(a, b):
     anchor(a)
     anchor(b)
     return a, b
 
 
 @gluon.jit
-def worker0(a, b):
+def warp_specialize_worker0(a, b):
     anchor(a)
     anchor(b)
 
 
 @gluon.jit
-def worker1(a, b):
+def warp_specialize_worker1(a, b):
     anchor(a)
     anchor(b)
 
@@ -105,9 +106,25 @@ class Pair:
         self.second = second
 
 
+@filecheck_test
 @gluon.jit
-def warp_specialize_kernel():
+def test_warp_specialize():
+    # CHECK-LABEL: test_warp_specialize
+    # CHECK: [[A:%.*]] = tt.make_range {end = 1 : i32, start = 0 : i32}
+    # CHECK: [[B:%.*]] = tt.make_range {end = 2 : i32, start = 0 : i32}
+    # CHECK: [[C:%.*]] = tt.make_range {end = 4 : i32, start = 0 : i32}
+    # CHECK: [[OUTS:%.*]]:3 = ttg.warp_specialize([[A]], [[B]], [[C]])
+    # CHECK-NEXT: default
+    # CHECK-NEXT:   [[RESULTS:%.*]]:3 = tt.call @"warp_specialize_default{{.*}}"([[A]], [[B]], [[C]])
+    # CHECK-NEXT:   warp_yield [[RESULTS]]#0, [[RESULTS]]#1, [[RESULTS]]#2
+    # CHECK: partition0(%arg0: tensor<1xi32>, %arg1: tensor<2xi32>, %arg2: tensor<4xi32>) num_warps(4)
+    # CHECK-NEXT:   call @"warp_specialize_worker0{{.*}}"(%arg0, %arg1, %arg2)
+    # CHECK: partition1(%arg0: tensor<1xi32>, %arg1: tensor<2xi32>, %arg2: tensor<4xi32>) num_warps(4)
+    # CHECK-NEXT:   call @"warp_specialize_worker1{{.*}}"(%arg0, %arg1, %arg2)
+    # CHECK: call @"anchor{{.*}}"([[A]], [[B]])
+    # CHECK: call @anchor{{.*}}([[C]])
     pair = Pair(tl.arange(0, 1), tl.arange(0, 2))
-    a, b = ttgl.warp_specialize((pair, tl.arange(0, 4)), default_partition, [worker0, worker1], [4, 4], [24, 48])
+    a, b = ttgl.warp_specialize((pair, tl.arange(0, 4)), warp_specialize_default,
+                                [warp_specialize_worker0, warp_specialize_worker1], [4, 4], [24, 48])
     anchor(a)
     anchor(b)
