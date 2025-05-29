@@ -20,14 +20,16 @@ def is_hip():
 def is_hip_cdna3():
     if "is_hip_cdna3" not in cached_capabilities:
         target = triton.runtime.driver.active.get_current_target()
-        cached_capabilities["is_hip_cdna3"] = (target is not None and target.backend == 'hip' and target.arch == 'gfx942')
+        cached_capabilities["is_hip_cdna3"] = (target is not None and target.backend == 'hip'
+                                               and target.arch == 'gfx942')
     return cached_capabilities["is_hip_cdna3"]
 
 
 def is_hip_cdna4():
     if "is_hip_cdna4" not in cached_capabilities:
         target = triton.runtime.driver.active.get_current_target()
-        cached_capabilities["is_hip_cdna4"] = (target is not None and target.backend == 'hip' and target.arch == 'gfx950')
+        cached_capabilities["is_hip_cdna4"] = (target is not None and target.backend == 'hip'
+                                               and target.arch == 'gfx950')
     return cached_capabilities["is_hip_cdna4"]
 
 
