@@ -100,19 +100,14 @@ LinearLayout buildReps(MLIRContext *ctx, const LinearLayout &src,
   auto kReg = StringAttr::get(ctx, "register");
   // A basis is a rep if:
   // 1) It is in registers in both src and dst
-  // 2) It is not swizzled
-  // 3) It is not vectorised
-  // After a moment's reflection, it should be clear that the
-  // set of basis that can be reps is exactly the set of elements
-  // that are in src[kReg] \cup dst[kReg], but are not in smem[kVec].
-  // This is because the swizzled elements are xors of elements that
-  // are in the src[kLane] \cup dst[kLane], which is disjoint to this set
+  // 2) It is in the segment of smem (i.e., is not part of just one
+  //    load/store)
   SetVector<int32_t> srcRegs(llvm::from_range_t{}, flatten(src, kReg));
   SetVector<int32_t> dstRegs(llvm::from_range_t{}, flatten(dst, kReg));
-  SetVector<int32_t> smemVecs(llvm::from_range_t{}, flatten(smem, kVec));
+  SetVector<int32_t> smemSegment(llvm::from_range_t{}, flatten(smem, kSegment));
   SetVector<int32_t> reps;
   for (int32_t b : srcRegs) {
-    if (dstRegs.contains(b) && !smemVecs.contains(b)) {
+    if (dstRegs.contains(b) && smemSegment.contains(b)) {
       reps.insert(b);
     }
   }

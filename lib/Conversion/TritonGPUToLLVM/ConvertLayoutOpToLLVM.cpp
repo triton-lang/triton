@@ -248,10 +248,14 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
 
     // The permutation exists by construction of the reps dimension in
     // optimalSwizzling
-    auto permRead = *regPermForDivide(totalReadCvt, reps, /*left=*/false);
+    auto maybePermRead = regPermForDivide(totalReadCvt, reps, /*left=*/false);
+    assert(maybePermRead.has_value());
+    auto permRead = *maybePermRead;
     totalReadCvt = permRead.apply(totalReadCvt);
     inVals = permRead.apply(inVals);
-    auto permWrite = *regPermForDivide(totalWriteCvt, reps, /*left=*/false);
+    auto maybePermWrite = regPermForDivide(totalWriteCvt, reps, /*left=*/false);
+    assert(maybePermWrite.has_value());
+    auto permWrite = *maybePermWrite;
     totalWriteCvt = permWrite.apply(totalWriteCvt);
 
     // Remove the reps and flatten into offset

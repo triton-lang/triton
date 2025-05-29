@@ -229,6 +229,8 @@ std::optional<ColumnAction> regPermForDivide(const LinearLayout &A,
   for (StringAttr out : A.getOutDimNames()) {
     log2QuotSize[out] =
         A.getOutDimSizeLog2(out) - BBroadcast.getOutDimSizeLog2(out);
+    if (log2QuotSize[out] < 0)
+      return std::nullopt;
   }
 
   auto multiplyByTileSize =
