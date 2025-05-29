@@ -24,23 +24,22 @@ LLVMStructType SegmentObject::getStructType(MLIRContext *ctx, int memorySpace,
   return LLVM::LLVMStructType::getLiteral(ctx, types);
 }
 
-Value SegmentObject::getStruct(Location loc, const SegmentObject &obj,
-                               ConversionPatternRewriter &rewriter) {
+Value SegmentObject::getStruct(Location loc, ConversionPatternRewriter &rewriter) {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   int memorySpace =
-      mlir::cast<LLVM::LLVMPointerType>(obj.base.getType()).getAddressSpace();
+      mlir::cast<LLVM::LLVMPointerType>(base.getType()).getAddressSpace();
   int indexPtrAddrSpace =
-      mlir::cast<LLVM::LLVMPointerType>(obj.indexPtr.getType())
+      mlir::cast<LLVM::LLVMPointerType>(indexPtr.getType())
           .getAddressSpace();
   auto structTy =
       getStructType(loc.getContext(), memorySpace, indexPtrAddrSpace);
   Value segmentStruct = rewriter.create<LLVM::UndefOp>(loc, structTy);
   segmentStruct =
-      b.insert_val(structTy.getBody()[0], segmentStruct, obj.base, 0);
+      b.insert_val(structTy, segmentStruct, base, 0);
   segmentStruct =
-      b.insert_val(structTy.getBody()[1], segmentStruct, obj.segmentBase, 1);
+      b.insert_val(structTy, segmentStruct, segmentBase, 1);
   segmentStruct =
-      b.insert_val(structTy.getBody()[2], segmentStruct, obj.indexPtr, 2);
+      b.insert_val(structTy, segmentStruct, indexPtr, 2);
   return segmentStruct;
 }
 

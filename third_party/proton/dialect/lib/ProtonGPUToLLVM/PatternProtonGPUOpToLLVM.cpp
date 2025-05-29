@@ -326,7 +326,7 @@ struct SegmentAllocOpConversion
     b.store(b.i32_val(0), indexPtr);
 
     auto segmentObj = LLVM::SegmentObject(bufferBase, segmentBase, indexPtr);
-    auto llvmStruct = LLVM::SegmentObject::getStruct(loc, segmentObj, rewriter);
+    auto llvmStruct = segmentObj.getStruct(loc, rewriter);
     rewriter.replaceOp(op, llvmStruct);
     return success();
   }

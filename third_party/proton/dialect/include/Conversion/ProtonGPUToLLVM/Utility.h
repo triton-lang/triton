@@ -15,11 +15,10 @@ struct SegmentObject {
   SegmentObject(Value base, Value segmentBase, Value indexPtr)
       : base(base), segmentBase(segmentBase), indexPtr(indexPtr) {}
 
+  Value getStruct(Location loc, ConversionPatternRewriter &rewriter);
+
   static LLVMStructType getStructType(MLIRContext *ctx, int memorySpace,
                                       int indexPtrAddrSpace);
-
-  static Value getStruct(Location loc, const SegmentObject &obj,
-                         ConversionPatternRewriter &rewriter);
 
   static SegmentObject fromStruct(Location loc, Value segmentStruct,
                                   ConversionPatternRewriter &rewriter);
