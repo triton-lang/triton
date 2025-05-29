@@ -387,7 +387,23 @@ class CUDABackend(BaseBackend):
             line_info = ["-lineinfo", "-suppress-debug-info"] if knobs.compilation.disable_line_info else ["-lineinfo"]
             fmad = [] if opt.enable_fp_fusion else ['--fmad=false']
             arch = sm_arch_from_capability(capability)
-            opt_level = ['--opt-level', '0'] if knobs.nvidia.disable_ptxas_opt else []
+
+            # Disable ptxas optimizations if requested
+            if knobs.nvidia.disable_ptxas_opt:
+                opt_level = ['--opt-level', '0']
+
+            # Accept more ptxas options if provided
+            elif knobs.nvidia.ptxas_other_options:
+
+                # If a kernel name is provided, only apply the options to that kernel
+                if not knobs.nvidia.ptxas_options_kernel_name or \
+                    knobs.nvidia.ptxas_options_kernel_name == metadata["name"]:
+                    opt_level = knobs.nvidia.ptxas_other_options.split(" ")
+                else:
+                    opt_level = []
+            else:
+                opt_level = []
+
             ptxas_cmd = [ptxas, *line_info, *fmad, '-v', *opt_level, f'--gpu-name={arch}', fsrc.name, '-o', fbin]
             try:
                 subprocess.run(ptxas_cmd, check=True, close_fds=False, stderr=flog)
