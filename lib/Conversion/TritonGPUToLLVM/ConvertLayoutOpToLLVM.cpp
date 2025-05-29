@@ -204,6 +204,8 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
                         : srcTy.getElementTypeBitWidth();
 
     // Handle sub-byte elements like i1
+    auto inVals = unpackLLElements(loc, src, rewriter);
+
     bool isSubByte = bitwidth < 8;
     auto llvmElemTy = getTypeConverter()->convertType(srcTy.getElementType());
     if (isSubByte) {
@@ -236,8 +238,6 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
                                     to_vector(srcLayout.getOutDimNames()));
     dstLayout = dstLayout.sublayout({kRegister, kLane, kWarp},
                                     to_vector(dstLayout.getOutDimNames()));
-
-    auto inVals = unpackLLElements(loc, src, rewriter);
 
     // Remove register broadcast from src and dst and input values
     auto removeBroadcastSrc = actionRemoveBroadcastedRegs(srcLayout);
