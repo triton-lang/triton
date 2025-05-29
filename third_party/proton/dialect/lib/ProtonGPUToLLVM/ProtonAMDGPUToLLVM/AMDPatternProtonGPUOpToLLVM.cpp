@@ -37,7 +37,7 @@ struct CircularStoreOpConversion
     Value indexPtr = segmentObj.indexPtr;
     Value bufferBase = segmentObj.base;
     Value segmentBase = segmentObj.segmentBase;
-    auto bufferBaseType = segmentBase.getType();
+    auto bufferBaseType = bufferBase.getType();
 
     Value curIdx = b.load(i32_ty, indexPtr);
     Value newIdx = b.add(curIdx, b.i32_val(wordsPerEntry));
@@ -58,13 +58,13 @@ struct CircularStoreOpConversion
     Value clock = op.getCounter();
     Value valsVec = packLLVector(loc, {tag, clock}, rewriter);
 
-    uint32_t AddrSpace =
+    uint32_t addrSpace = 
         cast<LLVM::LLVMPointerType>(bufferBaseType).getAddressSpace();
-    if (AddrSpace == 1) {
+    if (addrSpace == 1) {
       // TODO(crobeck): see what buffer ops performance looks like here for
       // stack mem (address space 1) compared to predicated ops to shared memory
       llvm::report_fatal_error("unimplemented");
-    } else if (AddrSpace == 3) {
+    } else if (addrSpace == 3) {
       // Setting predicate always true has bank conflicts but it is
       // expected and stable.
       targetInfo.getTritonTargetInfo().storeDShared(rewriter, loc, vecPtr,
