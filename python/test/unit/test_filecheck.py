@@ -1,7 +1,7 @@
 import pytest
 import triton
 
-from triton.testing import run_filecheck_test
+from triton.filecheck import run_filecheck_test
 
 
 @triton.jit
