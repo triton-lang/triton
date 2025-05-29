@@ -69,6 +69,7 @@ def warp_specialize(args, default_partition, worker_partitions, worker_num_warps
     mlir_args = flatten_values_to_ir(args)
     ws_op = builder.create_warp_specialize(result_types, mlir_args, worker_num_warps)
     ws_op.get_default_region().push_back(default_block)
+    ws_op.set_requested_registers(worker_num_regs)
 
     # Emit the partition regions.
     builder.create_block_with_parent(ws_op.get_partition_op_holder(), [])

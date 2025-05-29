@@ -110,6 +110,7 @@ def test_warp_specialize():
     # CHECK: [[B:%.*]] = tt.make_range {end = 2 : i32, start = 0 : i32}
     # CHECK: [[C:%.*]] = tt.make_range {end = 4 : i32, start = 0 : i32}
     # CHECK: [[OUTS:%.*]]:3 = ttg.warp_specialize([[A]], [[B]], [[C]])
+    # CHECK-SAME: requestedRegisters = array<i32: 24, 48>
     # CHECK-NEXT: default
     # CHECK-NEXT:   [[RESULTS:%.*]]:3 = tt.call @"warp_specialize_default{{.*}}"([[A]], [[B]], [[C]])
     # CHECK-NEXT:   warp_yield [[RESULTS]]#0, [[RESULTS]]#1, [[RESULTS]]#2
