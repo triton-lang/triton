@@ -25,6 +25,16 @@ llvm_bin_dir = os.path.join(os.path.dirname(sys.executable), "bin")
 filecheck_path = os.path.join(llvm_bin_dir, "FileCheck")
 
 
+class MatchError(ValueError):
+
+    def __init__(self, message, module_str):
+        super().__init__(message)
+        self.module_str = module_str
+
+    def __str__(self):
+        return f"{super().__str__()}\n{self.module_str}"
+
+
 def run_filecheck(name, module_str, check_template):
     options = Options(match_filename=name)
     fin = FInput(name, module_str)
@@ -33,7 +43,7 @@ def run_filecheck(name, module_str, check_template):
     matcher = Matcher(options, fin, parser)
     matcher.stderr = io.StringIO()
     if matcher.run() != 0:
-        raise ValueError(matcher.stderr.getvalue())
+        raise MatchError(matcher.stderr.getvalue(), module_str)
 
 
 def run_parser(kernel_fn):

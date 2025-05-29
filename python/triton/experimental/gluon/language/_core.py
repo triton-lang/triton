@@ -1,5 +1,5 @@
 from __future__ import annotations
-from typing import TypeVar, List, TYPE_CHECKING, Tuple, Sequence
+from typing import TypeVar, List, TYPE_CHECKING, Tuple
 from functools import wraps
 
 if TYPE_CHECKING:
