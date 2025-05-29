@@ -203,28 +203,6 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
                         ? kPtrBitWidth
                         : srcTy.getElementTypeBitWidth();
 
-    // Handle sub-byte elements like i1
-    auto inVals = unpackLLElements(loc, src, rewriter);
-
-    bool isSubByte = bitwidth < 8;
-    auto llvmElemTy = getTypeConverter()->convertType(srcTy.getElementType());
-    if (isSubByte) {
-      bitwidth = 8;
-      // Upcast to i8
-      auto llvmElemTy = i8_ty;
-      for (auto &v : inVals) {
-        v = b.zext(llvmElemTy, v);
-      }
-    }
-    bool isPtr = isa<PointerType>(srcTy.getElementType());
-    if (isPtr) {
-      llvmElemTy =
-          getTypeConverter()->convertType(IntegerType::get(ctx, kPtrBitWidth));
-      for (auto &v : inVals) {
-        v = b.ptrtoint(llvmElemTy, v);
-      }
-    }
-
     auto srcLayout = toLinearLayout(srcTy.getShape(), srcTy.getEncoding());
     auto dstLayout = toLinearLayout(dstTy.getShape(), dstTy.getEncoding());
     auto origDstLayout = dstLayout;
@@ -238,6 +216,28 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
                                     to_vector(srcLayout.getOutDimNames()));
     dstLayout = dstLayout.sublayout({kRegister, kLane, kWarp},
                                     to_vector(dstLayout.getOutDimNames()));
+
+    // Handle sub-byte elements like i1
+    auto inVals = unpackLLElements(loc, src, rewriter);
+
+    bool isSubByte = bitwidth < 8;
+    auto llvmElemTy = getTypeConverter()->convertType(srcTy.getElementType());
+    if (isSubByte) {
+      // Upcast to i8
+      bitwidth = 8;
+      llvmElemTy = i8_ty;
+      for (auto &v : inVals) {
+        v = b.zext(llvmElemTy, v);
+      }
+    }
+    bool isPtr = isa<PointerType>(srcTy.getElementType());
+    if (isPtr) {
+      llvmElemTy =
+          getTypeConverter()->convertType(IntegerType::get(ctx, kPtrBitWidth));
+      for (auto &v : inVals) {
+        v = b.ptrtoint(llvmElemTy, v);
+      }
+    }
 
     // Remove register broadcast from src and dst and input values
     auto removeBroadcastSrc = actionRemoveBroadcastedRegs(srcLayout);
