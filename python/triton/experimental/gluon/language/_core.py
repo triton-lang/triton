@@ -1,5 +1,5 @@
 from __future__ import annotations
-from typing import TypeVar, List, TYPE_CHECKING, Tuple
+from typing import TypeVar, List, TYPE_CHECKING, Tuple, Sequence
 from functools import wraps
 
 if TYPE_CHECKING:
@@ -233,3 +233,12 @@ def allocate_shared(element_ty, shape, layout, value=None, _builder=None):
     shape = _unwrap_if_constexpr(shape)
     layout = _unwrap_if_constexpr(layout)
     return semantic.allocate_shared(element_ty, shape, layout, value, _builder)
+
+
+@builtin
+def warp_specialize(default_partition, worker_partitions, worker_num_warps, worker_num_regs,  #
+                    _builder=None, _generator=None):
+    worker_num_warps = _unwrap_if_constexpr(worker_num_warps)
+    worker_num_regs = _unwrap_if_constexpr(worker_num_regs)
+    return semantic.warp_specialize(default_partition, worker_partitions, worker_num_warps,  #
+                                    worker_num_regs, _builder, _generator)

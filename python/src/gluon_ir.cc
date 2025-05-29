@@ -82,5 +82,24 @@ void init_gluon_ir(py::module &&m) {
       .def("create_local_load",
            [](GluonOpBuilder &self, Type resultTy, Value memDesc) -> Value {
              return self.create<ttg::LocalLoadOp>(resultTy, memDesc);
+           })
+
+      .def(
+          "create_warp_return",
+          [](GluonOpBuilder &self) { return self.create<ttg::WarpReturnOp>(); })
+      .def("create_warp_yield",
+           [](GluonOpBuilder &self, std::vector<Value> &values) {
+             return self.create<ttg::WarpYieldOp>(values);
+           })
+      .def("create_warp_specialize_partitions",
+           [](GluonOpBuilder &self, int numPartitions) {
+             return self.create<ttg::WarpSpecializePartitionsOp>(numPartitions);
+           })
+      .def("create_warp_specialize",
+           [](GluonOpBuilder &self, std::vector<Type> &resultTypes,
+              std::vector<Value> &explicitCaptures,
+              std::vector<int> &partitionNumWarps,
+              std::vector<int> &requestedRegisters) {
+
            });
 }

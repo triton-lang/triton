@@ -1,3 +1,4 @@
+from typing import Sequence
 from triton.language import semantic as tl_semantic
 from . import _core as ttgl
 from triton._C.libtriton.gluon_ir import GluonOpBuilder
@@ -42,3 +43,11 @@ def shared_load(mem_desc, layout, builder: GluonOpBuilder):
 
 def shared_store(mem_desc, value, builder: GluonOpBuilder):
     builder.create_local_store(mem_desc.handle, value.handle)
+
+
+def warp_specialize(default_partition, worker_partitions, worker_num_warps: Sequence[int],
+                    worker_num_regs: Sequence[int], builder: GluonOpBuilder, generator):
+    num_partitions = len(worker_partitions)
+    assert num_partitions == len(worker_num_warps), f"warp specialize got {num_partitions} partitions but {len(worker_num_warps)} warp counts"
+    assert num_partitions == len(worker_num_regs), f"warp specialize got {num_partitions} partitions but {len(worker_num_regs)} register counts"
+
