@@ -20,6 +20,8 @@ namespace {
 using namespace mlir;
 using namespace mlir::triton::gpu;
 
+constexpr int kPtrBitWidth = 64;
+
 struct ConvertLayoutOpUsingLinearLayoutsConversion
     : public ConvertOpToLLVMPattern<ConvertLayoutOp> {
   const TargetInfoBase &targetInfo;
@@ -197,7 +199,9 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
     auto b = TritonLLVMOpBuilder(loc, rewriter);
     auto srcTy = op.getSrc().getType();
     auto dstTy = op.getType();
-    auto bitwidth = srcTy.getElementTypeBitWidth();
+    auto bitwidth = isa<PointerType>(srcTy.getElementType())
+                        ? kPtrBitWidth
+                        : srcTy.getElementTypeBitWidth();
 
     auto srcLayout = toLinearLayout(srcTy.getShape(), srcTy.getEncoding());
     auto dstLayout = toLinearLayout(dstTy.getShape(), dstTy.getEncoding());
@@ -235,6 +239,14 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
         v = b.zext(llvmElemTy, v);
       }
       smem = optimalSwizzling(srcLayout, dstLayout, 8);
+    }
+    bool isPtr = isa<PointerType>(srcTy.getElementType());
+    if (isPtr) {
+      llvmElemTy =
+          getTypeConverter()->convertType(IntegerType::get(ctx, kPtrBitWidth));
+      for (auto &v : inVals) {
+        v = b.ptrtoint(llvmElemTy, v);
+      }
     }
 
     // Extract reps from smem
@@ -299,6 +311,12 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
           getTypeConverter()->convertType(srcTy.getElementType());
       for (auto &v : outVals) {
         v = b.trunc(llvmElemTyOrig, v);
+      }
+    } else if (isPtr) {
+      auto llvmElemTyOrig =
+          getTypeConverter()->convertType(srcTy.getElementType());
+      for (auto &v : outVals) {
+        v = b.inttoptr(llvmElemTyOrig, v);
       }
     }
 
