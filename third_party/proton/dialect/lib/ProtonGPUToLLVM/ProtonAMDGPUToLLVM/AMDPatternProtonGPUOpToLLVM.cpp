@@ -58,7 +58,7 @@ struct CircularStoreOpConversion
     Value clock = op.getCounter();
     Value valsVec = packLLVector(loc, {tag, clock}, rewriter);
 
-    uint32_t addrSpace = 
+    uint32_t addrSpace =
         cast<LLVM::LLVMPointerType>(bufferBaseType).getAddressSpace();
     if (addrSpace == 1) {
       // TODO(crobeck): see what buffer ops performance looks like here for
