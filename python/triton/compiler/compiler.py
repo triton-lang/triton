@@ -345,6 +345,9 @@ def compile(src, target=None, options=None):
     if ir_source:
         ir_filename = f"{file_name}.{src.ext}"
         metadata_group[ir_filename] = fn_cache_manager.put(module, ir_filename)
+    else:
+        ir_filename = f"{file_name}.source"
+        metadata_group[ir_filename] = fn_cache_manager.put(module, ir_filename)
 
     use_ir_loc = knobs.compilation.use_ir_loc
     if ir_source and use_ir_loc:

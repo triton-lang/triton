@@ -6,11 +6,6 @@
 #include "mlir/Dialect/UB/IR/UBOps.h"
 #include "llvm/ADT/StringSwitch.h"
 #include "llvm/ADT/TypeSwitch.h"
-#include "llvm/Support/raw_ostream.h"
-
-#include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
-#include "mlir/IR/DialectImplementation.h"
-#include "mlir/Transforms/InliningUtils.h"
 
 #include "triton/Dialect/Triton/IR/AttrInterfaces.cpp.inc"
 #include "triton/Dialect/Triton/IR/Dialect.cpp.inc"
