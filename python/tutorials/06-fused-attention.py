@@ -577,7 +577,7 @@ attention = _attention.apply
     (4, 48, 4096, 64),
 ])
 @pytest.mark.parametrize("causal", [True])
-@pytest.mark.parametrize("warp_specialize", [False])
+@pytest.mark.parametrize("warp_specialize", [False, True])
 def test_op(Z, H, N_CTX, HEAD_DIM, causal, warp_specialize, dtype=torch.float16):
     torch.manual_seed(20)
     q = (torch.empty((Z, H, N_CTX, HEAD_DIM), dtype=dtype, device=DEVICE).normal_(mean=0.0, std=0.5).requires_grad_())
