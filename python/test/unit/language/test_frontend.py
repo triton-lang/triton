@@ -111,7 +111,7 @@ def filecheck_test(fn):
 # ===-----------------------------------------------------------------------===#
 
 
-@tl.aggregate
+@tl.core._aggregate
 class Pair:
     first: tl.tensor
     second: tl.tensor
@@ -162,7 +162,7 @@ def test_jit_method():
     anchor(b)
 
 
-@tl.aggregate
+@tl.core._aggregate
 class TypeWithBuiltinInitializer:
     value: tl.tensor
 

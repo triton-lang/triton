@@ -1494,7 +1494,7 @@ class tensor_descriptor(tensor_descriptor_base):
 
 
 @dataclass(frozen=True)
-class aggregate_type(base_type):
+class _aggregate_type(base_type):
     """A generic base type for all Triton aggregate types.
 
     This class contains a reference to the original user-defined Python class
@@ -1521,7 +1521,7 @@ class aggregate_type(base_type):
         return f"{name}<{', '.join(fields)}>"
 
 
-def aggregate(cls):
+def _aggregate(cls):
 
     # Define the wrapped Triton value type.
     class aggregate_value(base_value):
@@ -1565,8 +1565,8 @@ def aggregate(cls):
 
         @property
         def type(self):
-            return aggregate_type(aggregate_value,
-                                  [(name, getattr(self, name).type) for name in cls.__annotations__.keys()])
+            return _aggregate_type(aggregate_value,
+                                   [(name, getattr(self, name).type) for name in cls.__annotations__.keys()])
 
     for (name, member) in inspect.getmembers(cls):
         if inspect.isfunction(member) or inspect.ismethod(member) or isinstance(member, JITFunction):
