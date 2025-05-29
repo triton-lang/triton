@@ -36,6 +36,25 @@ using namespace mlir;
 using namespace mlir::triton;
 
 namespace {
+
+// Goes from bases of the form [[1], [2], [4], [8]] to [1, 2, 4, 8]
+SmallVector<int32_t> flatten(const LinearLayout &ll, StringAttr dim) {
+  auto outDimNames = to_vector(ll.getOutDimNames());
+  assert(outDimNames.size() == 1);
+  SmallVector<int32_t> vec;
+  for (int i = 0; i < ll.getInDimSizeLog2(dim); ++i)
+    vec.push_back(ll.getBasis(dim, i, outDimNames[0]));
+  return vec;
+};
+
+// [1, 2, 4, 8] -> [[1], [2], [4], [8]]
+std::vector<std::vector<int32_t>> unflatten(ArrayRef<int32_t> basis) {
+  std::vector<std::vector<int32_t>> unflattened;
+  for (int32_t b : basis)
+    unflattened.push_back({b});
+  return unflattened;
+}
+
 // Compute the nullspace basis of `vectors`
 SmallVector<int32_t> nullspaceBasis(ArrayRef<int32_t> vectors, int32_t rank) {
   // Solve A^T x = 0, where A is the matrix of vectors
@@ -69,7 +88,78 @@ SmallVector<int32_t> nullspaceBasis(ArrayRef<int32_t> vectors, int32_t rank) {
   return basis;
 }
 
-// Helper used by findGoodSmemLayoutFasto – matches ll.py::compute_segment.
+// Find the smallest tile that we can read and write to smem
+// without sacrificing vectorisation and split it into its own
+// `reps` dimension
+LinearLayout buildReps(MLIRContext *ctx, const LinearLayout &src,
+                       const LinearLayout &dst, const LinearLayout &smem) {
+  auto kVec = StringAttr::get(ctx, "vector");
+  auto kBank = StringAttr::get(ctx, "bank");
+  auto kSegment = StringAttr::get(ctx, "segment");
+  auto kReps = StringAttr::get(ctx, "reps");
+  auto kReg = StringAttr::get(ctx, "register");
+  // A basis is a rep if:
+  // 1) It is in registers in both src and dst
+  // 2) It is not swizzled
+  // 3) It is not vectorised
+  // After a moment's reflection, it should be clear that the
+  // set of basis that can be reps is exactly the set of elements
+  // that are in src[kReg] \cup dst[kReg], but are not in smem[kVec].
+  // This is because the swizzled elements are xors of elements that
+  // are in the src[kLane] \cup dst[kLane], which is disjoint to this set
+  SetVector<int32_t> srcRegs(llvm::from_range_t{}, flatten(src, kReg));
+  SetVector<int32_t> dstRegs(llvm::from_range_t{}, flatten(dst, kReg));
+  SetVector<int32_t> smemVecs(llvm::from_range_t{}, flatten(smem, kVec));
+  SetVector<int32_t> reps;
+  for (int32_t b : srcRegs) {
+    if (dstRegs.contains(b) && !smemVecs.contains(b)) {
+      reps.insert(b);
+    }
+  }
+  // Split segment into segment and reps
+  SetVector<int32_t> segment;
+  for (int32_t b : smemVecs) {
+    if (!reps.contains(b)) {
+      segment.insert(b);
+    }
+  }
+  auto smemReps = LinearLayout({{kVec, smem.getBases().lookup(kVec)},
+                                {kBank, smem.getBases().lookup(kBank)},
+                                {kSegment, unflatten(to_vector(segment))},
+                                {kReps, unflatten(to_vector(reps))}},
+                               smem.getOutDims(),
+                               /*requireSurjective=*/true);
+  return smemReps;
+  // if (reps.size() == 0) {
+  //   return smemReps;
+  // }
+  //// We now transpose the out dims so that reps are the last ones
+  //// In other words, we want the vec+bank+segment to be contiguous in smem
+  // auto repsMask = llvm::accumulate(reps, ~0u, [](uint32_t a, uint32_t b) {
+  // return a & b; }); auto rank = smemReps.getTotalOutDimSizeLog2();
+  //// Reshape to out dims = 2x2x...x2
+  // SmallVector<std::pair<StringAttr, int32_t>> splitDims;
+  // for (int32_t i = 0; i < rank; ++i) {
+  //   splitDims.push_back({StringAttr::get(ctx, std::to_string(i)), 2});
+  // }
+  // auto smemReps2 = smemReps.reshapeOuts(splitDims);
+
+  // SmallVector<StringAttr> front;
+  // SmallVector<StringAttr> back;
+  // for (int32_t i = 0; i < rank; ++i) {
+  //   if (repsMask & (1 << i)) {
+  //     back.push_back(StringAttr::get(ctx, std::to_string(i)));
+  //   } else {
+  //     front.push_back(StringAttr::get(ctx, std::to_string(i)));
+  //   }
+  // }
+  // auto transDims = llvm::to_vector(llvm::concat<StringAttr>(front, back));
+  // smemReps2 = smemReps2.transposeOuts(transDims);
+  // auto ret = smemReps2.reshapeOuts(smemReps.getOutDims());
+  //// we now have all the reps to be the trailing bases of the smem
+  // return ret;
+}
+
 SmallVector<int32_t> computeSegment(const SmallVector<int32_t> &bankSrc,
                                     const SmallVector<int32_t> &bankDst,
                                     int32_t rank, int32_t lenSegment) {
@@ -82,7 +172,7 @@ SmallVector<int32_t> computeSegment(const SmallVector<int32_t> &bankSrc,
   SmallVector<int32_t> segment;
   for (int32_t b = 0; b < rank; ++b)
     if (!setSrc.contains(1 << b) && !setDst.contains(1 << b))
-      segment.push_back(1 << b);
+      segment.push_back(1 << b); // free variables
   if (segment.size() >= lenSegment) {
     segment.resize(lenSegment);
     return segment;
@@ -169,23 +259,26 @@ LinearLayout optimalSwizzling(const LinearLayout &src, const LinearLayout &dst,
   assert(bitwidth <= 32 && "NYI: support for larger bitwidths");
 
   const int32_t rank = src.getTotalOutDimSizeLog2();
-
-  // We work on the flattened tensors as the tensor dimensions are not relevant
-  // here
-  const LinearLayout srcFlat = src.flattenOuts();
-  const LinearLayout dstFlat = dst.flattenOuts();
-  const StringAttr out1D = *srcFlat.getOutDimNames().begin(); // single dim
-  auto *ctx = out1D.getContext();
+  assert(src.getNumInDims() != 0);
+  auto *ctx = src.getInDimNames().begin()->getContext();
   auto kReg = StringAttr::get(ctx, "register");
   auto kLane = StringAttr::get(ctx, "lane");
 
-  // Goes from bases of the form [[1], [2], [4], [8]] to [1, 2, 4, 8]
-  auto flatten = [&](const LinearLayout &ll, StringAttr dim) {
-    SmallVector<int32_t> vec;
-    for (int i = 0; i < ll.getInDimSizeLog2(dim); ++i)
-      vec.push_back(ll.getBasis(dim, i, out1D));
-    return vec;
+  // We work on the flattened tensors as the tensor dimensions are not relevant
+  const LinearLayout srcFlat = src.flattenOuts();
+  const LinearLayout dstFlat = dst.flattenOuts();
+  auto regsNotZero = [kReg](const LinearLayout &ll) {
+    return llvm::all_of(
+        ll.getBases().lookup(kReg),
+        [](const std::vector<int32_t> &basis) { return basis[0] != 0; });
   };
+  assert(
+      regsNotZero(srcFlat) &&
+      "Remove register broadcasting from src. See actionRemoveBroadcastedRegs");
+  assert(
+      regsNotZero(dstFlat) &&
+      "Remove register broadcasting from dst. See actionRemoveBroadcastedRegs");
+  const StringAttr out1D = *srcFlat.getOutDimNames().begin(); // single dim
 
   auto regSrc = flatten(srcFlat, kReg);
   auto regDst = flatten(dstFlat, kReg);
@@ -226,18 +319,11 @@ LinearLayout optimalSwizzling(const LinearLayout &src, const LinearLayout &dst,
   StringAttr bankAttr = StringAttr::get(ctx, "bank");
   StringAttr segAttr = StringAttr::get(ctx, "segment");
 
-  auto unflatten = [&](const SmallVector<int32_t> &basis)
-      -> std::vector<std::vector<int32_t>> {
-    std::vector<std::vector<int32_t>> unflattened;
-    for (int32_t b : basis)
-      unflattened.push_back({b});
-    return unflattened;
-  };
-
   LinearLayout basis1D({{vecAttr, unflatten(vbasis)},
                         {bankAttr, unflatten(bbasis)},
                         {segAttr, unflatten(sbasis)}},
                        srcFlat.getOutDims(), /*requireSurjective=*/true);
+  basis1D = buildReps(ctx, srcFlat, dstFlat, basis1D);
 
   return basis1D.reshapeOuts(src.getOutDims());
 }

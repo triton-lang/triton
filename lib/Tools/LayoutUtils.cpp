@@ -1,4 +1,5 @@
 #include "triton/Tools/LayoutUtils.h"
+#include "triton/Tools/GenericSwizzling.h"
 
 namespace mlir::triton {
 
@@ -258,6 +259,27 @@ ColumnAction actionRemoveBroadcastedRegs(const LinearLayout &layout) {
     }
   }
   return ColumnAction(permOrder, kReg, bases.size());
+}
+
+ColumnAction actionMoveRepsToBack(const LinearLayout &layout,
+                                  const LinearLayout &smem) {
+  assert(layout.getNumInDims() != 0);
+  auto kReg = *layout.getInDimNames().begin();
+  assert(kReg.str() == "register");
+  auto *ctx = kReg.getContext();
+  auto kReps = StringAttr::get(ctx, "reps");
+  // The third dimension is reps
+  auto cvt = layout.invertAndCompose(smem);
+  SmallVector<size_t> front, back;
+  for (size_t i = 0; i < cvt.getInDimSize(kReg); ++i) {
+    if (cvt.getBasis(kReg, i, kReps) == 0) {
+      front.push_back(i);
+    } else {
+      back.push_back(i);
+    }
+  }
+  auto perm = to_vector(llvm::concat<size_t>(front, back));
+  return ColumnAction(perm, kReg, layout.getInDimSize(kReg));
 }
 
 SmallVector<Value> broadcastAs(const SmallVector<Value> &values,

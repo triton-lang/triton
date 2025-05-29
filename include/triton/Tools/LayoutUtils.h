@@ -130,6 +130,11 @@ ColumnAction actionRemoveBroadcastedRegs(const LinearLayout &layout);
 SmallVector<Value> broadcastAs(const SmallVector<Value> &values,
                                const LinearLayout &layout);
 
+// Given a smem layout returned by `optimalSwizzling`, move the registers
+// associated with smem[kReps] to the back of the layout[kReg] bases
+ColumnAction actionMoveRepsToBack(const LinearLayout &layout,
+                                  const LinearLayout &smem);
+
 // Compute the supremum of two lists.
 // Error out if the supremum does not exist (e.g. [a, b] and [b, a]).
 // If the supremum is not unique, we return the first list first
