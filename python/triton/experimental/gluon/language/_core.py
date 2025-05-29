@@ -239,8 +239,8 @@ def allocate_shared(element_ty, shape, layout, value=None, _builder=None):
 @builtin
 def warp_specialize(args, default_partition, worker_partitions, worker_num_warps, worker_num_regs,  #
                     _builder=None, _generator=None):
-    worker_num_warps = _unwrap_if_constexpr(worker_num_warps)
-    worker_num_regs = _unwrap_if_constexpr(worker_num_regs)
+    worker_num_warps = [_unwrap_if_constexpr(w) for w in worker_num_warps]
+    worker_num_regs = [_unwrap_if_constexpr(r) for r in worker_num_regs]
     args = [_unwrap_if_constexpr(arg) for arg in args]
     return semantic.warp_specialize(args, default_partition, worker_partitions, worker_num_warps,  #
                                     worker_num_regs, _builder, _generator)

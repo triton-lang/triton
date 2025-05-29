@@ -500,9 +500,12 @@ void init_triton_ir(py::module &&m) {
            [](OpState &self, Value &val) {
              self->insertOperands(self->getNumOperands(), val);
            })
-      .def("verify", [](OpState &self) -> bool {
-        return succeeded(verify(self.getOperation()));
-      });
+      .def("verify",
+           [](OpState &self) -> bool {
+             return succeeded(verify(self.getOperation()));
+           })
+      .def("get_operation", [](OpState &self) { return self.getOperation(); });
+
   // scf Ops
   py::class_<scf::ForOp, OpState>(m, "ForOp", py::module_local())
       .def("get_induction_var", &scf::ForOp::getInductionVar);

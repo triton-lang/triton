@@ -2,6 +2,7 @@ from typing import Sequence
 from triton.language import semantic as tl_semantic
 from . import _core as ttgl
 from triton._C.libtriton.gluon_ir import GluonOpBuilder
+from triton.compiler.code_generator import flatten_values_to_ir, unflatten_ir_values
 
 
 def arange(start, end, layout, builder: GluonOpBuilder):
@@ -56,21 +57,30 @@ def warp_specialize(args, default_partition, worker_partitions, worker_num_warps
     insert_pt = builder.get_insertion_point()
 
     # Emit the default partition to get the result types.
-    default_block = builder.create_block()
+    default_block = builder.new_block()
+    builder.set_insertion_point_to_start(default_block)
     default_results = generator.call_JitFunction(default_partition, args, kwargs={})
-    print([r.handle for r in default_results])
-    builder.create_warp_yield([r.handle for r in default_results])
-    result_types = [r.type.to_ir(builder) for r in default_results]
+    mlir_results = flatten_values_to_ir(default_results)
+    builder.create_warp_yield(mlir_results)
+    result_types = [r.get_type() for r in mlir_results]
 
     # Create the warp specialize op.
     builder.restore_insertion_point(insert_pt)
-    ws_op = builder.create_warp_specialize(result_types, args, worker_num_warps)
+    mlir_args = flatten_values_to_ir(args)
+    ws_op = builder.create_warp_specialize(result_types, mlir_args, worker_num_warps)
     ws_op.get_default_region().push_back(default_block)
 
     # Emit the partition regions.
     builder.create_block_with_parent(ws_op.get_partition_op_holder(), [])
     partitions_op = builder.create_warp_specialize_partitions(num_partitions)
-    arg_types = [arg.type.to_ir(builder) for arg in args]
+    arg_types = [arg.get_type() for arg in mlir_args]
     for i in range(num_partitions):
-        builder.create_block_with_parent(partitions_op.get_region(i), arg_types)
-        builder.create_warp_yield()
+        block = builder.create_block_with_parent(partitions_op.get_region(i), arg_types)
+        block_args = [block.get_argument(j) for j in range(len(mlir_args))]
+        block_args = unflatten_ir_values(block_args, [arg.type for arg in args])
+        generator.call_JitFunction(worker_partitions[i], block_args, kwargs={})
+        builder.create_warp_return()
+
+    builder.set_insertion_point_after(ws_op.get_operation())
+    mlir_results = [ws_op.get_result(i) for i in range(len(result_types))]
+    return tuple(unflatten_ir_values(mlir_results, [r.type for r in default_results]))

@@ -3,6 +3,7 @@ import expecttest
 from triton import knobs
 from triton.experimental import gluon
 from triton.experimental.gluon import language as ttgl
+import triton.language as tl
 
 
 @gluon.jit
@@ -68,3 +69,45 @@ module attributes {"ttg.num-warps" = 4 : i32} {
 } loc(#loc)
 #loc = loc(unknown)
 """)
+
+
+@gluon.jit
+def anchor(x):
+    pass
+
+
+@gluon.jit
+def default_partition(a, b):
+    anchor(a)
+    anchor(b)
+    return a, b
+
+
+@gluon.jit
+def worker0(a, b):
+    anchor(a)
+    anchor(b)
+
+
+@gluon.jit
+def worker1(a, b):
+    anchor(a)
+    anchor(b)
+
+
+@tl.core._aggregate
+class Pair:
+    first: tl.tensor
+    second: tl.tensor
+
+    def __init__(self, first, second):
+        self.first = first
+        self.second = second
+
+
+@gluon.jit
+def warp_specialize_kernel():
+    pair = Pair(tl.arange(0, 1), tl.arange(0, 2))
+    a, b = ttgl.warp_specialize((pair, tl.arange(0, 4)), default_partition, [worker0, worker1], [4, 4], [24, 48])
+    anchor(a)
+    anchor(b)
