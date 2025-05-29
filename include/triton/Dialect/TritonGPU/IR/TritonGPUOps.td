@@ -337,6 +337,24 @@ def TTG_PredicateStageOp: TTG_Op<"predicate_stage",
   let assemblyFormat = "$iv `,` $ub `,` $step `maxStage` $maxStage `stage` $stage attr-dict `:` type($iv) `->` type($result)";
 }
 
+def TTG_MaskOp: TTG_Op<"mask",
+                       [SingleBlock]> {
+    let summary = "mask op for pipelining";
+    let arguments = (ins I1:$pred);
+    let results = (outs Variadic<AnyType>:$result);
+    let regions = (region SizedRegion<1>:$region);
+    let builders = [
+        OpBuilder<(ins "Value":$pred)>,
+    ];
+}
+
+def TTG_MaskReturnOp: TTG_Op<"mask.return",
+                             [HasParent<"MaskOp">, Pure, Terminator, ReturnLike]> {
+    let summary = "terminator for mask operator";
+    let arguments = (ins Variadic<AnyType>:$result);
+    let assemblyFormat = "$result attr-dict `:` type($result)";
+}
+
 def TTG_Fp4ToFpOp : TTG_Op<"fp4_to_fp", [Pure]> {
   let summary = "Upcast fp4 (e2m1) to fp";
 
