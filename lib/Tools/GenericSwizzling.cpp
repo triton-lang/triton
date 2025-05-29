@@ -252,7 +252,6 @@ LinearLayout optimalSwizzling(const LinearLayout &src, const LinearLayout &dst,
          "src and dst must have identical out dims and shape");
   assert((bitwidth > 0) && llvm::isPowerOf2_32(bitwidth) &&
          "bitwidth must be a power of two");
-  assert(bitwidth <= 32 && "NYI: support for larger bitwidths");
 
   const int32_t rank = src.getTotalOutDimSizeLog2();
   assert(src.getNumInDims() != 0);
