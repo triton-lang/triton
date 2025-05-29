@@ -54,7 +54,7 @@ void init_triton_nvidia_passes_ttnvgpuir(py::module &&m) {
   ADD_PASS_WRAPPER_0("add_interleave_tmem",
                      ttng::createTritonNvidiaGPUInterleaveTMemPass);
   ADD_PASS_WRAPPER_0("add_random_delay",
-                     ttng::createTritonNvidiaGPURandomDelayPass);
+                     ttng::createTritonGPUInsertRandomDelaysPass);
 }
 
 void init_triton_nvidia_passes_nvws(py::module &&m) {

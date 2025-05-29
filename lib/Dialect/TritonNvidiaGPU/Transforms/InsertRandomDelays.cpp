@@ -14,15 +14,15 @@ namespace mlir {
 namespace triton {
 namespace nvidia_gpu {
 
-#define GEN_PASS_DEF_TRITONGPUINSERTRANDOMDELAYS
+#define GEN_PASS_DEF_TRITONGPUINSERTRANDOMDELAYSPASS
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/Passes.h.inc"
 
 struct InsertRandomDelaysPass
-    : public impl::TritonGPUInsertRandomDelaysBase<InsertRandomDelaysPass> {
+    : public impl::TritonGPUInsertRandomDelaysPassBase<InsertRandomDelaysPass> {
 
 public:
-  using impl::TritonGPUInsertRandomDelaysBase<
-      InsertRandomDelaysPass>::TritonGPUInsertRandomDelaysBase;
+  using impl::TritonGPUInsertRandomDelaysPassBase<
+      InsertRandomDelaysPass>::TritonGPUInsertRandomDelaysPassBase;
   void runOnOperation() override {
     ModuleOp mod = getOperation();
     IRRewriter rewriter(&getContext());

@@ -152,7 +152,7 @@ def TritonNvidiaGPURemoveTMEMTokensPass : Pass<"triton-nvidia-gpu-remove-tmem-to
   }];
 }
 
-def TritonGPUInsertRandomDelays : Pass<"triton-nvidia-gpu-insert-random-delays", "mlir::ModuleOp"> {
+def TritonGPUInsertRandomDelaysPass : Pass<"triton-nvidia-gpu-insert-random-delays", "mlir::ModuleOp"> {
   let summary = "Insert random delays before/after asynchronous operations";
 
   let description = [{
