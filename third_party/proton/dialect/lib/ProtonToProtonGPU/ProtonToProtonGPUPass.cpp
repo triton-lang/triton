@@ -253,7 +253,7 @@ public:
     func.walk([&](triton::ReturnOp ret) {
       builder.setInsertionPoint(ret);
       builder.create<mlir::gpu::BarrierOp>(loc);
-      builder.create<gpu::FinalizeOp>(loc, buffer, profileMem);
+      builder.create<gpu::FinalizeOp>(loc, segment, profileMem);
     });
 
     return success();
