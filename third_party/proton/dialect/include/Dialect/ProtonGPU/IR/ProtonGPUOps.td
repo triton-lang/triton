@@ -97,7 +97,7 @@ def PTG_FinalizeOp : PTG_Op<"finalize", [
   );
 
   let assemblyFormat = [{
-    $segment `,` $scratchPtr attr-dict `:` qualified(type($segment)) `,` type($scratchPtr)
+    $segment `,` $scratchPtr attr-dict `:` qualified(type($segment)) `,` qualified(type($scratchPtr))
   }];
 }
 
@@ -143,7 +143,7 @@ def PTG_SegmentAllocOp : PTG_Op<"segment_alloc", [Pure]> {
 
   let hasVerifier = 1;
 
-  let assemblyFormat = "$buffer `,` attr-dict `:` qualified(type($buffer)) `->` type($segment)";
+  let assemblyFormat = "$buffer attr-dict `:` qualified(type($buffer)) `->` type($segment)";
 }
 
 def PTG_StackAllocOp : PTG_Op<"stack_alloc", [

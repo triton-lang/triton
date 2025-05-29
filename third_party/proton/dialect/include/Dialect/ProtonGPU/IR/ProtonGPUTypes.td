@@ -14,20 +14,17 @@ class PTG_TypeDef<string name, string _mnemonic, list<Trait> traits = []>
 
 def PTG_SegmentType : PTG_TypeDef<"Segment", "segment", []> {
   let summary = "A segment in the internal buffer";
-
-  let description = [{
-    `proton_gpu.segment` is a type returned by `PTG_SegmentOp`.
-  }];
+  let description = [{ `proton_gpu.segment` is a type returned by `PTG_SegmentOp`. }];
 
   let parameters = (ins
     "int32_t":$nBytes,
     "Attribute":$memorySpace,
     EnumParameter<GranularityAttr>:$granularity,
-    ArrayRefParameter<"int32_t">:$selectIds
+    OptionalArrayRefParameter<"int32_t">:$selectIds
   );
 
   let assemblyFormat = [{
-    `<` $nBytes `,` $memorySpace `,` $granularity `,` `[` $selectIds `]` `>`
+    `<` $nBytes `,` $memorySpace `,` $granularity (`,` `[` $selectIds^ `]`)?  `>`
   }];
 }
 
