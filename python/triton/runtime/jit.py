@@ -6,6 +6,7 @@ import itertools
 import re
 import textwrap
 from collections import defaultdict
+from collections.abc import Sequence
 from dataclasses import dataclass
 from functools import cached_property
 from typing import Callable, Generic, Iterable, Optional, TypeVar, Union, overload, Dict, Any, Tuple
@@ -627,8 +628,12 @@ class JITFunction(KernelInterface[T]):
             assert grid is not None
             if callable(grid):
                 grid = grid(bound_args)
+            if isinstance(grid, int):
+                grid = (grid, )
+            assert isinstance(grid, Sequence), "grid must be Sequence"
             grid_size = len(grid)
-            grid_0 = grid[0]
+            assert grid_size <= 3, "grid must have at most 3 dimensions"
+            grid_0 = grid[0] if grid_size > 0 else 1
             grid_1 = grid[1] if grid_size > 1 else 1
             grid_2 = grid[2] if grid_size > 2 else 1
             # launch kernel
