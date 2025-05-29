@@ -122,8 +122,8 @@ def test_warp_specialize():
     # CHECK-NEXT:      call @"warp_specialize_worker1{{.*}}"(%arg0, %arg1, %arg2)
     # CHECK-NEXT:      warp_return
     # CHECK-NEXT:    }
-    # CHECK-NEXT     call @anchor{{.*}}([[OUTS]]#0)
-    # CHECK-NEXT     call @"anchor{{.*}}"([[OUTS]]#1, [[OUTS]]#2)
+    # CHECK-NEXT:    call @anchor{{.*}}([[OUTS]]#0)
+    # CHECK-NEXT:    call @"anchor{{.*}}"([[OUTS]]#1, [[OUTS]]#2)
     pair = Pair(tl.arange(0, 1), tl.arange(0, 2))
     a, b = ttgl.warp_specialize((pair, tl.arange(0, 4)), warp_specialize_default,
                                 [warp_specialize_worker0, warp_specialize_worker1], [4, 4], [24, 48])
