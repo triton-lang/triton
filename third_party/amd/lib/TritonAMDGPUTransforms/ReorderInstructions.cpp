@@ -53,13 +53,11 @@ static bool isPureMatmulLoop(scf::ForOp forOp) {
 }
 
 // Search through block to find earliest insertion point for move op. This can
-// be either an atomic op or last usage of source pointer. Search ends when move
-// op is encountered.
+// be either an atomic op or the defining op of source pointer. Search ends when
+// move op is encountered.
 static llvm::ilist<Operation>::iterator
-findEarlyInsertionPoint(Block *block, Operation *move) {
-  Value src;
-  if (auto ld = dyn_cast<triton::LoadOp>(move))
-    src = ld.getPtr();
+findEarlyInsertionPoint(Block *block, triton::LoadOp move) {
+  Value src = move.getPtr();
 
   auto ipnt = block->end();
   for (auto bi = block->begin(); bi != block->end(); ++bi) {
@@ -67,24 +65,22 @@ findEarlyInsertionPoint(Block *block, Operation *move) {
     if (op == move) // Don't move later than current location
       break;
 
-    op->walk([&](Operation *wop) {
-      if (src) {
-        // Check for ops accessing src value.
-        for (auto opr : wop->getOperands()) {
-          if (opr == src)
-            ipnt = bi;
-        }
+    // Check for ops defining the source ptr
+    for (auto opr : op->getResults()) {
+      if (opr == src) {
+        ipnt = bi;
+        break;
       }
-      // Atomics used for global synchronization.
-      if (isa<triton::AtomicRMWOp, triton::AtomicCASOp>(wop))
-        ipnt = bi;
-      // Break at barrier
-      if (isa<gpu::BarrierOp>(wop))
-        ipnt = bi;
-      // Break at loops.
-      if (isa<scf::ForOp, scf::WhileOp>(wop))
-        ipnt = bi;
-    });
+    }
+
+    // Break at:
+    // - Atomics used for global synchronization.
+    // - barriers
+    // - loops
+    if (isa<triton::AtomicRMWOp, triton::AtomicCASOp, gpu::BarrierOp,
+            scf::ForOp, scf::WhileOp>(op)) {
+      ipnt = bi;
+    }
   }
   return ipnt;
 }
@@ -163,47 +159,22 @@ static void moveUpTranspose(triton::FuncOp funcOp) {
       op->moveAfter(argOp);
 }
 
-// Schedule global load and local store ops for better GEMM performance.
-static void scheduleGlobalLoadLocalStore(Operation *parentOp) {
-  SmallVector<Operation *> moveOps;
-
-  // Search through the forOp initArgs to find global loads for a GEMM that
-  // the pipeliner may have peeled into a loop prologue.
-  if (auto forOp = dyn_cast<scf::ForOp>(parentOp)) {
-    SmallVector<Value> vals = forOp.getInitArgs();
-    while (!vals.empty()) {
-      SmallVector<Value> nextVals; // Next set of values to search via BFS.
-      for (size_t i = 0; i < vals.size(); ++i) {
-        Operation *defOp = vals[i].getDefiningOp();
-        if (isa_and_nonnull<triton::LoadOp>(defOp)) {
-          moveOps.push_back(defOp);
-          continue;
-        }
-
-        // Find uses of the op that are local_store
-        for (Operation *op : vals[i].getUsers()) {
-          if (auto storeOp = dyn_cast<ttg::LocalStoreOp>(op)) {
-            // Recurse on operands of the local_store (to find a global_load).
-            nextVals.push_back(storeOp.getSrc());
-          }
-        }
-      }
-      vals.swap(nextVals);
-    }
-  }
-
-  // Move local_store ops inside the loop early if dependence distance greater
-  // than one iteration (i.e., num_stages > 2). For such case, better perf on
-  // GEMM when local_store ops precede global loads.
-  parentOp->walk([&](ttg::LocalStoreOp op) { moveOps.push_back(op); });
-  // Move global_load ops inside the loop early to prefetch. This may increase
+// Schedule global load ops in prologue for better GEMM performance.
+static void moveUpGlobalLoadInPrologue(triton::FuncOp funcOp) {
+  // Move global_load ops early to prefetch. This may increase
   // register pressure but it enables issuing global loads early.
-  parentOp->walk([&](triton::LoadOp op) { moveOps.push_back(op); });
+  auto globalLoadOps =
+      llvm::to_vector(funcOp.getBody().getOps<triton::LoadOp>());
 
-  for (auto op : llvm::reverse(moveOps)) {
+  // Avoid moving up global_load ops that don't belong to any prologue to avoid
+  // extra register pressure.
+  llvm::erase_if(globalLoadOps, [](triton::LoadOp op) {
+    return !op->getAttr("amd.pipeliner_part");
+  });
+
+  for (auto op : llvm::reverse(globalLoadOps)) {
     // Gather use-def chain in block.
     Block *block = op->getBlock();
-    bool leadsToLoad = false;
     SetVector<Operation *> backwardSet;
 
     BackwardSliceOptions options;
@@ -216,18 +187,11 @@ static void scheduleGlobalLoadLocalStore(Operation *parentOp) {
       if (!block->findAncestorOpInBlock(*defOp))
         return false;
 
-      // Check for a `load` dependent path.
-      leadsToLoad |= isa<triton::LoadOp>(defOp);
       // Only move ops residing in the same block.
       return defBlock == block;
     };
-    mlir::getBackwardSlice(op, &backwardSet, options);
+    mlir::getBackwardSlice(op.getOperation(), &backwardSet, options);
     backwardSet.insert(op);
-
-    // Don't move a local_store if its source is a load from
-    // the same iteration.
-    if (isa<ttg::LocalStoreOp>(op) && leadsToLoad)
-      continue;
 
     auto ipoint = findEarlyInsertionPoint(block, op);
     // Remove ops that already precede the insertion point. This is done
@@ -347,15 +311,14 @@ struct TritonAMDGPUReorderInstructionsPass
       moveDownCoversion(funcOp);
 
       moveUpTranspose(funcOp);
+      moveUpGlobalLoadInPrologue(funcOp);
 
       if (isPureMatmulFunc(funcOp)) {
-        scheduleGlobalLoadLocalStore(funcOp);
         funcOp.walk([&](scf::ForOp forOp) -> void { sinkSecondLoad(forOp); });
       } else {
         SmallVector<scf::ForOp> leafForOps = triton::AMD::getLeafForOps(funcOp);
         for (auto forOp : leafForOps) {
           if (isPureMatmulLoop(forOp)) {
-            scheduleGlobalLoadLocalStore(forOp);
             sinkSecondLoad(forOp);
           }
         }

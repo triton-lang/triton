@@ -407,13 +407,13 @@ tt.func @matmul_loop_single_pipeline(%lb : index, %ub : index, %step : index,
 //       AMD:     %[[LOCAL_ALLOC_1:.*]] = ttg.local_alloc
 //       AMD:     %[[CMPI_2:.*]] = arith.cmpi sgt, %{{.*}}, %{{.*}}
 //       AMD:     %[[SPLAT_3:.*]] = tt.splat %[[CMPI_2]]
-//       AMD:     %[[LOAD_4:.*]] = tt.load %{{.*}}, %[[SPLAT_3]] {OpIdx = #amdgpu.OpIdx<0>}
+//       AMD:     %[[LOAD_4:.*]] = tt.load %{{.*}}, %[[SPLAT_3]] {OpIdx = #amdgpu.OpIdx<0>, amd.pipeliner_part = "prologue"}
 //       AMD:     %[[LOAD_5:.*]] = tt.load %{{.*}}, %[[CMPI_2]]
 //       AMD:     %[[MULI_6:.*]] = arith.muli %{{.*}}, %[[LOAD_5]]
 //       AMD:     %[[SPLAT_7:.*]] = tt.splat %[[MULI_6]]
 //       AMD:     %[[ADDPTR_8:.*]] = tt.addptr %{{.*}}, %[[SPLAT_7]]
 //       AMD:     %[[SPLAT_9:.*]] = tt.splat %[[CMPI_2]]
-//       AMD:     %[[LOAD_10:.*]] = tt.load %[[ADDPTR_8]], %[[SPLAT_9]] {OpIdx = #amdgpu.OpIdx<1>}
+//       AMD:     %[[LOAD_10:.*]] = tt.load %[[ADDPTR_8]], %[[SPLAT_9]] {OpIdx = #amdgpu.OpIdx<1>, amd.pipeliner_part = "prologue"}
 //       AMD:     %[[MEMDESC_SUBVIEW_11:.*]] = ttg.memdesc_subview %[[LOCAL_ALLOC_0]][%{{.*}}, %{{.*}}, %{{.*}}]
 //       AMD:     ttg.local_store %[[LOAD_4]], %[[MEMDESC_SUBVIEW_11]] {OpIdx = #amdgpu.OpIdx<0>}
 //       AMD:     %[[MEMDESC_SUBVIEW_12:.*]] = ttg.memdesc_subview %[[LOCAL_ALLOC_1]][%{{.*}}, %{{.*}}, %{{.*}}]
@@ -422,13 +422,13 @@ tt.func @matmul_loop_single_pipeline(%lb : index, %ub : index, %step : index,
 //       AMD:     %[[ADDPTR_14:.*]] = tt.addptr %{{.*}}, %{{.*}}
 //       AMD:     %[[ADDPTR_15:.*]] = tt.addptr %{{.*}}, %{{.*}}
 //       AMD:     %[[SPLAT_16:.*]] = tt.splat %[[CMPI_13]]
-//       AMD:     %[[LOAD_17:.*]] = tt.load %[[ADDPTR_14]], %[[SPLAT_16]] {OpIdx = #amdgpu.OpIdx<0>}
+//       AMD:     %[[LOAD_17:.*]] = tt.load %[[ADDPTR_14]], %[[SPLAT_16]] {OpIdx = #amdgpu.OpIdx<0>, amd.pipeliner_part = "prologue"}
 //       AMD:     %[[LOAD_18:.*]] = tt.load %[[ADDPTR_15]], %[[CMPI_13]]
 //       AMD:     %[[MULI_19:.*]] = arith.muli %{{.*}}, %[[LOAD_18]]
 //       AMD:     %[[SPLAT_20:.*]] = tt.splat %[[MULI_19]]
 //       AMD:     %[[ADDPTR_21:.*]] = tt.addptr %{{.*}}, %[[SPLAT_20]]
 //       AMD:     %[[SPLAT_22:.*]] = tt.splat %[[CMPI_13]]
-//       AMD:     %[[LOAD_23:.*]] = tt.load %[[ADDPTR_21]], %[[SPLAT_22]] {OpIdx = #amdgpu.OpIdx<1>}
+//       AMD:     %[[LOAD_23:.*]] = tt.load %[[ADDPTR_21]], %[[SPLAT_22]] {OpIdx = #amdgpu.OpIdx<1>, amd.pipeliner_part = "prologue"}
 //       AMD:     %[[MEMDESC_SUBVIEW_24:.*]] = ttg.memdesc_subview %[[LOCAL_ALLOC_0]][%{{.*}}, %{{.*}}, %{{.*}}]
 //       AMD:     ttg.local_store %[[LOAD_17]], %[[MEMDESC_SUBVIEW_24]] {OpIdx = #amdgpu.OpIdx<0>}
 //       AMD:     %[[MEMDESC_SUBVIEW_25:.*]] = ttg.memdesc_subview %[[LOCAL_ALLOC_1]][%{{.*}}, %{{.*}}, %{{.*}}]
