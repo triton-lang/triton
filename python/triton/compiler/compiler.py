@@ -340,8 +340,13 @@ def compile(src, target=None, options=None):
     except Exception as e:
         filter_traceback(e)
         raise
+
+    if not src.run_ext_passes:
+        ir_filename = f"{file_name}.{src.ext}"
+        metadata_group[ir_filename] = fn_cache_manager.put(module, ir_filename)
+
     use_ir_loc = knobs.compilation.use_ir_loc
-    if ir_source and use_ir_loc:
+    if not src.run_ext_passes and use_ir_loc:
         module.create_location_snapshot(src.path)
         print(f"Creating new locations for {src.path}")
 
