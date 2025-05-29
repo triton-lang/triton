@@ -241,17 +241,40 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
       smem = optimalSwizzling(srcLayout, dstLayout, 8);
     }
 
+    auto moveRepsToBackSrc = actionMoveRepsToBack(srcLayout, smem);
+    srcLayout = moveRepsToBackSrc.apply(srcLayout);
+    inVals = moveRepsToBackSrc.apply(inVals);
+    auto moveRepsToBackDst = actionMoveRepsToBack(dstLayout, smem);
+    dstLayout = moveRepsToBackDst.apply(dstLayout);
+
     Value smemBase =
         LLVM::getSharedMemoryBase(loc, rewriter, targetInfo, op.getOperation());
 
-    // Store
-    lowerLdStShared(loc, ctx, srcLayout, smem, inVals, llvmElemTy, smemBase,
-                    rewriter);
-    b.barrier();
-    // Load
+    auto kReg = str_attr("register");
+    auto kReps = StringAttr::get(ctx, "reps");
+    auto nReps = smem.getInDimSize(kReps);
+    auto tileSize = srcLayout.getInDimSize(kReg) / nReps;
+
     SmallVector<Value> outVals;
-    lowerLdStShared(loc, ctx, dstLayout, smem, outVals, llvmElemTy, smemBase,
-                    rewriter);
+    for (int i = 0; i < nReps; ++i) {
+      if (i > 0)
+        b.barrier();
+
+      auto tileInVals = SmallVector<Value>(inVals.begin() + i * tileSize,
+                                           inVals.begin() + (i + 1) * tileSize);
+      // Store
+      lowerLdStShared(loc, ctx, srcLayout, smem, tileInVals, llvmElemTy,
+                      smemBase, rewriter);
+      b.barrier();
+      // Load
+      SmallVector<Value> tileOutVals;
+      lowerLdStShared(loc, ctx, dstLayout, smem, tileOutVals, llvmElemTy,
+                      smemBase, rewriter);
+      llvm::append_range(outVals, tileOutVals);
+    }
+
+    // Undo the moveRepsToBackDst
+    outVals = moveRepsToBackDst.inverse().apply(outVals);
 
     // Unwrap sub-byte elements if necessary
     if (isSubByte) {

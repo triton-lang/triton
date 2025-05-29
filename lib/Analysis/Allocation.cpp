@@ -10,6 +10,8 @@
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
+#include "triton/Tools/GenericSwizzling.h"
+#include "triton/Tools/LayoutUtils.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/raw_ostream.h"
@@ -31,6 +33,32 @@ namespace triton {
 constexpr int kPtrBitWidth = 64;
 // Max shmem LDS/STS instruction in bits
 constexpr int kMaxShmemVecBitLength = 128;
+
+static unsigned getBitwidth(RankedTensorType ty) {
+  auto isPtr = isa<PointerType>(ty.getElementType());
+  return isPtr ? kPtrBitWidth : std::max(ty.getElementTypeBitWidth(), 8u);
+}
+
+static unsigned getNumScratchElemsSwizzledCvt(RankedTensorType srcTy,
+                                              RankedTensorType dstTy) {
+  auto *ctx = srcTy.getContext();
+  auto srcLayout = gpu::toLinearLayout(srcTy.getShape(), srcTy.getEncoding());
+  auto dstLayout = gpu::toLinearLayout(dstTy.getShape(), dstTy.getEncoding());
+  srcLayout = actionRemoveBroadcastedRegs(srcLayout).apply(srcLayout);
+  dstLayout = actionRemoveBroadcastedRegs(dstLayout).apply(dstLayout);
+  auto bitwidth = getBitwidth(srcTy);
+  auto smem = gpu::optimalSwizzling(srcLayout, dstLayout, bitwidth);
+  auto reps = smem.getOutDimSize(StringAttr::get(ctx, "reps"));
+  return smem.getTotalOutDimSize() / reps;
+}
+
+static unsigned getNumScratchElemsPaddedCvt(RankedTensorType srcTy,
+                                            RankedTensorType dstTy) {
+  auto scratchConfig = getScratchConfigForCvt(srcTy, dstTy);
+  auto elems = getNumScratchElements(scratchConfig.paddedRepShape);
+  auto bitwidth = getBitwidth(srcTy);
+  return elems * bitwidth / 8;
+}
 
 static SmallVector<unsigned> getRepShapeForCvt(RankedTensorType srcTy,
                                                RankedTensorType dstTy) {
@@ -181,9 +209,12 @@ unsigned defaultAllocationAnalysisScratchSizeFn(Operation *op) {
     auto dstTy = cvtLayout.getType();
     if (!cvtNeedsSharedMemory(srcTy, dstTy))
       return 0;
-    auto elems = product(srcTy.getShape());
+    // Pesimistically take the max. We will revisit later
+    auto elems = std::max(getNumScratchElemsSwizzledCvt(srcTy, dstTy),
+                          getNumScratchElemsPaddedCvt(srcTy, dstTy));
+
     auto isPtr = isa<PointerType>(srcTy.getElementType());
-    // We pesimistically assume that we upcast i4 to i8
+    // Pesimistically assume that we upcast i4 to i8
     auto bitwidth =
         isPtr ? kPtrBitWidth : std::max(srcTy.getElementTypeBitWidth(), 8u);
     return elems * bitwidth / 8;
