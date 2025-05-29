@@ -188,33 +188,3 @@ def test_aggregate_initializers():
     # CHECK: call @"anchor{{.*}}"([[RANGE]])
     value.modify(tl.arange(4, 8))
     anchor(value)
-
-
-@gluon.jit
-def default_partition(a, b):
-    anchor(a)
-    anchor(b)
-    return b, a
-
-
-@gluon.jit
-def worker0(a, b):
-    anchor(a)
-    anchor(b)
-
-
-@gluon.jit
-def worker1(a, b):
-    anchor(a)
-    anchor(b)
-
-
-@gluon.jit
-def test():
-    a = tl.arange(0, 4)
-    b = tl.arange(4, 8)
-    ttgl.warp_specialize((a, b), default_partition, [worker0, worker1], [4, 4], [24, 48])
-
-
-
-print(run_parser(test))
