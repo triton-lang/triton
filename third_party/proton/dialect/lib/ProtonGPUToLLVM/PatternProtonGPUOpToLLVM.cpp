@@ -316,8 +316,10 @@ struct SegmentAllocOpConversion
           defaultSegmentAlloc(b, curWarpId, selectIds, bufferSizeInBytes);
     }
 
-    auto bufferBase = LLVM::getSharedMemoryBase(
-        loc, rewriter, targetInfo.getTritonTargetInfo(), op);
+    Value buffer = adaptor.getBuffer();
+    auto bufferBaseTy =
+        mlir::cast<LLVM::LLVMStructType>(buffer.getType()).getBody()[0];
+    Value bufferBase = b.extract_val(bufferBaseTy, buffer, 0);
     auto indexPtrTy = ptr_ty(rewriter.getContext(), IndexPtrAddrSpace);
     auto indexPtr = rewriter.create<LLVM::AllocaOp>(
         loc, indexPtrTy, i32_ty, b.i32_val(1), /*alignment=*/0);
