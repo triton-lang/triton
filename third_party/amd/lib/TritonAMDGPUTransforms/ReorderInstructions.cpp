@@ -180,6 +180,9 @@ static void scheduleGlobalLoadLocalStore(Operation *parentOp) {
           continue;
         }
 
+        if (isa_and_nonnull<triton::amdgpu::InThreadTransposeOp>(defOp))
+          continue;
+
         // Find uses of the op that are local_store
         for (Operation *op : vals[i].getUsers()) {
           if (auto storeOp = dyn_cast<ttg::LocalStoreOp>(op)) {
