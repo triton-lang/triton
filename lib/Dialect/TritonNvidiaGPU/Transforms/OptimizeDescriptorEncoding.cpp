@@ -86,16 +86,15 @@ std::optional<UseInfo> getUseInfo(Operation *op) {
     info.descriptor = store.getDesc();
     auto ty = store.getSrc().getType();
     auto order = triton::gpu::getOrderForMemory(ty);
-    auto ctaLayout = ttg::getCTALayout(ty.getEncoding());
+    info.ctaLayout = ttg::getCTALayout(ty.getEncoding());
     // For store the input will always come from distributed tensor. Pick the
     // swizzling size based on shape to make it more likely to avoid bank
     // conflicts.
-    info.desiredSharedEncoding = ttg::NVMMASharedEncodingAttr::get(
-        ty.getContext(), ty.getShape(), order, ctaLayout, ty.getElementType(),
-        /*fp4Padded*/ false);
-    auto encoding = store.getSrc().getType().getEncoding();
-    info.ctaLayout = ttg::getCTALayout(encoding);
-    auto shape = store.getSrc().getType().getShape();
+    info.desiredSharedEncoding =
+        ttg::NVMMASharedEncodingAttr::get(ty.getContext(), ty.getShape(), order,
+                                          info.ctaLayout, ty.getElementType(),
+                                          /*fp4Padded*/ false);
+    auto shape = ty.getShape();
     auto rank = store.getDesc().getType().getBlockType().getRank();
     info.shape = expandToRank(shape, rank);
     return info;
