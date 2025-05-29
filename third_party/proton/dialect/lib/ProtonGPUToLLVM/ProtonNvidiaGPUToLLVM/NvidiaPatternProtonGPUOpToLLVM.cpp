@@ -69,7 +69,7 @@ struct CircularStoreOpConversion
         b.add(segment, b.urem(curIdx, b.i32_val(segmentWordSize)));
 
     // Store the counter into buffer.
-    auto bufferBaseType = segmentBase.getType();
+    auto bufferBaseType = bufferBase.getType();
     Value vecPtr = b.gep(bufferBaseType, i32_ty, bufferBase, tagOffset);
     Value tag = op.getIsStart() ? b.i32_val(op.getScopeId())
                                 : b.i32_val(1 << 31 | op.getScopeId());
