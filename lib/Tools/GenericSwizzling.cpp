@@ -291,8 +291,10 @@ LinearLayout optimalSwizzling(const LinearLayout &src, const LinearLayout &dst,
   // Bits in a bank segment: 32 banks x 32 bits
   constexpr int32_t bankBits = 32 * 32;
   // Bases needed to cover a whole bank segment
-  // FIXME: Handle small converts
-  assert(bankBits >= (1 << vbasis.size()) * bitwidth && "cvt too small");
+  // FIXME: Make small cvts performant:
+  //    if (1 << vbasis.size()) * bitwidth < 32, we could use
+  //    32 when computing lenBbasis, and then upcast values to a b32
+  //    to cover at least one bank per element
   const int32_t lenBbasis =
       llvm::Log2_32(bankBits / ((1 << vbasis.size()) * bitwidth));
   // Bases to cover all the tensor

@@ -227,11 +227,9 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
 
     auto smem = optimalSwizzling(srcLayout, dstLayout, bitwidth);
 
-    // Handle sub-byte elements
+    // Handle sub-byte elements like i1
     bool isSubByte = bitwidth * smem.getInDimSize(str_attr("vector")) < 8;
-    // Is the isSubByte case dead?
     auto llvmElemTy = getTypeConverter()->convertType(srcTy.getElementType());
-    assert(!isSubByte);
     if (isSubByte) {
       // Upcast to i8
       auto llvmElemTy = i8_ty;
