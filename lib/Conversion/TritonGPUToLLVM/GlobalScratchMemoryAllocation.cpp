@@ -22,7 +22,7 @@ static void allocateGMem(Operation *parentOp,
   parentOp->walk([&](triton::CallOp call) {
     auto callable = call.resolveCallable();
     if (!callable->hasAttr("ttg.global_scratch_memory_size")) {
-      auto inserted = callStack.insert(parentOp);
+      [[maybe_unused]] auto inserted = callStack.insert(parentOp);
       assert(inserted && "call cycle detected");
       allocateGMem(callable, callStack);
       callStack.remove(parentOp);

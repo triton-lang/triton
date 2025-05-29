@@ -36,9 +36,7 @@ public:
   LogicalResult
   matchAndRewrite(triton::gpu::LocalLoadOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    MemDescType srcTy = op.getSrc().getType();
     RankedTensorType dstTy = op.getType();
-    Attribute srcLayout = srcTy.getEncoding();
     Attribute dstLayout = dstTy.getEncoding();
     if (isa<DotOperandEncodingAttr>(dstLayout) &&
         isa<AMDMfmaEncodingAttr, AMDWmmaEncodingAttr>(
@@ -62,7 +60,6 @@ private:
     auto loc = op.getLoc();
     auto b = TritonLLVMOpBuilder(loc, rewriter);
     Value src = op.getSrc();
-    Value dst = op.getResult();
     auto llvmElemTy = typeConverter->convertType(
         cast<MemDescType>(src.getType()).getElementType());
 
@@ -116,8 +113,6 @@ public:
                   ConversionPatternRewriter &rewriter) const override {
     MemDescType srcTy = op.getSrc().getType();
     RankedTensorType dstTy = op.getType();
-    Attribute srcLayout = srcTy.getEncoding();
-    Attribute dstLayout = dstTy.getEncoding();
 
     if (canUseTransLoad(op, srcTy, dstTy)) {
       return lowerSharedToDotOperandTransLL(op, adaptor, getTypeConverter(),
@@ -270,7 +265,7 @@ private:
     SmallVector<Value> outVals;
     SmallVector<Value> elemsI32;
     mlir::Type retTy = dstTy;
-    bool valid = emitTransferBetweenRegistersAndShared(
+    [[maybe_unused]] bool valid = emitTransferBetweenRegistersAndShared(
         ldsTransLayout, srcTy, llvmElemTy,
         /*maxVecElems=*/std::nullopt, smemObj, loc, rewriter, targetInfo,
         [&](VectorType vecTy, Value vecAddr) {

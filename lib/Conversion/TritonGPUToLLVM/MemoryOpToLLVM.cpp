@@ -167,7 +167,6 @@ public:
   LogicalResult
   matchAndRewrite(triton::gpu::LocalStoreOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    Value memDescVal = op.getDst();
     auto llvmElemTy =
         getTypeConverter()->convertType(op.getDst().getType().getElementType());
     auto smemObj = LLVM::getSharedMemoryObjectFromStruct(

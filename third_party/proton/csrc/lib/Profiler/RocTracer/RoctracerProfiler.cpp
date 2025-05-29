@@ -44,8 +44,6 @@ public:
 
 private:
   void initDeviceOffset() {
-    int dc = 0;
-    auto ret = hip::getDeviceCount<true>(&dc);
     hsa::iterateAgents(
         [](hsa_agent_t agent, void *data) {
           auto &offset = *static_cast<int *>(data);

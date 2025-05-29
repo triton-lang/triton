@@ -238,7 +238,6 @@ struct TritonNvidiaGPUInterleaveTMemPass
       TritonNvidiaGPUInterleaveTMemPass>::TritonNvidiaGPUInterleaveTMemPassBase;
 
   void runOnOperation() override {
-    MLIRContext *context = &getContext();
     ModuleOp m = getOperation();
     SmallVector<std::pair<Operation *, Value>> opsToSink;
     m.walk([&](Operation *op) {

@@ -142,7 +142,6 @@ Value convertLayout(int opIdx, ConversionPatternRewriter &rewriter,
   auto tb = TritonLLVMOpBuilder(loc, rewriter);
   assert((opIdx == 0 || opIdx == 1) && "unexpected operand idx");
   auto rank = smemObj.getOffsets().size();
-  int kDimIdx = opIdx == 0 ? rank - 1 : rank - 2;
   int nonKDimIdx = opIdx == 0 ? rank - 2 : rank - 1;
 
   auto wmmaLayout = cast<AMDWmmaEncodingAttr>(encoding.getParent());
@@ -211,7 +210,6 @@ Value convertLayout(int opIdx, ConversionPatternRewriter &rewriter,
   }
   smemBase = AMD::computeBasePtr(rewriter, loc, smemObj, smemStrides);
 
-  Type resElemTy = typeConverter->convertType(elemTy);
   Type smemPtrTy = ptr_ty(rewriter.getContext(), 3);
 
   int loadsPerThread = offsets.size() / (numRepNonK * numRepK);
@@ -225,8 +223,6 @@ Value convertLayout(int opIdx, ConversionPatternRewriter &rewriter,
                tb.add(waveIdInBatch, tb.i32_val(b * warpsPerBatch)));
     for (int nonK = 0; nonK < numRepNonK; ++nonK) {
       for (int k = 0; k < numRepK; ++k) {
-        auto vecTy = vec_ty(resElemTy, numElemsPerThreadPerRep);
-        Value valVec = tb.undef(vecTy);
         for (unsigned loadId = 0; loadId < loadsPerThread; ++loadId) {
           Value loadOffset = offsets[nonK * loadsPerThread * numRepK +
                                      k * loadsPerThread + loadId];

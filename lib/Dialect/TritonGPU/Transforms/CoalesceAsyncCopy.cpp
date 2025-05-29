@@ -48,7 +48,6 @@ struct ClipAsyncCopySizePerThread
     auto sharedEnc = dyn_cast<SwizzledSharedEncodingAttr>(dstTy.getEncoding());
     if (!sharedEnc)
       return failure();
-    auto sharedVec = sharedEnc.getVec();
 
     // obtain max contiguous copy size
     // Note this can be further optimized, as copyContigSize can be even

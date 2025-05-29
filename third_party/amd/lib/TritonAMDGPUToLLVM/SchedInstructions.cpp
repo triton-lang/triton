@@ -477,7 +477,6 @@ struct TritonAMDGPULowerInstructionSchedHints
 
   void runOnOperation() override {
     MLIRContext *ctx = &getContext();
-    ModuleOp mod = getOperation();
 
     ConversionTarget target(*ctx);
     target.addLegalDialect<LLVM::LLVMDialect>();

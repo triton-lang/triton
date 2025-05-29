@@ -386,8 +386,6 @@ std::pair<Value, Value> DependencyRewriter::createAndGetAsyncIndex(
 
 LogicalResult DependencyRewriter::run() {
   SmallVector<llvm::MapVector<OpResult, UseInfo>> partitionUseInfo;
-  auto yield = cast<scf::YieldOp>(loop.getBody()->getTerminator());
-
   for (const Partition &partition : schedule.getPartitions()) {
     // Find all consumers of all outputs of this partition, tracking the
     // specific partition and distance of each use.

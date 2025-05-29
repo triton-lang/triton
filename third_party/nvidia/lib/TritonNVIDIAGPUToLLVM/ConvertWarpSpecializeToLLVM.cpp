@@ -323,7 +323,6 @@ static LogicalResult lowerWarpSpecialize(LLVM::LLVMFuncOp func,
     return mlir::emitError(module.getLoc(),
                            "module missing 'ttg.total-num-warps' attribute");
   }
-  unsigned totalNumThreads = totalNumWarpsAttr.getInt() * threadsPerWarp;
 
   // Determine how many registers the worker warps can surrender before they
   // begin execution.

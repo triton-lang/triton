@@ -73,7 +73,7 @@ void dumpMatrix(uint64_t *m, int numRows, int numCols) {
 // not to use any functions that create LLs in here.
 std::unique_ptr<uint64_t[]> getMatrix(const LinearLayout &layout) {
   int numRows = layout.getTotalOutDimSizeLog2();
-  int numCols = layout.getTotalInDimSizeLog2();
+  [[maybe_unused]] int numCols = layout.getTotalInDimSizeLog2();
 
   // Don't handle giant LLs.  This makes some things easier; for example, each
   // row can be a single uint64_t.
@@ -515,6 +515,7 @@ LinearLayout LinearLayout::reshapeOuts(
 }
 
 LinearLayout LinearLayout::concatIns(const LinearLayout &other) const {
+#ifndef NDEBUG
   assert(llvm::to_vector(getOutDimNames()) ==
              llvm::to_vector(other.getOutDimNames()) &&
          "layouts must have the same output dimensions");
@@ -522,6 +523,7 @@ LinearLayout LinearLayout::concatIns(const LinearLayout &other) const {
     assert(getOutDimSize(outDim) == other.getOutDimSize(outDim) &&
            "layouts must have the same output dimension sizes");
   }
+#endif
 
   LinearLayout::BasesT resultBases = getBases();
   for (auto &bases : other.getBases())
@@ -537,10 +539,12 @@ LinearLayout LinearLayout::concatOuts(const LinearLayout &other) const {
   assert(llvm::to_vector(getInDimNames()) ==
              llvm::to_vector(other.getInDimNames()) &&
          "layouts must have the same input dimensions");
+#ifndef NDEBUG
   for (StringAttr inDim : getInDimNames()) {
     assert(getInDimSize(inDim) == other.getInDimSize(inDim) &&
            "layouts must have the same input dimension sizes");
   }
+#endif
 
   LinearLayout::BasesT result;
   for (auto [lhsBases, rhsBases] : llvm::zip(getBases(), other.getBases())) {
@@ -828,9 +832,11 @@ LinearLayout::apply(ArrayRef<std::pair<StringAttr, int32_t>> ins) const {
 
 LinearLayout LinearLayout::compose(const LinearLayout &outer) const {
   assertDimsEqualIgnoringOrder(getOutDimNames(), outer.getInDimNames());
+#ifndef NDEBUG
   for (StringAttr outDim : getOutDimNames()) {
     assert(getOutDimSize(outDim) <= outer.getInDimSize(outDim));
   }
+#endif
 
   BasesT newBases;
   for (const auto &[inDim, inDimBases] : bases) {

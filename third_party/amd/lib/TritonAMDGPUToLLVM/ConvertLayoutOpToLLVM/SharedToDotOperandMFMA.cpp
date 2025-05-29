@@ -74,7 +74,6 @@ llvm::SmallVector<llvm::SmallVector<Value>> computeTensorElemMappingInBlock(
     int numOfElems, ArrayRef<int64_t> reps, ArrayRef<Value> smemOffsets,
     int loadVecSize, unsigned iNonKDim, unsigned iKDim) {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
-  auto numM = reps[1];
   auto numK = reps[2];
   const int loadsPerThread = numOfElems / loadVecSize;
   llvm::SmallVector<llvm::SmallVector<Value>> mapping(numK * loadsPerThread);
@@ -354,7 +353,6 @@ Value convertLayout(int opIdx, ConversionPatternRewriter &rewriter,
     smemBase = AMD::computeBasePtr(rewriter, loc, smemObj, smemStrides);
   }
 
-  Type resElemTy = typeConverter->convertType(elemTy);
   Type smemPtrTy = ptr_ty(rewriter.getContext(), 3);
 
   int loadsPerThread = offsets.size() / numRepK / numRepNonK;
@@ -368,10 +366,7 @@ Value convertLayout(int opIdx, ConversionPatternRewriter &rewriter,
         tb.mul(tb.i32_val(operandSize),
                tb.add(warpIdInBatch, tb.i32_val(b * warpsPerBatch)));
     for (int nonK = 0; nonK < numRepNonK; ++nonK) {
-      int blockNonKOffset = nonK * mfmaInstrNonK * warpsPerBlockNonK;
-      Value warpBlockOffAdjust = tb.i32_val(blockNonKOffset * shape[order[0]]);
       for (int k = 0; k < numRepK; ++k) {
-        auto vecTy = vec_ty(resElemTy, numOfElems);
         for (unsigned loadId = 0; loadId < loadsPerThread; ++loadId) {
           Value loadOffset;
           loadOffset = offsets[nonK * loadsPerThread * numRepK +

@@ -95,8 +95,6 @@ struct PrintOpConversion : public ConvertOpToLLVMPattern<triton::PrintOp> {
     assert(elems.size() == indices.size());
     assert(dimWidths.size() == indices.front().size());
 
-    size_t rank = dimWidths.size();
-
     // Format is:
     //   pid (<x>, <y>, <z>) idx (<i1>, <i2>, ...)<prefix> (operand <n>) <elem>
     // where we leave off "(operand <n>)" if there's only one operand.

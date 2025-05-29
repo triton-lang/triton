@@ -162,7 +162,7 @@ public:
   explicit ModuleAxisInfoAnalysis(ModuleOp moduleOp)
       : CallGraph<AxisInfoMapT>(moduleOp) {
     SmallVector<FunctionOpInterface> funcs;
-    for (auto root : getRoots()) {
+    for ([[maybe_unused]] auto root : getRoots()) {
       walk<WalkOrder::PreOrder, WalkOrder::PostOrder>(
           // Pre-order edge walk callback
           [](CallOpInterface callOp, FunctionOpInterface funcOp) {},

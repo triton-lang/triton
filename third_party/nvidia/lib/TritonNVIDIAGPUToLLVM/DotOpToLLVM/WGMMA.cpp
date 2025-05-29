@@ -411,7 +411,6 @@ LogicalResult convertDot(const LLVMTypeConverter *typeConverter,
   triton::nvgpu::WGMMALayout layoutB = transB ? triton::nvgpu::WGMMALayout::row
                                               : triton::nvgpu::WGMMALayout::col;
 
-  auto func = op->getParentOfType<LLVM::LLVMFuncOp>();
   Operation *startSequence = rewriter.create<triton::nvgpu::WGMMAFenceOp>(loc);
   SmallVector<Value> mmaResults;
   for (int m = 0; m < numRepM; ++m) {
@@ -439,7 +438,7 @@ LogicalResult convertDot(const LLVMTypeConverter *typeConverter,
         if (aSharedLayout) {
           a = aLoader.smemLoad(m, k, rewriter, loc);
         } else {
-          auto aDotOpEnc =
+          [[maybe_unused]] auto aDotOpEnc =
               cast<DotOperandEncodingAttr>(aTensorTy.getEncoding());
           assert(aDotOpEnc.getKWidth() ==
                  32 / aTensorTy.getElementTypeBitWidth());
@@ -504,12 +503,15 @@ LogicalResult convertWGMMA(triton::nvidia_gpu::WarpGroupDotOp op,
                            triton::nvidia_gpu::WarpGroupDotOp::Adaptor adaptor,
                            const LLVMTypeConverter *typeConverter,
                            ConversionPatternRewriter &rewriter, Value thread) {
+#ifndef NDEBUG
   auto AEnc = op.getA().getType().getEncoding();
   auto BEnc = op.getB().getType().getEncoding();
   assert(mlir::isa<NVMMASharedEncodingAttr>(AEnc) ||
          mlir::isa<DotOperandEncodingAttr>(AEnc));
   assert(mlir::isa<NVMMASharedEncodingAttr>(BEnc) &&
          "Operand B should use Shared layout.");
+#endif
+
   return convertDot(typeConverter, rewriter, op.getLoc(), op.getOperation(),  //
                     op.getA(), op.getB(), op.getC(), op.getD(), op.getUseC(), //
                     adaptor.getA(), adaptor.getB(), adaptor.getC(),           //

@@ -496,7 +496,6 @@ static void lowerStoreToTensorMemory(Location loc, Operation *op, Value src,
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   SmallVector<Value> srcValues = unpackLLElements(loc, llSrc, rewriter);
   srcValues = packToI32(srcValues, loc, rewriter);
-  auto dstType = cast<MemDescType>(dest.getType());
   auto info = getTMemRuntimeInfo(op, cast<RankedTensorType>(src.getType()),
                                  cast<MemDescType>(dest.getType()));
   const TMemMessageTraits message =
@@ -546,7 +545,6 @@ struct TensorMemoryAllocOpConversion
     SmallVector<unsigned> order(op.getType().getRank());
     std::iota(order.begin(), order.end(), 0);
     std::reverse(order.begin(), order.end());
-    auto shape = op.getType().getShape();
 
     if (op.getSrc()) {
       lowerStoreToTensorMemory(loc, op, op.getSrc(), op.getResult(),
@@ -632,8 +630,6 @@ struct TensorMemoryLoadOpConversion
   matchAndRewrite(triton::nvidia_gpu::TMEMLoadOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     Location loc = op->getLoc();
-    auto llvmElemTy =
-        getTypeConverter()->convertType(op.getSrc().getType().getElementType());
     auto tmemBase = adaptor.getSrc();
 
     auto info = getTMemRuntimeInfo(op, cast<RankedTensorType>(op.getType()),
@@ -671,8 +667,6 @@ struct TensorMemoryStoreOpConversion
   matchAndRewrite(triton::nvidia_gpu::TMEMStoreOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     Location loc = op->getLoc();
-    auto llvmElemTy =
-        getTypeConverter()->convertType(op.getDst().getType().getElementType());
     auto tmemBase = adaptor.getDst();
     Value pred = adaptor.getPred();
     lowerStoreToTensorMemory(loc, op, op.getSrc(), op.getDst(),
@@ -841,7 +835,6 @@ struct MemDescSubviewOpConversion
     auto b = TritonLLVMOpBuilder(loc, rewriter);
     auto srcTy = op.getSrc().getType();
     auto dstTy = op.getResult().getType();
-    auto llvmElemTy = getTypeConverter()->convertType(srcTy.getElementType());
 
     if (!isa<triton::nvidia_gpu::TensorMemoryEncodingAttr>(
             srcTy.getEncoding())) {
@@ -883,8 +876,6 @@ struct TMEMSubSliceOpConversion
     Location loc = op->getLoc();
     auto b = TritonLLVMOpBuilder(loc, rewriter);
     auto srcTy = op.getSrc().getType();
-    auto dstTy = op.getResult().getType();
-    auto llvmElemTy = getTypeConverter()->convertType(srcTy.getElementType());
 
     auto encoding = dyn_cast<triton::nvidia_gpu::TensorMemoryEncodingAttr>(
         srcTy.getEncoding());
@@ -892,8 +883,6 @@ struct TMEMSubSliceOpConversion
       return failure();
     }
     auto shapePerCTA = getShapePerCTA(srcTy);
-    int blockN = encoding.getBlockN();
-    int blockM = encoding.getBlockM();
     int offsetCol = 0;
     int offsetRow = 0;
     // TODO: support the more complex layout when M == 64.

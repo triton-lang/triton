@@ -52,7 +52,6 @@ private:
                               OpAdaptor adaptor,
                               ConversionPatternRewriter &rewriter,
                               const TargetInfoBase &targetInfo) const {
-    MLIRContext *ctx = rewriter.getContext();
     auto loc = op.getLoc();
     auto b = TritonLLVMOpBuilder(loc, rewriter);
     auto typeConverter = getTypeConverter();
@@ -218,7 +217,6 @@ private:
   LogicalResult
   lowerMmaToDotOperand(triton::gpu::ConvertLayoutOp op, OpAdaptor adaptor,
                        ConversionPatternRewriter &rewriter) const {
-    auto loc = op.getLoc();
     auto srcTy = op.getSrc().getType();
     auto dstTy = op.getType();
     if (matchMmaV3AndDotOperandLayout(srcTy, dstTy)) {

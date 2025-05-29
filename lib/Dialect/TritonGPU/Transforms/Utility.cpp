@@ -420,7 +420,7 @@ static Attribute inferTransOpDstEncoding(Attribute srcEnc,
 static Attribute inferDstEncoding(triton::gpu::Fp4ToFpOp op, Attribute srcEnc) {
   Attribute dstEnc;
   auto shape = op.getSrc().getType().getShape();
-  auto result =
+  [[maybe_unused]] auto result =
       srcEnc.getDialect()
           .getRegisteredInterface<triton::DialectInferLayoutInterface>()
           ->inferFp4ToFpOpEncoding(shape, op.getAxis(), srcEnc, dstEnc,
@@ -472,7 +472,7 @@ static Attribute inferReshapeOpDstEncoding(ArrayRef<int64_t> srcShape,
     return {};
 
   Attribute dstEnc;
-  auto result =
+  [[maybe_unused]] auto result =
       srcEnc.getDialect()
           .getRegisteredInterface<triton::DialectInferLayoutInterface>()
           ->inferReshapeOpEncoding(srcShape, srcEnc, dstShape, dstEnc,
@@ -1039,7 +1039,8 @@ int getNVIDIAComputeCapability(Operation *module) {
 
   StringRef capabilityStr = ref.drop_front(5); // drop the "cuda:"
   int computeCapability;
-  bool parseError = capabilityStr.getAsInteger(10, computeCapability);
+  [[maybe_unused]] bool parseError =
+      capabilityStr.getAsInteger(10, computeCapability);
   assert(!parseError &&
          "invalid compute capability string in target attribute");
 
@@ -1509,7 +1510,6 @@ void replaceUsesAndPropagateType(OpBuilder &builder, Operation *oldUse,
       wait.replaceAllUsesWith(newWait.getResults());
       wait.erase();
     } else {
-      Operation *op = operand->getOwner();
       operand->set(val);
     }
   }

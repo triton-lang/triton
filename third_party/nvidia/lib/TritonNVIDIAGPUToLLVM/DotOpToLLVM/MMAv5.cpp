@@ -671,8 +671,10 @@ struct TCGen5MMAOpConversion
   LogicalResult
   matchAndRewrite(ttng::TCGen5MMAOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
+#ifndef NDEBUG
     auto AEnc = op.getA().getType().getEncoding();
     auto BEnc = op.getB().getType().getEncoding();
+#endif
     assert(
         (isa<NVMMASharedEncodingAttr, ttng::TensorMemoryEncodingAttr>(AEnc)) &&
         "Operand A should use Shared or Tensor memory layout.");

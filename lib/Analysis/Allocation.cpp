@@ -118,8 +118,6 @@ ScratchConfig getScratchConfigForCvt(RankedTensorType srcTy,
     return ScratchConfig({}, {});
   ScratchConfig scratchConfig(repShape, repShape);
   auto rank = repShape.size();
-  Attribute srcLayout = srcTy.getEncoding();
-  Attribute dstLayout = dstTy.getEncoding();
 
   assert(cvtNeedsSharedMemory(srcTy, dstTy));
   auto outOrd = gpu::getOrder(dstTy);

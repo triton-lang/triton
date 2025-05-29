@@ -222,8 +222,9 @@ public:
     if (inVals.empty() || inVals.size() % 8 != 0)
       return failure();
 
-    auto mfmaLayout = dyn_cast<AMDMfmaEncodingAttr>(srcType.getEncoding());
-    assert(mfmaLayout.getMDim() == 32 && "Expected MFMA size 32");
+    assert(dyn_cast<AMDMfmaEncodingAttr>(srcType.getEncoding()).getMDim() ==
+               32 &&
+           "Expected MFMA size 32");
     assert(triton::gpu::lookupThreadsPerWarp(rewriter) == 64 &&
            "Expected warp size 64 for MFMA");
 

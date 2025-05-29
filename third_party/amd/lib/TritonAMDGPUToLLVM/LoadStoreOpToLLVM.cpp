@@ -211,7 +211,7 @@ struct DirectToLdsLoadConversionBase : public LoadStoreConversionBase {
       auto loc = op->getLoc();
       auto smemObj = mlir::LLVM::getSharedMemoryObjectFromStruct(
           loc, llDst, resElemTy, rewriter);
-      bool ok = emitTransferBetweenRegistersAndShared(
+      [[maybe_unused]] bool ok = emitTransferBetweenRegistersAndShared(
           srcTy, dstTy, resElemTy, {}, smemObj, loc, rewriter, targetInfo,
           [&](VectorType vecTy_, Value shmemAddr) {
             vecTy = vecTy_;
@@ -317,22 +317,23 @@ struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp>,
       otherElems = unpackLLElements(loc, llOther, rewriter);
 
     // vectorized iteration through all the pointer/mask/other elements
-    const int valueElemNBits =
-        std::max(8u, valueElemTy.getIntOrFloatBitWidth());
-    const size_t valueElemNBytes = valueElemNBits / 8;
     const int numVecs = numElems / vec;
 
     auto cacheMod = op.getCache();
     SmallVector<Value> loadedVals;
     Type vecTy = LLVM::getVectorType(valueElemTy, vec);
     for (size_t vecStart = 0; vecStart < numElems; vecStart += vec) {
+
+#ifndef NDEBUG
+      const int valueElemNBits =
+          std::max(8u, valueElemTy.getIntOrFloatBitWidth());
       const size_t maxWordWidth = std::max<size_t>(32, valueElemNBits);
       const size_t totalWidth = valueElemNBits * vec;
       const size_t width = std::min(totalWidth, maxWordWidth);
       const size_t nWords = std::max<size_t>(1, totalWidth / width);
       const size_t wordNElems = width / valueElemNBits;
-      const size_t movWidth = width < 16 ? 16 : width;
       assert(wordNElems * nWords * numVecs == numElems);
+#endif
 
       Value pred = mask ? maskElems[vecStart] : b.int_val(1, 1);
       Value ptr = ptrElems[vecStart];
@@ -390,7 +391,6 @@ struct BufferLoadOpConversion
     Value ptr = op.getPtr();
     Value offset = op.getOffsets();
     Value mask = op.getMask();
-    Value other = op.getOther();
     auto cacheMod = op.getCache();
 
     // Converted values
@@ -486,7 +486,6 @@ struct BufferLoadToLocalOpConversion
 
     RankedTensorType ptrType =
         cast<RankedTensorType>(getPointerTypeWithShape(ptr, offset));
-    unsigned numElems = getTotalElemsPerThread(ptrType);
 
     // We can load N elements at a time if:
     //  1. Every group of N source pointers are contiguous.  For example, if
@@ -499,7 +498,7 @@ struct BufferLoadToLocalOpConversion
         getMaskElemsAndUpdateVeclen(rewriter, loc, llMask, mask, vec);
 
     SmallVector<Value> offsetElems = unpackLLElements(loc, llOffset, rewriter);
-    assert(offsetElems.size() == numElems);
+    assert(offsetElems.size() == getTotalElemsPerThread(ptrType));
 
     SmallVector<Value> otherElems;
     if (llOther)
@@ -761,12 +760,7 @@ struct StoreOpConversion : public ConvertOpToLLVMPattern<triton::StoreOp>,
     SmallVector<Value> maskElems =
         getMaskElemsAndUpdateVeclen(rewriter, loc, llMask, mask, vec);
 
-    const size_t valueElemNBits =
-        std::max<int>(8, valueElemTy.getIntOrFloatBitWidth());
-    const size_t valueElemNBytes = valueElemNBits / 8;
-
     auto cacheMod = op.getCache();
-    const int numVecs = elemsPerThread / vec;
     auto freeVarMasks = getFreeVariableMasks(valueTy);
     Value threadPred = emitRedundantThreadPredicate(moduleOp, freeVarMasks,
                                                     rewriter, loc, targetInfo);
@@ -782,15 +776,19 @@ struct StoreOpConversion : public ConvertOpToLLVMPattern<triton::StoreOp>,
 
       auto vecTy = LLVM::getVectorType(valueElemTy, vec);
 
+#ifndef NDEBUG
+      const size_t valueElemNBits =
+          std::max<int>(8, valueElemTy.getIntOrFloatBitWidth());
+      const int numVecs = elemsPerThread / vec;
       const size_t maxWordWidth = std::max<size_t>(32, valueElemNBits);
       const size_t totalWidth = valueElemNBits * vec;
       const size_t width = std::min(totalWidth, maxWordWidth);
       const size_t nWords = std::max<size_t>(1, totalWidth / width);
       const size_t wordNElems = width / valueElemNBits;
       assert(wordNElems * nWords * numVecs == elemsPerThread);
+#endif
 
       SmallVector<std::pair<Value, std::string>> asmArgs;
-      Value elem = valueElems[vecStart];
       Value ptr = ptrElems[vecStart];
 
       // Create the store val
@@ -1001,7 +999,8 @@ struct BufferAtomicRMWOpConversion
           llMask ? b.and_(threadPred, maskElems[vecStart]) : threadPred;
 
       Type vecTy = LLVM::getVectorType(valueElemTy, vec);
-      Value falseVal = createZeroVector(rewriter, loc, cast<VectorType>(vecTy));
+      [[maybe_unused]] Value falseVal =
+          createZeroVector(rewriter, loc, cast<VectorType>(vecTy));
       // Create the store val
       Value storeVal = packElementRangeIntoVector(
           rewriter, this->getTypeConverter(), loc, cast<VectorType>(vecTy),
@@ -1143,7 +1142,6 @@ struct AtomicCASOpConversion
     auto loc = op.getLoc();
     auto b = TritonLLVMOpBuilder(loc, rewriter);
     MLIRContext *ctx = rewriter.getContext();
-    Value ptr = op.getPtr();
 
     Value llPtr = adaptor.getPtr();
     Value llCmp = adaptor.getCmp();
@@ -1169,7 +1167,6 @@ struct AtomicCASOpConversion
     Type valueElemTy =
         TensorTy ? getTypeConverter()->convertType(TensorTy.getElementType())
                  : valueTy;
-    auto valueElemNBits = valueElemTy.getIntOrFloatBitWidth();
     auto elemsPerThread = getTotalElemsPerThread(op.getVal().getType());
     // vec = 1 for scalar
     auto vec = getVectorSize(op.getPtr(), axisAnalysisPass);
@@ -1197,7 +1194,6 @@ struct AtomicCASOpConversion
 
       // use op
       if (TensorTy) { // for tensor
-        auto retType = vec == 1 ? valueElemTy : vecTy;
         // TODO: USE ATOMIC CAS OP on Tensor
         auto successOrdering = *atomicMemOrdering;
         auto failureOrdering = LLVM::AtomicOrdering::monotonic;

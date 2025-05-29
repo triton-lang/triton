@@ -123,8 +123,6 @@ struct TritonAMDGPUUpdateAsyncWaitCountPass
       return;
     }
 
-    ModuleOp m = getOperation();
-
     SmallVector<ttg::AsyncWaitOp> waitOps;
     getOperation()->walk(
         [&](ttg::AsyncWaitOp waitOp) { waitOps.push_back(waitOp); });

@@ -42,7 +42,6 @@ struct FenceAsyncSharedOpConversion
   LogicalResult
   matchAndRewrite(triton::nvidia_gpu::FenceAsyncSharedOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    Location loc = op->getLoc();
     rewriter.replaceOpWithNewOp<triton::nvgpu::FenceAsyncSharedOp>(
         op, adaptor.getBCluster());
     return success();
@@ -151,7 +150,6 @@ struct WaitBarrierOpConversion
         op.getLoc(), adaptor.getAlloc(),
         typeConverter->convertType(op.getAlloc().getType().getElementType()),
         rewriter);
-    auto loc = op.getLoc();
     const std::string ptxNoPred =
         "{                                                           \n\t"
         ".reg .pred P1;                                              \n\t"

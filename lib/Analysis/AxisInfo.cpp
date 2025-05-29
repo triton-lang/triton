@@ -331,7 +331,6 @@ private:
       // with element locations:
       // [4, 5, 6, 7]
       // It is "strided contiguous" with a divisilibity of 16 bytes
-      auto rank = lhs.getRank();
       auto elemSize = std::max<int64_t>(
           1, triton::getPointeeBitWidth(op.getPtr().getType()) / 8);
       rhsDivisibility = multiplyDivisor(rhs.getDivisibility(dim), elemSize);
@@ -355,7 +354,6 @@ private:
         return {lhs.getConstantValue().value() -
                 rhs.getConstantValue().value()};
       } else if constexpr (std::is_same_v<OpTy, triton::AddPtrOp>) {
-        auto rank = lhs.getRank();
         auto elemSize = std::max<int64_t>(
             1, triton::getPointeeBitWidth(op.getPtr().getType()) / 8);
         auto rhsValue = rhs.getConstantValue().value() * elemSize;
@@ -925,7 +923,6 @@ private:
       // Treat [2^n,2^n+1,...]'s divisibility as 1 instead of 2^n
       lhsDivisibility = 1;
     }
-    auto numBits = log2Int(lhsDivisibility);
     return multiplyDivisor(lhsDivisibility, 1ll << shift);
   }
 

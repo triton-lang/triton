@@ -60,7 +60,6 @@ struct ExtractSliceOpConversion
                               ConversionPatternRewriter &rewriter) const {
     Location loc = op->getLoc();
     auto srcTy = cast<RankedTensorType>(op.getSource().getType());
-    auto srcLayout = srcTy.getEncoding();
     auto srcShape = srcTy.getShape();
     auto resultTy = cast<RankedTensorType>(op.getType());
     auto vals = unpackLLElements(loc, adaptor.getSource(), rewriter);
@@ -123,7 +122,6 @@ struct ExtractSliceOpConversion
   LogicalResult
   matchAndRewrite(amdgpu::ExtractSliceOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    auto srcTy = op.getSource().getType();
     if (isa<BlockedEncodingAttr, AMDMfmaEncodingAttr>(
             op.getSource().getType().getEncoding())) {
       return processLayout(op, adaptor, rewriter);

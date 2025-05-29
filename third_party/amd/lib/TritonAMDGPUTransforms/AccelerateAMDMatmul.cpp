@@ -633,7 +633,6 @@ public:
 
     unsigned mDim = mfmaInstr->mDim;
     unsigned nDim = mfmaInstr->nDim;
-    unsigned kDim = mfmaInstr->kDim;
     unsigned kBase = mfmaInstr->kBase;
 
     // For mxfp4 A/B tensor, we pack every two values into one int8 value there.
@@ -807,7 +806,6 @@ public:
 
     auto mDim = mfmaInstr->mDim;
     auto nDim = mfmaInstr->nDim;
-    auto kDim = mfmaInstr->kDim;
     auto kBase = mfmaInstr->kBase;
     assert(mDim == nDim);
 
