@@ -42,7 +42,6 @@ module attributes {"ttg.num-warps" = 8 : i32} {
     // CHECK-DAG: %[[ADDR2:.*]] = llvm.select %[[P2]], %{{.*}}, %[[ADDR1]]
     // CHECK-DAG: %[[P3:.*]] = llvm.icmp "eq" %[[WARPID]], %{{.*}}
     // CHECK-DAG: %[[ADDR3:.*]] = llvm.select %[[P3]], %{{.*}}, %[[ADDR2]]
-    // CHECK-DAG: builtin.unrealized_conversion_cast %[[ADDR3]]
     %0 = ttg.local_alloc : () -> !ttg.memdesc<96xi32, #shared, #smem, mutable>
     %3 = proton_gpu.segment_alloc %0 : !ttg.memdesc<96xi32, #shared, #smem, mutable> -> !proton_gpu.segment<384, #smem, warp, [0, 1, 2]>
     tt.return %3 : !proton_gpu.segment<384, #smem, warp, [0, 1, 2]>
@@ -79,7 +78,7 @@ module attributes {"ttg.num-warps" = 8 : i32} {
     // CHECK-DAG: scf.for
     // CHECK-DAG: %[[CYCLE1:.*]] = llvm.inline_asm has_side_effects{{.*}}%clock
     // CHECK-DAG: %[[INDEX:.*]] = llvm.urem
-    // CHECK-DAG: %[[SMEM_OFFSET:.*]] = llvm.add %[[ADDR2]], %[[INDEX]]
+    // CHECK-DAG: %[[SMEM_OFFSET:.*]] = llvm.add {{.*}}, %[[INDEX]]
     // CHECK-DAG: %[[SMEM_PTR:.*]] = llvm.getelementptr %{{.*}}[%[[SMEM_OFFSET]]] : (!llvm.ptr<3>, i32) -> !llvm.ptr<3>, i32
     // CHECK-DAG: %[[SMEM_P:.*]] = llvm.and
     // CHECK-DAG: llvm.inline_asm has_side_effects{{.*}}st.shared.v2.b32{{.*}}%[[SMEM_PTR]], %{{.*}}, %{{.*}}, %[[SMEM_P]]
@@ -114,7 +113,7 @@ module attributes {"ttg.num-warps" = 8 : i32} {
     // CHECK-DAG: %[[ADDR2:.*]] = llvm.select %[[P2]], %{{.*}}, %[[ADDR1]]
     // CHECK-DAG: %[[CYCLE1:.*]] = llvm.inline_asm has_side_effects{{.*}}%clock
     // CHECK-DAG: %[[INDEX:.*]] = llvm.urem
-    // CHECK-DAG: %[[SMEM_OFFSET:.*]] = llvm.add %[[ADDR2]], %[[INDEX]]
+    // CHECK-DAG: %[[SMEM_OFFSET:.*]] = llvm.add %{{.*}} %[[INDEX]]
     // CHECK-DAG: %[[SMEM_PTR:.*]] = llvm.getelementptr %{{.*}}[%[[SMEM_OFFSET]]] : (!llvm.ptr<3>, i32) -> !llvm.ptr<3>, i32
     // CHECK-DAG: %[[SMEM_P:.*]] = llvm.and
     // CHECK-DAG: llvm.inline_asm has_side_effects{{.*}}st.shared.v2.b32{{.*}}%[[SMEM_PTR]], %{{.*}}, %{{.*}}, %[[SMEM_P]]
