@@ -13,7 +13,7 @@ jobs:
     strategy:
       matrix:
         runner: ${{ fromJson(inputs.matrix) }}
-    timeout-minutes: 40
+    timeout-minutes: 60
     env:
       RUNNER_TYPE: ${{ matrix.runner[0] }}
     name: Build MacOS
