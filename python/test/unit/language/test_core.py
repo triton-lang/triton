@@ -2641,7 +2641,7 @@ def test_sum_dtype(device):
 
     @triton.jit
     def kernel_default_float(out_ptr):
-        x = tl.full((32, 32), 1.0, dtype=tl.bfloat16)
+        x = tl.full((32, 32), 0.0001, dtype=tl.bfloat16)
         x = tl.sum(x)
         tl.store(out_ptr, x)
 
@@ -2663,7 +2663,7 @@ def test_sum_dtype(device):
 
     out = torch.empty(1, dtype=torch.bfloat16, device=device)
     kernel_default_float[(1, )](out)
-    torch.testing.assert_close(out[0], torch.tensor(32 * 32, dtype=torch.bfloat16, device=device))
+    torch.testing.assert_close(out[0], torch.tensor(32 * 32 * 0.0001, dtype=torch.bfloat16, device=device))
 
 
 @triton.jit
