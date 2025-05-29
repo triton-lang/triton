@@ -33,6 +33,14 @@ module attributes {"ttg.num-warps" = 4 : i32} {
 } loc(#loc)
 #loc = loc(unknown)
 """)
+    expecttest.assert_expected_inline(h.asm["ttgir"], """\
+module attributes {"ttg.num-warps" = 4 : i32} {
+  tt.func public @convert_layout_kernel() attributes {noinline = false} {
+    tt.return loc(#loc)
+  } loc(#loc)
+} loc(#loc)
+#loc = loc(unknown)
+""")
 
 
 @gluon.jit
