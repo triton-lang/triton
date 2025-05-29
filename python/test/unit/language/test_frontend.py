@@ -185,3 +185,26 @@ def test_aggregate_initializers():
     # CHECK: call @"anchor{{.*}}"([[RANGE]])
     value.modify(tl.arange(4, 8))
     anchor(value)
+
+
+@triton.jit
+def forward(arg):
+    return arg
+
+
+@triton.jit
+def list_of_functions_constexpr(arg, fns: tl.constexpr):
+    for i in tl.static_range(len(fns)):
+        fns[i](arg)
+
+
+@filecheck_test
+@triton.jit
+def test_list_of_functions():
+    # CHECK-LABEL: test_list_of_functions
+    # CHECK: call @"list_of_functions_constexpr{{.*}}cJITFunction(test_frontend:anchor){{.*}}cJITFunction(test_frontend:forward)"
+
+    # CHECK-LABEL: tt.func private @"list_of_functions_constexpr
+    # CHECK-NEXT: call @anchor
+    # CHECK-NEXT: call @forward
+    list_of_functions_constexpr(tl.arange(0, 4), [anchor, forward])
