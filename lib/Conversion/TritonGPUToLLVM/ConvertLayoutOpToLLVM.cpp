@@ -203,6 +203,26 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
                         ? kPtrBitWidth
                         : srcTy.getElementTypeBitWidth();
 
+    // Handle sub-byte elements like i1
+    bool isSubByte = bitwidth < 8;
+    auto llvmElemTy = getTypeConverter()->convertType(srcTy.getElementType());
+    if (isSubByte) {
+      bitwidth = 8;
+      // Upcast to i8
+      auto llvmElemTy = i8_ty;
+      for (auto &v : inVals) {
+        v = b.zext(llvmElemTy, v);
+      }
+    }
+    bool isPtr = isa<PointerType>(srcTy.getElementType());
+    if (isPtr) {
+      llvmElemTy =
+          getTypeConverter()->convertType(IntegerType::get(ctx, kPtrBitWidth));
+      for (auto &v : inVals) {
+        v = b.ptrtoint(llvmElemTy, v);
+      }
+    }
+
     auto srcLayout = toLinearLayout(srcTy.getShape(), srcTy.getEncoding());
     auto dstLayout = toLinearLayout(dstTy.getShape(), dstTy.getEncoding());
     auto origDstLayout = dstLayout;
@@ -226,26 +246,6 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
     dstLayout = actionRemoveBroadcastedRegs(dstLayout).apply(dstLayout);
 
     auto smem = optimalSwizzling(srcLayout, dstLayout, bitwidth);
-
-    // Handle sub-byte elements like i1
-    bool isSubByte = bitwidth * smem.getInDimSize(str_attr("vector")) < 8;
-    auto llvmElemTy = getTypeConverter()->convertType(srcTy.getElementType());
-    if (isSubByte) {
-      // Upcast to i8
-      auto llvmElemTy = i8_ty;
-      for (auto &v : inVals) {
-        v = b.zext(llvmElemTy, v);
-      }
-      smem = optimalSwizzling(srcLayout, dstLayout, 8);
-    }
-    bool isPtr = isa<PointerType>(srcTy.getElementType());
-    if (isPtr) {
-      llvmElemTy =
-          getTypeConverter()->convertType(IntegerType::get(ctx, kPtrBitWidth));
-      for (auto &v : inVals) {
-        v = b.ptrtoint(llvmElemTy, v);
-      }
-    }
 
     // Extract reps from smem
     auto kReg = str_attr("register");
