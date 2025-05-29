@@ -1731,3 +1731,40 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
     tt.return
   }
 }
+
+// -----
+
+#AL = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [4, 8], warpsPerCTA = [4, 1], order = [1, 0]}>
+#C = #ttg.nvidia_mma<{versionMajor = 2, warpsPerCTA = [4, 1]}>
+#A = #ttg.dot_op<{opIdx = 0, parent = #C, kWidth=2}>
+#B = #ttg.dot_op<{opIdx = 1, parent = #C, kWidth=2}>
+#smem = #ttg.shared_memory
+
+module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 1 : i32} {
+// Verify that statically dead prologue iterations are properly predicated
+// CHECK-LABEL: @peeled_prologue_statically_dead
+// CHECK-DAG: %[[FALSE:.*]] = arith.constant dense<false>
+// CHECK-DAG: %[[TRUE:.*]] = arith.constant dense<true>
+// CHECK: ttg.async_copy_global_to_local {{.*}} mask %[[TRUE]]
+// CHECK: ttg.async_copy_global_to_local {{.*}} mask %[[TRUE]]
+// CHECK: ttg.async_copy_global_to_local {{.*}} mask %[[FALSE]]
+// CHECK: scf.for
+tt.func @peeled_prologue_statically_dead(
+                  %a_ptr : tensor<128x32x!tt.ptr<f16>, #AL> {tt.divisibility = 16 : i32, tt.contiguity = 16 : i32},
+                  %B : tensor<32x128xf16, #B>) -> tensor<128x128xf32, #C> {
+  %lb = arith.constant 0 : i32
+  %ub = arith.constant 2 : i32
+  %step = arith.constant 1 : i32
+
+  %c_init = arith.constant dense<0.00e+00> : tensor<128x128xf32, #C>
+
+  %loop = scf.for %iv = %lb to %ub step %step iter_args(%prev_c = %c_init) -> (tensor<128x128xf32, #C>) : i32 {
+    %a_ = tt.load %a_ptr : tensor<128x32x!tt.ptr<f16>, #AL>
+    %a = ttg.convert_layout %a_ : tensor<128x32xf16, #AL> -> tensor<128x32xf16, #A>
+    %c = tt.dot %a, %B, %prev_c : tensor<128x32xf16, #A> * tensor<32x128xf16, #B> -> tensor<128x128xf32, #C>
+    scf.yield %c : tensor<128x128xf32, #C>
+  } {tt.num_stages = 4 : i32}
+  tt.return %loop: tensor<128x128xf32, #C>
+}
+
+}
