@@ -124,22 +124,8 @@ class Pair:
     def get_first(self):
         return self.first
 
-<<<<<<< HEAD
     def get_second(self, _builder=None):
         return self.second
-=======
-    @triton.jit
-    def get_first(self):
-        return self.first
-
-    def get_second(self, _builder=None):
-        return self.second
-
-    @triton.jit
-    def unpack(self):
-        return self.get_first(), self.get_second()
-
->>>>>>> origin/main
 
     @triton.jit
     def unpack(self):
