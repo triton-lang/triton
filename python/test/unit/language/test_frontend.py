@@ -1,6 +1,6 @@
 import triton
 import triton.language as tl
-from triton.filecheck import filecheck_test
+from triton._filecheck import filecheck_test
 
 # ===-----------------------------------------------------------------------===#
 # Unit Tests

@@ -25,7 +25,7 @@ from .runtime._allocation import set_allocator
 from . import language
 from . import testing
 from . import tools
-from .filecheck import run_filecheck_test, filecheck_test, run_parser
+from ._filecheck import run_filecheck_test, filecheck_test, run_parser
 
 must_use_result = language.core.must_use_result
 

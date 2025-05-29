@@ -3,7 +3,7 @@ import expecttest
 from triton import knobs
 from triton.experimental import gluon
 from triton.experimental.gluon import language as ttgl
-from triton.filecheck import filecheck_test
+from triton._filecheck import filecheck_test
 import triton.language as tl
 
 
