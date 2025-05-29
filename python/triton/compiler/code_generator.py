@@ -4,6 +4,7 @@ import re
 import warnings
 import textwrap
 import itertools
+from dataclasses import dataclass
 from types import ModuleType
 from typing import Any, Callable, Dict, Optional, Tuple, Type, Union, Iterable, List
 
@@ -269,6 +270,12 @@ class ASTFunction:
         for path, val in constants.items():
             set_iterable_path(vals, path, language.constexpr(val))
         return vals
+
+
+@dataclass(frozen=True)
+class BoundJITMethod:
+    __self__: base_value
+    __func__: JITFunction
 
 
 class CodeGenerator(ast.NodeVisitor):
@@ -1247,6 +1254,9 @@ class CodeGenerator(ast.NodeVisitor):
         kws = dict(self.visit(keyword) for keyword in node.keywords)
         args = [self.visit(arg) for arg in node.args]
         args = list(itertools.chain.from_iterable(x if isinstance(x, list) else [x] for x in args))
+        if isinstance(fn, BoundJITMethod):
+            args.insert(0, fn.__self__)
+            fn = fn.__func__
         if isinstance(fn, JITFunction):
             _check_fn_args(node, fn, args)
             return self.call_JitFunction(fn, args, kws)
@@ -1338,7 +1348,10 @@ class CodeGenerator(ast.NodeVisitor):
         lhs = self.visit(node.value)
         if _is_triton_tensor(lhs) and node.attr == "T":
             return semantic.permute(lhs, (1, 0), builder=self.builder)
-        return getattr(lhs, node.attr)
+        attr = getattr(lhs, node.attr)
+        if _is_triton_value(lhs) and isinstance(attr, JITFunction):
+            return BoundJITMethod(lhs, attr)
+        return attr
 
     def visit_Expr(self, node):
         node.value._is_unused = True
