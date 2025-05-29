@@ -49,15 +49,13 @@ static unsigned getNumScratchElemsSwizzledCvt(RankedTensorType srcTy,
   auto bitwidth = getBitwidth(srcTy);
   auto smem = gpu::optimalSwizzling(srcLayout, dstLayout, bitwidth);
   auto reps = smem.getInDimSize(StringAttr::get(ctx, "reps"));
-  return smem.getTotalInDimSize() / reps;
+  return smem.getTotalOutDimSize() / reps;
 }
 
 static unsigned getNumScratchElemsPaddedCvt(RankedTensorType srcTy,
                                             RankedTensorType dstTy) {
   auto scratchConfig = getScratchConfigForCvt(srcTy, dstTy);
-  auto elems = getNumScratchElements(scratchConfig.paddedRepShape);
-  auto bitwidth = getBitwidth(srcTy);
-  return elems * bitwidth / 8;
+  return getNumScratchElements(scratchConfig.paddedRepShape);
 }
 
 static SmallVector<unsigned> getRepShapeForCvt(RankedTensorType srcTy,
@@ -163,12 +161,8 @@ ScratchConfig getScratchConfigForCvt(RankedTensorType srcTy,
   scratchConfig.outVec = std::min(scratchConfig.outVec, contiguousShapeDim);
   // Clamp the vector length to kMaxShmemVecBitLength / element bitwidth as this
   // is the max vectorisation
-  auto inBitWidth = isa<PointerType>(srcTy.getElementType())
-                        ? kPtrBitWidth
-                        : srcTy.getElementTypeBitWidth();
-  auto outBitWidth = isa<PointerType>(dstTy.getElementType())
-                         ? kPtrBitWidth
-                         : dstTy.getElementTypeBitWidth();
+  auto inBitWidth = getBitwidth(srcTy);
+  auto outBitWidth = getBitwidth(dstTy);
   scratchConfig.inVec =
       std::min(scratchConfig.inVec, kMaxShmemVecBitLength / inBitWidth);
   scratchConfig.outVec =
@@ -202,7 +196,7 @@ unsigned defaultAllocationAnalysisScratchSizeFn(Operation *op) {
     int threadsPerWarp = gpu::TritonGPUDialect::getThreadsPerWarp(
         op->getParentOfType<ModuleOp>());
     return std::max<int>(dstTy.getNumElements(), threadsPerWarp) *
-           std::max<int>(8, dstTy.getElementTypeBitWidth()) / 8;
+           getBitwidth(dstTy) / 8;
   }
   if (auto cvtLayout = dyn_cast<gpu::ConvertLayoutOp>(op)) {
     auto srcTy = cvtLayout.getSrc().getType();
@@ -213,11 +207,7 @@ unsigned defaultAllocationAnalysisScratchSizeFn(Operation *op) {
     auto elems = std::max(getNumScratchElemsSwizzledCvt(srcTy, dstTy),
                           getNumScratchElemsPaddedCvt(srcTy, dstTy));
 
-    auto isPtr = isa<PointerType>(srcTy.getElementType());
-    // Pesimistically assume that we upcast i4 to i8
-    auto bitwidth =
-        isPtr ? kPtrBitWidth : std::max(srcTy.getElementTypeBitWidth(), 8u);
-    return elems * bitwidth / 8;
+    return elems * getBitwidth(srcTy) / 8;
   }
   if (isa<AtomicRMWOp, AtomicCASOp>(op)) {
     auto value = op->getOperand(0);
