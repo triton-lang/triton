@@ -2407,7 +2407,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     tt.call @call_no_smem_usage() : () -> ()
     tt.return
   }
-  // CHECK: llvm.func internal @call_no_smem_usage(%arg0: !llvm.ptr<3>, %arg1: !llvm.ptr<1>, %arg2: !llvm.ptr<1>) {
+  // CHECK: llvm.func internal @call_no_smem_usage(%arg0: !llvm.ptr<3>, %arg1: !llvm.ptr<1>, %arg2: !llvm.ptr<1>)
   tt.func private @call_no_smem_usage() attributes {noinline = false} {
     tt.return
   }
