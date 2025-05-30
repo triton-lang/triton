@@ -26,13 +26,22 @@ def test_convert_layout(fresh_knobs):
         1, ttgl.BlockedLayout(size_per_thread=[1, 1], threads_per_warp=[1, 32], warps_per_cta=[1, 4], order=[1, 0]))
     h = convert_layout_kernel.warmup(128, layout_a, layout_b, num_warps=layout_a.warps_per_cta[0], grid=(1, ))
     expecttest.assert_expected_inline(
-        h.asm["ttgir"], """\
+        h.asm["source"], """\
 #blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
 #blocked1 = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0]}>
 module attributes {"ttg.num-warps" = 4 : i32} {
   tt.func public @convert_layout_kernel() attributes {noinline = false} {
     %0 = tt.make_range {end = 128 : i32, start = 0 : i32} : tensor<128xi32, #blocked> loc(#loc)
     %1 = ttg.convert_layout %0 : tensor<128xi32, #blocked> -> tensor<128xi32, #ttg.slice<{dim = 1, parent = #blocked1}>> loc(#loc)
+    tt.return loc(#loc)
+  } loc(#loc)
+} loc(#loc)
+#loc = loc(unknown)
+""")
+    expecttest.assert_expected_inline(
+        h.asm["ttgir"], """\
+module attributes {"ttg.num-warps" = 4 : i32} {
+  tt.func public @convert_layout_kernel() attributes {noinline = false} {
     tt.return loc(#loc)
   } loc(#loc)
 } loc(#loc)
@@ -60,7 +69,7 @@ def test_shared_memory(fresh_knobs):
     h = shared_memory_kernel.warmup(8, 32, layout_a, layout_b, smem_layout, num_warps=layout_a.warps_per_cta[0],
                                     grid=(1, ))
     expecttest.assert_expected_inline(
-        h.asm["ttgir"], """\
+        h.asm["source"], """\
 #blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [1, 0]}>
 #blocked1 = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [1, 0]}>
 #shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 32}>
@@ -103,7 +112,7 @@ def test_tensor_memory(fresh_knobs):
     tmem_layout = ttgl.nvidia.blackwell.TensorMemoryLayout(block=[128, 128], unpacked=True)
     h = tensor_memory_kernel.warmup(layout, tmem_layout, num_warps=4, grid=(1, ))
     expecttest.assert_expected_inline(
-        h.asm["ttgir"], """\
+        h.asm["source"], """\
 #blocked = #ttg.blocked<{sizePerThread = [1, 64], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [0, 1]}>
 #tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, unpacked = true>
 module attributes {"ttg.num-warps" = 4 : i32} {
@@ -200,7 +209,7 @@ def test_mbarrier(fresh_knobs):
 
     h = mbarrier_kernel.warmup(grid=(1, ))
     expecttest.assert_expected_inline(
-        h.asm["ttgir"], """\
+        h.asm["source"], """\
 #shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
 #smem = #ttg.shared_memory
 module attributes {"ttg.num-warps" = 4 : i32} {
@@ -240,7 +249,7 @@ def test_tcgen05_mma(fresh_knobs):
 
     h = tcgen05_mma_kernel.warmup(nvmma_layout, acc_layout, grid=(1, ))
     expecttest.assert_expected_inline(
-        h.asm["ttgir"], """\
+        h.asm["source"], """\
 #shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16}>
 #smem = #ttg.shared_memory
 #tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, unpacked = true>
