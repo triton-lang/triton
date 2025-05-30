@@ -8,14 +8,6 @@
 namespace mlir::triton {
 namespace proton::gpu {
 
-// Profiler index is private to each thread, address space is 5.
-// See detail discussion:
-// https://llvm.org/docs/NVPTXUsage.html#address-spaces
-// https://llvm.org/docs/AMDGPUUsage.html#address-spaces
-constexpr int IndexPtrAddrSpace = 5;
-
-constexpr int kGlobalScratchBufferOffset = -1;
-
 void populateProtonGPUOpPatterns(LLVMTypeConverter &typeConverter,
                                  RewritePatternSet &patterns,
                                  const TargetInfoBase &targetInfo,
@@ -24,8 +16,6 @@ void populateProtonGPUOpPatterns(LLVMTypeConverter &typeConverter,
 void populateTypeConversions(LLVMTypeConverter &typeConverter,
                              const TargetInfoBase &targetInfo);
 
-Value getLinearId(Location loc, ConversionPatternRewriter &rewriter,
-                  ModuleOp mod, const proton::gpu::TargetInfoBase &targetInfo);
 } // namespace proton::gpu
 } // namespace mlir::triton
 
