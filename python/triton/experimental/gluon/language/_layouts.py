@@ -94,16 +94,18 @@ class SharedLayout:
     pass
 
 
-@dataclass(frozen=True)
 class NVMMASharedLayout(SharedLayout):
-    swizzle_byte_width: int
-    element_bitwidth: int
-    rank: int
-    transposed: bool = False
-    fp4_padded: bool = False
-    ctas_per_cga: Optional[List[int]] = None
-    cta_split_num: Optional[List[int]] = None
-    cta_order: Optional[List[int]] = None
+
+    def __init__(self, swizzle_byte_width, element_bitwidth, rank, transposed=False, fp4_padded=False,
+                 ctas_per_cga=None, cta_split_num=None, cta_order=None):
+        self.swizzle_byte_width = _unwrap_if_constexpr(swizzle_byte_width)
+        self.element_bitwidth = _unwrap_if_constexpr(element_bitwidth)
+        self.rank = _unwrap_if_constexpr(rank)
+        self.transposed = _unwrap_if_constexpr(transposed)
+        self.fp4_padded = _unwrap_if_constexpr(fp4_padded)
+        self.ctas_per_cga = _unwrap_if_constexpr(ctas_per_cga)
+        self.cta_split_num = _unwrap_if_constexpr(cta_split_num)
+        self.cta_order = _unwrap_if_constexpr(cta_order)
 
     def __post_init__(self):
         assert self.element_bitwidth in [8, 16, 32, 64]

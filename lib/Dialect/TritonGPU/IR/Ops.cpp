@@ -437,9 +437,16 @@ MemDescTransOp::inferReturnTypes(MLIRContext *context,
       return failure();
     }
   }
+
+  // Permute the last `rank` dims of the source alloc shape.
+  SmallVector<int64_t> allocShape =
+      applyPermutation(argTy.getAllocShape().take_back(order.size()), order);
+  allocShape.insert(allocShape.begin(), argTy.getAllocShape().begin(),
+                    argTy.getAllocShape().end() - order.size());
+
   inferredReturnTypes.push_back(
       MemDescType::get(retShape, retEltTy, retEncoding, argTy.getMemorySpace(),
-                       argTy.getMutableMemory()));
+                       argTy.getMutableMemory(), allocShape));
   return success();
 }
 

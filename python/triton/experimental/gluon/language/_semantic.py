@@ -54,8 +54,9 @@ def shared_dealloc(mem_desc, builder: GluonOpBuilder):
 
 
 def _memdesc_subview(mem_desc, offsets, shape, layout, builder: GluonOpBuilder):
-    ret_ty = ttgl.shared_memory_descriptor_type(mem_desc.dtype, shape, layout, mem_desc.type.alloc_shape)
-    return builder.create_memdesc_subview(ret_ty.to_ir(builder), mem_desc.handle, offsets)
+    ty = ttgl.shared_memory_descriptor_type(mem_desc.dtype, shape, layout, mem_desc.type.alloc_shape)
+    handle = builder.create_memdesc_subview(ty.to_ir(builder), mem_desc.handle, offsets)
+    return ttgl.shared_memory_descriptor(handle, **ty.__dict__)
 
 
 def memdesc_split(mem_desc, offset, size, dim, layout, builder: GluonOpBuilder):
@@ -75,11 +76,14 @@ def memdesc_slice(mem_desc, index, shape, layout, builder: GluonOpBuilder):
     return _memdesc_subview(mem_desc, offsets, shape, layout, builder)
 
 
-def memdesc_trans(mem_desc, order, builder: GluonOpBuilder):
+def memdesc_trans(mem_desc, order, layout, builder: GluonOpBuilder):
     assert len(order) == len(
         mem_desc.shape), f"source rank ({len(mem_desc.shape)}) and order length ({len(order)}) must match"
 
-    return builder.create_memdesc_trans(mem_desc.handle, order)
+    shape = [mem_desc.shape[i] for i in order]
+    ty = ttgl.shared_memory_descriptor_type(mem_desc.dtype, shape, layout, mem_desc.type.alloc_shape)
+    handle = builder.create_memdesc_trans(ty.to_ir(builder), mem_desc.handle, order)
+    return ttgl.shared_memory_descriptor(handle, **ty.__dict__)
 
 
 def memdesc_reshape(mem_desc, shape, layout, builder: GluonOpBuilder):

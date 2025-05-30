@@ -24,13 +24,13 @@ void init_gluon_ir(py::module &&m) {
       .def(py::init<MLIRContext *>())
       .def("get_distributed_ty",
            [](GluonOpBuilder &self, Type &elementType,
-              std::vector<int64_t> &shape, Attribute layout) {
+              std::vector<int64_t> &shape, Attribute layout) -> Type {
              return RankedTensorType::get(shape, elementType, layout);
            })
       .def("get_shared_mem_desc_ty",
            [](GluonOpBuilder &self, Type &elementType,
               std::vector<int64_t> &shape, Attribute layout,
-              std::vector<int64_t> &allocShape) {
+              std::vector<int64_t> &allocShape) -> Type {
              auto ctx = self.getContext();
              return ttg::MemDescType::get(shape, elementType, layout,
                                           ttg::SharedMemorySpaceAttr::get(ctx),
@@ -40,7 +40,7 @@ void init_gluon_ir(py::module &&m) {
       .def("get_tensor_mem_desc_ty",
            [](GluonOpBuilder &self, Type &elementType,
               std::vector<int64_t> &shape, Attribute layout,
-              std::vector<int64_t> &allocShape) {
+              std::vector<int64_t> &allocShape) -> Type {
              auto ctx = self.getContext();
              return ttg::MemDescType::get(shape, elementType, layout,
                                           ttng::TensorMemorySpaceAttr::get(ctx),
@@ -134,16 +134,16 @@ void init_gluon_ir(py::module &&m) {
                                                        offsets);
            })
       .def("create_memdesc_trans",
-           [](GluonOpBuilder &self, Value src,
+           [](GluonOpBuilder &self, Type resultType, Value src,
               std::vector<int> &order) -> Value {
-             return self.create<ttg::MemDescTransOp>(src, order);
+             return self.create<ttg::MemDescTransOp>(resultType, src, order);
            })
       .def("create_memdesc_reshape",
            [](GluonOpBuilder &self, Type resultType, Value src) -> Value {
              return self.create<ttg::MemDescReshapeOp>(resultType, src);
            })
       .def("create_memdesc_reinterpret",
-           [](GluonOpBuilder &self, Type resultType, Value src) {
+           [](GluonOpBuilder &self, Type resultType, Value src) -> Value {
              return self.create<ttg::MemDescReinterpretOp>(resultType, src);
            })
 
@@ -219,33 +219,6 @@ void init_gluon_ir(py::module &&m) {
         return self.create<ttg::WarpSpecializeOp>(resultTypes, explicitCaptures,
                                                   partitionNumWarps);
       });
-
-  py::class_<RankedTensorType, Type>(m, "distributed_ty", py::module_local())
-      .def_property_readonly("shape",
-                             [](RankedTensorType &self) {
-                               return std::vector<int>(self.getShape().begin(),
-                                                       self.getShape().end());
-                             })
-      .def_property_readonly("dtype", &RankedTensorType::getElementType)
-      .def_property_readonly("layout", &RankedTensorType::getEncoding);
-  m.def("get_as_distributed_ty", [](Type type) -> RankedTensorType {
-    if (auto result = dyn_cast<RankedTensorType>(type))
-      return result;
-    throw std::runtime_error("Expected a distributed_ty");
-  });
-
-  py::class_<ttg::MemDescType, Type>(m, "mem_desc_ty", py::module_local())
-      .def_property_readonly("shape",
-                             [](ttg::MemDescType &self) {
-                               return std::vector<int>(self.getShape().begin(),
-                                                       self.getShape().end());
-                             })
-      .def_property_readonly("layout", &ttg::MemDescType::getEncoding);
-  m.def("get_as_mem_desc_ty", [](Type type) -> ttg::MemDescType {
-    if (auto result = dyn_cast<ttg::MemDescType>(type))
-      return result;
-    throw std::runtime_error("Expected a mem_desc_ty");
-  });
 
   py::class_<ttg::WarpSpecializeOp, OpState>(m, "WarpSpecializeOp",
                                              py::module_local())

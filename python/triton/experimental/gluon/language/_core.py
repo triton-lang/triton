@@ -212,9 +212,7 @@ class shared_memory_descriptor(base_value):
         dim = _unwrap_if_constexpr(dim)
         layout = _unwrap_if_constexpr(layout)
 
-        handle = semantic.memdesc_split(self, offset, size, dim, layout, _builder)
-        mem_desc_ty = gluon_ir.get_as_mem_desc_ty(handle.get_type())
-        return shared_memory_descriptor(handle, self.dtype, mem_desc_ty.shape, layout, self.type.alloc_shape)
+        return semantic.memdesc_split(self, offset, size, dim, layout, _builder)
 
     @builtin
     def subslice(self, index, shape=None, layout=None, _builder: GluonOpBuilder = None) -> shared_memory_descriptor:
@@ -227,8 +225,29 @@ class shared_memory_descriptor(base_value):
         shape = [_unwrap_if_constexpr(s) for s in shape]
         layout = _unwrap_if_constexpr(layout)
 
-        handle = semantic.memdesc_slice(self, index, shape, layout, _builder)
-        return shared_memory_descriptor(handle, self.dtype, shape, layout, self.type.alloc_shape)
+        return semantic.memdesc_slice(self, index, shape, layout, _builder)
+
+    @builtin
+    def permute(self, order, layout, _builder: GluonOpBuilder) -> shared_memory_descriptor:
+        order = [_unwrap_if_constexpr(o) for o in order]
+        layout = _unwrap_if_constexpr(layout)
+
+        return semantic.memdesc_trans(self, order, layout, _builder)
+
+    @builtin
+    def reshape(self, shape, layout, _builder: GluonOpBuilder) -> shared_memory_descriptor:
+        shape = [_unwrap_if_constexpr(s) for s in shape]
+        layout = _unwrap_if_constexpr(layout)
+
+        return semantic.memdesc_reshape(self, shape, layout, _builder)
+
+    @builtin
+    def _reinterpret(self, dtype, shape, layout, _builder: GluonOpBuilder = None) -> shared_memory_descriptor:
+        dtype = _unwrap_if_constexpr(dtype)
+        shape = [_unwrap_if_constexpr(s) for s in shape]
+        layout = _unwrap_if_constexpr(layout)
+
+        return semantic.memdesc_reinterpret(self, dtype, shape, layout, _builder)
 
     @builtin
     def _keep_alive(self, _builder: GluonOpBuilder = None) -> None:

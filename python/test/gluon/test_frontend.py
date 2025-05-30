@@ -7,7 +7,7 @@ from triton.experimental import gluon
 from triton.experimental.gluon import language as ttgl
 from triton.experimental.gluon.language.nvidia import blackwell
 from triton.experimental.gluon.language.nvidia.blackwell import mbarrier
-from triton._filecheck import filecheck_test
+from triton._filecheck import filecheck_test, run_parser
 import triton.language as tl
 from triton._internal_testing import is_cuda
 
@@ -212,6 +212,20 @@ module attributes {"ttg.num-warps" = 4 : i32} {
 } loc(#loc)
 #loc = loc(unknown)
 """)
+
+
+@gluon.jit
+def shared_memory_cast_kernel():
+    layout_a: ttgl.constexpr = ttgl.NVMMASharedLayout(swizzle_byte_width=64, transposed=False, element_bitwidth=8,
+                                                      rank=2)
+    layout_b: ttgl.constexpr = ttgl.NVMMASharedLayout(swizzle_byte_width=64, transposed=True, element_bitwidth=8,
+                                                      rank=2)
+    smem = ttgl.allocate_shared_memory(ttgl.int8, [256, 128], layout_a)
+    smem.permute((1, 0), layout_b)
+
+
+def test_shared_memory_cast(fresh_knobs):
+    expecttest.assert_expected_inline(str(run_parser(shared_memory_cast_kernel)), """""")
 
 
 @gluon.jit
