@@ -10,6 +10,11 @@ namespace mlir::triton::gpu {
 LinearLayout optimalSwizzling(const LinearLayout &src, const LinearLayout &dst,
                               int32_t bitwidth);
 
+std::pair<int, int> logBankConflicts(const LinearLayout &src,
+                                     const LinearLayout &dst,
+                                     const LinearLayout &smem,
+                                     int32_t bitwidth);
+
 // Compute a basis of span(b1) ∩ span(b2)
 llvm::SmallVector<int32_t> intersectionBasis(llvm::ArrayRef<int32_t> b1,
                                              llvm::ArrayRef<int32_t> b2,

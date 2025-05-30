@@ -66,17 +66,15 @@ SmallVector<int32_t> nullspaceBasis(ArrayRef<int32_t> vectors, int32_t dim) {
   f2reduce::inplace_rref_strided(mat.get(), /*rows=*/nRows, /*cols=*/dim,
                                  /*stride=*/1);
 
-  // Collect pivot columns.
   llvm::SmallDenseSet<int32_t> pivotCols;
   for (int32_t r = 0; r < nRows; ++r)
     if (mat[r])
       pivotCols.insert(__builtin_ctzll(mat[r]));
 
-  // Free columns are range(dim) - pivotCols.
   SmallVector<int32_t> basis;
   for (int32_t freeCol = 0; freeCol < dim; ++freeCol) {
     if (!pivotCols.contains(freeCol)) {
-      uint64_t vec = 1ull << freeCol; // start with e_free
+      uint64_t vec = 1ull << freeCol;
       for (int32_t r = 0; r < nRows; ++r)
         if (mat[r] & (1ull << freeCol)) {
           const int32_t pivot = __builtin_ctzll(mat[r]);
@@ -140,7 +138,7 @@ SmallVector<int32_t> computeSegment(const SmallVector<int32_t> &bankSrc,
   SmallVector<int32_t> segment;
   for (int32_t b = 0; b < dim; ++b)
     if (!setSrc.contains(1 << b) && !setDst.contains(1 << b))
-      segment.push_back(1 << b); // free variables
+      segment.push_back(1 << b);
   if (segment.size() >= lenSegment) {
     segment.resize(lenSegment);
     return segment;
@@ -184,7 +182,6 @@ SmallVector<int32_t> complementBasis(ArrayRef<int32_t> basis, int32_t dim) {
   f2reduce::inplace_rref_strided(mat.get(), /*rows=*/nRows,
                                  /*cols=*/dim, /*stride=*/1);
 
-  // Collect which coordinate-columns have pivots.
   llvm::SmallDenseSet<int32_t> pivotCols;
   for (int r = 0; r < nRows; ++r) {
     if (mat[r]) {
@@ -210,6 +207,43 @@ SmallVector<int32_t> intersectionBasis(ArrayRef<int32_t> b1,
   auto joint = llvm::to_vector(llvm::concat<int32_t>(ns1, ns2));
   auto result = nullspaceBasis(joint, dim);
   return result;
+}
+
+std::pair<int, int> logBankConflicts(const LinearLayout &src,
+                                     const LinearLayout &dst,
+                                     const LinearLayout &smem,
+                                     int32_t bitwidth) {
+  // build vector + segment basis
+  auto srcFlat = src.flattenOuts();
+  auto dstFlat = dst.flattenOuts();
+  auto smemFlat = smem.flattenOuts();
+  auto *ctx = smem.getOutDimNames().begin()->getContext();
+  auto S = [ctx](StringRef str) { return StringAttr::get(ctx, str); };
+  auto vecBasis = flatten(smemFlat, S("vector"));
+  auto segBasis = flatten(smemFlat, S("segment"));
+  auto bank0 = llvm::to_vector(llvm::concat<int32_t>(vecBasis, segBasis));
+  auto bitsPerThread = smem.getInDimSize(S("vector")) * bitwidth;
+  if (bitsPerThread < 32) {
+    // In this case, the first few bank bases are also used to
+    // cover the 0th bank so we need to add them.
+    unsigned basesMissing = llvm::Log2_32(32 / bitsPerThread);
+    unsigned nBankBases = smemFlat.getInDimSizeLog2(S("bank"));
+    for (int i = 0; i < std::min(basesMissing, nBankBases); ++i) {
+      bank0.push_back(smemFlat.getBasis(S("bank"), i)[0]);
+    }
+  }
+  int32_t rank = smem.getTotalOutDimSizeLog2();
+  // compute conflicts
+  int read = intersectionBasis(bank0, flatten(dstFlat, S("lane")), rank).size();
+  int write =
+      intersectionBasis(bank0, flatten(srcFlat, S("lane")), rank).size();
+  if (bitsPerThread > 32) {
+    // Substract the default wavefronts given by vectorisation
+    auto logWavefronts = llvm::Log2_32(bitsPerThread / 32);
+    read = std::max<int32_t>(0, read - logWavefronts);
+    write = std::max<int32_t>(0, write - logWavefronts);
+  }
+  return {read, write};
 }
 
 LinearLayout optimalSwizzling(const LinearLayout &src, const LinearLayout &dst,
@@ -258,10 +292,6 @@ LinearLayout optimalSwizzling(const LinearLayout &src, const LinearLayout &dst,
   // Bits in a bank segment: 32 banks x 32 bits
   constexpr int32_t bankBits = 32 * 32;
   // Bases needed to cover a whole bank segment
-  // FIXME: Make small cvts performant:
-  //    if (1 << vbasis.size()) * bitwidth < 32, we could use
-  //    32 when computing lenBbasis, and then upcast values to a b32
-  //    to cover at least one bank per element
   const int32_t lenBbasis =
       llvm::Log2_32(bankBits / ((1 << vbasis.size()) * bitwidth));
   // Bases to cover all the tensor
