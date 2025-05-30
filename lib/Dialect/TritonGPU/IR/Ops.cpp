@@ -471,6 +471,8 @@ LogicalResult MemDescReshapeOp::verify() {
 
 // MemDescReinterpretOp
 LogicalResult MemDescReinterpretOp::verify() {
+  if (getSrc().getType().getMemorySpace() != getType().getMemorySpace())
+    return emitError("source and destination memory space must match");
   return success();
 }
 
