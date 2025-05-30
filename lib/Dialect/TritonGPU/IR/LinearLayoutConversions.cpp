@@ -1542,67 +1542,37 @@ chooseMfmaLikeStoreLayout(RankedTensorType valType) {
   // The rows are kept as is with an identity linear layout.
   swapLL *= LinearLayout::identity1D(valShape[0], dimM, dimM);
   /*
-      In transposed mfma32 layout,
-      1) register is the N or column dimension and lane is the M or row
-  dimension;
-      2) the pair, e.g.(0, 0) is for the indices in the tensor.
+  clang-format off
+  In transposed mfma32 layout, Each thread holds 4 consecutive values along N
+  dim. We want to exchange column 4-7 (owned by thread 32-63, BLK0) and column
+  8-11 (owned by thread 0-31, BLK1) every 16 columns to make each thread holds 8
+  elements. This would mean exchange the 2nd and 3rd basis vector from an
+  identity linear layout on tensor elements.
 
-            N/register
-  M/lane    (0,  0) ... (0,  3)  | (0,  8)  ... (0, 11) | ...
-            ...                  | BLOCK1               |
-            (31, 0) ... (31, 3)  | (31, 8)  ... (31, 11)| ...
-            .................................................
-          |  (0,  4) ... (0,  7) |  (0,  12) ... (0, 15)  ...
-          |  BLOCK0              |
-          |  (31, 4) ... (31, 7) |  (31, 12) ... (31, 15) ...
-          ........................
-  Each thread holds 4 consecutive values along N dim. We want to exchange column
-  4-7 (owned by thread 32-63, BLK0) and column 8-11 (owned by thread 0-31, BLK1)
-  every 16 columns to make each thread holds 8 elements. This would mean
-  exchange the 2nd and 3rd basis vector from an identity linear layout on tensor
-  elements. Correspondingly, the transposed mfma16 layout, the output of
+  Correspondingly, the transposed mfma16 layout, the output of
   transposed of mfma16x16 is:
-            N/register
-            Tile-0                Tile-1
-  M/lane    ------------------------------------------------
-            |(0,  0) ...  (0,  3) | (0,  0)  ... (0,  3)   |
-  BLOCK0    |...                  |                        |
-            |(15, 0) ...  (15, 3) | (15, 0) ...  (15, 3)   |
-            |---------------------|------------------------|
-            |(0,  4) ...  (0,  7) | (0,  4) ...   (0,  7)  |
-  BLOCK1    |....                 | ...                    |
-            |(15, 4) ...  (15, 7) | (15, 4) ...   (15, 7)  |
-            |---------------------|------------------------|
-            |(0,  8) ...  (0, 11) | (0,  8) ...   (0, 11)  |
-  BLOCK2    |...                  |...                     |
-            |(15, 8)  ... (15, 11)| (15, 8)  ... (15, 11)  |
-            |---------------------|------------------------|
-            |(0,  12) ... (0, 15) | (0,  12) ... (0, 15)   |
-  BLOCK3    |...                  | ...                    |
-            |(15, 12) ... (15, 15)| (15, 12) ... (15, 15)  |
-            ------------------------------------------------
+  N dimension is for register and "r"in the table is for row.
+  M dimension is for lane.
+  ---------------------------------------------------------------------------------------------
+  |v0r0|v1r0|v0r1|v1r1|v0r2|v1r2  |v0r3  |v1r3  |v2r0|v3r0|v2r1|v3r1|v2r2|v3r2  |v2r3  |v3r3  |
+  |----|----|----|----|----|------|------|------|----|----|----|----|----|------|------|------|
+  |n0:1|n2:3|n4:5|n6:7|n8:9|n10:11|n12:13|n14:15|n0:1|n2:3|n4:5|n6:7|n8:9|n10:11|n12:13|n14:15|
+  |n0:1|n2:3|n4:5|n6:7|n8:9|n10:11|n12:13|n14:15|n0:1|n2:3|n4:5|n6:7|n8:9|n10:11|n12:13|n14:15|
+  |n0:1|n2:3|n4:5|n6:7|n8:9|n10:11|n12:13|n14:15|n0:1|n2:3|n4:5|n6:7|n8:9|n10:11|n12:13|n14:15|
+  ---------------------------------------------------------------------------------------------
 
   To pack 8 elements with 16-bits type we need to put the elements per row are
-  contiuous, so the expetecd layout is: N/register M/lane
-            ------------------------------------------------
-            |(0,  0) ...  (0,  3) | (0,  4)  ...  (0,  7)  |
-            | Tile-0: BLOCK0 and BLOCK0                    |
-            |(15, 0) ...  (15, 3)  (15,  3) ...  (15, 7)   |
-            |---------------------|------------------------|
-            |(0,  0) ...  (0,  3) | (0,  4)  ...  (0,  7)  |
-            | Tile-1: BLOCK0 and BLOCK1                    |
-            |(15, 0) ...  (15, 3)  (15,  3) ...  (15, 7)   |
-            ------------------------------------------------
-            |(0,  8) ...  (0,  11)| (0, 12) ...  (0,  15)  |
-            | Tile-0: BLOCK2 and BLOCK3                    |
-            |(15, 0) ...  (15, 3)  (15,  3) ...  (15, 7)   |
-            ------------------------------------------------
-            |(0,  8) ...  (0,  11)| (0, 12) ...  (0,  15)  |
-            | Tile-1: BLOCK2 and BLOCK3                    |
-            |(15, 0) ...  (15, 3)  (15,  3) ...  (15, 7)   |
-            ------------------------------------------------
-            This would mean exchange the 2nd and 4th basis vector from an
-            identity linear layout on tensor elements, for the NDim.
+  contiuous, so the expetecd layout is, for fp16 type:
+  1x8 fp16  1x8 fp16  1x8 fp16  1x8 fp16
+  -------------------------------------
+  |t0      | t32     | t16     | t48  |
+  |t1      | t33     | t17     | t49  |
+  |..      | ..      | ..      | ..   |
+  |t15     | t47     | t31     | t63  |
+  -------------------------------------
+  This would mean exchange the 2nd and 4th elements in the basis vector from an
+  identity linear layout on tensor elements, for the NDim.
+  clang-format on
   */
   auto destIdxInBases = isMfma32 ? 3 : 4;
   std::vector<std::vector<int32_t>> dimNBases(mfmaLL.getOutDimSizeLog2(dimN));
