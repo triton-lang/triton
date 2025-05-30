@@ -92,7 +92,6 @@ target_link_libraries(triton-tensor-layout PRIVATE
   ${dialect_libs}
   TritonTestAnalysis
   TritonTestDialect
-  TritonTestDialectTritonGPU
   TritonTestProton
   TritonAMDGPUTestAnalysis
   )
