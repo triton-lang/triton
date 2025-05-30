@@ -5232,6 +5232,26 @@ def test_call(type, num_ctas, device):
         np.testing.assert_equal(to_numpy(rand_val_tri), ans)
 
 
+@triton.jit
+def accumulate(a, b):
+    return a + b
+
+
+@pytest.mark.interpreter
+def test_call_within_loop(device):
+
+    @triton.jit
+    def kernel(ptr):
+        acc = 0
+        for i in range(10):
+            acc = accumulate(acc, i)
+        tl.store(ptr, acc)
+
+    result = torch.empty(1, device=device)
+    kernel[(1, )](result)
+    assert result == 45
+
+
 # -------------
 # test if
 # -------------
