@@ -514,7 +514,6 @@ def _p_matmul_ogs(
             if SWAP_XW:
                 acc_tile = acc_tile.T
             acc_tile = acc_tile + biases[a_i][None, :] * betas[:, None]
-            acc_tile *= gammas[:, None]
             if out_alpha is not None:
                 acc_tile *= out_alpha
 
@@ -524,6 +523,8 @@ def _p_matmul_ogs(
             else:
                 tl.static_assert(ACTIVATION_REDUCTION_N == 1, "Activation reduction must be 1 if no activation fn is provided")
                 out = acc_tile
+
+            out *= gammas[:, None]
 
             if MASK_ACC:
                 out = tl.where(mask_m[:, None], out, 0.0)
