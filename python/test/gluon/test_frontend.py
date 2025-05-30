@@ -125,10 +125,40 @@ module attributes {"ttg.num-warps" = 4 : i32} {
 def shared_memory_subview_kernel(XBLOCK: ttgl.constexpr, layout: ttgl.constexpr, smem_layout: ttgl.constexpr):
     XHALF: tl.constexpr = XBLOCK // 2
     smem = ttgl.allocate_shared_memory(ttgl.int32, [XBLOCK, XBLOCK], smem_layout)
-    view = smem.subview(XHALF, 0, [XBLOCK, XHALF], smem_layout)
+    view = smem.subview(XHALF, XHALF, dim=1)
     value = view.load(layout)
-    view = smem.subview(XHALF, 1, [XHALF, XBLOCK], smem_layout)
+    view = smem.subview(XHALF, XHALF, dim=0)
     view.store(value.trans())
+
+
+def test_shared_memory_subview(fresh_knobs):
+    knobs.compilation.disable_line_info = True
+
+    layout = ttgl.BlockedLayout(size_per_thread=[1, 1], threads_per_warp=[1, 32], warps_per_cta=[4, 1], order=[1, 0])
+    smem_layout = ttgl.SwizzledSharedLayout(1, 1, 1, [1, 0])
+    h = shared_memory_subview_kernel.warmup(256, layout, smem_layout, num_warps=4, grid=(1, ))
+    expecttest.assert_expected_inline(h.asm["ttgir"], """\
+#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [1, 0]}>
+#blocked1 = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [32, 1], warpsPerCTA = [1, 4], order = [0, 1]}>
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-warps" = 4 : i32} {
+  tt.func public @shared_memory_subview_kernel() attributes {noinline = false} {
+    %0 = ttg.local_alloc : () -> !ttg.memdesc<256x256xi32, #shared, #smem, mutable> loc(#loc)
+    %c0_i32 = arith.constant 0 : i32 loc(#loc)
+    %c128_i32 = arith.constant 128 : i32 loc(#loc)
+    %1 = ttg.memdesc_subview %0[%c0_i32, %c128_i32] : !ttg.memdesc<256x256xi32, #shared, #smem, mutable> -> !ttg.memdesc<256x128xi32, #shared, #smem, mutable, 256x256> loc(#loc)
+    %2 = ttg.local_load %1 : !ttg.memdesc<256x128xi32, #shared, #smem, mutable, 256x256> -> tensor<256x128xi32, #blocked> loc(#loc)
+    %c0_i32_0 = arith.constant 0 : i32 loc(#loc)
+    %c128_i32_1 = arith.constant 128 : i32 loc(#loc)
+    %3 = ttg.memdesc_subview %0[%c128_i32_1, %c0_i32_0] : !ttg.memdesc<256x256xi32, #shared, #smem, mutable> -> !ttg.memdesc<128x256xi32, #shared, #smem, mutable, 256x256> loc(#loc)
+    %4 = tt.trans %2 {order = array<i32: 1, 0>} : tensor<256x128xi32, #blocked> -> tensor<128x256xi32, #blocked1> loc(#loc)
+    ttg.local_store %4, %3 : tensor<128x256xi32, #blocked1> -> !ttg.memdesc<128x256xi32, #shared, #smem, mutable, 256x256> loc(#loc)
+    tt.return loc(#loc)
+  } loc(#loc)
+} loc(#loc)
+#loc = loc(unknown)
+""")
 
 
 @gluon.jit

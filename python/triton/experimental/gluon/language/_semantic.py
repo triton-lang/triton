@@ -58,12 +58,11 @@ def _memdesc_subview(mem_desc, offsets, shape, layout, builder: GluonOpBuilder):
     return builder.create_memdesc_subview(ret_ty.to_ir(builder), mem_desc.handle, offsets)
 
 
-def memdesc_offset(mem_desc, offset, dim, shape, layout, builder: GluonOpBuilder):
-    assert len(
-        mem_desc.shape) == len(shape), f"source rank ({len(mem_desc.shape)}) and result rank ({len(shape)}) must match"
-
-    offsets = [builder.get_int32(0)] * len(shape)
+def memdesc_split(mem_desc, offset, size, dim, layout, builder: GluonOpBuilder):
+    offsets = [builder.get_int32(0)] * len(mem_desc.shape)
     offsets[dim] = builder.get_int32(offset)
+    shape = list(mem_desc.shape)
+    shape[dim] = size
     return _memdesc_subview(mem_desc, offsets, shape, layout, builder)
 
 

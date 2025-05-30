@@ -6,7 +6,7 @@ if TYPE_CHECKING:
     from triton._C.libtriton.gluon_ir import GluonOpBuilder
 
 from ._layouts import SharedLayout, DistributedLayout
-from triton._C.libtriton import ir
+from triton._C.libtriton import ir, gluon_ir
 import triton.language.core as tl_core
 from triton.language.core import (
     constexpr,
@@ -201,26 +201,37 @@ class shared_memory_descriptor(base_value):
         return semantic.shared_store(self, value, _builder)
 
     @builtin
-    def subview(self, offset, dim, shape, layout, _builder: GluonOpBuilder) -> shared_memory_descriptor:
+    def subview(self, offset, size, dim=None, layout=None, _builder: GluonOpBuilder = None) -> shared_memory_descriptor:
+        if layout is None:
+            layout = self.type.layout
+        if dim is None:
+            dim = 0
+
         offset = _unwrap_if_constexpr(offset)
+        size = _unwrap_if_constexpr(size)
         dim = _unwrap_if_constexpr(dim)
-        shape = [_unwrap_if_constexpr(s) for s in shape]
         layout = _unwrap_if_constexpr(layout)
 
-        handle = semantic.memdesc_offset(self, offset, dim, shape, layout, _builder)
-        return shared_memory_descriptor(handle, self.dtype, shape, layout, self.alloc_shape)
+        handle = semantic.memdesc_split(self, offset, size, dim, layout, _builder)
+        mem_desc_ty = gluon_ir.get_as_mem_desc_ty(handle.get_type())
+        return shared_memory_descriptor(handle, self.dtype, mem_desc_ty.shape, layout, self.type.alloc_shape)
 
     @builtin
-    def subslice(self, index, shape, layout, _builder: GluonOpBuilder) -> shared_memory_descriptor:
+    def subslice(self, index, shape=None, layout=None, _builder: GluonOpBuilder = None) -> shared_memory_descriptor:
+        if layout is None:
+            layout = self.type.layout
+        if shape is None:
+            shape = self.shape[1:]
+
         index = _unwrap_if_constexpr(index)
         shape = [_unwrap_if_constexpr(s) for s in shape]
         layout = _unwrap_if_constexpr(layout)
 
         handle = semantic.memdesc_subslice(self, index, shape, layout, _builder)
-        return shared_memory_descriptor(handle, self.dtype, shape, layout, self.alloc_shape)
+        return shared_memory_descriptor(handle, self.dtype, shape, layout, self.type.alloc_shape)
 
     @builtin
-    def _keep_alive(self, _builder=None) -> None:
+    def _keep_alive(self, _builder: GluonOpBuilder = None) -> None:
         return semantic.shared_dealloc(self, _builder)
 
 
