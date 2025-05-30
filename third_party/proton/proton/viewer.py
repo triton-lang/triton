@@ -9,7 +9,7 @@ try:
 except ImportError:
     raise ImportError("Failed to import hatchet. `pip install llnl-hatchet` to get the correct version.")
 import numpy as np
-from triton.profiler.hook import COMPUTE_METADATA_SCOPE_NAME, TritonHook
+from triton.profiler.hooks.launch import COMPUTE_METADATA_SCOPE_NAME, LaunchHook
 from triton.profiler import specs
 
 
