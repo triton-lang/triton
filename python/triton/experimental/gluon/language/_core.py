@@ -84,7 +84,6 @@ __all__ = [
     "allocate_shared_memory",
     "shared_memory_descriptor",
     "warp_specialize",
-
     *_IMPORT_FROM_TRITON,
 ]
 

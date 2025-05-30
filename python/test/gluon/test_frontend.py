@@ -74,6 +74,8 @@ module attributes {"ttg.num-warps" = 4 : i32} {
 #loc = loc(unknown)
 """)
 
+
+@gluon.jit
 def tensor_memory_kernel(layout: ttgl.constexpr, tmem_layout: ttgl.constexpr):
     XBLOCK: ttgl.constexpr = tmem_layout.block[0]
     YBLOCK: ttgl.constexpr = tmem_layout.block[1]
