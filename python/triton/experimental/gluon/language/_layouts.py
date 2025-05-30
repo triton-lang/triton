@@ -21,15 +21,18 @@ class DistributedLayout:
     pass
 
 
-@dataclass(frozen=True)
 class BlockedLayout(DistributedLayout):
-    size_per_thread: List[int]
-    threads_per_warp: List[int]
-    warps_per_cta: List[int]
-    order: List[int]
-    ctas_per_cga: Optional[List[int]] = None
-    cta_split_num: Optional[List[int]] = None
-    cta_order: Optional[List[int]] = None
+
+    def __init__(self, size_per_thread: List[int], threads_per_warp: List[int], warps_per_cta: List[int],
+                 order: List[int], ctas_per_cga: Optional[List[int]] = None, cta_split_num: Optional[List[int]] = None,
+                 cta_order: Optional[List[int]] = None):
+        self.size_per_thread = _unwrap_if_constexpr(size_per_thread)
+        self.threads_per_warp = _unwrap_if_constexpr(threads_per_warp)
+        self.warps_per_cta = _unwrap_if_constexpr(warps_per_cta)
+        self.order = _unwrap_if_constexpr(order)
+        self.ctas_per_cga = _unwrap_if_constexpr(ctas_per_cga)
+        self.cta_split_num = _unwrap_if_constexpr(cta_split_num)
+        self.cta_order = _unwrap_if_constexpr(cta_order)
 
     def __post_init__(self):
         rank = len(self.size_per_thread)
@@ -71,10 +74,11 @@ class BlockedLayout(DistributedLayout):
         return f"B{size_per_thread}B{threads_per_warp}B{warps_per_cta}B{order}B{ctas_per_cga}B{cta_split_num}B{cta_order}B"
 
 
-@dataclass(frozen=True)
 class SliceLayout(DistributedLayout):
-    dim: int
-    parent: DistributedLayout
+
+    def __init__(self, dim: int, parent: DistributedLayout):
+        self.dim = _unwrap_if_constexpr(dim)
+        self.parent = _unwrap_if_constexpr(parent)
 
     def __post_init__(self):
         super().__setattr__("dim", _unwrap_if_constexpr(self.dim))
@@ -96,8 +100,9 @@ class SharedLayout:
 
 class NVMMASharedLayout(SharedLayout):
 
-    def __init__(self, swizzle_byte_width, element_bitwidth, rank, transposed=False, fp4_padded=False,
-                 ctas_per_cga=None, cta_split_num=None, cta_order=None):
+    def __init__(self, swizzle_byte_width: int, element_bitwidth: int, rank: int, transposed: bool = False,
+                 fp4_padded: bool = False, ctas_per_cga: Optional[List[int]] = None,
+                 cta_split_num: Optional[List[int]] = None, cta_order: Optional[List[int]] = None):
         self.swizzle_byte_width = _unwrap_if_constexpr(swizzle_byte_width)
         self.element_bitwidth = _unwrap_if_constexpr(element_bitwidth)
         self.rank = _unwrap_if_constexpr(rank)
@@ -132,15 +137,18 @@ class NVMMASharedLayout(SharedLayout):
         return f"NVMMA_{self.swizzle_byte_width}_{self.element_bitwidth}_{self.transposed}_{self.fp4_padded}_NVMMA"
 
 
-@dataclass(frozen=True, eq=True)
 class SwizzledSharedLayout(SharedLayout):
-    vec: int
-    per_phase: int
-    max_phase: int
-    order: List[int]
-    ctas_per_cga: Optional[List[int]] = None
-    cta_split_num: Optional[List[int]] = None
-    cta_order: Optional[List[int]] = None
+
+    def __init__(self, vec: int, per_phase: int, max_phase: int, order: List[int],
+                 ctas_per_cga: Optional[List[int]] = None, cta_split_num: Optional[List[int]] = None,
+                 cta_order: Optional[List[int]] = None):
+        self.vec = _unwrap_if_constexpr(vec)
+        self.per_phase = _unwrap_if_constexpr(per_phase)
+        self.max_phase = _unwrap_if_constexpr(max_phase)
+        self.order = _unwrap_if_constexpr(order)
+        self.ctas_per_cga = _unwrap_if_constexpr(ctas_per_cga)
+        self.cta_split_num = _unwrap_if_constexpr(cta_split_num)
+        self.cta_order = _unwrap_if_constexpr(cta_order)
 
     def __post_init__(self):
         rank = len(self.order)

@@ -90,13 +90,15 @@ def memdesc_trans(mem_desc, order, layout, builder: GluonOpBuilder):
 
 
 def memdesc_reshape(mem_desc, shape, layout, builder: GluonOpBuilder):
-    ret_ty = ttgl.shared_memory_descriptor_type(mem_desc.dtype, shape, layout, mem_desc.type.alloc_shape)
-    return builder.create_memdesc_reshape(ret_ty.to_ir(builder), mem_desc.handle)
+    ty = ttgl.shared_memory_descriptor_type(mem_desc.dtype, shape, layout, mem_desc.type.alloc_shape)
+    handle = builder.create_memdesc_reshape(ty.to_ir(builder), mem_desc.handle)
+    return ttgl.shared_memory_descriptor(handle, **ty.__dict__)
 
 
 def memdesc_reinterpret(mem_desc, dtype, shape, layout, builder: GluonOpBuilder):
-    ret_ty = ttgl.shared_memory_descriptor_type(dtype, shape, layout, shape)
-    return builder.create_memdesc_reinterpret(ret_ty.to_ir(builder), mem_desc.handle)
+    ty = ttgl.shared_memory_descriptor_type(dtype, shape, layout, shape)
+    handle = builder.create_memdesc_reinterpret(ty.to_ir(builder), mem_desc.handle)
+    return ttgl.shared_memory_descriptor(handle, **ty.__dict__)
 
 
 def warp_specialize(args, default_partition, worker_partitions, worker_num_warps: Sequence[int],
