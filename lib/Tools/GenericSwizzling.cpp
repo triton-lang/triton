@@ -39,11 +39,11 @@ namespace {
 
 // Goes from bases of the form [[1], [2], [4], [8]] to [1, 2, 4, 8]
 SmallVector<int32_t> flatten(const LinearLayout &ll, StringAttr dim) {
-  auto outDimNames = to_vector(ll.getOutDimNames());
-  assert(outDimNames.size() == 1);
+  assert(ll.getNumOutDims() == 1);
+  auto outDim = *ll.getOutDimNames().begin();
   SmallVector<int32_t> vec;
   for (int i = 0; i < ll.getInDimSizeLog2(dim); ++i)
-    vec.push_back(ll.getBasis(dim, i, outDimNames[0]));
+    vec.push_back(ll.getBasis(dim, i, outDim));
   return vec;
 };
 
@@ -56,14 +56,14 @@ std::vector<std::vector<int32_t>> unflatten(ArrayRef<int32_t> basis) {
 }
 
 // Compute the nullspace basis of `vectors`
-SmallVector<int32_t> nullspaceBasis(ArrayRef<int32_t> vectors, int32_t rank) {
+SmallVector<int32_t> nullspaceBasis(ArrayRef<int32_t> vectors, int32_t dim) {
   // Solve A^T x = 0, where A is the matrix of vectors
   // To do this, we form a matrix where each vector is a row
   const int32_t nRows = vectors.size();
   auto mat = std::make_unique<uint64_t[]>(nRows);
   for (int i = 0; i < nRows; ++i)
     mat[i] = static_cast<uint64_t>(vectors[i]);
-  f2reduce::inplace_rref_strided(mat.get(), /*rows=*/nRows, /*cols=*/rank,
+  f2reduce::inplace_rref_strided(mat.get(), /*rows=*/nRows, /*cols=*/dim,
                                  /*stride=*/1);
 
   // Collect pivot columns.
@@ -72,9 +72,9 @@ SmallVector<int32_t> nullspaceBasis(ArrayRef<int32_t> vectors, int32_t rank) {
     if (mat[r])
       pivotCols.insert(__builtin_ctzll(mat[r]));
 
-  // Free columns are range(rank) - pivotCols.
+  // Free columns are range(dim) - pivotCols.
   SmallVector<int32_t> basis;
-  for (int32_t freeCol = 0; freeCol < rank; ++freeCol) {
+  for (int32_t freeCol = 0; freeCol < dim; ++freeCol) {
     if (!pivotCols.contains(freeCol)) {
       uint64_t vec = 1ull << freeCol; // start with e_free
       for (int32_t r = 0; r < nRows; ++r)
@@ -126,39 +126,11 @@ LinearLayout buildReps(MLIRContext *ctx, const LinearLayout &src,
                                smem.getOutDims(),
                                /*requireSurjective=*/true);
   return smemReps;
-  // if (reps.size() == 0) {
-  //   return smemReps;
-  // }
-  //// We now transpose the out dims so that reps are the last ones
-  //// In other words, we want the vec+bank+segment to be contiguous in smem
-  // auto repsMask = llvm::accumulate(reps, ~0u, [](uint32_t a, uint32_t b) {
-  // return a & b; }); auto rank = smemReps.getTotalOutDimSizeLog2();
-  //// Reshape to out dims = 2x2x...x2
-  // SmallVector<std::pair<StringAttr, int32_t>> splitDims;
-  // for (int32_t i = 0; i < rank; ++i) {
-  //   splitDims.push_back({StringAttr::get(ctx, std::to_string(i)), 2});
-  // }
-  // auto smemReps2 = smemReps.reshapeOuts(splitDims);
-
-  // SmallVector<StringAttr> front;
-  // SmallVector<StringAttr> back;
-  // for (int32_t i = 0; i < rank; ++i) {
-  //   if (repsMask & (1 << i)) {
-  //     back.push_back(StringAttr::get(ctx, std::to_string(i)));
-  //   } else {
-  //     front.push_back(StringAttr::get(ctx, std::to_string(i)));
-  //   }
-  // }
-  // auto transDims = llvm::to_vector(llvm::concat<StringAttr>(front, back));
-  // smemReps2 = smemReps2.transposeOuts(transDims);
-  // auto ret = smemReps2.reshapeOuts(smemReps.getOutDims());
-  //// we now have all the reps to be the trailing bases of the smem
-  // return ret;
 }
 
 SmallVector<int32_t> computeSegment(const SmallVector<int32_t> &bankSrc,
                                     const SmallVector<int32_t> &bankDst,
-                                    int32_t rank, int32_t lenSegment) {
+                                    int32_t dim, int32_t lenSegment) {
   llvm::SmallDenseSet<int32_t> setSrc(bankSrc.begin(), bankSrc.end());
   llvm::SmallDenseSet<int32_t> setDst(bankDst.begin(), bankDst.end());
   // Remove the 0 as it's not a basis
@@ -166,7 +138,7 @@ SmallVector<int32_t> computeSegment(const SmallVector<int32_t> &bankSrc,
   setDst.erase(0);
 
   SmallVector<int32_t> segment;
-  for (int32_t b = 0; b < rank; ++b)
+  for (int32_t b = 0; b < dim; ++b)
     if (!setSrc.contains(1 << b) && !setDst.contains(1 << b))
       segment.push_back(1 << b); // free variables
   if (segment.size() >= lenSegment) {
@@ -203,16 +175,14 @@ SmallVector<int32_t> computeSegment(const SmallVector<int32_t> &bankSrc,
   return segment;
 }
 
-SmallVector<int32_t> complementBasis(ArrayRef<int32_t> basis, int32_t rank) {
+SmallVector<int32_t> complementBasis(ArrayRef<int32_t> basis, int32_t dim) {
   const int32_t nRows = basis.size();
-  // Build an nRows × rank matrix: each row is one of your 'basis' vectors.
   auto mat = std::make_unique<uint64_t[]>(nRows);
   for (int r = 0; r < nRows; ++r)
     mat[r] = static_cast<uint64_t>(basis[r]);
 
-  // RREF that, with 'rows = nRows' and 'cols = rank'.
   f2reduce::inplace_rref_strided(mat.get(), /*rows=*/nRows,
-                                 /*cols=*/rank, /*stride=*/1);
+                                 /*cols=*/dim, /*stride=*/1);
 
   // Collect which coordinate-columns have pivots.
   llvm::SmallDenseSet<int32_t> pivotCols;
@@ -222,25 +192,23 @@ SmallVector<int32_t> complementBasis(ArrayRef<int32_t> basis, int32_t rank) {
     }
   }
 
-  // Now any coordinate i ∈ [0,rank) that *isn’t* in pivotCols is free,
-  // so the unit-vector (1<<i) belongs in your complement.
   SmallVector<int32_t> comp;
-  for (int i = 0; i < rank; ++i)
+  for (int i = 0; i < dim; ++i)
     if (!pivotCols.contains(i))
       comp.push_back(1 << i);
 
   return comp;
 }
-} // anonymous namespace
+} // namespace
 
 namespace mlir::triton::gpu {
 
 SmallVector<int32_t> intersectionBasis(ArrayRef<int32_t> b1,
-                                       ArrayRef<int32_t> b2, int32_t rank) {
-  auto ns1 = nullspaceBasis(b1, rank);
-  auto ns2 = nullspaceBasis(b2, rank);
+                                       ArrayRef<int32_t> b2, int32_t dim) {
+  auto ns1 = nullspaceBasis(b1, dim);
+  auto ns2 = nullspaceBasis(b2, dim);
   auto joint = llvm::to_vector(llvm::concat<int32_t>(ns1, ns2));
-  auto result = nullspaceBasis(joint, rank);
+  auto result = nullspaceBasis(joint, dim);
   return result;
 }
 
@@ -253,7 +221,7 @@ LinearLayout optimalSwizzling(const LinearLayout &src, const LinearLayout &dst,
   assert((bitwidth > 0) && llvm::isPowerOf2_32(bitwidth) &&
          "bitwidth must be a power of two");
 
-  const int32_t rank = src.getTotalOutDimSizeLog2();
+  const int32_t dim = src.getTotalOutDimSizeLog2();
   assert(src.getNumInDims() != 0);
   auto *ctx = src.getInDimNames().begin()->getContext();
   auto kReg = StringAttr::get(ctx, "register");
@@ -273,7 +241,6 @@ LinearLayout optimalSwizzling(const LinearLayout &src, const LinearLayout &dst,
   assert(
       regsNotZero(dstFlat) &&
       "Remove register broadcasting from dst. See actionRemoveBroadcastedRegs");
-  const StringAttr out1D = *srcFlat.getOutDimNames().begin(); // single dim
 
   auto regSrc = flatten(srcFlat, kReg);
   auto regDst = flatten(dstFlat, kReg);
@@ -281,7 +248,7 @@ LinearLayout optimalSwizzling(const LinearLayout &src, const LinearLayout &dst,
   auto laneDst = flatten(dstFlat, kLane);
 
   // Compute the vectorisation we can use
-  SmallVector<int32_t> vbasis = intersectionBasis(regSrc, regDst, rank);
+  SmallVector<int32_t> vbasis = intersectionBasis(regSrc, regDst, dim);
   // Restrict the vectorisation to the maximum we can use
   auto maxVecBases = llvm::Log2_32(128 / bitwidth);
   if (vbasis.size() > maxVecBases) {
@@ -298,16 +265,16 @@ LinearLayout optimalSwizzling(const LinearLayout &src, const LinearLayout &dst,
   const int32_t lenBbasis =
       llvm::Log2_32(bankBits / ((1 << vbasis.size()) * bitwidth));
   // Bases to cover all the tensor
-  const int32_t lenSbasis = rank - lenBbasis - vbasis.size();
+  const int32_t lenSbasis = dim - lenBbasis - vbasis.size();
 
   auto bankSrc = llvm::to_vector(llvm::concat<int32_t>(vbasis, laneSrc));
   auto bankDst = llvm::to_vector(llvm::concat<int32_t>(vbasis, laneDst));
-  auto sbasis = computeSegment(bankSrc, bankDst, rank, lenSbasis);
+  auto sbasis = computeSegment(bankSrc, bankDst, dim, lenSbasis);
 
   // The bank is the complement of the union of the vector and the start of the
   // segments
   auto unionBasis = llvm::to_vector(llvm::concat<int32_t>(vbasis, sbasis));
-  SmallVector<int32_t> bbasis = complementBasis(unionBasis, rank);
+  SmallVector<int32_t> bbasis = complementBasis(unionBasis, dim);
   assert(bbasis.size() == lenBbasis + (lenSbasis - sbasis.size()) &&
          "bbasis size mismatch");
 
