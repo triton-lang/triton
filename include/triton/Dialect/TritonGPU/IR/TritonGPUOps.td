@@ -252,8 +252,6 @@ def TTG_MemDescTransOp : TTG_Op<"memdesc_trans", [Pure,
     representing a transposed view of the buffer.
   }];
 
-  let arguments = (ins TTG_MemDescType:$src, Variadic<I32>:$order);
-
   let arguments = (
     ins TTG_MemDescType:$src,
     DenseI32ArrayAttr:$order

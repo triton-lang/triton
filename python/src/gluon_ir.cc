@@ -126,6 +126,23 @@ void init_gluon_ir(py::module &&m) {
              return self.create<ttg::LocalDeallocOp>(memDesc);
            })
 
+      .def("create_memdesc_subview",
+           [](GluonOpBuilder &self, Value src,
+              std::vector<Value> &offsets) -> Value {
+             return self.create<ttg::MemDescSubviewOp>(src, offsets);
+           })
+      .def("create_memdesc_trans",
+           [](GluonOpBuilder &self, Value src,
+              std::vector<int> &order) -> Value {
+             return self.create<ttg::MemDescTransOp>(src, order);
+           })
+      .def("create_memdesc_reshape",
+           [](GluonOpBuilder &self, Type resultType, Value src) -> Value {
+             return self.create<ttg::MemDescReshapeOp>(resultType, src);
+           })
+      .def("create_memdesc_reinterpret",
+           [](GluonOpBuilder &self, Type resultType, Value src) {})
+
       .def("create_tmem_alloc",
            [](GluonOpBuilder &self, Type resultTy, Value value) -> Value {
              return self.create<ttng::TMEMAllocOp>(resultTy, value);
