@@ -1,3 +1,4 @@
+from dataclasses import dataclass
 from typing import List, Optional
 from triton.language.core import _unwrap_if_constexpr
 
@@ -20,20 +21,25 @@ class DistributedLayout:
     pass
 
 
+@dataclass(frozen=True)
 class BlockedLayout(DistributedLayout):
-
-    def __init__(self, size_per_thread: List[int], threads_per_warp: List[int], warps_per_cta: List[int],
-                 order: List[int], ctas_per_cga: Optional[List[int]] = None, cta_split_num: Optional[List[int]] = None,
-                 cta_order: Optional[List[int]] = None):
-        self.size_per_thread = _unwrap_if_constexpr(size_per_thread)
-        self.threads_per_warp = _unwrap_if_constexpr(threads_per_warp)
-        self.warps_per_cta = _unwrap_if_constexpr(warps_per_cta)
-        self.order = _unwrap_if_constexpr(order)
-        self.ctas_per_cga = _unwrap_if_constexpr(ctas_per_cga)
-        self.cta_split_num = _unwrap_if_constexpr(cta_split_num)
-        self.cta_order = _unwrap_if_constexpr(cta_order)
+    size_per_thread: List[int]
+    threads_per_warp: List[int]
+    warps_per_cta: List[int]
+    order: List[int]
+    ctas_per_cga: Optional[List[int]] = None
+    cta_split_num: Optional[List[int]] = None
+    cta_order: Optional[List[int]] = None
 
     def __post_init__(self):
+        super().__setattr__("size_per_thread", _unwrap_if_constexpr(self.size_per_thread))
+        super().__setattr__("threads_per_warp", _unwrap_if_constexpr(self.threads_per_warp))
+        super().__setattr__("warps_per_cta", _unwrap_if_constexpr(self.warps_per_cta))
+        super().__setattr__("order", _unwrap_if_constexpr(self.order))
+        super().__setattr__("ctas_per_cga", _unwrap_if_constexpr(self.ctas_per_cga))
+        super().__setattr__("cta_split_num", _unwrap_if_constexpr(self.cta_split_num))
+        super().__setattr__("cta_order", _unwrap_if_constexpr(self.cta_order))
+
         rank = len(self.size_per_thread)
         assert len(self.threads_per_warp) == rank
         assert len(self.warps_per_cta) == rank
@@ -73,11 +79,10 @@ class BlockedLayout(DistributedLayout):
         return f"B{size_per_thread}B{threads_per_warp}B{warps_per_cta}B{order}B{ctas_per_cga}B{cta_split_num}B{cta_order}B"
 
 
+@dataclass(frozen=True)
 class SliceLayout(DistributedLayout):
-
-    def __init__(self, dim: int, parent: DistributedLayout):
-        self.dim = _unwrap_if_constexpr(dim)
-        self.parent = _unwrap_if_constexpr(parent)
+    dim: int
+    parent: DistributedLayout
 
     def __post_init__(self):
         super().__setattr__("dim", _unwrap_if_constexpr(self.dim))
@@ -97,21 +102,27 @@ class SharedLayout:
     pass
 
 
+@dataclass(frozen=True)
 class NVMMASharedLayout(SharedLayout):
-
-    def __init__(self, swizzle_byte_width: int, element_bitwidth: int, rank: int, transposed: bool = False,
-                 fp4_padded: bool = False, ctas_per_cga: Optional[List[int]] = None,
-                 cta_split_num: Optional[List[int]] = None, cta_order: Optional[List[int]] = None):
-        self.swizzle_byte_width = _unwrap_if_constexpr(swizzle_byte_width)
-        self.element_bitwidth = _unwrap_if_constexpr(element_bitwidth)
-        self.rank = _unwrap_if_constexpr(rank)
-        self.transposed = _unwrap_if_constexpr(transposed)
-        self.fp4_padded = _unwrap_if_constexpr(fp4_padded)
-        self.ctas_per_cga = _unwrap_if_constexpr(ctas_per_cga)
-        self.cta_split_num = _unwrap_if_constexpr(cta_split_num)
-        self.cta_order = _unwrap_if_constexpr(cta_order)
+    swizzle_byte_width: int
+    element_bitwidth: int
+    rank: int
+    transposed: bool = False
+    fp4_padded: bool = False
+    ctas_per_cga: Optional[List[int]] = None
+    cta_split_num: Optional[List[int]] = None
+    cta_order: Optional[List[int]] = None
 
     def __post_init__(self):
+        super().__setattr__("swizzle_byte_width", _unwrap_if_constexpr(self.swizzle_byte_width))
+        super().__setattr__("element_bitwidth", _unwrap_if_constexpr(self.element_bitwidth))
+        super().__setattr__("rank", _unwrap_if_constexpr(self.rank))
+        super().__setattr__("transposed", _unwrap_if_constexpr(self.transposed))
+        super().__setattr__("fp4_padded", _unwrap_if_constexpr(self.fp4_padded))
+        super().__setattr__("ctas_per_cga", _unwrap_if_constexpr(self.ctas_per_cga))
+        super().__setattr__("cta_split_num", _unwrap_if_constexpr(self.cta_split_num))
+        super().__setattr__("cta_order", _unwrap_if_constexpr(self.cta_order))
+
         assert self.element_bitwidth in [8, 16, 32, 64]
         assert self.swizzle_byte_width in [0, 32, 64, 128]
         rank = self.rank
@@ -136,20 +147,25 @@ class NVMMASharedLayout(SharedLayout):
         return f"NVMMA_{self.swizzle_byte_width}_{self.element_bitwidth}_{self.transposed}_{self.fp4_padded}_NVMMA"
 
 
+@dataclass(frozen=True, eq=True)
 class SwizzledSharedLayout(SharedLayout):
-
-    def __init__(self, vec: int, per_phase: int, max_phase: int, order: List[int],
-                 ctas_per_cga: Optional[List[int]] = None, cta_split_num: Optional[List[int]] = None,
-                 cta_order: Optional[List[int]] = None):
-        self.vec = _unwrap_if_constexpr(vec)
-        self.per_phase = _unwrap_if_constexpr(per_phase)
-        self.max_phase = _unwrap_if_constexpr(max_phase)
-        self.order = _unwrap_if_constexpr(order)
-        self.ctas_per_cga = _unwrap_if_constexpr(ctas_per_cga)
-        self.cta_split_num = _unwrap_if_constexpr(cta_split_num)
-        self.cta_order = _unwrap_if_constexpr(cta_order)
+    vec: int
+    per_phase: int
+    max_phase: int
+    order: List[int]
+    ctas_per_cga: Optional[List[int]] = None
+    cta_split_num: Optional[List[int]] = None
+    cta_order: Optional[List[int]] = None
 
     def __post_init__(self):
+        super().__setattr__("vec", _unwrap_if_constexpr(self.vec))
+        super().__setattr__("per_phase", _unwrap_if_constexpr(self.per_phase))
+        super().__setattr__("max_phase", _unwrap_if_constexpr(self.max_phase))
+        super().__setattr__("order", _unwrap_if_constexpr(self.order))
+        super().__setattr__("ctas_per_cga", _unwrap_if_constexpr(self.ctas_per_cga))
+        super().__setattr__("cta_split_num", _unwrap_if_constexpr(self.cta_split_num))
+        super().__setattr__("cta_order", _unwrap_if_constexpr(self.cta_order))
+
         rank = len(self.order)
         assert self.ctas_per_cga is None or len(self.ctas_per_cga) == rank
         assert self.cta_split_num is None or len(self.cta_split_num) == rank
