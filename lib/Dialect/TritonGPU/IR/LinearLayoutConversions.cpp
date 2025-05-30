@@ -1517,8 +1517,14 @@ chooseMfmaLikeStoreLayout(RankedTensorType valType) {
   bool isMfma16 = mfmaLayout.getMDim() == 16 && mfmaLayout.getNDim() == 16;
 
   auto valShape = valType.getShape();
-  // For mfma16x16, to use in-wave swap, we need to make sure the tiles used are
-  // in one wave if there are multiple tiles.
+  // For mfma16x16, to use in-wavefront swap, we need to make sure the tiles
+  // used are in one wavefront if there are multiple tiles, which means
+  // warpsPerCTA = [numWarps, 1] and at least two tiles along the N dim. For
+  // now, it is only possible for FA-like kernels since during mfma generation,
+  // the WarpsPerCTA of the head dot in the chain will be reshaped to [numWaprs,
+  // 1].
+  // TODO: For gemm-like kernel, the transformation here cannot be applied for
+  // now and will support it.
   bool validForMfma16 = isMfma16 && valShape.back() >= 16 * 2 &&
                         mfmaLayout.getWarpsPerCTA().back() == 1;
 
@@ -1576,7 +1582,7 @@ chooseMfmaLikeStoreLayout(RankedTensorType valType) {
             |(15, 12) ... (15, 15)| (15, 12) ... (15, 15)  |
             ------------------------------------------------
 
-  To pack 8 elements with fp16 type we need to put the elements per row are
+  To pack 8 elements with 16-bits type we need to put the elements per row are
   contiuous, so the expetecd layout is: N/register M/lane
             ------------------------------------------------
             |(0,  0) ...  (0,  3) | (0,  4)  ...  (0,  7)  |
