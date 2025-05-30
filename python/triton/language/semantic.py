@@ -1569,6 +1569,11 @@ def dot(lhs: tl.tensor, rhs: tl.tensor, acc: tl.tensor, input_precision: Optiona
         lhs = cast(lhs, tl.float16, builder)
         rhs = cast(rhs, tl.float16, builder)
 
+    if lhs.dtype.name in builder.options.unsupported_fp8_dot_dtypes:
+        raise ValueError(f"Fp8 dtype {lhs.dtype} not supported in dot operations on this architecture.")
+    if rhs.dtype.name in builder.options.unsupported_fp8_dot_dtypes:
+        raise ValueError(f"Fp8 dtype {rhs.dtype} not supported in dot operations on this architecture.")
+
     if input_precision is None:
         input_precision = builder.options.default_dot_input_precision
 
