@@ -360,7 +360,7 @@ def TritonGPUCoalesceAsyncCopy: Pass<"tritongpu-coalesce-async-copy", "mlir::Mod
                            "mlir::triton::TritonDialect"];
 }
 
-def TritonGPUCanonicalize: Pass<"tritongpu-canonicalize", "mlir::ModuleOp"> {
+def TritonGPUCanonicalize: Pass<"tritongpu-canonicalize"> {
   let summary = "reduced set of simplifications for TTGIR";
 
   let description = [{
