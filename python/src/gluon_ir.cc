@@ -4,13 +4,14 @@
 
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/Types.h"
-#include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Attributes.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
+#include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 
 using namespace mlir;
 namespace py = pybind11;
 namespace ttg = triton::gpu;
+namespace ttng = triton::nvidia_gpu;
 
 struct GluonOpBuilder : public TritonOpBuilder {};
 
@@ -32,6 +33,16 @@ void init_gluon_ir(py::module &&m) {
              auto ctx = self.getContext();
              return ttg::MemDescType::get(shape, elementType, layout,
                                           ttg::SharedMemorySpaceAttr::get(ctx),
+                                          /*mutableMemory=*/true,
+                                          /*allocShape=*/allocShape);
+           })
+      .def("get_tensor_mem_desc_ty",
+           [](GluonOpBuilder &self, Type &elementType,
+              std::vector<int64_t> &shape, Attribute layout,
+              std::vector<int64_t> &allocShape) -> Type {
+             auto ctx = self.getContext();
+             return ttg::MemDescType::get(shape, elementType, layout,
+                                          ttng::TensorMemorySpaceAttr::get(ctx),
                                           /*mutableMemory=*/true,
                                           /*allocShape=*/allocShape);
            })
@@ -69,6 +80,16 @@ void init_gluon_ir(py::module &&m) {
                  ctx, swizzleByteWidth, transposed, elementBitwidth, fp4Padded,
                  ctaLayout);
            })
+      .def("get_tensor_memory_layout",
+           [](GluonOpBuilder &self, std::vector<unsigned> &block, bool unpacked,
+              std::vector<unsigned> &ctaSplitNum) -> Attribute {
+             auto ctx = self.getContext();
+             assert(block.size() == 2);
+             assert(ctaSplitNum.size() == 2);
+             return ttng::TensorMemoryEncodingAttr::get(
+                 ctx, block[0], block[1], unpacked, ctaSplitNum[0],
+                 ctaSplitNum[1]);
+           })
       .def("create_convert_layout",
            [](GluonOpBuilder &self, Type resultTy, Value value) -> Value {
              return self.create<ttg::ConvertLayoutOp>(resultTy, value);
@@ -94,6 +115,23 @@ void init_gluon_ir(py::module &&m) {
              return self.create<ttg::LocalDeallocOp>(memDesc);
            })
 
+      .def("create_tmem_alloc",
+           [](GluonOpBuilder &self, Type resultTy, Value value) -> Value {
+             return self.create<ttng::TMEMAllocOp>(resultTy, value);
+           })
+      .def("create_tmem_store",
+           [](GluonOpBuilder &self, Value memDesc, Value value, Value pred) {
+             self.create<ttng::TMEMStoreOp>(memDesc, value, pred);
+           })
+      .def("create_tmem_load",
+           [](GluonOpBuilder &self, Type resultTy, Value memDesc) -> Value {
+             return self.create<ttng::TMEMLoadOp>(resultTy, memDesc);
+           })
+      .def("create_tmem_subslice",
+           [](GluonOpBuilder &self, Type resultTy, Value memDesc,
+              int N) -> Value {
+             return self.create<ttng::TMEMSubSliceOp>(resultTy, memDesc, N);
+           })
       .def("create_warp_return",
            [](GluonOpBuilder &self) -> Operation * {
              return self.create<ttg::WarpReturnOp>();
