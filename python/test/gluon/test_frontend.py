@@ -99,8 +99,8 @@ def tensor_memory_kernel(layout: ttgl.constexpr, tmem_layout: ttgl.constexpr):
     mem = ttgl.nvidia.blackwell.allocate_tensor_memory(ttgl.int32, a.shape, tmem_layout, a)
     b = mem.load(layout)  # noqa: F841
     mem.store(a)
-    slice1 = mem.subslice(0, YBLOCK // 2)  # noqa: F841
-    slice2 = mem.subslice(YBLOCK // 2, YBLOCK // 2)  # noqa: F841
+    slice1 = mem.split(0, YBLOCK // 2)  # noqa: F841
+    slice2 = mem.split(YBLOCK // 2, YBLOCK // 2)  # noqa: F841
 
 
 @pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] != 10,
@@ -137,9 +137,9 @@ module attributes {"ttg.num-warps" = 4 : i32} {
 def shared_memory_subview_kernel(XBLOCK: ttgl.constexpr, layout: ttgl.constexpr, smem_layout: ttgl.constexpr):
     XHALF: tl.constexpr = XBLOCK // 2
     smem = ttgl.allocate_shared_memory(ttgl.int32, [XBLOCK, XBLOCK], smem_layout)
-    view = smem.subview(XHALF, XHALF, dim=1)
+    view = smem.split(XHALF, XHALF, dim=1)
     value = view.load(layout)
-    view = smem.subview(XHALF, XHALF, dim=0)
+    view = smem.split(XHALF, XHALF, dim=0)
     view.store(value.trans())
 
 

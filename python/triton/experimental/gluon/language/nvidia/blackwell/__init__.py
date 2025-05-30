@@ -94,6 +94,10 @@ class tensor_memory_descriptor(base_value):
     def shape(self):
         return self.type.shape
 
+    @property
+    def rank(self):
+        return len(self.shape)
+
     def __str__(self) -> str:
         return str(self.type)
 
@@ -111,7 +115,7 @@ class tensor_memory_descriptor(base_value):
         _builder.create_tmem_store(self.handle, value.handle, pred.handle)
 
     @builtin
-    def subslice(self, start, length, _builder: GluonOpBuilder) -> None:
+    def split(self, start, length, _builder: GluonOpBuilder) -> None:
         start = _unwrap_if_constexpr(start)
         length = _unwrap_if_constexpr(length)
         assert isinstance(start, int)

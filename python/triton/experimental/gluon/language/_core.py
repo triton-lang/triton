@@ -205,7 +205,7 @@ class shared_memory_descriptor(base_value):
         return semantic.shared_store(self, value, _builder)
 
     @builtin
-    def subview(self, offset, size, dim=None, layout=None, _builder: GluonOpBuilder = None) -> shared_memory_descriptor:
+    def split(self, offset, size, dim=None, layout=None, _builder: GluonOpBuilder = None) -> shared_memory_descriptor:
         if layout is None:
             layout = self.type.layout
         if dim is None:
