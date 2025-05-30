@@ -20,7 +20,7 @@ namespace gpu {
 
 // -- StackAllocOp --
 LogicalResult StackAllocOp::verify() {
-  auto bufferTy = mlir::cast<triton::gpu::MemDescType>(getData().getType());
+  auto bufferTy = mlir::cast<triton::gpu::MemDescType>(getBuffer().getType());
   auto elemTy = bufferTy.getElementType();
   auto rank = bufferTy.getRank();
 
@@ -40,34 +40,31 @@ LogicalResult StackAllocOp::verify() {
 
 // -- CircularRecordOp --
 LogicalResult CircularStoreOp::verify() {
-  auto segbaseOp =
-      mlir::cast<proton::gpu::SegmentBaseOp>(getSeg().getDefiningOp());
-  auto granularity = segbaseOp.getGranularity();
-  auto selectedIds = segbaseOp.getSelectIdsAttr().asArrayRef();
+  auto segmentType = getSegment().getType();
+  auto granularity = segmentType.getGranularity();
+  auto selectedIds = segmentType.getSelectIds();
+  auto bufferSizeInBytes = segmentType.getNBytes();
   auto mod = getOperation()->getParentOfType<ModuleOp>();
   int segmentNum = selectedIds.empty() ? mlir::triton::gpu::lookupNumWarps(mod)
                                        : selectedIds.size();
-  auto memDescTy = mlir::cast<triton::gpu::MemDescType>(getData().getType());
-  const int bufferSizeInBytes =
-      mlir::ShapedType::getNumElements(memDescTy.getShape()) *
-      memDescTy.getElementType().getIntOrFloatBitWidth() / 8;
-
   if (!llvm::isPowerOf2_32(bufferSizeInBytes / segmentNum))
     return emitOpError("profiling buffer segment size must be power of 2");
 
   return success();
 }
 
-// -- SegmentBaseOp --
-LogicalResult SegmentBaseOp::verify() {
-  auto granularity = getGranularity();
-  auto selectIdsAttr = getSelectIdsAttr();
-  if (granularity != Granularity::WARP && selectIdsAttr.asArrayRef().size()) {
+// -- SegmentAllocOp --
+LogicalResult SegmentAllocOp::verify() {
+  auto segmentType = getSegment().getType();
+  auto granularity = segmentType.getGranularity();
+  auto selectIds = segmentType.getSelectIds();
+  if (granularity != Granularity::WARP && selectIds.size()) {
     return emitOpError(
         "only warp granularity supports non-empty selectIds for now");
   }
   return success();
 }
+
 } // namespace gpu
 } // namespace proton
 } // namespace triton
