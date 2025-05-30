@@ -6,6 +6,7 @@
 #include "mlir/IR/Types.h"
 #include "triton/Dialect/TritonGPU/IR/Attributes.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
+#include "triton/Dialect/TritonGPU/IR/Types.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 
 using namespace mlir;
@@ -150,6 +151,10 @@ void init_gluon_ir(py::module &&m) {
            [](GluonOpBuilder &self, Type resultTy, Value value) -> Value {
              return self.create<ttng::TMEMAllocOp>(resultTy, value);
            })
+      .def("create_tmem_alloc",
+           [](GluonOpBuilder &self, Type resultTy, py::none value) -> Value {
+             return self.create<ttng::TMEMAllocOp>(resultTy, Value{});
+           })
       .def("create_tmem_store",
            [](GluonOpBuilder &self, Value memDesc, Value value, Value pred) {
              self.create<ttng::TMEMStoreOp>(memDesc, value, pred);
@@ -183,6 +188,17 @@ void init_gluon_ir(py::module &&m) {
       .def("create_mbarrier_arrive",
            [](GluonOpBuilder &self, Value memDesc, int count, Value pred) {
              self.create<ttng::ArriveBarrierOp>(memDesc, count, pred);
+           })
+      .def("create_tcgen05_mma",
+           [](GluonOpBuilder &self, Value a, Value b, Value acc, Value useAcc,
+              Value pred, std::vector<Value> &mbarriers,
+              std::vector<Value> &mbarrier_preds) {
+             Value accDep;
+             bool two_ctas = false;
+             auto tokType = self.getBuilder().getType<ttg::AsyncTokenType>();
+             self.create<ttng::TCGen5MMAOp>(tokType, a, b, acc, accDep, useAcc,
+                                            pred, two_ctas, mbarriers,
+                                            mbarrier_preds);
            })
       .def("create_warp_return",
            [](GluonOpBuilder &self) -> Operation * {
