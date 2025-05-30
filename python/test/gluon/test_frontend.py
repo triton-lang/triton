@@ -225,7 +225,22 @@ def shared_memory_cast_kernel():
 
 
 def test_shared_memory_cast(fresh_knobs):
-    expecttest.assert_expected_inline(str(run_parser(shared_memory_cast_kernel)), """""")
+    expecttest.assert_expected_inline(str(run_parser(shared_memory_cast_kernel)), """\
+#shared = #ttg.nvmma_shared<{swizzlingByteWidth = 64, transposed = false, elementBitWidth = 8}>
+#shared1 = #ttg.nvmma_shared<{swizzlingByteWidth = 64, transposed = true, elementBitWidth = 8}>
+#smem = #ttg.shared_memory
+module {
+  tt.func public @shared_memory_cast_kernel() attributes {noinline = false} {
+    %0 = ttg.local_alloc : () -> !ttg.memdesc<256x128xi8, #shared, #smem, mutable> loc(#loc1)
+    %1 = ttg.memdesc_trans %0 {order = array<i32: 1, 0>} : !ttg.memdesc<256x128xi8, #shared, #smem, mutable> -> !ttg.memdesc<128x256xi8, #shared1, #smem, mutable> loc(#loc2)
+    tt.return loc(#loc3)
+  } loc(#loc)
+} loc(#loc)
+#loc = loc("/root/code/triton/python/test/gluon/test_frontend.py":218:0)
+#loc1 = loc("/root/code/triton/python/test/gluon/test_frontend.py":223:62)
+#loc2 = loc("/root/code/triton/python/test/gluon/test_frontend.py":224:25)
+#loc3 = loc("/root/code/triton/python/test/gluon/test_frontend.py":224:4)
+""")
 
 
 @gluon.jit

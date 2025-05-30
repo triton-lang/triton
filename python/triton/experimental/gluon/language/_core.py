@@ -188,6 +188,10 @@ class shared_memory_descriptor(base_value):
     def shape(self):
         return self.type.shape
 
+    @property
+    def rank(self):
+        return len(self.shape)
+
     def __str__(self) -> str:
         return str(self.type)
 
