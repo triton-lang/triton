@@ -102,6 +102,10 @@ def tensor_memory_kernel(layout: ttgl.constexpr, tmem_layout: ttgl.constexpr):
     slice1 = mem.split(0, YBLOCK // 2)  # noqa: F841
     slice2 = mem.split(YBLOCK // 2, YBLOCK // 2)  # noqa: F841
 
+    buffers = ttgl.nvidia.blackwell.allocate_tensor_memory(ttgl.float32, [2, XBLOCK, YBLOCK], tmem_layout)
+    for i in range(2):
+        buffers.subslice(i).load(layout)
+
 
 @pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] != 10,
                     reason="Requires blackwell tensor cores")
@@ -126,6 +130,19 @@ module attributes {"ttg.num-warps" = 4 : i32} {
     ttng.tmem_store %cst, %result_0, %true : tensor<128x128xi32, #blocked> -> !ttg.memdesc<128x128xi32, #tmem, #ttng.tensor_memory, mutable> loc(#loc)
     %0 = ttng.tmem_subslice %result_0 {N = 0 : i32} : !ttg.memdesc<128x128xi32, #tmem, #ttng.tensor_memory, mutable> -> !ttg.memdesc<128x64xi32, #tmem, #ttng.tensor_memory, mutable, 128x128> loc(#loc)
     %1 = ttng.tmem_subslice %result_0 {N = 64 : i32} : !ttg.memdesc<128x128xi32, #tmem, #ttng.tensor_memory, mutable> -> !ttg.memdesc<128x64xi32, #tmem, #ttng.tensor_memory, mutable, 128x128> loc(#loc)
+    %result_2 = ttng.tmem_alloc : () -> !ttg.memdesc<2x128x128xf32, #tmem, #ttng.tensor_memory, mutable> loc(#loc)
+    %c0_i32_3 = arith.constant 0 : i32 loc(#loc)
+    %c2_i32 = arith.constant 2 : i32 loc(#loc)
+    %c1_i32 = arith.constant 1 : i32 loc(#loc)
+    %2 = arith.bitcast %c0_i32_3 : i32 to i32 loc(#loc)
+    %3 = arith.bitcast %c2_i32 : i32 to i32 loc(#loc)
+    %4 = arith.bitcast %c1_i32 : i32 to i32 loc(#loc)
+    %5 = ub.poison : i32 loc(#loc)
+    scf.for %arg0 = %2 to %3 step %4  : i32 {
+      %c0_i32_4 = arith.constant 0 : i32 loc(#loc)
+      %6 = ttg.memdesc_subview %result_2[%arg0, %c0_i32_4, %c0_i32_4] : !ttg.memdesc<2x128x128xf32, #tmem, #ttng.tensor_memory, mutable> -> !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable, 2x128x128> loc(#loc)
+      %result_5 = ttng.tmem_load %6 : !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable, 2x128x128> -> tensor<128x128xf32, #blocked> loc(#loc)
+    } loc(#loc)
     tt.return loc(#loc)
   } loc(#loc)
 } loc(#loc)
