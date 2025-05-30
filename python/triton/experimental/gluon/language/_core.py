@@ -195,6 +195,10 @@ class shared_memory_descriptor(base_value):
     def store(self, value, _builder: GluonOpBuilder) -> None:
         return semantic.shared_store(self, value, _builder)
 
+    @builtin
+    def _keep_alive(self, _builder=None) -> None:
+        return semantic.shared_dealloc(self, _builder)
+
 
 for name in [
         "program_id",

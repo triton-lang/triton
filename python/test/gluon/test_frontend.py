@@ -38,10 +38,12 @@ module attributes {"ttg.num-warps" = 4 : i32} {
 @gluon.jit
 def shared_memory_kernel(XBLOCK: ttgl.constexpr, YBLOCK: ttgl.constexpr, layout_a: ttgl.constexpr,
                          layout_b: ttgl.constexpr, smem_layout: ttgl.constexpr):
+    unused = ttgl.allocate_shared(ttgl.int32, [XBLOCK, YBLOCK], smem_layout)
     a = ttgl.full([XBLOCK, YBLOCK], 0, ttgl.int32, layout_a)
     mem = ttgl.allocate_shared(ttgl.int32, a.shape, smem_layout, a)
     b = mem.load(layout_b)  # noqa: F841
     mem.store(a)
+    unused._keep_alive()
 
 
 def test_shared_memory(fresh_knobs):
@@ -60,11 +62,13 @@ def test_shared_memory(fresh_knobs):
 #smem = #ttg.shared_memory
 module attributes {"ttg.num-warps" = 4 : i32} {
   tt.func public @shared_memory_kernel() attributes {noinline = false} {
+    %0 = ttg.local_alloc : () -> !ttg.memdesc<8x32xi32, #shared, #smem, mutable> loc(#loc)
     %c0_i32 = arith.constant 0 : i32 loc(#loc)
     %cst = arith.constant dense<0> : tensor<8x32xi32, #blocked> loc(#loc)
-    %0 = ttg.local_alloc %cst : (tensor<8x32xi32, #blocked>) -> !ttg.memdesc<8x32xi32, #shared, #smem, mutable> loc(#loc)
-    %1 = ttg.local_load %0 : !ttg.memdesc<8x32xi32, #shared, #smem, mutable> -> tensor<8x32xi32, #blocked1> loc(#loc)
-    ttg.local_store %cst, %0 : tensor<8x32xi32, #blocked> -> !ttg.memdesc<8x32xi32, #shared, #smem, mutable> loc(#loc)
+    %1 = ttg.local_alloc %cst : (tensor<8x32xi32, #blocked>) -> !ttg.memdesc<8x32xi32, #shared, #smem, mutable> loc(#loc)
+    %2 = ttg.local_load %1 : !ttg.memdesc<8x32xi32, #shared, #smem, mutable> -> tensor<8x32xi32, #blocked1> loc(#loc)
+    ttg.local_store %cst, %1 : tensor<8x32xi32, #blocked> -> !ttg.memdesc<8x32xi32, #shared, #smem, mutable> loc(#loc)
+    ttg.local_dealloc %0 : !ttg.memdesc<8x32xi32, #shared, #smem, mutable> loc(#loc)
     tt.return loc(#loc)
   } loc(#loc)
 } loc(#loc)
