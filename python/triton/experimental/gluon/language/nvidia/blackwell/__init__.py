@@ -5,11 +5,18 @@ from dataclasses import dataclass
 from triton.experimental.gluon.language import _core as ttgl
 from triton.experimental.gluon.language._core import builtin, base_type, base_value, _unwrap_if_constexpr
 
+from ..hopper import mbarrier
+
 if TYPE_CHECKING:
     from triton._C.libtriton.gluon_ir import GluonOpBuilder
     from triton._C.libtriton import gluon_ir as ir
 
-__all__ = ["TensorMemoryLayout", "tensor_memory_descriptor", "allocate_tensor_memory"]
+__all__ = [
+    "TensorMemoryLayout",
+    "tensor_memory_descriptor",
+    "allocate_tensor_memory",
+    "mbarrier",
+]
 
 
 @dataclass(frozen=True, eq=True)
@@ -120,7 +127,28 @@ def allocate_tensor_memory(element_ty, shape, layout, value=None, _builder=None)
     element_ty = _unwrap_if_constexpr(element_ty)
     shape = _unwrap_if_constexpr(shape)
     layout = _unwrap_if_constexpr(layout)
+    value = value.handle if value is not None else None
 
     ty = tensor_memory_descriptor_type(element_ty, shape, layout, shape)
-    handle = _builder.create_tmem_alloc(ty.to_ir(_builder), value.handle)
+    handle = _builder.create_tmem_alloc(ty.to_ir(_builder), value)
     return tensor_memory_descriptor(handle, element_ty, shape, layout, shape)
+
+
+@builtin
+def tcgen05_mma(a, b, acc, *, use_acc=True, pred=True, mbarriers=None, mbarrier_preds=None, _builder=None):
+    use_acc = ttgl.to_tensor(use_acc, _builder=_builder)
+    pred = ttgl.to_tensor(pred, _builder=_builder)
+
+    if mbarriers is None:
+        assert mbarrier_preds is None
+        mbarriers = []
+        mbarrier_preds = []
+    else:
+        mbarriers = [bar.handle for bar in mbarriers]
+        if mbarrier_preds is None:
+            true = ttgl.to_tensor(True, _builder=_builder)
+            mbarrier_preds = [true] * len(mbarriers)
+        else:
+            mbarrier_preds = [pred.handle for pred in mbarrier_preds]
+
+    _builder.create_tcgen05_mma(a.handle, b.handle, acc.handle, use_acc.handle, pred.handle, mbarriers, mbarrier_preds)

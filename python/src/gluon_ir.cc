@@ -6,6 +6,7 @@
 #include "mlir/IR/Types.h"
 #include "triton/Dialect/TritonGPU/IR/Attributes.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
+#include "triton/Dialect/TritonGPU/IR/Types.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 
 using namespace mlir;
@@ -80,6 +81,17 @@ void init_gluon_ir(py::module &&m) {
                  ctx, swizzleByteWidth, transposed, elementBitwidth, fp4Padded,
                  ctaLayout);
            })
+      .def("get_swizzled_shared_layout",
+           [](GluonOpBuilder &self, int vec, int perPhase, int maxPhase,
+              std::vector<unsigned> &order, std::vector<unsigned> &ctasPerCga,
+              std::vector<unsigned> &ctaSplitNum,
+              std::vector<unsigned> &ctaOrder) -> Attribute {
+             auto ctx = self.getContext();
+             auto ctaLayout = ttg::CTALayoutAttr::get(ctx, ctasPerCga,
+                                                      ctaSplitNum, ctaOrder);
+             return ttg::SwizzledSharedEncodingAttr::get(
+                 ctx, vec, perPhase, maxPhase, order, ctaLayout);
+           })
       .def("get_tensor_memory_layout",
            [](GluonOpBuilder &self, std::vector<unsigned> &block, bool unpacked,
               std::vector<unsigned> &ctaSplitNum) -> Attribute {
@@ -95,6 +107,10 @@ void init_gluon_ir(py::module &&m) {
              return self.create<ttg::ConvertLayoutOp>(resultTy, value);
            })
       .def("create_local_alloc",
+           [](GluonOpBuilder &self, Type resultTy) -> Value {
+             return self.create<ttg::LocalAllocOp>(resultTy);
+           })
+      .def("create_local_alloc",
            [](GluonOpBuilder &self, Type resultTy, Value value) -> Value {
              return self.create<ttg::LocalAllocOp>(resultTy, value);
            })
@@ -106,9 +122,18 @@ void init_gluon_ir(py::module &&m) {
            [](GluonOpBuilder &self, Type resultTy, Value memDesc) -> Value {
              return self.create<ttg::LocalLoadOp>(resultTy, memDesc);
            })
+      .def("create_local_dealloc",
+           [](GluonOpBuilder &self, Value memDesc) -> Operation * {
+             return self.create<ttg::LocalDeallocOp>(memDesc);
+           })
+
       .def("create_tmem_alloc",
            [](GluonOpBuilder &self, Type resultTy, Value value) -> Value {
              return self.create<ttng::TMEMAllocOp>(resultTy, value);
+           })
+      .def("create_tmem_alloc",
+           [](GluonOpBuilder &self, Type resultTy, py::none value) -> Value {
+             return self.create<ttng::TMEMAllocOp>(resultTy, Value{});
            })
       .def("create_tmem_store",
            [](GluonOpBuilder &self, Value memDesc, Value value, Value pred) {
@@ -122,6 +147,38 @@ void init_gluon_ir(py::module &&m) {
            [](GluonOpBuilder &self, Type resultTy, Value memDesc,
               int N) -> Value {
              return self.create<ttng::TMEMSubSliceOp>(resultTy, memDesc, N);
+           })
+      .def("create_mbarrier_init",
+           [](GluonOpBuilder &self, Value memDesc, int count) {
+             self.create<ttng::InitBarrierOp>(memDesc, count);
+           })
+      .def("create_mbarrier_inval",
+           [](GluonOpBuilder &self, Value memDesc) {
+             self.create<ttng::InvalBarrierOp>(memDesc);
+           })
+      .def("create_mbarrier_expect",
+           [](GluonOpBuilder &self, Value memDesc, int bytes, Value pred) {
+             self.create<ttng::BarrierExpectOp>(memDesc, bytes, pred);
+           })
+      .def("create_mbarrier_wait",
+           [](GluonOpBuilder &self, Value memDesc, Value phase, Value pred,
+              std::vector<Value> &deps) {
+             self.create<ttng::WaitBarrierOp>(memDesc, phase, pred, deps);
+           })
+      .def("create_mbarrier_arrive",
+           [](GluonOpBuilder &self, Value memDesc, int count, Value pred) {
+             self.create<ttng::ArriveBarrierOp>(memDesc, count, pred);
+           })
+      .def("create_tcgen05_mma",
+           [](GluonOpBuilder &self, Value a, Value b, Value acc, Value useAcc,
+              Value pred, std::vector<Value> &mbarriers,
+              std::vector<Value> &mbarrier_preds) {
+             Value accDep;
+             bool two_ctas = false;
+             auto tokType = self.getBuilder().getType<ttg::AsyncTokenType>();
+             self.create<ttng::TCGen5MMAOp>(tokType, a, b, acc, accDep, useAcc,
+                                            pred, two_ctas, mbarriers,
+                                            mbarrier_preds);
            })
       .def("create_warp_return",
            [](GluonOpBuilder &self) -> Operation * {
