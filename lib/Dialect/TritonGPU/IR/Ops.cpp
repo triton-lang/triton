@@ -444,7 +444,6 @@ MemDescTransOp::inferReturnTypes(MLIRContext *context,
 }
 
 // MemDescReshapeOp
-
 LogicalResult MemDescReshapeOp::verify() {
   MemDescType dstType = getResult().getType();
   MemDescType srcType = getSrc().getType();
@@ -467,6 +466,11 @@ LogicalResult MemDescReshapeOp::verify() {
   if (ll != llDst) {
     return emitError("source and destination layout are incompatible.");
   }
+  return success();
+}
+
+// MemDescReinterpretOp
+LogicalResult MemDescReinterpretOp::verify() {
   return success();
 }
 
