@@ -494,6 +494,7 @@ class nvidia_knobs(base_knobs):
     dump_nvptx: env_bool = env_bool("NVPTX_ENABLE_DUMP")
     disable_ptxas_opt: env_bool = env_bool("DISABLE_PTXAS_OPT")
     mock_ptx_version: env_opt_str = env_opt_str("TRITON_MOCK_PTX_VERSION")
+
     ptxas_other_options: env_opt_str = env_opt_str("NVPTX_OTHER_OPTIONS")
     ptxas_options_kernel_name: env_opt_str = env_opt_str("NVPTX_OPTIONS_KERNEL")
 
