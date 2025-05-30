@@ -32,7 +32,10 @@ def convert_layout(value, layout, builder: GluonOpBuilder):
 
 def allocate_shared(element_ty, shape, layout, value, builder: GluonOpBuilder):
     ty = ttgl.shared_memory_descriptor_type(element_ty, shape, layout, shape)
-    handle = builder.create_local_alloc(ty.to_ir(builder), value.handle)
+    if value is not None:
+        handle = builder.create_local_alloc(ty.to_ir(builder), value.handle)
+    else:
+        handle = builder.create_local_alloc(ty.to_ir(builder))
     return ttgl.shared_memory_descriptor(handle, element_ty, shape, layout, shape)
 
 
@@ -44,6 +47,10 @@ def shared_load(mem_desc, layout, builder: GluonOpBuilder):
 
 def shared_store(mem_desc, value, builder: GluonOpBuilder):
     builder.create_local_store(mem_desc.handle, value.handle)
+
+
+def shared_dealloc(mem_desc, builder: GluonOpBuilder):
+    builder.create_local_dealloc(mem_desc.handle)
 
 
 def warp_specialize(args, default_partition, worker_partitions, worker_num_warps: Sequence[int],

@@ -41,6 +41,13 @@ from triton.language.core import (
 )
 from . import _semantic as semantic
 
+_IMPORT_FROM_TRITON: List[str] = [
+    "program_id",  # NOQA: F822
+    "load",  # NOQA: F822
+    "store",  # NOQA: F822
+    "to_tensor",  # NOQA: F822
+]
+
 __all__ = [
     "constexpr",
     "base_value",
@@ -71,15 +78,13 @@ __all__ = [
     "float64",
     "_unwrap_if_constexpr",
     "tensor",
-    "program_id",  # NOQA: F822
-    "load",  # NOQA: F822
-    "store",  # NOQA: F822
     "arange",
     "full",
     "convert_layout",
-    "allocate_shared",
+    "allocate_shared_memory",
     "shared_memory_descriptor",
     "warp_specialize",
+    *_IMPORT_FROM_TRITON,
 ]
 
 T = TypeVar("T")
@@ -195,12 +200,12 @@ class shared_memory_descriptor(base_value):
     def store(self, value, _builder: GluonOpBuilder) -> None:
         return semantic.shared_store(self, value, _builder)
 
+    @builtin
+    def _keep_alive(self, _builder=None) -> None:
+        return semantic.shared_dealloc(self, _builder)
 
-for name in [
-        "program_id",
-        "load",
-        "store",
-]:
+
+for name in _IMPORT_FROM_TRITON:
     fn = getattr(tl_core, name)
     globals()[name] = builtin(fn)
 
@@ -229,7 +234,7 @@ def full(shape, value, dtype, layout, _builder=None):
 
 
 @builtin
-def allocate_shared(element_ty, shape, layout, value=None, _builder=None):
+def allocate_shared_memory(element_ty, shape, layout, value=None, _builder=None):
     element_ty = _unwrap_if_constexpr(element_ty)
     shape = _unwrap_if_constexpr(shape)
     layout = _unwrap_if_constexpr(layout)
