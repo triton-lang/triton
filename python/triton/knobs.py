@@ -8,20 +8,7 @@ import sysconfig
 
 from dataclasses import dataclass
 from contextlib import contextmanager
-from typing import (
-    cast,
-    Any,
-    Callable,
-    Generator,
-    Generic,
-    Optional,
-    Protocol,
-    Type,
-    TypeVar,
-    TypedDict,
-    TYPE_CHECKING,
-    Union,
-)
+from typing import cast, Any, Callable, Generator, Generic, Optional, Protocol, Type, TypeVar, TypedDict, TYPE_CHECKING, Union
 
 if TYPE_CHECKING:
     from .runtime.cache import CacheManager, RemoteCacheBackend
@@ -55,17 +42,17 @@ def setenv(key: str, value: Optional[str]) -> None:
 
 def toenv(val: Any) -> Union[None, tuple[Optional[str]]]:
     if val is None:
-        return (None,)
+        return (None, )
 
     t = type(val)
     if t is bool:
-        return ("1" if val else "0",)
+        return ("1" if val else "0", )
 
     if t is str:
-        return (val,)
+        return (val, )
 
     if t is int:
-        return (str(val),)
+        return (str(val), )
 
     return None
 
@@ -78,20 +65,14 @@ GetType = TypeVar("GetType")
 
 class env_base(Generic[SetType, GetType]):
 
-    def __init__(
-        self, key: str, default: Union[SetType, Callable[[], SetType]]
-    ) -> None:
+    def __init__(self, key: str, default: Union[SetType, Callable[[], SetType]]) -> None:
         self.key = key
-        self.default: Callable[[], SetType] = (
-            default if callable(default) else lambda: default
-        )
+        self.default: Callable[[], SetType] = default if callable(default) else lambda: default
 
     def __set_name__(self, objclass: Type[object], name: str) -> None:
         self.name = name
 
-    def __get__(
-        self, obj: Optional[object], objclass: Optional[Type[object]]
-    ) -> GetType:
+    def __get__(self, obj: Optional[object], objclass: Optional[Type[object]]) -> GetType:
         if obj is None:
             raise AttributeError(f"Cannot access {type(self)} on non-instance")
 
@@ -136,9 +117,7 @@ class env_str(env_base[str, str]):
 
 class env_bool(env_base[bool, bool]):
 
-    def __init__(
-        self, key: str, default: Union[bool, Callable[[], bool]] = False
-    ) -> None:
+    def __init__(self, key: str, default: Union[bool, Callable[[], bool]] = False) -> None:
         super().__init__(key, default)
 
     def from_env(self, val: str) -> bool:
@@ -157,9 +136,7 @@ class env_int(env_base[int, int]):
             raise RuntimeError(f"Unable to use {self.key}={val}: expected int") from exc
 
 
-class env_opt_base(
-    Generic[GetType, SetType], env_base[Optional[GetType], Optional[SetType]]
-):
+class env_opt_base(Generic[GetType, SetType], env_base[Optional[GetType], Optional[SetType]]):
 
     def __init__(self, key: str) -> None:
         super().__init__(key, None)
@@ -178,15 +155,11 @@ class env_class(Generic[ClassType], env_opt_base[Type[ClassType], Type[ClassType
     def from_env(self, val: str) -> Type[ClassType]:
         comps = val.split(":", 1)
         if len(comps) != 2:
-            raise RuntimeError(
-                f"Unable to read {self.key}: '{val}' isn't of the form MODULE:CLASS"
-            )
+            raise RuntimeError(f"Unable to read {self.key}: '{val}' isn't of the form MODULE:CLASS")
         cls = getattr(importlib.import_module(comps[0]), comps[1])
 
         if not any((c.__name__ == self.type for c in cls.mro())):
-            raise RuntimeError(
-                f"Unable to use '{val}' from {self.key}: not of type '{self.type}'"
-            )
+            raise RuntimeError(f"Unable to use '{val}' from {self.key}: not of type '{self.type}'")
 
         return cast(Type[ClassType], cls)
 
@@ -199,14 +172,10 @@ class NvidiaTool:
     @staticmethod
     def from_path(path: str) -> Optional[NvidiaTool]:
         try:
-            result = subprocess.check_output(
-                [path, "--version"], stderr=subprocess.STDOUT
-            )
+            result = subprocess.check_output([path, "--version"], stderr=subprocess.STDOUT)
             if result is None:
                 return None
-            version = re.search(
-                r".*release (\d+\.\d+).*", result.decode("utf-8"), flags=re.MULTILINE
-            )
+            version = re.search(r".*release (\d+\.\d+).*", result.decode("utf-8"), flags=re.MULTILINE)
             if version is None:
                 return None
             return NvidiaTool(path, version.group(1))
@@ -219,16 +188,13 @@ class env_nvidia_tool(env_base[str, NvidiaTool]):
     def __init__(self, binary: str) -> None:
         binary += sysconfig.get_config_var("EXE")
         self.binary = binary
-        super().__init__(
-            f"TRITON_{binary.upper()}_PATH",
-            lambda: os.path.join(
-                os.path.dirname(__file__),
-                "backends",
-                "nvidia",
-                "bin",
-                self.binary,
-            ),
-        )
+        super().__init__(f"TRITON_{binary.upper()}_PATH", lambda: os.path.join(
+            os.path.dirname(__file__),
+            "backends",
+            "nvidia",
+            "bin",
+            self.binary,
+        ))
 
     def transform(self, path: str) -> NvidiaTool:
         paths = [
@@ -287,18 +253,12 @@ class CompileTimes:
 
 class CompilationListener(Protocol):
 
-    def __call__(
-        self,
-        *,
-        src: Union[ASTSource, IRSource],
-        metadata: dict[str, Any],
-        metadata_group: dict[str, str],
-        times: CompileTimes,
-        cache_hit: bool,
-    ) -> None: ...
+    def __call__(self, *, src: Union[ASTSource, IRSource], metadata: dict[str, Any], metadata_group: dict[str, str],
+                 times: CompileTimes, cache_hit: bool) -> None:
+        ...
 
 
-knobs_type = TypeVar("knobs_type", bound="base_knobs")
+knobs_type = TypeVar("knobs_type", bound='base_knobs')
 
 
 class base_knobs:
@@ -329,9 +289,7 @@ class base_knobs:
     @contextmanager
     def scope(self) -> Generator[None, None, None]:
         try:
-            initial_env = {
-                knob.key: knob.env_val for knob in self.knob_descriptors.values()
-            }
+            initial_env = {knob.key: knob.env_val for knob in self.knob_descriptors.values()}
             orig = dict(self.__dict__)
             yield
         finally:
@@ -347,21 +305,13 @@ class base_knobs:
 
 class BuildImpl(Protocol):
 
-    def __call__(
-        self,
-        name: str,
-        src: str,
-        srcdir: str,
-        library_dirs: list[str],
-        include_dirs: list[str],
-        libraries: list[str],
-        /,
-    ) -> str: ...
+    def __call__(self, name: str, src: str, srcdir: str, library_dirs: list[str], include_dirs: list[str],
+                 libraries: list[str], /) -> str:
+        ...
 
 
 class build_knobs(base_knobs):
     """Configuration controlling how the native compiler is invoked"""
-
     cc: env_opt_str = env_opt_str("CC")
 
     cudacrt_path: env_opt_str = env_opt_str("TRITON_CUDACRT_PATH")
@@ -371,9 +321,7 @@ class build_knobs(base_knobs):
 
     @property
     def backend_dirs(self) -> set[str]:
-        return {
-            path for path in (self.cudacrt_path, self.cudart_path) if path is not None
-        }
+        return {path for path in (self.cudacrt_path, self.cudart_path) if path is not None}
 
 
 class redis_knobs(base_knobs):
@@ -389,17 +337,11 @@ class cache_knobs(base_knobs):
     home_dir: env_str = env_str("TRITON_HOME", lambda: os.path.expanduser("~/"))
 
     dump_dir: env_str = env_str("TRITON_DUMP_DIR", lambda: cache.get_triton_dir("dump"))
-    override_dir: env_str = env_str(
-        "TRITON_OVERRIDE_DIR", lambda: cache.get_triton_dir("override")
-    )
+    override_dir: env_str = env_str("TRITON_OVERRIDE_DIR", lambda: cache.get_triton_dir("override"))
     dir: env_str = env_str("TRITON_CACHE_DIR", lambda: cache.get_triton_dir("cache"))
 
-    manager_class: env_class[CacheManager] = env_class(
-        "TRITON_CACHE_MANAGER", "CacheManager"
-    )
-    remote_manager_class: env_class[RemoteCacheBackend] = env_class(
-        "TRITON_REMOTE_CACHE_BACKEND", "RemoteCacheBackend"
-    )
+    manager_class: env_class[CacheManager] = env_class("TRITON_CACHE_MANAGER", "CacheManager")
+    remote_manager_class: env_class[RemoteCacheBackend] = env_class("TRITON_REMOTE_CACHE_BACKEND", "RemoteCacheBackend")
 
     def get_triton_dir(self, dirname: str) -> str:
         return os.path.join(self.home_dir, ".triton", dirname)
@@ -415,9 +357,7 @@ class compilation_knobs(base_knobs):
     enable_asan: env_bool = env_bool("TRITON_ENABLE_ASAN")
     disable_line_info: env_bool = env_bool("TRITON_DISABLE_LINE_INFO")
     front_end_debugging: env_bool = env_bool("TRITON_FRONT_END_DEBUGGING")
-    allow_non_constexpr_globals: env_bool = env_bool(
-        "TRITON_ALLOW_NON_CONSTEXPR_GLOBALS"
-    )
+    allow_non_constexpr_globals: env_bool = env_bool("TRITON_ALLOW_NON_CONSTEXPR_GLOBALS")
     listener: Union[CompilationListener, None] = None
 
 
@@ -428,7 +368,8 @@ class autotuning_knobs(base_knobs):
 
 class LaunchHook(Protocol):
 
-    def __call__(self, metadata: LazyDict) -> None: ...
+    def __call__(self, metadata: LazyDict) -> None:
+        ...
 
 
 # This is of the form [attr_name, attr_val]
@@ -454,16 +395,9 @@ class JITHookCompileInfo(TypedDict):
 
 class JITHook(Protocol):
 
-    def __call__(
-        self,
-        *,
-        key: str,
-        repr: str,
-        fn: JitFunctionInfo,
-        compile: JITHookCompileInfo,
-        is_manual_warmup: bool,
-        already_compiled: bool,
-    ) -> Optional[bool]: ...
+    def __call__(self, *, key: str, repr: str, fn: JitFunctionInfo, compile: JITHookCompileInfo, is_manual_warmup: bool,
+                 already_compiled: bool) -> Optional[bool]:
+        ...
 
 
 class runtime_knobs(base_knobs):
@@ -510,9 +444,7 @@ class amd_knobs(base_knobs):
 
     # We use strs so that we can have a default value based on other runtime info
     use_block_pingpong: env_opt_bool = env_opt_bool("TRITON_HIP_USE_BLOCK_PINGPONG")
-    use_in_thread_transpose: env_opt_bool = env_opt_bool(
-        "TRITON_HIP_USE_IN_THREAD_TRANSPOSE"
-    )
+    use_in_thread_transpose: env_opt_bool = env_opt_bool("TRITON_HIP_USE_IN_THREAD_TRANSPOSE")
 
     global_prefetch: env_int = env_int("TRITON_HIP_GLOBAL_PREFETCH")
     local_prefetch: env_int = env_int("TRITON_HIP_LOCAL_PREFETCH")
