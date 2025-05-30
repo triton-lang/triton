@@ -16,13 +16,13 @@ def PTG_SegmentType : PTG_TypeDef<"Segment", "segment", []> {
   let summary = "A segment in the internal buffer";
   let description = [{
     The `proton_gpu.segment` type represents a segment returned by `PTG_SegmentOp`.
-    
+
     Each segment is private to a profiling unit as defined by the `granularity` attribute.
     The selected segments, specified by the `selectIds` attribute, collectively total `nBytes` bytes.
 
     When lowered to LLVM, a segment becomes a struct containing:
     - `base`: pointer to the start of the internal buffer
-    - `segmentBase`: pointer to each segment's start in the internal buffer  
+    - `segmentBase`: pointer to each segment's start in the internal buffer
     - `indexPtr`: pointer to the current index within the segment
 
     The segment can reside in global memory, shared memory, or stack memory depending on the `memorySpace` attribute.
