@@ -137,7 +137,8 @@ def test_shared_memory_subview(fresh_knobs):
     layout = ttgl.BlockedLayout(size_per_thread=[1, 1], threads_per_warp=[1, 32], warps_per_cta=[4, 1], order=[1, 0])
     smem_layout = ttgl.SwizzledSharedLayout(1, 1, 1, [1, 0])
     h = shared_memory_subview_kernel.warmup(256, layout, smem_layout, num_warps=4, grid=(1, ))
-    expecttest.assert_expected_inline(h.asm["ttgir"], """\
+    expecttest.assert_expected_inline(
+        h.asm["ttgir"], """\
 #blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [1, 0]}>
 #blocked1 = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [32, 1], warpsPerCTA = [1, 4], order = [0, 1]}>
 #shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
@@ -154,6 +155,46 @@ module attributes {"ttg.num-warps" = 4 : i32} {
     %3 = ttg.memdesc_subview %0[%c128_i32_1, %c0_i32_0] : !ttg.memdesc<256x256xi32, #shared, #smem, mutable> -> !ttg.memdesc<128x256xi32, #shared, #smem, mutable, 256x256> loc(#loc)
     %4 = tt.trans %2 {order = array<i32: 1, 0>} : tensor<256x128xi32, #blocked> -> tensor<128x256xi32, #blocked1> loc(#loc)
     ttg.local_store %4, %3 : tensor<128x256xi32, #blocked1> -> !ttg.memdesc<128x256xi32, #shared, #smem, mutable, 256x256> loc(#loc)
+    tt.return loc(#loc)
+  } loc(#loc)
+} loc(#loc)
+#loc = loc(unknown)
+""")
+
+
+@gluon.jit
+def shared_memory_subslice_kernel(XBLOCK: ttgl.constexpr, layout: ttgl.constexpr, smem_layout: ttgl.constexpr):
+    smem = ttgl.allocate_shared_memory(ttgl.int32, [4, XBLOCK], smem_layout)
+    for i in range(4):
+        smem.subslice(i).load(layout)
+
+
+def test_shared_memory_subslice(fresh_knobs):
+    knobs.compilation.disable_line_info = True
+
+    layout = ttgl.BlockedLayout(size_per_thread=[1], threads_per_warp=[32], warps_per_cta=[4], order=[0])
+    smem_layout = ttgl.NVMMASharedLayout(swizzle_byte_width=128, element_bitwidth=32, rank=2)
+    h = shared_memory_subslice_kernel.warmup(256, layout, smem_layout, num_warps=4, grid=(1, ))
+    expecttest.assert_expected_inline(
+        h.asm["ttgir"], """\
+#blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+#shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 32}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-warps" = 4 : i32} {
+  tt.func public @shared_memory_subslice_kernel() attributes {noinline = false} {
+    %0 = ttg.local_alloc : () -> !ttg.memdesc<4x256xi32, #shared, #smem, mutable> loc(#loc)
+    %c0_i32 = arith.constant 0 : i32 loc(#loc)
+    %c4_i32 = arith.constant 4 : i32 loc(#loc)
+    %c1_i32 = arith.constant 1 : i32 loc(#loc)
+    %1 = arith.bitcast %c0_i32 : i32 to i32 loc(#loc)
+    %2 = arith.bitcast %c4_i32 : i32 to i32 loc(#loc)
+    %3 = arith.bitcast %c1_i32 : i32 to i32 loc(#loc)
+    %4 = ub.poison : i32 loc(#loc)
+    scf.for %arg0 = %1 to %2 step %3  : i32 {
+      %c0_i32_0 = arith.constant 0 : i32 loc(#loc)
+      %5 = ttg.memdesc_subview %0[%arg0, %c0_i32_0] : !ttg.memdesc<4x256xi32, #shared, #smem, mutable> -> !ttg.memdesc<256xi32, #shared, #smem, mutable, 4x256> loc(#loc)
+      %6 = ttg.local_load %5 : !ttg.memdesc<256xi32, #shared, #smem, mutable, 4x256> -> tensor<256xi32, #blocked> loc(#loc)
+    } loc(#loc)
     tt.return loc(#loc)
   } loc(#loc)
 } loc(#loc)

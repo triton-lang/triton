@@ -227,7 +227,7 @@ class shared_memory_descriptor(base_value):
         shape = [_unwrap_if_constexpr(s) for s in shape]
         layout = _unwrap_if_constexpr(layout)
 
-        handle = semantic.memdesc_subslice(self, index, shape, layout, _builder)
+        handle = semantic.memdesc_slice(self, index, shape, layout, _builder)
         return shared_memory_descriptor(handle, self.dtype, shape, layout, self.type.alloc_shape)
 
     @builtin
