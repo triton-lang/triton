@@ -118,13 +118,11 @@ def accumulate(a, b):
 
 # Check that we can call a function returning a value from a loop.
 @filecheck_test
+@triton.jit
 def test_call_in_loop():
-
-    @triton.jit
-    def kernel():
-        # CHECK-LABEL: kernel
-        acc = 0
-        # CHECK: scf.for
-        # CHECK:   call @accumulate
-        for i in range(10):
-            acc = accumulate(acc, i)
+    # CHECK-LABEL: test_call_in_loop
+    acc = 0
+    # CHECK: scf.for
+    # CHECK:   call @accumulate
+    for i in range(10):
+        acc = accumulate(acc, i)
