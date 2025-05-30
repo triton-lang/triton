@@ -5,6 +5,7 @@ import pytest
 from triton import knobs
 from triton.experimental import gluon
 from triton.experimental.gluon import language as ttgl
+from triton.experimental.gluon.language.nvidia.blackwell import mbarrier
 from triton._filecheck import filecheck_test
 import triton.language as tl
 from triton._internal_testing import is_cuda
@@ -177,3 +178,42 @@ def test_warp_specialize():
                                 [warp_specialize_worker0, warp_specialize_worker1], [4, 4], [24, 48])
     anchor(a)
     anchor(b)
+
+
+@gluon.jit
+def mbarrier_kernel():
+    bar = ttgl.allocate_shared_memory(ttgl.int64, [1], mbarrier.MBarrierLayout())
+    mbarrier.init(bar, count=1)
+    mbarrier.expect(bar, 4)
+    mbarrier.arrive(bar, 1)
+    phase = 0
+    mbarrier.wait(bar, phase, deps=[bar])
+    mbarrier.invalidate(bar)
+
+
+@pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper or newer")
+def test_mbarrier(fresh_knobs):
+    knobs.compilation.disable_line_info = True
+
+    h = mbarrier_kernel.warmup(grid=(1, ))
+    expecttest.assert_expected_inline(
+        h.asm["ttgir"], """\
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-warps" = 4 : i32} {
+  tt.func public @mbarrier_kernel() attributes {noinline = false} {
+    %0 = ttg.local_alloc : () -> !ttg.memdesc<1xi64, #shared, #smem, mutable> loc(#loc)
+    ttng.init_barrier %0, 1 : !ttg.memdesc<1xi64, #shared, #smem, mutable> loc(#loc)
+    %true = arith.constant true loc(#loc)
+    ttng.barrier_expect %0, 4, %true : !ttg.memdesc<1xi64, #shared, #smem, mutable> loc(#loc)
+    %true_0 = arith.constant true loc(#loc)
+    ttng.arrive_barrier %0, 1, %true_0 : !ttg.memdesc<1xi64, #shared, #smem, mutable> loc(#loc)
+    %c0_i32 = arith.constant 0 : i32 loc(#loc)
+    %true_1 = arith.constant true loc(#loc)
+    ttng.wait_barrier %0, %c0_i32, %true_1 deps %0 : !ttg.memdesc<1xi64, #shared, #smem, mutable>, !ttg.memdesc<1xi64, #shared, #smem, mutable> loc(#loc)
+    ttng.inval_barrier %0 : !ttg.memdesc<1xi64, #shared, #smem, mutable> loc(#loc)
+    tt.return loc(#loc)
+  } loc(#loc)
+} loc(#loc)
+#loc = loc(unknown)
+""")

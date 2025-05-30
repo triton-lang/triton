@@ -5,11 +5,18 @@ from dataclasses import dataclass
 from triton.experimental.gluon.language import _core as ttgl
 from triton.experimental.gluon.language._core import builtin, base_type, base_value, _unwrap_if_constexpr
 
+from ..hopper import mbarrier
+
 if TYPE_CHECKING:
     from triton._C.libtriton.gluon_ir import GluonOpBuilder
     from triton._C.libtriton import gluon_ir as ir
 
-__all__ = ["TensorMemoryLayout", "tensor_memory_descriptor", "allocate_tensor_memory"]
+__all__ = [
+    "TensorMemoryLayout",
+    "tensor_memory_descriptor",
+    "allocate_tensor_memory",
+    "mbarrier",
+]
 
 
 @dataclass(frozen=True, eq=True)
