@@ -1,4 +1,3 @@
-from dataclasses import dataclass
 from typing import List, Optional
 from triton.language.core import _unwrap_if_constexpr
 

@@ -6,7 +6,7 @@ if TYPE_CHECKING:
     from triton._C.libtriton.gluon_ir import GluonOpBuilder
 
 from ._layouts import SharedLayout, DistributedLayout
-from triton._C.libtriton import ir, gluon_ir
+from triton._C.libtriton import ir
 import triton.language.core as tl_core
 from triton.language.core import (
     constexpr,
