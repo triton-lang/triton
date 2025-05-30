@@ -41,7 +41,7 @@ module attributes {"ttg.num-warps" = 4 : i32} {
 @gluon.jit
 def shared_memory_kernel(XBLOCK: ttgl.constexpr, YBLOCK: ttgl.constexpr, layout_a: ttgl.constexpr,
                          layout_b: ttgl.constexpr, smem_layout: ttgl.constexpr):
-    unused = ttgl.allocate_shared(ttgl.int32, [XBLOCK, YBLOCK], smem_layout)
+    unused = ttgl.allocate_shared_memory(ttgl.int32, [XBLOCK, YBLOCK], smem_layout)
     a = ttgl.full([XBLOCK, YBLOCK], 0, ttgl.int32, layout_a)
     mem = ttgl.allocate_shared_memory(ttgl.int32, a.shape, smem_layout, a)
     b = mem.load(layout_b)  # noqa: F841
