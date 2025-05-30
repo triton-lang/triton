@@ -172,7 +172,8 @@ CoarseSchedule getInitialSchedule(scf::ForOp forOp,
     // root at the stages of the latency ops to prune unnecessary stages.
     auto isLatencyOp = [&](Operation &op) {
       return opLatency.count(&op) ||
-             isa<LocalStoreOp, LocalLoadOp, ttng::TMEMLoadOp, ttng::TMEMStoreOp,
+             isa<LoadOp, DescriptorLoadOp, DescriptorGatherOp, LocalStoreOp,
+                 LocalLoadOp, ttng::TMEMLoadOp, ttng::TMEMStoreOp,
                  AsyncCopyGlobalToLocalOp, ttng::AsyncTMACopyGlobalToLocalOp,
                  ttng::AsyncTMAGatherOp, ttng::MMAv5OpInterface,
                  ttng::WaitBarrierOp, ttng::ArriveBarrierOp>(op);

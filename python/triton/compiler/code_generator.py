@@ -48,7 +48,7 @@ def _is_triton_tensor(o: Any) -> bool:
 
 
 def _is_constexpr(o: Any) -> bool:
-    return o is None or isinstance(o, (constexpr, language.core.dtype))
+    return o is None or isinstance(o, (constexpr, language.core.dtype, JITFunction))
 
 
 def _is_non_scalar_tensor(o: Any) -> bool:
@@ -1349,6 +1349,9 @@ class CodeGenerator(ast.NodeVisitor):
         lhs = self.visit(node.value)
         if _is_triton_tensor(lhs) and node.attr == "T":
             return semantic.permute(lhs, (1, 0), builder=self.builder)
+        # NOTE: special case ".value" for BC
+        if isinstance(lhs, constexpr) and node.attr != "value":
+            lhs = lhs.value
         attr = getattr(lhs, node.attr)
         if _is_triton_value(lhs) and isinstance(attr, JITFunction):
             return BoundJITMethod(lhs, attr)

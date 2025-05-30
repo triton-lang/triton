@@ -41,6 +41,13 @@ from triton.language.core import (
 )
 from . import _semantic as semantic
 
+_IMPORT_FROM_TRITON: List[str] = [
+    "program_id",  # NOQA: F822
+    "load",  # NOQA: F822
+    "store",  # NOQA: F822
+    "to_tensor",  # NOQA: F822
+]
+
 __all__ = [
     "constexpr",
     "base_value",
@@ -71,14 +78,13 @@ __all__ = [
     "float64",
     "_unwrap_if_constexpr",
     "tensor",
-    "program_id",  # NOQA: F822
-    "load",  # NOQA: F822
-    "store",  # NOQA: F822
     "arange",
     "full",
     "convert_layout",
-    "allocate_shared",
+    "allocate_shared_memory",
     "shared_memory_descriptor",
+    "warp_specialize",
+    *_IMPORT_FROM_TRITON,
 ]
 
 T = TypeVar("T")
@@ -195,11 +201,7 @@ class shared_memory_descriptor(base_value):
         return semantic.shared_store(self, value, _builder)
 
 
-for name in [
-        "program_id",
-        "load",
-        "store",
-]:
+for name in _IMPORT_FROM_TRITON:
     fn = getattr(tl_core, name)
     globals()[name] = builtin(fn)
 
@@ -228,8 +230,18 @@ def full(shape, value, dtype, layout, _builder=None):
 
 
 @builtin
-def allocate_shared(element_ty, shape, layout, value=None, _builder=None):
+def allocate_shared_memory(element_ty, shape, layout, value=None, _builder=None):
     element_ty = _unwrap_if_constexpr(element_ty)
     shape = _unwrap_if_constexpr(shape)
     layout = _unwrap_if_constexpr(layout)
     return semantic.allocate_shared(element_ty, shape, layout, value, _builder)
+
+
+@builtin
+def warp_specialize(args, default_partition, worker_partitions, worker_num_warps, worker_num_regs,  #
+                    _builder=None, _generator=None):
+    worker_num_warps = [_unwrap_if_constexpr(w) for w in worker_num_warps]
+    worker_num_regs = [_unwrap_if_constexpr(r) for r in worker_num_regs]
+    args = [_unwrap_if_constexpr(arg) for arg in args]
+    return semantic.warp_specialize(args, default_partition, worker_partitions, worker_num_warps,  #
+                                    worker_num_regs, _builder, _generator)

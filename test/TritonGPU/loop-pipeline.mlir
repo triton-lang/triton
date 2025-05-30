@@ -407,13 +407,13 @@ tt.func @matmul_loop_single_pipeline(%lb : index, %ub : index, %step : index,
 //       AMD:     %[[LOCAL_ALLOC_1:.*]] = ttg.local_alloc
 //       AMD:     %[[CMPI_2:.*]] = arith.cmpi sgt, %{{.*}}, %{{.*}}
 //       AMD:     %[[SPLAT_3:.*]] = tt.splat %[[CMPI_2]]
-//       AMD:     %[[LOAD_4:.*]] = tt.load %{{.*}}, %[[SPLAT_3]] {OpIdx = #amdgpu.OpIdx<0>}
+//       AMD:     %[[LOAD_4:.*]] = tt.load %{{.*}}, %[[SPLAT_3]] {OpIdx = #amdgpu.OpIdx<0>, amd.pipeliner_part = "prologue"}
 //       AMD:     %[[LOAD_5:.*]] = tt.load %{{.*}}, %[[CMPI_2]]
 //       AMD:     %[[MULI_6:.*]] = arith.muli %{{.*}}, %[[LOAD_5]]
 //       AMD:     %[[SPLAT_7:.*]] = tt.splat %[[MULI_6]]
 //       AMD:     %[[ADDPTR_8:.*]] = tt.addptr %{{.*}}, %[[SPLAT_7]]
 //       AMD:     %[[SPLAT_9:.*]] = tt.splat %[[CMPI_2]]
-//       AMD:     %[[LOAD_10:.*]] = tt.load %[[ADDPTR_8]], %[[SPLAT_9]] {OpIdx = #amdgpu.OpIdx<1>}
+//       AMD:     %[[LOAD_10:.*]] = tt.load %[[ADDPTR_8]], %[[SPLAT_9]] {OpIdx = #amdgpu.OpIdx<1>, amd.pipeliner_part = "prologue"}
 //       AMD:     %[[MEMDESC_SUBVIEW_11:.*]] = ttg.memdesc_subview %[[LOCAL_ALLOC_0]][%{{.*}}, %{{.*}}, %{{.*}}]
 //       AMD:     ttg.local_store %[[LOAD_4]], %[[MEMDESC_SUBVIEW_11]] {OpIdx = #amdgpu.OpIdx<0>}
 //       AMD:     %[[MEMDESC_SUBVIEW_12:.*]] = ttg.memdesc_subview %[[LOCAL_ALLOC_1]][%{{.*}}, %{{.*}}, %{{.*}}]
@@ -422,13 +422,13 @@ tt.func @matmul_loop_single_pipeline(%lb : index, %ub : index, %step : index,
 //       AMD:     %[[ADDPTR_14:.*]] = tt.addptr %{{.*}}, %{{.*}}
 //       AMD:     %[[ADDPTR_15:.*]] = tt.addptr %{{.*}}, %{{.*}}
 //       AMD:     %[[SPLAT_16:.*]] = tt.splat %[[CMPI_13]]
-//       AMD:     %[[LOAD_17:.*]] = tt.load %[[ADDPTR_14]], %[[SPLAT_16]] {OpIdx = #amdgpu.OpIdx<0>}
+//       AMD:     %[[LOAD_17:.*]] = tt.load %[[ADDPTR_14]], %[[SPLAT_16]] {OpIdx = #amdgpu.OpIdx<0>, amd.pipeliner_part = "prologue"}
 //       AMD:     %[[LOAD_18:.*]] = tt.load %[[ADDPTR_15]], %[[CMPI_13]]
 //       AMD:     %[[MULI_19:.*]] = arith.muli %{{.*}}, %[[LOAD_18]]
 //       AMD:     %[[SPLAT_20:.*]] = tt.splat %[[MULI_19]]
 //       AMD:     %[[ADDPTR_21:.*]] = tt.addptr %{{.*}}, %[[SPLAT_20]]
 //       AMD:     %[[SPLAT_22:.*]] = tt.splat %[[CMPI_13]]
-//       AMD:     %[[LOAD_23:.*]] = tt.load %[[ADDPTR_21]], %[[SPLAT_22]] {OpIdx = #amdgpu.OpIdx<1>}
+//       AMD:     %[[LOAD_23:.*]] = tt.load %[[ADDPTR_21]], %[[SPLAT_22]] {OpIdx = #amdgpu.OpIdx<1>, amd.pipeliner_part = "prologue"}
 //       AMD:     %[[MEMDESC_SUBVIEW_24:.*]] = ttg.memdesc_subview %[[LOCAL_ALLOC_0]][%{{.*}}, %{{.*}}, %{{.*}}]
 //       AMD:     ttg.local_store %[[LOAD_17]], %[[MEMDESC_SUBVIEW_24]] {OpIdx = #amdgpu.OpIdx<0>}
 //       AMD:     %[[MEMDESC_SUBVIEW_25:.*]] = ttg.memdesc_subview %[[LOCAL_ALLOC_1]][%{{.*}}, %{{.*}}, %{{.*}}]
@@ -1730,4 +1730,41 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
     } {tt.num_stages = 3 : i32, __test_keep_predicate_stage}
     tt.return
   }
+}
+
+// -----
+
+#AL = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [4, 8], warpsPerCTA = [4, 1], order = [1, 0]}>
+#C = #ttg.nvidia_mma<{versionMajor = 2, warpsPerCTA = [4, 1]}>
+#A = #ttg.dot_op<{opIdx = 0, parent = #C, kWidth=2}>
+#B = #ttg.dot_op<{opIdx = 1, parent = #C, kWidth=2}>
+#smem = #ttg.shared_memory
+
+module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 1 : i32} {
+// Verify that statically dead prologue iterations are properly predicated
+// CHECK-LABEL: @peeled_prologue_statically_dead
+// CHECK-DAG: %[[FALSE:.*]] = arith.constant dense<false>
+// CHECK-DAG: %[[TRUE:.*]] = arith.constant dense<true>
+// CHECK: ttg.async_copy_global_to_local {{.*}} mask %[[TRUE]]
+// CHECK: ttg.async_copy_global_to_local {{.*}} mask %[[TRUE]]
+// CHECK: ttg.async_copy_global_to_local {{.*}} mask %[[FALSE]]
+// CHECK: scf.for
+tt.func @peeled_prologue_statically_dead(
+                  %a_ptr : tensor<128x32x!tt.ptr<f16>, #AL> {tt.divisibility = 16 : i32, tt.contiguity = 16 : i32},
+                  %B : tensor<32x128xf16, #B>) -> tensor<128x128xf32, #C> {
+  %lb = arith.constant 0 : i32
+  %ub = arith.constant 2 : i32
+  %step = arith.constant 1 : i32
+
+  %c_init = arith.constant dense<0.00e+00> : tensor<128x128xf32, #C>
+
+  %loop = scf.for %iv = %lb to %ub step %step iter_args(%prev_c = %c_init) -> (tensor<128x128xf32, #C>) : i32 {
+    %a_ = tt.load %a_ptr : tensor<128x32x!tt.ptr<f16>, #AL>
+    %a = ttg.convert_layout %a_ : tensor<128x32xf16, #AL> -> tensor<128x32xf16, #A>
+    %c = tt.dot %a, %B, %prev_c : tensor<128x32xf16, #A> * tensor<32x128xf16, #B> -> tensor<128x128xf32, #C>
+    scf.yield %c : tensor<128x128xf32, #C>
+  } {tt.num_stages = 4 : i32}
+  tt.return %loop: tensor<128x128xf32, #C>
+}
+
 }
