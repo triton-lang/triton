@@ -95,6 +95,10 @@ void init_gluon_ir(py::module &&m) {
              return self.create<ttg::ConvertLayoutOp>(resultTy, value);
            })
       .def("create_local_alloc",
+           [](GluonOpBuilder &self, Type resultTy) -> Value {
+             return self.create<ttg::LocalAllocOp>(resultTy);
+           })
+      .def("create_local_alloc",
            [](GluonOpBuilder &self, Type resultTy, Value value) -> Value {
              return self.create<ttg::LocalAllocOp>(resultTy, value);
            })
@@ -106,6 +110,11 @@ void init_gluon_ir(py::module &&m) {
            [](GluonOpBuilder &self, Type resultTy, Value memDesc) -> Value {
              return self.create<ttg::LocalLoadOp>(resultTy, memDesc);
            })
+      .def("create_local_dealloc",
+           [](GluonOpBuilder &self, Value memDesc) -> Operation * {
+             return self.create<ttg::LocalDeallocOp>(memDesc);
+           })
+
       .def("create_tmem_alloc",
            [](GluonOpBuilder &self, Type resultTy, Value value) -> Value {
              return self.create<ttng::TMEMAllocOp>(resultTy, value);
