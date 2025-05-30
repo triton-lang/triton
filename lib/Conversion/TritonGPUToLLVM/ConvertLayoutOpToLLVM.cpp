@@ -246,6 +246,10 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
     dstLayout = actionRemoveBroadcastedRegs(dstLayout).apply(dstLayout);
 
     auto smem = optimalSwizzling(srcLayout, dstLayout, bitwidth);
+    auto [r, w] = logBankConflicts(srcLayout, dstLayout, smem, bitwidth);
+    // If there are bank conflicts, we fallback to padding for now
+    if (r > 0 || w > 0)
+      return failure();
 
     // Extract reps from smem
     auto kReg = str_attr("register");
