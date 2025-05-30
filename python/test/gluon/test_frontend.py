@@ -122,6 +122,16 @@ module attributes {"ttg.num-warps" = 4 : i32} {
 
 
 @gluon.jit
+def shared_memory_subview_kernel(XBLOCK: ttgl.constexpr, layout: ttgl.constexpr, smem_layout: ttgl.constexpr):
+    XHALF: tl.constexpr = XBLOCK // 2
+    smem = ttgl.allocate_shared_memory(ttgl.int32, [XBLOCK, XBLOCK], smem_layout)
+    view = smem.subview(XHALF, 0, [XBLOCK, XHALF], smem_layout)
+    value = view.load(layout)
+    view = smem.subview(XHALF, 1, [XHALF, XBLOCK], smem_layout)
+    view.store(value.trans())
+
+
+@gluon.jit
 def warp_specialize_default(a, b):
     return b, a
 

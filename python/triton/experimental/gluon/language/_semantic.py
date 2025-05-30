@@ -53,6 +53,46 @@ def shared_dealloc(mem_desc, builder: GluonOpBuilder):
     builder.create_local_dealloc(mem_desc.handle)
 
 
+def _memdesc_subview(mem_desc, offsets, shape, layout, builder: GluonOpBuilder):
+    ret_ty = ttgl.shared_memory_descriptor_type(mem_desc.dtype, shape, layout, mem_desc.type.alloc_shape)
+    return builder.create_memdesc_subview(ret_ty.to_ir(builder), mem_desc.handle, offsets)
+
+
+def memdesc_offset(mem_desc, offset, dim, shape, layout, builder: GluonOpBuilder):
+    assert len(
+        mem_desc.shape) == len(shape), f"source rank ({len(mem_desc.shape)}) and result rank ({len(shape)}) must match"
+
+    offsets = [builder.get_int32(0)] * len(shape)
+    offsets[dim] = builder.get_int32(offset)
+    return _memdesc_subview(mem_desc, offsets, shape, layout, builder)
+
+
+def memdesc_slice(mem_desc, index, shape, layout, builder: GluonOpBuilder):
+    assert len(mem_desc.shape) > len(
+        shape), f"source rank ({len(mem_desc.shape)}) must be greater than result rank ({len(shape)})"
+
+    offsets = [builder.get_int32(0)] * len(mem_desc.shape)
+    offsets[0] = index.handle
+    return _memdesc_subview(mem_desc, offsets, shape, layout, builder)
+
+
+def memdesc_trans(mem_desc, order, builder: GluonOpBuilder):
+    assert len(order) == len(
+        mem_desc.shape), f"source rank ({len(mem_desc.shape)}) and order length ({len(order)}) must match"
+
+    return builder.create_memdesc_trans(mem_desc.handle, order)
+
+
+def memdesc_reshape(mem_desc, shape, layout, builder: GluonOpBuilder):
+    ret_ty = ttgl.shared_memory_descriptor_type(mem_desc.dtype, shape, layout, mem_desc.type.alloc_shape)
+    return builder.create_memdesc_reshape(ret_ty.to_ir(builder), mem_desc.handle)
+
+
+def memdesc_reinterpret(mem_desc, dtype, shape, layout, builder: GluonOpBuilder):
+    ret_ty = ttgl.shared_memory_descriptor_type(dtype, shape, layout, shape)
+    return builder.create_memdesc_reinterpret(ret_ty.to_ir(builder), mem_desc.handle)
+
+
 def warp_specialize(args, default_partition, worker_partitions, worker_num_warps: Sequence[int],
                     worker_num_regs: Sequence[int], builder: GluonOpBuilder, generator):
     num_partitions = len(worker_partitions)

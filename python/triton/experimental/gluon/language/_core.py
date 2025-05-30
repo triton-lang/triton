@@ -201,6 +201,25 @@ class shared_memory_descriptor(base_value):
         return semantic.shared_store(self, value, _builder)
 
     @builtin
+    def subview(self, offset, dim, shape, layout, _builder: GluonOpBuilder) -> shared_memory_descriptor:
+        offset = _unwrap_if_constexpr(offset)
+        dim = _unwrap_if_constexpr(dim)
+        shape = [_unwrap_if_constexpr(s) for s in shape]
+        layout = _unwrap_if_constexpr(layout)
+
+        handle = semantic.memdesc_offset(self, offset, dim, shape, layout, _builder)
+        return shared_memory_descriptor(handle, self.dtype, shape, layout, self.alloc_shape)
+
+    @builtin
+    def subslice(self, index, shape, layout, _builder: GluonOpBuilder) -> shared_memory_descriptor:
+        index = _unwrap_if_constexpr(index)
+        shape = [_unwrap_if_constexpr(s) for s in shape]
+        layout = _unwrap_if_constexpr(layout)
+
+        handle = semantic.memdesc_subslice(self, index, shape, layout, _builder)
+        return shared_memory_descriptor(handle, self.dtype, shape, layout, self.alloc_shape)
+
+    @builtin
     def _keep_alive(self, _builder=None) -> None:
         return semantic.shared_dealloc(self, _builder)
 
