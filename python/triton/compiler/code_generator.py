@@ -1,4 +1,5 @@
 import ast
+import copy
 import inspect
 import re
 import warnings
@@ -565,16 +566,14 @@ class CodeGenerator(ast.NodeVisitor):
         return self.visit_Assign(node)
 
     def assignTarget(self, target, value):
+        assert isinstance(target.ctx, ast.Store)
         if isinstance(target, ast.Subscript):
-            assert target.ctx.__class__.__name__ == "Store"
             return self.visit_Subscript_Store(target, value)
         if isinstance(target, ast.Tuple):
-            assert target.ctx.__class__.__name__ == "Store"
             for i, name in enumerate(target.elts):
                 self.set_value(self.visit(name), value.values[i])
             return
         if isinstance(target, ast.Attribute):
-            assert target.ctx.__class__.__name__ == "Store"
             base = self.visit(target.value)
             setattr(base, target.attr, value)
             return
@@ -600,12 +599,12 @@ class CodeGenerator(ast.NodeVisitor):
         self.assignTarget(targets[0], values)
 
     def visit_AugAssign(self, node):
-        name = node.target.id
-        lhs = ast.Name(id=name, ctx=ast.Load())
+        lhs = copy.deepcopy(node.target)
+        lhs.ctx = ast.Load()
         rhs = ast.BinOp(lhs, node.op, node.value)
         assign = ast.Assign(targets=[node.target], value=rhs)
         self.visit(assign)
-        return self.dereference_name(name)
+        return self.visit(lhs)
 
     def visit_Name(self, node):
         if type(node.ctx) is ast.Store:
@@ -995,7 +994,7 @@ class CodeGenerator(ast.NodeVisitor):
             ast.NodeVisitor.generic_visit(self, stmt)
 
     def visit_Subscript_Load(self, node):
-        assert node.ctx.__class__.__name__ == "Load"
+        assert isinstance(node.ctx, ast.Load)
         lhs = self.visit(node.value)
         slices = self.visit(node.slice)
         if _is_triton_tensor(lhs):
@@ -1003,7 +1002,7 @@ class CodeGenerator(ast.NodeVisitor):
         return lhs[slices]
 
     def visit_Subscript_Store(self, node, value):
-        assert node.ctx.__class__.__name__ == "Store"
+        assert isinstance(node.ctx, ast.Store)
         lhs = self.visit(node.value)
         slices = self.visit(node.slice)
         assert isinstance(lhs, language.tuple)
