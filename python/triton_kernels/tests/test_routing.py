@@ -44,7 +44,8 @@ def ref_expt_data(routing_data, n_gates, block_m):
 @pytest.mark.parametrize("n_expts_tot, n_expts_act", [(128, 4), (1500, 8)])
 @pytest.mark.parametrize("block_m", [64, 128])
 @pytest.mark.parametrize("use_expt_indx", [False, True])
-def test_op(n_tokens, n_expts_tot, n_expts_act, block_m, use_expt_indx, device):
+@pytest.mark.parametrize("renormalize", [True, False])
+def test_op(n_tokens, n_expts_tot, n_expts_act, renormalize, block_m, use_expt_indx, device):
     torch.manual_seed(2)
     tri_logits = init_data(n_tokens, n_expts_tot, device=device).detach()
     ref_logits = tri_logits.clone()
@@ -55,8 +56,11 @@ def test_op(n_tokens, n_expts_tot, n_expts_act, block_m, use_expt_indx, device):
         ref_expt_indx = tri_expt_indx[:n_tokens]
     else:
         tri_expt_indx = ref_expt_indx = None
-    ref_routing_data, ref_gather, ref_scatter = routing_torch(ref_logits, n_expts_act, ref_expt_indx)
-    tri_routing_data, tri_gather, tri_scatter = routing(tri_logits, n_expts_act, tri_expt_indx)
+    if not renormalize:
+        tri_logits = torch.softmax(tri_logits, dim=-1)
+        ref_logits = torch.softmax(ref_logits, dim=-1)
+    ref_routing_data, ref_gather, ref_scatter = routing_torch(ref_logits, n_expts_act, renormalize, ref_expt_indx)
+    tri_routing_data, tri_gather, tri_scatter = routing(tri_logits, n_expts_act, renormalize, tri_expt_indx)
     ref_metadata = ref_expt_data(ref_routing_data, n_tokens * n_expts_act, block_m)
     tri_metadata = compute_metadata(tri_routing_data, n_tokens * n_expts_act, block_m)
 
