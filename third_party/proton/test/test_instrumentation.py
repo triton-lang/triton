@@ -277,7 +277,7 @@ def test_autotune(tmp_path: pathlib.Path):
     n_elements = output.numel()
     grid = (1, 1, 1)
     temp_file = tmp_path / "test_autotune.hatchet"
-    proton.start(str(temp_file.with_suffix("")), backend="instrumentation")
+    proton.start(str(temp_file.with_suffix("")), backend="instrumentation", hook="launch")
     add_kernel[grid](x, y, output, n_elements)
     proton.finalize()
 
