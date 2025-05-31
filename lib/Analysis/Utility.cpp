@@ -786,6 +786,16 @@ bool cvtNeedsWarpShuffle(RankedTensorType srcTy, RankedTensorType dstTy) {
          SmallVector<StringAttr, 2>{kRegister, kLane};
 }
 
+size_t potentilaSharedMemoryUsage(RankedTensorType Ty) {
+  size_t bytes_per_element =
+      (Ty.getElementType().getIntOrFloatBitWidth() + 7) / 8;
+  size_t type_size = bytes_per_element;
+  for (int dim_size : Ty.getShape()) {
+    type_size *= dim_size;
+  }
+  return type_size;
+}
+
 bool cvtNeedsSharedMemory(RankedTensorType srcTy, RankedTensorType dstTy) {
   // TODO(jlebar): Remove these special cases `isMfmaToDotShortcut` once
   // they're fully subsumed by the linear-layout checks.
