@@ -382,7 +382,11 @@ void init_triton_ir(py::module &&m) {
       .def("get_parent_region", &Region::getParentRegion, ret::reference)
       .def("size", [](Region &self) { return self.getBlocks().size(); })
       .def("empty", &Region::empty)
-      .def("id", [](Region &self) { return (uint64_t)&self; });
+      .def("id", [](Region &self) { return (uint64_t)&self; })
+      .def("push_back",
+           [](Region &self, Block *block) { self.push_back(block); })
+      .def("push_front",
+           [](Region &self, Block *block) { self.push_front(block); });
 
   py::class_<Block>(m, "block", py::module_local())
       .def("arg",
@@ -492,13 +496,23 @@ void init_triton_ir(py::module &&m) {
              self->print(os, printingFlags);
              return str;
            })
+      .def("str_nodebug",
+           [](OpState &self) -> std::string {
+             std::string str;
+             llvm::raw_string_ostream os(str);
+             self->print(os);
+             return str;
+           })
       .def("append_operand",
            [](OpState &self, Value &val) {
              self->insertOperands(self->getNumOperands(), val);
            })
-      .def("verify", [](OpState &self) -> bool {
-        return succeeded(verify(self.getOperation()));
-      });
+      .def("verify",
+           [](OpState &self) -> bool {
+             return succeeded(verify(self.getOperation()));
+           })
+      .def("get_operation", [](OpState &self) { return self.getOperation(); });
+
   // scf Ops
   py::class_<scf::ForOp, OpState>(m, "ForOp", py::module_local())
       .def("get_induction_var", &scf::ForOp::getInductionVar);

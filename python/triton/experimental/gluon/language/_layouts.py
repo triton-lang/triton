@@ -2,7 +2,12 @@ from dataclasses import dataclass
 from typing import List, Optional
 from triton.language.core import _unwrap_if_constexpr
 
-__all__ = ["BlockedLayout", "SliceLayout", "NVMMASharedLayout"]
+__all__ = [
+    "BlockedLayout",
+    "SliceLayout",
+    "NVMMASharedLayout",
+    "SwizzledSharedLayout",
+]
 
 
 def _realize_cta_layout(rank, ctas_per_cga, cta_split_num, cta_order):
@@ -116,6 +121,40 @@ class NVMMASharedLayout(SharedLayout):
             self.element_bitwidth,
             self.transposed,
             self.fp4_padded,
+            ctas_per_cga,
+            cta_split_num,
+            cta_order,
+        )
+
+    def mangle(self) -> str:
+        return f"NVMMA_{self.swizzle_byte_width}_{self.element_bitwidth}_{self.transposed}_{self.fp4_padded}_NVMMA"
+
+
+@dataclass(frozen=True, eq=True)
+class SwizzledSharedLayout(SharedLayout):
+    vec: int
+    per_phase: int
+    max_phase: int
+    order: List[int]
+    ctas_per_cga: Optional[List[int]] = None
+    cta_split_num: Optional[List[int]] = None
+    cta_order: Optional[List[int]] = None
+
+    def __post_init__(self):
+        rank = len(self.order)
+        assert self.ctas_per_cga is None or len(self.ctas_per_cga) == rank
+        assert self.cta_split_num is None or len(self.cta_split_num) == rank
+        assert self.cta_order is None or len(self.cta_order) == rank
+
+    def _to_ir(self, builder):
+        rank = len(self.order)
+        ctas_per_cga, cta_split_num, cta_order = _realize_cta_layout(rank, self.ctas_per_cga, self.cta_split_num,
+                                                                     self.cta_order)
+        return builder.get_swizzled_shared_layout(
+            _unwrap_if_constexpr(self.vec),
+            _unwrap_if_constexpr(self.per_phase),
+            _unwrap_if_constexpr(self.max_phase),
+            self.order,
             ctas_per_cga,
             cta_split_num,
             cta_order,

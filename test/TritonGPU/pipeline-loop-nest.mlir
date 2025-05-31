@@ -59,7 +59,8 @@ tt.func public @matmul_kernel_tma_persistent(%arg0: !tt.ptr<i8, 0>, %arg1: !tt.p
       %41 = tt.dot %37, %40, %arg9, inputPrecision = tf32 : tensor<128x64xf16> * tensor<64x128xf16> -> tensor<128x128xf32>
       scf.yield %41 : tensor<128x128xf32>
     }
-    // BLACKWELL-COUNT-1: ttng.tmem_load
+    // Blackwell: expect one tmem_load in the loop, and one in the peeled epilogue
+    // BLACKWELL-COUNT-2: ttng.tmem_load
     // BLACKWELL-NOT: ttng.tmem_load
 
     // HOPPER: ttng.warp_group_dot_wait {{.*}} {pendings = 0 : i32}

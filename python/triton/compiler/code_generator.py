@@ -48,7 +48,7 @@ def _is_triton_tensor(o: Any) -> bool:
 
 
 def _is_constexpr(o: Any) -> bool:
-    return o is None or isinstance(o, (constexpr, language.core.dtype))
+    return o is None or isinstance(o, (constexpr, language.core.dtype, JITFunction))
 
 
 def _is_non_scalar_tensor(o: Any) -> bool:
@@ -135,10 +135,9 @@ class ContainsReturnChecker(ast.NodeVisitor):
         return any(self.visit(s) for s in body)
 
     def _visit_function(self, fn) -> bool:
-        # Currently we only support JITFunctions defined in the global scope
-        if isinstance(fn, JITFunction) and not fn.noinline:
-            fn_node = fn.parse()
-            return ContainsReturnChecker(self.gscope).visit(fn_node)
+        # no need to check within the function as it won't cause an early return.
+        # If the function itself has unstructured control flow we may not be able to inline it causing poor performance.
+        # We should check for this and fail or emit a warning.
         return False
 
     def generic_visit(self, node) -> bool:
@@ -372,6 +371,7 @@ class CodeGenerator(ast.NodeVisitor):
                     type(val) is ModuleType,  #
                     isinstance(val, JITFunction),  #
                     getattr(val, "__triton_builtin__", False),  #
+                    getattr(val, "__triton_aggregate__", False),  #
                     getattr(val, "__module__", "").startswith("triton.language"),  #
                     isinstance(val, language.dtype),  #
                     _is_namedtuple(val),
@@ -1348,6 +1348,9 @@ class CodeGenerator(ast.NodeVisitor):
         lhs = self.visit(node.value)
         if _is_triton_tensor(lhs) and node.attr == "T":
             return semantic.permute(lhs, (1, 0), builder=self.builder)
+        # NOTE: special case ".value" for BC
+        if isinstance(lhs, constexpr) and node.attr != "value":
+            lhs = lhs.value
         attr = getattr(lhs, node.attr)
         if _is_triton_value(lhs) and isinstance(attr, JITFunction):
             return BoundJITMethod(lhs, attr)

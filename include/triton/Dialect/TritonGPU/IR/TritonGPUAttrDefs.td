@@ -437,7 +437,11 @@ def NVMMASharedEncodingAttr :
         } else {
           swizzlingByteWidth = 0;
         }
-        if (shapePerCTA.size() < 2 || shapePerCTA[order[1]] < 8) {
+        int flattenOutterDim = 1;
+        for (int i = 1; i < shapePerCTA.size(); i++) {
+          flattenOutterDim *= shapePerCTA[order[i]];
+        }
+        if (shapePerCTA.size() < 2 || flattenOutterDim < 8) {
           swizzlingByteWidth = 0;
         }
         bool transposed = order[0] == 0;

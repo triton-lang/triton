@@ -769,3 +769,21 @@ tt.func @set_warp_shuffle_layout_large_source(%arg0: tensor<256x256xf32, #blocke
 }
 
 }
+
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+
+// CHECK: [[LAYOUT:#.*]] = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
+
+// CHECK: skip_optimize_on_1d_tensor
+tt.func @skip_optimize_on_1d_tensor(%arg0: tensor<256xf32, #blocked>, %arg1: tensor<8xi32, #blocked>) -> tensor<8xf32, #blocked> {
+  // CHECK: tt.gather {{.*}} [[LAYOUT]]>
+  %0 = tt.gather %arg0[%arg1] {axis = 0 : i32} : (tensor<256xf32, #blocked>, tensor<8xi32, #blocked>) -> tensor<8xf32, #blocked>
+  tt.return %0 : tensor<8xf32, #blocked>
+}
+
+}
