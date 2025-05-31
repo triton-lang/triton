@@ -46,4 +46,6 @@ void Canonicalize::runOnOperation() {
   ExpandDimsOp::getCanonicalizationPatterns(patterns, ctx);
   ttg::WarpSpecializeOp::getCanonicalizationPatterns(patterns, ctx);
   ttng::TensorDescToTMAPtrOp::getCanonicalizationPatterns(patterns, ctx);
+
+  (void)applyPatternsGreedily(getOperation(), std::move(patterns));
 }
