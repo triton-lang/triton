@@ -98,7 +98,10 @@ class FileCacheManager(CacheManager):
             raise RuntimeError("Could not create or locate cache dir")
         binary = isinstance(data, bytes)
         if not binary:
-            data = str(data)
+            if hasattr(data, "str_nodebug"):
+                data = data.str_nodebug()
+            else:
+                data = str(data)
         assert self.lock_path is not None
         filepath = self._make_path(filename)
         # Random ID to avoid any collisions
