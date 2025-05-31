@@ -40,12 +40,12 @@ def ref_expt_data(routing_data, n_gates, block_m):
     return expt_data
 
 
-n_tokens = [(x, None) for x in [371, 255, 256, 8192, 1023, 1024]]
+n_tokens = [(x, None) for x in [371, 255, 256, 4096, 1023, 1024]]
 n_tokens += [(1152, 911)]
 
 
 @pytest.mark.parametrize("n_tokens_pad, n_tokens_raw", n_tokens)
-@pytest.mark.parametrize("n_expts_tot, n_expts_act", [(4, 2), (1500, 8)])
+@pytest.mark.parametrize("n_expts_tot, n_expts_act", [(128, 32), (1500, 8)])
 @pytest.mark.parametrize("block_m", [64, 128])
 @pytest.mark.parametrize("use_expt_indx", [False, True])
 def test_op(n_tokens_pad, n_tokens_raw, n_expts_tot, n_expts_act, block_m, use_expt_indx, device):
@@ -69,9 +69,9 @@ def test_op(n_tokens_pad, n_tokens_raw, n_expts_tot, n_expts_act, block_m, use_e
         ref_expt_indx = tri_expt_indx[:n_tokens_raw]
     else:
         tri_expt_indx = ref_expt_indx = None
-    ref_routing_data, ref_gather, ref_scatter = routing_torch(ref_logits, n_expts_act, ref_expt_indx)
-    # tri_logits = Tensor(tri_logits, [n_routing_rows, None])
-    tri_routing_data, tri_gather, tri_scatter = routing(tri_logits, n_expts_act, tri_expt_indx)
+    ref_routing_data, ref_gather, ref_scatter = routing_torch(ref_logits, n_expts_act, ref_expt_indx,
+                                                              n_rows=n_routing_rows)
+    tri_routing_data, tri_gather, tri_scatter = routing(tri_logits, n_expts_act, tri_expt_indx, n_rows=n_routing_rows)
     ref_metadata = ref_expt_data(ref_routing_data, n_gates_raw, block_m)
     tri_metadata = compute_metadata(tri_routing_data, n_gates_raw, block_m)
 
@@ -98,10 +98,8 @@ def test_op(n_tokens_pad, n_tokens_raw, n_expts_tot, n_expts_act, block_m, use_e
     scales_grad = torch.randn_like(tri_routing_data.gate_scal)
     ref_routing_data.gate_scal.backward(scales_grad[:n_gates_raw])
     tri_routing_data.gate_scal.backward(scales_grad)
-    print(ref_logits.grad)
-    print(tri_logits.grad)
 
-    # assert_close(ref_logits.grad, tri_logits.grad[:n_tokens])
+    assert_close(ref_logits.grad, tri_logits.grad[:n_tokens_raw])
 
 
 def bench_routing():

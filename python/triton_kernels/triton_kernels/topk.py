@@ -1,13 +1,14 @@
 import torch
+import triton
 from triton_kernels.topk_details._topk_forward import _topk_forward
 from triton_kernels.topk_details._topk_backward import _topk_backward
 from triton_kernels.datastruct import Bitmatrix
 from triton_kernels.datastruct import Tensor
 
 
-def topk_forward(x, k, dim=1, return_bitmatrix=True, y_indx=None):
+def topk_forward(x, k, dim=1, return_bitmatrix=True, y_indx=None, n_rows=None):
     if not isinstance(x, Tensor):
-        x = Tensor(x, [None] * x.ndim)
+        x = Tensor(x, [n_rows, None])
     cdiv = lambda a, b: (a + b - 1) // b
     BLOCK_M = 32
     BLOCK_N = 32
@@ -48,40 +49,33 @@ def topk_forward(x, k, dim=1, return_bitmatrix=True, y_indx=None):
     return y_vals, y_indx, Bitmatrix(bitmatrix, [n_rows_raw, n_cols], scratchpad)
 
 
-def topk_backward(x, y_indx, dy_vals, k):
+def topk_backward(x, y_indx, dy_vals, k, n_rows):
     assert dy_vals.shape[-1] == k
+    n_expts_pad = triton.next_power_of_2(x.shape[-1])
     dx = torch.empty_like(x)
-    _topk_backward[(dy_vals.shape[0], )](
-        y_indx,
-        y_indx.stride(0),
-        dy_vals,
-        dy_vals.stride(0),
-        x,
-        x.stride(0),
-        dx,
-        dx.stride(0),
-        x.shape[-1],
-        N_EXPTS_ACT=k,
-        N_EXPTS_PAD=x.shape[-1],
-    )
+    _topk_backward[(dy_vals.shape[0], )](y_indx, y_indx.stride(0), dy_vals, dy_vals.stride(0), x, x.stride(0), dx,
+                                         dx.stride(0), x.shape[0], n_rows, x.shape[-1], N_EXPTS_ACT=k,
+                                         N_EXPTS_PAD=n_expts_pad)
     return dx
 
 
 class TopK(torch.autograd.Function):
 
     @staticmethod
-    def forward(ctx, x, k, dim, return_bitmatrix, y_indx):
-        y_vals, y_indx, bitmatrix = topk_forward(x, k, dim, return_bitmatrix, y_indx)
+    def forward(ctx, x, k, dim, return_bitmatrix, y_indx, n_rows):
+        y_vals, y_indx, bitmatrix = topk_forward(x, k, dim, return_bitmatrix, y_indx, n_rows)
         ctx.save_for_backward(x, y_indx)
         ctx.k = k
+        ctx.n_rows = n_rows
         return y_vals, y_indx, bitmatrix
 
     @staticmethod
     def backward(ctx, dy_vals, _0, _1):
         x, y_indx = ctx.saved_tensors
-        dx = topk_backward(x, y_indx, dy_vals, ctx.k)
-        return dx, None, None, None, None
+        dx = topk_backward(x, y_indx, dy_vals, ctx.k, ctx.n_rows)
+        return dx, None, None, None, None, None
 
 
-def topk(x, k, dim=1, return_bitmatrix=True, y_indx=None):
-    return TopK.apply(x, k, dim, return_bitmatrix, y_indx)
+def topk(x, k, dim=1, return_bitmatrix=True, y_indx=None, n_rows=None):
+    ret = TopK.apply(x, k, dim, return_bitmatrix, y_indx, n_rows)
+    return ret

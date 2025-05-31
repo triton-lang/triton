@@ -94,14 +94,15 @@ class SortTokens(torch.autograd.Function):
             N_EXPTS_ACT=n_expts_act,  # constants
             num_warps=1 if HIST_BLOCK_M * n_expts_act // 32 < 4 else 4  #
         )
+        ctx.n_tokens_raw = n_tokens_raw
         ctx.n_tokens_pad = n_tokens_pad
         ctx.n_expts_act = n_expts_act
-        ctx.save_for_backward(topk_indx, gate_indx)
+        ctx.save_for_backward(gate_indx)
         return hist, topk_indx, gate_indx, gate_scal
 
     @staticmethod
     def backward(ctx, _0, _1, _2, dgate_scal):
-        topk_indx, gate_indx = ctx.saved_tensors
+        (gate_indx, ) = ctx.saved_tensors
         dgate_scal = dgate_scal[gate_indx]
         dgate_scal = dgate_scal.reshape(ctx.n_tokens_pad, ctx.n_expts_act)
         return dgate_scal, None, None
@@ -148,9 +149,9 @@ def prune_routing(expt_scal, expt_indx, bitmatrix, simulated_ep):
 # --------------------------
 
 
-def routing(logits, n_expts_act, expt_indx=None, simulated_ep=1):
+def routing(logits, n_expts_act, expt_indx=None, simulated_ep=1, n_rows=None):
     from .topk import topk
-    expt_scal, expt_indx, bitmatrix = topk(logits, n_expts_act, y_indx=expt_indx)
+    expt_scal, expt_indx, bitmatrix = topk(logits, n_expts_act, y_indx=expt_indx, n_rows=n_rows)
     # mutate bitmatrix
     if simulated_ep > 1:
         expt_scal, expt_indx, bitmatrix, n_expts_tot = prune_routing(expt_scal, expt_indx, bitmatrix, simulated_ep)
@@ -162,7 +163,9 @@ def routing(logits, n_expts_act, expt_indx=None, simulated_ep=1):
     return RoutingData(gate_scal, hist, n_expts_tot, n_expts_act), gather_indx, scatter_indx
 
 
-def routing_torch(logits, n_expts_act, expt_indx=None):
+def routing_torch(logits, n_expts_act, expt_indx=None, n_rows=None):
+    if n_rows is not None:
+        logits = logits[:n_rows, :]
 
     def topk(vals, k, expt_indx):
         # topk of experts
