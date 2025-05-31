@@ -53,12 +53,13 @@ int getAllocSharedMemSize(int maxSharedMemSize, int sharedMemUsed,
   const int bytesPerEntry = gpu::getBytesPerClockEntry();
   const int wordsPerEntry = bytesPerEntry / 4; // 1 word = 4 bytes
   const int circularHeaderSize = gpu::getCircularHeaderSize(); // byte size
+  auto sharedMemUsed = llvm::alignTo(sharedMemUsed, bytesPerEntry);
+  if (sharedMemUsed >= maxSharedMemRatio) {
+    return -1;
+  }
 
   int segmentByteSizeShared =
-      llvm::NextPowerOf2(
-          (maxSharedMemSize - llvm::alignTo(sharedMemUsed, bytesPerEntry)) /
-          segmentNum) /
-      2;
+      llvm::NextPowerOf2((maxSharedMemSize - sharedMemUsed) / segmentNum) / 2;
   int numSharedEntries = segmentByteSizeShared * segmentNum / bytesPerEntry;
   int allocSharedMemSize = numSharedEntries * bytesPerEntry;
 
@@ -154,6 +155,12 @@ public:
 
     int allocSharedMemSize =
         getAllocSharedMemSize(maxSharedMemSize, sharedMemUsed, segmentNum);
+    if (allocSharedMemSize < 0) {
+      mlir::emitWarning(
+          loc, "Shared memory used is too large, "
+               "cannot allocate shared memory for profiling");
+      return failure();
+    }
 
     const int bytesPerEntry = gpu::getBytesPerClockEntry();
 
@@ -176,12 +183,7 @@ public:
     } else if (bufferType == gpu::BufferType::GLOBAL) {
       allocBufferSize = bufferSize;
     } else {
-      allocBufferSize = 0;
-    }
-
-    if (allocBufferSize <= 0) {
-      mlir::emitError(loc, "profiling buffer size should be greater than 0");
-      return failure();
+      llvm_unreachable("buffer type not supported");
     }
 
     // Circular strategy memory layout (total: allocProfileScratchSize bytes)
