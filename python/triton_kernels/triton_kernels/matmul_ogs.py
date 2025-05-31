@@ -599,7 +599,7 @@ def matmul_ogs(x, w, bias,
     x, w, swap_xw, writeback_idxs, writeback_size, finalize_scatter_idxs, expt_data  = apply_preprocessing_features(
         x, w, gather_indx, scatter_indx, routing_data, opt_flags, preprocessing_features
     )
-    if expt_data.buffer is not None:
+    if expt_data.hist is not None:
         assert expt_data.hist.shape[0] == n_expts_tot, "invalid expt_data"
         assert expt_data.offs.shape[0] == n_expts_tot + 1, "invalid expt_data"
         assert expt_data.blocks.shape[0] == grid_m, "invalid expt_data"
@@ -628,7 +628,7 @@ def matmul_ogs(x, w, bias,
                    None if scatter_indx is None else scatter_indx.src_indx,
                    num_indx,
                    writeback_idxs, writeback_size,
-                   expt_data.hist, expt_data.offs, expt_data.offs_sum, expt_data.blocks,
+                   expt_data.hist, expt_data.offs, expt_data.tile_offs[-1], expt_data.blocks,
                    batch_size, grid_m, grid_n,
                    out_alpha,
                    *fused_activation.fn_args, fused_activation.reduction_n,

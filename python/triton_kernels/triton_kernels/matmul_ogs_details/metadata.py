@@ -8,9 +8,8 @@ import triton.language as tl
 class ExptData:
     hist: torch.Tensor
     offs: torch.Tensor
-    offs_sum: torch.Tensor
+    tile_offs: torch.Tensor
     blocks: torch.Tensor
-    buffer: torch.Tensor
 
 
 @triton.jit
@@ -97,19 +96,17 @@ def compute_metadata(routing_data, n_rows, block_m):
 
     metadata = torch.empty(metadata_size, dtype=torch.int32, device=device)
 
-    md_hist = routing_data.expt_hist[:n_expts_tot]
-    md_offs = metadata[:n_expts_tot + 1]
-    md_tile_starts = metadata[pad2:][:n_expts_tot + 1]
-    md_offs_sum = md_tile_starts[-1]
-    md_tile_infos = metadata[2 * pad2:][:grid_m]
+    hist = routing_data.expt_hist[:n_expts_tot]
+    offs = metadata[:n_expts_tot + 1]
+    tile_offs = metadata[pad2:][:n_expts_tot + 1]
+    tile_infos = metadata[2 * pad2:][:grid_m]
     _matmul_metadata_memset[(pids, )](
-        routing_data.expt_hist, n_expts_tot, md_offs, md_tile_starts, md_tile_infos,
-        BLOCK=MEMSET_BLOCK,  # optimization parameters
+        routing_data.expt_hist, n_expts_tot, offs, tile_offs, tile_infos, BLOCK=MEMSET_BLOCK,  # optimization parameters
         TILE_DIM=block_m,  # constants
         extra_block=extra_block, num_warps=1)
     _matmul_metadata_compute[(n_expts_tot, )](
-        routing_data.expt_hist, md_tile_starts, md_tile_infos,  # outputs
+        routing_data.expt_hist, tile_offs, tile_infos,  # outputs
         BLOCK=HIST2_BLOCK_M,  # optimization parameters
         TILE_DIM=block_m,  # constants
         num_warps=4)
-    return ExptData(md_hist, md_offs, md_offs_sum, md_tile_infos, metadata)
+    return ExptData(hist, offs, tile_offs, tile_infos)

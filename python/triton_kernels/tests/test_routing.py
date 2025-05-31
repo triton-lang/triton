@@ -2,7 +2,7 @@ import pytest
 import torch
 from triton_kernels.routing import routing, routing_torch
 from triton_kernels.testing import assert_close
-from triton_kernels.matmul_ogs_details.metadata import compute_metadata
+from triton_kernels.matmul_ogs_details.metadata import ExptData, compute_metadata
 from triton_kernels.testing import assert_equal
 
 
@@ -13,10 +13,13 @@ def init_data(n_tokens, n_expts_tot, dtype=torch.float16, device="cuda"):
 
 def ref_expt_data(routing_data, n_gates, block_m):
     hist = routing_data.expt_hist
+    device = hist.device
     n_expts_tot = routing_data.n_expts_tot
     blks = (hist + block_m - 1) // block_m  # matmul blocks needed
-    tsum = torch.cumsum(hist, dim=0)  # prefix sum of tokens
-    bsum = torch.cumsum(blks, dim=0)  # prefix sum of blocks
+    tsum = torch.cat((torch.zeros(1, dtype=torch.int32, device=device), torch.cumsum(hist,
+                                                                                     dim=0)))  # prefix sum of tokens
+    bsum = torch.cat((torch.zeros(1, dtype=torch.int32, device=device), torch.cumsum(blks,
+                                                                                     dim=0)))  # prefix sum of blocks
     # Get the max number of matmul blocks of size d_tile needed (and is launched with).
     # This assumes the worst distribution of all experts with one token except for one that has the rest.
     if n_gates <= n_expts_tot:
@@ -25,19 +28,13 @@ def ref_expt_data(routing_data, n_gates, block_m):
         # ceil_div(n_gates - n_experts + 1, d_tile) + n_experts - 1
         # ceil_div(x, y): -(-x // y)
         grid_m = n_expts_tot - 1 - ((n_expts_tot - n_gates - 1) // block_m)
-    bloc_data = -torch.ones(grid_m, dtype=torch.int32)
+    bloc_data = -torch.ones(grid_m, dtype=torch.int32, device=device)
     # compute data required to drive ragged batch matmul
     for e in range(n_expts_tot):
-        offset = bsum[e - 1] if e else 0
+        offset = bsum[e]
         for b in range(blks[e]):
             bloc_data[offset + b] = (b << 16) + e
-
-    expt_data = torch.zeros(n_expts_tot * 3 + 2 + grid_m, dtype=torch.int32, device=hist.device)
-    expt_data[:n_expts_tot] = routing_data.expt_hist
-    expt_data[n_expts_tot + 1:n_expts_tot * 2 + 1] = tsum
-    expt_data[n_expts_tot * 2 + 2:n_expts_tot * 3 + 2] = bsum
-    expt_data[n_expts_tot * 3 + 2:] = bloc_data
-    return expt_data
+    return ExptData(hist, tsum, bsum, bloc_data)
 
 
 n_tokens = [(x, None) for x in [371, 255, 256, 4096, 1023, 1024]]
@@ -82,10 +79,10 @@ def test_op(n_tokens_pad, n_tokens_raw, n_expts_tot, n_expts_act, block_m, use_e
     assert_close(ref_routing_data.gate_scal, tri_routing_data.gate_scal[:n_gates_raw], 2e-2, 4e-3)
     assert_equal(ref_routing_data.expt_hist, tri_routing_data.expt_hist)
 
-    assert_equal(ref_metadata[:n_expts_tot], tri_metadata.hist)
-    assert_equal(ref_metadata[n_expts_tot:2 * n_expts_tot + 1], tri_metadata.offs)
-    assert_equal(ref_metadata[3 * n_expts_tot + 1], tri_metadata.offs_sum)
-    assert_equal(ref_metadata[3 * n_expts_tot + 2:], tri_metadata.blocks)
+    assert_equal(ref_metadata.hist, tri_metadata.hist)
+    assert_equal(ref_metadata.offs, tri_metadata.offs)
+    assert_equal(ref_metadata.tile_offs, tri_metadata.tile_offs)
+    assert_equal(ref_metadata.blocks, tri_metadata.blocks)
 
     assert ref_routing_data.n_expts_tot == ref_routing_data.n_expts_tot
     assert ref_routing_data.n_expts_act == ref_routing_data.n_expts_act
