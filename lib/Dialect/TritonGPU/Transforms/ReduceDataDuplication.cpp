@@ -44,6 +44,15 @@ public:
         return;
       if (!cvtNeedsSharedMemory(srcType, dstType))
         return;
+      // TODO(Wenqin): we shouldn't hard code here, we should use a limitation
+      // for the current client GPU, there is a python API:
+      // def max_shared_mem(device), an AMD API: int getSharedMemorySize()
+      // TODO(Wenqin): we should maintain a cumulative shared memory usage,
+      // but not just for one OP. Is all shared memory were introduced in
+      // this pass? How to maintain the cumulative SMEM usage?
+      if (potentilaSharedMemoryUsage(dstType) > 96 * 1024) {
+        return;
+      }
       auto order = getOrderForMemory(srcType);
       auto sharedMemorySpace =
           triton::gpu::SharedMemorySpaceAttr::get(srcType.getContext());

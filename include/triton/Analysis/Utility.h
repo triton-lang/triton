@@ -239,6 +239,9 @@ bool cvtNeedsWarpShuffle(RankedTensorType srcTy, RankedTensorType dstTy);
 // warps, and possibly blocks.
 bool cvtNeedsSharedMemory(RankedTensorType srcTy, RankedTensorType dstTy);
 
+// Get the potential shared memory usage for a type.
+size_t potentilaSharedMemoryUsage(RankedTensorType Ty);
+
 bool atomicNeedsSharedMemory(Value result);
 
 // Return true if the src and dst layout match.
