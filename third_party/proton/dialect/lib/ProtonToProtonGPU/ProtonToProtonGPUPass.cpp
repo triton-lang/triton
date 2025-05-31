@@ -188,7 +188,6 @@ public:
       return failure();
     }
 
-
     // Circular strategy memory layout (total: allocProfileScratchSize bytes)
     //  +-----------------------------------------------+
     //  | header (circularHeaderSize bytes)             |
