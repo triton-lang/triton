@@ -109,3 +109,20 @@ def test_list_of_functions():
     # CHECK-NEXT: call @anchor
     # CHECK-NEXT: call @forward
     list_of_functions_constexpr(tl.arange(0, 4), [anchor, forward])
+
+
+@triton.jit
+def accumulate(a, b):
+    return a + b
+
+
+# Check that we can call a function returning a value from a loop.
+@filecheck_test
+@triton.jit
+def test_call_in_loop():
+    # CHECK-LABEL: test_call_in_loop
+    acc = 0
+    # CHECK: scf.for
+    # CHECK:   call @accumulate
+    for i in range(10):
+        acc = accumulate(acc, i)
