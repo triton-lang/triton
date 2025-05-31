@@ -1503,12 +1503,15 @@ class _aggregate_type(base_type):
 
     base_cls: type
     fields: List[Tuple[str, base_type]]
+    constexprs: List[Tuple[str, constexpr]]
 
     def _unflatten_ir(self, handles: List[ir.value], cursor: int) -> Tuple[ir.value, int]:
         instance = self.base_cls._get_instance()
         for name, ty in self.fields:
             value, cursor = ty._unflatten_ir(handles, cursor)
             setattr(instance, name, value)
+        for name, c in self.constexprs:
+            setattr(instance, name, c)
         return instance, cursor
 
     def _flatten_ir_types(self, builder: ir.builder, out: List[ir.type]) -> None:
@@ -1517,8 +1520,9 @@ class _aggregate_type(base_type):
 
     def mangle(self) -> str:
         name = f"{self.base_cls.__module__}.{self.base_cls.__qualname__}"
+        constexprs = [str(c) for (name, c) in self.constexprs]
         fields = [ty.mangle() for (name, ty) in self.fields]
-        return f"{name}<{', '.join(fields)}>"
+        return f"{name}[{', '.join(constexprs)}]<{', '.join(fields)}>"
 
 
 def _aggregate(cls):
@@ -1560,13 +1564,21 @@ def _aggregate(cls):
             super().__setattr__(name, value)
 
         def _flatten_ir(self, handles: List[ir.value]) -> None:
-            for name in cls.__annotations__.keys():
-                getattr(self, name)._flatten_ir(handles)
+            for name, ty in cls.__annotations__.items():
+                if ty != constexpr:
+                    getattr(self, name)._flatten_ir(handles)
 
         @property
         def type(self):
-            return _aggregate_type(aggregate_value,
-                                   [(name, getattr(self, name).type) for name in cls.__annotations__.keys()])
+            fields = []
+            constexprs = []
+            for name, ty in cls.__annotations__.items():
+                field = getattr(self, name)
+                if isinstance(field, constexpr):
+                    constexprs.append((name, field))
+                else:
+                    fields.append((name, getattr(self, name).type))
+            return _aggregate_type(aggregate_value, fields, constexprs)
 
     for (name, member) in inspect.getmembers(cls):
         if inspect.isfunction(member) or inspect.ismethod(member) or isinstance(member, JITFunction):
