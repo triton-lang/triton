@@ -11,6 +11,7 @@ from triton._filecheck import filecheck_test, run_parser
 import triton.language as tl
 from triton._internal_testing import is_cuda
 from triton.tools.tensor_descriptor import TensorDescriptor
+from triton.compiler.errors import CompilationError
 
 
 @gluon.jit
@@ -526,3 +527,15 @@ module attributes {"ttg.num-warps" = 4 : i32} {
   } loc(#loc)
 } loc(#loc)
 """)
+
+
+def test_mlir_attr_error():
+
+    @gluon.jit
+    def kernel():
+        ttgl.arange(0, 1, layout=ttgl.BlockedLayout([1], [32], [4], [1]))
+
+    with pytest.raises(CompilationError) as e:
+        run_parser(kernel)
+
+    assert "order must be a permutation of 0..(rank-1), but was [1]" in str(e.value.__cause__)
