@@ -39,6 +39,12 @@ class TensorMemoryLayout:
             cta_split_num,
         )
 
+    def mangle(self) -> str:
+        block_str = f"{self.block[0]}x{self.block[1]}"
+        unpacked_str = "U" if self.unpacked else "P"
+        cta_split_str = f"CS{self.cta_split_num[0]}x{self.cta_split_num[1]}" if self.cta_split_num else ""
+        return f"TL{block_str}{unpacked_str}{cta_split_str}TL"
+
 
 class tensor_memory_descriptor_type(base_type):
 
@@ -75,7 +81,7 @@ class tensor_memory_descriptor_type(base_type):
         return not (self == other)
 
     def mangle(self) -> str:
-        shape_str = "_".join(self.shape)
+        shape_str = "_".join([str(s) for s in self.shape])
         return f"MD{self.element_ty.mangle()}S{shape_str}SL{self.layout.mangle()}LAS{self.alloc_shape}ASMD"
 
 
