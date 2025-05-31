@@ -159,28 +159,28 @@ class TensorMemoryVariable:
 
 @aggregate
 class Barrier:
-    barrier: gl.shared_memory_descriptor
+    handle: gl.shared_memory_descriptor
 
     @gluon.jit
     def create():
-        barrier = gl.allocate_shared_memory(gl.int64, [1], mbarrier.MBarrierLayout())
-        mbarrier.init(barrier, count=1)
-        return Barrier(barrier)
+        handle = gl.allocate_shared_memory(gl.int64, [1], mbarrier.MBarrierLayout())
+        mbarrier.init(handle, count=1)
+        return Barrier(handle)
 
-    def __init__(self, barrier):
-        self.barrier = barrier
+    def __init__(self, handle):
+        self.handle = handle
 
     @gluon.jit
     def expect(self, size: gl.constexpr):
-        mbarrier.expect(self.barrier, size)
+        mbarrier.expect(self.handle, size)
 
     @gluon.jit
     def wait(self, phase):
-        mbarrier.wait(self.barrier, phase)
+        mbarrier.wait(self.handle, phase)
 
     @gluon.jit
     def dealloc(self):
-        mbarrier.invalidate(self.barrier)
+        mbarrier.invalidate(self.handle)
 
 
 @aggregate
@@ -212,13 +212,34 @@ class MMAOperandLoader:
         self.smem._keep_alive()
 
     @gluon.jit
-    def issue(self):
-        async_load_tensor_desc(self.desc, self.smem, self.barrier)
+    def issue(self, coord):
+        size: gl.constexpr = get_load_size_bytes(self.desc)
+        tma.async_copy_global_to_local(self.desc, coord, self.barrier.handle, self.smem)
+        self.barrier.expect(size)
 
     @gluon.jit
     def wait(self):
         self.barrier.wait(self.phase)
         self.phase ^= 1
+        return self
+
+
+@aggregate
+class MMAv5:
+    barrier: Barrier
+
+    @gluon.jit
+    def create():
+        barrier = Barrier.create()
+        x = MMAv5(barrier)
+        return x
+
+    def __init__(self, barrier):
+        self.barrier = barrier
+
+    @gluon.jit
+    def release(self):
+        self.barrier.dealloc()
 
 
 # ===-----------------------------------------------------------------------===#
@@ -239,7 +260,7 @@ def get_load_size_bytes(desc, _builder=None):
 def async_load_tensor_desc(desc, smem, barrier):
     size: gl.constexpr = get_load_size_bytes(desc)
     coord: gl.constexpr = [0] * len(desc.shape)
-    tma.async_copy_global_to_local(desc, coord, barrier.barrier, smem)
+    tma.async_copy_global_to_local(desc, coord, barrier.handle, smem)
     barrier.expect(size)
 
 
@@ -270,15 +291,16 @@ def _attn_fwd_inner(m_i, l_i,  #
     k_loader = MMAOperandLoader.create(desc_k)
     v_loader = MMAOperandLoader.create(desc_v)
 
-    k_loader.wait()
-    k_loader.wait()
+    mma = MMAv5.create()
 
     offsetkv_y = offset_y + lo
     for start_n in range(lo, hi, BLOCK_N):
-        pass
+        k_loader.issue([offsetkv_y, 0])
+        k_loader = k_loader.wait()
 
     k_loader.release()
     v_loader.release()
+    mma.release()
 
     return m_i, l_i
 
