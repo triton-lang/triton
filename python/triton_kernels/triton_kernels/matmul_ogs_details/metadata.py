@@ -76,7 +76,7 @@ def _matmul_metadata_compute(Hist, MDTileStarts, MDTileInfo, BLOCK: tl.constexpr
 
 def compute_metadata(routing_data, n_rows, block_m):
     if routing_data.expt_hist is None:
-        return ExptData(None, None, None, None, None)
+        return ExptData(None, None, None, None)
     MEMSET_BLOCK = 128
     HIST2_BLOCK_M = 512
     device = routing_data.expt_hist.device

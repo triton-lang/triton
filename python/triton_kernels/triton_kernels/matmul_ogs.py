@@ -610,6 +610,7 @@ def matmul_ogs(x, w, bias,
     bias_stride = None if bias is None else bias.stride(0)
     num_indx = None if scatter_indx is None else scatter_indx.src_indx.shape[0]
     kernels = get_kernels(epilogue.specs, fused_activation.specs)
+    expt_hist_sum = None if expt_data.hist is None else expt_data.tile_offs[-1]
     (kernels._p_matmul_ogs if opt_flags.is_persistent else kernels._matmul_ogs)[(n_cta,)](
                    flex.out_data.reinterpret(memory["output"]),
                    flex.out_data.reinterpret(out0), *out0.stride(),
@@ -628,7 +629,7 @@ def matmul_ogs(x, w, bias,
                    None if scatter_indx is None else scatter_indx.src_indx,
                    num_indx,
                    writeback_idxs, writeback_size,
-                   expt_data.hist, expt_data.offs, expt_data.tile_offs[-1], expt_data.blocks,
+                   expt_data.hist, expt_data.offs, expt_hist_sum, expt_data.blocks,
                    batch_size, grid_m, grid_n,
                    out_alpha,
                    *fused_activation.fn_args, fused_activation.reduction_n,
