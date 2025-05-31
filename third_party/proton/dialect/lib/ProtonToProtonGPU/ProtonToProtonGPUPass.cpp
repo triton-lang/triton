@@ -54,7 +54,7 @@ int getAllocSharedMemSize(int maxSharedMemSize, int sharedMemUsed,
   const int wordsPerEntry = bytesPerEntry / 4; // 1 word = 4 bytes
   const int circularHeaderSize = gpu::getCircularHeaderSize(); // byte size
   sharedMemUsed = llvm::alignTo(sharedMemUsed, bytesPerEntry);
-  if (sharedMemUsed >= maxSharedMemRatio) {
+  if (sharedMemUsed >= maxSharedMemSize) {
     return -1;
   }
 
@@ -162,7 +162,7 @@ public:
       func.walk([&](proton::RecordOp op) {
         op.erase();
       });
-      return failure();
+      return success();
     }
 
     const int bytesPerEntry = gpu::getBytesPerClockEntry();
