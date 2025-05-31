@@ -44,7 +44,6 @@ class CudaAllocator:
 class Instrumentation:
 
     def __init__(self, ir_map: Dict[str, Any]):
-        self.loaded = False
         self.manager = ir_map
 
     def register(self, ir: str, func):
@@ -58,9 +57,6 @@ class Instrumentation:
             self.manager[ir](pm)
 
     def load_dialects(self, ctx):
-        if self.loaded:
-            return
-        self.loaded = True
         triton_proton.load_dialects(ctx)
 
 

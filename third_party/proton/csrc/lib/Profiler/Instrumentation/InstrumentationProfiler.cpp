@@ -15,7 +15,7 @@
 
 namespace proton {
 
-constexpr size_t HOST_BUFFER_SIZE = 64 * 1024 * 1024;
+constexpr size_t HOST_BUFFER_SIZE = 256 * 1024 * 1024;
 
 thread_local std::map<Data *, size_t> InstrumentationProfiler::dataScopeIdMap =
     std::map<Data *, size_t>(); // Initialize the static member variable
@@ -156,7 +156,8 @@ void InstrumentationProfiler::exitInstrumentedOp(uint64_t streamId,
   // device buffer or a single device buffer contains multiple host buffer
   if (size > HOST_BUFFER_SIZE) {
     throw std::runtime_error(
-        "Buffer size exceeds the limit, not supported yet in proton");
+        "Buffer size " + std::to_string(size) + " exceeds the limit " +
+        std::to_string(HOST_BUFFER_SIZE) + ", not supported yet in proton");
   }
 
   auto dataSet = getDataSet();
