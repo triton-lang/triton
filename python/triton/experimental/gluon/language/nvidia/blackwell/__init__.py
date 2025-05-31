@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from triton.experimental.gluon.language import _core as ttgl
 from triton.experimental.gluon.language._core import builtin, base_type, base_value, _unwrap_if_constexpr
 
+from . import tma
 from ..hopper import mbarrier
 
 if TYPE_CHECKING:
@@ -16,6 +17,7 @@ __all__ = [
     "tensor_memory_descriptor",
     "allocate_tensor_memory",
     "mbarrier",
+    "tma",
 ]
 
 
