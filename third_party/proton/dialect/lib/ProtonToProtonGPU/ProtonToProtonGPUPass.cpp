@@ -179,8 +179,15 @@ public:
     } else if (bufferType == gpu::BufferType::GLOBAL) {
       allocBufferSize = bufferSize;
     } else {
-      llvm_unreachable("buffer type not supported");
+      mlir::emitError(loc, "buffer-type not supported");
+      return failure();
     }
+
+    if (allocBufferSize <= 0) {
+      mlir::emitError(loc, "profiling buffer size should be greater than 0");
+      return failure();
+    }
+
 
     // Circular strategy memory layout (total: allocProfileScratchSize bytes)
     //  +-----------------------------------------------+
