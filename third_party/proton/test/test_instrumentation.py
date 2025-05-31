@@ -227,3 +227,63 @@ def test_multi_session(tmp_path: pathlib.Path):
         kernel_frame = data[0]["children"][0]
         assert "add_kernel" == kernel_frame["frame"]["name"]
         assert "time (ns)" in kernel_frame["metrics"]
+
+
+def test_autotune(tmp_path: pathlib.Path):
+
+    def metadata_fn(
+        grid: tuple,
+        metadata: NamedTuple,
+        args: dict,
+    ):
+        BLOCK_SIZE = args["BLOCK_SIZE"]
+        return {
+            "name": f"add_{BLOCK_SIZE}",
+        }
+
+    @triton.autotune(
+        configs=[
+            triton.Config({"BLOCK_SIZE": 256}, num_warps=1),
+            triton.Config({"BLOCK_SIZE": 512}, num_warps=1),
+            triton.Config({"BLOCK_SIZE": 1024}, num_warps=1),
+        ],
+        key=["n_elements"],
+    )
+    @triton.jit(launch_metadata=metadata_fn)
+    def add_kernel(
+        x_ptr,
+        y_ptr,
+        output_ptr,
+        n_elements,
+        BLOCK_SIZE: tl.constexpr,
+    ):
+        pid = tl.program_id(axis=0)
+        block_start = pid * BLOCK_SIZE
+        offsets = block_start + tl.arange(0, BLOCK_SIZE)
+        mask = offsets < n_elements
+        with pl.scope("load_x"):
+            x = tl.load(x_ptr + offsets, mask=mask)
+        with pl.scope("load_y"):
+            y = tl.load(y_ptr + offsets, mask=mask)
+        output = x + y
+        tl.store(output_ptr + offsets, output, mask=mask)
+
+    torch.manual_seed(0)
+    size = 2048
+    x = torch.rand(size, device='cuda')
+    y = torch.rand(size, device='cuda')
+    output = torch.empty_like(x)
+    n_elements = output.numel()
+    grid = (1, 1, 1)
+    temp_file = tmp_path / "test_autotune.hatchet"
+    proton.start(str(temp_file.with_suffix("")), backend="instrumentation", hook="launch")
+    add_kernel[grid](x, y, output, n_elements)
+    proton.finalize()
+
+    # Check all names exist in the output
+    with open(temp_file, "rb") as f:
+        data = json.load(f)
+        names = [frame["frame"]["name"] for frame in data[0]["children"]]
+        assert "add_256" in names
+        assert "add_512" in names
+        assert "add_1024" in names
