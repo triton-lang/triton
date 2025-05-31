@@ -1,4 +1,5 @@
 #include "mlir/Dialect/Arith/IR/Arith.h"
+#include "mlir/Dialect/ControlFlow/IR/ControlFlow.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
@@ -31,6 +32,8 @@ void Canonicalize::runOnOperation() {
   ctx->getLoadedDialect<arith::ArithDialect>()->getCanonicalizationPatterns(
       patterns);
   ctx->getLoadedDialect<scf::SCFDialect>()->getCanonicalizationPatterns(
+      patterns);
+  ctx->getLoadedDialect<cf::ControlFlowDialect>()->getCanonicalizationPatterns(
       patterns);
   populateForOpDeadArgumentElimination(patterns);
 
