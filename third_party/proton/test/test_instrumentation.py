@@ -276,13 +276,13 @@ def test_autotune(tmp_path: pathlib.Path):
     output = torch.empty_like(x)
     n_elements = output.numel()
     grid = (1, 1, 1)
-    tmp_file = str(tmp_path / "test_autotune.hatchet")
-    proton.start(tmp_file, backend="instrumentation")
+    temp_file = tmp_path / "test_autotune.hatchet"
+    proton.start(str(temp_file.with_suffix("")), backend="instrumentation")
     add_kernel[grid](x, y, output, n_elements)
     proton.finalize()
 
     # Check all names exist in the output
-    with open(tmp_file, "rb") as f:
+    with open(temp_file, "rb") as f:
         data = json.load(f)
         names = [frame["frame"]["name"] for frame in data[0]["children"]]
         assert "add_256" in names
