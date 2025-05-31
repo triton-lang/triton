@@ -295,7 +295,8 @@ def test_async_tma(fresh_knobs):
     shared_layout = ttgl.NVMMASharedLayout(swizzle_byte_width=128, element_bitwidth=16, rank=2)
 
     h = async_tma_kernel.warmup(input_desc, XBLOCK, shared_layout, grid=(1, ), num_warps=4)
-    expecttest.assert_expected_inline(h.asm["source"], """\
+    expecttest.assert_expected_inline(
+        h.asm["source"], """\
 #loc = loc(unknown)
 #shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16}>
 #shared1 = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
@@ -355,7 +356,8 @@ def test_async_tma_blackwell(fresh_knobs):
     shared_layout = ttgl.NVMMASharedLayout(swizzle_byte_width=128, element_bitwidth=16, rank=2)
 
     h = async_tma_blackwell_kernel.warmup(input_desc, XBLOCK, shared_layout, grid=(1, ), num_warps=4)
-    expecttest.assert_expected_inline(h.asm["source"], """\
+    expecttest.assert_expected_inline(
+        h.asm["source"], """\
 #blocked = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [32, 1], warpsPerCTA = [1, 4], order = [1, 0]}>
 #loc = loc(unknown)
 #shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16}>
