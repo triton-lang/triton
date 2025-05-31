@@ -53,12 +53,15 @@ int getAllocSharedMemSize(int maxSharedMemSize, int sharedMemUsed,
   const int bytesPerEntry = gpu::getBytesPerClockEntry();
   const int wordsPerEntry = bytesPerEntry / 4; // 1 word = 4 bytes
   const int circularHeaderSize = gpu::getCircularHeaderSize(); // byte size
+  sharedMemUsed = llvm::alignTo(sharedMemUsed, bytesPerEntry);
+  if (sharedMemUsed >= maxSharedMemSize) {
+    // We just assume there's enough shared memory and error out if not during
+    // execution.
+    maxSharedMemSize += sharedMemUsed;
+  }
 
   int segmentByteSizeShared =
-      llvm::NextPowerOf2(
-          (maxSharedMemSize - llvm::alignTo(sharedMemUsed, bytesPerEntry)) /
-          segmentNum) /
-      2;
+      llvm::NextPowerOf2((maxSharedMemSize - sharedMemUsed) / segmentNum) / 2;
   int numSharedEntries = segmentByteSizeShared * segmentNum / bytesPerEntry;
   int allocSharedMemSize = numSharedEntries * bytesPerEntry;
 
@@ -176,7 +179,8 @@ public:
     } else if (bufferType == gpu::BufferType::GLOBAL) {
       allocBufferSize = bufferSize;
     } else {
-      allocBufferSize = 0;
+      mlir::emitError(loc, "buffer-type not supported");
+      return failure();
     }
 
     if (allocBufferSize <= 0) {
