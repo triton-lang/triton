@@ -159,6 +159,9 @@ public:
       mlir::emitWarning(
           loc, "Shared memory used is too large, "
                "cannot allocate shared memory for profiling");
+      func.walk([&](proton::RecordOp op) {
+        op.erase();
+      });
       return failure();
     }
 
