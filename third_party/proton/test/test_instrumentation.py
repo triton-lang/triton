@@ -238,8 +238,7 @@ def test_autotune(tmp_path: pathlib.Path):
     ):
         BLOCK_SIZE = args["BLOCK_SIZE"]
         return {
-            "name":
-            f"add_{BLOCK_SIZE}",
+            "name": f"add_{BLOCK_SIZE}",
         }
 
     @triton.autotune(
