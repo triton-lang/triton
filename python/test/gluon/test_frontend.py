@@ -6,10 +6,11 @@ from triton import knobs
 from triton.experimental import gluon
 from triton.experimental.gluon import language as ttgl
 from triton.experimental.gluon.language.nvidia import blackwell
-from triton.experimental.gluon.language.nvidia.blackwell import mbarrier
+from triton.experimental.gluon.language.nvidia.blackwell import mbarrier, tma
 from triton._filecheck import filecheck_test
 import triton.language as tl
 from triton._internal_testing import is_cuda
+from triton.tools.tensor_descriptor import TensorDescriptor
 
 
 @gluon.jit
@@ -266,3 +267,59 @@ module attributes {"ttg.num-warps" = 4 : i32} {
 } loc(#loc)
 #loc = loc(unknown)
 """)
+
+
+@gluon.jit
+def async_tma_kernel(input_desc, XBLOCK: ttgl.constexpr, smem_layout: ttgl.constexpr):
+    smem = ttgl.allocate_shared_memory(ttgl.float16, [XBLOCK, XBLOCK], smem_layout)
+    bar = ttgl.allocate_shared_memory(ttgl.int64, [1], mbarrier.MBarrierLayout())
+    mbarrier.init(bar, count=1)
+
+    tma.async_copy_global_to_local(input_desc, [0, 0], bar, smem)
+    mbarrier.expect(bar, XBLOCK * XBLOCK * ttgl.float16.primitive_bitwidth // 8)
+    mbarrier.wait(bar, 0)
+
+    mbarrier.invalidate(bar)
+
+    tma.async_copy_local_to_global(input_desc, [0, 0], smem)
+    tma.store_wait(0)
+
+
+@pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="TMA requires at least Hopper")
+def test_async_tma():
+    input = torch.randn((1024, 1024), device="cuda", dtype=torch.float16)
+    XBLOCK = 128
+    input_desc = TensorDescriptor.from_tensor(input, [XBLOCK, XBLOCK])
+    shared_layout = ttgl.NVMMASharedLayout(swizzle_byte_width=128, element_bitwidth=16, rank=2)
+
+    h = async_tma_kernel.warmup(input_desc, XBLOCK, shared_layout, grid=(1, ), num_warps=4)
+    expecttest.assert_expected_inline(h.asm["source"], """""")
+
+
+@gluon.jit
+def async_tma_blackwell_kernel(input_desc, XBLOCK: ttgl.constexpr, smem_layout: ttgl.constexpr):
+    smem = ttgl.allocate_shared_memory(ttgl.float16, [XBLOCK, XBLOCK], smem_layout)
+    bar = ttgl.allocate_shared_memory(ttgl.int64, [1], mbarrier.MBarrierLayout())
+    mbarrier.init(bar, count=1)
+
+    offset_layout: tl.constexpr = ttgl.BlockedLayout([1, 4], [32, 1], [1, 4], [1, 0])
+    x_offsets = ttgl.arange(0, XBLOCK, layout=ttgl.SliceLayout(0, offset_layout))
+    tma.async_gather(input_desc, x_offsets, 0, bar, smem)
+    mbarrier.expect(bar, XBLOCK * XBLOCK * ttgl.float16.primitive_bitwidth // 8)
+    mbarrier.wait(bar, 0)
+
+    mbarrier.invalidate(bar)
+
+    tma.async_scatter(input_desc, x_offsets, 0, smem)
+    tma.store_wait(0)
+
+
+@pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] != 10, reason="Requires Blackwell")
+def test_async_tma_blackwell():
+    input = torch.randn((1024, 1024), device="cuda", dtype=torch.float16)
+    XBLOCK = 128
+    input_desc = TensorDescriptor.from_tensor(input, [1, XBLOCK])
+    shared_layout = ttgl.NVMMASharedLayout(swizzle_byte_width=128, element_bitwidth=16, rank=2)
+
+    h = async_tma_blackwell_kernel.warmup(input_desc, XBLOCK, shared_layout, grid=(1, ), num_warps=4)
+    expecttest.assert_expected_inline(h.asm["source"], """""")

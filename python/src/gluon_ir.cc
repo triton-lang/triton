@@ -188,36 +188,35 @@ void init_gluon_ir(py::module &&m) {
       .def("create_async_tma_copy_global_to_local",
            [](GluonOpBuilder &self, Value descPtr, std::vector<Value> &coord,
               Value barrier, Value result, Value pred) {
-             return self.create<ttng::AsyncTMACopyGlobalToLocalOp>(
+             self.create<ttng::AsyncTMACopyGlobalToLocalOp>(
                  descPtr, coord, barrier, result, pred);
            })
       .def("create_async_tma_copy_local_to_global",
            [](GluonOpBuilder &self, Value descPtr, std::vector<Value> &coord,
               Value src) {
-             return self.create<ttng::AsyncTMACopyLocalToGlobalOp>(descPtr,
-                                                                   coord, src);
+             self.create<ttng::AsyncTMACopyLocalToGlobalOp>(descPtr, coord,
+                                                            src);
            })
       .def("create_async_tma_reduce",
            [](GluonOpBuilder &self, triton::DescriptorReduceKind kind,
               Value descPtr, std::vector<Value> &coord, Value src) {
-             return self.create<ttng::AsyncTMAReduceOp>(kind, descPtr, coord,
-                                                        src);
+             self.create<ttng::AsyncTMAReduceOp>(kind, descPtr, coord, src);
            })
       .def("create_async_tma_store_wait",
            [](GluonOpBuilder &self, int pendings) {
-             return self.create<ttng::TMAStoreWaitOp>(pendings);
+             self.create<ttng::TMAStoreWaitOp>(pendings);
            })
       .def("create_async_tma_gather",
            [](GluonOpBuilder &self, Value descPtr, Value xOffsets,
               Value yOffset, Value barrier, Value result, Value pred) {
-             return self.create<ttng::AsyncTMAGatherOp>(
-                 descPtr, xOffsets, yOffset, barrier, result, pred);
+             self.create<ttng::AsyncTMAGatherOp>(descPtr, xOffsets, yOffset,
+                                                 barrier, result, pred);
            })
       .def("create_async_tma_scatter",
            [](GluonOpBuilder &self, Value descPtr, Value xOffsets,
               Value yOffset, Value src) {
-             return self.create<ttng::AsyncTMAScatterOp>(descPtr, xOffsets,
-                                                         yOffset, src);
+             self.create<ttng::AsyncTMAScatterOp>(descPtr, xOffsets, yOffset,
+                                                  src);
            })
 
       .def("create_warp_return",
