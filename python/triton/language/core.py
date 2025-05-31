@@ -9,7 +9,7 @@ from typing import Union, Callable, List, Sequence, TypeVar, Optional, Tuple
 from dataclasses import dataclass
 import builtins
 from .. import knobs
-from ..runtime.jit import jit, JITFunction
+from ..runtime.jit import jit, JITFunction, get_full_name
 import inspect
 
 from .._C.libtriton import ir
@@ -1519,7 +1519,7 @@ class _aggregate_type(base_type):
             ty._flatten_ir_types(builder, out)
 
     def mangle(self) -> str:
-        name = f"{self.base_cls.__module__}.{self.base_cls.__qualname__}"
+        name = get_full_name(self.base_cls)
         constexprs = [str(c) for (name, c) in self.constexprs]
         fields = [ty.mangle() for (name, ty) in self.fields]
         return f"{name}[{', '.join(constexprs)}]<{', '.join(fields)}>"
