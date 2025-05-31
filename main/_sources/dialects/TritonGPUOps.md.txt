@@ -332,6 +332,48 @@ Traits: `VerifyTensorLayoutsTrait`
 | `dst` | memory descriptor type (`::mlir::triton::gpu::MemDescType`) in Triton IR type system |
 
 
+### `ttg.mask` (triton::gpu::MaskOp)
+
+_Mask op for pipelining_
+
+Traits: `SingleBlock`, `VerifyTensorLayoutsTrait`
+
+#### Operands:
+
+| Operand | Description |
+| :-----: | ----------- |
+| `pred` | 1-bit signless integer |
+
+#### Results:
+
+| Result | Description |
+| :----: | ----------- |
+| `result` | variadic of any type |
+
+
+### `ttg.mask.return` (triton::gpu::MaskReturnOp)
+
+_Terminator for mask operator_
+
+Syntax:
+
+```
+operation ::= `ttg.mask.return` $result attr-dict `:` type($result)
+```
+
+Traits: `AlwaysSpeculatableImplTrait`, `HasParent<MaskOp>`, `ReturnLike`, `Terminator`, `VerifyTensorLayoutsTrait`
+
+Interfaces: `ConditionallySpeculatable`, `NoMemoryEffect (MemoryEffectOpInterface)`, `RegionBranchTerminatorOpInterface`
+
+Effects: `MemoryEffects::Effect{}`
+
+#### Operands:
+
+| Operand | Description |
+| :-----: | ----------- |
+| `result` | variadic of any type |
+
+
 ### `ttg.memdesc_reshape` (triton::gpu::MemDescReshapeOp)
 
 _Creates a descriptor for the new shape_

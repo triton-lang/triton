@@ -86,46 +86,46 @@ Extra Credits:
 
     fused-attention-batch4-head32-d64-fwd-causal=True-warp_specialize=True:
          N_CTX  Triton [FP16]  Triton [FP8]
-    0   1024.0      28.884037     42.733133
-    1   2048.0      32.870721     49.988545
-    2   4096.0      35.481522     53.489462
-    3   8192.0      36.409958     55.051260
-    4  16384.0      36.364746     55.602602
+    0   1024.0      28.825714     43.006732
+    1   2048.0      33.264660     50.075106
+    2   4096.0      35.575962     53.117670
+    3   8192.0      36.397206     55.876906
+    4  16384.0      36.368747     55.972155
     fused-attention-batch4-head32-d64-fwd-causal=True-warp_specialize=False:
          N_CTX  Triton [FP16]  Triton [FP8]
-    0   1024.0      62.357889     66.223646
-    1   2048.0      76.307119     83.094217
-    2   4096.0      85.046303     93.181479
-    3   8192.0      89.166404     97.335266
-    4  16384.0      91.734582     99.799406
+    0   1024.0      62.441498     66.187187
+    1   2048.0      76.357106     83.050386
+    2   4096.0      84.404513     92.602868
+    3   8192.0      89.544711     97.595149
+    4  16384.0      91.974246     99.757684
     fused-attention-batch4-head32-d64-fwd-causal=False-warp_specialize=True:
          N_CTX  Triton [FP16]  Triton [FP8]
-    0   1024.0      33.545247     51.033041
-    1   2048.0      34.694056     54.024201
-    2   4096.0      35.546910     56.351384
-    3   8192.0      35.983907     55.680450
-    4  16384.0      35.718468     54.473897
+    0   1024.0      33.505769     50.802485
+    1   2048.0      34.758512     54.584459
+    2   4096.0      35.687109     55.553120
+    3   8192.0      35.992353     56.094234
+    4  16384.0      35.716835     54.217063
     fused-attention-batch4-head32-d64-fwd-causal=False-warp_specialize=False:
          N_CTX  Triton [FP16]  Triton [FP8]
-    0   1024.0      85.750160     91.789782
-    1   2048.0      93.471720    100.071963
-    2   4096.0      94.641369    102.089357
-    3   8192.0      96.223125    103.336312
-    4  16384.0      96.393735    103.402247
+    0   1024.0      85.701668     92.119914
+    1   2048.0      93.509447     99.992890
+    2   4096.0      95.100300    102.182192
+    3   8192.0      95.463872    103.243165
+    4  16384.0      94.958372    103.921394
     fused-attention-batch4-head32-d64-bwd-causal=True-warp_specialize=True:
          N_CTX  Triton [FP16]  Triton [FP8]
-    0   1024.0      34.761513     34.613307
-    1   2048.0      42.150587     42.115163
-    2   4096.0      46.876826     46.882284
-    3   8192.0      49.661527     49.690026
-    4  16384.0      51.123016     51.086047
+    0   1024.0      34.697405     34.653585
+    1   2048.0      42.066037     42.125737
+    2   4096.0      46.959925     46.963759
+    3   8192.0      49.701984     49.712110
+    4  16384.0      51.178086     51.201757
     fused-attention-batch4-head32-d64-bwd-causal=True-warp_specialize=False:
          N_CTX  Triton [FP16]  Triton [FP8]
-    0   1024.0      34.632186     34.645522
-    1   2048.0      42.150125     42.144141
-    2   4096.0      46.922713     46.909047
-    3   8192.0      49.699225     49.736060
-    4  16384.0      51.223497     51.135191
+    0   1024.0      34.733614     34.623368
+    1   2048.0      42.154730     42.259527
+    2   4096.0      46.880101     46.869187
+    3   8192.0      49.705667     49.692785
+    4  16384.0      51.076324     51.089205
 
 
 
@@ -701,7 +701,7 @@ Extra Credits:
         (4, 48, 4096, 64),
     ])
     @pytest.mark.parametrize("causal", [True])
-    @pytest.mark.parametrize("warp_specialize", [False])
+    @pytest.mark.parametrize("warp_specialize", [False, True])
     def test_op(Z, H, N_CTX, HEAD_DIM, causal, warp_specialize, dtype=torch.float16):
         torch.manual_seed(20)
         q = (torch.empty((Z, H, N_CTX, HEAD_DIM), dtype=dtype, device=DEVICE).normal_(mean=0.0, std=0.5).requires_grad_())
@@ -825,7 +825,7 @@ Extra Credits:
 
 .. rst-class:: sphx-glr-timing
 
-   **Total running time of the script:** (2 minutes 38.356 seconds)
+   **Total running time of the script:** (2 minutes 39.856 seconds)
 
 
 .. _sphx_glr_download_getting-started_tutorials_06-fused-attention.py:
