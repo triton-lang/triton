@@ -156,7 +156,8 @@ void InstrumentationProfiler::exitInstrumentedOp(uint64_t streamId,
   // device buffer or a single device buffer contains multiple host buffer
   if (size > HOST_BUFFER_SIZE) {
     throw std::runtime_error(
-        "Buffer size exceeds the limit, not supported yet in proton");
+        "Buffer size " + std::to_string(size) + " exceeds the limit " +
+        std::to_string(HOST_BUFFER_SIZE) + ", not supported yet in proton");
   }
 
   auto dataSet = getDataSet();
