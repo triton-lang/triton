@@ -53,9 +53,10 @@ def topk_backward(x, y_indx, dy_vals, k, n_rows):
     assert dy_vals.shape[-1] == k
     n_expts_pad = triton.next_power_of_2(x.shape[-1])
     dx = torch.empty_like(x)
-    _topk_backward[(dy_vals.shape[0], )](y_indx, y_indx.stride(0), dy_vals, dy_vals.stride(0), x, x.stride(0), dx,
-                                         dx.stride(0), x.shape[0], n_rows, x.shape[-1], N_EXPTS_ACT=k,
-                                         N_EXPTS_PAD=n_expts_pad)
+    _topk_backward[(dy_vals.shape[0], )](
+        y_indx, y_indx.stride(0), dy_vals, dy_vals.stride(0), x, x.stride(0),  # inputs
+        dx,  # outputs
+        dx.stride(0), x.shape[0], n_rows, x.shape[-1], N_EXPTS_ACT=k, N_EXPTS_PAD=n_expts_pad)
     return dx
 
 
