@@ -53,7 +53,7 @@ int getAllocSharedMemSize(int maxSharedMemSize, int sharedMemUsed,
   const int bytesPerEntry = gpu::getBytesPerClockEntry();
   const int wordsPerEntry = bytesPerEntry / 4; // 1 word = 4 bytes
   const int circularHeaderSize = gpu::getCircularHeaderSize(); // byte size
-  auto sharedMemUsed = llvm::alignTo(sharedMemUsed, bytesPerEntry);
+  sharedMemUsed = llvm::alignTo(sharedMemUsed, bytesPerEntry);
   if (sharedMemUsed >= maxSharedMemRatio) {
     return -1;
   }
