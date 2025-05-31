@@ -55,7 +55,9 @@ int getAllocSharedMemSize(int maxSharedMemSize, int sharedMemUsed,
   const int circularHeaderSize = gpu::getCircularHeaderSize(); // byte size
   sharedMemUsed = llvm::alignTo(sharedMemUsed, bytesPerEntry);
   if (sharedMemUsed >= maxSharedMemSize) {
-    return -1;
+    // We just assume there's enough shared memory and error out if not during
+    // execution.
+    maxSharedMemSize += sharedMemUsed;
   }
 
   int segmentByteSizeShared =
@@ -155,15 +157,6 @@ public:
 
     int allocSharedMemSize =
         getAllocSharedMemSize(maxSharedMemSize, sharedMemUsed, segmentNum);
-    if (allocSharedMemSize <= 0) {
-      mlir::emitWarning(
-          loc, "Shared memory used is too large, "
-               "cannot allocate shared memory for profiling");
-      func.walk([&](proton::RecordOp op) {
-        op.erase();
-      });
-      return success();
-    }
 
     const int bytesPerEntry = gpu::getBytesPerClockEntry();
 
