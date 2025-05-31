@@ -229,7 +229,7 @@ def test_multi_session(tmp_path: pathlib.Path):
         assert "time (ns)" in kernel_frame["metrics"]
 
 
-def test_autotune(tmp_path):
+def test_autotune(tmp_path: pathlib.Path):
 
     def metadata_fn(
         grid: tuple,
@@ -276,9 +276,9 @@ def test_autotune(tmp_path):
     output = torch.empty_like(x)
     n_elements = output.numel()
     grid = (1, 1, 1)
-    tmp_file = tmp_path / "test_autotune.hatchet"
-    proton.start(tmp_file), backend="instrumentation")
-    add_kernel[grid](x, y, output, n_elements, BLOCK_SIZE=1024, num_warps=1)
+    tmp_file = str(tmp_path / "test_autotune.hatchet")
+    proton.start(tmp_file, backend="instrumentation")
+    add_kernel[grid](x, y, output, n_elements)
     proton.finalize()
 
     # Check all names exist in the output
