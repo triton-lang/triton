@@ -28,6 +28,10 @@ def check_identifier_legality(name, type):
     return name
 
 
+def sanitize_kernel_name(name):
+    return name.replace('.', '_').replace('<locals>', 'anonymous')
+
+
 def mangle_fn(name, arg_tys, constants):
     # doesn't mangle ret type, which must be a function of arg tys
     mangled_arg_names = '_'.join([ty.mangle() for ty in arg_tys])
@@ -316,7 +320,7 @@ class CodeGenerator(ast.NodeVisitor):
         self.jit_fn = jit_fn
         # TODO: we currently generate illegal names for non-kernel functions involving constexprs!
         if is_kernel:
-            function_name = function_name.replace(".", "_").replace("<locals>", "anonymous")
+            function_name = sanitize_kernel_name(function_name)
             function_name = check_identifier_legality(function_name, "function")
         self.function_name = function_name
         self.is_kernel = is_kernel

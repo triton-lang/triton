@@ -319,7 +319,7 @@ def _attn_fwd(sm_scale, M, Z, H, N_CTX,  #
     off_h = off_hz % H
 
     offset_y = off_z * (N_CTX * H) + off_h * N_CTX
-    qo_offset_y = offset_y + start_m * BLOCK_M
+    # qo_offset_y = offset_y + start_m * BLOCK_M
 
     layout_1d: gl.constexpr = get_1d_blocked(num_warps, threads_per_warp)
     offs_m = start_m * BLOCK_M + gl.arange(0, BLOCK_M, layout=layout_1d)
