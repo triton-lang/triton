@@ -155,7 +155,7 @@ public:
 
     int allocSharedMemSize =
         getAllocSharedMemSize(maxSharedMemSize, sharedMemUsed, segmentNum);
-    if (allocSharedMemSize < 0) {
+    if (allocSharedMemSize <= 0) {
       mlir::emitWarning(
           loc, "Shared memory used is too large, "
                "cannot allocate shared memory for profiling");
