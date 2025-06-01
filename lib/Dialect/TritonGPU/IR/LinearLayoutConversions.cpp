@@ -1511,32 +1511,81 @@ chooseMfmaLikeStoreLayout(RankedTensorType valType) {
     return {};
   auto mfmaLayout = cast<AMDMfmaEncodingAttr>(valType.getEncoding());
 
-  // We currently only support transposed [B]F16 MFMA32x32 on CDNA4.
+  // We currently only support transposed [B]F16 MFMA32x32 and MFMA16x16 on
+  // CDNA4.
   bool isMfma32 = mfmaLayout.getMDim() == 32 && mfmaLayout.getNDim() == 32;
+  bool isMfma16 = mfmaLayout.getMDim() == 16 && mfmaLayout.getNDim() == 16;
+
+  auto valShape = valType.getShape();
+  // For mfma16x16, to use in-wavefront swap, we need to make sure the tiles
+  // used are in one wavefront if there are multiple tiles, which means
+  // warpsPerCTA = [numWarps, 1] and at least two tiles along the N dim. For
+  // now, it is only possible for FA-like kernels since during mfma generation,
+  // the WarpsPerCTA of the head dot in the chain will be reshaped to [numWaprs,
+  // 1].
+  // TODO: For gemm-like kernel, the transformation here cannot be applied for
+  // now and will support it.
+  bool validForMfma16 = isMfma16 && valShape.back() >= 16 * 2 &&
+                        mfmaLayout.getWarpsPerCTA().back() == 1;
+
   Type elemType = valType.getElementType();
   if (!(valType.getRank() == 2 && (elemType.isF16() || elemType.isBF16()) &&
         mfmaLayout.getVersionMajor() == 4 && mfmaLayout.getIsTransposed() &&
-        isMfma32))
+        (isMfma32 || validForMfma16)))
     return {};
 
-  auto valShape = valType.getShape();
   LinearLayout mfmaLL = mfmaLayout.toLinearLayout(valShape);
   auto mfmaOutDims = llvm::to_vector(mfmaLL.getOutDimNames());
   StringAttr dimM = mfmaOutDims[0];
   StringAttr dimN = mfmaOutDims[1];
-
   auto swapLL = LinearLayout::empty();
   // The rows are kept as is with an identity linear layout.
   swapLL *= LinearLayout::identity1D(valShape[0], dimM, dimM);
-  // In transposed mfma32 layout, each thread holds 4 consecutive values along N
-  // dim. We want to exchange column 4-7 (owned by thread 32-63) and column 8-11
-  // (owned by thread 0-31) every 16 columns to make each thread holds 8
-  // elements. This would mean exchange the 2nd and 3rd basis vector from an
-  // identity linear layout.
+  /*
+  clang-format off
+  In transposed mfma32 layout, Each thread holds 4 consecutive values along N
+  dim. We want to exchange column 4-7 (owned by thread 32-63, BLK0) and column
+  8-11 (owned by thread 0-31, BLK1) every 16 columns to make each thread holds 8
+  elements. This would mean exchange the 2nd and 3rd basis vector from an
+  identity linear layout on tensor elements.
+
+  Correspondingly, the transposed mfma16 layout, the output of
+  transposed of mfma16x16 is:
+
+              N/register and "r"in the table is for row.
+             ---------------------------------------------------------------------------------------------
+  M/Lane     |v0r0|v1r0|v0r1|v1r1|v0r2|v1r2  |v0r3  |v1r3  |v2r0|v3r0|v2r1|v3r1|v2r2|v3r2  |v2r3  |v3r3  |
+             |----|----|----|----|----|------|------|------|----|----|----|----|----|------|------|------|
+          0  |n0:1|n2:3|n4:5|n6:7|n8:9|n10:11|n12:13|n14:15|n0:1|n2:3|n4:5|n6:7|n8:9|n10:11|n12:13|n14:15|
+             |----|----|----|----|----|------|------|------|----|----|----|----|----|------|------|------|
+          1  |n0:1|n2:3|n4:5|n6:7|n8:9|n10:11|n12:13|n14:15|n0:1|n2:3|n4:5|n6:7|n8:9|n10:11|n12:13|n14:15|
+             |----|----|----|----|----|------|------|------|----|----|----|----|----|------|------|------|
+          .. |n0:1|n2:3|n4:5|n6:7|n8:9|n10:11|n12:13|n14:15|n0:1|n2:3|n4:5|n6:7|n8:9|n10:11|n12:13|n14:15|
+             |----|----|----|----|----|------|------|------|----|----|----|----|----|------|------|------|
+          15 |n0:1|n2:3|n4:5|n6:7|n8:9|n10:11|n12:13|n14:15|n0:1|n2:3|n4:5|n6:7|n8:9|n10:11|n12:13|n14:15|
+             ---------------------------------------------------------------------------------------------
+
+  To pack 8 elements with 16-bits type we need to put the elements per row are
+  contiuous, so the expetecd layout is, for fp16 type:
+  1x8 fp16  1x8 fp16  1x8 fp16  1x8 fp16
+  -------------------------------------
+  |t0      | t32     | t16     | t48  |
+  -------------------------------------
+  |t1      | t33     | t17     | t49  |
+  -------------------------------------
+  |..      | ..      | ..      | ..   |
+  -------------------------------------
+  |t15     | t47     | t31     | t63  |
+  -------------------------------------
+  This would mean exchange the 2nd and 4th elements in the basis vector from an
+  identity linear layout on tensor elements, for the NDim.
+  clang-format on
+  */
+  auto destIdxInBases = isMfma32 ? 3 : 4;
   std::vector<std::vector<int32_t>> dimNBases(mfmaLL.getOutDimSizeLog2(dimN));
   std::generate(dimNBases.begin(), dimNBases.end(),
                 [i = 0]() mutable { return std::vector<int32_t>{1 << i++}; });
-  std::swap(dimNBases[2], dimNBases[3]);
+  std::swap(dimNBases[2], dimNBases[destIdxInBases]);
   swapLL *= LinearLayout({{dimN, dimNBases}}, {dimN});
 
   return mfmaLL.compose(swapLL);
