@@ -4,6 +4,7 @@ import re
 import warnings
 import textwrap
 import itertools
+from dataclasses import dataclass
 from types import ModuleType
 from typing import Any, Callable, Dict, Optional, Tuple, Type, Union, Iterable, List
 
@@ -47,7 +48,7 @@ def _is_triton_tensor(o: Any) -> bool:
 
 
 def _is_constexpr(o: Any) -> bool:
-    return o is None or isinstance(o, (constexpr, language.core.dtype))
+    return o is None or isinstance(o, (constexpr, language.core.dtype, JITFunction))
 
 
 def _is_non_scalar_tensor(o: Any) -> bool:
@@ -134,10 +135,9 @@ class ContainsReturnChecker(ast.NodeVisitor):
         return any(self.visit(s) for s in body)
 
     def _visit_function(self, fn) -> bool:
-        # Currently we only support JITFunctions defined in the global scope
-        if isinstance(fn, JITFunction) and not fn.noinline:
-            fn_node = fn.parse()
-            return ContainsReturnChecker(self.gscope).visit(fn_node)
+        # no need to check within the function as it won't cause an early return.
+        # If the function itself has unstructured control flow we may not be able to inline it causing poor performance.
+        # We should check for this and fail or emit a warning.
         return False
 
     def generic_visit(self, node) -> bool:
@@ -271,6 +271,12 @@ class ASTFunction:
         return vals
 
 
+@dataclass(frozen=True)
+class BoundJITMethod:
+    __self__: base_value
+    __func__: JITFunction
+
+
 class CodeGenerator(ast.NodeVisitor):
 
     def __init__(self, context, prototype, gscope, function_name, jit_fn: JITFunction, options, codegen_fns, module_map,
@@ -365,6 +371,7 @@ class CodeGenerator(ast.NodeVisitor):
                     type(val) is ModuleType,  #
                     isinstance(val, JITFunction),  #
                     getattr(val, "__triton_builtin__", False),  #
+                    getattr(val, "__triton_aggregate__", False),  #
                     getattr(val, "__module__", "").startswith("triton.language"),  #
                     isinstance(val, language.dtype),  #
                     _is_namedtuple(val),
@@ -1247,6 +1254,9 @@ class CodeGenerator(ast.NodeVisitor):
         kws = dict(self.visit(keyword) for keyword in node.keywords)
         args = [self.visit(arg) for arg in node.args]
         args = list(itertools.chain.from_iterable(x if isinstance(x, list) else [x] for x in args))
+        if isinstance(fn, BoundJITMethod):
+            args.insert(0, fn.__self__)
+            fn = fn.__func__
         if isinstance(fn, JITFunction):
             _check_fn_args(node, fn, args)
             return self.call_JitFunction(fn, args, kws)
@@ -1338,7 +1348,13 @@ class CodeGenerator(ast.NodeVisitor):
         lhs = self.visit(node.value)
         if _is_triton_tensor(lhs) and node.attr == "T":
             return semantic.permute(lhs, (1, 0), builder=self.builder)
-        return getattr(lhs, node.attr)
+        # NOTE: special case ".value" for BC
+        if isinstance(lhs, constexpr) and node.attr != "value":
+            lhs = lhs.value
+        attr = getattr(lhs, node.attr)
+        if _is_triton_value(lhs) and isinstance(attr, JITFunction):
+            return BoundJITMethod(lhs, attr)
+        return attr
 
     def visit_Expr(self, node):
         node.value._is_unused = True

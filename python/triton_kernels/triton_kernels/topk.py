@@ -6,7 +6,7 @@ from triton_kernels.datastruct import Bitmatrix
 from triton_kernels.datastruct import Tensor
 
 
-def topk_forward(x, k, dim=1, return_bitmatrix=True, y_indx=None, n_rows=None):
+def topk_forward(x, k, apply_softmax=True, dim=1, return_bitmatrix=True, y_indx=None, n_rows=None):
     if not isinstance(x, Tensor):
         x = Tensor(x, [n_rows, None])
     cdiv = lambda a, b: (a + b - 1) // b
@@ -44,28 +44,30 @@ def topk_forward(x, k, dim=1, return_bitmatrix=True, y_indx=None, n_rows=None):
         n_rows_pad, n_rows_raw, n_cols,  # shapes
         scratchpad, BLOCK_S, s_blocks,  # thing to memset to zero
         BLOCK_M=BLOCK_M, BLOCK_N=BLOCK_N,  # tunable parameter
-        N_EXPTS_PAD=n_cols_pad, N_EXPTS_ACT=k,  # constants
+        APPLY_SOFTMAX=apply_softmax, N_EXPTS_PAD=n_cols_pad, N_EXPTS_ACT=k,  # constants
     )
     return y_vals, y_indx, Bitmatrix(bitmatrix, [n_rows_raw, n_cols], scratchpad)
 
 
-def topk_backward(x, y_indx, dy_vals, k, n_rows):
+def topk_backward(x, y_indx, dy_vals, k, n_rows, apply_softmax):
     assert dy_vals.shape[-1] == k
     n_expts_pad = triton.next_power_of_2(x.shape[-1])
     dx = torch.empty_like(x)
     _topk_backward[(dy_vals.shape[0], )](
         y_indx, y_indx.stride(0), dy_vals, dy_vals.stride(0), x, x.stride(0),  # inputs
         dx,  # outputs
-        dx.stride(0), x.shape[0], n_rows, x.shape[-1], N_EXPTS_ACT=k, N_EXPTS_PAD=n_expts_pad)
+        dx.stride(0), x.shape[0], n_rows, x.shape[-1], APPLY_SOFTMAX=apply_softmax, N_EXPTS_ACT=k,
+        N_EXPTS_PAD=n_expts_pad)
     return dx
 
 
 class TopK(torch.autograd.Function):
 
     @staticmethod
-    def forward(ctx, x, k, dim, return_bitmatrix, y_indx, n_rows):
-        y_vals, y_indx, bitmatrix = topk_forward(x, k, dim, return_bitmatrix, y_indx, n_rows)
+    def forward(ctx, x, k, apply_softmax, dim, return_bitmatrix, y_indx, n_rows):
+        y_vals, y_indx, bitmatrix = topk_forward(x, k, apply_softmax, dim, return_bitmatrix, y_indx, n_rows)
         ctx.save_for_backward(x, y_indx)
+        ctx.apply_softmax = apply_softmax
         ctx.k = k
         ctx.n_rows = n_rows
         return y_vals, y_indx, bitmatrix
@@ -73,10 +75,10 @@ class TopK(torch.autograd.Function):
     @staticmethod
     def backward(ctx, dy_vals, _0, _1):
         x, y_indx = ctx.saved_tensors
-        dx = topk_backward(x, y_indx, dy_vals, ctx.k, ctx.n_rows)
-        return dx, None, None, None, None, None
+        dx = topk_backward(x, y_indx, dy_vals, ctx.k, ctx.n_rows, ctx.apply_softmax)
+        return dx, None, None, None, None, None, None
 
 
-def topk(x, k, dim=1, return_bitmatrix=True, y_indx=None, n_rows=None):
-    ret = TopK.apply(x, k, dim, return_bitmatrix, y_indx, n_rows)
+def topk(x, k, apply_softmax=True, dim=1, return_bitmatrix=True, y_indx=None, n_rows=None):
+    ret = TopK.apply(x, k, apply_softmax, dim, return_bitmatrix, y_indx, n_rows)
     return ret

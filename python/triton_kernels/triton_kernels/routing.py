@@ -149,9 +149,10 @@ def prune_routing(expt_scal, expt_indx, bitmatrix, simulated_ep):
 # --------------------------
 
 
-def routing(logits, n_expts_act, expt_indx=None, simulated_ep=1, n_rows=None):
+def routing(logits, n_expts_act, renormalize=True, expt_indx=None, simulated_ep=1, n_rows=None):
     from .topk import topk
-    expt_scal, expt_indx, bitmatrix = topk(logits, n_expts_act, y_indx=expt_indx, n_rows=n_rows)
+    expt_scal, expt_indx, bitmatrix = topk(logits, n_expts_act, apply_softmax=renormalize, y_indx=expt_indx,
+                                           n_rows=n_rows)
     # mutate bitmatrix
     if simulated_ep > 1:
         expt_scal, expt_indx, bitmatrix, n_expts_tot = prune_routing(expt_scal, expt_indx, bitmatrix, simulated_ep)
@@ -163,7 +164,7 @@ def routing(logits, n_expts_act, expt_indx=None, simulated_ep=1, n_rows=None):
     return RoutingData(gate_scal, hist, n_expts_tot, n_expts_act), gather_indx, scatter_indx
 
 
-def routing_torch(logits, n_expts_act, expt_indx=None, n_rows=None):
+def routing_torch(logits, n_expts_act, renormalize=True, expt_indx=None, n_rows=None):
     if n_rows is not None:
         logits = logits[:n_rows, :]
 
@@ -178,7 +179,8 @@ def routing_torch(logits, n_expts_act, expt_indx=None, n_rows=None):
 
     _, n_expts_tot = logits.shape
     expt_scal, expt_indx = topk(logits, n_expts_act, expt_indx)
-    expt_scal = torch.softmax(expt_scal, dim=-1)
+    if renormalize:
+        expt_scal = torch.softmax(expt_scal, dim=-1)
     # flatten topk data
     expt_scal = expt_scal.reshape(-1)
     expt_indx = expt_indx.reshape(-1).to(torch.int32)

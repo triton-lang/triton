@@ -360,4 +360,17 @@ def TritonGPUCoalesceAsyncCopy: Pass<"tritongpu-coalesce-async-copy", "mlir::Mod
                            "mlir::triton::TritonDialect"];
 }
 
+def TritonGPUCanonicalize: Pass<"tritongpu-canonicalize"> {
+  let summary = "reduced set of simplifications for TTGIR";
+
+  let description = [{
+    The `tritongpu-canonicalize` pass applies a reduced set of simplification
+    and canonicalization patterns to the module.
+  }];
+  let dependentDialects = [
+    "mlir::arith::ArithDialect",
+    "mlir::scf::SCFDialect",
+  ];
+}
+
 #endif

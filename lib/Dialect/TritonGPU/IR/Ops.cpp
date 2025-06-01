@@ -886,6 +886,13 @@ void WarpSpecializeOp::build(OpBuilder &builder, OperationState &state,
                                              partitionNumRegions);
 }
 
+void WarpSpecializeOp::build(OpBuilder &builder, OperationState &state,
+                             TypeRange resultTypes, ValueRange explicitCaptures,
+                             ArrayRef<int32_t> partitionNumWarps) {
+  build(builder, state, resultTypes, explicitCaptures, partitionNumWarps, {},
+        {}, {});
+}
+
 ParseResult WarpSpecializeOp::parse(OpAsmParser &p, OperationState &result) {
   SmallVector<OpAsmParser::UnresolvedOperand> operands;
   SMLoc operandLoc = p.getCurrentLocation();

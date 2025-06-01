@@ -1,4 +1,4 @@
-from triton.backends.compiler import BaseBackend, GPUTarget
+from triton.backends.compiler import BaseBackend, GPUTarget, Language
 from triton._C.libtriton import ir, passes, llvm, amd
 from triton import knobs
 from dataclasses import dataclass
@@ -271,6 +271,20 @@ class HIPBackend(BaseBackend):
         return mod
 
     @staticmethod
+    def ttgir_opt(src, metadata, options):
+        mod = src
+        pm = ir.pass_manager(mod.context)
+        pm.enable_debug()
+
+        passes.ttgpuir.add_inliner(pm)
+        passes.ttir.add_loop_aware_cse(pm)
+        passes.ttgpuir.add_canonicalizer(pm)
+        passes.ttgpuir.add_combine_tensor_select_and_if(pm)
+
+        pm.run(mod)
+        return mod
+
+    @staticmethod
     def make_llir(src, metadata, options):
         mod = src
         # TritonGPU -> LLVM-IR (MLIR)
@@ -419,9 +433,12 @@ class HIPBackend(BaseBackend):
                 ret = fd_out.read()
         return ret
 
-    def add_stages(self, stages, options):
-        stages["ttir"] = lambda src, metadata: self.make_ttir(src, metadata, options)
-        stages["ttgir"] = lambda src, metadata: self.make_ttgir(src, metadata, options)
+    def add_stages(self, stages, options, language):
+        if language == Language.TRITON:
+            stages["ttir"] = lambda src, metadata: self.make_ttir(src, metadata, options)
+            stages["ttgir"] = lambda src, metadata: self.make_ttgir(src, metadata, options)
+        elif language == Language.GLUON:
+            stages["ttgir"] = lambda src, metadata: self.ttgir_opt(src, metadata, options)
         stages["llir"] = lambda src, metadata: self.make_llir(src, metadata, options)
         stages["amdgcn"] = lambda src, metadata: self.make_amdgcn(src, metadata, options)
         stages["hsaco"] = lambda src, metadata: self.make_hsaco(src, metadata, options)

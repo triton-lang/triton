@@ -73,6 +73,7 @@ def _topk_forward(X, stride_xm,  # inputs
                   USE_PROVIDED_INDX: tl.constexpr, Bits, stride_rm: tl.constexpr, stride_rn: tl.constexpr,  # bitmatrix
                   n_rows_pad, NRowsRaw, n_expts_tot,  # shape
                   S, BLOCK_S: tl.constexpr, s_blocks,  # thing to memset
+                  APPLY_SOFTMAX: tl.constexpr,  # constant
                   BLOCK_M: tl.constexpr, N_EXPTS_PAD: tl.constexpr, N_EXPTS_ACT: tl.constexpr, BLOCK_N: tl.constexpr):
 
     pid = tl.program_id(0)
@@ -110,7 +111,8 @@ def _topk_forward(X, stride_xm,  # inputs
         y_values = (y >> x_nbits).to(x_utype).to(x_dtype, bitcast=True)
 
     # normalize selected values
-    y_values = tl.softmax(y_values.to(tl.float32), dim=1, keep_dims=True).to(x_dtype)
+    if APPLY_SOFTMAX:
+        y_values = tl.softmax(y_values.to(tl.float32), dim=1, keep_dims=True).to(x_dtype)
 
     # write back
     Yv_ptrs = Yv + offs_m[:, None] * stride_ym + offs_y_n[None, :]

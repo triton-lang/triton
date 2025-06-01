@@ -15,6 +15,7 @@ def _topk_backward(
     n_rows,
     NRows,
     n_expts_tot,
+    APPLY_SOFTMAX: tl.constexpr,
     N_EXPTS_ACT: tl.constexpr,
     N_EXPTS_PAD: tl.constexpr,
 ):
@@ -43,4 +44,8 @@ def _topk_backward(
     # write-back input gradient
     tl.store(DX + offs_xn, 0, mask=mask_xn)
     tl.debug_barrier()
-    tl.store(DX + y_indx, y * (dy - s))
+    if APPLY_SOFTMAX:
+        dx = y * (dy - s)
+    else:
+        dx = dy
+    tl.store(DX + y_indx, dx)
