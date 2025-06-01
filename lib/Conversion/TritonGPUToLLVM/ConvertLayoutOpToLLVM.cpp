@@ -117,15 +117,17 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
   // Close cousin of lowerLdStMatrix in MemoryOpToLLVM.cpp
   // We might want to merge them at some point, but having to support
   // ldmatrix.trans makes the code in lowerLdStMatrix a bit specific
-  void
+  // Lowers to st when valArrays is empty, and to ld when it is not,
+  // and returns the output values.
+  SmallVector<Value>
   lowerLdStShared(Location loc, MLIRContext *ctx, LinearLayout cvt,
                   int elemsPerVec,
-                  SmallVector<Value> &vals_, // Input for store, output for load
+                  ArrayRef<Value> valsArray, // Input for store, output for load
                   Type llvmElemTy, Value smemBase,
                   ConversionPatternRewriter &rewriter) const {
     // Local copy of vals_ to avoid modifying the original vector
-    auto vals = vals_;
-    bool isStore = !vals_.empty();
+    auto vals = to_vector(valsArray);
+    bool isStore = !vals.empty();
     auto b = TritonLLVMOpBuilder(loc, rewriter);
     auto smemPtrTy = ptr_ty(ctx, 3);
     auto kReg = str_attr("register");
@@ -153,6 +155,7 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
             {{kReg, b.i32_val(0)}, {kLane, laneId}, {kWarp, warpId}})[0]
             .second;
     auto step = tile.getInDimSize(kReg);
+    SmallVector<Value> outVals;
     for (int i = 0; i < cvt.getInDimSize(kReg); i += step) {
       auto regIdx = reps.apply({{kReg, i}, {kLane, 0}, {kWarp, 0}})[0].second;
       Value offset = b.xor_(regBase, b.i32_val(regIdx));
@@ -169,20 +172,21 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
         Value valsVec = targetInfo.loadDShared(
             rewriter, loc, vecAddr, std::nullopt, vec_ty(llvmElemTy, step),
             /*pred=*/b.true_val());
-        llvm::append_range(vals_, unpackLLVector(loc, valsVec, rewriter));
+        llvm::append_range(outVals, unpackLLVector(loc, valsVec, rewriter));
       }
     }
 
     // Permute the values back if we are loading
     if (!isStore) {
       auto invPerm = permutation.inverse();
-      vals_ = invPerm.apply(vals_);
+      outVals = invPerm.apply(outVals);
     }
+    return outVals;
   }
 
   LogicalResult
-  transferWithinThreadSwizzling(ConvertLayoutOp op, Value src,
-                                ConversionPatternRewriter &rewriter) const {
+  transferWithinBlockSwizzling(ConvertLayoutOp op, Value src,
+                               ConversionPatternRewriter &rewriter) const {
     // Fallback for now to standard lowering if it can use stmatrix
     auto scratchConfig =
         getScratchConfigForCvt(op.getSrc().getType(), op.getType());
@@ -291,16 +295,14 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
       if (i > 0)
         b.barrier();
 
-      auto tileInVals = SmallVector<Value>(inVals.begin() + i * tileSize,
-                                           inVals.begin() + (i + 1) * tileSize);
+      auto tileInVals = ArrayRef<Value>(inVals).slice(i * tileSize, tileSize);
       // Store
       lowerLdStShared(loc, ctx, readCvt, elemsPerVec, tileInVals, llvmElemTy,
                       smemBase, rewriter);
       b.barrier();
       // Load
-      SmallVector<Value> tileOutVals;
-      lowerLdStShared(loc, ctx, writeCvt, elemsPerVec, tileOutVals, llvmElemTy,
-                      smemBase, rewriter);
+      SmallVector<Value> tileOutVals = lowerLdStShared(
+          loc, ctx, writeCvt, elemsPerVec, {}, llvmElemTy, smemBase, rewriter);
       llvm::append_range(outVals, tileOutVals);
     }
 
@@ -346,7 +348,7 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
 
     // Try to use swizzling to implement the conversion
     if (succeeded(
-            transferWithinThreadSwizzling(op, adaptor.getSrc(), rewriter))) {
+            transferWithinBlockSwizzling(op, adaptor.getSrc(), rewriter))) {
       return success();
     }
 
