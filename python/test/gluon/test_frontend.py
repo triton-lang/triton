@@ -7,9 +7,10 @@ from triton.experimental import gluon
 from triton.experimental.gluon import language as ttgl
 from triton.experimental.gluon.language.nvidia import blackwell
 from triton.experimental.gluon.language.nvidia.blackwell import mbarrier
-from triton._filecheck import filecheck_test
+from triton._filecheck import filecheck_test, run_parser
 import triton.language as tl
 from triton._internal_testing import is_cuda
+from triton.compiler.errors import CompilationError
 
 
 @gluon.jit
@@ -266,3 +267,15 @@ module attributes {"ttg.num-warps" = 4 : i32} {
 } loc(#loc)
 #loc = loc(unknown)
 """)
+
+
+def test_mlir_attr_error():
+
+    @gluon.jit
+    def kernel():
+        ttgl.arange(0, 1, layout=ttgl.BlockedLayout([1], [32], [4], [1]))
+
+    with pytest.raises(CompilationError) as e:
+        run_parser(kernel)
+
+    assert "order must be a permutation of 0..(rank-1), but was [1]" in str(e.value.__cause__)
