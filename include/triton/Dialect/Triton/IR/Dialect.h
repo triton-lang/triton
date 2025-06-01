@@ -35,24 +35,25 @@ public:
 
   virtual LogicalResult
   inferTransOpEncoding(Attribute operandEncoding, ArrayRef<int64_t> shape,
-                       ArrayRef<int32_t> order,
-                       Attribute &resultEncoding) const = 0;
+                       ArrayRef<int32_t> order, Attribute &resultEncoding,
+                       std::optional<Location> loc) const = 0;
 
   virtual LogicalResult
   inferReduceOpEncoding(Attribute operandEncoding, unsigned axis,
-                        Attribute &resultEncoding) const = 0;
+                        Attribute &resultEncoding,
+                        std::optional<Location> loc) const = 0;
 
   virtual LogicalResult
   inferExpandDimsOpEncoding(Attribute operandEncoding, unsigned axis,
                             Attribute &resultEncoding,
-                            std::optional<Location> location) const = 0;
+                            std::optional<Location> loc) const = 0;
 
   // Note: This function only verifies the operand encoding.  It doesn't infer
   // the result encoding.
   virtual LogicalResult
   inferDotOpEncoding(Attribute operandEncoding, unsigned opIdx,
                      Attribute retEncoding,
-                     std::optional<Location> location) const = 0;
+                     std::optional<Location> loc) const = 0;
 
   // Tries to compute the encoding for the result of a reshape operation that
   // makes the reshape a "nop", i.e. the same GPU threads contain the same
