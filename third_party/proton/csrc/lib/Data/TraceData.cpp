@@ -4,7 +4,6 @@
 #include "nlohmann/json.hpp"
 
 #include <algorithm>
-#include <iostream>
 #include <limits>
 #include <stdexcept>
 
@@ -321,7 +320,8 @@ convertToTimelineTrace(TraceData::Trace *trace,
         unitTrace.profileEvents.reserve(256);
 
         // Process all events for current uid
-        while (trace->getContexts(sortedEvents[eventIndex].contextId)[1].name ==
+        while (eventIndex < sortedEvents.size() &&
+               trace->getContexts(sortedEvents[eventIndex].contextId)[1].name ==
                    currentKernel &&
                sortedEvents[eventIndex].blockId == currentBlockId &&
                sortedEvents[eventIndex].unitId == currentUid) {
