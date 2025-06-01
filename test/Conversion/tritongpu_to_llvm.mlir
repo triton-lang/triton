@@ -2412,3 +2412,25 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     tt.return
   }
 }
+
+// -----
+
+#shared0 = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
+#shared1 = #ttg.swizzled_shared<{vec = 2, perPhase = 2, maxPhase = 1, order = [1, 0]}>
+
+module attributes {"ttg.num-warps" = 4 : i32, ttg.target = "cuda:90"} {
+
+// CHECK-LABEL: @memdesc_reinterpret
+tt.func private @memdesc_reinterpret(%arg0: !ttg.memdesc<4x1024xi8, #shared0, #ttg.shared_memory, mutable>) {
+  // CHECK: [[BASE_PTR:%.*]] = llvm.extractvalue %arg0[0]
+  // CHECK: [[C0:%.*]] = llvm.mlir.constant(0 : i32)
+  ttg.memdesc_reinterpret %arg0 : !ttg.memdesc<4x1024xi8, #shared0, #ttg.shared_memory, mutable> -> !ttg.memdesc<4x4x4xi32, #shared1, #ttg.shared_memory, mutable>
+  // CHECK: [[S0:%.*]] = llvm.mlir.undef
+  // CHECK: [[S1:%.*]] = llvm.insertvalue [[BASE_PTR]], [[S0]][0]
+  // CHECK: [[S2:%.*]] = llvm.insertvalue [[C0]], [[S1]][1]
+  // CHECK: [[S3:%.*]] = llvm.insertvalue [[C0]], [[S2]][2]
+  // CHECK: [[S4:%.*]] = llvm.insertvalue [[C0]], [[S3]][3]
+  tt.return
+}
+
+}

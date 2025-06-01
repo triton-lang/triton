@@ -252,8 +252,6 @@ def TTG_MemDescTransOp : TTG_Op<"memdesc_trans", [Pure,
     representing a transposed view of the buffer.
   }];
 
-  let arguments = (ins TTG_MemDescType:$src, Variadic<I32>:$order);
-
   let arguments = (
     ins TTG_MemDescType:$src,
     DenseI32ArrayAttr:$order
@@ -280,6 +278,26 @@ def TTG_MemDescReshapeOp : TTG_Op<"memdesc_reshape", [Pure,
   let results = (outs TTG_MemDescType:$result);
 
   let assemblyFormat = "$src attr-dict `:` qualified(type($src)) `->` qualified(type($result))";
+
+  let hasVerifier = 1;
+}
+
+def TTG_MemDescReinterpretOp : TTG_Op<"memdesc_reinterpret", [Pure, MemDescViewTrait]> {
+  let summary = "reinterpret a memory descriptor as a different type and shape";
+
+  let description = [{
+    The `ttg.memdesc_reinterpret` operation reinterprets a memory descriptor
+    as one with a different shape and element type. Because memory descriptors
+    lack strides, this operation is only valid if the original memory descriptor
+    is contiguous.
+  }];
+
+  let arguments = (ins TTG_MemDescType:$src);
+  let results = (outs TTG_MemDescType:$result);
+
+  let assemblyFormat = [{
+    $src attr-dict `:` qualified(type($src)) `->` qualified(type($result))
+  }];
 
   let hasVerifier = 1;
 }
