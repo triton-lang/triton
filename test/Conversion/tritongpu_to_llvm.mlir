@@ -1221,30 +1221,9 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32} {
   // CHECK: llvm.mlir.global external @global_smem
   // CHECK-LABEL: convert_layout_mmav3_transpose
   tt.func @convert_layout_mmav3_transpose(%arg0: tensor<128x256xf8E5M2, #mma>) {
-    // CHECK-COUNT-16: st.shared.b8
+    // CHECK-COUNT-8: st.shared.v4.b32
     // CHECK: nvvm.barrier0
-    // CHECK: llvm.load {{.*}} -> vector<4xi32>
-    // CHECK-COUNT-16: st.shared.b8
-    // CHECK: nvvm.barrier0
-    // CHECK: llvm.load {{.*}} -> vector<4xi32>
-    // CHECK-COUNT-16: st.shared.b8
-    // CHECK: nvvm.barrier0
-    // CHECK: llvm.load {{.*}} -> vector<4xi32>
-    // CHECK-COUNT-16: st.shared.b8
-    // CHECK: nvvm.barrier0
-    // CHECK: llvm.load {{.*}} -> vector<4xi32>
-    // CHECK-COUNT-16: st.shared.b8
-    // CHECK: nvvm.barrier0
-    // CHECK: llvm.load {{.*}} -> vector<4xi32>
-    // CHECK-COUNT-16: st.shared.b8
-    // CHECK: nvvm.barrier0
-    // CHECK: llvm.load {{.*}} -> vector<4xi32>
-    // CHECK-COUNT-16: st.shared.b8
-    // CHECK: nvvm.barrier0
-    // CHECK: llvm.load {{.*}} -> vector<4xi32>
-    // CHECK-COUNT-16: st.shared.b8
-    // CHECK: nvvm.barrier0
-    // CHECK: llvm.load {{.*}} -> vector<4xi32>
+    // CHECK-NOT: st.shared
     %0 = ttg.convert_layout %arg0 : tensor<128x256xf8E5M2, #mma> -> tensor<128x256xf8E5M2, #blocked>
     tt.return
   }
@@ -1274,7 +1253,9 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32} {
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
   // CHECK-LABEL: convert_blocked1d_to_slice0
   tt.func @convert_blocked1d_to_slice0(%src:tensor<32xi32, #blocked0>) {
-    // CHECK: llvm.load {{.*}} -> vector<4xi32>
+    // CHECK: st.shared.b32
+    // CHECK: nvvm.barrier0
+    // CHECK-COUNT-4: llvm.load {{.*}} -> i32
     %cvt = ttg.convert_layout %src : tensor<32xi32, #blocked0> -> tensor<32xi32, #ttg.slice<{dim = 0, parent = #blocked1}>>
     tt.return
   }
@@ -1319,13 +1300,9 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32} {
   // CHECK-LABEL: linear_layout_with_multiple_iterations
   tt.func @linear_layout_with_multiple_iterations(%src: tensor<8x4xbf16, #linear>) {
     %cvt = ttg.convert_layout %src : tensor<8x4xbf16, #linear> -> tensor<8x4xbf16, #linear1>
-    // CHECK: inline_asm{{.*}}st.shared.v2
+    // CHECK-COUNT-2: inline_asm{{.*}}st.shared.v2
     // CHECK: nvvm.barrier0
-    // CHECK: llvm.load
-    // CHECK: nvvm.barrier0
-    // CHECK: inline_asm{{.*}}st.shared.v2
-    // CHECK: nvvm.barrier0
-    // CHECK: llvm.load
+    // CHECK-COUNT: llvm.load{{.*}}->vector<2xi16>
     tt.return
   }
 }

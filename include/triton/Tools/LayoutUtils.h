@@ -118,8 +118,8 @@ LinearLayout zerosLike(const LinearLayout &layout);
 // It's not always true that the action returned by this function will
 // allow us to divideLeft, but it is true that if it if there exists one, it is
 // the one returned by this function.
-std::optional<ColumnAction> regPermForDivideLeft(const LinearLayout &A,
-                                                 const LinearLayout &B);
+std::optional<ColumnAction> regPermForDivide(const LinearLayout &A,
+                                             const LinearLayout &B, bool left);
 
 // For a layout A with A.hasInDim(kReg), find a permutation of registers action
 // such that action.apply(A) has the broadcasted registers removed

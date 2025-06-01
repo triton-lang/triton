@@ -637,6 +637,88 @@ std::optional<LinearLayout> divideLeft(const LinearLayout &A,
   return C;
 }
 
+std::optional<LinearLayout> divideRight(const LinearLayout &A,
+                                        const LinearLayout &B) {
+  // Compute a C such that A = C * B if it exists.
+  // Note that such a C exists iff (every pair of input/output dim of) A is of
+  // the form
+  // [[C, 0],
+  //  [0, B]]
+  // as a matrix, whenever those dimensions are present in B.
+
+  // Check that B's in-dimensions and out-dimensions are contained in A.
+  for (StringAttr dim : B.getInDimNames()) {
+    if (!llvm::is_contained(A.getInDimNames(), dim))
+      return std::nullopt;
+  }
+  for (StringAttr dim : B.getOutDimNames()) {
+    if (!llvm::is_contained(A.getOutDimNames(), dim))
+      return std::nullopt;
+  }
+
+  // Compute candidate C's log-sizes for output dimensions.
+  llvm::MapVector<StringAttr, int32_t> cOutDimSizes;
+  for (StringAttr outDim : A.getOutDimNames()) {
+    int outA = A.getOutDimSizeLog2(outDim);
+    int outB = B.hasOutDim(outDim) ? B.getOutDimSizeLog2(outDim) : 0;
+    int outC = outA - outB;
+    if (outC < 0)
+      return std::nullopt;
+    cOutDimSizes[outDim] = 1 << outC;
+  }
+
+  // For candidate C, its in-dim sizes come from subtracting B's in-dim sizes
+  // from A's.
+  LinearLayout::BasesT cBases;
+  for (StringAttr inDim : A.getInDimNames()) {
+    int inA = A.getInDimSizeLog2(inDim);
+    int inB = B.hasInDim(inDim) ? B.getInDimSizeLog2(inDim) : 0;
+    int inC = inA - inB;
+    if (inC < 0)
+      return std::nullopt;
+
+    std::vector<std::vector<int32_t>> basesForDim;
+    // The first inC basis vectors come directly from C.
+    for (int i = 0; i < inC; ++i) {
+      std::vector<int32_t> candidate;
+      for (StringAttr outDim : llvm::make_first_range(cOutDimSizes)) {
+        candidate.push_back(A.getBasis(inDim, i, outDim));
+      }
+      basesForDim.push_back(std::move(candidate));
+    }
+
+    // The remaining inB basis vectors in A should correspond to B after being
+    // shifted.
+    for (int i = inC; i < inA; ++i) {
+      int j = i - inC; // Index into B's basis vectors for this inDim.
+      for (StringAttr outDim : B.getOutDimNames()) {
+        int outA = A.getOutDimSizeLog2(outDim);
+        int outB = B.getOutDimSizeLog2(outDim);
+        int outC = outA - outB; // Expected log2 size for C in this output.
+        int shift = outC;
+        int v = A.getBasis(inDim, i, outDim);
+        // The lower shift bits must be zero.
+        if ((v & ((1 << shift) - 1)) != 0)
+          return std::nullopt;
+        int recovered = v >> shift;
+        int expected = B.getBasis(inDim, j, outDim);
+        if (recovered != expected)
+          return std::nullopt;
+      }
+    }
+    cBases[inDim] = basesForDim;
+  }
+
+  SmallVector<std::pair<StringAttr, int32_t>> COutDims;
+  for (auto [outDim, size] : cOutDimSizes)
+    COutDims.push_back({outDim, size});
+  // If A and B are surjective, then C should also be surjective.
+  LinearLayout C(std::move(cBases), COutDims,
+                 /*requireSurjective=*/A.isSurjective() && B.isSurjective());
+  assert(C * B == A);
+  return C;
+}
+
 LinearLayout operator*(LinearLayout inner, LinearLayout outer) {
   // Check that dims common to outer and inner have the same relative order.
   auto inDims = supremum(llvm::to_vector(inner.getInDimNames()),

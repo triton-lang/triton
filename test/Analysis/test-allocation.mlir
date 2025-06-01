@@ -35,7 +35,7 @@ tt.func @empty(%A : !tt.ptr<f16>) {
 }
 
 // expected-remark @below {{matmul_loop}}
-// expected-remark @below {{size = 4608}}
+// expected-remark @below {{size = 8192}}
 tt.func @matmul_loop(%lb : index, %ub : index, %step : index, %A : !tt.ptr<f16>, %B : !tt.ptr<f16>) {
   %a_ptr_init = tt.splat %A : !tt.ptr<f16> -> tensor<128x32x!tt.ptr<f16>, #AL>
   %b_ptr_init = tt.splat %B : !tt.ptr<f16> -> tensor<32x128x!tt.ptr<f16>, #BL>
@@ -51,10 +51,10 @@ tt.func @matmul_loop(%lb : index, %ub : index, %step : index, %A : !tt.ptr<f16>,
 
   scf.for %iv = %lb to %ub step %step iter_args(%a_ptr = %a_ptr_init, %b_ptr = %b_ptr_init, %prev_c = %c_init) -> (tensor<128x32x!tt.ptr<f16>, #AL>, tensor<32x128x!tt.ptr<f16>, #BL>, tensor<128x128xf32, #C>) {
     %a_ = tt.load %a_ptr, %a_mask, %a_other : tensor<128x32x!tt.ptr<f16>, #AL>
-    // expected-remark @below {{scratch offset = 0, size = 4608}}
+    // expected-remark @below {{scratch offset = 0, size = 8192}}
     %a = ttg.convert_layout %a_ : tensor<128x32xf16, #AL> -> tensor<128x32xf16, #A_DOT>
     %b_ = tt.load %b_ptr, %b_mask, %b_other : tensor<32x128x!tt.ptr<f16>, #BL>
-    // expected-remark @below {{scratch offset = 0, size = 2304}}
+    // expected-remark @below {{scratch offset = 0, size = 8192}}
     %b = ttg.convert_layout %b_ : tensor<32x128xf16, #BL> -> tensor<32x128xf16, #B_DOT>
 
     %c = tt.dot %a, %b, %prev_c : tensor<128x32xf16, #A_DOT> * tensor<32x128xf16, #B_DOT> -> tensor<128x128xf32, #C>
@@ -68,7 +68,7 @@ tt.func @matmul_loop(%lb : index, %ub : index, %step : index, %A : !tt.ptr<f16>,
 
 // Shared memory is available after a tensor's liveness range ends
 // expected-remark @below {{reusable}}
-// expected-remark @below {{size = 4608}}
+// expected-remark @below {{size = 8192}}
 tt.func @reusable(%A : !tt.ptr<f16>) {
   %cst1 = arith.constant dense<true> : tensor<128x32xi1, #AL>
   %cst2 = arith.constant dense<0.000000e+00> : tensor<128x32xf16, #AL>
@@ -79,17 +79,17 @@ tt.func @reusable(%A : !tt.ptr<f16>) {
   %a_ptr = tt.splat %A : !tt.ptr<f16> -> tensor<128x32x!tt.ptr<f16>, #AL>
   %b_ptr = tt.splat %A : !tt.ptr<f16> -> tensor<32x128x!tt.ptr<f16>, #AL>
   %a1_ = tt.load %a_ptr, %cst1, %cst2 : tensor<128x32x!tt.ptr<f16>, #AL>
-  // expected-remark @below {{scratch offset = 0, size = 4608}}
+  // expected-remark @below {{scratch offset = 0, size = 8192}}
   %a1 = ttg.convert_layout %a1_ : tensor<128x32xf16, #AL> -> tensor<128x32xf16, #A_DOT>
   %a2_ = tt.load %b_ptr, %cst3, %cst4 : tensor<32x128x!tt.ptr<f16>, #AL>
-  // expected-remark @below {{scratch offset = 0, size = 1088}}
+  // expected-remark @below {{scratch offset = 0, size = 8192}}
   %a2 = ttg.convert_layout %a2_ : tensor<32x128xf16, #AL> -> tensor<32x128xf16, #B_DOT>
   %a3_ = tt.load %a_ptr, %cst1, %cst2 : tensor<128x32x!tt.ptr<f16>, #AL>
-  // expected-remark @below {{scratch offset = 0, size = 4608}}
+  // expected-remark @below {{scratch offset = 0, size = 8192}}
   %a3 = ttg.convert_layout %a3_ : tensor<128x32xf16, #AL> -> tensor<128x32xf16, #A_DOT>
   %c = tt.dot %a1, %a2, %c_init : tensor<128x32xf16, #A_DOT> * tensor<32x128xf16, #B_DOT> -> tensor<128x128xf32, #C>
   %a4_ = tt.load %b_ptr, %cst3, %cst4 : tensor<32x128x!tt.ptr<f16>, #AL>
-  // expected-remark @below {{scratch offset = 0, size = 1088}}
+  // expected-remark @below {{scratch offset = 0, size = 8192}}
   %a4 = ttg.convert_layout %a4_ : tensor<32x128xf16, #AL> -> tensor<32x128xf16, #B_DOT>
   %c1 = tt.dot %a3, %a4, %c : tensor<128x32xf16, #A_DOT> * tensor<32x128xf16, #B_DOT> -> tensor<128x128xf32, #C>
   tt.return

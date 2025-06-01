@@ -10,6 +10,8 @@
 #include "triton/Dialect/TritonGPU/IR/Attributes.h"
 #include "triton/Dialect/TritonGPU/IR/LinearLayoutConversions.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
+#include "triton/Tools/GenericSwizzling.h"
+#include "triton/Tools/LayoutUtils.h"
 
 #include "triton/Conversion/TritonGPUToLLVM/PatternTritonGPUOpToLLVM.h"
 
@@ -17,6 +19,8 @@ namespace {
 
 using namespace mlir;
 using namespace mlir::triton::gpu;
+
+constexpr int kPtrBitWidth = 64;
 
 struct ConvertLayoutOpUsingLinearLayoutsConversion
     : public ConvertOpToLLVMPattern<ConvertLayoutOp> {
@@ -110,6 +114,219 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
     return success();
   }
 
+  // Close cousin of lowerLdStMatrix in MemoryOpToLLVM.cpp
+  // We might want to merge them at some point, but having to support
+  // ldmatrix.trans makes the code in lowerLdStMatrix a bit specific
+  void
+  lowerLdStShared(Location loc, MLIRContext *ctx, LinearLayout cvt,
+                  int elemsPerVec,
+                  SmallVector<Value> &vals_, // Input for store, output for load
+                  Type llvmElemTy, Value smemBase,
+                  ConversionPatternRewriter &rewriter) const {
+    // Local copy of vals_ to avoid modifying the original vector
+    auto vals = vals_;
+    bool isStore = !vals_.empty();
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
+    auto smemPtrTy = ptr_ty(ctx, 3);
+    auto kReg = str_attr("register");
+    auto kLane = str_attr("lane");
+    auto kWarp = str_attr("warp");
+    auto kOffset = str_attr("offset");
+
+    // Form the map from value to offset
+    auto tile = LinearLayout::identity1D(elemsPerVec, kReg, kOffset);
+    // By construction, there is a register permutation that allows us to
+    // divideLeft
+    auto permutation = *regPermForDivide(cvt, tile, /*left=*/true);
+    cvt = permutation.apply(cvt);
+    if (isStore) {
+      vals = permutation.apply(vals);
+    }
+    // By construction of the smemLl, we can divideLeft
+    LinearLayout quot = *divideLeft(cvt, tile);
+    LinearLayout reps = zerosLike(tile) * quot;
+
+    auto [laneId, warpId] = getLaneAndWarpId(rewriter, loc);
+    auto regBase =
+        applyLinearLayout(
+            loc, rewriter, reps,
+            {{kReg, b.i32_val(0)}, {kLane, laneId}, {kWarp, warpId}})[0]
+            .second;
+    auto step = tile.getInDimSize(kReg);
+    for (int i = 0; i < cvt.getInDimSize(kReg); i += step) {
+      auto regIdx = reps.apply({{kReg, i}, {kLane, 0}, {kWarp, 0}})[0].second;
+      Value offset = b.xor_(regBase, b.i32_val(regIdx));
+      auto vecAddr = b.gep(smemPtrTy, llvmElemTy, smemBase, offset,
+                           LLVM::GEPNoWrapFlags::inbounds);
+      // Lezcano: Do we want to use getFreeVariableMasks for pred or nah?
+      if (isStore) {
+        Value valsVec = packLLVector(
+            loc, ArrayRef<Value>(vals.begin() + i, vals.begin() + i + step),
+            rewriter);
+        targetInfo.storeDShared(rewriter, loc, vecAddr, std::nullopt, valsVec,
+                                /*pred=*/b.true_val());
+      } else {
+        Value valsVec = targetInfo.loadDShared(
+            rewriter, loc, vecAddr, std::nullopt, vec_ty(llvmElemTy, step),
+            /*pred=*/b.true_val());
+        llvm::append_range(vals_, unpackLLVector(loc, valsVec, rewriter));
+      }
+    }
+
+    // Permute the values back if we are loading
+    if (!isStore) {
+      auto invPerm = permutation.inverse();
+      vals_ = invPerm.apply(vals_);
+    }
+  }
+
+  LogicalResult
+  transferWithinThreadSwizzling(ConvertLayoutOp op, Value src,
+                                ConversionPatternRewriter &rewriter) const {
+    // Fallback for now to standard lowering if it can use stmatrix
+    auto scratchConfig =
+        getScratchConfigForCvt(op.getSrc().getType(), op.getType());
+    bool isStMatrix = targetInfo.canUseStMatrix(
+        op.getSrc().getType(), scratchConfig.repShape,
+        scratchConfig.paddedRepShape, scratchConfig.order,
+        /*swizzleByteSize=*/0);
+    if (isStMatrix) {
+      return failure();
+    }
+
+    auto loc = op.getLoc();
+    auto *ctx = op.getContext();
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
+    auto srcTy = op.getSrc().getType();
+    auto dstTy = op.getType();
+    auto bitwidth = isa<PointerType>(srcTy.getElementType())
+                        ? kPtrBitWidth
+                        : srcTy.getElementTypeBitWidth();
+
+    auto srcLayout = toLinearLayout(srcTy.getShape(), srcTy.getEncoding());
+    auto dstLayout = toLinearLayout(dstTy.getShape(), dstTy.getEncoding());
+    auto origDstLayout = dstLayout;
+
+    // We remove the Block dimension from the layout as it's the identity in the
+    // cvt
+    auto kRegister = str_attr("register");
+    auto kLane = str_attr("lane");
+    auto kWarp = str_attr("warp");
+    srcLayout = srcLayout.sublayout({kRegister, kLane, kWarp},
+                                    to_vector(srcLayout.getOutDimNames()));
+    dstLayout = dstLayout.sublayout({kRegister, kLane, kWarp},
+                                    to_vector(dstLayout.getOutDimNames()));
+
+    // Handle sub-byte elements like i1
+    auto inVals = unpackLLElements(loc, src, rewriter);
+
+    bool isSubByte = bitwidth < 8;
+    auto llvmElemTy = getTypeConverter()->convertType(srcTy.getElementType());
+    if (isSubByte) {
+      // Upcast to i8
+      bitwidth = 8;
+      llvmElemTy = i8_ty;
+      for (auto &v : inVals) {
+        v = b.zext(llvmElemTy, v);
+      }
+    }
+    bool isPtr = isa<PointerType>(srcTy.getElementType());
+    if (isPtr) {
+      llvmElemTy =
+          getTypeConverter()->convertType(IntegerType::get(ctx, kPtrBitWidth));
+      for (auto &v : inVals) {
+        v = b.ptrtoint(llvmElemTy, v);
+      }
+    }
+
+    // Remove register broadcast from src and dst and input values
+    auto removeBroadcastSrc = actionRemoveBroadcastedRegs(srcLayout);
+    srcLayout = removeBroadcastSrc.apply(srcLayout);
+    inVals = removeBroadcastSrc.apply(inVals);
+    dstLayout = actionRemoveBroadcastedRegs(dstLayout).apply(dstLayout);
+
+    auto smem = optimalSwizzling(srcLayout, dstLayout, bitwidth);
+
+    // Extract reps from smem
+    auto kReg = str_attr("register");
+    auto kReps = StringAttr::get(ctx, "reps");
+    auto nReps = smem.getInDimSize(kReps);
+    auto reps = LinearLayout::identity1D(nReps, kReg, kReps);
+
+    auto totalReadCvt = srcLayout.invertAndCompose(smem);
+    auto totalWriteCvt = dstLayout.invertAndCompose(smem);
+
+    // The permutation exists by construction of the reps dimension in
+    // optimalSwizzling
+    auto maybePermRead = regPermForDivide(totalReadCvt, reps, /*left=*/false);
+    assert(maybePermRead.has_value());
+    auto permRead = *maybePermRead;
+    totalReadCvt = permRead.apply(totalReadCvt);
+    inVals = permRead.apply(inVals);
+    auto maybePermWrite = regPermForDivide(totalWriteCvt, reps, /*left=*/false);
+    assert(maybePermWrite.has_value());
+    auto permWrite = *maybePermWrite;
+    totalWriteCvt = permWrite.apply(totalWriteCvt);
+
+    // Remove the reps and flatten into offset
+    auto readCvt = *divideRight(totalReadCvt, reps);
+    auto writeCvt = *divideRight(totalWriteCvt, reps);
+    auto kOffset = str_attr("offset");
+    readCvt = readCvt.reshapeOuts({{kOffset, readCvt.getTotalOutDimSize()}});
+    writeCvt = writeCvt.reshapeOuts({{kOffset, writeCvt.getTotalOutDimSize()}});
+
+    Value smemBase =
+        LLVM::getSharedMemoryBase(loc, rewriter, targetInfo, op.getOperation());
+
+    auto tileSize = readCvt.getInDimSize(kReg);
+
+    assert(inVals.size() == tileSize * nReps);
+    SmallVector<Value> outVals;
+    auto elemsPerVec = smem.getInDimSize(str_attr("vector"));
+    for (int i = 0; i < nReps; ++i) {
+      if (i > 0)
+        b.barrier();
+
+      auto tileInVals = SmallVector<Value>(inVals.begin() + i * tileSize,
+                                           inVals.begin() + (i + 1) * tileSize);
+      // Store
+      lowerLdStShared(loc, ctx, readCvt, elemsPerVec, tileInVals, llvmElemTy,
+                      smemBase, rewriter);
+      b.barrier();
+      // Load
+      SmallVector<Value> tileOutVals;
+      lowerLdStShared(loc, ctx, writeCvt, elemsPerVec, tileOutVals, llvmElemTy,
+                      smemBase, rewriter);
+      llvm::append_range(outVals, tileOutVals);
+    }
+
+    // Undo the permWrite used to divideRight
+    outVals = permWrite.inverse().apply(outVals);
+
+    // Unwrap sub-byte elements if necessary
+    if (isSubByte) {
+      auto llvmElemTyOrig =
+          getTypeConverter()->convertType(srcTy.getElementType());
+      for (auto &v : outVals) {
+        v = b.trunc(llvmElemTyOrig, v);
+      }
+    } else if (isPtr) {
+      auto llvmElemTyOrig =
+          getTypeConverter()->convertType(srcTy.getElementType());
+      for (auto &v : outVals) {
+        v = b.inttoptr(llvmElemTyOrig, v);
+      }
+    }
+
+    // Undo the removeBroadcastSrc
+    outVals = broadcastAs(outVals, origDstLayout);
+
+    Value result =
+        packLLElements(loc, getTypeConverter(), outVals, rewriter, dstTy);
+    rewriter.replaceOp(op, result);
+    return success();
+  }
+
   LogicalResult transferWithinBlock(ConvertLayoutOp op,
                                     const LinearLayout &srcLayout,
                                     const LinearLayout &dstLayout,
@@ -122,6 +339,12 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
     auto dstTy = op.getType();
 
     assert(cvtNeedsSharedMemory(srcTy, dstTy));
+
+    // Try to use swizzling to implement the conversion
+    if (succeeded(
+            transferWithinThreadSwizzling(op, adaptor.getSrc(), rewriter))) {
+      return success();
+    }
 
     SmallVector<Value> inVals =
         unpackLLElements(loc, adaptor.getSrc(), rewriter);
@@ -155,9 +378,8 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
     // remove kBlock from transferWithinBlockImpl
     auto srcLayoutWithinBlock = getLayoutWithinBlock(srcLayout);
     auto dstLayoutWithinBlock = getLayoutWithinBlock(dstLayout);
-    SmallVector<Value> outVals =
-        transferWithinBlockImpl(inVals, op, srcLayoutWithinBlock,
-                                dstLayoutWithinBlock, adaptor, rewriter);
+    SmallVector<Value> outVals = transferWithinBlockImpl(
+        inVals, op, srcLayoutWithinBlock, dstLayoutWithinBlock, rewriter);
 
     // Unmunge output values
     for (const auto &it : llvm::enumerate(outVals)) {
@@ -184,7 +406,7 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
   SmallVector<Value>
   transferWithinBlockImpl(ArrayRef<Value> inVals, ConvertLayoutOp op,
                           const LinearLayout &srcLayout,
-                          const LinearLayout &dstLayout, OpAdaptor adaptor,
+                          const LinearLayout &dstLayout,
                           ConversionPatternRewriter &rewriter) const {
     MLIRContext *ctx = op.getContext();
     auto loc = op.getLoc();
