@@ -6,10 +6,11 @@ from triton import knobs
 from triton.experimental import gluon
 from triton.experimental.gluon import language as ttgl
 from triton.experimental.gluon.language.nvidia import blackwell
-from triton.experimental.gluon.language.nvidia.blackwell import mbarrier
+from triton.experimental.gluon.language.nvidia.blackwell import mbarrier, tma
 from triton._filecheck import filecheck_test, run_parser
 import triton.language as tl
 from triton._internal_testing import is_cuda
+from triton.tools.tensor_descriptor import TensorDescriptor
 from triton.compiler.errors import CompilationError
 
 
@@ -418,3 +419,123 @@ def test_mlir_attr_error():
         run_parser(kernel)
 
     assert "order must be a permutation of 0..(rank-1), but was [1]" in str(e.value.__cause__)
+
+
+@gluon.jit
+def async_tma_kernel(input_desc, XBLOCK: ttgl.constexpr, smem_layout: ttgl.constexpr):
+    smem = ttgl.allocate_shared_memory(ttgl.float16, [XBLOCK, XBLOCK], smem_layout)
+    bar = ttgl.allocate_shared_memory(ttgl.int64, [1], mbarrier.MBarrierLayout())
+    mbarrier.init(bar, count=1)
+
+    tma.async_copy_global_to_local(input_desc, [0, 0], bar, smem)
+    mbarrier.expect(bar, XBLOCK * XBLOCK * ttgl.float16.primitive_bitwidth // 8)
+    mbarrier.wait(bar, 0)
+
+    mbarrier.invalidate(bar)
+
+    tma.async_copy_local_to_global(input_desc, [0, 0], smem)
+    tma.store_wait(0)
+
+
+@pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="TMA requires at least Hopper")
+def test_async_tma(fresh_knobs):
+    knobs.compilation.disable_line_info = True
+
+    input = torch.randn((1024, 1024), device="cuda", dtype=torch.float16)
+    XBLOCK = 128
+    input_desc = TensorDescriptor.from_tensor(input, [XBLOCK, XBLOCK])
+    shared_layout = ttgl.NVMMASharedLayout(swizzle_byte_width=128, element_bitwidth=16, rank=2)
+
+    h = async_tma_kernel.warmup(input_desc, XBLOCK, shared_layout, grid=(1, ), num_warps=4)
+    expecttest.assert_expected_inline(
+        h.asm["source"], """\
+#loc = loc(unknown)
+#shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16}>
+#shared1 = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-warps" = 4 : i32} {
+  tt.func public @async_tma_kernel(%arg0: !tt.tensordesc<tensor<128x128xf16>> loc(unknown), %arg1: i32 loc(unknown), %arg2: i32 loc(unknown), %arg3: i64 loc(unknown), %arg4: i64 loc(unknown)) attributes {noinline = false} {
+    %0 = ttg.local_alloc : () -> !ttg.memdesc<128x128xf16, #shared, #smem, mutable> loc(#loc)
+    %1 = ttg.local_alloc : () -> !ttg.memdesc<1xi64, #shared1, #smem, mutable> loc(#loc)
+    ttng.init_barrier %1, 1 : !ttg.memdesc<1xi64, #shared1, #smem, mutable> loc(#loc)
+    %c0_i32 = arith.constant 0 : i32 loc(#loc)
+    %c0_i32_0 = arith.constant 0 : i32 loc(#loc)
+    %true = arith.constant true loc(#loc)
+    %2 = ttng.tensor_desc_to_tma_ptr %arg0 : !tt.tensordesc<tensor<128x128xf16>> to !tt.ptr<i8> loc(#loc)
+    ttng.async_tma_copy_global_to_local %2[%c0_i32, %c0_i32_0] %0, %1, %true : !tt.ptr<i8>, !ttg.memdesc<1xi64, #shared1, #smem, mutable> -> !ttg.memdesc<128x128xf16, #shared, #smem, mutable> loc(#loc)
+    %true_1 = arith.constant true loc(#loc)
+    ttng.barrier_expect %1, 32768, %true_1 : !ttg.memdesc<1xi64, #shared1, #smem, mutable> loc(#loc)
+    %c0_i32_2 = arith.constant 0 : i32 loc(#loc)
+    %true_3 = arith.constant true loc(#loc)
+    ttng.wait_barrier %1, %c0_i32_2, %true_3 : !ttg.memdesc<1xi64, #shared1, #smem, mutable> loc(#loc)
+    ttng.inval_barrier %1 : !ttg.memdesc<1xi64, #shared1, #smem, mutable> loc(#loc)
+    %c0_i32_4 = arith.constant 0 : i32 loc(#loc)
+    %c0_i32_5 = arith.constant 0 : i32 loc(#loc)
+    %3 = ttng.tensor_desc_to_tma_ptr %arg0 : !tt.tensordesc<tensor<128x128xf16>> to !tt.ptr<i8> loc(#loc)
+    ttng.async_tma_copy_local_to_global %3[%c0_i32_4, %c0_i32_5] %0 : !tt.ptr<i8>, !ttg.memdesc<128x128xf16, #shared, #smem, mutable> loc(#loc)
+    ttng.async_tma_store_wait {pendings = 0 : i32} loc(#loc)
+    tt.return loc(#loc)
+  } loc(#loc)
+} loc(#loc)
+""")
+
+
+@gluon.jit
+def async_tma_blackwell_kernel(input_desc, XBLOCK: ttgl.constexpr, smem_layout: ttgl.constexpr):
+    smem = ttgl.allocate_shared_memory(ttgl.float16, [XBLOCK, XBLOCK], smem_layout)
+    bar = ttgl.allocate_shared_memory(ttgl.int64, [1], mbarrier.MBarrierLayout())
+    mbarrier.init(bar, count=1)
+
+    offset_layout: tl.constexpr = ttgl.BlockedLayout([1, 4], [32, 1], [1, 4], [1, 0])
+    x_offsets = ttgl.arange(0, XBLOCK, layout=ttgl.SliceLayout(0, offset_layout))
+    tma.async_gather(input_desc, x_offsets, 0, bar, smem)
+    mbarrier.expect(bar, XBLOCK * XBLOCK * ttgl.float16.primitive_bitwidth // 8)
+    mbarrier.wait(bar, 0)
+
+    mbarrier.invalidate(bar)
+
+    tma.async_scatter(input_desc, x_offsets, 0, smem)
+    tma.store_wait(0)
+
+
+@pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] != 10, reason="Requires Blackwell")
+def test_async_tma_blackwell(fresh_knobs):
+    knobs.compilation.disable_line_info = True
+
+    input = torch.randn((1024, 1024), device="cuda", dtype=torch.float16)
+    XBLOCK = 128
+    input_desc = TensorDescriptor.from_tensor(input, [1, XBLOCK])
+    shared_layout = ttgl.NVMMASharedLayout(swizzle_byte_width=128, element_bitwidth=16, rank=2)
+
+    h = async_tma_blackwell_kernel.warmup(input_desc, XBLOCK, shared_layout, grid=(1, ), num_warps=4)
+    expecttest.assert_expected_inline(
+        h.asm["source"], """\
+#blocked = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [32, 1], warpsPerCTA = [1, 4], order = [1, 0]}>
+#loc = loc(unknown)
+#shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16}>
+#shared1 = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-warps" = 4 : i32} {
+  tt.func public @async_tma_blackwell_kernel(%arg0: !tt.tensordesc<tensor<1x128xf16>> loc(unknown), %arg1: i32 loc(unknown), %arg2: i32 loc(unknown), %arg3: i64 loc(unknown), %arg4: i64 loc(unknown)) attributes {noinline = false} {
+    %0 = ttg.local_alloc : () -> !ttg.memdesc<128x128xf16, #shared, #smem, mutable> loc(#loc)
+    %1 = ttg.local_alloc : () -> !ttg.memdesc<1xi64, #shared1, #smem, mutable> loc(#loc)
+    ttng.init_barrier %1, 1 : !ttg.memdesc<1xi64, #shared1, #smem, mutable> loc(#loc)
+    %2 = tt.make_range {end = 128 : i32, start = 0 : i32} : tensor<128xi32, #ttg.slice<{dim = 0, parent = #blocked}>> loc(#loc)
+    %true = arith.constant true loc(#loc)
+    %c0_i32 = arith.constant 0 : i32 loc(#loc)
+    %3 = ttng.tensor_desc_to_tma_ptr %arg0 : !tt.tensordesc<tensor<1x128xf16>> to !tt.ptr<i8> loc(#loc)
+    ttng.async_tma_gather %3[%2, %c0_i32] %0, %1, %true : !tt.ptr<i8>, tensor<128xi32, #ttg.slice<{dim = 0, parent = #blocked}>>, i32, !ttg.memdesc<1xi64, #shared1, #smem, mutable>, !ttg.memdesc<128x128xf16, #shared, #smem, mutable>, i1 loc(#loc)
+    %true_0 = arith.constant true loc(#loc)
+    ttng.barrier_expect %1, 32768, %true_0 : !ttg.memdesc<1xi64, #shared1, #smem, mutable> loc(#loc)
+    %c0_i32_1 = arith.constant 0 : i32 loc(#loc)
+    %true_2 = arith.constant true loc(#loc)
+    ttng.wait_barrier %1, %c0_i32_1, %true_2 : !ttg.memdesc<1xi64, #shared1, #smem, mutable> loc(#loc)
+    ttng.inval_barrier %1 : !ttg.memdesc<1xi64, #shared1, #smem, mutable> loc(#loc)
+    %4 = ttng.tensor_desc_to_tma_ptr %arg0 : !tt.tensordesc<tensor<1x128xf16>> to !tt.ptr<i8> loc(#loc)
+    %c0_i32_3 = arith.constant 0 : i32 loc(#loc)
+    ttng.async_tma_scatter %4[%2, %c0_i32_3] %0 : !tt.ptr<i8>, tensor<128xi32, #ttg.slice<{dim = 0, parent = #blocked}>>, i32, !ttg.memdesc<128x128xf16, #shared, #smem, mutable> loc(#loc)
+    ttng.async_tma_store_wait {pendings = 0 : i32} loc(#loc)
+    tt.return loc(#loc)
+  } loc(#loc)
+} loc(#loc)
+""")
