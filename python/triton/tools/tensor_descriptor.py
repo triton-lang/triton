@@ -9,6 +9,7 @@ class TensorDescriptor:
     shape: List[int]
     strides: List[int]
     block_shape: List[int]
+    layout: Any = None
 
     def __post_init__(self):
         rank = len(self.shape)

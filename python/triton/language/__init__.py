@@ -288,13 +288,22 @@ def str_to_ty(name):
     if name.startswith("tensordesc"):
         inner = name.split("<")[1].rstrip(">")
         dtype, block_shape = inner.split("[")
-        block_shape = [int(s.strip()) for s in block_shape.rstrip("]").split(",")]
+        block_shape, layout = block_shape.split("]")
+        block_shape = [int(s.strip()) for s in block_shape.split(",")]
         dtype = str_to_ty(dtype)
         ndim = len(block_shape)
         shape_type = tuple_type([int32] * ndim)
         # FIXME: Last dim stride should be constexpr(1)
         stride_type = tuple_type(([int64] * ndim))
-        block = block_type(dtype, block_shape)
+
+        if len(layout):
+            import triton.experimental.gluon.language as ttgl
+            import ast
+            layout = layout.strip("(").rstrip(")").split(",")
+            layout = [ast.literal_eval(s) for s in layout]
+            block = ttgl.distributed_type(dtype, block_shape, ttgl.NVMMASharedLayout(*layout))
+        else:
+            block = block_type(dtype, block_shape)
         return tensor_descriptor_type(block, shape_type, stride_type)
 
     if name == "constexpr":

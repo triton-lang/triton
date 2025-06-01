@@ -183,7 +183,7 @@ bool LoopPipelinerInternal::initializeLoopInfo(
   // All operations need to have a stage.
   for (Operation &op : forOp.getBody()->without_terminator()) {
     if (!stages.contains(&op)) {
-      op.emitOpError("not assigned a pipeline stage");
+      op.emitWarning("not assigned a pipeline stage");
       LDBG("--op not assigned a pipeline stage: " << op << " -> BAIL");
       return false;
     }
