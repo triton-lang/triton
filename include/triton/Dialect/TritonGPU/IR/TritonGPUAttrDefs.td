@@ -1139,6 +1139,7 @@ Row |
     ins
     "unsigned": $version,
     "bool":$isTransposed,
+    ArrayRefParameter<"unsigned">:$warpTileSize,
     ArrayRefParameter<"unsigned">:$warpsPerCTA,
     "CTALayoutAttr":$CTALayout
   );
@@ -1147,11 +1148,12 @@ Row |
   let hasCustomAssemblyFormat = 1;
 
   let extraClassDeclaration = extraDistributedDeclaration # [{
-    SmallVector<int64_t> getElemsPerInstrForOperands() const;
+    SmallVector<int64_t> getElemsPerInstrForOperands(ArrayRef<unsigned> mnkDim ,int opIdx) const;
     SmallVector<int64_t> getRepForOperand(ArrayRef<int64_t> operandShape,
-                                          Type elemType, int kWidth, int opIdx) const;
+                                          Type elemType, int kWidth,
+                                           int opIdx, ArrayRef<unsigned> mnkDim) const;
     SmallVector<unsigned> getRepOrderForOperand(int opIdx) const;
-    unsigned getKWidthForOperands() const;
+    unsigned getKWidthForOperands(ArrayRef<unsigned> mnkDim ,int opIdx) const;
     static SmallVector<unsigned> getMNKDimPerInstr();
   }];
 }

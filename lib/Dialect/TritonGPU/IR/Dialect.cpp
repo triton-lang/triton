@@ -1390,6 +1390,7 @@ Attribute AMDWmmaEncodingAttr::parse(AsmParser &parser, Type type) {
 
   unsigned version = 0;
   bool isTransposed = false;
+  SmallVector<unsigned> warpTileSize;
   SmallVector<unsigned> warpsPerCTA;
   std::optional<SmallVector<unsigned>> CTAsPerCGA;
   std::optional<SmallVector<unsigned>> CTASplitNum;
@@ -1402,6 +1403,11 @@ Attribute AMDWmmaEncodingAttr::parse(AsmParser &parser, Type type) {
     }
     if (attr.getName() == "isTranspose") {
       if (parseBool(parser, attr, isTransposed, "isTranspose").failed())
+        return {};
+    }
+    if (attr.getName() == "warpTileSize") {
+      if (parseIntArrayAttr(parser, attr, warpTileSize, "warpTileSize")
+              .failed())
         return {};
     }
     if (attr.getName() == "warpsPerCTA") {
@@ -1430,14 +1436,16 @@ Attribute AMDWmmaEncodingAttr::parse(AsmParser &parser, Type type) {
   if (!CTALayout.has_value())
     return {};
 
-  return parser.getChecked<AMDWmmaEncodingAttr>(
-      parser.getContext(), version, isTransposed, warpsPerCTA, *CTALayout);
+  return parser.getChecked<AMDWmmaEncodingAttr>(parser.getContext(), version,
+                                                isTransposed, warpTileSize,
+                                                warpsPerCTA, *CTALayout);
 }
 
 void AMDWmmaEncodingAttr::print(AsmPrinter &printer) const {
   printer << "<{"
           << "version = " << getVersion()
-          << ", isTranspose = " << getIsTransposed() << ", warpsPerCTA = ["
+          << ", isTranspose = " << getIsTransposed() << ", warpTileSize = ["
+          << ArrayRef(getWarpTileSize()) << "]" << ", warpsPerCTA = ["
           << ArrayRef(getWarpsPerCTA()) << "]";
   maybePrintCTALayout(getContext(), printer, getCTALayout(),
                       /*rank=*/getWarpsPerCTA().size());
@@ -1447,8 +1455,27 @@ void AMDWmmaEncodingAttr::print(AsmPrinter &printer) const {
 LogicalResult
 AMDWmmaEncodingAttr::verify(function_ref<mlir::InFlightDiagnostic()> emitError,
                             unsigned version, bool isTransposed,
+                            llvm::ArrayRef<unsigned> warpTileSize,
                             llvm::ArrayRef<unsigned int> warpsPerCTA,
                             mlir::triton::gpu::CTALayoutAttr) {
+  if (version != 1 && version != 2) {
+    return emitError() << "WMMA version must be in the [1, 2] range";
+  }
+
+  if (warpTileSize.size() != 3 || warpTileSize[0] != 16 ||
+      warpTileSize[1] != 16 ||
+      (warpTileSize[2] != 32 && warpTileSize[2] != 16)) {
+
+    return emitError()
+           << "WMMA warpTileSize must be {16, 16, 16} or {16, 16, 32}";
+  }
+
+  if (warpTileSize[2] == 32 && version != 2) {
+
+    return emitError()
+           << "warpTileSize {16, 16, 32} is supported only for version 2";
+  }
+
   if (version != 1 && version != 2) {
     return emitError() << "WMMA version must be in the [1, 2] range";
   }
@@ -1833,15 +1860,22 @@ SmallVector<unsigned> AMDWmmaEncodingAttr::getCTASplitNum() const {
   return SmallVector<unsigned>(getCTALayout().getCTASplitNum());
 }
 
-SmallVector<int64_t> AMDWmmaEncodingAttr::getElemsPerInstrForOperands() const {
-  return {16, 16};
+SmallVector<int64_t>
+AMDWmmaEncodingAttr::getElemsPerInstrForOperands(ArrayRef<unsigned> mnkDim,
+                                                 int opIdx) const {
+  if (opIdx == 0)
+    return {mnkDim[0], mnkDim[2]};
+  else {
+    assert(opIdx == 1);
+    return {mnkDim[2], mnkDim[1]};
+  }
 }
 
 SmallVector<int64_t>
 AMDWmmaEncodingAttr::getRepForOperand(ArrayRef<int64_t> operandShape,
-                                      Type elemType, int kWidth,
-                                      int opIdx) const {
-  auto operandTileShape = getElemsPerInstrForOperands();
+                                      Type elemType, int kWidth, int opIdx,
+                                      ArrayRef<unsigned> mnkDim) const {
+  auto operandTileShape = getElemsPerInstrForOperands(mnkDim, opIdx);
   assert(operandTileShape.size() == 2);
   auto warpsPerCTA = getWarpsPerCTA();
   auto rank = operandShape.size();
@@ -1869,11 +1903,12 @@ SmallVector<unsigned> AMDWmmaEncodingAttr::getMNKDimPerInstr() {
   return {16, 16, 16};
 }
 
-unsigned AMDWmmaEncodingAttr::getKWidthForOperands() const {
+unsigned AMDWmmaEncodingAttr::getKWidthForOperands(ArrayRef<unsigned> mnkDim,
+                                                   int opIdx) const {
   SmallVector<unsigned> sizePerThread(getRank(), 1);
   auto numReplicated = getVersion() == 1 ? 2 : 1;
   auto elemsPerInstr =
-      numReplicated * product(getElemsPerInstrForOperands()) / 32;
+      numReplicated * product(getElemsPerInstrForOperands(mnkDim, opIdx)) / 32;
   return elemsPerInstr;
 }
 

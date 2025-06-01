@@ -2,9 +2,11 @@
 
 #blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [0, 1]}>
 #shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
-#mma1 = #ttg.amd_wmma<{version = 1, warpsPerCTA = [2, 2]}>
-#mma2 = #ttg.amd_wmma<{version = 2, warpsPerCTA = [2, 2]}>
-#mma2_transposed = #ttg.amd_wmma<{version = 2, warpsPerCTA = [2, 2], isTranspose = true}>
+#mma1 = #ttg.amd_wmma<{version = 1, warpTileSize = [16, 16, 16], warpsPerCTA = [2, 2]}>
+#mma2 = #ttg.amd_wmma<{version = 2, warpTileSize = [16, 16, 16], warpsPerCTA = [2, 2]}>
+#mma2_transposed = #ttg.amd_wmma<{version = 2, warpTileSize = [16, 16, 16], warpsPerCTA = [2, 2], isTranspose = true}>
+#mma_16x16x32 = #ttg.amd_wmma<{version = 2, warpTileSize = [16, 16, 32], warpsPerCTA = [2, 2]}>
+
 #smem = #ttg.shared_memory
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
   //  CHECK-LABEL: wmma1_dot_operand
@@ -129,6 +131,20 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
     tt.return
   }
 
+  tt.func @wmma_16x16x32_dot(%arg0: tensor<16x32xi4, #ttg.dot_op<{opIdx = 0, parent = #mma_16x16x32, kWidth = 16}>>, %arg1: tensor<32x16xi4, #ttg.dot_op<{opIdx = 1, parent = #mma_16x16x32, kWidth = 16}>>, %arg2: tensor<16x16xi32, #mma_16x16x32>) {
+    // CHECK-COUNT-16: llvm.extractvalue %{{.*}} : !llvm.struct<(i4, i4, i4, i4, i4, i4, i4, i4, i4, i4, i4, i4, i4, i4, i4, i4)>
+    // CHECK-COUNT-16: llvm.insertelement {{.*}} : vector<16xi4>
+    // CHECK: llvm.bitcast %{{.*}} : vector<16xi4> to vector<2xi32>
+    // CHECK-COUNT-16: llvm.extractvalue %{{.*}} : !llvm.struct<(i4, i4, i4, i4, i4, i4, i4, i4, i4, i4, i4, i4, i4, i4, i4, i4)>
+    // CHECK-COUNT-16: llvm.insertelement {{.*}} : vector<16xi4>
+    // CHECK: llvm.bitcast %{{.*}} : vector<16xi4> to vector<2xi32>
+    // CHECK-COUNT-8: llvm.extractvalue %{{.*}} : !llvm.struct<(i32, i32, i32, i32, i32, i32, i32, i32)>
+    // CHECK: wmma.i32.16x16x32.iu4{{.*}} : (i1, vector<2xi32>, i1, vector<2xi32>, vector<8xi32>, i1) -> vector<8xi32>
+    %0 = tt.dot %arg0, %arg1, %arg2, inputPrecision = ieee : tensor<16x32xi4, #ttg.dot_op<{opIdx = 0, parent = #mma_16x16x32, kWidth = 16}>> * tensor<32x16xi4, #ttg.dot_op<{opIdx = 1, parent = #mma_16x16x32, kWidth = 16}>> -> tensor<16x16xi32, #mma_16x16x32>
+    // CHECK-COUNT-8: llvm.insertvalue {{.*}} : !llvm.struct<(i32, i32, i32, i32, i32, i32, i32, i32)>
+    tt.return
+  }
+
   // CHECK-LABEL: wmma2_transposed_dot
   tt.func @wmma2_transposed_dot(%arg0: tensor<16x16xf16, #ttg.dot_op<{opIdx = 0, parent = #mma2_transposed, kWidth = 8}>>, %arg1: tensor<16x16xf16, #ttg.dot_op<{opIdx = 1, parent = #mma2_transposed, kWidth = 8}>>, %arg2: tensor<16x16xf16, #mma2_transposed>) {
     // CHECK: llvm.call_intrinsic "llvm.amdgcn.wmma.f16.16x16x16.f16.v8f16.v8f16"{{.*}} : (vector<8xf16>, vector<8xf16>, vector<8xf16>, i1) -> vector<8xf16>
@@ -204,7 +220,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
 // -----
 
 #shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [2, 1, 0]}>
-#mma1 = #ttg.amd_wmma<{version = 1, warpsPerCTA = [2, 1, 4]}>
+#mma1 = #ttg.amd_wmma<{version = 1, warpTileSize = [16, 16, 16], warpsPerCTA = [2, 1, 4]}>
 #smem = #ttg.shared_memory
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 32 : i32} {
   // CHECK-LABEL: wmma_dot_operand3d
