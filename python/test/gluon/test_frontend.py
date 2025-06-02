@@ -433,7 +433,8 @@ def test_layout_mangling():
         smem = ttgl.allocate_shared_memory(ttgl.int32, [32, 32], a)
         smem_and_layout_user(smem, a)
 
-    expecttest.assert_expected_inline(run_parser(kernel).str_nodebug(), """\
+    expecttest.assert_expected_inline(
+        run_parser(kernel).str_nodebug(), """\
 #shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
 #smem = #ttg.shared_memory
 module {
