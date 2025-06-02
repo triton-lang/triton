@@ -415,13 +415,13 @@ def async_tma_kernel(input_desc, XBLOCK: ttgl.constexpr, smem_layout: ttgl.const
     bar = ttgl.allocate_shared_memory(ttgl.int64, [1], mbarrier.MBarrierLayout())
     mbarrier.init(bar, count=1)
 
-    tma.async_copy_global_to_local(input_desc, [0, 0], bar, smem)
+    tma.async_copy_global_to_shared(input_desc, [0, 0], bar, smem)
     mbarrier.expect(bar, XBLOCK * XBLOCK * ttgl.float16.primitive_bitwidth // 8)
     mbarrier.wait(bar, 0)
 
     mbarrier.invalidate(bar)
 
-    tma.async_copy_local_to_global(input_desc, [0, 0], smem)
+    tma.async_copy_shared_to_global(input_desc, [0, 0], smem)
     tma.store_wait(0)
 
 
