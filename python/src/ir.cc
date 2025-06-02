@@ -1417,10 +1417,7 @@ void init_triton_ir(py::module &&m) {
       .def("create_reshape",
            [](TritonOpBuilder &self, Value &arg, std::vector<int64_t> &shape,
               bool allowReorder) -> Value {
-             auto argType =
-                 cast<RankedTensorType>(arg.getType()).getElementType();
-             return self.create<ReshapeOp>(
-                 RankedTensorType::get(shape, argType), arg, allowReorder);
+             return self.create<ReshapeOp>(shape, arg, allowReorder);
            })
       .def("create_expand_dims",
            [](TritonOpBuilder &self, Value &arg, int axis) -> Value {
