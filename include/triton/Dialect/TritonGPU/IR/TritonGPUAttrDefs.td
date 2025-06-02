@@ -462,7 +462,6 @@ def NVMMASharedEncodingAttr :
     int getVec() const;
   }];
   let hasCustomAssemblyFormat = 1;
-  let genVerifyDecl = 1;
 }
 
 def AMDRotatingSharedEncodingAttr :

@@ -1589,14 +1589,6 @@ void SwizzledSharedEncodingAttr::print(AsmPrinter &printer) const {
 // NVMMAShared encoding
 //===----------------------------------------------------------------------===//
 
-LogicalResult
-NVMMASharedEncodingAttr::verify(function_ref<InFlightDiagnostic()> emitError,
-                                unsigned swizzlingByteWidth, bool transposed,
-                                unsigned elementBitWidth, bool fp4Padded,
-                                CTALayoutAttr ctaLayout) {
-  return success();
-}
-
 Attribute NVMMASharedEncodingAttr::parse(AsmParser &parser, Type type) {
   if (parser.parseLess().failed())
     return {};
