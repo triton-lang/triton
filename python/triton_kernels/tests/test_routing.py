@@ -17,8 +17,8 @@ def ref_expt_data(routing_data, n_gates):
     hist = routing_data.expt_hist
     # offset for each experts
     device = hist.device
-    offs = torch.cumsum(hist, dim=0)
-    offs = torch.cat((torch.zeros(1, dtype=torch.int32, device=device), offs))
+    offs_raw = torch.cumsum(hist, dim=0)
+    offs_raw = torch.cat((torch.zeros(1, dtype=torch.int32, device=device), offs_raw))
     # maximum number of tiles for all values of `block_m` considered
     block_ms = [16, 32, 64, 128]
     if n_gates <= n_expts_tot:
@@ -28,19 +28,19 @@ def ref_expt_data(routing_data, n_gates):
         # ceil_div(x, y): -(-x // y)
         max_n_tiles = n_expts_tot - 1 - ((n_expts_tot - n_gates - 1) // min(block_ms))
     # fill up tile offset/infos for each block
-    tile_offs = dict()
-    blocks = dict()
+    offs_pad = dict()
+    id_map = dict()
     for block_m in [16, 32, 64, 128]:
         n_tiles = (hist + block_m - 1) // block_m  # matmul blocks needed
-        tile_offs[block_m] = torch.cumsum(n_tiles, dim=0)
-        tile_offs[block_m] = torch.cat((torch.zeros(1, dtype=torch.int32, device=device), tile_offs[block_m]))
+        offs_pad[block_m] = torch.cumsum(n_tiles, dim=0)
+        offs_pad[block_m] = torch.cat((torch.zeros(1, dtype=torch.int32, device=device), offs_pad[block_m]))
         # compute data required to drive ragged batch matmul
-        blocks[block_m] = -torch.ones(max_n_tiles, dtype=torch.int32, device=device)
+        id_map[block_m] = -torch.ones(max_n_tiles, dtype=torch.int32, device=device)
         for e in range(n_expts_tot):
-            offset = tile_offs[block_m][e]
+            offset = offs_pad[block_m][e]
             for b in range(n_tiles[e]):
-                blocks[block_m][offset + b] = (b << 16) + e
-    return ExptData(hist, offs, tile_offs, blocks)
+                id_map[block_m][offset + b] = (b << 16) + e
+    return ExptData(hist, offs_raw, offs_pad, id_map)
 
 
 n_tokens = [(x, None) for x in [371, 255, 256, 4096, 1023, 1024]]
@@ -87,12 +87,12 @@ def test_op(n_tokens_pad, n_tokens_raw, n_expts_tot, n_expts_act, sm_first, use_
     assert_equal(ref_routing_data.expt_hist, tri_routing_data.expt_hist)
 
     assert_equal(ref_metadata.hist, tri_metadata.hist)
-    assert_equal(ref_metadata.offs, tri_metadata.offs)
-    assert len(ref_metadata.tile_offs) == len(tri_metadata.tile_offs)
-    assert len(ref_metadata.blocks) == len(tri_metadata.blocks)
-    for block_m in ref_metadata.tile_offs.keys():
-        assert_equal(ref_metadata.tile_offs[block_m], tri_metadata.tile_offs[block_m])
-        assert_equal(ref_metadata.blocks[block_m], tri_metadata.blocks[block_m])
+    assert_equal(ref_metadata.offs_raw, tri_metadata.offs_raw)
+    assert len(ref_metadata.offs_pad) == len(tri_metadata.offs_pad)
+    assert len(ref_metadata.id_map) == len(tri_metadata.id_map)
+    for block_m in ref_metadata.offs_pad.keys():
+        assert_equal(ref_metadata.offs_pad[block_m], tri_metadata.offs_pad[block_m])
+        assert_equal(ref_metadata.id_map[block_m], tri_metadata.id_map[block_m])
 
     assert ref_routing_data.n_expts_tot == ref_routing_data.n_expts_tot
     assert ref_routing_data.n_expts_act == ref_routing_data.n_expts_act

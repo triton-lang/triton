@@ -7,9 +7,9 @@ import triton.language as tl
 @dataclass
 class ExptData:
     hist: torch.Tensor
-    offs: torch.Tensor
-    tile_offs: dict[int, torch.Tensor]
-    blocks: dict[int, torch.Tensor]
+    offs_raw: torch.Tensor
+    offs_pad: dict[int, torch.Tensor]
+    id_map: dict[int, torch.Tensor]
 
 
 @triton.jit
@@ -103,24 +103,24 @@ def compute_metadata(routing_data, n_rows):
     # allocate memory
     pad = lambda x: cdiv(x, MEMSET_BLOCK) * MEMSET_BLOCK
     dtype = torch.int32
-    offs = torch.empty((n_expts_tot + 1, ), dtype=dtype, device=device)
-    tile_offs = torch.empty((block_m_num, pad(n_expts_tot + 1)), dtype=dtype, device=device)
-    tile_infos = torch.empty((block_m_num, pad(max_n_tiles)), dtype=dtype, device=device)
+    offs_raw = torch.empty((n_expts_tot + 1, ), dtype=dtype, device=device)
+    offs_pad = torch.empty((block_m_num, pad(n_expts_tot + 1)), dtype=dtype, device=device)
+    id_map = torch.empty((block_m_num, pad(max_n_tiles)), dtype=dtype, device=device)
     # compute outputs
-    tile_offs = tile_offs[:, :n_expts_tot + 1]
-    tile_infos = tile_infos[:, :max_n_tiles]
-    memset_grid = cdiv(tile_infos.shape[1], MEMSET_BLOCK) + 1
+    offs_pad = offs_pad[:, :n_expts_tot + 1]
+    id_map = id_map[:, :max_n_tiles]
+    memset_grid = cdiv(id_map.shape[1], MEMSET_BLOCK) + 1
     _matmul_metadata_memset[(memset_grid, block_m_num)](
-        routing_data.expt_hist, n_expts_tot, offs,  #
-        tile_offs, tile_offs.stride(0),  #
-        tile_infos, tile_infos.stride(0),  #
+        routing_data.expt_hist, n_expts_tot, offs_raw,  #
+        offs_pad, offs_pad.stride(0),  #
+        id_map, id_map.stride(0),  #
         block_m_log2_start, BLOCK=MEMSET_BLOCK,  # optimization parameters
         num_warps=1)
     _matmul_metadata_compute[(n_expts_tot, block_m_num)](
-        routing_data.expt_hist, tile_offs, tile_offs.stride(0), tile_infos, tile_infos.stride(0),  # outputs
+        routing_data.expt_hist, offs_pad, offs_pad.stride(0), id_map, id_map.stride(0),  # outputs
         block_m_log2_start, BLOCK=HIST2_BLOCK_M,  # optimization parameters
         num_warps=4)
     # unpack into datastructure
-    tile_offs = {2**j: tile_offs[i, :] for i, j in enumerate(range(block_m_log2_start, block_m_log2_end))}
-    tile_infos = {2**j: tile_infos[i, :] for i, j in enumerate(range(block_m_log2_start, block_m_log2_end))}
-    return ExptData(routing_data.expt_hist, offs, tile_offs, tile_infos)
+    offs_pad = {2**j: offs_pad[i, :] for i, j in enumerate(range(block_m_log2_start, block_m_log2_end))}
+    id_map = {2**j: id_map[i, :] for i, j in enumerate(range(block_m_log2_start, block_m_log2_end))}
+    return ExptData(routing_data.expt_hist, offs_raw, offs_pad, id_map)
