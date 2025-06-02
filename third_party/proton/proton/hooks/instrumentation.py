@@ -159,6 +159,9 @@ class InstrumentationHook(Hook):
                                                           self.mode.buffer_size, max_shared_mem,
                                                           self.profile_buffer_size, self.profile_buffer_alignment)
 
+            if self.mode.optimization == mode.Optimize.SCHED_STORES:
+                triton_proton.add_move_proton_stores_to_end(pm)
+
             triton_proton.add_allocate_proton_shared_memory(pm)
 
         ttgpuir_func = lambda pm: to_ttgpuir_passes(pm)
@@ -174,11 +177,11 @@ class InstrumentationHook(Hook):
 
         original_run = JITFunction.run
 
-        mode = self.mode
+        original_mode = self.mode
 
         @functools.wraps(original_run)
         def instrumented_run(self, *args, **kwargs):
-            kwargs["instrumentation_mode"] = str(mode)
+            kwargs["instrumentation_mode"] = str(original_mode)
             return original_run(self, *args, **kwargs)
 
         JITFunction.run = instrumented_run
