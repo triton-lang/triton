@@ -11,30 +11,36 @@ def init_data(n_tokens, n_expts_tot, dtype=torch.float16, device="cuda"):
     return logits
 
 
-def ref_expt_data(routing_data, n_gates, block_m):
-    hist = routing_data.expt_hist
-    device = hist.device
+def ref_expt_data(routing_data, n_gates):
     n_expts_tot = routing_data.n_expts_tot
-    blks = (hist + block_m - 1) // block_m  # matmul blocks needed
-    tsum = torch.cat((torch.zeros(1, dtype=torch.int32, device=device), torch.cumsum(hist,
-                                                                                     dim=0)))  # prefix sum of tokens
-    bsum = torch.cat((torch.zeros(1, dtype=torch.int32, device=device), torch.cumsum(blks,
-                                                                                     dim=0)))  # prefix sum of blocks
-    # Get the max number of matmul blocks of size d_tile needed (and is launched with).
-    # This assumes the worst distribution of all experts with one token except for one that has the rest.
+    # histogram
+    hist = routing_data.expt_hist
+    # offset for each experts
+    device = hist.device
+    offs = torch.cumsum(hist, dim=0)
+    offs = torch.cat((torch.zeros(1, dtype=torch.int32, device=device), offs))
+    # maximum number of tiles for all values of `block_m` considered
+    block_ms = [16, 32, 64, 128]
     if n_gates <= n_expts_tot:
-        grid_m = n_gates
+        max_n_tiles = n_gates
     else:
         # ceil_div(n_gates - n_experts + 1, d_tile) + n_experts - 1
         # ceil_div(x, y): -(-x // y)
-        grid_m = n_expts_tot - 1 - ((n_expts_tot - n_gates - 1) // block_m)
-    bloc_data = -torch.ones(grid_m, dtype=torch.int32, device=device)
-    # compute data required to drive ragged batch matmul
-    for e in range(n_expts_tot):
-        offset = bsum[e]
-        for b in range(blks[e]):
-            bloc_data[offset + b] = (b << 16) + e
-    return ExptData(hist, tsum, bsum, bloc_data)
+        max_n_tiles = n_expts_tot - 1 - ((n_expts_tot - n_gates - 1) // min(block_ms))
+    # fill up tile offset/infos for each block
+    tile_offs = dict()
+    blocks = dict()
+    for block_m in [16, 32, 64, 128]:
+        n_tiles = (hist + block_m - 1) // block_m  # matmul blocks needed
+        tile_offs[block_m] = torch.cumsum(n_tiles, dim=0)
+        tile_offs[block_m] = torch.cat((torch.zeros(1, dtype=torch.int32, device=device), tile_offs[block_m]))
+        # compute data required to drive ragged batch matmul
+        blocks[block_m] = -torch.ones(max_n_tiles, dtype=torch.int32, device=device)
+        for e in range(n_expts_tot):
+            offset = tile_offs[block_m][e]
+            for b in range(n_tiles[e]):
+                blocks[block_m][offset + b] = (b << 16) + e
+    return ExptData(hist, offs, tile_offs, blocks)
 
 
 n_tokens = [(x, None) for x in [371, 255, 256, 4096, 1023, 1024]]
@@ -43,10 +49,9 @@ n_tokens += [(1152, 911)]
 
 @pytest.mark.parametrize("n_tokens_pad, n_tokens_raw", n_tokens)
 @pytest.mark.parametrize("n_expts_tot, n_expts_act", [(128, 32), (1500, 8)])
-@pytest.mark.parametrize("block_m", [64, 128])
 @pytest.mark.parametrize("use_expt_indx", [False, True])
 @pytest.mark.parametrize("sm_first", [True, False])
-def test_op(n_tokens_pad, n_tokens_raw, n_expts_tot, n_expts_act, sm_first, block_m, use_expt_indx, device):
+def test_op(n_tokens_pad, n_tokens_raw, n_expts_tot, n_expts_act, sm_first, use_expt_indx, device):
     torch.manual_seed(2)
     if n_tokens_raw is None:
         n_tokens_raw = n_tokens_pad
@@ -71,8 +76,8 @@ def test_op(n_tokens_pad, n_tokens_raw, n_expts_tot, n_expts_act, sm_first, bloc
                                                               n_rows=n_routing_rows)
     tri_routing_data, tri_gather, tri_scatter = routing(tri_logits, n_expts_act, sm_first, tri_expt_indx,
                                                         n_rows=n_routing_rows)
-    ref_metadata = ref_expt_data(ref_routing_data, n_gates_raw, block_m)
-    tri_metadata = compute_metadata(tri_routing_data, n_gates_raw, block_m)
+    ref_metadata = ref_expt_data(ref_routing_data, n_gates_raw)
+    tri_metadata = compute_metadata(tri_routing_data, n_gates_raw)
 
     def _assert_indx_equal(ref, tri):
         assert_equal(ref, tri[:len(ref)])
@@ -83,8 +88,11 @@ def test_op(n_tokens_pad, n_tokens_raw, n_expts_tot, n_expts_act, sm_first, bloc
 
     assert_equal(ref_metadata.hist, tri_metadata.hist)
     assert_equal(ref_metadata.offs, tri_metadata.offs)
-    assert_equal(ref_metadata.tile_offs, tri_metadata.tile_offs)
-    assert_equal(ref_metadata.blocks, tri_metadata.blocks)
+    assert len(ref_metadata.tile_offs) == len(tri_metadata.tile_offs)
+    assert len(ref_metadata.blocks) == len(tri_metadata.blocks)
+    for block_m in ref_metadata.tile_offs.keys():
+        assert_equal(ref_metadata.tile_offs[block_m], tri_metadata.tile_offs[block_m])
+        assert_equal(ref_metadata.blocks[block_m], tri_metadata.blocks[block_m])
 
     assert ref_routing_data.n_expts_tot == ref_routing_data.n_expts_tot
     assert ref_routing_data.n_expts_act == ref_routing_data.n_expts_act
