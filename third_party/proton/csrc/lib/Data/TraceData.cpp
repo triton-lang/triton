@@ -355,7 +355,6 @@ convertToTimelineTrace(TraceData::Trace *trace,
             break;
           }
 
-          const auto &event = sortedEvents[eventIndex];
           auto scopeName = trace->getContexts(event.contextId).back().name;
           if (scopeNameToId.count(scopeName) == 0) {
             scopeIdToName[curScopeId] = scopeName;
