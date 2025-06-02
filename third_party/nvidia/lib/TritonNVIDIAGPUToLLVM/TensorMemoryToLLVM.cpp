@@ -798,6 +798,7 @@ struct TensorMemoryCopyOpConversion
     // * (rep_m x 32, 16B), meant only for TMEMCopy unit tests
     // * (rep_m, rep_k * 32 x 4 x 4B), 2D scale load with cp.async
     // * (rep_m, rep_k, 32, 16B), 4D scale load with TMA
+    // * (1, rep_m, rep_k, 2, 256B), 5D scale load with TMA
     // * (rep_m, rep_k, 32, 4, 4B), 5D scale load with cp.async
     auto elemBits = srcTy.getElementType().getIntOrFloatBitWidth();
     int prodInner = 1;
@@ -814,8 +815,14 @@ struct TensorMemoryCopyOpConversion
           repMorN = srcTy.getDimSize(0);
           repK = prodInner * elemBits / (32 * 128);
         } else {
-          repMorN = srcTy.getDimSize(0);
-          repK = srcTy.getDimSize(1);
+          if (srcTy.getDimSize(0) == 1 &&
+              srcTy.getDimSize(srcTy.getRank() - 1) == 256) {
+            repMorN = srcTy.getDimSize(1);
+            repK = srcTy.getDimSize(2);
+          } else {
+            repMorN = srcTy.getDimSize(0);
+            repK = srcTy.getDimSize(1);
+          }
         }
         break;
       }
