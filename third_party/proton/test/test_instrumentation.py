@@ -225,7 +225,7 @@ def test_trace(tmp_path: pathlib.Path):
     size = 256
     x = torch.rand(size, device='cuda')
     y = torch.rand(size, device='cuda')
-    temp_file = tmp_path / "test_trace.hatchet"
+    temp_file = tmp_path / "test_trace.chrome_trace"
     output = torch.empty_like(x)
     n_elements = output.numel()
     grid = (1, 1, 1)
