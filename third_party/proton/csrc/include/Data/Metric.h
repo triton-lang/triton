@@ -250,6 +250,8 @@ public:
     StartCycle,
     EndCycle,
     NormalizedDuration,
+    KernelId,
+    KernelName,
     BlockId,
     ProcessorId,
     UnitId,
@@ -262,13 +264,16 @@ public:
   CycleMetric() : Metric(MetricKind::Cycle, CycleMetricKind::Count) {}
 
   CycleMetric(uint64_t startCycle, uint64_t endCycle,
-              uint64_t normalizedDuration, uint64_t blockId,
+              uint64_t normalizedDuration, uint64_t kernelId,
+              const std::string &kernelName, uint64_t blockId,
               uint64_t processorId, uint64_t unitId, uint64_t deviceId,
               uint64_t deviceType, uint64_t timeShiftCost)
       : CycleMetric() {
     this->values[StartCycle] = startCycle;
     this->values[EndCycle] = endCycle;
     this->values[NormalizedDuration] = normalizedDuration;
+    this->values[KernelId] = kernelId;
+    this->values[KernelName] = kernelName;
     this->values[BlockId] = blockId;
     this->values[ProcessorId] = processorId;
     this->values[UnitId] = unitId;
@@ -289,13 +294,13 @@ public:
 
 private:
   const static inline bool PROPERTY[CycleMetricKind::Count] = {
-      false, false, false, true, true, true, true, true, true};
+      false, false, false, true, true, true, true, true, true, true, true};
   const static inline bool EXCLUSIVE[CycleMetricKind::Count] = {
-      false, false, true, true, true, true, true, true, true};
+      false, false, true, true, true, true, true, true, true, true, true};
   const static inline std::string VALUE_NAMES[CycleMetricKind::Count] = {
-      "start_cycle", "end_cycle",    "cycles",
-      "block_id",    "processor_id", "unit_id",
-      "device_id",   "device_type",  "time_shift_cost"};
+      "start_cycle", "end_cycle",   "cycles",         "kernel_id",
+      "kernel_name", "block_id",    "processor_id",   "unit_id",
+      "device_id",   "device_type", "time_shift_cost"};
 };
 
 } // namespace proton
