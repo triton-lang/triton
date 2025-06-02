@@ -240,7 +240,6 @@ def routing(logits, n_expts_act, sm_first=False, expt_indx=None, simulated_ep=1,
     n_expts_tot = logits.shape[-1] // simulated_ep
     gather_indx = GatherIndx(src_indx=topk_indx, dst_indx=gate_indx)
     scatter_indx = ScatterIndx(src_indx=gate_indx, dst_indx=topk_indx)
-    print("triton: ", logits.shape[0], n_expts_act)
     expt_data = compute_expt_data(hist, n_expts_tot, topk_indx.numel())
     return RoutingData(gate_scal, hist, n_expts_tot, n_expts_act, expt_data), gather_indx, scatter_indx
 
