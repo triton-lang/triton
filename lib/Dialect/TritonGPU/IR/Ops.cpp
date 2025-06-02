@@ -437,14 +437,20 @@ MemDescTransOp::inferReturnTypes(MLIRContext *context,
       return failure();
     }
   }
+
+  // Permute the last `rank` dims of the source alloc shape.
+  SmallVector<int64_t> allocShape =
+      applyPermutation(argTy.getAllocShape().take_back(order.size()), order);
+  allocShape.insert(allocShape.begin(), argTy.getAllocShape().begin(),
+                    argTy.getAllocShape().end() - order.size());
+
   inferredReturnTypes.push_back(
       MemDescType::get(retShape, retEltTy, retEncoding, argTy.getMemorySpace(),
-                       argTy.getMutableMemory()));
+                       argTy.getMutableMemory(), allocShape));
   return success();
 }
 
 // MemDescReshapeOp
-
 LogicalResult MemDescReshapeOp::verify() {
   MemDescType dstType = getResult().getType();
   MemDescType srcType = getSrc().getType();
@@ -467,6 +473,13 @@ LogicalResult MemDescReshapeOp::verify() {
   if (ll != llDst) {
     return emitError("source and destination layout are incompatible.");
   }
+  return success();
+}
+
+// MemDescReinterpretOp
+LogicalResult MemDescReinterpretOp::verify() {
+  if (getSrc().getType().getMemorySpace() != getType().getMemorySpace())
+    return emitError("source and destination memory space must match");
   return success();
 }
 
@@ -621,19 +634,14 @@ LogicalResult MemDescSubviewOp::verify() {
           "only nD -> (n-1)D rank-reducing subviews are supported");
     }
     for (auto offset : getOffsets().take_back(dstTy.getRank())) {
-      if (auto constOp = offset.getDefiningOp<arith::ConstantOp>()) {
-        if (auto offsetInt = dyn_cast<IntegerAttr>(constOp.getValue())) {
-          if (offsetInt.getInt() != 0) {
-            return emitError("only first offset can be non-zero for a "
-                             "rank-reducing subview");
-          }
-        } else {
-          return emitError(
-              "only integer constant values are allowed for the split");
-        }
-      } else {
+      APInt value;
+      if (!matchPattern(offset, m_ConstantInt(&value))) {
         return emitError("only constant values are allowed outside the front "
                          "dimension in a rank-reducing subview");
+      }
+      if (!value.isZero()) {
+        return emitError(
+            "only first offset can be non-zero for a rank-reducing subview");
       }
     }
     return success();
@@ -656,16 +664,10 @@ LogicalResult MemDescSubviewOp::verify() {
   }
   SmallVector<int64_t> offsets;
   for (auto offset : getOffsets()) {
-    if (auto constOp = offset.getDefiningOp<arith::ConstantOp>()) {
-      if (auto offsetInt = dyn_cast<IntegerAttr>(constOp.getValue())) {
-        offsets.push_back(offsetInt.getInt());
-      } else {
-        return emitError(
-            "only integer constant values are allowed for the split");
-      }
-    } else {
+    APInt value;
+    if (!matchPattern(offset, m_ConstantInt(&value)))
       return emitError("only constant values are allowed for the split");
-    }
+    offsets.push_back(value.getSExtValue());
   }
   // Identity subview
   if (dim == -1) {

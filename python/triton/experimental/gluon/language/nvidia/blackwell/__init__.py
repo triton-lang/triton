@@ -96,6 +96,10 @@ class tensor_memory_descriptor(base_value):
     def shape(self):
         return self.type.shape
 
+    @property
+    def rank(self):
+        return len(self.shape)
+
     def __str__(self) -> str:
         return str(self.type)
 
@@ -113,7 +117,7 @@ class tensor_memory_descriptor(base_value):
         _builder.create_tmem_store(self.handle, value.handle, pred.handle)
 
     @builtin
-    def subslice(self, start, length, _builder: GluonOpBuilder) -> None:
+    def split(self, start, length, _builder: GluonOpBuilder) -> None:
         start = _unwrap_if_constexpr(start)
         length = _unwrap_if_constexpr(length)
         assert isinstance(start, int)
@@ -121,6 +125,23 @@ class tensor_memory_descriptor(base_value):
         shape = [self.shape[0], length]
         ret = tensor_memory_descriptor(None, self.dtype, shape, self.type.layout, self.type.alloc_shape)
         ret.handle = _builder.create_tmem_subslice(ret.type.to_ir(_builder), self.handle, start)
+        return ret
+
+    @builtin
+    def subslice(self, index, shape=None, layout=None, _builder: GluonOpBuilder = None) -> tensor_memory_descriptor:
+        if layout is None:
+            layout = self.type.layout
+        if shape is None:
+            shape = self.shape[1:]
+
+        index = _unwrap_if_constexpr(index)
+        shape = [_unwrap_if_constexpr(s) for s in shape]
+        layout = _unwrap_if_constexpr(layout)
+
+        offsets = [_builder.get_int32(0)] * self.rank
+        offsets[0] = index.handle
+        ret = tensor_memory_descriptor(None, self.dtype, shape, layout, self.type.alloc_shape)
+        ret.handle = _builder.create_memdesc_subview(ret.type.to_ir(_builder), self.handle, offsets)
         return ret
 
 

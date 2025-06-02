@@ -188,6 +188,10 @@ class shared_memory_descriptor(base_value):
     def shape(self):
         return self.type.shape
 
+    @property
+    def rank(self):
+        return len(self.shape)
+
     def __str__(self) -> str:
         return str(self.type)
 
@@ -201,7 +205,56 @@ class shared_memory_descriptor(base_value):
         return semantic.shared_store(self, value, _builder)
 
     @builtin
-    def _keep_alive(self, _builder=None) -> None:
+    def split(self, offset, size, dim=None, layout=None, _builder: GluonOpBuilder = None) -> shared_memory_descriptor:
+        if layout is None:
+            layout = self.type.layout
+        if dim is None:
+            dim = 0
+
+        offset = _unwrap_if_constexpr(offset)
+        size = _unwrap_if_constexpr(size)
+        dim = _unwrap_if_constexpr(dim)
+        layout = _unwrap_if_constexpr(layout)
+
+        return semantic.memdesc_split(self, offset, size, dim, layout, _builder)
+
+    @builtin
+    def subslice(self, index, shape=None, layout=None, _builder: GluonOpBuilder = None) -> shared_memory_descriptor:
+        if layout is None:
+            layout = self.type.layout
+        if shape is None:
+            shape = self.shape[1:]
+
+        index = _unwrap_if_constexpr(index)
+        shape = [_unwrap_if_constexpr(s) for s in shape]
+        layout = _unwrap_if_constexpr(layout)
+
+        return semantic.memdesc_slice(self, index, shape, layout, _builder)
+
+    @builtin
+    def permute(self, order, layout, _builder: GluonOpBuilder) -> shared_memory_descriptor:
+        order = [_unwrap_if_constexpr(o) for o in order]
+        layout = _unwrap_if_constexpr(layout)
+
+        return semantic.memdesc_trans(self, order, layout, _builder)
+
+    @builtin
+    def reshape(self, shape, layout, _builder: GluonOpBuilder) -> shared_memory_descriptor:
+        shape = [_unwrap_if_constexpr(s) for s in shape]
+        layout = _unwrap_if_constexpr(layout)
+
+        return semantic.memdesc_reshape(self, shape, layout, _builder)
+
+    @builtin
+    def _reinterpret(self, dtype, shape, layout, _builder: GluonOpBuilder = None) -> shared_memory_descriptor:
+        dtype = _unwrap_if_constexpr(dtype)
+        shape = [_unwrap_if_constexpr(s) for s in shape]
+        layout = _unwrap_if_constexpr(layout)
+
+        return semantic.memdesc_reinterpret(self, dtype, shape, layout, _builder)
+
+    @builtin
+    def _keep_alive(self, _builder: GluonOpBuilder = None) -> None:
         return semantic.shared_dealloc(self, _builder)
 
 

@@ -7,10 +7,11 @@ from triton.experimental import gluon
 from triton.experimental.gluon import language as ttgl
 from triton.experimental.gluon.language.nvidia import blackwell
 from triton.experimental.gluon.language.nvidia.blackwell import mbarrier, tma
-from triton._filecheck import filecheck_test
+from triton._filecheck import filecheck_test, run_parser
 import triton.language as tl
 from triton._internal_testing import is_cuda
 from triton.tools.tensor_descriptor import TensorDescriptor
+from triton.compiler.errors import CompilationError
 
 
 @gluon.jit
@@ -100,8 +101,12 @@ def tensor_memory_kernel(layout: ttgl.constexpr, tmem_layout: ttgl.constexpr):
     mem = ttgl.nvidia.blackwell.allocate_tensor_memory(ttgl.int32, a.shape, tmem_layout, a)
     b = mem.load(layout)  # noqa: F841
     mem.store(a)
-    slice1 = mem.subslice(0, YBLOCK // 2)  # noqa: F841
-    slice2 = mem.subslice(YBLOCK // 2, YBLOCK // 2)  # noqa: F841
+    slice1 = mem.split(0, YBLOCK // 2)  # noqa: F841
+    slice2 = mem.split(YBLOCK // 2, YBLOCK // 2)  # noqa: F841
+
+    buffers = ttgl.nvidia.blackwell.allocate_tensor_memory(ttgl.float32, [2, XBLOCK, YBLOCK], tmem_layout)
+    for i in range(2):
+        buffers.subslice(i).load(layout)
 
 
 @pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] != 10,
@@ -127,10 +132,145 @@ module attributes {"ttg.num-warps" = 4 : i32} {
     ttng.tmem_store %cst, %result_0, %true : tensor<128x128xi32, #blocked> -> !ttg.memdesc<128x128xi32, #tmem, #ttng.tensor_memory, mutable> loc(#loc)
     %0 = ttng.tmem_subslice %result_0 {N = 0 : i32} : !ttg.memdesc<128x128xi32, #tmem, #ttng.tensor_memory, mutable> -> !ttg.memdesc<128x64xi32, #tmem, #ttng.tensor_memory, mutable, 128x128> loc(#loc)
     %1 = ttng.tmem_subslice %result_0 {N = 64 : i32} : !ttg.memdesc<128x128xi32, #tmem, #ttng.tensor_memory, mutable> -> !ttg.memdesc<128x64xi32, #tmem, #ttng.tensor_memory, mutable, 128x128> loc(#loc)
+    %result_2 = ttng.tmem_alloc : () -> !ttg.memdesc<2x128x128xf32, #tmem, #ttng.tensor_memory, mutable> loc(#loc)
+    %c0_i32_3 = arith.constant 0 : i32 loc(#loc)
+    %c2_i32 = arith.constant 2 : i32 loc(#loc)
+    %c1_i32 = arith.constant 1 : i32 loc(#loc)
+    %2 = arith.bitcast %c0_i32_3 : i32 to i32 loc(#loc)
+    %3 = arith.bitcast %c2_i32 : i32 to i32 loc(#loc)
+    %4 = arith.bitcast %c1_i32 : i32 to i32 loc(#loc)
+    %5 = ub.poison : i32 loc(#loc)
+    scf.for %arg0 = %2 to %3 step %4  : i32 {
+      %c0_i32_4 = arith.constant 0 : i32 loc(#loc)
+      %6 = ttg.memdesc_subview %result_2[%arg0, %c0_i32_4, %c0_i32_4] : !ttg.memdesc<2x128x128xf32, #tmem, #ttng.tensor_memory, mutable> -> !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable, 2x128x128> loc(#loc)
+      %result_5 = ttng.tmem_load %6 : !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable, 2x128x128> -> tensor<128x128xf32, #blocked> loc(#loc)
+    } loc(#loc)
     tt.return loc(#loc)
   } loc(#loc)
 } loc(#loc)
 #loc = loc(unknown)
+""")
+
+
+@gluon.jit
+def shared_memory_subview_kernel(XBLOCK: ttgl.constexpr, layout: ttgl.constexpr, smem_layout: ttgl.constexpr):
+    XHALF: tl.constexpr = XBLOCK // 2
+    smem = ttgl.allocate_shared_memory(ttgl.int32, [XBLOCK, XBLOCK], smem_layout)
+    view = smem.split(XHALF, XHALF, dim=1)
+    value = view.load(layout)
+    view = smem.split(XHALF, XHALF, dim=0)
+    view.store(value.trans())
+
+
+def test_shared_memory_subview(fresh_knobs):
+    knobs.compilation.disable_line_info = True
+
+    layout = ttgl.BlockedLayout(size_per_thread=[1, 1], threads_per_warp=[1, 32], warps_per_cta=[4, 1], order=[1, 0])
+    smem_layout = ttgl.SwizzledSharedLayout(1, 1, 1, [1, 0])
+    h = shared_memory_subview_kernel.warmup(256, layout, smem_layout, num_warps=4, grid=(1, ))
+    expecttest.assert_expected_inline(
+        h.asm["source"], """\
+#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [1, 0]}>
+#blocked1 = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [32, 1], warpsPerCTA = [1, 4], order = [0, 1]}>
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-warps" = 4 : i32} {
+  tt.func public @shared_memory_subview_kernel() attributes {noinline = false} {
+    %0 = ttg.local_alloc : () -> !ttg.memdesc<256x256xi32, #shared, #smem, mutable> loc(#loc)
+    %c0_i32 = arith.constant 0 : i32 loc(#loc)
+    %c128_i32 = arith.constant 128 : i32 loc(#loc)
+    %1 = ttg.memdesc_subview %0[%c0_i32, %c128_i32] : !ttg.memdesc<256x256xi32, #shared, #smem, mutable> -> !ttg.memdesc<256x128xi32, #shared, #smem, mutable, 256x256> loc(#loc)
+    %2 = ttg.local_load %1 : !ttg.memdesc<256x128xi32, #shared, #smem, mutable, 256x256> -> tensor<256x128xi32, #blocked> loc(#loc)
+    %c0_i32_0 = arith.constant 0 : i32 loc(#loc)
+    %c128_i32_1 = arith.constant 128 : i32 loc(#loc)
+    %3 = ttg.memdesc_subview %0[%c128_i32_1, %c0_i32_0] : !ttg.memdesc<256x256xi32, #shared, #smem, mutable> -> !ttg.memdesc<128x256xi32, #shared, #smem, mutable, 256x256> loc(#loc)
+    %4 = tt.trans %2 {order = array<i32: 1, 0>} : tensor<256x128xi32, #blocked> -> tensor<128x256xi32, #blocked1> loc(#loc)
+    ttg.local_store %4, %3 : tensor<128x256xi32, #blocked1> -> !ttg.memdesc<128x256xi32, #shared, #smem, mutable, 256x256> loc(#loc)
+    tt.return loc(#loc)
+  } loc(#loc)
+} loc(#loc)
+#loc = loc(unknown)
+""")
+
+
+@gluon.jit
+def shared_memory_subslice_kernel(XBLOCK: ttgl.constexpr, layout: ttgl.constexpr, smem_layout: ttgl.constexpr):
+    smem = ttgl.allocate_shared_memory(ttgl.int32, [4, XBLOCK], smem_layout)
+    for i in range(4):
+        smem.subslice(i).load(layout)
+
+
+def test_shared_memory_subslice(fresh_knobs):
+    knobs.compilation.disable_line_info = True
+
+    layout = ttgl.BlockedLayout(size_per_thread=[1], threads_per_warp=[32], warps_per_cta=[4], order=[0])
+    smem_layout = ttgl.NVMMASharedLayout(swizzle_byte_width=128, element_bitwidth=32, rank=2)
+    h = shared_memory_subslice_kernel.warmup(256, layout, smem_layout, num_warps=4, grid=(1, ))
+    expecttest.assert_expected_inline(
+        h.asm["source"], """\
+#blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+#shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 32}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-warps" = 4 : i32} {
+  tt.func public @shared_memory_subslice_kernel() attributes {noinline = false} {
+    %0 = ttg.local_alloc : () -> !ttg.memdesc<4x256xi32, #shared, #smem, mutable> loc(#loc)
+    %c0_i32 = arith.constant 0 : i32 loc(#loc)
+    %c4_i32 = arith.constant 4 : i32 loc(#loc)
+    %c1_i32 = arith.constant 1 : i32 loc(#loc)
+    %1 = arith.bitcast %c0_i32 : i32 to i32 loc(#loc)
+    %2 = arith.bitcast %c4_i32 : i32 to i32 loc(#loc)
+    %3 = arith.bitcast %c1_i32 : i32 to i32 loc(#loc)
+    %4 = ub.poison : i32 loc(#loc)
+    scf.for %arg0 = %1 to %2 step %3  : i32 {
+      %c0_i32_0 = arith.constant 0 : i32 loc(#loc)
+      %5 = ttg.memdesc_subview %0[%arg0, %c0_i32_0] : !ttg.memdesc<4x256xi32, #shared, #smem, mutable> -> !ttg.memdesc<256xi32, #shared, #smem, mutable, 4x256> loc(#loc)
+      %6 = ttg.local_load %5 : !ttg.memdesc<256xi32, #shared, #smem, mutable, 4x256> -> tensor<256xi32, #blocked> loc(#loc)
+    } loc(#loc)
+    tt.return loc(#loc)
+  } loc(#loc)
+} loc(#loc)
+#loc = loc(unknown)
+""")
+
+
+@gluon.jit
+def shared_memory_cast_kernel():
+    layout_a: ttgl.constexpr = ttgl.NVMMASharedLayout(swizzle_byte_width=64, transposed=False, element_bitwidth=8,
+                                                      rank=2)
+    layout_T: ttgl.constexpr = ttgl.NVMMASharedLayout(swizzle_byte_width=64, transposed=True, element_bitwidth=8,
+                                                      rank=2)
+    smem = ttgl.allocate_shared_memory(ttgl.int8, [256, 128], layout_a)
+    smem.permute((1, 0), layout_T)
+
+    layout_b: ttgl.constexpr = ttgl.NVMMASharedLayout(swizzle_byte_width=64, transposed=False, element_bitwidth=16,
+                                                      rank=4, cta_order=[3, 2, 1, 0])
+    layout_reshape: ttgl.constexpr = ttgl.NVMMASharedLayout(swizzle_byte_width=64, transposed=False,
+                                                            element_bitwidth=16, rank=2)
+    smem = ttgl.allocate_shared_memory(ttgl.float16, [32, 1, 4, 64], layout_b)
+    smem.reshape((128, 64), layout_reshape)
+
+    smem._reinterpret(ttgl.int8, [1024], ttgl.SwizzledSharedLayout(1, 1, 1, [0, 1]))
+
+
+def test_shared_memory_cast(fresh_knobs):
+    expecttest.assert_expected_inline(
+        run_parser(shared_memory_cast_kernel).str_nodebug(), """\
+#shared = #ttg.nvmma_shared<{swizzlingByteWidth = 64, transposed = false, elementBitWidth = 8}>
+#shared1 = #ttg.nvmma_shared<{swizzlingByteWidth = 64, transposed = true, elementBitWidth = 8}>
+#shared2 = #ttg.nvmma_shared<{swizzlingByteWidth = 64, transposed = false, elementBitWidth = 16, CTAsPerCGA = [1, 1, 1, 1], CTASplitNum = [1, 1, 1, 1], CTAOrder = [3, 2, 1, 0]}>
+#shared3 = #ttg.nvmma_shared<{swizzlingByteWidth = 64, transposed = false, elementBitWidth = 16}>
+#shared4 = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0, 1]}>
+#smem = #ttg.shared_memory
+module {
+  tt.func public @shared_memory_cast_kernel() attributes {noinline = false} {
+    %0 = ttg.local_alloc : () -> !ttg.memdesc<256x128xi8, #shared, #smem, mutable>
+    %1 = ttg.memdesc_trans %0 {order = array<i32: 1, 0>} : !ttg.memdesc<256x128xi8, #shared, #smem, mutable> -> !ttg.memdesc<128x256xi8, #shared1, #smem, mutable>
+    %2 = ttg.local_alloc : () -> !ttg.memdesc<32x1x4x64xf16, #shared2, #smem, mutable>
+    %3 = ttg.memdesc_reshape %2 : !ttg.memdesc<32x1x4x64xf16, #shared2, #smem, mutable> -> !ttg.memdesc<128x64xf16, #shared3, #smem, mutable, 32x1x4x64>
+    %4 = ttg.memdesc_reinterpret %2 : !ttg.memdesc<32x1x4x64xf16, #shared2, #smem, mutable> -> !ttg.memdesc<1024xi8, #shared4, #smem, mutable>
+    tt.return
+  }
+}
 """)
 
 
@@ -387,3 +527,15 @@ module attributes {"ttg.num-warps" = 4 : i32} {
   } loc(#loc)
 } loc(#loc)
 """)
+
+
+def test_mlir_attr_error():
+
+    @gluon.jit
+    def kernel():
+        ttgl.arange(0, 1, layout=ttgl.BlockedLayout([1], [32], [4], [1]))
+
+    with pytest.raises(CompilationError) as e:
+        run_parser(kernel)
+
+    assert "order must be a permutation of 0..(rank-1), but was [1]" in str(e.value.__cause__)
