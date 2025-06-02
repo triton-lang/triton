@@ -2,16 +2,16 @@ from triton.experimental.gluon.language._core import builtin
 import triton.experimental.gluon.language._core as ttgl
 from triton.experimental.gluon.language.nvidia.hopper.tma import (
     _tensor_desc_to_tma_ptr,
-    async_copy_global_to_local,
-    async_copy_local_to_global,
+    async_copy_global_to_shared,
+    async_copy_shared_to_global,
     store_wait,
 )
 
 __all__ = [
     "async_gather",
     "async_scatter",
-    "async_copy_global_to_local",
-    "async_copy_local_to_global",
+    "async_copy_global_to_shared",
+    "async_copy_shared_to_global",
     "store_wait",
 ]
 

@@ -2,7 +2,7 @@ from triton.language.semantic import _convert_to_ir_values
 from triton.experimental.gluon.language._core import builtin, _unwrap_if_constexpr
 import triton.experimental.gluon.language._core as ttgl
 
-__all__ = ["async_copy_global_to_local", "async_copy_local_to_global", "store_wait"]
+__all__ = ["async_copy_global_to_shared", "async_copy_shared_to_global", "store_wait"]
 
 
 def _tensor_desc_to_tma_ptr(tensor_desc, builder):
@@ -10,7 +10,7 @@ def _tensor_desc_to_tma_ptr(tensor_desc, builder):
 
 
 @builtin
-def async_copy_global_to_local(tensor_desc, coord, barrier, result, pred=True, _builder=None):
+def async_copy_global_to_shared(tensor_desc, coord, barrier, result, pred=True, _builder=None):
     coord = _convert_to_ir_values(_builder, coord, require_i64=False)
     pred = ttgl.to_tensor(pred, _builder=_builder)
     tma_ptr = _tensor_desc_to_tma_ptr(tensor_desc, _builder)
@@ -18,7 +18,7 @@ def async_copy_global_to_local(tensor_desc, coord, barrier, result, pred=True, _
 
 
 @builtin
-def async_copy_local_to_global(tensor_desc, coord, src, _builder=None):
+def async_copy_shared_to_global(tensor_desc, coord, src, _builder=None):
     coord = _convert_to_ir_values(_builder, coord, require_i64=False)
     tma_ptr = _tensor_desc_to_tma_ptr(tensor_desc, _builder)
     _builder.create_async_tma_copy_local_to_global(tma_ptr, coord, src.handle)

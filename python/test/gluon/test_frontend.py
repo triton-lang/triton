@@ -409,31 +409,19 @@ module attributes {"ttg.num-warps" = 4 : i32} {
 """)
 
 
-def test_mlir_attr_error():
-
-    @gluon.jit
-    def kernel():
-        ttgl.arange(0, 1, layout=ttgl.BlockedLayout([1], [32], [4], [1]))
-
-    with pytest.raises(CompilationError) as e:
-        run_parser(kernel)
-
-    assert "order must be a permutation of 0..(rank-1), but was [1]" in str(e.value.__cause__)
-
-
 @gluon.jit
 def async_tma_kernel(input_desc, XBLOCK: ttgl.constexpr, smem_layout: ttgl.constexpr):
     smem = ttgl.allocate_shared_memory(ttgl.float16, [XBLOCK, XBLOCK], smem_layout)
     bar = ttgl.allocate_shared_memory(ttgl.int64, [1], mbarrier.MBarrierLayout())
     mbarrier.init(bar, count=1)
 
-    tma.async_copy_global_to_local(input_desc, [0, 0], bar, smem)
+    tma.async_copy_global_to_shared(input_desc, [0, 0], bar, smem)
     mbarrier.expect(bar, XBLOCK * XBLOCK * ttgl.float16.primitive_bitwidth // 8)
     mbarrier.wait(bar, 0)
 
     mbarrier.invalidate(bar)
 
-    tma.async_copy_local_to_global(input_desc, [0, 0], smem)
+    tma.async_copy_shared_to_global(input_desc, [0, 0], smem)
     tma.store_wait(0)
 
 
@@ -539,3 +527,15 @@ module attributes {"ttg.num-warps" = 4 : i32} {
   } loc(#loc)
 } loc(#loc)
 """)
+
+
+def test_mlir_attr_error():
+
+    @gluon.jit
+    def kernel():
+        ttgl.arange(0, 1, layout=ttgl.BlockedLayout([1], [32], [4], [1]))
+
+    with pytest.raises(CompilationError) as e:
+        run_parser(kernel)
+
+    assert "order must be a permutation of 0..(rank-1), but was [1]" in str(e.value.__cause__)
