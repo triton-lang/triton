@@ -17,8 +17,8 @@ def ref_expt_data(routing_data, n_gates):
     hist = routing_data.expt_hist
     # offset for each experts
     device = hist.device
-    offs_raw = torch.cumsum(hist, dim=0)
-    offs_raw = torch.cat((torch.zeros(1, dtype=torch.int32, device=device), offs_raw))
+    token_offs_raw = torch.cumsum(hist, dim=0)
+    token_offs_raw = torch.cat((torch.zeros(1, dtype=torch.int32, device=device), token_offs_raw))
     # maximum number of tiles for all values of `block_m` considered
     block_ms = [16, 32, 64, 128]
     if n_gates <= n_expts_tot:
@@ -28,19 +28,19 @@ def ref_expt_data(routing_data, n_gates):
         # ceil_div(x, y): -(-x // y)
         max_n_tiles = n_expts_tot - 1 - ((n_expts_tot - n_gates - 1) // min(block_ms))
     # fill up tile offset/infos for each block
-    offs_pad = dict()
-    id_map = dict()
+    token_offs_pad = dict()
+    block_id_map = dict()
     for block_m in [16, 32, 64, 128]:
         n_tiles = (hist + block_m - 1) // block_m  # matmul blocks needed
-        offs_pad[block_m] = torch.cumsum(n_tiles, dim=0)
-        offs_pad[block_m] = torch.cat((torch.zeros(1, dtype=torch.int32, device=device), offs_pad[block_m]))
+        token_offs_pad[block_m] = torch.cumsum(n_tiles, dim=0)
+        token_offs_pad[block_m] = torch.cat((torch.zeros(1, dtype=torch.int32, device=device), token_offs_pad[block_m]))
         # compute data required to drive ragged batch matmul
-        id_map[block_m] = -torch.ones(max_n_tiles, dtype=torch.int32, device=device)
+        block_id_map[block_m] = -torch.ones(max_n_tiles, dtype=torch.int32, device=device)
         for e in range(n_expts_tot):
-            offset = offs_pad[block_m][e]
+            offset = token_offs_pad[block_m][e]
             for b in range(n_tiles[e]):
-                id_map[block_m][offset + b] = (b << 16) + e
-    return ExptData(hist, offs_raw, offs_pad, id_map)
+                block_id_map[block_m][offset + b] = (b << 16) + e
+    return ExptData(hist, token_offs_raw, token_offs_pad, block_id_map)
 
 
 n_tokens = [(x, None) for x in [371, 255, 256, 4096, 1023, 1024]]
@@ -87,12 +87,12 @@ def test_op(n_tokens_pad, n_tokens_raw, n_expts_tot, n_expts_act, sm_first, use_
     assert_equal(ref_routing_data.expt_hist, tri_routing_data.expt_hist)
 
     assert_equal(ref_metadata.hist, tri_metadata.hist)
-    assert_equal(ref_metadata.offs_raw, tri_metadata.offs_raw)
-    assert len(ref_metadata.offs_pad) == len(tri_metadata.offs_pad)
-    assert len(ref_metadata.id_map) == len(tri_metadata.id_map)
-    for block_m in ref_metadata.offs_pad.keys():
-        assert_equal(ref_metadata.offs_pad[block_m], tri_metadata.offs_pad[block_m])
-        assert_equal(ref_metadata.id_map[block_m], tri_metadata.id_map[block_m])
+    assert_equal(ref_metadata.token_offs_raw, tri_metadata.token_offs_raw)
+    assert len(ref_metadata.token_offs_pad) == len(tri_metadata.token_offs_pad)
+    assert len(ref_metadata.block_id_map) == len(tri_metadata.block_id_map)
+    for block_m in ref_metadata.token_offs_pad.keys():
+        assert_equal(ref_metadata.token_offs_pad[block_m], tri_metadata.token_offs_pad[block_m])
+        assert_equal(ref_metadata.block_id_map[block_m], tri_metadata.block_id_map[block_m])
 
     assert ref_routing_data.n_expts_tot == ref_routing_data.n_expts_tot
     assert ref_routing_data.n_expts_act == ref_routing_data.n_expts_act

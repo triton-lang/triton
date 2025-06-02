@@ -7,9 +7,9 @@ import triton.language as tl
 @dataclass
 class ExptData:
     hist: torch.Tensor
-    offs_raw: torch.Tensor
-    offs_pad: dict[int, torch.Tensor]
-    id_map: dict[int, torch.Tensor]
+    token_offs_raw: torch.Tensor
+    token_offs_pad: dict[int, torch.Tensor]
+    block_id_map: dict[int, torch.Tensor]
 
 
 @triton.jit
@@ -103,24 +103,25 @@ def compute_metadata(routing_data, n_rows):
     # allocate memory
     pad = lambda x: cdiv(x, MEMSET_BLOCK) * MEMSET_BLOCK
     dtype = torch.int32
-    offs_raw = torch.empty((n_expts_tot + 1, ), dtype=dtype, device=device)
-    offs_pad = torch.empty((block_m_num, pad(n_expts_tot + 1)), dtype=dtype, device=device)
-    id_map = torch.empty((block_m_num, pad(max_n_tiles)), dtype=dtype, device=device)
+    token_offs_raw = torch.empty((n_expts_tot + 1, ), dtype=dtype, device=device)
+    token_offs_pad = torch.empty((block_m_num, pad(n_expts_tot + 1)), dtype=dtype, device=device)
+    block_id_map = torch.empty((block_m_num, pad(max_n_tiles)), dtype=dtype, device=device)
     # compute outputs
-    offs_pad = offs_pad[:, :n_expts_tot + 1]
-    id_map = id_map[:, :max_n_tiles]
-    memset_grid = cdiv(id_map.shape[1], MEMSET_BLOCK) + 1
+    token_offs_pad = token_offs_pad[:, :n_expts_tot + 1]
+    block_id_map = block_id_map[:, :max_n_tiles]
+    memset_grid = cdiv(block_id_map.shape[1], MEMSET_BLOCK) + 1
     _matmul_metadata_memset[(memset_grid, block_m_num)](
-        routing_data.expt_hist, n_expts_tot, offs_raw,  #
-        offs_pad, offs_pad.stride(0),  #
-        id_map, id_map.stride(0),  #
+        routing_data.expt_hist, n_expts_tot, token_offs_raw,  #
+        token_offs_pad, token_offs_pad.stride(0),  #
+        block_id_map, block_id_map.stride(0),  #
         block_m_log2_start, BLOCK=MEMSET_BLOCK,  # optimization parameters
         num_warps=1)
     _matmul_metadata_compute[(n_expts_tot, block_m_num)](
-        routing_data.expt_hist, offs_pad, offs_pad.stride(0), id_map, id_map.stride(0),  # outputs
+        routing_data.expt_hist, token_offs_pad, token_offs_pad.stride(0), block_id_map,
+        block_id_map.stride(0),  # outputs
         block_m_log2_start, BLOCK=HIST2_BLOCK_M,  # optimization parameters
         num_warps=4)
     # unpack into datastructure
-    offs_pad = {2**j: offs_pad[i, :] for i, j in enumerate(range(block_m_log2_start, block_m_log2_end))}
-    id_map = {2**j: id_map[i, :] for i, j in enumerate(range(block_m_log2_start, block_m_log2_end))}
-    return ExptData(routing_data.expt_hist, offs_raw, offs_pad, id_map)
+    token_offs_pad = {2**j: token_offs_pad[i, :] for i, j in enumerate(range(block_m_log2_start, block_m_log2_end))}
+    block_id_map = {2**j: block_id_map[i, :] for i, j in enumerate(range(block_m_log2_start, block_m_log2_end))}
+    return ExptData(routing_data.expt_hist, token_offs_raw, token_offs_pad, block_id_map)
