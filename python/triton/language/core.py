@@ -1308,6 +1308,9 @@ class tuple(base_value):
         for v in self.values:
             v._flatten_ir(handles)
 
+    def __repr__(self):
+        return f"({' ,'.join(repr(x) for x in self.values)})"
+
 
 class slice:
 
