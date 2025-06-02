@@ -6,9 +6,23 @@ import triton.language as tl
 
 @dataclass
 class ExptData:
+    # hist[i] is the number of tokens routed to expert i
     hist: torch.Tensor
+    # token_offs_raw[i] is the offset of the first token routed
+    # to expert i in an expert-sorted array
     token_offs_raw: torch.Tensor
+    # token_offs_pad[block][i] is the offset of the first token routed
+    # to expert i in an expert-sorted array, assuming histogram
+    # rounded to the next multiple of `block`
     token_offs_pad: dict[int, torch.Tensor]
+    # block_id_map[block] contain one value for each `pid`` launched by
+    # the matrix multiplication kernel launched with BLOCK_M=block:
+    # - the value is -1 if the `pid` has no work to do
+    # - otherwise, the value is two int16 (packed as an int32) that
+    #   correspond respectively to (1) the id of the expert assigned to
+    #   the tokens processed by this pid; (2) the id of the block of data
+    #   processed by this expert (think `pid_m` in a regular matmul)
+    # see `test_routing.py` for a reference implementation and more details
     block_id_map: dict[int, torch.Tensor]
 
 
