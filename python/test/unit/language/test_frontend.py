@@ -42,7 +42,7 @@ def test_assign_attribute():
     scalar = 11
     pair = Pair(tl.arange(0, 4), scalar)
     # CHECK: %c42_i32 = arith.constant 42 : i32
-    # CHECK-NEXT: call @"anchor{{.*}}"([[RANGE]], %c42_i32)
+    # CHECK-NEXT: call @{{.*}}anchor{{.*}}([[RANGE]], %c42_i32)
     pair.second = 42
     anchor(pair)
 
@@ -54,12 +54,12 @@ def test_jit_method():
     # CHECK: %c11_i32 = arith.constant 11 : i32
     # CHECK: [[RANGE:%.*]] = tt.make_range {end = 4 : i32, start = 0 : i32}
     scalar = 11
-    # CHECK: [[V:%.*]]:2 = tt.call @"unpack{{.*}}"([[RANGE]], %c11_i32)
+    # CHECK: [[V:%.*]]:2 = tt.call @{{.*}}unpack{{.*}}([[RANGE]], %c11_i32)
     pair = Pair(tl.arange(0, 4), scalar)
     a, b = pair.unpack()
-    # CHECK: call @anchor{{.*}}([[V]]#0)
+    # CHECK: call @{{.*}}anchor{{.*}}([[V]]#0)
     anchor(a)
-    # CHECK: call @anchor{{.*}}([[V]]#1)
+    # CHECK: call @{{.*}}anchor{{.*}}([[V]]#1)
     anchor(b)
 
 
@@ -80,10 +80,10 @@ def test_aggregate_initializers():
     # CHECK-LABEL: test_aggregate_initializers
     value = TypeWithBuiltinInitializer()
     # CHECK: [[RANGE:%.*]] = tt.make_range {end = 4 : i32, start = 0 : i32}
-    # CHECK: call @"anchor{{.*}}"([[RANGE]])
+    # CHECK: call @{{.*}}anchor{{.*}}([[RANGE]])
     anchor(value)
     # CHECK: [[RANGE:%.*]] = tt.make_range {end = 8 : i32, start = 4 : i32}
-    # CHECK: call @"anchor{{.*}}"([[RANGE]])
+    # CHECK: call @{{.*}}anchor{{.*}}([[RANGE]])
     value.modify(tl.arange(4, 8))
     anchor(value)
 
@@ -103,11 +103,11 @@ def list_of_functions_constexpr(arg, fns: tl.constexpr):
 @triton.jit
 def test_list_of_functions():
     # CHECK-LABEL: test_list_of_functions
-    # CHECK: call @"list_of_functions_constexpr{{.*}}cJITFunction(test_frontend:anchor){{.*}}cJITFunction(test_frontend:forward)"
+    # CHECK: call @{{.*}}list_of_functions_constexpr{{.*}}cJITFunction(test_frontend:anchor){{.*}}cJITFunction(test_frontend:forward)
 
-    # CHECK-LABEL: tt.func private @"list_of_functions_constexpr
-    # CHECK-NEXT: call @anchor
-    # CHECK-NEXT: call @forward
+    # CHECK: tt.func private @{{.*}}list_of_functions_constexpr
+    # CHECK-NEXT: call @{{.*}}anchor
+    # CHECK-NEXT: call @{{.*}}forward
     list_of_functions_constexpr(tl.arange(0, 4), [anchor, forward])
 
 
@@ -123,6 +123,29 @@ def test_call_in_loop():
     # CHECK-LABEL: test_call_in_loop
     acc = 0
     # CHECK: scf.for
-    # CHECK:   call @accumulate
+    # CHECK:   call @{{.*}}accumulate
     for i in range(10):
         acc = accumulate(acc, i)
+
+
+@tl.core._aggregate
+class FunctionParent:
+
+    @triton.jit
+    def function_with_name():
+        pass
+
+
+@triton.jit
+def test_function_with_name():
+    pass
+
+
+@filecheck_test
+@triton.jit
+def test_function_name_mangling():
+    # CHECK-LABEL: test_function_name_mangling
+    # CHECK: call @test_frontend.test_function_with_name
+    # CHECK: call @test_frontend.FunctionParent.function_with_name
+    test_function_with_name()
+    FunctionParent.function_with_name()
