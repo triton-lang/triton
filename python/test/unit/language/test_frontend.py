@@ -58,7 +58,7 @@ def test_augassign_attribute():
     # CHECK: %c42_i32 = arith.constant 42 : i32
     # CHECK: [[VALUE:%.*]] = arith.addi %c11_i32, %c42_i32
     pair.second += 42
-    # CHECK-NEXT: call @"anchor{{.*}}"([[RANGE]], [[VALUE]])
+    # CHECK-NEXT: call @{{.*}}anchor{{.*}}([[RANGE]], [[VALUE]])
     anchor(pair)
 
 
@@ -152,7 +152,7 @@ class FunctionParent:
 
 
 @triton.jit
-def test_function_with_name():
+def function_with_name():
     pass
 
 
@@ -160,7 +160,7 @@ def test_function_with_name():
 @triton.jit
 def test_function_name_mangling():
     # CHECK-LABEL: test_function_name_mangling
-    # CHECK: call @test_frontend.test_function_with_name
+    # CHECK: call @test_frontend.function_with_name
     # CHECK: call @test_frontend.FunctionParent.function_with_name
-    test_function_with_name()
+    function_with_name()
     FunctionParent.function_with_name()
