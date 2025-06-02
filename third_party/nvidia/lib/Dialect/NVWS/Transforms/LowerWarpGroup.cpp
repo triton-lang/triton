@@ -36,22 +36,23 @@
 #include "llvm/ADT/SmallVectorExtras.h"
 #include "llvm/Support/LogicalResult.h"
 
-#include <memory>
 #include <optional>
 
-#define GEN_PASS_CLASSES
-#include "nvidia/include/Dialect/NVWS/Transforms/Passes.h.inc"
+using namespace mlir::triton;
+using namespace mlir::triton::nvws;
+using namespace mlir::triton::gpu;
 
 #define DEBUG_TYPE "nvws-lower-warp-group"
 #define DBGS() (llvm::dbgs() << "[" DEBUG_TYPE "]: ")
 #define LDBG(X) LLVM_DEBUG(DBGS() << X << "\n")
 
-namespace {
+namespace mlir {
+namespace triton {
 
-using namespace mlir;
-using namespace triton;
-using namespace triton::nvws;
-using namespace triton::gpu;
+#define GEN_PASS_DEF_NVWSLOWERWARPGROUP
+#include "nvidia/include/Dialect/NVWS/Transforms/Passes.h.inc"
+
+namespace {
 
 class LowerWarpGroup : public OpRewritePattern<WarpGroupOp> {
 
@@ -177,7 +178,10 @@ public:
   }
 };
 
-class NVWSLowerWarpGroup : public NVWSLowerWarpGroupBase<NVWSLowerWarpGroup> {
+} // namespace
+
+class NVWSLowerWarpGroup
+    : public impl::NVWSLowerWarpGroupBase<NVWSLowerWarpGroup> {
 public:
   void runOnOperation() override {
     MLIRContext *context = &getContext();
@@ -194,8 +198,6 @@ public:
       assert(false);
   }
 };
-} // namespace
 
-std::unique_ptr<Pass> mlir::createNVWSLowerWarpGroupPass() {
-  return std::make_unique<NVWSLowerWarpGroup>();
-}
+} // namespace triton
+} // namespace mlir

@@ -7,10 +7,8 @@ from triton_kernels.testing import assert_equal
 
 
 def init_data(n_tokens, n_expts_tot, dtype=torch.float16, device="cuda"):
-    # the reference implementation and the triton implementation do not tie-break experts the same way
-    randbits = [torch.randperm(n_expts_tot) for _ in range(n_tokens)]
-    x = [(-1)**i * ((16384 + ((i * 512) % 4096) + bits).to(torch.int16).view(dtype)) for i, bits in enumerate(randbits)]
-    return torch.stack(x).to(device=device)
+    logits = torch.randn((n_tokens, n_expts_tot), dtype=dtype, device=device, requires_grad=True)
+    return logits
 
 
 def ref_expt_data(routing_data, n_gates, block_m):
@@ -45,15 +43,33 @@ def ref_expt_data(routing_data, n_gates, block_m):
 @pytest.mark.parametrize("n_tokens", [371, 255, 256, 8192, 1023, 1024])
 @pytest.mark.parametrize("n_expts_tot, n_expts_act", [(128, 4), (1500, 8)])
 @pytest.mark.parametrize("block_m", [64, 128])
-def test_op(n_tokens, n_expts_tot, n_expts_act, block_m, device):
+@pytest.mark.parametrize("use_expt_indx", [False, True])
+@pytest.mark.parametrize("renormalize", [True, False])
+def test_op(n_tokens, n_expts_tot, n_expts_act, renormalize, block_m, use_expt_indx, device):
     torch.manual_seed(2)
     tri_logits = init_data(n_tokens, n_expts_tot, device=device).detach()
     ref_logits = tri_logits.clone()
-    ref_routing_data, ref_gather, ref_scatter = routing_torch(ref_logits, n_expts_act)
-    tri_routing_data, tri_gather, tri_scatter = routing(tri_logits, n_expts_act)
+    if use_expt_indx:
+        rand_idx = lambda: torch.randperm(n_expts_tot, device="cuda", dtype=torch.int64)
+        tri_expt_indx = torch.stack([rand_idx()[:n_expts_act] for _ in range(n_tokens)])
+        tri_expt_indx, _ = torch.sort(tri_expt_indx, dim=1)
+        ref_expt_indx = tri_expt_indx[:n_tokens]
+    else:
+        tri_expt_indx = ref_expt_indx = None
+    if not renormalize:
+        tri_logits = torch.softmax(tri_logits, dim=-1)
+        ref_logits = torch.softmax(ref_logits, dim=-1)
+    ref_routing_data, ref_gather, ref_scatter = routing_torch(ref_logits, n_expts_act, renormalize, ref_expt_indx)
+    tri_routing_data, tri_gather, tri_scatter = routing(tri_logits, n_expts_act, renormalize, tri_expt_indx)
     ref_metadata = ref_expt_data(ref_routing_data, n_tokens * n_expts_act, block_m)
     tri_metadata = compute_metadata(tri_routing_data, n_tokens * n_expts_act, block_m)
 
+    def _assert_indx_equal(ref, tri):
+        assert_equal(ref, tri[:len(ref)])
+        assert torch.all(tri[len(ref):] == -1)
+
+    # print((ref_routing_data.expt_hist != tri_routing_data.expt_hist).nonzero())
+    # breakpoint()
     assert_close(ref_routing_data.gate_scal, tri_routing_data.gate_scal, 2e-2, 4e-3)
     assert_equal(ref_routing_data.expt_hist, tri_routing_data.expt_hist)
 
@@ -64,10 +80,6 @@ def test_op(n_tokens, n_expts_tot, n_expts_act, block_m, device):
 
     assert ref_routing_data.n_expts_tot == ref_routing_data.n_expts_tot
     assert ref_routing_data.n_expts_act == ref_routing_data.n_expts_act
-
-    def _assert_indx_equal(ref, tri):
-        assert_equal(ref, tri[:len(ref)])
-        assert torch.all(tri[len(ref):] == -1)
 
     _assert_indx_equal(ref_gather.src_indx, tri_gather.src_indx)
     _assert_indx_equal(ref_gather.dst_indx, tri_gather.dst_indx)

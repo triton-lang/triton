@@ -1,4 +1,4 @@
-// RUN: triton-opt %s --tritongpu-pipeline="num-stages=3" -canonicalize -cse | FileCheck %s
+// RUN: triton-opt %s --tritongpu-assign-latencies --tritongpu-schedule-loops --tritongpu-pipeline -canonicalize -cse | FileCheck %s
 
 #blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [4, 2], order = [1, 0]}>
 #blocked1 = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 8], order = [1, 0]}>

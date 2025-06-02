@@ -494,6 +494,9 @@ class JitFunctionInfo:
 
 class JITFunction(KernelInterface[T]):
 
+    def is_gluon(self):
+        return False
+
     def _call_hook(
         self,
         hook,
@@ -707,6 +710,11 @@ class JITFunction(KernelInterface[T]):
             self.hash = dependencies_finder.ret + str(self.starting_line_number)
             self.used_global_vals = dict(sorted(dependencies_finder.used_global_vals.items()))
         return self.hash
+
+    @property
+    def type(self):
+        from triton.language.core import constexpr
+        return constexpr
 
     def warmup(self, *args, grid, **kwargs):
         return self.run(grid=grid, warmup=True, *map(MockTensor.wrap_dtype, args), **kwargs)

@@ -53,10 +53,9 @@ class RoutingData:
 # --------------------------
 
 
-def routing(logits, n_expts_act, expt_indx=None, simulated_ep=1):
+def routing(logits, n_expts_act, renormalize=True, expt_indx=None, simulated_ep=1):
     from .topk import topk
     from .compaction import compaction
-    assert expt_indx is None
     cdiv = triton.cdiv
     HIST_BLOCK_M = 64
     INDX_OFFS_BLOCK_M = 512
@@ -64,7 +63,7 @@ def routing(logits, n_expts_act, expt_indx=None, simulated_ep=1):
     n_tokens, n_expts_tot = logits.shape
     n_gates = n_tokens * n_expts_act
     device = logits.device
-    expt_scal, expt_indx, bitmatrix = topk(logits, n_expts_act)
+    expt_scal, expt_indx, bitmatrix = topk(logits, n_expts_act, apply_softmax=renormalize, y_indx=expt_indx)
     # mutate bitmatrix
     if simulated_ep > 1:
         assert n_expts_tot % simulated_ep == 0
@@ -76,10 +75,11 @@ def routing(logits, n_expts_act, expt_indx=None, simulated_ep=1):
             n_expts_tot // simulated_ep,
             BLOCK_N=512,
         )
+        # perform compaction to update expt_scal / expt_indx
         expt_scal, expt_indx = compaction(expt_scal, expt_indx, bitmatrix)
         n_expts_tot = n_expts_tot // simulated_ep
         bitmatrix.shape[-1] = n_expts_tot
-    # perform compaction to update expt_scal / expt_indx
+    # compute bitmatrix histogram
     hist, partial_hist = bitmatrix.sum(partials_block_size=HIST_BLOCK_M)
     # scratchpad
     expt_offs = torch.empty(n_expts_tot, dtype=torch.int32, device=device)
@@ -96,7 +96,6 @@ def routing(logits, n_expts_act, expt_indx=None, simulated_ep=1):
         BLOCK_M=INDX_OFFS_BLOCK_M,  # tunable parameters
     )
     indx_offs = partial_hist
-
     _routing_compute_indx[(cdiv(n_tokens, HIST_BLOCK_M), )](
         topk_indx, gate_indx, gate_scal,  # outputs
         expt_scal, expt_indx, indx_offs, indx_offs.stride(0), indx_offs.stride(1), n_gates,  # input
@@ -109,7 +108,7 @@ def routing(logits, n_expts_act, expt_indx=None, simulated_ep=1):
     return RoutingData(gate_scal, hist, n_expts_tot, n_expts_act), gather_indx, scatter_indx
 
 
-def routing_torch(logits, n_expts_act, expt_indx=None):
+def routing_torch(logits, n_expts_act, renormalize=True, expt_indx=None):
 
     def topk(vals, k, expt_indx):
         # topk of experts
@@ -122,16 +121,14 @@ def routing_torch(logits, n_expts_act, expt_indx=None):
 
     _, n_expts_tot = logits.shape
     expt_scal, expt_indx = topk(logits, n_expts_act, expt_indx)
-    expt_scal = torch.softmax(expt_scal, dim=-1)
-    # Sort each token's selections by expert
-    expt_indx, sort_indices = torch.sort(expt_indx, dim=1)
-    expt_scal = torch.gather(expt_scal, 1, sort_indices)
+    if renormalize:
+        expt_scal = torch.softmax(expt_scal, dim=-1)
     # flatten topk data
     expt_scal = expt_scal.reshape(-1)
     expt_indx = expt_indx.reshape(-1).to(torch.int32)
     # sort by expert_id so experts are contiguous for the matmul
     topk_indx = torch.argsort(expt_indx, stable=True)
-    gate_indx = torch.argsort(topk_indx)
+    gate_indx = torch.argsort(topk_indx, stable=True)
     gate_scal = expt_scal[topk_indx]
     hist = torch.histc(expt_indx, bins=n_expts_tot, max=n_expts_tot - 1)  # histogram of tokens over experts
     # pack the matmul data structure

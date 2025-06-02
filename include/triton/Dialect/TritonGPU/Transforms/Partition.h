@@ -4,8 +4,6 @@
 #include "mlir/Support/LLVM.h"
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/DenseMap.h"
-#include "llvm/ADT/GraphTraits.h"
-#include "llvm/ADT/MapVector.h"
 #include "llvm/ADT/SmallVector.h"
 
 namespace mlir {
@@ -26,6 +24,29 @@ static constexpr char kPartitionStagesAttrName[] = "ttg.partition.stages";
 //===----------------------------------------------------------------------===//
 
 namespace mlir::triton::gpu {
+// A partition has a stage and contains some operation. The stage of a
+// partition determines how many cycles the partition's outputs are buffered
+// relative to its consumers.
+class Partition {
+public:
+  Partition(int idx, int stage) : idx(idx), stage(stage) {}
+
+  int getIndex() const { return idx; }
+  int getStage() const { return stage; }
+  ArrayRef<Operation *> getOps() const { return ops; }
+
+private:
+  void setIndex(int idx) { this->idx = idx; }
+  friend class WarpSchedule;
+
+  // The partition number.
+  int idx;
+  // The stage of the partition.
+  int stage;
+  // The ops in the partition.
+  SmallVector<Operation *> ops;
+};
+
 // A warp schedule divides a loop into multiple partitions. Ops in a loop are
 // assigned at most one partition. A warp schedule represents asynchronous
 // execution of the loop body, where partitions may execute simultaneously.
@@ -33,36 +54,8 @@ class WarpSchedule {
   static constexpr int kSentinel = -1;
 
 public:
-  // A partition has a stage and contains some operation. The stage of a
-  // partition determines how many cycles the partition's outputs are buffered
-  // relative to its consumers.
-  class Partition {
-  public:
-    Partition(int idx, int stage) : idx(idx), stage(stage) {}
-
-    int getIndex() const { return idx; }
-    int getStage() const { return stage; }
-    ArrayRef<Operation *> getOps() const { return ops; }
-
-    void insert(Operation *op) { ops.push_back(op); }
-    void remove(Operation *op) { ops.erase(llvm::find(ops, op)); }
-
-  private:
-    void setIndex(int idx) { this->idx = idx; }
-    friend class WarpSchedule;
-
-    // The partition number.
-    int idx;
-    // The stage of the partition.
-    int stage;
-    // The ops in the partition.
-    SmallVector<Operation *> ops;
-  };
-
   // Create a new partition with a stage.
   Partition *addPartition(unsigned stage);
-  // Update the op to partition mapping.
-  void updatePartitions();
 
   // Get the partition the op belongs to.
   Partition *getPartition(Operation *op);

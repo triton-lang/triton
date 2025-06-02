@@ -250,44 +250,19 @@ void eraseLoopCarriedValues(scf::ForOp &loop, llvm::BitVector indices);
 } // namespace mlir
 
 namespace mlir::triton {
-
 /// Replace all uses of `oldUse` with `val` and propagate the type if needed.
 /// This is useful when we need to change a memory descriptor from immutable to
 /// mutable.
 void replaceUsesAndPropagateType(OpBuilder &builder, Operation *oldUse,
                                  Value val);
 
-template <typename BuilderT>
+/// Replace all uses of `old` with a local load from `alloc` unless the use is a
+/// `ttg.local_alloc` with a matching shared encoding, in which case the shared
+/// memory is forwarded directly into the use.
 void replaceUsesWithLocalLoad(
-    BuilderT &builder, OpResult old, TypedValue<triton::gpu::MemDescType> alloc,
-    TypedValue<triton::gpu::AsyncTokenType> token = {}) {
-  //  Remove redundant local_load -> local_alloc
-  namespace ttg = triton::gpu;
-  using triton::gpu::LocalAllocOp;
-  auto allocTy = alloc.getType();
-  SmallVector<LocalAllocOp> allocsToErase;
-  for (Operation *user : old.getUsers()) {
-    if (auto userAlloc = dyn_cast<LocalAllocOp>(user)) {
-      if (allocTy.getEncoding() == userAlloc.getType().getEncoding()) {
-        replaceUsesAndPropagateType(builder, userAlloc, alloc);
-        allocsToErase.push_back(userAlloc);
-      }
-    }
-  }
-
-  // If there are some uses that were not local_allocs, we need to create a
-  // local_load for them.
-  if (std::distance(old.getUsers().begin(), old.getUsers().end()) >
-      allocsToErase.size()) {
-    auto loc = old.getOwner()->getLoc();
-    auto sharedLoad = builder.template create<ttg::LocalLoadOp>(
-        loc, old.getType(), alloc, token);
-    old.replaceAllUsesWith(sharedLoad.getResult());
-  }
-  for (auto alloc : allocsToErase) {
-    alloc.erase();
-  }
-}
+    OpBuilder &builder, OpResult old,
+    TypedValue<triton::gpu::MemDescType> alloc,
+    TypedValue<triton::gpu::AsyncTokenType> token = {});
 } // namespace mlir::triton
 
 #endif // TRITON_DIALECT_TRITONGPU_TRANSFORMS_UTILITY_H_

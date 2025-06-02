@@ -1,5 +1,5 @@
-// RUN: triton-opt %s -pass-pipeline='builtin.module(convert-triton-to-tritongpu{num-warps=4 target=cuda:100},tritongpu-coalesce,tritongpu-accelerate-matmul,tritongpu-remove-layout-conversions,tritongpu-optimize-dot-operands,cse,tritongpu-fuse-nested-loops,canonicalize,tritongpu-optimize-accumulator-init,tritongpu-hoist-tmem-alloc,tritongpu-pipeline,triton-nvidia-gpu-remove-tmem-tokens,canonicalize)' | FileCheck %s --check-prefix=BLACKWELL
-// RUN: triton-opt %s -pass-pipeline='builtin.module(convert-triton-to-tritongpu{num-warps=4 target=cuda:90 },tritongpu-coalesce,tritongpu-accelerate-matmul,tritongpu-remove-layout-conversions,tritongpu-optimize-dot-operands,cse,tritongpu-fuse-nested-loops,canonicalize,tritongpu-optimize-accumulator-init,canonicalize,tritongpu-combine-tensor-select-and-if,tritongpu-pipeline,canonicalize)' | FileCheck %s --check-prefix=HOPPER
+// RUN: triton-opt %s -pass-pipeline='builtin.module(convert-triton-to-tritongpu{num-warps=4 target=cuda:100},tritongpu-coalesce,tritongpu-accelerate-matmul,tritongpu-remove-layout-conversions,tritongpu-optimize-dot-operands,cse,tritongpu-fuse-nested-loops,canonicalize,tritongpu-optimize-accumulator-init,tritongpu-hoist-tmem-alloc,tritongpu-assign-latencies,tritongpu-schedule-loops,tritongpu-pipeline,triton-nvidia-gpu-remove-tmem-tokens,canonicalize)' | FileCheck %s --check-prefix=BLACKWELL
+// RUN: triton-opt %s -pass-pipeline='builtin.module(convert-triton-to-tritongpu{num-warps=4 target=cuda:90 },tritongpu-coalesce,tritongpu-accelerate-matmul,tritongpu-remove-layout-conversions,tritongpu-optimize-dot-operands,cse,tritongpu-fuse-nested-loops,canonicalize,tritongpu-optimize-accumulator-init,canonicalize,tritongpu-combine-tensor-select-and-if,tritongpu-assign-latencies,tritongpu-schedule-loops,tritongpu-pipeline,canonicalize)' | FileCheck %s --check-prefix=HOPPER
 
 #shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16}>
 
@@ -59,7 +59,8 @@ tt.func public @matmul_kernel_tma_persistent(%arg0: !tt.ptr<i8, 0>, %arg1: !tt.p
       %41 = tt.dot %37, %40, %arg9, inputPrecision = tf32 : tensor<128x64xf16> * tensor<64x128xf16> -> tensor<128x128xf32>
       scf.yield %41 : tensor<128x128xf32>
     }
-    // BLACKWELL-COUNT-1: ttng.tmem_load
+    // Blackwell: expect one tmem_load in the loop, and one in the peeled epilogue
+    // BLACKWELL-COUNT-2: ttng.tmem_load
     // BLACKWELL-NOT: ttng.tmem_load
 
     // HOPPER: ttng.warp_group_dot_wait {{.*}} {pendings = 0 : i32}

@@ -610,9 +610,8 @@ LinearLayout chooseDotDsReadB64TrLayout(DotOperandEncodingAttr dotMfmaLayout,
   laneBase.insert(laneBase.end(), laneBaseExt.begin(), laneBaseExt.end());
 
   // Base vectors above are defined in a fixed order [non-k-dim, k-dim].
-  // To assign them to actual matrix dimensions `order` array is used.
-  // For operand A: non-k-dim -> dim0, k-dim -> dim1
-  // For operand B: non-k-dim -> dim1, k-dim -> dim0
+  // To assign them to actual matrix dimensions we associate with register
+  // `order` which is also [nonk, k] given we set kContig to false.
   LinearLayout tileLayout({{kRegister, registerBase}, {kLane, laneBase}},
                           {outDimNames[order[0]], outDimNames[order[1]]});
 
@@ -637,31 +636,6 @@ LinearLayout chooseDotDsReadB64TrLayout(DotOperandEncodingAttr dotMfmaLayout,
 
 LinearLayout mfmaDotToLinearLayout(DotOperandEncodingAttr dotMfmaLayout,
                                    ArrayRef<int64_t> shape) {
-
-  // Current linear layout conversion for dot operand is only necessary to
-  // enable LDS bypass for operand B in the MFMA dot path. To achieve
-  // performance gains from bypassing LDS, the following conditions must be met:
-  //
-  // 1) opIdx == 1: Currently, only the B tensor (e.g. weights in moe-like
-  //    kernels) bypasses LDS. This constraint is not strict and support for
-  //    bypassing operand A (e.g. Q tensor in flash attention) will be added in
-  //    the future.
-  //
-  // 2) B tensor must be column major: This is required to support vectorized
-  //    global load instructions, as MFMA instructions expect threads to hold B
-  //    operand elements along the K dimension.
-  //
-  // 3) kWidth == 8: Ensures maximum global load vectorization for fp16
-  //    operations.
-  //    TODO: Generalize conversion to handle maximum kWidth for other types
-  //    (i.e. fp8).
-  //
-  // 4) warpsPerCTA[mDim] == 1: This guarantees that every B tensor element is
-  //    held by exactly one thread, maintaining the same number of global loads
-  //    as in a blocked layout.
-  //
-  // Other use of Linear layout is a support of rare corner cases,
-  // for example one instruction tile is larger than tensor
   auto mfmaLayout = llvm::cast<AMDMfmaEncodingAttr>(dotMfmaLayout.getParent());
 
   auto rank = shape.size();
@@ -725,10 +699,9 @@ LinearLayout mfmaDotToLinearLayout(DotOperandEncodingAttr dotMfmaLayout,
   for (int32_t elem = kTileSize; elem < kSize; elem *= 2)
     registerBase.emplace_back(std::vector<int32_t>{elem, 0});
 
-  // Base vectors above are defined in a fixed order [non-k-dim, k-dim].
-  // To assign them to actual matrix dimensions `order` array is used.
-  // For operand A: non-k-dim -> dim0, k-dim -> dim1
-  // For operand B: non-k-dim -> dim1, k-dim -> dim0
+  // Base vectors above are defined in a fixed order [k-dim, non-k-dim].
+  // To assign them to actual matrix dimensions we assoicate with register
+  // `order` which is also also [k, nonk].
   LinearLayout tileLayout({{kRegister, registerBase}, {kLane, laneBase}},
                           {outDimNames[order[0]], outDimNames[order[1]]});
 
@@ -1533,6 +1506,9 @@ LinearLayout chooseScaledMfmaScaleLayout(
 
 std::optional<LinearLayout>
 chooseMfmaLikeStoreLayout(RankedTensorType valType) {
+  // TODO: WMMA Support on RDNA
+  if (!isa<AMDMfmaEncodingAttr>(valType.getEncoding()))
+    return {};
   auto mfmaLayout = cast<AMDMfmaEncodingAttr>(valType.getEncoding());
 
   // We currently only support transposed [B]F16 MFMA32x32 on CDNA4.

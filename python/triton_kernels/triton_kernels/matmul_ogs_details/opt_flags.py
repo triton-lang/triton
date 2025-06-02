@@ -46,7 +46,8 @@ def make_default_opt_flags_amd(
     has_expensive_epilogue,
     constraints,
 ):
-    assert not constraints, "flags constraints not supported on AMD"
+    constraints_supported = ["block_m", "block_k", "split_k", "fused_scatter", "is_persistent", "epilogue_subtile"]
+    assert not any([c not in constraints_supported for c in constraints]), constraints.keys()
     # tokens per expert
     if routing_data is None:
         tokens_per_expt = m
@@ -76,22 +77,39 @@ def make_default_opt_flags_amd(
     block_n, block_k = opt_flags_amd.compute_block_nk(
         n, block_m, grid_m, num_xcds, lhs_dtype, rhs_dtype, microscaling_ctx
     )
+    # Replace block_k if provided in constraints.
+    # TODO: Does opt_flags_amd.compute_block_nk need to be refactored?
+    if constraints.get("block_k", None) is not None:
+        block_k = constraints["block_k"]
+    if constraints.get("is_persistent", None) is not None:
+        is_persistent = constraints["is_persistent"]
+    else:
+        is_persistent = False
     # split_k:
-    grid_size = grid_m * ((n + block_n - 1) // block_n)
-    n_cu = torch.cuda.get_device_properties(0).multi_processor_count
-    if enforce_bitwise_invariance:
+    if constraints.get("split_k", None) is not None:
+        split_k = constraints["split_k"]
+    elif is_persistent or enforce_bitwise_invariance:
         split_k = 1
     else:
+        grid_size = grid_m * ((n + block_n - 1) // block_n)
+        n_cu = torch.cuda.get_device_properties(0).multi_processor_count
         split_k = max(1, n_cu // grid_size)
     # w_cache_modifier:
     w_cache_modifier = ".cg" if block_m <= 32 else None
     # num_warps, num_stages
     num_warps = 2 if (m is not None and m <= 16) else 8
     num_stages = 2
-    is_persistent = False
+    if constraints.get("fused_scatter", None) is not None:
+        fused_scatter = constraints["fused_scatter"]
+    else:
+        fused_scatter = False
+    if constraints.get("epilogue_subtile", None) is not None:
+        epilogue_subtile = constraints["epilogue_subtile"]
+    else:
+        epilogue_subtile = False
     # AMD-specific
     target_kernel_kwargs = {"waves_per_eu": 0, "matrix_instr_nonkdim": 16, "kpack": 1}
-    return OptFlags(
+    ret = OptFlags(
         block_m=block_m,
         block_n=block_n,
         block_k=block_k,
@@ -101,12 +119,15 @@ def make_default_opt_flags_amd(
         xcd_swizzle=xcd_swizzle,
         w_cache_modifier=w_cache_modifier,
         split_k=split_k,
-        fused_scatter=False,
+        fused_scatter=fused_scatter,
         is_persistent=is_persistent,
-        epilogue_subtile=False,
+        epilogue_subtile=epilogue_subtile,
         arch=None,
         target_kernel_kwargs=target_kernel_kwargs,
     )
+    # check constraints
+    assert all(getattr(ret, ck) == cv for ck, cv in constraints.items() if cv is not None), f"{ret} != {constraints}"
+    return ret
 
 def make_default_opt_flags_nvidia(
     out_dtype,

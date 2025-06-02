@@ -195,7 +195,7 @@ def abs(x, _builder=None):
 @core.builtin
 @_add_math_2arg_docstr("fast division")
 def fdiv(x, y, ieee_rounding=False, _builder=None):
-    ieee_rounding = core._constexpr_to_value(ieee_rounding)
+    ieee_rounding = core._unwrap_if_constexpr(ieee_rounding)
     x = semantic.to_tensor(x, _builder)
     y = semantic.to_tensor(y, _builder)
     return semantic.fdiv(x, y, ieee_rounding, _builder)

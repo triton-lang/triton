@@ -23,16 +23,19 @@
 // expander to generate the prologue and new loop and epilogue.
 //===----------------------------------------------------------------------===//
 
-#define GEN_PASS_CLASSES
-#include "TritonAMDGPUTransforms/Passes.h.inc"
-
 #define DEBUG_TYPE "tritonamdgpu-stream-pipeline"
 #define DBGS() (llvm::dbgs() << "[" DEBUG_TYPE "]: ")
 #define LDBG(X) LLVM_DEBUG(DBGS() << X << "\n")
 
-using namespace mlir;
 namespace tt = mlir::triton;
 namespace ttg = mlir::triton::gpu;
+
+namespace mlir {
+
+#define GEN_PASS_DEF_TRITONAMDGPUSTREAMPIPELINE
+#include "TritonAMDGPUTransforms/Passes.h.inc"
+
+namespace {
 
 static Operation *streamPredication(RewriterBase &rewriter, Operation *op,
                                     Value pred) {
@@ -52,8 +55,6 @@ static Operation *streamPredication(RewriterBase &rewriter, Operation *op,
   }
   return tt::predicateOp(rewriter, op, pred);
 }
-
-namespace {
 
 //===----------------------------------------------------------------------===//
 // Software pipelining generally works by anchoring on global load ops in the
@@ -133,6 +134,19 @@ public:
     options.supportDynamicLoops = true;
     options.peelEpilogue = true;
     options.predicateFn = streamPredication;
+
+    // Annotate loadOp in prologue for further moving up
+    options.annotateFn = [this](Operation *op,
+                                tt::PipeliningOption::PipelinerPart part,
+                                unsigned stage) {
+      if (part != tt::PipeliningOption::PipelinerPart::Prologue)
+        return;
+
+      if (auto loadOp = dyn_cast<tt::LoadOp>(op)) {
+        loadOp->setAttr("amd.pipeliner_part",
+                        StringAttr::get(op->getContext(), "prologue"));
+      }
+    };
   }
 
   LogicalResult pipelineLoop();
@@ -1025,17 +1039,12 @@ void labelLoadOpsForTritonDot(scf::ForOp forOp) {
   }
 }
 
-struct PipelinePass : public TritonAMDGPUStreamPipelineBase<PipelinePass> {
-  PipelinePass() = default;
-  PipelinePass(int32_t _numStages, int32_t _globalPrefetch,
-               int32_t _localPrefetch, bool _useAsyncCopy) {
-    this->numStages = _numStages;
+} // anonymous namespace
 
-    this->globalPrefetch = _globalPrefetch;
-    this->localPrefetch = _localPrefetch;
-
-    this->useAsyncCopy = _useAsyncCopy;
-  }
+struct PipelinePass
+    : public impl::TritonAMDGPUStreamPipelineBase<PipelinePass> {
+  using impl::TritonAMDGPUStreamPipelineBase<
+      PipelinePass>::TritonAMDGPUStreamPipelineBase;
 
   void runOnOperation() override {
     ModuleOp moduleOp = getOperation();
@@ -1075,10 +1084,5 @@ struct PipelinePass : public TritonAMDGPUStreamPipelineBase<PipelinePass> {
     }
   }
 };
-} // namespace
 
-std::unique_ptr<Pass> mlir::createTritonAMDGPUStreamPipelinePass(
-    int numStages, int globalPrefetch, int localPrefetch, bool useAsyncCopy) {
-  return std::make_unique<PipelinePass>(numStages, globalPrefetch,
-                                        localPrefetch, useAsyncCopy);
-}
+} // namespace mlir

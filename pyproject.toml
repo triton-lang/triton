@@ -7,6 +7,7 @@ mypy_path = "$MYPY_CONFIG_FILE_DIR/python"
 files = [
     "python/triton/knobs.py",
     "python/triton/runtime/build.py",
+    "python/triton/runtime/driver.py",
     "python/triton/_utils.py",
     "python/test/unit/test_knobs.py",
     "python/test/unit/runtime/test_build.py",

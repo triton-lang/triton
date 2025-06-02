@@ -14,8 +14,6 @@ using namespace triton;
 using namespace triton::gpu;
 namespace ttng = triton::nvidia_gpu;
 
-using Partition = WarpSchedule::Partition;
-
 //===----------------------------------------------------------------------===//
 // assignPartitions
 //===----------------------------------------------------------------------===//
@@ -208,6 +206,15 @@ static std::optional<WarpSchedule> getInitialSchedule(scf::ForOp loop) {
       Operation *op = operandViews.pop_back_val();
       if (!op->hasOneUse() || !op->hasTrait<OpTrait::MemDescViewTrait>())
         continue;
+
+      // Duplicate the op if necessary to ensure the MMA op is the only user.
+      if (!llvm::all_of(op->getUsers(),
+                        [&](Operation *user) { return user == mmaOp; })) {
+        Operation *viewOp = OpBuilder(op).clone(*op);
+        mmaOp->replaceUsesOfWith(op->getResult(0), viewOp->getResult(0));
+        op = viewOp;
+      }
+
       schedule.trySchedule(mmaPartition, op);
       if (Operation *defOp = op->getOperand(0).getDefiningOp())
         operandViews.push_back(defOp);
@@ -238,11 +245,7 @@ static std::optional<WarpSchedule> getInitialSchedule(scf::ForOp loop) {
   for (auto [mmaOp, userPartition] : llvm::zip(mmas, userPartitions)) {
     scheduleUsers(loop, schedule, userPartition, mmaOp);
   }
-  for (ttng::MMAv5OpInterface mmaOp : mmas) {
-    scheduleDependencies(loop, schedule, defaultPartition, mmaOp);
-  }
 
-  schedule.updatePartitions();
   return schedule;
 }
 
@@ -438,10 +441,10 @@ void propagatePartitions(scf::ForOp loop, WarpSchedule &schedule) {
       });
     }
 
-    // If all ops are on the critical path, assign them to the sink partition.
+    // If all ops are on the critical path, assign them to the def partition.
     if (critPath.size() == cluster.ops.size()) {
       for (Operation *op : cluster.ops)
-        schedule.insert(sinkPartition, op);
+        schedule.insert(defPartition, op);
       continue;
     }
 
@@ -463,8 +466,6 @@ void propagatePartitions(scf::ForOp loop, WarpSchedule &schedule) {
     for (Operation *op : cluster.ops)
       schedule.insert(defPartition, op);
   }
-
-  schedule.updatePartitions();
 }
 
 //===----------------------------------------------------------------------===//
