@@ -181,6 +181,72 @@ def test_tree(tmp_path: pathlib.Path, hook):
         assert load_ops["children"][1]["metrics"]["cycles"] > 0
 
 
+def test_trace(tmp_path: pathlib.Path):
+
+    @triton.jit
+    def add_kernel(
+        x_ptr,
+        y_ptr,
+        output_ptr,
+        n_elements,
+        BLOCK_SIZE: tl.constexpr,
+    ):
+        with pl.scope("kernel"):
+            pid = tl.program_id(axis=0)
+            block_start = pid * BLOCK_SIZE
+            offsets = block_start + tl.arange(0, BLOCK_SIZE)
+            mask = offsets < n_elements
+            with pl.scope("load_ops"):
+                x = tl.load(x_ptr + offsets, mask=mask)
+                y = tl.load(y_ptr + offsets, mask=mask)
+            output = x + y
+            tl.store(output_ptr + offsets, output, mask=mask)
+
+    @triton.jit
+    def sub_kernel(
+        x_ptr,
+        y_ptr,
+        output_ptr,
+        n_elements,
+        BLOCK_SIZE: tl.constexpr,
+    ):
+        with pl.scope("kernel"):
+            pid = tl.program_id(axis=0)
+            block_start = pid * BLOCK_SIZE
+            offsets = block_start + tl.arange(0, BLOCK_SIZE)
+            mask = offsets < n_elements
+            with pl.scope("load_ops"):
+                x = tl.load(x_ptr + offsets, mask=mask)
+                y = tl.load(y_ptr + offsets, mask=mask)
+            output = x - y
+            tl.store(output_ptr + offsets, output, mask=mask)
+
+    torch.manual_seed(0)
+    size = 256
+    x = torch.rand(size, device='cuda')
+    y = torch.rand(size, device='cuda')
+    temp_file = tmp_path / "test_trace.chrome_trace"
+    output = torch.empty_like(x)
+    n_elements = output.numel()
+    grid = (1, 1, 1)
+    proton.start(str(temp_file.with_suffix("")), backend="instrumentation", data="trace")
+    add_kernel[grid](x, y, output, n_elements, BLOCK_SIZE=1024, num_warps=1)
+    sub_kernel[grid](x, y, output, n_elements, BLOCK_SIZE=1024, num_warps=1)
+    proton.finalize()
+
+    with open(temp_file, "rb") as f:
+        data = json.load(f)
+        events = data["traceEvents"]
+        assert events[0]["name"] == "kernel"
+        assert events[0]["cat"] == "add_kernel"
+        assert events[1]["name"] == "load_ops"
+        assert events[1]["cat"] == "add_kernel"
+        assert events[2]["name"] == "kernel"
+        assert events[2]["cat"] == "sub_kernel"
+        assert events[3]["name"] == "load_ops"
+        assert events[3]["cat"] == "sub_kernel"
+
+
 def test_multi_session(tmp_path: pathlib.Path):
 
     @triton.jit

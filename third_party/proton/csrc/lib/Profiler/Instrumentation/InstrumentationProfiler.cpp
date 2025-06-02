@@ -211,13 +211,15 @@ void InstrumentationProfiler::exitInstrumentedOp(uint64_t streamId,
                                                   event.first->cycle) /
                               (config.totalUnits * config.numBlocks);
               for (auto *data : dataSet) {
+                auto kernelId = dataScopeIdMap[data];
                 auto scopeId = data->addOp(dataScopeIdMap[data], contexts);
                 data->addMetric(
                     scopeId,
                     std::make_shared<CycleMetric>(
                         event.first->cycle, event.second->cycle, duration,
-                        blockTrace.blockId, blockTrace.procId, trace.uid,
-                        device, static_cast<uint64_t>(runtime->getDeviceType()),
+                        kernelId, functionName, blockTrace.blockId,
+                        blockTrace.procId, trace.uid, device,
+                        static_cast<uint64_t>(runtime->getDeviceType()),
                         timeShiftCost));
               }
             }
