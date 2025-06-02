@@ -70,13 +70,13 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
 // CHECK:           %[[VAL_16:.*]] = llvm.shl %[[VAL_13]], %[[VAL_15]] : i32
 // CHECK:           %[[VAL_17:.*]] = llvm.or %[[VAL_16]], %[[VAL_14]] : i32
 // CHECK:           %[[VAL_18:.*]] = llvm.call @murmurhash3_insert(%[[VAL_12]], %[[VAL_17]]) : (i32, i32) -> i32
-// CHECK:           %[[VAL_19:.*]] = llvm.inline_asm has_side_effects asm_dialect = att "mov.u32 $0, globaltimer_lo;", "=r"  : () -> i32
+// CHECK:           %[[VAL_19:.*]] = llvm.inline_asm has_side_effects asm_dialect = att "mov.u32 $0, %globaltimer_lo;", "=r"  : () -> i32
 // CHECK:           %[[VAL_20:.*]] = llvm.call @murmurhash3_insert(%[[VAL_18]], %[[VAL_19]]) : (i32, i32) -> i32
-// CHECK:           %[[VAL_21:.*]] = llvm.inline_asm has_side_effects asm_dialect = att "mov.u32 $0, globaltimer_hi;", "=r"  : () -> i32
+// CHECK:           %[[VAL_21:.*]] = llvm.inline_asm has_side_effects asm_dialect = att "mov.u32 $0, %globaltimer_hi;", "=r"  : () -> i32
 // CHECK:           %[[VAL_22:.*]] = llvm.call @murmurhash3_insert(%[[VAL_20]], %[[VAL_21]]) : (i32, i32) -> i32
-// CHECK:           %[[VAL_23:.*]] = llvm.inline_asm has_side_effects asm_dialect = att "mov.u32 $0, clock;", "=r"  : () -> i32
+// CHECK:           %[[VAL_23:.*]] = llvm.inline_asm has_side_effects asm_dialect = att "mov.u32 $0, %clock;", "=r"  : () -> i32
 // CHECK:           %[[VAL_24:.*]] = llvm.call @murmurhash3_insert(%[[VAL_22]], %[[VAL_23]]) : (i32, i32) -> i32
-// CHECK:           %[[VAL_25:.*]] = llvm.inline_asm has_side_effects asm_dialect = att "mov.u32 $0, clock_hi;", "=r"  : () -> i32
+// CHECK:           %[[VAL_25:.*]] = llvm.inline_asm has_side_effects asm_dialect = att "mov.u32 $0, %clock_hi;", "=r"  : () -> i32
 // CHECK:           %[[VAL_26:.*]] = llvm.call @murmurhash3_insert(%[[VAL_24]], %[[VAL_25]]) : (i32, i32) -> i32
 // CHECK:           %[[VAL_27:.*]] = llvm.call @murmurhash3_finish(%[[VAL_26]]) : (i32) -> i32
 // CHECK:           llvm.return %[[VAL_27]] : i32

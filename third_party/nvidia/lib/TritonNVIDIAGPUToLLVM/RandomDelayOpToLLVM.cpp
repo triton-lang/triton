@@ -189,25 +189,25 @@ struct RandomDelayOpConversion
       };
 
       // ret = murmurhash3_insert(ret, globaltimer_lo())
-      auto globaltimerLo = getRegisterASM("globaltimer_lo");
+      auto globaltimerLo = getRegisterASM("%globaltimer_lo");
       auto insert4 = rewriter.create<LLVM::CallOp>(
           loc, murmurhash3InsertFn,
           ValueRange{insert3.getResult(), globaltimerLo.getRes()});
 
       // ret = murmurhash3_insert(ret, globaltimer_hi())
-      auto globaltimerHi = getRegisterASM("globaltimer_hi");
+      auto globaltimerHi = getRegisterASM("%globaltimer_hi");
       auto insert5 = rewriter.create<LLVM::CallOp>(
           loc, murmurhash3InsertFn,
           ValueRange{insert4.getResult(), globaltimerHi.getRes()});
 
       // ret = murmurhash3_insert(ret, clock_lo())
-      auto clockLo = getRegisterASM("clock");
+      auto clockLo = getRegisterASM("%clock");
       auto insert6 = rewriter.create<LLVM::CallOp>(
           loc, murmurhash3InsertFn,
           ValueRange{insert5.getResult(), clockLo.getRes()});
 
       // ret = murmurhash3_insert(ret, clock_hi())
-      auto clockHi = getRegisterASM("clock_hi");
+      auto clockHi = getRegisterASM("%clock_hi");
       auto insert7 = rewriter.create<LLVM::CallOp>(
           loc, murmurhash3InsertFn,
           ValueRange{insert6.getResult(), clockHi.getRes()});
