@@ -562,8 +562,7 @@ struct BufferLoadToLocalOpConversion
         llStore(rewriter, loc,
                 hasSwizzling ? swizzledShmemAddr[i] : coalescedShmemAddr[i],
                 storeVal, b.icmp_ne(maskElems[srcIdx], b.true_val()),
-                op.getCache(),
-                /*forceNoAliasAsyncLoads=*/true);
+                op.getCache(), /*forceNoAliasAsyncLoads=*/true);
       }
     }
 
