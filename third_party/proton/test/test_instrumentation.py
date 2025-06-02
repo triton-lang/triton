@@ -181,6 +181,71 @@ def test_tree(tmp_path: pathlib.Path, hook):
         assert load_ops["children"][1]["metrics"]["cycles"] > 0
 
 
+def test_trace(tmp_path: pathlib.Path):
+
+    @triton.jit
+    def add_kernel(
+        x_ptr,
+        y_ptr,
+        output_ptr,
+        n_elements,
+        BLOCK_SIZE: tl.constexpr,
+    ):
+        with pl.scope("kernel"):
+            pid = tl.program_id(axis=0)
+            block_start = pid * BLOCK_SIZE
+            offsets = block_start + tl.arange(0, BLOCK_SIZE)
+            mask = offsets < n_elements
+            with pl.scope("load_ops"):
+                x = tl.load(x_ptr + offsets, mask=mask)
+                y = tl.load(y_ptr + offsets, mask=mask)
+            output = x + y
+            tl.store(output_ptr + offsets, output, mask=mask)
+
+    @triton.jit
+    def sub_kernel(
+        x_ptr,
+        y_ptr,
+        output_ptr,
+        n_elements,
+        BLOCK_SIZE: tl.constexpr,
+    ):
+        with pl.scope("kernel"):
+            pid = tl.program_id(axis=0)
+            block_start = pid * BLOCK_SIZE
+            offsets = block_start + tl.arange(0, BLOCK_SIZE)
+            mask = offsets < n_elements
+            with pl.scope("load_ops"):
+                x = tl.load(x_ptr + offsets, mask=mask)
+                y = tl.load(y_ptr + offsets, mask=mask)
+            output = x - y
+            tl.store(output_ptr + offsets, output, mask=mask)
+
+    torch.manual_seed(0)
+    size = 256
+    x = torch.rand(size, device='cuda')
+    y = torch.rand(size, device='cuda')
+    temp_file = tmp_path / "test_trace.hatchet"
+    output = torch.empty_like(x)
+    n_elements = output.numel()
+    grid = (1, 1, 1)
+    proton.start(str(temp_file.with_suffix("")), backend="instrumentation")
+    add_kernel[grid](x, y, output, n_elements, BLOCK_SIZE=1024, num_warps=1)
+    sub_kernel[grid](x, y, output, n_elements, BLOCK_SIZE=1024, num_warps=1)
+    proton.finalize()
+
+    with open(temp_file, "rb") as f:
+        data = json.load(f)
+        kernel_frame = data[0]["children"][0]["children"][0]
+        load_ops = kernel_frame["children"][0]
+        assert "load_ops" in load_ops["frame"]["name"]
+        assert ("load_x" in load_ops["children"][0]["frame"]["name"]
+                or "load_x" in load_ops["children"][1]["frame"]["name"])
+        assert ("load_y" in load_ops["children"][0]["frame"]["name"]
+                or "load_y" in load_ops["children"][1]["frame"]["name"])
+        assert load_ops["children"][0]["metrics"]["cycles"] > 0
+        assert load_ops["children"][1]["metrics"]["cycles"] > 0
+
 def test_multi_session(tmp_path: pathlib.Path):
 
     @triton.jit
