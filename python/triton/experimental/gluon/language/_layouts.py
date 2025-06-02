@@ -186,4 +186,10 @@ class SwizzledSharedLayout(SharedLayout):
         )
 
     def mangle(self) -> str:
-        return f"NVMMA_{self.swizzle_byte_width}_{self.element_bitwidth}_{self.transposed}_{self.fp4_padded}_NVMMA"
+
+        def stringify(x):
+            if x is None:
+                return ""
+            return "_".join(map(str, x))
+
+        return f"SSS_{self.vec}_{self.per_phase}_{self.max_phase}_{stringify(self.order)}_{stringify(self.ctas_per_cga)}_{stringify(self.cta_split_num)}_{stringify(self.cta_order)}_SSS"
