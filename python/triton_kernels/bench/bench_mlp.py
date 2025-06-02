@@ -28,7 +28,7 @@ def quantize(w, dtype, dev, **opt):
     elif dtype == "fp8":
         fp8e4_dtype = torch.float8_e4m3fn if get_cdna_version() != 3 \
             else torch.float8_e4m3fnuz
-        wq = w.to(fp8e4_dtype).transpose(-1, -2).contiguous().transpose(-1, -2)
+        wq = w.to(fp8e4_dtype)
         return wq, InFlexData(dtype=wq.dtype, scale=w.abs().max().unsqueeze(0)), \
                    MicroscalingCtx()
     else:

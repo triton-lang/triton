@@ -12,6 +12,16 @@ from ._common import make_matmul_repr, matmul_launch_metadata, swizzle2d, xcd_sw
 def cuda_capability_geq(major, minor):
     return target_info.cuda_capability_geq(major, minor)
 
+@tl.constexpr_function
+def get_dtype(tensor_or_desc: tl.tensor | tl.tensor_descriptor) -> tl.dtype:
+    if isinstance(tensor_or_desc, tl.tensor):
+        return tensor_or_desc.dtype.element_ty
+    elif isinstance(tensor_or_desc, tl.tensor_descriptor):
+        return tensor_or_desc.dtype
+    else:
+        raise ValueError(f"Invalid type: {type(tensor_or_desc)}")
+
+
 @triton.jit
 def _load_tensor_desc(desc, offs, transpose: tl.constexpr = False):
     if transpose:
@@ -147,6 +157,7 @@ def _p_matmul_ogs(
              EVEN_K: tl.constexpr, SPLIT_K: tl.constexpr,
              W_CACHE_MODIFIER: tl.constexpr,
              NUM_SMS: tl.constexpr,
+             USE_HOST_TMA_DESCRIPTORS: tl.constexpr,
              TOKENS_PER_EXPT_FOR_ANNOTATION=None,
              UPCAST_INDICES:tl.constexpr=False,
              DISABLE_Y_TMA: tl.constexpr=False,
@@ -157,15 +168,15 @@ def _p_matmul_ogs(
     is_microscaled_format: tl.constexpr = MxScale is not None
     MX_PACK_DIVISOR: tl.constexpr = 32
     if is_microscaled_format:
-        w_type: tl.constexpr = W.dtype.element_ty
+        w_type: tl.constexpr = get_dtype(W)
         tl.static_assert(w_type == tl.uint8 or (w_type == tl.float8e4nv or w_type == tl.float8e5),
                          "mx_weight_ptr must be uint8")
-        tl.static_assert(MxScale.dtype.element_ty == tl.uint8, "mx_scale_ptr must be uint8")
+        tl.static_assert(get_dtype(MxScale) == tl.uint8, "mx_scale_ptr must be uint8")
         tl.static_assert(BLOCK_K % MX_PACK_DIVISOR == 0, "BLOCK_K must be a multiple of MX_PACK_DIVISOR")
         tl.static_assert(SWIZZLE_MX_SCALE == "BLACKWELL" or SWIZZLE_MX_SCALE is None, "Only Blackwell swizzling is supported for scales")
 
         # We have pack 2 fp4 values in a byte
-        W_PACK_DIVISOR: tl.constexpr = 2 if W.dtype.element_ty == tl.uint8 else 1
+        W_PACK_DIVISOR: tl.constexpr = 2 if w_type == tl.uint8 else 1
         PACKED_BLOCK_K_W: tl.constexpr = BLOCK_K // W_PACK_DIVISOR
         MX_SCALE_BLOCK_K: tl.constexpr = BLOCK_K // MX_PACK_DIVISOR
     else:
@@ -221,7 +232,9 @@ def _p_matmul_ogs(
     X_USE_LOAD_TMA: tl.constexpr = GatherIndx is None and not USE_GATHER_TMA
     USE_SCATTER_TMA: tl.constexpr = (HAS_TMA_GS and HAS_FUSED_SCATTER) and not DISABLE_Y_TMA
 
-    if USE_GATHER_TMA:
+    if USE_HOST_TMA_DESCRIPTORS:
+        x_desc = X
+    elif USE_GATHER_TMA:
         x_desc = tl.make_tensor_descriptor(
             X,
             # No masking on the M dimension because we manually mask by setting indices to -1
@@ -239,41 +252,51 @@ def _p_matmul_ogs(
             block_shape=[BLOCK_M, BLOCK_K]
         )
 
-    # Pad the inner shape to 128 for mxfp4 weights; TMA requires this when the compiler uses CU_TENSOR_MAP_DATA_TYPE_16U4_ALIGN16B.
-    # This technically makes the shape masking incorrect, but it's fine because:
-    #  - When the N dim is padded, the scales will be masked to 0.
-    #  - When the K dim is padded, the activations we perform tl.dot with will be masked to 0.
-    #    Note: the scales can't be relied on for zeroing in this case, because they apply to groups
-    #    of 32 elements in the K dimension.
-    w_pad_inner_shape = 128 if is_microscaled_format and W.dtype.element_ty == tl.uint8 else 1
-    w_desc = _make_tensor_desc(W,
-        shape=[N_EXPTS_TOT if ExptData is not None else batch_size,
-            (K + W_PACK_DIVISOR - 1) // W_PACK_DIVISOR, N],
-        strides=[stride_w_e, stride_w_k, stride_w_n],
-        block_shape=[1, PACKED_BLOCK_K_W, BLOCK_N],
-        transpose=W_TRANSPOSE,
-        pad_inner_shape=w_pad_inner_shape)
+    if USE_HOST_TMA_DESCRIPTORS:
+        w_desc = W
+    else:
+        # Pad the inner shape to 128 for mxfp4 weights; TMA requires this when the compiler uses CU_TENSOR_MAP_DATA_TYPE_16U4_ALIGN16B.
+        # This technically makes the shape masking incorrect, but it's fine because:
+        #  - When the N dim is padded, the scales will be masked to 0.
+        #  - When the K dim is padded, the activations we perform tl.dot with will be masked to 0.
+        #    Note: the scales can't be relied on for zeroing in this case, because they apply to groups
+        #    of 32 elements in the K dimension.
+        w_pad_inner_shape = 128 if is_microscaled_format and W.dtype.element_ty == tl.uint8 else 1
+        w_desc = _make_tensor_desc(W,
+            shape=[N_EXPTS_TOT if ExptData is not None else batch_size,
+                (K + W_PACK_DIVISOR - 1) // W_PACK_DIVISOR, N],
+            strides=[stride_w_e, stride_w_k, stride_w_n],
+            block_shape=[1, PACKED_BLOCK_K_W, BLOCK_N],
+            transpose=W_TRANSPOSE,
+            pad_inner_shape=w_pad_inner_shape)
 
     if is_microscaled_format:
-        PackedK = (K + MX_PACK_DIVISOR - 1) // MX_PACK_DIVISOR
-        if SWIZZLE_MX_SCALE == "BLACKWELL":
-            mx_desc = tl.make_tensor_descriptor(
-                MxScale,
-                shape=[
-                    N_EXPTS_TOT if ExptData is not None else batch_size,
-                    (N + 127) // 128, (PackedK + 3) // 4, 32, 4 * 4,
-                ],
-                strides=[stride_mx_e, stride_mx_n, stride_mx_k, 4 * 4, 1],
-                block_shape=[1, BLOCK_N // 128, MX_SCALE_BLOCK_K // 4, 32, 4 * 4]
-            )
+        if USE_HOST_TMA_DESCRIPTORS:
+            mx_desc = MxScale
         else:
-            mx_desc = _make_tensor_desc(
-                MxScale,
-                shape=[N_EXPTS_TOT if ExptData is not None else batch_size, PackedK, N],
-                strides=[stride_mx_e, stride_mx_k, stride_mx_n],
-                block_shape=[1, MX_SCALE_BLOCK_K, BLOCK_N],
-                transpose=MX_TRANSPOSE
-            )
+            PackedK = (K + MX_PACK_DIVISOR - 1) // MX_PACK_DIVISOR
+            if SWIZZLE_MX_SCALE == "BLACKWELL":
+                mx_desc = tl.make_tensor_descriptor(
+                    MxScale,
+                    shape=[
+                        1,
+                        (N_EXPTS_TOT if ExptData is not None else batch_size) * ((N + 127) // 128),
+                        (PackedK + 3) // 4, 2, 256,
+                    ],
+                    strides=[
+                        (N_EXPTS_TOT if ExptData is not None else batch_size) * ((N + 127) // 128) * stride_mx_n,
+                        stride_mx_n, stride_mx_k, 256, 1
+                    ],
+                    block_shape=[1, BLOCK_N // 128, MX_SCALE_BLOCK_K // 4, 2, 256]
+                )
+            else:
+                mx_desc = _make_tensor_desc(
+                    MxScale,
+                    shape=[N_EXPTS_TOT if ExptData is not None else batch_size, PackedK, N],
+                    strides=[stride_mx_e, stride_mx_k, stride_mx_n],
+                    block_shape=[1, MX_SCALE_BLOCK_K, BLOCK_N],
+                    transpose=MX_TRANSPOSE
+                )
 
     if USE_SCATTER_TMA:
         y_desc = tl.make_tensor_descriptor(
@@ -313,26 +336,11 @@ def _p_matmul_ogs(
             GROUP_M, XCD_SWIZZLE)
 
         # Base pointers and offsets. These will be DCE'ed if unused in the TMA path.
-        XBase = X + start_z.to(index_type) * stride_x_z
-        offs_x_k = tl.arange(0, BLOCK_K)[None, :] * stride_x_k
-        if SPLIT_K > 1:
-            offs_x_k += pid_k.to(index_type) * BLOCK_K * stride_x_k
-        offs_w_n = off_n + tl.arange(0, BLOCK_N)
-        offs_w_n = tl.max_contiguous(tl.multiple_of(offs_w_n % N, BLOCK_N), BLOCK_N)
-
-        # If the operands are swapped, the TMA layout of the MX scales are not optimal for the weights anymore.
-        # The scales will be loaded with normal loads instead.
-        if is_microscaled_format and SWAP_XW:
-            offs_mx_k = tl.arange(0, MX_SCALE_BLOCK_K)
-
-            PACKED_MX_BLOCK: tl.constexpr = (MX_SCALE_BLOCK_K // 4) * 32 * 4 * 4
-            offs_mx_inner = tl.arange(0, PACKED_MX_BLOCK)
-            offs_mx_outer = ((off_n // 128) + tl.arange(0, BLOCK_N // 128)) % N
-            offs_mx_outer = tl.max_contiguous(tl.multiple_of(offs_mx_outer, BLOCK_N // 128), BLOCK_N // 128)
-
+        if not USE_HOST_TMA_DESCRIPTORS:
+            XBase = X + start_z.to(index_type) * stride_x_z
+            offs_x_k = tl.arange(0, BLOCK_K)[None, :] * stride_x_k
             if SPLIT_K > 1:
-                offs_mx_k += MX_SCALE_BLOCK_K * pid_k
-                offs_mx_inner += (MX_SCALE_BLOCK_K // 4) * pid_k * stride_mx_k
+                offs_x_k += pid_k.to(index_type) * BLOCK_K * stride_x_k
 
         if X_USE_LOAD_TMA:
             if ExptData is None:
@@ -387,24 +395,10 @@ def _p_matmul_ogs(
                     x_scales: tl.constexpr = None
                 else:
                     x_scales = tl.full((BLOCK_M, BLOCK_K // MX_PACK_DIVISOR), 127, dtype=tl.uint8)
-                if SWAP_XW:
-                    if SWIZZLE_MX_SCALE == "BLACKWELL":
-                        MxPtrs = MxScale + expt_id.to(index_type) * stride_mx_e + offs_mx_outer.to(index_type)[:, None] * stride_mx_n + offs_mx_inner[None, :] + ki * (MX_SCALE_BLOCK_K // 4 * SPLIT_K) * stride_mx_k
-                        w_scales = unswizzle_mx_scale_bw(tl.load(MxPtrs))
-                    else:
-                        MxPtrs = MxScale + expt_id.to(index_type) * stride_mx_e + offs_mx_k.to(index_type)[None, :] * stride_mx_k + offs_w_n.to(index_type)[:, None] * stride_mx_n + ki * MX_SCALE_BLOCK_K * SPLIT_K * stride_mx_k
-                        mask_k = offs_mx_k < tl.cdiv(K - off_k, MX_PACK_DIVISOR)
-                        if EVEN_K:
-                            if SPLIT_K > 1:
-                                w_scales = tl.load(MxPtrs, mask=mask_k[None, :], other=0.0)
-                            else:
-                                w_scales = tl.load(MxPtrs)
-                        else:
-                            w_scales = tl.load(MxPtrs, mask=mask_k[None, :], other=0.0)
-
-                elif SWIZZLE_MX_SCALE == "BLACKWELL":
-                    w_scales = mx_desc.load([expt_id, off_n // 128, pid_k * MX_SCALE_BLOCK_K // 4 + ki * (MX_SCALE_BLOCK_K // 4 * SPLIT_K), 0, 0])
-                    w_scales = w_scales.reshape((w_scales.shape[1], w_scales.shape[2] * 32 * 4 * 4))
+                if SWIZZLE_MX_SCALE == "BLACKWELL":
+                    flattened_expt_n_idx = expt_id * ((N + 127) // 128) + (off_n // 128)
+                    w_scales = mx_desc.load([0, flattened_expt_n_idx, pid_k * MX_SCALE_BLOCK_K // 4 + ki * (MX_SCALE_BLOCK_K // 4 * SPLIT_K), 0, 0])
+                    w_scales = w_scales.reshape((w_scales.shape[1], w_scales.shape[2] * w_scales.shape[-2] * w_scales.shape[-1]))
                     w_scales = unswizzle_mx_scale_bw(w_scales)
                 else:
                     w_scales = _load_tensor_desc(mx_desc, [expt_id, off_k_mx, off_n], transpose=MX_TRANSPOSE).T
