@@ -606,7 +606,9 @@ def matmul_ogs(x, w, bias,
     kernels = get_kernels(epilogue.specs, fused_activation.specs)
     expt_data = routing_data.expt_data
     block_m = opt_flags.block_m
-    expt_hist_sum = None if expt_data.hist is None else expt_data.token_offs_pad[block_m][-1]
+    expt_hist_sum = None if expt_data is None else expt_data.token_offs_pad[block_m][-1]
+    expt_token_offs_raw = None if expt_data is None else expt_data.token_offs_raw
+    expt_block_pid_map = None if expt_data is None else expt_data.block_pid_map[block_m]
     (kernels._p_matmul_ogs if opt_flags.is_persistent else kernels._matmul_ogs)[(n_cta,)](
                    flex.out_data.reinterpret(memory["output"]),
                    flex.out_data.reinterpret(out0), *out0.stride(),
@@ -625,7 +627,7 @@ def matmul_ogs(x, w, bias,
                    None if scatter_indx is None else scatter_indx.src_indx,
                    num_indx,
                    writeback_idxs, writeback_size,
-                   expt_data.hist, expt_data.token_offs_raw, expt_hist_sum, expt_data.block_pid_map[block_m],
+                   routing_data.expt_hist, expt_token_offs_raw, expt_hist_sum, expt_block_pid_map,
                    batch_size, grid_m, grid_n,
                    out_alpha,
                    *fused_activation.fn_args, fused_activation.reduction_n,
@@ -656,7 +658,7 @@ def matmul_ogs(x, w, bias,
                    NUM_SMS = n_cta if opt_flags.is_persistent else 0,
                    **opt_flags.target_kernel_kwargs)
     # post-processing
-    out = apply_postprocessing_features(scatter_indx, finalize_scatter_idxs, opt_flags, expt_data.token_offs_raw,
+    out = apply_postprocessing_features(scatter_indx, finalize_scatter_idxs, opt_flags, expt_token_offs_raw,
                                 num_indx, precision_config, routing_data,
                                 postprocessing_features, memory, fused_postprocess_activation, epilogue)
 
