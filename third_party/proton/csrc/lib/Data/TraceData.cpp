@@ -445,6 +445,8 @@ void TraceData::dumpChromeTrace(std::ostream &os) const {
               event.metrics.at(MetricKind::Cycle));
       auto kernelId =
           std::get<uint64_t>(cycleMetric->getValue(CycleMetric::KernelId));
+      auto kernelName =
+          std::get<std::string>(cycleMetric->getValue(CycleMetric::KernelName));
       auto uid = std::get<uint64_t>(cycleMetric->getValue(CycleMetric::UnitId));
       auto startCycle =
           std::get<uint64_t>(cycleMetric->getValue(CycleMetric::StartCycle));
@@ -459,7 +461,7 @@ void TraceData::dumpChromeTrace(std::ostream &os) const {
 
       hasCycleMetrics = true;
       kernelBlockNum[kernelId] += 1;
-      cycleEvents.emplace_back(startCycle, endCycle, kernelId, blockId, uid, procId,
+      cycleEvents.emplace_back(startCycle, endCycle, kernelId, kernelName, blockId, uid, procId,
                                event.contextId, timeShiftCost);
     }
 
