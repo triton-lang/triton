@@ -13,7 +13,7 @@ from .. import knobs, language
 from .._C.libtriton import ir, gluon_ir
 from ..language import constexpr, semantic, str_to_ty, tensor
 from ..language.core import _unwrap_if_constexpr, base_value, base_type
-from ..runtime.jit import get_jit_fn_file_line
+from ..runtime.jit import get_jit_fn_file_line, get_full_name
 # ideally we wouldn't need any runtime component
 from ..runtime import JITFunction
 from .._utils import find_paths_if, get_iterable_path, set_iterable_path
@@ -315,6 +315,7 @@ class CodeGenerator(ast.NodeVisitor):
         self.jit_fn = jit_fn
         # TODO: we currently generate illegal names for non-kernel functions involving constexprs!
         if is_kernel:
+            function_name = function_name[function_name.rfind('.') + 1:]
             function_name = check_identifier_legality(function_name, "function")
         self.function_name = function_name
         self.is_kernel = is_kernel
@@ -1200,7 +1201,7 @@ class CodeGenerator(ast.NodeVisitor):
         args_path = find_paths_if(args, lambda _, x: not _is_constexpr(x))
         args_val = [get_iterable_path(args, path) for path in args_path]
         # mangle
-        fn_name = mangle_fn(fn.__name__, [arg.type for arg in args_val], args_cst)
+        fn_name = mangle_fn(get_full_name(fn), [arg.type for arg in args_val], args_cst)
         # generate function def if necessary
         if not self.module.has_function(fn_name):
             gscope = fn.__globals__
