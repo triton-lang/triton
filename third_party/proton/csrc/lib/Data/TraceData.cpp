@@ -240,7 +240,7 @@ namespace {
 struct CycleMetricWithContext {
   std::shared_ptr<CycleMetric> cycleMetric;
   uint32_t contextId;
-  
+
   CycleMetricWithContext(std::shared_ptr<CycleMetric> metric, uint32_t ctx)
       : cycleMetric(metric), contextId(ctx) {}
 };
@@ -250,11 +250,13 @@ convertToTimelineTrace(TraceData::Trace *trace,
                        std::vector<CycleMetricWithContext> &cycleEvents) {
   std::vector<KernelTrace> results;
 
-  auto getInt64Value = [](const std::shared_ptr<CycleMetric> &metric, CycleMetric::CycleMetricKind kind) {
+  auto getInt64Value = [](const std::shared_ptr<CycleMetric> &metric,
+                          CycleMetric::CycleMetricKind kind) {
     return std::get<uint64_t>(metric->getValue(kind));
   };
 
-  auto getStringValue = [](const std::shared_ptr<CycleMetric> &metric, CycleMetric::CycleMetricKind kind) {
+  auto getStringValue = [](const std::shared_ptr<CycleMetric> &metric,
+                           CycleMetric::CycleMetricKind kind) {
     return std::get<std::string>(metric->getValue(kind));
   };
 
@@ -280,27 +282,28 @@ convertToTimelineTrace(TraceData::Trace *trace,
 
   // Pre-sort all events once
   auto &sortedEvents = cycleEvents;
-  std::sort(sortedEvents.begin(), sortedEvents.end(),
-            [&](const CycleMetricWithContext &a, const CycleMetricWithContext &b) {
-              auto aKernelId = getKernelId(a);
-              auto bKernelId = getKernelId(b);
-              if (aKernelId != bKernelId)
-                return aKernelId < bKernelId;
-              
-              auto aBlockId = getBlockId(a);
-              auto bBlockId = getBlockId(b);
-              if (aBlockId != bBlockId)
-                return aBlockId < bBlockId;
-              
-              auto aUnitId = getUnitId(a);
-              auto bUnitId = getUnitId(b);
-              if (aUnitId != bUnitId)
-                return aUnitId < bUnitId;
+  std::sort(
+      sortedEvents.begin(), sortedEvents.end(),
+      [&](const CycleMetricWithContext &a, const CycleMetricWithContext &b) {
+        auto aKernelId = getKernelId(a);
+        auto bKernelId = getKernelId(b);
+        if (aKernelId != bKernelId)
+          return aKernelId < bKernelId;
 
-              auto aStartCycle = getStartCycle(a);
-              auto bStartCycle = getStartCycle(b);
-              return aStartCycle < bStartCycle;
-            });
+        auto aBlockId = getBlockId(a);
+        auto bBlockId = getBlockId(b);
+        if (aBlockId != bBlockId)
+          return aBlockId < bBlockId;
+
+        auto aUnitId = getUnitId(a);
+        auto bUnitId = getUnitId(b);
+        if (aUnitId != bUnitId)
+          return aUnitId < bUnitId;
+
+        auto aStartCycle = getStartCycle(a);
+        auto bStartCycle = getStartCycle(b);
+        return aStartCycle < bStartCycle;
+      });
 
   size_t eventIndex = 0;
 
@@ -314,15 +317,17 @@ convertToTimelineTrace(TraceData::Trace *trace,
     std::map<int, std::string> scopeIdToName;
     std::map<std::string, int> scopeNameToId;
     int curScopeId = 0;
-    uint32_t timeShiftCost = getInt64Value(kernelEvent.cycleMetric, CycleMetric::TimeShiftCost);
+    uint32_t timeShiftCost =
+        getInt64Value(kernelEvent.cycleMetric, CycleMetric::TimeShiftCost);
 
     // Process all events for current kernel
     while (eventIndex < sortedEvents.size() &&
-            getKernelId(sortedEvents[eventIndex]) == currentKernelId) {
+           getKernelId(sortedEvents[eventIndex]) == currentKernelId) {
 
       const auto &blockEvent = sortedEvents[eventIndex];
       uint32_t currentBlockId = getBlockId(blockEvent);
-      uint32_t currentProcId = getInt64Value(blockEvent.cycleMetric, CycleMetric::ProcessorId);
+      uint32_t currentProcId =
+          getInt64Value(blockEvent.cycleMetric, CycleMetric::ProcessorId);
 
       CircularLayoutParserResult::BlockTrace blockTrace;
       blockTrace.blockId = currentBlockId;
@@ -380,7 +385,8 @@ convertToTimelineTrace(TraceData::Trace *trace,
       }
       parserResult->blockTraces.push_back(std::move(blockTrace));
     }
-    metadata->kernelName = getStringValue(kernelEvent.cycleMetric, CycleMetric::KernelName);
+    metadata->kernelName =
+        getStringValue(kernelEvent.cycleMetric, CycleMetric::KernelName);
     metadata->scopeName = scopeIdToName;
     if (timeShiftCost > 0)
       timeShift(timeShiftCost, parserResult);
