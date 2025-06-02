@@ -161,7 +161,7 @@ class PruneRouting(torch.autograd.Function):
         # perform compaction to update expt_scal / expt_indx
         expt_scal, expt_indx = compaction(expt_scal, expt_indx, bitmatrix)
         n_expts_tot = n_expts_tot // simulated_ep
-        bitmatrix.shape[-1] = n_expts_tot
+        bitmatrix.shape_raw[-1] = n_expts_tot
         return expt_scal, expt_indx, bitmatrix
 
 
@@ -234,7 +234,7 @@ def routing(logits, n_expts_act, sm_first=False, expt_indx=None, simulated_ep=1,
                                            apply_softmax=not sm_first, y_indx=expt_indx, n_rows=n_rows)
     # mutate bitmatrix
     if simulated_ep > 1:
-        expt_scal, expt_indx, bitmatrix, n_expts_tot = prune_routing(expt_scal, expt_indx, bitmatrix, simulated_ep)
+        expt_scal, expt_indx, bitmatrix = prune_routing(expt_scal, expt_indx, bitmatrix, simulated_ep)
     hist, topk_indx, gate_indx, gate_scal = sort_tokens(expt_scal, expt_indx, bitmatrix)
     # pack the matmul data structure
     n_expts_tot = logits.shape[-1] // simulated_ep
