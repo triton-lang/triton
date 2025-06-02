@@ -141,3 +141,35 @@ def test_call_in_loop():
     # CHECK:   call @accumulate
     for i in range(10):
         acc = accumulate(acc, i)
+
+
+@tl.core._aggregate
+class AggregateWithConstexpr:
+    a: tl.tensor
+    b: tl.constexpr
+
+    def __init__(self, a, b):
+        self.a = a
+        self.b = b
+
+    @staticmethod
+    def create(a):
+        return AggregateWithConstexpr(a, tl.constexpr(42))
+
+
+@triton.jit
+def add_rhs_constexpr(agg):
+    _ = agg.a + agg.b
+
+
+@filecheck_test
+@triton.jit
+def test_aggregate_with_constexpr():
+    # CHECK-LABEL: test_aggregate_with_constexpr
+    # CHECK: tt.call @"add_rhs_constexpr__test_frontend.AggregateWithConstexpr<i32S4S, constexpr[42]>
+    agg = AggregateWithConstexpr.create(tl.arange(0, 4))
+    add_rhs_constexpr(agg)
+
+    # CHECK: tt.func private @"add_rhs_constexpr__test_frontend.AggregateWithConstexpr<i32S4S, constexpr[42]>
+    # CHECK: %cst = arith.constant dense<42> : tensor<4xi32>
+    # CHECK: arith.addi %arg0, %cst : tensor<4xi32>
