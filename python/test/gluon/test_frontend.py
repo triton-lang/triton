@@ -428,7 +428,8 @@ def tmem_subslice_kernel():
 
 
 def test_tmem_subslice_constexpr():
-    expecttest.assert_expected_inline(run_parser(tmem_subslice_kernel).str_nodebug(), """\
+    expecttest.assert_expected_inline(
+        run_parser(tmem_subslice_kernel).str_nodebug(), """\
 #tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, unpacked = true>
 module {
   tt.func public @tmem_subslice_kernel() attributes {noinline = false} {
