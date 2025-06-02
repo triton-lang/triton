@@ -1054,6 +1054,10 @@ available on AMD Radeon GPUs of RDNA architectures.
   supported:
   - 1: gfx11
   - 2: gfx12
+-A `warpTileSize` parameter defines the shape of the tile processed by a single warp,
+  given as a list of three integers [M, N, K] corresponding to the dimensions of the
+  matrix multiplication. This allows support for architectures (like gfx1200) that
+  enable non-16x16x16 tiles, e.g., 16x16x32 for i4 operands.
 - A `warpsPerCTA` parameter characterizes data distribution between warps.
   An important limitation of WMMA for layout is a shape for tiles processed
   by a single warp. It is [16, 16].
