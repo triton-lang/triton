@@ -332,7 +332,7 @@ def test_op(m, n, k, split_k, do_gather, do_scatter, fused_scatter, has_y_gammas
                                                swizzle_scale=swizzle_scale,
                                                actual_weight_scale_shape=weight_scale_shape)
 
-    if is_cuda() and is_persistent and not can_use_persistent_tma(x_tri, w_tri, gindx, precision_opt):
+    if is_persistent and not can_use_persistent_tma(x_tri, w_tri, gindx, precision_opt):
         pytest.skip("persistent TMAs not supported for this test")
 
     if w_tri.shape[0] == 1:
