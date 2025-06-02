@@ -3,7 +3,7 @@
 
 namespace mlir::triton::gpu {
 
-llvm::FailureOr<CTALayoutAttr>
-permuteCTALayout(MLIRContext *ctx, CTALayoutAttr layout, ArrayRef<int> order);
+CTALayoutAttr permuteCTALayout(MLIRContext *ctx, CTALayoutAttr layout,
+                               ArrayRef<int> order);
 
-}
+} // namespace mlir::triton::gpu

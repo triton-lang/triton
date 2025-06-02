@@ -1,4 +1,5 @@
 #include "mlir/Dialect/Arith/IR/Arith.h"
+#include "mlir/Dialect/ControlFlow/IR/ControlFlow.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
@@ -32,6 +33,8 @@ void Canonicalize::runOnOperation() {
       patterns);
   ctx->getLoadedDialect<scf::SCFDialect>()->getCanonicalizationPatterns(
       patterns);
+  ctx->getLoadedDialect<cf::ControlFlowDialect>()->getCanonicalizationPatterns(
+      patterns);
   populateForOpDeadArgumentElimination(patterns);
 
   // Populate select Triton canonicalization patterns. The important patterns to
@@ -43,4 +46,6 @@ void Canonicalize::runOnOperation() {
   ExpandDimsOp::getCanonicalizationPatterns(patterns, ctx);
   ttg::WarpSpecializeOp::getCanonicalizationPatterns(patterns, ctx);
   ttng::TensorDescToTMAPtrOp::getCanonicalizationPatterns(patterns, ctx);
+
+  (void)applyPatternsGreedily(getOperation(), std::move(patterns));
 }

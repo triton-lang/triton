@@ -381,12 +381,14 @@ When vec=2, elements are swizzled in pairs of 2.  In other words, the element at
   ];
 
   let extraClassDeclaration = extraBaseClassDeclaration # [{
+    unsigned getRank() const { return getCTAOrder().size(); }
     int32_t getAlignment() const;
     SmallVector<unsigned> getCTAsPerCGA() const;
     SmallVector<unsigned> getCTAOrder() const;
     SmallVector<unsigned> getCTASplitNum() const;
   }];
   let hasCustomAssemblyFormat = 1;
+  let genVerifyDecl = 1;
 }
 
 def NVMMASharedEncodingAttr :
@@ -450,6 +452,7 @@ def NVMMASharedEncodingAttr :
   ];
 
   let extraClassDeclaration = extraBaseClassDeclaration # [{
+    unsigned getRank() const { return getCTAOrder().size(); }
     int32_t getAlignment() const;
     SmallVector<unsigned> getCTAsPerCGA() const;
     SmallVector<unsigned> getCTAOrder() const;
@@ -556,6 +559,7 @@ Swizzling examples (matrix is filled with numbers 0, 1, 2, .. columns*rows-1):
   );
 
   let extraClassDeclaration = extraBaseClassDeclaration # [{
+    unsigned getRank() const { return getCTAOrder().size(); }
     int32_t getAlignment() const;
     SmallVector<unsigned> getCTAsPerCGA() const;
     SmallVector<unsigned> getCTAOrder() const;

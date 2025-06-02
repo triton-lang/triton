@@ -139,7 +139,59 @@ class const:
     pass
 
 
-class constexpr:
+class base_value:
+    """Base class of values that exist in the triton IR (i.e. not constexprs).
+    """
+    type: base_type
+
+    def _flatten_ir(self, handles: List[ir.value]) -> None:
+        """Flatten frontend value into a sequence of mlir handles, which are appended
+        to the output list
+        """
+        raise NotImplementedError
+
+
+class base_type:
+
+    def __eq__(self, other):
+        raise NotImplementedError("Types must implement __eq__")
+
+    def __ne__(self, other):
+        return not (self == other)
+
+    def _unflatten_ir(self, handles: List[ir.value], cursor: int) -> Tuple[base_value, int]:
+        """Build a frontend value with the current dtype, wrapping a list of existing handles.
+        cursor is the index of the first handle relevant to this value, and the function
+        should return the updated cursor position after any handles consumed by the created value.
+        """
+        raise NotImplementedError
+
+    def mangle(self) -> str:
+        raise NotImplementedError(f"NYI: Type mangling for type {self.__class__}")
+
+    def _flatten_ir_types(self, builder: ir.builder, out: List[ir.type]) -> None:
+        raise NotImplementedError
+
+
+class constexpr_type(base_type):
+
+    def __init__(self, value):
+        self.value = value
+
+    def __repr__(self) -> str:
+        return f"constexpr[{self.value}]"
+
+    def mangle(self) -> str:
+        return repr(self)
+
+    def _flatten_ir_types(self, builder: ir.builder, out: List[ir.type]) -> None:
+        return
+
+    def _unflatten_ir(self, handles: List[ir.value], cursor: int) -> Tuple[base_value, int]:
+        return constexpr(self.value), cursor
+
+
+class constexpr(base_value):
     """
     This class is used to store a value that is known at compile-time.
     """
@@ -149,10 +201,13 @@ class constexpr:
             self.value = value.value
         else:
             self.value = value
-        self.type = constexpr
+        self.type = constexpr_type(value)
 
     def __repr__(self) -> str:
         return f"constexpr[{self.value}]"
+
+    def _flatten_ir(self, handles: List[ir.value]) -> None:
+        return
 
     def __index__(self):
         return self.value
@@ -320,40 +375,6 @@ def check_bit_width(value, shift_value):
             warn(
                 f"Value {shift_value.value} exceeds the maximum bitwidth ({bitwidth}) for type '{value.dtype}'. This may result in undefined behavior."
             )
-
-
-class base_value:
-    """Base class of values that exist in the triton IR (i.e. not constexprs).
-    """
-    type: base_type
-
-    def _flatten_ir(self, handles: List[ir.value]) -> None:
-        """Flatten frontend value into a sequence of mlir handles, which are appended
-        to the output list
-        """
-        raise NotImplementedError
-
-
-class base_type:
-
-    def __eq__(self, other):
-        raise NotImplementedError("Types must implement __eq__")
-
-    def __ne__(self, other):
-        return not (self == other)
-
-    def _unflatten_ir(self, handles: List[ir.value], cursor: int) -> Tuple[base_value, int]:
-        """Build a frontend value with the current dtype, wrapping a list of existing handles.
-        cursor is the index of the first handle relevant to this value, and the function
-        should return the updated cursor position after any handles consumed by the created value.
-        """
-        raise NotImplementedError
-
-    def mangle(self) -> str:
-        raise NotImplementedError(f"NYI: Type mangling for type {self.__class__}")
-
-    def _flatten_ir_types(self, builder: ir.builder, out: List[ir.type]) -> None:
-        raise NotImplementedError
 
 
 # -----------------------
@@ -1307,6 +1328,9 @@ class tuple(base_value):
     def _flatten_ir(self, handles: List[ir.value]):
         for v in self.values:
             v._flatten_ir(handles)
+
+    def __repr__(self):
+        return f"({' ,'.join(repr(x) for x in self.values)})"
 
 
 class slice:

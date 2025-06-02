@@ -423,8 +423,8 @@ TEST_F(JoinOpTest, JoinOpLayoutPropagation) {
       joinShape.push_back(2);
       assert(succeeded(result));
       Attribute transEnc;
-      result = inferLayout->inferTransOpEncoding(joinedEnc, joinShape,
-                                                 transPerm, transEnc);
+      result = inferLayout->inferTransOpEncoding(
+          joinedEnc, joinShape, transPerm, transEnc, /*loc=*/{});
       assert(succeeded(result));
       SmallVector<int64_t> transShape;
       for (auto i : transPerm) {
