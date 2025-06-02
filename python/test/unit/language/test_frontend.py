@@ -161,11 +161,11 @@ class AggregateWithConstexpr:
 @triton.jit
 def test_aggregate_with_constexpr():
     # CHECK-LABEL: test_aggregate_with_constexpr
-    # CHECK: tt.call @"add_rhs_constexpr__test_frontend.AggregateWithConstexpr<i32S4S, constexpr[42]>
+    # CHECK: tt.call @{{.*}}add_rhs_constexpr__test_frontend.AggregateWithConstexpr<i32S4S, constexpr[42]>
     agg = AggregateWithConstexpr.create(tl.arange(0, 4))
     add_rhs_constexpr(agg)
 
-    # CHECK: tt.func private @"add_rhs_constexpr__test_frontend.AggregateWithConstexpr<i32S4S, constexpr[42]>
+    # CHECK: tt.func private @{{.*}}add_rhs_constexpr__test_frontend.AggregateWithConstexpr<i32S4S, constexpr[42]>
     # CHECK: %cst = arith.constant dense<42> : tensor<4xi32>
     # CHECK: arith.addi %arg0, %cst : tensor<4xi32>
 
