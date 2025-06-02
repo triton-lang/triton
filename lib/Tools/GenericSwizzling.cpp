@@ -232,17 +232,20 @@ std::pair<int, int> logBankConflicts(const LinearLayout &src,
       bank0.push_back(smemFlat.getBasis(S("bank"), i)[0]);
     }
   }
+  auto srcLane = flatten(srcFlat, S("lane"));
+  auto dstLane = flatten(dstFlat, S("lane"));
+  if (bitsPerThread > 32) {
+    // The transaction is split into 2 or 4 transactions. Each of them
+    // taking 16 or 8 lanes. We just look at those lanes when computing
+    // bank conflicts.
+    auto logWavefronts = llvm::Log2_32(bitsPerThread / 32);
+    srcLane.resize(srcLane.size() - logWavefronts);
+    dstLane.resize(dstLane.size() - logWavefronts);
+  }
   int32_t rank = smem.getTotalOutDimSizeLog2();
   // compute conflicts
-  int read = intersectionBasis(bank0, flatten(dstFlat, S("lane")), rank).size();
-  int write =
-      intersectionBasis(bank0, flatten(srcFlat, S("lane")), rank).size();
-  if (bitsPerThread > 32) {
-    // Substract the default wavefronts given by vectorisation
-    auto logWavefronts = llvm::Log2_32(bitsPerThread / 32);
-    read = std::max<int32_t>(0, read - logWavefronts);
-    write = std::max<int32_t>(0, write - logWavefronts);
-  }
+  int read = intersectionBasis(bank0, dstLane, rank).size();
+  int write = intersectionBasis(bank0, srcLane, rank).size();
   return {read, write};
 }
 
@@ -299,6 +302,14 @@ LinearLayout optimalSwizzling(const LinearLayout &src, const LinearLayout &dst,
 
   auto bankSrc = llvm::to_vector(llvm::concat<int32_t>(vbasis, laneSrc));
   auto bankDst = llvm::to_vector(llvm::concat<int32_t>(vbasis, laneDst));
+
+  // Whether we'll use b32.v1 / b32.v2 / b32.v4
+  auto b32Vec =
+      llvm::Log2_32(std::max<int32_t>((1 << vbasis.size()) * bitwidth / 32, 1));
+  // Drop the last vec bases of the banks
+  bankSrc.resize(bankSrc.size() - b32Vec);
+  bankDst.resize(bankDst.size() - b32Vec);
+
   auto sbasis = computeSegment(bankSrc, bankDst, dim, lenSbasis);
 
   // The bank is the complement of the union of the vector and the start of the
