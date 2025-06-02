@@ -1581,7 +1581,7 @@ def _aggregate(cls):
             super().__setattr__(name, value)
 
         def _flatten_ir(self, handles: List[ir.value]) -> None:
-            for name, ty in cls.__annotations__.items():
+            for name in cls.__annotations__.keys():
                 getattr(self, name)._flatten_ir(handles)
 
         @property
