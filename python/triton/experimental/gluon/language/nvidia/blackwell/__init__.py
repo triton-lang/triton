@@ -2,7 +2,7 @@ from __future__ import annotations
 from typing import Optional, Tuple, List, TYPE_CHECKING
 
 from dataclasses import dataclass
-from triton.language.semantic import _convert_elem_to_ir_value
+from triton.language.semantic import _convert_elem_to_ir_value, _convert_to_ir_values
 from triton.experimental.gluon.language import _core as ttgl
 from triton.experimental.gluon.language._core import builtin, base_type, base_value, _unwrap_if_constexpr
 
@@ -171,6 +171,6 @@ def tcgen05_mma(a, b, acc, *, use_acc=True, pred=True, mbarriers=None, mbarrier_
             true = ttgl.to_tensor(True, _builder=_builder)
             mbarrier_preds = [true] * len(mbarriers)
         else:
-            mbarrier_preds = [pred.handle for pred in mbarrier_preds]
+            mbarrier_preds = _convert_to_ir_values(_builder, mbarrier_preds, require_i64=False)
 
     _builder.create_tcgen05_mma(a.handle, b.handle, acc.handle, use_acc.handle, pred.handle, mbarriers, mbarrier_preds)
