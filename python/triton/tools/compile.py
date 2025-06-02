@@ -112,9 +112,12 @@ def compile_kernel(
     attrs = {k: [["tt.divisibility", 16]] for k, v in hints.items() if v == 16}
     src = triton.compiler.ASTSource(fn=kernel, constexprs=constants, signature=signature, attrs=attrs)
 
-    opts = {"num_warps": num_warps, "num_stages": num_stages}
+    target = triton.runtime.driver.active.get_current_target()
+    backend = triton.compiler.make_backend(target)
+    kwargs = {"num_warps": num_warps, "num_stages": num_stages}
+    opts = backend.parse_options(kwargs)
+    ccinfo = triton.compile(src, target=target, options=opts.__dict__)
 
-    ccinfo = triton.compile(src, options=opts)
     if not _is_hip() and ccinfo.metadata.global_scratch_size > 0:
         raise RuntimeError("AOT compiling kernels with global scratch requirements is not yet implemented")
 
