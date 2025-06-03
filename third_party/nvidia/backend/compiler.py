@@ -404,18 +404,16 @@ class CUDABackend(BaseBackend):
             # Disable ptxas optimizations if requested
             if knobs.nvidia.disable_ptxas_opt:
                 opt_level = ['--opt-level', '0']
+            else:
+                opt_level = []
 
             # Accept more ptxas options if provided
-            elif knobs.nvidia.ptxas_other_options:
+            if knobs.nvidia.ptxas_other_options:
 
                 # If a kernel name is provided, only apply the options to that kernel
                 if not knobs.nvidia.ptxas_options_kernel_name or \
                     knobs.nvidia.ptxas_options_kernel_name == metadata["name"]:
-                    opt_level = knobs.nvidia.ptxas_other_options.split(" ")
-                else:
-                    opt_level = []
-            else:
-                opt_level = []
+                    opt_level.extend(knobs.nvidia.ptxas_other_options.split(" "))
 
             ptxas_cmd = [ptxas, *line_info, *fmad, '-v', *opt_level, f'--gpu-name={arch}', fsrc.name, '-o', fbin]
             try:

@@ -429,8 +429,8 @@ class nvidia_knobs(base_knobs):
     disable_ptxas_opt: env_bool = env_bool("DISABLE_PTXAS_OPT")
     mock_ptx_version: env_opt_str = env_opt_str("TRITON_MOCK_PTX_VERSION")
 
-    ptxas_other_options: env_opt_str = env_opt_str("NVPTX_OTHER_OPTIONS")
-    ptxas_options_kernel_name: env_opt_str = env_opt_str("NVPTX_OPTIONS_KERNEL")
+    ptxas_other_options: env_opt_str = env_opt_str("PTXAS_OTHER_OPTIONS")
+    ptxas_options_kernel_name: env_opt_str = env_opt_str("PTXAS_OPTIONS_KERNEL")
 
     libdevice_path: env_opt_str = env_opt_str("TRITON_LIBDEVICE_PATH")
     libcuda_path: env_opt_str = env_opt_str("TRITON_LIBCUDA_PATH")
