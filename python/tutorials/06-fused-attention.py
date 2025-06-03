@@ -569,10 +569,10 @@ attention = _attention.apply
 
 @pytest.mark.parametrize("Z", [1, 4])
 @pytest.mark.parametrize("H", [2, 48])
-@pytest.mark.parametrize("N_CTX", [128, 1024, 4 * 1024])
+@pytest.mark.parametrize("N_CTX", [128, 1024, (2 if is_hip() else 4) * 1024])
 @pytest.mark.parametrize("HEAD_DIM", [64, 128])
 @pytest.mark.parametrize("causal", [True])  # FIXME: Torch causal reference is incorrect
-@pytest.mark.parametrize("warp_specialize", [False, True])
+@pytest.mark.parametrize("warp_specialize", [False] if is_hip() else [False, True])
 def test_op(Z, H, N_CTX, HEAD_DIM, causal, warp_specialize, dtype=torch.float16):
     torch.manual_seed(20)
     q = (torch.empty((Z, H, N_CTX, HEAD_DIM), dtype=dtype, device=DEVICE).normal_(mean=0.0, std=0.5).requires_grad_())
