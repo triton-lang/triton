@@ -134,6 +134,19 @@ public:
     options.supportDynamicLoops = true;
     options.peelEpilogue = true;
     options.predicateFn = streamPredication;
+
+    // Annotate loadOp in prologue for further moving up
+    options.annotateFn = [this](Operation *op,
+                                tt::PipeliningOption::PipelinerPart part,
+                                unsigned stage) {
+      if (part != tt::PipeliningOption::PipelinerPart::Prologue)
+        return;
+
+      if (auto loadOp = dyn_cast<tt::LoadOp>(op)) {
+        loadOp->setAttr("amd.pipeliner_part",
+                        StringAttr::get(op->getContext(), "prologue"));
+      }
+    };
   }
 
   LogicalResult pipelineLoop();
@@ -880,7 +893,7 @@ void StreamPipeliner::createStreamOps() {
 
   unsigned newOperandIndex = forOp.getBody()->getNumArguments();
   // Patch the loop to add the new loop carried dependencies.
-  (void)addIterArgsToLoop(builder, forOp, {extractIdx});
+  forOp = addIterArgsToLoop(builder, forOp, {extractIdx});
 
   // Create one counter for the extract indices to avoid creating long
   // live range.

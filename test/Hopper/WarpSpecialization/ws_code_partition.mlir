@@ -1,7 +1,7 @@
 // RUN: triton-opt %s -split-input-file --nvgpu-test-ws-code-partition=num-buffers=1 | FileCheck %s
 
 // CHECK-LABEL: @matmul_kernel_one_consumer
-// CHECK: ttg.warp_specialize
+// CHECK: ttg.warp_specialize{{.*}}requestedRegisters = array<i32: 232>
 // CHECK: default
 // CHECK: scf.for
 // CHECK: nvws.producer_acquire
@@ -64,7 +64,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 
 
 // CHECK-LABEL: @matmul_kernel_two_consumers
-// CHECK: ttg.warp_specialize
+// CHECK: ttg.warp_specialize{{.*}}requestedRegisters = array<i32: 232, 232>
 // CHECK: default
 // CHECK: scf.for
 // CHECK: nvws.producer_acquire
@@ -145,7 +145,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 // -----
 
 // CHECK-LABEL: @_matmul_layernorm_persistent_one_producer_one_consumer_one_epilog
-// CHECK: ttg.warp_specialize
+// CHECK: ttg.warp_specialize{{.*}}requestedRegisters = array<i32: 232, 232>
 // CHECK: default
 // CHECK: scf.for
 // CHECK: scf.for

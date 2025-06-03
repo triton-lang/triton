@@ -99,7 +99,7 @@ static RankedTensorType replaceEncoding(RankedTensorType oldType,
 
 // This function considers a gather op in isolation and attempts to determine
 // whether an optimized layout can be applied to the source and index tensors.
-static void setOptimizedGatherLayout(GatherOp op, RewriterBase &b) {
+static LogicalResult setOptimizedGatherLayout(GatherOp op, RewriterBase &b) {
   RankedTensorType srcType = op.getSrc().getType();
   RankedTensorType idxType = op.getIndices().getType();
 
@@ -137,6 +137,8 @@ static void setOptimizedGatherLayout(GatherOp op, RewriterBase &b) {
   // for `sizePerThread[axis]`.
   unsigned axis = op.getAxis();
   unsigned rank = srcType.getRank();
+  if (rank == 1)
+    return failure();
   SmallVector<unsigned> threadsPerWarp(rank);
   SmallVector<unsigned> warpsPerCTA(rank);
   SmallVector<unsigned> order;
@@ -223,6 +225,8 @@ static void setOptimizedGatherLayout(GatherOp op, RewriterBase &b) {
 
   // Make sure we did this right.
   assert(GatherLoweringHelper(op).isWarpLocal());
+
+  return success();
 }
 
 namespace {
@@ -233,8 +237,7 @@ struct OptimizeGatherLayoutPattern : public mlir::OpRewritePattern<GatherOp> {
                                 PatternRewriter &rewriter) const override {
     if (op.getEfficientLayout())
       return failure();
-    setOptimizedGatherLayout(op, rewriter);
-    return success();
+    return setOptimizedGatherLayout(op, rewriter);
   }
 };
 } // namespace

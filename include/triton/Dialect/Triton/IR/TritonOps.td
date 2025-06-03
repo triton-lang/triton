@@ -460,7 +460,8 @@ def TT_ReshapeOp : TT_Op<"reshape", [Pure,
         The compiler is still free to change it for better performance.
     }];
     let builders = [
-      OpBuilder<(ins "ArrayRef<int64_t>":$shape, "TypedValue<RankedTensorType>":$src)>
+      OpBuilder<(ins "ArrayRef<int64_t>":$shape, "Value":$src,
+                     CArg<"bool", "false">:$allowReorder)>
     ];
 
     let arguments = (ins TT_Tensor:$src, UnitAttr:$allow_reorder, UnitAttr:$efficient_layout);
@@ -728,9 +729,6 @@ def TT_ReduceOp: TT_Op<"reduce",
     let arguments = (ins Variadic<TT_Tensor>:$srcs, I32Attr:$axis);
     let results = (outs Variadic<TT_Type>:$result);
     let regions = (region SizedRegion<1>:$combineOp);
-    let builders = [
-        OpBuilder<(ins "ValueRange":$srcs, "int":$axis)>,
-    ];
     let hasVerifier = 1;
     let hasRegionVerifier = 1;
     let extraClassDeclaration = [{

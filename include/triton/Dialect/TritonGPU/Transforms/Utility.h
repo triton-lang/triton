@@ -141,8 +141,8 @@ scf::ForOp replaceForOpWithNewSignature(
     SmallVectorImpl<std::tuple<Value, Value>> &replacements);
 scf::ForOp replaceForOpWithNewSignature(OpBuilder &rewriter, scf::ForOp loop,
                                         ValueRange newIterOperands);
-Block::BlockArgListType addIterArgsToLoop(OpBuilder &rewriter, scf::ForOp &loop,
-                                          ValueRange newIterOperands);
+[[nodiscard]] scf::ForOp addIterArgsToLoop(OpBuilder &rewriter, scf::ForOp loop,
+                                           ValueRange newIterOperands);
 
 // Replace WhileOp with a new WhileOp with extra operands. The YieldOp is not
 // updated and needs to be updated separately for the loop to be correct.
@@ -247,9 +247,6 @@ SetVector<Value> getNestedOperands(Operation *op);
 // Erase the given loop carried values from the loop, where `loop` is replaced
 // with a new loop.
 void eraseLoopCarriedValues(scf::ForOp &loop, llvm::BitVector indices);
-
-// Get a boolean if the Value is an arith::ConstantOp
-std::optional<bool> getBoolFromConstant(Value cst);
 } // namespace mlir
 
 namespace mlir::triton {

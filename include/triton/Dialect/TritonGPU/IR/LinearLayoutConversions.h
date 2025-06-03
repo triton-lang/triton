@@ -287,6 +287,11 @@ LinearLayout chooseScaledMfmaScaleLayout(
     const std::vector<std::vector<int32_t>> &dotOperandWarpBasis,
     ArrayRef<int64_t> dotOperandShape, unsigned mfmaMDim);
 
+// Create LinearLayout for nvidia mma tile.
+LinearLayout nvidiaMmaTile(MLIRContext *ctx, ArrayRef<unsigned> tileShape,
+                           unsigned kWidth, ArrayRef<unsigned> order,
+                           ArrayRef<unsigned> repOrder);
+
 // Create a LinearLayout similar to mfmaLayout, but changing each thread to hold
 // 8 elements. This layout is useful for emitting the widest 128-bit global
 // store instructions. Since it closely resembles mfmaLayout, conversion between

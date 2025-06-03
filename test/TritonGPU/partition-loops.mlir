@@ -245,7 +245,7 @@ tt.func @dce_before_warp_allocation(%lb: i32, %ub: i32, %step: i32) {
 }
 
 // CHECK-LABEL: @capture_order
-tt.func public @capture_order(%arg0: i32) {
+tt.func @capture_order(%arg0: i32) {
   %c0_i32 = arith.constant 0 : i32
   %c1_i32 = arith.constant 1 : i32
   %0 = tt.make_range {end = 4 : i32, start = 0 : i32} : tensor<4xi32, #blocked>
@@ -261,6 +261,26 @@ tt.func public @capture_order(%arg0: i32) {
     // CHECK-NEXT: "use"([[EXT]])
     "use"(%1) : (tensor<4xi64, #blocked>) -> ()
   } {ttg.partition.stages = [1 : i32, 0 : i32]}
+  tt.return
+}
+
+// CHECK-LABEL: @clone_then_capture
+tt.func @clone_then_capture(%arg0: i32) {
+  %c0_i32 = arith.constant 0 : i32
+  %c1_i32 = arith.constant 1 : i32
+
+  // CHECK: [[TT:%.*]] = "tensor_op"()
+  %0 = "tensor_op"() : () -> tensor<4xi32, #blocked>
+  // CHECK: ttg.local_alloc [[TT]]
+  %1 = arith.addi %0, %0 : tensor<4xi32, #blocked>
+  // CHECK: partition0
+  // CHECK: [[TT:%.*]] = ttg.local_load
+  // CHECK: [[V:%.*]] = arith.addi [[TT]], [[TT]]
+  // CHECK: scf.for
+  scf.for %arg1 = %c0_i32 to %arg0 step %c1_i32  : i32 {
+    // CHECK: "use"([[V]])
+    "use"(%1) {ttg.partition = 1 : i32} : (tensor<4xi32, #blocked>) -> ()
+  } {ttg.partition.stages = [0 : i32, 1 : i32]}
   tt.return
 }
 

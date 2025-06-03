@@ -1,6 +1,6 @@
 // RUN: triton-opt %s -split-input-file -tritongpu-reduce-data-duplication | FileCheck %s
 
-//       CHECK:   #[[$SHARED:.*]] = #ttg.swizzled_shared<{vec = 8, perPhase = 8, maxPhase = 2, order = [0, 1]}
+//       CHECK:   #[[$SHARED:.*]] = #ttg.swizzled_shared<{vec = 8, perPhase = 4, maxPhase = 2, order = [0, 1]}
 //       CHECK-LABEL: apply_swizzle
 //       CHECK:   %{{.*}} = ttg.local_alloc %{{.*}} : (tensor<16x256xf16, #{{.*}}>) -> !ttg.memdesc<16x256xf16, #[[$SHARED]], #smem>
 
@@ -29,7 +29,7 @@ module attributes {"ttg.target" = "cuda:80", "ttg.num-ctas" = 1 : i32, "ttg.num-
 
 // -----
 
-//       CHECK:   #[[$SHARED:.*]] = #ttg.swizzled_shared<{vec = 32, perPhase = 128, maxPhase = 1, order = [1, 0]}>
+//       CHECK:   #[[$SHARED:.*]] = #ttg.swizzled_shared<{vec = 32, perPhase = 64, maxPhase = 1, order = [1, 0]}>
 //       CHECK-LABEL:   handles_small_contiguous_dim
 //       CHECK:   %{{.*}} = ttg.local_alloc %{{.*}} : (tensor<32x1xf16, #{{.*}}>) -> !ttg.memdesc<32x1xf16, #[[$SHARED]], #smem>
 

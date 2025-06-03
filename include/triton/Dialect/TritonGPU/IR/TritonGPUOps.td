@@ -252,8 +252,6 @@ def TTG_MemDescTransOp : TTG_Op<"memdesc_trans", [Pure,
     representing a transposed view of the buffer.
   }];
 
-  let arguments = (ins TTG_MemDescType:$src, Variadic<I32>:$order);
-
   let arguments = (
     ins TTG_MemDescType:$src,
     DenseI32ArrayAttr:$order
@@ -280,6 +278,26 @@ def TTG_MemDescReshapeOp : TTG_Op<"memdesc_reshape", [Pure,
   let results = (outs TTG_MemDescType:$result);
 
   let assemblyFormat = "$src attr-dict `:` qualified(type($src)) `->` qualified(type($result))";
+
+  let hasVerifier = 1;
+}
+
+def TTG_MemDescReinterpretOp : TTG_Op<"memdesc_reinterpret", [Pure, MemDescViewTrait]> {
+  let summary = "reinterpret a memory descriptor as a different type and shape";
+
+  let description = [{
+    The `ttg.memdesc_reinterpret` operation reinterprets a memory descriptor
+    as one with a different shape and element type. Because memory descriptors
+    lack strides, this operation is only valid if the original memory descriptor
+    is contiguous.
+  }];
+
+  let arguments = (ins TTG_MemDescType:$src);
+  let results = (outs TTG_MemDescType:$result);
+
+  let assemblyFormat = [{
+    $src attr-dict `:` qualified(type($src)) `->` qualified(type($result))
+  }];
 
   let hasVerifier = 1;
 }
@@ -335,6 +353,24 @@ def TTG_PredicateStageOp: TTG_Op<"predicate_stage",
                        I32Attr:$stage);
   let results = (outs I1:$result);
   let assemblyFormat = "$iv `,` $ub `,` $step `maxStage` $maxStage `stage` $stage attr-dict `:` type($iv) `->` type($result)";
+}
+
+def TTG_MaskOp: TTG_Op<"mask",
+                       [SingleBlock]> {
+    let summary = "mask op for pipelining";
+    let arguments = (ins I1:$pred);
+    let results = (outs Variadic<AnyType>:$result);
+    let regions = (region SizedRegion<1>:$region);
+    let builders = [
+        OpBuilder<(ins "Value":$pred)>,
+    ];
+}
+
+def TTG_MaskReturnOp: TTG_Op<"mask.return",
+                             [HasParent<"MaskOp">, Pure, Terminator, ReturnLike]> {
+    let summary = "terminator for mask operator";
+    let arguments = (ins Variadic<AnyType>:$result);
+    let assemblyFormat = "$result attr-dict `:` type($result)";
 }
 
 def TTG_Fp4ToFpOp : TTG_Op<"fp4_to_fp", [Pure]> {
@@ -450,7 +486,9 @@ def TTG_WarpSpecializeOp : TTG_Op<"warp_specialize", [
   let builders = [
     OpBuilder<(ins "TypeRange":$resultTypes,
                    "ArrayRef<int32_t>":$partitionNumWarps,
-                   "unsigned":$numPartitionRegions)>
+                   "unsigned":$numPartitionRegions)>,
+    OpBuilder<(ins "TypeRange":$resultTypes, "ValueRange":$explicitCaptures,
+                   "ArrayRef<int32_t>":$partitionNumWarps)>,
   ];
 
   let hasVerifier = 1;

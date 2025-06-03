@@ -14,7 +14,7 @@ from triton.tools.tensor_descriptor import TensorDescriptor
 from types import ModuleType
 from .. import knobs
 from ..runtime.driver import driver
-from .._utils import find_paths_if, get_iterable_path
+from .._utils import find_paths_if, get_iterable_path, type_canonicalisation_dict, canonicalize_dtype
 
 TRITON_MODULE = __name__[:-len(".runtime.jit")]
 
@@ -329,7 +329,7 @@ def create_specialize_impl(specialize_extra):
             dsk = (arg.dtype, is_const)
             res = dtype2str.get(dsk, None)
             if res is None:
-                res = ("*k" if dsk[1] else "*") + type_canonicalisation_dict[str(dsk[0]).split('.')[-1]]
+                res = ("*k" if dsk[1] else "*") + canonicalize_dtype(dsk[0])
                 dtype2str[dsk] = res
             key = specialize_extra(arg, "tensor", align=align) if specialize_value else None
             return (res, key)
@@ -347,7 +347,7 @@ def create_specialize_impl(specialize_extra):
             return (tys, keys)
         elif isinstance(arg, TensorDescriptor):
             assert hasattr(arg.base, "data_ptr")
-            inner = type_canonicalisation_dict[str(arg.base.dtype).split('.')[-1]]
+            inner = canonicalize_dtype(arg.base.dtype)
             return (f"tensordesc<{inner}{list(arg.block_shape)}>", None)
         else:
             raise TypeError("Unsupported type: %s" % type(arg))
@@ -445,44 +445,8 @@ def dynamic_func({", ".join(list(map(arg, sig.parameters.items())) + ["**options
     return func_namespace['dynamic_func']
 
 
-type_canonicalisation_dict = {
-    # we canonicalise all bools to be unsigned:
-    "bool": "u1",
-    "int1": "u1",
-    "uint1": "u1",
-    "i1": "u1",
-    # floating-point dtypes:
-    "float8e4nv": "fp8e4nv",
-    "float8e5": "fp8e5",
-    "float8e4b15": "fp8e4b15",
-    "float8_e4m3fn": "fp8e4nv",
-    "float8e4b8": "fp8e4b8",
-    "float8_e4m3fnuz": "fp8e4b8",
-    "float8_e5m2": "fp8e5",
-    "float8e5b16": "fp8e5b16",
-    "float8_e5m2fnuz": "fp8e5b16",
-    "half": "fp16",
-    "float16": "fp16",
-    "bfloat16": "bf16",
-    "float": "fp32",
-    "float32": "fp32",
-    "double": "fp64",
-    "float64": "fp64",
-    # signed integers:
-    "int8": "i8",
-    "int16": "i16",
-    "int": "i32",
-    "int32": "i32",
-    "int64": "i64",
-    # unsigned integers:
-    "uint8": "u8",
-    "uint16": "u16",
-    "uint32": "u32",
-    "uint64": "u64",
-}
-
-for v in list(type_canonicalisation_dict.values()):
-    type_canonicalisation_dict[v] = v
+def get_full_name(fn):
+    return f"{fn.__module__}.{fn.__qualname__}"
 
 
 @dataclass
@@ -493,6 +457,9 @@ class JitFunctionInfo:
 
 
 class JITFunction(KernelInterface[T]):
+
+    def is_gluon(self):
+        return False
 
     def _call_hook(
         self,
@@ -508,7 +475,7 @@ class JITFunction(KernelInterface[T]):
         if not hook:
             return None
 
-        name = self.fn.__name__
+        name = get_full_name(self.fn)
         module = self.fn.__module__
         arg_reprs = ", ".join([f"{param.name}: {ty}" for param, ty in zip(self.params, key[1])])
         repr = f"{name}[num_warps={options.num_warps}, num_ctas={options.num_ctas}, num_stages={options.num_stages}, enable_fp_fusion={options.enable_fp_fusion}, launch_cooperative_grid={options.launch_cooperative_grid}]({arg_reprs})"
@@ -650,7 +617,7 @@ class JITFunction(KernelInterface[T]):
         self.do_not_specialize_on_alignment = do_not_specialize_on_alignment
         self.starting_line_number = inspect.getsourcelines(fn)[1]
         self._repr = repr
-        self._fn_name = fn.__name__
+        self._fn_name = get_full_name(fn)
         self.launch_metadata = launch_metadata
 
         self.params = []
@@ -695,6 +662,7 @@ class JITFunction(KernelInterface[T]):
         # reuse docs of wrapped function
         self.__doc__ = fn.__doc__
         self.__name__ = fn.__name__
+        self.__qualname__ = fn.__qualname__
         self.__globals__ = fn.__globals__
         self.__module__ = fn.__module__
 
@@ -702,11 +670,16 @@ class JITFunction(KernelInterface[T]):
     def cache_key(self):
         # TODO : hash should be attribute of `self`
         if self.hash is None:
-            dependencies_finder = DependenciesFinder(name=self.__name__, globals=self.__globals__, src=self.src)
+            dependencies_finder = DependenciesFinder(name=self._fn_name, globals=self.__globals__, src=self.src)
             dependencies_finder.visit(self.parse())
             self.hash = dependencies_finder.ret + str(self.starting_line_number)
             self.used_global_vals = dict(sorted(dependencies_finder.used_global_vals.items()))
         return self.hash
+
+    @property
+    def type(self):
+        from triton.language.core import constexpr
+        return constexpr
 
     def warmup(self, *args, grid, **kwargs):
         return self.run(grid=grid, warmup=True, *map(MockTensor.wrap_dtype, args), **kwargs)
@@ -717,9 +690,9 @@ class JITFunction(KernelInterface[T]):
         import triton.language as tl
         device = driver.active.get_current_device()
         deserialized_obj = json.loads(specialization_data)
-        if deserialized_obj['name'] != self.fn.__name__:
+        if deserialized_obj['name'] != self._fn_name:
             raise RuntimeError(
-                f"Specialization data is for {deserialized_obj['name']} but trying to preload for {self.fn.__name__}")
+                f"Specialization data is for {deserialized_obj['name']} but trying to preload for {self._fn_name}")
         constant_keys = map(tuple, deserialized_obj['constant_keys'])
         constant_vals = deserialized_obj['constant_vals']
         constants = {
@@ -770,7 +743,7 @@ class JITFunction(KernelInterface[T]):
         super().__setattr__('src', new_src)
 
     def __repr__(self):
-        return f"JITFunction({self.module}:{self.fn.__name__})"
+        return f"JITFunction({self.module}:{self.fn.__qualname__})"
 
 
 # -----------------------------------------------------------------------------

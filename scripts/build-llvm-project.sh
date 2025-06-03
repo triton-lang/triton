@@ -42,6 +42,7 @@ if [ ! -e "$LLVM_PROJECT_PATH" ]; then
     git clone "$LLVM_PROJECT_URL" "$LLVM_PROJECT_PATH"
 fi
 echo "Resetting to $LLVM_COMMIT_HASH"
+git -C "$LLVM_PROJECT_PATH" fetch origin "$LLVM_COMMIT_HASH"
 git -C "$LLVM_PROJECT_PATH" reset --hard "$LLVM_COMMIT_HASH"
 echo "Configuring with ${CMAKE_ARGS[@]}"
 cmake "${CMAKE_ARGS[@]}"

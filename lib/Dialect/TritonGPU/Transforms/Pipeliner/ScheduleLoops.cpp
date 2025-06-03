@@ -167,6 +167,33 @@ CoarseSchedule getInitialSchedule(scf::ForOp forOp,
   CoarseSchedule schedule;
   if (forOp->hasAttr(kWarpSpecializeAttrName) &&
       succeeded(schedule.deSerialize(forOp))) {
+    // The loop was partitioned from a warp-specialized loop, meaning it can
+    // have a partial view of the original loop stages. Re-schedule the loop
+    // root at the stages of the latency ops to prune unnecessary stages.
+    auto isLatencyOp = [&](Operation &op) {
+      return opLatency.count(&op) ||
+             isa<LoadOp, DescriptorLoadOp, DescriptorGatherOp, LocalStoreOp,
+                 LocalLoadOp, ttng::TMEMLoadOp, ttng::TMEMStoreOp,
+                 AsyncCopyGlobalToLocalOp, ttng::AsyncTMACopyGlobalToLocalOp,
+                 ttng::AsyncTMAGatherOp, ttng::MMAv5OpInterface,
+                 ttng::WaitBarrierOp, ttng::ArriveBarrierOp>(op);
+    };
+
+    // If there are no latency ops or all latency ops are in the same stage, we
+    // don't need to pipeline the loop. Return a new schedule with everything
+    // assigned to the same stage.
+    DenseSet<int> latencyStages;
+    auto ops = forOp.getBody()->without_terminator();
+    for (Operation &op : llvm::make_filter_range(ops, isLatencyOp))
+      latencyStages.insert(schedule[&op].first);
+    if (latencyStages.size() <= 1) {
+      CoarseSchedule normalized(/*numStages=*/1);
+      auto cluster = normalized.clusters.newAtFront();
+      for (Operation &op : ops)
+        normalized.insert(&op, 0, cluster);
+      return normalized;
+    }
+
     schedule.shrinkToFit();
     return schedule;
   }
