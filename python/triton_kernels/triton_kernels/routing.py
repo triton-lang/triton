@@ -279,6 +279,7 @@ def compute_expt_data_torch(hist, n_expts_tot, n_gates):
 
 
 def routing_torch(logits, n_expts_act, sm_first=False, expt_indx=None, n_rows=None):
+    has_user_provided_indx = expt_indx is not None
     n_gates_pad = logits.shape[0] * n_expts_act
 
     if n_rows is not None:
@@ -286,12 +287,12 @@ def routing_torch(logits, n_expts_act, sm_first=False, expt_indx=None, n_rows=No
 
     def topk(vals, k, expt_indx):
         # topk of experts
-        if expt_indx is None:
-            tk_idx = torch.argsort(-vals, dim=1, stable=True)[:, :k]
+        if has_user_provided_indx:
+            tk_indx = expt_indx
         else:
-            tk_idx = expt_indx
-        tk_val = torch.take_along_dim(vals, tk_idx, dim=1)
-        return tk_val, tk_idx
+            tk_indx = torch.argsort(-vals, dim=1, stable=True)[:, :k]
+        tk_val = torch.take_along_dim(vals, tk_indx, dim=1)
+        return tk_val, tk_indx
 
     _, n_expts_tot = logits.shape
     if sm_first:
@@ -300,8 +301,9 @@ def routing_torch(logits, n_expts_act, sm_first=False, expt_indx=None, n_rows=No
     if not sm_first:
         expt_scal = torch.softmax(expt_scal, dim=-1)
     # sort each token's selections by expert
-    expt_indx, sort_indices = torch.sort(expt_indx, dim=1)
-    expt_scal = torch.gather(expt_scal, 1, sort_indices)
+    if not has_user_provided_indx:
+        expt_indx, sort_indices = torch.sort(expt_indx, dim=1)
+        expt_scal = torch.gather(expt_scal, 1, sort_indices)
     # flatten topk data
     expt_scal = expt_scal.reshape(-1)
     expt_indx = expt_indx.reshape(-1).to(torch.int32)
