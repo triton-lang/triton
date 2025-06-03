@@ -1566,6 +1566,26 @@ chooseMfmaLikeStoreLayout(RankedTensorType valType) {
   which means:
   The columns from v0 to v3 are in the one output of mfma16x16 and
   the columns from v4 to v7 are in the one output of mfma16x16,
+
+  The following graph is the same as the one above, execept the tile number is replaced with coordinates in the tenor,
+            N/register
+            -----------------------------------------------
+  M/lane    |(0,  0) ...  (0,  3) | (0,  16) ... (0,  19) |
+            |....                 | sub-tensor-0          |
+            |(15, 0) ...  (15, 3) | (15, 16) ... (15, 19) |
+            -----------------------------------------------
+            |(0,  4) ...  (0,  7) | (0,  20) ... (0,  23) |
+            |sub-tensor-1         | ....                  |
+            |(15, 0) ...  (15, 3) | (15, 20) ... (15, 23) |
+            -----------------------------------------------
+            |(0,  8) ...  (0,  11)| (0,  24) ... (0,  27) |
+            |....                 | sub-tensor-2          |
+            |(15, 8) ...  (15, 11)| (15, 24) ... (15, 27) |
+            -----------------------------------------------
+            |(0,  12) ... (0,  15)| (0,  28) ... (0,  31) |
+            |sub-tensor-3         | ....                  |
+            |(15, 12) ... (15, 15)| (15, 28) ... (15, 31) |
+            -----------------------------------------------
   The basis vector for lane and register are:
   Register = {{0, 1}, {0, 2}}
   Lane = {{1, 0}, {2, 0}, {4, 0}, {8, 0}, {0, 4}, {0, 8}}
@@ -1583,14 +1603,35 @@ chooseMfmaLikeStoreLayout(RankedTensorType valType) {
               -------------------------------------------------------------------------
   row3: 48-63 | tile-1 | tile-1 | tile-1 | tile-1 | tile-1 | tile-1 | tile-1 | tile-1 |
               -------------------------------------------------------------------------
+
+  The following graph is the same as the one above, execept the tile number is replaced with coordinates in the tenor:
+            N/register
+            -----------------------------------------------
+            |(0,  0) ...  (0,  3) | (0,  4) ...  (0,  7)  |
+            |....                 | sub-tensor-1          |
+            |(15, 0) ...  (15, 3) | (15, 16) ... (15, 19) |
+            -----------------------------------------------
+            |(0, 16) ...  (0, 19) | (0,  20) ... (0,  23) |
+            |sub-tensor-0         | ....                  |
+            |(15, 16) ... (15, 19)| (15, 20) ... (15, 23) |
+            -----------------------------------------------
+            |(0,  8) ...  (0,  11)| (0,  12) ... (0,  15) |
+            |....                 | sub-tensor-3          |
+            |(15, 8) ...  (15, 11)| (15, 12) ... (15, 15) |
+            -----------------------------------------------
+            |(0,  24) ... (0,  27)| (0,  28) ... (0,  31) |
+            |sub-tensor-2         | ....                  |
+            |(15, 24) ... (15, 27)| (15, 28) ... (15, 31) |
+            -----------------------------------------------
+  which means we need to exchange sub-tensor-0 with sub-tensor-1 and sub-tensor-2 and sub-tensor-3.
   And basis vector for lane and register are:
   Register = {{0, 1}, {0, 2}, {0, 4}}
   Lane = {{1, 0}, {2, 0, [4, 0}, {8, 0}, {0, 16}, {0, 8}}
 
   The steps to get this layout are, firstly we check the last dim of WarpsPerCTA is 1, so we can use v_permlane16.
-  Then, we exchange the 2nd and 4th elements in the basis vector from an
-  identity linear layout on tensor elements, for the NDim.
-  clang-format on
+  Then, we exchange the 2nd and 4th elements in the basis vector of an identity linear and then it will be composed with
+  the original mfma16 LL.
+            clang-format on
   */
   auto destIdxInBases = isMfma32 ? 3 : 4;
   std::vector<std::vector<int32_t>> dimNBases(mfmaLL.getOutDimSizeLog2(dimN));
