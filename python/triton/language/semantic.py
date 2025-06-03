@@ -1865,6 +1865,8 @@ def _convert_elem_to_ir_value(builder, elem, require_i64):
     if isinstance(elem, int):
         elem = tl.constexpr(elem)
     if isinstance(elem, tl.constexpr):
+        if isinstance(elem.value, bool):
+            return builder.get_int1(elem.value)
         if require_i64:
             assert -2**63 <= elem.value < 2**63, f"Block pointers only support 64 bit `shape/strides`, " \
                 f"got a value {elem.value} which is out of the range"

@@ -71,7 +71,7 @@ def memdesc_slice(mem_desc, index, shape, layout, builder: GluonOpBuilder):
     assert mem_desc.rank > len(shape), f"source rank ({mem_desc.rank}) must be greater than result rank ({len(shape)})"
 
     offsets = [builder.get_int32(0)] * mem_desc.rank
-    offsets[0] = index.handle
+    offsets[0] = tl_semantic._convert_elem_to_ir_value(builder, index, require_i64=False)
     return _memdesc_subview(mem_desc, offsets, shape, layout, builder)
 
 
