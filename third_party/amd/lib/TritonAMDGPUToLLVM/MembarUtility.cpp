@@ -31,16 +31,12 @@ bool comesFromAsyncWait(Value token) {
   // argId to see if they are immediately an AsyncWait.
   for (auto *pred : block->getPredecessors()) {
     auto terminator = pred->getTerminator();
-    if (auto br = dyn_cast<cf::BranchOp>(terminator)) {
-      if (!destOperandFromAsyncWait(br.getDestOperands()))
-        return false;
-    } else if (auto condBr = dyn_cast<cf::CondBranchOp>(terminator)) {
-      if (condBr.getTrueDest() == block) {
-        if (!destOperandFromAsyncWait(condBr.getTrueDestOperands()))
-          return false;
-      }
-      if (condBr.getFalseDest() == block) {
-        if (!destOperandFromAsyncWait(condBr.getFalseDestOperands()))
+    if (auto br = dyn_cast<BranchOpInterface>(terminator)) {
+      for (auto successor : llvm::enumerate(br->getSuccessors())) {
+        if (block != successor.value())
+          continue;
+        auto operands = br.getSuccessorOperands(successor.index());
+        if (!destOperandFromAsyncWait(operands))
           return false;
       }
     } else {
