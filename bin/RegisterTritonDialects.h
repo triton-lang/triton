@@ -9,6 +9,7 @@
 #include "proton/dialect/include/Conversion/ProtonToProtonGPU/Passes.h"
 #include "proton/dialect/include/Dialect/Proton/IR/Dialect.h"
 #include "proton/dialect/include/Dialect/ProtonGPU/IR/Dialect.h"
+#include "proton/dialect/include/Dialect/ProtonGPU/Transforms/Passes.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
@@ -105,6 +106,7 @@ inline void registerTritonDialects(mlir::DialectRegistry &registry) {
   mlir::triton::proton::gpu::registerConvertProtonAMDGPUToLLVM();
   mlir::triton::proton::gpu::registerAllocateProtonSharedMemoryPass();
   mlir::triton::proton::gpu::registerAllocateProtonGlobalScratchBufferPass();
+  mlir::triton::proton::gpu::registerMoveProtonStoresToEndPass();
 
   registry.insert<
       mlir::triton::TritonDialect, mlir::cf::ControlFlowDialect,
