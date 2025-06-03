@@ -9,7 +9,6 @@
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/raw_ostream.h"
 
-
 #define DEBUG_TYPE "task-id-propagation"
 #define DBGS() (llvm::dbgs() << "[" DEBUG_TYPE "]: ")
 #define LDBG(X) LLVM_DEBUG(DBGS() << X << "\n")
@@ -35,7 +34,9 @@ void TaskId::print(raw_ostream &os) const {
   return getTaskIds().print(os);
 }
 
-TaskId TaskId::join(const TaskId &lhs, const TaskId &rhs) {return TaskId::getUnknownTaskId();}
+TaskId TaskId::join(const TaskId &lhs, const TaskId &rhs) {
+  return TaskId::getUnknownTaskId();
+}
 
 TaskId TaskId::meet(const TaskId &lhs, const TaskId &rhs) {
   if (lhs.isUnknown() || rhs.isUnknown())
@@ -169,4 +170,4 @@ void TaskIdBackwardPropagation::visitCallOperand(OpOperand &operand) {
 
 void TaskIdBackwardPropagation::setToExitState(TaskIdLattice *lattice) {}
 
-} // namespace mlir::triton
+} // namespace mlir::triton::gpu

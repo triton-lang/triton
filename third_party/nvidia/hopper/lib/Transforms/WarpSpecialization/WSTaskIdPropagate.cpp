@@ -27,7 +27,8 @@ namespace mlir {
 #include "nvidia/hopper/include/Transforms/Passes.h.inc"
 
 class NVGPUTestWSTaskIdPropagatePass
-    : public impl::NVGPUTestWSTaskIdPropagateBase<NVGPUTestWSTaskIdPropagatePass> {
+    : public impl::NVGPUTestWSTaskIdPropagateBase<
+          NVGPUTestWSTaskIdPropagatePass> {
 public:
   using impl::NVGPUTestWSTaskIdPropagateBase<
       NVGPUTestWSTaskIdPropagatePass>::NVGPUTestWSTaskIdPropagateBase;
