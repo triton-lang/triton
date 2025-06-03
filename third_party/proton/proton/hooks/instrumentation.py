@@ -160,7 +160,7 @@ class InstrumentationHook(Hook):
                                                           self.profile_buffer_size, self.profile_buffer_alignment)
 
             if self.mode.optimization == mode.Optimize.SCHED_STORES:
-                triton_proton.add_move_proton_stores_to_end(pm)
+                triton_proton.add_proton_schedule_buffer_store(pm)
 
             triton_proton.add_allocate_proton_shared_memory(pm)
 

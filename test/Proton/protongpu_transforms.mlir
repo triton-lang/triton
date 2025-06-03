@@ -1,4 +1,4 @@
-// RUN: triton-opt --split-input-file --convert-proton-to-protongpu="max-shared-mem-size=32768" --move-proton-stores-to-end -canonicalize -cse %s | FileCheck %s
+// RUN: triton-opt --split-input-file -convert-proton-to-protongpu="max-shared-mem-size=32768" -proton-schedule-buffer-store -canonicalize -cse %s | FileCheck %s
 
 module attributes {"ttg.num-warps" = 8 : i32} {
   // CHECK-LABEL: simple_record

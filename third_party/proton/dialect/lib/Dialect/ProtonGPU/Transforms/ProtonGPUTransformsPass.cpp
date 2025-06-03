@@ -8,14 +8,15 @@
 
 namespace mlir::triton::proton::gpu {
 
-#define GEN_PASS_DEF_MOVEPROTONSTORESTOENDPASS
+#define GEN_PASS_DEF_PROTONSCHEDULEBUFFERSTOREPASS
 #include "Dialect/ProtonGPU/Transforms/Passes.h.inc"
 
-struct MoveProtonStoresToEndPass
-    : public impl::MoveProtonStoresToEndPassBase<MoveProtonStoresToEndPass> {
+struct ProtonScheduleBufferStorePass
+    : public impl::ProtonScheduleBufferStorePassBase<
+          ProtonScheduleBufferStorePass> {
 
-  using impl::MoveProtonStoresToEndPassBase<
-      MoveProtonStoresToEndPass>::MoveProtonStoresToEndPassBase;
+  using impl::ProtonScheduleBufferStorePassBase<
+      ProtonScheduleBufferStorePass>::ProtonScheduleBufferStorePassBase;
 
   void runOnOperation() override {
     ModuleOp m = getOperation();
@@ -37,7 +38,7 @@ struct MoveProtonStoresToEndPass
       int scopeId = store.getScopeId();
       auto endStore = endStoreMap[scopeId];
       if (!endStore) {
-        mlir::emitError(func.getLoc(), "end store not found");
+        mlir::emitError(func.getLoc(), "proton end store not found");
         signalPassFailure();
         return;
       }
