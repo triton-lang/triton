@@ -52,6 +52,18 @@ class ExptData:
     # see `test_routing.py` for a reference implementation and more details
     block_pid_map: dict[int, torch.Tensor]
 
+    def __post_init__(self):
+        if self.hist is not None:
+            assert self.hist.dtype == torch.int32
+        if self.token_offs_raw is not None:
+            assert self.token_offs_raw.dtype == torch.int32
+        if self.token_offs_pad is not None:
+            for v in self.token_offs_pad.values():
+                assert v.dtype == torch.int32
+        if self.block_pid_map is not None:
+            for v in self.block_pid_map.values():
+                assert v.dtype == torch.int32
+
 
 @dataclass
 class RoutingData:
@@ -94,6 +106,7 @@ class SortTokens(torch.autograd.Function):
         n_gates_pad = n_tokens_pad * n_expts_act
 
         hist, partial_hist = bitmatrix.sum(partials_block_size=HIST_BLOCK_M)
+        assert hist.dtype == torch.int32
         # scratchpad
         expt_offs = torch.empty(n_expts_tot, dtype=torch.int32, device=device)
         combined_indx = torch.empty(n_gates_pad * 2, dtype=torch.int32, device=device)

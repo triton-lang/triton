@@ -606,6 +606,7 @@ def matmul_ogs(x, w, bias,
     kernels = get_kernels(epilogue.specs, fused_activation.specs)
     expt_data = routing_data.expt_data
     block_m = opt_flags.block_m
+    expt_hist = None if expt_data is None else expt_data.hist
     expt_hist_sum = None if expt_data is None else expt_data.token_offs_pad[block_m][-1]
     expt_token_offs_raw = None if expt_data is None else expt_data.token_offs_raw
     expt_block_pid_map = None if expt_data is None else expt_data.block_pid_map[block_m]
@@ -627,7 +628,7 @@ def matmul_ogs(x, w, bias,
                    None if scatter_indx is None else scatter_indx.src_indx,
                    num_indx,
                    writeback_idxs, writeback_size,
-                   routing_data.expt_hist, expt_token_offs_raw, expt_hist_sum, expt_block_pid_map,
+                   expt_hist, expt_token_offs_raw, expt_hist_sum, expt_block_pid_map,
                    batch_size, grid_m, grid_n,
                    out_alpha,
                    *fused_activation.fn_args, fused_activation.reduction_n,
