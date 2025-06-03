@@ -5,6 +5,7 @@ add_triton_library(TritonGPUTransforms
   F32DotTC.cpp
   FuseNestedLoops.cpp
   CombineTensorSelectAndIf.cpp
+  ConcurrencySanitizer.cpp
   DecomposeScaledBlocked.cpp
   HoistTMEMAlloc.cpp
   ReduceDataDuplication.cpp
@@ -36,7 +37,6 @@ add_triton_library(TritonGPUTransforms
   WarpSpecialization/PartitionLoops.cpp
   WarpSpecialization/PartitionScheduling.cpp
   WarpSpecialization/RewritePartitionDependencies.cpp
-
   DEPENDS
   TritonGPUTransformsIncGen
 
