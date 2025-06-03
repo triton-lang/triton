@@ -23,6 +23,7 @@ struct ProtonScheduleBufferStorePass
     MLIRContext *context = m.getContext();
     OpBuilder builder(context);
 
+    // TODO(srir): Add support for non-inline kernels
     FuncOp func = *m.getOps<triton::FuncOp>().begin();
     auto startStoreList = llvm::SmallVector<CircularStoreOp, 8>();
     auto endStoreMap = llvm::SmallDenseMap<int, CircularStoreOp, 8>();
