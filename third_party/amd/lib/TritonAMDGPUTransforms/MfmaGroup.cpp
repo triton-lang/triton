@@ -11,10 +11,13 @@ namespace {
 // MFMA intrinsic query key
 //===----------------------------------------------------------------------===//
 
+// Enum to represent supported Dot types (to avoid collisions)
+enum class MfmaKeyDotType { STANDARD, SCALED, SPARSE };
+
 // The tuple used as key to query MFMA intrinsic map.
-using MfmaKey =
-    std::tuple<unsigned /*version*/, unsigned /*mDim*/, unsigned /*nDim*/,
-               TypeID /*aElemType*/, TypeID /*bElemType*/>;
+using MfmaKey = std::tuple<unsigned /*version*/, unsigned /*mDim*/,
+                           unsigned /*nDim*/, TypeID /*aElemType*/,
+                           TypeID /*bElemType*/, MfmaKeyDotType /*dotType*/>;
 
 // Returns a key for querying an MFMA intrinsic for the given parameters.
 // Updates the passed-in A/B element type to the chosen MFMA intrinsic's A/B
@@ -25,7 +28,7 @@ using MfmaKey =
 // to query with "mismatches".
 MfmaKey composeMfmaKeyFor(unsigned version, unsigned mDim, unsigned nDim,
                           Type &aElemType, Type &bElemType, bool withScale,
-                          bool useTF32) {
+                          bool isSparse, bool useTF32) {
   Type aET = aElemType, bET = bElemType;
   Builder b(aElemType.getContext());
   if (withScale) {
@@ -43,7 +46,18 @@ MfmaKey composeMfmaKeyFor(unsigned version, unsigned mDim, unsigned nDim,
     // For the OCP FP8 E5M2 type, we can emulate the support for it with FP16.
     aElemType = bElemType = aET = bET = b.getF16Type();
   }
-  return {version, mDim, nDim, aET.getTypeID(), bET.getTypeID()};
+
+  assert(((withScale && !isSparse) || (!withScale && isSparse) ||
+          (!withScale && !isSparse)) &&
+         "Invalid argument, type of selected dot must be either standard, "
+         "scaled, or sparse.");
+  auto dotType = MfmaKeyDotType::STANDARD;
+  if (isSparse)
+    dotType = MfmaKeyDotType::SPARSE;
+  else if (withScale)
+    dotType = MfmaKeyDotType::SCALED;
+
+  return {version, mDim, nDim, aET.getTypeID(), bET.getTypeID(), dotType};
 }
 
 //===----------------------------------------------------------------------===//
@@ -71,7 +85,27 @@ MfmaDatabase::MfmaDatabase(MLIRContext *context) {
 // Macro for defining MFMA intrinsics at a specific gfx version.
 #define TRITON_MFMA_v(v, m, n, aET, bET, symbol, k, kBase)                     \
   {                                                                            \
-    /*key=*/{v, m, n, aET.getTypeID(), bET.getTypeID()}, /*value=*/{           \
+    /*key=*/{                                                                  \
+        v, m, n, aET.getTypeID(), bET.getTypeID(), MfmaKeyDotType::STANDARD},  \
+    /*value=*/{                                                                \
+      {ROCDL::symbol::getOperationName(), k, kBase},                           \
+    }                                                                          \
+  }
+
+#define TRITON_MFMA_SCALE_v(v, m, n, aET, bET, symbol, k, kBase)               \
+  {                                                                            \
+    /*key=*/{                                                                  \
+        v, m, n, aET.getTypeID(), bET.getTypeID(), MfmaKeyDotType::SCALED},    \
+    /*value=*/{                                                                \
+      {ROCDL::symbol::getOperationName(), k, kBase},                           \
+    }                                                                          \
+  }
+
+#define TRITON_MFMA_SPARSE_v(v, m, n, aET, bET, symbol, k, kBase)              \
+  {                                                                            \
+    /*key=*/{                                                                  \
+        v, m, n, aET.getTypeID(), bET.getTypeID(), MfmaKeyDotType::SPARSE},    \
+    /*value=*/{                                                                \
       {ROCDL::symbol::getOperationName(), k, kBase},                           \
     }                                                                          \
   }
@@ -81,7 +115,9 @@ MfmaDatabase::MfmaDatabase(MLIRContext *context) {
 #define TRITON_MFMA_v_2case(v, m, n, aET, bET, symbol1, k1, kBase1, symbol2,   \
                             k2, kBase2)                                        \
   {                                                                            \
-    /*key=*/{v, m, n, aET.getTypeID(), bET.getTypeID()}, /*value=*/{           \
+    /*key=*/{                                                                  \
+        v, m, n, aET.getTypeID(), bET.getTypeID(), MfmaKeyDotType::STANDARD},  \
+    /*value=*/{                                                                \
       {ROCDL::symbol1::getOperationName(), k1, kBase1},                        \
           {ROCDL::symbol2::getOperationName(), k2, kBase2},                    \
     }                                                                          \
@@ -255,11 +291,32 @@ MfmaDatabase::MfmaDatabase(MLIRContext *context) {
 
       // Scaled mfma f8f6f4
       // mfma_scale_F32_16x16x128_F8F6F4
-      TRITON_MFMA_v(4, 16, 16, fp4T, fp4T, mfma_scale_f32_16x16x128_f8f6f4, 128,
-                    32),
+      TRITON_MFMA_SCALE_v(4, 16, 16, fp4T, fp4T,
+                          mfma_scale_f32_16x16x128_f8f6f4, 128, 32),
       // mfma_scale_F32_32x32x64_F8F6F4
-      TRITON_MFMA_v(4, 32, 32, fp4T, fp4T, mfma_scale_f32_32x32x64_f8f6f4, 64,
-                    32),
+      TRITON_MFMA_SCALE_v(4, 32, 32, fp4T, fp4T, mfma_scale_f32_32x32x64_f8f6f4,
+                          64, 32),
+
+      // smfmac 2:4 Sparsity MFMA instructions
+      // CDNA3-only for now
+      // kBase is 8 for fp16/bf16 and 16 for fp8/bf8/i8
+      TRITON_MFMA_SPARSE_v(3, 32, 32, f16T, f16T, smfmac_f32_32x32x16_f16, 16,
+                           8),
+      TRITON_MFMA_SPARSE_v(3, 16, 16, f16T, f16T, smfmac_f32_16x16x32_f16, 32,
+                           8),
+      TRITON_MFMA_SPARSE_v(3, 32, 32, bf16T, bf16T, smfmac_f32_32x32x16_bf16,
+                           16, 8),
+      TRITON_MFMA_SPARSE_v(3, 16, 16, bf16T, bf16T, smfmac_f32_16x16x32_bf16,
+                           32, 8),
+      // MI300 / CDNA3 does not support ocpFp8T (Float8E4M3FNType)
+      TRITON_MFMA_SPARSE_v(3, 16, 16, amdFp8T, amdFp8T,
+                           smfmac_f32_16x16x64_fp8_fp8, 64, 16),
+      TRITON_MFMA_SPARSE_v(3, 32, 32, amdFp8T, amdFp8T,
+                           smfmac_f32_32x32x32_fp8_fp8, 32, 16),
+      TRITON_MFMA_SPARSE_v(3, 16, 16, amdBf8T, amdBf8T,
+                           smfmac_f32_16x16x64_bf8_bf8, 64, 16),
+      TRITON_MFMA_SPARSE_v(3, 32, 32, amdBf8T, amdBf8T,
+                           smfmac_f32_32x32x32_bf8_bf8, 32, 16),
   };
 }
 
@@ -272,10 +329,10 @@ MfmaDatabase::MfmaDatabase(MLIRContext *context) {
 FailureOr<MfmaIntrinsic>
 MfmaIntrinsic::selectFor(int version, unsigned mDim, unsigned nDim,
                          unsigned inputKDim, Type aElemType, Type bElemType,
-                         bool withScale, bool useTF32) {
+                         bool withScale, bool isSparse, bool useTF32) {
   const MfmaMap &mfmaMap = MfmaDatabase::get(aElemType.getContext());
   MfmaKey key = composeMfmaKeyFor(version, mDim, nDim, aElemType, bElemType,
-                                  withScale, useTF32);
+                                  withScale, isSparse, useTF32);
 
   auto it = mfmaMap.find(key);
   if (it == mfmaMap.end())

@@ -710,6 +710,13 @@ LogicalResult DotOperandEncodingAttr::verify(
     return success();
   }
 
+  if (auto parentAttr = mlir::dyn_cast<AMDSparseMfmaEncodingAttr>(parent)) {
+    if (kWidth == 0)
+      return emitError() << "ttg.dot_op kWidth parameter is mandatory for "
+                            "Sparse MFMA parent";
+    return success();
+  }
+
   if (auto parentAttr = mlir::dyn_cast<BlockedEncodingAttr>(parent)) {
     if (kWidth != 0)
       return emitError() << "ttg.dot_op kWidth parameter is not supported "
@@ -1375,6 +1382,182 @@ AMDMfmaEncodingAttr::verify(function_ref<mlir::InFlightDiagnostic()> emitError,
 }
 
 //===----------------------------------------------------------------------===//
+// Sparse MFMA encoding
+//===----------------------------------------------------------------------===//
+
+Attribute AMDSparseMfmaEncodingAttr::parse(AsmParser &parser, Type type) {
+  if (parser.parseLess().failed())
+    return {};
+  DictionaryAttr dict;
+  if (parser.parseAttribute(dict).failed())
+    return {};
+  if (parser.parseGreater().failed())
+    return {};
+
+  unsigned versionMajor = 0;
+  unsigned versionMinor = 0;
+  SmallVector<unsigned> warpsPerCTA;
+  SmallVector<unsigned> instrShape;
+  bool isTransposed;
+  std::optional<SmallVector<unsigned>> CTAsPerCGA;
+  std::optional<SmallVector<unsigned>> CTASplitNum;
+  std::optional<SmallVector<unsigned>> CTAOrder;
+
+  for (const NamedAttribute &attr : dict) {
+    if (attr.getName() == "versionMajor") {
+      if (parseUInt(parser, attr, versionMajor, "versionMajor").failed())
+        return {};
+    }
+    if (attr.getName() == "versionMinor") {
+      if (parseUInt(parser, attr, versionMinor, "versionMinor").failed())
+        return {};
+    }
+    if (attr.getName() == "warpsPerCTA") {
+      if (parseIntArrayAttr(parser, attr, warpsPerCTA, "warpsPerCTA").failed())
+        return {};
+    }
+    if (attr.getName() == "instrShape") {
+      if (parseIntArrayAttr(parser, attr, instrShape, "instrShape").failed())
+        return {};
+    }
+
+    if (attr.getName() == "isTransposed") {
+      if (parseBool(parser, attr, isTransposed, "isTransposed").failed())
+        return {};
+    }
+    if (attr.getName() == "CTAsPerCGA") {
+      if (parseIntArrayAttr(parser, attr, CTAsPerCGA.emplace(), "CTAsPerCGA")
+              .failed())
+        return {};
+    }
+    if (attr.getName() == "CTASplitNum") {
+      if (parseIntArrayAttr(parser, attr, CTASplitNum.emplace(), "CTASplitNum")
+              .failed())
+        return {};
+    }
+    if (attr.getName() == "CTAOrder") {
+      if (parseIntArrayAttr(parser, attr, CTAOrder.emplace(), "CTAOrder")
+              .failed())
+        return {};
+    }
+  }
+
+  std::optional<CTALayoutAttr> CTALayout = getCTALayoutOrError(
+      parser, CTAsPerCGA, CTASplitNum, CTAOrder, /*rank=*/warpsPerCTA.size());
+  if (!CTALayout.has_value())
+    return {};
+
+  return parser.getChecked<AMDSparseMfmaEncodingAttr>(
+      parser.getContext(), versionMajor, versionMinor, warpsPerCTA,
+      instrShape[0], instrShape[1], isTransposed, *CTALayout);
+}
+
+LogicalResult AMDSparseMfmaEncodingAttr::verify(
+    function_ref<mlir::InFlightDiagnostic()> emitError, unsigned versionMajor,
+    unsigned versionMinor, llvm::ArrayRef<unsigned int> warpsPerCTA,
+    unsigned mDim, unsigned nDim, bool isTransposed,
+    mlir::triton::gpu::CTALayoutAttr) {
+  if (!(versionMajor >= 0 && versionMajor <= 4)) {
+    return emitError() << "major version must be in the [0, 4] range";
+  }
+  if (versionMinor != 0) {
+    return emitError() << "minor version must be 0";
+  }
+  if (!((mDim == 32 && nDim == 32) || (mDim == 16 && nDim == 16))) {
+    return emitError()
+           << "(M, N) cases other than (32, 32) or (16, 16) unimplemented";
+  }
+
+  return success();
+}
+
+Attribute AMDCompressionMfmaEncodingAttr::parse(AsmParser &parser, Type type) {
+  if (parser.parseLess().failed())
+    return {};
+  DictionaryAttr dict;
+  if (parser.parseAttribute(dict).failed())
+    return {};
+  if (parser.parseGreater().failed())
+    return {};
+
+  unsigned versionMajor = 0;
+  unsigned versionMinor = 0;
+  SmallVector<unsigned> warpsPerCTA;
+  SmallVector<unsigned> instrShape;
+  bool isTransposed;
+  std::optional<SmallVector<unsigned>> CTAsPerCGA;
+  std::optional<SmallVector<unsigned>> CTASplitNum;
+  std::optional<SmallVector<unsigned>> CTAOrder;
+
+  for (const NamedAttribute &attr : dict) {
+    if (attr.getName() == "versionMajor") {
+      if (parseUInt(parser, attr, versionMajor, "versionMajor").failed())
+        return {};
+    }
+    if (attr.getName() == "versionMinor") {
+      if (parseUInt(parser, attr, versionMinor, "versionMinor").failed())
+        return {};
+    }
+    if (attr.getName() == "warpsPerCTA") {
+      if (parseIntArrayAttr(parser, attr, warpsPerCTA, "warpsPerCTA").failed())
+        return {};
+    }
+    if (attr.getName() == "instrShape") {
+      if (parseIntArrayAttr(parser, attr, instrShape, "instrShape").failed())
+        return {};
+    }
+
+    if (attr.getName() == "isTransposed") {
+      if (parseBool(parser, attr, isTransposed, "isTransposed").failed())
+        return {};
+    }
+    if (attr.getName() == "CTAsPerCGA") {
+      if (parseIntArrayAttr(parser, attr, CTAsPerCGA.emplace(), "CTAsPerCGA")
+              .failed())
+        return {};
+    }
+    if (attr.getName() == "CTASplitNum") {
+      if (parseIntArrayAttr(parser, attr, CTASplitNum.emplace(), "CTASplitNum")
+              .failed())
+        return {};
+    }
+    if (attr.getName() == "CTAOrder") {
+      if (parseIntArrayAttr(parser, attr, CTAOrder.emplace(), "CTAOrder")
+              .failed())
+        return {};
+    }
+  }
+
+  std::optional<CTALayoutAttr> CTALayout = getCTALayoutOrError(
+      parser, CTAsPerCGA, CTASplitNum, CTAOrder, /*rank=*/warpsPerCTA.size());
+  if (!CTALayout.has_value())
+    return {};
+
+  return parser.getChecked<AMDCompressionMfmaEncodingAttr>(
+      parser.getContext(), versionMajor, versionMinor, warpsPerCTA,
+      instrShape[0], instrShape[1], isTransposed, *CTALayout);
+}
+
+LogicalResult AMDCompressionMfmaEncodingAttr::verify(
+    function_ref<mlir::InFlightDiagnostic()> emitError, unsigned versionMajor,
+    unsigned versionMinor, llvm::ArrayRef<unsigned int> warpsPerCTA,
+    unsigned mDim, unsigned nDim, bool isTransposed,
+    mlir::triton::gpu::CTALayoutAttr) {
+  if (!(versionMajor >= 0 && versionMajor <= 4)) {
+    return emitError() << "major version must be in the [0, 4] range";
+  }
+  if (versionMinor != 0) {
+    return emitError() << "minor version must be 0";
+  }
+  if (!((mDim == 32 && nDim == 32) || (mDim == 16 && nDim == 16))) {
+    return emitError()
+           << "(M, N) cases other than (32, 32) or (16, 16) unimplemented";
+  }
+
+  return success();
+}
+
+//===----------------------------------------------------------------------===//
 // WMMA encoding
 //===----------------------------------------------------------------------===//
 
@@ -1709,6 +1892,156 @@ void AMDRotatingSharedEncodingAttr::print(AsmPrinter &printer) const {
           << ", order = [" << getOrder() << "]";
   maybePrintCTALayout(getContext(), printer, getCTALayout(),
                       /*rank=*/getOrder().size());
+  printer << "}>";
+}
+
+//===----------------------------------------------------------------------===//
+// Compression Mfma encoding
+//===----------------------------------------------------------------------===//
+
+SmallVector<unsigned> AMDCompressionMfmaEncodingAttr::getCTAsPerCGA() const {
+  return SmallVector<unsigned>(getCTALayout().getCTAsPerCGA());
+}
+SmallVector<unsigned> AMDCompressionMfmaEncodingAttr::getCTAOrder() const {
+  return SmallVector<unsigned>(getCTALayout().getCTAOrder());
+}
+SmallVector<unsigned> AMDCompressionMfmaEncodingAttr::getCTASplitNum() const {
+  return SmallVector<unsigned>(getCTALayout().getCTASplitNum());
+}
+
+SmallVector<unsigned> AMDCompressionMfmaEncodingAttr::getRepOrder() const {
+  return getMatrixOrder(getRank(), /*rowMajor*/ true);
+}
+
+SmallVector<unsigned>
+AMDCompressionMfmaEncodingAttr::getRepOrderForOperand(int opIdx) const {
+  return getOrderForDotOperand(opIdx, getRank(), /*kContig*/ true);
+}
+
+void AMDCompressionMfmaEncodingAttr::print(AsmPrinter &printer) const {
+  printer << "<{"
+          << "versionMajor = " << getVersionMajor()                      //
+          << ", versionMinor = " << getVersionMinor()                    //
+          << ", warpsPerCTA = [" << getWarpsPerCTA() << "]"              //
+          << ", instrShape = [" << ArrayRef{getMDim(), getNDim()} << "]" //
+          << ", isTransposed = " << getIsTransposed();
+  maybePrintCTALayout(getContext(), printer, getCTALayout(),
+                      /*rank=*/getRank());
+  printer << "}>";
+}
+
+SmallVector<unsigned> AMDSparseMfmaEncodingAttr::getCTAsPerCGA() const {
+  return SmallVector<unsigned>(getCTALayout().getCTAsPerCGA());
+}
+SmallVector<unsigned> AMDSparseMfmaEncodingAttr::getCTAOrder() const {
+  return SmallVector<unsigned>(getCTALayout().getCTAOrder());
+}
+SmallVector<unsigned> AMDSparseMfmaEncodingAttr::getCTASplitNum() const {
+  return SmallVector<unsigned>(getCTALayout().getCTASplitNum());
+}
+
+SmallVector<int64_t>
+AMDSparseMfmaEncodingAttr::getInstrShapeForOperand(int kWidth,
+                                                   int opIdx) const {
+  unsigned mDim = getMDim();
+  unsigned nDim = getNDim();
+
+  assert((mDim == nDim) && (mDim == 32 || mDim == 16));
+
+  constexpr int warpSize = 64; // MFMA is always based on the 64-wide warps.
+  int kGroups = -1;
+  if (mDim == nDim)
+    kGroups = warpSize / mDim;
+  else {
+    assert("M and N dims should match for 2:4 sparse smfmac instructions");
+  }
+  // The K-dim is 2:4 sparse, so it has half as many elements
+  // kWidth has already been adjusted
+  int64_t kDim = kWidth * kGroups;
+
+  assert(opIdx == 0 && "Only the A-input to a sparse dot can be sparse");
+
+  return {mDim, kDim};
+}
+
+SmallVector<unsigned> AMDSparseMfmaEncodingAttr::getRepOrder() const {
+  return getMatrixOrder(getRank(), /*rowMajor*/ true);
+}
+
+SmallVector<unsigned>
+AMDSparseMfmaEncodingAttr::getRepOrderForOperand(int opIdx) const {
+  return getOrderForDotOperand(opIdx, getRank(), /*kContig*/ true);
+}
+
+SmallVector<unsigned>
+AMDSparseMfmaEncodingAttr::getThreadsPerWarpForOperand(int opIdx) const {
+  auto rank = getRank();
+  SmallVector<unsigned> threads(rank, 1);
+  unsigned kThreads;
+  unsigned nonKThreads;
+  switch (getMDim()) {
+  case 32:
+    assert(getNDim() == 32);
+    kThreads = 2;
+    nonKThreads = 32;
+    break;
+  case 16:
+    assert(getNDim() == 16);
+    kThreads = 4;
+    nonKThreads = 16;
+    break;
+  default:
+    llvm::report_fatal_error(
+        "unexpected mfma shape encountered in getThreadsPerWarpForOperand");
+  }
+  int kDimIdx = opIdx == 0 ? rank - 1 : rank - 2;
+  int nonKDimIdx = opIdx == 0 ? rank - 2 : rank - 1;
+  threads[kDimIdx] = kThreads;
+  threads[nonKDimIdx] = nonKThreads;
+  return threads;
+}
+
+SmallVector<int64_t>
+AMDSparseMfmaEncodingAttr::getRepForOperand(ArrayRef<int64_t> operandShape,
+                                            int kWidth, int opIdx) const {
+  assert(opIdx == 0 && "Only the A-input to a sparse dot can be sparse");
+
+  auto operandTileShape = getInstrShapeForOperand(kWidth, opIdx);
+  auto rank = operandShape.size();
+  auto warpsPerCTA = getWarpsPerCTA();
+  int numRepBatch =
+      rank == 3 ? std::max<int64_t>(1, operandShape[0] / warpsPerCTA[0]) : 1;
+
+  return {
+      numRepBatch,
+      std::max<int64_t>(1, operandShape[rank - 2] /
+                               (operandTileShape[0] * warpsPerCTA[rank - 2])),
+      std::max<int64_t>(1, operandShape[rank - 1] / operandTileShape[1])};
+}
+
+SmallVector<unsigned>
+AMDSparseMfmaEncodingAttr::getSizePerThreadForOperand(int kWidth,
+                                                      int opIdx) const {
+  auto rank = getWarpsPerCTA().size();
+  auto sizePerThread = SmallVector<unsigned>(rank, 1);
+
+  assert(opIdx == 0 && "Only the A-input to a sparse dot can be sparse");
+
+  sizePerThread[rank - 2] = 1;
+  sizePerThread[rank - 1] = kWidth;
+
+  return sizePerThread;
+}
+
+void AMDSparseMfmaEncodingAttr::print(AsmPrinter &printer) const {
+  printer << "<{"
+          << "versionMajor = " << getVersionMajor()                      //
+          << ", versionMinor = " << getVersionMinor()                    //
+          << ", warpsPerCTA = [" << getWarpsPerCTA() << "]"              //
+          << ", instrShape = [" << ArrayRef{getMDim(), getNDim()} << "]" //
+          << ", isTransposed = " << getIsTransposed();
+  maybePrintCTALayout(getContext(), printer, getCTALayout(),
+                      /*rank=*/getRank());
   printer << "}>";
 }
 
