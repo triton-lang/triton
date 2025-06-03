@@ -8,6 +8,7 @@ from triton.backends.compiler import GPUTarget
 from triton.backends.driver import GPUDriver
 from triton.runtime.build import compile_module_from_src
 from triton.tools.tensor_descriptor import TensorDescriptor
+from .compiler import all_possible_fp8_dtypes
 
 dirname = os.path.dirname(os.path.realpath(__file__))
 include_dirs = [os.path.join(dirname, "include")]
@@ -152,6 +153,8 @@ class HIPUtils(object):
 def ty_to_cpp(ty):
     if ty[0] == '*':
         return "hipDeviceptr_t"
+    if ty in all_possible_fp8_dtypes():
+        return "uint8_t"
     return {
         "i1": "int32_t",
         "i8": "int8_t",

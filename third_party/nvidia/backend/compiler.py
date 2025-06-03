@@ -96,6 +96,11 @@ def sm_arch_from_capability(capability: int):
     return f"sm_{capability}{suffix}"
 
 
+@functools.lru_cache
+def all_possible_fp8_dtypes() -> set[str]:
+    return {"fp8e5", "fp8e4b15", "fp8e4nv"}
+
+
 @dataclass(frozen=True)
 class CUDAOptions:
     num_warps: int = 4
@@ -169,6 +174,10 @@ class CUDABackend(BaseBackend):
             if capability >= 89:
                 supported_fp8_dtypes.add("fp8e4nv")
             args["supported_fp8_dtypes"] = tuple(sorted(supported_fp8_dtypes))
+
+        for dtype in args["supported_fp8_dtypes"]:
+            if dtype not in all_possible_fp8_dtypes():
+                raise ValueError(f"Unknown fp8 dtype {dtype} for arch {self.target.arch}")
 
         if "deprecated_fp8_dot_operand_dtypes" not in args:
             if capability >= 90:
