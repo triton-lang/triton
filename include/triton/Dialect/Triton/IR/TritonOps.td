@@ -865,7 +865,10 @@ def TT_ElementwiseInlineAsmOp : TT_Op<"elementwise_inline_asm", [
 //
 // Histogram Op
 //
-def TT_HistogramOp : TT_Op<"histogram", [Pure]> {
+def TT_HistogramOp : TT_Op<"histogram", [Pure,
+    TypesMatchWith<"mask type matches src type",
+                 "src", "mask", "getI1SameShape($_self)",
+                 "($_op.getOperands().size() <= 1) || std::equal_to<>()">]> {
   let summary = "return a histogram of the inputs.";
   let description = [{
     Return the histogram of the input tensor. The number of bins is equal to
@@ -873,11 +876,13 @@ def TT_HistogramOp : TT_Op<"histogram", [Pure]> {
     start at 0.
   }];
 
-  let arguments = (ins TT_IntTensor:$src);
+  let arguments = (ins TT_IntTensor:$src,
+    Optional<TT_BoolLike>:$mask);
+
   let results = (outs TT_IntTensor:$result);
 
   let assemblyFormat = [{
-    $src attr-dict `:` type($src) `->` type($result)
+    $src (`,` $mask^)? attr-dict `:` type($src) `->` type($result)
   }];
 }
 
