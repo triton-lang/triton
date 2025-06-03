@@ -202,11 +202,27 @@ namespace mlir::triton::gpu {
 
 SmallVector<int32_t> intersectionBasis(ArrayRef<int32_t> b1,
                                        ArrayRef<int32_t> b2, int32_t dim) {
-  auto ns1 = nullspaceBasis(b1, dim);
-  auto ns2 = nullspaceBasis(b2, dim);
-  auto joint = llvm::to_vector(llvm::concat<int32_t>(ns1, ns2));
-  auto result = nullspaceBasis(joint, dim);
-  return result;
+  // If needed to be generic, this can be done computing
+  // nullspaceBasis(concat(nullspaceBasis(b1), nullspaceBasis(b2)))
+  // but doing this returns the bases in an arbitrary order!
+  auto isPowerOf2 = [](int32_t x) { return llvm::isPowerOf2_32(x); };
+  bool powerOf2 = llvm::all_of(b1, isPowerOf2) && llvm::all_of(b2, isPowerOf2);
+  if (powerOf2) {
+    SmallVector<int32_t> result;
+    // Heuristic: We choose to retain the order relative to b1
+    SetVector<int32_t> set2(b2.begin(), b2.end());
+    for (int32_t b : b1) {
+      if (b != 0 && set2.contains(b)) {
+        result.push_back(b);
+      }
+    }
+    return result;
+  } else {
+    auto ns1 = nullspaceBasis(b1, dim);
+    auto ns2 = nullspaceBasis(b2, dim);
+    auto joint = llvm::to_vector(llvm::concat<int32_t>(ns1, ns2));
+    return nullspaceBasis(joint, dim);
+  }
 }
 
 std::pair<int, int> logBankConflicts(const LinearLayout &src,
