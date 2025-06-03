@@ -3,6 +3,7 @@ import itertools
 import sys
 import torch
 import triton
+from triton.tools.tensor_descriptor import TensorDescriptor
 # utilities
 from triton_kernels import target_info
 from triton_kernels.numerics import InFlexData, OutFlexData
@@ -18,6 +19,18 @@ from .matmul_ogs_details.fast_contiguous import fast_contiguous
 from .numerics_details.mxfp import SwizzlingType
 from .specialize import specialize
 
+def make_tensor_descriptor(tensor, shape, strides, block_shape, transpose=False):
+    if transpose:
+        shape = [*shape[:-2], shape[-1], shape[-2]]
+        strides = [*strides[:-2], strides[-1], strides[-2]]
+        block_shape = [*block_shape[:-2], block_shape[-1], block_shape[-2]]
+
+    return TensorDescriptor(
+        tensor,
+        shape=shape,
+        strides=strides,
+        block_shape=block_shape,
+    )
 
 @dataclass
 class FnSpecs:
@@ -609,17 +622,121 @@ def matmul_ogs(x, w, bias,
     flex = precision_config.flex_ctx
     bias_stride = None if bias is None else bias.stride(0)
     num_indx = None if scatter_indx is None else scatter_indx.src_indx.shape[0]
+
+
+    x_ptr = flex.lhs_data.reinterpret(x)
+    w_ptr = flex.rhs_data.reinterpret(w)
+    o_ptr = flex.out_data.reinterpret(out0)
+    x_desc = None
+    w_desc = None
+    mx_desc = None
+    y_desc = None
+    if opt_flags.is_persistent:
+        INT_MAX = 2147483647
+        HAS_TMA_GS = target_info.cuda_capability_geq(10, 0)
+        USE_GATHER_TMA = (HAS_TMA_GS and gather_indx is not None)
+        X_USE_LOAD_TMA = gather_indx is None and not USE_GATHER_TMA
+        HAS_FUSED_SCATTER = writeback_idxs is not None
+        DISABLE_Y_TMA = out0.stride(-2) * out0.dtype.itemsize % 16 != 0
+        USE_SCATTER_TMA = (HAS_TMA_GS and HAS_FUSED_SCATTER) and not DISABLE_Y_TMA
+
+        OUTPUT_USE_FLEX = out0_flex.actual_scale is not None or out0_flex.checksum_scale is not None
+        if HAS_FUSED_SCATTER:
+            MASK_ACC = OUTPUT_USE_FLEX
+        elif USE_GATHER_TMA:
+            MASK_ACC = False
+        else:
+            MASK_ACC = OUTPUT_USE_FLEX
+
+        # TMA is faster on Blackwell if a SWAP_XW transpose is not needed, or when we need registers to mask out the acc.
+        # Contrary to the SWAP_XW case, having a fused activation function tends to make TMA faster again.
+        # For the ideal optimization, this would depend on what the activation function is doing.
+        Y_USE_STORE_TMA = (MASK_ACC or target_info.cuda_capability_geq(10, 0)) and not (
+            DISABLE_Y_TMA or (swap_xw and fused_activation.specs.fn is None))
+
+        if USE_GATHER_TMA:
+            x_desc = make_tensor_descriptor(
+                x_ptr,
+                shape=[INT_MAX, K], # No masking on the M dimension because we manually mask by setting indices to -1
+                strides=[x.stride(1), x.stride(2)],
+                block_shape=[1, opt_flags.block_k],
+            )
+        elif X_USE_LOAD_TMA:
+            x_desc = make_tensor_descriptor(
+                x_ptr,
+                # When M is ragged, we don't mask the input rows, but mask the accumulator result in the epilogue.
+                # So shape[0] here is the global number of rows in the X matrix, which allows using an invariant descriptor.
+                shape=[batch_size, x.shape[1], K],
+                strides=[x.stride(0), x.stride(1), x.stride(2)],
+                block_shape=[1, opt_flags.block_m, opt_flags.block_k],
+            )
+
+        if mx_ctx.weight_scale is not None:
+            W_PACK_DIVISOR = 2 if w_ptr.dtype == torch.uint8 else 1
+        else:
+            W_PACK_DIVISOR = 1
+        w_desc = make_tensor_descriptor(
+            w_ptr,
+            shape=[routing_data.n_expts_tot if expt_data.blocks is not None else batch_size,
+                   triton.cdiv(K, W_PACK_DIVISOR), N],
+            strides=w.stride(),
+            block_shape=[1, opt_flags.block_k // W_PACK_DIVISOR, opt_flags.block_n],
+            transpose=w.stride(-1) != 1,
+        )
+
+        if mx_ctx.weight_scale is not None:
+            PackedK = triton.cdiv(K, 32)
+            if mx_ctx.swizzle_scale == SwizzlingType.BLACKWELL:
+                mx_desc = make_tensor_descriptor(
+                    mx_ctx.weight_scale,
+                    shape=[routing_data.n_expts_tot if expt_data.blocks is not None else batch_size,
+                           triton.cdiv(N, 128), triton.cdiv(PackedK, 4), 32, 4 * 4],
+                    strides=[mx_scale_stride_e, mx_scale_stride_n, mx_scale_stride_k, 4 * 4, 1],
+                    block_shape=[1, opt_flags.block_n // 128, opt_flags.block_k // 32 // 4, 32, 4 * 4],
+                )
+            else:
+                mx_desc = make_tensor_descriptor(
+                    mx_ctx.weight_scale,
+                    shape=[routing_data.n_expts_tot if expt_data.blocks is not None else batch_size,
+                           PackedK, N],
+                    strides=[mx_scale_stride_e, mx_scale_stride_k, mx_scale_stride_n],
+                    block_shape=[1, opt_flags.block_k // 32, opt_flags.block_n],
+                    transpose=mx_scale_stride_n != 1
+                )
+
+        EPILOGUE_BLOCK_N = opt_flags.block_n // 2 if opt_flags.epilogue_subtile else opt_flags.block_n
+        OUT_BLOCK_N = EPILOGUE_BLOCK_N // fused_activation.reduction_n
+
+        NOutputRows = num_indx // routing_data.n_expts_act if num_indx is not None else x.shape[1]
+
+        if USE_SCATTER_TMA:
+            y_desc = make_tensor_descriptor(
+                o_ptr,
+                # No masking on the M dimension because we manually mask by setting indices to INT_MAX
+                shape=[INT_MAX - 1, N // fused_activation.reduction_n],
+                strides=[out0.stride(2), out0.stride(3)],
+                block_shape=[1, OUT_BLOCK_N],
+            )
+        elif Y_USE_STORE_TMA and expt_data.blocks is None: # If expt_data, this desc is made at runtime instead.
+            y_desc = make_tensor_descriptor(
+                o_ptr,
+                shape=[opt_flags.split_k, batch_size, NOutputRows, N // fused_activation.reduction_n],
+                strides=out0.stride(),
+                block_shape=[1, 1, opt_flags.block_m, OUT_BLOCK_N],
+            )
+
     kernels = get_kernels(epilogue.specs, fused_activation.specs)
     (kernels._p_matmul_ogs if opt_flags.is_persistent else kernels._matmul_ogs)[(n_cta,)](
-                   flex.out_data.reinterpret(memory["output"]),
-                   flex.out_data.reinterpret(out0), *out0.stride(),
+                   flex.out_data.reinterpret(memory["output"]), # just for type annotation
+                   o_ptr, *out0.stride(),
                    *out0_flex,
-                   flex.lhs_data.reinterpret(x), x.stride(0), x.stride(1), x.stride(2),
+                   x_ptr, x.stride(0), x.stride(1), x.stride(2),
                    flex.lhs_data.scale,
-                   flex.rhs_data.reinterpret(w), w.stride(0), w.stride(1), w.stride(2), w.stride(2) != 1,
+                   w_ptr, w.stride(0), w.stride(1), w.stride(2), w.stride(2) != 1,
                    flex.rhs_data.scale,
                    mx_ctx.weight_scale, mx_scale_stride_e, mx_scale_stride_k, mx_scale_stride_n, mx_scale_stride_n != 1,
                    bias, bias_stride,
+                   x_desc, w_desc, mx_desc, y_desc,
                    x.shape[1],
                    x.shape[1] if routing_data.expt_hist is None else None,
                    N, K,
