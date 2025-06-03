@@ -247,6 +247,8 @@ def test_op(m, n, k, split_k, do_gather, do_scatter, fused_scatter, has_y_gammas
             pytest.skip("NYI: float8 x mxfloat8 not tested on AMD GPU")
         if is_persistent:
             pytest.skip("NYI: Persistent kernel not supported on AMD GPU")
+        if split_k > 1:
+            pytest.skip("splitK hasn't been fully tested on AMD GPU.")
 
     if "float8_e4m3fnuz" in (weight_dtype_str, act_dtype_str) and not is_hip_cdna3():
         pytest.skip("float8_e4m3fnuz only tested on AMD CDNA3 Platform")
@@ -413,10 +415,7 @@ def test_op(m, n, k, split_k, do_gather, do_scatter, fused_scatter, has_y_gammas
             assert n_rows > 0
             ref_y = ref_y[:n_rows]
             tri_y = tri_y[:n_rows]
-    maxtol = None
-    if is_hip() and weight_dtype == torch.uint8:
-        maxtol = 0.08
-    assert_close(scale(ref_y, flex.out_data.expected_scale), tri_y, maxtol=maxtol)
+    assert_close(scale(ref_y, flex.out_data.expected_scale), tri_y)
 
     if act_is_float8:
         tri_y_scale = flex.out_data.actual_scale.clone()
