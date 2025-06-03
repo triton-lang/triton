@@ -2357,15 +2357,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 // CHECK-LABEL: @reinterpret_tensor_descriptor
 tt.func private @reinterpret_tensor_descriptor(%arg0: !tt.ptr<i8, 0>) -> !tt.tensordesc<tensor<128x64xf16, #shared>> {
   // CHECK-NEXT: llvm.addrspacecast %arg0 : !llvm.ptr to !llvm.ptr
-  %0 = tt.reinterpret_tensor_descriptor %arg0 : !tt.ptr<i8, 0> to !tt.tensordesc<tensor<128x64xf16, #shared>>
+  %0 = ttng.reinterpret_tensor_descriptor %arg0 : !tt.ptr<i8, 0> to !tt.tensordesc<tensor<128x64xf16, #shared>>
   tt.return %0 : !tt.tensordesc<tensor<128x64xf16, #shared>>
-}
-
-// CHECK-LABEL: @tensor_desc_to_tma_ptr
-tt.func private @tensor_desc_to_tma_ptr(%arg0: !tt.tensordesc<tensor<128x64xf16, #shared>>) -> !tt.ptr<i8, 0> {
-  // CHECK-NEXT: llvm.addrspacecast %arg0 : !llvm.ptr to !llvm.ptr
-  %0 = ttng.tensor_desc_to_tma_ptr %arg0 : !tt.tensordesc<tensor<128x64xf16, #shared>> to !tt.ptr<i8, 0>
-  tt.return %0 : !tt.ptr<i8, 0>
 }
 
 }

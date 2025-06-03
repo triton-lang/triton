@@ -154,18 +154,6 @@ LogicalResult ArriveBarrierOp::verify() {
   return success();
 }
 
-// -- TensorDescToTMAPtrOp --
-LogicalResult TensorDescToTMAPtrOp::canonicalize(TensorDescToTMAPtrOp op,
-                                                 PatternRewriter &rewriter) {
-  // tensor_desc_to_tma_ptr(reinterpret_tensor_desc(ptr)) -> ptr
-  if (auto reinterpret =
-          op.getDesc().getDefiningOp<triton::ReinterpretTensorDescOp>()) {
-    rewriter.replaceOp(op, reinterpret.getRawDesc());
-    return success();
-  }
-  return failure();
-}
-
 // -- AsyncTMACopyGlobalToLocalOp --
 LogicalResult AsyncTMACopyGlobalToLocalOp::verify() {
   if (failed(verifyBarrierType(*this, getBarrier().getType())))
@@ -583,6 +571,24 @@ void TMEMSubSliceOp::build(OpBuilder &builder, OperationState &state,
       shape, allocTy.getElementType(), newEncoding, allocTy.getMemorySpace(),
       allocTy.getMutableMemory());
   build(builder, state, subsliceType, alloc, offset);
+}
+
+// -- TensormapCreateOp --
+LogicalResult TensormapCreateOp::verify() {
+  auto rank = getBoxDim().size();
+  if (getGlobalDim().size() != rank) {
+    return emitError("Rank mismatch for global dim. Got ")
+           << getGlobalDim().size() << " but expected " << rank;
+  }
+  if (getGlobalStride().size() + 1 != rank) {
+    return emitError("Rank mismatch for global stride. Got ")
+           << getGlobalStride().size() << " but expected " << rank - 1;
+  }
+  if (getElementStride().size() != rank) {
+    return emitError("Rank mismatch for element stride. Got ")
+           << getElementStride().size() << " but expected " << rank;
+  }
+  return success();
 }
 
 } // namespace nvidia_gpu

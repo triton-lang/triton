@@ -69,8 +69,8 @@ tt.func public @make_tensor_desc_epilogue(%arg0: i32, %arg1: !tt.ptr<f32>, %arg2
     // CHECK: scf.if
     scf.if %4 {
       // CHECK-NOT: tt.make_tensor_descriptor
-      // CHECK: tt.experimental_tensormap_create
-      // CHECK-NEXT: tt.experimental_tensormap_fenceproxy_acquire
+      // CHECK: ttng.tensormap_create
+      // CHECK-NEXT: ttng.tensormap_fenceproxy_acquire
       %5 = tt.make_tensor_descriptor %arg1, [%arg2, %arg2], [%c1_i64, %c1_i64] : <f32>, <tensor<128x256xf32, #nvmma_128>>
     } {loop.cluster = 5 : i32, loop.stage = 2 : i32}
   } {tt.num_stages = 3 : i32, tt.scheduled_max_stage = 2 : i32}
