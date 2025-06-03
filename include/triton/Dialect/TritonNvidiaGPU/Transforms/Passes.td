@@ -64,7 +64,7 @@ def TritonNvidiaGPUTMALoweringPass : Pass<"triton-nvidia-tma-lowering", "mlir::M
   let summary = "lower to TMA load/store operations";
 
   let description = [{
-    Lower Triton experimental descriptor load to TMA load/store operations in TritonNvidiaGPUDialect.
+    Lower Triton descriptor load to TMA load/store operations in TritonNvidiaGPUDialect.
   }];
 
   let dependentDialects = [

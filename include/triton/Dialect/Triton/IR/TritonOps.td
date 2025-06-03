@@ -1033,22 +1033,6 @@ def TT_MakeTensorDescOp : TT_Op<"make_tensor_descriptor", [
   }];
 }
 
-def ReinterpretTensorDescOp : TT_Op<"reinterpret_tensor_descriptor", [Pure]> {
-  let summary = "Reinterpret a pointer as a tensor descriptor";
-
-  let description = [{
-     This Op exists to help the transition from untyped raw TMA objects to typed Tensor descriptor objects.
-     Ideally, we can remove this once the APIs are fully fleshed out.
-  }];
-
-  let arguments = (ins TT_Ptr:$rawDesc);
-  let results = (outs TT_TensorDescType:$result);
-
-  let assemblyFormat = [{
-    $rawDesc attr-dict `:` qualified(type($rawDesc))  `to` qualified(type($result))
-  }];
-}
-
 // The following ops, including `call`, `func`, and `return` are copied and modified from
 // https://github.com/llvm/llvm-project/blob/main/mlir/include/mlir/Dialect/Func/IR/FuncOps.td
 // We could revert it back once MLIR has a better inliner interface.
@@ -1388,55 +1372,6 @@ def TT_DescriptorScatterOp : TT_Op<"descriptor_scatter", [TT_DescriptorStoreLike
   }];
 
   let hasVerifier = 1;
-}
-
-def TT_ExperimentalTensormapCreateOp: TT_Op<
-  "experimental_tensormap_create",
-  [
-    MemoryEffects<[MemRead<GlobalMemory>, MemWrite<GlobalMemory>]>,
-    AttrSizedOperandSegments,
-  ]
-> {
-  let summary = "Create a new TMA descriptor on device";
-  let arguments = (
-      ins
-      TT_PtrType:$desc_ptr,
-      TT_PtrType:$global_address,
-      Variadic<I32>:$box_dim,
-      Variadic<I32>:$global_dim,
-      Variadic<I64>:$global_stride,
-      Variadic<I32>:$element_stride,
-      ConfinedAttr<I32Attr, [IntNonNegative, IntMaxValue<15>]>:$elem_type,
-      ConfinedAttr<I32Attr, [IntNonNegative, IntMaxValue<2>]>:$interleave_layout,
-      ConfinedAttr<I32Attr, [IntNonNegative, IntMaxValue<3>]>:$swizzle_mode,
-      ConfinedAttr<I32Attr, [IntNonNegative, IntMaxValue<1>]>:$fill_mode
-  );
-  let extraClassDeclaration = [{
-      int32_t getRank() {
-          return getBoxDim().size();
-      }
-  }];
-  let assemblyFormat = [{
-    $desc_ptr `,` $global_address `,`
-    `[` $box_dim `]` `,`
-    `[` $global_dim `]` `,`
-    `[` $global_stride `]` `,`
-    `[` $element_stride `]`
-    attr-dict `:` functional-type(operands, results)
-  }];
-
-  let hasVerifier = 1;
-}
-
-def TT_ExperimentalTensormapFenceproxyAcquireOp: TT_Op<
-  "experimental_tensormap_fenceproxy_acquire",
-  [MemoryEffects<[MemWrite<GlobalMemory>]>]
-> {
-  let summary = "Acquire fence on a tensormap object";
-  let arguments = (ins TT_PtrType:$desc_ptr);
-  let assemblyFormat = [{
-    $desc_ptr attr-dict `:` qualified(type($desc_ptr))
-  }];
 }
 
 
