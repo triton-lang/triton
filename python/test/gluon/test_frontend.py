@@ -539,3 +539,56 @@ def test_mlir_attr_error():
         run_parser(kernel)
 
     assert "order must be a permutation of 0..(rank-1), but was [1]" in str(e.value.__cause__)
+
+
+@gluon.jit
+def tmem_subslice_kernel():
+    layout: ttgl.constexpr = ttgl.nvidia.blackwell.TensorMemoryLayout(block=[128, 128], unpacked=True)
+    tmem = ttgl.nvidia.blackwell.allocate_tensor_memory(ttgl.int32, [2, 256, 256], layout)
+    tmem.subslice(0)
+
+
+def test_tmem_subslice_constexpr():
+    expecttest.assert_expected_inline(
+        run_parser(tmem_subslice_kernel).str_nodebug(), """\
+#tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, unpacked = true>
+module {
+  tt.func public @tmem_subslice_kernel() attributes {noinline = false} {
+    %result = ttng.tmem_alloc : () -> !ttg.memdesc<2x256x256xi32, #tmem, #ttng.tensor_memory, mutable>
+    %c0_i32 = arith.constant 0 : i32
+    %c0_i32_0 = arith.constant 0 : i32
+    %0 = ttg.memdesc_subview %result[%c0_i32, %c0_i32_0, %c0_i32_0] : !ttg.memdesc<2x256x256xi32, #tmem, #ttng.tensor_memory, mutable> -> !ttg.memdesc<256x256xi32, #tmem, #ttng.tensor_memory, mutable, 2x256x256>
+    tt.return
+  }
+}
+""")
+
+
+@gluon.jit
+def smem_and_layout_user(smem, a: ttgl.constexpr):
+    pass
+
+
+def test_layout_mangling():
+
+    @gluon.jit
+    def kernel():
+        a: ttgl.constexpr = ttgl.SwizzledSharedLayout(1, 1, 1, [1, 0])
+        smem = ttgl.allocate_shared_memory(ttgl.int32, [32, 32], a)
+        smem_and_layout_user(smem, a)
+
+    expecttest.assert_expected_inline(
+        run_parser(kernel).str_nodebug(), """\
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
+#smem = #ttg.shared_memory
+module {
+  tt.func public @kernel() attributes {noinline = false} {
+    %0 = ttg.local_alloc : () -> !ttg.memdesc<32x32xi32, #shared, #smem, mutable>
+    tt.call @"smem_and_layout_user__MDi32S32_32SLSSS_1_1_1_constexpr[1]_constexpr[0]____SSSLAS[32, 32]ASMD__(1,)cconstexpr_SwizzledSharedLayout(vec=1, per_phase=1, max_phase=1, order=(constexpr_1_ ,constexpr_0_), ctas_per_cga=None, cta_split_num=None, cta_order=None)_"(%0) : (!ttg.memdesc<32x32xi32, #shared, #smem, mutable>) -> ()
+    tt.return
+  }
+  tt.func private @"smem_and_layout_user__MDi32S32_32SLSSS_1_1_1_constexpr[1]_constexpr[0]____SSSLAS[32, 32]ASMD__(1,)cconstexpr_SwizzledSharedLayout(vec=1, per_phase=1, max_phase=1, order=(constexpr_1_ ,constexpr_0_), ctas_per_cga=None, cta_split_num=None, cta_order=None)_"(%arg0: !ttg.memdesc<32x32xi32, #shared, #smem, mutable>) attributes {noinline = false} {
+    tt.return
+  }
+}
+""")

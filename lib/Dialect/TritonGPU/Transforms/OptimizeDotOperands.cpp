@@ -57,11 +57,10 @@ public:
     auto ctx = getContext();
     auto oldCTALayout = triton::gpu::getCTALayout(srcTy.getEncoding());
     auto newCTALayout = permuteCTALayout(ctx, oldCTALayout, trans.getOrder());
-    assert(succeeded(newCTALayout));
     auto newInnerCvtEnc =
         SwizzledSharedEncodingAttr::get(ctx, cvtEncoding, srcTy.getShape(),
                                         /*order=*/getOrderForMemory(srcTy),
-                                        *newCTALayout, srcTy.getElementType(),
+                                        newCTALayout, srcTy.getElementType(),
                                         /*needTrans=*/true);
     if (newInnerCvtEnc == cvtEncoding)
       return failure();
@@ -129,9 +128,8 @@ public:
     auto ctx = getContext();
     auto newCTALayout =
         permuteCTALayout(ctx, allocEncoding.getCTALayout(), {1, 0});
-    assert(succeeded(newCTALayout));
     auto newInnerEnc = NVMMASharedEncodingAttr::get(
-        getContext(), srcTy.getShape(), newInnerCvtOrder, *newCTALayout,
+        getContext(), srcTy.getShape(), newInnerCvtOrder, newCTALayout,
         srcTy.getElementType(), allocEncoding.getFp4Padded());
 
     MemDescType innerTy =

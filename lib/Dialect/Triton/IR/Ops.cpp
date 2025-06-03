@@ -231,9 +231,10 @@ LogicalResult TransOp::verify() {
   return success();
 }
 
-LogicalResult TransOp::inferReturnTypes(
-    MLIRContext *context, std::optional<Location> location,
-    TransOp::Adaptor adaptor, SmallVectorImpl<Type> &inferredReturnTypes) {
+LogicalResult
+TransOp::inferReturnTypes(MLIRContext *context, std::optional<Location> loc,
+                          TransOp::Adaptor adaptor,
+                          SmallVectorImpl<Type> &inferredReturnTypes) {
 
   // type is the same as the input
   auto argTy = cast<RankedTensorType>(adaptor.getSrc().getType());
@@ -247,9 +248,8 @@ LogicalResult TransOp::inferReturnTypes(
   if (argEncoding) {
     Dialect &dialect = argEncoding.getDialect();
     auto inferLayoutInterface = cast<DialectInferLayoutInterface>(&dialect);
-    if (inferLayoutInterface
-            ->inferTransOpEncoding(argEncoding, shape, order, retEncoding)
-            .failed()) {
+    if (failed(inferLayoutInterface->inferTransOpEncoding(
+            argEncoding, shape, order, retEncoding, loc))) {
       return failure();
     }
   }
@@ -389,7 +389,8 @@ LogicalResult MakeRangeOp::verify() {
 
 //-- ReduceOp --
 static LogicalResult
-inferReduceReturnShape(RankedTensorType argTy, Type retEltTy, int axis,
+inferReduceReturnShape(std::optional<Location> loc, RankedTensorType argTy,
+                       Type retEltTy, int axis,
                        SmallVectorImpl<Type> &inferredReturnTypes) {
   auto retShape = argTy.getShape().vec();
   retShape.erase(retShape.begin() + axis);
@@ -404,10 +405,8 @@ inferReduceReturnShape(RankedTensorType argTy, Type retEltTy, int axis,
     if (argEncoding) {
       Dialect &dialect = argEncoding.getDialect();
       auto inferLayoutInterface = cast<DialectInferLayoutInterface>(&dialect);
-      if (inferLayoutInterface
-              ->inferReduceOpEncoding(argEncoding, axis, retEncoding)
-              .failed()) {
-        llvm::report_fatal_error("failed to infer layout for ReduceOp");
+      if (failed(inferLayoutInterface->inferReduceOpEncoding(
+              argEncoding, axis, retEncoding, loc))) {
         return failure();
       }
     }
@@ -418,29 +417,18 @@ inferReduceReturnShape(RankedTensorType argTy, Type retEltTy, int axis,
   return success();
 }
 
-void ReduceOp::build(OpBuilder &builder, OperationState &state,
-                     ValueRange operands, int axis) {
-  SmallVector<Type> inferredReturnTypes;
-  for (unsigned i = 0; i < operands.size(); ++i) {
-    auto argTy = cast<RankedTensorType>(operands[i].getType());
-    auto retEltTy = argTy.getElementType();
-    (void)inferReduceReturnShape(argTy, retEltTy, axis, inferredReturnTypes);
-  }
-
-  ReduceOp::build(builder, state, inferredReturnTypes, operands, axis);
-}
-
-LogicalResult ReduceOp::inferReturnTypes(
-    MLIRContext *context, std::optional<Location> location, ValueRange operands,
-    DictionaryAttr attributes, OpaqueProperties properties, RegionRange regions,
-    SmallVectorImpl<Type> &inferredReturnTypes) {
+LogicalResult
+ReduceOp::inferReturnTypes(MLIRContext *context, std::optional<Location> loc,
+                           ValueRange operands, DictionaryAttr attributes,
+                           OpaqueProperties properties, RegionRange regions,
+                           SmallVectorImpl<Type> &inferredReturnTypes) {
   Properties *prop = properties.as<Properties *>();
   int axis = prop->axis.getInt();
   for (auto arg : operands) {
     auto argTy = cast<RankedTensorType>(arg.getType());
     auto retEltTy = argTy.getElementType();
-    if (inferReduceReturnShape(argTy, retEltTy, axis, inferredReturnTypes)
-            .failed()) {
+    if (failed(inferReduceReturnShape(loc, argTy, retEltTy, axis,
+                                      inferredReturnTypes))) {
       return failure();
     }
   }
@@ -636,9 +624,8 @@ LogicalResult ExpandDimsOp::inferReturnTypes(
   if (argEncoding) {
     Dialect &dialect = argEncoding.getDialect();
     auto inferLayoutInterface = cast<DialectInferLayoutInterface>(&dialect);
-    if (inferLayoutInterface
-            ->inferExpandDimsOpEncoding(argEncoding, axis, retEncoding, loc)
-            .failed())
+    if (failed(inferLayoutInterface->inferExpandDimsOpEncoding(
+            argEncoding, axis, retEncoding, loc)))
       return emitOptionalError(loc, "failed to infer layout for ExpandDimsOp");
   }
   // create type
@@ -674,10 +661,10 @@ LogicalResult ExpandDimsOp::canonicalize(ExpandDimsOp op,
     // Infer the encoding of the new expand op, if encodings are present.
     Attribute newExpandEnc;
     if (auto srcEnc = srcTy.getEncoding()) {
-      if (cast<DialectInferLayoutInterface>(&srcEnc.getDialect())
-              ->inferExpandDimsOpEncoding(srcEnc, op.getAxis(), newExpandEnc,
-                                          op.getLoc())
-              .failed()) {
+      Dialect &dialect = srcEnc.getDialect();
+      auto inferLayoutInterface = cast<DialectInferLayoutInterface>(&dialect);
+      if (failed(inferLayoutInterface->inferExpandDimsOpEncoding(
+              srcEnc, op.getAxis(), newExpandEnc, op.getLoc()))) {
         return emitOptionalError(op.getLoc(),
                                  "failed to infer layout for ExpandDimsOp");
       }
@@ -719,9 +706,8 @@ OpFoldResult ExpandDimsOp::fold(FoldAdaptor adaptor) {
 //-- ReshapeOp --
 
 void ReshapeOp::build(OpBuilder &builder, OperationState &state,
-                      ArrayRef<int64_t> shape,
-                      TypedValue<RankedTensorType> src) {
-  auto srcTy = src.getType();
+                      ArrayRef<int64_t> shape, Value src, bool allowReorder) {
+  auto srcTy = cast<RankedTensorType>(src.getType());
   auto srcEnc = srcTy.getEncoding();
   Attribute dstEnc;
   if (srcEnc) {
@@ -731,7 +717,7 @@ void ReshapeOp::build(OpBuilder &builder, OperationState &state,
     assert(succeeded(result));
   }
   auto dstTy = RankedTensorType::get(shape, srcTy.getElementType(), dstEnc);
-  build(builder, state, dstTy, src);
+  build(builder, state, dstTy, src, allowReorder);
 }
 
 LogicalResult ReshapeOp::canonicalize(ReshapeOp op, PatternRewriter &rewriter) {
@@ -794,14 +780,14 @@ LogicalResult ReshapeOp::verify() {
   // Check that we can infer the dst encoding from the src encoding
   // and that the inferred dst encoding is the same as the given dst encoding
   Attribute inferredDstEnc;
-  auto result =
-      cast<DialectInferLayoutInterface>(&srcEnc.getDialect())
-          ->inferReshapeOpEncoding(srcTy.getShape(), srcEnc, dstTy.getShape(),
-                                   inferredDstEnc, getLoc());
-  assert(succeeded(result));
-  return cast<DialectInferLayoutInterface>(&srcEnc.getDialect())
-      ->verifyLayoutsAreEqual(dstTy.getShape(), inferredDstEnc, dstEnc,
-                              getLoc());
+  auto layoutInterface =
+      cast<DialectInferLayoutInterface>(&srcEnc.getDialect());
+  auto result = layoutInterface->inferReshapeOpEncoding(
+      srcTy.getShape(), srcEnc, dstTy.getShape(), inferredDstEnc, getLoc());
+  if (failed(result))
+    return failure();
+  return layoutInterface->verifyLayoutsAreEqual(
+      dstTy.getShape(), inferredDstEnc, dstEnc, getLoc());
 }
 
 //-- FpToFpOp --
@@ -1092,11 +1078,10 @@ void JoinOp::build(OpBuilder &builder, OperationState &state, Value lhs,
   Attribute srcEnc = lhsTy.getEncoding();
   Attribute retEnc;
   if (srcEnc) {
-    if (cast<DialectInferLayoutInterface>(&srcEnc.getDialect())
-            ->inferDefaultJoinOpEncoding(srcEnc, retEnc, lhsTy.getShape(),
-                                         /*loc=*/std::nullopt)
-            .failed()) {
-      assert(false && "failed to infer join encoding");
+    if (failed(cast<DialectInferLayoutInterface>(&srcEnc.getDialect())
+                   ->inferDefaultJoinOpEncoding(
+                       srcEnc, retEnc, lhsTy.getShape(), state.location))) {
+      llvm_unreachable("failed to infer join encoding");
     }
   }
   auto retTy = RankedTensorType::get(retShape, lhsTy.getElementType(), retEnc);

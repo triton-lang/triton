@@ -167,7 +167,7 @@ class shared_memory_descriptor_type(base_type):
         return not (self == other)
 
     def mangle(self) -> str:
-        shape_str = "_".join(self.shape)
+        shape_str = "_".join([str(s) for s in self.shape])
         return f"MD{self.element_ty.mangle()}S{shape_str}SL{self.layout.mangle()}LAS{self.alloc_shape}ASMD"
 
 
@@ -290,6 +290,7 @@ def full(shape, value, dtype, layout, _builder=None):
 def allocate_shared_memory(element_ty, shape, layout, value=None, _builder=None):
     element_ty = _unwrap_if_constexpr(element_ty)
     shape = _unwrap_if_constexpr(shape)
+    shape = [_unwrap_if_constexpr(s) for s in shape]
     layout = _unwrap_if_constexpr(layout)
     return semantic.allocate_shared(element_ty, shape, layout, value, _builder)
 
