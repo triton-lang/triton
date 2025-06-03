@@ -485,6 +485,10 @@ for v in list(type_canonicalisation_dict.values()):
     type_canonicalisation_dict[v] = v
 
 
+def get_full_name(fn):
+    return f"{fn.__module__}.{fn.__qualname__}"
+
+
 @dataclass
 class JitFunctionInfo:
     module: ModuleType
@@ -511,7 +515,7 @@ class JITFunction(KernelInterface[T]):
         if not hook:
             return None
 
-        name = self.fn.__name__
+        name = get_full_name(self.fn)
         module = self.fn.__module__
         arg_reprs = ", ".join([f"{param.name}: {ty}" for param, ty in zip(self.params, key[1])])
         repr = f"{name}[num_warps={options.num_warps}, num_ctas={options.num_ctas}, num_stages={options.num_stages}, enable_fp_fusion={options.enable_fp_fusion}, launch_cooperative_grid={options.launch_cooperative_grid}]({arg_reprs})"
@@ -653,7 +657,7 @@ class JITFunction(KernelInterface[T]):
         self.do_not_specialize_on_alignment = do_not_specialize_on_alignment
         self.starting_line_number = inspect.getsourcelines(fn)[1]
         self._repr = repr
-        self._fn_name = fn.__name__
+        self._fn_name = get_full_name(fn)
         self.launch_metadata = launch_metadata
 
         self.params = []
@@ -698,6 +702,7 @@ class JITFunction(KernelInterface[T]):
         # reuse docs of wrapped function
         self.__doc__ = fn.__doc__
         self.__name__ = fn.__name__
+        self.__qualname__ = fn.__qualname__
         self.__globals__ = fn.__globals__
         self.__module__ = fn.__module__
 
@@ -705,7 +710,7 @@ class JITFunction(KernelInterface[T]):
     def cache_key(self):
         # TODO : hash should be attribute of `self`
         if self.hash is None:
-            dependencies_finder = DependenciesFinder(name=self.__name__, globals=self.__globals__, src=self.src)
+            dependencies_finder = DependenciesFinder(name=self._fn_name, globals=self.__globals__, src=self.src)
             dependencies_finder.visit(self.parse())
             self.hash = dependencies_finder.ret + str(self.starting_line_number)
             self.used_global_vals = dict(sorted(dependencies_finder.used_global_vals.items()))
@@ -725,9 +730,9 @@ class JITFunction(KernelInterface[T]):
         import triton.language as tl
         device = driver.active.get_current_device()
         deserialized_obj = json.loads(specialization_data)
-        if deserialized_obj['name'] != self.fn.__name__:
+        if deserialized_obj['name'] != self._fn_name:
             raise RuntimeError(
-                f"Specialization data is for {deserialized_obj['name']} but trying to preload for {self.fn.__name__}")
+                f"Specialization data is for {deserialized_obj['name']} but trying to preload for {self._fn_name}")
         constant_keys = map(tuple, deserialized_obj['constant_keys'])
         constant_vals = deserialized_obj['constant_vals']
         constants = {
@@ -778,7 +783,7 @@ class JITFunction(KernelInterface[T]):
         super().__setattr__('src', new_src)
 
     def __repr__(self):
-        return f"JITFunction({self.module}:{self.fn.__name__})"
+        return f"JITFunction({self.module}:{self.fn.__qualname__})"
 
 
 # -----------------------------------------------------------------------------
