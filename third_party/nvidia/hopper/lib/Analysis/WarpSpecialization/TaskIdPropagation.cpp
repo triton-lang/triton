@@ -8,7 +8,7 @@
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/raw_ostream.h"
 
-#include "triton/Analysis/TaskIdPropagation.h"
+#include "nvidia/hopper/include/Analysis/TaskIdPropagation.h"
 
 #define DEBUG_TYPE "task-id-propagation"
 #define DBGS() (llvm::dbgs() << "[" DEBUG_TYPE "]: ")

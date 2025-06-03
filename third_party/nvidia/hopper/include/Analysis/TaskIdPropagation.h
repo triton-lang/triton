@@ -1,5 +1,5 @@
-#ifndef TRITON_ANALYSIS_TASKIDPROPAGATION_H
-#define TRITON_ANALYSIS_TASKIDPROPAGATION_H
+#ifndef NVHOPPER_ANALYSIS_TASKIDPROPAGATION_H
+#define NVHOPPER_ANALYSIS_TASKIDPROPAGATION_H
 
 #include "mlir/Analysis/DataFlow/SparseAnalysis.h"
 #include "mlir/IR/BuiltinAttributes.h"
@@ -96,4 +96,4 @@ public:
 
 } // namespace mlir::triton::gpu
 
-#endif // TRITON_ANALYSIS_TASKIDPROPAGATION_H
+#endif // NVHOPPER_ANALYSIS_TASKIDPROPAGATION_H

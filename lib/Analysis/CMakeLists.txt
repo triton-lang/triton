@@ -3,7 +3,6 @@ add_triton_library(TritonAnalysis
   Allocation.cpp
   Membar.cpp
   Alias.cpp
-  TaskIdPropagation.cpp
   Utility.cpp
 
   DEPENDS
