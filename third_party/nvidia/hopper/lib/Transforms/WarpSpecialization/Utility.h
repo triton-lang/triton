@@ -20,6 +20,9 @@ bool hasAsyncTaskId(Operation *op, AsyncTaskId asyncTaskId);
 // Sets the async task ids of the given operation.
 void setAsyncTaskIds(Operation *op, ArrayRef<AsyncTaskId> asyncTaskIds);
 
+// Propagate the async task ids of the given operation to its parent ops.
+void labelParentOps(Operation *op);
+
 // Retrieves the async task IDs of all operations nested within the given
 // operation, including the operation itself.
 SmallVector<AsyncTaskId> getNestedAsyncTaskIds(Operation *op);

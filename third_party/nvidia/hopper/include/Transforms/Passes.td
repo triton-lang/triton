@@ -4,7 +4,7 @@
 include "mlir/Pass/PassBase.td"
 
 def NVGPUWarpSpecialization : Pass<"nvgpu-warp-specialization", "mlir::ModuleOp"> {
-  let summary = "Automaticl Warp specialization for NVIDIA GPU";
+  let summary = "Automatic Warp specialization for NVIDIA GPU";
 
   let description = [{
     This pass automatically partitions user-defined kernels into
@@ -26,6 +26,24 @@ def NVGPUTestWSTaskPartition : Pass<"nvgpu-test-ws-task-partition", "mlir::Modul
   let description = "This pass computes a warp schedule partition by annoating anchor operations with async task ids";
 
   let dependentDialects = ["mlir::triton::gpu::TritonGPUDialect"];
+  let options = [
+    Option<"numWarpGroups", "num-warp-groups",
+           "int32_t", /*default*/"0",
+           "number of warp groups for warp specialization">
+  ];
+}
+
+def NVGPUTestWSTaskIdPropagate : Pass<"nvgpu-test-taskid-propagate", "mlir::ModuleOp"> {
+  let summary = "test warp specialization task id propagation";
+
+  let description = [{
+    This pass propagates the `async_task_id` annotation to the dependencies
+    of any op that has it set.  This has the functional effect of partitioning
+    the graph into multiple async tasks, based on the initial annotation.
+  }];
+
+  let dependentDialects = ["mlir::triton::gpu::TritonGPUDialect"];
+
   let options = [
     Option<"numWarpGroups", "num-warp-groups",
            "int32_t", /*default*/"0",
