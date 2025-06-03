@@ -15,9 +15,10 @@ def key_to_fpval(x):
     tl.static_assert(x.dtype.is_int_unsigned(), "floating-point value must be passed as bits")
     tm: tl.constexpr = 1 << (-1 + x.dtype.primitive_bitwidth)
     fm: tl.constexpr = (1 << x.dtype.primitive_bitwidth) - 1
-    return x ^ tl.where((x & tm) == 0, fm, tm)
+    return (x ^ tl.where((x & tm) == 0, fm, tm)).to(x.dtype)
 
 
+# stable top-k tie-breaks to value with smaller index
 @triton.jit
 def indx_to_key(indx, N_EXPTS_PAD: tl.constexpr):
     return N_EXPTS_PAD - indx
@@ -34,7 +35,8 @@ def streaming_topk(X, stride_xm, n_expts_tot, offs_m, mask_m, N_EXPTS_PAD: tl.co
     x_nbits: tl.constexpr = X.dtype.element_ty.primitive_bitwidth
     x_utype: tl.constexpr = tl.dtype(f"uint{x_nbits}")
     x_ultype: tl.constexpr = tl.dtype(f"uint{2*x_nbits}")
-    x_dbtype: tl.constexpr = tl.dtype(f"fp{2*x_nbits}")
+    x_dtype: tl.constexpr = tl.dtype(f"fp{x_nbits}")
+    x_umask: tl.constexpr = (1 << x_nbits) - 1
 
     # subtract 1 from loop iterations because we peel the first (masked) iteration:
     loop_iterations: tl.constexpr = N_EXPTS_PAD // BLOCK_N - 1
@@ -59,12 +61,14 @@ def streaming_topk(X, stride_xm, n_expts_tot, offs_m, mask_m, N_EXPTS_PAD: tl.co
         acc = tl.maximum(acc, tl.topk(x, N_EXPTS_ACT, dim=1))
 
     acc = tl.sort(acc, dim=1, descending=True)
-    acc_values = key_to_fpval((acc >> x_nbits).to(x_utype))
-    acc_indices = key_to_indx(acc & 0x0000FFFF, N_EXPTS_PAD)
-    acc = (acc_values.to(x_ultype) << x_nbits) | acc_indices
-    acc = acc.to(x_dbtype, bitcast=True)
-
-    return acc
+    # sort in ascending order of index
+    acc = (key_to_indx(acc & 0x0000FFFF, N_EXPTS_PAD) << x_nbits) | (acc >> x_nbits)
+    acc = tl.sort(acc, dim=1)
+    acc = (acc << x_nbits) | (acc >> x_nbits)
+    # unpack and return values / indx
+    vals = key_to_fpval((acc >> x_nbits).to(x_utype)).to(x_dtype, bitcast=True)
+    indx = acc & x_umask
+    return vals, indx
 
 
 @triton.jit
@@ -91,9 +95,6 @@ def _topk_forward(X, stride_xm,  # inputs
     tl.static_assert(BLOCK_N % 32 == 0)
     tl.static_assert(N_EXPTS_PAD % BLOCK_N == 0)
     x_dtype: tl.constexpr = X.dtype.element_ty
-    x_nbits: tl.constexpr = X.dtype.element_ty.primitive_bitwidth
-    x_utype: tl.constexpr = tl.dtype(f"uint{x_nbits}")
-    x_ultype: tl.constexpr = tl.dtype(f"uint{2*x_nbits}")
 
     # load logits
     offs_m = pid * BLOCK_M + tl.arange(0, BLOCK_M)
@@ -105,10 +106,8 @@ def _topk_forward(X, stride_xm,  # inputs
         Xv_ptrs = X + offs_m[:, None] * stride_xm + y_indices
         y_values = tl.load(Xv_ptrs, mask=mask_m)
     else:
-        y = streaming_topk(X, stride_xm, n_expts_tot, offs_m, mask_m, N_EXPTS_PAD, N_EXPTS_ACT, BLOCK_N)
-        y = y.to(x_ultype, bitcast=True)
-        y_indices = y & 0x0000FFFF
-        y_values = (y >> x_nbits).to(x_utype).to(x_dtype, bitcast=True)
+        y_values, y_indices = streaming_topk(X, stride_xm, n_expts_tot, offs_m, mask_m,  #
+                                             N_EXPTS_PAD, N_EXPTS_ACT, BLOCK_N)
 
     # normalize selected values
     if APPLY_SOFTMAX:

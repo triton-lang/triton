@@ -82,3 +82,7 @@ class TopK(torch.autograd.Function):
 def topk(x, k, apply_softmax=True, dim=1, return_bitmatrix=True, y_indx=None, n_rows=None):
     ret = TopK.apply(x, k, apply_softmax, dim, return_bitmatrix, y_indx, n_rows)
     return ret
+
+
+# x = torch.randn((32, 32), dtype=torch.float16, device="cuda")
+# print(topk(x, 4))

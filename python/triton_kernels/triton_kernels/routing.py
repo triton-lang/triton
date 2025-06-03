@@ -299,6 +299,9 @@ def routing_torch(logits, n_expts_act, sm_first=False, expt_indx=None, n_rows=No
     expt_scal, expt_indx = topk(logits, n_expts_act, expt_indx)
     if not sm_first:
         expt_scal = torch.softmax(expt_scal, dim=-1)
+    # sort each token's selections by expert
+    expt_indx, sort_indices = torch.sort(expt_indx, dim=1)
+    expt_scal = torch.gather(expt_scal, 1, sort_indices)
     # flatten topk data
     expt_scal = expt_scal.reshape(-1)
     expt_indx = expt_indx.reshape(-1).to(torch.int32)
