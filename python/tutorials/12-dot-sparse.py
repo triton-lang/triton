@@ -8,28 +8,61 @@ torch.manual_seed(42)
 random.seed(42)
 
 
+def is_cuda():
+    return triton.runtime.driver.active.get_current_target().backend == "cuda"
+
+
 def get_autotune_config():
     configs = []
-    for BLOCK_M in [16, 32, 64, 128]:
-        for BLOCK_N in [16, 32, 64, 128]:
-            for BLOCK_K in [16, 32, 64, 128]:
-                for num_warps in [1, 2, 4, 8]:
-                    for num_stages in [1]:
-                        for GROUP_SIZE_M in [4]:
-                            configs.append(
-                                triton.Config(
-                                    {
-                                        "BLOCK_SIZE_M": BLOCK_M,
-                                        "BLOCK_SIZE_N": BLOCK_N,
-                                        "BLOCK_SIZE_K": BLOCK_K,
-                                        "GROUP_SIZE_M": GROUP_SIZE_M,
-                                    },
-                                    num_stages=num_stages,
-                                    num_warps=num_warps,
-                                ), )
+    for BLOCK_M in [32, 64, 128]:
+        for BLOCK_N in [32, 64]:
+            for BLOCK_K in [64, 128]:
+                for num_warps in [4, 8]:
+                    for num_stages in [1, 2, 3]:
+                        for GROUP_SIZE_M in [8]:
+                            for waves_per_eu in [2]:
+                                configs.append(
+                                    triton.Config(
+                                        {
+                                            "BLOCK_SIZE_M": BLOCK_M,
+                                            "BLOCK_SIZE_N": BLOCK_N,
+                                            "BLOCK_SIZE_K": BLOCK_K,
+                                            "GROUP_SIZE_M": GROUP_SIZE_M,
+                                            "waves_per_eu": waves_per_eu,
+                                        },
+                                        num_stages=num_stages,
+                                        num_warps=num_warps,
+                                    ), )
+    """
+    return [
+        triton.Config(
+            {'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 256, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 8, 'waves_per_eu': 2},
+            num_warps=4, num_stages=2),
+        triton.Config(
+            {'BLOCK_SIZE_M': 256, 'BLOCK_SIZE_N': 256, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 8, 'waves_per_eu': 2},
+            num_warps=8, num_stages=2),
+        triton.Config(
+            {'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 128, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 8, 'waves_per_eu': 2},
+            num_warps=8, num_stages=2),
+        triton.Config(
+            {'BLOCK_SIZE_M': 64, 'BLOCK_SIZE_N': 256, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 8, 'waves_per_eu': 3},
+            num_warps=4, num_stages=2),
+        triton.Config(
+            {'BLOCK_SIZE_M': 64, 'BLOCK_SIZE_N': 64, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 8, 'waves_per_eu': 8},
+            num_warps=4, num_stages=2),
+        triton.Config(
+            {'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 64, 'BLOCK_SIZE_K': 128, 'GROUP_SIZE_M': 8, 'waves_per_eu': 2},
+            num_warps=8, num_stages=2),
+    ]
+    """
+
     return configs
 
 
+@triton.autotune(
+    configs=get_autotune_config(),
+    key=['M', 'N', 'K'],
+)
 @triton.heuristics(values={
     "EVEN_K": lambda args: args["K"] % args["BLOCK_SIZE_K"] == 0,
 })
@@ -222,7 +255,7 @@ def compress(A):
     return aSparse.cuda(), aMeta.cuda()
 
 
-def matmul(aSparse, aMeta, b, config):
+def matmul(aSparse, aMeta, b):
     # Check constraints.
     assert aSparse.shape[1] * 2 == b.shape[0], "Incompatible dimensions"
     assert aMeta.shape[1] * 16 == b.shape[0], "Incompatible dimensions"
@@ -234,12 +267,7 @@ def matmul(aSparse, aMeta, b, config):
     acc_dtype = torch.bfloat16 if b.dtype == torch.bfloat16 else torch.float16
     # Allocates output.
     c = torch.zeros((M, N), device=b.device, dtype=acc_dtype)
-    # 1D launch kernel where each block gets its own program.
     grid = lambda META: (triton.cdiv(M, META["BLOCK_SIZE_M"]) * triton.cdiv(N, META["BLOCK_SIZE_N"]), )
-    block_m = config.kwargs['BLOCK_SIZE_M']
-    block_n = config.kwargs['BLOCK_SIZE_N']
-    block_k = config.kwargs['BLOCK_SIZE_K']
-    group_m = config.kwargs['GROUP_SIZE_M']
     matmul_kernel_sparse[grid](
         aSparse,
         b,
@@ -256,12 +284,6 @@ def matmul(aSparse, aMeta, b, config):
         c.stride(1),  #
         aMeta.stride(0),
         aMeta.stride(1),
-        BLOCK_SIZE_M=block_m,
-        BLOCK_SIZE_N=block_n,
-        BLOCK_SIZE_K=block_k,
-        GROUP_SIZE_M=group_m,
-        num_stages=config.num_stages,
-        num_warps=config.num_warps,
         USE_BF16=acc_dtype is torch.bfloat16,
     )
 
@@ -269,7 +291,7 @@ def matmul(aSparse, aMeta, b, config):
 
 
 def test_sparse_matrix(dtype):
-    test_dim = 512
+    test_dim = 1024
 
     a = make_sparse(torch.randn((test_dim, test_dim), device="cuda", dtype=torch.float16))
     print("Running sparse compression in Python... this can be quite slow, be patient!")
@@ -278,8 +300,8 @@ def test_sparse_matrix(dtype):
 
     a = a.to(dtype)
     aSparse = aSparse.to(dtype)
+    b = b.T  # .contiguous().T.contiguous()
     b = b.to(dtype)
-    b = b.T.contiguous().T
 
     print("Autotuning... set TRITON_PRINT_AUTOTUNING=1 to see logs here...")
     print("aMeta: ", aMeta)
@@ -290,7 +312,7 @@ def test_sparse_matrix(dtype):
                                         use_fast_accum=True)
     else:
         torch_output = torch.matmul(a, b)
-
+    """
     for config in get_autotune_config():
         print("Testing Config: ", config)
         triton_output = matmul(aSparse, aMeta, b, config)
@@ -306,18 +328,18 @@ def test_sparse_matrix(dtype):
             print("FAILED: Triton and Torch differ! ❌")
             print("Triton output: ", triton_output)
             print("torch output: ", torch_output)
+    """
 
     print("report best performance")
-    best_triton_flops = 0.0
-    for config in get_autotune_config():
-        ms = triton.testing.do_bench(lambda: matmul(aSparse, aMeta, b, config))
-        flops = 2 * test_dim * test_dim * test_dim * 1e-12 / (ms * 1e-3)
-        best_triton_flops = max(best_triton_flops, flops)
-    print(f"Triton Perf: {best_triton_flops} TFLOPS")
+    quantiles = [0.5, 0.2, 0.8]
+    ms, min_ms, max_ms = triton.testing.do_bench(lambda: matmul(aSparse, aMeta, b), quantiles=quantiles, warmup=20,
+                                                 rep=100)
+    flops = 2 * test_dim * test_dim * test_dim * 1e-12 / (ms * 1e-3)
+    print(f"Triton Perf: {flops} TFLOPS")
 
     if dtype == torch.float8_e4m3fnuz:
         ms_torch = triton.testing.do_bench(lambda: torch._scaled_mm(a, b, scale_a=one_device, scale_b=one_device,
-                                                                    out_dtype=torch.float16, use_fast_accum=True))
+                                                                    out_dtype=torch.float32, use_fast_accum=False))
     else:
         ms_torch = triton.testing.do_bench(lambda: torch.matmul(a, b))
     flops = 2 * test_dim * test_dim * test_dim * 1e-12 / (ms_torch * 1e-3)
@@ -325,8 +347,68 @@ def test_sparse_matrix(dtype):
 
 
 # On MI300x, torch.float8_e4m3fnuz is used instead of torch.float8_e4m3fn
-dtypes = [torch.bfloat16, torch.float16, torch.float8_e4m3fnuz]
+# dtypes = [torch.bfloat16, torch.float16, torch.float8_e4m3fnuz]
+#dtypes = [torch.float8_e4m3fnuz]
+#for dtype in dtypes:
+#    print(f"Running dot_sparse with dtype={dtype}")
+#    test_sparse_matrix(dtype)
 
-for dtype in dtypes:
-    print(f"Running dot_sparse with dtype={dtype}")
-    test_sparse_matrix(dtype)
+ref_lib = 'cuBLAS' if is_cuda() else 'rocBLAS'
+
+configs = []
+for fp8_inputs in [True]:
+    configs.append(
+        triton.testing.Benchmark(
+            x_names=["M", "N", "K"],  # Argument names to use as an x-axis for the plot
+            x_vals=[512, 1024, 2048, 4096, 8192],  # Different possible values for `x_name`
+            line_arg="provider",  # Argument name whose value corresponds to a different line in the plot
+            # Possible values for `line_arg`
+            # Don't compare to cublas for fp8 cases as torch.matmul doesn't support fp8 at the moment.
+            line_vals=[ref_lib.lower(), "triton"],  # Label name for the lines
+            line_names=[ref_lib, "Triton"],  # Line styles
+            styles=[("green", "-"), ("blue", "-")],
+            ylabel="TFLOPS",  # Label name for the y-axis
+            plot_name="sparse-matmul-performance-" +
+            ("fp16" if not fp8_inputs else "fp8"),  # Name for the plot, used also as a file name for saving the plot.
+            args={"fp8_inputs": fp8_inputs},
+        ))
+
+# prealloc scaled mm constant for fp8 gemm
+one_device = torch.tensor(1.0, device="cuda")
+
+
+@triton.testing.perf_report(configs)
+def benchmark(M, N, K, provider, fp8_inputs):
+    print(M, N, K)
+
+    a = make_sparse(torch.randn((M, K), device="cuda", dtype=torch.float16))
+    b = torch.randn((K, N), device="cuda", dtype=torch.float16)
+
+    if fp8_inputs:
+        dtype = torch.float8_e4m3fnuz
+    else:
+        dtype = torch.float16
+
+    b = b.T
+    b = b.to(dtype)
+
+    quantiles = [0.5, 0.2, 0.8]
+    if provider == ref_lib.lower():
+        a = a.to(dtype)
+        if dtype == torch.float8_e4m3fnuz:
+            ms, min_ms, max_ms = triton.testing.do_bench(
+                lambda: torch._scaled_mm(a, b, scale_a=one_device, scale_b=one_device, out_dtype=torch.float16,
+                                         use_fast_accum=False), quantiles=quantiles)
+        else:
+            ms, min_ms, max_ms = triton.testing.do_bench(lambda: torch.matmul(a, b), quantiles=quantiles)
+    elif provider == 'triton':
+        print("Running sparse compression in Python... this can be quite slow, be patient!")
+        aSparse, aMeta = compress(a)
+        a = a.to(dtype)
+        aSparse = aSparse.to(dtype)
+        ms, min_ms, max_ms = triton.testing.do_bench(lambda: matmul(aSparse, aMeta, b), quantiles=quantiles)
+    perf = lambda ms: 2 * M * N * K * 1e-12 / (ms * 1e-3)
+    return perf(ms), perf(max_ms), perf(min_ms)
+
+
+benchmark.run(show_plots=True, print_data=True)

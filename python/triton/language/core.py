@@ -2086,7 +2086,7 @@ def dot_scaled(lhs, lhs_scale, lhs_format, rhs, rhs_scale, rhs_format, acc=None,
 
 
 @builtin
-def dot_sparse(input, other, input_meta, acc=None, _builder=None):
+def dot_sparse(input, other, input_meta, acc=None, _semantic=None):
     """
     Returns the matrix product of two blocks and a third metadata block, where the first block is 2:4 structurally sparse and the second block is dense.
     The third metadata block describes which 2 out of 4 consecutive elements in the first input are zero.
@@ -2103,7 +2103,7 @@ def dot_sparse(input, other, input_meta, acc=None, _builder=None):
     :param acc: The accumulator tensor. If not None, the result is added to this tensor.
     :type acc: 2D or 3D tensor of scalar-type in {:code:`float32`}
     """
-    return semantic.dot_sparse(input, other, input_meta, acc, _builder)
+    return _semantic.dot_sparse(input, other, input_meta, acc)
 
 
 # -----------------------
