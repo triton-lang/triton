@@ -266,7 +266,8 @@ def compute_expt_data_torch(hist, n_expts_tot, n_gates):
     # offset for each experts
     device = hist.device
     token_offs_raw = torch.cumsum(hist, dim=0)
-    token_offs_raw = torch.cat((torch.zeros(1, dtype=torch.int32, device=device), token_offs_raw))
+    token_offs_raw = torch.cat((torch.zeros(1, device=device), token_offs_raw))
+    token_offs_raw = token_offs_raw.int()
     # maximum number of tiles for all values of `block_m` considered
     block_ms = [16, 32, 64, 128]
     if n_gates <= n_expts_tot:
@@ -281,13 +282,15 @@ def compute_expt_data_torch(hist, n_expts_tot, n_gates):
     for block_m in [16, 32, 64, 128]:
         n_tiles = (hist + block_m - 1) // block_m  # matmul blocks needed
         token_offs_pad[block_m] = torch.cumsum(n_tiles, dim=0)
-        token_offs_pad[block_m] = torch.cat((torch.zeros(1, dtype=torch.int32, device=device), token_offs_pad[block_m]))
+        token_offs_pad[block_m] = torch.cat((torch.zeros(1, device=device), token_offs_pad[block_m]))
+        token_offs_pad[block_m] = token_offs_pad[block_m].int()
         # compute data required to drive ragged batch matmul
-        block_pid_map[block_m] = -torch.ones(max_n_tiles, dtype=torch.int32, device=device)
+        block_pid_map[block_m] = -torch.ones(max_n_tiles, device=device)
         for e in range(n_expts_tot):
             offset = token_offs_pad[block_m][e]
             for b in range(n_tiles[e]):
                 block_pid_map[block_m][offset + b] = (b << 16) + e
+        block_pid_map[block_m] = block_pid_map[block_m].int()
     return ExptData(hist, token_offs_raw, token_offs_pad, block_pid_map)
 
 
@@ -324,7 +327,7 @@ def routing_torch(logits, n_expts_act, sm_first=False, expt_indx=None, n_rows=No
     topk_indx = torch.argsort(expt_indx, stable=True)
     gate_indx = torch.argsort(topk_indx, stable=True)
     gate_scal = expt_scal[topk_indx]
-    hist = torch.histc(expt_indx, bins=n_expts_tot, max=n_expts_tot - 1)  # histogram of tokens over experts
+    hist = torch.histc(expt_indx, bins=n_expts_tot, max=n_expts_tot - 1).int()  # histogram of tokens over experts
     # pack the matmul data structure
     gather_indx = GatherIndx(src_indx=topk_indx.int(), dst_indx=gate_indx.int())
     scatter_indx = ScatterIndx(src_indx=gate_indx.int(), dst_indx=topk_indx.int())
