@@ -1552,32 +1552,43 @@ chooseMfmaLikeStoreLayout(RankedTensorType valType) {
   Correspondingly, the transposed mfma16 layout, the output of
   transposed of mfma16x16 is:
 
-              N/register and "r"in the table is for row.
-             ---------------------------------------------------------------------------------------------
-  M/Lane     |v0r0|v1r0|v0r1|v1r1|v0r2|v1r2  |v0r3  |v1r3  |v2r0|v3r0|v2r1|v3r1|v2r2|v3r2  |v2r3  |v3r3  |
-             |----|----|----|----|----|------|------|------|----|----|----|----|----|------|------|------|
-          0  |n0:1|n2:3|n4:5|n6:7|n8:9|n10:11|n12:13|n14:15|n0:1|n2:3|n4:5|n6:7|n8:9|n10:11|n12:13|n14:15|
-             |----|----|----|----|----|------|------|------|----|----|----|----|----|------|------|------|
-          1  |n0:1|n2:3|n4:5|n6:7|n8:9|n10:11|n12:13|n14:15|n0:1|n2:3|n4:5|n6:7|n8:9|n10:11|n12:13|n14:15|
-             |----|----|----|----|----|------|------|------|----|----|----|----|----|------|------|------|
-          .. |n0:1|n2:3|n4:5|n6:7|n8:9|n10:11|n12:13|n14:15|n0:1|n2:3|n4:5|n6:7|n8:9|n10:11|n12:13|n14:15|
-             |----|----|----|----|----|------|------|------|----|----|----|----|----|------|------|------|
-          15 |n0:1|n2:3|n4:5|n6:7|n8:9|n10:11|n12:13|n14:15|n0:1|n2:3|n4:5|n6:7|n8:9|n10:11|n12:13|n14:15|
-             ---------------------------------------------------------------------------------------------
+              N/register
+  M/Lane          v0       v1       v2       v3       v4       v5       v6       v7
+              -------------------------------------------------------------------------
+  row0:  0-15 | tile-0 | tile-0 | tile-0 | tile-0 | tile-1 | tile-1 | tile-1 | tile-1 |
+              -------------------------------------------------------------------------
+  row1: 16-31 | tile-0 | tile-0 | tile-0 | tile-0 | tile-1 | tile-1 | tile-1 | tile-1 |
+              -------------------------------------------------------------------------
+  row2: 32-47 | tile-0 | tile-0 | tile-0 | tile-0 | tile-1 | tile-1 | tile-1 | tile-1 |
+              -------------------------------------------------------------------------
+  row3: 48-63 | tile-0 | tile-0 | tile-0 | tile-0 | tile-1 | tile-1 | tile-1 | tile-1 |
+              -------------------------------------------------------------------------
+  which means:
+  The columns from v0 to v3 are in the one output of mfma16x16 and
+  the columns from v4 to v7 are in the one output of mfma16x16,
+  The basis vector for lane and register are:
+  Register = {{0, 1}, {0, 2}}
+  Lane = {{1, 0}, {2, 0}, {4, 0}, {8, 0}, {0, 4}, {0, 8}}
+  With this layout, only 4xfp16 can be packed in the final global store.
 
-  To pack 8 elements with 16-bits type we need to put the elements per row are
-  contiuous, so the expetecd layout is, for fp16 type:
-  1x8 fp16  1x8 fp16  1x8 fp16  1x8 fp16
-  -------------------------------------
-  |t0      | t32     | t16     | t48  |
-  -------------------------------------
-  |t1      | t33     | t17     | t49  |
-  -------------------------------------
-  |..      | ..      | ..      | ..   |
-  -------------------------------------
-  |t15     | t47     | t31     | t63  |
-  -------------------------------------
-  This would mean exchange the 2nd and 4th elements in the basis vector from an
+  To use 128-bits global store, we need to pack 8 elements, which means the layout looks like:
+              N/register
+  M/Lane          v0       v1       v2       v3       v4       v5       v6       v7
+              -------------------------------------------------------------------------
+  row0:  0-15 | tile-0 | tile-0 | tile-0 | tile-0 | tile-0 | tile-0 | tile-0 | tile-0 |
+              -------------------------------------------------------------------------
+  row1: 16-31 | tile-1 | tile-1 | tile-1 | tile-1 | tile-1 | tile-1 | tile-1 | tile-1 |
+              -------------------------------------------------------------------------
+  row2: 32-47 | tile-0 | tile-0 | tile-0 | tile-0 | tile-0 | tile-0 | tile-0 | tile-0 |
+              -------------------------------------------------------------------------
+  row3: 48-63 | tile-1 | tile-1 | tile-1 | tile-1 | tile-1 | tile-1 | tile-1 | tile-1 |
+              -------------------------------------------------------------------------
+  And basis vector for lane and register are:
+  Register = {{0, 1}, {0, 2}, {0, 4}}
+  Lane = {{1, 0}, {2, 0, [4, 0}, {8, 0}, {0, 16}, {0, 8}}
+
+  The steps to get this layout are, firstly we check the last dim of WarpsPerCTA is 1, so we can use v_permlane16.
+  Then, we exchange the 2nd and 4th elements in the basis vector from an
   identity linear layout on tensor elements, for the NDim.
   clang-format on
   */
