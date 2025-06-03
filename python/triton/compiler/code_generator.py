@@ -1,4 +1,5 @@
 import ast
+import copy
 import inspect
 import re
 import warnings
@@ -12,7 +13,7 @@ from .. import knobs, language
 from .._C.libtriton import ir, gluon_ir
 from ..language import constexpr, semantic, str_to_ty, tensor
 from ..language.core import _unwrap_if_constexpr, base_value, base_type
-from ..runtime.jit import get_jit_fn_file_line
+from ..runtime.jit import get_jit_fn_file_line, get_full_name
 # ideally we wouldn't need any runtime component
 from ..runtime import JITFunction
 from .._utils import find_paths_if, get_iterable_path, set_iterable_path
@@ -135,10 +136,9 @@ class ContainsReturnChecker(ast.NodeVisitor):
         return any(self.visit(s) for s in body)
 
     def _visit_function(self, fn) -> bool:
-        # Currently we only support JITFunctions defined in the global scope
-        if isinstance(fn, JITFunction) and not fn.noinline:
-            fn_node = fn.parse()
-            return ContainsReturnChecker(self.gscope).visit(fn_node)
+        # no need to check within the function as it won't cause an early return.
+        # If the function itself has unstructured control flow we may not be able to inline it causing poor performance.
+        # We should check for this and fail or emit a warning.
         return False
 
     def generic_visit(self, node) -> bool:
@@ -315,6 +315,7 @@ class CodeGenerator(ast.NodeVisitor):
         self.jit_fn = jit_fn
         # TODO: we currently generate illegal names for non-kernel functions involving constexprs!
         if is_kernel:
+            function_name = function_name[function_name.rfind('.') + 1:]
             function_name = check_identifier_legality(function_name, "function")
         self.function_name = function_name
         self.is_kernel = is_kernel
@@ -566,16 +567,14 @@ class CodeGenerator(ast.NodeVisitor):
         return self.visit_Assign(node)
 
     def assignTarget(self, target, value):
+        assert isinstance(target.ctx, ast.Store)
         if isinstance(target, ast.Subscript):
-            assert target.ctx.__class__.__name__ == "Store"
             return self.visit_Subscript_Store(target, value)
         if isinstance(target, ast.Tuple):
-            assert target.ctx.__class__.__name__ == "Store"
             for i, name in enumerate(target.elts):
                 self.set_value(self.visit(name), value.values[i])
             return
         if isinstance(target, ast.Attribute):
-            assert target.ctx.__class__.__name__ == "Store"
             base = self.visit(target.value)
             setattr(base, target.attr, value)
             return
@@ -601,12 +600,12 @@ class CodeGenerator(ast.NodeVisitor):
         self.assignTarget(targets[0], values)
 
     def visit_AugAssign(self, node):
-        name = node.target.id
-        lhs = ast.Name(id=name, ctx=ast.Load())
+        lhs = copy.deepcopy(node.target)
+        lhs.ctx = ast.Load()
         rhs = ast.BinOp(lhs, node.op, node.value)
         assign = ast.Assign(targets=[node.target], value=rhs)
         self.visit(assign)
-        return self.dereference_name(name)
+        return self.visit(lhs)
 
     def visit_Name(self, node):
         if type(node.ctx) is ast.Store:
@@ -996,7 +995,7 @@ class CodeGenerator(ast.NodeVisitor):
             ast.NodeVisitor.generic_visit(self, stmt)
 
     def visit_Subscript_Load(self, node):
-        assert node.ctx.__class__.__name__ == "Load"
+        assert isinstance(node.ctx, ast.Load)
         lhs = self.visit(node.value)
         slices = self.visit(node.slice)
         if _is_triton_tensor(lhs):
@@ -1004,7 +1003,7 @@ class CodeGenerator(ast.NodeVisitor):
         return lhs[slices]
 
     def visit_Subscript_Store(self, node, value):
-        assert node.ctx.__class__.__name__ == "Store"
+        assert isinstance(node.ctx, ast.Store)
         lhs = self.visit(node.value)
         slices = self.visit(node.slice)
         assert isinstance(lhs, language.tuple)
@@ -1202,7 +1201,7 @@ class CodeGenerator(ast.NodeVisitor):
         args_path = find_paths_if(args, lambda _, x: not _is_constexpr(x))
         args_val = [get_iterable_path(args, path) for path in args_path]
         # mangle
-        fn_name = mangle_fn(fn.__name__, [arg.type for arg in args_val], args_cst)
+        fn_name = mangle_fn(get_full_name(fn), [arg.type for arg in args_val], args_cst)
         # generate function def if necessary
         if not self.module.has_function(fn_name):
             gscope = fn.__globals__

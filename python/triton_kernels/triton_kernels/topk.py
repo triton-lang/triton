@@ -3,7 +3,7 @@ from .topk_details._topk import _topk
 from .bitmatrix import Bitmatrix
 
 
-def topk(x, k, dim=1, return_bitmatrix=True, y_indx=None):
+def topk(x, k, apply_softmax=True, dim=1, return_bitmatrix=True, y_indx=None):
     cdiv = lambda a, b: (a + b - 1) // b
     BLOCK_M = 32
     BLOCK_N = 32
@@ -39,5 +39,5 @@ def topk(x, k, dim=1, return_bitmatrix=True, y_indx=None):
         S, BLOCK_S, s_blocks,  # thing to memset to zero
         BLOCK_M=BLOCK_M, BLOCK_N=BLOCK_N,  # tunable parameter
         N_EXPTS_PAD=n_cols_pad, N_EXPTS_ACT=k,  # constants
-    )
+        APPLY_SOFTMAX=apply_softmax)
     return y_vals, y_indx, Bitmatrix(bitmatrix, [n_rows, n_cols], S)

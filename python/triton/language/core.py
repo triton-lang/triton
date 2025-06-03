@@ -14,7 +14,7 @@ import inspect
 
 from .._C.libtriton import ir
 from . import semantic
-from ._utils import TRITON_MAX_TENSOR_NUMEL, validate_block_shape
+from .._utils import TRITON_MAX_TENSOR_NUMEL, validate_block_shape, get_primitive_bitwidth
 
 T = TypeVar('T')
 
@@ -139,7 +139,59 @@ class const:
     pass
 
 
-class constexpr:
+class base_value:
+    """Base class of values that exist in the triton IR (i.e. not constexprs).
+    """
+    type: base_type
+
+    def _flatten_ir(self, handles: List[ir.value]) -> None:
+        """Flatten frontend value into a sequence of mlir handles, which are appended
+        to the output list
+        """
+        raise NotImplementedError
+
+
+class base_type:
+
+    def __eq__(self, other):
+        raise NotImplementedError("Types must implement __eq__")
+
+    def __ne__(self, other):
+        return not (self == other)
+
+    def _unflatten_ir(self, handles: List[ir.value], cursor: int) -> Tuple[base_value, int]:
+        """Build a frontend value with the current dtype, wrapping a list of existing handles.
+        cursor is the index of the first handle relevant to this value, and the function
+        should return the updated cursor position after any handles consumed by the created value.
+        """
+        raise NotImplementedError
+
+    def mangle(self) -> str:
+        raise NotImplementedError(f"NYI: Type mangling for type {self.__class__}")
+
+    def _flatten_ir_types(self, builder: ir.builder, out: List[ir.type]) -> None:
+        raise NotImplementedError
+
+
+class constexpr_type(base_type):
+
+    def __init__(self, value):
+        self.value = value
+
+    def __repr__(self) -> str:
+        return f"constexpr[{self.value}]"
+
+    def mangle(self) -> str:
+        return repr(self)
+
+    def _flatten_ir_types(self, builder: ir.builder, out: List[ir.type]) -> None:
+        return
+
+    def _unflatten_ir(self, handles: List[ir.value], cursor: int) -> Tuple[base_value, int]:
+        return constexpr(self.value), cursor
+
+
+class constexpr(base_value):
     """
     This class is used to store a value that is known at compile-time.
     """
@@ -149,10 +201,13 @@ class constexpr:
             self.value = value.value
         else:
             self.value = value
-        self.type = constexpr
+        self.type = constexpr_type(value)
 
     def __repr__(self) -> str:
         return f"constexpr[{self.value}]"
+
+    def _flatten_ir(self, handles: List[ir.value]) -> None:
+        return
 
     def __index__(self):
         return self.value
@@ -322,40 +377,6 @@ def check_bit_width(value, shift_value):
             )
 
 
-class base_value:
-    """Base class of values that exist in the triton IR (i.e. not constexprs).
-    """
-    type: base_type
-
-    def _flatten_ir(self, handles: List[ir.value]) -> None:
-        """Flatten frontend value into a sequence of mlir handles, which are appended
-        to the output list
-        """
-        raise NotImplementedError
-
-
-class base_type:
-
-    def __eq__(self, other):
-        raise NotImplementedError("Types must implement __eq__")
-
-    def __ne__(self, other):
-        return not (self == other)
-
-    def _unflatten_ir(self, handles: List[ir.value], cursor: int) -> Tuple[base_value, int]:
-        """Build a frontend value with the current dtype, wrapping a list of existing handles.
-        cursor is the index of the first handle relevant to this value, and the function
-        should return the updated cursor position after any handles consumed by the created value.
-        """
-        raise NotImplementedError
-
-    def mangle(self) -> str:
-        raise NotImplementedError(f"NYI: Type mangling for type {self.__class__}")
-
-    def _flatten_ir_types(self, builder: ir.builder, out: List[ir.type]) -> None:
-        raise NotImplementedError
-
-
 # -----------------------
 # dtype
 # -----------------------
@@ -381,55 +402,43 @@ class dtype(base_type):
         name = _unwrap_if_constexpr(name)
         self.name = name
         assert name in dtype.SINT_TYPES + dtype.UINT_TYPES + dtype.FP_TYPES + dtype.OTHER_TYPES, name
+        self.primitive_bitwidth = get_primitive_bitwidth(name)
         if name in dtype.SINT_TYPES:
             self.int_signedness = dtype.SIGNEDNESS.SIGNED
-            self.int_bitwidth = int(name.split('int')[-1])
-            self.primitive_bitwidth = self.int_bitwidth
+            self.int_bitwidth = self.primitive_bitwidth
         elif name in dtype.UINT_TYPES:
             self.int_signedness = dtype.SIGNEDNESS.UNSIGNED
-            self.int_bitwidth = int(name.split('int')[-1])
-            self.primitive_bitwidth = self.int_bitwidth
+            self.int_bitwidth = self.primitive_bitwidth
         elif name in dtype.FP_TYPES:
             if name == 'fp8e4b15':
                 self.fp_mantissa_width = 3
-                self.primitive_bitwidth = 8
                 self.exponent_bias = 15
             elif name == 'fp8e4nv':
                 self.fp_mantissa_width = 3
-                self.primitive_bitwidth = 8
                 self.exponent_bias = 7
             elif name == 'fp8e4b8':
                 self.fp_mantissa_width = 3
-                self.primitive_bitwidth = 8
                 self.exponent_bias = 8
             elif name == 'fp8e5':
                 self.fp_mantissa_width = 2
-                self.primitive_bitwidth = 8
                 self.exponent_bias = 15
             elif name == 'fp8e5b16':
                 self.fp_mantissa_width = 2
-                self.primitive_bitwidth = 8
                 self.exponent_bias = 16
             elif name == 'fp16':
                 self.fp_mantissa_width = 10
-                self.primitive_bitwidth = 16
                 self.exponent_bias = 15
             elif name == 'bf16':
                 self.fp_mantissa_width = 7
-                self.primitive_bitwidth = 16
                 self.exponent_bias = 127
             elif name == 'fp32':
                 self.fp_mantissa_width = 23
-                self.primitive_bitwidth = 32
                 self.exponent_bias = 127
             elif name == 'fp64':
                 self.fp_mantissa_width = 52
-                self.primitive_bitwidth = 64
                 self.exponent_bias = 1023
             else:
                 raise RuntimeError(f'Unsupported floating-point type {name}')
-        elif name == 'void':
-            self.primitive_bitwidth = 0
 
     def is_fp8(self):
         return 'fp8' in self.name
@@ -1307,6 +1316,9 @@ class tuple(base_value):
     def _flatten_ir(self, handles: List[ir.value]):
         for v in self.values:
             v._flatten_ir(handles)
+
+    def __repr__(self):
+        return f"({' ,'.join(repr(x) for x in self.values)})"
 
 
 class slice:

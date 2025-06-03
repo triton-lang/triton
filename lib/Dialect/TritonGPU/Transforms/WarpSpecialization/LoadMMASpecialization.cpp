@@ -118,8 +118,8 @@ addIndexAndPhase(PartitionBuilder &b, scf::ForOp &loop, unsigned numStages,
   b.setInsertionPoint(loop);
 
   // Index and phase both start at 0.
-  unsigned curArgIdx = loop.getNumRegionIterArgs();
-  auto newArgs = addIterArgsToLoop(b, loop, {b.intCst(0), b.intCst(0)});
+  loop = addIterArgsToLoop(b, loop, {b.intCst(0), b.intCst(0)});
+  auto newArgs = loop.getRegionIterArgs().take_back(2);
   BlockArgument index = newArgs[0];
   BlockArgument phase = newArgs[1];
 
@@ -488,7 +488,8 @@ static LogicalResult pipelineMMA(scf::ForOp &loop, PipelinedMMA &mma,
       createTMemAlloc(b, oldAllocOp, /*multiBuffered=*/true, numMmaStages);
 
   // Use placeholder values for the indices in the loop.
-  auto indexPhase = addIterArgsToLoop(b, loop, {b.intCst(0), b.intCst(0)});
+  loop = addIterArgsToLoop(b, loop, {b.intCst(0), b.intCst(0)});
+  auto indexPhase = loop.getRegionIterArgs().take_back(2);
   BlockArgument index = indexPhase[0];
   BlockArgument phase = indexPhase[1];
 
