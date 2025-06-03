@@ -372,6 +372,13 @@ def TritonGPUCanonicalize: Pass<"tritongpu-canonicalize"> {
     "mlir::cf::ControlFlowDialect",
     "mlir::scf::SCFDialect",
   ];
+def TritonGPUConcurrencySanitizer: Pass<"tritongpu-concurrency-sanitizer", "mlir::ModuleOp"> {
+  let summary = "Add runtime verification of asynchronous operations";
+
+  let description = "TODO: Add description";
+
+  let dependentDialects = ["mlir::triton::gpu::TritonGPUDialect",
+                           "mlir::triton::TritonDialect"];
 }
 
 #endif
