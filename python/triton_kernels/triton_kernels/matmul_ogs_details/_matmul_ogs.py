@@ -301,7 +301,6 @@ def _matmul_ogs(
         w_scale = load_scale(WScale)
     acc *= x_scale * w_scale
     acc = acc + bias[None, :] * betas[:, None]
-    acc *= gammas[:, None]
     if out_alpha is not None:
         acc *= out_alpha
     if ACTIVATION_FN is not None:
@@ -312,6 +311,7 @@ def _matmul_ogs(
     else:
         tl.static_assert(ACTIVATION_REDUCTION_N == 1, "Activation reduction must be 1 if no activation fn is provided")
         out = acc
+    out *= gammas[:, None]
     # write-back
     Y += start_z.to(index_type) * stride_y_z
     if WriteBackIndx is not None:

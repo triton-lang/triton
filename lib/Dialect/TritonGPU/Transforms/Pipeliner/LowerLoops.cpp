@@ -556,7 +556,7 @@ scf::ForOp lowerLoads(scf::ForOp forOp, CoarseSchedule &schedule) {
   }
 
   // Patch the loop to add the new loop carried dependencies.
-  (void)addIterArgsToLoop(builder, forOp, newOperands);
+  forOp = addIterArgsToLoop(builder, forOp, newOperands);
 
   // Update yield op with temporary yield values
   auto forYield = cast<scf::YieldOp>(forOp.getBody()->getTerminator());
@@ -750,7 +750,7 @@ scf::ForOp lowerTMADescriptors(scf::ForOp forOp, CoarseSchedule &schedule) {
     newOperands.push_back(zero);
   }
 
-  (void)addIterArgsToLoop(builder, forOp, newOperands);
+  forOp = addIterArgsToLoop(builder, forOp, newOperands);
 
   auto tmaCounters = ArrayRef<BlockArgument>(forOp.getBody()->getArguments())
                          .slice(tmaCounterArgsStartIdx);

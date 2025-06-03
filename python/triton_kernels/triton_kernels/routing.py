@@ -53,7 +53,7 @@ class RoutingData:
 # --------------------------
 
 
-def routing(logits, n_expts_act, expt_indx=None, simulated_ep=1):
+def routing(logits, n_expts_act, renormalize=True, expt_indx=None, simulated_ep=1):
     from .topk import topk
     from .compaction import compaction
     cdiv = triton.cdiv
@@ -63,7 +63,7 @@ def routing(logits, n_expts_act, expt_indx=None, simulated_ep=1):
     n_tokens, n_expts_tot = logits.shape
     n_gates = n_tokens * n_expts_act
     device = logits.device
-    expt_scal, expt_indx, bitmatrix = topk(logits, n_expts_act, y_indx=expt_indx)
+    expt_scal, expt_indx, bitmatrix = topk(logits, n_expts_act, apply_softmax=renormalize, y_indx=expt_indx)
     # mutate bitmatrix
     if simulated_ep > 1:
         assert n_expts_tot % simulated_ep == 0
@@ -108,7 +108,7 @@ def routing(logits, n_expts_act, expt_indx=None, simulated_ep=1):
     return RoutingData(gate_scal, hist, n_expts_tot, n_expts_act), gather_indx, scatter_indx
 
 
-def routing_torch(logits, n_expts_act, expt_indx=None):
+def routing_torch(logits, n_expts_act, renormalize=True, expt_indx=None):
 
     def topk(vals, k, expt_indx):
         # topk of experts
@@ -121,7 +121,8 @@ def routing_torch(logits, n_expts_act, expt_indx=None):
 
     _, n_expts_tot = logits.shape
     expt_scal, expt_indx = topk(logits, n_expts_act, expt_indx)
-    expt_scal = torch.softmax(expt_scal, dim=-1)
+    if renormalize:
+        expt_scal = torch.softmax(expt_scal, dim=-1)
     # flatten topk data
     expt_scal = expt_scal.reshape(-1)
     expt_indx = expt_indx.reshape(-1).to(torch.int32)

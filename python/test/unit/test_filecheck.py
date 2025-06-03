@@ -17,7 +17,7 @@ def test_filecheck_positive():
         # CHECK-LABEL: test_kernel
         scalar = 42
         # CHECK: %c42_i32 = arith.constant 42 : i32
-        # CHECK-NEXT: call @anchor{{.*}}(%c42_i32) : (i32) -> ()
+        # CHECK-NEXT: call @{{.*}}anchor{{.*}}(%c42_i32) : (i32) -> ()
         anchor(scalar)
 
     run_filecheck_test(test_kernel)

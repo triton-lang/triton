@@ -460,7 +460,8 @@ def TT_ReshapeOp : TT_Op<"reshape", [Pure,
         The compiler is still free to change it for better performance.
     }];
     let builders = [
-      OpBuilder<(ins "ArrayRef<int64_t>":$shape, "TypedValue<RankedTensorType>":$src)>
+      OpBuilder<(ins "ArrayRef<int64_t>":$shape, "Value":$src,
+                     CArg<"bool", "false">:$allowReorder)>
     ];
 
     let arguments = (ins TT_Tensor:$src, UnitAttr:$allow_reorder, UnitAttr:$efficient_layout);
@@ -728,9 +729,6 @@ def TT_ReduceOp: TT_Op<"reduce",
     let arguments = (ins Variadic<TT_Tensor>:$srcs, I32Attr:$axis);
     let results = (outs Variadic<TT_Type>:$result);
     let regions = (region SizedRegion<1>:$combineOp);
-    let builders = [
-        OpBuilder<(ins "ValueRange":$srcs, "int":$axis)>,
-    ];
     let hasVerifier = 1;
     let hasRegionVerifier = 1;
     let extraClassDeclaration = [{
@@ -867,7 +865,10 @@ def TT_ElementwiseInlineAsmOp : TT_Op<"elementwise_inline_asm", [
 //
 // Histogram Op
 //
-def TT_HistogramOp : TT_Op<"histogram", [Pure]> {
+def TT_HistogramOp : TT_Op<"histogram", [Pure,
+    TypesMatchWith<"mask type matches src type",
+                 "src", "mask", "getI1SameShape($_self)",
+                 "($_op.getOperands().size() <= 1) || std::equal_to<>()">]> {
   let summary = "return a histogram of the inputs.";
   let description = [{
     Return the histogram of the input tensor. The number of bins is equal to
@@ -875,11 +876,13 @@ def TT_HistogramOp : TT_Op<"histogram", [Pure]> {
     start at 0.
   }];
 
-  let arguments = (ins TT_IntTensor:$src);
+  let arguments = (ins TT_IntTensor:$src,
+    Optional<TT_BoolLike>:$mask);
+
   let results = (outs TT_IntTensor:$result);
 
   let assemblyFormat = [{
-    $src attr-dict `:` type($src) `->` type($result)
+    $src (`,` $mask^)? attr-dict `:` type($src) `->` type($result)
   }];
 }
 

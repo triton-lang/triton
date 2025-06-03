@@ -32,7 +32,10 @@ def convert_layout(value, layout, builder: GluonOpBuilder):
 
 def allocate_shared(element_ty, shape, layout, value, builder: GluonOpBuilder):
     ty = ttgl.shared_memory_descriptor_type(element_ty, shape, layout, shape)
-    handle = builder.create_local_alloc(ty.to_ir(builder), value.handle)
+    if value is not None:
+        handle = builder.create_local_alloc(ty.to_ir(builder), value.handle)
+    else:
+        handle = builder.create_local_alloc(ty.to_ir(builder))
     return ttgl.shared_memory_descriptor(handle, element_ty, shape, layout, shape)
 
 
@@ -44,6 +47,58 @@ def shared_load(mem_desc, layout, builder: GluonOpBuilder):
 
 def shared_store(mem_desc, value, builder: GluonOpBuilder):
     builder.create_local_store(mem_desc.handle, value.handle)
+
+
+def shared_dealloc(mem_desc, builder: GluonOpBuilder):
+    builder.create_local_dealloc(mem_desc.handle)
+
+
+def _memdesc_subview(mem_desc, offsets, shape, layout, builder: GluonOpBuilder):
+    ty = ttgl.shared_memory_descriptor_type(mem_desc.dtype, shape, layout, mem_desc.type.alloc_shape)
+    handle = builder.create_memdesc_subview(ty.to_ir(builder), mem_desc.handle, offsets)
+    return ttgl.shared_memory_descriptor(handle, **ty.__dict__)
+
+
+def memdesc_split(mem_desc, offset, size, dim, layout, builder: GluonOpBuilder):
+    offsets = [builder.get_int32(0)] * mem_desc.rank
+    offsets[dim] = builder.get_int32(offset)
+    shape = list(mem_desc.shape)
+    shape[dim] = size
+    return _memdesc_subview(mem_desc, offsets, shape, layout, builder)
+
+
+def memdesc_slice(mem_desc, index, shape, layout, builder: GluonOpBuilder):
+    assert mem_desc.rank > len(shape), f"source rank ({mem_desc.rank}) must be greater than result rank ({len(shape)})"
+
+    offsets = [builder.get_int32(0)] * mem_desc.rank
+    offsets[0] = tl_semantic._convert_elem_to_ir_value(builder, index, require_i64=False)
+    return _memdesc_subview(mem_desc, offsets, shape, layout, builder)
+
+
+def memdesc_trans(mem_desc, order, layout, builder: GluonOpBuilder):
+    assert len(order) == len(
+        mem_desc.shape), f"source rank ({mem_desc.rank}) and order length ({len(order)}) must match"
+
+    shape = [mem_desc.shape[i] for i in order]
+    alloc_shape = mem_desc.type.alloc_shape
+    new_alloc_shape = alloc_shape[:len(alloc_shape) - mem_desc.rank]
+    new_alloc_shape += [alloc_shape[:mem_desc.rank][i] for i in order]
+
+    ty = ttgl.shared_memory_descriptor_type(mem_desc.dtype, shape, layout, new_alloc_shape)
+    handle = builder.create_memdesc_trans(ty.to_ir(builder), mem_desc.handle, order)
+    return ttgl.shared_memory_descriptor(handle, **ty.__dict__)
+
+
+def memdesc_reshape(mem_desc, shape, layout, builder: GluonOpBuilder):
+    ty = ttgl.shared_memory_descriptor_type(mem_desc.dtype, shape, layout, mem_desc.type.alloc_shape)
+    handle = builder.create_memdesc_reshape(ty.to_ir(builder), mem_desc.handle)
+    return ttgl.shared_memory_descriptor(handle, **ty.__dict__)
+
+
+def memdesc_reinterpret(mem_desc, dtype, shape, layout, builder: GluonOpBuilder):
+    ty = ttgl.shared_memory_descriptor_type(dtype, shape, layout, shape)
+    handle = builder.create_memdesc_reinterpret(ty.to_ir(builder), mem_desc.handle)
+    return ttgl.shared_memory_descriptor(handle, **ty.__dict__)
 
 
 def warp_specialize(args, default_partition, worker_partitions, worker_num_warps: Sequence[int],

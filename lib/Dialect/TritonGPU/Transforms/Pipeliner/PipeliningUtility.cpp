@@ -106,7 +106,7 @@ Value triton::sinkValueRedefinition(RewriterBase &rewriter, Value in, Value out,
     // `in` is live into the loop body. `out` becomes the live-out if the
     // loop executes at least once.
     if (auto forOp = dyn_cast<scf::ForOp>(op)) {
-      (void)addIterArgsToLoop(rewriter, forOp, in);
+      forOp = addIterArgsToLoop(rewriter, forOp, in);
       appendToForOpYield(forOp, out);
       out = forOp.getResults().back();
       continue;

@@ -2,7 +2,12 @@ from dataclasses import dataclass
 from typing import List, Optional
 from triton.language.core import _unwrap_if_constexpr
 
-__all__ = ["BlockedLayout", "SliceLayout", "NVMMASharedLayout"]
+__all__ = [
+    "BlockedLayout",
+    "SliceLayout",
+    "NVMMASharedLayout",
+    "SwizzledSharedLayout",
+]
 
 
 def _realize_cta_layout(rank, ctas_per_cga, cta_split_num, cta_order):
@@ -27,6 +32,14 @@ class BlockedLayout(DistributedLayout):
     cta_order: Optional[List[int]] = None
 
     def __post_init__(self):
+        super().__setattr__("size_per_thread", _unwrap_if_constexpr(self.size_per_thread))
+        super().__setattr__("threads_per_warp", _unwrap_if_constexpr(self.threads_per_warp))
+        super().__setattr__("warps_per_cta", _unwrap_if_constexpr(self.warps_per_cta))
+        super().__setattr__("order", _unwrap_if_constexpr(self.order))
+        super().__setattr__("ctas_per_cga", _unwrap_if_constexpr(self.ctas_per_cga))
+        super().__setattr__("cta_split_num", _unwrap_if_constexpr(self.cta_split_num))
+        super().__setattr__("cta_order", _unwrap_if_constexpr(self.cta_order))
+
         rank = len(self.size_per_thread)
         assert len(self.threads_per_warp) == rank
         assert len(self.warps_per_cta) == rank
@@ -101,6 +114,15 @@ class NVMMASharedLayout(SharedLayout):
     cta_order: Optional[List[int]] = None
 
     def __post_init__(self):
+        super().__setattr__("swizzle_byte_width", _unwrap_if_constexpr(self.swizzle_byte_width))
+        super().__setattr__("element_bitwidth", _unwrap_if_constexpr(self.element_bitwidth))
+        super().__setattr__("rank", _unwrap_if_constexpr(self.rank))
+        super().__setattr__("transposed", _unwrap_if_constexpr(self.transposed))
+        super().__setattr__("fp4_padded", _unwrap_if_constexpr(self.fp4_padded))
+        super().__setattr__("ctas_per_cga", _unwrap_if_constexpr(self.ctas_per_cga))
+        super().__setattr__("cta_split_num", _unwrap_if_constexpr(self.cta_split_num))
+        super().__setattr__("cta_order", _unwrap_if_constexpr(self.cta_order))
+
         assert self.element_bitwidth in [8, 16, 32, 64]
         assert self.swizzle_byte_width in [0, 32, 64, 128]
         rank = self.rank
@@ -123,3 +145,51 @@ class NVMMASharedLayout(SharedLayout):
 
     def mangle(self) -> str:
         return f"NVMMA_{self.swizzle_byte_width}_{self.element_bitwidth}_{self.transposed}_{self.fp4_padded}_NVMMA"
+
+
+@dataclass(frozen=True, eq=True)
+class SwizzledSharedLayout(SharedLayout):
+    vec: int
+    per_phase: int
+    max_phase: int
+    order: List[int]
+    ctas_per_cga: Optional[List[int]] = None
+    cta_split_num: Optional[List[int]] = None
+    cta_order: Optional[List[int]] = None
+
+    def __post_init__(self):
+        super().__setattr__("vec", _unwrap_if_constexpr(self.vec))
+        super().__setattr__("per_phase", _unwrap_if_constexpr(self.per_phase))
+        super().__setattr__("max_phase", _unwrap_if_constexpr(self.max_phase))
+        super().__setattr__("order", _unwrap_if_constexpr(self.order))
+        super().__setattr__("ctas_per_cga", _unwrap_if_constexpr(self.ctas_per_cga))
+        super().__setattr__("cta_split_num", _unwrap_if_constexpr(self.cta_split_num))
+        super().__setattr__("cta_order", _unwrap_if_constexpr(self.cta_order))
+
+        rank = len(self.order)
+        assert self.ctas_per_cga is None or len(self.ctas_per_cga) == rank
+        assert self.cta_split_num is None or len(self.cta_split_num) == rank
+        assert self.cta_order is None or len(self.cta_order) == rank
+
+    def _to_ir(self, builder):
+        rank = len(self.order)
+        ctas_per_cga, cta_split_num, cta_order = _realize_cta_layout(rank, self.ctas_per_cga, self.cta_split_num,
+                                                                     self.cta_order)
+        return builder.get_swizzled_shared_layout(
+            _unwrap_if_constexpr(self.vec),
+            _unwrap_if_constexpr(self.per_phase),
+            _unwrap_if_constexpr(self.max_phase),
+            self.order,
+            ctas_per_cga,
+            cta_split_num,
+            cta_order,
+        )
+
+    def mangle(self) -> str:
+
+        def stringify(x):
+            if x is None:
+                return ""
+            return "_".join(map(str, x))
+
+        return f"SSS_{self.vec}_{self.per_phase}_{self.max_phase}_{stringify(self.order)}_{stringify(self.ctas_per_cga)}_{stringify(self.cta_split_num)}_{stringify(self.cta_order)}_SSS"

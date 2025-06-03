@@ -3,6 +3,7 @@ import hashlib
 import json
 from .._C.libtriton import get_cache_invalidating_env_vars, ir
 from ..backends import backends
+from ..backends.compiler import Language
 from ..backends.compiler import BaseBackend, GPUTarget
 from .. import __version__, knobs
 from ..runtime.autotuner import OutOfResources
@@ -54,8 +55,8 @@ class ASTSource:
 
     def __init__(self, fn, signature, constexprs=None, attrs=None) -> None:
         self.fn = fn
+        self.language = Language.TRITON
         self.ext = "ttir"
-        self.run_ext_passes = True
         self.name = fn.__name__
         self.signature = signature
         self.constants = dict()
@@ -93,7 +94,7 @@ class IRSource:
         self.path = path
         path = Path(path)
         self.ext = path.suffix[1:]
-        self.run_ext_passes = False
+        self.language = Language.TRITON
         self.src = path.read_text()
         ir.load_dialects(context)
         backend.load_dialects(context)
@@ -320,10 +321,10 @@ def compile(src, target=None, options=None):
     metadata["triton_version"] = __version__
     # run compilation pipeline  and populate metadata
     stages = dict()
-    backend.add_stages(stages, options)
+    backend.add_stages(stages, options, src.language)
     first_stage = list(stages.keys()).index(src.ext)
     # when the source is an IR file, don't apply the passes related to this stage. This makes it easier to write IR level tests.
-    if not src.run_ext_passes:
+    if ir_source:
         first_stage += 1
 
     # For IRSource, we have already grabbed the context + called both
@@ -341,12 +342,15 @@ def compile(src, target=None, options=None):
         filter_traceback(e)
         raise
 
-    if not src.run_ext_passes:
+    if ir_source:
         ir_filename = f"{file_name}.{src.ext}"
+        metadata_group[ir_filename] = fn_cache_manager.put(module, ir_filename)
+    else:
+        ir_filename = f"{file_name}.source"
         metadata_group[ir_filename] = fn_cache_manager.put(module, ir_filename)
 
     use_ir_loc = knobs.compilation.use_ir_loc
-    if not src.run_ext_passes and use_ir_loc:
+    if ir_source and use_ir_loc:
         module.create_location_snapshot(src.path)
         print(f"Creating new locations for {src.path}")
 

@@ -1,5 +1,6 @@
 from triton.compiler.code_generator import ast_to_ttir
 from triton.compiler.compiler import ASTSource
+from triton.backends.compiler import Language
 from triton.runtime.jit import JITFunction
 from typing import TypeVar, Optional, Callable, Iterable, Union
 from triton._C.libtriton import ir
@@ -11,8 +12,8 @@ class GluonASTSource(ASTSource):
 
     def __init__(self, fn, signature, constexprs=None, attrs=None) -> None:
         super().__init__(fn, signature, constexprs, attrs)
+        self.language = Language.GLUON
         self.ext = "ttgir"
-        self.run_ext_passes = False
 
     def make_ir(self, options, codegen_fns, module_map, context):
         module = ast_to_ttir(self.fn, self, context=context, options=options, codegen_fns=codegen_fns,

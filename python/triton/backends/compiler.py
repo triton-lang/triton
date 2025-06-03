@@ -1,5 +1,6 @@
 from abc import ABCMeta, abstractmethod
 from dataclasses import dataclass
+from enum import Enum
 from typing import Dict, Union
 from types import ModuleType
 
@@ -11,6 +12,12 @@ class GPUTarget(object):
     # Target architecture, e.g., 90 (for cuda compute capability), gfx940 (for hip)
     arch: Union[int, str]
     warp_size: int
+
+
+class Language(Enum):
+    """The input language being compiled by the backend."""
+    TRITON = 0
+    GLUON = 1
 
 
 class BaseBackend(metaclass=ABCMeta):

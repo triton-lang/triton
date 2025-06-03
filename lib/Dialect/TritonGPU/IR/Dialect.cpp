@@ -7,6 +7,7 @@
 #include "mlir/IR/OpImplementation.h"
 #include "mlir/Support/LLVM.h"
 #include "triton/Analysis/Utility.h"
+#include "triton/Dialect/Triton/IR/Interfaces.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Attributes.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
@@ -152,10 +153,8 @@ SmallVector<unsigned> getOrderForDotOperand(unsigned opIdx, unsigned rank,
                                             bool kContig) {
   // kContig: if true, the matrix is fastest-running on k,
   //         otherwise it is on m (resp. n)
-  // opIdx=0: [batch, m, k] if rank == 3 else [m, k]
-  // opIdx=1: [batch, k, n] if rank == 3 else [k, n]
-  // batch (if rank == 3) is always the slowest running dimension
-  assert(rank == 2 || rank == 3);
+  // opIdx=0: [*batch, m, k]
+  // opIdx=1: [*batch, k, n]
   assert(opIdx == 0 || opIdx == 1);
   auto rowMajor = bool(opIdx) != kContig;
   return getMatrixOrder(rank, rowMajor);
@@ -349,20 +348,28 @@ bool isExpensiveCat(CatOp cat, Attribute targetEncoding) {
   return newTotalElemsPerThread < totalElemsPerThread;
 }
 
+static LogicalResult
+verifyLayoutOrder(function_ref<InFlightDiagnostic()> emitError,
+                  ArrayRef<unsigned> order) {
+  if (!isPermutationOfIota(order)) {
+    return emitError()
+           << "order must be a permutation of 0..(rank-1), but was [" << order
+           << "]";
+  }
+  return success();
+}
+
 LogicalResult CTALayoutAttr::verify(
     function_ref<InFlightDiagnostic()> emitError, ArrayRef<unsigned> CTAsPerCGA,
     ArrayRef<unsigned> CTASplitNum, ArrayRef<unsigned> CTAOrder) {
-  if (CTAsPerCGA.size() != CTASplitNum.size() ||
-      CTASplitNum.size() != CTAOrder.size()) {
+  if (!llvm::all_equal(
+          {CTAsPerCGA.size(), CTASplitNum.size(), CTAOrder.size()})) {
     return emitError() << "CTAsPerCGA, CTASplitNum, and CTAOrder must all have "
                           "the same rank.";
   }
 
-  if (!isPermutationOfIota(CTAOrder)) {
-    return emitError()
-           << "CTAOrder must be a permutation of 0..(rank-1), but was ["
-           << CTAOrder << "]";
-  }
+  if (failed(verifyLayoutOrder(emitError, CTAOrder)))
+    return failure();
 
   if (llvm::any_of(CTAsPerCGA, [](unsigned x) { return x == 0; })) {
     return emitError() << "Every element in CTAsPerCGA must be greater than 0.";
@@ -382,26 +389,19 @@ BlockedEncodingAttr::verify(function_ref<InFlightDiagnostic()> emitError,
                             ArrayRef<unsigned> threadsPerWarp,
                             ArrayRef<unsigned> warpsPerCTA,
                             ArrayRef<unsigned> order, CTALayoutAttr CTALayout) {
-  if (sizePerThread.size() != threadsPerWarp.size() ||
-      threadsPerWarp.size() != warpsPerCTA.size() ||
-      warpsPerCTA.size() != order.size()) {
+  if (!llvm::all_equal({sizePerThread.size(), threadsPerWarp.size(),
+                        warpsPerCTA.size(), order.size()})) {
     return emitError() << "sizePerThread, threadsPerWarp, warpsPerCTA, and "
                           "order must all have the same rank.";
   }
 
   // Empty CTALayout is allowed, but if it's present its rank must match the
   // BlockedEncodingAttr's rank.
-  if (CTALayout.getCTASplitNum().size() != 0 &&
-      sizePerThread.size() != CTALayout.getCTASplitNum().size()) {
+  if (order.size() != CTALayout.getRank()) {
     return emitError() << "BlockedEncodingAttr and CTALayout's fields must "
                           "have the same rank.";
   }
-  if (!isPermutationOfIota(order)) {
-    return emitError()
-           << "order must be a permutation of 0..(rank-1), but was [" << order
-           << "]";
-  }
-  return success();
+  return verifyLayoutOrder(emitError, order);
 }
 
 // 1 element per thread
@@ -1555,6 +1555,19 @@ Attribute parseSwizzledEncoding(AsmParser &parser, Type type) {
 // SwizzledShared encoding
 //===----------------------------------------------------------------------===//
 
+LogicalResult
+SwizzledSharedEncodingAttr::verify(function_ref<InFlightDiagnostic()> emitError,
+                                   unsigned vec, unsigned perPhase,
+                                   unsigned maxPhase, ArrayRef<unsigned> order,
+                                   CTALayoutAttr ctaLayout) {
+  if (order.size() != ctaLayout.getRank()) {
+    return emitError() << "order size (" << order.size()
+                       << ") must match CTALayout rank (" << ctaLayout.getRank()
+                       << ")";
+  }
+  return verifyLayoutOrder(emitError, order);
+}
+
 Attribute SwizzledSharedEncodingAttr::parse(AsmParser &parser, Type type) {
   return parseSwizzledEncoding<SwizzledSharedEncodingAttr>(parser, type);
 }
@@ -2001,7 +2014,8 @@ struct TritonGPUInferLayoutInterface
 
   LogicalResult
   inferReduceOpEncoding(Attribute operandEncoding, unsigned axis,
-                        Attribute &resultEncoding) const override {
+                        Attribute &resultEncoding,
+                        std::optional<Location> loc) const override {
     resultEncoding =
         SliceEncodingAttr::get(getDialect()->getContext(), axis,
                                cast<DistributedEncodingTrait>(operandEncoding));
@@ -2042,68 +2056,75 @@ struct TritonGPUInferLayoutInterface
   //   outputEnc.order = inverse(inverse(inputEnc.order) * trans.order)
   //                   = inverse(trans.order) * inputEnc.order.
   //
-  LogicalResult inferTransOpEncoding(Attribute operandEncoding,
-                                     ArrayRef<int64_t> shape,
-                                     ArrayRef<int32_t> order, // trans order
-                                     Attribute &resultEncoding) const override {
+  LogicalResult
+  inferTransOpEncoding(Attribute operandEncoding, ArrayRef<int64_t> shape,
+                       ArrayRef<int32_t> order, Attribute &resultEncoding,
+                       std::optional<Location> loc) const override {
     // Note: inferFooOpEncoding should not crash if given invalid inputs, which
     // happens when someone creates invalid IR.  If we return failure() on
     // error, then MLIR will generate a helpful error message.
+    if (isIota(order)) {
+      resultEncoding = operandEncoding;
+      return success();
+    }
+    if (shape.size() != order.size()) {
+      return emitOptionalError(loc, "shape and order rank do not match: ",
+                               shape.size(), " vs ", order.size());
+    }
+    auto checkRank = [&](unsigned rank) {
+      if (rank != order.size()) {
+        return emitOptionalError(loc, "rank of encoding does not match order: ",
+                                 rank, " vs ", order.size());
+      }
+      return success();
+    };
 
     auto *ctx = getDialect()->getContext();
     auto invOrder = inversePermutation(order);
     SmallVector<unsigned> invOrderUnsigned(invOrder.begin(), invOrder.end());
 
-    if (auto enc =
-            mlir::dyn_cast<SwizzledSharedEncodingAttr>(operandEncoding)) {
-      if (enc.getOrder().size() != order.size()) {
+    if (auto enc = dyn_cast<SwizzledSharedEncodingAttr>(operandEncoding)) {
+      if (failed(checkRank(enc.getRank())))
         return failure();
-      }
-      FailureOr<CTALayoutAttr> ctaLayout =
+
+      CTALayoutAttr ctaLayout =
           permuteCTALayout(ctx, enc.getCTALayout(), order);
-      if (failed(ctaLayout)) {
-        return failure();
-      }
       resultEncoding = SwizzledSharedEncodingAttr::get(
           ctx, enc.getVec(), enc.getPerPhase(), enc.getMaxPhase(),
-          applyPermutation(invOrderUnsigned, enc.getOrder()), *ctaLayout);
+          applyPermutation(invOrderUnsigned, enc.getOrder()), ctaLayout);
       return success();
     }
 
-    if (auto enc = mlir::dyn_cast<NVMMASharedEncodingAttr>(operandEncoding)) {
+    if (auto enc = dyn_cast<NVMMASharedEncodingAttr>(operandEncoding)) {
+      if (failed(checkRank(enc.getRank())))
+        return failure();
       if (order != ArrayRef<int32_t>({1, 0})) {
-        return failure();
+        return emitOptionalError(
+            loc, "NVMMSharedEncoding can only be transposed in 2D");
       }
-      FailureOr<CTALayoutAttr> ctaLayout =
+
+      CTALayoutAttr ctaLayout =
           permuteCTALayout(ctx, enc.getCTALayout(), order);
-      if (failed(ctaLayout)) {
-        return failure();
-      }
       resultEncoding = NVMMASharedEncodingAttr::get(
           ctx, enc.getSwizzlingByteWidth(), !enc.getTransposed(),
-          enc.getElementBitWidth(), enc.getFp4Padded(), *ctaLayout);
+          enc.getElementBitWidth(), enc.getFp4Padded(), ctaLayout);
       return success();
     }
 
-    if (auto enc = mlir::dyn_cast<BlockedEncodingAttr>(operandEncoding)) {
-      auto n = order.size();
-      if (enc.getSizePerThread().size() != n ||
-          enc.getThreadsPerWarp().size() != n ||
-          enc.getWarpsPerCTA().size() != n || enc.getOrder().size() != n) {
+    if (auto enc = dyn_cast<BlockedEncodingAttr>(operandEncoding)) {
+      if (failed(checkRank(enc.getRank())))
         return failure();
-      }
-      FailureOr<CTALayoutAttr> ctaLayout =
+
+      CTALayoutAttr ctaLayout =
           permuteCTALayout(ctx, enc.getCTALayout(), order);
-      if (failed(ctaLayout)) {
-        return failure();
-      }
       resultEncoding = BlockedEncodingAttr::get(
           ctx, applyPermutation(enc.getSizePerThread(), order),
           applyPermutation(enc.getThreadsPerWarp(), order),
           applyPermutation(enc.getWarpsPerCTA(), order),
-          applyPermutation(invOrderUnsigned, enc.getOrder()), *ctaLayout);
+          applyPermutation(invOrderUnsigned, enc.getOrder()), ctaLayout);
       return success();
     }
+
     auto ll = toLinearLayout(shape, operandEncoding);
     auto transposedLl = transposeLinearLayout(ll, order);
     resultEncoding = LinearEncodingAttr::get(ctx, std::move(transposedLl));
@@ -2555,8 +2576,10 @@ struct TritonGPUInferLayoutInterface
     }
 
     auto axis = shape.size() - 1;
-    assert(shape[axis] == 2 &&
-           "SplitOp input shape should have 2 in the last dim");
+    if (shape[axis] != 2) {
+      return emitOptionalError(
+          loc, "SplitOp input shape should have 2 in the last dim");
+    }
 
     auto ctx = getContext();
 
@@ -3083,6 +3106,7 @@ void TritonGPUDialect::initialize() {
 #include "triton/Dialect/TritonGPU/IR/Ops.cpp.inc"
 #include "triton/Dialect/TritonGPU/IR/OpsEnums.cpp.inc"
       >();
+  addInterfaces<TritonInlinerInterface>();
   addInterfaces<TritonGPUOpAsmInterface>();
   addInterfaces<TritonGPUInferLayoutInterface>();
   addInterfaces<TritonGPUVerifyTensorLayoutInterface>();
