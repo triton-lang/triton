@@ -14,7 +14,7 @@ import inspect
 
 from .._C.libtriton import ir
 from . import semantic
-from ._utils import TRITON_MAX_TENSOR_NUMEL, validate_block_shape
+from .._utils import TRITON_MAX_TENSOR_NUMEL, validate_block_shape, get_primitive_bitwidth
 
 T = TypeVar('T')
 
@@ -402,55 +402,43 @@ class dtype(base_type):
         name = _unwrap_if_constexpr(name)
         self.name = name
         assert name in dtype.SINT_TYPES + dtype.UINT_TYPES + dtype.FP_TYPES + dtype.OTHER_TYPES, name
+        self.primitive_bitwidth = get_primitive_bitwidth(name)
         if name in dtype.SINT_TYPES:
             self.int_signedness = dtype.SIGNEDNESS.SIGNED
-            self.int_bitwidth = int(name.split('int')[-1])
-            self.primitive_bitwidth = self.int_bitwidth
+            self.int_bitwidth = self.primitive_bitwidth
         elif name in dtype.UINT_TYPES:
             self.int_signedness = dtype.SIGNEDNESS.UNSIGNED
-            self.int_bitwidth = int(name.split('int')[-1])
-            self.primitive_bitwidth = self.int_bitwidth
+            self.int_bitwidth = self.primitive_bitwidth
         elif name in dtype.FP_TYPES:
             if name == 'fp8e4b15':
                 self.fp_mantissa_width = 3
-                self.primitive_bitwidth = 8
                 self.exponent_bias = 15
             elif name == 'fp8e4nv':
                 self.fp_mantissa_width = 3
-                self.primitive_bitwidth = 8
                 self.exponent_bias = 7
             elif name == 'fp8e4b8':
                 self.fp_mantissa_width = 3
-                self.primitive_bitwidth = 8
                 self.exponent_bias = 8
             elif name == 'fp8e5':
                 self.fp_mantissa_width = 2
-                self.primitive_bitwidth = 8
                 self.exponent_bias = 15
             elif name == 'fp8e5b16':
                 self.fp_mantissa_width = 2
-                self.primitive_bitwidth = 8
                 self.exponent_bias = 16
             elif name == 'fp16':
                 self.fp_mantissa_width = 10
-                self.primitive_bitwidth = 16
                 self.exponent_bias = 15
             elif name == 'bf16':
                 self.fp_mantissa_width = 7
-                self.primitive_bitwidth = 16
                 self.exponent_bias = 127
             elif name == 'fp32':
                 self.fp_mantissa_width = 23
-                self.primitive_bitwidth = 32
                 self.exponent_bias = 127
             elif name == 'fp64':
                 self.fp_mantissa_width = 52
-                self.primitive_bitwidth = 64
                 self.exponent_bias = 1023
             else:
                 raise RuntimeError(f'Unsupported floating-point type {name}')
-        elif name == 'void':
-            self.primitive_bitwidth = 0
 
     def is_fp8(self):
         return 'fp8' in self.name
