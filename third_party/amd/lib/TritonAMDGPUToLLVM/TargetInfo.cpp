@@ -286,6 +286,12 @@ static bool warpReduceSwap16or32(RewriterBase &rewriter, Location loc,
   if (!(mfma32Case || mfma16Case))
     return false;
 
+  // In the proceeding buffer_load, the stride is 1 so only reduction on the
+  // last dim is valid
+  if (op.getAxis() != op.getInputTypes().front().getShape().size() - 1) {
+    return false;
+  }
+
   Value val = acc[0];
   unsigned bits = val.getType().getIntOrFloatBitWidth();
   if (bits > 32)
