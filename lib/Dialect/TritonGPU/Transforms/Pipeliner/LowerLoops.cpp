@@ -312,8 +312,7 @@ void createTMAAsyncCopy(
   Value view = createSingleBufferView(builder, alloc, insertIdx);
 
   Value pred = builder.create<arith::ConstantIntOp>(1, 1);
-  Value tmaPtr = builder.create<triton::nvidia_gpu::TensorDescToTMAPtrOp>(desc);
-  createCopy(builder, tmaPtr, barrier, view, pred);
+  createCopy(builder, desc, barrier, view, pred);
 
   // Create local load after the wait
   builder.setInsertionPointAfter(waitOp);
@@ -697,8 +696,8 @@ LogicalResult rewriteTMABufferUpdates(
     if (failed(ttng::createTMADesc(nextBuf, makeDescOp, builder))) {
       return failure();
     }
-    builder.create<triton::ExperimentalTensormapFenceproxyAcquireOp>(nextBuf);
-    Value nextDesc = builder.create<triton::ReinterpretTensorDescOp>(
+    builder.create<ttng::TensormapFenceproxyAcquireOp>(nextBuf);
+    Value nextDesc = builder.create<ttng::ReinterpretTensorDescOp>(
         makeDescOp.getType(), nextBuf);
 
     makeDescOp.getResult().replaceAllUsesWith(nextDesc);

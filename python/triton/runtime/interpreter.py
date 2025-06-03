@@ -598,8 +598,15 @@ class InterpreterBuilder:
     def create_make_range(self, ret_ty, start, stop):
         return TensorHandle(np.arange(start, stop, dtype=np.int32), tl.int32)
 
-    def create_histogram(self, data, bins):
-        return TensorHandle(np.histogram(data.data, bins=bins, range=(0, bins))[0], tl.int32)
+    def create_histogram(self, data, bins, mask):
+        if mask is None:
+            mask = TensorHandle(np.ones_like(data.data, dtype=bool), tl.int1)
+        # force all masked elements to zero
+        data = np.where(mask.data, data.data, np.zeros_like(data.data))
+        histogram = np.histogram(data, bins=bins, range=(0, bins))[0]
+        # remove overcounted elements
+        histogram[0] -= np.logical_not(mask.data).sum()
+        return TensorHandle(histogram, tl.int32)
 
     def create_gather(self, src, indices, axis):
         return TensorHandle(np.take_along_axis(src.data, indices.data, axis=axis), src.dtype.scalar)

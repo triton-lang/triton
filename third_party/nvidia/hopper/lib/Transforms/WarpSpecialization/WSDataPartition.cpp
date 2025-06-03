@@ -293,7 +293,7 @@ static bool getBackwardSliceToPartition(Value v,
                                        currentDim))
         return false;
       partitionScheme.dotPartitionOperand[dotOp] = currentDim == 0 ? 0 : 1;
-    } else if (isa<ReinterpretTensorDescOp, MakeTensorDescOp>(op)) {
+    } else if (isa<ttng::ReinterpretTensorDescOp, MakeTensorDescOp>(op)) {
       return true;
     } else if (auto ifOp = dyn_cast<scf::IfOp>(op)) {
       // track yield value
@@ -1012,7 +1012,7 @@ static Operation *sliceOp(Operation *op, int offset, IRMapping &mappings,
     }
   } else if (auto tensorDescOp = dyn_cast<MakeTensorDescOp>(op)) {
     newOp = cloneAndSetResultType(op);
-  } else if (auto tensorDescOp = dyn_cast<ReinterpretTensorDescOp>(op)) {
+  } else if (auto tensorDescOp = dyn_cast<ttng::ReinterpretTensorDescOp>(op)) {
     newOp = cloneAndSetResultType(op);
   } else if (isa<TransOp, MemDescTransOp>(op)) {
     sliceOp(op->getOperand(0), offset, mappings, reverseMappings,

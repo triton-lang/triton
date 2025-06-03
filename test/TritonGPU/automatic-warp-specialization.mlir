@@ -27,19 +27,19 @@ tt.func @matmul_change_desc_in_prologue(
   // CHECK-LABEL: ttg.warp_specialize
   // CHECK-LABEL: default
   // BASE-NOT: tt.make_tensor_descriptor
-  // PIPELINE-NOT: tt.experimental_tensormap_create
+  // PIPELINE-NOT: ttng.tensormap_create
   // CHECK-LABEL: partition0
   // CHECK-SAME: num_warps(1)
   // BASE-NOT: tt.make_tensor_descriptor
-  // PIPELINE-NOT: tt.experimental_tensormap_create
+  // PIPELINE-NOT: ttng.tensormap_create
   // PIPELINE-COUNT-1: tc_gen5_mma
   // PIPELINE-NOT: tc_gen5_mma
   // CHECK-LABEL: partition1
   // CHECK-SAME: num_warps(2)
   // BASE-COUNT-2: tt.make_tensor_descriptor
   // PIPELINE-COUNT-2: ttg.global_scratch_alloc {alignment = 128 : i32, nbytes = 512 : i32}
-  // PIPELINE-COUNT-2: tt.experimental_tensormap_create
-  // PIPELINE-NOT: tt.experimental_tensormap_create
+  // PIPELINE-COUNT-2: ttng.tensormap_create
+  // PIPELINE-NOT: ttng.tensormap_create
   // PIPELINE-COUNT-2: async_tma_copy_global_to_local
   // PIPELINE-NOT: async_tma_copy_global_to_local
   // CHECK-NOT: partition2

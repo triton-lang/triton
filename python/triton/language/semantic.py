@@ -1805,10 +1805,15 @@ def gather(src: tl.tensor, index: tl.tensor, axis: int, builder: ir.builder) -> 
 # ===----------------------------------------------------------------------===
 
 
-def histogram(input: tl.tensor, num_bins: int, builder: ir.builder) -> tl.tensor:
+def histogram(input: tl.tensor, num_bins: int, mask: Optional[tl.tensor], builder: ir.builder) -> tl.tensor:
     assert len(input.shape) == 1, "histogram only supports 1D input"
     assert input.dtype.is_int(), "histogram only supports integer input"
-    return tl.tensor(builder.create_histogram(input.handle, num_bins), tl.block_type(tl.int32, [num_bins]))
+    if mask is not None:
+        mask = broadcast_impl_shape(mask, input.shape, builder)
+        if not mask.type.scalar.is_bool():
+            raise ValueError("Mask must have boolean scalar type")
+        mask = mask.handle
+    return tl.tensor(builder.create_histogram(input.handle, num_bins, mask), tl.block_type(tl.int32, [num_bins]))
 
 
 def multiple_of(x: tl.tensor, values: List[int]) -> tl.tensor:

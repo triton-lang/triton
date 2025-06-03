@@ -98,12 +98,10 @@ tt.func @warp_specialize_tma_matmul(
     // CHECK-NEXT: ttng.barrier_expect [[OPER_MBAR]], 32768 {ttg.partition = 2 : i32}
 
     // CHECK-NEXT: [[A_BUF:%.*]] = ttg.memdesc_subview [[A_BUFS]][[[IDX]], [[C0]], [[C0]]]
-    // CHECK-NEXT: [[A_DESC_PTR:%.*]] = ttng.tensor_desc_to_tma_ptr [[A_DESC]]
-    // CHECK-NEXT: ttng.async_tma_copy_global_to_local [[A_DESC_PTR]][[[OFF_M]], [[OFF_K]]] [[A_BUF]], [[OPER_MBAR]], [[TRUE]] {ttg.partition = 2 : i32}
+    // CHECK-NEXT: ttng.async_tma_copy_global_to_local [[A_DESC]][[[OFF_M]], [[OFF_K]]] [[A_BUF]], [[OPER_MBAR]], [[TRUE]] {ttg.partition = 2 : i32}
     %a_reg = tt.descriptor_load %a_desc[%off_m, %off_k] : !tt.tensordesc<tensor<128x64xf16, #shared>> -> tensor<128x64xf16, #oper_layout>
     // CHECK-NEXT: [[B_BUF:%.*]] = ttg.memdesc_subview [[B_BUFS]][[[IDX]], [[C0]], [[C0]]]
-    // CHECK-NEXT: [[B_DESC_PTR:%.*]] = ttng.tensor_desc_to_tma_ptr [[B_DESC]]
-    // CHECK-NEXT: ttng.async_tma_copy_global_to_local [[B_DESC_PTR]][[[OFF_N]], [[OFF_K]]] [[B_BUF]], [[OPER_MBAR]], [[TRUE]] {ttg.partition = 2 : i32}
+    // CHECK-NEXT: ttng.async_tma_copy_global_to_local [[B_DESC]][[[OFF_N]], [[OFF_K]]] [[B_BUF]], [[OPER_MBAR]], [[TRUE]] {ttg.partition = 2 : i32}
     %b_reg = tt.descriptor_load %b_desc[%off_n, %off_k] : !tt.tensordesc<tensor<128x64xf16, #shared>> -> tensor<128x64xf16, #oper_layout>
 
     %a_shared = ttg.local_alloc %a_reg : (tensor<128x64xf16, #oper_layout>) -> !ttg.memdesc<128x64xf16, #shared, #smem>
@@ -1037,7 +1035,7 @@ tt.func @fp4_padded_load(%desc: !tt.tensordesc<tensor<1x256x64xui8, #fp4_padded_
   // CHECK: scf.for [[I:%arg[0-9]+]]
   scf.for %i = %c0_i32 to %ub step %c1_i32 : i32 {
     // CHECK: [[IDX:%.*]] = arith.muli [[I]], %c2_i32 : i32
-    // CHECK: async_tma_copy_global_to_local %{{[0-9]+}}[[[I]], [[IDX]]]
+    // CHECK: async_tma_copy_global_to_local %arg{{[0-9]+}}[[[I]], [[IDX]]]
     %val = tt.descriptor_load %desc[%i, %i] : !tt.tensordesc<tensor<1x256x64xui8, #fp4_padded_shared>> -> tensor<256x64xi8, #oper_layout>
     "use"(%val) : (tensor<256x64xi8, #oper_layout>) -> ()
   } {tt.warp_specialize}
@@ -1181,7 +1179,6 @@ tt.func @store_mma_load(
     // CHECK-NEXT: [[LOAD_READY_BAR:%.*]] = ttg.memdesc_subview [[LHS_READY_BARS]]
     // CHECK-NEXT: barrier_expect [[LOAD_READY_BAR]]{{.*}}partition = 2
     // CHECK-NEXT: [[LOAD_BUF:%.*]] = ttg.memdesc_subview
-    // CHECK-NEXT: tensor_desc_to_tma_ptr
     // CHECK-NEXT: async_tma_copy_global_to_local{{.*}}partition = 2
     %lhs = tt.descriptor_load %lhs_desc[%i, %i] : !tt.tensordesc<tensor<128x64xf16, #shared>> -> tensor<128x64xf16, #oper_layout>
 
@@ -1406,8 +1403,7 @@ tt.func public @attention_forward(
     // CHECK-NEXT: [[K_READY_BAR:%.*]] = ttg.memdesc_subview [[K_READY_MBARS]][[[K_INDEX]]]
     // CHECK-NEXT: barrier_expect [[K_READY_BAR]], 8192 {ttg.partition = 2 : i32}
     // CHECK-NEXT: [[K_BUF:%.*]] = ttg.memdesc_subview [[K_BUFS]][[[K_INDEX]], %c0_i32, %c0_i32]
-    // CHECK-NEXT: [[K_DESC_PTR:%.*]] = ttng.tensor_desc_to_tma_ptr [[K_DESC]]
-    // CHECK-NEXT: async_tma_copy_global_to_local [[K_DESC_PTR]][[[I]], %c0_i32] [[K_BUF]], [[K_READY_BAR]], %true {ttg.partition = 2 : i32}
+    // CHECK-NEXT: async_tma_copy_global_to_local [[K_DESC]][[[I]], %c0_i32] [[K_BUF]], [[K_READY_BAR]], %true {ttg.partition = 2 : i32}
     %K = tt.descriptor_load %K_desc[%i, %c0_i32] : !tt.tensordesc<tensor<64x64xf16, #shared>> -> tensor<64x64xf16, #load_blocked>
     %K_shared = ttg.local_alloc %K : (tensor<64x64xf16, #load_blocked>) -> !ttg.memdesc<64x64xf16, #shared, #smem>
 
@@ -1476,8 +1472,7 @@ tt.func public @attention_forward(
     // CHECK-NEXT: [[V_READY_BAR:%.*]] = ttg.memdesc_subview [[V_READY_MBARS]][[[V_INDEX]]]
     // CHECK-NEXT: barrier_expect [[V_READY_BAR]], 8192 {ttg.partition = 2 : i32}
     // CHECK-NEXT: [[V_BUF:%.*]] = ttg.memdesc_subview [[V_BUFS]][[[V_INDEX]], %c0_i32, %c0_i32]
-    // CHECK-NEXT: [[V_DESC_PTR:%.*]] = ttng.tensor_desc_to_tma_ptr [[V_DESC]]
-    // CHECK-NEXT: async_tma_copy_global_to_local [[V_DESC_PTR]][[[I]], %c0_i32] [[V_BUF]], [[V_READY_BAR]], %true {ttg.partition = 2 : i32}
+    // CHECK-NEXT: async_tma_copy_global_to_local [[V_DESC]][[[I]], %c0_i32] [[V_BUF]], [[V_READY_BAR]], %true {ttg.partition = 2 : i32}
     %V = tt.descriptor_load %V_desc[%i, %c0_i32] : !tt.tensordesc<tensor<64x64xf16, #shared>> -> tensor<64x64xf16, #load_blocked>
     %V_shared = ttg.local_alloc %V : (tensor<64x64xf16, #load_blocked>) -> !ttg.memdesc<64x64xf16, #shared, #smem>
 
