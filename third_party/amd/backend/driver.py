@@ -213,7 +213,7 @@ def make_launcher(constants, signature, warp_size):
             return f"[{val}]"
         if ty[0] == '*':
             return "PyObject*"
-        if ty in ("constexpr"):
+        if ty == "constexpr":
             return "PyObject*"
         return ty_to_cpp(ty)
 
@@ -223,7 +223,7 @@ def make_launcher(constants, signature, warp_size):
             return f"({val})"
         if ty[0] == '*':
             return "O"
-        if ty in ("constexpr"):
+        if ty == "constexpr":
             return "O"
         return {
             "float": "f",
