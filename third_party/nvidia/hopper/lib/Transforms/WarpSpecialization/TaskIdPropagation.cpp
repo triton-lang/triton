@@ -1,3 +1,4 @@
+#include "TaskIdPropagation.h"
 #include "mlir/Analysis/DataFlow/SparseAnalysis.h"
 #include "mlir/Analysis/DataFlowFramework.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
@@ -8,7 +9,6 @@
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/raw_ostream.h"
 
-#include "nvidia/hopper/include/Analysis/TaskIdPropagation.h"
 
 #define DEBUG_TYPE "task-id-propagation"
 #define DBGS() (llvm::dbgs() << "[" DEBUG_TYPE "]: ")
