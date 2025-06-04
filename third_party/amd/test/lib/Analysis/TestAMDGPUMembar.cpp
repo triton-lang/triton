@@ -1,4 +1,5 @@
 #include "TritonAMDGPUToLLVM/MembarUtility.h"
+#include "amd/lib/TritonAMDGPUToLLVM/AsyncUtility.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Transforms/DialectConversion.h"
 #include "triton/Analysis/Allocation.h"
