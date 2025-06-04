@@ -124,3 +124,38 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.targ
     tt.return
   }
 }
+
+// -----
+
+// COMMON: [[LOCAL_LOAD_SCOPE:#.*]] = #llvm.alias_scope<id = "amdgpu.LocalLoads"
+// COMMON: [[ASYNC_COPY_SCOPE:#.*]] = #llvm.alias_scope<id = "amdgpu.AsyncCopies"
+#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [64, 1], warpsPerCTA = [1, 1], order = [0, 1]}>
+#shared = #ttg.swizzled_shared<{vec = 8, perPhase = 8, maxPhase = 2, order = [0, 1]}>
+#shared1 = #ttg.swizzled_shared<{vec = 8, perPhase = 1, maxPhase = 16, order = [1, 0]}>
+#smem = #ttg.shared_memory
+#mma = #ttg.amd_mfma<{versionMajor = 4, versionMinor = 0, warpsPerCTA = [1, 4], instrShape = [32, 32], isTransposed = true}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.target = "hip:gfx950", "ttg.threads-per-warp" = 64 : i32} {
+  tt.func public @local_loads_with_loop_carried_token(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32},
+                                                         %arg1: !ttg.memdesc<64x1xf16, #shared, #smem, mutable>,
+                                                         %loopIterCount: i32) {
+    %c0_i32 = arith.constant 0 : i32
+    %c1_i32 = arith.constant 1 : i32
+
+    %1 = ttg.async_wait {num = 1 : i32}
+    // COMMON: llvm.load
+    %2 = ttg.local_load %arg1 token %1 : !ttg.memdesc<64x1xf16, #shared, #smem, mutable> -> tensor<64x1xf16, #blocked>
+
+    %loop_result:2 = scf.for %arg14 = %c0_i32 to %loopIterCount step %c1_i32 iter_args(%arg10 = %1, %arg11 = %2) -> (!ttg.async.token, tensor<64x1xf16, #blocked>)  : i32 {
+      // COMMON: llvm.load {{.*}} {alias_scopes = [[[LOCAL_LOAD_SCOPE]]], {{.*}}, noalias_scopes = [[[ASYNC_COPY_SCOPE]]]
+      %3 = ttg.local_load %arg1 token %arg10 : !ttg.memdesc<64x1xf16, #shared, #smem, mutable> -> tensor<64x1xf16, #blocked>
+      %4 = ttg.async_wait {num = 1 : i32}
+      scf.yield %4, %3: !ttg.async.token, tensor<64x1xf16, #blocked>
+    }
+
+    // Stores to keep the local_loads
+    %ptr = tt.splat %arg0 : !tt.ptr<f16> -> tensor<64x1x!tt.ptr<f16>, #blocked>
+    tt.store %ptr, %loop_result#1 : tensor<64x1x!tt.ptr<f16>, #blocked>
+    // COMMON: llvm.return
+    tt.return
+  }
+}
