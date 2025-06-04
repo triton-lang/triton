@@ -394,6 +394,19 @@ class KernelInterface(Generic[T]):
         # return cast(T, functools.partial(cast(Callable, self.run), grid=grid))
 
 
+def custom_serializer(obj):
+    if type(obj).__name__ == "dtype":
+        return {"triton_dtype": str(obj)}
+    raise TypeError(f"Object of type {type(obj).__name__} is not JSON serializable")
+
+
+def deserializer(obj):
+    from ..language import dtype
+    if obj.get("triton_dtype"):
+        return dtype(obj["triton_dtype"])
+    return obj
+
+
 def serialize_specialization_data(name, signature, constants, attrs, options, key):
     constants = {key: str(value) if value.__class__.__name__ == "dtype" else value for key, value in constants.items()}
     import json
@@ -402,7 +415,7 @@ def serialize_specialization_data(name, signature, constants, attrs, options, ke
         list(constants.values()), 'attrs_keys': [list(x) for x in attrs.keys()], 'attrs_vals': list(attrs.values()),
         'options': options.__dict__, 'key': key
     }
-    serialized_obj = json.dumps(obj)
+    serialized_obj = json.dumps(obj, default=custom_serializer)
     return serialized_obj
 
 
@@ -588,7 +601,7 @@ class JITFunction(KernelInterface[T]):
         bound_args, specialization, options = binder(*args, **kwargs)
 
         # compute cache key
-        key = str(specialization) + str(options)
+        key = (tuple(specialization), tuple(options.items()))
         kernel = kernel_cache.get(key, None)
 
         # Kernel is not cached; we have to compile.
@@ -725,7 +738,7 @@ class JITFunction(KernelInterface[T]):
         import json
         import triton.language as tl
         device = driver.active.get_current_device()
-        deserialized_obj = json.loads(specialization_data)
+        deserialized_obj = json.loads(specialization_data, object_hook=deserializer)
         if deserialized_obj['name'] != self._fn_name:
             raise RuntimeError(
                 f"Specialization data is for {deserialized_obj['name']} but trying to preload for {self._fn_name}")
@@ -744,6 +757,7 @@ class JITFunction(KernelInterface[T]):
             for key, value in deserialized_obj['options'].items()
         }
         key = deserialized_obj['key']
+        key = tuple(tuple(tuple(item2) for item2 in item) for item in key)
         _, _, backend, _ = self.device_caches[device]
         options = backend.parse_options(options)
         return self._do_compile(
