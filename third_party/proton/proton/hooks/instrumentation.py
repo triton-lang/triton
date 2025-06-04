@@ -149,7 +149,7 @@ class InstrumentationHook(Hook):
         backend_name = _get_backend_name()
 
         def to_ttgpuir_passes(pm):
-            triton_proton.add_allocate_proton_shared_memory(pm)
+            pass
 
         def to_llvmir_passes(pm):
             triton_proton.add_convert_proton_to_protongpu(pm, self.mode.metric_type, self.mode.sampling_strategy,
@@ -157,6 +157,7 @@ class InstrumentationHook(Hook):
                                                           self.mode.buffer_strategy, self.mode.buffer_type,
                                                           self.mode.buffer_size, max_shared_mem,
                                                           self.profile_buffer_size, self.profile_buffer_alignment)
+            triton_proton.add_allocate_proton_shared_memory(pm)
 
         def to_llvm_passes(pm):
             triton_proton.add_allocate_proton_global_scratch_buffer(pm)
