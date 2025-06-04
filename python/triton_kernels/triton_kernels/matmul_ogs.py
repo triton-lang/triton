@@ -43,7 +43,7 @@ class Epilogue:
     specs: FnSpecs
     fn_arg_values_matmul: tuple[object]
     fn_arg_values_finalize: tuple[object]
-    is_expensive: bool = False
+    effective_itemsize: float | None = None
 
 
 EpilogueSpecs = FnSpecs  # TODO: remove this alias when callers are updated
@@ -564,7 +564,7 @@ def matmul_ogs(x, w, bias,
         M, N, K, routing_data,
         can_use_persistent_tma(x, w, gather_indx, precision_config),
         can_use_fused_scatter(scatter_indx, fused_activation),
-        epilogue.is_expensive,
+        epilogue.effective_itemsize,
     )
     # compute grid size
     if not is_input_batched:
