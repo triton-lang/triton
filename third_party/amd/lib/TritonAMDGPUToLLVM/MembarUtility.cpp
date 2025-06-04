@@ -1,9 +1,11 @@
-#include "third_party/amd/include/TritonAMDGPUToLLVM/MembarUtility.h"
+#include "TritonAMDGPUToLLVM/MembarUtility.h"
 #include "Dialect/TritonAMDGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 
 namespace mlir::triton::AMD {
 namespace {
+constexpr const char *syncedViaAsyncWaitAttrName =
+    "ttg.amdgpu.syncedViaAsyncWait";
 
 // Traverses the def-chain including control flow of the token and returns true
 // if all defining operations are an AsyncWait
@@ -76,13 +78,13 @@ void annotateLocalLoadsSyncedViaAsyncWait(ModuleOp mod) {
   for (auto &loadOp : localLoads) {
     auto token = loadOp.getToken();
     bool isSyncedViaAsyncWait = token && AMD::comesFromAsyncWait(token);
-    loadOp->setAttr("ttg.amdgpu.syncedViaAsyncWait",
+    loadOp->setAttr(syncedViaAsyncWaitAttrName,
                     BoolAttr::get(ctx, isSyncedViaAsyncWait));
   }
 }
 
 bool isSyncedViaAsyncWait(triton::gpu::LocalLoadOp localLoadOp) {
-  auto attr = localLoadOp->getAttr("ttg.amdgpu.syncedViaAsyncWait");
+  auto attr = localLoadOp->getAttr(syncedViaAsyncWaitAttrName);
   // If the attribute is missing we output a remark instead of error because it
   // only affects performance
   if (!attr) {
