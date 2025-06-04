@@ -307,7 +307,9 @@ def routing_torch(logits, n_expts_act, sm_first=False, expt_indx=None, n_rows=No
             tk_indx = expt_indx
         else:
             tk_indx = torch.argsort(-vals, dim=1, stable=True)[:, :k]
+        tk_indx = tk_indx.long()
         tk_val = torch.take_along_dim(vals, tk_indx, dim=1)
+        tk_indx = tk_indx.int()
         return tk_val, tk_indx
 
     _, n_expts_tot = logits.shape
