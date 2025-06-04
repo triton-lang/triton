@@ -110,11 +110,11 @@ public:
     int numWarps = ttg::lookupNumWarps(tmemLoad);
     rewriter.setInsertionPoint(tmemLoad);
 
-    auto createSliceLoad = [&](int64_t nOffset)
-        -> std::pair<TMEMLoadOp, ttg::ConvertLayoutOp> {
+    auto createSliceLoad =
+        [&](int64_t nOffset) -> std::pair<TMEMLoadOp, ttg::ConvertLayoutOp> {
       // Generate the subslice op.
-      Value subSlice = rewriter.create<TMEMSubSliceOp>(
-          tmemLoad.getLoc(), tmem, nOffset, splitNSize);
+      Value subSlice = rewriter.create<TMEMSubSliceOp>(tmemLoad.getLoc(), tmem,
+                                                       nOffset, splitNSize);
 
       // Choose a layout compatible with the slice size.
       Attribute distLayout = getTmemCompatibleLayout(
@@ -125,8 +125,8 @@ public:
           splitOp.getOutLHS().getType().getElementType(), distLayout);
 
       // Generate the load and convert_layout back to the original layout.
-      auto load = rewriter.create<TMEMLoadOp>(tmemLoad.getLoc(),
-                                                    newLoadType, subSlice);
+      auto load =
+          rewriter.create<TMEMLoadOp>(tmemLoad.getLoc(), newLoadType, subSlice);
       auto cvt = rewriter.create<ttg::ConvertLayoutOp>(
           tmemLoad.getLoc(), splitOp.getOutLHS().getType(), load);
 
