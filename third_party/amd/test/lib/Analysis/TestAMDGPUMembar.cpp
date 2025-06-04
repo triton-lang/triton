@@ -21,7 +21,7 @@ struct TestAMDGPUMembarPass
 
   void runOnOperation() override {
     ModuleOp moduleOp = getOperation();
-    triton::AMD::markLocalLoadsSyncedViaAsyncWait(moduleOp);
+    triton::AMD::annotateLocalLoadsSyncedViaAsyncWait(moduleOp);
     // Print all ops after membar pass
     ModuleAllocation allocation(moduleOp);
     ModuleMembarAnalysis membarPass(&allocation, triton::AMD::membarFilter);

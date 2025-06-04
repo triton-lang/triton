@@ -53,7 +53,7 @@ bool filterAsyncLocalLoadsDependencies(Operation *op1, Operation *op2) {
   };
   auto isLocalLoadWithAsyncWaitToken = [](Operation *op) {
     auto localLoad = llvm::dyn_cast<triton::gpu::LocalLoadOp>(op);
-    return localLoad && localLoad->hasAttr("ttg.amdgpu.syncedViaAsyncWait");
+    return localLoad && isSyncedViaAsyncWait(localLoad);
   };
 
   // Early return if neither or both operands are an AsyncLoad
@@ -66,7 +66,7 @@ bool filterAsyncLocalLoadsDependencies(Operation *op1, Operation *op2) {
 };
 } // namespace
 
-void markLocalLoadsSyncedViaAsyncWait(ModuleOp mod) {
+void annotateLocalLoadsSyncedViaAsyncWait(ModuleOp mod) {
   SmallVector<triton::gpu::LocalLoadOp> localLoads;
   mod->walk([&](triton::gpu::LocalLoadOp localLoadOp) {
     localLoads.emplace_back(localLoadOp);
@@ -75,12 +75,22 @@ void markLocalLoadsSyncedViaAsyncWait(ModuleOp mod) {
   auto *ctx = mod->getContext();
   for (auto &loadOp : localLoads) {
     auto token = loadOp.getToken();
-    if (!token || !AMD::comesFromAsyncWait(token)) {
-      continue;
-    }
+    bool isSyncedViaAsyncWait = token && AMD::comesFromAsyncWait(token);
     loadOp->setAttr("ttg.amdgpu.syncedViaAsyncWait",
-                    UnitAttr::get(mod->getContext()));
+                    BoolAttr::get(ctx, isSyncedViaAsyncWait));
   }
+}
+
+bool isSyncedViaAsyncWait(triton::gpu::LocalLoadOp localLoadOp) {
+  auto attr = localLoadOp->getAttr("ttg.amdgpu.syncedViaAsyncWait");
+  // If the attribute is missing we output a remark instead of error because it
+  // only affects performance
+  if (!attr) {
+    localLoadOp.emitRemark("has no async sync information attached to it. "
+                           "Run annotateLocalLoadSyncedViaAsyncWait first");
+    return false;
+  }
+  return cast<BoolAttr>(attr).getValue();
 }
 
 bool membarFilter(Operation *op1, Operation *op2) {

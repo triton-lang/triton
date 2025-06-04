@@ -3,12 +3,14 @@
 
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/Operation.h"
+#include "triton/Dialect/TritonGPU/IR/Dialect.h"
 
 namespace mlir::triton::AMD {
 
 // Annotates LocalLoadOps with ttg.amdgpu.syncedByAsyncWait if they consume an
 // AsyncToken from an AsyncWait.
-void markLocalLoadsSyncedViaAsyncWait(ModuleOp mod);
+void annotateLocalLoadsSyncedViaAsyncWait(ModuleOp mod);
+bool isSyncedViaAsyncWait(triton::gpu::LocalLoadOp localLoadOp);
 
 // Filter function used in the AMDGPU backend to filter unnecessary barriers
 // during Membar Analysis. Filters applied by this function:
