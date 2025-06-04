@@ -2,7 +2,7 @@ import functools
 from typing import Dict, Optional, Union, Any
 
 import triton
-from triton._C.libtriton import triton_ir
+from triton._C.libtriton import ir as triton_ir
 from triton._C.libtriton import proton as triton_proton
 from triton._C.libtriton import amd as triton_amd
 from triton._C.libtriton import nvidia as triton_nvidia
