@@ -90,7 +90,10 @@ def _attn_fwd_inner(acc, l_i, m_i, q,  #
         else:
             acc = acc * alpha[:, None]
         # prepare p and v for the dot
-        v = desc_v.load([offsetv_y, 0])
+        if dtype == tl.float8e5:
+            v = desc_v.load([0, offsetv_y]).T
+        else:
+            v = desc_v.load([offsetv_y, 0])
         p = p.to(dtype)
         # note that this non transposed v for FP8 is only supported on Blackwell
         acc = tl.dot(p, v, acc)
@@ -181,8 +184,8 @@ def _attn_fwd(sm_scale, M,  #
     desc_q = _maybe_make_tensor_desc(desc_q, shape=[y_dim, HEAD_DIM], strides=[HEAD_DIM, 1],
                                      block_shape=[BLOCK_M, HEAD_DIM])
     if FP8_OUTPUT:
-        desc_v = _maybe_make_tensor_desc(desc_v, shape=[y_dim, HEAD_DIM], strides=[1, N_CTX],
-                                         block_shape=[BLOCK_N, HEAD_DIM])
+        desc_v = _maybe_make_tensor_desc(desc_v, shape=[HEAD_DIM, y_dim], strides=[N_CTX, 1],
+                                         block_shape=[HEAD_DIM, BLOCK_N])
     else:
         desc_v = _maybe_make_tensor_desc(desc_v, shape=[y_dim, HEAD_DIM], strides=[HEAD_DIM, 1],
                                          block_shape=[BLOCK_N, HEAD_DIM])
