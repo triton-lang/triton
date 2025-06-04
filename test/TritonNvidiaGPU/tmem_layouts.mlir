@@ -43,20 +43,20 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
   // CHECK-LABEL: @subtile4_tmem_load
   tt.func public @subtile4_tmem_load(%arg0: !ttg.memdesc<128x256xf32, #tmem, #ttng.tensor_memory, mutable>) -> (tensor<128x64xf32, #blocked4>, tensor<128x64xf32, #blocked4>, tensor<128x64xf32, #blocked4>, tensor<128x64xf32, #blocked4>) {
     // CHECK: %[[S0:.+]] = ttng.tmem_subslice %{{.+}} {N = 0 : i32}
-    // CHECK: %[[S1:.+]] = ttng.tmem_subslice %{{.+}} {N = 128 : i32}
-    // CHECK: %[[S2:.+]] = ttng.tmem_subslice %[[S0]] {N = 0 : i32}
-    // CHECK: %[[S3:.+]] = ttng.tmem_subslice %[[S0]] {N = 64 : i32}
-    // CHECK: %[[S4:.+]] = ttng.tmem_subslice %[[S1]] {N = 0 : i32}
-    // CHECK: %[[S5:.+]] = ttng.tmem_subslice %[[S1]] {N = 64 : i32}
-    // CHECK: %[[L4:.+]] = ttng.tmem_load %[[S4]] : !ttg.memdesc<128x64xf32
-    // CHECK: %[[C4:.+]] = ttg.convert_layout %[[L4]]
-    // CHECK: %[[L5:.+]] = ttng.tmem_load %[[S5]] : !ttg.memdesc<128x64xf32
+    // CHECK: %[[S1:.+]] = ttng.tmem_subslice %[[S0]] {N = 0 : i32}
+    // CHECK: %[[L1:.+]] = ttng.tmem_load %[[S1]] : !ttg.memdesc<128x64xf32
+    // CHECK: %[[C1:.+]] = ttg.convert_layout %[[L1]]
+    // CHECK: %[[S2:.+]] = ttng.tmem_subslice %[[S0]] {N = 64 : i32}
     // CHECK: %[[L2:.+]] = ttng.tmem_load %[[S2]] : !ttg.memdesc<128x64xf32
     // CHECK: %[[C2:.+]] = ttg.convert_layout %[[L2]]
-    // CHECK: %[[L3:.+]] = ttng.tmem_load %[[S3]] : !ttg.memdesc<128x64xf32
-    // CHECK: %[[C3:.+]] = ttg.convert_layout %[[L3]]
+    // CHECK: %[[S3:.+]] = ttng.tmem_subslice %{{.+}} {N = 128 : i32}
+    // CHECK: %[[S4:.+]] = ttng.tmem_subslice %[[S3]] {N = 0 : i32}
+    // CHECK: %[[L4:.+]] = ttng.tmem_load %[[S4]] : !ttg.memdesc<128x64xf32
+    // CHECK: %[[C4:.+]] = ttg.convert_layout %[[L4]]
+    // CHECK: %[[S5:.+]] = ttng.tmem_subslice %[[S3]] {N = 64 : i32}
+    // CHECK: %[[L5:.+]] = ttng.tmem_load %[[S5]] : !ttg.memdesc<128x64xf32
     // CHECK: %[[C5:.+]] = ttg.convert_layout %[[L5]]
-    // CHECK: tt.return %[[C2]], %[[C3]], %[[C4]], %[[C5]]
+    // CHECK: tt.return %[[C1]], %[[C2]], %[[C4]], %[[C5]]
     %0 = ttng.tmem_load %arg0 : !ttg.memdesc<128x256xf32, #tmem, #ttng.tensor_memory, mutable> -> tensor<128x256xf32, #blocked>
     %1 = tt.reshape %0 : tensor<128x256xf32, #blocked> -> tensor<128x2x128xf32, #blocked7>
     %2 = tt.trans %1 {order = array<i32: 0, 2, 1>} : tensor<128x2x128xf32, #blocked7> -> tensor<128x128x2xf32, #blocked8>
