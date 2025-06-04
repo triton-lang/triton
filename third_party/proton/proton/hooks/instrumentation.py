@@ -167,9 +167,12 @@ class InstrumentationHook(Hook):
                 triton_proton.add_convert_proton_amd_gpu_to_llvm(pm, arch)
 
         backends[backend_name].compiler.instrumentation = Instrumentation({
-            "ttir_to_ttgpuir": lambda pm: to_ttgpuir_passes(pm),
-            "ttgir_to_llvmir": lambda pm: to_llvmir_passes(pm),
-            "llvmir_to_llvm": lambda pm: to_llvm_passes(pm),
+            "ttir_to_ttgpuir":
+            lambda pm: to_ttgpuir_passes(pm),
+            "ttgir_to_llvmir":
+            lambda pm: to_llvmir_passes(pm),
+            "llvmir_to_llvm":
+            lambda pm: to_llvm_passes(pm),
         })
 
         # Set up the profiling allocator
