@@ -3,7 +3,7 @@
 
 include "mlir/Pass/PassBase.td"
 
-def ProtonScheduleBufferStorePass: Pass<"proton-schedule-buffer-store", "mlir::ModuleOp"> {
+def ScheduleBufferStorePass: Pass<"proton-schedule-buffer-store", "mlir::ModuleOp"> {
   let summary = "Pass to move all Proton buffer stores to the end of the function";
 
   let description = "This pass makes the measurement more accurate by moving the expensive "

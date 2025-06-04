@@ -8,15 +8,14 @@
 
 namespace mlir::triton::proton::gpu {
 
-#define GEN_PASS_DEF_PROTONSCHEDULEBUFFERSTOREPASS
+#define GEN_PASS_DEF_SCHEDULEBUFFERSTOREPASS
 #include "Dialect/ProtonGPU/Transforms/Passes.h.inc"
 
-struct ProtonScheduleBufferStorePass
-    : public impl::ProtonScheduleBufferStorePassBase<
-          ProtonScheduleBufferStorePass> {
+struct ScheduleBufferStorePass
+    : public impl::ScheduleBufferStorePassBase<ScheduleBufferStorePass> {
 
-  using impl::ProtonScheduleBufferStorePassBase<
-      ProtonScheduleBufferStorePass>::ProtonScheduleBufferStorePassBase;
+  using impl::ScheduleBufferStorePassBase<
+      ScheduleBufferStorePass>::ScheduleBufferStorePassBase;
 
   void runOnOperation() override {
     ModuleOp m = getOperation();
