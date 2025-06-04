@@ -1,9 +1,19 @@
 #ifndef TRITON_THIRD_PARTY_AMD_INCLUDE_TRITONAMDGPUTOLLVM_MEMBARUTILITY_H_
 #define TRITON_THIRD_PARTY_AMD_INCLUDE_TRITONAMDGPUTOLLVM_MEMBARUTILITY_H_
 
+#include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/Operation.h"
+#include "triton/Dialect/TritonGPU/IR/Dialect.h"
 
 namespace mlir::triton::AMD {
+
+// Annotates LocalLoadOps with ttg.amdgpu.syncedByAsyncWait=true if they are
+// synced by an AsyncWait.
+void annotateLocalLoadsSyncedViaAsyncWait(ModuleOp mod);
+
+// Getter for the annotation applied by annotateLocalLoadsSyncedViaAsyncWait
+bool isSyncedViaAsyncWait(triton::gpu::LocalLoadOp localLoadOp);
+
 // Filter function used in the AMDGPU backend to filter unnecessary barriers
 // during Membar Analysis. Filters applied by this function:
 // 1) Do not create barriers between AsyncCopyGlobalToLocal and LocalLoad if the
