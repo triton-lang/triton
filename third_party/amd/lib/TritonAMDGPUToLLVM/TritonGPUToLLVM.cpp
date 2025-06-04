@@ -100,6 +100,7 @@ struct ConvertTritonAMDGPUToLLVM
     // Allocate shared memory and set barrier
     ModuleAllocation allocation(mod);
 
+    AMD::markLocalLoadsSyncedViaAsyncWait(mod);
     ModuleMembarAnalysis membarPass(&allocation,
                                     mlir::triton::AMD::membarFilter);
     membarPass.run();

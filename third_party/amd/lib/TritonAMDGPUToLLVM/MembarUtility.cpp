@@ -1,6 +1,5 @@
 #include "third_party/amd/include/TritonAMDGPUToLLVM/MembarUtility.h"
 #include "Dialect/TritonAMDGPU/IR/Dialect.h"
-#include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 
 namespace mlir::triton::AMD {
@@ -47,19 +46,14 @@ bool comesFromAsyncWait(Value token) {
 }
 
 // Returns true if one of the operands is a LocalLoad synced via AsyncWait.
-bool filterAsyncLocalLoadsDeppendencies(Operation *op1, Operation *op2) {
+bool filterAsyncLocalLoadsDependencies(Operation *op1, Operation *op2) {
   auto isAsyncLoad = [](Operation *op) {
     return llvm::isa<triton::gpu::AsyncCopyGlobalToLocalOp,
                      triton::amdgpu::BufferLoadToLocalOp>(op);
   };
   auto isLocalLoadWithAsyncWaitToken = [](Operation *op) {
     auto localLoad = llvm::dyn_cast<triton::gpu::LocalLoadOp>(op);
-    if (!localLoad)
-      return false;
-    Value token = localLoad.getToken();
-    if (!token || !comesFromAsyncWait(token))
-      return false;
-    return true;
+    return localLoad && localLoad->hasAttr("ttg.amdgpu.syncedViaAsyncWait");
   };
 
   // Early return if neither or both operands are an AsyncLoad
@@ -72,7 +66,24 @@ bool filterAsyncLocalLoadsDeppendencies(Operation *op1, Operation *op2) {
 };
 } // namespace
 
+void markLocalLoadsSyncedViaAsyncWait(ModuleOp mod) {
+  SmallVector<triton::gpu::LocalLoadOp> localLoads;
+  mod->walk([&](triton::gpu::LocalLoadOp localLoadOp) {
+    localLoads.emplace_back(localLoadOp);
+  });
+
+  auto *ctx = mod->getContext();
+  for (auto &loadOp : localLoads) {
+    auto token = loadOp.getToken();
+    if (!token || !AMD::comesFromAsyncWait(token)) {
+      continue;
+    }
+    loadOp->setAttr("ttg.amdgpu.syncedViaAsyncWait",
+                    UnitAttr::get(mod->getContext()));
+  }
+}
+
 bool membarFilter(Operation *op1, Operation *op2) {
-  return filterAsyncLocalLoadsDeppendencies(op1, op2);
+  return filterAsyncLocalLoadsDependencies(op1, op2);
 }
 } // namespace mlir::triton::AMD
