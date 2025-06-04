@@ -297,8 +297,7 @@ void init_triton_ir(py::module &&m) {
 
   m.def("load_dialects", [](MLIRContext &context) {
     DialectRegistry registry;
-    registry.insert<TritonDialect, ttg::TritonGPUDialect,
-                    ttng::TritonNvidiaGPUDialect, math::MathDialect,
+    registry.insert<TritonDialect, ttg::TritonGPUDialect, math::MathDialect,
                     arith::ArithDialect, scf::SCFDialect,
                     ::mlir::gpu::GPUDialect, cf::ControlFlowDialect,
                     LLVM::LLVMDialect, mlir::ub::UBDialect>();

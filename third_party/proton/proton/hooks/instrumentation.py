@@ -2,8 +2,10 @@ import functools
 from typing import Dict, Optional, Union, Any
 
 import triton
-from triton._C.libtriton import ir
+from triton._C.libtriton import triton_ir
 from triton._C.libtriton import proton as triton_proton
+from triton._C.libtriton import amd as triton_amd
+from triton._C.libtriton import nvidia as triton_nvidia
 from triton._C.libproton import proton as libproton
 from triton.compiler import LazyDict
 from triton.runtime.jit import JITFunction
@@ -228,15 +230,22 @@ class InstrumentationHook(Hook):
         self.metadata_path[function] = metadata_path
 
         if ir_path:
-            context = ir.context()
-            ir.load_dialects(context)
+            context = triton_ir.context()
+            triton_ir.load_dialects(context)
+            backend_name = _get_backend_name()
+            if backend_name == "nvidia":
+                triton_nvidia.load_dialects(context)
+            elif backend_name == "amd":
+                triton_amd.load_dialects(context)
             triton_proton.load_dialects(context)
-            module = ir.parse_mlir_module(ir_path, context)
+            module = triton_ir.parse_mlir_module(ir_path, context)
             module.context = context
 
             scope_id_names = triton_proton.get_scope_id_names(module)
             scope_id_parents = triton_proton.get_scope_id_parents(module)
             libproton.init_function_metadata(function, name, scope_id_names, scope_id_parents, metadata_path)
+        else:
+            raise RuntimeError(f"IR path not found in metadata for function {function}")
 
     def _data_ptr(self) -> int:
         return 0 if self.buffer is None else self.buffer.data_ptr()
