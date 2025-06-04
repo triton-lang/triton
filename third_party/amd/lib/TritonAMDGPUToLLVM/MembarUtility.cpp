@@ -77,7 +77,7 @@ void annotateLocalLoadsSyncedViaAsyncWait(ModuleOp mod) {
   auto *ctx = mod->getContext();
   for (auto &loadOp : localLoads) {
     auto token = loadOp.getToken();
-    bool isSyncedViaAsyncWait = token && AMD::comesFromAsyncWait(token);
+    bool isSyncedViaAsyncWait = token && comesFromAsyncWait(token);
     loadOp->setAttr(syncedViaAsyncWaitAttrName,
                     BoolAttr::get(ctx, isSyncedViaAsyncWait));
   }
@@ -85,11 +85,10 @@ void annotateLocalLoadsSyncedViaAsyncWait(ModuleOp mod) {
 
 bool isSyncedViaAsyncWait(triton::gpu::LocalLoadOp localLoadOp) {
   auto attr = localLoadOp->getAttr(syncedViaAsyncWaitAttrName);
-  // If the attribute is missing we output a remark instead of error because it
-  // only affects performance
   if (!attr) {
-    localLoadOp.emitRemark("has no async sync information attached to it. "
-                           "Run annotateLocalLoadSyncedViaAsyncWait first");
+    localLoadOp.emitRemark("has no async sync information attached to it which "
+                           "might negatively affect performance. Run "
+                           "annotateLocalLoadSyncedViaAsyncWait first");
     return false;
   }
   return cast<BoolAttr>(attr).getValue();

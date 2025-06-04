@@ -7,9 +7,11 @@
 
 namespace mlir::triton::AMD {
 
-// Annotates LocalLoadOps with ttg.amdgpu.syncedByAsyncWait if they consume an
-// AsyncToken from an AsyncWait.
+// Annotates LocalLoadOps with ttg.amdgpu.syncedByAsyncWait=true if they are
+// synced by an AsyncWait.
 void annotateLocalLoadsSyncedViaAsyncWait(ModuleOp mod);
+
+// Getter for the annotation applied by annotateLocalLoadsSyncedViaAsyncWait
 bool isSyncedViaAsyncWait(triton::gpu::LocalLoadOp localLoadOp);
 
 // Filter function used in the AMDGPU backend to filter unnecessary barriers
