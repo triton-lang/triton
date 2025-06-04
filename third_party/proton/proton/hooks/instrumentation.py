@@ -107,6 +107,16 @@ def _interpret_mode(mode_obj: Union[str, mode.InstrumentationMode]) -> mode.Inst
         raise ValueError(f"Unknown mode: {mode_obj}")
 
 
+def _get_backend_name() -> str:
+    backend = triton.runtime.driver.active.get_current_target().backend
+    if backend == "cuda":
+        return "nvidia"
+    elif backend == "hip":
+        return "amd"
+    else:
+        raise RuntimeError(f"Unsupported backend: {backend}")
+
+
 class InstrumentationHook(Hook):
     priority: int = 0
     # It's important to note that only one instance of the instrumentation hook can be active at a time.
@@ -136,15 +146,19 @@ class InstrumentationHook(Hook):
         backend = triton.runtime.driver.active.get_current_target().backend
         device = triton.runtime.driver.active.get_current_device()
         max_shared_mem = triton.runtime.driver.active.utils.get_device_properties(device)["max_shared_mem"]
+        backend_name = _get_backend_name()
 
-        if backend == "cuda":
-            backend_name = "nvidia"
-        elif backend == "hip":
-            backend_name = "amd"
-        else:
-            raise RuntimeError(f"Unsupported backend: {backend}")
+        def to_ttgpuir_passes(pm):
+            triton_proton.add_allocate_proton_shared_memory(pm)
 
         def to_llvmir_passes(pm):
+            triton_proton.add_convert_proton_to_protongpu(pm, self.mode.metric_type, self.mode.sampling_strategy,
+                                                          self.mode.sampling_options, self.mode.granularity,
+                                                          self.mode.buffer_strategy, self.mode.buffer_type,
+                                                          self.mode.buffer_size, max_shared_mem,
+                                                          self.profile_buffer_size, self.profile_buffer_alignment)
+
+        def to_llvm_passes(pm):
             triton_proton.add_allocate_proton_global_scratch_buffer(pm)
             if backend == "cuda":
                 triton_proton.add_convert_proton_nvidia_gpu_to_llvm(pm)
@@ -152,21 +166,10 @@ class InstrumentationHook(Hook):
                 arch = triton.runtime.driver.active.utils.get_device_properties(device)["arch"].split(":")[0]
                 triton_proton.add_convert_proton_amd_gpu_to_llvm(pm, arch)
 
-        def to_ttgpuir_passes(pm):
-            triton_proton.add_convert_proton_to_protongpu(pm, self.mode.metric_type, self.mode.sampling_strategy,
-                                                          self.mode.sampling_options, self.mode.granularity,
-                                                          self.mode.buffer_strategy, self.mode.buffer_type,
-                                                          self.mode.buffer_size, max_shared_mem,
-                                                          self.profile_buffer_size, self.profile_buffer_alignment)
-
-            triton_proton.add_allocate_proton_shared_memory(pm)
-
-        ttgpuir_func = lambda pm: to_ttgpuir_passes(pm)
-        llvmir_func = lambda pm: to_llvmir_passes(pm)
-
         backends[backend_name].compiler.instrumentation = Instrumentation({
-            "ttgpuir": ttgpuir_func,
-            "llvmir": llvmir_func,
+            "ttir_to_ttgpuir": lambda pm: to_ttgpuir_passes(pm),
+            "ttgir_to_llvmir": lambda pm: to_llvmir_passes(pm),
+            "llvmir_to_llvm": lambda pm: to_llvm_passes(pm),
         })
 
         # Set up the profiling allocator
@@ -189,16 +192,12 @@ class InstrumentationHook(Hook):
 
         InstrumentationHook.active_count -= 1
 
-        backend = triton.runtime.driver.active.get_current_target().backend
-        if backend == "cuda":
-            backend_name = "nvidia"
-        elif backend == "hip":
-            backend_name = "amd"
-        else:
-            raise RuntimeError(f"Unsupported backend: {backend}")
+        backend_name = _get_backend_name()
 
+        # No instrumentation passes are registered anymore
         backends[backend_name].compiler.instrumentation = {}
 
+        # No runtime instrumentation hook is active anymore
         set_instrumentation_off()
 
         # Restore original JIT function run method
@@ -211,6 +210,7 @@ class InstrumentationHook(Hook):
         # Reset host memory for external processing
         if InstrumentationHook.enable_host_buffer:
             InstrumentationHook.host_buffer = None
+
         # Reset the buffer reference
         self.buffer = None
 
@@ -219,7 +219,7 @@ class InstrumentationHook(Hook):
             return
 
         # Find the IR path in metadata
-        ir_path = next((path for key, path in metadata_group.items() if key.endswith(("ttgir", "ttir"))), None)
+        ir_path = next((path for key, path in metadata_group.items() if key.endswith(("ttgir"))), None)
         metadata_path = next((path for key, path in metadata_group.items() if key.endswith(("json"))), None)
         self.metadata_path[function] = metadata_path
 
