@@ -1,5 +1,6 @@
 #include "TritonAMDGPUToLLVM/Passes.h"
 
+#include "AsyncUtility.h"
 #include "PatternTritonGPUOpToLLVM.h"
 #include "SchedInstructions.h"
 #include "TargetInfo.h"
