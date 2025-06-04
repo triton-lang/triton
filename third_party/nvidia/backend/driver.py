@@ -1,5 +1,5 @@
 import array
-from collections.abc import Callable, Iterator, MutableSequence, Sequence
+from collections.abc import Callable, Iterator, Sequence
 import functools
 import inspect
 import operator
@@ -8,7 +8,6 @@ import subprocess
 from typing import Any
 import triton
 import re
-from pathlib import Path
 from triton import knobs
 from triton.runtime import _allocation
 from triton.backends.compiler import GPUTarget
@@ -99,15 +98,11 @@ def ty_to_cpp(ty):
     }[ty]
 
 
-# A nested sequence of arg type strings.
-_ArgTypeWithNesting = str | Sequence[Any]
-
-# Nested mask that has True for elements that should be kept and False for
-# elements that should be removed. Has the same shape as the signature.
-_ArgMask = Sequence[bool | Any]
-
-
-def _make_nonconst_arg_mask(signature_types: Sequence[_ArgTypeWithNesting]) -> _ArgMask:
+# signature_types: _ArgTypeWithNesting = str | Sequence[_ArgTypeWithNesting]
+# returns: _ArgMask = Sequence[bool | _ArgMask]
+#   Nested mask that has True for elements that should be kept and False for
+#   elements that should be removed. Has the same shape as the signature.
+def _make_nonconst_arg_mask(signature_types: Sequence[Any]) -> Any:
     """Makes a mask that keeps non-constexpr args and removes constexpr args."""
     # For example:
     #   Signature: [i32, constexpr, (i32, constexpr)]
@@ -124,7 +119,9 @@ def _flatten_tuples(xs):
             yield x
 
 
-def _flatten_and_apply_arg_mask(args: Sequence[Any], mask: _ArgMask) -> Iterator[Any]:
+# args: Sequence of similar tuple/nesting structure as mask
+# mask: _ArgMask = Sequence[bool | _ArgMask]
+def _flatten_and_apply_arg_mask(args: Sequence[Any], mask: Sequence[Any]) -> Iterator[Any]:
     """Flattens nested args skipping those filtered out by the mask."""
     if len(mask) != len(args):
         # If the included elements in the mask are the same length as the args,
@@ -139,12 +136,8 @@ def _flatten_and_apply_arg_mask(args: Sequence[Any], mask: _ArgMask) -> Iterator
     for mask_item, arg in zip(mask, args):
         if not mask_item:
             continue
-        arg_is_sequence = isinstance(arg, Sequence) and not isinstance(arg, str)
-        mask_item_is_sequence = isinstance(mask_item, Sequence)
-        if arg_is_sequence and mask_item_is_sequence:
+        if isinstance(arg, tuple):
             yield from _flatten_and_apply_arg_mask(arg, mask_item)
-        elif arg_is_sequence != mask_item_is_sequence:
-            raise ValueError(f"Inconsistent mask {mask_item} and arg {arg}")
         else:
             yield arg
 
@@ -191,9 +184,9 @@ def _expand_signature(signature, tensordesc_meta):
     return output
 
 
-def make_launcher(signature_types: Sequence[_ArgTypeWithNesting], tensordesc_meta: Sequence[Any]) -> Callable[..., None]:
+def make_launcher(signature_types: Sequence[Any], tensordesc_meta: Sequence[Any]) -> Callable[..., None]:
 
-    signature_types = _expand_signature(signature.values())
+    signature_types = _expand_signature(signature_types, tensordesc_meta)
     non_const_arg_mask = _make_nonconst_arg_mask(signature_types)
     flattened_signature = list(_flatten_and_apply_arg_mask(signature_types, non_const_arg_mask))
 

@@ -333,6 +333,9 @@ class constexpr(base_value):
         args = (_unwrap_if_constexpr(x) for x in _normalize_tuple(args))
         return self.value.__getitem__(*args)
 
+    def __hash__(self):
+        return hash(self.value)
+
 
 def constexpr_function(f):
     """
