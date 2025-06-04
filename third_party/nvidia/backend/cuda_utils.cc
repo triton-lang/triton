@@ -1,20 +1,17 @@
 #include <algorithm>
+#include <alloca.h>
+#include <dlfcn.h>
 #include <map>
+#include <pybind11/pybind11.h>
+#include <pybind11/stl.h>
+#include <pybind11/stl_bind.h>
 #include <string>
 #include <string_view>
 #include <tuple>
 #include <vector>
-#define PY_SSIZE_T_CLEAN
-#include <Python.h>
-#include <alloca.h>
-#include <dlfcn.h>
-#include <pybind11/pybind11.h>
-#include <pybind11/stl.h>
-#include <pybind11/stl_bind.h>
 
 #include <cstdint>
 #include <cstdlib>
-#include <initializer_list>
 #include <iterator>
 #include <limits>
 #include <optional>
@@ -26,9 +23,9 @@ namespace py = pybind11;
 namespace {
 
 // Raise a python exception if the CUDA result code is not CUDA_SUCCESS.
-inline bool gpuAssert(CUresult code, const char *file, int line) {
+inline void gpuAssert(CUresult code, const char *file, int line) {
   if (code == CUDA_SUCCESS)
-    return true;
+    return;
   const char *error = nullptr;
   cuGetErrorString(code, &error);
   py::str error_str = py::str("Triton Error [CUDA]: {0}").format(error);
@@ -157,33 +154,6 @@ void launchKernel(const TritonLaunchConfig &config) {
 // otherwise.
 using ExtractorType = bool (*)(py::object obj, void *ptr);
 
-// Enable peer access if dev_ptr is allocated on a different device than the
-// device on which we will execute the kernel.
-void enablePeerAccessIfNecessary(CUdeviceptr dev_ptr) {
-  CUmemorytype mem_type = CU_MEMORYTYPE_HOST;
-  CUresult status = cuPointerGetAttribute(
-      &mem_type, CU_POINTER_ATTRIBUTE_MEMORY_TYPE, dev_ptr);
-  if (status != CUDA_SUCCESS || mem_type != CU_MEMORYTYPE_DEVICE) {
-    return;
-  }
-  int mem_device_ordinal = 0;
-  CUDA_CHECK(cuPointerGetAttribute(
-      &mem_device_ordinal, CU_POINTER_ATTRIBUTE_DEVICE_ORDINAL, dev_ptr));
-  CUdevice mem_device = 0;
-  CUDA_CHECK(cuDeviceGet(&mem_device, mem_device_ordinal));
-  CUdevice compute_device = 0;
-  CUDA_CHECK(cuCtxGetDevice(&compute_device));
-  if (mem_device != compute_device) {
-    CUcontext mem_ctx = nullptr;
-    CUDA_CHECK(cuDevicePrimaryCtxRetain(&mem_ctx, mem_device));
-    CUresult status = cuCtxEnablePeerAccess(mem_ctx, /*flags=*/0);
-    if (status == CUDA_ERROR_PEER_ACCESS_ALREADY_ENABLED) {
-      status = CUDA_SUCCESS;
-    }
-    CUDA_CHECK(status);
-  }
-}
-
 // Extract a CUDA device pointer from a pointer-like py::object obj, and store
 // it to the memory location pointed by ptr.
 bool extractPointer(py::object obj, void *ptr) {
@@ -213,7 +183,6 @@ bool extractPointer(py::object obj, void *ptr) {
   if (*dev_ptr == 0) {
     return true; // valid nullptr
   }
-  enablePeerAccessIfNecessary(*dev_ptr);
 
   CUresult status = cuPointerGetAttribute(
       dev_ptr, CU_POINTER_ATTRIBUTE_DEVICE_POINTER, *dev_ptr);
@@ -325,20 +294,6 @@ std::optional<char> findExtractor(std::string_view type_repr) {
   return std::nullopt;
 }
 
-PyDoc_STRVAR(buildSignatureMetadata__doc__,
-             R"(buildSignatureMetadata(signature_iterator) -> bytes
-
-Build a metadata object describing the signature of a kernel.
-
-This can then be passed as the signature_metadata parameter to the launch()
-function.
-
-:param signature: list of types describing the signature of a kernel,
-    specialized parameters should be represented with None
-:type signature: sequence or iterable
-:return: an opaque metadata object which can then be passed to launch()
-:rtype: bytes
-)");
 std::vector<char> buildSignatureMetadata(std::vector<std::string> signature) {
   std::vector<char> signature_metadata;
   for (std::string type : signature) {
@@ -374,47 +329,11 @@ static void ensureCudaContext() {
   }
 }
 
-PyDoc_STRVAR(
-    launch__doc__,
-    R"(launch(gridDimX, gridDimY, gridDimZ, stream, kernel, packed_metadata, launch_metadata, launch_enter_hook, launch_exit_hook, kernel_arg_types, global_scratch, kernel_args)
-
-Launch a kernel on an Nvidia GPU.
-
-:param gridDimX: X dimension of the grid
-:type gridDimX: signed integer
-:param gridDimY: Y dimension of the grid
-:type gridDimY: signed integer
-:param gridDimZ: Z dimension of the grid
-:type gridDimZ: signed integer
-:param stream: CUDA Stream to launch on
-:type stream: unsigned long integer (pointer)
-:param kernel: CUDA kernel to launch
-:type kernel: unsigned long integer (pointer)
-:param launch_cooperative_grid: launch a cooperative grid
-:type launch_cooperative_grid bool
-:param launch_pdl: enable programmatic dependent launch
-:type launch_pdl: bool
-:param packed_metadata: Kernel metadata, including in sequence:
-    number of warps, number of CTAs, required bytes of shared memory,
-    cluster dimensions x, y, and z
-:type packed_metadata: 6-tuple
-:param hook_args: arguments to pass to the enter and exit hooks
-:type hook_args: object
-:param launch_enter_hook: hook to call just before launching the kernel
-:type launch_enter_hook: callable
-:param launch_exit_hook: hook to call just after launching the kernel
-:type launch_exit_hook: callable
-:param signature_metadata: matadata built from build_signature_metadata
-:type signature_metadata: bytes
-:param global_scratch: pointer to global scratch memory
-:type global_scratch: pointer
-:param kernel_args: kernel parameters
-:type kernel_args: tuple
-
-:raises RuntimeError: on kernel launch failure
-)");
 void launch(int grid_dim_x, int grid_dim_y, int grid_dim_z, int64_t stream,
             int64_t function, bool launch_cooperative_grid, bool launch_pdl,
+            /* packed_metadata: 6-tuple of (number of warps, number of CTAs,
+             * required bytes of shared memory, cluster dimension x, y, and
+             * z) */
             std::tuple<int, int, int, int, int, int> packed_metadata,
             py::object hook_args, py::object launch_enter_hook,
             py::object launch_exit_hook, std::vector<char> signature_metadata,
@@ -431,15 +350,6 @@ void launch(int grid_dim_x, int grid_dim_y, int grid_dim_z, int64_t stream,
       .stream = reinterpret_cast<CUstream>(stream),
       .function = reinterpret_cast<CUfunction>(function),
   };
-  int num_ctas = std::get<1>(packed_metadata);
-
-  auto &cluster = config.cluster;
-  if (num_ctas != cluster.size()) {
-    throw py::value_error(
-        py::str("Expected cluster dimensions ({0}, {1}, {2}) to have a total "
-                "size of {3}")
-            .format(cluster.x, cluster.y, cluster.z, num_ctas));
-  }
 
   if (signature_metadata.size() != kernel_args.size()) {
     throw py::type_error(
@@ -616,22 +526,18 @@ defineGetFunctionHandle(getCuOccupancyMaxActiveClustersHandle,
 defineGetFunctionHandle(getCuTensorMapEncodeTiledHandle,
                         cuTensorMapEncodeTiled);
 
-static PyObject *occupancyMaxActiveClusters(PyObject *self, PyObject *args) {
-  int clusterDimX = -1, clusterDimY = -1, clusterDimZ = -1,
-      maxActiveClusters = -1;
-  int shared = 0;
-  CUfunction func;
-
-  if (!PyArg_ParseTuple(args, "Kiiii", &func, &shared, &clusterDimX,
-                        &clusterDimY, &clusterDimZ)) {
-    return NULL;
-  }
+static int32_t occupancyMaxActiveClusters(uint64_t func, int32_t shared,
+                                          int32_t clusterDimX,
+                                          int32_t clusterDimY,
+                                          int32_t clusterDimZ) {
+  int32_t maxActiveClusters = -1;
+  CUfunction cuFunc = (CUfunction)func;
 
   // Let each SM have one block
   int maxActiveBlocks = 1;
   py::gil_scoped_release release;
   CUDA_CHECK(cuFuncSetAttribute(
-      func, CU_FUNC_ATTRIBUTE_MAX_DYNAMIC_SHARED_SIZE_BYTES, shared));
+      cuFunc, CU_FUNC_ATTRIBUTE_MAX_DYNAMIC_SHARED_SIZE_BYTES, shared));
 
   CUlaunchAttribute launchAttr[1];
   launchAttr[0].id = CU_LAUNCH_ATTRIBUTE_CLUSTER_DIMENSION;
@@ -655,19 +561,14 @@ static PyObject *occupancyMaxActiveClusters(PyObject *self, PyObject *args) {
                                       getCuOccupancyMaxActiveClustersHandle);
 
   CUDA_CHECK(cuFuncSetAttribute(
-      func, CU_FUNC_ATTRIBUTE_NON_PORTABLE_CLUSTER_SIZE_ALLOWED, 1));
-  CUDA_CHECK(cuOccupancyMaxActiveClusters(&maxActiveClusters, func, &config));
-  return PyLong_FromLong(maxActiveClusters);
+      cuFunc, CU_FUNC_ATTRIBUTE_NON_PORTABLE_CLUSTER_SIZE_ALLOWED, 1));
+  CUDA_CHECK(cuOccupancyMaxActiveClusters(&maxActiveClusters, cuFunc, &config));
+  return maxActiveClusters;
 }
 
-static PyObject *setPrintfFifoSize(PyObject *self, PyObject *args) {
-  long size;
-  if (!PyArg_ParseTuple(args, "l", &size)) {
-    return NULL;
-  }
+static void setPrintfFifoSize(int32_t size) {
   if (size < 0) {
-    PyErr_SetString(PyExc_ValueError, "fifo size must be non-negative");
-    return NULL;
+    throw py::value_error("fifo size must be non-negative");
   }
 
   py::gil_scoped_release release;
@@ -691,9 +592,6 @@ static PyObject *setPrintfFifoSize(PyObject *self, PyObject *args) {
   if (oldSize != size) {
     CUDA_CHECK(cuCtxSetLimit(CU_LIMIT_PRINTF_FIFO_SIZE, size));
   }
-
-  Py_INCREF(Py_None);
-  return Py_None;
 }
 
 static void fillTMADescriptor(uint64_t desc_address, uint64_t global_address,
