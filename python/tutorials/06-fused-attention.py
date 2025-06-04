@@ -56,12 +56,16 @@ def _attn_fwd_inner(acc, l_i, m_i, q,  #
     # causal = False
     else:
         lo, hi = 0, N_CTX
-    offsetkv_y = offset_y + lo
+    offsetk_y = offset_y + lo
+    if dtype == tl.float8e5:
+        offsetv_y = offset_y * HEAD_DIM + lo
+    else:
+        offsetv_y = offset_y + lo
     # loop over k, v and update accumulator
     for start_n in tl.range(lo, hi, BLOCK_N, warp_specialize=warp_specialize):
         start_n = tl.multiple_of(start_n, BLOCK_N)
         # -- compute qk ----
-        k = desc_k.load([offsetkv_y, 0]).T
+        k = desc_k.load([offsetk_y, 0]).T
         qk = tl.dot(q, k)
         if STAGE == 2:
             mask = offs_m[:, None] >= (start_n + offs_n[None, :])
@@ -86,7 +90,7 @@ def _attn_fwd_inner(acc, l_i, m_i, q,  #
         else:
             acc = acc * alpha[:, None]
         # prepare p and v for the dot
-        v = desc_v.load([offsetkv_y, 0])
+        v = desc_v.load([offsetv_y, 0])
         p = p.to(dtype)
         # note that this non transposed v for FP8 is only supported on Blackwell
         acc = tl.dot(p, v, acc)
@@ -94,7 +98,8 @@ def _attn_fwd_inner(acc, l_i, m_i, q,  #
         # place this at the end of the loop to reduce register pressure
         l_i = l_i * alpha + l_ij
         m_i = m_ij
-        offsetkv_y += BLOCK_N
+        offsetk_y += BLOCK_N
+        offsetv_y += BLOCK_N
     return acc, l_i, m_i
 
 
@@ -120,7 +125,7 @@ else:
 configs = [
     triton.Config({'BLOCK_M': BM, 'BLOCK_N': BN}, num_stages=s, num_warps=w, pre_hook=_host_descriptor_pre_hook) \
     for BM in [64, 128]\
-    for BN in [64, 128]\
+    for BN in [32, 64, 128]\
     for s in NUM_STAGES_OPTIONS \
     for w in [4, 8]\
 ]
@@ -134,7 +139,8 @@ if "PYTEST_VERSION" in os.environ:
 def keep(conf):
     BLOCK_M = conf.kwargs["BLOCK_M"]
     BLOCK_N = conf.kwargs["BLOCK_N"]
-    return not (torch.cuda.get_device_capability()[0] == 9 and BLOCK_M * BLOCK_N < 128 * 128 and conf.num_warps == 8)
+    return not (is_cuda() and torch.cuda.get_device_capability()[0] == 9 and BLOCK_M * BLOCK_N < 128 * 128
+                and conf.num_warps == 8)
 
 
 def prune_invalid_configs(configs, named_args, **kwargs):
@@ -174,8 +180,12 @@ def _attn_fwd(sm_scale, M,  #
     y_dim = Z * H * N_CTX
     desc_q = _maybe_make_tensor_desc(desc_q, shape=[y_dim, HEAD_DIM], strides=[HEAD_DIM, 1],
                                      block_shape=[BLOCK_M, HEAD_DIM])
-    desc_v = _maybe_make_tensor_desc(desc_v, shape=[y_dim, HEAD_DIM], strides=[HEAD_DIM, 1],
-                                     block_shape=[BLOCK_N, HEAD_DIM])
+    if FP8_OUTPUT:
+        desc_v = _maybe_make_tensor_desc(desc_v, shape=[y_dim, HEAD_DIM], strides=[1, N_CTX],
+                                         block_shape=[BLOCK_N, HEAD_DIM])
+    else:
+        desc_v = _maybe_make_tensor_desc(desc_v, shape=[y_dim, HEAD_DIM], strides=[HEAD_DIM, 1],
+                                         block_shape=[BLOCK_N, HEAD_DIM])
     desc_k = _maybe_make_tensor_desc(desc_k, shape=[y_dim, HEAD_DIM], strides=[HEAD_DIM, 1],
                                      block_shape=[BLOCK_N, HEAD_DIM])
     desc_o = _maybe_make_tensor_desc(desc_o, shape=[y_dim, HEAD_DIM], strides=[HEAD_DIM, 1],
