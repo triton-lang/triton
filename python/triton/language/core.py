@@ -1487,19 +1487,19 @@ class tensor_descriptor(tensor_descriptor_base):
         """Not called by user code."""
         # IR handle
         super().__init__(handle, block_type)
+        # Global shape
+        self.shape = tuple(shape)
+        self.strides = tuple(strides)
         self.type = tensor_descriptor_type(
             block_type,
-            shape_type=tuple_type([s.type for s in shape]),
-            strides_type=tuple_type([s.type for s in strides]),
+            shape_type=self.shape.type,
+            strides_type=self.strides.type,
         )
-        # Global shape
-        self.shape = shape
-        self.strides = strides
 
     def _flatten_ir(self, handles: List[ir.value]) -> None:
         handles.append(self.handle)
-        handles.extend(s.handle for s in self.shape)
-        handles.extend(s.handle for s in self.strides)
+        self.shape._flatten_ir(handles)
+        self.strides._flatten_ir(handles)
 
 
 # -----------------------
