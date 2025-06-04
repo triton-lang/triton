@@ -169,7 +169,7 @@ class InstrumentationHook(Hook):
         backends[backend_name].compiler.instrumentation = Instrumentation({
             "ttir_to_ttgpuir":
             lambda pm: to_ttgpuir_passes(pm),
-            "ttgir_to_llvmir":
+            "ttgpuir_to_llvmir":
             lambda pm: to_llvmir_passes(pm),
             "llvmir_to_llvm":
             lambda pm: to_llvm_passes(pm),
