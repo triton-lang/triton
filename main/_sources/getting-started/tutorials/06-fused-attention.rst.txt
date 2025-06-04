@@ -30,7 +30,7 @@ Extra Credits:
 * Original flash attention paper (https://arxiv.org/abs/2205.14135)
 * Rabe and Staats (https://arxiv.org/pdf/2112.05682v2.pdf)
 
-.. GENERATED FROM PYTHON SOURCE LINES 15-700
+.. GENERATED FROM PYTHON SOURCE LINES 15-699
 
 
 
@@ -86,46 +86,46 @@ Extra Credits:
 
     fused-attention-batch4-head32-d64-fwd-causal=True-warp_specialize=True:
          N_CTX  Triton [FP16]  Triton [FP8]
-    0   1024.0      28.777757     42.871522
-    1   2048.0      33.274556     49.900125
-    2   4096.0      35.455356     53.342889
-    3   8192.0      36.417780     54.849909
-    4  16384.0      36.533947     55.705728
+    0   1024.0      36.110016     41.861112
+    1   2048.0      41.150795     49.112214
+    2   4096.0      43.502591     54.401932
+    3   8192.0      45.244949     57.535652
+    4  16384.0      45.412866     58.877913
     fused-attention-batch4-head32-d64-fwd-causal=True-warp_specialize=False:
          N_CTX  Triton [FP16]  Triton [FP8]
-    0   1024.0      62.553261     66.280223
-    1   2048.0      76.288970     83.188042
-    2   4096.0      84.781401     92.643815
-    3   8192.0      89.329602     97.349607
-    4  16384.0      91.930933     99.846968
+    0   1024.0     110.228698     68.868716
+    1   2048.0     136.861971     85.945708
+    2   4096.0     151.463535     95.684443
+    3   8192.0     159.971865    100.786129
+    4  16384.0     164.174430    102.374468
     fused-attention-batch4-head32-d64-fwd-causal=False-warp_specialize=True:
          N_CTX  Triton [FP16]  Triton [FP8]
-    0   1024.0      33.458438     51.255497
-    1   2048.0      34.600340     54.104233
-    2   4096.0      35.583821     56.002223
-    3   8192.0      35.998988     55.660246
-    4  16384.0      35.773508     54.614863
+    0   1024.0      40.085134     52.902807
+    1   2048.0      41.977418     58.836817
+    2   4096.0      42.831702     60.463884
+    3   8192.0      41.271571     60.546221
+    4  16384.0      42.650693     60.181843
     fused-attention-batch4-head32-d64-fwd-causal=False-warp_specialize=False:
          N_CTX  Triton [FP16]  Triton [FP8]
-    0   1024.0      85.763372     92.176938
-    1   2048.0      93.543084     99.980476
-    2   4096.0      95.364248    102.591157
-    3   8192.0      95.999446    103.304005
-    4  16384.0      95.003537    103.706851
+    0   1024.0     153.067586     90.071042
+    1   2048.0     162.577085    111.928426
+    2   4096.0     167.757417    110.058383
+    3   8192.0     169.447726    113.492567
+    4  16384.0     171.846805    115.081781
     fused-attention-batch4-head32-d64-bwd-causal=True-warp_specialize=True:
          N_CTX  Triton [FP16]  Triton [FP8]
-    0   1024.0      34.703989     34.677393
-    1   2048.0      42.199447     42.145521
-    2   4096.0      46.919432     46.952807
-    3   8192.0      49.694625     49.726845
-    4  16384.0      51.222765     51.211036
+    0   1024.0      52.032459     51.539614
+    1   2048.0      66.360466     65.550937
+    2   4096.0      76.432045     76.113035
+    3   8192.0      82.821051     82.144363
+    4  16384.0      86.111524     85.088618
     fused-attention-batch4-head32-d64-bwd-causal=True-warp_specialize=False:
          N_CTX  Triton [FP16]  Triton [FP8]
-    0   1024.0      34.642401     34.649553
-    1   2048.0      42.196679     42.132177
-    2   4096.0      46.981843     46.875189
-    3   8192.0      49.774793     49.919191
-    4  16384.0      51.258711     51.219343
+    0   1024.0      51.918882     51.560942
+    1   2048.0      65.652831     65.759112
+    2   4096.0      76.193402     76.105267
+    3   8192.0      83.088948     83.305546
+    4  16384.0      85.453620     85.461778
 
 
 
@@ -158,6 +158,10 @@ Extra Credits:
 
     def supports_host_descriptor():
         return is_cuda() and torch.cuda.get_device_capability()[0] >= 9
+
+
+    def is_blackwell():
+        return is_cuda() and torch.cuda.get_device_capability()[0] == 10
 
 
     @triton.jit
@@ -239,7 +243,7 @@ Extra Credits:
     if "PYTEST_VERSION" in os.environ:
         # Use a single config in testing for reproducibility
         configs = [
-            triton.Config(dict(BLOCK_M=64, BLOCK_N=64), num_stages=4, num_warps=4, pre_hook=_host_descriptor_pre_hook),
+            triton.Config(dict(BLOCK_M=64, BLOCK_N=64), num_stages=2, num_warps=4, pre_hook=_host_descriptor_pre_hook),
         ]
 
 
@@ -607,10 +611,10 @@ Extra Credits:
                 y_dim = q.shape[0] * q.shape[1] * q.shape[2]
 
                 dummy_block = [1, 1]
-                desc_q = TensorDescriptor(q, shape=[y_dim, HEAD_DIM_K], strides=[HEAD_DIM, 1], block_shape=dummy_block)
-                desc_v = TensorDescriptor(v, shape=[y_dim, HEAD_DIM_K], strides=[HEAD_DIM, 1], block_shape=dummy_block)
-                desc_k = TensorDescriptor(k, shape=[y_dim, HEAD_DIM_K], strides=[HEAD_DIM, 1], block_shape=dummy_block)
-                desc_o = TensorDescriptor(o, shape=[y_dim, HEAD_DIM_K], strides=[HEAD_DIM, 1], block_shape=dummy_block)
+                desc_q = TensorDescriptor(q, shape=[y_dim, HEAD_DIM_K], strides=[HEAD_DIM_K, 1], block_shape=dummy_block)
+                desc_v = TensorDescriptor(v, shape=[y_dim, HEAD_DIM_K], strides=[HEAD_DIM_K, 1], block_shape=dummy_block)
+                desc_k = TensorDescriptor(k, shape=[y_dim, HEAD_DIM_K], strides=[HEAD_DIM_K, 1], block_shape=dummy_block)
+                desc_o = TensorDescriptor(o, shape=[y_dim, HEAD_DIM_K], strides=[HEAD_DIM_K, 1], block_shape=dummy_block)
             else:
                 desc_q = q
                 desc_v = v
@@ -633,7 +637,7 @@ Extra Credits:
                 q.shape[0], q.shape[1],  #
                 desc_q, desc_k, desc_v, desc_o,  #
                 N_CTX=q.shape[2],  #
-                HEAD_DIM=HEAD_DIM,  #
+                HEAD_DIM=HEAD_DIM_K,  #
                 FP8_OUTPUT=q.dtype == torch.float8_e5m2,  #
                 STAGE=stage,  #
                 warp_specialize=warp_specialize,  #
@@ -691,17 +695,12 @@ Extra Credits:
     attention = _attention.apply
 
 
-    @pytest.mark.parametrize('Z, H, N_CTX, HEAD_DIM', [
-        (1, 2, 1024, 64),
-        (4, 48, 128, 64),
-        (4, 48, 256, 64),
-        (4, 48, 512, 64),
-        (4, 48, 1024, 64),
-        (4, 48, 2048, 64),
-        (4, 48, 4096, 64),
-    ])
-    @pytest.mark.parametrize("causal", [True])
-    @pytest.mark.parametrize("warp_specialize", [False, True])
+    @pytest.mark.parametrize("Z", [1, 4])
+    @pytest.mark.parametrize("H", [2, 48])
+    @pytest.mark.parametrize("N_CTX", [128, 1024, (2 if is_hip() else 4) * 1024])
+    @pytest.mark.parametrize("HEAD_DIM", [64, 128])
+    @pytest.mark.parametrize("causal", [True])  # FIXME: Non-causal tests do not pass at the moment.
+    @pytest.mark.parametrize("warp_specialize", [False, True] if is_blackwell() else [False])
     def test_op(Z, H, N_CTX, HEAD_DIM, causal, warp_specialize, dtype=torch.float16):
         torch.manual_seed(20)
         q = (torch.empty((Z, H, N_CTX, HEAD_DIM), dtype=dtype, device=DEVICE).normal_(mean=0.0, std=0.5).requires_grad_())
@@ -825,7 +824,7 @@ Extra Credits:
 
 .. rst-class:: sphx-glr-timing
 
-   **Total running time of the script:** (2 minutes 38.556 seconds)
+   **Total running time of the script:** (2 minutes 27.837 seconds)
 
 
 .. _sphx_glr_download_getting-started_tutorials_06-fused-attention.py:

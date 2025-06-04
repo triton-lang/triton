@@ -126,13 +126,14 @@
 <h1>triton.language.histogram<a class="headerlink" href="#triton-language-histogram" title="Link to this heading">¶</a></h1>
 <dl class="py function">
 <dt class="sig sig-object py" id="triton.language.histogram">
-<span class="sig-prename descclassname"><span class="pre">triton.language.</span></span><span class="sig-name descname"><span class="pre">histogram</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">input</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">num_bins</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#triton.language.histogram" title="Link to this definition">¶</a></dt>
+<span class="sig-prename descclassname"><span class="pre">triton.language.</span></span><span class="sig-name descname"><span class="pre">histogram</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">input</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">num_bins</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">mask</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#triton.language.histogram" title="Link to this definition">¶</a></dt>
 <dd><p>computes an histogram based on input tensor with num_bins bins, the bins have a width of 1 and start at 0.</p>
 <dl class="field-list simple">
 <dt class="field-odd">Parameters<span class="colon">:</span></dt>
 <dd class="field-odd"><ul class="simple">
 <li><p><strong>input</strong> (<em>Tensor</em>) – the input tensor</p></li>
 <li><p><strong>num_bins</strong> (<em>int</em>) – number of histogram bins</p></li>
+<li><p><strong>mask</strong> (Block of <cite>triton.int1</cite>, optional) – if <cite>mask[idx]</cite> is false, exclude <cite>input[idx]</cite> from histogram</p></li>
 </ul>
 </dd>
 </dl>

@@ -131,38 +131,43 @@
 <li class="toctree-l4"><a class="reference internal" href="#id22">Operands:</a></li>
 </ul>
 </li>
-<li class="toctree-l3"><a class="reference internal" href="#ttg-memdesc-reshape-triton-gpu-memdescreshapeop"><code class="docutils literal notranslate"><span class="pre">ttg.memdesc_reshape</span></code> (triton::gpu::MemDescReshapeOp)</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="#ttg-memdesc-reinterpret-triton-gpu-memdescreinterpretop"><code class="docutils literal notranslate"><span class="pre">ttg.memdesc_reinterpret</span></code> (triton::gpu::MemDescReinterpretOp)</a><ul>
 <li class="toctree-l4"><a class="reference internal" href="#id23">Operands:</a></li>
 <li class="toctree-l4"><a class="reference internal" href="#id24">Results:</a></li>
 </ul>
 </li>
-<li class="toctree-l3"><a class="reference internal" href="#ttg-memdesc-subview-triton-gpu-memdescsubviewop"><code class="docutils literal notranslate"><span class="pre">ttg.memdesc_subview</span></code> (triton::gpu::MemDescSubviewOp)</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="#ttg-memdesc-reshape-triton-gpu-memdescreshapeop"><code class="docutils literal notranslate"><span class="pre">ttg.memdesc_reshape</span></code> (triton::gpu::MemDescReshapeOp)</a><ul>
 <li class="toctree-l4"><a class="reference internal" href="#id25">Operands:</a></li>
 <li class="toctree-l4"><a class="reference internal" href="#id26">Results:</a></li>
 </ul>
 </li>
+<li class="toctree-l3"><a class="reference internal" href="#ttg-memdesc-subview-triton-gpu-memdescsubviewop"><code class="docutils literal notranslate"><span class="pre">ttg.memdesc_subview</span></code> (triton::gpu::MemDescSubviewOp)</a><ul>
+<li class="toctree-l4"><a class="reference internal" href="#id27">Operands:</a></li>
+<li class="toctree-l4"><a class="reference internal" href="#id28">Results:</a></li>
+</ul>
+</li>
 <li class="toctree-l3"><a class="reference internal" href="#ttg-memdesc-trans-triton-gpu-memdesctransop"><code class="docutils literal notranslate"><span class="pre">ttg.memdesc_trans</span></code> (triton::gpu::MemDescTransOp)</a><ul>
-<li class="toctree-l4"><a class="reference internal" href="#id27">Attributes:</a></li>
-<li class="toctree-l4"><a class="reference internal" href="#id28">Operands:</a></li>
-<li class="toctree-l4"><a class="reference internal" href="#id29">Results:</a></li>
+<li class="toctree-l4"><a class="reference internal" href="#id29">Attributes:</a></li>
+<li class="toctree-l4"><a class="reference internal" href="#id30">Operands:</a></li>
+<li class="toctree-l4"><a class="reference internal" href="#id31">Results:</a></li>
 </ul>
 </li>
 <li class="toctree-l3"><a class="reference internal" href="#ttg-predicate-stage-triton-gpu-predicatestageop"><code class="docutils literal notranslate"><span class="pre">ttg.predicate_stage</span></code> (triton::gpu::PredicateStageOp)</a><ul>
-<li class="toctree-l4"><a class="reference internal" href="#id30">Attributes:</a></li>
-<li class="toctree-l4"><a class="reference internal" href="#id31">Operands:</a></li>
-<li class="toctree-l4"><a class="reference internal" href="#id32">Results:</a></li>
+<li class="toctree-l4"><a class="reference internal" href="#id32">Attributes:</a></li>
+<li class="toctree-l4"><a class="reference internal" href="#id33">Operands:</a></li>
+<li class="toctree-l4"><a class="reference internal" href="#id34">Results:</a></li>
 </ul>
 </li>
 <li class="toctree-l3"><a class="reference internal" href="#ttg-warp-return-triton-gpu-warpreturnop"><code class="docutils literal notranslate"><span class="pre">ttg.warp_return</span></code> (triton::gpu::WarpReturnOp)</a></li>
 <li class="toctree-l3"><a class="reference internal" href="#ttg-warp-specialize-triton-gpu-warpspecializeop"><code class="docutils literal notranslate"><span class="pre">ttg.warp_specialize</span></code> (triton::gpu::WarpSpecializeOp)</a><ul>
-<li class="toctree-l4"><a class="reference internal" href="#id33">Attributes:</a></li>
-<li class="toctree-l4"><a class="reference internal" href="#id34">Operands:</a></li>
-<li class="toctree-l4"><a class="reference internal" href="#id35">Results:</a></li>
+<li class="toctree-l4"><a class="reference internal" href="#id35">Attributes:</a></li>
+<li class="toctree-l4"><a class="reference internal" href="#id36">Operands:</a></li>
+<li class="toctree-l4"><a class="reference internal" href="#id37">Results:</a></li>
 </ul>
 </li>
 <li class="toctree-l3"><a class="reference internal" href="#ttg-warp-specialize-partitions-triton-gpu-warpspecializepartitionsop"><code class="docutils literal notranslate"><span class="pre">ttg.warp_specialize.partitions</span></code> (triton::gpu::WarpSpecializePartitionsOp)</a></li>
 <li class="toctree-l3"><a class="reference internal" href="#ttg-warp-yield-triton-gpu-warpyieldop"><code class="docutils literal notranslate"><span class="pre">ttg.warp_yield</span></code> (triton::gpu::WarpYieldOp)</a><ul>
-<li class="toctree-l4"><a class="reference internal" href="#id36">Operands:</a></li>
+<li class="toctree-l4"><a class="reference internal" href="#id38">Operands:</a></li>
 </ul>
 </li>
 </ul>
@@ -704,16 +709,18 @@ operand.</p>
 </table>
 </section>
 </section>
-<section id="ttg-memdesc-reshape-triton-gpu-memdescreshapeop">
-<h2><code class="docutils literal notranslate"><span class="pre">ttg.memdesc_reshape</span></code> (triton::gpu::MemDescReshapeOp)<a class="headerlink" href="#ttg-memdesc-reshape-triton-gpu-memdescreshapeop" title="Link to this heading">¶</a></h2>
-<p><em>Creates a descriptor for the new shape</em></p>
+<section id="ttg-memdesc-reinterpret-triton-gpu-memdescreinterpretop">
+<h2><code class="docutils literal notranslate"><span class="pre">ttg.memdesc_reinterpret</span></code> (triton::gpu::MemDescReinterpretOp)<a class="headerlink" href="#ttg-memdesc-reinterpret-triton-gpu-memdescreinterpretop" title="Link to this heading">¶</a></h2>
+<p><em>Reinterpret a memory descriptor as a different type and shape</em></p>
 <p>Syntax:</p>
-<div class="highlight-default notranslate"><div class="highlight"><pre><span></span>operation ::= `ttg.memdesc_reshape` $src attr-dict `:` qualified(type($src)) `-&gt;` qualified(type($result))
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span>operation ::= `ttg.memdesc_reinterpret` $src attr-dict `:` qualified(type($src)) `-&gt;` qualified(type($result))
 </pre></div>
 </div>
-<p>This operation returns a new descriptor representing a reshaped view of the underlying buffer.
-This doesn’t affect the memory.</p>
-<p>Traits: <code class="docutils literal notranslate"><span class="pre">AlwaysSpeculatableImplTrait</span></code>, <code class="docutils literal notranslate"><span class="pre">MemDescViewTrait</span></code>, <code class="docutils literal notranslate"><span class="pre">SameOperandsAndResultElementType</span></code>, <code class="docutils literal notranslate"><span class="pre">VerifyTensorLayoutsTrait</span></code></p>
+<p>The <code class="docutils literal notranslate"><span class="pre">ttg.memdesc_reinterpret</span></code> operation reinterprets a memory descriptor
+as one with a different shape and element type. Because memory descriptors
+lack strides, this operation is only valid if the original memory descriptor
+is contiguous.</p>
+<p>Traits: <code class="docutils literal notranslate"><span class="pre">AlwaysSpeculatableImplTrait</span></code>, <code class="docutils literal notranslate"><span class="pre">MemDescViewTrait</span></code>, <code class="docutils literal notranslate"><span class="pre">VerifyTensorLayoutsTrait</span></code></p>
 <p>Interfaces: <code class="docutils literal notranslate"><span class="pre">ConditionallySpeculatable</span></code>, <code class="docutils literal notranslate"><span class="pre">NoMemoryEffect</span> <span class="pre">(MemoryEffectOpInterface)</span></code></p>
 <p>Effects: <code class="docutils literal notranslate"><span class="pre">MemoryEffects::Effect{}</span></code></p>
 <section id="id23">
@@ -733,6 +740,49 @@ This doesn’t affect the memory.</p>
 </section>
 <section id="id24">
 <h3>Results:<a class="headerlink" href="#id24" title="Link to this heading">¶</a></h3>
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd"><th class="head text-center"><p>Result</p></th>
+<th class="head"><p>Description</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td class="text-center"><p><code class="docutils literal notranslate"><span class="pre">result</span></code></p></td>
+<td><p>memory descriptor type (<code class="docutils literal notranslate"><span class="pre">::mlir::triton::gpu::MemDescType</span></code>) in Triton IR type system</p></td>
+</tr>
+</tbody>
+</table>
+</section>
+</section>
+<section id="ttg-memdesc-reshape-triton-gpu-memdescreshapeop">
+<h2><code class="docutils literal notranslate"><span class="pre">ttg.memdesc_reshape</span></code> (triton::gpu::MemDescReshapeOp)<a class="headerlink" href="#ttg-memdesc-reshape-triton-gpu-memdescreshapeop" title="Link to this heading">¶</a></h2>
+<p><em>Creates a descriptor for the new shape</em></p>
+<p>Syntax:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span>operation ::= `ttg.memdesc_reshape` $src attr-dict `:` qualified(type($src)) `-&gt;` qualified(type($result))
+</pre></div>
+</div>
+<p>This operation returns a new descriptor representing a reshaped view of the underlying buffer.
+This doesn’t affect the memory.</p>
+<p>Traits: <code class="docutils literal notranslate"><span class="pre">AlwaysSpeculatableImplTrait</span></code>, <code class="docutils literal notranslate"><span class="pre">MemDescViewTrait</span></code>, <code class="docutils literal notranslate"><span class="pre">SameOperandsAndResultElementType</span></code>, <code class="docutils literal notranslate"><span class="pre">VerifyTensorLayoutsTrait</span></code></p>
+<p>Interfaces: <code class="docutils literal notranslate"><span class="pre">ConditionallySpeculatable</span></code>, <code class="docutils literal notranslate"><span class="pre">NoMemoryEffect</span> <span class="pre">(MemoryEffectOpInterface)</span></code></p>
+<p>Effects: <code class="docutils literal notranslate"><span class="pre">MemoryEffects::Effect{}</span></code></p>
+<section id="id25">
+<h3>Operands:<a class="headerlink" href="#id25" title="Link to this heading">¶</a></h3>
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd"><th class="head text-center"><p>Operand</p></th>
+<th class="head"><p>Description</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td class="text-center"><p><code class="docutils literal notranslate"><span class="pre">src</span></code></p></td>
+<td><p>memory descriptor type (<code class="docutils literal notranslate"><span class="pre">::mlir::triton::gpu::MemDescType</span></code>) in Triton IR type system</p></td>
+</tr>
+</tbody>
+</table>
+</section>
+<section id="id26">
+<h3>Results:<a class="headerlink" href="#id26" title="Link to this heading">¶</a></h3>
 <table class="docutils align-default">
 <thead>
 <tr class="row-odd"><th class="head text-center"><p>Result</p></th>
@@ -778,8 +828,8 @@ When the input and the output have the same rank:</p></li>
 <p>Traits: <code class="docutils literal notranslate"><span class="pre">AlwaysSpeculatableImplTrait</span></code>, <code class="docutils literal notranslate"><span class="pre">MemDescViewTrait</span></code>, <code class="docutils literal notranslate"><span class="pre">VerifyTensorLayoutsTrait</span></code></p>
 <p>Interfaces: <code class="docutils literal notranslate"><span class="pre">ConditionallySpeculatable</span></code>, <code class="docutils literal notranslate"><span class="pre">NoMemoryEffect</span> <span class="pre">(MemoryEffectOpInterface)</span></code></p>
 <p>Effects: <code class="docutils literal notranslate"><span class="pre">MemoryEffects::Effect{}</span></code></p>
-<section id="id25">
-<h3>Operands:<a class="headerlink" href="#id25" title="Link to this heading">¶</a></h3>
+<section id="id27">
+<h3>Operands:<a class="headerlink" href="#id27" title="Link to this heading">¶</a></h3>
 <table class="docutils align-default">
 <thead>
 <tr class="row-odd"><th class="head text-center"><p>Operand</p></th>
@@ -796,8 +846,8 @@ When the input and the output have the same rank:</p></li>
 </tbody>
 </table>
 </section>
-<section id="id26">
-<h3>Results:<a class="headerlink" href="#id26" title="Link to this heading">¶</a></h3>
+<section id="id28">
+<h3>Results:<a class="headerlink" href="#id28" title="Link to this heading">¶</a></h3>
 <table class="docutils align-default">
 <thead>
 <tr class="row-odd"><th class="head text-center"><p>Result</p></th>
@@ -824,15 +874,15 @@ representing a transposed view of the buffer.</p>
 <p>Traits: <code class="docutils literal notranslate"><span class="pre">AlwaysSpeculatableImplTrait</span></code>, <code class="docutils literal notranslate"><span class="pre">InferTypeOpAdaptor</span></code>, <code class="docutils literal notranslate"><span class="pre">MemDescViewTrait</span></code>, <code class="docutils literal notranslate"><span class="pre">SameOperandsAndResultElementType</span></code>, <code class="docutils literal notranslate"><span class="pre">VerifyTensorLayoutsTrait</span></code></p>
 <p>Interfaces: <code class="docutils literal notranslate"><span class="pre">ConditionallySpeculatable</span></code>, <code class="docutils literal notranslate"><span class="pre">InferTypeOpInterface</span></code>, <code class="docutils literal notranslate"><span class="pre">NoMemoryEffect</span> <span class="pre">(MemoryEffectOpInterface)</span></code>, <code class="docutils literal notranslate"><span class="pre">TransposeOpInterface</span></code></p>
 <p>Effects: <code class="docutils literal notranslate"><span class="pre">MemoryEffects::Effect{}</span></code></p>
-<section id="id27">
-<h3>Attributes:<a class="headerlink" href="#id27" title="Link to this heading">¶</a></h3>
+<section id="id29">
+<h3>Attributes:<a class="headerlink" href="#id29" title="Link to this heading">¶</a></h3>
 <table>
 <tr><th>Attribute</th><th>MLIR Type</th><th>Description</th></tr>
 <tr><td><code>order</code></td><td>::mlir::DenseI32ArrayAttr</td><td>i32 dense array attribute</td></tr>
 </table>
 </section>
-<section id="id28">
-<h3>Operands:<a class="headerlink" href="#id28" title="Link to this heading">¶</a></h3>
+<section id="id30">
+<h3>Operands:<a class="headerlink" href="#id30" title="Link to this heading">¶</a></h3>
 <table class="docutils align-default">
 <thead>
 <tr class="row-odd"><th class="head text-center"><p>Operand</p></th>
@@ -846,8 +896,8 @@ representing a transposed view of the buffer.</p>
 </tbody>
 </table>
 </section>
-<section id="id29">
-<h3>Results:<a class="headerlink" href="#id29" title="Link to this heading">¶</a></h3>
+<section id="id31">
+<h3>Results:<a class="headerlink" href="#id31" title="Link to this heading">¶</a></h3>
 <table class="docutils align-default">
 <thead>
 <tr class="row-odd"><th class="head text-center"><p>Result</p></th>
@@ -872,16 +922,16 @@ representing a transposed view of the buffer.</p>
 <p>Traits: <code class="docutils literal notranslate"><span class="pre">AlwaysSpeculatableImplTrait</span></code>, <code class="docutils literal notranslate"><span class="pre">VerifyTensorLayoutsTrait</span></code></p>
 <p>Interfaces: <code class="docutils literal notranslate"><span class="pre">ConditionallySpeculatable</span></code>, <code class="docutils literal notranslate"><span class="pre">InferTypeOpInterface</span></code>, <code class="docutils literal notranslate"><span class="pre">NoMemoryEffect</span> <span class="pre">(MemoryEffectOpInterface)</span></code></p>
 <p>Effects: <code class="docutils literal notranslate"><span class="pre">MemoryEffects::Effect{}</span></code></p>
-<section id="id30">
-<h3>Attributes:<a class="headerlink" href="#id30" title="Link to this heading">¶</a></h3>
+<section id="id32">
+<h3>Attributes:<a class="headerlink" href="#id32" title="Link to this heading">¶</a></h3>
 <table>
 <tr><th>Attribute</th><th>MLIR Type</th><th>Description</th></tr>
 <tr><td><code>maxStage</code></td><td>::mlir::IntegerAttr</td><td>32-bit signless integer attribute</td></tr>
 <tr><td><code>stage</code></td><td>::mlir::IntegerAttr</td><td>32-bit signless integer attribute</td></tr>
 </table>
 </section>
-<section id="id31">
-<h3>Operands:<a class="headerlink" href="#id31" title="Link to this heading">¶</a></h3>
+<section id="id33">
+<h3>Operands:<a class="headerlink" href="#id33" title="Link to this heading">¶</a></h3>
 <table class="docutils align-default">
 <thead>
 <tr class="row-odd"><th class="head text-center"><p>Operand</p></th>
@@ -901,8 +951,8 @@ representing a transposed view of the buffer.</p>
 </tbody>
 </table>
 </section>
-<section id="id32">
-<h3>Results:<a class="headerlink" href="#id32" title="Link to this heading">¶</a></h3>
+<section id="id34">
+<h3>Results:<a class="headerlink" href="#id34" title="Link to this heading">¶</a></h3>
 <table class="docutils align-default">
 <thead>
 <tr class="row-odd"><th class="head text-center"><p>Result</p></th>
@@ -964,8 +1014,8 @@ partition1(%arg0: i32, %arg1: i32) num_warps(1) {
 </div>
 <p>Traits: <code class="docutils literal notranslate"><span class="pre">AsyncRegions</span></code>, <code class="docutils literal notranslate"><span class="pre">RecursiveMemoryEffects</span></code>, <code class="docutils literal notranslate"><span class="pre">RecursivelySpeculatableImplTrait</span></code>, <code class="docutils literal notranslate"><span class="pre">VerifyTensorLayoutsTrait</span></code></p>
 <p>Interfaces: <code class="docutils literal notranslate"><span class="pre">ConditionallySpeculatable</span></code>, <code class="docutils literal notranslate"><span class="pre">RegionBranchOpInterface</span></code></p>
-<section id="id33">
-<h3>Attributes:<a class="headerlink" href="#id33" title="Link to this heading">¶</a></h3>
+<section id="id35">
+<h3>Attributes:<a class="headerlink" href="#id35" title="Link to this heading">¶</a></h3>
 <table>
 <tr><th>Attribute</th><th>MLIR Type</th><th>Description</th></tr>
 <tr><td><code>partitionNumWarps</code></td><td>::mlir::DenseI32ArrayAttr</td><td>i32 dense array attribute</td></tr>
@@ -974,8 +1024,8 @@ partition1(%arg0: i32, %arg1: i32) num_warps(1) {
 <tr><td><code>actualRegisters</code></td><td>::mlir::DenseI32ArrayAttr</td><td>i32 dense array attribute</td></tr>
 </table>
 </section>
-<section id="id34">
-<h3>Operands:<a class="headerlink" href="#id34" title="Link to this heading">¶</a></h3>
+<section id="id36">
+<h3>Operands:<a class="headerlink" href="#id36" title="Link to this heading">¶</a></h3>
 <table class="docutils align-default">
 <thead>
 <tr class="row-odd"><th class="head text-center"><p>Operand</p></th>
@@ -989,8 +1039,8 @@ partition1(%arg0: i32, %arg1: i32) num_warps(1) {
 </tbody>
 </table>
 </section>
-<section id="id35">
-<h3>Results:<a class="headerlink" href="#id35" title="Link to this heading">¶</a></h3>
+<section id="id37">
+<h3>Results:<a class="headerlink" href="#id37" title="Link to this heading">¶</a></h3>
 <table class="docutils align-default">
 <thead>
 <tr class="row-odd"><th class="head text-center"><p>Result</p></th>
@@ -1030,8 +1080,8 @@ the SSA results of the <code class="docutils literal notranslate"><span class="p
 <p>Traits: <code class="docutils literal notranslate"><span class="pre">AlwaysSpeculatableImplTrait</span></code>, <code class="docutils literal notranslate"><span class="pre">HasParent&lt;WarpSpecializeOp&gt;</span></code>, <code class="docutils literal notranslate"><span class="pre">ReturnLike</span></code>, <code class="docutils literal notranslate"><span class="pre">Terminator</span></code>, <code class="docutils literal notranslate"><span class="pre">VerifyTensorLayoutsTrait</span></code></p>
 <p>Interfaces: <code class="docutils literal notranslate"><span class="pre">ConditionallySpeculatable</span></code>, <code class="docutils literal notranslate"><span class="pre">NoMemoryEffect</span> <span class="pre">(MemoryEffectOpInterface)</span></code>, <code class="docutils literal notranslate"><span class="pre">RegionBranchTerminatorOpInterface</span></code></p>
 <p>Effects: <code class="docutils literal notranslate"><span class="pre">MemoryEffects::Effect{}</span></code></p>
-<section id="id36">
-<h3>Operands:<a class="headerlink" href="#id36" title="Link to this heading">¶</a></h3>
+<section id="id38">
+<h3>Operands:<a class="headerlink" href="#id38" title="Link to this heading">¶</a></h3>
 <table class="docutils align-default">
 <thead>
 <tr class="row-odd"><th class="head text-center"><p>Operand</p></th>

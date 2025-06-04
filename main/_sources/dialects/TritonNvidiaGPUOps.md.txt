@@ -48,16 +48,16 @@ _Copy data based on descriptor from global memory to local memory asynchronously
 Syntax:
 
 ```
-operation ::= `ttng.async_tma_copy_global_to_local` $desc_ptr `[` $coord `]` $result `,` $barrier `,` $pred
+operation ::= `ttng.async_tma_copy_global_to_local` $desc `[` $coord `]` $result `,` $barrier `,` $pred
               oilist(`cacheModifier` `=` $cache | `evictionPolicy` `=` $evict)
-              attr-dict `:` qualified(type($desc_ptr)) `,` qualified(type($barrier)) `->` qualified(type($result))
+              attr-dict `:` qualified(type($desc)) `,` qualified(type($barrier)) `->` qualified(type($result))
 ```
 
 This operation copies data from global memory to local memory
 asynchronously.  This is analogue to tt.load except the data are copied to
 local memory pointed by the memory descriptor instead of a distributed
 tensor. The data copied depends on the global memory descriptor pointed to
-by `desc_ptr`.
+by `desc`.
 
 Traits: `VerifyTensorLayoutsTrait`
 
@@ -74,7 +74,7 @@ Traits: `VerifyTensorLayoutsTrait`
 
 | Operand | Description |
 | :-----: | ----------- |
-| `desc_ptr` | Pointer type (`::mlir::triton::PointerType`) in Triton IR type system |
+| `desc` | Tensor descriptor type (`::mlir::triton::TensorDescType`) in Triton IR type system |
 | `coord` | variadic of 32-bit signless integer |
 | `barrier` | memory descriptor type (`::mlir::triton::gpu::MemDescType`) in Triton IR type system |
 | `result` | memory descriptor type (`::mlir::triton::gpu::MemDescType`) in Triton IR type system |
@@ -88,15 +88,15 @@ _Copy data based on descriptor from local memory to global memory asynchronously
 Syntax:
 
 ```
-operation ::= `ttng.async_tma_copy_local_to_global` $desc_ptr `[` $coord `]` $src
-              attr-dict `:` qualified(type($desc_ptr)) `,` qualified(type($src))
+operation ::= `ttng.async_tma_copy_local_to_global` $desc `[` $coord `]` $src
+              attr-dict `:` qualified(type($desc)) `,` qualified(type($src))
 ```
 
 This operation copies data from local memory to global memory
 asynchronously.  This is analogue to tt.store except the data are copied from
 local memory pointed by the memory descriptor instead of a distributed
 tensor. The data copied depends on the global memory descriptor pointed to
-by `desc_ptr`.
+by `desc`.
 
 Traits: `VerifyTensorLayoutsTrait`
 
@@ -104,7 +104,7 @@ Traits: `VerifyTensorLayoutsTrait`
 
 | Operand | Description |
 | :-----: | ----------- |
-| `desc_ptr` | Pointer type (`::mlir::triton::PointerType`) in Triton IR type system |
+| `desc` | Tensor descriptor type (`::mlir::triton::TensorDescType`) in Triton IR type system |
 | `coord` | variadic of 32-bit signless integer |
 | `src` | memory descriptor type (`::mlir::triton::gpu::MemDescType`) in Triton IR type system |
 
@@ -116,7 +116,7 @@ _Gather data based on descriptor from global memory to local memory asynchronous
 Syntax:
 
 ```
-operation ::= `ttng.async_tma_gather` $desc_ptr `[` $x_offsets `,` $y_offset `]` $result `,` $barrier `,` $pred
+operation ::= `ttng.async_tma_gather` $desc `[` $x_offsets `,` $y_offset `]` $result `,` $barrier `,` $pred
               attr-dict `:` type(operands)
 ```
 
@@ -130,7 +130,7 @@ Traits: `VerifyTensorLayoutsTrait`
 
 | Operand | Description |
 | :-----: | ----------- |
-| `desc_ptr` | Pointer type (`::mlir::triton::PointerType`) in Triton IR type system |
+| `desc` | Tensor descriptor type (`::mlir::triton::TensorDescType`) in Triton IR type system |
 | `x_offsets` | ranked tensor of 32-bit signless integer values |
 | `y_offset` | 32-bit signless integer |
 | `barrier` | memory descriptor type (`::mlir::triton::gpu::MemDescType`) in Triton IR type system |
@@ -145,8 +145,8 @@ _Reduce result in gmem based on a TMA descriptor_
 Syntax:
 
 ```
-operation ::= `ttng.async_tma_reduce` $kind `,` $desc_ptr `[` $coord `]` $src
-              attr-dict `:` qualified(type($desc_ptr)) `,` qualified(type($src))
+operation ::= `ttng.async_tma_reduce` $kind `,` $desc `[` $coord `]` $src
+              attr-dict `:` qualified(type($desc)) `,` qualified(type($src))
 ```
 
 This operation copies data from local memory to global memory
@@ -171,7 +171,7 @@ Effects: `MemoryEffects::Effect{MemoryEffects::Read on ::mlir::triton::GlobalMem
 
 | Operand | Description |
 | :-----: | ----------- |
-| `desc_ptr` | Pointer type (`::mlir::triton::PointerType`) in Triton IR type system |
+| `desc` | Tensor descriptor type (`::mlir::triton::TensorDescType`) in Triton IR type system |
 | `coord` | variadic of 32-bit signless integer |
 | `src` | memory descriptor type (`::mlir::triton::gpu::MemDescType`) in Triton IR type system |
 
@@ -183,7 +183,7 @@ _Scatter data from local memory into global memory based on a descriptor asynchr
 Syntax:
 
 ```
-operation ::= `ttng.async_tma_scatter` $desc_ptr `[` $x_offsets `,` $y_offset `]` $src
+operation ::= `ttng.async_tma_scatter` $desc `[` $x_offsets `,` $y_offset `]` $src
               attr-dict `:` type(operands)
 ```
 
@@ -199,7 +199,7 @@ Traits: `VerifyTensorLayoutsTrait`
 
 | Operand | Description |
 | :-----: | ----------- |
-| `desc_ptr` | Pointer type (`::mlir::triton::PointerType`) in Triton IR type system |
+| `desc` | Tensor descriptor type (`::mlir::triton::TensorDescType`) in Triton IR type system |
 | `x_offsets` | ranked tensor of 32-bit signless integer values |
 | `y_offset` | 32-bit signless integer |
 | `src` | memory descriptor type (`::mlir::triton::gpu::MemDescType`) in Triton IR type system |
@@ -338,6 +338,38 @@ Traits: `VerifyTensorLayoutsTrait`
 | Operand | Description |
 | :-----: | ----------- |
 | `alloc` | memory descriptor type (`::mlir::triton::gpu::MemDescType`) in Triton IR type system |
+
+
+### `ttng.reinterpret_tensor_descriptor` (triton::nvidia_gpu::ReinterpretTensorDescOp)
+
+_Reinterpret a pointer as a tensor descriptor_
+
+Syntax:
+
+```
+operation ::= `ttng.reinterpret_tensor_descriptor` $rawDesc attr-dict `:` qualified(type($rawDesc))  `to` qualified(type($result))
+```
+
+This Op exists to help the transition from untyped raw TMA objects to typed Tensor descriptor objects.
+Ideally, we can remove this once the APIs are fully fleshed out.
+
+Traits: `AlwaysSpeculatableImplTrait`, `VerifyTensorLayoutsTrait`
+
+Interfaces: `ConditionallySpeculatable`, `NoMemoryEffect (MemoryEffectOpInterface)`
+
+Effects: `MemoryEffects::Effect{}`
+
+#### Operands:
+
+| Operand | Description |
+| :-----: | ----------- |
+| `rawDesc` | ptr |
+
+#### Results:
+
+| Result | Description |
+| :----: | ----------- |
+| `result` | Tensor descriptor type (`::mlir::triton::TensorDescType`) in Triton IR type system |
 
 
 ### `ttng.tc_gen5_mma` (triton::nvidia_gpu::TCGen5MMAOp)
@@ -680,33 +712,70 @@ Effects: `MemoryEffects::Effect{}`
 | `result` | memory descriptor type (`::mlir::triton::gpu::MemDescType`) in Triton IR type system |
 
 
-### `ttng.tensor_desc_to_tma_ptr` (triton::nvidia_gpu::TensorDescToTMAPtrOp)
+### `ttng.tensormap_create` (triton::nvidia_gpu::TensormapCreateOp)
 
-_Convert tensor descriptor to pointer to tma descriptor_
+_Create a new TMA descriptor on device_
 
 Syntax:
 
 ```
-operation ::= `ttng.tensor_desc_to_tma_ptr` $desc attr-dict `:` qualified(type($desc)) `to` qualified(type($ptr))
+operation ::= `ttng.tensormap_create` $desc_ptr `,` $global_address `,`
+              `[` $box_dim `]` `,`
+              `[` $global_dim `]` `,`
+              `[` $global_stride `]` `,`
+              `[` $element_stride `]`
+              attr-dict `:` functional-type(operands, results)
 ```
 
-Traits: `AlwaysSpeculatableImplTrait`, `VerifyTensorLayoutsTrait`
+Traits: `AttrSizedOperandSegments`, `VerifyTensorLayoutsTrait`
 
-Interfaces: `ConditionallySpeculatable`, `NoMemoryEffect (MemoryEffectOpInterface)`
+Interfaces: `MemoryEffectOpInterface (MemoryEffectOpInterface)`
 
-Effects: `MemoryEffects::Effect{}`
+Effects: `MemoryEffects::Effect{MemoryEffects::Read on ::mlir::triton::GlobalMemory, MemoryEffects::Write on ::mlir::triton::GlobalMemory}`
+
+#### Attributes:
+
+<table>
+<tr><th>Attribute</th><th>MLIR Type</th><th>Description</th></tr>
+<tr><td><code>elem_type</code></td><td>::mlir::IntegerAttr</td><td>32-bit signless integer attribute whose value is non-negative whose maximum value is 15</td></tr>
+<tr><td><code>interleave_layout</code></td><td>::mlir::IntegerAttr</td><td>32-bit signless integer attribute whose value is non-negative whose maximum value is 2</td></tr>
+<tr><td><code>swizzle_mode</code></td><td>::mlir::IntegerAttr</td><td>32-bit signless integer attribute whose value is non-negative whose maximum value is 3</td></tr>
+<tr><td><code>fill_mode</code></td><td>::mlir::IntegerAttr</td><td>32-bit signless integer attribute whose value is non-negative whose maximum value is 1</td></tr>
+</table>
 
 #### Operands:
 
 | Operand | Description |
 | :-----: | ----------- |
-| `desc` | Tensor descriptor type (`::mlir::triton::TensorDescType`) in Triton IR type system |
+| `desc_ptr` | Pointer type (`::mlir::triton::PointerType`) in Triton IR type system |
+| `global_address` | Pointer type (`::mlir::triton::PointerType`) in Triton IR type system |
+| `box_dim` | variadic of 32-bit signless integer |
+| `global_dim` | variadic of 32-bit signless integer |
+| `global_stride` | variadic of 64-bit signless integer |
+| `element_stride` | variadic of 32-bit signless integer |
 
-#### Results:
 
-| Result | Description |
-| :----: | ----------- |
-| `ptr` | ptr |
+### `ttng.tensormap_fenceproxy_acquire` (triton::nvidia_gpu::TensormapFenceproxyAcquireOp)
+
+_Acquire fence on a tensormap object_
+
+Syntax:
+
+```
+operation ::= `ttng.tensormap_fenceproxy_acquire` $desc_ptr attr-dict `:` qualified(type($desc_ptr))
+```
+
+Traits: `VerifyTensorLayoutsTrait`
+
+Interfaces: `MemoryEffectOpInterface (MemoryEffectOpInterface)`
+
+Effects: `MemoryEffects::Effect{MemoryEffects::Write on ::mlir::triton::GlobalMemory}`
+
+#### Operands:
+
+| Operand | Description |
+| :-----: | ----------- |
+| `desc_ptr` | Pointer type (`::mlir::triton::PointerType`) in Triton IR type system |
 
 
 ### `ttng.wait_barrier` (triton::nvidia_gpu::WaitBarrierOp)
