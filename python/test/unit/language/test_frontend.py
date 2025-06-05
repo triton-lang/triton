@@ -245,9 +245,15 @@ def test_reassign_aggregate_with_constexpr():
     # CHECK-LABEL: test_reassign_aggregate_with_constexpr
     agg = AggregateWithConstexpr.create(tl.arange(0, 4))
     var = 1
-    # CHECK: scf.if
+    # CHECK: [[AGG:%.*]] = scf.if {{.*}} -> (tensor<4xi32>)
+    # CHECK:   [[VALUE:%.*]] = tt.call {{.*}}modify
+    # CHECK:   yield [[VALUE]]
+    # CHECK: else
+    # CHECK:   [[VALUE:%.*]] = tt.call {{.*}}modify
+    # CHECK:   yield [[VALUE]]
     if var == 0:
         agg = agg.modify(tl.arange(4, 8))
     else:
         agg = agg.modify(tl.arange(8, 12))
+    # CHECK: call @{{.*}}anchor{{.*}}([[AGG]])
     anchor(agg)
