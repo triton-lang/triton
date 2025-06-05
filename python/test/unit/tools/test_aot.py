@@ -386,7 +386,8 @@ def test_compile_link_autotune_matmul():
 
         for ts in tile_sizes:
             BM, BN, BK = ts[0], ts[1], ts[2]
-            compile_aot_kernels(tmp_dir, kernel_path, dtype, BM, BN, BK, ha_hb_hints=[(":16", ":16"), (":16", ""), ("", ":16")])
+            compile_aot_kernels(tmp_dir, kernel_path, dtype, BM, BN, BK, ha_hb_hints=[(":16", ":16"), (":16", ""),
+                                                                                      ("", ":16")])
 
         link_aot_kernels(tmp_dir)
 
