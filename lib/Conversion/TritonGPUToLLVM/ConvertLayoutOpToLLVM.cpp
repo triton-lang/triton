@@ -148,18 +148,29 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
     LinearLayout quot = *divideLeft(cvt, tile);
     LinearLayout reps = zerosLike(tile) * quot;
 
+    // Reps to i8
+    auto bitwidth = llvmElemTy.getIntOrFloatBitWidth();
+    auto i8Tile =
+        zerosLike(LinearLayout::identity1D(bitwidth / 8, kReg, kOffset));
+    auto i8Reps = i8Tile * reps;
+
+    // PTX expects the address increments to be done in bytes
+    // If we don't perform the computations in i8, the compiler would
+    // have to divide the computation by bitwdith / 8 and then lift this
+    // shl, which often it's not able to do.
     auto [laneId, warpId] = getLaneAndWarpId(rewriter, loc);
-    auto regBase =
+    auto regBaseI8 =
         applyLinearLayout(
-            loc, rewriter, reps,
+            loc, rewriter, i8Reps,
             {{kReg, b.i32_val(0)}, {kLane, laneId}, {kWarp, warpId}})[0]
             .second;
     auto step = tile.getInDimSize(kReg);
     SmallVector<Value> outVals;
     for (int i = 0; i < cvt.getInDimSize(kReg); i += step) {
       auto regIdx = reps.apply({{kReg, i}, {kLane, 0}, {kWarp, 0}})[0].second;
-      Value offset = b.xor_(regBase, b.i32_val(regIdx));
-      auto vecAddr = b.gep(smemPtrTy, llvmElemTy, smemBase, offset,
+      auto regIdxI8 = regIdx * (bitwidth / 8);
+      Value offset = b.xor_(regBaseI8, b.i32_val(regIdxI8));
+      auto vecAddr = b.gep(smemPtrTy, i8_ty, smemBase, offset,
                            LLVM::GEPNoWrapFlags::inbounds);
       // Lezcano: Do we want to use getFreeVariableMasks for pred or nah?
       if (isStore) {
