@@ -265,11 +265,14 @@ struct DirectToLdsLoadConversionBase : public LoadStoreConversionBase {
     return b.trunc(i1_ty, bitMask);
   }
 
-  // This is conservative because there are cases were we can bypass
-  // permute even if vecSize==1 but AMDCoalesceAsyncCopy adjust the layout
-  // to favour the largest possible vecSize. So we should rarely miss out
-  // on the bypass
-  bool canBypassShuffle(unsigned vecSize) const { return vecSize > 1; }
+  bool isFastestDimContiguous(Value srcPtrOrOffset) const {
+    auto fastedDim = triton::gpu::getOrder(
+        cast<RankedTensorType>(srcPtrOrOffset.getType()))[0];
+    AxisInfo *axisInfo = axisAnalysisPass.getAxisInfo(srcPtrOrOffset);
+    assert(axisInfo->getRank() > fastedDim);
+
+    return axisInfo->getContiguity(fastedDim) > 1;
+  }
 };
 
 struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp>,
@@ -553,10 +556,10 @@ struct BufferLoadToLocalOpConversion
         // threadsPerWarp) because we only swizzle inside a warp
         Value swizzledLaneId = b.add(getLaneId(rewriter, loc), laneOffset);
 
-        if (canBypassShuffle(vecTy.getNumElements())) {
+        if (isFastestDimContiguous(offset)) {
           // Because rows are contiguous and we only swizzle inside rows by
-          // swapping elements we can add laneOffset * vecSize to the offset to
-          // apply the swizzling
+          // swapping elements between lanes we can add laneOffset * vecSize to
+          // the offset to apply the swizzling
           offsetIn = b.add(
               offsetIn, b.mul(laneOffset, b.i32_val(vecTy.getNumElements())));
         } else {
@@ -692,10 +695,10 @@ struct AsyncCopyGlobalToLocalOpConversion
         // threadsPerWarp) because we only swizzle inside a warp
         Value swizzledLaneId = b.add(getLaneId(rewriter, loc), laneOffset);
 
-        if (canBypassShuffle(vecTy.getNumElements())) {
+        if (isFastestDimContiguous(op.getSrc())) {
           // Because rows are contiguous and we only swizzle inside rows by
-          // swapping elements we can move the src pointer by laneOffset *
-          // vecSize elements to apply the swizzling.
+          // swapping elements between lanes we can move the vecTy typed src
+          // pointer by laneOffset elements to apply the swizzling.
           srcPtr = b.gep(srcPtr.getType(), vecTy, srcPtr, laneOffset);
         } else {
           // If rows are not contiguous in memory we need to shuffle the
