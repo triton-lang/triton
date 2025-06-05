@@ -301,6 +301,26 @@ def TTG_MemDescReinterpretOp : TTG_Op<"memdesc_reinterpret", [Pure, MemDescViewT
   let hasFolder = 1;
 }
 
+def TTG_MemDescToI64Op : TTG_Op<"memdesc_to_i64", [Pure]> {
+  let summary = "convert a memory descriptor to i64";
+  let description = [{
+    This operation converts a memory descriptor to i64 representing the pointer.
+  }];
+  let arguments = (ins TTG_MemDescType:$src);
+  let results = (outs I64:$result);
+}
+
+def TTG_SharedMemoryBaseOp : TTG_Op<"shared_memory_base", [Pure]> {
+  let summary = "get base pointer of shared memory";
+  let description = [{
+    This operation returns the base pointer of shared memory casted to i64.
+  }];
+  let results = (outs I64:$result);
+  let assemblyFormat = [{
+    attr-dict `->` qualified(type($result))
+  }];
+}
+
 def TTG_LocalLoadOp : TTG_Op<"local_load"> {
   let summary = "Load a buffer from local memory into a distributed tensor";
 
