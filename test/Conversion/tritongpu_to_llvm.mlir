@@ -1313,13 +1313,13 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32} {
   // CHECK-LABEL: linear_layout_with_multiple_iterations
   tt.func @linear_layout_with_multiple_iterations(%src: tensor<8x4xbf16, #linear>) {
     %cvt = ttg.convert_layout %src : tensor<8x4xbf16, #linear> -> tensor<8x4xbf16, #linear1>
-    // CHECK: llvm.store
+    // CHECK: llvm.store {{.*}} : vector<2xi16>
     // CHECK: nvvm.barrier0
-    // CHECK: llvm.load
+    // CHECK: llvm.load {{.*}} -> i16
     // CHECK: nvvm.barrier0
-    // CHECK: llvm.store
+    // CHECK: llvm.store {{.*}} : vector<2xi16>
     // CHECK: nvvm.barrier0
-    // CHECK: llvm.load
+    // CHECK: llvm.load {{.*}} -> i16
     tt.return
   }
 }
