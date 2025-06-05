@@ -178,7 +178,9 @@ def test_tree(tmp_path: pathlib.Path, hook):
         assert ("load_y" in load_ops["children"][0]["frame"]["name"]
                 or "load_y" in load_ops["children"][1]["frame"]["name"])
         assert load_ops["children"][0]["metrics"]["cycles"] > 0
+        assert load_ops["children"][0]["metrics"]["normalized_cycles"] > 0
         assert load_ops["children"][1]["metrics"]["cycles"] > 0
+        assert load_ops["children"][1]["metrics"]["normalized_cycles"] > 0
 
 
 def test_trace(tmp_path: pathlib.Path):
