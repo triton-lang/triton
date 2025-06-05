@@ -63,11 +63,11 @@ void init_triton_proton(py::module &&m) {
   });
 
   m.def("get_scope_id_names", [](mlir::ModuleOp &module) {
-    return proton::ScopeIdAllocation(module).getScopeIdNames();
+    return proton::ModuleScopeIdAllocation(module).getScopeIdNames();
   });
 
   m.def("get_scope_id_parents", [](mlir::ModuleOp &module) {
-    return proton::ScopeIdAllocation(module).getScopeIdParents();
+    return proton::ModuleScopeIdAllocation(module).getScopeIdParents();
   });
 
   // Proton operations
