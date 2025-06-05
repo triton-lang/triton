@@ -1,10 +1,8 @@
 import argparse
 import sys
 import os
-import pathlib
 from .profile import start, finalize, _select_backend
 from .flags import set_command_line
-import triton
 
 
 def parse_arguments():
@@ -78,7 +76,6 @@ def run_profiling(args, target_args):
     do_setup_and_execute(target_args)
 
     finalize()
-
 
 
 def main():
