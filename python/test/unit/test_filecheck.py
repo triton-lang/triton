@@ -32,5 +32,5 @@ def test_filecheck_negative():
         # CHECK: %c42_i32
         anchor(scalar)
 
-    with pytest.raises(ValueError, match="Couldn't match \"%c42_i32\""):
+    with pytest.raises(ValueError, match="expected string not found in input\n # CHECK: %c42_i32"):
         run_filecheck_test(test_kernel)

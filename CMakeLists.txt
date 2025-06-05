@@ -296,6 +296,12 @@ if(TRITON_BUILD_PYTHON_MODULE)
     target_link_libraries(triton PRIVATE z)
   endif()
   target_link_options(triton PRIVATE ${LLVM_LDFLAGS})
+
+  configure_file(
+    "${LLVM_SYSPATH}/bin/FileCheck"
+    "${CMAKE_LIBRARY_OUTPUT_DIRECTORY}/../FileCheck"
+    COPYONLY)
+
 endif()
 
 if (UNIX AND NOT APPLE)
