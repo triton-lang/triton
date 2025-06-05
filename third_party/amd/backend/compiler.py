@@ -39,6 +39,7 @@ class HIPOptions:
     arch: str = None
     supported_fp8_dtypes: Tuple[str] = ("fp8e5", )
     deprecated_fp8_dot_operand_dtypes: Tuple[str] = ()
+    unsupported_fp8_dot_dtypes: Tuple[str] = ()
     default_dot_input_precision: str = "ieee"
     allowed_dot_input_precisions: Tuple[str] = ("ieee", )
     enable_fp_fusion: bool = True
@@ -119,6 +120,15 @@ class HIPBackend(BaseBackend):
             elif 'gfx12' in self.target.arch:
                 supported_fp8_dtypes.update({'fp8e4nv', 'fp8e5'})
             args["supported_fp8_dtypes"] = tuple(sorted(supported_fp8_dtypes))
+
+        if "unsupported_fp8_dot_dtypes" not in opts:
+            if self.target.arch == 'gfx942':
+                unsupported_dot_dtypes = ('fp8e4nv')
+            elif self.target.arch == 'gfx950':
+                unsupported_dot_dtypes = ('fp8e4b8')
+            else:
+                unsupported_dot_dtypes = ()
+            args["unsupported_fp8_dot_dtypes"] = tuple(sorted(unsupported_dot_dtypes))
 
         if "enable_fp_fusion" not in opts:
             args["enable_fp_fusion"] = knobs.language.default_fp_fusion
