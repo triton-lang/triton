@@ -129,7 +129,7 @@ class TritonSemantic(Generic[TensorTy]):
                 dtype = tl.uint64
             else:
                 raise ValueError(f'Nonrepresentable integer {x}.')
-            return self.full((), x, dtype=dtype)
+            return self.scalar_constant(x, dtype=dtype)
         elif isinstance(x, float):
             min_float32 = 2**-126
             max_float32 = (2 - 2**-23) * 2**127
@@ -141,7 +141,7 @@ class TritonSemantic(Generic[TensorTy]):
                 dtype = tl.float32
             else:
                 dtype = tl.float64
-            return self.full((), x, dtype=dtype)
+            return self.scalar_constant(x, dtype=dtype)
 
         elif isinstance(x, tl.constexpr):
             return self.to_tensor(x.value)
@@ -196,8 +196,8 @@ class TritonSemantic(Generic[TensorTy]):
                 if rhs_is_scalar and not (ret_sca_ty.get_int_min_value() <= rhs_scalar <=
                                           ret_sca_ty.get_int_max_value()):
                     raise ValueError(f"Scalar {rhs_scalar} is out of range for type {ret_sca_ty}")
-            lhs = self.full((), lhs_scalar, dtype=ret_sca_ty) if lhs_is_scalar else self.cast(lhs, ret_sca_ty)
-            rhs = self.full((), rhs_scalar, dtype=ret_sca_ty) if rhs_is_scalar else self.cast(rhs, ret_sca_ty)
+            lhs = self.scalar_constant(lhs_scalar, dtype=ret_sca_ty) if lhs_is_scalar else self.cast(lhs, ret_sca_ty)
+            rhs = self.scalar_constant(rhs_scalar, dtype=ret_sca_ty) if rhs_is_scalar else self.cast(rhs, ret_sca_ty)
 
         # implicit broadcasting
         lhs, rhs = self.broadcast_impl_value(lhs, rhs)
@@ -214,9 +214,9 @@ class TritonSemantic(Generic[TensorTy]):
         rhs = self.cast(rhs, tl.int64)
         ret = binary_op(lhs, rhs, False)
         max_value = lhs_sca_ty.get_int_max_value()
-        max_value = self.full([], max_value, tl.int64)
+        max_value = self.scalar_constant(max_value, tl.int64)
         min_value = lhs_sca_ty.get_int_min_value()
-        min_value = self.full([], min_value, tl.int64)
+        min_value = self.scalar_constant(min_value, tl.int64)
         cond = self.and_(self.less_equal(ret, max_value), self.greater_equal(ret, min_value))
         msg = f"int{lhs_sca_ty.int_bitwidth} overflow detected for operation {binary_op.__name__}"
         self.device_assert(cond, msg)
@@ -587,22 +587,26 @@ class TritonSemantic(Generic[TensorTy]):
         ret_ty_ir = ret_ty.to_ir(self.builder)
         return self.tensor(self.builder.create_make_range(ret_ty_ir, start, end), ret_ty)
 
-    def full(self, shape: List[int], value, dtype: tl.dtype) -> TensorTy:
+    def scalar_constant(self, value, dtype: tl.dtype) -> TensorTy:
+        # scalar
+        if dtype is None:
+            raise ValueError("dtype must be specified when value is not a tensor")
+        if value == 0:
+            value = self.builder.get_null_value(dtype.to_ir(self.builder))
+        else:
+            get_value_fn = getattr(self.builder, f"get_{dtype.name}")
+            value = get_value_fn(value)
+        return self.tensor(value, dtype)
+
+    def make_scalar(self, value, dtype: tl.dtype) -> TensorTy:
         if isinstance(value, tl.tensor):
             assert value.numel.value == 1, "only accepts size-1 tensor"
-            value = self.cast(value, dtype)
-        else:
-            # scalar
-            if dtype is None:
-                raise ValueError("dtype must be specified when value is not a tensor")
-            if value == 0:
-                value = self.builder.get_null_value(dtype.to_ir(self.builder))
-            else:
-                get_value_fn = getattr(self.builder, f"get_{dtype.name}")
-                value = get_value_fn(value)
-            value = self.tensor(value, dtype)
+            return self.cast(value, dtype)
+        # scalar
+        return self.scalar_constant(value, dtype)
 
-        return self.splat(value, shape)
+    def full(self, shape: List[int], value, dtype: tl.dtype) -> TensorTy:
+        return self.splat(self.make_scalar(value, dtype), shape)
 
 # ===----------------------------------------------------------------------===//
 #                               Shape Manipulation
@@ -1867,8 +1871,8 @@ class TritonSemantic(Generic[TensorTy]):
         if strides[-1] != 1:
             raise ValueError(f"Tensor descriptor last dim must be 1 but got {strides[-1]}")
 
-        shape = [self.full([], x, tl.int32) for x in shape]
-        strides = [self.full([], x, tl.int64) for x in strides]
+        shape = [self.make_scalar(x, tl.int32) for x in shape]
+        strides = [self.make_scalar(x, tl.int64) for x in strides]
 
         # Check whether `block_shape` is static
         block_shape = tl._unwrap_shape(block_shape)

@@ -25,4 +25,4 @@ def async_gather(tensor_desc, x_offsets, y_offset, barrier, result, pred=True, _
 @builtin
 def async_scatter(tensor_desc, x_offsets, y_offset, src, _semantic=None):
     y_offset = _semantic.to_tensor(y_offset)
-    _semantic.create_async_tma_scatter(tensor_desc.handle, x_offsets.handle, y_offset.handle, src.handle)
+    _semantic.builder.create_async_tma_scatter(tensor_desc.handle, x_offsets.handle, y_offset.handle, src.handle)

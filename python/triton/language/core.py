@@ -338,7 +338,7 @@ def constexpr_function(f):
     """
 
     @wraps(f)
-    def wrapper(*args, **kwargs, _semantic):
+    def wrapper(*args, _semantic=None, **kwargs):
         # de-constexpr arguments and discard the _semantic keyword argument:
         args = [_unwrap_if_constexpr(x) for x in args]
         kwargs = {k: _unwrap_if_constexpr(v) for (k, v) in kwargs.items()}

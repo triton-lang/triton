@@ -25,7 +25,7 @@ class GluonSemantic(TritonSemantic[ttgl.tensor]):
         return ttgl.tensor(handle, ret_ty)
 
     def full(self, shape, value, dtype, layout):
-        scalar = super().full([], value, dtype)
+        scalar = self.make_scalar(value, dtype)
         return self.splat(scalar, shape, layout)
 
     def convert_layout(self, value, layout):
