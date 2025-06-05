@@ -151,6 +151,10 @@ class CUDABackend(BaseBackend):
             raise ValueError(f"TRITON_OVERRIDE_ARCH must have the form {pattern}")
         return int(match.group(1))
 
+    def get_target_name(self, options) -> str:
+        capability = self._parse_arch(options.arch)
+        return f"cuda:{capability}"
+
     def __init__(self, target: GPUTarget) -> None:
         super().__init__(target)
         self.binary_ext = "cubin"
