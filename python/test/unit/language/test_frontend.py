@@ -179,6 +179,11 @@ class AggregateWithConstexpr:
     def create(a):
         return AggregateWithConstexpr(a, tl.constexpr(42))
 
+    @triton.jit
+    def modify(self, a):
+        self.a = a
+        return self
+
 
 @triton.jit
 def add_rhs_constexpr(agg):
@@ -214,3 +219,35 @@ def test_constexpr_function_from_jit():
 
 def test_constexpr_function_from_pythin():
     assert constexpr_function(7) == 8
+
+
+@triton.jit
+def swap(pair):
+    return pair.second, pair.first
+
+
+@filecheck_test
+@triton.jit
+def test_assign_tuple_attrs():
+    # CHECK-LABEL: test_assign_tuple_attrs
+    p = Pair(tl.arange(0, 4), tl.arange(4, 8))
+    # CHECK: [[P:%.*]]:2 = tt.call @{{.*}}swap
+    p.first, p.second = swap(p)
+    # CHECK: call @{{.*}}anchor{{.*}}([[P]]#0)
+    # CHECK: call @{{.*}}anchor{{.*}}([[P]]#1)
+    anchor(p.first)
+    anchor(p.second)
+
+
+@filecheck_test
+@triton.jit
+def test_reassign_aggregate_with_constexpr():
+    # CHECK-LABEL: test_reassign_aggregate_with_constexpr
+    agg = AggregateWithConstexpr.create(tl.arange(0, 4))
+    var = 1
+    # CHECK: scf.if
+    if var == 0:
+        agg = agg.modify(tl.arange(4, 8))
+    else:
+        agg = agg.modify(tl.arange(8, 12))
+    anchor(agg)
