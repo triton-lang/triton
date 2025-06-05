@@ -1054,7 +1054,7 @@ static Value Fp8E4M3FNUZ_to_Fp16_oneValue(Location loc,
   auto e_mask = tb.int_val(16, 0x7A00);
   auto e = tb.and_(i16_ty, a, e_mask);
 
-  auto m = tb.and_(i16_ty, a, tb.int_val(16, 0x0700));
+  [[maybe_unused]] auto m = tb.and_(i16_ty, a, tb.int_val(16, 0x0700));
   auto sign = tb.and_(i16_ty, a, tb.int_val(16, 0x8000));
 
   // check whether all exponents are zeros
@@ -1204,7 +1204,6 @@ struct FpToFpOpConversion
   FailureOr<ConverterT>
   getConversionFunc(Type srcTy, Type dstTy,
                     std::optional<RoundingMode> roundingMode) const {
-    auto F8E4M3B15TyID = TypeID::get<Float8E4M3B11FNUZType>();
     auto F8E4M3FNUZTyID = TypeID::get<Float8E4M3FNUZType>();
     auto F8E5M2FNUZTyID = TypeID::get<Float8E5M2FNUZType>();
     auto F8E5M2TyID = TypeID::get<Float8E5M2Type>();
@@ -1212,7 +1211,6 @@ struct FpToFpOpConversion
     auto F16TyID = TypeID::get<Float16Type>();
     auto BF16TyID = TypeID::get<BFloat16Type>();
     auto F32TyID = TypeID::get<Float32Type>();
-    auto F64TyID = TypeID::get<Float64Type>();
 
     auto undefRounding = static_cast<RoundingMode>(-1);
 
@@ -1596,8 +1594,7 @@ struct ExtFOpConversion
                                    Location loc) const {
     auto inElemTy = getElementType(op.getIn());
     if (inElemTy.isBF16()) {
-      auto outElemTy = getElementType(op.getOut());
-      assert(outElemTy.isF32() && "unsupported conversion");
+      assert(getElementType(op.getOut()).isF32() && "unsupported conversion");
       return {convertBf16ToFp32(loc, rewriter, operands[0][0])};
     } else {
       return {rewriter.create<LLVM::FPExtOp>(loc, elemTy, operands[0][0])};

@@ -106,11 +106,9 @@ Value getBarrier(PatternRewriter &rewriter, Location loc, Value mBars,
 
 void waitOnMbar(PatternRewriter &rewriter, Location loc, Value mBars, Value idx,
                 Value phase) {
-  auto ctx = rewriter.getContext();
   auto barrier = getBarrier(rewriter, loc, mBars, idx);
   // wait on empty/full
-  auto waitOp =
-      rewriter.create<triton::nvidia_gpu::WaitBarrierOp>(loc, barrier, phase);
+  rewriter.create<triton::nvidia_gpu::WaitBarrierOp>(loc, barrier, phase);
 }
 
 void signalArrival(PatternRewriter &rewriter, Location loc, Value mBars,
@@ -139,7 +137,6 @@ public:
     }
     auto loc = op.getLoc();
     auto ctx = op.getContext();
-    auto uses = op.getResult().getUses();
     auto numBatches = op.getResult().getType().getNumBatchAxes();
 
     int rank = 0;
@@ -199,7 +196,6 @@ public:
 
 template <bool put, typename T>
 LogicalResult LowerEnter(T op, PatternRewriter &rewriter, ArefUseGraph &graph) {
-  auto ctx = op.getContext();
   auto loc = op.getLoc();
   auto aref = op.getAref();
   auto emptyMbars = graph.arefs[aref].emptyMbars;
@@ -208,7 +204,7 @@ LogicalResult LowerEnter(T op, PatternRewriter &rewriter, ArefUseGraph &graph) {
   rewriter.setInsertionPoint(op);
 
   auto zero = rewriter.create<arith::ConstantIntOp>(loc, 0, 32);
-  auto one = rewriter.create<arith::ConstantIntOp>(loc, 1, 32);
+  [[maybe_unused]] auto one = rewriter.create<arith::ConstantIntOp>(loc, 1, 32);
 
   waitOnMbar(rewriter, loc, put ? emptyMbars : fullMbars, op.getIndex(),
              op.getPhase());
@@ -246,7 +242,6 @@ LogicalResult LowerEnter(T op, PatternRewriter &rewriter, ArefUseGraph &graph) {
 
 template <bool put, typename T>
 LogicalResult LowerExit(T op, PatternRewriter &rewriter, ArefUseGraph &graph) {
-  auto ctx = op.getContext();
   auto loc = op.getLoc();
   auto aref = op.getAref();
   auto emptyMbars = graph.arefs[aref].emptyMbars;

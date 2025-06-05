@@ -161,7 +161,6 @@ Value generateMaskFromOffsetRanges(OpBuilder &builder, const Location &loc,
   auto maskTensorType = RankedTensorType::get(blockShape, builder.getI1Type());
   Value mask;
   for (std::size_t i = 0; i < blockShape.size(); ++i) {
-    auto offsetWithRange = offsetRanges[i];
 
     // Compare with lower bound
     Value lowerBound = builder.create<mlir::arith::ConstantIntOp>(
@@ -410,7 +409,7 @@ struct RewriteReducePattern : OpConversionPattern<triton::DescriptorReduceOp> {
       return op->emitError(msgstring);
     }
 
-    auto newStore = rewriter.create<triton::AtomicRMWOp>(
+    rewriter.create<triton::AtomicRMWOp>(
         loc, descTy.getSignlessBlockType(), *rmwOp,
         generatePtr(rewriter, loc, blockShape, desc, offsets), op.getSrc(),
         generateMask(rewriter, loc, blockShape, desc, offsets),

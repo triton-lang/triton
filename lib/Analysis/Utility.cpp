@@ -334,7 +334,6 @@ getWarpLayoutConvertDecomposition(RankedTensorType srcTy,
       continue;
 
     assert(upperHalfRow[0] == 0);
-    int32_t laneBase = upperHalfRow[1];
     assert(/*C(r,r)[i]*/ upperHalfRow[0] == 0);
     if (!missingLaneRows.empty()) {
       // Select row i into row j from the missing rows. The order in which the

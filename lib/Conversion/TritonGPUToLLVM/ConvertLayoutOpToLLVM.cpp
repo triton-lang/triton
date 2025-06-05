@@ -35,7 +35,6 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
                   ConversionPatternRewriter &rewriter) const override {
     MLIRContext *ctx = op.getContext();
 
-    const auto &shape = op.getType().getShape();
     auto srcTy = op.getSrc().getType();
     auto dstTy = op.getType();
 
@@ -96,8 +95,6 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
     StringAttr kRegister = str_attr("register");
     assert(!cvtNeedsSharedMemory(op.getSrc().getType(), op.getType()));
 
-    auto srcTy = op.getSrc().getType();
-    auto dstTy = op.getType();
     auto inVals = unpackLLElements(loc, adaptor.getSrc(), rewriter);
     SmallVector<Value> outVals(conversion.getInDimSize(kRegister));
     for (int i = 0; i < outVals.size(); i++) {
@@ -115,13 +112,14 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
                                     const LinearLayout &dstLayout,
                                     OpAdaptor adaptor,
                                     ConversionPatternRewriter &rewriter) const {
-    MLIRContext *ctx = op.getContext();
     auto loc = op.getLoc();
     auto b = TritonLLVMOpBuilder(loc, rewriter);
     auto srcTy = op.getSrc().getType();
-    auto dstTy = op.getType();
 
+#ifndef NDEBUG
+    auto dstTy = op.getType();
     assert(cvtNeedsSharedMemory(srcTy, dstTy));
+#endif
 
     SmallVector<Value> inVals =
         unpackLLElements(loc, adaptor.getSrc(), rewriter);
@@ -194,7 +192,6 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
     StringAttr kLane = str_attr("lane");
     StringAttr kWarp = str_attr("warp");
     StringAttr kBlock = str_attr("block");
-    StringAttr kOffset = str_attr("offset");
     StringAttr kIteration = str_attr("iteration");
 
     auto [laneId, warpId] = getLaneAndWarpId(rewriter, loc);
@@ -224,9 +221,12 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
                                           /*swizzleByteSize=*/0)
                    : srcLayout.invertAndCompose(sharedLayout);
 
+#ifndef NDEBUG
+    StringAttr kOffset = str_attr("offset");
     const int shmemAllocatedNumElems =
         getNumScratchElements(scratchConfig.paddedRepShape);
     assert(shmemStoreLayout.getOutDimSize(kOffset) <= shmemAllocatedNumElems);
+#endif
 
     // Layout for the load from shmem to registers.
     LinearLayout shmemLoadLayout = dstLayout.invertAndCompose(sharedLayout);
@@ -364,14 +364,16 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
   SmallVector<SmallVector<int> /*registers*/>
   collectRegsForIter(MLIRContext *ctx, const LinearLayout &layout) const {
     StringAttr kRegister = str_attr("register");
+    StringAttr kIteration = str_attr("iteration");
+
+#ifndef NDEBUG
     StringAttr kLane = str_attr("lane");
     StringAttr kWarp = str_attr("warp");
     StringAttr kBlock = str_attr("block");
-    StringAttr kIteration = str_attr("iteration");
-
     // The choice of iteration should be determined only by the register.  That
     // is, it should be correct to split the register dimension into iterations.
     assert(layout.sublayoutIsZero({kLane, kWarp, kBlock}, {kIteration}));
+#endif
 
     LinearLayout sublayout = layout.sublayout({kRegister}, {kIteration});
     SmallVector<SmallVector<int>> ret(sublayout.getOutDimSize(kIteration));

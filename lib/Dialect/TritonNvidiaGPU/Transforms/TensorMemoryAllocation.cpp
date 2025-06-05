@@ -326,7 +326,6 @@ public:
 
   void runOnOperation() override {
     ModuleOp mod = getOperation();
-    MLIRContext *ctx = &getContext();
 
     DenseMap<triton::nvidia_gpu::TMEMAllocOp, int> offsets;
     // TODO: handle cases with multiple function with TMEMAllocOp.

@@ -330,11 +330,8 @@ bool StreamPipeliner::createAsyncCopy(tt::LoadOp loadOp, Value alloc,
   Location loc = loadOp.getLoc();
 
   Value src = loadOp.getPtr();
-  auto srcTy = cast<triton::gpu::TensorOrMemDesc>(src.getType());
 
   ttg::MemDescType allocTy = cast<ttg::MemDescType>(alloc.getType());
-  auto sharedEncodingAttr =
-      cast<ttg::SwizzledSharedEncodingAttr>(allocTy.getEncoding());
 
   // Extract local subview from shared allocation
   Value zero = builder.create<arith::ConstantIntOp>(forOp.getLoc(), 0, 32);
@@ -412,9 +409,6 @@ void StreamPipeliner::createStreamCopy(tt::LoadOp loadOp, Value alloc,
   // Replace the load with insert/extract slice.
   builder.setInsertionPoint(loadOp);
   Location loc = loadOp.getLoc();
-  Value src = loadOp.getPtr();
-  Value mask = loadOp.getMask();
-  Value other = loadOp.getOther();
 
   ttg::MemDescType allocTy = cast<ttg::MemDescType>(alloc.getType());
   SmallVector<Value> copyOffsets(allocTy.getRank(), zero);

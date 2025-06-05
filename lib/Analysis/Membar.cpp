@@ -158,7 +158,7 @@ void MembarAnalysis::visitTerminator(Operation *op,
 
 void MembarAnalysis::insertBarrier(Operation *op, OpBuilder *builder) {
   OpBuilder::InsertionGuard g(*builder);
-  auto barrierOp = builder->create<gpu::BarrierOp>(op->getLoc());
+  builder->create<gpu::BarrierOp>(op->getLoc());
 }
 
 void MembarAnalysis::update(Operation *op, BlockInfo *blockInfo,

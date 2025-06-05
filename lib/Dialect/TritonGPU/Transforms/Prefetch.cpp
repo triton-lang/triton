@@ -238,7 +238,7 @@ LogicalResult Prefetcher::initialize() {
     auto bEnc =
         mlir::cast<triton::gpu::DotOperandEncodingAttr>(bType.getEncoding());
     int aKWidth = aEnc.getKWidth();
-    int bKWidth = bEnc.getKWidth();
+    [[maybe_unused]] int bKWidth = bEnc.getKWidth();
     assert(aKWidth == bKWidth);
 
     auto kSize = aType.getShape().back();

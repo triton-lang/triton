@@ -393,13 +393,12 @@ void Fp4ToFpOp::build(OpBuilder &builder, OperationState &state,
                       int32_t axis) {
   auto srcTy = src.getType();
   auto shape = llvm::to_vector(srcTy.getShape());
-  auto rank = srcTy.getRank();
-  assert(0 <= axis && axis < rank);
+  assert(0 <= axis && axis < srcTy.getRank());
   shape[axis] *= 2;
 
   Attribute inEnc = srcTy.getEncoding();
   Attribute outEnc;
-  auto result =
+  [[maybe_unused]] auto result =
       inEnc.getDialect()
           .getRegisteredInterface<triton::DialectInferLayoutInterface>()
           ->inferFp4ToFpOpEncoding(shape, axis, inEnc, outEnc,
@@ -475,9 +474,6 @@ LogicalResult MemDescReshapeOp::verify() {
   }
 
   // Infer the dst layout from the source and verify that it is equivalent.
-  auto srcEncoding = srcType.getEncoding();
-  Attribute inferedDstEncoding;
-
   LinearLayout ll = inferReshapeLinearLayout(
       srcType.getShape(), srcType.getEncoding(), dstType.getShape());
   LinearLayout llDst =
@@ -895,7 +891,7 @@ void WarpSpecializeOp::build(OpBuilder &builder, OperationState &state,
   build(builder, state, resultTypes, /*explicitCaptures=*/ValueRange(),
         partitionNumWarps, {}, {}, {});
   OpBuilder::InsertionGuard guard(builder);
-  Block *container = builder.createBlock(state.regions.back().get());
+  builder.createBlock(state.regions.back().get());
   builder.create<WarpSpecializePartitionsOp>(state.location,
                                              partitionNumRegions);
 }
@@ -924,7 +920,6 @@ ParseResult WarpSpecializeOp::parse(OpAsmParser &p, OperationState &result) {
   while (succeeded(p.parseOptionalKeyword(
       ("partition" + Twine(partitionNumWarps.size()).str())))) {
     partitionArgs.clear();
-    SMLoc regionLoc = p.getCurrentLocation();
     if (p.parseArgumentList(partitionArgs, AsmParser::Delimiter::Paren,
                             /*allowType=*/true) ||
         p.parseKeyword("num_warps") || p.parseLParen() ||

@@ -177,7 +177,6 @@ void collectAsyncChannels(SmallVector<std::unique_ptr<Channel>> &channels,
         });
         return;
       }
-      auto producerTaskId = producerTaskIds.front();
       unsigned producerNumBuffers = numBuffers;
       if (auto forOp = op->getParentOfType<scf::ForOp>()) {
         producerNumBuffers = getNumBuffersOrDefault(forOp, numBuffers);
@@ -685,7 +684,6 @@ void createToken(
 static ttng::TMEMAllocOp createTMemAlloc(OpBuilder &builder,
                                          ttng::TMEMAllocOp oldTMemAllocOp,
                                          int numBuffers) {
-  Location loc = oldTMemAllocOp.getLoc();
   auto oldRetType = oldTMemAllocOp.getType();
   SmallVector<int64_t> shape = {oldRetType.getShape().begin(),
                                 oldRetType.getShape().end()};

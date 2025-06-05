@@ -55,7 +55,6 @@ class LoopInvariantCodeMotionPass
           [&](Operation *op, Region *) {
             // Create the new mask for load op.
             if (auto loadOp = dyn_cast<LoadOp>(op)) {
-              Value mask = loadOp.getMask();
               IRRewriter rewriter(loopLike);
               Location loc = loopLike->getLoc();
               Value cond;

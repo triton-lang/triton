@@ -650,12 +650,11 @@ void Pingponger::addAsymmetricSyncToLoop(OpBuilder &builder, Location loc) {
                                                warpIDX, constZero);
   auto warpHigh = builder.create<arith::CmpIOp>(loc, arith::CmpIPredicate::ne,
                                                 warpIDX, constZero);
-  auto condBarrierHigh =
-      builder.create<tt::amdgpu::CondBarrierOp>(loc, warpHigh);
+  builder.create<tt::amdgpu::CondBarrierOp>(loc, warpHigh);
 
   // Insert condbarrier::first_half after the end of the loop
   builder.setInsertionPointAfter(forOp);
-  auto condBarrierLow = builder.create<tt::amdgpu::CondBarrierOp>(loc, warpLow);
+  builder.create<tt::amdgpu::CondBarrierOp>(loc, warpLow);
 }
 
 void Pingponger::getDotPingponged() {
@@ -668,7 +667,6 @@ void Pingponger::getDotPingponged() {
   }
 
   OpBuilder builder(forOp);
-  MLIRContext *ctx = forOp.getContext();
   Location loc = forOp.getLoc();
 
   forOp->walk([&](Operation *op) {

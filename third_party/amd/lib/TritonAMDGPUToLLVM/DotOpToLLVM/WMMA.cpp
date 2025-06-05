@@ -91,17 +91,13 @@ WMMAInstrType getWMMAInstrTypeFromDot(DotOp op) {
   auto aOperandTy = op.getA().getType();
   auto aTensorTy = cast<RankedTensorType>(aOperandTy);
   auto aElemTy = aTensorTy.getElementType();
-  auto bOperandTy = op.getB().getType();
-  auto bTensorTy = cast<RankedTensorType>(bOperandTy);
-  auto bElemTy = bTensorTy.getElementType();
-  assert(aElemTy == bElemTy);
-  auto cOperandTy = op.getC().getType();
-  auto cTensorTy = cast<RankedTensorType>(cOperandTy);
-  auto cElemTy = cTensorTy.getElementType();
+  assert(aElemTy ==
+         cast<RankedTensorType>(op.getB().getType()).getElementType());
   auto dOperandTy = op.getD().getType();
   auto dTensorTy = cast<RankedTensorType>(dOperandTy);
   auto dElemTy = dTensorTy.getElementType();
-  assert(cElemTy == dElemTy);
+  assert(cast<RankedTensorType>(op.getC().getType()).getElementType() ==
+         dElemTy);
 
   if (dElemTy.isF32() && aElemTy.isF16())
     return WMMAInstrType::FP32_FP16;
@@ -218,7 +214,6 @@ Value generateWMMAIntrinsic(ConversionPatternRewriter &rewriter, Location loc,
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   auto name = getWmmaIntrinsicName(aElType, bElType, dElType, valA.getType(),
                                    valC.getType(), tiedLower.has_value());
-  LLVM::FastmathFlagsAttr defaultFlags{};
   SmallVector<Value> operands;
   if (aElType.isInteger())
     operands.push_back(b.int_val(1, !aElType.isUnsignedInteger()));
@@ -255,7 +250,6 @@ LogicalResult convertDot(DotOp op, DotOpAdaptor adaptor,
   auto wmmaLayout = cast<AMDWmmaEncodingAttr>(
       cast<RankedTensorType>(op.getResult().getType()).getEncoding());
   int wmmaVer = wmmaLayout.getVersion();
-  auto warpsPerCTA = wmmaLayout.getWarpsPerCTA();
   auto mnkDim = AMDWmmaEncodingAttr::getMNKDimPerInstr();
 
   auto loc = op.getLoc();
@@ -269,7 +263,6 @@ LogicalResult convertDot(DotOp op, DotOpAdaptor adaptor,
   auto elemTy = aTensorTy.getElementType();
 
   auto aEncoding = cast<DotOperandEncodingAttr>(aTensorTy.getEncoding());
-  auto bEncoding = cast<DotOperandEncodingAttr>(bTensorTy.getEncoding());
   int kWidth = aEncoding.getKWidth();
 
   auto repA =
@@ -371,6 +364,7 @@ LogicalResult convertDot(DotOp op, DotOpAdaptor adaptor,
 LogicalResult convertWMMA(triton::DotOp op, triton::DotOp::Adaptor adaptor,
                           const LLVMTypeConverter *typeConverter,
                           ConversionPatternRewriter &rewriter) {
+#ifndef NDEBUG
   auto rankedTType = [](Value tensor) {
     return cast<RankedTensorType>(tensor.getType());
   };
@@ -387,6 +381,7 @@ LogicalResult convertWMMA(triton::DotOp op, triton::DotOp::Adaptor adaptor,
   assert(cTensorTy.getShape()[0] == dTensorTy.getShape()[0] &&
          cTensorTy.getShape()[1] == dTensorTy.getShape()[1] &&
          "DotOp's $c operand should pass the same number of values as $d");
+#endif
 
   return convertDot(op, adaptor, rewriter, typeConverter);
 }

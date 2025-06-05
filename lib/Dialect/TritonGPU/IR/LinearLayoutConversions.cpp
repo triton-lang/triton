@@ -121,9 +121,11 @@ LinearLayout combineCtaCgaWithShape(LinearLayout ctaLayout,
   ctaLayout = ensureLayoutNotLargerThan(ctaLayout, ctaShape);
 
   LinearLayout ret = (ctaLayout * cgaLayout).transposeOuts(outDimNames);
+#ifndef NDEBUG
   for (auto dim : ret.getOutDimNames()) {
     assert(ret.getOutDimSize(dim) == labeledShape[dim]);
   }
+#endif
   return ret;
 }
 
@@ -578,7 +580,6 @@ LinearLayout chooseDotDsReadB64TrLayout(DotOperandEncodingAttr dotMfmaLayout,
   };
 
   const bool isMfma32 = (mDim == 32);
-  const bool isMfma16 = (mDim == 16);
 
   // kDoubleTileSize is the k dimension of a tile when double rated
   // mfma instructions are used.
@@ -640,7 +641,6 @@ LinearLayout mfmaDotToLinearLayout(DotOperandEncodingAttr dotMfmaLayout,
 
   auto rank = shape.size();
   bool hasBatchDim = rank == 3;
-  int mIndex = 0 + hasBatchDim;
 
   int32_t kWidth = dotMfmaLayout.getKWidth();
   auto kDim = dotMfmaLayout.getOpIdx() == 0 ? rank - 1 : rank - 2;
@@ -818,12 +818,10 @@ LinearLayout wmmaDotOperandToLinearLayout(DotOperandEncodingAttr dotWmmaLayout,
   auto rank = shape.size();
   bool hasBatchDim = rank == 3;
   auto kDim = dotWmmaLayout.getOpIdx() == 0 ? rank - 1 : rank - 2;
-  int32_t kSize = shape[kDim];
   MLIRContext *ctx = dotWmmaLayout.getContext();
   SmallVector<StringAttr> outDimNames = standardOutDimNames(ctx, rank);
   StringAttr kRegister = S("register");
   StringAttr kLane = S("lane");
-  StringAttr kWarp = S("warp");
   // lane order
   // operand A: [1, 0] / [2, 1, 0]
   // operand B: [0, 1] / [1, 2, 0]
@@ -1041,7 +1039,6 @@ DotOperandEncodingAttr::toLinearLayout(ArrayRef<int64_t> shape) const {
   } else if (auto wmmaLayout = mlir::dyn_cast<AMDWmmaEncodingAttr>(parent)) {
     return wmmaDotOperandToLinearLayout(*this, shape);
   } else {
-    auto mma = mlir::cast<NvidiaMmaEncodingAttr>(parent);
     return nvidiaDotToLinearLayout(shape, *this);
   }
 }
@@ -1279,7 +1276,6 @@ LinearLayout chooseStMatrixLayoutSwizzled(MLIRContext *ctx, Attribute encoding,
   StringAttr kWarp = S("warp");
   StringAttr kCol = S("dim1");
   StringAttr kRow = S("dim0");
-  StringAttr kBlock = S("block");
 
   std::vector<std::vector<int>> basesReg = {{1, 0}, {2, 0}, {4, 0}};
   std::vector<std::vector<int>> basesLane = {
@@ -1321,7 +1317,6 @@ LinearLayout chooseDotLdMatrixLayout(DotOperandEncodingAttr dot,
   StringAttr kReg = S("register");
   StringAttr kLane = S("lane");
   StringAttr kWarp = S("warp");
-  StringAttr kBlock = S("block");
   StringAttr kInner = opIdx == 0 ? (needTrans ? S("dim0") : S("dim1"))
                                  : (needTrans ? S("dim1") : S("dim0"));
   StringAttr kOuter = opIdx == 0 ? (needTrans ? S("dim1") : S("dim0"))
@@ -1605,7 +1600,6 @@ getTmemLoadStoreLayout16x256(int M, int N, RankedTensorType oldType,
 
   using basisT = std::vector<std::vector<int32_t>>;
   StringAttr kRegister = StringAttr::get(ctx, "register");
-  StringAttr kLane = StringAttr::get(ctx, "lane");
   StringAttr kWarp = StringAttr::get(ctx, "warp");
   SmallVector<StringAttr> outDimNames = standardOutDimNames(ctx, 2);
 

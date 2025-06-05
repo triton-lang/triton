@@ -250,7 +250,6 @@ struct ReshapeOpConversion : public ConvertOpToLLVMPattern<ReshapeOp> {
                                "expensive view not supported on reshape op");
     }
     auto resultTy = cast<RankedTensorType>(op.getType());
-    auto srcTy = cast<RankedTensorType>(op.getSrc().getType());
     auto typeConverter = getTypeConverter();
     auto vals = unpackLLElements(loc, adaptor.getSrc(), rewriter);
     Value ret = packLLElements(loc, typeConverter, vals, rewriter, resultTy);
@@ -387,10 +386,8 @@ struct BroadcastOpConversion
     auto srcLayout = srcTy.getEncoding();
     auto resultLayout = resultTy.getEncoding();
     auto srcShape = srcTy.getShape();
-    auto resultShape = resultTy.getShape();
-    unsigned rank = srcTy.getRank();
     auto typeConverter = getTypeConverter();
-    assert(rank == resultTy.getRank());
+    assert(srcTy.getRank() == resultTy.getRank());
     auto srcOffsets = emitOffsetForLayout(srcLayout, srcTy);
     auto resultOffsets = emitOffsetForLayout(resultLayout, resultTy);
     SmallVector<Value> srcVals = unpackLLElements(loc, src, rewriter);
@@ -428,7 +425,6 @@ struct MemDescSubviewOpConversion
     auto destTy = op.getResult().getType();
     auto llvmElemTy = getTypeConverter()->convertType(srcTy.getElementType());
     auto layoutOrder = getOrder(srcTy);
-    auto enc = srcTy.getEncoding();
 
     // newBase = base + offset
     auto smemObj = getSharedMemoryObjectFromStruct(loc, adaptor.getSrc(),

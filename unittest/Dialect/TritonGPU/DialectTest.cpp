@@ -534,8 +534,6 @@ TEST_F(LinearEncodingTest, DistributedEncodingToLinearEncoding) {
       ASSERT_EQ(linearLayout, expandedLL);
 
       // Test that methods of DistributedEncoding return the same values
-      Type eltTy = Float32Type::get(&ctx);
-
       ASSERT_EQ(distributedEncoding.getTotalElemsPerThread(shape),
                 linearEncoding.getTotalElemsPerThread(shape));
       ASSERT_EQ(distributedEncoding.getElemsPerThread(shape),

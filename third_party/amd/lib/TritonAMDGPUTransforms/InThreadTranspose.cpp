@@ -629,20 +629,19 @@ matchInThreadTransposePattern(ttg::LocalLoadOp lLoad) {
     pattern.globalLoads.insert_range(globalLoadSearch.value());
   }
 
-  LDBG("found global loads: " << pattern.globalLoads.size());
-  for (auto load : pattern.globalLoads)
-    LDBG(load);
-  LDBG("found local alloc stores: " << pattern.localAllocStores.size());
-  for (auto local : pattern.localAllocStores)
-    LDBG(*local);
-  LDBG("found shared mem values: " << pattern.sharedMemVals.size());
-  for (auto val : pattern.sharedMemVals)
-    LDBG(val);
+  LLVM_DEBUG(
+      LDBG("found global loads: " << pattern.globalLoads.size());
+      for (auto load : pattern.globalLoads) LDBG(load);
+      LDBG("found local alloc stores: " << pattern.localAllocStores.size());
+      for (auto local : pattern.localAllocStores) LDBG(*local);
+      LDBG("found shared mem values: " << pattern.sharedMemVals.size());
+      for (auto val : pattern.sharedMemVals) LDBG(val);
 
-  if (pattern.globalLoads.empty()) {
-    LDBG("Did not find global load operation");
-    return failure();
-  }
+      if (pattern.globalLoads.empty()) {
+        LDBG("Did not find global load operation");
+        return failure();
+      });
+
   // check that all global loads have same type(i.e. shape and layout),
   // otherwise can not guarantee transformation overhead is cheap
   auto firstLoadOp = pattern.globalLoads.front();

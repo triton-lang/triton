@@ -250,7 +250,6 @@ struct DotOpMFMAConversionHelper {
     // Check if this dot has come with priority set by setprio.
     auto setPrioOp = dyn_cast_or_null<ROCDL::SetPrioOp>(op->getPrevNode());
 
-    auto warpsPerCTA = mfmaLayout.getWarpsPerCTA();
     auto mDim = mfmaLayout.getMDim();
     auto nDim = mfmaLayout.getNDim();
     auto mfmaVersion = mfmaLayout.getVersionMajor();
@@ -280,7 +279,6 @@ struct DotOpMFMAConversionHelper {
     unsigned kBase = maybeMfmaIntrinsic->kBase;
 
     auto aEncoding = cast<DotOperandEncodingAttr>(aTensorTy.getEncoding());
-    auto bEncoding = cast<DotOperandEncodingAttr>(bTensorTy.getEncoding());
     int kWidth = aEncoding.getKWidth();
 
     intrinsicName = maybeMfmaIntrinsic->name;
@@ -541,7 +539,6 @@ struct ScaledDotOpMFMAConversionHelper : DotOpMFMAConversionHelper {
     // Check if this dot has come with priority set by setprio.
     auto setPrioOp = dyn_cast_or_null<ROCDL::SetPrioOp>(op->getPrevNode());
 
-    auto warpsPerCTA = mfmaLayout.getWarpsPerCTA();
     auto mDim = mfmaLayout.getMDim();
     auto nDim = mfmaLayout.getNDim();
     auto mfmaVersion = mfmaLayout.getVersionMajor();
@@ -564,7 +561,6 @@ struct ScaledDotOpMFMAConversionHelper : DotOpMFMAConversionHelper {
     auto bTensorTy = cast<RankedTensorType>(b.getType());
     auto dTensorTy = cast<RankedTensorType>(d.getType());
     auto elemTyA = aTensorTy.getElementType();
-    auto elemTyB = bTensorTy.getElementType();
     ScaleDotElemType aElemType = op.getAElemType();
     ScaleDotElemType bElemType = op.getBElemType();
 
@@ -738,6 +734,7 @@ namespace mlir::triton::AMD {
 LogicalResult convertMFMA(triton::DotOp op, triton::DotOp::Adaptor adaptor,
                           const LLVMTypeConverter *typeConverter,
                           ConversionPatternRewriter &rewriter) {
+#ifndef NDEBUG
   auto rankedTType = [](Value tensor) {
     return cast<RankedTensorType>(tensor.getType());
   };
@@ -754,6 +751,7 @@ LogicalResult convertMFMA(triton::DotOp op, triton::DotOp::Adaptor adaptor,
   assert(cTensorTy.getShape()[0] == dTensorTy.getShape()[0] &&
          cTensorTy.getShape()[1] == dTensorTy.getShape()[1] &&
          "DotOp's C operand should pass the same number of values as D.");
+#endif
 
   auto loc = op.getLoc();
   auto mfmaLayout = cast<AMDMfmaEncodingAttr>(
@@ -771,10 +769,6 @@ LogicalResult convertScaledMFMA(triton::DotScaledOp op,
   assert(isa<DotOperandEncodingAttr>(op.getA().getType().getEncoding()) &&
          isa<DotOperandEncodingAttr>(op.getB().getType().getEncoding()) &&
          "Both lhs and rhs should be in DotOperand layout.");
-
-  auto aScale = op.getAScale();
-  auto bScale = op.getBScale();
-
   // If the tt.dot_scaled is transformed from a tt.dot, both scales are None. In
   // this case, both scales remain None in this method and we will generate a
   // mfma instruction with the scale operand to be 0. Then there's an
@@ -789,6 +783,10 @@ LogicalResult convertScaledMFMA(triton::DotScaledOp op,
   // 2. #scales = 1: The upstream transform guarantees to create constant
   // scales for the absent.
   // 2. #scales = 2: Both scales should exist.
+
+#ifndef NDEBUG
+  auto aScale = op.getAScale();
+  auto bScale = op.getBScale();
 
   // Thus in this pass, there shouldn't be a single scale present.
   assert(((aScale && bScale) || (!aScale && !bScale)) &&
@@ -809,6 +807,7 @@ LogicalResult convertScaledMFMA(triton::DotScaledOp op,
   assert(cTensorTy.getShape()[0] == dTensorTy.getShape()[0] &&
          cTensorTy.getShape()[1] == dTensorTy.getShape()[1] &&
          "DotOp's C operand should pass the same number of values as D.");
+#endif
 
   auto loc = op.getLoc();
   auto mfmaLayout = cast<AMDMfmaEncodingAttr>(
