@@ -22,6 +22,7 @@
  */
 #include "../PatternTritonGPUOpToLLVM.h"
 #include "../TritonAMDGPUToLLVM/SchedInstructions.h"
+#include "AsyncUtility.h"
 #include "SharedToDotOperandHelper.h"
 #include "Utility.h"
 
@@ -397,7 +398,7 @@ Value convertLayout(int opIdx, ConversionPatternRewriter &rewriter,
       setNumGeneratedDsReads(localLoadOp, numDsReadsCount, loadVecTy);
 
       for (auto llLoad : llLoads) {
-        LLVM::AMD::addLocalLoadNoAliasScope(localLoadOp, llLoad);
+        AMD::addLocalLoadNoAliasScope(localLoadOp, llLoad);
       }
     }
   }

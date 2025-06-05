@@ -1,3 +1,4 @@
+#include "AsyncUtility.h"
 #include "AtomicRMWOpsEmitter.h"
 #include "BufferOpsEmitter.h"
 #include "Dialect/TritonAMDGPU/IR/Dialect.h"
@@ -555,7 +556,7 @@ struct BufferLoadToLocalOpConversion
       auto bufferLoadToLds = bufferEmitter.emitLoadToLds(
           vecTy, vecBytesVal, rsrcDesc, offsetIn, coalescedShmemAddr[i], pred,
           op.getCache());
-      LLVM::AMD::addAsyncCopyAliasScope(bufferLoadToLds);
+      AMD::addAsyncCopyAliasScope(bufferLoadToLds);
       if (!otherElems.empty()) {
         Value storeVal = packElementRangeIntoVector(
             rewriter, this->getTypeConverter(), loc, vecTy, otherElems, srcIdx);
@@ -682,7 +683,7 @@ struct AsyncCopyGlobalToLocalOpConversion
             /*size=*/vecBytes, /*offset=*/0,
             /*aux=*/cacheModifiers, /*alias_scopes=*/nullptr,
             /*noalias_scopes=*/nullptr, /*tbaa=*/nullptr);
-        LLVM::AMD::addAsyncCopyAliasScope(globalLoadLdsOp);
+        AMD::addAsyncCopyAliasScope(globalLoadLdsOp);
         continue;
       }
 
@@ -696,7 +697,7 @@ struct AsyncCopyGlobalToLocalOpConversion
       auto globalLoadLdsOp = rewriter.create<ROCDL::GlobalLoadLDSOp>(
           loc, srcPtr, coalescedShmemAddr[i], vecBytes,
           /*offset=*/0, cacheModifiers, nullptr, nullptr, nullptr);
-      LLVM::AMD::addAsyncCopyAliasScope(globalLoadLdsOp);
+      AMD::addAsyncCopyAliasScope(globalLoadLdsOp);
 
       rewriter.create<LLVM::BrOp>(loc, afterLoad);
       rewriter.setInsertionPointToStart(afterLoad);

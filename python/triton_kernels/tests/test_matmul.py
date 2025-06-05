@@ -148,7 +148,7 @@ class Case:
     n_expt_shards: int = 1
     split_k: int = 1
     hbm_swizzling: bool = False
-    epilogue_subtile: Union[bool, None] = None
+    epilogue_subtile: Union[int, None] = None
 
 
 @pytest.mark.parametrize(
@@ -171,8 +171,9 @@ class Case:
             Case(300, 400, 400, "ragged", "float16", "float16"),
             Case(300, 400, 400, "ragged", "float8_e5m2", "float8_e5m2"),
             Case(1000, 400, 400, "ragged", "float8_e5m2", "float8_e5m2", 3, 1),
-            Case(600, 400, 400, "ragged", "float8_e5m2", "float8_e5m2", 4, 2, epilogue_subtile=False),
-            Case(600, 400, 400, "ragged", "float8_e5m2", "float8_e5m2", 4, 2, epilogue_subtile=True),
+            Case(600, 400, 400, "ragged", "float8_e5m2", "float8_e5m2", 4, 2, epilogue_subtile=1),
+            Case(600, 400, 400, "ragged", "float8_e5m2", "float8_e5m2", 4, 2, epilogue_subtile=2),
+            Case(600, 400, 400, "ragged", "float8_e5m2", "float8_e5m2", 4, 2, epilogue_subtile=4),
             Case(600, 400, 400, "ragged", "float8_e5m2", "float8_e5m2", 4, 2),
             Case(600, 400, 400, "ragged", "float8_e5m2", "float8_e5m2", 4, 2, n_expt_shards=2),
             Case(600, 400, 400, "ragged", "float8_e5m2", "float8_e5m2", 4, 1, n_expt_shards=2),
@@ -424,9 +425,9 @@ def test_op(m, n, k, split_k, do_gather, do_scatter, fused_scatter, has_y_gammas
     (True, True, True),
 ])
 @pytest.mark.parametrize("is_persistent, epilogue_subtile", [
-    (False, False),
-    (True, False),
-    (True, True),
+    (False, None),
+    (True, 1),
+    (True, 4),
 ])
 @pytest.mark.parametrize("swiglu_alpha, swiglu_limit", [
     (1.1, 1.4),
