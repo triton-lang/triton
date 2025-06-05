@@ -77,10 +77,10 @@ def streaming_topk(X, stride_xm, n_expts_tot, offs_m, mask_m, N_EXPTS_PAD: tl.co
     # sort in ascending order of expert (descending order of key)
     acc = tl.sort(acc, dim=1, descending=True)
     # iiii0000vvvvvvvv --> 0000iiii:
-    y_indices_raw = (y >> (y_bits - 16)).to(tl.uint32)
+    y_indices_raw = (acc >> (y_nbits - 16)).to(tl.uint32)
     y_indices = key_to_indx(y_indices_raw, N_EXPTS_PAD)
     # iiii0000vvvvvvvv --> vvvvvvvv:
-    y_values_raw = y.to(x_utype)
+    y_values_raw = acc.to(x_utype)
     y_values = key_to_fpval(y_values_raw).to(x_dtype, bitcast=True)
 
     return y_values, y_indices
