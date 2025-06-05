@@ -265,6 +265,8 @@ class HIPBackend(BaseBackend):
         passes.common.add_symbol_dce(pm)
         if use_async_copy:
             amd.passes.ttgpuir.add_update_async_wait_count(pm, options.arch)
+        if HIPBackend.instrumentation:
+            HIPBackend.instrumentation.patch("ttir_to_ttgpuir", pm, mod.context)
         pm.run(mod)
         return mod
 
@@ -303,7 +305,7 @@ class HIPBackend(BaseBackend):
         amd.passes.ttgpuir.add_allocate_shared_memory(pm)
         # instrumentation point here so we can override IRs above (e.g., ttir and ttgir)
         if HIPBackend.instrumentation:
-            HIPBackend.instrumentation.patch("ttgpuir", pm, mod.context)
+            HIPBackend.instrumentation.patch("ttgpuir_to_llvmir", pm, mod.context)
         ## __HIP_FTZ is used to control the denorm flushing behavior of exp2 op as follows:
         ## 1. If __HIP_FTZ = 1, exp2 flushes denorms in input and output regardless
         ##    of the value of kernel arg `allow_flush_denorm`.
@@ -327,7 +329,7 @@ class HIPBackend(BaseBackend):
 
         # This can not be moved below the di_scope pass
         if HIPBackend.instrumentation:
-            HIPBackend.instrumentation.patch("llvmir", pm, mod.context)
+            HIPBackend.instrumentation.patch("llvmir_to_llvm", pm, mod.context)
 
         if not knobs.compilation.disable_line_info:
             passes.llvmir.add_di_scope(pm)

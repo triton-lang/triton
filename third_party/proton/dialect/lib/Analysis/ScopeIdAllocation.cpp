@@ -5,17 +5,23 @@
 namespace mlir {
 namespace triton::proton {
 
+#define DEBUG_TYPE "proton-scope-id-allocation"
+#define DBGS() (llvm::dbgs() << "[" DEBUG_TYPE "]: ")
+#define LDBG(X) LLVM_DEBUG(DBGS() << X << "\n")
+
 void ScopeIdAllocation::run() {
-  llvm::StringMap<size_t> nameCount;
+  llvm::StringMap<size_t> nameToIdMap;
   std::stack<ScopeId> scopeIdStack;
   ScopeId id = 0;
 
   funcOp->walk<WalkOrder::PreOrder>([&](RecordOp recordOp) {
     auto name = recordOp.getName();
+    LDBG("Processing RecordOp: " << recordOp);
     if (recordOp.getIsStart()) {
-      if (!nameCount.contains(name)) {
-        nameCount[name] = id;
+      if (!nameToIdMap.contains(name)) {
+        nameToIdMap[name] = id;
         idToNameMap[id] = name;
+        LDBG("Assigning new scope id " << id << " to name '" << name << "'");
         opToIdMap[recordOp] = id;
         if (!scopeIdStack.empty()) {
           scopeParentIds.push_back({id, scopeIdStack.top()});
@@ -26,18 +32,18 @@ void ScopeIdAllocation::run() {
         recordOp->emitError("The scope name must appear in pairs");
       }
     } else {
-      if (nameCount.contains(name)) {
+      if (nameToIdMap.contains(name)) {
         scopeIdStack.pop();
-        opToIdMap[recordOp] = nameCount.lookup(name);
-        nameCount.erase(name);
+        opToIdMap[recordOp] = nameToIdMap.lookup(name);
+        nameToIdMap.erase(name);
       } else {
         recordOp->emitError("The scope name must appear in pairs");
       }
     }
   });
 
-  if (nameCount.size() > 0) {
-    for (auto &[name, _] : nameCount) {
+  if (nameToIdMap.size() > 0) {
+    for (auto &[name, _] : nameToIdMap) {
       funcOp->emitError("Scope name '") << name << "' must appear in pairs";
     }
   }
