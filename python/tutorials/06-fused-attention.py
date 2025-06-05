@@ -600,6 +600,8 @@ class _attention(torch.autograd.Function):
 
 attention = _attention.apply
 
+TORCH_HAS_FP8 = hasattr(torch, 'float8_e5m2')
+
 
 @pytest.mark.parametrize("Z", [1, 4])
 @pytest.mark.parametrize("H", [2, 48])
@@ -607,13 +609,14 @@ attention = _attention.apply
 @pytest.mark.parametrize("HEAD_DIM", [64, 128])
 @pytest.mark.parametrize("causal", [True])  # FIXME: Non-causal tests do not pass at the moment.
 @pytest.mark.parametrize("warp_specialize", [False, True] if is_blackwell() else [False])
-def test_op(Z, H, N_CTX, HEAD_DIM, causal, warp_specialize, dtype=torch.float16):
+@pytest.mark.parametrize("mode", ["fwd", "bwd"])
+@pytest.mark.parametrize("provider", ["triton-fp16"] + (["triton-fp8"] if TORCH_HAS_FP8 else []))
+def test_op(Z, H, N_CTX, HEAD_DIM, causal, warp_specialize, mode, provider, dtype=torch.float16):
     torch.manual_seed(20)
     q = (torch.empty((Z, H, N_CTX, HEAD_DIM), dtype=dtype, device=DEVICE).normal_(mean=0.0, std=0.5).requires_grad_())
     k = (torch.empty((Z, H, N_CTX, HEAD_DIM), dtype=dtype, device=DEVICE).normal_(mean=0.0, std=0.5).requires_grad_())
     v = (torch.empty((Z, H, N_CTX, HEAD_DIM), dtype=dtype, device=DEVICE).normal_(mean=0.0, std=0.5).requires_grad_())
     sm_scale = 0.5
-    dout = torch.randn_like(q)
     # reference implementation
     M = torch.tril(torch.ones((N_CTX, N_CTX), device=DEVICE))
     p = torch.matmul(q, k.transpose(2, 3)) * sm_scale
@@ -622,12 +625,23 @@ def test_op(Z, H, N_CTX, HEAD_DIM, causal, warp_specialize, dtype=torch.float16)
     p = torch.softmax(p.float(), dim=-1).half()
     # p = torch.exp(p)
     ref_out = torch.matmul(p, v)
-    ref_out.backward(dout)
-    ref_dv, v.grad = v.grad.clone(), None
-    ref_dk, k.grad = k.grad.clone(), None
-    ref_dq, q.grad = q.grad.clone(), None
+    if mode == "bwd":
+        dout = torch.randn_like(q)
+        ref_out.backward(dout)
+        ref_dv, v.grad = v.grad.clone(), None
+        ref_dk, k.grad = k.grad.clone(), None
+        ref_dq, q.grad = q.grad.clone(), None
     # triton implementation
+    if mode == "fwd" and "fp8" in provider:
+        q = q.to(torch.float8_e5m2)
+        k = k.to(torch.float8_e5m2)
+        v = v.permute(0, 1, 3, 2).contiguous()
+        v = v.permute(0, 1, 3, 2)
+        v = v.to(torch.float8_e5m2)
     tri_out = attention(q, k, v, causal, sm_scale, warp_specialize).half()
+    if mode == "fwd":
+        torch.testing.assert_close(tri_out, ref_out, atol=13, rtol=1)
+        return
     tri_out.backward(dout)
     tri_dv, v.grad = v.grad.clone(), None
     tri_dk, k.grad = k.grad.clone(), None
