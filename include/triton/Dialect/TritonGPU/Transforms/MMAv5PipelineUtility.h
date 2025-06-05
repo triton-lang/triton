@@ -38,18 +38,21 @@ public:
       : mmaOp(mmaOp), forOp(forOp), isLoadToBePipelined(isLoadToBePipelined) {
     run();
   }
+  void run();
+
   bool isPipelineable = false;
   // If true, the existing operand loads are all been found and their
   // pipelineability has been determined.
   bool isOperandsStateDetermined = false;
   SmallVector<Operation *> unpipelineableOperandLoads;
+  SmallVector<Operation *> unpipelineableOperandAllocs;
 
 private:
   MMAv5OpInterface mmaOp;
   scf::ForOp forOp;
   std::function<bool(Operation *)> isLoadToBePipelined;
-  bool comesFromLoadOrOutsideLoop(Value v, Operation *&foundLoad);
-  void run();
+  bool isOperandPipelineable(Value v, Operation *&foundLoad,
+                             Operation *&foundAlloc);
 };
 
 //===----------------------------------------------------------------------===//

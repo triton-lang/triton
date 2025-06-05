@@ -636,6 +636,9 @@ scf::ForOp lowerLoads(scf::ForOp forOp, CoarseSchedule &schedule) {
 
   // Make sure all ops have attributes.
   for (Operation &op : forOp.getBody()->without_terminator()) {
+    if (!schedule.count(&op)) {
+      op.emitError() << "op not found in the schedule";
+    }
     assert(schedule.count(&op) && "op not found in the schedule");
   }
   return forOp;
@@ -796,6 +799,40 @@ getTmemUseStageBoundOps(ttng::TMEMAllocOp alloc, scf::ForOp forOp,
   return bounds;
 }
 
+static bool hoistBufferOutOfLoop(scf::ForOp forOp, Operation *op,
+                                 CoarseSchedule &schedule) {
+  if (!isa<ttng::TMEMAllocOp, ttg::LocalAllocOp>(op))
+    return false;
+  // If the alloc is already out of the loop, there is nothing to do.
+  if (!forOp->isAncestor(op))
+    return true;
+  OpBuilderForStage builder(op->getLoc(), forOp, schedule);
+  auto allocType = dyn_cast<MemDescType>(op->getResult(0).getType());
+  auto newType = triton::gpu::MemDescType::get(
+      allocType.getShape(), allocType.getElementType(), allocType.getEncoding(),
+      allocType.getMemorySpace(),
+      /*mutableMemory=*/true);
+  auto newAlloc = builder.clone(*op);
+  newAlloc->getResult(0).setType(newType);
+  builder.setStageCluster(schedule[op]);
+  if (auto tmemAlloc = dyn_cast<ttng::TMEMAllocOp>(newAlloc)) {
+    tmemAlloc.getSrcMutable().clear();
+    builder.setInsertionPointAfter(op);
+    Value trueVal = builder.create<arith::ConstantIntOp>(1, 1);
+    builder.create<ttng::TMEMStoreOp>(tmemAlloc.getResult(), op->getOperand(0),
+                                      trueVal);
+  } else {
+    auto localAlloc = cast<ttg::LocalAllocOp>(newAlloc);
+    localAlloc.getSrcMutable().clear();
+    builder.setInsertionPointAfter(op);
+    builder.create<ttg::LocalStoreOp>(op->getOperand(0),
+                                      localAlloc.getResult());
+  }
+  op->replaceAllUsesWith(newAlloc);
+  op->erase();
+  return true;
+}
+
 void createBarrierAndWaitOps(scf::ForOp forOp, CoarseSchedule &schedule,
                              ttng::MMAv5OpInterface mma, int mmaSelfLatency,
                              ttng::TMEMAllocOp alloc, int phaseArgIdx,
@@ -818,6 +855,14 @@ void createBarrierAndWaitOps(scf::ForOp forOp, CoarseSchedule &schedule,
 
   ttng::MMAv5PipelineableOperandsHelper mmaPipeHelper(mma, forOp,
                                                       isLoadToBePipelined);
+
+  for (auto alloc : mmaPipeHelper.unpipelineableOperandAllocs) {
+    hoistBufferOutOfLoop(forOp, alloc, schedule);
+  }
+
+  // Rerun analysis after hoisting
+  mmaPipeHelper.run();
+
   if (!mmaPipeHelper.isPipelineable &&
       mmaPipeHelper.isOperandsStateDetermined) {
     // If the operands are not pipelineable, we need to insert a sync point
