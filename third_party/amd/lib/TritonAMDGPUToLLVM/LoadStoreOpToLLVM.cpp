@@ -265,13 +265,19 @@ struct DirectToLdsLoadConversionBase : public LoadStoreConversionBase {
     return b.trunc(i1_ty, bitMask);
   }
 
-  bool isFastestDimContiguous(Value srcPtrOrOffset) const {
-    auto fastedDim = triton::gpu::getOrder(
-        cast<RankedTensorType>(srcPtrOrOffset.getType()))[0];
+  // For direct-to-lds the order of the shared encoding decides the order we
+  // load elements from global memory. This function returns true if the fastest
+  // dim for the sharedEnc is contiguous for the global ptrs/offsets
+  bool isFastedLoadDimContiguous(Value srcPtrOrOffset,
+                                 MemDescType sharedTy) const {
+    auto fastestDim = triton::gpu::getOrder(sharedTy)[0];
     AxisInfo *axisInfo = axisAnalysisPass.getAxisInfo(srcPtrOrOffset);
-    assert(axisInfo->getRank() > fastedDim);
 
-    return axisInfo->getContiguity(fastedDim) > 1;
+    // This can happen if axis analysis fails (e.g. lit tests).
+    if (axisInfo->getRank() <= fastestDim)
+      return false;
+
+    return axisInfo->getContiguity(fastestDim) > 1;
   }
 };
 
@@ -556,7 +562,7 @@ struct BufferLoadToLocalOpConversion
         // threadsPerWarp) because we only swizzle inside a warp
         Value swizzledLaneId = b.add(getLaneId(rewriter, loc), laneOffset);
 
-        if (isFastestDimContiguous(offset)) {
+        if (isFastedLoadDimContiguous(offset, cast<MemDescType>(dstTy))) {
           // Because rows are contiguous and we only swizzle inside rows by
           // swapping elements between lanes we can add laneOffset * vecSize to
           // the offset to apply the swizzling
@@ -695,7 +701,7 @@ struct AsyncCopyGlobalToLocalOpConversion
         // threadsPerWarp) because we only swizzle inside a warp
         Value swizzledLaneId = b.add(getLaneId(rewriter, loc), laneOffset);
 
-        if (isFastestDimContiguous(op.getSrc())) {
+        if (isFastedLoadDimContiguous(op.getSrc(), cast<MemDescType>(dstTy))) {
           // Because rows are contiguous and we only swizzle inside rows by
           // swapping elements between lanes we can move the vecTy typed src
           // pointer by laneOffset elements to apply the swizzling.
