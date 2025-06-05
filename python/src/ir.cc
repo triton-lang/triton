@@ -171,7 +171,7 @@ py::list getTensorDescMetadata(ModuleOp &mod) {
 
     auto blockType = descTy.getBlockType();
     auto encoding = blockType.getEncoding();
-    auto mmaEncoding = dyn_cast<triton::gpu::NVMMASharedEncodingAttr>(encoding);
+    auto mmaEncoding = dyn_cast<ttg::NVMMASharedEncodingAttr>(encoding);
     auto swizzle = ttng::getTMASwizzleMode(nullptr, descTy);
     auto elemType = ttng::getTMAElementType(nullptr, descTy);
     assert(swizzle.has_value());

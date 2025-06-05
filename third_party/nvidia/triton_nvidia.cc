@@ -111,8 +111,7 @@ void init_triton_nvidia(py::module &&m) {
   m.def("load_dialects", [](mlir::MLIRContext &context) {
     mlir::DialectRegistry registry;
     registry.insert<mlir::triton::nvidia_gpu::TritonNvidiaGPUDialect,
-                    mlir::triton::nvgpu::NVGPUDialect>();
-    registry.insert<mlir::triton::nvidia_gpu::TritonNvidiaGPUDialect,
+                    mlir::triton::nvgpu::NVGPUDialect,
                     mlir::triton::nvws::NVWSDialect>();
     mlir::registerNVVMDialectTranslation(registry);
     context.appendDialectRegistry(registry);
