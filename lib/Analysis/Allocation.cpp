@@ -203,11 +203,22 @@ unsigned defaultAllocationAnalysisScratchSizeFn(Operation *op) {
     auto dstTy = cvtLayout.getType();
     if (!cvtNeedsSharedMemory(srcTy, dstTy))
       return 0;
+    // Hack
+    auto bitwidth = getBitwidth(srcTy);
+    if (bitwidth < 32) {
+      auto has32BContig = [bitwidth](RankedTensorType ty) {
+        auto layout = gpu::toLinearLayout(ty.getShape(), ty.getEncoding());
+        return layout.getNumConsecutiveInOut() * bitwidth >= 32;
+      };
+      if (!has32BContig(srcTy) || !has32BContig(dstTy)) {
+        return getNumScratchElemsPaddedCvt(srcTy, dstTy) * bitwidth / 8;
+      }
+    }
+
     // Pesimistically take the max. We will revisit later
     auto elems = std::max(getNumScratchElemsSwizzledCvt(srcTy, dstTy),
                           getNumScratchElemsPaddedCvt(srcTy, dstTy));
-
-    return elems * getBitwidth(srcTy) / 8;
+    return elems * bitwidth / 8;
   }
   if (isa<AtomicRMWOp, AtomicCASOp>(op)) {
     auto value = op->getOperand(0);
