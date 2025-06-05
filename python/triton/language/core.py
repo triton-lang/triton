@@ -178,6 +178,9 @@ class constexpr_type(base_type):
     def __init__(self, value):
         self.value = value
 
+    def __eq__(self, other):
+        return self.value == other.value
+
     def __repr__(self) -> str:
         return f"constexpr[{self.value}]"
 
@@ -338,7 +341,7 @@ def constexpr_function(f):
     @wraps(f)
     def wrapper(*args, **kwargs):
         # de-constexpr arguments and discard the _builder keyword argument:
-        args = [getattr(x, "value", x) for x in args]
+        args = [_unwrap_if_constexpr(x) for x in args]
         kwargs = {k: getattr(v, "value", v) for (k, v) in kwargs.items() if k != "_builder"}
 
         # call the raw Python function f:
