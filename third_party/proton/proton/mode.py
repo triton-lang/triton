@@ -35,6 +35,7 @@ granularities = {
 class Optimize(Enum):
     NONE = "none"
     TIMESHIFT = "time_shift"
+    SCHED_STORES = "sched_stores"
 
     def __str__(self):
         return self.value
