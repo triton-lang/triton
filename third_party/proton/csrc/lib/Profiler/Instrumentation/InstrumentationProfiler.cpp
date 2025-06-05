@@ -206,10 +206,9 @@ void InstrumentationProfiler::exitInstrumentedOp(uint64_t streamId,
             for (auto &event : profileEvents) {
               // Process the profile events
               auto &contexts = scopeIdContexts[event.first->scopeId];
-              // Normalize the duration
-              auto duration = static_cast<double>(event.second->cycle -
-                                                  event.first->cycle) /
-                              (config.totalUnits * config.numBlocks);
+              auto duration = event.second->cycle - event.first->cycle;
+              auto normalizedDuration = static_cast<double>(duration) /
+                                        (config.totalUnits * config.numBlocks);
               for (auto *data : dataSet) {
                 auto kernelId = dataScopeIdMap[data];
                 auto scopeId = data->addOp(dataScopeIdMap[data], contexts);
@@ -217,9 +216,9 @@ void InstrumentationProfiler::exitInstrumentedOp(uint64_t streamId,
                     scopeId,
                     std::make_shared<CycleMetric>(
                         event.first->cycle, event.second->cycle, duration,
-                        kernelId, functionName, blockTrace.blockId,
-                        blockTrace.procId, trace.uid, device,
-                        static_cast<uint64_t>(runtime->getDeviceType()),
+                        normalizedDuration, kernelId, functionName,
+                        blockTrace.blockId, blockTrace.procId, trace.uid,
+                        device, static_cast<uint64_t>(runtime->getDeviceType()),
                         timeShiftCost));
               }
             }
