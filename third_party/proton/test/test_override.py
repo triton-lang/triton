@@ -42,23 +42,14 @@ def add_kernel(x_ptr,  # *Pointer* to first input vector.
                BLOCK_SIZE: tl.constexpr,  # Number of elements each program should process.
                # NOTE: `constexpr` so it can be used as a shape value.
                ):
-    with pl.scope("kernel"):
-        pid = tl.program_id(axis=0)
-        block_start = pid * BLOCK_SIZE
-        offsets = block_start + tl.arange(0, BLOCK_SIZE)
-        mask = offsets < n_elements
-        with pl.scope("load_ops"):
-            with pl.scope("load_x"):
-                x = tl.load(x_ptr + offsets, mask=mask)
-            with pl.scope("load_y"):
-                y = tl.load(y_ptr + offsets, mask=mask)
-        output = x + y
-        tl.store(output_ptr + offsets, output, mask=mask)
-
-
-# %%
-# Let's also declare a helper function to (1) allocate the `z` tensor
-# and (2) enqueue the above kernel with appropriate grid/block sizes:
+    pid = tl.program_id(axis=0)
+    block_start = pid * BLOCK_SIZE
+    offsets = block_start + tl.arange(0, BLOCK_SIZE)
+    mask = offsets < n_elements
+    x = tl.load(x_ptr + offsets, mask=mask)
+    y = tl.load(y_ptr + offsets, mask=mask)
+    output = x + y
+    tl.store(output_ptr + offsets, output, mask=mask)
 
 
 def add(x: torch.Tensor, y: torch.Tensor):
@@ -74,20 +65,17 @@ def add(x: torch.Tensor, y: torch.Tensor):
     #  - Each torch.tensor object is implicitly converted into a pointer to its first element.
     #  - `triton.jit`'ed functions can be indexed with a launch grid to obtain a callable GPU kernel.
     #  - Don't forget to pass meta-parameters as keywords arguments.
-    tmp_path = pathlib.Path(os.getcwd() + '/tmp')
-    temp_file = tmp_path / "test_tree.hatchet"
-    if sys.argv[-1] == "on":
-        proton.start(str(temp_file.with_suffix("")), backend="instrumentation")
+    tmp_path = pathlib.Path(os.getcwd())
+    temp_file = tmp_path / "test_override.hatchet"
+    # if sys.argv[-1] == "on":
+    proton.start(str(temp_file.with_suffix("")), backend="instrumentation")
     add_kernel[grid](x, y, output, n_elements, BLOCK_SIZE=1024, num_warps=1)
-    if sys.argv[-1] == "on":
-        proton.finalize()
+    # if sys.argv[-1] == "on":
+    proton.finalize()
     # We return a handle to z but, since `torch.cuda.synchronize()` hasn't been called, the kernel is still
     # running asynchronously at this point.
     return output
 
-
-# %%
-# We can now use the above function to compute the element-wise sum of two `torch.tensor` objects and test its correctness:
 
 torch.manual_seed(0)
 size = 98432
@@ -95,7 +83,3 @@ x = torch.rand(size, device=DEVICE)
 y = torch.rand(size, device=DEVICE)
 output_torch = x + y
 output_triton = add(x, y)
-# print(output_torch)
-# print(output_triton)
-# print(f'The maximum difference between torch and triton is '
-#       f'{torch.max(torch.abs(output_torch - output_triton))}')
