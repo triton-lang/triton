@@ -292,6 +292,35 @@ ColumnAction actionRemoveBroadcastedRegs(const LinearLayout &layout) {
   }
   return ColumnAction(permOrder, kReg, bases.size());
 }
+std::pair<int64_t, ColumnAction>
+actionAdditiveStrides(const LinearLayout &layout) {
+  // We are looking to put at the front (after any zeros) any basis that does
+  // not intersect with any bit moved by any basis in kLane / kWarp
+  assert(layout.getNumInDims() != 0);
+  auto kReg = *layout.getInDimNames().begin();
+  assert(kReg.str() == "register");
+  auto kLane = StringAttr::get(kReg.getContext(), "lane");
+  auto kWarp = StringAttr::get(kReg.getContext(), "warp");
+  assert(layout.getNumOutDims() == 1);
+  uint32_t bits = 0;
+  for (auto dim : {kLane, kWarp}) {
+    const auto &bases = layout.getBases().lookup(dim);
+    for (auto basis : bases) {
+      bits |= basis[0];
+    }
+  }
+  SmallVector<size_t> front, back;
+  for (auto [idx, basis] : llvm::enumerate(layout.getBases().lookup(kReg))) {
+    if ((basis[0] & bits) == 0) {
+      front.push_back(idx);
+    } else {
+      back.push_back(idx);
+    }
+  }
+  auto permOrder = to_vector(llvm::concat<size_t>(front, back));
+  return {1 << front.size(),
+          ColumnAction(permOrder, kReg, layout.getInDimSizeLog2(kReg))};
+}
 
 SmallVector<Value> broadcastAs(const SmallVector<Value> &values,
                                const LinearLayout &layout) {

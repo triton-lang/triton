@@ -125,6 +125,9 @@ std::optional<ColumnAction> regPermForDivide(const LinearLayout &A,
 // such that action.apply(A) has the broadcasted registers removed
 ColumnAction actionRemoveBroadcastedRegs(const LinearLayout &layout);
 
+std::pair<int64_t, ColumnAction>
+actionAdditiveStrides(const LinearLayout &layout);
+
 // For a layout A with A.hasInDim(kReg), repeat the values so that they have
 // the same broadcasting as layout
 SmallVector<Value> broadcastAs(const SmallVector<Value> &values,

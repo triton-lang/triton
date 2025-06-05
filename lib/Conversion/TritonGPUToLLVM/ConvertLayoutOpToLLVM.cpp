@@ -144,50 +144,65 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
     if (isStore) {
       vals = permutation.apply(vals);
     }
+
     // By construction of the smemLl, we can divideLeft
     LinearLayout quot = *divideLeft(cvt, tile);
     LinearLayout reps = zerosLike(tile) * quot;
 
-    // Reps to i8
-    auto bitwidth = llvmElemTy.getIntOrFloatBitWidth();
-    auto i8Tile =
-        zerosLike(LinearLayout::identity1D(bitwidth / 8, kReg, kOffset));
-    auto i8Reps = i8Tile * reps;
+    auto [nAdditive, permStrides] = actionAdditiveStrides(reps);
+    reps = permStrides.apply(reps);
+    if (isStore) {
+      vals = permStrides.apply(vals);
+    }
 
     // PTX expects the address increments to be done in bytes
     // If we don't perform the computations in i8, the compiler would
     // have to divide the computation by bitwdith / 8 and then lift this
     // shl, which often it's not able to do.
+    auto bitwidth = llvmElemTy.getIntOrFloatBitWidth();
+    auto i8Tile =
+        zerosLike(LinearLayout::identity1D(bitwidth / 8, kReg, kOffset));
+    auto i8Reps = i8Tile * reps;
+
     auto [laneId, warpId] = getLaneAndWarpId(rewriter, loc);
     auto regBaseI8 =
         applyLinearLayout(
             loc, rewriter, i8Reps,
             {{kReg, b.i32_val(0)}, {kLane, laneId}, {kWarp, warpId}})[0]
             .second;
-    auto step = tile.getInDimSize(kReg);
     SmallVector<Value> outVals;
-    for (int i = 0; i < cvt.getInDimSize(kReg); i += step) {
+    for (int i = 0; i < cvt.getInDimSize(kReg); i += nAdditive) {
       auto regIdx = reps.apply({{kReg, i}, {kLane, 0}, {kWarp, 0}})[0].second;
       auto regIdxI8 = regIdx * (bitwidth / 8);
       Value offset = b.xor_(regBaseI8, b.i32_val(regIdxI8));
-      auto vecAddr = b.gep(smemPtrTy, i8_ty, smemBase, offset,
-                           LLVM::GEPNoWrapFlags::inbounds);
-      // Lezcano: Do we want to use getFreeVariableMasks for pred or nah?
-      if (isStore) {
-        Value valsVec =
-            packLLVector(loc, ArrayRef<Value>(vals).slice(i, step), rewriter);
-        targetInfo.storeDShared(rewriter, loc, vecAddr, std::nullopt, valsVec,
-                                /*pred=*/b.true_val());
-      } else {
-        Value valsVec = targetInfo.loadDShared(
-            rewriter, loc, vecAddr, std::nullopt, vec_ty(llvmElemTy, step),
-            /*pred=*/b.true_val());
-        llvm::append_range(outVals, unpackLLVector(loc, valsVec, rewriter));
+      for (int j = 0; j < nAdditive; j += elemsPerVec) {
+        // all these constants will go as immediate values to LDS/STS
+        auto regIdxAdd =
+            reps.apply({{kReg, j}, {kLane, 0}, {kWarp, 0}})[0].second;
+        auto regIdxAddI8 = regIdxAdd * (bitwidth / 8);
+        Value innerOffset = b.add(offset, b.i32_val(regIdxAddI8));
+        auto vecAddr = b.gep(smemPtrTy, i8_ty, smemBase, innerOffset,
+                             LLVM::GEPNoWrapFlags::inbounds);
+        // Lezcano: Do we want to use getFreeVariableMasks for pred or nah?
+        if (isStore) {
+          Value valsVec = packLLVector(
+              loc, ArrayRef<Value>(vals).slice(i + j, elemsPerVec), rewriter);
+          targetInfo.storeDShared(rewriter, loc, vecAddr, std::nullopt, valsVec,
+                                  /*pred=*/b.true_val());
+        } else {
+          Value valsVec =
+              targetInfo.loadDShared(rewriter, loc, vecAddr, std::nullopt,
+                                     vec_ty(llvmElemTy, elemsPerVec),
+                                     /*pred=*/b.true_val());
+          llvm::append_range(outVals, unpackLLVector(loc, valsVec, rewriter));
+        }
       }
     }
 
     // Permute the values back if we are loading
     if (!isStore) {
+      auto invPermStrides = permStrides.inverse();
+      outVals = invPermStrides.apply(outVals);
       auto invPerm = permutation.inverse();
       outVals = invPerm.apply(outVals);
     }
