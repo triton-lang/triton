@@ -3,6 +3,7 @@
 #include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
 #include "mlir/Dialect/Func/Transforms/FuncConversions.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
+#include "mlir/Dialect/UB/IR/UBOps.h"
 #include "mlir/IR/Attributes.h"
 #include "mlir/IR/Block.h"
 #include "mlir/IR/BuiltinAttributes.h"
@@ -157,7 +158,7 @@ bool canNarrowOffset(Value baseOffset, Value addOffset) {
 
 // Create a zero tensor with a given `type`
 Value createTensorZero(RewriterBase &rw, Location loc, RankedTensorType type) {
-  mlir::Attribute zeroAttr = rw.getZeroAttr(type.getElementType());
+  TypedAttr zeroAttr = rw.getZeroAttr(type.getElementType());
   auto zeroDenseAttr = DenseElementsAttr::get(type, zeroAttr);
   return rw.create<arith::ConstantOp>(loc, zeroDenseAttr);
 }
@@ -365,8 +366,11 @@ void FatPointers::collectFatPointerAttributes(const KeyT &k) {
   }
 
   // Otherwise add the attributes of the base to the fat pointer
-  for (auto baseAttr : base.getDefiningOp()->getAttrs())
+  for (auto baseAttr : base.getDefiningOp()->getAttrs()) {
+    if (isa<ub::PoisonAttrInterface>(baseAttr.getValue()))
+      continue;
     pointerAttrs[k].attributes[baseAttr.getName()] = baseAttr.getValue();
+  }
 }
 
 Value createTensorPointer(RewriterBase &rewriter, Value basePtr, Value offset,
@@ -966,9 +970,11 @@ public:
 
 #ifndef NDEBUG
     if (withElseRegion) {
-      assert(ifOp.thenYield().getOperandTypes() ==
-                 ifOp.elseYield().getOperandTypes() &&
-             "ifOp types must match in both arms");
+      if (ifOp.thenYield().getOperandTypes() !=
+          ifOp.elseYield().getOperandTypes()) {
+        ifOp.emitError("ifOp types must match in both arms");
+        return failure();
+      }
       if (auto thenFatPtrIndxs = ifOp.thenYield()->getDiscardableAttr(
               kSCFIfOpYieldFatPtrOffsets)) {
         assert(ifOp.elseYield()->hasAttr(kSCFIfOpYieldFatPtrOffsets) &&
@@ -995,10 +1001,23 @@ public:
           Value thenFatPtrOffset = ifOp.thenYield().getOperand(i + 1);
           Value elseFatPtrBase = ifOp.elseYield().getOperand(i);
           Value elseFatPtrOffset = ifOp.elseYield().getOperand(i + 1);
-          assert((fatPtrs.at({thenFatPtrBase, thenFatPtrOffset}) ==
-                  fatPtrs.at({elseFatPtrBase, elseFatPtrOffset})) &&
-                 "expected then fat ptr canNarrow and else fat ptr canNarrow "
-                 "to be equal");
+          auto thenFatPtrInfo = fatPtrs.at({thenFatPtrBase, thenFatPtrOffset});
+          auto elseFatPtrInfo = fatPtrs.at({elseFatPtrBase, elseFatPtrOffset});
+          if (thenFatPtrInfo != elseFatPtrInfo) {
+            LDBG("then fatptr attrs");
+            for (auto attribute : thenFatPtrInfo.attributes) {
+              LDBG(attribute.getFirst() << ": " << attribute.getSecond());
+            }
+            LDBG("then fatptr canNarrow: " << thenFatPtrInfo.canNarrow);
+            LDBG("else fatptr attrs");
+            for (auto attribute : elseFatPtrInfo.attributes) {
+              LDBG(attribute.getFirst() << ": " << attribute.getSecond());
+            }
+            LDBG("else fatptr canNarrow: " << elseFatPtrInfo.canNarrow);
+            ifOp.emitError("expected then fat ptr canNarrow and else fat ptr "
+                           "canNarrow to be equal");
+            return failure();
+          }
         }
       }
     }
@@ -1261,6 +1280,39 @@ struct InitFuncPtrArgs : OpRewritePattern<tt::FuncOp> {
   FatPointers &fatPtrs;
 };
 
+struct ConvertUBPoisonOp : OpRewritePattern<ub::PoisonOp> {
+  ConvertUBPoisonOp(MLIRContext *context, FatPointers &fatPtrs)
+      : OpRewritePattern(context, 0), fatPtrs(fatPtrs) {}
+
+  LogicalResult matchAndRewrite(ub::PoisonOp poisonOp,
+                                PatternRewriter &rewriter) const override {
+    auto resultTy = dyn_cast<RankedTensorType>(poisonOp.getResult().getType());
+    if (!llvm::isa<tt::PointerType>(getElementTypeOrSelf(resultTy)))
+      return rewriter.notifyMatchFailure(poisonOp,
+                                         "expected operand to be pointer-like");
+    auto loc = poisonOp->getLoc();
+    auto elemTy = resultTy.getElementType();
+    // NB: We're not propagating poisonOp.getValue because it will no longer be
+    // the correct type.
+    auto scalarPoison = rewriter.create<ub::PoisonOp>(loc, elemTy);
+    auto offsetTy = RankedTensorType::get(
+        resultTy.getShape(), rewriter.getI32Type(), resultTy.getEncoding());
+    auto zeroOffset = createTensorZero(rewriter, loc, offsetTy);
+    auto dummyCast = rewriter.create<UnrealizedConversionCastOp>(
+        poisonOp.getLoc(), TypeRange{resultTy},
+        ValueRange{scalarPoison, zeroOffset});
+    rewriter.replaceAllUsesExcept(poisonOp, dummyCast.getResult(0), dummyCast);
+    poisonOp.erase();
+    // NB: We set false here because the offset type is already i32 and we
+    // assume the corresponding non-poison pointer will be narrowed.
+    fatPtrs[{scalarPoison, zeroOffset}].canNarrow = false;
+
+    return success();
+  }
+
+  FatPointers &fatPtrs;
+};
+
 /// No-op to make conversion framework happy.
 class ConvertReturnOp : public PointerCanonicalizationPattern<tt::ReturnOp> {
 public:
@@ -1275,7 +1327,7 @@ public:
   }
 };
 
-class ConvertFuncOpArgsUnrealizedCasts
+class ConvertExternalUnrealizedCasts
     : public PointerCanonicalizationPattern<UnrealizedConversionCastOp> {
 public:
   using PointerCanonicalizationPattern::PointerCanonicalizationPattern;
@@ -1289,24 +1341,35 @@ public:
       return success();
     }
     // Exhaustive checking we're converting ONLY unrealized_casts inserted (by
-    // the 1:N conversion) in ConvertFuncOp.
+    // the 1:N conversion) in ConvertFuncOp OR ConvertUBPoisonOp.
     ArrayRef<ValueRange> remappedOperands = adaptor.getOperands();
     if (remappedOperands.size() != 2 || remappedOperands[0].size() != 1 ||
         remappedOperands[1].size() != 1)
       return rewriter.notifyMatchFailure(
           castOp, "expected CastOp to have already been remapped");
     Value fatPtrBase = remappedOperands[0][0];
-    if (!llvm::isa<BlockArgument>(fatPtrBase) ||
-        !llvm::isa<tt::FuncOp>(fatPtrBase.getParentBlock()->getParentOp()) ||
-        !llvm::isa<tt::PointerType>(fatPtrBase.getType()))
+    bool isFuncArg =
+        llvm::isa<BlockArgument>(fatPtrBase) &&
+        llvm::isa<tt::FuncOp>(fatPtrBase.getParentBlock()->getParentOp());
+    bool isPoison = !llvm::isa<BlockArgument>(fatPtrBase) &&
+                    llvm::isa<ub::PoisonOp>(fatPtrBase.getDefiningOp());
+    if (!(isFuncArg || isPoison))
+      return rewriter.notifyMatchFailure(castOp,
+                                         "expected CastOp first operand to be "
+                                         "block arg of tt.func or ub.poison");
+    if (!llvm::isa<tt::PointerType>(fatPtrBase.getType()))
       return rewriter.notifyMatchFailure(
-          castOp,
-          "expected CastOp first operand to be tt.ptr block arg of tt.func");
+          castOp, "expected CastOp first operand to be tt.ptr");
     Value fatPtrOffset = remappedOperands[1][0];
     if (llvm::isa<BlockArgument>(fatPtrOffset) ||
         !llvm::isa<arith::ConstantOp>(fatPtrOffset.getDefiningOp()))
       return rewriter.notifyMatchFailure(
           castOp, "expected CastOp second operand to be arith.constant");
+    if (!llvm::isa<mlir::IntegerType>(
+            getElementTypeOrSelf(fatPtrOffset.getType())))
+      return rewriter.notifyMatchFailure(
+          castOp,
+          "expected CastOp second operand arith.constant to be integer type");
     OpFoldResult maybeScalar = getAsOpFoldResult(fatPtrOffset);
     auto maybeAttr = llvm::dyn_cast<mlir::Attribute>(maybeScalar);
 
@@ -1316,7 +1379,18 @@ public:
         rewriter.replaceOpWithMultiple(castOp, {{fatPtrBase, fatPtrOffset}});
         return success();
       }
+    } else if (auto denseAttr =
+                   llvm::dyn_cast_or_null<mlir::DenseElementsAttr>(maybeAttr)) {
+      // We already checked the element type is integer above.
+      unsigned elWidth = denseAttr.getElementType().getIntOrFloatBitWidth();
+      if ((elWidth == 16 && denseAttr.getSplatValue<int16_t>() == 0) ||
+          (elWidth == 32 && denseAttr.getSplatValue<int32_t>() == 0) ||
+          (elWidth == 64 && denseAttr.getSplatValue<ino64_t>() == 0)) {
+        rewriter.replaceOpWithMultiple(castOp, {{fatPtrBase, fatPtrOffset}});
+        return success();
+      }
     }
+
     return rewriter.notifyMatchFailure(
         castOp,
         "expected CastOp second operand to be arith.constant with value 0");
@@ -1482,6 +1556,22 @@ void TritonAMDGPUCanonicalizePointersPass::runOnOperation() {
     }
   }
 
+  ConvertUBPoisonOp convUB(&getContext(), fatPrs);
+  auto walkResult =
+      func->walk<WalkOrder::PreOrder>([&rewriter, &convUB](ub::PoisonOp op) {
+        if (failed(convUB.matchAndRewrite(op, rewriter)))
+          return WalkResult::interrupt();
+        return WalkResult::advance();
+      });
+  if (walkResult.wasInterrupted())
+    return signalPassFailure();
+
+  func->walk<WalkOrder::PreOrder>([&opsToRewrite](ub::PoisonOp op) {
+    for (auto &use : op.getResult().getUses()) {
+      getForwardSliceImpl(&use, use.getOwner(), &opsToRewrite);
+    }
+  });
+
   ConversionConfig config;
   config.buildMaterializations = false;
   ConversionTarget target(getContext());
@@ -1516,7 +1606,7 @@ void TritonAMDGPUCanonicalizePointersPass::runOnOperation() {
   // "initializing" the chain of fat pointers starting from tt.func tt.ptr args.
   RewritePatternSet patterns(&getContext());
   patterns.add<
-      ConvertFuncOpArgsUnrealizedCasts, ConvertBroadcastOp, ConvertSplatOp,
+      ConvertExternalUnrealizedCasts, ConvertBroadcastOp, ConvertSplatOp,
       ConvertConvertLayoutOp, ConvertAddPtrOp,
       MaterializeFatPointer<tt::AtomicCASOp>,
       MaterializeFatPointer<tt::AtomicRMWOp>,
@@ -1531,7 +1621,9 @@ void TritonAMDGPUCanonicalizePointersPass::runOnOperation() {
       ConvertSCFConditionOp, ConvertSCFWhileOp, ConvertCFCondBranch,
       ConvertCFBranch, ConvertArithSelectOp, ConvertReturnOp>(
       patterns.getContext(), opsToRewrite, fatPrs);
-  if (failed(applyPartialConversion(func, target, std::move(patterns), config)))
+  if (failed(
+          applyPartialConversion(func, target, std::move(patterns), config)) ||
+      !opsToRewrite.empty())
     return signalPassFailure();
 
   // Rewrite any lingering unrealized_casts that *should* only be the result of
