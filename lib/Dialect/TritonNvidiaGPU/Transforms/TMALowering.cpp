@@ -96,9 +96,7 @@ lowerTMALoad(Operation *op, RankedTensorType tensorType, Value desc,
   Value pred = rewriter.create<arith::ConstantIntOp>(loc, 1, 1);
   rewriter.create<triton::nvidia_gpu::BarrierExpectOp>(loc, barrierAlloc,
                                                        sizeInBytes, pred);
-  Value tmaPtr =
-      rewriter.create<triton::nvidia_gpu::TensorDescToTMAPtrOp>(loc, desc);
-  createLoad(tmaPtr, barrierAlloc, alloc, pred);
+  createLoad(desc, barrierAlloc, alloc, pred);
   Value phase = rewriter.create<arith::ConstantIntOp>(loc, 0, 32);
   rewriter.create<WaitBarrierOp>(loc, barrierAlloc, phase);
   rewriter.create<InvalBarrierOp>(loc, barrierAlloc);
@@ -157,9 +155,7 @@ static void lowerTMAStore(Operation *op, mlir::TypedValue<RankedTensorType> src,
       sharedMemorySpace, /*mutableMemory=*/true);
   Value alloc = rewriter.create<gpu::LocalAllocOp>(loc, memDescType, src);
   rewriter.create<triton::nvidia_gpu::FenceAsyncSharedOp>(loc, false);
-  Value tmaPtr =
-      rewriter.create<triton::nvidia_gpu::TensorDescToTMAPtrOp>(loc, desc);
-  createStore(tmaPtr, alloc);
+  createStore(desc, alloc);
   rewriter.create<triton::nvidia_gpu::TMAStoreWaitOp>(loc, 0);
   rewriter.eraseOp(op);
 }
@@ -225,10 +221,9 @@ public:
     if (failed(createTMADesc(alloc, op, rewriter))) {
       return failure();
     }
-    rewriter.create<triton::ExperimentalTensormapFenceproxyAcquireOp>(
-        loc, alloc.getResult());
-    auto newDesc = rewriter.create<triton::ReinterpretTensorDescOp>(
-        loc, op.getType(), alloc.getResult());
+    rewriter.create<TensormapFenceproxyAcquireOp>(loc, alloc.getResult());
+    auto newDesc = rewriter.create<ReinterpretTensorDescOp>(loc, op.getType(),
+                                                            alloc.getResult());
     rewriter.replaceOp(op, newDesc);
     return success();
   }

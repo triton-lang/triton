@@ -14,7 +14,7 @@ import inspect
 
 from .._C.libtriton import ir
 from . import semantic
-from ._utils import TRITON_MAX_TENSOR_NUMEL, validate_block_shape
+from .._utils import TRITON_MAX_TENSOR_NUMEL, validate_block_shape, get_primitive_bitwidth
 
 T = TypeVar('T')
 
@@ -178,6 +178,9 @@ class constexpr_type(base_type):
     def __init__(self, value):
         self.value = value
 
+    def __eq__(self, other):
+        return self.value == other.value
+
     def __repr__(self) -> str:
         return f"constexpr[{self.value}]"
 
@@ -338,7 +341,7 @@ def constexpr_function(f):
     @wraps(f)
     def wrapper(*args, **kwargs):
         # de-constexpr arguments and discard the _builder keyword argument:
-        args = [getattr(x, "value", x) for x in args]
+        args = [_unwrap_if_constexpr(x) for x in args]
         kwargs = {k: getattr(v, "value", v) for (k, v) in kwargs.items() if k != "_builder"}
 
         # call the raw Python function f:
@@ -402,55 +405,43 @@ class dtype(base_type):
         name = _unwrap_if_constexpr(name)
         self.name = name
         assert name in dtype.SINT_TYPES + dtype.UINT_TYPES + dtype.FP_TYPES + dtype.OTHER_TYPES, name
+        self.primitive_bitwidth = get_primitive_bitwidth(name)
         if name in dtype.SINT_TYPES:
             self.int_signedness = dtype.SIGNEDNESS.SIGNED
-            self.int_bitwidth = int(name.split('int')[-1])
-            self.primitive_bitwidth = self.int_bitwidth
+            self.int_bitwidth = self.primitive_bitwidth
         elif name in dtype.UINT_TYPES:
             self.int_signedness = dtype.SIGNEDNESS.UNSIGNED
-            self.int_bitwidth = int(name.split('int')[-1])
-            self.primitive_bitwidth = self.int_bitwidth
+            self.int_bitwidth = self.primitive_bitwidth
         elif name in dtype.FP_TYPES:
             if name == 'fp8e4b15':
                 self.fp_mantissa_width = 3
-                self.primitive_bitwidth = 8
                 self.exponent_bias = 15
             elif name == 'fp8e4nv':
                 self.fp_mantissa_width = 3
-                self.primitive_bitwidth = 8
                 self.exponent_bias = 7
             elif name == 'fp8e4b8':
                 self.fp_mantissa_width = 3
-                self.primitive_bitwidth = 8
                 self.exponent_bias = 8
             elif name == 'fp8e5':
                 self.fp_mantissa_width = 2
-                self.primitive_bitwidth = 8
                 self.exponent_bias = 15
             elif name == 'fp8e5b16':
                 self.fp_mantissa_width = 2
-                self.primitive_bitwidth = 8
                 self.exponent_bias = 16
             elif name == 'fp16':
                 self.fp_mantissa_width = 10
-                self.primitive_bitwidth = 16
                 self.exponent_bias = 15
             elif name == 'bf16':
                 self.fp_mantissa_width = 7
-                self.primitive_bitwidth = 16
                 self.exponent_bias = 127
             elif name == 'fp32':
                 self.fp_mantissa_width = 23
-                self.primitive_bitwidth = 32
                 self.exponent_bias = 127
             elif name == 'fp64':
                 self.fp_mantissa_width = 52
-                self.primitive_bitwidth = 64
                 self.exponent_bias = 1023
             else:
                 raise RuntimeError(f'Unsupported floating-point type {name}')
-        elif name == 'void':
-            self.primitive_bitwidth = 0
 
     def is_fp8(self):
         return 'fp8' in self.name
@@ -2745,17 +2736,22 @@ def associative_scan(input, axis, combine_fn, reverse=False, _builder=None, _gen
 
 @_tensor_member_fn
 @builtin
-def histogram(input, num_bins, _builder=None, _generator=None):
+def histogram(input, num_bins, mask=None, _builder=None, _generator=None):
     """computes an histogram based on input tensor with num_bins bins, the bins have a width of 1 and start at 0.
 
     :param input: the input tensor
     :type input: Tensor
     :param num_bins: number of histogram bins
     :type num_bins: int
+    :param mask: if `mask[idx]` is false, exclude `input[idx]` from histogram
+    :type mask: Block of `triton.int1`, optional
 
     """
     num_bins = _unwrap_if_constexpr(num_bins)
-    return semantic.histogram(input, num_bins, _builder)
+    mask = _unwrap_if_constexpr(mask)
+    if mask is not None:
+        mask = semantic.to_tensor(mask, _builder)
+    return semantic.histogram(input, num_bins, mask, _builder)
 
 
 @_tensor_member_fn

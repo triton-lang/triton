@@ -1,3 +1,4 @@
+#include "AsyncUtility.h"
 #include "PatternTritonGPUOpToLLVM.h"
 #include "Utility.h"
 #include "triton/Conversion/TritonGPUToLLVM/PatternTritonGPUOpToLLVM.h"
@@ -277,7 +278,7 @@ private:
           if (bitwidth == 16) {
             auto dsReadOp =
                 rewriter.create<ROCDL::ds_read_tr16_b64>(loc, vecTy, vecAddr);
-            LLVM::AMD::addLocalLoadNoAliasScope(op, dsReadOp);
+            AMD::addLocalLoadNoAliasScope(op, dsReadOp);
             Value vecVal = dsReadOp.getResult();
             for (int v = 0; v < vecTy.getNumElements(); v++) {
               outVals.push_back(
@@ -291,7 +292,7 @@ private:
 
             auto dsReadOp =
                 rewriter.create<ROCDL::ds_read_tr8_b64>(loc, i32VecTy, vecAddr);
-            LLVM::AMD::addLocalLoadNoAliasScope(op, dsReadOp);
+            AMD::addLocalLoadNoAliasScope(op, dsReadOp);
             Value vecVal = dsReadOp.getResult();
             for (auto i = 0; i < numElemsI32; ++i) {
               elemsI32.push_back(

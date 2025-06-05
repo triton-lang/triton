@@ -756,6 +756,10 @@ void init_triton_ir(py::module &&m) {
            [](TritonOpBuilder &self, int32_t value) {
              return self.getBuilder().getI32IntegerAttr(value);
            })
+      .def("get_string_attr",
+           [](TritonOpBuilder &self, std::string value) -> Attribute {
+             return self.getBuilder().getStringAttr(value);
+           })
       // Use arith.ConstantOp to create constants
       // Constants
       .def("get_int1",
@@ -1667,12 +1671,21 @@ void init_triton_ir(py::module &&m) {
              return self.create<ub::PoisonOp>(type);
            })
       .def("create_histogram",
-           [](TritonOpBuilder &self, Value operand, int numBins) -> Value {
-             return self.create<HistogramOp>(
-                 RankedTensorType::get(
-                     {static_cast<int64_t>(numBins)},
-                     IntegerType::get(operand.getContext(), 32)),
-                 operand);
+           [](TritonOpBuilder &self, Value operand, int numBins,
+              std::optional<Value> mask) -> Value {
+             if (!mask) {
+               return self.create<HistogramOp>(
+                   RankedTensorType::get(
+                       {static_cast<int64_t>(numBins)},
+                       IntegerType::get(operand.getContext(), 32)),
+                   operand);
+             } else {
+               return self.create<HistogramOp>(
+                   RankedTensorType::get(
+                       {static_cast<int64_t>(numBins)},
+                       IntegerType::get(operand.getContext(), 32)),
+                   operand, *mask);
+             }
            })
       .def("create_gather",
            [](TritonOpBuilder &self, Value src, Value indices, int axis)
