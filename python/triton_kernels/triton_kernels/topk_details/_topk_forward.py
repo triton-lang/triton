@@ -3,19 +3,25 @@ import triton.language as tl
 
 
 @triton.jit
-def fpval_to_key(x):
+def get_topmask_and_fullmask(x):
     tl.static_assert(x.dtype.is_int_unsigned(), "floating-point value must be passed as bits")
     tm: tl.constexpr = 1 << (-1 + x.dtype.primitive_bitwidth)
     fm: tl.constexpr = (1 << x.dtype.primitive_bitwidth) - 1
+    tm_arr = tl.full(x.shape, tm, dtype=x.dtype)
+    fm_arr = tl.full(x.shape, fm, dtype=x.dtype)
+    return tm_arr, fm_arr
+
+
+@triton.jit
+def fpval_to_key(x):
+    tm, fm = get_topmask_and_fullmask(x)
     return x ^ tl.where((x & tm) != 0, fm, tm)
 
 
 @triton.jit
 def key_to_fpval(x):
-    tl.static_assert(x.dtype.is_int_unsigned(), "floating-point value must be passed as bits")
-    tm: tl.constexpr = 1 << (-1 + x.dtype.primitive_bitwidth)
-    fm: tl.constexpr = (1 << x.dtype.primitive_bitwidth) - 1
-    return (x ^ tl.where((x & tm) == 0, fm, tm)).to(x.dtype)
+    tm, fm = get_topmask_and_fullmask(x)
+    return x ^ tl.where((x & tm) == 0, fm, tm)
 
 
 # stable top-k tie-breaks to value with smaller index
@@ -34,9 +40,14 @@ def streaming_topk(X, stride_xm, n_expts_tot, offs_m, mask_m, N_EXPTS_PAD: tl.co
                    BLOCK_N: tl.constexpr):
     x_nbits: tl.constexpr = X.dtype.element_ty.primitive_bitwidth
     x_utype: tl.constexpr = tl.dtype(f"uint{x_nbits}")
-    x_ultype: tl.constexpr = tl.dtype(f"uint{2*x_nbits}")
-    x_dtype: tl.constexpr = tl.dtype(f"fp{x_nbits}")
-    x_umask: tl.constexpr = (1 << x_nbits) - 1
+    if x_nbits < 16:
+        # this ensures that we leave at least 16 bits for expert index
+        # even if the input dtype is smaller than 16 bits:
+        y_nbits: tl.constexpr = 32
+    else:
+        y_nbits: tl.constexpr = x_nbits * 2
+    x_ultype: tl.constexpr = tl.dtype(f"uint{y_nbits}")
+    x_dtype: tl.constexpr = X.dtype.element_ty
 
     # subtract 1 from loop iterations because we peel the first (masked) iteration:
     loop_iterations: tl.constexpr = N_EXPTS_PAD // BLOCK_N - 1
@@ -47,7 +58,7 @@ def streaming_topk(X, stride_xm, n_expts_tot, offs_m, mask_m, N_EXPTS_PAD: tl.co
     X_ptrs = X + offs_m[:, None] * stride_xm + offs_x_n[None, :]
     x = tl.load(X_ptrs, mask=(mask_m & mask_n), other=float("-inf"))
     x = fpval_to_key(x.to(x_utype, bitcast=True))
-    x = (x.to(x_ultype) << x_nbits) | indx_to_key(offs_x_n, N_EXPTS_PAD)[None, :]
+    x = (x.to(x_ultype) << 16) | indx_to_key(offs_x_n, N_EXPTS_PAD)[None, :]
     acc = tl.topk(x, N_EXPTS_ACT, dim=1)
 
     # subsequent iterations:
@@ -57,18 +68,22 @@ def streaming_topk(X, stride_xm, n_expts_tot, offs_m, mask_m, N_EXPTS_PAD: tl.co
         offs_x_n -= BLOCK_N
         x = tl.load(X_ptrs, mask=mask_m, other=float("-inf"))
         x = fpval_to_key(x.to(x_utype, bitcast=True))
-        x = (x.to(x_ultype) << x_nbits) | indx_to_key(offs_x_n, N_EXPTS_PAD)[None, :]
+        x = (x.to(x_ultype) << 16) | indx_to_key(offs_x_n, N_EXPTS_PAD)[None, :]
         acc = tl.maximum(acc, tl.topk(x, N_EXPTS_ACT, dim=1))
 
+    # rotate expert index into upper 16 bits:
+    # 0000vvvvvvvviiii --> iiii0000vvvvvvvv
+    acc = (acc << (y_nbits - 16)) | (acc >> 16)
+    # sort in ascending order of expert (descending order of key)
     acc = tl.sort(acc, dim=1, descending=True)
-    # sort in ascending order of index
-    acc = (key_to_indx(acc & 0x0000FFFF, N_EXPTS_PAD) << x_nbits) | (acc >> x_nbits)
-    acc = tl.sort(acc, dim=1)
-    acc = (acc << x_nbits) | (acc >> x_nbits)
-    # unpack and return values / indx
-    vals = key_to_fpval((acc >> x_nbits).to(x_utype)).to(x_dtype, bitcast=True)
-    indx = acc & x_umask
-    return vals, indx
+    # iiii0000vvvvvvvv --> 0000iiii:
+    y_indices_raw = (y >> (y_bits - 16)).to(tl.uint32)
+    y_indices = key_to_indx(y_indices_raw, N_EXPTS_PAD)
+    # iiii0000vvvvvvvv --> vvvvvvvv:
+    y_values_raw = y.to(x_utype)
+    y_values = key_to_fpval(y_values_raw).to(x_dtype, bitcast=True)
+
+    return y_values, y_indices
 
 
 @triton.jit
