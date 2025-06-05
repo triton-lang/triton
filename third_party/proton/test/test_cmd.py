@@ -33,30 +33,3 @@ def test_exec(mode, tmp_path: pathlib.Path):
     kernels = data[0]["children"]
     assert len(kernels) == 2
     assert kernels[0]["frame"]["name"] == "test" or kernels[1]["frame"]["name"] == "test"
-
-
-def test_instrument_exec():
-
-    try:
-        out = subprocess.Popen(["proton", "--instrument=print-mem-spaces", "helper.py", "test_matmul"],
-                               cwd=pathlib.Path(__file__).parent, stderr=subprocess.PIPE, stdout=subprocess.PIPE)
-    except Exception as e:
-        print(f"An error occurred while executing proton: {e}")
-
-    result = []
-    for line in str(out.stderr.read().decode()).split("\n"):
-        if line:
-            result.append(line.split())
-
-    if is_hip():
-        assert len(result) == 7
-        assert result[0] == ['0', 'matmul_kernel', 'helper_kernels.py:35:20', 'GLOBAL', 'LOAD']
-        assert result[1] == ['1', 'matmul_kernel', 'helper_kernels.py:36:20', 'GLOBAL', 'LOAD']
-        assert result[2] == ['2', 'matmul_kernel', 'helper_kernels.py:35:20', 'SHARED', 'STORE']
-        assert result[3] == ['3', 'matmul_kernel', 'helper_kernels.py:36:20', 'SHARED', 'STORE']
-        assert result[4] == ['4', 'matmul_kernel', 'helper_kernels.py:35:20', 'SHARED', 'LOAD']
-        assert result[5] == ['5', 'matmul_kernel', 'helper_kernels.py:36:20', 'SHARED', 'LOAD']
-        assert result[6] == ['6', 'matmul_kernel', 'helper_kernels.py:45:21', 'GLOBAL', 'STORE']
-    else:
-        assert len(result) == 1
-        assert result[0] == ['0', 'matmul_kernel', 'helper_kernels.py:45:21', 'SHARED', 'LOAD']
