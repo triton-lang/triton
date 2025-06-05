@@ -69,10 +69,10 @@ def streaming_topk(X, stride_xm, n_expts_tot, offs_m, mask_m, N_EXPTS_PAD: tl.co
 
 
 @triton.jit
-def _rotr(y, right_shift : tl.constexpr):
+def _rotr(y, right_shift: tl.constexpr):
 
-    full_width : tl.constexpr = y.dtype.primitive_bitwidth
-    left_shift : tl.constexpr = full_width - right_shift
+    full_width: tl.constexpr = y.dtype.primitive_bitwidth
+    left_shift: tl.constexpr = full_width - right_shift
     y = (y << left_shift) | (y >> right_shift)
     return y
 
