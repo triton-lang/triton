@@ -145,7 +145,6 @@ class InstrumentationHook(Hook):
 
         set_instrumentation_on()
 
-        backend = triton.runtime.driver.active.get_current_target().backend
         device = triton.runtime.driver.active.get_current_device()
         max_shared_mem = triton.runtime.driver.active.utils.get_device_properties(device)["max_shared_mem"]
         backend_name = _get_backend_name()
@@ -163,9 +162,9 @@ class InstrumentationHook(Hook):
 
         def to_llvm_passes(pm):
             triton_proton.add_allocate_proton_global_scratch_buffer(pm)
-            if backend == "cuda":
+            if backend_name == "nvidia":
                 triton_proton.add_convert_proton_nvidia_gpu_to_llvm(pm)
-            elif backend == "hip":
+            elif backend_name == "amd":
                 arch = triton.runtime.driver.active.utils.get_device_properties(device)["arch"].split(":")[0]
                 triton_proton.add_convert_proton_amd_gpu_to_llvm(pm, arch)
 
