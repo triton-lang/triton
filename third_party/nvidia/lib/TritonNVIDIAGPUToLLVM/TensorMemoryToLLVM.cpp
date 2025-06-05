@@ -184,7 +184,8 @@ TMemMessageTraits constrainMessageFromWorkload(TMemMessageTraits m,
               (m.atom.colsPerThread * m.atom.rowsPerThread);
   // Half as many registers are needed for 16-bit packed elements,
   // so twice as many columns are accessed per message.
-  m.numCols *= info.numElementsPer32B;
+  if (info.unpackedb16)
+    m.numCols *= info.numElementsPer32B;
   m.numRepeats = m.numCols / (m.atom.opBitWidth / 32);
   return m;
 }
