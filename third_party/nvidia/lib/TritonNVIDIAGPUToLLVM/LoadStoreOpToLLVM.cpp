@@ -1393,7 +1393,7 @@ struct AsyncTMACopyGlobalToLocalOpConversion
       SmallVector<PTXBuilder::Operand *> operands = {
           ptxBuilderTMA.newOperand(boxPred, "b"),
           ptxBuilderTMA.newOperand(shMemPtr, "r"),
-          ptxBuilderTMA.newOperand(adaptor.getDescPtr(), "l")};
+          ptxBuilderTMA.newOperand(adaptor.getDesc(), "l")};
       std::string tmaInst =
           "@$0 cp.async.bulk.tensor." + std::to_string(rank) +
           "d.shared::cluster.global.mbarrier::complete_tx::bytes [$1], [$2, {";
@@ -1525,10 +1525,9 @@ struct AsyncTMACopyLocalToGlobalOpConversion
         tmaInst << ", ";
     }
     tmaInst << "}], [$" << (operandIdx++) << "];";
-    return convertTMAStoreLikeOp(op, typeConverter, rewriter,
-                                 adaptor.getDescPtr(), op.getSrc().getType(),
-                                 adaptor.getSrc(), adaptor.getCoord(),
-                                 tmaInst.str());
+    return convertTMAStoreLikeOp(op, typeConverter, rewriter, adaptor.getDesc(),
+                                 op.getSrc().getType(), adaptor.getSrc(),
+                                 adaptor.getCoord(), tmaInst.str());
   }
 };
 
@@ -1551,10 +1550,9 @@ struct AsyncTMAReduceOpConversion
         tmaInst << ", ";
     }
     tmaInst << "}], [$" << (operandIdx++) << "];";
-    return convertTMAStoreLikeOp(op, typeConverter, rewriter,
-                                 adaptor.getDescPtr(), op.getSrc().getType(),
-                                 adaptor.getSrc(), adaptor.getCoord(),
-                                 tmaInst.str());
+    return convertTMAStoreLikeOp(op, typeConverter, rewriter, adaptor.getDesc(),
+                                 op.getSrc().getType(), adaptor.getSrc(),
+                                 adaptor.getCoord(), tmaInst.str());
   }
 };
 
@@ -1734,7 +1732,7 @@ LogicalResult AsyncTMAGatherOpConversion::matchAndRewrite(
         // clang-format off
         ptxBuilder.newOperand(pred, "b"),
         ptxBuilder.newOperand(shMemPtr, "r"),
-        ptxBuilder.newOperand(adaptor.getDescPtr(), "l"),
+        ptxBuilder.newOperand(adaptor.getDesc(), "l"),
         ptxBuilder.newOperand(yOffset, "r")
         // clang-format on
     };
@@ -1785,7 +1783,7 @@ LogicalResult AsyncTMAScatterOpConversion::matchAndRewrite(
     SmallVector<PTXBuilder::Operand *, 8> operands{
         // clang-format off
         ptxBuilder.newOperand(pred, "b"),
-        ptxBuilder.newOperand(adaptor.getDescPtr(), "l"),
+        ptxBuilder.newOperand(adaptor.getDesc(), "l"),
         ptxBuilder.newOperand(yOffset, "r")
         // clang-format on
     };

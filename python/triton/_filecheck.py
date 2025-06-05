@@ -11,6 +11,7 @@ from filecheck.matcher import Matcher
 import triton
 from triton.compiler import ASTSource, make_backend
 from triton.backends.compiler import GPUTarget
+from triton.experimental.gluon._runtime import GluonASTSource
 from triton._C.libtriton import ir
 
 # ===-----------------------------------------------------------------------===#
@@ -50,7 +51,8 @@ def run_parser(kernel_fn):
     sigkeys = [x.name for x in kernel_fn.params]
     sigvals = [f"arg{i}" for i in range(len(sigkeys))]
     signature = {k: v for (k, v) in zip(sigkeys, sigvals)}
-    src = ASTSource(fn=kernel_fn, signature=signature)
+    source_cls = GluonASTSource if kernel_fn.is_gluon() else ASTSource
+    src = source_cls(fn=kernel_fn, signature=signature)
 
     context = ir.context()
     ir.load_dialects(context)
@@ -60,7 +62,9 @@ def run_parser(kernel_fn):
     options = stub_backend.parse_options(dict(**extra_options))
     codegen_fns = stub_backend.get_codegen_implementation(options)
     module_map = stub_backend.get_module_map()
-    return src.make_ir(options, codegen_fns, module_map, context)
+    module = src.make_ir(options, codegen_fns, module_map, context)
+    assert module.verify()
+    return module
 
 
 def run_filecheck_test(kernel_fn):

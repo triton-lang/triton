@@ -337,7 +337,8 @@ ttng::TMEMAllocOp hoistTMEMAlloc(TMEMTokenAllocOp alloc, scf::ForOp &forOp) {
   // By hoisting the allocation out of the loop, we need to turn the underlying
   // memory variable into a loop-carried depdendency.
   auto tokType = builder.getType<AsyncTokenType>();
-  Value newTok = addIterArgsToLoop(builder, forOp, newAlloc.getToken()).front();
+  forOp = addIterArgsToLoop(builder, forOp, newAlloc.getToken());
+  Value newTok = forOp.getRegionIterArgs().back();
   appendToForOpYield(forOp, joinLastMemoryUses(builder, alloc.getToken()));
 
   if (src != nullptr) {

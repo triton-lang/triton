@@ -56,26 +56,25 @@ static void createTMAAsyncCopy(scf::ForOp forOp, const TMAStore &store,
   builder.create<ttng::TMAStoreWaitOp>(loc, 0);
   builder.create<ttg::LocalStoreOp>(loc, store.src, alloc);
   builder.create<ttng::FenceAsyncSharedOp>(loc, false);
-  Value tmaPtr =
-      builder.create<triton::nvidia_gpu::TensorDescToTMAPtrOp>(loc, store.desc);
+  auto desc = store.desc;
   if (auto storeOp = dyn_cast<tt::DescriptorStoreOp>(store.op)) {
     auto indices = ttng::translateTMAIndices(
         builder, storeOp.getLoc(),
         storeOp.getDesc().getType().getBlockType().getEncoding(),
         storeOp.getIndices());
     builder.create<ttng::AsyncTMACopyLocalToGlobalOp>(
-        loc, tmaPtr, storeOp.getIndices(), alloc);
+        loc, desc, storeOp.getIndices(), alloc);
   } else if (auto reduceOp = dyn_cast<tt::DescriptorReduceOp>(store.op)) {
     auto indices = ttng::translateTMAIndices(
         builder, reduceOp.getLoc(),
         reduceOp.getDesc().getType().getBlockType().getEncoding(),
         reduceOp.getIndices());
-    builder.create<ttng::AsyncTMAReduceOp>(loc, reduceOp.getKind(), tmaPtr,
+    builder.create<ttng::AsyncTMAReduceOp>(loc, reduceOp.getKind(), desc,
                                            reduceOp.getIndices(), alloc);
   } else {
     auto scatterOp = cast<tt::DescriptorScatterOp>(store.op);
-    builder.create<ttng::AsyncTMAScatterOp>(
-        loc, tmaPtr, scatterOp.getXOffsets(), scatterOp.getYOffset(), alloc);
+    builder.create<ttng::AsyncTMAScatterOp>(loc, desc, scatterOp.getXOffsets(),
+                                            scatterOp.getYOffset(), alloc);
   }
 
   store.op->erase();

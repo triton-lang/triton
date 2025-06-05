@@ -22,46 +22,81 @@ namespace {
 
 // clang-format off
 // Converts:
-//  %l = ttng.tmem_load %o : !ttg.memdesc<128x256xf32, #tmem, #ttng.tensor_memory, mutable> -> tensor<128x256xf32, #blocked>
-//  %r = tt.reshape %l : tensor<128x256xf32, #blocked> -> tensor<128x2x128xf32, #blocked4>
-//  %t = tt.trans %r {order = array<i32: 0, 2, 1>} : tensor<128x2x128xf32, #blocked4> -> tensor<128x128x2xf32, #blocked5>
-//  %outLHS, %outRHS = tt.split %t : tensor<128x128x2xf32, #blocked5> -> tensor<128x128xf32, #blocked2>
-// To:
-//  %o0 = ttng.tmem_subslice %o { N = 0 }: !ttg.memdesc<128x256xf32, #tmem, #ttng.tensor_memory, mutable> -> !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>
-//  %outLHS = ttng.tmem_load %o0 : !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable> -> tensor<128x128xf32, #blocked>
-//  %o1 = ttng.tmem_subslice %o { N = 128 }: !ttg.memdesc<128x256xf32, #tmem, #ttng.tensor_memory, mutable> -> !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>
-//  %outRHS = ttng.tmem_load %o1 : !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable> -> tensor<128x128xf32, #blocked>
+//  %l  = ttng.tmem_load  %o : !ttg.memdesc<128x256xf32, #tmem, #ttng.tensor_memory, mutable>
+//                               -> tensor<128x256xf32, #blocked>
+//  %r  = tt.reshape %l  : tensor<128x256xf32, #blocked>
+//                               -> tensor<128x2x128xf32, #blocked4>
+//  %t  = tt.trans   %r  {order = array<i32: 0, 2, 1>}
+//                               -> tensor<128x128x2xf32, #blocked5>
+//  %lhs, %rhs = tt.split %t
+//
+// becomes
+//  %o0   = ttng.tmem_subslice %o { N = 0   }
+//  %lhs  = ttng.tmem_load     %o0
+//  %o1   = ttng.tmem_subslice %o { N = 128 }
+//  %rhs  = ttng.tmem_load     %o1
+//
+// and if %lhs / %rhs are split again through the same reshape->trans->split
+// pattern, the transformation is can match again so that each further
+// split is materialised as an independent `ttng.tmem_subslice` / `ttng.tmem_load`
+// pair.  Consequently, a chain such as
+//
+//   acc0, acc1  = split(permute(reshape(acc , ...)))
+//   acc00, acc01 = split(permute(reshape(acc0, ...)))
+//   acc10, acc11 = split(permute(reshape(acc1, ...)))
+//
+// is lowered to four independent TMEM loads operating on four disjoint
+// subslices.
+//
 // clang-format on
-// This will change the layout of the destination tensor to distribute each
-// slice across warps. It currently only supports simple cases where tmem can be
-// sliced easily. This could be extended if needed with more powerful slicing
-// support of tmem.
+// Strip away all intermediate ttg.convert_layout ops to reach the true
+// producer.
+static Value stripConvertLayout(Value v) {
+  while (auto cvt = v.getDefiningOp<ttg::ConvertLayoutOp>())
+    v = cvt.getSrc();
+  return v;
+}
+
 class TMemSplitLoadPattern : public OpRewritePattern<SplitOp> {
 public:
   using OpRewritePattern::OpRewritePattern;
 
   LogicalResult matchAndRewrite(SplitOp splitOp,
                                 PatternRewriter &rewriter) const override {
-    auto src = splitOp.getSrc();
-    // Skip convert layout ops.
-    while (auto cvt = src.getDefiningOp<ttg::ConvertLayoutOp>()) {
-      src = cvt.getSrc();
-    }
-    // Only support splitting N dimension on the outer most.
+    // -----------------------------------------------------------------------
+    // Match the pattern:
+    //      splitOp
+    //        ^  |
+    //        |  +-- transOp(order = [0, 2, 1])
+    //        |       ^  |
+    //        |       |  +-- reshapeOp
+    //        |       |        ^  |
+    //        |       |        |  +-- (maybe convert_layout)
+    //        |       |        +-- tmemLoad
+    // -----------------------------------------------------------------------
+
+    // Starting from the split source, peel off convert_layouts if any.
+    Value src = stripConvertLayout(splitOp.getSrc());
     auto transOp = src.getDefiningOp<TransOp>();
     if (!transOp || transOp.getOrder() != ArrayRef<int>({0, 2, 1}))
       return failure();
     auto reshapeOp = transOp.getSrc().getDefiningOp<ReshapeOp>();
     if (!reshapeOp)
       return failure();
-    auto shape = reshapeOp.getResult().getType().getShape();
-    if (shape[0] != reshapeOp.getSrc().getType().getShape()[0])
-      return failure();
-    auto tmemLoad = reshapeOp.getSrc().getDefiningOp<TMEMLoadOp>();
+
+    // Peel off convert_layouts *below* the reshape as well.  This is required
+    // for the recursive case where the producer of the reshape is the result
+    // of an earlier optimisation pass (i.e. a convert_layout of a previous
+    // tmem_load).
+    Value reshapeSrc = stripConvertLayout(reshapeOp.getSrc());
+    auto tmemLoad = reshapeSrc.getDefiningOp<TMEMLoadOp>();
     if (!tmemLoad)
       return failure();
-    // We found a tmem_load that is split on the N dimension. We can split it
-    // into multiple tmem_loads.
+
+    auto shape = reshapeOp.getResult().getType().getShape();
+    // Ensure M dimension is preserved by the reshape.
+    if (shape[0] != cast<RankedTensorType>(reshapeSrc.getType()).getShape()[0])
+      return failure();
     int mDim = getShapePerCTA(tmemLoad.getSrc().getType())[0];
     // TODO: enable other M cases. (the layout is a bit more complex).
     if (mDim != 128)
@@ -69,28 +104,37 @@ public:
     int splitNSize = shape[2];
     if (splitNSize < 8)
       return failure();
-    Value tmem = tmemLoad.getSrc();
+
+    // Create the two TMEM subslices and their corresponding loads.
+    Value tmem = tmemLoad.getSrc(); // Could itself be a subslice.
     int numWarps = ttg::lookupNumWarps(tmemLoad);
     rewriter.setInsertionPoint(tmemLoad);
-    // First slice.
-    Value subSlice0 =
-        rewriter.create<TMEMSubSliceOp>(tmemLoad.getLoc(), tmem, 0, splitNSize);
-    Attribute distLayout = getTmemCompatibleLayout(
-        mDim, splitNSize, splitOp.getOutLHS().getType(), numWarps);
-    RankedTensorType newLoadType = RankedTensorType::get(
-        splitOp.getOutLHS().getType().getShape(),
-        splitOp.getOutLHS().getType().getElementType(), distLayout);
-    auto load0 =
-        rewriter.create<TMEMLoadOp>(tmemLoad.getLoc(), newLoadType, subSlice0);
-    auto cvt0 = rewriter.create<ttg::ConvertLayoutOp>(
-        tmemLoad.getLoc(), splitOp.getOutLHS().getType(), load0);
-    // Second slice.
-    Value subSlice1 = rewriter.create<TMEMSubSliceOp>(tmemLoad.getLoc(), tmem,
-                                                      splitNSize, splitNSize);
-    auto load1 =
-        rewriter.create<TMEMLoadOp>(tmemLoad.getLoc(), newLoadType, subSlice1);
-    auto cvt1 = rewriter.create<ttg::ConvertLayoutOp>(
-        tmemLoad.getLoc(), splitOp.getOutRHS().getType(), load1);
+
+    auto createSliceLoad =
+        [&](int64_t nOffset) -> std::pair<TMEMLoadOp, ttg::ConvertLayoutOp> {
+      // Generate the subslice op.
+      Value subSlice = rewriter.create<TMEMSubSliceOp>(tmemLoad.getLoc(), tmem,
+                                                       nOffset, splitNSize);
+
+      // Choose a layout compatible with the slice size.
+      Attribute distLayout = getTmemCompatibleLayout(
+          mDim, splitNSize, splitOp.getOutLHS().getType(), numWarps);
+
+      RankedTensorType newLoadType = RankedTensorType::get(
+          splitOp.getOutLHS().getType().getShape(),
+          splitOp.getOutLHS().getType().getElementType(), distLayout);
+
+      // Generate the load and convert_layout back to the original layout.
+      auto load =
+          rewriter.create<TMEMLoadOp>(tmemLoad.getLoc(), newLoadType, subSlice);
+      auto cvt = rewriter.create<ttg::ConvertLayoutOp>(
+          tmemLoad.getLoc(), splitOp.getOutLHS().getType(), load);
+
+      return {load, cvt};
+    };
+
+    auto [load0, cvt0] = createSliceLoad(/*nOffset=*/0);
+    auto [load1, cvt1] = createSliceLoad(/*nOffset=*/splitNSize);
     rewriter.replaceOp(splitOp, {cvt0, cvt1});
     return success();
   }
