@@ -217,7 +217,7 @@ def test_constexpr_function_from_jit():
     tl.arange(0, x)
 
 
-def test_constexpr_function_from_pythin():
+def test_constexpr_function_from_python():
     assert constexpr_function(7) == 8
 
 
