@@ -114,6 +114,7 @@ def routing_torch(logits, n_expts_act, renormalize=True, expt_indx=None):
         # topk of experts
         if expt_indx is None:
             tk_idx = torch.argsort(-vals, dim=1, stable=True)[:, :k]
+            tk_idx, _ = torch.sort(tk_idx, dim=1)
         else:
             tk_idx = expt_indx
         tk_val = torch.take_along_dim(vals, tk_idx, dim=1)

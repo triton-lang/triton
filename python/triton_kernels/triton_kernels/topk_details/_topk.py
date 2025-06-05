@@ -7,7 +7,7 @@ def fpval_to_key(x):
     tl.static_assert(x.dtype.is_int_unsigned(), "floating-point value must be passed as bits")
     tm: tl.constexpr = 1 << (-1 + x.dtype.primitive_bitwidth)
     fm: tl.constexpr = (1 << x.dtype.primitive_bitwidth) - 1
-    return x ^ tl.where((x & tm) != 0, fm, tm)
+    return x ^ tl.where((x & tm) != 0, fm, tm).to(x.dtype)
 
 
 @triton.jit
@@ -15,7 +15,7 @@ def key_to_fpval(x):
     tl.static_assert(x.dtype.is_int_unsigned(), "floating-point value must be passed as bits")
     tm: tl.constexpr = 1 << (-1 + x.dtype.primitive_bitwidth)
     fm: tl.constexpr = (1 << x.dtype.primitive_bitwidth) - 1
-    return x ^ tl.where((x & tm) == 0, fm, tm)
+    return x ^ tl.where((x & tm) == 0, fm, tm).to(x.dtype)
 
 
 @triton.jit
@@ -50,7 +50,7 @@ def streaming_topk(X, stride_xm, n_expts_tot, offs_m, mask_m, N_EXPTS_PAD: tl.co
     X_ptrs = X + offs_m[:, None] * stride_xm + offs_x_n[None, :]
     x = tl.load(X_ptrs, mask=(mask_m & mask_n), other=float("-inf"))
     x = fpval_to_key(x.to(x_utype, bitcast=True))
-    x = (x.to(x_ultype) << 16) | indx_to_key(offs_x_n, N_EXPTS_PAD)[None, :]
+    x = (x.to(x_ultype) << 16) | indx_to_key(offs_x_n, N_EXPTS_PAD)[None, :].to(x_ultype)
     acc = tl.topk(x, N_EXPTS_ACT, dim=1)
 
     # subsequent iterations:
@@ -60,15 +60,21 @@ def streaming_topk(X, stride_xm, n_expts_tot, offs_m, mask_m, N_EXPTS_PAD: tl.co
         offs_x_n -= BLOCK_N
         x = tl.load(X_ptrs, mask=mask_m, other=float("-inf"))
         x = fpval_to_key(x.to(x_utype, bitcast=True))
-        x = (x.to(x_ultype) << 16) | indx_to_key(offs_x_n, N_EXPTS_PAD)[None, :]
+        x = (x.to(x_ultype) << 16) | indx_to_key(offs_x_n, N_EXPTS_PAD)[None, :].to(x_ultype)
         acc = tl.maximum(acc, tl.topk(x, N_EXPTS_ACT, dim=1))
 
-    acc = tl.sort(acc, dim=1, descending=True)
-    acc_values = key_to_fpval((acc >> 16).to(x_utype))
-    acc_indices = key_to_indx(acc & 0x0000FFFF, N_EXPTS_PAD)
-    acc = (acc_values.to(x_ultype) << 16) | acc_indices
+    tl.static_assert(tl.constexpr(acc.dtype) == x_ultype)
 
     return acc
+
+
+@triton.jit
+def _rotr(y, right_shift : tl.constexpr):
+
+    full_width : tl.constexpr = y.dtype.primitive_bitwidth
+    left_shift : tl.constexpr = full_width - right_shift
+    y = (y << left_shift) | (y >> right_shift)
+    return y
 
 
 @triton.jit
@@ -105,8 +111,19 @@ def _topk(X, stride_xm,  # inputs
         y_values = tl.load(Xv_ptrs, mask=mask_m)
     else:
         y = streaming_topk(X, stride_xm, n_expts_tot, offs_m, mask_m, N_EXPTS_PAD, N_EXPTS_ACT, BLOCK_N)
-        y_indices = (y & 0x0000FFFF).to(tl.uint32)
-        y_values = (y >> 16).to(x_utype).to(x_dtype, bitcast=True)
+        # rotate expert index into upper 16 bits:
+        # 0000vvvvvvvviiii --> iiii0000vvvvvvvv
+        y = _rotr(y, 16)
+        # sort result in direction of ascending expert index:
+        y = tl.sort(y, dim=1, descending=True)
+        # iiii0000vvvvvvvv --> 0000iiii:
+        full_width: tl.constexpr = y.dtype.primitive_bitwidth
+        right_shift: tl.constexpr = full_width - 16
+        y_indices_raw = (y >> right_shift).to(tl.uint32)
+        y_indices = key_to_indx(y_indices_raw, N_EXPTS_PAD).to(tl.uint32)
+        # iiii0000vvvvvvvv --> vvvvvvvv:
+        y_values_raw = y.to(x_utype)
+        y_values = key_to_fpval(y_values_raw).to(x_dtype, bitcast=True)
 
     if APPLY_SOFTMAX:
         y_values = tl.softmax(y_values.to(tl.float32), dim=1, keep_dims=True).to(x_dtype)
