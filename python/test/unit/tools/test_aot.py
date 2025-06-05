@@ -153,8 +153,6 @@ int main(int argc, char **argv) {{
   if (ret != 0) fprintf(stderr, "kernel launch failed\\n");
   assert(ret == 0);
 
-  cuStreamSynchronize(stream);
-
   // read data
   int32_t hC[M*N];
   memset(hC, 0, M*N*4);
@@ -346,7 +344,7 @@ def test_launcher_has_no_available_kernel():
         BM, BN, BK = 16, 16, 16
 
         kernel_path = write_triton_kernels(tmp_dir, kernel_src, kernel_utils_src)
-        compile_aot_kernels(tmp_dir, kernel_path, dtype, BM, BN, BK, ha_hb_hints=[":1"])
+        compile_aot_kernels(tmp_dir, kernel_path, dtype, BM, BN, BK, ha_hb_hints=[(":1", ":1")])
         link_aot_kernels(tmp_dir)
 
         # compile test case
