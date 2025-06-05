@@ -98,6 +98,39 @@ struct ArithConstantSplatOpConversion
     return success();
   }
 };
+
+// Convert arith::ConstantOp with an array DenseElementsAttr to a
+// LLVM::StructType value.
+// TODO: Add tests
+struct ArithConstantArrayOpConversion
+    : public ConvertOpToLLVMPattern<arith::ConstantOp> {
+  using ConvertOpToLLVMPattern<arith::ConstantOp>::ConvertOpToLLVMPattern;
+  LogicalResult
+  matchAndRewrite(arith::ConstantOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto value = op.getValue();
+    if (!mlir::dyn_cast<DenseElementsAttr>(value))
+      return failure();
+    auto tensorTy = cast<RankedTensorType>(op.getType());
+    auto loc = op->getLoc();
+    auto values = mlir::dyn_cast<DenseElementsAttr>(op.getValue());
+    auto elemType = values.getElementType();
+    SmallVector<Value> llVals;
+    for (auto v : values.getValues<APInt>()) {
+      auto ll = rewriter.create<LLVM::ConstantOp>(loc, elemType, v);
+      llVals.push_back(ll);
+    }
+    size_t elemsPerThread = getTotalElemsPerThread(tensorTy);
+    // TODO: Figure out if we need to handle arbitrary number of initializers
+    assert(elemsPerThread == llVals.size() &&
+           "Don't know how to handle arbitrary number of initializers");
+    auto llStruct =
+        packLLElements(loc, getTypeConverter(), llVals, rewriter, op.getType());
+    rewriter.replaceOp(op, {llStruct});
+    return success();
+  }
+};
+
 struct CatOpConversion : public ConvertOpToLLVMPattern<CatOp> {
   using OpAdaptor = typename CatOp::Adaptor;
   explicit CatOpConversion(LLVMTypeConverter &typeConverter,
@@ -501,6 +534,31 @@ struct MemDescReinterpretOpConversion
     return success();
   }
 };
+
+struct MemDescToI64OpConversion
+    : public ConvertOpToLLVMPattern<triton::gpu::MemDescToI64Op> {
+  using ConvertOpToLLVMPattern::ConvertOpToLLVMPattern;
+
+  LogicalResult
+  matchAndRewrite(triton::gpu::MemDescToI64Op op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    Location loc = op.getLoc();
+    MemDescType srcTy = op.getSrc().getType();
+    Type srcElemTy = getTypeConverter()->convertType(srcTy.getElementType());
+    auto smemObj = getSharedMemoryObjectFromStruct(loc, adaptor.getSrc(),
+                                                   srcElemTy, rewriter);
+    auto offsets = smemObj.getOffsets();
+    auto strides = smemObj.getStrides(srcTy, loc, rewriter);
+    Value offset = dot(rewriter, loc, offsets, strides);
+    TritonLLVMOpBuilder b(loc, rewriter);
+    auto i64Ty = rewriter.getIntegerType(64);
+    offset = b.zext(i64Ty, offset);
+    Value v = b.add(offset, b.ptrtoint(i64Ty, smemObj.getBase()));
+    rewriter.replaceOp(op, v);
+    return success();
+  }
+};
+
 } // namespace
 
 void mlir::triton::populateViewOpToLLVMPatterns(
@@ -510,6 +568,7 @@ void mlir::triton::populateViewOpToLLVMPatterns(
   patterns.add<ExpandDimsOpConversion>(typeConverter, benefit);
   patterns.add<SplatOpConversion>(typeConverter, benefit);
   patterns.add<ArithConstantSplatOpConversion>(typeConverter, benefit);
+  patterns.add<ArithConstantArrayOpConversion>(typeConverter, benefit);
   patterns.add<CatOpConversion>(typeConverter, benefit);
   patterns.add<JoinOpConversion>(typeConverter, benefit);
   patterns.add<SplitOpConversion>(typeConverter, benefit);
@@ -519,4 +578,5 @@ void mlir::triton::populateViewOpToLLVMPatterns(
   patterns.add<BroadcastOpConversion>(typeConverter, benefit);
   patterns.add<MemDescSubviewOpConversion>(typeConverter, benefit);
   patterns.add<MemDescReinterpretOpConversion>(typeConverter, benefit);
+  patterns.add<MemDescToI64OpConversion>(typeConverter, benefit);
 }

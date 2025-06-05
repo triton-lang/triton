@@ -92,6 +92,8 @@ void init_triton_passes_ttgpuir(py::module &&m) {
       pm.addPass(createTritonGPUCanonicalize());
     });
   });
+  ADD_PASS_WRAPPER_0("add_concurrency_sanitizer",
+                     createTritonGPUConcurrencySanitizer);
 }
 
 void init_triton_passes_convert(py::module &&m) {
