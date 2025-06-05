@@ -257,14 +257,19 @@ void TreeData::dumpHatchet(std::ostream &os) const {
         }
       } else if (metricKind == MetricKind::Cycle) {
         auto cycleMetric = std::dynamic_pointer_cast<CycleMetric>(metric);
-        uint64_t duration = std::get<uint64_t>(
+        uint64_t duration =
+            std::get<uint64_t>(cycleMetric->getValue(CycleMetric::Duration));
+        double normalizedDuration = std::get<double>(
             cycleMetric->getValue(CycleMetric::NormalizedDuration));
         uint64_t deviceId =
             std::get<uint64_t>(cycleMetric->getValue(CycleMetric::DeviceId));
         uint64_t deviceType =
             std::get<uint64_t>(cycleMetric->getValue(CycleMetric::DeviceType));
+        (*jsonNode)["metrics"]
+                   [cycleMetric->getValueName(CycleMetric::Duration)] =
+                       duration;
         (*jsonNode)["metrics"][cycleMetric->getValueName(
-            CycleMetric::NormalizedDuration)] = duration;
+            CycleMetric::NormalizedDuration)] = normalizedDuration;
         (*jsonNode)["metrics"]
                    [cycleMetric->getValueName(CycleMetric::DeviceId)] =
                        std::to_string(deviceId);
