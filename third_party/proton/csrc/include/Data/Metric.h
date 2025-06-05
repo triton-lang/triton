@@ -264,8 +264,7 @@ public:
 
   CycleMetric() : Metric(MetricKind::Cycle, CycleMetricKind::Count) {}
 
-  CycleMetric(uint64_t startCycle, uint64_t endCycle,
-              uint64_t duration,
+  CycleMetric(uint64_t startCycle, uint64_t endCycle, uint64_t duration,
               double normalizedDuration, uint64_t kernelId,
               const std::string &kernelName, uint64_t blockId,
               uint64_t processorId, uint64_t unitId, uint64_t deviceId,
@@ -297,7 +296,8 @@ public:
 
 private:
   const static inline bool PROPERTY[CycleMetricKind::Count] = {
-      false, false, false, false, true, true, true, true, true, true, true, true};
+      false, false, false, false, true, true,
+      true,  true,  true,  true,  true, true};
   const static inline bool EXCLUSIVE[CycleMetricKind::Count] = {
       false, false, true, true, true, true, true, true, true, true, true, true};
   const static inline std::string VALUE_NAMES[CycleMetricKind::Count] = {
