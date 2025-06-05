@@ -11,9 +11,14 @@ add_triton_library(NVWSTransforms
   ArefAsyncOps.cpp
   ArefDepth.cpp
   ArefIndex.cpp
+  ArefLowering.cpp
+  FMHAMathLoopPipeline.cpp
+  BlackwellFA.cpp
 
   LowerAref.cpp
   LowerWarpGroup.cpp
+
+  Utility.cpp
 
   DEPENDS
   NVWSTransformsIncGen

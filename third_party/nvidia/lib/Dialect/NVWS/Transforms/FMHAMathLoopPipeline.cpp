@@ -1,32 +1,58 @@
+/*
+ * Copyright (c) 2025 NVIDIA Corporation & Affiliates. All rights reserved.
+ *
+ * Permission is hereby granted, free of charge, to any person obtaining
+ * a copy of this software and associated documentation files
+ * (the "Software"), to deal in the Software without restriction,
+ * including without limitation the rights to use, copy, modify, merge,
+ * publish, distribute, sublicense, and/or sell copies of the Software,
+ * and to permit persons to whom the Software is furnished to do so,
+ * subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice shall be
+ * included in all copies or substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+ * EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+ * MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
+ * IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
+ * CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,
+ * TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
+ * SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+ */
+
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Support/LLVM.h"
 #include "mlir/Transforms/Passes.h"
+#include "nvidia/include/Dialect/NVWS/IR/Dialect.h"
+#include "nvidia/include/Dialect/NVWS/Transforms/Passes.h"
+#include "nvidia/include/Dialect/NVWS/Transforms/Utility.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
-#include "triton/Dialect/TritonGPU/Transforms/WSUtility.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "llvm/Support/raw_ostream.h"
 
-#include <iostream>
-
 namespace mlir {
-namespace triton {
-namespace gpu {
 
-#define GEN_PASS_DEF_TRITONGPUFMHAMATHLOOPPIPELINE
-#include "triton/Dialect/TritonGPU/Transforms/Passes.h.inc"
+#define GEN_PASS_DEF_NVWSFMHAMATHLOOPPIPELINE
+#include "nvidia/include/Dialect/NVWS/Transforms/Passes.h.inc"
 
 #undef DEBUG_TYPE
-#define DEBUG_TYPE "tritonnvidiagpu-fmha-math-loop-pipeline"
+#define DEBUG_TYPE "nvws-fmha-math-loop-pipeline"
 #define DBGS() (llvm::dbgs() << "[" DEBUG_TYPE "]: ")
 #define LDBG(X) LLVM_DEBUG(DBGS() << X << "\n")
 
 namespace {
+
+namespace tt = triton;
+namespace ttg = triton::gpu;
+namespace ttng = triton::nvidia_gpu;
+using namespace triton::nvws;
 
 Operation *getSingleUserOp(Operation *op) {
   if (op->getNumResults() == 1 && op->getResult(0).hasOneUse()) {
@@ -74,7 +100,7 @@ SmallVector<Operation *> collectSecondGemmOp(scf::ForOp forOp) {
   Operation *secondDotOp = nullptr;
   SmallVector<Operation *> secondGemmOps;
   for (Operation &op : llvm::reverse(forOp.getBody()->getOperations())) {
-    if (isa<triton::nvidia_gpu::WarpGroupDotOp>(op)) {
+    if (isa<ttng::WarpGroupDotOp>(op)) {
       secondDotOp = &op;
       break;
     }
@@ -83,38 +109,37 @@ SmallVector<Operation *> collectSecondGemmOp(scf::ForOp forOp) {
   secondGemmOps.push_back(secondDotOp);
   // after split loop, we already inserted dot wait after the dot op
   Operation *waitOp = getSingleUserOp(secondDotOp);
-  assert(waitOp && isa<triton::nvidia_gpu::WarpGroupDotWaitOp>(waitOp));
+  assert(waitOp && isa<ttng::WarpGroupDotWaitOp>(waitOp));
   secondGemmOps.push_back(waitOp);
 
   assert(secondDotOp->getNumOperands() == 3);
   // the first operand of the warp_group_dot is the result of softmax
   // don't peel the convert_layout op if there is one.
   Value operandA = secondDotOp->getOperand(0);
-  if (isa<mlir::triton::gpu::ConvertLayoutOp>(operandA.getDefiningOp())) {
+  if (isa<ttg::ConvertLayoutOp>(operandA.getDefiningOp())) {
     secondGemmOps.push_back(operandA.getDefiningOp());
   }
   // the second operand of the warp_group_dot is V which is loaded by tma_get
   Value operandB = secondDotOp->getOperand(1);
   Operation *localAllocOp = nullptr;
-  if (isa<triton::gpu::LocalAllocOp>(operandB.getDefiningOp())) {
+  if (isa<ttg::LocalAllocOp>(operandB.getDefiningOp())) {
     localAllocOp = operandB.getDefiningOp();
     secondGemmOps.push_back(localAllocOp);
-  } else if (isa<triton::TransOp>(operandB.getDefiningOp())) {
+  } else if (isa<tt::TransOp>(operandB.getDefiningOp())) {
     Operation *transOp = operandB.getDefiningOp();
     secondGemmOps.push_back(transOp);
     localAllocOp = transOp->getOperand(0).getDefiningOp();
-    assert(isa<triton::nvidia_gpu::ArefGetEnterOp>(localAllocOp) &&
+    assert(isa<ttng::ArefGetEnterOp>(localAllocOp) &&
            "The second operand of GEMM PV should be a ArefWaitGetOp");
     secondGemmOps.push_back(localAllocOp);
-  } else if (isa<triton::gpu::MemDescTransOp>(operandB.getDefiningOp())) {
+  } else if (isa<ttg::MemDescTransOp>(operandB.getDefiningOp())) {
     Operation *transOp = operandB.getDefiningOp();
     secondGemmOps.push_back(transOp);
     localAllocOp = transOp->getOperand(0).getDefiningOp();
-    assert(isa<triton::nvidia_gpu::ArefGetEnterOp>(localAllocOp) &&
+    assert(isa<ttng::ArefGetEnterOp>(localAllocOp) &&
            "The second operand of GEMM PV should be a ArefGetEnterOp");
     secondGemmOps.push_back(localAllocOp);
-  } else if (isa<triton::nvidia_gpu::ArefGetEnterOp>(
-                 operandB.getDefiningOp())) {
+  } else if (isa<ttng::ArefGetEnterOp>(operandB.getDefiningOp())) {
     localAllocOp = operandB.getDefiningOp();
     secondGemmOps.push_back(localAllocOp);
   } else {
@@ -151,19 +176,17 @@ SmallVector<Operation *> collectSecondGemmOp(scf::ForOp forOp) {
   assert(isa<arith::MulFOp>(operandAcc.getDefiningOp()));
   Operation *mulOp = operandAcc.getDefiningOp();
   secondGemmOps.push_back(mulOp);
-  assert(isa<triton::BroadcastOp>(mulOp->getOperand(1).getDefiningOp()));
+  assert(isa<tt::BroadcastOp>(mulOp->getOperand(1).getDefiningOp()));
   Operation *broadcastOp = mulOp->getOperand(1).getDefiningOp();
   secondGemmOps.push_back(broadcastOp);
-  if (isa<triton::gpu::ConvertLayoutOp>(
-          broadcastOp->getOperand(0).getDefiningOp())) {
+  if (isa<ttg::ConvertLayoutOp>(broadcastOp->getOperand(0).getDefiningOp())) {
     Operation *convertOp = broadcastOp->getOperand(0).getDefiningOp();
     secondGemmOps.push_back(convertOp);
-    assert(isa<triton::ExpandDimsOp>(convertOp->getOperand(0).getDefiningOp()));
+    assert(isa<tt::ExpandDimsOp>(convertOp->getOperand(0).getDefiningOp()));
     Operation *expandOp = convertOp->getOperand(0).getDefiningOp();
     secondGemmOps.push_back(expandOp);
   } else {
-    assert(
-        isa<triton::ExpandDimsOp>(broadcastOp->getOperand(0).getDefiningOp()));
+    assert(isa<tt::ExpandDimsOp>(broadcastOp->getOperand(0).getDefiningOp()));
     Operation *expandOp = broadcastOp->getOperand(0).getDefiningOp();
     secondGemmOps.push_back(expandOp);
   }
@@ -205,7 +228,7 @@ std::pair<scf::ForOp, Value> peelFirstGemmAndSoftmax(
     if (std::find(secondGemmOps.begin(), secondGemmOps.end(), &op) ==
         secondGemmOps.end()) {
       Operation *cloneOp = builder.clone(op, peelMapping);
-      if (isa<triton::nvidia_gpu::WarpGroupDotOp>(cloneOp)) {
+      if (isa<ttng::WarpGroupDotOp>(cloneOp)) {
         assert(peeledBeforeDotOp == nullptr);
         peeledBeforeDotOp = cloneOp;
       }
@@ -320,14 +343,13 @@ std::pair<scf::ForOp, Value> peelFirstGemmAndSoftmax(
     // V, we need to update its index to normMathIdx - 1
     if (std::find(secondGemmOps.begin(), secondGemmOps.end(), &op) !=
         secondGemmOps.end()) {
-      if (isa<triton::nvidia_gpu::ArefGetEnterOp>(op)) {
+      if (isa<ttng::ArefGetEnterOp>(op)) {
         auto one = builder.create<arith::ConstantIntOp>(forOp.getLoc(), 1, 32);
         auto minus =
             builder.create<arith::SubIOp>(forOp.getLoc(), normMathIdxVar, one);
         newSecondGemmOps.push_back(one);
         newSecondGemmOps.push_back(minus);
-        auto clonedGetEnterOp =
-            cast<triton::nvidia_gpu::ArefGetEnterOp>(clonedOp);
+        auto clonedGetEnterOp = cast<ttng::ArefGetEnterOp>(clonedOp);
         clonedGetEnterOp.setIndex(minus.getResult());
       }
       newSecondGemmOps.push_back(clonedOp);
@@ -399,16 +421,17 @@ void reorderSecondGemm(scf::ForOp forOp,
   }
 }
 
-void updateWarpGroupDotWaitOpForFMHA(
-    scf::ForOp forOp, OpBuilderWithGroup &builder,
-    SmallVector<triton::nvidia_gpu::ArefCreateOp> &arefOps,
-    Operation *peeledBeforeDotOp, Value normMathIdx, int AREF_SIZE) {
+void updateWarpGroupDotWaitOpForFMHA(scf::ForOp forOp,
+                                     OpBuilderWithGroup &builder,
+                                     SmallVector<ttng::ArefCreateOp> &arefOps,
+                                     Operation *peeledBeforeDotOp,
+                                     Value normMathIdx, int AREF_SIZE) {
   // QK GEMM
   Operation *firstDot = nullptr;
   // PV GEMM
   Operation *secondDot = nullptr;
   for (Operation &op : forOp.getBody()->without_terminator()) {
-    if (isa<mlir::triton::nvidia_gpu::WarpGroupDotOp>(op)) {
+    if (isa<mlir::ttng::WarpGroupDotOp>(op)) {
       if (firstDot == nullptr) {
         firstDot = &op;
       } else {
@@ -420,16 +443,15 @@ void updateWarpGroupDotWaitOpForFMHA(
 
   // insert a wait 1 after the second gemm in the loop body to make sure the
   // first gemm in this iteration is done
-  auto waitOp1 = dyn_cast<triton::nvidia_gpu::WarpGroupDotWaitOp>(
-      getSingleUserOp(secondDot));
+  auto waitOp1 = dyn_cast<ttng::WarpGroupDotWaitOp>(getSingleUserOp(secondDot));
   waitOp1.setPendings(1);
   builder.setInsertionPointAfter(waitOp1);
-// here we can guarantee the k-th iteration of the first GEMM is done, where
-// k is normalized loop index
+  // here we can guarantee the k-th iteration of the first GEMM is done, where
+  // k is normalized loop index
   {
     assert(arefOps.size() == 2);
-    builder.create<triton::nvidia_gpu::ArefGetExitOp>(
-        forOp.getLoc(), arefOps[0],  normMathIdx,
+    builder.create<ttng::ArefGetExitOp>(
+        forOp.getLoc(), arefOps[0], normMathIdx,
         ArrayAttr::get(
             builder.getContext(),
             nvidia_gpu::ArefConsumerAttr::get(
@@ -439,20 +461,19 @@ void updateWarpGroupDotWaitOpForFMHA(
   // move the wait 0 to the end of the loop body so that the second gemm in the
   // loop body can overlap with softmax and we make sure the second gemm is done
   // before end of the iteration
-  auto waitOp2 = dyn_cast<triton::nvidia_gpu::WarpGroupDotWaitOp>(
-      getSingleUserOp(secondDot));
+  auto waitOp2 = dyn_cast<ttng::WarpGroupDotWaitOp>(getSingleUserOp(secondDot));
   waitOp2.setPendings(0);
   waitOp2.getOperation()->moveBefore(forOp.getBody()->getTerminator());
   builder.setInsertionPointAfter(waitOp2);
-// here we can guarantee the (k-1)th iteration of the second GEMM is done
-// because we want k-1 to start from 0, so we actually don't need to add
-// offset here
+  // here we can guarantee the (k-1)th iteration of the second GEMM is done
+  // because we want k-1 to start from 0, so we actually don't need to add
+  // offset here
   {
     auto one = builder.create<arith::ConstantIntOp>(forOp.getLoc(), 1, 32);
     auto minus =
         builder.create<arith::SubIOp>(forOp.getLoc(), normMathIdx, one);
     assert(arefOps.size() == 2);
-    builder.create<triton::nvidia_gpu::ArefGetExitOp>(
+    builder.create<ttng::ArefGetExitOp>(
         forOp.getLoc(), arefOps[1], minus.getResult(),
         ArrayAttr::get(
             builder.getContext(),
@@ -462,14 +483,14 @@ void updateWarpGroupDotWaitOpForFMHA(
 
   // handle the dot op that peeled to before the loop. the normalized index
   // for this dot is always 0
-  auto waitOp3 = dyn_cast<triton::nvidia_gpu::WarpGroupDotWaitOp>(
-      getSingleUserOp(peeledBeforeDotOp));
+  auto waitOp3 =
+      dyn_cast<ttng::WarpGroupDotWaitOp>(getSingleUserOp(peeledBeforeDotOp));
   waitOp3.setPendings(0);
   builder.setInsertionPointAfter(waitOp3);
   {
     auto zero = builder.create<arith::ConstantIntOp>(forOp.getLoc(), 0, 32);
     assert(arefOps.size() == 2);
-    builder.create<triton::nvidia_gpu::ArefGetExitOp>(
+    builder.create<ttng::ArefGetExitOp>(
         forOp.getLoc(), arefOps[0], zero.getResult(),
         ArrayAttr::get(
             builder.getContext(),
@@ -499,7 +520,7 @@ void updateWarpGroupDotWaitOpForFMHA(
   consumed(V) k
 */
 Value appendSecondGemm(scf::ForOp forOp, OpBuilderWithGroup &builder,
-                       SmallVector<triton::nvidia_gpu::ArefCreateOp> &arefOps,
+                       SmallVector<ttng::ArefCreateOp> &arefOps,
                        SmallVector<Operation *> &secondGemmOps,
                        Value normMathIdx, int AREF_SIZE) {
   // set insertion point to after the loop
@@ -521,11 +542,11 @@ Value appendSecondGemm(scf::ForOp forOp, OpBuilderWithGroup &builder,
   for (Operation *op : secondGemmOps) {
     Operation *clonedOp = builder.clone(*op, mapping);
     clonedOps.push_back(clonedOp);
-    if (isa<triton::nvidia_gpu::WarpGroupDotOp>(clonedOp)) {
+    if (isa<ttng::WarpGroupDotOp>(clonedOp)) {
       assert(dotOp == nullptr);
       dotOp = clonedOp;
     }
-    if (isa<triton::nvidia_gpu::ArefGetEnterOp>(clonedOp)) {
+    if (isa<ttng::ArefGetEnterOp>(clonedOp)) {
       assert(tmaGetOp == nullptr);
       tmaGetOp = clonedOp;
     }
@@ -568,7 +589,7 @@ Value appendSecondGemm(scf::ForOp forOp, OpBuilderWithGroup &builder,
   auto waitOp = getSingleUserOp(dotOp);
   builder.setInsertionPointAfter(waitOp);
   assert(arefOps.size() == 2);
-  builder.create<triton::nvidia_gpu::ArefGetExitOp>(
+  builder.create<ttng::ArefGetExitOp>(
       forOp.getLoc(), arefOps[1], minus.getResult(),
       ArrayAttr::get(
           builder.getContext(),
@@ -576,8 +597,6 @@ Value appendSecondGemm(scf::ForOp forOp, OpBuilderWithGroup &builder,
                                             nvidia_gpu::ArefConsumer::WGMMA)));
   return postLoopNormIdx;
 }
-
-} // namespace
 
 // remove ifOp and only keep the then block if we can prove a condition is
 // always true, for example, i >= 0 where i is a forOp index which has lower
@@ -643,14 +662,14 @@ public:
   }
 };
 
-class TritonGPUFMHAMathLoopPipelinePass
-    : public impl::TritonGPUFMHAMathLoopPipelineBase<
-          TritonGPUFMHAMathLoopPipelinePass> {
+} // namespace
 
-  void
-  pipelineFMHAMathLoop(scf::ForOp forOp, OpBuilderWithGroup builder,
-                       SmallVector<triton::nvidia_gpu::ArefCreateOp> &arefOps) {
-    int AREF_SIZE = TritonGPUDialect::getNumStages(getOperation());
+class NVWSFMHAMathLoopPipelinePass
+    : public impl::NVWSFMHAMathLoopPipelineBase<NVWSFMHAMathLoopPipelinePass> {
+
+  void pipelineFMHAMathLoop(scf::ForOp forOp, OpBuilderWithGroup builder,
+                            SmallVector<ttng::ArefCreateOp> &arefOps) {
+    int AREF_SIZE = triton::gpu::TritonGPUDialect::getNumStages(getOperation());
 
     // the contract is that the last loop variable is the normalized index which
     // we create at the split loop pass
@@ -688,6 +707,8 @@ class TritonGPUFMHAMathLoopPipelinePass
 
 public:
   void runOnOperation() override {
+    using namespace triton::nvws;
+
     // the input IR should already be in the form of warp specialized loops
     ModuleOp m = getOperation();
     // collect all Math loop in the module
@@ -707,16 +728,14 @@ public:
     assert(fmhaMathForOps.size() == 1 || fmhaMathForOps.size() == 2);
     OpBuilderWithGroup builder(m, ATTR_WS_MMA);
     // collect all ArefCreateOp
-    SmallVector<triton::nvidia_gpu::ArefCreateOp> arefOps;
-    m.walk([&](triton::nvidia_gpu::ArefCreateOp arefOp) {
-      arefOps.push_back(arefOp);
-    });
+    SmallVector<ttng::ArefCreateOp> arefOps;
+    m.walk([&](ttng::ArefCreateOp arefOp) { arefOps.push_back(arefOp); });
     assert(arefOps.size() == 3);
     arefOps.erase(arefOps.end() - 1);
     std::swap(arefOps[0], arefOps[1]);
 
-    SmallVector<triton::nvidia_gpu::ArefGetExitOp> getExitOps;
-    m.walk([&](triton::nvidia_gpu::ArefGetExitOp getOp) {
+    SmallVector<ttng::ArefGetExitOp> getExitOps;
+    m.walk([&](ttng::ArefGetExitOp getOp) {
       for (auto arefOp : arefOps) {
         if (arefOp.getResult() == getOp.getAref()) {
           getExitOps.push_back(getOp);
@@ -730,6 +749,5 @@ public:
     pipelineFMHAMathLoop(fmhaMathForOps[0], builder, arefOps);
   }
 };
-} // namespace gpu
-} // namespace triton
+
 } // namespace mlir

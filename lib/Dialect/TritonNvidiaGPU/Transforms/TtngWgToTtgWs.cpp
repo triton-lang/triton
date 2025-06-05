@@ -7,8 +7,9 @@
 #include "mlir/Support/LogicalResult.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 #include "mlir/Transforms/Passes.h"
+#include "nvidia/include/Dialect/NVWS/IR/Dialect.h"
+#include "nvidia/include/Dialect/NVWS/Transforms/Utility.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
-#include "triton/Dialect/TritonGPU/Transforms/WSUtility.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/Passes.h"
 #include "llvm/ADT/STLExtras.h"
@@ -203,7 +204,7 @@ public:
     MLIRContext *context = &getContext();
     mlir::ModuleOp m = getOperation();
 
-    SmallVector<ttng::WarpGroupOp> wgOps = findWarpGroupOps(m);
+    SmallVector<ttng::WarpGroupOp> wgOps = nvws::findWarpGroupOps(m);
 
     DenseMap<int32_t, int32_t> warpGroups;
     DenseMap<int32_t, ttng::WarpGroupOp> wgOpsMap;
@@ -242,7 +243,7 @@ public:
     for (auto [startWarp, wgOp] : wgOpsMap) {
       auto wgRegion = &wgOp.getPartitionRegions()[0].front();
       partitions.push_back(wgRegion);
-      auto barId = triton::gpu::getBarrierID(wgOp);
+      auto barId = nvws::getBarrierID(wgOp);
       barIds.push_back(barId);
     }
     OpBuilder builder(wgOps.back());
@@ -259,9 +260,8 @@ public:
       wgOp.erase();
     }
 
-    constexpr static char AttrWarpSpecializedName[] = "ttg.warp-specialized";
-    Attribute boolAttribute = BoolAttr::get(context, false);
-    m->setAttr(AttrWarpSpecializedName, boolAttribute);
+    m->setAttr(mlir::triton::nvws::AttrWarpSpecializedName,
+               BoolAttr::get(context, false));
   }
 };
 } // namespace

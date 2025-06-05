@@ -42,6 +42,9 @@ std::unique_ptr<Pass> createNVWSArefOptimizePass();
 std::unique_ptr<Pass> createNVWSArefAsyncOpsPass();
 std::unique_ptr<Pass> createNVWSArefIndexPass();
 std::unique_ptr<Pass> createNVWSArefDepthPass();
+std::unique_ptr<Pass> createNVWSArefLoweringPass();
+std::unique_ptr<Pass> createNVWSFMHAMathLoopPipeline();
+std::unique_ptr<Pass> createNVWSBlackwellFAPass();
 
 // Generate the pass class declarations.
 #define GEN_PASS_DECL

@@ -9,7 +9,6 @@ add_triton_library(TritonNvidiaGPUTransforms
   TensorMemoryAllocation.cpp
   TMALowering.cpp
   TMAUtilities.cpp
-  ArefLowering.cpp
   TtngWgToArefIf.cpp
   TtngWgToTtgWs.cpp
 
@@ -22,4 +21,6 @@ add_triton_library(TritonNvidiaGPUTransforms
   TritonGPUTransforms
   TritonNvidiaGPUIR
   MLIRTransformUtils
+  NVWSIR
+  NVWSTransforms
 )

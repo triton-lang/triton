@@ -1,4 +1,4 @@
-// RUN: triton-opt %s -split-input-file --triton-nvidia-aref-lowering | FileCheck %s
+// RUN: triton-opt %s -split-input-file --nvws-aref-lowering | FileCheck %s
 
 #blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [2, 2], order = [1, 0]}>
 #blockedA = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
@@ -9,7 +9,7 @@
 #smem = #ttg.shared_memory
 module attributes {
     "ttg.num-ctas"  = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32,
-    ttg.target = "cuda:100", "ttg.warp-specialized" = true
+    ttg.target = "cuda:100", "nvws.warp-specialized" = true
   } {
   tt.func public @aref_put_tmaldg_get_lds(
     %desc0: !tt.tensordesc<tensor<128x64xf16, #shared>>,
@@ -138,7 +138,7 @@ module attributes {
 #tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 256, unpacked = true>
 module attributes {
     "ttg.num-ctas"  = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32,
-    ttg.target = "cuda:100", "ttg.warp-specialized" = true
+    ttg.target = "cuda:100", "nvws.warp-specialized" = true
   } {
   tt.func public @aref_put_tmaldg_sttm_sts_get_lds_ldtm(
     %desc0: !tt.tensordesc<tensor<128x256xf16, #shared>>,

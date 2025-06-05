@@ -20,11 +20,11 @@ void init_triton_nvidia_passes_ttgpuir(py::module &&m) {
   using namespace mlir::triton;
   // TODO: it is weird to pass mlir::triton::NVVM here since the conversion is
   // nvidia-specificontext
-  m.def("add_to_llvmir",
-        [](mlir::PassManager &pm, int32_t capability, int32_t ptxVersion, bool forceMembar) {
-          pm.addPass(mlir::triton::createConvertTritonGPUToLLVMPass(
-              capability, ptxVersion, forceMembar));
-        });
+  m.def("add_to_llvmir", [](mlir::PassManager &pm, int32_t capability,
+                            int32_t ptxVersion, bool forceMembar) {
+    pm.addPass(mlir::triton::createConvertTritonGPUToLLVMPass(
+        capability, ptxVersion, forceMembar));
+  });
 }
 
 void init_triton_nvidia_passes_ttnvgpuir(py::module &&m) {
@@ -36,8 +36,6 @@ void init_triton_nvidia_passes_ttnvgpuir(py::module &&m) {
                      mlir::createTritonNvidiaGPUTMALoweringPass);
   ADD_PASS_WRAPPER_0("add_promote_lhs_to_tmem",
                      mlir::createTritonNvidiaGPUPromoteLHSToTMemPass);
-  ADD_PASS_WRAPPER_0("add_aref_lowering",
-                     mlir::createTritonNvidiaGPUArefLoweringPass);
   ADD_PASS_WRAPPER_0("add_ttng_wg_to_ttg_ws",
                      mlir::createTritonNvidiaGPUTtngWgToTtgWsPass);
   ADD_PASS_WRAPPER_0("add_ttng_wg_to_aref_if",
@@ -65,25 +63,24 @@ void init_triton_nvidia_passes_nvws(py::module &&m) {
 
   ADD_PASS_WRAPPER_0("add_aref_canonicalize",
                      mlir::createNVWSArefCanonicalizePass);
-  ADD_PASS_WRAPPER_0("add_aref_insertion",
-                     mlir::createNVWSArefInsertionPass);
-  ADD_PASS_WRAPPER_0("add_aref_code_split",
-                     mlir::createNVWSArefCodeSplitPass);
+  ADD_PASS_WRAPPER_0("add_aref_insertion", mlir::createNVWSArefInsertionPass);
+  ADD_PASS_WRAPPER_0("add_aref_code_split", mlir::createNVWSArefCodeSplitPass);
   ADD_PASS_WRAPPER_0("add_aref_copy_elimination",
                      mlir::createNVWSArefCopyEliminationPass);
   ADD_PASS_WRAPPER_0("add_aref_copy_lowering",
                      mlir::createNVWSArefCopyLoweringPass);
-  ADD_PASS_WRAPPER_0("add_aref_optimize",
-                     mlir::createNVWSArefOptimizePass);
-  ADD_PASS_OPTION_WRAPPER_2("add_aref_depth",
-                     mlir::createNVWSArefDepthPass, int, int);
-  ADD_PASS_WRAPPER_0("add_aref_async_ops",
-                     mlir::createNVWSArefAsyncOpsPass);
-  ADD_PASS_WRAPPER_0("add_aref_index",
-                     mlir::createNVWSArefIndexPass);
+  ADD_PASS_WRAPPER_0("add_aref_optimize", mlir::createNVWSArefOptimizePass);
+  ADD_PASS_WRAPPER_0("add_aref_async_ops", mlir::createNVWSArefAsyncOpsPass);
+  ADD_PASS_WRAPPER_0("add_blackwell_fa", mlir::createNVWSBlackwellFAPass);
+  ADD_PASS_WRAPPER_0("add_aref_index", mlir::createNVWSArefIndexPass);
+  ADD_PASS_OPTION_WRAPPER_2("add_aref_depth", mlir::createNVWSArefDepthPass,
+                            int, int);
+  ADD_PASS_WRAPPER_0("add_aref_lowering", mlir::createNVWSArefLoweringPass);
   ADD_PASS_WRAPPER_0("add_lower_warp_group",
                      mlir::createNVWSLowerWarpGroupPass);
   ADD_PASS_WRAPPER_0("add_lower_aref", mlir::createNVWSLowerArefPass);
+  ADD_PASS_WRAPPER_0("add_fmha_math_loop_pipeline",
+                     mlir::createNVWSFMHAMathLoopPipeline);
 }
 
 void init_triton_nvidia(py::module &&m) {

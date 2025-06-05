@@ -7,7 +7,7 @@
 #include "mlir/Pass/Pass.h"
 #include "mlir/Support/LogicalResult.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
-
+#include "nvidia/include/Dialect/NVWS/IR/Dialect.h"
 #include "nvidia/lib/TritonNVIDIAGPUToLLVM/Utility.h"
 #include "llvm/Support/ErrorHandling.h"
 
@@ -699,7 +699,7 @@ void freeTMAlloc(LLVM::LLVMFuncOp func, Value alloc, size_t size, Value pred,
     PTXBuilder ptxBuilder;
 
     auto mod = ret->getParentOfType<ModuleOp>();
-    if (triton::gpu::TritonGPUDialect::isWarpSpecialized(mod)) {
+    if (triton::nvws::NVWSDialect::isWarpSpecialized(mod)) {
       // Wait for all threads to complete, so we don't dealloc early
       rewriter.create<NVVM::Barrier0Op>(loc);
     }

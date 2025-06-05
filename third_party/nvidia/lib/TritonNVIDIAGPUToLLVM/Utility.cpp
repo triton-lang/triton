@@ -1,6 +1,7 @@
 #include "Utility.h"
 #include "Dialect/NVGPU/IR/Dialect.h"
 #include "mlir/Dialect/LLVMIR/NVVMDialect.h"
+#include "nvidia/include/Dialect/NVWS/IR/Dialect.h"
 #include "triton/Conversion/TritonGPUToLLVM/TypeConverter.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 
@@ -144,7 +145,7 @@ void createTcgen05Commit(ConversionPatternRewriter &rewriter, Location loc,
 
 Value getWarpId(OpBuilder &rewriter, Location loc) {
   auto mod = rewriter.getBlock()->getParent()->getParentOfType<ModuleOp>();
-  if (triton::gpu::TritonGPUDialect::isWarpSpecialized(mod)) {
+  if (triton::nvws::NVWSDialect::isWarpSpecialized(mod)) {
     auto [_, warpId] = getLaneAndWarpId(rewriter, loc);
     return warpId;
   } else {

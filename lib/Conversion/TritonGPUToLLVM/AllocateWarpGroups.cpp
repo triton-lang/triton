@@ -1,4 +1,5 @@
 #include "mlir/IR/BuiltinOps.h"
+#include "nvidia/include/Dialect/NVWS/IR/Dialect.h"
 #include "triton/Conversion/TritonGPUToLLVM/Passes.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
@@ -135,7 +136,7 @@ struct AllocateWarpGroups
     });
 
     Builder b(&getContext());
-    if (triton::gpu::TritonGPUDialect::isWarpSpecialized(mod)) {
+    if (triton::nvws::NVWSDialect::isWarpSpecialized(mod)) {
       int32_t numWarps = 0;
       mod.walk([&](triton::nvidia_gpu::WarpGroupOp wg) {
         numWarps =

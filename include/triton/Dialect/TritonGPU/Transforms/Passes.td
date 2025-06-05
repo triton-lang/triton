@@ -374,18 +374,4 @@ def TritonGPUCoalesceAsyncCopy: Pass<"tritongpu-coalesce-async-copy", "mlir::Mod
                            "mlir::triton::TritonDialect"];
 }
 
-def TritonGPUFMHAMathLoopPipeline: Pass<"triton-nvidia-fmha-math-loop-pipeline", "mlir::ModuleOp"> {
-  let summary = "fmha math loop pipelining";
-
-  let description = [{
-    Pipeline the FMHA math loop in TritonNvidiaGPUDialect.
-  }];
-
-  let dependentDialects = [
-    "mlir::triton::gpu::TritonGPUDialect",
-    "mlir::triton::TritonDialect",
-  ];
-}
-
-
 #endif

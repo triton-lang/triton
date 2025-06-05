@@ -8,7 +8,7 @@ class Group(base_value):
     Context manager to annotate operations into groups manually.
     """
     def __init__(self, name):
-        self.name = 'nvws.' + _constexpr_to_value(name)
+        self.name = _constexpr_to_value(name)
         self.builder = None
 
     def set_builder(self, builder):
@@ -37,5 +37,5 @@ def group(name, start, size, reg_count=None, _module=None, _builder=None):
         reg_count = 0
     assert re.fullmatch(r'[A-Za-z][A-Za-z0-9\-_]*', name), 'invalid group name'
     if not _builder.options.ignore_manual_groups:
-        _module.create_group('nvws.' + name, start, size, reg_count)
+        _module.create_group(name, start, size, reg_count)
     return constexpr(Group(name))

@@ -34,15 +34,15 @@ def test_manual_groups(device):
 
     compiled_kernel = kernel.warmup(x, y, shape, BLOCK_SIZE=1024, grid=(1,))
     ttir = compiled_kernel.asm['ttir']
-    assert '"ttg.manual-nvws" = true' in ttir
-    assert 'nvws.g1 = {num_warps = 4 : i32, start_warp = 0 : i32}' in ttir
-    assert 'nvws.g2 = {num_warps = 4 : i32, start_warp = 4 : i32}' in ttir
+    assert 'nvws.manual = true' in ttir
+    assert 'nvws.group.g1 = {num_warps = 4 : i32, start_warp = 0 : i32}' in ttir
+    assert 'nvws.group.g2 = {num_warps = 4 : i32, start_warp = 4 : i32}' in ttir
 
     # load has group g1
-    assert '%9 = tt.load %8, %6 {groups = [@nvws.g1]}' in ttir
+    assert '%9 = tt.load %8, %6 {groups = [@nvws.group.g1]}' in ttir
 
     # store has group g2
-    assert 'tt.store %12, %10, %6 {groups = [@nvws.g2]}' in ttir
+    assert 'tt.store %12, %10, %6 {groups = [@nvws.group.g2]}' in ttir
 
     # mul has no group
     assert '%10 = arith.mulf %9, %9 : tensor<1024xf32>' in ttir
@@ -79,15 +79,15 @@ def test_manual_groups_func_arg(device):
 
     compiled_kernel = kernel.warmup(x, y, shape, BLOCK_SIZE=1024, grid=(1,))
     ttir = compiled_kernel.asm['ttir']
-    assert '"ttg.manual-nvws" = true' in ttir
-    assert 'nvws.g1 = {num_warps = 4 : i32, start_warp = 0 : i32}' in ttir
-    assert 'nvws.g2 = {num_warps = 4 : i32, start_warp = 4 : i32}' in ttir
+    assert 'nvws.manual = true' in ttir
+    assert 'nvws.group.g1 = {num_warps = 4 : i32, start_warp = 0 : i32}' in ttir
+    assert 'nvws.group.g2 = {num_warps = 4 : i32, start_warp = 4 : i32}' in ttir
 
     # load has group g1
-    assert '%9 = tt.load %8, %6 {groups = [@nvws.g1]}' in ttir
+    assert '%9 = tt.load %8, %6 {groups = [@nvws.group.g1]}' in ttir
 
     # store has group g2
-    assert 'tt.store %12, %10, %6 {groups = [@nvws.g2]}' in ttir
+    assert 'tt.store %12, %10, %6 {groups = [@nvws.group.g2]}' in ttir
 
     # mul has no group
     assert '%10 = arith.mulf %9, %9 : tensor<1024xf32>' in ttir
@@ -116,8 +116,8 @@ def test_reg_count(device):
 
     compiled_kernel = kernel.warmup(x, y, shape, BLOCK_SIZE=1024, grid=(1,))
     ttir = compiled_kernel.asm['ttir']
-    assert '"ttg.manual-nvws" = true' in ttir
-    assert 'nvws.g = {num_warps = 4 : i32, reg_count = 72 : i32, start_warp = 0 : i32}' in ttir
+    assert 'nvws.manual = true' in ttir
+    assert 'nvws.group.g = {num_warps = 4 : i32, reg_count = 72 : i32, start_warp = 0 : i32}' in ttir
 
     # load has group g1
-    assert '%9 = tt.load %8, %6 {groups = [@nvws.g]}' in ttir
+    assert '%9 = tt.load %8, %6 {groups = [@nvws.group.g]}' in ttir

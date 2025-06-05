@@ -36,10 +36,10 @@
 #include "mlir/Transforms/Passes.h"
 #include "nvidia/include/Dialect/NVWS/IR/Dialect.h"
 #include "nvidia/include/Dialect/NVWS/Transforms/Passes.h"
+#include "nvidia/include/Dialect/NVWS/Transforms/Utility.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
-#include "triton/Dialect/TritonGPU/Transforms/WSUtility.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/Support/Casting.h"
@@ -60,6 +60,7 @@ namespace {
 
 using namespace mlir;
 using namespace triton::gpu;
+using namespace triton::nvws;
 namespace ttg = triton::gpu;
 namespace ttng = triton::nvidia_gpu;
 
@@ -141,14 +142,16 @@ class NVWSArefCanonicalize
     // results from forOp can only contain groups where forOp is
     // present
     funcOp.walk([&](scf::ForOp forOp) {
-      auto producerGroups = getGroups(forOp);
-      for (auto [idx, arg] : llvm::enumerate(forOp.getInitArgs())) {
+      auto forOpGroups = getGroups(forOp);
+
+      for (auto result : forOp.getResults()) {
+        auto idx = result.getResultNumber();
         auto groups = getGroupsIdx(forOp, idx);
-        std::set<std::string> correctedGroups;
+        std::set<std::string> resultGroups;
         for (auto group : groups)
-          if (producerGroups.count(group) > 0)
-            correctedGroups.insert(group);
-        setGroupsIdx(forOp, idx, correctedGroups);
+          if (forOpGroups.count(group) > 0)
+            resultGroups.insert(group);
+        setGroupsIdx(forOp, idx, resultGroups);
       }
     });
 
@@ -163,14 +166,264 @@ class NVWSArefCanonicalize
           for (auto group : getGroups(user))
             consumerGroups.insert(group);
         setGroups(alloc, consumerGroups);
+      } else {
+        // tmem-alloc w/ source should be in the same group as the source,
+        // otherwise we'd pass the operand of tmem-alloc in shared memory buffer
+        // between groups then immediate copy it to tmem. putting them in the
+        // same group would make the operand pass directly in tmem
+        assert(isa<RankedTensorType>(alloc.getSrc().getType()));
+        auto srcGroups = getGroups(alloc.getSrc().getDefiningOp());
+        auto allocGroups = getGroups(alloc);
+        if (srcGroups != allocGroups) {
+          setGroups(alloc, srcGroups);
+        }
       }
     });
 
     // fix group for tt.reduce.return
     funcOp.walk([&](triton::ReduceReturnOp reduceReturnOp) {
-      auto groups = getGroups(reduceReturnOp->getParentOfType<triton::ReduceOp>());
+      auto groups =
+          getGroups(reduceReturnOp->getParentOfType<triton::ReduceOp>());
       assert(!groups.empty());
       setGroups(reduceReturnOp, groups);
+    });
+
+    // place tmem_load after tcgen5_mma in the same group as consumer of
+    // tmem_load
+    funcOp.walk([&](ttng::TMEMLoadOp load) {
+      auto loadGroups = getGroups(load);
+      loadGroups.clear();
+      for (auto user : load.getResult().getUsers()) {
+        auto groups = getGroups(user);
+        loadGroups.insert(groups.begin(), groups.end());
+      }
+      setGroups(load, loadGroups);
+    });
+
+    // For each loop body, verify that loop results are only annotated with
+    // groups that contain their producing operations.
+    funcOp.walk([&](scf::ForOp forOp) {
+      auto forOpGroups = getGroups(forOp);
+      auto yieldOp = cast<scf::YieldOp>(forOp.getBody()->getTerminator());
+      for (auto [idx, opnd] : llvm::enumerate(yieldOp->getOperands())) {
+        auto groups = getGroups(opnd.getDefiningOp());
+        for (auto group : groups)
+          if (forOpGroups.count(group) == 0)
+            llvm_unreachable("result is annotated with a group that is not "
+                             "present in the loop");
+        setGroupsIdx(forOp, idx, groups);
+      }
+    });
+
+    // place tmem_store before tcgen5_mma in the same groups a src of tmem_store
+    funcOp.walk([&](ttng::TMEMStoreOp store) {
+      auto srcGroups = getGroups(store.getSrc().getDefiningOp());
+      // we just need one group, pick first one if there are multiple
+      auto group = *srcGroups.begin();
+      setGroups(store, {group});
+    });
+  }
+
+  void updateTokens(triton::FuncOp funcOp) {
+    // This function patches tokens as preparation for aref insertion.
+    // The aref insertion pass makes local decisions by examining token uses -
+    // if a token is used in a different group, it inserts an aref. However,
+    // token creation alone doesn't necessarily indicate memory updates. The
+    // aref pass intentionally avoids analyzing op semantics and operands, and
+    // only focuses on immediate uses to keep the logic simple and composable.
+    // This local decision-making could generate unnecessary copies that would
+    // be difficult to optimize away, since copy elimination in some cases would
+    // require inter-group analysis. Instead, we canonicalize the input IR here
+    // to prevent unnecessary copies from being inserted in the first place.
+
+    // Consider the following input:
+    //   %ret = for  .. iter_args(%tok = %tok0) {
+    //      %tok1 = update %buf[%tok]   @gr1
+    //      %tok2 = load %buf[%tok1]     @gr2
+    //      yield %tok2
+    //   }  [@gr1, @gr2] {.0=[@gr1, @gr2]}
+    //
+    // Here result.0 from the forOp is produced by both @gr1 and @gr2. However,
+    // %tok2 that is in `yield %tok2`, is produced by @gr2.  Aref-insertion will
+    // need to insert aref between `load %tok1` and `yield %tok2`:
+    //
+    //   %ret = for  .. iter_args(%tok = %tok0) {
+    //      %tok1 = update %buf[%tok]        @gr1
+    //      copy %buf[%tok1], %aref1         @gr1
+    //      %tok1' = copy %aref1, %buf        @gr2
+    //      %tok2 = load %buf[%tok1']         @gr2
+    //      copy %buf[%tok2] -> %aref2        @gr2
+    //      %tok2' = copy %aref2 -> %buf     @gr1
+    //      %tok2'' = phi %tok2, %tok2'
+    //      yield %tok2''
+    //   }  [@gr1, @gr2] {.0=[@gr1, @gr2]}
+    //
+    //  and after code split we have
+    //
+    //   @gr1 {
+    //     %ret = for  .. iter_args(%tok = %tok0) {
+    //        %tok1 = update %buf[%tok]         @gr1
+    //        copy %buf[%tok1], %aref1          @gr1
+    //        %tok2' = copy %aref2 -> %buf      @gr1
+    //        yield %tok2'
+    //     } [@gr1] {.0=[@gr1]}
+    //   }
+    //
+    //   @gr2 {
+    //     %ret = for  .. iter_args(%tok = %tok0) {
+    //        %tok1' = copy %aref1, %buf        @gr2
+    //        %tok2 = load %buf[%tok1']         @gr2
+    //        copy %buf[%tok2] -> %aref2        @gr2
+    //        yield %tok2
+    //     } [@gr2]  {.0=[@gr2]}
+    //   }
+    //
+    // The second aref copy is unnecessary since it copies an unmodified buffer
+    // from @gr2 back to @gr1 solely to propagate token dependencies. While this
+    // redundant copy could be eliminated through inter-group analysis of memory
+    // access patterns later, such analysis would be non-trivial after
+    // code-split.
+    // The aref-insertion and code-split passes intentionally use local decision
+    // making to remain simple and composable. Rather than complicate those
+    // passes, we canonicalize the IR here to prevent unnecessary copies from
+    // being generated in the first place. This maintains the clean separation
+    // of concerns between passes while still achieving the desired
+    // optimization.
+    //
+    // The canonicalization is performed in two steps:
+    // 1. For token-returning results of the forOp, we annotate them only with
+    //    the group of the last buffer update operation in the loop body
+    // 2. We return the token from this last  update, rather than the last
+    //    produced token which may be a read-operation.
+    //
+    // Given the input IR above, this pass will produce
+    //   %ret = for  .. iter_args(%tok = %tok0) {
+    //      %tok1 = update %buf[%tok]   @gr1
+    //      %tok2 = load %buf[%tok1]    @gr2
+    //      yield %tok1
+    //   } [@gr1, @gr2] {.0=[@gr1]}
+    //
+    // It is valid, because right after this pass we will run aref-insertion
+    // And arefs between update and load will ensure sequencing of operation,
+    // i.e.
+    //
+    //   %ret = for  .. iter_args(%tok = %tok0) {
+    //      %tok1 = update %buf[%tok]   @gr1
+    //      copy %buf[tok1], %aref1     @gr1
+    //      %tok1' = copy %aref1, %buf   @gr2
+    //      %tok2  = load %buf[%tok1']   @gr2
+    //      yield %tok1
+    //   } [@gr1, @gr2] {.0=[@gr1]}
+    //
+    // and after code-split we will have
+    //
+    //   @gr1 {
+    //     %ret = for  .. iter_args(%tok = %tok0) {
+    //        %tok1 = update %buf[%tok]   @gr1
+    //        copy %buf[tok1], %aref1     @gr1
+    //        yield %tok1
+    //     } [@gr1] {.0=[@gr1]}
+    //   }
+    //
+    //   @gr2 {
+    //     for  .. iter_args() {
+    //        %tok1' = copy %aref1, %buf  @gr2
+    //        %tok2  = load %buf[%tok1']  @gr2
+    //     } [@gr2]
+    //   }
+    //
+    // and copy is not present, by canonicalizing input IR.
+
+    funcOp.walk([&](scf::ForOp forOp) {
+      auto body = forOp.getBody();
+      auto yieldOp = cast<scf::YieldOp>(body->getTerminator());
+      IRMapping mapping;
+      SmallVector<Value> yieldOperands;
+      for (auto opnd : yieldOp->getOperands())
+        yieldOperands.push_back(opnd);
+
+      bool cloneYield = true;
+      for (auto [idx, opnd] : llvm::enumerate(yieldOperands)) {
+        if (isa<AsyncTokenType>(opnd.getType())) {
+          auto op = opnd.getDefiningOp();
+          // if op is a load, get the op that created the dep for the load
+          if (auto loadOp = dyn_cast<ttng::TMEMLoadOp>(op))
+            op = loadOp.getDep().getDefiningOp();
+          Value token;
+          // assme, the op here must be either a tmem_store or mmav5
+          if (auto storeOp = dyn_cast<ttng::TMEMStoreOp>(op)) {
+            token = storeOp.getToken();
+          } else if (auto mmav5 = dyn_cast<ttng::MMAv5OpInterface>(op)) {
+            token = mmav5.getToken();
+          }
+          // update token to be the one produced by the store/mma operation
+          if (token) {
+            auto groups = getGroups(op);
+            assert(!groups.empty());
+
+            // enforce that only one group updates tmem
+            groups = {*groups.begin()};
+            setGroups(op, groups);
+
+            // ensure token is produced by the group that makes last buf update
+            setGroupsIdx(forOp, idx, groups);
+
+            mapping.map(opnd, token);
+            cloneYield = true;
+          }
+        }
+      }
+      if (cloneYield) {
+        OpBuilder builder(yieldOp);
+        builder.clone(*yieldOp, mapping);
+        yieldOp.erase();
+      }
+    });
+  }
+
+  void blackwellFlashAttentionPatches(triton::FuncOp funcOp) {
+    // For Flash Attention, we want the partitioner to generate input IR in a
+    // specific way. However, since the partitioner is currently under
+    // development, for now we patch the input IR from the propagation pass to
+    // add the group annotations we need.
+
+    // When a for-loop yields a token that comes from an MMA operaton in
+    // the @mma2 group and is consumed by the @correction group on the next
+    // iteration, we want to annotate that loop output as being produced by the
+    // correction group instead. This is done even though the actual computation
+    // is performed by the @mma2 group. For example:
+    //
+    // %tok1 = for .. %tok = %tok0 {
+    //    %tok2 = tmem_load %tok1      @correction
+    //    %tok3 = tmem_store %tok2     @correction
+    //    %tok4 = mma  %tok3           @mma2
+    //    yield %tok4
+    // } .0=[@correction]
+    //
+    // This transformation ensures that a copy operation is inserted between mma
+    // and yield ops, rather than between iter_args and tmem_load. This
+    // placement generates cleaner IR after aref-insertion, making it easier to
+    // eliminate redundant copies later.
+
+    funcOp.walk([&](scf::ForOp forOp) {
+      auto forOpGroups = getGroups(forOp);
+      auto yieldOp = cast<scf::YieldOp>(forOp.getBody()->getTerminator());
+      for (auto [idx, opnd] : llvm::enumerate(yieldOp->getOperands())) {
+        if (!isa<ttng::MMAv5OpInterface>(opnd.getDefiningOp()))
+          continue;
+        auto groups = getGroups(opnd.getDefiningOp());
+        bool hasMMA2 = false;
+        for (auto group : groups) {
+          if (group == "nvws.group.mma2") {
+            hasMMA2 = true;
+            break;
+          }
+        }
+        if (hasMMA2) {
+          groups = {"nvws.group.correction"};
+        }
+        setGroupsIdx(forOp, idx, groups);
+      }
     });
   }
 
@@ -182,6 +435,10 @@ public:
       llvm_unreachable("Failed to remove tmem_store");
 
     correctGroups(funcOp);
+
+    updateTokens(funcOp);
+
+    blackwellFlashAttentionPatches(funcOp);
   }
 
   void runOnOperation() override {

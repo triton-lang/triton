@@ -401,16 +401,6 @@ private:
           continue;
         }
 
-	// FIXME: WA for ExperimentalTensormapCreateOp with WS - without this,
-	// ExperimentalTensormapCreateOp in TMA and epilogue groups incorrectly
-	// share the smem storage for desc update.
-        auto mod = operation->getParentOfType<ModuleOp>();
-        if (triton::gpu::TritonGPUDialect::isWarpSpecialized(mod) &&
-            isa<ExperimentalTensormapCreateOp>(op)) {
-          bufferRange.insert({buffer, maxInterval});
-          continue;
-        }
-
         // Any scratch memory's live range is the current operation's live
         // range.
         bufferRange.insert(
@@ -461,21 +451,6 @@ private:
     // Analyze liveness of explicit buffers
     Liveness liveness(operation);
     auto getValueLivenessRange = [&](Value value) {
-      if (auto defOp = value.getDefiningOp()) {
-        if (auto localAlloc = dyn_cast<gpu::LocalAllocOp>(defOp)) {
-          if (localAlloc->hasAttr("aref_buffer") ||
-              localAlloc->hasAttr("aref_full_mbarriers") ||
-              localAlloc->hasAttr("aref_empty_mbarriers")) {
-            // WA for WS. Off-the-shelf liveness analysis cannot determine the
-            // correct live range for SMEM buffers used across warp groups.
-            // Without this, the storage of an MMA operand is incorrectly shared
-            // with the source of TMA store in the epilogue group, for example.
-            auto minId = (size_t)0;
-            auto maxId = std::numeric_limits<size_t>::max();
-            return Interval(minId, maxId);
-          }
-        }
-      }
       auto liveOperations = liveness.resolveLiveness(value);
       auto minId = std::numeric_limits<size_t>::max();
       auto maxId = std::numeric_limits<size_t>::min();
@@ -666,6 +641,15 @@ private:
         if (wsx && wsy && wsx == wsy &&
             x->owner->getParentRegion() != y->owner->getParentRegion() &&
             xSizeRange.intersects(ySizeRange)) {
+          interference[x].insert(y);
+        }
+
+        // Similarly to above, handle interferences among WarpGroupOp regions.
+        // This includes cases where one of the buffers is defined at the
+        // top level.
+        auto wgx = x->owner->getParentOfType<nvidia_gpu::WarpGroupOp>();
+        auto wgy = y->owner->getParentOfType<nvidia_gpu::WarpGroupOp>();
+        if ((wgx || wgy) && wgx != wgy && xSizeRange.intersects(ySizeRange)) {
           interference[x].insert(y);
         }
       }

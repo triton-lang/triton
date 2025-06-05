@@ -64,8 +64,6 @@ std::unique_ptr<Pass> createTritonNvidiaGPUOptimizeDescriptorEncodingPass();
 
 std::unique_ptr<Pass> createTritonNvidiaGPUOptimizeTMemSubtilingPass();
 
-std::unique_ptr<Pass> createTritonNvidiaGPUArefLoweringPass();
-
 std::unique_ptr<Pass> createTritonNvidiaGPUTtngWgToArefIfPass();
 
 std::unique_ptr<Pass> createTritonNvidiaGPUTtngWgToTtgWsPass();

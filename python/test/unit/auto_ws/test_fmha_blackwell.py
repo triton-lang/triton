@@ -37,12 +37,13 @@ def _attn_fwd_inner(
     offs_hz: tl.constexpr,
     N_CTX: tl.constexpr,
     fp8_v: tl.constexpr,
+    ld1_group: tl.constexpr,
+    ld2_group: tl.constexpr,
+    mma1_group: tl.constexpr,
+    mma2_group: tl.constexpr,
+    softmax_group: tl.constexpr,
+    correction_group: tl.constexpr,
 ):
-
-    softmax_group = tl.group(name="fa_bw_softmax", start=0, size=4)
-    load_group = tl.group(name="tma_load", start=4, size=4)
-    groupA = tl.group(name="groupA", start=8, size=4)
-    groupB = tl.group(name="groupB", start=12, size=4)
 
     # to support correction, group we need to use warpSize= 1 in load/groupA/groupB
     # that would contain only mma's
@@ -63,12 +64,12 @@ def _attn_fwd_inner(
     for start_n in range(lo, hi, BLOCK_N):
         start_n = tl.multiple_of(start_n, BLOCK_N)
         # -- compute qk ----
-        with load_group:
+        with ld1_group:
             k = k_desc_ptr.load(
                 [offs_kv, 0],
             )
 
-        with groupA:
+        with mma1_group:
             qk = tl.dot(q, k.T)
 
         with softmax_group:
@@ -81,21 +82,21 @@ def _attn_fwd_inner(
             else:
                 m_ij = tl.maximum(m_i, tl.max(qk, 1) * qk_scale)
                 qk = qk * qk_scale - m_ij[:, None]
-            p = tl.math.exp2(qk)
-            p = p.to(tl.float8e5) if fp8_v else p.to(tl.float16)
-            l_ij = tl.sum(p, 1)
-            # -- update m_i and l_i
             alpha = tl.math.exp2(m_i - m_ij)
+            p = tl.math.exp2(qk)
+            l_ij = tl.sum(p, 1)
+            p = p.to(tl.float8e5) if fp8_v else p.to(tl.float16)
+            # -- update m_i and l_i
             m_i = m_ij
             l_i = l_i * alpha + l_ij
 
-        with groupA:
+        with correction_group:
             # -- update output accumulator --
             acc = acc * alpha[:, None]
 
         # update acc
         # with softmax_group:
-        with load_group:
+        with ld2_group:
             if fp8_v:
                 v = v_desc_ptr.load(
                     [offs_hz * HEAD_DIM, start_n],
@@ -106,7 +107,7 @@ def _attn_fwd_inner(
                 )
 
         # with softmax_group:
-        with groupB:
+        with mma2_group:
             if fp8_v:
                 acc = tl.dot(p, v.T, acc)
             else:
@@ -175,14 +176,18 @@ def _attn_fwd(
     qk_scale = sm_scale
     qk_scale *= 1.44269504  # 1/log(2)
 
-    # load q: it will stay in SRAM throughout
-    q = q_desc_ptr.load(
-        [off_hz * N_CTX + start_m * BLOCK_M, 0],
-    )
+    mma1_group = tl.group(name="mma1", start=12, size=1)
+    ld1_group = tl.group(name="ld1_group", start=13, size=1)
+    ld2_group = tl.group(name="ld2_group", start=14, size=1)
+    mma2_group = tl.group(name="mma2", start=8, size=4)
+    softmax_group = tl.group(name="softmax", start=0, size=4)
+    correction_group = tl.group(name="correction", start=4, size=4)
 
-    # XXX: we can't pass groups yet to other triton function
-    # so unfortunatelly we need to redefine duplicate groupB here and in _attn_fwd_inner
-    groupB = tl.group(name="groupB", start=12, size=4)
+    # load q: it will stay in SRAM throughout
+    with ld1_group:
+        q = q_desc_ptr.load(
+            [off_hz * N_CTX + start_m * BLOCK_M, 0],
+        )
 
     # stage 1: off-band
     # For causal = True, STAGE = 3 and _attn_fwd_inner gets 1 as its STAGE
@@ -206,6 +211,12 @@ def _attn_fwd(
             off_hz,
             N_CTX,
             V.dtype.element_ty == tl.float8e5,  #
+            ld1_group,
+            ld2_group,
+            mma1_group,
+            mma2_group,
+            softmax_group,
+            correction_group,
         )
     # stage 2: on-band
     if STAGE & 2:
@@ -229,9 +240,15 @@ def _attn_fwd(
             off_hz,
             N_CTX,
             V.dtype.element_ty == tl.float8e5,  #
+            ld1_group,
+            ld2_group,
+            mma1_group,
+            mma2_group,
+            softmax_group,
+            correction_group,
         )
 
-    with groupB:
+    with softmax_group:
         # epilogue
         m_i += tl.math.log2(l_i)
         acc = acc / l_i[:, None]
@@ -241,6 +258,11 @@ def _attn_fwd(
 
 
 def attention(q, k, v, causal, sm_scale, NUM_WARPS):
+    if v.dtype == torch.float8_e5m2:
+        _, _, HEAD_DIM, _ = v.shape
+    else:
+        _, _, _, HEAD_DIM = v.shape
+    BLOCK_N = min(128, HEAD_DIM)
     return run_attention(
         _attn_fwd,
         q,
@@ -249,7 +271,7 @@ def attention(q, k, v, causal, sm_scale, NUM_WARPS):
         causal,
         sm_scale,
         BLOCK_M=128,
-        BLOCK_N=64,
+        BLOCK_N=BLOCK_N,
         NUM_STAGES=1,
         NUM_WARPS=NUM_WARPS,
         USE_TTG_WS=False,
@@ -260,17 +282,21 @@ def attention(q, k, v, causal, sm_scale, NUM_WARPS):
 
 
 @pytest.mark.parametrize(
-    "Z, H, N_CTX, HEAD_DIM, NUM_WARPS",
+    "Z, H, N_CTX, HEAD_DIM, NUM_WARPS, causal",
     [
-        (2, 2, 256, 64, 4),
-        (2, 2, 512, 64, 4),
-        (2, 2, 1024, 64, 4),
-        (2, 2, 2048, 64, 4),
-        (2, 2, 4096, 64, 4),
+        (2, 2, 256, 64, 4, False),
+        (2, 2, 512, 64, 4, False),
+        (2, 2, 1024, 64, 4, False),
+        (2, 2, 2048, 64, 4, False),
+        (2, 2, 4096, 64, 4, False),
+        (2, 2, 256, 32, 4, True),
+        (2, 2, 512, 32, 4, True),
+        (2, 2, 1024, 32, 4, True),
+        (2, 2, 2048, 32, 4, True),
+        (2, 2, 4096, 32, 4, True),
     ],
 )
-@pytest.mark.parametrize("causal", [False, True])
-@pytest.mark.parametrize("dtype", [torch.float16])
+@pytest.mark.parametrize("dtype", [torch.float16, torch.float8_e5m2])
 def test_op(Z, H, N_CTX, HEAD_DIM, NUM_WARPS, causal, dtype):
     if torch.cuda.get_device_capability()[0] != 10:
         pytest.skip("Blackwell attention isn't supported on sm != 10.x")
@@ -290,25 +316,25 @@ def test_op(Z, H, N_CTX, HEAD_DIM, NUM_WARPS, causal, dtype):
     # assert torch.allclose(ref_out, tri_out, atol=1e-2, rtol=0)
     # print("ref_out :", ref_out)
     # print("tri_out :", tri_out)
-    ERROR_TOLERANCE = 2e-3 if dtype == torch.float16 else 3e-2
+    RTOL = 2e-3 if dtype == torch.float16 else 3e-2
+    ATOL = 2.0e-3 if dtype == torch.float16 else 1.0/8
     assert_close_verbose(
         tri_out.to(torch.float16),
         ref_out.to(torch.float16),
-        rtol=ERROR_TOLERANCE,
-        atol=ERROR_TOLERANCE,
+        rtol=RTOL,
+        atol=ATOL,
     )
     # print("PASS")
 
 
-BATCH, N_HEADS, HEAD_DIM = 4, 32, 64
+BATCH, N_HEADS = 4, 32
 HAS_FLASH_BENCH = HAS_FLASH
 HAS_FLASH_BENCH = False
 # vary seq length for fixed head and batch=4
 configs = []
 for mode in ["fwd"]:
-    for causal in [False, True]:
-        # for provider in ["triton-fp16", "triton-fp8"]:
-        for provider in ["triton-fp16"]:
+    for causal, HEAD_DIM in [(False, 64), (True, 32)]:
+        for provider in ["triton-fp16", "triton-fp8"]:
             if mode == "bwd" and not causal:
                 continue
             configs.append(
@@ -365,14 +391,16 @@ def bench_flash_attention(
 
 
 if __name__ == "__main__":
-    Z, H, N_CTX, HEAD_DIM, NUM_WARPS = (2, 2, 4096, 64, 4)
+    Z, H, N_CTX, HEAD_DIM, NUM_WARPS = (2, 2, 4096, 32, 4)
+
+    # causal = True
+    dtype = torch.float16
+    dtype = torch.float8_e5m2
+
+    causal = False
+    test_op(Z, H, N_CTX, HEAD_DIM, NUM_WARPS, causal=causal, dtype=dtype)
 
     causal = True
-    # causal = False
-
-    dtype = torch.float16
-    # dtype = torch.float8_e5m2
-
     test_op(Z, H, N_CTX, HEAD_DIM, NUM_WARPS, causal=causal, dtype=dtype)
 
     bench_flash_attention.run(save_path=".", print_data=True)

@@ -1,15 +1,39 @@
-#include "triton/Dialect/TritonGPU/Transforms/WSUtility.h"
-#include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
-#include <optional>
+/*
+ * Copyright (c) 2025 NVIDIA Corporation & Affiliates. All rights reserved.
+ *
+ * Permission is hereby granted, free of charge, to any person obtaining
+ * a copy of this software and associated documentation files
+ * (the "Software"), to deal in the Software without restriction,
+ * including without limitation the rights to use, copy, modify, merge,
+ * publish, distribute, sublicense, and/or sell copies of the Software,
+ * and to permit persons to whom the Software is furnished to do so,
+ * subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice shall be
+ * included in all copies or substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+ * EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+ * MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
+ * IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
+ * CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,
+ * TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
+ * SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+ */
 
+#include "nvidia/include/Dialect/NVWS/Transforms/Utility.h"
 #include "mlir/IR/Builders.h"
+#include "triton/Dialect/TritonGPU/Transforms/PipeliningUtility.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
+
+#include <optional>
 
 namespace mlir {
 namespace triton {
+namespace nvws {
 
+namespace ttg = triton::gpu;
 namespace ttng = triton::nvidia_gpu;
-namespace gpu {
 
 bool isManuallyGrouped(ModuleOp module) {
   auto attr = module->getAttr(ATTR_WS_MANUAL);
@@ -55,51 +79,52 @@ void addGroups(Operation *op, const std::string &attrName,
 } // namespace
 
 std::set<std::string> getGroups(Operation *op) {
-  return getGroups(op, ATTR_WSGROUPS);
+  return getGroups(op, ATTR_WS_GROUPS);
 }
 
 std::set<std::string> getGroups(OpResult result) {
   return getGroups(result.getOwner(),
-                   std::string(ATTR_WSGROUPS) + "." +
+                   std::string(ATTR_WS_GROUPS) + "." +
                        std::to_string(result.getResultNumber()));
 }
 
 std::set<std::string> getGroupsIdx(Operation *op, int idx) {
-  return getGroups(op, std::string(ATTR_WSGROUPS) + "." + std::to_string(idx));
+  return getGroups(op, std::string(ATTR_WS_GROUPS) + "." + std::to_string(idx));
 }
 
 void setGroups(Operation *op, const std::set<std::string> &groups) {
-  setGroups(op, ATTR_WSGROUPS, groups);
+  setGroups(op, ATTR_WS_GROUPS, groups);
 }
 
 void setGroups(OpResult result, const std::set<std::string> &groups) {
   setGroups(result.getOwner(),
-            std::string(ATTR_WSGROUPS) + "." +
+            std::string(ATTR_WS_GROUPS) + "." +
                 std::to_string(result.getResultNumber()),
             groups);
 }
 void setGroupsIdx(Operation *op, int idx, const std::set<std::string> &groups) {
-  setGroups(op, std::string(ATTR_WSGROUPS) + "." + std::to_string(idx), groups);
+  setGroups(op, std::string(ATTR_WS_GROUPS) + "." + std::to_string(idx),
+            groups);
 }
 
 void addGroups(Operation *op, const std::set<std::string> &groups) {
-  addGroups(op, ATTR_WSGROUPS, groups);
+  addGroups(op, ATTR_WS_GROUPS, groups);
 }
 
 void addGroups(OpResult result, const std::set<std::string> &groups) {
   auto op = result.getOwner();
-  auto attrName = std::string(ATTR_WSGROUPS) + "." +
+  auto attrName = std::string(ATTR_WS_GROUPS) + "." +
                   std::to_string(result.getResultNumber());
   addGroups(op, attrName, groups);
 }
 void addGroupsIdx(Operation *op, int idx, const std::set<std::string> &groups) {
-  auto attrName = std::string(ATTR_WSGROUPS) + "." + std::to_string(idx);
+  auto attrName = std::string(ATTR_WS_GROUPS) + "." + std::to_string(idx);
   addGroups(op, attrName, groups);
 }
 
 void copyGroups(Operation *from_op, Operation *to_op) {
-  if (from_op->hasAttr(ATTR_WSGROUPS)) {
-    setGroups(to_op, ATTR_WSGROUPS, getGroups(from_op, ATTR_WSGROUPS));
+  if (from_op->hasAttr(ATTR_WS_GROUPS)) {
+    setGroups(to_op, ATTR_WS_GROUPS, getGroups(from_op, ATTR_WS_GROUPS));
   }
 }
 
@@ -120,12 +145,13 @@ WSGroup getGroupFromAttribute(Attribute attr) {
   auto dictAttr = mlir::dyn_cast<mlir::DictionaryAttr>(attr);
   assert(dictAttr);
   int startWarp =
-      (int)mlir::cast<IntegerAttr>(dictAttr.get("start_warp")).getInt();
+      (int)mlir::cast<IntegerAttr>(dictAttr.get(ATTR_WS_START_WARP)).getInt();
   int numWarps =
-      (int)mlir::cast<IntegerAttr>(dictAttr.get("num_warps")).getInt();
+      (int)mlir::cast<IntegerAttr>(dictAttr.get(ATTR_WS_NUM_WARPS)).getInt();
   int regCount = 0;
-  if (dictAttr.contains("reg_count")) {
-    regCount = (int)mlir::cast<IntegerAttr>(dictAttr.get("reg_count")).getInt();
+  if (dictAttr.contains(ATTR_WS_REG_COUNT)) {
+    regCount =
+        (int)mlir::cast<IntegerAttr>(dictAttr.get(ATTR_WS_REG_COUNT)).getInt();
   }
   return WSGroup(startWarp, numWarps, regCount);
 }
@@ -137,17 +163,17 @@ WSGroup getGroupFromSymbolRefAttr(ModuleOp mod, SymbolRefAttr refAttr) {
 }
 
 bool isOpInGroup(Operation *op, const std::string &group) {
-  if (!op->hasAttr(ATTR_WSGROUPS)) {
+  if (!op->hasAttr(ATTR_WS_GROUPS)) {
     return false;
   }
-  auto groups = getGroups(op, ATTR_WSGROUPS);
+  auto groups = getGroups(op, ATTR_WS_GROUPS);
   return groups.count(group) > 0;
 }
 
 bool isResultInGroup(Value value, const std::string &group) {
   auto result = cast<OpResult>(value);
   auto op = result.getOwner();
-  auto attrName = std::string(ATTR_WSGROUPS) + "." +
+  auto attrName = std::string(ATTR_WS_GROUPS) + "." +
                   std::to_string(result.getResultNumber());
   if (!op->hasAttr(attrName)) {
     return false;
@@ -157,15 +183,15 @@ bool isResultInGroup(Value value, const std::string &group) {
 
 void setGroupAttribute(ModuleOp moduleOp, const std::string &name,
                        WSGroup group) {
-  assert(!moduleOp->hasAttr(ATTR_WSGROUPS));
+  assert(!moduleOp->hasAttr(ATTR_WS_GROUPS));
   OpBuilder builder(moduleOp.getContext());
   auto attr_pair = std::vector<NamedAttribute>{
-      {builder.getStringAttr("start_warp"),
+      {builder.getStringAttr(ATTR_WS_START_WARP),
        builder.getI32IntegerAttr(group.getStartWarp())},
-      {builder.getStringAttr("num_warps"),
+      {builder.getStringAttr(ATTR_WS_NUM_WARPS),
        builder.getI32IntegerAttr(group.getNumWarps())}};
   if (group.hasRegCount()) {
-    attr_pair.push_back({builder.getStringAttr("reg_count"),
+    attr_pair.push_back({builder.getStringAttr(ATTR_WS_REG_COUNT),
                          builder.getI32IntegerAttr(group.getRegCount())});
   }
   NamedAttrList attrList(attr_pair);
@@ -243,7 +269,18 @@ std::map<std::string, WSGroup> collectGroups(ModuleOp mod) {
 }
 
 TokenInfo getTokenProducerOp(Value result) {
-  assert(isa<AsyncTokenType>(result.getType()));
+  assert(isa<ttg::AsyncTokenType>(result.getType()));
+  if (auto blockArg = dyn_cast<BlockArgument>(result)) {
+    auto argNum = blockArg.getArgNumber();
+    if (auto forOp =
+            blockArg.getOwner()->getParent()->getParentOfType<scf::ForOp>()) {
+      assert(argNum > 0);
+      auto result = forOp.getResults()[argNum - 1];
+      return getTokenProducerOp(result);
+    } else {
+      llvm_unreachable("unhandled op with block-argument");
+    }
+  }
   auto op = result.getDefiningOp();
   if (auto mmav5 = dyn_cast<ttng::MMAv5OpInterface>(op)) {
     return {mmav5, mmav5.getAccumulator()};
@@ -266,12 +303,18 @@ TokenInfo getTokenProducerOp(Value result) {
     }
     assert(resultIdx >= 0);
     auto token = forOp.getBody()->getTerminator()->getOperand(resultIdx);
-    assert(isa<AsyncTokenType>(token.getType()));
+    assert(isa<ttg::AsyncTokenType>(token.getType()));
     return getTokenProducerOp(token);
   } else if (auto ifOp = dyn_cast<scf::IfOp>(op)) {
     llvm_unreachable("ifOp is unsupported yet");
   } else if (auto arefPhiOp = dyn_cast<ttng::ArefPhiOp>(op)) {
     return getTokenProducerOp(arefPhiOp.getLocal());
+  } else if (auto copyOp = dyn_cast<ttng::ArefCopyOp>(op)) {
+    if (!isa<ttng::ArefEnterOpInterface>(copyOp.getSrc().getDefiningOp())) {
+      return {copyOp, copyOp.getSrc()};
+    } else {
+      return {copyOp, copyOp.getDst()};
+    }
   } else {
     return {};
   }
@@ -279,25 +322,27 @@ TokenInfo getTokenProducerOp(Value result) {
 
 // --------------------------------------------
 
-MemDescType getDataMemDescType(MemDescType memDescType, bool mutableMemory) {
+ttg::MemDescType getDataMemDescType(ttg::MemDescType memDescType,
+                                    bool mutableMemory) {
   auto shape = memDescType.getShape();
   SmallVector<int64_t> dataShape(shape.begin() + 1, shape.end());
-  return MemDescType::get(dataShape, memDescType.getElementType(),
-                          memDescType.getEncoding(),
-                          memDescType.getMemorySpace(), mutableMemory);
+  return ttg::MemDescType::get(dataShape, memDescType.getElementType(),
+                               memDescType.getEncoding(),
+                               memDescType.getMemorySpace(), mutableMemory);
 };
 
-MemDescType getArefbufMemDescType(MemDescType memDescType, int32_t AREF_SIZE) {
+ttg::MemDescType getArefbufMemDescType(ttg::MemDescType memDescType,
+                                       int32_t AREF_SIZE) {
   auto shape = memDescType.getShape();
   SmallVector<int64_t> bufferShape(shape.begin(), shape.end());
   bufferShape.insert(bufferShape.begin(), AREF_SIZE);
-  return MemDescType::get(bufferShape, memDescType.getElementType(),
-                          memDescType.getEncoding(),
-                          memDescType.getMemorySpace(), true);
+  return ttg::MemDescType::get(bufferShape, memDescType.getElementType(),
+                               memDescType.getEncoding(),
+                               memDescType.getMemorySpace(), true);
 }
 
 bool isHopper(ModuleOp mod) {
-  auto target = mod->getAttrOfType<StringAttr>(AttrTargetName);
+  auto target = mod->getAttrOfType<StringAttr>(ttg::AttrTargetName);
   return target == "cuda:90";
 }
 
@@ -319,9 +364,9 @@ bool isConstant(Value value, int constant) {
 }
 
 Operation *createAlloc(OpBuilder &builder, Location loc,
-                       MemDescType memDescType, Value src) {
-  if (isa<SharedMemorySpaceAttr>(memDescType.getMemorySpace()))
-    return builder.create<LocalAllocOp>(loc, memDescType, src);
+                       ttg::MemDescType memDescType, Value src) {
+  if (isa<ttg::SharedMemorySpaceAttr>(memDescType.getMemorySpace()))
+    return builder.create<ttg::LocalAllocOp>(loc, memDescType, src);
   else {
     assert(isa<ttng::TensorMemorySpaceAttr>(memDescType.getMemorySpace()));
     return builder.create<triton::nvidia_gpu::TMEMAllocOp>(loc, memDescType,
@@ -329,6 +374,44 @@ Operation *createAlloc(OpBuilder &builder, Location loc,
   }
 }
 
-} // namespace gpu
+bool isMMAOperandLoadOp(Operation *op) {
+  // Check if the given LoadOp can be lowered to cpasync
+  if (!isa<LoadOp>(op)) {
+    return false;
+  }
+
+  LoadOp loadOp = cast<LoadOp>(op);
+  auto resType = dyn_cast<RankedTensorType>(loadOp.getResult().getType());
+  if (!resType) {
+    return false;
+  }
+
+  std::function<bool(Operation *)> isUsedByDot = [&](Operation *op) {
+    // transitively check if one of the user of the op is a dot op
+    if (isa<ttng::MMAv5OpInterface, ttng::WarpGroupDotOp>(op)) {
+      return true;
+    } else {
+      for (auto user : op->getUsers())
+        if (isUsedByDot(user)) {
+          return true;
+        }
+      return false;
+    }
+  };
+
+  // For now, allow cpasync only for loading dot operands
+  // When we add support for a specialized warp group for loading additional
+  // tensors used in the epilogue, we should relax this condition.
+  if (!isOpInGroup(op, ATTR_WS_TMALOAD) && !isUsedByDot(op)) {
+    return false;
+  }
+
+  auto copyVecBytes = getCopyVecBytes(resType, getSharedEncoding(op));
+
+  // At least 4 bytes needed for cpasync
+  return copyVecBytes >= 4;
+}
+
+} // namespace nvws
 } // namespace triton
 } // namespace mlir

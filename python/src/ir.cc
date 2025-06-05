@@ -24,12 +24,13 @@
 #include "mlir/Target/LLVMIR/Dialect/LLVMIR/LLVMToLLVMIRTranslation.h"
 #include "mlir/Transforms/LocationSnapshot.h"
 
+#include "nvidia/include/Dialect/NVWS/Transforms/Utility.h"
+
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Types.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
-#include "triton/Dialect/TritonGPU/Transforms/WSUtility.h"
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/TMAUtilities.h"
 #include "triton/Tools/Sys/GetEnv.hpp"
 #include "llvm/Support/FileSystem.h"
@@ -147,25 +148,29 @@ public:
     return op;
   }
 
-  std::set<std::string> getGroups() { return groups; }
+  std::set<std::string> getGroups() { return groupNames; }
 
-  void enterGroup(const std::string &name) { groups.emplace(name); }
+  void enterGroup(const std::string &name) { groupNames.emplace(name); }
 
-  void exitGroup(const std::string &name) { groups.erase(name); }
+  void exitGroup(const std::string &name) { groupNames.erase(name); }
 
 private:
   std::unique_ptr<OpBuilder> builder;
   std::unique_ptr<Location> lastLoc;
   bool lineInfoEnabled = !triton::tools::getBoolEnv("TRITON_DISABLE_LINE_INFO");
-  std::set<std::string> groups;
+  std::set<std::string> groupNames;
 
   void setGroups(Operation *op) {
     if (isa<scf::YieldOp, ReduceReturnOp>(op)) {
       // don't set groups for yield/reduce return
       return;
     }
-    if (!groups.empty()) {
-      triton::gpu::setGroups(op, groups);
+    if (!groupNames.empty()) {
+      std::set<std::string> groups;
+      for (auto name : groupNames) {
+        groups.insert(triton::nvws::ATTR_WS_PREFIX + name);
+      }
+      triton::nvws::setGroups(op, groups);
     }
   }
 };
@@ -752,9 +757,10 @@ void init_triton_ir(py::module &&m) {
            })
       .def("create_group", [](ModuleOp &self, const std::string &name,
                               int start, int size, int reg_count) {
-        self->setAttr(triton::gpu::ATTR_WS_MANUAL,
+        self->setAttr(triton::nvws::ATTR_WS_MANUAL,
                       BoolAttr::get(self->getContext(), true));
-        mkGroup(self, name, triton::gpu::WSGroup{start, size, reg_count});
+        triton::nvws::mkGroup(self, triton::nvws::ATTR_WS_PREFIX + name,
+                              triton::nvws::WSGroup{start, size, reg_count});
       });
 
   m.def("make_attr", [](const std::vector<int> &values, MLIRContext &context) {

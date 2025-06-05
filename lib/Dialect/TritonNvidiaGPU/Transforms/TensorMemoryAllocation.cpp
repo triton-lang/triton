@@ -266,6 +266,23 @@ allocateTMem(Operation *parentOp,
       }
     }
 
+    // For ttng.warp_group operations, memory allocation follows these rules:
+    // 1. Allocations in different groups must coexist simultaneously since
+    //    groups execute in parallel.
+    // 2. Top-level allocations (outside any groups) must coexist with all group
+    //    allocations since they are used for cross-group data sharing.
+    // 3. Allocations within the same group may reuse memory since ops in the
+    //    group are sequenced.
+    if (auto ws = alloc->getParentOfType<nvidia_gpu::WarpGroupOp>()) {
+      for (auto prevIt = allocs.begin(); prevIt != it; ++prevIt) {
+        TMEMAllocOp prevAlloc = *prevIt;
+        auto prevWs = prevAlloc->getParentOfType<nvidia_gpu::WarpGroupOp>();
+        if (!prevWs || (prevWs != ws && alloc->getParentRegion() !=
+                                            prevAlloc->getParentRegion()))
+          coexistingChunks.push_back(allocChunks.at(prevAlloc));
+      }
+    }
+
     Interval<int> liveInterval = getLiveIntervals(alloc, liveness, operationId);
     auto memDescType = alloc.getType();
     TMemAllocation allocSize = getTmemAllocSizes(memDescType);

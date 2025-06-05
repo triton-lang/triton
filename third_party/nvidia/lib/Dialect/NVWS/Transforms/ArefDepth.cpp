@@ -36,10 +36,10 @@
 #include "mlir/Transforms/Passes.h"
 #include "nvidia/include/Dialect/NVWS/IR/Dialect.h"
 #include "nvidia/include/Dialect/NVWS/Transforms/Passes.h"
+#include "nvidia/include/Dialect/NVWS/Transforms/Utility.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
-#include "triton/Dialect/TritonGPU/Transforms/WSUtility.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/Support/Casting.h"
@@ -63,6 +63,7 @@ namespace {
 namespace tt = triton;
 namespace ttg = triton::gpu;
 namespace ttng = triton::nvidia_gpu;
+using namespace triton::nvws;
 
 } // namespace
 
@@ -105,15 +106,15 @@ private:
         continue;
       // if aref is used in multiple wgOps, do not update aref depth
       if (wgOps.size() == 1) {
-        auto groups = ttg::getGroups(*wgOps.begin());
+        auto groups = getGroups(*wgOps.begin());
         assert(groups.size() == 1);
         auto group = *groups.begin();
         int depth = 1;
-        if (group == ttg::ATTR_WS_TMALOAD) {
+        if (group == ATTR_WS_TMALOAD) {
           depth = numStages;
-        } else if (group == ttg::ATTR_WS_MMA) {
+        } else if (group == ATTR_WS_MMA) {
           depth = accDepth;
-        } else if (group == ttg::ATTR_WS_EPILOGUE) {
+        } else if (group == ATTR_WS_EPILOGUE) {
           llvm_unreachable("ArefPut in epilogue is not supported");
         }
 
@@ -127,8 +128,7 @@ private:
               getDataMemDescType(arefBufType, true), depth);
           auto oldAlloc = opnd.getDefiningOp();
           auto loc = oldAlloc->getLoc();
-          Operation *newAlloc =
-              ttg::createAlloc(builder, loc, arefBufType, Value());
+          Operation *newAlloc = createAlloc(builder, loc, arefBufType, Value());
           newAlloc->setAttr("aref_buffer", builder.getUnitAttr());
           allocOps.push_back(newAlloc->getResult(0));
           arefTypes.push_back(arefBufType);

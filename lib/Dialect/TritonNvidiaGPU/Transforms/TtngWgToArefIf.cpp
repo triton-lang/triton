@@ -7,8 +7,8 @@
 #include "mlir/Support/LogicalResult.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 #include "mlir/Transforms/Passes.h"
+#include "nvidia/include/Dialect/NVWS/Transforms/Utility.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
-#include "triton/Dialect/TritonGPU/Transforms/WSUtility.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/Passes.h"
 #include "llvm/ADT/STLExtras.h"
@@ -47,7 +47,7 @@ public:
     //        ttng.wapr_group start_warp(n) num_warps(m)  { .. }
     //   }
 
-    SmallVector<ttng::WarpGroupOp> wgOps = findWarpGroupOps(m);
+    SmallVector<ttng::WarpGroupOp> wgOps = nvws::findWarpGroupOps(m);
     assert(wgOps.size() > 1);
     OpBuilder builder(wgOps[0]);
 
@@ -71,12 +71,11 @@ public:
       auto cond = builder.create<arith::AndIOp>(loc, cond1, cond2);
       auto arefIfOp =
           builder.create<scf::IfOp>(loc, cond, /*withElseRegion=*/false);
-      arefIfOp->setAttr(ATTR_WS_AREF_IF, builder.getUnitAttr());
+      arefIfOp->setAttr(nvws::ATTR_WS_AREF_IF, builder.getUnitAttr());
 
       // move wgOp to thenRegion
       wgOp->moveBefore(arefIfOp.thenYield());
     }
-
   }
 };
 } // namespace

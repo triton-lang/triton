@@ -36,10 +36,10 @@
 #include "mlir/Transforms/Passes.h"
 #include "nvidia/include/Dialect/NVWS/IR/Dialect.h"
 #include "nvidia/include/Dialect/NVWS/Transforms/Passes.h"
+#include "nvidia/include/Dialect/NVWS/Transforms/Utility.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
-#include "triton/Dialect/TritonGPU/Transforms/WSUtility.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/Support/Casting.h"
@@ -59,6 +59,7 @@
 namespace {
 
 using namespace mlir;
+using namespace triton::nvws;
 namespace tt = triton;
 namespace ttg = triton::gpu;
 namespace ttng = triton::nvidia_gpu;
@@ -77,11 +78,11 @@ struct ArefFirstUse {
 
 using ArefFirstUseMap = llvm::MapVector<Value /*arefs*/, ArefFirstUse>;
 Value getIndex(ttng::ArefEnterOpInterface enterOp) {
-  return ttg::isConstant(enterOp.getIndex(), 0) ? Value{} : enterOp.getIndex();
+  return isConstant(enterOp.getIndex(), 0) ? Value{} : enterOp.getIndex();
 };
 
 void setIndex(ttng::ArefEnterOpInterface enterOp, Value index) {
-  assert(ttg::isConstant(enterOp.getIndex(), 0));
+  assert(isConstant(enterOp.getIndex(), 0));
   enterOp.setIndex(index);
 
   auto aref = enterOp.getAref();
@@ -93,7 +94,7 @@ void setIndex(ttng::ArefEnterOpInterface enterOp, Value index) {
       auto isPutExit = isa<ttng::ArefPutExitOp>(exitOp);
       if (isPutEnter == isPutExit &&
           exitOp->getAttrOfType<StringAttr>("aref_tag").str() == arefTag) {
-        assert(ttg::isConstant(exitOp.getIndex(), 0));
+        assert(isConstant(exitOp.getIndex(), 0));
         exitOp.setIndex(index);
         return;
       }

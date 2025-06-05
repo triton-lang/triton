@@ -36,11 +36,11 @@
 #include "mlir/Transforms/Passes.h"
 #include "nvidia/include/Dialect/NVWS/IR/Dialect.h"
 #include "nvidia/include/Dialect/NVWS/Transforms/Passes.h"
+#include "nvidia/include/Dialect/NVWS/Transforms/Utility.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
-#include "triton/Dialect/TritonGPU/Transforms/WSUtility.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SetVector.h"
@@ -62,6 +62,7 @@ namespace {
 
 using namespace mlir;
 using namespace triton::gpu;
+using namespace triton::nvws;
 namespace tt = triton;
 namespace ttg = triton::gpu;
 namespace ttng = triton::nvidia_gpu;
@@ -305,7 +306,7 @@ void combineArefs(triton::FuncOp funcOp) {
     OpBuilder builder(lastAref);
     auto arefTy = triton::nvidia_gpu::ArefType::get(
         builder.getContext(),
-        TypeArrayAttr::get(builder.getContext(), arefBufTypes));
+        ttg::TypeArrayAttr::get(builder.getContext(), arefBufTypes));
     auto aref = builder.create<ttng::ArefCreateOp>(lastAref->getLoc(), arefTy,
                                                    arefBufs);
 
@@ -435,7 +436,11 @@ void optimizeNumWarps(tt::FuncOp funcOp) {
     if (isOpInGroup(wgOp, ATTR_WS_TMALOAD)) {
       bool hasCpAsync = false;
       for (auto &block : wgOp.getRegion(0)) {
-        block.walk([&](tt::LoadOp) { hasCpAsync = true; });
+        block.walk([&](tt::LoadOp op) {
+          if (isMMAOperandLoadOp(op)) {
+            hasCpAsync = true;
+          }
+        });
       }
       if (hasCpAsync) {
         auto mod = wgOp->getParentOfType<ModuleOp>();
@@ -471,9 +476,10 @@ void optimizeNumWarps(tt::FuncOp funcOp) {
           }
         }
         if (auto localAlloc = dyn_cast<LocalAllocOp>(op)) {
-          auto src = localAlloc.getSrc().getDefiningOp();
-          if (isa<tt::DescriptorLoadOp, tt::DescriptorGatherOp>(src)) {
-            return WalkResult::advance();
+          if (auto src = localAlloc.getSrc()) {
+            if (isa<DescriptorOpInterface>(src.getDefiningOp())) {
+              return WalkResult::advance();
+            }
           }
         }
         auto types =

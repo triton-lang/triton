@@ -90,20 +90,6 @@ def TritionTensorMemoryAllocationPass : Pass<"triton-tensor-memory-allocation", 
   ];
 }
 
-def TritonNvidiaGPUArefLoweringPass : Pass<"triton-nvidia-aref-lowering", "mlir::ModuleOp"> {
-  let summary = "lower aref and TMA operations";
-
-  let description = [{
-    Lower aref operations in TritonNvidiaGPUDialect.
-  }];
-
-  let constructor = "mlir::createTritonNvidiaGPUArefLoweringPass()";
-
-  let dependentDialects = [
-    "mlir::triton::nvidia_gpu::TritonNvidiaGPUDialect"
-  ];
-}
-
 def TritonNvidiaGPUTtngWgToArefIf : Pass<"triton-nvidia-ttng-wg-to-aref-if", "mlir::ModuleOp"> {
   let summary = "convert aref-if to ttg.warp_specialize";
 

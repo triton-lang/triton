@@ -3,6 +3,7 @@
 #include "mlir/IR/PatternMatch.h"
 #include "mlir/Support/LogicalResult.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
+#include "nvidia/include/Dialect/NVWS/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Types.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
@@ -151,7 +152,7 @@ static void lowerTMALoad(Operation *op, RankedTensorType tensorType, Value desc,
   rewriter.create<InitBarrierOp>(loc, barrierAlloc, 1);
   createBarrierExpectOp(loc, rewriter, {op}, barrierAlloc);
   auto mod = op->getParentOfType<ModuleOp>();
-  if (triton::gpu::TritonGPUDialect::isWarpSpecialized(mod)) {
+  if (triton::nvws::NVWSDialect::isWarpSpecialized(mod)) {
     insertBarrier(rewriter, loc);
   }
   Value pred = rewriter.create<arith::ConstantIntOp>(loc, 1, 1);
@@ -209,7 +210,7 @@ static void lowerTMAStore(Operation *op, mlir::TypedValue<RankedTensorType> src,
       MemDescType::get(tensorType.getShape(), tensorType.getElementType(),
                        encoding, sharedMemorySpace, /*mutableMemory=*/true);
 
-  bool isWs = triton::gpu::TritonGPUDialect::isWarpSpecialized(
+  bool isWs = triton::nvws::NVWSDialect::isWarpSpecialized(
       op->getParentOfType<ModuleOp>());
 
   Value alloc = rewriter.create<LocalAllocOp>(loc, memDescType, src);

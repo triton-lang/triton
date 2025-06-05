@@ -238,7 +238,6 @@ def NVWSArefIndex : Pass<"nvws-aref-index", "mlir::ModuleOp"> {
   ];
 }
 
-
 def NVWSArefDepthPass : Pass<"nvws-aref-depth", "mlir::ModuleOp"> {
   let summary = "add depth to arefs";
 
@@ -262,5 +261,53 @@ def NVWSArefDepthPass : Pass<"nvws-aref-depth", "mlir::ModuleOp"> {
            "number of MMA pipeline stages">
   ];
 }
+
+def NVWSArefLoweringPass : Pass<"nvws-aref-lowering", "mlir::ModuleOp"> {
+  let summary = "lower arefs";
+
+  let description = [{
+    Lower aref operations in TritonNvidiaGPUDialect.
+  }];
+
+  let dependentDialects = [
+    "mlir::triton::nvws::NVWSDialect",
+    "mlir::triton::TritonDialect",
+    "mlir::triton::gpu::TritonGPUDialect",
+    "mlir::triton::nvidia_gpu::TritonNvidiaGPUDialect"
+  ];
+}
+
+def NVWSFMHAMathLoopPipeline: Pass<"nvws-fmha-math-loop-pipeline", "mlir::ModuleOp"> {
+  let summary = "fmha math loop pipelining";
+
+  let description = [{
+    Pipeline the FMHA math loop.
+  }];
+
+  let dependentDialects = [
+    "mlir::triton::nvws::NVWSDialect",
+    "mlir::triton::TritonDialect",
+    "mlir::triton::gpu::TritonGPUDialect",
+    "mlir::triton::nvidia_gpu::TritonNvidiaGPUDialect"
+  ];
+}
+
+def NVWSBlackwellFA: Pass<"nvws-blackwell-fa", "mlir::ModuleOp"> {
+  let summary = "aref optimization passes for blackwell FA (experimental)";
+
+  let description = [{
+    Optimizations for blackwell FA (experimental).
+  }];
+
+  let constructor = "mlir::createNVWSBlackwellFAPass()";
+
+  let dependentDialects = [
+    "mlir::triton::nvws::NVWSDialect",
+    "mlir::triton::TritonDialect",
+    "mlir::triton::gpu::TritonGPUDialect",
+    "mlir::triton::nvidia_gpu::TritonNvidiaGPUDialect"
+  ];
+}
+
 
 #endif // NVWS_PASSES

@@ -45,9 +45,7 @@ constexpr static char AttrNumStagesName[] = "ttg.num-stages";
 constexpr static char AttrNumCTAsName[] = "ttg.num-ctas";
 constexpr static char AttrTargetName[] = "ttg.target";
 constexpr static char AttrNumThreadsPerWarp[] = "ttg.threads-per-warp";
-constexpr static char AttrWarpSpecializedName[] = "ttg.warp-specialized";
 constexpr static char AttrUseTtgWsName[] = "ttg.use-ttg-ws";
-constexpr static char AttrMathWGPipeName[] = "ttg.math-wg-pipe";
 
 // Find the contextual number of warps on which this operation is executed.
 int lookupNumWarps(Operation *op);

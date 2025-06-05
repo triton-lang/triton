@@ -25,11 +25,10 @@
 #include "mlir/Support/LLVM.h"
 #include "nvidia/include/Dialect/NVWS/IR/Dialect.h"
 #include "nvidia/include/Dialect/NVWS/Transforms/Passes.h"
+#include "nvidia/include/Dialect/NVWS/Transforms/Utility.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
-#include "triton/Dialect/TritonGPU/Transforms/PipeliningUtility.h"
-#include "triton/Dialect/TritonGPU/Transforms/WSUtility.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "llvm/Support/Debug.h"
 
@@ -52,7 +51,6 @@ using namespace triton;
 using namespace triton::gpu;
 using namespace triton::nvidia_gpu;
 using namespace triton::nvws;
-namespace ttng = triton::nvidia_gpu;
 
 class InitialAssignment {
 public:
@@ -168,49 +166,6 @@ private:
     }
   }
 
-  bool isMMAOperandLoadOp(Operation *op) {
-    // Check if the given LoadOp can be lowered to cpasync
-    if (!isa<LoadOp>(op))
-      return false;
-
-    LoadOp loadOp = cast<LoadOp>(op);
-    auto resType = loadOp.getResult().getType();
-    if (!isa<RankedTensorType>(resType)) {
-      return false;
-    }
-
-    LocalAllocOp localAlloc;
-
-    std::function<bool(Operation *)> isUsedByDot = [&](Operation *op) {
-      // transitively check if one of the user of the op is a dot op
-      if (isa<MMAv5OpInterface, WarpGroupDotOp>(op)) {
-        return true;
-      } else {
-        if (isa<LocalAllocOp>(op)) {
-          localAlloc = cast<LocalAllocOp>(op);
-        }
-        for (auto user : op->getUsers())
-          if (isUsedByDot(user))
-            return true;
-        return false;
-      }
-    };
-
-    // For now, allow cpasync only for loading dot operands
-    // When we add support for a specialized warp group for loading additional
-    // tensors used in the epilogue, we should relax this condition.
-    if (!isUsedByDot(op))
-      return false;
-
-    auto sharedEnc =
-        mlir::cast<SharedEncodingTrait>(localAlloc.getType().getEncoding());
-    auto copyVecBytes =
-        getCopyVecBytes(localAlloc.getSrc().getType(), sharedEnc);
-
-    // At least 4 bytes needed for cpasync
-    return copyVecBytes >= 4;
-  }
-
   void assignGroups(Operation *op) {
     OpBuilder builder(op);
 
@@ -295,11 +250,24 @@ public:
         DBGS() << "Using manual initial group assignments\n";
         m.dump();
       });
+
+      // Put local_alloc after load into the same group as load
+      m.walk([&](Operation *loadOp) {
+        if (isa<DescriptorOpInterface, triton::LoadOp>(loadOp)) {
+          auto groups = getGroups(loadOp);
+          for (auto user : loadOp->getUsers()) {
+            if (isa<triton::gpu::LocalAllocOp>(user)) {
+              setGroups(user, groups);
+            }
+          }
+        }
+      });
+
       // check control flow are not assigned to groups
       m.walk([&](Operation *op) {
         if (isa<ModuleOp, FuncOp, ReturnOp, scf::IfOp, scf::ForOp,
                 scf::YieldOp>(op) &&
-            op->hasAttr(ATTR_WSGROUPS)) {
+            op->hasAttr(ATTR_WS_GROUPS)) {
           op->emitError("op should not have initial group assignment");
           signalPassFailure();
         }

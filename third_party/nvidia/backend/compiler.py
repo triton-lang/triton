@@ -259,13 +259,12 @@ class CUDABackend(BaseBackend):
             cluster_info.clusterDimZ = opt.cluster_dims[2]
         pm = ir.pass_manager(mod.context)
         dump_enabled = pm.enable_debug()
-        passes.ttir.add_convert_to_ttgpuir(pm, f"cuda:{capability}", 
+        passes.ttir.add_convert_to_ttgpuir(pm, f"cuda:{capability}",
                                            opt.num_warps, 32, opt.num_ctas,
                                            False, # enableSourceRemat
                                            opt.num_stages,
                                            opt.enable_warp_specialization,
                                            opt.use_ttg_ws,
-                                           opt.math_wg_pipe,
                                            opt.wg_spec_override)
         # optimize TTGIR
         passes.ttgpuir.add_coalesce(pm)
@@ -293,6 +292,7 @@ class CUDABackend(BaseBackend):
                 nvidia.passes.nvws.add_aref_insertion(pm)
                 nvidia.passes.nvws.add_aref_code_split(pm)
                 nvidia.passes.nvws.add_aref_copy_elimination(pm)
+                nvidia.passes.nvws.add_blackwell_fa(pm)
                 if os.environ.get("DISABLE_AREF_COPY_LOWERING", "0") != "1":
                     nvidia.passes.nvws.add_aref_copy_lowering(pm)
                 nvidia.passes.nvws.add_aref_async_ops(pm)
@@ -304,7 +304,7 @@ class CUDABackend(BaseBackend):
                     if capability // 10 == 9:
                         # some cleanup after wg parititioning and aref generation
                         passes.common.add_canonicalizer(pm)
-                        passes.ttgpuir.add_fmha_math_loop_pipeline(pm)
+                        nvidia.passes.nvws.add_fmha_math_loop_pipeline(pm)
                     else:
                         print("WARNING: fmha_math_loop_pipeline is not supported on this architecture")
         if capability // 10 in [8, 9]:
@@ -349,7 +349,7 @@ class CUDABackend(BaseBackend):
         if capability // 10 >= 9:
             nvidia.passes.ttnvgpuir.add_fence_insertion(pm)
             if opt.enable_warp_specialization:
-                nvidia.passes.ttnvgpuir.add_aref_lowering(pm)
+                nvidia.passes.nvws.add_aref_lowering(pm)
                 if opt.use_ttg_ws:
                     nvidia.passes.ttnvgpuir.add_ttng_wg_to_ttg_ws(pm)
                 else:

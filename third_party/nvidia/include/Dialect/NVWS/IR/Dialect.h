@@ -46,10 +46,10 @@
 #define GET_OP_CLASSES
 #include "nvidia/include/Dialect/NVWS/IR/Ops.h.inc"
 
-namespace mlir {
-namespace triton {
-namespace nvws {} // namespace nvws
-} // namespace triton
-} // namespace mlir
+namespace mlir::triton::nvws {
+
+constexpr static char AttrWarpSpecializedName[] = "nvws.warp-specialized";
+
+} // namespace mlir::triton::nvws
 
 #endif // DIALECT_NVWS_IR_DIALECT_H_

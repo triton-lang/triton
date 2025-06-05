@@ -55,3 +55,9 @@ void mlir::triton::nvws::NVWSDialect::initialize() {
 
 #define GET_TYPEDEF_CLASSES
 #include "Dialect/NVWS/IR/Types.cpp.inc"
+
+bool mlir::triton::nvws::NVWSDialect::isWarpSpecialized(ModuleOp module) {
+  if (auto attr = module->getAttrOfType<BoolAttr>(AttrWarpSpecializedName))
+    return attr.getValue();
+  return false;
+}

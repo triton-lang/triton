@@ -161,6 +161,8 @@ def assert_close_verbose(actual, expected, rtol=2e-3, atol=2e-3, max_mismatches=
             print(
                 f"Mismatch at {tuple(mismatch_idx.tolist())}: actual={act_val}, expected={exp_val}, diff={top_k_vals[i]}"
             )
+        print("FAIL")
+        assert False
 
 
 def init_tensors(Z, H, N_CTX, HEAD_DIM, dtype, sm_scale):

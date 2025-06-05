@@ -2668,8 +2668,12 @@ struct TritonGPUVerifyTensorLayoutInterface
                   "is not in a context with `ttg.num-warps`.";
       }
 
-      if (!TritonGPUDialect::isWarpSpecialized(
-              op->getParentOfType<ModuleOp>())) {
+      bool isWarpSpecialized = false;
+      if (auto attr = op->getParentOfType<ModuleOp>()->getAttrOfType<BoolAttr>(
+              "nvws.warp-specialized")) {
+        isWarpSpecialized = attr.getValue();
+      }
+      if (!isWarpSpecialized) {
         // auto-ws-war: Disable layout check inside ttng.wg regions as they may
         // temporarily contain ops with layouts set for a different num_warps.
         // Example: with num_warps = 8, a tma_load_group with num_warps = 4:
@@ -3121,18 +3125,6 @@ int TritonGPUDialect::getThreadsPerWarp(ModuleOp module) {
   if (auto attr = module->getAttrOfType<IntegerAttr>(AttrNumThreadsPerWarp))
     return attr.getInt();
   return 32;
-}
-
-bool TritonGPUDialect::isWarpSpecialized(ModuleOp module) {
-  if (auto attr = module->getAttrOfType<BoolAttr>(AttrWarpSpecializedName))
-    return attr.getValue();
-  return false;
-}
-
-bool TritonGPUDialect::isMathWGPipe(ModuleOp module) {
-  if (auto attr = module->getAttrOfType<BoolAttr>(AttrMathWGPipeName))
-    return attr.getValue();
-  return false;
 }
 
 int TritonGPUDialect::getNumStages(ModuleOp module) {

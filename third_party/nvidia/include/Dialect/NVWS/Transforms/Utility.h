@@ -1,23 +1,51 @@
-#ifndef TRITONGPU_TRANSFORM_WSUTILITY_H_
-#define TRITONGPU_TRANSFORM_WSUTILITY_H_
+/*
+ * Copyright (c) 2025 NVIDIA Corporation & Affiliates. All rights reserved.
+ *
+ * Permission is hereby granted, free of charge, to any person obtaining
+ * a copy of this software and associated documentation files
+ * (the "Software"), to deal in the Software without restriction,
+ * including without limitation the rights to use, copy, modify, merge,
+ * publish, distribute, sublicense, and/or sell copies of the Software,
+ * and to permit persons to whom the Software is furnished to do so,
+ * subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice shall be
+ * included in all copies or substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+ * EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+ * MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
+ * IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
+ * CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,
+ * TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
+ * SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+ */
+
+#ifndef NVWS_TRANSFORM_UTILITY_H_
+#define NVWS_TRANSFORM_UTILITY_H_
 
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 
 namespace mlir {
 namespace triton {
+namespace nvws {
 
-namespace gpu {
+constexpr char ATTR_WS_MANUAL[] = "nvws.manual";
 
-constexpr char ATTR_WS_MANUAL[] = "ttg.manual-nvws";
-constexpr char ATTR_WS_PREFIX[] = "nvws.";
-constexpr char ATTR_WS_TMALOAD[] = "nvws.tma_load";
-constexpr char ATTR_WS_MMA[] = "nvws.mma";
-constexpr char ATTR_WS_EPILOGUE[] = "nvws.epilogue";
-constexpr char ATTR_WSGROUPS[] = "groups";
+constexpr char ATTR_WS_GROUPS[] = "groups";
+constexpr char ATTR_WS_PREFIX[] = "nvws.group.";
+constexpr char ATTR_WS_TMALOAD[] = "nvws.group.tma_load";
+constexpr char ATTR_WS_MMA[] = "nvws.group.mma";
+constexpr char ATTR_WS_EPILOGUE[] = "nvws.group.epilogue";
+
 constexpr char ATTR_WS_AREF_IF[] = "aref_if";
 constexpr char ATTR_WS_INIT_BARRIER_SYNC[] = "init_barrier_sync";
 constexpr char ATTR_WS_BARID[] = "barId";
+
+constexpr char ATTR_WS_START_WARP[] = "start_warp";
+constexpr char ATTR_WS_NUM_WARPS[] = "num_warps";
+constexpr char ATTR_WS_REG_COUNT[] = "reg_count";
 
 bool isManuallyGrouped(Operation *op);
 bool isManuallyGrouped(ModuleOp module);
@@ -101,18 +129,22 @@ struct TokenInfo {
 };
 TokenInfo getTokenProducerOp(Value result);
 
-MemDescType getDataMemDescType(MemDescType memDescType, bool mutableMemory);
-MemDescType getArefbufMemDescType(MemDescType memDescType, int32_t AREF_SIZE);
+gpu::MemDescType getDataMemDescType(gpu::MemDescType memDescType,
+                                    bool mutableMemory);
+gpu::MemDescType getArefbufMemDescType(gpu::MemDescType memDescType,
+                                       int32_t AREF_SIZE);
 bool isHopper(ModuleOp mod);
 Value mkConstant(OpBuilder &builder, Location loc, int value, int width,
                  std::set<std::string> groups);
 bool isConstant(Value value, int constant);
 
 Operation *createAlloc(OpBuilder &builder, Location loc,
-                       MemDescType memDescType, Value src);
+                       gpu::MemDescType memDescType, Value src);
 
-} // namespace gpu
+bool isMMAOperandLoadOp(Operation *op);
+
+} // namespace nvws
 } // namespace triton
 } // namespace mlir
 
-#endif // TRITONGPU_TRANSFORM_WSUTILITY_H_
+#endif // NVWS_TRANSFORM_UTILITY_H_

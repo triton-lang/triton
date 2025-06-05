@@ -2,6 +2,7 @@
 #include "mlir/Support/LogicalResult.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 #include "mlir/Transforms/Passes.h"
+#include "nvidia/include/Dialect/NVWS/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
@@ -45,7 +46,7 @@ public:
         rewriter.create<LocalAllocOp>(loc, barrierMemDescType, Value());
     rewriter.create<InitBarrierOp>(loc, barrierAlloc, 1);
     auto mod = op->template getParentOfType<ModuleOp>();
-    if (triton::gpu::TritonGPUDialect::isWarpSpecialized(mod))
+    if (triton::nvws::NVWSDialect::isWarpSpecialized(mod))
       insertBarrier(rewriter, loc);
     op.addCompletionBarrier(barrierAlloc,
                             rewriter.create<arith::ConstantIntOp>(loc, 1, 1));
@@ -53,7 +54,7 @@ public:
     rewriter.setInsertionPointAfter(op);
     Value phase = rewriter.create<arith::ConstantIntOp>(loc, 0, 32);
     rewriter.create<WaitBarrierOp>(loc, barrierAlloc, phase, op.getPred());
-    if (triton::gpu::TritonGPUDialect::isWarpSpecialized(mod))
+    if (triton::nvws::NVWSDialect::isWarpSpecialized(mod))
       insertBarrier(rewriter, loc);
     rewriter.create<InvalBarrierOp>(loc, barrierAlloc);
     return success();

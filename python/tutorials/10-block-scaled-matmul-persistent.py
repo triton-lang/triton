@@ -299,7 +299,7 @@ def block_scaled_matmul(
             enable_warp_specialization=ws,
         )
 
-    print(out.asm["ttgir"])
+    # print(out.asm["ttgir"])
     return output
 
 

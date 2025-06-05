@@ -5,6 +5,7 @@
 #include "mlir/Support/LLVM.h"
 #include "mlir/Support/LogicalResult.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
+#include "nvidia/include/Dialect/NVWS/Transforms/Utility.h"
 #include "triton/Analysis/Utility.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
@@ -14,7 +15,6 @@
 #include "triton/Dialect/TritonGPU/Transforms/DecomposeScaledBlocked.h"
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
-#include "triton/Dialect/TritonGPU/Transforms/WSUtility.h"
 #include "triton/Tools/LayoutUtils.h"
 #include "triton/Tools/StrUtil.h"
 #include "llvm/ADT/ArrayRef.h"
@@ -396,7 +396,7 @@ public:
                                       dotOp.getMaxNumImpreciseAcc());
     }
     // convert dot instruction
-    copyGroups(origDotOp, newDot);
+    nvws::copyGroups(origDotOp, newDot);
     rewriter.replaceOpWithNewOp<ConvertLayoutOp>(origDotOp, origDotOp.getType(),
                                                  newDot->getResult(0));
     return success();
@@ -557,7 +557,7 @@ public:
 
     auto ld = rewriter.create<triton::nvidia_gpu::TMEMLoadOp>(
         loc, newAccType, tokType, acc, /*dep=*/mma.getToken());
-    copyGroups(dotOp, mma);
+    nvws::copyGroups(dotOp, mma);
     rewriter.replaceOpWithNewOp<ConvertLayoutOp>(dotOp, oldRetType, ld);
     return success();
   }
@@ -750,7 +750,7 @@ public:
 
     auto ld = rewriter.create<triton::nvidia_gpu::TMEMLoadOp>(
         loc, newAccType, tokType, acc, mmaOp.getToken());
-    copyGroups(dotOp, mmaOp);
+    nvws::copyGroups(dotOp, mmaOp);
     rewriter.replaceOpWithNewOp<ConvertLayoutOp>(dotOp, oldRetType, ld);
     return success();
   }

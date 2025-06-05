@@ -30,16 +30,17 @@
 #include "mlir/IR/Location.h"
 #include "mlir/IR/PatternMatch.h"
 #include "mlir/IR/Value.h"
+#include "mlir/IR/Verifier.h"
 #include "mlir/Support/LLVM.h"
 #include "mlir/Support/LogicalResult.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 #include "mlir/Transforms/Passes.h"
 #include "nvidia/include/Dialect/NVWS/IR/Dialect.h"
 #include "nvidia/include/Dialect/NVWS/Transforms/Passes.h"
+#include "nvidia/include/Dialect/NVWS/Transforms/Utility.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
-#include "triton/Dialect/TritonGPU/Transforms/WSUtility.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/Support/Casting.h"
@@ -60,9 +61,22 @@ namespace {
 
 using namespace mlir;
 using namespace triton::gpu;
+using namespace triton::nvws;
 namespace tt = triton;
 namespace ttg = triton::gpu;
 namespace ttng = triton::nvidia_gpu;
+
+Operation *getParentInSameBlock(Block *targetBlock, Operation *op) {
+  Operation *current = op;
+
+  while (current) {
+    if (current->getBlock() == targetBlock)
+      return current;
+    current = current->getParentOp();
+  }
+
+  return nullptr; // op2 is not nested within op1's block
+}
 
 SetVector<Operation *> findCopyConsumers(Operation *op) {
   // if user output is not memDescType, we assume it is consumer of copyOp
@@ -137,6 +151,13 @@ ttng::ArefProducer getProducerKind(ttng::ArefCopyOp &copyOp) {
   } else {
     auto src = copyOp.getSrc();
     auto producer = src.getDefiningOp();
+    if (auto tmemAlloc = dyn_cast<ttng::TMEMAllocOp>(producer)) {
+      // only handle tmem_alloc with an operand for now as it implies tmem_Store
+      // tmem_alloc w/o operand doesn't have a store semantics and will be
+      // caught the NONE case so we know something is off
+      if (tmemAlloc.getSrc())
+        return ttng::ArefProducer::STTM;
+    }
     Value localStoreSrc;
     if (auto localAlloc = dyn_cast<ttg::LocalAllocOp>(producer)) {
       localStoreSrc = localAlloc.getSrc();
@@ -184,8 +205,8 @@ void removeConsumerCopyOp(Operation *copyOrCloneOp, Operation *lastConsumer) {
                              Operation *lastConsumer) {
     getExitOp->moveAfter(lastConsumer);
     OpBuilder builder(getExitOp);
-    getExitOp.getIndexMutable().assign(ttg::mkConstant(
-        builder, getExitOp.getLoc(), 0, 32, getGroups(getExitOp)));
+    getExitOp.getIndexMutable().assign(
+        mkConstant(builder, getExitOp.getLoc(), 0, 32, getGroups(getExitOp)));
   };
 
   auto consumerScope =
@@ -206,11 +227,20 @@ void removeConsumerCopyOp(Operation *copyOrCloneOp, Operation *lastConsumer) {
     //         .. use %srcBuf
     //      aref_get.exit %aref
 
-    moveGetExitAfter(getExitOp, lastConsumer);
-
     if (auto copyOp = dyn_cast<ttng::ArefCopyOp>(copyOrCloneOp)) {
       allocOp = copyOp.getDst().getDefiningOp();
       assert(isa<ttng::TMEMAllocOp>(allocOp));
+
+      // Skip copy elimination from get.enter for MMAv5 operations since this op
+      // both reads and updates its accumulator. This must be coordinated with
+      // its corresponding put operations. For example, in Flash Attention,
+      // MMAv5 operations have paired put/get operations that must be processed
+      // together. This is currently handled as a specialized optimization in
+      // the BlackwellFA pass.
+      // TODO: Develop a more general approach for handling MMAv5 copy
+      // elimination.
+      if (isa<ttng::MMAv5OpInterface>(lastConsumer))
+        return;
 
       // update token/buffer returned with get
       // XXX: this could lead in interesting behaviour, when copyOp is
@@ -239,11 +269,30 @@ void removeConsumerCopyOp(Operation *copyOrCloneOp, Operation *lastConsumer) {
       //
       //   we don't have use cases like that today
       copyOp.getToken().replaceAllUsesWith(copyOp.getSrcDep());
-      copyOp.getDst().replaceAllUsesWith(copyOp.getSrc());
+      copyOp.getDst().replaceUsesWithIf(
+          copyOp.getSrc(), [&](OpOperand &use) -> bool {
+            auto blockScopeCopyToUse =
+                getBlockScope(copyOp->getBlock(), use.getOwner()->getBlock());
+            if (blockScopeCopyToUse == BlockScope::SAME_BLOCK) {
+              // use is either last consumer, or is in between copy and last
+              // consumer
+              return use.getOwner() == lastConsumer ||
+                     (use.getOwner()->isBeforeInBlock(lastConsumer) &&
+                      copyOp->isBeforeInBlock(use.getOwner()));
+            } else if (blockScopeCopyToUse == BlockScope::NESTED_INSIDE) {
+              // if nested inside block, ensure that use is between enter & exit
+              auto parentOp =
+                  getParentInSameBlock(getEnterOp->getBlock(), use.getOwner());
+              return parentOp->isBeforeInBlock(getExitOp) &&
+                     getEnterOp->isBeforeInBlock(parentOp);
+            }
+            return false;
+          });
     } else {
       auto cloneOp = cast<ttng::ArefCloneOp>(copyOrCloneOp);
       cloneOp.getResult().replaceAllUsesWith(cloneOp.getSrc());
     }
+    moveGetExitAfter(getExitOp, lastConsumer);
   } else if (BlockScope::NESTED_INSIDE == consumerScope) {
     // When the consumer is nested inside a block containing the copy op,
     // we need to move getExitOp after the outermost parent operation in
@@ -269,9 +318,6 @@ void removeConsumerCopyOp(Operation *copyOrCloneOp, Operation *lastConsumer) {
     while (regionOp->getBlock() != copyOrCloneOp->getBlock())
       regionOp = regionOp->getParentOp();
 
-    // move exitOp right after the region_op
-    moveGetExitAfter(getExitOp, regionOp);
-
     if (auto copyOp = dyn_cast<ttng::ArefCopyOp>(copyOrCloneOp)) {
       allocOp = copyOp.getDst().getDefiningOp();
       assert(isa<ttng::TMEMAllocOp>(allocOp));
@@ -281,13 +327,15 @@ void removeConsumerCopyOp(Operation *copyOrCloneOp, Operation *lastConsumer) {
       auto cloneOp = cast<ttng::ArefCloneOp>(copyOrCloneOp);
       cloneOp.getResult().replaceAllUsesWith(cloneOp.getSrc());
     }
+    // move exitOp right after the region_op
+    moveGetExitAfter(getExitOp, regionOp);
   } else {
     llvm_unreachable("unsupported copy elimination case for consumer side");
   }
 
   // remove copyOp and allocOp
   copyOrCloneOp->erase();
-  if (allocOp)
+  if (allocOp && allocOp->use_empty())
     allocOp->erase();
 }
 
@@ -315,15 +363,45 @@ void removeProducerCopyOp(ttng::ArefCopyOp &copyOp) {
                                Operation *producer) {
     putEnterOp->moveBefore(producer);
     OpBuilder builder(putEnterOp);
-    putEnterOp.setIndex(ttg::mkConstant(builder, putEnterOp.getLoc(), 0, 32,
-                                        getGroups(putEnterOp)));
+    putEnterOp.setIndex(
+        mkConstant(builder, putEnterOp.getLoc(), 0, 32, getGroups(putEnterOp)));
   };
+
+  if (auto tok = copyOp.getToken()) {
+    if (!tok.use_empty()) {
+      assert(copyOp.getSrcDep());
+      if (!tok.hasOneUse())
+        return;
+      // If there is a use of the token, try to move that use before copyOp
+      // prior to eliminating copyOp. This ensures exitOp will be after the use.
+      auto &use = *tok.getUses().begin();
+      auto user = use.getOwner();
+      if (getBlockScope(copyOp->getBlock(), user->getBlock()) !=
+          BlockScope::SAME_BLOCK) {
+        return;
+      }
+      if (auto tmemLoadOp = dyn_cast<ttng::TMEMLoadOp>(user)) {
+        tmemLoadOp.getDepMutable().assign(copyOp.getSrcDep());
+        tmemLoadOp->moveBefore(copyOp);
+      } else if (auto tmemStoreOp = dyn_cast<ttng::TMEMStoreOp>(user)) {
+        tmemStoreOp.getDepMutable().assign(copyOp.getSrcDep());
+        tmemStoreOp->moveBefore(copyOp);
+      } else if (auto yieldOp = dyn_cast<scf::YieldOp>(user)) {
+        yieldOp.setOperand(use.getOperandNumber(), copyOp.getSrcDep());
+      } else {
+        // unsupport use of token, we don't eliminate this copy
+        return;
+      }
+    }
+  }
 
   if (copyOp.getSrcDep()) {
     // we store to mutable memory,
     // assume that buffer comes from tmem_alloc
     auto tmemAllocOp = cast<ttng::TMEMAllocOp>(copyOp.getSrc().getDefiningOp());
     assert(tmemAllocOp.getToken() && "token expected");
+    if (!tmemAllocOp.getToken().hasOneUse())
+      return;
     assert(tmemAllocOp.getToken().hasOneUse() &&
            "token is expected to have one use");
 
@@ -366,12 +444,30 @@ void removeProducerCopyOp(ttng::ArefCopyOp &copyOp) {
       movePutEnterBefore(putEnterOp, producer);
       assert(copyOp.getDstDep());
       tmemAllocOp.getToken().replaceAllUsesWith(copyOp.getDstDep());
-      tmemAllocOp.getResult().replaceAllUsesWith(copyOp.getDst());
+      copyOp.getSrc().replaceUsesWithIf(
+          copyOp.getDst(), [&](OpOperand &use) -> bool {
+            auto blockScopeCopyToUse =
+                getBlockScope(copyOp->getBlock(), use.getOwner()->getBlock());
+            if (blockScopeCopyToUse == BlockScope::SAME_BLOCK) {
+              // use is either producer, or is in between producer and copy
+              return use.getOwner() == producer ||
+                     (producer->isBeforeInBlock(use.getOwner()) &&
+                      use.getOwner()->isBeforeInBlock(copyOp));
+            } else if (blockScopeCopyToUse == BlockScope::NESTED_INSIDE) {
+              // if nested inside block, sure that use is between enter & exit
+              auto parentOp =
+                  getParentInSameBlock(putEnterOp->getBlock(), use.getOwner());
+              return parentOp->isBeforeInBlock(putExitOp) &&
+                     putEnterOp->isBeforeInBlock(parentOp);
+            }
+            return false;
+          });
     } else {
       return;
     }
     copyOp->erase();
-    tmemAllocOp->erase();
+    if (tmemAllocOp->use_empty())
+      tmemAllocOp->erase();
   } else {
     // if there is no token, we assume producer comes from
     // local/tmem_alloc with src operand, immutable buffer
@@ -431,9 +527,21 @@ void removeProducerCopyOp(ttng::ArefCopyOp &copyOp) {
 
 void removeCopyOrCloneOp(Operation *op,
                          DenseMap<Operation *, int> const &opOrdering) {
-  auto consumers = findCopyConsumers(op);
-  if (!consumers.empty()) {
-    auto lastConsumer = *llvm::max_element(consumers, [&](auto a, auto b) {
+
+  auto mod = op->getParentOfType<ModuleOp>();
+  if (isa<ttng::ArefGetEnterOp>(op->getOperand(0).getDefiningOp())) {
+    auto allConsumers = findCopyConsumers(op);
+    // Filter consumers that are in the same block or nested blocks
+    SetVector<Operation *> validConsumers;
+    for (auto consumer : allConsumers) {
+      if (getBlockScope(op->getBlock(), consumer->getBlock()) !=
+          BlockScope::UNSUPPORTED)
+        validConsumers.insert(consumer);
+    }
+    if (validConsumers.empty())
+      return;
+
+    auto lastConsumer = *llvm::max_element(validConsumers, [&](auto a, auto b) {
       return opOrdering.at(a) < opOrdering.at(b);
     });
     removeConsumerCopyOp(op, lastConsumer);

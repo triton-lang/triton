@@ -37,19 +37,17 @@
 #include "mlir/Transforms/Passes.h"
 #include "nvidia/include/Dialect/NVWS/IR/Dialect.h"
 #include "nvidia/include/Dialect/NVWS/Transforms/Passes.h"
+#include "nvidia/include/Dialect/NVWS/Transforms/Utility.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
-#include "triton/Dialect/TritonGPU/Transforms/WSUtility.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
+#include "triton/Dialect/TritonNvidiaGPU/Transforms/TMAUtilities.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/Support/Casting.h"
 
 #include <memory>
-
-// #define GEN_PASS_CLASSES
-// #include "nvidia/include/Dialect/NVWS/Transforms/Passes.h.inc"
 
 #define GEN_PASS_CLASSES
 #include "nvidia/include/Dialect/NVWS/Transforms/Passes.h.inc"
@@ -62,6 +60,7 @@ namespace {
 
 using namespace mlir;
 using namespace triton::gpu;
+using namespace triton::nvws;
 namespace tt = triton;
 namespace ttg = triton::gpu;
 namespace ttng = triton::nvidia_gpu;
@@ -228,27 +227,39 @@ ttng::ArefCreateOp createAref(OpBuilder &builder,
     // if result is a value, create memdesctype for location where value will
     // be stored
     MemDescType memDescType;
-    for (auto user : producedValue.result.getUsers()) {
-      // if user is localAlloc/localStore, uses their memDescType
-      if (auto localAlloc = dyn_cast<ttg::LocalAllocOp>(user)) {
-        memDescType = cast<MemDescType>(localAlloc.getResult().getType());
-        break;
-      } else if (auto localStore = dyn_cast<ttg::LocalStoreOp>(user)) {
-        memDescType = cast<MemDescType>(localStore.getDst().getType());
-        break;
+    Attribute SharedMemorySpace =
+        SharedMemorySpaceAttr::get(tensorType.getContext());
+    if (auto load = result.getDefiningOp<DescriptorOpInterface>()) {
+      auto encoding =
+          ttng::getEncodingFromDescriptor(load, tensorType, load.getDesc());
+      memDescType =
+          MemDescType::get(tensorType.getShape(), tensorType.getElementType(),
+                           encoding, SharedMemorySpace);
+    } else {
+      for (auto user : producedValue.result.getUsers()) {
+        // if user is localAlloc/localStore, uses their memDescType
+        if (auto localAlloc = dyn_cast<ttg::LocalAllocOp>(user)) {
+          memDescType = cast<MemDescType>(localAlloc.getResult().getType());
+          break;
+        } else if (auto localStore = dyn_cast<ttg::LocalStoreOp>(user)) {
+          memDescType = cast<MemDescType>(localStore.getDst().getType());
+          break;
+        }
       }
     }
     if (!memDescType) {
-      Attribute SharedMemorySpace =
-          SharedMemorySpaceAttr::get(tensorType.getContext());
+      // The right smem encoding cannot be inferred from the IR. This can
+      // happen, for example, in an attention kernel where smem is used to
+      // communicate between different warp groups. We need to pick a new
+      // encoding for such cases. For now, use a non-swizzled layout.
+      // TODO: Use a swizzled one when possible
       auto CTALayout = getCTALayout(tensorType.getEncoding());
-      // No swizzling for scale for now
       auto newOrder = getOrderForMemory(tensorType);
-      auto newLayout = SwizzledSharedEncodingAttr::get(
+      auto encoding = SwizzledSharedEncodingAttr::get(
           tensorType.getContext(), 1, 1, 1, newOrder, CTALayout);
       memDescType =
           MemDescType::get(tensorType.getShape(), tensorType.getElementType(),
-                           newLayout, SharedMemorySpace);
+                           encoding, SharedMemorySpace);
     }
     arefBufType = getArefbufMemDescType(memDescType, 1);
   } else {
@@ -259,19 +270,19 @@ ttng::ArefCreateOp createAref(OpBuilder &builder,
 
   auto arefTy = triton::nvidia_gpu::ArefType::get(
       builder.getContext(),
-      TypeArrayAttr::get(builder.getContext(), arefBufType));
+      ttg::TypeArrayAttr::get(builder.getContext(), arefBufType));
   assert((isa<SharedMemorySpaceAttr, ttng::TensorMemorySpaceAttr>(
       arefBufType.getMemorySpace())));
-  auto alloc = ttg::createAlloc(builder, loc, arefBufType, Value());
+  auto alloc = createAlloc(builder, loc, arefBufType, Value());
   alloc->setAttr("aref_buffer", builder.getUnitAttr());
   auto aref = builder.create<triton::nvidia_gpu::ArefCreateOp>(
       loc, arefTy, alloc->getResult(0));
   return aref;
 };
 
-void createArefPut(OpBuilder &builder, ttng::ArefCreateOp aref,
-                   std::string arefTag, ProducedValueInfo producedValue,
-                   GroupId producerGroup) {
+Value createArefPut(OpBuilder &builder, ttng::ArefCreateOp aref,
+                    std::string arefTag, ProducedValueInfo producedValue,
+                    GroupId producerGroup) {
   auto loc = producedValue.result.getLoc();
   auto arefBufType = cast<MemDescType>(aref.getOperand(0).getType());
   Value result = producedValue.result;
@@ -292,15 +303,18 @@ void createArefPut(OpBuilder &builder, ttng::ArefCreateOp aref,
   auto dataBuf = putEnterOp.getBuffers()[0];
 
   auto producerKind = ttng::ArefProducer::NONE;
+  Value copyToken;
   if (isa<AsyncTokenType>(result.getType())) {
     // when result is token, find associated buffer were result will be copied
     auto buffer = getTokenProducerOp(result).buffer;
     auto putToken = putEnterOp.getTokens()[0];
     assert(isa<AsyncTokenType>(putToken.getType()));
 
-    auto copyOp = builder.create<ttng::ArefCopyOp>(loc, Type{}, buffer, dataBuf,
-                                                   result, putToken);
+    auto copyOp =
+        builder.create<ttng::ArefCopyOp>(loc, builder.getType<AsyncTokenType>(),
+                                         buffer, dataBuf, result, putToken);
     setGroups(copyOp, {producerGroup});
+    copyToken = copyOp.getToken();
   } else if (auto memDescType = dyn_cast<MemDescType>(result.getType())) {
     auto copyOp = builder.create<ttng::ArefCopyOp>(loc, Type{}, result, dataBuf,
                                                    Value(), Value());
@@ -308,10 +322,10 @@ void createArefPut(OpBuilder &builder, ttng::ArefCreateOp aref,
   } else if (auto tensorType = dyn_cast<RankedTensorType>(result.getType())) {
     auto storeOp = builder.create<ttg::LocalStoreOp>(loc, result, dataBuf);
     setGroups(storeOp, {producerGroup});
-    if (isa<tt::DescriptorLoadOp, tt::DescriptorGatherOp>(
-            result.getDefiningOp()))
+    auto op = result.getDefiningOp();
+    if (op && isa<DescriptorOpInterface>(op))
       producerKind = ttng::ArefProducer::TMALDG;
-    else if (isa<tt::LoadOp>(result.getDefiningOp()))
+    else if (op && isa<tt::LoadOp>(op))
       producerKind = ttng::ArefProducer::LDGSTS;
     else
       producerKind = ttng::ArefProducer::STS;
@@ -325,11 +339,13 @@ void createArefPut(OpBuilder &builder, ttng::ArefCreateOp aref,
           ttng::ArefProducerAttr::get(aref.getContext(), producerKind)}));
   putExitOp->setAttr("aref_tag", builder.getStringAttr(arefTag));
   setGroups(putExitOp, {producerGroup});
+  return copyToken;
 };
 
 void createArefGet(OpBuilder &builder, ttng::ArefCreateOp aref,
                    std::string arefTag, ProducedValueInfo producedValue,
-                   SmallVector<Operation *> users, GroupSet consumerGroups, bool needArefPhi) {
+                   SetVector<Operation *> users, GroupSet consumerGroups,
+                   Value copyToken, bool needArefPhi) {
   OpBuilder::InsertionGuard g(builder);
   auto loc = producedValue.result.getLoc();
   auto arefBufType = cast<MemDescType>(aref.getOperand(0).getType());
@@ -417,8 +433,12 @@ void createArefGet(OpBuilder &builder, ttng::ArefCreateOp aref,
   */
 
   if (needArefPhi) {
-    newOperand = builder.create<ttng::ArefPhiOp>(loc, result.getType(), result,
-                                                 newOperand);
+    // If result is a token, the aref_copy in createArefPut will create a new
+    // token which must be used in aref_phi op to preserve memory
+    // dependencies if there are uses of the token in the producers group later.
+    auto localResult = copyToken ? copyToken : result;
+    newOperand = builder.create<ttng::ArefPhiOp>(loc, result.getType(),
+                                                 localResult, newOperand);
   }
 
   // update result operand with newOperand
@@ -426,7 +446,6 @@ void createArefGet(OpBuilder &builder, ttng::ArefCreateOp aref,
     bool updatedOperand = false;
     for (auto [i, operand] : llvm::enumerate(user->getOperands())) {
       if (result == operand) {
-        assert(!updatedOperand);
         user->setOperand(i, newOperand);
         updatedOperand = true;
       }
@@ -435,9 +454,146 @@ void createArefGet(OpBuilder &builder, ttng::ArefCreateOp aref,
   }
 };
 
+bool insertArefs(OpBuilder &builder, tt::FuncOp funcOp,
+                 ProducedValueInfo producedValue, int arefTag) {
+  GroupSet consumerGroups;
+  auto [producerGroups, result] = producedValue;
+  assert(!producerGroups.empty());
+
+  bool needArefPhi = false;
+  for (auto &useOpnd : result.getUses()) {
+    GroupSet userGroups;
+    if (auto forOp = dyn_cast<scf::ForOp>(useOpnd.getOwner())) {
+      auto idx = useOpnd.getOperandNumber();
+      if (idx < 3) {
+        auto groups = getGroups(forOp);
+        userGroups.insert(groups.begin(), groups.end());
+      } else {
+        auto groups = getGroupsIdx(forOp, idx - 3);
+        userGroups.insert(groups.begin(), groups.end());
+      }
+    } else if (auto yieldOp = dyn_cast<scf::YieldOp>(useOpnd.getOwner())) {
+      auto parentOp = yieldOp->getParentOp();
+      auto groups = getGroupsIdx(parentOp, useOpnd.getOperandNumber());
+      userGroups.insert(groups.begin(), groups.end());
+    } else {
+      userGroups = getGroups(useOpnd.getOwner());
+    }
+
+    for (auto group : userGroups) {
+      if (producerGroups.count(group) == 0) {
+        consumerGroups.insert(group);
+      } else {
+        needArefPhi = true;
+      }
+    }
+  }
+  if (consumerGroups.empty())
+    return false;
+
+  // for now we enforce that there is only one consumer group, but in
+  // future we may want to support multiple consumer groups
+  assert(consumerGroups.size() == 1);
+
+  // we also enforce that there is at least one user of the result
+  assert(llvm::count_if(result.getUsers(), [](auto) { return true; }) >= 1);
+
+  // if there are multitiple consumer groups, we need to generate as
+  // separate aref_get per consumer group
+
+  // if there are mutlilpe producer groups, we just pick first group to
+  // generate aref_put,
+
+  // if there are multiple producers, it is possible zip them in
+  // round-robin way, e.g.
+  //      (p1,p2,p3)x(c1,c2,c3,c4,c5,c6) -> (p1,c1) (p2,c2), (p3,c3),
+  //      (p1,c4), (p2,c5) (p3,c6) but it will require multilpe aref
+  //      buffers
+
+  SetVector<Operation *> users(result.getUsers().begin(),
+                               result.getUsers().end());
+
+  ttng::ArefCreateOp aref;
+  {
+    OpBuilder::InsertionGuard g(builder);
+    builder.setInsertionPointToStart(&funcOp.getBody().front());
+    aref = createAref(builder, producedValue);
+  }
+
+  // for now we set put/get right after producing op, e.g.
+
+  //     %val = ..  @gr1
+  //       ..
+  //      .. = val  @gr2
+
+  //      %val = ..   @gr1
+  //      put %val    @gr2
+  //      %val = get  @gr2
+  //        ..
+  //      .. = val    @gr2
+  //
+  // However, in future we may want to consider where consumer is, e.g.
+
+  //   for  {
+  //     %val = ..  @gr1
+  //      if {
+  //           .. = %val @gr2
+  //         }
+  //    }
+
+  //  we may want to have put/get next to consumer, e.g.
+
+  //   for  {
+  //     %val = ..      @gr1
+  //      if {
+  //            put %val   @gr1
+  //            %val = get %gr2
+  //            .. = %val @gr2
+  //         }
+  //   }
+
+  // that can be important if we'd want to support epilogue decoupling
+  // in flattened loops.
+
+  // in nested loop, the put/get will be placed after for-loop, because thi
+  // is where final tmem produce token will be, e.g.
+
+  // %tok0 = ..
+  // %tok1 = for  %tok0 = %tok  {
+  //           %tok1 = mma .. %tok0 ..  @gr1
+  //           yield %tok1
+  //          }
+  //  ..
+  //  tmem_load .. %tok1  @gr2
+
+  // so aref will be placed after %tok1 producer, which is for-loop
+
+  // %tok0 = ..
+  // %tok1 = for  %tok0 = %tok  {
+  //           %tok1 = mma .. %tok0 .. @gr1
+  //           yield %tok1
+  //          }
+  //  put %buf  @gr1
+  //  get %buf  @gr2
+  //  ..
+  //  tmem_load .. %tok1 @gr2
+  //
+  // That also help with perf in MOE kernel, where we want to have
+  // aref_get before bias-load, so that convert_layout + tmem_load could be
+  // intearleaved
+
+  auto tag = std::string("aref_") + std::to_string(arefTag);
+  auto copyToken =
+      createArefPut(builder, aref, tag, producedValue, *producerGroups.begin());
+  createArefGet(builder, aref, tag, producedValue, users, consumerGroups,
+                copyToken, needArefPhi);
+  return true;
+}
+
 void runArefInsertionOnFunc(triton::FuncOp funcOp) {
   OpBuilder builder(funcOp);
 
+  // Gather all operations from the function body before inserting any arefs.
   SmallVector<Operation *> opsToArefy;
   funcOp.walk([&](Operation *op) {
     if (isa<scf::YieldOp, triton::FuncOp, triton::ReturnOp>(op))
@@ -448,138 +604,52 @@ void runArefInsertionOnFunc(triton::FuncOp funcOp) {
 
   int arefTag = 0;
 
-  for (auto op : opsToArefy) {
+  // Visit all for-ops to check if we need to insert arefs between block
+  // arguments and their users. This handles cases where a value is produced in
+  // one group but consumed in another across loop iterations, e.g.:
+  //
+  //     %val0 = .. @gr1
+  //     %ret = for .. iter_args(%val = %val0) {
+  //       ..  =  %val   @gr2
+  //       %val1 = ..     @gr1
+  //       yield %val1
+  //     } groups=[@gr1,@gr2], groups.0=[@gr1]
+  //
+  //  will insert aref between block argument and its use
+  //
+  //     %val0 = .. @gr1
+  //     %ret = for .. iter_args(%val = %val0) {
+  //        aref_put %val    @gr1
+  //        %val' = aref_get %gr2
+  //          ..  =  %val'   @gr2
+  //        %val1 = ..       @gr1
+  //        yield %val1
+  //     } groups=[@gr1,@gr2], groups.0=[@gr1]
+  //
+  funcOp.walk([&](scf::ForOp forOp) {
+    auto body = forOp.getBody();
+    OpBuilder builder(forOp);
+    for (auto [idx, arg] : llvm::enumerate(body->getArguments())) {
+      if (idx > 0) {
+        // insert arefs only for loop-carried values
+        auto groups = getGroupsIdx(forOp, idx - 1);
+        auto producedValue = ProducedValueInfo{groups, arg};
+        builder.setInsertionPointToStart(body);
+        if (insertArefs(builder, funcOp, producedValue, arefTag))
+          arefTag++;
+      }
+    }
+  });
 
+  // Handle ops in the function body
+  for (auto op : opsToArefy) {
     // otherwise we need to place put/get
     auto producedValues = getProducedValues(op);
-
     for (auto producedValue : producedValues) {
-      GroupSet consumerGroups;
-      bool needArefPhi = false;
-      auto [producerGroups, result] = producedValue;
-
-      for (auto &useOpnd : result.getUses()) {
-        GroupSet userGroups;
-        if (auto forOp = dyn_cast<scf::ForOp>(useOpnd.getOwner())) {
-          auto idx = useOpnd.getOperandNumber();
-          if (idx < 3) {
-            auto groups = getGroups(forOp);
-            userGroups.insert(groups.begin(), groups.end());
-          } else {
-            auto groups = getGroupsIdx(forOp, idx - 3);
-            userGroups.insert(groups.begin(), groups.end());
-          }
-        } else if (auto yieldOp = dyn_cast<scf::YieldOp>(useOpnd.getOwner())) {
-          auto parentOp = yieldOp->getParentOp();
-          auto groups = getGroupsIdx(parentOp, useOpnd.getOperandNumber());
-          userGroups.insert(groups.begin(), groups.end());
-        } else {
-          userGroups = getGroups(useOpnd.getOwner());
-        }
-
-        for (auto group : userGroups) {
-          if (producerGroups.count(group) == 0) {
-            consumerGroups.insert(group);
-          } else {
-            needArefPhi = true;
-          }
-        }
-      }
-      if (consumerGroups.empty())
-        continue;
-
-      // for now we enforce that there is only one consumer group, but in
-      // future we may want to support multiple consumer groups
-      assert(consumerGroups.size() == 1);
-
-      // we also enforce that there is at least one user of the result
-      assert(llvm::count_if(result.getUsers(), [](auto) { return true; }) >= 1);
-
-      // if there are multitiple consumer groups, we need to generate as
-      // separate aref_get per consumer group
-
-      // if there are mutlilpe producer groups, we just pick first group to
-      // generate aref_put,
-
-      // if there are multiple producers, it is possible zip them in
-      // round-robin way, e.g.
-      //      (p1,p2,p3)x(c1,c2,c3,c4,c5,c6) -> (p1,c1) (p2,c2), (p3,c3),
-      //      (p1,c4), (p2,c5) (p3,c6) but it will require multilpe aref
-      //      buffers
-
-      SmallVector<Operation *> users(result.getUsers().begin(),
-                                     result.getUsers().end());
-
-      builder.setInsertionPointToStart(&funcOp.getBody().front());
-      auto aref = createAref(builder, producedValue);
-
-      // for now we set put/get right after producing op, e.g.
-
-      //     %val = ..  @gr1
-      //       ..
-      //      .. = val  @gr2
-
-      //      %val = ..   @gr1
-      //      put %val    @gr2
-      //      %val = get  @gr2
-      //        ..
-      //      .. = val    @gr2
-      //
-      // However, in future we may want to consider where consumer is, e.g.
-
-      //   for  {
-      //     %val = ..  @gr1
-      //      if {
-      //           .. = %val @gr2
-      //         }
-      //    }
-
-      //  we may want to have put/get next to consumer, e.g.
-
-      //   for  {
-      //     %val = ..      @gr1
-      //      if {
-      //            put %val   @gr1
-      //            %val = get %gr2
-      //            .. = %val @gr2
-      //         }
-      //   }
-
-      // that can be important if we'd want to support epilogue decoupling
-      // in flattened loops.
-
-      // in nested loop, the put/get will be placed after for-loop, because thi
-      // is where final tmem produce token will be, e.g.
-
-      // %tok0 = ..
-      // %tok1 = for  %tok0 = %tok  {
-      //           %tok1 = mma .. %tok0 ..  @gr1
-      //           yield %tok1
-      //          }
-      //  ..
-      //  tmem_load .. %tok1  @gr2
-
-      // so aref will be placed after %tok1 producer, which is for-loop
-
-      // %tok0 = ..
-      // %tok1 = for  %tok0 = %tok  {
-      //           %tok1 = mma .. %tok0 .. @gr1
-      //           yield %tok1
-      //          }
-      //  put %buf  @gr1
-      //  get %buf  @gr2
-      //  ..
-      //  tmem_load .. %tok1 @gr2
-      //
-      // That also help with perf in MOE kernel, where we want to have
-      // aref_get before bias-load, so that convert_layout + tmem_load could be
-      // intearleaved
-
+      OpBuilder builder(op);
       builder.setInsertionPointAfter(op);
-      auto tag = std::string("aref_") + std::to_string(arefTag);
-      createArefPut(builder, aref, tag, producedValue, *producerGroups.begin());
-      createArefGet(builder, aref, tag, producedValue, users, consumerGroups, needArefPhi);
-      arefTag++;
+      if (insertArefs(builder, funcOp, producedValue, arefTag))
+        arefTag++;
     }
   }
 }

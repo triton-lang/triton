@@ -1,3 +1,4 @@
+#include "nvidia/include/Dialect/NVWS/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/Schedule.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
@@ -65,7 +66,7 @@ static void createTMAAsyncCopy(scf::ForOp forOp, const TMAStore &store,
   // that we are the only user of the CopyLocalToGlobal.
   builder.create<ttng::TMAStoreWaitOp>(loc, 0);
 
-  auto isWs = triton::gpu::TritonGPUDialect::isWarpSpecialized(
+  auto isWs = triton::nvws::NVWSDialect::isWarpSpecialized(
       forOp->getParentOfType<ModuleOp>());
   // Ensure all threads arrive at this point to avoid race conditions between
   // two TMA stores in Blackwell tests with sub-tiling enabled. Without this

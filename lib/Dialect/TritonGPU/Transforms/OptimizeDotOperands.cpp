@@ -3,6 +3,7 @@
 #include "mlir/Support/LogicalResult.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 #include "mlir/Transforms/Passes.h"
+#include "nvidia/include/Dialect/NVWS/Transforms/Utility.h"
 #include "triton/Analysis/Utility.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Attributes.h"
@@ -10,7 +11,6 @@
 #include "triton/Dialect/TritonGPU/IR/LayoutUtility.h"
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
-#include "triton/Dialect/TritonGPU/Transforms/WSUtility.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "triton/Tools/LinearLayout.h"
 #include <memory>
@@ -137,7 +137,7 @@ public:
                                                   trans.getSrc());
     auto newTrans = rewriter.replaceOpWithNewOp<MemDescTransOp>(
         allocOp, newAlloc, ArrayRef<int32_t>({1, 0}));
-    copyGroups(trans, newTrans);
+    nvws::copyGroups(trans, newTrans);
     return success();
   }
 };

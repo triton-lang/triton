@@ -472,6 +472,22 @@ OpFoldResult LocalAllocOp::fold(FoldAdaptor adaptor) {
   auto loadSrc = localLoadOp.getSrc();
   if (loadSrc.getType() != getType())
     return {};
+  // Folding across `aref_get.exit` ops is invalid. For example,
+  // optimizing
+  //   %buf = aref_get.enter %aref
+  //   %val = ttg.local_load %buf
+  //   aref_get.exit %aref
+  //   %buf1 = ttg.local_alloc %val  <downstream_code>
+
+  //    ... use %buf1
+
+  // to the following is incorrect:
+  //   %buf = aref_get.enter %aref
+  //   aref_get.exit %aref
+
+  //   ... use %buf
+  if (isa<nvidia_gpu::ArefGetEnterOp>(loadSrc.getDefiningOp()))
+    return {};
   return loadSrc;
 }
 

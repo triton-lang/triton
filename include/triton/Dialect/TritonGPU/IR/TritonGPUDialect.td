@@ -29,8 +29,6 @@ def TritonGPU_Dialect : Dialect {
     static int getNumCTAs(ModuleOp mod);
     static int getNumStages(ModuleOp mod);
     static int getThreadsPerWarp(ModuleOp mod);
-    static bool isWarpSpecialized(ModuleOp mod);
-    static bool isMathWGPipe(ModuleOp mod);
 
     private:
       LinearLayoutCache llCache;

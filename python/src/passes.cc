@@ -43,15 +43,13 @@ void init_triton_passes_ttir(py::module &&m) {
   ADD_PASS_WRAPPER_0("add_loop_unroll", createLoopUnrollPass);
   ADD_PASS_WRAPPER_0("add_triton_licm", createLoopInvariantCodeMotionPass);
   using tyMap = std::vector<std::tuple<std::string, int, int>>;
-  ADD_PASS_WRAPPER_10("add_convert_to_ttgpuir",
-                      createConvertTritonToTritonGPUPass, const std::string &,
-                      int, int, int, bool, int, bool, bool, bool, tyMap &);
+  ADD_PASS_WRAPPER_9("add_convert_to_ttgpuir",
+                     createConvertTritonToTritonGPUPass, const std::string &,
+                     int, int, int, bool, int, bool, bool, tyMap &);
 }
 
 void init_triton_passes_ttgpuir(py::module &&m) {
   using namespace mlir::triton::gpu;
-  ADD_PASS_WRAPPER_0("add_fmha_math_loop_pipeline",
-                     createTritonGPUFMHAMathLoopPipeline);
   ADD_PASS_WRAPPER_0("add_coalesce", createTritonGPUCoalesce);
   ADD_PASS_WRAPPER_0("add_optimize_thread_locality",
                      createTritonGPUOptimizeThreadLocality);

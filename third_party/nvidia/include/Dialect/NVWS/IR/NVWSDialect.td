@@ -37,6 +37,10 @@ def NVWS_Dialect : Dialect {
     "triton::gpu::TritonGPUDialect",
   ];
 
+  let extraClassDeclaration = [{
+    static bool isWarpSpecialized(ModuleOp mod);
+  }];
+
   let useDefaultTypePrinterParser = 1;
   let useDefaultAttributePrinterParser = 1;
   let usePropertiesForAttributes = 1;

@@ -6,11 +6,12 @@
 #include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Transforms/DialectConversion.h"
+#include "nvidia/include/Dialect/NVWS/IR/Dialect.h"
+#include "nvidia/include/Dialect/NVWS/Transforms/Utility.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/TritonGPUConversion.h"
-#include "triton/Dialect/TritonGPU/Transforms/WSUtility.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "llvm/ADT/APSInt.h"
 #include <numeric>
@@ -834,8 +835,8 @@ public:
   // constructor with some parameters set explicitly.
   ConvertTritonToTritonGPU(
       const std::string &target, int numWarps, int threadsPerWarp, int numCTAs,
-      bool enableSourceRemat, int numStages, bool warpSpecialized, bool useTtgWs,
-      bool mathWGPipe,
+      bool enableSourceRemat, int numStages, bool warpSpecialized,
+      bool useTtgWs,
       std::vector<std::tuple<std::string, int, int>> const &wgSpec) {
     this->numWarps = numWarps;
     this->numStages = numStages;
@@ -843,11 +844,10 @@ public:
     this->numCTAs = numCTAs;
     this->warpSpecialized = warpSpecialized;
     this->useTtgWs = useTtgWs;
-    this->mathWGPipe = mathWGPipe;
     this->target = target;
     this->enableSourceRemat = enableSourceRemat;
     for (auto &[wgName, startWarp, numWarps] : wgSpec) {
-      this->wgName.push_back(triton::gpu::ATTR_WS_PREFIX + wgName);
+      this->wgName.push_back(triton::nvws::ATTR_WS_PREFIX + wgName);
       this->wgStartWarp.push_back(startWarp);
       this->wgNumWarps.push_back(numWarps);
     }
@@ -889,11 +889,8 @@ public:
     mod->setAttr(AttrNumCTAsName, b.getI32IntegerAttr(numCTAs));
     mod->setAttr(AttrTargetName, b.getStringAttr(this->target.getValue()));
     if (warpSpecialized.getValue()) {
-      mod->setAttr(AttrWarpSpecializedName,
+      mod->setAttr(mlir::triton::nvws::AttrWarpSpecializedName,
                    b.getBoolAttr(warpSpecialized.getValue()));
-    }
-    if (mathWGPipe.getValue()) {
-      mod->setAttr(AttrMathWGPipeName, b.getBoolAttr(mathWGPipe.getValue()));
     }
     if (useTtgWs.getValue()) {
       mod->setAttr(AttrUseTtgWsName, b.getBoolAttr(useTtgWs.getValue()));
@@ -904,7 +901,7 @@ public:
         assert(wgName.size() == wgNumWarps.size());
         for (const auto &[name, wgStartWarp, numWraps] :
              llvm::zip(wgName, wgStartWarp, wgNumWarps)) {
-          mkGroup(mod, name, {wgStartWarp, numWraps});
+          mlir::triton::nvws::mkGroup(mod, name, {wgStartWarp, numWraps});
         }
       }
     }
@@ -925,11 +922,10 @@ std::unique_ptr<OperationPass<ModuleOp>>
 mlir::triton::createConvertTritonToTritonGPUPass(
     const std::string &target, int numWarps, int threadsPerWarp, int numCTAs,
     bool enableSourceRemat, int numStages, bool warpSpecialized, bool useTtgWs,
-    bool mathWGPipe,
     std::vector<std::tuple<std::string, int, int>> const &wgSpec) {
   return std::make_unique<::ConvertTritonToTritonGPU>(
       target, numWarps, threadsPerWarp, numCTAs, enableSourceRemat, numStages,
-      warpSpecialized, useTtgWs, mathWGPipe, wgSpec);
+      warpSpecialized, useTtgWs, wgSpec);
 }
 
 std::unique_ptr<OperationPass<ModuleOp>>

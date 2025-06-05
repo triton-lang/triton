@@ -49,6 +49,8 @@ def matmul_kernel(  #
 @pytest.mark.parametrize("BLOCK_K", [64, 128])
 @pytest.mark.parametrize("NUM_WARPS", [4])
 def test_simple_matmul(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, NUM_WARPS, device):
+    if not torch.cuda.is_available() or torch.cuda.get_device_capability()[0] < 9:
+        pytest.skip("Test requires at least Hopper target.")
     NUM_STAGES = 3
     torch.manual_seed(42)
     dtype = torch.float16
@@ -152,6 +154,8 @@ def simple_persistent_kernel(a_ptr, b_ptr, c_ptr, M, N, K, stride_am, stride_ak,
 @pytest.mark.parametrize("BLOCK_K", [64, 128])
 @pytest.mark.parametrize("NUM_WARPS", [4])
 def test_simple_persistent_matmul(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, NUM_WARPS, device):
+    if not torch.cuda.is_available() or torch.cuda.get_device_capability()[0] < 9:
+        pytest.skip("Test requires at least Hopper target.")
     NUM_STAGES = 3
     torch.manual_seed(42)
     dtype = torch.float16
@@ -211,6 +215,8 @@ def matmul_kernel_mixed_tma_cpasync(  #
 @pytest.mark.parametrize("BLOCK_K", [64, 128])
 @pytest.mark.parametrize("NUM_WARPS", [4])
 def test_mixed_tma_cpasync(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, NUM_WARPS, device):
+    if not torch.cuda.is_available() or torch.cuda.get_device_capability()[0] < 9:
+        pytest.skip("Test requires at least Hopper target.")
     NUM_STAGES = 3
     torch.manual_seed(42)
     dtype = torch.float16

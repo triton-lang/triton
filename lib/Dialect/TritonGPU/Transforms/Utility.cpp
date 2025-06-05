@@ -10,6 +10,7 @@
 #include "mlir/IR/IRMapping.h"
 #include "mlir/Support/LLVM.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
+#include "nvidia/include/Dialect/NVWS/Transforms/Utility.h"
 #include "triton/Analysis/AxisInfo.h"
 #include "triton/Conversion/TritonToTritonGPU/TritonToTritonGPUPass.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
@@ -17,7 +18,6 @@
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/LinearLayoutConversions.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
-#include "triton/Dialect/TritonGPU/Transforms/WSUtility.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "llvm/ADT/SetOperations.h"
 #include "llvm/Support/Debug.h"
@@ -1551,10 +1551,14 @@ Operation *insertBarrier(OpBuilder &rewriter, Location loc) {
     return rewriter.create<arith::ConstantIntOp>(loc, c, 32);
   };
 
-  auto barrier = [&](int barId, int numWarps) {
+  auto barrier = [&](int barId, int numWarps) -> Operation * {
     // TODO: Remove the dependency on NVVM dialect?
-    return rewriter.create<NVVM::BarrierOp>(loc, makeCstI32(barId),
-                                            makeCstI32(numWarps * 32));
+    if (numWarps == 1) {
+      return rewriter.create<NVVM::SyncWarpOp>(loc, makeCstI32(-1));
+    } else {
+      return rewriter.create<NVVM::BarrierOp>(loc, makeCstI32(barId),
+                                              makeCstI32(numWarps * 32));
+    }
   };
 
   {
@@ -1565,7 +1569,7 @@ Operation *insertBarrier(OpBuilder &rewriter, Location loc) {
       block = block->getParentOp()->getBlock();
     if (block && block->getParentOp()) {
       auto wgOp = cast<triton::nvidia_gpu::WarpGroupOp>(block->getParentOp());
-      auto barId = triton::gpu::getBarrierID(wgOp);
+      auto barId = nvws::getBarrierID(wgOp);
       int numWarps = wgOp.getNumWarps();
       return barrier(barId, numWarps);
     }

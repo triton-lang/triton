@@ -36,11 +36,11 @@
 #include "mlir/Transforms/Passes.h"
 #include "nvidia/include/Dialect/NVWS/IR/Dialect.h"
 #include "nvidia/include/Dialect/NVWS/Transforms/Passes.h"
+#include "nvidia/include/Dialect/NVWS/Transforms/Utility.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
-#include "triton/Dialect/TritonGPU/Transforms/WSUtility.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/Support/Casting.h"
@@ -61,6 +61,7 @@ namespace {
 
 using namespace mlir;
 using namespace triton::gpu;
+using namespace triton::nvws;
 namespace tt = triton;
 namespace ttg = triton::gpu;
 namespace ttng = triton::nvidia_gpu;
@@ -102,19 +103,27 @@ LogicalResult lowerArefCopyOp(ttng::ArefCopyOp op, OpBuilder &rewriter) {
                                           memDescType.getElementType(),
                                           newDistributedEncoding);
 
-    auto load =
-        rewriter.create<ttng::TMEMLoadOp>(op.getLoc(), loadType, src, srcTok);
-    Type tokTy = op.getToken() ? AsyncTokenType::get(op.getContext()) : Type();
+    auto load = rewriter.create<ttng::TMEMLoadOp>(
+        op.getLoc(), loadType, rewriter.getType<ttg::AsyncTokenType>(), src,
+        srcTok);
     auto vTrue = rewriter.create<arith::ConstantIntOp>(load.getLoc(), 1, 1);
     auto store = rewriter.create<ttng::TMEMStoreOp>(
-        op.getLoc(), tokTy, dst, op.getDstDep(), load.getResult(), vTrue);
+        op.getLoc(), rewriter.getType<AsyncTokenType>(), dst, op.getDstDep(),
+        load.getResult(), vTrue);
 
     if (auto tok = store.getToken())
       op.getToken().replaceAllUsesWith(tok);
 
-    auto enterOp =
-        tokTy ? op.getSrc().getDefiningOp<ttng::ArefEnterOpInterface>()
-              : op.getDst().getDefiningOp<ttng::ArefEnterOpInterface>();
+    // Check if this is a copy from aref_buffer (aref_get) by checking if src is
+    // an enter op, or a copy into aref_buffer (aref_put) by checking if dst is
+    // an enter op
+    ttng::ArefEnterOpInterface enterOp =
+        op.getSrc().getDefiningOp<ttng::ArefGetEnterOp>();
+    bool isGet = true;
+    if (!enterOp) {
+      enterOp = op.getDst().getDefiningOp<ttng::ArefPutEnterOp>();
+      isGet = false;
+    }
     auto isEnterPut = isa<ttng::ArefPutEnterOp>(enterOp);
     auto arefTag = enterOp->getAttrOfType<StringAttr>("aref_tag").str();
     ttng::ArefExitOpInterface exitOp;
@@ -130,7 +139,7 @@ LogicalResult lowerArefCopyOp(ttng::ArefCopyOp op, OpBuilder &rewriter) {
     }
 
     Attribute attribute;
-    if (tokTy) {
+    if (isGet) {
       attribute = ttng::ArefConsumerAttr::get(rewriter.getContext(),
                                               ttng::ArefConsumer::LDTM);
     } else {

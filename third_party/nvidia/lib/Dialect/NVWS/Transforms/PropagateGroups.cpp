@@ -25,10 +25,10 @@
 #include "mlir/Support/LLVM.h"
 #include "nvidia/include/Dialect/NVWS/IR/Dialect.h"
 #include "nvidia/include/Dialect/NVWS/Transforms/Passes.h"
+#include "nvidia/include/Dialect/NVWS/Transforms/Utility.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
-#include "triton/Dialect/TritonGPU/Transforms/WSUtility.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "llvm/Support/Debug.h"
 
@@ -94,7 +94,7 @@ SetVector<Operation *> findRoots(ModuleOp module) {
   // that are not control flow
   SetVector<Operation *> roots;
   module.walk([&](Operation *op) {
-    if (op->hasAttr(ATTR_WSGROUPS) && !isControlFlowOp(op)) {
+    if (op->hasAttr(ATTR_WS_GROUPS) && !isControlFlowOp(op)) {
       roots.insert(op);
     }
   });
@@ -303,7 +303,7 @@ public:
       // note: if operand is defined by an op that has groups,
       // don't search it
       auto op = value.getDefiningOp();
-      if (op && op->hasAttr(ATTR_WSGROUPS)) {
+      if (op && op->hasAttr(ATTR_WS_GROUPS)) {
         continue;
       }
       stack.push(value);
@@ -325,7 +325,7 @@ public:
       auto op = value.getDefiningOp();
 
       // set groups for defining op
-      if (op && !op->hasAttr(ATTR_WSGROUPS) && !isControlFlowOp(op)) {
+      if (op && !op->hasAttr(ATTR_WS_GROUPS) && !isControlFlowOp(op)) {
         // assign groups
         addOperationGroups(op, groups);
       }
@@ -335,7 +335,7 @@ public:
       // search predecessors
       for (auto it : getPredecessors(value)) {
         auto op = it.getDefiningOp();
-        if (op && op->hasAttr(ATTR_WSGROUPS)) {
+        if (op && op->hasAttr(ATTR_WS_GROUPS)) {
           continue;
         }
         if (visited.count(it) == 0) {
@@ -349,7 +349,7 @@ public:
         auto [values, ops] = getSuccessors(value);
         for (auto it : values) {
           auto op = it.getDefiningOp();
-          if (op && op->hasAttr(ATTR_WSGROUPS)) {
+          if (op && op->hasAttr(ATTR_WS_GROUPS)) {
             continue;
           }
           if (visited.count(it) == 0) {
@@ -361,7 +361,7 @@ public:
         // we assign them to the group, if they have none,
         // then search their operands
         for (auto op : ops) {
-          if (op->hasAttr(ATTR_WSGROUPS)) {
+          if (op->hasAttr(ATTR_WS_GROUPS)) {
             continue;
           }
           addOperationGroups(op, groups);
