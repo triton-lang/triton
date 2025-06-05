@@ -361,7 +361,7 @@ if __name__ == "__main__":
         validate_block_scaled(8192, 8192, 8192, block_scale_type=args.format)
 
         if args.bench:
-            proton.start("block_scaled_matmul", hook="triton")
+            proton.start("block_scaled_matmul", hook="launch")
             proton.deactivate(0)  # Skip argument creation
             for K in range(args.K_range[0], args.K_range[1] + 1, args.K_step):
                 bench_block_scaled(K, reps=10000, block_scale_type=args.format)
