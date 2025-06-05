@@ -196,3 +196,21 @@ def test_aggregate_with_constexpr():
     # CHECK: tt.func private @"test_frontend.add_rhs_constexpr__test_frontend.AggregateWithConstexpr<i32S4S, constexpr[42]>
     # CHECK: %cst = arith.constant dense<42> : tensor<4xi32>
     # CHECK: arith.addi %arg0, %cst : tensor<4xi32>
+
+
+@tl.constexpr_function
+def constexpr_function(x):
+    return x + 1
+
+
+@filecheck_test
+@triton.jit
+def test_constexpr_function_from_jit():
+    # CHECK-LABEL: test_constexpr_function
+    x: tl.constexpr = constexpr_function(7)
+    # CHECK: make_range {end = 8 : i32, start = 0 : i32}
+    tl.arange(0, x)
+
+
+def test_constexpr_function_from_pythin():
+    assert constexpr_function(7) == 8
