@@ -174,9 +174,8 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
                            LLVM::GEPNoWrapFlags::inbounds);
       // Lezcano: Do we want to use getFreeVariableMasks for pred or nah?
       if (isStore) {
-        Value valsVec = packLLVector(
-            loc, ArrayRef<Value>(vals.begin() + i, vals.begin() + i + step),
-            rewriter);
+        Value valsVec =
+            packLLVector(loc, ArrayRef<Value>(vals).slice(i, step), rewriter);
         targetInfo.storeDShared(rewriter, loc, vecAddr, std::nullopt, valsVec,
                                 /*pred=*/b.true_val());
       } else {
