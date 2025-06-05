@@ -567,4 +567,5 @@ void mlir::triton::populateViewOpToLLVMPatterns(
   patterns.add<BroadcastOpConversion>(typeConverter, benefit);
   patterns.add<MemDescSubviewOpConversion>(typeConverter, benefit);
   patterns.add<MemDescReinterpretOpConversion>(typeConverter, benefit);
+  patterns.add<MemDescToI64OpConversion>(typeConverter, benefit);
 }

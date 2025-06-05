@@ -262,6 +262,24 @@ private:
   const TargetInfoBase &targetInfo;
 };
 
+struct SharedMemoryBaseOpConversion
+    : public ConvertOpToLLVMPattern<triton::gpu::SharedMemoryBaseOp> {
+  using ConvertOpToLLVMPattern::ConvertOpToLLVMPattern;
+
+  LogicalResult
+  matchAndRewrite(triton::gpu::SharedMemoryBaseOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    Location loc = op.getLoc();
+    auto func = op->getParentOfType<FunctionOpInterface>();
+    Value base = LLVM::getStackPointer(rewriter, func);
+    // Bitcast to i64
+    auto i64Ty = rewriter.getIntegerType(64);
+    TritonLLVMOpBuilder b(loc, rewriter);
+    base = b.ptrtoint(i64Ty, base);
+    rewriter.replaceOp(op, base);
+    return success();
+  }
+};
 } // namespace
 
 void mlir::triton::populateMemoryOpToLLVMPatterns(
@@ -273,4 +291,5 @@ void mlir::triton::populateMemoryOpToLLVMPatterns(
   patterns.add<LocalDeallocOpConversion>(typeConverter, benefit);
   patterns.add<LocalLoadOpConversion>(typeConverter, targetInfo, benefit);
   patterns.add<LocalStoreOpConversion>(typeConverter, targetInfo, benefit);
+  patterns.add<SharedMemoryBaseOpConversion>(typeConverter);
 }
