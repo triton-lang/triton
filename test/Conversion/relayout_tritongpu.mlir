@@ -49,21 +49,21 @@ tt.func @tmem_scales_layout() {
 // CHECK: [[SLICE_PARENT:#.*]] = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [32, 1], warpsPerCTA = [1, 4], order = [1, 0]}>
 
 // CHECK: @async_tma_gather
-tt.func @async_tma_gather(%desc: !tt.ptr<i8>, %y_offset: i32,
+tt.func @async_tma_gather(%desc: !tt.tensordesc<tensor<1x128xbf16, #shared>>, %y_offset: i32,
                           %bar: !ttg.memdesc<1xi64, #bar_layout, #ttg.shared_memory, mutable>,
                           %result: !ttg.memdesc<32x128xbf16, #shared, #ttg.shared_memory, mutable>,
                           %pred: i1) {
   %x_offsets = arith.constant dense<1> : tensor<32xi32>
   // CHECK: [[IDX:%.*]] = ttg.convert_layout %cst : tensor<32xi32, #{{.*}}> -> tensor<32xi32, #ttg.slice<{dim = 0, parent = [[SLICE_PARENT]]}>>
-  ttng.async_tma_gather %desc[%x_offsets, %y_offset] %result, %bar, %pred : !tt.ptr<i8>, tensor<32xi32>, i32, !ttg.memdesc<1xi64, #bar_layout, #ttg.shared_memory, mutable>, !ttg.memdesc<32x128xbf16, #shared, #ttg.shared_memory, mutable>, i1
+  ttng.async_tma_gather %desc[%x_offsets, %y_offset] %result, %bar, %pred : !tt.tensordesc<tensor<1x128xbf16, #shared>>, tensor<32xi32>, i32, !ttg.memdesc<1xi64, #bar_layout, #ttg.shared_memory, mutable>, !ttg.memdesc<32x128xbf16, #shared, #ttg.shared_memory, mutable>, i1
   tt.return
 }
 
 // CHECK: @async_tma_scatter
-tt.func @async_tma_scatter(%desc: !tt.ptr<i8>, %y_offset: i32,
+tt.func @async_tma_scatter(%desc: !tt.tensordesc<tensor<1x128xbf16, #shared>>, %y_offset: i32,
                            %src: !ttg.memdesc<32x128xbf16, #shared, #ttg.shared_memory, mutable>) {
   %x_offsets = arith.constant dense<1> : tensor<32xi32>
   // CHECK: [[IDX:%.*]] = ttg.convert_layout %cst : tensor<32xi32, #{{.*}}> -> tensor<32xi32, #ttg.slice<{dim = 0, parent = [[SLICE_PARENT]]}>>
-  ttng.async_tma_scatter %desc[%x_offsets, %y_offset] %src : !tt.ptr<i8>, tensor<32xi32>, i32, !ttg.memdesc<32x128xbf16, #shared, #ttg.shared_memory, mutable>
+  ttng.async_tma_scatter %desc[%x_offsets, %y_offset] %src : !tt.tensordesc<tensor<1x128xbf16, #shared>>, tensor<32xi32>, i32, !ttg.memdesc<32x128xbf16, #shared, #ttg.shared_memory, mutable>
   tt.return
 }

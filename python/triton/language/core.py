@@ -178,6 +178,9 @@ class constexpr_type(base_type):
     def __init__(self, value):
         self.value = value
 
+    def __eq__(self, other):
+        return self.value == other.value
+
     def __repr__(self) -> str:
         return f"constexpr[{self.value}]"
 
@@ -338,7 +341,7 @@ def constexpr_function(f):
     @wraps(f)
     def wrapper(*args, **kwargs):
         # de-constexpr arguments and discard the _builder keyword argument:
-        args = [getattr(x, "value", x) for x in args]
+        args = [_unwrap_if_constexpr(x) for x in args]
         kwargs = {k: getattr(v, "value", v) for (k, v) in kwargs.items() if k != "_builder"}
 
         # call the raw Python function f:
@@ -2733,17 +2736,22 @@ def associative_scan(input, axis, combine_fn, reverse=False, _builder=None, _gen
 
 @_tensor_member_fn
 @builtin
-def histogram(input, num_bins, _builder=None, _generator=None):
+def histogram(input, num_bins, mask=None, _builder=None, _generator=None):
     """computes an histogram based on input tensor with num_bins bins, the bins have a width of 1 and start at 0.
 
     :param input: the input tensor
     :type input: Tensor
     :param num_bins: number of histogram bins
     :type num_bins: int
+    :param mask: if `mask[idx]` is false, exclude `input[idx]` from histogram
+    :type mask: Block of `triton.int1`, optional
 
     """
     num_bins = _unwrap_if_constexpr(num_bins)
-    return semantic.histogram(input, num_bins, _builder)
+    mask = _unwrap_if_constexpr(mask)
+    if mask is not None:
+        mask = semantic.to_tensor(mask, _builder)
+    return semantic.histogram(input, num_bins, mask, _builder)
 
 
 @_tensor_member_fn

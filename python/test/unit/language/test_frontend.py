@@ -179,6 +179,11 @@ class AggregateWithConstexpr:
     def create(a):
         return AggregateWithConstexpr(a, tl.constexpr(42))
 
+    @triton.jit
+    def modify(self, a):
+        self.a = a
+        return self
+
 
 @triton.jit
 def add_rhs_constexpr(agg):
@@ -196,3 +201,59 @@ def test_aggregate_with_constexpr():
     # CHECK: tt.func private @"test_frontend.add_rhs_constexpr__test_frontend.AggregateWithConstexpr<i32S4S, constexpr[42]>
     # CHECK: %cst = arith.constant dense<42> : tensor<4xi32>
     # CHECK: arith.addi %arg0, %cst : tensor<4xi32>
+
+
+@tl.constexpr_function
+def constexpr_function(x):
+    return x + 1
+
+
+@filecheck_test
+@triton.jit
+def test_constexpr_function_from_jit():
+    # CHECK-LABEL: test_constexpr_function
+    x: tl.constexpr = constexpr_function(7)
+    # CHECK: make_range {end = 8 : i32, start = 0 : i32}
+    tl.arange(0, x)
+
+
+def test_constexpr_function_from_python():
+    assert constexpr_function(7) == 8
+
+
+@triton.jit
+def swap(pair):
+    return pair.second, pair.first
+
+
+@filecheck_test
+@triton.jit
+def test_assign_tuple_attrs():
+    # CHECK-LABEL: test_assign_tuple_attrs
+    p = Pair(tl.arange(0, 4), tl.arange(4, 8))
+    # CHECK: [[P:%.*]]:2 = tt.call @{{.*}}swap
+    p.first, p.second = swap(p)
+    # CHECK: call @{{.*}}anchor{{.*}}([[P]]#0)
+    # CHECK: call @{{.*}}anchor{{.*}}([[P]]#1)
+    anchor(p.first)
+    anchor(p.second)
+
+
+@filecheck_test
+@triton.jit
+def test_reassign_aggregate_with_constexpr():
+    # CHECK-LABEL: test_reassign_aggregate_with_constexpr
+    agg = AggregateWithConstexpr.create(tl.arange(0, 4))
+    var = 1
+    # CHECK: [[AGG:%.*]] = scf.if {{.*}} -> (tensor<4xi32>)
+    # CHECK:   [[VALUE:%.*]] = tt.call {{.*}}modify
+    # CHECK:   yield [[VALUE]]
+    # CHECK: else
+    # CHECK:   [[VALUE:%.*]] = tt.call {{.*}}modify
+    # CHECK:   yield [[VALUE]]
+    if var == 0:
+        agg = agg.modify(tl.arange(4, 8))
+    else:
+        agg = agg.modify(tl.arange(8, 12))
+    # CHECK: call @{{.*}}anchor{{.*}}([[AGG]])
+    anchor(agg)

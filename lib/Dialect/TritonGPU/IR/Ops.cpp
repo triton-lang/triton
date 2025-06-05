@@ -119,12 +119,24 @@ struct CanonicalizeConvertFromHistogram
   mlir::LogicalResult
   matchAndRewrite(triton::HistogramOp op,
                   PatternRewriter &rewriter) const override {
-    auto convert = op.getSrc().getDefiningOp<ConvertLayoutOp>();
-    if (!convert)
+    auto src = op.getSrc();
+    auto convert = src.getDefiningOp<ConvertLayoutOp>();
+    if (!convert) {
       return failure();
+    }
+    src = convert.getSrc();
+
+    // If mask is present, convert the layout of mask to match new src layout
+    auto mask = op.getMask();
+    if (mask) {
+      auto sharedType = getI1SameShape(src.getType());
+      rewriter.setInsertionPoint(op);
+      mask = rewriter.create<ConvertLayoutOp>(op.getLoc(), sharedType, mask);
+    }
+
     rewriter.replaceOpWithNewOp<triton::HistogramOp>(
-        op, op->getResult(0).getType(), convert.getSrc());
-    return mlir::success();
+        op, op->getResult(0).getType(), src, mask);
+    return success();
   }
 };
 
@@ -263,7 +275,8 @@ struct CanonicalizeConvertFromConvert
       // For histogram ops the input and output layouts are independent, so we
       // can always fold convert into the histogram op.
       rewriter.replaceOpWithNewOp<HistogramOp>(op, op->getResult(0).getType(),
-                                               histogram.getSrc());
+                                               histogram.getSrc(),
+                                               histogram.getMask());
       return success();
     }
 

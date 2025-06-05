@@ -2858,6 +2858,36 @@ def test_histogram(M, N, device):
     assert (z_torch == z).all()
 
 
+# ------------------------
+# test histogram with mask
+# ------------------------
+
+
+@pytest.mark.interpreter
+@pytest.mark.parametrize("M, N", [[2048, 2], [1024, 8], [1024, 128], [256, 512], [32, 512], [8, 512], [8, 2]])
+def test_histogram_mask(M, N, device):
+
+    @triton.jit
+    def histogram_kernel(x_ptr, z_ptr, M: tl.constexpr, N: tl.constexpr):
+        offset1 = tl.arange(0, 2 * M)
+        offset2 = tl.arange(0, N)
+        mask = offset1 < M
+        x = tl.load(x_ptr + offset1)
+        z = tl.histogram(x, N, mask)
+        tl.store(z_ptr + offset2, z)
+
+    torch.manual_seed(17)
+    x1 = torch.randint(0, N, (M, ), device=device, dtype=torch.int32)
+    x = torch.cat((x1, x1), 0)
+    z = torch.empty(N, dtype=torch.int32, device=device)
+    # torch.histc does not work when the input type is not float and the device is CPU
+    # https://github.com/pytorch/pytorch/issues/74236
+    # This is a workload by converting the input to float
+    z_torch = torch.histc(x1.float(), bins=N, min=0, max=N - 1)
+    histogram_kernel[(1, )](x, z, M=M, N=N)
+    assert (z_torch == z).all()
+
+
 @pytest.mark.parametrize("M, N", [(1, 64), (2, 32), (4, 16), (8, 8), (16, 4), (32, 2), (64, 1)])
 def test_scan_1d(M, N, device):
 
@@ -5907,14 +5937,9 @@ layouts = [
     DotOperandLayout(parent=MmaLayout([3, 0], [4, 1], [1, 1], [1, 1], [1, 0], [16, 32, 16]), op_idx=0, k_width=2),
     DotOperandLayout(parent=MmaLayout([3, 0], [4, 1], [1, 1], [1, 1], [1, 0], [16, 32, 16]), op_idx=0, k_width=1),
     MmaLayout([2, 0], [4, 1], [1, 1], [1, 1], [1, 0], [16, 8]),
-    DotOperandLayout(parent=MmaLayout([2, 0], [4, 1], [1, 1], [1, 1], [1, 0], [16, 8]), op_idx=0, k_width=2),
     DotOperandLayout(parent=MmaLayout([2, 0], [4, 1], [1, 1], [1, 1], [1, 0], [16, 8]), op_idx=1, k_width=2),
     DotOperandLayout(parent=MmaLayout([2, 0], [2, 2], [1, 1], [1, 1], [1, 0], [16, 8]), op_idx=0, k_width=2),
-    DotOperandLayout(parent=MmaLayout([2, 0], [2, 2], [1, 1], [1, 1], [1, 0], [16, 8]), op_idx=1, k_width=2),
     DotOperandLayout(parent=MmaLayout([2, 0], [4, 1], [1, 1], [1, 1], [1, 0], [16, 8]), op_idx=0, k_width=8),
-    DotOperandLayout(parent=MmaLayout([2, 0], [4, 1], [1, 1], [1, 1], [1, 0], [16, 8]), op_idx=1, k_width=8),
-    DotOperandLayout(parent=MmaLayout([2, 0], [2, 2], [1, 1], [1, 1], [1, 0], [16, 8]), op_idx=0, k_width=8),
-    DotOperandLayout(parent=MmaLayout([2, 0], [2, 2], [1, 1], [1, 1], [1, 0], [16, 8]), op_idx=1, k_width=8),
     SliceLayout(
         dim=1,
         parent=DotOperandLayout(parent=MmaLayout([3, 0], [4, 1, 1], [1, 1, 1], [1, 1, 1], [2, 1, 0], [16, 32, 16]),

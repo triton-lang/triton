@@ -92,7 +92,7 @@ def TT_TensorPtr : TT_PtrOf<[TT_Tensor]>;
 // Any Type in Triton IR
 def TT_Type : AnyTypeOf<[TT_FloatLike, TT_IntLike, TT_PtrLike, TT_TensorPtr]>;
 
-// Result type of ExperimentalMakeTensorDescriptor
+// Result type of MakeTensorDescriptor
 def TT_TensorDescType : TritonTypeDef<"TensorDesc", "tensordesc", []> {
   let summary = "Tensor descriptor type (`::mlir::triton::TensorDescType`) in Triton IR type system";
 

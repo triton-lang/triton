@@ -258,19 +258,23 @@ void TargetInfo::storeDShared(RewriterBase &rewriter, Location loc, Value ptr,
                 .b(elemBitwidth);
   auto *ptrOpr = builder.newAddrOperand(ptr, "r");
 
-  PTXBuilder::Operand *valOpr;
-  std::string constraint = getConstraintForBitwidth(elemBitwidth);
-  if (vec > 1) {
-    SmallVector<std::pair<Value, std::string>> vecVals;
-    for (int i = 0; i < vec; i++) {
-      vecVals.push_back({b.extract_element(val, b.i32_val(i)), constraint});
-    }
-    valOpr = builder.newListOperand(vecVals);
+  if (isConstantTruePred(pred)) {
+    b.store(val, ptr);
   } else {
-    valOpr = builder.newOperand(val, constraint);
+    PTXBuilder::Operand *valOpr;
+    std::string constraint = getConstraintForBitwidth(elemBitwidth);
+    if (vec > 1) {
+      SmallVector<std::pair<Value, std::string>> vecVals;
+      for (int i = 0; i < vec; i++) {
+        vecVals.push_back({b.extract_element(val, b.i32_val(i)), constraint});
+      }
+      valOpr = builder.newListOperand(vecVals);
+    } else {
+      valOpr = builder.newOperand(val, constraint);
+    }
+    st(ptrOpr, valOpr).predicate(pred, "b");
+    builder.launch(rewriter, loc, void_ty(ctx));
   }
-  st(ptrOpr, valOpr).predicate(pred, "b");
-  builder.launch(rewriter, loc, void_ty(ctx));
 }
 
 Value TargetInfo::loadDShared(RewriterBase &rewriter, Location loc, Value ptr,

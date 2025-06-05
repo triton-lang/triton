@@ -1,3 +1,4 @@
+#include <triton/Dialect/TritonNvidiaGPU/IR/Dialect.h>
 #include <triton/Dialect/TritonNvidiaGPU/Transforms/TMAUtilities.h>
 
 namespace tt = mlir::triton;
@@ -300,7 +301,7 @@ LogicalResult createTMADesc(Value tmaPtr, MakeTensorDescOp op,
     return failure();
   }
 
-  builder.create<ExperimentalTensormapCreateOp>(
+  builder.create<TensormapCreateOp>(
       loc,
       /*desc_ptr=*/tmaPtr,
       /*global_address=*/op.getBase(),

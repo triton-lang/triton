@@ -265,10 +265,6 @@ void init_gluon_ir(py::module &&m) {
                                             mbarrier_preds);
            })
 
-      .def("create_tensor_desc_to_tma_ptr",
-           [](GluonOpBuilder &self, Value desc) -> Value {
-             return self.create<ttng::TensorDescToTMAPtrOp>(desc);
-           })
       .def("create_async_tma_copy_global_to_local",
            [](GluonOpBuilder &self, Value descPtr, std::vector<Value> &coord,
               Value barrier, Value result, Value pred) {

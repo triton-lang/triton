@@ -151,6 +151,10 @@ class CUDABackend(BaseBackend):
             raise ValueError(f"TRITON_OVERRIDE_ARCH must have the form {pattern}")
         return int(match.group(1))
 
+    def get_target_name(self, options) -> str:
+        capability = self._parse_arch(options.arch)
+        return f"cuda:{capability}"
+
     def __init__(self, target: GPUTarget) -> None:
         super().__init__(target)
         self.binary_ext = "cubin"
@@ -300,6 +304,7 @@ class CUDABackend(BaseBackend):
         pm.enable_debug()
 
         passes.ttgpuir.add_inliner(pm)
+        passes.common.add_sccp(pm)
         passes.ttir.add_loop_aware_cse(pm)
         passes.ttgpuir.add_canonicalizer(pm)
         passes.ttgpuir.add_combine_tensor_select_and_if(pm)

@@ -571,8 +571,8 @@ class CodeGenerator(ast.NodeVisitor):
         if isinstance(target, ast.Subscript):
             return self.visit_Subscript_Store(target, value)
         if isinstance(target, ast.Tuple):
-            for i, name in enumerate(target.elts):
-                self.set_value(self.visit(name), value.values[i])
+            for i, target in enumerate(target.elts):
+                self.assignTarget(target, value.values[i])
             return
         if isinstance(target, ast.Attribute):
             base = self.visit(target.value)

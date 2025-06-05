@@ -1,3 +1,4 @@
+import triton
 from triton.compiler.code_generator import ast_to_ttir
 from triton.compiler.compiler import ASTSource
 from triton.backends.compiler import Language
@@ -16,10 +17,19 @@ class GluonASTSource(ASTSource):
         self.ext = "ttgir"
 
     def make_ir(self, options, codegen_fns, module_map, context):
+        from triton.compiler.compiler import make_backend
         module = ast_to_ttir(self.fn, self, context=context, options=options, codegen_fns=codegen_fns,
                              module_map=module_map)
         builder = ir.builder(context)
+        target = triton.runtime.driver.active.get_current_target()
+        backend = make_backend(target)
+        target = backend.get_target_name(options)
+        module.set_attr("ttg.target", builder.get_string_attr(target))
         module.set_attr("ttg.num-warps", builder.get_int32_attr(options.num_warps))
+        module.set_attr("ttg.num-ctas", builder.get_int32_attr(options.num_ctas))
+        module.set_attr("ttg.threads-per-warp", builder.get_int32_attr(32))
+        if options.maxnreg is not None:
+            module.set_attr("ttg.maxnreg", builder.get_int32_attr(options.maxnreg))
         return module
 
 
