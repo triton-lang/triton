@@ -1659,7 +1659,7 @@ class TritonSemantic(Generic[TensorTy]):
 
         reduce_op = self.builder.create_reduce([t.handle for t in inputs], axis)
         region_builder_fn(reduce_op)
-        reduce_op.verify()
+        assert reduce_op.verify()
 
         return tuple(
             self.wrap_tensor(reduce_op.get_result(i), inputs[i].type.scalar, ret_shape) for i in range(len(inputs)))
