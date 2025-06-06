@@ -17,3 +17,5 @@ for dir in "$DUMP_DIR"/*; do
 		find "$dir" -type f ! -name "*.ttgir" -delete
 	fi
 done
+
+echo "TTGIR files dumped to $DUMP_DIR"
