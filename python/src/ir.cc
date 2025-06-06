@@ -1425,12 +1425,7 @@ void init_triton_ir(py::module &&m) {
            })
       .def("create_expand_dims",
            [](TritonOpBuilder &self, Value &arg, int axis) -> Value {
-             auto argType = dyn_cast<RankedTensorType>(arg.getType());
-             auto argEltType = argType.getElementType();
-             std::vector<int64_t> retShape = argType.getShape();
-             retShape.insert(retShape.begin() + axis, 1);
-             return self.create<ExpandDimsOp>(
-                 RankedTensorType::get(retShape, argEltType), arg, axis);
+             return self.create<ExpandDimsOp>(arg, axis);
            })
       .def("create_cat",
            [](TritonOpBuilder &self, Value &lhs, Value &rhs) -> Value {
