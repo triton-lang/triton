@@ -936,7 +936,7 @@ class CodeGenerator(ast.NodeVisitor):
             fn = self.visit(call.func)
             args = [self.visit(arg) for arg in call.args]
             kws = dict(self.visit(kw) for kw in call.keywords)
-            cm = fn(*args, _builder=self.builder, **kws)
+            cm = fn(*args, _semantic=self.semantic, **kws)
             cm_list.append(cm)
         for cm, item in zip(cm_list, node.items):
             res = cm.__enter__()
