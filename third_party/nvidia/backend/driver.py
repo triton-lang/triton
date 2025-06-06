@@ -159,7 +159,7 @@ def _expand_signature(signature, tensordesc_meta):
             match = re.match("tensordesc<([^[>]*)\\[([^]]*)\\]", sig)
             dtype = match.group(1)
             shape = match.group(2)
-            ndim = sig.count(",") + 1
+            ndim = shape.count(",") + 1
 
             if meta is None:
                 output.append("*" + dtype)
@@ -256,6 +256,7 @@ def make_tensordesc_arg(arg, metadata):
     result = [desc, *shape, *strides]
 
     if fp4_padded:
+        shape = list(shape)
         shape[-1] *= 2
     triton.runtime.driver.active.utils.fill_tma_descriptor(
         desc.tma_desc_cpu_ptr(),
