@@ -382,6 +382,7 @@ class CodeGenerator(ast.NodeVisitor):
                     getattr(val, "__triton_builtin__", False),  #
                     getattr(val, "__triton_aggregate__", False),  #
                     getattr(val, "__module__", "").startswith("triton.language"),  #
+                    getattr(val, "__module__", "").startswith("triton.experimental.gluon.language"),  #
                     isinstance(val, language.dtype),  #
                     _is_namedtuple(val),
                     self._is_constexpr_global(name),  #

@@ -8,7 +8,7 @@ from triton import knobs
 from triton.experimental import gluon
 from triton.experimental.gluon import language as ttgl
 from triton.experimental.gluon.language.nvidia import blackwell
-from triton.experimental.gluon.language.nvidia.blackwell import mbarrier, tma
+from triton.experimental.gluon.language.nvidia.blackwell import mbarrier, tma, TensorMemoryLayout
 from triton._filecheck import filecheck_test, run_parser
 import triton.language as tl
 from triton._internal_testing import is_cuda
@@ -123,7 +123,7 @@ def test_tensor_memory(fresh_knobs):
     knobs.compilation.disable_line_info = True
 
     layout = ttgl.BlockedLayout(size_per_thread=[1, 64], threads_per_warp=[32, 1], warps_per_cta=[4, 1], order=[0, 1])
-    tmem_layout = ttgl.nvidia.blackwell.TensorMemoryLayout(block=[128, 128], unpacked=True)
+    tmem_layout = TensorMemoryLayout(block=[128, 128], unpacked=True)
     h = tensor_memory_kernel.warmup(layout, tmem_layout, num_warps=4, grid=(1, ))
     expecttest.assert_expected_inline(
         anonymize_ir(h.asm["source"]), """\
@@ -399,7 +399,7 @@ def test_tcgen05_mma(fresh_knobs):
     knobs.compilation.disable_line_info = True
 
     nvmma_layout = ttgl.NVMMASharedLayout(swizzle_byte_width=128, element_bitwidth=16, rank=2)
-    acc_layout = blackwell.TensorMemoryLayout([128, 128], unpacked=True)
+    acc_layout = TensorMemoryLayout([128, 128], unpacked=True)
 
     h = tcgen05_mma_kernel.warmup(nvmma_layout, acc_layout, grid=(1, ))
     expecttest.assert_expected_inline(
@@ -552,7 +552,7 @@ def test_mlir_attr_error():
 
 @gluon.jit
 def tmem_subslice_kernel():
-    layout: ttgl.constexpr = ttgl.nvidia.blackwell.TensorMemoryLayout(block=[128, 128], unpacked=True)
+    layout: ttgl.constexpr = TensorMemoryLayout(block=[128, 128], unpacked=True)
     tmem = ttgl.nvidia.blackwell.allocate_tensor_memory(ttgl.int32, [2, 256, 256], layout)
     tmem.subslice(0)
 
