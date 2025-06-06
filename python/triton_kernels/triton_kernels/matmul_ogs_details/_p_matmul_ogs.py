@@ -308,20 +308,6 @@ def _p_matmul_ogs(
         offs_w_n = off_n + tl.arange(0, BLOCK_N)
         offs_w_n = tl.max_contiguous(tl.multiple_of(offs_w_n % N, BLOCK_N), BLOCK_N)
 
-        # If the operands are swapped, the TMA layout of the MX scales are not optimal for the weights anymore.
-        # The scales will be loaded with normal loads instead.
-        if is_microscaled_format and SWAP_XW:
-            offs_mx_k = tl.arange(0, MX_SCALE_BLOCK_K)
-
-            PACKED_MX_BLOCK: tl.constexpr = (MX_SCALE_BLOCK_K // 4) * 32 * 4 * 4
-            offs_mx_inner = tl.arange(0, PACKED_MX_BLOCK)
-            offs_mx_outer = ((off_n // 128) + tl.arange(0, BLOCK_N // 128)) % N
-            offs_mx_outer = tl.max_contiguous(tl.multiple_of(offs_mx_outer, BLOCK_N // 128), BLOCK_N // 128)
-
-            if SPLIT_K > 1:
-                offs_mx_k += MX_SCALE_BLOCK_K * pid_k
-                offs_mx_inner += PACKED_MX_BLOCK * pid_k
-
         if X_USE_LOAD_TMA:
             if ExptData is None:
                 # start_z may change; update the descriptor
@@ -375,22 +361,7 @@ def _p_matmul_ogs(
                     x_scales: tl.constexpr = None
                 else:
                     x_scales = tl.full((BLOCK_M, BLOCK_K // MX_PACK_DIVISOR), 127, dtype=tl.uint8)
-                if SWAP_XW:
-                    if SWIZZLE_MX_SCALE == "BLACKWELL":
-                        MxPtrs = MxScale + expt_id.to(index_type) * stride_mx_e + offs_mx_outer.to(index_type)[:, None] * stride_mx_n + offs_mx_inner[None, :] + ki * (MX_SCALE_BLOCK_K // 4 * SPLIT_K) * stride_mx_k
-                        w_scales = unswizzle_mx_scale_bw(tl.load(MxPtrs))
-                    else:
-                        MxPtrs = MxScale + expt_id.to(index_type) * stride_mx_e + offs_mx_k.to(index_type)[None, :] * stride_mx_k + offs_w_n.to(index_type)[:, None] * stride_mx_n + ki * MX_SCALE_BLOCK_K * SPLIT_K * stride_mx_k
-                        if EVEN_K:
-                            if SPLIT_K > 1:
-                                w_scales = tl.load(MxPtrs, mask=off_k < K, other=0.0)
-                            else:
-                                w_scales = tl.load(MxPtrs)
-                        else:
-                            mask_k = offs_mx_k < tl.cdiv(K - off_k, MX_PACK_DIVISOR)
-                            w_scales = tl.load(MxPtrs, mask=mask_k[None, :], other=0.0)
-
-                elif SWIZZLE_MX_SCALE == "BLACKWELL":
+                if SWIZZLE_MX_SCALE == "BLACKWELL":
                     w_scales = mx_desc.load([expt_id, off_n // 128, ki * (MX_SCALE_BLOCK_K // 4 * SPLIT_K), 0, 0])
                     w_scales = w_scales.reshape((w_scales.shape[1], w_scales.shape[2] * 32 * 4 * 4))
                     w_scales = unswizzle_mx_scale_bw(w_scales)
