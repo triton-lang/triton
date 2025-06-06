@@ -475,12 +475,13 @@ class JITFunction(KernelInterface[T]):
         if not hook:
             return None
 
-        name = get_full_name(self.fn)
+        name = self.fn.__qualname__
         module = self.fn.__module__
         arg_reprs = ", ".join([f"{param.name}: {ty}" for param, ty in zip(self.params, key[1])])
         repr = f"{name}[num_warps={options.num_warps}, num_ctas={options.num_ctas}, num_stages={options.num_stages}, enable_fp_fusion={options.enable_fp_fusion}, launch_cooperative_grid={options.launch_cooperative_grid}]({arg_reprs})"
+        full_name = get_full_name(self.fn)
 
-        specialization_data = serialize_specialization_data(name, signature, constants, configs[0], options, key)
+        specialization_data = serialize_specialization_data(full_name, signature, constants, configs[0], options, key)
 
         kwargs = {
             'signature': signature,
