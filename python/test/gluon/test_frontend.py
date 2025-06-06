@@ -635,3 +635,73 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 } loc(#loc)
 #loc = loc(unknown)
 """)
+
+
+@gluon.jit
+def math_kernel():
+    layout: ttgl.constexpr = ttgl.BlockedLayout([1, 1], [1, 32], [4, 1], [1, 0])
+    a = ttgl.full([16, 16], 1, ttgl.float32, layout)
+    b = ttgl.full([16, 16], 2, ttgl.float32, layout)
+    c = ttgl.full([16, 16], 4, ttgl.float32, layout)
+    d = ttgl.full([16, 16], 1, ttgl.int32, layout)
+    e = ttgl.full([16, 16], 1, ttgl.int32, layout)
+    ttgl.umulhi(d, e)
+    ttgl.exp(a)
+    ttgl.exp2(a)
+    ttgl.log(a)
+    ttgl.log2(a)
+    ttgl.cos(a)
+    ttgl.sin(a)
+    ttgl.sqrt(a)
+    ttgl.sqrt_rn(a)
+    ttgl.rsqrt(a)
+    ttgl.abs(a)
+    ttgl.fdiv(a, b)
+    ttgl.div_rn(a, b)
+    ttgl.erf(a)
+    ttgl.floor(a)
+    ttgl.ceil(a)
+    ttgl.fma(a, b, c)
+
+
+def test_math(fresh_knobs):
+    knobs.compilation.disable_line_info = True
+
+    h = math_kernel.warmup(sanitize_overflow=False, grid=(1, ))
+    expecttest.assert_expected_inline(
+        anonymize_ir(h.asm["source"]), """\
+#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [1, 0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "...", "ttg.threads-per-warp" = 32 : i32} {
+  tt.func public @math_kernel() attributes {noinline = false} {
+    %cst = arith.constant 1.000000e+00 : f32 loc(#loc)
+    %cst_0 = arith.constant dense<1.000000e+00> : tensor<16x16xf32, #blocked> loc(#loc)
+    %cst_1 = arith.constant 2.000000e+00 : f32 loc(#loc)
+    %cst_2 = arith.constant dense<2.000000e+00> : tensor<16x16xf32, #blocked> loc(#loc)
+    %cst_3 = arith.constant 4.000000e+00 : f32 loc(#loc)
+    %cst_4 = arith.constant dense<4.000000e+00> : tensor<16x16xf32, #blocked> loc(#loc)
+    %c1_i32 = arith.constant 1 : i32 loc(#loc)
+    %cst_5 = arith.constant dense<1> : tensor<16x16xi32, #blocked> loc(#loc)
+    %c1_i32_6 = arith.constant 1 : i32 loc(#loc)
+    %cst_7 = arith.constant dense<1> : tensor<16x16xi32, #blocked> loc(#loc)
+    %0 = tt.mulhiui %cst_5, %cst_7 : tensor<16x16xi32, #blocked> loc(#loc)
+    %1 = math.exp %cst_0 : tensor<16x16xf32, #blocked> loc(#loc)
+    %2 = math.exp2 %cst_0 : tensor<16x16xf32, #blocked> loc(#loc)
+    %3 = math.log %cst_0 : tensor<16x16xf32, #blocked> loc(#loc)
+    %4 = math.log2 %cst_0 : tensor<16x16xf32, #blocked> loc(#loc)
+    %5 = math.cos %cst_0 : tensor<16x16xf32, #blocked> loc(#loc)
+    %6 = math.sin %cst_0 : tensor<16x16xf32, #blocked> loc(#loc)
+    %7 = math.sqrt %cst_0 : tensor<16x16xf32, #blocked> loc(#loc)
+    %8 = tt.precise_sqrt %cst_0 : tensor<16x16xf32, #blocked> loc(#loc)
+    %9 = math.rsqrt %cst_0 : tensor<16x16xf32, #blocked> loc(#loc)
+    %10 = math.absf %cst_0 : tensor<16x16xf32, #blocked> loc(#loc)
+    %11 = arith.divf %cst_0, %cst_2 : tensor<16x16xf32, #blocked> loc(#loc)
+    %12 = tt.precise_divf %cst_0, %cst_2 : tensor<16x16xf32, #blocked> loc(#loc)
+    %13 = math.erf %cst_0 : tensor<16x16xf32, #blocked> loc(#loc)
+    %14 = math.floor %cst_0 : tensor<16x16xf32, #blocked> loc(#loc)
+    %15 = math.ceil %cst_0 : tensor<16x16xf32, #blocked> loc(#loc)
+    %16 = math.fma %cst_0, %cst_2, %cst_4 : tensor<16x16xf32, #blocked> loc(#loc)
+    tt.return loc(#loc)
+  } loc(#loc)
+} loc(#loc)
+#loc = loc(unknown)
+""")
