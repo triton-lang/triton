@@ -303,6 +303,12 @@ dtype2str = {}
 specialize_impl_cache = []
 
 
+def _mangle_tensordesc_layout(layout):
+    if layout is None:
+        return ""
+    return f"({layout.swizzle_byte_width},{layout.element_bitwidth},{layout.rank},{layout.transposed},{layout.fp4_padded},{layout.ctas_per_cga},{layout.cta_split_num},{layout.cta_order})"
+
+
 def create_specialize_impl(specialize_extra):
 
     from ..language import constexpr
@@ -348,7 +354,7 @@ def create_specialize_impl(specialize_extra):
         elif isinstance(arg, TensorDescriptor):
             assert hasattr(arg.base, "data_ptr")
             inner = canonicalize_dtype(arg.base.dtype)
-            return (f"tensordesc<{inner}{list(arg.block_shape)}>", None)
+            return (f"tensordesc<{inner}{list(arg.block_shape)}{_mangle_tensordesc_layout(arg.layout)}>", None)
         else:
             raise TypeError("Unsupported type: %s" % type(arg))
 

@@ -3,7 +3,6 @@ import operator
 import os
 import subprocess
 import triton
-import re
 from pathlib import Path
 from triton import knobs
 from triton.runtime.build import compile_module_from_src
@@ -121,8 +120,12 @@ def make_launcher(constants, signature, tensordesc_meta):
                 meta = tensordesc_meta[tensordesc_idx] if tensordesc_meta else None
                 tensordesc_idx += 1
 
-                ndim = sig.count(",") + 1
-                dtype = re.match("tensordesc<([^[>]*)", sig).group()
+                inner = sig.split("<")[1].rstrip(">")
+                dtype, block_shape = inner.split("[")
+                block_shape, layout = block_shape.split("]")
+                block_shape = [int(s.strip()) for s in block_shape.split(",")]
+
+                ndim = len(block_shape)
 
                 if meta is None:
                     output.append("*" + dtype)

@@ -311,6 +311,8 @@ class CUDABackend(BaseBackend):
         passes.ttgpuir.add_combine_tensor_select_and_if(pm)
 
         pm.run(mod)
+        tensordesc_meta = mod.get_tensordesc_metadata()
+        metadata["tensordesc_meta"] = tensordesc_meta
         return mod
 
     def make_llir(self, src, metadata, options, capability):

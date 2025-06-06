@@ -172,7 +172,12 @@ py::list getTensorDescMetadata(ModuleOp &mod) {
 
     auto blockType = descTy.getBlockType();
     auto encoding = blockType.getEncoding();
-    auto mmaEncoding = dyn_cast<triton::gpu::NVMMASharedEncodingAttr>(encoding);
+    auto mmaEncoding =
+        dyn_cast_or_null<triton::gpu::NVMMASharedEncodingAttr>(encoding);
+    if (!mmaEncoding) {
+      throw std::invalid_argument(
+          "TensorDescriptor argument requires an NVMMASharedLayout");
+    }
     auto swizzle = ttng::getTMASwizzleMode(nullptr, descTy);
     auto elemType = ttng::getTMAElementType(nullptr, descTy);
     assert(swizzle.has_value());
