@@ -1,6 +1,7 @@
 #ifndef PROTONGPU_TO_LLVM_UTILITY_H
 #define PROTONGPU_TO_LLVM_UTILITY_H
 
+#include "Dialect/ProtonGPU/IR/Dialect.h"
 #include "mlir/Dialect/LLVMIR/LLVMTypes.h"
 #include "mlir/IR/Value.h"
 #include "mlir/Transforms/DialectConversion.h"
@@ -25,5 +26,22 @@ struct SegmentObject {
 };
 
 } // namespace mlir::LLVM
+
+namespace mlir::triton {
+namespace proton::gpu {
+
+struct CircularStoreDataPack {
+  Value isWriter;
+  Value record;
+  Value ptr;
+  uint32_t addrSpace;
+};
+
+CircularStoreDataPack
+lowerCircularStoreOpHelper(CircularStoreOp op, Value segmentStruct,
+                           ConversionPatternRewriter &rewriter);
+
+} // namespace proton::gpu
+} // namespace mlir::triton
 
 #endif // PROTONGPU_TO_LLVM_UTILITY_H

@@ -15,7 +15,7 @@ struct ParserConfig {
   };
 
   // Configure exception message visibility
-  ExceptionPrinting exceptionPrintLevel = ExceptionPrinting::ALL;
+  ExceptionPrinting exceptionPrintLevel = ExceptionPrinting::SILENT;
 };
 
 // Define exception severity levels

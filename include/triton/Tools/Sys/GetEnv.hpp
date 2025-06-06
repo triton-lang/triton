@@ -50,7 +50,8 @@ inline const std::set<std::string> CACHE_INVALIDATING_ENV_VARS = {
 inline const std::set<std::string> CACHE_NEUTRAL_ENV_VARS = {
     // clang-format off
     "TRITON_REPRODUCER_PATH",
-    "TRITON_ENABLE_PYTHON_STACKTRACE"
+    "TRITON_ENABLE_PYTHON_STACKTRACE",
+    "PROTON_ENABLE_DEBUG"
     // clang-format on
 };
 
