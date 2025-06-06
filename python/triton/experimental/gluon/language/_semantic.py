@@ -164,7 +164,7 @@ class GluonSemantic(TritonSemantic[TensorTy]):
         shape = [mem_desc.shape[i] for i in order]
         alloc_shape = mem_desc.type.alloc_shape
         new_alloc_shape = alloc_shape[:len(alloc_shape) - mem_desc.rank]
-        new_alloc_shape += [alloc_shape[:mem_desc.rank][i] for i in order]
+        new_alloc_shape += [alloc_shape[len(alloc_shape) - mem_desc.rank:][i] for i in order]
 
         ty = ttgl.shared_memory_descriptor_type(mem_desc.dtype, shape, layout, new_alloc_shape)
         handle = self.builder.create_memdesc_trans(ty.to_ir(self.builder), mem_desc.handle, order)

@@ -257,3 +257,23 @@ def test_reassign_aggregate_with_constexpr():
         agg = agg.modify(tl.arange(8, 12))
     # CHECK: call @{{.*}}anchor{{.*}}([[AGG]])
     anchor(agg)
+
+
+@tl.constexpr_function
+def make_shape(m, n):
+    return (m, n)
+
+
+@tl.constexpr_function
+def add_shape_dims(m, n):
+    return m + n
+
+
+@filecheck_test
+@triton.jit
+def test_constexpr_getitem():
+    # CHECK-LABEL: test_constexpr_getitem
+    # CHECK: make_range {end = 12 : i32, start = 4 : i32}
+    shape: tl.constexpr = make_shape(4, 8)
+    sum: tl.constexpr = add_shape_dims(shape[0], shape[1])
+    tl.arange(4, sum)
