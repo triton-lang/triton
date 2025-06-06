@@ -1,6 +1,4 @@
-import sys
 import os
-import io
 import inspect
 import subprocess
 import tempfile
@@ -44,10 +42,12 @@ def run_filecheck(name, module_str, check_template):
             temp.write(check_template)
 
         try:
-            subprocess.check_output([filecheck_path, temp_expected, "--input-file", temp_module], stderr=subprocess.STDOUT)
+            subprocess.check_output([filecheck_path, temp_expected, "--input-file", temp_module],
+                                    stderr=subprocess.STDOUT)
         except subprocess.CalledProcessError as error:
             decoded = error.output.decode('unicode_escape')
             raise ValueError(decoded)
+
 
 def run_parser(kernel_fn):
     sigkeys = [x.name for x in kernel_fn.params]
