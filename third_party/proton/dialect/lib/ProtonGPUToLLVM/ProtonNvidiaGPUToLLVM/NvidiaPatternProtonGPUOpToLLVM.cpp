@@ -38,70 +38,17 @@ struct CircularStoreOpConversion
                   OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     auto loc = op.getLoc();
-    auto mod = op.getOperation()->getParentOfType<ModuleOp>();
-    auto b = TritonLLVMOpBuilder(loc, rewriter);
-    const int bytesPerEntry = proton::gpu::getBytesPerClockEntry();
-    const int wordsPerEntry = bytesPerEntry / 4; // 1 word = 4 bytes
 
-    auto segmentObj =
-        LLVM::SegmentObject::fromStruct(loc, adaptor.getSegment(), rewriter);
-    Value indexPtr = segmentObj.indexPtr;
-    Value bufferBase = segmentObj.base;
-    Value segmentBase = segmentObj.segmentBase;
+    auto dataPack =
+        lowerCircularStoreOpHelper(op, adaptor.getSegment(), rewriter);
 
-    // Update the index (could be register promoted).
-    Value curIdx = b.load(i32_ty, indexPtr);
-    Value newIdx = b.add(curIdx, b.i32_val(wordsPerEntry));
-    b.store(newIdx, indexPtr);
-
-    // Compute the segment size in word (4 bytes).
-    int selectedWarpNum = mlir::triton::gpu::lookupNumWarps(mod);
-    auto segmentType = op.getSegment().getType();
-    auto selectedIds = segmentType.getSelectIds();
-    if (!selectedIds.empty())
-      selectedWarpNum = selectedIds.size();
-    const int bufferSizeInBytes = segmentType.getNBytes();
-    const int segmentWordSize = bufferSizeInBytes / selectedWarpNum / 4;
-
-    // Compute the actual base offset (with urem as circular buffer).
-    Value tagOffset =
-        b.add(segmentBase, b.urem(curIdx, b.i32_val(segmentWordSize)));
-
-    // Store the counter into buffer.
-    auto bufferBaseType = bufferBase.getType();
-    Value vecPtr = b.gep(bufferBaseType, i32_ty, bufferBase, tagOffset);
-    Value tag = op.getIsStart() ? b.i32_val(op.getScopeId())
-                                : b.i32_val(1 << 31 | op.getScopeId());
-    Value clock = op.getCounter();
-    Value valsVec = packLLVector(loc, {tag, clock}, rewriter);
-
-    // Compute the predicate for the writer.
-    const int warpSize = triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod);
-    Value curThreadId = getThreadId(rewriter, loc);
-    Value isWarpMaster =
-        b.icmp_eq(b.urem(curThreadId, b.i32_val(warpSize)), b.i32_val(0));
-    Value isWriter;
-
-    auto granularity = segmentType.getGranularity();
-    if (selectedIds.empty()) {
-      if (granularity == proton::gpu::Granularity::WARP) {
-        isWriter = isWarpMaster;
-      } else {
-        llvm::report_fatal_error(
-            "segment address specialization not implemented yet");
-      }
-    } else {
-      Value isCurWarpEnabled = b.icmp_ne(segmentBase, b.i32_val(-1));
-      isWriter = b.and_(isCurWarpEnabled, isWarpMaster);
-    }
-    uint32_t AddrSpace =
-        cast<LLVM::LLVMPointerType>(bufferBaseType).getAddressSpace();
-    if (AddrSpace == 1) {
+    uint32_t addrSpace = dataPack.addrSpace;
+    if (addrSpace == 1) {
       llvm::report_fatal_error("unimplemented");
-    } else if (AddrSpace == 3) {
-      targetInfo.getTritonTargetInfo().storeDShared(rewriter, loc, vecPtr,
-                                                    std::nullopt, valsVec,
-                                                    /*pred=*/isWriter);
+    } else if (addrSpace == 3) {
+      targetInfo.getTritonTargetInfo().storeDShared(
+          rewriter, loc, dataPack.ptr, std::nullopt, dataPack.record,
+          /*pred=*/dataPack.isWriter);
     } else {
       llvm::report_fatal_error("unsupported address space in circular store");
     }
