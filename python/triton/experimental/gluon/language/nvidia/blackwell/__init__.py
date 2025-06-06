@@ -46,6 +46,10 @@ class TensorMemoryLayout:
     def __post_init__(self):
         assert len(self.block) == 2
         assert self.cta_split_num is None or len(self.cta_split_num) == 2
+        # Maintain hashability by transforming any lists into tuples.
+        object.__setattr__(self, 'block', tuple(self.block))
+        if self.cta_split_num:
+            object.__setattr__(self, 'cta_split_num', tuple(self.cta_split_num))
 
     def _to_ir(self, builder):
         cta_split_num = self.cta_split_num or [1, 1]
