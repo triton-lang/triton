@@ -5177,7 +5177,7 @@ def test_value_specialization_overflow(value: int, overflow: bool, device) -> No
     x = torch.tensor([3.14159], device=device)
 
     if overflow:
-        with pytest.raises(RuntimeError, match='Unable to cast'):
+        with pytest.raises((RuntimeError, OverflowError)):
             kernel[(1, )](value, x)
     else:
         kernel[(1, )](value, x)

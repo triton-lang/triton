@@ -308,13 +308,12 @@ std::vector<char> buildSignatureMetadata(std::vector<std::string> signature) {
 }
 
 // Launch a Python callable hook with metadata passed as parameters.
-bool launchHook(py::object hook, py::object metadata) {
+void launchHook(py::object hook, py::object metadata) {
   if (hook.is_none()) {
-    return true;
+    return;
   }
   py::tuple args = py::make_tuple(metadata);
   py::object ret = hook(*args);
-  return ret.cast<bool>();
 }
 
 static void ensureCudaContext() {
@@ -385,15 +384,11 @@ void launch(int grid_dim_x, int grid_dim_y, int grid_dim_z, int64_t stream,
     return;
   }
 
-  if (!launchHook(launch_enter_hook, hook_args)) {
-    return;
-  }
+  launchHook(launch_enter_hook, hook_args);
 
   launchKernel(config);
 
-  if (!launchHook(launch_exit_hook, hook_args)) {
-    return;
-  }
+  launchHook(launch_exit_hook, hook_args);
 }
 
 } // namespace
