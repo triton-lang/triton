@@ -362,6 +362,27 @@ def test_cache_builtin_as_global():
     assert "global variable" in str(e.value).lower()
 
 
+def test_cache_closure():
+
+    def make_closure(cst):
+
+        @triton.jit
+        def closure():
+            tl.full((16, ), cst, dtype=tl.int32)
+
+        return closure
+
+    cst = tl.constexpr(42)
+    closure = make_closure(cst)
+
+    closure[(1, )]()
+    cst.value = 43
+    with pytest.raises(RuntimeError) as e:
+        closure[(1, )]()
+
+    assert "cst has changed since we compiled this kernel, from constexpr[42] to constexpr[43]" in str(e.value)
+
+
 @triton.jit
 def no_cache_callable_inner():
     pass
