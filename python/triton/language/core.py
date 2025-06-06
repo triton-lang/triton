@@ -329,6 +329,10 @@ class constexpr(base_value):
     def __call__(self, *args, **kwds):
         return self.value(*args, **kwds)
 
+    def __getitem__(self, *args):
+        args = (_unwrap_if_constexpr(x) for x in _normalize_tuple(args))
+        return self.value.__getitem__(*args)
+
 
 def constexpr_function(f):
     """
