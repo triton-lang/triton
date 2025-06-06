@@ -283,17 +283,17 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 
 
 @gluon.jit
-def warp_specialize_default(a, b):
+def warp_specialize_default(a, b, e: ttgl.constexpr):
     return b, a
 
 
 @gluon.jit
-def warp_specialize_worker0(a, b):
+def warp_specialize_worker0(a, b, e: ttgl.constexpr):
     pass
 
 
 @gluon.jit
-def warp_specialize_worker1(a, b):
+def warp_specialize_worker1(a, b, e: ttgl.constexpr):
     pass
 
 
@@ -322,15 +322,15 @@ def test_warp_specialize():
     # CHECK-NEXT:    [[C:%.*]] = tt.make_range {end = 4 : i32, start = 0 : i32}
     # CHECK-NEXT:    [[OUTS:%.*]]:3 = ttg.warp_specialize([[A]], [[B]], [[C]]) {{.*}}requestedRegisters = array<i32: 24, 48>
     # CHECK-NEXT:    default {
-    # CHECK-NEXT:      [[RESULTS:%.*]]:3 = tt.call @{{.*}}warp_specialize_default{{.*}}([[A]], [[B]], [[C]])
+    # CHECK-NEXT:      [[RESULTS:%.*]]:3 = tt.call @{{.*}}warp_specialize_default{{.*}}cconstexpr_42{{.*}}([[A]], [[B]], [[C]])
     # CHECK-NEXT:      warp_yield [[RESULTS]]#0, [[RESULTS]]#1, [[RESULTS]]#2
     # CHECK-NEXT:    }
     # CHECK-NEXT:    partition0(%arg0: tensor<1xi32, [[BLOCKED]]>, %arg1: tensor<2xi32, [[BLOCKED]]>, %arg2: tensor<4xi32, [[BLOCKED]]>) num_warps(4) {
-    # CHECK-NEXT:      call @{{.*}}warp_specialize_worker0{{.*}}(%arg0, %arg1, %arg2)
+    # CHECK-NEXT:      call @{{.*}}warp_specialize_worker0{{.*}}cconstexpr_42{{.*}}(%arg0, %arg1, %arg2)
     # CHECK-NEXT:      warp_return
     # CHECK-NEXT:    }
     # CHECK-NEXT:    partition1(%arg0: tensor<1xi32, [[BLOCKED]]>, %arg1: tensor<2xi32, [[BLOCKED]]>, %arg2: tensor<4xi32, [[BLOCKED]]>) num_warps(4) {
-    # CHECK-NEXT:      call @{{.*}}warp_specialize_worker1{{.*}}(%arg0, %arg1, %arg2)
+    # CHECK-NEXT:      call @{{.*}}warp_specialize_worker1{{.*}}cconstexpr_42{{.*}}(%arg0, %arg1, %arg2)
     # CHECK-NEXT:      warp_return
     # CHECK-NEXT:    }
     # CHECK-NEXT:    call @{{.*}}anchor{{.*}}([[OUTS]]#0)
@@ -340,8 +340,9 @@ def test_warp_specialize():
     b = ttgl.arange(0, 2, layout=layout)
     c = ttgl.arange(0, 4, layout=layout)
     pair = Pair(a, b)
-    a, b = ttgl.warp_specialize((pair, c), warp_specialize_default, [warp_specialize_worker0, warp_specialize_worker1],
-                                [4, 4], [24, 48])
+    e: ttgl.constexpr = 42
+    a, b = ttgl.warp_specialize((pair, c, e), warp_specialize_default,
+                                [warp_specialize_worker0, warp_specialize_worker1], [4, 4], [24, 48])
     anchor(a)
     anchor(b)
 
@@ -781,3 +782,23 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
   } loc(#loc)
 } loc(#loc)
 """)
+
+
+@filecheck_test
+@gluon.jit
+def test_elementwise_core():
+    # CHECK: [[BLOCKED:#.*]] = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+    # CHECK: @test_elementwise_core
+    layout: ttgl.constexpr = ttgl.BlockedLayout([1], [32], [4], [0])
+    x = ttgl.arange(0, 16, layout)
+    y = ttgl.arange(16, 32, layout)
+
+    # CHECK: arith.select {{.*}} : tensor<16xi1, [[BLOCKED]]>, tensor<16xi32, [[BLOCKED]]>
+    a = ttgl.where(x > 8, x, y)
+    # CHECK: arith.maxsi {{.*}} : tensor<16xi32, [[BLOCKED]]>
+    b = ttgl.maximum(x, y)
+    # CHECK: arith.minsi {{.*}} : tensor<16xi32, [[BLOCKED]]>
+    c = ttgl.minimum(x, y)
+    ttgl.static_assert(a.type == x.type)
+    ttgl.static_assert(b.type == x.type)
+    ttgl.static_assert(c.type == x.type)

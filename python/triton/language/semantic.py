@@ -1683,7 +1683,7 @@ class TritonSemantic(Generic[TensorTy]):
 
         scan_op = self.builder.create_scan([t.handle for t in inputs], axis, reverse)
         region_builder_fn(scan_op)
-        scan_op.verify()
+        assert scan_op.verify()
 
         return tuple(self.wrap_tensor(scan_op.get_result(i), inputs[i].type.scalar, shape) for i in range(len(inputs)))
 

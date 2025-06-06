@@ -299,6 +299,11 @@ void init_gluon_ir(py::module &&m) {
              self.create<ttng::AsyncTMAScatterOp>(descPtr, xOffsets, yOffset,
                                                   src);
            })
+      .def("create_fence_async_shared",
+           [](GluonOpBuilder &self, bool bCluster) -> OpState {
+             return self.create<ttng::FenceAsyncSharedOp>(bCluster);
+           })
+
       .def("create_broadcast",
            [](TritonOpBuilder &self, Value &arg, Type retTy) -> Value {
              return self.create<tt::BroadcastOp>(retTy, arg);
