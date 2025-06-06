@@ -22,7 +22,7 @@ tt.func public @_2d_tensor() {
 
 // -----
 tt.func public @bad_start_end() {
-    // expected-error @+1 {{start must be less than or equal to end}}
+    // expected-error @+1 {{start must be less than end}}
     %a = tt.make_range { start = 0 : i32, end = -16 : i32 } : tensor<16xi32>
     tt.return
 }
