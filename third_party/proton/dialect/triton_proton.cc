@@ -5,6 +5,7 @@
 #include "Conversion/ProtonToProtonGPU/Passes.h"
 #include "Dialect/Proton/IR/Dialect.h"
 #include "Dialect/ProtonGPU/IR/Dialect.h"
+#include "Dialect/ProtonGPU/Transforms/Passes.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/Pass/PassManager.h"
 #include "passes.h"
@@ -63,11 +64,11 @@ void init_triton_proton(py::module &&m) {
   });
 
   m.def("get_scope_id_names", [](mlir::ModuleOp &module) {
-    return proton::ScopeIdAllocation(module).getScopeIdNames();
+    return proton::ModuleScopeIdAllocation(module).getScopeIdNames();
   });
 
   m.def("get_scope_id_parents", [](mlir::ModuleOp &module) {
-    return proton::ScopeIdAllocation(module).getScopeIdParents();
+    return proton::ModuleScopeIdAllocation(module).getScopeIdParents();
   });
 
   // Proton operations
@@ -104,4 +105,6 @@ void init_triton_proton(py::module &&m) {
                      proton::gpu::createAllocateProtonSharedMemoryPass);
   ADD_PASS_WRAPPER_0("add_allocate_proton_global_scratch_buffer",
                      proton::gpu::createAllocateProtonGlobalScratchBufferPass);
+  ADD_PASS_WRAPPER_0("add_proton_schedule_buffer_store",
+                     proton::gpu::createScheduleBufferStorePass);
 }

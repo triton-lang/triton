@@ -24,7 +24,7 @@ namespace proton {
 #define GEN_PASS_DEF_CONVERTPROTONTOPROTONGPU
 #include "Conversion/ProtonToProtonGPU/Passes.h.inc"
 
-#define DEBUG_TYPE "proton-gpu"
+#define DEBUG_TYPE "proton-to-proton-gpu"
 #define DBGS() (llvm::dbgs() << "[" DEBUG_TYPE "]: ")
 #define LDBG(X) LLVM_DEBUG(DBGS() << X << "\n")
 
