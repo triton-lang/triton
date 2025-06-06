@@ -546,6 +546,34 @@ tt.func public @tmem_message_local_constraint(%desc: !ttg.memdesc<128x64xf32, #t
 
 // -----
 
+#blocked = #ttg.blocked<{sizePerThread = [1, 128], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [0, 1]}>
+#packed_b16 = #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, unpacked = false>
+
+module attributes {ttg.target = "cuda:100", "ttg.num-warps" = 4 : i32, ttg.maxnreg = 128 : i32} {
+// CHECK-LABEL: @store_packedb16_2x64xf16
+tt.func @store_packedb16_2x64xf16(%arg0: !ttg.memdesc<128x128xf16, #packed_b16, #ttng.tensor_memory, mutable, 1x128x128>, %arg1: tensor<128x128xf16, #blocked>) {
+  %true = arith.constant true
+  // CHECK: tcgen05.st.sync.aligned.32x32b.x64.b32
+  // CHECK-NOT: tcgen05.st
+  ttng.tmem_store %arg1, %arg0, %true : tensor<128x128xf16, #blocked> -> !ttg.memdesc<128x128xf16, #packed_b16, #ttng.tensor_memory, mutable, 1x128x128>
+  tt.return
+}
+}
+
+module attributes {ttg.target = "cuda:100", "ttg.num-warps" = 4 : i32, ttg.maxnreg = 80 : i32} {
+// CHECK-LABEL: @store_packedb16_4x32xf16
+tt.func @store_packedb16_4x32xf16(%arg0: !ttg.memdesc<128x128xf16, #packed_b16, #ttng.tensor_memory, mutable, 1x128x128>, %arg1: tensor<128x128xf16, #blocked>) {
+  %true = arith.constant true
+  // CHECK: tcgen05.st.sync.aligned.32x32b.x32.b32 [$1 + 0]
+  // CHECK: tcgen05.st.sync.aligned.32x32b.x32.b32 [$1 + 32]
+  // CHECK-NOT: tcgen05.st
+  ttng.tmem_store %arg1, %arg0, %true : tensor<128x128xf16, #blocked> -> !ttg.memdesc<128x128xf16, #packed_b16, #ttng.tensor_memory, mutable, 1x128x128>
+  tt.return
+}
+}
+
+// -----
+
 #shared = #ttg.nvmma_shared<{swizzlingByteWidth = 32, transposed = false, elementBitWidth = 16}>
 #shared1 = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
 #smem = #ttg.shared_memory
