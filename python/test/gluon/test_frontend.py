@@ -600,3 +600,38 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
   }
 }
 """)
+
+
+@gluon.jit
+def broadcast_kernel():
+    layout: ttgl.constexpr = ttgl.BlockedLayout([1, 1], [2, 16], [4, 1], [1, 0])
+    a = ttgl.arange(0, 16, layout=ttgl.SliceLayout(0, layout))[None, :]
+    b = ttgl.arange(0, 16, layout=ttgl.SliceLayout(1, layout))[:, None]
+    0 + a + b
+
+
+def test_broadcast(fresh_knobs):
+    knobs.compilation.disable_line_info = True
+
+    h = broadcast_kernel.warmup(sanitize_overflow=False, grid=(1, ))
+    expecttest.assert_expected_inline(
+        anonymize_ir(h.asm["source"]), """\
+#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [2, 16], warpsPerCTA = [4, 1], order = [1, 0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "...", "ttg.threads-per-warp" = 32 : i32} {
+  tt.func public @broadcast_kernel() attributes {noinline = false} {
+    %0 = tt.make_range {end = 16 : i32, start = 0 : i32} : tensor<16xi32, #ttg.slice<{dim = 0, parent = #blocked}>> loc(#loc)
+    %1 = tt.expand_dims %0 {axis = 0 : i32} : tensor<16xi32, #ttg.slice<{dim = 0, parent = #blocked}>> -> tensor<1x16xi32, #blocked> loc(#loc)
+    %2 = tt.make_range {end = 16 : i32, start = 0 : i32} : tensor<16xi32, #ttg.slice<{dim = 1, parent = #blocked}>> loc(#loc)
+    %3 = tt.expand_dims %2 {axis = 1 : i32} : tensor<16xi32, #ttg.slice<{dim = 1, parent = #blocked}>> -> tensor<16x1xi32, #blocked> loc(#loc)
+    %c0_i32 = arith.constant 0 : i32 loc(#loc)
+    %c0_i32_0 = arith.constant 0 : i32 loc(#loc)
+    %cst = arith.constant dense<0> : tensor<1x16xi32, #blocked> loc(#loc)
+    %4 = arith.addi %cst, %1 : tensor<1x16xi32, #blocked> loc(#loc)
+    %5 = tt.broadcast %4 : tensor<1x16xi32, #blocked> -> tensor<16x16xi32, #blocked> loc(#loc)
+    %6 = tt.broadcast %3 : tensor<16x1xi32, #blocked> -> tensor<16x16xi32, #blocked> loc(#loc)
+    %7 = arith.addi %5, %6 : tensor<16x16xi32, #blocked> loc(#loc)
+    tt.return loc(#loc)
+  } loc(#loc)
+} loc(#loc)
+#loc = loc(unknown)
+""")

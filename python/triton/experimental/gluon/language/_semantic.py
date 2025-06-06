@@ -1,11 +1,14 @@
-from typing import Sequence
+from typing import Sequence, List, TypeVar, Tuple
 from triton.language.semantic import TritonSemantic
 from . import _core as ttgl
+from ._layouts import SliceLayout
 from triton._C.libtriton.gluon_ir import GluonOpBuilder
 from triton.compiler.code_generator import flatten_values_to_ir, unflatten_ir_values
 
+TensorTy = TypeVar("TensorTy")
 
-class GluonSemantic(TritonSemantic[ttgl.tensor]):
+
+class GluonSemantic(TritonSemantic[TensorTy]):
     tensor = ttgl.tensor
     lang = ttgl
 
@@ -13,6 +16,74 @@ class GluonSemantic(TritonSemantic[ttgl.tensor]):
 
     def __init__(self, builder: GluonOpBuilder):
         self.builder = builder
+
+    def _broadcast_shapes(self, lhs_shape: List[int], rhs_shape: List[int]):
+        if len(lhs_shape) != len(rhs_shape):
+            raise ValueError(f"Cannot broadcast, rank mismatch: {lhs_shape}, {rhs_shape}")
+
+        ret_shape = []
+        for i, left in enumerate(lhs_shape):
+            right = rhs_shape[i]
+            if left == 1:
+                ret_shape.append(right)
+            elif (right == 1) or (right == left):
+                ret_shape.append(left)
+            else:
+                raise ValueError("Cannot make_shape_compatible: incompatible dimensions "
+                                 "at index " + str(i) + ": " + str(left) + " and " + str(right))
+        return ret_shape
+
+    def expand_dims(self, input: TensorTy, axis: int) -> TensorTy:
+        dst_shape = [ttgl._unwrap_if_constexpr(x) for x in input.shape]
+        dst_shape.insert(axis, 1)
+
+        if axis < 0:
+            axis += len(input.shape)
+
+        assert isinstance(input.type, ttgl.distributed_type)
+        layout = input.type.layout
+        assert isinstance(layout, SliceLayout)
+        assert layout.dim == axis
+
+        ret_ty = ttgl.distributed_type(input.type.scalar, dst_shape, layout.parent)
+        handle = self.builder.create_expand_dims(input.handle, axis, ret_ty.to_ir(self.builder))
+        return self.tensor(handle, ret_ty)
+
+    def broadcast_impl_shape(self, input: TensorTy, shape: Tuple[int]) -> TensorTy:
+        assert isinstance(input.type, ttgl.distributed_type), str(input.type)
+        src_shape = input.type.get_block_shapes()
+        if len(src_shape) != len(shape):
+            raise ValueError(f"Cannot broadcast, rank mismatch: {src_shape}, {shape}")
+        if shape == src_shape:
+            return input
+        for i, item in enumerate(src_shape):
+            if shape[i] != item and item != 1:
+                raise ValueError(f"Cannot broadcast, the expanded size of the tensor ({shape[i]})"
+                                 f" must match the existing size ({item}) at non-singleton dimension"
+                                 f" {i}: {src_shape}, {shape}")
+        ret_ty = ttgl.distributed_type(input.type.scalar, shape, input.type.layout)
+        handle = self.builder.create_broadcast(input.handle, ret_ty.to_ir(self.builder))
+        return self.tensor(handle, ret_ty)
+
+    def broadcast_impl_value(self, lhs: TensorTy, rhs: TensorTy) -> TensorTy:
+        lhs_ty = lhs.type
+        rhs_ty = rhs.type
+
+        if not lhs_ty.is_block() or not rhs_ty.is_block():
+            return super().broadcast_impl_value(lhs, rhs)
+
+        assert isinstance(lhs_ty, ttgl.distributed_type)
+        assert isinstance(rhs_ty, ttgl.distributed_type)
+
+        lhs_shape = lhs_ty.get_block_shapes()
+        rhs_shape = rhs_ty.get_block_shapes()
+        ret_shape = self._broadcast_shapes(lhs_shape, rhs_shape)
+        if lhs_ty.layout != rhs_ty.layout:
+            raise ValueError(f"Layout mismatch in broadcast: {lhs_ty.layout} vs {rhs_ty.layout}")
+
+        lhs = self.broadcast_impl_shape(lhs, ret_shape)
+        rhs = self.broadcast_impl_shape(rhs, ret_shape)
+        return lhs, rhs
 
     def arange(self, start, end, layout):
         shape = [end - start]
