@@ -265,7 +265,7 @@ class CUDABackend(BaseBackend):
         if capability // 10 in [8, 9]:
             passes.ttgpuir.add_fuse_nested_loops(pm)
             passes.common.add_canonicalizer(pm)
-            passes.common.add_licm(pm)
+            passes.ttir.add_triton_licm(pm)
             passes.ttgpuir.add_optimize_accumulator_init(pm)
             passes.common.add_canonicalizer(pm)
             passes.ttgpuir.add_combine_tensor_select_and_if(pm)
@@ -280,7 +280,7 @@ class CUDABackend(BaseBackend):
         elif capability // 10 >= 10:
             passes.ttgpuir.add_fuse_nested_loops(pm)
             passes.common.add_canonicalizer(pm)
-            passes.common.add_licm(pm)
+            passes.ttir.add_triton_licm(pm)
             passes.ttgpuir.add_optimize_accumulator_init(pm)
             passes.ttgpuir.add_ws_task_partition(pm, opt.num_consumer_groups)
             passes.ttgpuir.add_taskid_propagate(pm, opt.num_consumer_groups)
@@ -294,7 +294,7 @@ class CUDABackend(BaseBackend):
             passes.ttgpuir.add_ws_lowering(pm, opt.num_consumer_groups)
             passes.common.add_canonicalizer(pm)
         else:
-            passes.common.add_licm(pm)
+            passes.ttir.add_triton_licm(pm)
         passes.ttgpuir.add_prefetch(pm)
         passes.ttgpuir.add_optimize_dot_operands(pm, capability >= 80)
         passes.ttgpuir.add_coalesce_async_copy(pm)

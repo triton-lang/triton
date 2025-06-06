@@ -1,5 +1,3 @@
-#include <memory>
-
 #include "mlir/Analysis/SliceAnalysis.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/BuiltinAttributes.h"
@@ -23,7 +21,6 @@
 #include "triton/Dialect/TritonGPU/Transforms/TritonGPUConversion.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include <deque>
-#include <memory>
 
 namespace mlir::triton::gpu {
 
@@ -1119,7 +1116,7 @@ void LayoutRematerialization::hoistConvertDotOperand() {
 void LayoutRematerialization::hoistConvertDotOperand(
     ConvertLayoutOp convertOp) {
   auto targetType = convertOp.getType();
-  // The pass is targeted to Nvidia mma/wgmma dot operands
+  // The pass is targeted to MMA dot operands
 
   auto canBePipelined = [&](ConvertLayoutOp convertOp) {
     // FIXME: Check that the parent is a for loop
@@ -1127,7 +1124,7 @@ void LayoutRematerialization::hoistConvertDotOperand(
     if (!parent)
       return false;
 
-    // Find all the dot-like ops in the for loop that have a nvidia dot operand
+    // Find all the dot-like ops in the for loop that have a dot operand
     // encoding on the lhs and check if any of them post-dominates the load +
     // cvt
     SmallVector<Operation *> dotLikeOps;
@@ -1140,7 +1137,7 @@ void LayoutRematerialization::hoistConvertDotOperand(
       auto dotEnc = dyn_cast<DotOperandEncodingAttr>(opType.getEncoding());
       if (!dotEnc)
         return;
-      if (isa<NvidiaMmaEncodingAttr>(dotEnc.getParent()))
+      if (isa<MmaEncodingTrait>(dotEnc.getParent()))
         dotLikeOps.push_back(op);
     });
     if (dotLikeOps.empty())

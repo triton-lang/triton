@@ -7,6 +7,7 @@
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/LinearLayoutConversions.h"
 
+namespace tt = mlir::triton;
 using mlir::triton::ModuleAxisInfoAnalysis;
 using mlir::triton::AMD::DppCtrl;
 using mlir::triton::AMD::ISAFamily;
@@ -626,6 +627,45 @@ bool canCoalesceWriteIntoSharedMemory(RewriterBase &rewriter,
     }
   }
   return true;
+}
+
+bool isChainDotHead(tt::DotOpInterface dotOp) {
+  auto isInSameRegion = [&dotOp](Operation *op) {
+    return op->getParentRegion() == dotOp->getParentRegion();
+  };
+  ForwardSliceOptions fwdOpt;
+  fwdOpt.filter = isInSameRegion;
+  SetVector<mlir::Operation *> fwdSlices;
+  getForwardSlice(dotOp, &fwdSlices, fwdOpt);
+  for (Operation *op : fwdSlices) {
+    if (auto dOp = dyn_cast<tt::DotOpInterface>(op)) {
+      assert(dOp != dotOp);
+      auto opA = dOp.getA().getDefiningOp();
+      if (opA && fwdSlices.contains(opA)) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+bool isChainDotTail(tt::DotOpInterface dotOp) {
+  auto isInSameRegion = [&dotOp](Operation *op) {
+    return op->getParentRegion() == dotOp->getParentRegion();
+  };
+  BackwardSliceOptions bwdOpt;
+  bwdOpt.omitBlockArguments = true;
+  bwdOpt.filter = isInSameRegion;
+  SetVector<Operation *> bwdSlices;
+  Operation *opA = dotOp.getA().getDefiningOp();
+  if (!opA)
+    return false;
+  getBackwardSlice(opA, &bwdSlices, bwdOpt);
+  if (llvm::find_if(bwdSlices, [](Operation *op) {
+        return isa<tt::DotOpInterface>(op);
+      }) != bwdSlices.end())
+    return true;
+  return false;
 }
 
 } // namespace mlir::LLVM::AMD

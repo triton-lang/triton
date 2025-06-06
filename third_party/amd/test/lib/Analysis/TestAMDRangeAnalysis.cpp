@@ -36,13 +36,19 @@ struct TestAMDRangeAnalysisPass
     auto nonNegativePred = [&solver](Value v) -> bool {
       return succeeded(dataflow::staticallyNonNegative(*solver, v));
     };
+
     mod->walk<WalkOrder::PreOrder>([&solver, nonNegativePred](Operation *op) {
       auto results = op->getResults();
       if (auto outputRanges = AMD::collectRanges(*solver, results)) {
+        int i = 0;
         for (const auto &[res, outR] : llvm::zip(results, *outputRanges)) {
           std::string rangeS;
           llvm::raw_string_ostream rangeSt(rangeS);
-          rangeSt << outR;
+          if (results.size() > 1)
+            rangeSt << " result " << i << ": " << outR;
+          else
+            rangeSt << outR;
+          i++;
           emitRemark(res.getLoc(), rangeS);
         }
 
@@ -52,8 +58,19 @@ struct TestAMDRangeAnalysisPass
         }
       }
 
-      if (!results.empty() && llvm::all_of(results, nonNegativePred))
-        emitRemark(op->getLoc(), "non-neg");
+      int i = 0;
+      for (auto result : results) {
+        if (nonNegativePred(result)) {
+          std::string nonNegs;
+          llvm::raw_string_ostream nonNegSt(nonNegs);
+          if (results.size() > 1)
+            nonNegSt << " result " << i << ": non-neg";
+          else
+            nonNegSt << "non-neg";
+          emitRemark(result.getLoc(), nonNegs);
+        }
+        i++;
+      }
     });
   }
 };

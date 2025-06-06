@@ -15,6 +15,7 @@ enum class ScaleDotElemType : uint32_t;
 namespace mlir::triton::gpu {
 class SwizzledSharedEncodingAttr;
 class NVMMASharedEncodingAttr;
+class AMDRotatingSharedEncodingAttr;
 class AMDMfmaEncodingAttr;
 
 // - BlockedEncodingAttrs have the following input dimensions.
