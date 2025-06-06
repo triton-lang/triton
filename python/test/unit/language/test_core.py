@@ -7619,3 +7619,15 @@ def test_cumsum_dtype(device):
     kernel[(1, )](z)
     expected = torch.tensor([1, 2, 3, 4], dtype=torch.int32, device=device)
     assert torch.equal(z, expected)
+
+
+@pytest.mark.interpreter
+def test_tensor_member(device):
+
+    @triton.jit
+    def kernel():
+        x = tl.arange(0, 16)
+        tl.device_assert(tl.abs(x) == x.abs())
+        tl.device_assert(tl.sum(x) == x.sum())
+
+    kernel[(1, )]()
