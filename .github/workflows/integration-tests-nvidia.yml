@@ -56,6 +56,7 @@ jobs:
             ~/.triton/llvm
             ~/.triton/nvidia
             ~/.triton/json
+            ~/.ccache
           key: ${{ runner.os }}-${{ runner.arch }}-llvm-${{ steps.cache-key.outputs.llvm }}-nvidia-${{ steps.cache-key.outputs.nvidia }}-json-${{ steps.cache-key.outputs.json }}
       - name: Inspect cache directories
         run: |
@@ -78,6 +79,7 @@ jobs:
           nvidia-smi
           echo "PATH is '$PATH'"
           ccache --zero-stats
+          ccache --set-config=max_size=300M
           make dev-install
       - name: CCache Stats
         run: ccache --print-stats
