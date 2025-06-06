@@ -263,6 +263,13 @@ void replaceUsesWithLocalLoad(
     OpBuilder &builder, OpResult old,
     TypedValue<triton::gpu::MemDescType> alloc,
     TypedValue<triton::gpu::AsyncTokenType> token = {});
+
+// Return true if the value comes from a load or a block argument.
+// This will skip convert layouts and memdesc views.
+// This is a helper useful to know if value is likely to come from shared memory
+// after converting loads into async loads.
+bool comesFromLoadOrBlockArg(Value v);
+
 } // namespace mlir::triton
 
 #endif // TRITON_DIALECT_TRITONGPU_TRANSFORMS_UTILITY_H_
