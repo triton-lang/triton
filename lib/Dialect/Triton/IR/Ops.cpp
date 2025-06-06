@@ -368,8 +368,8 @@ OpFoldResult MakeRangeOp::fold(FoldAdaptor adaptor) {
 LogicalResult MakeRangeOp::verify() {
   int64_t start = getStartAttr().getInt();
   int64_t end = getEndAttr().getInt();
-  if (start > end) {
-    return this->emitOpError() << "start must be less than or equal to end";
+  if (start >= end) {
+    return this->emitOpError() << "start must be less than end";
   }
   auto ty = getType();
   if (ty.getShape().size() != 1) {
