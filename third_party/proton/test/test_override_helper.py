@@ -4,9 +4,20 @@ import shutil
 import pathlib
 import json
 
+import triton
+
+
+def is_cuda():
+    return triton.runtime.driver.active.get_current_target().backend == "cuda"
+
+
+def is_hip():
+    return triton.runtime.driver.active.get_current_target() == "hip"
+
+
 dir_path = os.path.dirname(os.path.realpath(__file__))
 
-tmp_dir = os.getcwd() + '/tmp'
+tmp_dir = dir_path + '/tmp'
 
 if os.path.exists(tmp_dir):
     shutil.rmtree(tmp_dir)
@@ -28,19 +39,26 @@ def test_override():
     ttir_files = list(path.rglob("*.ttir"))
     ttgir_files = list(path.rglob("*.ttgir"))
     llir_files = list(path.rglob("*.llir"))
-    ptx_files = list(path.rglob("*.ptx"))
-    cubin_files = list(path.rglob("*.cubin"))
 
     assert len(ttir_files) == 1
     assert len(ttgir_files) == 1
     assert len(llir_files) == 1
-    assert len(ptx_files) == 1
-    assert len(cubin_files) == 1
 
     os.remove(ttir_files[0])
     os.remove(llir_files[0])
-    os.remove(ptx_files[0])
-    os.remove(cubin_files[0])
+
+    if is_cuda():
+        ptx_files = list(path.rglob("*.ptx"))
+        cubin_files = list(path.rglob("*.cubin"))
+        assert len(ptx_files) == 1
+        assert len(cubin_files) == 1
+        os.remove(ptx_files[0])
+        os.remove(cubin_files[0])
+
+    if is_hip():
+        gcn_files = list(path.rglob("*.amdgcn"))
+        assert len(gcn_files) == 1
+        os.remove(gcn_files[0])
 
     filename = str(list(path.rglob("*.ttgir"))[0])
 
@@ -93,3 +111,4 @@ def test_override():
 
     # Clean up
     shutil.rmtree(tmp_dir)
+    os.remove("test_override.hatchet")
