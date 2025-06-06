@@ -1,4 +1,3 @@
-import functools
 import torch
 import triton
 import triton.language as tl
@@ -13,44 +12,26 @@ from ._common import make_matmul_repr, matmul_launch_metadata, swizzle2d, xcd_sw
 def cuda_capability_geq(major, minor):
     return target_info.cuda_capability_geq(major, minor)
 
-# TODO: this is a limitation of the triton frontend
-# we shouldn't have to do that!
-def inline_function(f):
-    """
-    Wraps an arbitrary Python function so that it can be inlined into a Triton function at compile-time.
-    """
-
-    @functools.wraps(f)
-    def wrapper(*args, **kwargs):
-        return f(*args, **kwargs)
-
-    # disguise the function as a Triton builtin to avoid raising an error
-    # that we're calling a non-JIT function from within a Triton kernel:
-    wrapper.__triton_builtin__ = True
-    wrapper.__module__ = getattr(tl, "__name__", "triton.language")
-    return wrapper
-
-@inline_function
-def _load_tensor_desc(desc, offs, transpose: tl.constexpr = False, _builder=None):
+@triton.jit
+def _load_tensor_desc(desc, offs, transpose: tl.constexpr = False):
     if transpose:
         offs = offs[:-2] + [offs[-1], offs[-2]]
-    res = desc.load(offs, _builder=_builder)
-    res = tl.reshape(res, desc.block_shape[-2:], _builder=_builder)
+    res = desc.load(offs)
+    res = tl.reshape(res, desc.block_shape[-2:])
     if transpose:
-        res = tl.trans(res, _builder=_builder)
+        res = tl.trans(res)
     return res
 
 
 # Helper function to recreate a TMA desc with the same fields, but with a new pointer and optional new shape.
-@inline_function
-def _update_tensor_desc(desc, ptr, shape=None, _builder=None):
+@triton.jit
+def _update_tensor_desc(desc, ptr, shape=None):
     return tl.make_tensor_descriptor(
         ptr,
         shape=shape or desc.shape,
         # last dim must be constexpr 1; reflecting the old descriptor drops the constexpr
         strides=desc.strides[:-1] + [tl.constexpr(1)],
         block_shape=desc.block_shape,
-        _builder=_builder,
     )
 
 @triton.jit
