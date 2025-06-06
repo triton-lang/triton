@@ -11,6 +11,7 @@
 
 using namespace mlir;
 namespace py = pybind11;
+namespace tt = triton;
 namespace ttg = triton::gpu;
 namespace ttng = triton::nvidia_gpu;
 
@@ -298,7 +299,15 @@ void init_gluon_ir(py::module &&m) {
              self.create<ttng::AsyncTMAScatterOp>(descPtr, xOffsets, yOffset,
                                                   src);
            })
-
+      .def("create_broadcast",
+           [](TritonOpBuilder &self, Value &arg, Type retTy) -> Value {
+             return self.create<tt::BroadcastOp>(retTy, arg);
+           })
+      .def(
+          "create_expand_dims",
+          [](TritonOpBuilder &self, Value &arg, int axis, Type retTy) -> Value {
+            return self.create<tt::ExpandDimsOp>(retTy, arg, axis);
+          })
       .def("create_warp_return",
            [](GluonOpBuilder &self) -> Operation * {
              return self.create<ttg::WarpReturnOp>();

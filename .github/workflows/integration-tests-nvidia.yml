@@ -83,6 +83,22 @@ jobs:
         run: ccache --print-stats
       - name: Run lit tests
         run: make test-lit
+      - name: Warm up kernels cache
+        run: |
+          if [ "${{ matrix.runner[0] }}" == "nvidia-gb200" ]; then
+            source /venv/bin/activate
+            export NUM_CORES=62
+          fi
+          if [ "${{ matrix.runner[0] }}" == "nvidia-a100" ]; then
+            export NUM_CORES=23
+          fi
+          if [ "${{ matrix.runner[0] }}" == "nvidia-h100" ]; then
+            export NUM_CORES=24
+          fi
+          # warm up the cache, run with high parallelism and ignore errors.
+          cd python/test/unit
+          pytest -s -n $NUM_CORES --ignore=language/test_line_info.py --ignore=language/test_subprocess.py --ignore=test_debug.py
+        continue-on-error: true
       - name: Run python tests on CUDA
         run: |
           if [ "${{ matrix.runner[0] }}" == "nvidia-gb200" ]; then

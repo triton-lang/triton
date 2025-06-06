@@ -25,7 +25,7 @@ class Pair:
     def get_first(self):
         return self.first
 
-    def get_second(self, _builder=None):
+    def get_second(self, _semantic=None):
         return self.second
 
     @triton.jit
@@ -82,10 +82,10 @@ def test_jit_method():
 class TypeWithBuiltinInitializer:
     value: tl.tensor
 
-    def __init__(self, _builder=None):
-        self.value = tl.arange(0, 4, _builder=_builder)
+    def __init__(self, _semantic=None):
+        self.value = tl.arange(0, 4, _semantic=_semantic)
 
-    def modify(self, value, _builder=None):
+    def modify(self, value, _semantic=None):
         self.value = value
 
 
