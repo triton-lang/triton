@@ -5,6 +5,7 @@
 #include "Profiler/Instrumentation/CudaRuntime.h"
 #include "Profiler/Instrumentation/HipRuntime.h"
 #include "Utility/String.h"
+#include "triton/Tools/Sys/GetEnv.hpp"
 #include <algorithm>
 #include <limits>
 #include <map>
@@ -186,6 +187,9 @@ void InstrumentationProfiler::exitInstrumentedOp(uint64_t streamId,
   config.uidVec = getUnitIdVector(modeOptions, config.totalUnits);
   config.device = Device();
   config.device.type = runtime->getDeviceType();
+  bool enableDebug = mlir::triton::tools::getBoolEnv("PROTON_ENABLE_DEBUG");
+  if (enableDebug)
+    config.exceptionPrintLevel = ParserConfig::ExceptionPrinting::ALL;
 
   uint32_t timeShiftCost = 0;
   if (modeOptions.count("optimization") &&
