@@ -167,120 +167,138 @@ class TensorMemoryVariable:
         return self.subslice(idx).load(self.reg_layout)
 
 
-@aggregate
-class SharedMemoryChannel:
-    smem: gl.shared_memory_descriptor
-    ready_bars: gl.shared_memory_descriptor
-    empty_bars: gl.shared_memory_descriptor
-    num_buffers: gl.constexpr
+def Channel(T, alloc_fn):
 
-    @gluon.jit
-    def create(shape, dtype, layout: gl.constexpr, num_buffers: gl.constexpr):
-        smem = gl.allocate_shared_memory(dtype, [num_buffers] + shape, layout)
-        ready_bars = gl.allocate_shared_memory(gl.int64, [num_buffers, 1], mbarrier.MBarrierLayout())
-        empty_bars = gl.allocate_shared_memory(gl.int64, [num_buffers, 1], mbarrier.MBarrierLayout())
-        for i in tl.static_range(num_buffers):
-            mbarrier.init(ready_bars.subslice(i), count=1)
-            mbarrier.init(empty_bars.subslice(i), count=1)
-            mbarrier.arrive(empty_bars.subslice(i), count=1)
-        return SharedMemoryChannel(smem, ready_bars, empty_bars, num_buffers)
+    @aggregate
+    class ChannelType:
+        mem: T
+        ready_bars: gl.shared_memory_descriptor
+        empty_bars: gl.shared_memory_descriptor
+        num_buffers: gl.constexpr
 
-    @gluon.jit
-    def increment(self, index, phase):
-        next_index = index + 1
-        rollover = next_index == self.num_buffers
-        index = gl.where(rollover, 0, next_index)
-        phase = gl.where(rollover, phase ^ 1, phase)
-        return index, phase
+        @gluon.jit
+        def create(shape, dtype, layout: gl.constexpr, num_buffers: gl.constexpr):
+            mem = alloc_fn(dtype, [num_buffers] + shape, layout)
+            ready_bars = gl.allocate_shared_memory(gl.int64, [num_buffers, 1], mbarrier.MBarrierLayout())
+            empty_bars = gl.allocate_shared_memory(gl.int64, [num_buffers, 1], mbarrier.MBarrierLayout())
+            for i in tl.static_range(num_buffers):
+                mbarrier.init(ready_bars.subslice(i), count=1)
+                mbarrier.init(empty_bars.subslice(i), count=1)
+            return ChannelType(mem, ready_bars, empty_bars, num_buffers)
 
-    def __init__(self, smem, ready_bars, empty_bars, num_buffers):
-        self.smem = smem
-        self.ready_bars = ready_bars
-        self.empty_bars = empty_bars
-        self.num_buffers = gl.constexpr(num_buffers)
+        @gluon.jit
+        def increment(self, index, phase):
+            next_index = index + 1
+            rollover = next_index == self.num_buffers
+            index = gl.where(rollover, 0, next_index)
+            phase = gl.where(rollover, phase ^ 1, phase)
+            return index, phase
 
-    @gluon.jit
-    def acquire_producer(self, index, phase):
-        smem = self.smem.subslice(index)
-        ready_bar = self.ready_bars.subslice(index)
-        empty_bar = self.empty_bars.subslice(index)
+        def __init__(self, mem, ready_bars, empty_bars, num_buffers):
+            self.mem = mem
+            self.ready_bars = ready_bars
+            self.empty_bars = empty_bars
+            self.num_buffers = gl.constexpr(num_buffers)
 
-        mbarrier.wait(empty_bar, phase)
-        return smem, ready_bar
+        @gluon.jit
+        def initialize_for_consumer(self):
+            for i in tl.static_range(self.num_buffers):
+                mbarrier.arrive(self.ready_bars.subslice(i), count=1)
 
-    @gluon.jit
-    def acquire_consumer(self, index, phase):
-        smem = self.smem.subslice(index)
-        ready_bar = self.ready_bars.subslice(index)
-        empty_bar = self.empty_bars.subslice(index)
+        @gluon.jit
+        def initialize_for_producer(self):
+            for i in tl.static_range(self.num_buffers):
+                mbarrier.arrive(self.empty_bars.subslice(i), count=1)
 
-        mbarrier.wait(ready_bar, phase)
-        return smem, empty_bar
+        @gluon.jit
+        def acquire_producer(self, index, phase):
+            mem = self.mem.subslice(index)
+            ready_bar = self.ready_bars.subslice(index)
+            empty_bar = self.empty_bars.subslice(index)
 
-    @gluon.jit
-    def create_producer(self):
-        return SharedMemoryProducer(self, gl.to_tensor(0), gl.to_tensor(0))
+            mbarrier.wait(empty_bar, phase)
+            return mem, ready_bar
 
-    @gluon.jit
-    def create_consumer(self):
-        return SharedMemoryConsumer(self, gl.to_tensor(0), gl.to_tensor(0))
+        @gluon.jit
+        def acquire_consumer(self, index, phase):
+            mem = self.mem.subslice(index)
+            ready_bar = self.ready_bars.subslice(index)
+            empty_bar = self.empty_bars.subslice(index)
 
-    @gluon.jit
-    def release(self):
-        self.smem._keep_alive()
-        for i in tl.static_range(self.num_buffers):
-            mbarrier.invalidate(self.ready_bars.subslice(i))
-            mbarrier.invalidate(self.empty_bars.subslice(i))
+            mbarrier.wait(ready_bar, phase)
+            return mem, empty_bar
+
+        @gluon.jit
+        def create_producer(self):
+            return Producer(self, gl.to_tensor(0), gl.to_tensor(0))
+
+        @gluon.jit
+        def create_consumer(self):
+            return Consumer(self, gl.to_tensor(0), gl.to_tensor(0))
+
+        @gluon.jit
+        def release(self):
+            if isinstance(self.mem, gl.shared_memory_descriptor):
+                self.mem._keep_alive()
+            for i in tl.static_range(self.num_buffers):
+                mbarrier.invalidate(self.ready_bars.subslice(i))
+                mbarrier.invalidate(self.empty_bars.subslice(i))
+
+    @aggregate
+    class Producer:
+        channel: ChannelType
+        phase: gl.tensor
+        index: gl.tensor
+
+        def __init__(self, channel, phase, index):
+            self.channel = channel
+            self.phase = phase
+            self.index = index
+
+        @gluon.jit
+        def acquire(self):
+            smem, ready_bar = self.channel.acquire_producer(self.index, self.phase)
+            self.index, self.phase = self.channel.increment(self.index, self.phase)
+            return smem, ready_bar, self
+
+        @gluon.jit
+        def emplace(self, value):
+            smem, ready_bar, self = self.acquire()
+            smem.store(value)
+            mbarrier.arrive(ready_bar, count=1)
+            return self
+
+    @aggregate
+    class Consumer:
+        channel: ChannelType
+        phase: gl.tensor
+        index: gl.tensor
+
+        def __init__(self, channel, phase, index):
+            self.channel = channel
+            self.phase = phase
+            self.index = index
+
+        @gluon.jit
+        def acquire(self):
+            smem, empty_bar = self.channel.acquire_consumer(self.index, self.phase)
+            self.index, self.phase = self.channel.increment(self.index, self.phase)
+            return smem, empty_bar, self
+
+        @gluon.jit
+        def get(self, layout: gl.constexpr):
+            smem, empty_bar, self = self.acquire()
+            value = smem.load(layout)
+            mbarrier.arrive(empty_bar, count=1)
+            return value, self
+
+    return ChannelType, Producer, Consumer
 
 
-@aggregate
-class SharedMemoryProducer:
-    channel: SharedMemoryChannel
-    phase: gl.tensor
-    index: gl.tensor
-
-    def __init__(self, channel, phase, index):
-        self.channel = channel
-        self.phase = phase
-        self.index = index
-
-    @gluon.jit
-    def acquire(self):
-        smem, ready_bar = self.channel.acquire_producer(self.index, self.phase)
-        self.index, self.phase = self.channel.increment(self.index, self.phase)
-        return smem, ready_bar, self
-
-    @gluon.jit
-    def emplace(self, value):
-        smem, ready_bar, self = self.acquire()
-        smem.store(value)
-        mbarrier.arrive(ready_bar, count=1)
-        return self
-
-
-@aggregate
-class SharedMemoryConsumer:
-    channel: SharedMemoryChannel
-    phase: gl.tensor
-    index: gl.tensor
-
-    def __init__(self, channel, phase, index):
-        self.channel = channel
-        self.phase = phase
-        self.index = index
-
-    @gluon.jit
-    def acquire(self):
-        smem, empty_bar = self.channel.acquire_consumer(self.index, self.phase)
-        self.index, self.phase = self.channel.increment(self.index, self.phase)
-        return smem, empty_bar, self
-
-    @gluon.jit
-    def get(self, layout: gl.constexpr):
-        smem, empty_bar, self = self.acquire()
-        value = smem.load(layout)
-        mbarrier.arrive(empty_bar, count=1)
-        return value, self
+SharedMemoryChannel, SharedMemoryProducer, SharedMemoryConsumer = Channel(gl.shared_memory_descriptor,
+                                                                          gl.allocate_shared_memory)
+TensorMemoryChannel, TensorMemoryProducer, TensorMemoryConsumer = Channel(tensor_memory_descriptor,
+                                                                          allocate_tensor_memory)
 
 
 @aggregate
@@ -293,6 +311,7 @@ class LoadContext:
         shape: gl.constexpr = desc.block_type.shape
         smem_layout: gl.constexpr = get_nvmma_layout(shape, desc.dtype)
         channel = SharedMemoryChannel.create(shape, desc.dtype, smem_layout, num_buffers)
+        channel.initialize_for_producer()
         return LoadContext(desc, channel)
 
     def __init__(self, desc, channel):
@@ -335,10 +354,7 @@ def get_mma_reg_layout(shape, num_warps, dtype=gl.float32):
 
 @aggregate
 class MMAContext:
-    tmem: tensor_memory_descriptor
-    inp_bars: gl.shared_memory_descriptor
-    out_bars: gl.shared_memory_descriptor
-    num_buffers: gl.constexpr
+    channel: TensorMemoryChannel
     instr_shape: gl.constexpr
     shape: gl.constexpr
 
@@ -347,46 +363,17 @@ class MMAContext:
         instr_shape: gl.constexpr = get_mma_instr_shape(shape, dtype)
         tmem_layout: gl.constexpr = TensorMemoryLayout((instr_shape[0], instr_shape[1]), unpacked=True)
 
-        tmem = allocate_tensor_memory(dtype, [num_buffers] + list(shape), tmem_layout)
-        inp_bars = gl.allocate_shared_memory(gl.int64, [num_buffers, 1], mbarrier.MBarrierLayout())
-        out_bars = gl.allocate_shared_memory(gl.int64, [num_buffers, 1], mbarrier.MBarrierLayout())
-        for i in tl.static_range(num_buffers):
-            mbarrier.init(inp_bars.subslice(i), count=1)
-            mbarrier.init(out_bars.subslice(i), count=1)
+        channel = TensorMemoryChannel.create(shape, dtype, tmem_layout, num_buffers)
+        return MMAContext(channel, instr_shape, shape)
 
-        return MMAContext(tmem, inp_bars, out_bars, num_buffers, instr_shape, shape)
-
-    def __init__(self, tmem, inp_bars, out_bars, num_buffers, instr_shape, shape):
-        self.tmem = tmem
-        self.inp_bars = inp_bars
-        self.out_bars = out_bars
-        self.num_buffers = gl.constexpr(num_buffers)
+    def __init__(self, channel, instr_shape, shape):
+        self.channel = channel
         self.instr_shape = gl.constexpr(instr_shape)
         self.shape = gl.constexpr(shape)
 
     @gluon.jit
-    def increment(self, index, phase):
-        next_index = index + 1
-        rollover = next_index == self.num_buffers
-        index = gl.where(rollover, 0, next_index)
-        phase = gl.where(rollover, phase ^ 1, phase)
-        return index, phase
-
-    @gluon.jit
-    def initialize_for_consumer(self):
-        for i in tl.static_range(self.num_buffers):
-            mbarrier.arrive(self.out_bars.subslice(i), count=1)
-
-    @gluon.jit
-    def initialize_for_producer(self):
-        for i in tl.static_range(self.num_buffers):
-            mbarrier.arrive(self.inp_bars.subslice(i), count=1)
-
-    @gluon.jit
     def release(self):
-        for i in tl.static_range(self.num_buffers):
-            mbarrier.invalidate(self.inp_bars.subslice(i))
-            mbarrier.invalidate(self.out_bars.subslice(i))
+        self.channel.release()
 
     @tl.constexpr_function
     def get_reg_layout(self, num_warps):
@@ -394,66 +381,21 @@ class MMAContext:
 
 
 @aggregate
-class MMAConsumer:
-    ctx: MMAContext
-    index: gl.tensor
-    phase: gl.tensor
-
-    @gluon.jit
-    def create(ctx):
-        return MMAConsumer(ctx, gl.to_tensor(0), gl.to_tensor(0))
-
-    def __init__(self, ctx, index, phase):
-        self.ctx = ctx
-        self.index = index
-        self.phase = phase
-
-    @gluon.jit
-    def acquire(self):
-        tmem = self.ctx.tmem.subslice(self.index)
-        inp_bar = self.ctx.inp_bars.subslice(self.index)
-        out_bar = self.ctx.out_bars.subslice(self.index)
-
-        mbarrier.wait(out_bar, self.phase)
-
-        self.index, self.phase = self.ctx.increment(self.index, self.phase)
-        return tmem, inp_bar, self
-
-    @gluon.jit
-    def get(self, layout: gl.constexpr):
-        tmem, inp_bar, self = self.acquire()
-        value = tmem.load(layout)
-        mbarrier.arrive(inp_bar, count=1)
-        return value, self
-
-
-@aggregate
 class MMAProducer:
-    ctx: MMAContext
-    index: gl.tensor
-    phase: gl.tensor
+    producer: TensorMemoryProducer
 
     @gluon.jit
     def create(ctx):
-        return MMAProducer(ctx, gl.to_tensor(0), gl.to_tensor(0))
+        return MMAProducer(ctx.channel.create_producer())
 
-    def __init__(self, ctx, index, phase):
-        self.ctx = ctx
-        self.index = index
-        self.phase = phase
+    def __init__(self, producer):
+        self.producer = producer
 
     @gluon.jit
     def wait_and_issue_next(self, a, b, release_bars, use_acc):
-        tmem = self.ctx.tmem.subslice(self.index)
-        inp_bar = self.ctx.inp_bars.subslice(self.index)
-        out_bar = self.ctx.out_bars.subslice(self.index)
-
-        mbarrier.wait(inp_bar, self.phase)
-
-        tcgen05_mma(a, b, tmem, use_acc=use_acc, mbarriers=[out_bar] + release_bars,
+        tmem, bar, self.producer = self.producer.acquire()
+        tcgen05_mma(a, b, tmem, use_acc=use_acc, mbarriers=[bar] + release_bars,
                     mbarrier_preds=[True] * (len(release_bars) + 1))
-
-        self.index, self.phase = self.ctx.increment(self.index, self.phase)
         return self
 
 
@@ -640,8 +582,8 @@ def _attn_fwd_default(m_i, l_i,  #
         lo, hi = 0, N_CTX
     offsetkv_y = offset_y + lo
 
-    qk_consumer = MMAConsumer.create(qk_mma_ctx)
-    o_consumer = MMAConsumer.create(o_mma_ctx)
+    qk_consumer = qk_mma_ctx.channel.create_consumer()
+    o_consumer = o_mma_ctx.channel.create_consumer()
 
     mi_producer = mi_chnl.create_producer()
     mi_producer = mi_producer.emplace(m_i)
@@ -694,14 +636,15 @@ def _attn_fwd_inner(m_i, l_i,  #
     v_load_ctx = LoadContext.create(desc_v, num_buffers=2)
 
     qk_mma_ctx = MMAContext.create([BLOCK_M, BLOCK_N], num_buffers=2)
-    qk_mma_ctx.initialize_for_producer()
+    qk_mma_ctx.channel.initialize_for_producer()
 
     o_mma_ctx = MMAContext.create(acc.shape, num_buffers=1)
-    o_mma_ctx.initialize_for_consumer()
-    o_mma_ctx.tmem.subslice(0).store(acc)
+    o_mma_ctx.channel.initialize_for_consumer()
+    o_mma_ctx.channel.mem.subslice(0).store(acc)
 
     p_tmem = TensorMemoryVariable.allocate_lhs(1, [BLOCK_M, BLOCK_N], dtype, num_warps)
     mi_chnl = SharedMemoryChannel.create([BLOCK_M], gl.float32, gl.constexpr(mbarrier.MBarrierLayout()), num_buffers=1)
+    mi_chnl.initialize_for_producer()
 
     m_i, l_i = gl.warp_specialize((
         m_i,
@@ -725,7 +668,7 @@ def _attn_fwd_inner(m_i, l_i,  #
         STAGE,
     ), _attn_fwd_default, [_attn_fwd_load, _attn_fwd_mma], [1, 1], [24, 24])
 
-    acc = o_mma_ctx.tmem.subslice(0).load(acc.type.layout)
+    acc = o_mma_ctx.channel.mem.subslice(0).load(acc.type.layout)
 
     k_load_ctx.release()
     v_load_ctx.release()
