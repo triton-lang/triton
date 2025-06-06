@@ -33,3 +33,11 @@ tt.func public @bad_num_elems() {
     %a = tt.make_range { start = 0 : i32, end = 32 : i32 } : tensor<16xi32>
     tt.return
 }
+
+// -----
+
+tt.func @make_range_op() {
+  // expected-error @+1 {{'tt.make_range' op start must be less than end}}
+  %0 = tt.make_range{end = 1 : i32, start = 1 : i32} : tensor<0xi32>
+  tt.return
+}
