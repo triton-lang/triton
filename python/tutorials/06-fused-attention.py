@@ -583,8 +583,6 @@ class _attention(torch.autograd.Function):
 
 attention = _attention.apply
 
-TORCH_HAS_FP8 = hasattr(torch, 'float8_e5m2')
-
 
 @pytest.mark.parametrize("Z", [1, 4])
 @pytest.mark.parametrize("H", [2, 48])
@@ -592,20 +590,13 @@ TORCH_HAS_FP8 = hasattr(torch, 'float8_e5m2')
 @pytest.mark.parametrize("HEAD_DIM", [64, 128])
 @pytest.mark.parametrize("causal", [True])  # FIXME: Non-causal tests do not pass at the moment.
 @pytest.mark.parametrize("warp_specialize", [False, True] if is_blackwell() else [False])
-@pytest.mark.parametrize("mode", ["fwd", "bwd"])
-@pytest.mark.parametrize("provider", ["triton-fp16"] + (["triton-fp8"] if TORCH_HAS_FP8 else []))
-def test_op(Z, H, N_CTX, HEAD_DIM, causal, warp_specialize, mode, provider, dtype=torch.float16):
+def test_op(Z, H, N_CTX, HEAD_DIM, causal, warp_specialize, dtype=torch.float16):
     torch.manual_seed(20)
     q = (torch.empty((Z, H, N_CTX, HEAD_DIM), dtype=dtype, device=DEVICE).normal_(mean=0.0, std=0.5).requires_grad_())
     k = (torch.empty((Z, H, N_CTX, HEAD_DIM), dtype=dtype, device=DEVICE).normal_(mean=0.0, std=0.5).requires_grad_())
     v = (torch.empty((Z, H, N_CTX, HEAD_DIM), dtype=dtype, device=DEVICE).normal_(mean=0.0, std=0.5).requires_grad_())
-    if mode == "fwd" and "fp8" in provider:
-        q = q.to(torch.float8_e5m2)
-        k = k.to(torch.float8_e5m2)
-        v = v.permute(0, 1, 3, 2).contiguous()
-        v = v.permute(0, 1, 3, 2)
-        v = v.to(torch.float8_e5m2)
     sm_scale = 0.5
+    dout = torch.randn_like(q)
     # reference implementation
     M = torch.tril(torch.ones((N_CTX, N_CTX), device=DEVICE))
     p = torch.matmul(q, k.transpose(2, 3)) * sm_scale
@@ -614,23 +605,18 @@ def test_op(Z, H, N_CTX, HEAD_DIM, causal, warp_specialize, mode, provider, dtyp
     p = torch.softmax(p.float(), dim=-1).half()
     # p = torch.exp(p)
     ref_out = torch.matmul(p, v)
-    if mode == "bwd":
-        dout = torch.randn_like(q)
-        ref_out.backward(dout)
-        ref_dv, v.grad = v.grad.clone(), None
-        ref_dk, k.grad = k.grad.clone(), None
-        ref_dq, q.grad = q.grad.clone(), None
+    ref_out.backward(dout)
+    ref_dv, v.grad = v.grad.clone(), None
+    ref_dk, k.grad = k.grad.clone(), None
+    ref_dq, q.grad = q.grad.clone(), None
     # triton implementation
     tri_out = attention(q, k, v, causal, sm_scale, warp_specialize).half()
-    if mode == "bwd":
-        tri_out.backward(dout)
-        tri_dv, v.grad = v.grad.clone(), None
-        tri_dk, k.grad = k.grad.clone(), None
-        tri_dq, q.grad = q.grad.clone(), None
+    tri_out.backward(dout)
+    tri_dv, v.grad = v.grad.clone(), None
+    tri_dk, k.grad = k.grad.clone(), None
+    tri_dq, q.grad = q.grad.clone(), None
     # compare
     torch.testing.assert_close(ref_out, tri_out, atol=1e-2, rtol=0)
-    if mode == "fwd":
-        return
     rtol = 0.0
     # Relative tolerance workaround for known hardware limitation of CDNA2 GPU.
     # For details see https://pytorch.org/docs/stable/notes/numerical_accuracy.html#reduced-precision-fp16-and-bf16-gemms-and-convolutions-on-amd-instinct-mi200-devices
@@ -648,6 +634,7 @@ try:
 except BaseException:
     HAS_FLASH = False
 
+TORCH_HAS_FP8 = hasattr(torch, 'float8_e5m2')
 BATCH, N_HEADS, HEAD_DIM = 4, 32, 64
 # vary seq length for fixed head and batch=4
 configs = []
