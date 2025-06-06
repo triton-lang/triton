@@ -1,4 +1,4 @@
-from typing import Sequence, List, TypeVar, Tuple
+from typing import Sequence, List, TypeVar, Tuple, Callable
 from triton.language.semantic import TritonSemantic
 from . import _core as ttgl
 from ._layouts import SliceLayout
@@ -6,6 +6,11 @@ from triton._C.libtriton.gluon_ir import GluonOpBuilder
 from triton.compiler.code_generator import flatten_values_to_ir, unflatten_ir_values
 
 TensorTy = TypeVar("TensorTy")
+
+
+def _check(cond: bool, msg_fn: Callable[[], str], category=ValueError):
+    if not cond:
+        raise category(msg_fn())
 
 
 class GluonSemantic(TritonSemantic[TensorTy]):
@@ -40,20 +45,23 @@ class GluonSemantic(TritonSemantic[TensorTy]):
         if axis < 0:
             axis += len(input.shape)
 
-        assert isinstance(input.type, ttgl.distributed_type)
+        _check(isinstance(input.type, ttgl.distributed_type),
+               lambda: f"expected expand_dims input to be a distributed_type but got: {input.type!r}")
         layout = input.type.layout
-        assert isinstance(layout, SliceLayout)
-        assert layout.dim == axis
+        _check(isinstance(layout, SliceLayout),
+               lambda: f"expected expand_dims input to have a SliceLayout, but got: {layout}")
+        _check(layout.dim == axis,
+               lambda: f"expected expand_dims input layout to be sliced in axis {axis} but got {layout.dim}")
 
         ret_ty = ttgl.distributed_type(input.type.scalar, dst_shape, layout.parent)
         handle = self.builder.create_expand_dims(input.handle, axis, ret_ty.to_ir(self.builder))
         return self.tensor(handle, ret_ty)
 
     def broadcast_impl_shape(self, input: TensorTy, shape: Tuple[int]) -> TensorTy:
-        assert isinstance(input.type, ttgl.distributed_type), str(input.type)
+        _check(isinstance(input.type, ttgl.distributed_type),
+               lambda: f"expected expand_dims input to be a distributed_type but got: {input.type!r}")
         src_shape = input.type.get_block_shapes()
-        if len(src_shape) != len(shape):
-            raise ValueError(f"Cannot broadcast, rank mismatch: {src_shape}, {shape}")
+        _check(len(src_shape) == len(shape), lambda: f"Cannot broadcast, rank mismatch: {src_shape}, {shape}")
         if shape == src_shape:
             return input
         for i, item in enumerate(src_shape):
@@ -72,8 +80,10 @@ class GluonSemantic(TritonSemantic[TensorTy]):
         if not lhs_ty.is_block() or not rhs_ty.is_block():
             return super().broadcast_impl_value(lhs, rhs)
 
-        assert isinstance(lhs_ty, ttgl.distributed_type)
-        assert isinstance(rhs_ty, ttgl.distributed_type)
+        _check(isinstance(lhs_ty, ttgl.distributed_type),
+               lambda: f"expected broadcast left input to be a distributed_type but got: {lhs_ty!r}")
+        _check(isinstance(rhs_ty, ttgl.distributed_type),
+               lambda: f"expected broadcast right input to be a distributed_type but got: {rhs_ty!r}")
 
         lhs_shape = lhs_ty.get_block_shapes()
         rhs_shape = rhs_ty.get_block_shapes()
@@ -101,7 +111,8 @@ class GluonSemantic(TritonSemantic[TensorTy]):
 
     def convert_layout(self, value, layout):
         ty = value.type
-        assert isinstance(ty, ttgl.distributed_type)
+        _check(isinstance(ty, ttgl.distributed_type),
+               lambda: f"expected convert_layout input to be a distributed_type but got: {ty!r}")
         ret_ty = ttgl.distributed_type(ty.element_ty, ty.shape, layout)
         handle = self.builder.create_convert_layout(ret_ty.to_ir(self.builder), value.handle)
         return ttgl.tensor(handle, ret_ty)
