@@ -723,12 +723,15 @@ def reduce_kernel(out):
     s1 = ttgl.sum(a, 1)
     ttgl.static_assert(s1.type.layout == ttgl.SliceLayout(1, layout))
 
+    scalar = ttgl.max(s0, 0)
+    ttgl.static_assert(scalar.type == ttgl.float32)
+
     s1 = ttgl.convert_layout(s1, s0.type.layout)
 
     pairs = ttgl.reduce((a, b), 0, pair_add)
     ttgl.static_assert(pairs[0].type.layout == ttgl.SliceLayout(0, layout))
     ttgl.static_assert(pairs[1].type.layout == ttgl.SliceLayout(0, layout))
-    result = s0 + s1 + pairs[0] + pairs[1]
+    result = scalar + s1 + pairs[0] + pairs[1]
     tl.store(out + ttgl.arange(0, 16, s0.type.layout), result)
 
 
@@ -746,28 +749,34 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     %cst_0 = arith.constant dense<1.000000e+00> : tensor<16x16xf32, #blocked> loc(#loc)
     %0 = "tt.reduce"(%cst_0) <{axis = 0 : i32}> ({
     ^bb0(%arg1: f32 loc(unknown), %arg2: f32 loc(unknown)):
-      %10 = arith.addf %arg1, %arg2 : f32 loc(#loc)
-      tt.reduce.return %10 : f32 loc(#loc)
+      %12 = arith.addf %arg1, %arg2 : f32 loc(#loc)
+      tt.reduce.return %12 : f32 loc(#loc)
     }) : (tensor<16x16xf32, #blocked>) -> tensor<16xf32, #ttg.slice<{dim = 0, parent = #blocked}>> loc(#loc)
     %1 = "tt.reduce"(%cst_0) <{axis = 1 : i32}> ({
     ^bb0(%arg1: f32 loc(unknown), %arg2: f32 loc(unknown)):
-      %10 = arith.addf %arg1, %arg2 : f32 loc(#loc)
-      tt.reduce.return %10 : f32 loc(#loc)
+      %12 = arith.addf %arg1, %arg2 : f32 loc(#loc)
+      tt.reduce.return %12 : f32 loc(#loc)
     }) : (tensor<16x16xf32, #blocked>) -> tensor<16xf32, #ttg.slice<{dim = 1, parent = #blocked}>> loc(#loc)
-    %2 = ttg.convert_layout %1 : tensor<16xf32, #ttg.slice<{dim = 1, parent = #blocked}>> -> tensor<16xf32, #ttg.slice<{dim = 0, parent = #blocked}>> loc(#loc)
-    %3:2 = "tt.reduce"(%cst_0, %cst) <{axis = 0 : i32}> ({
+    %2 = "tt.reduce"(%0) <{axis = 0 : i32}> ({
+    ^bb0(%arg1: f32 loc(unknown), %arg2: f32 loc(unknown)):
+      %12 = arith.maxnumf %arg1, %arg2 : f32 loc(#loc)
+      tt.reduce.return %12 : f32 loc(#loc)
+    }) : (tensor<16xf32, #ttg.slice<{dim = 0, parent = #blocked}>>) -> f32 loc(#loc)
+    %3 = ttg.convert_layout %1 : tensor<16xf32, #ttg.slice<{dim = 1, parent = #blocked}>> -> tensor<16xf32, #ttg.slice<{dim = 0, parent = #blocked}>> loc(#loc)
+    %4:2 = "tt.reduce"(%cst_0, %cst) <{axis = 0 : i32}> ({
     ^bb0(%arg1: f32 loc(unknown), %arg2: f32 loc(unknown), %arg3: f32 loc(unknown), %arg4: f32 loc(unknown)):
-      %10 = arith.addf %arg1, %arg3 : f32 loc(#loc)
-      %11 = arith.addf %arg2, %arg4 : f32 loc(#loc)
-      tt.reduce.return %10, %11 : f32, f32 loc(#loc)
+      %12 = arith.addf %arg1, %arg3 : f32 loc(#loc)
+      %13 = arith.addf %arg2, %arg4 : f32 loc(#loc)
+      tt.reduce.return %12, %13 : f32, f32 loc(#loc)
     }) : (tensor<16x16xf32, #blocked>, tensor<16x16xf32, #blocked>) -> (tensor<16xf32, #ttg.slice<{dim = 0, parent = #blocked}>>, tensor<16xf32, #ttg.slice<{dim = 0, parent = #blocked}>>) loc(#loc)
-    %4 = arith.addf %0, %2 : tensor<16xf32, #ttg.slice<{dim = 0, parent = #blocked}>> loc(#loc)
-    %5 = arith.addf %4, %3#0 : tensor<16xf32, #ttg.slice<{dim = 0, parent = #blocked}>> loc(#loc)
-    %6 = arith.addf %5, %3#1 : tensor<16xf32, #ttg.slice<{dim = 0, parent = #blocked}>> loc(#loc)
-    %7 = tt.make_range {end = 16 : i32, start = 0 : i32} : tensor<16xi32, #ttg.slice<{dim = 0, parent = #blocked}>> loc(#loc)
-    %8 = tt.splat %arg0 : !tt.ptr<f32> -> tensor<16x!tt.ptr<f32>, #ttg.slice<{dim = 0, parent = #blocked}>> loc(#loc)
-    %9 = tt.addptr %8, %7 : tensor<16x!tt.ptr<f32>, #ttg.slice<{dim = 0, parent = #blocked}>>, tensor<16xi32, #ttg.slice<{dim = 0, parent = #blocked}>> loc(#loc)
-    tt.store %9, %6 : tensor<16x!tt.ptr<f32>, #ttg.slice<{dim = 0, parent = #blocked}>> loc(#loc)
+    %5 = tt.splat %2 : f32 -> tensor<16xf32, #ttg.slice<{dim = 0, parent = #blocked}>> loc(#loc)
+    %6 = arith.addf %5, %3 : tensor<16xf32, #ttg.slice<{dim = 0, parent = #blocked}>> loc(#loc)
+    %7 = arith.addf %6, %4#0 : tensor<16xf32, #ttg.slice<{dim = 0, parent = #blocked}>> loc(#loc)
+    %8 = arith.addf %7, %4#1 : tensor<16xf32, #ttg.slice<{dim = 0, parent = #blocked}>> loc(#loc)
+    %9 = tt.make_range {end = 16 : i32, start = 0 : i32} : tensor<16xi32, #ttg.slice<{dim = 0, parent = #blocked}>> loc(#loc)
+    %10 = tt.splat %arg0 : !tt.ptr<f32> -> tensor<16x!tt.ptr<f32>, #ttg.slice<{dim = 0, parent = #blocked}>> loc(#loc)
+    %11 = tt.addptr %10, %9 : tensor<16x!tt.ptr<f32>, #ttg.slice<{dim = 0, parent = #blocked}>>, tensor<16xi32, #ttg.slice<{dim = 0, parent = #blocked}>> loc(#loc)
+    tt.store %11, %8 : tensor<16x!tt.ptr<f32>, #ttg.slice<{dim = 0, parent = #blocked}>> loc(#loc)
     tt.return loc(#loc)
   } loc(#loc)
 } loc(#loc)
