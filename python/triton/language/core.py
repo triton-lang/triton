@@ -329,6 +329,9 @@ class constexpr(base_value):
     def __call__(self, *args, **kwds):
         return self.value(*args, **kwds)
 
+    def __hash__(self):
+        return hash(self.value)
+
 
 def constexpr_function(f):
     """
