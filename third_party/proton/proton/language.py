@@ -31,7 +31,7 @@ class scope:
         self.semantic = _semantic
 
     def __enter__(self):
-        enter_scope(self.name, semantic=self._semantic)
+        enter_scope(self.name, _semantic=self.semantic)
 
     def __exit__(self, exc_type, exc_value, traceback):
-        exit_scope(self.name, semantic=self._semantic)
+        exit_scope(self.name, _semantic=self.semantic)
