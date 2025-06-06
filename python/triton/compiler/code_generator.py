@@ -1464,7 +1464,7 @@ class CodeGenerator(ast.NodeVisitor):
     }
 
 
-def ast_to_ttir(fn, src, context, options, codegen_fns, module_map):
+def ast_to_ttir(fn, src, context, options, codegen_fns, module_map, module=None):
     arg_types = [None] * len(fn.arg_names)
     for k, v in src.signature.items():
         idx = fn.arg_names.index(k)
@@ -1479,7 +1479,7 @@ def ast_to_ttir(fn, src, context, options, codegen_fns, module_map):
     proxy = namedtuple("SpecializationProxy", ["constants", "signature"])(constants, signature)
     generator = CodeGenerator(context, prototype, gscope=fn.__globals__.copy(), function_name=fn.repr(proxy), jit_fn=fn,
                               is_kernel=True, file_name=file_name, begin_line=begin_line, options=options,
-                              codegen_fns=codegen_fns, module_map=module_map)
+                              codegen_fns=codegen_fns, module_map=module_map, module=module)
     generator.visit(fn.parse())
     ret = generator.module
     # module takes ownership of the context
