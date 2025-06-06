@@ -1468,3 +1468,27 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 // CHECK:           %[[VAL_21:.*]] = tt.load %[[VAL_20]], %[[VAL_11]] : tensor<256x!tt.ptr<i32>>
 // CHECK:           tt.return %[[VAL_21]] : tensor<256xi32>
 // CHECK:         }
+
+// -----
+
+module attributes {"ttg.num-warps" = 4 : i32} {
+  tt.func @ifOpPoison(%arg0: !tt.ptr<f32>, %arg1: tensor<1024xf32>, %arg2: i1) -> tensor<1024xf32> {
+    %c1024_i32 = arith.constant 1024 : i32
+    // expected-remark@+1 {{skipping canonicalize-pointers due to ub.poison}}
+    %poison = ub.poison : tensor<1024x!tt.ptr<f32>>
+    %0 = tt.get_program_id x : i32
+    %1 = arith.muli %0, %c1024_i32 : i32
+    %2 = tt.make_range {end = 1024 : i32, start = 0 : i32} : tensor<1024xi32>
+    %3 = tt.splat %1 : i32 -> tensor<1024xi32>
+    %4 = arith.addi %3, %2 : tensor<1024xi32>
+    %5 = tt.splat %arg0 : !tt.ptr<f32> -> tensor<1024x!tt.ptr<f32>>
+    %6 = scf.if %arg2 -> (tensor<1024x!tt.ptr<f32>>) {
+      %8 = tt.addptr %5, %4 : tensor<1024x!tt.ptr<f32>>, tensor<1024xi32>
+      scf.yield %8 : tensor<1024x!tt.ptr<f32>>
+    } else {
+      scf.yield %poison : tensor<1024x!tt.ptr<f32>>
+    }
+    %7 = tt.load %6 : tensor<1024x!tt.ptr<f32>>
+    tt.return %7 : tensor<1024xf32>
+  }
+}
