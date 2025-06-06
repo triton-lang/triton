@@ -15,7 +15,7 @@ namespace ttng = mlir::triton::nvidia_gpu;
 //===----------------------------------------------------------------------===//
 
 bool ttng::MMAv5PipelineableOperandsHelper::isOperandPipelineable(
-    Value v, Operation *&foundLoad, Operation *&foundAlloc) {
+    Value v, Operation *&foundDef) {
   if (forOp.isDefinedOutsideOfLoop(v)) {
     return true;
   }
@@ -25,21 +25,16 @@ bool ttng::MMAv5PipelineableOperandsHelper::isOperandPipelineable(
   while (isa<ttg::MemDescTransOp, ttg::MemDescReshapeOp>(v.getDefiningOp())) {
     v = v.getDefiningOp()->getOperand(0);
   }
-  if (auto tmemAlloc = dyn_cast<ttng::TMEMAllocOp>(v.getDefiningOp())) {
-    foundLoad = tmemAlloc;
-    foundAlloc = tmemAlloc;
-    return false;
-  }
-  if (auto tmemStore = dyn_cast<ttng::TMEMStoreOp>(v.getDefiningOp())) {
-    foundLoad = tmemStore;
-    foundAlloc = tmemStore;
+  if (isa<ttg::LocalStoreOp, ttng::TMEMStoreOp, ttng::TMEMAllocOp>(
+          v.getDefiningOp())) {
+    foundDef = v.getDefiningOp();
     return false;
   }
   auto localAlloc = dyn_cast<ttg::LocalAllocOp>(v.getDefiningOp());
   if (!localAlloc) {
     return false;
   }
-  foundAlloc = localAlloc;
+  foundDef = localAlloc;
   if (!localAlloc.getSrc()) {
     return false;
   }
@@ -51,19 +46,18 @@ bool ttng::MMAv5PipelineableOperandsHelper::isOperandPipelineable(
           localAllocSrc)) {
     return false;
   }
-  foundLoad = localAllocSrc;
-  if (!isLoadToBePipelined(foundLoad)) {
+  foundDef = localAllocSrc;
+  if (!isLoadToBePipelined(localAllocSrc)) {
     return false;
   }
-  if (canBeAsyncLoad(foundLoad)) {
+  if (canBeAsyncLoad(localAllocSrc)) {
     return true;
   }
   return false;
 }
 
 void ttng::MMAv5PipelineableOperandsHelper::run() {
-  unpipelineableOperandAllocs.clear();
-  unpipelineableOperandLoads.clear();
+  unpipelineableOperandDefs.clear();
   isOperandsStateDetermined = true;
   // Accumulator alloc must be outside the loop.
   auto tmemAlloc = mmaOp.getAccumulator().getDefiningOp<ttng::TMEMAllocOp>();
@@ -74,24 +68,17 @@ void ttng::MMAv5PipelineableOperandsHelper::run() {
     return;
   }
   if (auto dotOp = dyn_cast<tt::DotOpInterface>(mmaOp.getOperation())) {
-    Operation *foundLoad = nullptr;
-    Operation *foundAlloc = nullptr;
-    if (!isOperandPipelineable(dotOp.getA(), foundLoad, foundAlloc)) {
-      if (foundAlloc) {
-        unpipelineableOperandAllocs.push_back(foundAlloc);
-      }
-      if (foundLoad) {
-        unpipelineableOperandLoads.push_back(foundLoad);
+    Operation *foundDef = nullptr;
+    if (!isOperandPipelineable(dotOp.getA(), foundDef)) {
+      if (foundDef) {
+        unpipelineableOperandDefs.push_back(foundDef);
       } else {
         isOperandsStateDetermined = false;
       }
     }
-    if (!isOperandPipelineable(dotOp.getB(), foundLoad, foundAlloc)) {
-      if (foundAlloc) {
-        unpipelineableOperandAllocs.push_back(foundAlloc);
-      }
-      if (foundLoad) {
-        unpipelineableOperandLoads.push_back(foundLoad);
+    if (!isOperandPipelineable(dotOp.getB(), foundDef)) {
+      if (foundDef) {
+        unpipelineableOperandDefs.push_back(foundDef);
       } else {
         isOperandsStateDetermined = false;
       }
@@ -111,31 +98,24 @@ void ttng::MMAv5PipelineableOperandsHelper::run() {
       isOperandsStateDetermined = false;
       return;
     }
-    Operation *foundLoad = nullptr;
-    Operation *foundAlloc = nullptr;
-    if (!isOperandPipelineable(scaledOp.getAScale(), foundLoad, foundAlloc)) {
-      if (foundAlloc) {
-        unpipelineableOperandAllocs.push_back(foundAlloc);
-      }
-      if (foundLoad) {
-        unpipelineableOperandLoads.push_back(foundLoad);
+    Operation *foundDef = nullptr;
+    if (!isOperandPipelineable(scaledOp.getAScale(), foundDef)) {
+      if (foundDef) {
+        unpipelineableOperandDefs.push_back(foundDef);
       } else {
         isOperandsStateDetermined = false;
       }
     }
-    if (!isOperandPipelineable(scaledOp.getBScale(), foundLoad, foundAlloc)) {
-      if (foundAlloc) {
-        unpipelineableOperandAllocs.push_back(foundAlloc);
-      }
-      if (foundLoad) {
-        unpipelineableOperandLoads.push_back(foundLoad);
+    if (!isOperandPipelineable(scaledOp.getBScale(), foundDef)) {
+      if (foundDef) {
+        unpipelineableOperandDefs.push_back(foundDef);
       } else {
         isOperandsStateDetermined = false;
       }
     }
   }
   isPipelineable =
-      isOperandsStateDetermined && unpipelineableOperandLoads.empty();
+      isOperandsStateDetermined && unpipelineableOperandDefs.empty();
 }
 
 bool ttng::hasAccReadModifyWrite(ttng::MMAv5OpInterface mma, scf::ForOp forOp) {

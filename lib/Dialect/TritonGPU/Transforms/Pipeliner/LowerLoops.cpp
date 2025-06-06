@@ -799,13 +799,14 @@ getTmemUseStageBoundOps(ttng::TMEMAllocOp alloc, scf::ForOp forOp,
   return bounds;
 }
 
-static bool hoistBufferOutOfLoop(scf::ForOp forOp, Operation *op,
-                                 CoarseSchedule &schedule) {
+Operation *hoistBufferOutOfLoop(scf::ForOp forOp, Operation *op,
+                                CoarseSchedule &schedule) {
+  Operation *newStore = nullptr;
   if (!isa<ttng::TMEMAllocOp, ttg::LocalAllocOp>(op))
-    return false;
+    return nullptr;
   // If the alloc is already out of the loop, there is nothing to do.
   if (!forOp->isAncestor(op))
-    return true;
+    return nullptr;
   OpBuilderForStage builder(op->getLoc(), forOp, schedule);
   auto allocType = dyn_cast<MemDescType>(op->getResult(0).getType());
   auto newType = triton::gpu::MemDescType::get(
@@ -819,18 +820,18 @@ static bool hoistBufferOutOfLoop(scf::ForOp forOp, Operation *op,
     tmemAlloc.getSrcMutable().clear();
     builder.setInsertionPointAfter(op);
     Value trueVal = builder.create<arith::ConstantIntOp>(1, 1);
-    builder.create<ttng::TMEMStoreOp>(tmemAlloc.getResult(), op->getOperand(0),
-                                      trueVal);
+    newStore = builder.create<ttng::TMEMStoreOp>(tmemAlloc.getResult(),
+                                                 op->getOperand(0), trueVal);
   } else {
     auto localAlloc = cast<ttg::LocalAllocOp>(newAlloc);
     localAlloc.getSrcMutable().clear();
     builder.setInsertionPointAfter(op);
-    builder.create<ttg::LocalStoreOp>(op->getOperand(0),
-                                      localAlloc.getResult());
+    newStore = builder.create<ttg::LocalStoreOp>(op->getOperand(0),
+                                                 localAlloc.getResult());
   }
   op->replaceAllUsesWith(newAlloc);
   op->erase();
-  return true;
+  return newStore;
 }
 
 void createBarrierAndWaitOps(scf::ForOp forOp, CoarseSchedule &schedule,
@@ -856,20 +857,26 @@ void createBarrierAndWaitOps(scf::ForOp forOp, CoarseSchedule &schedule,
   ttng::MMAv5PipelineableOperandsHelper mmaPipeHelper(mma, forOp,
                                                       isLoadToBePipelined);
 
-  for (auto alloc : mmaPipeHelper.unpipelineableOperandAllocs) {
-    hoistBufferOutOfLoop(forOp, alloc, schedule);
+  SmallVector<Operation *> updatedDefs;
+  for (auto def : mmaPipeHelper.unpipelineableOperandDefs) {
+    auto newStore = hoistBufferOutOfLoop(forOp, def, schedule);
+    if (newStore) {
+      updatedDefs.push_back(newStore);
+    } else {
+      updatedDefs.push_back(def);
+    }
   }
 
   // Rerun analysis after hoisting
-  mmaPipeHelper.run();
+  // mmaPipeHelper.run();
 
   if (!mmaPipeHelper.isPipelineable &&
       mmaPipeHelper.isOperandsStateDetermined) {
     // If the operands are not pipelineable, we need to insert a sync point
     // before the earliest operand load
-    for (auto load : mmaPipeHelper.unpipelineableOperandLoads) {
-      if (!latestSyncPoint || schedule.isOpBefore(load, *latestSyncPoint)) {
-        latestSyncPoint = load;
+    for (auto def : updatedDefs) {
+      if (!latestSyncPoint || schedule.isOpBefore(def, *latestSyncPoint)) {
+        latestSyncPoint = def;
       }
     }
   }

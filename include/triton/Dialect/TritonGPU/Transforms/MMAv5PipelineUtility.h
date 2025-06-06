@@ -44,15 +44,13 @@ public:
   // If true, the existing operand loads are all been found and their
   // pipelineability has been determined.
   bool isOperandsStateDetermined = false;
-  SmallVector<Operation *> unpipelineableOperandLoads;
-  SmallVector<Operation *> unpipelineableOperandAllocs;
+  SmallVector<Operation *> unpipelineableOperandDefs;
 
 private:
   MMAv5OpInterface mmaOp;
   scf::ForOp forOp;
   std::function<bool(Operation *)> isLoadToBePipelined;
-  bool isOperandPipelineable(Value v, Operation *&foundLoad,
-                             Operation *&foundAlloc);
+  bool isOperandPipelineable(Value v, Operation *&foundDef);
 };
 
 //===----------------------------------------------------------------------===//

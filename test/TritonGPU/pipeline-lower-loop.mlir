@@ -1586,10 +1586,13 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 #tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, unpacked = true>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
   // Check that wait is pushed to the next stage, right before the tmem_alloc, and after the prologue.
+  // Check that tmem is hoisted out of the loop.
   // CHECK-LABEL: @wait_before_tmem_alloc
+  // CHECK: ttng.tmem_alloc
+  // CHECK: %[[TMEM_BUF:.+]] = ttng.tmem_alloc
   // CHECK: scf.for
   // CHECK: "prologue"() {loop.cluster = 0 : i32, loop.stage = 2 : i32}
-  // CHECK: ttng.tmem_alloc {{.*}} {loop.cluster = 2 : i32, loop.stage = 2 : i32}
+  // CHECK: ttng.tmem_store {{.*}}, %[[TMEM_BUF]], {{.*}} {loop.cluster = 2 : i32, loop.stage = 2 : i32}
   // CHECK: ttg.async_copy_global_to_local {{.*}} {loop.cluster = 2 : i32, loop.stage = 2 : i32}
   // CHECK: ttng.tc_gen5_mma {{.*}} {loop.cluster = 2 : i32, loop.stage = 2 : i32}
   // CHECK: ttng.wait_barrier {{.*}} {loop.cluster = 1 : i32, loop.stage = 3 : i32}
