@@ -297,9 +297,17 @@ if(TRITON_BUILD_PYTHON_MODULE)
   endif()
   target_link_options(triton PRIVATE ${LLVM_LDFLAGS})
 
+  if (NOT DEFINED LLVM_SYSPATH)
+      message(FATAL_ERROR "LLVM_SYSPATH must be set.")
+  endif()
+
+  if (NOT DEFINED TRITON_WHEEL_DIR)
+      message(FATAL_ERROR "TRITON_WHEEL_DIR must be set.")
+  endif()
+
   configure_file(
     "${LLVM_SYSPATH}/bin/FileCheck"
-    "${CMAKE_LIBRARY_OUTPUT_DIRECTORY}/../FileCheck"
+    "${TRITON_WHEEL_DIR}/FileCheck"
     COPYONLY)
 
 endif()
