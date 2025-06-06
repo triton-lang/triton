@@ -38,7 +38,6 @@ public:
       : mmaOp(mmaOp), forOp(forOp), isLoadToBePipelined(isLoadToBePipelined) {
     run();
   }
-  void run();
 
   bool isPipelineable = false;
   // If true, the existing operand loads are all been found and their
@@ -50,6 +49,7 @@ private:
   MMAv5OpInterface mmaOp;
   scf::ForOp forOp;
   std::function<bool(Operation *)> isLoadToBePipelined;
+  void run();
   bool isOperandPipelineable(Value v, Operation *&foundDef);
 };
 

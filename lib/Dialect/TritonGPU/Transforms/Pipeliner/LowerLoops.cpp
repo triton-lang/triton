@@ -867,9 +867,6 @@ void createBarrierAndWaitOps(scf::ForOp forOp, CoarseSchedule &schedule,
     }
   }
 
-  // Rerun analysis after hoisting
-  // mmaPipeHelper.run();
-
   if (!mmaPipeHelper.isPipelineable &&
       mmaPipeHelper.isOperandsStateDetermined) {
     // If the operands are not pipelineable, we need to insert a sync point
