@@ -27,6 +27,6 @@ def compute_block_nk(n, block_m, grid_m, num_xcds, lhs_dtype, rhs_dtype, microsc
 
     # TODO: block_k = 128 seems to work better for now.
     #       perhaps due to increased number of k loops to pipeline
-    if microscaling_ctx.weight_scale is not None:
+    if microscaling_ctx.weight_scale is not None and get_cdna_version() != 4:
         block_k = 128
     return block_n, block_k
