@@ -1,4 +1,5 @@
 import expecttest
+from triton.runtime.jit import MockTensor
 import torch
 import pytest
 import re
@@ -704,4 +705,70 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
   } loc(#loc)
 } loc(#loc)
 #loc = loc(unknown)
+""")
+
+
+@gluon.jit
+def pair_add(a0, a1, b0, b1):
+    return a0 + b0, a1 + b1
+
+
+@gluon.jit
+def reduce_kernel(out):
+    layout: ttgl.constexpr = ttgl.BlockedLayout([1, 1], [1, 32], [4, 1], [1, 0])
+    a = ttgl.full([16, 16], 1, ttgl.float32, layout)
+    b = ttgl.full([16, 16], 2, ttgl.float32, layout)
+    s0 = ttgl.sum(a, 0)
+    ttgl.static_assert(s0.type.layout == ttgl.SliceLayout(0, layout))
+    s1 = ttgl.sum(a, 1)
+    ttgl.static_assert(s1.type.layout == ttgl.SliceLayout(1, layout))
+
+    s1 = ttgl.convert_layout(s1, s0.type.layout)
+
+    pairs = ttgl.reduce((a, b), 0, pair_add)
+    ttgl.static_assert(pairs[0].type.layout == ttgl.SliceLayout(0, layout))
+    ttgl.static_assert(pairs[1].type.layout == ttgl.SliceLayout(0, layout))
+    result = s0 + s1 + pairs[0] + pairs[1]
+    tl.store(out + ttgl.arange(0, 16, s0.type.layout), result)
+
+
+def test_reduce(fresh_knobs):
+    knobs.compilation.disable_line_info = True
+
+    h = reduce_kernel.warmup(MockTensor(ttgl.float32), sanitize_overflow=False, grid=(1, ))
+    expecttest.assert_expected_inline(
+        anonymize_ir(h.asm["ttgir"]), """\
+#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [1, 0]}>
+#loc = loc(unknown)
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "...", "ttg.threads-per-warp" = 32 : i32} {
+  tt.func public @reduce_kernel(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32} loc(unknown)) attributes {noinline = false} {
+    %cst = arith.constant dense<2.000000e+00> : tensor<16x16xf32, #blocked> loc(#loc)
+    %cst_0 = arith.constant dense<1.000000e+00> : tensor<16x16xf32, #blocked> loc(#loc)
+    %0 = "tt.reduce"(%cst_0) <{axis = 0 : i32}> ({
+    ^bb0(%arg1: f32 loc(unknown), %arg2: f32 loc(unknown)):
+      %10 = arith.addf %arg1, %arg2 : f32 loc(#loc)
+      tt.reduce.return %10 : f32 loc(#loc)
+    }) : (tensor<16x16xf32, #blocked>) -> tensor<16xf32, #ttg.slice<{dim = 0, parent = #blocked}>> loc(#loc)
+    %1 = "tt.reduce"(%cst_0) <{axis = 1 : i32}> ({
+    ^bb0(%arg1: f32 loc(unknown), %arg2: f32 loc(unknown)):
+      %10 = arith.addf %arg1, %arg2 : f32 loc(#loc)
+      tt.reduce.return %10 : f32 loc(#loc)
+    }) : (tensor<16x16xf32, #blocked>) -> tensor<16xf32, #ttg.slice<{dim = 1, parent = #blocked}>> loc(#loc)
+    %2 = ttg.convert_layout %1 : tensor<16xf32, #ttg.slice<{dim = 1, parent = #blocked}>> -> tensor<16xf32, #ttg.slice<{dim = 0, parent = #blocked}>> loc(#loc)
+    %3:2 = "tt.reduce"(%cst_0, %cst) <{axis = 0 : i32}> ({
+    ^bb0(%arg1: f32 loc(unknown), %arg2: f32 loc(unknown), %arg3: f32 loc(unknown), %arg4: f32 loc(unknown)):
+      %10 = arith.addf %arg1, %arg3 : f32 loc(#loc)
+      %11 = arith.addf %arg2, %arg4 : f32 loc(#loc)
+      tt.reduce.return %10, %11 : f32, f32 loc(#loc)
+    }) : (tensor<16x16xf32, #blocked>, tensor<16x16xf32, #blocked>) -> (tensor<16xf32, #ttg.slice<{dim = 0, parent = #blocked}>>, tensor<16xf32, #ttg.slice<{dim = 0, parent = #blocked}>>) loc(#loc)
+    %4 = arith.addf %0, %2 : tensor<16xf32, #ttg.slice<{dim = 0, parent = #blocked}>> loc(#loc)
+    %5 = arith.addf %4, %3#0 : tensor<16xf32, #ttg.slice<{dim = 0, parent = #blocked}>> loc(#loc)
+    %6 = arith.addf %5, %3#1 : tensor<16xf32, #ttg.slice<{dim = 0, parent = #blocked}>> loc(#loc)
+    %7 = tt.make_range {end = 16 : i32, start = 0 : i32} : tensor<16xi32, #ttg.slice<{dim = 0, parent = #blocked}>> loc(#loc)
+    %8 = tt.splat %arg0 : !tt.ptr<f32> -> tensor<16x!tt.ptr<f32>, #ttg.slice<{dim = 0, parent = #blocked}>> loc(#loc)
+    %9 = tt.addptr %8, %7 : tensor<16x!tt.ptr<f32>, #ttg.slice<{dim = 0, parent = #blocked}>>, tensor<16xi32, #ttg.slice<{dim = 0, parent = #blocked}>> loc(#loc)
+    tt.store %9, %6 : tensor<16x!tt.ptr<f32>, #ttg.slice<{dim = 0, parent = #blocked}>> loc(#loc)
+    tt.return loc(#loc)
+  } loc(#loc)
+} loc(#loc)
 """)

@@ -43,8 +43,10 @@ from triton.language.core import (
 
 _IMPORT_FROM_TRITON: List[str] = [
     "expand_dims",  # NOQA: F822
-    "program_id",  # NOQA: F822
     "load",  # NOQA: F822
+    "program_id",  # NOQA: F822
+    "reduce",  # NOQA: F822
+    "static_assert",  # NOQA: F822
     "store",  # NOQA: F822
     "to_tensor",  # NOQA: F822
 ]
