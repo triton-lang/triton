@@ -2,6 +2,7 @@
 #define PROTON_COMMON_PARSER_H_
 
 #include "ByteSpan.h"
+#include "Device.h"
 #include "EntryDecoder.h"
 #include <cstdint>
 #include <stdexcept>

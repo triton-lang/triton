@@ -1,7 +1,6 @@
 #ifndef PROTON_COMMON_CIRCULAR_LAYOUT_PARSER_H_
 #define PROTON_COMMON_CIRCULAR_LAYOUT_PARSER_H_
 
-#include "Device.h"
 #include "Parser.h"
 #include <cstdint>
 
