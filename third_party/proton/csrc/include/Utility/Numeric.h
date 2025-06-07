@@ -1,5 +1,5 @@
-#ifndef PROTON_UTILITY_NUMERIC_H
-#define PROTON_UTILITY_NUMERIC_H
+#ifndef PROTON_UTILITY_NUMERIC_H_
+#define PROTON_UTILITY_NUMERIC_H_
 
 #include <cstddef>
 
@@ -18,4 +18,4 @@ template <typename T> constexpr T nextPowerOfTwo(T value) {
 
 } // namespace proton
 
-#endif // PROTON_UTILITY_NUMERIC_H
+#endif // PROTON_UTILITY_NUMERIC_H_
