@@ -1356,10 +1356,9 @@ class FunctionRewriter:
         return transformed_ast
 
     def _compile_and_exec(self, transformed_ast):
-        from .jit import JITFunction
         compiled_code = compile(transformed_ast, filename=self.filename, mode='exec')
         local_namespace = {**self.kwargs}
-        fn_globals = JITFunction.get_capture_scope(self.fn)
+        fn_globals = self.fn.__globals__
         for key, value in globals().items():
             if key not in fn_globals:
                 fn_globals[key] = value
