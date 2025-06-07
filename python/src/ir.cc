@@ -756,6 +756,10 @@ void init_triton_ir(py::module &&m) {
            [](TritonOpBuilder &self, int32_t value) {
              return self.getBuilder().getI32IntegerAttr(value);
            })
+      .def("get_string_attr",
+           [](TritonOpBuilder &self, std::string value) -> Attribute {
+             return self.getBuilder().getStringAttr(value);
+           })
       // Use arith.ConstantOp to create constants
       // Constants
       .def("get_int1",
@@ -1421,12 +1425,7 @@ void init_triton_ir(py::module &&m) {
            })
       .def("create_expand_dims",
            [](TritonOpBuilder &self, Value &arg, int axis) -> Value {
-             auto argType = dyn_cast<RankedTensorType>(arg.getType());
-             auto argEltType = argType.getElementType();
-             std::vector<int64_t> retShape = argType.getShape();
-             retShape.insert(retShape.begin() + axis, 1);
-             return self.create<ExpandDimsOp>(
-                 RankedTensorType::get(retShape, argEltType), arg, axis);
+             return self.create<ExpandDimsOp>(arg, axis);
            })
       .def("create_cat",
            [](TritonOpBuilder &self, Value &lhs, Value &rhs) -> Value {

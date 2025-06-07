@@ -13,7 +13,6 @@ from .matmul_ogs_details._matmul_ogs import _matmul_ogs
 from .matmul_ogs_details._p_matmul_ogs import _p_matmul_ogs, get_per_device_per_stream_alloc_fn
 from .matmul_ogs_details._finalize_matmul import _finalize_matmul
 from .matmul_ogs_details.opt_flags import make_opt_flags
-from .matmul_ogs_details.metadata import compute_metadata
 from .matmul_ogs_details.fast_contiguous import fast_contiguous
 from .numerics_details.mxfp import SwizzlingType
 from .specialize import specialize
@@ -343,8 +342,7 @@ def apply_preprocessing_features(x, w, gather_indx, scatter_indx, routing_data, 
         w = fast_contiguous(w.transpose(-1, -2)).transpose(-1, -2)
     # preprocess routing information and ptr lookup table
     M = x.shape[1] if gather_indx is None else gather_indx.src_indx.shape[0]
-    expt_data = compute_metadata(routing_data, M, opt_flags.block_m)
-    return x, w, preprocessing_features.swap_xw, writeback_idxs, writeback_size, finalize_scatter_idxs, expt_data
+    return x, w, preprocessing_features.swap_xw, writeback_idxs, writeback_size, finalize_scatter_idxs
 
 
 # ---------------------
@@ -596,13 +594,9 @@ def matmul_ogs(x, w, bias,
 
         fused_activation, fused_postprocess_activation = fused_postprocess_activation, fused_activation
     # pre-processing
-    x, w, swap_xw, writeback_idxs, writeback_size, finalize_scatter_idxs, expt_data  = apply_preprocessing_features(
+    x, w, swap_xw, writeback_idxs, writeback_size, finalize_scatter_idxs = apply_preprocessing_features(
         x, w, gather_indx, scatter_indx, routing_data, opt_flags, preprocessing_features
     )
-    if expt_data.buffer is not None:
-        assert expt_data.hist.shape[0] == n_expts_tot, "invalid expt_data"
-        assert expt_data.offs.shape[0] == n_expts_tot + 1, "invalid expt_data"
-        assert expt_data.blocks.shape[0] == grid_m, "invalid expt_data"
     # matrix multiplication
     n_cta = batch_size * grid_m * grid_n * opt_flags.split_k
     n_cta = min(target_info.num_sms(), n_cta) if opt_flags.is_persistent else n_cta
@@ -610,6 +604,12 @@ def matmul_ogs(x, w, bias,
     bias_stride = None if bias is None else bias.stride(0)
     num_indx = None if scatter_indx is None else scatter_indx.src_indx.shape[0]
     kernels = get_kernels(epilogue.specs, fused_activation.specs)
+    expt_data = routing_data.expt_data
+    block_m = opt_flags.block_m
+    expt_hist = None if expt_data is None else expt_data.hist
+    expt_hist_sum = None if expt_data is None else expt_data.token_offs_pad[block_m][-1]
+    expt_token_offs_raw = None if expt_data is None else expt_data.token_offs_raw
+    expt_block_pid_map = None if expt_data is None else expt_data.block_pid_map[block_m]
     (kernels._p_matmul_ogs if opt_flags.is_persistent else kernels._matmul_ogs)[(n_cta,)](
                    flex.out_data.reinterpret(memory["output"]),
                    flex.out_data.reinterpret(out0), *out0.stride(),
@@ -628,7 +628,7 @@ def matmul_ogs(x, w, bias,
                    None if scatter_indx is None else scatter_indx.src_indx,
                    num_indx,
                    writeback_idxs, writeback_size,
-                   expt_data.hist, expt_data.offs, expt_data.offs_sum, expt_data.blocks,
+                   expt_hist, expt_token_offs_raw, expt_hist_sum, expt_block_pid_map,
                    batch_size, grid_m, grid_n,
                    out_alpha,
                    *fused_activation.fn_args, fused_activation.reduction_n,
@@ -659,7 +659,7 @@ def matmul_ogs(x, w, bias,
                    NUM_SMS = n_cta if opt_flags.is_persistent else 0,
                    **opt_flags.target_kernel_kwargs)
     # post-processing
-    out = apply_postprocessing_features(scatter_indx, finalize_scatter_idxs, opt_flags, expt_data.offs,
+    out = apply_postprocessing_features(scatter_indx, finalize_scatter_idxs, opt_flags, expt_token_offs_raw,
                                 num_indx, precision_config, routing_data,
                                 postprocessing_features, memory, fused_postprocess_activation, epilogue)
 

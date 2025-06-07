@@ -3,6 +3,7 @@
 #include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
 #include "mlir/Dialect/Func/Transforms/FuncConversions.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
+#include "mlir/Dialect/UB/IR/UBOps.h"
 #include "mlir/IR/Attributes.h"
 #include "mlir/IR/Block.h"
 #include "mlir/IR/BuiltinAttributes.h"
@@ -633,9 +634,6 @@ public:
     return success();
   }
 };
-
-using ConversionCallbackFn =
-    std::function<std::optional<LogicalResult>(Type, SmallVectorImpl<Type> &)>;
 
 /// Rewrite init args and result type and bb args.
 class ConvertSCFForOp : public PointerCanonicalizationPattern<scf::ForOp> {
@@ -1464,6 +1462,12 @@ void TritonAMDGPUCanonicalizePointersPass::runOnOperation() {
   });
 
   auto func = getOperation();
+  auto walkResult = func->walk<WalkOrder::PreOrder>([](ub::PoisonOp op) {
+    op.emitRemark("skipping canonicalize-pointers due to ub.poison");
+    return WalkResult::interrupt();
+  });
+  if (walkResult.wasInterrupted())
+    return;
 
   FatPointers fatPrs;
   PatternRewriter rewriter(&getContext());

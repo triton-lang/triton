@@ -98,6 +98,9 @@ class HIPBackend(BaseBackend):
         assert isinstance(target.arch, str)
         self.binary_ext = "hsaco"
 
+    def get_target_name(self, options) -> str:
+        return f"hip:{options.arch}"
+
     def parse_options(self, opts) -> Any:
         args = {'arch': knobs.runtime.override_arch or self.target.arch}
 
@@ -277,6 +280,7 @@ class HIPBackend(BaseBackend):
         pm.enable_debug()
 
         passes.ttgpuir.add_inliner(pm)
+        passes.common.add_sccp(pm)
         passes.ttir.add_loop_aware_cse(pm)
         passes.ttgpuir.add_canonicalizer(pm)
         passes.ttgpuir.add_combine_tensor_select_and_if(pm)

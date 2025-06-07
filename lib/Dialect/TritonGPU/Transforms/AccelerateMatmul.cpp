@@ -322,29 +322,6 @@ public:
     if (!(versionMajor >= 1 && versionMajor <= 3))
       return failure();
 
-    // If both of the operands are not loads, we fallback to MMAv2
-    // otherwise the reg-smem roundtrip will tank the MMAv3 performance
-    auto comesFromLoadOrBlockArg = [](Value v) -> bool {
-      // Peel out the original cvt dot_op<..., #blocked>
-      // and any other potential cvt/trans ops
-      while (true) {
-        if (auto cvtOp = v.getDefiningOp<ConvertLayoutOp>()) {
-          v = cvtOp.getSrc();
-          continue;
-        }
-        if (auto transOp = v.getDefiningOp<TransOp>()) {
-          v = transOp.getSrc();
-          continue;
-        }
-        break;
-      }
-      // We also accept block arguments as they appear in many MLIR tests
-      // If this is problematic we can totally drop them
-      return isa<BlockArgument>(v) ||
-             (v.getDefiningOp() &&
-              isa<LoadOp, DescriptorLoadOp>(v.getDefiningOp()));
-    };
-
     bool aFromLoad = comesFromLoadOrBlockArg(dotOp.getA());
     bool bFromLoad = comesFromLoadOrBlockArg(dotOp.getB());
     auto origDotOp = dotOp;
