@@ -1017,7 +1017,7 @@ public:
     // TODO implement heuristic/option for this parameter
     bool isTransposed = false;
     wmmaEnc = ttg::AMDWmmaEncodingAttr::get(ctx, wmmaVersion, isTransposed,
-                                            warpsPerTile, CTALayout);
+                                            mnkDim, warpsPerTile, CTALayout);
 
     auto newRetType = RankedTensorType::get(retShape, operandTypes[3], wmmaEnc);
 
@@ -1025,7 +1025,8 @@ public:
     auto oldAcc = dotOp.getC();
     auto newAcc =
         convertAndCastTensor(rewriter, oldAcc, wmmaEnc, operandTypes[2]);
-    auto kWidth = wmmaEnc.getKWidthForOperands();
+    auto kWidth =
+        wmmaEnc.getKWidthForOperands(mnkDim, /* irrelevant if 0 or 1 */ 0);
 
     auto newAType = RankedTensorType::get(
         aShape, operandTypes[0],

@@ -186,18 +186,31 @@ std::string getTypeStr(Type ty) {
   return scalarName;
 }
 
+std::string getWarpTileStr(const llvm::ArrayRef<unsigned> &shape) {
+  std::string result = ".";
+  for (size_t i = 0; i < shape.size(); ++i) {
+    result += std::to_string(shape[i]);
+    if (i + 1 < shape.size())
+      result += "x";
+  }
+  result += ".";
+  return result;
+}
+
 StringRef getWmmaIntrinsicName(Type aElTy, Type bElTy, Type dElTy, Type valATy,
-                               Type valCTy, bool tied) {
+                               Type valCTy, bool tied,
+                               ArrayRef<unsigned> mnkDim) {
   static llvm::SmallDenseMap<llvm::hash_code, std::string> intrinsics;
   using MapInfo = llvm::DenseMapInfo<Type>;
   llvm::hash_code h = llvm::hash_combine(
       MapInfo::getHashValue(aElTy), MapInfo::getHashValue(bElTy),
       MapInfo::getHashValue(dElTy), MapInfo::getHashValue(valATy),
-      MapInfo::getHashValue(valCTy), llvm::hash_value(tied));
+      MapInfo::getHashValue(valCTy), llvm::hash_value(tied),
+      llvm::hash_value(mnkDim[2]));
   if (!intrinsics.contains(h)) {
     std::string name = "llvm.amdgcn.wmma.";
     name += getTypeStr(dElTy);
-    name += ".16x16x16."; // TODO support 16x16x32 for i4 operands
+    name += getWarpTileStr(mnkDim);
     name += getTypeStr(aElTy);
     if (tied) {
       name += ".tied";
@@ -214,10 +227,12 @@ StringRef getWmmaIntrinsicName(Type aElTy, Type bElTy, Type dElTy, Type valATy,
 Value generateWMMAIntrinsic(ConversionPatternRewriter &rewriter, Location loc,
                             Value valA, Value valB, Value valC, Type aElType,
                             Type bElType, Type dElType,
-                            std::optional<bool> tiedLower) {
+                            std::optional<bool> tiedLower,
+                            ArrayRef<unsigned> mnkDim) {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
-  auto name = getWmmaIntrinsicName(aElType, bElType, dElType, valA.getType(),
-                                   valC.getType(), tiedLower.has_value());
+  auto name =
+      getWmmaIntrinsicName(aElType, bElType, dElType, valA.getType(),
+                           valC.getType(), tiedLower.has_value(), mnkDim);
   LLVM::FastmathFlagsAttr defaultFlags{};
   SmallVector<Value> operands;
   if (aElType.isInteger())
@@ -240,12 +255,12 @@ Value generateWMMAIntrinsic(ConversionPatternRewriter &rewriter, Location loc,
 
 Value generateWMMAOp(ConversionPatternRewriter &rewriter, Location loc,
                      Value valA, Value valB, Value valC, Type aElType,
-                     Type bElType, Type dElType,
-                     std::optional<bool> tiedLower) {
+                     Type bElType, Type dElType, std::optional<bool> tiedLower,
+                     ArrayRef<unsigned> mnkDim) {
   // Independent of wmma version because builtin functions are backward
   // compatible
   return generateWMMAIntrinsic(rewriter, loc, valA, valB, valC, aElType,
-                               bElType, dElType, tiedLower);
+                               bElType, dElType, tiedLower, mnkDim);
 }
 
 // Conduct the Dot conversion.
@@ -256,7 +271,7 @@ LogicalResult convertDot(DotOp op, DotOpAdaptor adaptor,
       cast<RankedTensorType>(op.getResult().getType()).getEncoding());
   int wmmaVer = wmmaLayout.getVersion();
   auto warpsPerCTA = wmmaLayout.getWarpsPerCTA();
-  auto mnkDim = AMDWmmaEncodingAttr::getMNKDimPerInstr();
+  auto mnkDim = wmmaLayout.getWarpTileSize();
 
   auto loc = op.getLoc();
   auto tb = TritonLLVMOpBuilder(loc, rewriter);
@@ -272,10 +287,10 @@ LogicalResult convertDot(DotOp op, DotOpAdaptor adaptor,
   auto bEncoding = cast<DotOperandEncodingAttr>(bTensorTy.getEncoding());
   int kWidth = aEncoding.getKWidth();
 
-  auto repA =
-      wmmaLayout.getRepForOperand(aTensorTy.getShape(), elemTy, kWidth, 0);
-  auto repB =
-      wmmaLayout.getRepForOperand(bTensorTy.getShape(), elemTy, kWidth, 1);
+  auto repA = wmmaLayout.getRepForOperand(aTensorTy.getShape(), elemTy, kWidth,
+                                          0, mnkDim);
+  auto repB = wmmaLayout.getRepForOperand(bTensorTy.getShape(), elemTy, kWidth,
+                                          1, mnkDim);
 
   assert(repA[2] == repB[1]);
 
@@ -334,11 +349,12 @@ LogicalResult convertDot(DotOp op, DotOpAdaptor adaptor,
                                        ha[{b, m * tiedGroup + subTied, k}], acc,
                                        bTensorTy.getElementType(),
                                        aTensorTy.getElementType(), dstElemTy,
-                                       optTied)
+                                       optTied, mnkDim)
                       : generateWMMAOp(
                             rewriter, loc, ha[{b, m * tiedGroup + subTied, k}],
                             hb[{b, n, k}], acc, aTensorTy.getElementType(),
-                            bTensorTy.getElementType(), dstElemTy, optTied);
+                            bTensorTy.getElementType(), dstElemTy, optTied,
+                            mnkDim);
           }
         }
         for (unsigned v = 0; v < dElemsToStorePerThread; ++v) {

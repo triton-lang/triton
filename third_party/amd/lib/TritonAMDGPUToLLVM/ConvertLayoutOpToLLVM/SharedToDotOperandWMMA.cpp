@@ -146,10 +146,12 @@ Value convertLayout(int opIdx, ConversionPatternRewriter &rewriter,
   int nonKDimIdx = opIdx == 0 ? rank - 2 : rank - 1;
 
   auto wmmaLayout = cast<AMDWmmaEncodingAttr>(encoding.getParent());
+  auto mnkDim = wmmaLayout.getWarpTileSize();
+
   auto computeTensorElemMappingInBlock =
       wmmaLayout.getVersion() == 1 ? computeTensorElemMappingInBlockWmma1
                                    : computeTensorElemMappingInBlockWmma2;
-  assert(wmmaLayout.getMNKDimPerInstr()[nonKDimIdx] == 16);
+  assert(mnkDim[nonKDimIdx] == 16);
   auto warpsPerCTA = wmmaLayout.getWarpsPerCTA();
 
   auto aTensorTy = cast<triton::gpu::MemDescType>(tensor.getType());
@@ -164,12 +166,13 @@ Value convertLayout(int opIdx, ConversionPatternRewriter &rewriter,
 
   auto elemTy = aTensorTy.getElementType();
   int kWidth = encoding.getKWidth();
-  auto elemsPerInstr = wmmaLayout.getElemsPerInstrForOperands();
+  auto elemsPerInstr = wmmaLayout.getElemsPerInstrForOperands(mnkDim, opIdx);
   auto wmmaInstrK = elemsPerInstr[opIdx == 0 ? 1 : 0];
   auto wmmaInstrNonK = elemsPerInstr[opIdx == 0 ? 0 : 1];
   assert(wmmaInstrNonK == 16);
 
-  auto numReps = wmmaLayout.getRepForOperand(shape, elemTy, kWidth, opIdx);
+  auto numReps =
+      wmmaLayout.getRepForOperand(shape, elemTy, kWidth, opIdx, mnkDim);
   auto numRepNonK = numReps[opIdx == 0 ? 1 : 2];
   auto numRepK = numReps[opIdx == 0 ? 2 : 1];
   auto repB = numReps[0];
@@ -179,7 +182,8 @@ Value convertLayout(int opIdx, ConversionPatternRewriter &rewriter,
   Value waveSize = tb.i32_val(iWaveSize);
   Value linearWaveId = tb.udiv(thread, waveSize);
 
-  unsigned numElemsPerThreadPerRep = wmmaLayout.getKWidthForOperands();
+  unsigned numElemsPerThreadPerRep =
+      wmmaLayout.getKWidthForOperands(mnkDim, opIdx);
 
   Value lane = tb.urem(thread, waveSize);
   unsigned int maxNumWarps = shape[nonKDimIdx] / wmmaInstrNonK;

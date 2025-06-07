@@ -59,8 +59,8 @@ createTmpLayout(triton::gpu::DistributedEncodingTrait layout,
         src.getCTALayout());
   if (auto src = dyn_cast<triton::gpu::AMDWmmaEncodingAttr>(layout))
     return triton::gpu::AMDWmmaEncodingAttr::get(
-        ctx, src.getVersion(), src.getIsTransposed(), warpsPerCTA,
-        src.getCTALayout());
+        ctx, src.getVersion(), src.getIsTransposed(), src.getWarpTileSize(),
+        warpsPerCTA, src.getCTALayout());
   if (auto src = dyn_cast<triton::gpu::BlockedEncodingAttr>(layout))
     return triton::gpu::BlockedEncodingAttr::get(
         ctx, src.getSizePerThread(), src.getThreadsPerWarp(), warpsPerCTA,
