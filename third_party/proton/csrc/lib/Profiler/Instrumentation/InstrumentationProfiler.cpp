@@ -17,8 +17,8 @@
 
 namespace proton {
 
-constexpr size_t DEFAULT_HOST_BUFFER_SIZE = 64 * 1024 * 1024; // 64MB
-constexpr size_t MAX_HOST_BUFFER_SIZE = 4 * 1024 * 1024 * 1024; // 4GB
+constexpr size_t DEFAULT_HOST_BUFFER_SIZE = 64 * 1024 * 1024;           // 64MB
+constexpr size_t MAX_HOST_BUFFER_SIZE = 4LL * 1024LL * 1024LL * 1024LL; // 4GB
 
 thread_local std::map<Data *, size_t> InstrumentationProfiler::dataScopeIdMap =
     std::map<Data *, size_t>(); // Initialize the static member variable
