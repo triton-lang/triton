@@ -34,12 +34,12 @@ def add_kernel(x_ptr,  # *Pointer* to first input vector.
     tl.store(output_ptr + offsets, output, mask=mask)
 
 
-def add(x: torch.Tensor, y: torch.Tensor):
+def add(x: torch.Tensor, y: torch.Tensor, path):
     output = torch.empty_like(x)
     assert x.device == DEVICE and y.device == DEVICE and output.device == DEVICE
     n_elements = output.numel()
     grid = lambda meta: (triton.cdiv(n_elements, meta['BLOCK_SIZE']), )
-    tmp_path = pathlib.Path(sys.argv[-1])
+    tmp_path = pathlib.Path(path)
     temp_file = tmp_path / "test_override.hatchet"
     proton.start(str(temp_file.with_suffix("")), backend="instrumentation")
     add_kernel[grid](x, y, output, n_elements, BLOCK_SIZE=1024, num_warps=1)
@@ -52,4 +52,4 @@ size = 98432
 x = torch.rand(size, device=DEVICE)
 y = torch.rand(size, device=DEVICE)
 output_torch = x + y
-output_triton = add(x, y)
+output_triton = add(x, y, sys.argv[-1])

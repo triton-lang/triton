@@ -11,13 +11,11 @@ def is_cuda():
 
 
 def is_hip():
-    return triton.runtime.driver.active.get_current_target() == "hip"
-
-
-dir_path = os.path.dirname(os.path.realpath(__file__))
+    return triton.runtime.driver.active.get_current_target().backend == "hip"
 
 
 def test_override(tmp_path: pathlib.Path):
+    dir_path = os.path.dirname(os.path.realpath(__file__))
 
     # Run once to get the file dumps
     first_env = os.environ.copy()
@@ -26,60 +24,62 @@ def test_override(tmp_path: pathlib.Path):
     first_env["TRITON_DUMP_DIR"] = str(tmp_path)
 
     subprocess.run(["python3", dir_path + "/test_override.py", str(tmp_path)], env=first_env)
-    path = pathlib.Path(str(tmp_path))
 
-    hatchet_files = list(path.rglob("*.hatchet"))
-    ttir_files = list(path.rglob("*.ttir"))
-    ttgir_files = list(path.rglob("*.ttgir"))
-    llir_files = list(path.rglob("*.llir"))
+    ttir_files = list(tmp_path.rglob("*.ttir"))
+    ttgir_files = list(tmp_path.rglob("*.ttgir"))
+    llir_files = list(tmp_path.rglob("*.llir"))
 
     assert len(ttir_files) == 1
     assert len(ttgir_files) == 1
     assert len(llir_files) == 1
 
-    os.remove(hatchet_files[0])
     os.remove(ttir_files[0])
     os.remove(llir_files[0])
 
     if is_cuda():
-        ptx_files = list(path.rglob("*.ptx"))
-        cubin_files = list(path.rglob("*.cubin"))
+        ptx_files = list(tmp_path.rglob("*.ptx"))
+        cubin_files = list(tmp_path.rglob("*.cubin"))
         assert len(ptx_files) == 1
         assert len(cubin_files) == 1
         os.remove(ptx_files[0])
         os.remove(cubin_files[0])
 
     if is_hip():
-        gcn_files = list(path.rglob("*.amdgcn"))
+        gcn_files = list(tmp_path.rglob("*.amdgcn"))
+        hsaco_files = list(tmp_path.rglob("*.hsaco"))
+        assert len(hsaco_files) == 1
         assert len(gcn_files) == 1
         os.remove(gcn_files[0])
+        os.remove(hsaco_files[0])
 
-    filename = str(list(path.rglob("*.ttgir"))[0])
+    filename = str(list(tmp_path.rglob("*.ttgir"))[0])
 
     with open(filename, "r") as infile:
         file_str = infile.readlines()
 
     # Add ttgir instrumentation
+    isFirstLoad = True
     with open(filename, "w") as outfile:
         for line in file_str:
-            if "tt.get_program_id x" in line and "loc(#loc2)" in line:
+            if "tt.get_program_id x" in line:
                 #insert before the line
-                line = '    proton.record start "kernel" loc(#loc1)\n' + line
-            if "arith.cmpi slt" in line and "loc(#loc6)" in line:
+                line = '    proton.record start "kernel" loc(#loc)\n' + line
+            elif "arith.cmpi slt" in line:
                 #insert after the line
-                line = line + '    proton.record start "load_ops" loc(#loc1)\n'
-                line = line + '    proton.record start "load_x" loc(#loc1)\n'
-            if "tt.load" in line and "loc(#loc8)" in line:
+                line = line + '    proton.record start "load_ops" loc(#loc)\n'
+                line = line + '    proton.record start "load_x" loc(#loc)\n'
+            elif ("tt.load" in line and isFirstLoad) or ("amdgpu.buffer_load" in line and isFirstLoad):
                 #insert after the line
-                line = line + '    proton.record end "load_x" loc(#loc1)\n'
-                line = line + '    proton.record start "load_y" loc(#loc1)\n'
-            if "tt.load" in line and "loc(#loc10)" in line:
+                line = line + '    proton.record end "load_x" loc(#loc)\n'
+                line = line + '    proton.record start "load_y" loc(#loc)\n'
+                isFirstLoad = False
+            elif ("tt.load" in line and not isFirstLoad) or ("amdgpu.buffer_load" in line and not isFirstLoad):
                 #insert after the line
-                line = line + '    proton.record end "load_y" loc(#loc1)\n'
-                line = line + '    proton.record end "load_ops" loc(#loc1)\n'
-            if "tt.return" in line and "loc(#loc14)" in line:
+                line = line + '    proton.record end "load_y" loc(#loc)\n'
+                line = line + '    proton.record end "load_ops" loc(#loc)\n'
+            elif "tt.return" in line:
                 #insert before the line
-                line = '    proton.record end "kernel" loc(#loc1)\n' + line
+                line = '    proton.record end "kernel" loc(#loc)\n' + line
             outfile.write(line)
 
     # # Run again with kernel override
