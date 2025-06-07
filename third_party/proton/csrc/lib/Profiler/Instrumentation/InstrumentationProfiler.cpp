@@ -6,6 +6,7 @@
 #include "Profiler/Instrumentation/HipRuntime.h"
 #include "Utility/Numeric.h"
 #include "Utility/String.h"
+#include "triton/Tools/Sys/GetEnv.hpp"
 #include <algorithm>
 #include <limits>
 #include <map>
@@ -110,6 +111,9 @@ InstrumentationProfiler::getParserConfig(uint64_t functionId,
   config->uidVec = getUnitIdVector(modeOptions, config->totalUnits);
   config->device = Device();
   config->device.type = runtime->getDeviceType();
+  bool enableDebug = mlir::triton::tools::getBoolEnv("PROTON_ENABLE_DEBUG");
+  if (enableDebug)
+    config->exceptionPrintLevel = ParserConfig::ExceptionPrinting::ALL;
 
   return config;
 }
