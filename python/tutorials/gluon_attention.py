@@ -544,9 +544,17 @@ def _attn_fwd_correction(m_i, l_i,  #
     else:
         lo, hi = 0, N_CTX
 
+    if BLOCK_M == 128:
+        SPLIT_FACTOR: gl.constexpr = triton.cdiv(BLOCK_N, 64)
+        SPLIT_N: gl.constexpr = BLOCK_N // SPLIT_FACTOR
+        o_shape: gl.constexpr = [BLOCK_M, SPLIT_N]
+    else:
+        SPLIT_FACTOR: gl.constexpr = 1
+        o_shape: gl.constexpr = [BLOCK_M, BLOCK_N]
+    blocked: gl.constexpr = get_tmem_32x32b_layout((o_shape[0], o_shape[1], None), o_shape, num_warps)
+
     o_consumer = o_mma_ctx.channel.create_consumer()
 
-    blocked: gl.constexpr = get_mma_reg_layout([BLOCK_M, BLOCK_N], num_warps)
     layout: gl.constexpr = gl.SliceLayout(1, blocked)
     mi_consumer = mi_chnl.create_consumer()
     m_i, mi_consumer = mi_consumer.get(layout)
@@ -556,9 +564,18 @@ def _attn_fwd_correction(m_i, l_i,  #
         alpha = triton.language.math.exp2(m_i - m_ij)
 
         o_tmem, o_bar, o_consumer = o_consumer.acquire()
-        o = o_tmem.load(o_mma_ctx.get_reg_layout(num_warps))
-        o = o * alpha[:, None]
-        o_tmem.store(o)
+
+        if SPLIT_FACTOR == 1:
+            o = o_tmem.load(blocked)
+            o = o * alpha[:, None]
+            o_tmem.store(o)
+        else:
+            for i in tl.static_range(SPLIT_FACTOR):
+                o_ref = o_tmem.split(i * SPLIT_N, SPLIT_N)
+                o = o_ref.load(blocked)
+                o = o * alpha[:, None]
+                o_ref.store(o)
+
         mbarrier.arrive(o_bar, count=1)
 
         m_i = m_ij
