@@ -5,8 +5,7 @@
 
 namespace proton {
 
-template <typename T>
-constexpr T nextPowerOfTwo(T value) {
+template <typename T> constexpr T nextPowerOfTwo(T value) {
   if (value < 1) {
     return 1;
   }
