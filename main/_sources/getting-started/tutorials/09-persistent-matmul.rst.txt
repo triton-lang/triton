@@ -66,13 +66,13 @@ Note that currently this tutorial will fail on devices with a small shared memor
     Benchmarking torch: ...    Benchmarking torch: done
     Benchmarking naive: ...    Benchmarking naive: done
     Benchmarking persistent: ...    Benchmarking persistent: done
-    170.997 16075.035 ROOT
-    ├─ 178.123 3857.976 cublas [M=8192, N=8192, K=512]
-    │  └─ nan 3857.976 ampere_fp16_s16816gemm_fp16_128x128_ldg8_f2f_stages_32x5_tn
-    ├─ 166.651 4123.558 matmul_kernel [M=8192, N=8192, K=512]
-    ├─ 162.387 4231.830 matmul_kernel_persistent [M=8192, N=8192, K=512]
-    └─ 177.953 3861.670 torch [M=8192, N=8192, K=512]
-       └─ nan 3861.670 ampere_fp16_s16816gemm_fp16_128x128_ldg8_f2f_stages_32x5_tn
+    170.832 16090.509 ROOT
+    ├─ 178.136 3857.690 cublas [M=8192, N=8192, K=512]
+    │  └─ nan 3857.690 ampere_fp16_s16816gemm_fp16_128x128_ldg8_f2f_stages_32x5_tn
+    ├─ 166.475 4127.925 matmul_kernel [M=8192, N=8192, K=512]
+    ├─ 162.066 4240.205 matmul_kernel_persistent [M=8192, N=8192, K=512]
+    └─ 177.814 3864.689 torch [M=8192, N=8192, K=512]
+       └─ nan 3864.689 ampere_fp16_s16816gemm_fp16_128x128_ldg8_f2f_stages_32x5_tn
 
 
 
@@ -786,7 +786,7 @@ Note that currently this tutorial will fail on devices with a small shared memor
 
 .. rst-class:: sphx-glr-timing
 
-   **Total running time of the script:** (1 minutes 8.217 seconds)
+   **Total running time of the script:** (1 minutes 7.481 seconds)
 
 
 .. _sphx_glr_download_getting-started_tutorials_09-persistent-matmul.py:
