@@ -131,7 +131,10 @@ class tensor_memory_descriptor(base_value):
         assert isinstance(start, int)
         assert isinstance(length, int)
         shape = [self.shape[0], length]
-        ret = tensor_memory_descriptor(None, self.dtype, shape, self.type.layout, self.type.alloc_shape)
+        layout = self.type.layout
+        layout = TensorMemoryLayout((layout.block[0], min(layout.block[1], length)), layout.unpacked,
+                                    layout.cta_split_num)
+        ret = tensor_memory_descriptor(None, self.dtype, shape, layout, self.type.alloc_shape)
         builder = _semantic.builder
         ret.handle = builder.create_tmem_subslice(ret.type.to_ir(builder), self.handle, start)
         return ret
