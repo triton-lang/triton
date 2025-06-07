@@ -16,6 +16,9 @@ struct ParserConfig {
 
   // Configure exception message visibility
   ExceptionPrinting exceptionPrintLevel = ExceptionPrinting::ALL;
+
+  // Device type that generated the trace
+  Device device;
 };
 
 // Define exception severity levels

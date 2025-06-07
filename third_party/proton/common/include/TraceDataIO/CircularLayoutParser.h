@@ -24,8 +24,6 @@ struct CircularLayoutParserConfig : public ParserConfig {
   size_t numBlocks = 0;
   // A vector of trace's uids
   std::vector<uint32_t> uidVec = {};
-  // Device type that generated the trace
-  Device device;
 };
 
 struct CircularLayoutParserResult {
