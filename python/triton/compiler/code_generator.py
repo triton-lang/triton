@@ -1248,9 +1248,10 @@ class CodeGenerator(ast.NodeVisitor):
 
     def visit_Call(self, node):
         fn = _unwrap_if_constexpr(self.visit(node.func))
-        static_implementation = self.statically_implemented_functions.get(fn)
-        if static_implementation is not None:
-            return static_implementation(self, node)
+        if not isinstance(fn, BoundJITMethod):
+            static_implementation = self.statically_implemented_functions.get(fn)
+            if static_implementation is not None:
+                return static_implementation(self, node)
 
         mur = getattr(fn, '_must_use_result', False)
         if mur and getattr(node, '_is_unused', False):
