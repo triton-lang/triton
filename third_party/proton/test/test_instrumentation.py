@@ -11,10 +11,6 @@ import triton.profiler as proton
 from typing import NamedTuple
 
 
-def is_hip():
-    return triton.runtime.driver.active.get_current_target().backend == "hip"
-
-
 @pytest.mark.parametrize("mode",
                          ["default", "default:metric_type=cycle", "default:metric_type=cycle:buffer_size=4096", "mma"])
 def test_mode_str(mode, tmp_path: pathlib.Path):
