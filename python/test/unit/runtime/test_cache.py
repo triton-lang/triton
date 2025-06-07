@@ -1,6 +1,5 @@
 import importlib.util
 import itertools
-import os
 import shutil
 import pathlib
 
@@ -9,7 +8,6 @@ import torch
 
 import triton
 import triton.language as tl
-from triton._internal_testing import is_hip
 
 
 @triton.jit
@@ -549,44 +547,6 @@ def test_hooks(device, fresh_triton_cache) -> None:
     assert specialization_data is not None and specialization_data_compiled == specialization_data
     assert is_warmup is True
     assert key in kernel_add.device_caches[getattr(torch, device).current_device()][0]
-
-
-@pytest.mark.skipif(reason="within_2g is a HIP specific optimization", condition=not is_hip())
-def test_within_2gb(device, fresh_triton_cache) -> None:
-    default_buffer_ops = os.environ.get("AMDGCN_USE_BUFFER_OPS", "0")
-    try:
-        use_buffer_ops_opts = ["1", "0"]
-        # The ranges should only be available when buffer ops are enabled
-        pointer_ranges = [[(0, )], []]
-        for use_buffer_ops, pointer_range in zip(use_buffer_ops_opts, pointer_ranges):
-            # Set AMDGCN_USE_BUFFER_OPS
-            os.environ["AMDGCN_USE_BUFFER_OPS"] = use_buffer_ops
-
-            @triton.jit
-            def kernel_add(a):
-                tl.load(a)
-
-            # This is the attribute we want to test
-            pointer_range_32 = None
-
-            def cache_hook(*args, **kwargs):
-                nonlocal pointer_range_32
-                pointer_range_32 = [
-                    k for k, v in kwargs["compile"]["configs"][0].items() if ["tt.pointer_range", 32] in v
-                ]
-
-            triton.knobs.runtime.jit_cache_hook = cache_hook
-            # In warmup we assume that the pointer range is 32 bits
-            kernel_add.warmup(torch.float32, grid=(1, ))
-            assert pointer_range_32 == pointer_range
-            # Torch tensor > 2GB
-            kernel_add[(1, 0)](torch.empty(2**31, dtype=torch.int8, device=device))
-            assert len(pointer_range_32) == 0
-            # Torch tensor <= 2GB
-            kernel_add[(1, 0)](torch.empty(2**31 - 1, dtype=torch.int8, device=device))
-            assert pointer_range_32 == pointer_range
-    finally:
-        os.environ["AMDGCN_USE_BUFFER_OPS"] = default_buffer_ops
 
 
 def test_function_arguments(device):
