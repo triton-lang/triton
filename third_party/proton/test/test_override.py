@@ -1,55 +1,106 @@
-import torch
+import os
+import subprocess
+import pathlib
+import json
 
 import triton
-import triton.language as tl
-import triton.profiler as proton
-import pathlib
-import sys
-
-from typing import NamedTuple
-
-DEVICE = triton.runtime.driver.active.get_active_torch_device()
 
 
-def metadata_fn(grid: tuple, metadata: NamedTuple, args: dict):
-    BLOCK_SIZE = args["BLOCK_SIZE"]
-    return {"name": f"add_{BLOCK_SIZE}"}
+def is_cuda():
+    return triton.runtime.driver.active.get_current_target().backend == "cuda"
 
 
-@triton.jit(launch_metadata=metadata_fn)
-def add_kernel(x_ptr,  # *Pointer* to first input vector.
-               y_ptr,  # *Pointer* to second input vector.
-               output_ptr,  # *Pointer* to output vector.
-               n_elements,  # Size of the vector.
-               BLOCK_SIZE: tl.constexpr,  # Number of elements each program should process.
-               # NOTE: `constexpr` so it can be used as a shape value.
-               ):
-    pid = tl.program_id(axis=0)
-    block_start = pid * BLOCK_SIZE
-    offsets = block_start + tl.arange(0, BLOCK_SIZE)
-    mask = offsets < n_elements
-    x = tl.load(x_ptr + offsets, mask=mask)
-    y = tl.load(y_ptr + offsets, mask=mask)
-    output = x + y
-    tl.store(output_ptr + offsets, output, mask=mask)
+def is_hip():
+    return triton.runtime.driver.active.get_current_target().backend == "hip"
 
 
-def add(x: torch.Tensor, y: torch.Tensor, path):
-    output = torch.empty_like(x)
-    assert x.device == DEVICE and y.device == DEVICE and output.device == DEVICE
-    n_elements = output.numel()
-    grid = lambda meta: (triton.cdiv(n_elements, meta['BLOCK_SIZE']), )
-    tmp_path = pathlib.Path(path)
+def test_override(tmp_path: pathlib.Path):
+    dir_path = os.path.dirname(os.path.realpath(__file__))
+
+    # Run once to get the file dumps
+    first_env = os.environ.copy()
+    first_env["TRITON_ALWAYS_COMPILE"] = "1"
+    first_env["TRITON_KERNEL_DUMP"] = "1"
+    first_env["TRITON_DUMP_DIR"] = str(tmp_path)
+
+    subprocess.run(["python3", dir_path + "/override_helper.py", str(tmp_path)], env=first_env)
+
+    ttir_files = list(tmp_path.rglob("*.ttir"))
+    ttgir_files = list(tmp_path.rglob("*.ttgir"))
+    llir_files = list(tmp_path.rglob("*.llir"))
+
+    assert len(ttir_files) == 1
+    assert len(ttgir_files) == 1
+    assert len(llir_files) == 1
+
+    os.remove(ttir_files[0])
+    os.remove(llir_files[0])
+
+    if is_cuda():
+        ptx_files = list(tmp_path.rglob("*.ptx"))
+        cubin_files = list(tmp_path.rglob("*.cubin"))
+        assert len(ptx_files) == 1
+        assert len(cubin_files) == 1
+        os.remove(ptx_files[0])
+        os.remove(cubin_files[0])
+
+    if is_hip():
+        gcn_files = list(tmp_path.rglob("*.amdgcn"))
+        hsaco_files = list(tmp_path.rglob("*.hsaco"))
+        assert len(hsaco_files) == 1
+        assert len(gcn_files) == 1
+        os.remove(gcn_files[0])
+        os.remove(hsaco_files[0])
+
+    filename = str(list(tmp_path.rglob("*.ttgir"))[0])
+
+    with open(filename, "r") as infile:
+        file_str = infile.readlines()
+
+    # Add ttgir instrumentation
+    isFirstLoad = True
+    with open(filename, "w") as outfile:
+        for line in file_str:
+            if "tt.get_program_id x" in line:
+                #insert before the line
+                line = '    proton.record start "kernel" loc(#loc)\n' + line
+            elif "arith.cmpi slt" in line:
+                #insert after the line
+                line = line + '    proton.record start "load_ops" loc(#loc)\n'
+                line = line + '    proton.record start "load_x" loc(#loc)\n'
+            elif ("tt.load" in line and isFirstLoad) or ("amdgpu.buffer_load" in line and isFirstLoad):
+                #insert after the line
+                line = line + '    proton.record end "load_x" loc(#loc)\n'
+                line = line + '    proton.record start "load_y" loc(#loc)\n'
+                isFirstLoad = False
+            elif ("tt.load" in line and not isFirstLoad) or ("amdgpu.buffer_load" in line and not isFirstLoad):
+                #insert after the line
+                line = line + '    proton.record end "load_y" loc(#loc)\n'
+                line = line + '    proton.record end "load_ops" loc(#loc)\n'
+            elif "tt.return" in line:
+                #insert before the line
+                line = '    proton.record end "kernel" loc(#loc)\n' + line
+            outfile.write(line)
+
+    # # Run again with kernel override
+    second_env = os.environ.copy()
+    second_env["TRITON_ALWAYS_COMPILE"] = "1"
+    second_env["TRITON_KERNEL_OVERRIDE"] = "1"
+    second_env["TRITON_OVERRIDE_DIR"] = str(tmp_path)
+    subprocess.run(["python3", dir_path + "/override_helper.py", str(tmp_path)], env=second_env)
+
     temp_file = tmp_path / "test_override.hatchet"
-    proton.start(str(temp_file.with_suffix("")), backend="instrumentation")
-    add_kernel[grid](x, y, output, n_elements, BLOCK_SIZE=1024, num_warps=1)
-    proton.finalize()
-    return output
 
-
-torch.manual_seed(0)
-size = 98432
-x = torch.rand(size, device=DEVICE)
-y = torch.rand(size, device=DEVICE)
-output_torch = x + y
-output_triton = add(x, y, sys.argv[-1])
+    with open(temp_file, "rb") as f:
+        data = json.load(f)
+        kernel_frame = data[0]["children"][0]["children"][0]
+        load_ops = kernel_frame["children"][0]
+        assert "load_ops" in load_ops["frame"]["name"]
+        assert ("load_x" in load_ops["children"][0]["frame"]["name"]
+                or "load_x" in load_ops["children"][1]["frame"]["name"])
+        assert ("load_y" in load_ops["children"][0]["frame"]["name"]
+                or "load_y" in load_ops["children"][1]["frame"]["name"])
+        assert load_ops["children"][0]["metrics"]["cycles"] > 0
+        assert load_ops["children"][0]["metrics"]["normalized_cycles"] > 0
+        assert load_ops["children"][1]["metrics"]["cycles"] > 0
+        assert load_ops["children"][1]["metrics"]["normalized_cycles"] > 0
