@@ -257,7 +257,7 @@ static int computeOrigBitWidth(Value x) {
   mlir::BackwardSliceOptions opt;
   opt.omitBlockArguments = true;
   opt.filter = bwdFilter;
-  getBackwardSlice(x, &slice, opt);
+  (void)getBackwardSlice(x, &slice, opt);
 
   // TODO: This heuristic may be a bit too coarse and may need improving
   // If the chain contains a fp4 to fp16/bf16 conversion, then the original

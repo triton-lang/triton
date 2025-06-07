@@ -953,7 +953,7 @@ SetVector<Operation *> multiRootGetSlice(Operation *op,
     BackwardSliceOptions opt;
     opt.omitBlockArguments = true;
     opt.filter = backwardFilter;
-    getBackwardSlice(currentOp, &backwardSlice, opt);
+    (void)getBackwardSlice(currentOp, &backwardSlice, opt);
     slice.insert(backwardSlice.begin(), backwardSlice.end());
 
     // Compute and insert the forwardSlice starting from currentOp.

@@ -37,30 +37,25 @@ cvtScalePkUpcastFromFp8(Location loc, ConversionPatternRewriter &rewriter,
   fp8x4Vec = b.insert_element(fp8x4VecTy, fp8x4Vec, v1, idx1);
   auto i32v = b.bitcast(fp8x4Vec, i32_ty);
 
-  auto resType = i32_ty;
-  auto dstType = f32_ty;
+  Type resElemType;
   if constexpr (std::is_same_v<ConvertOp, ROCDL::CvtScaleF32PkF32Fp8Op> ||
                 std::is_same_v<ConvertOp, ROCDL::CvtScaleF32PkF32Bf8Op>) {
-    resType = i64_ty;
-    dstType = f32_ty;
+    resElemType = f32_ty;
   } else if constexpr (std::is_same_v<ConvertOp,
                                       ROCDL::CvtScaleF32PkF16Fp8Op> ||
                        std::is_same_v<ConvertOp,
                                       ROCDL::CvtScaleF32PkF16Bf8Op>) {
-    resType = i32_ty;
-    dstType = f16_ty;
+    resElemType = f16_ty;
   } else {
-    resType = i32_ty;
-    dstType = bf16_ty;
+    resElemType = bf16_ty;
   }
+  Type resType = vec_ty(resElemType, 2);
   Value scale = b.f32_val(1);
-  Value select = b.false_val();
-  auto result = rewriter.create<ConvertOp>(loc, resType, i32v, scale, select);
-  auto retVecTy = vec_ty(dstType, 2);
-  auto retVec = b.bitcast(result, retVecTy);
+  auto result = rewriter.create<ConvertOp>(loc, resType, i32v, scale,
+                                           /*srcLoHiSel=*/false);
   SmallVector<Value> ret(2);
-  ret[0] = b.extract_element(dstType, retVec, idx0);
-  ret[1] = b.extract_element(dstType, retVec, idx1);
+  ret[0] = b.extract_element(resElemType, result, idx0);
+  ret[1] = b.extract_element(resElemType, result, idx1);
   return ret;
 }
 
@@ -73,13 +68,12 @@ cvtScalePkDowncastToFp8(Location loc, ConversionPatternRewriter &rewriter,
   Type v2I16Ty = vec_ty(i16_ty, 2);
   Value v2I16Vec = b.undef(v2I16Ty);
   Value scale = b.f32_val(1);
-  Value select = b.false_val();
 
   Value result;
   if constexpr (std::is_same_v<ConvertOp, ROCDL::CvtScaleF32PkFp8F32Op> ||
                 std::is_same_v<ConvertOp, ROCDL::CvtScaleF32PkBf8F32Op>) {
     result = rewriter.create<ConvertOp>(loc, v2I16Ty, v2I16Vec, v0, v1, scale,
-                                        select);
+                                        /*dstLoHiSel=*/false);
   } else {
     Type v2F16Ty = vec_ty(v0.getType(), 2);
     Value srcVec = b.undef(v2F16Ty);
@@ -88,7 +82,7 @@ cvtScalePkDowncastToFp8(Location loc, ConversionPatternRewriter &rewriter,
     srcVec = b.insert_element(v2F16Ty, srcVec, v0, idx0);
     srcVec = b.insert_element(v2F16Ty, srcVec, v1, idx1);
     result = rewriter.create<ConvertOp>(loc, v2I16Ty, v2I16Vec, srcVec, scale,
-                                        select);
+                                        /*dstLoHiSel=*/false);
   }
   auto fp8x4VecTy = vec_ty(i8_ty, 4);
   auto fp8x4Vec = b.bitcast(result, fp8x4VecTy);
@@ -312,8 +306,8 @@ static SmallVector<Value> cvtPkF8ToFp32(Location loc,
   auto resType = i64_ty;
   auto dstType = f32_ty;
 
-  Value select = b.false_val();
-  auto result = rewriter.create<ConvertOp>(loc, resType, i32v, select);
+  auto result =
+      rewriter.create<ConvertOp>(loc, resType, i32v, /*wordSel=*/false);
   auto f32x2VecTy = vec_ty(dstType, 2);
   auto retVec = b.bitcast(result, f32x2VecTy);
   SmallVector<Value> ret(2);
@@ -330,10 +324,10 @@ static SmallVector<Value> cvtPkFp32ToF8(Location loc,
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   Type v2I16Ty = vec_ty(i16_ty, 2);
   Value old = b.undef(i32_ty);
-  Value select = b.false_val();
 
   Value result;
-  result = rewriter.create<ConvertOp>(loc, v2I16Ty, v0, v1, old, select);
+  result =
+      rewriter.create<ConvertOp>(loc, v2I16Ty, v0, v1, old, /*wordSel=*/false);
   auto fp8x4VecTy = vec_ty(i8_ty, 4);
   auto fp8x4Vec = b.bitcast(result, fp8x4VecTy);
   SmallVector<Value> ret(2);

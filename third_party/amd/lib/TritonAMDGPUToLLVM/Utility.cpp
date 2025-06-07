@@ -691,7 +691,7 @@ bool isChainDotTail(tt::DotOpInterface dotOp) {
   Operation *opA = dotOp.getA().getDefiningOp();
   if (!opA)
     return false;
-  getBackwardSlice(opA, &bwdSlices, bwdOpt);
+  (void)getBackwardSlice(opA, &bwdSlices, bwdOpt);
   if (llvm::find_if(bwdSlices, [](Operation *op) {
         return isa<tt::DotOpInterface>(op);
       }) != bwdSlices.end())

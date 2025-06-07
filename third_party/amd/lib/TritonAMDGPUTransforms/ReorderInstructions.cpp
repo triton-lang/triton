@@ -190,7 +190,7 @@ static void moveUpGlobalLoadInPrologue(triton::FuncOp funcOp) {
       // Only move ops residing in the same block.
       return defBlock == block;
     };
-    mlir::getBackwardSlice(op.getOperation(), &backwardSet, options);
+    (void)mlir::getBackwardSlice(op.getOperation(), &backwardSet, options);
     backwardSet.insert(op);
 
     auto ipoint = findEarlyInsertionPoint(block, op);
