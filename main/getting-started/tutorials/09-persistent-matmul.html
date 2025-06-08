@@ -162,13 +162,13 @@ Benchmarking naive: ...
 Benchmarking naive: done
 Benchmarking persistent: ...
 Benchmarking persistent: done
-170.832 16090.509 ROOT
-├─ 178.136 3857.690 cublas [M=8192, N=8192, K=512]
-│  └─ nan 3857.690 ampere_fp16_s16816gemm_fp16_128x128_ldg8_f2f_stages_32x5_tn
-├─ 166.475 4127.925 matmul_kernel [M=8192, N=8192, K=512]
-├─ 162.066 4240.205 matmul_kernel_persistent [M=8192, N=8192, K=512]
-└─ 177.814 3864.689 torch [M=8192, N=8192, K=512]
-   └─ nan 3864.689 ampere_fp16_s16816gemm_fp16_128x128_ldg8_f2f_stages_32x5_tn
+170.790 16094.510 ROOT
+├─ 178.040 3859.773 cublas [M=8192, N=8192, K=512]
+│  └─ nan 3859.773 ampere_fp16_s16816gemm_fp16_128x128_ldg8_f2f_stages_32x5_tn
+├─ 166.533 4126.486 matmul_kernel [M=8192, N=8192, K=512]
+├─ 161.966 4242.835 matmul_kernel_persistent [M=8192, N=8192, K=512]
+└─ 177.780 3865.417 torch [M=8192, N=8192, K=512]
+   └─ nan 3865.417 ampere_fp16_s16816gemm_fp16_128x128_ldg8_f2f_stages_32x5_tn
 </pre></div>
 </div>
 <div class="line-block">
@@ -873,7 +873,7 @@ Benchmarking persistent: done
         <span class="n">show_profile</span><span class="p">(</span><span class="n">args</span><span class="o">.</span><span class="n">prec</span><span class="p">,</span> <span class="s2">&quot;matmul&quot;</span><span class="p">)</span>
 </pre></div>
 </div>
-<p class="sphx-glr-timing"><strong>Total running time of the script:</strong> (1 minutes 7.481 seconds)</p>
+<p class="sphx-glr-timing"><strong>Total running time of the script:</strong> (1 minutes 7.723 seconds)</p>
 <div class="sphx-glr-footer sphx-glr-footer-example docutils container" id="sphx-glr-download-getting-started-tutorials-09-persistent-matmul-py">
 <div class="sphx-glr-download sphx-glr-download-jupyter docutils container">
 <p><a class="reference download internal" download="" href="../../_downloads/b5537c431cd73b8ee3c32cdf90c58104/09-persistent-matmul.ipynb"><code class="xref download docutils literal notranslate"><span class="pre">Download</span> <span class="pre">Jupyter</span> <span class="pre">notebook:</span> <span class="pre">09-persistent-matmul.ipynb</span></code></a></p>
