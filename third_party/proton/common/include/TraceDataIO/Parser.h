@@ -2,6 +2,7 @@
 #define PROTON_COMMON_PARSER_H_
 
 #include "ByteSpan.h"
+#include "Device.h"
 #include "EntryDecoder.h"
 #include <cstdint>
 #include <stdexcept>
@@ -16,6 +17,11 @@ struct ParserConfig {
 
   // Configure exception message visibility
   ExceptionPrinting exceptionPrintLevel = ExceptionPrinting::SILENT;
+
+  // Device type that generated the trace
+  Device device;
+
+  virtual ~ParserConfig() = default;
 };
 
 // Define exception severity levels

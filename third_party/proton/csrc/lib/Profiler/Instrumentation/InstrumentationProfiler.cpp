@@ -4,6 +4,7 @@
 #include "Driver/GPU/CudaApi.h"
 #include "Profiler/Instrumentation/CudaRuntime.h"
 #include "Profiler/Instrumentation/HipRuntime.h"
+#include "Utility/Numeric.h"
 #include "Utility/String.h"
 #include "triton/Tools/Sys/GetEnv.hpp"
 #include <algorithm>
@@ -16,7 +17,8 @@
 
 namespace proton {
 
-constexpr size_t HOST_BUFFER_SIZE = 256 * 1024 * 1024;
+constexpr size_t DEFAULT_HOST_BUFFER_SIZE = 64 * 1024 * 1024;           // 64MB
+constexpr size_t MAX_HOST_BUFFER_SIZE = 4LL * 1024LL * 1024LL * 1024LL; // 4GB
 
 thread_local std::map<Data *, size_t> InstrumentationProfiler::dataScopeIdMap =
     std::map<Data *, size_t>(); // Initialize the static member variable
@@ -67,6 +69,7 @@ InstrumentationProfiler::setMode(const std::vector<std::string> &mode) {
   return this;
 }
 namespace {
+
 std::vector<uint32_t>
 getUnitIdVector(const std::map<std::string, std::string> &modeOptions,
                 size_t totalUnits) {
@@ -90,6 +93,30 @@ getUnitIdVector(const std::map<std::string, std::string> &modeOptions,
 }
 
 } // namespace
+
+std::shared_ptr<ParserConfig>
+InstrumentationProfiler::getParserConfig(uint64_t functionId,
+                                         size_t bufferSize) const {
+  // Only support circular layout parser for now, but we will extend the support
+  // to other parsers in the future
+  auto config = std::make_shared<CircularLayoutParserConfig>();
+  config->scratchMemSize =
+      functionMetadata.at(functionId).getScratchMemorySize();
+  if (!(modeOptions.count("granularity") == 0 ||
+        modeOptions.at("granularity") == "GRANULARITY.WARP")) {
+    throw std::runtime_error("Only warp granularity is supported for now");
+  }
+  config->totalUnits = functionMetadata.at(functionId).getNumWarps();
+  config->numBlocks = bufferSize / config->scratchMemSize;
+  config->uidVec = getUnitIdVector(modeOptions, config->totalUnits);
+  config->device = Device();
+  config->device.type = runtime->getDeviceType();
+  bool enableDebug = mlir::triton::tools::getBoolEnv("PROTON_ENABLE_DEBUG");
+  if (enableDebug)
+    config->exceptionPrintLevel = ParserConfig::ExceptionPrinting::ALL;
+
+  return config;
+}
 
 void InstrumentationProfiler::initFunctionMetadata(
     uint64_t functionId, const std::string &functionName,
@@ -139,7 +166,7 @@ void InstrumentationProfiler::enterInstrumentedOp(uint64_t streamId,
                                                   uint8_t *buffer,
                                                   size_t size) {
   if (!hostBuffer) {
-    runtime->allocateHostBuffer(&hostBuffer, HOST_BUFFER_SIZE);
+    runtime->allocateHostBuffer(&hostBuffer, DEFAULT_HOST_BUFFER_SIZE);
   }
 }
 
@@ -148,22 +175,25 @@ void InstrumentationProfiler::exitInstrumentedOp(uint64_t streamId,
                                                  uint8_t *buffer, size_t size) {
   if (!buffer || !hostBuffer)
     return;
+
   uint64_t device = runtime->getDevice();
   void *&priorityStream = deviceStreams[reinterpret_cast<void *>(device)];
   if (!priorityStream) {
     priorityStream = runtime->getPriorityStream();
   }
-  // FIXME: we should support cases where a single host buffer contains multiple
-  // device buffer or a single device buffer contains multiple host buffer
-  if (size > HOST_BUFFER_SIZE) {
+
+  if (size > MAX_HOST_BUFFER_SIZE) {
     throw std::runtime_error(
         "Buffer size " + std::to_string(size) + " exceeds the limit " +
-        std::to_string(HOST_BUFFER_SIZE) + ", not supported yet in proton");
+        std::to_string(MAX_HOST_BUFFER_SIZE) + ", not supported yet in proton");
+  } else if (size > DEFAULT_HOST_BUFFER_SIZE) {
+    runtime->freeHostBuffer(hostBuffer);
+    auto newSize = nextPowerOfTwo(size);
+    runtime->allocateHostBuffer(&hostBuffer, newSize);
   }
 
   auto dataSet = getDataSet();
-
-  std::string functionName = functionNames[functionId];
+  const auto &functionName = functionNames[functionId];
   if (dataScopeIdMap.empty()) {
     for (auto &data : dataSet) {
       auto scopeId = Scope::getNewScopeId();
@@ -172,50 +202,40 @@ void InstrumentationProfiler::exitInstrumentedOp(uint64_t streamId,
     }
   }
 
-  // For now, only support the synchronization mode
-  runtime->synchronizeStream(reinterpret_cast<void *>(streamId));
-
-  CircularLayoutParserConfig config;
-  config.scratchMemSize =
-      functionMetadata.at(functionId).getScratchMemorySize();
-  if (!(modeOptions.count("granularity") == 0 ||
-        modeOptions.at("granularity") == "GRANULARITY.WARP")) {
-    throw std::runtime_error("Only warp granularity is supported for now");
+  auto config = getParserConfig(functionId, size);
+  auto circularLayoutConfig =
+      std::dynamic_pointer_cast<CircularLayoutParserConfig>(config);
+  if (!circularLayoutConfig) {
+    throw std::runtime_error(
+        "Only circular layout parser is supported for now");
   }
-  config.totalUnits = functionMetadata.at(functionId).getNumWarps();
-  config.numBlocks = size / config.scratchMemSize;
-  config.uidVec = getUnitIdVector(modeOptions, config.totalUnits);
-  config.device = Device();
-  config.device.type = runtime->getDeviceType();
-  bool enableDebug = mlir::triton::tools::getBoolEnv("PROTON_ENABLE_DEBUG");
-  if (enableDebug)
-    config.exceptionPrintLevel = ParserConfig::ExceptionPrinting::ALL;
 
   uint32_t timeShiftCost = 0;
   if (modeOptions.count("optimization") &&
-      modeOptions.at("optimization") == "time_shift")
-    timeShiftCost = getTimeShiftCost(config);
+      modeOptions.at("optimization") == "time_shift") {
+    timeShiftCost = getTimeShiftCost(*circularLayoutConfig);
+  }
 
   auto &scopeIdContexts = functionScopeIdContexts[functionId];
 
+  runtime->synchronizeStream(reinterpret_cast<void *>(streamId));
   runtime->processHostBuffer(
-      hostBuffer, HOST_BUFFER_SIZE, buffer, size, priorityStream,
+      hostBuffer, DEFAULT_HOST_BUFFER_SIZE, buffer, size, priorityStream,
       [&](uint8_t *bufferPtr, size_t size) {
-        auto byteSpan = ByteSpan(bufferPtr, size);
-        auto parser = CircularLayoutParser(byteSpan, config);
+        ByteSpan byteSpan(bufferPtr, size);
+        CircularLayoutParser parser(byteSpan, *circularLayoutConfig);
         parser.parse();
         for (auto &blockTrace : parser.getResult()->blockTraces) {
           for (auto &trace : blockTrace.traces) {
-            auto &profileEvents = trace.profileEvents;
-            for (auto &event : profileEvents) {
-              // Process the profile events
+            for (auto &event : trace.profileEvents) {
               auto &contexts = scopeIdContexts[event.first->scopeId];
               auto duration = event.second->cycle - event.first->cycle;
               auto normalizedDuration = static_cast<double>(duration) /
-                                        (config.totalUnits * config.numBlocks);
+                                        (circularLayoutConfig->totalUnits *
+                                         circularLayoutConfig->numBlocks);
               for (auto *data : dataSet) {
                 auto kernelId = dataScopeIdMap[data];
-                auto scopeId = data->addOp(dataScopeIdMap[data], contexts);
+                auto scopeId = data->addOp(kernelId, contexts);
                 data->addMetric(
                     scopeId,
                     std::make_shared<CycleMetric>(
