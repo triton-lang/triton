@@ -48,6 +48,9 @@ protected:
   void stopOp(const Scope &scope) override { dataScopeIdMap.clear(); }
 
 private:
+  std::shared_ptr<ParserConfig> getParserConfig(uint64_t functionId,
+                                                size_t bufferSize) const;
+
   std::unique_ptr<Runtime> runtime;
   // device -> deviceStream
   std::map<void *, void *> deviceStreams;
