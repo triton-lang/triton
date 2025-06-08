@@ -20,6 +20,8 @@ struct ParserConfig {
 
   // Device type that generated the trace
   Device device;
+
+  virtual ~ParserConfig() = default;
 };
 
 // Define exception severity levels
