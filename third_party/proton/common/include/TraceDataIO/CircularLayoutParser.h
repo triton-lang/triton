@@ -1,7 +1,6 @@
 #ifndef PROTON_COMMON_CIRCULAR_LAYOUT_PARSER_H_
 #define PROTON_COMMON_CIRCULAR_LAYOUT_PARSER_H_
 
-#include "Device.h"
 #include "Parser.h"
 #include <cstdint>
 
@@ -24,8 +23,6 @@ struct CircularLayoutParserConfig : public ParserConfig {
   size_t numBlocks = 0;
   // A vector of trace's uids
   std::vector<uint32_t> uidVec = {};
-  // Device type that generated the trace
-  Device device;
 };
 
 struct CircularLayoutParserResult {
