@@ -1,10 +1,11 @@
 from dataclasses import dataclass
 from typing import List, Optional
-from triton.language.core import _unwrap_if_constexpr
+from triton.language.core import _unwrap_if_constexpr, _unwrap_shape
 
 __all__ = [
     "BlockedLayout",
     "SliceLayout",
+    "DistributedLinearLayout",
     "NVMMASharedLayout",
     "SwizzledSharedLayout",
 ]
@@ -96,6 +97,40 @@ class SliceLayout(DistributedLayout):
 
     def mangle(self) -> str:
         return f"SL{self.dim}_{self.parent.mangle()}SL"
+
+
+@dataclass(frozen=True)
+class DistributedLinearLayout(DistributedLayout):
+    reg_bases: List[List[int]]
+    lane_bases: List[List[int]]
+    warp_bases: List[List[int]]
+    block_bases: List[List[int]]
+    shape: List[int]
+
+    def __post_init__(self):
+        super().__setattr__("reg_bases", _unwrap_shape(self.reg_bases))
+        super().__setattr__("lane_bases", _unwrap_shape(self.lane_bases))
+        super().__setattr__("warp_bases", _unwrap_shape(self.warp_bases))
+        super().__setattr__("block_bases", _unwrap_shape(self.block_bases))
+        super().__setattr__("shape", _unwrap_shape(self.shape))
+
+        rank = len(self.shape)
+
+        for basis in self.reg_bases:
+            assert len(basis) == rank
+        for basis in self.lane_bases:
+            assert len(basis) == rank
+        for basis in self.warp_bases:
+            assert len(basis) == rank
+        for basis in self.block_bases:
+            assert len(basis) == rank
+
+    def _to_ir(self, builder):
+        return builder.get_distributed_linear_layout(self.reg_bases, self.lane_bases, self.warp_bases, self.block_bases,
+                                                     self.shape)
+
+    def mangle(self):
+        return f"DLL{self.reg_bases}_{self.lane_bases}_{self.warp_bases}_{self.block_bases}_{self.shape}DLL"
 
 
 class SharedLayout:
