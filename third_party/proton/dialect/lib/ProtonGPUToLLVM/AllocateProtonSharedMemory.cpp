@@ -18,7 +18,7 @@ namespace triton::proton {
 namespace {
 
 struct AllocateProtonSharedMemory
-    : public mlir::triton::proton::impl::AllocateProtonSharedMemoryBase<
+    : public mlir::triton::proton::gpu::impl::AllocateProtonSharedMemoryBase<
           AllocateProtonSharedMemory> {
   void runOnOperation() override {
     ModuleOp mod = getOperation();

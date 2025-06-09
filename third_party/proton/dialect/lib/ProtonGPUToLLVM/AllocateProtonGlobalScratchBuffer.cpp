@@ -17,8 +17,9 @@ namespace triton::proton {
 namespace {
 
 struct AllocateProtonGlobalScratchBuffer
-    : public mlir::triton::proton::impl::AllocateProtonGlobalScratchBufferBase<
-          AllocateProtonGlobalScratchBuffer> {
+    : public mlir::triton::proton::gpu::impl::
+          AllocateProtonGlobalScratchBufferBase<
+              AllocateProtonGlobalScratchBuffer> {
   void runOnOperation() override {
     ModuleOp mod = getOperation();
     MLIRContext *ctx = &getContext();
