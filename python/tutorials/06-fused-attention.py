@@ -199,8 +199,6 @@ def _attn_fwd(sm_scale, M,  #
                                         warp_specialize)
     # stage 2: on-band
     if STAGE & 2:
-        # barrier makes it easier for compielr to schedule the
-        # two loops independently
         acc, l_i, m_i = _attn_fwd_inner(acc, l_i, m_i, q,  #
                                         desc_k, desc_v,  #
                                         offset_y, dtype, start_m, qk_scale,  #
@@ -627,7 +625,7 @@ BATCH, N_HEADS, HEAD_DIM = 4, 32, 64
 configs = []
 for mode in ["fwd", "bwd"]:
     for causal in [True, False]:
-        for warp_specialize in [True, False]:
+        for warp_specialize in [False, True] if is_blackwell() else [False]:
             if mode == "bwd" and not causal:
                 continue
             configs.append(
