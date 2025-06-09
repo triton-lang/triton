@@ -15,9 +15,8 @@ FetchContent_Declare(
 FetchContent_GetProperties(googletest)
 
 if(NOT googletest_POPULATED)
-  FetchContent_Populate(googletest)
+  FetchContent_MakeAvailable(googletest)
   if (MSVC)
     set(gtest_force_shared_crt ON CACHE BOOL "" FORCE)
   endif()
-  add_subdirectory(${googletest_SOURCE_DIR} ${googletest_BINARY_DIR} EXCLUDE_FROM_ALL)
 endif()

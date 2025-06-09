@@ -7,6 +7,7 @@ BUILD_DIR := $(shell cd python; $(PYTHON) -c 'from build_helpers import get_cmak
 TRITON_OPT := $(BUILD_DIR)/bin/triton-opt
 PYTEST := $(PYTHON) -m pytest
 LLVM_BUILD_PATH ?= ".llvm-project/build"
+NUM_PROCS ?= 8
 
 # Incremental builds
 
@@ -28,22 +29,27 @@ test-lit:
 test-cpp:
 	ninja -C $(BUILD_DIR) check-triton-unit-tests
 
-.PHONY: test-python
+.PHONY: test-unit
 test-unit: all
-	cd python/test/unit && $(PYTEST) -s -n 8 --ignore=language/test_line_info.py \
+	cd python/test/unit && $(PYTEST) -s -n $(NUM_PROCS) --ignore=language/test_line_info.py \
 		--ignore=language/test_subprocess.py --ignore=test_debug.py
-	$(PYTEST) -s -n 8 python/test/unit/language/test_subprocess.py
-	$(PYTEST) -s -n 8 python/test/unit/test_debug.py --forked
+	$(PYTEST) -s -n $(NUM_PROCS) python/test/unit/language/test_subprocess.py
+	$(PYTEST) -s -n $(NUM_PROCS) python/test/unit/test_debug.py --forked
 	$(PYTEST) -s -n 8 python/triton_kernels/tests/
 	TRITON_DISABLE_LINE_INFO=0 $(PYTEST) -s python/test/unit/language/test_line_info.py
 	# Run attention separately to avoid out of gpu memory
 	$(PYTEST) -vs python/tutorials/06-fused-attention.py
 	TRITON_ALWAYS_COMPILE=1 TRITON_DISABLE_LINE_INFO=0 LLVM_PASS_PLUGIN_PATH=python/triton/instrumentation/libGPUInstrumentationTestLib.so \
 		$(PYTEST) --capture=tee-sys -rfs -vvv python/test/unit/instrumentation/test_gpuhello.py
+	$(PYTEST) -s -n $(NUM_PROCS) python/test/gluon
+
+.PHONY: test-gluon
+test-gluon: all
+	$(PYTEST) -s -n $(NUM_PROCS) python/test/gluon
 
 .PHONY: test-regression
 test-regression: all
-	$(PYTEST) -s -n 8 python/test/regression
+	$(PYTEST) -s -n $(NUM_PROCS) python/test/regression
 
 .PHONY: test-interpret
 test-interpret: all
@@ -101,9 +107,9 @@ dev-install-llvm:
 
 .PHONY: golden-samples
 golden-samples: triton-opt
-	$(TRITON_OPT) test/TritonGPU/samples/simulated-grouped-gemm.mlir.in -tritongpu-pipeline -canonicalize | \
+	$(TRITON_OPT) test/TritonGPU/samples/simulated-grouped-gemm.mlir.in -tritongpu-assign-latencies -tritongpu-schedule-loops -tritongpu-pipeline -canonicalize | \
 		$(PYTHON) utils/generate-test-checks.py --source test/TritonGPU/samples/simulated-grouped-gemm.mlir.in --source_delim_regex="\bmodule" \
 		-o test/TritonGPU/samples/simulated-grouped-gemm.mlir
-	$(TRITON_OPT) test/TritonGPU/samples/descriptor-matmul-pipeline.mlir.in -tritongpu-pipeline -canonicalize | \
+	$(TRITON_OPT) test/TritonGPU/samples/descriptor-matmul-pipeline.mlir.in -tritongpu-assign-latencies -tritongpu-schedule-loops -tritongpu-pipeline -canonicalize | \
 		$(PYTHON) utils/generate-test-checks.py --source test/TritonGPU/samples/descriptor-matmul-pipeline.mlir.in --source_delim_regex="\bmodule" \
 		-o test/TritonGPU/samples/descriptor-matmul-pipeline.mlir

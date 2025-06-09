@@ -85,7 +85,10 @@ def matmul_launch_metadata(grid, kernel, args):
     batch_repr = ""
     if "batch_size" in args and args["batch_size"] > 1:
         batch_repr = repr("B", args["batch_size"]) + ", "
-    ret["name"] = f"{kernel.name} [{batch_repr}{repr('M', M)}, {repr('N', N)}, {repr('K', K)}]"
+    ret["name"] = f"{kernel.name} [{batch_repr}{repr('M', M)}, {repr('N', N)}, {repr('K', K)}] stg{kernel.num_stages}"
+    ep_subtile = args["EPILOGUE_SUBTILE"]
+    if ep_subtile is not None and ep_subtile > 1:
+        ret["name"] += f" ep/{ep_subtile}"
     fM = M if M is not None else n_tokens
     fK = K if K is not None else n_tokens
     ret[f"flops{nbits}"] = 2.0 * fM * N * fK

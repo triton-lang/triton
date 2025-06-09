@@ -1399,6 +1399,19 @@ void LayoutRematerialization::hoistConvertOnTopOfExtOrBroadcast(
         return;
       LogicalResult result = getRematerializableSlice(
           op->getOpOperand(0), srcEncoding, tempSlice, tempLayout);
+
+      // If a value is already assigned to a _different_ layout,
+      // we cannot propagate past this op (as it would conflict with
+      // an already-assigned layout).
+      for (auto [val, enc] : tempLayout) {
+        auto preexistingLayout = layout.find(val);
+        if (preexistingLayout != layout.end() &&
+            preexistingLayout->second != enc) {
+          result = failure();
+          break;
+        }
+      }
+
       // If we can rematerialize the rest of the ext slice we can ignore this
       // ext as it won't need a convert.
       if (result.succeeded()) {

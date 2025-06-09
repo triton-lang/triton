@@ -36,6 +36,10 @@ def supports_host_descriptor():
     return is_cuda() and torch.cuda.get_device_capability()[0] >= 9
 
 
+def is_blackwell():
+    return is_cuda() and torch.cuda.get_device_capability()[0] == 10
+
+
 @triton.jit
 def _attn_fwd_inner(acc, l_i, m_i, q,  #
                     desc_k, desc_v,  #
@@ -115,7 +119,7 @@ configs = [
 if "PYTEST_VERSION" in os.environ:
     # Use a single config in testing for reproducibility
     configs = [
-        triton.Config(dict(BLOCK_M=64, BLOCK_N=64), num_stages=4, num_warps=4, pre_hook=_host_descriptor_pre_hook),
+        triton.Config(dict(BLOCK_M=64, BLOCK_N=64), num_stages=2, num_warps=4, pre_hook=_host_descriptor_pre_hook),
     ]
 
 
@@ -483,10 +487,10 @@ class _attention(torch.autograd.Function):
             y_dim = q.shape[0] * q.shape[1] * q.shape[2]
 
             dummy_block = [1, 1]
-            desc_q = TensorDescriptor(q, shape=[y_dim, HEAD_DIM_K], strides=[HEAD_DIM, 1], block_shape=dummy_block)
-            desc_v = TensorDescriptor(v, shape=[y_dim, HEAD_DIM_K], strides=[HEAD_DIM, 1], block_shape=dummy_block)
-            desc_k = TensorDescriptor(k, shape=[y_dim, HEAD_DIM_K], strides=[HEAD_DIM, 1], block_shape=dummy_block)
-            desc_o = TensorDescriptor(o, shape=[y_dim, HEAD_DIM_K], strides=[HEAD_DIM, 1], block_shape=dummy_block)
+            desc_q = TensorDescriptor(q, shape=[y_dim, HEAD_DIM_K], strides=[HEAD_DIM_K, 1], block_shape=dummy_block)
+            desc_v = TensorDescriptor(v, shape=[y_dim, HEAD_DIM_K], strides=[HEAD_DIM_K, 1], block_shape=dummy_block)
+            desc_k = TensorDescriptor(k, shape=[y_dim, HEAD_DIM_K], strides=[HEAD_DIM_K, 1], block_shape=dummy_block)
+            desc_o = TensorDescriptor(o, shape=[y_dim, HEAD_DIM_K], strides=[HEAD_DIM_K, 1], block_shape=dummy_block)
         else:
             desc_q = q
             desc_v = v
@@ -509,7 +513,7 @@ class _attention(torch.autograd.Function):
             q.shape[0], q.shape[1],  #
             desc_q, desc_k, desc_v, desc_o,  #
             N_CTX=q.shape[2],  #
-            HEAD_DIM=HEAD_DIM,  #
+            HEAD_DIM=HEAD_DIM_K,  #
             FP8_OUTPUT=q.dtype == torch.float8_e5m2,  #
             STAGE=stage,  #
             warp_specialize=warp_specialize,  #
@@ -567,17 +571,12 @@ class _attention(torch.autograd.Function):
 attention = _attention.apply
 
 
-@pytest.mark.parametrize('Z, H, N_CTX, HEAD_DIM', [
-    (1, 2, 1024, 64),
-    (4, 48, 128, 64),
-    (4, 48, 256, 64),
-    (4, 48, 512, 64),
-    (4, 48, 1024, 64),
-    (4, 48, 2048, 64),
-    (4, 48, 4096, 64),
-])
-@pytest.mark.parametrize("causal", [True])
-@pytest.mark.parametrize("warp_specialize", [False])
+@pytest.mark.parametrize("Z", [1, 4])
+@pytest.mark.parametrize("H", [2, 48])
+@pytest.mark.parametrize("N_CTX", [128, 1024, (2 if is_hip() else 4) * 1024])
+@pytest.mark.parametrize("HEAD_DIM", [64, 128])
+@pytest.mark.parametrize("causal", [True])  # FIXME: Non-causal tests do not pass at the moment.
+@pytest.mark.parametrize("warp_specialize", [False, True] if is_blackwell() else [False])
 def test_op(Z, H, N_CTX, HEAD_DIM, causal, warp_specialize, dtype=torch.float16):
     torch.manual_seed(20)
     q = (torch.empty((Z, H, N_CTX, HEAD_DIM), dtype=dtype, device=DEVICE).normal_(mean=0.0, std=0.5).requires_grad_())

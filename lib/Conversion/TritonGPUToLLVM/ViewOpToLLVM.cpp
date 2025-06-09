@@ -480,6 +480,27 @@ struct MemDescSubviewOpConversion
     return success();
   }
 };
+
+struct MemDescReinterpretOpConversion
+    : public ConvertOpToLLVMPattern<MemDescReinterpretOp> {
+  using ConvertOpToLLVMPattern::ConvertOpToLLVMPattern;
+
+  LogicalResult matchAndRewrite(MemDescReinterpretOp op, OpAdaptor adaptor,
+                                ConversionPatternRewriter &b) const override {
+    Location loc = op.getLoc();
+    MemDescType srcTy = op.getSrc().getType();
+    MemDescType dstTy = op.getType();
+    Type srcElemTy = getTypeConverter()->convertType(srcTy.getElementType());
+    Type dstElemTy = getTypeConverter()->convertType(dstTy.getElementType());
+
+    auto smemObj =
+        getSharedMemoryObjectFromStruct(loc, adaptor.getSrc(), srcElemTy, b);
+    SharedMemoryObject newObj(smemObj.getBase(), dstElemTy, dstTy.getRank(),
+                              loc, b);
+    b.replaceOp(op, getStructFromSharedMemoryObject(loc, newObj, b));
+    return success();
+  }
+};
 } // namespace
 
 void mlir::triton::populateViewOpToLLVMPatterns(
@@ -497,4 +518,5 @@ void mlir::triton::populateViewOpToLLVMPatterns(
   patterns.add<TransOpConversion>(typeConverter, benefit);
   patterns.add<BroadcastOpConversion>(typeConverter, benefit);
   patterns.add<MemDescSubviewOpConversion>(typeConverter, benefit);
+  patterns.add<MemDescReinterpretOpConversion>(typeConverter, benefit);
 }

@@ -1,4 +1,3 @@
-import functools
 import torch
 import triton
 import triton.language as tl
@@ -13,44 +12,26 @@ from ._common import make_matmul_repr, matmul_launch_metadata, swizzle2d, xcd_sw
 def cuda_capability_geq(major, minor):
     return target_info.cuda_capability_geq(major, minor)
 
-# TODO: this is a limitation of the triton frontend
-# we shouldn't have to do that!
-def inline_function(f):
-    """
-    Wraps an arbitrary Python function so that it can be inlined into a Triton function at compile-time.
-    """
-
-    @functools.wraps(f)
-    def wrapper(*args, **kwargs):
-        return f(*args, **kwargs)
-
-    # disguise the function as a Triton builtin to avoid raising an error
-    # that we're calling a non-JIT function from within a Triton kernel:
-    wrapper.__triton_builtin__ = True
-    wrapper.__module__ = getattr(tl, "__name__", "triton.language")
-    return wrapper
-
-@inline_function
-def _load_tensor_desc(desc, offs, transpose: tl.constexpr = False, _builder=None):
+@triton.jit
+def _load_tensor_desc(desc, offs, transpose: tl.constexpr = False):
     if transpose:
         offs = offs[:-2] + [offs[-1], offs[-2]]
-    res = desc.load(offs, _builder=_builder)
-    res = tl.reshape(res, desc.block_shape[-2:], _builder=_builder)
+    res = desc.load(offs)
+    res = tl.reshape(res, desc.block_shape[-2:])
     if transpose:
-        res = tl.trans(res, _builder=_builder)
+        res = tl.trans(res)
     return res
 
 
 # Helper function to recreate a TMA desc with the same fields, but with a new pointer and optional new shape.
-@inline_function
-def _update_tensor_desc(desc, ptr, shape=None, _builder=None):
+@triton.jit
+def _update_tensor_desc(desc, ptr, shape=None):
     return tl.make_tensor_descriptor(
         ptr,
         shape=shape or desc.shape,
         # last dim must be constexpr 1; reflecting the old descriptor drops the constexpr
         strides=desc.strides[:-1] + [tl.constexpr(1)],
         block_shape=desc.block_shape,
-        _builder=_builder,
     )
 
 @triton.jit
@@ -199,7 +180,11 @@ def _p_matmul_ogs(
     HAS_FUSED_SCATTER: tl.constexpr = WriteBackIndx is not None
     index_type: tl.constexpr = tl.int64
 
-    EPILOGUE_BLOCK_N: tl.constexpr = BLOCK_N // 2 if EPILOGUE_SUBTILE else BLOCK_N
+    if EPILOGUE_SUBTILE is None:
+        SUBTILE_FACTOR: tl.constexpr = 1
+    else:
+        SUBTILE_FACTOR: tl.constexpr = EPILOGUE_SUBTILE
+    EPILOGUE_BLOCK_N: tl.constexpr = BLOCK_N // SUBTILE_FACTOR
     OUT_BLOCK_N: tl.constexpr = EPILOGUE_BLOCK_N // ACTIVATION_REDUCTION_N
     yN = N // ACTIVATION_REDUCTION_N
 
@@ -500,12 +485,26 @@ def _p_matmul_ogs(
         else:
             w_scale = load_scale(WScale)
 
-        if EPILOGUE_SUBTILE:
-            accs = tl.split(tl.permute(tl.reshape(acc, (BLOCK_M, 2, EPILOGUE_BLOCK_N)), (0, 2, 1)))
-            biases = tl.split(tl.permute(tl.reshape(bias, (2, EPILOGUE_BLOCK_N)), (1, 0)))
-        else:
-            accs = (acc,)
-            biases = (bias,)
+        accs = (acc,)
+        biases = (bias,)
+
+        if SUBTILE_FACTOR >= 2:
+            acc0, acc1 = acc.reshape(BLOCK_M, 2, BLOCK_N // 2).permute(0, 2, 1).split()
+            accs = (acc0, acc1)
+            bias0, bias1 = bias.reshape(2, BLOCK_N // 2).permute(1, 0).split()
+            biases = (bias0, bias1)
+
+        if SUBTILE_FACTOR >= 4:
+            acc00, acc01 = acc0.reshape(BLOCK_M, 2, BLOCK_N // 4).permute(0, 2, 1).split()
+            acc10, acc11 = acc1.reshape(BLOCK_M, 2, BLOCK_N // 4).permute(0, 2, 1).split()
+            accs = (acc00, acc01, acc10, acc11)
+            bias00, bias01 = bias0.reshape(2, BLOCK_N // 4).permute(1, 0).split()
+            bias10, bias11 = bias1.reshape(2, BLOCK_N // 4).permute(1, 0).split()
+            biases = (bias00, bias01, bias10, bias11)
+
+        tl.static_assert(EPILOGUE_BLOCK_N == BLOCK_N // SUBTILE_FACTOR)
+        tl.static_assert(len(accs) == SUBTILE_FACTOR)
+        tl.static_assert(len(biases) == SUBTILE_FACTOR)
 
         for a_i in tl.static_range(len(accs)):
             acc_tile = accs[a_i]
@@ -514,7 +513,6 @@ def _p_matmul_ogs(
             if SWAP_XW:
                 acc_tile = acc_tile.T
             acc_tile = acc_tile + biases[a_i][None, :] * betas[:, None]
-            acc_tile *= gammas[:, None]
             if out_alpha is not None:
                 acc_tile *= out_alpha
 
@@ -524,6 +522,8 @@ def _p_matmul_ogs(
             else:
                 tl.static_assert(ACTIVATION_REDUCTION_N == 1, "Activation reduction must be 1 if no activation fn is provided")
                 out = acc_tile
+
+            out *= gammas[:, None]
 
             if MASK_ACC:
                 out = tl.where(mask_m[:, None], out, 0.0)

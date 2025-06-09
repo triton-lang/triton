@@ -1,4 +1,4 @@
-from triton.backends.compiler import BaseBackend, GPUTarget
+from triton.backends.compiler import BaseBackend, GPUTarget, Language
 from triton._C.libtriton import ir, passes, llvm, nvidia
 from triton import knobs
 from triton.runtime.errors import PTXASError
@@ -111,7 +111,7 @@ class CUDAOptions:
     launch_cooperative_grid: bool = False
     launch_pdl: bool = False
     supported_fp8_dtypes: Tuple[str] = ("fp8e5", "fp8e4b15")
-    deprecated_fp8_dtypes: Tuple[str] = ()
+    deprecated_fp8_dot_operand_dtypes: Tuple[str] = ()
     default_dot_input_precision: str = "tf32"
     allowed_dot_input_precisions: Tuple[str] = ("tf32", "tf32x3", "ieee")
     max_num_imprecise_acc_default: bool = None
@@ -151,6 +151,10 @@ class CUDABackend(BaseBackend):
             raise ValueError(f"TRITON_OVERRIDE_ARCH must have the form {pattern}")
         return int(match.group(1))
 
+    def get_target_name(self, options) -> str:
+        capability = self._parse_arch(options.arch)
+        return f"cuda:{capability}"
+
     def __init__(self, target: GPUTarget) -> None:
         super().__init__(target)
         self.binary_ext = "cubin"
@@ -166,9 +170,9 @@ class CUDABackend(BaseBackend):
                 supported_fp8_dtypes.add("fp8e4nv")
             args["supported_fp8_dtypes"] = tuple(sorted(supported_fp8_dtypes))
 
-        if "deprecated_fp8_dtypes" not in args:
+        if "deprecated_fp8_dot_operand_dtypes" not in args:
             if capability >= 90:
-                args["deprecated_fp8_dtypes"] = ("fp8e4b15", )
+                args["deprecated_fp8_dot_operand_dtypes"] = ("fp8e4b15", )
 
         if "enable_fp_fusion" not in args:
             args["enable_fp_fusion"] = knobs.language.default_fp_fusion
@@ -287,11 +291,26 @@ class CUDABackend(BaseBackend):
         if capability // 10 >= 9:
             nvidia.passes.ttnvgpuir.add_tma_lowering(pm)
             nvidia.passes.ttnvgpuir.add_fence_insertion(pm)
+        passes.common.add_sccp(pm)
         passes.common.add_canonicalizer(pm)
         pm.run(mod)
         metadata["cluster_dims"] = (cluster_info.clusterDimX, cluster_info.clusterDimY, cluster_info.clusterDimZ)
         tensordesc_meta = mod.get_tensordesc_metadata()
         metadata["tensordesc_meta"] = tensordesc_meta
+        return mod
+
+    def ttgir_opt(self, src, metadata, options, capability):
+        mod = src
+        pm = ir.pass_manager(mod.context)
+        pm.enable_debug()
+
+        passes.ttgpuir.add_inliner(pm)
+        passes.common.add_sccp(pm)
+        passes.ttir.add_loop_aware_cse(pm)
+        passes.ttgpuir.add_canonicalizer(pm)
+        passes.ttgpuir.add_combine_tensor_select_and_if(pm)
+
+        pm.run(mod)
         return mod
 
     def make_llir(self, src, metadata, options, capability):
@@ -418,10 +437,13 @@ class CUDABackend(BaseBackend):
                 os.remove(fbin)
         return cubin
 
-    def add_stages(self, stages, options):
+    def add_stages(self, stages, options, language):
         capability = self._parse_arch(options.arch)
-        stages["ttir"] = lambda src, metadata: self.make_ttir(src, metadata, options, capability)
-        stages["ttgir"] = lambda src, metadata: self.make_ttgir(src, metadata, options, capability)
+        if language == Language.TRITON:
+            stages["ttir"] = lambda src, metadata: self.make_ttir(src, metadata, options, capability)
+            stages["ttgir"] = lambda src, metadata: self.make_ttgir(src, metadata, options, capability)
+        elif language == Language.GLUON:
+            stages["ttgir"] = lambda src, metadata: self.ttgir_opt(src, metadata, options, capability)
         stages["llir"] = lambda src, metadata: self.make_llir(src, metadata, options, capability)
         stages["ptx"] = lambda src, metadata: self.make_ptx(src, metadata, options, self.target.arch)
         stages["cubin"] = lambda src, metadata: self.make_cubin(src, metadata, options, self.target.arch)
