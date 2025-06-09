@@ -57,6 +57,12 @@ class GluonSemantic(TritonSemantic[TensorTy]):
         handle = self.builder.create_expand_dims(input.handle, axis, ret_ty.to_ir(self.builder))
         return self.tensor(handle, ret_ty)
 
+    def permute(self, input: TensorTy, dims: Tuple[int]) -> TensorTy:
+        value = super().permute(input, dims)
+        layout = self.builder.get_gluon_layout_from_tensor(value.handle)
+        res_ty = ttgl.distributed_type(value.type.scalar, value.shape, layout)
+        return self.tensor(value.handle, res_ty)
+
     def broadcast_impl_shape(self, input: TensorTy, shape: Tuple[int]) -> TensorTy:
         _check(isinstance(input.type, ttgl.distributed_type),
                lambda: f"expected expand_dims input to be a distributed_type but got: {input.type!r}")

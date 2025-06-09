@@ -829,3 +829,16 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 } loc(#loc)
 #loc = loc(unknown)
 """)
+
+
+@filecheck_test
+@gluon.jit
+def test_tensor_permute():
+    # CHECK-DAG: [[BLOCKED:#.*]] = #ttg.blocked<{sizePerThread = [1, 2], threadsPerWarp = [4, 8], warpsPerCTA = [4, 1], order = [1, 0]}>
+    # CHECK-DAG: [[BLOCKED1:#.*]] = #ttg.blocked<{sizePerThread = [2, 1], threadsPerWarp = [8, 4], warpsPerCTA = [1, 4], order = [0, 1]}>
+    layout: ttgl.constexpr = ttgl.BlockedLayout([1, 2], [4, 8], [4, 1], [1, 0])
+    a = ttgl.full([32, 16], 0, ttgl.int32, layout=layout)
+    # CHECK: tt.trans{{.*}} : tensor<32x16xi32, [[BLOCKED]]> -> tensor<16x32xi32, [[BLOCKED1]]>
+    res = ttgl.permute(a, [1, 0])
+    permuted_layout: ttgl.constexpr = ttgl.BlockedLayout([2, 1], [8, 4], [1, 4], [0, 1], [1, 1], [1, 1], [1, 0])
+    ttgl.static_assert(permuted_layout == res.type.layout)
