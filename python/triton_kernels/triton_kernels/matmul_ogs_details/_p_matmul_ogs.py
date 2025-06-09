@@ -332,7 +332,7 @@ def _p_matmul_ogs(
 
             if SPLIT_K > 1:
                 offs_mx_k += MX_SCALE_BLOCK_K * pid_k
-                offs_mx_inner += PACKED_MX_BLOCK * pid_k
+                offs_mx_inner += (MX_SCALE_BLOCK_K // 4) * pid_k * stride_mx_k
 
         if X_USE_LOAD_TMA:
             if ExptData is None:
@@ -403,7 +403,7 @@ def _p_matmul_ogs(
                             w_scales = tl.load(MxPtrs, mask=mask_k[None, :], other=0.0)
 
                 elif SWIZZLE_MX_SCALE == "BLACKWELL":
-                    w_scales = mx_desc.load([expt_id, off_n // 128, ki * (MX_SCALE_BLOCK_K // 4 * SPLIT_K), 0, 0])
+                    w_scales = mx_desc.load([expt_id, off_n // 128, pid_k * MX_SCALE_BLOCK_K // 4 + ki * (MX_SCALE_BLOCK_K // 4 * SPLIT_K), 0, 0])
                     w_scales = w_scales.reshape((w_scales.shape[1], w_scales.shape[2] * 32 * 4 * 4))
                     w_scales = unswizzle_mx_scale_bw(w_scales)
                 else:
