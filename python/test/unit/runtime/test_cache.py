@@ -528,6 +528,7 @@ def test_hooks(device, fresh_triton_cache) -> None:
     specialization_data = None
     is_warmup = False
     key = 0
+    name = None
 
     def cache_hook(*args, **kwargs):
         nonlocal specialization_data
@@ -536,6 +537,8 @@ def test_hooks(device, fresh_triton_cache) -> None:
         is_warmup = kwargs["compile"]["is_warmup"]
         nonlocal key
         key = kwargs["compile"]["key"]
+        nonlocal name
+        name = kwargs["fn"].name
 
     specialization_data_compiled = None
 
@@ -549,6 +552,7 @@ def test_hooks(device, fresh_triton_cache) -> None:
     assert specialization_data is not None and specialization_data_compiled == specialization_data
     assert is_warmup is True
     assert key in kernel_add.device_caches[getattr(torch, device).current_device()][0]
+    assert name == "test_hooks.<locals>.kernel_add"
 
 
 @pytest.mark.skipif(reason="within_2g is a HIP specific optimization", condition=not is_hip())
