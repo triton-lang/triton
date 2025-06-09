@@ -239,11 +239,9 @@ class shared_memory_descriptor(base_value):
         return _semantic.memdesc_slice(self, index, shape, layout)
 
     @builtin
-    def permute(self, order, layout, _semantic: GluonSemantic) -> shared_memory_descriptor:
+    def permute(self, order, _semantic: GluonSemantic) -> shared_memory_descriptor:
         order = [_unwrap_if_constexpr(o) for o in order]
-        layout = _unwrap_if_constexpr(layout)
-
-        return _semantic.memdesc_trans(self, order, layout)
+        return _semantic.memdesc_trans(self, order)
 
     @builtin
     def reshape(self, shape, layout, _semantic: GluonSemantic) -> shared_memory_descriptor:

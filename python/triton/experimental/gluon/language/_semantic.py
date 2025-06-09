@@ -163,7 +163,7 @@ class GluonSemantic(TritonSemantic[TensorTy]):
         offsets[0] = self._convert_elem_to_ir_value(index, require_i64=False)
         return self._memdesc_subview(mem_desc, offsets, shape, layout)
 
-    def memdesc_trans(self, mem_desc, order, layout):
+    def memdesc_trans(self, mem_desc, order):
         assert len(order) == len(
             mem_desc.shape), f"source rank ({mem_desc.rank}) and order length ({len(order)}) must match"
 
@@ -172,9 +172,10 @@ class GluonSemantic(TritonSemantic[TensorTy]):
         new_alloc_shape = alloc_shape[:len(alloc_shape) - mem_desc.rank]
         new_alloc_shape += [alloc_shape[len(alloc_shape) - mem_desc.rank:][i] for i in order]
 
-        ty = ttgl.shared_memory_descriptor_type(mem_desc.dtype, shape, layout, new_alloc_shape)
-        handle = self.builder.create_memdesc_trans(ty.to_ir(self.builder), mem_desc.handle, order)
-        return ttgl.shared_memory_descriptor(handle, **ty.__dict__)
+        handle = self.builder.create_memdesc_trans(mem_desc.handle, order)
+        layout = self.builder.get_gluon_layout_from_memdesc(handle)
+        return ttgl.shared_memory_descriptor(handle, element_ty=mem_desc.dtype, shape=shape, alloc_shape=alloc_shape,
+                                             layout=layout)
 
     def memdesc_reshape(self, mem_desc, shape, layout):
         ty = ttgl.shared_memory_descriptor_type(mem_desc.dtype, shape, layout, mem_desc.type.alloc_shape)

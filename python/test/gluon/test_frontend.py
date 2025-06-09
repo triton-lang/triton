@@ -247,9 +247,11 @@ def shared_memory_cast_kernel():
     layout_a: ttgl.constexpr = ttgl.NVMMASharedLayout(swizzle_byte_width=64, transposed=False, element_bitwidth=8,
                                                       rank=2)
     layout_T: ttgl.constexpr = ttgl.NVMMASharedLayout(swizzle_byte_width=64, transposed=True, element_bitwidth=8,
-                                                      rank=2)
+                                                      rank=2, ctas_per_cga=[1, 1], cta_split_num=[1,
+                                                                                                  1], cta_order=[1, 0])
     smem = ttgl.allocate_shared_memory(ttgl.int8, [2, 256, 128], layout_a)
-    smem.subslice(0).permute((1, 0), layout_T)
+    perm = smem.subslice(0).permute((1, 0))
+    ttgl.static_assert(perm.type.layout == layout_T)
 
     layout_b: ttgl.constexpr = ttgl.NVMMASharedLayout(swizzle_byte_width=64, transposed=False, element_bitwidth=16,
                                                       rank=4, cta_order=[3, 2, 1, 0])
