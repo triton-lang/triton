@@ -90,8 +90,8 @@ class PerfData:
 def bench_mlp(batch, dim1, dim2, n_expts_tot, n_expts_act, x_dtype, w_dtype, TP, EP, name):
     assert n_expts_tot % EP == 0
     assert dim2 % TP == 0
-    local_rank, world_size = triton_dist.setup()
-    dev = f"cuda:{local_rank}"
+    rank, world_size = triton_dist.setup()
+    dev = f"cuda:{rank}"
     DP = world_size
 
     assert n_expts_tot % EP == 0, f"{n_expts_tot=}, {EP=}, n_expts_tot must be divisible by EP"

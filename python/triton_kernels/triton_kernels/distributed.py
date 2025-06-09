@@ -2,7 +2,7 @@ import os
 import torch
 import torch.distributed as dist
 import triton_kernels.routing
-from triton_kernels.routing import RoutingData, GatherIndx, ScatterIndx
+from triton_kernels.routing import RoutingData, GatherIndx, ScatterIndx, compute_expt_data
 from triton_kernels.topk import topk
 from typing import Tuple
 
@@ -89,16 +89,17 @@ def reduce_scatter(x: torch.Tensor, token_mask: torch.Tensor = None, dim=0) -> t
         return x
 
 
-def routing(logits, n_expts_act, expt_indx=None, EP=1,
+def routing(logits, n_expts_act, sm_first=False, expt_indx=None, n_rows=None, EP=1,
             TP=1) -> Tuple[RoutingData, GatherIndx, ScatterIndx, torch.Tensor]:
     if _is_distributed_launch():
         assert expt_indx is None
         _, n_expts_tot = logits.shape
         # We need to use the same topk as triton_kernels because torch's topk
         # does not have the same tie-breaking behavior as triton_kernels.
-        expt_scal, expt_indx, _ = topk(logits, n_expts_act)
+        if sm_first:
+            logits = torch.softmax(logits, dim=-1)
+        expt_scal, expt_indx, _ = topk(logits, n_expts_act, apply_softmax=sm_first, n_rows=n_rows)
         expt_indx = expt_indx.int()
-        expt_scal = torch.softmax(expt_scal, dim=-1)
         # Sort each token's selections by expert
         expt_indx, sort_indices = torch.sort(expt_indx, dim=1, stable=True)
         expt_scal = torch.gather(expt_scal, 1, sort_indices)
@@ -138,6 +139,8 @@ def routing(logits, n_expts_act, expt_indx=None, EP=1,
         # pack the matmul data structure
         gather_indx = GatherIndx(src_indx=topk_indx.int(), dst_indx=gate_indx.int())
         scatter_indx = ScatterIndx(src_indx=gate_indx.int(), dst_indx=topk_indx.int())
-        return RoutingData(gate_scal, hist, n_expts_tot // EP, n_expts_act), gather_indx, scatter_indx, token_mask
+        expt_data = compute_expt_data(hist, n_expts_tot, topk_indx.numel())
+        return RoutingData(gate_scal, hist, n_expts_tot // EP, n_expts_act,
+                           expt_data=expt_data), gather_indx, scatter_indx, token_mask
     else:
         return *triton_kernels.routing.routing(logits, n_expts_act, expt_indx, EP), None
