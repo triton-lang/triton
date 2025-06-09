@@ -567,6 +567,9 @@ public:
              "expected offset to be integer type");
       auto newAddPtrOp = rewriter.create<tt::AddPtrOp>(
           curLoc, fatPtrBase.getType(), fatPtrBase, origOffset);
+      newAddPtrOp.getOperation()->setDiscardableAttrs(
+          addPtrOp->getDiscardableAttrDictionary());
+
       rewriter.replaceOpWithMultiple(addPtrOp, {{newAddPtrOp, fatPtrOffset}});
       fatPtrs[{newAddPtrOp, fatPtrOffset}] =
           fatPtrs.at({fatPtrBase, fatPtrOffset});
@@ -581,6 +584,9 @@ public:
             maybeGetOrCreateScalarConstant(rewriter, curLoc, origOffset)) {
       tt::AddPtrOp newAddPtrOp = rewriter.create<tt::AddPtrOp>(
           curLoc, fatPtrBase.getType(), fatPtrBase, *scalarConst);
+      newAddPtrOp.getOperation()->setDiscardableAttrs(
+          addPtrOp->getDiscardableAttrDictionary());
+
       rewriter.replaceOpWithMultiple(addPtrOp, {{newAddPtrOp, fatPtrOffset}});
       // If we are updating the tensor pointer with a constant value, we can
       // propagate the attributes of the tensor pointer to the fat pointer.
@@ -596,6 +602,8 @@ public:
 
     auto newAddPtrOp = rewriter.create<tt::AddPtrOp>(
         curLoc, fatPtrBase.getType(), fatPtrBase, uniformOffset);
+    newAddPtrOp.getOperation()->setDiscardableAttrs(
+        addPtrOp->getDiscardableAttrDictionary());
 
     // Vector offset update (if any): bump the tensor offset
     bool canNarrow = fatPtrs.at({fatPtrBase, fatPtrOffset}).canNarrow;
