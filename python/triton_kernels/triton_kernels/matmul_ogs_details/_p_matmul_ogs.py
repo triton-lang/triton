@@ -35,20 +35,28 @@ def _update_tensor_desc(desc, ptr, shape=None):
     )
 
 @triton.jit
-def _make_tensor_desc(ptr, shape, strides, block_shape, transpose: tl.constexpr = False):
+def _cdiv(a, b):
+    return (a + b - 1) // b
+
+@triton.jit
+def _multiple_of(a, b):
+    return _cdiv(a, b) * b
+
+@triton.jit
+def _make_tensor_desc(ptr, shape, strides, block_shape, transpose: tl.constexpr = False, pad_inner_shape: tl.constexpr = 1):
     tl.static_assert(len(shape) == len(strides))
     tl.static_assert(len(strides) == len(block_shape))
     if transpose:
         return tl.make_tensor_descriptor(
             ptr,
-            shape=shape[:-2] + [shape[-1], shape[-2]],
+            shape=shape[:-2] + [shape[-1], _multiple_of(shape[-2], pad_inner_shape)],
             strides=strides[:-2] + [strides[-1], tl.constexpr(1)],
             block_shape=block_shape[:-2] + [block_shape[-1], block_shape[-2]],
         )
     else:
         return tl.make_tensor_descriptor(
             ptr,
-            shape=shape,
+            shape=shape[:-1] + [_multiple_of(shape[-1], pad_inner_shape)],
             strides=strides[:-1] + [tl.constexpr(1)],
             block_shape=block_shape,
         )
@@ -235,12 +243,20 @@ def _p_matmul_ogs(
             block_shape=[BLOCK_M, BLOCK_K]
         )
 
+    # Pad the inner shape to 128 for mxfp4 weights; TMA requires this when the compiler uses CU_TENSOR_MAP_DATA_TYPE_16U4_ALIGN16B.
+    # This technically makes the shape masking incorrect, but it's fine because:
+    #  - When the N dim is padded, the scales will be masked to 0.
+    #  - When the K dim is padded, the activations we perform tl.dot with will be masked to 0.
+    #    Note: the scales can't be relied on for zeroing in this case, because they apply to groups
+    #    of 32 elements in the K dimension.
+    w_pad_inner_shape = 128 if is_microscaled_format and W.dtype.element_ty == tl.uint8 else 1
     w_desc = _make_tensor_desc(W,
         shape=[N_EXPTS_TOT if ExptData is not None else batch_size,
             (K + W_PACK_DIVISOR - 1) // W_PACK_DIVISOR, N],
         strides=[stride_w_e, stride_w_k, stride_w_n],
         block_shape=[1, PACKED_BLOCK_K_W, BLOCK_N],
-        transpose=W_TRANSPOSE)
+        transpose=W_TRANSPOSE,
+        pad_inner_shape=w_pad_inner_shape)
 
     if is_microscaled_format:
         PackedK = (K + MX_PACK_DIVISOR - 1) // MX_PACK_DIVISOR
