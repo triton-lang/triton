@@ -806,3 +806,26 @@ def test_elementwise_core():
     ttgl.static_assert(a.type == x.type)
     ttgl.static_assert(b.type == x.type)
     ttgl.static_assert(c.type == x.type)
+
+
+@gluon.jit
+def linear_layout_kernel():
+    ll: tl.constexpr = ttgl.DistributedLinearLayout(reg_bases=[[1]], lane_bases=[[2], [4], [8], [16], [32]],
+                                                    warp_bases=[[64], [128]], block_bases=[], shape=[256])
+    ttgl.arange(0, 256, layout=ll)
+
+
+def test_linear_layout(fresh_knobs):
+    knobs.compilation.disable_line_info = True
+    h = linear_layout_kernel.warmup(grid=(1, ))
+    expecttest.assert_expected_inline(
+        anonymize_ir(h.asm["source"]), """\
+#linear = #ttg.linear<{register = [[1]], lane = [[2], [4], [8], [16], [32]], warp = [[64], [128]], block = []}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "...", "ttg.threads-per-warp" = 32 : i32} {
+  tt.func public @linear_layout_kernel() attributes {noinline = false} {
+    %0 = tt.make_range {end = 256 : i32, start = 0 : i32} : tensor<256xi32, #linear> loc(#loc)
+    tt.return loc(#loc)
+  } loc(#loc)
+} loc(#loc)
+#loc = loc(unknown)
+""")
