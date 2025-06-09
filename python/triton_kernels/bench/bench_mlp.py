@@ -33,8 +33,8 @@ def quantize(w, dtype, dev, **opt):
                    MicroscalingCtx()
     else:
         assert dtype == "mx4", f"{dtype=}"
-        swizzle_mx_scale = opt["swizzle_mx_scale"]
-        swizzle_mx_value = opt["swizzle_mx_value"]
+        swizzle_mx_scale = opt.get("swizzle_mx_scale", None)
+        swizzle_mx_value = opt.get("swizzle_mx_value", None)
         swizzle_axis = 2 if swizzle_mx_scale else None
         w = w.to(torch.bfloat16)
         w, mx_scales, weight_scale_shape = downcast_to_mxfp(w, torch.uint8, axis=1, swizzle_axis=swizzle_axis,
