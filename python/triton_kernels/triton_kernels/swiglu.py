@@ -31,7 +31,6 @@ class SwiGLU(torch.autograd.Function):
         assert a.stride()[-1] == 1
         assert a.shape[-1] % 2 == 0
         out = torch.empty(size=(M, N // 2), dtype=a.dtype, device=a.device)
-
         flex_ctx = precision_config.flex_ctx
         # optimization hyperparameters
         BLOCK_M, BLOCK_N = 32 // a.itemsize, 128

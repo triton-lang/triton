@@ -28,7 +28,6 @@ def quantize(w, dtype, dev, **opt):
     elif dtype == "fp8":
         fp8e4_dtype = torch.float8_e4m3fn if get_cdna_version() != 3 \
             else torch.float8_e4m3fnuz
-
         wq = w.to(fp8e4_dtype)
         return wq, InFlexData(dtype=wq.dtype, scale=w.abs().max().unsqueeze(0)), \
                    MicroscalingCtx()
@@ -137,7 +136,6 @@ def bench_mlp(batch, dim1, dim2, n_expts_tot, n_expts_act, x_dtype, w_dtype, TP,
     x = torch.randn((batch, dim1), device=dev)
     xg = x.to(wg.dtype if n_expts_tot > 1 else x_dtype)
     x = x.to(x_dtype)
-
     # run layer
     proton.start(str(fpath.with_suffix('')), hook="triton")
     for i in range(100):
@@ -148,7 +146,6 @@ def bench_mlp(batch, dim1, dim2, n_expts_tot, n_expts_act, x_dtype, w_dtype, TP,
             rdata, gather_indx, scatter_indx = None, None, None
         x = matmul_ogs(x, w1, b1, rdata, gather_indx=gather_indx, precision_config=pc1, fused_activation=act)
         x = matmul_ogs(x, w2, b2, rdata, scatter_indx=scatter_indx, precision_config=pc2)
-
     proton.finalize()
 
     # -- analyze --
