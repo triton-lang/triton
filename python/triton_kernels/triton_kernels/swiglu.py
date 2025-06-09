@@ -4,7 +4,6 @@ import torch
 import triton
 from .swiglu_details._swiglu import _swiglu, _swiglu_fn
 from triton_kernels import target_info
-from .descriptor_cache import TensorCache
 
 
 @dataclass(frozen=True)
@@ -26,16 +25,13 @@ swiglu_fn = _swiglu_fn
 class SwiGLU(torch.autograd.Function):
 
     @staticmethod
-    def forward(ctx, a, alpha, precision_config, routing_data, tensor_cache=None):
-        if tensor_cache is None:
-            tensor_cache = TensorCache()
-
+    def forward(ctx, a, alpha, precision_config, routing_data):
         N = a.shape[-1]
         M = a.numel() // N
         assert a.stride()[-1] == 1
         assert a.shape[-1] % 2 == 0
         shape = (M, N // 2)
-        out = tensor_cache.get_or_create(shape, a.dtype, a.device)
+        out = torch.empty(shape, dtype=a.dtype, device=a.device)
 
         flex_ctx = precision_config.flex_ctx
         # optimization hyperparameters
@@ -88,8 +84,8 @@ class SwiGLU(torch.autograd.Function):
         return out
 
 
-def swiglu(a, alpha, precision_config, routing_data=None, tensor_cache=None):
-    return SwiGLU.apply(a, alpha, precision_config, routing_data, tensor_cache)
+def swiglu(a, alpha, precision_config, routing_data=None):
+    return SwiGLU.apply(a, alpha, precision_config, routing_data)
 
 
 def swiglu_torch(a, alpha, precision_config):

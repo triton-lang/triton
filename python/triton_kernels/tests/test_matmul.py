@@ -18,7 +18,6 @@ from triton_kernels.numerics_details.mxfp import SwizzlingType, downcast_to_mxfp
 from triton_kernels.testing import assert_close, compute_actual_scale
 # target-specific utilities
 from triton_kernels.target_info import is_hip
-from triton_kernels.descriptor_cache import CacheManager
 
 # ---------------
 # initialize data
@@ -381,9 +380,7 @@ def test_op(m, n, k, split_k, do_gather, do_scatter, fused_scatter, has_y_gammas
     flex = precision_opt.flex_ctx
 
     # triton
-    cache_manager = CacheManager()
-    tri_y = matmul_ogs(x_tri, w_tri, bias_tri, rdata, gindx, sindx, precision_opt, gammas=gs1_ref,
-                       cache_manager=cache_manager)
+    tri_y = matmul_ogs(x_tri, w_tri, bias_tri, rdata, gindx, sindx, precision_opt, gammas=gs1_ref)
     # If split_k > 1, then the intermediate tensor is fp32.
     sep_gather = mode == "ragged" and do_gather and n_expts_act > 1 and split_k == 1
     sep_scatter = mode == "ragged" and do_scatter and n_expts_act > 1 and split_k == 1
