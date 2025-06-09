@@ -50,7 +50,6 @@ def make_matmul_repr(base_name, order):
         reorder = lambda L: [L[i] for i in order]
         layout = lambda stride: "N" if stride in constants else "T"
 
-        # convert_dtype = lambda dtype: "mxfp4" if "u8" in dtype else dtype
         def convert_dtype(dtype):
             if "tensordesc" in dtype:
                 return dtype.split("<")[1].split("[")[0]
