@@ -1212,7 +1212,6 @@ class CodeGenerator(ast.NodeVisitor):
         fn_name = mangle_fn(get_full_name(fn), [arg.type for arg in args_val], args_cst)
         # generate function def if necessary
         if not self.module.has_function(fn_name):
-            gscope = fn.__globals__
             # If the callee is not set, we use the same debug setting as the caller
             file_name, begin_line = get_jit_fn_file_line(fn)
             arg_types = [
@@ -1221,7 +1220,7 @@ class CodeGenerator(ast.NodeVisitor):
                 for arg in args
             ]
             prototype = ASTFunction([], arg_types, args_cst, dict())
-            generator = CodeGenerator(self.context, prototype, gscope, module=self.module, jit_fn=fn,
+            generator = CodeGenerator(self.context, prototype, fn.get_capture_scope(), module=self.module, jit_fn=fn,
                                       function_name=fn_name, function_types=self.function_ret_types,
                                       noinline=fn.noinline, file_name=file_name, begin_line=begin_line,
                                       options=self.builder.options, codegen_fns=self.builder.codegen_fns,
@@ -1479,8 +1478,8 @@ def ast_to_ttir(fn, src, context, options, codegen_fns, module_map, module=None)
     constants = {fn.arg_names[i[0]]: src.constants[i] for i in leaves}
     signature = src.signature
     proxy = namedtuple("SpecializationProxy", ["constants", "signature"])(constants, signature)
-    generator = CodeGenerator(context, prototype, gscope=fn.__globals__.copy(), function_name=fn.repr(proxy), jit_fn=fn,
-                              is_kernel=True, file_name=file_name, begin_line=begin_line, options=options,
+    generator = CodeGenerator(context, prototype, gscope=fn.get_capture_scope(), function_name=fn.repr(proxy),
+                              jit_fn=fn, is_kernel=True, file_name=file_name, begin_line=begin_line, options=options,
                               codegen_fns=codegen_fns, module_map=module_map, module=module)
     generator.visit(fn.parse())
     ret = generator.module
