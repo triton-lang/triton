@@ -35,12 +35,8 @@ def _update_tensor_desc(desc, ptr, shape=None):
     )
 
 @triton.jit
-def _cdiv(a, b):
-    return (a + b - 1) // b
-
-@triton.jit
 def _multiple_of(a, b):
-    return _cdiv(a, b) * b
+    return tl.cdiv(a, b) * b
 
 @triton.jit
 def _make_tensor_desc(ptr, shape, strides, block_shape, transpose: tl.constexpr = False, pad_inner_shape: tl.constexpr = 1):
