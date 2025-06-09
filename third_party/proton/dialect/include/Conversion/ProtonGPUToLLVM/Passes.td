@@ -3,7 +3,7 @@
 
 include "mlir/Pass/PassBase.td"
 
-def AllocateProtonSharedMemory : Pass<"allocate-proton-shared-memory", "mlir::ModuleOp"> {
+def AllocateProtonSharedMemoryPass : Pass<"allocate-proton-shared-memory", "mlir::ModuleOp"> {
     let summary = "Update metadata for proton shared memory allocation";
     let description = [{
       This pass updates the amount of shared/local memory used by
@@ -14,7 +14,7 @@ def AllocateProtonSharedMemory : Pass<"allocate-proton-shared-memory", "mlir::Mo
                              "gpu::ProtonGPUDialect"];
 }
 
-def AllocateProtonGlobalScratchBuffer : Pass<"allocate-proton-global-scratch-buffer", "mlir::ModuleOp"> {
+def AllocateProtonGlobalScratchBufferPass : Pass<"allocate-proton-global-scratch-buffer", "mlir::ModuleOp"> {
     let summary = "Update metadata for proton global scratch buffer allocation";
     let description = [{
       This pass updates the amount of global memory used by
