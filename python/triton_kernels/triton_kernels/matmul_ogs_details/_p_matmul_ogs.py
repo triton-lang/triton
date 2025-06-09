@@ -373,13 +373,13 @@ def _p_matmul_ogs(
             else:
                 XPtrs = XBase + offs_x_m + offs_x_k
                 XBase += BLOCK_K * SPLIT_K * stride_x_k
+                mask_k = tl.arange(0, BLOCK_K) < K - off_k
                 if EVEN_K:
                     if SPLIT_K > 1:
-                        x = tl.load(XPtrs, mask=off_k < K, other=0.0)
+                        x = tl.load(XPtrs, mask=mask_k[None, :], other=0.0)
                     else:
                         x = tl.load(XPtrs)
                 else:
-                    mask_k = tl.arange(0, BLOCK_K) < K - off_k
                     x = tl.load(XPtrs, mask=mask_k[None, :], other=0.0)
 
             w = _load_tensor_desc(w_desc, [expt_id, off_k_w, off_n], transpose=W_TRANSPOSE)
@@ -397,13 +397,13 @@ def _p_matmul_ogs(
                         w_scales = unswizzle_mx_scale_bw(tl.load(MxPtrs))
                     else:
                         MxPtrs = MxScale + expt_id.to(index_type) * stride_mx_e + offs_mx_k.to(index_type)[None, :] * stride_mx_k + offs_w_n.to(index_type)[:, None] * stride_mx_n + ki * MX_SCALE_BLOCK_K * SPLIT_K * stride_mx_k
+                        mask_k = offs_mx_k < tl.cdiv(K - off_k, MX_PACK_DIVISOR)
                         if EVEN_K:
                             if SPLIT_K > 1:
-                                w_scales = tl.load(MxPtrs, mask=off_k < K, other=0.0)
+                                w_scales = tl.load(MxPtrs, mask=mask_k[None, :], other=0.0)
                             else:
                                 w_scales = tl.load(MxPtrs)
                         else:
-                            mask_k = offs_mx_k < tl.cdiv(K - off_k, MX_PACK_DIVISOR)
                             w_scales = tl.load(MxPtrs, mask=mask_k[None, :], other=0.0)
 
                 elif SWIZZLE_MX_SCALE == "BLACKWELL":
