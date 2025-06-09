@@ -4,7 +4,7 @@
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 
-namespace mlir::triton::proton {
+namespace mlir::triton::proton::gpu {
 
 #define GEN_PASS_DEF_ALLOCATEPROTONGLOBALSCRATCHBUFFERPASS
 #include "Conversion/ProtonGPUToLLVM/Passes.h.inc"
@@ -57,4 +57,4 @@ struct AllocateProtonGlobalScratchBufferPass
   }
 };
 
-} // namespace mlir::triton::proton
+} // namespace mlir::triton::proton::gpu

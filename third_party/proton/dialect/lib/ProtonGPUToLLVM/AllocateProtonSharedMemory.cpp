@@ -5,7 +5,7 @@
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "llvm/Support/MathExtras.h"
 
-namespace mlir::triton::proton {
+namespace mlir::triton::proton::gpu {
 
 #define GEN_PASS_DEF_ALLOCATEPROTONSHAREDMEMORYPASS
 #include "Conversion/ProtonGPUToLLVM/Passes.h.inc"
@@ -57,4 +57,4 @@ struct AllocateProtonSharedMemoryPass
   }
 };
 
-} // namespace mlir::triton::proton
+} // namespace mlir::triton::proton::gpu
