@@ -19,6 +19,7 @@ def cumsum_kernel(ptr):
 
 def test_compile_stats(device: str, fresh_knobs_except_libraries: Any, fresh_triton_cache: str) -> None:
     captured: Union[tuple[Union[ASTSource, IRSource], dict[str, Any], dict[str, Any], CompileTimes, bool], None] = None
+    call_count = 0
 
     def compile_listener(src: Union[ASTSource, IRSource], metadata: dict[str, str], metadata_group: dict[str, Any],
                          times: CompileTimes, cache_hit: bool) -> None:
@@ -26,13 +27,18 @@ def test_compile_stats(device: str, fresh_knobs_except_libraries: Any, fresh_tri
         assert captured is None
         captured = (src, metadata, metadata_group, times, cache_hit)
 
-    fresh_knobs_except_libraries.compilation.listener = compile_listener
+    def compile_listener2(src: Union[ASTSource, IRSource], metadata: dict[str, str], metadata_group: dict[str, Any],
+                          times: CompileTimes, cache_hit: bool) -> None:
+        nonlocal call_count
+        call_count += 1
+
+    fresh_knobs_except_libraries.compilation.listener = [compile_listener, compile_listener2]
 
     x = torch.randn(4, device=device)
     cumsum_kernel[(1, )](x)
 
     assert captured is not None
-
+    assert call_count > 0
     # No cache hit at first
     assert not captured[4]
 
