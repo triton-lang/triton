@@ -7,6 +7,7 @@
 #shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16}>
 #smem = #ttg.shared_memory
 #tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, unpacked = true>
+#tmem1 = #ttng.tensor_memory_encoding<blockM = 128, blockN = 64, unpacked = true>
 
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.target = "cuda:100"} {
 
@@ -16,6 +17,7 @@ tt.func public @sink_load(%arg0: !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_m
                           -> (tensor<128x64xf16, #blocked>, tensor<128x64xf16, #blocked>, tensor<128x128xf16, #blocked>) {
 
   // CHECK: ttg.local_alloc
+  // CHECK: ttng.tmem_store
   // CHECK: ttng.tmem_load
   // CHECK: ttg.convert_layout
   // CHECK: arith.truncf
@@ -28,7 +30,6 @@ tt.func public @sink_load(%arg0: !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_m
 
   // CHECK: ttng.tmem_load
   // CHECK: ttg.convert_layout
-  // CHECK: ttng.tmem_store
   // CHECK: arith.truncf
   %4 = ttg.local_alloc %arg1 : (tensor<128x128xf16, #blocked>) -> !ttg.memdesc<128x128xf16, #shared, #smem>
   %5 = arith.truncf %outLHS : tensor<128x64xf32, #blocked> to tensor<128x64xf16, #blocked>
@@ -102,10 +103,11 @@ tt.func @arrive_barrier(%arg0: !ttg.memdesc<1xi64, #shared, #smem, mutable>) {
   %true = arith.constant true
   %cst = arith.constant dense<0.0> : tensor<128x128xf32, #blocked1>
 
-  // CHECK-COUNT-2: ttng.tmem_alloc
+  // CHECK: ttng.tmem_alloc
   %alloc = ttng.tmem_alloc : () -> !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>
   %noalias_alloc = ttng.tmem_alloc : () -> !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>
   // CHECK-NEXT: tmem_store
+  // CHECK-NEXT: ttng.tmem_alloc
   // CHECK-NEXT: tmem_load
   %0 = ttng.tmem_load %alloc : !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable> -> tensor<128x128xf32, #blocked>
   ttng.tmem_store %cst, %noalias_alloc, %true : tensor<128x128xf32, #blocked1> -> !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>
@@ -132,6 +134,30 @@ tt.func @sink_alloc_op(%arg0: tensor<128x128xf32, #blocked>) {
   // CHECK-NEXT: [[SUBVIEW0:%.+]] = ttg.memdesc_subview [[ALLOC0]]
   // CHECK-NEXT: tmem_store %arg0, [[SUBVIEW0]]
   ttng.tmem_store %arg0, %subview0, %true : tensor<128x128xf32, #blocked> -> !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>
+  tt.return
+}
+
+// CHECK-LABEL: @hoist_store_op
+tt.func @hoist_store_op(%arg0: tensor<128x64xf32, #blocked>, %arg1: tensor<128x64xf32, #blocked>) {
+  %true = arith.constant true
+  // CHECK: ttng.tmem_alloc
+  // CHECK-NEXT: ttng.tmem_subslice {{.*}} {N = 0 : i32}
+  // CHECK-NEXT: arith.truncf
+  // CHECK-NEXT: math.exp2
+  // CHECK-NEXT: ttng.tmem_store
+  // CHECK-NEXT: ttng.tmem_subslice {{.*}} {N = 64 : i32}
+  // CHECK-NEXT: arith.truncf
+  // CHECK-NEXT: math.exp2
+  // CHECK-NEXT: ttng.tmem_store
+  %alloc_store = ttng.tmem_alloc : () -> !ttg.memdesc<128x128xf16, #tmem, #ttng.tensor_memory, mutable>
+  %0 = arith.truncf %arg0 : tensor<128x64xf32, #blocked> to tensor<128x64xf16, #blocked>
+  %1 = arith.truncf %arg1 : tensor<128x64xf32, #blocked> to tensor<128x64xf16, #blocked>
+  %2 = math.exp2 %0 : tensor<128x64xf16, #blocked>
+  %3 = math.exp2 %1 : tensor<128x64xf16, #blocked>
+  %slice0 = ttng.tmem_subslice %alloc_store {N = 0 : i32} : !ttg.memdesc<128x128xf16, #tmem, #ttng.tensor_memory, mutable> -> !ttg.memdesc<128x64xf16, #tmem1, #ttng.tensor_memory, mutable>
+  ttng.tmem_store %2, %slice0, %true : tensor<128x64xf16, #blocked> -> !ttg.memdesc<128x64xf16, #tmem1, #ttng.tensor_memory, mutable>
+  %slice1 = ttng.tmem_subslice %alloc_store {N = 64 : i32} : !ttg.memdesc<128x128xf16, #tmem, #ttng.tensor_memory, mutable> -> !ttg.memdesc<128x64xf16, #tmem1, #ttng.tensor_memory, mutable>
+  ttng.tmem_store %3, %slice1, %true : tensor<128x64xf16, #blocked> -> !ttg.memdesc<128x64xf16, #tmem1, #ttng.tensor_memory, mutable>
   tt.return
 }
 

@@ -168,6 +168,28 @@ bool tmemMayAlias(Value a, Value b) {
   return true;
 }
 
+bool opAlias(Operation *op, Value buffer) {
+  if (isa<ArriveBarrierOp>(op))
+    return true;
+  if (!isMemoryEffectFree(op)) {
+    SmallVector<MemoryEffects::EffectInstance> effects;
+    collectEffects(op, effects);
+    for (auto effect : effects) {
+      // Look for potentially aliasing write or free effects.
+      if (!isa<MemoryEffects::Write, MemoryEffects::Free>(effect.getEffect()))
+        continue;
+      if (isa<SideEffects::DefaultResource>(effect.getResource())) {
+        return true;
+      }
+      if (isa<TensorMemory>(effect.getResource()) &&
+          (!effect.getValue() || tmemMayAlias(effect.getValue(), buffer))) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
 // Sink tmem_loads as close to their use as possible to reduce register
 // pressure.
 bool sinkOps(Value buffer, ArrayRef<Operation *> useChain) {
@@ -186,26 +208,8 @@ bool sinkOps(Value buffer, ArrayRef<Operation *> useChain) {
     }
     // Don't sink past barrier signals, since they may guard the liverange
     // of the buffer.
-    if (isa<ArriveBarrierOp>(next))
-      break;
-    if (!isMemoryEffectFree(next)) {
-      SmallVector<MemoryEffects::EffectInstance> effects;
-      collectEffects(next, effects);
-      for (auto effect : effects) {
-        // Look for potentially aliasing write or free effects.
-        if (!isa<MemoryEffects::Write, MemoryEffects::Free>(effect.getEffect()))
-          continue;
-        if (isa<SideEffects::DefaultResource>(effect.getResource())) {
-          dep = true;
-          break;
-        }
-        if (isa<TensorMemory>(effect.getResource()) &&
-            (!effect.getValue() || tmemMayAlias(effect.getValue(), buffer))) {
-          dep = true;
-          break;
-        }
-      }
-    }
+    if (opAlias(next, buffer))
+      dep = true;
     if (dep)
       break;
     next = next->getNextNode();
@@ -229,6 +233,68 @@ bool trySinkOp(Operation *op, Value buffer) {
   return sinkOps(buffer, useChain);
 }
 
+// Hoist tmem_stores as close to their operand def as possible to reduce
+// register pressure.
+bool hoistOps(Value buffer, ArrayRef<Operation *> defChain,
+              ArrayRef<OpOperand> storeOperands) {
+  Operation *insertAfter = nullptr;
+  Operation *prev = defChain.back()->getPrevNode();
+  while (prev) {
+    insertAfter = prev;
+    bool dep = false;
+    for (auto operand : getNestedOperands(defChain.back())) {
+      if (llvm::is_contained(prev->getResults(), operand)) {
+        dep = true;
+        break;
+      }
+    }
+    for (const OpOperand &operand : storeOperands) {
+      if (llvm::is_contained(prev->getResults(), operand.get())) {
+        dep = true;
+        break;
+      }
+    }
+    // Don't hoist past barrier signals, since they may guard the liverange
+    // of the buffer.
+    if (opAlias(prev, buffer))
+      dep = true;
+    if (dep)
+      break;
+    prev = prev->getPrevNode();
+  }
+  if (insertAfter && insertAfter != defChain.back()->getPrevNode()) {
+    for (Operation *op : defChain) {
+      op->moveAfter(insertAfter);
+      // For store we need to move the subslice and potentially alloc op along.
+    }
+    return true;
+  }
+  return false;
+}
+
+// Get the single defining operand if it exists, only consider the source
+// operand for tmem stores.
+Operation *getSingleDefOperand(Operation *op) {
+  if (op->getNumOperands() == 1)
+    return op->getOperand(0).getDefiningOp();
+  if (auto store = dyn_cast<TMEMStoreOp>(op))
+    return store.getSrc().getDefiningOp();
+  return nullptr;
+}
+
+// Try to hoist a store and a collection of its users.
+bool tryHoistOp(Operation *op, Value buffer) {
+  SmallVector<Operation *> defChain{op};
+  Operation *currentOp = op;
+  Operation *def = getSingleDefOperand(op);
+  while (def && isPure(def) && currentOp->getPrevNode() == def) {
+    defChain.push_back(def);
+    currentOp = def;
+    def = getSingleDefOperand(def);
+  }
+  return hoistOps(buffer, defChain, op->getOpOperands());
+}
+
 } // anonymous namespace
 
 struct TritonNvidiaGPUInterleaveTMemPass
@@ -241,15 +307,40 @@ struct TritonNvidiaGPUInterleaveTMemPass
     MLIRContext *context = &getContext();
     ModuleOp m = getOperation();
     SmallVector<std::pair<Operation *, Value>> opsToSink;
+    SmallVector<std::pair<Operation *, Value>> opsToHoist;
+    SmallVector<std::pair<Operation *, Value>> allocOps;
+    SmallVector<Operation *> subsliceOps;
     m.walk([&](Operation *op) {
       if (auto load = dyn_cast<TMEMLoadOp>(op))
         opsToSink.emplace_back(load, load.getSrc());
       else if (auto alloc = dyn_cast<TMEMAllocOp>(op))
-        opsToSink.emplace_back(alloc, alloc.getResult());
+        allocOps.emplace_back(alloc, alloc.getResult());
+      else if (auto store = dyn_cast<TMEMStoreOp>(op))
+        opsToHoist.emplace_back(store, store.getSrc());
+      else if (auto subslice = dyn_cast<TMEMSubSliceOp>(op))
+        subsliceOps.push_back(subslice);
     });
     for (auto [op, buffer] : opsToSink) {
       while (trySinkOp(op, buffer)) {
         // Keep trying to sink loads and their users.
+      }
+    }
+    // Subslice ops don't affect pressure, hoist them to make tmem_store
+    // hoisting easier.
+    for (auto subslice : llvm::reverse(subsliceOps)) {
+      if (auto defOp = subslice->getOperand(0).getDefiningOp()) {
+        subslice->moveAfter(defOp);
+      }
+    }
+    for (auto [op, buffer] : llvm::reverse(opsToHoist)) {
+      while (tryHoistOp(op, buffer)) {
+        // Keep trying to hoist stores and their defs.
+      }
+    }
+    // Sink the tmem_allocs last to reduce tmem liveranges.
+    for (auto [op, buffer] : allocOps) {
+      while (trySinkOp(op, buffer)) {
+        // Keep trying to sink alloc and its users.
       }
     }
   }
