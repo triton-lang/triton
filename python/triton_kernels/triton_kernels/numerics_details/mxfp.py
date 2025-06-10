@@ -263,8 +263,7 @@ def _upcast_from_mxfp(out_ptr, stride_o_outer, stride_o_quant: tl.constexpr,
                 (dst_tensor.to(tl.uint16, bitcast=True) | non_finite_mask_dst).to(dst_dtype, bitcast=True),
                 dst_tensor,
             )
-    else:
-        assert is_fp4
+    elif is_fp4:
         dst_bias: tl.constexpr = 127 if dst_dtype == tl.bfloat16 else 15
         dst_0p5: tl.constexpr = 16128 if dst_dtype == tl.bfloat16 else 0x3800
         dst_m_bits: tl.constexpr = 7 if dst_dtype == tl.bfloat16 else 10
@@ -282,6 +281,10 @@ def _upcast_from_mxfp(out_ptr, stride_o_outer, stride_o_quant: tl.constexpr,
         x1 = tl.where(em1 == 0x10, dst_0p5 | (x1 & 0x8000), x1)
         # 3) x is zero, do nothing
         dst_tensor = tl.interleave(x0, x1).to(dst_dtype, bitcast=True)
+    else:
+        tl.static_assert(mx_tensor_dtype == dst_dtype)
+        dst_tensor = tensor
+
 
     # Reshape for proper broadcasting: the scale was stored with a 32‐sized “inner” grouping.
     dst_tensor = dst_tensor.reshape([BLOCK_SIZE_OUT_DIM, BLOCK_SIZE_QUANT_MX_SCALE, 32])
@@ -474,7 +477,9 @@ def downcast_to_mxfp(src_tensor: torch.Tensor, out_quant_type: torch.dtype, axis
 
     # Swizzling
     if swizzle_value == SwizzlingType.HOPPER:
+        assert src_tensor.dtype == torch.bfloat16, f"Hopper bittwiddling only implemented for bfloat16. Got {src_tensor.dtype=}"
         quant_tensor = swizzle_mxfp4_value_hopper(quant_tensor, op_idx=0, mma_version=3)
+        quant_tensor = bit_twiddling_mxfp4_value_hopper(quant_tensor, op_idx=0)
     assert quant_tensor.is_contiguous()
     quant_tensor = perm_tensor_from_contig(quant_tensor, axis, swizzle_axis)
 
@@ -532,10 +537,6 @@ def upcast_from_mxfp(tensor: torch.Tensor, scale: torch.Tensor, dtype: torch.dty
     scale = perm_tensor_to_contig(scale, axis, swizzle_axis)
     assert scale.is_contiguous()
 
-    # Unswizzle the value tensor
-    if swizzle_value == SwizzlingType.HOPPER:
-        tensor = unswizzle_mxfp4_value_hopper_torch(tensor, op_idx=0, mma_version=3)
-
     logical_quant_dim = tensor.shape[-1] * (2 if tensor.dtype == torch.uint8 else 1)
 
     # Unswizzle the scale tensor
@@ -553,6 +554,13 @@ def upcast_from_mxfp(tensor: torch.Tensor, scale: torch.Tensor, dtype: torch.dty
         scale = unswizzle_mxfp4_scale_hopper_torch(scale, num_warps=8)
 
     assert scale.is_contiguous()
+
+    # Unswizzle the value tensor
+    if swizzle_value == SwizzlingType.HOPPER:
+        assert tensor.dtype == torch.uint8, "NYI. Just mxfp4 supported for now"
+        assert dtype == torch.bfloat16, "Hopper bittwiddling only implemented for bfloat16"
+        tensor = bit_untwiddling_mxfp4_value_hopper_torch(tensor, scale, op_idx=0)
+        return perm_tensor_from_contig(tensor, axis, swizzle_axis)
 
     assert tensor.is_contiguous()
 
@@ -604,6 +612,8 @@ def downcast_to_mxfp_torch(src_tensor: torch.Tensor, out_quant_type: torch.dtype
     else:
         assert swizzle_scale is not None or swizzle_value is not None, "At least one of swizzle_scale or swizzle_value must be provided"
         assert swizzle_value is None or swizzle_value == SwizzlingType.HOPPER, "Just implemented Hopper swizzle for now"
+    if swizzle_value == SwizzlingType.HOPPER:
+        assert src_tensor.dtype == torch.bfloat16, "Hopper bittwiddling only implemented for bfloat16"
 
 
     ndim = src_tensor.ndim
@@ -717,6 +727,7 @@ def downcast_to_mxfp_torch(src_tensor: torch.Tensor, out_quant_type: torch.dtype
         dq_scale = swizzle_mxfp4_scale_hopper(dq_scale, num_warps=8)
     if swizzle_value == SwizzlingType.HOPPER:
         out_weight = swizzle_mxfp4_value_hopper(out_weight, op_idx=0, mma_version=3)
+        out_weight = bit_twiddling_mxfp4_value_hopper(out_weight, op_idx=0)
 
     # Now, invert the permutation so that the contiguous axis returns to its original position.
     out_weight = perm_tensor_from_contig(out_weight, axis, swizzle_axis)
@@ -784,17 +795,21 @@ def upcast_from_mxfp_torch(tensor: torch.Tensor, scale: torch.Tensor, target_dty
     else:
         assert swizzle_scale is None, "Swizzle scale must be None if swizzle axis is None"
         assert swizzle_value is None, "Swizzle value must be None if swizzle axis is None"
+    if swizzle_value == SwizzlingType.HOPPER:
+        assert target_dtype == torch.bfloat16, "Hopper bittwiddling only implemented for bfloat16"
+
 
     tensor = perm_tensor_to_contig(tensor, axis, swizzle_axis)
     scale = perm_tensor_to_contig(scale, axis, swizzle_axis)
-
-    if swizzle_value == SwizzlingType.HOPPER:
-        tensor = unswizzle_mxfp4_value_hopper_torch(tensor, op_idx=0, mma_version=3)
 
     if swizzle_scale == SwizzlingType.BLACKWELL:
         scale = unswizzle_mx_scale_bw_torch(scale)
     elif swizzle_scale == SwizzlingType.HOPPER:
         scale = unswizzle_mxfp4_scale_hopper_torch(scale, num_warps=8)
+
+    if swizzle_value == SwizzlingType.HOPPER:
+        tensor = bit_untwiddling_mxfp4_value_hopper_torch(tensor, scale, op_idx=0)
+        return perm_tensor_from_contig(tensor, axis, swizzle_axis)
 
     dq_scale = (scale.to(torch.int32) << 23).view(torch.float32)  # Shift to the exponent and bitcast to fp32
 
@@ -1045,4 +1060,165 @@ def unswizzle_mxfp4_value_hopper_torch(x, op_idx: int, mma_version: int):
     x = x.reshape(*batch, M * 4, K // 4)
     if op_idx == 1:
         x = x.transpose(-2, -1)
+    return x
+
+
+def bit_twiddling_mxfp4_value_hopper(x: torch.Tensor, op_idx: int):
+    """
+    Pre-swizzle the mxfp4 values as per
+        1000000111000000         (first fp4)
+           1000000111000000      (second fp4)
+              1000000111000000   (third fp4)
+        0110110000000000         (fourth fp4)
+    This is done so that dequantization can be done in 14 SASS instructions
+    """
+    if op_idx == 1:
+        x = x.mT
+
+    assert x.is_contiguous()
+    assert x.shape[-1] % 4 == 0, "Input tensor must have a last dimension divisible by 4"
+    x = x.reshape(x.shape[:-1] + (x.shape[-1] // 4, 4))
+
+    def compress_fp4(x):
+        x = x.to(torch.int32)
+        return ((x & 0x8) << 12) | ((x & 0x7) << 6)
+
+    first = compress_fp4(x[..., 0]) | (compress_fp4(x[..., 0] >> 4) << 16)
+    second = compress_fp4(x[..., 1]) | (compress_fp4(x[..., 1] >> 4) << 16)
+    third = compress_fp4(x[..., 2]) | (compress_fp4(x[..., 2] >> 4) << 16)
+    def compress_fourth(x):
+        x = x.to(torch.int32)
+        return ((x & 0x8) << 11) | ((x & 0x6) << 9) | ((x & 0x1) << 13)
+
+    fourth = compress_fourth(x[..., 3]) | (compress_fourth(x[..., 3] >> 4) << 16)
+
+    x = first | right_shift_unsigned(second, 3) | right_shift_unsigned(third, 6) | fourth
+    assert x.is_contiguous()
+    x = x.view(torch.uint8)
+
+    if op_idx == 1:
+        x = x.mT
+    return x
+
+@triton.jit
+def bit_untwiddling_mxfp4_value_hopper(x, scale, op_idx: tl.constexpr):
+    """
+    Implements the bit-untwiddling of a 32-bit integer (8 mxfp4 elements):
+    (x << 0) & 0b1000000111000000
+    (x << 3) & 0b1000000111000000
+    (x << 6) & 0b1000000111000000
+    ((x << 1) & 0b1000000000000000) | ((x >> 3) & 0b0000000110000000) | ((x >> 7) & 0b0000000001000000)
+    """
+    if op_idx == 1:
+        x = x.trans()
+
+    tl.static_assert(x.dtype == tl.uint8)
+    tl.static_assert(x.shape[1] % 4 == 0)
+    # For now we implement just H100 support (mul.bf16x2)
+    # A100 support is possible via fma
+    r0, r1 = tl.inline_asm_elementwise(
+        r"""
+        {
+            .reg .b32 b, c, d<7>, scale;
+            // We add the missing bias to the scale directly
+            and.b32 $0, $4, 0b10000001110000001000000111000000;
+            shl.b32 b, $4, 3;
+            and.b32 $1, b,  0b10000001110000001000000111000000;
+            shl.b32 c, $4, 6;
+            and.b32 $2, c,  0b10000001110000001000000111000000;
+            // Unpack last two elements
+            shl.b32 d0, $4, 1;
+            and.b32 d1, d0, 0b10000000000000001000000000000000;
+            shr.b32 d2, $4, 3;
+            and.b32 d3, d2, 0b00000001100000000000000110000000;
+            or.b32 d4, d1, d3;
+            shr.b32 d5, $4, 7;
+            and.b32 d6, d5, 0b00000000010000000000000001000000;
+            or.b32 $3, d4, d6;
+        }
+        """,
+        constraints="=r,=r,=r,=r,r",
+        args=[x],
+        dtype=(tl.bfloat16, tl.bfloat16),
+        is_pure=True,
+        pack=4,
+    )
+    # Concat each pack of 4
+    x = tl.join(r0, r1)
+    x = x.reshape(x.shape[0], x.shape[1] // 4, 4, x.shape[2])
+    x = x.trans(0, 1, 3, 2)
+    x = x.reshape(x.shape[0], x.shape[1] * x.shape[2] * x.shape[3])
+
+    x = unswizzle_mxfp4_value_hopper(x, op_idx=0, mma_version=3)
+
+    # Scales
+
+    # Add bias missing from the bf16 upcasting sequence
+    # triton / LLVM generates terrible code for this sequence
+    # scale += 126
+    #scale = scale.to(tl.uint16)
+    #scale = scale << 7
+    #scale = scale.to(tl.bfloat16, bitcast=True)
+    scale = tl.inline_asm_elementwise(
+        r"""
+        {
+            // Assumes no overflow
+            add.u32 $2, $2, 0x7E7E7E7E;
+            prmt.b32 $0, $2, 0, 0x5140;
+            shl.b32 $0, $0, 7;
+            prmt.b32 $1, $2, 0, 0x7362;
+            shl.b32 $1, $1, 7;
+        }
+        """,
+        constraints="=r,=r,r",
+        args=[scale],
+        dtype=tl.bfloat16,
+        is_pure=True,
+        pack=4,
+    )
+    # Broadcast scale
+    scale = scale.expand_dims(2)
+    scale = scale.broadcast_to(scale.shape[:-1] + (32,))
+    scale = scale.reshape(x.shape)
+
+
+    # Combine scale and x
+    x = x * scale
+
+    if op_idx == 1:
+        x = x.trans()
+    return x
+
+def bit_untwiddling_mxfp4_value_hopper_torch(x: torch.Tensor, scale: torch.Tensor, op_idx: int):
+    assert x.dtype == torch.uint8, "Input tensor must be of type torch.uint8"
+    if op_idx == 1:
+        x = x.mT
+    assert x.is_contiguous()
+    x = x.view(torch.int32)
+
+    def unpack(x):
+        x = x.view(torch.int32)
+        m = 0b10000001110000001000000111000000
+        a = (x << 1) & 0b10000000000000001000000000000000
+        b = right_shift_unsigned(x, 3) & 0b00000001100000000000000110000000
+        c = right_shift_unsigned(x, 7) & 0b00000000010000000000000001000000
+        unpacked = [x & m, (x << 3) & m, (x << 6) & m, (a | b) | c]
+        x = torch.stack(unpacked, dim=-1)
+        x = x.flatten(-2, -1)
+        return x.view(torch.bfloat16)
+    x = unpack(x)
+    x = unswizzle_mxfp4_value_hopper_torch(x, op_idx=0, mma_version=3)
+
+    scale = scale + 126
+    scale = scale.to(torch.int16)
+    scale = scale << 7
+    scale = scale.view(torch.bfloat16)
+
+    scale = scale.unsqueeze(-1)
+    scale = scale.expand(scale.shape[:-1] + (32,))
+    scale = scale.flatten(-2, -1)
+    x = x * scale
+
+    if op_idx == 1:
+        x = x.mT
     return x

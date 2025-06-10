@@ -1,10 +1,10 @@
 import triton
 import triton.language as tl
 from triton_kernels.numerics_details.mxfp import (
+    bit_untwiddling_mxfp4_value_hopper,
     get_scaled_dot_format_string,
     unswizzle_mx_scale_bw,
     unswizzle_mxfp4_scale_hopper,
-    unswizzle_mxfp4_value_hopper,
 )
 
 from triton_kernels.numerics_details.flexpoint import float_to_flex, load_scale
@@ -257,13 +257,21 @@ def _matmul_ogs(
             else:
                 w_scales = tl.load(MxScalePtrs, mask=mask_k_scale[None, :], other=0.0)
 
+            # TODO: Wrap into a function
             if SWIZZLE_MX_VALUE == "HOPPER":
-                # Handshake with the swizzling code
-                w = unswizzle_mxfp4_value_hopper(w, op_idx=1, mma_version=3)
-                mma_version: tl.constexpr = 3 if w.shape[1] >= 64 else 2
-                tl.static_assert(mma_version == 3, "Only mma_version 3 is supported for Hopper swizzling")
+                tl.static_assert(x_format == "bf16")
+                tl.static_assert(mx_format == "e2m1")
+                w = bit_untwiddling_mxfp4_value_hopper(w, w_scales, op_idx=1)
+                tl.static_assert(w.dtype == tl.bfloat16)
 
-            acc = tl.dot_scaled(x, x_scales, x_format, w, w_scales, mx_format, acc=acc, fast_math=True)
+                acc = acc.trans()
+                x = x.trans()
+                w = w.trans()
+                acc = tl.dot(w, x, acc, max_num_imprecise_acc=MAX_NUM_IMPRECISE_ACC, allow_tf32=ALLOW_TF32)
+                acc = acc.trans()
+            else:
+                acc = tl.dot_scaled(x, x_scales, x_format, w, w_scales, mx_format, acc=acc, fast_math=True)
+
             if SWIZZLE_MX_SCALE == "BLACKWELL":
                 MxScalePtrs += (MX_SCALE_BLOCK_K // 4 * SPLIT_K) * stride_mx_k
             else:

@@ -525,7 +525,6 @@ def matmul_ogs(x, w, bias,
     for e in num_experts:
         Y[idxs_y_m(e), :] += matmul(X[idxs_x_m(e), :], W[e, :, :])
     """
-
     is_input_batched = x.ndim == 3
     if is_input_batched:
         assert gather_indx is None, "gather not supported in batched mode"

@@ -7,6 +7,8 @@ import triton
 from triton_kernels.numerics_details.mxfp import (
     DequantScaleRoundingMode,
     SwizzlingType,
+    bit_twiddling_mxfp4_value_hopper,
+    bit_untwiddling_mxfp4_value_hopper_torch,
     downcast_to_mxfp,
     downcast_to_mxfp_torch,
     get_max_quant_val,
@@ -136,6 +138,8 @@ def test_mxfp_casting(
         if shape[axis] % 64 != 0 or shape[swizzle_axis] % 128 != 0:
             # Automatic padding not implemented for Hopper swizzle
             pytest.skip("Hopper swizzle not supported for tile not multiple of 64x128")
+        if dequant_dtype != "bfloat16":
+            pytest.skip("NYI. Hopper bittwiddling just implemented for bfloat16")
     if swizzle_scale == SwizzlingType.HOPPER:
         if shape[axis] % 64 != 0 or shape[swizzle_axis] % 128 != 0:
             # Automatic padding not implemented for Hopper swizzle
@@ -181,6 +185,11 @@ def test_mxfp_casting(
         BLOCK_OUT_DIM=block_out_dim,
         BLOCK_QUANT_DIM=block_quant_dim,
     )
+
+    # NYI global scale when doing quantization
+    # Assert that the scale will not overflow when doing scale += 126
+    assert (scale < 256 - 126).all()
+
     if out_tensor is not None:
         assert_equal(out_tensor, quant)
     if out_tensor_scale is not None:
@@ -264,3 +273,45 @@ def test_swizzle_mxfp4_scale(shape, num_warps):
     res = swizzle_mxfp4_scale_hopper(x, num_warps=num_warps)
     res = unswizzle_mxfp4_scale_hopper_torch(res, num_warps=num_warps)
     assert (res == x).all()
+
+
+@pytest.mark.parametrize("op_idx", [0, 1])
+@pytest.mark.parametrize("shape", [(64, 64), (64, 128), (128, 128), (128, 256), (256, 256)])
+def test_bittwiddling_mxfp4_value(shape, op_idx):
+    x = torch.randint(0, 256, shape, dtype=torch.uint8, device="cuda")
+    # scale = 1
+    scale = x.new_full(shape[:-1] + (shape[-1] // 16, ), 127)
+    if op_idx == 1:
+        x = x.mT
+
+    res = swizzle_mxfp4_value_hopper(x, op_idx=op_idx, mma_version=3)
+    res = bit_twiddling_mxfp4_value_hopper(res, op_idx=op_idx)
+    res = bit_untwiddling_mxfp4_value_hopper_torch(res, scale, op_idx=op_idx)
+
+    def upcast_fp4_to_bf16(x, op_idx):
+        if op_idx == 1:
+            x = x.mT
+
+        x1 = x & 0x0F
+        x2 = x >> 4
+
+        def fp4_to_bf16(x):
+            dst_bias = 127
+            dst_0p5 = 16128
+            dst_m_bits = 7
+            em0 = x & 0x07
+            x0 = (em0.to(torch.int16) << (dst_m_bits - 1)) | ((x & 0x08).to(torch.int16) << 12)
+            # Three cases:
+            # 1) x is normal and non-zero: Correct bias
+            x0 = torch.where((em0 & 0x06) != 0, x0 + ((dst_bias - 1) << dst_m_bits), x0)
+            # 2) x is subnormal (x == 0bs001 where s is the sign): Map to +-0.5 in the dst type
+            x0 = torch.where(em0 == 0x01, dst_0p5 | (x0 & 0x8000), x0)
+            return x0.view(torch.bfloat16)
+
+        ret = torch.stack([fp4_to_bf16(x1), fp4_to_bf16(x2)], dim=2).flatten(-2, -1)
+        if op_idx == 1:
+            ret = ret.mT
+        return ret
+
+    ref = upcast_fp4_to_bf16(x, op_idx)
+    torch.testing.assert_close(res, ref, rtol=0, atol=0)
