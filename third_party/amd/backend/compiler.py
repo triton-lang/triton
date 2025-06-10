@@ -252,8 +252,6 @@ class HIPBackend(BaseBackend):
         passes.common.add_symbol_dce(pm)
         if use_async_copy:
             amd.passes.ttgpuir.add_update_async_wait_count(pm, options.arch)
-        if HIPBackend.instrumentation:
-            HIPBackend.instrumentation.patch("ttir_to_ttgpuir", pm, mod.context)
         pm.run(mod)
         return mod
 

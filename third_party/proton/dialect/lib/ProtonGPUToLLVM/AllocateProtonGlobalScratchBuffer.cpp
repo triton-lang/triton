@@ -4,21 +4,14 @@
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 
-using namespace mlir;
-using namespace mlir::triton;
+namespace mlir::triton::proton::gpu {
 
-namespace mlir {
-namespace triton::proton {
-#define GEN_PASS_DEF_ALLOCATEPROTONGLOBALSCRATCHBUFFER
+#define GEN_PASS_DEF_ALLOCATEPROTONGLOBALSCRATCHBUFFERPASS
 #include "Conversion/ProtonGPUToLLVM/Passes.h.inc"
-} // namespace triton::proton
-} // namespace mlir
 
-namespace {
-
-struct AllocateProtonGlobalScratchBuffer
-    : public mlir::triton::proton::impl::AllocateProtonGlobalScratchBufferBase<
-          AllocateProtonGlobalScratchBuffer> {
+struct AllocateProtonGlobalScratchBufferPass
+    : public impl::AllocateProtonGlobalScratchBufferPassBase<
+          AllocateProtonGlobalScratchBufferPass> {
   void runOnOperation() override {
     ModuleOp mod = getOperation();
     MLIRContext *ctx = &getContext();
@@ -63,14 +56,5 @@ struct AllocateProtonGlobalScratchBuffer
                  builder.getI32IntegerAttr(alignments.front()));
   }
 };
-
-} // namespace
-
-namespace mlir::triton::proton::gpu {
-
-std::unique_ptr<OperationPass<ModuleOp>>
-createAllocateProtonGlobalScratchBufferPass() {
-  return std::make_unique<AllocateProtonGlobalScratchBuffer>();
-}
 
 } // namespace mlir::triton::proton::gpu
