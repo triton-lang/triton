@@ -95,7 +95,6 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 }
 
 // -----
-
 // 4 warps
 // matmul: 128x32 @ 32x128 -> 128x128
 #AL = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [4, 8], warpsPerCTA = [4, 1], order = [1, 0]}>
@@ -107,6 +106,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 #A = #ttg.dot_op<{opIdx = 0, parent = #C, kWidth=2}>
 #B = #ttg.dot_op<{opIdx = 1, parent = #C, kWidth=2}>
 #shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16}>
+#shared1 = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = true, elementBitWidth = 16}>
 #smem = #ttg.shared_memory
 #tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, unpacked = true>
 module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 1 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
@@ -119,6 +119,7 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 1 : i32, ttg.targ
 // CHECK: tt.fp_to_fp
 // CHECK: ttng.wait_barrier
 // CHECK: ttg.local_store
+// CHECK: ttg.memdesc_trans
 // CHECK: ttng.tc_gen5_mma {{.*}}, {{.*}}, {{.*}}, {{.*}}, {{.*}}
 // CHECK: ttg.async_copy_global_to_local
     %a_ptr_splat = tt.splat %A : !tt.ptr<f8E4M3FN> -> tensor<128x32x!tt.ptr<f8E4M3FN>, #AL>
@@ -127,37 +128,38 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 1 : i32, ttg.targ
     %a_offs = tt.broadcast %a_tmp1 : tensor<1x32xi32, #AL> -> tensor<128x32xi32, #AL>
     %a_ptr_init = tt.addptr %a_ptr_splat, %a_offs : tensor<128x32x!tt.ptr<f8E4M3FN>, #AL>, tensor<128x32xi32, #AL>
 
-    %b_ptr_splat = tt.splat %B : !tt.ptr<f8E4M3FN> -> tensor<32x128x!tt.ptr<f8E4M3FN>, #BL>
-    %b_tmp0 = tt.make_range {end = 128: i32, start = 0: i32} : tensor<128xi32, #BLs0>
-    %b_tmp1 = tt.expand_dims %b_tmp0 {axis = 0 : i32} : tensor<128xi32, #BLs0> -> tensor<1x128xi32, #BL>
-    %b_offs = tt.broadcast %b_tmp1 : tensor<1x128xi32, #BL> -> tensor<32x128xi32, #BL>
-    %b_ptr_init = tt.addptr %b_ptr_splat, %b_offs : tensor<32x128x!tt.ptr<f8E4M3FN>, #BL>, tensor<32x128xi32, #BL>
+    %b_ptr_splat = tt.splat %B : !tt.ptr<f8E4M3FN> -> tensor<128x32x!tt.ptr<f8E4M3FN>, #BL>
+    %b_tmp0 = tt.make_range {end = 32: i32, start = 0: i32} : tensor<32xi32, #BLs0>
+    %b_tmp1 = tt.expand_dims %b_tmp0 {axis = 0 : i32} : tensor<32xi32, #BLs0> -> tensor<1x32xi32, #BL>
+    %b_offs = tt.broadcast %b_tmp1 : tensor<1x32xi32, #BL> -> tensor<128x32xi32, #BL>
+    %b_ptr_init = tt.addptr %b_ptr_splat, %b_offs : tensor<128x32x!tt.ptr<f8E4M3FN>, #BL>, tensor<128x32xi32, #BL>
 
     %true = arith.constant true
-    %b_mask = arith.constant dense<true> : tensor<32x128xi1, #BL>
-    %b_other = arith.constant dense<0.00e+00> : tensor<32x128xf8E4M3FN, #BL>
+    %b_mask = arith.constant dense<true> : tensor<128x32xi1, #BL>
+    %b_other = arith.constant dense<0.00e+00> : tensor<128x32xf8E4M3FN, #BL>
     %c_init = arith.constant dense<0.00e+00> : tensor<128x128xf32, #C>
 
     %a_off = arith.constant dense<4> : tensor<128x32xi32, #AL>
-    %b_off = arith.constant dense<4> : tensor<32x128xi32, #BL>
+    %b_off = arith.constant dense<4> : tensor<128x32xi32, #BL>
 
-    %loop:3 = scf.for %iv = %lb to %ub step %step iter_args(%a_ptr = %a_ptr_init, %b_ptr = %b_ptr_init, %prev_c = %c_init) -> (tensor<128x32x!tt.ptr<f8E4M3FN>, #AL>, tensor<32x128x!tt.ptr<f8E4M3FN>, #BL>, tensor<128x128xf32, #C>) {
+    %loop:3 = scf.for %iv = %lb to %ub step %step iter_args(%a_ptr = %a_ptr_init, %b_ptr = %b_ptr_init, %prev_c = %c_init) -> (tensor<128x32x!tt.ptr<f8E4M3FN>, #AL>, tensor<128x32x!tt.ptr<f8E4M3FN>, #BL>, tensor<128x128xf32, #C>) {
       %a___ = tt.load %a_ptr : tensor<128x32x!tt.ptr<f8E4M3FN>, #AL>
       %a__ = tt.fp_to_fp %a___ : tensor<128x32xf8E4M3FN, #AL> -> tensor<128x32xf16, #AL>
       %a_ = ttg.convert_layout %a__ : tensor<128x32xf16, #AL> -> tensor<128x32xf16, #A>
-      %b___ = tt.load %b_ptr, %b_mask, %b_other : tensor<32x128x!tt.ptr<f8E4M3FN>, #BL>
-      %b__ = tt.fp_to_fp %b___ : tensor<32x128xf8E4M3FN, #BL> -> tensor<32x128xf16, #BL>
-      %b_ = ttg.convert_layout %b__ : tensor<32x128xf16, #BL> -> tensor<32x128xf16, #B>
+      %b___ = tt.load %b_ptr, %b_mask, %b_other : tensor<128x32x!tt.ptr<f8E4M3FN>, #BL>
+      %b__ = tt.fp_to_fp %b___ : tensor<128x32xf8E4M3FN, #BL> -> tensor<128x32xf16, #BL>
+      %b_ = ttg.convert_layout %b__ : tensor<128x32xf16, #BL> -> tensor<128x32xf16, #B>
 
       %a = ttg.local_alloc %a_ {loop.cluster = 0 : i32, loop.stage = 2 : i32} : (tensor<128x32xf16, #A>) -> !ttg.memdesc<128x32xf16, #shared, #smem>
-      %b = ttg.local_alloc %b_ {loop.cluster = 0 : i32, loop.stage = 2 : i32} : (tensor<32x128xf16, #B>) -> !ttg.memdesc<32x128xf16, #shared, #smem>
+      %b = ttg.local_alloc %b_ {loop.cluster = 0 : i32, loop.stage = 2 : i32} : (tensor<128x32xf16, #B>) -> !ttg.memdesc<128x32xf16, #shared, #smem>
+      %bt = ttg.memdesc_trans %b {loop.cluster = 1 : i32, loop.stage = 2 : i32, order = array<i32: 1, 0>} : !ttg.memdesc<128x32xf16, #shared, #smem> -> !ttg.memdesc<32x128xf16, #shared1, #smem>
       %acc_tm, %acc_tok = ttng.tmem_alloc %prev_c : (tensor<128x128xf32, #C>) -> (!ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>, !ttg.async.token)
-      %mma_tok = ttng.tc_gen5_mma %a, %b, %acc_tm[%acc_tok], %true, %true : !ttg.memdesc<128x32xf16, #shared, #smem>, !ttg.memdesc<32x128xf16, #shared, #smem>, !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>
+      %mma_tok = ttng.tc_gen5_mma %a, %bt, %acc_tm[%acc_tok], %true, %true : !ttg.memdesc<128x32xf16, #shared, #smem>, !ttg.memdesc<32x128xf16, #shared1, #smem>, !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>
       %c, %load_tok = ttng.tmem_load %acc_tm[%mma_tok] : !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable> -> tensor<128x128xf32, #C>
 
       %next_a_ptr = tt.addptr %a_ptr, %a_off : tensor<128x32x!tt.ptr<f8E4M3FN>, #AL>, tensor<128x32xi32, #AL>
-      %next_b_ptr = tt.addptr %b_ptr, %b_off : tensor<32x128x!tt.ptr<f8E4M3FN>, #BL>, tensor<32x128xi32, #BL>
-      scf.yield %next_a_ptr, %next_b_ptr, %c : tensor<128x32x!tt.ptr<f8E4M3FN>, #AL>, tensor<32x128x!tt.ptr<f8E4M3FN>, #BL>, tensor<128x128xf32, #C>
+      %next_b_ptr = tt.addptr %b_ptr, %b_off : tensor<128x32x!tt.ptr<f8E4M3FN>, #BL>, tensor<128x32xi32, #BL>
+      scf.yield %next_a_ptr, %next_b_ptr, %c : tensor<128x32x!tt.ptr<f8E4M3FN>, #AL>, tensor<128x32x!tt.ptr<f8E4M3FN>, #BL>, tensor<128x128xf32, #C>
     }
     tt.return %loop#2: tensor<128x128xf32, #C>
   }
