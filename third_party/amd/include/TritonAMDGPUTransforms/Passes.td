@@ -254,5 +254,13 @@ def TritonAMDFoldTrueCmpI: Pass<"tritonamdgpu-fold-true-cmpi", "mlir::ModuleOp">
   }];
 }
 
+def TritonAMDGPUAssignMMALatencies : Pass<"tritonamdgpu-assign-mma-latencies", "mlir::ModuleOp"> {
+  let summary = "Assign WMMA/MFMA latencies";
+  let options = [
+    Option<"numStages", "num-stages", "int32_t", /*default*/"3",
+           "number of pipeline stages">
+  ];
+}
+
 
 #endif
