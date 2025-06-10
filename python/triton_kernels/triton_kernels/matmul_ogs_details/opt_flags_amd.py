@@ -5,7 +5,7 @@ from triton_kernels.target_info import get_cdna_version
 
 def compute_block_nk(n, block_m, grid_m, num_xcds, lhs_dtype, rhs_dtype, microscaling_ctx):
     lhs_width = lhs_dtype.itemsize
-    rhs_width = rhs_dtype.itemsize if microscaling_ctx.weight_scale is None else 0.5
+    rhs_width = rhs_dtype.itemsize if rhs_dtype != torch.uint8 else 0.5
 
     # block_n:
     n_cu = torch.cuda.get_device_properties(0).multi_processor_count

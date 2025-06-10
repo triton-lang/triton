@@ -65,7 +65,7 @@ def make_default_opt_flags_amd(
         block_m = 256 if is_cnda4 else 128
     elif tokens_per_expt >= 512 and n >= 2048:
         block_m = 256 if is_cnda4 else 128
-    elif is_cnda4:
+    elif is_cnda4 and m >= 512:
         block_m = 128
     else:
         block_m = max(32, min(triton.next_power_of_2(tokens_per_expt), 64))
