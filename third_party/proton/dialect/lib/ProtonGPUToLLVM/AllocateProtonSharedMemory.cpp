@@ -5,21 +5,14 @@
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "llvm/Support/MathExtras.h"
 
-using namespace mlir;
-using namespace mlir::triton;
+namespace mlir::triton::proton::gpu {
 
-namespace mlir {
-namespace triton::proton {
-#define GEN_PASS_DEF_ALLOCATEPROTONSHAREDMEMORY
+#define GEN_PASS_DEF_ALLOCATEPROTONSHAREDMEMORYPASS
 #include "Conversion/ProtonGPUToLLVM/Passes.h.inc"
-} // namespace triton::proton
-} // namespace mlir
 
-namespace {
-
-struct AllocateProtonSharedMemory
-    : public mlir::triton::proton::impl::AllocateProtonSharedMemoryBase<
-          AllocateProtonSharedMemory> {
+struct AllocateProtonSharedMemoryPass
+    : public impl::AllocateProtonSharedMemoryPassBase<
+          AllocateProtonSharedMemoryPass> {
   void runOnOperation() override {
     ModuleOp mod = getOperation();
     MLIRContext *ctx = &getContext();
@@ -64,21 +57,4 @@ struct AllocateProtonSharedMemory
   }
 };
 
-} // namespace
-
-namespace mlir {
-
-namespace triton::proton {
-
-namespace gpu {
-
-std::unique_ptr<OperationPass<ModuleOp>>
-createAllocateProtonSharedMemoryPass() {
-  return std::make_unique<AllocateProtonSharedMemory>();
-}
-
-} // namespace gpu
-
-} // namespace triton::proton
-
-} // namespace mlir
+} // namespace mlir::triton::proton::gpu
