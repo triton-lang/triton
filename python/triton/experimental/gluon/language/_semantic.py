@@ -22,6 +22,11 @@ class GluonSemantic(TritonSemantic[TensorTy]):
     def __init__(self, builder: GluonOpBuilder):
         self.builder = builder
 
+    def _wrap_tensor_infer_layout(self, tensor):
+        ty = ttgl.distributed_type(tensor.type.scalar, tensor.shape,
+                                   self.builder.get_gluon_layout_from_tensor(tensor.handle))
+        return self.tensor(tensor.handle, ty)
+
     def _broadcast_shapes(self, lhs_shape: List[int], rhs_shape: List[int]):
         if len(lhs_shape) != len(rhs_shape):
             raise ValueError(f"Cannot broadcast, rank mismatch: {lhs_shape}, {rhs_shape}")
@@ -57,11 +62,19 @@ class GluonSemantic(TritonSemantic[TensorTy]):
         handle = self.builder.create_expand_dims(input.handle, axis, ret_ty.to_ir(self.builder))
         return self.tensor(handle, ret_ty)
 
+    def join(self, a: TensorTy, b: TensorTy) -> TensorTy:
+        a, b = self.broadcast_impl_value(a, b)
+        _check(a.shape != [], "Cannot join scalars in gluon")
+        value = super().join(a, b)
+        return self._wrap_tensor_infer_layout(value)
+
+    def split(self, a: TensorTy) -> Tuple[TensorTy, TensorTy]:
+        lhs, rhs = super().split(a)
+        return self._wrap_tensor_infer_layout(lhs), self._wrap_tensor_infer_layout(rhs)
+
     def permute(self, input: TensorTy, dims: Tuple[int]) -> TensorTy:
         value = super().permute(input, dims)
-        layout = self.builder.get_gluon_layout_from_tensor(value.handle)
-        res_ty = ttgl.distributed_type(value.type.scalar, value.shape, layout)
-        return self.tensor(value.handle, res_ty)
+        return self._wrap_tensor_infer_layout(value)
 
     def broadcast_impl_shape(self, input: TensorTy, shape: Tuple[int]) -> TensorTy:
         _check(isinstance(input.type, ttgl.distributed_type),
@@ -105,6 +118,11 @@ class GluonSemantic(TritonSemantic[TensorTy]):
         shape = [end - start]
         ret_ty = ttgl.distributed_type(ttgl.int32, shape, layout)
         return super().arange(start, end, ret_ty=ret_ty)
+
+    def reshape(self, input: TensorTy, dst_shape: List[int], can_reorder: bool):
+        _check(not can_reorder, "can_reorder is not supported in gluon")
+        value = super().reshape(input, dst_shape, can_reorder)
+        return self._wrap_tensor_infer_layout(value)
 
     def splat(self, value, shape, layout):
         ret_ty = ttgl.distributed_type(value.dtype, shape, layout)
@@ -163,7 +181,7 @@ class GluonSemantic(TritonSemantic[TensorTy]):
         offsets[0] = self._convert_elem_to_ir_value(index, require_i64=False)
         return self._memdesc_subview(mem_desc, offsets, shape, layout)
 
-    def memdesc_trans(self, mem_desc, order, layout):
+    def memdesc_trans(self, mem_desc, order):
         assert len(order) == len(
             mem_desc.shape), f"source rank ({mem_desc.rank}) and order length ({len(order)}) must match"
 
@@ -172,9 +190,10 @@ class GluonSemantic(TritonSemantic[TensorTy]):
         new_alloc_shape = alloc_shape[:len(alloc_shape) - mem_desc.rank]
         new_alloc_shape += [alloc_shape[len(alloc_shape) - mem_desc.rank:][i] for i in order]
 
-        ty = ttgl.shared_memory_descriptor_type(mem_desc.dtype, shape, layout, new_alloc_shape)
-        handle = self.builder.create_memdesc_trans(ty.to_ir(self.builder), mem_desc.handle, order)
-        return ttgl.shared_memory_descriptor(handle, **ty.__dict__)
+        handle = self.builder.create_memdesc_trans(mem_desc.handle, order)
+        layout = self.builder.get_gluon_layout_from_memdesc(handle)
+        return ttgl.shared_memory_descriptor(handle, element_ty=mem_desc.dtype, shape=shape, alloc_shape=alloc_shape,
+                                             layout=layout)
 
     def memdesc_reshape(self, mem_desc, shape, layout):
         ty = ttgl.shared_memory_descriptor_type(mem_desc.dtype, shape, layout, mem_desc.type.alloc_shape)

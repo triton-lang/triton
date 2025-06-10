@@ -264,6 +264,12 @@ void init_gluon_ir(py::module &&m) {
              assert(ty.getEncoding());
              return layoutToGluon(ty.getEncoding());
            })
+      .def("get_gluon_layout_from_memdesc",
+           [](GluonOpBuilder &self, Value memdesc) -> py::object {
+             auto ty = dyn_cast<ttg::MemDescType>(memdesc.getType());
+             assert(ty.getEncoding());
+             return layoutToGluon(ty.getEncoding());
+           })
       .def("create_convert_layout",
            [](GluonOpBuilder &self, Type resultTy, Value value) -> Value {
              return self.create<ttg::ConvertLayoutOp>(resultTy, value);
@@ -296,9 +302,9 @@ void init_gluon_ir(py::module &&m) {
                                                        offsets);
            })
       .def("create_memdesc_trans",
-           [](GluonOpBuilder &self, Type resultType, Value src,
+           [](GluonOpBuilder &self, Value src,
               std::vector<int> &order) -> Value {
-             return self.create<ttg::MemDescTransOp>(resultType, src, order);
+             return self.create<ttg::MemDescTransOp>(src, order);
            })
       .def("create_memdesc_reshape",
            [](GluonOpBuilder &self, Type resultType, Value src) -> Value {
