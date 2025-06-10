@@ -17,10 +17,6 @@ namespace triton::proton::gpu {
 #define GEN_PASS_DECL
 #include "proton/dialect/include/Conversion/ProtonGPUToLLVM/Passes.h.inc"
 
-std::unique_ptr<OperationPass<ModuleOp>> createAllocateProtonSharedMemoryPass();
-std::unique_ptr<OperationPass<ModuleOp>>
-createAllocateProtonGlobalScratchBufferPass();
-
 #define GEN_PASS_REGISTRATION
 #include "proton/dialect/include/Conversion/ProtonGPUToLLVM/Passes.h.inc"
 
