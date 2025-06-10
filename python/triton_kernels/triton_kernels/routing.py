@@ -7,6 +7,7 @@ from .routing_details._routing_compute import _routing_compute_indx
 from .routing_details._routing_compute import _routing_clear_bitmatrix
 from .routing_details._expt_data import _expt_data_memset
 from .routing_details._expt_data import _expt_data_compute
+from .target_info import is_hip
 
 
 @dataclass
@@ -202,7 +203,7 @@ def compute_expt_data(expt_hist, n_expts_tot, n_gates):
     cdiv = triton.cdiv
     # block_ms are all powers-of-two between 16 and 128 (inclusive)
     block_m_log2_start = 4
-    block_m_log2_end = 8
+    block_m_log2_end = 9 if is_hip() else 8
     block_m_num = block_m_log2_end - block_m_log2_start
     if n_gates <= n_expts_tot:
         max_n_tiles = n_gates
