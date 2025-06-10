@@ -107,7 +107,7 @@ def test_routing_distributed_EP(monkeypatch):
     assert torch.equal(token_mask, torch.tensor([False, True, False, True], dtype=torch.bool, device="cuda"))
 
 
-def quantize(w, dtype, dev, **opt):
+def quantize(w, dtype, **opt):
     if dtype == "bf16":
         wq = w.to(torch.bfloat16).transpose(-1, -2).contiguous().transpose(-1, -2)
         return wq, InFlexData(), MicroscalingCtx()
@@ -181,14 +181,12 @@ def distributed_run(rank, world_size, batch, dim1, dim2, n_expts_tot, n_expts_ac
     b2_full = gather_ep(rank, world_size, b2, TP, EP)
 
     # quantization
-    swizzle_opt = {"mx4": {"swizzle_mx_scale": True}}
-    opt = swizzle_opt.get(w_dtype, {})
-    wg, wg_flex, wg_mx = quantize(wg, "bf16", dev)
-    w1, w1_flex, w1_mx = quantize(w1, w_dtype, dev, **opt)
-    w2, w2_flex, w2_mx = quantize(w2, w_dtype, dev, **opt)
+    wg, wg_flex, wg_mx = quantize(wg, "bf16")
+    w1, w1_flex, w1_mx = quantize(w1, w_dtype)
+    w2, w2_flex, w2_mx = quantize(w2, w_dtype)
     if rank == 0:
-        w1_full, w1_flex_f, w1_mx_f = quantize(w1_full, w_dtype, dev, **opt)
-        w2_full, w2_flex_f, w2_mx_f = quantize(w2_full, w_dtype, dev, **opt)
+        w1_full, w1_flex_f, w1_mx_f = quantize(w1_full, w_dtype)
+        w2_full, w2_flex_f, w2_mx_f = quantize(w2_full, w_dtype)
     else:
         w1_full = w2_full = w1_flex_f = w2_flex_f = w1_mx_f = w2_mx_f = None
 

@@ -23,7 +23,7 @@ else:
     cublas = None
 
 
-def quantize(w, dtype, dev, **opt):
+def quantize(w, dtype, **opt):
     if dtype == "bf16":
         wq = w.to(torch.bfloat16).transpose(-1, -2).contiguous().transpose(-1, -2)
         return wq, InFlexData(), MicroscalingCtx()
@@ -128,9 +128,9 @@ def bench_mlp(batch, dim1, dim2, n_expts_tot, n_expts_act, x_dtype, w_dtype, TP,
             swizzle_mx_scale = SwizzlingType.BLACKWELL
         opt1 = {"swizzle_mx_value": swizzle_mx_value, "swizzle_mx_scale": swizzle_mx_scale}
         opt2 = deepcopy(opt1)
-    wg, wg_flex, wg_mx = quantize(wg, "bf16", dev, **optg)
-    w1, w1_flex, w1_mx = quantize(w1, w_dtype, dev, **opt1)
-    w2, w2_flex, w2_mx = quantize(w2, w_dtype, dev, **opt2)
+    wg, wg_flex, wg_mx = quantize(wg, "bf16", **optg)
+    w1, w1_flex, w1_mx = quantize(w1, w_dtype, **opt1)
+    w2, w2_flex, w2_mx = quantize(w2, w_dtype, **opt2)
     pcg = PrecisionConfig(mx_ctx=wg_mx, flex_ctx=FlexCtx(rhs_data=wg_flex))
     act = FusedActivation(FnSpecs("swiglu", triton_kernels.swiglu.swiglu_fn, ("alpha", "limit")), (1.0, 1.0), 2)
     pc1 = PrecisionConfig(mx_ctx=w1_mx, flex_ctx=FlexCtx(rhs_data=w1_flex))

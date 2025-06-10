@@ -139,7 +139,8 @@ def routing(logits, n_expts_act, sm_first=False, expt_indx=None, n_rows=None, EP
         # pack the matmul data structure
         gather_indx = GatherIndx(src_indx=topk_indx.int(), dst_indx=gate_indx.int())
         scatter_indx = ScatterIndx(src_indx=gate_indx.int(), dst_indx=topk_indx.int())
-        expt_data = compute_expt_data(hist, n_expts_tot, topk_indx.numel())
+        n_gates = topk_indx[expt_indx != n_expts_tot].numel()
+        expt_data = compute_expt_data(hist, n_expts_tot // EP, n_gates)
         return RoutingData(gate_scal, hist, n_expts_tot // EP, n_expts_act,
                            expt_data=expt_data), gather_indx, scatter_indx, token_mask
     else:
