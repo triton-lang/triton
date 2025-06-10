@@ -193,52 +193,9 @@ struct DirectToLdsLoadConversionBase : public LoadStoreConversionBase {
     return success();
   }
 
-  // Determine the vector size per load and collect the shared addresses. This
-  // will only emit the address calculation and not the actual loads.
-  // For swizzled loads we get the non swizzled/coalesced shared addresses
-  // from a temporary non swizzled layout. Those addresses will be used as the
-  // store addresses. Additionally, we compute the swizzled shared memory
-  // addresses which will be used to compute which lane holds the global ptr
-  // to the coalesced address
-  void emitSharedAddresses(RewriterBase &rewriter, Operation *op,
-                           RankedTensorType srcTy, MemDescType dstTy,
-                           bool hasSwizzling, Type resElemTy, Value llDst,
-                           SmallVector<Value> &coalescedShmemAddr,
-                           SmallVector<Value> &swizzledShmemAddr,
-                           VectorType &vecTy) const {
-    auto emitSharedAddresses = [&](MemDescType dstTy,
-                                   SmallVector<Value> &shmemAddrs,
-                                   VectorType &vecTy) {
-      auto loc = op->getLoc();
-      auto smemObj = mlir::LLVM::getSharedMemoryObjectFromStruct(
-          loc, llDst, resElemTy, rewriter);
-      bool ok = emitTransferBetweenRegistersAndShared(
-          srcTy, dstTy, resElemTy, {}, smemObj, loc, rewriter, targetInfo,
-          [&](VectorType vecTy_, Value shmemAddr) {
-            vecTy = vecTy_;
-            shmemAddrs.push_back(shmemAddr);
-          });
-      assert(ok);
-    };
-
-    if (!hasSwizzling) {
-      emitSharedAddresses(dstTy, coalescedShmemAddr, vecTy);
-    } else {
-      emitSharedAddresses(dstTy, swizzledShmemAddr, vecTy);
-      // Create non swizzled/coalesced encoding
-      auto dstEnc = cast<SwizzledSharedEncodingAttr>(dstTy.getEncoding());
-      auto flatSharedEnc = SwizzledSharedEncodingAttr::get(
-          op->getContext(), dstEnc.getVec(), 1, 1, dstEnc.getOrder(),
-          dstEnc.getCTALayout());
-      auto flatDstTy =
-          MemDescType::get(dstTy.getShape(), dstTy.getElementType(),
-                           flatSharedEnc, dstTy.getMemorySpace());
-      VectorType coalescedVecTy;
-      emitSharedAddresses(flatDstTy, coalescedShmemAddr, coalescedVecTy);
-      assert(coalescedVecTy == vecTy);
-    }
-  }
-
+  // Determine the vector size per load and collect the shared addresses per
+  // vecTy. This will only emit the address calculation and not the actual
+  // loads.
   void emitSharedAddresses(RewriterBase &rewriter, Location loc,
                            RankedTensorType srcTy, MemDescType dstTy,
                            VectorType &vecTy, Value llDst, Type resElemTy,
