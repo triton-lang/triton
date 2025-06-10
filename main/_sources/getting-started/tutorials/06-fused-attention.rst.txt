@@ -30,7 +30,7 @@ Extra Credits:
 * Original flash attention paper (https://arxiv.org/abs/2205.14135)
 * Rabe and Staats (https://arxiv.org/pdf/2112.05682v2.pdf)
 
-.. GENERATED FROM PYTHON SOURCE LINES 15-699
+.. GENERATED FROM PYTHON SOURCE LINES 15-697
 
 
 
@@ -58,74 +58,32 @@ Extra Credits:
          :srcset: /getting-started/tutorials/images/sphx_glr_06-fused-attention_003.png
          :class: sphx-glr-multi-img
 
-    *
-
-      .. image-sg:: /getting-started/tutorials/images/sphx_glr_06-fused-attention_004.png
-         :alt: 06 fused attention
-         :srcset: /getting-started/tutorials/images/sphx_glr_06-fused-attention_004.png
-         :class: sphx-glr-multi-img
-
-    *
-
-      .. image-sg:: /getting-started/tutorials/images/sphx_glr_06-fused-attention_005.png
-         :alt: 06 fused attention
-         :srcset: /getting-started/tutorials/images/sphx_glr_06-fused-attention_005.png
-         :class: sphx-glr-multi-img
-
-    *
-
-      .. image-sg:: /getting-started/tutorials/images/sphx_glr_06-fused-attention_006.png
-         :alt: 06 fused attention
-         :srcset: /getting-started/tutorials/images/sphx_glr_06-fused-attention_006.png
-         :class: sphx-glr-multi-img
-
 
 .. rst-class:: sphx-glr-script-out
 
  .. code-block:: none
 
-    fused-attention-batch4-head32-d64-fwd-causal=True-warp_specialize=True:
-         N_CTX  Triton [FP16]  Triton [FP8]
-    0   1024.0      35.991437     41.997326
-    1   2048.0      41.133680     49.135206
-    2   4096.0      43.580280     54.351814
-    3   8192.0      45.194483     57.229603
-    4  16384.0      45.363464     58.661595
     fused-attention-batch4-head32-d64-fwd-causal=True-warp_specialize=False:
          N_CTX  Triton [FP16]  Triton [FP8]
-    0   1024.0     110.805506     68.856195
-    1   2048.0     136.856105     86.008378
-    2   4096.0     152.270388     95.667910
-    3   8192.0     160.196214    100.556455
-    4  16384.0     164.396465    103.407222
-    fused-attention-batch4-head32-d64-fwd-causal=False-warp_specialize=True:
-         N_CTX  Triton [FP16]  Triton [FP8]
-    0   1024.0      40.108659     53.220402
-    1   2048.0      42.270545     58.958231
-    2   4096.0      42.633455     60.629127
-    3   8192.0      42.000462     60.858504
-    4  16384.0      42.951391     60.637257
+    0   1024.0     111.543151     68.856633
+    1   2048.0     140.035997     86.291241
+    2   4096.0     152.910320     96.326418
+    3   8192.0     161.547532    100.774568
+    4  16384.0     167.475587    103.506906
     fused-attention-batch4-head32-d64-fwd-causal=False-warp_specialize=False:
          N_CTX  Triton [FP16]  Triton [FP8]
-    0   1024.0     153.022344     90.159917
-    1   2048.0     164.765194    111.579488
-    2   4096.0     166.329773    111.350638
-    3   8192.0     170.061152    113.452996
-    4  16384.0     172.460944    114.208110
-    fused-attention-batch4-head32-d64-bwd-causal=True-warp_specialize=True:
-         N_CTX  Triton [FP16]  Triton [FP8]
-    0   1024.0      52.151911     51.807115
-    1   2048.0      67.167075     65.689961
-    2   4096.0      76.348568     75.417624
-    3   8192.0      82.296726     82.887116
-    4  16384.0      85.206106     85.376843
+    0   1024.0     153.957442     90.186912
+    1   2048.0     165.778336    111.672327
+    2   4096.0     167.824608    111.963440
+    3   8192.0     171.516424    114.411643
+    4  16384.0     171.771212    114.608864
     fused-attention-batch4-head32-d64-bwd-causal=True-warp_specialize=False:
          N_CTX  Triton [FP16]  Triton [FP8]
-    0   1024.0      51.974665     51.723365
-    1   2048.0      65.757188     65.717162
-    2   4096.0      76.529665     76.124261
-    3   8192.0      82.292939     82.836385
-    4  16384.0      85.704624     85.342907
+    0   1024.0      52.414616     51.743202
+    1   2048.0      66.484647     66.533717
+    2   4096.0      76.587311     77.578017
+    3   8192.0      83.081231     83.350812
+    4  16384.0      86.546718     86.371974
 
 
 
@@ -323,8 +281,6 @@ Extra Credits:
                                             warp_specialize)
         # stage 2: on-band
         if STAGE & 2:
-            # barrier makes it easier for compielr to schedule the
-            # two loops independently
             acc, l_i, m_i = _attn_fwd_inner(acc, l_i, m_i, q,  #
                                             desc_k, desc_v,  #
                                             offset_y, dtype, start_m, qk_scale,  #
@@ -751,7 +707,7 @@ Extra Credits:
     configs = []
     for mode in ["fwd", "bwd"]:
         for causal in [True, False]:
-            for warp_specialize in [True, False]:
+            for warp_specialize in [False, True] if is_blackwell() else [False]:
                 if mode == "bwd" and not causal:
                     continue
                 configs.append(
@@ -824,7 +780,7 @@ Extra Credits:
 
 .. rst-class:: sphx-glr-timing
 
-   **Total running time of the script:** (2 minutes 27.198 seconds)
+   **Total running time of the script:** (0 minutes 56.388 seconds)
 
 
 .. _sphx_glr_download_getting-started_tutorials_06-fused-attention.py:
