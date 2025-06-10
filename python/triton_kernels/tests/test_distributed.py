@@ -113,7 +113,7 @@ def test_all_to_all(monkeypatch):
         size0 = input_split_sizes[0]
         size1 = input_split_sizes[1]
         out[0:size0, :].copy_(x[0:size0, :])
-        out[size0:size1, :].copy_(x[0:size1, :])
+        out[size0:(size0 + size1), :].copy_(x[size0:(size0 + size1), :])
 
     monkeypatch.setenv("WORLD_SIZE", "2")
     monkeypatch.setenv("LOCAL_RANK", "0")
