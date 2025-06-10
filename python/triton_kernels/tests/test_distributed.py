@@ -106,7 +106,7 @@ def test_routing_distributed_EP(monkeypatch):
     assert torch.equal(token_mask, torch.tensor([False, True, False, True], dtype=torch.bool, device="cuda"))
 
 
-def test_all_to_all(monkeypatch):
+def test_all_to_all_single(monkeypatch):
 
     def dummy_all_to_all_single(out, x, output_split_sizes, input_split_sizes):
         # simulate all_to_all for rank 0
