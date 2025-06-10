@@ -221,6 +221,45 @@ private:
   void update(CallOpInterface callOp, FunctionOpInterface funcOp);
 };
 
+class AxisInfoVisitor {
+public:
+  AxisInfoVisitor() = default;
+  virtual ~AxisInfoVisitor() = default;
+
+  bool isContiguousDim(const AxisInfo &info, ArrayRef<int64_t> shape, int dim) {
+    return info.getContiguity(dim) == shape[dim];
+  }
+
+  bool isConstantDim(const AxisInfo &info, ArrayRef<int64_t> shape, int dim) {
+    return info.getConstancy(dim) == shape[dim];
+  }
+
+  virtual AxisInfo
+  getAxisInfo(Operation *op,
+              ArrayRef<const dataflow::Lattice<AxisInfo> *> operands) = 0;
+
+  virtual bool match(Operation *op) = 0;
+};
+
+class AxisInfoVisitorList {
+public:
+  template <typename... Ts, typename = std::enable_if_t<sizeof...(Ts) != 0>>
+  void append() {
+    (visitors.emplace_back(std::make_unique<Ts>()), ...);
+  }
+
+  AxisInfo apply(Operation *op,
+                 ArrayRef<const dataflow::Lattice<AxisInfo> *> operands) {
+    for (auto &visitor : visitors)
+      if (visitor->match(op))
+        return visitor->getAxisInfo(op, operands);
+    return AxisInfo();
+  }
+
+private:
+  std::vector<std::unique_ptr<AxisInfoVisitor>> visitors;
+};
+
 } // namespace mlir::triton
 
 #endif

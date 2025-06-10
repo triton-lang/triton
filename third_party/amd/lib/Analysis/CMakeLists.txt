@@ -10,3 +10,13 @@ add_triton_library(TritonAMDAnalysis
   TritonIR
   TritonGPUIR
 )
+
+add_triton_library(TritonAMDAxisInfoExt
+  AxisInfoExt.cpp
+
+  DEPENDS
+  TritonTableGen
+
+  LINK_LIBS PUBLIC
+  TritonAMDGPUIR
+)

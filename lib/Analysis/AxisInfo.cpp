@@ -1,7 +1,8 @@
 #include "triton/Analysis/AxisInfo.h"
 #include "mlir/Analysis/DataFlowFramework.h"
 #include "mlir/Dialect/UB/IR/UBOps.h"
-#include "third_party/amd/include/Dialect/TritonAMDGPU/IR/Dialect.h"
+#include "third_party/amd/include/Analysis/AxisInfoExt.h"
+#include "third_party/nvidia/include/Analysis/AxisInfoExt.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
@@ -51,28 +52,6 @@ int64_t multiplyDivisor(int64_t lhs, int64_t rhs) {
     return maxDivisor;
   return lhs * rhs;
 }
-
-class AxisInfoVisitor {
-public:
-  AxisInfoVisitor() = default;
-  virtual ~AxisInfoVisitor() = default;
-
-  static bool isContiguousDim(const AxisInfo &info, ArrayRef<int64_t> shape,
-                              int dim) {
-    return info.getContiguity(dim) == shape[dim];
-  }
-
-  static bool isConstantDim(const AxisInfo &info, ArrayRef<int64_t> shape,
-                            int dim) {
-    return info.getConstancy(dim) == shape[dim];
-  }
-
-  virtual AxisInfo
-  getAxisInfo(Operation *op,
-              ArrayRef<const dataflow::Lattice<AxisInfo> *> operands) = 0;
-
-  virtual bool match(Operation *op) = 0;
-};
 
 // Base class for all operations
 template <typename OpTy> class AxisInfoVisitorImpl : public AxisInfoVisitor {
@@ -145,25 +124,6 @@ protected:
                                                   const AxisInfo &rhs) {
     return {};
   }
-};
-
-class AxisInfoVisitorList {
-public:
-  template <typename... Ts, typename = std::enable_if_t<sizeof...(Ts) != 0>>
-  void append() {
-    (visitors.emplace_back(std::make_unique<Ts>()), ...);
-  }
-
-  AxisInfo apply(Operation *op,
-                 ArrayRef<const dataflow::Lattice<AxisInfo> *> operands) {
-    for (auto &visitor : visitors)
-      if (visitor->match(op))
-        return visitor->getAxisInfo(op, operands);
-    return AxisInfo();
-  }
-
-private:
-  std::vector<std::unique_ptr<AxisInfoVisitor>> visitors;
 };
 
 class AxisInfoAnalysis : public dataflow::SparseForwardDataFlowAnalysis<
@@ -1043,8 +1003,7 @@ AxisInfoAnalysis::AxisInfoAnalysis(DataFlowSolver &solver)
                   CastOpAxisInfoVisitor<arith::TruncIOp>,
                   CastOpAxisInfoVisitor<triton::gpu::ConvertLayoutOp>,
                   CastOpAxisInfoVisitor<mlir::UnrealizedConversionCastOp>,
-                  CastOpAxisInfoVisitor<triton::BitcastOp>,
-                  CastOpAxisInfoVisitor<amdgpu::ExtractSliceOp>>();
+                  CastOpAxisInfoVisitor<triton::BitcastOp>>();
   visitors.append<MakeRangeOpAxisInfoVisitor>();
   visitors.append<PoisonOpAxisInfoVisitor>();
   visitors.append<ConstantOpAxisInfoVisitor>();
@@ -1071,6 +1030,9 @@ AxisInfoAnalysis::AxisInfoAnalysis(DataFlowSolver &solver)
                   MaxMinOpAxisInfoVisitor<arith::MinSIOp>,
                   MaxMinOpAxisInfoVisitor<arith::MinUIOp>>();
   visitors.append<LoadOpAxisInfoVisitor>();
+
+  mlir::triton::AMD::AxisInfoExt::addVisitors(visitors);
+  mlir::triton::nvidia::AxisInfoExt::addVisitors(visitors);
 }
 
 LogicalResult AxisInfoAnalysis::visitOperation(
