@@ -274,25 +274,8 @@ struct DirectToLdsLoadConversionBase : public LoadStoreConversionBase {
 
     int numberOfLoads =
         regToSharedLayout.getInDimSize(kRegister) / vecTy.getNumElements();
-    llvm::outs() << "Number of loads: " << numberOfLoads << "\n";
     for (int i = 0; i < numberOfLoads; i++) {
       auto regId = b.i32_val(i * vecTy.getNumElements());
-
-      // for (int l = 0; l < 64; l++) {
-      // SmallVector<std::pair<StringAttr, int32_t>> input = {
-      //     {kRegister, i * vecTy.getNumElements()},
-      //     {kLane, l},
-      //     {kWarp, 0},
-      //     {kBlock, 0}};
-
-      // auto swizzOff = regToSharedLayout.apply(input)[0].second;
-      // auto flatOff = regToSharedFlat.apply(input)[0].second;
-
-      // auto laneOff = (swizzOff - flatOff) / vecTy.getNumElements();
-
-      // llvm::outs() << l << ": " << swizzOff << ", " << flatOff << " = "
-      //              << laneOff << "\n";
-      // }
 
       auto swizzleOffset =
           llvm::to_vector(llvm::drop_end(llvm::make_second_range(
@@ -311,21 +294,6 @@ struct DirectToLdsLoadConversionBase : public LoadStoreConversionBase {
                               b.i32_val(vecTy.getNumElements()));
       swizzleOffsets.push_back(laneOffet);
     }
-  }
-
-  // Emits the computation to get the lane id offset which holds the source
-  // pointers/offsets we need to store to shared memory
-  Value emitSwizzledLaneOffset(RewriterBase &rewriter, TritonLLVMOpBuilder &b,
-                               Location loc, Value coalescedShmem,
-                               Value swizzledShmem, Value vecBytes) const {
-    // Compute the laneOffset based on the difference in elements between
-    // the two shmem addresses. laneOffset will be negative for half the
-    // lanes because a smaller laneId might hold our global_ptr.
-    auto coalescedAddr = b.ptrtoint(i64_ty, coalescedShmem);
-    auto swizzledAddr = b.ptrtoint(i64_ty, swizzledShmem);
-    auto diff = b.trunc(i32_ty, b.sub(swizzledAddr, coalescedAddr));
-    Value laneOffset = b.sdiv(diff, vecBytes);
-    return laneOffset;
   }
 
   // Swizzle the mask (1bit) based on selectLane via ballot
