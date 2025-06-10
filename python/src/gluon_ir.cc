@@ -8,6 +8,8 @@
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Types.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
+#include "triton/Tools/LayoutUtils.h"
+#include "triton/Tools/LinearLayout.h"
 
 using namespace mlir;
 namespace py = pybind11;
@@ -132,6 +134,26 @@ void init_gluon_ir(py::module &&m) {
              auto ctx = self.getContext();
              auto dist = cast<ttg::DistributedEncodingTrait>(parent);
              return self.getChecked<ttg::SliceEncodingAttr>(ctx, dim, dist);
+           })
+      .def("get_distributed_linear_layout",
+           [](GluonOpBuilder &self, std::vector<std::vector<int>> regBases,
+              std::vector<std::vector<int>> laneBases,
+              std::vector<std::vector<int>> warpBases,
+              std::vector<std::vector<int>> blockBases,
+              std::vector<int64_t> shape) -> Attribute {
+             auto ctx = self.getContext();
+             auto kReg = mlir::StringAttr::get(ctx, "register");
+             auto kLane = mlir::StringAttr::get(ctx, "lane");
+             auto kWarp = mlir::StringAttr::get(ctx, "warp");
+             auto kBlock = mlir::StringAttr::get(ctx, "block");
+             auto outDims = tt::standardOutDimPairs(ctx, shape);
+             auto ll = tt::LinearLayout({{kReg, regBases},
+                                         {kLane, laneBases},
+                                         {kWarp, warpBases},
+                                         {kBlock, blockBases}},
+                                        outDims,
+                                        /*requiresSurjective=*/true);
+             return ttg::LinearEncodingAttr::get(ctx, ll);
            })
       .def("get_nvmma_shared_layout",
            [](GluonOpBuilder &self, unsigned swizzleByteWidth,

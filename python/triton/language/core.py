@@ -86,7 +86,7 @@ def _tensor_member_fn(fn: T) -> T:
     if is_builtin(fn):
         setattr(wrapper, TRITON_BUILTIN, True)
 
-    setattr(tensor, fn.__name__, wrapper)
+    setattr(tensor, fn.__name__, fn if isinstance(fn, JITFunction) else wrapper)
     return fn
 
 
