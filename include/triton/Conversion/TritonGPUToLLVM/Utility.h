@@ -423,10 +423,6 @@ size_t linearize(ArrayRef<unsigned> multiDim, ArrayRef<unsigned> shape,
 Value addStringToModule(Location loc, RewriterBase &rewriter, StringRef key,
                         StringRef content);
 
-inline bool isKernel(FunctionOpInterface funcOp) {
-  return funcOp.getVisibility() == SymbolTable::Visibility::Public;
-}
-
 Value getStackPointer(RewriterBase &rewriter, FunctionOpInterface funcOp);
 
 Value getGlobalScratchPtr(Location loc, RewriterBase &rewriter,

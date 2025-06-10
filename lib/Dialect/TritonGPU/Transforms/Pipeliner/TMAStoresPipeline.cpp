@@ -1,4 +1,6 @@
+#include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
+#include "triton/Dialect/TritonGPU/Transforms/PipeliningUtility.h"
 #include "triton/Dialect/TritonGPU/Transforms/Schedule.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/TMAUtilities.h"
@@ -46,14 +48,16 @@ static Value createAlloc(scf::ForOp &forOp, const TMAStore &store) {
 }
 
 static void createTMAAsyncCopy(scf::ForOp forOp, const TMAStore &store,
-                               Value alloc) {
+                               Value alloc, bool &hasDeviceSideTMA) {
   OpBuilder builder(store.op);
   Location loc = store.op->getLoc();
   RankedTensorType ty = store.src.getType();
 
+  bool hostSideTMA = triton::isHostSideDescriptor(store.desc);
+  hasDeviceSideTMA |= !hostSideTMA;
   // Put wait before the local_store make the store truly async. We know
   // that we are the only user of the CopyLocalToGlobal.
-  builder.create<ttng::TMAStoreWaitOp>(loc, 0);
+  builder.create<ttng::TMAStoreWaitOp>(loc, 0, hostSideTMA);
   builder.create<ttg::LocalStoreOp>(loc, store.src, alloc);
   builder.create<ttng::FenceAsyncSharedOp>(loc, false);
   auto desc = store.desc;
@@ -80,6 +84,12 @@ static void createTMAAsyncCopy(scf::ForOp forOp, const TMAStore &store,
   store.op->erase();
 }
 
+static void lowerTMADescriptorCreation(scf::ForOp forOp) {
+  // Use max_stage=3 to double buffer the descriptor.
+  triton::CoarseSchedule schedule(3);
+  triton::lowerTMADescriptors(forOp, schedule);
+}
+
 bool mlir::triton::pipelineTMAStores(scf::ForOp forOp) {
   SmallVector<TMAStore> tmaStores = getTMAStores(forOp);
   if (tmaStores.empty())
@@ -101,16 +111,23 @@ bool mlir::triton::pipelineTMAStores(scf::ForOp forOp) {
     storeToAlloc[store.op] = alloc;
   }
 
+  bool hasDeviceSideTMA = false;
   for (const TMAStore &store : tmaStores) {
-    createTMAAsyncCopy(forOp, store, storeToAlloc[store.op]);
+    createTMAAsyncCopy(forOp, store, storeToAlloc[store.op], hasDeviceSideTMA);
   }
 
   // Deallocate shared memory buffers.
   OpBuilder builder(forOp);
   builder.setInsertionPointAfter(forOp);
-  builder.create<ttng::TMAStoreWaitOp>(forOp->getLoc(), 0);
+  builder.create<ttng::TMAStoreWaitOp>(forOp->getLoc(), 0, !hasDeviceSideTMA);
   for (auto it : storeToAlloc) {
     builder.create<ttg::LocalDeallocOp>(forOp->getLoc(), it.second);
+  }
+
+  if (hasDeviceSideTMA) {
+    // This is a bit coarse as it would multibuffer any descriptor in the loop
+    // but it likely to not have a big impact.
+    lowerTMADescriptorCreation(forOp);
   }
   return true;
 }

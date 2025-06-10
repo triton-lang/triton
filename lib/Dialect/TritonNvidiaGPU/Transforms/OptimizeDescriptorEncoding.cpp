@@ -285,7 +285,7 @@ void assignMemoryLayouts(FuncOp &func) {
 
   // 1. Set seed values from either TMA ops, or device function boundaries for
   // which we fallback to default encoding
-  auto isKernel = LLVM::isKernel(func);
+  auto isKernel = triton::isKernel(func);
   for (auto blockArg : func.getBlocks().front().getArguments())
     if (auto desc = dyn_cast<TypedValue<TensorDescType>>(blockArg))
       updateEncoding({desc},
