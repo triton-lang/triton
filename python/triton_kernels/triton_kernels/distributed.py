@@ -143,4 +143,4 @@ def routing(logits, n_expts_act, sm_first=False, expt_indx=None, n_rows=None, EP
         return RoutingData(gate_scal, hist, n_expts_tot // EP, n_expts_act,
                            expt_data=expt_data), gather_indx, scatter_indx, token_mask
     else:
-        return *triton_kernels.routing.routing(logits, n_expts_act, expt_indx, EP), None
+        return *triton_kernels.routing.routing(logits, n_expts_act, sm_first, expt_indx, EP, n_rows), None
