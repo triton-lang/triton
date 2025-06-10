@@ -1143,11 +1143,10 @@ Row |
   let hasCustomAssemblyFormat = 1;
 
   let extraClassDeclaration = extraDistributedDeclaration # [{
-    SmallVector<int64_t> getElemsPerInstrForOperands() const;
+    SmallVector<int64_t> getElemsPerInstrForOperands(int kDim, int opIdx) const;
     SmallVector<int64_t> getRepForOperand(ArrayRef<int64_t> operandShape,
-                                          Type elemType, int kWidth, int opIdx) const;
+                                          Type elemType, int kWidth, int kDim, int opIdx) const;
     SmallVector<unsigned> getRepOrderForOperand(int opIdx) const;
-    unsigned getKWidthForOperands() const;
     static SmallVector<unsigned> getMNKDimPerInstr();
   }];
 }
