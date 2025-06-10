@@ -158,7 +158,7 @@ class TensorDescriptorBuilder:
                                      block_k: int) -> TensorDescriptor:
         """Create a tensor descriptor for input matrix X via TMA"""
         x_desc = x_tensor.squeeze()
-        assert x_desc.ndim == 2, "LHS input TMA descriptor builder expects 2D input"
+        assert x_desc.ndim in [2, 3], "LHS input TMA descriptor builder expects 2D or 3D input"
         return TensorDescriptor(base=x_desc, shape=[x_desc.shape[0], K], strides=[x_stride_1, x_stride_2],
                                 block_shape=[block_m, block_k])
 

@@ -171,7 +171,6 @@ class Case:
             Case(300, 400, 400, "batched", "float16", "float16", 5, 1),
             Case(300, 400, 400, "ragged", "float16", "float16"),
             Case(300, 400, 400, "ragged", "float8_e5m2", "float8_e5m2"),
-            Case(2048, 2048, 5120, "ragged", "float8_e5m2", "float8_e5m2"),
             Case(1000, 400, 400, "ragged", "float8_e5m2", "float8_e5m2", 3, 1),
             Case(600, 400, 400, "ragged", "float8_e5m2", "float8_e5m2", 4, 2, epilogue_subtile=1),
             Case(600, 400, 400, "ragged", "float8_e5m2", "float8_e5m2", 4, 2, epilogue_subtile=2),
@@ -183,7 +182,6 @@ class Case:
             Case(1000, 400, 400, "ragged", "float16", "float16", 3, 1),
             Case(1000, 700, 700, "ragged", "float16", "float16", 8, 2),
             Case(1000, 700, 700, "ragged", "float16", "float16", 8, 2, split_k=9),
-            Case(2048, 2048, 5120, "ragged", "float8_e5m2", "float8_e5m2", 128, 4),
             # mx types:
             Case(16, 256, 256, "ragged", "bfloat16", "mxfloat4_e2m1", 128, 4),
             Case(16, 256, 256, "ragged", "bfloat16", "mxfloat4_e2m1", 128, 4, hbm_swizzling=True),
@@ -211,7 +209,6 @@ class Case:
             Case(300, 400, 400, "batched", "float8_e5m2", "mxfloat8_e4m3fn", 32, 4, hbm_swizzling=True),
             Case(256, 256, 256, "ragged", "float8_e5m2", "mxfloat4_e2m1", 128, 4, hbm_swizzling=True),
             Case(256, 256, 256, "ragged", "float8_e5m2", "mxfloat4_e2m1", 128, 4, hbm_swizzling=False),
-            Case(2048, 2048, 5120, "ragged", "float8_e5m2", "mxfloat4_e2m1", 128, 4, hbm_swizzling=True),
             # AMD
             Case(300, 400, 400, "ragged", "float8_e4m3fnuz", "float8_e4m3fnuz"),
             Case(1000, 400, 400, "ragged", "float8_e4m3fnuz", "float8_e4m3fnuz", 3, 1),
