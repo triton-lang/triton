@@ -3,6 +3,8 @@ from triton.experimental.gluon.language.nvidia.hopper.tma import (
     async_copy_global_to_shared,
     async_copy_shared_to_global,
     store_wait,
+    tensor_descriptor,
+    tensor_descriptor_type,
 )
 
 __all__ = [
@@ -11,6 +13,8 @@ __all__ = [
     "async_copy_global_to_shared",
     "async_copy_shared_to_global",
     "store_wait",
+    "tensor_descriptor",
+    "tensor_descriptor_type",
 ]
 
 

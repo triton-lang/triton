@@ -287,14 +287,23 @@ def str_to_ty(name):
 
     if name.startswith("tensordesc"):
         inner = name.split("<")[1].rstrip(">")
-        dtype, block_shape = inner.split("[")
+        dtype, rest = inner.split("[", maxsplit=2)
+        block_shape, rest = rest.split("]", maxsplit=2)
         block_shape = [int(s.strip()) for s in block_shape.rstrip("]").split(",")]
+        layout = rest.lstrip(",")
+        is_gluon = len(layout)
         dtype = str_to_ty(dtype)
         ndim = len(block_shape)
         shape_type = tuple_type([int32] * ndim)
         # FIXME: Last dim stride should be constexpr(1)
         stride_type = tuple_type(([int64] * ndim))
         block = block_type(dtype, block_shape)
+        if is_gluon:
+            from triton.experimental.gluon.language._layouts import NVMMASharedLayout
+            from triton.experimental.gluon.language.nvidia.hopper.tma import tensor_descriptor_type as gluon_tensor_descriptor_type
+            layout = eval(layout, dict(NVMMASharedLayout=NVMMASharedLayout))
+            assert isinstance(layout, NVMMASharedLayout)
+            return gluon_tensor_descriptor_type(block, shape_type, stride_type, layout)
         return tensor_descriptor_type(block, shape_type, stride_type)
 
     if name == "constexpr":
