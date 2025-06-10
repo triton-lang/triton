@@ -1,4 +1,4 @@
-### Triton Community Meetup Notes
+### How to run a Triton Community Meetup
 
 Contributors:  Bill Yoshimi, Areg Melikadamyan, Whitney Tsang, Ksharma Pawar
 
