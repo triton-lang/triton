@@ -199,14 +199,13 @@ struct DirectToLdsLoadConversionBase : public LoadStoreConversionBase {
   void emitSharedAddresses(RewriterBase &rewriter, Location loc,
                            RankedTensorType srcTy, MemDescType dstTy,
                            VectorType &vecTy, Value llDst, Type resElemTy,
-                           SmallVector<Value> &addresses) const {
+                           Value laneId, SmallVector<Value> &addresses) const {
     TritonLLVMOpBuilder b(loc, rewriter);
     auto smemObj = mlir::LLVM::getSharedMemoryObjectFromStruct(
         loc, llDst, resElemTy, rewriter);
     auto regLayout =
         triton::gpu::toLinearLayout(srcTy.getShape(), srcTy.getEncoding());
     auto [_, warpId] = getLaneAndWarpId(rewriter, loc);
-    auto laneId = b.i32_val(0);
 
     bool ok = emitTransferBetweenRegistersAndShared(
         regLayout, dstTy, resElemTy, {}, smemObj, loc, rewriter, targetInfo,
@@ -223,6 +222,7 @@ struct DirectToLdsLoadConversionBase : public LoadStoreConversionBase {
                                SmallVector<Value> &baseAddresses,
                                VectorType &vecTy) const {
     auto loc = op->getLoc();
+    TritonLLVMOpBuilder b(loc, rewriter);
 
     if (hasSwizzling) {
       // Overwrite the shared encoding with a non swizzled one to get the base
@@ -236,7 +236,7 @@ struct DirectToLdsLoadConversionBase : public LoadStoreConversionBase {
     }
 
     emitSharedAddresses(rewriter, loc, srcTy, dstTy, vecTy, llDst, resElemTy,
-                        baseAddresses);
+                        /*laneId=*/b.i32_val(0), baseAddresses);
   }
 
   void emitSwizzleOffsets(RewriterBase &rewriter, Operation *op,
@@ -616,10 +616,11 @@ struct BufferLoadToLocalOpConversion
       assert(ldsBaseAddresses.size() == swizzleLaneOffsets.size());
     }
 
+    Value laneId = getLaneId(rewriter, loc);
     SmallVector<Value> otherLdsAddresses;
     if (!otherElems.empty()) {
       emitSharedAddresses(rewriter, loc, ptrType, dstTy, vecTy, llDst,
-                          resElemTy, otherLdsAddresses);
+                          resElemTy, laneId, otherLdsAddresses);
     }
 
     int vecBytes =
@@ -630,7 +631,6 @@ struct BufferLoadToLocalOpConversion
     // Create the resource descriptor and then emit the buffer_loads to lds
     // based on the collected shared addresses and vector size
     Value rsrcDesc = bufferEmitter.createResourceDescriptor(llPtr, llStride);
-    Value laneId = getLaneId(rewriter, loc);
 
     for (int i = 0; i < ldsBaseAddresses.size(); i++) {
       auto srcIdx = i * vec;
@@ -774,10 +774,11 @@ struct AsyncCopyGlobalToLocalOpConversion
       assert(ldsBaseAddresses.size() == swizzleLaneOffsets.size());
     }
 
+    Value laneId = getLaneId(rewriter, loc);
     SmallVector<Value> otherLdsAddresses;
     if (!otherElems.empty()) {
       emitSharedAddresses(rewriter, loc, srcTy, dstTy, vecTy, llDst, resElemTy,
-                          otherLdsAddresses);
+                          laneId, otherLdsAddresses);
     }
 
     int vecBytes =
@@ -787,7 +788,6 @@ struct AsyncCopyGlobalToLocalOpConversion
     int32_t cacheModifiers =
         mlir::LLVM::AMD::getCtrlBitsForCacheModifierOnTarget(
             op.getCache(), /*isLoad=*/true, targetInfo);
-    Value laneId = getLaneId(rewriter, loc);
 
     // Emit the load to lds based on the collected shared addresses and vector
     // size
