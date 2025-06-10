@@ -48,13 +48,12 @@ static Value createAlloc(scf::ForOp &forOp, const TMAStore &store) {
 }
 
 static void createTMAAsyncCopy(scf::ForOp forOp, const TMAStore &store,
-                               Value alloc, bool &hasDeviceSideTMA) {
+                               Value alloc) {
   OpBuilder builder(store.op);
   Location loc = store.op->getLoc();
   RankedTensorType ty = store.src.getType();
 
   bool hostSideTMA = triton::isHostSideDescriptor(store.desc);
-  hasDeviceSideTMA |= !hostSideTMA;
   // Put wait before the local_store make the store truly async. We know
   // that we are the only user of the CopyLocalToGlobal.
   builder.create<ttng::TMAStoreWaitOp>(loc, 0, hostSideTMA);
@@ -111,9 +110,11 @@ bool mlir::triton::pipelineTMAStores(scf::ForOp forOp) {
     storeToAlloc[store.op] = alloc;
   }
 
-  bool hasDeviceSideTMA = false;
+  bool hasDeviceSideTMA = llvm::any_of(tmaStores, [](const TMAStore &store) {
+    return !triton::isHostSideDescriptor(store.desc);
+  });
   for (const TMAStore &store : tmaStores) {
-    createTMAAsyncCopy(forOp, store, storeToAlloc[store.op], hasDeviceSideTMA);
+    createTMAAsyncCopy(forOp, store, storeToAlloc[store.op]);
   }
 
   // Deallocate shared memory buffers.
