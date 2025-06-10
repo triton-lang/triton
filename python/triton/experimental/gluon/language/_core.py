@@ -42,16 +42,20 @@ from triton.language.core import (
 )
 
 _IMPORT_FROM_TRITON: List[str] = [
-    "expand_dims",  # NOQA: F822
-    "load",  # NOQA: F822
-    "program_id",  # NOQA: F822
-    "reduce",  # NOQA: F822
-    "static_assert",  # NOQA: F822
-    "store",  # NOQA: F822
-    "to_tensor",  # NOQA: F822
-    "where",  # NOQA: F822
-    "maximum",  # NOQA: F822
-    "minimum",  # NOQA: F822
+    "expand_dims",
+    "join",
+    "load",
+    "maximum",
+    "minimum",
+    "permute",
+    "program_id",
+    "reduce",
+    "reshape",
+    "split",
+    "static_assert",
+    "store",
+    "to_tensor",
+    "where",
 ]
 
 __all__ = [
@@ -238,11 +242,9 @@ class shared_memory_descriptor(base_value):
         return _semantic.memdesc_slice(self, index, shape, layout)
 
     @builtin
-    def permute(self, order, layout, _semantic: GluonSemantic) -> shared_memory_descriptor:
+    def permute(self, order, _semantic: GluonSemantic) -> shared_memory_descriptor:
         order = [_unwrap_if_constexpr(o) for o in order]
-        layout = _unwrap_if_constexpr(layout)
-
-        return _semantic.memdesc_trans(self, order, layout)
+        return _semantic.memdesc_trans(self, order)
 
     @builtin
     def reshape(self, shape, layout, _semantic: GluonSemantic) -> shared_memory_descriptor:

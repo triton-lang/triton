@@ -247,9 +247,11 @@ def shared_memory_cast_kernel():
     layout_a: ttgl.constexpr = ttgl.NVMMASharedLayout(swizzle_byte_width=64, transposed=False, element_bitwidth=8,
                                                       rank=2)
     layout_T: ttgl.constexpr = ttgl.NVMMASharedLayout(swizzle_byte_width=64, transposed=True, element_bitwidth=8,
-                                                      rank=2)
+                                                      rank=2, ctas_per_cga=[1, 1], cta_split_num=[1,
+                                                                                                  1], cta_order=[1, 0])
     smem = ttgl.allocate_shared_memory(ttgl.int8, [2, 256, 128], layout_a)
-    smem.subslice(0).permute((1, 0), layout_T)
+    perm = smem.subslice(0).permute((1, 0))
+    ttgl.static_assert(perm.type.layout == layout_T)
 
     layout_b: ttgl.constexpr = ttgl.NVMMASharedLayout(swizzle_byte_width=64, transposed=False, element_bitwidth=16,
                                                       rank=4, cta_order=[3, 2, 1, 0])
@@ -829,3 +831,49 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 } loc(#loc)
 #loc = loc(unknown)
 """)
+
+
+@filecheck_test
+@gluon.jit
+def test_tensor_permute():
+    # CHECK-DAG: [[BLOCKED:#.*]] = #ttg.blocked<{sizePerThread = [1, 2], threadsPerWarp = [4, 8], warpsPerCTA = [4, 1], order = [1, 0]}>
+    # CHECK-DAG: [[BLOCKED1:#.*]] = #ttg.blocked<{sizePerThread = [2, 1], threadsPerWarp = [8, 4], warpsPerCTA = [1, 4], order = [0, 1]}>
+    layout: ttgl.constexpr = ttgl.BlockedLayout([1, 2], [4, 8], [4, 1], [1, 0])
+    a = ttgl.full([32, 16], 0, ttgl.int32, layout=layout)
+    # CHECK: tt.trans{{.*}} : tensor<32x16xi32, [[BLOCKED]]> -> tensor<16x32xi32, [[BLOCKED1]]>
+    res = ttgl.permute(a, [1, 0])
+    permuted_layout: ttgl.constexpr = ttgl.BlockedLayout([2, 1], [8, 4], [1, 4], [0, 1], [1, 1], [1, 1], [1, 0])
+    ttgl.static_assert(permuted_layout == res.type.layout)
+
+
+@filecheck_test
+@gluon.jit
+def test_split_join():
+    # CHECK: [[BLOCKED:#.*]] = #ttg.blocked<{sizePerThread = [2], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+    # CHECK: [[BLOCKED1:#.*]] = #ttg.blocked<{sizePerThread = [2, 2], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [1, 0]}>
+    layout: ttgl.constexpr = ttgl.BlockedLayout([2], [32], [4], [0])
+    a = ttgl.full([128], 1, ttgl.int32, layout)
+    b = ttgl.full([128], 2, ttgl.int32, layout)
+    # CHECK: tt.join {{.*}} : tensor<128xi32, [[BLOCKED]]> -> tensor<128x2xi32, [[BLOCKED1]]>
+    res = ttgl.join(a, b)
+    expect_layout: ttgl.constexpr = ttgl.BlockedLayout([2, 2], [32, 1], [4, 1], [1, 0], [1, 1], [1, 1], [1, 0])
+    ttgl.static_assert(res.type.layout == expect_layout)
+
+    # CHECK: tt.split {{.*}} : tensor<128x2xi32, [[BLOCKED1]]> -> tensor<128xi32, [[BLOCKED]]>
+    c, d = ttgl.split(res)
+    ttgl.static_assert(c.type.layout == layout)
+    ttgl.static_assert(d.type.layout == layout)
+
+
+@filecheck_test
+@gluon.jit
+def test_tensor_reshape():
+    # CHECK: [[BLOCKED:#.*]] = #ttg.blocked<{sizePerThread = [2], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+    # CHECK: [[BLOCKED1:#.*]] = #ttg.blocked<{sizePerThread = [1, 1, 2], threadsPerWarp = [2, 4, 4], warpsPerCTA = [4, 1, 1], order = [2, 1, 0]}>
+    layout: ttgl.constexpr = ttgl.BlockedLayout([2], [32], [4], [0])
+    a = ttgl.full([256], 1, ttgl.int32, layout)
+    # CHECK: tt.reshape {{.*}} : tensor<256xi32, [[BLOCKED]]> -> tensor<8x4x8xi32, [[BLOCKED1]]>
+    v = a.reshape([8, 4, 8])
+    expect_layout: ttgl.constexpr = ttgl.BlockedLayout([1, 1, 2], [2, 4, 4], [4, 1, 1], [2, 1, 0], [1, 1, 1], [1, 1, 1],
+                                                       [2, 1, 0])
+    ttgl.static_assert(v.type.layout == expect_layout)

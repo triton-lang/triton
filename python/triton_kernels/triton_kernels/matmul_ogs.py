@@ -250,6 +250,8 @@ def mx_can_use_tma(mx_ctx: MicroscalingCtx):
 
 def can_use_persistent_tma(x, w, gather_indx, precision_config):
     mx_ctx = precision_config.mx_ctx
+    is_mxfp4 = mx_ctx.weight_scale is not None and w.dtype == torch.uint8
+    weight_stride_req = 32 if is_mxfp4 else 16
     return (
         # TMA requires CUDA 9.0, last dim contiguous, and multiple of 16-byte strides otherwise.
         target_info.cuda_capability_geq(9, 0) and
@@ -258,14 +260,10 @@ def can_use_persistent_tma(x, w, gather_indx, precision_config):
             x.stride(1) * x.element_size() % 16 == 0 and x.stride(2) == 1
         ) and (
             # Check W is either transposed or non-transposed, and with required stride.
-            (w.stride(1) * w.element_size() % 16 == 0 and w.stride(2) == 1) or
-            (w.stride(2) * w.element_size() % 16 == 0 and w.stride(1) == 1)
+            (w.stride(1) * w.element_size() % weight_stride_req == 0 and w.stride(2) == 1) or
+            (w.stride(2) * w.element_size() % weight_stride_req == 0 and w.stride(1) == 1)
         ) and (
             mx_ctx.weight_scale is None or mx_can_use_tma(mx_ctx)
-        ) and (
-            # MFXP4 tma requires 128 elements on the inner dim.
-            # MFXP4 is represented as packed uint8.
-            w.dtype != torch.uint8 or w.shape[-1] % 128 == 0
         )
         # compiler crash ?
         and (x.dtype.itemsize <= 1 or w.dtype != torch.uint8)
@@ -315,7 +313,7 @@ def apply_preprocessing_features(x, w, gather_indx, scatter_indx, routing_data, 
     has_fused_scatter_scratchpad = opt_flags.fused_scatter and routing_data.n_expts_act > 1
     if has_fused_scatter_scratchpad:
         M = scatter_indx.src_indx.shape[0]
-        writeback_idxs = torch.empty((M,), dtype=torch.int32, device=x.device)
+        writeback_idxs = torch.zeros((M,), dtype=torch.int32, device=x.device)
         writeback_size = writeback_idxs.shape[0]
         finalize_scatter_idxs = torch.zeros((M // routing_data.n_expts_act + M + 1,), dtype=torch.int32, device=x.device)
         BLOCK_M=256
@@ -496,12 +494,12 @@ def init_allocation(x, w, precision_config, fused_activation, routing_data, gath
 def apply_allocation(allocation: MatmulAllocation, output):
     ret = dict()
     if output is None:
-        output = torch.empty(allocation.output[0], device=allocation.device, dtype=allocation.output[1])
+        output = torch.zeros(allocation.output[0], device=allocation.device, dtype=allocation.output[1])
     else:
         assert output.shape == allocation.output[0]
     ret["output"] = output[None, :, :]
     ret["scratchpad"] = {
-        k: torch.empty(v[0], device=allocation.device, dtype=v[1])
+        k: torch.zeros(v[0], device=allocation.device, dtype=v[1])
             for k, v in allocation.scratchpads.items()
     }
     return ret
