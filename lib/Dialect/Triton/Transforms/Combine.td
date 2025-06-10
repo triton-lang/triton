@@ -41,7 +41,8 @@ def CombineDotAddFRevPattern : Pat<
 defvar DefOverflow = ConstantEnumCase<Arith_IntegerOverflowAttr, "none">;
 
 def CopyDiscardableAttrs: NativeCodeCallVoid<
-        "$1.getOwner()->setDiscardableAttrs($0.getOwner()->getDiscardableAttrDictionary())">;
+        "$1.getOwner()->setDiscardableAttrs(getAllowedDiscardableAttrs("
+        "::llvm::cast<::mlir::triton::AddPtrOp>($0.getOwner())))">;
 
 def CombineAddPtrPattern : Pat<
         (TT_AddPtrOp:$src (TT_AddPtrOp $ptr, $idx0), $idx1),

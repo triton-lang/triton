@@ -60,6 +60,19 @@ bool isAddPtrOffsetCombinable(Value first, Value second) {
   return false;
 }
 
+SmallVector<NamedAttribute> getAllowedDiscardableAttrs(triton::AddPtrOp op) {
+  // Query all discardable attributes that we want to preserve
+  std::array<StringRef, 3> allowList{"tt.divisibility", "tt.contiguity",
+                                     "tt.constancy"};
+  SmallVector<NamedAttribute> propagatedAttrs;
+  for (auto attrName : allowList) {
+    Attribute attr = op->getDiscardableAttr(attrName);
+    if (attr)
+      propagatedAttrs.emplace_back(attrName, attr);
+  }
+  return propagatedAttrs;
+}
+
 // TODO(csigg): remove after next LLVM integrate.
 using FastMathFlags = arith::FastMathFlags;
 

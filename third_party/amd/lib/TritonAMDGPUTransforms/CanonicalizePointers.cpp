@@ -561,14 +561,23 @@ public:
     RewriterBase::InsertionGuard guard(rewriter);
     rewriter.setInsertionPoint(addPtrOp);
 
+    // Query all discardable attributes that we want to preserve
+    std::array<StringRef, 3> allowList{"tt.divisibility", "tt.contiguity",
+                                       "tt.constancy"};
+    SmallVector<NamedAttribute> propagatedAttrs;
+    for (auto attrName : allowList) {
+      Attribute attr = addPtrOp->getDiscardableAttr(attrName);
+      if (attr)
+        propagatedAttrs.emplace_back(attrName, attr);
+    }
+
     // If it is a scalar pointer update, simply bump the base pointer
     if (llvm::isa<tt::PointerType>(addPtrOp.getPtr().getType())) {
       assert(llvm::isa<IntegerType>(origOffset.getType()) &&
              "expected offset to be integer type");
       auto newAddPtrOp = rewriter.create<tt::AddPtrOp>(
           curLoc, fatPtrBase.getType(), fatPtrBase, origOffset);
-      newAddPtrOp.getOperation()->setDiscardableAttrs(
-          addPtrOp->getDiscardableAttrDictionary());
+      newAddPtrOp.getOperation()->setDiscardableAttrs(propagatedAttrs);
 
       rewriter.replaceOpWithMultiple(addPtrOp, {{newAddPtrOp, fatPtrOffset}});
       fatPtrs[{newAddPtrOp, fatPtrOffset}] =
@@ -584,8 +593,7 @@ public:
             maybeGetOrCreateScalarConstant(rewriter, curLoc, origOffset)) {
       tt::AddPtrOp newAddPtrOp = rewriter.create<tt::AddPtrOp>(
           curLoc, fatPtrBase.getType(), fatPtrBase, *scalarConst);
-      newAddPtrOp.getOperation()->setDiscardableAttrs(
-          addPtrOp->getDiscardableAttrDictionary());
+      newAddPtrOp.getOperation()->setDiscardableAttrs(propagatedAttrs);
 
       rewriter.replaceOpWithMultiple(addPtrOp, {{newAddPtrOp, fatPtrOffset}});
       // If we are updating the tensor pointer with a constant value, we can
@@ -602,8 +610,7 @@ public:
 
     auto newAddPtrOp = rewriter.create<tt::AddPtrOp>(
         curLoc, fatPtrBase.getType(), fatPtrBase, uniformOffset);
-    newAddPtrOp.getOperation()->setDiscardableAttrs(
-        addPtrOp->getDiscardableAttrDictionary());
+    newAddPtrOp.getOperation()->setDiscardableAttrs(propagatedAttrs);
 
     // Vector offset update (if any): bump the tensor offset
     bool canNarrow = fatPtrs.at({fatPtrBase, fatPtrOffset}).canNarrow;
