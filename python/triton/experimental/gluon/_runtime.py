@@ -1,3 +1,4 @@
+from __future__ import annotations
 import triton
 from triton.compiler.code_generator import ast_to_ttir
 from triton.compiler.compiler import ASTSource
