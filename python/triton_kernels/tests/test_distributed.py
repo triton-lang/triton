@@ -108,7 +108,7 @@ def test_routing_distributed_EP(monkeypatch):
 
 def test_all_to_all(monkeypatch):
 
-    def dummy_all_to_all(out, x, output_split_sizes, input_split_sizes):
+    def dummy_all_to_all_single(out, x, output_split_sizes, input_split_sizes):
         # simulate all_to_all for rank 0
         size0 = input_split_sizes[0]
         size1 = input_split_sizes[1]
@@ -120,12 +120,12 @@ def test_all_to_all(monkeypatch):
     monkeypatch.setattr(dist, "is_initialized", lambda: True)
     monkeypatch.setattr(dist, "get_world_size", lambda: 2)
     monkeypatch.setattr(dist, "get_rank", lambda: 0)
-    monkeypatch.setattr(dist, "all_to_all", dummy_all_to_all)
+    monkeypatch.setattr(dist, "all_to_all_single", dummy_all_to_all_single)
 
     input = torch.tensor([[1, 2], [3, 4], [5, 6], [7, 8]], dtype=torch.float32)
     input_split_sizes = [1, 3]
     output_split_sizes = [1, 3]
-    output = triton_dist.all_to_all(input, output_split_sizes, input_split_sizes)
+    output = triton_dist.all_to_all_single(input, output_split_sizes, input_split_sizes)
     assert torch.equal(output, input)
 
 

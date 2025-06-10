@@ -89,7 +89,7 @@ def reduce_scatter(x: torch.Tensor, token_mask: torch.Tensor = None, dim=0) -> t
         return x
 
 
-def all_to_all(x: torch.Tensor, output_split_sizes: list[int], input_split_sizes: list[int]) -> torch.Tensor:
+def all_to_all_single(x: torch.Tensor, output_split_sizes: list[int], input_split_sizes: list[int]) -> torch.Tensor:
     if _is_distributed_launch():
         output_dim0 = sum(output_split_sizes)
         output = torch.empty((output_dim0, *x.shape[1:]), dtype=x.dtype, device=x.device)
