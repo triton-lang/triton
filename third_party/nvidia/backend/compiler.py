@@ -307,8 +307,6 @@ class CUDABackend(BaseBackend):
         nvidia.passes.ttnvgpuir.add_lower_mma(pm)
         passes.common.add_sccp(pm)
         passes.common.add_canonicalizer(pm)
-        if CUDABackend.instrumentation:
-            CUDABackend.instrumentation.patch("ttir_to_ttgpuir", pm, mod.context)
 
         pm.run(mod)
         metadata["cluster_dims"] = (cluster_info.clusterDimX, cluster_info.clusterDimY, cluster_info.clusterDimZ)
