@@ -1,3 +1,4 @@
+#include "mlir/IR/ImplicitLocOpBuilder.h"
 #include "mlir/Transforms/Passes.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
@@ -17,18 +18,18 @@ namespace ttng = mlir::triton::nvidia_gpu;
 namespace {
 
 // TODO: remove
-Operation *createDebugPrintOp(OpBuilder &builder, StringRef str, Location loc,
+Operation *createDebugPrintOp(ImplicitLocOpBuilder &builder, StringRef str,
                               Value value) {
-  auto strAttr = StringAttr::get(loc.getContext(), str);
-  return builder.create<tt::PrintOp>(
-      loc, strAttr, false, std::vector<Value>{value}, std::vector<int32_t>{0});
+  auto strAttr = StringAttr::get(builder.getLoc().getContext(), str);
+  return builder.create<tt::PrintOp>(strAttr, false, std::vector<Value>{value},
+                                     std::vector<int32_t>{0});
 }
 
-void createAssertExpected(OpBuilder &builder, Location loc, Value value,
-                          Value expected) {
-  auto cmp = builder.create<arith::CmpIOp>(loc, arith::CmpIPredicate::eq, value,
-                                           expected);
-  builder.create<tt::AssertOp>(loc, cmp, "Expected different value");
+void createAssertExpected(ImplicitLocOpBuilder &builder, Value value,
+                          Value expected, StringRef msg) {
+  auto cmp =
+      builder.create<arith::CmpIOp>(arith::CmpIPredicate::eq, value, expected);
+  builder.create<tt::AssertOp>(cmp, msg);
 }
 
 BlockedEncodingAttr getBlockedEncoding(ModuleOp module, unsigned int size) {
@@ -77,32 +78,31 @@ tt::FuncOp getEntryPoint(ModuleOp module) {
   return publicFuncs.front();
 }
 
-Value createCmpIntTensorScalar(OpBuilder &builder, Location loc, Value tensor,
+Value createCmpIntTensorScalar(ImplicitLocOpBuilder &builder, Value tensor,
                                Value scalar) {
   auto tensorTy = cast<RankedTensorType>(tensor.getType());
   auto scalarTy = scalar.getType();
   auto elemTy = tensorTy.getElementType();
   assert(scalarTy == elemTy &&
          "Expected scalar to be of the same type as the tensor elements");
-  auto splat = builder.create<triton::SplatOp>(loc, tensorTy, scalar);
-  auto cmp = builder.create<arith::CmpIOp>(loc, arith::CmpIPredicate::eq,
-                                           tensor, splat);
+  auto splat = builder.create<triton::SplatOp>(tensorTy, scalar);
+  auto cmp =
+      builder.create<arith::CmpIOp>(arith::CmpIPredicate::eq, tensor, splat);
   return cmp;
 }
 
-Operation *createSumReduction(OpBuilder &builder, Location loc, Value tensor) {
+Operation *createSumReduction(ImplicitLocOpBuilder &builder, Value tensor) {
   OpBuilder::InsertionGuard guard(builder);
 
   auto tensorTy = cast<RankedTensorType>(tensor.getType());
   auto elemTy = tensorTy.getElementType();
-  auto reduce =
-      builder.create<tt::ReduceOp>(loc, std::vector<Value>{tensor}, 0);
+  auto reduce = builder.create<tt::ReduceOp>(std::vector<Value>{tensor}, 0);
   auto block = builder.createBlock(&reduce->getRegion(0));
   builder.setInsertionPointToStart(block);
-  block->addArguments({elemTy, elemTy}, {loc, loc});
-  Value sum = builder.create<arith::AddIOp>(loc, block->getArgument(0),
+  block->addArguments({elemTy, elemTy}, {builder.getLoc(), builder.getLoc()});
+  Value sum = builder.create<arith::AddIOp>(block->getArgument(0),
                                             block->getArgument(1));
-  builder.create<tt::ReduceReturnOp>(loc, std::vector<Value>{sum});
+  builder.create<tt::ReduceReturnOp>(std::vector<Value>{sum});
   return reduce;
 }
 
@@ -115,6 +115,7 @@ public:
   constexpr static int8_t READ_BIT = 1 << 1;
 
   void runOnOperation() override {
+    return;
     module = getOperation();
     // Collect shared memory buffers allocated in the module
     // TODO: We should actually map the region in IR + the offset in the buffer
@@ -141,23 +142,21 @@ public:
     uint64_t nextPowerOf2 = llvm::NextPowerOf2(shMemBufsValues.size());
     shMemBufsValues.resize(nextPowerOf2, 0);
 
-    OpBuilder b(entryPoint);
+    ImplicitLocOpBuilder b(entryPoint.getLoc(), entryPoint);
     b.setInsertionPointToStart(&entryPoint.getBody().front());
-    Location loc = entryPoint.getLoc();
-    Value shMemBufs = createInitializedIntTensor(b, loc, shMemBufsValues);
-    Value shMemBase = b.create<ttg::SharedMemoryBaseOp>(loc);
+    Value shMemBufs = createInitializedIntTensor(b, shMemBufsValues);
+    Value shMemBase = b.create<ttg::SharedMemoryBaseOp>();
     shMemBufs = b.create<arith::AddIOp>(
-        loc, shMemBufs,
-        b.create<triton::SplatOp>(loc, shMemBufs.getType(), shMemBase));
+        shMemBufs, b.create<triton::SplatOp>(shMemBufs.getType(), shMemBase));
 
     // Create state tensors:
     // 1. Barrier, tracking which barriers are tracking the buffer
     // 2. State, a bitfield tracking if the buffer is written (0x1) or read
     // (0x2)
-    Value barriers = createConstIntTensor(b, loc, 0, b.getIntegerType(64),
+    Value barriers = createConstIntTensor(b, 0, b.getIntegerType(64),
                                           shMemBufsValues.size());
-    Value state = createConstIntTensor(b, loc, 0, b.getIntegerType(8),
-                                       shMemBufsValues.size());
+    Value state =
+        createConstIntTensor(b, 0, b.getIntegerType(8), shMemBufsValues.size());
 
     // debug
     // auto strAttr = StringAttr::get(loc.getContext(), "shMemBufs: ");
@@ -167,7 +166,7 @@ public:
   }
 
 private:
-  Value createInitializedIntTensor(OpBuilder &builder, Location loc,
+  Value createInitializedIntTensor(ImplicitLocOpBuilder &builder,
                                    SmallVector<int64_t> values) {
     int64_t size = values.size();
     assert(llvm::isPowerOf2_64(size) && "Expected power of 2");
@@ -176,58 +175,77 @@ private:
     SmallVector<APInt> apInts = llvm::to_vector(
         llvm::map_range(values, [](int64_t v) { return APInt(64, v); }));
     auto denseAttr = DenseElementsAttr::get(tensorType, apInts);
-    return builder.create<arith::ConstantOp>(loc, tensorType, denseAttr);
+    return builder.create<arith::ConstantOp>(tensorType, denseAttr);
   }
 
-  Value createConstIntTensor(OpBuilder &builder, Location loc, int val,
+  Value createConstIntTensor(ImplicitLocOpBuilder &builder, int val,
                              Type elType, int64_t size) {
     assert(llvm::isPowerOf2_64(size) && "Expected power of 2");
     auto tensorType =
         RankedTensorType::get({size}, elType, getBlockedEncoding(module, size));
     auto denseAttr = DenseElementsAttr::get(
         tensorType, APInt(elType.getIntOrFloatBitWidth(), val));
-    return builder.create<arith::ConstantOp>(loc, tensorType, denseAttr);
+    return builder.create<arith::ConstantOp>(tensorType, denseAttr);
   }
 
-  Value createConstIntTensor(OpBuilder &builder, Location loc, int val,
+  Value createConstIntTensor(ImplicitLocOpBuilder &builder, int val,
                              RankedTensorType tensorType) {
     auto denseAttr = DenseElementsAttr::get(
         tensorType,
         APInt(tensorType.getElementType().getIntOrFloatBitWidth(), val));
-    return builder.create<arith::ConstantOp>(loc, tensorType, denseAttr);
+    return builder.create<arith::ConstantOp>(tensorType, denseAttr);
   }
 
-  void instrumentMemoryOperations(OpBuilder &b, Value buffers, Value barriers,
-                                  Value state) {
+  void instrumentMemoryOperations(ImplicitLocOpBuilder &b, Value buffers,
+                                  Value barriers, Value state) {
     SmallVector<ttng::AsyncTMACopyGlobalToLocalOp> copyOps;
     module.walk(
         [&](ttng::AsyncTMACopyGlobalToLocalOp op) { copyOps.push_back(op); });
+    int i = 0;
     for (auto op : copyOps) {
-      Location loc = op.getLoc();
+      b.setLoc(op.getLoc());
       b.setInsertionPoint(op);
       RankedTensorType barriersTy = cast<RankedTensorType>(barriers.getType());
       RankedTensorType stateTy = cast<RankedTensorType>(state.getType());
-      Value zero_64b = createConstIntTensor(b, loc, 0, barriersTy);
-      Value zero_8b = createConstIntTensor(b, loc, 0, stateTy);
-      Value buffer = b.create<ttg::MemDescToI64Op>(loc, op.getResult());
-      Value bar = b.create<ttg::MemDescToI64Op>(loc, op.getBarrier());
-      Value barSplat = b.create<triton::SplatOp>(loc, barriersTy, bar);
-      Value mask = createCmpIntTensorScalar(b, loc, buffers, buffer);
+      Value zero_64b = createConstIntTensor(b, 0, barriersTy);
+      Value zero_8b = createConstIntTensor(b, 0, stateTy);
+      Value buffer = b.create<ttg::MemDescToI64Op>(op.getResult());
+      Value bar = b.create<ttg::MemDescToI64Op>(op.getBarrier());
+      Value barSplat = b.create<triton::SplatOp>(barriersTy, bar);
+      Value mask = createCmpIntTensorScalar(b, buffers, buffer);
 
       // 1. Check if the buffer has outstanding accesses
-      Value rwSplat =
-          createConstIntTensor(b, loc, WRITE_BIT | READ_BIT, stateTy);
-      Value isRW = b.create<arith::AndIOp>(loc, state, rwSplat);
-      Value isRWMask = b.create<arith::SelectOp>(loc, mask, isRW, zero_8b);
-      Value isCurrentRW = createSumReduction(b, loc, isRWMask)->getResult(0);
+      Value rwSplat = createConstIntTensor(b, WRITE_BIT | READ_BIT, stateTy);
+      Value writeSplat = createConstIntTensor(b, WRITE_BIT, stateTy);
+      Value isRW = b.create<arith::AndIOp>(state, rwSplat);
+      Value isRWMask = b.create<arith::SelectOp>(mask, isRW, zero_8b);
+      // Value isCurrentRW = createSumReduction(b, isRWMask)->getResult(0);
 
-      createDebugPrintOp(b, "isRWMask: ", loc, isCurrentRW);
+      std::stringstream ss;
+      ss << "isRWMask: " << i;
+      createDebugPrintOp(b, ss.str(), isRWMask);
 
-      Value newBarriers =
-          b.create<arith::SelectOp>(loc, mask, barSplat, barriers);
+      // Assert that the buffer is not being read or written
+      createAssertExpected(b, isRWMask, zero_8b,
+                           "TMA copy to buffer being read or written");
+
+      // 2. Update the access state
+      // TODO: Implicit assumption we are instrumenting buffers in the program
+      // order, so the next instruction uses the updated state
+      state = b.create<arith::SelectOp>(
+          mask, b.create<arith::OrIOp>(state, writeSplat), state);
+
+      ss.str("");
+      ss << "updated state: " << i;
+      createDebugPrintOp(b, ss.str(), state);
+
+      barriers = b.create<arith::SelectOp>(mask, barSplat, barriers);
+
+      createDebugPrintOp(b, "updated barriers: ", barriers);
       // createDebugPrintOp(b, "buffer: ", loc, buffer);
       // createDebugPrintOp(b, "all buffers: ", loc, buffers);
       // createDebugPrintOp(b, "mask: ", loc, mask);
+      i++;
     }
   }
 
