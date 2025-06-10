@@ -111,6 +111,8 @@ struct ArithConstantArrayOpConversion
     auto value = op.getValue();
     if (!mlir::dyn_cast<DenseElementsAttr>(value))
       return failure();
+    if (mlir::isa<SplatElementsAttr>(value))
+      return failure();
     auto tensorTy = cast<RankedTensorType>(op.getType());
     auto loc = op->getLoc();
     auto values = mlir::dyn_cast<DenseElementsAttr>(op.getValue());
