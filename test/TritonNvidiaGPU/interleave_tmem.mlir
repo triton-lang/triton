@@ -17,7 +17,6 @@ tt.func public @sink_load(%arg0: !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_m
                           -> (tensor<128x64xf16, #blocked>, tensor<128x64xf16, #blocked>, tensor<128x128xf16, #blocked>) {
 
   // CHECK: ttg.local_alloc
-  // CHECK: ttng.tmem_store
   // CHECK: ttng.tmem_load
   // CHECK: ttg.convert_layout
   // CHECK: arith.truncf
@@ -29,6 +28,7 @@ tt.func public @sink_load(%arg0: !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_m
   %outRHS = ttg.convert_layout %subtile1 : tensor<128x64xf32, #subtile_layout> -> tensor<128x64xf32, #blocked>
 
   // CHECK: ttng.tmem_load
+  // CHECK: ttng.tmem_store
   // CHECK: ttg.convert_layout
   // CHECK: arith.truncf
   %4 = ttg.local_alloc %arg1 : (tensor<128x128xf16, #blocked>) -> !ttg.memdesc<128x128xf16, #shared, #smem>

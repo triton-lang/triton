@@ -168,7 +168,7 @@ bool tmemMayAlias(Value a, Value b) {
   return true;
 }
 
-bool opAlias(Operation *op, Value buffer) {
+bool opAliasRead(Operation *op, Value buffer) {
   if (isa<ArriveBarrierOp>(op))
     return true;
   if (!isMemoryEffectFree(op)) {
@@ -177,6 +177,29 @@ bool opAlias(Operation *op, Value buffer) {
     for (auto effect : effects) {
       // Look for potentially aliasing write or free effects.
       if (!isa<MemoryEffects::Write, MemoryEffects::Free>(effect.getEffect()))
+        continue;
+      if (isa<SideEffects::DefaultResource>(effect.getResource())) {
+        return true;
+      }
+      if (isa<TensorMemory>(effect.getResource()) &&
+          (!effect.getValue() || tmemMayAlias(effect.getValue(), buffer))) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+bool opAliasWrite(Operation *op, Value buffer) {
+  if (isa<WaitBarrierOp>(op))
+    return true;
+  if (!isMemoryEffectFree(op)) {
+    SmallVector<MemoryEffects::EffectInstance> effects;
+    collectEffects(op, effects);
+    for (auto effect : effects) {
+      // Look for potentially aliasing read or write or allocate effects.
+      if (!isa<MemoryEffects::Write, MemoryEffects::Read,
+               MemoryEffects::Allocate>(effect.getEffect()))
         continue;
       if (isa<SideEffects::DefaultResource>(effect.getResource())) {
         return true;
@@ -208,7 +231,7 @@ bool sinkOps(Value buffer, ArrayRef<Operation *> useChain) {
     }
     // Don't sink past barrier signals, since they may guard the liverange
     // of the buffer.
-    if (opAlias(next, buffer))
+    if (opAliasRead(next, buffer))
       dep = true;
     if (dep)
       break;
@@ -254,9 +277,9 @@ bool hoistOps(Value buffer, ArrayRef<Operation *> defChain,
         break;
       }
     }
-    // Don't hoist past barrier signals, since they may guard the liverange
+    // Don't hoist past barrier wait, since they may guard the liverange
     // of the buffer.
-    if (opAlias(prev, buffer))
+    if (opAliasWrite(prev, buffer))
       dep = true;
     if (dep)
       break;
