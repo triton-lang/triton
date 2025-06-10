@@ -1,5 +1,6 @@
 from dataclasses import dataclass
 import itertools
+import math
 import sys
 import torch
 import triton
@@ -612,6 +613,7 @@ def _create_tma_descriptors(
 
     x_desc, w_desc = [None] * 2
     mx_desc = mx_tensor
+    descriptors = []
     # The dense case currently uses on device descriptor updates
     # so we bail out on using host descriptors in that case
     if (use_host_tma_descriptors):
@@ -621,12 +623,23 @@ def _create_tma_descriptors(
                     opt_flags.block_k, opt_flags.block_m,
                     USE_GATHER_TMA, X_USE_LOAD_TMA
                 )
-
+            descriptors.append(x_desc)
         if (expt_data is not None and len(expt_data.block_pid_map) > 0):
             w_desc = TensorDescriptorBuilder.create_weight_descriptor(
                     w_tensor, opt_flags.block_k, opt_flags.block_n, w_transpose
                 )
-
+            is_microscaled_format = (mx_ctx.weight_scale is not None) and (w_tensor.dtype == torch.uint8)
+            if is_microscaled_format:
+                # Pad the inner shape to 128 for mxfp4 weights
+                # for mixed precision fp8 x mxfp4 compute
+                pad = 128
+                dim_to_pad = -1 if w_transpose else -2
+                old_size = w_desc.shape[dim_to_pad]
+                padded_size = math.ceil(old_size / pad) * pad
+                if padded_size != old_size:
+                    w_desc.shape = list(w_desc.shape)
+                    w_desc.shape[dim_to_pad] = padded_size
+            descriptors.append(w_desc)
         # Optional MX scale descriptor
         if mx_tensor is not None:
             mx_desc = TensorDescriptorBuilder.create_block_scale_descriptor(
@@ -635,17 +648,17 @@ def _create_tma_descriptors(
                     batch_size,
                     expt_data.block_pid_map, mx_ctx.swizzle_scale, mx_transpose
                 )
-
+            descriptors.append(mx_desc)
     # TODO: Currently all or none, instead should support a mixture
     # of host and device descriptors
-    if None in [x_desc, w_desc, mx_desc]:
+    if None in descriptors:
         x_desc, w_desc, mx_desc = [x_tensor, w_tensor, mx_tensor]
         use_host_tma_descriptors = False
 
     if opt_flags.is_persistent:
         opt_flags.target_kernel_kwargs["USE_HOST_TMA_DESCRIPTORS"] = use_host_tma_descriptors
 
-    return use_host_tma_descriptors, x_desc, w_desc, mx_desc
+    return use_host_tma_descriptors, *descriptors
 
 
 def matmul_ogs(x, w, bias,
