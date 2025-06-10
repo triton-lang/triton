@@ -223,6 +223,14 @@ struct PipelinePass : public impl::TritonGPUPipelineBase<PipelinePass> {
 
   void runOnOperation() override {
     ModuleOp moduleOp = getOperation();
+    SmallVector<scf::ForOp> loops;
+    getOperation()->walk([&](scf::ForOp forOp) {
+      // Bail out for loops with num_stage < 1.
+      if (getNumStagesOrDefault(forOp, numStages) >= 1)
+        loops.push_back(forOp);
+    });
+    if (loops.empty())
+      return;
 
     // Transform the loop by introducing async operations to prepare it for
     // pipeline expansion.
