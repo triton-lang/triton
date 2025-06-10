@@ -829,7 +829,7 @@ Operation *hoistBufferOutOfLoop(scf::ForOp forOp, Operation *op,
     newStore = builder.create<ttg::LocalStoreOp>(op->getOperand(0),
                                                  localAlloc.getResult());
   }
-  op->replaceAllUsesWith(newAlloc);
+  replaceUsesAndPropagateType(builder, op, newAlloc->getResult(0));
   op->erase();
   return newStore;
 }
