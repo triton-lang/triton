@@ -156,6 +156,7 @@ def distributed_run(rank, world_size, batch, dim1, dim2, n_expts_tot, n_expts_ac
     # init
     dev = f"cuda:{rank}"
     dist.init_process_group(backend="nccl", rank=rank, world_size=world_size, device_id=torch.device(dev))
+    torch.cuda.set_device(rank)
 
     # weights & biases
     wg = torch.randn((dim1, n_expts_tot), device=dev)
