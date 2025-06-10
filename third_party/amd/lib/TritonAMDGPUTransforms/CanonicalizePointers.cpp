@@ -635,6 +635,50 @@ public:
   }
 };
 
+/// Slice only offset and keep base - i.e.,
+/// slice(fatPtrBase, fatPtrOffset) -> (fatPtrBase, slice(fatPtrOffset))
+class ConvertExtractSliceOp
+    : public PointerCanonicalizationPattern<tt::amdgpu::ExtractSliceOp> {
+public:
+  using PointerCanonicalizationPattern::PointerCanonicalizationPattern;
+
+  LogicalResult
+  matchAndRewrite_(tt::amdgpu::ExtractSliceOp extractSliceOp,
+                   OneToNOpAdaptor adaptor,
+                   ConversionPatternRewriter &rewriter) const override {
+    ValueRange remappedOperands = adaptor.getSource();
+    if (remappedOperands.size() != 2)
+      return success();
+
+    Value fatPtrBase = remappedOperands[0];
+    Value fatPtrOffset = remappedOperands[1];
+    if (!llvm::isa<tt::PointerType>(fatPtrBase.getType()))
+      return rewriter.notifyMatchFailure(extractSliceOp,
+                                         "non tt.ptr base unimplemented");
+
+    auto fatPtrOffsetTy = dyn_cast<RankedTensorType>(fatPtrOffset.getType());
+    if (!fatPtrOffsetTy)
+      return rewriter.notifyMatchFailure(
+          extractSliceOp, "non RankedTensorType offset unimplemented");
+
+    Location loc = extractSliceOp->getLoc();
+    RankedTensorType resultType = extractSliceOp.getResult().getType();
+    auto slicedOffsetsTy = RankedTensorType::get(
+        resultType.getShape(), fatPtrOffsetTy.getElementType(),
+        resultType.getEncoding());
+    Value slicedOffsets = rewriter.create<tt::amdgpu::ExtractSliceOp>(
+        loc, Type{slicedOffsetsTy}, Value{fatPtrOffset},
+        extractSliceOp.getStaticOffsetsAttr());
+
+    rewriter.replaceOpWithMultiple(extractSliceOp,
+                                   {{fatPtrBase, slicedOffsets}});
+    fatPtrs[{fatPtrBase, slicedOffsets}] =
+        fatPtrs.at({fatPtrBase, fatPtrOffset});
+
+    return success();
+  }
+};
+
 /// Rewrite init args and result type and bb args.
 class ConvertSCFForOp : public PointerCanonicalizationPattern<scf::ForOp> {
   using PointerCanonicalizationPattern::PointerCanonicalizationPattern;
@@ -1510,6 +1554,8 @@ void TritonAMDGPUCanonicalizePointersPass::runOnOperation() {
   target.addDynamicallyLegalDialect<scf::SCFDialect>(isLegal);
   target.addDynamicallyLegalDialect<cf::ControlFlowDialect>(isLegal);
   target.addDynamicallyLegalDialect<arith::ArithDialect>(isLegal);
+  target.addDynamicallyLegalDialect<triton::amdgpu::TritonAMDGPUDialect>(
+      isLegal);
 
   // Rewrite the rest of the ops.
   // Note we *do not* declare unrealized_cast an illegal op here in order that
@@ -1521,7 +1567,7 @@ void TritonAMDGPUCanonicalizePointersPass::runOnOperation() {
   RewritePatternSet patterns(&getContext());
   patterns.add<
       ConvertFuncOpArgsUnrealizedCasts, ConvertBroadcastOp, ConvertSplatOp,
-      ConvertConvertLayoutOp, ConvertAddPtrOp,
+      ConvertConvertLayoutOp, ConvertAddPtrOp, ConvertExtractSliceOp,
       MaterializeFatPointer<tt::AtomicCASOp>,
       MaterializeFatPointer<tt::AtomicRMWOp>,
       MaterializeFatPointer<tt::BitcastOp>, MaterializeFatPointer<tt::LoadOp>,
