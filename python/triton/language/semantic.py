@@ -1523,7 +1523,7 @@ class TritonSemantic(Generic[TensorTy]):
         K = lhs.type.shape[-1]
         B = lhs.type.shape[0] if lhs_rank == 3 else None
         ret_ty = tl.block_type(ret_scalar_ty, [B, M, N] if B else [M, N])
-        if acc is None:
+        if tl._unwrap_if_constexpr(acc) is None:
             acc_handle = self.builder.create_splat(ret_ty.to_ir(self.builder), _0)
         else:
             acc_handle = acc.handle
