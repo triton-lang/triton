@@ -101,7 +101,6 @@ class InstrumentationMode(BaseMode):
                     raise ValueError(f"Unknown optimization: {value}")
             object.__setattr__(self, "optimizations", [optimizations[value] for value in values])
 
-
     def __str__(self):
         optimizations_str = ",".join([str(opt) for opt in self.optimizations or []])
         return (f"{self.name}:metric_type={self.metric_type}:sampling_strategy={self.sampling_strategy}"
