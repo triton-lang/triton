@@ -93,6 +93,12 @@ def ExtractSliceOp : TT_AMDGPU_Op<"extract_slice", [Pure]> {
       |                                         |             .|
       |                                         +--------------+
 
+
+    This op is designed to work on logical tensors directly, avoiding the need for complex layout reinterpretation or reshaping.
+    For example, the tt.join operation only supports concatenation along the innermost dimension,
+    and requires that the resulting innermost dimension provide 2 elements per thread, distributed across registers.
+    In contrast, this concat op imposes no constraints on the concatenation dimension or the size of dimensions.
+
     Example 1:
 
     ```mlir
