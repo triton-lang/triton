@@ -313,7 +313,7 @@ def apply_preprocessing_features(x, w, gather_indx, scatter_indx, routing_data, 
     has_fused_scatter_scratchpad = opt_flags.fused_scatter and routing_data.n_expts_act > 1
     if has_fused_scatter_scratchpad:
         M = scatter_indx.src_indx.shape[0]
-        writeback_idxs = torch.empty((M,), dtype=torch.int32, device=x.device)
+        writeback_idxs = torch.zeros((M,), dtype=torch.int32, device=x.device)
         writeback_size = writeback_idxs.shape[0]
         finalize_scatter_idxs = torch.zeros((M // routing_data.n_expts_act + M + 1,), dtype=torch.int32, device=x.device)
         BLOCK_M=256
@@ -494,12 +494,12 @@ def init_allocation(x, w, precision_config, fused_activation, routing_data, gath
 def apply_allocation(allocation: MatmulAllocation, output):
     ret = dict()
     if output is None:
-        output = torch.empty(allocation.output[0], device=allocation.device, dtype=allocation.output[1])
+        output = torch.zeros(allocation.output[0], device=allocation.device, dtype=allocation.output[1])
     else:
         assert output.shape == allocation.output[0]
     ret["output"] = output[None, :, :]
     ret["scratchpad"] = {
-        k: torch.empty(v[0], device=allocation.device, dtype=v[1])
+        k: torch.zeros(v[0], device=allocation.device, dtype=v[1])
             for k, v in allocation.scratchpads.items()
     }
     return ret

@@ -81,10 +81,7 @@ def make_default_opt_flags_amd(
     # TODO: Does opt_flags_amd.compute_block_nk need to be refactored?
     if constraints.get("block_k", None) is not None:
         block_k = constraints["block_k"]
-    if constraints.get("is_persistent", None) is not None:
-        is_persistent = constraints["is_persistent"]
-    else:
-        is_persistent = False
+    is_persistent = constraints.get("is_persistent", False)
     # split_k:
     if constraints.get("split_k", None) is not None:
         split_k = constraints["split_k"]
@@ -99,14 +96,6 @@ def make_default_opt_flags_amd(
     # num_warps, num_stages
     num_warps = 2 if (m is not None and m <= 16) else 8
     num_stages = 2
-    if constraints.get("fused_scatter", None) is not None:
-        fused_scatter = constraints["fused_scatter"]
-    else:
-        fused_scatter = False
-    if constraints.get("epilogue_subtile", None) is not None:
-        epilogue_subtile = constraints["epilogue_subtile"]
-    else:
-        epilogue_subtile = None
     # AMD-specific
     target_kernel_kwargs = {"waves_per_eu": 0, "matrix_instr_nonkdim": 16, "kpack": 1}
     ret = OptFlags(
@@ -119,9 +108,9 @@ def make_default_opt_flags_amd(
         xcd_swizzle=xcd_swizzle,
         w_cache_modifier=w_cache_modifier,
         split_k=split_k,
-        fused_scatter=fused_scatter,
+        fused_scatter=constraints.get('fused_scatter', False),
         is_persistent=is_persistent,
-        epilogue_subtile=epilogue_subtile,
+        epilogue_subtile=constraints.get('epilogue_subtile', None),
         arch=None,
         target_kernel_kwargs=target_kernel_kwargs,
     )
