@@ -52,6 +52,7 @@ _IMPORT_FROM_TRITON: List[str] = [
     "where",  # NOQA: F822
     "maximum",  # NOQA: F822
     "minimum",  # NOQA: F822
+    "permute",
 ]
 
 __all__ = [
