@@ -417,6 +417,18 @@ bool emitTransferBetweenRegistersAndShared(
     std::optional<int32_t> maxVecElems, const SharedMemoryObject &smemObj,
     Location loc, RewriterBase &rewriter, const TargetInfoBase &target,
     std::function<void(VectorType, Value /*shmemAddr*/)> perVectorCallback) {
+  auto [laneId, warpId] = getLaneAndWarpId(rewriter, loc);
+  return emitTransferBetweenRegistersAndShared(
+      regLayout, sharedTy, elemLlvmTy, maxVecElems, smemObj, loc, rewriter,
+      target, laneId, warpId, perVectorCallback);
+}
+
+bool emitTransferBetweenRegistersAndShared(
+    LinearLayout &regLayout, triton::gpu::MemDescType sharedTy, Type elemLlvmTy,
+    std::optional<int32_t> maxVecElems, const SharedMemoryObject &smemObj,
+    Location loc, RewriterBase &rewriter, const TargetInfoBase &target,
+    Value laneId, Value warpId,
+    std::function<void(VectorType, Value /*shmemAddr*/)> perVectorCallback) {
   MLIRContext *ctx = rewriter.getContext();
   auto b = TritonLLVMOpBuilder(loc, rewriter);
 
@@ -458,7 +470,6 @@ bool emitTransferBetweenRegistersAndShared(
                maxVecElems.value_or(std::numeric_limits<int>::max()));
 
   auto withCTAOffset = triton::gpu::getNumCTAs(sharedTy.getEncoding()) > 1;
-  auto [laneId, warpId] = getLaneAndWarpId(rewriter, loc);
   Value blockId =
       withCTAOffset ? target.getClusterCTAId(rewriter, loc) : b.i32_val(0);
 
