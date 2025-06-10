@@ -2034,6 +2034,7 @@ def dot(input, other, acc=None, input_precision=None, allow_tf32=None, max_num_i
     input_precision = _unwrap_if_constexpr(input_precision)
     out_dtype = _unwrap_if_constexpr(out_dtype)
     max_num_imprecise_acc = _unwrap_if_constexpr(max_num_imprecise_acc)
+    acc = _unwrap_if_constexpr(acc)
     return _semantic.dot(input, other, acc, input_precision, max_num_imprecise_acc, out_dtype)
 
 
