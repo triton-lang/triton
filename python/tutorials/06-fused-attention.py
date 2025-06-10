@@ -496,16 +496,16 @@ class _attention(torch.autograd.Function):
         if config.use_gluon:
             assert is_blackwell(), "Gluon attention only works on Blackwell"
             y_dim = q.shape[0] * q.shape[1] * q.shape[2]
-            BLOCK_M = 128
-            BLOCK_N = min(128, HEAD_DIM_K)
+            BLOCK_M = 256
+            BLOCK_N = min(64, HEAD_DIM_K)
             desc_q = make_gluon_tensor_desc(q, shape=[y_dim, HEAD_DIM_K], strides=[HEAD_DIM_K, 1],
-                                            block_shape=[BLOCK_M, HEAD_DIM_K])
+                                            block_shape=[BLOCK_M // 2, HEAD_DIM_K])
             desc_v = make_gluon_tensor_desc(v, shape=[y_dim, HEAD_DIM_K], strides=[HEAD_DIM_K, 1],
                                             block_shape=[BLOCK_N, HEAD_DIM_K])
             desc_k = make_gluon_tensor_desc(k, shape=[y_dim, HEAD_DIM_K], strides=[HEAD_DIM_K, 1],
                                             block_shape=[BLOCK_N, HEAD_DIM_K])
             desc_o = make_gluon_tensor_desc(o, shape=[y_dim, HEAD_DIM_K], strides=[HEAD_DIM_K, 1],
-                                            block_shape=[BLOCK_M, HEAD_DIM_K])
+                                            block_shape=[BLOCK_M // 2, HEAD_DIM_K])
 
         elif supports_host_descriptor():
             # Note that on Hopper we cannot perform a FP8 dot with a non-transposed second tensor
@@ -540,7 +540,7 @@ class _attention(torch.autograd.Function):
                 HEAD_DIM_K, BLOCK_M, BLOCK_N,  #
                 stage, torch_dtype_to_triton(q.dtype),  #
                 num_warps=4, threads_per_warp=32,  #
-                maxnreg=128)
+                maxnreg=None)
         else:
             _attn_fwd[grid](
                 sm_scale, M,  #
@@ -614,7 +614,7 @@ if is_blackwell():
 
 @pytest.mark.parametrize("Z", [1, 4])
 @pytest.mark.parametrize("H", [2, 48])
-@pytest.mark.parametrize("N_CTX", [128, 1024, (2 if is_hip() else 4) * 1024])
+@pytest.mark.parametrize("N_CTX", [256, 1024, (2 if is_hip() else 4) * 1024])
 @pytest.mark.parametrize("HEAD_DIM", [64, 128])
 @pytest.mark.parametrize("causal", [True])  # FIXME: Non-causal tests do not pass at the moment.
 @pytest.mark.parametrize("config", attn_configs, ids=repr)
