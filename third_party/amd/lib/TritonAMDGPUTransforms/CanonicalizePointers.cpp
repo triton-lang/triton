@@ -17,6 +17,7 @@
 #include "mlir/Transforms/DialectConversion.h"
 #include "triton/Analysis/Utility.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
+#include "triton/Dialect/Triton/IR/DiscardableAttributes.h"
 #include "triton/Dialect/Triton/IR/Types.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "llvm/ADT/STLExtras.h"
@@ -562,14 +563,8 @@ public:
     rewriter.setInsertionPoint(addPtrOp);
 
     // Query all discardable attributes that we want to preserve
-    std::array<StringRef, 3> allowList{"tt.divisibility", "tt.contiguity",
-                                       "tt.constancy"};
-    SmallVector<NamedAttribute> propagatedAttrs;
-    for (auto attrName : allowList) {
-      Attribute attr = addPtrOp->getDiscardableAttr(attrName);
-      if (attr)
-        propagatedAttrs.emplace_back(attrName, attr);
-    }
+    SmallVector<NamedAttribute> propagatedAttrs =
+        getAllowedDiscardableAttrs(addPtrOp);
 
     // If it is a scalar pointer update, simply bump the base pointer
     if (llvm::isa<tt::PointerType>(addPtrOp.getPtr().getType())) {
