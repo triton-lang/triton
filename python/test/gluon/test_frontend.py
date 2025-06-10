@@ -844,3 +844,36 @@ def test_tensor_permute():
     res = ttgl.permute(a, [1, 0])
     permuted_layout: ttgl.constexpr = ttgl.BlockedLayout([2, 1], [8, 4], [1, 4], [0, 1], [1, 1], [1, 1], [1, 0])
     ttgl.static_assert(permuted_layout == res.type.layout)
+
+
+@filecheck_test
+@gluon.jit
+def test_split_join():
+    # CHECK: [[BLOCKED:#.*]] = #ttg.blocked<{sizePerThread = [2], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+    # CHECK: [[BLOCKED1:#.*]] = #ttg.blocked<{sizePerThread = [2, 2], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [1, 0]}>
+    layout: ttgl.constexpr = ttgl.BlockedLayout([2], [32], [4], [0])
+    a = ttgl.full([128], 1, ttgl.int32, layout)
+    b = ttgl.full([128], 2, ttgl.int32, layout)
+    # CHECK: tt.join {{.*}} : tensor<128xi32, [[BLOCKED]]> -> tensor<128x2xi32, [[BLOCKED1]]>
+    res = ttgl.join(a, b)
+    expect_layout: ttgl.constexpr = ttgl.BlockedLayout([2, 2], [32, 1], [4, 1], [1, 0], [1, 1], [1, 1], [1, 0])
+    ttgl.static_assert(res.type.layout == expect_layout)
+
+    # CHECK: tt.split {{.*}} : tensor<128x2xi32, [[BLOCKED1]]> -> tensor<128xi32, [[BLOCKED]]>
+    c, d = ttgl.split(res)
+    ttgl.static_assert(c.type.layout == layout)
+    ttgl.static_assert(d.type.layout == layout)
+
+
+@filecheck_test
+@gluon.jit
+def test_tensor_reshape():
+    # CHECK: [[BLOCKED:#.*]] = #ttg.blocked<{sizePerThread = [2], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+    # CHECK: [[BLOCKED1:#.*]] = #ttg.blocked<{sizePerThread = [1, 1, 2], threadsPerWarp = [2, 4, 4], warpsPerCTA = [4, 1, 1], order = [2, 1, 0]}>
+    layout: ttgl.constexpr = ttgl.BlockedLayout([2], [32], [4], [0])
+    a = ttgl.full([256], 1, ttgl.int32, layout)
+    # CHECK: tt.reshape {{.*}} : tensor<256xi32, [[BLOCKED]]> -> tensor<8x4x8xi32, [[BLOCKED1]]>
+    v = a.reshape([8, 4, 8])
+    expect_layout: ttgl.constexpr = ttgl.BlockedLayout([1, 1, 2], [2, 4, 4], [4, 1, 1], [2, 1, 0], [1, 1, 1], [1, 1, 1],
+                                                       [2, 1, 0])
+    ttgl.static_assert(v.type.layout == expect_layout)

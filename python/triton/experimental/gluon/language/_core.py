@@ -42,17 +42,20 @@ from triton.language.core import (
 )
 
 _IMPORT_FROM_TRITON: List[str] = [
-    "expand_dims",  # NOQA: F822
-    "load",  # NOQA: F822
-    "program_id",  # NOQA: F822
-    "reduce",  # NOQA: F822
-    "static_assert",  # NOQA: F822
-    "store",  # NOQA: F822
-    "to_tensor",  # NOQA: F822
-    "where",  # NOQA: F822
-    "maximum",  # NOQA: F822
-    "minimum",  # NOQA: F822
+    "expand_dims",
+    "join",
+    "load",
+    "maximum",
+    "minimum",
     "permute",
+    "program_id",
+    "reduce",
+    "reshape",
+    "split",
+    "static_assert",
+    "store",
+    "to_tensor",
+    "where",
 ]
 
 __all__ = [
