@@ -2,7 +2,6 @@ import torch
 
 import torch.distributed as dist
 import torch.multiprocessing as mp
-from triton_kernels.numerics_details.mxfp import downcast_to_mxfp
 from triton_kernels.matmul_ogs import MicroscalingCtx, matmul_ogs, PrecisionConfig, FlexCtx, FnSpecs, FusedActivation
 from triton_kernels.numerics import InFlexData
 import triton_kernels.distributed as triton_dist
@@ -107,22 +106,35 @@ def test_routing_distributed_EP(monkeypatch):
     assert torch.equal(token_mask, torch.tensor([False, True, False, True], dtype=torch.bool, device="cuda"))
 
 
+def test_all_to_all(monkeypatch):
+
+    def dummy_all_to_all(out, x, output_split_sizes, input_split_sizes):
+        # simulate all_to_all for rank 0
+        size0 = input_split_sizes[0]
+        size1 = input_split_sizes[1]
+        out[0:size0, :].copy_(x[0:size0, :])
+        out[size0:size1, :].copy_(x[0:size1, :])
+
+    monkeypatch.setenv("WORLD_SIZE", "2")
+    monkeypatch.setenv("LOCAL_RANK", "0")
+    monkeypatch.setattr(dist, "is_initialized", lambda: True)
+    monkeypatch.setattr(dist, "get_world_size", lambda: 2)
+    monkeypatch.setattr(dist, "get_rank", lambda: 0)
+    monkeypatch.setattr(dist, "all_to_all", dummy_all_to_all)
+
+    input = torch.tensor([[1, 2], [3, 4], [5, 6], [7, 8]], dtype=torch.float32)
+    input_split_sizes = [1, 3]
+    output_split_sizes = [1, 3]
+    output = triton_dist.all_to_all(input, output_split_sizes, input_split_sizes)
+    assert torch.equal(output, input)
+
+
 def quantize(w, dtype, **opt):
     if dtype == "bf16":
         wq = w.to(torch.bfloat16).transpose(-1, -2).contiguous().transpose(-1, -2)
         return wq, InFlexData(), MicroscalingCtx()
     else:
-        assert dtype == "mx4", f"{dtype=}"
-        swizzle_mx_scale = opt["swizzle_mx_scale"]
-        swizzle_axis = 2 if swizzle_mx_scale else None
-        w = w.to(torch.bfloat16)
-        w, mx_scales, weight_scale_shape = downcast_to_mxfp(w, torch.uint8, axis=1, swizzle_axis=swizzle_axis)
-        return (
-            w,
-            InFlexData(),
-            MicroscalingCtx(weight_scale=mx_scales, swizzle_mx=swizzle_mx_scale,
-                            actual_weight_scale_shape=weight_scale_shape),
-        )
+        raise ValueError(f"Unsupported dtype: {dtype}. Supported: 'bf16'.")
 
 
 def gather_ep(rank, world_size, param, TP, EP):

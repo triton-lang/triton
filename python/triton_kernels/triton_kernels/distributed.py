@@ -89,6 +89,16 @@ def reduce_scatter(x: torch.Tensor, token_mask: torch.Tensor = None, dim=0) -> t
         return x
 
 
+def all_to_all(x: torch.Tensor, output_split_sizes: list[int], input_split_sizes: list[int]) -> torch.Tensor:
+    if _is_distributed_launch():
+        output_dim0 = sum(output_split_sizes)
+        output = torch.empty((output_dim0, *x.shape[1:]), dtype=x.dtype, device=x.device)
+        dist.all_to_all_single(output, x, output_split_sizes=output_split_sizes, input_split_sizes=input_split_sizes)
+        return output
+    else:
+        return x
+
+
 def routing(logits, n_expts_act, sm_first=False, expt_indx=None, n_rows=None, EP=1,
             TP=1) -> Tuple[RoutingData, GatherIndx, ScatterIndx, torch.Tensor]:
     if _is_distributed_launch():
