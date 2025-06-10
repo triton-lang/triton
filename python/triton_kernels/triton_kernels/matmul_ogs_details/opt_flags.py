@@ -57,15 +57,15 @@ def make_default_opt_flags_amd(
     else:
         tokens_per_expt = routing_data.expected_tokens_per_expt
 
-    is_cnda4 = get_cdna_version() == 4
+    is_cdna4 = get_cdna_version() == 4
     # block_m
     if constraints.get("block_m", None):
         block_m = constraints["block_m"]
     elif enforce_bitwise_invariance:
-        block_m = 256 if is_cnda4 else 128
+        block_m = 256 if is_cdna4 else 128
     elif tokens_per_expt >= 512 and n >= 2048:
-        block_m = 256 if is_cnda4 else 128
-    elif is_cnda4 and m >= 512:
+        block_m = 256 if is_cdna4 else 128
+    elif is_cdna4 and m >= 512:
         block_m = 128
     else:
         block_m = max(32, min(triton.next_power_of_2(tokens_per_expt), 64))
