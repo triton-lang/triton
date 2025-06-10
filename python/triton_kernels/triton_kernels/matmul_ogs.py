@@ -19,7 +19,6 @@ from .matmul_ogs_details.fast_contiguous import fast_contiguous
 from .numerics_details.mxfp import SwizzlingType
 from .specialize import specialize
 from typing import Tuple, Optional
-from typing import Dict
 
 
 @dataclass
@@ -124,7 +123,7 @@ class TensorDescriptorBuilder:
     @staticmethod
     def create_block_scale_descriptor(mx_tensor: torch.Tensor, block_k: int, block_n: int, K: int, N: int,
                                       mx_scale_stride_k: int, mx_scale_stride_n: int, n_expts_tot: int, batch_size: int,
-                                      expt_data_blocks: Optional[Dict[int, torch.Tensor]], swizzle_mx: bool,
+                                      expt_data: Optional[ExptData], swizzle_mx: bool,
                                       transpose: bool) -> TensorDescriptor:
         """Create a tensor descriptor for block scale factors"""
         MX_PACK_DIVISOR = 32
@@ -132,7 +131,8 @@ class TensorDescriptorBuilder:
         PackedK = (K + MX_PACK_DIVISOR - 1) // MX_PACK_DIVISOR
 
         if swizzle_mx:
-            num_expt_x_ncol = (n_expts_tot if len(expt_data_blocks) > 0 else batch_size) * ((N + 127) // 128)
+            num_expt_x_ncol = (n_expts_tot if expt_data is not None and len(expt_data.block_pid_map) > 0 else
+                               batch_size) * ((N + 127) // 128)
             return TensorDescriptor(
                 base=mx_tensor, shape=[1, num_expt_x_ncol, (PackedK + 3) // 4, 2, 256],
                 strides=[num_expt_x_ncol * mx_scale_stride_n, mx_scale_stride_n, mx_scale_stride_k, 256,
@@ -612,7 +612,6 @@ def _create_tma_descriptors(
     use_host_tma_descriptors = opt_flags.is_persistent and target_info.cuda_capability_geq(10, 0)
 
     x_desc, w_desc = [None] * 2
-    mx_desc = mx_tensor
     descriptors = []
     # The dense case currently uses on device descriptor updates
     # so we bail out on using host descriptors in that case
@@ -623,7 +622,7 @@ def _create_tma_descriptors(
                     opt_flags.block_k, opt_flags.block_m,
                     USE_GATHER_TMA, X_USE_LOAD_TMA
                 )
-            descriptors.append(x_desc)
+        descriptors.append(x_desc)
         if (expt_data is not None and len(expt_data.block_pid_map) > 0):
             w_desc = TensorDescriptorBuilder.create_weight_descriptor(
                     w_tensor, opt_flags.block_k, opt_flags.block_n, w_transpose
@@ -639,22 +638,22 @@ def _create_tma_descriptors(
                 if padded_size != old_size:
                     w_desc.shape = list(w_desc.shape)
                     w_desc.shape[dim_to_pad] = padded_size
-            descriptors.append(w_desc)
+        descriptors.append(w_desc)
         # Optional MX scale descriptor
+        descriptors.append(None)
         if mx_tensor is not None:
-            mx_desc = TensorDescriptorBuilder.create_block_scale_descriptor(
+            descriptors[-1] = TensorDescriptorBuilder.create_block_scale_descriptor(
                     mx_tensor, opt_flags.block_k, opt_flags.block_n, K, N,
                     mx_scale_stride_k, mx_scale_stride_n, routing_data.n_expts_tot,
                     batch_size,
-                    expt_data.block_pid_map, mx_ctx.swizzle_scale, mx_transpose
+                    expt_data, mx_ctx.swizzle_scale, mx_transpose
                 )
-            descriptors.append(mx_desc)
+
     # TODO: Currently all or none, instead should support a mixture
     # of host and device descriptors
-    if None in descriptors:
-        x_desc, w_desc, mx_desc = [x_tensor, w_tensor, mx_tensor]
+    if None in descriptors or len(descriptors) == 0:
+        descriptors = [x_tensor, w_tensor, mx_tensor]
         use_host_tma_descriptors = False
-
     if opt_flags.is_persistent:
         opt_flags.target_kernel_kwargs["USE_HOST_TMA_DESCRIPTORS"] = use_host_tma_descriptors
 
