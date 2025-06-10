@@ -149,9 +149,6 @@ class InstrumentationHook(Hook):
         max_shared_mem = triton.runtime.driver.active.utils.get_device_properties(device)["max_shared_mem"]
         backend_name = _get_backend_name()
 
-        def to_ttgpuir_passes(pm):
-            pass
-
         def to_llvmir_passes(pm):
             triton_proton.add_convert_proton_to_protongpu(pm, self.mode.metric_type, self.mode.sampling_strategy,
                                                           self.mode.sampling_options, self.mode.granularity,
@@ -160,7 +157,7 @@ class InstrumentationHook(Hook):
                                                           self.profile_buffer_size, self.profile_buffer_alignment)
 
             if self.mode.optimization == mode.Optimize.SCHED_STORES:
-                triton_proton.add_proton_schedule_buffer_store(pm)
+                triton_proton.add_schedule_buffer_store(pm)
 
             triton_proton.add_allocate_proton_shared_memory(pm)
 
@@ -173,8 +170,6 @@ class InstrumentationHook(Hook):
                 triton_proton.add_convert_proton_amd_gpu_to_llvm(pm, arch)
 
         backends[backend_name].compiler.instrumentation = Instrumentation({
-            "ttir_to_ttgpuir":
-            lambda pm: to_ttgpuir_passes(pm),
             "ttgpuir_to_llvmir":
             lambda pm: to_llvmir_passes(pm),
             "llvmir_to_llvm":

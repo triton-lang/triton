@@ -3,18 +3,26 @@
 
 include "mlir/Pass/PassBase.td"
 
-def AllocateProtonSharedMemory : Pass<"allocate-proton-shared-memory", "mlir::ModuleOp"> {
+def AllocateProtonSharedMemoryPass : Pass<"allocate-proton-shared-memory", "mlir::ModuleOp"> {
     let summary = "Update metadata for proton shared memory allocation";
     let description = [{
-      This pass updates the amount of shared/local memory used due to
+      This pass updates the amount of shared/local memory used by
       proton intra kernel profiling.
      }];
 
-    let constructor = "mlir::triton::proton::gpu::createAllocateProtonSharedMemoryPass()";
+    let dependentDialects = ["ProtonDialect",
+                             "gpu::ProtonGPUDialect"];
 }
 
-def AllocateProtonGlobalScratchBuffer : Pass<"allocate-proton-global-scratch-buffer", "mlir::ModuleOp"> {
-    let constructor = "mlir::triton::proton::gpu::createAllocateProtonGlobalScratchBufferPass()";
+def AllocateProtonGlobalScratchBufferPass : Pass<"allocate-proton-global-scratch-buffer", "mlir::ModuleOp"> {
+    let summary = "Update metadata for proton global scratch buffer allocation";
+    let description = [{
+      This pass updates the amount of global memory used by
+      proton intra kernel profiling.
+     }];
+
+    let dependentDialects = ["ProtonDialect",
+                             "gpu::ProtonGPUDialect"];
 }
 
 #endif // PROTONGPU_TO_LLVM_PASSES
