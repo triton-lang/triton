@@ -271,6 +271,10 @@ LinearLayout chooseDsReadB64TrLayout(Attribute enc, ArrayRef<int64_t> shape,
 LinearLayout getScaleTMEMStoreLinearLayout(RankedTensorType scaleType,
                                            int numWarps);
 
+std::optional<LinearLayout>
+getTmemLoadStoreLayout16x256(int M, int N, RankedTensorType oldType,
+                             int numWarps);
+
 // Return a layout valid for TMemLoad op for a tmem layout of block MxN that
 // distribute the data long M for the warp groups. This doesn't affect the TMem
 // layout it just returns a distributed layout compatible for tmem_load.
@@ -282,6 +286,11 @@ LinearLayout chooseScaledMfmaScaleLayout(
     MLIRContext *ctx, int dotOperandIdx,
     const std::vector<std::vector<int32_t>> &dotOperandWarpBasis,
     ArrayRef<int64_t> dotOperandShape, unsigned mfmaMDim);
+
+// Create LinearLayout for nvidia mma tile.
+LinearLayout nvidiaMmaTile(MLIRContext *ctx, ArrayRef<unsigned> tileShape,
+                           unsigned kWidth, ArrayRef<unsigned> order,
+                           ArrayRef<unsigned> repOrder);
 
 // Create a LinearLayout similar to mfmaLayout, but changing each thread to hold
 // 8 elements. This layout is useful for emitting the widest 128-bit global

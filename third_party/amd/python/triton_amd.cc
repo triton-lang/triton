@@ -56,40 +56,39 @@ void init_triton_amd_passes_ttgpuir(py::module &&m) {
   ADD_PASS_WRAPPER_2("add_optimize_lds_usage",
                      mlir::triton::AMD::createOptimizeLDSUsagePass,
                      const std::string &, int32_t);
-  ADD_PASS_WRAPPER_3("add_accelerate_matmul",
-                     mlir::createTritonAMDGPUAccelerateMatmulPass,
-                     const std::string, int, int);
+  ADD_PASS_OPTION_WRAPPER_3("add_accelerate_matmul",
+                            mlir::createTritonAMDGPUAccelerateMatmul,
+                            const std::string, int, int);
   ADD_PASS_WRAPPER_0("add_optimize_epilogue",
-                     mlir::createTritonAMDGPUOptimizeEpiloguePass);
+                     mlir::createTritonAMDGPUOptimizeEpilogue);
   m.def("add_hoist_layout_conversions", [](mlir::PassManager &pm) {
     pm.addNestedPass<mlir::triton::FuncOp>(
-        mlir::createTritonAMDGPUHoistLayoutConversionsPass());
+        mlir::createTritonAMDGPUHoistLayoutConversions());
   });
   m.def("add_canonicalize_pointers", [](mlir::PassManager &pm) {
     pm.addNestedPass<mlir::triton::FuncOp>(
-        mlir::createTritonAMDGPUCanonicalizePointersPass());
+        mlir::createTritonAMDGPUCanonicalizePointers());
   });
-  ADD_PASS_WRAPPER_1("add_convert_to_buffer_ops",
-                     mlir::createTritonAMDGPUConvertToBufferOpsPass,
-                     const std::string &);
+  ADD_PASS_OPTION_WRAPPER_1("add_convert_to_buffer_ops",
+                            mlir::createTritonAMDGPUConvertToBufferOps,
+                            const std::string &);
   ADD_PASS_WRAPPER_0("add_reorder_instructions",
-                     mlir::createTritonAMDGPUReorderInstructionsPass);
-  ADD_PASS_WRAPPER_0("add_fold_true_cmpi",
-                     mlir::createTritonAMDGPUFoldTrueCmpIPass);
-  ADD_PASS_WRAPPER_1("add_block_pingpong",
-                     mlir::createTritonAMDGPUBlockPingpongPass, int32_t);
-  ADD_PASS_WRAPPER_4("add_stream_pipeline",
-                     mlir::createTritonAMDGPUStreamPipelinePass, int, int, int,
-                     bool);
-  ADD_PASS_WRAPPER_1("add_coalesce_async_copy",
-                     mlir::createTritonAMDGPUCoalesceAsyncCopyPass,
-                     std::string);
-  ADD_PASS_WRAPPER_1("add_update_async_wait_count",
-                     mlir::createTritonAMDGPUUpdateAsyncWaitCountPass,
-                     std::string);
+                     mlir::createTritonAMDGPUReorderInstructions);
+  ADD_PASS_WRAPPER_0("add_fold_true_cmpi", mlir::createTritonAMDFoldTrueCmpI);
+  ADD_PASS_OPTION_WRAPPER_1("add_block_pingpong",
+                            mlir::createTritonAMDGPUBlockPingpong, int32_t);
+  ADD_PASS_OPTION_WRAPPER_4("add_stream_pipeline",
+                            mlir::createTritonAMDGPUStreamPipeline, int, int,
+                            int, bool);
+  ADD_PASS_OPTION_WRAPPER_1("add_coalesce_async_copy",
+                            mlir::createTritonAMDGPUCoalesceAsyncCopy,
+                            std::string);
+  ADD_PASS_OPTION_WRAPPER_1("add_update_async_wait_count",
+                            mlir::createTritonAMDGPUUpdateAsyncWaitCount,
+                            std::string);
   m.def("add_in_thread_transpose", [](mlir::PassManager &pm) {
     pm.addNestedPass<mlir::triton::FuncOp>(
-        mlir::createTritonAMDGPUInThreadTransposePass());
+        mlir::createTritonAMDGPUInThreadTranspose());
   });
 }
 

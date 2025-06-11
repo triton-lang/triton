@@ -257,7 +257,7 @@ static LogicalResult optimizePartitionNumWarps(ModuleAxisInfoAnalysis &axisInfo,
        llvm::zip(wsOp.getPartitionRegions(), partitionNumWarps,
                  wsOp.getPartitionNumWarps(), maxTensorRegs, estRegUsage)) {
     // "Guess" the register usage for each partition.
-    estRegs = tensorRegs ? 72 : 24;
+    estRegs = tensorRegs ? 88 : 24;
 
     // Layouts need to be reassigned if the number of warps changed and there
     // are tensor computations.

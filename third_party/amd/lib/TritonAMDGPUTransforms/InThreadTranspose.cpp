@@ -5,9 +5,7 @@
 #include "mlir/Transforms/WalkPatternRewriteDriver.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
-#include "triton/Dialect/TritonGPU/Transforms/Passes.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
-#include "triton/Tools/LayoutUtils.h"
 #include "llvm/Support/Debug.h"
 
 // InThreadTranspose pass optimizes inefficient
@@ -20,13 +18,14 @@
 #define DBGS() (llvm::dbgs() << "[" DEBUG_TYPE "]: ")
 #define LDBG(X) LLVM_DEBUG(DBGS() << X << "\n")
 
-#define GEN_PASS_CLASSES
-#include "TritonAMDGPUTransforms/Passes.h.inc"
-
-using namespace mlir;
 namespace tt = mlir::triton;
 namespace ttg = mlir::triton::gpu;
 namespace ttag = mlir::triton::amdgpu;
+
+namespace mlir {
+
+#define GEN_PASS_DEF_TRITONAMDGPUINTHREADTRANSPOSE
+#include "TritonAMDGPUTransforms/Passes.h.inc"
 
 namespace {
 
@@ -514,6 +513,11 @@ findReachableSMemOps(ttg::LocalLoadOp root) {
         smemOperand = candidate->getOperand(0);
       } else if (isa<ttg::LocalLoadOp, ttg::LocalDeallocOp>(candidate)) {
         smemOperand = candidate->getOperand(0);
+      } else if (isa<ttg::AsyncCopyGlobalToLocalOp,
+                     tt::amdgpu::BufferLoadToLocalOp>(candidate)) {
+        // InTheadTranspose cannot be used with direct-to-lds loads
+        LDBG(" skip because of direct-to-lds load");
+        return failure();
       } else {
         // this operation is not part of shared memory def-use network,
         // algorithm should not reach this point
@@ -775,25 +779,21 @@ public:
   }
 };
 
-} // namespace
+} // anonymous namespace
 
 class TritonAMDGPUInThreadTransposePass
-    : public TritonAMDGPUInThreadTransposeBase<
+    : public impl::TritonAMDGPUInThreadTransposeBase<
           TritonAMDGPUInThreadTransposePass> {
 
 public:
-  TritonAMDGPUInThreadTransposePass() = default;
-
   void runOnOperation() override {
     tt::FuncOp f = getOperation();
 
     auto ctx = f.getContext();
     RewritePatternSet patterns(ctx);
-    patterns.add<::InThreadTransposePattern>(ctx, /*benefit=*/1);
+    patterns.add<InThreadTransposePattern>(ctx, /*benefit=*/1);
     walkAndApplyPatterns(f, std::move(patterns));
   }
 };
 
-std::unique_ptr<Pass> mlir::createTritonAMDGPUInThreadTransposePass() {
-  return std::make_unique<TritonAMDGPUInThreadTransposePass>();
-}
+} // namespace mlir

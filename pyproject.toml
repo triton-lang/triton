@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=40.8.0", "cmake>=3.18", "ninja>=1.11.1", "pybind11>=2.13.1"]
+requires = ["setuptools>=40.8.0", "cmake>=3.20,<4.0", "ninja>=1.11.1", "pybind11>=2.13.1"]
 build-backend = "setuptools.build_meta"
 
 [tool.mypy]
@@ -7,8 +7,10 @@ mypy_path = "$MYPY_CONFIG_FILE_DIR/python"
 files = [
     "python/triton/knobs.py",
     "python/triton/runtime/build.py",
+    "python/triton/runtime/driver.py",
     "python/triton/_utils.py",
     "python/test/unit/test_knobs.py",
+    "python/test/unit/runtime/test_build.py",
     "python/test/unit/runtime/test_compilation_listener.py",
 ]
 exclude = ["/build/"]

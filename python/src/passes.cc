@@ -44,22 +44,26 @@ void init_triton_passes_ttir(py::module &&m) {
                      createTritonRewriteTensorDescriptorToPointer);
   ADD_PASS_WRAPPER_0("add_loop_unroll", createTritonLoopUnroll);
   ADD_PASS_WRAPPER_0("add_triton_licm", createTritonLoopInvariantCodeMotion);
+  ADD_PASS_WRAPPER_0("add_loop_aware_cse", createTritonLoopAwareCSE);
   ADD_PASS_OPTION_WRAPPER_4("add_convert_to_ttgpuir",
                             createConvertTritonToTritonGPU, const std::string &,
                             int, int, int);
 }
 
 void init_triton_passes_ttgpuir(py::module &&m) {
+  using namespace mlir;
   using namespace mlir::triton::gpu;
   ADD_PASS_WRAPPER_0("add_coalesce", createTritonGPUCoalesce);
   ADD_PASS_WRAPPER_0("add_optimize_thread_locality",
                      createTritonGPUOptimizeThreadLocality);
   ADD_PASS_WRAPPER_0("add_hoist_tmem_alloc", createTritonGPUHoistTMEMAlloc);
+  ADD_PASS_OPTION_WRAPPER_1("add_assign_latencies",
+                            createTritonGPUAssignLatencies, int);
+  ADD_PASS_WRAPPER_0("add_schedule_loops", createTritonGPUScheduleLoops);
   ADD_PASS_OPTION_WRAPPER_2("add_pipeline", createTritonGPUPipeline, int, bool);
   ADD_PASS_OPTION_WRAPPER_1("add_warp_specialize",
                             createTritonGPUAutomaticWarpSpecialization, int);
   ADD_PASS_WRAPPER_0("add_prefetch", createTritonGPUPrefetch);
-  ADD_PASS_WRAPPER_0("add_WGMMAPrefetch", createTritonGPUWGMMAPrefetch);
   ADD_PASS_WRAPPER_0("add_accelerate_matmul", createTritonGPUAccelerateMatmul);
   ADD_PASS_WRAPPER_0("add_reorder_instructions",
                      createTritonGPUReorderInstructions);
@@ -82,6 +86,12 @@ void init_triton_passes_ttgpuir(py::module &&m) {
   ADD_PASS_WRAPPER_0("add_fuse_nested_loops", createTritonGPUFuseNestedLoops);
   ADD_PASS_WRAPPER_0("add_coalesce_async_copy",
                      createTritonGPUCoalesceAsyncCopy);
+  ADD_PASS_WRAPPER_0("add_canonicalizer", createTritonGPUCanonicalize);
+  ADD_PASS_WRAPPER_0("add_inliner", [] {
+    return createInlinerPass(/*opPipelines=*/{}, [](OpPassManager &pm) {
+      pm.addPass(createTritonGPUCanonicalize());
+    });
+  });
 }
 
 void init_triton_passes_convert(py::module &&m) {
@@ -94,7 +104,7 @@ void init_triton_passes_convert(py::module &&m) {
 
 void init_triton_passes_llvmir(py::module &&m) {
   using namespace mlir;
-  ADD_PASS_WRAPPER_0("add_di_scope", createLLVMDIScopePass);
+  ADD_PASS_WRAPPER_0("add_di_scope", mlir::createLLVMDIScope);
 }
 
 void init_triton_passes(py::module &&m) {

@@ -37,6 +37,7 @@ void registerTestAllocationPass();
 void registerTestMembarPass();
 void registerTestAMDGPUMembarPass();
 void registerTestTritonAMDGPURangeAnalysis();
+void registerTestLoopPeelingPass();
 } // namespace test
 } // namespace mlir
 
@@ -44,11 +45,12 @@ inline void registerTritonDialects(mlir::DialectRegistry &registry) {
   mlir::registerAllPasses();
   mlir::triton::registerTritonPasses();
   mlir::triton::gpu::registerTritonGPUPasses();
-  mlir::registerTritonNvidiaGPUPasses();
+  mlir::triton::nvidia_gpu::registerTritonNvidiaGPUPasses();
   mlir::test::registerTestAliasPass();
   mlir::test::registerTestAlignmentPass();
   mlir::test::registerTestAllocationPass();
   mlir::test::registerTestMembarPass();
+  mlir::test::registerTestLoopPeelingPass();
   mlir::test::registerTestAMDGPUMembarPass();
   mlir::test::registerTestTritonAMDGPURangeAnalysis();
   mlir::triton::registerConvertTritonToTritonGPUPass();
@@ -83,7 +85,7 @@ inline void registerTritonDialects(mlir::DialectRegistry &registry) {
   mlir::registerTritonAMDFoldTrueCmpI();
 
   // NVWS passes
-  mlir::registerNVWSTransformsPasses();
+  mlir::triton::registerNVWSTransformsPasses();
 
   // NVGPU transform passes
   mlir::registerNVHopperTransformsPasses();

@@ -1,3 +1,4 @@
+#include "AsyncUtility.h"
 #include "AtomicRMWOpsEmitter.h"
 #include "BufferOpsEmitter.h"
 #include "Dialect/TritonAMDGPU/IR/Dialect.h"
@@ -238,11 +239,11 @@ struct DirectToLdsLoadConversionBase : public LoadStoreConversionBase {
     }
   }
 
-  // Emits the computation to get the lane index which holds the source
+  // Emits the computation to get the lane id offset which holds the source
   // pointers/offsets we need to store to shared memory
-  Value emitSwizzledLaneIndex(RewriterBase &rewriter, TritonLLVMOpBuilder &b,
-                              Location loc, Value coalescedShmem,
-                              Value swizzledShmem, Value vecBytes) const {
+  Value emitSwizzledLaneOffset(RewriterBase &rewriter, TritonLLVMOpBuilder &b,
+                               Location loc, Value coalescedShmem,
+                               Value swizzledShmem, Value vecBytes) const {
     // Compute the laneOffset based on the difference in elements between
     // the two shmem addresses. laneOffset will be negative for half the
     // lanes because a smaller laneId might hold our global_ptr.
@@ -250,9 +251,7 @@ struct DirectToLdsLoadConversionBase : public LoadStoreConversionBase {
     auto swizzledAddr = b.ptrtoint(i64_ty, swizzledShmem);
     auto diff = b.trunc(i32_ty, b.sub(swizzledAddr, coalescedAddr));
     Value laneOffset = b.sdiv(diff, vecBytes);
-    // laneId + laneOffset will always stay inside the warp [0,
-    // threadsPerWarp) because we only swizzle inside a warp
-    return b.add(getLaneId(rewriter, loc), laneOffset);
+    return laneOffset;
   }
 
   // Swizzle the mask (1bit) based on selectLane via ballot
@@ -264,6 +263,21 @@ struct DirectToLdsLoadConversionBase : public LoadStoreConversionBase {
     // Extract the selectLane bit
     auto bitMask = b.lshr(warpMask, b.zext(rewriter.getI64Type(), selectLane));
     return b.trunc(i1_ty, bitMask);
+  }
+
+  // For direct-to-lds the order of the shared encoding decides the order we
+  // load elements from global memory. This function returns true if the fastest
+  // dim for the sharedEnc is contiguous for the global ptrs/offsets
+  bool isFastedLoadDimContiguous(Value srcPtrOrOffset,
+                                 MemDescType sharedTy) const {
+    auto fastestDim = triton::gpu::getOrder(sharedTy)[0];
+    AxisInfo *axisInfo = axisAnalysisPass.getAxisInfo(srcPtrOrOffset);
+
+    // This can happen if axis analysis fails (e.g. lit tests).
+    if (axisInfo->getRank() <= fastestDim)
+      return false;
+
+    return axisInfo->getContiguity(fastestDim) > 1;
   }
 };
 
@@ -541,11 +555,26 @@ struct BufferLoadToLocalOpConversion
 
       if (hasSwizzling) {
         // Apply swizzling to the src offsets
-        Value swizzledLaneId =
-            emitSwizzledLaneIndex(rewriter, b, loc, coalescedShmemAddr[i],
-                                  swizzledShmemAddr[i], vecBytesVal);
-        offsetIn =
-            targetInfo.shuffleIdx(rewriter, loc, offsetIn, swizzledLaneId);
+        Value laneOffset =
+            emitSwizzledLaneOffset(rewriter, b, loc, coalescedShmemAddr[i],
+                                   swizzledShmemAddr[i], vecBytesVal);
+        // laneId + laneOffset will always stay inside the warp [0,
+        // threadsPerWarp) because we only swizzle inside a warp
+        Value swizzledLaneId = b.add(getLaneId(rewriter, loc), laneOffset);
+
+        if (isFastedLoadDimContiguous(offset, cast<MemDescType>(dstTy))) {
+          // Because rows are contiguous and we only swizzle inside rows by
+          // swapping elements between lanes we can add laneOffset * vecSize to
+          // the offset to apply the swizzling
+          offsetIn = b.add(
+              offsetIn, b.mul(laneOffset, b.i32_val(vecTy.getNumElements())));
+        } else {
+          // If rows are not contiguous in memory we need to shuffle the
+          // pointers to apply the swizzling to the src pointers
+          offsetIn =
+              targetInfo.shuffleIdx(rewriter, loc, offsetIn, swizzledLaneId);
+        }
+
         if (mask) {
           pred =
               shuffleMask(rewriter, b, loc, targetInfo, swizzledLaneId, pred);
@@ -555,14 +584,14 @@ struct BufferLoadToLocalOpConversion
       auto bufferLoadToLds = bufferEmitter.emitLoadToLds(
           vecTy, vecBytesVal, rsrcDesc, offsetIn, coalescedShmemAddr[i], pred,
           op.getCache());
-      LLVM::AMD::addAsyncCopyAliasScope(bufferLoadToLds);
+      AMD::addAsyncCopyAliasScope(bufferLoadToLds);
       if (!otherElems.empty()) {
         Value storeVal = packElementRangeIntoVector(
             rewriter, this->getTypeConverter(), loc, vecTy, otherElems, srcIdx);
         llStore(rewriter, loc,
                 hasSwizzling ? swizzledShmemAddr[i] : coalescedShmemAddr[i],
-                storeVal, b.icmp_ne(pred, b.true_val()), op.getCache(),
-                /*forceNoAliasAsyncLoads=*/true);
+                storeVal, b.icmp_ne(maskElems[srcIdx], b.true_val()),
+                op.getCache(), /*forceNoAliasAsyncLoads=*/true);
       }
     }
 
@@ -639,10 +668,9 @@ struct AsyncCopyGlobalToLocalOpConversion
         (vecTy.getNumElements() * vecTy.getElementTypeBitWidth()) / 8;
     assert(llvm::isPowerOf2_32(vecBytes));
     Value vecBytesVal = b.i32_val(vecBytes);
-
-    Value cacheModifiers =
-        b.i32_val(mlir::LLVM::AMD::getCtrlBitsForCacheModifierOnTarget(
-            op.getCache(), /*isLoad=*/true, targetInfo));
+    int32_t cacheModifiers =
+        mlir::LLVM::AMD::getCtrlBitsForCacheModifierOnTarget(
+            op.getCache(), /*isLoad=*/true, targetInfo);
 
     Value llMask = adaptor.getMask();
     SmallVector<Value> maskElems;
@@ -666,10 +694,23 @@ struct AsyncCopyGlobalToLocalOpConversion
 
       if (hasSwizzling) {
         // Apply swizzling to the src pointers
-        Value swizzledLaneId =
-            emitSwizzledLaneIndex(rewriter, b, loc, coalescedShmemAddr[i],
-                                  swizzledShmemAddr[i], vecBytesVal);
-        srcPtr = targetInfo.shuffleIdx(rewriter, loc, srcPtr, swizzledLaneId);
+        Value laneOffset =
+            emitSwizzledLaneOffset(rewriter, b, loc, coalescedShmemAddr[i],
+                                   swizzledShmemAddr[i], vecBytesVal);
+        // laneId + laneOffset will always stay inside the warp [0,
+        // threadsPerWarp) because we only swizzle inside a warp
+        Value swizzledLaneId = b.add(getLaneId(rewriter, loc), laneOffset);
+
+        if (isFastedLoadDimContiguous(op.getSrc(), cast<MemDescType>(dstTy))) {
+          // Because rows are contiguous and we only swizzle inside rows by
+          // swapping elements between lanes we can move the vecTy typed src
+          // pointer by laneOffset elements to apply the swizzling.
+          srcPtr = b.gep(srcPtr.getType(), vecTy, srcPtr, laneOffset);
+        } else {
+          // If rows are not contiguous in memory we need to shuffle the
+          // pointers to apply the swizzling to the src pointers
+          srcPtr = targetInfo.shuffleIdx(rewriter, loc, srcPtr, swizzledLaneId);
+        }
         if (!maskElements.empty()) {
           pred =
               shuffleMask(rewriter, b, loc, targetInfo, swizzledLaneId, pred);
@@ -680,10 +721,10 @@ struct AsyncCopyGlobalToLocalOpConversion
         auto globalLoadLdsOp = rewriter.create<ROCDL::GlobalLoadLDSOp>(
             loc,
             /*globalPtr=*/srcPtr, /*ldsPtr=*/coalescedShmemAddr[i],
-            /*size=*/vecBytesVal, /*offset=*/b.i32_val(0),
+            /*size=*/vecBytes, /*offset=*/0,
             /*aux=*/cacheModifiers, /*alias_scopes=*/nullptr,
             /*noalias_scopes=*/nullptr, /*tbaa=*/nullptr);
-        LLVM::AMD::addAsyncCopyAliasScope(globalLoadLdsOp);
+        AMD::addAsyncCopyAliasScope(globalLoadLdsOp);
         continue;
       }
 
@@ -695,9 +736,9 @@ struct AsyncCopyGlobalToLocalOpConversion
       rewriter.create<LLVM::CondBrOp>(loc, pred, loadBlock, afterLoad);
       rewriter.setInsertionPointToStart(loadBlock);
       auto globalLoadLdsOp = rewriter.create<ROCDL::GlobalLoadLDSOp>(
-          loc, srcPtr, coalescedShmemAddr[i], vecBytesVal,
-          /*offset=*/b.i32_val(0), cacheModifiers, nullptr, nullptr, nullptr);
-      LLVM::AMD::addAsyncCopyAliasScope(globalLoadLdsOp);
+          loc, srcPtr, coalescedShmemAddr[i], vecBytes,
+          /*offset=*/0, cacheModifiers, nullptr, nullptr, nullptr);
+      AMD::addAsyncCopyAliasScope(globalLoadLdsOp);
 
       rewriter.create<LLVM::BrOp>(loc, afterLoad);
       rewriter.setInsertionPointToStart(afterLoad);

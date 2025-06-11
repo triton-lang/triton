@@ -243,8 +243,8 @@ class Autotuner(KernelInterface):
             config = self.configs[0]
         self.best_config = config
         if knobs.autotuning.print and not used_cached_result:
-            print(f"Triton autotuning for function {self.base_fn.__name__} finished after "
-                  f"{self.bench_time:.2f}s; best config selected: {self.best_config};")
+            print(f"Triton autotuning for function {self.base_fn.__name__},\nwith key as {key},\n"
+                  f"finished after {self.bench_time:.2f}s,\nbest config selected: {self.best_config};")
         if config.pre_hook is not None:
             full_nargs = {**self.nargs, **kwargs, **config.all_kwargs()}
             config.pre_hook(full_nargs)
@@ -313,15 +313,17 @@ class Config:
                        to ptx .maxnreg directive.  Not supported on all platforms.
     :ivar pre_hook: a function that will be called before the kernel is called. Parameters of this
                     function are args.
+    :ivar ir_override: filename of a user-defined IR (*.{ttgir|llir|ptx|amdgcn}).
     """
 
-    def __init__(self, kwargs, num_warps=4, num_stages=3, num_ctas=1, maxnreg=None, pre_hook=None):
+    def __init__(self, kwargs, num_warps=4, num_stages=3, num_ctas=1, maxnreg=None, pre_hook=None, ir_override=None):
         self.kwargs = kwargs
         self.num_warps = num_warps
         self.num_ctas = num_ctas
         self.num_stages = num_stages
         self.maxnreg = maxnreg
         self.pre_hook = pre_hook
+        self.ir_override = ir_override
 
     def __setstate__(self, state):
         self.kwargs = state.get("kwargs", {})
@@ -330,6 +332,7 @@ class Config:
         self.num_ctas = state.get("num_ctas", 1)
         self.maxnreg = state.get("maxnreg", None)
         self.pre_hook = state.get("pre_hook", None)
+        self.ir_override = state.get("ir_override", None)
 
     def all_kwargs(self):
         return {
@@ -340,6 +343,7 @@ class Config:
                     ("num_ctas", self.num_ctas),
                     ("num_stages", self.num_stages),
                     ("maxnreg", self.maxnreg),
+                    ("ir_override", self.ir_override),
                 ) if v is not None
             }
         }

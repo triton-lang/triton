@@ -327,10 +327,16 @@ def reduce_or(input, axis, keep_dims=False):
 
 @core._tensor_member_fn
 @jit
-@core._add_scan_docstr("cumsum")
-def cumsum(input, axis=0, reverse=False):
+@core._add_scan_docstr("cumsum", dtype_arg="dtype")
+def cumsum(input, axis=0, reverse=False, dtype: core.constexpr = None):
     # todo rename this to a generic function name
+
     input = core._promote_bfloat16_to_float32(input)
+    out_dtype: core.constexpr = _pick_sum_dtype(input.dtype, dtype)
+
+    if out_dtype is not None:
+        input = input.to(out_dtype)
+
     return core.associative_scan(input, axis, _sum_combine, reverse)
 
 
@@ -475,7 +481,8 @@ def _get_flip_dim(dim, shape):
     shape = core._unwrap_if_constexpr(shape)
     if dim is None:
         dim = len(shape) - 1
-    assert dim == len(shape) - 1, "Currently only support flipping the last dimension"
+    if dim < 0:  # flip doesn't work if dim < 0 because the xor-swap for loop will start/end at the wrong index
+        dim += len(shape)
     return core.constexpr(dim)
 
 
@@ -487,20 +494,19 @@ def flip(x, dim=None):
 
     :param x: the first input tensor
     :type x: Block
-    :param dim: the dimension to flip along (currently only final dimension supported)
+    :param dim: the dimension to flip along
     :type dim: int
     """
-    core.static_assert(_is_power_of_two(x.shape[_get_flip_dim(dim, x.shape)]))
-    core.static_assert(_is_power_of_two(x.numel))
-    # reshape the tensor to have all dimensions be 2.
-    # TODO: We shouldn't have to change the dimensions not sorted.
-    steps: core.constexpr = _log2(x.numel)
-    start: core.constexpr = _log2(x.numel) - _log2(x.shape[_get_flip_dim(dim, x.shape)])
+    core.static_assert(-len(x.shape) <= dim and dim < len(x.shape))
+    _dim: core.constexpr = _get_flip_dim(dim, x.shape)
+    core.static_assert(_is_power_of_two(x.shape[_dim]))
+    steps: core.constexpr = _log2(x.shape[_dim])
 
+    # reshape the swap dimension to (2, 2, ..., 2)
     idtype = core.get_int_dtype(bitwidth=x.dtype.primitive_bitwidth, signed=True)
-    y = core.reshape(x.to(idtype, bitcast=True), [2] * steps)
-    for i in core.static_range(start, steps):
-        y = y ^ xor_sum(y, i, True)
+    y = core.reshape(x.to(idtype, bitcast=True), x.shape[:_dim] + [2] * steps + x.shape[_dim + 1:])
+    for i in core.static_range(steps):
+        y = y ^ xor_sum(y, _dim + i, True)
     x = core.reshape(y, x.shape).to(x.dtype, bitcast=True)
     return x
 

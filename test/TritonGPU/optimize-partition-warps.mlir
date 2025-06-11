@@ -119,7 +119,7 @@ tt.func @fits_after_shrink(%arg0: i32) {
 
 // CHECK-LABEL: @register_use_heuristic
 tt.func @register_use_heuristic() {
-  // CHECK: requestedRegisters = array<i32: 24, 72>
+  // CHECK: requestedRegisters = array<i32: 24, 88>
   ttg.warp_specialize()
   default {
     ttg.warp_yield
@@ -148,9 +148,9 @@ tt.func @tmem_min_4_warps(%tensor_desc: !ttg.memdesc<64x64xf32, #tmem, #ttng.ten
   }
   // CHECK: partition1{{.*}} num_warps(4)
   partition1(%desc: !ttg.memdesc<64x64xf32, #tmem, #ttng.tensor_memory, mutable>) num_warps(8) {
-    %cst = arith.constant dense<0> : tensor<64x64xi32, #blocked2d_8>
+    %cst = arith.constant dense<0.0> : tensor<64x64xf32, #blocked2d_8>
     %true = arith.constant true
-    ttng.tmem_store %cst, %desc, %true : tensor<64x64xi32, #blocked2d_8> -> !ttg.memdesc<64x64xf32, #tmem, #ttng.tensor_memory, mutable>
+    ttng.tmem_store %cst, %desc, %true : tensor<64x64xf32, #blocked2d_8> -> !ttg.memdesc<64x64xf32, #tmem, #ttng.tensor_memory, mutable>
     ttg.warp_return
   }
   // CHECK: partition2{{.*}} num_warps(4)

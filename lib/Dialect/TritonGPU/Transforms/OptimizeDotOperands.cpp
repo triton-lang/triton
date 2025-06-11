@@ -11,6 +11,7 @@
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
+#include "triton/Tools/LayoutUtils.h"
 #include "triton/Tools/LinearLayout.h"
 #include <memory>
 
@@ -56,11 +57,10 @@ public:
     auto ctx = getContext();
     auto oldCTALayout = triton::gpu::getCTALayout(srcTy.getEncoding());
     auto newCTALayout = permuteCTALayout(ctx, oldCTALayout, trans.getOrder());
-    assert(succeeded(newCTALayout));
     auto newInnerCvtEnc =
         SwizzledSharedEncodingAttr::get(ctx, cvtEncoding, srcTy.getShape(),
                                         /*order=*/getOrderForMemory(srcTy),
-                                        *newCTALayout, srcTy.getElementType(),
+                                        newCTALayout, srcTy.getElementType(),
                                         /*needTrans=*/true);
     if (newInnerCvtEnc == cvtEncoding)
       return failure();
@@ -128,9 +128,8 @@ public:
     auto ctx = getContext();
     auto newCTALayout =
         permuteCTALayout(ctx, allocEncoding.getCTALayout(), {1, 0});
-    assert(succeeded(newCTALayout));
     auto newInnerEnc = NVMMASharedEncodingAttr::get(
-        getContext(), srcTy.getShape(), newInnerCvtOrder, *newCTALayout,
+        getContext(), srcTy.getShape(), newInnerCvtOrder, newCTALayout,
         srcTy.getElementType(), allocEncoding.getFp4Padded());
 
     MemDescType innerTy =
@@ -149,17 +148,17 @@ static Attribute inferSrcEncodingMemDescReshape(Attribute dstEncoding,
                                                 ArrayRef<int64_t> dstShape) {
   auto mmaEncoding = dyn_cast<NVMMASharedEncodingAttr>(dstEncoding);
   if (!mmaEncoding)
-    return Attribute();
+    return {};
   // TODO: supporting reshape of CTA layouts is non-trivial.
   if (getNumCTAs(mmaEncoding) > 1)
-    return Attribute();
+    return {};
   int innerDimDst =
       mmaEncoding.getTransposed() ? dstShape.front() : dstShape.back();
   int innerDimSrc =
       mmaEncoding.getTransposed() ? srcShape.front() : srcShape.back();
   // For now disallow reshape of the inner dimension.
   if (innerDimDst != innerDimSrc)
-    return Attribute();
+    return {};
 
   // CTALayout can be all 1's because we bailed on multi-CTA layouts above.
   auto CTALayout = CTALayoutAttr::get(
@@ -167,11 +166,18 @@ static Attribute inferSrcEncodingMemDescReshape(Attribute dstEncoding,
       /*CTAsPerCGA=*/SmallVector<unsigned>(srcShape.size(), 1),
       /*CTASplitNum=*/SmallVector<unsigned>(srcShape.size(), 1),
       /*CTAOrder=*/llvm::to_vector(llvm::seq<unsigned>(srcShape.size())));
-  // Check that the second dim is big enough to contain a full swizzle.
-  return NVMMASharedEncodingAttr::get(
+  auto srcEncoding = NVMMASharedEncodingAttr::get(
       dstEncoding.getContext(), mmaEncoding.getSwizzlingByteWidth(),
       mmaEncoding.getTransposed(), mmaEncoding.getElementBitWidth(),
       mmaEncoding.getFp4Padded(), CTALayout);
+  // Big guns, check linear layouts are equivalent
+  auto srcLL = toLinearLayout(srcShape, srcEncoding);
+  auto dstLL = toLinearLayout(dstShape, dstEncoding);
+  auto ctx = dstEncoding.getContext();
+  if (reshapeLayout(ctx, srcLL, dstShape) != dstLL) {
+    return {};
+  }
+  return srcEncoding;
 }
 
 // Rewrite
@@ -313,12 +319,6 @@ private:
     // TMEM copy expects that blocked scale "chunks" in SMEM are stored in
     // innermost axes contiguously.
     if (!isInnermostContiguous(scaleType, 512))
-      return false;
-
-    auto sharedEnc =
-        dyn_cast<triton::gpu::NVMMASharedEncodingAttr>(scaleType.getEncoding());
-    if (!sharedEnc || sharedEnc.getTransposed() || sharedEnc.getFp4Padded() ||
-        sharedEnc.getSwizzlingByteWidth() != 0)
       return false;
 
     if (usesTMAload) {

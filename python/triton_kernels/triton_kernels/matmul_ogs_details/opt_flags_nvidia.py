@@ -13,10 +13,10 @@ def compute_grid_size(routing_data, m, n, block_m, block_n):
 
 
 def compute_block_n(n: int, arch, precision_config):
-    capability = torch.cuda.get_device_capability()[0] if arch is None else int(arch[2:-1])
     # block_n:
     block_n = max(16, min(128, triton.next_power_of_2(n)))
-    if capability >= 9 and precision_config.max_num_imprecise_acc is None and n > 128:
+    # On Ampere and Hopper, handshake with swizzle_mxfp4_scale_hopper
+    if precision_config.max_num_imprecise_acc is None and n > 128:
         block_n = 256
     return block_n
 
@@ -69,7 +69,7 @@ def compute_num_stages(
     lhs_dtype,
     rhs_dtype,
     epilogue_subtile,
-    has_expensive_epilogue,
+    epilogue_effective_itemsize,
 ):
     if precision_config.max_num_imprecise_acc is not None:
         return 3
@@ -88,19 +88,18 @@ def compute_num_stages(
     if is_persistent:
         # Per-stage wait barrier
         stage_size += 8
-        acc_size = out_dtype.itemsize
         if target_info.cuda_capability_geq(10, 0):
-            acc_size = 4 if has_expensive_epilogue else out_dtype.itemsize
+            acc_size = epilogue_effective_itemsize or out_dtype.itemsize
         else:
             acc_size = out_dtype.itemsize
-        if target_info.cuda_capability_geq(10, 0) and epilogue_subtile and not has_expensive_epilogue:
-            acc_block_n = block_n // 2
+        if target_info.cuda_capability_geq(10, 0) and epilogue_subtile is not None:
+            acc_block_n = block_n // epilogue_subtile
         else:
             acc_block_n = block_n
         # pipelined TMA store local to global, or
         # pipelined layout conversion before store of the accumulator
         # note: layout conversion has some padding
-        smem_capacity -= (block_m + 4) * acc_block_n * acc_size
+        smem_capacity -= int((block_m + 4) * acc_block_n * acc_size)
         if microscaling_ctx.weight_scale is not None:
             # mx scales
             stage_size += block_n * (block_k // 32)

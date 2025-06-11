@@ -4,7 +4,9 @@ add_public_tablegen_target(TritonCombineIncGen)
 
 add_triton_library(TritonTransforms
   Combine.cpp
+  LoopAwareCSE.cpp
   LoopInvariantCodeMotion.cpp
+  LoopPeeling.cpp
   LoopUnroll.cpp
   ReorderBroadcast.cpp
   RewriteTensorPointer.cpp
@@ -19,5 +21,7 @@ add_triton_library(TritonTransforms
   LINK_LIBS PUBLIC
   MLIRPass
   MLIRTransformUtils
+  MLIRTransforms
+  MLIRSCFToControlFlow
   TritonIR
 )

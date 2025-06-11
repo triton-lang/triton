@@ -1,3 +1,5 @@
+#include "ir.h"
+
 #include <optional>
 #include <pybind11/cast.h>
 #include <pybind11/functional.h>
@@ -60,90 +62,6 @@ llvm::raw_ostream &mlir_dumps_or_dbgs() {
     return llvm::dbgs();
   }
 }
-
-// A custom op builder that keeps track of the last location
-class TritonOpBuilder {
-public:
-  TritonOpBuilder(MLIRContext *context) {
-    builder = std::make_unique<OpBuilder>(context);
-    lastLoc = std::make_unique<Location>(builder->getUnknownLoc());
-  }
-
-  OpBuilder &getBuilder() { return *builder; }
-  MLIRContext *getContext() { return builder->getContext(); }
-
-  bool isLineInfoEnabled() { return lineInfoEnabled; }
-
-  void setLastLoc(Location loc) {
-    if (lineInfoEnabled)
-      lastLoc = std::make_unique<Location>(loc);
-  }
-
-  void setLastLoc(const std::string &fileName, int line, int column) {
-    auto context = builder->getContext();
-    setLastLoc(FileLineColLoc::get(context, fileName, line, column));
-  }
-
-  Location getLastLoc() {
-    assert(lastLoc);
-    return *lastLoc;
-  }
-
-  void setInsertionPointToStart(Block &block) {
-    if (!block.empty())
-      setLastLoc(block.begin()->getLoc());
-    else
-      setLastLoc(builder->getUnknownLoc());
-    builder->setInsertionPointToStart(&block);
-  }
-
-  void setInsertionPointToEnd(Block &block) {
-    if (!block.empty())
-      setLastLoc(block.back().getLoc());
-    else
-      setLastLoc(builder->getUnknownLoc());
-    builder->setInsertionPointToEnd(&block);
-  }
-
-  void setInsertionPointAfter(Operation &op) {
-    setLastLoc(op.getLoc());
-    builder->setInsertionPointAfter(&op);
-  }
-
-  void restoreInsertionPoint(OpBuilder::InsertPoint pt) {
-    if (pt.isSet() && pt.getPoint() != pt.getBlock()->end())
-      setLastLoc(pt.getPoint()->getLoc());
-    else
-      setLastLoc(builder->getUnknownLoc());
-    builder->restoreInsertionPoint(pt);
-  }
-
-  template <typename OpTy, typename... Args> OpTy create(Args &&...args) {
-    auto loc = getLastLoc();
-    return builder->create<OpTy>(loc, std::forward<Args>(args)...);
-  }
-
-  // Overload to create or fold a single result operation.
-  template <typename OpTy, typename... Args>
-  std::enable_if_t<OpTy::template hasTrait<OpTrait::OneResult>(), Value>
-  createOrFold(Args &&...args) {
-    auto loc = getLastLoc();
-    return builder->createOrFold<OpTy>(loc, std::forward<Args>(args)...);
-  }
-
-  // Overload to create or fold a zero result operation.
-  template <typename OpTy, typename... Args>
-  std::enable_if_t<OpTy::template hasTrait<OpTrait::ZeroResults>(), OpTy>
-  createOrFold(Args &&...args) {
-    auto loc = getLastLoc();
-    return builder->createOrFold<OpTy>(loc, std::forward<Args>(args)...);
-  }
-
-private:
-  std::unique_ptr<OpBuilder> builder;
-  std::unique_ptr<Location> lastLoc;
-  bool lineInfoEnabled = !triton::tools::getBoolEnv("TRITON_DISABLE_LINE_INFO");
-};
 
 // Run the pass manager under a source manager diagnostic handler, which
 // enables emitted MLIR diagnostics to directly reference Python source
@@ -259,8 +177,7 @@ py::list getTensorDescMetadata(ModuleOp &mod) {
     auto elemType = ttng::getTMAElementType(nullptr, descTy);
     assert(swizzle.has_value());
     assert(elemType.has_value());
-    auto blockSize = ttg::getShapePerCTA(blockType);
-    blockSize.back() = ttng::getTMAContigDim(blockType);
+    auto blockSize = ttng::getTMABlockShape(blockType, /*packedSize=*/false);
     py::dict metadata;
     metadata["swizzle"] = *swizzle;
     metadata["elem_size"] = descTy.getBlockType().getElementTypeBitWidth() / 8;
@@ -465,7 +382,11 @@ void init_triton_ir(py::module &&m) {
       .def("get_parent_region", &Region::getParentRegion, ret::reference)
       .def("size", [](Region &self) { return self.getBlocks().size(); })
       .def("empty", &Region::empty)
-      .def("id", [](Region &self) { return (uint64_t)&self; });
+      .def("id", [](Region &self) { return (uint64_t)&self; })
+      .def("push_back",
+           [](Region &self, Block *block) { self.push_back(block); })
+      .def("push_front",
+           [](Region &self, Block *block) { self.push_front(block); });
 
   py::class_<Block>(m, "block", py::module_local())
       .def("arg",
@@ -575,13 +496,23 @@ void init_triton_ir(py::module &&m) {
              self->print(os, printingFlags);
              return str;
            })
+      .def("str_nodebug",
+           [](OpState &self) -> std::string {
+             std::string str;
+             llvm::raw_string_ostream os(str);
+             self->print(os);
+             return str;
+           })
       .def("append_operand",
            [](OpState &self, Value &val) {
              self->insertOperands(self->getNumOperands(), val);
            })
-      .def("verify", [](OpState &self) -> bool {
-        return succeeded(verify(self.getOperation()));
-      });
+      .def("verify",
+           [](OpState &self) -> bool {
+             return succeeded(verify(self.getOperation()));
+           })
+      .def("get_operation", [](OpState &self) { return self.getOperation(); });
+
   // scf Ops
   py::class_<scf::ForOp, OpState>(m, "ForOp", py::module_local())
       .def("get_induction_var", &scf::ForOp::getInductionVar);
@@ -824,6 +755,10 @@ void init_triton_ir(py::module &&m) {
       .def("get_int32_attr",
            [](TritonOpBuilder &self, int32_t value) {
              return self.getBuilder().getI32IntegerAttr(value);
+           })
+      .def("get_string_attr",
+           [](TritonOpBuilder &self, std::string value) -> Attribute {
+             return self.getBuilder().getStringAttr(value);
            })
       // Use arith.ConstantOp to create constants
       // Constants
@@ -1081,10 +1016,8 @@ void init_triton_ir(py::module &&m) {
 
       // miscellaneous
       .def("create_make_range",
-           [](TritonOpBuilder &self, int start, int end) -> Value {
-             auto retType = RankedTensorType::get(
-                 {end - start}, self.getBuilder().getI32Type());
-             return self.create<MakeRangeOp>(retType, start, end);
+           [](TritonOpBuilder &self, Type retTy, int start, int end) -> Value {
+             return self.create<MakeRangeOp>(retTy, start, end);
            })
 
       // Cast instructions
@@ -1488,19 +1421,11 @@ void init_triton_ir(py::module &&m) {
       .def("create_reshape",
            [](TritonOpBuilder &self, Value &arg, std::vector<int64_t> &shape,
               bool allowReorder) -> Value {
-             auto argType =
-                 cast<RankedTensorType>(arg.getType()).getElementType();
-             return self.create<ReshapeOp>(
-                 RankedTensorType::get(shape, argType), arg, allowReorder);
+             return self.create<ReshapeOp>(shape, arg, allowReorder);
            })
       .def("create_expand_dims",
            [](TritonOpBuilder &self, Value &arg, int axis) -> Value {
-             auto argType = dyn_cast<RankedTensorType>(arg.getType());
-             auto argEltType = argType.getElementType();
-             std::vector<int64_t> retShape = argType.getShape();
-             retShape.insert(retShape.begin() + axis, 1);
-             return self.create<ExpandDimsOp>(
-                 RankedTensorType::get(retShape, argEltType), arg, axis);
+             return self.create<ExpandDimsOp>(arg, axis);
            })
       .def("create_cat",
            [](TritonOpBuilder &self, Value &lhs, Value &rhs) -> Value {
@@ -1527,14 +1452,8 @@ void init_triton_ir(py::module &&m) {
            })
       // Implements tl.trans and tl.permute.
       .def("create_trans",
-           [](TritonOpBuilder &self, Value &arg,
-              std::vector<int> &order) -> Value {
-             auto argType = dyn_cast<RankedTensorType>(arg.getType());
-             auto argEltType = argType.getElementType();
-             auto retShape = applyPermutation(argType.getShape(), order);
-             return self.create<TransOp>(
-                 RankedTensorType::get(retShape, argEltType), arg, order);
-           })
+           [](TritonOpBuilder &self, Value &arg, std::vector<int> &order)
+               -> Value { return self.create<TransOp>(arg, order); })
       .def("create_broadcast",
            [](TritonOpBuilder &self, Value &arg,
               std::vector<int64_t> &shape) -> Value {
@@ -1545,12 +1464,8 @@ void init_triton_ir(py::module &&m) {
                  "arg is not of RankedTensorType, use create_splat");
            })
       .def("create_splat",
-           [](TritonOpBuilder &self, Value &arg,
-              std::vector<int64_t> &shape) -> Value {
-             auto argType = arg.getType();
-             auto ret = self.createOrFold<SplatOp>(
-                 RankedTensorType::get(shape, argType), arg);
-             return ret;
+           [](TritonOpBuilder &self, Type &retTy, Value &arg) -> Value {
+             return self.createOrFold<SplatOp>(retTy, arg);
            })
       // // atomic
       .def("create_atomic_cas",
@@ -1751,12 +1666,21 @@ void init_triton_ir(py::module &&m) {
              return self.create<ub::PoisonOp>(type);
            })
       .def("create_histogram",
-           [](TritonOpBuilder &self, Value operand, int numBins) -> Value {
-             return self.create<HistogramOp>(
-                 RankedTensorType::get(
-                     {static_cast<int64_t>(numBins)},
-                     IntegerType::get(operand.getContext(), 32)),
-                 operand);
+           [](TritonOpBuilder &self, Value operand, int numBins,
+              std::optional<Value> mask) -> Value {
+             if (!mask) {
+               return self.create<HistogramOp>(
+                   RankedTensorType::get(
+                       {static_cast<int64_t>(numBins)},
+                       IntegerType::get(operand.getContext(), 32)),
+                   operand);
+             } else {
+               return self.create<HistogramOp>(
+                   RankedTensorType::get(
+                       {static_cast<int64_t>(numBins)},
+                       IntegerType::get(operand.getContext(), 32)),
+                   operand, *mask);
+             }
            })
       .def("create_gather",
            [](TritonOpBuilder &self, Value src, Value indices, int axis)

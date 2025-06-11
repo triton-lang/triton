@@ -54,6 +54,10 @@ getNumElementsPerThread(Operation *op, SmallVector<unsigned> order,
 // Returns whether the op is a "view op", i.e. doesn't move any data
 bool isView(Operation *op);
 
+// Returns whether the op is a "noop op", i.e. has one input and one output
+// and lowers to llvm as the identity function (returns the input)
+bool isNoop(Operation *op);
+
 /* Dump Triton IR in graphviz dot format.
  *
  * You can override `onValue` and `onOperation` in a subclass to mark
@@ -137,8 +141,8 @@ scf::ForOp replaceForOpWithNewSignature(
     SmallVectorImpl<std::tuple<Value, Value>> &replacements);
 scf::ForOp replaceForOpWithNewSignature(OpBuilder &rewriter, scf::ForOp loop,
                                         ValueRange newIterOperands);
-Block::BlockArgListType addIterArgsToLoop(OpBuilder &rewriter, scf::ForOp &loop,
-                                          ValueRange newIterOperands);
+[[nodiscard]] scf::ForOp addIterArgsToLoop(OpBuilder &rewriter, scf::ForOp loop,
+                                           ValueRange newIterOperands);
 
 // Replace WhileOp with a new WhileOp with extra operands. The YieldOp is not
 // updated and needs to be updated separately for the loop to be correct.
@@ -246,44 +250,26 @@ void eraseLoopCarriedValues(scf::ForOp &loop, llvm::BitVector indices);
 } // namespace mlir
 
 namespace mlir::triton {
-
 /// Replace all uses of `oldUse` with `val` and propagate the type if needed.
 /// This is useful when we need to change a memory descriptor from immutable to
 /// mutable.
 void replaceUsesAndPropagateType(OpBuilder &builder, Operation *oldUse,
                                  Value val);
 
-template <typename BuilderT>
+/// Replace all uses of `old` with a local load from `alloc` unless the use is a
+/// `ttg.local_alloc` with a matching shared encoding, in which case the shared
+/// memory is forwarded directly into the use.
 void replaceUsesWithLocalLoad(
-    BuilderT &builder, OpResult old, TypedValue<triton::gpu::MemDescType> alloc,
-    TypedValue<triton::gpu::AsyncTokenType> token = {}) {
-  //  Remove redundant local_load -> local_alloc
-  namespace ttg = triton::gpu;
-  using triton::gpu::LocalAllocOp;
-  auto allocTy = alloc.getType();
-  SmallVector<LocalAllocOp> allocsToErase;
-  for (Operation *user : old.getUsers()) {
-    if (auto userAlloc = dyn_cast<LocalAllocOp>(user)) {
-      if (allocTy.getEncoding() == userAlloc.getType().getEncoding()) {
-        replaceUsesAndPropagateType(builder, userAlloc, alloc);
-        allocsToErase.push_back(userAlloc);
-      }
-    }
-  }
+    OpBuilder &builder, OpResult old,
+    TypedValue<triton::gpu::MemDescType> alloc,
+    TypedValue<triton::gpu::AsyncTokenType> token = {});
 
-  // If there are some uses that were not local_allocs, we need to create a
-  // local_load for them.
-  if (std::distance(old.getUsers().begin(), old.getUsers().end()) >
-      allocsToErase.size()) {
-    auto loc = old.getOwner()->getLoc();
-    auto sharedLoad = builder.template create<ttg::LocalLoadOp>(
-        loc, old.getType(), alloc, token);
-    old.replaceAllUsesWith(sharedLoad.getResult());
-  }
-  for (auto alloc : allocsToErase) {
-    alloc.erase();
-  }
-}
+// Return true if the value comes from a load or a block argument.
+// This will skip convert layouts and memdesc views.
+// This is a helper useful to know if value is likely to come from shared memory
+// after converting loads into async loads.
+bool comesFromLoadOrBlockArg(Value v);
+
 } // namespace mlir::triton
 
 #endif // TRITON_DIALECT_TRITONGPU_TRANSFORMS_UTILITY_H_

@@ -155,3 +155,16 @@ tt.func @ub_poison() {
   %0 = ub.poison : tensor<128x64xf16>
   tt.return
 }
+
+// -----
+
+// CHECK-LABEL: @cf_br
+tt.func @cf_br(%ptr: !tt.ptr<i32>) {
+  %cst = arith.constant dense<1> : tensor<128xi32>
+  // cf.br ^bb1(%{{.+}} : tensor<128xi32, #{{.+}}>)
+  cf.br ^bb1(%cst : tensor<128xi32>)
+^bb1(%arg0: tensor<128xi32>):
+  %ptrs = tt.splat %ptr : !tt.ptr<i32> -> tensor<128x!tt.ptr<i32>>
+  tt.store %ptrs, %arg0 : tensor<128x!tt.ptr<i32>>
+  tt.return
+}

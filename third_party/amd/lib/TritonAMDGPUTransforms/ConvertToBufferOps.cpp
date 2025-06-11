@@ -1,3 +1,4 @@
+#include "TritonAMDGPUTransforms/Passes.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
@@ -17,20 +18,21 @@
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "llvm/ADT/TypeSwitch.h"
 
-#define GEN_PASS_CLASSES
-#include "TritonAMDGPUTransforms/Passes.h"
-
 #undef DEBUG_TYPE
 #define DEBUG_TYPE "tritonamdgpu-convert-buffer-ops"
 #define DBGS() (llvm::dbgs() << "[" DEBUG_TYPE "]: ")
 #define LDBG(X) LLVM_DEBUG(DBGS() << X << "\n")
 
-using namespace mlir;
 using ::mlir::LLVM::AMD::getVectorSize;
 using mlir::triton::AMD::ISAFamily;
 
 namespace ttg = mlir::triton::gpu;
 namespace tt = mlir::triton;
+
+namespace mlir {
+
+#define GEN_PASS_DEF_TRITONAMDGPUCONVERTTOBUFFEROPS
+#include "TritonAMDGPUTransforms/Passes.h.inc"
 
 namespace {
 
@@ -252,8 +254,6 @@ Value getBlockStride(Location loc, Value offset, PatternRewriter &rewriter) {
   return nullptr;
 }
 
-} // namespace
-
 struct ConvertTritonAtomicRMWOpToBufferAtomicRMW
     : public mlir::OpRewritePattern<triton::AtomicRMWOp> {
   using OpRewritePattern::OpRewritePattern;
@@ -262,10 +262,10 @@ struct ConvertTritonAtomicRMWOpToBufferAtomicRMW
       mlir::MLIRContext *context,
       DenseMap<Value, SetVector<Operation *>> &assumptions,
       ModuleAxisInfoAnalysis &axisAnalysisPass,
-      std::shared_ptr<DataFlowSolver> solver)
+      std::shared_ptr<DataFlowSolver> solver, ISAFamily isaFamily)
       : mlir::OpRewritePattern<triton::AtomicRMWOp>(context),
         assumptions(assumptions), axisAnalysisPass(axisAnalysisPass),
-        solver(std::move(solver)) {}
+        solver(std::move(solver)), isaFamily(isaFamily) {}
 
   mlir::LogicalResult
   matchAndRewrite(triton::AtomicRMWOp op,
@@ -322,6 +322,14 @@ struct ConvertTritonAtomicRMWOpToBufferAtomicRMW
       return rewriter.notifyMatchFailure(op, "RMW with unsupported type");
     }
     LDBG("RMW supported type");
+
+    // float16 is the only 16-bit dtype supported by buffer atomic fadd on
+    // gfx942
+    if (isaFamily == ISAFamily::CDNA3 && checkType.isBF16() &&
+        atomicRmwOp == RMWOp::FADD) {
+      return rewriter.notifyMatchFailure(op, "RMW FADD does not support bf16");
+    }
+    LDBG("RMW FADD supported 16-bit type");
 
     auto vecSize = getVectorSize(ptr, axisAnalysisPass);
     // f16/bf16 dtypes could only be efficiently calculated using instructions
@@ -387,6 +395,7 @@ private:
   DenseMap<Value, SetVector<Operation *>> assumptions;
   ModuleAxisInfoAnalysis &axisAnalysisPass;
   std::shared_ptr<DataFlowSolver> solver;
+  ISAFamily isaFamily;
 };
 
 // Workaround to allow static_assert(false) on older compilers as it was
@@ -508,15 +517,16 @@ private:
   std::shared_ptr<DataFlowSolver> solver;
 };
 
+} // anonymous namespace
+
 class TritonAMDGPUConvertToBufferOpsPass
-    : public TritonAMDGPUConvertToBufferOpsBase<
+    : public impl::TritonAMDGPUConvertToBufferOpsBase<
           TritonAMDGPUConvertToBufferOpsPass> {
 
 public:
-  TritonAMDGPUConvertToBufferOpsPass() = default;
-  TritonAMDGPUConvertToBufferOpsPass(StringRef archGen) {
-    this->archGenerationName = archGen.data();
-  };
+  using impl::TritonAMDGPUConvertToBufferOpsBase<
+      TritonAMDGPUConvertToBufferOpsPass>::TritonAMDGPUConvertToBufferOpsBase;
+
   void runOnOperation() override {
     MLIRContext *context = &getContext();
     RewritePatternSet patterns(context);
@@ -540,16 +550,15 @@ public:
     // Gate buffer atomics behind CDNA3 for now
     // GFX942-specific assumptions regarding cache coherence are made when
     // lowering to LLVM
-    if (ISAFamily::CDNA3 == triton::AMD::deduceISAFamily(archGenerationName))
+    triton::AMD::ISAFamily isaFamily =
+        triton::AMD::deduceISAFamily(archGenerationName);
+    if (ISAFamily::CDNA3 == isaFamily)
       patterns.add<ConvertTritonAtomicRMWOpToBufferAtomicRMW>(
-          context, assumptions, axisInfoAnalysis, solver);
+          context, assumptions, axisInfoAnalysis, solver, isaFamily);
 
     if (applyPatternsGreedily(mod, std::move(patterns)).failed())
       signalPassFailure();
   }
 };
 
-std::unique_ptr<Pass>
-mlir::createTritonAMDGPUConvertToBufferOpsPass(std::string archGen) {
-  return std::make_unique<TritonAMDGPUConvertToBufferOpsPass>(archGen);
-}
+} // namespace mlir

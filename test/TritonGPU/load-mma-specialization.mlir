@@ -1,5 +1,5 @@
 // RUN: triton-opt %s -split-input-file -allow-unregistered-dialect -tritongpu-hoist-tmem-alloc | FileCheck %s --check-prefix=TMEM --check-prefix=FUNC
-// RUN: triton-opt %s -split-input-file -allow-unregistered-dialect -verify-diagnostics --tritongpu-hoist-tmem-alloc -tritongpu-load-mma-specialization -sccp -int-range-optimizations -canonicalize -cse -tritongpu-remove-layout-conversions | FileCheck %s
+// RUN: triton-opt %s -split-input-file -allow-unregistered-dialect -verify-diagnostics --tritongpu-hoist-tmem-alloc -tritongpu-partition-scheduling -tritongpu-load-mma-specialization -sccp -int-range-optimizations -canonicalize -cse -tritongpu-remove-layout-conversions | FileCheck %s
 // RUN: triton-opt %s -split-input-file -allow-unregistered-dialect -verify-diagnostics --tritongpu-hoist-tmem-alloc -tritongpu-automatic-warp-specialization | FileCheck %s --check-prefix=AWS --check-prefix=FUNC
 
 #acc_layout = #ttg.blocked<{sizePerThread = [1, 128], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [0, 1]}>
@@ -98,12 +98,10 @@ tt.func @warp_specialize_tma_matmul(
     // CHECK-NEXT: ttng.barrier_expect [[OPER_MBAR]], 32768 {ttg.partition = 2 : i32}
 
     // CHECK-NEXT: [[A_BUF:%.*]] = ttg.memdesc_subview [[A_BUFS]][[[IDX]], [[C0]], [[C0]]]
-    // CHECK-NEXT: [[A_DESC_PTR:%.*]] = ttng.tensor_desc_to_tma_ptr [[A_DESC]]
-    // CHECK-NEXT: ttng.async_tma_copy_global_to_local [[A_DESC_PTR]][[[OFF_M]], [[OFF_K]]] [[A_BUF]], [[OPER_MBAR]], [[TRUE]] {ttg.partition = 2 : i32}
+    // CHECK-NEXT: ttng.async_tma_copy_global_to_local [[A_DESC]][[[OFF_M]], [[OFF_K]]] [[A_BUF]], [[OPER_MBAR]], [[TRUE]] {ttg.partition = 2 : i32}
     %a_reg = tt.descriptor_load %a_desc[%off_m, %off_k] : !tt.tensordesc<tensor<128x64xf16, #shared>> -> tensor<128x64xf16, #oper_layout>
     // CHECK-NEXT: [[B_BUF:%.*]] = ttg.memdesc_subview [[B_BUFS]][[[IDX]], [[C0]], [[C0]]]
-    // CHECK-NEXT: [[B_DESC_PTR:%.*]] = ttng.tensor_desc_to_tma_ptr [[B_DESC]]
-    // CHECK-NEXT: ttng.async_tma_copy_global_to_local [[B_DESC_PTR]][[[OFF_N]], [[OFF_K]]] [[B_BUF]], [[OPER_MBAR]], [[TRUE]] {ttg.partition = 2 : i32}
+    // CHECK-NEXT: ttng.async_tma_copy_global_to_local [[B_DESC]][[[OFF_N]], [[OFF_K]]] [[B_BUF]], [[OPER_MBAR]], [[TRUE]] {ttg.partition = 2 : i32}
     %b_reg = tt.descriptor_load %b_desc[%off_n, %off_k] : !tt.tensordesc<tensor<128x64xf16, #shared>> -> tensor<128x64xf16, #oper_layout>
 
     %a_shared = ttg.local_alloc %a_reg : (tensor<128x64xf16, #oper_layout>) -> !ttg.memdesc<128x64xf16, #shared, #smem>
@@ -278,7 +276,7 @@ tt.func @invalid_acc_reset(
 
 // AWS: ttg.warp_specialize
 // AWS: num_warps(4)
-// AWS: num_warps(4)
+// AWS: num_warps(2)
 // AWS-NOT: num_warps(
 
 // CHECK-LABEL: @matmul_tma_acc_with_unconditional_user
@@ -292,7 +290,9 @@ tt.func @matmul_tma_acc_with_unconditional_user(
   %c1_i32 = arith.constant 1 : i32
   %true = arith.constant true
   // CHECK-DAG: [[ZERO:%.*]] = arith.constant dense<0.0
+  // CHECK-DAG: [[ACC_RESET:%.*]] = arith.constant dense<1.0
   %zero = arith.constant dense<0.0> : tensor<128x128xf32, #acc_layout>
+  %acc_reset = arith.constant dense<1.0> : tensor<128x128xf32, #acc_layout>
   // CHECK-DAG: [[K_TILES:%.*]] = arith.constant 32 : i32
   %k_tiles = arith.constant 32 : i32
 
@@ -343,9 +343,6 @@ tt.func @matmul_tma_acc_with_unconditional_user(
     // CHECK-NEXT: [[MMA_TOK:%.*]] = ttng.tc_gen5_mma %{{[0-9]+}}, %{{[0-9]+}}, [[ACC_BUF]][], %true, %true, {{.*}}, [[CUR_ACC_READY_BAR]][%true] {ttg.partition = 1 : i32}
     %mma_tok = ttng.tc_gen5_mma %a_shared, %b_shared, %c_tmem[%c_tok], %true, %true : !ttg.memdesc<128x64xf16, #shared, #smem>, !ttg.memdesc<64x128xf16, #shared, #smem>, !ttg.memdesc<128x128xf32, #acc_tmem, #ttng.tensor_memory, mutable>
 
-    // CHECK-NEXT: [[ACC_RESET:%.*]] = "acc_reset"
-    %acc_reset = "acc_reset"() : () -> tensor<128x128xf32, #acc_layout>
-
     // CHECK-NEXT: ttng.wait_barrier [[CUR_ACC_READY_BAR]], [[ACC_PHASE]] {ttg.partition = 0 : i32}
     // CHECK-NEXT: [[C:%.*]], [[LOAD_TOK:%.*]] = ttng.tmem_load [[ACC_BUF]][] {ttg.partition = 0 : i32}
     %c, %load_tok = ttng.tmem_load %c_tmem[%mma_tok] : !ttg.memdesc<128x128xf32, #acc_tmem, #ttng.tensor_memory, mutable> -> tensor<128x128xf32, #acc_layout>
@@ -385,7 +382,7 @@ tt.func @matmul_tma_acc_with_unconditional_user(
 
 // AWS: ttg.warp_specialize
 // AWS: num_warps(4)
-// AWS: num_warps(4)
+// AWS: num_warps(2)
 // AWS-NOT: num_warps(
 
 // CHECK-LABEL: @matmul_tma_acc_with_conditional_user
@@ -399,6 +396,8 @@ tt.func @matmul_tma_acc_with_conditional_user(
   %c1_i32 = arith.constant 1 : i32
   %true = arith.constant true
   %zero = arith.constant dense<0.0> : tensor<128x128xf32, #acc_layout>
+  // CHECK-DAG: [[ACC_RESET:%.*]] = arith.constant dense<1.0
+  %acc_reset = arith.constant dense<1.0> : tensor<128x128xf32, #acc_layout>
   %k_tiles = arith.constant 32 : i32
 
   // CHECK: [[ACC_BUFS:%.*]], [[ACC_TOK:%.*]] = ttng.tmem_alloc
@@ -434,8 +433,6 @@ tt.func @matmul_tma_acc_with_conditional_user(
     %mma_tok = ttng.tc_gen5_mma %a_shared, %b_shared, %c_tmem[%c_tok], %true, %true : !ttg.memdesc<128x64xf16, #shared, #smem>, !ttg.memdesc<64x128xf16, #shared, #smem>, !ttg.memdesc<128x128xf32, #acc_tmem, #ttng.tensor_memory, mutable>
     %c, %load_tok = ttng.tmem_load %c_tmem[%mma_tok] : !ttg.memdesc<128x128xf32, #acc_tmem, #ttng.tensor_memory, mutable> -> tensor<128x128xf32, #acc_layout>
 
-    // CHECK-NEXT: [[ACC_RESET:%.*]] = "acc_reset"
-    %acc_reset = "acc_reset"() : () -> tensor<128x128xf32, #acc_layout>
     %do_epilogue = arith.cmpi eq, %k, %c0_i32 : i32
 
     // CHECK-NEXT: scf.if [[DO_EPILOGUE]]
@@ -753,8 +750,7 @@ tt.func @matmul_tma_acc_with_conditional_def_and_use_no_multibuf_flag(
 
     // CHECK: scf.yield [[NEXT_FLAG]], %{{[0-9]+}}, %{{[0-9]+}}, [[EPILOGUE_ACC_NEXT_PHASE]]
     scf.yield %c, %use_acc : tensor<128x128xf32, #acc_layout>, i1
-  // CHECK-NEXT: tt.scheduled_max_stage = 2 : i32
-  // CHECK-SAME: ttg.partition.stages = [0 : i32, 1 : i32, 0 : i32]
+  // CHECK-NEXT: ttg.partition.stages = [0 : i32, 1 : i32, 0 : i32]
   } {tt.warp_specialize, tt.disallow_acc_multi_buffer, tt.num_stages = 2 : i32}
 
   tt.return
@@ -1011,8 +1007,7 @@ tt.func @matmul_tma_acc_with_conditional_def_and_use_flag(
 
     // CHECK: scf.yield [[NEXT_FLAG]], %{{[0-9]+}}, %{{[0-9]+}}, [[EPILOGUE_ACC_NEXT_INDEX]], [[EPILOGUE_ACC_NEXT_PHASE]]
     scf.yield %c, %use_acc : tensor<128x128xf32, #acc_layout>, i1
-  // CHECK-NEXT: tt.scheduled_max_stage = 4 : i32
-  // CHECK-SAME: ttg.partition.stages = [0 : i32, 1 : i32, 0 : i32]
+  // CHECK-NEXT: ttg.partition.stages = [0 : i32, 1 : i32, 0 : i32]
   } {tt.warp_specialize, tt.num_stages = 4 : i32}
 
   tt.return
@@ -1040,7 +1035,7 @@ tt.func @fp4_padded_load(%desc: !tt.tensordesc<tensor<1x256x64xui8, #fp4_padded_
   // CHECK: scf.for [[I:%arg[0-9]+]]
   scf.for %i = %c0_i32 to %ub step %c1_i32 : i32 {
     // CHECK: [[IDX:%.*]] = arith.muli [[I]], %c2_i32 : i32
-    // CHECK: async_tma_copy_global_to_local %{{[0-9]+}}[[[I]], [[IDX]]]
+    // CHECK: async_tma_copy_global_to_local %arg{{[0-9]+}}[[[I]], [[IDX]]]
     %val = tt.descriptor_load %desc[%i, %i] : !tt.tensordesc<tensor<1x256x64xui8, #fp4_padded_shared>> -> tensor<256x64xi8, #oper_layout>
     "use"(%val) : (tensor<256x64xi8, #oper_layout>) -> ()
   } {tt.warp_specialize}
@@ -1083,14 +1078,15 @@ tt.func @specialize_mma_only(%rhs_desc: !tt.tensordesc<tensor<64x128xf16, #share
     // CHECK-NEXT: arrive_barrier
     // CHECK-NEXT: [[RESULTS:%.*]]:2 = "some_producer"
     %rhs_reg, %next_acc = "some_producer"(%loaded, %acc) : (tensor<64x128xf16, #oper_layout>, tensor<128x128xf32, #acc_layout>) -> (tensor<64x128xf16, #oper_layout>, tensor<128x128xf32, #acc_layout>)
-    // CHECK-NEXT: local_store [[RESULTS]]#0, [[OPERAND]]
-    // CHECK-NEXT: tmem_store [[RESULTS]]#1, [[ACC_TMEM]]
-    // CHECK-NEXT: arrive_barrier [[EMPTY_BAR0]]
+    // CHECK-NEXT: local_store [[RESULTS]]#0, [[OPERAND]]{{.*}}partition = 0
+    // CHECK-NEXT: fence_async_shared {{.*}}partition = 0
+    // CHECK-NEXT: tmem_store [[RESULTS]]#1, [[ACC_TMEM]]{{.*}}partition = 0
+    // CHECK-NEXT: arrive_barrier [[EMPTY_BAR0]]{{.*}}partition = 0
     %rhs = ttg.local_alloc %rhs_reg : (tensor<64x128xf16, #oper_layout>) -> !ttg.memdesc<64x128xf16, #shared, #smem>
 
     %acc_tmem, %acc_tok = ttng.tmem_alloc %next_acc : (tensor<128x128xf32, #acc_layout>) -> (!ttg.memdesc<128x128xf32, #acc_tmem, #ttng.tensor_memory, mutable>, !ttg.async.token)
-    // CHECK: wait_barrier [[EMPTY_BAR0]]
-    // CHECK-NEXT: ttng.tc_gen5_mma {{.*}} [[READY_BAR0]][%true]
+    // CHECK: wait_barrier [[EMPTY_BAR0]]{{.*}}partition = 1
+    // CHECK-NEXT: ttng.tc_gen5_mma %arg1, [[OPERAND]], {{.*}} [[READY_BAR0]][%true] {{.*}}partition = 1
     %mma_tok = ttng.tc_gen5_mma %lhs, %rhs, %acc_tmem[%acc_tok], %true, %true : !ttg.memdesc<128x64xf16, #shared, #smem>, !ttg.memdesc<64x128xf16, #shared, #smem>, !ttg.memdesc<128x128xf32, #acc_tmem, #ttng.tensor_memory, mutable>
     %c, %load_tok = ttng.tmem_load %acc_tmem[%mma_tok] : !ttg.memdesc<128x128xf32, #acc_tmem, #ttng.tensor_memory, mutable> -> tensor<128x128xf32, #acc_layout>
 
@@ -1131,6 +1127,7 @@ tt.func @load_scale_mma_user(
     %scales_tmem = ttng.tmem_alloc %scales_T : (tensor<128x8xi8, #oper_layout_trans>) -> !ttg.memdesc<128x8xi8, #ttng.tensor_memory_scales_encoding<>, #ttng.tensor_memory>
     // CHECK-NEXT: arrive_barrier [[SCALES_READY_BAR:%.*]], 1 {{.*}}partition = 0
 
+    // CHECK: wait_barrier [[USER_DONE:%.*]], %arg{{[0-9]+}}, %true {{.*}}partition = 1
     // CHECK: wait_barrier [[SCALES_READY_BAR]]{{.*}}partition = 1
     %acc_tmem, %acc_tok = ttng.tmem_alloc %acc : (tensor<128x128xf32, #acc_layout>) -> (!ttg.memdesc<128x128xf32, #acc_tmem, #ttng.tensor_memory, mutable>, !ttg.async.token)
     // CHECK-NEXT: tc_gen5_mma_scaled {{.*}} [[SCALES_TMEM]]{{.*}} [[USER_BAR:%.*]][%true], [[SCALES_TMEM_BAR]][%true] {{.*}}partition = 1
@@ -1139,14 +1136,114 @@ tt.func @load_scale_mma_user(
     // CHECK: wait_barrier [[USER_BAR]]{{.*}}partition = 0
     // CHECK-NEXT: tmem_load
     %c, %load_tok = ttng.tmem_load %acc_tmem[%mma_tok] : !ttg.memdesc<128x128xf32, #acc_tmem, #ttng.tensor_memory, mutable> -> tensor<128x128xf32, #acc_layout>
-    // CHECK: arrive_barrier [[USER_DONE:%.*]], 1 {{.*}}partition = 0
-    // CHECK: wait_barrier [[USER_DONE]]{{.*}}partition = 1
+    // CHECK: arrive_barrier [[USER_DONE]]{{.*}}partition = 0
 
     "user"(%c) : (tensor<128x128xf32, #acc_layout>) -> ()
 
     scf.yield %c : tensor<128x128xf32, #acc_layout>
   } {tt.warp_specialize, tt.num_stages = 3 : i32}
   "use"(%out) : (tensor<128x128xf32, #acc_layout>) -> ()
+  tt.return
+}
+
+// CHECK-LABEL: @store_mma_load
+tt.func @store_mma_load(
+  %ub: i32,
+  %lhs_desc: !tt.tensordesc<tensor<128x64xf16, #shared>>,
+  %rhs: !ttg.memdesc<64x128xf16, #shared, #smem>
+) {
+  %c0 = arith.constant 0 : i32
+  %c1 = arith.constant 1 : i32
+  %true = arith.constant true
+
+  // CHECK: [[LHS_EMPTY_BARS:%.*]] = ttg.local_alloc : () -> !ttg.memdesc<2xi64,
+  // CHECK: [[LHS_EMPTY_BAR0:%.*]] = ttg.memdesc_subview [[LHS_EMPTY_BARS]][%c0_i32]
+  // CHECK: [[LHS_EMPTY_BAR1:%.*]] = ttg.memdesc_subview [[LHS_EMPTY_BARS]][%c1_i32]
+  // CHECK: [[LHS_READY_BARS:%.*]] = ttg.local_alloc : () -> !ttg.memdesc<2xi64,
+  // CHECK: arrive_barrier [[LHS_EMPTY_BAR0]]
+  // CHECK: arrive_barrier [[LHS_EMPTY_BAR1]]
+  // CHECK-NOT: arrive_barrier
+
+  // CHECK: [[MMA_ENTRY_BARS:%.*]] = ttg.local_alloc : () -> !ttg.memdesc<1xi64,
+  // CHECK: [[MMA_ENTRY_BAR:%.*]] = ttg.memdesc_subview [[MMA_ENTRY_BARS]][%c0_i32]
+  // CHECK: [[MMA_EXIT_BARS:%.*]] = ttg.local_alloc : () -> !ttg.memdesc<1xi64,
+  // CHECK: [[MMA_EXIT_BAR:%.*]] = ttg.memdesc_subview [[MMA_EXIT_BARS]][%c0_i32]
+  // CHECK-NOT: arrive_barrier
+
+  // CHECK: [[LHS_SHARED:%.*]] = ttg.local_alloc : () -> !ttg.memdesc<128x64xf16,
+
+  // CHECK: scf.for
+  scf.for %i = %c0 to %ub step %c1 : i32 {
+    // CHECK-NEXT: [[LOAD_EMPTY_BAR:%.*]] = ttg.memdesc_subview [[LHS_EMPTY_BARS]]
+    // CHECK-NEXT: wait_barrier [[LOAD_EMPTY_BAR]]{{.*}}partition = 2
+    // CHECK-NEXT: [[LOAD_READY_BAR:%.*]] = ttg.memdesc_subview [[LHS_READY_BARS]]
+    // CHECK-NEXT: barrier_expect [[LOAD_READY_BAR]]{{.*}}partition = 2
+    // CHECK-NEXT: [[LOAD_BUF:%.*]] = ttg.memdesc_subview
+    // CHECK-NEXT: async_tma_copy_global_to_local{{.*}}partition = 2
+    %lhs = tt.descriptor_load %lhs_desc[%i, %i] : !tt.tensordesc<tensor<128x64xf16, #shared>> -> tensor<128x64xf16, #oper_layout>
+
+    // CHECK-NEXT: wait_barrier [[LOAD_READY_BAR]], {{.*}}partition = 0
+    // CHECK-NEXT: [[LHS:%.*]] = ttg.local_load [[LOAD_BUF]] {ttg.partition = 0 : i32}
+    // CHECK-NEXT: arrive_barrier [[LOAD_EMPTY_BAR]], {{.*}}partition = 0
+    // CHECK-NEXT: [[LHS_OP:%.*]] = arith.addf [[LHS]], [[LHS]] {ttg.partition = 0 : i32}
+    // CHECK-NEXT: local_store [[LHS_OP]], [[LHS_SHARED]] {ttg.partition = 0 : i32}
+    // CHECK-NEXT: fence_async_shared {bCluster = false, ttg.partition = 0 : i32}
+    %lhs_op = arith.addf %lhs, %lhs : tensor<128x64xf16, #oper_layout>
+    %lhs_shared = ttg.local_alloc %lhs_op : (tensor<128x64xf16, #oper_layout>) -> !ttg.memdesc<128x64xf16, #shared, #smem>
+
+    // CHECK-NEXT: [[ACC:%.*]] = "make_acc"()
+    %acc = "make_acc"() : () -> tensor<128x128xf32, #acc_layout>
+    // CHECK-NEXT: [[ACC_TMEM:%.*]] = ttg.memdesc_subview
+    // CHECK-NEXT: tmem_store [[ACC]], [[ACC_TMEM]][], %true {{.*}}partition = 0
+    // CHECK-NEXT: arrive_barrier [[MMA_ENTRY_BAR]], {{.*}}partition = 0
+    %acc_tmem, %acc_tok = ttng.tmem_alloc %acc : (tensor<128x128xf32, #acc_layout>) -> (!ttg.memdesc<128x128xf32, #acc_tmem, #ttng.tensor_memory, mutable>, !ttg.async.token)
+
+    // CHECK-NEXT: wait_barrier [[MMA_ENTRY_BAR]], {{.*}}partition = 1
+    // CHECK-NEXT: tc_gen5_mma {{.*}} [[MMA_EXIT_BAR]][%true]
+    %mma_tok = ttng.tc_gen5_mma %lhs_shared, %rhs, %acc_tmem[%acc_tok], %true, %true : !ttg.memdesc<128x64xf16, #shared, #smem>, !ttg.memdesc<64x128xf16, #shared, #smem>, !ttg.memdesc<128x128xf32, #acc_tmem, #ttng.tensor_memory, mutable>
+
+    // CHECK-NEXT: wait_barrier [[MMA_EXIT_BAR]], {{.*}}partition = 0
+    // CHECK-NEXT: [[ACC_VALUE:%.*]], [[LOAD_TOK:%.*]] = ttng.tmem_load [[ACC_TMEM]][]
+    %acc_value, %load_tok = ttng.tmem_load %acc_tmem[%mma_tok] : !ttg.memdesc<128x128xf32, #acc_tmem, #ttng.tensor_memory, mutable> -> tensor<128x128xf32, #acc_layout>
+    // CHECK-NEXT: arith.xori
+    // CHECK-NEXT: "use"([[ACC_VALUE]])
+    "use"(%acc_value) : (tensor<128x128xf32, #acc_layout>) -> ()
+  } {tt.warp_specialize, tt.num_stages = 2 : i32, tt.disallow_acc_multi_buffer}
+  tt.return
+}
+
+// CHECK-LABEL: @local_alloc_into_mma
+tt.func @local_alloc_into_mma(
+  %ub: i32,
+  %lhs_reg: tensor<128x64xf16, #oper_layout>,
+  %rhs_desc: !tt.tensordesc<tensor<64x128xf16, #shared>>
+) {
+  %c0 = arith.constant 0 : i32
+  %c1 = arith.constant 1 : i32
+  %acc, %acc_tok = ttng.tmem_alloc : () -> (!ttg.memdesc<128x128xf32, #acc_tmem, #ttng.tensor_memory, mutable>, !ttg.async.token)
+  %true = arith.constant true
+  // CHECK: [[LHS_SHARED:%.*]] = ttg.local_alloc %arg1 : (tensor<128x64xf16, {{.*}}>) -> !ttg.memdesc<128x64xf16,
+  // CHECK: scf.for
+  scf.for %i = %c0 to %ub step %c1 iter_args(%tok = %acc_tok) -> !ttg.async.token : i32 {
+    // CHECK: barrier_expect [[LOAD_READY_BAR:%.*]], 16384 {ttg.partition = 2 : i32}
+    %lhs_shared = ttg.local_alloc %lhs_reg : (tensor<128x64xf16, #oper_layout>) -> !ttg.memdesc<128x64xf16, #shared, #smem>
+    %rhs_reg = tt.descriptor_load %rhs_desc[%i, %i] : !tt.tensordesc<tensor<64x128xf16, #shared>> -> tensor<64x128xf16, #oper_layout>
+
+    // CHECK: wait_barrier [[LOAD_READY_BAR]], {{.*}}partition = 0
+    // CHECK-NEXT: [[RHS_REG:%.*]] = ttg.local_load {{.*}}partition = 0
+    // CHECK-NEXT: arrive_barrier
+    // CHECK-NEXT: [[RHS_REG_MOD:%.*]] = arith.addf [[RHS_REG]], [[RHS_REG]] {ttg.partition = 0 : i32}
+    // CHECK-NEXT: wait_barrier [[MMA_OPER_BAR:%.*]], %arg{{.*}}partition = 0
+    // CHECK-NEXT: local_store [[RHS_REG_MOD]], [[RHS_SHARED:%.*]] {ttg.partition = 0 : i32}
+    // CHECK-NEXT: fence_async_shared {bCluster = false, ttg.partition = 0 : i32}
+    // CHECK-NEXT: arrive_barrier [[MMA_READY_BAR:%.*]], 1 {{.*}}partition = 0
+    %rhs_reg_mod = arith.addf %rhs_reg, %rhs_reg : tensor<64x128xf16, #oper_layout>
+    %rhs_shared = ttg.local_alloc %rhs_reg_mod : (tensor<64x128xf16, #oper_layout>) -> !ttg.memdesc<64x128xf16, #shared, #smem>
+    // CHECK: wait_barrier [[MMA_READY_BAR]], {{.*}}partition = 1
+    // CHECK-NEXT: tc_gen5_mma [[LHS_SHARED]], [[RHS_SHARED]], {{.*}} [[MMA_OPER_BAR]][%true] {{.*}}partition = 1
+    %mma_tok = ttng.tc_gen5_mma %lhs_shared, %rhs_shared, %acc[%acc_tok], %true, %true : !ttg.memdesc<128x64xf16, #shared, #smem>, !ttg.memdesc<64x128xf16, #shared, #smem>, !ttg.memdesc<128x128xf32, #acc_tmem, #ttng.tensor_memory, mutable>
+    scf.yield %mma_tok : !ttg.async.token
+  } {tt.warp_specialize, tt.num_stages = 2 : i32}
   tt.return
 }
 
@@ -1302,28 +1399,28 @@ tt.func public @attention_forward(
   ) : i32 {
 
     // CHECK-NEXT: [[K_EMPTY_BAR:%.*]] = ttg.memdesc_subview [[K_EMPTY_MBARS]][[[K_INDEX]]]
-    // CHECK-NEXT: wait_barrier [[K_EMPTY_BAR]], [[K_PHASE]] {ttg.assigned_stage = 0 : i32, ttg.partition = 2 : i32}
+    // CHECK-NEXT: wait_barrier [[K_EMPTY_BAR]], [[K_PHASE]] {ttg.partition = 2 : i32}
     // CHECK-NEXT: [[K_READY_BAR:%.*]] = ttg.memdesc_subview [[K_READY_MBARS]][[[K_INDEX]]]
-    // CHECK-NEXT: barrier_expect [[K_READY_BAR]], 8192 {ttg.assigned_stage = 0 : i32, ttg.partition = 2 : i32}
+    // CHECK-NEXT: barrier_expect [[K_READY_BAR]], 8192 {ttg.partition = 2 : i32}
     // CHECK-NEXT: [[K_BUF:%.*]] = ttg.memdesc_subview [[K_BUFS]][[[K_INDEX]], %c0_i32, %c0_i32]
-    // CHECK-NEXT: [[K_DESC_PTR:%.*]] = ttng.tensor_desc_to_tma_ptr [[K_DESC]]
-    // CHECK-NEXT: async_tma_copy_global_to_local [[K_DESC_PTR]][[[I]], %c0_i32] [[K_BUF]], [[K_READY_BAR]], %true {ttg.assigned_stage = 0 : i32, ttg.partition = 2 : i32}
+    // CHECK-NEXT: async_tma_copy_global_to_local [[K_DESC]][[[I]], %c0_i32] [[K_BUF]], [[K_READY_BAR]], %true {ttg.partition = 2 : i32}
     %K = tt.descriptor_load %K_desc[%i, %c0_i32] : !tt.tensordesc<tensor<64x64xf16, #shared>> -> tensor<64x64xf16, #load_blocked>
     %K_shared = ttg.local_alloc %K : (tensor<64x64xf16, #load_blocked>) -> !ttg.memdesc<64x64xf16, #shared, #smem>
 
     // CHECK-NEXT: [[K_TRANS:%.*]] = ttg.memdesc_trans [[K_BUF]] {order = array<i32: 1, 0>, ttg.partition = 1 : i32}
     %K_trans = ttg.memdesc_trans %K_shared {order = array<i32: 1, 0>} : !ttg.memdesc<64x64xf16, #shared, #smem> -> !ttg.memdesc<64x64xf16, #shared_T, #smem>
-    // CHECK-NEXT: wait_barrier [[K_READY_BAR]], [[K_PHASE]] {ttg.assigned_stage = 0 : i32, ttg.partition = 1 : i32}
+    // CHECK-NEXT: wait_barrier [[K_READY_BAR]], [[K_PHASE]] {ttg.partition = 1 : i32}
     // CHECK-NEXT: [[QK_BUF:%.*]] = ttg.memdesc_subview [[QK_TMEM]][[[QK_INDEX]], %c0_i32, %c0_i32]
+    // CHECK-NEXT: [[QK_EMPTY_BAR:%.*]] = ttg.memdesc_subview [[QK_EMPTY_MBARS]][[[QK_INDEX]]]
+    // CHECK-NEXT: wait_barrier [[QK_EMPTY_BAR]], [[QK_PHASE]], %true {ttg.partition = 1 : i32}
     // CHECK-NEXT: [[QK_READY_BAR:%.*]] = ttg.memdesc_subview [[QK_READY_MBARS]][[[QK_INDEX]]]
-    // CHECK-NEXT: tc_gen5_mma [[Q_SHARED]], [[K_TRANS]], [[QK_BUF]][], %false, %true, [[K_EMPTY_BAR]][%true], [[QK_READY_BAR]][%true] {ttg.assigned_stage = 0 : i32, ttg.partition = 1 : i32}
+    // CHECK-NEXT: tc_gen5_mma [[Q_SHARED]], [[K_TRANS]], [[QK_BUF]][], %false, %true, [[K_EMPTY_BAR]][%true], [[QK_READY_BAR]][%true] {ttg.partition = 1 : i32}
     %QK_tmem, %QK_tok = ttng.tmem_alloc : () -> (!ttg.memdesc<256x64xf32, #tmem_acc, #ttng.tensor_memory, mutable>, !ttg.async.token)
     %QK_mma_tok = ttng.tc_gen5_mma %Q_shared, %K_trans, %QK_tmem[%QK_tok], %false, %true : !ttg.memdesc<256x64xf16, #shared, #smem>, !ttg.memdesc<64x64xf16, #shared_T, #smem>, !ttg.memdesc<256x64xf32, #tmem_acc, #ttng.tensor_memory, mutable>
 
     // CHECK-NEXT: wait_barrier [[QK_READY_BAR]], [[QK_PHASE]] {ttg.partition = 0 : i32}
     // CHECK-NEXT: [[QK:%.*]], [[QK_LOAD_TOK:%.*]] = ttng.tmem_load [[QK_BUF]][] {ttg.partition = 0 : i32}
     %QK, %QK_load_tok = ttng.tmem_load %QK_tmem[%QK_mma_tok] : !ttg.memdesc<256x64xf32, #tmem_acc, #ttng.tensor_memory, mutable> -> tensor<256x64xf32, #blocked>
-    // CHECK-NEXT: [[QK_EMPTY_BAR:%.*]] = ttg.memdesc_subview [[QK_EMPTY_MBARS]][[[QK_INDEX]]]
     // CHECK-NEXT: arrive_barrier [[QK_EMPTY_BAR]], 1 {ttg.partition = 0 : i32}
 
     // CHECK-NEXT: [[QK_INDEX_INCR:%.*]] = arith.addi [[QK_INDEX]], %c1_i32
@@ -1331,8 +1428,6 @@ tt.func public @attention_forward(
     // CHECK-NEXT: [[QK_ROLLVER:%.*]] = arith.cmpi eq, [[QK_INDEX_INCR]], %c2_i32
     // CHECK-NEXT: [[QK_NEXT_INDEX:%.*]] = arith.select [[QK_ROLLVER]], %c0_i32, [[QK_INDEX_INCR]]
     // CHECK-NEXT: [[QK_NEXT_PHASE:%.*]] = arith.select [[QK_ROLLVER]], [[QK_PHASE_INCR]], [[QK_PHASE]]
-    // CHECK-NEXT: [[QK_EMPTY_BAR:%.*]] = ttg.memdesc_subview [[QK_EMPTY_MBARS]][[[QK_NEXT_INDEX]]]
-    // CHECK-NEXT: wait_barrier [[QK_EMPTY_BAR]], [[QK_NEXT_PHASE]], %true {ttg.assigned_stage = 0 : i32, ttg.partition = 1 : i32}
 
     // CHECK-NEXT: [[ROW_MAX:%.*]] = "compute_row_max"([[QK]], [[QK_SCALE]]) {ttg.partition = 0 : i32}
     %row_max = "compute_row_max"(%QK, %qk_scale) : (tensor<256x64xf32, #blocked>, f32) -> tensor<256xf32, #ttg.slice<{dim = 1, parent = #blocked}>>
@@ -1373,12 +1468,11 @@ tt.func public @attention_forward(
     %acc_corrected = arith.mulf %acc, %alpha_1 : tensor<256x64xf32, #blocked>
 
     // CHECK-NEXT: [[V_EMPTY_BAR:%.*]] = ttg.memdesc_subview [[V_EMPTY_MBARS]][[[V_INDEX]]]
-    // CHECK-NEXT: wait_barrier [[V_EMPTY_BAR]], [[V_PHASE]] {ttg.assigned_stage = 2 : i32, ttg.partition = 2 : i32}
+    // CHECK-NEXT: wait_barrier [[V_EMPTY_BAR]], [[V_PHASE]] {ttg.partition = 2 : i32}
     // CHECK-NEXT: [[V_READY_BAR:%.*]] = ttg.memdesc_subview [[V_READY_MBARS]][[[V_INDEX]]]
-    // CHECK-NEXT: barrier_expect [[V_READY_BAR]], 8192 {ttg.assigned_stage = 2 : i32, ttg.partition = 2 : i32}
+    // CHECK-NEXT: barrier_expect [[V_READY_BAR]], 8192 {ttg.partition = 2 : i32}
     // CHECK-NEXT: [[V_BUF:%.*]] = ttg.memdesc_subview [[V_BUFS]][[[V_INDEX]], %c0_i32, %c0_i32]
-    // CHECK-NEXT: [[V_DESC_PTR:%.*]] = ttng.tensor_desc_to_tma_ptr [[V_DESC]]
-    // CHECK-NEXT: async_tma_copy_global_to_local [[V_DESC_PTR]][[[I]], %c0_i32] [[V_BUF]], [[V_READY_BAR]], %true {ttg.assigned_stage = 2 : i32, ttg.partition = 2 : i32}
+    // CHECK-NEXT: async_tma_copy_global_to_local [[V_DESC]][[[I]], %c0_i32] [[V_BUF]], [[V_READY_BAR]], %true {ttg.partition = 2 : i32}
     %V = tt.descriptor_load %V_desc[%i, %c0_i32] : !tt.tensordesc<tensor<64x64xf16, #shared>> -> tensor<64x64xf16, #load_blocked>
     %V_shared = ttg.local_alloc %V : (tensor<64x64xf16, #load_blocked>) -> !ttg.memdesc<64x64xf16, #shared, #smem>
 
@@ -1391,12 +1485,12 @@ tt.func public @attention_forward(
     // CHECK-NEXT: tmem_store [[ACC_CORRECTED]], [[PV_0]][], %true {ttg.partition = 3 : i32}
     // CHECK-NEXT: arrive_barrier [[PV_EMPTY_BAR0]], 1 {ttg.partition = 3 : i32}
 
-    // CHECK-NEXT: wait_barrier [[V_READY_BAR]], [[V_PHASE]] {ttg.assigned_stage = 2 : i32, ttg.partition = 1 : i32}
-    // CHECK-NEXT: wait_barrier [[PV_EMPTY_BAR0]], [[NEXT_PV_PHASE]], %true {ttg.assigned_stage = 2 : i32, ttg.partition = 1 : i32}
-    // CHECK-NEXT: wait_barrier [[P_READY_MBARS]], [[P_PHASE]] {ttg.assigned_stage = 2 : i32, ttg.partition = 1 : i32}
+    // CHECK-NEXT: wait_barrier [[V_READY_BAR]], [[V_PHASE]] {ttg.partition = 1 : i32}
+    // CHECK-NEXT: wait_barrier [[PV_EMPTY_BAR0]], [[NEXT_PV_PHASE]], %true {ttg.partition = 1 : i32}
+    // CHECK-NEXT: wait_barrier [[P_READY_MBARS]], [[P_PHASE]] {ttg.partition = 1 : i32}
     %P_tmem = ttng.tmem_alloc %P : (tensor<256x64xf16, #blocked>) -> !ttg.memdesc<256x64xf16, #tmem_lhs, #ttng.tensor_memory>
     %acc_tmem, %acc_tok = ttng.tmem_alloc %acc_corrected : (tensor<256x64xf32, #blocked>) -> (!ttg.memdesc<256x64xf32, #tmem_acc, #ttng.tensor_memory, mutable>, !ttg.async.token)
-    // CHECK-NEXT: tc_gen5_mma [[P_BUF]], [[V_BUF]], [[PV_0]][], %true, %true, [[V_EMPTY_BAR]][%true], [[PV_READY_BAR0]][%true], [[P_EMPTY_MBARS]][%true] {ttg.assigned_stage = 2 : i32, ttg.partition = 1 : i32}
+    // CHECK-NEXT: tc_gen5_mma [[P_BUF]], [[V_BUF]], [[PV_0]][], %true, %true, [[V_EMPTY_BAR]][%true], [[PV_READY_BAR0]][%true], [[P_EMPTY_MBARS]][%true] {ttg.partition = 1 : i32}
     %PV_mma_tok = ttng.tc_gen5_mma %P_tmem, %V_shared, %acc_tmem[%acc_tok], %true, %true : !ttg.memdesc<256x64xf16, #tmem_lhs, #ttng.tensor_memory>, !ttg.memdesc<64x64xf16, #shared, #smem>, !ttg.memdesc<256x64xf32, #tmem_acc, #ttng.tensor_memory, mutable>
     %O, %O_tok = ttng.tmem_load %acc_tmem[%PV_mma_tok] : !ttg.memdesc<256x64xf32, #tmem_acc, #ttng.tensor_memory, mutable> -> tensor<256x64xf32, #blocked>
 
@@ -1417,8 +1511,7 @@ tt.func public @attention_forward(
     // CHECK-NEXT: yield [[NEXT_L_I]], [[ROW_MAX]], %{{[0-9]+}}, [[K_NEXT_INDEX]], [[K_NEXT_PHASE]], [[V_NEXT_INDEX]], [[V_NEXT_PHASE]], [[QK_NEXT_INDEX]], [[QK_NEXT_PHASE]], [[NEXT_PV_PHASE]], [[NEXT_P_PHASE]]
 
     scf.yield %next_l_i, %O, %row_max : tensor<256xf32, #ttg.slice<{dim = 1, parent = #blocked}>>, tensor<256x64xf32, #blocked>, tensor<256xf32, #ttg.slice<{dim = 1, parent = #blocked}>>
-  // CHECK-NEXT: tt.scheduled_max_stage = 3 : i32
-  // CHECK-SAME: ttg.partition.stages = [0 : i32, 1 : i32, 0 : i32, 1 : i32]
+  // CHECK-NEXT: ttg.partition.stages = [0 : i32, 1 : i32, 0 : i32, 1 : i32]
   } {tt.warp_specialize}
 
   // CHECK-NEXT: wait_barrier [[PV_READY_BAR0]], [[OUTS]]#9

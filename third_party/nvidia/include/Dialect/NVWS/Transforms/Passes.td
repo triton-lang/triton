@@ -36,8 +36,6 @@ def NVWSLowerWarpGroup : Pass<"nvws-lower-warp-group", "mlir::ModuleOp"> {
     warp groups will become isolated regions.
   }];
 
-  let constructor = "mlir::createNVWSLowerWarpGroupPass()";
-
   let dependentDialects = [
     "mlir::triton::nvws::NVWSDialect",
     "mlir::triton::TritonDialect",
@@ -58,8 +56,6 @@ def NVWSLowerAref : Pass<"nvws-lower-aref", "mlir::ModuleOp"> {
     This lowering may yield non-ideal parallelism in certain cases,
     which will be optimized by follow up peephole passes.
   }];
-
-  let constructor = "mlir::createNVWSLowerArefPass()";
 
   let dependentDialects = [
     "mlir::triton::nvws::NVWSDialect",

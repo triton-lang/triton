@@ -1,6 +1,6 @@
 // RUN: triton-opt %s -split-input-file -tritongpu-reduce-data-duplication | FileCheck %s
 
-//       CHECK:   #[[$SHARED:.*]] = #ttg.swizzled_shared<{vec = 8, perPhase = 8, maxPhase = 2, order = [0, 1]}
+//       CHECK:   #[[$SHARED:.*]] = #ttg.swizzled_shared<{vec = 8, perPhase = 4, maxPhase = 2, order = [0, 1]}
 //       CHECK-LABEL: apply_swizzle
 //       CHECK:   %{{.*}} = ttg.local_alloc %{{.*}} : (tensor<16x256xf16, #{{.*}}>) -> !ttg.memdesc<16x256xf16, #[[$SHARED]], #smem>
 
@@ -23,6 +23,21 @@ module attributes {"ttg.target" = "cuda:80", "ttg.num-ctas" = 1 : i32, "ttg.num-
 module attributes {"ttg.target" = "cuda:80", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
   tt.func @conversion_shortcut_blocked_dotop_warp32(%arg0: tensor<64x64xf16, #blocked>) {
     %0 = ttg.convert_layout %arg0 : tensor<64x64xf16, #blocked> -> tensor<64x64xf16, #ttg.dot_op<{opIdx = 0, parent = #blocked}>>
+    tt.return
+  }
+}
+
+// -----
+
+//       CHECK:   #[[$SHARED:.*]] = #ttg.swizzled_shared<{vec = 32, perPhase = 64, maxPhase = 1, order = [1, 0]}>
+//       CHECK-LABEL:   handles_small_contiguous_dim
+//       CHECK:   %{{.*}} = ttg.local_alloc %{{.*}} : (tensor<32x1xf16, #{{.*}}>) -> !ttg.memdesc<32x1xf16, #[[$SHARED]], #smem>
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [8, 4], warpsPerCTA = [4, 1], order = [1, 0]}>
+#mma = #ttg.nvidia_mma<{versionMajor = 2, versionMinor = 0, warpsPerCTA = [2, 2], instrShape = [16, 8]}>
+module attributes {"ttg.target" = "cuda:80", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  tt.func @handles_small_contiguous_dim(%arg0: tensor<32x1xf16, #blocked>) {
+    %0 = ttg.convert_layout %arg0 : tensor<32x1xf16, #blocked> -> tensor<32x1xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 8}>>
     tt.return
   }
 }

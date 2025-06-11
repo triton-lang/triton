@@ -3,6 +3,7 @@ import hashlib
 import json
 from .._C.libtriton import get_cache_invalidating_env_vars, ir
 from ..backends import backends
+from ..backends.compiler import Language
 from ..backends.compiler import BaseBackend, GPUTarget
 from .. import __version__, knobs
 from ..runtime.autotuner import OutOfResources
@@ -54,6 +55,7 @@ class ASTSource:
 
     def __init__(self, fn, signature, constexprs=None, attrs=None) -> None:
         self.fn = fn
+        self.language = Language.TRITON
         self.ext = "ttir"
         self.name = fn.__name__
         self.signature = signature
@@ -92,6 +94,7 @@ class IRSource:
         self.path = path
         path = Path(path)
         self.ext = path.suffix[1:]
+        self.language = Language.TRITON
         self.src = path.read_text()
         ir.load_dialects(context)
         backend.load_dialects(context)
@@ -318,7 +321,7 @@ def compile(src, target=None, options=None):
     metadata["triton_version"] = __version__
     # run compilation pipeline  and populate metadata
     stages = dict()
-    backend.add_stages(stages, options)
+    backend.add_stages(stages, options, src.language)
     first_stage = list(stages.keys()).index(src.ext)
     # when the source is an IR file, don't apply the passes related to this stage. This makes it easier to write IR level tests.
     if ir_source:
@@ -338,6 +341,14 @@ def compile(src, target=None, options=None):
     except Exception as e:
         filter_traceback(e)
         raise
+
+    if ir_source:
+        ir_filename = f"{file_name}.{src.ext}"
+        metadata_group[ir_filename] = fn_cache_manager.put(module, ir_filename)
+    else:
+        ir_filename = f"{file_name}.source"
+        metadata_group[ir_filename] = fn_cache_manager.put(module, ir_filename)
+
     use_ir_loc = knobs.compilation.use_ir_loc
     if ir_source and use_ir_loc:
         module.create_location_snapshot(src.path)
@@ -348,7 +359,12 @@ def compile(src, target=None, options=None):
     for ext, compile_ir in list(stages.items())[first_stage:]:
         next_module = compile_ir(module, metadata)
         ir_filename = f"{file_name}.{ext}"
-        if (fn_override_manager is not None and (full_name := fn_override_manager.get_file(ir_filename)) is not None):
+        if fn_override_manager is None:
+            # Users can override kernels at scale by setting `ir_override` in autotune config
+            # without TRITON_KERNEL_OVERRIDE
+            if (ir_override := metadata.get("ir_override", None)) and ir_override.endswith(f".{ext}"):
+                next_module = parse(ir_override, ext, context)
+        elif full_name := fn_override_manager.get_file(ir_filename):
             print(f"\nOverriding kernel with file {full_name}")
             next_module = parse(full_name, ext, context)
         # If TRITON_STORE_BINARY_ONLY is 1, only store cubin/hsaco/json

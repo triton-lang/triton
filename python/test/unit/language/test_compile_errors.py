@@ -263,19 +263,6 @@ def test_power_of_two_shapes_2():
     assert str(e.value.__cause__) == "Shape element 0 must be a power of 2"
 
 
-def test_captured_var_access():
-
-    CAPTURED = 42
-
-    @triton.jit
-    def kernel():
-        a = CAPTURED  # noqa
-
-    with pytest.raises(CompilationError) as e:
-        triton.compile(triton.compiler.ASTSource(fn=kernel, signature={}, constexprs={}))
-    assert "CAPTURED is not defined" in str(e.value)
-
-
 GLOBAL = 42
 
 
@@ -384,10 +371,11 @@ def test_fp8_support(fresh_triton_cache, dtype):
 
     @triton.jit
     def dtype_kernel(dtype: tl.constexpr):
-        _ = tl.full((256, ), 0.0, dtype)
+        a = tl.full((64, 64), 0.0, dtype)
+        tl.dot(a, a)
 
     if dtype in warning_dtypes:
-        ctx = pytest.warns(UserWarning, match=r"fp8e4b15 is deprecated in this architecture")
+        ctx = pytest.warns(UserWarning, match=r"the use of fp8e4b15 is deprecated on Hopper and later architectures")
     elif dtype in supported_dtypes:
         ctx = contextlib.nullcontext()
     else:

@@ -1,4 +1,5 @@
 add_triton_library(TritonAMDGPUToLLVM
+    AsyncUtility.cpp
     AtomicRMWOpsEmitter.cpp
     BufferOpsEmitter.cpp
     ConvertLayoutOpToLLVM/SharedToDotOperandHelper.cpp

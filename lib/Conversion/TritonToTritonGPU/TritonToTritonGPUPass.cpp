@@ -481,14 +481,17 @@ public:
   matchAndRewrite(triton::FuncOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     auto converter = getTypeConverter();
+    TypeConverter::SignatureConversion result(op.getNumArguments());
     auto newOp = rewriter.replaceOpWithNewOp<triton::FuncOp>(
         op, op.getName(), op.getFunctionType());
     addNamedAttrs(newOp, adaptor.getAttributes());
     rewriter.inlineRegionBefore(op.getBody(), newOp.getBody(),
                                 newOp.getBody().end());
-    if (failed(rewriter.convertRegionTypes(&newOp.getBody(), *converter)))
-      return failure();
-
+    // Convert just the entry block. The remaining unstructured control flow is
+    // converted by br patterns.
+    if (!newOp.getBody().empty())
+      rewriter.applySignatureConversion(&newOp.getBody().front(), result,
+                                        converter);
     return success();
   }
 };
@@ -565,8 +568,6 @@ void populateTritonPatterns(TritonGPUTypeConverter &typeConverter,
       GenericOpPattern<triton::DescriptorLoadOp>,
       GenericOpPattern<triton::DescriptorStoreOp>,
       GenericOpPattern<triton::DescriptorReduceOp>,
-      GenericOpPattern<triton::ExperimentalTensormapCreateOp>,
-      GenericOpPattern<triton::ExperimentalTensormapFenceproxyAcquireOp>,
       // this assumes the right layout will be set later for dot scaled.
       GenericOpPattern<triton::DotScaledOp>,
       GenericOpPattern<triton::CallOp>,

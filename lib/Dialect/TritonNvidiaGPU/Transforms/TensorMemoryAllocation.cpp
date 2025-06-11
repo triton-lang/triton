@@ -9,13 +9,14 @@
 #include "llvm/ADT/EquivalenceClasses.h"
 #include "llvm/ADT/MapVector.h"
 
-#define GEN_PASS_CLASSES
-#include "triton/Dialect/TritonNvidiaGPU/Transforms/Passes.h.inc"
+namespace mlir {
+namespace triton {
+namespace nvidia_gpu {
 
-using namespace mlir;
-using namespace triton;
-using namespace triton::gpu;
-using namespace triton::nvidia_gpu;
+namespace ttg = triton::gpu;
+
+#define GEN_PASS_DEF_TRITONTENSORMEMORYALLOCATIONPASS
+#include "triton/Dialect/TritonNvidiaGPU/Transforms/Passes.h.inc"
 
 namespace {
 
@@ -119,7 +120,7 @@ static Interval<int> getLiveIntervals(Value value, Liveness &liveness,
   SmallVector<Operation *> users(value.getUsers());
   while (!users.empty()) {
     Operation *user = users.pop_back_val();
-    if (!isa<triton::gpu::MemDescSubviewOp>(user))
+    if (!isa<ttg::MemDescSubviewOp, ttg::MemDescReinterpretOp>(user))
       continue;
     auto usersLivness = liveness.resolveLiveness(user->getResult(0));
     liveOperations.insert(liveOperations.end(), usersLivness.begin(),
@@ -178,15 +179,20 @@ static Operation *getAlloc(Value value) {
   while (true) {
     if (auto allocOp = value.getDefiningOp<TMEMAllocOp>())
       return allocOp;
-    if (auto subviewOp = value.getDefiningOp<triton::gpu::MemDescSubviewOp>()) {
+    if (auto subviewOp = value.getDefiningOp<ttg::MemDescSubviewOp>()) {
       value = subviewOp.getSrc();
       continue;
     }
+    if (auto reinterpOp = value.getDefiningOp<ttg::MemDescReinterpretOp>()) {
+      value = reinterpOp.getSrc();
+      continue;
+    }
     auto arg = dyn_cast<BlockArgument>(value);
-    if (!arg || !isa<WarpSpecializePartitionsOp>(arg.getOwner()->getParentOp()))
+    if (!arg || !isa<triton::gpu::WarpSpecializePartitionsOp>(
+                    arg.getOwner()->getParentOp()))
       llvm::report_fatal_error("expected to find a TMEM alloc op");
-    auto partitions =
-        cast<WarpSpecializePartitionsOp>(arg.getOwner()->getParentOp());
+    auto partitions = cast<triton::gpu::WarpSpecializePartitionsOp>(
+        arg.getOwner()->getParentOp());
     value = partitions.getParentOp().getExplicitCaptures()[arg.getArgNumber()];
   }
 }
@@ -264,10 +270,11 @@ allocateTMem(Operation *parentOp,
     // Find all allocations in code that may execute at the same time. Only look
     // at processed allocations.
     SmallVector<TMemChunk> coexistingChunks;
-    if (auto ws = alloc->getParentOfType<WarpSpecializeOp>()) {
+    if (auto ws = alloc->getParentOfType<triton::gpu::WarpSpecializeOp>()) {
       for (auto prevIt = allocs.begin(); prevIt != it; ++prevIt) {
         TMEMAllocOp prevAlloc = *prevIt;
-        auto prevWs = prevAlloc->getParentOfType<WarpSpecializeOp>();
+        auto prevWs =
+            prevAlloc->getParentOfType<triton::gpu::WarpSpecializeOp>();
         if (prevWs && prevWs == ws &&
             alloc->getParentRegion() != prevAlloc->getParentRegion())
           coexistingChunks.push_back(allocChunks.at(prevAlloc));
@@ -307,10 +314,16 @@ allocateTMem(Operation *parentOp,
   return totalMemorySize;
 }
 
-class TritionTensorMemoryAllocationPass
-    : public TritionTensorMemoryAllocationPassBase<
-          TritionTensorMemoryAllocationPass> {
+} // anonymous namespace
+
+class TritonTensorMemoryAllocationPass
+    : public impl::TritonTensorMemoryAllocationPassBase<
+          TritonTensorMemoryAllocationPass> {
 public:
+  IntegerAttr getI32Attr(int32_t value) {
+    return Builder(&getContext()).getI32IntegerAttr(value);
+  }
+
   void runOnOperation() override {
     ModuleOp mod = getOperation();
     MLIRContext *ctx = &getContext();
@@ -320,6 +333,9 @@ public:
     int totalMemorySize = allocateTMem(mod, offsets);
 
     std::array<int, 6> possibleAllocations = {0, 32, 64, 128, 256, 512};
+    // NOTE: if totalMemorySize > 512 we exceeded the maximum amount of tensor
+    // memory, but we let the compilation finish so that we can raise an
+    // exception in python for the auto-tuner.
     if (totalMemorySize <= 512) {
       for (int size : possibleAllocations) {
         if (totalMemorySize <= size) {
@@ -328,23 +344,21 @@ public:
         }
       }
     }
-    // if totalMemorySize > 512 we exceeded the maximum amount of tensor memory,
-    // let the compilation finish so that we can raise an exception in python
-    // for auto-tuner.
     if (totalMemorySize > 0) {
-      assert(mod->getAttr("ttg.shared") != nullptr &&
-             cast<IntegerAttr>(mod->getAttr("ttg.shared")).getInt() != 0 &&
-             "Shared memory is required for allocation of Tensor Core memory.");
+      // We use a small smem allocation to get the tensor memory base address
+      // from tcgen05.alloc, ensure the block has at least 4 bytes of smem
+      int shared = 0;
+      if (auto sharedAttr = mod->getAttr("ttg.shared")) {
+        shared = cast<IntegerAttr>(sharedAttr).getInt();
+      }
+      if (shared < 4) {
+        mod->setAttr("ttg.shared", getI32Attr(4));
+      }
     }
-
-    mod->setAttr("ttg.tensor_memory_size",
-                 mlir::IntegerAttr::get(mlir::IntegerType::get(ctx, 32),
-                                        totalMemorySize));
+    mod->setAttr("ttg.tensor_memory_size", getI32Attr(totalMemorySize));
   }
 };
 
-} // namespace
-
-std::unique_ptr<Pass> mlir::createTensorMemoryAllocationPass() {
-  return std::make_unique<TritionTensorMemoryAllocationPass>();
-}
+} // namespace nvidia_gpu
+} // namespace triton
+} // namespace mlir

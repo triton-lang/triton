@@ -154,18 +154,6 @@ LogicalResult ArriveBarrierOp::verify() {
   return success();
 }
 
-// -- TensorDescToTMAPtrOp --
-LogicalResult TensorDescToTMAPtrOp::canonicalize(TensorDescToTMAPtrOp op,
-                                                 PatternRewriter &rewriter) {
-  // tensor_desc_to_tma_ptr(reinterpret_tensor_desc(ptr)) -> ptr
-  if (auto reinterpret =
-          op.getDesc().getDefiningOp<triton::ReinterpretTensorDescOp>()) {
-    rewriter.replaceOp(op, reinterpret.getRawDesc());
-    return success();
-  }
-  return failure();
-}
-
 // -- AsyncTMACopyGlobalToLocalOp --
 LogicalResult AsyncTMACopyGlobalToLocalOp::verify() {
   if (failed(verifyBarrierType(*this, getBarrier().getType())))
@@ -244,8 +232,15 @@ static void printToken(OpAsmPrinter &p, Operation *op, Value dep, Type token) {
 void TCGen5MMAOp::getEffects(
     SmallVectorImpl<SideEffects::EffectInstance<MemoryEffects::Effect>>
         &effects) {
+  // The op reads the accumulator if `useD` is not known to be false.
+  APInt useD;
+  if (!matchPattern(getUseD(), m_ConstantInt(&useD)) || !useD.isZero()) {
+    effects.emplace_back(MemoryEffects::Read::get(), &getDMutable(),
+                         TensorMemory::get());
+  }
   effects.emplace_back(MemoryEffects::Write::get(), &getDMutable(),
                        TensorMemory::get());
+
   if (isa<SharedMemorySpaceAttr>(getA().getType().getMemorySpace())) {
     effects.emplace_back(MemoryEffects::Read::get(), &getAMutable(),
                          SharedMemory::get());
@@ -296,8 +291,15 @@ void TCGen5MMAOp::build(OpBuilder &builder, OperationState &state, Type token,
 void TCGen5MMAScaledOp::getEffects(
     SmallVectorImpl<SideEffects::EffectInstance<MemoryEffects::Effect>>
         &effects) {
+  // The op reads the accumulator if `useD` is not known to be false.
+  APInt useD;
+  if (!matchPattern(getUseD(), m_ConstantInt(&useD)) || !useD.isZero()) {
+    effects.emplace_back(MemoryEffects::Read::get(), &getDMutable(),
+                         TensorMemory::get());
+  }
   effects.emplace_back(MemoryEffects::Write::get(), &getDMutable(),
                        TensorMemory::get());
+
   if (isa<SharedMemorySpaceAttr>(getA().getType().getMemorySpace())) {
     effects.emplace_back(MemoryEffects::Read::get(), &getAMutable(),
                          SharedMemory::get());
@@ -453,7 +455,8 @@ LogicalResult TMEMStoreOp::verify() {
   if (!getDst().getType().getMutableMemory()) {
     return emitOpError("Cannot store into an immutable alloc");
   }
-  return success();
+  return triton::gpu::verifyMemoryOpTypes(*this, getSrc().getType(),
+                                          getDst().getType());
 }
 
 // -- TMEMLoadOp --
@@ -464,7 +467,7 @@ LogicalResult TMEMLoadOp::verify() {
   if (!isa<triton::nvidia_gpu::TensorMemoryEncodingAttr>(
           getSrc().getType().getEncoding()))
     return emitOpError("should use tensor memory encoding.");
-  return success();
+  return triton::gpu::verifyMemoryOpTypes(*this, getSrc().getType(), getType());
 }
 
 // -- TMEMAllocOp --
@@ -474,8 +477,7 @@ LogicalResult TMEMAllocOp::verify() {
   if (!isa<TensorMemoryEncodingAttr, TensorMemoryScalesEncodingAttr>(
           getType().getEncoding()))
     return emitOpError("should use tensor memory encoding");
-
-  return LocalAllocOp::verifyAllocOp(*this, getSrc(), getType());
+  return triton::gpu::verifyAllocOp(*this, getSrc(), getType());
 }
 
 void TMEMAllocOp::getEffects(
@@ -488,10 +490,12 @@ void TMEMAllocOp::getEffects(
   // op.
   if (!getType().getMutableMemory() && !op->hasAttr("tensor_memory_col_offset"))
     return;
-  effects.emplace_back(MemoryEffects::Allocate::get(), TensorMemory::get());
+  OpResult alloc = getOperation()->getOpResult(0);
+  effects.emplace_back(MemoryEffects::Allocate::get(), alloc,
+                       TensorMemory::get());
   if (getSrc())
-    effects.emplace_back(MemoryEffects::Write::get(),
-                         getOperation()->getOpResult(0), TensorMemory::get());
+    effects.emplace_back(MemoryEffects::Write::get(), alloc,
+                         TensorMemory::get());
 }
 
 // -- TMEMCopyOp --
@@ -567,6 +571,24 @@ void TMEMSubSliceOp::build(OpBuilder &builder, OperationState &state,
       shape, allocTy.getElementType(), newEncoding, allocTy.getMemorySpace(),
       allocTy.getMutableMemory());
   build(builder, state, subsliceType, alloc, offset);
+}
+
+// -- TensormapCreateOp --
+LogicalResult TensormapCreateOp::verify() {
+  auto rank = getBoxDim().size();
+  if (getGlobalDim().size() != rank) {
+    return emitError("Rank mismatch for global dim. Got ")
+           << getGlobalDim().size() << " but expected " << rank;
+  }
+  if (getGlobalStride().size() + 1 != rank) {
+    return emitError("Rank mismatch for global stride. Got ")
+           << getGlobalStride().size() << " but expected " << rank - 1;
+  }
+  if (getElementStride().size() != rank) {
+    return emitError("Rank mismatch for element stride. Got ")
+           << getElementStride().size() << " but expected " << rank;
+  }
+  return success();
 }
 
 } // namespace nvidia_gpu

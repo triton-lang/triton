@@ -77,8 +77,8 @@ def specialize(fn, module, constants, tuples, name=None, do_not_specialize=tuple
         if arg_key not in constants:
             non_specialized_args += new_args
     # add global symbols
-    extra_globals = {v.__name__: v for k, v in constants.items() if isinstance(v, triton.runtime.jit.JITFunction)}
-    extra_globals.update(fn.__globals__)
+    spec_fns = {v.__name__: v for k, v in constants.items() if isinstance(v, triton.runtime.jit.JITFunction)}
+    globals = spec_fns | fn.get_capture_scope()
     # build new source code and define kernel dynamically
     new_signature = f"def {name}({', '.join(non_specialized_args)}):"
     constexpr_lines = [
@@ -92,7 +92,23 @@ def specialize(fn, module, constants, tuples, name=None, do_not_specialize=tuple
     sig = inspect.signature(triton.runtime.jit.JITFunction.__init__)
     params = list(sig.parameters.values())[2:]
     attrs = {param.name: getattr(fn, param.name, param.default) for param in params}
+
+    # make a new repr which appends the repr of the specialized functions.
+    base_repr = attrs["repr"]
+
+    def new_repr(specialization):
+        ret = base_repr(specialization)
+        for spec_fn in spec_fns.values():
+            spec_repr = spec_fn.repr(None)
+            if spec_repr:
+                spec_repr = spec_repr.strip("_")
+            if spec_repr:
+                ret += f"_{spec_repr}"
+        return ret
+
+    attrs["repr"] = new_repr
+
     if do_not_specialize:
         attrs["do_not_specialize"] = do_not_specialize
-    ret = define_kernel(new_src, module, attrs, **extra_globals)
+    ret = define_kernel(new_src, module, attrs, **globals)
     return ret

@@ -27,14 +27,16 @@
 #include "mlir/Pass/Pass.h"
 
 namespace mlir {
+namespace triton {
 
-std::unique_ptr<Pass> createNVWSLowerWarpGroupPass();
+// Generate the pass class declarations.
+#define GEN_PASS_DECL
+#include "nvidia/include/Dialect/NVWS/Transforms/Passes.h.inc"
 
-std::unique_ptr<Pass> createNVWSLowerArefPass();
-
-/// Generate the code for registering passes.
+// Generate the code for registering passes.
 #define GEN_PASS_REGISTRATION
 #include "nvidia/include/Dialect/NVWS/Transforms/Passes.h.inc"
 
+} // namespace triton
 } // namespace mlir
 #endif // DIALECT_NVWS_TRANSFORMS_PASSES_H_

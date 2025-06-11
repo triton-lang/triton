@@ -4,10 +4,33 @@ import triton
 cached_capabilities = {}
 
 
+def is_cuda():
+    if "is_cuda" not in cached_capabilities:
+        target = triton.runtime.driver.active.get_current_target()
+        cached_capabilities["is_cuda"] = False if target is None else target.backend == "cuda"
+    return cached_capabilities["is_cuda"]
+
+
 def is_hip():
     if "is_hip" not in cached_capabilities:
         cached_capabilities["is_hip"] = torch.cuda.is_available() and bool(torch.version.hip)
     return cached_capabilities["is_hip"]
+
+
+def is_hip_cdna3():
+    if "is_hip_cdna3" not in cached_capabilities:
+        target = triton.runtime.driver.active.get_current_target()
+        cached_capabilities["is_hip_cdna3"] = (target is not None and target.backend == 'hip'
+                                               and target.arch == 'gfx942')
+    return cached_capabilities["is_hip_cdna3"]
+
+
+def is_hip_cdna4():
+    if "is_hip_cdna4" not in cached_capabilities:
+        target = triton.runtime.driver.active.get_current_target()
+        cached_capabilities["is_hip_cdna4"] = (target is not None and target.backend == 'hip'
+                                               and target.arch == 'gfx950')
+    return cached_capabilities["is_hip_cdna4"]
 
 
 def cuda_capability_geq(major, minor=0):

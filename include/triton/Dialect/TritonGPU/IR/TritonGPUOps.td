@@ -163,8 +163,6 @@ def TTG_LocalAllocOp : TTG_Op<"local_alloc", [DeclareOpInterfaceMethods<MemoryEf
   ];
 
   let extraClassDeclaration = [{
-    static LogicalResult verifyAllocOp(Operation *op, Value src,
-                                       MemDescType dstTy);
     bool isSharedMemoryAlloc() {
       return isa_and_nonnull<SharedMemorySpaceAttr>(getType().getMemorySpace());
     }
@@ -208,14 +206,26 @@ def TTG_MemDescSubviewOp : TTG_Op<"memdesc_subview", [Pure, MemDescViewTrait]> {
 
   let description = [{
     This operation returns a new descriptor representing a subview of the buffer.
-    It doesn't affect the underlying memory. The subview can be rank-reduced.
+    It doesn't affect the underlying memory.
 
     For example, suppose that
      - the input shape is 2x4x16xf16,
-     - the output shape is 4x4xf16, and
-     - offsets = [1, 0, 4].
+     - the output shape is 4x16xf16, and
+     - offsets = [1, 0, 0].
 
-    Then in Python syntax, the subview covers input[1][0:4][4:8].
+    Then in Python syntax, the subview covers input[1].
+
+    Just one dimension may be split (at most one non-zero offset).
+
+    When the input shape and the output shape have different rank:
+    Or the output shape is a tensor of 1D tensor of 1 element:
+      - The rank of the output must be 1D smaller than the input.
+      - We assume the input is split along the 0th dimension.
+      - The offset along the 0th dimension may be a runtime value.
+    When the input and the output have the same rank:
+      - The offset must be a compile-time constant
+      - Larger or equal to the tile of the tensor (or zero)
+      - That does not split the input along the swizzling pattern (if any)
   }];
   let arguments = (
     ins TTG_MemDescType:$src, Variadic<I32>:$offsets);
@@ -239,8 +249,6 @@ def TTG_MemDescTransOp : TTG_Op<"memdesc_trans", [Pure,
     This operation returns a new descriptor
     representing a transposed view of the buffer.
   }];
-
-  let arguments = (ins TTG_MemDescType:$src, Variadic<I32>:$order);
 
   let arguments = (
     ins TTG_MemDescType:$src,
@@ -272,6 +280,26 @@ def TTG_MemDescReshapeOp : TTG_Op<"memdesc_reshape", [Pure,
   let hasVerifier = 1;
 }
 
+def TTG_MemDescReinterpretOp : TTG_Op<"memdesc_reinterpret", [Pure, MemDescViewTrait]> {
+  let summary = "reinterpret a memory descriptor as a different type and shape";
+
+  let description = [{
+    The `ttg.memdesc_reinterpret` operation reinterprets a memory descriptor
+    as one with a different shape and element type. Because memory descriptors
+    lack strides, this operation is only valid if the original memory descriptor
+    is contiguous.
+  }];
+
+  let arguments = (ins TTG_MemDescType:$src);
+  let results = (outs TTG_MemDescType:$result);
+
+  let assemblyFormat = [{
+    $src attr-dict `:` qualified(type($src)) `->` qualified(type($result))
+  }];
+
+  let hasVerifier = 1;
+}
+
 def TTG_LocalLoadOp : TTG_Op<"local_load"> {
   let summary = "Load a buffer from local memory into a distributed tensor";
 
@@ -282,6 +310,7 @@ def TTG_LocalLoadOp : TTG_Op<"local_load"> {
     Arg<TTG_MemDescType, "", [MemRead<SharedMemory>]>:$src,
     Optional<TTG_AsyncToken>:$token
   );
+  let results = (outs TT_Tensor:$result);
 
   let builders = [
       OpBuilder<(ins "Type":$retType, "Value":$src),
@@ -291,8 +320,7 @@ def TTG_LocalLoadOp : TTG_Op<"local_load"> {
 
   // Use qualified() otherwise "!ttg.memdesc<X>" is printed as "<X>".
   let assemblyFormat = [{$src (`token` $token^)? attr-dict `:` qualified(type($src)) `->` type($result)}];
-
-  let results = (outs TT_Tensor:$result);
+  let hasVerifier = 1;
 }
 
 def TTG_LocalStoreOp : TTG_Op<"local_store"> {
@@ -311,6 +339,36 @@ def TTG_LocalStoreOp : TTG_Op<"local_store"> {
   let assemblyFormat = [{
     $src `,` $dst attr-dict `:` type($src) `->` qualified(type($dst))
   }];
+}
+
+def TTG_PredicateStageOp: TTG_Op<"predicate_stage",
+                                [Pure, AllTypesMatch<["iv", "ub", "step"]>]> {
+  let summary = "pipeliner stage predicate";
+  let arguments = (ins AnySignlessIntegerOrIndex:$iv,
+                       AnySignlessIntegerOrIndex:$ub,
+                       AnySignlessIntegerOrIndex:$step,
+                       I32Attr:$maxStage,
+                       I32Attr:$stage);
+  let results = (outs I1:$result);
+  let assemblyFormat = "$iv `,` $ub `,` $step `maxStage` $maxStage `stage` $stage attr-dict `:` type($iv) `->` type($result)";
+}
+
+def TTG_MaskOp: TTG_Op<"mask",
+                       [SingleBlock]> {
+    let summary = "mask op for pipelining";
+    let arguments = (ins I1:$pred);
+    let results = (outs Variadic<AnyType>:$result);
+    let regions = (region SizedRegion<1>:$region);
+    let builders = [
+        OpBuilder<(ins "Value":$pred)>,
+    ];
+}
+
+def TTG_MaskReturnOp: TTG_Op<"mask.return",
+                             [HasParent<"MaskOp">, Pure, Terminator, ReturnLike]> {
+    let summary = "terminator for mask operator";
+    let arguments = (ins Variadic<AnyType>:$result);
+    let assemblyFormat = "$result attr-dict `:` type($result)";
 }
 
 def TTG_Fp4ToFpOp : TTG_Op<"fp4_to_fp", [Pure]> {
@@ -426,7 +484,9 @@ def TTG_WarpSpecializeOp : TTG_Op<"warp_specialize", [
   let builders = [
     OpBuilder<(ins "TypeRange":$resultTypes,
                    "ArrayRef<int32_t>":$partitionNumWarps,
-                   "unsigned":$numPartitionRegions)>
+                   "unsigned":$numPartitionRegions)>,
+    OpBuilder<(ins "TypeRange":$resultTypes, "ValueRange":$explicitCaptures,
+                   "ArrayRef<int32_t>":$partitionNumWarps)>,
   ];
 
   let hasVerifier = 1;

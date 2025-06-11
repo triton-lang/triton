@@ -23,7 +23,7 @@ tt.func public @softmax_kernel(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32},
     %8 = tt.splat %arg0 {loop.cluster = 1 : i32, loop.stage = 1 : i32} : !tt.ptr<f32> -> tensor<128x!tt.ptr<f32>, #blocked>
     %9 = tt.addptr %8, %2 {loop.cluster = 1 : i32, loop.stage = 1 : i32} : tensor<128x!tt.ptr<f32>, #blocked>, tensor<128xi32, #blocked>
     tt.store %9, %7, %4 {loop.cluster = 1 : i32, loop.stage = 1 : i32} : tensor<128x!tt.ptr<f32>, #blocked>
-  } {tt.num_stages = 2 : i32}
+  } {tt.num_stages = 2 : i32, tt.scheduled_max_stage = 1 : i32}
   tt.return
 }
 
@@ -42,7 +42,7 @@ tt.func public @scalar_load(%arg0: !tt.ptr<f32>, %arg1: i32, %arg2: i32, %arg3: 
     %1 = arith.addf %0, %k {loop.cluster = 1 : i32, loop.stage = 0 : i32} : f32
     %2 = arith.addf %1, %k {loop.cluster = 0 : i32, loop.stage = 1 : i32} : f32
     scf.yield %2 : f32
-  } {num_stages = 2 : i32}
+  } {num_stages = 2 : i32, tt.scheduled_max_stage = 1 : i32}
   tt.return %2 : f32
 }
 
@@ -69,11 +69,11 @@ tt.func public @make_tensor_desc_epilogue(%arg0: i32, %arg1: !tt.ptr<f32>, %arg2
     // CHECK: scf.if
     scf.if %4 {
       // CHECK-NOT: tt.make_tensor_descriptor
-      // CHECK: tt.experimental_tensormap_create
-      // CHECK-NEXT: tt.experimental_tensormap_fenceproxy_acquire
+      // CHECK: ttng.tensormap_create
+      // CHECK-NEXT: ttng.tensormap_fenceproxy_acquire
       %5 = tt.make_tensor_descriptor %arg1, [%arg2, %arg2], [%c1_i64, %c1_i64] : <f32>, <tensor<128x256xf32, #nvmma_128>>
     } {loop.cluster = 5 : i32, loop.stage = 2 : i32}
-  } {tt.num_stages = 3 : i32}
+  } {tt.num_stages = 3 : i32, tt.scheduled_max_stage = 2 : i32}
   tt.return
 }
 

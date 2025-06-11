@@ -83,6 +83,17 @@ LinearLayout ensureLayoutNotSmallerThan(
     const LinearLayout &layout,
     const llvm::SmallDenseMap<StringAttr, int64_t> &shape);
 
+inline LinearLayout
+ensureLayoutNotSmallerThan(const LinearLayout &layout,
+                           const llvm::ArrayRef<StringAttr> dimNames,
+                           const llvm::ArrayRef<int64_t> shape) {
+  llvm::SmallDenseMap<StringAttr, int64_t> namedDims;
+  for (auto [dimName, length] : llvm::zip_equal(dimNames, shape))
+    namedDims[dimName] = length;
+  assert(namedDims.size() == shape.size() && "duplicate dimension names given");
+  return ensureLayoutNotSmallerThan(layout, namedDims);
+}
+
 // Return a vector of the standard out dimension names for tensor layouts. These
 // are "dim0", "dim1", etc.
 SmallVector<StringAttr> standardOutDimNames(MLIRContext *ctx, int rank);
@@ -113,6 +124,11 @@ std::optional<ColumnAction> regPermForDivideLeft(const LinearLayout &A,
 // For a layout A with A.hasInDim(kReg), find a permutation of registers action
 // such that action.apply(A) has the broadcasted registers removed
 ColumnAction actionRemoveBroadcastedRegs(const LinearLayout &layout);
+
+// For a layout A with A.hasInDim(kReg), repeat the values so that they have
+// the same broadcasting as layout
+SmallVector<Value> broadcastAs(const SmallVector<Value> &values,
+                               const LinearLayout &layout);
 
 // Compute the supremum of two lists.
 // Error out if the supremum does not exist (e.g. [a, b] and [b, a]).

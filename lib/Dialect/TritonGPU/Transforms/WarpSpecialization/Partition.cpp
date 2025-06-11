@@ -16,11 +16,10 @@ namespace {
 // The consumers have to be precomputed in order for the SCC iterator to have an
 // acceptable runtime complexity. This assumes the underlying loop is immutable.
 struct PartitionNode {
-  PartitionNode(const WarpSchedule::Partition *partition)
-      : partition(partition) {}
+  PartitionNode(const Partition *partition) : partition(partition) {}
 
   // The partition this node represents.
-  const WarpSchedule::Partition *partition;
+  const Partition *partition;
   // Partitions that consume the outputs of this partition.
   SmallVector<std::pair<const PartitionNode *, OpOperand *>> consumers;
 };
@@ -31,7 +30,7 @@ struct PartitionGraph {
   PartitionGraph(scf::ForOp loop, const WarpSchedule &schedule);
 
   PartitionNode root;
-  llvm::MapVector<const WarpSchedule::Partition *, PartitionNode> nodes;
+  llvm::MapVector<const Partition *, PartitionNode> nodes;
 };
 } // namespace
 
@@ -39,7 +38,7 @@ PartitionGraph::PartitionGraph(scf::ForOp loop, const WarpSchedule &schedule)
     : root(schedule.getRootPartition()) {
   // Create the nodes at once. Afterwards, the map won't re-allocate and the
   // pointers will be stable.
-  for (WarpSchedule::Partition &partition : schedule.getPartitions())
+  for (Partition &partition : schedule.getPartitions())
     nodes.try_emplace(&partition, &partition);
 
   // Wire up the graph. Consider the root node to be consumed by all other
@@ -82,34 +81,27 @@ template <> struct GraphTraits<PartitionGraph> {
 // WarpSchedule
 //===----------------------------------------------------------------------===//
 
-WarpSchedule::Partition *WarpSchedule::addPartition(unsigned stage) {
+Partition *WarpSchedule::addPartition(unsigned stage) {
   partitions.push_back(std::make_unique<Partition>(partitions.size(), stage));
   return partitions.back().get();
 }
 
-void WarpSchedule::updatePartitions() {
-  for (Partition &partition : getPartitions()) {
-    for (Operation *op : partition.getOps())
-      opToPartition[op] = &partition;
-  }
-}
-
-WarpSchedule::Partition *WarpSchedule::getPartition(Operation *op) {
+Partition *WarpSchedule::getPartition(Operation *op) {
   return opToPartition.lookup(op);
 }
-const WarpSchedule::Partition *WarpSchedule::getPartition(Operation *op) const {
+const Partition *WarpSchedule::getPartition(Operation *op) const {
   return opToPartition.lookup(op);
 }
 
-WarpSchedule::Partition *WarpSchedule::getPartition(unsigned idx) {
+Partition *WarpSchedule::getPartition(unsigned idx) {
   return partitions[idx].get();
 }
-const WarpSchedule::Partition *WarpSchedule::getPartition(unsigned idx) const {
+const Partition *WarpSchedule::getPartition(unsigned idx) const {
   return partitions[idx].get();
 }
 
 void WarpSchedule::insert(Partition *partition, Operation *op) {
-  partition->insert(op);
+  partition->ops.push_back(op);
   opToPartition[op] = partition;
 }
 
@@ -154,9 +146,7 @@ FailureOr<WarpSchedule> WarpSchedule::deserialize(scf::ForOp loop) {
       }
       partition = result.partitions[idx].get();
     }
-
-    partition->insert(&op);
-    result.opToPartition[&op] = partition;
+    result.insert(partition, &op);
   }
 
   return result;

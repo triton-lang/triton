@@ -13,13 +13,6 @@ namespace triton {
 
 namespace gpu {
 
-/// Discover operations that should become async and assign latencies to them
-/// based on the numStages value provided by the user.
-void assignLatencies(ModuleOp moduleOp, int numStages);
-
-/// Schedule the loops based on the latencies assigned to the operations.
-void scheduleLoops(ModuleOp moduleOp);
-
 /// Lower the loops to prepare them for pipeline expansion.
 void lowerLoops(ModuleOp moduleOp);
 
@@ -114,6 +107,10 @@ public:
 
   bool insertDepsOfOp(Operation *op, int stage, CoarseSchedule::Cluster cluster,
                       bool includeArg, bool insertIfEarlier = false);
+
+  // Remove empty stages and clusters from the schedule, adjusting the maximum
+  // number of stages as appropriate.
+  void shrinkToFit();
 
   void erase(Operation *op) { opToStageAndCluster.erase(op); }
 

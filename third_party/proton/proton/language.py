@@ -4,8 +4,8 @@ import warnings
 
 
 @builtin
-def record(isStart: bool, regionId: int, _builder=None):
+def record(isStart: bool, regionId: int, _semantic=None):
     warnings.warn(
         "\nWarning the proton language module within Proton contains under development features that are not intended to be used outside of the core development team"
     )
-    return tl.tensor(_builder.create_proton_record(isStart, regionId), tl.void)
+    return tl.tensor(_semantic.builder.create_proton_record(isStart, regionId), tl.void)

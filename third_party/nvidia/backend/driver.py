@@ -1,23 +1,18 @@
 import functools
 import operator
 import os
-import sysconfig
-import hashlib
 import subprocess
-import tempfile
 import triton
+import re
 from pathlib import Path
 from triton import knobs
-from triton.runtime.build import _build
-from triton.runtime.cache import get_cache_manager
+from triton.runtime.build import compile_module_from_src
 from triton.runtime import _allocation
 from triton.backends.compiler import GPUTarget
-from triton.backends.driver import GPUDriver, platform_key
-
-from triton.tools.tensor_descriptor import TensorDescriptor
+from triton.backends.driver import GPUDriver
 
 dirname = os.path.dirname(os.path.realpath(__file__))
-include_dir = [os.path.join(dirname, "include")]
+include_dirs = [os.path.join(dirname, "include")]
 libdevice_dir = os.path.join(dirname, "lib")
 libraries = ['cuda']
 
@@ -51,26 +46,6 @@ def library_dirs():
     return [libdevice_dir, *libcuda_dirs()]
 
 
-def compile_module_from_src(src, name):
-    key = hashlib.sha256((src + platform_key()).encode("utf-8")).hexdigest()
-    cache = get_cache_manager(key)
-    suffix = sysconfig.get_config_var("EXT_SUFFIX")
-    cache_path = cache.get_file(f"{name}{suffix}")
-    if cache_path is None:
-        with tempfile.TemporaryDirectory() as tmpdir:
-            src_path = os.path.join(tmpdir, "main.c")
-            with open(src_path, "w") as f:
-                f.write(src)
-            so = _build(name, src_path, tmpdir, library_dirs(), include_dir, libraries)
-            with open(so, "rb") as f:
-                cache_path = cache.put(f.read(), f"{name}{suffix}", binary=True)
-    import importlib.util
-    spec = importlib.util.spec_from_file_location(name, cache_path)
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-    return mod
-
-
 # ------------------------
 # Utils
 # ------------------------
@@ -84,7 +59,13 @@ class CudaUtils(object):
         return cls.instance
 
     def __init__(self):
-        mod = compile_module_from_src(Path(os.path.join(dirname, "driver.c")).read_text(), "cuda_utils")
+        mod = compile_module_from_src(
+            src=Path(os.path.join(dirname, "driver.c")).read_text(),
+            name="cuda_utils",
+            library_dirs=library_dirs(),
+            include_dirs=include_dirs,
+            libraries=libraries,
+        )
         self.load_binary = mod.load_binary
         self.get_device_properties = mod.get_device_properties
         self.cuOccupancyMaxActiveClusters = mod.cuOccupancyMaxActiveClusters
@@ -125,19 +106,45 @@ def ty_to_cpp(ty):
 _BASE_ARGS_FORMAT = "iiiKKppOOOOO"
 
 
-def make_launcher(constants, signature):
+def make_launcher(constants, signature, tensordesc_meta):
 
-    def _expand_signature(sig, output):
-        # Expand tensordesc arguments
-        if isinstance(sig, str) and sig.startswith("tensordesc"):
-            output.append("nvTmaDesc")
-            ndim = sig.count(",") + 1
-            for _ in range(ndim):
-                output.append("i32")
-            for _ in range(ndim):
-                output.append("i64")
-        else:
-            output.append(sig)
+    def _expand_signature(signature):
+        output = []
+        tensordesc_idx = 0
+        # Expand tensor descriptor arguments into either nvTmaDesc, shape and
+        # strides, or base pointer, shape and strides depending on whether the
+        # kernel was lowered to use the nvTmaDesc or not.
+        for sig in signature:
+            if isinstance(sig, str) and sig.startswith("tensordesc"):
+                meta = tensordesc_meta[tensordesc_idx] if tensordesc_meta else None
+                tensordesc_idx += 1
+
+                match = re.match("tensordesc<([^[>]*)\\[([^]]*)\\]", sig)
+                dtype = match.group(1)
+                shape = match.group(2)
+                ndim = shape.count(",") + 1
+
+                if meta is None:
+                    output.append("*" + dtype)
+                    # Currently the host side tensor descriptors get passed in as a
+                    # tensor desc, shape, and strides. We have no way to use these
+                    # shape and strides when processing tensor descriptors which is
+                    # why we provide our own decomposition above. Sadly this means
+                    # we have to pass the shape and strides twice.
+                    for _ in range(2 * ndim):
+                        output.append("i64")
+                else:
+                    output.append("nvTmaDesc")
+
+                for _ in range(ndim):
+                    output.append("i32")
+                for _ in range(ndim):
+                    output.append("i64")
+            else:
+                output.append(sig)
+
+        assert not tensordesc_meta or tensordesc_idx == len(tensordesc_meta)
+        return output
 
     def _flatten_signature(sig, output):
         # Flatten tuples
@@ -181,9 +188,7 @@ def make_launcher(constants, signature):
             "uint64_t": "K",
         }[ty_to_cpp(ty)]
 
-    expand_signature = []
-    for sig in signature.values():
-        _expand_signature(sig, expand_signature)
+    expand_signature = _expand_signature(signature.values())
     signature = {i: s for i, s in enumerate(expand_signature)}
 
     args_format = ''.join([format_of(ty) for ty in signature.values()])
@@ -551,7 +556,15 @@ TMA_DTYPE_DEVICE_TO_HOST[10] = 9
 
 
 def make_tensordesc_arg(arg, metadata):
-    assert isinstance(arg, TensorDescriptor)
+    if metadata is None:
+        # Currently the host side tensor descriptors get decomposed in
+        # the frontend to tensor desc, shape, and strides. We have no
+        # way to use these shape and strides when processing tensor
+        # descriptors which is why we provide our own decomposition
+        # above. Sadly this means we have to pass the shape and strides
+        # twice.
+        return [arg.base, *arg.shape, *arg.strides, *arg.shape, *arg.strides]
+
     swizzle = metadata["swizzle"]
     elem_size = metadata["elem_size"]
     elem_type = metadata["elem_type"]
@@ -583,8 +596,8 @@ def make_tensordesc_arg(arg, metadata):
 
 
 def wrap_handle_tensordesc(launcher, tensordesc_meta):
-    if not tensordesc_meta:
-        return launcher
+    from triton.tools.tensor_descriptor import TensorDescriptor
+    from triton.experimental.gluon.nvidia.hopper import TensorDescriptor as GluonTensorDescriptor
 
     def inner(*args):
         meta_args = args[:len(_BASE_ARGS_FORMAT)]
@@ -592,13 +605,13 @@ def wrap_handle_tensordesc(launcher, tensordesc_meta):
         tensordesc_idx = 0
         final_args = []
         for i, arg in enumerate(raw_kernel_args):
-            if isinstance(arg, TensorDescriptor):
-                meta = tensordesc_meta[tensordesc_idx]
+            if isinstance(arg, (TensorDescriptor, GluonTensorDescriptor)):
+                meta = tensordesc_meta[tensordesc_idx] if tensordesc_meta else None
                 tensordesc_idx += 1
                 final_args.extend(make_tensordesc_arg(arg, meta))
             else:
                 final_args.append(arg)
-        assert tensordesc_idx == len(tensordesc_meta)
+        assert not tensordesc_meta or tensordesc_idx == len(tensordesc_meta)
         return launcher(*meta_args, *final_args)
 
     return inner
@@ -611,14 +624,19 @@ class CudaLauncher(object):
         arg_idx = lambda x: (src.fn.arg_names.index(x), ) if isinstance(x, str) else x
         constants = {arg_idx(idx): value for idx, value in constants.items()}
         signature = {idx: value for idx, value in src.signature.items()}
-        src = make_launcher(constants, signature)
-        mod = compile_module_from_src(src, "__triton_launcher")
-        self.num_ctas = functools.reduce(operator.mul, metadata.cluster_dims, 1)
         tensordesc_meta = getattr(metadata, "tensordesc_meta", None)
-        if tensordesc_meta is not None:
-            self.launch = wrap_handle_tensordesc(mod.launch, tensordesc_meta)
-        else:
-            self.launch = mod.launch
+        src = make_launcher(constants, signature, tensordesc_meta)
+        mod = compile_module_from_src(
+            src=src,
+            name="__triton_launcher",
+            library_dirs=library_dirs(),
+            include_dirs=include_dirs,
+            libraries=libraries,
+        )
+        has_tensor_desc_arg = any(isinstance(sig, str) and sig.startswith("tensordesc") for sig in signature.values())
+
+        self.num_ctas = functools.reduce(operator.mul, metadata.cluster_dims, 1)
+        self.launch = wrap_handle_tensordesc(mod.launch, tensordesc_meta) if has_tensor_desc_arg else mod.launch
         self.global_scratch_size = metadata.global_scratch_size
         self.global_scratch_align = metadata.global_scratch_align
         self.launch_cooperative_grid = metadata.launch_cooperative_grid

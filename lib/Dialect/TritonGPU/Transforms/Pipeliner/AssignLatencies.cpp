@@ -18,11 +18,12 @@ namespace tt = mlir::triton;
 namespace ttg = mlir::triton::gpu;
 namespace ttng = mlir::triton::nvidia_gpu;
 
-namespace mlir {
-namespace triton {
-namespace gpu {
-
+namespace mlir::triton::gpu {
 namespace {
+
+//===----------------------------------------------------------------------===//
+// assignLatencies
+//===----------------------------------------------------------------------===//
 
 // Return true if the preconditions for pipelining the loop are met.
 bool preCondition(scf::ForOp forOp) {
@@ -274,10 +275,10 @@ public:
         // place the wait right before the loads.
 
         if (hasSyncDots(forOp)) {
-          // Skip pipelining MMA in the loops where sync dots are used. This is
-          // dirty heuristic for performance drops in kernels where we would
-          // rather want to have last iteration peeled instead of having a full
-          // iteration of masked operations only to execute single wait.
+          // Skip pipelining MMA in the loops where sync dots are used. This
+          // is a dirty heuristic for performance drops in kernels where we
+          // would rather want to have last iteration peeled instead of having a
+          // full iteration of masked operations only to execute single wait.
           continue;
         }
         auto pipeHelper = ttng::MMAv5PipelineableOperandsHelper(
@@ -292,6 +293,19 @@ public:
                !getDisallowAccMultiBuffer(forOp))) {
             // MMA's users can be pushed to the next stage
             opLatency[&op] = 1;
+          }
+          // HACK: A pipelined MMA's latency should equal the number of buffers
+          // for the accumulator, but when the user is in an `scf.if` in SWP,
+          // the `scf.if` is pushed to the end of the loop rather than peeled
+          // before the MMA op, requiring an extra buffer due to liverange
+          // overlap. WS does not have this problem because the MMA is placed in
+          // a different partition than the MMA, so we can correctly set the
+          // latency.
+          if (forOp->hasAttr(kWarpSpecializeAttrName)) {
+            if (ttng::hasAccReadModifyWrite(mma, forOp))
+              opLatency.erase(&op); // can't pipeline the MMA
+            else
+              opLatency[&op] += 1;
           }
         }
       }
@@ -312,12 +326,13 @@ private:
   }
 };
 
-} // namespace
-
-// Look for load ops that directly or indirectly feed into dot ops. Based
-// on the requested number of stages assign the latencies in a way that
-// cover all the stages with the sum of latencies in the chain from the first
-// load to the final dot op.
+// Discover operations that should become async and assign latencies to them
+// based on the numStages value provided by the user.
+//
+// Look for load ops that directly or indirectly feed into dot ops. Based on the
+// requested number of stages assign the latencies in a way that cover all the
+// stages with the sum of latencies in the chain from the first load to the
+// final dot op.
 void assignLatencies(ModuleOp moduleOp, int defaultNumStages) {
   SmallVector<scf::ForOp> loops;
   moduleOp->walk([&](scf::ForOp forOp) {
@@ -341,6 +356,21 @@ void assignLatencies(ModuleOp moduleOp, int defaultNumStages) {
   }
   serializeLatencies(moduleOp, opLatency);
 }
-} // namespace gpu
-} // namespace triton
-} // namespace mlir
+
+} // namespace
+
+//===----------------------------------------------------------------------===//
+// Pass Definition
+//===----------------------------------------------------------------------===//
+
+#define GEN_PASS_DEF_TRITONGPUASSIGNLATENCIES
+#include "triton/Dialect/TritonGPU/Transforms/Passes.h.inc"
+
+struct AssignLatencies
+    : public impl::TritonGPUAssignLatenciesBase<AssignLatencies> {
+  using TritonGPUAssignLatenciesBase::TritonGPUAssignLatenciesBase;
+
+  void runOnOperation() override { assignLatencies(getOperation(), numStages); }
+};
+
+} // namespace mlir::triton::gpu

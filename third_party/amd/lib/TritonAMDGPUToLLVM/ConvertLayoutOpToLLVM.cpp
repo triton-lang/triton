@@ -189,21 +189,10 @@ static bool matchMFMAAndLinearLayoutCase(RankedTensorType srcTy,
   if (!mfmaLayout || !linearLayout)
     return false;
 
-  std::optional<LinearLayout> srcLL =
+  std::optional<LinearLayout> storeLL =
       mlir::triton::gpu::chooseMfmaLikeStoreLayout(srcTy);
-  if (!srcLL)
-    return false;
-
-  MLIRContext *ctx = linearLayout.getContext();
-  StringAttr kLane = StringAttr::get(ctx, "lane");
-  StringAttr kRegister = StringAttr::get(ctx, "register");
-  auto srcBase = srcLL.value().getBases();
-  auto srcReg = srcBase.lookup(kRegister);
-  auto srcLane = srcBase.lookup(kLane);
-  auto dstBases = linearLayout.getLinearLayout().getBases();
-  auto dstReg = dstBases.lookup(kRegister);
-  auto dstLane = dstBases.lookup(kLane);
-  return dstReg == srcReg && dstLane == srcLane;
+  return linearLayout.getLinearLayout() ==
+         storeLL.value_or(LinearLayout::empty());
 };
 
 struct ConvertLayoutOpMFMAToLinearConversion
@@ -234,7 +223,10 @@ public:
       return failure();
 
     auto mfmaLayout = dyn_cast<AMDMfmaEncodingAttr>(srcType.getEncoding());
-    assert(mfmaLayout.getMDim() == 32 && "Expected MFMA size 32");
+    auto mDim = mfmaLayout.getMDim();
+    auto nDim = mfmaLayout.getNDim();
+    assert((mDim == 32 || mDim == 16) && mDim == nDim &&
+           "Expected MFMA size 32 or 16");
     assert(triton::gpu::lookupThreadsPerWarp(rewriter) == 64 &&
            "Expected warp size 64 for MFMA");
 
@@ -244,6 +236,8 @@ public:
     SmallVector<Value> outVals;
     auto idx0 = b.i32_val(0);
     auto idx1 = b.i32_val(1);
+    auto intrinsicName = mDim == 32 ? "llvm.amdgcn.permlane32.swap"
+                                    : "llvm.amdgcn.permlane16.swap";
     // Convert MFMA layout to a MFMA-like linear layout where each thread
     // holds 8 consecutive elements
     for (size_t idx = 0; idx < inVals.size(); idx += 8) {
@@ -263,7 +257,7 @@ public:
       Value falseVal = b.false_val();
       Value perm =
           LLVM::createLLVMIntrinsicCallOp(
-              rewriter, loc, "llvm.amdgcn.permlane32.swap", retType,
+              rewriter, loc, intrinsicName, retType,
               ValueRange{b.bitcast(inVecs[0], i32_ty),
                          b.bitcast(inVecs[2], i32_ty), falseVal, falseVal})
               ->getResult(0);
@@ -272,7 +266,7 @@ public:
 
       // Swap the row 2 and 3 of vec1 and the row 0 and 1 of vec3
       perm = LLVM::createLLVMIntrinsicCallOp(
-                 rewriter, loc, "llvm.amdgcn.permlane32.swap", retType,
+                 rewriter, loc, intrinsicName, retType,
                  ValueRange{b.bitcast(inVecs[1], i32_ty),
                             b.bitcast(inVecs[3], i32_ty), falseVal, falseVal})
                  ->getResult(0);

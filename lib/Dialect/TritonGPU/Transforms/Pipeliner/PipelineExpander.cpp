@@ -67,6 +67,8 @@ protected:
   triton::PipeliningOption::AnnotationlFnType annotateFn = nullptr;
   bool peelEpilogue;
   triton::PipeliningOption::PredicateOpFnType predicateFn = nullptr;
+  triton::PipeliningOption::EmitPredicateStageFnType emitPredicateStageFn =
+      nullptr;
 
   // When peeling the kernel we generate several version of each value for
   // different stage of the prologue. This map tracks the mapping between
@@ -159,6 +161,10 @@ bool LoopPipelinerInternal::initializeLoopInfo(
   if ((!peelEpilogue || dynamicLoop) && predicateFn == nullptr) {
     LDBG("--no epilogue or predicate set -> BAIL");
     return false;
+  }
+  emitPredicateStageFn = options.emitPredicateStageFn;
+  if (emitPredicateStageFn == nullptr) {
+    emitPredicateStageFn = mlir::triton::emitPredicateForStage;
   }
   std::vector<std::pair<Operation *, unsigned>> schedule;
   options.getScheduleFn(forOp, schedule);
@@ -490,20 +496,10 @@ LogicalResult LoopPipelinerInternal::createKernel(
   if (!peelEpilogue) {
     // Create a predicate for each stage except the last stage.
     Location loc = newForOp.getLoc();
-    Type t = ub.getType();
     for (unsigned i = 0; i < maxStage; i++) {
       // c = ub - (maxStage - i) * step
-      Value c = rewriter.create<arith::SubIOp>(
-          loc, ub,
-          rewriter.create<arith::MulIOp>(
-              loc, step,
-              rewriter.create<arith::ConstantOp>(
-                  loc, rewriter.getIntegerAttr(t, int64_t(maxStage - i)))));
-
-      Value pred = rewriter.create<arith::CmpIOp>(
-          newForOp.getLoc(), arith::CmpIPredicate::slt,
-          newForOp.getInductionVar(), c);
-      predicates[i] = pred;
+      predicates[i] = emitPredicateStageFn(rewriter, newForOp.getInductionVar(),
+                                           ub, step, maxStage, i);
     }
   }
   for (Operation *op : opOrder) {
@@ -851,4 +847,20 @@ mlir::triton::pipelineForLoop(RewriterBase &rewriter, ForOp forOp,
     rewriter.eraseOp(forOp);
 
   return newForOp;
+}
+
+Value mlir::triton::emitPredicateForStage(RewriterBase &rewriter,
+                                          Value inductionVar, Value upperBound,
+                                          Value step, uint64_t maxStage,
+                                          uint64_t stage) {
+  auto loc = inductionVar.getLoc();
+  auto type = inductionVar.getType();
+  Value c = rewriter.create<arith::SubIOp>(
+      loc, upperBound,
+      rewriter.create<arith::MulIOp>(
+          loc, step,
+          rewriter.create<arith::ConstantOp>(
+              loc, rewriter.getIntegerAttr(type, maxStage - stage))));
+  return rewriter.create<arith::CmpIOp>(loc, arith::CmpIPredicate::slt,
+                                        inductionVar, c);
 }
