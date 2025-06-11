@@ -193,9 +193,9 @@ struct DirectToLdsLoadConversionBase : public LoadStoreConversionBase {
   }
 
   // Determine the vector size per load and collect the warp uniform shared
-  // addresses per vecTy. On GFX9 the shared address is a scalar so we need to
-  // compute the start address by setting lane_id to 0 and ignore swizzling
-  void emitSharedWarpStartAddresses(RewriterBase &rewriter, Operation *op,
+  // memory addresses per vecTy. This will only emit the address calculation and
+  // not the actual loads.
+  void emitWarpStartSharedAddresses(RewriterBase &rewriter, Operation *op,
                                     RankedTensorType srcTy, MemDescType dstTy,
                                     bool hasSwizzling, Type resElemTy,
                                     Value llDst,
@@ -204,11 +204,15 @@ struct DirectToLdsLoadConversionBase : public LoadStoreConversionBase {
     auto loc = op->getLoc();
     TritonLLVMOpBuilder b(loc, rewriter);
 
+    // On GFX9 the shared memory address is a scalar so we need to compute the
+    // start address by setting lane_id to 0 and ignore swizzling
+
     if (hasSwizzling) {
       // Overwrite the shared encoding with a non swizzled
       // one to get the base address of the warp
-      // TODO (alex): this only correct as long as we are not slicing along the
-      //              2 minor dimensions.
+      // TODO (alex): this is only correct as long as the lds view is a
+      //              contigous block. So this can break if we slice along the 2
+      //              minor dimensions carelessly.
       auto dstEnc = cast<SwizzledSharedEncodingAttr>(dstTy.getEncoding());
       auto flatSharedEnc = SwizzledSharedEncodingAttr::get(
           op->getContext(), dstEnc.getVec(), 1, 1, dstEnc.getOrder(),
@@ -243,15 +247,7 @@ struct DirectToLdsLoadConversionBase : public LoadStoreConversionBase {
     auto loc = op->getLoc();
     TritonLLVMOpBuilder b(loc, rewriter);
 
-    // Create the regToShared layout
-    auto regLayout =
-        triton::gpu::toLinearLayout(srcTy.getShape(), srcTy.getEncoding());
-    auto shape = dstTy.getShape();
-    LinearLayout sharedLayout =
-        triton::gpu::toLinearLayout(shape, dstTy.getEncoding());
-    LinearLayout regToSharedLayout = regLayout.invertAndCompose(sharedLayout);
-
-    // Create the non swizzled/flat regToShared layout
+    // Create the non swizzled/flat encoding
     auto dstEnc = cast<SwizzledSharedEncodingAttr>(dstTy.getEncoding());
     auto flatSharedEnc = SwizzledSharedEncodingAttr::get(
         srcTy.getContext(), dstEnc.getVec(), 1, 1, dstEnc.getOrder(),
@@ -259,6 +255,14 @@ struct DirectToLdsLoadConversionBase : public LoadStoreConversionBase {
     auto flatDst = MemDescType::get(dstTy.getShape(), dstTy.getElementType(),
                                     flatSharedEnc, dstTy.getMemorySpace());
 
+    // Create regToShared layout for the swizzled and flat encoding
+    auto regLayout =
+        triton::gpu::toLinearLayout(srcTy.getShape(), srcTy.getEncoding());
+    auto shape = dstTy.getShape();
+    LinearLayout sharedLayout =
+        triton::gpu::toLinearLayout(shape, dstTy.getEncoding());
+
+    LinearLayout regToSharedSwizzled = regLayout.invertAndCompose(sharedLayout);
     auto regToSharedFlat = regLayout.invertAndCompose(
         triton::gpu::toLinearLayout(shape, flatDst.getEncoding()));
 
@@ -270,18 +274,19 @@ struct DirectToLdsLoadConversionBase : public LoadStoreConversionBase {
     auto [laneId, warpId] = getLaneAndWarpId(rewriter, loc);
 
     int numberOfLoads =
-        regToSharedLayout.getInDimSize(kRegister) / vecTy.getNumElements();
+        regToSharedSwizzled.getInDimSize(kRegister) / vecTy.getNumElements();
 
     // For each load compute the difference between the flat and the swizzled
     // offset into shared memory
-    // TODO (alex): this only correct as long as we are not slicing along the 2
-    //              minor dimensions.
+    // TODO (alex): this is only correct as long as the lds view is a contigous
+    //              block. So this can break if we slice along the 2 minor
+    //              dimensions carelessly.
     for (int i = 0; i < numberOfLoads; i++) {
       auto regId = b.i32_val(i * vecTy.getNumElements());
 
       auto swizzleOffset =
           llvm::to_vector(llvm::drop_end(llvm::make_second_range(
-              applyLinearLayout(loc, rewriter, regToSharedLayout,
+              applyLinearLayout(loc, rewriter, regToSharedSwizzled,
                                 {{kRegister, regId},
                                  {kLane, laneId},
                                  {kWarp, warpId},
@@ -577,7 +582,7 @@ struct BufferLoadToLocalOpConversion
 
     VectorType vecTy;
     SmallVector<Value> ldsWarpStartAddrs;
-    emitSharedWarpStartAddresses(rewriter, op, ptrType, dstTy, hasSwizzling,
+    emitWarpStartSharedAddresses(rewriter, op, ptrType, dstTy, hasSwizzling,
                                  resElemTy, llDst, ldsWarpStartAddrs, vecTy);
     assert(vecTy.getNumElements() == vec);
 
@@ -722,7 +727,7 @@ struct AsyncCopyGlobalToLocalOpConversion
 
     VectorType vecTy;
     SmallVector<Value> ldsWarpStartAddrs;
-    emitSharedWarpStartAddresses(rewriter, op, srcTy, dstTy, hasSwizzling,
+    emitWarpStartSharedAddresses(rewriter, op, srcTy, dstTy, hasSwizzling,
                                  resElemTy, llDst, ldsWarpStartAddrs, vecTy);
     assert(vecTy.getNumElements() == maxVec);
 
