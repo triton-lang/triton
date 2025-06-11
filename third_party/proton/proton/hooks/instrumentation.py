@@ -83,7 +83,7 @@ def _interpret_mode(mode_obj: Union[str, mode.InstrumentationMode]) -> mode.Inst
         "metric_type": opts.get("metric_type", "cycle"), "buffer_type": opts.get("buffer_type", "shared"),
         "buffer_strategy": opts.get("buffer_strategy", "circular"), "buffer_size": int(opts.get("buffer_size", "0")),
         "granularity": opts.get("granularity", "warp"), "sampling_strategy": opts.get("sampling_strategy", "none"),
-        "sampling_options": opts.get("sampling_options", ""), "optimization": opts.get("optimization", "none")
+        "sampling_options": opts.get("sampling_options", ""), "optimizations": opts.get("optimizations", "")
     }
 
     # Helper function to validate and map options to their enum values
@@ -99,6 +99,13 @@ def _interpret_mode(mode_obj: Union[str, mode.InstrumentationMode]) -> mode.Inst
     options["buffer_strategy"] = get_option_value("buffer_strategy", mode.buffer_strategies)
     options["granularity"] = get_option_value("granularity", mode.granularities)
     options["sampling_strategy"] = get_option_value("sampling_strategy", mode.sampling_strategies)
+
+    values = ([value.strip()
+               for value in options["optimizations"].split(",")] if len(options["optimizations"]) > 0 else [])
+    for value in values:
+        if value not in mode.optimizations:
+            raise ValueError(f"Unknown optimization: {value}")
+    options["optimizations"] = [mode.optimizations[value] for value in values]
 
     # Create the appropriate mode instance
     if mode_name == "default":
@@ -156,7 +163,7 @@ class InstrumentationHook(Hook):
                                                           self.mode.buffer_size, max_shared_mem,
                                                           self.profile_buffer_size, self.profile_buffer_alignment)
 
-            if self.mode.optimization == mode.Optimize.SCHED_STORES:
+            if mode.Optimize.SCHED_STORES in self.mode.optimizations:
                 triton_proton.add_schedule_buffer_store(pm)
 
             triton_proton.add_allocate_proton_shared_memory(pm)
