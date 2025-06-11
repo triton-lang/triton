@@ -17,7 +17,7 @@ def compute_block_n(n: int, arch, precision_config):
     block_n = max(16, min(128, triton.next_power_of_2(n)))
     # On Ampere and Hopper, handshake with swizzle_mxfp4_scale_hopper
     if precision_config.max_num_imprecise_acc is None and n > 128:
-        block_n = 256
+        block_n = 128
     return block_n
 
 
@@ -36,6 +36,7 @@ def compute_block_k(m: int, k: int | None, is_persistent: bool, lhs_dtype, rhs_d
             block_k = 64
         else:
             block_k = 128
+        block_k = 256
     elif k is not None:
         block_k = max(32, min(triton.next_power_of_2(k), block_k))
 

@@ -555,6 +555,15 @@ def matmul_ogs(x, w, bias,
     mx_scale_stride_e, mx_scale_stride_k, mx_scale_stride_n = mx_ctx.compute_strides()
     # compute optimization flags
     out_dtype = precision_config.out_dtype or x.dtype
+
+    # MXFP hyperparams
+    has_mx_weight_scale = mx_ctx and mx_ctx.weight_scale is not None
+    backend = triton.runtime.driver.active.get_current_target().backend
+    has_native_mxfp = backend == "cuda" and target_info.cuda_capability_geq(10, 0)
+    if has_mx_weight_scale and not has_native_mxfp:
+        # TODO: Implement this
+        raise NotImplementedError("MXFP with non-native swizzling is not supported")
+
     opt_flags = make_opt_flags(out_dtype, x.dtype, w.dtype, precision_config,
         M, N, K, routing_data,
         can_use_persistent_tma(x, w, gather_indx, precision_config),
