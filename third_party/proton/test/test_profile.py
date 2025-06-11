@@ -347,7 +347,7 @@ def test_trace(tmp_path: pathlib.Path):
 
 def test_timeline(tmp_path: pathlib.Path):
     temp_file = tmp_path / "test_timeline.chrome_trace"
-    mode = proton.mode.Default(metric_type="cycle", optimization="time_shift")
+    mode = proton.mode.Default(metric_type="cycle", optimizations="time_shift")
     proton.start(str(temp_file.with_suffix("")), data="trace", backend="instrumentation", mode=mode)
 
     @triton.jit
