@@ -146,7 +146,7 @@ class TensorDescriptorBuilder:
 
     @staticmethod
     def squeeze_after_dim(shape, dim=2):
-        new_shape = [s for s in shape[:dim - 1] if s != 1] + shape[dim - 1:]
+        new_shape = [s for s in shape[:dim - 1] if s != 1] + list(shape)[dim - 1:]
         return new_shape
 
     @staticmethod
