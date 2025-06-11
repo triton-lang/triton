@@ -21,7 +21,7 @@ def compute_block_n(n: int, arch, precision_config):
     return block_n
 
 
-def compute_block_k(k: int | None, is_persistent: bool, lhs_dtype, rhs_dtype, mx_ctx):
+def compute_block_k(m: int, k: int | None, is_persistent: bool, lhs_dtype, rhs_dtype, mx_ctx):
     has_mx_weight_scale = mx_ctx and mx_ctx.weight_scale is not None
     lhs_width = lhs_dtype.itemsize
     rhs_width = rhs_dtype.itemsize
@@ -29,10 +29,13 @@ def compute_block_k(k: int | None, is_persistent: bool, lhs_dtype, rhs_dtype, mx
         rhs_width = 0.5
     # block_k needs to match the cacheline size (128B)
     block_k = int(128 // min(lhs_width, rhs_width))
-    # TODO: revisit when Triton is better for H100 + MXFP4
     has_native_mxfp = target_info.cuda_capability_geq(10, 0)
     if rhs_width == 0.5 and not has_native_mxfp:
-        block_k = 128
+        # Reduce block_k for small matmuls
+        if k <= 1024 and m <= 2048:
+            block_k = 64
+        else:
+            block_k = 128
     elif k is not None:
         block_k = max(32, min(triton.next_power_of_2(k), block_k))
 

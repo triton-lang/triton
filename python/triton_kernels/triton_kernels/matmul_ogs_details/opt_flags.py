@@ -2,6 +2,7 @@ from dataclasses import dataclass
 import triton
 from triton_kernels.numerics_details.mxfp import SwizzlingType
 import torch
+from triton_kernels import target_info
 
 from . import opt_flags_amd, opt_flags_nvidia
 
@@ -147,10 +148,19 @@ def make_default_opt_flags_nvidia(
     group_m = 8
     xcd_swizzle = 1
     # block_m
+    has_mx_weight_scale = microscaling_ctx and microscaling_ctx.weight_scale is not None
+    has_native_mxfp = target_info.cuda_capability_geq(10, 0)
     if constraints.get("block_m", None):
         block_m = constraints["block_m"]
     elif enforce_bitwise_invariance:
         block_m = 128
+    elif has_mx_weight_scale and not has_native_mxfp:
+        if m <= 1024:
+            block_m = 16
+        elif m <= 2048:
+            block_m = 32
+        else:
+            block_m = 64
     else:
         block_m = max(64, min(triton.next_power_of_2(tokens_per_expt), 128))
     # block n
@@ -170,7 +180,7 @@ def make_default_opt_flags_nvidia(
     if constraints.get("block_k", None) is not None:
         block_k = constraints["block_k"]
     else:
-        block_k = opt_flags_nvidia.compute_block_k(k, is_persistent, lhs_dtype, rhs_dtype, microscaling_ctx)
+        block_k = opt_flags_nvidia.compute_block_k(m, k, is_persistent, lhs_dtype, rhs_dtype, microscaling_ctx)
     # split_k
     if constraints.get("split_k", None) is not None:
         split_k = constraints["split_k"]
