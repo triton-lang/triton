@@ -965,8 +965,9 @@ def swizzle_mxfp4_scale_hopper(x: torch.Tensor, num_warps: int):
     assert num_warps & (num_warps - 1) == 0, "warps_n must be a power of 2"
     assert M % (2 * num_warps * 2 * 8) == 0 and K % 2 == 0, f"Input tensor must have a subtile of shape (..., {2 * num_warps * 2 * 8}, 2)"
     b = len(batch)
+    #                     0                           , 1, 2        , 3, 4, 5,    , 6
     x = x.reshape(*batch, M // (2 * num_warps * 2 * 8), 2, num_warps, 2, 8, K // 2, 2)
-    perm = [0, 2, 5, 1, 4, 6, 3]
+    perm = [0, 2, 4, 1, 5, 6, 3]
     perm = list(range(b)) + [b + p for p in perm]
     x = x.permute(*perm)
     x = x.flatten(-5, -1)
@@ -985,8 +986,8 @@ def unswizzle_mxfp4_scale_hopper(x, num_warps: tl.constexpr):
     K: tl.constexpr = x.shape[1]
     tl.static_assert(M % num_warps == 0, f"M must be divisible by {num_warps}. Got {M}")
     tl.static_assert(K % 64 == 0, f"K must be divisible by 64. Got {K}")
-    x = x.reshape(M // num_warps, num_warps, K // 64, 2, 8, 2, 2)
-    x = x.trans(0, 3, 1, 6, 4, 2, 5)
+    x = x.reshape(M // num_warps, num_warps, 8, 2, K // 64, 2, 2)
+    x = x.trans(0, 3, 1, 6, 2, 4, 5)
     x = x.reshape(M * 32, K // 32)
     return x
 
@@ -997,8 +998,8 @@ def unswizzle_mxfp4_scale_hopper_torch(x: torch.Tensor, num_warps: int):
     assert num_warps & (num_warps - 1) == 0, "num_warps must be a power of 2"
     *batch, M, K = x.shape
     b = len(batch)
-    x = x.reshape(*batch, M // num_warps, num_warps, K // 64, 2, 8, 2, 2)
-    perm = [0, 3, 1, 6, 4, 2, 5]
+    x = x.reshape(*batch, M // num_warps, num_warps, 8, 2, K // 64, 2, 2)
+    perm = [0, 3, 1, 6, 2, 4, 5]
     perm = list(range(b)) + [b + p for p in perm]
     x = x.permute(*perm)
     x = x.reshape(*batch, M * 32, K // 32)
