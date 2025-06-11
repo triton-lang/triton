@@ -164,6 +164,16 @@ struct DirectToLdsLoadConversionBase : public LoadStoreConversionBase {
                                   RankedTensorType srcTy, MemDescType dstTy,
                                   unsigned vectorSize,
                                   bool hasSwizzling) const {
+    // Direct-to-lds writes a contiguous block to LDS so we bail out if we
+    // encounter a sliced lds allocation which could make rows to be not be
+    // contiguous
+    // TODO (alex): this is too restrictive because slicing is fine if the warp
+    //              still writes one contiguous chunk.
+    if (!isSimpleSharedMemoryAccess(
+            srcTy.getShape(), dstTy.getAllocShape(),
+            cast<SharedEncodingTrait>(dstTy.getEncoding()))) {
+      return failure();
+    }
 
     int vecBits = vectorSize * dstTy.getElementTypeBitWidth();
     if (!targetInfo.supportsDirectToLdsLoadBitWidth(vecBits)) {
