@@ -226,7 +226,8 @@ struct DirectToLdsLoadConversionBase : public LoadStoreConversionBase {
     auto regLayout =
         triton::gpu::toLinearLayout(srcTy.getShape(), srcTy.getEncoding());
 
-    // Using the tid as a scalar improves codegen a lot
+    // The final LDS addr will be a scalar so we compute the warp id based on a
+    // scalar thread id which improves final codegen (reduces register pressure)
     Value tid =
         targetInfo.shuffleIdx(rewriter, loc, getThreadId(rewriter, loc), 0);
     int threadsPerWarp = triton::gpu::lookupThreadsPerWarp(rewriter);
