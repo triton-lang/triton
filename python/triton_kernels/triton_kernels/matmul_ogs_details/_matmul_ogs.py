@@ -387,7 +387,7 @@ def _compute_writeback_idx(
     is_src_active = (src_idxs != -1).to(tl.int32)
     num_src_active = tl.sum(is_src_active, axis=1)
 
-    need_finalize_scatter = mask_m & (num_src_active > 1)
+    need_finalize_scatter = mask_m & (num_src_active != 1)
     finalize_scatter_count = tl.sum(need_finalize_scatter.to(tl.int32))
     if finalize_scatter_count == 0:
         return
