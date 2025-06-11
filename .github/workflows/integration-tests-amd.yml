@@ -24,7 +24,7 @@ jobs:
       PYTHON: "python3"
       CCACHE_COMPRESS: "true"
     container:
-      image: rocm/pytorch:rocm6.2.2_ubuntu22.04_py3.10_pytorch_2.5.1_asan
+      image: container compute-artifactory.amd.com:5000/rocm-plus-docker/framework/compute-rocm-npi-mi350:862_ubuntu22.04_py3.10_pytorch_rocm6.4_internal_testing_gfx950_334b011
       options: --device=/dev/kfd --device=/dev/dri --security-opt seccomp=unconfined --group-add video --user root
     steps:
       - name: Checkout
