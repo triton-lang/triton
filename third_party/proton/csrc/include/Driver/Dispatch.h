@@ -62,7 +62,9 @@ public:
       // If not found, try to load it from the default path
       auto dir = std::string(ExternLib::defaultDir);
       if (dir.length() > 0) {
-        auto fullPath = dir + "/" + name;
+        // When providing a knob a user may set the path directly
+        // to the library.
+        auto fullPath = dir.ends_with(name) ? dir : dir + "/" + name;
         *lib = dlopen(fullPath.c_str(), RTLD_LOCAL | RTLD_LAZY);
       } else {
         // Only if the default path is not set, we try to load it from the
