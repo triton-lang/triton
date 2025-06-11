@@ -660,7 +660,6 @@ def matmul_ogs(x, w, bias,
     out = apply_postprocessing_features(scatter_indx, finalize_scatter_idxs, opt_flags, expt_token_offs_raw,
                                 num_indx, precision_config, routing_data,
                                 postprocessing_features, memory, fused_postprocess_activation, epilogue)
-
     # remove split-k
     out = out.squeeze(0)
     if not is_input_batched:
