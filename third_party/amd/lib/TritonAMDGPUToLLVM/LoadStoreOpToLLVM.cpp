@@ -164,19 +164,6 @@ struct DirectToLdsLoadConversionBase : public LoadStoreConversionBase {
                                   RankedTensorType srcTy, MemDescType dstTy,
                                   unsigned vectorSize,
                                   bool hasSwizzling) const {
-    // Direct-to-lds writes a contiguous block to LDS so we bail out if we
-    // encounter a sliced lds allocation which requires non contiguous
-    // writes to LDS
-    // TODO (alex): the check is too restrictive because slicing is fine if the
-    //              warp still writes one contiguous chunk but it will require
-    //              adjustments to the LDS base and lane offset calculations
-    if (!isSimpleSharedMemoryAccess(
-            srcTy.getShape(), dstTy.getAllocShape(),
-            cast<SharedEncodingTrait>(dstTy.getEncoding()))) {
-      LDBG(op << " slicing is not support for direct-to-lds loads");
-      return failure();
-    }
-
     int vecBits = vectorSize * dstTy.getElementTypeBitWidth();
     if (!targetInfo.supportsDirectToLdsLoadBitWidth(vecBits)) {
       LDBG(op << " results in unsupported load bitwidth: " << vecBits);
@@ -218,8 +205,10 @@ struct DirectToLdsLoadConversionBase : public LoadStoreConversionBase {
     TritonLLVMOpBuilder b(loc, rewriter);
 
     if (hasSwizzling) {
-      // Overwrite the shared encoding with a non swizzled one to get the base
-      // address of the warp
+      // Overwrite the shared encoding with a non swizzled
+      // one to get the base address of the warp
+      // TODO (alex): this only correct as long as we are not slicing along the
+      //              2 minor dimensions.
       auto dstEnc = cast<SwizzledSharedEncodingAttr>(dstTy.getEncoding());
       auto flatSharedEnc = SwizzledSharedEncodingAttr::get(
           op->getContext(), dstEnc.getVec(), 1, 1, dstEnc.getOrder(),
@@ -285,6 +274,8 @@ struct DirectToLdsLoadConversionBase : public LoadStoreConversionBase {
 
     // For each load compute the difference between the flat and the swizzled
     // offset into shared memory
+    // TODO (alex): this only correct as long as we are not slicing along the 2
+    //              minor dimensions.
     for (int i = 0; i < numberOfLoads; i++) {
       auto regId = b.i32_val(i * vecTy.getNumElements());
 
