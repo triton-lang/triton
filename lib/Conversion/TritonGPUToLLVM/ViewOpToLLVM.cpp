@@ -101,7 +101,6 @@ struct ArithConstantSplatOpConversion
 
 // Convert arith::ConstantOp with an array DenseElementsAttr to a
 // LLVM::StructType value.
-// TODO: Add tests
 struct ArithConstantArrayOpConversion
     : public ConvertOpToLLVMPattern<arith::ConstantOp> {
   using ConvertOpToLLVMPattern<arith::ConstantOp>::ConvertOpToLLVMPattern;
@@ -123,9 +122,9 @@ struct ArithConstantArrayOpConversion
       llVals.push_back(ll);
     }
     size_t elemsPerThread = getTotalElemsPerThread(tensorTy);
-    // TODO: Figure out if we need to handle arbitrary number of initializers
     assert(elemsPerThread == llVals.size() &&
-           "Don't know how to handle arbitrary number of initializers");
+           "Right now we only support constant arrays with the same number of "
+           "elements as the number of threads per warp");
     auto llStruct =
         packLLElements(loc, getTypeConverter(), llVals, rewriter, op.getType());
     rewriter.replaceOp(op, {llStruct});
