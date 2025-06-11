@@ -205,29 +205,6 @@ struct DirectToLdsLoadConversionBase : public LoadStoreConversionBase {
     return success();
   }
 
-  // Determine the vector size per load and collect the shared addresses per
-  // vecTy. This will only emit the address calculation and not the actual
-  // loads.
-  void emitSharedAddresses(RewriterBase &rewriter, Location loc,
-                           RankedTensorType srcTy, MemDescType dstTy,
-                           VectorType &vecTy, Value llDst, Type resElemTy,
-                           Value laneId, SmallVector<Value> &addresses) const {
-    TritonLLVMOpBuilder b(loc, rewriter);
-    auto smemObj = mlir::LLVM::getSharedMemoryObjectFromStruct(
-        loc, llDst, resElemTy, rewriter);
-    auto regLayout =
-        triton::gpu::toLinearLayout(srcTy.getShape(), srcTy.getEncoding());
-    auto [_, warpId] = getLaneAndWarpId(rewriter, loc);
-
-    bool ok = emitTransferBetweenRegistersAndShared(
-        regLayout, dstTy, resElemTy, {}, smemObj, loc, rewriter, targetInfo,
-        laneId, warpId, [&](VectorType vecTy_, Value shmemAddr) {
-          vecTy = vecTy_;
-          addresses.push_back(shmemAddr);
-        });
-    assert(ok);
-  }
-
   // Determine the vector size per load and collect the warp uniform shared
   // addresses per vecTy. On GFX9 the shared address is a scalar so we need to
   // compute the start address by setting lane_id to 0 and ignore swizzling
@@ -235,7 +212,7 @@ struct DirectToLdsLoadConversionBase : public LoadStoreConversionBase {
                                     RankedTensorType srcTy, MemDescType dstTy,
                                     bool hasSwizzling, Type resElemTy,
                                     Value llDst,
-                                    SmallVector<Value> &baseAddresses,
+                                    SmallVector<Value> &warpStartAddr,
                                     VectorType &vecTy) const {
     auto loc = op->getLoc();
     TritonLLVMOpBuilder b(loc, rewriter);
@@ -251,8 +228,20 @@ struct DirectToLdsLoadConversionBase : public LoadStoreConversionBase {
                                flatSharedEnc, dstTy.getMemorySpace());
     }
 
-    emitSharedAddresses(rewriter, loc, srcTy, dstTy, vecTy, llDst, resElemTy,
-                        /*laneId=*/b.i32_val(0), baseAddresses);
+    auto smemObj = mlir::LLVM::getSharedMemoryObjectFromStruct(
+        loc, llDst, resElemTy, rewriter);
+    auto regLayout =
+        triton::gpu::toLinearLayout(srcTy.getShape(), srcTy.getEncoding());
+    auto [_, warpId] = getLaneAndWarpId(rewriter, loc);
+
+    bool ok = emitTransferBetweenRegistersAndShared(
+        regLayout, dstTy, resElemTy, {}, smemObj, loc, rewriter, targetInfo,
+        /*laneId=*/b.i32_val(0), warpId,
+        [&](VectorType vecTy_, Value shmemAddr) {
+          vecTy = vecTy_;
+          warpStartAddr.push_back(shmemAddr);
+        });
+    assert(ok);
   }
 
   // For each load emit the computation to get the lane id offset which holds
