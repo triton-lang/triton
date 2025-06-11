@@ -251,9 +251,8 @@ def _matmul_ogs(
             if SWIZZLE_MX_SCALE == "BLACKWELL":
                 w_scales = unswizzle_mx_scale_bw(tl.load(MxScalePtrs))
             elif SWIZZLE_MX_SCALE == "HOPPER":
-                # Handshake with the swizzling code
-                tl.static_assert(tl.extra.cuda.num_warps() == 8, "Only 8 warps are supported for Hopper swizzling. Got %d" % tl.extra.cuda.num_warps())
-                w_scales = unswizzle_mxfp4_scale_hopper(tl.load(MxScalePtrs), num_warps=8)
+                num_warps: tl.constexpr = tl.extra.cuda.num_warps()
+                w_scales = unswizzle_mxfp4_scale_hopper(tl.load(MxScalePtrs), num_warps=num_warps)
             else:
                 w_scales = tl.load(MxScalePtrs, mask=mask_k_scale[None, :], other=0.0)
 

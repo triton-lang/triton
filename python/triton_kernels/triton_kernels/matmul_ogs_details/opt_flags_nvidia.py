@@ -32,7 +32,7 @@ def compute_block_k(m: int, k: int | None, is_persistent: bool, lhs_dtype, rhs_d
     has_native_mxfp = target_info.cuda_capability_geq(10, 0)
     if rhs_width == 0.5 and not has_native_mxfp:
         # Reduce block_k for small matmuls
-        if k <= 1024 and m <= 2048:
+        if k < 2048 and m < 4096:
             block_k = 64
         else:
             block_k = 128

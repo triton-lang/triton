@@ -216,6 +216,7 @@ def make_default_opt_flags_nvidia(
     assert num_stages >= 1
     if constraints.get("num_stages", None):
         num_stages = constraints["num_stages"]
+    num_stages = 5
 
     # fused scatter scratchpad
     if constraints.get("fused_scatter", None) is not None:
@@ -224,7 +225,7 @@ def make_default_opt_flags_nvidia(
         fused_scatter = can_use_fused_scatter and split_k == 1
     # Handshake with the HBM swizzling
     hopper_swizzling = microscaling_ctx.swizzle_scale == SwizzlingType.HOPPER
-    num_warps = 8 if hopper_swizzling else opt_flags_nvidia.compute_num_warps(block_m, block_n)
+    num_warps = 4 if hopper_swizzling else opt_flags_nvidia.compute_num_warps(block_m, block_n)
     ret = OptFlags(
         block_m=block_m,
         block_n=block_n,

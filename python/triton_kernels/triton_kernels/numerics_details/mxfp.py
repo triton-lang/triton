@@ -424,7 +424,7 @@ def downcast_to_mxfp_impl(src_tensor: torch.Tensor, out_quant_type: torch.dtype,
         kernel_src_tensor, *kernel_src_tensor.stride(),
         *kernel_src_tensor.shape,
         BLOCK_OUT_DIM, BLOCK_QUANT_DIM, DEQUANT_SCALE_ROUNDING_MODE.value,
-        num_warps=8
+        num_warps=4
     )
 
     return out_quant_tensor, out_scale
@@ -487,7 +487,7 @@ def downcast_to_mxfp(src_tensor: torch.Tensor, out_quant_type: torch.dtype, axis
     if swizzle_scale == SwizzlingType.BLACKWELL:
         scale = swizzle_mx_scale_bw(scale, allow_pad=True)
     elif swizzle_scale == SwizzlingType.HOPPER:
-        scale = swizzle_mxfp4_scale_hopper(scale, num_warps=8)
+        scale = swizzle_mxfp4_scale_hopper(scale, num_warps=4)
     assert scale.is_contiguous()
     scale = perm_tensor_from_contig(scale, axis, swizzle_axis)
 
@@ -551,7 +551,7 @@ def upcast_from_mxfp(tensor: torch.Tensor, scale: torch.Tensor, dtype: torch.dty
         slices = tuple(slice(0, size) for size in unpadded_scale_shape)
         scale = scale[slices].contiguous()
     elif swizzle_scale == SwizzlingType.HOPPER:
-        scale = unswizzle_mxfp4_scale_hopper_torch(scale, num_warps=8)
+        scale = unswizzle_mxfp4_scale_hopper_torch(scale, num_warps=4)
 
     assert scale.is_contiguous()
 
@@ -577,7 +577,7 @@ def upcast_from_mxfp(tensor: torch.Tensor, scale: torch.Tensor, dtype: torch.dty
         reshaped_out, *reshaped_out.stride(),
         reshaped_scale, *reshaped_scale.stride(),
         reshaped_tensor, *reshaped_tensor.stride(),
-        *reshaped_out.shape, BLOCK_OUT_DIM, BLOCK_QUANT_DIM, num_warps=8
+        *reshaped_out.shape, BLOCK_OUT_DIM, BLOCK_QUANT_DIM, num_warps=4
     )
 
     return perm_tensor_from_contig(out, axis, swizzle_axis)
@@ -724,7 +724,7 @@ def downcast_to_mxfp_torch(src_tensor: torch.Tensor, out_quant_type: torch.dtype
     if swizzle_scale == SwizzlingType.BLACKWELL:
         dq_scale = swizzle_mx_scale_bw(dq_scale)
     elif swizzle_scale == SwizzlingType.HOPPER:
-        dq_scale = swizzle_mxfp4_scale_hopper(dq_scale, num_warps=8)
+        dq_scale = swizzle_mxfp4_scale_hopper(dq_scale, num_warps=4)
     if swizzle_value == SwizzlingType.HOPPER:
         out_weight = swizzle_mxfp4_value_hopper(out_weight, op_idx=0, mma_version=3)
         out_weight = bit_twiddling_mxfp4_value_hopper(out_weight, op_idx=0)
@@ -805,7 +805,7 @@ def upcast_from_mxfp_torch(tensor: torch.Tensor, scale: torch.Tensor, target_dty
     if swizzle_scale == SwizzlingType.BLACKWELL:
         scale = unswizzle_mx_scale_bw_torch(scale)
     elif swizzle_scale == SwizzlingType.HOPPER:
-        scale = unswizzle_mxfp4_scale_hopper_torch(scale, num_warps=8)
+        scale = unswizzle_mxfp4_scale_hopper_torch(scale, num_warps=4)
 
     if swizzle_value == SwizzlingType.HOPPER:
         tensor = bit_untwiddling_mxfp4_value_hopper_torch(tensor, scale, op_idx=0)
