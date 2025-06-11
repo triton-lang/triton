@@ -1,5 +1,4 @@
 from triton.experimental.gluon.language._layouts import SwizzledSharedLayout
-import triton.experimental.gluon.language._core as ttgl
 from triton.experimental.gluon.language._core import builtin, _unwrap_if_constexpr
 
 __all__ = ["MBarrierLayout", "init", "invalidate", "expect", "wait", "arrive"]
@@ -20,33 +19,33 @@ class MBarrierLayout(SwizzledSharedLayout):
 
 
 @builtin
-def init(mbarrier, count, _builder=None):
+def init(mbarrier, count, _semantic=None):
     count = _unwrap_if_constexpr(count)
-    _builder.create_mbarrier_init(mbarrier.handle, count)
+    _semantic.builder.create_mbarrier_init(mbarrier.handle, count)
 
 
 @builtin
-def invalidate(mbarrier, _builder=None):
-    _builder.create_mbarrier_inval(mbarrier.handle)
+def invalidate(mbarrier, _semantic=None):
+    _semantic.builder.create_mbarrier_inval(mbarrier.handle)
 
 
 @builtin
-def expect(mbarrier, bytes, pred=True, _builder=None):
+def expect(mbarrier, bytes, pred=True, _semantic=None):
     bytes = _unwrap_if_constexpr(bytes)
-    pred = ttgl.to_tensor(pred, _builder=_builder)
-    _builder.create_mbarrier_expect(mbarrier.handle, bytes, pred.handle)
+    pred = _semantic.to_tensor(pred)
+    _semantic.builder.create_mbarrier_expect(mbarrier.handle, bytes, pred.handle)
 
 
 @builtin
-def wait(mbarrier, phase, pred=True, deps=(), _builder=None):
-    phase = ttgl.to_tensor(phase, _builder=_builder)
-    pred = ttgl.to_tensor(pred, _builder=_builder)
+def wait(mbarrier, phase, pred=True, deps=(), _semantic=None):
+    phase = _semantic.to_tensor(phase)
+    pred = _semantic.to_tensor(pred)
     deps = [x.handle for x in deps]
-    _builder.create_mbarrier_wait(mbarrier.handle, phase.handle, pred.handle, deps)
+    _semantic.builder.create_mbarrier_wait(mbarrier.handle, phase.handle, pred.handle, deps)
 
 
 @builtin
-def arrive(mbarrier, count, pred=True, _builder=None):
+def arrive(mbarrier, count, pred=True, _semantic=None):
     count = _unwrap_if_constexpr(count)
-    pred = ttgl.to_tensor(pred, _builder=_builder)
-    _builder.create_mbarrier_arrive(mbarrier.handle, count, pred.handle)
+    pred = _semantic.to_tensor(pred)
+    _semantic.builder.create_mbarrier_arrive(mbarrier.handle, count, pred.handle)

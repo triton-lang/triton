@@ -941,6 +941,13 @@ LogicalResult getConvertBackwardSlice(
         auto srcEncoding = inferSrcEncoding(definingOp, encoding);
         if (!srcEncoding)
           return failure();
+        // If the infered layout matches the original one we don't need to keep
+        // propagating.
+        if (auto operandType =
+                dyn_cast<RankedTensorType>(operand.get().getType())) {
+          if (srcEncoding == operandType.getEncoding())
+            continue;
+        }
         enqueue(operand, srcEncoding);
       }
       continue;
@@ -1547,4 +1554,29 @@ void replaceUsesWithLocalLoad(OpBuilder &builder, OpResult old,
     alloc.erase();
   }
 }
+
+bool comesFromLoadOrBlockArg(Value v) {
+  // Peel out the original cvt dot_op<..., #blocked>
+  // and any other potential cvt/trans ops
+  while (true) {
+    Operation *def = v.getDefiningOp();
+    if (!def)
+      break;
+    if (auto cvtOp = dyn_cast<ttg::ConvertLayoutOp>(def)) {
+      v = cvtOp.getSrc();
+      continue;
+    }
+    if (def->hasTrait<OpTrait::MemDescViewTrait>()) {
+      v = def->getOperand(0);
+      continue;
+    }
+    break;
+  }
+  // We also accept block arguments as they appear in many MLIR tests
+  // If this is problematic we can totally drop them
+  return isa<BlockArgument>(v) ||
+         (v.getDefiningOp() &&
+          isa<LoadOp, DescriptorLoadOp, DescriptorGatherOp>(v.getDefiningOp()));
+}
+
 } // namespace mlir::triton

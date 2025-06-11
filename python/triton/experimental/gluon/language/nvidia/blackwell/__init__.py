@@ -2,7 +2,6 @@ from __future__ import annotations
 from typing import Optional, Tuple, List, TYPE_CHECKING
 
 from dataclasses import dataclass
-from triton.language.semantic import _convert_elem_to_ir_value, _convert_to_ir_values
 from triton.experimental.gluon.language import _core as ttgl
 from triton.experimental.gluon.language._core import builtin, base_type, base_value, _unwrap_if_constexpr
 
@@ -12,6 +11,7 @@ from ..hopper import mbarrier
 if TYPE_CHECKING:
     from triton._C.libtriton.gluon_ir import GluonOpBuilder
     from triton._C.libtriton import gluon_ir as ir
+    from ..._semantic import GluonSemantic
 
 __all__ = [
     "TensorMemoryLayout",
@@ -111,63 +111,70 @@ class tensor_memory_descriptor(base_value):
         return str(self.type)
 
     @builtin
-    def load(self, layout, _builder: GluonOpBuilder) -> ttgl.tensor:
+    def load(self, layout, _semantic: GluonSemantic) -> ttgl.tensor:
         layout = _unwrap_if_constexpr(layout)
         ret_ty = ttgl.distributed_type(self.dtype, self.shape, layout)
-        handle = _builder.create_tmem_load(ret_ty.to_ir(_builder), self.handle)
+        builder = _semantic.builder
+        handle = builder.create_tmem_load(ret_ty.to_ir(builder), self.handle)
         return ttgl.tensor(handle, ret_ty)
 
     @builtin
-    def store(self, value, pred=True, _builder: GluonOpBuilder = None) -> None:
+    def store(self, value, pred=True, _semantic: GluonSemantic = None) -> None:
         pred = _unwrap_if_constexpr(pred)
-        pred = ttgl.to_tensor(pred, _builder=_builder)
-        _builder.create_tmem_store(self.handle, value.handle, pred.handle)
+        pred = _semantic.to_tensor(pred)
+        _semantic.builder.create_tmem_store(self.handle, value.handle, pred.handle)
 
     @builtin
-    def split(self, start, length, _builder: GluonOpBuilder) -> None:
+    def split(self, start, length, _semantic: GluonSemantic) -> None:
         start = _unwrap_if_constexpr(start)
         length = _unwrap_if_constexpr(length)
         assert isinstance(start, int)
         assert isinstance(length, int)
         shape = [self.shape[0], length]
-        ret = tensor_memory_descriptor(None, self.dtype, shape, self.type.layout, self.type.alloc_shape)
-        ret.handle = _builder.create_tmem_subslice(ret.type.to_ir(_builder), self.handle, start)
+        layout = self.type.layout
+        layout = TensorMemoryLayout((layout.block[0], min(layout.block[1], length)), layout.unpacked,
+                                    layout.cta_split_num)
+        ret = tensor_memory_descriptor(None, self.dtype, shape, layout, self.type.alloc_shape)
+        builder = _semantic.builder
+        ret.handle = builder.create_tmem_subslice(ret.type.to_ir(builder), self.handle, start)
         return ret
 
     @builtin
-    def subslice(self, index, shape=None, layout=None, _builder: GluonOpBuilder = None) -> tensor_memory_descriptor:
+    def subslice(self, index, shape=None, layout=None, _semantic: GluonSemantic = None) -> tensor_memory_descriptor:
         if layout is None:
             layout = self.type.layout
         if shape is None:
             shape = self.shape[1:]
 
-        index = _convert_elem_to_ir_value(_builder, index, require_i64=False)
+        index = _semantic._convert_elem_to_ir_value(index, require_i64=False)
         shape = [_unwrap_if_constexpr(s) for s in shape]
         layout = _unwrap_if_constexpr(layout)
 
-        offsets = [_builder.get_int32(0)] * self.rank
+        builder = _semantic.builder
+        offsets = [builder.get_int32(0)] * self.rank
         offsets[0] = index
         ret = tensor_memory_descriptor(None, self.dtype, shape, layout, self.type.alloc_shape)
-        ret.handle = _builder.create_memdesc_subview(ret.type.to_ir(_builder), self.handle, offsets)
+        ret.handle = builder.create_memdesc_subview(ret.type.to_ir(builder), self.handle, offsets)
         return ret
 
 
 @builtin
-def allocate_tensor_memory(element_ty, shape, layout, value=None, _builder=None):
+def allocate_tensor_memory(element_ty, shape, layout, value=None, _semantic=None):
     element_ty = _unwrap_if_constexpr(element_ty)
     shape = _unwrap_if_constexpr(shape)
     layout = _unwrap_if_constexpr(layout)
     value = value.handle if value is not None else None
 
     ty = tensor_memory_descriptor_type(element_ty, shape, layout, shape)
-    handle = _builder.create_tmem_alloc(ty.to_ir(_builder), value)
+    builder = _semantic.builder
+    handle = builder.create_tmem_alloc(ty.to_ir(builder), value)
     return tensor_memory_descriptor(handle, element_ty, shape, layout, shape)
 
 
 @builtin
-def tcgen05_mma(a, b, acc, *, use_acc=True, pred=True, mbarriers=None, mbarrier_preds=None, _builder=None):
-    use_acc = ttgl.to_tensor(use_acc, _builder=_builder)
-    pred = ttgl.to_tensor(pred, _builder=_builder)
+def tcgen05_mma(a, b, acc, *, use_acc=True, pred=True, mbarriers=None, mbarrier_preds=None, _semantic=None):
+    use_acc = _semantic.to_tensor(use_acc)
+    pred = _semantic.to_tensor(pred)
 
     if mbarriers is None:
         assert mbarrier_preds is None
@@ -176,9 +183,10 @@ def tcgen05_mma(a, b, acc, *, use_acc=True, pred=True, mbarriers=None, mbarrier_
     else:
         mbarriers = [bar.handle for bar in mbarriers]
         if mbarrier_preds is None:
-            true = ttgl.to_tensor(True, _builder=_builder)
+            true = _semantic.to_tensor(True)
             mbarrier_preds = [true] * len(mbarriers)
         else:
-            mbarrier_preds = _convert_to_ir_values(_builder, mbarrier_preds, require_i64=False)
+            mbarrier_preds = _semantic._convert_to_ir_values(mbarrier_preds, require_i64=False)
 
-    _builder.create_tcgen05_mma(a.handle, b.handle, acc.handle, use_acc.handle, pred.handle, mbarriers, mbarrier_preds)
+    _semantic.builder.create_tcgen05_mma(a.handle, b.handle, acc.handle, use_acc.handle, pred.handle, mbarriers,
+                                         mbarrier_preds)
