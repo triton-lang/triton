@@ -270,6 +270,15 @@ void init_gluon_ir(py::module &&m) {
              assert(ty.getEncoding());
              return layoutToGluon(ty.getEncoding());
            })
+      .def("get_tensor_descriptor_layout_type",
+           [](GluonOpBuilder &self, Type blockType, bool isSigned,
+              Attribute layout) -> Type {
+             auto ctx = self.getContext();
+             auto blockTy = cast<RankedTensorType>(blockType);
+             auto blockTyLayout = RankedTensorType::get(
+                 blockTy.getShape(), blockTy.getElementType(), layout);
+             return triton::TensorDescType::get(ctx, blockTyLayout, isSigned);
+           })
       .def("create_convert_layout",
            [](GluonOpBuilder &self, Type resultTy, Value value) -> Value {
              return self.create<ttg::ConvertLayoutOp>(resultTy, value);

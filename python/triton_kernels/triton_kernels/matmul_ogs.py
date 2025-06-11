@@ -145,10 +145,16 @@ class TensorDescriptorBuilder:
                                                                                 block_n], transpose=transpose)
 
     @staticmethod
+    def squeeze_after_dim(x, dim=2):
+        shape = list(x.shape)
+        new_shape = [s for s in shape[:dim - 1] if s != 1] + shape[dim - 1:]
+        return x.view(*new_shape)
+
+    @staticmethod
     def create_input_descriptor_gather(x_tensor: torch.Tensor, K: int, x_stride_1: int, x_stride_2: int,
                                        block_k: int) -> TensorDescriptor:
         """Create a tensor descriptor for input matrix X via TMA gather"""
-        x_desc = x_tensor.squeeze()
+        x_desc = TensorDescriptorBuilder.squeeze_after_dim(x_tensor)
         assert x_desc.ndim == 2, "TMA gather descriptor requires 2D input"
         INT_MAX = 2147483647
         return TensorDescriptor(base=x_desc, shape=[INT_MAX, K], strides=[x_stride_1, x_stride_2],
@@ -158,7 +164,7 @@ class TensorDescriptorBuilder:
     def create_input_descriptor_load(x_tensor: torch.Tensor, K: int, x_stride_1: int, x_stride_2: int, block_m: int,
                                      block_k: int) -> TensorDescriptor:
         """Create a tensor descriptor for input matrix X via TMA"""
-        x_desc = x_tensor.squeeze()
+        x_desc = TensorDescriptorBuilder.squeeze_after_dim(x_tensor)
         assert x_desc.ndim in [2, 3], "LHS input TMA descriptor builder expects 2D or 3D input"
         return TensorDescriptor(base=x_desc, shape=[x_desc.shape[0], K], strides=[x_stride_1, x_stride_2],
                                 block_shape=[block_m, block_k])
@@ -574,12 +580,12 @@ def init_allocation(x, w, precision_config, fused_activation, routing_data, gath
 def apply_allocation(allocation: MatmulAllocation, output):
     ret = dict()
     if output is None:
-        output = torch.zeros(allocation.output[0], device=allocation.device, dtype=allocation.output[1])
+        output = torch.empty(allocation.output[0], device=allocation.device, dtype=allocation.output[1])
     else:
         assert output.shape == allocation.output[0]
     ret["output"] = output[None, :, :]
     ret["scratchpad"] = {
-        k: torch.zeros(v[0], device=allocation.device, dtype=v[1])
+        k: torch.empty(v[0], device=allocation.device, dtype=v[1])
             for k, v in allocation.scratchpads.items()
     }
     return ret
@@ -837,7 +843,6 @@ def matmul_ogs(x, w, bias,
     out = apply_postprocessing_features(scatter_indx, finalize_scatter_idxs, opt_flags, expt_token_offs_raw,
                                 num_indx, precision_config, routing_data,
                                 postprocessing_features, memory, fused_postprocess_activation, epilogue)
-
     # remove split-k
     out = out.squeeze(0)
     if not is_input_batched:

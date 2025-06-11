@@ -529,8 +529,22 @@ OpFoldResult LocalAllocOp::fold(FoldAdaptor adaptor) {
   return loadSrc;
 }
 
-LogicalResult LocalAllocOp::verifyAllocOp(Operation *op, Value src,
-                                          MemDescType dstTy) {
+LogicalResult verifyMemoryOpTypes(Operation *op, ShapedType srcTy,
+                                  ShapedType dstTy) {
+  if (srcTy.getElementType() != dstTy.getElementType()) {
+    return op->emitOpError("source element type ")
+           << srcTy << " must match "
+           << "destination element type " << dstTy.getElementType();
+  }
+  if (srcTy.getShape() != dstTy.getShape()) {
+    return op->emitOpError("source shape [")
+           << srcTy.getShape() << "] must match ["
+           << "destination shape " << dstTy.getShape() << "]";
+  }
+  return success();
+}
+
+LogicalResult verifyAllocOp(Operation *op, Value src, MemDescType dstTy) {
   if (dstTy.getShape() != dstTy.getAllocShape())
     return op->emitOpError("result shape and its alloc shape must match");
 
@@ -542,12 +556,7 @@ LogicalResult LocalAllocOp::verifyAllocOp(Operation *op, Value src,
     return success();
   }
 
-  auto srcTy = cast<RankedTensorType>(src.getType());
-  if (srcTy.getElementType() != dstTy.getElementType())
-    return op->emitOpError("result element type must source element type");
-  if (srcTy.getShape() != dstTy.getShape())
-    return op->emitOpError("result shape must match source shape");
-  return success();
+  return verifyMemoryOpTypes(op, cast<RankedTensorType>(src.getType()), dstTy);
 }
 
 LogicalResult LocalAllocOp::verify() {
@@ -561,7 +570,12 @@ LogicalResult LocalAllocOp::verify() {
 LogicalResult LocalStoreOp::verify() {
   if (!getDst().getType().getMutableMemory())
     return emitOpError("Cannot store into immutable memory");
-  return success();
+  return verifyMemoryOpTypes(*this, getSrc().getType(), getDst().getType());
+}
+
+// LocalLoadOp
+LogicalResult LocalLoadOp::verify() {
+  return verifyMemoryOpTypes(*this, getSrc().getType(), getType());
 }
 
 // AsyncCopyGlobalToLocalOp

@@ -317,6 +317,7 @@ specialize_impl_cache = []
 def create_specialize_impl(specialize_extra):
 
     from ..language import constexpr
+    from triton.experimental.gluon.nvidia.hopper import TensorDescriptor as GluonTensorDescriptor
 
     def specialize_impl(arg, is_const=False, specialize_value=True, align=True):
         if arg is None:
@@ -360,6 +361,10 @@ def create_specialize_impl(specialize_extra):
             assert hasattr(arg.base, "data_ptr")
             inner = canonicalize_dtype(arg.base.dtype)
             return (f"tensordesc<{inner}{list(arg.block_shape)}>", None)
+        elif isinstance(arg, GluonTensorDescriptor):
+            assert hasattr(arg.base, "data_ptr")
+            inner = canonicalize_dtype(arg.base.dtype)
+            return (f"tensordesc<{inner}{list(arg.block_shape)},{arg.layout!r}>", None)
         else:
             raise TypeError("Unsupported type: %s" % type(arg))
 
