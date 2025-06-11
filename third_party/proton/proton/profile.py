@@ -31,6 +31,9 @@ def _get_backend_default_path(backend: str) -> str:
             # Get the default path for the cupti backend,
             # which is the most compatible with the current CUPTI header file triton is compiled with
             lib_path = str(pathlib.Path(__file__).parent.parent.absolute() / "backends" / "nvidia" / "lib" / "cupti")
+        # Proton expects the lib_path to be the directory containing the libcupti.so file, not the actual library.
+        if lib_path.endswith("libcupti.so"):
+            lib_path = str(pathlib.Path(lib_path).parent)
     return lib_path
 
 
