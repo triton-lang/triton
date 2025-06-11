@@ -773,8 +773,8 @@ def matmul_ogs(x, w, bias,
     X_USE_LOAD_TMA = gather_indx is None and not USE_GATHER_TMA
     _, x_tensor, w_tensor, mx_tensor = _create_tma_descriptors(
         x=x,
-        x_tensor=flex.lhs_data.reinterpret(x),
-        w_tensor=flex.rhs_data.reinterpret(w),
+        x_tensor=x,
+        w_tensor=w,
         mx_tensor=mx_ctx.weight_scale,
         routing_data=routing_data,
         mx_ctx=mx_ctx,
