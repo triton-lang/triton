@@ -257,7 +257,9 @@ class GluonSemantic(TritonSemantic[TensorTy]):
         default_block = builder.new_block()
         builder.set_insertion_point_to_start(default_block)
         default_results = generator.call_JitFunction(default_partition, args, kwargs={})
-        mlir_results = flatten_values_to_ir(default_results)
+        mlir_results = []
+        if default_results is not None:
+            mlir_results = flatten_values_to_ir(default_results)
         builder.create_warp_yield(mlir_results)
         result_types = [r.get_type() for r in mlir_results]
 
@@ -281,4 +283,6 @@ class GluonSemantic(TritonSemantic[TensorTy]):
 
         builder.set_insertion_point_after(ws_op.get_operation())
         mlir_results = [ws_op.get_result(i) for i in range(len(result_types))]
+        if default_results is None:
+            return
         return tuple(unflatten_ir_values(mlir_results, [r.type for r in default_results]))
