@@ -537,30 +537,6 @@ struct MemDescReinterpretOpConversion
   }
 };
 
-struct MemDescToI64OpConversion
-    : public ConvertOpToLLVMPattern<triton::gpu::MemDescToI64Op> {
-  using ConvertOpToLLVMPattern::ConvertOpToLLVMPattern;
-
-  LogicalResult
-  matchAndRewrite(triton::gpu::MemDescToI64Op op, OpAdaptor adaptor,
-                  ConversionPatternRewriter &rewriter) const override {
-    Location loc = op.getLoc();
-    MemDescType srcTy = op.getSrc().getType();
-    Type srcElemTy = getTypeConverter()->convertType(srcTy.getElementType());
-    auto smemObj = getSharedMemoryObjectFromStruct(loc, adaptor.getSrc(),
-                                                   srcElemTy, rewriter);
-    auto offsets = smemObj.getOffsets();
-    auto strides = smemObj.getStrides(srcTy, loc, rewriter);
-    Value offset = dot(rewriter, loc, offsets, strides);
-    TritonLLVMOpBuilder b(loc, rewriter);
-    auto i64Ty = rewriter.getIntegerType(64);
-    offset = b.zext(i64Ty, offset);
-    Value v = b.add(offset, b.ptrtoint(i64Ty, smemObj.getBase()));
-    rewriter.replaceOp(op, v);
-    return success();
-  }
-};
-
 } // namespace
 
 void mlir::triton::populateViewOpToLLVMPatterns(
@@ -580,5 +556,4 @@ void mlir::triton::populateViewOpToLLVMPatterns(
   patterns.add<BroadcastOpConversion>(typeConverter, benefit);
   patterns.add<MemDescSubviewOpConversion>(typeConverter, benefit);
   patterns.add<MemDescReinterpretOpConversion>(typeConverter, benefit);
-  patterns.add<MemDescToI64OpConversion>(typeConverter, benefit);
 }
