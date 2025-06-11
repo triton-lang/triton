@@ -252,19 +252,19 @@ struct DirectToLdsLoadConversionBase : public LoadStoreConversionBase {
     auto flatSharedEnc = SwizzledSharedEncodingAttr::get(
         srcTy.getContext(), dstEnc.getVec(), 1, 1, dstEnc.getOrder(),
         dstEnc.getCTALayout());
-    auto flatDst = MemDescType::get(dstTy.getShape(), dstTy.getElementType(),
-                                    flatSharedEnc, dstTy.getMemorySpace());
+    auto flatTy = MemDescType::get(dstTy.getShape(), dstTy.getElementType(),
+                                   flatSharedEnc, dstTy.getMemorySpace());
 
     // Create regToShared layout for the swizzled and flat encoding
     auto regLayout =
         triton::gpu::toLinearLayout(srcTy.getShape(), srcTy.getEncoding());
     auto shape = dstTy.getShape();
-    LinearLayout sharedLayout =
-        triton::gpu::toLinearLayout(shape, dstTy.getEncoding());
 
-    LinearLayout regToSharedSwizzled = regLayout.invertAndCompose(sharedLayout);
-    auto regToSharedFlat = regLayout.invertAndCompose(
-        triton::gpu::toLinearLayout(shape, flatDst.getEncoding()));
+    auto sharedSwizz = triton::gpu::toLinearLayout(shape, dstTy.getEncoding());
+    auto sharedFlat = triton::gpu::toLinearLayout(shape, flatTy.getEncoding());
+
+    auto regToSharedSwizzled = regLayout.invertAndCompose(sharedSwizz);
+    auto regToSharedFlat = regLayout.invertAndCompose(sharedFlat);
 
     MLIRContext *ctx = rewriter.getContext();
     StringAttr kBlock = str_attr("block");
@@ -272,34 +272,34 @@ struct DirectToLdsLoadConversionBase : public LoadStoreConversionBase {
     StringAttr kLane = str_attr("lane");
     StringAttr kWarp = str_attr("warp");
     auto [laneId, warpId] = getLaneAndWarpId(rewriter, loc);
+    Value blockId = b.i32_val(0);
 
     int numberOfLoads =
         regToSharedSwizzled.getInDimSize(kRegister) / vecTy.getNumElements();
 
     // For each load compute the difference between the flat and the swizzled
-    // offset into shared memory
+    // linear offsets into shared memory
     // TODO (alex): this is only correct as long as the lds view is a contigous
     //              block. So this can break if we slice along the 2 minor
     //              dimensions carelessly.
     for (int i = 0; i < numberOfLoads; i++) {
       auto regId = b.i32_val(i * vecTy.getNumElements());
 
-      auto swizzleOffset =
-          llvm::to_vector(llvm::drop_end(llvm::make_second_range(
-              applyLinearLayout(loc, rewriter, regToSharedSwizzled,
-                                {{kRegister, regId},
-                                 {kLane, laneId},
-                                 {kWarp, warpId},
-                                 {kBlock, b.i32_val(0)}}))))[0];
-      auto flatOffset = llvm::to_vector(llvm::drop_end(llvm::make_second_range(
-          applyLinearLayout(loc, rewriter, regToSharedFlat,
-                            {{kRegister, regId},
-                             {kLane, laneId},
-                             {kWarp, warpId},
-                             {kBlock, b.i32_val(0)}}))))[0];
+      std::array<std::pair<StringAttr, Value>, 4> indices{{
+          {kRegister, regId},
+          {kLane, laneId},
+          {kWarp, warpId},
+          {kBlock, blockId},
+      }};
+
+      Value swizzledOffset =
+          applyLinearLayout(loc, rewriter, regToSharedSwizzled, indices)[0]
+              .second;
+      Value flatOffset =
+          applyLinearLayout(loc, rewriter, regToSharedFlat, indices)[0].second;
 
       // Normalize the offset by vecTy to obtain the offset in lanes
-      auto laneOffet = b.sdiv(b.sub(swizzleOffset, flatOffset),
+      auto laneOffet = b.sdiv(b.sub(swizzledOffset, flatOffset),
                               b.i32_val(vecTy.getNumElements()));
       swizzleOffsets.push_back(laneOffet);
     }
