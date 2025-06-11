@@ -172,6 +172,7 @@ struct DirectToLdsLoadConversionBase : public LoadStoreConversionBase {
     if (!isSimpleSharedMemoryAccess(
             srcTy.getShape(), dstTy.getAllocShape(),
             cast<SharedEncodingTrait>(dstTy.getEncoding()))) {
+      LDBG(op << " slicing is not support for direct-to-lds loads");
       return failure();
     }
 
