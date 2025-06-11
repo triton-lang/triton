@@ -225,7 +225,13 @@ struct DirectToLdsLoadConversionBase : public LoadStoreConversionBase {
         loc, llDst, resElemTy, rewriter);
     auto regLayout =
         triton::gpu::toLinearLayout(srcTy.getShape(), srcTy.getEncoding());
-    auto [_, warpId] = getLaneAndWarpId(rewriter, loc);
+
+    // Using the tid as a scalar improves codegen a lot
+    Value tid =
+        targetInfo.shuffleIdx(rewriter, loc, getThreadId(rewriter, loc), 0);
+    int threadsPerWarp = triton::gpu::lookupThreadsPerWarp(rewriter);
+    Value warpSizeVal = b.i32_val(threadsPerWarp);
+    Value warpId = b.udiv(tid, warpSizeVal);
 
     bool ok = emitTransferBetweenRegistersAndShared(
         regLayout, dstTy, resElemTy, {}, smemObj, loc, rewriter, targetInfo,
