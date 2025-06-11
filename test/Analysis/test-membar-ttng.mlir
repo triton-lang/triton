@@ -9,7 +9,7 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 1 : i32} {
 tt.func @async_store_wait(%arg: tensor<32x16xf16, #AL>) {
   %alloc = ttg.local_alloc : () -> !ttg.memdesc<32x16xf16, #A_SHARED, #ttg.shared_memory, mutable>
   // CHECK: async_tma_store_wait
-  ttng.async_tma_store_wait {pendings = 0 : i32, wait_for_read = true}
+  ttng.async_tma_store_wait {pendings = 0 : i32}
   // CHECK-NEXT: gpu.barrier
   // CHECK-NEXT: ttg.local_store
   ttg.local_store %arg, %alloc : tensor<32x16xf16, #AL> -> !ttg.memdesc<32x16xf16, #A_SHARED, #ttg.shared_memory, mutable>

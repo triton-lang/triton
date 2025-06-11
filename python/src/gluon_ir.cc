@@ -388,9 +388,7 @@ void init_gluon_ir(py::module &&m) {
            })
       .def("create_async_tma_store_wait",
            [](GluonOpBuilder &self, int pendings) {
-             // Convervatively wait for the both read and write part to be done.
-             // TODO: expose control over this.
-             self.create<ttng::TMAStoreWaitOp>(pendings, false);
+             self.create<ttng::TMAStoreWaitOp>(pendings);
            })
       .def("create_async_tma_gather",
            [](GluonOpBuilder &self, Value descPtr, Value xOffsets,

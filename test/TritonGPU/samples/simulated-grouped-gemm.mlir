@@ -134,14 +134,14 @@
 // CHECK:             %[[VAL_119:.*]] = arith.cmpi ne, %[[VAL_66]], %[[VAL_44]] : i32
 // CHECK:             scf.if %[[VAL_118]] {
 // CHECK:               %[[VAL_120:.*]] = arith.truncf %[[VAL_117]]#0 : tensor<128x256xf32, #[[$ATTR_1]]> to tensor<128x256xf16, #[[$ATTR_1]]>
-// CHECK:               ttng.async_tma_store_wait {pendings = 0 : i32, wait_for_read = false}
+// CHECK:               ttng.async_tma_store_wait {pendings = 0 : i32}
 // CHECK:               ttg.local_store %[[VAL_120]], %[[VAL_45]] : tensor<128x256xf16, #[[$ATTR_1]]> -> !ttg.memdesc<128x256xf16, #[[$ATTR_2]], #[[$ATTR_4]], mutable>
 // CHECK:               ttng.fence_async_shared {bCluster = false}
 // CHECK:               ttng.async_tma_copy_local_to_global %[[VAL_111]]#2{{\[}}%[[VAL_111]]#5, %[[VAL_111]]#6] %[[VAL_45]] : !tt.tensordesc<tensor<128x256xf16, #[[$ATTR_2]]>>, !ttg.memdesc<128x256xf16, #[[$ATTR_2]], #[[$ATTR_4]], mutable>
 // CHECK:             }
 // CHECK:             scf.yield %[[VAL_66]], %[[VAL_111]]#0, %[[VAL_111]]#1, %[[VAL_111]]#2, %[[VAL_111]]#3, %[[VAL_111]]#4, %[[VAL_111]]#5, %[[VAL_111]]#6, %[[VAL_117]]#0, %[[VAL_119]], %[[VAL_111]]#7, %[[VAL_111]]#8, %[[VAL_111]]#9 : i32, !tt.tensordesc<tensor<128x64xf16, #[[$ATTR_2]]>>, !tt.tensordesc<tensor<256x64xf16, #[[$ATTR_2]]>>, !tt.tensordesc<tensor<128x256xf16, #[[$ATTR_2]]>>, i32, i32, i32, i32, tensor<128x256xf32, #[[$ATTR_1]]>, i1, i32, i32, i32
 // CHECK:           }
-// CHECK:           ttng.async_tma_store_wait {pendings = 0 : i32, wait_for_read = false}
+// CHECK:           ttng.async_tma_store_wait {pendings = 0 : i32}
 // CHECK:           ttg.local_dealloc %[[VAL_45]] : !ttg.memdesc<128x256xf16, #[[$ATTR_2]], #[[$ATTR_4]], mutable>
 // CHECK:           tt.return
 // CHECK:         }

@@ -87,7 +87,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   // CHECK-LABEL: async_tma_store_wait
   // CHECK: nvvm.cp.async.bulk.wait_group 0 {read}
   tt.func @async_tma_store_wait() {
-    ttng.async_tma_store_wait {pendings = 0 : i32, wait_for_read = true}
+    ttng.async_tma_store_wait {pendings = 0 : i32}
     tt.return
   }
 }
