@@ -1,6 +1,6 @@
 from dataclasses import dataclass, field
 from triton._C.libtriton import proton as triton_proton
-from typing import List, Optional
+from typing import List
 from enum import Enum
 
 metric_types = {"cycle": triton_proton.METRIC_TYPE.CYCLE}
@@ -75,7 +75,7 @@ class InstrumentationMode(BaseMode):
     buffer_strategy: triton_proton.BUFFER_STRATEGY = triton_proton.BUFFER_STRATEGY.CIRCULAR
     buffer_type: triton_proton.BUFFER_TYPE = triton_proton.BUFFER_TYPE.SHARED
     buffer_size: int = 0
-    optimizations: Optional[List[Optimize]] = None
+    optimizations: List[Optimize] = field(default_factory=list)
 
     def __post_init__(self):
         # automatically map string inputs to enums using the global lookup dicts
@@ -102,7 +102,7 @@ class InstrumentationMode(BaseMode):
             object.__setattr__(self, "optimizations", [optimizations[value] for value in values])
 
     def __str__(self):
-        optimizations_str = ",".join([str(opt) for opt in self.optimizations or []])
+        optimizations_str = ",".join([str(opt) for opt in self.optimizations])
         return (f"{self.name}:metric_type={self.metric_type}:sampling_strategy={self.sampling_strategy}"
                 f":sampling_options={self.sampling_options}:granularity={self.granularity}"
                 f":buffer_strategy={self.buffer_strategy}:buffer_type={self.buffer_type}"

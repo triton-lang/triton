@@ -162,7 +162,7 @@ class InstrumentationHook(Hook):
                                                           self.mode.buffer_size, max_shared_mem,
                                                           self.profile_buffer_size, self.profile_buffer_alignment)
 
-            if mode.Optimize.SCHED_STORES in (self.mode.optimizations or []):
+            if mode.Optimize.SCHED_STORES in self.mode.optimizations:
                 triton_proton.add_schedule_buffer_store(pm)
 
             triton_proton.add_allocate_proton_shared_memory(pm)
