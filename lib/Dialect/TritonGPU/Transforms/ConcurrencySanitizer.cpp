@@ -115,14 +115,13 @@ public:
   constexpr static int8_t READ_BIT = 1 << 1;
 
   void runOnOperation() override {
-    return;
     module = getOperation();
     // Collect shared memory buffers allocated in the module
     // TODO: We should actually map the region in IR + the offset in the buffer
     // to the local_alloc to give user a better error message
-    llvm::SetVector<int64_t> shMemBufsSet;
+    llvm::SetVector<int32_t> shMemBufsSet;
     module.walk([&](triton::gpu::LocalAllocOp op) {
-      int64_t baseOffset = getAllocationOffset(op);
+      int32_t baseOffset = getAllocationOffset(op);
       shMemBufsSet.insert(baseOffset);
       if (isMultiBuffered(op)) {
         unsigned numBuffers = getNumBuffers(op);
@@ -137,17 +136,14 @@ public:
     tt::FuncOp entryPoint = getEntryPoint(module);
     assert(entryPoint);
 
-    SmallVector<int64_t> shMemBufsValues = llvm::to_vector(shMemBufsSet);
+    SmallVector<int32_t> shMemBufsValues = llvm::to_vector(shMemBufsSet);
     // Pad to the next power of 2 with zeros
     uint64_t nextPowerOf2 = llvm::NextPowerOf2(shMemBufsValues.size());
     shMemBufsValues.resize(nextPowerOf2, 0);
 
     ImplicitLocOpBuilder b(entryPoint.getLoc(), entryPoint);
     b.setInsertionPointToStart(&entryPoint.getBody().front());
-    Value shMemBufs = createInitializedIntTensor(b, shMemBufsValues);
-    Value shMemBase = b.create<ttg::SharedMemoryBaseOp>();
-    shMemBufs = b.create<arith::AddIOp>(
-        shMemBufs, b.create<triton::SplatOp>(shMemBufs.getType(), shMemBase));
+    Value shMemBufs = createSharedBufferPointers(b, shMemBufsValues);
 
     // Create state tensors:
     // 1. Barrier, tracking which barriers are tracking the buffer
@@ -167,15 +163,27 @@ public:
 
 private:
   Value createInitializedIntTensor(ImplicitLocOpBuilder &builder,
-                                   SmallVector<int64_t> values) {
+                                   SmallVector<int32_t> values) {
     int64_t size = values.size();
     assert(llvm::isPowerOf2_64(size) && "Expected power of 2");
     auto tensorType = RankedTensorType::get({size}, builder.getIntegerType(64),
                                             getBlockedEncoding(module, size));
     SmallVector<APInt> apInts = llvm::to_vector(
-        llvm::map_range(values, [](int64_t v) { return APInt(64, v); }));
+        llvm::map_range(values, [](int32_t v) { return APInt(64, v); }));
     auto denseAttr = DenseElementsAttr::get(tensorType, apInts);
     return builder.create<arith::ConstantOp>(tensorType, denseAttr);
+  }
+
+  Value createSharedBufferPointers(ImplicitLocOpBuilder &builder,
+                                   SmallVector<int32_t> values) {
+    int64_t size = values.size();
+    auto tensorType = RankedTensorType::get({size}, builder.getIntegerType(64),
+                                            getBlockedEncoding(module, size));
+    SmallVector<APInt> apInts = llvm::to_vector(
+        llvm::map_range(values, [](int64_t v) { return APInt(64, v); }));
+    auto denseAttr = DenseElementsAttr::get(tensorType, apInts);
+    return builder.create<ttg::ExperimentalSharedBufferPointersOp>(tensorType,
+                                                                   values);
   }
 
   Value createConstIntTensor(ImplicitLocOpBuilder &builder, int val,
@@ -198,55 +206,32 @@ private:
 
   void instrumentMemoryOperations(ImplicitLocOpBuilder &b, Value buffers,
                                   Value barriers, Value state) {
-    SmallVector<ttng::AsyncTMACopyGlobalToLocalOp> copyOps;
-    module.walk(
-        [&](ttng::AsyncTMACopyGlobalToLocalOp op) { copyOps.push_back(op); });
-    int i = 0;
-    for (auto op : copyOps) {
-      b.setLoc(op.getLoc());
-      b.setInsertionPoint(op);
-      RankedTensorType barriersTy = cast<RankedTensorType>(barriers.getType());
-      RankedTensorType stateTy = cast<RankedTensorType>(state.getType());
-      Value zero_64b = createConstIntTensor(b, 0, barriersTy);
-      Value zero_8b = createConstIntTensor(b, 0, stateTy);
-      Value buffer = b.create<ttg::MemDescToI64Op>(op.getResult());
-      Value bar = b.create<ttg::MemDescToI64Op>(op.getBarrier());
-      Value barSplat = b.create<triton::SplatOp>(barriersTy, bar);
-      Value mask = createCmpIntTensorScalar(b, buffers, buffer);
+    module.walk([&](Operation *op) {
+      if (auto copyOp = dyn_cast<ttng::AsyncTMACopyGlobalToLocalOp>(op)) {
+        b.setLoc(copyOp.getLoc());
+        b.setInsertionPoint(copyOp);
+        auto checkOp =
+            b.create<ttg::ExperimentalCheckAsyncWriteWithMbarSharedOp>(
+                copyOp.getResult(), copyOp.getBarrier(), buffers, state,
+                barriers);
+        state = checkOp.getOutStates();
+        barriers = checkOp.getOutBarriers();
 
-      // 1. Check if the buffer has outstanding accesses
-      Value rwSplat = createConstIntTensor(b, WRITE_BIT | READ_BIT, stateTy);
-      Value writeSplat = createConstIntTensor(b, WRITE_BIT, stateTy);
-      Value isRW = b.create<arith::AndIOp>(state, rwSplat);
-      Value isRWMask = b.create<arith::SelectOp>(mask, isRW, zero_8b);
-      // Value isCurrentRW = createSumReduction(b, isRWMask)->getResult(0);
+        createDebugPrintOp(b, "(asyncTMA) updated state: ", state);
+        createDebugPrintOp(b, "(asyncTMA) updated barriers: ", barriers);
+      }
+      if (auto waitOp = dyn_cast<ttng::WaitBarrierOp>(op)) {
+        b.setLoc(waitOp.getLoc());
+        b.setInsertionPoint(waitOp);
+        auto checkOp = b.create<ttg::ExperimentalCheckWaitMbarOp>(
+            waitOp.getAlloc(), barriers, state);
+        state = checkOp.getOutStates();
+        barriers = checkOp.getOutBarriers();
 
-      std::stringstream ss;
-      ss << "isRWMask: " << i;
-      createDebugPrintOp(b, ss.str(), isRWMask);
-
-      // Assert that the buffer is not being read or written
-      createAssertExpected(b, isRWMask, zero_8b,
-                           "TMA copy to buffer being read or written");
-
-      // 2. Update the access state
-      // TODO: Implicit assumption we are instrumenting buffers in the program
-      // order, so the next instruction uses the updated state
-      state = b.create<arith::SelectOp>(
-          mask, b.create<arith::OrIOp>(state, writeSplat), state);
-
-      ss.str("");
-      ss << "updated state: " << i;
-      createDebugPrintOp(b, ss.str(), state);
-
-      barriers = b.create<arith::SelectOp>(mask, barSplat, barriers);
-
-      createDebugPrintOp(b, "updated barriers: ", barriers);
-      // createDebugPrintOp(b, "buffer: ", loc, buffer);
-      // createDebugPrintOp(b, "all buffers: ", loc, buffers);
-      // createDebugPrintOp(b, "mask: ", loc, mask);
-      i++;
-    }
+        createDebugPrintOp(b, "(waitBarrier) updated barriers: ", barriers);
+        createDebugPrintOp(b, "(waitBarrier) updated state: ", state);
+      }
+    });
   }
 
   ModuleOp module;
