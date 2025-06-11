@@ -100,7 +100,11 @@ def _interpret_mode(mode_obj: Union[str, mode.InstrumentationMode]) -> mode.Inst
     options["granularity"] = get_option_value("granularity", mode.granularities)
     options["sampling_strategy"] = get_option_value("sampling_strategy", mode.sampling_strategies)
 
-    values = [value.strip() for value in options["optimizations"].split(",")]
+    values = (
+        [value.strip() for value in options["optimizations"].split(",")]
+        if len(options["optimizations"]) > 0
+        else []
+    )
     for value in values:
         if value not in mode.optimizations:
             raise ValueError(f"Unknown optimization: {value}")
