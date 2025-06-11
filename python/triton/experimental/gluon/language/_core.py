@@ -16,7 +16,6 @@ from triton.language.core import (
     dtype,
     block_type,  # TODO: block type with layout info
     pointer_type,
-    tuple_type,
     void,
     int1,
     int8,
@@ -39,6 +38,8 @@ from triton.language.core import (
     _unwrap_if_constexpr,
     _unwrap_shape,
     tensor,
+    tuple,
+    tuple_type,
 )
 
 _IMPORT_FROM_TRITON: List[str] = [
@@ -88,6 +89,8 @@ __all__ = [
     "float64",
     "_unwrap_if_constexpr",
     "tensor",
+    "tuple",
+    "tuple_type",
     "arange",
     "full",
     "convert_layout",
