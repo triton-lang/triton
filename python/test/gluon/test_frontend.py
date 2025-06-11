@@ -908,3 +908,20 @@ def test_zeros():
 
     # CHECK: arith.constant dense<7> : tensor<8x8xi16, [[BLOCKED2D]]>
     ttgl.full_like(a, 7, shape=[8, 8], dtype=ttgl.int16, layout=layout_2d)
+
+
+@filecheck_test
+@gluon.jit
+def test_barrier():
+    # CHECK: gpu.barrier
+    ttgl.thread_barrier()
+
+
+@filecheck_test
+@gluon.jit
+def test_fence_async_shared():
+    # CHECK: ttng.fence_async_shared {bCluster = false}
+    blackwell.fence_async_shared()
+
+    # CHECK-NEXT: ttng.fence_async_shared {bCluster = true}
+    blackwell.fence_async_shared(cluster=True)
