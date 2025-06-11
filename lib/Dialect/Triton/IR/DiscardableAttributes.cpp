@@ -3,9 +3,8 @@
 
 namespace mlir::triton {
 
-SmallVector<NamedAttribute> getAllowedDiscardableAttrs(triton::AddPtrOp op) {
-  std::array<StringRef, 3> allowList{"tt.divisibility", "tt.contiguity",
-                                     "tt.constancy"};
+SmallVector<NamedAttribute>
+filterDiscardableAttrs(Operation *op, ArrayRef<StringRef> allowList) {
   SmallVector<NamedAttribute> propagatedAttrs;
   for (auto attrName : allowList) {
     Attribute attr = op->getDiscardableAttr(attrName);

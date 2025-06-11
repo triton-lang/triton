@@ -563,8 +563,10 @@ public:
     rewriter.setInsertionPoint(addPtrOp);
 
     // Query all discardable attributes that we want to preserve
+    std::array<StringRef, 3> propagateList{"tt.divisibility", "tt.contiguity",
+                                           "tt.constancy"};
     SmallVector<NamedAttribute> propagatedAttrs =
-        getAllowedDiscardableAttrs(addPtrOp);
+        tt::filterDiscardableAttrs(addPtrOp.getOperation(), propagateList);
 
     // If it is a scalar pointer update, simply bump the base pointer
     if (llvm::isa<tt::PointerType>(addPtrOp.getPtr().getType())) {
