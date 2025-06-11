@@ -574,12 +574,12 @@ def init_allocation(x, w, precision_config, fused_activation, routing_data, gath
 def apply_allocation(allocation: MatmulAllocation, output):
     ret = dict()
     if output is None:
-        output = torch.zeros(allocation.output[0], device=allocation.device, dtype=allocation.output[1])
+        output = torch.empty(allocation.output[0], device=allocation.device, dtype=allocation.output[1])
     else:
         assert output.shape == allocation.output[0]
     ret["output"] = output[None, :, :]
     ret["scratchpad"] = {
-        k: torch.zeros(v[0], device=allocation.device, dtype=v[1])
+        k: torch.empty(v[0], device=allocation.device, dtype=v[1])
             for k, v in allocation.scratchpads.items()
     }
     return ret
@@ -837,7 +837,6 @@ def matmul_ogs(x, w, bias,
     out = apply_postprocessing_features(scatter_indx, finalize_scatter_idxs, opt_flags, expt_token_offs_raw,
                                 num_indx, precision_config, routing_data,
                                 postprocessing_features, memory, fused_postprocess_activation, epilogue)
-
     # remove split-k
     out = out.squeeze(0)
     if not is_input_batched:

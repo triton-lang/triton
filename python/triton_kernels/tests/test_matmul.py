@@ -414,7 +414,15 @@ def test_op(m, n, k, split_k, do_gather, do_scatter, fused_scatter, has_y_gammas
                              rdata, gindx, sindx, round_x=round_x, round_y=round_y, gammas=gs1_ref)
     scale = lambda val, scal: val if scal is None else val / scal
     if n_expt_shards > 1:
-        if not do_scatter:
+        if do_scatter:
+            indx = sindx.dst_indx[sindx.dst_indx != -1]
+            ref_y = ref_y[indx // n_expts_act, :]
+            if act_is_float8:
+                tri_y = tri_y.view(torch.int8)
+            tri_y = tri_y[indx // n_expts_act, :]
+            if act_is_float8:
+                tri_y = tri_y.view(act_dtype)
+        else:
             n_rows = rdata.expt_hist.sum()
             assert n_rows > 0
             ref_y = ref_y[:n_rows]
