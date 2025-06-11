@@ -165,10 +165,11 @@ struct DirectToLdsLoadConversionBase : public LoadStoreConversionBase {
                                   unsigned vectorSize,
                                   bool hasSwizzling) const {
     // Direct-to-lds writes a contiguous block to LDS so we bail out if we
-    // encounter a sliced lds allocation which could make rows to be not be
-    // contiguous
-    // TODO (alex): this is too restrictive because slicing is fine if the warp
-    //              still writes one contiguous chunk.
+    // encounter a sliced lds allocation which requires non contiguous
+    // writes to LDS
+    // TODO (alex): the check is too restrictive because slicing is fine if the
+    //              warp still writes one contiguous chunk but it will require
+    //              adjustments to the LDS base and lane offset calculations
     if (!isSimpleSharedMemoryAccess(
             srcTy.getShape(), dstTy.getAllocShape(),
             cast<SharedEncodingTrait>(dstTy.getEncoding()))) {
@@ -227,11 +228,15 @@ struct DirectToLdsLoadConversionBase : public LoadStoreConversionBase {
     assert(ok);
   }
 
-  void emitSharedBaseAddresses(RewriterBase &rewriter, Operation *op,
-                               RankedTensorType srcTy, MemDescType dstTy,
-                               bool hasSwizzling, Type resElemTy, Value llDst,
-                               SmallVector<Value> &baseAddresses,
-                               VectorType &vecTy) const {
+  // Determine the vector size per load and collect the warp uniform shared
+  // addresses per vecTy. On GFX9 the shared address is a scalar so we need to
+  // compute the start address by setting lane_id to 0 and ignore swizzling
+  void emitSharedWarpStartAddresses(RewriterBase &rewriter, Operation *op,
+                                    RankedTensorType srcTy, MemDescType dstTy,
+                                    bool hasSwizzling, Type resElemTy,
+                                    Value llDst,
+                                    SmallVector<Value> &baseAddresses,
+                                    VectorType &vecTy) const {
     auto loc = op->getLoc();
     TritonLLVMOpBuilder b(loc, rewriter);
 
@@ -250,15 +255,17 @@ struct DirectToLdsLoadConversionBase : public LoadStoreConversionBase {
                         /*laneId=*/b.i32_val(0), baseAddresses);
   }
 
-  void emitSwizzleOffsets(RewriterBase &rewriter, Operation *op,
-                          RankedTensorType srcTy, MemDescType dstTy,
-                          bool hasSwizzling, Type resElemTy, Value llDst,
-                          SmallVector<Value> &swizzleOffsets,
-                          VectorType vecTy) const {
+  // For each load emit the computation to get the lane id offset which holds
+  // the source pointers/offsets we need to store to shared memory
+  void emitSwizzledLaneOffsets(RewriterBase &rewriter, Operation *op,
+                               RankedTensorType srcTy, MemDescType dstTy,
+                               bool hasSwizzling, Value llDst, Type resElemTy,
+                               SmallVector<Value> &swizzleOffsets,
+                               VectorType vecTy) const {
     auto loc = op->getLoc();
     TritonLLVMOpBuilder b(loc, rewriter);
 
-    // Compute swizzle offsets
+    // Create the regToShared layout
     auto regLayout =
         triton::gpu::toLinearLayout(srcTy.getShape(), srcTy.getEncoding());
     auto shape = dstTy.getShape();
@@ -266,6 +273,7 @@ struct DirectToLdsLoadConversionBase : public LoadStoreConversionBase {
         triton::gpu::toLinearLayout(shape, dstTy.getEncoding());
     LinearLayout regToSharedLayout = regLayout.invertAndCompose(sharedLayout);
 
+    // Create the non swizzled/flat regToShared layout
     auto dstEnc = cast<SwizzledSharedEncodingAttr>(dstTy.getEncoding());
     auto flatSharedEnc = SwizzledSharedEncodingAttr::get(
         srcTy.getContext(), dstEnc.getVec(), 1, 1, dstEnc.getOrder(),
@@ -285,6 +293,9 @@ struct DirectToLdsLoadConversionBase : public LoadStoreConversionBase {
 
     int numberOfLoads =
         regToSharedLayout.getInDimSize(kRegister) / vecTy.getNumElements();
+
+    // For each load compute the difference between the flat and the swizzled
+    // offset into shared memory
     for (int i = 0; i < numberOfLoads; i++) {
       auto regId = b.i32_val(i * vecTy.getNumElements());
 
@@ -301,6 +312,8 @@ struct DirectToLdsLoadConversionBase : public LoadStoreConversionBase {
                              {kLane, laneId},
                              {kWarp, warpId},
                              {kBlock, b.i32_val(0)}}))))[0];
+
+      // Normalize the offset by vecTy to obtain the offset in lanes
       auto laneOffet = b.sdiv(b.sub(swizzleOffset, flatOffset),
                               b.i32_val(vecTy.getNumElements()));
       swizzleOffsets.push_back(laneOffet);
@@ -583,25 +596,19 @@ struct BufferLoadToLocalOpConversion
     }
 
     VectorType vecTy;
-    SmallVector<Value> ldsBaseAddresses;
-    emitSharedBaseAddresses(rewriter, op, ptrType, dstTy, hasSwizzling,
-                            resElemTy, llDst, ldsBaseAddresses, vecTy);
+    SmallVector<Value> ldsWarpStartAddrs;
+    emitSharedWarpStartAddresses(rewriter, op, ptrType, dstTy, hasSwizzling,
+                                 resElemTy, llDst, ldsWarpStartAddrs, vecTy);
     assert(vecTy.getNumElements() == vec);
 
-    SmallVector<Value> swizzleLaneOffsets;
+    SmallVector<Value> swizzledLaneOffsets;
     if (hasSwizzling) {
-      emitSwizzleOffsets(rewriter, op, ptrType, dstTy, hasSwizzling, resElemTy,
-                         llDst, swizzleLaneOffsets, vecTy);
-      assert(ldsBaseAddresses.size() == swizzleLaneOffsets.size());
+      emitSwizzledLaneOffsets(rewriter, op, ptrType, dstTy, hasSwizzling, llDst,
+                              resElemTy, swizzledLaneOffsets, vecTy);
+      assert(ldsWarpStartAddrs.size() == swizzledLaneOffsets.size());
     }
 
     Value laneId = getLaneId(rewriter, loc);
-    SmallVector<Value> otherLdsAddresses;
-    if (!otherElems.empty()) {
-      emitSharedAddresses(rewriter, loc, ptrType, dstTy, vecTy, llDst,
-                          resElemTy, laneId, otherLdsAddresses);
-    }
-
     int vecBytes =
         (vecTy.getNumElements() * vecTy.getElementTypeBitWidth()) / 8;
     assert(llvm::isPowerOf2_32(vecBytes));
@@ -611,14 +618,14 @@ struct BufferLoadToLocalOpConversion
     // based on the collected shared addresses and vector size
     Value rsrcDesc = bufferEmitter.createResourceDescriptor(llPtr, llStride);
 
-    for (int i = 0; i < ldsBaseAddresses.size(); i++) {
+    for (int i = 0; i < ldsWarpStartAddrs.size(); i++) {
       auto srcIdx = i * vec;
       auto offsetIn = offsetElems[srcIdx];
       Value pred = mask ? maskElems[srcIdx] : b.true_val();
 
       if (hasSwizzling) {
         // Apply swizzling to the src offsets
-        auto swizzleLaneOffset = swizzleLaneOffsets[i];
+        auto swizzleLaneOffset = swizzledLaneOffsets[i];
         // laneId + swizzleOffset will always stay inside the warp [0,
         // threadsPerWarp) because we only swizzle inside a warp
         Value swizzledLaneId = b.add(laneId, swizzleLaneOffset);
@@ -641,26 +648,19 @@ struct BufferLoadToLocalOpConversion
         }
       }
 
-      auto bufferLoadToLds =
-          bufferEmitter.emitLoadToLds(vecTy, vecBytesVal, rsrcDesc, offsetIn,
-                                      ldsBaseAddresses[i], pred, op.getCache());
+      auto bufferLoadToLds = bufferEmitter.emitLoadToLds(
+          vecTy, vecBytesVal, rsrcDesc, offsetIn, ldsWarpStartAddrs[i], pred,
+          op.getCache());
       AMD::addAsyncCopyAliasScope(bufferLoadToLds);
       if (!otherElems.empty()) {
         Value storeVal = packElementRangeIntoVector(
             rewriter, this->getTypeConverter(), loc, vecTy, otherElems, srcIdx);
+        Type ptrTy = ldsWarpStartAddrs[i].getType();
 
-        Value ldsAddr;
-
-        if (isFastedLoadDimContiguous(offset, cast<MemDescType>(dstTy))) {
-          ldsAddr = b.gep(ldsBaseAddresses[i].getType(), vecTy,
-                          ldsBaseAddresses[i], laneId);
-          if (hasSwizzling) {
-            ldsAddr = b.gep(ldsBaseAddresses[i].getType(), vecTy, ldsAddr,
-                            swizzleLaneOffsets[i]);
-          }
-        } else {
-          ldsAddr = otherLdsAddresses[i];
-        }
+        // otherDstPtr = warpStartAddr + (laneId + [swizzleLaneOffset]) * vecTy
+        Value ldsAddr = b.gep(ptrTy, vecTy, ldsWarpStartAddrs[i], laneId);
+        if (hasSwizzling)
+          ldsAddr = b.gep(ptrTy, vecTy, ldsAddr, swizzledLaneOffsets[i]);
 
         llStore(rewriter, loc, ldsAddr, storeVal,
                 b.icmp_ne(maskElems[srcIdx], b.true_val()), op.getCache(),
@@ -741,25 +741,19 @@ struct AsyncCopyGlobalToLocalOpConversion
     }
 
     VectorType vecTy;
-    SmallVector<Value> ldsBaseAddresses;
-    emitSharedBaseAddresses(rewriter, op, srcTy, dstTy, hasSwizzling, resElemTy,
-                            llDst, ldsBaseAddresses, vecTy);
+    SmallVector<Value> ldsWarpStartAddrs;
+    emitSharedWarpStartAddresses(rewriter, op, srcTy, dstTy, hasSwizzling,
+                                 resElemTy, llDst, ldsWarpStartAddrs, vecTy);
     assert(vecTy.getNumElements() == maxVec);
 
-    SmallVector<Value> swizzleLaneOffsets;
+    SmallVector<Value> swizzledLaneOffsets;
     if (hasSwizzling) {
-      emitSwizzleOffsets(rewriter, op, srcTy, dstTy, hasSwizzling, resElemTy,
-                         llDst, swizzleLaneOffsets, vecTy);
-      assert(ldsBaseAddresses.size() == swizzleLaneOffsets.size());
+      emitSwizzledLaneOffsets(rewriter, op, srcTy, dstTy, hasSwizzling, llDst,
+                              resElemTy, swizzledLaneOffsets, vecTy);
+      assert(ldsWarpStartAddrs.size() == swizzledLaneOffsets.size());
     }
 
     Value laneId = getLaneId(rewriter, loc);
-    SmallVector<Value> otherLdsAddresses;
-    if (!otherElems.empty()) {
-      emitSharedAddresses(rewriter, loc, srcTy, dstTy, vecTy, llDst, resElemTy,
-                          laneId, otherLdsAddresses);
-    }
-
     int vecBytes =
         (vecTy.getNumElements() * vecTy.getElementTypeBitWidth()) / 8;
     assert(llvm::isPowerOf2_32(vecBytes));
@@ -770,7 +764,7 @@ struct AsyncCopyGlobalToLocalOpConversion
 
     // Emit the load to lds based on the collected shared addresses and vector
     // size
-    for (int i = 0; i < ldsBaseAddresses.size(); i++) {
+    for (int i = 0; i < ldsWarpStartAddrs.size(); i++) {
       auto srcIdx = i * maxVec;
       Value srcPtr = srcElems[srcIdx];
       Value pred = maskElements.empty() ? b.true_val() : maskElems[srcIdx];
@@ -780,14 +774,14 @@ struct AsyncCopyGlobalToLocalOpConversion
         // laneId + laneOffset will always stay inside the warp [0,
         // threadsPerWarp) because we only swizzle inside a warp
         Value swizzledLaneId =
-            b.add(getLaneId(rewriter, loc), swizzleLaneOffsets[i]);
+            b.add(getLaneId(rewriter, loc), swizzledLaneOffsets[i]);
 
         if (isFastedLoadDimContiguous(op.getSrc(), cast<MemDescType>(dstTy))) {
           // Because rows are contiguous and we only swizzle inside rows by
           // swapping elements between lanes we can move the vecTy typed src
           // pointer by laneOffset elements to apply the swizzling.
           srcPtr =
-              b.gep(srcPtr.getType(), vecTy, srcPtr, swizzleLaneOffsets[i]);
+              b.gep(srcPtr.getType(), vecTy, srcPtr, swizzledLaneOffsets[i]);
         } else {
           // If rows are not contiguous in memory we need to shuffle the
           // pointers to apply the swizzling to the src pointers
@@ -802,7 +796,7 @@ struct AsyncCopyGlobalToLocalOpConversion
       if (maskElems.empty()) {
         auto globalLoadLdsOp = rewriter.create<ROCDL::GlobalLoadLDSOp>(
             loc,
-            /*globalPtr=*/srcPtr, /*ldsPtr=*/ldsBaseAddresses[i],
+            /*globalPtr=*/srcPtr, /*ldsPtr=*/ldsWarpStartAddrs[i],
             /*size=*/vecBytes, /*offset=*/0,
             /*aux=*/cacheModifiers, /*alias_scopes=*/nullptr,
             /*noalias_scopes=*/nullptr, /*tbaa=*/nullptr);
@@ -818,7 +812,7 @@ struct AsyncCopyGlobalToLocalOpConversion
       rewriter.create<LLVM::CondBrOp>(loc, pred, loadBlock, afterLoad);
       rewriter.setInsertionPointToStart(loadBlock);
       auto globalLoadLdsOp = rewriter.create<ROCDL::GlobalLoadLDSOp>(
-          loc, srcPtr, ldsBaseAddresses[i], vecBytes,
+          loc, srcPtr, ldsWarpStartAddrs[i], vecBytes,
           /*offset=*/0, cacheModifiers, nullptr, nullptr, nullptr);
       AMD::addAsyncCopyAliasScope(globalLoadLdsOp);
 
@@ -827,18 +821,12 @@ struct AsyncCopyGlobalToLocalOpConversion
       if (!otherElems.empty()) {
         Value storeVal = packElementRangeIntoVector(
             rewriter, this->getTypeConverter(), loc, vecTy, otherElems, srcIdx);
+        Type ptrTy = ldsWarpStartAddrs[i].getType();
 
-        Value ldsAddr;
-        if (isFastedLoadDimContiguous(op.getSrc(), cast<MemDescType>(dstTy))) {
-          ldsAddr = b.gep(ldsBaseAddresses[i].getType(), vecTy,
-                          ldsBaseAddresses[i], laneId);
-          if (hasSwizzling) {
-            ldsAddr = b.gep(ldsBaseAddresses[i].getType(), vecTy, ldsAddr,
-                            swizzleLaneOffsets[i]);
-          }
-        } else {
-          ldsAddr = otherLdsAddresses[i];
-        }
+        // otherDstPtr = warpStartAddr + (laneId + [swizzleLaneOffset]) * vecTy
+        Value ldsAddr = b.gep(ptrTy, vecTy, ldsWarpStartAddrs[i], laneId);
+        if (hasSwizzling)
+          ldsAddr = b.gep(ptrTy, vecTy, ldsAddr, swizzledLaneOffsets[i]);
 
         llStore(rewriter, loc, ldsAddr, storeVal,
                 b.icmp_ne(maskElems[srcIdx], b.true_val()), op.getCache(),
