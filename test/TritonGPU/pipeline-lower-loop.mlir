@@ -48,7 +48,7 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 1 : i32} {
 // CHECK-DAG:   ttg.async_wait  {num = 0 : i32}
 
 tt.func @one_dep_async(%lb : index, %ub : index, %step : index,
-                 %a_ptr_init : tensor<128x32x!tt.ptr<f16>, #A>) -> () {
+                 %a_ptr_init : tensor<128x32x!tt.ptr<f16>, #A> {tt.divisibility = 16 : i32, tt.contiguity = 16 : i32}) -> () {
   scf.for %iv = %lb to %ub step %step : index {
     %a = tt.load %a_ptr_init {loop.cluster = 2 : i32, loop.stage = 0 : i32} : tensor<128x32x!tt.ptr<f16>, #A>
     "use"(%a) {loop.cluster = 0 : i32, loop.stage = 2 : i32} : (tensor<128x32xf16, #A>) -> ()
@@ -67,7 +67,7 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 1 : i32} {
 // CHECK-LABEL: @one_dep_barrier_wait
 // CHECK: ttg.local_alloc : () -> !ttg.memdesc<3x128x64
 tt.func @one_dep_barrier_wait(%lb : index, %ub : index, %step : index,
-                 %a_ptr_init : tensor<128x64x!tt.ptr<f16>, #A>,
+                 %a_ptr_init : tensor<128x64x!tt.ptr<f16>, #A> {tt.divisibility = 16 : i32, tt.contiguity = 16 : i32},
                  %bar : !ttg.memdesc<1xi64, #shared1, #ttg.shared_memory, mutable>,
                  %phase : i32) -> () {
   scf.for %iv = %lb to %ub step %step : index {
@@ -91,7 +91,7 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 1 : i32} {
 // CHECK-LABEL: @one_dep_barrier_wait_trans
 // CHECK: ttg.local_alloc : () -> !ttg.memdesc<3x128x64
 tt.func @one_dep_barrier_wait_trans(%lb : index, %ub : index, %step : index,
-                 %a_ptr_init : tensor<128x64x!tt.ptr<f16>, #A>,
+                 %a_ptr_init : tensor<128x64x!tt.ptr<f16>, #A> {tt.divisibility = 16 : i32, tt.contiguity = 16 : i32},
                  %bar : !ttg.memdesc<1xi64, #shared1, #ttg.shared_memory, mutable>,
                  %phase : i32) -> () {
   scf.for %iv = %lb to %ub step %step : index {
@@ -119,7 +119,7 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 1 : i32} {
 // CHECK:   "use1"(%[[A_VAL]]) {loop.cluster = 0 : i32, loop.stage = 2 : i32}
 // CHECK:   "use2"(%[[A_VAL]]) {loop.cluster = 0 : i32, loop.stage = 3 : i32}
 tt.func @different_use_stages(%lb : index, %ub : index, %step : index,
-                 %a_ptr_init : tensor<128x32x!tt.ptr<f16>, #A>) -> () {
+                 %a_ptr_init : tensor<128x32x!tt.ptr<f16>, #A> {tt.divisibility = 16 : i32, tt.contiguity = 16 : i32}) -> () {
   scf.for %iv = %lb to %ub step %step : index {
     %a = tt.load %a_ptr_init {loop.cluster = 2 : i32, loop.stage = 0 : i32} : tensor<128x32x!tt.ptr<f16>, #A>
     "use1"(%a) {loop.cluster = 0 : i32, loop.stage = 2 : i32} : (tensor<128x32xf16, #A>) -> ()
@@ -144,7 +144,7 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 1 : i32} {
 // CHECK:   "use"{{.*}} {loop.cluster = 0 : i32, loop.stage = 3 : i32}
 
 tt.func @used_by_if_yield(%lb : index, %ub : index, %step : index,
-                 %a_ptr_init : tensor<128x32x!tt.ptr<f16>, #A>,
+                 %a_ptr_init : tensor<128x32x!tt.ptr<f16>, #A> {tt.divisibility = 16 : i32, tt.contiguity = 16 : i32},
                  %init_a : tensor<128x32xf16, #A>,
                  %cnd : i1) -> () {
   scf.for %iv = %lb to %ub step %step : index {
@@ -166,7 +166,7 @@ tt.func @used_by_if_yield(%lb : index, %ub : index, %step : index,
 module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 1 : i32} {
 // CHECK-LABEL: @dist1_load
 tt.func @dist1_load(%lb : index, %ub : index, %step : index,
-                 %a_ptr_init : tensor<128x32x!tt.ptr<f16>, #A>,
+                 %a_ptr_init : tensor<128x32x!tt.ptr<f16>, #A> {tt.divisibility = 16 : i32, tt.contiguity = 16 : i32},
                  %init_a : tensor<128x32xf16, #A>) -> () {
   %_ = scf.for %iv = %lb to %ub step %step iter_args(%prev_a = %init_a) -> (tensor<128x32xf16, #A>) : index {
     "use_next_iter"(%prev_a) {loop.cluster = 2 : i32, loop.stage = 0 : i32} : (tensor<128x32xf16, #A>) -> ()
@@ -187,7 +187,7 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 1 : i32} {
 // CHECK: scf.for
 // CHECK:   tt.load {{.*}} {loop.cluster = 2 : i32, loop.stage = 0 : i32}
 tt.func @one_dep_sync(%lb : index, %ub : index, %step : index,
-                 %a_ptr_init : tensor<1x!tt.ptr<f16>, #A>) -> () {
+                 %a_ptr_init : tensor<1x!tt.ptr<f16>, #A> {tt.divisibility = 16 : i32, tt.contiguity = 16 : i32}) -> () {
   scf.for %iv = %lb to %ub step %step : index {
     %a = tt.load %a_ptr_init {loop.cluster = 2 : i32, loop.stage = 0 : i32} : tensor<1x!tt.ptr<f16>, #A>
     "use"(%a) {loop.cluster = 0 : i32, loop.stage = 2 : i32} : (tensor<1xf16, #A>) -> ()
@@ -226,7 +226,7 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 1 : i32} {
 // CHECK-DAG:   ttg.local_dealloc %[[A]]
 // CHECK-DAG:   ttg.async_wait  {num = 0 : i32}
 tt.func @one_dep_local_alloc(%lb : index, %ub : index, %step : index,
-                 %a_ptr_init : tensor<128x32x!tt.ptr<f16>, #A>) -> () {
+                 %a_ptr_init : tensor<128x32x!tt.ptr<f16>, #A> {tt.divisibility = 16 : i32, tt.contiguity = 16 : i32}) -> () {
   scf.for %iv = %lb to %ub step %step : index {
     %a = tt.load %a_ptr_init {loop.cluster = 2 : i32, loop.stage = 0 : i32} : tensor<128x32x!tt.ptr<f16>, #A>
     %a_alloc = ttg.local_alloc %a {loop.cluster = 0 : i32, loop.stage = 2 : i32} : (tensor<128x32xf16, #A>) -> !ttg.memdesc<128x32xf16, #shared, #ttg.shared_memory, mutable>
@@ -244,8 +244,8 @@ tt.func @one_dep_local_alloc(%lb : index, %ub : index, %step : index,
 module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 1 : i32} {
 // CHECK-LABEL: @one_load_group
 tt.func @one_load_group(%lb : index, %ub : index, %step : index,
-                       %a_ptr_init : tensor<128x32x!tt.ptr<f32>, #A>,
-                       %b_ptr_init : tensor<128x32x!tt.ptr<f32>, #A>) -> () {
+                       %a_ptr_init : tensor<128x32x!tt.ptr<f32>, #A> {tt.divisibility = 16 : i32, tt.contiguity = 16 : i32},
+                       %b_ptr_init : tensor<128x32x!tt.ptr<f32>, #A> {tt.divisibility = 16 : i32, tt.contiguity = 16 : i32}) -> () {
   // CHECK-DAG: %[[MINUS_ONE:.*]] = arith.constant -1
   // CHECK-DAG: %[[ZERO:.*]] = arith.constant 0
   // CHECK-DAG: %[[ONE:.*]] = arith.constant 1
@@ -275,9 +275,9 @@ tt.func @one_load_group(%lb : index, %ub : index, %step : index,
 module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 1 : i32} {
 // CHECK-LABEL: @two_load_groups
 tt.func @two_load_groups(%lb : index, %ub : index, %step : index,
-                       %a_ptr_init : tensor<128x32x!tt.ptr<f32>, #A>,
-                       %b_ptr_init : tensor<128x32x!tt.ptr<f32>, #A>,
-                       %c_ptr_init : tensor<128x32x!tt.ptr<f32>, #A>) -> () {
+                       %a_ptr_init : tensor<128x32x!tt.ptr<f32>, #A> {tt.divisibility = 16 : i32, tt.contiguity = 16 : i32},
+                       %b_ptr_init : tensor<128x32x!tt.ptr<f32>, #A> {tt.divisibility = 16 : i32, tt.contiguity = 16 : i32},
+                       %c_ptr_init : tensor<128x32x!tt.ptr<f32>, #A> {tt.divisibility = 16 : i32, tt.contiguity = 16 : i32}) -> () {
   // CHECK-DAG: %[[MINUS_ONE:.*]] = arith.constant -1
   // CHECK-DAG: %[[ZERO:.*]] = arith.constant 0
   // CHECK-DAG: %[[ONE:.*]] = arith.constant 1
@@ -316,7 +316,7 @@ tt.func @two_load_groups(%lb : index, %ub : index, %step : index,
 module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 1 : i32} {
 // CHECK-LABEL: @dependent_loads
 tt.func @dependent_loads(%lb : index, %ub : index, %step : index,
-                       %a_ptr_init : tensor<128x32x!tt.ptr<f32>, #A>) -> () {
+                       %a_ptr_init : tensor<128x32x!tt.ptr<f32>, #A> {tt.divisibility = 16 : i32, tt.contiguity = 16 : i32}) -> () {
   // CHECK-DAG: %[[MINUS_ONE:.*]] = arith.constant -1
   // CHECK-DAG: %[[ZERO:.*]] = arith.constant 0
   // CHECK-DAG: %[[ONE:.*]] = arith.constant 1
@@ -366,7 +366,7 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 1 : i32} {
 // CHECK-LABEL: @dependent_loads_asymmetric
 // Loads have different latencies, should create two load groups.
 tt.func @dependent_loads_asymmetric(%lb : index, %ub : index, %step : index,
-                       %a_ptr_init : tensor<128x32x!tt.ptr<f32>, #A>) -> () {
+                       %a_ptr_init : tensor<128x32x!tt.ptr<f32>, #A> {tt.divisibility = 16 : i32, tt.contiguity = 16 : i32}) -> () {
   // CHECK-DAG: %[[MINUS_ONE:.*]] = arith.constant -1
   // CHECK-DAG: %[[ZERO:.*]] = arith.constant 0
   // CHECK-DAG: %[[ONE:.*]] = arith.constant 1
@@ -422,7 +422,7 @@ tt.func @dependent_loads_asymmetric(%lb : index, %ub : index, %step : index,
 module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 1 : i32} {
 // CHECK-LABEL: @unused_load
 tt.func @unused_load(%lb : index, %ub : index, %step : index,
-                       %a_ptr_init : tensor<128x32x!tt.ptr<f32>, #A>) -> () {
+                       %a_ptr_init : tensor<128x32x!tt.ptr<f32>, #A> {tt.divisibility = 16 : i32, tt.contiguity = 16 : i32}) -> () {
   // CHECK: scf.for
   scf.for %iv = %lb to %ub step %step : index {
     // CHECK: dummy
@@ -472,8 +472,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
   // CHECK-DAG: ttg.local_dealloc %[[B]]
   // CHECK-DAG: ttg.async_wait  {num = 0 : i32}
   tt.func public @shmem_pipelining_mmav3(%lb : index, %ub : index, %step : index,
-                                              %A_ptr: tensor<128x128x!tt.ptr<f16>, #blocked1>,
-                                              %B_ptr: tensor<128x128x!tt.ptr<f16>, #blocked1>) -> tensor<128x128xf16, #mma> attributes {noinline = false} {
+                                              %A_ptr: tensor<128x128x!tt.ptr<f16>, #blocked1> {tt.divisibility = 16 : i32, tt.contiguity = 16 : i32},
+                                              %B_ptr: tensor<128x128x!tt.ptr<f16>, #blocked1> {tt.divisibility = 16 : i32, tt.contiguity = 16 : i32}) -> tensor<128x128xf16, #mma> attributes {noinline = false} {
     %true = arith.constant true
     %cst = arith.constant dense<0.000000e+00> : tensor<128x128xf32, #mma>
     %c0_i32 = arith.constant 0 : i32
@@ -528,8 +528,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
   // CHECK-DAG:   ttg.async_wait  {num = 0 : i32}
   tt.func public @no_shmem_pipelining_incompat_layout(
                     %lb : index, %ub : index, %step : index,
-                    %A_ptr: tensor<128x128x!tt.ptr<f16>, #blocked1>,
-                    %B_ptr: tensor<128x128x!tt.ptr<f16>, #blocked1>) -> tensor<128x128xf32, #mma> attributes {noinline = false} {
+                    %A_ptr: tensor<128x128x!tt.ptr<f16>, #blocked1> {tt.divisibility = 16 : i32, tt.contiguity = 16 : i32},
+                    %B_ptr: tensor<128x128x!tt.ptr<f16>, #blocked1> {tt.divisibility = 16 : i32, tt.contiguity = 16 : i32}) -> tensor<128x128xf32, #mma> attributes {noinline = false} {
     %true = arith.constant true
     %cst = arith.constant dense<0.000000e+00> : tensor<128x128xf32, #mma>
     %c0_i32 = arith.constant 0 : i32
@@ -592,10 +592,10 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
   // CHECK-DAG: ttg.async_wait  {num = 0 : i32}
   tt.func public @no_shmem_pipelining_other_used(
                       %lb : index, %ub : index, %step : index,
-                      %A_ptr: tensor<128x128x!tt.ptr<f16>, #blocked1>,
-                      %B_ptr: tensor<128x128x!tt.ptr<f16>, #blocked1>,
-                      %mask: tensor<128x128xi1, #blocked1>,
-                      %other: tensor<128x128xf16, #blocked1>) -> tensor<128x128xf16, #mma> attributes {noinline = false} {
+                      %A_ptr: tensor<128x128x!tt.ptr<f16>, #blocked1> {tt.divisibility = 16 : i32, tt.contiguity = 16 : i32},
+                      %B_ptr: tensor<128x128x!tt.ptr<f16>, #blocked1> {tt.divisibility = 16 : i32, tt.contiguity = 16 : i32},
+                      %mask: tensor<128x128xi1, #blocked1> {tt.constancy = 128 : i32},
+                      %other: tensor<128x128xf16, #blocked1> {tt.constancy = 128 : i32}) -> tensor<128x128xf16, #mma> attributes {noinline = false} {
     %true = arith.constant true
     %cst = arith.constant dense<0.000000e+00> : tensor<128x128xf32, #mma>
     %c0_i32 = arith.constant 0 : i32
@@ -671,8 +671,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
   // CHECK-DAG: ttg.local_dealloc %[[BAR]]
   // CHECK-DAG: ttg.async_wait {num = 0 : i32}
   tt.func public @shmem_pipelining_mmav5(%lb : index, %ub : index, %step : index,
-                                              %A_ptr: tensor<128x128x!tt.ptr<f16>, #blocked1>,
-                                              %B_ptr: tensor<128x128x!tt.ptr<f16>, #blocked1>) -> tensor<128x128xf16, #blocked> attributes {noinline = false} {
+                                              %A_ptr: tensor<128x128x!tt.ptr<f16>, #blocked1> {tt.divisibility = 16 : i32, tt.contiguity = 16 : i32},
+                                              %B_ptr: tensor<128x128x!tt.ptr<f16>, #blocked1> {tt.divisibility = 16 : i32, tt.contiguity = 16 : i32}) -> tensor<128x128xf16, #blocked> attributes {noinline = false} {
     %true = arith.constant true
     %cst = arith.constant dense<0.000000e+00> : tensor<128x128xf32, #blocked>
     %c0_i32 = arith.constant 0 : i32
@@ -929,10 +929,10 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
   // CHECK: ttg.local_alloc : () -> !ttg.memdesc<3x1x2x32x4x4xi8
   // CHECK: ttg.local_alloc : () -> !ttg.memdesc<3x1x2x32x4x4xi8
   tt.func public @pipelining_mmav5_scaled(%lb : index, %ub : index, %step : index,
-                                              %A_ptr: tensor<128x128x!tt.ptr<f8E5M2>, #blocked1>,
-                                              %B_ptr: tensor<128x128x!tt.ptr<f8E5M2>, #blocked1>,
-                                              %A_sc_ptr: tensor<1x2x32x4x4x!tt.ptr<i8>, #blocked2>,
-                                              %B_sc_ptr: tensor<1x2x32x4x4x!tt.ptr<i8>, #blocked2>) -> tensor<128x128xf32, #blocked> attributes {noinline = false} {
+                                              %A_ptr: tensor<128x128x!tt.ptr<f8E5M2>, #blocked1> {tt.divisibility = 16 : i32, tt.contiguity = 16 : i32},
+                                              %B_ptr: tensor<128x128x!tt.ptr<f8E5M2>, #blocked1> {tt.divisibility = 16 : i32, tt.contiguity = 16 : i32},
+                                              %A_sc_ptr: tensor<1x2x32x4x4x!tt.ptr<i8>, #blocked2> {tt.divisibility = 16 : i32, tt.contiguity = 16 : i32},
+                                              %B_sc_ptr: tensor<1x2x32x4x4x!tt.ptr<i8>, #blocked2> {tt.divisibility = 16 : i32, tt.contiguity = 16 : i32}) -> tensor<128x128xf32, #blocked> attributes {noinline = false} {
     %true = arith.constant true
     %cst = arith.constant dense<0.000000e+00> : tensor<128x128xf32, #blocked>
     %c0_i32 = arith.constant 0 : i32
@@ -1614,4 +1614,23 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     "use"(%1) : (tensor<128x128xf32, #blocked1>) -> ()
     tt.return
   }
+}
+
+// -----
+
+#A = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [2, 16], warpsPerCTA = [4, 1], order = [1, 0]}>
+
+module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 1 : i32} {
+// CHECK-LABEL: @load_cant_use_async_cp
+// CHECK: scf.for
+// CHECK:   tt.load
+// CHECK:   "use"
+tt.func @load_cant_use_async_cp(%lb : index, %ub : index, %step : index,
+                 %a_ptr_init : tensor<128x32x!tt.ptr<f16>, #A>) -> () {
+  scf.for %iv = %lb to %ub step %step : index {
+    %a = tt.load %a_ptr_init {loop.cluster = 1 : i32, loop.stage = 0 : i32} : tensor<128x32x!tt.ptr<f16>, #A>
+    "use"(%a) {loop.cluster = 2 : i32, loop.stage = 3 : i32} : (tensor<128x32xf16, #A>) -> ()
+  } {tt.scheduled_max_stage = 3 : i32}
+  tt.return
+}
 }
