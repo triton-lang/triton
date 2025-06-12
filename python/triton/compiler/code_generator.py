@@ -11,6 +11,7 @@ from typing import Any, Callable, Dict, Optional, Tuple, Type, Union, Iterable, 
 
 from .. import knobs, language
 from .._C.libtriton import ir, gluon_ir
+from ..experimental.gluon import language as ttgl
 from ..language import constexpr, str_to_ty, tensor
 from ..language.core import _unwrap_if_constexpr, base_value, base_type
 from ..runtime.jit import get_jit_fn_file_line, get_full_name
@@ -637,6 +638,8 @@ class CodeGenerator(ast.NodeVisitor):
         if _is_triton_tensor(rhs):
             reverse_method_name = re.sub(r"__(.*)__", r"__r\1__", method_name)
             return getattr(rhs, reverse_method_name)(lhs, _semantic=self.semantic)
+        if not isinstance(lhs, constexpr) and isinstance(rhs, constexpr):
+            lhs = constexpr(lhs)
         return getattr(lhs, method_name)(rhs)
 
     def visit_BinOp(self, node):
@@ -1460,6 +1463,8 @@ class CodeGenerator(ast.NodeVisitor):
     statically_implemented_functions: Dict[object, Callable[[ast.Call], Any]] = {
         language.core.static_assert: execute_static_assert,
         language.core.static_print: static_executor(print),
+        ttgl.static_assert: execute_static_assert,
+        ttgl.static_print: static_executor(print),
         int: static_executor(int),
         len: static_executor(len),
     }
