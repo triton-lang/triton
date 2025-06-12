@@ -57,6 +57,7 @@ _IMPORT_FROM_TRITON: List[str] = [
     "store",
     "to_tensor",
     "where",
+    "inline_asm_elementwise",
 ]
 
 __all__ = [
