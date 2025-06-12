@@ -98,7 +98,7 @@ def get_min_time_bytes(df, device_info):
             device_frames = df[idx]
             memory_clock_rate = device_info[device_type][device_index]["memory_clock_rate"]  # in khz
             bus_width = device_info[device_type][device_index]["bus_width"]  # in bits
-            peak_bandwidth = specs.max_bps(bus_width, memory_clock_rate)
+            peak_bandwidth = specs.max_bps(device_type, device_index, bus_width, memory_clock_rate)
             min_time_bytes.loc[idx, "min_time"] += device_frames["bytes"] / peak_bandwidth
     return min_time_bytes
 
