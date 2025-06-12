@@ -82,9 +82,6 @@ void populateTensorMemorySubviewOpToLLVMPattern(
     LLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
     PatternBenefit benefit);
 
-void populateRandomDelayOpToLLVMPatterns(LLVMTypeConverter &typeConverter,
-                                         RewritePatternSet &patterns,
-                                         PatternBenefit benefit);
 } // namespace NVIDIA
 } // namespace triton
 } // namespace mlir

@@ -16,10 +16,10 @@ add_triton_library(TritonNVIDIAGPUToLLVM
     TensorPtrOpsToLLVM.cpp
     ClusterOpsToLLVM.cpp
     PTXAsmFormat.cpp
-    RandomDelayOpToLLVM.cpp
     Utility.cpp
     Fp4ToFpOpToLLVM.cpp
     TargetInfo.cpp
+    InsertRandomDelays.cpp
 
     DEPENDS
     TritonNVIDIAGPUConversionPassIncGen
