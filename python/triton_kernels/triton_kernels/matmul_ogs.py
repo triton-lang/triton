@@ -624,7 +624,7 @@ def _create_tma_descriptors(
                 # Pad the inner shape to 128 for mxfp4 weights
                 # for mixed precision fp8 x mxfp4 compute
                 pad = 128
-                dim_to_pad = -1 if w_transpose else -2
+                dim_to_pad = -1
                 old_size = w_desc.shape[dim_to_pad]
                 padded_size = math.ceil(old_size / pad) * pad
                 if padded_size != old_size:
