@@ -756,6 +756,8 @@ def get_git_branch():
 
 
 def get_git_version_suffix():
+    if not os.path.isdir(os.path.join(os.path.dirname(__file__), '.git')):
+        return ""  # Not a git checkout
     branch = get_git_branch()
     if branch.startswith("release"):
         return ""
