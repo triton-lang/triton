@@ -52,11 +52,14 @@ def make_matmul_repr(base_name, order):
 
         def convert_dtype(dtype):
             if "tensordesc" in dtype:
-                return dtype.split("<")[1].split("[")[0]
+                ret = convert_dtype(dtype.split("<")[1].split("[")[0])
+                return ret
             elif "u8" in dtype:
                 return "mxfp4"
-            else:
+            elif dtype[0] == "*":
                 return dtype[1:]
+            else:
+                return dtype
 
         dtypes = "x".join([convert_dtype(f"{signature[i]}") for i in reorder(["Y", "X", "W"])])
         layouts = "".join([f"{layout(i)}" for i in reorder(["stride_y_n", "stride_x_k", "stride_w_n"])])
