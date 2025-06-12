@@ -757,9 +757,6 @@ class TritonSemantic(Generic[TensorTy]):
         # (scalar, scalar) => returns original blocks
         return lhs, rhs
 
-    def _broadcast_type(self, dtype, type):
-        return tl.block_type(dtype, type.shape)
-
 #######
 # cast
 #######

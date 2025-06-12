@@ -114,9 +114,6 @@ class GluonSemantic(TritonSemantic[TensorTy]):
         rhs = self.broadcast_impl_shape(rhs, ret_shape)
         return lhs, rhs
 
-    def _broadcast_type(self, dtype, type):
-        return ttgl.distributed_type(dtype, type.shape, type.layout)
-
     def arange(self, start, end, layout):
         shape = [end - start]
         ret_ty = ttgl.distributed_type(ttgl.int32, shape, layout)
