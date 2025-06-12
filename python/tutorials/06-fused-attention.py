@@ -663,7 +663,7 @@ except BaseException:
     HAS_FLASH = False
 
 TORCH_HAS_FP8 = hasattr(torch, 'float8_e5m2')
-BATCH, N_HEADS, HEAD_DIM = 4, 32, 64
+BATCH, N_HEADS, HEAD_DIM = 4, 32, 128
 # vary seq length for fixed head and batch=4
 configs = []
 for mode in ["fwd"]:

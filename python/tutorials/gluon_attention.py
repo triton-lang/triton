@@ -128,46 +128,6 @@ def get_nvmma_layout(shape, element_ty, order=[1, 0], fp4_padded=False):
 # ===-----------------------------------------------------------------------===#
 
 
-@aggregate
-class TensorMemoryVariable:
-    desc: tensor_memory_descriptor
-    reg_layout: gl.constexpr
-
-    @gluon.jit
-    def _allocate(num_buffers: gl.constexpr, shape: gl.constexpr, element_ty: gl.constexpr, num_warps: gl.constexpr,
-                  unpacked: gl.constexpr):
-        instr_shape: gl.constexpr = get_mma_instr_shape(shape, element_ty).value
-        tmem_layout: gl.constexpr = TensorMemoryLayout([instr_shape[0], instr_shape[1]], unpacked=unpacked)
-        reg_layout: gl.constexpr = get_tmem_32x32b_layout(instr_shape, shape, num_warps).value
-
-        desc = allocate_tensor_memory(element_ty, [num_buffers] + list(shape), tmem_layout)
-        return TensorMemoryVariable(desc, gl.constexpr(reg_layout))
-
-    @gluon.jit
-    def allocate_mma(num_buffers: gl.constexpr, shape: gl.constexpr, element_ty: gl.constexpr, num_warps: gl.constexpr):
-        return TensorMemoryVariable._allocate(num_buffers, shape, element_ty, num_warps, unpacked=True)
-
-    @gluon.jit
-    def allocate_lhs(num_buffers: gl.constexpr, shape: gl.constexpr, element_ty: gl.constexpr, num_warps: gl.constexpr):
-        return TensorMemoryVariable._allocate(num_buffers, shape, element_ty, num_warps, unpacked=False)
-
-    def __init__(self, desc: tensor_memory_descriptor, reg_layout):
-        self.desc = desc
-        self.reg_layout = reg_layout
-
-    @gluon.jit
-    def subslice(self, idx):
-        return self.desc.subslice(idx)
-
-    @gluon.jit
-    def store(self, idx, value):
-        self.subslice(idx).store(value)
-
-    @gluon.jit
-    def load(self, idx):
-        return self.subslice(idx).load(self.reg_layout)
-
-
 def Channel(T, alloc_fn):
 
     @aggregate
@@ -178,7 +138,7 @@ def Channel(T, alloc_fn):
         num_buffers: gl.constexpr
 
         @gluon.jit
-        def create(shape, dtype, layout: gl.constexpr, num_buffers: gl.constexpr):
+        def create(shape: gl.constexpr, dtype: gl.constexpr, layout: gl.constexpr, num_buffers: gl.constexpr):
             mem = alloc_fn(dtype, [num_buffers] + shape, layout)
             ready_bars = gl.allocate_shared_memory(gl.int64, [num_buffers, 1], mbarrier.MBarrierLayout())
             empty_bars = gl.allocate_shared_memory(gl.int64, [num_buffers, 1], mbarrier.MBarrierLayout())
@@ -422,6 +382,34 @@ class PipelinedLoadProducer:
         return self
 
 
+@aggregate
+class TensorMemoryVariable:
+    channel: TensorMemoryChannel
+    reg_layout: gl.constexpr
+
+    @gluon.jit
+    def _allocate(num_buffers: gl.constexpr, shape: gl.constexpr, dtype: gl.constexpr, num_warps: gl.constexpr,
+                  unpacked: gl.constexpr):
+        instr_shape: gl.constexpr = get_mma_instr_shape(shape, dtype).value
+        tmem_layout: gl.constexpr = TensorMemoryLayout([instr_shape[0], instr_shape[1]], unpacked=unpacked)
+        reg_layout: gl.constexpr = get_tmem_32x32b_layout(instr_shape, shape, num_warps).value
+
+        channel = TensorMemoryChannel.create(shape, dtype, tmem_layout, num_buffers)
+        return TensorMemoryVariable(channel, reg_layout)
+
+    @gluon.jit
+    def allocate_mma(shape: gl.constexpr, dtype: gl.constexpr, num_warps: gl.constexpr, num_buffers: gl.constexpr = 1):
+        return TensorMemoryVariable._allocate(num_buffers, shape, dtype, num_warps, unpacked=True)
+
+    @gluon.jit
+    def allocate_lhs(shape: gl.constexpr, dtype: gl.constexpr, num_warps: gl.constexpr, num_buffers: gl.constexpr = 1):
+        return TensorMemoryVariable._allocate(num_buffers, shape, dtype, num_warps, unpacked=False)
+
+    def __init__(self, channel, reg_layout):
+        self.channel = channel
+        self.reg_layout = gl.constexpr(reg_layout)
+
+
 # ===-----------------------------------------------------------------------===#
 # Missing APIs
 # ===-----------------------------------------------------------------------===#
@@ -464,7 +452,7 @@ def store_smem_to_tensor_desc(desc, coord, smem):
 
 @gluon.jit
 def _attn_fwd_load(m_i, l_i,  #
-                   q_smem, p_tmem,  #
+                   q_smem, p_var, mi_chnl,  #
                    qk_mma_ctx, o_mma_ctx,  #
                    k_load_ctx, v_load_ctx,  #
                    qk_scale, Z, H, N_CTX,  #
@@ -498,7 +486,7 @@ def _attn_fwd_load(m_i, l_i,  #
 
 @gluon.jit
 def _attn_fwd_mma(m_i, l_i,  #
-                  q_smem, p_tmem,  #
+                  q_smem, p_var, mi_chnl,  #
                   qk_mma_ctx, o_mma_ctx,  #
                   k_load_ctx, v_load_ctx,  #
                   qk_scale, Z, H, N_CTX,  #
@@ -519,6 +507,7 @@ def _attn_fwd_mma(m_i, l_i,  #
     v_consumer = v_load_ctx.channel.create_consumer()
     qk_producer = MMAProducer.create(qk_mma_ctx)
     o_producer = MMAProducer.create(o_mma_ctx)
+    p_consumer = p_var.channel.create_consumer()
 
     num_mmas = (hi - lo) // BLOCK_N
     if num_mmas > 0:
@@ -526,16 +515,60 @@ def _attn_fwd_mma(m_i, l_i,  #
         qk_producer = qk_producer.wait_and_issue_next(q_smem, k_smem.permute((1, 0)), [k_bar], use_acc=False)
         for _ in range(num_mmas - 1):
             k_smem, k_bar, k_consumer = k_consumer.acquire()
-            qk_producer = qk_producer.wait_and_issue_next(q_smem, k_smem.permute((1, 0)), [k_bar], use_acc=False)
+            qk_producer = qk_producer.wait_and_issue_next(q_smem, k_smem.permute((1, 0)), [k_bar],
+                                                          use_acc=False)
             v_smem, v_bar, v_consumer = v_consumer.acquire()
-            o_producer = o_producer.wait_and_issue_next(p_tmem.subslice(0), v_smem, [v_bar], use_acc=True)
+            p_tmem, p_bar, p_consumer = p_consumer.acquire()
+            o_producer = o_producer.wait_and_issue_next(p_tmem, v_smem, [v_bar, p_bar], use_acc=True)
         v_smem, v_bar, v_consumer = v_consumer.acquire()
-        o_producer = o_producer.wait_and_issue_next(p_tmem.subslice(0), v_smem, [v_bar], use_acc=True)
+        p_tmem, p_bar, p_consumer = p_consumer.acquire()
+        o_producer = o_producer.wait_and_issue_next(p_tmem, v_smem, [v_bar, p_bar], use_acc=True)
+
+
+@gluon.jit
+def _attn_fwd_correction(m_i, l_i,  #
+                         q_smem, p_var, mi_chnl,  #
+                         qk_mma_ctx, o_mma_ctx,  #
+                         k_load_ctx, v_load_ctx,  #
+                         qk_scale, Z, H, N_CTX,  #
+                         dtype: gl.constexpr, num_warps: gl.constexpr,  #
+                         BLOCK_M: gl.constexpr, BLOCK_N: gl.constexpr, HEAD_DIM: gl.constexpr,  #
+                         STAGE: gl.constexpr):
+    start_m, off_hz, offset_y, qo_offset_y, offs_m, offs_n = _get_attn_program(Z, H, N_CTX, BLOCK_M, BLOCK_N, HEAD_DIM,
+                                                                               o_mma_ctx.get_reg_layout(num_warps))
+
+    if STAGE == 1:
+        lo, hi = 0, start_m * BLOCK_M
+    elif STAGE == 2:
+        lo, hi = start_m * BLOCK_M, (start_m + 1) * BLOCK_M
+    else:
+        lo, hi = 0, N_CTX
+
+    o_consumer = o_mma_ctx.channel.create_consumer()
+
+    blocked: gl.constexpr = get_mma_reg_layout([BLOCK_M, BLOCK_N], num_warps)
+    layout: gl.constexpr = gl.SliceLayout(1, blocked)
+    mi_consumer = mi_chnl.create_consumer()
+    m_i, mi_consumer = mi_consumer.get(layout)
+
+    for start_n in range(lo, hi, BLOCK_N):
+        m_ij, mi_consumer = mi_consumer.get(layout)
+        alpha = triton.language.math.exp2(m_i - m_ij)
+
+        o_tmem, o_bar, o_consumer = o_consumer.acquire()
+        o = o_tmem.load(o_mma_ctx.get_reg_layout(num_warps))
+        o = o * alpha[:, None]
+        o_tmem.store(o)
+        mbarrier.arrive(o_bar, count=1)
+
+        m_i = m_ij
+
+    o_consumer.acquire()
 
 
 @gluon.jit
 def _attn_fwd_default(m_i, l_i,  #
-                      q_smem, p_tmem,  #
+                      q_smem, p_var, mi_chnl,  #
                       qk_mma_ctx, o_mma_ctx,  #
                       k_load_ctx, v_load_ctx,  #
                       qk_scale, Z, H, N_CTX,  #
@@ -554,7 +587,10 @@ def _attn_fwd_default(m_i, l_i,  #
     offsetkv_y = offset_y + lo
 
     qk_consumer = qk_mma_ctx.channel.create_consumer()
-    o_consumer = o_mma_ctx.channel.create_consumer()
+
+    p_producer = p_var.channel.create_producer()
+    mi_producer = mi_chnl.create_producer()
+    mi_producer = mi_producer.emplace(m_i)
 
     for start_n in range(lo, hi, BLOCK_N):
         qk, qk_consumer = qk_consumer.get(qk_mma_ctx.get_reg_layout(num_warps))
@@ -568,26 +604,18 @@ def _attn_fwd_default(m_i, l_i,  #
             m_ij = gl.maximum(m_i, gl.max(qk, 1) * qk_scale)
             qk = qk * qk_scale - m_ij[:, None]
 
+        mi_producer = mi_producer.emplace(m_ij)
         p = triton.language.math.exp2(qk)
 
         alpha = triton.language.math.exp2(m_i - m_ij)
         l_ij = gl.sum(p, 1)
 
-        o_tmem, o_bar, o_consumer = o_consumer.acquire()
-        o = o_tmem.load(o_mma_ctx.get_reg_layout(num_warps))
-        o = o * alpha[:, None]
-        o_tmem.store(o)
-
-        p = p.to(dtype)
-        p_tmem.store(0, p)
-        mbarrier.arrive(o_bar, count=1)
+        p_producer = p_producer.emplace(p.to(dtype))
 
         l_i = l_i * alpha + l_ij
         m_i = m_ij
 
         offsetkv_y += BLOCK_N
-
-    o_consumer.acquire()
 
     return m_i, l_i
 
@@ -610,13 +638,17 @@ def _attn_fwd_inner(m_i, l_i,  #
     o_mma_ctx.channel.initialize_for_consumer()
     o_mma_ctx.channel.mem.subslice(0).store(acc)
 
-    p_tmem = TensorMemoryVariable.allocate_lhs(1, [BLOCK_M, BLOCK_N], dtype, num_warps)
+    p_var = TensorMemoryVariable.allocate_lhs([BLOCK_M, BLOCK_N], dtype, num_warps)
+    p_var.channel.initialize_for_producer()
+    mi_chnl = SharedMemoryChannel.create([BLOCK_M], gl.float32, gl.constexpr(mbarrier.MBarrierLayout()), num_buffers=1)
+    mi_chnl.initialize_for_producer()
 
     m_i, l_i = gl.warp_specialize((
         m_i,
         l_i,
         q_smem,
-        p_tmem,
+        p_var,
+        mi_chnl,
         qk_mma_ctx,
         o_mma_ctx,
         k_load_ctx,
@@ -631,7 +663,7 @@ def _attn_fwd_inner(m_i, l_i,  #
         BLOCK_N,
         HEAD_DIM,
         STAGE,
-    ), _attn_fwd_default, [_attn_fwd_load, _attn_fwd_mma], [1, 1], [24, 24])
+    ), _attn_fwd_default, [_attn_fwd_load, _attn_fwd_mma, _attn_fwd_correction], [1, 1, 4], [24, 24, 80])
 
     acc = o_mma_ctx.channel.mem.subslice(0).load(acc.type.layout)
 
@@ -639,6 +671,7 @@ def _attn_fwd_inner(m_i, l_i,  #
     v_load_ctx.release()
     qk_mma_ctx.release()
     o_mma_ctx.release()
+    mi_chnl.release()
 
     return m_i, l_i, acc
 
