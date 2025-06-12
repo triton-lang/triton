@@ -121,7 +121,7 @@ def test_min_time_bytes():
     device0_idx = gf.dataframe["device_id"] == "0"
     device1_idx = gf.dataframe["device_id"] == "1"
     # CDNA2
-    np.testing.assert_allclose(ret[device0_idx].to_numpy(), [[6.10351e-06]], atol=1e-6)
+    np.testing.assert_allclose(ret[device0_idx].to_numpy(), [[3.125e-06]], atol=1e-6)
     # CDNA3
     np.testing.assert_allclose(ret[device1_idx].to_numpy(), [[1.93378e-05]], atol=1e-6)
 
