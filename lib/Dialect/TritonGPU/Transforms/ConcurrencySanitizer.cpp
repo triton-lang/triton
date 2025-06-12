@@ -17,6 +17,31 @@ namespace ttng = mlir::triton::nvidia_gpu;
 
 namespace {
 
+bool canAllocBeInstrumented(triton::gpu::LocalAllocOp op) {
+  if (llvm::any_of(op->getUsers(),
+                   [](Operation *user) { return isa<tt::CallOp>(user); })) {
+    op->emitWarning("Allocation is used in a function call, cannot instrument");
+    return false;
+  }
+  if (llvm::all_of(op->getUsers(), [](Operation *user) {
+        return !isa<ttg::MemDescSubviewOp>(user);
+      })) {
+    return true;
+  }
+  if (llvm::all_of(op->getUsers(), [](Operation *user) {
+        auto subview = dyn_cast<ttg::MemDescSubviewOp>(user);
+        return subview && llvm::all_of(subview.getOffsets().drop_front(),
+                                       [](Value offset) {
+                                         return isConstantIntValue(offset, 0);
+                                       });
+      })) {
+    return true;
+  }
+  op->emitWarning(
+      "Allocation is used in an inconsistent way, cannot instrument");
+  return false;
+}
+
 // Interpret local_allocs that are used in ttg.memdesc_subview as multibuffered
 bool isMultiBuffered(triton::gpu::LocalAllocOp op) {
   return llvm::any_of(op->getUsers(), [](Operation *user) {
@@ -63,6 +88,9 @@ public:
     // to the local_alloc to give user a better error message
     llvm::SetVector<int32_t> shMemBufsSet;
     module.walk([&](triton::gpu::LocalAllocOp op) {
+      if (!canAllocBeInstrumented(op)) {
+        return WalkResult::advance();
+      }
       int32_t baseOffset = getAllocationOffset(op);
       shMemBufsSet.insert(baseOffset);
       if (isMultiBuffered(op)) {
