@@ -1,5 +1,6 @@
 add_triton_library(TritonAMDAnalysis
   RangeAnalysis.cpp
+  AxisInfoExt.cpp
 
   DEPENDS
   TritonTableGen

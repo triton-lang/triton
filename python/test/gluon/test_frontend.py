@@ -13,7 +13,7 @@ from triton.experimental.gluon.nvidia.hopper import TensorDescriptor
 from triton._filecheck import filecheck_test, run_parser
 import triton.language as tl
 from triton._internal_testing import is_cuda
-from triton.compiler.errors import CompilationError
+from triton.compiler.errors import CompilationError, CompileTimeAssertionFailure
 
 TARGET_PAT = re.compile('ttg.target = "[^"]*"')
 
@@ -109,12 +109,12 @@ def tensor_memory_kernel(layout: ttgl.constexpr, tmem_layout: ttgl.constexpr):
     mem = ttgl.nvidia.blackwell.allocate_tensor_memory(ttgl.int32, a.shape, tmem_layout, a)
     b = mem.load(layout)  # noqa: F841
     mem.store(a)
-    slice1 = mem.split(0, YBLOCK // 2)  # noqa: F841
-    slice2 = mem.split(YBLOCK // 2, YBLOCK // 2)  # noqa: F841
+    slice1 = mem.slice(0, YBLOCK // 2)  # noqa: F841
+    slice2 = mem.slice(YBLOCK // 2, YBLOCK // 2)  # noqa: F841
 
     buffers = ttgl.nvidia.blackwell.allocate_tensor_memory(ttgl.float32, [2, XBLOCK, YBLOCK], tmem_layout)
     for i in range(2):
-        buffers.subslice(i).load(layout)
+        buffers.index(i).load(layout)
 
 
 @pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] != 10,
@@ -165,9 +165,9 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 def shared_memory_subview_kernel(XBLOCK: ttgl.constexpr, layout: ttgl.constexpr, smem_layout: ttgl.constexpr):
     XHALF: ttgl.constexpr = XBLOCK // 2
     smem = ttgl.allocate_shared_memory(ttgl.int32, [XBLOCK, XBLOCK], smem_layout)
-    view = smem.split(XHALF, XHALF, dim=1)
+    view = smem.slice(XHALF, XHALF, dim=1)
     value = view.load(layout)
-    view = smem.split(XHALF, XHALF, dim=0)
+    view = smem.slice(XHALF, XHALF, dim=0)
     view.store(value.trans())
 
 
@@ -203,25 +203,25 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 
 
 @gluon.jit
-def shared_memory_subslice_kernel(XBLOCK: ttgl.constexpr, layout: ttgl.constexpr, smem_layout: ttgl.constexpr):
+def shared_memory_index_kernel(XBLOCK: ttgl.constexpr, layout: ttgl.constexpr, smem_layout: ttgl.constexpr):
     smem = ttgl.allocate_shared_memory(ttgl.int32, [4, XBLOCK], smem_layout)
     for i in range(4):
-        smem.subslice(i).load(layout)
+        smem.index(i).load(layout)
 
 
-def test_shared_memory_subslice(fresh_knobs):
+def test_shared_memory_index(fresh_knobs):
     knobs.compilation.disable_line_info = True
 
     layout = ttgl.BlockedLayout(size_per_thread=[1], threads_per_warp=[32], warps_per_cta=[4], order=[0])
     smem_layout = ttgl.NVMMASharedLayout(swizzle_byte_width=128, element_bitwidth=32, rank=2)
-    h = shared_memory_subslice_kernel.warmup(256, layout, smem_layout, num_warps=4, grid=(1, ))
+    h = shared_memory_index_kernel.warmup(256, layout, smem_layout, num_warps=4, grid=(1, ))
     expecttest.assert_expected_inline(
         anonymize_ir(h.asm["source"]), """\
 #blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
 #shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 32}>
 #smem = #ttg.shared_memory
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "...", "ttg.threads-per-warp" = 32 : i32} {
-  tt.func public @shared_memory_subslice_kernel() attributes {noinline = false} {
+  tt.func public @shared_memory_index_kernel() attributes {noinline = false} {
     %0 = ttg.local_alloc : () -> !ttg.memdesc<4x256xi32, #shared, #smem, mutable> loc(#loc)
     %c0_i32 = arith.constant 0 : i32 loc(#loc)
     %c4_i32 = arith.constant 4 : i32 loc(#loc)
@@ -250,7 +250,7 @@ def shared_memory_cast_kernel():
                                                       rank=2, ctas_per_cga=[1, 1], cta_split_num=[1,
                                                                                                   1], cta_order=[1, 0])
     smem = ttgl.allocate_shared_memory(ttgl.int8, [2, 256, 128], layout_a)
-    perm = smem.subslice(0).permute((1, 0))
+    perm = smem.index(0).permute((1, 0))
     ttgl.static_assert(perm.type.layout == layout_T)
 
     layout_b: ttgl.constexpr = ttgl.NVMMASharedLayout(swizzle_byte_width=64, transposed=False, element_bitwidth=16,
@@ -562,18 +562,18 @@ def test_mlir_attr_error():
 
 
 @gluon.jit
-def tmem_subslice_kernel():
+def tmem_index_kernel():
     layout: ttgl.constexpr = TensorMemoryLayout(block=[128, 128], unpacked=True)
     tmem = ttgl.nvidia.blackwell.allocate_tensor_memory(ttgl.int32, [2, 256, 256], layout)
-    tmem.subslice(0)
+    tmem.index(0)
 
 
-def test_tmem_subslice_constexpr():
+def test_tmem_index_constexpr():
     expecttest.assert_expected_inline(
-        anonymize_ir(run_parser(tmem_subslice_kernel).str_nodebug()), """\
+        anonymize_ir(run_parser(tmem_index_kernel).str_nodebug()), """\
 #tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, unpacked = true>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "...", "ttg.threads-per-warp" = 32 : i32} {
-  tt.func public @tmem_subslice_kernel() attributes {noinline = false} {
+  tt.func public @tmem_index_kernel() attributes {noinline = false} {
     %result = ttng.tmem_alloc : () -> !ttg.memdesc<2x256x256xi32, #tmem, #ttng.tensor_memory, mutable>
     %c0_i32 = arith.constant 0 : i32
     %c0_i32_0 = arith.constant 0 : i32
@@ -604,10 +604,10 @@ def test_layout_mangling():
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "...", "ttg.threads-per-warp" = 32 : i32} {
   tt.func public @kernel() attributes {noinline = false} {
     %0 = ttg.local_alloc : () -> !ttg.memdesc<32x32xi32, #shared, #smem, mutable>
-    tt.call @"test_frontend.smem_and_layout_user__MDi32S32_32SLSSS_1_1_1_constexpr[1]_constexpr[0]____SSSLAS[32, 32]ASMD__(1,)cconstexpr_SwizzledSharedLayout(vec=1, per_phase=1, max_phase=1, order=(constexpr_1_ ,constexpr_0_), ctas_per_cga=None, cta_split_num=None, cta_order=None)_"(%0) : (!ttg.memdesc<32x32xi32, #shared, #smem, mutable>) -> ()
+    tt.call @"test_frontend.smem_and_layout_user__MDi32S32_32SLSSS_1_1_1_1_0____SSSLAS[32, 32]ASMD__(1,)cconstexpr_SwizzledSharedLayout(vec=1, per_phase=1, max_phase=1, order=(1 ,0), ctas_per_cga=None, cta_split_num=None, cta_order=None)_"(%0) : (!ttg.memdesc<32x32xi32, #shared, #smem, mutable>) -> ()
     tt.return
   }
-  tt.func private @"test_frontend.smem_and_layout_user__MDi32S32_32SLSSS_1_1_1_constexpr[1]_constexpr[0]____SSSLAS[32, 32]ASMD__(1,)cconstexpr_SwizzledSharedLayout(vec=1, per_phase=1, max_phase=1, order=(constexpr_1_ ,constexpr_0_), ctas_per_cga=None, cta_split_num=None, cta_order=None)_"(%arg0: !ttg.memdesc<32x32xi32, #shared, #smem, mutable>) attributes {noinline = false} {
+  tt.func private @"test_frontend.smem_and_layout_user__MDi32S32_32SLSSS_1_1_1_1_0____SSSLAS[32, 32]ASMD__(1,)cconstexpr_SwizzledSharedLayout(vec=1, per_phase=1, max_phase=1, order=(1 ,0), ctas_per_cga=None, cta_split_num=None, cta_order=None)_"(%arg0: !ttg.memdesc<32x32xi32, #shared, #smem, mutable>) attributes {noinline = false} {
     tt.return
   }
 }
@@ -855,7 +855,7 @@ def test_tensor_permute():
 def test_split_join():
     # CHECK: [[BLOCKED:#.*]] = #ttg.blocked<{sizePerThread = [2], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
     # CHECK: [[BLOCKED1:#.*]] = #ttg.blocked<{sizePerThread = [2, 2], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [1, 0]}>
-    layout: ttgl.constexpr = ttgl.BlockedLayout([2], [32], [4], [0])
+    layout: ttgl.constexpr = ttgl.BlockedLayout([2], [32], [4], [0], [1], [1], [0])
     a = ttgl.full([128], 1, ttgl.int32, layout)
     b = ttgl.full([128], 2, ttgl.int32, layout)
     # CHECK: tt.join {{.*}} : tensor<128xi32, [[BLOCKED]]> -> tensor<128x2xi32, [[BLOCKED1]]>
@@ -881,6 +881,16 @@ def test_tensor_reshape():
     expect_layout: ttgl.constexpr = ttgl.BlockedLayout([1, 1, 2], [2, 4, 4], [4, 1, 1], [2, 1, 0], [1, 1, 1], [1, 1, 1],
                                                        [2, 1, 0])
     ttgl.static_assert(v.type.layout == expect_layout)
+
+
+@gluon.jit
+def static_assert_kernel():
+    ttgl.static_assert(False)
+
+
+def test_static_assert():
+    with pytest.raises(CompileTimeAssertionFailure):
+        run_parser(static_assert_kernel)
 
 
 @filecheck_test
@@ -925,3 +935,12 @@ def test_fence_async_shared():
 
     # CHECK-NEXT: ttng.fence_async_shared {bCluster = true}
     blackwell.fence_async_shared(cluster=True)
+
+
+@filecheck_test
+@gluon.jit
+def test_inline_asm_elementwise():
+    layout: ttgl.constexpr = ttgl.BlockedLayout([1], [32], [4], [0])
+    x = ttgl.arange(0, 16, layout)
+    # CHECK: elementwise_inline_asm {{.*}} : tensor<16xi32, [[BLOCKED:#.*]]> -> tensor<16xi32, [[BLOCKED]]>
+    ttgl.inline_asm_elementwise("mov $0, $0;", "=r,r", [x], dtype=x.dtype, is_pure=True, pack=1)

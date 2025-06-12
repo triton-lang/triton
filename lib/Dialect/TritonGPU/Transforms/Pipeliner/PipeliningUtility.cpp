@@ -6,6 +6,7 @@
 #include "mlir/IR/TypeUtilities.h"
 #include "mlir/Interfaces/SideEffectInterfaces.h"
 #include "mlir/Support/LLVM.h"
+#include "triton/Analysis/AxisInfo.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h"
@@ -14,7 +15,12 @@
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/TMAUtilities.h"
 #include "llvm/Support/Casting.h"
+#include "llvm/Support/Debug.h"
 #include <queue>
+
+#define DEBUG_TYPE "triton-loop-pipeline"
+#define DBGS() (llvm::dbgs() << "[" DEBUG_TYPE "]: ")
+#define LDBG(X) LLVM_DEBUG(DBGS() << X << "\n")
 
 using namespace mlir;
 namespace tt = mlir::triton;
@@ -311,6 +317,30 @@ int mlir::triton::getCopyVecBytes(RankedTensorType registerTy,
   auto regToSharedLayout = regLayout.invertAndCompose(sharedLayout);
   const int vecElems = regToSharedLayout.getNumConsecutiveInOut();
   return vecElems * registerTy.getElementTypeBitWidth() / 8;
+}
+
+bool mlir::triton::canBeConvertedToAsyncLoad(
+    tt::LoadOp loadOp, tt::ModuleAxisInfoAnalysis &axisInfoAnalysis) {
+  assert(!isLoadFromTensorPtr(loadOp) &&
+         "Block ptr should have been lowered before this pass.");
+  auto ptr = loadOp.getPtr();
+  unsigned vec = axisInfoAnalysis.getContiguity(ptr);
+  if (auto mask = loadOp.getMask())
+    vec = std::min<unsigned>(vec, axisInfoAnalysis.getMaskAlignment(mask));
+
+  auto tensorTy = dyn_cast<RankedTensorType>(ptr.getType());
+  if (!tensorTy)
+    return false;
+  auto ty = cast<tt::PointerType>(tensorTy.getElementType()).getPointeeType();
+  unsigned width = vec * ty.getIntOrFloatBitWidth();
+
+  // We do not pipeline all loads for the following reasons:
+  // 1. On nvidia GPUs, cp.async's cp-size can only be 4, 8, or 16.
+  // 2. It's likely that pipling small loads won't offer much performance
+  //    improvement and may even hurt performance by increasing register
+  //    pressure.
+  LDBG("Load " << *loadOp << " has width " << width);
+  return width >= 32;
 }
 
 void mlir::triton::serializeLatencies(ModuleOp module,

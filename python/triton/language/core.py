@@ -364,6 +364,12 @@ CONSTEXPR_0 = constexpr(0)
 
 
 def _unwrap_if_constexpr(o):
+    if isinstance(o, list):
+        return [_unwrap_if_constexpr(x) for x in o]
+    if isinstance(o, builtins.tuple):
+        return builtins.tuple(_unwrap_if_constexpr(x) for x in o)
+    if isinstance(o, tuple):
+        return tuple(_unwrap_if_constexpr(x) for x in o)
     return o.value if isinstance(o, constexpr) else o
 
 
@@ -3077,7 +3083,7 @@ def inline_asm_elementwise(asm: str, constraints: str, args: Sequence, dtype: Un
             # Change the shape of each argument based on the broadcast shape
             for i, item in enumerate(dispatch_args):
                 dispatch_args[i], _ = bin_op_type_checking(item, broadcast_arg)
-            res_tys = [block_type(dt, broadcast_arg.shape) for dt in dtype]
+            res_tys = [broadcast_arg.type.with_element_ty(dt) for dt in dtype]
     handles = [t.handle for t in dispatch_args]
     builder = _semantic.builder
     call = builder.create_inline_asm(asm, constraints, handles, [ty.to_ir(builder) for ty in res_tys], is_pure, pack)

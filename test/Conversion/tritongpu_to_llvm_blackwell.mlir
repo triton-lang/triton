@@ -591,3 +591,18 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32} {
     tt.return
   }
 }
+
+// -----
+
+#tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, unpacked = true>
+
+module attributes {"ttg.num-warps" = 4 : i32} {
+
+// CHECK-LABEL: @reinterpret
+tt.func private @reinterpret(%arg0: !ttg.memdesc<128xf32, #tmem, #ttng.tensor_memory>) -> !ttg.memdesc<16x16xf16, #tmem, #ttng.tensor_memory> {
+  %0 = ttg.memdesc_reinterpret %arg0 : !ttg.memdesc<128xf32, #tmem, #ttng.tensor_memory> -> !ttg.memdesc<16x16xf16, #tmem, #ttng.tensor_memory>
+  // CHECK-NEXT: return %arg0
+  tt.return %0 : !ttg.memdesc<16x16xf16, #tmem, #ttng.tensor_memory>
+}
+
+}
