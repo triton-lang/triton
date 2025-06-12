@@ -410,16 +410,12 @@ class CUDABackend(BaseBackend):
             arch = sm_arch_from_capability(capability)
 
             # Disable ptxas optimizations if requested
-            if knobs.nvidia.disable_ptxas_opt:
-                opt_level = ['--opt-level', '0']
-            else:
-                opt_level = []
+            disable_opt = ['--opt-level', '0'] if knobs.nvidia.disable_ptxas_opt else []
 
             # Accept more ptxas options if provided
-            if opt.ptx_options:
-                opt_level.extend(opt.ptx_options.split(" "))
+            ptx_extra_options = opt.ptx_options.split(" ") if opt.ptx_options else []
 
-            ptxas_cmd = [ptxas, *line_info, *fmad, '-v', *opt_level, f'--gpu-name={arch}', fsrc.name, '-o', fbin]
+            ptxas_cmd = [ptxas, *line_info, *fmad, '-v', *disable_opt, *ptx_extra_options, f'--gpu-name={arch}', fsrc.name, '-o', fbin]
             try:
                 subprocess.run(ptxas_cmd, check=True, close_fds=False, stderr=flog)
                 if os.path.exists(fsrc.name):
