@@ -1,6 +1,5 @@
 from __future__ import annotations
 import triton
-from triton.compiler.code_generator import ast_to_ttir
 from triton.compiler.compiler import ASTSource
 from triton.backends.compiler import Language
 from triton.runtime.jit import JITFunction
@@ -19,6 +18,7 @@ class GluonASTSource(ASTSource):
 
     def make_ir(self, options, codegen_fns, module_map, context):
         from triton.compiler.compiler import make_backend
+        from triton.compiler.code_generator import ast_to_ttir
 
         builder = ir.builder(context)
         module = builder.create_module()

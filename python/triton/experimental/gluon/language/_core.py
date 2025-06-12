@@ -54,6 +54,7 @@ _IMPORT_FROM_TRITON: List[str] = [
     "reshape",
     "split",
     "static_assert",
+    "static_print",
     "store",
     "to_tensor",
     "where",
