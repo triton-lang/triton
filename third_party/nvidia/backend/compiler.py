@@ -106,6 +106,7 @@ class CUDAOptions:
     maxnreg: Optional[int] = None
     cluster_dims: tuple = (1, 1, 1)
     ptx_version: int = None
+    ptx_options: str = None
     ir_override: Optional[str] = None  # filename of a user-defined IR (*.{ttir|ttgir|llir|ptx})
     enable_fp_fusion: bool = True
     launch_cooperative_grid: bool = False
@@ -415,12 +416,8 @@ class CUDABackend(BaseBackend):
                 opt_level = []
 
             # Accept more ptxas options if provided
-            if knobs.nvidia.ptxas_other_options:
-
-                # If a kernel name is provided, only apply the options to that kernel
-                if not knobs.nvidia.ptxas_options_kernel_name or \
-                    knobs.nvidia.ptxas_options_kernel_name == metadata["name"]:
-                    opt_level.extend(knobs.nvidia.ptxas_other_options.split(" "))
+            if opt.ptx_options:
+                opt_level.extend(opt.ptx_options.split(" "))
 
             ptxas_cmd = [ptxas, *line_info, *fmad, '-v', *opt_level, f'--gpu-name={arch}', fsrc.name, '-o', fbin]
             try:
