@@ -1,6 +1,7 @@
 #include "Dialect/TritonAMDGPU/IR/Dialect.h"
+#include "Utility.h"
 #include "mlir/Conversion/LLVMCommon/Pattern.h"
-#include "third_party/amd/lib/TritonAMDGPUToLLVM/Utility.h"
+#include "third_party/amd/include/Utils/Utility.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 
 using namespace mlir;

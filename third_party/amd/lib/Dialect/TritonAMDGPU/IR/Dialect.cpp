@@ -24,11 +24,10 @@
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "mlir/IR/DialectImplementation.h"
 #include "mlir/IR/OpImplementation.h"
-#include "third_party/amd/lib/TritonAMDGPUToLLVM/Utility.h"
-#include "llvm/ADT/TypeSwitch.h"
-
+#include "third_party/amd/include/Utils/Utility.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 #include "triton/Tools/LayoutUtils.h"
+#include "llvm/ADT/TypeSwitch.h"
 
 // clang-format off
 #include "Dialect/TritonAMDGPU/IR/Dialect.h"
@@ -173,6 +172,10 @@ LogicalResult ExtractSliceOp::verify() {
   return success();
 }
 
+// This pattern optimizes the combination of extract_slice and concat
+// operations. When extract_slice is used to extract a portion that exactly
+// matches one of the original tensors concatenated by a concat operation, we
+// can eliminate extract_slice op and use the original tensor directly.
 struct CononicalizeExtractSliceAndConcat
     : public mlir::OpRewritePattern<amdgpu::ExtractSliceOp> {
   using OpRewritePattern::OpRewritePattern;
@@ -180,12 +183,12 @@ struct CononicalizeExtractSliceAndConcat
   mlir::LogicalResult
   matchAndRewrite(amdgpu::ExtractSliceOp op,
                   PatternRewriter &rewriter) const override {
+    // Try to match preceding Concat op
     auto concatOp = op.getSource().getDefiningOp<amdgpu::ConcatOp>();
     if (!concatOp)
       return failure();
 
     auto offset = op.getStaticOffsets();
-
     auto sliceResult = op.getResult();
     auto sliceResultType = sliceResult.getType();
     RankedTensorType dstType =
@@ -200,11 +203,13 @@ struct CononicalizeExtractSliceAndConcat
     if (sliceResultType != concatItemType)
       return failure();
 
+    // Calculate which concat operand contains our slice
     auto srcShape = concatItemType.getShape();
     auto rank = srcShape.size();
     std::vector<unsigned> defaultOrder(rank);
     std::iota(defaultOrder.rbegin(), defaultOrder.rend(), 0);
 
+    // Convert multidimensional offset to concat operand index
     auto multiDimSrcIdx = LLVM::AMD::multiDimElementwise<int64_t, int64_t>(
         offset, srcShape, std::divides<unsigned>());
     auto srcToDstShape = LLVM::AMD::multiDimElementwise<int64_t, int64_t>(
@@ -212,6 +217,7 @@ struct CononicalizeExtractSliceAndConcat
     auto linearSrcIdx =
         mlir::LLVM::linearize(multiDimSrcIdx, srcToDstShape, defaultOrder);
 
+    // Replace extract_slice with the concat operand
     assert(linearSrcIdx < concatOp->getNumOperands() &&
            "concat index must be in bounds");
     Value concreteConcatItem = concatOp->getOperand(linearSrcIdx);

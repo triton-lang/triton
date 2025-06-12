@@ -111,25 +111,6 @@ bool isChainDotHead(mlir::triton::DotOpInterface dotOp);
 // Check if the opA of this tl.dot is the result of another tl.dot
 // in the same region
 bool isChainDotTail(mlir::triton::DotOpInterface dotOp);
-
-// Determine the order in which CTA tiles are laid out across the tensor.
-// That is, create vector of dimensions from fastest to slowest varying.
-SmallVector<unsigned> getCTATileOrder(MLIRContext *ctx,
-                                      const LinearLayout &layout);
-
-template <typename T, typename U, typename BinaryOp>
-std::vector<unsigned> multiDimElementwise(const ArrayRef<T> &lhs,
-                                          const ArrayRef<U> &rhs, BinaryOp op) {
-  assert(lhs.size() == rhs.size() && "Input dimensions must match");
-  std::vector<unsigned> result;
-  result.reserve(lhs.size());
-  for (size_t i = 0, n = lhs.size(); i < n; ++i) {
-    unsigned a = static_cast<unsigned>(lhs[i]);
-    unsigned b = static_cast<unsigned>(rhs[i]);
-    result.push_back(op(a, b));
-  }
-  return result;
-}
 } // namespace mlir::LLVM::AMD
 
 #endif // TRITON_THIRD_PARTY_AMD_LIB_TRITONAMDGPUTOLLVM_UTILITY_H_

@@ -1,8 +1,9 @@
 #include "Dialect/TritonAMDGPU/IR/Dialect.h"
 #include "TritonAMDGPUToLLVM/GCNAsmFormat.h"
+#include "Utility.h"
 #include "mlir/Conversion/LLVMCommon/Pattern.h"
 #include "mlir/Dialect/LLVMIR/ROCDLDialect.h"
-#include "third_party/amd/lib/TritonAMDGPUToLLVM/Utility.h"
+#include "third_party/amd/include/Utils/Utility.h"
 #include "triton/Analysis/Utility.h"
 #include "triton/Conversion/MLIRTypes.h"
 #include "triton/Conversion/TritonGPUToLLVM/PatternTritonGPUOpToLLVM.h"
@@ -14,32 +15,7 @@ using namespace mlir::triton;
 // In distributed layouts, tensors are divided into CTA tiles.
 // A CTA tile represents the smallest contiguous portion of a tensor that is
 // distributed across all threads and warps within a workgroup. The ExtractSlice
-// operation extracts a portion of the tensor that aligns with CTA tile
-// boundaries.
-
-// clang-format off
-//===--------------------------------------------------------------------------------===//
-//   +-------+-------+
-//   |  W0   |  W1   |
-//   |       |       |
-//   |   +   |   +   |
-//   |  W2   |  W3   |  <-- Single CTA tile (distributed across warps W0-W3)
-//   |       |       |
-//   |   +   |   +   |
-//   |       |       |
-//   |          Source Tensor                    Extracted Slice
-//   |             .                           +--------------+
-//   |             .                           |  W0  |  W1   |
-//   |             .                           |      |       |
-//   |                                         |  +   |   +   |
-//   |                                         |  W2  |  W3   |
-//   |                                         |      |       |
-//   |                                         |  +   |   +   |
-//   |                                         |             .|
-//   |                                         |             .|
-//   |                                         +--------------+
-//===--------------------------------------------------------------------------------===//
-// clang-format on
+// operation extracts a portion of the tensor that is a multiple of CTA tiles.
 
 namespace {
 
@@ -102,10 +78,9 @@ struct ExtractSliceOpConversion
       auto linearIdxInSrcTensor =
           mlir::LLVM::linearize(coordInSrcTensor, srcCTAShape, srcCTAOrder);
 
-      for (size_t j = 0; j < elemsPerThreadPerCTA; j++) {
-        resultVals.push_back(
-            vals[linearIdxInSrcTensor * elemsPerThreadPerCTA + j]);
-      }
+      size_t startIdx = linearIdxInSrcTensor * elemsPerThreadPerCTA;
+      llvm::append_range(resultVals, llvm::ArrayRef(vals).slice(
+                                         startIdx, elemsPerThreadPerCTA));
     }
     Value ret = packLLElements(loc, this->getTypeConverter(), resultVals,
                                rewriter, dstTy);
