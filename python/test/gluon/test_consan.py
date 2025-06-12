@@ -5,18 +5,8 @@ from triton import knobs
 from triton.experimental import gluon
 from triton.experimental.gluon import language as ttgl
 from triton.experimental.gluon.language.nvidia.blackwell import mbarrier, tma
-from contextlib import contextmanager
 import multiprocessing
 import tempfile
-
-
-@contextmanager
-def check_exception_if_failing(failure):
-    if failure:
-        with pytest.raises(RuntimeError):
-            yield
-    else:
-        yield
 
 
 class ProcessResult:
