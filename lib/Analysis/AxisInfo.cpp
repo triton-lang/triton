@@ -1,8 +1,6 @@
 #include "triton/Analysis/AxisInfo.h"
 #include "mlir/Analysis/DataFlowFramework.h"
 #include "mlir/Dialect/UB/IR/UBOps.h"
-#include "third_party/amd/include/Analysis/AxisInfoExt.h"
-#include "third_party/nvidia/include/Analysis/AxisInfoExt.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
@@ -153,7 +151,8 @@ private:
   }
 
 public:
-  AxisInfoAnalysis(DataFlowSolver &solver);
+  AxisInfoAnalysis(DataFlowSolver &solver,
+                   axisinfo::callbackType callback = nullptr);
   using dataflow::SparseForwardDataFlowAnalysis<
       dataflow::Lattice<AxisInfo>>::getLatticeElement;
   using FuncAxisInfoMapT = DenseMap<FunctionOpInterface, AxisInfo>;
@@ -991,7 +990,8 @@ public:
 // AxisInfoAnalysis
 //===----------------------------------------------------------------------===//
 
-AxisInfoAnalysis::AxisInfoAnalysis(DataFlowSolver &solver)
+AxisInfoAnalysis::AxisInfoAnalysis(DataFlowSolver &solver,
+                                   axisinfo::callbackType callback)
     : dataflow::SparseForwardDataFlowAnalysis<dataflow::Lattice<AxisInfo>>(
           solver) {
   // UnrealizedConversionCast:
@@ -1031,8 +1031,8 @@ AxisInfoAnalysis::AxisInfoAnalysis(DataFlowSolver &solver)
                   MaxMinOpAxisInfoVisitor<arith::MinUIOp>>();
   visitors.append<LoadOpAxisInfoVisitor>();
 
-  mlir::triton::AMD::AxisInfoExt::addVisitors(visitors);
-  mlir::triton::nvidia::AxisInfoExt::addVisitors(visitors);
+  if (callback)
+    callback(visitors);
 }
 
 LogicalResult AxisInfoAnalysis::visitOperation(
@@ -1302,9 +1302,10 @@ unsigned ModuleAxisInfoAnalysis::getMaskAlignment(Value mask) {
   return alignment;
 }
 
-void ModuleAxisInfoAnalysis::initialize(FunctionOpInterface funcOp) {
+void ModuleAxisInfoAnalysis::initialize(FunctionOpInterface funcOp,
+                                        axisinfo::callbackType callback) {
   std::unique_ptr<DataFlowSolver> solver = createDataFlowSolver();
-  AxisInfoAnalysis *analysis = solver->load<AxisInfoAnalysis>();
+  AxisInfoAnalysis *analysis = solver->load<AxisInfoAnalysis>(callback);
   // Walk pre-order so analysis results can be propagated into nested isolated
   // regions.
   WalkResult result =

@@ -17,5 +17,4 @@ add_triton_library(TritonAnalysis
   TritonIR
   TritonGPUIR
   TritonNvidiaGPUIR
-  TritonAMDAxisInfoExt
 )

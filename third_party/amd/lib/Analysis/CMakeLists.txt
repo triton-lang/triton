@@ -1,5 +1,6 @@
 add_triton_library(TritonAMDAnalysis
   RangeAnalysis.cpp
+  AxisInfoExt.cpp
 
   DEPENDS
   TritonTableGen
@@ -9,14 +10,4 @@ add_triton_library(TritonAMDAnalysis
   MLIRLLVMDialect
   TritonIR
   TritonGPUIR
-)
-
-add_triton_library(TritonAMDAxisInfoExt
-  AxisInfoExt.cpp
-
-  DEPENDS
-  TritonTableGen
-
-  LINK_LIBS PUBLIC
-  TritonAMDGPUIR
 )
