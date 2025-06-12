@@ -2,11 +2,9 @@ import torch
 
 import triton
 import triton.language as tl
-import triton.profiler.language as pl
 import triton.profiler as proton
 import pathlib
 import os
-import sys
 
 from typing import NamedTuple
 
@@ -26,41 +24,32 @@ def add_kernel(x_ptr,  # *Pointer* to first input vector.
                BLOCK_SIZE: tl.constexpr,  # Number of elements each program should process.
                # NOTE: `constexpr` so it can be used as a shape value.
                ):
-    with pl.scope("kernel"):
-        pid = tl.program_id(axis=0)
-        block_start = pid * BLOCK_SIZE
-        offsets = block_start + tl.arange(0, BLOCK_SIZE)
-        mask = offsets < n_elements
-        with pl.scope("load_ops"):
-            with pl.scope("load_x"):
-                x = tl.load(x_ptr + offsets, mask=mask)
-            with pl.scope("load_y"):
-                y = tl.load(y_ptr + offsets, mask=mask)
-        output = x + y
-        tl.store(output_ptr + offsets, output, mask=mask)
+    pid = tl.program_id(axis=0)
+    block_start = pid * BLOCK_SIZE
+    offsets = block_start + tl.arange(0, BLOCK_SIZE)
+    mask = offsets < n_elements
+    x = tl.load(x_ptr + offsets, mask=mask)
+    y = tl.load(y_ptr + offsets, mask=mask)
+    output = x + y
+    tl.store(output_ptr + offsets, output, mask=mask)
 
 
-def add(x: torch.Tensor, y: torch.Tensor, profile: bool):
+def add(x: torch.Tensor, y: torch.Tensor):
     output = torch.empty_like(x)
     assert x.device == DEVICE and y.device == DEVICE and output.device == DEVICE
     n_elements = output.numel()
     grid = lambda meta: (triton.cdiv(n_elements, meta['BLOCK_SIZE']), )
     tmp_path = pathlib.Path(os.getcwd())
     temp_file = tmp_path / "vector-add.hatchet"
-    if (profile):
-        proton.start(str(temp_file.with_suffix("")), backend="instrumentation")
+    proton.start(str(temp_file.with_suffix("")), backend="instrumentation")
     add_kernel[grid](x, y, output, n_elements, BLOCK_SIZE=1024, num_warps=1)
-    if (profile):
-        proton.finalize()
+    proton.finalize()
     return output
 
 
-profile = False
-if (str(sys.argv[-1]) == "on"):
-    profile = True
 torch.manual_seed(0)
 size = 98432
 x = torch.rand(size, device=DEVICE)
 y = torch.rand(size, device=DEVICE)
 output_torch = x + y
-output_triton = add(x, y, profile)
+output_triton = add(x, y)
