@@ -101,6 +101,7 @@ public:
           shMemBufsSet.insert(baseOffset + i * subBufferSize);
         }
       }
+      return WalkResult::advance();
     });
 
     tt::FuncOp entryPoint = getEntryPoint(module);
