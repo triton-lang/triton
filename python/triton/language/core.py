@@ -409,6 +409,7 @@ class dtype(base_type):
         self.name = name
         assert name in dtype.SINT_TYPES + dtype.UINT_TYPES + dtype.FP_TYPES + dtype.OTHER_TYPES, name
         self.primitive_bitwidth = get_primitive_bitwidth(name)
+        self.itemsize = self.primitive_bitwidth // 8
         if name in dtype.SINT_TYPES:
             self.int_signedness = dtype.SIGNEDNESS.SIGNED
             self.int_bitwidth = self.primitive_bitwidth

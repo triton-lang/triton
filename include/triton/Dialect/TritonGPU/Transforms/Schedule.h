@@ -2,6 +2,7 @@
 #define TRITON_TRITONGPU_TRANSFORM_PIPELINE_SCHEDULE_H_
 
 #include "mlir/Dialect/SCF/IR/SCF.h"
+#include "mlir/IR/ImplicitLocOpBuilder.h"
 #include "mlir/Support/LLVM.h"
 #include "triton/Dialect/TritonGPU/Transforms/PipelineExpander.h"
 #include "llvm/ADT/ArrayRef.h"
@@ -163,6 +164,32 @@ private:
 // Add dependencies of anchor ops to the coarse schedule. Schedule them to
 // the same stage and ordering cluster as the anchor op.
 void scheduleDependencies(scf::ForOp forOp, CoarseSchedule &schedule);
+
+class OpBuilderForStage : public mlir::ImplicitLocOpBuilder,
+                          public OpBuilder::Listener {
+public:
+  explicit OpBuilderForStage(Location loc, Operation *op,
+                             CoarseSchedule &schedule)
+      : ImplicitLocOpBuilder(loc, op, this), schedule(schedule) {
+    if (auto it = schedule.find(op); it != schedule.end())
+      std::tie(stage, cluster) = it->second;
+  }
+
+  void setStageCluster(std::pair<int, CoarseSchedule::Cluster> stageCluster) {
+    stage = stageCluster.first;
+    cluster = stageCluster.second;
+  }
+
+  void notifyOperationInserted(Operation *op, InsertPoint previous) {
+    if (stage && cluster)
+      schedule.insert(op, *stage, *cluster);
+  }
+
+private:
+  std::optional<int> stage;
+  std::optional<CoarseSchedule::Cluster> cluster;
+  CoarseSchedule &schedule;
+};
 
 } // namespace triton
 } // namespace mlir
