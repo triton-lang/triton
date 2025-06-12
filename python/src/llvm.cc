@@ -316,6 +316,11 @@ void init_triton_llvm(py::module &&m) {
         CGSCCAnalysisManager cgam;
         ModuleAnalysisManager mam;
 
+        llvm::TargetLibraryInfoImpl TLII{Triple("nvptx64", "nvidia", "cuda")};
+        fam.registerPass([TLII = std::move(TLII)] {
+          return llvm::TargetLibraryAnalysis(TLII);
+        });
+
         PassInstrumentationCallbacks *instrCbPtr = nullptr;
         PassInstrumentationCallbacks passInstrCb;
         StandardInstrumentations standardInstr(mod->getContext(),
