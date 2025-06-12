@@ -20,13 +20,13 @@
 using namespace mlir;
 using namespace mlir::triton::gpu;
 
-using ::mlir::LLVM::delinearize;
 using ::mlir::LLVM::getSharedMemoryBase;
 using ::mlir::LLVM::AMD::getVectorSize;
 using ::mlir::LLVM::AMD::llLoad;
 using ::mlir::LLVM::AMD::llStore;
 using ::mlir::triton::AMD::ISAFamily;
 using ::mlir::triton::gpu::getTotalElemsPerThread;
+
 namespace {
 
 std::optional<const char *> getAMDGPUMemScopeStr(MemSyncScope scope) {
@@ -592,8 +592,6 @@ struct BufferLoadToLocalOpConversion
       return failure();
     }
 
-    // VectorType vecTy;
-    // SmallVector<Value> ldsWarpStartAddrs;
     auto [ldsWarpStartAddrs, vecTy] = emitWarpStartSharedAddresses(
         rewriter, op, ptrType, dstTy, hasSwizzling, resElemTy, llDst);
     assert(vecTy.getNumElements() == vec);
