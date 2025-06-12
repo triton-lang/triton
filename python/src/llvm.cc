@@ -1,4 +1,4 @@
-﻿#include "mlir/IR/BuiltinOps.h" // mlir::ModuleOp
+#include "mlir/IR/BuiltinOps.h" // mlir::ModuleOp
 #include "mlir/Target/LLVMIR/LLVMTranslationInterface.h"
 #include "mlir/Target/LLVMIR/ModuleTranslation.h"
 #include "triton/Tools/Sys/GetEnv.hpp"
@@ -504,7 +504,5 @@ void triton_stacktrace_signal_handler(void *) {
 }
 
 void init_triton_stacktrace_hook(pybind11::module &m) {
-  if (mlir::triton::tools::getBoolEnv("TRITON_ENABLE_PYTHON_STACKTRACE")) {
-    llvm::sys::AddSignalHandler(triton_stacktrace_signal_handler, nullptr);
-  }
+  llvm::sys::AddSignalHandler(triton_stacktrace_signal_handler, nullptr);
 }
