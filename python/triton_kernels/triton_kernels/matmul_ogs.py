@@ -117,11 +117,8 @@ class TensorDescriptorBuilder:
         # Two e2m1 packed in a uint8 or a single fp8
         W_PACK_DIVISOR = 2 if w_tensor.dtype == torch.uint8 else 1
         PACKED_BLOCK_K_W = block_k // W_PACK_DIVISOR
-        return TensorDescriptorBuilder.create_basic_descriptor(
-            w_tensor,
-            block_shape=[1, PACKED_BLOCK_K_W, block_n],
-            transpose=transpose,
-        )
+        return TensorDescriptorBuilder.create_basic_descriptor(w_tensor, block_shape=[1, PACKED_BLOCK_K_W, block_n],
+                                                               transpose=transpose)
 
     @staticmethod
     def create_block_scale_descriptor(mx_tensor: torch.Tensor, block_k: int, block_n: int, K: int, N: int,
@@ -143,45 +140,44 @@ class TensorDescriptorBuilder:
         else:
             # Non-optimal SF layout, expect slow transfers
             # from global to shmem and from shmem to tmem
-            return TensorDescriptorBuilder.create_basic_descriptor(mx_tensor, None,
+            return TensorDescriptorBuilder.create_basic_descriptor(mx_tensor,
                                                                    block_shape=[1, MX_SCALE_BLOCK_K,
                                                                                 block_n], transpose=transpose)
 
     @staticmethod
-    def squeeze_after_dim(shape, dim=2):
-        new_shape = [s for s in shape[:dim - 1] if s != 1] + list(shape)[dim - 1:]
-        return new_shape
+    def squeeze_after_dim(x, dim=2):
+        shape = list(x.shape)
+        new_shape = [s for s in shape[:dim - 1] if s != 1] + shape[dim - 1:]
+        return x.view(*new_shape)
 
     @staticmethod
-    def create_input_descriptor_gather(x_tensor: torch.Tensor, K: int, x_shape: tuple, x_stride_1: int, x_stride_2: int,
+    def create_input_descriptor_gather(x_tensor: torch.Tensor, K: int, x_stride_1: int, x_stride_2: int,
                                        block_k: int) -> TensorDescriptor:
         """Create a tensor descriptor for input matrix X via TMA gather"""
-        new_shape = TensorDescriptorBuilder.squeeze_after_dim(x_shape)
-        assert len(new_shape) == 2, "TMA gather descriptor requires 2D input"
+        x_desc = TensorDescriptorBuilder.squeeze_after_dim(x_tensor)
+        assert x_desc.ndim == 2, "TMA gather descriptor requires 2D input"
         INT_MAX = 2147483647
-        return TensorDescriptor(base=x_tensor, shape=[INT_MAX, K], strides=[x_stride_1, x_stride_2],
+        return TensorDescriptor(base=x_desc, shape=[INT_MAX, K], strides=[x_stride_1, x_stride_2],
                                 block_shape=[1, block_k])
 
     @staticmethod
-    def create_input_descriptor_load(x_tensor: torch.Tensor, K: int, x_shape: tuple, x_stride_1: int, x_stride_2: int,
-                                     block_m: int, block_k: int) -> TensorDescriptor:
+    def create_input_descriptor_load(x_tensor: torch.Tensor, K: int, x_stride_1: int, x_stride_2: int, block_m: int,
+                                     block_k: int) -> TensorDescriptor:
         """Create a tensor descriptor for input matrix X via TMA"""
-        new_shape = TensorDescriptorBuilder.squeeze_after_dim(x_shape)
-        assert len(new_shape) in [2, 3], "LHS input TMA descriptor builder expects 2D or 3D input"
-        return TensorDescriptor(base=x_tensor, shape=[new_shape[0], K], strides=[x_stride_1, x_stride_2],
+        x_desc = TensorDescriptorBuilder.squeeze_after_dim(x_tensor)
+        assert x_desc.ndim in [2, 3], "LHS input TMA descriptor builder expects 2D or 3D input"
+        return TensorDescriptor(base=x_desc, shape=[x_desc.shape[0], K], strides=[x_stride_1, x_stride_2],
                                 block_shape=[block_m, block_k])
 
     @staticmethod
-    def create_input_descriptor(x_tensor: torch.Tensor, K: int, x_shape: tuple, x_stride_1: int, x_stride_2: int,
-                                block_k: int, block_m: int, use_gather_tma: bool,
-                                use_load_tma: bool) -> TensorDescriptor:
+    def create_input_descriptor(x_tensor: torch.Tensor, K: int, x_stride_1: int, x_stride_2: int, block_k: int,
+                                block_m: int, use_gather_tma: bool, use_load_tma: bool) -> TensorDescriptor:
         """Create a tensor descriptor for input matrix X based on TMA usage"""
         if use_gather_tma:
-            return TensorDescriptorBuilder.create_input_descriptor_gather(x_tensor, K, x_shape, x_stride_1, x_stride_2,
-                                                                          block_k)
+            return TensorDescriptorBuilder.create_input_descriptor_gather(x_tensor, K, x_stride_1, x_stride_2, block_k)
         elif use_load_tma:
-            return TensorDescriptorBuilder.create_input_descriptor_load(x_tensor, K, x_shape, x_stride_1, x_stride_2,
-                                                                        block_m, block_k)
+            return TensorDescriptorBuilder.create_input_descriptor_load(x_tensor, K, x_stride_1, x_stride_2, block_m,
+                                                                        block_k)
         else:
             return x_tensor
 
@@ -627,7 +623,7 @@ def _create_tma_descriptors(
     if (use_host_tma_descriptors):
         if USE_GATHER_TMA or X_USE_LOAD_TMA:
             x_desc = TensorDescriptorBuilder.create_input_descriptor(
-                    x, K, x.shape, x.stride(1), x.stride(2),
+                    x, K, x.stride(1), x.stride(2),
                     opt_flags.block_k, opt_flags.block_m,
                     USE_GATHER_TMA, X_USE_LOAD_TMA
                 )
