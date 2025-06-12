@@ -19,6 +19,7 @@ static const char *kWarpSpecializeAttrName = "tt.warp_specialize";
 static const char *kLoopStageAttrName = "loop.stage";
 static const char *kLoopClusterAttrName = "loop.cluster";
 static const char *kScheduledMaxStageAttrName = "tt.scheduled_max_stage";
+class CoarseSchedule;
 
 //===----------------------------------------------------------------------===//
 // Hoisting Utilities
@@ -137,6 +138,12 @@ createSingleBufferView(OpBuilder &builder, Value alloc, Value idx);
 // single buffer slice (leading dimension equal to 1), at the given index.
 TypedValue<triton::gpu::MemDescType>
 createSingleBufferView(OpBuilder &builder, Value alloc, int idx);
+
+Value createIncrementModulo(OpBuilder &builder, Location loc, Value counter,
+                            Value modulus, Value zero, Value one,
+                            Value *outWrapCond = nullptr);
+
+scf::ForOp lowerTMADescriptors(scf::ForOp forOp, CoarseSchedule &schedule);
 
 } // namespace triton
 } // namespace mlir

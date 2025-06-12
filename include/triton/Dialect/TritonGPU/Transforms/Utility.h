@@ -35,9 +35,11 @@ SmallVector<unsigned, 3> mmaVersionToInstrShape(int version,
 // Return true if the Load uses block pointer.
 bool isLoadFromTensorPtr(triton::LoadOp op);
 
-// Return an array of indices enumerating the elements of 'arr' in descending
-// order (so that result[i] is the index of the i-th largest element of 'arr')
-SmallVector<unsigned, 4> argSort(const SmallVector<int64_t> &arr);
+// Gets the order of a tensor from its contiguity. Places the dimensions with
+// the largest contiguity as the inner most dimension. If the contiguity is
+// all ones, returns the order {dim - 1, dim - 2, ..., 0}
+SmallVector<unsigned, 4>
+getOrderFromContiguity(const SmallVector<int64_t> &contiguity);
 
 // Return the operand used to access the memory in the operation
 Value getMemAccessPtr(Operation *op);
@@ -263,6 +265,13 @@ void replaceUsesWithLocalLoad(
     OpBuilder &builder, OpResult old,
     TypedValue<triton::gpu::MemDescType> alloc,
     TypedValue<triton::gpu::AsyncTokenType> token = {});
+
+// Return true if the value comes from a load or a block argument.
+// This will skip convert layouts and memdesc views.
+// This is a helper useful to know if value is likely to come from shared memory
+// after converting loads into async loads.
+bool comesFromLoadOrBlockArg(Value v);
+
 } // namespace mlir::triton
 
 #endif // TRITON_DIALECT_TRITONGPU_TRANSFORMS_UTILITY_H_
