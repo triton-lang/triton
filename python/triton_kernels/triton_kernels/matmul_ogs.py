@@ -367,18 +367,13 @@ def can_use_fused_scatter(scatter_indx, fused_activation):
 
 @dataclass(frozen=True)
 class PreprocessingFeatures:
-    w_want_n_major: bool
     w_want_k_major: bool
     swap_xw: bool
-
-    def __post_init__(self):
-        assert not (self.w_want_k_major and self.w_want_n_major), "Cannot have both K-major and N-major"
 
 def init_preprocessing_features(w, precision_config, opt_flags):
     mx_ctx = precision_config.mx_ctx
     swap_xw = False  # Whether or not to swap X and W operands to the tl.dot
     w_want_k_major = False
-    w_want_n_major = False
     if not target_info.cuda_capability_geq(10, 0):
         # Hopper transpose. Reduction dimension must be contiguous.
         if w.stride(1) != 1 and w.dtype.itemsize == 1:
@@ -388,12 +383,7 @@ def init_preprocessing_features(w, precision_config, opt_flags):
         swap_xw = mx_ctx.weight_scale is not None and opt_flags.block_m <= 64 and opt_flags.is_persistent
         if swap_xw:
             w_want_k_major = True
-        # fp4 padded mode requires the contiguous dim size to be a multiple of 64 bytes. If it is K-major and does not
-        # meet the requirement, make the tensor N-major instead.
-        # But, don't do this if we're going to swap X and W in which case we would transpose W again.
-        if w.stride(1) == 1 and w.dtype == torch.uint8 and w.shape[1] % 64 != 0 and not swap_xw:
-            w_want_n_major = True
-    return PreprocessingFeatures(w_want_n_major, w_want_k_major, swap_xw)
+    return PreprocessingFeatures(w_want_k_major, swap_xw)
 
 
 def apply_preprocessing_features(x, w, gather_indx, scatter_indx, routing_data, opt_flags, preprocessing_features):
@@ -420,10 +410,7 @@ def apply_preprocessing_features(x, w, gather_indx, scatter_indx, routing_data, 
         finalize_scatter_idxs = None
     else:
         writeback_idxs, writeback_size, finalize_scatter_idxs = None, None, None
-    # some transposition variants aren't supported
-    if preprocessing_features.w_want_n_major:
-        w = fast_contiguous(w)
-    elif preprocessing_features.w_want_k_major:
+    if preprocessing_features.w_want_k_major:
         w = fast_contiguous(w.transpose(-1, -2)).transpose(-1, -2)
     # preprocess routing information and ptr lookup table
     M = x.shape[1] if gather_indx is None else gather_indx.src_indx.shape[0]
