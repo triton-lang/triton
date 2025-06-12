@@ -47,7 +47,7 @@ def InsertRandomDelays : Pass<"insert-random-delays", "mlir::ModuleOp"> {
     This pass is to insert random delays before or after asynchronous
     operations to expose race conditions.
   }];
-  let dependentDialects = ["mlir::arith::ArithDialect", "mlir::LLVM::LLVMDialect", "mlir::NVVM::NVVMDialect"];
+  let dependentDialects = ["mlir::LLVM::LLVMDialect", "mlir::NVVM::NVVMDialect"];
 }
 
 #endif // TRITONGPU_CONVERSION_PASSES

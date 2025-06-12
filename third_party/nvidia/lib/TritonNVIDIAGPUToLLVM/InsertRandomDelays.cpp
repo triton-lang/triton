@@ -274,12 +274,10 @@ static void insertRandomDelay(IRRewriter &rewriter, Operation *op) {
       rewriter.create<LLVM::CallOp>(loc, stateHashFn, ValueRange{});
 
   // Calculate delay stateHash >> (32 - 21)
-  auto ext64StateHash =
-      rewriter.create<arith::ExtUIOp>(loc, i64Type, stateHash.getResult());
+  auto ext64StateHash = llvmBuilder.zext(i64Type, stateHash.getResult());
   auto const32Minus21 = llvmBuilder.i64_val(32 - 21);
   auto shiftRightStateHash = llvmBuilder.lshr(ext64StateHash, const32Minus21);
-  auto delay =
-      rewriter.create<arith::TruncIOp>(loc, i32Type, shiftRightStateHash);
+  auto delay = llvmBuilder.trunc(i32Type, shiftRightStateHash);
 
   // Sleep for the calculated nanoseconds.
   rewriter.create<LLVM::InlineAsmOp>(
@@ -301,13 +299,12 @@ struct InsertRandomDelays
     ModuleOp mod = getOperation();
     IRRewriter rewriter(&getContext());
     mod.walk([&](Operation *op) {
-      if (!isa<LLVM::InlineAsmOp, LLVM::CallIntrinsicOp, NVVM::Barrier0Op>(
-              op)) {
-        return WalkResult::advance();
-      }
       if (isa<NVVM::Barrier0Op>(op)) {
+        // bar.sync ops can manifest as NVVM::Barrier0Op in the IR.
         rewriter.setInsertionPointAfter(op);
-      } else {
+        insertRandomDelay(rewriter, op);
+      } else if (isa<LLVM::InlineAsmOp, LLVM::CallIntrinsicOp>(op)) {
+        // Both inline asm and call intrinsics can be used for some async ops.
         llvm::StringRef asmString =
             isa<LLVM::InlineAsmOp>(op)
                 ? llvm::cast<LLVM::InlineAsmOp>(op).getAsmString()
@@ -317,12 +314,12 @@ struct InsertRandomDelays
         };
         if (llvm::any_of(before, hasSubstring)) {
           rewriter.setInsertionPoint(op);
+          insertRandomDelay(rewriter, op);
         } else if (llvm::any_of(after, hasSubstring)) {
           rewriter.setInsertionPointAfter(op);
+          insertRandomDelay(rewriter, op);
         }
       }
-      insertRandomDelay(rewriter, op);
-      return WalkResult::advance();
     });
   }
 };
