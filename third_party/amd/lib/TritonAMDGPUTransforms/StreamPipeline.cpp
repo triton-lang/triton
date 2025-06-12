@@ -1,5 +1,6 @@
 #include "TritonAMDGPUTransforms/Passes.h"
 #include "mlir/Support/LLVM.h"
+#include "third_party/amd/include/Analysis/AxisInfoExt.h"
 #include "third_party/amd/include/Dialect/TritonAMDGPU/IR/Dialect.h"
 #include "third_party/amd/lib/TritonAMDGPUToLLVM/SchedInstructions.h"
 #include "triton/Analysis/AxisInfo.h"
@@ -784,7 +785,7 @@ LogicalResult preprocessLoopAndBuildSchedule(scf::ForOp &forOp, int numStages,
                                              int stages[SCHED_SIZE],
                                              bool useAsyncCopy,
                                              tt::PipeliningOption &options) {
-  tt::ModuleAxisInfoAnalysis axisInfoAnalysis(
+  triton::AMD::ModuleAxisInfoAnalysis axisInfoAnalysis(
       forOp->getParentOfType<ModuleOp>());
   int numBuffers = 1;
   std::array<tt::CoarseSchedule::Cluster, SCHED_SIZE> clusters;
