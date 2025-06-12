@@ -32,10 +32,7 @@ inline void gpuAssert(CUresult code, const char *file, int line) {
   throw pybind11::cast_error(error_str);
 }
 
-#define CUDA_CHECK(ans)                                                        \
-  {{gpuAssert((ans), __FILE__, __LINE__);                                      \
-  }                                                                            \
-  }
+#define CUDA_CHECK(ans) gpuAssert((ans), __FILE__, __LINE__);
 
 // Used to check if functions exist in old CUDA driver versions.
 #define INITIALIZE_FUNCTION_POINTER_IF_NULL(funcPointer, initializerFunction)  \
@@ -48,31 +45,47 @@ inline void gpuAssert(CUresult code, const char *file, int line) {
     }                                                                          \
   } while (0)
 
-using cuLaunchKernelEx_t = CUresult (*)(const CUlaunchConfig *config,
-                                        CUfunction f, void **kernelParams,
-                                        void **extra);
+#define defineGetFunctionHandle(name, symbolName)                              \
+  static symbolName##_t name() {                                               \
+    /* Open the shared library */                                              \
+    void *libHandle = dlopen("libcuda.so.1", RTLD_LAZY);                       \
+    if (!libHandle) {                                                          \
+      PyErr_SetString(PyExc_RuntimeError, "Failed to open libcuda.so.1");      \
+      return NULL;                                                             \
+    }                                                                          \
+    /* Clear any existing error */                                             \
+    dlerror();                                                                 \
+    symbolName##_t funcHandle = (symbolName##_t)dlsym(libHandle, #symbolName); \
+    /* Check for errors */                                                     \
+    const char *err = dlerror();                                               \
+    if (err) {                                                                 \
+      PyErr_SetString(PyExc_RuntimeError,                                      \
+                      "Failed to retrieve " #symbolName " from libcuda.so.1"); \
+      dlclose(libHandle);                                                      \
+      return NULL;                                                             \
+    }                                                                          \
+    return funcHandle;                                                         \
+  }
 
-// Dynamically load the handle to cuLaunchKernelEx.
-cuLaunchKernelEx_t getLaunchKernelExHandle() {
-  // Open the shared library
-  void *handle = dlopen("libcuda.so.1", RTLD_LAZY);
-  if (!handle) {
-    PyErr_SetString(PyExc_RuntimeError, "Failed to open libcuda.so");
-    return nullptr;
-  }
-  // Clear any existing error
-  dlerror();
-  auto cuLaunchKernelExHandle =
-      reinterpret_cast<cuLaunchKernelEx_t>(dlsym(handle, "cuLaunchKernelEx"));
-  // Check for errors
-  if (const char *dlsym_error = dlerror()) {
-    PyErr_Format(PyExc_RuntimeError,
-                 "Failed to retrieve cuLaunchKernelEx from libcuda.so: %s",
-                 dlsym_error);
-    return nullptr;
-  }
-  return cuLaunchKernelExHandle;
-}
+typedef CUresult (*cuOccupancyMaxActiveClusters_t)(
+    int *numClusters, CUfunction func, const CUlaunchConfig *config);
+defineGetFunctionHandle(getCuOccupancyMaxActiveClustersHandle,
+                        cuOccupancyMaxActiveClusters);
+
+typedef CUresult (*cuTensorMapEncodeTiled_t)(
+    CUtensorMap *tensorMap, CUtensorMapDataType tensorDataType,
+    cuuint32_t tensorRank, void *globalAddress, const cuuint64_t *globalDim,
+    const cuuint64_t *globalStrides, const cuuint32_t *boxDim,
+    const cuuint32_t *elementStrides, CUtensorMapInterleave interleave,
+    CUtensorMapSwizzle swizzle, CUtensorMapL2promotion l2Promotion,
+    CUtensorMapFloatOOBfill oobFill);
+defineGetFunctionHandle(getCuTensorMapEncodeTiledHandle,
+                        cuTensorMapEncodeTiled);
+
+typedef CUresult (*cuLaunchKernelEx_t)(const CUlaunchConfig *config,
+                                       CUfunction f, void **kernelParams,
+                                       void **extra);
+defineGetFunctionHandle(getLaunchKernelExHandle, cuLaunchKernelEx);
 
 // Configuration with all the information necessary to launch a compiled
 // Triton kernel using the CUDA driver API.
@@ -152,11 +165,11 @@ void launchKernel(const TritonLaunchConfig &config) {
 // Interface used by various py::object extractors to extract obj into a memory
 // location pointed by ptr. Returns true if extraction succeeded, and false
 // otherwise.
-using ExtractorType = bool (*)(py::object obj, void *ptr);
+using ExtractorType = bool (*)(py::handle obj, void *ptr);
 
 // Extract a CUDA device pointer from a pointer-like py::object obj, and store
 // it to the memory location pointed by ptr.
-bool extractPointer(py::object obj, void *ptr) {
+bool extractPointer(py::handle obj, void *ptr) {
   auto dev_ptr = static_cast<CUdeviceptr *>(ptr);
   if (obj.is_none()) {
     *dev_ptr = static_cast<CUdeviceptr>(0); // valid nullptr
@@ -198,7 +211,7 @@ bool extractPointer(py::object obj, void *ptr) {
 
 // Extract a CUtensorMap descriptor from a python object, and store it to the
 // memory location pointed by ptr.
-bool extractTmaDesc(py::object obj, void *ptr) {
+bool extractTmaDesc(py::handle obj, void *ptr) {
   if (sizeof(CUtensorMap *) != 8) {
     PyErr_SetString(PyExc_SystemError,
                     "extractTmaDesc() requires 64-bit compilation");
@@ -230,7 +243,7 @@ bool extractTmaDesc(py::object obj, void *ptr) {
 
 // Extract a value of type T from obj and store it into memory pointed by ptr.
 // Returns true if extraction succeeded, and false otherwise.
-template <typename T> bool extractValue(py::object obj, void *ptr) {
+template <typename T> bool extractValue(py::handle obj, void *ptr) {
   *static_cast<T *>(ptr) = obj.cast<T>();
   return true;
 }
@@ -294,8 +307,10 @@ std::optional<char> findExtractor(std::string_view type_repr) {
   return std::nullopt;
 }
 
-std::vector<char> buildSignatureMetadata(std::vector<std::string> signature) {
+std::vector<char>
+buildSignatureMetadata(const std::vector<std::string> &signature) {
   std::vector<char> signature_metadata;
+  signature_metadata.reserve(signature.size());
   for (std::string type : signature) {
     std::optional<std::uint8_t> extractor_idx = findExtractor(type);
     if (!extractor_idx.has_value()) {
@@ -316,7 +331,7 @@ void launchHook(py::object hook, py::object metadata) {
   py::object ret = hook(*args);
 }
 
-static void ensureCudaContext() {
+void ensureCudaContext() {
   CUcontext pctx;
   CUDA_CHECK(cuCtxGetCurrent(&pctx));
   if (!pctx) {
@@ -335,8 +350,8 @@ void launch(int grid_dim_x, int grid_dim_y, int grid_dim_z, int64_t stream,
              * z) */
             std::tuple<int, int, int, int, int, int> packed_metadata,
             py::object hook_args, py::object launch_enter_hook,
-            py::object launch_exit_hook, std::vector<char> signature_metadata,
-            py::object global_scratch, std::vector<py::object> kernel_args) {
+            py::object launch_exit_hook, py::iterable signature_metadata,
+            py::object global_scratch, py::iterable kernel_args) {
   ensureCudaContext();
   TritonLaunchConfig config{
       .grid = {grid_dim_x, grid_dim_y, grid_dim_z},
@@ -350,22 +365,24 @@ void launch(int grid_dim_x, int grid_dim_y, int grid_dim_z, int64_t stream,
       .function = reinterpret_cast<CUfunction>(function),
   };
 
-  if (signature_metadata.size() != kernel_args.size()) {
+  std::size_t num_params = py::len(signature_metadata);
+  if (num_params != py::len(kernel_args)) {
     throw py::type_error(
         py::str("Expected kernel to have {0} parameters, but got {1}")
-            .format(signature_metadata.size(), kernel_args.size()));
+            .format(num_params, py::len(kernel_args)));
   }
+  num_params++; // +1 for the global scratch pointer.
 
-  // +1 for the global scratch pointer.
-  std::size_t num_params = signature_metadata.size() + 1;
   // Use alloca to set up kernel parameters on the stack and avoid dynamic
   // memory allocations.
   config.params = static_cast<void **>(alloca(num_params * sizeof(void *)));
   // This loop has to stay in the same function that owns params, since we are
   // using alloca to allocate pointers to it on the stack of the function.
   std::size_t params_idx = 0;
-  for (int i = 0; i < kernel_args.size(); ++i) {
-    int converter_idx = signature_metadata[i];
+  py::iterator arg_data = py::iter(signature_metadata);
+  for (py::handle arg : kernel_args) {
+    int converter_idx = arg_data->cast<char>();
+    arg_data++;
     if (converter_idx >= std::size(kExtractionInfos)) {
       throw py::value_error("corrupted signature metadata");
     }
@@ -374,7 +391,7 @@ void launch(int grid_dim_x, int grid_dim_y, int grid_dim_z, int64_t stream,
       continue; // skip adding constexpr parameters
     }
     config.params[params_idx] = alloca(extraction_info.size);
-    if (!extraction_info.extractor(kernel_args[i], config.params[params_idx])) {
+    if (!extraction_info.extractor(arg, config.params[params_idx])) {
       return;
     }
     ++params_idx;
@@ -391,14 +408,11 @@ void launch(int grid_dim_x, int grid_dim_y, int grid_dim_z, int64_t stream,
   launchHook(launch_exit_hook, hook_args);
 }
 
-} // namespace
-
-static std::map<std::string, int> getDeviceProperties(int device_id) {
+std::map<std::string, int> getDeviceProperties(int device_id) {
   // Get device handle
   CUdevice device;
   cuDeviceGet(&device, device_id);
 
-  // create a struct to hold device properties
   int max_shared_mem;
   int max_num_regs;
   int multiprocessor_count;
@@ -434,7 +448,7 @@ static std::map<std::string, int> getDeviceProperties(int device_id) {
   return properties;
 }
 
-static std::tuple<uint64_t, uint64_t, int32_t, int32_t, int32_t>
+std::tuple<uint64_t, uint64_t, int32_t, int32_t, int32_t>
 loadBinary(char *name, char *data, int shared, CUdevice device) {
   CUfunction fun;
   CUmodule mod;
@@ -482,49 +496,9 @@ loadBinary(char *name, char *data, int shared, CUdevice device) {
   return {(uint64_t)mod, (uint64_t)fun, n_regs, n_spills, n_max_threads};
 }
 
-typedef CUresult (*cuOccupancyMaxActiveClusters_t)(
-    int *numClusters, CUfunction func, const CUlaunchConfig *config);
-
-typedef CUresult (*cuTensorMapEncodeTiled_t)(
-    CUtensorMap *tensorMap, CUtensorMapDataType tensorDataType,
-    cuuint32_t tensorRank, void *globalAddress, const cuuint64_t *globalDim,
-    const cuuint64_t *globalStrides, const cuuint32_t *boxDim,
-    const cuuint32_t *elementStrides, CUtensorMapInterleave interleave,
-    CUtensorMapSwizzle swizzle, CUtensorMapL2promotion l2Promotion,
-    CUtensorMapFloatOOBfill oobFill);
-
-#define defineGetFunctionHandle(name, symbolName)                              \
-  static symbolName##_t name() {                                               \
-    /* Open the shared library */                                              \
-    void *libHandle = dlopen("libcuda.so.1", RTLD_LAZY);                       \
-    if (!libHandle) {                                                          \
-      PyErr_SetString(PyExc_RuntimeError, "Failed to open libcuda.so.1");      \
-      return NULL;                                                             \
-    }                                                                          \
-    /* Clear any existing error */                                             \
-    dlerror();                                                                 \
-    symbolName##_t funcHandle = (symbolName##_t)dlsym(libHandle, #symbolName); \
-    /* Check for errors */                                                     \
-    const char *err = dlerror();                                               \
-    if (err) {                                                                 \
-      PyErr_SetString(PyExc_RuntimeError,                                      \
-                      "Failed to retrieve " #symbolName " from libcuda.so.1"); \
-      dlclose(libHandle);                                                      \
-      return NULL;                                                             \
-    }                                                                          \
-    return funcHandle;                                                         \
-  }
-
-defineGetFunctionHandle(getCuOccupancyMaxActiveClustersHandle,
-                        cuOccupancyMaxActiveClusters);
-
-defineGetFunctionHandle(getCuTensorMapEncodeTiledHandle,
-                        cuTensorMapEncodeTiled);
-
-static int32_t occupancyMaxActiveClusters(uint64_t func, int32_t shared,
-                                          int32_t clusterDimX,
-                                          int32_t clusterDimY,
-                                          int32_t clusterDimZ) {
+int32_t occupancyMaxActiveClusters(uint64_t func, int32_t shared,
+                                   int32_t clusterDimX, int32_t clusterDimY,
+                                   int32_t clusterDimZ) {
   int32_t maxActiveClusters = -1;
   CUfunction cuFunc = (CUfunction)func;
 
@@ -561,7 +535,7 @@ static int32_t occupancyMaxActiveClusters(uint64_t func, int32_t shared,
   return maxActiveClusters;
 }
 
-static void setPrintfFifoSize(int32_t size) {
+void setPrintfFifoSize(int32_t size) {
   if (size < 0) {
     throw py::value_error("fifo size must be non-negative");
   }
@@ -589,11 +563,11 @@ static void setPrintfFifoSize(int32_t size) {
   }
 }
 
-static void fillTMADescriptor(uint64_t desc_address, uint64_t global_address,
-                              int swizzle, int elemSize, int elemType,
-                              std::vector<int64_t> blockSize,
-                              std::vector<int32_t> shape,
-                              std::vector<int64_t> strides) {
+void fillTMADescriptor(uint64_t desc_address, uint64_t global_address,
+                       int swizzle, int elemSize, int elemType,
+                       const std::vector<int64_t> &blockSize,
+                       const std::vector<int32_t> &shape,
+                       const std::vector<int64_t> &strides) {
   uint32_t blockSizeInt[5];
   uint64_t shapeInt[5];
   uint64_t stridesLL[5];
@@ -632,6 +606,8 @@ static void fillTMADescriptor(uint64_t desc_address, uint64_t global_address,
 
   return;
 }
+
+} // namespace
 
 void init_triton_cuda_utils(py::module &&m) {
   m.def("load_binary", &loadBinary);

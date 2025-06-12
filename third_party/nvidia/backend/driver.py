@@ -1,4 +1,3 @@
-import array
 from collections.abc import Callable, Iterator, Sequence
 import functools
 import inspect
@@ -98,15 +97,18 @@ def ty_to_cpp(ty):
     }[ty]
 
 
-# signature_types: _ArgTypeWithNesting = str | Sequence[_ArgTypeWithNesting]
-# returns: _ArgMask = Sequence[bool | _ArgMask]
-#   Nested mask that has True for elements that should be kept and False for
-#   elements that should be removed. Has the same shape as the signature.
 def _make_nonconst_arg_mask(signature_types: Sequence[Any]) -> Any:
-    """Makes a mask that keeps non-constexpr args and removes constexpr args."""
-    # For example:
-    #   Signature: [i32, constexpr, (i32, constexpr)]
-    #   Mask:      [True, False, [True, False]]
+    """Makes a mask that keeps non-constexpr args and removes constexpr args.
+
+    signature_types: _ArgTypeWithNesting = str | Sequence[_ArgTypeWithNesting]
+    returns: _ArgMask = Sequence[bool | _ArgMask]
+        Nested mask that has True for elements that should be kept and False for
+        elements that should be removed. Has the same shape as the signature.
+
+    For example:
+      Signature: [i32, constexpr, (i32, constexpr)]
+      Mask:      [True, False, [True, False]]
+    """
     return [_make_nonconst_arg_mask(ty) if isinstance(ty, tuple) else ty != "constexpr" for ty in signature_types]
 
 
@@ -119,10 +121,12 @@ def _flatten_tuples(xs):
             yield x
 
 
-# args: Sequence of similar tuple/nesting structure as mask
-# mask: _ArgMask = Sequence[bool | _ArgMask]
 def _flatten_and_apply_arg_mask(args: Sequence[Any], mask: Sequence[Any]) -> Iterator[Any]:
-    """Flattens nested args skipping those filtered out by the mask."""
+    """Flattens nested args skipping those filtered out by the mask.
+
+    args: Sequence of similar tuple/nesting structure as mask
+    mask: _ArgMask = Sequence[bool | _ArgMask]
+    """
     if len(mask) != len(args):
         # If the included elements in the mask are the same length as the args,
         # we can assume the caller filtered the args already.
@@ -142,10 +146,11 @@ def _flatten_and_apply_arg_mask(args: Sequence[Any], mask: Sequence[Any]) -> Ite
             yield arg
 
 
-# Expands tensordesc with the type and block shapes like <fp16[128, 16]>
-# into an nvTmaDesc, shapes, and strides.
-# This is the signature-handling counterpart to `make_tensordesc_arg`.
 def _expand_signature(signature, tensordesc_meta):
+    """Expands tensordesc with the type and block shapes like <fp16[128, 16]>
+    into an nvTmaDesc, shapes, and strides.
+    This is the signature-handling counterpart to `make_tensordesc_arg`.
+    """
     output = []
     tensordesc_idx = 0
     # Expand tensor descriptor arguments into either nvTmaDesc, shape and
@@ -168,15 +173,11 @@ def _expand_signature(signature, tensordesc_meta):
                 # shape and strides when processing tensor descriptors which is
                 # why we provide our own decomposition above. Sadly this means
                 # we have to pass the shape and strides twice.
-                for _ in range(2 * ndim):
-                    output.append("i64")
+                output.extend(["i64"] * 2 * ndim)
             else:
                 output.append("nvTmaDesc")
-
-            for _ in range(ndim):
-                output.append("i32")
-            for _ in range(ndim):
-                output.append("i64")
+            output.extend(["i32"] * ndim)
+            output.extend(["i64"] * ndim)
         else:
             output.append(sig)
 
@@ -207,21 +208,14 @@ def make_launcher(signature_types: Sequence[Any], tensordesc_meta: Sequence[Any]
 
 class TmaDescKernelParam:
     TMA_DESC_SIZE = 128
-    _ALIGN = 64
 
     def __init__(self):
-        # Add the alignment to the array size to ensure that the address can be
-        # aligned without access going out of bounds.
-        self._array = array.array('B', [0] * (self.TMA_DESC_SIZE + self._ALIGN))
-        address, num_bytes = self._array.buffer_info()
-        # Shift the address to the nearest multiple of the alignment.
-        self._aligned_address = address + self._ALIGN - (address % self._ALIGN)
-        assert self._aligned_address + self.TMA_DESC_SIZE <= address + num_bytes
-        assert self._aligned_address % self._ALIGN == 0
+        import torch
+        self.desc = torch.empty(self.TMA_DESC_SIZE, dtype=torch.uint8, device="cpu")
 
     # Return a CUtensorMap* pointer in host memory
     def tma_desc_cpu_ptr(self):
-        return self._aligned_address
+        return self.desc.data_ptr()
 
 
 # The TMA dtype enum values are slightly different on host vs device...
