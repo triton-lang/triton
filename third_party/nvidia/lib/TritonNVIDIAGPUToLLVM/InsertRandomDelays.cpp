@@ -4,6 +4,7 @@
 #include "triton/Conversion/TritonGPUToLLVM/Passes.h"
 #include "triton/Conversion/TritonGPUToLLVM/TypeConverter.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
+#include "llvm/ADT/TypeSwitch.h"
 #include "llvm/Support/FormatVariadic.h"
 
 namespace mlir::triton {
@@ -45,8 +46,7 @@ std::array<const char *, 8> after = {"cp.async.bulk.wait_group",
                                      "mbarrier.try_wait",
                                      "tcgen05.wait"};
 
-/* Insert random delay via murmurhash3.
-
+/* Helper to create murmurhash3 insert function.
 The sequence of operations to insert into the hash given some part is:
   part *= 0xcc9e2d51;
   part = part << 15 | part >> 17;
@@ -54,30 +54,16 @@ The sequence of operations to insert into the hash given some part is:
   hash = hash << 13 | hash >> 19;
   hash *= 5;
   hash += 0xe6546b64;
-
-The sequence of operations to finish the hash is:
-  hash ^= hash >> 16;
-  hash *= 0x85ebca6b;
-  hash ^= hash >> 13;
-  hash *= 0xc2b2ae35;
-  hash ^= hash >> 16;
-
-The random delay value is determined by the state hash, which is just the
-murmurhash3 of the blockIdx, threadIdx, clock, and global_timer values. The
-delay is calculated as stateHash >> (32 - 21). The delay is then converted to a
-nanoseconds value and passed to __nanosleep.
 */
-static void insertRandomDelay(IRRewriter &rewriter, Operation *op) {
-  auto loc = op->getLoc();
-  TritonLLVMOpBuilder llvmBuilder(loc, rewriter);
+static LLVM::LLVMFuncOp createHashInsertFn(IRRewriter &rewriter,
+                                           ModuleOp module,
+                                           FunctionOpInterface funcOp) {
   auto ctx = rewriter.getContext();
-  auto module = op->getParentOfType<ModuleOp>();
-  auto funcOp = op->getParentOfType<FunctionOpInterface>();
   auto i32Type = type::i32Ty(ctx);
-  auto i64Type = type::i64Ty(ctx);
-
-  // Helper function to insert into hash.
+  auto loc = funcOp.getLoc();
   StringRef murmurhash3InsertFnName = "murmurhash3_insert";
+  TritonLLVMOpBuilder llvmBuilder(loc, rewriter);
+
   LLVM::LLVMFuncOp murmurhash3InsertFn =
       module.lookupSymbol<LLVM::LLVMFuncOp>(murmurhash3InsertFnName);
   if (!murmurhash3InsertFn) {
@@ -128,9 +114,26 @@ static void insertRandomDelay(IRRewriter &rewriter, Operation *op) {
     // return hash;
     rewriter.create<LLVM::ReturnOp>(loc, hashAddFactor);
   }
+  return murmurhash3InsertFn;
+}
 
-  // Helper function to finish hash.
+/* Helper to create murmurhash3 finish function.
+The sequence of operations to finish the hash is:
+  hash ^= hash >> 16;
+  hash *= 0x85ebca6b;
+  hash ^= hash >> 13;
+  hash *= 0xc2b2ae35;
+  hash ^= hash >> 16;
+*/
+static LLVM::LLVMFuncOp createHashFinishFn(IRRewriter &rewriter,
+                                           ModuleOp module,
+                                           FunctionOpInterface funcOp) {
+  auto ctx = rewriter.getContext();
+  auto i32Type = type::i32Ty(ctx);
   StringRef murmurhash3FinishFnName = "murmurhash3_finish";
+  auto loc = funcOp.getLoc();
+  TritonLLVMOpBuilder llvmBuilder(loc, rewriter);
+
   LLVM::LLVMFuncOp murmurhash3FinishFn =
       module.lookupSymbol<LLVM::LLVMFuncOp>(murmurhash3FinishFnName);
   if (!murmurhash3FinishFn) {
@@ -174,9 +177,27 @@ static void insertRandomDelay(IRRewriter &rewriter, Operation *op) {
     // return hash
     rewriter.create<LLVM::ReturnOp>(loc, hashXor16_2);
   }
+  return murmurhash3FinishFn;
+}
 
-  // Helper function to get state hash.
+/* Helper to create state hash function.
+The state hash is the murmurhash3 of the blockIdx, threadIdx, clock, and
+global_timer values.
+*/
+static LLVM::LLVMFuncOp createStateHashFn(IRRewriter &rewriter, ModuleOp module,
+                                          FunctionOpInterface funcOp) {
+  auto ctx = rewriter.getContext();
+  auto i32Type = type::i32Ty(ctx);
   StringRef stateHashFnName = "state_hash";
+  auto loc = funcOp.getLoc();
+  TritonLLVMOpBuilder llvmBuilder(loc, rewriter);
+
+  // Create murmurhash3 insert and finish functions.
+  LLVM::LLVMFuncOp murmurhash3InsertFn =
+      createHashInsertFn(rewriter, module, funcOp);
+  LLVM::LLVMFuncOp murmurhash3FinishFn =
+      createHashFinishFn(rewriter, module, funcOp);
+
   LLVM::LLVMFuncOp stateHashFn =
       module.lookupSymbol<LLVM::LLVMFuncOp>(stateHashFnName);
   if (!stateHashFn) {
@@ -267,6 +288,24 @@ static void insertRandomDelay(IRRewriter &rewriter, Operation *op) {
     // return ret
     rewriter.create<LLVM::ReturnOp>(loc, finish.getResult());
   }
+  return stateHashFn;
+}
+
+/* Insert random delay.
+The delay is calculated as stateHash >> (32 - 21). The delay is then converted
+to a nanoseconds value and passed to __nanosleep.
+*/
+static void insertRandomDelay(IRRewriter &rewriter, Operation *op) {
+  auto loc = op->getLoc();
+  TritonLLVMOpBuilder llvmBuilder(loc, rewriter);
+  auto ctx = rewriter.getContext();
+  auto module = op->getParentOfType<ModuleOp>();
+  auto funcOp = op->getParentOfType<FunctionOpInterface>();
+  auto i32Type = type::i32Ty(ctx);
+  auto i64Type = type::i64Ty(ctx);
+
+  // Create state hash function.
+  LLVM::LLVMFuncOp stateHashFn = createStateHashFn(rewriter, module, funcOp);
 
   // Get state hash.
   rewriter.setInsertionPoint(op);
@@ -298,28 +337,36 @@ struct InsertRandomDelays
   void runOnOperation() override {
     ModuleOp mod = getOperation();
     IRRewriter rewriter(&getContext());
+
     llvm::StringRef asmString("");
     auto hasSubstring = [&asmString](const char *prefix) {
       return asmString.contains(prefix);
     };
-    mod.walk([&](Operation *op) {
-      if (isa<NVVM::Barrier0Op>(op)) {
-        // bar.sync ops can manifest as NVVM::Barrier0Op in the IR.
+    auto parseAsmString = [&](Operation *op) {
+      if (llvm::any_of(before, hasSubstring)) {
+        rewriter.setInsertionPoint(op);
+        insertRandomDelay(rewriter, op);
+      } else if (llvm::any_of(after, hasSubstring)) {
         rewriter.setInsertionPointAfter(op);
         insertRandomDelay(rewriter, op);
-      } else if (isa<LLVM::InlineAsmOp, LLVM::CallIntrinsicOp>(op)) {
-        // Both inline asm and call intrinsics can be used for some async ops.
-        asmString = isa<LLVM::InlineAsmOp>(op)
-                        ? llvm::cast<LLVM::InlineAsmOp>(op).getAsmString()
-                        : llvm::cast<LLVM::CallIntrinsicOp>(op).getIntrin();
-        if (llvm::any_of(before, hasSubstring)) {
-          rewriter.setInsertionPoint(op);
-          insertRandomDelay(rewriter, op);
-        } else if (llvm::any_of(after, hasSubstring)) {
-          rewriter.setInsertionPointAfter(op);
-          insertRandomDelay(rewriter, op);
-        }
       }
+    };
+
+    mod.walk([&](Operation *op) {
+      llvm::TypeSwitch<Operation *>(op)
+          .Case<NVVM::Barrier0Op>([&](auto) {
+            // bar.sync ops can manifest as NVVM::Barrier0Op in the IR.
+            rewriter.setInsertionPointAfter(op);
+            insertRandomDelay(rewriter, op);
+          })
+          .Case<LLVM::InlineAsmOp>([&](auto inlineAsmOp) {
+            asmString = inlineAsmOp.getAsmString();
+            parseAsmString(op);
+          })
+          .Case<LLVM::CallIntrinsicOp>([&](auto callIntrinsicOp) {
+            asmString = callIntrinsicOp.getIntrin();
+            parseAsmString(op);
+          });
     });
   }
 };
