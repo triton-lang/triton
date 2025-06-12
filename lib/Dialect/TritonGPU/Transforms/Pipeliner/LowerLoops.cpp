@@ -1,6 +1,7 @@
 #include "mlir/Dialect/UB/IR/UBOps.h"
 #include "mlir/IR/Dominance.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
+#include "triton/Analysis/AxisInfo.h"
 #include "triton/Analysis/Utility.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Types.h"
@@ -441,7 +442,8 @@ bool loadRequiresAdditionalBuffer(Operation *loadOp) {
   return false;
 }
 
-scf::ForOp lowerLoads(scf::ForOp forOp, CoarseSchedule &schedule) {
+scf::ForOp lowerLoads(scf::ForOp forOp, CoarseSchedule &schedule,
+                      triton::ModuleAxisInfoAnalysis &axisInfoAnalysis) {
   llvm::MapVector<Operation *, AsyncLoad> asyncLoads;
   llvm::MapVector<int, LoadGroupInfo> loadGroups;
   // Only visit the top level ops, we do not support pipelining conditional
@@ -457,9 +459,13 @@ scf::ForOp lowerLoads(scf::ForOp forOp, CoarseSchedule &schedule) {
       SharedEncodingTrait sharedEncoding = getSharedEncoding(&op);
       // Do not create async loads for small loads (cp.async requires at least 4
       // bytes)
+      bool canUseAsyncCp =
+          isa<tt::LoadOp>(op) &&
+          canBeConvertedToAsyncLoad(cast<tt::LoadOp>(op), axisInfoAnalysis);
       int copyVecBytes = getCopyVecBytes(
           cast<RankedTensorType>(op.getResultTypes()[0]), sharedEncoding);
-      if (copyVecBytes >= 4 || isTMALoad(&op)) {
+      canUseAsyncCp &= copyVecBytes >= 4;
+      if (canUseAsyncCp || isTMALoad(&op)) {
         if (loadRequiresAdditionalBuffer(&op)) {
           // Allocate additional buffer required by the wgmma pipelining.
           stageDiff += 1;
@@ -1008,13 +1014,14 @@ scf::ForOp lowerMMAs(scf::ForOp forOp, CoarseSchedule &schedule) {
 // LOWER LOOP
 /////////////////////////////
 
-void lowerLoop(scf::ForOp forOp) {
+void lowerLoop(scf::ForOp forOp,
+               triton::ModuleAxisInfoAnalysis &axisInfoAnalysis) {
   CoarseSchedule schedule;
   if (failed(schedule.deSerialize(forOp))) {
     return;
   }
   scf::ForOp newForOp = lowerMMAs(forOp, schedule);
-  newForOp = lowerLoads(newForOp, schedule);
+  newForOp = lowerLoads(newForOp, schedule, axisInfoAnalysis);
   newForOp = lowerTMADescriptors(newForOp, schedule);
   schedule.serialize(newForOp);
 }
@@ -1022,12 +1029,13 @@ void lowerLoop(scf::ForOp forOp) {
 } // namespace
 
 void lowerLoops(ModuleOp moduleOp) {
+  triton::ModuleAxisInfoAnalysis axisInfoAnalysis(moduleOp);
   SmallVector<scf::ForOp> loops;
   moduleOp->walk([&](scf::ForOp forOp) { loops.push_back(forOp); });
   if (loops.empty())
     return;
   for (auto forOp : loops) {
-    lowerLoop(forOp);
+    lowerLoop(forOp, axisInfoAnalysis);
   }
 }
 
