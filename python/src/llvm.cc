@@ -317,7 +317,8 @@ void init_triton_llvm(py::module &&m) {
         ModuleAnalysisManager mam;
 
         if (arch.empty()) {
-          llvm::TargetLibraryInfoImpl TLII{Triple("nvptx64", "nvidia", "cuda")};
+          llvm::TargetLibraryInfoImpl TLII;
+          TLII.disableAllFunctions();
           fam.registerPass([TLII = std::move(TLII)] {
             return llvm::TargetLibraryAnalysis(TLII);
           });
