@@ -495,6 +495,12 @@ LogicalResult MemDescReinterpretOp::verify() {
   return success();
 }
 
+OpFoldResult MemDescReinterpretOp::fold(FoldAdaptor adaptor) {
+  if (getType() == getSrc().getType())
+    return getSrc();
+  return {};
+}
+
 // LocalAllocOp
 void LocalAllocOp::getEffects(
     SmallVectorImpl<SideEffects::EffectInstance<MemoryEffects::Effect>>

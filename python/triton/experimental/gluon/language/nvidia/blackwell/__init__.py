@@ -158,6 +158,16 @@ class tensor_memory_descriptor(base_value):
         ret.handle = builder.create_memdesc_subview(ret.type.to_ir(builder), self.handle, offsets)
         return ret
 
+    @builtin
+    def _reinterpret(self, dtype, shape, layout, _semantic: GluonSemantic = None) -> tensor_memory_descriptor:
+        dtype = _unwrap_if_constexpr(dtype)
+        shape = [_unwrap_if_constexpr(s) for s in shape]
+        layout = _unwrap_if_constexpr(layout)
+
+        ty = tensor_memory_descriptor_type(dtype, shape, layout, shape)
+        handle = _semantic.builder.create_memdesc_reinterpret(ty.to_ir(_semantic.builder), self.handle)
+        return tensor_memory_descriptor(handle, **ty.__dict__)
+
 
 @builtin
 def allocate_tensor_memory(element_ty, shape, layout, value=None, _semantic=None):
