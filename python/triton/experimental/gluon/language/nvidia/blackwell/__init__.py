@@ -6,7 +6,7 @@ from triton.experimental.gluon.language import _core as ttgl
 from triton.experimental.gluon.language._core import builtin, base_type, base_value, _unwrap_if_constexpr
 
 from . import tma
-from ..hopper import mbarrier
+from ..hopper import mbarrier, fence_async_shared
 
 if TYPE_CHECKING:
     from triton._C.libtriton.gluon_ir import GluonOpBuilder
@@ -14,10 +14,11 @@ if TYPE_CHECKING:
     from ..._semantic import GluonSemantic
 
 __all__ = [
-    "TensorMemoryLayout",
-    "tensor_memory_descriptor",
     "allocate_tensor_memory",
+    "fence_async_shared",
     "mbarrier",
+    "tensor_memory_descriptor",
+    "TensorMemoryLayout",
     "tma",
 ]
 

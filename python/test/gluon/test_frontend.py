@@ -881,3 +881,47 @@ def test_tensor_reshape():
     expect_layout: ttgl.constexpr = ttgl.BlockedLayout([1, 1, 2], [2, 4, 4], [4, 1, 1], [2, 1, 0], [1, 1, 1], [1, 1, 1],
                                                        [2, 1, 0])
     ttgl.static_assert(v.type.layout == expect_layout)
+
+
+@filecheck_test
+@gluon.jit
+def test_zeros():
+    # CHECK: [[BLOCKED:#.*]] = #ttg.blocked<{sizePerThread = [2]
+    # CHECK: [[BLOCKED2D:#.*]] = #ttg.blocked<{sizePerThread = [1, 2]
+    layout: ttgl.constexpr = ttgl.BlockedLayout([2], [32], [4], [0])
+    layout_2d: ttgl.constexpr = ttgl.BlockedLayout([1, 2], [4, 8], [4, 1], [1, 0])
+
+    # CHECK: arith.constant dense<0.000000e+00> : tensor<32xf32, [[BLOCKED]]>
+    a = ttgl.zeros([32], ttgl.float32, layout)
+
+    # CHECK: arith.constant dense<7.000000e+00> : tensor<32xf32, [[BLOCKED]]>
+    ttgl.full_like(a, 7)
+
+    # CHECK: arith.constant dense<0.000000e+00> : tensor<32xf32, [[BLOCKED]]>
+    ttgl.zeros_like(a)
+
+    # CHECK: arith.constant dense<0.000000e+00> : tensor<64xf32, [[BLOCKED]]>
+    ttgl.zeros_like(a, shape=[64])
+
+    # CHECK: arith.constant dense<0> : tensor<16x16xi8, [[BLOCKED2D]]>
+    ttgl.zeros_like(a, shape=[16, 16], dtype=ttgl.int8, layout=layout_2d)
+
+    # CHECK: arith.constant dense<7> : tensor<8x8xi16, [[BLOCKED2D]]>
+    ttgl.full_like(a, 7, shape=[8, 8], dtype=ttgl.int16, layout=layout_2d)
+
+
+@filecheck_test
+@gluon.jit
+def test_barrier():
+    # CHECK: gpu.barrier
+    ttgl.thread_barrier()
+
+
+@filecheck_test
+@gluon.jit
+def test_fence_async_shared():
+    # CHECK: ttng.fence_async_shared {bCluster = false}
+    blackwell.fence_async_shared()
+
+    # CHECK-NEXT: ttng.fence_async_shared {bCluster = true}
+    blackwell.fence_async_shared(cluster=True)

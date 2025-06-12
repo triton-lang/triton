@@ -91,6 +91,7 @@ __all__ = [
     "tensor",
     "tuple",
     "tuple_type",
+    "thread_barrier",
     "arange",
     "full",
     "convert_layout",
@@ -313,3 +314,8 @@ def warp_specialize(args, default_partition, worker_partitions, worker_num_warps
     worker_num_regs = [_unwrap_if_constexpr(r) for r in worker_num_regs]
     return _semantic.warp_specialize(args, default_partition, worker_partitions, worker_num_warps,  #
                                      worker_num_regs, _generator)
+
+
+@builtin
+def thread_barrier(_semantic=None):
+    return _semantic.debug_barrier()
