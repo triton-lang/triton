@@ -497,7 +497,7 @@ class _attention(torch.autograd.Function):
             assert is_blackwell(), "Gluon attention only works on Blackwell"
             y_dim = q.shape[0] * q.shape[1] * q.shape[2]
             BLOCK_M = 256
-            BLOCK_N = min(64, HEAD_DIM_K)
+            BLOCK_N = min(128, HEAD_DIM_K)
             desc_q = make_gluon_tensor_desc(q, shape=[y_dim, HEAD_DIM_K], strides=[HEAD_DIM_K, 1],
                                             block_shape=[BLOCK_M // 2, HEAD_DIM_K])
             desc_v = make_gluon_tensor_desc(v, shape=[y_dim, HEAD_DIM_K], strides=[HEAD_DIM_K, 1],
@@ -606,7 +606,7 @@ attention = _attention.apply
 
 attn_configs = [
     # Config(warp_specialize=False, use_gluon=False),
-    Config(warp_specialize=True, use_gluon=False),
+    # Config(warp_specialize=True, use_gluon=False),
 ]
 if is_blackwell():
     attn_configs.append(Config(warp_specialize=False, use_gluon=True))
