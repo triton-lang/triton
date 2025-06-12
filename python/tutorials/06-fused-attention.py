@@ -21,7 +21,7 @@ from dataclasses import dataclass
 import triton
 import triton.language as tl
 from triton.tools.tensor_descriptor import TensorDescriptor
-from gluon_attention import _attn_fwd as _gluon_attn
+from gluon_attention import _gluon_attn
 from gluon_attention import make_tensor_desc as make_gluon_tensor_desc
 from gluon_attention import torch_dtype_to_triton
 
@@ -604,11 +604,9 @@ class _attention(torch.autograd.Function):
 
 attention = _attention.apply
 
-attn_configs = [
-    # Config(warp_specialize=False, use_gluon=False),
-    # Config(warp_specialize=True, use_gluon=False),
-]
+attn_configs = [Config(warp_specialize=False, use_gluon=False)]
 if is_blackwell():
+    attn_configs.append(Config(warp_specialize=True, use_gluon=False))
     attn_configs.append(Config(warp_specialize=False, use_gluon=True))
 
 
@@ -666,7 +664,7 @@ TORCH_HAS_FP8 = hasattr(torch, 'float8_e5m2')
 BATCH, N_HEADS, HEAD_DIM = 4, 32, 128
 # vary seq length for fixed head and batch=4
 configs = []
-for mode in ["fwd"]:
+for mode in ["fwd", "bwd"]:
     for causal in [True]:
         for config in attn_configs:
             configs.append(
