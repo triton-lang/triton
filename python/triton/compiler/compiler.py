@@ -10,7 +10,6 @@ from ..runtime.autotuner import OutOfResources
 from ..runtime.cache import get_cache_manager, get_dump_manager, get_override_manager
 from ..runtime.driver import driver
 from ..tools.disasm import get_sass
-# TODO: this shouldn't be here
 from pathlib import Path
 import re
 import functools
