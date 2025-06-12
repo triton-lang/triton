@@ -189,7 +189,7 @@ private:
 };
 
 namespace axisinfo {
-using callbackType = std::function<void(AxisInfoVisitorList &)>;
+using CallbackType = std::function<void(AxisInfoVisitorList &)>;
 } // namespace axisinfo
 
 // Module level axis info analysis based on the call graph, assuming that we do
@@ -203,7 +203,7 @@ using AxisInfoMapT = DenseMap<Value, AxisInfo>;
 class ModuleAxisInfoAnalysis : public CallGraph<AxisInfoMapT> {
 public:
   explicit ModuleAxisInfoAnalysis(ModuleOp moduleOp,
-                                  axisinfo::callbackType callback = nullptr)
+                                  axisinfo::CallbackType callback = nullptr)
       : CallGraph<AxisInfoMapT>(moduleOp) {
     SmallVector<FunctionOpInterface> funcs;
     for (auto root : getRoots()) {
@@ -262,7 +262,7 @@ public:
 
 private:
   void initialize(FunctionOpInterface funcOp,
-                  axisinfo::callbackType callback = nullptr);
+                  axisinfo::CallbackType callback = nullptr);
   void update(CallOpInterface callOp, FunctionOpInterface funcOp);
 };
 } // namespace mlir::triton

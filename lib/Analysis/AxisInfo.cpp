@@ -152,7 +152,7 @@ private:
 
 public:
   AxisInfoAnalysis(DataFlowSolver &solver,
-                   axisinfo::callbackType callback = nullptr);
+                   axisinfo::CallbackType callback = nullptr);
   using dataflow::SparseForwardDataFlowAnalysis<
       dataflow::Lattice<AxisInfo>>::getLatticeElement;
   using FuncAxisInfoMapT = DenseMap<FunctionOpInterface, AxisInfo>;
@@ -991,7 +991,7 @@ public:
 //===----------------------------------------------------------------------===//
 
 AxisInfoAnalysis::AxisInfoAnalysis(DataFlowSolver &solver,
-                                   axisinfo::callbackType callback)
+                                   axisinfo::CallbackType callback)
     : dataflow::SparseForwardDataFlowAnalysis<dataflow::Lattice<AxisInfo>>(
           solver) {
   // UnrealizedConversionCast:
@@ -1303,7 +1303,7 @@ unsigned ModuleAxisInfoAnalysis::getMaskAlignment(Value mask) {
 }
 
 void ModuleAxisInfoAnalysis::initialize(FunctionOpInterface funcOp,
-                                        axisinfo::callbackType callback) {
+                                        axisinfo::CallbackType callback) {
   std::unique_ptr<DataFlowSolver> solver = createDataFlowSolver();
   AxisInfoAnalysis *analysis = solver->load<AxisInfoAnalysis>(callback);
   // Walk pre-order so analysis results can be propagated into nested isolated

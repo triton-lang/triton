@@ -16,8 +16,6 @@ protected:
 };
 } // namespace
 
-namespace mlir {
-namespace test {
+namespace mlir::test {
 void registerAMDTestAlignmentPass() { PassRegistration<AMDTestAxisInfoPass>(); }
-} // namespace test
-} // namespace mlir
+} // namespace mlir::test
