@@ -637,7 +637,7 @@ class CodeGenerator(ast.NodeVisitor):
         if _is_triton_tensor(rhs):
             reverse_method_name = re.sub(r"__(.*)__", r"__r\1__", method_name)
             return getattr(rhs, reverse_method_name)(lhs, _semantic=self.semantic)
-        if not isinstance(lhs, constexpr) and isinstance(rhs, constexpr):
+        if not isinstance(lhs, (constexpr, language.tuple)) and isinstance(rhs, constexpr):
             lhs = constexpr(lhs)
         return getattr(lhs, method_name)(rhs)
 
