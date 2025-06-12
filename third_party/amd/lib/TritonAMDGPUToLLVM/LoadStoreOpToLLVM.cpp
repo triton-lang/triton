@@ -192,15 +192,12 @@ struct DirectToLdsLoadConversionBase : public LoadStoreConversionBase {
     return success();
   }
 
-  // Determine the vector size per load and collect the warp uniform shared
-  // memory addresses per vecTy. This will only emit the address calculation and
-  // not the actual loads.
-  void emitWarpStartSharedAddresses(RewriterBase &rewriter, Operation *op,
-                                    RankedTensorType srcTy, MemDescType dstTy,
-                                    bool hasSwizzling, Type resElemTy,
-                                    Value llDst,
-                                    SmallVector<Value> &warpStartAddr,
-                                    VectorType &vecTy) const {
+  // Determine the vecTy per async load to LDS and collect the warp uniform
+  // shared memory addresses per vecTy. This will only emit the address
+  // calculation and not the actual loads.
+  std::pair<SmallVector<Value>, VectorType> emitWarpStartSharedAddresses(
+      RewriterBase &rewriter, Operation *op, RankedTensorType srcTy,
+      MemDescType dstTy, bool hasSwizzling, Type resElemTy, Value llDst) const {
     auto loc = op->getLoc();
     TritonLLVMOpBuilder b(loc, rewriter);
 
@@ -211,8 +208,8 @@ struct DirectToLdsLoadConversionBase : public LoadStoreConversionBase {
       // Overwrite the shared encoding with a non swizzled
       // one to get the base address of the warp
       // TODO (alex): this is only correct as long as the lds view is a
-      //              contigous block. So this can break if we slice along the 2
-      //              minor dimensions carelessly.
+      // contigous block. So this can break if we slice along the 2 minor
+      // dimensions.
       auto dstEnc = cast<SwizzledSharedEncodingAttr>(dstTy.getEncoding());
       auto flatSharedEnc = SwizzledSharedEncodingAttr::get(
           op->getContext(), dstEnc.getVec(), 1, 1, dstEnc.getOrder(),
@@ -226,31 +223,37 @@ struct DirectToLdsLoadConversionBase : public LoadStoreConversionBase {
     auto regLayout =
         triton::gpu::toLinearLayout(srcTy.getShape(), srcTy.getEncoding());
 
-    // The final LDS addr will be a scalar so we compute the warp id based on a
-    // scalar thread id which improves final codegen (reduces register pressure)
+    // The warp ID is always a scalar so we use the ThreadId from the first lane
+    // to compute the warp ID which improves codegen. shuffleIdx will be lowered
+    // to readlane 0 placing it into a SGPR and hinting at LLVM that it
+    // should use scalar ops which also allows it to better hoist values
     Value tid =
         targetInfo.shuffleIdx(rewriter, loc, getThreadId(rewriter, loc), 0);
     int threadsPerWarp = triton::gpu::lookupThreadsPerWarp(rewriter);
     Value warpSizeVal = b.i32_val(threadsPerWarp);
     Value warpId = b.udiv(tid, warpSizeVal);
 
+    VectorType vecTy;
+    SmallVector<Value> warpStartAddrs;
     bool ok = emitTransferBetweenRegistersAndShared(
         regLayout, dstTy, resElemTy, {}, smemObj, loc, rewriter, targetInfo,
         /*laneId=*/b.i32_val(0), warpId,
         [&](VectorType vecTy_, Value shmemAddr) {
           vecTy = vecTy_;
-          warpStartAddr.push_back(shmemAddr);
+          warpStartAddrs.push_back(shmemAddr);
         });
     assert(ok);
+
+    return {std::move(warpStartAddrs), vecTy};
   }
 
   // For each load emit the computation to get the lane id offset which holds
   // the source pointers/offsets we need to store to shared memory
-  void emitSwizzledLaneOffsets(RewriterBase &rewriter, Operation *op,
-                               RankedTensorType srcTy, MemDescType dstTy,
-                               bool hasSwizzling, Value llDst, Type resElemTy,
-                               SmallVector<Value> &swizzleOffsets,
-                               VectorType vecTy) const {
+  SmallVector<Value>
+  emitSwizzledLaneOffsets(RewriterBase &rewriter, Operation *op,
+                          RankedTensorType srcTy, MemDescType dstTy,
+                          bool hasSwizzling, Value llDst, Type resElemTy,
+                          VectorType vecTy) const {
     auto loc = op->getLoc();
     TritonLLVMOpBuilder b(loc, rewriter);
 
@@ -287,8 +290,9 @@ struct DirectToLdsLoadConversionBase : public LoadStoreConversionBase {
     // For each load compute the difference between the flat and the swizzled
     // linear offsets into shared memory
     // TODO (alex): this is only correct as long as the lds view is a contigous
-    //              block. So this can break if we slice along the 2 minor
-    //              dimensions carelessly.
+    // block. So this can break if we slice along the 2 minor dimensions
+    SmallVector<Value> swizzledOffsets;
+    swizzledOffsets.reserve(numberOfLoads);
     for (int i = 0; i < numberOfLoads; i++) {
       auto regId = b.i32_val(i * vecTy.getNumElements());
 
@@ -308,8 +312,9 @@ struct DirectToLdsLoadConversionBase : public LoadStoreConversionBase {
       // Normalize the offset by vecTy to obtain the offset in lanes
       auto laneOffet = b.sdiv(b.sub(swizzledOffset, flatOffset),
                               b.i32_val(vecTy.getNumElements()));
-      swizzleOffsets.push_back(laneOffet);
+      swizzledOffsets.push_back(laneOffet);
     }
+    return swizzledOffsets;
   }
 
   // Swizzle the mask (1bit) based on selectLane via ballot
@@ -587,16 +592,16 @@ struct BufferLoadToLocalOpConversion
       return failure();
     }
 
-    VectorType vecTy;
-    SmallVector<Value> ldsWarpStartAddrs;
-    emitWarpStartSharedAddresses(rewriter, op, ptrType, dstTy, hasSwizzling,
-                                 resElemTy, llDst, ldsWarpStartAddrs, vecTy);
+    // VectorType vecTy;
+    // SmallVector<Value> ldsWarpStartAddrs;
+    auto [ldsWarpStartAddrs, vecTy] = emitWarpStartSharedAddresses(
+        rewriter, op, ptrType, dstTy, hasSwizzling, resElemTy, llDst);
     assert(vecTy.getNumElements() == vec);
 
     SmallVector<Value> swizzledLaneOffsets;
     if (hasSwizzling) {
-      emitSwizzledLaneOffsets(rewriter, op, ptrType, dstTy, hasSwizzling, llDst,
-                              resElemTy, swizzledLaneOffsets, vecTy);
+      swizzledLaneOffsets = emitSwizzledLaneOffsets(
+          rewriter, op, ptrType, dstTy, hasSwizzling, llDst, resElemTy, vecTy);
       assert(ldsWarpStartAddrs.size() == swizzledLaneOffsets.size());
     }
 
@@ -732,16 +737,14 @@ struct AsyncCopyGlobalToLocalOpConversion
       assert(srcElems.size() == otherElems.size());
     }
 
-    VectorType vecTy;
-    SmallVector<Value> ldsWarpStartAddrs;
-    emitWarpStartSharedAddresses(rewriter, op, srcTy, dstTy, hasSwizzling,
-                                 resElemTy, llDst, ldsWarpStartAddrs, vecTy);
+    auto [ldsWarpStartAddrs, vecTy] = emitWarpStartSharedAddresses(
+        rewriter, op, srcTy, dstTy, hasSwizzling, resElemTy, llDst);
     assert(vecTy.getNumElements() == maxVec);
 
     SmallVector<Value> swizzledLaneOffsets;
     if (hasSwizzling) {
-      emitSwizzledLaneOffsets(rewriter, op, srcTy, dstTy, hasSwizzling, llDst,
-                              resElemTy, swizzledLaneOffsets, vecTy);
+      swizzledLaneOffsets = emitSwizzledLaneOffsets(
+          rewriter, op, srcTy, dstTy, hasSwizzling, llDst, resElemTy, vecTy);
       assert(ldsWarpStartAddrs.size() == swizzledLaneOffsets.size());
     }
 
