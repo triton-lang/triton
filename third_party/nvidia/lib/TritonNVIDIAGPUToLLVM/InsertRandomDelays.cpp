@@ -298,6 +298,10 @@ struct InsertRandomDelays
   void runOnOperation() override {
     ModuleOp mod = getOperation();
     IRRewriter rewriter(&getContext());
+    llvm::StringRef asmString("");
+    auto hasSubstring = [&asmString](const char *prefix) {
+      return asmString.contains(prefix);
+    };
     mod.walk([&](Operation *op) {
       if (isa<NVVM::Barrier0Op>(op)) {
         // bar.sync ops can manifest as NVVM::Barrier0Op in the IR.
@@ -305,13 +309,9 @@ struct InsertRandomDelays
         insertRandomDelay(rewriter, op);
       } else if (isa<LLVM::InlineAsmOp, LLVM::CallIntrinsicOp>(op)) {
         // Both inline asm and call intrinsics can be used for some async ops.
-        llvm::StringRef asmString =
-            isa<LLVM::InlineAsmOp>(op)
-                ? llvm::cast<LLVM::InlineAsmOp>(op).getAsmString()
-                : llvm::cast<LLVM::CallIntrinsicOp>(op).getIntrin();
-        auto hasSubstring = [&asmString](const char *prefix) {
-          return asmString.contains(prefix);
-        };
+        asmString = isa<LLVM::InlineAsmOp>(op)
+                        ? llvm::cast<LLVM::InlineAsmOp>(op).getAsmString()
+                        : llvm::cast<LLVM::CallIntrinsicOp>(op).getIntrin();
         if (llvm::any_of(before, hasSubstring)) {
           rewriter.setInsertionPoint(op);
           insertRandomDelay(rewriter, op);
