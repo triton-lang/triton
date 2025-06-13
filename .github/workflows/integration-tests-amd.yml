@@ -76,9 +76,10 @@ jobs:
         run: |
           echo "PATH is '$PATH'"
           pip uninstall -y triton pytorch-triton-rocm
-          ccache --zero-stats
+          #ccache --zero-stats
           make dev-install
       - name: CCache Stats
+        if: false
         run: ccache --print-stats
       - name: Run lit tests
         run: make test-lit
