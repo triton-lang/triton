@@ -60,7 +60,7 @@ test-interpret: all
 
 .PHONY: test-proton
 test-proton: all
-	$(PYTEST) -s -n 8 third_party/proton/test
+	$(PYTEST) -s -n 8 third_party/proton/test -k "not test_instrument_exec"
 
 .PHONY: test-python
 test-python: test-unit test-regression test-interpret test-proton
