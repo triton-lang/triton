@@ -8,6 +8,11 @@ from triton.experimental.gluon.language.nvidia.blackwell import mbarrier, tma
 import multiprocessing
 import tempfile
 
+try:
+    multiprocessing.set_start_method("spawn")
+except RuntimeError:
+    pass  # start method already set
+
 
 class ProcessResult:
 
@@ -16,31 +21,31 @@ class ProcessResult:
         self.driver_stderr_output = driver_stderr_output
 
 
+def target(client_fn, queue, *args):
+    # Prepare temp file for capturing low-level stderr
+    with tempfile.TemporaryFile(mode="w+") as tmp_stderr:
+        saved_stderr_fd = os.dup(2)
+        os.dup2(tmp_stderr.fileno(), 2)  # Redirect fd 2 to tmp_stderr
+        exc = None
+
+        try:
+            client_fn(*args)
+        except Exception as e:
+            exc = e
+        finally:
+            # Restore original stderr
+            os.dup2(saved_stderr_fd, 2)
+            os.close(saved_stderr_fd)
+
+            # Read driver stderr
+            tmp_stderr.seek(0)
+            driver_stderr_output = tmp_stderr.read()
+            queue.put(ProcessResult(exc, driver_stderr_output))
+
+
 def run_in_process(client_fn, args):
-
-    def target(queue, *args):
-        # Prepare temp file for capturing low-level stderr
-        with tempfile.TemporaryFile(mode="w+") as tmp_stderr:
-            saved_stderr_fd = os.dup(2)
-            os.dup2(tmp_stderr.fileno(), 2)  # Redirect fd 2 to tmp_stderr
-            exc = None
-
-            try:
-                client_fn(*args)
-            except Exception as e:
-                exc = e
-            finally:
-                # Restore original stderr
-                os.dup2(saved_stderr_fd, 2)
-                os.close(saved_stderr_fd)
-
-                # Read driver stderr
-                tmp_stderr.seek(0)
-                driver_stderr_output = tmp_stderr.read()
-                queue.put(ProcessResult(exc, driver_stderr_output))
-
     queue = multiprocessing.Queue()
-    p = multiprocessing.Process(target=target, args=(queue, *args))
+    p = multiprocessing.Process(target=target, args=(client_fn, queue, *args))
     p.start()
     p.join()
     result = queue.get()
