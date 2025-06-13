@@ -415,7 +415,10 @@ class CUDABackend(BaseBackend):
             # Accept more ptxas options if provided
             ptx_extra_options = opt.ptx_options.split(" ") if opt.ptx_options else []
 
-            ptxas_cmd = [ptxas, *line_info, *fmad, '-v', *disable_opt, *ptx_extra_options, f'--gpu-name={arch}', fsrc.name, '-o', fbin]
+            ptxas_cmd = [
+                ptxas, *line_info, *fmad, '-v', *disable_opt, *ptx_extra_options, f'--gpu-name={arch}', fsrc.name, '-o',
+                fbin
+            ]
             try:
                 subprocess.run(ptxas_cmd, check=True, close_fds=False, stderr=flog)
                 if os.path.exists(fsrc.name):
