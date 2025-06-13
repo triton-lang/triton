@@ -1,6 +1,7 @@
 import torch
 import triton
 import triton.language as tl
+import pytest
 
 from triton.language.core import _aggregate as aggregate
 
@@ -806,7 +807,7 @@ def _gluon_attn_d128(sm_scale, M, Z, H, N_CTX,  #
                      desc_q, desc_k, desc_v, desc_o,  #
                      HEAD_DIM: gl.constexpr, BLOCK_M: gl.constexpr, BLOCK_N: gl.constexpr,  #
                      STAGE: gl.constexpr, dtype: gl.constexpr,  #
-                     num_warps: gl.constexpr, threads_per_warp: gl.constexpr):
+                     num_warps: gl.constexpr):
     gl.static_assert(BLOCK_N <= HEAD_DIM, "BLOCK_N must be less than or equal to HEAD_DIM")
 
     qk_scale = sm_scale
@@ -976,7 +977,7 @@ def _gluon_attn_d64(sm_scale, M, Z, H, N_CTX,  #
                     desc_q, desc_k, desc_v, desc_o,  #
                     HEAD_DIM: gl.constexpr, BLOCK_M: gl.constexpr, BLOCK_N: gl.constexpr,  #
                     STAGE: gl.constexpr, dtype: gl.constexpr,  #
-                    num_warps: gl.constexpr, threads_per_warp: gl.constexpr):
+                    num_warps: gl.constexpr):
     gl.static_assert(BLOCK_N <= HEAD_DIM, "BLOCK_N must be less than or equal to HEAD_DIM")
 
     qk_scale = sm_scale
@@ -1014,3 +1015,73 @@ def torch_dtype_to_triton(dtype):
 def make_tensor_desc(x, shape, strides, block_shape):
     layout = get_nvmma_layout(block_shape, torch_dtype_to_triton(x.dtype))
     return TensorDescriptor(x, shape=shape, strides=strides, block_shape=block_shape, layout=layout.value)
+
+
+def attention_forward(q, k, v, causal, sm_scale, impl=None):
+    HEAD_DIM_Q, HEAD_DIM_K = q.shape[-1], k.shape[-1]
+    HEAD_DIM_V = v.shape[-1]
+    assert HEAD_DIM_Q == HEAD_DIM_K and HEAD_DIM_K == HEAD_DIM_V
+    assert HEAD_DIM_K in {16, 32, 64, 128, 256}
+
+    stage = 3 if causal else 1
+
+    o = torch.empty_like(q)
+    M = torch.empty((q.shape[0], q.shape[1], q.shape[2]), device=q.device, dtype=torch.float32)
+
+    y_dim = q.shape[0] * q.shape[1] * q.shape[2]
+
+    if impl is None:
+        impl = "d128" if HEAD_DIM_K == 128 else "d64"
+    split_m = impl == "d128"
+
+    # The D128 kernel will split BLOCK_M into two subtiles.
+    BLOCK_M = 256 if split_m else 128
+    SPLIT_M = BLOCK_M // (2 if split_m else 1)
+
+    BLOCK_N = min(128, HEAD_DIM_K)
+
+    desc_q = make_tensor_desc(q, shape=[y_dim, HEAD_DIM_K], strides=[HEAD_DIM_K, 1], block_shape=[SPLIT_M, HEAD_DIM_K])
+    desc_v = make_tensor_desc(v, shape=[y_dim, HEAD_DIM_K], strides=[HEAD_DIM_K, 1], block_shape=[BLOCK_N, HEAD_DIM_K])
+    desc_k = make_tensor_desc(k, shape=[y_dim, HEAD_DIM_K], strides=[HEAD_DIM_K, 1], block_shape=[BLOCK_N, HEAD_DIM_K])
+    desc_o = make_tensor_desc(o, shape=[y_dim, HEAD_DIM_K], strides=[HEAD_DIM_K, 1], block_shape=[SPLIT_M, HEAD_DIM_K])
+
+    def grid(META):
+        return (triton.cdiv(q.shape[2], META["BLOCK_M"]), q.shape[0] * q.shape[1], 1)
+
+    attn = _gluon_attn_d128 if impl == "d128" else _gluon_attn_d64
+    maxnreg = None if impl == "d128" else 128
+    attn[grid](
+        sm_scale, M, q.shape[0], q.shape[1], q.shape[2],  #
+        desc_q, desc_k, desc_v, desc_o,  #
+        HEAD_DIM_K, BLOCK_M, BLOCK_N,  #
+        stage, torch_dtype_to_triton(q.dtype),  #
+        num_warps=4, maxnreg=maxnreg)
+
+    return o, M
+
+
+@pytest.mark.parametrize("Z", [1, 4])
+@pytest.mark.parametrize("H", [2, 48])
+@pytest.mark.parametrize("N_CTX", [256, 1024, 4 * 1024])
+@pytest.mark.parametrize("HEAD_DIM", [64, 128])
+@pytest.mark.parametrize("causal", [True])
+@pytest.mark.parametrize("impl", ["d128", "d64"])
+@pytest.mark.parametrize("dtype", [torch.float16])
+def test_op(Z, H, N_CTX, HEAD_DIM, causal, impl, dtype):
+    device = "cuda"
+
+    torch.manual_seed(42)
+    q = (torch.empty((Z, H, N_CTX, HEAD_DIM), dtype=dtype, device=device).normal_(mean=0.0, std=0.5).requires_grad_())
+    k = (torch.empty((Z, H, N_CTX, HEAD_DIM), dtype=dtype, device=device).normal_(mean=0.0, std=0.5).requires_grad_())
+    v = (torch.empty((Z, H, N_CTX, HEAD_DIM), dtype=dtype, device=device).normal_(mean=0.0, std=0.5).requires_grad_())
+    sm_scale = 0.5
+
+    M = torch.tril(torch.ones((N_CTX, N_CTX), device=device))
+    p = torch.matmul(q, k.transpose(2, 3)) * sm_scale
+    if causal:
+        p[:, :, M == 0] = float("-inf")
+    p = torch.softmax(p.float(), dim=-1).half()
+    ref_out = torch.matmul(p, v)
+
+    tri_out, _ = attention_forward(q, k, v, causal, sm_scale, impl=impl)
+    torch.testing.assert_close(ref_out, tri_out, atol=1e-2, rtol=0)

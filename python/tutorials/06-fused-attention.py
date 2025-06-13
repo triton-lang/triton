@@ -16,14 +16,10 @@ Extra Credits:
 import pytest
 import torch
 import os
-from dataclasses import dataclass
 
 import triton
 import triton.language as tl
 from triton.tools.tensor_descriptor import TensorDescriptor
-from gluon_attention import _gluon_attn_d128, _gluon_attn_d64
-from gluon_attention import make_tensor_desc as make_gluon_tensor_desc
-from gluon_attention import torch_dtype_to_triton
 
 DEVICE = triton.runtime.driver.active.get_active_torch_device()
 
@@ -473,19 +469,10 @@ def _attn_bwd(Q, K, V, sm_scale,  #
     tl.store(dq_ptrs, dq)
 
 
-@dataclass
-class Config:
-    warp_specialize: bool
-    use_gluon: bool
-
-    def __post_init__(self):
-        assert not (self.warp_specialize and self.use_gluon)
-
-
 class _attention(torch.autograd.Function):
 
     @staticmethod
-    def forward(ctx, q, k, v, causal, sm_scale, config=Config(warp_specialize=True, use_gluon=False)):
+    def forward(ctx, q, k, v, causal, sm_scale, warp_specialize=True):
         # shape constraints
         HEAD_DIM_Q, HEAD_DIM_K = q.shape[-1], k.shape[-1]
         # when v is in float8_e5m2 it is transposed.
@@ -501,22 +488,7 @@ class _attention(torch.autograd.Function):
             extra_kern_args = {"waves_per_eu": waves_per_eu, "allow_flush_denorm": True}
 
         M = torch.empty((q.shape[0], q.shape[1], q.shape[2]), device=q.device, dtype=torch.float32)
-        if config.use_gluon:
-            assert is_blackwell(), "Gluon attention only works on Blackwell"
-            y_dim = q.shape[0] * q.shape[1] * q.shape[2]
-            BLOCK_M = 256 if HEAD_DIM_K == 128 else 128
-            SPLIT_M_FACTOR = 2 if HEAD_DIM_K == 128 else 1
-            BLOCK_N = min(128, HEAD_DIM_K)
-            desc_q = make_gluon_tensor_desc(q, shape=[y_dim, HEAD_DIM_K], strides=[HEAD_DIM_K, 1],
-                                            block_shape=[BLOCK_M // SPLIT_M_FACTOR, HEAD_DIM_K])
-            desc_v = make_gluon_tensor_desc(v, shape=[y_dim, HEAD_DIM_K], strides=[HEAD_DIM_K, 1],
-                                            block_shape=[BLOCK_N, HEAD_DIM_K])
-            desc_k = make_gluon_tensor_desc(k, shape=[y_dim, HEAD_DIM_K], strides=[HEAD_DIM_K, 1],
-                                            block_shape=[BLOCK_N, HEAD_DIM_K])
-            desc_o = make_gluon_tensor_desc(o, shape=[y_dim, HEAD_DIM_K], strides=[HEAD_DIM_K, 1],
-                                            block_shape=[BLOCK_M // SPLIT_M_FACTOR, HEAD_DIM_K])
-
-        elif supports_host_descriptor():
+        if supports_host_descriptor():
             # Note that on Hopper we cannot perform a FP8 dot with a non-transposed second tensor
             y_dim = q.shape[0] * q.shape[1] * q.shape[2]
 
@@ -540,39 +512,21 @@ class _attention(torch.autograd.Function):
             return (triton.cdiv(q.shape[2], META["BLOCK_M"]), q.shape[0] * q.shape[1], 1)
 
         ctx.grid = grid
-        if is_cuda() and config.warp_specialize:
+        if is_cuda() and warp_specialize:
             if HEAD_DIM_K == 128 and q.dtype == torch.float16:
                 extra_kern_args["maxnreg"] = 168
             else:
                 extra_kern_args["maxnreg"] = 80
-        if config.use_gluon:
-            if HEAD_DIM_K == 128:
-                _gluon_attn_d128[grid](  #
-                    sm_scale, M, q.shape[0], q.shape[1], q.shape[2],  #
-                    desc_q, desc_k, desc_v, desc_o,  #
-                    HEAD_DIM_K, BLOCK_M, BLOCK_N,  #
-                    stage, torch_dtype_to_triton(q.dtype),  #
-                    num_warps=4, threads_per_warp=32,  #
-                    maxnreg=None)
-            else:
-                _gluon_attn_d64[grid](  #
-                    sm_scale, M, q.shape[0], q.shape[1], q.shape[2],  #
-                    desc_q, desc_k, desc_v, desc_o,  #
-                    HEAD_DIM_K, BLOCK_M, BLOCK_N,  #
-                    stage, torch_dtype_to_triton(q.dtype),  #
-                    num_warps=4, threads_per_warp=32,  #
-                    maxnreg=128)
-        else:
-            _attn_fwd[grid](
-                sm_scale, M,  #
-                q.shape[0], q.shape[1],  #
-                desc_q, desc_k, desc_v, desc_o,  #
-                N_CTX=q.shape[2],  #
-                HEAD_DIM=HEAD_DIM_K,  #
-                FP8_OUTPUT=q.dtype == torch.float8_e5m2,  #
-                STAGE=stage,  #
-                warp_specialize=config.warp_specialize,  #
-                **extra_kern_args)
+        _attn_fwd[grid](
+            sm_scale, M,  #
+            q.shape[0], q.shape[1],  #
+            desc_q, desc_k, desc_v, desc_o,  #
+            N_CTX=q.shape[2],  #
+            HEAD_DIM=HEAD_DIM_K,  #
+            FP8_OUTPUT=q.dtype == torch.float8_e5m2,  #
+            STAGE=stage,  #
+            warp_specialize=warp_specialize,  #
+            **extra_kern_args)
 
         ctx.save_for_backward(q, k, v, o, M)
         ctx.sm_scale = sm_scale
@@ -625,19 +579,14 @@ class _attention(torch.autograd.Function):
 
 attention = _attention.apply
 
-attn_configs = [Config(warp_specialize=False, use_gluon=False)]
-if is_blackwell():
-    attn_configs.append(Config(warp_specialize=True, use_gluon=False))
-    attn_configs.append(Config(warp_specialize=False, use_gluon=True))
-
 
 @pytest.mark.parametrize("Z", [1, 4])
 @pytest.mark.parametrize("H", [2, 48])
 @pytest.mark.parametrize("N_CTX", [256, 1024, (2 if is_hip() else 4) * 1024])
 @pytest.mark.parametrize("HEAD_DIM", [64, 128])
 @pytest.mark.parametrize("causal", [True])  # FIXME: Non-causal tests do not pass at the moment.
-@pytest.mark.parametrize("config", attn_configs, ids=repr)
-def test_op(Z, H, N_CTX, HEAD_DIM, causal, config, dtype=torch.float16):
+@pytest.mark.parametrize("warp_specialize", [False, True] if is_blackwell() else [False])
+def test_op(Z, H, N_CTX, HEAD_DIM, causal, warp_specialize, dtype=torch.float16):
     torch.manual_seed(20)
     q = (torch.empty((Z, H, N_CTX, HEAD_DIM), dtype=dtype, device=DEVICE).normal_(mean=0.0, std=0.5).requires_grad_())
     k = (torch.empty((Z, H, N_CTX, HEAD_DIM), dtype=dtype, device=DEVICE).normal_(mean=0.0, std=0.5).requires_grad_())
@@ -657,7 +606,7 @@ def test_op(Z, H, N_CTX, HEAD_DIM, causal, config, dtype=torch.float16):
     ref_dk, k.grad = k.grad.clone(), None
     ref_dq, q.grad = q.grad.clone(), None
     # triton implementation
-    tri_out = attention(q, k, v, causal, sm_scale, config).half()
+    tri_out = attention(q, k, v, causal, sm_scale, warp_specialize).half()
     tri_out.backward(dout)
     tri_dv, v.grad = v.grad.clone(), None
     tri_dk, k.grad = k.grad.clone(), None
@@ -688,7 +637,7 @@ configs = []
 for HEAD_DIM in [64, 128]:
     for mode in ["fwd"]:
         for causal in [True]:
-            for config in attn_configs:
+            for warp_specialize in [False, True] if is_blackwell() else [False]:
                 configs.append(
                     triton.testing.Benchmark(
                         x_names=["N_CTX"],
@@ -701,20 +650,20 @@ for HEAD_DIM in [64, 128]:
                         styles=[("red", "-"), ("blue", "-"), ("green", "-")],
                         ylabel="TFLOPS",
                         plot_name=
-                        f"fused-attention-batch{BATCH}-head{N_HEADS}-d{HEAD_DIM}-{mode}-causal={causal}-config={repr(config)}",
+                        f"fused-attention-batch{BATCH}-head{N_HEADS}-d{HEAD_DIM}-{mode}-causal={causal}-warp_specialize={warp_specialize}",
                         args={
                             "H": N_HEADS,
                             "BATCH": BATCH,
                             "HEAD_DIM": HEAD_DIM,
                             "mode": mode,
                             "causal": causal,
-                            "config": config,
+                            "warp_specialize": warp_specialize,
                         },
                     ))
 
 
 @triton.testing.perf_report(configs)
-def bench_flash_attention(BATCH, H, N_CTX, HEAD_DIM, causal, config, mode, provider, device=DEVICE):
+def bench_flash_attention(BATCH, H, N_CTX, HEAD_DIM, causal, warp_specialize, mode, provider, device=DEVICE):
     assert mode in ["fwd", "bwd"]
     dtype = torch.float16
     if "triton" in provider:
@@ -728,7 +677,7 @@ def bench_flash_attention(BATCH, H, N_CTX, HEAD_DIM, causal, config, mode, provi
             v = v.permute(0, 1, 3, 2)
             v = v.to(torch.float8_e5m2)
         sm_scale = 1.3
-        fn = lambda: attention(q, k, v, causal, sm_scale, config)
+        fn = lambda: attention(q, k, v, causal, sm_scale, warp_specialize)
         if mode == "bwd":
             o = fn()
             do = torch.randn_like(o)
