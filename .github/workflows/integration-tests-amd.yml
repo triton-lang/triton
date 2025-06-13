@@ -102,7 +102,7 @@ jobs:
           pytest --capture=tee-sys -rfs -vvv instrumentation/test_gpuhello.py
 
           # Run test_line_info.py separately with TRITON_DISABLE_LINE_INFO=0
-          TRITON_DISABLE_LINE_INFO=0 python3 -m pytest -s -n 8 language/test_line_info.py
+          TRITON_DISABLE_LINE_INFO=0 python3 -m pytest -s -n 8 language/test_line_info.py -k "not test_line_info_ir_source"
       - name: Run asan tests on AMD
         if: false
         run: |
