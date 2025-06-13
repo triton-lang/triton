@@ -4,9 +4,9 @@ import triton
 import triton.language as tl
 import triton.profiler.language as pl
 import triton.profiler as proton
+import triton.profiler.viewer as proton_viewer
 import pathlib
 import os
-import sys
 
 from typing import NamedTuple
 
@@ -40,27 +40,32 @@ def add_kernel(x_ptr,  # *Pointer* to first input vector.
         tl.store(output_ptr + offsets, output, mask=mask)
 
 
-def add(x: torch.Tensor, y: torch.Tensor, profile: bool):
+def add(x: torch.Tensor, y: torch.Tensor):
     output = torch.empty_like(x)
     assert x.device == DEVICE and y.device == DEVICE and output.device == DEVICE
     n_elements = output.numel()
     grid = lambda meta: (triton.cdiv(n_elements, meta['BLOCK_SIZE']), )
-    tmp_path = pathlib.Path(os.getcwd())
-    temp_file = tmp_path / "vector-add.hatchet"
-    if (profile):
-        proton.start(str(temp_file.with_suffix("")), backend="instrumentation")
+    profile_path = pathlib.Path(os.getcwd())
+    profile_file = profile_path / "vector-add.hatchet"
+    proton.start(str(profile_file.with_suffix("")), backend="instrumentation")
     add_kernel[grid](x, y, output, n_elements, BLOCK_SIZE=1024, num_warps=1)
-    if (profile):
-        proton.finalize()
+    proton.finalize()
     return output
 
 
-profile = False
-if (str(sys.argv[-1]) == "on"):
-    profile = True
 torch.manual_seed(0)
 size = 98432
 x = torch.rand(size, device=DEVICE)
 y = torch.rand(size, device=DEVICE)
-output_torch = x + y
-output_triton = add(x, y, profile)
+triton_output = x + y
+torch_output = add(x, y)
+if torch.allclose(triton_output, torch_output, atol=1e-2, rtol=0.0):
+    print("✅ Triton and Torch match")
+else:
+    print("❌ Triton and Torch differ")
+
+profile_name = "vector-add"
+file_name = f"{profile_name}.hatchet"
+metric_names = ["normalized_cycles"]
+tree, metrics = proton_viewer.parse(metric_names, file_name)
+proton_viewer.print_tree(tree, metrics)
