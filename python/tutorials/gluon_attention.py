@@ -1006,6 +1006,11 @@ def _gluon_attn_d64(sm_scale, M, Z, H, N_CTX,  #
     o_smem._keep_alive()
 
 
+# ===-----------------------------------------------------------------------===#
+# Entry Point
+# ===-----------------------------------------------------------------------===#
+
+
 def torch_dtype_to_triton(dtype):
     if dtype == torch.float8_e5m2:
         return gl.float8e5
@@ -1060,6 +1065,19 @@ def attention_forward(q, k, v, causal, sm_scale, impl=None):
     return o, M
 
 
+# ===-----------------------------------------------------------------------===#
+# Unit Tests
+# ===-----------------------------------------------------------------------===#
+
+
+def is_cuda():
+    return triton.runtime.driver.active.get_current_target().backend == "cuda"
+
+
+def is_blackwell():
+    return is_cuda() and torch.cuda.get_device_capability()[0] == 10
+
+
 @pytest.mark.parametrize("Z", [1, 4])
 @pytest.mark.parametrize("H", [2, 48])
 @pytest.mark.parametrize("N_CTX", [256, 1024, 4 * 1024])
@@ -1067,6 +1085,7 @@ def attention_forward(q, k, v, causal, sm_scale, impl=None):
 @pytest.mark.parametrize("causal", [True])
 @pytest.mark.parametrize("impl", ["d128", "d64"])
 @pytest.mark.parametrize("dtype", [torch.float16])
+@pytest.mark.skipif(not is_blackwell(), reason="Gluon attention is only supported on Blackwell GPUs")
 def test_op(Z, H, N_CTX, HEAD_DIM, causal, impl, dtype):
     device = "cuda"
 
