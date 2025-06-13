@@ -180,14 +180,15 @@ int main(int argc, char **argv) {{
     subprocess.run(command, check=True, cwd=dir)
 
 
-def write_triton_kernels(dir, src, util_src):
+def write_triton_kernels(dir: str, src: str, util_src: str | None):
     kernel_path = os.path.join(dir, "kernel.py")
     with open(kernel_path, "w") as file:
         file.write(src)
 
     kernel_utils_path = os.path.join(dir, "kernel_utils.py")
-    with open(kernel_utils_path, "w") as file:
-        file.write(util_src)
+    if util_src:
+        with open(kernel_utils_path, "w") as file:
+            file.write(util_src)
 
     return kernel_path
 
@@ -254,12 +255,16 @@ def compile_aot_kernels(dir, kernel_path, dtype, BM, BN, BK, ha_hb_hints):
         )
 
 
-def link_aot_kernels(dir):
+def link_aot_kernels(dir, output_name: str = "kernel"):
     linker_path = os.path.join(triton.tools.__path__[0], "link.py")
 
     # link all desired configs
     h_files = glob.glob(os.path.join(dir, "*.h"))
-    subprocess.run([sys.executable, linker_path] + h_files + ["-o", "kernel"], check=True, cwd=dir)
+    subprocess.run(
+        [sys.executable, linker_path] + h_files + ["-o", output_name],
+        check=True,
+        cwd=dir,
+    )
 
 
 def generate_matmul_test_data(dir, M, N, K):
@@ -386,8 +391,15 @@ def test_compile_link_autotune_matmul():
 
         for ts in tile_sizes:
             BM, BN, BK = ts[0], ts[1], ts[2]
-            compile_aot_kernels(tmp_dir, kernel_path, dtype, BM, BN, BK, ha_hb_hints=[(":16", ":16"), (":16", ""),
-                                                                                      ("", ":16")])
+            compile_aot_kernels(
+                tmp_dir,
+                kernel_path,
+                dtype,
+                BM,
+                BN,
+                BK,
+                ha_hb_hints=[(":16", ":16"), (":16", ""), ("", ":16")],
+            )
 
         link_aot_kernels(tmp_dir)
 
@@ -417,6 +429,75 @@ def test_compile_link_autotune_matmul():
             c = np.genfromtxt(c_path, delimiter=",", dtype=np.int32)
             c_tri = c.reshape((M, N)).view(np.float32)
             np.testing.assert_allclose(c_tri, c_ref * c_ref, atol=1e-4, rtol=1e-4)
+
+
+fp8_vector_src = """
+import triton
+import triton.language as tl
+
+@triton.jit
+def add_kernel(x_ptr,
+               y_ptr,
+               output_ptr,
+               n_elements,
+               BLOCK_SIZE: tl.constexpr):
+    # Note: This only designed to run with 1 program.
+    # and requires n_elements <= BLOCK_SIZE
+    offsets = tl.arange(0, BLOCK_SIZE)
+    mask = offsets < n_elements
+    x = tl.load(x_ptr + offsets, mask=mask)
+    y = tl.load(y_ptr + offsets, mask=mask)
+    output = x + y
+    tl.store(output_ptr + offsets, output, mask=mask)
+"""
+
+
+def test_compile_link_fp8_vector():
+    """
+    Test that an fp8 vector kernel can be compiled and linked.
+    """
+    np.random.seed(3)
+
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        dtype = "fp8e5"
+        # num_elements = 48
+        BLOCK_SIZE = 64
+
+        kernel_path = write_triton_kernels(tmp_dir, fp8_vector_src, None)
+        sig = f"*{dtype}, *{dtype}, *{dtype}, i32, {BLOCK_SIZE}"
+        name = f"vector_add_{dtype}"
+        grid = "1"
+        _compile_kernel(
+            dir=tmp_dir,
+            signature=sig,
+            kernel_name="add_kernel",
+            out_name=name,
+            out_path=name,
+            num_warps=1,
+            grid=grid,
+            kernel_path=kernel_path,
+        )
+        link_aot_kernels(tmp_dir, "add_kernel")
+
+        # compile test case
+        gen_kernel_library(tmp_dir, "libadd_kernel.so")
+        # gen_test_bin(tmp_dir, M, N, K)
+
+        # # initialize test data
+        # a, b, a_path, b_path, c_path = generate_matmul_test_data(tmp_dir, M, N, K)
+
+        # # run test case
+        # env = os.environ.copy()
+        # env["LD_LIBRARY_PATH"] = tmp_dir
+        # subprocess.run(
+        #     ["./test", a_path, b_path, c_path], env=env, check=True, cwd=tmp_dir
+        # )
+
+        # # read data and compare against reference
+        # c = np.genfromtxt(c_path, delimiter=",", dtype=np.int32)
+        # c_tri = c.reshape((M, N)).view(np.float32)
+        # c_ref = np.matmul(a.astype(np.float32), b.astype(np.float32))
+        # np.testing.assert_allclose(c_tri, c_ref * c_ref, atol=1e-4, rtol=0.0)
 
 
 def test_ttgir_to_ptx():
