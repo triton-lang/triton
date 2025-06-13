@@ -17,7 +17,7 @@ using namespace mlir::triton;
 using namespace mlir::triton::gpu;
 
 // Insert random delays before these operations.
-std::array<const char *, 18> before = {"cp.async.bulk.tensor",
+std::array<const char *, 19> before = {"cp.async.bulk.tensor",
                                        "cp.async.bulk.prefetch.tensor",
                                        "cp.async.bulk.commit_group",
                                        "cp.reduce.async.bulk.tensor",
@@ -26,6 +26,7 @@ std::array<const char *, 18> before = {"cp.async.bulk.tensor",
                                        "wgmma.commit_group",
                                        "bar.arrive",
                                        "barrier.arrive",
+                                       "barrier.cluster.arrive",
                                        "mbarrier.init",
                                        "mbarrier.arrive",
                                        "mbarrier.inval",
@@ -37,11 +38,12 @@ std::array<const char *, 18> before = {"cp.async.bulk.tensor",
                                        "llvm.nvvm.cluster.barrier"};
 
 // Insert random delays after these operations.
-std::array<const char *, 8> after = {"cp.async.bulk.wait_group",
+std::array<const char *, 9> after = {"cp.async.bulk.wait_group",
                                      "wgmma.wait_group",
                                      "cp.async.wait",
                                      "bar.sync",
                                      "barrier.sync",
+                                     "barrier.cluster.wait",
                                      "mbarrier.test_wait",
                                      "mbarrier.try_wait",
                                      "tcgen05.wait"};
@@ -353,9 +355,16 @@ struct InsertRandomDelays
     };
 
     mod.walk([&](Operation *op) {
+      // Synchronization ops can manifest as NVVM ops, inline PTX, or LLVM
+      // intrinsics.
       llvm::TypeSwitch<Operation *>(op)
-          .Case<NVVM::Barrier0Op>([&](auto) {
-            // bar.sync ops can manifest as NVVM::Barrier0Op in the IR.
+          .Case<NVVM::CpAsyncBulkCommitGroupOp, NVVM::CpAsyncCommitGroupOp>(
+              [&](auto) {
+                rewriter.setInsertionPoint(op);
+                insertRandomDelay(rewriter, op);
+              })
+          .Case<NVVM::Barrier0Op, NVVM::CpAsyncBulkWaitGroupOp,
+                NVVM::CpAsyncWaitGroupOp>([&](auto) {
             rewriter.setInsertionPointAfter(op);
             insertRandomDelay(rewriter, op);
           })
