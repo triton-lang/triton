@@ -450,7 +450,7 @@ class amd_knobs(base_knobs):
 
 
 class proton_knobs(base_knobs):
-    cupti_path: env_opt_str = env_opt_str("TRITON_CUPTI_LIB_PATH")
+    cupti_dir: env_opt_str = env_opt_str("TRITON_CUPTI_LIB_PATH")
 
 
 build = build_knobs()

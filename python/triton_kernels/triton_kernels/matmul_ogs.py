@@ -367,18 +367,13 @@ def can_use_fused_scatter(scatter_indx, fused_activation):
 
 @dataclass(frozen=True)
 class PreprocessingFeatures:
-    w_want_n_major: bool
     w_want_k_major: bool
     swap_xw: bool
-
-    def __post_init__(self):
-        assert not (self.w_want_k_major and self.w_want_n_major), "Cannot have both K-major and N-major"
 
 def init_preprocessing_features(w, precision_config, opt_flags):
     mx_ctx = precision_config.mx_ctx
     swap_xw = False  # Whether or not to swap X and W operands to the tl.dot
     w_want_k_major = False
-    w_want_n_major = False
     if not target_info.cuda_capability_geq(10, 0):
         # Hopper transpose. Reduction dimension must be contiguous.
         if w.stride(1) != 1 and w.dtype.itemsize == 1:
@@ -388,12 +383,7 @@ def init_preprocessing_features(w, precision_config, opt_flags):
         swap_xw = mx_ctx.weight_scale is not None and opt_flags.block_m <= 64 and opt_flags.is_persistent
         if swap_xw:
             w_want_k_major = True
-        # fp4 padded mode requires the contiguous dim size to be a multiple of 64 bytes. If it is K-major and does not
-        # meet the requirement, make the tensor N-major instead.
-        # But, don't do this if we're going to swap X and W in which case we would transpose W again.
-        if w.stride(1) == 1 and w.dtype == torch.uint8 and w.shape[1] % 64 != 0 and not swap_xw:
-            w_want_n_major = True
-    return PreprocessingFeatures(w_want_n_major, w_want_k_major, swap_xw)
+    return PreprocessingFeatures(w_want_k_major, swap_xw)
 
 
 def apply_preprocessing_features(x, w, gather_indx, scatter_indx, routing_data, opt_flags, preprocessing_features):
@@ -420,10 +410,7 @@ def apply_preprocessing_features(x, w, gather_indx, scatter_indx, routing_data, 
         finalize_scatter_idxs = None
     else:
         writeback_idxs, writeback_size, finalize_scatter_idxs = None, None, None
-    # some transposition variants aren't supported
-    if preprocessing_features.w_want_n_major:
-        w = fast_contiguous(w)
-    elif preprocessing_features.w_want_k_major:
+    if preprocessing_features.w_want_k_major:
         w = fast_contiguous(w.transpose(-1, -2)).transpose(-1, -2)
     # preprocess routing information and ptr lookup table
     M = x.shape[1] if gather_indx is None else gather_indx.src_indx.shape[0]
@@ -597,8 +584,7 @@ def apply_allocation(allocation: MatmulAllocation, output):
 
 def _create_tma_descriptors(
     x: torch.Tensor,
-    x_tensor: torch.Tensor,
-    w_tensor: torch.Tensor,
+    w: torch.Tensor,
     mx_tensor: Optional[torch.Tensor],
     routing_data: RoutingData,
     mx_ctx: MicroscalingCtx,
@@ -624,21 +610,21 @@ def _create_tma_descriptors(
     if (use_host_tma_descriptors):
         if USE_GATHER_TMA or X_USE_LOAD_TMA:
             x_desc = TensorDescriptorBuilder.create_input_descriptor(
-                    x_tensor, K, x.stride(1), x.stride(2),
+                    x, K, x.stride(1), x.stride(2),
                     opt_flags.block_k, opt_flags.block_m,
                     USE_GATHER_TMA, X_USE_LOAD_TMA
                 )
         descriptors.append(x_desc)
         if (expt_data is not None and len(expt_data.block_pid_map) > 0):
             w_desc = TensorDescriptorBuilder.create_weight_descriptor(
-                    w_tensor, opt_flags.block_k, opt_flags.block_n, w_transpose
+                    w, opt_flags.block_k, opt_flags.block_n, w_transpose
                 )
-            is_microscaled_format = (mx_ctx.weight_scale is not None) and (w_tensor.dtype == torch.uint8)
+            is_microscaled_format = (mx_ctx.weight_scale is not None) and (w.dtype == torch.uint8)
             if is_microscaled_format:
                 # Pad the inner shape to 128 for mxfp4 weights
                 # for mixed precision fp8 x mxfp4 compute
                 pad = 128
-                dim_to_pad = -1 if w_transpose else -2
+                dim_to_pad = -1
                 old_size = w_desc.shape[dim_to_pad]
                 padded_size = math.ceil(old_size / pad) * pad
                 if padded_size != old_size:
@@ -658,7 +644,7 @@ def _create_tma_descriptors(
     # TODO: Currently all or none, instead should support a mixture
     # of host and device descriptors
     if None in descriptors or len(descriptors) == 0:
-        descriptors = [x_tensor, w_tensor, mx_tensor]
+        descriptors = [x, w, mx_tensor]
         use_host_tma_descriptors = False
     if opt_flags.is_persistent:
         opt_flags.target_kernel_kwargs["USE_HOST_TMA_DESCRIPTORS"] = use_host_tma_descriptors
@@ -772,9 +758,7 @@ def matmul_ogs(x, w, bias,
     USE_GATHER_TMA = HAS_TMA_GS and gather_indx is not None
     X_USE_LOAD_TMA = gather_indx is None and not USE_GATHER_TMA
     _, x_tensor, w_tensor, mx_tensor = _create_tma_descriptors(
-        x=x,
-        x_tensor=flex.lhs_data.reinterpret(x),
-        w_tensor=flex.rhs_data.reinterpret(w),
+        x=x, w=w,
         mx_tensor=mx_ctx.weight_scale,
         routing_data=routing_data,
         mx_ctx=mx_ctx,
@@ -790,7 +774,10 @@ def matmul_ogs(x, w, bias,
         w_transpose=w.stride(2) != 1,
         mx_transpose=mx_scale_stride_n != 1,
     )
-
+    if isinstance(x_tensor, torch.Tensor):
+        x_tensor = flex.lhs_data.reinterpret(x)
+    if isinstance(w_tensor, torch.Tensor):
+        w_tensor = flex.rhs_data.reinterpret(w)
     (kernels._p_matmul_ogs if opt_flags.is_persistent else kernels._matmul_ogs)[(n_cta,)](
                    flex.out_data.reinterpret(memory["output"]),
                    flex.out_data.reinterpret(out0), *out0.stride(),

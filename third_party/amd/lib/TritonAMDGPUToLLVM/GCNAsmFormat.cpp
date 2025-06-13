@@ -82,6 +82,7 @@ mlir::Value GCNBuilder::launch(RewriterBase &rewriter, Location loc, Type resTy,
       getConstraints(),             // constraints
       hasSideEffect,                // has_side_effects
       isAlignStack,                 // is_align_stack
+      LLVM::TailCallKind::None,
       LLVM::AsmDialectAttr::get(ctx,
                                 LLVM::AsmDialect::AD_ATT), // asm_dialect
       ArrayAttr::get(ctx, attrs)                           // operand_attrs

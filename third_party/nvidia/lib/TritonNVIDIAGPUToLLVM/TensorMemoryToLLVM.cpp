@@ -884,6 +884,23 @@ struct MemDescSubviewOpConversion
   }
 };
 
+class MemDescReinterpretOpConversion
+    : public ConvertOpToLLVMPattern<MemDescReinterpretOp> {
+public:
+  using ConvertOpToLLVMPattern::ConvertOpToLLVMPattern;
+
+  LogicalResult
+  matchAndRewrite(MemDescReinterpretOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    if (!isa<triton::nvidia_gpu::TensorMemoryEncodingAttr>(
+            op.getSrc().getType().getEncoding())) {
+      return failure();
+    }
+    rewriter.replaceOp(op, adaptor.getSrc());
+    return success();
+  }
+};
+
 struct TMEMSubSliceOpConversion
     : public ConvertOpToLLVMPattern<triton::nvidia_gpu::TMEMSubSliceOp> {
   using ConvertOpToLLVMPattern<
@@ -937,5 +954,6 @@ void mlir::triton::NVIDIA::populateTensorMemorySubviewOpToLLVMPattern(
     LLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
     PatternBenefit benefit) {
   patterns.add<MemDescSubviewOpConversion>(typeConverter, benefit);
+  patterns.add<MemDescReinterpretOpConversion>(typeConverter, benefit);
   return;
 }

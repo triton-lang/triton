@@ -637,6 +637,8 @@ class CodeGenerator(ast.NodeVisitor):
         if _is_triton_tensor(rhs):
             reverse_method_name = re.sub(r"__(.*)__", r"__r\1__", method_name)
             return getattr(rhs, reverse_method_name)(lhs, _semantic=self.semantic)
+        if not isinstance(lhs, (constexpr, language.tuple)) and isinstance(rhs, constexpr):
+            lhs = constexpr(lhs)
         return getattr(lhs, method_name)(rhs)
 
     def visit_BinOp(self, node):
@@ -1457,9 +1459,12 @@ class CodeGenerator(ast.NodeVisitor):
 
         return ret
 
+    from ..experimental.gluon import language as ttgl
     statically_implemented_functions: Dict[object, Callable[[ast.Call], Any]] = {
         language.core.static_assert: execute_static_assert,
         language.core.static_print: static_executor(print),
+        ttgl.static_assert: execute_static_assert,
+        ttgl.static_print: static_executor(print),
         int: static_executor(int),
         len: static_executor(len),
     }
