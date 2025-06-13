@@ -3,21 +3,26 @@ import hashlib
 import importlib.util
 import sys
 from argparse import ArgumentParser
+from dataclasses import dataclass
 from pathlib import Path
 from typing import List
+import glob
 
 import triton
 import triton.backends
 
 
-def _is_hip():
-    return triton.runtime.driver.active.get_current_target().backend == "hip"
+@dataclass
+class CompileArgs:
+    path: str = ''
+    kernel_name: str = ''
+    signature: str = ''
+    grid: str = ''
+    num_warps: int = 1
+    num_stages: int = 3
+    out_name: str = None
+    out_path: Path = None
 
-
-if _is_hip():
-    from triton.backends.amd.driver import ty_to_cpp
-else:
-    from triton.backends.nvidia.driver import ty_to_cpp
 
 desc = """
 Triton ahead-of-time compiler:
@@ -46,38 +51,29 @@ used to run this `compile.py` script
 """
 
 
-def compile_kernel(
-    path,
-    kernel_name: str,
-    signature: str,
-    grid: str,
-    num_warps: int = 1,
-    num_stages: int = 3,
-    out_name: str = None,
-    out_path: Path = None,
-):
-    out_name = out_name if out_name else kernel_name
-    out_path = out_path if out_path else Path(out_name)
+def compile_kernel(args: CompileArgs):
+    out_name = args.out_name if args.out_name else args.kernel_name
+    out_path = args.out_path if args.out_path else Path(out_name)
 
     # execute python sources and extract functions wrapped in JITFunction
-    arg_path = Path(path)
+    arg_path = Path(args.path)
     sys.path.insert(0, str(arg_path.parent))
     spec = importlib.util.spec_from_file_location(arg_path.stem, arg_path)
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
-    kernel = getattr(mod, kernel_name)
-    grid = grid.split(",")
+    kernel = getattr(mod, args.kernel_name)
+    grid = args.grid.split(",")
     assert len(grid) == 3
 
     # validate and parse signature
-    signature = list(map(lambda s: s.strip(" "), signature.split(",")))
+    signature = list(map(lambda s: s.strip(" "), args.signature.split(",")))
 
     def hash_signature(signature: List[str]):
         m = hashlib.sha256()
         m.update(" ".join(signature).encode())
         return m.hexdigest()[:8]
 
-    meta_sig = f"warps{num_warps}xstages{num_stages}"
+    meta_sig = f"warps{args.num_warps}xstages{args.num_stages}"
     sig_hash = hash_signature(signature + [meta_sig])
 
     def constexpr(s):
@@ -105,7 +101,7 @@ def compile_kernel(
         signature[key] = 'constexpr'
     const_sig = 'x'.join([str(v) for v in constants.values()])
     doc_string = [f"{k}={v}" for k, v in constants.items()]
-    doc_string += [f"num_warps={num_warps}", f"num_stages={num_stages}"]
+    doc_string += [f"num_warps={args.num_warps}", f"num_stages={args.num_stages}"]
     # compile ast into cubin
     for h in hints.values():
         assert h in [1, 16], f"Only 1 and 16 are valid hints, got {h}"
@@ -114,11 +110,11 @@ def compile_kernel(
 
     target = triton.runtime.driver.active.get_current_target()
     backend = triton.compiler.make_backend(target)
-    kwargs = {"num_warps": num_warps, "num_stages": num_stages}
+    kwargs = {"num_warps": args.num_warps, "num_stages": args.num_stages}
     opts = backend.parse_options(kwargs)
     ccinfo = triton.compile(src, target=target, options=opts.__dict__)
 
-    if not _is_hip() and ccinfo.metadata.global_scratch_size > 0:
+    if getattr(ccinfo.metadata, "global_scratch_size", 0) > 0:
         raise RuntimeError("AOT compiling kernels with global scratch requirements is not yet implemented")
 
     arg_names = []
@@ -144,45 +140,57 @@ def compile_kernel(
         if hints.get((i, ), None) == 16:
             suffix += 'd'
     func_name = '_'.join([out_name, sig_hash, suffix])
-    if _is_hip():
-        asm = ccinfo.asm["hsaco"]  # store binary data once
-    else:
-        asm = ccinfo.asm["cubin"]  # store binary data once
+
+    asm = ccinfo.asm[backend.binary_ext]  # store binary data once
     hex_ = str(binascii.hexlify(asm))[2:-1]
 
     params = {
-        "kernel_name": func_name,
-        "triton_kernel_name": kernel_name,
-        "bin_size": len(asm),
-        "bin_data": ", ".join([f"0x{x}{y}" for x, y in zip(hex_[::2], hex_[1::2])]),
-        "signature": ", ".join([f"{ty_to_cpp(ty)} {name}" for name, ty in zip(arg_names_not_1, arg_types_not_1)]),
-        "full_signature": ", ".join([f"{ty_to_cpp(ty)} {name}" for name, ty in zip(arg_names, arg_types)]),
-        "arg_pointers": ", ".join([f"&{arg}" for arg in arg_names_not_1] + ["&global_scratch"]),
-        "num_args": len(arg_names_not_1) + 1,
-        "kernel_docstring": doc_string,
-        "shared": ccinfo.metadata.shared,
-        "num_warps": num_warps,
-        "algo_info": '_'.join([const_sig, meta_sig]),
-        "gridX": grid[0],
-        "gridY": grid[1],
-        "gridZ": grid[2],
-        "_placeholder": "",
+        "kernel_name":
+        func_name,
+        "triton_kernel_name":
+        args.kernel_name,
+        "bin_size":
+        len(asm),
+        "bin_data":
+        ", ".join([f"0x{x}{y}" for x, y in zip(hex_[::2], hex_[1::2])]),
+        "signature":
+        ", ".join([
+            f"{triton.runtime.driver.active.ty_to_cpp(ty)} {name}"
+            for name, ty in zip(arg_names_not_1, arg_types_not_1)
+        ]),
+        "full_signature":
+        ", ".join([f"{triton.runtime.driver.active.ty_to_cpp(ty)} {name}" for name, ty in zip(arg_names, arg_types)]),
+        "arg_pointers":
+        ", ".join([f"&{arg}" for arg in arg_names_not_1] + ["&global_scratch"]),
+        "num_args":
+        len(arg_names_not_1) + 1,
+        "kernel_docstring":
+        doc_string,
+        "shared":
+        ccinfo.metadata.shared,
+        "num_warps":
+        args.num_warps,
+        "algo_info":
+        '_'.join([const_sig, meta_sig]),
+        "gridX":
+        grid[0],
+        "gridY":
+        grid[1],
+        "gridZ":
+        grid[2],
+        "_placeholder":
+        "",
     }
     output_files = []
-    if _is_hip():
-        for ext in ['h', 'cpp']:
-            template_path = Path(__file__).parent / "extra" / "hip" / f"compile.{ext}"
-            output_file = out_path.with_suffix(f".{sig_hash}_{suffix}.{ext}")
-            output_files.append(output_file)
-            with output_file.open("w") as fp:
-                fp.write(Path(template_path).read_text().format(**params))
-    else:
-        for ext in ['h', 'c']:
-            template_path = Path(__file__).parent / "extra" / "cuda" / f"compile.{ext}"
-            output_file = out_path.with_suffix(f".{sig_hash}_{suffix}.{ext}")
-            output_files.append(output_file)
-            with output_file.open("w") as fp:
-                fp.write(Path(template_path).read_text().format(**params))
+    backend_name = target.backend
+    files = glob.glob(str(Path(__file__).parent / "extra" / backend_name / "compile.*"))
+    for file in files:
+        ext = file.split(".")[-1]
+        output_file = out_path.with_suffix(f".{sig_hash}_{suffix}.{ext}")
+        output_files.append(output_file)
+        with output_file.open("w") as fp:
+            fp.write(Path(file).read_text().format(**params))
+
     return func_name, *output_files
 
 
@@ -202,4 +210,4 @@ if __name__ == "__main__":
     parser.add_argument("--signature", "-s", type=str, help="Signature of the kernel", required=True)
     parser.add_argument("--grid", "-g", type=str, help="Launch grid of the kernel", required=True)
     args = parser.parse_args()
-    compile_kernel(**vars(args))
+    compile_kernel(CompileArgs(**vars(args)))

@@ -682,6 +682,10 @@ class CudaDriver(GPUDriver):
         except ImportError:
             return False
 
+    def ty_to_cpp(self, ty: str) -> str:
+        from triton.backends.nvidia.driver import ty_to_cpp
+        return ty_to_cpp(ty)
+
     def get_benchmarker(self):
         from triton.testing import do_bench
         return do_bench
