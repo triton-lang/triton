@@ -76,7 +76,15 @@ def _attn_fwd_inner(acc, l_i, m_i, q,  #
         alpha = tl.math.exp2(m_i - m_ij)
         l_ij = tl.sum(p, 1)
         # -- update output accumulator --
-        acc = acc * alpha[:, None]
+        if warp_specialize and BLOCK_M == 128 and HEAD_DIM == 128:
+            BM: tl.constexpr = acc.shape[0]
+            BN: tl.constexpr = acc.shape[1]
+            acc0, acc1 = acc.reshape([BM, 2, BN // 2]).permute(0, 2, 1).split()
+            acc0 = acc0 * alpha[:, None]
+            acc1 = acc1 * alpha[:, None]
+            acc = tl.join(acc0, acc1).permute(0, 2, 1).reshape([BM, BN])
+        else:
+            acc = acc * alpha[:, None]
         # prepare p and v for the dot
         v = desc_v.load([offsetkv_y, 0])
         p = p.to(dtype)
@@ -119,7 +127,7 @@ configs = [
 if "PYTEST_VERSION" in os.environ:
     # Use a single config in testing for reproducibility
     configs = [
-        triton.Config(dict(BLOCK_M=64, BLOCK_N=64), num_stages=2, num_warps=4, pre_hook=_host_descriptor_pre_hook),
+        triton.Config(dict(BLOCK_M=128, BLOCK_N=64), num_stages=2, num_warps=4, pre_hook=_host_descriptor_pre_hook),
     ]
 
 
@@ -505,7 +513,10 @@ class _attention(torch.autograd.Function):
 
         ctx.grid = grid
         if is_cuda() and warp_specialize:
-            extra_kern_args["maxnreg"] = 80
+            if HEAD_DIM_K == 128 and q.dtype == torch.float16:
+                extra_kern_args["maxnreg"] = 168
+            else:
+                extra_kern_args["maxnreg"] = 80
         _attn_fwd[grid](
             sm_scale, M,  #
             q.shape[0], q.shape[1],  #
@@ -571,7 +582,7 @@ attention = _attention.apply
 
 @pytest.mark.parametrize("Z", [1, 4])
 @pytest.mark.parametrize("H", [2, 48])
-@pytest.mark.parametrize("N_CTX", [128, 1024, (2 if is_hip() else 4) * 1024])
+@pytest.mark.parametrize("N_CTX", [256, 1024, (2 if is_hip() else 4) * 1024])
 @pytest.mark.parametrize("HEAD_DIM", [64, 128])
 @pytest.mark.parametrize("causal", [True])  # FIXME: Non-causal tests do not pass at the moment.
 @pytest.mark.parametrize("warp_specialize", [False, True] if is_blackwell() else [False])
@@ -620,36 +631,35 @@ except BaseException:
     HAS_FLASH = False
 
 TORCH_HAS_FP8 = hasattr(torch, 'float8_e5m2')
-BATCH, N_HEADS, HEAD_DIM = 4, 32, 64
+BATCH, N_HEADS = 4, 32
 # vary seq length for fixed head and batch=4
 configs = []
-for mode in ["fwd", "bwd"]:
-    for causal in [True, False]:
-        for warp_specialize in [False, True] if is_blackwell() else [False]:
-            if mode == "bwd" and not causal:
-                continue
-            configs.append(
-                triton.testing.Benchmark(
-                    x_names=["N_CTX"],
-                    x_vals=[2**i for i in range(10, 15)],
-                    line_arg="provider",
-                    line_vals=["triton-fp16"] + (["triton-fp8"] if TORCH_HAS_FP8 else []) +
-                    (["flash"] if HAS_FLASH else []),
-                    line_names=["Triton [FP16]"] + (["Triton [FP8]"] if TORCH_HAS_FP8 else []) +
-                    (["Flash-2"] if HAS_FLASH else []),
-                    styles=[("red", "-"), ("blue", "-"), ("green", "-")],
-                    ylabel="TFLOPS",
-                    plot_name=
-                    f"fused-attention-batch{BATCH}-head{N_HEADS}-d{HEAD_DIM}-{mode}-causal={causal}-warp_specialize={warp_specialize}",
-                    args={
-                        "H": N_HEADS,
-                        "BATCH": BATCH,
-                        "HEAD_DIM": HEAD_DIM,
-                        "mode": mode,
-                        "causal": causal,
-                        "warp_specialize": warp_specialize,
-                    },
-                ))
+for HEAD_DIM in [64, 128]:
+    for mode in ["fwd"]:
+        for causal in [True]:
+            for warp_specialize in [False, True] if is_blackwell() else [False]:
+                configs.append(
+                    triton.testing.Benchmark(
+                        x_names=["N_CTX"],
+                        x_vals=[2**i for i in range(10, 15)],
+                        line_arg="provider",
+                        line_vals=["triton-fp16"] + (["triton-fp8"] if TORCH_HAS_FP8 else []) +
+                        (["flash"] if HAS_FLASH else []),
+                        line_names=["Triton [FP16]"] + (["Triton [FP8]"] if TORCH_HAS_FP8 else []) +
+                        (["Flash-2"] if HAS_FLASH else []),
+                        styles=[("red", "-"), ("blue", "-"), ("green", "-")],
+                        ylabel="TFLOPS",
+                        plot_name=
+                        f"fused-attention-batch{BATCH}-head{N_HEADS}-d{HEAD_DIM}-{mode}-causal={causal}-warp_specialize={warp_specialize}",
+                        args={
+                            "H": N_HEADS,
+                            "BATCH": BATCH,
+                            "HEAD_DIM": HEAD_DIM,
+                            "mode": mode,
+                            "causal": causal,
+                            "warp_specialize": warp_specialize,
+                        },
+                    ))
 
 
 @triton.testing.perf_report(configs)
