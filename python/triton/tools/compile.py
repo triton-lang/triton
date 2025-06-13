@@ -6,12 +6,13 @@ from argparse import ArgumentParser
 from dataclasses import dataclass
 from pathlib import Path
 from typing import List
-import glob
 
 import triton
 import triton.backends
 
-
+'''
+Argument class to call compile_kernel() from python code.
+'''
 @dataclass
 class CompileArgs:
     path: str = ''
@@ -50,6 +51,23 @@ NOTE: when resolving the scope of /path/to/kernel.py, the file will be executed 
 used to run this `compile.py` script
 """
 
+def main():
+    # command-line arguments
+    parser = ArgumentParser(description=desc)
+    parser.add_argument("path",
+                        help="Path to Python source containing desired kernel in its scope. File will be executed.")
+    parser.add_argument("--kernel-name", "-n", type=str, default="", help="Name of the kernel to compile",
+                        required=True)
+    parser.add_argument("--num-warps", "-w", type=int, default=1, help="Number of warps to launch the kernel")
+    parser.add_argument("--num-stages", "-ns", type=int, default=3,
+                        help="Number of stages (meta-parameter of the kernel)")
+    parser.add_argument("--out-name", "-on", type=str, default=None, help="Out name for the compiled kernel")
+    parser.add_argument("--out-path", "-o", type=Path, default=None, help="Out filename")
+    parser.add_argument("--signature", "-s", type=str, help="Signature of the kernel", required=True)
+    parser.add_argument("--grid", "-g", type=str, help="Launch grid of the kernel", required=True)
+    cli_args = parser.parse_args()
+    args = CompileArgs(**vars(cli_args))  # A sanity check to ensure class CompileArgs is updated as well.
+    compile_kernel(args)
 
 def compile_kernel(args: CompileArgs):
     out_name = args.out_name if args.out_name else args.kernel_name
@@ -140,74 +158,42 @@ def compile_kernel(args: CompileArgs):
         if hints.get((i, ), None) == 16:
             suffix += 'd'
     func_name = '_'.join([out_name, sig_hash, suffix])
-
     asm = ccinfo.asm[backend.binary_ext]  # store binary data once
+
     hex_ = str(binascii.hexlify(asm))[2:-1]
 
+    ty_to_cpp = triton.runtime.driver.active.ty_to_cpp
+
     params = {
-        "kernel_name":
-        func_name,
-        "triton_kernel_name":
-        args.kernel_name,
-        "bin_size":
-        len(asm),
-        "bin_data":
-        ", ".join([f"0x{x}{y}" for x, y in zip(hex_[::2], hex_[1::2])]),
-        "signature":
-        ", ".join([
-            f"{triton.runtime.driver.active.ty_to_cpp(ty)} {name}"
-            for name, ty in zip(arg_names_not_1, arg_types_not_1)
-        ]),
-        "full_signature":
-        ", ".join([f"{triton.runtime.driver.active.ty_to_cpp(ty)} {name}" for name, ty in zip(arg_names, arg_types)]),
-        "arg_pointers":
-        ", ".join([f"&{arg}" for arg in arg_names_not_1] + ["&global_scratch"]),
-        "num_args":
-        len(arg_names_not_1) + 1,
-        "kernel_docstring":
-        doc_string,
-        "shared":
-        ccinfo.metadata.shared,
-        "num_warps":
-        args.num_warps,
-        "algo_info":
-        '_'.join([const_sig, meta_sig]),
-        "gridX":
-        grid[0],
-        "gridY":
-        grid[1],
-        "gridZ":
-        grid[2],
-        "_placeholder":
-        "",
+        "kernel_name": func_name,
+        "triton_kernel_name": args.kernel_name,
+        "bin_size": len(asm),
+        "bin_data": ", ".join([f"0x{x}{y}" for x, y in zip(hex_[::2], hex_[1::2])]),
+        "signature": ", ".join([f"{ty_to_cpp(ty)} {name}" for name, ty in zip(arg_names_not_1, arg_types_not_1)]),
+        "full_signature": ", ".join([f"{ty_to_cpp(ty)} {name}" for name, ty in zip(arg_names, arg_types)]),
+        "arg_pointers": ", ".join([f"&{arg}" for arg in arg_names_not_1] + ["&global_scratch"]),
+        "num_args": len(arg_names_not_1) + 1,
+        "kernel_docstring": doc_string,
+        "shared": ccinfo.metadata.shared,
+        "num_warps": args.num_warps,
+        "algo_info": '_'.join([const_sig, meta_sig]),
+        "gridX": grid[0],
+        "gridY": grid[1],
+        "gridZ": grid[2],
+        "_placeholder": "",
     }
     output_files = []
     backend_name = target.backend
-    files = glob.glob(str(Path(__file__).parent / "extra" / backend_name / "compile.*"))
-    for file in files:
-        ext = file.split(".")[-1]
+    template_dir = Path(__file__).parent / "extra" / backend_name
+    for template_path in template_dir.glob('compile.*'):
+        ext = template_path.suffix
         output_file = out_path.with_suffix(f".{sig_hash}_{suffix}.{ext}")
-        output_files.append(output_file)
         with output_file.open("w") as fp:
-            fp.write(Path(file).read_text().format(**params))
+            fp.write(template_path.read_text().format(**params))
+        output_file.append(output_file)
 
-    return func_name, *output_files
+    return func_name, output_files
 
 
 if __name__ == "__main__":
-
-    # command-line arguments
-    parser = ArgumentParser(description=desc)
-    parser.add_argument("path",
-                        help="Path to Python source containing desired kernel in its scope. File will be executed.")
-    parser.add_argument("--kernel-name", "-n", type=str, default="", help="Name of the kernel to compile",
-                        required=True)
-    parser.add_argument("--num-warps", "-w", type=int, default=1, help="Number of warps to launch the kernel")
-    parser.add_argument("--num-stages", "-ns", type=int, default=3,
-                        help="Number of stages (meta-parameter of the kernel)")
-    parser.add_argument("--out-name", "-on", type=str, default=None, help="Out name for the compiled kernel")
-    parser.add_argument("--out-path", "-o", type=Path, default=None, help="Out filename")
-    parser.add_argument("--signature", "-s", type=str, help="Signature of the kernel", required=True)
-    parser.add_argument("--grid", "-g", type=str, help="Launch grid of the kernel", required=True)
-    args = parser.parse_args()
-    compile_kernel(CompileArgs(**vars(args)))
+    main()
