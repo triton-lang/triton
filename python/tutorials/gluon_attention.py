@@ -24,7 +24,7 @@ from triton.experimental.gluon.language.nvidia.blackwell import (
 
 
 @tl.constexpr_function
-def get_tmem_32x32b_layout(instr_shape, shape, num_warps):
+def get_tmem_32x32b_reg_layout(instr_shape, shape, num_warps):
     assert len(shape) == 2, "expected a 2D tensor"
     assert num_warps in [4, 8], "expected 4 or 8 warps"
     M, N, _ = instr_shape
@@ -100,7 +100,7 @@ def get_nvmma_layout(shape, element_ty, order=[1, 0], fp4_padded=False):
 @tl.constexpr_function
 def get_mma_reg_layout(shape, num_warps, dtype=gl.float32):
     instr_shape = get_mma_instr_shape(shape, dtype)
-    return get_tmem_32x32b_layout(instr_shape, shape, num_warps)
+    return get_tmem_32x32b_reg_layout(instr_shape, shape, num_warps)
 
 
 # ===-----------------------------------------------------------------------===#
@@ -291,8 +291,7 @@ class LoadContext:
     @gluon.jit
     def create(desc, num_buffers: gl.constexpr, num_consumers: gl.constexpr = 1):
         shape: gl.constexpr = desc.block_type.shape
-        smem_layout: gl.constexpr = get_nvmma_layout(shape, desc.dtype)
-        channel = SharedMemoryChannel.create(shape, desc.dtype, smem_layout, num_buffers, num_consumers)
+        channel = SharedMemoryChannel.create(shape, desc.dtype, gl.constexpr(desc.layout), num_buffers, num_consumers)
         channel.initialize_for_producer()
         return LoadContext(desc, channel)
 
@@ -359,7 +358,7 @@ class MMAContext:
 
     @tl.constexpr_function
     def get_reg_layout(self, num_warps):
-        return get_tmem_32x32b_layout(self.instr_shape, self.shape, num_warps)
+        return get_tmem_32x32b_reg_layout(self.instr_shape, self.shape, num_warps)
 
 
 @aggregate
@@ -444,11 +443,11 @@ class AttentionConfig:
         self.o_tmem_layout = gl.constexpr(TensorMemoryLayout((o_instr_shape[0], o_instr_shape[1]), unpacked=True))
         self.p_tmem_layout = gl.constexpr(TensorMemoryLayout((qk_instr_shape[0], qk_instr_shape[1]), unpacked=False))
 
-        self.qk_layout = gl.constexpr(get_tmem_32x32b_layout(qk_instr_shape, self.qk_shape, self.num_warps))
-        self.o_layout = gl.constexpr(get_tmem_32x32b_layout(o_instr_shape, self.o_shape, self.num_warps))
+        self.qk_layout = gl.constexpr(get_tmem_32x32b_reg_layout(qk_instr_shape, self.qk_shape, self.num_warps))
+        self.o_layout = gl.constexpr(get_tmem_32x32b_reg_layout(o_instr_shape, self.o_shape, self.num_warps))
         self.o_splitn_layout = gl.constexpr(
-            get_tmem_32x32b_layout((o_instr_shape[0], o_instr_shape[1] // self.SPLIT_N_FACTOR, o_instr_shape[2]),
-                                   (self.o_shape[0], self.o_shape[1] // self.SPLIT_N_FACTOR), self.num_warps))
+            get_tmem_32x32b_reg_layout((o_instr_shape[0], o_instr_shape[1] // self.SPLIT_N_FACTOR, o_instr_shape[2]),
+                                       (self.o_shape[0], self.o_shape[1] // self.SPLIT_N_FACTOR), self.num_warps))
 
     @gluon.jit
     def get_program(self):
@@ -499,10 +498,9 @@ class AttentionTile:
 
     @gluon.jit
     def create(config):
-        row_layout: gl.constexpr = gl.SliceLayout(1, config.o_splitn_layout)
         acc = gl.full([config.SPLIT_M, config.HEAD_DIM], 0, gl.float32, config.o_layout)
-        m_i = gl.full([config.SPLIT_M], -float("inf"), gl.float32, row_layout)
-        l_i = gl.full([config.SPLIT_M], 1.0, gl.float32, row_layout)
+        m_i = gl.full([config.SPLIT_M], -float("inf"), gl.float32, gl.SliceLayout(1, config.o_splitn_layout))
+        l_i = gl.full([config.SPLIT_M], 1.0, gl.float32, gl.SliceLayout(1, config.qk_layout))
 
         smem_layout: gl.constexpr = get_nvmma_layout((config.SPLIT_M, config.HEAD_DIM), config.dtype)
         q_smem = gl.allocate_shared_memory(config.dtype, (config.SPLIT_M, config.HEAD_DIM), smem_layout)
@@ -516,8 +514,8 @@ class AttentionTile:
 
     @gluon.jit
     def do_epilogue(self, tile_id: gl.constexpr, M, o_smem, desc_o, prog, config):
-        self.m_i += gl.log2(self.l_i)
-        o = self.acc / gl.convert_layout(self.l_i, gl.SliceLayout(1, self.acc.type.layout))[:, None]
+        self.m_i += gl.convert_layout(gl.log2(self.l_i), self.m_i.type.layout)
+        o = self.acc / self.l_i[:, None]
 
         coalesced: gl.constexpr = gl.BlockedLayout([1], [32], [4], [0])
         offs_m = prog.start_m * config.BLOCK_M
@@ -596,7 +594,6 @@ class InnerLoopInfo:
     @gluon.jit
     def consume_result(self, tile):
         tile.acc = self.o_mma_ctx.channel.mem.index(0).load(tile.acc.type.layout)
-        tile.m_i = self.mi_chnl.mem.index(0).load(tile.m_i.type.layout)
         tile.l_i = self.li_smem.load(tile.l_i.type.layout)
 
         self.qk_mma_ctx.release()
@@ -672,7 +669,7 @@ def _attn_fwd_mma_d128(config,  #
 @gluon.jit
 def _attn_fwd_correction_compute(config, mi_consumer, o_consumer, m_i):
     m_ij, mi_consumer = mi_consumer.get(gl.constexpr(gl.SliceLayout(1, config.o_splitn_layout)))
-    alpha = triton.language.math.exp2(m_i - m_ij)
+    alpha = gl.exp2(m_i - m_ij)
 
     o_tmem, o_bar, o_consumer = o_consumer.acquire()
     if config.SPLIT_N_FACTOR == 1:
@@ -710,6 +707,7 @@ def _attn_fwd_correction(config,  #
 
     o0_consumer.acquire()
     o1_consumer.acquire()
+    return (m_i0, m_i1)
 
 
 @gluon.jit
@@ -759,7 +757,6 @@ def _softmax_tile(tile_id: gl.constexpr, config, info, STAGE: gl.constexpr):
         l_i = l_i * alpha + l_ij
         m_i = m_ij
 
-    info.mi_chnl.mem.index(0).store(m_i)
     info.li_smem.store(l_i)
 
 
@@ -784,7 +781,7 @@ def _attn_fwd_inner_d128(config, info0, info1, m_i0, m_i1,  #
     k_load_ctx = LoadContext.create(desc_k, num_buffers=2, num_consumers=2)
     v_load_ctx = LoadContext.create(desc_v, num_buffers=2, num_consumers=2)
 
-    gl.warp_specialize((
+    m_i0, m_i1 = gl.warp_specialize((
         config,
         (m_i0, m_i1),
         (info0, info1),
@@ -800,6 +797,8 @@ def _attn_fwd_inner_d128(config, info0, info1, m_i0, m_i1,  #
 
     k_load_ctx.release()
     v_load_ctx.release()
+
+    return m_i0, m_i1
 
 
 @gluon.jit(do_not_specialize=["Z"])
@@ -826,18 +825,19 @@ def _gluon_attn_d128(sm_scale, M, Z, H, N_CTX,  #
     info1 = InnerLoopInfo.create(config, tile1)
 
     if STAGE & 1:
-        _attn_fwd_inner_d128(config, info0, info1, tile0.m_i, tile1.m_i, desc_k, desc_v, 4 - STAGE)
+        tile0.m_i, tile1.m_i = _attn_fwd_inner_d128(config, info0, info1, tile0.m_i, tile1.m_i, desc_k, desc_v,
+                                                    4 - STAGE)
     if STAGE & 2:
         tile0 = info0.consume_result(tile0)
         info0 = InnerLoopInfo.create(config, tile0)
         tile1 = info1.consume_result(tile1)
         info1 = InnerLoopInfo.create(config, tile1)
-        _attn_fwd_inner_d128(config, info0, info1, tile0.m_i, tile1.m_i, desc_k, desc_v, 2)
+        tile0.m_i, tile1.m_i = _attn_fwd_inner_d128(config, info0, info1, tile0.m_i, tile1.m_i, desc_k, desc_v, 2)
 
     tile0.q_smem._keep_alive()
     tile1.q_smem._keep_alive()
 
-    o_smem = gl.allocate_shared_memory(desc_o.dtype, config.o_shape, get_nvmma_layout(config.o_shape, desc_o.dtype))
+    o_smem = gl.allocate_shared_memory(desc_o.dtype, config.o_shape, gl.constexpr(desc_o.layout))
     info0.consume_result(tile0).do_epilogue(0, M, o_smem, desc_o, prog, config)
     info1.consume_result(tile1).do_epilogue(1, M, o_smem, desc_o, prog, config)
     o_smem._keep_alive()
@@ -1000,7 +1000,7 @@ def _gluon_attn_d64(sm_scale, M, Z, H, N_CTX,  #
 
     tile.q_smem._keep_alive()
 
-    o_smem = gl.allocate_shared_memory(desc_o.dtype, config.o_shape, get_nvmma_layout(config.o_shape, desc_o.dtype))
+    o_smem = gl.allocate_shared_memory(desc_o.dtype, config.o_shape, gl.constexpr(desc_o.layout))
     info.consume_result(tile).do_epilogue(0, M, o_smem, desc_o, prog, config)
     o_smem._keep_alive()
 
