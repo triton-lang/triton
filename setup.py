@@ -67,13 +67,14 @@ class BackendInstaller:
             assert backend_name in os.listdir(
                 root_dir), f"{backend_name} is requested for install but not present in {root_dir}"
 
-            try:
-                subprocess.run(["git", "submodule", "update", "--init", f"{backend_name}"], check=True,
-                               stdout=subprocess.DEVNULL, cwd=root_dir)
-            except subprocess.CalledProcessError:
-                pass
-            except FileNotFoundError:
-                pass
+            if (Path(__file__).parent / ".git").is_dir():
+                try:
+                    subprocess.run(["git", "submodule", "update", "--init", f"{backend_name}"], check=True,
+                                   stdout=subprocess.DEVNULL, cwd=root_dir)
+                except subprocess.CalledProcessError:
+                    pass
+                except FileNotFoundError:
+                    pass
 
             backend_src_dir = os.path.join(root_dir, backend_name)
 
