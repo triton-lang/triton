@@ -21,7 +21,7 @@ from dataclasses import dataclass
 import triton
 import triton.language as tl
 from triton.tools.tensor_descriptor import TensorDescriptor
-from gluon_attention import _gluon_attn
+from gluon_attention import _gluon_attn_d128, _gluon_attn_d64
 from gluon_attention import make_tensor_desc as make_gluon_tensor_desc
 from gluon_attention import torch_dtype_to_triton
 
@@ -80,7 +80,15 @@ def _attn_fwd_inner(acc, l_i, m_i, q,  #
         alpha = tl.math.exp2(m_i - m_ij)
         l_ij = tl.sum(p, 1)
         # -- update output accumulator --
-        acc = acc * alpha[:, None]
+        if warp_specialize and BLOCK_M == 128 and HEAD_DIM == 128:
+            BM: tl.constexpr = acc.shape[0]
+            BN: tl.constexpr = acc.shape[1]
+            acc0, acc1 = acc.reshape([BM, 2, BN // 2]).permute(0, 2, 1).split()
+            acc0 = acc0 * alpha[:, None]
+            acc1 = acc1 * alpha[:, None]
+            acc = tl.join(acc0, acc1).permute(0, 2, 1).reshape([BM, BN])
+        else:
+            acc = acc * alpha[:, None]
         # prepare p and v for the dot
         v = desc_v.load([offsetkv_y, 0])
         p = p.to(dtype)
@@ -120,7 +128,7 @@ configs = [
     for s in NUM_STAGES_OPTIONS \
     for w in [4, 8]\
 ]
-if "PYTEST_VERSION" in os.environ or True:
+if "PYTEST_VERSION" in os.environ:
     # Use a single config in testing for reproducibility
     configs = [
         triton.Config(dict(BLOCK_M=128, BLOCK_N=64), num_stages=2, num_warps=4, pre_hook=_host_descriptor_pre_hook),
@@ -496,16 +504,17 @@ class _attention(torch.autograd.Function):
         if config.use_gluon:
             assert is_blackwell(), "Gluon attention only works on Blackwell"
             y_dim = q.shape[0] * q.shape[1] * q.shape[2]
-            BLOCK_M = 256
+            BLOCK_M = 256 if HEAD_DIM_K == 128 else 128
+            SPLIT_M_FACTOR = 2 if HEAD_DIM_K == 128 else 1
             BLOCK_N = min(128, HEAD_DIM_K)
             desc_q = make_gluon_tensor_desc(q, shape=[y_dim, HEAD_DIM_K], strides=[HEAD_DIM_K, 1],
-                                            block_shape=[BLOCK_M // 2, HEAD_DIM_K])
+                                            block_shape=[BLOCK_M // SPLIT_M_FACTOR, HEAD_DIM_K])
             desc_v = make_gluon_tensor_desc(v, shape=[y_dim, HEAD_DIM_K], strides=[HEAD_DIM_K, 1],
                                             block_shape=[BLOCK_N, HEAD_DIM_K])
             desc_k = make_gluon_tensor_desc(k, shape=[y_dim, HEAD_DIM_K], strides=[HEAD_DIM_K, 1],
                                             block_shape=[BLOCK_N, HEAD_DIM_K])
             desc_o = make_gluon_tensor_desc(o, shape=[y_dim, HEAD_DIM_K], strides=[HEAD_DIM_K, 1],
-                                            block_shape=[BLOCK_M // 2, HEAD_DIM_K])
+                                            block_shape=[BLOCK_M // SPLIT_M_FACTOR, HEAD_DIM_K])
 
         elif supports_host_descriptor():
             # Note that on Hopper we cannot perform a FP8 dot with a non-transposed second tensor
@@ -532,15 +541,27 @@ class _attention(torch.autograd.Function):
 
         ctx.grid = grid
         if is_cuda() and config.warp_specialize:
-            extra_kern_args["maxnreg"] = 80
+            if HEAD_DIM_K == 128 and q.dtype == torch.float16:
+                extra_kern_args["maxnreg"] = 168
+            else:
+                extra_kern_args["maxnreg"] = 80
         if config.use_gluon:
-            _gluon_attn[grid](  #
-                sm_scale, M, q.shape[0], q.shape[1], q.shape[2],  #
-                desc_q, desc_k, desc_v, desc_o,  #
-                HEAD_DIM_K, BLOCK_M, BLOCK_N,  #
-                stage, torch_dtype_to_triton(q.dtype),  #
-                num_warps=4, threads_per_warp=32,  #
-                maxnreg=None)
+            if HEAD_DIM_K == 128:
+                _gluon_attn_d128[grid](  #
+                    sm_scale, M, q.shape[0], q.shape[1], q.shape[2],  #
+                    desc_q, desc_k, desc_v, desc_o,  #
+                    HEAD_DIM_K, BLOCK_M, BLOCK_N,  #
+                    stage, torch_dtype_to_triton(q.dtype),  #
+                    num_warps=4, threads_per_warp=32,  #
+                    maxnreg=None)
+            else:
+                _gluon_attn_d64[grid](  #
+                    sm_scale, M, q.shape[0], q.shape[1], q.shape[2],  #
+                    desc_q, desc_k, desc_v, desc_o,  #
+                    HEAD_DIM_K, BLOCK_M, BLOCK_N,  #
+                    stage, torch_dtype_to_triton(q.dtype),  #
+                    num_warps=4, threads_per_warp=32,  #
+                    maxnreg=128)
         else:
             _attn_fwd[grid](
                 sm_scale, M,  #
@@ -661,34 +682,35 @@ except BaseException:
     HAS_FLASH = False
 
 TORCH_HAS_FP8 = hasattr(torch, 'float8_e5m2')
-BATCH, N_HEADS, HEAD_DIM = 4, 32, 128
+BATCH, N_HEADS = 4, 32
 # vary seq length for fixed head and batch=4
 configs = []
-for mode in ["fwd", "bwd"]:
-    for causal in [True]:
-        for config in attn_configs:
-            configs.append(
-                triton.testing.Benchmark(
-                    x_names=["N_CTX"],
-                    x_vals=[2**i for i in range(10, 15)],
-                    line_arg="provider",
-                    line_vals=["triton-fp16"] + (["triton-fp8"] if TORCH_HAS_FP8 else []) +
-                    (["flash"] if HAS_FLASH else []),
-                    line_names=["Triton [FP16]"] + (["Triton [FP8]"] if TORCH_HAS_FP8 else []) +
-                    (["Flash-2"] if HAS_FLASH else []),
-                    styles=[("red", "-"), ("blue", "-"), ("green", "-")],
-                    ylabel="TFLOPS",
-                    plot_name=
-                    f"fused-attention-batch{BATCH}-head{N_HEADS}-d{HEAD_DIM}-{mode}-causal={causal}-config={repr(config)}",
-                    args={
-                        "H": N_HEADS,
-                        "BATCH": BATCH,
-                        "HEAD_DIM": HEAD_DIM,
-                        "mode": mode,
-                        "causal": causal,
-                        "config": config,
-                    },
-                ))
+for HEAD_DIM in [64, 128]:
+    for mode in ["fwd"]:
+        for causal in [True]:
+            for config in attn_configs:
+                configs.append(
+                    triton.testing.Benchmark(
+                        x_names=["N_CTX"],
+                        x_vals=[2**i for i in range(10, 15)],
+                        line_arg="provider",
+                        line_vals=["triton-fp16"] + (["triton-fp8"] if TORCH_HAS_FP8 else []) +
+                        (["flash"] if HAS_FLASH else []),
+                        line_names=["Triton [FP16]"] + (["Triton [FP8]"] if TORCH_HAS_FP8 else []) +
+                        (["Flash-2"] if HAS_FLASH else []),
+                        styles=[("red", "-"), ("blue", "-"), ("green", "-")],
+                        ylabel="TFLOPS",
+                        plot_name=
+                        f"fused-attention-batch{BATCH}-head{N_HEADS}-d{HEAD_DIM}-{mode}-causal={causal}-config={repr(config)}",
+                        args={
+                            "H": N_HEADS,
+                            "BATCH": BATCH,
+                            "HEAD_DIM": HEAD_DIM,
+                            "mode": mode,
+                            "causal": causal,
+                            "config": config,
+                        },
+                    ))
 
 
 @triton.testing.perf_report(configs)
