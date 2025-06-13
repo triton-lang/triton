@@ -729,7 +729,7 @@ class JITFunction(KernelInterface[T]):
 
     def preload(self, specialization_data):
         from ..compiler import compile, ASTSource
-        from triton.backends.compiler import AttrsDescriptor
+        from triton.backends.triton_x.npu.compiler import AscendAttrsDescriptor
         import json
         import triton.language as tl
         device = driver.active.get_current_device()
@@ -742,7 +742,7 @@ class JITFunction(KernelInterface[T]):
             for key, value in deserialized_obj['constants'].items()
         }
         signature = dict(deserialized_obj['signature'].items())
-        src = ASTSource(self, signature, constants, AttrsDescriptor.from_dict(deserialized_obj['attrs']))
+        src = ASTSource(self, signature, constants, AscendAttrsDescriptor.from_dict(deserialized_obj['attrs']))
         options = {
             key: tuple(value) if isinstance(value, list) else value
             for key, value in deserialized_obj['options'].items()

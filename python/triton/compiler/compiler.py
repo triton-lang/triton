@@ -69,6 +69,7 @@ def _get_num_warps_from_ir_str(src: str):
 class ASTSource:
 
     def __init__(self, fn, signature, constants=None, attrs=None) -> None:
+        from triton.backends.triton_x.npu.compiler import AscendAttrsDescriptor
         self.fn = fn
         self.ext = "ttir"
         self.name = fn.__name__
@@ -88,7 +89,7 @@ class ASTSource:
                 if not isinstance(k, str):
                     raise TypeError("Constants keys must be string")
         if self.attrs is None:
-            self.attrs = AttrsDescriptor()
+            self.attrs = AscendAttrsDescriptor()
 
     def hash(self):
         sorted_sig = [v for k, v in sorted(self.signature.items())]
