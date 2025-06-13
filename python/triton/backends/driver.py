@@ -16,6 +16,10 @@ class DriverBase(metaclass=ABCMeta):
         pass
 
     @abstractmethod
+    def ty_to_cpp(self, ty: str) -> str:
+        pass
+
+    @abstractmethod
     def get_current_target(self):
         pass
 
