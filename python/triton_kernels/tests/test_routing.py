@@ -19,7 +19,7 @@ n_tokens += [(1152, 911)]
 @pytest.mark.parametrize("n_expts_tot, n_expts_act", [(128, 32), (1500, 8)])
 @pytest.mark.parametrize("use_expt_indx", [False, True])
 @pytest.mark.parametrize("sm_first", [True, False])
-@pytest.mark.skipif(is_hip, reason="Tests are currently broken on AMD")
+@pytest.mark.skipif(is_hip(), reason="Tests are currently broken on AMD")
 def test_op(n_tokens_pad, n_tokens_raw, n_expts_tot, n_expts_act, sm_first, use_expt_indx, device):
     torch.manual_seed(2)
     if n_tokens_raw is None:
