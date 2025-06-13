@@ -271,6 +271,8 @@ def compute_expt_data_torch(hist, n_expts_tot, n_gates):
     token_offs_raw = token_offs_raw.int()
     # maximum number of tiles for all values of `block_m` considered
     block_ms = [16, 32, 64, 128]
+    if is_hip():
+        block_ms.append(256)
     if n_gates <= n_expts_tot:
         max_n_tiles = n_gates
     else:
@@ -280,7 +282,7 @@ def compute_expt_data_torch(hist, n_expts_tot, n_gates):
     # fill up tile offset/infos for each block
     token_offs_pad = dict()
     block_pid_map = dict()
-    for block_m in [16, 32, 64, 128]:
+    for block_m in block_ms:
         n_tiles = (hist + block_m - 1) // block_m  # matmul blocks needed
         token_offs_pad[block_m] = torch.cumsum(n_tiles, dim=0)
         token_offs_pad[block_m] = torch.cat((torch.zeros(1, device=device), token_offs_pad[block_m]))
