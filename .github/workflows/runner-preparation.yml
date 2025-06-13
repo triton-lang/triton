@@ -100,6 +100,6 @@ jobs:
             echo '::set-output name=matrix-MACOS::[["macos-latest"]]'
           else
             echo '::set-output name=matrix-NVIDIA::["ubuntu-latest"]'
-            echo '::set-output name=matrix-AMD::["ubuntu-latest"]'
+            echo '::set-output name=matrix-AMD::["amd-gfx950"]'
             echo '::set-output name=matrix-MACOS::[["macos-latest"]]'
           fi
