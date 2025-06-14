@@ -542,3 +542,66 @@ def test_scatter_pipeline(device):
     torch.testing.assert_close(c, ref)
 
     assert kernel.asm["ttgir"].count("tma_store_wait") == 2, "expected pipelined TMA scatter"
+
+
+@triton.jit
+def matmul_and_non_matmul_kernel(
+    a_ptr,
+    b_ptr,
+    out_a_ptr,
+    out_ab_ptr,
+    N,
+    D: tl.constexpr,
+    BLOCK_SIZE_N_INNER: tl.constexpr = 64,
+):
+    out_a = tl.zeros((D, ), dtype=tl.float32)
+    out_ab = tl.zeros((D, D), dtype=tl.float32)
+
+    n_iters = tl.cdiv(N, BLOCK_SIZE_N_INNER)
+    for k in range(0, n_iters):
+        rows = k * BLOCK_SIZE_N_INNER + tl.arange(0, BLOCK_SIZE_N_INNER)
+        cols = tl.arange(0, D)
+
+        offs_a = rows[:, None] * D + cols[None, :]
+        offs_b = rows[:, None] * D + cols[None, :]
+        ptrs_a = a_ptr + offs_a
+        ptrs_b = b_ptr + offs_b
+
+        block_a = tl.load(ptrs_a)
+        block_b = tl.load(ptrs_b)
+        block_at = tl.trans(block_a)
+
+        out_a += tl.sum(block_a.to(tl.float32), axis=0)
+        out_ab += tl.dot(block_at, block_b)
+
+    out_a_ptrs = out_a_ptr + tl.arange(0, D)
+    tl.store(out_a_ptrs, out_a)
+
+    out_ab_ptrs = out_ab_ptr + tl.arange(0, D)[:, None] * D + tl.arange(0, D)[None, :]
+    tl.store(out_ab_ptrs, out_ab)
+
+
+@pytest.mark.parametrize("N", [128, 256])
+@pytest.mark.parametrize("D", [128, 256])
+@pytest.mark.parametrize("num_stages", [2, 3])
+@pytest.mark.parametrize("dtype", [torch.float16])
+def test_matmul_and_non_matmul_kernel(N, D, dtype, num_stages):
+    for i in range(100):
+        torch.manual_seed(0)
+
+        a = torch.rand(N, D, dtype=dtype, device="cuda")
+        b = torch.rand(N, D, dtype=dtype, device="cuda")
+
+        out_a = torch.zeros(D, dtype=torch.float32, device="cuda")
+        out_ab = torch.zeros(D, D, dtype=torch.float32, device="cuda")
+
+        matmul_and_non_matmul_kernel[(1, )](a, b, out_a, out_ab, N, D=D, num_stages=num_stages)
+
+        a_tensor = a.to(dtype=torch.float32)
+        b_tensor = b.to(dtype=torch.float32)
+
+        ref = a_tensor.T @ b_tensor
+        max_err = (out_ab - ref).abs().max().item()
+        print(max_err)
+        allowed_err = 1e-5 * N
+        assert max_err < allowed_err, f"Max AB error too high: {max_err, i, ref, out_ab}"
