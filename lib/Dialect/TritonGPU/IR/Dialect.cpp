@@ -1845,15 +1845,19 @@ SmallVector<unsigned> AMDWmmaEncodingAttr::getCTASplitNum() const {
   return SmallVector<unsigned>(getCTALayout().getCTASplitNum());
 }
 
-SmallVector<int64_t> AMDWmmaEncodingAttr::getElemsPerInstrForOperands() const {
-  return {16, 16};
+SmallVector<int64_t>
+AMDWmmaEncodingAttr::getElemsPerInstrForOperands(int kDim, int opIdx) const {
+  if (opIdx == 0)
+    return {16, kDim};
+  else
+    return {kDim, 16};
 }
 
 SmallVector<int64_t>
 AMDWmmaEncodingAttr::getRepForOperand(ArrayRef<int64_t> operandShape,
-                                      Type elemType, int kWidth,
+                                      Type elemType, int kWidth, int kDim,
                                       int opIdx) const {
-  auto operandTileShape = getElemsPerInstrForOperands();
+  auto operandTileShape = getElemsPerInstrForOperands(kDim, opIdx);
   assert(operandTileShape.size() == 2);
   auto warpsPerCTA = getWarpsPerCTA();
   auto rank = operandShape.size();
@@ -1879,14 +1883,6 @@ AMDWmmaEncodingAttr::getRepForOperand(ArrayRef<int64_t> operandShape,
 SmallVector<unsigned> AMDWmmaEncodingAttr::getMNKDimPerInstr() {
   // TODO: move magic numbers out of the code
   return {16, 16, 16};
-}
-
-unsigned AMDWmmaEncodingAttr::getKWidthForOperands() const {
-  SmallVector<unsigned> sizePerThread(getRank(), 1);
-  auto numReplicated = getVersion() == 1 ? 2 : 1;
-  auto elemsPerInstr =
-      numReplicated * product(getElemsPerInstrForOperands()) / 32;
-  return elemsPerInstr;
 }
 
 //===----------------------------------------------------------------------===//
