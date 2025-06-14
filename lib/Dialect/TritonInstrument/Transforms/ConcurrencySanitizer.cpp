@@ -2,18 +2,20 @@
 #include "mlir/Transforms/Passes.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
+#include "triton/Dialect/TritonInstrument/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 
 namespace mlir {
 namespace triton {
-namespace gpu {
+namespace instrument {
 
 namespace tt = mlir::triton;
 namespace ttg = mlir::triton::gpu;
 namespace ttng = mlir::triton::nvidia_gpu;
+namespace tti = mlir::triton::instrument;
 
-#define GEN_PASS_DEF_TRITONGPUCONCURRENCYSANITIZER
-#include "triton/Dialect/TritonGPU/Transforms/Passes.h.inc"
+#define GEN_PASS_DEF_TRITONINSTRUMENTCONCURRENCYSANITIZER
+#include "triton/Dialect/TritonInstrument/Transforms/Passes.h.inc"
 
 namespace {
 
@@ -58,12 +60,12 @@ uint64_t getAllocationOffset(triton::gpu::LocalAllocOp op) {
 }
 
 unsigned getNumBuffers(triton::gpu::LocalAllocOp op) {
-  MemDescType ty = op.getType();
+  ttg::MemDescType ty = op.getType();
   return ty.getShape().size();
 }
 
 unsigned getSubBufferSize(triton::gpu::LocalAllocOp op) {
-  MemDescType ty = op.getType();
+  ttg::MemDescType ty = op.getType();
   unsigned elSize = ty.getElementType().getIntOrFloatBitWidth();
   return product(ty.getShape().drop_front()) * elSize;
 }
@@ -79,7 +81,8 @@ tt::FuncOp getEntryPoint(ModuleOp module) {
 } // namespace
 
 class ConcurrencySanitizerPass
-    : public impl::TritonGPUConcurrencySanitizerBase<ConcurrencySanitizerPass> {
+    : public impl::TritonInstrumentConcurrencySanitizerBase<
+          ConcurrencySanitizerPass> {
 public:
   void runOnOperation() override {
     module = getOperation();
@@ -140,7 +143,7 @@ private:
         b.setLoc(copyOp.getLoc());
         b.setInsertionPoint(copyOp);
         auto checkOp =
-            b.create<ttg::ExperimentalCheckAsyncWriteWithMbarSharedOp>(
+            b.create<tti::ExperimentalCheckAsyncWriteWithMbarSharedOp>(
                 copyOp.getResult(), copyOp.getBarrier(), buffers, state,
                 barriers);
         state = checkOp.getOutStates();
@@ -149,7 +152,7 @@ private:
       if (auto waitOp = dyn_cast<ttng::WaitBarrierOp>(op)) {
         b.setLoc(waitOp.getLoc());
         b.setInsertionPoint(waitOp);
-        auto checkOp = b.create<ttg::ExperimentalCheckWaitMbarOp>(
+        auto checkOp = b.create<tti::ExperimentalCheckWaitMbarOp>(
             waitOp.getAlloc(), barriers, state);
         state = checkOp.getOutStates();
         barriers = checkOp.getOutBarriers();
@@ -157,17 +160,17 @@ private:
     });
   }
 
-  BlockedEncodingAttr getBlockedEncoding(unsigned int size) {
+  ttg::BlockedEncodingAttr getBlockedEncoding(unsigned int size) {
     MLIRContext *ctx = module.getContext();
     unsigned int warps =
         mlir::cast<mlir::IntegerAttr>(module->getAttr("ttg.num-warps"))
             .getInt();
-    auto ctaLayout = CTALayoutAttr::getDefault(ctx, /*rank=*/1);
-    return BlockedEncodingAttr::get(ctx,
-                                    /*sizePerThread=*/{size},
-                                    /*threadsPerWarp=*/{32},
-                                    /*warpsPerCTA=*/{warps},
-                                    /*order=*/{0}, ctaLayout);
+    auto ctaLayout = ttg::CTALayoutAttr::getDefault(ctx, /*rank=*/1);
+    return ttg::BlockedEncodingAttr::get(ctx,
+                                         /*sizePerThread=*/{size},
+                                         /*threadsPerWarp=*/{32},
+                                         /*warpsPerCTA=*/{warps},
+                                         /*order=*/{0}, ctaLayout);
   }
 
   Value createSharedBufferPointers(ImplicitLocOpBuilder &builder,
@@ -179,7 +182,7 @@ private:
     SmallVector<APInt> apInts = llvm::to_vector(
         llvm::map_range(values, [](int64_t v) { return APInt(64, v); }));
     auto denseAttr = DenseElementsAttr::get(tensorType, apInts);
-    return builder.create<ttg::ExperimentalSharedBufferPointersOp>(tensorType,
+    return builder.create<tti::ExperimentalSharedBufferPointersOp>(tensorType,
                                                                    values);
   }
 
@@ -196,6 +199,6 @@ private:
   ModuleOp module;
 };
 
-} // namespace gpu
+} // namespace instrument
 } // namespace triton
 } // namespace mlir
