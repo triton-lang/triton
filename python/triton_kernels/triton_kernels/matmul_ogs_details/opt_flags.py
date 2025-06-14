@@ -21,10 +21,10 @@ class OptFlags:
     split_k: int
     fused_scatter: bool
     is_persistent: bool
+    idle_sms: int
     epilogue_subtile: int | None
     arch: str
     target_kernel_kwargs: dict
-    idle_sms: int = 0
 
     def __post_init__(self):
         if self.fused_scatter and self.split_k != 1:
@@ -117,6 +117,7 @@ def make_default_opt_flags_amd(
         split_k=split_k,
         fused_scatter=constraints.get('fused_scatter', False),
         is_persistent=is_persistent,
+        idle_sms=0,
         epilogue_subtile=constraints.get('epilogue_subtile', None),
         arch=None,
         target_kernel_kwargs=target_kernel_kwargs,
