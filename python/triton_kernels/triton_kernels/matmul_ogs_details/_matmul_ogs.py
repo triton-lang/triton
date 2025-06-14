@@ -31,7 +31,7 @@ def _zero_masked_rows(
 _matmul_ogs_repr = make_matmul_repr("_matmul_ogs", [0, 1, 2])
 @triton.jit(repr=_matmul_ogs_repr, launch_metadata=matmul_launch_metadata)
 def _matmul_ogs(
-             Y, Out, stride_y_k, stride_y_z, stride_y_m, stride_y_n,
+             Y, Out, OutPtr, stride_y_k, stride_y_z, stride_y_m, stride_y_n,
              YExpectedScale, YActualScale, YChecksumScale,
              X, stride_x_z, stride_x_m, stride_x_k,
              XScale,
