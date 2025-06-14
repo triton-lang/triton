@@ -770,14 +770,10 @@ def matmul_ogs(x, w, bias,
     expt_token_offs_raw = None if expt_data is None else expt_data.token_offs_raw
     expt_block_pid_map = None if expt_data is None else expt_data.block_pid_map[block_m]
 
-    x_tensor = flex.lhs_data.reinterpret(x)
-    w_tensor = flex.rhs_data.reinterpret(w)
-    mx_tensor = mx_ctx.weight_scale
-    y_tensor = flex.out_data.reinterpret(out0)
     if opt_flags.is_persistent:
         x_tensor, w_tensor, mx_tensor, y_tensor = _create_tma_descriptors(
-            x=x_tensor, w=w_tensor, mx_tensor=mx_tensor,
-            y_tensor=y_tensor, reduction_n=fused_activation.reduction_n,
+            x=x, w=w, mx_tensor=mx_ctx.weight_scale, y_tensor=out0,
+            reduction_n=fused_activation.reduction_n,
             routing_data=routing_data,
             mx_ctx=mx_ctx,
             expt_data=expt_data,
@@ -790,6 +786,17 @@ def matmul_ogs(x, w, bias,
             HAS_GATHER=gather_indx is not None,
             HAS_FUSED_SCATTER=writeback_idxs is not None,
         )
+    else:
+        x_tensor = x
+        w_tensor = w
+        mx_tensor = mx_ctx.weight_scale
+        y_tensor = out0
+    if isinstance(x_tensor, torch.Tensor):
+        x_tensor = flex.lhs_data.reinterpret(x)
+    if isinstance(w_tensor, torch.Tensor):
+        w_tensor = flex.rhs_data.reinterpret(w)
+    if isinstance(y_tensor, torch.Tensor):
+        y_tensor = flex.out_data.reinterpret(y_tensor)
     (kernels._p_matmul_ogs if opt_flags.is_persistent else kernels._matmul_ogs)[(n_cta,)](
                    flex.out_data.reinterpret(memory["output"]),
                    y_tensor, flex.out_data.reinterpret(out0), *out0.stride(), *out0_flex,
