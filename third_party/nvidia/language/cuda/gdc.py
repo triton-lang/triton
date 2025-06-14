@@ -16,7 +16,7 @@ def gdc_wait(_builder=None):
     This ensures all memory operations happening before the wait is visible to instructions after it,
     e.g. if the prior kernel writes to address "x" the new values will be visible in this kernel after the wait.
 
-    This instruction is also safe to execute when programatic dependent launch is disabled.
+    This instruction is also safe to execute when programmatic dependent launch is disabled.
 
     See https://docs.nvidia.com/cuda/parallel-thread-execution/index.html#parallel-synchronization-and-communication-instructions-griddepcontrol for more details.
     """
@@ -34,7 +34,7 @@ def gdc_launch_dependents(_builder=None):
     Repeated calls to this function have no effect past the first call, and the first call should be
     treated by the programmer as a hint to the runtime system to launch the next kernel.
 
-    This instruction is also safe to execute when programatic dependent launch is disabled.
+    This instruction is also safe to execute when programmatic dependent launch is disabled.
 
     See https://docs.nvidia.com/cuda/parallel-thread-execution/index.html#parallel-synchronization-and-communication-instructions-griddepcontrol for more details.
     """
