@@ -168,6 +168,9 @@ class InstrumentationHook(Hook):
 
             triton_proton.add_allocate_proton_shared_memory(pm)
 
+            if backend_name == "amd":
+                triton_proton.add_sched_barriers(pm)
+
         def to_llvm_passes(pm):
             triton_proton.add_allocate_proton_global_scratch_buffer(pm)
             if backend_name == "nvidia":
