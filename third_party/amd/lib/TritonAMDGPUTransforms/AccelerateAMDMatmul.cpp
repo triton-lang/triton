@@ -968,9 +968,11 @@ static void decomposeMixedModeDotOp(ModuleOp mod) {
   });
 }
 
-FailureOr<WmmaIntrinsic>
-chooseWmmaInstruction(int wmmaVersion, RankedTensorType cType, Type aElemType,
-                      Type bElemType, int inputKSize, int enforcedNonKDim) {
+FailureOr<WmmaIntrinsic> chooseWmmaInstruction(Location loc, int wmmaVersion,
+                                               RankedTensorType cType,
+                                               Type aElemType, Type bElemType,
+                                               int inputKSize,
+                                               int enforcedNonKDim) {
   // number of matrix elements along k dim per one WMMA instruction
   unsigned kDim = 0;
 
@@ -998,8 +1000,8 @@ chooseWmmaInstruction(int wmmaVersion, RankedTensorType cType, Type aElemType,
   FailureOr<WmmaIntrinsic> maybeWmmaIntrinsic = WmmaIntrinsic::selectFor(
       wmmaVersion, mDim, nDim, inputKSize, aElemType, bElemType, cElemType);
   if (failed(maybeWmmaIntrinsic))
-    return failure();
-  ;
+    return emitError(loc, "no matching matrix core intrinsic due to "
+                          "unsupported element type");
 
   kDim = maybeWmmaIntrinsic->kDim;
   assert(kDim != 0);
@@ -1014,7 +1016,7 @@ chooseWmmaInstruction(int wmmaVersion, RankedTensorType cType, Type aElemType,
 FailureOr<WmmaIntrinsic> chooseWmmaInstruction(tt::DotOp dot, int wmmaVersion,
                                                int nonKDim) {
 
-  return chooseWmmaInstruction(wmmaVersion, dot.getC().getType(),
+  return chooseWmmaInstruction(dot.getLoc(), wmmaVersion, dot.getC().getType(),
                                dot.getA().getType().getElementType(),
                                dot.getB().getType().getElementType(),
                                dot.getA().getType().getShape().back(), nonKDim);

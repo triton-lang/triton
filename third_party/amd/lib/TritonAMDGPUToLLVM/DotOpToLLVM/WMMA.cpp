@@ -212,8 +212,9 @@ StringRef getWmmaIntrinsicName(Type aElTy, Type bElTy, Type dElTy, Type valATy,
   return intrinsics[h];
 }
 
-StringRef addInstructionSuffix(std::string intrinsicName, unsigned kWidth,
-                               Type aElTy, Type bElTy, Type dElTy, bool tied) {
+std::string addInstructionSuffix(std::string intrinsicName, unsigned kWidth,
+                                 Type aElTy, Type bElTy, Type dElTy,
+                                 bool tied) {
   if (tied) {
     intrinsicName += ".tied";
   } else {
@@ -291,7 +292,9 @@ LogicalResult convertDot(DotOp op, DotOpAdaptor adaptor,
       WmmaIntrinsic::selectFor(wmmaVer, mnkDim[0], mnkDim[1], kDimOperandSize,
                                aElemTy, bElemTy, dElemTy);
   if (failed(maybeWmmaIntrinsic)) {
-    llvm::report_fatal_error("No match found in WMMA database\n");
+
+    return op.emitError(
+        "no matching matrix core intrinsic due to unsupported element type");
   }
 
   unsigned kDim = maybeWmmaIntrinsic->kDim;

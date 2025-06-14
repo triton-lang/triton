@@ -151,6 +151,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
     tt.return
   }
 
+
   //  CHECK-LABEL: blocked_to_wmma1
   tt.func @blocked_to_wmma1(%arg0: tensor<128x16xi32, #blocked>) {
     // CHECK-COUNT-16: llvm.extractvalue {{.*}} : !llvm.struct<(i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32)>
