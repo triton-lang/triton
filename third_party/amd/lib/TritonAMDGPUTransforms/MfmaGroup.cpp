@@ -38,9 +38,10 @@ MfmaKey composeMfmaKeyFor(unsigned version, unsigned mDim, unsigned nDim,
     // In the MFMA map we use the proper TF32 type. So "fix" it here.
     assert(version == 3);
     aET = bET = b.getType<FloatTF32Type>();
-  } else if (version <= 3 && isa<Float8E5M2Type>(aET) &&
-             isa<Float8E5M2Type>(bET)) {
-    // For the OCP FP8 E5M2 type, we can emulate the support for it with FP16.
+  } else if (version <= 3 && isa<Float8E5M2Type, Float8E4M3FNType>(aET) &&
+             isa<Float8E5M2Type, Float8E4M3FNType>(bET)) {
+    // For the OCP FP8 E5M2/E4M3FN type, we don't have native support until
+    // CDNA4. So emulate with FP16.
     aElemType = bElemType = aET = bET = b.getF16Type();
   }
   return {version, mDim, nDim, aET.getTypeID(), bET.getTypeID()};
