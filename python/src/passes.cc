@@ -9,6 +9,7 @@
 #include "triton/Conversion/TritonToTritonGPU/Passes.h"
 #include "triton/Dialect/Triton/Transforms/Passes.h"
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h"
+#include "triton/Dialect/TritonInstrument/Transforms/Passes.h"
 #include "triton/Target/LLVMIR/Passes.h"
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
@@ -53,6 +54,7 @@ void init_triton_passes_ttir(py::module &&m) {
 void init_triton_passes_ttgpuir(py::module &&m) {
   using namespace mlir;
   using namespace mlir::triton::gpu;
+  using namespace mlir::triton::instrument;
   ADD_PASS_WRAPPER_0("add_coalesce", createTritonGPUCoalesce);
   ADD_PASS_WRAPPER_0("add_optimize_thread_locality",
                      createTritonGPUOptimizeThreadLocality);
@@ -92,6 +94,8 @@ void init_triton_passes_ttgpuir(py::module &&m) {
       pm.addPass(createTritonGPUCanonicalize());
     });
   });
+  ADD_PASS_WRAPPER_0("add_concurrency_sanitizer",
+                     createTritonInstrumentConcurrencySanitizer);
 }
 
 void init_triton_passes_convert(py::module &&m) {
