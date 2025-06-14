@@ -166,8 +166,8 @@ chooseMfmaInstruction(Location loc, int mfmaVersion, RankedTensorType cType,
     return failure();
 
   FailureOr<MfmaIntrinsic> maybeMfmaIntrinsic =
-      MfmaIntrinsic::selectFor(mfmaVersion, mDim, nDim, inputKSize, aElemType,
-                               bElemType, withScale, allowXF32);
+      MfmaIntrinsic::selectFor(loc, mfmaVersion, mDim, nDim, inputKSize,
+                               aElemType, bElemType, withScale, allowXF32);
   if (failed(maybeMfmaIntrinsic))
     return emitError(loc, "no matching matrix core intrinsic due to "
                           "unsupported element type");
