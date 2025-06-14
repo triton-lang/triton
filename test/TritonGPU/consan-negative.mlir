@@ -1,8 +1,4 @@
-//===- consan-negative.mlir ----------------------------------------------===//
-// Negative tests for canAllocBeInstrumented in ConcurrencySanitizer.
-//
-// RUN: triton-opt %s -split-input-file -allow-unregistered-dialect \
-// RUN:   -tritongpu-concurrency-sanitizer -verify-diagnostics
+// RUN: triton-opt %s -split-input-file -allow-unregistered-dialect -tritoninstrument-concurrency-sanitizer -verify-diagnostics
 
 #shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 32}>
 #smem   = #ttg.shared_memory

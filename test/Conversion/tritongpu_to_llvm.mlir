@@ -2461,7 +2461,7 @@ tt.func private @experimental_check_async_write_with_mbar_shared(
   %state: tensor<2xi8, #blocked>,
   %barriers: tensor<2xi64, #blocked>
 ) {
-  ttg.experimental_check_async_write_with_mbar_shared %buf, %bar{%buffers, %state, %barriers} : !ttg.memdesc<32x32xf32, #shared, #smem, mutable>, !ttg.memdesc<1xi64, #shared1, #smem, mutable>, tensor<2xi64, #blocked>, tensor<2xi8, #blocked>, tensor<2xi64, #blocked> -> tensor<2xi8, #blocked>, tensor<2xi64, #blocked>
+  ti.experimental_check_async_write_with_mbar_shared %buf, %bar{%buffers, %state, %barriers} : !ttg.memdesc<32x32xf32, #shared, #smem, mutable>, !ttg.memdesc<1xi64, #shared1, #smem, mutable>, tensor<2xi64, #blocked>, tensor<2xi8, #blocked>, tensor<2xi64, #blocked> -> tensor<2xi8, #blocked>, tensor<2xi64, #blocked>
   tt.return
 }
 }
@@ -2480,7 +2480,7 @@ tt.func private @experimental_check_wait_mbar(
   %state: tensor<2xi8, #blocked>,
   %barriers: tensor<2xi64, #blocked>
 ) {
-  ttg.experimental_check_wait_mbar %bar{%state, %barriers} : !ttg.memdesc<1xi64, #shared1, #smem, mutable>, tensor<2xi8, #blocked>, tensor<2xi64, #blocked> -> tensor<2xi8, #blocked>, tensor<2xi64, #blocked>
+  ti.experimental_check_wait_mbar %bar{%state, %barriers} : !ttg.memdesc<1xi64, #shared1, #smem, mutable>, tensor<2xi8, #blocked>, tensor<2xi64, #blocked> -> tensor<2xi8, #blocked>, tensor<2xi64, #blocked>
   tt.return
 }
 }

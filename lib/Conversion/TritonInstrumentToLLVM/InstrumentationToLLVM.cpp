@@ -4,6 +4,7 @@
 #include "triton/Conversion/TritonGPUToLLVM/TargetInfoBase.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
+#include "triton/Dialect/TritonInstrument/IR/Dialect.h"
 
 namespace {
 
@@ -13,6 +14,7 @@ constexpr static int8_t READ_BIT = 1 << 1;
 
 namespace tt = mlir::triton;
 namespace ttg = tt::gpu;
+namespace tti = mlir::triton::instrument;
 
 BlockedEncodingAttr getBlockedEncoding(ModuleOp module, unsigned int size) {
   MLIRContext *ctx = module.getContext();
@@ -45,14 +47,12 @@ Value createConstIntTensor(OpBuilder &builder, Location loc, int val,
 }
 
 struct SharedBufferPointersOpConversion
-    : public ConvertOpToLLVMPattern<
-          triton::gpu::ExperimentalSharedBufferPointersOp> {
+    : public ConvertOpToLLVMPattern<tti::ExperimentalSharedBufferPointersOp> {
   using ConvertOpToLLVMPattern::ConvertOpToLLVMPattern;
 
-  LogicalResult
-  matchAndRewrite(triton::gpu::ExperimentalSharedBufferPointersOp op,
-                  OpAdaptor adaptor,
-                  ConversionPatternRewriter &b) const override {
+  LogicalResult matchAndRewrite(tti::ExperimentalSharedBufferPointersOp op,
+                                OpAdaptor adaptor,
+                                ConversionPatternRewriter &b) const override {
     auto loc = op.getLoc();
     auto *ctx = b.getContext();
     auto module = op->getParentOfType<ModuleOp>();
@@ -122,11 +122,11 @@ Value createMemDescToI64(ConversionPatternRewriter &rewriter, Location loc,
 
 struct CheckAsyncWriteWithMbarSharedOpConversion
     : public ConvertOpToLLVMPattern<
-          triton::gpu::ExperimentalCheckAsyncWriteWithMbarSharedOp> {
+          tti::ExperimentalCheckAsyncWriteWithMbarSharedOp> {
   using ConvertOpToLLVMPattern::ConvertOpToLLVMPattern;
 
   LogicalResult
-  matchAndRewrite(triton::gpu::ExperimentalCheckAsyncWriteWithMbarSharedOp op,
+  matchAndRewrite(tti::ExperimentalCheckAsyncWriteWithMbarSharedOp op,
                   OpAdaptor adaptor,
                   ConversionPatternRewriter &b) const override {
 
@@ -173,10 +173,10 @@ struct CheckAsyncWriteWithMbarSharedOpConversion
 };
 
 struct CheckWaitMbarOpConversion
-    : public ConvertOpToLLVMPattern<triton::gpu::ExperimentalCheckWaitMbarOp> {
+    : public ConvertOpToLLVMPattern<tti::ExperimentalCheckWaitMbarOp> {
   using ConvertOpToLLVMPattern::ConvertOpToLLVMPattern;
 
-  LogicalResult matchAndRewrite(triton::gpu::ExperimentalCheckWaitMbarOp op,
+  LogicalResult matchAndRewrite(tti::ExperimentalCheckWaitMbarOp op,
                                 OpAdaptor adaptor,
                                 ConversionPatternRewriter &b) const override {
     Location loc = op.getLoc();
