@@ -75,6 +75,16 @@ void TaskIdBackwardPropagation::propagateToYield(
   }
 }
 
+void TaskIdBackwardPropagation::propagateToTerminator(
+    Operation *op, ArrayRef<const TaskIdLattice *> &lattices) {
+  for (auto [lattice, terminatorOperand] :
+       llvm::zip_equal(lattices, op->getOperands())) {
+    auto terminatorLattice = getLatticeElement(terminatorOperand);
+    ChangeResult changed = terminatorLattice->meet(lattice->getValue());
+    propagateIfChanged(terminatorLattice, changed);
+  }
+}
+
 void TaskIdBackwardPropagation::propagateToParent(Operation *op,
                                                   const TaskId &taskId) {
   auto parentOp = op->getParentOp();
@@ -93,7 +103,7 @@ void TaskIdBackwardPropagation::propagateToParent(Operation *op,
       ChangeResult changed = condLattice->meet(taskId);
       propagateIfChanged(condLattice, changed);
     } else {
-      if (!isa<triton::FuncOp>(parentOp))
+      if (!isa<triton::FuncOp, triton::ReduceOp>(parentOp))
         llvm_unreachable("Other parent ops are not supported.");
     }
     parentOp = parentOp->getParentOp();
@@ -115,6 +125,14 @@ LogicalResult TaskIdBackwardPropagation::visitOperation(
     }
     // Propagate to the parent ops such as control flows
     propagateToParent(op, annotated);
+
+    if (op->getNumRegions() == 1) {
+      if (auto reduceOp = dyn_cast<triton::ReduceOp>(op)) {
+        propagateToTerminator(reduceOp.getCombineOp().front().getTerminator(),
+                              results);
+      }
+    }
+
     return success();
   }
   // If it is not annotated by the user, propagate from results to the
@@ -128,6 +146,13 @@ LogicalResult TaskIdBackwardPropagation::visitOperation(
 
   for (const auto resultLattice : results)
     propagateToParent(op, resultLattice->getValue());
+
+  if (op->getNumRegions() == 1) {
+    if (auto reduceOp = dyn_cast<triton::ReduceOp>(op)) {
+      propagateToTerminator(reduceOp.getCombineOp().front().getTerminator(),
+                            results);
+    }
+  }
 
   return success();
 }

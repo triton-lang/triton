@@ -47,6 +47,9 @@ static void fixTaskId(triton::FuncOp &funcOp) {
         auto defTaskIds = getAsyncTaskIds(defOp);
         // Backward propagation: ensure def covers op's task IDs.
         if (!containsAll(defTaskIds, asyncTaskIds)) {
+          // Skip control flow ops.
+          if (isa<scf::YieldOp, scf::ForOp, scf::IfOp>(op))
+            continue;
           // Only propagate backward to arithmetic ops (e.g. constants).
           // Const ops with same value but different task ids can be folded.
           if (defOp->getDialect()->getNamespace() == "arith") {

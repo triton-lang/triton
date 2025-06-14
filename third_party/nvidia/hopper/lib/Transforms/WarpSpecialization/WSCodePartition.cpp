@@ -1178,8 +1178,7 @@ void foldLocalLoads(triton::FuncOp funcOp) {
                                               kv.getSecond());
 }
 
-void doCodePartition(triton::FuncOp &funcOp, unsigned numBuffers,
-                     unsigned requestedRegisters) {
+void doCodePartition(triton::FuncOp &funcOp, unsigned numBuffers) {
   // Step 1: collect all communications between producers and consumers.
   SmallVector<std::unique_ptr<Channel>> channelsOrigin;
   collectAsyncChannels(channelsOrigin, funcOp, numBuffers);
@@ -1269,7 +1268,7 @@ void doCodePartition(triton::FuncOp &funcOp, unsigned numBuffers,
     funcOp.dump();
   });
 
-  specializeRegion(funcOp, requestedRegisters);
+  specializeRegion(funcOp, 0 /*requestedRegisters*/);
   LLVM_DEBUG({
     LDBG("\n\nwith specializeRegion");
     funcOp.dump();
@@ -1288,7 +1287,7 @@ public:
   void runOnFuncOp(triton::FuncOp funcOp) {
     // Disable code partitioning when numBuffers is 0.
     if (numBuffers > 0)
-      doCodePartition(funcOp, numBuffers, requestedRegisters);
+      doCodePartition(funcOp, numBuffers);
   }
   void runOnOperation() override {
     getOperation()->walk([&](triton::FuncOp funcOp) { runOnFuncOp(funcOp); });
