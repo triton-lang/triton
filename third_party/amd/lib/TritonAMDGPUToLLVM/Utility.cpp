@@ -698,5 +698,4 @@ bool isChainDotTail(tt::DotOpInterface dotOp) {
     return true;
   return false;
 }
-
 } // namespace mlir::LLVM::AMD

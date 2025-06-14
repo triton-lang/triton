@@ -3,6 +3,7 @@ add_triton_library(TritonAMDGPUDialectToLLVM
     ExtractSliceOpToLLVM.cpp
     InThreadTransposeOpToTTG.cpp
     ConcatOpToLLVM.cpp
+    Utility.cpp
 
     DEPENDS
     TritonAMDGPUIR
