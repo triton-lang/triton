@@ -275,7 +275,8 @@ struct DotOpMFMAConversionHelper {
         mfmaVersion, mDim, nDim, kDimOperandSize, elemTyA, elemTyB,
         /*withScale=*/false, allowXF32);
     if (failed(maybeMfmaIntrinsic))
-      llvm::report_fatal_error("No match found in MFMA database\n");
+      return op.emitError(
+          "no matching matrix core intrinsic due to unsupported element type");
 
     unsigned kBase = maybeMfmaIntrinsic->kBase;
 
@@ -590,7 +591,8 @@ struct ScaledDotOpMFMAConversionHelper : DotOpMFMAConversionHelper {
         scaleDotElemTypeToMLIRType(ctx, bElemType),
         /*withScale=*/true, allowXF32);
     if (failed(maybeMfmaIntrinsic))
-      llvm::report_fatal_error("No match found in MFMA database\n");
+      return op.emitError(
+          "no matching matrix core intrinsic due to unsupported element type");
 
     StringRef intrinsicName = maybeMfmaIntrinsic->name;
     unsigned kBase = maybeMfmaIntrinsic->kBase;
