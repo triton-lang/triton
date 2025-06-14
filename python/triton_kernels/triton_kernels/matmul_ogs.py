@@ -614,10 +614,7 @@ def _create_tma_descriptors(
     USE_GATHER_TMA: bool = HAS_GATHER and SUPPORTS_TMA_GS
     X_USE_LOAD_TMA: bool = not HAS_GATHER and not USE_GATHER_TMA
 
-    x_tensor_or_desc, mx_desc, y_tensor_or_desc = x, None, y_tensor
-
-    w_transpose = w.stride(2) != 1
-    mx_transpose = mx_scale_stride_n != 1
+    x_tensor_or_desc, mx_desc_and_transpose, y_tensor_or_desc = x, (None, False), y_tensor
 
     if USE_GATHER_TMA or X_USE_LOAD_TMA:
         x_tensor_or_desc = TensorDescriptorBuilder.create_input_descriptor(
@@ -626,9 +623,11 @@ def _create_tma_descriptors(
                 USE_GATHER_TMA, X_USE_LOAD_TMA
             )
 
+    w_transpose = w.stride(2) != 1
     w_desc = TensorDescriptorBuilder.create_weight_descriptor(
             w, opt_flags.block_k, opt_flags.block_n, w_transpose
         )
+    w_desc_and_transpose = (w_desc, w_transpose)
 
     is_microscaled_format = mx_ctx.weight_scale is not None and w.dtype == torch.uint8
     if is_microscaled_format:
@@ -648,11 +647,13 @@ def _create_tma_descriptors(
             w_desc.shape[dim_to_pad] = padded_size
 
     if mx_tensor is not None:
+        mx_transpose = mx_scale_stride_n != 1 if mx_ctx.swizzle_scale is None else None
         mx_desc = TensorDescriptorBuilder.create_block_scale_descriptor(
                 mx_tensor, opt_flags.block_k, opt_flags.block_n,
                 routing_data.n_expts_tot if expt_data is not None and len(expt_data.block_pid_map) > 0 else B, K, N,
                 mx_scale_stride_k, mx_scale_stride_n, mx_ctx.swizzle_scale, mx_transpose
             )
+        mx_desc_and_transpose = (mx_desc, mx_transpose)
 
     if y_tensor.stride(-2) * y_tensor.dtype.itemsize % 16 == 0:
         USE_TMA_SCATTER = HAS_FUSED_SCATTER and SUPPORTS_TMA_GS
@@ -665,7 +666,7 @@ def _create_tma_descriptors(
                 y_tensor, B, N // reduction_n, y_tensor.stride(), opt_flags.block_m, out_block_n,
                 USE_TMA_SCATTER, USE_TMA_STORE)
 
-    return x_tensor_or_desc, w_desc, mx_desc, y_tensor_or_desc
+    return x_tensor_or_desc, w_desc_and_transpose, mx_desc_and_transpose, y_tensor_or_desc
 
 
 def matmul_ogs(x, w, bias,
@@ -771,7 +772,7 @@ def matmul_ogs(x, w, bias,
     expt_block_pid_map = None if expt_data is None else expt_data.block_pid_map[block_m]
 
     if opt_flags.is_persistent:
-        x_tensor, w_tensor, mx_tensor, y_tensor = _create_tma_descriptors(
+        x_tensor, w_tensor_and_transpose, mx_tensor_and_tranpose, y_tensor = _create_tma_descriptors(
             x=x, w=w, mx_tensor=mx_ctx.weight_scale, y_tensor=out0,
             reduction_n=fused_activation.reduction_n,
             routing_data=routing_data,
@@ -786,10 +787,12 @@ def matmul_ogs(x, w, bias,
             HAS_GATHER=gather_indx is not None,
             HAS_FUSED_SCATTER=writeback_idxs is not None,
         )
+        w_tensor, w_tma_transpose = w_tensor_and_transpose
+        mx_tensor, mx_tma_transpose = mx_tensor_and_tranpose
     else:
         x_tensor = x
-        w_tensor = w
-        mx_tensor = mx_ctx.weight_scale
+        w_tensor, w_tma_transpose = w, False
+        mx_tensor, mx_tma_transpose = mx_ctx.weight_scale, False
         y_tensor = out0
     if isinstance(x_tensor, torch.Tensor):
         x_tensor = flex.lhs_data.reinterpret(x)
@@ -802,11 +805,10 @@ def matmul_ogs(x, w, bias,
                    y_tensor, flex.out_data.reinterpret(out0), *out0.stride(), *out0_flex,
                    x_tensor, x.stride(0), x.stride(1), x.stride(2),
                    flex.lhs_data.scale,
-                   w_tensor, w.stride(0), w.stride(1), w.stride(2), w.stride(2) != 1,
+                   w_tensor, w.stride(0), w.stride(1), w.stride(2), w_tma_transpose,
                    flex.rhs_data.scale,
-                   mx_tensor, mx_scale_stride_e, mx_scale_stride_k, mx_scale_stride_n, mx_scale_stride_n != 1,
+                   mx_tensor, mx_scale_stride_e, mx_scale_stride_k, mx_scale_stride_n, mx_tma_transpose,
                    bias, bias_stride,
-                   x.shape[1],
                    x.shape[1] if routing_data.expt_hist is None else None,
                    N, K,
                    betas, gammas,
@@ -840,7 +842,6 @@ def matmul_ogs(x, w, bias,
                    num_stages=opt_flags.num_stages,
                    arch=opt_flags.arch,
                    UPCAST_INDICES=should_upcast_indices(x, w, out0),
-                   DISABLE_Y_TMA=out0.stride(-2) * out0.dtype.itemsize % 16 != 0,
                    SWAP_XW=swap_xw,
                    NUM_SMS = n_cta if opt_flags.is_persistent else 0,
                    **opt_flags.target_kernel_kwargs)

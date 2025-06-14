@@ -105,7 +105,7 @@ def _p_matmul_ogs(
              WScale,
              MxScale, stride_mx_e, stride_mx_k, stride_mx_n, MX_TRANSPOSE: tl.constexpr,
              B, stride_b_e, # Bias
-             NRows, M, N, K, # shapes
+             M, N, K, # shapes
              # expt data
              Betas, Gammas,
              GatherIndx,
@@ -139,7 +139,6 @@ def _p_matmul_ogs(
              NUM_SMS: tl.constexpr,
              TOKENS_PER_EXPT_FOR_ANNOTATION=None,
              UPCAST_INDICES:tl.constexpr=False,
-             DISABLE_Y_TMA: tl.constexpr=False,
              SWAP_XW: tl.constexpr = False):
     tl.static_assert(SWIZZLE_MX_VALUE is None, "NYI. Value swizzling")
 
@@ -349,7 +348,7 @@ def _p_matmul_ogs(
         # TMA is faster on Blackwell if a SWAP_XW transpose is not needed, or when we need registers to mask out the acc.
         # Contrary to the SWAP_XW case, having a fused activation function tends to make TMA faster again.
         # For the ideal optimization, this would depend on what the activation function is doing.
-        OUT_USE_STORE_TMA: tl.constexpr = (MASK_ACC or cuda_capability_geq(10, 0)) and isinstance(Out, tl.tensor_descriptor) and not (
+        OUT_USE_STORE_TMA: tl.constexpr = isinstance(Out, tl.tensor_descriptor) and (MASK_ACC or cuda_capability_geq(10, 0)) and not (
             SWAP_XW and ACTIVATION_FN is None)
 
         if USE_SCATTER_TMA:
