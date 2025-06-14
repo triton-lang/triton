@@ -84,6 +84,29 @@ tt.func @test_combine_addptr_pattern(%base: !tt.ptr<f32>) -> tensor<8x!tt.ptr<f3
     tt.return %ptr1 : tensor<8x!tt.ptr<f32>>
 }
 
+// CHECK-LABEL: @test_combine_addptr_pattern_discardableattrs
+tt.func @test_combine_addptr_pattern_discardableattrs(%base: !tt.ptr<f32>) -> !tt.ptr<f32> {
+    %off0 = arith.constant 8 : i32
+    %off1 = arith.constant 4 : i32
+    // CHECK-NEXT: %[[cst:.*]] = arith.constant 12 : i32
+    // CHECK-NEXT: %0 = tt.addptr %{{.*}}, %[[cst]] {tt.constancy = 8 : i32, tt.contiguity = 512 : i32, tt.divisibility = 16 : i32} : !tt.ptr<f32>, i32
+    %ptr0 = tt.addptr %base, %off0 : !tt.ptr<f32>, i32
+    %ptr1 = tt.addptr %ptr0, %off1 {tt.divisibility = 16 : i32, tt.constancy = 8 : i32, tt.contiguity = 512 : i32} : !tt.ptr<f32>, i32
+
+    tt.return %ptr1 : !tt.ptr<f32>
+}
+
+// CHECK-LABEL: @test_combine_addptr_pattern_discardableattrs_disallowed
+tt.func @test_combine_addptr_pattern_discardableattrs_disallowed(%base: !tt.ptr<f32>) -> !tt.ptr<f32> {
+    %off0 = arith.constant 8 : i32
+    %off1 = arith.constant 4 : i32
+    // CHECK-NEXT: %[[cst:.*]] = arith.constant 12 : i32
+    // CHECK-NEXT: %0 = tt.addptr %{{.*}}, %[[cst]] {tt.divisibility = 16 : i32} : !tt.ptr<f32>, i32
+    %ptr0 = tt.addptr %base, %off0 : !tt.ptr<f32>, i32
+    %ptr1 = tt.addptr %ptr0, %off1 {tt.divisibility = 16 : i32, tt.disallowed = 8 : i32} : !tt.ptr<f32>, i32
+
+    tt.return %ptr1 : !tt.ptr<f32>
+}
 // CHECK-LABEL: @test_combine_addptr_pattern_i64
 tt.func @test_combine_addptr_pattern_i64(%base: !tt.ptr<f32>) -> tensor<8x!tt.ptr<f32>> {
     %off0 = arith.constant 10 : i64
