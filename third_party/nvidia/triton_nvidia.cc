@@ -61,11 +61,14 @@ void init_triton_nvidia_passes_nvws(py::module &&m) {
   ADD_PASS_WRAPPER_0("add_lower_aref", mlir::triton::createNVWSLowerAref);
 }
 
+void init_triton_cuda_utils(pybind11::module &&m);
+
 void init_triton_nvidia(py::module &&m) {
   auto passes = m.def_submodule("passes");
   init_triton_nvidia_passes_nvws(passes.def_submodule("nvws"));
   init_triton_nvidia_passes_ttgpuir(passes.def_submodule("ttgpuir"));
   init_triton_nvidia_passes_ttnvgpuir(passes.def_submodule("ttnvgpuir"));
+  init_triton_cuda_utils(m.def_submodule("cuda_utils"));
 
   // cluster info
   py::class_<mlir::triton::nvidia_gpu::ClusterInfo>(m, "ClusterInfo")

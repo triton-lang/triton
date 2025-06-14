@@ -49,6 +49,9 @@ class BlockedLayout(DistributedLayout):
         assert self.cta_split_num is None or len(self.cta_split_num) == rank
         assert self.cta_order is None or len(self.cta_order) == rank
 
+    def __hash__(self):
+        return hash(tuple((k, tuple(v)) for k, v in self.__dict__.items() if v is not None))
+
     def _to_ir(self, builder):
         rank = len(self.size_per_thread)
         ctas_per_cga, cta_split_num, cta_order = _realize_cta_layout(rank, self.ctas_per_cga, self.cta_split_num,
@@ -129,6 +132,9 @@ class DistributedLinearLayout(DistributedLayout):
         return builder.get_distributed_linear_layout(self.reg_bases, self.lane_bases, self.warp_bases, self.block_bases,
                                                      self.shape)
 
+    def __hash__(self):
+        return hash(tuple((k, tuple(v)) for k, v in self.__dict__.items() if v is not None))
+
     def mangle(self):
         return f"DLL{self.reg_bases}_{self.lane_bases}_{self.warp_bases}_{self.block_bases}_{self.shape}DLL"
 
@@ -178,6 +184,10 @@ class NVMMASharedLayout(SharedLayout):
             cta_order,
         )
 
+    def __hash__(self):
+        return hash(
+            tuple((k, tuple(v) if isinstance(v, List) else v) for k, v in self.__dict__.items() if v is not None))
+
     def mangle(self) -> str:
         return f"NVMMA_{self.swizzle_byte_width}_{self.element_bitwidth}_{self.transposed}_{self.fp4_padded}_NVMMA"
 
@@ -219,6 +229,10 @@ class SwizzledSharedLayout(SharedLayout):
             cta_split_num,
             cta_order,
         )
+
+    def __hash__(self):
+        return hash(
+            tuple((k, tuple(v) if isinstance(v, List) else v) for k, v in self.__dict__.items() if v is not None))
 
     def mangle(self) -> str:
 
