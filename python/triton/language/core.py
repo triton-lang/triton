@@ -2085,6 +2085,27 @@ def dot_scaled(lhs, lhs_scale, lhs_format, rhs, rhs_scale, rhs_format, acc=None,
                                 rhs_k_pack, out_dtype)
 
 
+@builtin
+def dot_sparse(input, other, input_meta, acc=None, _semantic=None):
+    """
+    Returns the matrix product of two blocks and a third metadata block, where the first block is 2:4 structurally sparse and the second block is dense.
+    The third metadata block describes which 2 out of 4 consecutive elements in the first input are zero.
+    dot_sparse is currently experimental, and this interface is subject to change.
+
+    The three blocks must be two-dimensional or three-dimensional and have compatible inner dimensions.
+    For three-dimensional blocks, `tl.dot_sparse` performs the batched matrix product,
+    where the first dimension of each block represents the batch dimension.
+
+    :param input: The first tensor to be multiplied.
+    :type input: 2D or 3D tensor of scalar-type in {:code:`float8_e4m3fn`, :code:`float16`, :code:`bfloat16`}. On MI300, float8_e4m3fnuz is used.
+    :param other: The second tensor to be multiplied.
+    :type other: 2D or 3D tensor of scalar-type in {:code:`float8_e4m3fn`, :code:`float16`, :code:`bfloat16`}. On MI300, float8_e4m3fnuz is used.
+    :param acc: The accumulator tensor. If not None, the result is added to this tensor.
+    :type acc: 2D or 3D tensor of scalar-type in {:code:`float32`}
+    """
+    return _semantic.dot_sparse(input, other, input_meta, acc)
+
+
 # -----------------------
 # Non-Atomic Memory Operations
 # -----------------------

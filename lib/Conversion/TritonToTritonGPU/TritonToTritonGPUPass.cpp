@@ -568,7 +568,8 @@ void populateTritonPatterns(TritonGPUTypeConverter &typeConverter,
       GenericOpPattern<triton::DescriptorLoadOp>,
       GenericOpPattern<triton::DescriptorStoreOp>,
       GenericOpPattern<triton::DescriptorReduceOp>,
-      // this assumes the right layout will be set later for dot scaled.
+      // this assumes the right layout will be set later for dot scaled and dot sparse.
+      GenericOpPattern<triton::DotSparseOp>,
       GenericOpPattern<triton::DotScaledOp>,
       GenericOpPattern<triton::CallOp>,
       GenericOpPattern<ReturnOp>,

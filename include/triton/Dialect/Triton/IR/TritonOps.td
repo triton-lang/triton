@@ -717,6 +717,37 @@ def TT_DotScaledOp : TT_Op<"dot_scaled", [Pure,
 }
 
 //
+// DotSparse Op
+//
+def TT_DotSparseOp : TT_Op<"dot_sparse", [Pure,
+                             DeclareOpInterfaceMethods<DotOpInterface>,
+                             TypesMatchWith<"result's type matches accumulator's type",
+                                            "d", "c", "$_self">]> {
+    let summary = "dot_sparse";
+
+    let description = [{
+        $d = sparse_matrix_multiply($a, $b, $aMeta) + $c. The $a input is 2:4 sparse, such that two out of four
+        consecutive elements are zero. The $aMeta input is a metadata matrix that describes which two out of four
+        elements are sparse (i.e., zero) in the $a input. The $b input is dense, as in a normal `tl.dot` operation.
+    }];
+
+    let arguments = (
+      ins
+      TT_FpIntTensor:$a,
+      TT_FpIntTensor:$b,
+      TT_FpIntTensor:$c,
+      TT_IntTensor:$aMeta
+    );
+
+    let results = (outs TT_FpIntTensor:$d);
+
+    // attr-dict prints enums as integers.  To get inputPrecision printed as a
+    // string, we need to specify it explicitly.
+    let assemblyFormat = [{$a`,` $b`,` $c`,` $aMeta attr-dict `:` type($a) `meta` type($aMeta) `*` type($b) `->` type($d)}];
+    let hasVerifier = 0;
+}
+
+//
 // Reduce Op
 //
 def TT_ReduceOp: TT_Op<"reduce",
