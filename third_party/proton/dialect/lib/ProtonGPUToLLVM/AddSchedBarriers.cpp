@@ -1,7 +1,9 @@
 #include "Conversion/ProtonGPUToLLVM/Passes.h"
 #include "Dialect/ProtonGPU/IR/Dialect.h"
+#include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/LLVMIR/ROCDLDialect.h"
 #include "mlir/Pass/Pass.h"
+#include "mlir/Transforms/DialectConversion.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 
@@ -25,29 +27,39 @@ struct AddSchedBarriers
     ModuleOp mod = getOperation();
     MLIRContext *ctx = &getContext();
     OpBuilder builder(ctx);
+
     int numFuncOps = 0;
     FunctionOpInterface func;
-
     mod.walk([&](FunctionOpInterface op) {
       // Ignore any intrinsic functions. On AMD the predicate load/store ops
-      // are currently pseduo instrunctions at this point and will get picked up
+      // are currently pseduo instrunctions at this point and may get picked up
       // here and trigger the FunctionOpInterface range based assert below
       StringRef funcName(op.getNameAttr());
-      llvm::errs() << funcName << "\n";
       if (!funcName.contains("__")) {
         numFuncOps += 1;
         func = op;
       }
     });
 
+    assert(numFuncOps == 1);
+
+    IntegerAttr zeroAttrValue =
+        builder.getI32IntegerAttr(static_cast<int32_t>(0));
+
     func.walk([&](mlir::triton::proton::gpu::ReadCounterOp op) {
       auto loc = op.getLoc();
-      IntegerAttr maskValue =
-          builder.getI32IntegerAttr(static_cast<int32_t>(0));
-      builder.setInsertionPoint(op);
-      builder.create<ROCDL::SchedBarrier>(loc, maskValue);
-      builder.setInsertionPointAfter(op);
-      builder.create<ROCDL::SchedBarrier>(loc, maskValue);
+      if (!isa_and_nonnull<ROCDL::SchedBarrier>(op->getPrevNode())) {
+        builder.setInsertionPoint(op);
+        builder.create<ROCDL::SchedBarrier>(loc, zeroAttrValue);
+      }
+    });
+
+    func.walk([&](mlir::triton::proton::gpu::CircularStoreOp op) {
+      auto loc = op.getLoc();
+      if (!isa_and_nonnull<ROCDL::SchedBarrier>(op->getNextNode())) {
+        builder.setInsertionPointAfter(op);
+        builder.create<ROCDL::SchedBarrier>(loc, zeroAttrValue);
+      }
     });
   }
 };
