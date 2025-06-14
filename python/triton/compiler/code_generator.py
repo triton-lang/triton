@@ -602,8 +602,10 @@ class CodeGenerator(ast.NodeVisitor):
                 value = self.semantic.to_tensor(value)
             return value
 
-        values = _sanitize_value(self.visit(node.value))
         targets = [node.target] if isinstance(node, ast.AnnAssign) else node.targets
+        self.builder.set_loc_def_name(node.targets[0].id)
+
+        values = _sanitize_value(self.visit(node.value))
         assert len(targets) == 1
         self.assignTarget(targets[0], values)
 

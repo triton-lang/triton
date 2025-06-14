@@ -26,6 +26,15 @@ public:
     setLastLoc(mlir::FileLineColLoc::get(context, fileName, line, column));
   }
 
+  // record var name that was defined
+  void setLastLocDefName(std::string defName){
+    lastLoc -> setDefName(defName);
+  }
+
+  std::string getLastLocDefName() const {
+    return lastLoc->getDefName().c_str();
+  }
+
   mlir::Location getLastLoc() {
     assert(lastLoc);
     return *lastLoc;

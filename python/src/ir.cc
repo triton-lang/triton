@@ -928,6 +928,9 @@ void init_triton_ir(py::module &&m) {
       .def("set_loc",
            [](TritonOpBuilder &self, const std::string &fileName, int line,
               int column) { self.setLastLoc(fileName, line, column); })
+      .def("set_loc_def_name",
+        [](TritonOpBuilder &self, const std::string &defName) { self.setLastLocDefName(defName); })
+
       .def("get_loc",
            [](TritonOpBuilder &self) -> Location { return self.getLastLoc(); })
 
