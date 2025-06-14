@@ -121,9 +121,8 @@ class TensorDescriptorBuilder:
                                                                transpose=transpose)
 
     @staticmethod
-    def create_block_scale_descriptor(mx_tensor: torch.Tensor, block_k: int, block_n: int, K: int, N: int,
-                                      mx_scale_stride_k: int, mx_scale_stride_n: int, n_expts_tot: int, batch_size: int,
-                                      expt_data: Optional[ExptData], swizzle_mx: bool,
+    def create_block_scale_descriptor(mx_tensor: torch.Tensor, block_k: int, block_n: int, B: int, K: int, N: int,
+                                      mx_scale_stride_k: int, mx_scale_stride_n: int, swizzle_mx: bool,
                                       transpose: bool) -> TensorDescriptor:
         """Create a tensor descriptor for block scale factors"""
         MX_PACK_DIVISOR = 32
@@ -131,8 +130,7 @@ class TensorDescriptorBuilder:
         PackedK = (K + MX_PACK_DIVISOR - 1) // MX_PACK_DIVISOR
 
         if swizzle_mx:
-            num_expt_x_ncol = (n_expts_tot if expt_data is not None and len(expt_data.block_pid_map) > 0 else
-                               batch_size) * ((N + 127) // 128)
+            num_expt_x_ncol = B * ((N + 127) // 128)
             return TensorDescriptor(
                 base=mx_tensor, shape=[1, num_expt_x_ncol, (PackedK + 3) // 4, 2, 256],
                 strides=[num_expt_x_ncol * mx_scale_stride_n, mx_scale_stride_n, mx_scale_stride_k, 256,
@@ -151,35 +149,47 @@ class TensorDescriptorBuilder:
         return x.view(*new_shape)
 
     @staticmethod
-    def create_input_descriptor_gather(x_tensor: torch.Tensor, K: int, x_stride_1: int, x_stride_2: int,
+    def create_input_descriptor_gather(x_tensor: torch.Tensor, K: int, strides: tuple[int, int],
                                        block_k: int) -> TensorDescriptor:
         """Create a tensor descriptor for input matrix X via TMA gather"""
         x_desc = TensorDescriptorBuilder.squeeze_after_dim(x_tensor)
         assert x_desc.ndim == 2, "TMA gather descriptor requires 2D input"
         INT_MAX = 2147483647
-        return TensorDescriptor(base=x_desc, shape=[INT_MAX, K], strides=[x_stride_1, x_stride_2],
-                                block_shape=[1, block_k])
+        return TensorDescriptor(base=x_desc, shape=[INT_MAX, K], strides=strides, block_shape=[1, block_k])
 
     @staticmethod
-    def create_input_descriptor_load(x_tensor: torch.Tensor, K: int, x_stride_1: int, x_stride_2: int, block_m: int,
-                                     block_k: int) -> TensorDescriptor:
-        """Create a tensor descriptor for input matrix X via TMA"""
-        x_desc = TensorDescriptorBuilder.squeeze_after_dim(x_tensor)
-        assert x_desc.ndim in [2, 3], "LHS input TMA descriptor builder expects 2D or 3D input"
-        return TensorDescriptor(base=x_desc, shape=[x_desc.shape[0], K], strides=[x_stride_1, x_stride_2],
-                                block_shape=[block_m, block_k])
+    def create_descriptor(x_tensor: torch.Tensor, block_m: int, block_k: int) -> TensorDescriptor:
+        """Create a tensor descriptor for matrix X via TMA"""
+        x_tensor = TensorDescriptorBuilder.squeeze_after_dim(x_tensor)
+        assert x_tensor.ndim in [2, 3], "TMA descriptor builder expects 2D or 3D input"
+        block_shape = [1] * (x_tensor.ndim - 2) + [block_m, block_k]
+        return TensorDescriptor.from_tensor(x_tensor, block_shape=block_shape)
 
     @staticmethod
-    def create_input_descriptor(x_tensor: torch.Tensor, K: int, x_stride_1: int, x_stride_2: int, block_k: int,
+    def create_input_descriptor(x_tensor: torch.Tensor, B: int, K: int, strides: tuple[int, int, int], block_k: int,
                                 block_m: int, use_gather_tma: bool, use_load_tma: bool) -> TensorDescriptor:
         """Create a tensor descriptor for input matrix X based on TMA usage"""
         if use_gather_tma:
-            return TensorDescriptorBuilder.create_input_descriptor_gather(x_tensor, K, x_stride_1, x_stride_2, block_k)
+            assert B == 1, "Gather does not support 3D input."
+            return TensorDescriptorBuilder.create_input_descriptor_gather(x_tensor, K, strides[1:], block_k)
         elif use_load_tma:
-            return TensorDescriptorBuilder.create_input_descriptor_load(x_tensor, K, x_stride_1, x_stride_2, block_m,
-                                                                        block_k)
+            return TensorDescriptorBuilder.create_descriptor(x_tensor, block_m, block_k)
         else:
-            return x_tensor
+            assert False, "Either gather or load must be enabled"
+
+    @staticmethod
+    def create_output_descriptor(y_tensor: torch.Tensor, B: int, N: int, strides: tuple[int, int, int], block_m: int,
+                                 block_n: int, use_scatter_tma: bool, use_store_tma: bool) -> TensorDescriptor:
+        """Create a tensor descriptor for output matrix Y based on TMA usage"""
+        if use_scatter_tma:
+            assert B == 1, "Scatter does not support 3D output."
+            INT_MAX = 2147483647
+            return TensorDescriptor(base=y_tensor, shape=[INT_MAX - 1, N], strides=strides[-2:],
+                                    block_shape=[1, block_n])
+        elif use_store_tma:
+            return TensorDescriptorBuilder.create_descriptor(y_tensor, block_m, block_n)
+        else:
+            assert False, "Either scatter or store must be enabled"
 
 
 # ---------------------
@@ -586,70 +596,78 @@ def _create_tma_descriptors(
     x: torch.Tensor,
     w: torch.Tensor,
     mx_tensor: Optional[torch.Tensor],
+    y_tensor: torch.Tensor, reduction_n: int,
     routing_data: RoutingData,
     mx_ctx: MicroscalingCtx,
     expt_data: ExptData,
     opt_flags: OptFlags,
-    batch_size: int,
+    B: int,
     K: int,
     N: int,
     mx_scale_stride_k: int,
     mx_scale_stride_n: int,
-    USE_GATHER_TMA: bool,
-    X_USE_LOAD_TMA: bool,
-    w_transpose: bool,
-    mx_transpose: bool,
+    HAS_GATHER: bool,
+    HAS_FUSED_SCATTER: bool,
 ) -> Tuple[bool, torch.Tensor, torch.Tensor, Optional[torch.Tensor]]:
     """Create and cache TMA descriptors for tensors."""
-    use_host_tma_descriptors = opt_flags.is_persistent and target_info.cuda_capability_geq(10, 0)
 
-    x_desc, w_desc = [None] * 2
-    descriptors = []
-    # The dense case currently uses on device descriptor updates
-    # so we bail out on using host descriptors in that case
-    if (use_host_tma_descriptors):
-        if USE_GATHER_TMA or X_USE_LOAD_TMA:
-            x_desc = TensorDescriptorBuilder.create_input_descriptor(
-                    x, K, x.stride(1), x.stride(2),
-                    opt_flags.block_k, opt_flags.block_m,
-                    USE_GATHER_TMA, X_USE_LOAD_TMA
-                )
-        descriptors.append(x_desc)
-        if (expt_data is not None and len(expt_data.block_pid_map) > 0):
-            w_desc = TensorDescriptorBuilder.create_weight_descriptor(
-                    w, opt_flags.block_k, opt_flags.block_n, w_transpose
-                )
-            is_microscaled_format = (mx_ctx.weight_scale is not None) and (w.dtype == torch.uint8)
-            if is_microscaled_format:
-                # Pad the inner shape to 128 for mxfp4 weights
-                # for mixed precision fp8 x mxfp4 compute
-                pad = 128
-                dim_to_pad = -1
-                old_size = w_desc.shape[dim_to_pad]
-                padded_size = math.ceil(old_size / pad) * pad
-                if padded_size != old_size:
-                    w_desc.shape = list(w_desc.shape)
-                    w_desc.shape[dim_to_pad] = padded_size
-        descriptors.append(w_desc)
-        # Optional MX scale descriptor
-        descriptors.append(None)
-        if mx_tensor is not None:
-            descriptors[-1] = TensorDescriptorBuilder.create_block_scale_descriptor(
-                    mx_tensor, opt_flags.block_k, opt_flags.block_n, K, N,
-                    mx_scale_stride_k, mx_scale_stride_n, routing_data.n_expts_tot,
-                    batch_size,
-                    expt_data, mx_ctx.swizzle_scale, mx_transpose
-                )
+    SUPPORTS_TMA_GS = target_info.cuda_capability_geq(10, 0)
+    USE_GATHER_TMA: bool = HAS_GATHER and SUPPORTS_TMA_GS
+    X_USE_LOAD_TMA: bool = not HAS_GATHER and not USE_GATHER_TMA
 
-    # TODO: Currently all or none, instead should support a mixture
-    # of host and device descriptors
-    if None in descriptors or len(descriptors) == 0:
-        descriptors = [x, w, mx_tensor]
-        use_host_tma_descriptors = False
-    if opt_flags.is_persistent:
-        opt_flags.target_kernel_kwargs["USE_HOST_TMA_DESCRIPTORS"] = use_host_tma_descriptors
+    x_tensor_or_desc, mx_desc_and_transpose, y_tensor_or_desc = x, (None, False), y_tensor
 
-    return use_host_tma_descriptors, *descriptors
+    if USE_GATHER_TMA or X_USE_LOAD_TMA:
+        x_tensor_or_desc = TensorDescriptorBuilder.create_input_descriptor(
+                x, B, K, x.stride(),
+                opt_flags.block_k, opt_flags.block_m,
+                USE_GATHER_TMA, X_USE_LOAD_TMA
+            )
+
+    w_transpose = w.stride(2) != 1
+    w_desc = TensorDescriptorBuilder.create_weight_descriptor(
+            w, opt_flags.block_k, opt_flags.block_n, w_transpose
+        )
+    w_desc_and_transpose = (w_desc, w_transpose)
+
+    is_microscaled_format = mx_ctx.weight_scale is not None and w.dtype == torch.uint8
+    if is_microscaled_format:
+        # Pad the inner shape to 128 for mxfp4 weights; TMA requires this when the compiler uses
+        # CU_TENSOR_MAP_DATA_TYPE_16U4_ALIGN16B.
+        # This technically makes the shape masking incorrect, but it's fine because:
+        #  - When the N dim is padded, the scales will be masked to 0.
+        #  - When the K dim is padded, the activations we perform tl.dot with will be masked to 0.
+        #    Note: the scales can't be relied on for zeroing in this case, because they apply to groups
+        #    of 32 elements in the K dimension.
+        pad = 128
+        dim_to_pad = -1
+        old_size = w_desc.shape[dim_to_pad]
+        padded_size = math.ceil(old_size / pad) * pad
+        if padded_size != old_size:
+            w_desc.shape = list(w_desc.shape)
+            w_desc.shape[dim_to_pad] = padded_size
+
+    if mx_tensor is not None:
+        mx_transpose = mx_scale_stride_n != 1 if mx_ctx.swizzle_scale is None else None
+        mx_desc = TensorDescriptorBuilder.create_block_scale_descriptor(
+                mx_tensor, opt_flags.block_k, opt_flags.block_n,
+                routing_data.n_expts_tot if expt_data is not None and len(expt_data.block_pid_map) > 0 else B, K, N,
+                mx_scale_stride_k, mx_scale_stride_n, mx_ctx.swizzle_scale, mx_transpose
+            )
+        mx_desc_and_transpose = (mx_desc, mx_transpose)
+
+    if y_tensor.stride(-2) * y_tensor.dtype.itemsize % 16 == 0:
+        USE_TMA_SCATTER = HAS_FUSED_SCATTER and SUPPORTS_TMA_GS
+        USE_TMA_STORE = not USE_TMA_SCATTER and expt_data is None
+
+        if USE_TMA_SCATTER or USE_TMA_STORE:
+            subtile_factor = opt_flags.epilogue_subtile or 1
+            out_block_n = opt_flags.block_n // subtile_factor // reduction_n
+            y_tensor_or_desc = TensorDescriptorBuilder.create_output_descriptor(
+                y_tensor, B, N // reduction_n, y_tensor.stride(), opt_flags.block_m, out_block_n,
+                USE_TMA_SCATTER, USE_TMA_STORE)
+
+    return x_tensor_or_desc, w_desc_and_transpose, mx_desc_and_transpose, y_tensor_or_desc
 
 
 def matmul_ogs(x, w, bias,
@@ -754,41 +772,44 @@ def matmul_ogs(x, w, bias,
     expt_token_offs_raw = None if expt_data is None else expt_data.token_offs_raw
     expt_block_pid_map = None if expt_data is None else expt_data.block_pid_map[block_m]
 
-    HAS_TMA_GS = target_info.cuda_capability_geq(10, 0)
-    USE_GATHER_TMA = HAS_TMA_GS and gather_indx is not None
-    X_USE_LOAD_TMA = gather_indx is None and not USE_GATHER_TMA
-    _, x_tensor, w_tensor, mx_tensor = _create_tma_descriptors(
-        x=x, w=w,
-        mx_tensor=mx_ctx.weight_scale,
-        routing_data=routing_data,
-        mx_ctx=mx_ctx,
-        expt_data=expt_data,
-        opt_flags=opt_flags,
-        batch_size=batch_size,
-        K=K,
-        N=N,
-        mx_scale_stride_k=mx_scale_stride_k,
-        mx_scale_stride_n=mx_scale_stride_n,
-        USE_GATHER_TMA=USE_GATHER_TMA,
-        X_USE_LOAD_TMA=X_USE_LOAD_TMA,
-        w_transpose=w.stride(2) != 1,
-        mx_transpose=mx_scale_stride_n != 1,
-    )
+    if opt_flags.is_persistent:
+        x_tensor, w_tensor_and_transpose, mx_tensor_and_tranpose, y_tensor = _create_tma_descriptors(
+            x=x, w=w, mx_tensor=mx_ctx.weight_scale, y_tensor=out0,
+            reduction_n=fused_activation.reduction_n,
+            routing_data=routing_data,
+            mx_ctx=mx_ctx,
+            expt_data=expt_data,
+            opt_flags=opt_flags,
+            B=batch_size,
+            K=K,
+            N=N,
+            mx_scale_stride_k=mx_scale_stride_k,
+            mx_scale_stride_n=mx_scale_stride_n,
+            HAS_GATHER=gather_indx is not None,
+            HAS_FUSED_SCATTER=writeback_idxs is not None,
+        )
+        w_tensor, w_tma_transpose = w_tensor_and_transpose
+        mx_tensor, mx_tma_transpose = mx_tensor_and_tranpose
+    else:
+        x_tensor = x
+        w_tensor, w_tma_transpose = w, False
+        mx_tensor, mx_tma_transpose = mx_ctx.weight_scale, False
+        y_tensor = out0
     if isinstance(x_tensor, torch.Tensor):
         x_tensor = flex.lhs_data.reinterpret(x)
     if isinstance(w_tensor, torch.Tensor):
         w_tensor = flex.rhs_data.reinterpret(w)
+    if isinstance(y_tensor, torch.Tensor):
+        y_tensor = flex.out_data.reinterpret(y_tensor)
     (kernels._p_matmul_ogs if opt_flags.is_persistent else kernels._matmul_ogs)[(n_cta,)](
                    flex.out_data.reinterpret(memory["output"]),
-                   flex.out_data.reinterpret(out0), *out0.stride(),
-                   *out0_flex,
+                   y_tensor, flex.out_data.reinterpret(out0), *out0.stride(), *out0_flex,
                    x_tensor, x.stride(0), x.stride(1), x.stride(2),
                    flex.lhs_data.scale,
-                   w_tensor, w.stride(0), w.stride(1), w.stride(2), w.stride(2) != 1,
+                   w_tensor, w.stride(0), w.stride(1), w.stride(2), w_tma_transpose,
                    flex.rhs_data.scale,
-                   mx_tensor, mx_scale_stride_e, mx_scale_stride_k, mx_scale_stride_n, mx_scale_stride_n != 1,
+                   mx_tensor, mx_scale_stride_e, mx_scale_stride_k, mx_scale_stride_n, mx_tma_transpose,
                    bias, bias_stride,
-                   x.shape[1],
                    x.shape[1] if routing_data.expt_hist is None else None,
                    N, K,
                    betas, gammas,
@@ -822,7 +843,6 @@ def matmul_ogs(x, w, bias,
                    num_stages=opt_flags.num_stages,
                    arch=opt_flags.arch,
                    UPCAST_INDICES=should_upcast_indices(x, w, out0),
-                   DISABLE_Y_TMA=out0.stride(-2) * out0.dtype.itemsize % 16 != 0,
                    SWAP_XW=swap_xw,
                    NUM_SMS = n_cta if opt_flags.is_persistent else 0,
                    **opt_flags.target_kernel_kwargs)

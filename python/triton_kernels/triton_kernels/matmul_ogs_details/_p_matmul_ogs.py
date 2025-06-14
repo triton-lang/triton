@@ -23,7 +23,10 @@ def get_dtype(tensor_or_desc: tl.tensor | tl.tensor_descriptor) -> tl.dtype:
 
 
 @triton.jit
-def _load_tensor_desc(desc, offs, transpose: tl.constexpr = False):
+def _tma_load_2d(desc, offs, transpose: tl.constexpr = False):
+    if len(desc.shape) == 2 and len(offs) == 3:
+        tl.device_assert(offs[0] == 0, "2D TMA load requires Z offset to be 0")
+        offs = offs[1:]
     if transpose:
         offs = offs[:-2] + [offs[-1], offs[-2]]
     res = desc.load(offs)
@@ -33,39 +36,16 @@ def _load_tensor_desc(desc, offs, transpose: tl.constexpr = False):
     return res
 
 
-# Helper function to recreate a TMA desc with the same fields, but with a new pointer and optional new shape.
 @triton.jit
-def _update_tensor_desc(desc, ptr, shape=None):
-    return tl.make_tensor_descriptor(
-        ptr,
-        shape=shape or desc.shape,
-        # last dim must be constexpr 1; reflecting the old descriptor drops the constexpr
-        strides=desc.strides[:-1] + [tl.constexpr(1)],
-        block_shape=desc.block_shape,
-    )
+def _tma_store_2d(desc, offs, values):
+    if len(offs) > len(desc.block_shape):
+        for i in tl.static_range(0, len(offs) - len(desc.block_shape)):
+            tl.device_assert(offs[i] == 0, f"TMA store requires leading offset {i} to be 0")
+        offs = offs[-len(desc.block_shape):]
+    if len(desc.block_shape) > len(values.shape):
+        values = tl.reshape(values, (1,) * (len(desc.block_shape) - len(values.shape)) + values.shape)
+    desc.store(offs, values)
 
-@triton.jit
-def _multiple_of(a, b):
-    return tl.cdiv(a, b) * b
-
-@triton.jit
-def _make_tensor_desc(ptr, shape, strides, block_shape, transpose: tl.constexpr = False, pad_inner_shape: tl.constexpr = 1):
-    tl.static_assert(len(shape) == len(strides))
-    tl.static_assert(len(strides) == len(block_shape))
-    if transpose:
-        return tl.make_tensor_descriptor(
-            ptr,
-            shape=shape[:-2] + [shape[-1], _multiple_of(shape[-2], pad_inner_shape)],
-            strides=strides[:-2] + [strides[-1], tl.constexpr(1)],
-            block_shape=block_shape[:-2] + [block_shape[-1], block_shape[-2]],
-        )
-    else:
-        return tl.make_tensor_descriptor(
-            ptr,
-            shape=shape[:-1] + [_multiple_of(shape[-1], pad_inner_shape)],
-            strides=strides[:-1] + [tl.constexpr(1)],
-            block_shape=block_shape,
-        )
 
 @triton.jit
 def _load_tile_attrs(
@@ -117,7 +97,7 @@ def _load_writeback_idx_and_mask(WriteBackIndx, writeback_size, offs, mask):
 _matmul_ogs_repr = make_matmul_repr("_p_matmul_ogs", [0, 1, 2])
 @triton.jit(repr=_matmul_ogs_repr, launch_metadata=matmul_launch_metadata)
 def _p_matmul_ogs(
-             Y, Out, stride_y_k, stride_y_z, stride_y_m, stride_y_n,
+             Y, Out, OutPtr, stride_y_k, stride_y_z, stride_y_m, stride_y_n,
              YExpectedScale, YActualScale, YChecksumScale,
              X, stride_x_z, stride_x_m, stride_x_k,
              XScale,
@@ -125,7 +105,7 @@ def _p_matmul_ogs(
              WScale,
              MxScale, stride_mx_e, stride_mx_k, stride_mx_n, MX_TRANSPOSE: tl.constexpr,
              B, stride_b_e, # Bias
-             NRows, M, N, K, # shapes
+             M, N, K, # shapes
              # expt data
              Betas, Gammas,
              GatherIndx,
@@ -157,13 +137,10 @@ def _p_matmul_ogs(
              EVEN_K: tl.constexpr, SPLIT_K: tl.constexpr,
              W_CACHE_MODIFIER: tl.constexpr,
              NUM_SMS: tl.constexpr,
-             USE_HOST_TMA_DESCRIPTORS: tl.constexpr,
              TOKENS_PER_EXPT_FOR_ANNOTATION=None,
              UPCAST_INDICES:tl.constexpr=False,
-             DISABLE_Y_TMA: tl.constexpr=False,
              SWAP_XW: tl.constexpr = False):
     tl.static_assert(SWIZZLE_MX_VALUE is None, "NYI. Value swizzling")
-    Y = Out  # Y is passed for the purposes of annotation; replace it with Out
 
     is_microscaled_format: tl.constexpr = MxScale is not None
     MX_PACK_DIVISOR: tl.constexpr = 32
@@ -201,7 +178,7 @@ def _p_matmul_ogs(
         SUBTILE_FACTOR: tl.constexpr = EPILOGUE_SUBTILE
     EPILOGUE_BLOCK_N: tl.constexpr = BLOCK_N // SUBTILE_FACTOR
     OUT_BLOCK_N: tl.constexpr = EPILOGUE_BLOCK_N // ACTIVATION_REDUCTION_N
-    yN = N // ACTIVATION_REDUCTION_N
+    OutN = N // ACTIVATION_REDUCTION_N
 
     # set masked out rows to 0
     if HAS_FUSED_SCATTER and N_EXPTS_ACT == 1:
@@ -219,90 +196,23 @@ def _p_matmul_ogs(
             offs_m = z.shape[0] * pid_m + tl.arange(0, z.shape[0])
             offs_n = z.shape[1] * pid_n + tl.arange(0, z.shape[1])
             src_idx = tl.load(ScatterSrcIndx + offs_m, mask=offs_m < num_idxs, other=0)
-            YPtrs = Y + offs_m.to(index_type)[:, None] * stride_y_m + offs_n[None, :] * stride_y_n
-            mask_n = offs_n < yN
+            OutPtrs = OutPtr + offs_m.to(index_type)[:, None] * stride_y_m + offs_n[None, :] * stride_y_n
+            mask_n = offs_n < OutN
             mask = (src_idx == -1)[:, None] & mask_n[None, :]
-            tl.store(YPtrs + pid_k * stride_y_k, z, mask=mask)
+            tl.store(OutPtrs + pid_k * stride_y_k, z, mask=mask)
 
     USE_FLEXPOINT_SCALE: tl.constexpr = YActualScale is not None or YChecksumScale is not None
 
-    INT_MAX: tl.constexpr = 2147483647
-    HAS_TMA_GS: tl.constexpr = cuda_capability_geq(10, 0)
-    USE_GATHER_TMA: tl.constexpr = (HAS_TMA_GS and GatherIndx is not None)
-    X_USE_LOAD_TMA: tl.constexpr = GatherIndx is None and not USE_GATHER_TMA
-    USE_SCATTER_TMA: tl.constexpr = (HAS_TMA_GS and HAS_FUSED_SCATTER) and not DISABLE_Y_TMA
-
-    if USE_HOST_TMA_DESCRIPTORS:
-        x_desc = X
-    elif USE_GATHER_TMA:
-        x_desc = tl.make_tensor_descriptor(
-            X,
-            # No masking on the M dimension because we manually mask by setting indices to -1
-            shape=[INT_MAX, K],
-            strides=[stride_x_m, stride_x_k],
-            block_shape=[1, BLOCK_K]
-        )
-    elif X_USE_LOAD_TMA:
-        x_desc = tl.make_tensor_descriptor(
-            X,
-            # When M is ragged, we don't mask the input rows, but mask the accumulator result in the epilogue.
-            # So shape[0] here is the global number of rows in the X matrix, which allows using an invariant descriptor.
-            shape=[NRows, K],
-            strides=[stride_x_m, stride_x_k],
-            block_shape=[BLOCK_M, BLOCK_K]
-        )
-
-    if USE_HOST_TMA_DESCRIPTORS:
-        w_desc = W
-    else:
-        # Pad the inner shape to 128 for mxfp4 weights; TMA requires this when the compiler uses CU_TENSOR_MAP_DATA_TYPE_16U4_ALIGN16B.
-        # This technically makes the shape masking incorrect, but it's fine because:
-        #  - When the N dim is padded, the scales will be masked to 0.
-        #  - When the K dim is padded, the activations we perform tl.dot with will be masked to 0.
-        #    Note: the scales can't be relied on for zeroing in this case, because they apply to groups
-        #    of 32 elements in the K dimension.
-        w_pad_inner_shape = 128 if is_microscaled_format and W.dtype.element_ty == tl.uint8 else 1
-        w_desc = _make_tensor_desc(W,
-            shape=[N_EXPTS_TOT if ExptData is not None else batch_size,
-                (K + W_PACK_DIVISOR - 1) // W_PACK_DIVISOR, N],
-            strides=[stride_w_e, stride_w_k, stride_w_n],
-            block_shape=[1, PACKED_BLOCK_K_W, BLOCK_N],
-            transpose=W_TRANSPOSE,
-            pad_inner_shape=w_pad_inner_shape)
-
-    if is_microscaled_format:
-        if USE_HOST_TMA_DESCRIPTORS:
-            mx_desc = MxScale
-        else:
-            PackedK = (K + MX_PACK_DIVISOR - 1) // MX_PACK_DIVISOR
-            if SWIZZLE_MX_SCALE == "BLACKWELL":
-                mx_desc = tl.make_tensor_descriptor(
-                    MxScale,
-                    shape=[
-                        1,
-                        (N_EXPTS_TOT if ExptData is not None else batch_size) * ((N + 127) // 128),
-                        (PackedK + 3) // 4, 2, 256,
-                    ],
-                    strides=[
-                        (N_EXPTS_TOT if ExptData is not None else batch_size) * ((N + 127) // 128) * stride_mx_n,
-                        stride_mx_n, stride_mx_k, 256, 1
-                    ],
-                    block_shape=[1, BLOCK_N // 128, MX_SCALE_BLOCK_K // 4, 2, 256]
-                )
-            else:
-                mx_desc = _make_tensor_desc(
-                    MxScale,
-                    shape=[N_EXPTS_TOT if ExptData is not None else batch_size, PackedK, N],
-                    strides=[stride_mx_e, stride_mx_k, stride_mx_n],
-                    block_shape=[1, MX_SCALE_BLOCK_K, BLOCK_N],
-                    transpose=MX_TRANSPOSE
-                )
+    USE_GATHER_TMA: tl.constexpr = GatherIndx is not None and isinstance(X, tl.tensor_descriptor)
+    X_USE_LOAD_TMA: tl.constexpr = GatherIndx is None and isinstance(X, tl.tensor_descriptor)
+    USE_SCATTER_TMA: tl.constexpr = HAS_FUSED_SCATTER and isinstance(Out, tl.tensor_descriptor)
 
     if USE_SCATTER_TMA:
-        y_desc = tl.make_tensor_descriptor(
-            Y,
+        INT_MAX: tl.constexpr = 2147483647
+        scatter_desc = tl.make_tensor_descriptor(
+            OutPtr,
             # No masking on the M dimension because we manually mask by setting indices to INT_MAX
-            shape=[INT_MAX - 1, yN],
+            shape=[INT_MAX - 1, OutN],
             strides=[stride_y_m, stride_y_n],
             block_shape=[1, OUT_BLOCK_N],
         )
@@ -323,10 +233,8 @@ def _p_matmul_ogs(
     local_absmax = tl.full([THREADS_PER_BLOCK], 0.0, tl.uint32)
 
     DISALLOW_ACC_MULTI_BUFFER: tl.constexpr = is_microscaled_format and BLOCK_M * BLOCK_N >= 128 * 256
-    # Enable warp specialization when all loads are TMA loads. Don't enable it
-    # for mixed-precision yet.
-    ENABLE_WS: tl.constexpr = True
-    WARP_SPECIALIZE: tl.constexpr = (USE_GATHER_TMA or X_USE_LOAD_TMA) and ENABLE_WS
+    # Enable warp specialization when all loads are TMA loads.
+    WARP_SPECIALIZE: tl.constexpr = (USE_GATHER_TMA or X_USE_LOAD_TMA)
 
     for tile_id in tl.range(tl.program_id(0), num_tiles, NUM_SMS, flatten=True, disallow_acc_multi_buffer=DISALLOW_ACC_MULTI_BUFFER, warp_specialize=WARP_SPECIALIZE):
         expt_id, start_z, start_m, eM, off_m, off_n, pid_k = _load_tile_attrs(
@@ -335,26 +243,23 @@ def _p_matmul_ogs(
             BLOCK_M, BLOCK_N, SPLIT_K,
             GROUP_M, XCD_SWIZZLE)
 
-        # Base pointers and offsets. These will be DCE'ed if unused in the TMA path.
-        if not USE_HOST_TMA_DESCRIPTORS:
+        # Base pointers and offsets.
+        if not USE_GATHER_TMA and not X_USE_LOAD_TMA:
             XBase = X + start_z.to(index_type) * stride_x_z
             offs_x_k = tl.arange(0, BLOCK_K)[None, :] * stride_x_k
             if SPLIT_K > 1:
                 offs_x_k += pid_k.to(index_type) * BLOCK_K * stride_x_k
 
-        if X_USE_LOAD_TMA:
-            if ExptData is None:
-                # start_z may change; update the descriptor
-                x_desc = _update_tensor_desc(x_desc, XBase)
-        else:
+        if not X_USE_LOAD_TMA:
             offs_m = off_m + tl.arange(0, BLOCK_M)
             mask_m = offs_m < (M if M is not None else eM)
             if USE_GATHER_TMA:
                 # Mask the gather indices and load -1 instead. TMA will handle OOB accesses.
                 offs_x_m = tl.load(GatherIndx + start_m.to(index_type) + offs_m,
                                    mask=mask_m, other=-N_EXPTS_ACT) // N_EXPTS_ACT
-                if ExptData is None:  # start_z may change; update the descriptor
-                    x_desc = _update_tensor_desc(x_desc, XBase)
+                if ExptData is None:
+                    # Bump rows to account for the Z offset.
+                    offs_x_m += start_z * (stride_x_z // stride_x_m)
             else:
                 if M is not None:
                     offs_m = tl.max_contiguous(tl.multiple_of(offs_m % M, BLOCK_M), BLOCK_M)
@@ -371,9 +276,9 @@ def _p_matmul_ogs(
             off_k_mx = pid_k * MX_SCALE_BLOCK_K + ki * MX_SCALE_BLOCK_K * SPLIT_K
 
             if USE_GATHER_TMA:
-                x = x_desc.gather(offs_x_m, off_k)
+                x = X.gather(offs_x_m, off_k)
             elif X_USE_LOAD_TMA:
-                x = x_desc.load([start_m + off_m, off_k])
+                x = _tma_load_2d(X, [start_z, start_m + off_m, off_k])
             else:
                 XPtrs = XBase + offs_x_m + offs_x_k
                 XBase += BLOCK_K * SPLIT_K * stride_x_k
@@ -386,7 +291,7 @@ def _p_matmul_ogs(
                 else:
                     x = tl.load(XPtrs, mask=mask_k[None, :], other=0.0)
 
-            w = _load_tensor_desc(w_desc, [expt_id, off_k_w, off_n], transpose=W_TRANSPOSE)
+            w = _tma_load_2d(W, [expt_id, off_k_w, off_n], transpose=W_TRANSPOSE)
 
             if is_microscaled_format:
                 x_format: tl.constexpr = get_scaled_dot_format_string(x.dtype)
@@ -397,11 +302,11 @@ def _p_matmul_ogs(
                     x_scales = tl.full((BLOCK_M, BLOCK_K // MX_PACK_DIVISOR), 127, dtype=tl.uint8)
                 if SWIZZLE_MX_SCALE == "BLACKWELL":
                     flattened_expt_n_idx = expt_id * ((N + 127) // 128) + (off_n // 128)
-                    w_scales = mx_desc.load([0, flattened_expt_n_idx, pid_k * MX_SCALE_BLOCK_K // 4 + ki * (MX_SCALE_BLOCK_K // 4 * SPLIT_K), 0, 0])
+                    w_scales = MxScale.load([0, flattened_expt_n_idx, pid_k * MX_SCALE_BLOCK_K // 4 + ki * (MX_SCALE_BLOCK_K // 4 * SPLIT_K), 0, 0])
                     w_scales = w_scales.reshape((w_scales.shape[1], w_scales.shape[2] * w_scales.shape[-2] * w_scales.shape[-1]))
                     w_scales = unswizzle_mx_scale_bw(w_scales)
                 else:
-                    w_scales = _load_tensor_desc(mx_desc, [expt_id, off_k_mx, off_n], transpose=MX_TRANSPOSE).T
+                    w_scales = _tma_load_2d(MxScale, [expt_id, off_k_mx, off_n], transpose=MX_TRANSPOSE).T
                 if SWAP_XW:
                     acc = tl.dot_scaled(w.T, w_scales, mx_format, x.T, x_scales, x_format, acc=acc, fast_math=True)
                 else:
@@ -451,17 +356,13 @@ def _p_matmul_ogs(
         # TMA is faster on Blackwell if a SWAP_XW transpose is not needed, or when we need registers to mask out the acc.
         # Contrary to the SWAP_XW case, having a fused activation function tends to make TMA faster again.
         # For the ideal optimization, this would depend on what the activation function is doing.
-        Y_USE_TMA: tl.constexpr = (MASK_ACC or cuda_capability_geq(10, 0)) and not (
-            DISABLE_Y_TMA or (SWAP_XW and ACTIVATION_FN is None))
+        OUT_USE_STORE_TMA: tl.constexpr = isinstance(Out, tl.tensor_descriptor) and (MASK_ACC or cuda_capability_geq(10, 0)) and not (
+            SWAP_XW and ACTIVATION_FN is None)
 
-        YBase = Y + start_z1.to(index_type) * stride_y_z + start_m1.to(index_type) * stride_y_m
-        if USE_SCATTER_TMA:
-            if ExptData is None:  # start_z1 may change; update the descriptor
-                y_desc = _update_tensor_desc(y_desc, YBase)
-        elif not HAS_FUSED_SCATTER and Y_USE_TMA:
-            y_desc = tl.make_tensor_descriptor(
-                YBase + pid_k1.to(index_type) * stride_y_k,
-                shape=[M if M is not None else eM1, yN],
+        if not HAS_FUSED_SCATTER and OUT_USE_STORE_TMA and M is None:
+            runtime_out_desc = tl.make_tensor_descriptor(
+                OutPtr + pid_k1.to(index_type) * stride_y_k + start_z1.to(index_type) * stride_y_z + start_m1.to(index_type) * stride_y_m,
+                shape=[eM1, OutN],
                 strides=[stride_y_m, stride_y_n],
                 block_shape=[BLOCK_M, OUT_BLOCK_N],
             )
@@ -542,25 +443,39 @@ def _p_matmul_ogs(
                 None, # ActualScale: local absmax is tracked and updated after the loop
                 YChecksumScale,
                 None, # mask: out is manually masked to 0
-                Y, FLEXPOINT_SATURATE_INF)
+                OutPtr, FLEXPOINT_SATURATE_INF)
             if EPILOGUE_FN is not None:
-                out = EPILOGUE_FN(out, *epilogue_fn_args, target_dtype=Y.dtype.element_ty, pid=len(accs)*tile_id1 + a_i)
+                out = EPILOGUE_FN(out, *epilogue_fn_args, target_dtype=OutPtr.dtype.element_ty, pid=len(accs)*tile_id1 + a_i)
 
             out_off_n = off_n1 // ACTIVATION_REDUCTION_N + a_i * OUT_BLOCK_N
             if USE_SCATTER_TMA:
                 # Convert -1 offsets to INT_MAX. We do this by clearing the leading bit. Note that
                 # there shouldn't be any other negative values.
-                offs_y_m = (offs_y_m.to(tl.uint32, bitcast=True) & 0x7FFFFFFF).to(tl.int32, bitcast=True)
-                y_desc.scatter(out.to(Y.dtype.element_ty), offs_y_m, out_off_n)
-            elif not HAS_FUSED_SCATTER and Y_USE_TMA:
-                y_desc.store([off_m1, out_off_n], out.to(Y.dtype.element_ty))
+                masked_offs_y_m = (offs_y_m.to(tl.uint32, bitcast=True) & 0x7FFFFFFF).to(tl.int32, bitcast=True)
+                if ExptData is None:
+                    # Bump rows to account for the Z offset. add.sat.s32 preserves the INT_MAX offsets.
+                    z_offset_in_rows = start_z1 * (stride_y_z // stride_y_m)
+                    masked_offs_y_m = tl.inline_asm_elementwise(
+                        """add.sat.s32 $0, $1, $2;""",
+                        "=r,r,r",
+                        args=[masked_offs_y_m, tl.broadcast_to(z_offset_in_rows, masked_offs_y_m.shape)],
+                        dtype=tl.int32,
+                        is_pure=True,
+                        pack=1,
+                    )
+                scatter_desc.scatter(out.to(OutPtr.dtype.element_ty), masked_offs_y_m, out_off_n)
+            elif not HAS_FUSED_SCATTER and OUT_USE_STORE_TMA:
+                if M is None:
+                    runtime_out_desc.store([off_m1, out_off_n], out.to(OutPtr.dtype.element_ty))
+                else:
+                    _tma_store_2d(Out, [pid_k1, start_z1, off_m1, out_off_n], out.to(OutPtr.dtype.element_ty))
             else:
                 offs_y_n = out_off_n + tl.arange(0, OUT_BLOCK_N)
-                mask_n = offs_y_n < yN
+                mask_n = offs_y_n < OutN
 
-                YPtrs = Y + pid_k1.to(index_type) * stride_y_k + start_z1.to(index_type) * stride_y_z + offs_y_m.to(index_type)[:, None] * stride_y_m + offs_y_n[None, :] * stride_y_n
+                OutPtrs = OutPtr + pid_k1.to(index_type) * stride_y_k + start_z1.to(index_type) * stride_y_z + offs_y_m.to(index_type)[:, None] * stride_y_m + offs_y_n[None, :] * stride_y_n
                 mask = mask_m[:, None] & mask_n[None, :]
-                tl.store(YPtrs, out, mask=mask)
+                tl.store(OutPtrs, out, mask=mask)
 
 
     # Update the flexpoint scales
