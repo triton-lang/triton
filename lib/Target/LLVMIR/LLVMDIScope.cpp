@@ -91,7 +91,10 @@ struct LLVMDIScopePass : public impl::LLVMDIScopeBase<LLVMDIScopePass> {
         compileUnitAttr = LLVM::DICompileUnitAttr::get(
             distinctId, llvm::dwarf::DW_LANG_C, fileAttr,
             StringAttr::get(context, "triton"),
-            /*isOptimized=*/true, LLVM::DIEmissionKind::LineTablesOnly);
+            /*isOptimized=*/true,
+            LLVM::DIEmissionKind::Full); // DIEmissionKind::Full is required by
+                                         // emiting ptx with dbg-metadata
+                                         // (otherwise assertion fail)
       }
       subprogramFlags = subprogramFlags | LLVM::DISubprogramFlags::Definition;
     } else {
