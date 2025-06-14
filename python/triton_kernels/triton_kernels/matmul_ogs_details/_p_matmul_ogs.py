@@ -359,22 +359,7 @@ def _p_matmul_ogs(
         OUT_USE_STORE_TMA: tl.constexpr = isinstance(Out, tl.tensor_descriptor) and (MASK_ACC or cuda_capability_geq(10, 0)) and not (
             SWAP_XW and ACTIVATION_FN is None)
 
-        if USE_SCATTER_TMA:
-            # Convert -1 offsets to INT_MAX. We do this by clearing the leading bit. Note that
-            # there shouldn't be any other negative values.
-            offs_y_m = (offs_y_m.to(tl.uint32, bitcast=True) & 0x7FFFFFFF).to(tl.int32, bitcast=True)
-            if ExptData is None:
-                # Bump rows to account for the Z offset. add.sat.s32 preserves the INT_MAX offsets.
-                z_offset_in_rows = start_z1 * (stride_y_z // stride_y_m)
-                offs_y_m = tl.inline_asm_elementwise(
-                    """add.sat.s32 $0, $1, $2;""",
-                    "=r,r,r",
-                    args=[offs_y_m, tl.broadcast_to(z_offset_in_rows, offs_y_m.shape)],
-                    dtype=tl.int32,
-                    is_pure=True,
-                    pack=1,
-                )
-        elif not HAS_FUSED_SCATTER and OUT_USE_STORE_TMA and M is None:
+        if not HAS_FUSED_SCATTER and OUT_USE_STORE_TMA and M is None:
             runtime_out_desc = tl.make_tensor_descriptor(
                 OutPtr + pid_k1.to(index_type) * stride_y_k + start_z1.to(index_type) * stride_y_z + start_m1.to(index_type) * stride_y_m,
                 shape=[eM1, OutN],
@@ -464,7 +449,21 @@ def _p_matmul_ogs(
 
             out_off_n = off_n1 // ACTIVATION_REDUCTION_N + a_i * OUT_BLOCK_N
             if USE_SCATTER_TMA:
-                scatter_desc.scatter(out.to(OutPtr.dtype.element_ty), offs_y_m, out_off_n)
+                # Convert -1 offsets to INT_MAX. We do this by clearing the leading bit. Note that
+                # there shouldn't be any other negative values.
+                masked_offs_y_m = (offs_y_m.to(tl.uint32, bitcast=True) & 0x7FFFFFFF).to(tl.int32, bitcast=True)
+                if ExptData is None:
+                    # Bump rows to account for the Z offset. add.sat.s32 preserves the INT_MAX offsets.
+                    z_offset_in_rows = start_z1 * (stride_y_z // stride_y_m)
+                    masked_offs_y_m = tl.inline_asm_elementwise(
+                        """add.sat.s32 $0, $1, $2;""",
+                        "=r,r,r",
+                        args=[masked_offs_y_m, tl.broadcast_to(z_offset_in_rows, masked_offs_y_m.shape)],
+                        dtype=tl.int32,
+                        is_pure=True,
+                        pack=1,
+                    )
+                scatter_desc.scatter(out.to(OutPtr.dtype.element_ty), masked_offs_y_m, out_off_n)
             elif not HAS_FUSED_SCATTER and OUT_USE_STORE_TMA:
                 if M is None:
                     runtime_out_desc.store([off_m1, out_off_n], out.to(OutPtr.dtype.element_ty))
