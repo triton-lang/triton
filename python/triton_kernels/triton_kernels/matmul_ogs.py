@@ -184,7 +184,8 @@ class TensorDescriptorBuilder:
         if use_scatter_tma:
             assert B == 1, "Scatter does not support 3D output."
             INT_MAX = 2147483647
-            return TensorDescriptor(base=y_tensor, shape=[INT_MAX, N], strides=strides[-2:], block_shape=[1, block_n])
+            return TensorDescriptor(base=y_tensor, shape=[INT_MAX - 1, N], strides=strides[-2:],
+                                    block_shape=[1, block_n])
         elif use_store_tma:
             return TensorDescriptorBuilder.create_descriptor(y_tensor, block_m, block_n)
         else:
