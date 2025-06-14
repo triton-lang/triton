@@ -596,7 +596,6 @@ def _create_tma_descriptors(
     x: torch.Tensor,
     w: torch.Tensor,
     mx_tensor: Optional[torch.Tensor],
-    y_tensor: torch.Tensor, reduction_n: int,
     routing_data: RoutingData,
     mx_ctx: MicroscalingCtx,
     expt_data: ExptData,
@@ -607,7 +606,6 @@ def _create_tma_descriptors(
     mx_scale_stride_k: int,
     mx_scale_stride_n: int,
     HAS_GATHER: bool,
-    HAS_FUSED_SCATTER: bool,
 ) -> Tuple[bool, torch.Tensor, torch.Tensor, Optional[torch.Tensor]]:
     """Create and cache TMA descriptors for tensors."""
 
@@ -615,7 +613,7 @@ def _create_tma_descriptors(
     USE_GATHER_TMA: bool = HAS_GATHER and SUPPORTS_TMA_GS
     X_USE_LOAD_TMA: bool = not HAS_GATHER and not USE_GATHER_TMA
 
-    x_tensor_or_desc, mx_desc_and_transpose, y_tensor_or_desc = x, (None, False), y_tensor
+    x_tensor_or_desc, mx_desc_and_transpose = x, (None, False)
 
     if USE_GATHER_TMA or X_USE_LOAD_TMA:
         x_tensor_or_desc = TensorDescriptorBuilder.create_input_descriptor(
@@ -656,18 +654,7 @@ def _create_tma_descriptors(
             )
         mx_desc_and_transpose = (mx_desc, mx_transpose)
 
-    if y_tensor.stride(-2) * y_tensor.dtype.itemsize % 16 == 0:
-        USE_TMA_SCATTER = HAS_FUSED_SCATTER and SUPPORTS_TMA_GS
-        USE_TMA_STORE = not USE_TMA_SCATTER and expt_data is None
-
-        if USE_TMA_SCATTER or USE_TMA_STORE:
-            subtile_factor = opt_flags.epilogue_subtile or 1
-            out_block_n = opt_flags.block_n // subtile_factor // reduction_n
-            y_tensor_or_desc = TensorDescriptorBuilder.create_output_descriptor(
-                y_tensor, B, N // reduction_n, y_tensor.stride(), opt_flags.block_m, out_block_n,
-                USE_TMA_SCATTER, USE_TMA_STORE)
-
-    return x_tensor_or_desc, w_desc_and_transpose, mx_desc_and_transpose, y_tensor_or_desc
+    return x_tensor_or_desc, w_desc_and_transpose, mx_desc_and_transpose
 
 
 def matmul_ogs(x, w, bias,
@@ -773,9 +760,8 @@ def matmul_ogs(x, w, bias,
     expt_block_pid_map = None if expt_data is None else expt_data.block_pid_map[block_m]
 
     if opt_flags.is_persistent:
-        x_tensor, w_tensor_and_transpose, mx_tensor_and_tranpose, y_tensor = _create_tma_descriptors(
-            x=x, w=w, mx_tensor=mx_ctx.weight_scale, y_tensor=out0,
-            reduction_n=fused_activation.reduction_n,
+        x_tensor, w_tensor_and_transpose, mx_tensor_and_tranpose = _create_tma_descriptors(
+            x=x, w=w, mx_tensor=mx_ctx.weight_scale,
             routing_data=routing_data,
             mx_ctx=mx_ctx,
             expt_data=expt_data,
@@ -786,7 +772,6 @@ def matmul_ogs(x, w, bias,
             mx_scale_stride_k=mx_scale_stride_k,
             mx_scale_stride_n=mx_scale_stride_n,
             HAS_GATHER=gather_indx is not None,
-            HAS_FUSED_SCATTER=writeback_idxs is not None,
         )
         w_tensor, w_tma_transpose = w_tensor_and_transpose
         mx_tensor, mx_tma_transpose = mx_tensor_and_tranpose
@@ -794,16 +779,13 @@ def matmul_ogs(x, w, bias,
         x_tensor = x
         w_tensor, w_tma_transpose = w, False
         mx_tensor, mx_tma_transpose = mx_ctx.weight_scale, False
-        y_tensor = out0
     if isinstance(x_tensor, torch.Tensor):
         x_tensor = flex.lhs_data.reinterpret(x)
     if isinstance(w_tensor, torch.Tensor):
         w_tensor = flex.rhs_data.reinterpret(w)
-    if isinstance(y_tensor, torch.Tensor):
-        y_tensor = flex.out_data.reinterpret(y_tensor)
     (kernels._p_matmul_ogs if opt_flags.is_persistent else kernels._matmul_ogs)[(n_cta,)](
                    flex.out_data.reinterpret(memory["output"]),
-                   y_tensor, flex.out_data.reinterpret(out0), *out0.stride(), *out0_flex,
+                   flex.out_data.reinterpret(out0), *out0.stride(), *out0_flex,
                    x_tensor, x.stride(0), x.stride(1), x.stride(2),
                    flex.lhs_data.scale,
                    w_tensor, w.stride(0), w.stride(1), w.stride(2), w_tma_transpose,
@@ -843,6 +825,7 @@ def matmul_ogs(x, w, bias,
                    num_stages=opt_flags.num_stages,
                    arch=opt_flags.arch,
                    UPCAST_INDICES=should_upcast_indices(x, w, out0),
+                   DISABLE_Y_TMA=out0.stride(-2) * out0.dtype.itemsize % 16 != 0,
                    SWAP_XW=swap_xw,
                    NUM_SMS = n_cta if opt_flags.is_persistent else 0,
                    **opt_flags.target_kernel_kwargs)
