@@ -606,7 +606,7 @@ def matmul_ogs(x, w, bias,
     batch_size = w.shape[0] if routing_data.expt_hist is None else 1
     _, K, N = w.shape
 
-    mx_scale_stride_e, mx_scale_stride_k, mx_scale_stride_n = (0,0,0) if mx_ctx.weight_scale is None else w.data_strides
+    mx_scale_stride_e, mx_scale_stride_k, mx_scale_stride_n = (0,0,0) if mx_ctx.weight_scale is None else w.scale_strides
     # compute optimization flags
     out_dtype = precision_config.out_dtype or x.dtype
     opt_flags = make_opt_flags(out_dtype, x.dtype, w.dtype, precision_config,

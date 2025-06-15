@@ -83,8 +83,8 @@ class MxTensor:
             s2 = swizzled_shape[3] * s3  # 4 * 128 = 512
             s1 = swizzled_shape[2] * s2  # (mxK//4) * 512
             s0 = swizzled_shape[1] * s1  # (mxN//128) * ((mxK//4)*512)
-            return s0, s1, s2
-        return scale.stride()
+            return s0, s2, s1
+        return self.weight_scale.stride()
 
     def _compute_data_shape(self, handle, swizzle_mode):
         from .numerics_details.mxfp import SwizzlingType
