@@ -5,6 +5,7 @@
 
 #include "mlir/IR/DialectImplementation.h"
 #include "mlir/IR/OpImplementation.h"
+#include "mlir/IR/OperationSupport.h"
 #include "mlir/Support/LLVM.h"
 #include "triton/Analysis/Utility.h"
 #include "triton/Dialect/Triton/IR/Interfaces.h"
@@ -20,7 +21,9 @@
 #include "triton/Tools/LinearLayout.h"
 #include "triton/Tools/StrUtil.h"
 #include "triton/Tools/Sys/GetEnv.hpp"
+#include "llvm/ADT/SmallSet.h"
 #include "llvm/ADT/TypeSwitch.h"
+#include "llvm/Support/MathExtras.h"
 
 // Include TableGen'erated code
 #include "triton/Dialect/TritonGPU/IR/Dialect.cpp.inc"
@@ -639,6 +642,16 @@ SmallVector<unsigned> SwizzledSharedEncodingAttr::getCTAOrder() const {
 }
 SmallVector<unsigned> SwizzledSharedEncodingAttr::getCTASplitNum() const {
   return SmallVector<unsigned>(getCTALayout().getCTASplitNum());
+}
+
+SmallVector<unsigned> PaddedSharedEncodingAttr::getCTAsPerCGA() const {
+  return llvm::to_vector(getCTALayout().getCTAsPerCGA());
+}
+SmallVector<unsigned> PaddedSharedEncodingAttr::getCTAOrder() const {
+  return llvm::to_vector(getCTALayout().getCTAOrder());
+}
+SmallVector<unsigned> PaddedSharedEncodingAttr::getCTASplitNum() const {
+  return llvm::to_vector(getCTALayout().getCTASplitNum());
 }
 
 int32_t AMDRotatingSharedEncodingAttr::getAlignment() const { return 16; }
@@ -1492,38 +1505,14 @@ void SliceEncodingAttr::print(mlir::AsmPrinter &printer) const {
 // Helper shared encoding functions
 //===----------------------------------------------------------------------===//
 
-template <typename SpecificEncoding>
-Attribute parseSwizzledEncoding(AsmParser &parser, Type type) {
-  if (parser.parseLess().failed())
-    return {};
-  // Parse the data as a dictionary
-  DictionaryAttr dict;
-  if (parser.parseAttribute(dict).failed())
-    return {};
-  if (parser.parseGreater().failed())
-    return {};
-
-  unsigned vec = 0;
-  unsigned perPhase = 0;
-  unsigned maxPhase = 0;
-  SmallVector<unsigned> order;
+std::optional<CTALayoutAttr>
+parseCTAAttrs(AsmParser &parser, NamedAttrList attrList, unsigned rank) {
   std::optional<SmallVector<unsigned>> CTAsPerCGA;
   std::optional<SmallVector<unsigned>> CTASplitNum;
   std::optional<SmallVector<unsigned>> CTAOrder;
-  for (const NamedAttribute &attr : dict) {
-    if (attr.getName() == "vec") {
-      if (parseUInt(parser, attr, vec, "vec").failed())
-        return {};
-    } else if (attr.getName() == "perPhase") {
-      if (parseUInt(parser, attr, perPhase, "perPhase").failed())
-        return {};
-    } else if (attr.getName() == "maxPhase") {
-      if (parseUInt(parser, attr, maxPhase, "maxPhase").failed())
-        return {};
-    } else if (attr.getName() == "order") {
-      if (parseIntArrayAttr(parser, attr, order, "order").failed())
-        return {};
-    } else if (attr.getName() == "CTAsPerCGA") {
+
+  for (const NamedAttribute &attr : attrList) {
+    if (attr.getName() == "CTAsPerCGA") {
       if (parseIntArrayAttr(parser, attr, CTAsPerCGA.emplace(), "CTAsPerCGA")
               .failed())
         return {};
@@ -1542,13 +1531,47 @@ Attribute parseSwizzledEncoding(AsmParser &parser, Type type) {
     }
   }
 
-  std::optional<CTALayoutAttr> CTALayout = getCTALayoutOrError(
-      parser, CTAsPerCGA, CTASplitNum, CTAOrder, /*rank=*/order.size());
-  if (!CTALayout.has_value())
+  return getCTALayoutOrError(parser, CTAsPerCGA, CTASplitNum, CTAOrder, rank);
+}
+
+template <typename SpecificEncoding>
+Attribute parseSwizzledEncoding(AsmParser &parser, Type type) {
+  if (parser.parseLess().failed())
+    return {};
+  // Parse the data as a dictionary
+  DictionaryAttr dict;
+  if (parser.parseAttribute(dict).failed())
+    return {};
+  if (parser.parseGreater().failed())
     return {};
 
-  return parser.getChecked<SpecificEncoding>(parser.getContext(), vec, perPhase,
-                                             maxPhase, order, *CTALayout);
+  unsigned vec = 0;
+  unsigned perPhase = 0;
+  unsigned maxPhase = 0;
+  SmallVector<unsigned> order;
+  NamedAttrList remainingAttrs;
+  for (const NamedAttribute &attr : dict) {
+    if (attr.getName() == "vec") {
+      if (parseUInt(parser, attr, vec, "vec").failed())
+        return {};
+    } else if (attr.getName() == "perPhase") {
+      if (parseUInt(parser, attr, perPhase, "perPhase").failed())
+        return {};
+    } else if (attr.getName() == "maxPhase") {
+      if (parseUInt(parser, attr, maxPhase, "maxPhase").failed())
+        return {};
+    } else if (attr.getName() == "order") {
+      if (parseIntArrayAttr(parser, attr, order, "order").failed())
+        return {};
+    } else {
+      remainingAttrs.push_back(attr);
+    }
+  }
+
+  if (auto CTALayout = parseCTAAttrs(parser, remainingAttrs, order.size()))
+    return parser.getChecked<SpecificEncoding>(
+        parser.getContext(), vec, perPhase, maxPhase, order, *CTALayout);
+  return {};
 }
 
 //===----------------------------------------------------------------------===//
@@ -1581,6 +1604,99 @@ void SwizzledSharedEncodingAttr::print(AsmPrinter &printer) const {
   maybePrintCTALayout(getContext(), printer, getCTALayout(),
                       /*rank=*/getOrder().size());
   printer << "}>";
+}
+
+//===----------------------------------------------------------------------===//
+// PaddedShared encoding
+//===----------------------------------------------------------------------===//
+
+Attribute PaddedSharedEncodingAttr::parse(AsmParser &parser, Type type) {
+  // <[
+  if (failed(parser.parseLess()) || failed(parser.parseLSquare()))
+    return {};
+
+  // <interval_i>:+<padding_i>
+  SmallVector<unsigned, 4> intervals, paddings;
+  auto parseIntervalPaddingPair = [&]() {
+    unsigned interval = 0, padding = 0;
+    if (failed(parser.parseInteger(interval)) || failed(parser.parseColon()) ||
+        failed(parser.parsePlus()) || failed(parser.parseInteger(padding)))
+      return failure();
+    intervals.push_back(interval);
+    paddings.push_back(padding);
+    return success();
+  };
+  // ]
+  if (failed(parser.parseCommaSeparatedList(parseIntervalPaddingPair)) ||
+      failed(parser.parseRSquare()))
+    return {};
+
+  // {<attr-dict>}>
+  NamedAttrList attrList;
+  if (failed(parser.parseOptionalAttrDict(attrList)) ||
+      failed(parser.parseGreater()))
+    return {};
+
+  // Decode order and CTA attributes
+  SmallVector<unsigned> order;
+  NamedAttrList remainingAttrs;
+  for (const NamedAttribute &attr : attrList) {
+    if (attr.getName() == "order") {
+      if (parseIntArrayAttr(parser, attr, order, "order").failed())
+        return {};
+    } else {
+      remainingAttrs.push_back(attr);
+    }
+  }
+  if (auto ctaLayout = parseCTAAttrs(parser, remainingAttrs, order.size()))
+    return parser.getChecked<PaddedSharedEncodingAttr>(
+        parser.getContext(), intervals, paddings, order, *ctaLayout);
+  return {};
+}
+
+void PaddedSharedEncodingAttr::print(AsmPrinter &printer) const {
+  printer << "<[";
+  llvm::interleaveComma(llvm::zip(getIntervals(), getPaddings()), printer,
+                        [&](std::tuple<unsigned, unsigned> intervalPad) {
+                          printer << std::get<0>(intervalPad) << ":+"
+                                  << std::get<1>(intervalPad);
+                        });
+  printer << "] {order = [" << getOrder() << "]";
+  maybePrintCTALayout(getContext(), printer, getCTALayout(),
+                      /*rank=*/getOrder().size());
+  printer << "}>";
+}
+
+LogicalResult PaddedSharedEncodingAttr::verify(
+    function_ref<InFlightDiagnostic()> emitError, ArrayRef<unsigned> intervals,
+    ArrayRef<unsigned> paddings, ArrayRef<unsigned> order,
+    CTALayoutAttr ctaLayout) {
+  if (intervals.size() != paddings.size())
+    return emitError() << "intervals size (" << intervals.size()
+                       << ") must match paddings size (" << paddings.size()
+                       << ")";
+
+  if (intervals.empty())
+    return emitError() << "must have at least one interval-padding pair";
+
+  if (!llvm::all_of(intervals, llvm::isPowerOf2_32))
+    return emitError() << "interval values must all be power of two";
+  if (!llvm::all_of(paddings, llvm::isPowerOf2_32))
+    return emitError() << "padding values must all be power of two";
+
+  llvm::SmallSet<unsigned, 4> intervalValues(intervals.begin(),
+                                             intervals.end());
+  if (intervalValues.size() != intervals.size())
+    return emitError() << "interval values cannot have duplicates";
+
+  if (order.empty())
+    return emitError() << "order cannot be empty";
+
+  if (order.size() != ctaLayout.getRank())
+    return emitError() << "order size (" << order.size()
+                       << ") must match CTALayout rank (" << ctaLayout.getRank()
+                       << ")";
+  return verifyLayoutOrder(emitError, order);
 }
 
 //===----------------------------------------------------------------------===//
