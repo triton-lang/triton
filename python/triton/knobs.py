@@ -446,6 +446,7 @@ class amd_knobs(base_knobs):
     global_prefetch: env_int = env_int("TRITON_HIP_GLOBAL_PREFETCH")
     local_prefetch: env_int = env_int("TRITON_HIP_LOCAL_PREFETCH")
     use_async_copy: env_bool = env_bool("TRITON_HIP_USE_ASYNC_COPY")
+    use_padded_shared_layout : env_bool = env_bool("TRITON_HIP_USE_PADDED_SHARED_LAYOUT")
     scalarize_packed_fops: env_bool = env_bool("AMDGCN_SCALARIZE_PACKED_FOPS")
 
 
