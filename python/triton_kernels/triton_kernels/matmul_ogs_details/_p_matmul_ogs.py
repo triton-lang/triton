@@ -160,8 +160,7 @@ def _p_matmul_ogs(
              USE_HOST_TMA_DESCRIPTORS: tl.constexpr,
              TOKENS_PER_EXPT_FOR_ANNOTATION=None,
              UPCAST_INDICES:tl.constexpr=False,
-             DISABLE_Y_TMA: tl.constexpr=False,
-             SWAP_XW: tl.constexpr = False):
+             DISABLE_Y_TMA: tl.constexpr=False):
     tl.static_assert(SWIZZLE_MX_VALUE is None, "NYI. Value swizzling")
     Y = Out  # Y is passed for the purposes of annotation; replace it with Out
 
@@ -364,7 +363,7 @@ def _p_matmul_ogs(
                 offs_m = tl.load(GatherIndx + start_m.to(index_type) + offs_m) // N_EXPTS_ACT
                 offs_x_m = offs_m.to(index_type)[:, None] * stride_x_m
 
-        acc = tl.zeros((BLOCK_N, BLOCK_M) if SWAP_XW else (BLOCK_M, BLOCK_N), dtype=tl.float32)
+        acc = tl.zeros((BLOCK_M, BLOCK_N), dtype=tl.float32)
         for ki in tl.range(k_tiles, disallow_acc_multi_buffer=DISALLOW_ACC_MULTI_BUFFER):
             off_k = pid_k * BLOCK_K + ki * BLOCK_K * SPLIT_K
             off_k_w = pid_k * PACKED_BLOCK_K_W + ki * PACKED_BLOCK_K_W * SPLIT_K
@@ -402,15 +401,9 @@ def _p_matmul_ogs(
                     w_scales = unswizzle_mx_scale_bw(w_scales)
                 else:
                     w_scales = _load_tensor_desc(mx_desc, [expt_id, off_k_mx, off_n], transpose=MX_TRANSPOSE).T
-                if SWAP_XW:
-                    acc = tl.dot_scaled(w.T, w_scales, mx_format, x.T, x_scales, x_format, acc=acc, fast_math=True)
-                else:
-                    acc = tl.dot_scaled(x, x_scales, x_format, w, w_scales, mx_format, acc=acc, fast_math=True)
+                acc = tl.dot_scaled(x, x_scales, x_format, w, w_scales, mx_format, acc=acc, fast_math=True)
             else:
-                if SWAP_XW:
-                    acc = tl.dot(w.T, x.T, acc, max_num_imprecise_acc=MAX_NUM_IMPRECISE_ACC, allow_tf32=ALLOW_TF32)
-                else:
-                    acc = tl.dot(x, w, acc, max_num_imprecise_acc=MAX_NUM_IMPRECISE_ACC, allow_tf32=ALLOW_TF32)
+                acc = tl.dot(x, w, acc, max_num_imprecise_acc=MAX_NUM_IMPRECISE_ACC, allow_tf32=ALLOW_TF32)
 
         if INDEPENDENT_EPILOGUE:
             tile_id1 += NUM_SMS
@@ -448,11 +441,9 @@ def _p_matmul_ogs(
                 # Later, mask out the acc for computing flexpoint scales.
                 MASK_ACC: tl.constexpr = USE_FLEXPOINT_SCALE
 
-        # TMA is faster on Blackwell if a SWAP_XW transpose is not needed, or when we need registers to mask out the acc.
-        # Contrary to the SWAP_XW case, having a fused activation function tends to make TMA faster again.
+        # TMA is faster on Blackwell when we need registers to mask out the acc.
         # For the ideal optimization, this would depend on what the activation function is doing.
-        Y_USE_TMA: tl.constexpr = (MASK_ACC or cuda_capability_geq(10, 0)) and not (
-            DISABLE_Y_TMA or (SWAP_XW and ACTIVATION_FN is None))
+        Y_USE_TMA: tl.constexpr = (MASK_ACC or cuda_capability_geq(10, 0)) and not DISABLE_Y_TMA
 
         YBase = Y + start_z1.to(index_type) * stride_y_z + start_m1.to(index_type) * stride_y_m
         if USE_SCATTER_TMA:
@@ -516,8 +507,6 @@ def _p_matmul_ogs(
             acc_tile = accs[a_i]
             acc_tile *= x_scale * w_scale
 
-            if SWAP_XW:
-                acc_tile = acc_tile.T
             acc_tile = acc_tile + biases[a_i][None, :] * betas[:, None]
             if out_alpha is not None:
                 acc_tile *= out_alpha

@@ -148,7 +148,6 @@ class Case:
     n_expts_act: int = 1
     n_expt_shards: int = 1
     split_k: int = 1
-    hbm_swizzling: bool = False
     epilogue_subtile: Union[int, None] = None
 
 
@@ -184,31 +183,19 @@ class Case:
             Case(1000, 700, 700, "ragged", "float16", "float16", 8, 2, split_k=9),
             # mx types:
             Case(16, 256, 256, "ragged", "bfloat16", "mxfloat4_e2m1", 128, 4),
-            Case(16, 256, 256, "ragged", "bfloat16", "mxfloat4_e2m1", 128, 4, hbm_swizzling=True),
             Case(1000, 700, 700, "batched", "bfloat16", "mxfloat4_e2m1", 8, 2),
-            Case(1000, 700, 700, "batched", "bfloat16", "mxfloat4_e2m1", 8, 2, hbm_swizzling=True),
             Case(1000, 700, 700, "ragged", "bfloat16", "mxfloat4_e2m1", 8, 2, split_k=9),
-            Case(1000, 512, 256, "ragged", "bfloat16", "mxfloat4_e2m1", 8, 2, split_k=9, hbm_swizzling=True),
             Case(300, 400, 400, "ragged", "bfloat16", "mxfloat8_e4m3fn", 8, 4),
-            Case(300, 400, 400, "ragged", "bfloat16", "mxfloat8_e4m3fn", 8, 4, hbm_swizzling=True),
             Case(300, 400, 400, "batched", "bfloat16", "mxfloat8_e5m2", 32, 4),
             Case(1000, 700, 2, "batched", "bfloat16", "mxfloat4_e2m1", 8, 2),
-            Case(16, 256, 256, "ragged", "float8_e5m2", "mxfloat4_e2m1", 128, 4, hbm_swizzling=True),
-            Case(1000, 704, 832, "batched", "float8_e5m2", "mxfloat4_e2m1", 3, 1, hbm_swizzling=True),
-            Case(1000, 704, 832, "batched", "float8_e5m2", "mxfloat4_e2m1", 3, 1, hbm_swizzling=True),
+            Case(16, 256, 256, "ragged", "float8_e5m2", "mxfloat4_e2m1", 128, 4),
             Case(1000, 704, 832, "batched", "float8_e5m2", "mxfloat4_e2m1", 3, 1),
             Case(1000, 704, 832, "ragged", "float8_e5m2", "mxfloat4_e2m1", 8, 2, split_k=9),
-            Case(1000, 704, 832, "ragged", "float8_e5m2", "mxfloat4_e2m1", 8, 2, split_k=9, hbm_swizzling=True),
             Case(1000, 704, 832, "ragged", "float8_e5m2", "mxfloat4_e2m1", 8, 2),
-            Case(1000, 704, 832, "ragged", "float8_e5m2", "mxfloat4_e2m1", 8, 2, hbm_swizzling=True),
             Case(300, 400, 400, "ragged", "float8_e5m2", "mxfloat8_e4m3fn", 8, 4),
-            Case(300, 400, 400, "ragged", "float8_e5m2", "mxfloat8_e4m3fn", 8, 4, hbm_swizzling=True),
             Case(300, 400, 832, "ragged", "float8_e5m2", "mxfloat4_e2m1", 8, 4),
-            Case(300, 400, 832, "ragged", "float8_e5m2", "mxfloat4_e2m1", 8, 4, hbm_swizzling=True),
             Case(300, 400, 400, "batched", "float8_e5m2", "mxfloat8_e4m3fn", 32, 4),
-            Case(300, 400, 400, "batched", "float8_e5m2", "mxfloat8_e4m3fn", 32, 4, hbm_swizzling=True),
-            Case(256, 256, 256, "ragged", "float8_e5m2", "mxfloat4_e2m1", 128, 4, hbm_swizzling=True),
-            Case(256, 256, 256, "ragged", "float8_e5m2", "mxfloat4_e2m1", 128, 4, hbm_swizzling=False),
+            Case(256, 256, 256, "ragged", "float8_e5m2", "mxfloat4_e2m1", 128, 4),
             # AMD
             Case(300, 400, 400, "ragged", "float8_e4m3fnuz", "float8_e4m3fnuz"),
             Case(1000, 400, 400, "ragged", "float8_e4m3fnuz", "float8_e4m3fnuz", 3, 1),
@@ -233,8 +220,8 @@ class Case:
 @pytest.mark.parametrize("has_y_gammas", [False, True])
 @pytest.mark.parametrize("is_persistent", [False, True])
 def test_op(m, n, k, split_k, do_gather, do_scatter, fused_scatter, has_y_gammas, is_persistent, n_expts_tot,
-            n_expts_act, n_expt_shards, mode, act_dtype_str, weight_dtype_str, block_m, hbm_swizzling, epilogue_subtile,
-            device, opt_flags_scope):
+            n_expts_act, n_expt_shards, mode, act_dtype_str, weight_dtype_str, block_m, epilogue_subtile, device,
+            opt_flags_scope):
     # TODO: remove when Triton FP8 supports proper RTNE
     if is_cuda():
         if "float8" in weight_dtype_str and torch.cuda.get_device_capability()[0] < 9:
@@ -258,18 +245,6 @@ def test_op(m, n, k, split_k, do_gather, do_scatter, fused_scatter, has_y_gammas
 
     if fused_scatter and split_k > 1:
         pytest.skip("fused scatter scratchpad not supported with split_k")
-    if hbm_swizzling:
-        if is_hip():
-            pytest.skip("NYI. HBM swizzling just implemented for CUDA.")
-        if torch.cuda.get_device_capability()[0] < 9:
-            pytest.skip("NYI. Ampere swizzling.")
-        if torch.cuda.get_device_capability()[0] < 10:
-            if "mxfloat4" not in weight_dtype_str:
-                pytest.skip("NYI. Hopper swizzling just implemented for mxfp4.")
-            if k % 64 != 0 or n % 64 != 0:
-                # Automatic padding not implemented for Hopper swizzle
-                pytest.skip("Hopper swizzling acts on a 64x64 tile (4x1 mma tiles).")
-
     # launch metadata for batched / mx types may not work yet.
     test_launch_metadata = (mode == "ragged") and ("mx" not in weight_dtype_str)
 
@@ -312,16 +287,17 @@ def test_op(m, n, k, split_k, do_gather, do_scatter, fused_scatter, has_y_gammas
                                                                  torch.bfloat16 if is_mixed_input else weight_dtype,
                                                                  has_y_gammas, requires_grad=test_bwd, device=device)
     x_ref, w_ref, bias_ref, gs0_ref, gs1_ref = apply_precision(x_tri, w_tri, bias_tri, gs0_tri, gs1_tri, precision_opt)
-
     if is_mixed_input:
-        if hbm_swizzling:
+        if torch.cuda.get_device_capability()[0] == 9:
+            if k % 64 != 0 or n % 64 != 0:
+                pytest.skip("Hopper swizzling acts on a 64x64 tile (4x1 mma tiles).")
             swizzle_axis = 2
-            if torch.cuda.get_device_capability()[0] < 10:
-                swizzle_value = SwizzlingType.HOPPER
-                swizzle_scale = SwizzlingType.HOPPER
-            else:
-                swizzle_value = None
-                swizzle_scale = SwizzlingType.BLACKWELL
+            swizzle_value = SwizzlingType.HOPPER
+            swizzle_scale = SwizzlingType.HOPPER
+        elif torch.cuda.get_device_capability()[0] == 10:
+            swizzle_axis = 2
+            swizzle_value = None
+            swizzle_scale = SwizzlingType.BLACKWELL
         else:
             swizzle_axis = None
             swizzle_value = None
@@ -337,7 +313,7 @@ def test_op(m, n, k, split_k, do_gather, do_scatter, fused_scatter, has_y_gammas
                                                swizzle_scale=swizzle_scale,
                                                actual_weight_scale_shape=weight_scale_shape)
 
-    if is_persistent and not can_use_persistent_tma(x_tri, w_tri, gindx, precision_opt):
+    if is_persistent and not can_use_persistent_tma(x_tri, w_tri, precision_opt):
         pytest.skip("persistent TMAs not supported for this test")
 
     if w_tri.shape[0] == 1:
