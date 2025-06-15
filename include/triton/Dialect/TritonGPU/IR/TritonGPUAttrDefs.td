@@ -454,9 +454,10 @@ attributes too, for example,
   ];
 
   let extraClassDeclaration = extraBaseClassDeclaration#[{
+    unsigned getRank() const { return getOrder().size(); }
     int32_t getAlignment() const { return 16; }
 
-    unsigned getRank() const { return getOrder().size(); }
+    PaddedLayout toPaddedLayout(ArrayRef<int64_t> shape) const;
 
     SmallVector<unsigned> getCTAsPerCGA() const;
     SmallVector<unsigned> getCTAOrder() const;

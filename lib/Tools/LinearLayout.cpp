@@ -8,7 +8,6 @@
 #include "third_party/f2reduce/f2reduce.h"
 #include "triton/Tools/LayoutUtils.h"
 #include "triton/Tools/StrUtil.h"
-#include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SetOperations.h"
 #include "llvm/ADT/StringRef.h"
@@ -1336,6 +1335,21 @@ std::string ColumnAction::toString() const {
   ret += join(action, ", ");
   ret += "], " + inDim.str() + ", " + std::to_string(inSizeLog2) + ")";
   return ret;
+}
+
+PaddedLayout::PaddedLayout(LinearLayout linearMapping,
+                           ArrayRef<unsigned> intervals,
+                           ArrayRef<unsigned> paddings)
+    : linearMapping(std::move(linearMapping)) {
+  intervalPads.reserve(intervals.size());
+  for (auto [i, p] : llvm::zip_equal(intervals, paddings))
+    intervalPads.emplace_back(i, p);
+}
+
+std::optional<int32_t> PaddedLayout::getMinInterval() const {
+  if (intervalPads.empty())
+    return std::nullopt;
+  return *llvm::min_element(llvm::make_first_range(intervalPads));
 }
 
 } // namespace mlir::triton

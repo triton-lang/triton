@@ -840,6 +840,20 @@ public:
   std::string toString() const;
 };
 
+class PaddedLayout {
+public:
+  PaddedLayout(LinearLayout linearMapping, ArrayRef<unsigned> intervals,
+               ArrayRef<unsigned> paddings);
+
+  const LinearLayout &getLinearMapping() const { return linearMapping; }
+
+  std::optional<int32_t> getMinInterval() const;
+
+private:
+  LinearLayout linearMapping;
+  SmallVector<std::pair<unsigned, unsigned>> intervalPads;
+};
+
 } // namespace mlir::triton
 
 #endif // TRITON_TOOLS_LINEARLAYOUT_H

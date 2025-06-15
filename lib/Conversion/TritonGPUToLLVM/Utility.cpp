@@ -8,6 +8,7 @@
 #include "triton/Dialect/TritonGPU/IR/LinearLayoutConversions.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "llvm/ADT/STLExtras.h"
+#include "llvm/Support/MathExtras.h"
 
 #if defined(_MSC_VER) && !defined(__clang__)
 // from https://gist.github.com/pps83/3210a2f980fd02bb2ba2e5a1fc4a2ef0
@@ -469,6 +470,17 @@ Value getSmemVecAddr(const LinearLayout &regLayout,
     Value baseToAllocBaseDist = dot(rewriter, loc, smemOffsets, smemStrides);
     smemOffset = b.sub(smemOffset, baseToAllocBaseDist);
   }
+  if (auto paddedLayout =
+          dyn_cast<triton::gpu::PaddedSharedEncodingAttr>(sharedEnc)) {
+    Value padOffset = b.i32_val(0);
+    for (auto [interval, padding] : llvm::zip_equal(
+             paddedLayout.getIntervals(), paddedLayout.getPaddings())) {
+      Value iVal = b.i32_val(llvm::Log2_32(interval));
+      Value pVal = b.i32_val(llvm::Log2_32(padding));
+      padOffset = b.add(padOffset, b.shl(b.ashr(smemOffset, iVal), pVal));
+    }
+    smemOffset = b.add(smemOffset, padOffset);
+  }
   auto ptrTy = smemBase.getType();
   auto vecAddr = b.gep(ptrTy, elemLlvmTy, smemBase, smemOffset,
                        LLVM::GEPNoWrapFlags::inbounds);
@@ -476,17 +488,6 @@ Value getSmemVecAddr(const LinearLayout &regLayout,
 }
 
 } // namespace
-
-bool emitTransferBetweenRegistersAndShared(
-    LinearLayout &regLayout, triton::gpu::MemDescType sharedTy, Type elemLlvmTy,
-    std::optional<int32_t> maxVecElems, const SharedMemoryObject &smemObj,
-    Location loc, RewriterBase &rewriter, const TargetInfoBase &target,
-    std::function<void(VectorType, Value /*shmemAddr*/)> perVectorCallback) {
-  auto [laneId, warpId] = getLaneAndWarpId(rewriter, loc);
-  return emitTransferBetweenRegistersAndShared(
-      regLayout, sharedTy, elemLlvmTy, maxVecElems, smemObj, loc, rewriter,
-      target, laneId, warpId, perVectorCallback);
-}
 
 bool emitTransferBetweenRegistersAndShared(
     LinearLayout &regLayout, triton::gpu::MemDescType sharedTy, Type elemLlvmTy,
@@ -503,9 +504,10 @@ bool emitTransferBetweenRegistersAndShared(
   StringAttr kWarp = str_attr("warp");
 
   auto shape = sharedTy.getShape();
-  LinearLayout sharedLayout =
-      triton::gpu::toLinearLayout(shape, sharedTy.getEncoding());
-  LinearLayout regToSharedLayout = regLayout.invertAndCompose(sharedLayout);
+  PaddedLayout sharedLayout =
+      triton::gpu::toPaddedLayout(shape, sharedTy.getEncoding());
+  LinearLayout regToSharedLayout =
+      regLayout.invertAndCompose(sharedLayout.getLinearMapping());
 
   // TODO(jlebar): We don't currently support loading from shared memory in a
   // different CTA.  We'd need to emit `mapa.shared::cluster` instructions.
@@ -530,9 +532,10 @@ bool emitTransferBetweenRegistersAndShared(
   //
   // It's OK if the vector width we choose here is wider than the hardware
   // supports; LLVM will legalize it.
-  const int vecElems =
-      std::min(regToSharedLayout.getNumConsecutiveInOut(),
-               maxVecElems.value_or(std::numeric_limits<int>::max()));
+  const int vecElems = std::min(
+      {regToSharedLayout.getNumConsecutiveInOut(),
+       sharedLayout.getMinInterval().value_or(std::numeric_limits<int>::max()),
+       maxVecElems.value_or(std::numeric_limits<int>::max())});
 
   auto withCTAOffset = triton::gpu::getNumCTAs(sharedTy.getEncoding()) > 1;
   Value blockId =
@@ -572,9 +575,10 @@ bool emitTransferBetweenRegistersAndShared(
     std::function<void(VectorType, Value /*shmemAddr*/)> perVectorCallback) {
   auto regLayout = triton::gpu::toLinearLayout(registerTy.getShape(),
                                                registerTy.getEncoding());
+  auto [laneId, warpId] = getLaneAndWarpId(rewriter, loc);
   return emitTransferBetweenRegistersAndShared(
       regLayout, sharedTy, elemLlvmTy, maxVecElems, smemObj, loc, rewriter,
-      target, perVectorCallback);
+      target, laneId, warpId, perVectorCallback);
 }
 
 SmallVector<Value> loadSharedToDistributed(triton::gpu::LocalLoadOp localLoadOp,
@@ -762,10 +766,13 @@ bool isSimpleSharedMemoryAccess(ArrayRef<int64_t> shape,
                                 ArrayRef<int64_t> allocShape,
                                 triton::gpu::SharedEncodingTrait sharedEnc) {
   auto rank = shape.size();
+  auto paddedLayout =
+      dyn_cast<triton::gpu::PaddedSharedEncodingAttr>(sharedEnc);
   auto swizzledLayout =
       dyn_cast<triton::gpu::SwizzledSharedEncodingAttr>(sharedEnc);
   auto nvmmaLayout = dyn_cast<triton::gpu::NVMMASharedEncodingAttr>(sharedEnc);
-  bool noSwizzling = (swizzledLayout && swizzledLayout.getMaxPhase() == 1) ||
+  bool noSwizzling = paddedLayout ||
+                     (swizzledLayout && swizzledLayout.getMaxPhase() == 1) ||
                      (nvmmaLayout && nvmmaLayout.getSwizzlingByteWidth() == 0);
   return /*no swizzling*/ noSwizzling ||
          /*swizzling but same shape*/ shape == allocShape ||

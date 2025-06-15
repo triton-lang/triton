@@ -49,6 +49,8 @@ class AMDMfmaEncodingAttr;
 // Returns std::nullopt if the given layout can't be converted to an LL.
 LinearLayout toLinearLayout(ArrayRef<int64_t> shape, Attribute layout);
 
+PaddedLayout toPaddedLayout(ArrayRef<int64_t> shape, Attribute layout);
+
 // Convert the shared encoding of a tensor with `nvmma_shared` layout to a
 // LinearLayout that maps from a linear shared memory offset to tensor index.
 //

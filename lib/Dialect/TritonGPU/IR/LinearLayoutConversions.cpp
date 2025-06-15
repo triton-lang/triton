@@ -1,7 +1,5 @@
 #include <vector>
 
-#include "triton/Dialect/Triton/IR/Dialect.h"
-#include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Attributes.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/LinearLayoutConversions.h"
@@ -11,12 +9,9 @@
 #include "triton/Tools/LinearLayout.h"
 #include "triton/Tools/StrUtil.h"
 #include "llvm/ADT/DenseMap.h"
-#include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/Twine.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/MathExtras.h"
-
-using mlir::triton::ScaleDotElemType;
 
 namespace mlir::triton::gpu {
 namespace {
@@ -273,6 +268,15 @@ LinearLayout getCoreMatrixLinearLayout(NVMMASharedEncodingAttr shared,
 }
 
 } // namespace
+
+PaddedLayout
+PaddedSharedEncodingAttr::toPaddedLayout(ArrayRef<int64_t> shape) const {
+  auto nonSwizzleAttr = SwizzledSharedEncodingAttr::get(
+      getContext(), /*vec=*/1, /*perPhase=*/1, /*maxPhase=*/1, getOrder(),
+      getCTALayout());
+  LinearLayout ll = swizzledSharedToLinearLayout(shape, nonSwizzleAttr);
+  return PaddedLayout(ll, getIntervals(), getPaddings());
+}
 
 LinearLayout nvmmaSharedToLinearLayout(ArrayRef<int64_t> shape,
                                        NVMMASharedEncodingAttr shared,
@@ -1123,6 +1127,16 @@ LinearLayout toLinearLayout(ArrayRef<int64_t> shape, Attribute layout) {
   auto *ctx = layout.getContext();
   return ctx->getLoadedDialect<TritonGPUDialect>()->toLinearLayout(shape,
                                                                    layout);
+}
+
+PaddedLayout toPaddedLayout(ArrayRef<int64_t> shape, Attribute layout) {
+  auto *ctx = layout.getContext();
+  if (auto paddedLayout = dyn_cast<PaddedSharedEncodingAttr>(layout)) {
+    return paddedLayout.toPaddedLayout(shape);
+  }
+  auto ll =
+      ctx->getLoadedDialect<TritonGPUDialect>()->toLinearLayout(shape, layout);
+  return PaddedLayout(ll, /*intervals=*/{}, /*paddings=*/{});
 }
 
 LinearLayout getLayoutWithinBlock(const LinearLayout &layout) {
