@@ -34,10 +34,22 @@ public:
     });
     if (loops.empty())
       return;
+    // FIXME: skip warpspec if there is else block.
+    bool hasElse = false;
+    funcOp->walk([&](scf::IfOp ifOp) {
+      if (ifOp.elseBlock()) {
+        for (Operation &op : ifOp.elseBlock()->getOperations()) {
+          hasElse = true;
+        }
+      }
+    });
+    if (hasElse)
+      return;
 
     OpBuilder builder(funcOp);
     auto moduleOp = funcOp->getParentOfType<ModuleOp>();
     unsigned numWarpGroups = 3;
+    // FIXME: skip data partitioning with on-host TMA.
     bool success = false;
     for (; numWarpGroups >= 2; numWarpGroups--) {
       // Partition key ops into multiple async tasks.
