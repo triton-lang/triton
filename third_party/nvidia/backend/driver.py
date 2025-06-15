@@ -10,6 +10,7 @@ from triton.runtime.build import compile_module_from_src
 from triton.runtime import _allocation
 from triton.backends.compiler import GPUTarget
 from triton.backends.driver import GPUDriver
+from .compiler import all_possible_fp8_dtypes
 
 dirname = os.path.dirname(os.path.realpath(__file__))
 include_dirs = [os.path.join(dirname, "include")]
@@ -83,6 +84,8 @@ def ty_to_cpp(ty):
         return "CUdeviceptr"
     if ty.startswith("tensordesc"):
         return "CUtensorMap"
+    if ty in all_possible_fp8_dtypes():
+        return "uint8_t"
     return {
         "i1": "int32_t",
         "i8": "int8_t",
