@@ -621,11 +621,16 @@ private:
           interference[x].insert(y);
         }
 
+        auto getAsyncRegion = [](Operation *op) {
+          if (op->hasTrait<OpTrait::AsyncRegions>())
+            return op;
+          return op->getParentWithTrait<OpTrait::AsyncRegions>();
+        };
         // Buffers also interfere if their allocation offsets overlap and they
         // exist within regions that may execute simultaneously with respect to
         // each other.
-        auto wsx = x->owner->getParentWithTrait<OpTrait::AsyncRegions>();
-        auto wsy = y->owner->getParentWithTrait<OpTrait::AsyncRegions>();
+        auto wsx = getAsyncRegion(x->owner);
+        auto wsy = getAsyncRegion(y->owner);
         if (wsx && wsy && wsx == wsy &&
             x->owner->getParentRegion() != y->owner->getParentRegion() &&
             xSizeRange.intersects(ySizeRange)) {

@@ -761,12 +761,12 @@ tt.func @implicit_and_explicit_capture_liveness() {
 }
 
 // expected-remark @below {{explicit_capture_liveness}}
-// expected-remark @below {{size = 33}}
-// expected-remark @below {{offset = 32, size = 1}}
+// expected-remark @below {{size = 45}}
+// expected-remark @below {{offset = 44, size = 1}}
 tt.func @explicit_capture_liveness() {
   // expected-remark @below {{offset = 0, size = 16}}
   %0 = ttg.local_alloc : () -> !ttg.memdesc<2xi64, #A_SHARED, #smem, mutable>
-  // expected-remark @below {{offset = 16, size = 12}}
+  // expected-remark @below {{offset = 32, size = 12}}
   ttg.warp_specialize(%0)
   default {
     // expected-remark @below {{offset = 16, size = 16}}
