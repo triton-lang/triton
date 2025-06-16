@@ -302,7 +302,6 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
 
     // Extract reps from smem
     auto kReg = str_attr("register");
-    auto kVec = str_attr("vector");
     auto kReps = str_attr("reps");
     auto nReps = smem.getInDimSize(kReps);
     auto reps = LinearLayout::identity1D(nReps, kReg, kReps);
@@ -311,18 +310,6 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
     auto totalLoadCvt = dstLayout.invertAndCompose(smem);
 
     // FIXME(Lezcano): The legacy path also creates PRMT, so we should revisit
-    // If the vectorization up to 32 bits is not contiguous, the current
-    // algorithm creates a ton of PRMTs that often kill performance
-    auto vecUntilB32 = std::min<int>(llvm::Log2_32(32 / bitwidth),
-                                     smem.getInDimSizeLog2(kVec));
-    for (int i = 0; i < vecUntilB32; i++) {
-      if (totalStoreCvt.getBasis(kReg, i, kVec) != (1 << i)) {
-        return failure();
-      }
-      if (totalLoadCvt.getBasis(kReg, i, kVec) != (1 << i)) {
-        return failure();
-      }
-    }
 
     // The permutation exists by construction of the reps dimension in
     // optimalSwizzling
