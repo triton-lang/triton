@@ -504,10 +504,10 @@ bool emitTransferBetweenRegistersAndShared(
   StringAttr kWarp = str_attr("warp");
 
   auto shape = sharedTy.getShape();
-  PaddedLayout sharedLayout =
+  PaddedLayout paddedLayout =
       triton::gpu::toPaddedLayout(shape, sharedTy.getEncoding());
   LinearLayout regToSharedLayout =
-      regLayout.invertAndCompose(sharedLayout.getLinearMapping());
+      regLayout.invertAndCompose(paddedLayout.getLinearMapping());
 
   // TODO(jlebar): We don't currently support loading from shared memory in a
   // different CTA.  We'd need to emit `mapa.shared::cluster` instructions.
@@ -534,7 +534,7 @@ bool emitTransferBetweenRegistersAndShared(
   // supports; LLVM will legalize it.
   const int vecElems = std::min(
       {regToSharedLayout.getNumConsecutiveInOut(),
-       sharedLayout.getMinInterval().value_or(std::numeric_limits<int>::max()),
+       paddedLayout.getMinInterval().value_or(std::numeric_limits<int>::max()),
        maxVecElems.value_or(std::numeric_limits<int>::max())});
 
   auto withCTAOffset = triton::gpu::getNumCTAs(sharedTy.getEncoding()) > 1;
@@ -549,10 +549,13 @@ bool emitTransferBetweenRegistersAndShared(
   // take out the "block" dimension.
   // Thus we use `pseudoinvert` instead of `invert` here for simplicity.
   auto allocShape = sharedTy.getAllocShape();
-  LinearLayout invertAllocSharedLayout =
-      triton::gpu::toLinearLayout(allocShape.take_back(sharedTy.getRank()),
-                                  sharedTy.getEncoding())
-          .pseudoinvert();
+  auto invertAllocSharedLayout = LinearLayout::empty();
+  if (paddedLayout.hasNoPadding()) {
+    invertAllocSharedLayout =
+        triton::gpu::toLinearLayout(allocShape.take_back(sharedTy.getRank()),
+                                    sharedTy.getEncoding())
+            .pseudoinvert();
+  }
 
   int numElems = regToSharedLayout.getInDimSize(kRegister);
   auto vecTy = vec_ty(elemLlvmTy, vecElems);

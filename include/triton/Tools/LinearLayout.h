@@ -849,6 +849,8 @@ public:
 
   std::optional<int32_t> getMinInterval() const;
 
+  bool hasNoPadding() const;
+
 private:
   LinearLayout linearMapping;
   SmallVector<std::pair<unsigned, unsigned>> intervalPads;

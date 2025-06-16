@@ -1352,4 +1352,10 @@ std::optional<int32_t> PaddedLayout::getMinInterval() const {
   return *llvm::min_element(llvm::make_first_range(intervalPads));
 }
 
+bool PaddedLayout::hasNoPadding() const {
+  return intervalPads.empty() ||
+         llvm::all_of(llvm::make_second_range(intervalPads),
+                      [](unsigned v) { return v == 0; });
+}
+
 } // namespace mlir::triton
