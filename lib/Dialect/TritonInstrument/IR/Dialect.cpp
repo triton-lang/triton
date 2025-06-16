@@ -14,12 +14,6 @@ using namespace mlir;
 using namespace mlir::triton::gpu;
 using namespace mlir::triton::instrument;
 
-namespace mlir {
-namespace triton {
-namespace instrument {} // namespace instrument
-} // namespace triton
-} // namespace mlir
-
 void TritonInstrumentDialect::initialize() {
   addOperations<
 #define GET_OP_LIST
