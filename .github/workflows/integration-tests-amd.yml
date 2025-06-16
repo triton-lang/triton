@@ -17,7 +17,7 @@ jobs:
         include:
           - image: rocm/pytorch:rocm6.2.2_ubuntu22.04_py3.10_pytorch_2.5.1_asan
           - image: rocm/7.0-preview:rocm7.0_preview_ubuntu22.04_llama2_70b_training_mlperf_mi35X_prealpha
-            runner: amd-gfx950
+            runner: ["amd-gfx950"]
     env:
       RUNNER_TYPE: ${{ matrix.runner[1] }}
       TRITON_BUILD_WITH_CCACHE: "true"
