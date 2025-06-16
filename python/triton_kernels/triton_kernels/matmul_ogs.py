@@ -1,6 +1,5 @@
 from dataclasses import dataclass
 import itertools
-import math
 import sys
 import torch
 import triton
@@ -123,13 +122,14 @@ class TensorDescriptorBuilder:
     @staticmethod
     def create_block_scale_descriptor(mx_tensor: torch.Tensor, block_k: int, block_n: int, B: int, K: int, N: int,
                                       mx_scale_stride_k: int, mx_scale_stride_n: int, swizzle_mx: bool,
-                                      transpose: bool) -> TensorDescriptor:
+                                      transpose: Optional[bool]) -> TensorDescriptor:
         """Create a tensor descriptor for block scale factors"""
         MX_PACK_DIVISOR = 32
         MX_SCALE_BLOCK_K = block_k // MX_PACK_DIVISOR
         PackedK = (K + MX_PACK_DIVISOR - 1) // MX_PACK_DIVISOR
 
         if swizzle_mx:
+            assert transpose is None
             num_expt_x_ncol = B * triton.cdiv(N, 128)
             return TensorDescriptor(
                 base=mx_tensor, shape=[1, num_expt_x_ncol, triton.cdiv(PackedK, 4), 2, 256],
@@ -149,13 +149,11 @@ class TensorDescriptorBuilder:
         return x.view(*new_shape)
 
     @staticmethod
-    def create_input_descriptor_gather(x_tensor: torch.Tensor, K: int, strides: tuple[int, int],
-                                       block_k: int) -> TensorDescriptor:
+    def create_input_descriptor_gather(x_tensor: torch.Tensor, block_k: int) -> TensorDescriptor:
         """Create a tensor descriptor for input matrix X via TMA gather"""
-        x_desc = TensorDescriptorBuilder.squeeze_after_dim(x_tensor)
-        assert x_desc.ndim == 2, "TMA gather descriptor requires 2D input"
-        INT_MAX = 2147483647
-        return TensorDescriptor(base=x_desc, shape=[INT_MAX, K], strides=strides, block_shape=[1, block_k])
+        x = TensorDescriptorBuilder.squeeze_after_dim(x_tensor)
+        assert x.ndim == 2, "TMA gather descriptor requires 2D input"
+        return TensorDescriptor.from_tensor(x, block_shape=[1, block_k])
 
     @staticmethod
     def create_descriptor(x_tensor: torch.Tensor, block_m: int, block_k: int) -> TensorDescriptor:
@@ -166,12 +164,11 @@ class TensorDescriptorBuilder:
         return TensorDescriptor.from_tensor(x_tensor, block_shape=block_shape)
 
     @staticmethod
-    def create_input_descriptor(x_tensor: torch.Tensor, B: int, K: int, strides: tuple[int, int, int], block_m: int,
-                                block_k: int, use_gather_tma: bool, use_load_tma: bool) -> TensorDescriptor:
+    def create_input_descriptor(x_tensor: torch.Tensor, block_m: int, block_k: int, use_gather_tma: bool,
+                                use_load_tma: bool) -> TensorDescriptor:
         """Create a tensor descriptor for input matrix X based on TMA usage"""
         if use_gather_tma:
-            assert B == 1, "Gather does not support 3D input."
-            return TensorDescriptorBuilder.create_input_descriptor_gather(x_tensor, K, strides[1:], block_k)
+            return TensorDescriptorBuilder.create_input_descriptor_gather(x_tensor, block_k)
         elif use_load_tma:
             return TensorDescriptorBuilder.create_descriptor(x_tensor, block_m, block_k)
         else:
@@ -603,10 +600,10 @@ def _create_tma_descriptors(
 
     if USE_GATHER_TMA or X_USE_LOAD_TMA:
         x_tensor_or_desc = TensorDescriptorBuilder.create_input_descriptor(
-                x, B, K, x.stride(),
-                opt_flags.block_m, opt_flags.block_k,
+                x, opt_flags.block_m, opt_flags.block_k,
                 USE_GATHER_TMA, X_USE_LOAD_TMA
             )
+        assert x_tensor_or_desc.base.data_ptr() == x.data_ptr()
 
     w_transpose = w.stride(2) != 1
     w_desc = TensorDescriptorBuilder.create_weight_descriptor(
@@ -626,7 +623,7 @@ def _create_tma_descriptors(
         pad = 128
         dim_to_pad = -1
         old_size = w_desc.shape[dim_to_pad]
-        padded_size = math.ceil(old_size / pad) * pad
+        padded_size = triton.cdiv(old_size, pad) * pad
         if padded_size != old_size:
             w_desc.shape = list(w_desc.shape)
             w_desc.shape[dim_to_pad] = padded_size

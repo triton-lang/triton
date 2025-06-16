@@ -258,13 +258,14 @@ def _p_matmul_ogs(
             mask_m = offs_m < (M if M is not None else eM)
             if USE_GATHER_TMA:
                 # Mask the gather indices and load -1 instead. TMA will handle OOB accesses.
-                offs_x_m = tl.load(GatherIndx + start_m.to(index_type) + offs_m,
-                                   mask=mask_m, other=-N_EXPTS_ACT) // N_EXPTS_ACT
                 if ExptData is None:
+                    offs_x_m = tl.load(GatherIndx + start_m.to(index_type) + offs_m, mask=mask_m)
                     # Bump rows to account for the Z offset.
-                    # offs_x_m += start_z * (stride_x_z // stride_x_m)
-                    # TODO: mask -1s
-                    pass
+                    offs_x_m += start_z * (stride_x_z // stride_x_m)
+                    offs_x_m = tl.where(mask_m, offs_x_m, -1)
+                else:
+                    offs_x_m = tl.load(GatherIndx + start_m.to(index_type) + offs_m,
+                                       mask=mask_m, other=-N_EXPTS_ACT) // N_EXPTS_ACT
             else:
                 if M is not None:
                     offs_m = tl.max_contiguous(tl.multiple_of(offs_m % M, BLOCK_M), BLOCK_M)
