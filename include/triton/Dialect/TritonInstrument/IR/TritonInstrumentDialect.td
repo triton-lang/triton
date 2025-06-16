@@ -4,7 +4,7 @@
 include "mlir/IR/OpBase.td"
 
 def TritonInstrument_Dialect : Dialect {
-  let name = "ti";
+  let name = "tti";
   let cppNamespace = "::mlir::triton::instrument";
 }
 

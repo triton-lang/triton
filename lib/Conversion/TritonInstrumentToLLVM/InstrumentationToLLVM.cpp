@@ -28,16 +28,6 @@ BlockedEncodingAttr getBlockedEncoding(ModuleOp module, unsigned int size) {
                                   /*order=*/{0}, ctaLayout);
 }
 
-Value createConstIntTensor(OpBuilder &builder, Location loc, ModuleOp module,
-                           int val, Type elType, int64_t size) {
-  assert(llvm::isPowerOf2_64(size) && "Expected power of 2");
-  auto tensorType =
-      RankedTensorType::get({size}, elType, getBlockedEncoding(module, size));
-  auto denseAttr = DenseElementsAttr::get(
-      tensorType, APInt(elType.getIntOrFloatBitWidth(), val));
-  return builder.create<arith::ConstantOp>(loc, tensorType, denseAttr);
-}
-
 Value createConstIntTensor(OpBuilder &builder, Location loc, int val,
                            RankedTensorType tensorType) {
   auto denseAttr = DenseElementsAttr::get(
