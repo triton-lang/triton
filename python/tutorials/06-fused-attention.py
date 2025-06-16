@@ -633,15 +633,15 @@ def test_op(Z, H, N_CTX, HEAD_DIM, causal, warp_specialize, dtype=torch.float16)
     tri_dk, k.grad = k.grad.clone(), None
     tri_dq, q.grad = q.grad.clone(), None
     # compare
-    torch.testing.assert_close(ref_out, tri_out, atol=1e-2, rtol=0)
+    torch.testing.assert_close(tri_out, ref_out, atol=1e-2, rtol=0)
     rtol = 0.0
     # Relative tolerance workaround for known hardware limitation of CDNA2 GPU.
     # For details see https://pytorch.org/docs/stable/notes/numerical_accuracy.html#reduced-precision-fp16-and-bf16-gemms-and-convolutions-on-amd-instinct-mi200-devices
     if torch.version.hip is not None and triton.runtime.driver.active.get_current_target().arch == "gfx90a":
         rtol = 1e-2
-    torch.testing.assert_close(ref_dv, tri_dv, atol=1e-2, rtol=rtol)
-    torch.testing.assert_close(ref_dk, tri_dk, atol=1e-2, rtol=rtol)
-    torch.testing.assert_close(ref_dq, tri_dq, atol=1e-2, rtol=rtol)
+    torch.testing.assert_close(tri_dv, ref_dv, atol=1e-2, rtol=rtol)
+    torch.testing.assert_close(tri_dk, ref_dk, atol=1e-2, rtol=rtol)
+    torch.testing.assert_close(tri_dq, ref_dq, atol=1e-2, rtol=rtol)
 
 
 try:
