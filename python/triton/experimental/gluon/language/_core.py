@@ -173,7 +173,7 @@ class shared_memory_descriptor_type(base_type):
         out.append(self.to_ir(builder))
 
     def __str__(self) -> str:
-        return f"shared_memory_descriptor<{self.element_ty}, {self.shape}, {self.layout}>"
+        return f"shared_memory_descriptor<{self.element_ty}, {self.shape}, {self.layout}, {self.alloc_shape}>"
 
     def __eq__(self, other) -> bool:
         return (type(self) is type(other) and self.shape == other.shape and self.layout == other.layout
