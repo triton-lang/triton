@@ -125,7 +125,6 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
                   ArrayRef<Value> valsArray, // Input for store, output for load
                   Type llvmElemTy, Value smemBase,
                   ConversionPatternRewriter &rewriter) const {
-    // Local copy of vals_ to avoid modifying the original vector
     auto vals = to_vector(valsArray);
     bool isStore = !vals.empty();
     auto b = TritonLLVMOpBuilder(loc, rewriter);
@@ -275,10 +274,6 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
     dstLayout = actionRemoveBroadcastedRegs(dstLayout).apply(dstLayout);
 
     auto smem = optimalSwizzling(srcLayout, dstLayout, bitwidth);
-    auto [r, w] = logBankConflicts(srcLayout, dstLayout, smem, bitwidth);
-    // If there are bank conflicts, we fallback to padding for now
-    // if (r > 0 || w > 0)
-    //   return failure();
 
     // Extract reps from smem
     auto kReg = str_attr("register");
@@ -286,30 +281,30 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
     auto nReps = smem.getInDimSize(kReps);
     auto reps = LinearLayout::identity1D(nReps, kReg, kReps);
 
-    auto totalLoadCvt = srcLayout.invertAndCompose(smem);
-    auto totalStoreCvt = dstLayout.invertAndCompose(smem);
+    auto totalStoreCvt = srcLayout.invertAndCompose(smem);
+    auto totalLoadCvt = dstLayout.invertAndCompose(smem);
 
     // The permutation exists by construction of the reps dimension in
     // optimalSwizzling
-    auto permLoad =
-        regPermForDivide(totalLoadCvt, reps, /*left=*/false).value();
-    totalLoadCvt = permLoad.apply(totalLoadCvt);
-    inVals = permLoad.apply(inVals);
     auto permStore =
         regPermForDivide(totalStoreCvt, reps, /*left=*/false).value();
     totalStoreCvt = permStore.apply(totalStoreCvt);
+    inVals = permStore.apply(inVals);
+    auto permLoad =
+        regPermForDivide(totalLoadCvt, reps, /*left=*/false).value();
+    totalLoadCvt = permLoad.apply(totalLoadCvt);
 
     // Remove the reps and flatten into offset
-    auto loadCvt = *divideRight(totalLoadCvt, reps);
     auto storeCvt = *divideRight(totalStoreCvt, reps);
+    auto loadCvt = *divideRight(totalLoadCvt, reps);
     auto kOffset = str_attr("offset");
-    loadCvt = loadCvt.reshapeOuts({{kOffset, loadCvt.getTotalOutDimSize()}});
     storeCvt = storeCvt.reshapeOuts({{kOffset, storeCvt.getTotalOutDimSize()}});
+    loadCvt = loadCvt.reshapeOuts({{kOffset, loadCvt.getTotalOutDimSize()}});
 
     Value smemBase =
         LLVM::getSharedMemoryBase(loc, rewriter, targetInfo, op.getOperation());
 
-    auto tileSize = loadCvt.getInDimSize(kReg);
+    auto tileSize = storeCvt.getInDimSize(kReg);
 
     assert(inVals.size() == tileSize * nReps);
     SmallVector<Value> outVals;
@@ -320,17 +315,17 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
 
       auto tileInVals = ArrayRef<Value>(inVals).slice(i * tileSize, tileSize);
       // Store
-      lowerLdStShared(loc, ctx, loadCvt, elemsPerVec, tileInVals, llvmElemTy,
+      lowerLdStShared(loc, ctx, storeCvt, elemsPerVec, tileInVals, llvmElemTy,
                       smemBase, rewriter);
       b.barrier();
       // Load
       SmallVector<Value> tileOutVals = lowerLdStShared(
-          loc, ctx, storeCvt, elemsPerVec, {}, llvmElemTy, smemBase, rewriter);
+          loc, ctx, loadCvt, elemsPerVec, {}, llvmElemTy, smemBase, rewriter);
       llvm::append_range(outVals, tileOutVals);
     }
 
-    // Undo the permStore used to divideRight
-    outVals = permStore.inverse().apply(outVals);
+    // Undo the permLoad used to divideRight
+    outVals = permLoad.inverse().apply(outVals);
 
     // Unwrap sub-byte elements if necessary
     if (isSubByte) {
