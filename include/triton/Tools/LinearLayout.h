@@ -806,9 +806,10 @@ private:
   SmallVector<size_t> action;
   StringAttr inDim;
   size_t inSizeLog2;
-  bool isIdentity;
+  bool isIdentity = true;
 
 public:
+  ColumnAction() = default;
   ColumnAction(ArrayRef<size_t> action, StringAttr inDim, size_t inSizeLog2)
       : action(action), inDim(inDim), inSizeLog2(inSizeLog2) {
     auto it = llvm::max_element(action);
