@@ -2,50 +2,13 @@ from collections.abc import Callable, Iterator, Sequence
 import functools
 import inspect
 import operator
-import os
-import subprocess
 from typing import Any
 import triton
 import re
-from triton import knobs
 from triton.runtime import _allocation
 from triton.backends.compiler import GPUTarget
 from triton.backends.driver import GPUDriver
 from triton._C.libtriton import nvidia
-
-dirname = os.path.dirname(os.path.realpath(__file__))
-include_dirs = [os.path.join(dirname, "include")]
-libdevice_dir = os.path.join(dirname, "lib")
-
-
-@functools.lru_cache()
-def libcuda_dirs():
-    if env_libcuda_path := knobs.nvidia.libcuda_path:
-        return [env_libcuda_path]
-
-    libs = subprocess.check_output(["/sbin/ldconfig", "-p"]).decode()
-    # each line looks like the following:
-    # libcuda.so.1 (libc6,x86-64) => /lib/x86_64-linux-gnu/libcuda.so.1
-    locs = [line.split()[-1] for line in libs.splitlines() if "libcuda.so.1" in line]
-    dirs = [os.path.dirname(loc) for loc in locs]
-    env_ld_library_path = os.getenv("LD_LIBRARY_PATH")
-    if env_ld_library_path and not dirs:
-        dirs = [dir for dir in env_ld_library_path.split(":") if os.path.exists(os.path.join(dir, "libcuda.so.1"))]
-    msg = 'libcuda.so cannot found!\n'
-    if locs:
-        msg += 'Possible files are located at %s.' % str(locs)
-        msg += 'Please create a symlink of libcuda.so to any of the files.'
-    else:
-        msg += 'Please make sure GPU is set up and then run "/sbin/ldconfig"'
-        msg += ' (requires sudo) to refresh the linker cache.'
-    assert any(os.path.exists(os.path.join(path, 'libcuda.so.1')) for path in dirs), msg
-    return dirs
-
-
-@functools.lru_cache()
-def library_dirs():
-    return [libdevice_dir, *libcuda_dirs()]
-
 
 # ------------------------
 # Utils
@@ -194,9 +157,9 @@ def make_launcher(signature_types: Sequence[Any], tensordesc_meta: Sequence[Any]
     signature_metadata = nvidia.cuda_utils.build_signature_metadata(flattened_signature)
 
     def wrapper(grid_dim_x: int, grid_dim_y: int, grid_dim_z: int, stream: int, kernel: int,
-                launch_cooperative_grid: bool, launch_pdl: bool, global_scratch: any,
-                packed_metadata: tuple[int, int, int, int, int, int], hook_args: any,
-                launch_enter_hook: Callable[..., None], launch_exit_hook: Callable[..., None], *args: any) -> None:
+                launch_cooperative_grid: bool, launch_pdl: bool, global_scratch: Any,
+                packed_metadata: tuple[int, int, int, int, int, int], hook_args: Any,
+                launch_enter_hook: Callable[..., None], launch_exit_hook: Callable[..., None], *args: Any) -> None:
         non_const_args = list(_flatten_and_apply_arg_mask(args, non_const_arg_mask))
 
         nvidia.cuda_utils.launch(grid_dim_x, grid_dim_y, grid_dim_z, stream, kernel, launch_cooperative_grid,
