@@ -1095,6 +1095,7 @@ class CodeGenerator(ast.NodeVisitor):
 
         with enter_sub_region(self) as sr:
             liveins, insert_block = sr
+            livevals = {name: flatten_values_to_ir([v]) for name, v in liveins.items()}
             ip, last_loc = self._get_insertion_point_and_loc()
 
             # create loop body block
@@ -1106,25 +1107,24 @@ class CodeGenerator(ast.NodeVisitor):
             self.scf_stack.pop()
             block.erase()
 
-            # If a variable (name) is defined in both its parent & itself, then it's
-            # a loop-carried variable. (They must be of the same type)
-            init_args = []
-            yields = []
+            # If a variable (name) has changed value within the loop, then it's
+            # a loop-carried variable. (The new and old value must be of the
+            # same type)
+            init_tys = []
+            init_handles = []
             names = []
-            for name in self.local_defs:
-                if name in liveins:
-                    loop_val = self.local_defs[name]
-                    live_val = liveins[name]
-                    self._verify_loop_carried_variable(name, loop_val, live_val)
+
+            for name, live_val in livevals.items():
+                loop_val = flatten_values_to_ir([self.lscope[name]])
+                if live_val != loop_val:
+                    self._verify_loop_carried_variable(name, self.lscope[name], liveins[name])
 
                     names.append(name)
-                    init_args.append(live_val)
-                    yields.append(loop_val)
+                    init_tys.append(liveins[name].type)
+                    init_handles.extend(live_val)
 
             # create ForOp
             self._set_insertion_point_and_loc(ip, last_loc)
-            init_handles = flatten_values_to_ir(init_args)
-            init_tys = [v.type for v in init_args]
             for_op = self.builder.create_for_op(lb, ub, step, init_handles)
             if _unwrap_if_constexpr(num_stages) is not None:
                 for_op.set_attr("tt.num_stages", self.builder.get_int32_attr(num_stages))
@@ -1149,17 +1149,10 @@ class CodeGenerator(ast.NodeVisitor):
                 self.set_value(name, val)
             self.visit_compound_statement(node.body)
             self.scf_stack.pop()
-            yields = []
-            for name in self.local_defs:
-                if name in liveins:
-                    local = self.local_defs[name]
-                    if isinstance(local, constexpr):
-                        local = self.semantic.to_tensor(local)
-                    yields.append(local)
+            yield_handles = flatten_values_to_ir(self.lscope[name] for name in names)
 
             # create YieldOp
-            if len(yields) > 0:
-                yield_handles = flatten_values_to_ir(yields)
+            if len(yield_handles) > 0:
                 self.builder.create_yield_op(yield_handles)
             for_op_region = for_op_body.get_parent()
             assert for_op_region.size() == 1, "We use SCF, so the loop body should only have one block"
