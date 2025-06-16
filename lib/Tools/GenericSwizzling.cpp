@@ -332,6 +332,39 @@ LinearLayout optimalSwizzling(const LinearLayout &src, const LinearLayout &dst,
   // segments
   auto unionBasis = llvm::to_vector(llvm::concat<int32_t>(vbasis, sbasis));
   SmallVector<int32_t> bbasis = complementBasis(unionBasis, dim);
+  // We might be able to vectorise a bit more the load or the store
+  // This may happen when there is broadcasting
+  // e.g for fp32
+  // src = {reg = [], lane = [1, 2, 4, 8, 16], warp = [32]}
+  // dst = {reg = [8, 32], lane = [0, 0, 1, 2, 4], warp = [16]}
+  if (b32Vec < 2) {
+    // For every bank line, find if it is in regSrc or regDst
+    // and if so, store the index in the vector
+    SmallVector<int32_t> banksInRegSrc;
+    SmallVector<int32_t> banksInRegDst;
+    for (auto r : bbasis) {
+      if (llvm::any_of(regSrc, [r](int32_t b) { return b == r; })) {
+        banksInRegSrc.push_back(r);
+      }
+      if (llvm::any_of(regDst, [r](int32_t b) { return b == r; })) {
+        banksInRegDst.push_back(r);
+      }
+    }
+    // Choose the max vectorisation. Bias towards dst for no very good reason
+    // Move the vectorisation elements to the front
+    auto newBbasis = banksInRegSrc.size() > banksInRegDst.size()
+                         ? std::move(banksInRegSrc)
+                         : std::move(banksInRegDst);
+    SmallVector<int32_t> others;
+    for (auto b : bbasis) {
+      if (!llvm::any_of(newBbasis, [b](int32_t b2) { return b2 == b; })) {
+        others.push_back(b);
+      }
+    }
+    newBbasis.append(others.begin(), others.end());
+    bbasis = std::move(newBbasis);
+  }
+
   assert(bbasis.size() == lenBbasis + (lenSbasis - sbasis.size()) &&
          "bbasis size mismatch");
 
