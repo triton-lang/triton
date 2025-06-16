@@ -26,10 +26,11 @@ namespace {
 inline void gpuAssert(CUresult code, const char *file, int line) {
   if (code == CUDA_SUCCESS)
     return;
-  const char *error = nullptr;
-  cuGetErrorString(code, &error);
-  py::str errorStr = py::str("Triton Error [CUDA]: {0}").format(error);
-  throw py::cast_error(errorStr);
+  const char *errorPtr = nullptr;
+  cuGetErrorString(code, &errorPtr);
+  std::string errorStr = errorPtr ? errorPtr : "Unknown CUDA error";
+  std::string errorMessage = "Triton Error [CUDA]: " + errorStr;
+  throw py::cast_error(errorMessage);
 }
 
 #define CUDA_CHECK(ans) gpuAssert((ans), __FILE__, __LINE__);
