@@ -970,14 +970,13 @@ static void decomposeMixedModeDotOp(ModuleOp mod) {
 
 FailureOr<WmmaIntrinsic> chooseWmmaInstruction(Location loc, int wmmaVersion,
                                                RankedTensorType cType,
-                                               Type aElemType, Type bElemType,
+                                               Type aElemType, Type bElemType, Type cElemType,
                                                int inputKSize,
                                                int enforcedNonKDim) {
   // number of matrix elements along k dim per one WMMA instruction
   unsigned kDim = 0;
 
   auto resShape = cType.getShape();
-  auto cElemType = cType.getElementType();
   auto rank = resShape.size();
   auto M = resShape[rank - 2];
   auto N = resShape[rank - 1];
@@ -1013,12 +1012,13 @@ FailureOr<WmmaIntrinsic> chooseWmmaInstruction(Location loc, int wmmaVersion,
   return maybeWmmaIntrinsic;
 }
 
-FailureOr<WmmaIntrinsic> chooseWmmaInstruction(tt::DotOp dot, int wmmaVersion,
+FailureOr<WmmaIntrinsic> chooseWmmaInstruction(tt::DotOp dot, OperandTypesVector operandTypes, int wmmaVersion,
                                                int nonKDim) {
 
   return chooseWmmaInstruction(dot.getLoc(), wmmaVersion, dot.getC().getType(),
-                               dot.getA().getType().getElementType(),
-                               dot.getB().getType().getElementType(),
+                               operandTypes[0],
+                               operandTypes[1],
+                               operandTypes[2],
                                dot.getA().getType().getShape().back(), nonKDim);
 }
 
@@ -1057,7 +1057,7 @@ public:
 
     // check shape
     FailureOr<WmmaIntrinsic> wmmaInstr =
-        chooseWmmaInstruction(dotOp, wmmaVersion, nonKDim);
+        chooseWmmaInstruction(dotOp, operandTypes, wmmaVersion, nonKDim);
     if (failed(wmmaInstr)) {
       return failure();
     }
