@@ -14,6 +14,10 @@ jobs:
     strategy:
       matrix:
         runner: ${{ fromJson(inputs.matrix) }}
+        include:
+          - image: rocm/pytorch:rocm6.2.2_ubuntu22.04_py3.10_pytorch_2.5.1_asan
+          - image: rocm/7.0-preview:rocm7.0_preview_ubuntu22.04_llama2_70b_training_mlperf_mi35X_prealpha
+            runner: ["amd-gfx950"]
     env:
       RUNNER_TYPE: ${{ matrix.runner[1] }}
       TRITON_BUILD_WITH_CCACHE: "true"
@@ -24,7 +28,7 @@ jobs:
       PYTHON: "python3"
       CCACHE_COMPRESS: "true"
     container:
-      image: rocm/pytorch:rocm6.2.2_ubuntu22.04_py3.10_pytorch_2.5.1_asan
+      image: ${{ matrix.image }}
       options: --device=/dev/kfd --device=/dev/dri --security-opt seccomp=unconfined --group-add video --user root
     steps:
       - name: Checkout
@@ -76,9 +80,14 @@ jobs:
         run: |
           echo "PATH is '$PATH'"
           pip uninstall -y triton pytorch-triton-rocm
-          ccache --zero-stats
+
+          if [ "${{ matrix.runner[0] }}" != "amd-gfx950" ]; then
+            ccache --zero-stats
+          fi
+
           make dev-install
       - name: CCache Stats
+        if: ${{ matrix.runner[0] != 'amd-gfx950' }}
         run: ccache --print-stats
       - name: Run lit tests
         run: make test-lit
@@ -101,7 +110,12 @@ jobs:
           pytest --capture=tee-sys -rfs -vvv instrumentation/test_gpuhello.py
 
           # Run test_line_info.py separately with TRITON_DISABLE_LINE_INFO=0
-          TRITON_DISABLE_LINE_INFO=0 python3 -m pytest -s -n 8 language/test_line_info.py
+          if [ "${{ matrix.runner[0] }}" = "amd-gfx950" ]; then
+            TRITON_DISABLE_LINE_INFO=0 python3 -m pytest -s -n 8 language/test_line_info.py -k "not test_line_info_ir_source"
+          else
+            TRITON_DISABLE_LINE_INFO=0 python3 -m pytest -s -n 8 language/test_line_info.py
+          fi
+
       - name: Run asan tests on AMD
         if: false
         run: |
@@ -121,8 +135,12 @@ jobs:
           cd python/test/regression
           python3 -m pytest -s -n 8 ./test_cast_matmul.py
       - name: Run Proton tests
-        if: ${{ matrix.runner[0] != 'nvidia-gb200' }}
-        run: make test-proton
+        run: |
+          if [ "${{ matrix.runner[0] }}" = "amd-gfx950" ]; then
+            python3 -m pytest -s -n 8 third_party/proton/test -k "not test_instrument_exec"
+          else
+            make test-proton
+          fi
       - name: Run C++ unittests
         run: make test-cpp
       - name: Inspect cache directories
