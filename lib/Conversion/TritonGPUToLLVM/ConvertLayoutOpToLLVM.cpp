@@ -299,6 +299,12 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
       }
     }
 
+    // FIXME(Lezcano): Return when there's broadcasting
+    if (srcLayout.getFreeVariableMasks()[kLane] != 0 ||
+        dstLayout.getFreeVariableMasks()[kLane] != 0) {
+      return failure();
+    }
+
     // The permutation exists by construction of the reps dimension in
     // optimalSwizzling
     auto permStore =
