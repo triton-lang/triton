@@ -130,9 +130,9 @@ class TensorDescriptorBuilder:
         PackedK = (K + MX_PACK_DIVISOR - 1) // MX_PACK_DIVISOR
 
         if swizzle_mx:
-            num_expt_x_ncol = B * ((N + 127) // 128)
+            num_expt_x_ncol = B * triton.cdiv(N, 128)
             return TensorDescriptor(
-                base=mx_tensor, shape=[1, num_expt_x_ncol, (PackedK + 3) // 4, 2, 256],
+                base=mx_tensor, shape=[1, num_expt_x_ncol, triton.cdiv(PackedK, 4), 2, 256],
                 strides=[num_expt_x_ncol * mx_scale_stride_n, mx_scale_stride_n, mx_scale_stride_k, 256,
                          1], block_shape=[1, block_n // 128, MX_SCALE_BLOCK_K // 4, 2, 256])
         else:
@@ -166,8 +166,8 @@ class TensorDescriptorBuilder:
         return TensorDescriptor.from_tensor(x_tensor, block_shape=block_shape)
 
     @staticmethod
-    def create_input_descriptor(x_tensor: torch.Tensor, B: int, K: int, strides: tuple[int, int, int], block_k: int,
-                                block_m: int, use_gather_tma: bool, use_load_tma: bool) -> TensorDescriptor:
+    def create_input_descriptor(x_tensor: torch.Tensor, B: int, K: int, strides: tuple[int, int, int], block_m: int,
+                                block_k: int, use_gather_tma: bool, use_load_tma: bool) -> TensorDescriptor:
         """Create a tensor descriptor for input matrix X based on TMA usage"""
         if use_gather_tma:
             assert B == 1, "Gather does not support 3D input."
@@ -176,20 +176,6 @@ class TensorDescriptorBuilder:
             return TensorDescriptorBuilder.create_descriptor(x_tensor, block_m, block_k)
         else:
             assert False, "Either gather or load must be enabled"
-
-    @staticmethod
-    def create_output_descriptor(y_tensor: torch.Tensor, B: int, N: int, strides: tuple[int, int, int], block_m: int,
-                                 block_n: int, use_scatter_tma: bool, use_store_tma: bool) -> TensorDescriptor:
-        """Create a tensor descriptor for output matrix Y based on TMA usage"""
-        if use_scatter_tma:
-            assert B == 1, "Scatter does not support 3D output."
-            INT_MAX = 2147483647
-            return TensorDescriptor(base=y_tensor, shape=[INT_MAX - 1, N], strides=strides[-2:],
-                                    block_shape=[1, block_n])
-        elif use_store_tma:
-            return TensorDescriptorBuilder.create_descriptor(y_tensor, block_m, block_n)
-        else:
-            assert False, "Either scatter or store must be enabled"
 
 
 # ---------------------
@@ -618,7 +604,7 @@ def _create_tma_descriptors(
     if USE_GATHER_TMA or X_USE_LOAD_TMA:
         x_tensor_or_desc = TensorDescriptorBuilder.create_input_descriptor(
                 x, B, K, x.stride(),
-                opt_flags.block_k, opt_flags.block_m,
+                opt_flags.block_m, opt_flags.block_k,
                 USE_GATHER_TMA, X_USE_LOAD_TMA
             )
 

@@ -262,7 +262,9 @@ def _p_matmul_ogs(
                                    mask=mask_m, other=-N_EXPTS_ACT) // N_EXPTS_ACT
                 if ExptData is None:
                     # Bump rows to account for the Z offset.
-                    offs_x_m += start_z * (stride_x_z // stride_x_m)
+                    # offs_x_m += start_z * (stride_x_z // stride_x_m)
+                    # TODO: mask -1s
+                    pass
             else:
                 if M is not None:
                     offs_m = tl.max_contiguous(tl.multiple_of(offs_m % M, BLOCK_M), BLOCK_M)
