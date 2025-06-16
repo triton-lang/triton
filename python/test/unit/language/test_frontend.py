@@ -105,8 +105,8 @@ def test_aggregate_initializers():
 
 @filecheck_test
 @triton.jit
-def test_aggregate_modification_in_loop():
-    # CHECK-LABEL: test_aggregate_modification_in_loop
+def test_aggregate_modification_in_for_loop():
+    # CHECK-LABEL: test_aggregate_modification_in_for_loop
     value = TypeWithBuiltinInitializer()
     # CHECK: [[RANGE:%.*]] = tt.make_range {end = 4 : i32, start = 0 : i32}
     for i in range(0, 2):
@@ -115,6 +115,24 @@ def test_aggregate_modification_in_loop():
         value.modify(tl.arange(4, 8))
         # CHECK: [[RANGE:%.*]] = tt.make_range {end = 8 : i32, start = 4 : i32}
         # CHECK: yield [[RANGE]]
+
+
+@filecheck_test
+@triton.jit
+def test_aggregate_modification_in_while_loop():
+    # CHECK-LABEL: test_aggregate_modification_in_while_loop
+    value = TypeWithBuiltinInitializer()
+    # CHECK: [[RANGE:%.*]] = tt.make_range {end = 4 : i32, start = 0 : i32}
+    i = 0
+    # CHECK: [[C0:%.*]] = arith.constant 0 :
+    while i < 1:
+        # CHECK: while ([[ITER:%.*]] = [[RANGE]], [[IV:%.*]] = [[C0]])
+        # CHECK: do
+        i = 1
+        # CHECK: [[C1:%.*]] = arith.constant 1 :
+        value.modify(tl.arange(4, 8))
+        # CHECK: [[RANGE:%.*]] = tt.make_range {end = 8 : i32, start = 4 : i32}
+        # CHECK: yield [[RANGE]], [[C1]]
 
 
 @triton.jit
