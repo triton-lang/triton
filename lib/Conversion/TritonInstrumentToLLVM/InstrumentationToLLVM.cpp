@@ -20,18 +20,6 @@ namespace tti = mlir::triton::instrument;
 // Utility functions
 ////////////////////////////////////////////
 
-BlockedEncodingAttr getBlockedEncoding(ModuleOp module, unsigned int size) {
-  MLIRContext *ctx = module.getContext();
-  unsigned int warps =
-      mlir::cast<mlir::IntegerAttr>(module->getAttr("ttg.num-warps")).getInt();
-  auto ctaLayout = CTALayoutAttr::getDefault(ctx, /*rank=*/1);
-  return BlockedEncodingAttr::get(ctx,
-                                  /*sizePerThread=*/{size},
-                                  /*threadsPerWarp=*/{32},
-                                  /*warpsPerCTA=*/{warps},
-                                  /*order=*/{0}, ctaLayout);
-}
-
 Value createConstIntTensor(OpBuilder &builder, Location loc, int val,
                            RankedTensorType tensorType) {
   auto denseAttr = DenseElementsAttr::get(
@@ -83,7 +71,9 @@ struct SharedBufferPointersOpConversion
     auto *ctx = b.getContext();
     auto module = op->getParentOfType<ModuleOp>();
     auto values = adaptor.getOffsets();
-    auto shMemBufs = createInitializedIntArrayTensor(b, loc, module, values);
+    auto encoding =
+        cast<ttg::BlockedEncodingAttr>(op.getResult().getType().getEncoding());
+    auto shMemBufs = createInitializedIntArrayTensor(b, loc, encoding, values);
     auto base =
         getSharedMemoryBase(b, op->getParentOfType<FunctionOpInterface>());
     shMemBufs = b.create<arith::AddIOp>(
@@ -94,12 +84,12 @@ struct SharedBufferPointersOpConversion
   }
 
   Value createInitializedIntArrayTensor(OpBuilder &builder, Location loc,
-                                        ModuleOp module,
+                                        BlockedEncodingAttr encoding,
                                         ArrayRef<int32_t> values) const {
     int64_t size = values.size();
     assert(llvm::isPowerOf2_64(size) && "Expected power of 2");
-    auto tensorType = RankedTensorType::get({size}, builder.getIntegerType(64),
-                                            getBlockedEncoding(module, size));
+    auto tensorType =
+        RankedTensorType::get({size}, builder.getIntegerType(64), encoding);
     SmallVector<APInt> apInts = llvm::to_vector(
         llvm::map_range(values, [](int32_t v) { return APInt(64, v); }));
     auto denseAttr = DenseElementsAttr::get(tensorType, apInts);

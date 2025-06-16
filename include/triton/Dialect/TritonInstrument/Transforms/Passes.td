@@ -6,7 +6,7 @@ include "mlir/Pass/PassBase.td"
 def TritonInstrumentConcurrencySanitizer: Pass<"tritoninstrument-concurrency-sanitizer", "mlir::ModuleOp"> {
   let summary = "Add runtime verification of asynchronous operations";
 
-  let description = "TODO: Add description";
+  let description = "Instrument the program with runtime verification of asynchronous operations.";
 
   let dependentDialects = ["mlir::triton::gpu::TritonGPUDialect",
                            "mlir::triton::TritonDialect",
